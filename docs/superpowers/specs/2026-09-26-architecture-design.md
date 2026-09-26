@@ -67,10 +67,10 @@ world-imaginer-voxel/          (repository root)
   .github/workflows/ci.yml   npm ci → build → npm test → npm run test:metrics (quick, cached) on push and PR
   docker-compose.yml         service world-imaginer-voxel, port 5183, external network maestre-web_app-network
   docs/superpowers/specs/ plans/   this spec and every SP spec/plan
-  package.json        deps: three@~0.186.1 | dev: vite, typescript, vitest, @types/three
+  package.json        deps: three@~0.186.1 | dev: vite, typescript, vitest, @types/three, @types/node (tests/arch/worker_threads; amended by SP0)
   vite.config.ts      server+preview headers COOP=same-origin, COEP=require-corp; worker.format='es'; port 5183
   vercel.json         the same COOP/COEP headers for all routes (static Vercel deploy linked to the repository root)
-  vitest.config.ts    projects: unit | metrics (quick) | metrics-full | bench
+  vitest.config.ts    projects: unit | arch | metrics-fast | metrics-quick | metrics-full | bench (amended by SP0)
   Dockerfile          node:24-slim, `npx vite --host 0.0.0.0 --port 5183` (headers from vite.config)
   index.html          CSS-grid shell (toolbar | canvas | side panel), ResizeObserver-driven; no fixed 80px
   src/
@@ -114,7 +114,7 @@ world-imaginer-voxel/          (repository root)
     workers/protocol.ts task.worker.ts sim.worker.ts
     engine/                     main thread, no three
       coordinator.ts scheduler.ts rings.ts workerPool.ts throttle.ts uploadBudget.ts session.ts invalidation.ts capabilities.ts
-    render/                     the only place three is imported (plus ui canvases)
+    render/                     the only place three is imported (ui canvases are 2D; amended by SP0)
       renderer.ts sectionRenderer.ts (interface) regionBatch.ts regionMesh.ts (fallback) floatingOrigin.ts selection.ts
       materials/index.ts uniforms.ts glsl/*.glsl.ts   THE ONLY module that creates ShaderMaterial/GLSL (TSL port seam)
       lightmap.ts sky.ts clouds.ts shadows.ts textureArray.ts tintTexture.ts colormap.ts
@@ -132,6 +132,8 @@ world-imaginer-voxel/          (repository root)
 ```
 
 ### Dependency rules
+
+The authoritative layer table (value and type-only edges, worker edges, `light`/`mesh` isolation from the SAB implementation files) is in the SP0 spec `2026-09-26-sp0-scaffold-guardrails-design.md`, §"Dependency table"; the bullets below summarise it.
 
 `test/arch/imports.test.ts` enforces these by regex-scanning imports.
 
@@ -312,8 +314,8 @@ interface NeighborhoodReader { proto(dx:number, dz:number): ColumnView; final(dx
 interface SectionMesh { secKey:number; pass:0|1|2; quads:number; position:Uint8Array /*Uint8x4*/; data:Uint32Array; index:Uint32Array;
   bounds:[number,number,number,number] /*sphere*/; seq:number; versions:Int32Array /*3x3 block+light*/;
   emitters?: Float32Array /* audio candidates: kind, x, y, z, strength (§4.18) */ }
-interface MetricDef { id: MetricId; run(region: RegionView): number; threshold: {min?:number; max?:number}; scope:'column'|'voxel'|'render'|'audio';
-  activeFrom: SubProjectId /* first SP that gates it; stays gated afterwards (§10) */ }
+interface MetricDef { id: MetricId; run(region: RegionView): Record<string, number> /* value per threshold part */; scope:'column'|'voxel'|'render'|'audio' }
+// Thresholds and per-part activeFrom live only in the locked test/thresholds.ts (SP0); SubProjectId and MetricId are declared in src/core/ids.ts.
 ```
 
 ### 2.6 Byte budgets
@@ -1565,7 +1567,7 @@ Thresholds are locked (`thresholds.lock.json`) and goldens are gated (§6.2). Si
 **Cut lines.** Every SP names a cut line: what may slip if it overruns. A slipped item moves to a named receiving SP by amending this section, and the receiving SP adds it to its exit. Default receivers: SP0 Vercel preview check → SP4; SP2 share preview and cross-section → SP10; SP3 inspector pins → SP10; SP5 worlds-menu polish and palette search → SP10; SP7 vertex waves → SP11; SP8a animation frames → SP11; SP8a fence gates and trapdoors → SP12; SP8b giant trees, boulders and fossils → SP12; SP8c HRTF → SP11; SP9 jungle temple and village depth > 4 → SP12; SP11 Ultra shadows, 3D clouds and Fabulous water → SP12; SP6 underground-only carver and spaghetti-2D rarity bands → SP12; SP7 extra lava reactions → SP12; SP10 seed sweep and column-status heatmap → SP12. SP12's exit requires no open cut-line items, unless the user explicitly dropped one and the impact on its D-decision is recorded.
 
 **SP0 — Scaffold and guardrails** (S; no dependencies)
-- Repository scaffold at the root: Vite, TS strict, three `~0.186.1`, vitest projects (unit / metrics / metrics-full / bench).
+- Repository scaffold at the root: Vite, TS strict, three `~0.186.1`, vitest projects (unit / arch / metrics-fast / metrics-quick / metrics-full / bench; see the SP0 spec).
 - Headers exactly `Cross-Origin-Opener-Policy: same-origin` and `Cross-Origin-Embedder-Policy: require-corp`, set in vite.config `server.headers` and `preview.headers` and in `vercel.json` with `source: "/(.*)"`. Dockerfile and the repository's own `docker-compose.yml` (service `world-imaginer-voxel`, port 5183, external network `maestre-web_app-network`); README and CLAUDE.md updated with the real commands; GitHub Actions CI (`.github/workflows/ci.yml`: `npm ci`, `npm run build`, `npm test`, `npm run test:metrics` with the region cache, on push and PR).
 - Arch tests (imports, banned APIs, no numeric tunables in `gen/`, no audio assets, no imports outside the project); thresholds-lock (with `activeFrom`) and goldens commands.
 - Capability probe: `isSecureContext`, `crossOriginIsolated` in the page **and in a module worker** sharing one SAB, `WEBGL_multi_draw`, timer query, max texture layers, WebGL renderer string; an error screen that names the missing condition.
