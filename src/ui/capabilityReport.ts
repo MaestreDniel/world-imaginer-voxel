@@ -24,9 +24,12 @@ function el<K extends keyof HTMLElementTagNameMap>(tag: K, text?: string, classN
   return node;
 }
 
-function valueClass(value: CapabilityReport[keyof CapabilityReport]): string {
+const WARN_ONLY_KEYS: ReadonlySet<keyof CapabilityReport> = new Set(['multiDraw', 'timerQuery']);
+
+function valueClass(key: keyof CapabilityReport, value: CapabilityReport[keyof CapabilityReport]): string {
   if (value === true || value === 'ok') return 'ok';
-  if (value === false || value === 'not-isolated' || value === 'load-error' || value === 'timeout') return 'bad';
+  if (value === false) return WARN_ONLY_KEYS.has(key) ? 'warn' : 'bad';
+  if (value === 'not-isolated' || value === 'load-error' || value === 'timeout') return 'bad';
   return '';
 }
 
@@ -48,12 +51,16 @@ export function renderCapabilityReport(panel: HTMLElement, report: CapabilityRep
   for (const [key, label] of ROWS) {
     const value = report[key];
     const row = el('tr');
-    row.append(el('td', label), el('td', value === null ? '—' : String(value), valueClass(value)));
+    row.append(el('td', label), el('td', value === null ? '—' : String(value), valueClass(key, value)));
     table.append(row);
   }
   const copy = el('button', 'Copy as JSON');
   copy.type = 'button';
-  copy.onclick = () => { void navigator.clipboard.writeText(JSON.stringify(report, null, 2)); };
+  copy.onclick = () => {
+    navigator.clipboard.writeText(JSON.stringify(report, null, 2)).catch(() => {
+      copy.textContent = 'Copy failed';
+    });
+  };
   panel.replaceChildren(el('h2', 'Capabilities'), table);
   if (evaluation.warnings.length > 0) panel.append(el('h3', 'Warnings'), causeList(evaluation.warnings, 'warn'));
   panel.append(copy, jsonBlock(report));

@@ -34,7 +34,12 @@ function probeWorker(): Promise<WorkerResult> {
     };
     worker.onerror = () => finish({ workerProbe: 'load-error', workerIsolated: null, sabShared: false });
     worker.onmessageerror = () => finish({ workerProbe: 'load-error', workerIsolated: null, sabShared: false });
-    worker.postMessage({ sab });
+    try {
+      worker.postMessage({ sab });
+    } catch {
+      // DataCloneError: some browsers throw synchronously instead of firing messageerror.
+      finish({ workerProbe: 'load-error', workerIsolated: null, sabShared: false });
+    }
   });
 }
 
