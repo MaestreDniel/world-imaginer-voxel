@@ -1,5 +1,5 @@
 import { execFileSync } from 'node:child_process';
-import { readdirSync, statSync } from 'node:fs';
+import { lstatSync, readdirSync } from 'node:fs';
 import { extname, join, posix } from 'node:path';
 import { lineAt, type ScannedFile, type Violation } from '../scan';
 
@@ -12,12 +12,20 @@ const MATH_ALLOWED = new Set(['abs', 'floor', 'ceil', 'round', 'trunc', 'sign', 
 const THREE_AUDIO = new Set(['Audio', 'AudioListener', 'PositionalAudio', 'AudioLoader', 'AudioAnalyser']);
 const AUDIO_EXTS = new Set(['.ogg', '.oga', '.mp3', '.wav', '.flac', '.m4a', '.aac', '.opus', '.weba']);
 
-const NUM = String.raw`(?:0x[\da-f_]+|\d[\d_]*(?:\.[\d_]*)?(?:e[-+]?\d+)?n?|\.\d[\d_]*(?:e[-+]?\d+)?)`;
+const NUM = String.raw`(?:0x[\da-f_]+n?|0b[01_]+n?|0o[0-7_]+n?|\d[\d_]*(?:\.[\d_]*)?(?:e[-+]?\d+)?n?|\.\d[\d_]*(?:e[-+]?\d+)?)`;
 const NUMERIC_EXPR = new RegExp(String.raw`^[-+(]*${NUM}\)*(?:[-+*/%][-+(]*${NUM}\)*)*$`, 'i');
 
 export function isNumericExpr(init: string): boolean {
   const s = init.trim().replace(/\s+as\s+const\s*$/, '').replace(/\s+satisfies\s+[\w$.<>[\]]+\s*$/, '').replace(/\s+/g, '');
   return NUMERIC_EXPR.test(s);
+}
+
+function continuesAcrossNewline(code: string, from: number, upTo: number): boolean {
+  const soFar = code.slice(from, upTo).trim();
+  if (/[=,]$/.test(soFar)) return true;
+  let j = upTo + 1;
+  while (j < code.length && /\s/.test(code[j]!)) j++;
+  return j < code.length && /[+\-*/%.?:=]/.test(code[j]!);
 }
 
 function readStatement(code: string, start: number): string {
@@ -27,7 +35,11 @@ function readStatement(code: string, start: number): string {
     const c = code[i];
     if (c === '(' || c === '[' || c === '{') depth++;
     else if (c === ')' || c === ']' || c === '}') depth--;
-    else if (depth === 0 && (c === ';' || c === '\n')) break;
+    else if (depth === 0 && c === ';') break;
+    else if (depth === 0 && c === '\n') {
+      if (continuesAcrossNewline(code, start, i)) continue;
+      break;
+    }
   }
   return code.slice(start, i);
 }
@@ -63,8 +75,12 @@ function numericExportViolations(f: ScannedFile, srcRel: string): Violation[] {
     if (isNumericExpr(m[1]!)) at(m.index, 'numeric-export', 'exported default numeric constant');
   }
   const numericBindings = new Set<string>();
-  for (const m of f.code.matchAll(/(?:^|\n)\s*(?:const|let|var)\s+([\w$]+)\s*(?::[^=\n]+)?=\s*([^;\n]+)/g)) {
-    if (isNumericExpr(m[2]!)) numericBindings.add(m[1]!);
+  for (const m of f.code.matchAll(/(?:^|\n)[ \t]*(?:const|let|var)\s+/g)) {
+    for (const decl of splitTopLevel(readStatement(f.code, m.index + m[0].length))) {
+      const d = /^\s*([\w$]+)\s*(?::[^=]+)?=\s*([\s\S]*)$/.exec(decl);
+      if (!d) continue;
+      if (isNumericExpr(d[2]!.trim())) numericBindings.add(d[1]!);
+    }
   }
   for (const m of f.code.matchAll(/\bexport\s*\{([^}]*)\}(?!\s*from)/g)) {
     for (const item of m[1]!.split(',')) {
@@ -121,9 +137,23 @@ export function checkBanned(files: readonly ScannedFile[]): Violation[] {
       if (layer !== 'sound') {
         for (const m of code.matchAll(/\b(AudioContext|webkitAudioContext|OfflineAudioContext|AudioWorklet|AudioWorkletNode|AudioWorkletProcessor|registerProcessor|decodeAudioData)\b/g)) at(code, m.index, 'webaudio-outside-sound', `${m[1]} outside sound/`);
       }
+      const threeAudioMessage = 'three audio classes are not used (audio lives in sound/)';
       for (const m of codeKeepStrings.matchAll(/\bimport\s*(?:type\s*)?\{([^}]*)\}\s*from\s*['"]three(?:\/[^'"]*)?['"]/g)) {
         const names = m[1]!.split(',').map((n) => n.trim().replace(/^type\s+/, '').split(/\s+as\s+/)[0]!);
-        if (names.some((n) => THREE_AUDIO.has(n))) at(codeKeepStrings, m.index, 'three-audio', 'three audio classes are not used (audio lives in sound/)');
+        if (names.some((n) => THREE_AUDIO.has(n))) at(codeKeepStrings, m.index, 'three-audio', threeAudioMessage);
+      }
+      for (const m of codeKeepStrings.matchAll(/\bexport\s+(?:type\s+)?\{([^}]*)\}\s*from\s*['"]three(?:\/[^'"]*)?['"]/g)) {
+        const names = m[1]!.split(',').map((n) => n.trim().replace(/^type\s+/, '').split(/\s+as\s+/)[0]!);
+        if (names.some((n) => THREE_AUDIO.has(n))) at(codeKeepStrings, m.index, 'three-audio', threeAudioMessage);
+      }
+      const threeBindings: string[] = [];
+      for (const m of codeKeepStrings.matchAll(/\bimport\s+(?:type\s+)?(\*\s*as\s+[\w$]+|[\w$]+)\s*from\s*['"]three(?:\/[^'"]*)?['"]/g)) {
+        const raw = m[1]!;
+        threeBindings.push(raw.startsWith('*') ? raw.replace(/^\*\s*as\s+/, '') : raw);
+      }
+      for (const binding of threeBindings) {
+        const re = new RegExp(String.raw`\b${binding}\s*\.\s*(Audio|AudioListener|PositionalAudio|AudioLoader|AudioAnalyser)\b`, 'g');
+        for (const m of code.matchAll(re)) at(code, m.index, 'three-audio', threeAudioMessage);
       }
     }
     out.push(...found.values());
@@ -135,7 +165,9 @@ function walkFiles(root: string, rel: string, out: string[]): void {
   for (const name of readdirSync(join(root, rel))) {
     const child = rel === '' ? name : posix.join(rel, name);
     if (['node_modules', 'dist', '.git'].includes(name) || child === 'test/.cache') continue;
-    if (statSync(join(root, child)).isDirectory()) walkFiles(root, child, out);
+    const st = lstatSync(join(root, child));
+    if (st.isSymbolicLink()) continue;
+    if (st.isDirectory()) walkFiles(root, child, out);
     else out.push(child);
   }
 }
