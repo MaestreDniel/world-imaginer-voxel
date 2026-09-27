@@ -6,10 +6,12 @@ import { NOISE_FIELD_RANGES, SCHEMA, type Params, type ParamsPatch } from '../..
 import { applyPatch, patchAt } from '../../core/params/kit';
 import { noiseInstances } from '../../core/params/noises';
 import { seedFromInput } from '../../core/seed';
+import { pearson } from '../../metrics/noiseStats';
 import { ADVERSARIAL_DEFS, DENSITY3D_DEF } from '../../metrics/sp1Fixtures';
 import { resolveSeedText } from '../seedBox';
 import { createFieldView, type Camera, type FieldView } from './fieldView';
 import { decodeLabState, DEFAULT_LAB_STATE, encodeLabState, labParams, mergePatch, type LabState } from './labState';
+import { createStatsPanel, type StatsPanel } from './statsPanel';
 
 /** One selectable noise: a schema instance (editable through its leaf path) or a test fixture (read-only). */
 export interface LabNoise {
@@ -92,6 +94,26 @@ export function mountNoiseLab(root: HTMLElement): void {
   const form = el('div', 'lab-form');
   const issues = el('div', 'lab-issues');
   side.append(readout, formTitle, form, issues);
+  const abButton = el('button', '', 'A/B');
+  const bSeedInput = el('input');
+  bSeedInput.placeholder = 'B seed (empty = same as A)';
+  const copyButton = el('button', '', 'copy A → B');
+  toolbar.append(abButton, bSeedInput, copyButton);
+  const targetSelect = el('select');
+  targetSelect.append(new Option('edit A', 'A'), new Option('edit B', 'B'));
+  toolbar.append(targetSelect);
+  let target: 'A' | 'B' = 'A';
+  targetSelect.addEventListener('change', () => { target = targetSelect.value === 'B' ? 'B' : 'A'; render(); });
+  const statsA: StatsPanel = createStatsPanel(side, 'Statistics A');
+  let statsB: StatsPanel | null = null;
+  const corr = el('div', 'lab-readout');
+  side.append(corr);
+  let zA: Float64Array | null = null;
+  let zB: Float64Array | null = null;
+  const showCorr = () => { corr.textContent = zA !== null && zB !== null ? `r(A, B) = ${pearson(zA, zB).toFixed(4)}` : ''; };
+  statsA.onDone = (z) => { zA = z; showCorr(); };
+  let viewB: FieldView | null = null;
+  let viewBHost: HTMLElement | null = null;
 
   const viewHost = el('div', 'lab-view');
   views.append(viewHost);
@@ -115,11 +137,15 @@ export function mountNoiseLab(root: HTMLElement): void {
   }
 
   const editPatch = (path: string, field: keyof NoiseDef, value: unknown) => {
-    const next = mergePatch(state.patch, patchAt(path, { [field]: value })) as ParamsPatch;
-    const r = applyPatch(SCHEMA, SCHEMA.defaults, next);
-    if (!r.ok) { issues.textContent = r.issues.map((i) => `${i.path}: ${i.code} — ${i.message}`).join('\n'); return; }
-    issues.textContent = '';
-    setState({ ...state, patch: next });
+    const delta = patchAt(path, { [field]: value });
+    const show = (r: ReturnType<typeof applyPatch>) => { issues.textContent = r.ok ? '' : r.issues.map((i) => `${i.path}: ${i.code} — ${i.message}`).join('\n'); return r.ok; };
+    if (target === 'B' && state.b !== undefined) {
+      const nextB = mergePatch(state.b.patch ?? {}, delta) as ParamsPatch;
+      if (show(applyPatch(SCHEMA, labParams(state).a, nextB))) setState({ ...state, b: { ...state.b, patch: nextB } });
+      return;
+    }
+    const next = mergePatch(state.patch, delta) as ParamsPatch;
+    if (show(applyPatch(SCHEMA, SCHEMA.defaults, next))) setState({ ...state, patch: next });
   };
 
   function renderForm(noise: LabNoise): void {
@@ -188,10 +214,45 @@ export function mountNoiseLab(root: HTMLElement): void {
     sliceInput.hidden = noise.dims === 2;
     planeSelect.value = state.view.plane ?? 'xz';
     sliceInput.value = String(state.view.slice ?? 64);
-    renderForm(noise);
+    const editB = target === 'B' && state.b !== undefined;
+    const formNoise = editB ? labNoises(labParams(state).b!).find((n) => n.seedName === noise.seedName) ?? noise : noise;
+    formTitle.textContent = `NoiseDef (${editB ? 'B' : 'A'})`;
+    renderForm(formNoise);
     const a = makeSide(state.seed, noise, state);
+    const cam = { x: state.view.x, z: state.view.z, bpp: state.view.bpp };
     view.setSource(a.sample, a.lo, a.hi);
-    view.setCamera({ x: state.view.x, z: state.view.z, bpp: state.view.bpp });
+    view.setCamera(cam);
+    zA = null;
+    zB = null;
+    showCorr();
+    statsA.update(a);
+    abButton.textContent = state.b === undefined ? 'A/B: off' : 'A/B: on';
+    bSeedInput.hidden = state.b === undefined;
+    copyButton.hidden = state.b === undefined;
+    targetSelect.hidden = state.b === undefined;
+    if (state.b === undefined) {
+      viewB?.destroy();
+      viewBHost?.remove();
+      statsB?.destroy();
+      viewB = null;
+      viewBHost = null;
+      statsB = null;
+      return;
+    }
+    const { b } = labParams(state);
+    const noiseB = labNoises(b!).find((n) => n.seedName === noise.seedName) ?? noise;
+    const sideB = makeSide(state.b.seed ?? state.seed, noiseB, state);
+    if (viewB === null) {
+      viewBHost = el('div', 'lab-view');
+      views.append(viewBHost);
+      viewB = createFieldView(viewBHost, { onCamera, onHover: () => {} });
+      statsB = createStatsPanel(side, 'Statistics B');
+      statsB.onDone = (z) => { zB = z; showCorr(); };
+    }
+    bSeedInput.value = state.b.seed ?? '';
+    viewB.setSource(sideB.sample, sideB.lo, sideB.hi);
+    viewB.setCamera(cam);
+    statsB!.update(sideB);
   }
 
   noiseSelect.addEventListener('change', () => setState({ ...state, noise: noiseSelect.value }));
@@ -203,6 +264,17 @@ export function mountNoiseLab(root: HTMLElement): void {
   modeSelect.addEventListener('change', () => setState({ ...state, view: { ...state.view, mode: modeSelect.value === 'z' ? 'z' : 'u' } }));
   planeSelect.addEventListener('change', () => setState({ ...state, view: { ...state.view, plane: planeSelect.value === 'xy' ? 'xy' : 'xz' } }));
   sliceInput.addEventListener('change', () => setState({ ...state, view: { ...state.view, slice: Number(sliceInput.value) } }));
+
+  abButton.addEventListener('click', () => {
+    if (state.b === undefined) setState({ ...state, b: {} });
+    else { const { b: _off, ...rest } = state; setState(rest); }
+  });
+  bSeedInput.addEventListener('change', () => {
+    const t = bSeedInput.value.trim();
+    const { seed: _old, ...restB } = state.b ?? {};
+    setState({ ...state, b: t === '' ? restB : { ...restB, seed: t } });
+  });
+  copyButton.addEventListener('click', () => setState({ ...state, b: {} }));
 
   if (!current().noises.some((n) => n.seedName === state.noise)) notice.textContent = `unknown noise ${state.noise}; showing ${DEFAULT_LAB_STATE.noise}`;
   render();
