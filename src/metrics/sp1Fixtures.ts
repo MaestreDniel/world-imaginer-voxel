@@ -4,11 +4,20 @@
  */
 import { completeNoiseDef } from '../core/noise/types';
 import type { NoiseDef } from '../core/noise/types';
+import { buildSchema, enumOf, group, int, noise, num, spline } from '../core/params/kit';
 import { autoTangents } from '../core/spline/tangents';
 import type { NestedSpline, SplineCoord } from '../core/spline/types';
+import type { StageDef } from '../core/stage/registry';
 
 const COMPLETE = completeNoiseDef;
 const AUTO = autoTangents;
+const BUILD = buildSchema;
+const GROUP = group;
+const NUM = num;
+const INT = int;
+const ENUM = enumOf;
+const NOISE = noise;
+const SPLINE = spline;
 
 type Knot = readonly [number, number | NestedSpline];
 const S = (coord: SplineCoord, knots: readonly Knot[]): NestedSpline => ({ coord, points: knots.map(([x, y]) => ({ x, y, d: 0 })) });
@@ -82,3 +91,23 @@ export const ADVERSARIAL_DEFS: readonly FixtureNoise[] = [
   { seedName: 'test.adv3d8', def: COMPLETE({ wavelength: 8, octaves: 1, double: false }), dims: 3, corners: false },
   { seedName: 'test.adv3d32', def: COMPLETE({ wavelength: 32, octaves: 1, double: false }), dims: 3, corners: true },
 ];
+
+/** Frozen params fixture for the sp1.params golden (SP1 spec Appendix B). */
+export const PARAMS_FIXTURE = BUILD(GROUP('Fixture', 'Frozen params fixture for the sp1.params golden.', {
+  a: GROUP('A', 'Climate-scope leaves.', {
+    n: NUM(0.5, { label: 'n', doc: 'A number.', min: 0, max: 1, scope: 'climate', stage: 'climate' }),
+    k: INT(3, { label: 'k', doc: 'An integer.', min: 1, max: 8, scope: 'climate', stage: 'climate' }),
+    e: ENUM(['p', 'q'], 'q', { label: 'e', doc: 'An enum.', scope: 'climate', stage: 'climate' }),
+    w: NOISE({ wavelength: 128, octaves: 3 }, { label: 'w', doc: 'A noise.', scope: 'climate', stage: 'climate', wavelength: { min: 16, max: 1024 }, dims: 2 }),
+  }),
+  b: GROUP('B', 'Decorate-scope leaves.', {
+    s: SPLINE(TANGENT_FIXTURE, { label: 's', doc: 'A spline.', coords: ['C', 'E', 'W', 'PV', 'T', 'H'], min: -100, max: 100, scope: 'decorate', stage: 'decorate' }),
+  }),
+}));
+
+export const FIXTURE_STAGES: readonly StageDef[] = [
+  { id: 'climate', version: 1, reads: [], params: ['a'], checkpoint: 'columnSample' },
+  { id: 'decorate', version: 1, reads: ['climate'], params: ['b'], checkpoint: 'final' },
+];
+
+export const FIXTURE_DEFAULTS = PARAMS_FIXTURE.defaults;
