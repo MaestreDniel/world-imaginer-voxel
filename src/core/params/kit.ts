@@ -7,7 +7,7 @@ import type { MetricId, RegenScope, StageId } from '../ids';
 import { NOISE_DEF_DEFAULTS, type NoiseDef, type NoiseDefPatch } from '../noise/types';
 import type { NestedSpline, SplineCoord } from '../spline/types';
 import { normalizeSpline, validateSpline, type SplineErrorCode } from '../spline/validate';
-import { q15 } from './canonical';
+import { canonicalJSON, q15 } from './canonical';
 
 export type ParamKind =
   | 'number' | 'int' | 'bool' | 'enum' | 'noise' | 'spline' | 'expr' | 'boxTable' | 'ruleTree' | 'featureList' | 'structureSets';
@@ -331,4 +331,96 @@ export function checkParams<R extends Group>(s: Schema<R>, v: unknown): Result<V
   };
   const value = walk(s.root, v, '');
   return out.length > 0 ? { ok: false, issues: out } : { ok: true, value: deepFreeze(value) as Value<R> };
+}
+
+// ---------------------------------------------------------------- patches
+/**
+ * Deep-merges a partial document over `base` with validation (profiles, presets, lab URL, panel edits,
+ * saves). Groups and noise leaves merge per key; other leaves are replaced whole. Collects every issue
+ * and applies nothing on error. A subtree the patch does not mention keeps its reference.
+ */
+export function applyPatch<R extends Group>(s: Schema<R>, base: Value<R>, patch: unknown): Result<Value<R>> {
+  const out: Issue[] = [];
+  const walk = (n: Node, b: unknown, p: unknown, path: string): unknown => {
+    if (p === undefined) return b;
+    if (n.tag === 'leaf') {
+      if (n.merge === 'fields') {
+        if (!isObj(p)) { out.push({ path, code: 'NOT_OBJECT', message: `expected an object, got ${fmt(p)}` }); return b; }
+        if (unknownKeys(p, NOISE_KEYS, path, out)) return b;
+        const merged: Record<string, unknown> = { ...(b as Record<string, unknown>) };
+        for (const k of NOISE_KEYS) if (p[k] !== undefined) merged[k] = p[k];
+        return checkLeaf(n, merged, path, out) ?? b;
+      }
+      return checkLeaf(n, p, path, out) ?? b;
+    }
+    if (!isObj(p)) { out.push({ path, code: 'NOT_OBJECT', message: `expected an object, got ${fmt(p)}` }); return b; }
+    unknownKeys(p, Object.keys(n.children), path, out);
+    const bb = b as Record<string, unknown>;
+    const res: Record<string, unknown> = {};
+    let changed = false;
+    for (const k of Object.keys(n.children)) {
+      const v = Object.hasOwn(p, k) ? walk(n.children[k]!, bb[k], p[k], join(path, k)) : bb[k];
+      res[k] = v;
+      if (v !== bb[k]) changed = true;
+    }
+    return changed ? res : b;
+  };
+  const value = walk(s.root, base, patch, '');
+  return out.length > 0 ? { ok: false, issues: out } : { ok: true, value: deepFreeze(value) as Value<R> };
+}
+
+/** Minimal patch with applyPatch(s, base, diffParams(s, base, v)) canonically equal to v. */
+export function diffParams<R extends Group>(s: Schema<R>, base: Value<R>, value: Value<R>): Patch<R> {
+  const walk = (n: Node, b: unknown, x: unknown): unknown => {
+    if (n.tag === 'leaf') {
+      if (n.merge === 'fields' && isObj(b) && isObj(x)) {
+        const d: Record<string, unknown> = {};
+        for (const k of NOISE_KEYS) if (canonicalJSON(x[k]) !== canonicalJSON(b[k])) d[k] = x[k];
+        return Object.keys(d).length > 0 ? d : undefined;
+      }
+      return canonicalJSON(b) === canonicalJSON(x) ? undefined : x;
+    }
+    const d: Record<string, unknown> = {};
+    const bb = b as Record<string, unknown>;
+    const xx = x as Record<string, unknown>;
+    for (const k of Object.keys(n.children)) {
+      const c = walk(n.children[k]!, bb[k], xx[k]);
+      if (c !== undefined) d[k] = c;
+    }
+    return Object.keys(d).length > 0 ? d : undefined;
+  };
+  return (walk(s.root, base, value) ?? {}) as Patch<R>;
+}
+
+export function getPath(value: unknown, path: string): unknown {
+  if (path === '') return value;
+  let cur: unknown = value;
+  for (const k of path.split('.')) {
+    if (!isObj(cur) || !Object.hasOwn(cur, k)) return undefined;
+    cur = cur[k];
+  }
+  return cur;
+}
+
+/** {a: {b: value}} for path "a.b". */
+export function patchAt(path: string, value: unknown): Record<string, unknown> {
+  const keys = path.split('.');
+  let acc: unknown = value;
+  for (let i = keys.length - 1; i >= 0; i--) acc = { [keys[i]!]: acc };
+  return acc as Record<string, unknown>;
+}
+
+// ---------------------------------------------------------------- README reference
+/** Markdown parameter table (SP1 spec §4.7): path | kind | default | range | unit | scope | doc. */
+export function renderReference<R extends Group>(s: Schema<R>): string {
+  const esc = (t: string) => t.replaceAll('|', '\\|');
+  const rows = ['| path | kind | default | range | unit | scope | doc |', '|---|---|---|---|---|---|---|'];
+  for (const { path, meta } of s.leaves) {
+    const def = canonicalJSON(getPath(s.defaults, path));
+    const range = meta.options !== undefined ? meta.options.join(' / ')
+      : meta.kind === 'noise' ? `wavelength ${meta.min} … ${meta.max}`
+      : meta.min !== undefined ? `${meta.min} … ${meta.max}` : '';
+    rows.push(`| \`${path}\` | ${meta.kind} | ${esc(def)} | ${esc(range)} | ${esc(meta.unit ?? '')} | ${meta.scope} | ${esc(`${meta.label}: ${meta.doc}`)} |`);
+  }
+  return rows.join('\n');
 }
