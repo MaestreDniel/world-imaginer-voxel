@@ -2,7 +2,7 @@ import { describe, expect, test } from 'vitest';
 import { utf8Bytes } from '../../src/core/hash';
 import { DEFAULTS } from '../../src/core/params/defaults';
 import {
-  base64urlDecode, base64urlEncode, decodeLabState, DEFAULT_LAB_STATE, encodeLabState, labParams, mergePatch, type LabState,
+  applyLabEdit, base64urlDecode, base64urlEncode, decodeLabState, DEFAULT_LAB_STATE, encodeLabState, labParams, mergePatch, type LabState,
 } from '../../src/ui/lab/labState';
 
 const enc = (text: string) => base64urlEncode(utf8Bytes(text));
@@ -61,4 +61,33 @@ test('B layers over A', () => {
   expect(a.climate.C.octaves).toBe(3);
   expect(b!.climate.C).toEqual({ ...DEFAULTS.climate.C, octaves: 3, wavelength: 900 });
   expect(labParams(DEFAULT_LAB_STATE).b).toBeNull();
+});
+
+describe('applyLabEdit', () => {
+  const on = (b: LabState['b']): LabState => ({ ...DEFAULT_LAB_STATE, b });
+  test('an A edit that would make the layered B invalid is rejected with B-prefixed issues', () => {
+    const s = on({ patch: { climate: { C: { amplitudes: [1, 1, 1, 1, 1, 1] } } } });
+    const r = applyLabEdit(s, 'A', 'climate.C', 'octaves', 5);
+    expect(r.ok).toBe(false);
+    if (!r.ok) expect(r.issues.some((i) => i.startsWith('B: climate.C.amplitudes: AMPLITUDES_LENGTH'))).toBe(true);
+    expect(() => labParams(s)).not.toThrow();
+  });
+  test('an A remap edit that conflicts with a B double=false override is rejected', () => {
+    const s = on({ patch: { climate: { warp: { shift: { noise: { double: false } } } } } });
+    const r = applyLabEdit(s, 'A', 'climate.warp.shift.noise', 'remap', 'uniform');
+    expect(!r.ok && r.issues.some((i) => i.startsWith('B: climate.warp.shift.noise.remap: REMAP_NEEDS_DOUBLE'))).toBe(true);
+  });
+  test('valid edits apply to the chosen side and keep labParams total', () => {
+    const s = on({ seed: '7', patch: { climate: { C: { wavelength: 900 } } } });
+    const a = applyLabEdit(s, 'A', 'climate.C', 'octaves', 5);
+    expect(a.ok && a.state.patch).toEqual({ climate: { C: { octaves: 5 } } });
+    const b = applyLabEdit(s, 'B', 'climate.C', 'octaves', 3);
+    expect(b.ok && b.state.b).toEqual({ seed: '7', patch: { climate: { C: { wavelength: 900, octaves: 3 } } } });
+    if (a.ok) expect(labParams(a.state).b!.climate.C.octaves).toBe(5);
+    expect(applyLabEdit(DEFAULT_LAB_STATE, 'B', 'climate.C', 'octaves', 3)).toEqual({ ok: true, state: { ...DEFAULT_LAB_STATE, patch: { climate: { C: { octaves: 3 } } } } });
+  });
+  test('an invalid edit reports unprefixed A issues', () => {
+    const r = applyLabEdit(DEFAULT_LAB_STATE, 'A', 'climate.C', 'double', false);
+    expect(!r.ok && r.issues).toEqual(["climate.C.remap: REMAP_NEEDS_DOUBLE — remap 'uniform' needs double: true"]);
+  });
 });

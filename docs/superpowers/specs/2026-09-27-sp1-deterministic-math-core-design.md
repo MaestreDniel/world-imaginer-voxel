@@ -1,7 +1,7 @@
 # SP1 — Deterministic math core (Design)
 
 Date: 2026-09-27
-Status: Implemented on branch `sp1/math-core` (2026-09-27); exit evidence below
+Status: Implemented on branch `sp1/math-core` (2026-09-27); exit pending CI and the Chrome/Firefox determinism panel (evidence below)
 Parent: master spec `2026-09-26-architecture-design.md` — §10 SP1, §1, §2.5, §2.7, §3.1-3.3, §3.17, §5.1, §6.3, §6.4, §7, §8 risks 4 and 6; decisions D6, D16, D17 and the new D20.
 
 References written "master §x" point to the master spec; a bare "§x" points to this document.
@@ -698,6 +698,7 @@ Pending with the user: push `sp1/math-core`, the pull request with CI green, the
 Amendments recorded at exit:
 - `npm run bench` and `npm run bench:record` pass `--reporter=verbose`: the default reporter hides the kernel table and `killRatio` of a passing bench.
 - The screenshots were captured through the DevTools protocol after 3 s of real time: with `--virtual-time-budget` the field stayed blank because its progressive render runs in `requestAnimationFrame` slices. They are stored as 256-colour palette PNGs (6.6 MB instead of 12.3 MB).
+- Final review (fresh reviewer): an A-side lab edit is now also validated against the layered B patch (`applyLabEdit`), so the lab never reaches a state `labParams` rejects. Lab URL writes are debounced and fail-safe (`createUrlWriter`), because Firefox and Safari throw when `history.replaceState` is called too often and Chrome drops the calls. The status lines say "implemented" until CI and the Chrome/Firefox panel are in.
 
 ### Threshold log
 

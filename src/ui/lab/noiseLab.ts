@@ -2,8 +2,7 @@ import './lab.css';
 import { NormalNoise } from '../../core/noise/normal';
 import { toUniform } from '../../core/noise/cdf';
 import type { NoiseDef } from '../../core/noise/types';
-import { NOISE_FIELD_RANGES, SCHEMA, type Params, type ParamsPatch } from '../../core/params/schema';
-import { applyPatch, patchAt } from '../../core/params/kit';
+import { NOISE_FIELD_RANGES, SCHEMA, type Params } from '../../core/params/schema';
 import { noiseInstances } from '../../core/params/noises';
 import { seedFromInput } from '../../core/seed';
 import { pearson } from '../../metrics/noiseStats';
@@ -11,8 +10,9 @@ import { ADVERSARIAL_DEFS, DENSITY3D_DEF } from '../../metrics/sp1Fixtures';
 import { resolveSeedText } from '../seedBox';
 import { mountDeterminismPanel } from './determinismPanel';
 import { createFieldView, type Camera, type FieldView } from './fieldView';
-import { decodeLabState, DEFAULT_LAB_STATE, encodeLabState, labParams, mergePatch, type LabState } from './labState';
+import { applyLabEdit, decodeLabState, DEFAULT_LAB_STATE, encodeLabState, labParams, type LabState } from './labState';
 import { createStatsPanel, type StatsPanel } from './statsPanel';
+import { createUrlWriter } from './urlWriter';
 
 /** One selectable noise: a schema instance (editable through its leaf path) or a test fixture (read-only). */
 export interface LabNoise {
@@ -131,22 +131,19 @@ export function mountNoiseLab(root: HTMLElement): void {
     return { params: a, noises, noise };
   };
 
+  const url = createUrlWriter((u) => history.replaceState(null, '', u));
+  addEventListener('pagehide', () => url.flush());
+
   function setState(next: LabState): void {
     state = next;
-    history.replaceState(null, '', `?lab=noise#${encodeLabState(state)}`);
     render();
+    url.set(`?lab=noise#${encodeLabState(state)}`);
   }
 
   const editPatch = (path: string, field: keyof NoiseDef, value: unknown) => {
-    const delta = patchAt(path, { [field]: value });
-    const show = (r: ReturnType<typeof applyPatch>) => { issues.textContent = r.ok ? '' : r.issues.map((i) => `${i.path}: ${i.code} — ${i.message}`).join('\n'); return r.ok; };
-    if (target === 'B' && state.b !== undefined) {
-      const nextB = mergePatch(state.b.patch ?? {}, delta) as ParamsPatch;
-      if (show(applyPatch(SCHEMA, labParams(state).a, nextB))) setState({ ...state, b: { ...state.b, patch: nextB } });
-      return;
-    }
-    const next = mergePatch(state.patch, delta) as ParamsPatch;
-    if (show(applyPatch(SCHEMA, SCHEMA.defaults, next))) setState({ ...state, patch: next });
+    const r = applyLabEdit(state, target, path, field, value);
+    issues.textContent = r.ok ? '' : r.issues.join('\n');
+    if (r.ok) setState(r.state);
   };
 
   function renderForm(noise: LabNoise): void {

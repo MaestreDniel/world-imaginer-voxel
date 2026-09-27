@@ -1,7 +1,7 @@
 import { utf8Bytes } from '../../core/hash';
 import { canonicalJSON, q15 } from '../../core/params/canonical';
 import { DEFAULTS } from '../../core/params/defaults';
-import { applyPatch, isObj } from '../../core/params/kit';
+import { applyPatch, isObj, patchAt, type Issue } from '../../core/params/kit';
 import { SCHEMA, type Params, type ParamsPatch } from '../../core/params/schema';
 import { WINDOW } from '../../metrics/noiseStats';
 
@@ -85,6 +85,32 @@ export function labParams(s: LabState): { a: Params; b: Params | null } {
   const b = applyPatch(SCHEMA, a.value, s.b.patch ?? {});
   if (!b.ok) throw new Error('invalid lab B patch');
   return { a: a.value, b: b.value };
+}
+
+const formatIssues = (prefix: string, issues: readonly Issue[]) => issues.map((i) => `${prefix}${i.path}: ${i.code} — ${i.message}`);
+
+/**
+ * One NoiseDef field edit on side A or B (B only while A/B is on). Rejected, with the state unchanged, when
+ * it would make A invalid or make B (= A ⊕ b.patch) invalid, so `labParams` stays total for edited states.
+ * B issues are prefixed `B: `.
+ */
+export function applyLabEdit(s: LabState, target: 'A' | 'B', path: string, field: string, value: unknown): { ok: true; state: LabState } | { ok: false; issues: string[] } {
+  const delta = patchAt(path, { [field]: value });
+  if (target === 'B' && s.b !== undefined) {
+    const a = applyPatch(SCHEMA, DEFAULTS, s.patch);
+    if (!a.ok) return { ok: false, issues: formatIssues('', a.issues) };
+    const nextB = mergePatch(s.b.patch ?? {}, delta) as ParamsPatch;
+    const b = applyPatch(SCHEMA, a.value, nextB);
+    return b.ok ? { ok: true, state: { ...s, b: { ...s.b, patch: nextB } } } : { ok: false, issues: formatIssues('B: ', b.issues) };
+  }
+  const next = mergePatch(s.patch, delta) as ParamsPatch;
+  const a = applyPatch(SCHEMA, DEFAULTS, next);
+  if (!a.ok) return { ok: false, issues: formatIssues('', a.issues) };
+  if (s.b?.patch !== undefined) {
+    const b = applyPatch(SCHEMA, a.value, s.b.patch);
+    if (!b.ok) return { ok: false, issues: formatIssues('B: ', b.issues) };
+  }
+  return { ok: true, state: { ...s, patch: next } };
 }
 
 const STATE_KEYS = ['v', 'seed', 'noise', 'patch', 'view', 'b'];

@@ -6,7 +6,7 @@ It is the successor of [world-imaginer](https://github.com/MaestreDniel/world-im
 
 ## Status
 
-SP0 and SP1 are complete: the app shows a sky canvas and a capability report, and `?lab=noise` inspects every climate noise (deployed at https://world-imaginer-voxel.vercel.app). SP2 (column stage, 2D biomes, map and parameter tooling) is next.
+SP0 (scaffold, guardrails, CI) is complete: the app shows a sky canvas and a capability report, deployed at https://world-imaginer-voxel.vercel.app. SP1 (deterministic math core, with the `?lab=noise` page that inspects every climate noise) is implemented on branch `sp1/math-core`; its exit is pending CI and the Chrome/Firefox determinism check. SP2 (column stage, 2D biomes, map and parameter tooling) comes next.
 
 ## Development
 
