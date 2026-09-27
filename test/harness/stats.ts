@@ -57,3 +57,33 @@ export function refErf(x: number): number {
   for (let n = 60; n >= 1; n--) k = x + n / 2 / k;
   return 1 - Math.exp(-x * x) / (Math.sqrt(Math.PI) * k);
 }
+
+export function pearson(a: ArrayLike<number>, b: ArrayLike<number>): number {
+  const n = a.length;
+  let ma = 0;
+  let mb = 0;
+  for (let i = 0; i < n; i++) { ma += a[i]!; mb += b[i]!; }
+  ma /= n;
+  mb /= n;
+  let sab = 0;
+  let saa = 0;
+  let sbb = 0;
+  for (let i = 0; i < n; i++) {
+    const x = a[i]! - ma;
+    const y = b[i]! - mb;
+    sab += x * y;
+    saa += x * x;
+    sbb += y * y;
+  }
+  return sab / Math.sqrt(saa * sbb);
+}
+
+export function sampleSd(a: ArrayLike<number>): number {
+  const n = a.length;
+  let m = 0;
+  for (let i = 0; i < n; i++) m += a[i]!;
+  m /= n;
+  let s = 0;
+  for (let i = 0; i < n; i++) s += (a[i]! - m) ** 2;
+  return Math.sqrt(s / (n - 1));
+}
