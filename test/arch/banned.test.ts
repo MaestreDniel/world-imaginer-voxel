@@ -34,6 +34,7 @@ test('bad fixture tree reports every banned use', () => {
     'src/render/materials/rawImport.ts:1 raw-import',
     'src/render/threeAudio.ts:1 three-audio',
     'src/render/threeAudioNamespace.ts:2 three-audio',
+    'src/render/threeAudioReexport.ts:1 three-audio',
     'src/ui/audio.ts:1 webaudio-outside-sound',
     'src/ui/shader.ts:1 glsl-outside-materials',
     'src/world/clock.ts:1 nondeterministic',
