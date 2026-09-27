@@ -1,4 +1,32 @@
 {
   "generatorVersion": 0,
-  "entries": {}
+  "entries": {
+    "sp1.detMath.detCos": "feb91af46e2d5fa8",
+    "sp1.detMath.detErf": "2e75e35244a19c1a",
+    "sp1.detMath.detExp": "c53d7ddf72bd3cec",
+    "sp1.detMath.detExp2": "169843df6c4b480a",
+    "sp1.detMath.detSin": "c0068832078fcc5f",
+    "sp1.detMath.detSmoothstep": "e8ecc239194f0001",
+    "sp1.noise.climate.C": "680c01ba6642f1a7",
+    "sp1.noise.climate.E": "58586d7808dfe2d1",
+    "sp1.noise.climate.H": "bbeef615830d715b",
+    "sp1.noise.climate.R": "7f29f6fd6882fcf0",
+    "sp1.noise.climate.T": "98a56062d2803095",
+    "sp1.noise.climate.W": "a0f5467da1603401",
+    "sp1.noise.climate.warp.C.noise.x": "73777f2e5850f398",
+    "sp1.noise.climate.warp.C.noise.z": "2eeae0c123b03ad4",
+    "sp1.noise.climate.warp.R.noise.x": "3b557c06de0599df",
+    "sp1.noise.climate.warp.R.noise.z": "cd46ececce41f6e0",
+    "sp1.noise.climate.warp.shift.noise.x": "ab58facf37a59f64",
+    "sp1.noise.climate.warp.shift.noise.z": "ce2a355bb0a4b957",
+    "sp1.noise.test.adv2d16": "12594d7f09c393c9",
+    "sp1.noise.test.adv3d32": "a456079e4b571a2c",
+    "sp1.noise.test.adv3d8": "439e4ef6ce852dd6",
+    "sp1.noise.test.density3d": "127615bde2c54f3e",
+    "sp1.params": "47645b99620ed764",
+    "sp1.spline.JAG": "445a1955b3113d35",
+    "sp1.spline.OFFSET": "9d5ae62fbb06366d",
+    "sp1.spline.SIGMA": "7163452d6496dba1",
+    "sp1.spline.TANGENT_FIXTURE": "48c1ad609fc51ac9"
+  }
 }

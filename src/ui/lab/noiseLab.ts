@@ -9,6 +9,7 @@ import { seedFromInput } from '../../core/seed';
 import { pearson } from '../../metrics/noiseStats';
 import { ADVERSARIAL_DEFS, DENSITY3D_DEF } from '../../metrics/sp1Fixtures';
 import { resolveSeedText } from '../seedBox';
+import { mountDeterminismPanel } from './determinismPanel';
 import { createFieldView, type Camera, type FieldView } from './fieldView';
 import { decodeLabState, DEFAULT_LAB_STATE, encodeLabState, labParams, mergePatch, type LabState } from './labState';
 import { createStatsPanel, type StatsPanel } from './statsPanel';
@@ -277,5 +278,6 @@ export function mountNoiseLab(root: HTMLElement): void {
   copyButton.addEventListener('click', () => setState({ ...state, b: {} }));
 
   if (!current().noises.some((n) => n.seedName === state.noise)) notice.textContent = `unknown noise ${state.noise}; showing ${DEFAULT_LAB_STATE.noise}`;
+  mountDeterminismPanel(side);
   render();
 }
