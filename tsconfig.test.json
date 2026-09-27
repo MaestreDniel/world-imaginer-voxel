@@ -1,0 +1,6 @@
+{
+  "extends": "./tsconfig.base.json",
+  "compilerOptions": { "lib": ["ES2023", "DOM"], "types": ["node", "vite/client"] },
+  "include": ["test/**/*.ts", "vite.config.ts", "vitest.config.ts"],
+  "exclude": ["test/arch/fixtures/**"]
+}
