@@ -1,0 +1,24 @@
+:root { color-scheme: dark; --panel: #16213e; --line: #2a3558; --text: #e0e0e0; }
+* { box-sizing: border-box; margin: 0; }
+html, body, #app { height: 100%; }
+body { background: #0f1629; color: var(--text); font: 13px/1.4 system-ui, sans-serif; overflow: hidden; }
+.shell {
+  display: grid; height: 100%;
+  grid-template-columns: 1fr minmax(260px, 22rem);
+  grid-template-rows: auto 1fr;
+  grid-template-areas: "toolbar toolbar" "canvas panel";
+}
+.toolbar { grid-area: toolbar; display: flex; gap: 1rem; align-items: center; padding: .4rem .8rem; background: var(--panel); border-bottom: 1px solid var(--line); }
+.canvas-host { grid-area: canvas; position: relative; min-width: 0; min-height: 0; }
+.canvas-host canvas { display: block; width: 100%; height: 100%; }
+.side-panel { grid-area: panel; overflow: auto; padding: .8rem; background: var(--panel); border-left: 1px solid var(--line); display: grid; gap: .6rem; align-content: start; }
+.hud { margin-left: auto; font-variant-numeric: tabular-nums; opacity: .85; }
+.cap-table { width: 100%; border-collapse: collapse; }
+.cap-table td { padding: 2px 4px; border-bottom: 1px solid var(--line); vertical-align: top; }
+.ok { color: #7bd88f; } .bad { color: #ff6b6b; } .warn { color: #ffd166; }
+.error-screen { display: grid; gap: 1rem; align-content: center; height: 100%; max-width: 48rem; margin: 0 auto; padding: 2rem; overflow: auto; }
+.error-screen pre { white-space: pre-wrap; background: var(--panel); padding: .8rem; border-radius: 4px; }
+@media (max-width: 720px) {
+  .shell { grid-template-columns: 1fr; grid-template-rows: auto 1fr auto; grid-template-areas: "toolbar" "canvas" "panel"; }
+  .side-panel { max-height: 40vh; border-left: 0; border-top: 1px solid var(--line); }
+}
