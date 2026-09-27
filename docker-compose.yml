@@ -1,0 +1,22 @@
+services:
+  world-imaginer-voxel:
+    build:
+      context: .
+    container_name: world_imaginer_voxel
+    ports:
+      - "5183:5183"
+    environment:
+      - VITE_ALLOWED_HOSTS=${VITE_ALLOWED_HOSTS:-}
+    volumes:
+      - .:/app
+      - world_imaginer_voxel_modules:/app/node_modules
+    networks:
+      - app-network
+
+networks:
+  app-network:
+    external: true
+    name: maestre-web_app-network
+
+volumes:
+  world_imaginer_voxel_modules:
