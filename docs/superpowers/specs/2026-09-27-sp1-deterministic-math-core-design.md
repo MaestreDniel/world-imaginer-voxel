@@ -1,7 +1,7 @@
 # SP1 — Deterministic math core (Design)
 
 Date: 2026-09-27
-Status: Draft, revised after an independent three-lens review — awaiting user review
+Status: Approved (2026-09-27); in implementation on branch `sp1/math-core`
 Parent: master spec `2026-09-26-architecture-design.md` — §10 SP1, §1, §2.5, §2.7, §3.1-3.3, §3.17, §5.1, §6.3, §6.4, §7, §8 risks 4 and 6; decisions D6, D16, D17 and the new D20.
 
 References written "master §x" point to the master spec; a bare "§x" points to this document.
@@ -365,7 +365,7 @@ getPath(value: unknown, path: string): unknown;   patchAt(path: string, value: u
 
 | family | codes |
 |---|---|
-| params | `UNKNOWN_KEY`, `NOT_OBJECT`, `NOT_NUMBER`, `NOT_FINITE`, `NOT_INTEGER`, `INT_TOO_LARGE`, `OUT_OF_RANGE`, `NOT_BOOL`, `BAD_ENUM`, `AMPLITUDES_LENGTH`, `AMPLITUDES_ZERO`, `YSCALE_NOT_1`, `REMAP_NEEDS_DOUBLE`, `REMAP_NEEDS_2D` |
+| params | `UNKNOWN_KEY`, `MISSING_KEY`, `NOT_OBJECT`, `NOT_NUMBER`, `NOT_FINITE`, `NOT_INTEGER`, `INT_TOO_LARGE`, `OUT_OF_RANGE`, `NOT_BOOL`, `BAD_ENUM`, `AMPLITUDES_LENGTH`, `AMPLITUDES_ZERO`, `YSCALE_NOT_1`, `REMAP_NEEDS_DOUBLE`, `REMAP_NEEDS_2D` |
 | presets | `BAD_FORMAT`, `BAD_NAME`, `RESERVED_NAME`, `UNKNOWN_PROFILE`, `BAD_SCHEMA_VERSION`, `NEWER_SCHEMA_VERSION` |
 | migrations | `MIGRATION_FAILED` |
 
@@ -621,6 +621,8 @@ In this list, a bold section number is a master section; "here" marks a section 
 ### Threshold log
 
 (One line per commit that changes `test/thresholds.lock.json`.)
+
+- Task 1: `STARTED_SPS` gains `SP1`; no threshold rows yet.
 
 ## Appendix A — `core/detMath.ts` reference implementation
 

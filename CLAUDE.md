@@ -6,7 +6,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 Browser voxel explorer + editor (TypeScript, Vite, three.js r186 WebGL2 with custom GLSL3 ShaderMaterials). Successor of `09-density-terrain` in [world-imaginer](https://github.com/MaestreDniel/world-imaginer); nothing is imported or copied wholesale from there.
 
-**Status:** SP0 complete (scaffold, guardrails, CI; all exit checks done 2026-09-27). SP1 is next.
+**Status:** SP0 complete (2026-09-27). SP1 (deterministic math core) in implementation on branch `sp1/math-core`.
 
 ## Source of truth
 
@@ -31,6 +31,9 @@ Browser voxel explorer + editor (TypeScript, Vite, three.js r186 WebGL2 with cus
 - In `core/`, `world/` and `gen/`: no `Math.random`, `Date.now`, `performance.now` or `console.*`; in `gen/` no `Math.sin/cos/exp/...` (use `core/detMath`) and no exported numeric constants (tunables live in `ParamSchema`).
 - No audio files (`.ogg`/`.mp3`/`.wav`) in the repository; sound packs are user-supplied.
 - Conventional commits scoped by area: `feat(gen):`, `feat(render):`, `fix(store):`, `test(metrics):`, `docs(spec):`, …
+- Determinism (SP1): in `core/noise/**`, `core/spline/**` and `metrics/**` an imported value binding is used only through a top-level `const` alias (vitest turns imports into getters; arch-tested); `core/` and `gen/` never call `Intl`, `localeCompare`, `toLocale*`, `.normalize(`, `TextEncoder` or `TextDecoder`; `Math.fround` is banned in `core/` and `gen/`.
+- Generator outputs are NaN-free; every golden hasher writes NaN as `0x7FF8000000000000` (`hashF64`). Every validated parameter number goes through `q15`; canonical JSON throws on NaN, ±Infinity and −0.
+- A noise leaf's seed name is its path; renaming the path needs `seedName` to keep the same worlds.
 
 ## Runtime and deployment
 
