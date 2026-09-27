@@ -1,4 +1,4 @@
-import { mkdtempSync, writeFileSync } from 'node:fs';
+import { mkdirSync, mkdtempSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { describe, expect, test } from 'vitest';
@@ -101,6 +101,25 @@ describe('resolveTarget', () => {
     expect(resolveTarget('index.html', '/src/main.ts', 'html')).toEqual({ kind: 'repo', path: 'src/main.ts' });
     expect(resolveTarget('test/x.ts', 'node:fs', 'value')).toEqual({ kind: 'builtin' });
     expect(resolveTarget('src/render/x.ts', 'three/addons/x.js', 'value')).toEqual({ kind: 'bare', name: 'three/addons/x.js' });
+  });
+
+  test('with a root, a directory import falls back to its index.ts and a missing .js falls back to its .ts sibling', () => {
+    const dir = mkdtempSync(join(tmpdir(), 'scan-root-'));
+    mkdirSync(join(dir, 'src/render/materials'), { recursive: true });
+    writeFileSync(join(dir, 'src/render/materials/index.ts'), 'export {};\n');
+    mkdirSync(join(dir, 'src/workers'), { recursive: true });
+    writeFileSync(join(dir, 'src/workers/task.worker.ts'), 'export {};\n');
+
+    // without a root, resolution stays purely lexical (.ts appended, disk never touched)
+    expect(resolveTarget('src/ui/x.ts', '../render/materials', 'value')).toEqual({ kind: 'repo', path: 'src/render/materials.ts' });
+    expect(resolveTarget('src/ui/x.ts', '../workers/task.worker.js', 'value')).toEqual({ kind: 'repo', path: 'src/workers/task.worker.js' });
+
+    // with a root, the on-disk fallbacks kick in
+    expect(resolveTarget('src/ui/x.ts', '../render/materials', 'value', dir)).toEqual({ kind: 'repo', path: 'src/render/materials/index.ts' });
+    expect(resolveTarget('src/ui/x.ts', '../workers/task.worker.js', 'value', dir)).toEqual({ kind: 'repo', path: 'src/workers/task.worker.ts' });
+
+    // a lexical target that already exists on disk is left untouched
+    expect(resolveTarget('src/ui/x.ts', '../render/materials/index', 'value', dir)).toEqual({ kind: 'repo', path: 'src/render/materials/index.ts' });
   });
 });
 

@@ -1,4 +1,4 @@
-import { layerOf, resolveTarget, type Edge, type ScannedFile, type Violation } from '../scan';
+import { layerOf, resolveTarget, ROOT, type Edge, type ScannedFile, type Violation } from '../scan';
 
 interface LayerRule {
   value: readonly string[];
@@ -52,11 +52,11 @@ const TEST_IMPORT_EXCEPTIONS: ReadonlyArray<{ from: (f: ScannedFile) => boolean;
   { from: (f) => f.path === 'src/ui/metricsDashboard.ts', target: 'test/thresholds.ts' },
 ];
 
-function checkEdge(f: ScannedFile, layer: string, e: Edge): Violation | null {
+function checkEdge(f: ScannedFile, layer: string, e: Edge, root: string): Violation | null {
   const at = (rule: string, message: string): Violation => ({ file: f.path, line: e.line, rule, message });
   if (e.kind === 'type-import-expr') return at('type-import-expr', `use import type instead of import('${e.spec}')`);
   if (e.kind === 'dynamic-nonliteral') return at('dynamic-nonliteral', 'dynamic import with a non-literal specifier');
-  const t = resolveTarget(f.path, e.spec, e.kind);
+  const t = resolveTarget(f.path, e.spec, e.kind, root);
   if (t.kind === 'bare') {
     const isThree = t.name === 'three' || t.name.startsWith('three/');
     return isThree && layer !== 'render' ? at('three-outside-render', `${layer} imports ${t.name}`) : null;
@@ -80,7 +80,7 @@ function checkEdge(f: ScannedFile, layer: string, e: Edge): Violation | null {
   return allowed(rule, srcRel, e.kind) ? null : at('layer', `${layer} may not import ${srcRel}${e.kind === 'type' ? ' (type-only)' : ''}`);
 }
 
-export function checkImports(files: readonly ScannedFile[]): Violation[] {
+export function checkImports(files: readonly ScannedFile[], root: string = ROOT): Violation[] {
   const out: Violation[] = [];
   for (const f of files) {
     if (!f.path.startsWith('src/')) continue;
@@ -90,7 +90,7 @@ export function checkImports(files: readonly ScannedFile[]): Violation[] {
       continue;
     }
     for (const e of f.edges) {
-      const v = checkEdge(f, layer, e);
+      const v = checkEdge(f, layer, e, root);
       if (v) out.push(v);
     }
   }

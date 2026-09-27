@@ -326,17 +326,41 @@ function withExtension(path: string): string {
   return KNOWN_EXTS.has(extname(path).toLowerCase()) ? path : `${path}.ts`;
 }
 
-export function resolveTarget(fromPath: string, spec: string, edgeKind: EdgeKind): Target {
+/**
+ * Lexical resolution (`withExtension`) only ever appends `.ts`; it never touches disk, so a
+ * fixture-less caller (`resolveTarget` without `root`) keeps its old, pure behaviour. When `root`
+ * is given, two on-disk fallbacks apply, matching how bundler resolution actually behaves:
+ * a directory import (the lexical `<p>.ts` is missing but `<p>/index.ts` exists) resolves to the
+ * index file, and a `.js`/`.mjs` specifier whose own file is missing but whose `.ts`/`.mts` sibling
+ * exists resolves to that sibling. Without these, a broken directory or `.js` import silently
+ * resolves to a path nothing on disk uses, and rules keyed on the resolved path (materials,
+ * worker-import, layer) fail open instead of reporting it.
+ */
+function resolveOnDisk(lexical: string, root: string | undefined): string {
+  if (root === undefined || existsSync(join(root, lexical))) return lexical;
+  const ext = extname(lexical);
+  if (ext === '.js' || ext === '.mjs') {
+    const sibling = `${lexical.slice(0, -ext.length)}${ext === '.js' ? '.ts' : '.mts'}`;
+    return existsSync(join(root, sibling)) ? sibling : lexical;
+  }
+  if (ext === '.ts') {
+    const indexPath = `${lexical.slice(0, -'.ts'.length)}/index.ts`;
+    if (existsSync(join(root, indexPath))) return indexPath;
+  }
+  return lexical;
+}
+
+export function resolveTarget(fromPath: string, spec: string, edgeKind: EdgeKind, root?: string): Target {
   const clean = spec.replace(/[?#].*$/, '');
   if (spec.startsWith('node:') || builtinModules.includes(clean)) return { kind: 'builtin' };
   if (/^[a-z][a-z0-9+.-]*:/i.test(spec) || spec.startsWith('//')) return { kind: 'url' };
   if (spec.startsWith('/')) {
-    return edgeKind === 'html' ? { kind: 'repo', path: withExtension(clean.slice(1)) } : { kind: 'absolute' };
+    return edgeKind === 'html' ? { kind: 'repo', path: resolveOnDisk(withExtension(clean.slice(1)), root) } : { kind: 'absolute' };
   }
   if (spec.startsWith('.')) {
     const joined = posix.normalize(posix.join(posix.dirname(fromPath), clean));
     if (joined === '..' || joined.startsWith('../')) return { kind: 'escape' };
-    return { kind: 'repo', path: withExtension(joined) };
+    return { kind: 'repo', path: resolveOnDisk(withExtension(joined), root) };
   }
   return { kind: 'bare', name: spec };
 }

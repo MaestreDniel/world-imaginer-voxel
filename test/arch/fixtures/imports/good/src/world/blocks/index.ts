@@ -1,0 +1,1 @@
+export { STONE } from './registry';

@@ -31,7 +31,7 @@ export function checkResolution(root: string, files: readonly ScannedFile[]): Vi
     for (const e of f.edges) {
       if (e.kind === 'dynamic-nonliteral' || e.kind === 'type-import-expr') continue;
       const at = (rule: string, message: string) => out.push({ file: f.path, line: e.line, rule, message });
-      const t = resolveTarget(f.path, e.spec, e.kind);
+      const t = resolveTarget(f.path, e.spec, e.kind, root);
       const inSrc = f.path.startsWith('src/');
       if (t.kind === 'url') { at('url-specifier', `${e.spec} is a URL`); continue; }
       if (t.kind === 'absolute') { at('absolute-specifier', `${e.spec} is an absolute path`); continue; }

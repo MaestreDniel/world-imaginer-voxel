@@ -4,7 +4,7 @@ import { checkImports } from './rules/imports';
 import { ROOT, scanTree, sortViolations } from './scan';
 
 const fixture = (name: string) => fileURLToPath(new URL(`./fixtures/imports/${name}`, import.meta.url));
-const brief = (root: string) => sortViolations(checkImports(scanTree(root))).map((v) => `${v.file}:${v.line} ${v.rule}`);
+const brief = (root: string) => sortViolations(checkImports(scanTree(root), root)).map((v) => `${v.file}:${v.line} ${v.rule}`);
 
 test('good fixture tree has no violations', () => {
   expect(brief(fixture('good'))).toEqual([]);
@@ -21,12 +21,14 @@ test('bad fixture tree reports every violation', () => {
     'src/main.ts:1 worker-import',
     'src/render/bad-gen-type.ts:1 layer',
     'src/strange/bad-layer.ts:1 unknown-layer',
+    'src/ui/bad-dir-materials.ts:1 materials-outside-render',
     'src/ui/bad-materials.ts:1 materials-outside-render',
     'src/ui/bad-test-import.ts:1 test-import',
     'src/ui/bad-worker-edge.ts:1 worker-edge',
+    'src/ui/bad-worker-js.ts:1 worker-import',
   ]);
 });
 
 test('the repository follows the layer table', () => {
-  expect(sortViolations(checkImports(scanTree(ROOT)))).toEqual([]);
+  expect(sortViolations(checkImports(scanTree(ROOT), ROOT))).toEqual([]);
 });
