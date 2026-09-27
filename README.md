@@ -6,7 +6,18 @@ It is the successor of [world-imaginer](https://github.com/MaestreDniel/world-im
 
 ## Status
 
-Design approved; implementation has not started yet. The first sub-project (SP0: scaffold, guardrails and CI) is next.
+SP0 (scaffold, guardrails, CI) is complete: the app shows a sky canvas and a capability report; SP1 (deterministic math core) is next.
+
+## Development
+
+```bash
+npm install
+npm run dev            # http://localhost:5183 (must be localhost or HTTPS)
+npm run build          # typecheck + production build
+npm test               # unit + arch + fast metrics
+npm run test:metrics   # quick metric tier (CI)
+docker compose up world-imaginer-voxel
+```
 
 ## Design
 

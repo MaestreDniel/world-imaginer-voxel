@@ -6,7 +6,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 Browser voxel explorer + editor (TypeScript, Vite, three.js r186 WebGL2 with custom GLSL3 ShaderMaterials). Successor of `09-density-terrain` in [world-imaginer](https://github.com/MaestreDniel/world-imaginer); nothing is imported or copied wholesale from there.
 
-**Status:** design approved, no code yet. SP0 (scaffold, guardrails, CI) is next. Update the Commands section when SP0 lands.
+**Status:** SP0 complete (scaffold, guardrails, CI). SP1 is next.
 
 ## Source of truth
 
@@ -15,11 +15,17 @@ Browser voxel explorer + editor (TypeScript, Vite, three.js r186 WebGL2 with cus
 
 ## Commands
 
-None yet. SP0 adds: `npm run dev`, `npm run build`, `npm test` (unit + arch + fast metrics), `npm run test:metrics`, `npm run test:metrics:full`, `npm run bench`, `npm run test:accept-thresholds`, `npm run test:goldens`.
+- `npm run dev` / `npm run preview` — http://localhost:5183 (COOP/COEP headers; open via localhost or HTTPS)
+- `npm run build` — `typecheck` (three tsconfigs) + `vite build`
+- `npm test` — vitest projects `unit`, `arch`, `metrics-fast`; `npm run test:metrics` (quick, CI), `npm run test:metrics:full` (SP exit), `npm run bench`
+- `npm run test:accept-thresholds` — rewrite `test/thresholds.lock.json` (needs a spec amendment in the same change; CI checks it)
+- `npm run test:goldens` — record and merge goldens (refuses changed goldens without a `GENERATOR_VERSION` bump)
+- `docker compose up world-imaginer-voxel`
+- Each sub-project appends its id to `STARTED_SPS` in `test/harness/sp.ts` in its first commit.
 
 ## Conventions
 
-- TypeScript strict. Runtime dependency: `three` only. Dev dependencies: `vite`, `typescript`, `vitest`, `@types/three`.
+- TypeScript strict. Runtime dependency: `three` only. Dev dependencies: `vite`, `typescript`, `vitest`, `@types/three`, `@types/node`.
 - Tests are mandatory (vitest): unit, arch and metric tests. Metric thresholds are locked (`test/thresholds.lock.json`); never loosen one without amending the spec. Golden changes require a `GENERATOR_VERSION` bump.
 - Layer rules (spec §1) are enforced by arch tests: `core` ← `world` ← `gen` ← L2 (`light`, `mesh`, `sim`, `persist`, `metrics`); `render/` is the only place three is imported and `render/materials/**` the only place GLSL lives; `sound/` is the only place WebAudio is used.
 - In `core/`, `world/` and `gen/`: no `Math.random`, `Date.now`, `performance.now` or `console.*`; in `gen/` no `Math.sin/cos/exp/...` (use `core/detMath`) and no exported numeric constants (tunables live in `ParamSchema`).

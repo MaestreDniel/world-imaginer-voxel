@@ -52,7 +52,7 @@ Shared options: `strict`, `target: ES2023`, `module: ESNext`, `moduleResolution:
 .nvmrc  .gitignore  .dockerignore
 Dockerfile  docker-compose.yml  vercel.json
 index.html  package.json  package-lock.json
-tsconfig.json  tsconfig.worker.json  tsconfig.test.json
+tsconfig.json  tsconfig.worker.json  tsconfig.test.json  tsconfig.base.json     shared compiler options
 vite.config.ts  vitest.config.ts
 src/
   main.ts                           boot: probe → error screen, or shell + renderer + HUD
@@ -70,7 +70,6 @@ test/
   harness/sp.ts                     STARTED_SPS, SP_DEPS
   harness/metric.ts                 metricTest(id, parts, fn)
   harness/goldens.ts                createGoldenStore(), expectGolden()
-  harness/goldensSetup.ts           vitest globalSetup for UPDATE_GOLDENS merges
   harness/lock.ts                   canonical JSON + sha256 + diff (LOOSEN/TIGHTEN)
   thresholds.ts  thresholds.lock.json  goldens.json
   unit/…  unit/fixtures/sabWorker.mjs
@@ -98,7 +97,7 @@ There is no `scripts/` folder: acceptance runs through vitest, which avoids Node
 
 ## vitest configuration (`vitest.config.ts`)
 
-`defineConfig` from `vitest/config` with root `test: { environment: 'node', passWithNoTests: true, globalSetup: ['test/harness/goldensSetup.ts'], projects: [...] }`. `passWithNoTests` is root-only in Vitest 5 (ignored inside projects), and inline projects inherit the root config, so each project sets only `name`, `include`, `env` (and `benchmark` for bench):
+`defineConfig` from `vitest/config` with root `test: { environment: 'node', passWithNoTests: true, projects: [...] }`. `passWithNoTests` is root-only in Vitest 5 (ignored inside projects), and inline projects inherit the root config, so each project sets only `name`, `include`, `env` (and `benchmark` for bench):
 
 | project | include | env |
 |---|---|---|
@@ -129,7 +128,7 @@ There is no `scripts/` folder: acceptance runs through vitest, which avoids Node
 
 **Goldens.** `test/goldens.json` is `{ generatorVersion, entries }`. `expectGolden(key, hash)` uses a store from `createGoldenStore(path = 'test/goldens.json')`; `goldens.test.ts` passes a temporary copy.
 - Normal mode: `goldens.generatorVersion !== GENERATOR_VERSION` → fail ("run `npm run test:goldens`"); missing entry → fail with the same hint; mismatch → fail.
-- `UPDATE_GOLDENS=1`: the root `globalSetup` reads the committed `generatorVersion` once and `provide`s it; each worker writes its observations to a per-run temporary directory; the teardown merges them. New keys are added; changed existing entries are accepted only if `GENERATOR_VERSION > base`, otherwise the run fails listing every such key and writes nothing; `generatorVersion` is set once, at the end.
+- `UPDATE_GOLDENS=1`: every `expectGolden` call writes its observation to `test/.cache/goldens-obs/`; `npm run test:goldens` then runs `MERGE_GOLDENS=1 vitest run --project arch test/arch/goldensMerge.test.ts`, which merges them once: new keys are added; changed existing entries are accepted only if `GENERATOR_VERSION > goldens.generatorVersion`, otherwise the run fails listing every such key and writes nothing; `generatorVersion` is set once, at the end. (A root `globalSetup` was dropped because inline vitest projects inherit it and would run it once per project.)
 
 **CI governance check.** `test/arch/governance.test.ts` runs when `GOVERNANCE_BASE` is set (CI) and is otherwise skipped ("no base ref"). Using `git show` / `git diff --name-only` against that ref:
 - if a key present in the base `test/goldens.json` changed or disappeared, `GENERATOR_VERSION` (parsed from `src/core/constants.ts` at both refs) must have increased — this also catches hand-edited goldens;
@@ -144,6 +143,7 @@ There is no `scripts/` folder: acceptance runs through vitest, which avoids Node
 - An edge is **type-only** only for `import type …` and `export type … from`. `import { type X } from` is a value edge (verbatimModuleSyntax keeps `import {} from`, which Vite still loads — verified). TypeScript `import('…')` type expressions are banned; write `import type`.
 - Specifiers are extracted first; the token rules then run on the text with comments and string/template contents blanked (the GLSL rule blanks only comments).
 - A file's layer is its first path segment under `src/`; `src/main.ts` is the layer `main`. Any other unclassified path fails until the table below is amended.
+- **Hardening done during implementation:** a dynamic `import()` with a non-literal or interpolated argument yields `dynamic-nonliteral` (a literal argument plus an import-attributes second argument still counts as a literal edge); a bare `import('…')` type expression is classified as `type-import-expr` only when it has no member access and sits after `typeof`, after `extends`, or inside a `type X = …` alias — a plain value-position annotation like `let v: import('…')` is accepted as a value edge; `blankJs` recognises regex literals (so a `/…/` after an operator or keyword is not mistaken for a comment start) and keeps `${…}` template expressions live as code while still blanking the surrounding template text; a match whose start position lies inside string or template text (rather than real code) is discarded by comparing the comments-only blank against the strings-blanked-too pass; and file extensions are compared case-insensitively throughout.
 
 ### Dependency table (`imports.test.ts`) — refines §1 "Dependency rules"
 
@@ -188,6 +188,7 @@ Every edge target must resolve inside the repository root: relative specifiers a
 - `ShaderMaterial`, `RawShaderMaterial`, `onBeforeCompile`, `ShaderChunk`, `ShaderLib`, `glslVersion` and the GLSL markers `#version`, `gl_Position`, `gl_FragColor`, `gl_FragCoord`, `precision (highp|mediump|lowp)` appear only under `render/materials/**` (GLSL lives in `*.glsl.ts` template literals). Raw shader files (`.glsl`, `.vert`, `.frag`, `.wgsl`) and `?raw` imports are not allowed anywhere.
 - WebAudio (`AudioContext`, `webkitAudioContext`, `OfflineAudioContext`, `AudioWorklet`, `AudioWorkletNode`, `AudioWorkletProcessor`, `registerProcessor`, `decodeAudioData`) appears only under `sound/`; three's audio classes (`Audio`, `AudioListener`, `PositionalAudio`, `AudioLoader`, `AudioAnalyser`) are never imported.
 - Anywhere in the repository: no file whose extension (case-insensitive) is `.ogg`, `.oga`, `.mp3`, `.wav`, `.flac`, `.m4a`, `.aac`, `.opus` or `.weba` (D17). Files checked: `git ls-files --cached --others --exclude-standard`, or, without git, a walk that skips `node_modules/`, `dist/`, `.git/`, `test/.cache/`.
+- **Hardening done during implementation:** numeric-export detection covers multi-declarator statements (`export const a = 1, b = 2`), `export { X }` of a module-level numeric binding, an initializer wrapped onto the next line, and `0b`/`0o` numeric literals, in addition to the forms already listed above; the three audio classes are also caught when imported through a namespace import (`import * as THREE from 'three'`), a default import, or re-exported by name from `'three'` (`export { Audio } from 'three'`), not only through a direct named import.
 
 ### Headers and subresources (`headers.test.ts`)
 
