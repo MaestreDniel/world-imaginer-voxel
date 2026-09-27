@@ -11,4 +11,8 @@ export interface ThresholdPart {
 export type ThresholdTable = Partial<Record<MetricId, Record<string, ThresholdPart>>>;
 
 /** Locked by test/thresholds.lock.json — change only with `npm run test:accept-thresholds` and a spec amendment. */
-export const THRESHOLDS: ThresholdTable = {};
+export const THRESHOLDS: ThresholdTable = {
+  N1: { ksD: { max: 0.015, activeFrom: 'SP1' }, sdErr: { max: 0.02, activeFrom: 'SP1' } },
+  N2: { value: { max: 0.02, activeFrom: 'SP1' } },
+  N3: { value: { min: 0.9, activeFrom: 'SP1' } },
+};

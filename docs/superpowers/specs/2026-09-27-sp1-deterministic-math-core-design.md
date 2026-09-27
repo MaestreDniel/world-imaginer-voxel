@@ -623,6 +623,7 @@ In this list, a bold section number is a master section; "here" marks a section 
 (One line per commit that changes `test/thresholds.lock.json`.)
 
 - Task 1: `STARTED_SPS` gains `SP1`; no threshold rows yet.
+- Task 20: add N1 (ksD ≤ 0.015, sdErr ≤ 0.02), N2 (value ≤ 0.02) and N3 (value ≥ 0.9), all `activeFrom: 'SP1'`.
 
 ## Appendix A — `core/detMath.ts` reference implementation
 

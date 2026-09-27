@@ -1,10 +1,33 @@
 {
-  "sha256": "3618099299052e747df8498139124b2b7df6bc22c6b75f911ba143621138327d",
+  "sha256": "a6745ab484d7f60b8fd6aecd96b2416edd1db6aa62642ff7dae00469386f0694",
   "canonical": {
     "startedSps": [
       "SP0",
       "SP1"
     ],
-    "thresholds": {}
+    "thresholds": {
+      "N1": {
+        "ksD": {
+          "activeFrom": "SP1",
+          "max": 0.015
+        },
+        "sdErr": {
+          "activeFrom": "SP1",
+          "max": 0.02
+        }
+      },
+      "N2": {
+        "value": {
+          "activeFrom": "SP1",
+          "max": 0.02
+        }
+      },
+      "N3": {
+        "value": {
+          "activeFrom": "SP1",
+          "min": 0.9
+        }
+      }
+    }
   }
 }
