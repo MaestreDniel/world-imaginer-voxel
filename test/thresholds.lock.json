@@ -1,0 +1,9 @@
+{
+  "sha256": "85f6eca6c79c3549587df3c8bfe4e33d8fef1d9e55f076065050ff4c7c894c55",
+  "canonical": {
+    "startedSps": [
+      "SP0"
+    ],
+    "thresholds": {}
+  }
+}
