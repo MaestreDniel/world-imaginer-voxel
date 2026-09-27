@@ -624,6 +624,7 @@ In this list, a bold section number is a master section; "here" marks a section 
 
 - Task 1: `STARTED_SPS` gains `SP1`; no threshold rows yet.
 - Task 20: add N1 (ksD ≤ 0.015, sdErr ≤ 0.02), N2 (value ≤ 0.02) and N3 (value ≥ 0.9), all `activeFrom: 'SP1'`.
+- Task 21: add N5 (horizontal, vertical ≤ 1.15), N6 (value ≤ 0.001) and U4 (registryIssues, migrationFailures, shapeLockViolations, readmeStale ≤ 0), all `activeFrom: 'SP1'`.
 
 ## Appendix A — `core/detMath.ts` reference implementation
 

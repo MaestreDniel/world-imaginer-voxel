@@ -15,4 +15,12 @@ export const THRESHOLDS: ThresholdTable = {
   N1: { ksD: { max: 0.015, activeFrom: 'SP1' }, sdErr: { max: 0.02, activeFrom: 'SP1' } },
   N2: { value: { max: 0.02, activeFrom: 'SP1' } },
   N3: { value: { min: 0.9, activeFrom: 'SP1' } },
+  N5: { horizontal: { max: 1.15, activeFrom: 'SP1' }, vertical: { max: 1.15, activeFrom: 'SP1' } },
+  N6: { value: { max: 0.001, activeFrom: 'SP1' } },
+  U4: {
+    registryIssues: { max: 0, activeFrom: 'SP1' },
+    migrationFailures: { max: 0, activeFrom: 'SP1' },
+    shapeLockViolations: { max: 0, activeFrom: 'SP1' },
+    readmeStale: { max: 0, activeFrom: 'SP1' },
+  },
 };

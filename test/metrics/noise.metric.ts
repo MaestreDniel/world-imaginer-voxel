@@ -5,7 +5,7 @@ import type { NoiseDef } from '../../src/core/noise/types';
 import { DEFAULTS } from '../../src/core/params/defaults';
 import { noiseInstances } from '../../src/core/params/noises';
 import { SCHEMA } from '../../src/core/params/schema';
-import { meanAbsPairDiff, meanAbsShiftDiff, Moments, pearson, samplePoints, ksUniform, type Field } from '../../src/metrics/noiseStats';
+import { lastOctaveWavelength, meanAbsPairDiff, meanAbsShiftDiff, Moments, pearson, Rose, samplePoints, ksUniform, zeroRate, type Field } from '../../src/metrics/noiseStats';
 import { ADVERSARIAL_DEFS, DENSITY3D_DEF } from '../../src/metrics/sp1Fixtures';
 import { metricTest } from '../harness/metric';
 
@@ -98,5 +98,45 @@ metricTest('N3', ['value'], () => {
       }
     }
   }
+  return { value: worst };
+});
+
+const latticeTerms = (def: NoiseDef) => def.octaves * (def.double ? 2 : 1);
+
+metricTest('N5', ['horizontal', 'vertical'], () => {
+  const n = pick(100000, 200000, 400000);
+  const pts = samplePoints('N5', n);
+  let horizontal = 0;
+  let vertical = 0;
+  const DENSITY = TEST_NOISES.find((t) => t.name === 'test.density3d')!;
+  for (const s of [1, 2]) {
+    for (const nz of [...SCHEMA_NOISES, DENSITY].filter((t) => latticeTerms(t.def) >= 2)) {
+      const nn = new Normal([s, 0], nz.name, nz.def);
+      const c = nn.clamp;
+      const h = lastOctaveWavelength(nz.def) / 128;
+      const f: Field = nz.dims === 2 ? (x, _y, z) => nn.z2(x, z) : (x, y, z) => nn.z3(x, y, z);
+      const hr = new Rose();
+      const vr = new Rose();
+      for (let i = 0; i < n; i++) {
+        const x = pts.x[i]!, y = pts.y[i]!, z = pts.z[i]!;
+        const xp = f(x + h, y, z), xm = f(x - h, y, z), zp = f(x, y, z + h), zm = f(x, y, z - h);
+        if (Math.abs(xp) !== c && Math.abs(xm) !== c && Math.abs(zp) !== c && Math.abs(zm) !== c) hr.add(xp - xm, zp - zm);
+        if (nz.dims === 3) {
+          const yp = f(x, y + h, z), ym = f(x, y - h, z);
+          if (Math.abs(xp) !== c && Math.abs(xm) !== c && Math.abs(yp) !== c && Math.abs(ym) !== c) vr.add(xp - xm, yp - ym);
+        }
+      }
+      horizontal = Math.max(horizontal, hr.ratio());
+      if (nz.dims === 3) vertical = Math.max(vertical, vr.ratio());
+    }
+  }
+  return { horizontal, vertical };
+});
+
+metricTest('N6', ['value'], () => {
+  const n = pick(50000, 200000, 1000000);
+  const pts = samplePoints('N6', n);
+  let worst = 0;
+  for (const s of [1, 2]) for (const nz of [...SCHEMA_NOISES, ...TEST_NOISES]) worst = Math.max(worst, zeroRate(field([s, 0], nz), pts, nz.corners));
   return { value: worst };
 });

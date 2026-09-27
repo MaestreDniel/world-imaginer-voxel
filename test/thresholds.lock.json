@@ -1,5 +1,5 @@
 {
-  "sha256": "a6745ab484d7f60b8fd6aecd96b2416edd1db6aa62642ff7dae00469386f0694",
+  "sha256": "7fa91eb8605cf5ca095c760a673dd2379b1f64b732a738d33f782c7e5c8b849a",
   "canonical": {
     "startedSps": [
       "SP0",
@@ -26,6 +26,40 @@
         "value": {
           "activeFrom": "SP1",
           "min": 0.9
+        }
+      },
+      "N5": {
+        "horizontal": {
+          "activeFrom": "SP1",
+          "max": 1.15
+        },
+        "vertical": {
+          "activeFrom": "SP1",
+          "max": 1.15
+        }
+      },
+      "N6": {
+        "value": {
+          "activeFrom": "SP1",
+          "max": 0.001
+        }
+      },
+      "U4": {
+        "migrationFailures": {
+          "activeFrom": "SP1",
+          "max": 0
+        },
+        "readmeStale": {
+          "activeFrom": "SP1",
+          "max": 0
+        },
+        "registryIssues": {
+          "activeFrom": "SP1",
+          "max": 0
+        },
+        "shapeLockViolations": {
+          "activeFrom": "SP1",
+          "max": 0
         }
       }
     }
