@@ -537,7 +537,7 @@ Sampling rules shared by N1-N6 (implemented in `src/metrics/noiseStats.ts`):
 - N5 excludes single-lattice-term noises, which are intrinsically anisotropic (1.1-1.4 measured). It skips clamped samples because both differences are 0 there and atan2(0, 0) = 0 inflates one bin (bias about 0.02).
 - N6 needs the adversarial defs: double stacks and large-λ fields pass even with integer origins (which give 0.66-1.97 % on the adversarial defs), so without them the metric measures nothing.
 - P = 65536 in N3 catches a 16-bit lattice-coordinate wrap that {256 … 4096} misses.
-- Measured by the review re-implementation (balanced gradients, ±2^19): N1 D ≤ 0.0118 (16 × 50 k) and ≤ 0.0073 (16 × 200 k), sdErr ≤ 0.011; N3 0.951; N5 1.031-1.100; N6 ≤ 0.0045 %. The fast tier takes a few seconds under vitest with aliased imports.
+- Measured by the review re-implementation (balanced gradients, ±2^19): N1 D ≤ 0.0118 (16 × 50 k) and ≤ 0.0073 (16 × 200 k), sdErr ≤ 0.011; N3 0.951; N5 1.031-1.100. The plan's dry run (fast tier, 7 s under vitest): N1 D 0.0100, sdErr 0.0076; N2 0.0122; N3 0.953; N5 1.074 / 1.051; N6 0.058 %, all from `test.adv2d16` (exact cancellations of a single-octave field on the ½ slice at integer points; 0.054 % at 1 M points, so the 0.1 % gate keeps a 1.9× margin while integer origins would give 0.66 %).
 
 ### 7.4 Goldens
 
