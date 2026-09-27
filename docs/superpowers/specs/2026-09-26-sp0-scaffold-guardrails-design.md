@@ -230,7 +230,7 @@ Blocking causes show a full-screen error screen naming each one; otherwise the s
 
 - **`vite.config.ts`**: `server` and `preview` on port 5183 with `strictPort` and the exact COOP/COEP headers; `worker.format = 'es'`; `build.chunkSizeWarningLimit = 1024` (three alone is ≈ 520 kB minified); `server.allowedHosts = ['world-imaginer-voxel', ...(process.env.VITE_ALLOWED_HOSTS?.split(',') ?? [])]` (localhost and IPs are allowed by default; Vite 8 answers other hosts with 403).
 - **`vercel.json`**: the same two headers for `source: "/(.*)"`; build `npm run build`, output `dist`. The user links the Vercel project to the repository root.
-- **Dockerfile**: `node:24-slim`, `npm ci`, `npx vite --host 0.0.0.0 --port 5183`. **`.dockerignore`**: `node_modules`, `dist`, `.git`, `test/.cache`. **`docker-compose.yml`**: service `world-imaginer-voxel`, container `world_imaginer_voxel`, `5183:5183`, bind mount plus a `node_modules` volume, external network `maestre-web_app-network`. Open it through `http://localhost:5183` to keep the secure context; a reverse proxy must forward its host via `VITE_ALLOWED_HOSTS`, terminate TLS and pass COOP/COEP through unchanged.
+- **Dockerfile**: `node:24-slim`, `npm ci`, `npx vite --host 0.0.0.0 --port 5183`. **`.dockerignore`**: `node_modules`, `dist`, `.git`, `test/.cache`. **`docker-compose.yml`**: service `world-imaginer-voxel`, container `world_imaginer_voxel`, `5183:5183`, bind mount plus a `node_modules` volume, the default compose network. Open it through `http://localhost:5183` to keep the secure context; a reverse proxy must forward its host via `VITE_ALLOWED_HOSTS`, terminate TLS and pass COOP/COEP through unchanged.
 - **CI** (`.github/workflows/ci.yml`): on `push` (all branches) and `pull_request` (D19); `permissions: { contents: read }`; `concurrency: { group: ci-${{ github.ref }}, cancel-in-progress: true }`; `ubuntu-latest`; `actions/checkout@v7` with `fetch-depth: 0`; `actions/setup-node@v7` with `node-version-file: .nvmrc` and `cache: npm`; `npm ci`; `npm run build`; `npm test` with `GOVERNANCE_BASE: ${{ github.event.pull_request.base.sha || github.event.before }}` (an all-zero `before` skips the governance test); `npm run test:metrics`. The `actions/cache@v6` step for `test/.cache` is added in SP3, when the region cache exists (before that its post step would log a warning on every run). Action inputs were checked against their `action.yml`.
 - **README / CLAUDE.md**: replace the "no code yet" notes with the real commands (`npm run dev|build|typecheck|test|test:metrics|test:metrics:full|bench|test:accept-thresholds|test:goldens`, `docker compose up world-imaginer-voxel`); the CLAUDE.md dev-dependency list adds `@types/node`; both status sections say SP0 is complete.
 
@@ -267,7 +267,11 @@ Done:
 - Headless Chrome capability-report JSON: `secureContext`, `pageIsolated`, `workerIsolated` and `sabShared` all `true` on both `npm run dev` and `npm run preview`; screenshots saved under `docs/superpowers/specs/assets/sp0/`.
 - Docker image builds and serves the app; `docker build`/`docker run` headers checked directly (COOP/COEP present on the page and on worker script responses).
 
-Pending (cut line: the Vercel preview check → SP4):
-- CI green on `main` — checked by the controller after this branch merges.
-- `docker compose up` against the external `maestre-web_app-network` — checked by the user (the repo-local Docker check above only exercises the image itself, not the compose network).
-- A Vercel preview deployment showing the page and a module worker both `crossOriginIsolated === true` sharing one SAB — triggered and checked by the user.
+Done after merge (2026-09-27):
+- CI green on `main` (GitHub Actions run for bb7f829).
+- Vercel production deployment https://world-imaginer-voxel.vercel.app (own Vercel project, linked to the repository root): COOP/COEP on the page and on `assets/probe.worker-*.js`; capability JSON `secureContext`, `pageIsolated`, `workerIsolated`, `sabShared` all `true`. The cut line was not needed.
+- `docker compose up world-imaginer-voxel` on the default compose network: headers present; a real-time Chrome DevTools probe reports `workerProbe: ok` and all four isolation fields `true`.
+
+Amendments recorded at exit:
+- The the default compose network belonged to a retired project and was dropped; the compose service uses the default network.
+- `--virtual-time-budget` headless runs can report `worker-timeout` against the dev server because virtual time advances the 5 s probe timer past a still-pending worker fetch; real-time probes (Chrome DevTools Protocol) are the reference for dev/Docker checks.

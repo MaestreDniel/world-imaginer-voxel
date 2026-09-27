@@ -6,7 +6,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 Browser voxel explorer + editor (TypeScript, Vite, three.js r186 WebGL2 with custom GLSL3 ShaderMaterials). Successor of `09-density-terrain` in [world-imaginer](https://github.com/MaestreDniel/world-imaginer); nothing is imported or copied wholesale from there.
 
-**Status:** SP0 implemented (scaffold, guardrails, CI); remaining exit checks: CI green on main, `docker compose up` on the external network, Vercel preview isolation (cut line → SP4). SP1 is next.
+**Status:** SP0 complete (scaffold, guardrails, CI; all exit checks done 2026-09-27). SP1 is next.
 
 ## Source of truth
 
@@ -35,4 +35,4 @@ Browser voxel explorer + editor (TypeScript, Vite, three.js r186 WebGL2 with cus
 ## Runtime and deployment
 
 - SharedArrayBuffer needs `Cross-Origin-Opener-Policy: same-origin` and `Cross-Origin-Embedder-Policy: require-corp` on the page **and** every worker script, in a secure context (`http://localhost:<port>` or HTTPS; a reverse proxy must terminate TLS and pass the headers through).
-- Vercel is linked to the repository root and sets the headers via `vercel.json`. Docker: own `docker-compose.yml`, port 5183, external network `maestre-web_app-network`.
+- Vercel is linked to the repository root and sets the headers via `vercel.json`. Docker: own `docker-compose.yml`, port 5183, default compose network (no external network). Production: Vercel project `world-imaginer-voxel` (https://world-imaginer-voxel.vercel.app), separate from maestre-web-next.

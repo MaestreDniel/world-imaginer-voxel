@@ -10,13 +10,6 @@ services:
     volumes:
       - .:/app
       - world_imaginer_voxel_modules:/app/node_modules
-    networks:
-      - app-network
-
-networks:
-  app-network:
-    external: true
-    name: maestre-web_app-network
 
 volumes:
   world_imaginer_voxel_modules:

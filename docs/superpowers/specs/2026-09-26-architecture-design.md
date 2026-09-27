@@ -65,7 +65,7 @@ D1-D19 are decisions. Metric IDs (N*, T*, B*, C*, A*, S*, O*, V*, X*, DT*, R*, L
 world-imaginer-voxel/          (repository root)
   README.md CLAUDE.md .gitignore
   .github/workflows/ci.yml   npm ci → build → npm test → npm run test:metrics (quick, cached) on push and PR
-  docker-compose.yml         service world-imaginer-voxel, port 5183, external network maestre-web_app-network
+  docker-compose.yml         service world-imaginer-voxel, port 5183, default compose network
   docs/superpowers/specs/ plans/   this spec and every SP spec/plan
   package.json        deps: three@~0.186.1 | dev: vite, typescript, vitest, @types/three, @types/node (tests/arch/worker_threads; amended by SP0)
   vite.config.ts      server+preview headers COOP=same-origin, COEP=require-corp; worker.format='es'; port 5183
@@ -1568,7 +1568,7 @@ Thresholds are locked (`thresholds.lock.json`) and goldens are gated (§6.2). Si
 
 **SP0 — Scaffold and guardrails** (S; no dependencies)
 - Repository scaffold at the root: Vite, TS strict, three `~0.186.1`, vitest projects (unit / arch / metrics-fast / metrics-quick / metrics-full / bench; see the SP0 spec).
-- Headers exactly `Cross-Origin-Opener-Policy: same-origin` and `Cross-Origin-Embedder-Policy: require-corp`, set in vite.config `server.headers` and `preview.headers` and in `vercel.json` with `source: "/(.*)"`. Dockerfile and the repository's own `docker-compose.yml` (service `world-imaginer-voxel`, port 5183, external network `maestre-web_app-network`); README and CLAUDE.md updated with the real commands; GitHub Actions CI (`.github/workflows/ci.yml`: `npm ci`, `npm run build`, `npm test`, `npm run test:metrics`, on push and PR; the region-cache step for `npm run test:metrics` arrives in SP3, when the region cache exists).
+- Headers exactly `Cross-Origin-Opener-Policy: same-origin` and `Cross-Origin-Embedder-Policy: require-corp`, set in vite.config `server.headers` and `preview.headers` and in `vercel.json` with `source: "/(.*)"`. Dockerfile and the repository's own `docker-compose.yml` (service `world-imaginer-voxel`, port 5183, default compose network); README and CLAUDE.md updated with the real commands; GitHub Actions CI (`.github/workflows/ci.yml`: `npm ci`, `npm run build`, `npm test`, `npm run test:metrics`, on push and PR; the region-cache step for `npm run test:metrics` arrives in SP3, when the region cache exists).
 - Arch tests (imports, banned APIs, no numeric tunables in `gen/`, no audio assets, no imports outside the project); thresholds-lock (with `activeFrom`) and goldens commands.
 - Capability probe: `isSecureContext`, `crossOriginIsolated` in the page **and in a module worker** sharing one SAB, `WEBGL_multi_draw`, timer query, max texture layers, WebGL renderer string; an error screen that names the missing condition.
 - CSS-grid shell and HUD.
@@ -1608,7 +1608,7 @@ Thresholds are locked (`thresholds.lock.json`) and goldens are gated (§6.2). Si
 - Materials v1 (opaque / cutout / translucent passes; face shade × AO × smooth light × lightmap; spherical fog; Fast water); placeholder flat-colour DataArrayTexture; sky dome with sun; elevation-based day/night.
 - Fly controller, floating origin, FPS limiter, HUD counts; `ui/help.ts` key map (H/F1; each SP that adds keys extends it); Apply v1 (epoch bump, old meshes kept); bench route with renderer-string capture and optional 4-worker cap.
 - **Deliverable:** fly through RD12 terrain with day/night and translucent oceans.
-- **Exit:** R1, R2, R7, L1, L2; R4 measured and recorded, not gated (activeFrom SP8b; sets the GPU memory budget); coordinator, lightmap, phase, FPS-limiter, colour-space, water pass/light, mesher AO and packing↔GLSL unit tests; P1 L ≤ 4 / 8 ms and Mesh ≤ 1.0 / 2.5 ms per non-trivial section; G1 (Medium, terrain-only at RD12 on the reference Iris Xe: p95 ≤ 16.7 ms, ≤ 100 draw calls, main thread ≤ 6 ms p95); received from SP0: Vercel preview — page and module worker report crossOriginIsolated and share one SAB.
+- **Exit:** R1, R2, R7, L1, L2; R4 measured and recorded, not gated (activeFrom SP8b; sets the GPU memory budget); coordinator, lightmap, phase, FPS-limiter, colour-space, water pass/light, mesher AO and packing↔GLSL unit tests; P1 L ≤ 4 / 8 ms and Mesh ≤ 1.0 / 2.5 ms per non-trivial section; G1 (Medium, terrain-only at RD12 on the reference Iris Xe: p95 ≤ 16.7 ms, ≤ 100 draw calls, main thread ≤ 6 ms p95).
 - **Cut line:** the RegionMesh fallback, unless the spike or the capability probe requires it.
 
 **SP5 — Editing and persistence vertical slice** (M; SP4)
