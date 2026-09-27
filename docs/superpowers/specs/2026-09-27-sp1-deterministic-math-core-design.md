@@ -1,7 +1,7 @@
 # SP1 — Deterministic math core (Design)
 
 Date: 2026-09-27
-Status: Approved (2026-09-27); in implementation on branch `sp1/math-core`
+Status: Implemented on branch `sp1/math-core` (2026-09-27); exit evidence below
 Parent: master spec `2026-09-26-architecture-design.md` — §10 SP1, §1, §2.5, §2.7, §3.1-3.3, §3.17, §5.1, §6.3, §6.4, §7, §8 risks 4 and 6; decisions D6, D16, D17 and the new D20.
 
 References written "master §x" point to the master spec; a bare "§x" points to this document.
@@ -616,7 +616,88 @@ In this list, a bold section number is a master section; "here" marks a section 
 
 ## Exit evidence
 
-(Filled in at SP exit.)
+Done (2026-09-27, branch `sp1/math-core`; 12th Gen Intel(R) Core(TM) i7-12700H, Node v24.21.0):
+- `npm run typecheck`, `npm run build`, `npm test` (430 passed, 2 skipped), `npm run test:metrics` and `npm run test:metrics:full` all green.
+
+Metrics as measured (`test/metrics/.out/*.json`):
+
+| metric | fast | quick | full | threshold |
+|---|---|---|---|---|
+| N1.ksD | 0.00996 | 0.00996 | 0.00623 | ≤ 0.015 |
+| N1.sdErr | 0.00761 | 0.00865 | 0.00525 | ≤ 0.02 |
+| N2.value | 0.0122 | 0.0133 | 0.0133 | ≤ 0.02 |
+| N3.value | 0.953 | 0.979 | 0.986 | ≥ 0.9 |
+| N5.horizontal | 1.074 | 1.048 | 1.041 | ≤ 1.15 |
+| N5.vertical | 1.051 | 1.038 | 1.024 | ≤ 1.15 |
+| N6.value | 0.00058 | 0.000515 | 0.000536 | ≤ 0.001 |
+| U4.registryIssues, migrationFailures, shapeLockViolations, readmeStale | 0 | 0 | 0 | ≤ 0 |
+
+N6 is set by `test.adv2d16` in every tier (exact cancellations of a single-octave field on the ½ slice at integer points; §7.3).
+
+Bench (`npm run bench:record`, then a gated `npm run bench`, both green; `test/baselines.json`, 11 kernels): `killRatio` 0.855 recorded (0.841 on the gated re-run), ≤ 1.6.
+
+| kernel | ns/eval | ratio to calibration |
+|---|---|---|
+| `calibration.fmix32` | 0.638 | 1 |
+| `lattice3.slice` | 22.372 | 35.069 |
+| `perm512.slice` | 28.141 | 44.112 |
+| `lattice3.random` | 22.933 | 35.949 |
+| `perm512.random` | 26.828 | 42.054 |
+| `normal.z2.climateC` | 327.025 | 512.627 |
+| `normal.z3.density3d` | 224.534 | 351.968 |
+| `spline.offset` | 47.855 | 75.015 |
+| `spline.mix3` | 93.164 | 146.039 |
+| `detErf` | 3.121 | 4.892 |
+| `stageHashes.genKey` | 39215.812 | 61472.625 |
+
+JavaScriptCore (`npx --yes bun@1 test/tools/goldensJsc.ts`, exit code 0):
+
+```
+ok   sp1.detMath.detSin c0068832078fcc5f
+ok   sp1.detMath.detCos feb91af46e2d5fa8
+ok   sp1.detMath.detExp c53d7ddf72bd3cec
+ok   sp1.detMath.detExp2 169843df6c4b480a
+ok   sp1.detMath.detErf 2e75e35244a19c1a
+ok   sp1.detMath.detSmoothstep e8ecc239194f0001
+ok   sp1.noise.climate.warp.shift.noise.x ab58facf37a59f64
+ok   sp1.noise.climate.warp.shift.noise.z ce2a355bb0a4b957
+ok   sp1.noise.climate.warp.C.noise.x 73777f2e5850f398
+ok   sp1.noise.climate.warp.C.noise.z 2eeae0c123b03ad4
+ok   sp1.noise.climate.warp.R.noise.x 3b557c06de0599df
+ok   sp1.noise.climate.warp.R.noise.z cd46ececce41f6e0
+ok   sp1.noise.climate.C 680c01ba6642f1a7
+ok   sp1.noise.climate.E 58586d7808dfe2d1
+ok   sp1.noise.climate.W a0f5467da1603401
+ok   sp1.noise.climate.T 98a56062d2803095
+ok   sp1.noise.climate.H bbeef615830d715b
+ok   sp1.noise.climate.R 7f29f6fd6882fcf0
+ok   sp1.noise.test.density3d 127615bde2c54f3e
+ok   sp1.noise.test.adv2d16 12594d7f09c393c9
+ok   sp1.noise.test.adv3d8 439e4ef6ce852dd6
+ok   sp1.noise.test.adv3d32 a456079e4b571a2c
+ok   sp1.spline.OFFSET 9d5ae62fbb06366d
+ok   sp1.spline.SIGMA 7163452d6496dba1
+ok   sp1.spline.JAG 445a1955b3113d35
+ok   sp1.spline.TANGENT_FIXTURE 48c1ad609fc51ac9
+ok   sp1.params 47645b99620ed764
+27/27 match on Bun 1.4.2 (JavaScriptCore)
+```
+
+The 27 goldens recorded under V8 equal those of the plan's dry run (V8 = CPython oracle for detMath = JSC).
+
+Lab checks (headless Chrome over the DevTools protocol, dedicated profile):
+- Inspector: coarse-to-fine render, drag pan, wheel zoom around the cursor, seed box write-back, patch edits in the URL hash, invalid edits reported and not applied, 3D plane and slice controls, reload restores, a bad hash falls back to the defaults with a notice.
+- Statistics: `climate.C`, seed 42: sd 1.0017, KS D 0.0062, rose max/min 1.056; the longest frame gap while computing was 22-28 ms.
+- A/B: shared camera; r(A, B) = 1.0000 with the same seed, 0.0034 with B seed 1234; "edit B" changes only B.
+- Determinism panel: `✓ all 27 goldens match`.
+
+Screenshots (`docs/superpowers/specs/assets/sp1/`, 1400×900, seed 42): `climate-C.png`, `climate-E.png`, `climate-W.png`, `climate-T.png`, `climate-H.png`, `climate-R.png` (mode u, bpp 64), `warp-shift-x.png` (`climate.warp.shift.noise.x`, mode z, bpp 16), `density3d.png` (`test.density3d`, mode z, bpp 0.5), `ab-climate-C.png` (A/B with B seed 7).
+
+Pending with the user: push `sp1/math-core`, the pull request with CI green, the Vercel preview's determinism panel in Chrome and Firefox (JSON added here in a follow-up commit), and the fast-forward of `main`.
+
+Amendments recorded at exit:
+- `npm run bench` and `npm run bench:record` pass `--reporter=verbose`: the default reporter hides the kernel table and `killRatio` of a passing bench.
+- The screenshots were captured through the DevTools protocol after 3 s of real time: with `--virtual-time-budget` the field stayed blank because its progressive render runs in `requestAnimationFrame` slices. They are stored as 256-colour palette PNGs (6.6 MB instead of 12.3 MB).
 
 ### Threshold log
 

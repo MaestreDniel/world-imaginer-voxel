@@ -1,0 +1,52 @@
+{
+  "machine": "12th Gen Intel(R) Core(TM) i7-12700H",
+  "node": "v24.21.0",
+  "date": "2026-09-27",
+  "kernels": {
+    "calibration.fmix32": {
+      "nsPerEval": 0.638,
+      "ratio": 1
+    },
+    "lattice3.slice": {
+      "nsPerEval": 22.372,
+      "ratio": 35.069
+    },
+    "perm512.slice": {
+      "nsPerEval": 28.141,
+      "ratio": 44.112
+    },
+    "lattice3.random": {
+      "nsPerEval": 22.933,
+      "ratio": 35.949
+    },
+    "perm512.random": {
+      "nsPerEval": 26.828,
+      "ratio": 42.054
+    },
+    "normal.z2.climateC": {
+      "nsPerEval": 327.025,
+      "ratio": 512.627
+    },
+    "normal.z3.density3d": {
+      "nsPerEval": 224.534,
+      "ratio": 351.968
+    },
+    "spline.offset": {
+      "nsPerEval": 47.855,
+      "ratio": 75.015
+    },
+    "spline.mix3": {
+      "nsPerEval": 93.164,
+      "ratio": 146.039
+    },
+    "detErf": {
+      "nsPerEval": 3.121,
+      "ratio": 4.892
+    },
+    "stageHashes.genKey": {
+      "nsPerEval": 39215.812,
+      "ratio": 61472.625
+    }
+  },
+  "killRatio": 0.855
+}

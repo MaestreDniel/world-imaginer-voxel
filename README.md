@@ -6,7 +6,7 @@ It is the successor of [world-imaginer](https://github.com/MaestreDniel/world-im
 
 ## Status
 
-SP0 (scaffold, guardrails, CI) is complete: the app shows a sky canvas and a capability report, deployed at https://world-imaginer-voxel.vercel.app. SP1 (deterministic math core) is next.
+SP0 and SP1 are complete: the app shows a sky canvas and a capability report, and `?lab=noise` inspects every climate noise (deployed at https://world-imaginer-voxel.vercel.app). SP2 (column stage, 2D biomes, map and parameter tooling) is next.
 
 ## Development
 
