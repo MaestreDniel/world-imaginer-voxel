@@ -6,7 +6,7 @@ It is the successor of [world-imaginer](https://github.com/MaestreDniel/world-im
 
 ## Status
 
-SP0 (scaffold, guardrails, CI) is complete: the app shows a sky canvas and a capability report; SP1 (deterministic math core) is next.
+SP0 (scaffold, guardrails, CI) is implemented; remaining exit checks: CI green on main, `docker compose up` on maestre-web_app-network, Vercel preview isolation (cut line → SP4). SP1 (deterministic math core) is next.
 
 ## Development
 

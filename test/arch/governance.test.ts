@@ -15,11 +15,13 @@ const showAtBase = (path: string): string | null => {
 test.skipIf(BASE === '' || /^0+$/.test(BASE))('goldens and threshold lock changes follow governance (CI, against GOVERNANCE_BASE)', () => {
   const baseGoldensText = showAtBase('test/goldens.json');
   const baseConstants = showAtBase('src/core/constants.ts');
+  const headVersion = parseGeneratorVersion(readFileSync(join(ROOT, 'src/core/constants.ts'), 'utf8'));
+  if (headVersion === null) throw new Error('cannot parse GENERATOR_VERSION from src/core/constants.ts');
   const errors = checkGovernance({
     baseGoldens: baseGoldensText ? (JSON.parse(baseGoldensText) as GoldensFile) : null,
     headGoldens: JSON.parse(readFileSync(join(ROOT, 'test/goldens.json'), 'utf8')) as GoldensFile,
     baseVersion: baseConstants ? parseGeneratorVersion(baseConstants) : null,
-    headVersion: parseGeneratorVersion(readFileSync(join(ROOT, 'src/core/constants.ts'), 'utf8')) ?? 0,
+    headVersion,
     changedFiles: git('diff', '--name-only', BASE, 'HEAD').split('\n').filter((f) => f.length > 0),
   });
   expect(errors).toEqual([]);

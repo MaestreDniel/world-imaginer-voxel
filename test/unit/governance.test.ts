@@ -36,3 +36,7 @@ test('parseGeneratorVersion reads the constant', () => {
   expect(parseGeneratorVersion('export const GENERATOR_VERSION = 12;')).toBe(12);
   expect(parseGeneratorVersion('nothing')).toBeNull();
 });
+
+test('parseGeneratorVersion reads the constant with an explicit type annotation', () => {
+  expect(parseGeneratorVersion('export const GENERATOR_VERSION: number = 1;')).toBe(1);
+});

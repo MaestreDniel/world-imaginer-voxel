@@ -9,7 +9,7 @@ export interface GovernanceInput {
 }
 
 export function parseGeneratorVersion(source: string): number | null {
-  const m = /GENERATOR_VERSION\s*=\s*(\d+)/.exec(source);
+  const m = /GENERATOR_VERSION\s*(?::\s*number\s*)?=\s*(\d+)/.exec(source);
   return m ? Number(m[1]) : null;
 }
 

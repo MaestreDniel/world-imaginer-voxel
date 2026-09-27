@@ -6,7 +6,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 Browser voxel explorer + editor (TypeScript, Vite, three.js r186 WebGL2 with custom GLSL3 ShaderMaterials). Successor of `09-density-terrain` in [world-imaginer](https://github.com/MaestreDniel/world-imaginer); nothing is imported or copied wholesale from there.
 
-**Status:** SP0 complete (scaffold, guardrails, CI). SP1 is next.
+**Status:** SP0 implemented (scaffold, guardrails, CI); remaining exit checks: CI green on main, `docker compose up` on the external network, Vercel preview isolation (cut line → SP4). SP1 is next.
 
 ## Source of truth
 
@@ -21,7 +21,7 @@ Browser voxel explorer + editor (TypeScript, Vite, three.js r186 WebGL2 with cus
 - `npm run test:accept-thresholds` — rewrite `test/thresholds.lock.json` (needs a spec amendment in the same change; CI checks it)
 - `npm run test:goldens` — record and merge goldens (refuses changed goldens without a `GENERATOR_VERSION` bump)
 - `docker compose up world-imaginer-voxel`
-- Each sub-project appends its id to `STARTED_SPS` in `test/harness/sp.ts` in its first commit.
+- Each sub-project appends its id to `STARTED_SPS` in `test/harness/sp.ts` in its first commit. Appending changes the lock (`test/thresholds.lock.json`), so run `npm run test:accept-thresholds` and amend the spec in the same change.
 
 ## Conventions
 

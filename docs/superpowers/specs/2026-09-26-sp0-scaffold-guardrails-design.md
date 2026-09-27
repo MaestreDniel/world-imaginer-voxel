@@ -1,7 +1,7 @@
 # SP0 — Scaffold and guardrails (Design)
 
 Date: 2026-09-26
-Status: Draft for review (verified by a throwaway toolchain spike and an adversarial consistency review)
+Status: Approved; implemented on branch sp0/scaffold (2026-09-27)
 Parent: master spec `2026-09-26-architecture-design.md` — §10 SP0 and Definition of done, §1 (layout, dependency rules, banned APIs), §2.5, §6.1-6.2, §8 risk 1, decisions D6, D7, D11, D17, D19.
 
 ## Goal
@@ -259,3 +259,15 @@ Cut line: the Vercel preview check (→ SP4).
 
 - **Running TypeScript in `worker_threads` for the harness (SP3).** Node type stripping needs explicit `.ts` extensions, while the codebase uses bundler-style extensionless imports. SP3 decides between bundling harness worker entry points (Vite/Rolldown) and switching to explicit `.ts` extensions with `allowImportingTsExtensions`. SP0 sidesteps it with a plain `.mjs` fixture and by running acceptance through vitest.
 - **Metric registry shape.** `MetricDef.run(region)` and `RegionView` arrive with the harness (SP2/SP3); SP0 fixes only `THRESHOLDS`, per-part `activeFrom`, the lock and `metricTest`.
+
+## Exit evidence
+
+Done:
+- `npm run typecheck`, `npm run build`, `npm test`, `npm run test:metrics`, `npm run test:metrics:full` and `npm run bench` all green.
+- Headless Chrome capability-report JSON: `secureContext`, `pageIsolated`, `workerIsolated` and `sabShared` all `true` on both `npm run dev` and `npm run preview`; screenshots saved under `docs/superpowers/specs/assets/sp0/`.
+- Docker image builds and serves the app; `docker build`/`docker run` headers checked directly (COOP/COEP present on the page and on worker script responses).
+
+Pending (cut line: the Vercel preview check → SP4):
+- CI green on `main` — checked by the controller after this branch merges.
+- `docker compose up` against the external `maestre-web_app-network` — checked by the user (the repo-local Docker check above only exercises the image itself, not the compose network).
+- A Vercel preview deployment showing the page and a module worker both `crossOriginIsolated === true` sharing one SAB — triggered and checked by the user.
