@@ -25,3 +25,9 @@ export type MetricId =
   | 'G1' | 'G2'
   | 'M1'
   | 'AU1' | 'AU2' | 'AU3' | 'AU4';
+
+/** Invalidation scope of a parameter (master §5.1). */
+export type RegenScope = 'live' | 'remesh' | 'decorate' | 'terrain' | 'climate';
+
+/** Generation and derived stages (master §2.5, SP1 spec §5). */
+export type StageId = 'climate' | 'shape' | 'surfaceEst' | 'biome2d' | 'terrain' | 'decorate' | 'light' | 'mesh' | 'lod' | 'map';
