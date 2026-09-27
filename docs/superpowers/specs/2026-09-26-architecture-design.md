@@ -39,8 +39,9 @@ Worth keeping from 09: the 6D multi-noise box picker (matches MC's; in practice 
 | D17 | Fresh scaffold; 09 modules are ported deliberately (§1), never copied wholesale. The copyrighted C418 `.ogg` files are **not** copied into this repository. |
 | D18 | Runtime fluids are **edit-triggered only**; truncated generation fronts stay frozen until an edit touches them (fallback policy in §8). |
 | D19 | **Separate public repository** `MaestreDniel/world-imaginer-voxel` (default branch `main`), independent of world-imaginer, with **GitHub Actions CI** (build, `npm test`, quick metrics) on push and PR. |
+| D20 | **Determinism references** (confirmed 2026-09-27): V8 (Chrome, Node), SpiderMonkey (Firefox) and JavaScriptCore (Safari). Goldens must match bit-for-bit in all three; XS and QuickJS are not references. |
 
-D1-D19 are decisions. Metric IDs (N*, T*, B*, C*, A*, S*, O*, V*, X*, DT*, R*, L*, F*, E*, U*, P*, G*, M*, AU*, Z*) are listed in §6.4. The single letter D alone denotes the decorate stage.
+D1-D20 are decisions. Metric IDs (N*, T*, B*, C*, A*, S*, O*, V*, X*, DT*, R*, L*, F*, E*, U*, P*, G*, M*, AU*, Z*) are listed in §6.4. The single letter D alone denotes the decorate stage.
 
 ## 0. Principles and scope
 
@@ -76,14 +77,16 @@ world-imaginer-voxel/          (repository root)
   src/
     core/                       L0 pure: no DOM, three, worker APIs, Math.random, Date.now, console.*
       constants.ts coords.ts    MIN_Y=-64, HEIGHT=384, SECTIONS=24, SEA=63; keys, voxel/quart index math, torus slots
-      hash.ts rng.ts            fmix32, fnv1a32/64, hash2/3/4(seed,..), deriveSeed(world,name); xoshiro128** streams
-      detMath.ts                polynomial sin/cos/exp2/erf/smoothstep (error < 2e-6); the only transcendentals allowed in gen
-      noise/lattice3.ts         hashed-lattice 3D gradient noise, 16 edge gradients, quintic fade, no table, no period
-      noise/octave.ts normal.ts cdf.ts   OctaveNoise (per-octave seed + random origin), NormalNoise (337/331), CDF remap
-      spline/hermite.ts         nested cubic-Hermite splines compiled to a flat Float64Array program
-      params/schema.ts meta.ts defaults.ts profiles.ts migrate.ts canonical.ts graphicsPresets.ts   ParamSchema = single source
-                                (types, defaults, UI, scope); graphicsPresets.ts = the §4.16 preset table as pure data (graphics + audio rows)
-      stage/registry.ts hash.ts StageDef, stageHash, dirty-stage computation
+      hash.ts rng.ts seed.ts    fmix32, axis pre-mix, hash2/3/4, fnv1a32/64, hashF64, deriveSeed(world,name); xoshiro128** streams; seed text
+      detMath.ts                detSin/detCos/detExp/detExp2/detErf/detSmoothstep (pinned domains; SP1 spec §1.5); the only transcendentals allowed in gen
+      noise/lattice3.ts         hashed-lattice 3D gradient noise, 12 balanced edge gradients, quintic fade, no table, no period
+      noise/octave.ts normal.ts cdf.ts   OctaveNoise (per-octave seed + fractional origin), NormalNoise (337/331), CDF remap
+      spline/types.ts validate.ts hermite.ts tangents.ts   nested cubic-Hermite splines compiled to Int32Array code + Float64Array numbers,
+                                evaluated by a zero-allocation register-file interpreter; one validator; authoring-time auto tangents
+      params/kit.ts schema.ts meta.ts defaults.ts noises.ts profiles.ts presets.ts migrate.ts canonical.ts graphicsPresets.ts
+                                ParamSchema = single source (types, defaults, UI, scope); defaults referenced by the schema live in core/params
+                                (core cannot import gen/); graphicsPresets.ts = the §4.16 preset table as pure data (graphics + audio rows)
+      stage/registry.ts hash.ts StageDef, stageHash, genKey, dirty-stage computation
     world/                      L1 (core only)
       blocks/registry.ts states.ts shapes.ts tags.ts fluid.ts fluidRules.ts   u16 block-state ids (<= 4096 used), property
                                 model, SoA per-state tables, shape boxes; fluid byte; rules shared by settle + sim
@@ -150,7 +153,8 @@ The authoritative layer table (value and type-only edges, worker edges, `light`/
 `test/arch/banned.test.ts` enforces these:
 
 - In `core`, `world` and `gen`: `Math.random`, `Date.now`, `performance.now` and `console.*`.
-- In `gen/` and `core/noise`: `Math.sin|cos|tan|exp|log|pow|atan2|tanh`.
+- In `core/` and `gen/`: only exactly-specified `Math` members (the SP0 allowlist minus `fround`), no `**`; no `Intl`, `localeCompare`, `toLocale*`, `String.prototype.normalize`, `TextEncoder` or `TextDecoder` (amended by SP1).
+- In `core/noise/**` and `core/spline/**`: imported value bindings are referenced only through top-level `const` aliases (vitest's transform turns them into getters; amended by SP1).
 - Exported numeric consts anywhere in `gen/` (fixed world constants live only in `core/constants.ts`).
 - Anywhere in the repository: no `.ogg`/`.mp3`/`.wav` files (sound packs are user-supplied, D17) and no import specifier resolving outside the repository (no copy-forward imports from world-imaginer).
 
@@ -279,19 +283,22 @@ A pure fluid voxel is AIR plus a fluid byte. Waterlogging comes free: a state wh
 ### 2.5 Key TypeScript types
 
 ```ts
-type Seed64 = readonly [number, number];
+type Seed64 = readonly [lo: number, hi: number];   // u32 words, value = hi·2^32 + lo, normalised with >>> 0 (SP1); Hash64 alike
 type RegenScope = 'live' | 'remesh' | 'decorate' | 'terrain' | 'climate';
 type SubProjectId = 'SP0'|'SP1'|'SP2'|'SP3'|'SP4'|'SP5'|'SP6'|'SP7'|'SP8a'|'SP8b'|'SP8c'|'SP9'|'SP10'|'SP11'|'SP12';
 type StageId = 'climate'|'shape'|'surfaceEst'|'biome2d'|'terrain'|'decorate'|'light'|'mesh'|'lod'|'map';
 interface ParamMeta { path: string; label: string; doc: string; unit?: string;
   kind: 'number'|'int'|'bool'|'enum'|'noise'|'spline'|'expr'|'boxTable'|'ruleTree'|'featureList'|'structureSets';
-  min?: number; max?: number; step?: number; scope: RegenScope; stage: StageId; effectMetric?: MetricId; }
+  min?: number; max?: number; step?: number; options?: readonly string[]; dims?: 2|3;
+  scope: RegenScope; stage?: StageId /* present exactly when scope !== 'live' (SP1) */; effectMetric?: MetricId; }
 interface StageDef { id: StageId; version: number; reads: StageId[]; params: string[] /* path prefixes */;
   checkpoint: 'columnSample'|'proto'|'final'|'none'; }
-// stageHash = fnv1a64(id, version, canonicalJSON(paramSlice), ...upstream stageHashes)
-interface NoiseDef { wavelength: number; octaves: number; persistence?: number; lacunarity?: number; amplitudes?: number[];
-  yScale?: number; double?: boolean; remap?: 'none'|'uniform'; clampSigma?: number /* default 3 */ }
-interface SplinePoint { x: number; y: number | NestedSpline; d: number }   // d = Hermite tangent
+// stageHash = fnv1a64(`${id}|${version}|${canonicalJSON(slice)}|${reads.map(r => hex64(H[r])).join(',')}`) (SP1 spec §5)
+interface NoiseDef { wavelength: number; octaves: number; persistence?: number; lacunarity?: number; amplitudes?: number[] | null;
+  yScale?: number; double?: boolean /* default true */; remap?: 'none'|'uniform'; clampSigma?: number /* default 3 */ }
+// Validated params always hold the complete NoiseDef (persistence 0.5, lacunarity 2, amplitudes null, yScale 1, double true,
+// remap 'none', clampSigma 3); only patches may be partial (SP1).
+interface SplinePoint { x: number; y: number | NestedSpline; d: number }   // d = dy/dx per unit of the node's coord (explicit data)
 interface NestedSpline { coord: 'C'|'E'|'W'|'PV'|'T'|'H'; points: SplinePoint[] }
 type ColField = 'C'|'E'|'W'|'PV'|'T'|'H'|'offset'|'sigma'|'jag'|'riverStrength'|'lakeMask'|'lakeFloor'|'islandMask';   // islandMask = the §3.15 cluster mask m (0 outside floating_islands), a derived ColumnSample field
 type Expr =                                  // 3D density composition (preset data), ~22 node types
@@ -354,7 +361,7 @@ Sparse entries are sorted by idx, sections by sy, and trailer ticks by packedPos
 - `presets`;
 - `meta`.
 
-`genKey = fnv1a64(utf8(`${GENERATOR_VERSION}|${seed[0]}|${seed[1]}|${stageHash('decorate')}`))`, where the decorate stageHash covers exactly the decorate-, terrain- and climate-scope params (§5.1). Live and Remesh params never affect genKey. A save is valid only for its genKey.
+`genKey = fnv1a64(utf8(`${GENERATOR_VERSION}|${seed[0]}|${seed[1]}|${hex64(stageHash('decorate'))}`))` (seed words as decimal u32, lo first; `hex64` = 16 lower-case hex digits, hi first), where the decorate stageHash covers exactly the decorate-, terrain- and climate-scope params (§5.1). Live and Remesh params never affect genKey. A save is valid only for its genKey.
 
 **Fork dialog.** It appears (a) on opening a world whose stored genKey differs from the one recomputed with the current GENERATOR_VERSION, and (b) on the first Apply of a decorate-, terrain- or climate-scope change in a world that has diffs. Auto-apply is suspended until the user answers, and the choice holds for the rest of the session. Options:
 1. **Fork:** a new world id with the new genKey and no diffs; the original save is untouched.
@@ -371,7 +378,7 @@ During development this dialog is expected often, since every SP changes the gen
 
 Import validates the magic and version, runs `migrate`, recomputes genKey, and creates a new world id.
 
-**Presets.** Format `{format:'wi10-preset', schemaVersion, name, profile, params}`. Loading migrates, validates (showing the error path inline) and deep-merges over the defaults. Import *loads* the preset; export writes the *current draft*. Built-in names are reserved.
+**Presets.** Format `{format:'wi10-preset', schemaVersion, name, profile, params}`, where `params` is the minimal patch over `resolveProfile(profile)`. Import checks format → name (profile ids are reserved) → profile → schemaVersion (newer is rejected) → migrate → applyPatch over the profile, showing every error path inline; unknown keys are errors. Import *loads* the preset; export writes the *current draft*. Saves and `.wiworld` store full params and load as migrate → applyPatch over the defaults (SP1 spec §4.5).
 
 **Session.** Settings, last world and panel layout go to localStorage behind try/catch. The URL hash `#seed=…&p=<base64url(gzip(params diff vs profile))>` makes a world shareable.
 
@@ -391,34 +398,37 @@ Visible radius RD therefore needs L at RD+1, D at RD+2 and T at RD+3. Unload use
 
 ### 3.1 Noise core and seeding (fixes the origin, lattice-zero, aliasing, period and diagonal vices)
 
+Amended by SP1; the SP1 spec (§1-2 there) holds the exact formulas, constants and vectors.
+
 **Seeds.**
-- `seedFromInput(text)`: numeric text maps to that number, anything else to fnv1a64.
-- Every noise gets `deriveSeed(world, name) = fmix32(world[0] ^ fmix32(world[1] ^ fnv1a32(name)))`, with names such as `"climate.T"` or `"cave.cheese#3"`. No `seed+k` derivation remains.
-- Positional randomness uses `hash4(seed, salt, x, z)`. Feature RNG streams are xoshiro128** seeded via splitmix32.
+- `Seed64 = [lo, hi]` (u32 words). `seedFromInput(text)`: trim only (no Unicode normalisation); an integer in [−2^63, 2^64 − 1] maps to its value mod 2^64, anything else to fnv1a64 of its UTF-8 bytes. An empty box gets a random seed in the UI, written back into the box.
+- Every noise gets `deriveSeed(world, name) = fmix32(world[0] ^ fmix32(world[1] ^ fnv1a32(name)))`. Names come from the ParamSchema path (`"climate.T"`; octaves append `#i`, stack B appends `'`, warp components `.x`/`.z`; a leaf's `seedName` keeps an old name after a rename). No `seed+k` derivation remains.
+- Positional hashes pre-mix each axis, `ax(v,K) = imul(t ^ (t>>>15), 0x85ebca6b)` with `t = imul(v,K)`: `hash2(s,x,z)`, `hash3(s,x,y,z) = fmix32(s ^ ax(x,KX) ^ ax(y,KY) ^ ax(z,KZ))` and `hash4(s,salt,x,z)`. The plain xor of products was unchanged under (x,z) → (−x,−z) for a third of positions. Feature RNG streams are xoshiro128** seeded via splitmix32.
 
 **`lattice3(s,x,y,z)`.**
-- Quintic fade.
-- The corner gradient is `GRAD16[hash3(s,ix,iy,iz) & 15]`, where `hash3 = fmix32(s ^ imul(ix,0x27d4eb2d) ^ imul(iy,0x165667b1) ^ imul(iz,0x9e3779b1))` and GRAD16 is the 12 cube edges plus 4 repeats.
+- Quintic fade; interpolation along x, then y, then z.
+- The corner gradient is one of the **12 cube edges, balanced**: index `((hash3(s,ix,iy,iz) & 0xffff)·12) >>> 16`. GRAD16's 4 repeats gave the vertical derivative 8 % more variance (vertical-plane N5 up to 1.22).
 - There is no permutation table and therefore no period.
-- 2D fields are 3D noise at a per-noise random fractional y, which removes 09's 4-gradient diagonal bias.
+- 2D fields are 3D noise on a fixed slice: octave i samples at `y = floor(oy_i) + 0.5` (a random integer part, fraction ½). A random fraction made the slice sd vary by ±9 %.
+- Closed-form constants: `PERLIN3_SD = √(35054270/480729249)` (3D) and `PERLIN2_SD = √(2052359/24972948)` (2D slice).
 
-**`OctaveNoise`.** Octave i has frequency `lacunarity^i / wavelength` and amplitude `persistence^i` (or `amplitudes[i]`). Each octave gets its own `deriveSeed(name#i)` and a random origin in [0,4096)³, so the origin is never special.
+**`OctaveNoise`.** `f_0 = 1/wavelength`, `f_i = f_{i−1}·lacunarity`; `a_0 = 1`, `a_i = a_{i−1}·persistence` (or `amplitudes[i]`). Each octave gets its own `deriveSeed(name#i)` and a fractional origin `splitmix32(seed_i)·2^−20` per axis, in lattice units in [0,4096)³, added after frequency scaling. The origin is never special and integer points never align with the lattice.
 
 **`NormalNoise`.**
-- `v = A(p) + B(p·337/331)`.
-- The analytic `sd = PERLIN3_SD·sqrt(ΣaA² + ΣaB²)`; `PERLIN3_SD` is pinned by a unit test to ±2%.
-- `z = clamp(v/sd, −clampSigma, clampSigma)` with a default of 3, which gives exact interval bounds.
-- Climate fields go through `u = erf(z/√2)` (detMath), which is uniform on (−1,1).
+- `v = A(p) + B(p·R)`, `R = 337/331`; B's octaves are named `name'#i`; `double` defaults to true.
+- `S = sqrt(ΣaA² + ΣaB²)`; `z = clamp(v · 1/(SD·S), −clampSigma, clampSigma)` with `SD = PERLIN2_SD` (2D) or `PERLIN3_SD` (3D) and a default clamp of 3, which gives exact interval bounds. A unit test pins both SDs within ±0.5 %.
+- Climate fields go through `u = detErf(z * Math.SQRT1_2)`, approximately uniform on [−uMax, uMax] with uMax = detErf(3·SQRT1_2) = 0.9973; `remap: 'uniform'` requires a double stack.
 - Density and cave noises use z directly (unit sd).
 
-**Kill criterion (SP1 bench).** If `lattice3` is more than 1.6× slower than a 512-entry per-octave permutation variant, switch to that variant with a per-octave lacunarity jitter (±3%, from the seed). It must still pass N3.
+**Kill criterion (SP1 bench).** If `lattice3` is more than 1.6× slower than a 512-entry per-octave permutation variant (measured in the same bench run, locally aliased), SP1 does not exit and this section is revisited. The permutation variant exists only as a bench comparator: its octave 0 repeats with period 256·λ, so it cannot pass N3.
 
 ### 3.2 Climate (column stage, per quart point)
 
 Warps:
 - A shared shift warp: `(x,z) += 48·(Nwx,Nwz)` with λ 256 and 3 octaves.
-- C gets an extra warp of 180 at λ 1024 (bays and peninsulas).
-- R gets an extra warp of 120 at λ 512 (meanders).
+- C gets an extra warp of 180 at λ 1024 with 2 octaves (bays and peninsulas).
+- R gets an extra warp of 120 at λ 512 with 2 octaves (meanders).
+- Warp noises are NormalNoise z values (unit sd, no remap). Every climate noise uses persistence 0.5 and lacunarity 2 (SP1).
 
 | field | λ₀ (blocks) | octaves | notes |
 |---|---|---|---|
@@ -429,8 +439,8 @@ Warps:
 | H humidity | 2400 | 4 | |
 | R rivers | 1400 | 4 | its zero set gives the river lines |
 
-- All six fields are **CDF-uniform** (chosen over MC's 3σ normal so shares are authorable), so a band's area share equals its width / 2. (`X_u` and `X` denote the same uniform field; the suffix is only emphasis.)
-- `climate.scaleMul` multiplies every λ; `large_biomes` sets it to 4.
+- All six fields are **CDF-uniform** (chosen over MC's 3σ normal so shares are authorable) on [−uMax, uMax] with uMax = 0.9973, so a band inside that range has area share width / 2. Spline knots at ±1 act as end knots. (`X_u` and `X` denote the same uniform field; the suffix is only emphasis.)
+- `climate.scaleMul` divides the climate stage's input coordinates before warping, `(x,z) → (x/s, z/s)`: an exact zoom of every climate λ, warp λ and warp amplitude; `large_biomes` sets it to 4.
 - The altitude lapse `T_eff(y) = T − 0.006·max(0, y − 80)` is used by surface rules and freezing.
 - The depth axis for cave biomes is `depth = (surfaceEst − y)/128`.
 
@@ -450,6 +460,8 @@ Warps:
 **`steep`:** `|∇offset|` by central differences on the quart halo. It is continuous across columns, which fixes 09's chunk-edge clamped slope, and it feeds surface rules.
 
 There are no downstream multipliers: the editor's y-axis *is* the terrain.
+
+**Spline semantics (SP1).** Outside the end knots the end value holds (no linear extension, unlike MC). Between knots, `f = y0 + t·dy + t(1−t)((1−t)(d0·h − dy) + t(dy − d1·h))` with `h = x1 − x0`, `t = (q − x0)/h`, `dy = y1 − y0`; a nested knot evaluates only the two bracketing children. Tangents are explicit data, never re-derived at compile or evaluation time. The defaults above get their tangents from the hybrid rule when SP2 authors them (PCHIP inside numeric runs; d = 0 at nested knots, their neighbours and end knots inside (−1,1)), which never overshoots. Validation: 1-32 points, strictly increasing x, y within the leaf's range, finite d, no coordinate reused along a path, ≤ 4096 nodes.
 
 ### 3.4 Rivers (column stage; exact on the map and LOD)
 
@@ -658,7 +670,7 @@ The result is order-independent and identical in every receiving column. Canopie
 
 **Trees:**
 - Jittered grid with cell 4 and jitter within `1 − minSpacing/cell`.
-- Acceptance `p = biomeDensity·(0.25 + 0.75·smoothstep(−0.5, 0.7, Nforest))^1.5` with Nforest at λ 160, which creates groves and clearings. Declared densities are true probabilities.
+- Acceptance `p = biomeDensity·(s·√s)` with `s = 0.25 + 0.75·detSmoothstep(−0.5, 0.7, Nforest)` (no `**`) and Nforest at λ 160, which creates groves and clearings. Declared densities are true probabilities.
 - Species per biome: oak, fancy oak, birch, spruce, pine, acacia, jungle, dark oak (2×2), swamp oak with vines.
 - Shape parameters come from `hash4(seed, species, x, z)`.
 - Ground check: the top block is grass, dirt, podzol or snowy grass; water depth is 0; the tree AABB does not intersect any structure piece.
@@ -763,8 +775,12 @@ Map markers come from the same start function. Structure starts never lie below 
 ### 3.17 Determinism rules
 
 - `gen/` uses float64 only, with no `Math.fround`.
-- Arithmetic is IEEE `+ − × ÷ √` plus `Math.imul` and `floor`; transcendentals come only from detMath.
-- There is no iteration over Map or Set in any output path; iteration is always over sorted arrays.
+- Arithmetic is limited to what ECMA-262 specifies exactly: `+ − × ÷` (roundTiesToEven per operation, so no FMA contraction), correctly rounded `Math.sqrt`, and the exact `Math` allowlist; `**` and `Math.pow` are implementation-approximated and banned. Transcendentals come only from detMath. Formulas keep their written operation order; a reciprocal multiply is not a substitute for a division unless the formula says so.
+- Numeric literals in `core/` and `gen/` are shortest round-trip decimals (≤ 17 significant digits).
+- There is no iteration over Map or Set in any output path, and plain-object keys are iterated only after sorting; iteration is always over sorted arrays.
+- NaN: generator outputs are NaN-free (asserted by DT1/DT2 and the SP1 unit tests); every golden hasher reads Float64 values little-endian and writes any NaN as `0x7FF8000000000000`, because x86 and ARM produce different NaN bits.
+- `core/` and `gen/` never call `Intl`, `localeCompare`, `toLocale*`, `String.prototype.normalize`, `TextEncoder` or `TextDecoder`; hashing uses a hand-written UTF-8 encoder (arch-tested).
+- Every validated parameter number is normalised with `q15(x) = x === 0 ? 0 : Number(x.toPrecision(15))` (unique printed form, −0 → +0); canonical JSON is RFC 8785 and throws on NaN, ±Infinity and −0.
 - Caches are pure memoisation of pure functions.
 
 Proof suite (DT1/DT2):
@@ -1102,7 +1118,7 @@ Target: edit → visible ≤ 50 ms p95, measured in the HUD.
 
 `core/params/schema.ts` is the single source of types, defaults and `ParamMeta` (label, doc, unit, range, step, scope, stage, effectMetric). The panel, import merge, migrations, stage slicing and the README parameter reference are all generated from it. A unit test fails when the README's generated block is stale.
 
-**Stage hashes.** `stageHash = h(id, version, paramSliceHash, upstreamHashes)` decides exactly which stages re-run. Real checkpoints are:
+**Stage hashes.** `stageHash = fnv1a64(`${id}|${version}|${canonicalJSON(slice)}|${reads.map(r => hex64(H[r])).join(',')}`)`, with `slice = {[prefix]: getPath(params, prefix)}` over the stage's param prefixes (matched on dot boundaries). It does not depend on the seed and decides exactly which stages re-run; live leaves have no stage and are hashed by none. Real checkpoints are:
 - raw climate (in ColumnSample);
 - derived shape (in ColumnSample);
 - proto (in the outer rings, or everywhere in tuning mode);
@@ -1113,8 +1129,10 @@ Target: edit → visible ≤ 50 ms p95, measured in the HUD.
 | Live | time of day, fog, graphics, biome blend radius, colours, tint colormaps, packs (same layer count), audio | nothing (uniforms, textures) | all |
 | Remesh | AO/smooth light, leaves mode | mesh | all voxels |
 | Decorate | features, ores, vegetation, structure sets without beard | D → L → mesh (T re-runs only where the proto is gone; tuning mode keeps every proto) | ColumnSample, proto |
-| Terrain | splines, rivers, lakes, density DAG, caves, carvers, aquifer, surface rules, biome tables, cave biomes, beard-carrying structures, profile | derived shape → T → … | raw climate noise |
-| Climate | seed, climate noise defs, warps, scaleMul | everything | nothing |
+| Terrain | splines, rivers, lakes, density DAG, caves, carvers, aquifer, surface rules, biome tables, cave biomes, beard-carrying structures | derived shape → T → … | raw climate noise |
+| Climate | seed¹, climate noise defs, warps, scaleMul | everything | nothing |
+
+¹ The seed is WorldSession state, not a leaf; it enters genKey directly. A profile is an overlay, not a leaf: switching profile has the scope of the earliest stage it dirties (`dirtyStages`).
 
 **Apply.** An explicit button, or auto-apply with a 500 ms debounce. It bumps the epoch *from the dirty stage onward* and re-queues loaded columns nearest-first.
 - **Old meshes stay visible until replaced**, column by column and atomically (§4.2). There is no teardown and no worker restart; workers get one `configure` message.
@@ -1223,7 +1241,7 @@ WASD; Space (up/jump); Shift (down/sneak); Ctrl (sprint); F (walk/fly); M (map);
 | `npm test` | unit + arch + fast metrics | < 60 s |
 | `npm run test:metrics` | 2 seeds, cached | < 5 min, every SP |
 | `npm run test:metrics:full` | 8 seeds | SP exit |
-| `npm run bench` | vitest bench vs `baselines.json`; fails on > 30% regression and prints absolute targets | |
+| `npm run bench` | vitest bench vs `baselines.json` (each kernel as a ratio to a calibration kernel measured in the same run, ≥ 4096 evaluations per call; `npm run bench:record` writes the baseline on the reference machine); fails on > 30% regression and prints absolute targets | |
 
 Metric values are written to `test/metrics/.out/*.json` for trends. The harness exports PNG slices and map snapshots for the visual review each SP requires.
 
@@ -1235,9 +1253,9 @@ Metric values are written to `test/metrics/.out/*.json` for trends. The harness 
 
 ### 6.3 Unit tests (selection)
 
-- **Hash/RNG:** avalanche 50 ± 2%; no `deriveSeed` collisions over 100k pairs; `nextInt` has no modulo bias (χ² p > 0.01).
-- **detMath:** error ≤ 2e-6.
-- **Splines:** Hermite continuity (jump < 1e-9); nested evaluation.
+- **Hash/RNG:** published vectors; avalanche 50 ± 2% (fmix32 at 100k per bit, hash2/3/4 at ≥ 20k per word and bit); no hash2 reflection pairs; `deriveSeed` bijective in world[0] and collision-free over all schema names × octaves; `nextInt` has no modulo bias (χ² p > 0.01, modulo as negative control).
+- **detMath:** acceptance error ≤ 2e-6; design bounds, special values, symmetry, monotonicity, literal bits and a CPython oracle as in the SP1 spec (T-DM1-T-DM7).
+- **Splines:** C0 at every knot of every node (1 ulp either side, < 1e-9); C1 at interior knots on a fixture with non-zero tangents; hold semantics; compiled == reference bit-exact; batch == point; knot-raise linearity; validation paths; zero allocation.
 - **Packing:** round-trip, and the GLSL defines equal the TS constants.
 - **Store:** slab fuzz (4 threads × 100k alloc/free, 0 double allocations); uniform ↔ dense promotion; refcounted proto/final sharing.
 - **Compiler:** DAG validation errors carry the node path; compiled == reference bit-exactly on 100k points for every built-in preset.
@@ -1255,7 +1273,7 @@ Metric values are written to `test/metrics/.out/*.json` for trends. The harness 
 - **Mesher AO:** the per-vertex 3-sample table [1, .8, .6, .45] and the diagonal flip (quad split chosen by AO sums) on canned 3×3×3 neighbourhoods.
 - **FPS limiter:** ≥ 59.5 fps at cap 60 on simulated 60 Hz timestamps.
 - **Physics:** swept, step-up, swim, sink in water, unloaded ≠ solid.
-- **Presets:** migrate v0 → v1, deep-merge, reserved names, import loads, export writes the current draft.
+- **Presets:** migrations via an injected v1 → v2 list, patch over the profile, reserved names, import order and error paths, import loads, export writes the current draft.
 - **Session:** the typed seed is used; "same seed" regenerates the same world; URL round-trip.
 - **Invalidation:** stage-run counters per scope (U1).
 - **Persistence:** codec, `.wiworld` and fault-injection round-trips (E1-E6).
@@ -1269,18 +1287,18 @@ Metric values are written to `test/metrics/.out/*.json` for trends. The harness 
 
 | id | metric | threshold |
 |---|---|---|
-| N1 | climate CDF-uniformity, KS D (16 seeds × 50k); NormalNoise sd vs analytic | ≤ 0.015; ±2% |
-| N2 | \|r\| between fields at the same seed, and f(s) vs g(s+k), k = 1..64 | ≤ 0.02 |
-| N3 | aperiodicity: mean\|f(x) − f(x+P)\| for P ∈ {256…4096}·λ, all noises incl. single-stack | ≥ 0.9 × random-pair mean |
+| N1 | climate CDF-uniformity: per (seed, field) KS D of u vs U(−1,1), 16 seeds × 50k random points in [−2^19, 2^19)²; per-seed \|sd(z) − 1\| | ≤ 0.015; ±2% |
+| N2 | \|r\| between schema noises at the same seed, and f([b,0]) vs g([b+k,0]), k = 1..64, n ≥ 100k random points | ≤ 0.02 |
+| N3 | aperiodicity: mean\|f(p) − f(p+P·λ0·e)\| for P ∈ {256…4096}, e ∈ {x, z, xz} (+y), all noises incl. single-stack | ≥ 0.9 × random-pair mean |
 | N4 | origin: sd of each field at (0,0) over 64 seeds / spawn | ≥ 0.8 × global sd; most common spawn biome ≤ 30%; ≥ 8 distinct spawn biomes; spawn on land 100% |
-| N5 | 16-bin gradient-direction histogram, max/min | ≤ 1.15 |
-| N6 | lattice zeros: P(\|n\| < 1e-6) at integer points | ≤ 0.1% |
+| N5 | 16-bin gradient-direction histogram (central differences, h = λ_min/128), max/min, noises with ≥ 2 lattice terms; horizontal plane and vertical plane of 3D noises | ≤ 1.15 each |
+| N6 | lattice zeros: P(\|z\| < 1e-6) at integer points and 4×8×4 corners, incl. adversarial single-stack small-λ defs | ≤ 0.1% |
 | T1 | land heights: largest 10-block band / p5..p95 span / share y > 120 / share y > 200 | ≤ 25% / ≥ 60 blocks / ≥ 6% / ≥ 0.5% |
 | T2 | land columns with ≥ 2 solid→air transitions above surface − 30 (pre-cave) | ≥ 1.5%, ≥ 10% in peaks/windswept (amplified: Z1) |
 | T3 | P(\|Δh\| ≥ 4 across a biome border) / P(within biome) | ≤ 1.5 |
 | T4 | ocean floor sd per 256² / exposed bedrock under water / floor ≤ −50 | ≥ 3 / 0 / 0 |
 | T5 | surfaceEst vs true top (single-surface, no canopy) | median ≤ 1, p90 ≤ 2, p99 ≤ 6 |
-| T6 | spline gain: raising a knot by 10 blocks shifts the mean offset of affected columns | 10 ± 1.5 |
+| T6 | spline gain: raising a knot by 10 blocks, `gain = ΣΔoffset_col / Σw_col` over columns with w_col > 0 (w_col = product of Hermite value-basis weights along the knot path, tangents fixed), one knot per depth | 10 ± 1.5 |
 | T7 | steep continuity: border/interior gradient ratio | 0.9-1.1 |
 | T8 | per-axis relief in the default profile: sd of land `offset` from varying E_u over [−1,1] (resp. W) at sampled C, W (resp. C, E), on the column-stage point path | E ≥ 10 blocks / PV ≥ 10 blocks |
 | B1 | surface biome shares | each ≥ 0.3% (rare ≥ 0.1%); largest land biome ≤ 16%; ocean family 25-45%; exact ties 0; outside all boxes ≤ 2% |
@@ -1331,7 +1349,7 @@ Metric values are written to `test/metrics/.out/*.json` for trends. The harness 
 | U1 | stage-run counters: decorate edit re-runs only {D, L, mesh}; terrain edit spares raw climate; climate re-runs all | exact |
 | U2 | param liveness: ±15% on each non-live param changes its stage output hash in ≥ 1 of 16 columns | 100% |
 | U3 | no-placebo: params with `effectMetric` move that metric by > 0.5% at ±15% | 100% |
-| U4 | every schema leaf has meta, scope and stage; migrations round-trip; README generated block is fresh | exact |
+| U4 | registry invariants (every leaf has meta and scope, every non-live leaf a covering stage); migration invariant, fixtures and export → import identity; schema-shape lock; README generated block is fresh | exact (0 issues each) |
 | Z1 | amplified: land columns with ≥ 2 transitions (T2) / p99 land height | ≥ 8% / ≥ 250 |
 | Z2 | archipelago: ocean share / islands ≥ 1 km² per 100 km² | 60-75% / ≥ 20 |
 | Z3 | floating_islands: 8×8 km columns with solid ground at y 190-270 / island top runs that are grass | ≥ 3% / ≥ 90% |
@@ -1512,7 +1530,7 @@ High adds MSAA, a shadow cascade (about 2 ms), LOD 1 km and RD16 (dGPU target). 
 3. **T cost of the full cave family in JS, plus DAG closures.**
    - Mitigation: interval early-outs, bench gates per SP, and the codegen kill criterion.
    - Knobs in reserve: octave pruning via amplitude arrays, and 4×8×4 cells for noodles (thinnest-axis metric C5 guards against blurring).
-4. **Hashed-lattice noise cost.** Kill criterion in 3.1.
+4. **Hashed-lattice noise cost.** Kill criterion in 3.1 (measured at 1.06-1.27× the permutation variant in the SP1 spike).
 5. **Thread oversubscription on 4-core laptops.** Adaptive throttle, pool ≤ 6, map/LOD/metric jobs ≤ 1 while generating.
 6. **Cross-browser determinism.** detMath, IEEE-only arithmetic, arch bans, `?selftest=1` golden check in the browser, and absolute-state diffs.
 7. **Concurrency bugs in the shared store.** Single writer by status, version and meshSeq discard, slab fuzz, edits-during-light fuzz in the harness (L3).
@@ -1538,7 +1556,7 @@ High adds MSAA, a shadow cascade (about 2 ms), LOD 1 km and RD16 (dGPU target). 
 | batching | per-region BatchedMesh, 56 B/quad, real `position` | one batch per pass (whole-world `optimize` stalls); shared index (impossible) |
 | tint | tint texture + colormap | per-section UBO (impossible under multi-draw) |
 | density | typed column stage + closure DAG for the 3D composition | fixed formula (no structural experiments); full router with codegen (framework-first critical path) |
-| noise | hashed lattice (kill criterion) | 256-permutation (single-stack periodicity) |
+| noise | hashed lattice with axis pre-mix and 12 balanced gradients (kill criterion) | 256/512-permutation (single-stack periodicity; kept only as a bench comparator); GRAD16 (vertical anisotropy) |
 | map | pool jobs, coarse-first | dedicated map worker (idle thread, oversubscription) |
 | runtime fluids | edit-triggered only | natural ticks + lineage bit (sim storms entering sim distance; world ≠ gen + diffs) |
 | shadows | custom depth pass inside materials | SunLight (no shadow chunks for custom ShaderMaterial) |
@@ -1559,7 +1577,7 @@ Each sub-project runs its own cycle:
 - `npm run build`, `npm test` and `npm run test:metrics:full` pass for **every metric ID active at this SP**. Each ID (or ID part) carries `activeFrom: 'SPn'` in `test/thresholds.ts`, set to the first SP that lists it in its exit; once active it stays gated in every later SP. Metrics not yet active are skipped, not failed.
 - The bench stays within +30 % of `baselines.json`.
 - The visual review is done (PNG slices, map snapshots and screenshots attached to the SP spec).
-- From SP2 on, `?selftest=1` matches the goldens in the browser.
+- From SP2 on, `?selftest=1` matches the goldens in the browser (SP1: the `?lab=noise` determinism panel over the SP1 goldens).
 - The app still runs.
 
 Thresholds are locked (`thresholds.lock.json`) and goldens are gated (§6.2). Sizes: S ≈ 2-4 days, M ≈ 1-2 weeks, L ≈ 2-3 weeks of focused work.
@@ -1577,15 +1595,15 @@ Thresholds are locked (`thresholds.lock.json`) and goldens are gated (§6.2). Si
 - **Cut line:** the Vercel preview check (→ SP4).
 
 **SP1 — Deterministic math core** (M; SP0)
-- hash, rng, detMath; hashed-lattice `lattice3`, OctaveNoise, NormalNoise, CDF; nested Hermite splines; ParamSchema + meta, profiles skeleton, migrate, canonical JSON, genKey; stage registry and stageHash.
-- **Deliverable:** `?lab=noise` page showing any schema noise field with its histogram and gradient rose.
-- **Exit:** N1, N2, N3, N5, N6; detMath error ≤ 2e-6; spline continuity; `PERLIN3_SD` pinned; U4 (schema part: every leaf has meta, scope and stage; migrations round-trip); bench baseline recorded; noise kill criterion evaluated (§3.1).
+- hash, rng, seed text, detMath; hashed-lattice `lattice3`, OctaveNoise, NormalNoise, CDF; nested Hermite splines; ParamSchema + meta, profiles skeleton, presets envelope, migrate, canonical JSON, genKey; stage registry and stageHash (spec `2026-09-27-sp1-deterministic-math-core-design.md`).
+- **Deliverable:** `?lab=noise` page: inspector and A/B comparison of any schema noise field with its histogram, gradient rose and statistics, plus a browser determinism panel over the SP1 goldens.
+- **Exit:** N1, N2, N3, N5, N6, U4 (all parts, including README freshness); detMath error ≤ 2e-6 and its design bounds; spline tests; `PERLIN3_SD` and `PERLIN2_SD` pinned; SP1 goldens recorded; bench baseline recorded; noise kill criterion evaluated (§3.1); the lab's determinism panel green in Chrome and Firefox.
 - **Cut line:** none.
 
 **SP2 — Column stage, 2D biomes, map and parameter tooling** (L; SP1)
 - Climate with warps and CDF, PV fold; offset / σ / jag splines in blocks; steep from the halo; rivers (channel, valley, gorges) and lakes (column terms); surface biome registry, picker and zoom; spawn search; ColumnSample LRU.
 - Task pool and protocol (MAP_TILE jobs); map view (coarse-first tiles; biome, 2D relief, raw fields, rivers and lakes layers; hover; teleport stub).
-- Schema-driven parameter panel with scope badges; nested Hermite spline editor (typed coords, histogram overlay, area shares, blocks y-axis, cross-section); biome table with share preview; presets (import loads, export writes the draft), URL hash, WorldSession seed handling.
+- Schema-driven parameter panel with scope badges; nested Hermite spline editor (typed coords, histogram overlay, area shares, blocks y-axis, cross-section); biome table with share preview; presets UI over the SP1 envelope (import loads, export writes the draft), URL hash, WorldSession seed handling.
 - `?selftest=1` page: recomputes column-stage and map-tile golden hashes in a real module worker.
 - **Deliverable:** an interactive world map that updates live while splines and biome boxes are edited — research tooling before any voxel exists.
 - **Exit:** B1, B4 (climate parts), N4, T6, T7, T8; T3 on 2D relief; B2 (length, share, mouths, gorges) and B5 (lakes per km², share with Lw ≥ 70) on the column stage; U2 for column-scope params; DT2 batch == point (column stage); two workers produce byte-identical map tiles; P1 Column ≤ 0.7 / 1.2 ms; first coarse map image ≤ 0.3 s; spline-edit map preview ≤ 300 ms; preset and session unit tests.
@@ -1662,7 +1680,7 @@ Thresholds are locked (`thresholds.lock.json`) and goldens are gated (§6.2). Si
 **SP10 — Research tooling completion** (M; SP9)
 - Full stage-hash invalidation for every scope with badges and progress; probe of all stage outputs including the surface-rule branch; slice view of every 3D field; inspector mutes and pins; metrics dashboard (shared metric definitions, compare with previous params, seed sweep for column metrics); complete map layers (structures, carvers, aquifer, status heatmap, bookmarks, teleport snap); JSON editors with validation; full F3 overlay and performance HUD; generated README parameter reference; plus received cut-line items.
 - **Deliverable:** the research workbench — tweak, preview, measure and compare without leaving the app.
-- **Exit:** U1-U4 (U4 in full, including README freshness); G2 (Apply part: first visible change near the player ≤ 0.5 s); dashboard metric == vitest metric (same function, same value); decorate-scope Apply at RD12 ≤ 3 s; inspector slice ≤ 300 ms at 128².
+- **Exit:** U1-U4 (U4 active in full since SP1); G2 (Apply part: first visible change near the player ≤ 0.5 s); dashboard metric == vitest metric (same function, same value); decorate-scope Apply at RD12 ≤ 3 s; inspector slice ≤ 300 ms at 128².
 - **Cut line:** seed sweep; the column-status heatmap (→ SP12).
 
 **SP11 — Graphics scale-up** (L; SP10 for integration, most parts need only SP8a)
