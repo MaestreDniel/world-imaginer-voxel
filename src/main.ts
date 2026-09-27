@@ -23,7 +23,10 @@ async function boot(root: HTMLElement): Promise<void> {
 
 const root = document.getElementById('app');
 if (root === null) throw new Error('#app element missing from index.html');
-boot(root).catch((error: unknown) => {
+const start: Promise<void> = new URLSearchParams(location.search).get('lab') === 'noise'
+  ? import('./ui/lab/noiseLab').then((m) => m.mountNoiseLab(root))
+  : boot(root);
+start.catch((error: unknown) => {
   const pre = document.createElement('pre');
   pre.textContent = `Boot failed: ${error instanceof Error ? error.stack ?? error.message : String(error)}`;
   root.replaceChildren(pre);

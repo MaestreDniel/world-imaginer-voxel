@@ -1,0 +1,16 @@
+.lab { display: grid; grid-template-rows: auto auto 1fr; grid-template-columns: 1fr 320px; height: 100vh; font: 13px system-ui, sans-serif; color: #ddd; background: #1b1d22; }
+.lab-header { grid-column: 1 / 3; display: flex; gap: 12px; align-items: center; padding: 6px 10px; background: #23262d; }
+.lab-notice { color: #f0b34a; }
+.lab-toolbar { grid-column: 1 / 3; display: flex; flex-wrap: wrap; gap: 8px; align-items: center; padding: 6px 10px; border-bottom: 1px solid #333; }
+.lab-views { display: grid; grid-auto-flow: column; grid-auto-columns: 1fr; gap: 4px; min-height: 0; }
+.lab-view { position: relative; min-width: 0; min-height: 0; }
+.lab-canvas { display: block; width: 100%; height: 100%; cursor: grab; }
+.lab-side { overflow: auto; padding: 8px 10px; border-left: 1px solid #333; }
+.lab-side h3 { margin: 10px 0 4px; font-size: 12px; text-transform: uppercase; color: #9aa; }
+.lab-form label { display: grid; grid-template-columns: 110px 1fr; gap: 6px; margin: 3px 0; align-items: center; }
+.lab-form input, .lab-form select { width: 100%; box-sizing: border-box; }
+.lab-issues { color: #ff7b72; white-space: pre-wrap; }
+.lab-readout { font-family: ui-monospace, monospace; }
+.lab-stats canvas { width: 100%; height: 120px; background: #15171b; }
+.lab-stats pre { margin: 4px 0; font-family: ui-monospace, monospace; }
+.lab-det li { font-family: ui-monospace, monospace; list-style: none; }
