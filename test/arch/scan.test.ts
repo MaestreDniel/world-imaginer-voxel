@@ -1,5 +1,8 @@
+import { mkdtempSync, writeFileSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
 import { describe, expect, test } from 'vitest';
-import { blankJs, extractEdges, layerOf, resolveTarget } from './scan';
+import { blankJs, extractEdges, layerOf, resolveTarget, scanFile } from './scan';
 
 describe('blankJs', () => {
   test('blanks comments and optionally string contents, keeping line numbers', () => {
@@ -98,5 +101,60 @@ describe('resolveTarget', () => {
     expect(resolveTarget('index.html', '/src/main.ts', 'html')).toEqual({ kind: 'repo', path: 'src/main.ts' });
     expect(resolveTarget('test/x.ts', 'node:fs', 'value')).toEqual({ kind: 'builtin' });
     expect(resolveTarget('src/render/x.ts', 'three/addons/x.js', 'value')).toEqual({ kind: 'bare', name: 'three/addons/x.js' });
+  });
+});
+
+describe('regressions: scanner must not fail open', () => {
+  test('a non-literal dynamic import is itself flagged, never silently dropped', () => {
+    expect(extractEdges('src/engine/y.ts', "import('./a' + x);")).toEqual([
+      { spec: '', kind: 'dynamic-nonliteral', line: 1 },
+    ]);
+    expect(extractEdges('src/engine/y.ts', "import('./a.json', { with: { type: 'json' } });")).toEqual([
+      { spec: './a.json', kind: 'value', line: 1 },
+    ]);
+  });
+
+  test('a template literal with interpolation is a non-literal dynamic import, not a literal spec', () => {
+    expect(extractEdges('src/engine/y.ts', 'import(`./x/${n}.ts`);')).toEqual([
+      { spec: '', kind: 'dynamic-nonliteral', line: 1 },
+    ]);
+  });
+
+  test('type-position dynamic import without member access is type-import-expr; runtime forms stay value', () => {
+    expect(extractEdges('src/engine/y.ts', "let v: typeof import('./t');")).toEqual([
+      { spec: './t', kind: 'type-import-expr', line: 1 },
+    ]);
+    expect(extractEdges('src/engine/y.ts', "type M = import('./t');")).toEqual([
+      { spec: './t', kind: 'type-import-expr', line: 1 },
+    ]);
+    expect(extractEdges('src/engine/y.ts', "const m = await import('./m');")).toEqual([
+      { spec: './m', kind: 'value', line: 1 },
+    ]);
+    expect(extractEdges('src/engine/y.ts', "import('./m').then((mod) => mod);")).toEqual([
+      { spec: './m', kind: 'value', line: 1 },
+    ]);
+  });
+
+  test('a regex literal is not mistaken for a string, and does not open a fake block comment', () => {
+    expect(blankJs("s.replace(/'/g, \"\");\neval(x);\nconst t = 'a';", { strings: true }))
+      .toBe("s.replace(/'/g, \"\");\neval(x);\nconst t = ' ';");
+    const src = "/a\\/*/;\nimport x from '../../../../etc/passwd';";
+    expect(blankJs(src, { strings: false })).toBe(src);
+    expect(extractEdges('src/core/z.ts', src)).toEqual([
+      { spec: '../../../../etc/passwd', kind: 'value', line: 2 },
+    ]);
+  });
+
+  test('template literal interpolation is scanned as code, not blanked as string content', () => {
+    expect(blankJs('const s = `a${eval(x)}b`;', { strings: true })).toBe('const s = ` ${eval(x)} `;');
+  });
+
+  test('extension matching is case-insensitive', () => {
+    expect(extractEdges('src/ui/X.TS', "import { a } from './a';")).toEqual([
+      { spec: './a', kind: 'value', line: 1 },
+    ]);
+    const dir = mkdtempSync(join(tmpdir(), 'scan-ext-'));
+    writeFileSync(join(dir, 'X.TS'), "import { a } from './a';\n");
+    expect(scanFile(dir, 'X.TS').edges).toEqual([{ spec: './a', kind: 'value', line: 1 }]);
   });
 });

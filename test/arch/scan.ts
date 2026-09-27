@@ -27,36 +27,112 @@ const JS_EXTS = new Set(['.ts', '.mts', '.cts', '.js', '.mjs', '.cjs']);
 const SHADER_EXTS = new Set(['.glsl', '.vert', '.frag', '.wgsl']);
 const KNOWN_EXTS = new Set([...SOURCE_EXTS, '.json', '.png', '.svg', '.jpg', '.webp']);
 
+const REGEX_PUNCT_TRIGGERS = new Set(['(', ',', '=', ':', '[', '!', '&', '|', '?', '{', '}', ';', '+', '-', '*', '%', '<', '>', '~', '^']);
+const REGEX_WORD_TRIGGERS = new Set(['return', 'typeof', 'case', 'in', 'of', 'void', 'delete', 'throw']);
+
 export function blankJs(text: string, opts: { strings: boolean }): string {
   const out = text.split('');
   const n = text.length;
   const fill = (from: number, to: number) => {
     for (let k = from; k < to; k++) if (out[k] !== '\n') out[k] = ' ';
   };
-  let i = 0;
-  while (i < n) {
-    const c = text[i];
-    const d = text[i + 1];
-    if (c === '/' && d === '/') {
-      const end = text.indexOf('\n', i);
-      const stop = end === -1 ? n : end;
-      fill(i, stop);
-      i = stop;
-    } else if (c === '/' && d === '*') {
-      const end = text.indexOf('*/', i + 2);
-      const stop = end === -1 ? n : end + 2;
-      fill(i, stop);
-      i = stop;
-    } else if (c === '"' || c === "'" || c === '`') {
-      let j = i + 1;
-      while (j < n && text[j] !== c) j += text[j] === '\\' ? 2 : 1;
-      const stop = Math.min(n, j + 1);
-      if (opts.strings) fill(i + 1, stop - 1);
-      i = stop;
-    } else {
+
+  const isRegexContext = (i: number): boolean => {
+    let k = i - 1;
+    while (k >= 0 && /[ \t\r\n]/.test(out[k]!)) k--;
+    if (k < 0) return true;
+    const ch = out[k]!;
+    if (REGEX_PUNCT_TRIGGERS.has(ch)) return true;
+    if (!/[A-Za-z0-9_$]/.test(ch)) return false;
+    let wStart = k + 1;
+    while (wStart > 0 && /[A-Za-z0-9_$]/.test(out[wStart - 1]!)) wStart--;
+    return REGEX_WORD_TRIGGERS.has(out.slice(wStart, k + 1).join(''));
+  };
+
+  const scanRegex = (start: number): number => {
+    let i = start + 1;
+    let inClass = false;
+    while (i < n) {
+      const c = text[i];
+      if (c === '\n') return start + 1;
+      if (c === '\\') { i += 2; continue; }
+      if (c === '[') { inClass = true; i++; continue; }
+      if (c === ']') { inClass = false; i++; continue; }
+      if (c === '/' && !inClass) {
+        i++;
+        while (i < n && /[a-zA-Z]/.test(text[i]!)) i++;
+        return i;
+      }
       i++;
     }
+    return start + 1;
+  };
+
+  const scanTemplate = (start: number): number => {
+    let i = start;
+    while (i < n) {
+      const c = text[i];
+      if (c === '\\') {
+        if (opts.strings) {
+          if (text[i] !== '\n') out[i] = ' ';
+          if (i + 1 < n && text[i + 1] !== '\n') out[i + 1] = ' ';
+        }
+        i += 2;
+        continue;
+      }
+      if (c === '`') return i + 1;
+      if (c === '$' && text[i + 1] === '{') {
+        i = scanCode(i + 2, true);
+        continue;
+      }
+      if (opts.strings && c !== '\n') out[i] = ' ';
+      i++;
+    }
+    return i;
+  };
+
+  function scanCode(start: number, untilCloseBrace: boolean): number {
+    let i = start;
+    let depth = 0;
+    while (i < n) {
+      const c = text[i];
+      const d = text[i + 1];
+      if (c === '/' && d === '/') {
+        const end = text.indexOf('\n', i);
+        const stop = end === -1 ? n : end;
+        fill(i, stop);
+        i = stop;
+      } else if (c === '/' && d === '*') {
+        const end = text.indexOf('*/', i + 2);
+        const stop = end === -1 ? n : end + 2;
+        fill(i, stop);
+        i = stop;
+      } else if (c === '"' || c === "'") {
+        let j = i + 1;
+        while (j < n && text[j] !== c) j += text[j] === '\\' ? 2 : 1;
+        const stop = Math.min(n, j + 1);
+        if (opts.strings) fill(i + 1, stop - 1);
+        i = stop;
+      } else if (c === '`') {
+        i = scanTemplate(i + 1);
+      } else if (c === '/' && d !== '/' && d !== '*' && isRegexContext(i)) {
+        i = scanRegex(i);
+      } else if (untilCloseBrace && c === '}' && depth === 0) {
+        return i + 1;
+      } else if (c === '{') {
+        depth++;
+        i++;
+      } else if (c === '}') {
+        depth--;
+        i++;
+      } else {
+        i++;
+      }
+    }
+    return i;
   }
+
+  scanCode(0, false);
   return out.join('');
 }
 
@@ -87,8 +163,71 @@ export function layerOf(path: string): string | null {
 
 const THEN_LIKE = new Set(['then', 'catch', 'finally']);
 
+function precedesTypePosition(code: string, importIndex: number): boolean {
+  let k = importIndex - 1;
+  while (k >= 0 && /\s/.test(code[k]!)) k--;
+  if (k < 0) return false;
+  const ch = code[k]!;
+  if (':<|&'.includes(ch)) return true;
+  if (/[A-Za-z_$]/.test(ch)) {
+    let wStart = k + 1;
+    while (wStart > 0 && /[A-Za-z0-9_$]/.test(code[wStart - 1]!)) wStart--;
+    const word = code.slice(wStart, k + 1);
+    if (word === 'typeof' || word === 'extends') return true;
+  }
+  if (ch === '=') {
+    let s = k - 1;
+    while (s >= 0 && !';{}'.includes(code[s]!)) s--;
+    const stmt = code.slice(s + 1, k + 1);
+    if (/^\s*type\s+[A-Za-z_$][\w$]*\s*(<[^=]*>)?\s*=\s*$/.test(stmt)) return true;
+  }
+  return false;
+}
+
+function scanDynamicImports(code: string, push: (spec: string, kind: EdgeKind, text: string, index: number) => void): void {
+  for (const m of code.matchAll(/\bimport\s*\(/g)) {
+    const callStart = m.index;
+    let i = callStart + m[0].length;
+    while (i < code.length && /\s/.test(code[i]!)) i++;
+    const qc = code[i];
+    if (qc !== "'" && qc !== '"' && qc !== '`') {
+      push('', 'dynamic-nonliteral', code, callStart);
+      continue;
+    }
+    let j = i + 1;
+    let content = '';
+    let closed = false;
+    while (j < code.length) {
+      const cj = code[j]!;
+      if (cj === '\\') { content += cj + (code[j + 1] ?? ''); j += 2; continue; }
+      if (cj === qc) { closed = true; j++; break; }
+      if (cj === '\n' && qc !== '`') break;
+      content += cj;
+      j++;
+    }
+    let k = j;
+    while (k < code.length && /\s/.test(code[k]!)) k++;
+    const interpolated = qc === '`' && content.includes('${');
+    if (closed && !interpolated && (code[k] === ')' || code[k] === ',')) {
+      if (code[k] === ')') {
+        const rest = code.slice(k + 1, k + 81);
+        const memberMatch = /^\s*\.\s*([\w$]+)/.exec(rest);
+        const member = memberMatch?.[1];
+        const kind: EdgeKind = member !== undefined
+          ? (THEN_LIKE.has(member) ? 'value' : 'type-import-expr')
+          : (precedesTypePosition(code, callStart) ? 'type-import-expr' : 'value');
+        push(content, kind, code, callStart);
+      } else {
+        push(content, 'value', code, callStart);
+      }
+      continue;
+    }
+    push('', 'dynamic-nonliteral', code, callStart);
+  }
+}
+
 export function extractEdges(path: string, raw: string): Edge[] {
-  const ext = extname(path);
+  const ext = extname(path).toLowerCase();
   const edges: Edge[] = [];
   const push = (spec: string, kind: EdgeKind, text: string, index: number) => edges.push({ spec, kind, line: lineAt(text, index) });
   if (ext === '.css') {
@@ -111,11 +250,7 @@ export function extractEdges(path: string, raw: string): Edge[] {
   for (const m of code.matchAll(/\bexport\s+(type\s+)?(?:\*(?:\s+as\s+[\w$]+)?|\{[^}]*\})\s*from\s*(['"])([^'"\n]+)\2/g)) {
     push(m[3]!, m[1] ? 'type' : 'value', code, m.index);
   }
-  for (const m of code.matchAll(/\bimport\s*\(\s*(['"`])([^'"`\n]+)\1\s*\)(\s*\.\s*([\w$]+))?/g)) {
-    const member = m[4];
-    push(m[2]!, member !== undefined && !THEN_LIKE.has(member) ? 'type-import-expr' : 'value', code, m.index);
-  }
-  for (const m of code.matchAll(/\bimport\s*\(\s*(?!['"`])/g)) push('', 'dynamic-nonliteral', code, m.index);
+  scanDynamicImports(code, push);
   const workerUrlStarts = new Set<number>();
   for (const m of code.matchAll(/\bnew\s+(?:Shared)?Worker\s*\(\s*(new\s+URL)\s*\(\s*(['"])([^'"\n]+)\2\s*,\s*import\.meta\.url\s*\)/g)) {
     workerUrlStarts.add(m.index + m[0].indexOf(m[1]!));
@@ -148,7 +283,7 @@ export function listFiles(root: string, dir: string, exts: readonly string[], ex
 
 export function scanFile(root: string, path: string): ScannedFile {
   const raw = readFileSync(join(root, path), 'utf8');
-  const ext = extname(path);
+  const ext = extname(path).toLowerCase();
   const isJs = JS_EXTS.has(ext);
   const commentsOnly = isJs ? blankJs(raw, { strings: false })
     : ext === '.css' || SHADER_EXTS.has(ext) ? blankBlock(raw, '/*', '*/')
