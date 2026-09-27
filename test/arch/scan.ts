@@ -168,7 +168,6 @@ function precedesTypePosition(code: string, importIndex: number): boolean {
   while (k >= 0 && /\s/.test(code[k]!)) k--;
   if (k < 0) return false;
   const ch = code[k]!;
-  if (':<|&'.includes(ch)) return true;
   if (/[A-Za-z_$]/.test(ch)) {
     let wStart = k + 1;
     while (wStart > 0 && /[A-Za-z0-9_$]/.test(code[wStart - 1]!)) wStart--;

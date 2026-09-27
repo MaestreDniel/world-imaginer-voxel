@@ -135,6 +135,19 @@ describe('regressions: scanner must not fail open', () => {
     ]);
   });
 
+  test('a bare ":" before a dynamic import is not a type position: object values, ternary branches and switch cases stay value', () => {
+    expect(extractEdges('src/engine/y.ts', "const obj = { mod: import('./x') };")).toEqual([
+      { spec: './x', kind: 'value', line: 1 },
+    ]);
+    expect(extractEdges('src/engine/y.ts', "cond ? import('./x') : import('./y');")).toEqual([
+      { spec: './x', kind: 'value', line: 1 },
+      { spec: './y', kind: 'value', line: 1 },
+    ]);
+    expect(extractEdges('src/engine/y.ts', 'switch (k) { case 1: import(\'./x\'); break; }')).toEqual([
+      { spec: './x', kind: 'value', line: 1 },
+    ]);
+  });
+
   test('a regex literal is not mistaken for a string, and does not open a fake block comment', () => {
     expect(blankJs("s.replace(/'/g, \"\");\neval(x);\nconst t = 'a';", { strings: true }))
       .toBe("s.replace(/'/g, \"\");\neval(x);\nconst t = ' ';");
