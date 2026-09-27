@@ -3,7 +3,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { describe, expect, test } from 'vitest';
-import { checkBanned, isNumericExpr, listAudioFiles } from './rules/banned';
+import { checkBanned, importClauseBindings, isNumericExpr, listAudioFiles } from './rules/banned';
 import { ROOT, scanTree, sortViolations } from './scan';
 
 const fixture = (name: string) => fileURLToPath(new URL(`./fixtures/banned/${name}`, import.meta.url));
@@ -11,9 +11,16 @@ const brief = (root: string) => sortViolations(checkBanned(scanTree(root))).map(
 
 test('bad fixture tree reports every banned use', () => {
   expect(brief(fixture('bad'))).toEqual([
+    'src/core/encoder.ts:1 engine-dependent-api',
+    'src/core/fround.ts:1 math-member',
+    'src/core/localeSort.ts:1 engine-dependent-api',
+    'src/core/noise/direct.ts:2 hot-import-reference',
+    'src/core/normalize.ts:1 engine-dependent-api',
     'src/core/perfNow.ts:1 nondeterministic',
+    'src/core/pow.ts:1 math-pow-operator',
     'src/core/random.ts:1 nondeterministic',
     'src/core/spawnWorker.ts:1 worker-api',
+    'src/core/spline/ns.ts:1 hot-import-namespace',
     'src/core/worker.ts:1 worker-api',
     'src/gen/alias.ts:1 math-as-value',
     'src/gen/binaryExport.ts:1 numeric-export',
@@ -21,6 +28,7 @@ test('bad fixture tree reports every banned use', () => {
     'src/gen/data.ts:1 numeric-data-export',
     'src/gen/defaultNumeric.ts:1 numeric-export',
     'src/gen/destructureMath.ts:1 math-as-value',
+    'src/gen/intl.ts:1 engine-dependent-api',
     'src/gen/log.ts:1 nondeterministic',
     'src/gen/multiDecl.ts:2 numeric-export',
     'src/gen/pow.ts:1 math-pow-operator',
@@ -30,6 +38,9 @@ test('bad fixture tree reports every banned use', () => {
     'src/gen/tunables2.ts:2 numeric-export',
     'src/gen/wrappedInit.ts:1 numeric-export',
     'src/light/dom.ts:1 dom-global',
+    'src/metrics/direct.ts:2 hot-import-reference',
+    'src/metrics/sp1Goldens.ts:1 nondeterministic',
+    'src/metrics/sp1Goldens.ts:2 math-pow-operator',
     'src/render/materials/raw.glsl:1 raw-shader-file',
     'src/render/materials/rawImport.ts:1 raw-import',
     'src/render/threeAudio.ts:1 three-audio',
@@ -73,5 +84,13 @@ describe('audio files', () => {
 
   test('the repository contains no audio files', () => {
     expect(listAudioFiles(ROOT)).toEqual([]);
+  });
+});
+
+describe('hot-module import rule', () => {
+  test('importClauseBindings', () => {
+    expect(importClauseBindings('{ a, b as c, type T }')).toEqual({ names: ['a', 'c'], namespace: false });
+    expect(importClauseBindings('d, { e }')).toEqual({ names: ['e', 'd'], namespace: false });
+    expect(importClauseBindings('* as ns')).toEqual({ names: [], namespace: true });
   });
 });

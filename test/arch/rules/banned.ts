@@ -7,8 +7,14 @@ const JS_EXTS = new Set(['.ts', '.mts', '.cts', '.js', '.mjs', '.cjs']);
 const SHADER_EXTS = new Set(['.glsl', '.vert', '.frag', '.wgsl']);
 const ND_LAYERS = new Set(['core', 'world', 'gen']);
 const PURE_LAYERS = new Set(['core', 'world', 'gen', 'textures', 'audio', 'light', 'mesh', 'sim', 'persist', 'metrics', 'daynight']);
-const MATH_ALLOWED = new Set(['abs', 'floor', 'ceil', 'round', 'trunc', 'sign', 'min', 'max', 'imul', 'fround', 'clz32', 'sqrt',
+const MATH_ALLOWED = new Set(['abs', 'floor', 'ceil', 'round', 'trunc', 'sign', 'min', 'max', 'imul', 'clz32', 'sqrt',
   'PI', 'E', 'LN2', 'LN10', 'LOG2E', 'LOG10E', 'SQRT2', 'SQRT1_2']);
+/** Files outside core/ and gen/ whose outputs are golden-hashed, so they follow the core determinism rules (SP1 spec §1.8). */
+const DET_FILES = new Set(['metrics/sp1Goldens.ts', 'metrics/sp1Fixtures.ts']);
+/** Modules whose hot loops must not read imported bindings (vitest turns them into getters; SP1 spec §1.8). */
+const HOT_PREFIXES = ['core/noise/', 'core/spline/', 'metrics/'];
+const ENGINE_DEPENDENT = /\bIntl\b|\.\s*(?:localeCompare|toLocaleString|toLocaleUpperCase|toLocaleLowerCase|toLocaleDateString|toLocaleTimeString|normalize)\s*\(|\bTextEncoder\b|\bTextDecoder\b/g;
+const IMPORT_STMT = /\bimport\s+(type\s+)?([\w$*{},\s]+?)\s+from\s*(['"])[^'"\n]+\3\s*;?/g;
 const THREE_AUDIO = new Set(['Audio', 'AudioListener', 'PositionalAudio', 'AudioLoader', 'AudioAnalyser']);
 const AUDIO_EXTS = new Set(['.ogg', '.oga', '.mp3', '.wav', '.flac', '.m4a', '.aac', '.opus', '.weba']);
 
@@ -91,6 +97,58 @@ function numericExportViolations(f: ScannedFile, srcRel: string): Violation[] {
   return out;
 }
 
+/** Value bindings of an import clause (`d, { a, b as c, type T }` → a, c, d); inline `type` specifiers are skipped. */
+export function importClauseBindings(clause: string): { names: string[]; namespace: boolean } {
+  const names: string[] = [];
+  const braces = /\{([^}]*)\}/.exec(clause);
+  if (braces) {
+    for (const item of braces[1]!.split(',')) {
+      const t = item.trim();
+      if (t === '' || /^type\s/.test(t)) continue;
+      const parts = t.split(/\s+as\s+/);
+      names.push((parts[1] ?? parts[0]!).trim());
+    }
+  }
+  const namespace = /\*\s*as\s+[\w$]+/.test(clause);
+  const head = clause.replace(/\{[^}]*\}/, '').replace(/\*\s*as\s+[\w$]+/, '');
+  for (const part of head.split(',')) {
+    const t = part.trim();
+    if (/^[\w$]+$/.test(t)) names.push(t);
+  }
+  return { names, namespace };
+}
+
+function hotImportViolations(f: ScannedFile): Violation[] {
+  const out: Violation[] = [];
+  const spans: Array<[number, number]> = [];
+  const names: string[] = [];
+  for (const m of f.codeKeepStrings.matchAll(IMPORT_STMT)) {
+    spans.push([m.index, m.index + m[0].length]);
+    if (m[1]) continue;
+    const b = importClauseBindings(m[2]!);
+    if (b.namespace) {
+      out.push({ file: f.path, line: lineAt(f.codeKeepStrings, m.index), rule: 'hot-import-namespace', message: 'namespace import in a hot module (import the bindings and alias them)' });
+    }
+    names.push(...b.names);
+  }
+  const lines = f.code.split('\n');
+  for (const name of names) {
+    const esc = name.replace(/\$/g, '\\$');
+    const alias = new RegExp(String.raw`^const\s+[\w$]+\s*=\s*${esc}\s*;?\s*$`);
+    for (const m of f.code.matchAll(new RegExp(String.raw`(?<![\w$.])${esc}(?![\w$])`, 'g'))) {
+      const i = m.index;
+      if (spans.some(([a, b]) => i >= a && i < b)) continue;
+      const line = lineAt(f.code, i);
+      if (alias.test(lines[line - 1]!)) continue;
+      const before = f.code.slice(0, i).trimEnd();
+      const after = f.code.slice(i + name.length).trimStart();
+      if (after.startsWith(':') && (before.endsWith('{') || before.endsWith(','))) continue;
+      out.push({ file: f.path, line, rule: 'hot-import-reference', message: `imported binding ${name} used outside a top-level const alias (vitest turns it into a getter)` });
+    }
+  }
+  return out;
+}
+
 export function checkBanned(files: readonly ScannedFile[]): Violation[] {
   const out: Violation[] = [];
   for (const f of files) {
@@ -110,10 +168,17 @@ export function checkBanned(files: readonly ScannedFile[]): Violation[] {
     }
     if (JS_EXTS.has(ext)) {
       const { code, codeKeepStrings } = f;
-      if (ND_LAYERS.has(layer)) {
+      const detFile = DET_FILES.has(srcRel);
+      if (ND_LAYERS.has(layer) || detFile) {
         for (const m of code.matchAll(/\bMath\.random\b|\bDate\.now\b|\bperformance\.now\b|\bconsole\s*\./g)) at(code, m.index, 'nondeterministic', `${m[0]} in ${layer}/`);
       }
-      if (layer === 'gen' || srcRel.startsWith('core/noise/')) {
+      if (layer === 'gen' || layer === 'core' || detFile) {
+        for (const m of code.matchAll(ENGINE_DEPENDENT)) at(code, m.index, 'engine-dependent-api', `${m[0].trim()} in ${layer}/ (engine-dependent; SP1 spec §1.8)`);
+      }
+      if (HOT_PREFIXES.some((p) => srcRel.startsWith(p))) {
+        for (const v of hotImportViolations(f)) found.set(`${v.rule}:${v.line}`, v);
+      }
+      if (layer === 'gen' || layer === 'core' || detFile) {
         for (const m of code.matchAll(/\bMath\s*\.\s*([A-Za-z_$][\w$]*)/g)) {
           if (!MATH_ALLOWED.has(m[1]!) && m[1] !== 'random') at(code, m.index, 'math-member', `Math.${m[1]} (use core/detMath)`);
         }
