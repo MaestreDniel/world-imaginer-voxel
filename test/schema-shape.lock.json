@@ -1,0 +1,18 @@
+{
+  "schemaVersion": 1,
+  "leaves": {
+    "climate.C": "noise",
+    "climate.E": "noise",
+    "climate.H": "noise",
+    "climate.R": "noise",
+    "climate.T": "noise",
+    "climate.W": "noise",
+    "climate.scaleMul": "number",
+    "climate.warp.C.amplitude": "number",
+    "climate.warp.C.noise": "noise",
+    "climate.warp.R.amplitude": "number",
+    "climate.warp.R.noise": "noise",
+    "climate.warp.shift.amplitude": "number",
+    "climate.warp.shift.noise": "noise"
+  }
+}

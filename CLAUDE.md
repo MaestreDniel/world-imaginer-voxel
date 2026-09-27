@@ -20,6 +20,8 @@ Browser voxel explorer + editor (TypeScript, Vite, three.js r186 WebGL2 with cus
 - `npm test` — vitest projects `unit`, `arch`, `metrics-fast`; `npm run test:metrics` (quick, CI), `npm run test:metrics:full` (SP exit), `npm run bench`
 - `npm run test:accept-thresholds` — rewrite `test/thresholds.lock.json` (needs a spec amendment in the same change; CI checks it)
 - `npm run test:goldens` — record and merge goldens (refuses changed goldens without a `GENERATOR_VERSION` bump)
+- `npm run test:accept-schema` — rewrite `test/schema-shape.lock.json` (refuses a removed, renamed or re-kinded leaf unless `SCHEMA_VERSION` was bumped with a migration)
+- `npm run docs:params` — regenerate the README parameter table from the schema
 - `docker compose up world-imaginer-voxel`
 - Each sub-project appends its id to `STARTED_SPS` in `test/harness/sp.ts` in its first commit. Appending changes the lock (`test/thresholds.lock.json`), so run `npm run test:accept-thresholds` and amend the spec in the same change.
 

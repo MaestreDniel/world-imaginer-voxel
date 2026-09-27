@@ -31,6 +31,28 @@ Highlights of the design:
 - **Sandbox:** editing with real-time fluids, saves in IndexedDB with export/import, procedural textures and audio with loadable resource and sound packs.
 - **Research tooling:** live map, spline editor, biome table, density inspector, slice views and an in-app metrics dashboard backed by the same metric tests that gate CI.
 
+## Parameters
+
+Generated from `src/core/params/schema.ts` by `npm run docs:params`; a test fails when it is stale.
+
+<!-- params:begin -->
+| path | kind | default | range | unit | scope | doc |
+|---|---|---|---|---|---|---|
+| `climate.scaleMul` | number | 1 | 0.25 … 16 |  | climate | Climate scale: Zooms every climate wavelength, warp wavelength and warp amplitude (large_biomes = 4). |
+| `climate.warp.shift.amplitude` | number | 48 | 0 … 1000 | blocks | climate | Amplitude: Maximum displacement of the warp. |
+| `climate.warp.shift.noise` | noise | {"amplitudes":null,"clampSigma":3,"double":true,"lacunarity":2,"octaves":3,"persistence":0.5,"remap":"none","wavelength":256,"yScale":1} | wavelength 16 … 8192 |  | climate | Warp noise: Unit-sd noise sampled twice (.x and .z) to displace the coordinates. |
+| `climate.warp.C.amplitude` | number | 180 | 0 … 1000 | blocks | climate | Amplitude: Maximum displacement of the warp. |
+| `climate.warp.C.noise` | noise | {"amplitudes":null,"clampSigma":3,"double":true,"lacunarity":2,"octaves":2,"persistence":0.5,"remap":"none","wavelength":1024,"yScale":1} | wavelength 16 … 8192 |  | climate | Warp noise: Unit-sd noise sampled twice (.x and .z) to displace the coordinates. |
+| `climate.warp.R.amplitude` | number | 120 | 0 … 1000 | blocks | climate | Amplitude: Maximum displacement of the warp. |
+| `climate.warp.R.noise` | noise | {"amplitudes":null,"clampSigma":3,"double":true,"lacunarity":2,"octaves":2,"persistence":0.5,"remap":"none","wavelength":512,"yScale":1} | wavelength 16 … 8192 |  | climate | Warp noise: Unit-sd noise sampled twice (.x and .z) to displace the coordinates. |
+| `climate.C` | noise | {"amplitudes":null,"clampSigma":3,"double":true,"lacunarity":2,"octaves":6,"persistence":0.5,"remap":"uniform","wavelength":2400,"yScale":1} | wavelength 64 … 20000 |  | climate | Continentalness: Ocean ↔ inland. |
+| `climate.E` | noise | {"amplitudes":null,"clampSigma":3,"double":true,"lacunarity":2,"octaves":5,"persistence":0.5,"remap":"uniform","wavelength":1600,"yScale":1} | wavelength 64 … 20000 |  | climate | Erosion: Flat ↔ mountainous. |
+| `climate.W` | noise | {"amplitudes":null,"clampSigma":3,"double":true,"lacunarity":2,"octaves":5,"persistence":0.5,"remap":"uniform","wavelength":900,"yScale":1} | wavelength 64 … 20000 |  | climate | Weirdness: Ridges at \|W\| = 2/3 via PV; sign selects variants. |
+| `climate.T` | noise | {"amplitudes":null,"clampSigma":3,"double":true,"lacunarity":2,"octaves":4,"persistence":0.5,"remap":"uniform","wavelength":5000,"yScale":1} | wavelength 64 … 20000 |  | climate | Temperature: Cold ↔ hot; zones about twice the size of humidity zones. |
+| `climate.H` | noise | {"amplitudes":null,"clampSigma":3,"double":true,"lacunarity":2,"octaves":4,"persistence":0.5,"remap":"uniform","wavelength":2400,"yScale":1} | wavelength 64 … 20000 |  | climate | Humidity: Dry ↔ wet. |
+| `climate.R` | noise | {"amplitudes":null,"clampSigma":3,"double":true,"lacunarity":2,"octaves":4,"persistence":0.5,"remap":"uniform","wavelength":1400,"yScale":1} | wavelength 64 … 20000 |  | climate | Rivers: Its zero set gives the river lines. |
+<!-- params:end -->
+
 ## Requirements
 
 The app needs cross-origin isolation (COOP/COEP) for SharedArrayBuffer, which browsers only grant in a secure context: open it through `http://localhost:<port>` or HTTPS.
