@@ -1,7 +1,7 @@
 # SP1 — Deterministic math core (Design)
 
 Date: 2026-09-27
-Status: Implemented on branch `sp1/math-core` (2026-09-27); exit pending CI and the Chrome/Firefox determinism panel (evidence below)
+Status: Complete (2026-09-28); exit evidence below
 Parent: master spec `2026-09-26-architecture-design.md` — §10 SP1, §1, §2.5, §2.7, §3.1-3.3, §3.17, §5.1, §6.3, §6.4, §7, §8 risks 4 and 6; decisions D6, D16, D17 and the new D20.
 
 References written "master §x" point to the master spec; a bare "§x" points to this document.
@@ -693,12 +693,16 @@ Lab checks (headless Chrome over the DevTools protocol, dedicated profile):
 
 Screenshots (`docs/superpowers/specs/assets/sp1/`, 1400×900, seed 42): `climate-C.png`, `climate-E.png`, `climate-W.png`, `climate-T.png`, `climate-H.png`, `climate-R.png` (mode u, bpp 64), `warp-shift-x.png` (`climate.warp.shift.noise.x`, mode z, bpp 16), `density3d.png` (`test.density3d`, mode z, bpp 0.5), `ab-climate-C.png` (A/B with B seed 7).
 
-Pending with the user: push `sp1/math-core`, the pull request with CI green, the Vercel preview's determinism panel in Chrome and Firefox (JSON added here in a follow-up commit), and the fast-forward of `main`.
+Done after the pull request (2026-09-28):
+- CI green on PR #1 (https://github.com/MaestreDniel/world-imaginer-voxel/pull/1): GitHub Actions runs 36353345396 (push) and 36353347910 (pull_request) on d2edbc6. The first two runs failed only because spline test 6 took 5.95 s on the runner, against Vitest's 5 s default.
+- Determinism panel on the Vercel preview of `sp1/math-core` (production build): Chrome 153 (V8) `✓ all 27 goldens match` and Firefox 152 (SpiderMonkey) `✓ all 27 goldens match`; every `actual` equals `test/goldens.json`. The panels' JSON is in `assets/sp1/determinism-chrome.json` and `assets/sp1/determinism-firefox.json`. Together with Bun above, all three D20 reference engines match bit for bit, and this is the first SpiderMonkey run of the noise, spline and params goldens.
 
 Amendments recorded at exit:
 - `npm run bench` and `npm run bench:record` pass `--reporter=verbose`: the default reporter hides the kernel table and `killRatio` of a passing bench.
 - The screenshots were captured through the DevTools protocol after 3 s of real time: with `--virtual-time-budget` the field stayed blank because its progressive render runs in `requestAnimationFrame` slices. They are stored as 256-colour palette PNGs (6.6 MB instead of 12.3 MB).
-- Final review (fresh reviewer): an A-side lab edit is now also validated against the layered B patch (`applyLabEdit`), so the lab never reaches a state `labParams` rejects. Lab URL writes are debounced and fail-safe (`createUrlWriter`), because Firefox and Safari throw when `history.replaceState` is called too often and Chrome drops the calls. The status lines say "implemented" until CI and the Chrome/Firefox panel are in.
+- Final review (fresh reviewer): an A-side lab edit is now also validated against the layered B patch (`applyLabEdit`), so the lab never reaches a state `labParams` rejects. Lab URL writes are debounced and fail-safe (`createUrlWriter`), because Firefox and Safari throw when `history.replaceState` is called too often and Chrome drops the calls. The status lines said "implemented" until CI and the Chrome/Firefox panel were in.
+- The `unit` Vitest project runs with a 30 s test timeout (`vitest.config.ts`): its million-point checks take about 2.5 s locally and about 6 s on a GitHub runner.
+- The panels' JSON is stored as files next to the screenshots (whitespace compacted) instead of being pasted inline: its 27 rows per browser repeat the digests listed in the Bun output above.
 
 ### Threshold log
 
