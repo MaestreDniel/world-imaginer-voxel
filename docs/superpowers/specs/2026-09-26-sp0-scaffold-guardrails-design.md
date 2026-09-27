@@ -172,7 +172,7 @@ Additional edges:
 - `render/materials/**` is imported only from `render/**`.
 - `three` and `three/*` (type-only included) are imported only from `render/**`. This resolves §1's "(plus ui canvases)": ui canvases are 2D and never import three; §1 is amended to drop the parenthetical.
 - A `*.worker.ts` file is never imported; it is referenced only from `engine/**` through a worker edge (`new Worker(new URL('../workers/<name>.worker.ts', import.meta.url), { type: 'module' })`). A worker edge anywhere else is a violation.
-- No `src/` file imports `test/**`, except `test/goldens.json` (SP2 `?selftest=1`, from `main` or `ui`) and `test/thresholds.ts` (from `ui/metricsDashboard.ts`, SP10).
+- No `src/` file imports `test/**`, except `test/goldens.json` (the SP1 `?lab=noise` determinism panel and SP2 `?selftest=1`, from `main` or `ui`) and `test/thresholds.ts` (from `ui/metricsDashboard.ts`, SP10).
 - **§8 risk 1 tightening:** `light/` and `mesh/` never import the SAB implementation files (see the table); SAB-backed `ColumnWriter`/`NeighborhoodReader` are built in `workers/*` and `engine/` and injected, so the snapshot-transport fallback stays local to the store.
 
 ### Resolution and dependencies

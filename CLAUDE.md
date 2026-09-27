@@ -10,7 +10,7 @@ Browser voxel explorer + editor (TypeScript, Vite, three.js r186 WebGL2 with cus
 
 ## Source of truth
 
-- `docs/superpowers/specs/2026-09-26-architecture-design.md` is the master spec. Its **Decisions log (D1-D19) is authoritative** and overrides any other text.
+- `docs/superpowers/specs/2026-09-26-architecture-design.md` is the master spec. Its **Decisions log (D1-D20) is authoritative** and overrides any other text.
 - Every sub-project (SP0-SP12, spec §10) runs spec → plan → TDD implementation. SP specs live in `docs/superpowers/specs/YYYY-MM-DD-sp<N>-<topic>-design.md`, plans in `docs/superpowers/plans/`. A deviation from the master spec is made by amending it explicitly.
 
 ## Commands

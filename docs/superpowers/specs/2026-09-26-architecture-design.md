@@ -39,7 +39,7 @@ Worth keeping from 09: the 6D multi-noise box picker (matches MC's; in practice 
 | D17 | Fresh scaffold; 09 modules are ported deliberately (§1), never copied wholesale. The copyrighted C418 `.ogg` files are **not** copied into this repository. |
 | D18 | Runtime fluids are **edit-triggered only**; truncated generation fronts stay frozen until an edit touches them (fallback policy in §8). |
 | D19 | **Separate public repository** `MaestreDniel/world-imaginer-voxel` (default branch `main`), independent of world-imaginer, with **GitHub Actions CI** (build, `npm test`, quick metrics) on push and PR. |
-| D20 | **Determinism references** (confirmed 2026-09-27): V8 (Chrome, Node), SpiderMonkey (Firefox) and JavaScriptCore (Safari). Goldens must match bit-for-bit in all three; XS and QuickJS are not references. |
+| D20 | **Determinism references** (confirmed 2026-09-27): V8 (Chrome, Node), SpiderMonkey (Firefox) and JavaScriptCore (Safari). Goldens must match bit-for-bit in all three. Every SP exit checks V8 and SpiderMonkey in the browser and JavaScriptCore through Bun (no dependency added); Safari itself is checked by hand when a Mac is available. XS and QuickJS are not references. |
 
 D1-D20 are decisions. Metric IDs (N*, T*, B*, C*, A*, S*, O*, V*, X*, DT*, R*, L*, F*, E*, U*, P*, G*, M*, AU*, Z*) are listed in §6.4. The single letter D alone denotes the decorate stage.
 
@@ -113,7 +113,8 @@ world-imaginer-voxel/          (repository root)
                                 and by metrics AU2-AU4 (injected clock, NeighborhoodReader-like voxel/light view)
     sim/fluidSim.ts edits.ts diffStore.ts          L2
     persist/kv.ts idb.ts memory.ts diffCodec.ts wiworld.ts saves.ts   L2 (IStorage adapter; MemoryKV for tests)
-    metrics/*.ts                                    pure metric definitions shared by vitest and the in-app dashboard
+    metrics/*.ts                                    pure metric definitions shared by vitest and the in-app dashboard (SP1: noiseStats.ts,
+                                sp1Fixtures.ts, sp1Goldens.ts)
     workers/protocol.ts task.worker.ts sim.worker.ts
     engine/                     main thread, no three
       coordinator.ts scheduler.ts rings.ts workerPool.ts throttle.ts uploadBudget.ts session.ts invalidation.ts capabilities.ts
@@ -127,10 +128,13 @@ world-imaginer-voxel/          (repository root)
     sound/                      main thread, the only place WebAudio is used
       engine.ts buses.ts        AudioContext (resumed on first user gesture), master/music/sfx/ambient buses, settings
       sfx.ts footsteps.ts ambience.ts emitters.ts music.ts reverb.ts
+    ui/lab/* seedBox.ts          (SP1) the ?lab=noise research page; DOM-free seed-box logic
     ui/shell.ts styles.css paramPanel.ts splineEditor/* biomeTable.ts inspector/* sliceView.ts probe.ts mapView/*
        metricsDashboard.ts jsonEditor.ts worldsMenu.ts settingsPanel.ts palette.ts hud.ts debugOverlay.ts help.ts
     main.ts
-  test/ unit/ metrics/ bench/ arch/ harness/{region,refs,cache,stats,flood}.ts
+  tools/detmath-oracle.py       (SP1) CPython port of detMath, a manual oracle for the detMath goldens
+  test/ unit/ metrics/ bench/ arch/ harness/{region,refs,cache,stats,flood}.ts fixtures/ tools/
+        schema-shape.lock.json (SP1)
         thresholds.ts thresholds.lock.json goldens.json baselines.json
 ```
 
@@ -275,7 +279,7 @@ A pure fluid voxel is AIR plus a fluid byte. Waterlogging comes free: a state wh
 ### 2.4 ColumnSample (worker-local LRU of 1024, not in the SAB)
 
 - **Lattice:** a 7×7 quart grid, the column's 5×5 quart corners plus a one-quart halo for gradients.
-- **Raw climate** (kept separately so a spline edit re-derives shape without resampling noise): `C E W T H R` (uniform [-1,1]), `PV`.
+- **Raw climate** (kept separately so a spline edit re-derives shape without resampling noise): `C E W T H R` (uniform on [−uMax, uMax], uMax = 0.9973), `PV`.
 - **Derived fields:** `offset, sigma, jag, riverDist, riverStrength, lakeMask, lakeLevel, lakeFloor, surfaceWaterLevel, steep, surfaceEst, islandMask`, and `surfaceBiomeQ[49]`.
 - **Size:** about 6.5 KB.
 - **Readout:** fields are bilinear between quart points, so values at 4-aligned corners are exact and every column sharing a corner computes it identically.
@@ -289,7 +293,7 @@ type SubProjectId = 'SP0'|'SP1'|'SP2'|'SP3'|'SP4'|'SP5'|'SP6'|'SP7'|'SP8a'|'SP8b
 type StageId = 'climate'|'shape'|'surfaceEst'|'biome2d'|'terrain'|'decorate'|'light'|'mesh'|'lod'|'map';
 interface ParamMeta { path: string; label: string; doc: string; unit?: string;
   kind: 'number'|'int'|'bool'|'enum'|'noise'|'spline'|'expr'|'boxTable'|'ruleTree'|'featureList'|'structureSets';
-  min?: number; max?: number; step?: number; options?: readonly string[]; dims?: 2|3;
+  min?: number; max?: number; step?: number; options?: readonly string[]; dims?: 2|3; coords?: readonly SplineCoord[];
   scope: RegenScope; stage?: StageId /* present exactly when scope !== 'live' (SP1) */; effectMetric?: MetricId; }
 interface StageDef { id: StageId; version: number; reads: StageId[]; params: string[] /* path prefixes */;
   checkpoint: 'columnSample'|'proto'|'final'|'none'; }
@@ -380,7 +384,7 @@ Import validates the magic and version, runs `migrate`, recomputes genKey, and c
 
 **Presets.** Format `{format:'wi10-preset', schemaVersion, name, profile, params}`, where `params` is the minimal patch over `resolveProfile(profile)`. Import checks format → name (profile ids are reserved) → profile → schemaVersion (newer is rejected) → migrate → applyPatch over the profile, showing every error path inline; unknown keys are errors. Import *loads* the preset; export writes the *current draft*. Saves and `.wiworld` store full params and load as migrate → applyPatch over the defaults (SP1 spec §4.5).
 
-**Session.** Settings, last world and panel layout go to localStorage behind try/catch. The URL hash `#seed=…&p=<base64url(gzip(params diff vs profile))>` makes a world shareable.
+**Session.** Settings, last world and panel layout go to localStorage behind try/catch. The URL hash `#seed=…&profile=<ProfileId>&p=<base64url(gzip(params diff vs profile))>` makes a world shareable.
 
 ## 3. Generation
 
@@ -461,7 +465,7 @@ Warps:
 
 There are no downstream multipliers: the editor's y-axis *is* the terrain.
 
-**Spline semantics (SP1).** Outside the end knots the end value holds (no linear extension, unlike MC). Between knots, `f = y0 + t·dy + t(1−t)((1−t)(d0·h − dy) + t(dy − d1·h))` with `h = x1 − x0`, `t = (q − x0)/h`, `dy = y1 − y0`; a nested knot evaluates only the two bracketing children. Tangents are explicit data, never re-derived at compile or evaluation time. The defaults above get their tangents from the hybrid rule when SP2 authors them (PCHIP inside numeric runs; d = 0 at nested knots, their neighbours and end knots inside (−1,1)), which never overshoots. Validation: 1-32 points, strictly increasing x, y within the leaf's range, finite d, no coordinate reused along a path, ≤ 4096 nodes.
+**Spline semantics (SP1).** Outside the end knots the end value holds (no linear extension, unlike MC). Between knots, `f = y0 + t·dy + t(1−t)((1−t)(d0·h − dy) + t(dy − d1·h))` with `h = x1 − x0`, `t = (q − x0)/h`, `dy = y1 − y0`; a nested knot evaluates only the two bracketing children. Tangents are explicit data, never re-derived at compile or evaluation time. The defaults above get their tangents from the hybrid rule when SP2 authors them (PCHIP inside numeric runs; d = 0 at nested knots, their neighbours and end knots inside (−1,1)); it stays inside the hull of each segment's end values up to rounding (≤ 4 ulp), so consumers that need jag, σ ≥ 0 clamp with `max(0, ·)`. Validation: 1-32 points, strictly increasing x, y within the leaf's range, finite d, no coordinate reused along a path, ≤ 4096 spline objects.
 
 ### 3.4 Rivers (column stage; exact on the map and LOD)
 
@@ -749,6 +753,8 @@ Map markers come from the same start function. Structure starts never lie below 
 
 ### 3.15 Extreme presets (data only: splines + climate params + DAG terms)
 
+The built-in presets are the `PROFILES` entries of `core/params/profiles.ts` (SP1): overlays over the defaults, each hidden in the UI until its `readyFrom` sub-project.
+
 | preset | changes |
 |---|---|
 | default | as above |
@@ -776,8 +782,8 @@ Map markers come from the same start function. Structure starts never lie below 
 
 - `gen/` uses float64 only, with no `Math.fround`.
 - Arithmetic is limited to what ECMA-262 specifies exactly: `+ − × ÷` (roundTiesToEven per operation, so no FMA contraction), correctly rounded `Math.sqrt`, and the exact `Math` allowlist; `**` and `Math.pow` are implementation-approximated and banned. Transcendentals come only from detMath. Formulas keep their written operation order; a reciprocal multiply is not a substitute for a division unless the formula says so.
-- Numeric literals in `core/` and `gen/` are shortest round-trip decimals (≤ 17 significant digits).
-- There is no iteration over Map or Set in any output path, and plain-object keys are iterated only after sorting; iteration is always over sorted arrays.
+- Coefficient literals in detMath and any polynomial kernel are shortest round-trip decimals (≤ 17 significant digits), with their bit patterns pinned by tests.
+- There is no iteration over Map or Set in any output path, and plain-object keys in generator output paths are iterated only after sorting; iteration is always over sorted arrays.
 - NaN: generator outputs are NaN-free (asserted by DT1/DT2 and the SP1 unit tests); every golden hasher reads Float64 values little-endian and writes any NaN as `0x7FF8000000000000`, because x86 and ARM produce different NaN bits.
 - `core/` and `gen/` never call `Intl`, `localeCompare`, `toLocale*`, `String.prototype.normalize`, `TextEncoder` or `TextDecoder`; hashing uses a hand-written UTF-8 encoder (arch-tested).
 - Every validated parameter number is normalised with `q15(x) = x === 0 ? 0 : Number(x.toPrecision(15))` (unique printed form, −0 → +0); canonical JSON is RFC 8785 and throws on NaN, ±Infinity and −0.
@@ -1116,7 +1122,7 @@ Target: edit → visible ≤ 50 ms p95, measured in the HUD.
 
 ### 5.1 Parameter model, scopes and invalidation
 
-`core/params/schema.ts` is the single source of types, defaults and `ParamMeta` (label, doc, unit, range, step, scope, stage, effectMetric). The panel, import merge, migrations, stage slicing and the README parameter reference are all generated from it. A unit test fails when the README's generated block is stale.
+`core/params/schema.ts` is the single source of types, defaults and `ParamMeta` (label, doc, unit, range, step, scope, stage, effectMetric). The panel, import merge, migrations, stage slicing and the README parameter reference are all generated from it. The U4 `readmeStale` metric part (active since SP1) fails when the README's generated block is stale.
 
 **Stage hashes.** `stageHash = fnv1a64(`${id}|${version}|${canonicalJSON(slice)}|${reads.map(r => hex64(H[r])).join(',')}`)`, with `slice = {[prefix]: getPath(params, prefix)}` over the stage's param prefixes (matched on dot boundaries). It does not depend on the seed and decides exactly which stages re-run; live leaves have no stage and are hashed by none. Real checkpoints are:
 - raw climate (in ColumnSample);
@@ -1370,7 +1376,7 @@ Metric values are written to `test/metrics/.out/*.json` for trends. The harness 
 - seed+k aliasing and LCG-biased shuffle → `deriveSeed` (no permutation table) → N2.
 - ±0.45 range, dead spline ends and biomes → NormalNoise + CDF → N1, B1.
 - 256-periodicity → hashed lattice → N3.
-- Diagonal bias → 16-gradient 3D noise → N5.
+- Diagonal bias → 12 balanced-gradient 3D noise → N5.
 
 **Terrain shape:**
 - Lowland shelf and biome-owned shape → climate-only splines in blocks → T1.
@@ -1424,7 +1430,7 @@ Metric values are written to `test/metrics/.out/*.json` for trends. The harness 
 - Full teardown per change → stage hashes, old meshes kept → U1.
 - Title sniffing → typed coords → unit test.
 - Dead controls → U2, U3.
-- Seed, map-refresh and preset bugs → WorldSession, map keyed by stageHash, migrate/deep-merge → session and preset tests.
+- Seed, map-refresh and preset bugs → WorldSession, map keyed by stageHash, migrate/applyPatch → session and preset tests.
 - Hard-coded 80 px layout → CSS grid.
 - Monolithic panel and duplicated schema → ParamSchema → U4.
 - Slow main-thread map → worker tiles.
@@ -1532,7 +1538,7 @@ High adds MSAA, a shadow cascade (about 2 ms), LOD 1 km and RD16 (dGPU target). 
    - Knobs in reserve: octave pruning via amplitude arrays, and 4×8×4 cells for noodles (thinnest-axis metric C5 guards against blurring).
 4. **Hashed-lattice noise cost.** Kill criterion in 3.1 (measured at 1.06-1.27× the permutation variant in the SP1 spike).
 5. **Thread oversubscription on 4-core laptops.** Adaptive throttle, pool ≤ 6, map/LOD/metric jobs ≤ 1 while generating.
-6. **Cross-browser determinism.** detMath, IEEE-only arithmetic, arch bans, `?selftest=1` golden check in the browser, and absolute-state diffs.
+6. **Cross-browser determinism.** detMath, IEEE-only arithmetic, arch bans, golden checks in the browser (the SP1 `?lab=noise` determinism panel, then `?selftest=1` from SP2), a Bun (JavaScriptCore) golden check at every SP exit (D20), and absolute-state diffs.
 7. **Concurrency bugs in the shared store.** Single writer by status, version and meshSeq discard, slab fuzz, edits-during-light fuzz in the harness (L3).
 8. **Memory at High and Ultra.** Uniform elision, proto retention limited to the outer rings, unload hysteresis, HUD slab usage, Ultra documented as desktop-only.
 9. **Fluid runaway** (breaking an ocean wall into a cave net). Caps, sim distance, remesh throttle, dense diff format, F2.
@@ -1597,8 +1603,8 @@ Thresholds are locked (`thresholds.lock.json`) and goldens are gated (§6.2). Si
 **SP1 — Deterministic math core** (M; SP0)
 - hash, rng, seed text, detMath; hashed-lattice `lattice3`, OctaveNoise, NormalNoise, CDF; nested Hermite splines; ParamSchema + meta, profiles skeleton, presets envelope, migrate, canonical JSON, genKey; stage registry and stageHash (spec `2026-09-27-sp1-deterministic-math-core-design.md`).
 - **Deliverable:** `?lab=noise` page: inspector and A/B comparison of any schema noise field with its histogram, gradient rose and statistics, plus a browser determinism panel over the SP1 goldens.
-- **Exit:** N1, N2, N3, N5, N6, U4 (all parts, including README freshness); detMath error ≤ 2e-6 and its design bounds; spline tests; `PERLIN3_SD` and `PERLIN2_SD` pinned; SP1 goldens recorded; bench baseline recorded; noise kill criterion evaluated (§3.1); the lab's determinism panel green in Chrome and Firefox.
-- **Cut line:** none.
+- **Exit:** N1, N2, N3, N5, N6, U4 (all parts, including README freshness); detMath error ≤ 2e-6 and its design bounds; spline tests; `PERLIN3_SD` and `PERLIN2_SD` pinned; SP1 goldens recorded; bench baseline recorded; noise kill criterion evaluated (§3.1); the lab's determinism panel green in Chrome and Firefox and the Bun (JavaScriptCore) golden check green (D20).
+- **Cut line:** the lab's A/B mode (→ SP10).
 
 **SP2 — Column stage, 2D biomes, map and parameter tooling** (L; SP1)
 - Climate with warps and CDF, PV fold; offset / σ / jag splines in blocks; steep from the halo; rivers (channel, valley, gorges) and lakes (column terms); surface biome registry, picker and zoom; spawn search; ColumnSample LRU.
@@ -1607,6 +1613,7 @@ Thresholds are locked (`thresholds.lock.json`) and goldens are gated (§6.2). Si
 - `?selftest=1` page: recomputes column-stage and map-tile golden hashes in a real module worker.
 - **Deliverable:** an interactive world map that updates live while splines and biome boxes are edited — research tooling before any voxel exists.
 - **Exit:** B1, B4 (climate parts), N4, T6, T7, T8; T3 on 2D relief; B2 (length, share, mouths, gorges) and B5 (lakes per km², share with Lw ≥ 70) on the column stage; U2 for column-scope params; DT2 batch == point (column stage); two workers produce byte-identical map tiles; P1 Column ≤ 0.7 / 1.2 ms; first coarse map image ≤ 0.3 s; spline-edit map preview ≤ 300 ms; preset and session unit tests.
+- Received from SP1 (its spec §10): author the `shape.*` defaults with `autoTangents`; clamp jag and σ with `max(0, ·)`; check the lowland band (≈ 34 % of land in [66, 76) on the pure offset) against T1 and retune if needed; add a `src/`-side current-SP constant that hides profiles before their `readyFrom`; put the profile id in the world URL hash.
 - **Cut line:** the biome share preview and the cross-section profile (→ SP10).
 
 **SP3 — Voxel store, block states, density DAG, surface rules, harness** (L; SP2)
@@ -1678,7 +1685,7 @@ Thresholds are locked (`thresholds.lock.json`) and goldens are gated (§6.2). Si
 - **Cut line:** jungle temple; village depth > 4 (→ SP12).
 
 **SP10 — Research tooling completion** (M; SP9)
-- Full stage-hash invalidation for every scope with badges and progress; probe of all stage outputs including the surface-rule branch; slice view of every 3D field; inspector mutes and pins; metrics dashboard (shared metric definitions, compare with previous params, seed sweep for column metrics); complete map layers (structures, carvers, aquifer, status heatmap, bookmarks, teleport snap); JSON editors with validation; full F3 overlay and performance HUD; generated README parameter reference; plus received cut-line items.
+- Full stage-hash invalidation for every scope with badges and progress; probe of all stage outputs including the surface-rule branch; slice view of every 3D field; inspector mutes and pins; metrics dashboard (shared metric definitions, compare with previous params, seed sweep for column metrics); complete map layers (structures, carvers, aquifer, status heatmap, bookmarks, teleport snap); JSON editors with validation; full F3 overlay and performance HUD; plus received cut-line items (the generated README parameter reference is already gated since SP1).
 - **Deliverable:** the research workbench — tweak, preview, measure and compare without leaving the app.
 - **Exit:** U1-U4 (U4 active in full since SP1); G2 (Apply part: first visible change near the player ≤ 0.5 s); dashboard metric == vitest metric (same function, same value); decorate-scope Apply at RD12 ≤ 3 s; inspector slice ≤ 300 ms at 128².
 - **Cut line:** seed sweep; the column-status heatmap (→ SP12).

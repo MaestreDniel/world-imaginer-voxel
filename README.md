@@ -21,7 +21,7 @@ docker compose up world-imaginer-voxel
 
 ## Design
 
-- Master architecture spec: [`docs/superpowers/specs/2026-09-26-architecture-design.md`](docs/superpowers/specs/2026-09-26-architecture-design.md). Its decisions log (D1-D19) is the source of truth.
+- Master architecture spec: [`docs/superpowers/specs/2026-09-26-architecture-design.md`](docs/superpowers/specs/2026-09-26-architecture-design.md). Its decisions log (D1-D20) is the source of truth.
 - Work is split into sub-projects SP0-SP12 (§10 of the spec), each with its own spec → plan → test-driven implementation.
 
 Highlights of the design:
