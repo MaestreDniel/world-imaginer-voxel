@@ -242,23 +242,34 @@ export function extractEdges(path: string, raw: string): Edge[] {
   }
   if (!JS_EXTS.has(ext)) return edges;
   const code = blankJs(raw, { strings: false });
+  // `code` only blanks comments, so import-like text sitting inside a string or template
+  // literal (outside any `${}` interpolation) still reads as a match. `inert` additionally
+  // blanks string/template contents, so comparing the two tells real code from string text:
+  // a position that differs between them was blanked only because it lives inside a string.
+  const inert = blankJs(raw, { strings: true });
+  const isReal = (index: number) => code[index] === inert[index];
   for (const m of code.matchAll(/\bimport\s+(type\s+)?(?![('"])[^;'"`]*?\bfrom\s*(['"])([^'"\n]+)\2/g)) {
-    push(m[3]!, m[1] ? 'type' : 'value', code, m.index);
+    if (isReal(m.index)) push(m[3]!, m[1] ? 'type' : 'value', code, m.index);
   }
-  for (const m of code.matchAll(/\bimport\s*(['"])([^'"\n]+)\1/g)) push(m[2]!, 'value', code, m.index);
+  for (const m of code.matchAll(/\bimport\s*(['"])([^'"\n]+)\1/g)) {
+    if (isReal(m.index)) push(m[2]!, 'value', code, m.index);
+  }
   for (const m of code.matchAll(/\bexport\s+(type\s+)?(?:\*(?:\s+as\s+[\w$]+)?|\{[^}]*\})\s*from\s*(['"])([^'"\n]+)\2/g)) {
-    push(m[3]!, m[1] ? 'type' : 'value', code, m.index);
+    if (isReal(m.index)) push(m[3]!, m[1] ? 'type' : 'value', code, m.index);
   }
-  scanDynamicImports(code, push);
+  scanDynamicImports(code, (spec, kind, text, index) => { if (isReal(index)) push(spec, kind, text, index); });
   const workerUrlStarts = new Set<number>();
   for (const m of code.matchAll(/\bnew\s+(?:Shared)?Worker\s*\(\s*(new\s+URL)\s*\(\s*(['"])([^'"\n]+)\2\s*,\s*import\.meta\.url\s*\)/g)) {
+    if (!isReal(m.index)) continue;
     workerUrlStarts.add(m.index + m[0].indexOf(m[1]!));
     push(m[3]!, 'worker', code, m.index);
   }
   for (const m of code.matchAll(/\bnew\s+URL\s*\(\s*(['"])([^'"\n]+)\1\s*,\s*import\.meta\.url\s*\)/g)) {
-    if (!workerUrlStarts.has(m.index)) push(m[2]!, 'url', code, m.index);
+    if (!workerUrlStarts.has(m.index) && isReal(m.index)) push(m[2]!, 'url', code, m.index);
   }
-  for (const m of code.matchAll(/\bimport\.meta\.glob\s*\(\s*(['"])([^'"\n]+)\1/g)) push(m[2]!, 'glob', code, m.index);
+  for (const m of code.matchAll(/\bimport\.meta\.glob\s*\(\s*(['"])([^'"\n]+)\1/g)) {
+    if (isReal(m.index)) push(m[2]!, 'glob', code, m.index);
+  }
   for (const m of raw.matchAll(/^\s*\/\/\/\s*<reference\s+path\s*=\s*(['"])([^'"]+)\1/gm)) push(m[2]!, 'reference', raw, m.index);
   return edges;
 }

@@ -162,6 +162,15 @@ describe('regressions: scanner must not fail open', () => {
     expect(blankJs('const s = `a${eval(x)}b`;', { strings: true })).toBe('const s = ` ${eval(x)} `;');
   });
 
+  test('import-like text inside a string or template literal is not a fake edge', () => {
+    const src = [
+      "const msg = `use import type instead of import('${spec}')`;",
+      'const s = "import x from \'./y\'";',
+      'const w = \'new Worker(new URL("./w.ts", import.meta.url))\';',
+    ].join('\n');
+    expect(extractEdges('src/engine/y.ts', src)).toEqual([]);
+  });
+
   test('extension matching is case-insensitive', () => {
     expect(extractEdges('src/ui/X.TS', "import { a } from './a';")).toEqual([
       { spec: './a', kind: 'value', line: 1 },
