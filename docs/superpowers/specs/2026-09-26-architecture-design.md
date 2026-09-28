@@ -93,7 +93,8 @@ world-imaginer-voxel/          (repository root)
       store/slab.ts columnTable.ts section.ts aux.ts versions.ts api.ts padded.ts   SAB store; ColumnWriter/NeighborhoodReader
     gen/                        L1 pure (core + world/api types only)
       context.ts                GenContext per (epoch, paramsHash): noises, splines, compiled density, biome tables, templates, LRUs
-      column/climate.ts shape.ts rivers.ts lakes.ts columnStage.ts surfaceEstimate.ts spawn.ts
+      column/climate.ts shape.ts rivers.ts lakes.ts steep.ts columnPoint.ts columnStage.ts columnCache.ts surfaceEstimate.ts spawn.ts
+      map/layers.ts tile.ts palette.ts   pure map-tile painting (SP2a)
       density/expr.ts nodes.ts compile.ts bounds.ts reference.ts defaults.ts beardifier.ts
       caves/carvers.ts carverCache.ts
       fluids/aquifer.ts settle.ts
@@ -115,7 +116,7 @@ world-imaginer-voxel/          (repository root)
     persist/kv.ts idb.ts memory.ts diffCodec.ts wiworld.ts saves.ts   L2 (IStorage adapter; MemoryKV for tests)
     metrics/*.ts                                    pure metric definitions shared by vitest and the in-app dashboard (SP1: noiseStats.ts,
                                 sp1Fixtures.ts, sp1Goldens.ts)
-    workers/protocol.ts task.worker.ts sim.worker.ts
+    workers/protocol.ts taskHandler.ts task.worker.ts sim.worker.ts   (taskHandler: pure message handler, SP2a)
     engine/                     main thread, no three
       coordinator.ts scheduler.ts rings.ts workerPool.ts throttle.ts uploadBudget.ts session.ts invalidation.ts capabilities.ts
     render/                     the only place three is imported (ui canvases are 2D; amended by SP0)
@@ -128,6 +129,7 @@ world-imaginer-voxel/          (repository root)
     sound/                      main thread, the only place WebAudio is used
       engine.ts buses.ts        AudioContext (resumed on first user gesture), master/music/sfx/ambient buses, settings
       sfx.ts footsteps.ts ambience.ts emitters.ts music.ts reverb.ts
+    ui/map/* ui/selftest/*       (SP2a) the standalone ?map page (mounted in-game from SP4) and ?selftest=1
     ui/lab/* seedBox.ts          (SP1) the ?lab=noise research page; DOM-free seed-box logic
     ui/shell.ts styles.css paramPanel.ts splineEditor/* biomeTable.ts inspector/* sliceView.ts probe.ts mapView/*
        metricsDashboard.ts jsonEditor.ts worldsMenu.ts settingsPanel.ts palette.ts hud.ts debugOverlay.ts help.ts
@@ -157,8 +159,8 @@ The authoritative layer table (value and type-only edges, worker edges, `light`/
 `test/arch/banned.test.ts` enforces these:
 
 - In `core`, `world` and `gen`: `Math.random`, `Date.now`, `performance.now` and `console.*`.
-- In `core/` and `gen/`: only exactly-specified `Math` members (the SP0 allowlist minus `fround`), no `**`; no `Intl`, `localeCompare`, `toLocale*`, `String.prototype.normalize`, `TextEncoder` or `TextDecoder` (amended by SP1).
-- In `core/noise/**` and `core/spline/**`: imported value bindings are referenced only through top-level `const` aliases (vitest's transform turns them into getters; amended by SP1).
+- In `core/`, `gen/`, `metrics/sp1Goldens.ts` and `metrics/sp1Fixtures.ts` (and the SP2a equivalents): only exactly-specified `Math` members (the SP0 allowlist minus `fround`), no `**`; no `Intl`, `localeCompare`, `toLocale*`, `String.prototype.normalize`, `TextEncoder` or `TextDecoder` (amended by SP1 and SP2a).
+- In `core/noise/**`, `core/spline/**`, `metrics/**` and `gen/**`: imported value bindings are referenced only through top-level `const` aliases (vitest's transform turns them into getters; amended by SP1 and SP2a).
 - Exported numeric consts anywhere in `gen/` (fixed world constants live only in `core/constants.ts`).
 - Anywhere in the repository: no `.ogg`/`.mp3`/`.wav` files (sound packs are user-supplied, D17) and no import specifier resolving outside the repository (no copy-forward imports from world-imaginer).
 
@@ -289,7 +291,7 @@ A pure fluid voxel is AIR plus a fluid byte. Waterlogging comes free: a state wh
 ```ts
 type Seed64 = readonly [lo: number, hi: number];   // u32 words, value = hi·2^32 + lo, normalised with >>> 0 (SP1); Hash64 alike
 type RegenScope = 'live' | 'remesh' | 'decorate' | 'terrain' | 'climate';
-type SubProjectId = 'SP0'|'SP1'|'SP2'|'SP3'|'SP4'|'SP5'|'SP6'|'SP7'|'SP8a'|'SP8b'|'SP8c'|'SP9'|'SP10'|'SP11'|'SP12';
+type SubProjectId = 'SP0'|'SP1'|'SP2a'|'SP2b'|'SP3'|'SP4'|'SP5'|'SP6'|'SP7'|'SP8a'|'SP8b'|'SP8c'|'SP9'|'SP10'|'SP11'|'SP12';
 type StageId = 'climate'|'shape'|'surfaceEst'|'biome2d'|'terrain'|'decorate'|'light'|'mesh'|'lod'|'map';
 interface ParamMeta { path: string; label: string; doc: string; unit?: string;
   kind: 'number'|'int'|'bool'|'enum'|'noise'|'spline'|'expr'|'boxTable'|'ruleTree'|'featureList'|'structureSets';
@@ -465,7 +467,7 @@ Warps:
 
 There are no downstream multipliers: the editor's y-axis *is* the terrain.
 
-**Spline semantics (SP1).** Outside the end knots the end value holds (no linear extension, unlike MC). Between knots, `f = y0 + t·dy + t(1−t)((1−t)(d0·h − dy) + t(dy − d1·h))` with `h = x1 − x0`, `t = (q − x0)/h`, `dy = y1 − y0`; a nested knot evaluates only the two bracketing children. Tangents are explicit data, never re-derived at compile or evaluation time. The defaults above get their tangents from the hybrid rule when SP2 authors them (PCHIP inside numeric runs; d = 0 at nested knots, their neighbours and end knots inside (−1,1)); it stays inside the hull of each segment's end values up to rounding (≤ 4 ulp), so consumers that need jag, σ ≥ 0 clamp with `max(0, ·)`. Validation: 1-32 points, strictly increasing x, y within the leaf's range, finite d, no coordinate reused along a path, ≤ 4096 spline objects.
+**Spline semantics (SP1).** Outside the end knots the end value holds (no linear extension, unlike MC). Between knots, `f = y0 + t·dy + t(1−t)((1−t)(d0·h − dy) + t(dy − d1·h))` with `h = x1 − x0`, `t = (q − x0)/h`, `dy = y1 − y0`; a nested knot evaluates only the two bracketing children. Tangents are explicit data, never re-derived at compile or evaluation time. The defaults above get their tangents from the hybrid rule when SP2a authors them (PCHIP inside numeric runs; d = 0 at nested knots, their neighbours and end knots inside (−1,1)); it stays inside the hull of each segment's end values up to rounding (≤ 4 ulp), so consumers that need jag, σ ≥ 0 clamp with `max(0, ·)`. Validation: 1-32 points, strictly increasing x, y within the leaf's range, finite d, no coordinate reused along a path, ≤ 4096 spline objects.
 
 ### 3.4 Rivers (column stage; exact on the map and LOD)
 
@@ -545,6 +547,9 @@ final     = max( min( min(terrain + detail, max(caves, lakeRoof)), 16·noodle ),
 - Every term is a `tap`, so the inspector, probe and mutes work on it. In the harness, a debug channel records the winning cave term per carved voxel.
 
 ### 3.7 surfaceEstimate and surfaceWaterLevel (shared by map, LOD, aquifer, structures, spawn and teleport)
+
+SP2a uses the 2D estimate `surfaceEst = offset` (after rivers and lakes); SP3 introduces the density-tap search below and bumps the `surfaceEst` stage version.
+
 
 - **surfaceEstimate(x,z):** start at `col.offset`, step ±8 blocks evaluating the `terrain` tap at the point, then bisect 4 times. That is about 6-10 point evaluations, ≈ 8 µs.
 - The column stage caches it on the 7×7 quart lattice.
@@ -792,7 +797,7 @@ The built-in presets are the `PROFILES` entries of `core/params/profiles.ts` (SP
 Proof suite (DT1/DT2):
 - shuffled vs spiral order, 1 vs 4 `worker_threads`, cold vs warm cache, two runs, and goldens;
 - compiled vs reference bit-exact; probe == bulk; batch == point;
-- a browser self-test page (`?selftest=1`), built in SP2 and extended by every later SP with its stage, that recomputes golden hashes (column stage and map tiles from SP2, proto regions from SP3, …) in a real module worker, run at every SP exit from SP2 on.
+- a browser self-test page (`?selftest=1`), built in SP2a and extended by every later SP with its stage, that recomputes golden hashes (column stage and map tiles from SP2a, proto regions from SP3, …) in a real module worker, run at every SP exit from SP2a on.
 
 ## 4. Engine
 
@@ -1300,6 +1305,7 @@ Metric values are written to `test/metrics/.out/*.json` for trends. The harness 
 | N5 | 16-bin gradient-direction histogram (central differences, h = λ_min/128), max/min, noises with ≥ 2 lattice terms; horizontal plane and vertical plane of 3D noises | ≤ 1.15 each |
 | N6 | lattice zeros: P(\|z\| < 1e-6) at integer points and 4×8×4 corners, incl. adversarial single-stack small-λ defs | ≤ 0.1% |
 | T1 | land heights: largest 10-block band / p5..p95 span / share y > 120 / share y > 200 | ≤ 25% / ≥ 60 blocks / ≥ 6% / ≥ 0.5% |
+| T1lowland | share of land columns with offset0 in [66, 76) on the pure offset (SP2a diagnostic) | reported, not gated |
 | T2 | land columns with ≥ 2 solid→air transitions above surface − 30 (pre-cave) | ≥ 1.5%, ≥ 10% in peaks/windswept (amplified: Z1) |
 | T3 | P(\|Δh\| ≥ 4 across a biome border) / P(within biome) | ≤ 1.5 |
 | T4 | ocean floor sd per 256² / exposed bedrock under water / floor ≤ −50 | ≥ 3 / 0 / 0 |
@@ -1336,7 +1342,7 @@ Metric values are written to `test/metrics/.out/*.json` for trends. The harness 
 | X1 | villages per 100 km² / start x mod 16 / piece overlaps / median pieces per village | ±35% of analytic / χ² p ≥ 0.01 / 0 / ≥ 8 |
 | X2 | rigid floor cells supported / clearance above / starts below surfaceEst − 4 | ≥ 95% / ≥ 95% / 0 |
 | DT1 | region hash: spiral vs shuffled, 1 vs 4 threads, cold vs warm, 2 runs, goldens | exact |
-| DT2 | probe == bulk / compiled == reference / batch == point (column stage) | 0 mismatches / bit-exact / ≤ 1e-9 |
+| DT2 | probe == bulk / compiled == reference / batch == point (column stage, at quart corners) | 0 mismatches / bit-exact / bit-exact (tightened by SP2a) |
 | R1 | hidden seam faces emitted / visible faces missing vs brute force | 0 / 0 |
 | R2 | greedy quads per visible face (AO on / off) | ≤ 0.6 / ≤ 0.35 |
 | R3 | wrongly culled sections vs raycast reference / culled from an underground camera | 0 / ≥ 50% |
@@ -1538,7 +1544,7 @@ High adds MSAA, a shadow cascade (about 2 ms), LOD 1 km and RD16 (dGPU target). 
    - Knobs in reserve: octave pruning via amplitude arrays, and 4×8×4 cells for noodles (thinnest-axis metric C5 guards against blurring).
 4. **Hashed-lattice noise cost.** Kill criterion in 3.1 (measured at 1.06-1.27× the permutation variant in the SP1 spike).
 5. **Thread oversubscription on 4-core laptops.** Adaptive throttle, pool ≤ 6, map/LOD/metric jobs ≤ 1 while generating.
-6. **Cross-browser determinism.** detMath, IEEE-only arithmetic, arch bans, golden checks in the browser (the SP1 `?lab=noise` determinism panel, then `?selftest=1` from SP2), a Bun (JavaScriptCore) golden check at every SP exit (D20), and absolute-state diffs.
+6. **Cross-browser determinism.** detMath, IEEE-only arithmetic, arch bans, golden checks in the browser (the SP1 `?lab=noise` determinism panel, then `?selftest=1` from SP2a), a Bun (JavaScriptCore) golden check at every SP exit (D20), and absolute-state diffs.
 7. **Concurrency bugs in the shared store.** Single writer by status, version and meshSeq discard, slab fuzz, edits-during-light fuzz in the harness (L3).
 8. **Memory at High and Ultra.** Uniform elision, proto retention limited to the outer rings, unload hysteresis, HUD slab usage, Ultra documented as desktop-only.
 9. **Fluid runaway** (breaking an ocean wall into a cave net). Caps, sim distance, remesh throttle, dense diff format, F2.
@@ -1583,12 +1589,12 @@ Each sub-project runs its own cycle:
 - `npm run build`, `npm test` and `npm run test:metrics:full` pass for **every metric ID active at this SP**. Each ID (or ID part) carries `activeFrom: 'SPn'` in `test/thresholds.ts`, set to the first SP that lists it in its exit; once active it stays gated in every later SP. Metrics not yet active are skipped, not failed.
 - The bench stays within +30 % of `baselines.json`.
 - The visual review is done (PNG slices, map snapshots and screenshots attached to the SP spec).
-- From SP2 on, `?selftest=1` matches the goldens in the browser (SP1: the `?lab=noise` determinism panel over the SP1 goldens).
+- From SP2a on, `?selftest=1` matches the goldens in the browser (SP1: the `?lab=noise` determinism panel over the SP1 goldens).
 - The app still runs.
 
 Thresholds are locked (`thresholds.lock.json`) and goldens are gated (§6.2). Sizes: S ≈ 2-4 days, M ≈ 1-2 weeks, L ≈ 2-3 weeks of focused work.
 
-**Cut lines.** Every SP names a cut line: what may slip if it overruns. A slipped item moves to a named receiving SP by amending this section, and the receiving SP adds it to its exit. Default receivers: SP0 Vercel preview check → SP4; SP2 share preview and cross-section → SP10; SP3 inspector pins → SP10; SP5 worlds-menu polish and palette search → SP10; SP7 vertex waves → SP11; SP8a animation frames → SP11; SP8a fence gates and trapdoors → SP12; SP8b giant trees, boulders and fossils → SP12; SP8c HRTF → SP11; SP9 jungle temple and village depth > 4 → SP12; SP11 Ultra shadows, 3D clouds and Fabulous water → SP12; SP6 underground-only carver and spaghetti-2D rarity bands → SP12; SP7 extra lava reactions → SP12; SP10 seed sweep and column-status heatmap → SP12. SP12's exit requires no open cut-line items, unless the user explicitly dropped one and the impact on its D-decision is recorded.
+**Cut lines.** Every SP names a cut line: what may slip if it overruns. A slipped item moves to a named receiving SP by amending this section, and the receiving SP adds it to its exit. Default receivers: SP0 Vercel preview check → SP4; SP2b share preview and cross-section → SP10; SP2a raw W/T/H/R map layers and spawn fallback refinement → SP2b; SP3 inspector pins → SP10; SP5 worlds-menu polish and palette search → SP10; SP7 vertex waves → SP11; SP8a animation frames → SP11; SP8a fence gates and trapdoors → SP12; SP8b giant trees, boulders and fossils → SP12; SP8c HRTF → SP11; SP9 jungle temple and village depth > 4 → SP12; SP11 Ultra shadows, 3D clouds and Fabulous water → SP12; SP6 underground-only carver and spaghetti-2D rarity bands → SP12; SP7 extra lava reactions → SP12; SP10 seed sweep and column-status heatmap → SP12. SP12's exit requires no open cut-line items, unless the user explicitly dropped one and the impact on its D-decision is recorded.
 
 **SP0 — Scaffold and guardrails** (S; no dependencies)
 - Repository scaffold at the root: Vite, TS strict, three `~0.186.1`, vitest projects (unit / arch / metrics-fast / metrics-quick / metrics-full / bench; see the SP0 spec).
@@ -1606,17 +1612,22 @@ Thresholds are locked (`thresholds.lock.json`) and goldens are gated (§6.2). Si
 - **Exit:** N1, N2, N3, N5, N6, U4 (all parts, including README freshness); detMath error ≤ 2e-6 and its design bounds; spline tests; `PERLIN3_SD` and `PERLIN2_SD` pinned; SP1 goldens recorded; bench baseline recorded; noise kill criterion evaluated (§3.1); the lab's determinism panel green in Chrome and Firefox and the Bun (JavaScriptCore) golden check green (D20).
 - **Cut line:** the lab's A/B mode (→ SP10).
 
-**SP2 — Column stage, 2D biomes, map and parameter tooling** (L; SP1)
-- Climate with warps and CDF, PV fold; offset / σ / jag splines in blocks; steep from the halo; rivers (channel, valley, gorges) and lakes (column terms); surface biome registry, picker and zoom; spawn search; ColumnSample LRU.
-- Task pool and protocol (MAP_TILE jobs); map view (coarse-first tiles; biome, 2D relief, raw fields, rivers and lakes layers; hover; teleport stub).
-- Schema-driven parameter panel with scope badges; nested Hermite spline editor (typed coords, histogram overlay, area shares, blocks y-axis, cross-section); biome table with share preview; presets UI over the SP1 envelope (import loads, export writes the draft), URL hash, WorldSession seed handling.
+**SP2a — Column stage, worker pool and map** (L; SP1). Spec: `2026-09-28-sp2a-column-stage-map-design.md` (the 2026-09-28 split of the former SP2).
+- Climate with warps and CDF, PV fold; offset / σ / jag splines in blocks; steep from the halo; rivers (channel, valley, gorges) and lakes (column terms); a 2D `surfaceEst = offset` (SP3 replaces it); surface biome registry, picker and zoom; spawn search; ColumnSample LRU; point reference `columnPoint` and batched `buildColumnSample`, bit-exact at quart corners.
+- Task pool and protocol (`MAP_TILE`, `point`, `selftest`); the standalone `?map` page (coarse-first tiles; biome, relief, rivers, lakes, raw fields and offset/σ/jag layers; hover; spawn marker; click shows a coordinate); seed box, ready-profile select and a JSON patch box over `WorldSession`, in the URL hash.
 - `?selftest=1` page: recomputes column-stage and map-tile golden hashes in a real module worker.
-- **Deliverable:** an interactive world map that updates live while splines and biome boxes are edited — research tooling before any voxel exists.
-- **Exit:** B1, B4 (climate parts), N4, T6, T7, T8; T3 on 2D relief; B2 (length, share, mouths, gorges) and B5 (lakes per km², share with Lw ≥ 70) on the column stage; U2 for column-scope params; DT2 batch == point (column stage); two workers produce byte-identical map tiles; P1 Column ≤ 0.7 / 1.2 ms; first coarse map image ≤ 0.3 s; spline-edit map preview ≤ 300 ms; preset and session unit tests.
-- Received from SP1 (its spec §10): author the `shape.*` defaults with `autoTangents`; clamp jag and σ with `max(0, ·)`; check the lowland band (≈ 34 % of land in [66, 76) on the pure offset) against T1 and retune if needed; add a `src/`-side current-SP constant that hides profiles before their `readyFrom`; put the profile id in the world URL hash.
+- **Deliverable:** an interactive world map of the default and large_biomes worlds, parameterised by URL patch.
+- **Exit:** B1, B4 (climate parts), N4, T6, T7, T8; T3 on 2D relief; B2 (length, share, mouths, gorges) and B5 (lakes per km², share with Lw ≥ 70) on the column stage; DT2 batch == point (column stage, bit-exact); two workers produce byte-identical map tiles; P1 Column ≤ 0.7 / 1.2 ms; first coarse map image ≤ 0.3 s; session unit tests; `?selftest=1` green in Chrome and Firefox.
+- Received from SP1 (its spec §10): author the `shape.*` defaults with `autoTangents`; clamp jag and σ with `max(0, ·)`; check the lowland band (≈ 34 % of land in [66, 76) on the pure offset) as a diagnostic; add `CURRENT_SP` that hides profiles before their `readyFrom`; put the profile id in the world URL hash.
+- **Cut line:** the raw W/T/H/R layers and the spawn fallback refinement (→ SP2b).
+
+**SP2b — Parameter tooling** (M; SP2a)
+- Schema-driven parameter panel with scope badges; nested Hermite spline editor (typed coords, histogram overlay, area shares, blocks y-axis, cross-section); biome table with share preview; presets UI over the SP1 envelope (import loads, export writes the draft), all editing `WorldSession`.
+- **Deliverable:** the SP2a map updates live while splines and biome boxes are edited.
+- **Exit:** U2 for column-scope params; spline-edit map preview ≤ 300 ms; preset unit tests; the SP1 deferred minors reachable through the editor (spline knot/tangent bounds, tiny amplitudes).
 - **Cut line:** the biome share preview and the cross-section profile (→ SP10).
 
-**SP3 — Voxel store, block states, density DAG, surface rules, harness** (L; SP2)
+**SP3 — Voxel store, block states, density DAG, surface rules, harness** (L; SP2b)
 - SAB store (two slab pools, CAS free stacks, refcounts, torus table, aux). **The u16 block-state encoding, the fluid byte and the light byte are frozen here, together with the property model, the registry API and the append-only id rule (§2.2).** Frozen means the encoding, the property kinds and the API; later SPs still add block types, SoA columns and per-state values (the block list grows in SP6, SP8a, SP8b and SP9).
 - Density: Expr, closure compiler with stage placement, reference interpreter, interval bounds with early-outs, probe; the default terrain expression without caves; the `islands` DAG term (−1e6 by default) and draft `floating_islands`, `amplified` and `archipelago` presets (terms, splines and params; surface-rule branch for islands), so per-preset goldens and SP11's LOD island scan have a target.
 - surfaceEstimate by bisection (replaces the 2D relief on the map).
@@ -1702,11 +1713,11 @@ Thresholds are locked (`thresholds.lock.json`) and goldens are gated (§6.2). Si
 
 ### Critical path and parallelism
 
-Critical path: SP0 → SP1 → SP2 → SP3 → SP4 → SP5 → SP6 → SP7 → SP8b → SP9 → SP10 → SP11 → SP12.
+Critical path: SP0 → SP1 → SP2a → SP2b → SP3 → SP4 → SP5 → SP6 → SP7 → SP8b → SP9 → SP10 → SP11 → SP12.
 
 In parallel: SP8a's texture parts after SP4 (alongside SP5-SP7; its shape collision/raycast parts after SP5); SP8c after SP7 (alongside SP8a/SP8b); the persistence codec and `.wiworld` format after SP3; the LOD and cloud parts of SP11 after SP4.
 
-Visible value in every SP: a map in SP2, slices in SP3, flight in SP4, editing in SP5, caves in SP6, water in SP7. The riskiest integrations sit early: the SAB store and the u16 state format in SP3, BatchedMesh in SP4 week 1, and fluid byte → light → mesh → edit → diff → IDB → reload in SP3-SP5.
+Visible value in every SP: a map in SP2a (edited live in SP2b), slices in SP3, flight in SP4, editing in SP5, caves in SP6, water in SP7. The riskiest integrations sit early: the SAB store and the u16 state format in SP3, BatchedMesh in SP4 week 1, and fluid byte → light → mesh → edit → diff → IDB → reload in SP3-SP5.
 
 ## 11. Relationship with world-imaginer
 
