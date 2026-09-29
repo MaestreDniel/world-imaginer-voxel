@@ -5,15 +5,17 @@ import { metaOf, PARAM_META } from '../../src/core/params/meta';
 import { noiseInstances } from '../../src/core/params/noises';
 import { SCHEMA, type ClimateParams } from '../../src/core/params/schema';
 
-test('13 leaves, all climate scope and stage, in declaration order', () => {
-  expect(PARAM_META.map((m) => `${m.path}:${m.kind}`)).toEqual([
+const CLIMATE_META = PARAM_META.filter((m) => m.path.startsWith('climate.'));
+
+test('13 climate leaves, all climate scope and stage, in declaration order', () => {
+  expect(CLIMATE_META.map((m) => `${m.path}:${m.kind}`)).toEqual([
     'climate.scaleMul:number',
     'climate.warp.shift.amplitude:number', 'climate.warp.shift.noise:noise',
     'climate.warp.C.amplitude:number', 'climate.warp.C.noise:noise',
     'climate.warp.R.amplitude:number', 'climate.warp.R.noise:noise',
     'climate.C:noise', 'climate.E:noise', 'climate.W:noise', 'climate.T:noise', 'climate.H:noise', 'climate.R:noise',
   ]);
-  for (const m of PARAM_META) {
+  for (const m of CLIMATE_META) {
     expect(m.scope).toBe('climate');
     expect(m.stage).toBe('climate');
     expect(m.label.length).toBeGreaterThan(0);
@@ -38,7 +40,7 @@ test('defaults match spec §4.3', () => {
 });
 
 test('noise instances: warps expand to .x/.z, seed names default to paths', () => {
-  const inst = noiseInstances(SCHEMA, DEFAULTS);
+  const inst = noiseInstances(SCHEMA, DEFAULTS).filter((i) => i.path.startsWith('climate.'));
   expect(inst.map((i) => `${i.seedName}|${i.path}|${i.dims}`)).toEqual([
     'climate.warp.shift.noise.x|climate.warp.shift.noise|2', 'climate.warp.shift.noise.z|climate.warp.shift.noise|2',
     'climate.warp.C.noise.x|climate.warp.C.noise|2', 'climate.warp.C.noise.z|climate.warp.C.noise|2',

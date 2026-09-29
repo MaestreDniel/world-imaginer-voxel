@@ -11,10 +11,10 @@ import { FIXTURE_DEFAULTS, FIXTURE_STAGES, PARAMS_FIXTURE } from '../../src/metr
 const ALL = STAGES.map((s) => s.id);
 
 describe('registry', () => {
-  test('the SP1 schema and stage list satisfy every invariant', () => {
+  test('the SP2a schema and stage list satisfy every invariant', () => {
     expect(checkRegistry(SCHEMA, STAGES)).toEqual([]);
     expect(ALL).toEqual(['climate', 'shape', 'surfaceEst', 'biome2d', 'terrain', 'decorate', 'light', 'mesh', 'lod', 'map']);
-    expect(STAGES.every((s) => s.version === 1)).toBe(true);
+    expect(STAGES.map((s) => `${s.id}@${s.version}`)).toEqual(['climate@1', 'shape@2', 'surfaceEst@2', 'biome2d@2', 'terrain@1', 'decorate@1', 'light@1', 'mesh@1', 'lod@1', 'map@2']);
   });
   test('prefixes match on dot boundaries', () => {
     expect(prefixCovers('climate', 'climate.C')).toBe(true);
@@ -45,8 +45,10 @@ describe('stage hashes', () => {
   const H = stageHashes(DEFAULTS);
   test('preimages', () => {
     expect(hex64(H.climate!)).toBe(hex64(fnv1a64(`climate|1|${canonicalJSON({ climate: DEFAULTS.climate })}|`)));
-    expect(hex64(H.shape!)).toBe(hex64(fnv1a64(`shape|1|{}|${hex64(H.climate!)}`)));
-    expect(hex64(H.biome2d!)).toBe(hex64(fnv1a64(`biome2d|1|{}|${hex64(H.climate!)},${hex64(H.shape!)},${hex64(H.surfaceEst!)}`)));
+    const shapeSlice = { lakes: DEFAULTS.lakes, rivers: DEFAULTS.rivers, shape: DEFAULTS.shape };
+    expect(hex64(H.shape!)).toBe(hex64(fnv1a64(`shape|2|${canonicalJSON(shapeSlice)}|${hex64(H.climate!)}`)));
+    expect(hex64(H.surfaceEst!)).toBe(hex64(fnv1a64(`surfaceEst|2|{}|${hex64(H.shape!)}`)));
+    expect(hex64(H.biome2d!)).toBe(hex64(fnv1a64(`biome2d|2|${canonicalJSON({ biomes: DEFAULTS.biomes })}|${hex64(H.climate!)},${hex64(H.shape!)},${hex64(H.surfaceEst!)}`)));
   });
   test('every stage is hashed and none depends on the seed', () => {
     expect(Object.keys(H).sort()).toEqual([...ALL].sort());
