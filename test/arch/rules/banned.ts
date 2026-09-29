@@ -10,10 +10,11 @@ const PURE_LAYERS = new Set(['core', 'world', 'gen', 'textures', 'audio', 'light
 const MATH_ALLOWED = new Set(['abs', 'floor', 'ceil', 'round', 'trunc', 'sign', 'min', 'max', 'imul', 'clz32', 'sqrt',
   'PI', 'E', 'LN2', 'LN10', 'LOG2E', 'LOG10E', 'SQRT2', 'SQRT1_2']);
 /** Files outside core/ and gen/ whose outputs are golden-hashed, so they follow the core determinism rules (SP1 spec §1.8). */
-const DET_FILES = new Set(['metrics/sp1Goldens.ts', 'metrics/sp1Fixtures.ts']);
-/** Modules whose hot loops must not read imported bindings (vitest turns them into getters; SP1 spec §1.8). */
-const HOT_PREFIXES = ['core/noise/', 'core/spline/', 'metrics/'];
-const ENGINE_DEPENDENT = /\bIntl\b|\.\s*(?:localeCompare|toLocaleString|toLocaleUpperCase|toLocaleLowerCase|toLocaleDateString|toLocaleTimeString|normalize)\s*\(|\bTextEncoder\b|\bTextDecoder\b/g;
+const DET_FILES = new Set(['metrics/sp1Goldens.ts', 'metrics/sp1Fixtures.ts', 'metrics/sp2aGoldens.ts']);
+/** Modules whose hot loops must not read imported bindings (vitest turns them into getters; SP1 spec §1.8, SP2a spec §8). */
+const HOT_PREFIXES = ['core/noise/', 'core/spline/', 'metrics/', 'gen/'];
+/** Matches the member name alone, so `.normalize.call(…)` and `.localeCompare.bind(…)` are caught too (SP1 review minor). */
+const ENGINE_DEPENDENT = /\bIntl\b|\.\s*(?:localeCompare|toLocale\w*|normalize)\b|\bTextEncoder\b|\bTextDecoder\b/g;
 const IMPORT_STMT = /\bimport\s+(type\s+)?([\w$*{},\s]+?)\s+from\s*(['"])[^'"\n]+\3\s*;?/g;
 const THREE_AUDIO = new Set(['Audio', 'AudioListener', 'PositionalAudio', 'AudioLoader', 'AudioAnalyser']);
 const AUDIO_EXTS = new Set(['.ogg', '.oga', '.mp3', '.wav', '.flac', '.m4a', '.aac', '.opus', '.weba']);
