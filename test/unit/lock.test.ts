@@ -3,7 +3,7 @@ import { canonicalJson, diffGovernance, formatChanges, makeLock, verifyLock, typ
 
 const base: GovernanceState = {
   thresholds: { T1: { band: { max: 0.25, activeFrom: 'SP3' }, span: { min: 60, activeFrom: 'SP3' } } },
-  startedSps: ['SP0', 'SP1', 'SP2', 'SP3'],
+  startedSps: ['SP0', 'SP1', 'SP2a', 'SP2b', 'SP3'],
 };
 
 describe('canonical JSON and lock', () => {
@@ -55,7 +55,7 @@ describe('diffGovernance', () => {
   });
 
   test('removing a started SP loosens; adding one tightens', () => {
-    expect(diffGovernance(base, edit((s) => { s.startedSps = ['SP0', 'SP1', 'SP2']; }))).toEqual([
+    expect(diffGovernance(base, edit((s) => { s.startedSps = ['SP0', 'SP1', 'SP2a', 'SP2b']; }))).toEqual([
       { path: 'startedSps', detail: 'removed SP3', kind: 'LOOSEN' },
     ]);
     expect(diffGovernance(base, edit((s) => { s.startedSps = [...s.startedSps, 'SP4']; }))).toEqual([

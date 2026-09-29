@@ -1,4 +1,4 @@
-import type { SubProjectId } from '../ids';
+import { CURRENT_SP, SUB_PROJECTS, type SubProjectId } from '../ids';
 import { DEFAULTS } from './defaults';
 import { applyPatch } from './kit';
 import { SCHEMA, type Params, type ParamsPatch } from './schema';
@@ -16,12 +16,17 @@ export const PROFILE_IDS: readonly ProfileId[] = ['default', 'large_biomes', 'ar
 /** Built-in world presets (master §3.15) as overlays over the defaults (SP1 spec §4.4). */
 export const PROFILES: Readonly<Record<ProfileId, Profile>> = {
   default: { overlay: {}, readyFrom: 'SP1' },
-  large_biomes: { overlay: { climate: { scaleMul: 4 } }, readyFrom: 'SP2' },
+  large_biomes: { overlay: { climate: { scaleMul: 4 } }, readyFrom: 'SP2a' },
   archipelago: { overlay: { climate: { C: { wavelength: 840 } } }, readyFrom: 'SP3' },
   amplified: { overlay: {}, readyFrom: 'SP3' },
   floating_islands: { overlay: {}, readyFrom: 'SP3' },
   cave_heavy: { overlay: {}, readyFrom: 'SP6' },
 };
+
+/** A profile is selectable once its readyFrom is at or before `current` in master §10 order. */
+export function isProfileReady(id: ProfileId, current: SubProjectId = CURRENT_SP): boolean {
+  return SUB_PROJECTS.indexOf(PROFILES[id].readyFrom) <= SUB_PROJECTS.indexOf(current);
+}
 
 export function isProfileId(v: unknown): v is ProfileId {
   return typeof v === 'string' && (PROFILE_IDS as readonly string[]).includes(v);

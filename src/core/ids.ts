@@ -1,7 +1,15 @@
-/** Sub-project ids of master spec §10. */
+/** Sub-project ids of master spec §10 (SP2 split into SP2a and SP2b on 2026-09-28). */
 export type SubProjectId =
-  | 'SP0' | 'SP1' | 'SP2' | 'SP3' | 'SP4' | 'SP5' | 'SP6' | 'SP7'
+  | 'SP0' | 'SP1' | 'SP2a' | 'SP2b' | 'SP3' | 'SP4' | 'SP5' | 'SP6' | 'SP7'
   | 'SP8a' | 'SP8b' | 'SP8c' | 'SP9' | 'SP10' | 'SP11' | 'SP12';
+
+/** Every sub-project in master §10 order. */
+export const SUB_PROJECTS: readonly SubProjectId[] = [
+  'SP0', 'SP1', 'SP2a', 'SP2b', 'SP3', 'SP4', 'SP5', 'SP6', 'SP7', 'SP8a', 'SP8b', 'SP8c', 'SP9', 'SP10', 'SP11', 'SP12',
+];
+
+/** The sub-project this build belongs to; hides profiles whose readyFrom comes later (SP2a spec §4.4). */
+export const CURRENT_SP: SubProjectId = 'SP2a';
 
 /** Every metric id of master spec §6.4 (E1-E6 expanded). */
 export type MetricId =

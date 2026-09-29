@@ -4,7 +4,8 @@ import { canonicalJSON } from '../../src/core/params/canonical';
 import { DEFAULTS } from '../../src/core/params/defaults';
 import { deletePath, mapPath, migrate, MIGRATIONS, renamePath, SCHEMA_VERSION, type JsonObject } from '../../src/core/params/migrate';
 import { exportPreset, importPreset } from '../../src/core/params/presets';
-import { PROFILE_IDS, PROFILES, resolveProfile } from '../../src/core/params/profiles';
+import { CURRENT_SP } from '../../src/core/ids';
+import { isProfileReady, PROFILE_IDS, PROFILES, resolveProfile } from '../../src/core/params/profiles';
 import { SCHEMA } from '../../src/core/params/schema';
 import { dirtyStages, genKey, stageHashes } from '../../src/core/stage/hash';
 import { STAGES } from '../../src/core/stage/registry';
@@ -15,11 +16,17 @@ describe('profiles', () => {
   test('ids, readiness and overlays', () => {
     expect(Object.keys(PROFILES)).toEqual([...PROFILE_IDS]);
     expect(PROFILE_IDS.map((id) => [id, PROFILES[id].readyFrom])).toEqual([
-      ['default', 'SP1'], ['large_biomes', 'SP2'], ['archipelago', 'SP3'], ['amplified', 'SP3'], ['floating_islands', 'SP3'], ['cave_heavy', 'SP6'],
+      ['default', 'SP1'], ['large_biomes', 'SP2a'], ['archipelago', 'SP3'], ['amplified', 'SP3'], ['floating_islands', 'SP3'], ['cave_heavy', 'SP6'],
     ]);
     expect(resolveProfile('large_biomes').climate.scaleMul).toBe(4);
     expect(resolveProfile('archipelago').climate.C.wavelength).toBe(840);
     expect(resolveProfile('default')).toBe(DEFAULTS);
+  });
+  test('readiness follows CURRENT_SP', () => {
+    expect(CURRENT_SP).toBe('SP2a');
+    expect(PROFILE_IDS.filter((id) => isProfileReady(id))).toEqual(['default', 'large_biomes']);
+    expect(isProfileReady('archipelago', 'SP3')).toBe(true);
+    expect(isProfileReady('large_biomes', 'SP1')).toBe(false);
   });
   test('switching profile dirties exactly what its overlay touches', () => {
     const base = stageHashes(DEFAULTS);

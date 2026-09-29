@@ -610,6 +610,8 @@ The plan was dry-run in a scratch worktree: every task was implemented and every
 
 (One line per commit that changes `test/thresholds.lock.json`.)
 
+- Task 1: `STARTED_SPS` gains `SP2a`; no threshold rows yet.
+
 ## Appendix A — default surface-biome table
 
 Uniform climate units; `[lo, hi]` per axis; W = `wSign` (0 any); P = priority. Source: `src/core/params/biomeDefaults.ts`.

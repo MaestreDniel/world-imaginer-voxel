@@ -4,8 +4,9 @@ import type { SubProjectId } from '../../src/core/ids';
 export const SP_DEPS: Readonly<Record<SubProjectId, readonly SubProjectId[]>> = {
   SP0: [],
   SP1: ['SP0'],
-  SP2: ['SP1'],
-  SP3: ['SP2'],
+  SP2a: ['SP1'],
+  SP2b: ['SP2a'],
+  SP3: ['SP2b'],
   SP4: ['SP3'],
   SP5: ['SP4'],
   SP6: ['SP3', 'SP5'],
@@ -25,7 +26,7 @@ export const SP_ORDER = Object.keys(SP_DEPS) as SubProjectId[];
  * Append-only list of sub-projects whose first commit has landed.
  * Each SP appends its id in its first commit. Part of the locked governance state.
  */
-export const STARTED_SPS: readonly SubProjectId[] = ['SP0', 'SP1'];
+export const STARTED_SPS: readonly SubProjectId[] = ['SP0', 'SP1', 'SP2a'];
 
 export function spIndex(sp: SubProjectId): number {
   return SP_ORDER.indexOf(sp);
