@@ -24,3 +24,14 @@ export function seedFromInput(text: string): Seed64 {
 export function seedToText(seed: Seed64): string {
   return ((BigInt(seed[1]) << 32n) | BigInt(seed[0])).toString();
 }
+
+/**
+ * Seed-box rule (SP1 spec §1.4): non-empty text is trimmed and parsed; empty text draws a seed from
+ * `random` and returns its decimal text, so the UI writes it back and the world stays reproducible.
+ */
+export function resolveSeedText(text: string, random: () => Seed64): { text: string; seed: Seed64 } {
+  const t = text.trim();
+  if (t.length > 0) return { text: t, seed: seedFromInput(t) };
+  const drawn = seedToText(random());
+  return { text: drawn, seed: seedFromInput(drawn) };
+}
