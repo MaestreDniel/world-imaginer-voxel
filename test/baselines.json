@@ -1,52 +1,68 @@
 {
   "machine": "12th Gen Intel(R) Core(TM) i7-12700H",
   "node": "v24.21.0",
-  "date": "2026-09-27",
+  "date": "2026-09-29",
   "kernels": {
     "calibration.fmix32": {
-      "nsPerEval": 0.638,
+      "nsPerEval": 0.636,
       "ratio": 1
     },
     "lattice3.slice": {
-      "nsPerEval": 22.372,
-      "ratio": 35.069
+      "nsPerEval": 22.73,
+      "ratio": 35.727
     },
     "perm512.slice": {
-      "nsPerEval": 28.141,
-      "ratio": 44.112
+      "nsPerEval": 27.865,
+      "ratio": 43.797
     },
     "lattice3.random": {
-      "nsPerEval": 22.933,
-      "ratio": 35.949
+      "nsPerEval": 22.804,
+      "ratio": 35.843
     },
     "perm512.random": {
-      "nsPerEval": 26.828,
-      "ratio": 42.054
+      "nsPerEval": 26.854,
+      "ratio": 42.207
     },
     "normal.z2.climateC": {
-      "nsPerEval": 327.025,
-      "ratio": 512.627
+      "nsPerEval": 321.936,
+      "ratio": 506.005
     },
     "normal.z3.density3d": {
-      "nsPerEval": 224.534,
-      "ratio": 351.968
+      "nsPerEval": 218.873,
+      "ratio": 344.015
     },
     "spline.offset": {
-      "nsPerEval": 47.855,
-      "ratio": 75.015
+      "nsPerEval": 44.753,
+      "ratio": 70.342
     },
     "spline.mix3": {
-      "nsPerEval": 93.164,
-      "ratio": 146.039
+      "nsPerEval": 87.756,
+      "ratio": 137.932
     },
     "detErf": {
-      "nsPerEval": 3.121,
-      "ratio": 4.892
+      "nsPerEval": 3.12,
+      "ratio": 4.904
     },
     "stageHashes.genKey": {
-      "nsPerEval": 39215.812,
-      "ratio": 61472.625
+      "nsPerEval": 197030,
+      "ratio": 309683.377
+    },
+    "column.point": {
+      "nsPerEval": 16014.531,
+      "ratio": 25170.959
+    },
+    "column.sample": {
+      "nsPerEval": 351885,
+      "ratio": 553077.882
+    },
+    "map.tile.b64.biome": {
+      "nsPerEval": 325498211.5,
+      "ratio": 511604249.538
+    },
+    "map.tile.b16.relief": {
+      "nsPerEval": 314875469.5,
+      "ratio": 494907875.313
     }
   },
-  "killRatio": 0.855
+  "killRatio": 0.849
 }

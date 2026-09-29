@@ -1,6 +1,9 @@
 /** SP1 bench gates (SP1 spec §7.5). Outside THRESHOLDS in SP1; changing them requires a spec amendment. */
 export const P1_MAX_REGRESSION = 1.3;
 export const KILL_RATIO_MAX = 1.6;
+/** P1 column-stage budget (master §3.0): buildColumnSample p50 / p95 in ms on the reference machine (SP2a; p95 gated through p99). */
+export const COLUMN_P50_MAX_MS = 0.7;
+export const COLUMN_P95_MAX_MS = 1.2;
 
 export interface BenchKernel {
   readonly nsPerEval: number;
