@@ -12,7 +12,7 @@ export default defineConfig({
     passWithNoTests: true,
     projects: [
       // Several unit tests make ~1M evaluations (spline test 6, q15): ~2.5 s locally, ~6 s on a CI runner.
-      { test: { name: 'unit', include: ['test/unit/**/*.test.ts'], testTimeout: 30_000 } },
+      { test: { name: 'unit', include: ['test/unit/**/*.test.ts', 'test/integration/**/*.test.ts'], testTimeout: 30_000 } },
       { test: { name: 'arch', include: ['test/arch/**/*.test.ts'] } },
       metrics('fast'),
       metrics('quick'),
