@@ -23,9 +23,12 @@ async function boot(root: HTMLElement): Promise<void> {
 
 const root = document.getElementById('app');
 if (root === null) throw new Error('#app element missing from index.html');
-const start: Promise<void> = new URLSearchParams(location.search).get('lab') === 'noise'
+const query = new URLSearchParams(location.search);
+const start: Promise<void> = query.get('lab') === 'noise'
   ? import('./ui/lab/noiseLab').then((m) => m.mountNoiseLab(root))
-  : boot(root);
+  : query.has('map')
+    ? import('./ui/map/mapPage').then((m) => m.mountMapPage(root))
+    : boot(root);
 start.catch((error: unknown) => {
   const pre = document.createElement('pre');
   pre.textContent = `Boot failed: ${error instanceof Error ? error.stack ?? error.message : String(error)}`;
