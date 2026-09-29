@@ -1,7 +1,7 @@
 # SP2a — Column stage, worker pool and the `?map` page (Design)
 
 Date: 2026-09-28
-Status: Approved (2026-09-28); revised by the implementation-plan dry run (2026-09-29, see §12)
+Status: Implemented on branch `sp2a/column-map` (2026-09-29); exit pending CI and the Vercel preview (first-image timing in Chrome, `?selftest=1` in Chrome and Firefox)
 Parent: master spec `2026-09-26-architecture-design.md`. The sections involved are:
 - §10 SP2, which this spec splits into SP2a and SP2b;
 - the data model and generation sections: §2.4, §2.7, §3.0, §3.2-3.5, §3.7, §3.10, §3.16, §3.17;
@@ -604,7 +604,78 @@ The plan was dry-run in a scratch worktree: every task was implemented and every
 
 ## Exit evidence
 
-(Filled in at SP exit.)
+Done (2026-09-29, branch `sp2a/column-map`; 12th Gen Intel(R) Core(TM) i7-12700H, Node v24.21.0):
+- `npm run typecheck`, `npm run build`, `npm test` (616 passed, 2 skipped), `npm run test:metrics` and `npm run test:metrics:full` all green.
+
+Metrics as measured (`test/metrics/.out/*.json`):
+
+| metric | fast | quick | full |
+|---|---|---|---|
+| B1.minShare | 0.0034 | 0.0036 | 0.0037 |
+| B1.minRareShare | 0.0071 | 0.0069 | 0.007 |
+| B1.largestLand | 0.0729 | 0.0734 | 0.0732 |
+| B1.oceanFamilyMin | 0.3855 | 0.3843 | 0.3841 |
+| B1.oceanFamilyMax | 0.3855 | 0.3843 | 0.3841 |
+| B1.ties | 0 | 0 | 0 |
+| B1.outside | 0.0019 | 0.0019 | 0.0019 |
+| B4.hotColdSpruceWindswept | 0 | 0 | 0 |
+| B4.coastBandBeach | 1 | 1 | 1 |
+| N4.originSdRatio | 0.8978 | 0.9008 | 0.9029 |
+| N4.spawnTopShare | 0.1406 | 0.1406 | 0.1406 |
+| N4.spawnDistinct | 17 | 17 | 17 |
+| N4.spawnOnLand | 1 | 1 | 1 |
+| T6.minGain | 10 | 10 | 10 |
+| T6.maxGain | 10 | 10 | 10 |
+| T7.value | 0.9855 | 0.9866 | 1.002 |
+| T7.borderMismatch | 0 | 0 | 0 |
+| T8.E | 21.12 | 21.19 | 21.28 |
+| T8.PV | 10.14 | 10.06 | 10.33 |
+| T1lowland.value | 0.3325 | 0.3342 | 0.3349 |
+| B2.medianLength | 360.3 | 475.2 | 551.3 |
+| B2.landShareMin | 0.0416 | 0.0433 | 0.0361 |
+| B2.landShareMax | 0.0416 | 0.0433 | 0.0361 |
+| B2.mouths | 0.871 | 0.8182 | 0.7143 |
+| B2.gorgesPer100km2 | 4004 | 2537 | 2973 |
+| B2.dryRiverBiome | 0 | 0 | 0 |
+| B5.perKm2Min | 1.224 | 1.535 | 1.38 |
+| B5.perKm2Max | 1.224 | 1.535 | 1.38 |
+| B5.highShare | 0.4444 | 0.4545 | 0.4681 |
+
+Bench (`npm run bench:record`, then a gated `npm run bench`; 15 kernels; `column.sample p50 0.350 ms, p99 (≥ p95) 0.507 ms`; `killRatio 0.835`):
+
+| kernel | ns/eval | ratio to calibration |
+|---|---|---|
+| `calibration.fmix32` | 0.636 | 1 |
+| `lattice3.slice` | 22.73 | 35.727 |
+| `perm512.slice` | 27.865 | 43.797 |
+| `lattice3.random` | 22.804 | 35.843 |
+| `perm512.random` | 26.854 | 42.207 |
+| `normal.z2.climateC` | 321.936 | 506.005 |
+| `normal.z3.density3d` | 218.873 | 344.015 |
+| `spline.offset` | 44.753 | 70.342 |
+| `spline.mix3` | 87.756 | 137.932 |
+| `detErf` | 3.12 | 4.904 |
+| `stageHashes.genKey` | 197030 | 309683.377 |
+| `column.point` | 16014.531 | 25170.959 |
+| `column.sample` | 351885 | 553077.882 |
+| `map.tile.b64.biome` | 325498211.5 | 511604249.538 |
+| `map.tile.b16.relief` | 314875469.5 | 494907875.313 |
+
+JavaScriptCore: `npx --yes bun@1 test/tools/goldensJsc.ts` → `47/47 match on Bun 1.4.2 (JavaScriptCore)`. The goldens recorded in V8 are identical to the plan's dry run.
+
+Browser checks (headless Chrome over the DevTools protocol, dev server, 6 workers):
+- `?map`: tiles cover the view; hover, patch errors, reconfiguration and reload restore all work, with no console errors.
+- First image of the default view (64 blocks/px): 254-319 ms over eight loads. The `large_biomes` view at 256 blocks/px needs 20 preview tiles: 1025 ms.
+- `?selftest=1`: `✓ all 47 goldens match` (6.2 s).
+
+Screenshots (`docs/superpowers/specs/assets/sp2a/`, 1400 × 900, seed 42, 256-colour palette PNGs):
+- `biome-64.png`, `relief-64.png`, `rivers-64.png`, `lakes-64.png`, `C-64.png`;
+- `biome-4-spawn.png`, `relief-4-spawn.png`;
+- `biome-256-large_biomes.png`.
+
+Observations for SP2b: at 64 blocks/px the rivers layer is speckled, because channels are narrower than a pixel. Oceans at the default λ 2400 read as 2-5 km seas rather than continents; this is a tuning target for the editor.
+
+Pending with the user: push `sp2a/column-map`, the pull request with CI green, and on the Vercel preview the `?map` first-image line in Chrome plus `?selftest=1` in Chrome and Firefox (JSON added here in a follow-up commit). Then the fast-forward of `main`.
 
 ### Threshold log
 
