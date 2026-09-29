@@ -49,10 +49,25 @@ describe('paintTile', () => {
       for (let o = 3; o < t.length; o += 4) if (t[o] !== 255) throw new Error('alpha');
     }
   });
-  test('the preview level samples climate, shape and biome only', () => {
+  test('the preview level samples climate, shape and biome once per 2 × 2 pixel block', () => {
     const t = paintTile(ctx, 'biome', 256, 0, 0, newTile());
     const rec = newPointRecord();
-    for (const [i, j] of PIX) expect(rgbAt(t, i, j)).toBe(biomeColor(sampleCoarse(ctx, 256 * (i + 0.5), 256 * (j + 0.5), rec).biome));
+    for (const [i, j] of PIX) {
+      const bi = i >> 1;
+      const bj = j >> 1;
+      const expected = biomeColor(sampleCoarse(ctx, 256 * (2 * bi + 1), 256 * (2 * bj + 1), rec).biome);
+      for (const [di, dj] of [[0, 0], [1, 0], [0, 1], [1, 1]]) expect(rgbAt(t, 2 * bi + di, 2 * bj + dj)).toBe(expected);
+    }
+  });
+  test('preview relief is shaded from the neighbouring 2 × 2 blocks', () => {
+    const t = paintTile(ctx, 'relief', 256, 1, 0, newTile());
+    const rec = newPointRecord();
+    const h = (bi: number, bj: number) => sampleCoarse(ctx, 65536 + 256 * (2 * bi + 1), 256 * (2 * bj + 1), rec).surfaceEst;
+    for (const [bi, bj] of [[0, 0], [127, 127], [40, 3]]) {
+      const k = slopeShade(h(bi - 1, bj), h(bi + 1, bj), h(bi, bj - 1), h(bi, bj + 1), 512);
+      sampleCoarse(ctx, 65536 + 256 * (2 * bi + 1), 256 * (2 * bj + 1), rec);
+      expect(rgbAt(t, 2 * bi + 1, 2 * bj)).toBe(layerColor('relief', rec, k));
+    }
   });
   test('relief shading reads the neighbour tile across the edge (seamless)', () => {
     const t = paintTile(ctx, 'relief', 16, 5, 1, newTile());

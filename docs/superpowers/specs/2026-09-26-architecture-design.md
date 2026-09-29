@@ -1624,7 +1624,7 @@ Thresholds are locked (`thresholds.lock.json`) and goldens are gated (§6.2). Si
 
 **SP2b — Parameter tooling** (M; SP2a)
 - Schema-driven parameter panel with scope badges; nested Hermite spline editor (typed coords, histogram overlay, area shares, blocks y-axis, cross-section); biome table with share preview; presets UI over the SP1 envelope (import loads, export writes the draft), all editing `WorldSession`.
-- **Deliverable:** the SP2a map updates live while splines and biome boxes are edited.
+- **Deliverable:** the SP2a map updates live while splines and biome boxes are edited; a 1-10 biome-size slider drives `climate.scaleMul = 4^((v − 5)/5)` (5 = default, 10 = large_biomes; user request 2026-09-29).
 - **Exit:** U2 for column-scope params; spline-edit map preview ≤ 300 ms; preset unit tests; the SP1 deferred minors reachable through the editor (spline knot/tangent bounds, tiny amplitudes).
 - **Cut line:** the biome share preview and the cross-section profile (→ SP10).
 
@@ -1710,6 +1710,7 @@ Thresholds are locked (`thresholds.lock.json`) and goldens are gated (§6.2). Si
 
 **SP12 — Extreme presets and final tuning** (M; SP11)
 - Finalise amplified, archipelago, floating_islands, large_biomes and cave_heavy; goldens per preset; profile gallery in docs; baselines refreshed; README; received cut-line items.
+- A "continental" profile (user request, 2026-09-29): large continents with islands in open ocean, via a much longer C wavelength (about 8000) and deep-ocean-dominated low C; it may move to SP3 by amending this section.
 - The volcanic cone (reserved by SP2a, its spec §10): sparse cells in hot high ground add a cone and crater to `offset` and assign the volcano biome by mask; lava in the crater uses SP7's fluids. It may move to an earlier SP by amending this section.
 - **Exit:** Z1-Z4; cave_heavy C1 10-22 %; every other active metric green per preset; DT1 goldens stable; no open cut-line items (unless explicitly dropped by the user with the D-decision impact recorded).
 

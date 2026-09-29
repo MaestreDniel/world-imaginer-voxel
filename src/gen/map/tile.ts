@@ -1,8 +1,8 @@
 /**
  * Map tile painting (SP2a spec §6.1): a 256 × 256 RGBA tile of one layer at level b blocks/px. Pixel
  * (i, j) of tile (tx, tz) samples the pixel centre (256·b·tx + b·(i + 0.5), 256·b·tz + b·(j + 0.5)).
- * Level 256 is the preview (sampleCoarse: no rivers or lakes); finer levels use samplePoint without
- * steep. Shaded layers sample a one-pixel border so adjacent tiles shade seamlessly.
+ * Level 256 is the preview (sampleCoarse: no rivers or lakes, one sample per 2 × 2 pixel block); finer
+ * levels use samplePoint without steep. Shaded layers sample a one-pixel border so adjacent tiles shade seamlessly.
  */
 import { MAP_LEVELS, MAP_TILE_PX, type MapLevel } from '../../core/constants';
 import type { GenContext } from '../context';
@@ -51,8 +51,33 @@ function put(out: Uint8ClampedArray, o: number, rgb: number): void {
   out[o + 3] = 255;
 }
 
+const HALF = TILE / 2;
+
+/**
+ * The preview level samples one point per 2 × 2 pixel block, at the block's centre, and shades from the
+ * neighbouring blocks (4× cheaper; a preview pixel is already 256 blocks wide).
+ */
+function paintPreview(ctx: GenContext, layer: LayerId, tx: number, tz: number, out: Uint8ClampedArray): Uint8ClampedArray {
+  const b = 256;
+  const x0 = TILE * b * tx;
+  const z0 = TILE * b * tz;
+  const WH = HALF + 2;
+  const relief = NEEDS_RELIEF(layer);
+  const at = (bi: number, bj: number) => samplePixel(ctx, 256, x0 + b * (2 * bi + 1), z0 + b * (2 * bj + 1), P);
+  if (relief) for (let bj = -1; bj <= HALF; bj++) for (let bi = -1; bi <= HALF; bi++) HEIGHT[(bj + 1) * WH + (bi + 1)] = at(bi, bj).surfaceEst;
+  for (let bj = 0; bj < HALF; bj++) for (let bi = 0; bi < HALF; bi++) {
+    const p = at(bi, bj);
+    const k0 = (bj + 1) * WH + (bi + 1);
+    const k = relief ? SLOPE(HEIGHT[k0 - 1]!, HEIGHT[k0 + 1]!, HEIGHT[k0 - WH]!, HEIGHT[k0 + WH]!, 2 * b) : 1;
+    const rgb = COLOR(layer, p, k);
+    for (let dj = 0; dj < 2; dj++) for (let di = 0; di < 2; di++) put(out, 4 * ((2 * bj + dj) * TILE + 2 * bi + di), rgb);
+  }
+  return out;
+}
+
 /** Paints tile (tx, tz) of `layer` at level b into `out` (256·256·4 bytes, alpha 255). */
 export function paintTile(ctx: GenContext, layer: LayerId, b: Level, tx: number, tz: number, out: Uint8ClampedArray): Uint8ClampedArray {
+  if (b === 256) return paintPreview(ctx, layer, tx, tz, out);
   const x0 = TILE * b * tx;
   const z0 = TILE * b * tz;
   if (!NEEDS_RELIEF(layer)) {

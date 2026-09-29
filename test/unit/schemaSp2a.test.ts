@@ -46,7 +46,7 @@ describe('SP2a schema groups', () => {
 describe('default biome table (SP2a spec §3.1 authoring rules)', () => {
   const T = BIOME_TABLE_DEFAULT;
   const EDGES: Record<string, readonly number[]> = {
-    C: [-1, -0.55, -0.22, -0.1, 1], E: [-1, -0.375, 1], PV: [-1, -0.6, 0.2, 0.7, 1], T: [-1, -0.6, -0.2, 0.2, 0.6, 1], H: [-1, -0.6, -0.2, 0.2, 0.6, 1],
+    C: [-1, -0.55, -0.22, -0.1, 1], E: [-1, -0.375, 1], PV: [-1, -0.6, 0.2, 0.7, 1], T: [-1, -0.8, -0.6, -0.2, 0.2, 0.6, 1], H: [-1, -0.6, -0.2, 0.2, 0.6, 1],
   };
   test('26 box-picked biomes with unique priorities', () => {
     expect(Object.keys(T)).toEqual([...BOX_BIOMES]);
@@ -60,6 +60,10 @@ describe('default biome table (SP2a spec §3.1 authoring rules)', () => {
     expect(T.beach.PV).toEqual([-1, 1]);
     expect([T.beach.C, T.snowy_beach.C, T.stony_shore.C]).toEqual([[-0.22, -0.1], [-0.22, -0.1], [-0.22, -0.1]]);
     expect([T.volcano.T, T.volcano.PV, T.volcano.E]).toEqual([[0.6, 1], [0.7, 1], [-1, -0.375]]);
+    // Liquid oceans reach down to T −0.8; only the coldest seas freeze (tuning of 2026-09-29).
+    expect([T.frozen_ocean.T, T.ocean.T, T.deep_ocean.T]).toEqual([[-1, -0.8], [-0.8, 0.6], [-0.8, 0.6]]);
+    const onlyOceans = Object.entries(T).filter(([, r]) => r.T.includes(-0.8)).map(([n]) => n).sort();
+    expect(onlyOceans).toEqual(['deep_ocean', 'frozen_ocean', 'ocean']);
   });
   test('the boxes tile the climate space: 20 000 random points fall in exactly one box (edges excluded)', () => {
     let s = 12345;

@@ -261,7 +261,7 @@ biome    → picker at this point (§3.2)
   - a map colour.
 - **Boxes.** The 26 box-picked biomes (all but river and frozen river) get a box in `params.biomes.table` (a `boxTable` leaf, §4.1): an interval per climate axis `C, E, PV, T, H`, a `wSign` (−1 | 0 | +1) and a unique `priority`.
 - **Authoring rules**, checked by a unit test on the default table:
-  - T and H edges are on −0.6 / −0.2 / 0.2 / 0.6.
+  - T and H edges are on −0.6 / −0.2 / 0.2 / 0.6, plus −0.8 for the ocean boxes only: frozen oceans are the coldest seas (T < −0.8) and liquid oceans reach down to −0.8 (tuning of 2026-09-29; frozen oceans went from 7.7 % to 3.8 % of the world).
   - C bands: deep ocean < −0.55; ocean < −0.22; coast −0.22..−0.10; inland above.
   - E splits mountains (< −0.375) from lowlands.
   - PV edges −0.6 (valleys), 0.2 (meadow) and 0.7 (peaks).
@@ -373,7 +373,7 @@ Messages are plain objects checked by `parseToWorker` / `parseFromWorker`. Coord
 
 - **Tile geometry.** A tile is 256 × 256 px at a **level** `b ∈ MAP_LEVELS = {256, 64, 16, 4}` blocks per pixel. Tile `(tx, tz)` at level b covers `[256·b·tx, 256·b·(tx+1))` in x, and the same in z. Pixel `(i, j)` samples its centre.
 - **Painting** (`gen/map/tile.ts`, pure; revised by the dry run):
-  - **b = 256** is the **preview level** and uses `sampleCoarse`: climate, shape and biome only. Rivers and lakes are narrower than a 256-block pixel, and skipping them keeps a preview tile near 0.2 s.
+  - **b = 256** is the **preview level** and uses `sampleCoarse` (climate, shape and biome only; rivers and lakes are narrower than a 256-block pixel) at one point per 2 × 2 pixel block, the block centre, shaded from the neighbouring blocks at spacing 2b. A preview tile costs about 0.05 s (tuning of 2026-09-29: production first images were 281-318 ms with one sample per pixel).
   - **Finer levels** use `samplePoint` without steep at every pixel centre.
   - The dry run showed why ColumnSamples are not used for tiles: at 16 blocks/px each pixel is its own column, and even at 4 blocks/px a ColumnSample (49 points) serves only 16 pixels, so the point path is 4× cheaper. DT2 already ties the two paths together.
   - Shaded layers (relief, rivers, lakes) sample a one-pixel border in the same pass, so adjacent tiles shade seamlessly.
@@ -562,6 +562,8 @@ Dry run: column.sample p50 0.36 ms, p99 0.51 ms; tiles about 0.31-0.34 s; killRa
   - Fix the SP1 deferred minors that become reachable through the editor: spline knot and tangent bounds, and tiny amplitudes.
 - **SP3:** replace the 2D `surfaceEst` (bump `surfaceEst`), fill `islandMask`, add T1/T5 against voxel terrain, and re-check the lowland diagnostic against T1.
 - **SP4:** mount `ui/map` as the in-game panel; wire click-to-teleport.
+- **SP2b — biome-size slider (user request, 2026-09-29).** A 1-10 slider in the panel that drives `climate.scaleMul = 4^((v − 5)/5)`: 5 = default (1), 10 = large_biomes (4), 1 ≈ 0.33.
+- **Future profile "continental" (user request, 2026-09-29; SP3 or SP12).** Large continents with islands in open ocean, the opposite of today's inland-sea look: C at a much longer wavelength (about 8000) with an offset spline where deep ocean dominates the low C band.
 - **Volcanic cone (receiving SP: SP12 by default, pullable earlier by amendment).**
   - A column-stage term modelled on the lakes:
     - sparse warped-Voronoi cells enabled only where the cell centre has T_u ≥ 0.6 and offset0 ≥ 120;
@@ -675,7 +677,18 @@ Screenshots (`docs/superpowers/specs/assets/sp2a/`, 1400 × 900, seed 42, 256-co
 
 Observations for SP2b: at 64 blocks/px the rivers layer is speckled, because channels are narrower than a pixel. Oceans at the default λ 2400 read as 2-5 km seas rather than continents; this is a tuning target for the editor.
 
-Pending with the user: push `sp2a/column-map`, the pull request with CI green, and on the Vercel preview the `?map` first-image line in Chrome plus `?selftest=1` in Chrome and Firefox (JSON added here in a follow-up commit). Then the fast-forward of `main`.
+Done after the merge (2026-09-29): `main` pushed at 6d03c93, CI green, production (Vercel) serves `?map`.
+- Production, headless Chrome: the `?map` checks all pass. First image 281 / 318 / 308 ms: over the 300 ms target, so the preview level was tuned (2 × 2 sampling, below).
+- Production, headless Chrome: `?selftest=1` `✓ all 47 goldens match` (6.1 s).
+- Production, Firefox 152 (the user): 47/47 match. The JSON is in `assets/sp2a/selftest-firefox-v0.json` (GENERATOR_VERSION 0 build).
+
+Tuning of 2026-09-29, with GENERATOR_VERSION 0 → 1:
+- Frozen oceans take only T < −0.8 (3.8 % of the world, down from 7.7 %).
+- Preview tiles sample one point per 2 × 2 pixels.
+- Goldens re-recorded: 10 keys changed (sp1.params through genKey's version, the column points and sample, the 4 preview tiles, biome at 64 and 16).
+- Bun 47/47. All metric tiers green (B1 full: minShare 0.37 %, ocean family 38.4 %).
+- The production first-image timing and the Chrome/Firefox selftest are re-checked on the tuned build.
+
 
 ### Threshold log
 
@@ -692,10 +705,10 @@ Uniform climate units; `[lo, hi]` per axis; W = `wSign` (0 any); P = priority. S
 
 | biome | C | E | PV | T | H | W | P |
 |---|---|---|---|---|---|---|---|
-| deep_ocean | −1, −0.55 | any | any | −0.6, 0.6 | any | 0 | 1 |
-| ocean | −0.55, −0.22 | any | any | −0.6, 0.6 | any | 0 | 2 |
+| deep_ocean | −1, −0.55 | any | any | −0.8, 0.6 | any | 0 | 1 |
+| ocean | −0.55, −0.22 | any | any | −0.8, 0.6 | any | 0 | 2 |
 | warm_ocean | −1, −0.22 | any | any | 0.6, 1 | any | 0 | 3 |
-| frozen_ocean | −1, −0.22 | any | any | −1, −0.6 | any | 0 | 4 |
+| frozen_ocean | −1, −0.22 | any | any | −1, −0.8 | any | 0 | 4 |
 | beach | −0.22, −0.1 | −0.375, 1 | any | −0.6, 1 | any | 0 | 5 |
 | snowy_beach | −0.22, −0.1 | −0.375, 1 | any | −1, −0.6 | any | 0 | 6 |
 | stony_shore | −0.22, −0.1 | −1, −0.375 | any | any | any | 0 | 7 |

@@ -1,4 +1,5 @@
 import { describe, expect, test } from 'vitest';
+import { GENERATOR_VERSION } from '../../src/core/constants';
 import { fnv1a64, hex64 } from '../../src/core/hash';
 import { canonicalJSON } from '../../src/core/params/canonical';
 import { DEFAULTS } from '../../src/core/params/defaults';
@@ -56,7 +57,7 @@ describe('stage hashes', () => {
   });
   test('genKey preimage and seed dependence', () => {
     const seed = [42, 0] as const;
-    expect(hex64(genKey(seed, H))).toBe(hex64(fnv1a64(`0|42|0|${hex64(H.decorate!)}`)));
+    expect(hex64(genKey(seed, H))).toBe(hex64(fnv1a64(`${GENERATOR_VERSION}|42|0|${hex64(H.decorate!)}`)));
     expect(hex64(genKey([43, 0], H))).not.toBe(hex64(genKey(seed, H)));
     expect(hex64(genKey([42, 1], H))).not.toBe(hex64(genKey(seed, H)));
   });
