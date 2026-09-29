@@ -14,7 +14,7 @@ export const CURRENT_SP: SubProjectId = 'SP2a';
 /** Every metric id of master spec §6.4 (E1-E6 expanded). */
 export type MetricId =
   | 'N1' | 'N2' | 'N3' | 'N4' | 'N5' | 'N6'
-  | 'T1' | 'T2' | 'T3' | 'T4' | 'T5' | 'T6' | 'T7' | 'T8'
+  | 'T1' | 'T1lowland' | 'T2' | 'T3' | 'T4' | 'T5' | 'T6' | 'T7' | 'T8'
   | 'B1' | 'B2' | 'B3' | 'B4' | 'B5'
   | 'C1' | 'C2' | 'C3' | 'C4' | 'C5' | 'C6'
   | 'A1' | 'A2' | 'A3' | 'A4'

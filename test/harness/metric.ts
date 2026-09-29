@@ -76,7 +76,7 @@ export function findMetricCalls(root: string): MetricCall[] {
   const files: string[] = [];
   walk(join(root, 'test', 'metrics'), files);
   const calls: MetricCall[] = [];
-  const re = /metricTest\(\s*['"]([A-Z]+\d+)['"]\s*,\s*\[([^\]]*)\]/g;
+  const re = /metricTest\(\s*['"]([A-Z]+\d+[a-z]*)['"]\s*,\s*\[([^\]]*)\]/g;
   for (const file of files.sort()) {
     const text = readFileSync(file, 'utf8');
     for (const m of text.matchAll(re)) {

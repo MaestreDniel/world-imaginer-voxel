@@ -4,6 +4,7 @@ import { autoTangents } from '../../src/core/spline/tangents';
 import { SPLINE_SLOT, type NestedSpline } from '../../src/core/spline/types';
 import { ADVERSARIAL_DEFS, CLIMATE_FIXTURE_DEFS, DENSITY3D_DEF, JAG, OFFSET, SIGMA, TANGENT_FIXTURE } from '../../src/metrics/sp1Fixtures';
 import { nextDown, nextUp, testFloat, testRng } from '../harness/stats';
+import { pathWeight } from '../harness/spline';
 
 const FIXTURES: Array<[string, NestedSpline]> = [['OFFSET', OFFSET], ['SIGMA', SIGMA], ['JAG', JAG], ['TANGENT_FIXTURE', TANGENT_FIXTURE]];
 
@@ -119,25 +120,6 @@ test('spline test 6 on the fixtures: compiled equals the reference on 1M points'
   }
   expect(bad).toBe(0);
 });
-
-/** Product of Hermite value-basis weights of the knot along `path` (tangents fixed). */
-function pathWeight(s: NestedSpline, path: readonly number[], c: Float64Array): number {
-  const [k, ...rest] = path;
-  const xs = s.points.map((p) => p.x);
-  const n = xs.length;
-  const q = c[SPLINE_SLOT[s.coord]]!;
-  let w: number;
-  if (q <= xs[0]!) w = k === 0 ? 1 : 0;
-  else if (q >= xs[n - 1]!) w = k === n - 1 ? 1 : 0;
-  else {
-    let i = 0;
-    while (q >= xs[i + 1]!) i++;
-    const t = (q - xs[i]!) / (xs[i + 1]! - xs[i]!);
-    w = k === i ? 2 * t ** 3 - 3 * t ** 2 + 1 : k === i + 1 ? -2 * t ** 3 + 3 * t ** 2 : 0;
-  }
-  if (rest.length === 0 || w === 0) return w;
-  return w * pathWeight(s.points[k!]!.y as NestedSpline, rest, c);
-}
 
 describe('spline test 8: knot-raise linearity', () => {
   test.each([[[2]], [[5, 1]], [[7, 1, 1]]] as const)('OFFSET knot %j', (path) => {

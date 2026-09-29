@@ -1,4 +1,6 @@
-import { existsSync, readFileSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { expect, test } from 'vitest';
 import { diffGovernance, formatChanges, makeLock, verifyLock, type GovernanceState, type LockFile } from '../harness/lock';
@@ -26,4 +28,15 @@ test('thresholds lock matches THRESHOLDS and STARTED_SPS', () => {
 
 test('every active threshold part is covered by exactly one metricTest', () => {
   expect(coverageErrors(findMetricCalls(ROOT))).toEqual([]);
+});
+
+test('findMetricCalls reads ids with a lowercase suffix (T1lowland) and multi-line part lists', () => {
+  const root = mkdtempSync(join(tmpdir(), 'wi-metric-calls-'));
+  try {
+    mkdirSync(join(root, 'test', 'metrics'), { recursive: true });
+    writeFileSync(join(root, 'test', 'metrics', 'x.metric.ts'), "metricTest('T1lowland', ['value'], () => ({ value: 0 }));\nmetricTest('B2', [\n  'a',\n  'b',\n], () => ({}));\n");
+    expect(findMetricCalls(root).map((c) => `${c.id}:${c.parts.join('|')}`)).toEqual(['T1lowland:value', 'B2:a|b']);
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
 });
