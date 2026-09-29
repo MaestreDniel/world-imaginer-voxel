@@ -44,7 +44,7 @@ export interface ParamMeta {
 export type ParamIssueCode =
   | 'UNKNOWN_KEY' | 'MISSING_KEY' | 'NOT_OBJECT' | 'NOT_NUMBER' | 'NOT_FINITE' | 'NOT_INTEGER' | 'INT_TOO_LARGE'
   | 'OUT_OF_RANGE' | 'NOT_BOOL' | 'BAD_ENUM' | 'AMPLITUDES_LENGTH' | 'AMPLITUDES_ZERO' | 'YSCALE_NOT_1'
-  | 'REMAP_NEEDS_DOUBLE' | 'REMAP_NEEDS_2D';
+  | 'REMAP_NEEDS_DOUBLE' | 'REMAP_NEEDS_2D' | 'BAD_INTERVAL' | 'DUPLICATE_PRIORITY';
 export type PresetIssueCode = 'BAD_FORMAT' | 'BAD_NAME' | 'RESERVED_NAME' | 'UNKNOWN_PROFILE' | 'BAD_SCHEMA_VERSION' | 'NEWER_SCHEMA_VERSION';
 export type IssueCode = ParamIssueCode | PresetIssueCode | 'MIGRATION_FAILED' | SplineErrorCode;
 
@@ -106,6 +106,15 @@ export type NoiseMeta = MetaInput & {
 };
 export type SplineMeta = MetaInput & { readonly coords: readonly SplineCoord[]; readonly min: number; readonly max: number };
 
+/** Climate axes of a box row (uniform fields, SP2a spec §3.1). */
+export const BOX_AXES = ['C', 'E', 'PV', 'T', 'H'] as const;
+export type BoxAxis = (typeof BOX_AXES)[number];
+export type Interval = readonly [lo: number, hi: number];
+/** One biome box: an interval per climate axis, a sign(W) filter (0 = any) and a unique tie-break priority. */
+export type BoxRow = { readonly [A in BoxAxis]: Interval } & { readonly wSign: -1 | 0 | 1; readonly priority: number };
+export type BoxTable<K extends string = string> = { readonly [R in K]: BoxRow };
+export type BoxTableMeta<K extends string> = MetaInput & { readonly rows: readonly K[] };
+
 export function num(def: number, meta: Ranged): Leaf<number> {
   return { tag: 'leaf', kind: 'number', merge: 'atomic', def, meta, min: meta.min, max: meta.max, ...(meta.step !== undefined ? { step: meta.step } : {}) };
 }
@@ -133,6 +142,11 @@ export function noise(def: Pick<NoiseDef, 'wavelength' | 'octaves'> & NoiseDefPa
 
 export function spline(def: NestedSpline, meta: SplineMeta): Leaf<NestedSpline> {
   return { tag: 'leaf', kind: 'spline', merge: 'atomic', def, meta, coords: meta.coords, min: meta.min, max: meta.max };
+}
+
+/** A table of named boxes (the biome table); patches replace it whole. `rows` fixes the row names. */
+export function boxTable<const K extends string>(def: BoxTable<K>, meta: BoxTableMeta<K>): Leaf<BoxTable<K>> {
+  return { tag: 'leaf', kind: 'boxTable', merge: 'atomic', def, meta, options: meta.rows };
 }
 
 export function group<const C extends Children>(label: string, doc: string, children: C): Group<C> {
@@ -215,6 +229,51 @@ function checkNoise(v: unknown, path: string, out: Issue[], leaf: Leaf<unknown, 
   };
 }
 
+const BOX_KEYS: readonly string[] = [...BOX_AXES, 'wSign', 'priority'];
+
+function checkBoxTable(v: unknown, path: string, out: Issue[], leaf: Leaf<unknown, unknown>): BoxTable | undefined {
+  if (!isObj(v)) { out.push({ path, code: 'NOT_OBJECT', message: `expected a table object, got ${fmt(v)}` }); return undefined; }
+  const n0 = out.length;
+  const rows = leaf.options!;
+  unknownKeys(v, rows, path, out);
+  for (const r of rows) if (!Object.hasOwn(v, r)) out.push({ path: join(path, r), code: 'MISSING_KEY', message: 'missing' });
+  if (out.length > n0) return undefined;
+  const res: Record<string, BoxRow> = {};
+  const seen = new Map<number, string>();
+  for (const r of rows) {
+    const rp = join(path, r);
+    const x = v[r];
+    if (!isObj(x)) { out.push({ path: rp, code: 'NOT_OBJECT', message: `expected a box row, got ${fmt(x)}` }); continue; }
+    const r0 = out.length;
+    unknownKeys(x, BOX_KEYS, rp, out);
+    for (const k of BOX_KEYS) if (!Object.hasOwn(x, k)) out.push({ path: join(rp, k), code: 'MISSING_KEY', message: 'missing' });
+    if (out.length > r0) continue;
+    const row: Record<string, unknown> = {};
+    for (const a of BOX_AXES) {
+      const ap = join(rp, a);
+      const iv = x[a];
+      if (!Array.isArray(iv) || iv.length !== 2) { out.push({ path: ap, code: 'BAD_INTERVAL', message: `expected [lo, hi], got ${fmt(iv)}` }); continue; }
+      const lo = checkNumber(iv[0], `${ap}[0]`, out, -1, 1, false);
+      const hi = checkNumber(iv[1], `${ap}[1]`, out, -1, 1, false);
+      if (lo === undefined || hi === undefined) continue;
+      if (!(lo < hi)) { out.push({ path: ap, code: 'BAD_INTERVAL', message: `lo ${lo} must be below hi ${hi}` }); continue; }
+      row[a] = [lo, hi];
+    }
+    const w = x['wSign'];
+    if (w !== -1 && w !== 0 && w !== 1) out.push({ path: join(rp, 'wSign'), code: 'BAD_ENUM', message: `expected -1 | 0 | 1, got ${fmt(w)}` });
+    else row['wSign'] = w;
+    const pr = checkNumber(x['priority'], join(rp, 'priority'), out, 1, 1000, true);
+    if (pr !== undefined) {
+      const other = seen.get(pr);
+      if (other !== undefined) out.push({ path: join(rp, 'priority'), code: 'DUPLICATE_PRIORITY', message: `priority ${pr} is also used by ${other}` });
+      else seen.set(pr, r);
+      row['priority'] = pr;
+    }
+    if (out.length === r0) res[r] = row as BoxRow;
+  }
+  return out.length > n0 ? undefined : res;
+}
+
 function checkSpline(v: unknown, path: string, out: Issue[], leaf: Leaf<unknown, unknown>): NestedSpline | undefined {
   const issues = validateSpline(v, path, { ...(leaf.coords !== undefined ? { coords: leaf.coords } : {}), yMin: leaf.min ?? -Infinity, yMax: leaf.max ?? Infinity });
   if (issues.length > 0) { out.push(...issues); return undefined; }
@@ -234,7 +293,8 @@ export function checkLeaf(leaf: Leaf<unknown, unknown>, v: unknown, path: string
       return v;
     case 'noise': return checkNoise(v, path, out, leaf);
     case 'spline': return checkSpline(v, path, out, leaf);
-    default: throw new Error(`no validator for kind ${leaf.kind} in SP1`);
+    case 'boxTable': return checkBoxTable(v, path, out, leaf);
+    default: throw new Error(`no validator for kind ${leaf.kind} yet`);
   }
 }
 
@@ -416,7 +476,8 @@ export function renderReference<R extends Group>(s: Schema<R>): string {
   const esc = (t: string) => t.replaceAll('|', '\\|');
   const rows = ['| path | kind | default | range | unit | scope | doc |', '|---|---|---|---|---|---|---|'];
   for (const { path, meta } of s.leaves) {
-    const def = canonicalJSON(getPath(s.defaults, path));
+    const value = getPath(s.defaults, path);
+    const def = meta.kind === 'boxTable' ? `${Object.keys(value as object).length} rows` : canonicalJSON(value);
     const range = meta.options !== undefined ? meta.options.join(' / ')
       : meta.kind === 'noise' ? `wavelength ${meta.min} … ${meta.max}`
       : meta.min !== undefined ? `${meta.min} … ${meta.max}` : '';

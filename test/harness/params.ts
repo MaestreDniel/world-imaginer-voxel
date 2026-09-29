@@ -1,5 +1,5 @@
 import { q15 } from '../../src/core/params/canonical';
-import { checkParams, type Group, type Leaf, type Node, type Schema, NOISE_FIELD_RANGES } from '../../src/core/params/kit';
+import { BOX_AXES, checkParams, type Group, type Leaf, type Node, type Schema, NOISE_FIELD_RANGES } from '../../src/core/params/kit';
 import type { NestedSpline } from '../../src/core/spline/types';
 import { testFloat } from './stats';
 
@@ -30,6 +30,18 @@ export function randomValue(leaf: Leaf<unknown, unknown>, next: () => number): u
       };
     }
     case 'spline': return randomSplineLike(leaf.def as NestedSpline, next, Math.max(leaf.min!, -1000), Math.min(leaf.max!, 1000));
+    case 'boxTable': {
+      const table: Record<string, unknown> = {};
+      leaf.options!.forEach((name, i) => {
+        const row: Record<string, unknown> = { wSign: (next() % 3) - 1, priority: i + 1 };
+        for (const a of BOX_AXES) {
+          const lo = between(next, -1, 0.9);
+          row[a] = [lo, q15(lo + 0.05 + (0.95 - lo) * testFloat(next))];
+        }
+        table[name] = row;
+      });
+      return table;
+    }
     default: throw new Error(`no generator for ${leaf.kind}`);
   }
 }
