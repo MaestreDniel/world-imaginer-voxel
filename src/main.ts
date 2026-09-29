@@ -28,7 +28,9 @@ const start: Promise<void> = query.get('lab') === 'noise'
   ? import('./ui/lab/noiseLab').then((m) => m.mountNoiseLab(root))
   : query.has('map')
     ? import('./ui/map/mapPage').then((m) => m.mountMapPage(root))
-    : boot(root);
+    : query.get('selftest') === '1'
+      ? import('./ui/selftest/selftestPage').then((m) => m.mountSelftestPage(root))
+      : boot(root);
 start.catch((error: unknown) => {
   const pre = document.createElement('pre');
   pre.textContent = `Boot failed: ${error instanceof Error ? error.stack ?? error.message : String(error)}`;

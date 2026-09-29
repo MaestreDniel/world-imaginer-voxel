@@ -2,6 +2,7 @@ import { describe, expect, test } from 'vitest';
 import { DEFAULTS } from '../../src/core/params/defaults';
 import { columnPoint } from '../../src/gen/column/columnPoint';
 import { findSpawn } from '../../src/gen/column/spawn';
+import { computeAnyGolden } from '../../src/metrics/sp2aGoldens';
 import { paintTile } from '../../src/gen/map/tile';
 import { parseFromWorker, parseToWorker } from '../../src/workers/protocol';
 import { createTaskHandler } from '../../src/workers/taskHandler';
@@ -15,6 +16,7 @@ describe('parseToWorker', () => {
     expect(parseToWorker(tileMsg)).not.toBeNull();
     expect(parseToWorker({ type: 'point', jobId: 2, epoch: 3, x: 1.5, z: -7 })).not.toBeNull();
     expect(parseToWorker({ type: 'spawn', jobId: 4, epoch: 3 })).not.toBeNull();
+    expect(parseToWorker({ type: 'selftest', jobId: 5, key: 'sp1.params' })).not.toBeNull();
   });
   test.each<[string, unknown]>([
     ['not an object', 5],
@@ -67,6 +69,11 @@ describe('task handler', () => {
     for (const m of msgs.slice(1)) last = h.handle(m).msg;
     expect(last.type).toBe('error');
     if (last.type === 'error') expect(last.code).toBe(code);
+  });
+  test('selftest needs no configure and reports digests or errors per key', () => {
+    const h = createTaskHandler();
+    expect(h.handle({ type: 'selftest', jobId: 1, key: 'sp1.params' }).msg).toEqual({ type: 'selftestResult', jobId: 1, key: 'sp1.params', actual: computeAnyGolden('sp1.params'), error: null });
+    expect(h.handle({ type: 'selftest', jobId: 2, key: 'sp9.nope' }).msg).toEqual({ type: 'selftestResult', jobId: 2, key: 'sp9.nope', actual: null, error: 'unknown golden sp9.nope' });
   });
   test('an error keeps the jobId of the failing job', () => {
     const h = createTaskHandler();

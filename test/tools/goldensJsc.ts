@@ -1,12 +1,13 @@
 /**
- * JavaScriptCore check of the SP1 goldens (D20): run with `npx --yes bun@1 test/tools/goldensJsc.ts`
+ * JavaScriptCore check of every golden, SP1 and SP2a (D20): run with `npx --yes bun@1 test/tools/goldensJsc.ts`
  * (Bun runs JavaScriptCore and resolves the repository's extensionless imports; no dependency is added).
  */
 import goldens from '../goldens.json';
-import { compareGoldens, computeGolden, goldenKeys } from '../../src/metrics/sp1Goldens';
+import { compareGoldens } from '../../src/metrics/sp1Goldens';
+import { allGoldenKeys, computeAnyGolden } from '../../src/metrics/sp2aGoldens';
 
 const expected = (goldens as unknown as { entries: Record<string, string> }).entries;
-const rows = compareGoldens(expected, goldenKeys(), computeGolden);
+const rows = compareGoldens(expected, allGoldenKeys(), computeAnyGolden);
 for (const r of rows) console.log(`${r.ok ? 'ok  ' : 'FAIL'} ${r.key} ${r.actual}${r.ok ? '' : ` (expected ${r.expected ?? 'missing'})`}`);
 const bad = rows.filter((r) => !r.ok).length;
 const bun = (globalThis as { Bun?: { version: string } }).Bun;

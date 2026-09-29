@@ -11,6 +11,7 @@ import { createGenContext, type GenContext } from '../gen/context';
 import { columnPoint } from '../gen/column/columnPoint';
 import { findSpawn } from '../gen/column/spawn';
 import { paintTile } from '../gen/map/tile';
+import { computeAnyGolden } from '../metrics/sp2aGoldens';
 import { parseToWorker, type ErrorCode, type FromWorker } from './protocol';
 
 const HEX = hex64;
@@ -23,6 +24,7 @@ const CREATE = createGenContext;
 const POINT = columnPoint;
 const PAINT = paintTile;
 const SPAWN = findSpawn;
+const GOLDEN = computeAnyGolden;
 const PARSE = parseToWorker;
 
 export interface Reply {
@@ -56,6 +58,13 @@ export function createTaskHandler(): TaskHandler {
           const hex: Record<string, string> = {};
           for (const [k, v] of Object.entries(h)) hex[k] = HEX(v);
           return { msg: { type: 'ready', epoch, stageHashes: hex, genKey: HEX(GEN_KEY(seed, h)) }, transfer: [] };
+        }
+        if (m.type === 'selftest') {
+          try {
+            return { msg: { type: 'selftestResult', jobId: m.jobId, key: m.key, actual: GOLDEN(m.key), error: null }, transfer: [] };
+          } catch (e) {
+            return { msg: { type: 'selftestResult', jobId: m.jobId, key: m.key, actual: null, error: e instanceof Error ? e.message : String(e) }, transfer: [] };
+          }
         }
         if (ctx === null) return err(m.jobId, 'NOT_CONFIGURED', 'no configure yet');
         if (m.epoch !== epoch) return err(m.jobId, 'STALE_EPOCH', `job epoch ${m.epoch}, worker epoch ${epoch}`);

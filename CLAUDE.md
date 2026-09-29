@@ -23,7 +23,8 @@ Browser voxel explorer + editor (TypeScript, Vite, three.js r186 WebGL2 with cus
 - `npm run test:goldens` — record and merge goldens (refuses changed goldens without a `GENERATOR_VERSION` bump)
 - `npm run test:accept-schema` — rewrite `test/schema-shape.lock.json` (refuses a removed, renamed or re-kinded leaf unless `SCHEMA_VERSION` was bumped with a migration)
 - `npm run docs:params` — regenerate the README parameter table from the schema
-- `npx --yes bun@1 test/tools/goldensJsc.ts` — recompute the SP1 goldens under JavaScriptCore (D20; SP exit evidence); the lab's determinism panel (`?lab=noise`) does the same in Chrome and Firefox
+- `npx --yes bun@1 test/tools/goldensJsc.ts` — recompute every golden (SP1 and SP2a) under JavaScriptCore (D20; SP exit evidence); `?selftest=1` does the same in a real module worker in Chrome and Firefox, and `?lab=noise` keeps the SP1 panel
+- `?map` — the SP2a world map (layers, hover, seed, profiles, JSON patch)
 - `docker compose up world-imaginer-voxel`
 - Each sub-project appends its id to `STARTED_SPS` in `test/harness/sp.ts` in its first commit. Appending changes the lock (`test/thresholds.lock.json`), so run `npm run test:accept-thresholds` and amend the spec in the same change.
 

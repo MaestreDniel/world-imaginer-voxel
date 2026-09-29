@@ -30,6 +30,8 @@ export interface WorkerPool {
   tile(req: TileRequest, priority: number): Promise<ArrayBuffer>;
   point(x: number, z: number, priority?: number): Promise<ColumnPoint>;
   spawn(): Promise<Spawn>;
+  /** Recomputes one golden in a worker (no configure needed). */
+  selftest(key: string): Promise<{ actual: string | null; error: string | null }>;
   /** Rejects queued tile jobs matching `pred` with JobCancelled. */
   cancelTiles(pred: (req: TileRequest) => boolean): void;
   readonly queued: number;
@@ -138,6 +140,11 @@ export function createWorkerPool(size: number, spawn: () => WorkerLike): WorkerP
       if (r.type !== 'spawnResult') throw new Error(`unexpected reply ${r.type}`);
       return r.spawn;
     },
+    async selftest(key) {
+      const r = await enqueue(0, (jobId) => ({ type: 'selftest', jobId, key }), null);
+      if (r.type !== 'selftestResult') throw new Error(`unexpected reply ${r.type}`);
+      return { actual: r.actual, error: r.error };
+    },
     cancelTiles(pred) {
       queue = queue.filter((j) => {
         if (j.tile !== null && pred(j.tile)) { j.reject(new JobCancelled()); return false; }
@@ -152,8 +159,8 @@ export function createWorkerPool(size: number, spawn: () => WorkerLike): WorkerP
   };
 }
 
-/** Browser pool of module workers running task.worker.ts. */
-export function createBrowserPool(): WorkerPool {
-  return createWorkerPool(poolSize(navigator.hardwareConcurrency || 4), () =>
+/** Browser pool of module workers running task.worker.ts (size defaults to clamp(cores − 2, 2, 6)). */
+export function createBrowserPool(size = poolSize(navigator.hardwareConcurrency || 4)): WorkerPool {
+  return createWorkerPool(size, () =>
     new Worker(new URL('../workers/task.worker.ts', import.meta.url), { type: 'module' }) as unknown as WorkerLike);
 }
