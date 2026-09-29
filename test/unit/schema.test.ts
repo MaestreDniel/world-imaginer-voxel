@@ -34,7 +34,7 @@ test('defaults match spec §4.3', () => {
   expect([c.warp.shift.noise, c.warp.C.noise, c.warp.R.noise].map((n) => [n.wavelength, n.octaves, n.remap])).toEqual([[256, 3, 'none'], [1024, 2, 'none'], [512, 2, 'none']]);
   expect([c.C, c.E, c.W, c.T, c.H, c.R].map((n) => [n.wavelength, n.octaves, n.remap, n.persistence, n.lacunarity, n.double])).toEqual([
     [2400, 6, 'uniform', 0.5, 2, true], [1600, 5, 'uniform', 0.5, 2, true], [900, 5, 'uniform', 0.5, 2, true],
-    [5000, 4, 'uniform', 0.5, 2, true], [2400, 4, 'uniform', 0.5, 2, true], [1400, 4, 'uniform', 0.5, 2, true],
+    [5000, 4, 'uniform', 0.5, 2, true], [2400, 4, 'uniform', 0.5, 2, true], [1000, 4, 'uniform', 0.5, 2, true],
   ]);
   expect(Object.isFrozen(DEFAULTS.climate.C)).toBe(true);
 });

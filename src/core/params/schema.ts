@@ -45,7 +45,7 @@ export const ROOT = group('Parameters', 'World generation parameters.', {
     W: field('Weirdness', 'Ridges at |W| = 2/3 via PV; sign selects variants.', 900, 5),
     T: field('Temperature', 'Cold ↔ hot; zones about twice the size of humidity zones.', 5000, 4),
     H: field('Humidity', 'Dry ↔ wet.', 2400, 4),
-    R: field('Rivers', 'Its zero set gives the river lines.', 1400, 4),
+    R: field('Rivers', 'Its zero set gives the river lines.', 1000, 4),
   }),
   shape: group('Shape', 'Target height, overhang and jaggedness in blocks (master §3.3).', {
     offset: spline(OFFSET_DEFAULT, { ...SHAPE, label: 'Offset', doc: 'Target surface y in blocks from C → E → PV.', coords: SHAPE_COORDS, min: -64, max: 320 }),
@@ -53,8 +53,8 @@ export const ROOT = group('Parameters', 'World generation parameters.', {
     jag: spline(JAG_DEFAULT, { ...SHAPE, label: 'Jaggedness', doc: 'Amplitude of ridged peaks in blocks (clamped at 0).', coords: SHAPE_COORDS, min: -16, max: 128 }),
   }),
   rivers: group('Rivers', 'Channels, valleys and gorges along the zero set of R (master §3.4).', {
-    widthMin: blocks(5, 'Minimum width', 'Channel width where the width noise is lowest.', 1, 64),
-    widthVar: blocks(9, 'Width variation', 'Extra channel width where the width noise is highest.', 0, 64),
+    widthMin: blocks(8, 'Minimum width', 'Channel width where the width noise is lowest.', 1, 64),
+    widthVar: blocks(12, 'Width variation', 'Extra channel width where the width noise is highest.', 0, 64),
     widthNoise: shapeNoise('Width noise', 'Uniform noise u2 that varies the width and depth along the river.', 600, 2, { remap: 'uniform' }),
     valleyBase: blocks(30, 'Valley width', 'Valley half-width on flat ground (E = −1).', 0, 400),
     valleyPerE: blocks(45, 'Valley width per E', 'Extra valley half-width per unit of (1 + E).', 0, 400),

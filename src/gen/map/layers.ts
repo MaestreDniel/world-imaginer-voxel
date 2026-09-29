@@ -55,7 +55,9 @@ export function layerColor(layer: LayerId, p: PointRecord, k: number): number {
       if (p.riverWet) return 0x2f6fe0;
       if (p.gorge) return 0xe07a2a;
       const base = GREY(reliefColor(p, k));
-      return p.riverDist < 64 ? BLEND(base, 0x9cc8f0, 0.6 * (1 - p.riverDist / 64)) : base;
+      // No proximity tint on the sea: R's zero set crosses oceans, but rivers only exist on land (§2.4).
+      const sea = p.surfaceWaterLevel > p.surfaceEst && p.lakeMask < 1;
+      return !sea && p.riverDist < 64 ? BLEND(base, 0x9cc8f0, 0.6 * (1 - p.riverDist / 64)) : base;
     }
     case 'lakes': {
       if (p.lakeMask === 1) return BLEND(0x4aa0e0, 0x0c3a8a, (p.lakeLevel - 63) / 137);

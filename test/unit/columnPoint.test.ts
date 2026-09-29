@@ -8,6 +8,7 @@ import { newRiver, sampleRivers } from '../../src/gen/column/rivers';
 import { newShape, sampleShape } from '../../src/gen/column/shape';
 import { steepAt } from '../../src/gen/column/steep';
 import { ctxFor } from '../harness/gen';
+import { samplePoints } from '../../src/metrics/noiseStats';
 import { testFloat, testRng } from '../harness/stats';
 
 describe('waterLevel (master §3.7)', () => {
@@ -57,6 +58,29 @@ describe('columnPoint', () => {
     }
     expect(ocean).toBeGreaterThan(50);
     expect(land).toBeGreaterThan(80);
+  });
+  test('rivers and gorges only where the column would be land without them (offset0 ≥ 63)', () => {
+    const rec = newPointRecord();
+    const sample = samplePoints('columnPoint.riverOnLand', 20000);
+    let wet = 0;
+    for (let i = 0; i < sample.n; i++) {
+      samplePoint(ctx, sample.x[i]!, sample.z[i]!, false, rec);
+      if (rec.riverWet) wet++;
+      if (rec.riverWet || rec.gorge || biomeFamily(rec.biome) === 'river') expect(rec.offset0).toBeGreaterThanOrEqual(63);
+    }
+    expect(wet).toBeGreaterThan(50);
+  });
+  test('regression: seed 42 at (−38343.6, 44384), open ocean on the R zero set, is not a river', () => {
+    // Reported under GENERATOR_VERSION 1 parameters (R wavelength 1400, widths 5/9), where R's zero set crosses here.
+    const v1 = ctxFor('42', { climate: { R: { wavelength: 1400 } }, rivers: { widthMin: 5, widthVar: 9 } });
+    const p = columnPoint(v1, -38343.6, 44384);
+    expect(p.C).toBeLessThan(-0.8);
+    expect(p.offset0).toBeLessThan(63);
+    expect(p.riverDist).toBeLessThan(2.5);
+    expect([p.riverWet, p.gorge]).toEqual([false, false]);
+    expect(biomeFamily(p.biome)).toBe('ocean');
+    expect(p.surfaceWaterLevel).toBe(63);
+    expect(p.offset).toBe(p.offset0);
   });
   test('deterministic plain data; samplePoint without steep matches every other field', () => {
     expect(columnPoint(ctxFor(), 1234.5, -987.25)).toEqual(columnPoint(ctx, 1234.5, -987.25));

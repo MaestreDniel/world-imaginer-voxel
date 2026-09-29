@@ -30,7 +30,7 @@ describe('SP2a schema groups', () => {
   test('river and lake defaults follow master §3.4-3.5', () => {
     const r = DEFAULTS.rivers;
     expect([r.widthMin, r.widthVar, r.valleyBase, r.valleyPerE, r.valleyFloor, r.valleyRise, r.coastFadeLo, r.coastFadeHi, r.altFadeLo, r.altFadeHi, r.depthMin, r.depthVar, r.wetMargin])
-      .toEqual([5, 9, 30, 45, 64, 2, -0.12, -0.02, 120, 170, 3, 3, 2]);
+      .toEqual([8, 12, 30, 45, 64, 2, -0.12, -0.02, 120, 170, 3, 3, 2]);
     expect([r.widthNoise.wavelength, r.widthNoise.remap]).toEqual([600, 'uniform']);
     const l = DEFAULTS.lakes;
     expect([l.cell, l.warpAmp, l.warpNoise.wavelength, l.p, l.minC, l.offsetMin, l.offsetMax, l.ringFrac, l.depthMin, l.depthVar, l.rimRise, l.rimSigma, l.sigmaMul, l.rimNoise.wavelength])

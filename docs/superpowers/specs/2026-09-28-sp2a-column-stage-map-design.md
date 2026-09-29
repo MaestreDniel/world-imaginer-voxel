@@ -165,7 +165,9 @@ Master §3.4 applies, with one amendment found by the plan's dry run (§12). Eve
   - `channelOffset = 63 − (depthMin + depthVar·u2)·profile`;
   - `gorgeOffset = offset0 − gorgeDepth·profile`;
   - `offset = min(offset, lerp(gorgeOffset, channelOffset, s_alt))`, σ = 0.5, jag = 0.
-- **Wet.** Water (surfaceWaterLevel 63, the river biome) applies where `riverDist < w/2 + wetMargin` **and** `lerp(offset0 − gorgeDepth, 63 − depth, s_alt) ≤ 62`. Otherwise a channel column is a dry **gorge**.
+- **Wet.** Water (surfaceWaterLevel 63, the river biome) applies where `offset0 ≥ 63` **and** `riverDist < w/2 + wetMargin` **and** `lerp(offset0 − gorgeDepth, 63 − depth, s_alt) ≤ 62`. A channel column on land that fails the last condition is a dry **gorge**.
+- **Land only** (fix of 2026-09-30). A river, wet or gorge, exists only where the column would be land without it (`offset0 ≥ 63`). On the sea floor the channel still lowers shelves shallower than its floor (a drowned mouth that continues the river under the sea), but it sets neither flag, so the column is sea: the picker gives it its climate biome, as for any other sea column, and the rivers layer shows no river there.
+- **Why the land rule.** R's zero set is a line field that crosses the whole world, oceans included. Before the fix, 47 % of wet columns were at sea: seed 42 at (−38343.6, 44384), with C −0.89 and offset0 17, was a river in deep ocean. A threshold on C cannot replace the rule: the shoreline sits at C −0.138..−0.10 depending on E, and moves whenever the offset spline is edited. `offset0 ≥ 63` is the shoreline itself.
 - **Why the amendment.** With the master formula the valley pulls any terrain near a river down to about 64, however high it is, so a 200-block mountain next to a river became a flat, dry valley at sea level. With `sv` the valley fades on high ground, and the channel cuts a dry gorge `gorgeDepth` (default 12) below offset0 there.
 - **Outputs:** `riverDist`, `width`, `riverStrength = s·s_alt`, `offset`, `sigma`, `jag`, `wet`, `gorge`.
 
@@ -202,7 +204,7 @@ shape    → offset0 sigma0 jag0
 steep    → steep (on offset0; NaN when sampled without steep)
 rivers   → riverDist riverStrength riverWet gorge offset sigma jag
 lakes    → lakeMask lakeLevel lakeFloor offset sigma jag
-water    → surfaceWaterLevel (lake inside → Lw; river wet or offset < 63 → 63; else −∞)
+water    → surfaceWaterLevel (lake inside → Lw; river wet (land only, §2.4) or offset < 63 → 63; else −∞)
 estimate → surfaceEst = offset; islandMask = 0
 biome    → picker at this point (§3.2)
 ```
@@ -275,7 +277,7 @@ biome    → picker at this point (§3.2)
 ### 3.2 Picker (`picker.ts`)
 
 - **Order of rules:**
-  1. River override: `isRiverChannel` gives `river`, or `frozen_river` when T_u < −0.6.
+  1. River override: `isRiverChannel` (the §2.4 wet flag, so land only) gives `river`, or `frozen_river` when T_u < −0.6.
   2. Lake columns keep the land biome underneath: the picker runs on climate only.
   3. Otherwise, for each box: `fitness = Σ_axis overshoot²`, where overshoot is the distance outside the interval (0 inside).
   4. The best is the lowest fitness, with ties broken by the lowest `priority`. `wSign` boxes are skipped when sign(W) disagrees.
@@ -295,7 +297,7 @@ biome    → picker at this point (§3.2)
 | group | stage | leaves (defaults) |
 |---|---|---|
 | `shape` | `shape` | `offset`, `sigma`, `jag`: spline leaves over `C E PV`, with y ranges −64..320, −16..64 and −16..128 (σ and jag clamped at 0 when used) |
-| `rivers` | `shape` | `widthMin` 5, `widthVar` 9, `widthNoise` (λ 600, 2 octaves, uniform), `valleyBase` 30, `valleyPerE` 45, `valleyFloor` 64, `valleyRise` 2, `coastFadeLo` −0.12, `coastFadeHi` −0.02, `altFadeLo` 120, `altFadeHi` 170, `depthMin` 3, `depthVar` 3, `wetMargin` 2, `gorgeDepth` 12 |
+| `rivers` | `shape` | `widthMin` 8, `widthVar` 12, `widthNoise` (λ 600, 2 octaves, uniform), `valleyBase` 30, `valleyPerE` 45, `valleyFloor` 64, `valleyRise` 2, `coastFadeLo` −0.12, `coastFadeHi` −0.02, `altFadeLo` 120, `altFadeHi` 170, `depthMin` 3, `depthVar` 3, `wetMargin` 2, `gorgeDepth` 12 |
 | `lakes` | `shape` | `cell` 320, `jitter` 0.8, `warpAmp` 80, `warpNoise` (λ 360, 2 octaves, .x/.z), `p` 0.12, `minC` −0.1, `offsetMin` 66, `offsetMax` 200, `radius` 90, `rimWidth` 0.35, `roughness` 0.15, `rimNoise` (λ 48, 2 octaves), `ringFrac` 0.55, `depthMin` 4, `depthVar` 10, `rimRise` 2, `rimSigma` 0.5, `sigmaMul` 0.3 |
 | `biomes` | `biome2d` | `table` (boxTable, Appendix A), `zoomJitter` 1.5 |
 
@@ -387,7 +389,7 @@ Messages are plain objects checked by `parseToWorker` / `parseFromWorker`. Coord
 |---|---|
 | `biome` | registry colour |
 | `relief` | hypsometric ramp of surfaceEst (63 → 263), slope-shaded from the NW by `k = 1 + ((west − east) + (north − south))/(4·b)` clamped to [0.55, 1.35]; water (level > surfaceEst) in blue by depth (0-64) |
-| `rivers` | wet channel blue, dry gorge orange, a blue tint for `riverDist < 64`, over grey shaded relief |
+| `rivers` | wet channel blue, dry gorge orange, a blue tint for `riverDist < 64` on land and lakes only (none on the sea, §2.4), over grey shaded relief |
 | `lakes` | lake inside blue by level, rim band sand by m, over grey shaded relief |
 | `C` `E` `PV` `W` `T` `H` `R` | the SP1 diverging map on [−1, 1] |
 | `offset` `sigma` `jag` | a sequential ramp over −64..320, 0..16 and 0..55 |
@@ -434,7 +436,12 @@ The page draws the overlays: the spawn marker, the pinned point, and an optional
 - **Shape and steep:**
   - σ and jag are ≥ 0 (never −0) over 1M random coordinate vectors;
   - `steepFrom` and `steepAt` match the §2.3 formula.
-- **Rivers:** `riverTerms` at named points — channel floor, parabolic profile, valley edge, σ/jag × t, coast fade (a mouth stays wet), gorge depth and the half-altitude case.
+- **Rivers:**
+  - `riverTerms` at named points — channel floor, parabolic profile, valley edge, σ/jag × t, coast fade (the channel stays wet down to the shoreline, offset0 63), gorge depth and the half-altitude case;
+  - the land rule (§2.4): on the sea floor (offset0 < 63, including the reported open-ocean point and a zero-depth channel) the channel still carves a drowned mouth but sets neither flag;
+  - invariant over 20 000 `columnPoint`s: riverWet, gorge and the river family only where offset0 ≥ 63;
+  - regression: seed 42 at (−38343.6, 44384) under the GENERATOR_VERSION 1 river parameters (R λ 1400, widths 5/9, where R's zero set crosses it) is ocean with no flag;
+  - the rivers layer tints river proximity on land and lakes only.
 - **Lakes:**
   - `lakeTerms` inside, on the rim (containment `Lw + rimRise + 3·rimSigma` at the inner edge) and outside;
   - the `cellEligible` rules;
@@ -496,6 +503,7 @@ All metrics sample fixed windows inside the colKey window with world seeds 1..S.
 | B2 (column) | median river length weighted by river cells (the length half the river water lies in, from component bounding boxes); share of land; components ≥ 300 blocks touching sea water; gorge columns cut ≥ 8 per 100 km² of land with offset0 ≥ 120; dry river biome | ≥ 300 / 2-7 % / ≥ 50 % / ≥ 1 / 0 | 551 / 3.6 % / 71 % / 2973 / 0 |
 | B5 (column) | lake-mask components per km² of land; share with Lw ≥ 70 | 0.2-2 / ≥ 30 % | 1.38 / 47 % |
 
+- **After the fix of 2026-09-30** (GENERATOR_VERSION 2, land-only rivers and the river retune), the full tier measures B2 at 498 / 3.5 % / 62 % / 7573 / 0 and the ocean family at 39.2 %. See Exit evidence.
 - **T3 on 2D relief is not an SP2a metric** (§12). In SP2a the terrain is independent of the biomes by construction, and a unit test (§7.1) pins that. T3 as defined measured the correlation "mountain biomes are steep" (2.38), not the biome cliffs it targets. T3 stays in SP3 on voxel terrain.
 - A metric that fails is fixed by retuning the data defaults, never by moving a threshold without a spec amendment.
 
@@ -551,6 +559,7 @@ Dry run: column.sample p50 0.36 ms, p99 0.51 ms; tiles about 0.31-0.34 s; killRa
 - **§6.1:** the metrics master list gains `T1lowland` (gated ≤ 0.40 from SP2a).
 - **§10 SP2a exit:** T3 on 2D relief is replaced by the unit test that the terrain does not depend on the biomes (§12).
 - **§3.4:** the valley fades with altitude and high ground gets dry gorges (§2.4).
+- **§3.4 and §3.2 (fix of 2026-09-30):** rivers are land only: the wet flag, the gorge flag and the river biome need `offset0 ≥ 63`, and on the sea floor the channel only carves a drowned mouth (§2.4). The river retune goes with it: R λ 1400 → 1000, `w = 8 + 12·u2` (was 5 + 9·u2).
 - **§5.6:** map levels are 256 (preview) / 64 / 16 / 4 blocks per pixel.
 - **§1** module layout lists `gen/map/`, `workers/taskHandler.ts`, `ui/map/`, `ui/selftest/` and `test/integration/`.
 - The rule scopes gain `metrics/**` and the SP1 metrics files (the SP1 review's deferred minor).
@@ -560,10 +569,13 @@ Dry run: column.sample p50 0.36 ms, p99 0.51 ms; tiles about 0.31-0.34 s; killRa
 - **SP2b:**
   - The schema-driven panel, the spline editor and the biome table edit the same `WorldSession.patch`. The map's per-layer `layerHash` already gives the partial invalidation the ≤ 300 ms spline-edit preview needs.
   - Fix the SP1 deferred minors that become reachable through the editor: spline knot and tangent bounds, and tiny amplitudes.
-- **SP3:** replace the 2D `surfaceEst` (bump `surfaceEst`), fill `islandMask`, add T1/T5 against voxel terrain, and re-check the lowland diagnostic against T1.
+- **SP3:**
+  - Replace the 2D `surfaceEst` (bump `surfaceEst`), fill `islandMask`, add T1/T5 against voxel terrain, and re-check the lowland diagnostic against T1.
+  - Inside `w/2` the channel sets σ = 0.5 and jag = 0 even on the sea floor, where it does not lower `offset` (§2.4). On the map, only the `sigma` layer shows it, as a thin line along R's zero set across oceans (σ0 is 3 there). Voxel terrain would get a smooth stripe on the ocean floor. Limit the σ/jag override to where the channel lowers `offset`.
 - **SP4:** mount `ui/map` as the in-game panel; wire click-to-teleport.
 - **SP2b — biome-size slider (user request, 2026-09-29).** A 1-10 slider in the panel that drives `climate.scaleMul = 4^((v − 5)/5)`: 5 = default (1), 10 = large_biomes (4), 1 ≈ 0.33.
 - **Future profile "continental" (user request, 2026-09-29; SP3 or SP12).** Large continents with islands in open ocean, the opposite of today's inland-sea look: C at a much longer wavelength (about 8000) with an offset spline where deep ocean dominates the low C band.
+- **Islands and archipelagos in open ocean (user request, 2026-09-30; with the continental profile, SP3 or SP12).** Small islands or archipelagos at extremely low C, to liven up open oceans. Islets need no rivers. The land rule (§2.4) lets a channel cross any column with offset0 ≥ 63, so an island mechanism also gates rivers off islets, for example through `islandMask` or a minimum island size.
 - **Volcanic cone (receiving SP: SP12 by default, pullable earlier by amendment).**
   - A column-stage term modelled on the lakes:
     - sparse warped-Voronoi cells enabled only where the cell centre has T_u ≥ 0.6 and offset0 ≥ 120;
@@ -690,6 +702,36 @@ Tuning of 2026-09-29, with GENERATOR_VERSION 0 → 1:
 - Production after the tuning (e75cea2, CI green):
   - `?map` first image 111 / 115 / 113 ms in headless Chrome (target ≤ 300 ms), all `?map` checks green;
   - `?selftest=1` `✓ all 47 goldens match` in headless Chrome (5.8 s) and 47/47 in Firefox 152 (the user; JSON in `assets/sp2a/selftest-firefox-v1.json`).
+
+Fix of 2026-09-30, GENERATOR_VERSION 1 → 2 (rivers in open ocean, reported by the user from production):
+- Rivers are land only (§2.4): no wet or gorge flag, and so no river biome, where offset0 < 63. The rivers layer no longer tints river proximity on the sea (§6.2).
+- Retune that goes with it: R λ 1400 → 1000, `widthMin` 5 → 8, `widthVar` 9 → 12, which brings the river land share back to what it was before the fix.
+- Goldens re-recorded: 14 keys changed (sp1.params through genKey's version, the column points and sample, spawn, and biome, relief and rivers at 64, 16 and 4). The preview tiles did not change, since level 256 samples no rivers.
+- `npm run build`, `npm test` (627 passed, 2 skipped), quick and full metrics green. Bun 47/47. Gated bench: `column.sample p50 0.346 ms, p99 (≥ p95) 0.485 ms`.
+- Every metric that moved. The others (B4, N4 other than spawnTopShare, T6, T8, T1lowland) are unchanged at the precision of the table above:
+
+| metric | before (full) | fast | quick | full |
+|---|---|---|---|---|
+| B1.minShare | 0.0037 | 0.0037 | 0.0037 | 0.0037 |
+| B1.minRareShare | 0.007 | 0.007 | 0.0069 | 0.0069 |
+| B1.largestLand | 0.0732 | 0.0718 | 0.0722 | 0.072 |
+| B1.oceanFamily | 0.3841 | 0.393 | 0.3919 | 0.3917 |
+| B1.outside | 0.0019 | 0.0019 | 0.0018 | 0.0018 |
+| N4.spawnTopShare | 0.1406 | 0.125 | 0.125 | 0.125 |
+| T7.value | 1.002 | 0.9855 | 0.9866 | 1.001 |
+| B2.medianLength | 551.3 | 405.6 | 403.1 | 497.7 |
+| B2.landShare | 0.0361 | 0.0373 | 0.0318 | 0.0352 |
+| B2.mouths | 0.7143 | 0.6471 | 0.6667 | 0.6173 |
+| B2.gorgesPer100km2 | 2973 | 6618 | 8133 | 7573 |
+| B5.perKm2 | 1.38 | 0.979 | 1.364 | 1.17 |
+| B5.highShare | 0.4681 | 0.4286 | 0.4737 | 0.4615 |
+
+- Why the retune. With the land rule alone, three locked gates failed:
+  - B2 land share: 1.57-1.67 %, against a minimum of 2 %;
+  - B2 mouths: 0.375 on the full tier, against a minimum of 0.5;
+  - B1 minShare: 0.19 % (frozen river), against a minimum of 0.3 %.
+  The earlier values passed only because about half of the river cells were at sea, and B2 counts every river cell as land. The retune meets the gates with real land rivers; no threshold moved.
+- Open, handled separately: about 83 % of the coast-band columns picked as beach, snowy beach or stony shore are under water, because the C band −0.22..−0.10 is wider than the shoreline (−0.138..−0.10).
 
 
 ### Threshold log

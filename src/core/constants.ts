@@ -1,5 +1,5 @@
 /** Bumped whenever generated output changes; goldens and saves are bound to it (§6.2). */
-export const GENERATOR_VERSION = 1;
+export const GENERATOR_VERSION = 2;
 
 /** World geometry (master §2.1): lowest block y, world height and sea level. */
 export const MIN_Y = -64;

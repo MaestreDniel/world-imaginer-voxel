@@ -443,7 +443,7 @@ Warps:
 | W weirdness | 900 | 5 | `PV = 1 − \|3\|W\| − 2\|` (ridges at \|W\| = 2/3); sign(W) selects variants |
 | T temperature | 5000 | 4 | zones about 2× larger than H (09 used 480 for both) |
 | H humidity | 2400 | 4 | |
-| R rivers | 1400 | 4 | its zero set gives the river lines |
+| R rivers | 1000 | 4 | its zero set gives the river lines |
 
 - All six fields are **CDF-uniform** (chosen over MC's 3σ normal so shares are authorable) on [−uMax, uMax] with uMax = 0.9973, so a band inside that range has area share width / 2. Spline knots at ±1 act as end knots. (`X_u` and `X` denote the same uniform field; the suffix is only emphasis.)
 - `climate.scaleMul` divides the climate stage's input coordinates before warping, `(x,z) → (x/s, z/s)`: an exact zoom of every climate λ, warp λ and warp amplitude; `large_biomes` sets it to 4.
@@ -472,13 +472,14 @@ There are no downstream multipliers: the editor's y-axis *is* the terrain.
 ### 3.4 Rivers (column stage; exact on the map and LOD)
 
 - **Distance:** `riverDist = |R_z| / max(|∇R_z|, 1e-4)` in blocks, with ±2-block central differences.
-- **Width:** `w = 5 + 9·u2`, where u2 comes from a λ 600 noise. `valleyWidth = 30 + 45·(1+E)`.
-- **Strengths:** the coastal factor `s = smoothstep(−0.12, −0.02, C)` fades only the valley (rivers stay out of the ocean without sealing their mouths); the altitude factor `s_alt = 1 − smoothstep(120, 170, offset0)` fades the channel into mountain gorges.
+- **Width:** `w = 8 + 12·u2`, where u2 comes from a λ 600 noise (5 + 9·u2 until the SP2a fix of 2026-09-30). `valleyWidth = 30 + 45·(1+E)`.
+- **Strengths:** the coastal factor `s = smoothstep(−0.12, −0.02, C)` fades only the valley, so the channel reaches the shore with its floor (rivers stay out of the ocean through the land rule below); the altitude factor `s_alt = 1 − smoothstep(120, 170, offset0)` fades the channel into mountain gorges.
 - **Valley:** `t = 1 − detExp(−(max(0, riverDist − w/2)/valleyWidth)²)`. Then `valleyOffset = lerp(min(offset0, 64 + 2t), offset0, t)`, and σ and jag are scaled by t (by s·t overall).
 - **Channel** (riverDist < w/2): `channelOffset = 63 − (3 + 3·u2)·(1 − (2·riverDist/w)²)`, σ = 0.5, jag = 0.
 - **SP2a amendment:** the valley's strength is `s·s_alt`, so valleys fade on high ground; there the channel cuts a dry gorge `gorgeDepth` (12) below offset0 instead of a valley pulled to sea level (SP2a spec §2.4).
-- **Final:** outside the channel `offset = lerp(offset0, valleyOffset, s)`; in the channel `offset = min(lerp(offset0, valleyOffset, s), lerp(offset0, channelOffset, s_alt))`, so the channel keeps its floor of 57-60 all the way to the ocean.
-- `surfaceWaterLevel = 63` and the River or Frozen River biome apply only where `riverDist < w/2 + 2` **and** the channel-centre offset ≤ 62, so rivers are guaranteed wet (08 rivers were 94% dry). Where `s_alt ∈ (0,1)` leaves the channel above 62, the column is a dry **gorge**: it keeps its land biome and surfaceWaterLevel stays −∞.
+- **Final:** outside the channel `offset = lerp(offset0, valleyOffset, s)`; in the channel `offset = min(lerp(offset0, valleyOffset, s), lerp(offset0, channelOffset, s_alt))`, so the channel keeps its floor of 57-60 all the way to the ocean and continues onto shelves shallower than its floor.
+- **Land only** (SP2a fix of 2026-09-30): a river, wet or gorge, exists only where `offset0 ≥ 63`. On the sea floor the channel still lowers shallower shelves (a drowned mouth), but the column stays sea and gets its climate biome (SP2a spec §2.4).
+- `surfaceWaterLevel = 63` and the River or Frozen River biome apply only where `offset0 ≥ 63`, `riverDist < w/2 + 2` **and** the channel-centre offset ≤ 62, so rivers are guaranteed wet (08 rivers were 94% dry). Where `s_alt ∈ (0,1)` leaves the channel above 62, the column is a dry **gorge**: it keeps its land biome and surfaceWaterLevel stays −∞.
 
 ### 3.5 Lakes at elevation (09 basins [keep], improved with a local water level)
 
@@ -1710,7 +1711,7 @@ Thresholds are locked (`thresholds.lock.json`) and goldens are gated (§6.2). Si
 
 **SP12 — Extreme presets and final tuning** (M; SP11)
 - Finalise amplified, archipelago, floating_islands, large_biomes and cave_heavy; goldens per preset; profile gallery in docs; baselines refreshed; README; received cut-line items.
-- A "continental" profile (user request, 2026-09-29): large continents with islands in open ocean, via a much longer C wavelength (about 8000) and deep-ocean-dominated low C; it may move to SP3 by amending this section.
+- A "continental" profile (user request, 2026-09-29): large continents with islands in open ocean, via a much longer C wavelength (about 8000) and deep-ocean-dominated low C; it may move to SP3 by amending this section. With it (user request, 2026-09-30): small islands or archipelagos at extremely low C, with no rivers on islets.
 - The volcanic cone (reserved by SP2a, its spec §10): sparse cells in hot high ground add a cone and crater to `offset` and assign the volcano biome by mask; lava in the crater uses SP7's fluids. It may move to an earlier SP by amending this section.
 - **Exit:** Z1-Z4; cave_heavy C1 10-22 %; every other active metric green per preset; DT1 goldens stable; no open cut-line items (unless explicitly dropped by the user with the D-decision impact recorded).
 

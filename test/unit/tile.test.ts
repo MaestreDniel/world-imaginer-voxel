@@ -24,6 +24,14 @@ describe('layers and palette', () => {
     expect([diverging(-1), diverging(1), hypsometric(63), hypsometric(263), sequential(0, 0, 1), sequential(1, 0, 1)])
       .toEqual([0x3b4cc0, 0xb40426, 0x3d7a3a, 0xf4f4f4, 0x0d0887, 0xf0f921]);
   });
+  test('the rivers layer tints river proximity on land and lakes only, never on the sea', () => {
+    const tinted = (surfaceEst: number, surfaceWaterLevel: number, lakeMask: number) => {
+      const rec = { ...newPointRecord(), riverDist: 10, surfaceEst, surfaceWaterLevel, lakeMask };
+      return layerColor('rivers', rec, 1) !== layerColor('rivers', { ...rec, riverDist: 64 }, 1);
+    };
+    expect([tinted(80, 63, 0), tinted(63, 63, 0), tinted(90, 100, 1)]).toEqual([true, true, true]);
+    expect([tinted(40, 63, 0), tinted(90, 100, 0.5)]).toEqual([false, false]);
+  });
   test('NW-lit slope shading is clamped to [0.55, 1.35]', () => {
     expect(slopeShade(70, 70, 70, 70, 16)).toBe(1);
     expect(slopeShade(80, 64, 70, 70, 16)).toBe(1.25);

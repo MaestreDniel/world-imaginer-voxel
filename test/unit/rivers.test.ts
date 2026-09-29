@@ -11,9 +11,9 @@ const base: RiverInput = { Rz: 0, gradLen: 0.01, u2: 0.5, C: 0.3, E: -1, offset0
 const at = (dist: number, over: Partial<RiverInput> = {}) => riverTerms({ ...base, Rz: dist * 0.01, ...over }, P, newRiver());
 
 describe('riverTerms (master §3.4)', () => {
-  test('distance is |R_z| / |∇R_z| and width is 5 + 9·u2', () => {
+  test('distance is |R_z| / |∇R_z| and width is 8 + 12·u2', () => {
     expect(at(12).riverDist).toBeCloseTo(12, 12);
-    expect(at(0).width).toBe(9.5);
+    expect(at(0).width).toBe(14);
     expect(riverTerms({ ...base, Rz: 0.5, gradLen: 0 }, P, newRiver()).riverDist).toBe(5000);
   });
   test('channel centre: floor at 63 − (3 + 3·u2), wet, no jag, σ ≤ 0.5', () => {
@@ -23,11 +23,11 @@ describe('riverTerms (master §3.4)', () => {
     expect(r.sigma).toBe(0.5);
   });
   test('channel profile is parabolic inside w/2', () => {
-    const r = at(9.5 / 4);
+    const r = at(14 / 4);
     expect(r.offset).toBeCloseTo(63 - 4.5 * 0.75, 12);
   });
   test('valley: at the channel edge the floor is min(offset0, 64); far away offset0 returns', () => {
-    const edge = at(9.5 / 2 + 1e-9);
+    const edge = at(14 / 2 + 1e-9);
     expect(edge.offset).toBeCloseTo(64, 6);
     expect(edge.wet).toBe(true);
     const far = at(1000);
@@ -36,18 +36,40 @@ describe('riverTerms (master §3.4)', () => {
     expect(far.sigma).toBeCloseTo(4, 9);
   });
   test('σ and jag are scaled by t inside the valley', () => {
-    const r = at(9.5 / 2 + 30);
+    const r = at(14 / 2 + 30);
     const t = 1 - Math.exp(-1);
     expect(r.sigma).toBeCloseTo(4 * t, 7);
     expect(r.jag).toBeCloseTo(10 * t, 7);
   });
-  test('the coast fade removes the valley but keeps the channel to the sea', () => {
+  test('the coast fade removes the valley but keeps the channel wet down to the shoreline', () => {
     const r = at(20, { C: -0.2 });
     expect(r.offset).toBe(80);
     expect(r.riverStrength).toBe(0);
-    const mouth = at(0, { C: -0.2, offset0: 60 });
-    expect(mouth.offset).toBe(Math.min(60, 63 - 4.5));
-    expect(mouth.wet).toBe(true);
+    for (const offset0 of [63, 64]) {
+      const mouth = at(0, { C: -0.2, offset0 });
+      expect(mouth.offset).toBe(63 - 4.5);
+      expect([mouth.wet, mouth.gorge]).toEqual([true, false]);
+    }
+    expect(at(14 / 2 + 1, { C: -0.2, offset0: 63 }).wet).toBe(true);
+  });
+  test('on the sea floor (offset0 < 63) the channel still carves a drowned mouth but sets no flag', () => {
+    const shelf = at(0, { C: -0.2, offset0: 60 });
+    expect(shelf.offset).toBe(63 - 4.5);
+    expect([shelf.wet, shelf.gorge]).toEqual([false, false]);
+    const edge = at(0, { C: -0.13, offset0: 62.999 });
+    expect([edge.wet, edge.gorge]).toEqual([false, false]);
+    expect(at(14 / 2 + 1, { C: -0.2, offset0: 62.9 }).wet).toBe(false);
+    // The reported open-ocean case: seed 42 (−38343.6, 44384), C −0.890, offset0 16.99, riverDist 0.36.
+    const deep = at(0.36, { C: -0.89, E: 0, offset0: 16.99 });
+    expect(deep.offset).toBe(16.99);
+    expect([deep.wet, deep.gorge]).toEqual([false, false]);
+  });
+  test('no flag below sea level even when a zero depth would make the channel centre dry', () => {
+    const p = { ...P, depthMin: 0, depthVar: 0 };
+    const sea = riverTerms({ ...base, Rz: 0, C: -0.5, offset0: 40 }, p, newRiver());
+    expect([sea.wet, sea.gorge]).toEqual([false, false]);
+    const land = riverTerms({ ...base, Rz: 0, offset0: 80 }, p, newRiver());
+    expect([land.wet, land.gorge]).toEqual([false, true]);
   });
   test('high ground turns the channel into a dry gorge gorgeDepth below offset0, and the valley fades', () => {
     const r = at(0, { offset0: 200 });

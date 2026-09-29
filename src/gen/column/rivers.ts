@@ -72,7 +72,10 @@ export function riverTerms(i: RiverInput, p: RiverParams, out: RiverOut): RiverO
     jag = 0;
   }
   const centre = lerp(i.offset0 - p.gorgeDepth, SEA - depth, sAlt);
-  const wet = riverDist < half + p.wetMargin && centre <= SEA - 1;
+  // A river (wet channel or dry gorge) exists only where the column would be land without it: on the
+  // sea floor (offset0 below sea level) the channel still carves, but the column stays ocean.
+  const land = i.offset0 >= SEA;
+  const wet = land && riverDist < half + p.wetMargin && centre <= SEA - 1;
   out.riverDist = riverDist;
   out.width = w;
   out.riverStrength = s * sAlt;
@@ -80,7 +83,7 @@ export function riverTerms(i: RiverInput, p: RiverParams, out: RiverOut): RiverO
   out.sigma = sigma;
   out.jag = jag;
   out.wet = wet;
-  out.gorge = riverDist < half && !wet;
+  out.gorge = land && riverDist < half && !wet;
   return out;
 }
 
