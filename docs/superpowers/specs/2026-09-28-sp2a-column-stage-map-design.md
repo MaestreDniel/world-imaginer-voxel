@@ -731,6 +731,10 @@ Fix of 2026-09-30, GENERATOR_VERSION 1 → 2 (rivers in open ocean, reported by 
   - B2 mouths: 0.375 on the full tier, against a minimum of 0.5;
   - B1 minShare: 0.19 % (frozen river), against a minimum of 0.3 %.
   The earlier values passed only because about half of the river cells were at sea, and B2 counts every river cell as land. The retune meets the gates with real land rivers; no threshold moved.
+- Production after the fix (50c6e82, CI green):
+  - `?map`: first image 125 / 124 / 127 ms in headless Chrome; all `?map` checks green.
+  - `?selftest=1`: `✓ all 47 goldens match` (5.6 s).
+  - At the reported point, the rivers layer at 16 blocks/px shows rivers and gorges on land only, with no line or tint across the sea.
 - Open, handled separately: about 83 % of the coast-band columns picked as beach, snowy beach or stony shore are under water, because the C band −0.22..−0.10 is wider than the shoreline (−0.138..−0.10).
 
 
