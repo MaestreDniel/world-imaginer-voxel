@@ -1,7 +1,7 @@
 # SP2a — Column stage, worker pool and the `?map` page (Design)
 
 Date: 2026-09-28
-Status: Draft for review
+Status: Approved (2026-09-28); revised by the implementation-plan dry run (2026-09-29, see §12)
 Parent: master spec `2026-09-26-architecture-design.md`. The sections involved are:
 - §10 SP2, which this spec splits into SP2a and SP2b;
 - the data model and generation sections: §2.4, §2.7, §3.0, §3.2-3.5, §3.7, §3.10, §3.16, §3.17;
@@ -25,12 +25,12 @@ Turn the SP1 math core into a playable 2D world: every column's climate, target 
   - the 28 surface biomes (master's 27 plus volcano, decision 6) with picker and jittered-Voronoi zoom;
   - spawn search.
 - A point reference `columnPoint` and a batched `buildColumnSample`, bit-identical at quart corners (DT2).
-- A module-worker task pool with a typed protocol and `MAP_TILE` jobs.
+- A module-worker task pool with a typed protocol and map-tile, point, spawn and selftest jobs.
 - The `?map` page:
   - coarse-first tiles, layers, pan and zoom, and a hover readout;
   - seed and profile, a JSON patch box, and the URL hash.
 - `?selftest=1`: the column and map-tile goldens, recomputed in a real module worker in the browser.
-- Metric tests B1, B4 (climate parts), N4, T3 (2D relief), T6, T7, T8, B2 (column parts) and B5 (column parts); the SP2a goldens; bench kernels with P1 targets.
+- Metric tests B1, B4 (climate parts), N4, T6, T7, T8, T1lowland, B2 (column parts) and B5 (column parts), plus a unit test that the terrain does not depend on the biomes (in place of T3 on 2D relief, §12); the SP2a goldens; bench kernels with P1 targets.
 
 ## Non-goals
 
@@ -64,41 +64,48 @@ Turn the SP1 math core into a playable 2D world: every column's climate, target 
 
 ## Module layout after SP2a
 
-New files only; SP0/SP1 files are unchanged unless listed in §9.
+New files only; SP0/SP1 files are unchanged unless listed in §8-9.
 
 ```
 src/
   core/
-    ids.ts                    SubProjectId gains 'SP2a' | 'SP2b' (and drops 'SP2'); CURRENT_SP (§4.4)
+    ids.ts                    SubProjectId gains 'SP2a' | 'SP2b' (drops 'SP2'); SUB_PROJECTS; CURRENT_SP; MetricId gains 'T1lowland'
+    constants.ts              + MIN_Y, HEIGHT, SEA_LEVEL; MAP_TILE_PX, MAP_LEVELS (§6.1)
+    seed.ts                   + resolveSeedText(text, random) (the SP1 seed-box rule, moved from ui/seedBox.ts)
+    params/kit.ts             + the boxTable leaf kind (§4.1)
     params/schema.ts          + shape.*, rivers.*, lakes.*, biomes.* groups (§4.1)
     params/shapeDefaults.ts   offset / sigma / jag defaults, authored with autoTangents (§2.2)
-    params/biomeDefaults.ts   the 28 surface biome boxes as data (§3.1)
-    params/profiles.ts        readyFrom 'SP2' → 'SP2a'
+    params/biomeDefaults.ts   BOX_BIOMES and the 26 default boxes (§3.1, Appendix A)
+    params/profiles.ts        readyFrom 'SP2' → 'SP2a'; isProfileReady
     stage/registry.ts         prefixes and version bumps for shape, surfaceEst, biome2d, map (§4.2)
   gen/
-    context.ts                GenContext: noises, warps, compiled splines, biome table, per (seed, paramsHash)
-    column/climate.ts shape.ts rivers.ts lakes.ts steep.ts
-    column/columnPoint.ts     the point reference (§2.6)
-    column/columnStage.ts     buildColumnSample + the ColumnSample layout (§2.7)
-    column/columnCache.ts     LRU of 1024 ColumnSamples
+    context.ts                GenContext: prepared noises, compiled splines and boxes, per (seed, params)
+    column/climate.ts shape.ts steep.ts rivers.ts lakes.ts
+    column/columnPoint.ts     samplePoint / columnPoint (the point reference) and sampleCoarse (§2.6)
+    column/columnStage.ts     buildColumnSample, the ColumnSample layout and readout (§2.7-2.8)
+    column/columnCache.ts     LRU of 1024 ColumnSamples keyed by colKey
     column/spawn.ts           spawn search (§2.9)
     biomes/registry.ts picker.ts zoom.ts
-    map/layers.ts tile.ts palette.ts   pure tile painting (§5.3)
+    map/palette.ts layers.ts tile.ts   pure tile painting (§6.1-6.2)
   workers/
     protocol.ts               typed messages + validators (§5.1)
-    taskHandler.ts            pure `handle(msg)`: configure / MAP_TILE / SELFTEST (§5.1)
+    taskHandler.ts            pure handle(msg): configure / mapTile / point / spawn / selftest
     task.worker.ts            the module-worker shell around taskHandler
   engine/
-    workerPool.ts             N workers, configure per epoch, queue, cancellation (§5.2)
-    session.ts                WorldSession: seed text, profile, patch, epoch (§4.3)
+    workerPool.ts             N workers, configure per epoch, priority queue, cancellation (§5.2)
+    session.ts                WorldSession (§4.3)
   ui/
-    map/mapPage.ts mapView.ts tileCache.ts hoverPanel.ts mapState.ts map.css   (§6)
-    selftest/selftestPage.ts
+    seedBox.ts                delegates to core/seed.ts
+    map/mapState.ts tileCache.ts viewMath.ts hoverPanel.ts mapView.ts mapPage.ts map.css   (§6)
+    selftest/selftestPage.ts  (§6.4)
   metrics/
-    sp2aFixtures.ts sp2aGoldens.ts columnStats.ts
+    columnStats.ts            water raster for B2/B5
+    sp2aGoldens.ts            SP2a digests; allGoldenKeys / computeAnyGolden (§7.4)
 test/
-  unit/…  metrics/column.metric.ts biomes.metric.ts water.metric.ts  bench/column.bench.ts
-  integration/twoWorkers.test.ts   (§7.2)
+  harness/gen.ts flood.ts spline.ts
+  unit/…  integration/twoWorkers.test.ts (§7.2)
+  metrics/biomes.metric.ts relief.metric.ts water.metric.ts
+  bench/noise.bench.ts        + the SP2a kernels and the P1 column gate (§7.5)
 ```
 
 ## 1. Coordinates and conventions
@@ -145,44 +152,68 @@ Master §3.2 applies verbatim.
 
 ### 2.4 Rivers (`gen/column/rivers.ts`)
 
-- Master §3.4 applies verbatim. Every constant in it is a schema leaf under `rivers.*` (§4.1).
-- `R_z` is R's NormalNoise value *before* the CDF. Its gradient uses ±2-block central differences in warped space.
-- Outputs: `riverDist`, `riverStrength` (s·s_alt), the adjusted `offset`, `sigma` and `jag`, `surfaceWaterLevel` (63 or −∞), and `isRiverChannel` / `isGorge` flags.
+Master §3.4 applies, with one amendment found by the plan's dry run (§12). Every constant is a `rivers.*` leaf.
+
+- **Inputs.** `R_z` is R's NormalNoise value before the CDF. Its gradient uses ±2-block central differences in R-warped space: `h = 2/scaleMul` scaled units, `∇ = (ΔR_z)/4` per world block. `u2 = (toUniform(widthNoise(xr, zr)) + 1)/2`.
+- `riverDist = |R_z| / max(|∇R_z|, 1e-4)`; `w = widthMin + widthVar·u2`; `valleyWidth = valleyBase + valleyPerE·(1 + E)`.
+- `s = smoothstep(coastFadeLo, coastFadeHi, C)`; `s_alt = 1 − smoothstep(altFadeLo, altFadeHi, offset0)`.
+- **Valley** (amended: strength `sv = s·s_alt` instead of `s`):
+  - `t = 1 − detExp(−(max(0, riverDist − w/2)/valleyWidth)²)`;
+  - `valleyOffset = lerp(min(offset0, valleyFloor + valleyRise·t), offset0, t)`;
+  - `offset = lerp(offset0, valleyOffset, sv)`, with σ and jag × `(1 − sv·(1 − t))`.
+- **Channel** (`riverDist < w/2`, with `r = 2·riverDist/w`, `profile = 1 − r²`):
+  - `channelOffset = 63 − (depthMin + depthVar·u2)·profile`;
+  - `gorgeOffset = offset0 − gorgeDepth·profile`;
+  - `offset = min(offset, lerp(gorgeOffset, channelOffset, s_alt))`, σ = 0.5, jag = 0.
+- **Wet.** Water (surfaceWaterLevel 63, the river biome) applies where `riverDist < w/2 + wetMargin` **and** `lerp(offset0 − gorgeDepth, 63 − depth, s_alt) ≤ 62`. Otherwise a channel column is a dry **gorge**.
+- **Why the amendment.** With the master formula the valley pulls any terrain near a river down to about 64, however high it is, so a 200-block mountain next to a river became a flat, dry valley at sea level. With `sv` the valley fades on high ground, and the channel cuts a dry gorge `gorgeDepth` (default 12) below offset0 there.
+- **Outputs:** `riverDist`, `width`, `riverStrength = s·s_alt`, `offset`, `sigma`, `jag`, `wet`, `gorge`.
 
 ### 2.5 Lakes (`gen/column/lakes.ts`)
 
-- Master §3.5 applies verbatim. Constants are `lakes.*` leaves.
-- **Cells.** Warped Voronoi with cell 320:
-  - Cell centres are jittered by `hash2(seedLakes, i, j)`.
-  - Each enabled cell is evaluated once, at its centre, by a column-stage point call without lakes (no recursion).
-  - `Lw` is computed from 8 ring samples at 0.55·R.
-- **Per column,** the F1 cell gives:
-  - `lakeMask`, from the F1 distance with the λ 48 rim noise;
-  - `lakeLevel = Lw`, with `lakeFloor = Lw − depth`;
-  - the offset, σ and jag adjustments;
-  - `surfaceWaterLevel = Lw` inside the mask.
-- **Order.** Lakes run after rivers. A cell whose centre is in a river valley (`riverDist < valleyWidth`) is disabled.
+Master §3.5, with the concrete formulas the plan fixed. Constants are `lakes.*` leaves.
+
+- **Lake space.** Lakes use world coordinates, so `scaleMul` does not scale them: `(xl, zl) = (x, z) + warpAmp·(Nx(x, z), Nz(x, z))` from `lakes.warpNoise` (.x/.z).
+- **Cells.** Cell `(i, j)` has side `cell`. Its centre is `((i + 0.5 + jitter·(u − 0.5))·cell, (j + 0.5 + jitter·(v − 0.5))·cell)`, with `u = hash2(lakeSeed, i, j)/2³²` and `v = hash4(lakeSeed, 1, i, j)/2³²`. `lakeSeed = deriveSeed(seed, 'lakes.cells')`.
+- **Eligibility** (`cellEligible`):
+  - the centre, as a world point, is evaluated with climate → shape → rivers and no lakes;
+  - the cell is enabled when all of: `hash4(lakeSeed, 2, i, j)/2³² < p`, `C > minC`, `offset0 ∈ [offsetMin, offsetMax]`, not river-wet, and `riverDist > valleyWidth`.
+- **Level.** `Lw = floor(min over 8 ring points of offset0) − 1`. The ring points lie at `ringFrac·radius` from the centre, at the 8 compass directions (diagonals at ±√½). The master's `jag·J` term needs SP3's jag noise and is added there with a stage bump.
+- **Depth.** `depth = depthMin + depthVar·hash4(lakeSeed, 3, i, j)/2³²`.
+- **Cell memo.** Cells are memoised per GenContext under the numeric key `(i + 32768)·65536 + (j + 32768)`. The memo is cleared at 65 536 entries.
+- **Per column.** The F1 cell is the nearest centre among the 3 × 3 cells around `(xl, zl)`, ties to the first in (dj, di) order. Let `d` be its distance and `q = d/radius − roughness·(rimNoise(x, z)/clamp)`.
+  - **Inside** (`q ≤ 1`):
+    - `offset = min(offset, Lw − depth·(1 − max(q, 0)²))`;
+    - σ × sigmaMul, jag = 0;
+    - `lakeMask = 1`, `lakeLevel = Lw`, `lakeFloor = Lw − depth`.
+  - **Rim band** (`1 < q < 1 + rimWidth`):
+    - `m = 1 − (q − 1)/rimWidth`;
+    - `offset += (max(offset, Lw + rimRise + 3·rimSigma) − offset)·m`;
+    - σ → min(σ, rimSigma) by m, jag → 0 by m;
+    - `lakeMask = m`, and there is no water.
+  - **Outside:** unchanged.
+- **Order.** Lakes run after rivers, on the river-adjusted offset, σ and jag.
 
 ### 2.6 `columnPoint(ctx, x, z)` — the point reference
-
-A plain function returning a frozen `ColumnPoint` object:
 
 ```
 climate  → C E W T H R PV
 shape    → offset0 sigma0 jag0
-steep    → steep (on offset0)
-rivers   → riverDist riverStrength offset sigma jag surfaceWaterLevel flags
-lakes    → lakeMask lakeLevel lakeFloor offset sigma jag surfaceWaterLevel
-estimate → surfaceEst = offset
-biome    → surfaceBiome (picker at this point; §3.2)
+steep    → steep (on offset0; NaN when sampled without steep)
+rivers   → riverDist riverStrength riverWet gorge offset sigma jag
+lakes    → lakeMask lakeLevel lakeFloor offset sigma jag
+water    → surfaceWaterLevel (lake inside → Lw; river wet or offset < 63 → 63; else −∞)
+estimate → surfaceEst = offset; islandMask = 0
+biome    → picker at this point (§3.2)
 ```
 
-- The steps run in exactly this order. Each step is a separate exported function, so metrics and the hover can call a prefix.
-- It is written for clarity: a few allocations per call are fine. The fast path is §2.7.
+- `samplePoint(ctx, x, z, withSteep, out)` writes every field into a reused `PointRecord` in exactly this order. `columnPoint(ctx, x, z)` is `samplePoint` with steep into a fresh record.
+- Each step is a separate exported function (`sampleClimate`, `sampleShape`, `steepAt`, `sampleRivers`, `sampleLakes`, `waterLevel`, `pickBiome`), so metrics and the batch path call them directly.
+- `sampleCoarse(ctx, x, z, out)` is the preview-level point (§6.1): climate, shape and biome only. It has no river, no lake, and `offset = offset0`.
 
 ### 2.7 `ColumnSample` and `buildColumnSample(ctx, cx, cz, out)`
 
-- **Layout:** a `Float64Array` per field over the 7 × 7 lattice (index `(j+1)·7 + (i+1)`), plus `surfaceBiomeQ: Uint8Array(49)`. This is about 6.5 KB (master §2.4).
+- **Layout:** a `Float64Array(49)` per field over the 7 × 7 lattice (index `(j+1)·7 + (i+1)`), plus `flags` and `biome` as `Uint8Array(49)`. With 22 fields this is about 8.7 KB, more than master §2.4's estimate of 6.5 KB.
 - **Fields:**
   - `C E W T H R PV`;
   - `offset0 sigma0 jag0`;
@@ -191,20 +222,22 @@ biome    → surfaceBiome (picker at this point; §3.2)
   - `lakeMask lakeLevel lakeFloor`;
   - `steep surfaceEst`;
   - `islandMask` (0);
-  - the flags as a `Uint8Array`.
+  - flags (bit 0 river wet, bit 1 gorge).
 - **The same operations as `columnPoint`, in the same order.**
   - The only reuse allowed is of values that `columnPoint` would compute identically. These are:
     - lattice-point climate and `offset0` shared by the steep stencil;
     - per-cell lake levels, cached by cell id per ColumnSample.
   - Hoisting a computation out of a point is allowed only when the hoisted expression is the same IEEE expression. A code comment names each hoist.
 - **Writes into `out`**, a reused ColumnSample, with no allocation in steady state. The bench checks this through the heap-growth assertion used for SP1's spline program.
-- **`columnCache.ts`:** an LRU of 1024 ColumnSamples per worker, keyed by `(cx, cz)` and cleared on `configure`.
+- **Halo steep.** Halo lattice points compute their steep neighbour outside the lattice with the same `offset0At` the point path uses.
+- **`columnCache.ts`:** an LRU of 1024 ColumnSamples per GenContext, keyed by `colKey = (cx + 32768)·65536 + (cz + 32768)` (master §2.1: no string keys).
 
 ### 2.8 Readout
 
-- `readField(sample, field, x, z)` interpolates bilinearly inside the column.
+- `readField(sample, field, x, z)` interpolates the continuous fields bilinearly inside the column.
+- `readLevel(sample, field, x, z)` reads the level fields (`lakeLevel`, `lakeFloor`, `surfaceWaterLevel`, which may be −∞) from the nearest quart corner. Bilinear mixing of −∞ would give NaN.
 - `readBiome(sample, ctx, x, z)` uses the zoom (§3.3).
-- Both return exactly the lattice value at quart corners.
+- All three return exactly the lattice value at quart corners.
 
 ### 2.9 Spawn (`gen/column/spawn.ts`)
 
@@ -221,23 +254,23 @@ biome    → surfaceBiome (picker at this point; §3.2)
 
 ### 3.1 Registry and boxes
 
-- **The 28 biomes of master §3.10** (volcano included), each with:
-  - `id` (a stable u8, in master order);
+- **The 28 biomes of master §3.10** (volcano included). The registry (`gen/biomes/registry.ts`) keeps, per biome:
+  - `id` (a stable u8, the index in master order, with volcano last);
   - `name`;
   - `family` (ocean | coast | river | lowland | highland);
-  - `priority` (a unique integer);
-  - a colour for the map;
-  - a **box**: an interval per climate axis `C, E, PV, T, H` and an optional `wSign` (−1 | 0 | +1).
-- **Authoring rules** (master §3.10), checked by a unit test on the default table:
+  - a map colour.
+- **Boxes.** The 26 box-picked biomes (all but river and frozen river) get a box in `params.biomes.table` (a `boxTable` leaf, §4.1): an interval per climate axis `C, E, PV, T, H`, a `wSign` (−1 | 0 | +1) and a unique `priority`.
+- **Authoring rules**, checked by a unit test on the default table:
   - T and H edges are on −0.6 / −0.2 / 0.2 / 0.6.
-  - C bands: deep ocean < −0.55; ocean < −0.22; coast −0.22..−0.10; near inland −0.10..0.05; mid 0.05..0.30; far > 0.30.
-  - E has 7 bands, with edges −0.78 / −0.375 / −0.2225 / 0.05 / 0.45 / 0.55.
-  - PV runs from valleys (< −0.6) up to peaks (> 0.7).
-  - Windswept and peak boxes bound T.
-  - Beach covers the whole coast band for temperate T, with no PV restriction. Snowy beach covers cold T and stony shore covers high E.
-  - River and frozen river are not picked from boxes: they come from the river flag (§3.2).
-  - Volcano takes the hot-peaks niche: T in the top band (T_u ≥ 0.6), PV > 0.7 and E in the two lowest bands (mountainous). It sits in the highland family with a priority above stony peaks and badlands, so those no longer receive hot peaks. B1 treats it as rare.
-- **The table is data under `biomes.*`** (§4.1). The concrete default table (28 rows) is authored in the implementation plan's first biome task. It is tuned there against B1/B4 on the fast tier and recorded as Appendix A of this spec in the same commit. The rules above are the contract; the numbers are tuning.
+  - C bands: deep ocean < −0.55; ocean < −0.22; coast −0.22..−0.10; inland above.
+  - E splits mountains (< −0.375) from lowlands.
+  - PV edges −0.6 (valleys), 0.2 (meadow) and 0.7 (peaks).
+  - Windswept, snowy slopes and every peak box bound T.
+  - The coast band holds beach (T ≥ −0.6), snowy beach (T < −0.6) and stony shore (mountain E), with no PV restriction.
+  - Volcano takes the hot peaks: T ≥ 0.6, PV ≥ 0.7, mountain E. Hot mountain slopes are badlands.
+  - River and frozen river come from the river flag (§3.2).
+- **Partition.** The default boxes tile the climate space: every point lies in exactly one box, apart from shared edges and one small gap (hot, humid valleys, which go to the nearest box by overshoot). A unit test checks 20 000 random points.
+- **The default table is Appendix A.** The dry run measured it against B1/B4 and needed no tuning.
 
 ### 3.2 Picker (`picker.ts`)
 
@@ -259,20 +292,21 @@ biome    → surfaceBiome (picker at this point; §3.2)
 
 ### 4.1 Schema additions (all `scope: 'terrain'`, one stage each)
 
-| group | stage | leaves |
+| group | stage | leaves (defaults) |
 |---|---|---|
-| `shape` | `shape` | `offset`, `sigma`, `jag` (spline leaves, coords `C E W PV`, y range per master §3.3) |
-| `rivers` | `shape` | `widthMin` 5, `widthVar` 9, `widthNoise` (λ 600), `valleyBase` 30, `valleyPerE` 45, `coastFade` [−0.12, −0.02], `altFade` [120, 170], `channelDepthMin` 3, `channelDepthVar` 3, `wetMargin` 2 |
-| `lakes` | `shape` | `cell` 320, `warpAmp` 80, `warpNoise` (λ 360), `p` 0.12, `offsetRange` [66, 200], `minC` −0.1, `ringFrac` 0.55, `depthMin` 4, `depthVar` 10, `rimNoise` (λ 48), `rimRise` 2, `rimSigma` 3, `sigmaMul` 0.3 |
-| `biomes` | `biome2d` | `table` (a list leaf of box rows, §3.1), `zoomJitter` 1.5 |
+| `shape` | `shape` | `offset`, `sigma`, `jag`: spline leaves over `C E PV`, with y ranges −64..320, −16..64 and −16..128 (σ and jag clamped at 0 when used) |
+| `rivers` | `shape` | `widthMin` 5, `widthVar` 9, `widthNoise` (λ 600, 2 octaves, uniform), `valleyBase` 30, `valleyPerE` 45, `valleyFloor` 64, `valleyRise` 2, `coastFadeLo` −0.12, `coastFadeHi` −0.02, `altFadeLo` 120, `altFadeHi` 170, `depthMin` 3, `depthVar` 3, `wetMargin` 2, `gorgeDepth` 12 |
+| `lakes` | `shape` | `cell` 320, `jitter` 0.8, `warpAmp` 80, `warpNoise` (λ 360, 2 octaves, .x/.z), `p` 0.12, `minC` −0.1, `offsetMin` 66, `offsetMax` 200, `radius` 90, `rimWidth` 0.35, `roughness` 0.15, `rimNoise` (λ 48, 2 octaves), `ringFrac` 0.55, `depthMin` 4, `depthVar` 10, `rimRise` 2, `rimSigma` 0.5, `sigmaMul` 0.3 |
+| `biomes` | `biome2d` | `table` (boxTable, Appendix A), `zoomJitter` 1.5 |
 
-- New leaf kinds are the smallest additions to the SP1 kit:
-  - `pair(min, max)`, an ordered numeric interval;
-  - `list(rowSchema, {minLen, maxLen})` for the biome table.
-
-  Both come with their validation codes, patch semantics (a list is replaced whole, never merged) and README rendering.
+- **One new leaf kind: `boxTable`.** `ParamKind` already reserved it.
+  - Its value is `{[row]: {C, E, PV, T, H: [lo, hi], wSign, priority}}`, with the row names fixed by the leaf.
+  - Intervals lie within [−1, 1] with lo < hi. `wSign` is −1, 0 or 1. Priorities are integers 1..1000, unique within the table.
+  - New issue codes: `BAD_INTERVAL` and `DUPLICATE_PRIORITY`.
+  - A patch replaces the whole table (merge `atomic`), and the README shows a row count.
+- Numeric intervals such as the fades are two `num` leaves, not a pair kind (YAGNI).
 - **Governance:**
-  - The schema-shape lock gains the new leaves: added leaves need only an accept. No existing leaf changes kind, so `SCHEMA_VERSION` stays 1.
+  - The schema-shape lock accepts the added leaves. No existing leaf changes kind, so `SCHEMA_VERSION` stays 1.
   - The README table regenerates.
   - U4 stays green.
 
@@ -289,16 +323,15 @@ Every version bump is part of the golden preimages. `GENERATOR_VERSION` stays 0 
 ### 4.3 `WorldSession` (`engine/session.ts`)
 
 - **State:** `{seedText, seed, profile, patch, params, epoch}`.
-- `setSeedText(text)` applies SP1 §1.4: trim, and an empty box draws a random seed and writes it back.
-- `setProfile(id)` accepts only a ready profile (§4.4) and resets the patch to `{}` after confirmation in the UI.
+- `new WorldSession(random, init?)` takes the random-seed source as a parameter. The page passes `cryptoSeed`, and tests pass a constant.
+- `setSeedText(text)` applies SP1 §1.4 through `core/seed.resolveSeedText(text, random)`: trim, and an empty box draws a random seed and writes it back.
+- `setProfile(id)` accepts only a ready profile (§4.4) and resets the patch to `{}`. The UI asks for confirmation first when the patch is not empty.
 - `setPatch(p)` validates `applyPatch(SCHEMA, resolveProfile(profile), p)`:
   - on failure, the issues are returned and nothing changes;
-  - on success, `params` and `epoch` update.
-- **Epoch.** The epoch increments on every accepted change. Unchanged params (same `paramsHash`) do not bump it.
-- `toHash()` / `fromHash()` read and write the world URL state `{v: 1, seed, profile, patch}`:
-  - canonical JSON, base64url;
-  - decode validation as in the SP1 lab: a bad hash gives the defaults plus a notice.
-- The page adds the view `{x, z, bpp, layer}` under `view`.
+  - on success, `patch` and `params` update.
+- **Epoch.** It increments only when the seed or `paramsHash(params)` changes.
+- **Initial state.** An unready profile or invalid patch falls back to `default` and `{}`.
+- The URL state lives in the page (§6.3), not in the session.
 
 ### 4.4 Profile readiness
 
@@ -310,106 +343,136 @@ Every version bump is part of the golden preimages. `GENERATOR_VERSION` stays 0 
 
 ### 5.1 Protocol (`workers/protocol.ts`, `workers/taskHandler.ts`)
 
-Messages are plain objects validated by a hand-written `isX(msg)` per kind; an invalid message is answered with `error {jobId?, code: 'BAD_MESSAGE'}`.
+Messages are plain objects checked by `parseToWorker` / `parseFromWorker`. Coordinates must stay inside the colKey window, and tile indices must satisfy `|t|·256·level ≤ 2^19`. A malformed message is answered with `error {jobId, code: 'BAD_MESSAGE'}`.
 
 | to worker | from worker |
 |---|---|
-| `configure {epoch, seedText, params}` | `ready {epoch, stageHashes, genKeyHex}` |
-| `mapTile {jobId, epoch, layer, zoom, tx, tz}` | `tile {jobId, epoch, rgba: ArrayBuffer (256·256·4, transferred)}` |
-| `point {jobId, epoch, x, z}` | `point {jobId, epoch, fields: ColumnPoint}` |
-| `selftest {jobId}` | `selftest {jobId, rows: GoldenRow[]}` |
-| — | `error {jobId?, code, message}` |
+| `configure {epoch, seedText, params}` (full params, checked with `checkParams`) | `ready {epoch, stageHashes (hex), genKey}` or `error {code: 'BAD_PARAMS'}` |
+| `mapTile {jobId, epoch, layer, level, tx, tz}` | `tile {jobId, epoch, rgba: ArrayBuffer (256·256·4, transferred)}` |
+| `point {jobId, epoch, x, z}` | `pointResult {jobId, epoch, fields: ColumnPoint}` |
+| `spawn {jobId, epoch}` | `spawnResult {jobId, epoch, spawn}` |
+| `selftest {jobId, key}` (no configure needed) | `selftestResult {jobId, key, actual, error}` |
+| — | `error {jobId, code: BAD_MESSAGE \| BAD_PARAMS \| NOT_CONFIGURED \| STALE_EPOCH \| INTERNAL, message}` |
 
-- `taskHandler.handle(msg): Reply` is pure apart from its own GenContext and LRU, and never touches the DOM. `task.worker.ts` only wires it to `onmessage`/`postMessage`.
-- A job whose epoch differs from the configured epoch is answered with `error {code: 'STALE_EPOCH'}` without work.
+- `createTaskHandler().handle(msg): {msg, transfer}` holds one GenContext per configured epoch and never touches the DOM or worker globals. `task.worker.ts` only wires it to `onmessage`/`postMessage`.
+- A job whose epoch differs from the configured one gets `STALE_EPOCH` and no work is done.
 
 ### 5.2 Pool (`engine/workerPool.ts`)
 
-- `N = clamp(navigator.hardwareConcurrency − 2, 2, 6)`, module workers created with `new Worker(new URL('../workers/task.worker.ts', import.meta.url), {type: 'module'})`.
-- **`configure`** goes to all workers. The pool resolves once every `ready` has arrived, and fails loudly (a visible error) if any `stageHashes` differ.
-- **Queue:** a priority queue ordered by `(zoomLevel coarse-first, distance to view centre)`. At most one in-flight job per worker.
-- **`cancel(predicate)`** drops queued jobs. In-flight results of an old epoch are discarded on arrival.
+- `createWorkerPool(size, spawn)` takes the worker factory as a parameter, so tests drive it with fake workers that run the real handler. `createBrowserPool(size = clamp(hardwareConcurrency − 2, 2, 6))` spawns module workers on `task.worker.ts`.
+- **`configure`** goes to every worker. It resolves once all `ready` messages have arrived, and rejects if any `stageHashes` or `genKey` differ, or on `BAD_PARAMS`. Jobs queued meanwhile wait.
+- **Queue.** Jobs are ordered by `(priority, id)`, with at most one in flight per worker.
+- **Cancellation:**
+  - `cancelTiles(pred)` rejects matching queued tiles with `JobCancelled`;
+  - a new `configure` rejects every queued job, and in-flight results of an old epoch reject on arrival.
 - The pool is the only place that spawns workers (SP0 arch rule).
 
 ## 6. The `?map` page (`src/ui/map/`)
 
 ### 6.1 Tiles and levels
 
-- A **tile** is 256 × 256 px at a **level** `bpp ∈ {32, 16, 4}` blocks per pixel. Tile `(tx, tz)` at level b covers `[256·b·tx, 256·b·(tx+1))` in x, and the same in z.
-- **Painting** (`gen/map/tile.ts`, pure). The sample point of each pixel is its centre.
-  - **b = 32:** one `columnPoint` prefix per pixel. Fields stop at the prefix the layer needs.
-  - **b = 16 and 4:** `buildColumnSample` per covered column, through the worker's LRU, then `readField`/`readBiome` at each pixel centre.
-- **Cache:** an LRU of 256 on the main thread, keyed by `(layer, b, tx, tz, layerHash)`.
-  - `layerHash` is the stage hash that layer depends on:
-    - `climate` for raw C/E/W/T/H/R/PV;
-    - `shape` for offset/σ/jag, relief, rivers and lakes;
-    - `biome2d` for biomes;
-    - all of them combined with `map`.
-  - An edit invalidates only the layers whose hash changed.
-- **Display.** The view shows continuous zoom from 1/4 to 64 blocks/px, anchored at the cursor. For every screen area it draws the finest cached tile, scaled, and requests missing tiles coarse-first.
+- **Tile geometry.** A tile is 256 × 256 px at a **level** `b ∈ MAP_LEVELS = {256, 64, 16, 4}` blocks per pixel. Tile `(tx, tz)` at level b covers `[256·b·tx, 256·b·(tx+1))` in x, and the same in z. Pixel `(i, j)` samples its centre.
+- **Painting** (`gen/map/tile.ts`, pure; revised by the dry run):
+  - **b = 256** is the **preview level** and uses `sampleCoarse`: climate, shape and biome only. Rivers and lakes are narrower than a 256-block pixel, and skipping them keeps a preview tile near 0.2 s.
+  - **Finer levels** use `samplePoint` without steep at every pixel centre.
+  - The dry run showed why ColumnSamples are not used for tiles: at 16 blocks/px each pixel is its own column, and even at 4 blocks/px a ColumnSample (49 points) serves only 16 pixels, so the point path is 4× cheaper. DT2 already ties the two paths together.
+  - Shaded layers (relief, rivers, lakes) sample a one-pixel border in the same pass, so adjacent tiles shade seamlessly.
+- **Levels on screen.** `levelFor(bpp)` gives the coarsest level ≤ 2·bpp, at least 4. Every view first requests preview tiles (priority by distance), then its own level (priority 1000 + distance).
+- **Cache.** An LRU of 256 ImageBitmaps on the main thread, keyed by `(layer, level, tx, tz, seed words, layer stage hash, map stage hash)`. Stage hashes do not depend on the seed, so the seed is part of the key. An edit invalidates only layers whose hash changed.
+- **Display.** Zoom is continuous from 1/4 to 256 blocks/px, anchored at the cursor. The view draws cached preview tiles first and the view-level tiles on top.
 
 ### 6.2 Layers (`gen/map/layers.ts`, `palette.ts`)
 
-| layer | source | colour |
-|---|---|---|
-| `biome` | `surfaceBiome` | registry colour |
-| `relief` | `surfaceEst` + water | hypsometric ramp; slope shading lit from the NW, from the 4-neighbour difference in the same tile; water at `surfaceWaterLevel` in blue by depth |
-| `rivers` | `riverDist`, flags | channel, valley ramp, gorge highlight, over grey relief |
-| `lakes` | `lakeMask`, `lakeLevel` | lake water by level, rim band, over grey relief |
-| `C` `E` `PV` | raw fields | the SP1 diverging map on [−1, 1] |
-| `W` `T` `H` `R` | raw fields | the same (cut line, §11) |
-| `offset` `sigma` `jag` | shape outputs | sequential ramps with fixed ranges (offset −64..320, σ 0..16, jag 0..55) |
+| layer | colour |
+|---|---|
+| `biome` | registry colour |
+| `relief` | hypsometric ramp of surfaceEst (63 → 263), slope-shaded from the NW by `k = 1 + ((west − east) + (north − south))/(4·b)` clamped to [0.55, 1.35]; water (level > surfaceEst) in blue by depth (0-64) |
+| `rivers` | wet channel blue, dry gorge orange, a blue tint for `riverDist < 64`, over grey shaded relief |
+| `lakes` | lake inside blue by level, rim band sand by m, over grey shaded relief |
+| `C` `E` `PV` `W` `T` `H` `R` | the SP1 diverging map on [−1, 1] |
+| `offset` `sigma` `jag` | a sequential ramp over −64..320, 0..16 and 0..55 |
 
-**Overlays:** spawn marker, a grid (256-block lines, with column lines at bpp ≤ 1), and the pinned readout point.
+`layerStage(layer)` gives the stage hash that invalidates each layer: `climate` for the raw fields, `biome2d` for biome, and `shape` for the rest.
+
+The page draws the overlays: the spawn marker, the pinned point, and an optional grid whose spacing is a power of two times 16 blocks, at least 48 px.
 
 ### 6.3 Interaction and state
 
 - **Toolbar:**
   - layer select;
-  - seed box (SP1 `resolveSeedText`);
-  - profile select, ready profiles only;
-  - JSON patch textarea with an Apply button. Issues are listed as `path: CODE — message`.
-- **Side panel:** hover readout from a `point` job, throttled to one in flight. It shows every `ColumnPoint` field, the biome name, and x/z. Clicking pins the readout.
-- **URL hash:** `{v: 1, seed, profile, patch, view: {x, z, bpp, layer}}`, written through SP1's `createUrlWriter`. A bad hash opens the defaults with a notice.
-- **Timing.** The page measures, with `performance.now()`, the time from `configure` to the first full coarse screen, and shows it in the side panel (§10 evidence).
+  - seed box (SP1 rule through the session);
+  - profile select (ready profiles only, with a confirmation before a non-empty patch is dropped);
+  - JSON patch textarea and an Apply button (issues listed as `path: CODE — message`);
+  - grid checkbox.
+- **Side panel:**
+  - the world status: seed, profile, epoch, workers, view, spawn and the first-image timing;
+  - the hover readout from a `point` job, with at most one in flight and the latest position queued;
+  - a click pins a point.
+- **URL hash:** `{v: 1, seed, profile, patch, view: {x, z, bpp, layer}}`, written through SP1's `createUrlWriter`.
+  - The seed must be non-empty and free of CR/LF.
+  - The profile must be ready and the patch valid over it.
+  - A bad hash opens the defaults with a notice.
+- **Timing.** The first-image timing runs from `setSource` (after `configure`) to the first frame in which every preview tile of the view is drawn.
 
 ### 6.4 `?selftest=1` (`ui/selftest/selftestPage.ts`)
 
-- Spawns one pool worker and sends `selftest`. The worker recomputes every `sp2a.*` golden (§7.4) and the SP1 goldens, and compares them with the bundled `test/goldens.json` via SP1's `compareGoldens`.
-- The page shows the SP1 panel's summary, rows and copy-as-JSON. Every golden computation is wrapped: a thrown error shows `✗ key error: …` instead of stalling (this fixes SP1's deferred minor for the new page).
+- The page starts a one-worker pool and sends one `selftest` message per key in `allGoldenKeys()` (SP1 then SP2a).
+- It compares each digest with the bundled `test/goldens.json` and shows a row per key; a key whose computation throws shows its error.
+- It ends with the summary line (`✓ all N goldens match` or `✗ …`, plus elapsed time) and copy-as-JSON. A clipboard failure is reported on the button.
 
 ## 7. Tests
 
 ### 7.1 Unit (`test/unit/`)
 
+- **Kit:** `boxTable` validation cases (codes and paths), whole-table patches, the README row count, random tables.
+- **Schema:** the SP2a leaves, scopes and stages; shape defaults equal SP1's frozen fixtures until the first retune; river and lake defaults; distinct noise seed names; the default biome table follows §3.1 (band edges, T bounds, beach, volcano, and the 20 000-point partition check).
 - **Climate:**
   - `scaleMul = s` equals the unscaled climate at (x/s, z/s) bit for bit;
-  - warps are applied in the §2.1 order;
-  - PV at W = ±2/3 is 1 and at W = 0 is −1.
-- **Shape:** σ, jag ≥ 0 over 1 M random coords; schema default = fixture (§2.2).
-- **Rivers:** hand-built R fields (a stub `GenContext` whose R noise is a linear ramp) give the master §3.4 channel depth, the valley shape, the coast fade and the gorge case, each at named points.
+  - all fields stay within [−uMax, uMax];
+  - PV at W = ±2/3 is 1 and at W = 0 is −1;
+  - with zero warps, fields are sampled at (x, z), and the C warp moves only C.
+- **Shape and steep:**
+  - σ and jag are ≥ 0 (never −0) over 1M random coordinate vectors;
+  - `steepFrom` and `steepAt` match the §2.3 formula.
+- **Rivers:** `riverTerms` at named points — channel floor, parabolic profile, valley edge, σ/jag × t, coast fade (a mouth stays wet), gorge depth and the half-altitude case.
 - **Lakes:**
-  - a stub cell gives `Lw`, the mask, the rim containment `rim ≥ Lw + 2 + 3·σ_rim`, and the disable rules;
-  - the lake-cell cache agrees with the uncached evaluation.
+  - `lakeTerms` inside, on the rim (containment `Lw + rimRise + 3·rimSigma` at the inner edge) and outside;
+  - the `cellEligible` rules;
+  - determinism of the cell memo, jitter bounds, and that some lakes exist;
+  - the nearest-cell choice.
 - **Biomes:**
-  - the table follows the §3.1 authoring rules;
-  - each biome's box centre picks that biome;
-  - no equal-fitness pairs among box centres;
-  - the zoom is deterministic, with the tie rule.
-- **DT2:** for 4096 random columns × 49 lattice points, every `ColumnSample` field equals `columnPoint` at that point under `Object.is`, biome ids included.
-- **Readout:** exact at corners; bilinear in between, checked against a hand computation.
-- **Spawn:** deterministic; the fixture seeds give the recorded spawns; the fallback path is taken on a stub all-ocean context.
-- **Session:**
-  - seed rules;
-  - profile readiness;
-  - an invalid patch leaves the state unchanged;
-  - epoch semantics;
-  - hash round-trip and bad-hash fallback cases.
-- **Protocol:** every message kind is valid; malformed messages give `BAD_MESSAGE`; a stale epoch gives `STALE_EPOCH`.
-- **Tile:**
-  - A b = 32 tile equals, pixel for pixel, colours computed directly from `columnPoint` at its pixel centres.
-  - A b = 16 or b = 4 tile equals colours computed from `readField`/`readBiome` over independently built ColumnSamples at its pixel centres.
-  - Together with DT2 this ties both paths to the point reference.
+  - registry order, families and colours;
+  - each box centre picks its biome with a clean margin;
+  - W sign, river override, overshoot outside every box, edge ties by priority, volcano versus badlands;
+  - the zoom's neighbourhood, determinism and tie rule.
+- **columnPoint:**
+  - `waterLevel` cases;
+  - composition order;
+  - river columns are river biomes;
+  - `samplePoint` without steep equals every other field;
+  - **the terrain does not depend on the biomes:** shuffling the biome table and the zoom jitter changes biomes but no height, water or steep field (this replaces T3 in SP2a, §12).
+- **DT2:** 4096 random columns × 49 lattice points (seed 42), plus 512 columns with `scaleMul` 4. Every field equals `columnPoint` under `Object.is`, biome and flags included.
+- **Readout:** exact at quart corners; bilinear in between; levels from the nearest corner; biome through the zoom. **Cache:** LRU order, hits, rebuilt values.
+- **Spawn:** ring order; valid dry inland spawns for seeds 1-16; the all-ocean fallback.
+- **Tiles:**
+  - unshaded layers equal `layerColor` of the pixel-centre point;
+  - the preview uses `sampleCoarse`;
+  - relief shading is seamless across the tile edge;
+  - determinism; palette end colours; the shading clamp; `levelFor`.
+- **Protocol and handler:**
+  - valid and malformed messages;
+  - configure / tile / point / spawn / selftest results equal the direct functions;
+  - `BAD_MESSAGE`, `NOT_CONFIGURED`, `STALE_EPOCH` and `BAD_PARAMS` keep their jobId.
+- **Pool** (fake workers running the real handler):
+  - size clamp;
+  - configure agreement and hash disagreement;
+  - bad params;
+  - priority order;
+  - `cancelTiles`;
+  - a new epoch cancels old jobs.
+- **Session:** the seed rule, profile readiness, invalid patches leave the state unchanged, epoch semantics, fallback of the initial state.
+- **Map page state:** URL round-trip and fallback cases; view maths; the tile plan; the tile cache.
+- **Harness:** the flood labelling and the metric-id regex (`T1lowland`).
 
 ### 7.2 Integration (`test/integration/twoWorkers.test.ts`, project `unit`)
 
@@ -419,43 +482,46 @@ Messages are plain objects validated by a hand-written `isX(msg)` per kind; an i
 
 ### 7.3 Metrics (`test/metrics/`)
 
-- **Sampling.** Every metric samples `columnPoint` on fixed windows inside the colKey window, with seeds 1..S and point sets from `samplePoints` (SP1).
-- **Rasters.** Metrics that need connectivity (B2, B5) rasterise on a 4-block grid over square regions and use `test/harness/flood.ts`, a union-find labelling of the raster.
-- **Tiers.** Sizes are per tier (fast / quick / full), and `activeFrom: 'SP2a'` for every part.
+All metrics sample fixed windows inside the colKey window with world seeds 1..S. B2 and B5 use a 4-block `waterRaster` (climate → shape → rivers → lakes, without steep or biome) over 2048-block regions, with 8-connected labelling (`test/harness/flood.ts`). Tiers are fast / quick / full, and every part is `activeFrom: 'SP2a'`.
 
-| ID | measured as | threshold |
-|---|---|---|
-| B1 | surface-biome shares over the sampled land and sea; ties; outside-all-boxes | each ≥ 0.3 % (rare ≥ 0.1 %: jagged peaks, frozen peaks, badlands, volcano); largest land biome ≤ 16 %; ocean family 25-45 %; exact ties 0; outside ≤ 2 % |
-| B4 (climate) | T_u ≥ 0.2 or ≤ −0.6 columns inside windswept or taiga-family boxes; coast-band land columns whose biome is beach, snowy beach or stony shore | < 1 % / ≥ 70 % |
-| N4 | sd of each climate field at (0,0) over 64 seeds vs its global sd; spawn biome over 64 seeds | ≥ 0.8; most common ≤ 30 %; ≥ 8 distinct; on land 100 % |
-| T3 (2D) | P(\|Δoffset\| ≥ 4 across a biome border) / P(within a biome), 4-block neighbour pairs | ≤ 1.5 |
-| T6 | raise one knot per depth (C, C→E, C→E→PV) by 10: `ΣΔoffset0 / Σw` over columns with w > 0 | 10 ± 1.5 |
-| T7 | `steep` gradient ratio across column borders vs interior, from ColumnSamples | 0.9-1.1 |
-| T8 | per-axis relief: sd of land `offset0` when E_u (resp. W) sweeps [−1, 1] at sampled other coords | ≥ 10 blocks (E) / ≥ 10 blocks (PV) |
-| B2 (column) | river columns: median connected length (4-block raster, 8-connected), share of land, components ≥ 300 blocks touching ocean, gorge columns per 100 km² of land with offset0 ≥ 120 | ≥ 300 / 2-7 % / ≥ 50 % / ≥ 1 |
-| B5 (column) | lakes (connected lake-mask components) per km² of land; share with Lw ≥ 70 | 0.2-2 / ≥ 30 % |
-| T1lowland | share of land columns with offset0 ∈ [66, 76) (diagnostic) | reported, not gated |
+| ID | measured as | threshold | dry-run full tier |
+|---|---|---|---|
+| B1 | surface-biome shares over sampled columns; ties = non-river points whose best and runner-up fitness are equal; outside = best fitness > 0 | minShare ≥ 0.3 %, minRareShare ≥ 0.1 % (jagged peaks, frozen peaks, badlands, volcano), largestLand ≤ 16 %, ocean family 25-45 %, ties 0, outside ≤ 2 % | 0.37 %, 0.70 %, 7.3 %, 38.4 %, 0, 0.19 % |
+| B4 (climate) | windswept/taiga/snowy-taiga columns with T > 0.6, or windswept with T < −0.6; dry coast-band (C −0.22..−0.10) columns that are beach, snowy beach or stony shore | < 1 % / ≥ 70 % | 0 / 100 % |
+| N4 | min over C E W T H R of sd at (0, 0) over 64 seeds ÷ global sd; spawn biome over 64 seeds | ≥ 0.8; top ≤ 30 %; ≥ 8 distinct; on land 100 % | 0.90; 14 %; 17; 100 % |
+| T6 | raise knot [2], [5,1] or [7,1,1] of offset by 10: `ΣΔoffset0/Σw` over columns with w > 0 | 8.5-11.5 | 10.0 |
+| T7 | median \|Δsteep\| of a 4-block step across a column border (from the two columns' own samples) ÷ median of the 4 steps inside a column; plus exact equality of the shared border point in both samples | 0.9-1.1; mismatches 0 | 1.00; 0 |
+| T8 | mean over sampled (C, W) (resp. (C, E)) of the sd of land offset0 as E (resp. W through PV) sweeps [−1, 1] | ≥ 10 / ≥ 10 blocks | 21.3 / 10.3 |
+| T1lowland | share of land columns with offset0 ∈ [66, 76) | ≤ 0.40 (SP1's retune trigger, now gated) | 0.335 |
+| B2 (column) | median river length weighted by river cells (the length half the river water lies in, from component bounding boxes); share of land; components ≥ 300 blocks touching sea water; gorge columns cut ≥ 8 per 100 km² of land with offset0 ≥ 120; dry river biome | ≥ 300 / 2-7 % / ≥ 50 % / ≥ 1 / 0 | 551 / 3.6 % / 71 % / 2973 / 0 |
+| B5 (column) | lake-mask components per km² of land; share with Lw ≥ 70 | 0.2-2 / ≥ 30 % | 1.38 / 47 % |
 
-Metrics that fail on the fast tier during implementation are fixed by retuning the data defaults (§3.1, §2.2), never by moving a threshold without a spec amendment.
+- **T3 on 2D relief is not an SP2a metric** (§12). In SP2a the terrain is independent of the biomes by construction, and a unit test (§7.1) pins that. T3 as defined measured the correlation "mountain biomes are steep" (2.38), not the biome cliffs it targets. T3 stays in SP3 on voxel terrain.
+- A metric that fails is fixed by retuning the data defaults, never by moving a threshold without a spec amendment.
 
 ### 7.4 Goldens (`metrics/sp2aGoldens.ts`)
 
-- **`sp2a.column.point.<profile>`:** a digest of every `ColumnPoint` field at 4096 points from `Xoshiro128(fnv1a32('sp2a.point'))`, world seed '42'. Profiles: default and large_biomes.
-- **`sp2a.column.sample`:** a digest of 64 full ColumnSamples at fixed `(cx, cz)`.
-- **`sp2a.tile.<layer>.<b>`:** the RGBA digest of fixed tiles for biome, relief, rivers and C at b = 32, 16 and 4 (12 keys).
+Twenty keys:
+
+- **`sp2a.column.point.default` and `.large_biomes`:** every ColumnPoint field (booleans as 0/1) at 4096 points from `Xoshiro128(fnv1a32('sp2a.point'))`, world seed '42'.
+- **`sp2a.column.sample`:** 64 full ColumnSamples at columns from `Xoshiro128(fnv1a32('sp2a.sample'))`.
+- **`sp2a.tile.<layer>.<level>`:** the RGBA digest of tile (1, −1) for the layers biome, relief, rivers and C, at levels 256, 64, 16 and 4 (16 keys).
 - **`sp2a.spawn`:** spawns of seeds 1..64.
 
-The goldens are recorded once and checked in the V8 unit run, in Bun (the SP1 JSC tool extended to `sp2a.*`), and in the browser via `?selftest=1` (Chrome and Firefox).
+`allGoldenKeys()` and `computeAnyGolden(key)` cover SP1 and SP2a. They are checked in the V8 unit run, in Bun (`test/tools/goldensJsc.ts`, all 47 keys) and in the browser (`?selftest=1`, Chrome and Firefox). The dry run matched 47/47 in Bun 1.4.2 and in headless Chrome.
 
-### 7.5 Bench (`test/bench/column.bench.ts`)
+### 7.5 Bench (`test/bench/noise.bench.ts`)
 
-Kernels, added to SP1's baseline file:
-- `columnPoint`;
-- `buildColumnSample` (cold LRU);
-- `mapTile.b32.biome`;
-- `mapTile.b16.relief`.
+Kernels are added to SP1's bench test (`test/bench/noise.bench.ts`, one baseline file):
+- `column.point` (per point);
+- `column.sample` (buildColumnSample);
+- `map.tile.b64.biome` and `map.tile.b16.relief` (8 iterations each).
 
-**P1 targets (gated):** `buildColumnSample` ≤ 0.7 ms p50 and ≤ 1.2 ms p90 on the reference machine. The +30 % regression gate and the calibration ratios work as in SP1 §7.5.
+**P1 gate:** `buildColumnSample` p50 ≤ 0.7 ms, and p95 ≤ 1.2 ms checked through p99, which bounds p95 from above (tinybench keeps no samples by default).
+
+The baseline is re-recorded in SP2a. `stageHashes.genKey` is about 5× slower than SP1's baseline, because `DEFAULTS` now carries the splines and the biome table.
+
+Dry run: column.sample p50 0.36 ms, p99 0.51 ms; tiles about 0.31-0.34 s; killRatio 0.85.
 
 ## 8. Governance steps
 
@@ -467,11 +533,11 @@ Kernels, added to SP1's baseline file:
 - Each commit that changes the thresholds lock edits this spec's Threshold log (the CI per-push rule).
 - The schema-shape lock is accepted when the new leaves land.
 - Registry version bumps land together with the code they version.
-- The arch rules gain:
-  - `gen/**` imports only `core/**` (and `world/store/api.ts` types, unused in SP2a);
-  - `workers/**` may import `gen/**`;
-  - `ui/map/**` and `engine/**` import `gen/**` only as types;
-  - the SP1 determinism rules (Math allowlist, hot-module import aliasing) extend to `gen/**`.
+- The arch rules:
+  - the SP0 layer table already has `gen` → core, `workers` → gen/metrics, `engine` → gen types only, and `ui` → anything but materials and worker entries, so `ui/map` may use gen values such as `layerStage`;
+  - the hot-module import-alias rule extends to `gen/**`;
+  - `metrics/sp2aGoldens.ts` follows the determinism rules;
+  - the engine-dependent-API ban matches the member name alone, so `.normalize.call(…)` is caught too (SP1 review minor).
 
 ## 9. Master-spec amendments made with this spec
 
@@ -482,7 +548,10 @@ Kernels, added to SP1's baseline file:
 - **§2.5:** `SubProjectId` has 'SP2a' | 'SP2b' instead of 'SP2'.
 - **§3.7:** "SP2a uses `surfaceEst = offset`; SP3 introduces the density-tap search and bumps the `surfaceEst` stage."
 - **§6.4:** DT2 "batch == point (column stage)" is tightened from ≤ 1e-9 to bit-exact at quart corners.
-- **§6.1:** the metrics master list gains `T1lowland` (diagnostic).
+- **§6.1:** the metrics master list gains `T1lowland` (gated ≤ 0.40 from SP2a).
+- **§10 SP2a exit:** T3 on 2D relief is replaced by the unit test that the terrain does not depend on the biomes (§12).
+- **§3.4:** the valley fades with altitude and high ground gets dry gorges (§2.4).
+- **§5.6:** map levels are 256 (preview) / 64 / 16 / 4 blocks per pixel.
 - **§1** module layout lists `gen/map/`, `workers/taskHandler.ts`, `ui/map/`, `ui/selftest/` and `test/integration/`.
 - The rule scopes gain `metrics/**` and the SP1 metrics files (the SP1 review's deferred minor).
 
@@ -511,13 +580,27 @@ Kernels, added to SP1's baseline file:
 | DT2 point = batch bit-exact | `columnStage.test.ts` |
 | two workers byte-identical tiles | `twoWorkers.test.ts` (Node) and `?selftest=1` (browser) |
 | P1: buildColumnSample ≤ 0.7 ms p50 / 1.2 ms p90 | `npm run bench:record`, then `npm run bench` on the reference machine |
-| first coarse map image ≤ 0.3 s | `?map` timing readout on the Vercel preview (Chrome), recorded in Exit evidence |
-| `sp2a.*` goldens recorded; SP1 goldens unchanged | `goldens.sp2a.test.ts`; `git diff` of `test/goldens.json` adds keys only |
+| first coarse map image ≤ 0.3 s | `?map` timing readout (preview level, default view) in Chrome on the Vercel preview, recorded in Exit evidence (dry run: 280 ms on the dev server, 6 workers) |
+| `sp2a.*` goldens recorded (20); SP1 goldens unchanged | `goldens.sp2a.test.ts`; the goldens merge refuses changed keys without a GENERATOR_VERSION bump |
 | JavaScriptCore matches the goldens | Bun tool, output in Exit evidence |
 | `?selftest=1` green in Chrome and Firefox | manual, on the Vercel preview; JSON in Exit evidence |
 | visual review | screenshots of the biome, relief, rivers, lakes and C layers at 32 and 4 bpp for seed 42, plus the large_biomes profile |
 
-**Cut line:** the raw W/T/H/R layers and the spawn fallback refinement (→ SP2b).
+**Cut line:** the raw W/T/H/R layers and the grid overlay (→ SP2b). The dry run built both, so the cut line is only a fallback.
+
+## 12. Changes made by the implementation-plan dry run (2026-09-29)
+
+The plan was dry-run in a scratch worktree: every task was implemented and every test run. These are the resulting changes to the approved spec:
+
+1. **Rivers** (§2.4). The valley fades with altitude (strength `s·s_alt`), and high ground gets a dry gorge `gorgeDepth` (new leaf, 12) below offset0. The master formula pulled mountains beside rivers down to about 64.
+2. **T3 on 2D relief removed from the SP2a exit.** It is replaced by the unit test that the terrain does not depend on the biomes (§7.1, §7.3).
+3. **T1lowland is gated ≤ 0.40**, not only reported. **B2's median length is weighted by river cells**: the plain median counts the many tiny loops of R's zero set. **T7 uses medians plus an exact border check**, because mean |Δsteep| is heavy-tailed.
+4. **Leaf kinds:** one `boxTable` kind (already reserved) and plain `num` pairs, instead of new `pair` and `list` kinds.
+5. **Map tiles** use the point path at every level; the levels are 256 (preview, climate/shape/biome only) / 64 / 16 / 4 (§6.1). ColumnSamples would cost 4-60× more per tile, and without a preview level the first image was about 1.4 s.
+6. **Protocol:** the `spawn` message, plus one `selftest` message per key.
+7. **ColumnSample size** is about 8.7 KB. The **lake formulas** are concrete (§2.5). The **seed-box rule** moves to `core/seed.ts`. The **map constants** move to `core/constants.ts` (gen may not export numbers).
+8. **Bench:** p95 is gated through p99, and the baseline is re-recorded because the schema grew.
+9. **Arch:** `ui/map` uses gen values under the existing SP0 table. The `.normalize.call` hole is closed.
 
 ## Exit evidence
 
@@ -529,4 +612,35 @@ Kernels, added to SP1's baseline file:
 
 ## Appendix A — default surface-biome table
 
-(Recorded by the plan's first biome task, §3.1.)
+Uniform climate units; `[lo, hi]` per axis; W = `wSign` (0 any); P = priority. Source: `src/core/params/biomeDefaults.ts`.
+
+| biome | C | E | PV | T | H | W | P |
+|---|---|---|---|---|---|---|---|
+| deep_ocean | −1, −0.55 | any | any | −0.6, 0.6 | any | 0 | 1 |
+| ocean | −0.55, −0.22 | any | any | −0.6, 0.6 | any | 0 | 2 |
+| warm_ocean | −1, −0.22 | any | any | 0.6, 1 | any | 0 | 3 |
+| frozen_ocean | −1, −0.22 | any | any | −1, −0.6 | any | 0 | 4 |
+| beach | −0.22, −0.1 | −0.375, 1 | any | −0.6, 1 | any | 0 | 5 |
+| snowy_beach | −0.22, −0.1 | −0.375, 1 | any | −1, −0.6 | any | 0 | 6 |
+| stony_shore | −0.22, −0.1 | −1, −0.375 | any | any | any | 0 | 7 |
+| plains | −0.1, 1 | −0.375, 1 | −1, 0.2 | −0.2, 0.2 | −1, 0.2 | 0 | 8 |
+| meadow | −0.1, 1 | −0.375, 1 | 0.2, 1 | −0.2, 0.2 | −1, 0.2 | 0 | 9 |
+| forest | −0.1, 1 | −0.375, 1 | any | −0.2, 0.6 | 0.2, 0.6 | −1 | 10 |
+| birch_forest | −0.1, 1 | −0.375, 1 | any | −0.2, 0.6 | 0.2, 0.6 | +1 | 11 |
+| dark_forest | −0.1, 1 | −0.375, 1 | −0.6, 1 | −0.2, 0.6 | 0.6, 1 | 0 | 12 |
+| taiga | −0.1, 1 | −0.375, 1 | any | −0.6, −0.2 | any | 0 | 13 |
+| snowy_taiga | −0.1, 1 | −0.375, 1 | any | −1, −0.6 | 0.2, 1 | 0 | 14 |
+| snowy_plains | −0.1, 1 | −0.375, 1 | any | −1, −0.6 | −1, 0.2 | 0 | 15 |
+| desert | −0.1, 1 | −0.375, 1 | any | 0.6, 1 | −1, 0.2 | 0 | 16 |
+| savanna | −0.1, 1 | −0.375, 1 | any | 0.2, 0.6 | −1, 0.2 | 0 | 17 |
+| swamp | −0.1, 1 | −0.375, 1 | −1, −0.6 | −0.2, 1 | 0.6, 1 | 0 | 18 |
+| jungle | −0.1, 1 | −0.375, 1 | −0.6, 1 | 0.6, 1 | 0.2, 1 | 0 | 19 |
+| badlands | −0.1, 1 | −1, −0.375 | −1, 0.7 | 0.6, 1 | any | 0 | 20 |
+| windswept_hills | −0.1, 1 | −1, −0.375 | −1, 0.7 | −0.2, 0.6 | any | 0 | 21 |
+| snowy_slopes | −0.1, 1 | −1, −0.375 | −1, 0.7 | −1, −0.2 | any | 0 | 22 |
+| stony_peaks | −0.1, 1 | −1, −0.375 | 0.7, 1 | −0.2, 0.6 | any | 0 | 23 |
+| jagged_peaks | −0.1, 1 | −1, −0.375 | 0.7, 1 | −1, −0.2 | any | +1 | 24 |
+| frozen_peaks | −0.1, 1 | −1, −0.375 | 0.7, 1 | −1, −0.2 | any | −1 | 25 |
+| volcano | −0.1, 1 | −1, −0.375 | 0.7, 1 | 0.6, 1 | any | 0 | 26 |
+
+Measured shares (dry run, full tier): all ≥ 0.37 %, volcano 0.72 %, taiga (largest land) 7.3 %, ocean family 38.4 %.

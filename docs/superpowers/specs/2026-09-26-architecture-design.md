@@ -476,6 +476,7 @@ There are no downstream multipliers: the editor's y-axis *is* the terrain.
 - **Strengths:** the coastal factor `s = smoothstep(−0.12, −0.02, C)` fades only the valley (rivers stay out of the ocean without sealing their mouths); the altitude factor `s_alt = 1 − smoothstep(120, 170, offset0)` fades the channel into mountain gorges.
 - **Valley:** `t = 1 − detExp(−(max(0, riverDist − w/2)/valleyWidth)²)`. Then `valleyOffset = lerp(min(offset0, 64 + 2t), offset0, t)`, and σ and jag are scaled by t (by s·t overall).
 - **Channel** (riverDist < w/2): `channelOffset = 63 − (3 + 3·u2)·(1 − (2·riverDist/w)²)`, σ = 0.5, jag = 0.
+- **SP2a amendment:** the valley's strength is `s·s_alt`, so valleys fade on high ground; there the channel cuts a dry gorge `gorgeDepth` (12) below offset0 instead of a valley pulled to sea level (SP2a spec §2.4).
 - **Final:** outside the channel `offset = lerp(offset0, valleyOffset, s)`; in the channel `offset = min(lerp(offset0, valleyOffset, s), lerp(offset0, channelOffset, s_alt))`, so the channel keeps its floor of 57-60 all the way to the ocean.
 - `surfaceWaterLevel = 63` and the River or Frozen River biome apply only where `riverDist < w/2 + 2` **and** the channel-centre offset ≤ 62, so rivers are guaranteed wet (08 rivers were 94% dry). Where `s_alt ∈ (0,1)` leaves the channel above 62, the column is a dry **gorge**: it keeps its land biome and surfaceWaterLevel stays −∞.
 
@@ -1189,7 +1190,7 @@ Target: edit → visible ≤ 50 ms p95, measured in the HUD.
 ### 5.6 Map view (M; worker tiles)
 
 - **Tiles:** 256² px, rendered as `MAP_TILE` jobs on the pool through the same column-stage functions, cached by `(layer, zoom, tile, stageHash)` in an LRU of 256, and transferred as ImageBitmap.
-- **Refinement is coarse-first:** 32 → 16 → 4 blocks/px. Zoom is continuous from 1/4 to 64 blocks/px, anchored at the cursor.
+- **Refinement is coarse-first:** a 256 blocks/px preview (climate, shape and biome only), then 64 → 16 → 4 blocks/px (amended by SP2a). Zoom is continuous from 1/4 to 256 blocks/px, anchored at the cursor.
 - **Layers:**
   - biome, shaded relief (surfaceEst), rivers, lakes;
   - raw T/H/C/E/W/PV/R;
@@ -1305,7 +1306,7 @@ Metric values are written to `test/metrics/.out/*.json` for trends. The harness 
 | N5 | 16-bin gradient-direction histogram (central differences, h = λ_min/128), max/min, noises with ≥ 2 lattice terms; horizontal plane and vertical plane of 3D noises | ≤ 1.15 each |
 | N6 | lattice zeros: P(\|z\| < 1e-6) at integer points and 4×8×4 corners, incl. adversarial single-stack small-λ defs | ≤ 0.1% |
 | T1 | land heights: largest 10-block band / p5..p95 span / share y > 120 / share y > 200 | ≤ 25% / ≥ 60 blocks / ≥ 6% / ≥ 0.5% |
-| T1lowland | share of land columns with offset0 in [66, 76) on the pure offset (SP2a diagnostic) | reported, not gated |
+| T1lowland | share of land columns with offset0 in [66, 76) on the pure offset (SP2a) | ≤ 40% |
 | T2 | land columns with ≥ 2 solid→air transitions above surface − 30 (pre-cave) | ≥ 1.5%, ≥ 10% in peaks/windswept (amplified: Z1) |
 | T3 | P(\|Δh\| ≥ 4 across a biome border) / P(within biome) | ≤ 1.5 |
 | T4 | ocean floor sd per 256² / exposed bedrock under water / floor ≤ −50 | ≥ 3 / 0 / 0 |
@@ -1617,7 +1618,7 @@ Thresholds are locked (`thresholds.lock.json`) and goldens are gated (§6.2). Si
 - Task pool and protocol (`MAP_TILE`, `point`, `selftest`); the standalone `?map` page (coarse-first tiles; biome, relief, rivers, lakes, raw fields and offset/σ/jag layers; hover; spawn marker; click shows a coordinate); seed box, ready-profile select and a JSON patch box over `WorldSession`, in the URL hash.
 - `?selftest=1` page: recomputes column-stage and map-tile golden hashes in a real module worker.
 - **Deliverable:** an interactive world map of the default and large_biomes worlds, parameterised by URL patch.
-- **Exit:** B1, B4 (climate parts), N4, T6, T7, T8; T3 on 2D relief; B2 (length, share, mouths, gorges) and B5 (lakes per km², share with Lw ≥ 70) on the column stage; DT2 batch == point (column stage, bit-exact); two workers produce byte-identical map tiles; P1 Column ≤ 0.7 / 1.2 ms; first coarse map image ≤ 0.3 s; session unit tests; `?selftest=1` green in Chrome and Firefox.
+- **Exit:** B1, B4 (climate parts), N4, T6, T7, T8, T1lowland; a unit test that the terrain does not depend on the biomes (in place of T3 on 2D relief; SP2a spec §12); B2 (length, share, mouths, gorges) and B5 (lakes per km², share with Lw ≥ 70) on the column stage; DT2 batch == point (column stage, bit-exact); two workers produce byte-identical map tiles; P1 Column ≤ 0.7 / 1.2 ms; first coarse map image ≤ 0.3 s; session unit tests; `?selftest=1` green in Chrome and Firefox.
 - Received from SP1 (its spec §10): author the `shape.*` defaults with `autoTangents`; clamp jag and σ with `max(0, ·)`; check the lowland band (≈ 34 % of land in [66, 76) on the pure offset) as a diagnostic; add `CURRENT_SP` that hides profiles before their `readyFrom`; put the profile id in the world URL hash.
 - **Cut line:** the raw W/T/H/R layers and the spawn fallback refinement (→ SP2b).
 
