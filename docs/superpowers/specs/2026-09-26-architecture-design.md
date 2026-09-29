@@ -603,12 +603,12 @@ SP2a uses the 2D estimate `surfaceEst = offset` (after rivers and lakes); SP3 in
 
 ### 3.10 Biomes
 
-**Surface registry (27):**
+**Surface registry (28; volcano added by SP2a, 2026-09-29):**
 - oceans: ocean, deep ocean, warm ocean, frozen ocean;
 - coast: beach, snowy beach, stony shore;
 - rivers: river, frozen river;
 - lowlands: plains, meadow, forest, birch forest, dark forest, taiga, snowy taiga, snowy plains, desert, savanna, swamp, jungle, badlands;
-- hills and peaks: windswept hills, snowy slopes, stony peaks, jagged peaks, frozen peaks.
+- hills and peaks: windswept hills, snowy slopes, stony peaks, jagged peaks, frozen peaks, volcano (hot peaks: T_u ≥ 0.6, PV > 0.7, low E; its cone is a later column-stage term, SP12 by default).
 
 **Cave registry (3):**
 - lush: H_u ≥ 0.4 and depth 0.2-0.9;
@@ -1709,6 +1709,7 @@ Thresholds are locked (`thresholds.lock.json`) and goldens are gated (§6.2). Si
 
 **SP12 — Extreme presets and final tuning** (M; SP11)
 - Finalise amplified, archipelago, floating_islands, large_biomes and cave_heavy; goldens per preset; profile gallery in docs; baselines refreshed; README; received cut-line items.
+- The volcanic cone (reserved by SP2a, its spec §10): sparse cells in hot high ground add a cone and crater to `offset` and assign the volcano biome by mask; lava in the crater uses SP7's fluids. It may move to an earlier SP by amending this section.
 - **Exit:** Z1-Z4; cave_heavy C1 10-22 %; every other active metric green per preset; DT1 goldens stable; no open cut-line items (unless explicitly dropped by the user with the D-decision impact recorded).
 
 ### Critical path and parallelism

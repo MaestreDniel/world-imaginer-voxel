@@ -22,7 +22,7 @@ Turn the SP1 math core into a playable 2D world: every column's climate, target 
   - rivers: channel, valley and gorges;
   - lakes: column terms;
   - a 2D `surfaceEst`;
-  - the 27 surface biomes with picker and jittered-Voronoi zoom;
+  - the 28 surface biomes (master's 27 plus volcano, decision 6) with picker and jittered-Voronoi zoom;
   - spawn search.
 - A point reference `columnPoint` and a batched `buildColumnSample`, bit-identical at quart corners (DT2).
 - A module-worker task pool with a typed protocol and `MAP_TILE` jobs.
@@ -58,6 +58,9 @@ Turn the SP1 math core into a playable 2D world: every column's climate, target 
    - `buildColumnSample` is the fast path.
    - A unit test holds them bit-equal at every quart corner of thousands of random columns.
 5. **`surfaceEst = offset` in SP2a.** It is the final column-stage height, after rivers and lakes. SP3 replaces it with the density-tap search of master §3.7, bumping the `surfaceEst` stage version.
+6. **A volcano biome (2026-09-29), a touch of distinction from Minecraft.**
+   - **In SP2a it is a climate box only:** hot peaks (§3.1), with its own map colour. Its surface identity comes later: basalt, blackstone, ash and magma via the surface rules in SP3, and lava in SP7.
+   - **The volcanic cone is reserved for a later SP** (§10): sparse cells inside hot high ground that add a cone and crater to `offset` and assign the biome by the cell mask. It is not built in SP2a.
 
 ## Module layout after SP2a
 
@@ -69,7 +72,7 @@ src/
     ids.ts                    SubProjectId gains 'SP2a' | 'SP2b' (and drops 'SP2'); CURRENT_SP (§4.4)
     params/schema.ts          + shape.*, rivers.*, lakes.*, biomes.* groups (§4.1)
     params/shapeDefaults.ts   offset / sigma / jag defaults, authored with autoTangents (§2.2)
-    params/biomeDefaults.ts   the 27 surface biome boxes as data (§3.1)
+    params/biomeDefaults.ts   the 28 surface biome boxes as data (§3.1)
     params/profiles.ts        readyFrom 'SP2' → 'SP2a'
     stage/registry.ts         prefixes and version bumps for shape, surfaceEst, biome2d, map (§4.2)
   gen/
@@ -218,7 +221,7 @@ biome    → surfaceBiome (picker at this point; §3.2)
 
 ### 3.1 Registry and boxes
 
-- **The 27 biomes of master §3.10,** each with:
+- **The 28 biomes of master §3.10** (volcano included), each with:
   - `id` (a stable u8, in master order);
   - `name`;
   - `family` (ocean | coast | river | lowland | highland);
@@ -233,7 +236,8 @@ biome    → surfaceBiome (picker at this point; §3.2)
   - Windswept and peak boxes bound T.
   - Beach covers the whole coast band for temperate T, with no PV restriction. Snowy beach covers cold T and stony shore covers high E.
   - River and frozen river are not picked from boxes: they come from the river flag (§3.2).
-- **The table is data under `biomes.*`** (§4.1). The concrete default table (27 rows) is authored in the implementation plan's first biome task. It is tuned there against B1/B4 on the fast tier and recorded as Appendix A of this spec in the same commit. The rules above are the contract; the numbers are tuning.
+  - Volcano takes the hot-peaks niche: T in the top band (T_u ≥ 0.6), PV > 0.7 and E in the two lowest bands (mountainous). It sits in the highland family with a priority above stony peaks and badlands, so those no longer receive hot peaks. B1 treats it as rare.
+- **The table is data under `biomes.*`** (§4.1). The concrete default table (28 rows) is authored in the implementation plan's first biome task. It is tuned there against B1/B4 on the fast tier and recorded as Appendix A of this spec in the same commit. The rules above are the contract; the numbers are tuning.
 
 ### 3.2 Picker (`picker.ts`)
 
@@ -421,7 +425,7 @@ Messages are plain objects validated by a hand-written `isX(msg)` per kind; an i
 
 | ID | measured as | threshold |
 |---|---|---|
-| B1 | surface-biome shares over the sampled land and sea; ties; outside-all-boxes | each ≥ 0.3 % (rare ≥ 0.1 %: jagged peaks, frozen peaks, badlands); largest land biome ≤ 16 %; ocean family 25-45 %; exact ties 0; outside ≤ 2 % |
+| B1 | surface-biome shares over the sampled land and sea; ties; outside-all-boxes | each ≥ 0.3 % (rare ≥ 0.1 %: jagged peaks, frozen peaks, badlands, volcano); largest land biome ≤ 16 %; ocean family 25-45 %; exact ties 0; outside ≤ 2 % |
 | B4 (climate) | T_u ≥ 0.2 or ≤ −0.6 columns inside windswept or taiga-family boxes; coast-band land columns whose biome is beach, snowy beach or stony shore | < 1 % / ≥ 70 % |
 | N4 | sd of each climate field at (0,0) over 64 seeds vs its global sd; spawn biome over 64 seeds | ≥ 0.8; most common ≤ 30 %; ≥ 8 distinct; on land 100 % |
 | T3 (2D) | P(\|Δoffset\| ≥ 4 across a biome border) / P(within a biome), 4-block neighbour pairs | ≤ 1.5 |
@@ -489,6 +493,14 @@ Kernels, added to SP1's baseline file:
   - Fix the SP1 deferred minors that become reachable through the editor: spline knot and tangent bounds, and tiny amplitudes.
 - **SP3:** replace the 2D `surfaceEst` (bump `surfaceEst`), fill `islandMask`, add T1/T5 against voxel terrain, and re-check the lowland diagnostic against T1.
 - **SP4:** mount `ui/map` as the in-game panel; wire click-to-teleport.
+- **Volcanic cone (receiving SP: SP12 by default, pullable earlier by amendment).**
+  - A column-stage term modelled on the lakes:
+    - sparse warped-Voronoi cells enabled only where the cell centre has T_u ≥ 0.6 and offset0 ≥ 120;
+    - a cone that raises `offset`, with a crater ring;
+    - σ and jag damped on the flanks;
+    - `volcano` assigned by the cell mask instead of the box.
+  - It adds `volcano.*` schema leaves, bumps the `shape` and `biome2d` stages, and needs a metric (volcanoes per 100 km² of hot high land).
+  - Lava in the crater waits for SP7's fluids.
 
 ## 11. Exit criteria
 
