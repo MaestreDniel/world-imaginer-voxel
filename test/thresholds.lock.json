@@ -1,5 +1,5 @@
 {
-  "sha256": "dc7346fe88b06e806d38b672e5c61c3a335a7c4c9dc599fe506c79ac3ae01850",
+  "sha256": "6a36daa8f219a49b59c3c455b496a7ccd07cc4a55ca701c5cf91eb2587a83729",
   "canonical": {
     "startedSps": [
       "SP0",
@@ -7,6 +7,46 @@
       "SP2a"
     ],
     "thresholds": {
+      "B1": {
+        "largestLand": {
+          "activeFrom": "SP2a",
+          "max": 0.16
+        },
+        "minRareShare": {
+          "activeFrom": "SP2a",
+          "min": 0.001
+        },
+        "minShare": {
+          "activeFrom": "SP2a",
+          "min": 0.003
+        },
+        "oceanFamilyMax": {
+          "activeFrom": "SP2a",
+          "max": 0.45
+        },
+        "oceanFamilyMin": {
+          "activeFrom": "SP2a",
+          "min": 0.25
+        },
+        "outside": {
+          "activeFrom": "SP2a",
+          "max": 0.02
+        },
+        "ties": {
+          "activeFrom": "SP2a",
+          "max": 0
+        }
+      },
+      "B4": {
+        "coastBandBeach": {
+          "activeFrom": "SP2a",
+          "min": 0.7
+        },
+        "hotColdSpruceWindswept": {
+          "activeFrom": "SP2a",
+          "max": 0.01
+        }
+      },
       "N1": {
         "ksD": {
           "activeFrom": "SP1",
@@ -27,6 +67,24 @@
         "value": {
           "activeFrom": "SP1",
           "min": 0.9
+        }
+      },
+      "N4": {
+        "originSdRatio": {
+          "activeFrom": "SP2a",
+          "min": 0.8
+        },
+        "spawnDistinct": {
+          "activeFrom": "SP2a",
+          "min": 8
+        },
+        "spawnOnLand": {
+          "activeFrom": "SP2a",
+          "min": 1
+        },
+        "spawnTopShare": {
+          "activeFrom": "SP2a",
+          "max": 0.3
         }
       },
       "N5": {

@@ -611,6 +611,7 @@ The plan was dry-run in a scratch worktree: every task was implemented and every
 (One line per commit that changes `test/thresholds.lock.json`.)
 
 - Task 1: `STARTED_SPS` gains `SP2a`; no threshold rows yet.
+- Task 14: add B1 (minShare ≥ 0.003, minRareShare ≥ 0.001, largestLand ≤ 0.16, ocean family 0.25-0.45, ties ≤ 0, outside ≤ 0.02), B4 (hotColdSpruceWindswept ≤ 0.01, coastBandBeach ≥ 0.7) and N4 (originSdRatio ≥ 0.8, spawnTopShare ≤ 0.3, spawnDistinct ≥ 8, spawnOnLand ≥ 1), all `activeFrom: 'SP2a'`.
 
 ## Appendix A — default surface-biome table
 
