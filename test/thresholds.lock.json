@@ -1,5 +1,5 @@
 {
-  "sha256": "0b62b9449b7a77008a6416d5b027a0507a39a8fa86259cca6b051e2108dace21",
+  "sha256": "c8c04bec445259fa64fada77c90c9179eb562fc99a306fceac90b81e16c78931",
   "canonical": {
     "startedSps": [
       "SP0",
@@ -37,6 +37,32 @@
           "max": 0
         }
       },
+      "B2": {
+        "dryRiverBiome": {
+          "activeFrom": "SP2a",
+          "max": 0
+        },
+        "gorgesPer100km2": {
+          "activeFrom": "SP2a",
+          "min": 1
+        },
+        "landShareMax": {
+          "activeFrom": "SP2a",
+          "max": 0.07
+        },
+        "landShareMin": {
+          "activeFrom": "SP2a",
+          "min": 0.02
+        },
+        "medianLength": {
+          "activeFrom": "SP2a",
+          "min": 300
+        },
+        "mouths": {
+          "activeFrom": "SP2a",
+          "min": 0.5
+        }
+      },
       "B4": {
         "coastBandBeach": {
           "activeFrom": "SP2a",
@@ -45,6 +71,20 @@
         "hotColdSpruceWindswept": {
           "activeFrom": "SP2a",
           "max": 0.01
+        }
+      },
+      "B5": {
+        "highShare": {
+          "activeFrom": "SP2a",
+          "min": 0.3
+        },
+        "perKm2Max": {
+          "activeFrom": "SP2a",
+          "max": 2
+        },
+        "perKm2Min": {
+          "activeFrom": "SP2a",
+          "min": 0.2
         }
       },
       "N1": {
