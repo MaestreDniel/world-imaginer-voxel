@@ -612,6 +612,7 @@ The plan was dry-run in a scratch worktree: every task was implemented and every
 
 - Task 1: `STARTED_SPS` gains `SP2a`; no threshold rows yet.
 - Task 14: add B1 (minShare ≥ 0.003, minRareShare ≥ 0.001, largestLand ≤ 0.16, ocean family 0.25-0.45, ties ≤ 0, outside ≤ 0.02), B4 (hotColdSpruceWindswept ≤ 0.01, coastBandBeach ≥ 0.7) and N4 (originSdRatio ≥ 0.8, spawnTopShare ≤ 0.3, spawnDistinct ≥ 8, spawnOnLand ≥ 1), all `activeFrom: 'SP2a'`.
+- Task 15: add T6 (gain 8.5-11.5), T7 (median ratio 0.9-1.1, borderMismatch ≤ 0), T8 (E, PV ≥ 10) and T1lowland (≤ 0.40), all `activeFrom: 'SP2a'`.
 
 ## Appendix A — default surface-biome table
 

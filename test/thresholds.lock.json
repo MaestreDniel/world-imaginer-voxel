@@ -1,5 +1,5 @@
 {
-  "sha256": "6a36daa8f219a49b59c3c455b496a7ccd07cc4a55ca701c5cf91eb2587a83729",
+  "sha256": "0b62b9449b7a77008a6416d5b027a0507a39a8fa86259cca6b051e2108dace21",
   "canonical": {
     "startedSps": [
       "SP0",
@@ -101,6 +101,43 @@
         "value": {
           "activeFrom": "SP1",
           "max": 0.001
+        }
+      },
+      "T1lowland": {
+        "value": {
+          "activeFrom": "SP2a",
+          "max": 0.4
+        }
+      },
+      "T6": {
+        "maxGain": {
+          "activeFrom": "SP2a",
+          "max": 11.5
+        },
+        "minGain": {
+          "activeFrom": "SP2a",
+          "min": 8.5
+        }
+      },
+      "T7": {
+        "borderMismatch": {
+          "activeFrom": "SP2a",
+          "max": 0
+        },
+        "value": {
+          "activeFrom": "SP2a",
+          "max": 1.1,
+          "min": 0.9
+        }
+      },
+      "T8": {
+        "E": {
+          "activeFrom": "SP2a",
+          "min": 10
+        },
+        "PV": {
+          "activeFrom": "SP2a",
+          "min": 10
         }
       },
       "U4": {

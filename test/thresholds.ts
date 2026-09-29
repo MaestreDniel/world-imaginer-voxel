@@ -23,6 +23,10 @@ export const THRESHOLDS: ThresholdTable = {
   },
   B4: { hotColdSpruceWindswept: { max: 0.01, activeFrom: 'SP2a' }, coastBandBeach: { min: 0.7, activeFrom: 'SP2a' } },
   N4: { originSdRatio: { min: 0.8, activeFrom: 'SP2a' }, spawnTopShare: { max: 0.3, activeFrom: 'SP2a' }, spawnDistinct: { min: 8, activeFrom: 'SP2a' }, spawnOnLand: { min: 1, activeFrom: 'SP2a' } },
+  T6: { minGain: { min: 8.5, activeFrom: 'SP2a' }, maxGain: { max: 11.5, activeFrom: 'SP2a' } },
+  T7: { value: { min: 0.9, max: 1.1, activeFrom: 'SP2a' }, borderMismatch: { max: 0, activeFrom: 'SP2a' } },
+  T8: { E: { min: 10, activeFrom: 'SP2a' }, PV: { min: 10, activeFrom: 'SP2a' } },
+  T1lowland: { value: { max: 0.4, activeFrom: 'SP2a' } },
   U4: {
     registryIssues: { max: 0, activeFrom: 'SP1' },
     migrationFailures: { max: 0, activeFrom: 'SP1' },
