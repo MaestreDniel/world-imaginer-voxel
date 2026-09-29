@@ -5,10 +5,10 @@
  */
 import { MAP_TILE_PX, type MapLevel } from '../../core/constants';
 import type { Spawn } from '../../gen/column/spawn';
-import { layerStage } from '../../gen/map/layers';
 import { JobCancelled, type WorkerPool } from '../../engine/workerPool';
 import { MAP_MAX_BPP, MAP_MIN_BPP, type MapView } from './mapState';
-import { createTileCache, tileKey } from './tileCache';
+import { createTileCache } from './tileCache';
+import { createTileSource } from './tileSource';
 import { planTiles, screenToWorld, visibleTiles, worldToScreen } from './viewMath';
 
 export interface MapViewOptions {
@@ -21,8 +21,10 @@ export interface MapViewOptions {
 
 export interface MapCanvas {
   setView(v: MapView): void;
-  /** New pool epoch: the seed words and the stage hashes (hex) by stage id (stage hashes are seed-independent). */
-  setSource(seedKey: string, hashes: Readonly<Record<string, string>>): void;
+  /** The pool finished configuring `epoch`: the seed words and the stage hashes (hex) by stage id. */
+  setSource(epoch: number, seedKey: string, hashes: Readonly<Record<string, string>>): void;
+  /** A reconfigure started: stop requesting and drawing until the next setSource. */
+  clearSource(): void;
   setSpawn(s: Spawn | null): void;
   setPin(p: [number, number] | null): void;
   setGrid(on: boolean): void;
@@ -39,8 +41,6 @@ export function createMapCanvas(host: HTMLElement, pool: WorkerPool, initial: Ma
   const ctx2d = canvas.getContext('2d');
   if (ctx2d === null) throw new Error('2D canvas unavailable');
   let view = initial;
-  let hashes: Readonly<Record<string, string>> | null = null;
-  let seedKey = '';
   let spawn: Spawn | null = null;
   let pin: [number, number] | null = null;
   let grid = false;
@@ -49,17 +49,18 @@ export function createMapCanvas(host: HTMLElement, pool: WorkerPool, initial: Ma
   const cache = createTileCache<ImageBitmap>(256, (b) => b.close());
   const pending = new Set<string>();
 
-  const hashOf = (layer: MapView['layer']) => (hashes === null ? '' : `${seedKey}:${hashes[layerStage(layer)] ?? ''}:${hashes['map'] ?? ''}`);
+  const source = createTileSource();
+  const keyOf = (layer: MapView['layer'], level: MapLevel, tx: number, tz: number) => source.keyFor(layer, level, tx, tz, pool.epoch);
 
   const request = () => {
-    if (hashes === null) return;
     const w = canvas.width;
     const h = canvas.height;
     const plan = planTiles(view, w, h);
-    const wanted = new Set(plan.map((t) => tileKey(view.layer, t.level, t.tx, t.tz, hashOf(view.layer))));
-    pool.cancelTiles((r) => !wanted.has(tileKey(r.layer, r.level, r.tx, r.tz, hashOf(r.layer))));
+    const wanted = new Set(plan.map((t) => keyOf(view.layer, t.level, t.tx, t.tz)));
+    pool.cancelTiles((r) => { const k = keyOf(r.layer, r.level, r.tx, r.tz); return k === null || !wanted.has(k); });
     for (const t of plan) {
-      const key = tileKey(view.layer, t.level, t.tx, t.tz, hashOf(view.layer));
+      const key = keyOf(view.layer, t.level, t.tx, t.tz);
+      if (key === null) return;
       if (pending.has(key) || cache.get(key) !== undefined) continue;
       pending.add(key);
       const layer = view.layer;
@@ -77,7 +78,8 @@ export function createMapCanvas(host: HTMLElement, pool: WorkerPool, initial: Ma
     const span = MAP_TILE_PX * level;
     let missing = 0;
     for (const t of visibleTiles(view, w, h, level)) {
-      const bmp = cache.get(tileKey(view.layer, level, t.tx, t.tz, hashOf(view.layer)));
+      const key = keyOf(view.layer, level, t.tx, t.tz);
+      const bmp = key === null ? undefined : cache.get(key);
       if (bmp === undefined) { missing++; continue; }
       const [sx, sy] = worldToScreen(view, w, h, t.tx * span, t.tz * span);
       const size = span / view.bpp;
@@ -121,7 +123,7 @@ export function createMapCanvas(host: HTMLElement, pool: WorkerPool, initial: Ma
     const target = planTiles(view, canvas.width, canvas.height).find((t) => t.level !== 256)?.level;
     if (target !== undefined) drawLevel(target);
     drawOverlays();
-    if (firstStart > 0 && missingPreview === 0 && hashes !== null) {
+    if (firstStart > 0 && missingPreview === 0 && keyOf(view.layer, 256, 0, 0) !== null) {
       opts.onFirstImage(performance.now() - firstStart);
       firstStart = 0;
     }
@@ -167,7 +169,8 @@ export function createMapCanvas(host: HTMLElement, pool: WorkerPool, initial: Ma
   resize();
   return {
     setView(v) { view = v; request(); schedule(); },
-    setSource(seed, h) { seedKey = seed; hashes = h; firstStart = performance.now(); request(); schedule(); },
+    setSource(epoch, seed, h) { source.set(epoch, seed, h); firstStart = performance.now(); request(); schedule(); },
+    clearSource() { source.clear(); schedule(); },
     setSpawn(s) { spawn = s; schedule(); },
     setPin(p) { pin = p; schedule(); },
     setGrid(on) { grid = on; schedule(); },

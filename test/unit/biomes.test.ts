@@ -84,3 +84,22 @@ describe('zoom', () => {
     expect(zoomQuart(ctx, 2, 2, [0, 0])).toEqual([0, 0]);
   });
 });
+
+describe('W-sign filters that exclude every box (final review)', () => {
+  test('a table whose boxes all have wSign +1 still picks a box for W < 0, identically on both paths', async () => {
+    const { columnPoint } = await import('../../src/gen/column/columnPoint');
+    const { buildColumnSample, latticeIndex, newColumnSample } = await import('../../src/gen/column/columnStage');
+    const t = BIOME_TABLE_DEFAULT;
+    const allPlus = Object.fromEntries(Object.entries(t).map(([k, r]) => [k, { ...r, wSign: 1 as const }]));
+    const ctx = ctxFor('42', { biomes: { table: allPlus as typeof t } });
+    const p = pickBox(ctx, 0.5, 0.5, 0, 0, 0, -0.5, newPick());
+    expect(p.box).toBeGreaterThanOrEqual(0);
+    expect(typeof p.biome).toBe('number');
+    const s = buildColumnSample(ctx, 3, 4, newColumnSample());
+    for (let j = 0; j <= 4; j++) for (let i = 0; i <= 4; i++) {
+      const cp = columnPoint(ctx, 48 + 4 * i, 64 + 4 * j);
+      expect(typeof cp.biome).toBe('number');
+      expect(s.biome[latticeIndex(i, j)]).toBe(cp.biome);
+    }
+  });
+});

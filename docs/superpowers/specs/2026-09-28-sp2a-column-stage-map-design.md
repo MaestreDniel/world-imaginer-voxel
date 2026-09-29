@@ -378,7 +378,7 @@ Messages are plain objects checked by `parseToWorker` / `parseFromWorker`. Coord
   - The dry run showed why ColumnSamples are not used for tiles: at 16 blocks/px each pixel is its own column, and even at 4 blocks/px a ColumnSample (49 points) serves only 16 pixels, so the point path is 4× cheaper. DT2 already ties the two paths together.
   - Shaded layers (relief, rivers, lakes) sample a one-pixel border in the same pass, so adjacent tiles shade seamlessly.
 - **Levels on screen.** `levelFor(bpp)` gives the coarsest level ≤ 2·bpp, at least 4. Every view first requests preview tiles (priority by distance), then its own level (priority 1000 + distance).
-- **Cache.** An LRU of 256 ImageBitmaps on the main thread, keyed by `(layer, level, tx, tz, seed words, layer stage hash, map stage hash)`. Stage hashes do not depend on the seed, so the seed is part of the key. An edit invalidates only layers whose hash changed.
+- **Cache.** An LRU of 256 ImageBitmaps on the main thread, keyed by `(layer, level, tx, tz, seed words, layer stage hash, map stage version)` through `ui/map/tileSource.ts`. Stage hashes do not depend on the seed, so the seed is part of the key. The map stage's *hash* chains every upstream stage, so only its version enters the key; an edit invalidates only the layers whose own stage hash changed. Keys exist only while the pool runs the epoch the source was set for, so a reconfigure never stores new-world tiles under old keys (final review).
 - **Display.** Zoom is continuous from 1/4 to 256 blocks/px, anchored at the cursor. The view draws cached preview tiles first and the view-level tiles on top.
 
 ### 6.2 Layers (`gen/map/layers.ts`, `palette.ts`)

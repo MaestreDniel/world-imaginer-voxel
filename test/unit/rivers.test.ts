@@ -80,3 +80,22 @@ describe('sampleRivers', () => {
     expect(wet).toBeLessThan(400);
   });
 });
+
+describe('degenerate but valid river parameters stay finite (final review)', () => {
+  test('zero valley width, equal fade edges and inverted fade edges', () => {
+    const cases = [
+      { ...P, valleyBase: 0, valleyPerE: 0 },
+      { ...P, altFadeLo: 150, altFadeHi: 150, coastFadeLo: -0.1, coastFadeHi: -0.1 },
+      { ...P, altFadeLo: 170, altFadeHi: 120, coastFadeLo: 0, coastFadeHi: -0.5 },
+    ];
+    for (const p of cases) for (const d of [0, 1, 4.75, 5, 40, 500]) for (const off of [60, 120, 150, 170, 250]) for (const C of [-0.5, -0.1, 0, 0.3]) {
+      const r = riverTerms({ ...base, Rz: d * 0.01, offset0: off, C }, p, newRiver());
+      for (const v of [r.offset, r.sigma, r.jag, r.riverStrength]) expect(Number.isFinite(v), JSON.stringify({ p, d, off, C, r })).toBe(true);
+    }
+  });
+  test('an edge-equal fade is a step at the edge', () => {
+    const p = { ...P, altFadeLo: 150, altFadeHi: 150 };
+    expect(riverTerms({ ...base, Rz: 0, offset0: 149 }, p, newRiver()).wet).toBe(true);
+    expect(riverTerms({ ...base, Rz: 0, offset0: 151 }, p, newRiver()).gorge).toBe(true);
+  });
+});

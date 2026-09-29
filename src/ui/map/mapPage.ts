@@ -105,8 +105,9 @@ export function mountMapPage(root: HTMLElement): void {
     renderStatus();
     writeUrl();
     canvas.setSpawn(null);
+    canvas.clearSource();
     pool.configure(s.seedText, s.params).then((ready) => {
-      canvas.setSource(`${s.seed[0]}.${s.seed[1]}`, ready.stageHashes as Record<string, string>);
+      canvas.setSource(ready.epoch, `${s.seed[0]}.${s.seed[1]}`, ready.stageHashes as Record<string, string>);
       return pool.spawn();
     }).then((sp) => {
       canvas.setSpawn(sp);

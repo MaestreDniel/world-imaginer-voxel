@@ -18,14 +18,21 @@ export const newPick = (): Pick => ({ box: -1, biome: 0, fitness: 0, runnerUp: I
 const V = new Float64Array(5);
 
 export function pickBox(ctx: GenContext, C: number, E: number, PV: number, T: number, H: number, W: number, out: Pick): Pick {
+  pickPass(ctx, C, E, PV, T, H, W < 0 ? -1 : 1, out);
+  // A table whose W filters exclude every box (e.g. all wSign +1 and W < 0) falls back to ignoring the filter.
+  if (out.box < 0) pickPass(ctx, C, E, PV, T, H, 0, out);
+  return out;
+}
+
+/** One pass over the boxes; sign 0 disables the W filter. */
+function pickPass(ctx: GenContext, C: number, E: number, PV: number, T: number, H: number, sign: number, out: Pick): void {
   V[0] = C; V[1] = E; V[2] = PV; V[3] = T; V[4] = H;
-  const sign = W < 0 ? -1 : 1;
   let best = -1;
   let bestF = Infinity;
   let bestP = Infinity;
   let second = Infinity;
   for (const b of ctx.boxes) {
-    if (b.wSign !== 0 && b.wSign !== sign) continue;
+    if (sign !== 0 && b.wSign !== 0 && b.wSign !== sign) continue;
     let f = 0;
     for (let k = 0; k < 5; k++) {
       const v = V[k]!;
@@ -42,10 +49,9 @@ export function pickBox(ctx: GenContext, C: number, E: number, PV: number, T: nu
     }
   }
   out.box = best;
-  out.biome = TO_BIOME[best]!;
+  out.biome = best < 0 ? -1 : TO_BIOME[best]!;
   out.fitness = bestF;
   out.runnerUp = second;
-  return out;
 }
 
 const SCRATCH = newPick();

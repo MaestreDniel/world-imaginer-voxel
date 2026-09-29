@@ -41,16 +41,20 @@ export interface RiverOut {
 export const newRiver = (): RiverOut => ({ riverDist: 0, width: 0, riverStrength: 0, offset: 0, sigma: 0, jag: 0, wet: false, gorge: false });
 
 const lerp = (a: number, b: number, t: number) => a + (b - a) * t;
+/** smoothstep over [lo, hi]; a step at lo when the edges are not ordered (detSmoothstep needs lo < hi). */
+const fade = (lo: number, hi: number, x: number): number => (lo < hi ? SMOOTH(lo, hi, x) : x >= lo ? 1 : 0);
 
 export function riverTerms(i: RiverInput, p: RiverParams, out: RiverOut): RiverOut {
   const riverDist = Math.abs(i.Rz) / Math.max(i.gradLen, 1e-4);
   const w = p.widthMin + p.widthVar * i.u2;
   const half = w / 2;
   const valleyWidth = p.valleyBase + p.valleyPerE * (1 + i.E);
-  const s = SMOOTH(p.coastFadeLo, p.coastFadeHi, i.C);
-  const sAlt = 1 - SMOOTH(p.altFadeLo, p.altFadeHi, i.offset0);
-  const q = Math.max(0, riverDist - half) / valleyWidth;
-  const t = 1 - EXP(-(q * q));
+  const s = fade(p.coastFadeLo, p.coastFadeHi, i.C);
+  const sAlt = 1 - fade(p.altFadeLo, p.altFadeHi, i.offset0);
+  const beyond = Math.max(0, riverDist - half);
+  // A zero valley width (valleyBase = valleyPerE = 0) is a step at the channel edge instead of 0/0.
+  const q = valleyWidth > 0 ? beyond / valleyWidth : 0;
+  const t = valleyWidth > 0 ? 1 - EXP(-(q * q)) : beyond > 0 ? 1 : 0;
   const valleyOffset = lerp(Math.min(i.offset0, p.valleyFloor + p.valleyRise * t), i.offset0, t);
   const sv = s * sAlt;
   const f = 1 - sv * (1 - t);
