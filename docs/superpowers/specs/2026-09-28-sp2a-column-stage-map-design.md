@@ -687,7 +687,9 @@ Tuning of 2026-09-29, with GENERATOR_VERSION 0 → 1:
 - Preview tiles sample one point per 2 × 2 pixels.
 - Goldens re-recorded: 10 keys changed (sp1.params through genKey's version, the column points and sample, the 4 preview tiles, biome at 64 and 16).
 - Bun 47/47. All metric tiers green (B1 full: minShare 0.37 %, ocean family 38.4 %).
-- The production first-image timing and the Chrome/Firefox selftest are re-checked on the tuned build.
+- Production after the tuning (e75cea2, CI green):
+  - `?map` first image 111 / 115 / 113 ms in headless Chrome (target ≤ 300 ms), all `?map` checks green;
+  - `?selftest=1` `✓ all 47 goldens match` in headless Chrome (5.8 s) and 47/47 in Firefox 152 (the user; JSON in `assets/sp2a/selftest-firefox-v1.json`).
 
 
 ### Threshold log
