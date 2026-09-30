@@ -1,0 +1,194 @@
+{
+ "userAgent": "Mozilla/5.0 (X11; Ubuntu; Linux x86_64; rv:152.0) Gecko/20100101 Firefox/152.0",
+ "generatorVersion": 3,
+ "results": {
+  "sp1.detMath.detSin": {
+   "expected": "c0068832078fcc5f",
+   "actual": "c0068832078fcc5f"
+  },
+  "sp1.detMath.detCos": {
+   "expected": "feb91af46e2d5fa8",
+   "actual": "feb91af46e2d5fa8"
+  },
+  "sp1.detMath.detExp": {
+   "expected": "c53d7ddf72bd3cec",
+   "actual": "c53d7ddf72bd3cec"
+  },
+  "sp1.detMath.detExp2": {
+   "expected": "169843df6c4b480a",
+   "actual": "169843df6c4b480a"
+  },
+  "sp1.detMath.detErf": {
+   "expected": "2e75e35244a19c1a",
+   "actual": "2e75e35244a19c1a"
+  },
+  "sp1.detMath.detSmoothstep": {
+   "expected": "e8ecc239194f0001",
+   "actual": "e8ecc239194f0001"
+  },
+  "sp1.noise.climate.warp.shift.noise.x": {
+   "expected": "ab58facf37a59f64",
+   "actual": "ab58facf37a59f64"
+  },
+  "sp1.noise.climate.warp.shift.noise.z": {
+   "expected": "ce2a355bb0a4b957",
+   "actual": "ce2a355bb0a4b957"
+  },
+  "sp1.noise.climate.warp.C.noise.x": {
+   "expected": "73777f2e5850f398",
+   "actual": "73777f2e5850f398"
+  },
+  "sp1.noise.climate.warp.C.noise.z": {
+   "expected": "2eeae0c123b03ad4",
+   "actual": "2eeae0c123b03ad4"
+  },
+  "sp1.noise.climate.warp.R.noise.x": {
+   "expected": "3b557c06de0599df",
+   "actual": "3b557c06de0599df"
+  },
+  "sp1.noise.climate.warp.R.noise.z": {
+   "expected": "cd46ececce41f6e0",
+   "actual": "cd46ececce41f6e0"
+  },
+  "sp1.noise.climate.C": {
+   "expected": "680c01ba6642f1a7",
+   "actual": "680c01ba6642f1a7"
+  },
+  "sp1.noise.climate.E": {
+   "expected": "58586d7808dfe2d1",
+   "actual": "58586d7808dfe2d1"
+  },
+  "sp1.noise.climate.W": {
+   "expected": "a0f5467da1603401",
+   "actual": "a0f5467da1603401"
+  },
+  "sp1.noise.climate.T": {
+   "expected": "98a56062d2803095",
+   "actual": "98a56062d2803095"
+  },
+  "sp1.noise.climate.H": {
+   "expected": "bbeef615830d715b",
+   "actual": "bbeef615830d715b"
+  },
+  "sp1.noise.climate.R": {
+   "expected": "7f29f6fd6882fcf0",
+   "actual": "7f29f6fd6882fcf0"
+  },
+  "sp1.noise.test.density3d": {
+   "expected": "127615bde2c54f3e",
+   "actual": "127615bde2c54f3e"
+  },
+  "sp1.noise.test.adv2d16": {
+   "expected": "12594d7f09c393c9",
+   "actual": "12594d7f09c393c9"
+  },
+  "sp1.noise.test.adv3d8": {
+   "expected": "439e4ef6ce852dd6",
+   "actual": "439e4ef6ce852dd6"
+  },
+  "sp1.noise.test.adv3d32": {
+   "expected": "a456079e4b571a2c",
+   "actual": "a456079e4b571a2c"
+  },
+  "sp1.spline.OFFSET": {
+   "expected": "9d5ae62fbb06366d",
+   "actual": "9d5ae62fbb06366d"
+  },
+  "sp1.spline.SIGMA": {
+   "expected": "7163452d6496dba1",
+   "actual": "7163452d6496dba1"
+  },
+  "sp1.spline.JAG": {
+   "expected": "445a1955b3113d35",
+   "actual": "445a1955b3113d35"
+  },
+  "sp1.spline.TANGENT_FIXTURE": {
+   "expected": "48c1ad609fc51ac9",
+   "actual": "48c1ad609fc51ac9"
+  },
+  "sp1.params": {
+   "expected": "9bed26417b2ca0fb",
+   "actual": "9bed26417b2ca0fb"
+  },
+  "sp2a.column.point.default": {
+   "expected": "901d82b3975139c2",
+   "actual": "901d82b3975139c2"
+  },
+  "sp2a.column.point.large_biomes": {
+   "expected": "fbfc7fcf202b9c71",
+   "actual": "fbfc7fcf202b9c71"
+  },
+  "sp2a.column.sample": {
+   "expected": "026e17f71d463678",
+   "actual": "026e17f71d463678"
+  },
+  "sp2a.tile.biome.256": {
+   "expected": "6d4706bd9dbe40c5",
+   "actual": "6d4706bd9dbe40c5"
+  },
+  "sp2a.tile.biome.64": {
+   "expected": "bf04282ca30077fa",
+   "actual": "bf04282ca30077fa"
+  },
+  "sp2a.tile.biome.16": {
+   "expected": "6e2b610d2ccf640a",
+   "actual": "6e2b610d2ccf640a"
+  },
+  "sp2a.tile.biome.4": {
+   "expected": "85c6cc65316619ce",
+   "actual": "85c6cc65316619ce"
+  },
+  "sp2a.tile.relief.256": {
+   "expected": "ccd05d65032e5dd5",
+   "actual": "ccd05d65032e5dd5"
+  },
+  "sp2a.tile.relief.64": {
+   "expected": "078b84f97d3afc63",
+   "actual": "078b84f97d3afc63"
+  },
+  "sp2a.tile.relief.16": {
+   "expected": "83c7e575c763492b",
+   "actual": "83c7e575c763492b"
+  },
+  "sp2a.tile.relief.4": {
+   "expected": "eb049779fda8b395",
+   "actual": "eb049779fda8b395"
+  },
+  "sp2a.tile.rivers.256": {
+   "expected": "95bd582b209aa855",
+   "actual": "95bd582b209aa855"
+  },
+  "sp2a.tile.rivers.64": {
+   "expected": "6da7f75d7a9bfcaf",
+   "actual": "6da7f75d7a9bfcaf"
+  },
+  "sp2a.tile.rivers.16": {
+   "expected": "8fc6e210afdfed8c",
+   "actual": "8fc6e210afdfed8c"
+  },
+  "sp2a.tile.rivers.4": {
+   "expected": "72f6d6c446d76cb2",
+   "actual": "72f6d6c446d76cb2"
+  },
+  "sp2a.tile.C.256": {
+   "expected": "df02f1596684e5cd",
+   "actual": "df02f1596684e5cd"
+  },
+  "sp2a.tile.C.64": {
+   "expected": "d0d22bdc15560fc4",
+   "actual": "d0d22bdc15560fc4"
+  },
+  "sp2a.tile.C.16": {
+   "expected": "3cbad99308c9a597",
+   "actual": "3cbad99308c9a597"
+  },
+  "sp2a.tile.C.4": {
+   "expected": "154b3bda8afb6efd",
+   "actual": "154b3bda8afb6efd"
+  },
+  "sp2a.spawn": {
+   "expected": "4edb3e81ef087062",
+   "actual": "4edb3e81ef087062"
+  }
+ }
+}

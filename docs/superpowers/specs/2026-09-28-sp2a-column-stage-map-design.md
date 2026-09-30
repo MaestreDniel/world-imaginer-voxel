@@ -1,7 +1,7 @@
 # SP2a — Column stage, worker pool and the `?map` page (Design)
 
 Date: 2026-09-28
-Status: Implemented on branch `sp2a/column-map` (2026-09-29); exit pending CI and the Vercel preview (first-image timing in Chrome, `?selftest=1` in Chrome and Firefox)
+Status: Complete (2026-09-30), at GENERATOR_VERSION 3; exit evidence below
 Parent: master spec `2026-09-26-architecture-design.md`. The sections involved are:
 - §10 SP2, which this spec splits into SP2a and SP2b;
 - the data model and generation sections: §2.4, §2.7, §3.0, §3.2-3.5, §3.7, §3.10, §3.16, §3.17;
@@ -778,6 +778,9 @@ Fix of 2026-09-30, GENERATOR_VERSION 2 → 3 (underwater beaches; design approve
   - `?map`: first image 85 / 110 / 99 / 84 ms in headless Chrome; all `?map` checks green.
   - `?selftest=1`: `✓ all 47 goldens match` (5.6 s).
   - Biome layer at 16 blocks/px: coast biomes form thin strips on land, and the sea is ocean-family up to the shoreline.
+  - `?selftest=1` in Firefox 152 (the user): 47/47 match, and every `actual` equals `test/goldens.json` (generatorVersion 3). The JSON is in `assets/sp2a/selftest-firefox-v3.json`.
+
+SP2a is complete (2026-09-30): every §11 exit criterion holds at GENERATOR_VERSION 3.
 
 
 ### Threshold log
