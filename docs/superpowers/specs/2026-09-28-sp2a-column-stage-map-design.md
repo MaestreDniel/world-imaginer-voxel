@@ -774,6 +774,10 @@ Fix of 2026-09-30, GENERATOR_VERSION 2 → 3 (underwater beaches; design approve
 
 - The ocean family now equals the sea share: 44.1 %, under the 45 % cap (§10).
 - B4 falls just below 100 % because of sea floor that lake rims lift above sea level. These columns stay sea class, so they get an ocean biome on dry land (0.014 % of the world, §10).
+- Production after the fix (306c502, CI green):
+  - `?map`: first image 85 / 110 / 99 / 84 ms in headless Chrome; all `?map` checks green.
+  - `?selftest=1`: `✓ all 47 goldens match` (5.6 s).
+  - Biome layer at 16 blocks/px: coast biomes form thin strips on land, and the sea is ocean-family up to the shoreline.
 
 
 ### Threshold log
