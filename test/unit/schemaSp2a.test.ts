@@ -46,7 +46,7 @@ describe('SP2a schema groups', () => {
 describe('default biome table (SP2a spec §3.1 authoring rules)', () => {
   const T = BIOME_TABLE_DEFAULT;
   const EDGES: Record<string, readonly number[]> = {
-    C: [-1, -0.55, -0.22, -0.1, 1], E: [-1, -0.375, 1], PV: [-1, -0.6, 0.2, 0.7, 1], T: [-1, -0.8, -0.6, -0.2, 0.2, 0.6, 1], H: [-1, -0.6, -0.2, 0.2, 0.6, 1],
+    C: [-1, -0.55, -0.22, -0.1, -0.04, 1], E: [-1, -0.375, 1], PV: [-1, -0.6, 0.2, 0.7, 1], T: [-1, -0.8, -0.6, -0.2, 0.2, 0.6, 1], H: [-1, -0.6, -0.2, 0.2, 0.6, 1],
   };
   test('26 box-picked biomes with unique priorities', () => {
     expect(Object.keys(T)).toEqual([...BOX_BIOMES]);
@@ -58,22 +58,30 @@ describe('default biome table (SP2a spec §3.1 authoring rules)', () => {
   test('windswept and peak boxes bound T; beach has no PV restriction; volcano is hot peaks', () => {
     for (const n of ['windswept_hills', 'stony_peaks', 'jagged_peaks', 'frozen_peaks', 'volcano', 'snowy_slopes'] as const) expect(T[n].T[1] - T[n].T[0]).toBeLessThan(2);
     expect(T.beach.PV).toEqual([-1, 1]);
-    expect([T.beach.C, T.snowy_beach.C, T.stony_shore.C]).toEqual([[-0.22, -0.1], [-0.22, -0.1], [-0.22, -0.1]]);
+    expect([T.beach.C, T.snowy_beach.C, T.stony_shore.C]).toEqual([[-0.22, -0.04], [-0.22, -0.04], [-0.22, -0.04]]);
+    // Oceans reach up to C −0.1 (the highest C of a sea-floor column); the height filter keeps them off land.
+    expect([T.deep_ocean.C, T.ocean.C, T.warm_ocean.C, T.frozen_ocean.C]).toEqual([[-1, -0.55], [-0.55, -0.1], [-1, -0.1], [-1, -0.1]]);
     expect([T.volcano.T, T.volcano.PV, T.volcano.E]).toEqual([[0.6, 1], [0.7, 1], [-1, -0.375]]);
     // Liquid oceans reach down to T −0.8; only the coldest seas freeze (tuning of 2026-09-29).
     expect([T.frozen_ocean.T, T.ocean.T, T.deep_ocean.T]).toEqual([[-1, -0.8], [-0.8, 0.6], [-0.8, 0.6]]);
     const onlyOceans = Object.entries(T).filter(([, r]) => r.T.includes(-0.8)).map(([n]) => n).sort();
     expect(onlyOceans).toEqual(['deep_ocean', 'frozen_ocean', 'ocean']);
   });
-  test('the boxes tile the climate space: 20 000 random points fall in exactly one box (edges excluded)', () => {
+  test('the boxes tile the climate space per height class: 20 000 random points fall in exactly one box (edges excluded)', () => {
     let s = 12345;
     const rnd = () => { s = (Math.imul(s, 1664525) + 1013904223) >>> 0; return (s / 4294967296) * 2 - 1; };
+    const OCEANS = new Set(['deep_ocean', 'ocean', 'warm_ocean', 'frozen_ocean']);
     for (let i = 0; i < 20000; i++) {
       const p = { C: rnd(), E: rnd(), PV: rnd(), T: rnd(), H: rnd() };
       const w = rnd() < 0 ? -1 : 1;
-      const inside = Object.entries(T).filter(([, r]) => BOX_AXES.every((a) => p[a] >= r[a][0] && p[a] <= r[a][1]) && (r.wSign === 0 || r.wSign === w)).map(([n]) => n);
-      const hotHumidValley = p.T > 0.6 && p.H > 0.2 && p.H < 0.6 && p.PV < -0.6 && p.C > -0.1 && p.E > -0.375;
-      expect(inside.length, `${JSON.stringify(p)} → ${inside.join(',')}`).toBe(hotHumidValley ? 0 : 1);
+      // Sea-floor columns (offset0 below sea level) have C below −0.1 and take only ocean boxes; land columns have
+      // C above −0.22 (in practice above −0.14) and take only the others. In the shore band both kinds occur.
+      const sea = p.C < -0.22 ? true : p.C > -0.1 ? false : rnd() < 0;
+      const inside = Object.entries(T)
+        .filter(([n, r]) => OCEANS.has(n) === sea && BOX_AXES.every((a) => p[a] >= r[a][0] && p[a] <= r[a][1]) && (r.wSign === 0 || r.wSign === w))
+        .map(([n]) => n);
+      const hotHumidValley = !sea && p.T > 0.6 && p.H > 0.2 && p.H < 0.6 && p.PV < -0.6 && p.C > -0.04 && p.E > -0.375;
+      expect(inside.length, `${JSON.stringify(p)} sea ${sea} → ${inside.join(',')}`).toBe(hotHumidValley ? 0 : 1);
     }
   });
 });

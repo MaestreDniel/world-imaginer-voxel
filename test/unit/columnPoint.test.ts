@@ -43,7 +43,7 @@ describe('columnPoint', () => {
       expect([p.offset, p.sigma, p.jag, p.lakeMask]).toEqual([l.offset, l.sigma, l.jag, l.lakeMask]);
       expect(p.surfaceEst).toBe(p.offset);
       expect(p.islandMask).toBe(0);
-      expect(p.biome).toBe(pickBiome(ctx, c.C, c.E, c.PV, c.T, c.H, c.W, r.wet));
+      expect(p.biome).toBe(pickBiome(ctx, c.C, c.E, c.PV, c.T, c.H, c.W, s.offset0, r.wet));
     }
   });
   test('river columns are river biomes; oceans sit below sea level', () => {
@@ -53,6 +53,8 @@ describe('columnPoint', () => {
       const p = columnPoint(ctx, x, z);
       if (p.riverWet) expect(biomeFamily(p.biome)).toBe('river');
       if (biomeName(p.biome) === 'deep_ocean') expect(p.offset).toBeLessThan(63);
+      // Height filter (SP2a spec §3.2): ocean-family biomes exactly where offset0 is below sea level.
+      if (!p.riverWet) expect(biomeFamily(p.biome) === 'ocean').toBe(p.offset0 < 63);
       if (p.surfaceWaterLevel === 63 && !p.riverWet) ocean++;
       if (p.surfaceWaterLevel === -Infinity) land++;
     }

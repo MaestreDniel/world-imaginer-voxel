@@ -32,7 +32,7 @@ metricTest('B1', ['minShare', 'minRareShare', 'largestLand', 'oceanFamilyMin', '
       counts[c.biome]!++;
       total++;
       if (c.riverWet) continue;
-      pickBox(ctx, c.C, c.E, c.PV, c.T, c.H, c.W, p);
+      pickBox(ctx, c.C, c.E, c.PV, c.T, c.H, c.W, c.offset0, p);
       if (p.runnerUp === p.fitness) ties++;
       if (p.fitness > 0) outside++;
     }

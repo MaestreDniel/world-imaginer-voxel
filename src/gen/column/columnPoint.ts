@@ -72,7 +72,7 @@ export function samplePoint(ctx: GenContext, x: number, z: number, withSteep: bo
   out.surfaceWaterLevel = waterLevel(l.offset, r.wet, l.lakeMask, l.lakeLevel);
   out.surfaceEst = l.offset;
   out.islandMask = 0;
-  out.biome = PICK(ctx, c.C, c.E, c.PV, c.T, c.H, c.W, r.wet);
+  out.biome = PICK(ctx, c.C, c.E, c.PV, c.T, c.H, c.W, s.offset0, r.wet);
   return out;
 }
 
@@ -97,6 +97,6 @@ export function sampleCoarse(ctx: GenContext, x: number, z: number, out: PointRe
   out.surfaceWaterLevel = waterLevel(s.offset0, false, 0, -Infinity);
   out.surfaceEst = s.offset0;
   out.islandMask = 0;
-  out.biome = PICK(ctx, c.C, c.E, c.PV, c.T, c.H, c.W, false);
+  out.biome = PICK(ctx, c.C, c.E, c.PV, c.T, c.H, c.W, s.offset0, false);
   return out;
 }

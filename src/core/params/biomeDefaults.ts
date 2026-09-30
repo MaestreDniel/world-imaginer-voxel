@@ -1,9 +1,12 @@
 /**
  * The default surface-biome boxes (master §3.10, SP2a spec §3.1 and Appendix A). Bands in uniform
  * climate units: T and H edges −0.6 / −0.2 / 0.2 / 0.6 (plus −0.8 for oceans only: frozen seas are the coldest
- * ~10 % of oceans, tuned 2026-09-29); C deep ocean < −0.55, ocean < −0.22, coast
- * −0.22..−0.10, inland above; E mountains < −0.375; PV valleys < −0.6, peaks > 0.7. The boxes tile the
- * climate space (ties only on shared edges); river and frozen river come from the river flag, not boxes.
+ * ~10 % of oceans, tuned 2026-09-29); C deep ocean < −0.55, ocean < −0.10, coast −0.22..−0.04, inland above;
+ * E mountains < −0.375; PV valleys < −0.6, peaks > 0.7. The picker's height filter (spec §3.2) gives sea-floor
+ * columns (offset0 below sea level, C < −0.10) only the ocean boxes and land columns (C > −0.14) only the others,
+ * so oceans and coast share the shore band and the shoreline decides between them (tuned 2026-09-30). Per
+ * height class the boxes tile the climate space (ties only on shared edges); river and frozen river come from
+ * the river flag, not boxes.
  */
 import type { BoxRow, BoxTable, Interval } from './kit';
 
@@ -21,11 +24,11 @@ const ALL: Interval = [-1, 1];
 const box = (C: Interval, E: Interval, PV: Interval, T: Interval, H: Interval, priority: number, wSign: -1 | 0 | 1 = 0): BoxRow =>
   ({ C, E, PV, T, H, wSign, priority });
 
-const OCEANS: Interval = [-1, -0.22];
+const OCEANS: Interval = [-1, -0.1];
 const FROZEN_SEA: Interval = [-1, -0.8];
 const LIQUID_SEA: Interval = [-0.8, 0.6];
-const COAST: Interval = [-0.22, -0.1];
-const INLAND: Interval = [-0.1, 1];
+const COAST: Interval = [-0.22, -0.04];
+const INLAND: Interval = [-0.04, 1];
 const MOUNT: Interval = [-1, -0.375];
 const LOW: Interval = [-0.375, 1];
 const PEAK: Interval = [0.7, 1];
@@ -41,7 +44,7 @@ const HOT: Interval = [0.6, 1];
 
 export const BIOME_TABLE_DEFAULT: BoxTable<BoxBiome> = {
   deep_ocean: box([-1, -0.55], ALL, ALL, LIQUID_SEA, ALL, 1),
-  ocean: box([-0.55, -0.22], ALL, ALL, LIQUID_SEA, ALL, 2),
+  ocean: box([-0.55, -0.1], ALL, ALL, LIQUID_SEA, ALL, 2),
   warm_ocean: box(OCEANS, ALL, ALL, HOT, ALL, 3),
   frozen_ocean: box(OCEANS, ALL, ALL, FROZEN_SEA, ALL, 4),
   beach: box(COAST, LOW, ALL, [-0.6, 1], ALL, 5),

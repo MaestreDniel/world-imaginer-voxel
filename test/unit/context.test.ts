@@ -15,7 +15,7 @@ test('GenContext prepares every schema noise, the three splines and the biome bo
   expect(evalSpline(ctx.offset, Float64Array.of(-1, 0, 0, 0, 0, 0))).toBe(16);
   expect(ctx.boxes.map((b) => b.index)).toEqual(BOX_BIOMES.map((_, i) => i));
   const v = ctx.boxes[BOX_BIOMES.indexOf('volcano')]!;
-  expect([Array.from(v.lo), Array.from(v.hi), v.wSign, v.priority]).toEqual([[-0.1, -1, 0.7, 0.6, -1], [1, -0.375, 1, 1, 1], 0, 26]);
+  expect([Array.from(v.lo), Array.from(v.hi), v.wSign, v.priority]).toEqual([[-0.04, -1, 0.7, 0.6, -1], [1, -0.375, 1, 1, 1], 0, 26]);
   expect(ctxFor('42').lakeSeed).toBe(ctx.lakeSeed);
   expect(ctxFor('43').lakeSeed).not.toBe(ctx.lakeSeed);
 });

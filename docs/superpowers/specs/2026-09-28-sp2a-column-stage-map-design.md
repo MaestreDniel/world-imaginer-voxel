@@ -264,23 +264,24 @@ biome    → picker at this point (§3.2)
 - **Boxes.** The 26 box-picked biomes (all but river and frozen river) get a box in `params.biomes.table` (a `boxTable` leaf, §4.1): an interval per climate axis `C, E, PV, T, H`, a `wSign` (−1 | 0 | +1) and a unique `priority`.
 - **Authoring rules**, checked by a unit test on the default table:
   - T and H edges are on −0.6 / −0.2 / 0.2 / 0.6, plus −0.8 for the ocean boxes only: frozen oceans are the coldest seas (T < −0.8) and liquid oceans reach down to −0.8 (tuning of 2026-09-29; frozen oceans went from 7.7 % to 3.8 % of the world).
-  - C bands: deep ocean < −0.55; ocean < −0.22; coast −0.22..−0.10; inland above.
+  - C bands: deep ocean < −0.55; ocean < −0.10; coast −0.22..−0.04; inland above. Oceans and coast overlap on the shore band −0.22..−0.10 and the picker's height filter (§3.2) decides between them: sea-floor columns (offset0 < 63) have C < −0.10 and land columns C > −0.14 (measured over 2 M columns, seeds 1-8). Tuning of 2026-09-30: with climate-only picking, 84 % of the coast-family columns lay under water and beaches were 4 blocks wide (median along transects); now none is under water, beach strips are 20 blocks wide (median; p10 2, p90 84) and beach, snowy beach and stony shore take 1.9 %, 0.49 % and 1.4 % of the world.
   - E splits mountains (< −0.375) from lowlands.
   - PV edges −0.6 (valleys), 0.2 (meadow) and 0.7 (peaks).
   - Windswept, snowy slopes and every peak box bound T.
   - The coast band holds beach (T ≥ −0.6), snowy beach (T < −0.6) and stony shore (mountain E), with no PV restriction.
   - Volcano takes the hot peaks: T ≥ 0.6, PV ≥ 0.7, mountain E. Hot mountain slopes are badlands.
   - River and frozen river come from the river flag (§3.2).
-- **Partition.** The default boxes tile the climate space: every point lies in exactly one box, apart from shared edges and one small gap (hot, humid valleys, which go to the nearest box by overshoot). A unit test checks 20 000 random points.
+- **Partition.** Per height class (sea floor: the four ocean boxes; land: the other 22), the default boxes tile the climate space: every point lies in exactly one box, apart from shared edges and one small gap (hot, humid valleys, which go to the nearest box by overshoot). A unit test checks 20 000 random points.
 - **The default table is Appendix A.** The dry run measured it against B1/B4 and needed no tuning.
 
 ### 3.2 Picker (`picker.ts`)
 
 - **Order of rules:**
   1. River override: `isRiverChannel` (the §2.4 wet flag, so land only) gives `river`, or `frozen_river` when T_u < −0.6.
-  2. Lake columns keep the land biome underneath: the picker runs on climate only.
-  3. Otherwise, for each box: `fitness = Σ_axis overshoot²`, where overshoot is the distance outside the interval (0 inside).
-  4. The best is the lowest fitness, with ties broken by the lowest `priority`. `wSign` boxes are skipped when sign(W) disagrees.
+  2. Lake columns keep the land biome underneath: the picker runs on climate and offset0 (before rivers and lakes).
+  3. Height filter: a column with offset0 < sea level (63) takes only the ocean-family boxes, any other column only the others. It never empties the set (every table has all 26 rows).
+  4. Otherwise, for each remaining box: `fitness = Σ_axis overshoot²`, where overshoot is the distance outside the interval (0 inside).
+  5. The best is the lowest fitness, with ties broken by the lowest `priority`. `wSign` boxes are skipped when sign(W) disagrees; if that empties the height class, the W filter is dropped.
 - **Exact ties** (equal fitness and equal priority) are impossible by construction, since priorities are unique. B1's "exact ties 0" counts equal-fitness pairs resolved by priority *inside* boxes, which should be 0 for a partition-shaped table.
 - **"Outside all boxes"** means best fitness > 0. B1 caps it at 2 %.
 
@@ -451,11 +452,12 @@ The page draws the overlays: the spawn marker, the pinned point, and an optional
   - registry order, families and colours;
   - each box centre picks its biome with a clean margin;
   - W sign, river override, overshoot outside every box, edge ties by priority, volcano versus badlands;
+  - the height filter (§3.2): the shore band gives ocean, beach, frozen ocean, snowy beach or stony shore by offset0; a sweep over C keeps sea columns ocean-family and land columns not; the W-filter fallback holds within a height class;
   - the zoom's neighbourhood, determinism and tie rule.
 - **columnPoint:**
   - `waterLevel` cases;
   - composition order;
-  - river columns are river biomes;
+  - river columns are river biomes, and biomes are ocean-family exactly where offset0 < 63 (outside rivers);
   - `samplePoint` without steep equals every other field;
   - **the terrain does not depend on the biomes:** shuffling the biome table and the zoom jitter changes biomes but no height, water or steep field (this replaces T3 in SP2a, §12).
 - **DT2:** 4096 random columns × 49 lattice points (seed 42), plus 512 columns with `scaleMul` 4. Every field equals `columnPoint` under `Object.is`, biome and flags included.
@@ -503,7 +505,7 @@ All metrics sample fixed windows inside the colKey window with world seeds 1..S.
 | B2 (column) | median river length weighted by river cells (the length half the river water lies in, from component bounding boxes); share of land; components ≥ 300 blocks touching sea water; gorge columns cut ≥ 8 per 100 km² of land with offset0 ≥ 120; dry river biome | ≥ 300 / 2-7 % / ≥ 50 % / ≥ 1 / 0 | 551 / 3.6 % / 71 % / 2973 / 0 |
 | B5 (column) | lake-mask components per km² of land; share with Lw ≥ 70 | 0.2-2 / ≥ 30 % | 1.38 / 47 % |
 
-- **After the fix of 2026-09-30** (GENERATOR_VERSION 2, land-only rivers and the river retune), the full tier measures B2 at 498 / 3.5 % / 62 % / 7573 / 0 and the ocean family at 39.2 %. See Exit evidence.
+- **After the fix of 2026-09-30** (GENERATOR_VERSION 2, land-only rivers and the river retune), the full tier measures B2 at 498 / 3.5 % / 62 % / 7573 / 0 and the ocean family at 39.2 %. After the beaches fix of the same day (GENERATOR_VERSION 3, height filter), B1 measures ocean family 44.1 %, largestLand 6.8 %, and B4 coastBandBeach 99.0 %. See Exit evidence.
 - **T3 on 2D relief is not an SP2a metric** (§12). In SP2a the terrain is independent of the biomes by construction, and a unit test (§7.1) pins that. T3 as defined measured the correlation "mountain biomes are steep" (2.38), not the biome cliffs it targets. T3 stays in SP3 on voxel terrain.
 - A metric that fails is fixed by retuning the data defaults, never by moving a threshold without a spec amendment.
 
@@ -559,6 +561,7 @@ Dry run: column.sample p50 0.36 ms, p99 0.51 ms; tiles about 0.31-0.34 s; killRa
 - **§6.1:** the metrics master list gains `T1lowland` (gated ≤ 0.40 from SP2a).
 - **§10 SP2a exit:** T3 on 2D relief is replaced by the unit test that the terrain does not depend on the biomes (§12).
 - **§3.4:** the valley fades with altitude and high ground gets dry gorges (§2.4).
+- **§3.10 (fix of 2026-09-30, beaches):** C bands ocean < −0.1 and coast −0.22..−0.04, plus the picker's height filter (§3.1-3.2 here).
 - **§3.4 and §3.2 (fix of 2026-09-30):** rivers are land only: the wet flag, the gorge flag and the river biome need `offset0 ≥ 63`, and on the sea floor the channel only carves a drowned mouth (§2.4). The river retune goes with it: R λ 1400 → 1000, `w = 8 + 12·u2` (was 5 + 9·u2).
 - **§5.6:** map levels are 256 (preview) / 64 / 16 / 4 blocks per pixel.
 - **§1** module layout lists `gen/map/`, `workers/taskHandler.ts`, `ui/map/`, `ui/selftest/` and `test/integration/`.
@@ -575,6 +578,10 @@ Dry run: column.sample p50 0.36 ms, p99 0.51 ms; tiles about 0.31-0.34 s; killRa
 - **SP4:** mount `ui/map` as the in-game panel; wire click-to-teleport.
 - **SP2b — biome-size slider (user request, 2026-09-29).** A 1-10 slider in the panel that drives `climate.scaleMul = 4^((v − 5)/5)`: 5 = default (1), 10 = large_biomes (4), 1 ≈ 0.33.
 - **Future profile "continental" (user request, 2026-09-29; SP3 or SP12).** Large continents with islands in open ocean, the opposite of today's inland-sea look: C at a much longer wavelength (about 8000) with an offset spline where deep ocean dominates the low C band.
+- **SP3 — the biome height filter** (fix of 2026-09-30, §3.2) classes sea and land by offset0. With SP3's voxel surface (σ, jag), the real shoreline moves away from offset0 = 63. Class by the new `surfaceEst` instead, and re-check B1/B4.
+  - Already visible in SP2a: sea floor that a lake rim lifts above sea level stays sea class (offset0 < 63), so these dry islets get an ocean biome (0.014 % of the world).
+  - The per-block zoom (§3.3) takes the biome of one of 4 jittered quarts, so the ocean/coast boundary blurs by about 2 blocks around the shoreline. Some dry shore blocks then read an ocean biome, and some shallow sea blocks read a coast biome. SP2a uses only point biomes (map, hover, spawn), so nothing shows it yet. SP3's surface rules should decide a block's treatment by its own water state, not by the ocean family alone.
+- **B1 ocean-family margin.** With the height filter the ocean family equals the sea share, 44.1 % against the 45 % cap. A retune that adds sea, or the continental profile, needs this bound revisited (per profile).
 - **Islands and archipelagos in open ocean (user request, 2026-09-30; with the continental profile, SP3 or SP12).** Small islands or archipelagos at extremely low C, to liven up open oceans. Islets need no rivers. The land rule (§2.4) lets a channel cross any column with offset0 ≥ 63, so an island mechanism also gates rivers off islets, for example through `islandMask` or a minimum island size.
 - **Volcanic cone (receiving SP: SP12 by default, pullable earlier by amendment).**
   - A column-stage term modelled on the lakes:
@@ -735,7 +742,38 @@ Fix of 2026-09-30, GENERATOR_VERSION 1 → 2 (rivers in open ocean, reported by 
   - `?map`: first image 125 / 124 / 127 ms in headless Chrome; all `?map` checks green.
   - `?selftest=1`: `✓ all 47 goldens match` (5.6 s).
   - At the reported point, the rivers layer at 16 blocks/px shows rivers and gorges on land only, with no line or tint across the sea.
-- Open, handled separately: about 83 % of the coast-band columns picked as beach, snowy beach or stony shore are under water, because the C band −0.22..−0.10 is wider than the shoreline (−0.138..−0.10).
+- Still open after this fix: about 83 % of the coast-band columns picked as beach, snowy beach or stony shore were under water, because the C band −0.22..−0.10 is wider than the shoreline (−0.138..−0.10). The next block fixes it.
+
+Fix of 2026-09-30, GENERATOR_VERSION 2 → 3 (underwater beaches; design approved by the user, coast edge −0.04):
+- The picker's height filter (§3.2): sea-floor columns (offset0 < 63) take only ocean boxes; land columns never do. Oceans reach C −0.10 and the coast band reaches C −0.04 inland (§3.1, Appendix A).
+- Measured over 2 M columns (B1 sample, seeds 1-8):
+
+| | before | after |
+|---|---|---|
+| coast-family columns under water | 83.6 % | 0 % |
+| beach / snowy beach / stony shore | 3.21 / 0.82 / 1.84 % (mostly under water) | 1.92 / 0.49 / 1.39 % (all on land) |
+| land beach strip width along random transects (median; p10-p90) | 4 blocks (1-21) | 20 blocks (2-84) |
+| shoreline crossings with no coast strip | 9.2 % | 4.4 % (river mouths) |
+
+- Alternatives measured and rejected:
+  - coast edge −0.06: snowy beach 0.35 %, too close to its 0.3 % floor;
+  - coast edge −0.02: beaches too wide (p90 about 100 blocks);
+  - a height cap on beaches: an extra parameter with almost no effect;
+  - a table-only retune with no height filter: 16 % of coast biomes stay under water. The shoreline's C depends on E, and no flat C edge can follow it.
+- Goldens re-recorded, 9 keys changed: sp1.params, the column points and sample, spawn, and biome at 256, 64, 16 and 4.
+- Checks: `npm run build`, `npm test` (628 passed, 2 skipped), quick and full metrics all green; Bun 47/47; gated bench `column.sample p50 0.341 ms, p99 (≥ p95) 0.465 ms`.
+- Metrics that moved (fast / quick / full). B2, B5, T6, T7, T8, T1lowland and N4 are unchanged from the previous block.
+
+| metric | before (full) | fast | quick | full |
+|---|---|---|---|---|
+| B1.minRareShare | 0.0069 | 0.0067 | 0.0065 | 0.0066 |
+| B1.largestLand | 0.072 | 0.0676 | 0.0683 | 0.0682 |
+| B1.oceanFamily | 0.3917 | 0.4412 | 0.4407 | 0.4408 |
+| B1.outside | 0.0018 | 0.0018 | 0.0017 | 0.0017 |
+| B4.coastBandBeach | 1 | 0.9935 | 0.9927 | 0.9903 |
+
+- The ocean family now equals the sea share: 44.1 %, under the 45 % cap (§10).
+- B4 falls just below 100 % because of sea floor that lake rims lift above sea level. These columns stay sea class, so they get an ocean biome on dry land (0.014 % of the world, §10).
 
 
 ### Threshold log
@@ -754,30 +792,30 @@ Uniform climate units; `[lo, hi]` per axis; W = `wSign` (0 any); P = priority. S
 | biome | C | E | PV | T | H | W | P |
 |---|---|---|---|---|---|---|---|
 | deep_ocean | −1, −0.55 | any | any | −0.8, 0.6 | any | 0 | 1 |
-| ocean | −0.55, −0.22 | any | any | −0.8, 0.6 | any | 0 | 2 |
-| warm_ocean | −1, −0.22 | any | any | 0.6, 1 | any | 0 | 3 |
-| frozen_ocean | −1, −0.22 | any | any | −1, −0.8 | any | 0 | 4 |
-| beach | −0.22, −0.1 | −0.375, 1 | any | −0.6, 1 | any | 0 | 5 |
-| snowy_beach | −0.22, −0.1 | −0.375, 1 | any | −1, −0.6 | any | 0 | 6 |
-| stony_shore | −0.22, −0.1 | −1, −0.375 | any | any | any | 0 | 7 |
-| plains | −0.1, 1 | −0.375, 1 | −1, 0.2 | −0.2, 0.2 | −1, 0.2 | 0 | 8 |
-| meadow | −0.1, 1 | −0.375, 1 | 0.2, 1 | −0.2, 0.2 | −1, 0.2 | 0 | 9 |
-| forest | −0.1, 1 | −0.375, 1 | any | −0.2, 0.6 | 0.2, 0.6 | −1 | 10 |
-| birch_forest | −0.1, 1 | −0.375, 1 | any | −0.2, 0.6 | 0.2, 0.6 | +1 | 11 |
-| dark_forest | −0.1, 1 | −0.375, 1 | −0.6, 1 | −0.2, 0.6 | 0.6, 1 | 0 | 12 |
-| taiga | −0.1, 1 | −0.375, 1 | any | −0.6, −0.2 | any | 0 | 13 |
-| snowy_taiga | −0.1, 1 | −0.375, 1 | any | −1, −0.6 | 0.2, 1 | 0 | 14 |
-| snowy_plains | −0.1, 1 | −0.375, 1 | any | −1, −0.6 | −1, 0.2 | 0 | 15 |
-| desert | −0.1, 1 | −0.375, 1 | any | 0.6, 1 | −1, 0.2 | 0 | 16 |
-| savanna | −0.1, 1 | −0.375, 1 | any | 0.2, 0.6 | −1, 0.2 | 0 | 17 |
-| swamp | −0.1, 1 | −0.375, 1 | −1, −0.6 | −0.2, 1 | 0.6, 1 | 0 | 18 |
-| jungle | −0.1, 1 | −0.375, 1 | −0.6, 1 | 0.6, 1 | 0.2, 1 | 0 | 19 |
-| badlands | −0.1, 1 | −1, −0.375 | −1, 0.7 | 0.6, 1 | any | 0 | 20 |
-| windswept_hills | −0.1, 1 | −1, −0.375 | −1, 0.7 | −0.2, 0.6 | any | 0 | 21 |
-| snowy_slopes | −0.1, 1 | −1, −0.375 | −1, 0.7 | −1, −0.2 | any | 0 | 22 |
-| stony_peaks | −0.1, 1 | −1, −0.375 | 0.7, 1 | −0.2, 0.6 | any | 0 | 23 |
-| jagged_peaks | −0.1, 1 | −1, −0.375 | 0.7, 1 | −1, −0.2 | any | +1 | 24 |
-| frozen_peaks | −0.1, 1 | −1, −0.375 | 0.7, 1 | −1, −0.2 | any | −1 | 25 |
-| volcano | −0.1, 1 | −1, −0.375 | 0.7, 1 | 0.6, 1 | any | 0 | 26 |
+| ocean | −0.55, −0.1 | any | any | −0.8, 0.6 | any | 0 | 2 |
+| warm_ocean | −1, −0.1 | any | any | 0.6, 1 | any | 0 | 3 |
+| frozen_ocean | −1, −0.1 | any | any | −1, −0.8 | any | 0 | 4 |
+| beach | −0.22, −0.04 | −0.375, 1 | any | −0.6, 1 | any | 0 | 5 |
+| snowy_beach | −0.22, −0.04 | −0.375, 1 | any | −1, −0.6 | any | 0 | 6 |
+| stony_shore | −0.22, −0.04 | −1, −0.375 | any | any | any | 0 | 7 |
+| plains | −0.04, 1 | −0.375, 1 | −1, 0.2 | −0.2, 0.2 | −1, 0.2 | 0 | 8 |
+| meadow | −0.04, 1 | −0.375, 1 | 0.2, 1 | −0.2, 0.2 | −1, 0.2 | 0 | 9 |
+| forest | −0.04, 1 | −0.375, 1 | any | −0.2, 0.6 | 0.2, 0.6 | −1 | 10 |
+| birch_forest | −0.04, 1 | −0.375, 1 | any | −0.2, 0.6 | 0.2, 0.6 | +1 | 11 |
+| dark_forest | −0.04, 1 | −0.375, 1 | −0.6, 1 | −0.2, 0.6 | 0.6, 1 | 0 | 12 |
+| taiga | −0.04, 1 | −0.375, 1 | any | −0.6, −0.2 | any | 0 | 13 |
+| snowy_taiga | −0.04, 1 | −0.375, 1 | any | −1, −0.6 | 0.2, 1 | 0 | 14 |
+| snowy_plains | −0.04, 1 | −0.375, 1 | any | −1, −0.6 | −1, 0.2 | 0 | 15 |
+| desert | −0.04, 1 | −0.375, 1 | any | 0.6, 1 | −1, 0.2 | 0 | 16 |
+| savanna | −0.04, 1 | −0.375, 1 | any | 0.2, 0.6 | −1, 0.2 | 0 | 17 |
+| swamp | −0.04, 1 | −0.375, 1 | −1, −0.6 | −0.2, 1 | 0.6, 1 | 0 | 18 |
+| jungle | −0.04, 1 | −0.375, 1 | −0.6, 1 | 0.6, 1 | 0.2, 1 | 0 | 19 |
+| badlands | −0.04, 1 | −1, −0.375 | −1, 0.7 | 0.6, 1 | any | 0 | 20 |
+| windswept_hills | −0.04, 1 | −1, −0.375 | −1, 0.7 | −0.2, 0.6 | any | 0 | 21 |
+| snowy_slopes | −0.04, 1 | −1, −0.375 | −1, 0.7 | −1, −0.2 | any | 0 | 22 |
+| stony_peaks | −0.04, 1 | −1, −0.375 | 0.7, 1 | −0.2, 0.6 | any | 0 | 23 |
+| jagged_peaks | −0.04, 1 | −1, −0.375 | 0.7, 1 | −1, −0.2 | any | +1 | 24 |
+| frozen_peaks | −0.04, 1 | −1, −0.375 | 0.7, 1 | −1, −0.2 | any | −1 | 25 |
+| volcano | −0.04, 1 | −1, −0.375 | 0.7, 1 | 0.6, 1 | any | 0 | 26 |
 
-Measured shares (dry run, full tier): all ≥ 0.37 %, volcano 0.72 %, taiga (largest land) 7.3 %, ocean family 38.4 %.
+Measured shares (dry run, full tier): all ≥ 0.37 %, volcano 0.72 %, taiga (largest land) 7.3 %, ocean family 38.4 %. After the height filter and the coast edge −0.04 (2026-09-30; 2 M columns, seeds 1-8): smallest frozen river 0.37 %, snowy beach 0.49 %, smallest rare jagged peaks 0.66 %, taiga 6.8 %, ocean family 44.1 % (every sea-floor column).

@@ -1,12 +1,19 @@
 /**
  * Surface-biome picker (SP2a spec §3.2): the river flag first; otherwise the box with the lowest summed
- * squared overshoot (0 inside), ties broken by the lower priority; boxes with a W sign skip the other sign.
+ * squared overshoot (0 inside), ties broken by the lower priority. Two filters narrow the boxes first:
+ * the height filter (a column whose offset0 is below sea level takes only ocean-family boxes, any other
+ * column only the rest) and the W sign (boxes with a W sign skip the other sign).
  */
+import { SEA_LEVEL } from '../../core/constants';
 import type { GenContext } from '../context';
-import { BOX_TO_BIOME, biomeId } from './registry';
+import { BOX_TO_BIOME, biomeFamily, biomeId } from './registry';
 
 const ID = biomeId;
 const TO_BIOME = BOX_TO_BIOME;
+const FAMILY = biomeFamily;
+const SEA = SEA_LEVEL;
+/** 1 for the ocean-family boxes, in BOX_BIOMES order. */
+const OCEAN_BOX = Uint8Array.from(TO_BIOME, (id) => (FAMILY(id) === 'ocean' ? 1 : 0));
 
 export interface Pick {
   /** Winning box index (−1 for a river override), biome id, and the winner's and runner-up's fitness. */
@@ -17,15 +24,19 @@ export const newPick = (): Pick => ({ box: -1, biome: 0, fitness: 0, runnerUp: I
 
 const V = new Float64Array(5);
 
-export function pickBox(ctx: GenContext, C: number, E: number, PV: number, T: number, H: number, W: number, out: Pick): Pick {
-  pickPass(ctx, C, E, PV, T, H, W < 0 ? -1 : 1, out);
-  // A table whose W filters exclude every box (e.g. all wSign +1 and W < 0) falls back to ignoring the filter.
-  if (out.box < 0) pickPass(ctx, C, E, PV, T, H, 0, out);
+export function pickBox(ctx: GenContext, C: number, E: number, PV: number, T: number, H: number, W: number, offset0: number, out: Pick): Pick {
+  const sign = W < 0 ? -1 : 1;
+  const sea = offset0 < SEA ? 1 : 0;
+  pickPass(ctx, C, E, PV, T, H, sign, sea, out);
+  // A table whose W filters exclude every box of the column's height class (e.g. all wSign +1 and W < 0) falls
+  // back to ignoring the W filter. The height filter alone never empties the set: every table has all 26 rows,
+  // ocean-family and others.
+  if (out.box < 0) pickPass(ctx, C, E, PV, T, H, 0, sea, out);
   return out;
 }
 
-/** One pass over the boxes; sign 0 disables the W filter. */
-function pickPass(ctx: GenContext, C: number, E: number, PV: number, T: number, H: number, sign: number, out: Pick): void {
+/** One pass over the boxes; sign 0 disables the W filter; sea 1 keeps only the ocean-family boxes, 0 the others. */
+function pickPass(ctx: GenContext, C: number, E: number, PV: number, T: number, H: number, sign: number, sea: number, out: Pick): void {
   V[0] = C; V[1] = E; V[2] = PV; V[3] = T; V[4] = H;
   let best = -1;
   let bestF = Infinity;
@@ -33,6 +44,7 @@ function pickPass(ctx: GenContext, C: number, E: number, PV: number, T: number, 
   let second = Infinity;
   for (const b of ctx.boxes) {
     if (sign !== 0 && b.wSign !== 0 && b.wSign !== sign) continue;
+    if (OCEAN_BOX[b.index] !== sea) continue;
     let f = 0;
     for (let k = 0; k < 5; k++) {
       const v = V[k]!;
@@ -56,8 +68,8 @@ function pickPass(ctx: GenContext, C: number, E: number, PV: number, T: number, 
 
 const SCRATCH = newPick();
 
-/** Biome id at a point: river override (frozen below T −0.6), else the best box. */
-export function pickBiome(ctx: GenContext, C: number, E: number, PV: number, T: number, H: number, W: number, riverWet: boolean): number {
+/** Biome id at a point: river override (frozen below T −0.6), else the best box for the column's height class. */
+export function pickBiome(ctx: GenContext, C: number, E: number, PV: number, T: number, H: number, W: number, offset0: number, riverWet: boolean): number {
   if (riverWet) return T < -0.6 ? ID('frozen_river') : ID('river');
-  return pickBox(ctx, C, E, PV, T, H, W, SCRATCH).biome;
+  return pickBox(ctx, C, E, PV, T, H, W, offset0, SCRATCH).biome;
 }

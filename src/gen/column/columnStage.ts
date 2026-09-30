@@ -99,7 +99,7 @@ export function buildColumnSample(ctx: GenContext, cx: number, cz: number, out: 
       f.surfaceEst[k] = l.offset;
       f.islandMask[k] = 0;
       out.flags[k] = (r.wet ? 1 : 0) | (r.gorge ? 2 : 0);
-      out.biome[k] = PICK(ctx, c.C, c.E, c.PV, c.T, c.H, c.W, r.wet);
+      out.biome[k] = PICK(ctx, c.C, c.E, c.PV, c.T, c.H, c.W, o[k]!, r.wet);
     }
   }
   return out;

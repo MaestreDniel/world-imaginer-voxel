@@ -621,7 +621,7 @@ Anything else is plain cave.
 
 **Boxes** are authored in uniform bands:
 - T and H edges −0.6 / −0.2 / 0.2 / 0.6;
-- C: deep ocean < −0.55, ocean < −0.22, coast −0.22..−0.1, then near / mid / far inland;
+- C: deep ocean < −0.55, ocean < −0.1, coast −0.22..−0.04, then near / mid / far inland. Oceans and coast overlap on the shore band, and the height filter below decides between them (SP2a fix of 2026-09-30: before it, 84 % of coast biomes lay under water);
 - E in 7 bands;
 - PV valleys < −0.6 up to peaks > 0.7;
 - sign(W) selects variants.
@@ -629,6 +629,8 @@ Anything else is plain cave.
 Two verifier fixes:
 - Windswept and peaks boxes **bound T** (no spruce hills in deserts).
 - Beach covers the whole coast band **without a PV restriction** (fixes the coastal mismatch).
+
+**Height filter** (SP2a, 2026-09-30). A column whose offset0 is below sea level takes only the ocean-family boxes; any other column takes only the rest. The shoreline itself, not a C threshold, separates sea biomes from coast and land biomes (the shoreline's C depends on E).
 
 **Fitness.** 09's weighted squared overshoot, with ties broken by an explicit `priority` field, not registry order.
 
