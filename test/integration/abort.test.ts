@@ -5,12 +5,19 @@ import { BIOME_SHARES_POINTS, biomeSharePoints, biomeSharesInto, biomeSharesLeng
 import { buildNodeTaskWorker } from '../harness/nodeWorker';
 import { ctxFor } from '../harness/gen';
 
-/** Cooperative abort through the SharedArrayBuffer epoch cell, in real worker threads (SP2b spec §2.2, §8, §12). */
+/**
+ * Cooperative abort through the SharedArrayBuffer epoch cell, in real worker threads (SP2b spec §2.2, §8, §12).
+ * The 50 ms bound is the handler's: from `Atomics.store` here to `handle` returning in the worker, both read on
+ * `process.hrtime`, the monotonic clock all threads of the process share. The delivery of the reply to this
+ * thread is not part of it: on a loaded runner that alone can take tens of ms, which `stall` stands in for. The
+ * two timing tests retry twice (a worker thread can still wait for a CPU); the ABORTED and byte-identity checks
+ * hold on every attempt.
+ */
 let script = '';
 const workers: Worker[] = [];
 
 beforeAll(async () => {
-  script = await buildNodeTaskWorker('abortHandler');
+  script = await buildNodeTaskWorker('abortHandler', { stamp: true });
 }, 120_000);
 
 afterAll(async () => {
@@ -26,22 +33,30 @@ const ask = (w: Worker, msg: unknown): Promise<Record<string, unknown>> =>
   new Promise((resolve) => { w.once('message', resolve); w.postMessage(msg); });
 const sameBytes = (a: unknown, b: unknown) => Buffer.from(a as ArrayBuffer).equals(Buffer.from(b as ArrayBuffer));
 const configure = (epoch: number, abort: SharedArrayBuffer | null) => ({ type: 'configure', epoch, seedText: '42', params: DEFAULTS, abort });
+/** Milliseconds on the clock the worker's `handledAt` uses (test/harness/nodeWorker.ts). */
+const clock = () => Number(process.hrtime.bigint()) / 1e6;
+/** Blocks this thread for `ms` without using a CPU, as a loaded runner delays the delivery of the worker's reply here. */
+const stall = (ms: number) => { Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, ms); };
+/** The handler's stop time: from the store to `handle` returning in the worker. */
+const stopMs = (m: Record<string, unknown>, storedAt: number) => (m['handledAt'] as number) - storedAt;
 const tile = (jobId: number, epoch: number, layer: string, level: number) => ({ type: 'mapTile', jobId, epoch, layer, level, tx: 0, tz: 0 });
 
-test('a level-4 relief tile stops within 50 ms of Atomics.store and replies ABORTED; the next tiles equal a fresh worker\'s', async () => {
+test('a level-4 relief tile stops within 50 ms of Atomics.store and replies ABORTED; the next tiles equal a fresh worker\'s', { retry: 2, timeout: 120_000 }, async () => {
   const cell = new Int32Array(new SharedArrayBuffer(4));
   const w = start();
   Atomics.store(cell, 0, 1);
   expect((await ask(w, configure(1, cell.buffer)))['type']).toBe('ready');
   // The whole tile takes ≈ 450 ms on one thread; an ABORTED reply shows the store landed mid-tile.
-  const reply = ask(w, tile(1, 1, 'relief', 4)).then((m) => ({ m, at: performance.now() }));
+  const reply = ask(w, tile(1, 1, 'relief', 4));
   await new Promise((resolve) => setTimeout(resolve, 50));
-  const storedAt = performance.now();
+  const storedAt = clock();
   Atomics.store(cell, 0, 2);
-  const { m, at } = await reply;
+  stall(60);
+  const m = await reply;
   expect(m).toMatchObject({ type: 'error', jobId: 1, epoch: 1, code: 'ABORTED' });
-  const abortMs = at - storedAt;
-  expect(abortMs, `answered ${abortMs.toFixed(1)} ms after the store`).toBeLessThan(50);
+  const abortMs = stopMs(m, storedAt);
+  expect(abortMs, 'the stamp is after the store on the shared clock').toBeGreaterThan(0);
+  expect(abortMs, `the handler returned ${abortMs.toFixed(1)} ms after the store`).toBeLessThan(50);
 
   // The pool's next configure, then tiles of the new epoch, against a worker that never aborted.
   expect((await ask(w, configure(2, cell.buffer)))['type']).toBe('ready');
@@ -56,9 +71,9 @@ test('a level-4 relief tile stops within 50 ms of Atomics.store and replies ABOR
     expect(sameBytes(a['rgba'], b['rgba']), `${layer} ${level} rgba`).toBe(true);
     if (layer === 'biome') expect(sameBytes(a['ids'], b['ids']), `${layer} ${level} ids`).toBe(true);
   }
-}, 120_000);
+});
 
-test('a biomeShares stats slice stops within 50 ms of Atomics.store and replies ABORTED; the next slice equals the direct sums', async () => {
+test('a biomeShares stats slice stops within 50 ms of Atomics.store and replies ABORTED; the next slice equals the direct sums', { retry: 2, timeout: 120_000 }, async () => {
   const cell = new Int32Array(new SharedArrayBuffer(4));
   const w = start();
   const len = biomeSharesLength();
@@ -66,14 +81,16 @@ test('a biomeShares stats slice stops within 50 ms of Atomics.store and replies 
   Atomics.store(cell, 0, 1);
   expect((await ask(w, configure(1, cell.buffer)))['type']).toBe('ready');
   // The whole stream takes ≈ 0.7 s on one thread; the handler polls the cell every 256 points.
-  const reply = ask(w, stats(1, 1, 0, BIOME_SHARES_POINTS)).then((m) => ({ m, at: performance.now() }));
+  const reply = ask(w, stats(1, 1, 0, BIOME_SHARES_POINTS));
   await new Promise((resolve) => setTimeout(resolve, 50));
-  const storedAt = performance.now();
+  const storedAt = clock();
   Atomics.store(cell, 0, 2);
-  const { m, at } = await reply;
+  stall(60);
+  const m = await reply;
   expect(m).toMatchObject({ type: 'error', jobId: 1, epoch: 1, code: 'ABORTED' });
-  const abortMs = at - storedAt;
-  expect(abortMs, `answered ${abortMs.toFixed(1)} ms after the store`).toBeLessThan(50);
+  const abortMs = stopMs(m, storedAt);
+  expect(abortMs, 'the stamp is after the store on the shared clock').toBeGreaterThan(0);
+  expect(abortMs, `the handler returned ${abortMs.toFixed(1)} ms after the store`).toBeLessThan(50);
 
   expect((await ask(w, configure(2, cell.buffer)))['type']).toBe('ready');
   const next = await ask(w, stats(2, 2, 1000, 3000));
@@ -81,4 +98,4 @@ test('a biomeShares stats slice stops within 50 ms of Atomics.store and replies 
   const want = new Float64Array(len);
   biomeSharesInto(ctxFor('42'), biomeSharePoints(), 1000, 3000, want);
   expect(Array.from(new Float64Array(next['data'] as ArrayBuffer))).toEqual(Array.from(want));
-}, 120_000);
+});

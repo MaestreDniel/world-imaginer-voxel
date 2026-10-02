@@ -14,7 +14,7 @@ SP0, SP1, SP2a and SP2b are complete: `?map` shows the generated world's biomes,
 npm install
 npm run dev            # http://localhost:5183 (must be localhost or HTTPS)
 npm run build          # typecheck + production build
-npm test               # unit + arch + fast metrics
+npm test               # unit + arch + fast metrics, then the worker-thread integration tests
 npm run test:metrics   # quick metric tier (CI)
 docker compose up world-imaginer-voxel
 ```

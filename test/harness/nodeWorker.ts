@@ -9,8 +9,13 @@ import { build } from 'vite';
 
 const ENTRY = fileURLToPath(new URL('../../src/workers/taskHandler.ts', import.meta.url));
 
-/** Builds into test/.cache/<dir>/ and returns the path of the worker script. */
-export async function buildNodeTaskWorker(dir: string): Promise<string> {
+/**
+ * Builds into test/.cache/<dir>/ and returns the path of the worker script. With `stamp`, each reply also carries
+ * `handledAt`: the time `handle` returned, in ms on `process.hrtime` (the monotonic clock every thread of the
+ * process shares, so the main thread compares it with its own reading). A test can then time the handler itself,
+ * without the delivery of the reply to its own event loop.
+ */
+export async function buildNodeTaskWorker(dir: string, opts: { readonly stamp?: boolean } = {}): Promise<string> {
   const out = fileURLToPath(new URL(`../.cache/${dir}/`, import.meta.url));
   mkdirSync(out, { recursive: true });
   await build({
@@ -21,7 +26,9 @@ export async function buildNodeTaskWorker(dir: string): Promise<string> {
     "import { parentPort } from 'node:worker_threads';",
     "import { createTaskHandler } from './taskHandler.mjs';",
     'const h = createTaskHandler();',
-    "parentPort.on('message', (m) => { const r = h.handle(m); parentPort.postMessage(r.msg, r.transfer); });",
+    opts.stamp === true
+      ? "parentPort.on('message', (m) => { const r = h.handle(m); const handledAt = Number(process.hrtime.bigint()) / 1e6; parentPort.postMessage({ ...r.msg, handledAt }, r.transfer); });"
+      : "parentPort.on('message', (m) => { const r = h.handle(m); parentPort.postMessage(r.msg, r.transfer); });",
   ].join('\n'));
   return `${out}node-worker.mjs`;
 }

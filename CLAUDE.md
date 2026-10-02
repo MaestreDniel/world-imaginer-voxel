@@ -17,7 +17,7 @@ Browser voxel explorer + editor (TypeScript, Vite, three.js r186 WebGL2 with cus
 
 - `npm run dev` / `npm run preview` — http://localhost:5183 (COOP/COEP headers; open via localhost or HTTPS)
 - `npm run build` — `typecheck` (three tsconfigs) + `vite build`
-- `npm test` — vitest projects `unit`, `arch`, `metrics-fast`; `npm run test:metrics` (quick, CI), `npm run test:metrics:full` (SP exit), `npm run bench`
+- `npm test` — vitest projects `unit`, `arch`, `metrics-fast`, then `integration` (real worker threads, one file at a time); `npm run test:metrics` (quick, CI), `npm run test:metrics:full` (SP exit), `npm run bench`
 - `npm run bench:record` — write `test/baselines.json` on the reference machine (per-kernel ratios to a calibration kernel, plus the lattice3/perm512 kill ratio); `npm run bench` gates +30 % per kernel and kill ratio ≤ 1.6
 - `npm run test:accept-thresholds` — rewrite `test/thresholds.lock.json` (needs a spec amendment in the same change; CI checks it)
 - `npm run test:goldens` — record and merge goldens (refuses changed goldens without a `GENERATOR_VERSION` bump)

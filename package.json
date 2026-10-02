@@ -11,7 +11,7 @@
     "build": "npm run typecheck && vite build",
     "preview": "vite preview",
     "typecheck": "tsc -p tsconfig.json && tsc -p tsconfig.worker.json && tsc -p tsconfig.test.json",
-    "test": "vitest run --project unit --project arch --project metrics-fast",
+    "test": "vitest run --project unit --project arch --project metrics-fast --project integration",
     "test:metrics": "vitest run --project metrics-quick",
     "test:metrics:full": "vitest run --project metrics-full",
     "bench": "vitest bench --run --reporter=verbose --project \"bench (bench)\"",
