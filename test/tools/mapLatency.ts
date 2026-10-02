@@ -619,6 +619,9 @@ async function main(argv: readonly string[]): Promise<number> {
   const args = parseArgs(argv);
   const counts: Counts = args.quick ? { pairs: 3, chain: 5, drags: 1 } : { pairs: 20, chain: 30, drags: 5 };
   const out = args.out ?? (args.quick ? null : DEFAULT_OUT);
+  // The commit measured, read once before anything is written: each JSON this run writes would otherwise mark the
+  // tree dirty for the files written after it.
+  const source = gitDescribe();
   const specs: RunSpec[] = args.layers.map((layer) => ({ layer, edit: 'knot', loads: args.loads, gated: true }));
   if (args.reported) specs.push({ layer: 'offset', edit: 'knot', loads: 1, gated: false }, { layer: 'biome', edit: 'scale', loads: 1, gated: false }, { layer: 'relief', edit: 'scale', loads: 1, gated: false });
 
@@ -689,7 +692,7 @@ async function main(argv: readonly string[]): Promise<number> {
       mkdirSync(out, { recursive: true });
       for (const layer of [...new Set(results.map((r) => r.layer))]) {
         const doc = {
-          spec: 'SP2b §2.8 (test/tools/mapLatency.ts)', date: new Date().toISOString().slice(0, 10), source: gitDescribe(),
+          spec: 'SP2b §2.8 (test/tools/mapLatency.ts)', date: new Date().toISOString().slice(0, 10), source,
           machine: `${cpus()[0]?.model ?? 'unknown'} (${cpus().length} threads)`, node: process.version, browser: version.Browser ?? 'unknown',
           page: { ...info, view: { ...info.view, layer } },
           limits: { maxMs: LIMIT_MS, dragGapMs: GAP_LIMIT_MS }, pageErrors,
