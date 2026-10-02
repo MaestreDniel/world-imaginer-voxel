@@ -9,8 +9,8 @@ const ND_LAYERS = new Set(['core', 'world', 'gen']);
 const PURE_LAYERS = new Set(['core', 'world', 'gen', 'textures', 'audio', 'light', 'mesh', 'sim', 'persist', 'metrics', 'daynight']);
 const MATH_ALLOWED = new Set(['abs', 'floor', 'ceil', 'round', 'trunc', 'sign', 'min', 'max', 'imul', 'clz32', 'sqrt',
   'PI', 'E', 'LN2', 'LN10', 'LOG2E', 'LOG10E', 'SQRT2', 'SQRT1_2']);
-/** Files outside core/ and gen/ whose outputs are golden-hashed, so they follow the core determinism rules (SP1 spec §1.8). */
-const DET_FILES = new Set(['metrics/sp1Goldens.ts', 'metrics/sp1Fixtures.ts', 'metrics/sp2aGoldens.ts']);
+/** Files outside core/ and gen/ that follow the core determinism rules: golden digests (SP1 spec §1.8) and stats kinds (SP2b spec §5.4). */
+const DET_FILES = new Set(['metrics/sp1Goldens.ts', 'metrics/sp1Fixtures.ts', 'metrics/sp2aGoldens.ts', 'metrics/biomeShares.ts']);
 /** Modules whose hot loops must not read imported bindings (vitest turns them into getters; SP1 spec §1.8, SP2a spec §8). */
 const HOT_PREFIXES = ['core/noise/', 'core/spline/', 'metrics/', 'gen/'];
 /** Matches the member name alone, so `.normalize.call(…)` and `.localeCompare.bind(…)` are caught too (SP1 review minor). */

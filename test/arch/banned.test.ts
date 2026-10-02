@@ -40,6 +40,8 @@ test('bad fixture tree reports every banned use', () => {
     'src/gen/tunables2.ts:2 numeric-export',
     'src/gen/wrappedInit.ts:1 numeric-export',
     'src/light/dom.ts:1 dom-global',
+    'src/metrics/biomeShares.ts:1 nondeterministic',
+    'src/metrics/biomeShares.ts:2 math-member',
     'src/metrics/direct.ts:2 hot-import-reference',
     'src/metrics/sp1Goldens.ts:1 nondeterministic',
     'src/metrics/sp1Goldens.ts:2 math-pow-operator',
