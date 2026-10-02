@@ -1,11 +1,18 @@
 import { describe, expect, test } from 'vitest';
+import type { Seed64 } from '../../src/core/hash';
 import { canonicalJSON } from '../../src/core/params/canonical';
 import { DEFAULTS } from '../../src/core/params/defaults';
 import { applyPatch, diffParams } from '../../src/core/params/kit';
 import { exportPreset, importPreset } from '../../src/core/params/presets';
-import { isProfileReady, PROFILE_IDS, PROFILES, resolveProfile } from '../../src/core/params/profiles';
+import { isProfileReady, PROFILE_IDS, PROFILES, resolveProfile, type ProfileId } from '../../src/core/params/profiles';
 import { SCHEMA } from '../../src/core/params/schema';
-import { presetFileName, presetNameProblem, presetText, readPresetText } from '../../src/ui/presets/presetFile';
+import { knotAt, setKnot } from '../../src/core/spline/edit';
+import { WorldSession } from '../../src/engine/session';
+import { setPriority } from '../../src/ui/biomeTable/model';
+import {
+  applyPatchText, exportDraft, loadedNotice, loadPresetText, patchBoxText, presetFileName, presetNameHint, presetNameProblem, presetText, readPresetText,
+} from '../../src/ui/presets/presetFile';
+import { leafOpts } from '../../src/ui/splineEditor/model';
 import { randomParams } from '../harness/params';
 import { testRng } from '../harness/stats';
 
@@ -149,5 +156,176 @@ describe('readPresetText', () => {
     for (const profile of UNREADY) {
       expect(readPresetText(presetText('Later', profile, resolveProfile(profile)))).toEqual({ ok: false, issues: [`profile ${profile} arrives in ${PROFILES[profile].readyFrom}`] });
     }
+  });
+});
+
+describe('presets tab logic', () => {
+  const random = (): Seed64 => [1, 2];
+  const open = (seedText = '42', profile: ProfileId = 'default') => new WorldSession(random, { seedText, profile });
+  /** The changes a session notifies, as 'kind' plus ' urgent' when urgent. */
+  const watch = (s: WorldSession): string[] => {
+    const seen: string[] = [];
+    s.subscribe((_state, c) => seen.push(`${c.kind}${c.urgent ? ' urgent' : ''}`));
+    return seen;
+  };
+  /** large_biomes with a number, a noise field, a spline tangent and a table row modified: four undo steps. */
+  const edited = (): WorldSession => {
+    const s = open('42', 'large_biomes');
+    const p = s.state.params;
+    const sigma = setKnot(p.shape.sigma, [0], { d: knotAt(p.shape.sigma, [0]).d + 0.5 }, leafOpts('shape.sigma'));
+    const table = setPriority(p.biomes.table, 'plains', 100);
+    if (!sigma.ok || !table.ok) throw new Error('bad test edit');
+    for (const [path, value] of [['rivers.widthMin', 6], ['climate.C', { octaves: 5 }], ['shape.sigma', sigma.value], ['biomes.table', table.table]] as const) {
+      expect(s.set(path, value).ok, path).toBe(true);
+    }
+    return s;
+  };
+  const textOf = (r: ReturnType<typeof exportDraft>): string => {
+    if (!r.ok) throw new Error(r.problem);
+    return r.text;
+  };
+
+  test('the name hint shows the file name, asks for a name, or gives the reason', () => {
+    expect(presetNameHint(' My world ')).toEqual({ kind: 'ok', text: 'saves My world.wi10-preset.json' });
+    expect(presetNameHint('Río/2')).toEqual({ kind: 'ok', text: 'saves R_o_2.wi10-preset.json' });
+    expect(presetNameHint('')).toEqual({ kind: 'empty', text: 'enter a name' });
+    expect(presetNameHint(' \t')).toEqual({ kind: 'empty', text: 'enter a name' });
+    expect(presetNameHint('default')).toEqual({ kind: 'problem', text: '"default" is a built-in profile name' });
+    expect(presetNameHint('x'.repeat(65))).toEqual({ kind: 'problem', text: 'the name has 65 characters; the limit is 64' });
+  });
+
+  test('export = exportPreset(name, session profile, session params) as the file text, under the file name', () => {
+    const s = edited();
+    const r = exportDraft(' My world ', s);
+    expect(r).toEqual({ ok: true, fileName: 'My world.wi10-preset.json', text: presetText(' My world ', 'large_biomes', s.state.params) });
+    const doc = JSON.parse(textOf(r));
+    expect(doc).toEqual(JSON.parse(JSON.stringify(exportPreset('My world', 'large_biomes', s.state.params))));
+    expect(doc.params).toEqual(JSON.parse(JSON.stringify(s.state.patch)));
+    expect(Object.keys(doc.params).sort()).toEqual(['biomes', 'climate', 'rivers', 'shape']);
+  });
+
+  test('export refuses an invalid name with its reason and leaves the session alone', () => {
+    const s = edited();
+    const seen = watch(s);
+    expect(exportDraft('default', s)).toEqual({ ok: false, problem: '"default" is a built-in profile name' });
+    expect(exportDraft('   ', s)).toEqual({ ok: false, problem: 'enter a name' });
+    expect(seen).toEqual([]);
+  });
+
+  test('import is one load and one undo step over the file\'s profile; the seed is kept', () => {
+    const from = edited();
+    const text = textOf(exportDraft('Saved', from));
+    const s = open('7');
+    expect(s.set('rivers.widthMin', 6).ok).toBe(true);
+    const before = s.snapshot;
+    const seen = watch(s);
+    expect(loadPresetText(s, text)).toEqual({ ok: true, name: 'Saved', changed: true });
+    expect(seen).toEqual(['load urgent']);
+    expect(s.state.seedText).toBe('7');
+    expect(s.state.profile).toBe('large_biomes');
+    expect(canonicalJSON(s.state.patch)).toBe(canonicalJSON(from.state.patch));
+    expect(canonicalJSON(s.state.params)).toBe(canonicalJSON(from.state.params));
+    expect(s.undo()).toBe(true);
+    expect(s.snapshot).toEqual(before);
+    expect(s.redo()).toBe(true);
+    expect(canonicalJSON(s.state.patch)).toBe(canonicalJSON(from.state.patch));
+    expect(seen).toEqual(['load urgent', 'undo urgent', 'redo urgent']);
+    expect(loadedNotice('Saved')).toBe('loaded preset Saved');
+  });
+
+  test('importing the draft\'s own export changes nothing and records nothing', () => {
+    const s = edited();
+    const text = textOf(exportDraft('Same', s));
+    const state = s.state;
+    const seen = watch(s);
+    expect(loadPresetText(s, text)).toEqual({ ok: true, name: 'Same', changed: false });
+    expect(s.state).toBe(state);
+    expect(seen).toEqual([]);
+    expect(s.canRedo).toBe(false);
+    expect(s.undo()).toBe(true);
+    expect(s.state.params.biomes.table.plains.priority).toBe(8);
+  });
+
+  test.each<[string, string, (string | RegExp)[]]>([
+    ['not JSON', '{"format":', [/^file is not JSON: ./]],
+    ['an invalid parameter', doc({ params: { rivers: { widthMin: 999 } } }), ['params.rivers.widthMin: OUT_OF_RANGE — 999 outside [1, 64]']],
+    ['an unknown key', doc({ extra: true }), ['extra: UNKNOWN_KEY — unknown key "extra"']],
+    ['a profile that is not ready', doc({ profile: 'archipelago' }), ['profile archipelago arrives in SP3']],
+  ])('a refused file (%s) lists its issues and leaves the session alone', (_name, text, issues) => {
+    const s = edited();
+    const state = s.state;
+    const seen = watch(s);
+    const r = loadPresetText(s, text);
+    expect(r.ok).toBe(false);
+    if (r.ok) return;
+    expect(r.issues.length).toBe(issues.length);
+    r.issues.forEach((line, i) => expect(line).toMatch(issues[i]!));
+    expect(s.state).toBe(state);
+    expect(seen).toEqual([]);
+  });
+
+  test('the patch box shows canonicalJSON of the minimal patch', () => {
+    const s = open();
+    expect(patchBoxText(s.state.patch)).toBe('{}');
+    expect(s.set('rivers.widthMin', 6).ok).toBe(true);
+    expect(s.set('climate.scaleMul', 2).ok).toBe(true);
+    expect(patchBoxText(s.state.patch)).toBe('{"climate":{"scaleMul":2},"rivers":{"widthMin":6}}');
+    expect(s.set('climate.scaleMul', 1).ok).toBe(true);
+    expect(s.set('lakes.rimSigma', 1).ok).toBe(true);
+    expect(patchBoxText(s.state.patch)).toBe('{"lakes":{"rimSigma":1},"rivers":{"widthMin":6}}');
+  });
+
+  test('applying the box replaces the whole patch over the session\'s profile in one step; the seed is kept', () => {
+    const s = open('9', 'large_biomes');
+    expect(s.set('rivers.widthMin', 6).ok).toBe(true);
+    const before = s.snapshot;
+    const seen = watch(s);
+    expect(applyPatchText(s, '{ "lakes": { "rimSigma": -0 } }')).toEqual({ ok: true, changed: true });
+    expect([s.state.seedText, s.state.profile]).toEqual(['9', 'large_biomes']);
+    expect(patchBoxText(s.state.patch)).toBe('{"lakes":{"rimSigma":0}}');
+    expect(seen).toEqual(['load urgent']);
+    expect(s.undo()).toBe(true);
+    expect(s.snapshot).toEqual(before);
+  });
+
+  test('an empty box clears the patch', () => {
+    for (const text of ['', ' \n ']) {
+      const s = open();
+      expect(s.set('climate.scaleMul', 2).ok).toBe(true);
+      expect(applyPatchText(s, text)).toEqual({ ok: true, changed: true });
+      expect(s.state.patch).toEqual({});
+      expect(s.canUndo).toBe(true);
+    }
+  });
+
+  test('the same patch spelt differently changes nothing and records nothing', () => {
+    const s = open();
+    expect(s.set('climate.scaleMul', 2).ok).toBe(true);
+    const state = s.state;
+    const seen = watch(s);
+    expect(applyPatchText(s, '{\n  "climate": { "scaleMul": 2.0 }\n}')).toEqual({ ok: true, changed: false });
+    expect(s.state).toBe(state);
+    expect(seen).toEqual([]);
+  });
+
+  test.each<[string, string, (string | RegExp)[]]>([
+    ['not JSON', 'nope', [/^patch is not JSON: ./]],
+    ['not an object', 'null', ['patch: NOT_OBJECT — expected an object, got null']],
+    ['a value out of range', '{"rivers":{"widthMin":999}}', ['rivers.widthMin: OUT_OF_RANGE — 999 outside [1, 64]']],
+    ['two problems', '{"climate":{"scaleMull":4},"rivers":{"widthMin":0}}', [
+      'climate.scaleMull: UNKNOWN_KEY — unknown key "scaleMull"',
+      'rivers.widthMin: OUT_OF_RANGE — 0 outside [1, 64]',
+    ]],
+  ])('a refused box (%s) lists its issues and leaves the session alone', (_name, text, issues) => {
+    const s = edited();
+    const state = s.state;
+    const seen = watch(s);
+    const r = applyPatchText(s, text);
+    expect(r.ok).toBe(false);
+    if (r.ok) return;
+    expect(r.issues.length).toBe(issues.length);
+    r.issues.forEach((line, i) => expect(line).toMatch(issues[i]!));
+    expect(s.state).toBe(state);
+    expect(seen).toEqual([]);
   });
 });

@@ -1,0 +1,18 @@
+/* The Presets tab (SP2b spec §3.4): export with an inline name check, import with its issues, the JSON patch box. */
+.pt { display: flex; flex-direction: column; gap: 4px; }
+.pt [hidden] { display: none !important; }
+.pt button { font: inherit; }
+.pt-doc { margin: 0 0 2px; font-size: 12px; color: #9aa; }
+.pt-row { display: flex; flex-wrap: wrap; align-items: center; gap: 4px 6px; }
+.pt-label { color: #9aa; }
+.pt-field { box-sizing: border-box; padding: 2px 5px; font: 12px ui-monospace, monospace; color: #ddd; background: #15171b; border: 1px solid #3a3f48; border-radius: 2px; }
+.pt-field.pt-invalid { border-color: #ff7b72; outline-color: #ff7b72; }
+.pt-name { flex: 1 1 10em; min-width: 0; font: 13px system-ui, sans-serif; }
+.pt-hint { font-size: 12px; color: #9aa; overflow-wrap: anywhere; }
+.pt-hint[data-kind="problem"] { color: #ff7b72; }
+.pt-msg { font-size: 12px; white-space: pre-wrap; overflow-wrap: anywhere; color: #b8c2d0; }
+.pt-msg:empty { display: none; }
+.pt-msg[data-kind="error"] { color: #ff7b72; }
+.pt-issues { margin: 0; padding-left: 18px; font: 12px ui-monospace, monospace; color: #ff7b72; overflow-wrap: anywhere; }
+.pt-issues:empty { display: none; }
+.pt-patch { width: 100%; min-height: 7em; resize: vertical; overflow-wrap: anywhere; }

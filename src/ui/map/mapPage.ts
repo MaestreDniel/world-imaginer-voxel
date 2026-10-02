@@ -5,7 +5,7 @@
  * and the global shortcuts (§3.5). The World tab shows the session status, the spawn and the hover readout
  * (§3.3); the Parameters tab holds the parameter panel (§3.2), whose spline "Edit" opens the spline drawer
  * under the map (§4.2); the Biomes tab holds the biome table (§5.2), whose hovered row the canvas highlights
- * on the biome layer (§5.3); the Presets tab is the host its editor mounts into.
+ * on the biome layer (§5.3); the Presets tab exports and imports preset files and holds the JSON patch box (§3.4).
  */
 import './map.css';
 import { WorldSession, type SessionState } from '../../engine/session';
@@ -19,6 +19,7 @@ import { installShortcuts } from '../common/keys';
 import { createNotices } from '../common/notice';
 import { createUrlWriter } from '../common/urlWriter';
 import { createParamPanel } from '../paramPanel/panel';
+import { createPresetsTab } from '../presets/presetsTab';
 import { cryptoSeed } from '../seedBox';
 import { createSplineDrawer } from '../splineEditor/drawer';
 import { isSplineLeaf } from '../splineEditor/model';
@@ -153,6 +154,9 @@ export function mountMapPage(root: HTMLElement): void {
 
   // Biomes tab (§5.2): hovering a row highlights its biome on the biome layer, else shows a notice (§5.3).
   createBiomeTable(layout.tabs.biomes, { session, edit, hover: hoverBiome });
+
+  // Presets tab (§3.4): export and import of preset files (an import is one undo step) and the JSON patch box.
+  createPresetsTab(layout.tabs.presets, { session, notices, edit });
 
   installShortcuts((a) => {
     if (a === 'undo') session.undo();
