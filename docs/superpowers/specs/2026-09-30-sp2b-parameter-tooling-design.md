@@ -1,7 +1,7 @@
 # SP2b — Parameter tooling (Design)
 
 Date: 2026-09-30
-Status: Written for review (design approved section by section by the user, 2026-09-30; revised after an adversarial spec review the same day and after the implementation-plan dry run, 2026-10-02, §13)
+Status: Complete (2026-10-02), at GENERATOR_VERSION 3; exit evidence below (design approved section by section by the user on 2026-09-30, revised after an adversarial spec review the same day and after the implementation-plan dry run, §13)
 Parent: master spec `2026-09-26-architecture-design.md`. The sections involved are:
 - §10 SP2b (deliverable, exit, cut line) and the SP2a cut-line items it receives;
 - the module layout and its banned-API rule scopes: §1;
@@ -666,7 +666,13 @@ Screenshots (`docs/superpowers/specs/assets/sp2b/`, 1400 × 900, seed 42, 256-co
 - `shares.png`: the biome share chart, fresh, with no warning;
 - `cross-section.png`: a cut line across a coast at 4 blocks/px (sea, a river channel, 2 gorges, a lake at 153).
 
-Not yet recorded (§2.8, §12): CI on the pull request, the latency run against production after the merge, and Firefox (`?selftest=1` 47/47 and the editor's status line during edits and a drag) by the user.
+Done after the merge (2026-10-02):
+- `main` fast-forwarded to the branch and pushed at 6f14137 (the user chose a local merge; pushing to `main` is authorised), so the CI evidence is the push run: GitHub Actions green in 3 min.
+- Production (Vercel) serves the same bundle as the local build. In headless Chrome: `?selftest=1` `✓ all 47 goldens match (6.1 s)`; `?map` shows the editor (World, Parameters, Biomes, Presets; Spline and Cross-section drawer; biome size, Undo/Redo, Cut line) with no console errors.
+- Production, Firefox 157 (the user): `?selftest=1` 47/47, and every `actual` equals `test/goldens.json` (generatorVersion 3); the JSON is in `assets/sp2b/selftest-firefox.json`. The editor's status line, as read by the user: undo 23, 26 and 43 ms (the restored draft's tiles are cached); `shape.offset` knot edits 105, 140, 143, 220, 288 and 319 ms. The status line measures from the input to the landing of the release cycle, outside the §2.8 pinned conditions, and is reported, not gated; one reading is over 300 ms in Firefox, against a gated Chrome maximum of about 200 ms.
+- The §2.8 latency runner was not pointed at production: it builds and serves `dist` itself, and the production bundle is byte-identical to that build. Its gated runs are the evidence above.
+
+SP2b is complete (2026-10-02): every §12 exit criterion holds.
 
 ## Threshold log
 
