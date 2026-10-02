@@ -1,19 +1,23 @@
 /**
  * Spline editor model (SP2b spec §4.2, §4.3): leaf views, the reach limit and the lints, probes, plot
- * transforms, hit testing, drag clamping, breadcrumbs and the node tree. Pure; the SVG lives in plot.ts,
- * the tree in tree.ts and the drawer in drawer.ts. Edits themselves go through core/spline/edit.ts.
+ * transforms, hit testing, drag clamping, breadcrumbs and the node tree, and the drawer's helpers (the node
+ * it follows, the coords nest offers, auto tangents for the whole spline, the statistics request and its
+ * stale state, axis ticks, histogram bars, region bands and texts). Pure; the SVG lives in plot.ts, the tree
+ * in tree.ts and the drawer in drawer.ts. Edits themselves go through core/spline/edit.ts.
  */
 import { SEA_LEVEL } from '../../core/constants';
 import { uMax } from '../../core/noise/cdf';
 import { q15 } from '../../core/params/canonical';
 import { metaOf } from '../../core/params/meta';
 import type { Params } from '../../core/params/schema';
-import { nodeAt } from '../../core/spline/edit';
+import { autoTangentsAt, knotAt, nodeAt, type SplineEdit } from '../../core/spline/edit';
 import { evalSplineRef } from '../../core/spline/hermite';
 import {
   SPLINE_COORDS, SPLINE_MAX_ABS_D, SPLINE_MAX_ABS_X, SPLINE_SLOT, type KnotPath, type NestedSpline, type SplineCoord, type SplineOpts,
 } from '../../core/spline/types';
-import type { SplineLeaf } from '../../metrics/splineStats';
+import {
+  SPLINE_LEAVES, SPLINE_STATS_POINTS, splineOfLeaf, splineStatsLength, type SplineLeaf, type SplineRegionShare, type SplineStatsSummary,
+} from '../../metrics/splineStats';
 
 // ---------------------------------------------------------------- leaves
 export interface LeafView {
@@ -353,4 +357,196 @@ export function splineTree(leaf: SplineLeaf, s: NestedSpline): TreeRow[] {
   };
   walk(s, [], leafView(leaf).key);
   return out;
+}
+
+// ---------------------------------------------------------------- the drawer
+/** Whether a parameter path is one of the spline leaves the drawer opens. */
+export function isSplineLeaf(path: string): path is SplineLeaf {
+  return (SPLINE_LEAVES as readonly string[]).includes(path);
+}
+
+/**
+ * The longest prefix of `nodePath` that still addresses a nested node of `s`: the node the drawer shows after
+ * an undo, a reset or an import removed or replaced the one it had open.
+ */
+export function followNode(s: NestedSpline, nodePath: KnotPath): KnotPath {
+  const out: number[] = [];
+  let node = s;
+  for (const k of nodePath) {
+    const p = node.points[k];
+    if (p === undefined || typeof p.y === 'number') break;
+    out.push(k);
+    node = p.y;
+  }
+  return out;
+}
+
+/** The coords "nest" offers for the knot at `path`: the leaf's coords that no node from the root down to the knot's node uses. Throws on a bad path. */
+export function nestCoords(leaf: SplineLeaf, s: NestedSpline, path: KnotPath): SplineCoord[] {
+  knotAt(s, path);
+  const used = new Set<SplineCoord>([s.coord]);
+  let node = s;
+  for (const k of path.slice(0, -1)) {
+    node = node.points[k]!.y as NestedSpline;
+    used.add(node.coord);
+  }
+  return leafView(leaf).coords.filter((c) => !used.has(c));
+}
+
+function nodePathsOf(s: NestedSpline, at: KnotPath): KnotPath[] {
+  const out: KnotPath[] = [at];
+  s.points.forEach((p, k) => { if (typeof p.y !== 'number') out.push(...nodePathsOf(p.y, [...at, k])); });
+  return out;
+}
+
+/**
+ * "Auto tangents (spline)": autoTangentsAt on every node in pre-order, so SP1's autoTangents(s) with every
+ * automatic tangent clamped to ±1e5 like the node action (§6.1).
+ */
+export function autoTangentsAll(s: NestedSpline, opts: SplineOpts): SplineEdit {
+  let cur = s;
+  for (const nodePath of nodePathsOf(s, [])) {
+    const r = autoTangentsAt(cur, nodePath, opts);
+    if (!r.ok) return r;
+    cur = r.value;
+  }
+  return { ok: true, value: cur };
+}
+
+/** A `splineStats` request for the open node (spec §4.3): the pool's n and args, and the knot xs that summarise its sum. */
+export interface NodeStatsRequest {
+  readonly n: number;
+  readonly args: { readonly len: number; readonly leaf: SplineLeaf; readonly node: KnotPath };
+  readonly knotXs: readonly number[];
+}
+
+/** Throws on a bad node path. */
+export function nodeStatsRequest(params: Params, leaf: SplineLeaf, nodePath: KnotPath): NodeStatsRequest {
+  const node = nodeAt(splineOfLeaf(params, leaf), nodePath);
+  return { n: SPLINE_STATS_POINTS, args: { len: splineStatsLength(node.points.length), leaf, node: [...nodePath] }, knotXs: node.points.map((p) => p.x) };
+}
+
+/** What a statistics result describes: the session epoch of the draft it ran on and the node. */
+export interface StatsTarget {
+  readonly epoch: number;
+  readonly leaf: SplineLeaf;
+  readonly nodePath: KnotPath;
+  readonly coord: SplineCoord;
+}
+
+const sameNode = (a: StatsTarget, b: StatsTarget): boolean =>
+  a.leaf === b.leaf && a.coord === b.coord && a.nodePath.length === b.nodePath.length && a.nodePath.every((k, i) => k === b.nodePath[i]);
+
+/** Whether `a` is exactly `b` (same epoch and node): a result or a request that needs no new request. */
+export function sameStatsTarget(a: StatsTarget | null, b: StatsTarget): boolean {
+  return a !== null && a.epoch === b.epoch && sameNode(a, b);
+}
+
+export type OverlayState = 'fresh' | 'stale' | 'none';
+
+/**
+ * How the overlays show the last result for the open node: fresh when it ran on the current draft and no
+ * gesture is active; stale from the next session change (or during a gesture) until a new result arrives;
+ * none when it belongs to another node.
+ */
+export function overlayState(shown: StatsTarget | null, now: StatsTarget, inGesture: boolean): OverlayState {
+  if (shown === null || !sameNode(shown, now)) return 'none';
+  return !inGesture && shown.epoch === now.epoch ? 'fresh' : 'stale';
+}
+
+/** Axis ticks: the multiples of a 1, 2 or 5 × 10^k step inside [lo, hi], the finest step giving at most maxCount. */
+export function niceTicks(lo: number, hi: number, maxCount: number): number[] {
+  if (!(hi > lo) || !(maxCount >= 2)) return [];
+  let mag = Math.pow(10, Math.floor(Math.log10((hi - lo) / (maxCount - 1))));
+  for (;;) {
+    for (const m of [1, 2, 5]) {
+      const step = m * mag;
+      const i0 = Math.ceil(lo / step - 1e-9);
+      const i1 = Math.floor(hi / step + 1e-9);
+      if (i1 - i0 + 1 <= maxCount) {
+        const out: number[] = [];
+        for (let i = i0; i <= i1; i++) out.push(Number((i * step).toFixed(10)));
+        return out;
+      }
+    }
+    mag *= 10;
+  }
+}
+
+/** A histogram bar in plot pixels: [x0, x1] and its height, drawn up from the plot's bottom. */
+export interface Bar {
+  readonly x0: number;
+  readonly x1: number;
+  readonly height: number;
+}
+
+/** The histogram's equal bins over [−1, 1] (whatever the plot's x range), the largest bin maxHeightPx high. */
+export function histogramBars(p: Plot, histogram: ArrayLike<number>, maxHeightPx: number): Bar[] {
+  const n = histogram.length;
+  let max = 0;
+  for (let b = 0; b < n; b++) if (histogram[b]! > max) max = histogram[b]!;
+  const out: Bar[] = [];
+  for (let b = 0; b < n; b++) {
+    out.push({ x0: toPx(p, -1 + (2 * b) / n, 0).px, x1: toPx(p, -1 + (2 * (b + 1)) / n, 0).px, height: max > 0 ? (histogram[b]! / max) * maxHeightPx : 0 });
+  }
+  return out;
+}
+
+/** A region of the node (summarizeSplineStats order) as drawn: its x interval clipped to the plot, in pixels, with its shares. */
+export interface Band {
+  readonly index: number;
+  readonly x0: number;
+  readonly x1: number;
+  readonly land: number;
+  readonly world: number;
+}
+
+export function regionBands(p: Plot, regions: readonly SplineRegionShare[]): Band[] {
+  const out: Band[] = [];
+  regions.forEach((r, index) => {
+    const lo = r.lo > p.xMin ? r.lo : p.xMin;
+    const hi = r.hi < p.xMax ? r.hi : p.xMax;
+    if (hi > lo) out.push({ index, x0: toPx(p, lo, 0).px, x1: toPx(p, hi, 0).px, land: r.land, world: r.world });
+  });
+  return out;
+}
+
+/** A share as a percentage with one decimal: `7.3 %`. */
+export function formatShare(f: number): string {
+  return `${(f * 100).toFixed(1)} %`;
+}
+
+/** `C < 0.30` (left hold), `0.30 ≤ C < 0.55` (segment), `C ≥ 0.80` (right hold). */
+export function regionLabel(coord: SplineCoord, r: SplineRegionShare): string {
+  if (r.lo === -Infinity) return `${coord} < ${formatCoordValue(r.hi)}`;
+  if (r.hi === Infinity) return `${coord} ≥ ${formatCoordValue(r.lo)}`;
+  return `${formatCoordValue(r.lo)} ≤ ${coord} < ${formatCoordValue(r.hi)}`;
+}
+
+/** `0.30 ≤ C < 0.55: 7.3 % of land, 4.1 % of the world` (spec §4.3). */
+export function regionText(coord: SplineCoord, r: SplineRegionShare): string {
+  return `${regionLabel(coord, r)}: ${formatShare(r.land)} of land, ${formatShare(r.world)} of the world`;
+}
+
+/** The statistics line: the stream's point and land counts, and for a nested node its mean weights (the sums of its shares). */
+export function statsText(sm: SplineStatsSummary, nested: boolean): string {
+  const base = `${sm.points} points, ${formatShare(sm.points > 0 ? sm.landPoints / sm.points : 0)} land`;
+  return nested ? `${base}; this node weighs ${formatShare(sm.meanWeight)} of the world and ${formatShare(sm.meanLandWeight)} of land` : base;
+}
+
+const px2 = (v: number): number => Math.round(v * 100) / 100;
+
+/** An SVG path `M…L…` through the samples, in plot pixels rounded to 2 decimals. */
+export function curvePath(p: Plot, xs: ArrayLike<number>, ys: ArrayLike<number>): string {
+  let d = '';
+  for (let j = 0; j < xs.length; j++) {
+    const q = toPx(p, xs[j]!, ys[j]!);
+    d += `${j === 0 ? 'M' : 'L'}${px2(q.px)},${px2(q.py)}`;
+  }
+  return d;
+}
+
+/** A lint entry: the crumbs of its node, then its message (`offset › C=0.20: knot 0 (E=−1.50) is unreachable: …`). */
+export function lintText(leaf: SplineLeaf, s: NestedSpline, lint: SplineLint): string {
+  return `${breadcrumbs(leaf, s, lint.nodePath).map((c) => c.label).join(CRUMB_SEPARATOR)}: ${lint.message}`;
 }

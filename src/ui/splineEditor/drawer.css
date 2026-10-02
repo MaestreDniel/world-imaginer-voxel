@@ -1,0 +1,79 @@
+/* The spline drawer (SP2b spec §4.2-4.4): header, then tree | plot | side column; the knot context menu. */
+.sd { display: grid; grid-template-rows: auto minmax(0, 1fr); height: 100%; min-height: 0; }
+.sd [hidden] { display: none !important; }
+.sd-head { display: flex; flex-wrap: wrap; align-items: center; gap: 4px 14px; padding: 4px 10px; border-bottom: 1px solid #333; }
+.sd-title { white-space: nowrap; }
+.sd-crumbs { display: flex; flex-wrap: wrap; align-items: center; gap: 2px; font-family: ui-monospace, monospace; }
+.sd-crumb { font: inherit; padding: 0 4px; color: #6fa8e8; background: none; border: 0; cursor: pointer; }
+.sd-crumb[aria-current="true"] { color: #eee; }
+.sd-crumb-sep { color: #667; }
+.sd-probes { display: flex; flex-wrap: wrap; align-items: center; gap: 4px 10px; }
+.sd-probes-label { color: #9aa; }
+.sd-probe { display: inline-flex; align-items: center; gap: 4px; }
+.sd-probe-name { font-family: ui-monospace, monospace; }
+.sd-probe-range { width: 90px; margin: 0; }
+.sd-probe-value { width: 3.6em; font-family: ui-monospace, monospace; color: #9aa; }
+.sd-actions { display: flex; flex-wrap: wrap; gap: 4px; margin-left: auto; }
+.sd-actions button, .sd-knot button { font: inherit; font-size: 12px; padding: 1px 7px; }
+.sd-body { display: grid; grid-template-columns: 200px minmax(0, 1fr) 270px; min-height: 0; }
+.sd-tree { overflow: auto; padding: 4px 0; border-right: 1px solid #2c3038; }
+.sd-node { display: block; width: 100%; padding: 1px 6px; font: 12px ui-monospace, monospace; text-align: left; white-space: nowrap; color: #bbb; background: none; border: 0; cursor: pointer; }
+.sd-node:hover { background: #262a31; }
+.sd-node[aria-current="true"] { color: #fff; background: #2b3a52; }
+.sd-node-linted::after { content: ' ●'; color: #f0b34a; }
+.sd-plotwrap { position: relative; min-width: 0; min-height: 0; overflow: hidden; }
+.sd-plot { position: absolute; inset: 0; display: block; user-select: none; touch-action: none; outline: none; }
+.sd-plot:focus-visible { outline: 1px solid #4a6fa5; }
+.sd-frame { fill: #15171b; stroke: #34406a; stroke-width: 0.5; }
+.sd-hold { fill: #ffffff; fill-opacity: 0.045; }
+.sd-grid { stroke: #252b38; stroke-width: 1; }
+.sd-tick, .sd-axis-label, .sd-row-label, .sd-sea-label, .sd-stale-label, .sd-band text { font: 10px ui-monospace, monospace; fill: #8a95a8; }
+.sd-axis-label { fill: #c0c8d8; }
+.sd-sea { stroke: #3d7ab8; stroke-dasharray: 4 3; }
+.sd-sea-label { fill: #5f9bd6; }
+.sd-reach { stroke: #9a8a5a; stroke-dasharray: 2 3; }
+.sd-curve { fill: none; stroke: #7ab8ff; stroke-width: 1.6; }
+.sd-knot { fill: #e94560; stroke: #1b1d22; stroke-width: 1; cursor: grab; }
+.sd-knot.sd-nested { fill: #15171b; stroke: #e94560; stroke-width: 2; }
+.sd-knot.sd-linted { stroke: #f0b34a; stroke-width: 2; }
+.sd-knot.sd-selected { stroke: #ffd166; stroke-width: 2.5; }
+.sd-tangent { stroke: #ffd166; stroke-width: 1; }
+.sd-handle { fill: #ffd166; cursor: crosshair; }
+.sd-bar { fill: #4a6fa5; fill-opacity: 0.45; }
+.sd-band-land rect { fill: #6fbf73; }
+.sd-band-world rect { fill: #6fa8e8; }
+.sd-band text { fill: #e8ecf2; }
+.sd-overlay.sd-stale { opacity: 0.35; }
+.sd-stale-label { fill: #f0b34a; }
+.sd-side { display: flex; flex-direction: column; gap: 8px; min-height: 0; overflow: auto; padding: 6px 10px; border-left: 1px solid #2c3038; }
+.sd-knot-head { display: flex; align-items: center; gap: 6px; }
+.sd-knot-title { flex: 1 1 auto; font-weight: 600; }
+.sd-field-row { display: flex; align-items: center; gap: 6px; margin-top: 3px; }
+.sd-field-name { flex: 0 0 1.2em; font-family: ui-monospace, monospace; color: #9aa; }
+.sd-field { flex: 1 1 auto; min-width: 0; padding: 1px 4px; font: 12px ui-monospace, monospace; color: #ddd; background: #15171b; border: 1px solid #3a3f48; border-radius: 2px; }
+.sd-field:disabled { color: #889; }
+.sd-field.sd-invalid { border-color: #ff7b72; outline-color: #ff7b72; }
+.sd-issue { font-size: 12px; color: #ff7b72; white-space: pre-wrap; }
+.sd-hint { font-size: 12px; color: #8a95a8; }
+.sd-stats { font-size: 12px; color: #b8c2d0; }
+.sd-stats[data-state="stale"] { color: #f0b34a; }
+.sd-stats[data-state="none"] { color: #8a95a8; }
+.sd-lints { display: flex; flex-direction: column; gap: 3px; padding: 4px 6px; border: 1px solid #6b5424; border-radius: 3px; }
+.sd-lints::before { content: 'Warnings'; font-size: 11px; text-transform: uppercase; color: #f0b34a; }
+.sd-lint-item { font: inherit; font-size: 12px; text-align: left; color: #f0b34a; background: none; border: 0; padding: 0; cursor: pointer; }
+.sd-lint-item:hover { text-decoration: underline; }
+.sd-message { font-size: 12px; white-space: pre-wrap; color: #b8c2d0; }
+.sd-message:empty { display: none; }
+.sd-message[data-kind="error"] { color: #ff7b72; }
+.sd-menu { position: fixed; z-index: 10; display: flex; flex-direction: column; min-width: 170px; padding: 3px 0; background: #262a31; border: 1px solid #3a3f48; border-radius: 3px; box-shadow: 0 4px 14px rgba(0, 0, 0, 0.5); }
+.sd-menu button { font: inherit; text-align: left; padding: 3px 12px; color: #ddd; background: none; border: 0; cursor: pointer; }
+.sd-menu button:hover, .sd-menu button:focus { background: #2b3a52; outline: none; }
+.sd-menu button:disabled { color: #778; background: none; cursor: default; }
+/* Below 900 px the drawer stacks: plot, tree, side column (the page scrolls). */
+@media (max-width: 899px) {
+  .sd { height: auto; }
+  .sd-body { grid-template-columns: minmax(0, 1fr); grid-template-rows: 260px auto auto; }
+  .sd-tree { max-height: 160px; border-right: 0; border-top: 1px solid #2c3038; }
+  .sd-plotwrap { grid-row: 1; }
+  .sd-side { border-left: 0; }
+}
