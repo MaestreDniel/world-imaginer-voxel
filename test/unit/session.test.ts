@@ -3,12 +3,18 @@ import { canonicalJSON } from '../../src/core/params/canonical';
 import { DEFAULTS } from '../../src/core/params/defaults';
 import { resolveProfile } from '../../src/core/params/profiles';
 import { seedFromInput } from '../../src/core/seed';
-import { WorldSession } from '../../src/engine/session';
+import { HISTORY_STEPS, WorldSession, type SessionState } from '../../src/engine/session';
 
 const random = () => [7, 1] as const;
 const session = () => new WorldSession(random, { seedText: '1' });
 const issuesOf = (r: { ok: boolean; issues?: readonly { path: string; code: string }[] }) => (r.ok ? [] : r.issues!.map((i) => `${i.path} ${i.code}`));
 const FLAT = { coord: 'C', points: [{ x: -1, y: 40, d: 0 }, { x: 1, y: 90, d: 0 }] };
+/** Subscribes and logs each change as 'kind urgent' or 'kind lazy gesture'. */
+const changes = (w: WorldSession) => {
+  const log: string[] = [];
+  w.subscribe((_s, c) => log.push(`${c.kind} ${c.urgent ? 'urgent' : 'lazy'}${c.gesture ? ' gesture' : ''}`));
+  return log;
+};
 
 describe('WorldSession', () => {
   test('defaults: default profile, empty patch, random seed written back', () => {
@@ -195,5 +201,180 @@ describe('initial state', () => {
     expect(w.state.params).toBe(resolveProfile('default'));
     expect(w.initNotice).toBe('invalid patch (nope UNKNOWN_KEY); opened the default profile with no changes');
     expect(new WorldSession(random, { patch: null }).initNotice).toBe('invalid patch (<root> NOT_OBJECT); opened the default profile with no changes');
+  });
+});
+
+describe('history', () => {
+  test('HISTORY_STEPS = 100: of 150 steps the last 100 undo, then redo all', () => {
+    const w = session();
+    expect(HISTORY_STEPS).toBe(100);
+    expect([w.canUndo, w.canRedo, w.undo(), w.redo()]).toEqual([false, false, false, false]);
+    for (let i = 1; i <= 150; i++) w.set('lakes.radius', 100 + i);
+    let n = 0;
+    while (w.undo()) n++;
+    expect([n, w.state.params.lakes.radius, w.canUndo, w.canRedo]).toEqual([100, 150, false, true]);
+    n = 0;
+    while (w.redo()) n++;
+    expect([n, w.state.params.lakes.radius, w.canRedo]).toEqual([100, 250, false]);
+  });
+  test('a recorded step after an undo drops the redo tail; an unchanged snapshot keeps it', () => {
+    const w = session();
+    for (const v of [6, 7, 9]) w.set('rivers.widthMin', v);
+    w.undo();
+    w.undo();
+    expect([w.state.params.rivers.widthMin, w.canRedo]).toEqual([6, true]);
+    w.set('rivers.widthMin', 6);
+    w.setSeedText(' 1 ');
+    expect(w.redo() && w.state.params.rivers.widthMin).toBe(7);
+    w.undo();
+    w.set('rivers.widthMin', 10);
+    expect([w.canRedo, w.redo()]).toEqual([false, false]);
+    expect(w.undo() && w.state.params.rivers.widthMin).toBe(6);
+  });
+  test('a profile switch that keeps the params is one step without an epoch bump', () => {
+    const w = session();
+    w.set('climate.scaleMul', 4);
+    expect(w.setProfile('large_biomes').ok && [w.state.profile, w.state.patch, w.state.epoch]).toEqual(['large_biomes', {}, 1]);
+    expect(w.undo()).toBe(true);
+    expect([w.state.profile, w.state.patch, w.state.epoch]).toEqual(['default', { climate: { scaleMul: 4 } }, 1]);
+    expect(w.redo() && [w.state.profile, w.state.epoch]).toEqual(['large_biomes', 1]);
+  });
+  test('42 → 042 is one step without an epoch bump', () => {
+    const w = new WorldSession(random, { seedText: '42' });
+    w.setSeedText('042');
+    expect([w.state.seedText, w.state.epoch, w.canUndo]).toEqual(['042', 0, true]);
+    w.undo();
+    expect([w.state.seedText, w.state.epoch, w.canUndo]).toEqual(['42', 0, false]);
+  });
+  test('undo and redo across a seed change restore seedText and seed', () => {
+    const w = new WorldSession(random, { seedText: '42' });
+    w.set('rivers.widthMin', 6);
+    w.newSeed();
+    expect([w.state.seedText, w.state.epoch]).toEqual(['4294967303', 2]);
+    w.undo();
+    expect([w.state.seedText, w.state.seed, w.state.params.rivers.widthMin, w.state.epoch]).toEqual(['42', seedFromInput('42'), 6, 3]);
+    w.redo();
+    expect([w.state.seedText, w.state.epoch]).toEqual(['4294967303', 4]);
+  });
+  test('a load with record false is no step: it replaces the step at the cursor', () => {
+    const w = session();
+    w.load({ profile: 'default', patch: { rivers: { widthMin: 5 } } }, { record: false });
+    expect([w.canUndo, w.undo()]).toEqual([false, false]);
+    w.set('rivers.widthMin', 6);
+    w.load({ profile: 'default', patch: { rivers: { widthMin: 7 } } }, { record: false });
+    expect(w.undo() && w.state.params.rivers.widthMin).toBe(5);
+    expect(w.redo() && [w.state.params.rivers.widthMin, w.canRedo]).toEqual([7, false]);
+  });
+  test('a URL-style load is one epoch bump, one notification and one step; the same load again is nothing', () => {
+    const w = session();
+    const log = changes(w);
+    const url = { seedText: '99', profile: 'default', patch: { rivers: { widthMin: 6 } } } as const;
+    w.load(url);
+    expect([w.state.epoch, log, w.canUndo]).toEqual([1, ['load urgent'], true]);
+    w.load(url);
+    expect([w.state.epoch, log.length]).toEqual([1, 1]);
+    expect(w.undo() && w.canUndo).toBe(false);
+  });
+});
+
+describe('gestures and notifications', () => {
+  test('every change notifies once with its kind; no-ops and failures notify nobody; unsubscribe stops', () => {
+    const w = session();
+    const log = changes(w);
+    const states: SessionState[] = [];
+    const off = w.subscribe((s) => { states.push(s); });
+    w.set('rivers.widthMin', 6);
+    w.set('rivers.widthMin', 6);
+    w.set('climate.scaleMul', 99);
+    w.reset('rivers');
+    w.setSeedText('2');
+    w.setSeedText(' 2 ');
+    w.newSeed();
+    w.setProfile('large_biomes');
+    w.setProfile('archipelago');
+    w.load({ profile: 'default', patch: {} });
+    w.undo();
+    w.redo();
+    expect(log).toEqual(['set urgent', 'reset urgent', 'seed urgent', 'seed urgent', 'profile urgent', 'load urgent', 'undo urgent', 'redo urgent']);
+    expect(states.at(-1)).toBe(w.state);
+    off();
+    w.set('rivers.widthMin', 5);
+    expect([states.length, log.length]).toEqual([8, 9]);
+  });
+  test('a gesture is one step; its edits are non-urgent; gestureEnd is urgent', () => {
+    const w = session();
+    const log = changes(w);
+    w.beginGesture();
+    expect(w.inGesture).toBe(true);
+    w.set('climate.scaleMul', 1.5);
+    w.set('climate.scaleMul', 2);
+    w.endGesture();
+    expect(w.inGesture).toBe(false);
+    expect(log).toEqual(['gestureBegin lazy gesture', 'set lazy gesture', 'set lazy gesture', 'gestureEnd urgent']);
+    expect(w.undo() && [w.state.params.climate.scaleMul, w.canUndo]).toEqual([1, false]);
+  });
+  test('a gesture that ends where it began records nothing, keeps the redo tail and still notifies gestureEnd', () => {
+    const w = session();
+    w.set('rivers.widthMin', 6);
+    w.undo();
+    const log = changes(w);
+    w.beginGesture();
+    w.set('climate.scaleMul', 2);
+    w.set('climate.scaleMul', 1);
+    w.endGesture();
+    w.beginGesture();
+    w.endGesture();
+    expect(log).toEqual(['gestureBegin lazy gesture', 'set lazy gesture', 'set lazy gesture', 'gestureEnd urgent', 'gestureBegin lazy gesture', 'gestureEnd urgent']);
+    expect([w.canUndo, w.canRedo]).toEqual([false, true]);
+  });
+  test('gestures do not nest', () => {
+    const w = session();
+    const log = changes(w);
+    w.endGesture();
+    w.beginGesture();
+    w.beginGesture();
+    w.set('rivers.widthMin', 6);
+    w.endGesture();
+    w.endGesture();
+    expect(log).toEqual(['gestureBegin lazy gesture', 'set lazy gesture', 'gestureEnd urgent']);
+    expect(w.undo() && w.state.params.rivers.widthMin).toBe(8);
+  });
+  test('undo during a gesture closes it first', () => {
+    const w = session();
+    const log = changes(w);
+    w.beginGesture();
+    w.set('rivers.widthMin', 6);
+    expect([w.canUndo, w.canRedo]).toEqual([true, false]);
+    expect(w.undo()).toBe(true);
+    expect([w.inGesture, w.state.params.rivers.widthMin]).toEqual([false, 8]);
+    expect(log).toEqual(['gestureBegin lazy gesture', 'set lazy gesture', 'gestureEnd urgent', 'undo urgent']);
+    expect(w.redo() && w.state.params.rivers.widthMin).toBe(6);
+  });
+  test('redo during a gesture that changed the draft finds no tail', () => {
+    const w = session();
+    w.set('rivers.widthMin', 6);
+    w.undo();
+    w.beginGesture();
+    w.set('lakes.p', 0.3);
+    expect(w.canRedo).toBe(false);
+    expect([w.redo(), w.inGesture, w.state.params.lakes.p]).toEqual([false, false, 0.3]);
+  });
+  test('load, setProfile, setSeedText and newSeed during a gesture end it first', () => {
+    const runs: [string, (w: WorldSession) => unknown][] = [
+      ['load', (w) => w.load({ profile: 'default', patch: { lakes: { p: 0.3 } } })],
+      ['profile', (w) => w.setProfile('large_biomes')],
+      ['seed', (w) => w.setSeedText('77')],
+      ['seed', (w) => w.newSeed()],
+    ];
+    for (const [kind, run] of runs) {
+      const w = session();
+      const log = changes(w);
+      w.beginGesture();
+      w.set('rivers.widthMin', 6);
+      run(w);
+      expect(log.slice(2)).toEqual(['gestureEnd urgent', `${kind} urgent`]);
+      expect(w.undo() && [w.inGesture, w.state.params.rivers.widthMin, w.state.profile]).toEqual([false, 6, 'default']);
+      expect(w.undo() && w.state.params.rivers.widthMin).toBe(8);
+    }
   });
 });

@@ -1,7 +1,8 @@
 /**
  * WorldSession (SP2b spec §1): the single owner of the draft — seed text, profile, a minimal canonical
  * patch over the profile, the resolved params and an epoch that bumps only when the seed or the params
- * change. Every editor, the biome-size slider, the URL and preset loads go through it.
+ * change. Every editor, the biome-size slider, the URL and preset loads go through it; gestures, a
+ * global undo/redo history and change notifications sit on top (§1.3).
  */
 import { hex64, type Seed64 } from '../core/hash';
 import { canonicalJSON } from '../core/params/canonical';
@@ -28,6 +29,25 @@ export interface SessionSnapshot {
   readonly seedText: string;
   readonly profile: ProfileId;
   readonly patch: ParamsPatch;
+}
+
+export type ChangeKind = 'seed' | 'profile' | 'set' | 'reset' | 'load' | 'undo' | 'redo' | 'gestureBegin' | 'gestureEnd';
+
+/** `urgent`: preview at once (every edit outside a gesture); `gesture`: an edit or the start of a drag in progress. */
+export interface SessionChange {
+  readonly kind: ChangeKind;
+  readonly urgent: boolean;
+  readonly gesture: boolean;
+}
+
+export type SessionListener = (state: SessionState, change: SessionChange) => void;
+
+/** Undo steps kept: the history holds up to HISTORY_STEPS + 1 snapshots. */
+export const HISTORY_STEPS = 100;
+
+interface HistoryEntry {
+  readonly snap: SessionSnapshot;
+  readonly key: string;
 }
 
 function profileIssue(id: unknown): Issue | null {
@@ -90,6 +110,11 @@ export class WorldSession {
   private epochKey: string;
   /** canonicalJSON of the snapshot: the draft changed when it changes (the patch is minimal, so it never throws). */
   private draftKey: string;
+  /** history[cursor] equals the draft except inside a gesture that changed it. */
+  private readonly history: HistoryEntry[];
+  private cursor = 0;
+  private gesture = false;
+  private readonly listeners = new Set<SessionListener>();
 
   constructor(random: () => Seed64, init: { readonly seedText?: string; readonly profile?: ProfileId; readonly patch?: unknown } = {}) {
     this.random = random;
@@ -115,6 +140,7 @@ export class WorldSession {
     this.s = Object.freeze({ seedText: seed.text, seed: seed.seed, profile, patch, params, epoch: 0 });
     this.epochKey = epochKeyOf(seed.seed, params);
     this.draftKey = draftKeyOf(this.s);
+    this.history = [this.entry()];
   }
 
   get state(): SessionState {
@@ -125,10 +151,62 @@ export class WorldSession {
     return { seedText: this.s.seedText, profile: this.s.profile, patch: this.s.patch };
   }
 
+  get inGesture(): boolean {
+    return this.gesture;
+  }
+
+  /** Whether undo() would change the cursor (inside a changed gesture it first records the gesture). */
+  get canUndo(): boolean {
+    return this.cursor > 0 || this.draftKey !== this.history[this.cursor]!.key;
+  }
+
+  /** Whether redo() would change the cursor (a gesture that changed the draft drops the redo tail when it ends). */
+  get canRedo(): boolean {
+    return this.cursor < this.history.length - 1 && this.draftKey === this.history[this.cursor]!.key;
+  }
+
+  /** Listeners run after every change of the draft, on undo and redo, and at gesture boundaries. */
+  subscribe(l: SessionListener): () => void {
+    this.listeners.add(l);
+    return () => { this.listeners.delete(l); };
+  }
+
+  /** Starts a drag: edits until endGesture() are non-urgent and form one history step. No-op inside a gesture. */
+  beginGesture(): void {
+    if (this.gesture) return;
+    this.gesture = true;
+    this.emit('gestureBegin');
+  }
+
+  /** Records the gesture's step (if the draft changed) and always notifies an urgent gestureEnd. No-op outside a gesture. */
+  endGesture(): void {
+    if (!this.gesture) return;
+    this.gesture = false;
+    this.recordStep();
+    this.emit('gestureEnd');
+  }
+
+  undo(): boolean {
+    this.endGesture();
+    if (this.cursor === 0) return false;
+    this.cursor--;
+    this.restore('undo');
+    return true;
+  }
+
+  redo(): boolean {
+    this.endGesture();
+    if (this.cursor === this.history.length - 1) return false;
+    this.cursor++;
+    this.restore('redo');
+    return true;
+  }
+
   /** SP1 seed rule: trimmed text, or a random seed written back for empty text. */
   setSeedText(text: string): SessionState {
+    this.endGesture();
     const r = resolveSeedText(text, this.random);
-    return this.commit(r.text, r.seed, this.s.profile, resolveProfile(this.s.profile), this.s.params);
+    return this.commit('seed', r.text, r.seed, this.s.profile, resolveProfile(this.s.profile), this.s.params);
   }
 
   /** Draws a random seed and writes its text back (the "New seed" button). */
@@ -138,10 +216,11 @@ export class WorldSession {
 
   /** Switches to a ready profile and clears the patch. The page asks for confirmation, never the session. */
   setProfile(id: ProfileId): SessionResult {
+    this.endGesture();
     const bad = profileIssue(id);
     if (bad !== null) return { ok: false, issues: [bad] };
     const base = resolveProfile(id);
-    return { ok: true, state: this.commit(this.s.seedText, this.s.seed, id, base, base) };
+    return { ok: true, state: this.commit('profile', this.s.seedText, this.s.seed, id, base, base) };
   }
 
   /**
@@ -151,27 +230,30 @@ export class WorldSession {
   set(path: string, value: unknown): SessionResult {
     const node = nodeAt(path);
     if (value === undefined) return { ok: false, issues: undefinedIssues(node, path) };
-    return this.commitPatch(mergeInto(SCHEMA.root, this.s.patch, path === '' ? value : patchAt(path, value)));
+    return this.commitPatch('set', mergeInto(SCHEMA.root, this.s.patch, path === '' ? value : patchAt(path, value)));
   }
 
   /** Returns a group or a leaf (a noise leaf as a whole) to the profile's value. */
   reset(path: string): SessionResult {
     nodeAt(path);
-    return this.commitPatch(path === '' ? {} : withoutPath(this.s.patch, path.split('.')));
+    return this.commitPatch('reset', path === '' ? {} : withoutPath(this.s.patch, path.split('.')));
   }
 
   /**
    * Atomic load: resolves `seedText` when given (otherwise keeps the seed), validates the patch over a
-   * ready profile, then replaces seed, profile and patch in one commit. On failure nothing changes.
+   * ready profile, then replaces seed, profile and patch in one commit (one notification, at most one
+   * epoch bump). Records one history step unless `record` is false; then the change replaces the step at
+   * the cursor instead. On failure nothing changes.
    */
-  load(s: { readonly seedText?: string; readonly profile: ProfileId; readonly patch: unknown }): SessionResult {
+  load(s: { readonly seedText?: string; readonly profile: ProfileId; readonly patch: unknown }, opts: { readonly record?: boolean } = {}): SessionResult {
+    this.endGesture();
     const bad = profileIssue(s.profile);
     if (bad !== null) return { ok: false, issues: [bad] };
     const base = resolveProfile(s.profile);
     const r = applyPatch(SCHEMA, base, s.patch);
     if (!r.ok) return { ok: false, issues: r.issues };
     const seed = s.seedText === undefined ? { text: this.s.seedText, seed: this.s.seed } : resolveSeedText(s.seedText, this.random);
-    return { ok: true, state: this.commit(seed.text, seed.seed, s.profile, base, r.value) };
+    return { ok: true, state: this.commit('load', seed.text, seed.seed, s.profile, base, r.value, opts.record ?? true) };
   }
 
   /** Whether the draft differs from the profile at a group or leaf path. */
@@ -190,22 +272,63 @@ export class WorldSession {
     return n;
   }
 
-  private commitPatch(patch: unknown): SessionResult {
+  private commitPatch(kind: 'set' | 'reset', patch: unknown): SessionResult {
     const base = resolveProfile(this.s.profile);
     const r = applyPatch(SCHEMA, base, patch);
     if (!r.ok) return { ok: false, issues: r.issues };
-    return { ok: true, state: this.commit(this.s.seedText, this.s.seed, this.s.profile, base, r.value) };
+    return { ok: true, state: this.commit(kind, this.s.seedText, this.s.seed, this.s.profile, base, r.value) };
   }
 
-  /** Stores the minimal frozen patch; keeps the state object when the draft is unchanged. */
-  private commit(seedText: string, seed: Seed64, profile: ProfileId, base: Params, params: Params): SessionState {
+  /** Writes a validated draft; outside a gesture records it (or replaces the cursor's step), then notifies. Unchanged drafts do nothing. */
+  private commit(kind: ChangeKind, seedText: string, seed: Seed64, profile: ProfileId, base: Params, params: Params, record = true): SessionState {
+    if (!this.write(seedText, seed, profile, base, params)) return this.s;
+    if (!this.gesture) {
+      if (record) this.recordStep();
+      else this.history[this.cursor] = this.entry();
+    }
+    this.emit(kind);
+    return this.s;
+  }
+
+  /** Stores the minimal frozen patch; false (and the state object kept) when the draft is unchanged. */
+  private write(seedText: string, seed: Seed64, profile: ProfileId, base: Params, params: Params): boolean {
     const patch = deepFreeze(diffParams(SCHEMA, base, params));
     const draftKey = draftKeyOf({ seedText, profile, patch });
-    if (draftKey === this.draftKey) return this.s;
+    if (draftKey === this.draftKey) return false;
     const epochKey = epochKeyOf(seed, params);
     this.s = Object.freeze({ seedText, seed, profile, patch, params, epoch: epochKey === this.epochKey ? this.s.epoch : this.s.epoch + 1 });
     this.epochKey = epochKey;
     this.draftKey = draftKey;
-    return this.s;
+    return true;
+  }
+
+  private entry(): HistoryEntry {
+    return { snap: this.snapshot, key: this.draftKey };
+  }
+
+  /** A step when the draft differs from the cursor's snapshot: drops the redo tail, keeps HISTORY_STEPS steps. */
+  private recordStep(): void {
+    if (this.draftKey === this.history[this.cursor]!.key) return;
+    this.history.length = this.cursor + 1;
+    this.history.push(this.entry());
+    if (this.history.length > HISTORY_STEPS + 1) this.history.shift();
+    this.cursor = this.history.length - 1;
+  }
+
+  /** Applies the snapshot at the cursor as load(snapshot, {record: false}) does; always notifies (the cursor moved). */
+  private restore(kind: 'undo' | 'redo'): void {
+    const { snap } = this.history[this.cursor]!;
+    const base = resolveProfile(snap.profile);
+    const r = applyPatch(SCHEMA, base, snap.patch);
+    if (!r.ok) throw new Error(`history snapshot no longer loads: ${r.issues[0]!.path} ${r.issues[0]!.code}`);
+    const seed = resolveSeedText(snap.seedText, this.random);
+    this.write(seed.text, seed.seed, snap.profile, base, r.value);
+    this.emit(kind);
+  }
+
+  /** Inside a gesture every change is non-urgent; gestureEnd and everything outside a gesture are urgent. */
+  private emit(kind: ChangeKind): void {
+    const change: SessionChange = { kind, urgent: !this.gesture, gesture: this.gesture };
+    for (const l of [...this.listeners]) l(this.s, change);
   }
 }
