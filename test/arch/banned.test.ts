@@ -47,6 +47,8 @@ test('bad fixture tree reports every banned use', () => {
     'src/metrics/sp1Goldens.ts:1 nondeterministic',
     'src/metrics/sp1Goldens.ts:2 math-pow-operator',
     'src/metrics/sp2aGoldens.ts:1 nondeterministic',
+    'src/metrics/splineStats.ts:1 nondeterministic',
+    'src/metrics/splineStats.ts:2 math-member',
     'src/render/materials/raw.glsl:1 raw-shader-file',
     'src/render/materials/rawImport.ts:1 raw-import',
     'src/render/threeAudio.ts:1 three-audio',
