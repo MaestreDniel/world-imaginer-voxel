@@ -1,7 +1,7 @@
 # SP3a — Block registry, voxel store and region harness (Design)
 
 Date: 2026-10-02
-Status: Approved by the user (2026-10-02): the design section by section, then the written spec after the adversarial review, including its three additions (slab fuzz gated by its integration test, not a threshold row, §9; `SHAPE` and `SOUND` gain `none` for air, §2.2, §11; the region-cache CI step moves to SP3b, §9, §11)
+Status: Approved by the user (2026-10-02): the design section by section, then the written spec after the adversarial review, including its three additions (slab fuzz gated by its integration test, not a threshold row, §9; `SHAPE` and `SOUND` gain `none` for air, §2.2, §11; the region-cache CI step moves to SP3b, §9, §11). Revised by the implementation-plan dry run (2026-10-03, §13)
 Parent: master spec `2026-09-26-architecture-design.md`. The sections involved are:
 - §10 SP3, which this spec splits into SP3a, SP3b and SP3c;
 - the data model: §2.1 (coordinates and keys), §2.2 (block registry and voxel encoding), §2.3 (the store), §2.5 (key types), §2.6 (byte budgets);
@@ -64,8 +64,13 @@ src/metrics/sp3aGoldens.ts    registry and region goldens (in DET_FILES)
 src/workers/                  + the slice job (protocol, handler, worker-local slice store and LRU)
 src/engine/workerPool.ts      + pool.slice
 src/ui/crossSection/          + the Voxels mode
+src/workers/sliceJob.ts       the slice job: worker-local store, 64-column LRU, the sample walk (§5.1)
+src/ui/crossSection/voxels.ts the Voxels palette, slice image, hover cells and readout (§5.2)
 test/harness/region.ts cache.ts png.ts regionWorker.ts fuzzWorker.ts; nodeWorker.ts takes an entry
+test/harness/blockFixtures.ts stateLock.ts registryChecks.ts reviewSlices.ts
+test/metrics/blocks.metric.ts (M1) region.metric.ts (DT1)
 test/stateIds.lock.json
+tsconfig*.json                lib ES2024 (target unchanged): growable SharedArrayBuffer and resizable ArrayBuffer types
 ```
 
 ## 1. Coordinates (`core/coords.ts`)
@@ -196,8 +201,8 @@ Master §2.1, as code: integer x and z; y ∈ [−64, 319]; `cx = x >> 4`, `cz =
   - alloc, retain and free of raw slots;
   - rewriting a section as uniform or dense in either direction (promotion and demotion: a dense write allocates, a uniform write over a dense section releases);
   - writing a column's proto set, then its final set through `shareFinal` (sharing) or `setFinal`; `freeProto`; `freeColumn`;
-  - claims on torus records with collisions: each thread owns the records whose slot ≡ thread (mod 4) and claims columns 64 apart on them (cx, cx + 64, …), freeing the holder first; lookups of its own records.
-  Each thread keeps at most 1,000 live raw references per pool and 8 claimed columns, so at most 5,536 block and 6,336 byte slots are live against 8,192 per pool: `StoreFull` is a failure here, and growth (128 or 256 slots per step) happens many times while the threads race. Checks:
+  - claims on torus records with collisions: each thread owns the records whose slot ≡ thread (mod 4) and claims columns 64 apart on them (cx − 64, cx, cx + 64, each at cz and cz + 64), freeing the holder first; lookups of its own records.
+  Each thread keeps at most 1,000 live raw references per pool and 8 claimed columns, so at most 5,540 block and 6,372 byte slots are live against 8,192 per pool (48 block and 74 byte slots per column, aux B included, plus one transient slot per thread and pool while a dense rewrite allocates before it frees): `StoreFull` is a failure here, and growth (128 or 256 slots per step) happens many times while the threads race. Checks:
   - 0 double allocations: an alloc never returns a slot that a reference still holds (each thread claims the slot in a shared owner table by compare-exchange on alloc and clears it before its last release);
   - at each barrier and at the end, every slot's refcount equals its raw references plus the descriptor and aux entries that reference it;
   - no lost slots: free-stack size + slots with refcount > 0 = slot count;
@@ -256,7 +261,7 @@ genRegion({ seed, params, cx0, cz0, w, h, upTo: 'T', order: 'spiral' | 'shuffled
   - Key: `genKey + srcKey + REGION_CACHE_FORMAT + (cx0, cz0, w, h) + upTo`, as a file `test/.cache/regions/<hex64 of the key>.bin`. `srcKey` is the FNV-1a 64 of the sorted paths and bytes of `src/core/**`, `src/world/**`, `src/gen/**`, `src/metrics/region.ts` and `test/harness/cache.ts`, read at test time, so any code change is a miss without a hand-bumped constant. `REGION_CACHE_FORMAT` (an integer in `cache.ts`, starting at 1) is bumped when the dump layout changes.
   - Dump: a header (format, genKey, srcKey, cx0, cz0, w, h, upTo), then per column, cz outer and cx inner: record ints 0-15, the 24 proto descriptors, the dense block and fluid slots they reference in descriptor order, and the 4096 aux A bytes. A header that disagrees with the key is a miss and the file is overwritten.
   - A hit rebuilds each column through the writer API (`claimColumn`, `setProto` per section with the expanded data, the aux bytes, `commit(1)`), so uniform and dense decisions are made again by the same code.
-- **PNG slices** (`test/harness/png.ts`): a small PNG encoder over `node:zlib`; vertical slices (an x or z plane) and horizontal slices (a y plane), with the Voxels palette.
+- **PNG slices** (`test/harness/png.ts`): a small PNG encoder over `node:zlib`; vertical slices (an x or z plane) and horizontal slices (a y plane), with the Voxels palette of `ui/crossSection/voxels.ts` (one palette for the PNGs and the page). The review slices of §12 are written by `npm run docs:review-slices` (`test/harness/reviewSlices.ts`, an env-gated unit test) into `docs/superpowers/specs/assets/sp3a/`.
 
 ### 6.2 Region hash
 
@@ -289,7 +294,9 @@ Threshold: exact (0 mismatches). Two parts:
 
 ## 7. Bench
 
-New rows, recorded with `npm run bench:record` and gated at +30 % like the rest: `store.alloc` (one alloc and free on the byte pool) and `terrain.provisional` (one column's provisional T stage including its ColumnSample). The dense-section write is covered by the unit tests and gets no gated row.
+New rows, gated at +30 % like the rest: `store.alloc` (one alloc and free on the byte pool) and `terrain.provisional` (one column's provisional T stage including its ColumnSample). The dense-section write is covered by the unit tests and gets no gated row. A unit test checks that `test/baselines.json` holds exactly the gated rows.
+
+`npm run bench:record` rewrites every row, so the record is made on the reference machine with nothing else loading the CPU, in this order: `npm run bench` against the SP2b baseline (the existing rows must pass), `npm run bench:record`, then `npm run bench`. The record refuses to write when the absolute P1 gate (column p50 ≤ 0.7 ms) fails.
 
 ## 8. Tests (summary)
 
@@ -297,7 +304,7 @@ New rows, recorded with `npm run bench:record` and gated at +30 % like the rest:
 - **Integration** (project `integration`, sequential): slab fuzz (alloc/retain/free, promotion, sharing, torus); the 4-thread harness against the 1-thread one.
 - **Metrics:** DT1 and M1 (registry parts), every tier.
 - **Arch:** `world/blocks` under the determinism rules; `gen` imports only types from `world/store/api.ts`; `metrics/region.ts` and `metrics/sp3aGoldens.ts` in `DET_FILES`; `CURRENT_SP` follows the §9 rule.
-- **Tools:** `uiSmoke.ts` toggles Voxels and checks a non-empty slice; the harness writes the review PNGs.
+- **Tools:** `uiSmoke.ts` toggles Voxels and checks a non-empty slice; `npm run docs:review-slices` writes the review PNGs.
 
 ## 9. Governance
 
@@ -336,6 +343,8 @@ New rows, recorded with `npm run bench:record` and gated at +30 % like the rest:
 - **§2.2:** `SHAPE` and `SOUND` gain `none` (air; `SOUND` none is never played); the enum codes, the id order (default first, then mixed-radix), the canonical key format and the `withType`/`rotateState`/`mirrorState` rules of §2.1-2.3 here; "new types and props only append" means new types with their full property sets append and locked types never gain properties or values; the table set only grows (later tables such as `PLACEABLE`, `category` and `SHAPE_BOXES` are added, existing ones never change).
 - **§2.3:** each slab pool is one growable buffer (`SharedArrayBuffer` with `maxByteLength`, or a resizable `ArrayBuffer`), grown by whichever thread runs out of slots, under the pool's lock, by 1 MiB; a slot id is the slot's index; there is no page broadcast. Uniform fluid sections are encoded `-1-fluidByte` (−1 stays "no fluid"). Record int 11 is `claimed`; claiming a held record throws `SlotBusy`. The meta word's bit positions, the aux A and B offsets and the heightmap encoding and predicates of §3.3-3.4 here; aux slots are zero-filled on allocation. The face-to-face connectivity bits and `padded.ts` are SP4.
 - **§2.5:** `SubProjectId` has `'SP3a' | 'SP3b' | 'SP3c'` instead of `'SP3'`. `ColumnWriter` is `setProto`, `setFinal(sy, blocks, light, fluid)`, `shareFinal(sy, light)`, `aux()`, `auxB()`, `commit(status)`, obtained from `store.claimColumn`; `ColumnView` and `NeighborhoodReader` as in §3.5 here.
+- **§10 cut lines:** SP3a names no cut line; SP3b's deliverable is voxel terrain from the density DAG with surface rules and water, in the harness slices and the Voxels mode; SP3b's cut line and SP3c's exit are set by their specs.
+- **Every other master reference to SP3** (§3.7, §3.17, §8 risk 1, §10's SP2a header and SP2b hand-over, the cut-line receivers, the parallelism and visible-value paragraphs, SP12's continental line) names the part it now belongs to: SP3a, SP3b or SP3c. The SP0 spec's open item "Running TypeScript in `worker_threads` for the harness (SP3)" is resolved by bundling (`buildNodeTaskWorker(dir, {entry?, stamp?})`).
 - **§6.1:** `RegionView` reads through the store per column and is never stitched into one array; SP3a's `genRegion` has `upTo: 'T'` only, `cache?` and `shuffleSeed?`, and no coordinator prerequisite rules until SP4. The region cache key adds `srcKey` and a format version to `genKey + region + upTo`, because `genKey` does not track code changes made without a stage bump.
 
 ## 12. Exit criteria
@@ -349,7 +358,18 @@ New rows, recorded with `npm run bench:record` and gated at +30 % like the rest:
 | DT1 exact at `upTo: 'T'` (invariance and golden parts) | metric DT1 |
 | `sp3a.*` goldens recorded; no other golden changes; `?selftest=1` all keys in Chrome and Firefox; Bun all keys | goldens tests, browsers, Bun tool |
 | bench within +30 % with the new rows | `npm run bench` |
-| visual review | harness PNG slices (vertical across a coast, a lake and a river; horizontal at y 62) and screenshots of the Voxels mode |
+| visual review | three vertical harness PNG slices, one across a coast, one across a lake and one across a river, and a horizontal slice at y 62, written by `npm run docs:review-slices` into `assets/sp3a/`; a screenshot of the Voxels mode (`uiSmoke.ts --shots`) |
+
+## 13. Changes made by the implementation-plan dry run (2026-10-03)
+
+The plan was dry-run in a scratch worktree: every task was implemented and every test and metric tier run. These are the resulting changes to the approved spec:
+
+1. **Slab fuzz bounds** (§3.6). The live-slot bound counts aux B and the transient slot of a dense rewrite: at most 5,540 block and 6,372 byte slots (was 5,536 and 6,336), still under 8,192. Each thread's columns also vary cz, because a lookup that ignored cz passed with cx variants alone.
+2. **Bench procedure** (§7). `bench:record` rewrites every row and refuses to write when the P1 absolute gate fails, so it needs a quiet machine and the order bench → record → bench (as SP2b §9). A unit test pins the baseline's rows.
+3. **Master amendments** (§11). SP3a names no cut line; SP3b's deliverable is stated and its cut line and SP3c's exit are left to their specs. Every other master reference to SP3 names its part, and the SP0 spec's `worker_threads` open item is resolved.
+4. **Review slices** (§6.1, §8, §12). Three vertical slices (coast, lake, river: the known seed-'42' sites lie about 1,300 columns apart, beyond one 64-column region) and one at y 62, written by `npm run docs:review-slices` into `assets/sp3a/`. The PNGs and the Voxels mode share one palette, in `ui/crossSection/voxels.ts`.
+5. **Module layout** (Module layout). `workers/sliceJob.ts`, `ui/crossSection/voxels.ts`, the test harness files (`blockFixtures`, `stateLock`, `registryChecks`, `reviewSlices`) and the two metric files are listed; the tsconfig `lib` moves to ES2024 for the growable-buffer types (the target is unchanged).
+6. **Measured, unchanged:** DT1's full tier keeps the four seeds (≈ 130 s cold, after the streaming FNV was made about 8 × faster, bit-identical); the provisional T column costs ≈ 0.67 ms on the reference machine; the 4-thread harness, the slab fuzz (≈ 2 s) and the 10-refresh torus slice test run as specified.
 
 ## Threshold log
 
