@@ -1,7 +1,7 @@
 # SP3a — Block registry, voxel store and region harness (Design)
 
 Date: 2026-10-02
-Status: Written for review (design approved section by section by the user, 2026-10-02); revised after the adversarial spec review (2026-10-02). Three points depart from or add to what was approved and need the user's confirmation: slab fuzz is gated by its integration test, not by a threshold row (§9); `SHAPE` and `SOUND` gain `none` for air (§2.2, §11); the region-cache CI step moves to SP3b (§9, §11).
+Status: Approved by the user (2026-10-02): the design section by section, then the written spec after the adversarial review, including its three additions (slab fuzz gated by its integration test, not a threshold row, §9; `SHAPE` and `SOUND` gain `none` for air, §2.2, §11; the region-cache CI step moves to SP3b, §9, §11)
 Parent: master spec `2026-09-26-architecture-design.md`. The sections involved are:
 - §10 SP3, which this spec splits into SP3a, SP3b and SP3c;
 - the data model: §2.1 (coordinates and keys), §2.2 (block registry and voxel encoding), §2.3 (the store), §2.5 (key types), §2.6 (byte budgets);
