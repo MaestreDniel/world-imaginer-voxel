@@ -57,7 +57,8 @@ export function mountMapPage(root: HTMLElement): void {
   const hover = el('div', 'map-readout');
   side.append(el('h3', '', 'World'), status, issues, el('h3', '', 'Point'), hover);
 
-  const pool = createBrowserPool();
+  const pool = createBrowserPool(undefined, { onFailure: () => notices.show('a worker failed; reload the page', { kind: 'error' }) });
+  if (!pool.abortable) notices.show('live preview is slower without cross-origin isolation', { kind: 'info' });
   const url = createUrlWriter((u) => history.replaceState(null, '', u));
   addEventListener('pagehide', () => url.flush());
   let firstImageMs: number | null = null;

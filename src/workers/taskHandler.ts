@@ -1,6 +1,8 @@
 /**
  * The pure message handler of a task worker (SP2a spec §5.1): owns one GenContext per configured epoch
  * and answers each validated message. No DOM and no worker globals, so Node tests drive it directly.
+ * Tile and spawn jobs stop as soon as the pool's abort cell leaves their epoch and reply ABORTED
+ * (SP2b spec §2.2); point and selftest jobs always run to the end.
  */
 import { hex64 } from '../core/hash';
 import { checkParams } from '../core/params/kit';
@@ -9,8 +11,8 @@ import { seedFromInput } from '../core/seed';
 import { genKey, stageHashes } from '../core/stage/hash';
 import { createGenContext, type GenContext } from '../gen/context';
 import { columnPoint } from '../gen/column/columnPoint';
-import { findSpawn } from '../gen/column/spawn';
-import { paintTile } from '../gen/map/tile';
+import { findSpawnAbortable } from '../gen/column/spawn';
+import { paintTileAbortable } from '../gen/map/tile';
 import { computeAnyGolden } from '../metrics/sp2aGoldens';
 import { parseToWorker, type ErrorCode, type FromWorker } from './protocol';
 
@@ -22,8 +24,8 @@ const GEN_KEY = genKey;
 const HASHES = stageHashes;
 const CREATE = createGenContext;
 const POINT = columnPoint;
-const PAINT = paintTile;
-const SPAWN = findSpawn;
+const PAINT = paintTileAbortable;
+const SPAWN = findSpawnAbortable;
 const GOLDEN = computeAnyGolden;
 const PARSE = parseToWorker;
 
@@ -36,24 +38,38 @@ export interface TaskHandler {
   handle(raw: unknown): Reply;
 }
 
-const err = (jobId: number | null, code: ErrorCode, message: string): Reply => ({ msg: { type: 'error', jobId, code, message }, transfer: [] });
+const err = (jobId: number | null, epoch: number | null, code: ErrorCode, message: string): Reply => ({ msg: { type: 'error', jobId, epoch, code, message }, transfer: [] });
+const NEVER = (): boolean => false;
+/** An integer field of a raw message, or null (for the replies to malformed messages). */
+const intField = (raw: unknown, key: 'jobId' | 'epoch'): number | null => {
+  const v = typeof raw === 'object' && raw !== null ? (raw as Record<string, unknown>)[key] : undefined;
+  return typeof v === 'number' && Number.isInteger(v) ? v : null;
+};
 
 export function createTaskHandler(): TaskHandler {
   let epoch = -1;
   let ctx: GenContext | null = null;
+  let cell: Int32Array | null = null;
+  /** A job of `jobEpoch` stops once the cell holds another epoch; without a cell it never stops. */
+  const stopFor = (jobEpoch: number): (() => boolean) => {
+    const c = cell;
+    return c === null ? NEVER : () => Atomics.load(c, 0) !== jobEpoch;
+  };
   return {
     handle(raw) {
       const m = PARSE(raw);
-      const jobId = typeof (raw as { jobId?: unknown } | null)?.jobId === 'number' ? (raw as { jobId: number }).jobId : null;
-      if (m === null) return err(jobId, 'BAD_MESSAGE', 'malformed message');
+      const jobId = intField(raw, 'jobId');
+      const msgEpoch = intField(raw, 'epoch');
+      if (m === null) return err(jobId, msgEpoch, 'BAD_MESSAGE', 'malformed message');
       try {
         if (m.type === 'configure') {
           const r = CHECK(SCHEMA_, m.params);
-          if (!r.ok) return err(null, 'BAD_PARAMS', r.issues.slice(0, 5).map((i) => `${i.path}: ${i.code}`).join('; '));
+          if (!r.ok) return err(null, m.epoch, 'BAD_PARAMS', r.issues.slice(0, 5).map((i) => `${i.path}: ${i.code}`).join('; '));
           const params: Params = r.value;
           const seed = SEED(m.seedText);
           ctx = CREATE(seed, params);
           epoch = m.epoch;
+          cell = m.abort === null ? null : new Int32Array(m.abort);
           const h = HASHES(params);
           const hex: Record<string, string> = {};
           for (const [k, v] of Object.entries(h)) hex[k] = HEX(v);
@@ -66,17 +82,25 @@ export function createTaskHandler(): TaskHandler {
             return { msg: { type: 'selftestResult', jobId: m.jobId, key: m.key, actual: null, error: e instanceof Error ? e.message : String(e) }, transfer: [] };
           }
         }
-        if (ctx === null) return err(m.jobId, 'NOT_CONFIGURED', 'no configure yet');
-        if (m.epoch !== epoch) return err(m.jobId, 'STALE_EPOCH', `job epoch ${m.epoch}, worker epoch ${epoch}`);
+        if (ctx === null) return err(m.jobId, m.epoch, 'NOT_CONFIGURED', 'no configure yet');
+        if (m.epoch !== epoch) return err(m.jobId, m.epoch, 'STALE_EPOCH', `job epoch ${m.epoch}, worker epoch ${epoch}`);
+        const aborted = (): Reply => err(m.jobId, m.epoch, 'ABORTED', `epoch ${m.epoch} was superseded`);
         if (m.type === 'mapTile') {
           const rgba = new ArrayBuffer(256 * 256 * 4);
-          PAINT(ctx, m.layer, m.level, m.tx, m.tz, new Uint8ClampedArray(rgba));
-          return { msg: { type: 'tile', jobId: m.jobId, epoch, rgba }, transfer: [rgba] };
+          const ids = m.layer === 'biome' ? new ArrayBuffer(256 * 256) : null;
+          const done = PAINT(ctx, m.layer, m.level, m.tx, m.tz, new Uint8ClampedArray(rgba), stopFor(m.epoch), ids === null ? undefined : new Uint8Array(ids));
+          if (done === null) return aborted();
+          return ids === null
+            ? { msg: { type: 'tile', jobId: m.jobId, epoch, rgba }, transfer: [rgba] }
+            : { msg: { type: 'tile', jobId: m.jobId, epoch, rgba, ids }, transfer: [rgba, ids] };
         }
-        if (m.type === 'spawn') return { msg: { type: 'spawnResult', jobId: m.jobId, epoch, spawn: SPAWN(ctx) }, transfer: [] };
+        if (m.type === 'spawn') {
+          const spawn = SPAWN(ctx, stopFor(m.epoch));
+          return spawn === null ? aborted() : { msg: { type: 'spawnResult', jobId: m.jobId, epoch, spawn }, transfer: [] };
+        }
         return { msg: { type: 'pointResult', jobId: m.jobId, epoch, fields: POINT(ctx, m.x, m.z) }, transfer: [] };
       } catch (e) {
-        return err(jobId, 'INTERNAL', e instanceof Error ? e.message : String(e));
+        return err(jobId, msgEpoch, 'INTERNAL', e instanceof Error ? e.message : String(e));
       }
     },
   };

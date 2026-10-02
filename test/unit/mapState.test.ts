@@ -52,12 +52,14 @@ describe('view math', () => {
       { tx: -1, tz: -1, dist: Math.SQRT1_2 }, { tx: 0, tz: -1, dist: Math.SQRT1_2 }, { tx: -1, tz: 0, dist: Math.SQRT1_2 }, { tx: 0, tz: 0, dist: Math.SQRT1_2 },
     ]);
   });
-  test('tiles outside the colKey window are never planned (view at the world edge)', () => {
-    const edge = { x: 524288, z: -524288, bpp: 256, layer: 'biome' as const };
-    const plan = planTiles(edge, 1400, 900);
-    expect(plan.length).toBeGreaterThan(0);
-    expect(plan.every((t) => Math.abs(t.tx) * 256 * t.level <= 524288 && Math.abs(t.tz) * 256 * t.level <= 524288)).toBe(true);
-    expect(planTiles({ ...edge, bpp: 4 }, 1400, 900).every((t) => Math.abs(t.tx) * 256 * t.level <= 524288)).toBe(true);
+  test('only tiles inside the half-open colKey window [−2^19, 2^19) are planned (view at the world edge)', () => {
+    const inside = (t: number, level: number) => t * 256 * level >= -524288 && (t + 1) * 256 * level <= 524288;
+    for (const edge of [{ x: 524288, z: -524288, bpp: 256, layer: 'biome' as const }, { x: -524288, z: 524288, bpp: 256, layer: 'biome' as const }]) {
+      const plan = planTiles(edge, 1400, 900);
+      expect(plan.length).toBeGreaterThan(0);
+      expect(plan.every((t) => inside(t.tx, t.level) && inside(t.tz, t.level))).toBe(true);
+      expect(planTiles({ ...edge, bpp: 4 }, 1400, 900).every((t) => inside(t.tx, t.level) && inside(t.tz, t.level))).toBe(true);
+    }
   });
   test('the plan asks for the preview level before the view level', () => {
     const p = planTiles(v, 800, 600);

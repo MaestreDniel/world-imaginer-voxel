@@ -5,7 +5,7 @@
  */
 import { MAP_TILE_PX, type MapLevel } from '../../core/constants';
 import type { Spawn } from '../../gen/column/spawn';
-import { JobCancelled, type WorkerPool } from '../../engine/workerPool';
+import { JobCancelled, WorkerFailed, type WorkerPool } from '../../engine/workerPool';
 import { MAP_MAX_BPP, MAP_MIN_BPP, type MapView } from './mapState';
 import { createTileCache } from './tileCache';
 import { createTileSource } from './tileSource';
@@ -65,9 +65,10 @@ export function createMapCanvas(host: HTMLElement, pool: WorkerPool, initial: Ma
       pending.add(key);
       const layer = view.layer;
       pool.tile({ layer, level: t.level, tx: t.tx, tz: t.tz }, t.priority)
-        .then((buf) => createImageBitmap(new ImageData(new Uint8ClampedArray(buf), MAP_TILE_PX, MAP_TILE_PX)))
+        .then((r) => createImageBitmap(new ImageData(new Uint8ClampedArray(r.rgba), MAP_TILE_PX, MAP_TILE_PX)))
         .then((bmp) => { cache.set(key, bmp); schedule(); })
-        .catch((e: unknown) => { if (!(e instanceof JobCancelled)) console.error(e); })
+        // A failed worker is reported once by the page's notice (SP2b spec §2.3), not per tile.
+        .catch((e: unknown) => { if (!(e instanceof JobCancelled) && !(e instanceof WorkerFailed)) console.error(e); })
         .finally(() => pending.delete(key));
     }
   };
