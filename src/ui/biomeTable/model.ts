@@ -1,16 +1,20 @@
 /**
- * Biome table model (SP2b spec §5.2), pure: the rows of the Biomes tab (sorted and filtered) and the edits of
- * one row. Every edit returns a new table, sharing the untouched rows and never mutating its input, which the
+ * Biome table model (SP2b spec §5.2, §5.3), pure: the rows of the Biomes tab (sorted and filtered) and the edits
+ * of one row. Every edit returns a new table, sharing the untouched rows and never mutating its input, which the
  * page writes whole with `session.set(BIOME_TABLE_PATH, table)`; when nothing changes it returns the input
  * table itself. Typed values are checked by the schema's own validator, so a refusal carries the code, path
  * and message `session.set` would give, except a duplicate priority, which is reported on the edited row
- * whatever the row order (the validator names the later row).
+ * whatever the row order (the validator names the later row). The rest serves the table's DOM (table.ts):
+ * the text of the typed cells, the bar geometry of the interval drags, the modified cells, the issue line under
+ * a row, the swatch colour and what hovering a row does on the map.
  */
 import { BOX_BIOMES, type BoxBiome } from '../../core/params/biomeDefaults';
 import { canonicalJSON, q15 } from '../../core/params/canonical';
-import { checkLeaf, type BoxAxis, type BoxRow, type BoxTable, type Interval, type Issue, type Leaf } from '../../core/params/kit';
+import { BOX_AXES, checkLeaf, type BoxAxis, type BoxRow, type BoxTable, type Interval, type Issue, type Leaf } from '../../core/params/kit';
 import { SCHEMA } from '../../core/params/schema';
-import { biomeFamily, biomeId, type BiomeFamily } from '../../gen/biomes/registry';
+import { biomeColor, biomeFamily, biomeId, type BiomeFamily } from '../../gen/biomes/registry';
+import type { LayerId } from '../../gen/map/layers';
+import { parseFieldText } from '../paramPanel/model';
 
 export const BIOME_TABLE_PATH = 'biomes.table';
 
@@ -101,4 +105,99 @@ export function resetRow(t: BoxTable<BoxBiome>, from: BoxTable<BoxBiome>, name: 
   const issue = duplicate(t, name, from[name].priority);
   if (issue !== null) return { ok: false, issue };
   return { ok: true, table: withRow(t, name, from[name]) };
+}
+
+/** The text of an interval cell, `lo, hi`, which setAxisText reads back. */
+export function intervalText(iv: Interval): string {
+  return `${iv[0]}, ${iv[1]}`;
+}
+
+/**
+ * A typed interval cell: `lo, hi`, with optional brackets and a comma, a semicolon or spaces between the two
+ * numbers. Text that is not two parts is refused with BAD_INTERVAL on the axis, a part that is not a number
+ * with the validator's issue on its item (`….C[0]`); two numbers go through setAxis.
+ */
+export function setAxisText(t: BoxTable<BoxBiome>, name: BoxBiome, axis: BoxAxis, text: string): TableEdit {
+  const body = text.trim().replace(/^\[/, '').replace(/\]$/, '').trim();
+  const parts = body === '' ? [] : body.split(/\s*[,;]\s*|\s+/);
+  if (parts.length !== 2) {
+    return { ok: false, issue: { path: `${BIOME_TABLE_PATH}.${name}.${axis}`, code: 'BAD_INTERVAL', message: `expected "lo, hi", got ${JSON.stringify(text.trim())}` } };
+  }
+  const lo = parseFieldText(parts[0]!);
+  const hi = parseFieldText(parts[1]!);
+  if (typeof lo === 'number' && typeof hi === 'number') return setAxis(t, name, axis, lo, hi);
+  // A part that is not a number: the validator's own issue on that item (NOT_NUMBER).
+  return { ok: false, issue: checked(t, name, { ...t[name], [axis]: [lo, hi] })! };
+}
+
+/** A typed priority cell: a number goes through setPriority, other text gets the validator's issue (NOT_NUMBER). */
+export function setPriorityText(t: BoxTable<BoxBiome>, name: BoxBiome, text: string): TableEdit {
+  const v = parseFieldText(text);
+  if (typeof v === 'number') return setPriority(t, name, v);
+  return { ok: false, issue: checked(t, name, { ...t[name], priority: v })! };
+}
+
+/** The cells of a row: the five axes, then the sign filter and the priority. */
+export type RowCell = BoxAxis | 'wSign' | 'priority';
+const ROW_CELLS: readonly RowCell[] = [...BOX_AXES, 'wSign', 'priority'];
+
+/** The cells of `row` that differ from the profile's row `from`, in ROW_CELLS order. */
+export function rowChanges(row: BoxRow, from: BoxRow): RowCell[] {
+  return row === from ? [] : ROW_CELLS.filter((k) => canonicalJSON(row[k]) !== canonicalJSON(from[k]));
+}
+
+/** The rows of `t` that differ from the profile's table `from`, in BOX_BIOMES order. */
+export function modifiedRows(t: BoxTable<BoxBiome>, from: BoxTable<BoxBiome>): BoxBiome[] {
+  return BOX_BIOMES.filter((n) => rowChanges(t[n], from[n]).length > 0);
+}
+
+/** A bar drag writes values on a 0.01 grid (one pixel of a bar is about 0.01 wide). */
+const BAR_GRID = 100;
+
+/** Where a bar over [−1, 1] shows `v`, as a fraction of its width. */
+export function barFraction(v: number): number {
+  return (v + 1) / 2;
+}
+
+/**
+ * The value under a pointer `px` from the left edge of a bar `width` px wide, rounded to 0.01 (never −0) and
+ * not clamped: dragAxisEnd clamps. NaN for a bar without width.
+ */
+export function barValue(px: number, width: number): number {
+  if (!(width > 0)) return Number.NaN;
+  return Math.round(((2 * px) / width - 1) * BAR_GRID) / BAR_GRID + 0;
+}
+
+/** The end of the bar of `iv` a press at `px` grabs: the nearer one within `slackPx` (a tie goes to hi), else null. */
+export function hitBarEnd(iv: Interval, px: number, width: number, slackPx: number): 'lo' | 'hi' | null {
+  if (!(width > 0)) return null;
+  const dLo = Math.abs(px - barFraction(iv[0]) * width);
+  const dHi = Math.abs(px - barFraction(iv[1]) * width);
+  if (Math.min(dLo, dHi) > slackPx) return null;
+  return dLo < dHi ? 'lo' : 'hi';
+}
+
+/** The issue line under `name`'s row: the issue's path relative to the row (`C: …`, `C[0]: …`), or `cannot reset: …`. */
+export function rowIssueText(name: BoxBiome, issue: Issue, reset = false): string {
+  if (reset) return `cannot reset: ${issue.message}`;
+  const base = `${BIOME_TABLE_PATH}.${name}.`;
+  return `${issue.path.startsWith(base) ? issue.path.slice(base.length) : issue.path}: ${issue.message}`;
+}
+
+/** The CSS colour of a biome's swatch: its map colour. */
+export function swatchColor(biome: number): string {
+  return `#${biomeColor(biome).toString(16).padStart(6, '0')}`;
+}
+
+/** Shown when a row is hovered while the map shows another layer (spec §5.3). */
+export const HIGHLIGHT_NOTICE = 'switch to the biome layer to highlight';
+
+/**
+ * What hovering a row does on the map's `layer`: `biome` is the hovered row's (null when the pointer leaves the
+ * rows) and `was` the one hovered before. The biome layer highlights it; another layer shows the notice once, as
+ * the pointer enters the rows, not again for each row it crosses.
+ */
+export function rowHover(layer: LayerId, biome: number | null, was: number | null): { readonly highlight: number | null; readonly notice: boolean } {
+  if (biome === null) return { highlight: null, notice: false };
+  return layer === 'biome' ? { highlight: biome, notice: false } : { highlight: null, notice: was === null };
 }

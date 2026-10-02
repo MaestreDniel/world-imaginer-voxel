@@ -4,13 +4,16 @@
  * configure cycles (§2.6), the map canvas, the URL (§1.4: written on every change, read on `hashchange`)
  * and the global shortcuts (§3.5). The World tab shows the session status, the spawn and the hover readout
  * (§3.3); the Parameters tab holds the parameter panel (§3.2), whose spline "Edit" opens the spline drawer
- * under the map (§4.2); the Biomes and Presets tabs are the hosts their editors mount into.
+ * under the map (§4.2); the Biomes tab holds the biome table (§5.2), whose hovered row the canvas highlights
+ * on the biome layer (§5.3); the Presets tab is the host its editor mounts into.
  */
 import './map.css';
 import { WorldSession, type SessionState } from '../../engine/session';
 import { createBrowserPool } from '../../engine/workerPool';
 import { biomeName } from '../../gen/biomes/registry';
 import type { Spawn } from '../../gen/column/spawn';
+import { HIGHLIGHT_NOTICE, rowHover } from '../biomeTable/model';
+import { createBiomeTable } from '../biomeTable/table';
 import { el } from '../common/dom';
 import { installShortcuts } from '../common/keys';
 import { createNotices } from '../common/notice';
@@ -91,10 +94,20 @@ export function mountMapPage(root: HTMLElement): void {
     },
   }, clock);
 
+  /** The biome of the table row under the pointer (§5.3): highlighted while the map shows the biome layer. */
+  let hoveredBiome: number | null = null;
+  const hoverBiome = (biome: number | null) => {
+    const h = rowHover(view.layer, biome, hoveredBiome);
+    hoveredBiome = biome;
+    canvas.highlightBiome(h.highlight);
+    if (h.notice) notices.show(HIGHLIGHT_NOTICE, { kind: 'info', timeoutMs: 4000 });
+  };
+
   const setView = (v: MapView) => {
     view = v;
     canvas.setView(v);
     toolbar.setLayer(v.layer);
+    hoverBiome(hoveredBiome);
     renderStatus();
   };
   const toolbar = createToolbar(layout.toolbar, {
@@ -137,6 +150,9 @@ export function mountMapPage(root: HTMLElement): void {
     visible: () => layout.drawerOpen,
     close: () => layout.closeDrawer(),
   });
+
+  // Biomes tab (§5.2): hovering a row highlights its biome on the biome layer, else shows a notice (§5.3).
+  createBiomeTable(layout.tabs.biomes, { session, edit, hover: hoverBiome });
 
   installShortcuts((a) => {
     if (a === 'undo') session.undo();

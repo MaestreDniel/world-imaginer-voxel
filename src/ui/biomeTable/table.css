@@ -1,0 +1,42 @@
+/* The biome table (SP2b spec §5.2): header, rows (swatch, name, family, dot, reset), interval cells with bars, sign and priority, issues. */
+.bt { display: flex; flex-direction: column; gap: 6px; }
+.bt [hidden] { display: none !important; }
+.bt-head { display: flex; flex-wrap: wrap; align-items: center; gap: 4px 8px; }
+.bt-head label { color: #9aa; }
+.bt-head select { font: inherit; }
+.bt-count { font-size: 12px; color: #6fa8e8; white-space: nowrap; }
+.bt-reset-all { margin-left: auto; font: inherit; font-size: 12px; padding: 0 6px; }
+.bt-help { margin: 0; font-size: 12px; color: #9aa; }
+.bt-rows { display: flex; flex-direction: column; }
+.bt-row { padding: 5px 4px 6px; border-top: 1px solid #2c3038; }
+.bt-row:hover { background: #23272e; }
+.bt-row-head { display: flex; flex-wrap: wrap; align-items: center; gap: 3px 6px; }
+.bt-who { display: flex; flex: 1 1 auto; align-items: center; gap: 6px; min-width: 0; }
+.bt-swatch { flex: 0 0 12px; height: 12px; border: 1px solid rgba(0, 0, 0, 0.5); border-radius: 2px; }
+.bt-name { flex: 0 1 auto; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-weight: 600; cursor: help; }
+.bt-family { flex: 0 0 auto; font-size: 10px; padding: 0 4px; border: 1px solid #555; border-radius: 3px; color: #9aa; }
+.bt-family-ocean { border-color: #2f5f9a; color: #8fb4e8; }
+.bt-family-coast { border-color: #8a7a4a; color: #e8dca0; }
+.bt-family-lowland { border-color: #4a6f45; color: #9fd08f; }
+.bt-family-highland { border-color: #7a5a4a; color: #d8a890; }
+.bt-controls { display: inline-flex; flex: 0 0 auto; align-items: center; gap: 4px; margin-left: auto; }
+.bt-cell-label { font-size: 11px; color: #9aa; cursor: help; }
+.bt-wsign { justify-self: start; font: 12px ui-monospace, monospace; }
+.bt-prio { display: inline-flex; align-items: center; gap: 4px; }
+.bt-field { box-sizing: border-box; padding: 1px 4px; font: 12px ui-monospace, monospace; color: #ddd; background: #15171b; border: 1px solid #3a3f48; border-radius: 2px; }
+.bt-priority { width: 3.6em; }
+.bt-field.bt-invalid { border-color: #ff7b72; outline-color: #ff7b72; }
+.bt-field.bt-changed, .bt-wsign.bt-changed { color: #6fa8e8; }
+.bt-dot { font-size: 10px; color: #6fa8e8; visibility: hidden; }
+.bt-dot.on { visibility: visible; }
+.bt-reset { font: inherit; padding: 0 5px; line-height: 1.3; }
+.bt-axes { display: grid; grid-template-columns: 2em 8.5em minmax(48px, 1fr); align-items: center; gap: 2px 6px; margin-top: 3px; }
+.bt-axis { font-size: 11px; color: #9aa; cursor: help; }
+.bt-interval { width: 100%; }
+/* A bar over [-1, 1]: the box, a mark at 0 and two ends to drag (12 px wide hit areas around 3 px grips). */
+.bt-bar { position: relative; height: 12px; background: #15171b; border: 1px solid #2f343c; border-radius: 2px; touch-action: none; user-select: none; }
+.bt-zero { position: absolute; left: 50%; top: 0; bottom: 0; width: 1px; background: #3a3f48; }
+.bt-fill { position: absolute; top: 2px; bottom: 2px; background: #4a6fa5; border-radius: 1px; }
+.bt-end { position: absolute; top: -2px; bottom: -2px; width: 12px; transform: translateX(-50%); cursor: ew-resize; }
+.bt-end::after { content: ''; position: absolute; left: 4.5px; top: 0; bottom: 0; width: 3px; background: #cfd8e3; border-radius: 1px; }
+.bt-issue { margin-top: 3px; font-size: 12px; color: #ff7b72; white-space: pre-wrap; }
