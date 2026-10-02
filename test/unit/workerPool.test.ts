@@ -397,3 +397,28 @@ describe('worker pool: stats jobs (SP2b spec §5.4)', () => {
     expect((await second).epoch).toBe(1);
   });
 });
+
+describe('worker pool: probe (SP2b spec §2.8)', () => {
+  test('busy workers, the type, epoch and level of each in-flight job, the queue and a pending configure', () => {
+    const pool = createWorkerPool(2, () => silentWorker());
+    expect(pool.probe()).toEqual({ busy: 0, queued: 0, configuring: false, jobs: [] });
+    // One job per worker in queue order (tile 64 to worker 0, tile 256 to worker 1); the spawn and the second tile wait.
+    void settle(pool.tile({ layer: 'biome', level: 64, tx: 0, tz: 0 }, 1000));
+    void settle(pool.tile({ layer: 'biome', level: 256, tx: 0, tz: 0 }, 0));
+    void settle(pool.spawn());
+    void settle(pool.tile({ layer: 'biome', level: 64, tx: 1, tz: 0 }, 1001));
+    const inFlight = [{ worker: 0, type: 'mapTile', epoch: -1, level: 64 }, { worker: 1, type: 'mapTile', epoch: -1, level: 256 }];
+    expect(pool.probe()).toEqual({ busy: 2, queued: 2, configuring: false, jobs: inFlight });
+    // A configure empties the queue; the in-flight jobs stay until their workers answer.
+    void settle(pool.configure('42', DEFAULTS));
+    expect(pool.probe()).toEqual({ busy: 2, queued: 0, configuring: true, jobs: inFlight });
+    pool.terminate();
+  });
+  test('a spawn or point job in flight has level null', () => {
+    const pool = createWorkerPool(2, () => silentWorker());
+    void settle(pool.spawn());
+    void settle(pool.point(1, 2));
+    expect(pool.probe().jobs).toEqual([{ worker: 0, type: 'spawn', epoch: -1, level: null }, { worker: 1, type: 'point', epoch: -1, level: null }]);
+    pool.terminate();
+  });
+});

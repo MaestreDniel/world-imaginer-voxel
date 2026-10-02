@@ -6,6 +6,7 @@
  * so a worker stops a superseded tile, spawn or stats job within a row or 256 points; job-less errors of
  * other epochs are ignored; a worker that raises an error event is removed and its pending work rejected
  * with WorkerFailed. SP2b §5.4: a stats request runs as `size` slices whose raw sums are added element-wise.
+ * SP2b §2.8: `probe()` reports what the workers run, for the latency hook.
  */
 import type { MapLevel } from '../core/constants';
 import type { ColumnPoint } from '../gen/column/columnPoint';
@@ -39,6 +40,26 @@ export class WorkerFailed extends Error {
   }
 }
 
+/** The type of a queued job (a configure is not a job). */
+export type JobType = Exclude<ToWorker['type'], 'configure'>;
+
+/** A job a worker is running (SP2b spec §2.8). */
+export interface InFlightJob {
+  readonly worker: number;
+  readonly type: JobType;
+  readonly epoch: number;
+  /** The tile level of a mapTile job, else null. */
+  readonly level: MapLevel | null;
+}
+
+/** What the pool runs now: busy workers and their jobs (by worker), queued jobs and whether a configure waits for its barrier. */
+export interface PoolProbe {
+  readonly busy: number;
+  readonly queued: number;
+  readonly configuring: boolean;
+  readonly jobs: readonly InFlightJob[];
+}
+
 export interface PoolOptions {
   /** The epoch cell (SP2b spec §2.2); null or absent: jobs are not abortable. */
   readonly abortCell?: Int32Array<SharedArrayBuffer> | null;
@@ -70,6 +91,8 @@ export interface WorkerPool {
   /** Rejects queued tile jobs matching `pred` with JobCancelled. */
   cancelTiles(pred: (req: TileRequest) => boolean): void;
   readonly queued: number;
+  /** The in-flight jobs and the queue, read at once (the latency hook's pool probe, SP2b spec §2.8). */
+  probe(): PoolProbe;
   terminate(): void;
 }
 
@@ -261,6 +284,13 @@ export function createWorkerPool(size: number, spawn: () => WorkerLike, opts: Po
         if (j.tile !== null && pred(j.tile)) { j.reject(new JobCancelled()); return false; }
         return true;
       });
+    },
+    probe() {
+      const jobs: InFlightJob[] = [];
+      busy.forEach((j, worker) => {
+        if (j !== null && j.msg.type !== 'configure') jobs.push({ worker, type: j.msg.type, epoch: j.epoch, level: j.tile === null ? null : j.tile.level });
+      });
+      return { busy: jobs.length, queued: queue.length, configuring: pendingReady !== null, jobs };
     },
     terminate() {
       for (const w of workers) w.terminate();

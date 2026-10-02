@@ -6,6 +6,7 @@
  * (§3.3); the Parameters tab holds the parameter panel (§3.2), whose spline "Edit" opens the spline drawer
  * under the map (§4.2); the Biomes tab holds the biome table (§5.2), whose hovered row the canvas highlights
  * on the biome layer (§5.3); the Presets tab exports and imports preset files and holds the JSON patch box (§3.4).
+ * `?map&perf=edit` also loads the latency hook (§2.8, `perfHook.ts`), which pins the canvas and the world.
  */
 import './map.css';
 import { WorldSession, type SessionState } from '../../engine/session';
@@ -33,17 +34,21 @@ import { createToolbar } from './toolbar';
 const draftOf = (s: SessionState): DriverDraft => ({ sessionEpoch: s.epoch, seedText: s.seedText, seedKey: `${s.seed[0]}.${s.seed[1]}`, params: s.params });
 const spawnText = (sp: Spawn): string => `${sp.x}, ${sp.z} (y ${sp.y}, ${biomeName(sp.biome)}${sp.fallback ? ', fallback' : ''})`;
 
-export function mountMapPage(root: HTMLElement): void {
+export async function mountMapPage(root: HTMLElement): Promise<void> {
+  // The latency hook is a chunk of its own, loaded only for the §2.8 runner.
+  const perf = new URLSearchParams(location.search).get('perf') === 'edit' ? (await import('./perfHook')).createPerfHook() : null;
   const decoded = decodeMapState(location.hash);
-  const initial = decoded.state;
+  const initial = perf?.initialState(decoded.state) ?? decoded.state;
   const session = new WorldSession(cryptoSeed, { seedText: initial.seed, profile: initial.profile, patch: initial.patch });
   let view: MapView = initial.view;
 
   const layout = createLayout(root, browserStorage());
+  perf?.pin(layout.map);
   const notices = createNotices(layout.notices);
   const startNotice = decoded.error ?? session.initNotice;
   if (startNotice !== null) notices.show(startNotice, { kind: 'warn' });
-  const pool = createBrowserPool(undefined, { onFailure: () => notices.show('a worker failed; reload the page', { kind: 'error' }) });
+  const browserPool = createBrowserPool(undefined, { onFailure: () => notices.show('a worker failed; reload the page', { kind: 'error' }) });
+  const pool = perf?.instrument(browserPool) ?? browserPool;
   if (!pool.abortable) notices.show('live preview is slower without cross-origin isolation', { kind: 'info' });
   const url = createUrlWriter((u) => history.replaceState(null, '', u));
   addEventListener('pagehide', () => url.flush());
@@ -70,16 +75,20 @@ export function mountMapPage(root: HTMLElement): void {
 
   /** The input event's timeStamp while a control's session call runs (§2.8: latency counts from it). */
   let inputAt: number | null = null;
-  const edit = (e: Event, fn: () => void) => {
-    inputAt = e.timeStamp;
-    try { fn(); } finally { inputAt = null; }
+  const editAt = <T>(at: number, fn: () => T): T => {
+    inputAt = at;
+    try { return fn(); } finally { inputAt = null; }
   };
+  const edit = (e: Event, fn: () => void): void => { editAt(e.timeStamp, fn); };
 
   const canvas = createMapCanvas(layout.map, pool, view, {
     onView: (v) => { view = v; canvas.setView(v); writeUrl(); renderStatus(); },
     onHover: (x, z) => hover.move(x, z),
     onClick: (x, z) => { canvas.setPin([x, z]); },
-    onPreviewProgress: (epoch, drawn, visible) => driver.previewProgress(epoch, drawn, visible),
+    onPreviewProgress: (epoch, drawn, visible) => {
+      perf?.drawn(epoch, drawn, visible);
+      driver.previewProgress(epoch, drawn, visible);
+    },
   });
   const clock: DriverClock = {
     now: () => performance.now(),
@@ -175,4 +184,5 @@ export function mountMapPage(root: HTMLElement): void {
   toolbar.setStatus(driver.status);
   writeUrl();
   renderStatus();
+  perf?.attach({ session, canvas, driver, host: layout.map, view: () => view, editAt });
 }

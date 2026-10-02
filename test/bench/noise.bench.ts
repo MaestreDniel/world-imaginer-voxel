@@ -16,6 +16,7 @@ import { createGenContext } from '../../src/gen/context';
 import { columnPoint } from '../../src/gen/column/columnPoint';
 import { buildColumnSample, newColumnSample } from '../../src/gen/column/columnStage';
 import { paintTile } from '../../src/gen/map/tile';
+import { createTaskHandler } from '../../src/workers/taskHandler';
 import { COLUMN_P50_MAX_MS, COLUMN_P95_MAX_MS, gateFailures, type Baselines, type BenchKernel } from './gates';
 import { buildPerm, perm3 } from './perm512';
 
@@ -30,7 +31,7 @@ const BASELINE_PATH = fileURLToPath(new URL('../baselines.json', import.meta.url
 const N = 4096;
 let sink = 0;
 
-test('SP1 and SP2a kernels', async ({ bench }) => {
+test('SP1, SP2a and SP2b kernels', async ({ bench }) => {
   const ns: Record<string, number> = {};
   const measure = async (name: string, evals: number, fn: () => void, iterations?: number) => {
     const r = await bench(name, fn).run(iterations === undefined ? undefined : { iterations, time: 0, warmupIterations: 1 });
@@ -87,6 +88,16 @@ test('SP1 and SP2a kernels', async ({ bench }) => {
   let tt = 0;
   await measure('map.tile.b64.biome', 1, () => { paintTile(gen, 'biome', 64, tt++ % 7, 3, tile); sink += tile[0]!; }, 8);
   await measure('map.tile.b16.relief', 1, () => { paintTile(gen, 'relief', 16, tt++ % 7, -2, tile); sink += tile[0]!; }, 8);
+  // SP2b §2.8: a worker's configure (default params as a structured clone, as a posted message delivers them)
+  // and the 4 preview tiles of the default view (0, 0, 64 bpp).
+  const handler = createTaskHandler();
+  const posted = structuredClone(DEFAULTS);
+  let epoch = 0;
+  await measure('worker.configure', 1, () => { sink += handler.handle({ type: 'configure', epoch: epoch++, seedText: '42', params: posted, abort: null }).msg.type === 'ready' ? 1 : 0; });
+  const preview = [[-1, -1], [0, -1], [-1, 0], [0, 0]] as const;
+  let pt = 0;
+  await measure('map.tile.b256.biome', 1, () => { const [tx, tz] = preview[pt++ % 4]!; paintTile(gen, 'biome', 256, tx, tz, tile); sink += tile[0]!; }, 8);
+  await measure('map.tile.b256.relief', 1, () => { const [tx, tz] = preview[pt++ % 4]!; paintTile(gen, 'relief', 256, tx, tz, tile); sink += tile[0]!; }, 8);
 
   const calib = ns['calibration.fmix32']!;
   const kernels: Record<string, BenchKernel> = {};
