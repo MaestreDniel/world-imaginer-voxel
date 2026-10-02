@@ -68,6 +68,13 @@ describe('view math', () => {
     expect(p.slice(firstFine).every((t) => t.level === 64 && t.priority >= 1000)).toBe(true);
     expect(planTiles({ ...v, bpp: 200 }, 800, 600).every((t) => t.level === 256)).toBe(true);
   });
+  test('the interactive plan asks only for the preview level, with the full plan\'s priorities (SP2b §2.6)', () => {
+    const full = planTiles(v, 800, 600);
+    const interactive = planTiles(v, 800, 600, true);
+    expect(interactive.length).toBeGreaterThan(0);
+    expect(interactive).toEqual(full.filter((t) => t.level === 256));
+    expect(planTiles(v, 800, 600, false)).toEqual(full);
+  });
 });
 
 describe('tile cache', () => {

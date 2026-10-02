@@ -62,6 +62,8 @@ export function mountMapPage(root: HTMLElement): void {
   const url = createUrlWriter((u) => history.replaceState(null, '', u));
   addEventListener('pagehide', () => url.flush());
   let firstImageMs: number | null = null;
+  /** The source set by the last configure and when (the first image is timed from it, as in SP2a). */
+  let shownSource: { readonly epoch: number; readonly at: number } | null = null;
   let spawnText = '';
 
   const state = (): MapState => {
@@ -92,7 +94,11 @@ export function mountMapPage(root: HTMLElement): void {
       return (x: number, z: number) => { if (busy) next = [x, z]; else run(x, z); };
     })(),
     onClick: (x, z) => { canvas.setPin([x, z]); },
-    onFirstImage: (ms) => { if (firstImageMs === null) { firstImageMs = ms; renderStatus(); } },
+    onPreviewProgress: (epoch, drawn, visible) => {
+      if (firstImageMs !== null || shownSource === null || epoch !== shownSource.epoch || drawn < visible) return;
+      firstImageMs = performance.now() - shownSource.at;
+      renderStatus();
+    },
   });
 
   const reconfigure = () => {
@@ -103,9 +109,9 @@ export function mountMapPage(root: HTMLElement): void {
     spawnText = 'spawn …';
     renderStatus();
     writeUrl();
-    canvas.setSpawn(null);
-    canvas.clearSource();
+    // The previous image and spawn marker stay until the new ones land (fallback tiles, SP2b spec §2.5).
     pool.configure(s.seedText, s.params).then((ready) => {
+      shownSource = { epoch: ready.epoch, at: performance.now() };
       canvas.setSource(ready.epoch, `${s.seed[0]}.${s.seed[1]}`, ready.stageHashes as Record<string, string>);
       return pool.spawn();
     }).then((sp) => {

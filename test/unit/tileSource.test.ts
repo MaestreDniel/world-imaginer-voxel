@@ -6,12 +6,15 @@ const hashes = (over: Record<string, string> = {}) => ({ climate: 'c1', shape: '
 describe('tile source (final review: stale keys and partial invalidation)', () => {
   test('no key before a source is set, or while the pool is in another epoch', () => {
     const src = createTileSource();
+    expect(src.epoch).toBeNull();
     expect(src.keyFor('C', 64, 0, 0, 0)).toBeNull();
     src.set(3, '42.0', hashes());
+    expect(src.epoch).toBe(3);
     expect(src.keyFor('C', 64, 0, 0, 3)).not.toBeNull();
     expect(src.keyFor('C', 64, 0, 0, 4)).toBeNull();
-    src.clear();
-    expect(src.keyFor('C', 64, 0, 0, 3)).toBeNull();
+  });
+  test('no clear(): a reconfigure keeps the source until the next set, and the canvas draws fallback tiles meanwhile (SP2b §2.5)', () => {
+    expect('clear' in createTileSource()).toBe(false);
   });
   test('a layer key depends on the seed and its own stage only, not on the map stage chain', () => {
     const src = createTileSource();

@@ -1,11 +1,17 @@
 /**
- * The map canvas (SP2a spec §6.1, §6.3): draws cached tiles (preview level first, then the view's level
- * on top), asks the pool for missing tiles coarse-first, pans by drag, zooms around the cursor, and draws
- * the spawn marker, a grid and the pinned point.
+ * The map canvas (SP2a spec §6.1, §6.3; SP2b spec §2.5-2.7, §5.3): draws cached tiles (preview level
+ * first, then the view's level on top), keeps showing the last drawn tile of each position until the
+ * current source's tile lands there (fallback tiles), asks the pool for missing tiles coarse-first (only
+ * preview tiles while interactive), reports preview progress to the preview driver, dims all biomes but a
+ * highlighted one, pans by drag, zooms around the cursor, and draws the spawn marker, a grid and the pin.
  */
 import { MAP_TILE_PX, type MapLevel } from '../../core/constants';
 import type { Spawn } from '../../gen/column/spawn';
+import { levelFor } from '../../gen/map/tile';
 import { JobCancelled, WorkerFailed, type WorkerPool } from '../../engine/workerPool';
+import { tileCacheCapacity, TILE_CACHE_MIN } from './capacity';
+import { createFallbacks, type LevelTiles, type TileDraw } from './fallback';
+import { highlightMask } from './highlight';
 import { MAP_MAX_BPP, MAP_MIN_BPP, type MapView } from './mapState';
 import { createTileCache } from './tileCache';
 import { createTileSource } from './tileSource';
@@ -15,21 +21,32 @@ export interface MapViewOptions {
   onView(v: MapView): void;
   onHover(x: number, z: number): void;
   onClick(x: number, z: number): void;
-  /** Called once when every preview tile of the current view has been drawn after setSource. */
-  onFirstImage(ms: number): void;
+  /**
+   * Every draw while the source matches the pool's epoch (SP2b spec §2.5-2.6): the length of the longest
+   * nearest-first prefix of the visible level-256 positions showing the source's tiles, and their count.
+   * The page passes it to the preview driver's `previewProgress`.
+   */
+  onPreviewProgress(poolEpoch: number, nearestDrawn: number, visible: number): void;
 }
 
 export interface MapCanvas {
   setView(v: MapView): void;
   /** The pool finished configuring `epoch`: the seed words and the stage hashes (hex) by stage id. */
   setSource(epoch: number, seedKey: string, hashes: Readonly<Record<string, string>>): void;
-  /** A reconfigure started: stop requesting and drawing until the next setSource. */
-  clearSource(): void;
+  /** The interactive plan (SP2b spec §2.6): while on, only level-256 tiles are requested. */
+  setInteractive(on: boolean): void;
   setSpawn(s: Spawn | null): void;
   setPin(p: [number, number] | null): void;
   setGrid(on: boolean): void;
+  /** Dims every biome but `id` on the biome layer's tiles (SP2b spec §5.3); null ends the highlight. */
+  highlightBiome(id: number | null): void;
+  /** Blank draws since the first image (SP2b spec §2.8), for the latency hook. */
+  readonly blankDraws: number;
   destroy(): void;
 }
+
+/** A cached tile: the bitmap, and for the biome layer the biome id of every pixel (SP2b spec §5.3). */
+interface CachedTile { readonly bitmap: ImageBitmap; readonly ids: Uint8Array | null }
 
 const WINDOW = 524288;
 const clampCentre = (v: number) => Math.max(-WINDOW, Math.min(WINDOW, v));
@@ -45,17 +62,26 @@ export function createMapCanvas(host: HTMLElement, pool: WorkerPool, initial: Ma
   let pin: [number, number] | null = null;
   let grid = false;
   let raf = 0;
-  let firstStart = 0;
-  const cache = createTileCache<ImageBitmap>(256, (b) => b.close());
+  let interactive = false;
+  let highlight: number | null = null;
+  const fallbacks = createFallbacks();
+  /** Highlight masks of the highlighted biome only, by tile key. */
+  const masks = new Map<string, OffscreenCanvas>();
+  const cache = createTileCache<CachedTile>(TILE_CACHE_MIN, (t, key) => {
+    t.bitmap.close();
+    masks.delete(key);
+    fallbacks.evicted(key);
+  });
   const pending = new Set<string>();
 
   const source = createTileSource();
   const keyOf = (layer: MapView['layer'], level: MapLevel, tx: number, tz: number) => source.keyFor(layer, level, tx, tz, pool.epoch);
+  const fitCache = () => cache.setCapacity(tileCacheCapacity(view, canvas.width, canvas.height));
 
   const request = () => {
     const w = canvas.width;
     const h = canvas.height;
-    const plan = planTiles(view, w, h);
+    const plan = planTiles(view, w, h, interactive);
     const wanted = new Set(plan.map((t) => keyOf(view.layer, t.level, t.tx, t.tz)));
     pool.cancelTiles((r) => { const k = keyOf(r.layer, r.level, r.tx, r.tz); return k === null || !wanted.has(k); });
     for (const t of plan) {
@@ -65,28 +91,41 @@ export function createMapCanvas(host: HTMLElement, pool: WorkerPool, initial: Ma
       pending.add(key);
       const layer = view.layer;
       pool.tile({ layer, level: t.level, tx: t.tx, tz: t.tz }, t.priority)
-        .then((r) => createImageBitmap(new ImageData(new Uint8ClampedArray(r.rgba), MAP_TILE_PX, MAP_TILE_PX)))
-        .then((bmp) => { cache.set(key, bmp); schedule(); })
+        .then(async (r) => {
+          const bitmap = await createImageBitmap(new ImageData(new Uint8ClampedArray(r.rgba), MAP_TILE_PX, MAP_TILE_PX));
+          cache.set(key, { bitmap, ids: r.ids === null ? null : new Uint8Array(r.ids) });
+          schedule();
+        })
         // A failed worker is reported once by the page's notice (SP2b spec §2.3), not per tile.
         .catch((e: unknown) => { if (!(e instanceof JobCancelled) && !(e instanceof WorkerFailed)) console.error(e); })
         .finally(() => pending.delete(key));
     }
   };
 
-  const drawLevel = (level: MapLevel): number => {
+  /** The mask of a biome tile for the highlighted biome, built once per tile key (≈ 0.2 ms). */
+  const maskFor = (key: string, ids: Uint8Array, biome: number): OffscreenCanvas | null => {
+    const had = masks.get(key);
+    if (had !== undefined) return had;
+    const mask = new OffscreenCanvas(MAP_TILE_PX, MAP_TILE_PX);
+    const g = mask.getContext('2d');
+    if (g === null) return null;
+    g.putImageData(new ImageData(highlightMask(ids, biome), MAP_TILE_PX, MAP_TILE_PX), 0, 0);
+    masks.set(key, mask);
+    return mask;
+  };
+
+  const drawTile = (d: TileDraw<CachedTile>) => {
     const w = canvas.width;
     const h = canvas.height;
-    const span = MAP_TILE_PX * level;
-    let missing = 0;
-    for (const t of visibleTiles(view, w, h, level)) {
-      const key = keyOf(view.layer, level, t.tx, t.tz);
-      const bmp = key === null ? undefined : cache.get(key);
-      if (bmp === undefined) { missing++; continue; }
-      const [sx, sy] = worldToScreen(view, w, h, t.tx * span, t.tz * span);
-      const size = span / view.bpp;
-      ctx2d.drawImage(bmp, Math.floor(sx), Math.floor(sy), Math.ceil(size) + 1, Math.ceil(size) + 1);
-    }
-    return missing;
+    const span = MAP_TILE_PX * d.level;
+    const [sx, sy] = worldToScreen(view, w, h, d.tx * span, d.tz * span);
+    const x = Math.floor(sx);
+    const y = Math.floor(sy);
+    const size = Math.ceil(span / view.bpp) + 1;
+    ctx2d.drawImage(d.tile.bitmap, x, y, size, size);
+    if (highlight === null || d.tile.ids === null) return;
+    const mask = maskFor(d.key, d.tile.ids, highlight);
+    if (mask !== null) ctx2d.drawImage(mask, x, y, size, size);
   };
 
   const drawOverlays = () => {
@@ -118,23 +157,26 @@ export function createMapCanvas(host: HTMLElement, pool: WorkerPool, initial: Ma
 
   const draw = () => {
     raf = 0;
+    const w = canvas.width;
+    const h = canvas.height;
     ctx2d.fillStyle = '#15171b';
-    ctx2d.fillRect(0, 0, canvas.width, canvas.height);
-    const missingPreview = drawLevel(256);
-    const target = planTiles(view, canvas.width, canvas.height).find((t) => t.level !== 256)?.level;
-    if (target !== undefined) drawLevel(target);
+    ctx2d.fillRect(0, 0, w, h);
+    const preview = visibleTiles(view, w, h, 256);
+    const target = levelFor(view.bpp);
+    const levels: LevelTiles[] = [{ level: 256, tiles: preview }];
+    if (target !== 256) levels.push({ level: target, tiles: visibleTiles(view, w, h, target) });
+    const frame = fallbacks.frame(view.layer, levels, (level, tx, tz) => keyOf(view.layer, level, tx, tz), (k) => cache.get(k));
+    for (const d of frame.draws) drawTile(d);
     drawOverlays();
-    if (firstStart > 0 && missingPreview === 0 && keyOf(view.layer, 256, 0, 0) !== null) {
-      opts.onFirstImage(performance.now() - firstStart);
-      firstStart = 0;
-    }
+    const epoch = source.epoch;
+    if (epoch !== null && epoch === pool.epoch) opts.onPreviewProgress(epoch, frame.nearestCurrent, preview.length);
   };
   const schedule = () => { if (raf === 0) raf = requestAnimationFrame(draw); };
 
   const resize = () => {
     const w = Math.max(1, Math.floor(host.clientWidth));
     const h = Math.max(1, Math.floor(host.clientHeight));
-    if (canvas.width !== w || canvas.height !== h) { canvas.width = w; canvas.height = h; request(); schedule(); }
+    if (canvas.width !== w || canvas.height !== h) { canvas.width = w; canvas.height = h; fitCache(); request(); schedule(); }
   };
   const observer = new ResizeObserver(resize);
   observer.observe(host);
@@ -169,12 +211,23 @@ export function createMapCanvas(host: HTMLElement, pool: WorkerPool, initial: Ma
 
   resize();
   return {
-    setView(v) { view = v; request(); schedule(); },
-    setSource(epoch, seed, h) { source.set(epoch, seed, h); firstStart = performance.now(); request(); schedule(); },
-    clearSource() { source.clear(); schedule(); },
+    setView(v) { view = v; fitCache(); request(); schedule(); },
+    setSource(epoch, seed, h) { source.set(epoch, seed, h); masks.clear(); request(); schedule(); },
+    setInteractive(on) {
+      if (on === interactive) return;
+      interactive = on;
+      request();
+    },
     setSpawn(s) { spawn = s; schedule(); },
     setPin(p) { pin = p; schedule(); },
     setGrid(on) { grid = on; schedule(); },
-    destroy() { cancelAnimationFrame(raf); observer.disconnect(); cache.clear(); canvas.remove(); },
+    highlightBiome(id) {
+      if (id === highlight) return;
+      highlight = id;
+      masks.clear();
+      schedule();
+    },
+    get blankDraws() { return fallbacks.blankDraws; },
+    destroy() { cancelAnimationFrame(raf); observer.disconnect(); cache.clear(); masks.clear(); canvas.remove(); },
   };
 }

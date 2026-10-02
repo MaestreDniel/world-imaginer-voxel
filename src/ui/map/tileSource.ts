@@ -14,8 +14,11 @@ const MAP_VERSION = STAGES.find((s) => s.id === 'map')!.version;
 export interface TileSource {
   /** The pool finished configuring `epoch` with these seed words and stage hashes (hex). */
   set(epoch: number, seedKey: string, hashes: Readonly<Record<string, string>>): void;
-  /** A reconfigure started: no keys until the next set. */
-  clear(): void;
+  /**
+   * The pool epoch of the source, or null before the first set. There is no clear (SP2b spec §2.5): while
+   * a reconfigure runs, keyFor gives no key and the canvas draws fallback tiles.
+   */
+  readonly epoch: number | null;
   /** The cache key of a tile, or null when no source matches the pool's current epoch. */
   keyFor(layer: LayerId, level: MapLevel, tx: number, tz: number, poolEpoch: number): string | null;
 }
@@ -26,7 +29,7 @@ export function createTileSource(): TileSource {
   let hashes: Readonly<Record<string, string>> | null = null;
   return {
     set(e, s, h) { epoch = e; seedKey = s; hashes = h; },
-    clear() { hashes = null; },
+    get epoch() { return hashes === null ? null : epoch; },
     keyFor(layer, level, tx, tz, poolEpoch) {
       if (hashes === null || poolEpoch !== epoch) return null;
       return tileKey(layer, level, tx, tz, `${seedKey}:${hashes[layerStage(layer)] ?? ''}:map${MAP_VERSION}`);

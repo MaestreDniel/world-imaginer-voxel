@@ -28,10 +28,13 @@ export function visibleTiles(v: MapView, w: number, h: number, level: MapLevel):
   return out.sort((a, b) => a.dist - b.dist || a.tz - b.tz || a.tx - b.tx);
 }
 
-/** The preview level first (priority < 1000), then the view's own level; nearer tiles first within each. */
-export function planTiles(v: MapView, w: number, h: number): PlannedTile[] {
+/**
+ * The preview level first (priority < 1000), then the view's own level; nearer tiles first within each.
+ * The interactive plan (`previewOnly`, SP2b spec §2.6) stops after the preview level.
+ */
+export function planTiles(v: MapView, w: number, h: number, previewOnly = false): PlannedTile[] {
   const target = levelFor(v.bpp);
   const plan: PlannedTile[] = visibleTiles(v, w, h, 256).map((t) => ({ level: 256 as MapLevel, tx: t.tx, tz: t.tz, priority: t.dist }));
-  if (target !== 256) for (const t of visibleTiles(v, w, h, target)) plan.push({ level: target, tx: t.tx, tz: t.tz, priority: 1000 + t.dist });
+  if (target !== 256 && !previewOnly) for (const t of visibleTiles(v, w, h, target)) plan.push({ level: target, tx: t.tx, tz: t.tz, priority: 1000 + t.dist });
   return plan;
 }
