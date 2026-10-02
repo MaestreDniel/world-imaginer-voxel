@@ -31,7 +31,7 @@ export function mountMapPage(root: HTMLElement): void {
   const page = el('div', 'map');
   const header = el('div', 'map-header');
   header.append(el('strong', '', 'world-imaginer-voxel · map'));
-  const notice = el('span', 'map-notice', decoded.error ?? '');
+  const notice = el('span', 'map-notice', decoded.error ?? session.initNotice ?? '');
   header.append(notice);
   const toolbar = el('div', 'map-toolbar');
   const host = el('div', 'map-view');
@@ -140,7 +140,7 @@ export function mountMapPage(root: HTMLElement): void {
       return;
     }
     const before = session.state.epoch;
-    const r = session.setPatch(patch);
+    const r = session.load({ profile: session.state.profile, patch });
     if (!r.ok) { issues.textContent = r.issues.map((i) => `${i.path}: ${i.code} — ${i.message}`).join('\n'); return; }
     issues.textContent = '';
     if (session.state.epoch !== before) reconfigure(); else writeUrl();
