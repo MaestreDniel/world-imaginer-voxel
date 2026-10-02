@@ -501,6 +501,13 @@ Master §6.4: "±15 % on each non-live param changes its stage output hash in �
 - **SP4:** mount the panel, drawer and table in the game; add Apply on top of the session's urgent commits; widen the epoch cell per scope; with the one-MAP-job cap, consider the climate-grid cache (§2.9).
 - **SP5:** a named preset library in IndexedDB `presets`; the fork dialog on the first Apply.
 - **SP10:** the cut-line items if they slip; the lab minors (Appendix A); the metrics dashboard reuses `src/metrics/biomeShares.ts`.
+- **SP10 — minors deferred by the SP2b final review (2026-10-02):**
+  - after a worker fails during a configure, the canvas keeps the old source until the next edit (`previewDriver.ts`);
+  - Ctrl+Z during a range-slider drag makes each later slider position its own urgent undo step (`paramPanel/controls.ts`);
+  - a map click becomes a pan after 1 px of movement, and every mouse button counts as a click (`mapView.ts`);
+  - an unparseable worker reply leaves that worker busy (`workerPool.ts`);
+  - the world window 2^19 is defined in five places;
+  - `uiSmoke.ts` and `mapLatency.ts` share about 170 lines of process and CDP code, hardcode `/usr/bin/google-chrome`, and stop their children only on SIGINT, SIGTERM or a normal return; the smoke test counts four informational lines as checks and hardcodes the golden count.
 
 ## 12. Exit criteria
 
