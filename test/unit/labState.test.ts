@@ -1,8 +1,9 @@
 import { describe, expect, test } from 'vitest';
 import { utf8Bytes } from '../../src/core/hash';
 import { DEFAULTS } from '../../src/core/params/defaults';
+import { base64urlEncode } from '../../src/ui/common/base64url';
 import {
-  applyLabEdit, base64urlDecode, base64urlEncode, decodeLabState, DEFAULT_LAB_STATE, encodeLabState, labParams, mergePatch, type LabState,
+  applyLabEdit, decodeLabState, DEFAULT_LAB_STATE, encodeLabState, labParams, mergePatch, type LabState,
 } from '../../src/ui/lab/labState';
 
 const enc = (text: string) => base64urlEncode(utf8Bytes(text));
@@ -43,12 +44,6 @@ describe('URL state', () => {
     expect(r.state).toEqual(DEFAULT_LAB_STATE);
     expect(r.error).toMatch(/^lab URL ignored: /);
   });
-});
-
-test('base64url helpers', () => {
-  expect(base64urlEncode(Uint8Array.of(251, 255))).toBe('-_8');
-  expect(Array.from(base64urlDecode('-_8')!)).toEqual([251, 255]);
-  expect(base64urlDecode('a b')).toBeNull();
 });
 
 test('mergePatch deep-merges plain objects and replaces everything else', () => {

@@ -8,7 +8,7 @@ import { applyPatch, isObj } from '../../core/params/kit';
 import { isProfileId, isProfileReady, resolveProfile, type ProfileId } from '../../core/params/profiles';
 import { SCHEMA, type ParamsPatch } from '../../core/params/schema';
 import { isLayerId, type LayerId } from '../../gen/map/layers';
-import { base64urlDecode, base64urlEncode } from '../lab/labState';
+import { base64urlDecode, base64urlEncode } from '../common/base64url';
 
 export interface MapView {
   readonly x: number;

@@ -9,18 +9,13 @@ import { biomeName } from '../../gen/biomes/registry';
 import { LAYERS, isLayerId } from '../../gen/map/layers';
 import { WorldSession } from '../../engine/session';
 import { createBrowserPool, JobCancelled } from '../../engine/workerPool';
+import { el } from '../common/dom';
+import { createNotices } from '../common/notice';
+import { createUrlWriter } from '../common/urlWriter';
 import { cryptoSeed } from '../seedBox';
-import { createUrlWriter } from '../lab/urlWriter';
 import { formatPoint } from './hoverPanel';
 import { createMapCanvas } from './mapView';
 import { decodeMapState, encodeMapState, type MapState, type MapView } from './mapState';
-
-function el<K extends keyof HTMLElementTagNameMap>(tag: K, className = '', text = ''): HTMLElementTagNameMap[K] {
-  const e = document.createElement(tag);
-  if (className !== '') e.className = className;
-  if (text !== '') e.textContent = text;
-  return e;
-}
 
 export function mountMapPage(root: HTMLElement): void {
   const decoded = decodeMapState(location.hash);
@@ -31,8 +26,11 @@ export function mountMapPage(root: HTMLElement): void {
   const page = el('div', 'map');
   const header = el('div', 'map-header');
   header.append(el('strong', '', 'world-imaginer-voxel · map'));
-  const notice = el('span', 'map-notice', decoded.error ?? session.initNotice ?? '');
-  header.append(notice);
+  const noticeHost = el('div', 'map-notices');
+  header.append(noticeHost);
+  const notices = createNotices(noticeHost);
+  const startNotice = decoded.error ?? session.initNotice;
+  if (startNotice !== null) notices.show(startNotice, { kind: 'warn' });
   const toolbar = el('div', 'map-toolbar');
   const host = el('div', 'map-view');
   const side = el('div', 'map-side');
@@ -125,13 +123,22 @@ export function mountMapPage(root: HTMLElement): void {
     session.setSeedText(seedInput.value);
     if (session.state.epoch !== before) reconfigure(); else seedInput.value = session.state.seedText;
   });
-  profileSelect.addEventListener('change', () => {
-    const id = profileSelect.value as ProfileId;
-    if (Object.keys(session.state.patch).length > 0 && !confirm('Switching profile clears the patch. Continue?')) { profileSelect.value = session.state.profile; return; }
+  const switchProfile = (id: ProfileId): boolean => {
     const r = session.setProfile(id);
-    if (!r.ok) { issues.textContent = r.issues.map((i) => i.message).join('\n'); return; }
+    if (!r.ok) { issues.textContent = r.issues.map((i) => i.message).join('\n'); return false; }
     issues.textContent = '';
     reconfigure();
+    return true;
+  };
+  profileSelect.addEventListener('change', () => {
+    const id = profileSelect.value as ProfileId;
+    const n = session.modifiedCount('');
+    if (n === 0) { switchProfile(id); return; }
+    // The select keeps showing the session's profile until Switch; a newer choice replaces the confirmation.
+    profileSelect.value = session.state.profile;
+    void notices.confirm(`Switching to ${id} clears ${n} modified parameter${n === 1 ? '' : 's'}`, 'Switch').then((ok) => {
+      if (ok && switchProfile(id)) notices.show('profile switched', { timeoutMs: 5000 });
+    });
   });
   applyBtn.addEventListener('click', () => {
     let patch: unknown;

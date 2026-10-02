@@ -7,12 +7,13 @@ import { noiseInstances } from '../../core/params/noises';
 import { seedFromInput } from '../../core/seed';
 import { pearson } from '../../metrics/noiseStats';
 import { ADVERSARIAL_DEFS, DENSITY3D_DEF } from '../../metrics/sp1Fixtures';
+import { el } from '../common/dom';
+import { createUrlWriter } from '../common/urlWriter';
 import { resolveSeedText } from '../seedBox';
 import { mountDeterminismPanel } from './determinismPanel';
 import { createFieldView, type Camera, type FieldView } from './fieldView';
 import { applyLabEdit, decodeLabState, DEFAULT_LAB_STATE, encodeLabState, labParams, type LabState } from './labState';
 import { createStatsPanel, type StatsPanel } from './statsPanel';
-import { createUrlWriter } from './urlWriter';
 
 /** One selectable noise: a schema instance (editable through its leaf path) or a test fixture (read-only). */
 export interface LabNoise {
@@ -27,13 +28,6 @@ export function labNoises(params: Params): LabNoise[] {
     ...noiseInstances(SCHEMA, params).map((i) => ({ seedName: i.seedName, path: i.path, def: i.def, dims: i.dims })),
     ...[DENSITY3D_DEF, ...ADVERSARIAL_DEFS].map((f) => ({ seedName: f.seedName, path: null, def: f.def, dims: f.dims })),
   ];
-}
-
-function el<K extends keyof HTMLElementTagNameMap>(tag: K, className = '', text = ''): HTMLElementTagNameMap[K] {
-  const e = document.createElement(tag);
-  if (className !== '') e.className = className;
-  if (text !== '') e.textContent = text;
-  return e;
 }
 
 export interface Side {

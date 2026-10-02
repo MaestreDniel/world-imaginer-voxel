@@ -1,6 +1,6 @@
 .map { display: grid; grid-template-rows: auto auto 1fr; grid-template-columns: 1fr 300px; height: 100vh; font: 13px system-ui, sans-serif; color: #ddd; background: #1b1d22; }
 .map-header { grid-column: 1 / 3; display: flex; gap: 12px; align-items: center; padding: 6px 10px; background: #23262d; }
-.map-notice { color: #f0b34a; }
+.map-notices { flex: 1 1 auto; }
 .map-toolbar { grid-column: 1 / 3; display: flex; flex-wrap: wrap; gap: 8px; align-items: center; padding: 6px 10px; border-bottom: 1px solid #333; }
 .map-toolbar textarea { width: 360px; height: 2.4em; font-family: ui-monospace, monospace; }
 .map-view { position: relative; min-width: 0; min-height: 0; overflow: hidden; }

@@ -1,7 +1,7 @@
 import { fileURLToPath } from 'node:url';
 import { expect, test } from 'vitest';
 import { checkImports } from './rules/imports';
-import { ROOT, scanTree, sortViolations } from './scan';
+import { resolveTarget, ROOT, scanTree, sortViolations } from './scan';
 
 const fixture = (name: string) => fileURLToPath(new URL(`./fixtures/imports/${name}`, import.meta.url));
 const brief = (root: string) => sortViolations(checkImports(scanTree(root), root)).map((v) => `${v.file}:${v.line} ${v.rule}`);
@@ -31,4 +31,11 @@ test('bad fixture tree reports every violation', () => {
 
 test('the repository follows the layer table', () => {
   expect(sortViolations(checkImports(scanTree(ROOT), ROOT))).toEqual([]);
+});
+
+test('?map does not import the lab (SP2b spec §1.5: shared helpers live in ui/common)', () => {
+  const found = scanTree(ROOT).filter((f) => f.path.startsWith('src/ui/map/')).flatMap((f) => f.edges
+    .filter((e) => { const t = resolveTarget(f.path, e.spec, e.kind, ROOT); return t.kind === 'repo' && t.path.startsWith('src/ui/lab/'); })
+    .map((e) => `${f.path}:${e.line} ${e.spec}`));
+  expect(found).toEqual([]);
 });

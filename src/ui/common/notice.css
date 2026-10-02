@@ -1,0 +1,9 @@
+.notices { display: flex; flex-direction: column; gap: 4px; min-width: 0; }
+.notices:empty { display: none; }
+.notice { display: flex; flex-wrap: wrap; align-items: center; gap: 6px; padding: 3px 6px; border: 1px solid #3a3f48; border-radius: 3px; background: #262a31; color: #ddd; }
+.notice-warn { border-color: #6b5424; color: #f0b34a; }
+.notice-error { border-color: #7a3431; color: #ff7b72; }
+.notice-text { flex: 1 1 auto; min-width: 0; white-space: pre-wrap; }
+.notice button { font: inherit; padding: 1px 8px; }
+.notice-confirm { font-weight: 600; }
+.notice-close { border: none; background: none; color: inherit; cursor: pointer; }

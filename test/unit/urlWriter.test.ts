@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, expect, test, vi } from 'vitest';
-import { createUrlWriter } from '../../src/ui/lab/urlWriter';
+import { createUrlWriter } from '../../src/ui/common/urlWriter';
 
 beforeEach(() => { vi.useFakeTimers(); });
 afterEach(() => { vi.useRealTimers(); });

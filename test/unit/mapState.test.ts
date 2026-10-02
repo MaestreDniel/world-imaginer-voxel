@@ -1,6 +1,6 @@
 import { describe, expect, test } from 'vitest';
 import { utf8Bytes } from '../../src/core/hash';
-import { base64urlEncode } from '../../src/ui/lab/labState';
+import { base64urlEncode } from '../../src/ui/common/base64url';
 import { decodeMapState, DEFAULT_MAP_STATE, encodeMapState, type MapState } from '../../src/ui/map/mapState';
 import { createTileCache, tileKey } from '../../src/ui/map/tileCache';
 import { planTiles, screenToWorld, visibleTiles, worldToScreen } from '../../src/ui/map/viewMath';

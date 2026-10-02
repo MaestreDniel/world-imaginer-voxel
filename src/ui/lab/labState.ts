@@ -4,6 +4,7 @@ import { DEFAULTS } from '../../core/params/defaults';
 import { applyPatch, isObj, patchAt, type Issue } from '../../core/params/kit';
 import { SCHEMA, type Params, type ParamsPatch } from '../../core/params/schema';
 import { WINDOW } from '../../metrics/noiseStats';
+import { base64urlDecode, base64urlEncode } from '../common/base64url';
 
 export type LabMode = 'z' | 'u';
 export type LabPlane = 'xz' | 'xy';
@@ -35,23 +36,6 @@ export interface LabState {
 export const MIN_BPP = 0.0625;
 export const MAX_BPP = 1024;
 export const DEFAULT_LAB_STATE: LabState = { v: 1, seed: '42', noise: 'climate.C', patch: {}, view: { x: 0, z: 0, bpp: 64, mode: 'u' } };
-
-export function base64urlEncode(bytes: Uint8Array): string {
-  let bin = '';
-  for (const b of bytes) bin += String.fromCharCode(b);
-  return btoa(bin).replace(/\+/g, '-').replace(/\//g, '_').replace(/=+$/, '');
-}
-
-export function base64urlDecode(text: string): Uint8Array | null {
-  if (!/^[A-Za-z0-9_-]*={0,2}$/.test(text)) return null;
-  const b64 = text.replace(/=+$/, '').replace(/-/g, '+').replace(/_/g, '/');
-  try {
-    const bin = atob(b64 + '='.repeat((4 - (b64.length % 4)) % 4));
-    return Uint8Array.from(bin, (c) => c.charCodeAt(0));
-  } catch {
-    return null;
-  }
-}
 
 /** Deep merge of plain objects; arrays and scalars in `b` replace. */
 export function mergePatch(a: unknown, b: unknown): Record<string, unknown> {
