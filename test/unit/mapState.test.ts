@@ -1,7 +1,8 @@
 import { describe, expect, test } from 'vitest';
-import { utf8Bytes } from '../../src/core/hash';
+import { utf8Bytes, type Seed64 } from '../../src/core/hash';
+import { WorldSession, type SessionChange } from '../../src/engine/session';
 import { base64urlEncode } from '../../src/ui/common/base64url';
-import { decodeMapState, DEFAULT_MAP_STATE, encodeMapState, type MapState } from '../../src/ui/map/mapState';
+import { applyMapHash, decodeMapState, DEFAULT_MAP_STATE, encodeMapState, type MapState, type MapView } from '../../src/ui/map/mapState';
 import { createTileCache, tileKey } from '../../src/ui/map/tileCache';
 import { planTiles, screenToWorld, visibleTiles, worldToScreen } from '../../src/ui/map/viewMath';
 
@@ -34,6 +35,73 @@ describe('map URL state', () => {
     const r = decodeMapState(hash);
     expect(r.state).toEqual(DEFAULT_MAP_STATE);
     expect(r.error).toMatch(/^map URL ignored: /);
+  });
+});
+
+describe('hashchange (SP2b spec §1.4)', () => {
+  const random = (): Seed64 => [1, 2];
+  const VIEW: MapView = DEFAULT_MAP_STATE.view;
+  const start = (init: { seedText?: string; patch?: unknown } = {}) => {
+    const session = new WorldSession(random, { seedText: init.seedText ?? '42', profile: 'default', patch: init.patch ?? {} });
+    const changes: SessionChange[] = [];
+    session.subscribe((_s, c) => changes.push(c));
+    const views: MapView[] = [];
+    return { session, changes, views, setView: (v: MapView) => views.push(v) };
+  };
+
+  test('a new seed and patch: the view, then one load — one epoch bump, one urgent notification, one undo step', () => {
+    const { session, changes, views, setView } = start();
+    const next: MapState = { v: 1, seed: '7', profile: 'default', patch: { climate: { scaleMul: 2 } }, view: { ...VIEW, x: 512, layer: 'relief' } };
+    const order: string[] = [];
+    session.subscribe((_s, c) => order.push(c.kind));
+    expect(applyMapHash(`#${encodeMapState(next)}`, session, (v) => { order.push('view'); setView(v); })).toBeNull();
+    expect(order).toEqual(['view', 'load']);
+    expect(views).toEqual([next.view]);
+    expect(changes).toEqual([{ kind: 'load', urgent: true, gesture: false }]);
+    expect(session.state).toMatchObject({ seedText: '7', profile: 'default', patch: { climate: { scaleMul: 2 } }, epoch: 1 });
+    expect(session.undo()).toBe(true);
+    expect(session.snapshot).toEqual({ seedText: '42', profile: 'default', patch: {} });
+    expect(session.canUndo).toBe(false);
+  });
+
+  test('a view-only change applies the view and is not a step', () => {
+    const { session, changes, views, setView } = start({ patch: { climate: { scaleMul: 2 } } });
+    const before = session.state;
+    const next: MapState = { v: 1, seed: '42', profile: 'default', patch: { climate: { scaleMul: 2 } }, view: { ...VIEW, z: -2048, bpp: 8 } };
+    expect(applyMapHash(`#${encodeMapState(next)}`, session, setView)).toBeNull();
+    expect(views).toEqual([next.view]);
+    expect(changes).toEqual([]);
+    expect(session.state).toBe(before);
+    expect(session.canUndo).toBe(false);
+  });
+
+  test('an invalid hash returns the SP2a notice and changes nothing', () => {
+    const { session, changes, views, setView } = start();
+    const before = session.state;
+    for (const hash of ['#***', enc({ ...DEFAULT_MAP_STATE, profile: 'archipelago' }), enc({ ...DEFAULT_MAP_STATE, patch: { rivers: { widthMin: 999 } } })]) {
+      expect(applyMapHash(hash, session, setView)).toMatch(/^map URL ignored: /);
+    }
+    expect(views).toEqual([]);
+    expect(changes).toEqual([]);
+    expect(session.state).toBe(before);
+  });
+
+  test('an empty hash loads the defaults like a fresh ?map (one step)', () => {
+    const { session, changes, views, setView } = start({ seedText: '7', patch: { climate: { scaleMul: 2 } } });
+    expect(applyMapHash('', session, setView)).toBeNull();
+    expect(views).toEqual([DEFAULT_MAP_STATE.view]);
+    expect(changes).toEqual([{ kind: 'load', urgent: true, gesture: false }]);
+    expect(session.snapshot).toEqual({ seedText: '42', profile: 'default', patch: {} });
+  });
+
+  test('a −0 in the hash\'s patch loads as 0, and the URL still encodes', () => {
+    const { session, setView } = start();
+    const text = '{"v":1,"seed":"42","profile":"default","patch":{"lakes":{"rimRise":-0}},"view":{"x":0,"z":0,"bpp":64,"layer":"biome"}}';
+    expect(applyMapHash(`#${base64urlEncode(utf8Bytes(text))}`, session, setView)).toBeNull();
+    expect(session.state.patch).toEqual({ lakes: { rimRise: 0 } });
+    expect(Object.is((session.state.patch as { lakes: { rimRise: number } }).lakes.rimRise, 0)).toBe(true);
+    const s = session.state;
+    expect(decodeMapState(`#${encodeMapState({ v: 1, seed: s.seedText, profile: s.profile, patch: s.patch, view: VIEW })}`).error).toBeNull();
   });
 });
 

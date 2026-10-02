@@ -1,11 +1,47 @@
-.map { display: grid; grid-template-rows: auto auto 1fr; grid-template-columns: 1fr 300px; height: 100vh; font: 13px system-ui, sans-serif; color: #ddd; background: #1b1d22; }
-.map-header { grid-column: 1 / 3; display: flex; gap: 12px; align-items: center; padding: 6px 10px; background: #23262d; }
-.map-notices { flex: 1 1 auto; }
-.map-toolbar { grid-column: 1 / 3; display: flex; flex-wrap: wrap; gap: 8px; align-items: center; padding: 6px 10px; border-bottom: 1px solid #333; }
-.map-toolbar textarea { width: 360px; height: 2.4em; font-family: ui-monospace, monospace; }
-.map-view { position: relative; min-width: 0; min-height: 0; overflow: hidden; }
+/* The ?map editor (SP2b spec §3.1): toolbar, notices, map | splitter | side panel, then the drawer row under both. */
+.map {
+  --panel-w: 340px;
+  --drawer-h: 300px;
+  display: grid; height: 100%;
+  grid-template-columns: minmax(0, 1fr) 5px var(--panel-w);
+  grid-template-rows: auto auto minmax(0, 1fr) auto auto;
+  grid-template-areas: "toolbar toolbar toolbar" "notices notices notices" "view vsplit side" "hsplit hsplit hsplit" "drawer drawer drawer";
+  font: 13px system-ui, sans-serif; color: #ddd; background: #1b1d22;
+}
+.map-toolbar { grid-area: toolbar; display: flex; flex-wrap: wrap; gap: 6px 14px; align-items: center; padding: 6px 10px; background: #23262d; border-bottom: 1px solid #333; }
+.map-group { display: inline-flex; gap: 4px; align-items: center; }
+.map-label { color: #9aa; }
+.map-toolbar input[type="text"] { width: 11em; }
+.map-size { width: 110px; }
+.map-approx { display: inline-block; width: 1em; color: #f0b34a; }
+.map-status { margin-left: auto; font-family: ui-monospace, monospace; color: #9aa; white-space: nowrap; }
+.map-status-error { color: #ff7b72; }
+.map-notices { grid-area: notices; padding: 4px 10px; border-bottom: 1px solid #333; }
+.map-view { grid-area: view; position: relative; min-width: 0; min-height: 0; overflow: hidden; }
 .map-canvas { display: block; width: 100%; height: 100%; cursor: grab; }
-.map-side { overflow: auto; padding: 8px 10px; border-left: 1px solid #333; }
-.map-side h3 { margin: 10px 0 4px; font-size: 12px; text-transform: uppercase; color: #9aa; }
-.map-issues { color: #ff7b72; white-space: pre-wrap; font-family: ui-monospace, monospace; }
+.map-split { background: #2a2d34; touch-action: none; }
+.map-split:hover, .map-split.dragging { background: #4a6fa5; }
+.map-split-v { grid-area: vsplit; cursor: col-resize; }
+.map-split-h { grid-area: hsplit; height: 5px; cursor: row-resize; }
+.map-side { grid-area: side; display: flex; flex-direction: column; min-width: 0; min-height: 0; background: #1f2228; }
+.map-tabs { display: flex; flex: 0 0 auto; border-bottom: 1px solid #333; }
+.map-tabs button { flex: 1 1 0; padding: 6px 4px; font: inherit; color: #9aa; background: none; border: 0; border-bottom: 2px solid transparent; cursor: pointer; }
+.map-tabs button[aria-selected="true"] { color: #eee; border-bottom-color: #4a90d9; }
+.map-tab { flex: 1 1 auto; min-height: 0; overflow: auto; padding: 8px 10px; }
+.map-tab h3 { margin: 10px 0 4px; font-size: 12px; text-transform: uppercase; color: #9aa; }
+.map-drawer { grid-area: drawer; height: max(160px, min(var(--drawer-h), 60vh)); overflow: auto; background: #1f2228; }
 .map-readout { font-family: ui-monospace, monospace; white-space: pre; }
+.map.panel-hidden { grid-template-columns: minmax(0, 1fr) 0 0; }
+.map.panel-hidden .map-side, .map.panel-hidden .map-split-v { display: none; }
+/* Below 900 px the side panel stacks under the map and the page scrolls. */
+@media (max-width: 899px) {
+  .map, .map.panel-hidden {
+    overflow-y: auto;
+    grid-template-columns: minmax(0, 1fr);
+    grid-template-rows: auto auto 60vh auto auto auto;
+    grid-template-areas: "toolbar" "notices" "view" "side" "hsplit" "drawer";
+  }
+  .map-split-v { display: none; }
+  .map-side { border-top: 1px solid #333; }
+  .map-tab { overflow: visible; }
+}

@@ -1,12 +1,14 @@
 /**
- * The ?map URL state (SP2a spec §6.3): {v: 1, seed, profile, patch, view: {x, z, bpp, layer}} as
- * canonical JSON in base64url. A bad hash opens the defaults with a notice.
+ * The ?map URL state (SP2a spec §6.3, SP2b spec §1.4): {v: 1, seed, profile, patch, view: {x, z, bpp,
+ * layer}} as canonical JSON in base64url, with the session's minimal patch. A bad hash opens the defaults
+ * with a notice; a `hashchange` applies the view, then loads the draft in one session step.
  */
 import { utf8Bytes } from '../../core/hash';
 import { canonicalJSON, q15 } from '../../core/params/canonical';
 import { applyPatch, isObj } from '../../core/params/kit';
 import { isProfileId, isProfileReady, resolveProfile, type ProfileId } from '../../core/params/profiles';
 import { SCHEMA, type ParamsPatch } from '../../core/params/schema';
+import type { SessionResult } from '../../engine/session';
 import { isLayerId, type LayerId } from '../../gen/map/layers';
 import { base64urlDecode, base64urlEncode } from '../common/base64url';
 
@@ -77,4 +79,26 @@ export function decodeMapState(hash: string): { state: MapState; error: string |
   if (why !== null) return fail(why);
   const s = json as MapState;
   return { state: { ...s, seed: s.seed.trim() }, error: null };
+}
+
+/** The session call a hash load needs (WorldSession satisfies it). */
+export interface HashTarget {
+  load(s: { readonly seedText?: string; readonly profile: ProfileId; readonly patch: unknown }): SessionResult;
+}
+
+/**
+ * A `hashchange` (SP2b spec §1.4, SP1 minor 5): decodes `hash`. An invalid hash returns the SP2a notice and
+ * changes nothing. Otherwise the view goes to `setView` (never a history step), then seed, profile and patch
+ * go to one `load` (urgent, one step; a no-op when they are unchanged). The raw decoded patch only reaches
+ * the session, which stores its minimal form, so a −0 in it never reaches canonicalJSON. An empty hash is
+ * the defaults, as when the page opens. Returns null, or a notice when the load is refused.
+ */
+export function applyMapHash(hash: string, session: HashTarget, setView: (v: MapView) => void): string | null {
+  const d = decodeMapState(hash);
+  if (d.error !== null) return d.error;
+  setView(d.state.view);
+  const r = session.load({ seedText: d.state.seed, profile: d.state.profile, patch: d.state.patch });
+  if (r.ok) return null;
+  const i = r.issues[0]!;
+  return `map URL ignored: ${i.path === '' ? '<root>' : i.path} ${i.code}`;
 }

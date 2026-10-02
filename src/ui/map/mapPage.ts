@@ -1,21 +1,29 @@
 /**
- * The ?map page (SP2a spec §6): WorldSession + worker pool + map canvas, with the seed box, the ready
- * profiles, a JSON patch box, a layer select, the hover readout, the spawn and the first-image timing.
+ * The ?map editor page (SP2b spec §3.1): the composition of the layout (toolbar, notices, map, side panel
+ * tabs, drawer), the WorldSession that owns the draft, the preview driver that turns its changes into
+ * configure cycles (§2.6), the map canvas, the URL (§1.4: written on every change, read on `hashchange`)
+ * and the global shortcuts (§3.5). The World tab shows the session status, the spawn and the hover readout
+ * (§3.3); the Parameters, Biomes and Presets tabs are the hosts their editors mount into.
  */
 import './map.css';
-import { PROFILE_IDS, isProfileReady, type ProfileId } from '../../core/params/profiles';
-import { canonicalJSON } from '../../core/params/canonical';
+import { WorldSession, type SessionState } from '../../engine/session';
+import { createBrowserPool } from '../../engine/workerPool';
 import { biomeName } from '../../gen/biomes/registry';
-import { LAYERS, isLayerId } from '../../gen/map/layers';
-import { WorldSession } from '../../engine/session';
-import { createBrowserPool, JobCancelled } from '../../engine/workerPool';
+import type { Spawn } from '../../gen/column/spawn';
 import { el } from '../common/dom';
+import { installShortcuts } from '../common/keys';
 import { createNotices } from '../common/notice';
 import { createUrlWriter } from '../common/urlWriter';
 import { cryptoSeed } from '../seedBox';
-import { formatPoint } from './hoverPanel';
+import { createHoverReadout } from './hoverPanel';
+import { browserStorage, createLayout } from './layout';
 import { createMapCanvas } from './mapView';
-import { decodeMapState, encodeMapState, type MapState, type MapView } from './mapState';
+import { applyMapHash, decodeMapState, encodeMapState, type MapView } from './mapState';
+import { createPreviewDriver, type DriverClock, type DriverDraft, type PreviewDriver } from './previewDriver';
+import { createToolbar } from './toolbar';
+
+const draftOf = (s: SessionState): DriverDraft => ({ sessionEpoch: s.epoch, seedText: s.seedText, seedKey: `${s.seed[0]}.${s.seed[1]}`, params: s.params });
+const spawnText = (sp: Spawn): string => `${sp.x}, ${sp.z} (y ${sp.y}, ${biomeName(sp.biome)}${sp.fallback ? ', fallback' : ''})`;
 
 export function mountMapPage(root: HTMLElement): void {
   const decoded = decodeMapState(location.hash);
@@ -23,142 +31,105 @@ export function mountMapPage(root: HTMLElement): void {
   const session = new WorldSession(cryptoSeed, { seedText: initial.seed, profile: initial.profile, patch: initial.patch });
   let view: MapView = initial.view;
 
-  const page = el('div', 'map');
-  const header = el('div', 'map-header');
-  header.append(el('strong', '', 'world-imaginer-voxel · map'));
-  const noticeHost = el('div', 'map-notices');
-  header.append(noticeHost);
-  const notices = createNotices(noticeHost);
+  const layout = createLayout(root, browserStorage());
+  const notices = createNotices(layout.notices);
   const startNotice = decoded.error ?? session.initNotice;
   if (startNotice !== null) notices.show(startNotice, { kind: 'warn' });
-  const toolbar = el('div', 'map-toolbar');
-  const host = el('div', 'map-view');
-  const side = el('div', 'map-side');
-  page.append(header, toolbar, host, side);
-  root.replaceChildren(page);
-
-  const layerSelect = el('select');
-  for (const l of LAYERS) layerSelect.append(new Option(l, l));
-  const seedInput = el('input');
-  seedInput.placeholder = 'seed (empty = random)';
-  const profileSelect = el('select');
-  for (const p of PROFILE_IDS) if (isProfileReady(p)) profileSelect.append(new Option(p, p));
-  const patchBox = el('textarea');
-  patchBox.spellcheck = false;
-  const applyBtn = el('button', '', 'apply patch');
-  const gridBox = el('input');
-  gridBox.type = 'checkbox';
-  const gridLabel = el('label', '', 'grid ');
-  gridLabel.append(gridBox);
-  toolbar.append(layerSelect, seedInput, profileSelect, patchBox, applyBtn, gridLabel);
-
-  const issues = el('div', 'map-issues');
-  const status = el('div', 'map-readout');
-  const hover = el('div', 'map-readout');
-  side.append(el('h3', '', 'World'), status, issues, el('h3', '', 'Point'), hover);
-
   const pool = createBrowserPool(undefined, { onFailure: () => notices.show('a worker failed; reload the page', { kind: 'error' }) });
   if (!pool.abortable) notices.show('live preview is slower without cross-origin isolation', { kind: 'info' });
   const url = createUrlWriter((u) => history.replaceState(null, '', u));
   addEventListener('pagehide', () => url.flush());
-  let firstImageMs: number | null = null;
-  /** The source set by the last configure and when (the first image is timed from it, as in SP2a). */
-  let shownSource: { readonly epoch: number; readonly at: number } | null = null;
-  let spawnText = '';
-
-  const state = (): MapState => {
+  const writeUrl = () => {
     const s = session.state;
-    return { v: 1, seed: s.seedText, profile: s.profile, patch: s.patch, view };
+    url.set(`?map#${encodeMapState({ v: 1, seed: s.seedText, profile: s.profile, patch: s.patch, view })}`);
   };
-  const writeUrl = () => url.set(`?map#${encodeMapState(state())}`);
+
+  // World tab (§3.3): session status, spawn and hover readout.
+  const statusOut = el('div', 'map-readout');
+  const spawnOut = el('div', 'map-readout', 'spawn …');
+  const hoverOut = el('div', 'map-readout', 'hover the map');
+  layout.tabs.world.append(el('h3', '', 'Session'), statusOut, el('h3', '', 'Spawn'), spawnOut, el('h3', '', 'Point'), hoverOut);
   const renderStatus = () => {
     const s = session.state;
-    status.textContent = [
-      `seed ${s.seedText}`, `profile ${s.profile}`, `epoch ${s.epoch}  workers ${pool.size}`,
+    const modified = session.modifiedCount('');
+    statusOut.textContent = [
+      `seed ${s.seedText}`, `profile ${s.profile}${modified === 0 ? '' : `, ${modified} modified`}`,
+      `epoch ${s.epoch}  workers ${pool.size}`,
       `view x ${view.x.toFixed(0)} z ${view.z.toFixed(0)}  ${view.bpp.toFixed(2)} blocks/px`,
-      spawnText, firstImageMs === null ? 'first image …' : `first image ${firstImageMs.toFixed(0)} ms`,
     ].join('\n');
   };
+  const hover = createHoverReadout(pool, (t) => { hoverOut.textContent = t; });
 
-  const canvas = createMapCanvas(host, pool, view, {
+  /** The input event's timeStamp while a control's session call runs (§2.8: latency counts from it). */
+  let inputAt: number | null = null;
+  const edit = (e: Event, fn: () => void) => {
+    inputAt = e.timeStamp;
+    try { fn(); } finally { inputAt = null; }
+  };
+
+  const canvas = createMapCanvas(layout.map, pool, view, {
     onView: (v) => { view = v; canvas.setView(v); writeUrl(); renderStatus(); },
-    onHover: (() => {
-      let busy = false;
-      let next: [number, number] | null = null;
-      const run = (x: number, z: number) => {
-        busy = true;
-        pool.point(x, z).then((p) => { hover.textContent = formatPoint(p); })
-          .catch((e: unknown) => { if (!(e instanceof JobCancelled)) hover.textContent = String(e); })
-          .finally(() => { busy = false; if (next !== null) { const [a, b] = next; next = null; run(a, b); } });
-      };
-      return (x: number, z: number) => { if (busy) next = [x, z]; else run(x, z); };
-    })(),
+    onHover: (x, z) => hover.move(x, z),
     onClick: (x, z) => { canvas.setPin([x, z]); },
-    onPreviewProgress: (epoch, drawn, visible) => {
-      if (firstImageMs !== null || shownSource === null || epoch !== shownSource.epoch || drawn < visible) return;
-      firstImageMs = performance.now() - shownSource.at;
-      renderStatus();
-    },
+    onPreviewProgress: (epoch, drawn, visible) => driver.previewProgress(epoch, drawn, visible),
   });
-
-  const reconfigure = () => {
-    const s = session.state;
-    seedInput.value = s.seedText;
-    profileSelect.value = s.profile;
-    patchBox.value = canonicalJSON(s.patch);
-    spawnText = 'spawn …';
-    renderStatus();
-    writeUrl();
-    // The previous image and spawn marker stay until the new ones land (fallback tiles, SP2b spec §2.5).
-    pool.configure(s.seedText, s.params).then((ready) => {
-      shownSource = { epoch: ready.epoch, at: performance.now() };
-      canvas.setSource(ready.epoch, `${s.seed[0]}.${s.seed[1]}`, ready.stageHashes as Record<string, string>);
-      return pool.spawn();
-    }).then((sp) => {
+  const clock: DriverClock = {
+    now: () => performance.now(),
+    setTimeout: (fn, ms) => window.setTimeout(fn, ms),
+    clearTimeout: (id) => window.clearTimeout(id),
+  };
+  const driver: PreviewDriver = createPreviewDriver(pool, {
+    setSource: (epoch, seedKey, hashes) => canvas.setSource(epoch, seedKey, hashes),
+    setInteractive: (on) => canvas.setInteractive(on),
+    setSpawn: (sp) => {
       canvas.setSpawn(sp);
-      spawnText = `spawn ${sp.x}, ${sp.z} (y ${sp.y}, ${biomeName(sp.biome)}${sp.fallback ? ', fallback' : ''})`;
-      renderStatus();
-    }).catch((e: unknown) => { if (!(e instanceof JobCancelled)) issues.textContent = String(e); });
-  };
+      spawnOut.textContent = sp === null ? 'spawn …' : spawnText(sp);
+    },
+  }, clock);
 
-  layerSelect.value = view.layer;
-  layerSelect.addEventListener('change', () => {
-    if (isLayerId(layerSelect.value)) { view = { ...view, layer: layerSelect.value }; canvas.setView(view); writeUrl(); }
-  });
-  seedInput.addEventListener('change', () => {
-    const before = session.state.epoch;
-    session.setSeedText(seedInput.value);
-    if (session.state.epoch !== before) reconfigure(); else seedInput.value = session.state.seedText;
-  });
-  const switchProfile = (id: ProfileId): boolean => {
-    const r = session.setProfile(id);
-    if (!r.ok) { issues.textContent = r.issues.map((i) => i.message).join('\n'); return false; }
-    issues.textContent = '';
-    reconfigure();
-    return true;
+  const setView = (v: MapView) => {
+    view = v;
+    canvas.setView(v);
+    toolbar.setLayer(v.layer);
+    renderStatus();
   };
-  profileSelect.addEventListener('change', () => {
-    const id = profileSelect.value as ProfileId;
-    const n = session.modifiedCount('');
-    if (n === 0) { switchProfile(id); return; }
-    // The select keeps showing the session's profile until Switch; a newer choice replaces the confirmation.
-    profileSelect.value = session.state.profile;
-    void notices.confirm(`Switching to ${id} clears ${n} modified parameter${n === 1 ? '' : 's'}`, 'Switch').then((ok) => {
-      if (ok && switchProfile(id)) notices.show('profile switched', { timeoutMs: 5000 });
-    });
+  const toolbar = createToolbar(layout.toolbar, {
+    session, notices, layer: view.layer, edit,
+    onLayer: (layer) => { setView({ ...view, layer }); writeUrl(); },
+    onGrid: (on) => canvas.setGrid(on),
   });
-  applyBtn.addEventListener('click', () => {
-    let patch: unknown;
-    try { patch = JSON.parse(patchBox.value.trim() === '' ? '{}' : patchBox.value); } catch (e) {
-      issues.textContent = `patch is not JSON: ${e instanceof Error ? e.message : String(e)}`;
-      return;
+
+  // The hover readout shows points of the canvas source's pool epoch only (§2.5).
+  let shownEpoch: number | null = null;
+  driver.onStatus((st) => {
+    toolbar.setStatus(st);
+    if (st.poolEpoch !== shownEpoch) {
+      shownEpoch = st.poolEpoch;
+      hover.refresh();
     }
-    const before = session.state.epoch;
-    const r = session.load({ profile: session.state.profile, patch });
-    if (!r.ok) { issues.textContent = r.issues.map((i) => `${i.path}: ${i.code} — ${i.message}`).join('\n'); return; }
-    issues.textContent = '';
-    if (session.state.epoch !== before) reconfigure(); else writeUrl();
   });
-  gridBox.addEventListener('change', () => canvas.setGrid(gridBox.checked));
-  reconfigure();
+  session.subscribe((s, change) => {
+    driver.change(draftOf(s), change, inputAt ?? performance.now());
+    toolbar.sync();
+    writeUrl();
+    renderStatus();
+  });
+
+  installShortcuts((a) => {
+    if (a === 'undo') session.undo();
+    else if (a === 'redo') session.redo();
+    else if (a === 'togglePanel') layout.togglePanel();
+    else layout.closeDrawer();
+  });
+  addEventListener('hashchange', () => {
+    const problem = applyMapHash(location.hash, session, setView);
+    if (problem !== null) notices.show(problem, { kind: 'warn' });
+    writeUrl();
+  });
+
+  // The first cycle is an urgent load (Task 10); the URL is rewritten in canonical form.
+  driver.change(draftOf(session.state), { kind: 'load', urgent: true, gesture: false }, performance.now());
+  toolbar.setStatus(driver.status);
+  writeUrl();
+  renderStatus();
 }
