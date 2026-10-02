@@ -1,8 +1,9 @@
 /**
  * The pure message handler of a task worker (SP2a spec §5.1): owns one GenContext per configured epoch
  * and answers each validated message. No DOM and no worker globals, so Node tests drive it directly.
- * Tile and spawn jobs stop as soon as the pool's abort cell leaves their epoch and reply ABORTED
- * (SP2b spec §2.2); point and selftest jobs always run to the end.
+ * Tile, spawn and stats jobs stop as soon as the pool's abort cell leaves their epoch and reply ABORTED
+ * (SP2b spec §2.2); point and selftest jobs always run to the end. Stats jobs (§5.4) run the metrics
+ * functions over a range of their kind's fixed point stream and reply with the raw sums.
  */
 import { hex64 } from '../core/hash';
 import { checkParams } from '../core/params/kit';
@@ -13,8 +14,11 @@ import { createGenContext, type GenContext } from '../gen/context';
 import { columnPoint } from '../gen/column/columnPoint';
 import { findSpawnAbortable } from '../gen/column/spawn';
 import { paintTileAbortable } from '../gen/map/tile';
+import { biomeSharePoints, biomeSharesInto, biomeSharesLength } from '../metrics/biomeShares';
+import type { Points } from '../metrics/noiseStats';
 import { computeAnyGolden } from '../metrics/sp2aGoldens';
-import { parseToWorker, type ErrorCode, type FromWorker } from './protocol';
+import { splineStatPoints, splineStatsInto, splineStatsLength, splineStatsNode } from '../metrics/splineStats';
+import { parseToWorker, type ErrorCode, type FromWorker, type StatsMsg } from './protocol';
 
 const HEX = hex64;
 const CHECK = checkParams;
@@ -28,6 +32,13 @@ const PAINT = paintTileAbortable;
 const SPAWN = findSpawnAbortable;
 const GOLDEN = computeAnyGolden;
 const PARSE = parseToWorker;
+const SHARE_POINTS = biomeSharePoints;
+const SHARES_INTO = biomeSharesInto;
+const SHARES_LEN = biomeSharesLength;
+const SPLINE_POINTS = splineStatPoints;
+const SPLINE_INTO = splineStatsInto;
+const SPLINE_LEN = splineStatsLength;
+const SPLINE_NODE = splineStatsNode;
 
 export interface Reply {
   readonly msg: FromWorker;
@@ -45,6 +56,36 @@ const intField = (raw: unknown, key: 'jobId' | 'epoch'): number | null => {
   const v = typeof raw === 'object' && raw !== null ? (raw as Record<string, unknown>)[key] : undefined;
   return typeof v === 'number' && Number.isInteger(v) ? v : null;
 };
+
+/** The stats kinds' fixed point streams, built on first use and shared by every handler of the thread. */
+let splinePoints: Points | null = null;
+let sharePoints: Points | null = null;
+
+/** A zeroed sum of `len` values, or the BAD_ARGS message when args.len or the point range does not fit. */
+const sumFor = (m: StatsMsg, len: number, pts: Points): Float64Array<ArrayBuffer> | string =>
+  m.args.len !== len ? `args.len ${m.args.len}, expected ${len}`
+    : m.to > pts.n ? `points [${m.from}, ${m.to}) outside the stream of ${pts.n}`
+      : new Float64Array(len);
+
+/**
+ * A stats job's sum; null when `stop` fired; a string (the BAD_ARGS message) when the node, args.len or
+ * the point range does not fit the configured params.
+ */
+function runStats(ctx: GenContext, m: StatsMsg, stop: () => boolean): Float64Array<ArrayBuffer> | string | null {
+  if (m.kind === 'splineStats') {
+    const { leaf, node: path } = m.args;
+    const node = SPLINE_NODE(ctx.params, leaf, path);
+    if (node === null) return `no node [${path.join(', ')}] in ${leaf}`;
+    const pts = splinePoints ??= SPLINE_POINTS();
+    const out = sumFor(m, SPLINE_LEN(node.points.length), pts);
+    if (typeof out === 'string') return out;
+    return SPLINE_INTO(ctx, leaf, path, pts, m.from, m.to, out, stop) ? out : null;
+  }
+  const pts = sharePoints ??= SHARE_POINTS();
+  const out = sumFor(m, SHARES_LEN(), pts);
+  if (typeof out === 'string') return out;
+  return SHARES_INTO(ctx, pts, m.from, m.to, out, stop) ? out : null;
+}
 
 export function createTaskHandler(): TaskHandler {
   let epoch = -1;
@@ -97,6 +138,12 @@ export function createTaskHandler(): TaskHandler {
         if (m.type === 'spawn') {
           const spawn = SPAWN(ctx, stopFor(m.epoch));
           return spawn === null ? aborted() : { msg: { type: 'spawnResult', jobId: m.jobId, epoch, spawn }, transfer: [] };
+        }
+        if (m.type === 'stats') {
+          const sum = runStats(ctx, m, stopFor(m.epoch));
+          if (sum === null) return aborted();
+          if (typeof sum === 'string') return err(m.jobId, m.epoch, 'BAD_ARGS', sum);
+          return { msg: { type: 'statsResult', jobId: m.jobId, epoch, kind: m.kind, data: sum.buffer }, transfer: [sum.buffer] };
         }
         return { msg: { type: 'pointResult', jobId: m.jobId, epoch, fields: POINT(ctx, m.x, m.z) }, transfer: [] };
       } catch (e) {

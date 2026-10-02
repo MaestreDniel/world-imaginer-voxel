@@ -1,8 +1,12 @@
 import { describe, expect, test } from 'vitest';
 import { DEFAULTS } from '../../src/core/params/defaults';
 import { createWorkerPool, JobCancelled, poolSize, WorkerFailed, type WorkerLike } from '../../src/engine/workerPool';
+import { BIOME_SHARES_POINTS, biomeSharePoints, biomeSharesInto, biomeSharesLength } from '../../src/metrics/biomeShares';
+import { SPLINE_STATS_POINTS, splineStatPoints, splineStatsInto, splineStatsLength, splineStatsNode } from '../../src/metrics/splineStats';
+import type { KnotPath } from '../../src/core/spline/types';
 import type { ToWorker } from '../../src/workers/protocol';
 import { createTaskHandler } from '../../src/workers/taskHandler';
+import { ctxFor } from '../harness/gen';
 
 /**
  * A fake worker running the real handler asynchronously; `log` records every message it receives and
@@ -34,6 +38,32 @@ function silentWorker(log: ToWorker[] = []): WorkerLike & { terminated: boolean 
     terminated: false,
     postMessage(msg) { log.push(msg); },
     terminate() { w.terminated = true; },
+  };
+  return w;
+}
+
+/**
+ * A worker running the real handler that holds the messages `hold` selects until flush(), which handles
+ * them at once (so the handler reads the abort cell as it is then) and replies asynchronously.
+ */
+function heldWorker(log: ToWorker[], hold: (m: ToWorker) => boolean, replies: unknown[] = []): WorkerLike & { flush(): void; holding: boolean } {
+  const h = createTaskHandler();
+  const held: ToWorker[] = [];
+  const answer = (msg: ToWorker) => {
+    const data = h.handle(msg).msg;
+    replies.push(data);
+    setTimeout(() => w.onmessage?.({ data }), 0);
+  };
+  const w: WorkerLike & { flush(): void; holding: boolean } = {
+    onmessage: null,
+    holding: true,
+    postMessage(msg) {
+      log.push(msg);
+      if (w.holding && hold(msg)) held.push(msg);
+      else setTimeout(() => answer(msg), 0);
+    },
+    flush() { for (const m of held.splice(0)) answer(m); },
+    terminate() {},
   };
   return w;
 }
@@ -221,6 +251,149 @@ describe('worker pool: worker errors (SP2b spec §2.3)', () => {
     expect(await queued).toBeInstanceOf(WorkerFailed);
     expect(await settle(pool.point(1, 2))).toBeInstanceOf(WorkerFailed);
     expect(await settle(pool.selftest('sp1.params'))).toBeInstanceOf(WorkerFailed);
+    expect(await settle(pool.stats('biomeShares', 10, { len: biomeSharesLength() }))).toBeInstanceOf(WorkerFailed);
     expect(await settle(pool.configure('7', DEFAULTS))).toBeInstanceOf(WorkerFailed);
+  });
+});
+
+describe('worker pool: stats jobs (SP2b spec §5.4)', () => {
+  const statsOf = (log: readonly ToWorker[]) => log.flatMap((m) => (m.type === 'stats' ? [[m.kind, m.from, m.to]] : []));
+  const SHARES = { len: biomeSharesLength() };
+  const splineArgs = (node: KnotPath) => ({ len: splineStatsLength(splineStatsNode(DEFAULTS, 'shape.offset', node)!.points.length), leaf: 'shape.offset' as const, node });
+  const direct = (fill: (out: Float64Array) => boolean, len: number) => {
+    const out = new Float64Array(len);
+    expect(fill(out)).toBe(true);
+    return out;
+  };
+
+  test('a request is split into pool.size slices of [0, n), queued at priority 500: after preview tiles, before fine tiles', async () => {
+    const log: ToWorker[] = [];
+    const pool = createWorkerPool(2, () => fakeWorker(log));
+    const ready = pool.configure('42', DEFAULTS);
+    const fine = pool.tile(tile(1), 1000);
+    const sum = pool.stats('biomeShares', 1001, SHARES);
+    const preview = pool.tile(tile(0), 3);
+    await ready;
+    await Promise.all([fine, sum, preview]);
+    // tile 0 has a preview tile's priority (3), tile 1 a fine tile's (1000 + distance).
+    expect(log.flatMap((m) => (m.type === 'mapTile' ? [`tile ${m.tx}`] : m.type === 'stats' ? [`stats ${m.from}-${m.to}`] : []))).toEqual(['tile 0', 'stats 0-500', 'stats 500-1001', 'tile 1']);
+    expect(log.filter((m) => m.type === 'stats').every((m) => m.type === 'stats' && m.epoch === 0 && m.args.len === SHARES.len)).toBe(true);
+  });
+
+  test('slices are contiguous and differ by at most one point; empty slices are not sent; n = 0 posts nothing', async () => {
+    const log: ToWorker[] = [];
+    const pool = createWorkerPool(6, () => fakeWorker(log));
+    await pool.configure('42', DEFAULTS);
+    await pool.stats('biomeShares', 1003, SHARES);
+    expect(statsOf(log)).toEqual([0, 167, 334, 501, 668, 835].map((from, i) => ['biomeShares', from, i === 5 ? 1003 : from + 167]));
+    log.length = 0;
+    await pool.stats('biomeShares', 4, SHARES);
+    expect(statsOf(log)).toEqual([['biomeShares', 0, 1], ['biomeShares', 1, 2], ['biomeShares', 2, 3], ['biomeShares', 3, 4]]);
+    log.length = 0;
+    const none = await pool.stats('biomeShares', 0, SHARES);
+    expect([statsOf(log).length, none.length, none.every((v) => v === 0)]).toEqual([0, SHARES.len, true]);
+  });
+
+  test('a bad n or len rejects with RangeError before anything is queued', async () => {
+    const log: ToWorker[] = [];
+    const pool = createWorkerPool(2, () => fakeWorker(log));
+    await pool.configure('42', DEFAULTS);
+    for (const [n, len] of [[-1, 31], [1.5, 31], [Number.NaN, 31], [10, 0], [10, 2.5]] as const) {
+      await expect(pool.stats('biomeShares', n, { len })).rejects.toBeInstanceOf(RangeError);
+    }
+    expect(statsOf(log)).toEqual([]);
+  });
+
+  test('the split sum equals a single-slice run: exactly for counts and root weights, within 1e-10 relative for nested weights', async () => {
+    const pool = createWorkerPool(6, () => fakeWorker([]));
+    await pool.configure('42', DEFAULTS);
+    const ctx = ctxFor('42');
+    const shares = await pool.stats('biomeShares', BIOME_SHARES_POINTS, SHARES);
+    expect(Array.from(shares)).toEqual(Array.from(direct((o) => biomeSharesInto(ctx, biomeSharePoints(), 0, BIOME_SHARES_POINTS, o), SHARES.len)));
+    expect(shares[SHARES.len - 1]).toBe(BIOME_SHARES_POINTS);
+    const root = await pool.stats('splineStats', SPLINE_STATS_POINTS, splineArgs([]));
+    expect(Array.from(root)).toEqual(Array.from(direct((o) => splineStatsInto(ctx, 'shape.offset', [], splineStatPoints(), 0, SPLINE_STATS_POINTS, o), root.length)));
+    for (const node of [[6], [6, 0]]) {
+      const got = await pool.stats('splineStats', SPLINE_STATS_POINTS, splineArgs(node));
+      const want = direct((o) => splineStatsInto(ctx, 'shape.offset', node, splineStatPoints(), 0, SPLINE_STATS_POINTS, o), got.length);
+      expect(got.length).toBe(want.length);
+      // The point count and the land point count are counts: exact.
+      expect([got[got.length - 2], got[got.length - 1]]).toEqual([want[want.length - 2], want[want.length - 1]]);
+      let maxRel = 0;
+      for (let k = 0; k < got.length; k++) {
+        const scale = Math.max(Math.abs(got[k]!), Math.abs(want[k]!));
+        if (scale > 0) maxRel = Math.max(maxRel, Math.abs(got[k]! - want[k]!) / scale);
+      }
+      expect(maxRel, `node [${node.join(', ')}]`).toBeLessThanOrEqual(1e-10);
+    }
+  });
+
+  test('a failed slice rejects the request with its error and drops its queued slices; nothing is retried', async () => {
+    const log: ToWorker[] = [];
+    let n = 0;
+    const gate = heldWorker(log, (m) => m.type === 'mapTile');
+    const pool = createWorkerPool(2, () => (n++ === 0 ? gate : fakeWorker(log)));
+    await pool.configure('42', DEFAULTS);
+    const held = pool.tile(tile(0), 0);
+    // Worker 1 is busy with the held tile: slice 0 runs on worker 2, slice 1 waits in the queue.
+    const req = settle(pool.stats('splineStats', 1000, { ...splineArgs([]), node: [0] }));
+    expect(pool.queued).toBe(1);
+    const r = await req;
+    expect(r).toBeInstanceOf(Error);
+    expect((r as Error).message).toMatch(/^BAD_ARGS: /);
+    expect([pool.queued, statsOf(log)]).toEqual([0, [['splineStats', 0, 500]]]);
+    gate.flush();
+    expect((await held).rgba.byteLength).toBe(262144);
+    expect(statsOf(log)).toEqual([['splineStats', 0, 500]]);
+  });
+
+  test('a slice reply of the wrong length rejects the request', async () => {
+    const pool = createWorkerPool(1, () => {
+      const inner = fakeWorker([]);
+      const w: WorkerLike = {
+        onmessage: null,
+        postMessage(msg) {
+          if (msg.type === 'stats') { setTimeout(() => w.onmessage?.({ data: { type: 'statsResult', jobId: msg.jobId, epoch: msg.epoch, kind: msg.kind, data: new ArrayBuffer(8) } }), 0); return; }
+          inner.onmessage = (e) => w.onmessage?.(e);
+          inner.postMessage(msg);
+        },
+        terminate() {},
+      };
+      return w;
+    });
+    await pool.configure('42', DEFAULTS);
+    await expect(pool.stats('biomeShares', 10, SHARES)).rejects.toThrow(/8 bytes, expected 248/);
+  });
+
+  test('aborting a stats request rejects it with JobCancelled and drops its partial sums; the next request is unaffected', async () => {
+    const cell = new Int32Array(new SharedArrayBuffer(4));
+    const log: ToWorker[] = [];
+    const replies: unknown[] = [];
+    let n = 0;
+    const slow = heldWorker(log, (m) => m.type === 'stats', replies);
+    const pool = createWorkerPool(2, () => (n++ === 0 ? fakeWorker(log, false, replies) : slow), { abortCell: cell });
+    await pool.configure('42', DEFAULTS);
+    const req = settle(pool.stats('biomeShares', 2000, SHARES));
+    // Slice 0 completes on worker 1 (a partial sum); slice 1 is held on worker 2.
+    while (!replies.some((r) => (r as { type: string }).type === 'statsResult')) await new Promise((resolve) => setTimeout(resolve, 0));
+    const next = pool.configure('42', DEFAULTS);
+    slow.flush();
+    expect(await req).toBeInstanceOf(JobCancelled);
+    expect(replies).toContainEqual(expect.objectContaining({ type: 'error', epoch: 0, code: 'ABORTED' }));
+    expect((await next).epoch).toBe(1);
+    slow.holding = false;
+    const again = await pool.stats('biomeShares', 2000, SHARES);
+    expect(Array.from(again)).toEqual(Array.from(direct((o) => biomeSharesInto(ctxFor('42'), biomeSharePoints(), 0, 2000, o), SHARES.len)));
+    expect(statsOf(log)).toEqual([['biomeShares', 0, 1000], ['biomeShares', 1000, 2000], ['biomeShares', 0, 1000], ['biomeShares', 1000, 2000]]);
+  });
+
+  test('a queued stats request is cancelled by the next configure', async () => {
+    const pool = createWorkerPool(1, () => fakeWorker([]));
+    const first = pool.configure('42', DEFAULTS);
+    const req = settle(pool.stats('biomeShares', 100, SHARES));
+    const second = pool.configure('7', DEFAULTS);
+    expect(await settle(first)).toBeInstanceOf(JobCancelled);
+    expect(await req).toBeInstanceOf(JobCancelled);
+    expect((await second).epoch).toBe(1);
   });
 });

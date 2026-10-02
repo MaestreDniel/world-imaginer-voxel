@@ -53,9 +53,12 @@ export function biomeSharesLength(): number {
   return LEN;
 }
 
+/** Points in the preview's stream: the `n` of the pool's biomeShares request. */
+export const BIOME_SHARES_POINTS = 100000;
+
 /** The preview's fixed point stream (spec §5.5). */
 export function biomeSharePoints(): Points {
-  return SAMPLE_POINTS('sp2b.biomeShares', 100000);
+  return SAMPLE_POINTS('sp2b.biomeShares', BIOME_SHARES_POINTS);
 }
 
 /**

@@ -75,9 +75,12 @@ export function splineStatsLength(knotCount: number): number {
   return BINS + 2 * (knotCount + 1) + 3;
 }
 
+/** Points in the editor's stream: the `n` of the pool's splineStats request. */
+export const SPLINE_STATS_POINTS = 60000;
+
 /** The editor's fixed point stream (spec §4.3). */
 export function splineStatPoints(): Points {
-  return SAMPLE_POINTS('sp2b.splineStats', 60000);
+  return SAMPLE_POINTS('sp2b.splineStats', SPLINE_STATS_POINTS);
 }
 
 /**

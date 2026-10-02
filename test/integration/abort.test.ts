@@ -1,7 +1,9 @@
 import { Worker } from 'node:worker_threads';
 import { afterAll, beforeAll, expect, test } from 'vitest';
 import { DEFAULTS } from '../../src/core/params/defaults';
+import { BIOME_SHARES_POINTS, biomeSharePoints, biomeSharesInto, biomeSharesLength } from '../../src/metrics/biomeShares';
 import { buildNodeTaskWorker } from '../harness/nodeWorker';
+import { ctxFor } from '../harness/gen';
 
 /** Cooperative abort through the SharedArrayBuffer epoch cell, in real worker threads (SP2b spec §2.2, §8, §12). */
 let script = '';
@@ -54,4 +56,29 @@ test('a level-4 relief tile stops within 50 ms of Atomics.store and replies ABOR
     expect(sameBytes(a['rgba'], b['rgba']), `${layer} ${level} rgba`).toBe(true);
     if (layer === 'biome') expect(sameBytes(a['ids'], b['ids']), `${layer} ${level} ids`).toBe(true);
   }
+}, 120_000);
+
+test('a biomeShares stats slice stops within 50 ms of Atomics.store and replies ABORTED; the next slice equals the direct sums', async () => {
+  const cell = new Int32Array(new SharedArrayBuffer(4));
+  const w = start();
+  const len = biomeSharesLength();
+  const stats = (jobId: number, epoch: number, from: number, to: number) => ({ type: 'stats', jobId, epoch, kind: 'biomeShares', from, to, args: { len } });
+  Atomics.store(cell, 0, 1);
+  expect((await ask(w, configure(1, cell.buffer)))['type']).toBe('ready');
+  // The whole stream takes ≈ 0.7 s on one thread; the handler polls the cell every 256 points.
+  const reply = ask(w, stats(1, 1, 0, BIOME_SHARES_POINTS)).then((m) => ({ m, at: performance.now() }));
+  await new Promise((resolve) => setTimeout(resolve, 50));
+  const storedAt = performance.now();
+  Atomics.store(cell, 0, 2);
+  const { m, at } = await reply;
+  expect(m).toMatchObject({ type: 'error', jobId: 1, epoch: 1, code: 'ABORTED' });
+  const abortMs = at - storedAt;
+  expect(abortMs, `answered ${abortMs.toFixed(1)} ms after the store`).toBeLessThan(50);
+
+  expect((await ask(w, configure(2, cell.buffer)))['type']).toBe('ready');
+  const next = await ask(w, stats(2, 2, 1000, 3000));
+  expect(next).toMatchObject({ type: 'statsResult', jobId: 2, epoch: 2, kind: 'biomeShares' });
+  const want = new Float64Array(len);
+  biomeSharesInto(ctxFor('42'), biomeSharePoints(), 1000, 3000, want);
+  expect(Array.from(new Float64Array(next['data'] as ArrayBuffer))).toEqual(Array.from(want));
 }, 120_000);

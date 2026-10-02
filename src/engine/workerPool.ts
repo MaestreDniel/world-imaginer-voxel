@@ -3,14 +3,15 @@
  * stage hashes), a priority queue of jobs with at most one in flight per worker, cancellation, and
  * stale-epoch results dropped. The worker factory is injectable so the logic is testable without a browser.
  * SP2b §2.2-2.3: an optional abort cell (one pool-wide Int32 in a SharedArrayBuffer) holds the pool's epoch,
- * so a worker stops a superseded tile or spawn job within a row; job-less errors of other epochs are
- * ignored; a worker that raises an error event is removed and its pending work rejected with WorkerFailed.
+ * so a worker stops a superseded tile, spawn or stats job within a row or 256 points; job-less errors of
+ * other epochs are ignored; a worker that raises an error event is removed and its pending work rejected
+ * with WorkerFailed. SP2b §5.4: a stats request runs as `size` slices whose raw sums are added element-wise.
  */
 import type { MapLevel } from '../core/constants';
 import type { ColumnPoint } from '../gen/column/columnPoint';
 import type { Spawn } from '../gen/column/spawn';
 import type { LayerId } from '../gen/map/layers';
-import { parseFromWorker, type FromWorker, type ReadyMsg, type ToWorker } from '../workers/protocol';
+import { parseFromWorker, type FromWorker, type ReadyMsg, type StatsArgs, type StatsKind, type StatsMsg, type ToWorker } from '../workers/protocol';
 
 export interface WorkerLike {
   postMessage(msg: ToWorker, transfer?: Transferable[]): void;
@@ -56,6 +57,14 @@ export interface WorkerPool {
   tile(req: TileRequest, priority: number): Promise<TileResult>;
   point(x: number, z: number, priority?: number): Promise<ColumnPoint>;
   spawn(): Promise<Spawn>;
+  /**
+   * The raw sums of a stats kind over points [0, n) of its fixed stream (spec §5.4): `size` slices, sent as
+   * ordinary jobs at `priority` (default 500: after preview tiles, before fine tiles), whose Float64 sums of
+   * length args.len are added element-wise in slice order. The first slice that fails rejects the request
+   * with its error (JobCancelled when a configure superseded it) and drops its queued slices; nothing is
+   * retried. Rejects with RangeError when n is not a non-negative integer or args.len not a positive one.
+   */
+  stats<K extends StatsKind>(kind: K, n: number, args: StatsArgs<K>, priority?: number): Promise<Float64Array<ArrayBuffer>>;
   /** Recomputes one golden in a worker (no configure needed). */
   selftest(key: string): Promise<{ actual: string | null; error: string | null }>;
   /** Rejects queued tile jobs matching `pred` with JobCancelled. */
@@ -70,6 +79,8 @@ interface Job {
   readonly priority: number;
   readonly msg: ToWorker;
   readonly tile: TileRequest | null;
+  /** The stats request the job is a slice of (0: none). */
+  readonly group: number;
   readonly resolve: (v: FromWorker) => void;
   readonly reject: (e: Error) => void;
 }
@@ -92,6 +103,7 @@ export function createWorkerPool(size: number, spawn: () => WorkerLike, opts: Po
   let queue: Job[] = [];
   let epoch = -1;
   let nextId = 1;
+  let nextGroup = 1;
   let pendingReady: { need: number; got: ReadyMsg[]; resolve: (r: ReadyMsg) => void; reject: (e: Error) => void } | null = null;
   if (cell !== null) Atomics.store(cell, 0, epoch);
 
@@ -161,11 +173,22 @@ export function createWorkerPool(size: number, spawn: () => WorkerLike, opts: Po
     };
   });
 
-  const enqueue = (priority: number, build: (id: number) => ToWorker, tile: TileRequest | null): Promise<FromWorker> =>
+  /** Removes the queued slices of a stats request whose first slice failed (their promises are ignored). */
+  const dropGroup = (group: number) => {
+    const dropped = queue.filter((j) => j.group === group);
+    if (dropped.length === 0) return;
+    queue = queue.filter((j) => j.group !== group);
+    for (const j of dropped) j.reject(new JobCancelled());
+  };
+
+  const enqueue = (priority: number, build: (id: number) => ToWorker, tile: TileRequest | null, group = 0): Promise<FromWorker> =>
     new Promise((resolve, reject) => {
       if (live === 0) { reject(new WorkerFailed('every worker failed')); return; }
       const id = nextId++;
-      queue.push({ id, epoch, priority, msg: build(id), tile, resolve, reject });
+      // A failed slice rejects first (the request fails with its error), then drops its queued siblings
+      // before the pool pumps the next job.
+      const fail = group === 0 ? reject : (e: Error) => { reject(e); dropGroup(group); };
+      queue.push({ id, epoch, priority, msg: build(id), tile, group, resolve, reject: fail });
       pump();
     });
 
@@ -205,6 +228,28 @@ export function createWorkerPool(size: number, spawn: () => WorkerLike, opts: Po
       const r = await enqueue(-2, (jobId) => ({ type: 'spawn', jobId, epoch: e }), null);
       if (r.type !== 'spawnResult') throw new Error(`unexpected reply ${r.type}`);
       return r.spawn;
+    },
+    async stats(kind, n, args, priority = 500) {
+      if (!(Number.isSafeInteger(n) && n >= 0)) throw new RangeError(`stats: n = ${n} is not a non-negative integer`);
+      const len = args.len;
+      if (!(Number.isSafeInteger(len) && len >= 1)) throw new RangeError(`stats: args.len = ${len} is not a positive integer`);
+      const e = epoch;
+      const group = nextGroup++;
+      const slices: Array<Promise<FromWorker>> = [];
+      for (let i = 0; i < size; i++) {
+        const from = Math.floor((i * n) / size);
+        const to = Math.floor(((i + 1) * n) / size);
+        if (from === to) continue;
+        slices.push(enqueue(priority, (jobId) => ({ type: 'stats', jobId, epoch: e, kind, from, to, args }) as StatsMsg, null, group));
+      }
+      const sum = new Float64Array(len);
+      for (const r of await Promise.all(slices)) {
+        if (r.type !== 'statsResult') throw new Error(`unexpected reply ${r.type}`);
+        if (r.data.byteLength !== 8 * len) throw new Error(`stats slice: ${r.data.byteLength} bytes, expected ${8 * len}`);
+        const part = new Float64Array(r.data);
+        for (let k = 0; k < len; k++) sum[k]! += part[k]!;
+      }
+      return sum;
     },
     async selftest(key) {
       const r = await enqueue(0, (jobId) => ({ type: 'selftest', jobId, key }), null);

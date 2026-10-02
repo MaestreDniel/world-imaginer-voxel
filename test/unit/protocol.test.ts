@@ -1,15 +1,23 @@
 import { describe, expect, test } from 'vitest';
 import { DEFAULTS } from '../../src/core/params/defaults';
+import { flattenKnot } from '../../src/core/spline/edit';
+import type { KnotPath } from '../../src/core/spline/types';
 import { columnPoint } from '../../src/gen/column/columnPoint';
 import { findSpawn } from '../../src/gen/column/spawn';
+import { BIOME_SHARES_POINTS, biomeSharePoints, biomeSharesInto, biomeSharesLength } from '../../src/metrics/biomeShares';
 import { computeAnyGolden } from '../../src/metrics/sp2aGoldens';
+import { SPLINE_STATS_POINTS, splineStatPoints, splineStatsInto, splineStatsLength, splineStatsNode, type SplineLeaf } from '../../src/metrics/splineStats';
 import { paintTile, paintTileAbortable } from '../../src/gen/map/tile';
+import { leafOpts } from '../../src/ui/splineEditor/model';
 import { parseFromWorker, parseToWorker, pointInWindow, tileInWindow } from '../../src/workers/protocol';
 import { createTaskHandler } from '../../src/workers/taskHandler';
 import { ctxFor } from '../harness/gen';
 
 const tileMsg = { type: 'mapTile', jobId: 1, epoch: 3, layer: 'biome', level: 64, tx: 2, tz: -1 };
 const configure = (epoch: number, abort: SharedArrayBuffer | null = null, params: unknown = DEFAULTS, seedText = '42') => ({ type: 'configure', epoch, seedText, params, abort });
+const stats = (jobId: number, epoch: number, kind: string, from: number, to: number, args: unknown) => ({ type: 'stats', jobId, epoch, kind, from, to, args });
+/** The length of a splineStats sum for the node at `node` of the leaf's default spline. */
+const splineLen = (leaf: SplineLeaf, node: KnotPath) => splineStatsLength(splineStatsNode(DEFAULTS, leaf, node)!.points.length);
 /** Byte equality through Buffer (vitest's deep equality is slow on 262 144-byte arrays). */
 const sameBytes = (a: ArrayBufferLike, b: ArrayBufferLike | ArrayBufferView) =>
   Buffer.from(a).equals(ArrayBuffer.isView(b) ? Buffer.from(b.buffer, b.byteOffset, b.byteLength) : Buffer.from(b));
@@ -22,6 +30,8 @@ describe('parseToWorker', () => {
     expect(parseToWorker({ type: 'point', jobId: 2, epoch: 3, x: 1.5, z: -7 })).not.toBeNull();
     expect(parseToWorker({ type: 'spawn', jobId: 4, epoch: 3 })).not.toBeNull();
     expect(parseToWorker({ type: 'selftest', jobId: 5, key: 'sp1.params' })).not.toBeNull();
+    expect(parseToWorker(stats(6, 3, 'splineStats', 0, 100, { len: 87, leaf: 'shape.offset', node: [6, 0] }))).not.toBeNull();
+    expect(parseToWorker(stats(7, 3, 'biomeShares', 5, 5, { len: 31 }))).not.toBeNull();
   });
   test.each<[string, unknown]>([
     ['not an object', 5],
@@ -39,6 +49,16 @@ describe('parseToWorker', () => {
     ['point on the window edge x = 2^19 (SP2a minor 1)', { type: 'point', jobId: 2, epoch: 3, x: 524288, z: 0 }],
     ['point on the window edge z = 2^19', { type: 'point', jobId: 2, epoch: 3, x: 0, z: 524288 }],
     ['non-finite point', { type: 'point', jobId: 2, epoch: 3, x: Number.NaN, z: 0 }],
+    ['stats of an unknown kind', stats(6, 3, 'nope', 0, 10, { len: 31 })],
+    ['stats with from > to', stats(6, 3, 'biomeShares', 10, 9, { len: 31 })],
+    ['stats with a negative from', stats(6, 3, 'biomeShares', -1, 9, { len: 31 })],
+    ['stats with a non-integer to', stats(6, 3, 'biomeShares', 0, 9.5, { len: 31 })],
+    ['stats without args', { type: 'stats', jobId: 6, epoch: 3, kind: 'biomeShares', from: 0, to: 9 }],
+    ['stats with args.len 0', stats(6, 3, 'biomeShares', 0, 9, { len: 0 })],
+    ['stats with a non-integer args.len', stats(6, 3, 'biomeShares', 0, 9, { len: 31.5 })],
+    ['splineStats whose leaf is not a string', stats(6, 3, 'splineStats', 0, 9, { len: 87, leaf: 7, node: [] })],
+    ['splineStats whose node is not an array', stats(6, 3, 'splineStats', 0, 9, { len: 87, leaf: 'shape.offset', node: '6' })],
+    ['splineStats whose node holds a non-integer', stats(6, 3, 'splineStats', 0, 9, { len: 87, leaf: 'shape.offset', node: [0.5] })],
   ])('%s is rejected', (_n, m) => {
     expect(parseToWorker(m)).toBeNull();
   });
@@ -67,6 +87,16 @@ describe('parseFromWorker', () => {
     expect(parseFromWorker({ type: 'error', jobId: 4, epoch: 3, code: 'ABORTED', message: 'x' })).not.toBeNull();
     expect(parseFromWorker({ type: 'error', jobId: null, code: 'BAD_MESSAGE', message: 'x' })).toBeNull();
     expect(parseFromWorker({ type: 'error', jobId: null, epoch: 1.5, code: 'BAD_MESSAGE', message: 'x' })).toBeNull();
+  });
+  test('stats results carry a whole, non-zero number of Float64 values in an ArrayBuffer', () => {
+    const result = (kind: string, data: unknown) => ({ type: 'statsResult', jobId: 6, epoch: 3, kind, data });
+    expect(parseFromWorker(result('biomeShares', new ArrayBuffer(8 * 31)))).not.toBeNull();
+    expect(parseFromWorker(result('splineStats', new ArrayBuffer(8)))).not.toBeNull();
+    expect(parseFromWorker(result('biomeShares', new ArrayBuffer(12)))).toBeNull();
+    expect(parseFromWorker(result('biomeShares', new ArrayBuffer(0)))).toBeNull();
+    expect(parseFromWorker(result('biomeShares', new Float64Array(31)))).toBeNull();
+    expect(parseFromWorker(result('nope', new ArrayBuffer(8)))).toBeNull();
+    expect(parseFromWorker({ ...result('biomeShares', new ArrayBuffer(8)), jobId: null })).toBeNull();
   });
 });
 
@@ -144,6 +174,68 @@ describe('task handler', () => {
     Atomics.store(cell, 0, 3);
     expect(h.handle({ ...tileMsg, level: 256 }).msg.type).toBe('tile');
     expect(h.handle({ type: 'spawn', jobId: 5, epoch: 3 }).msg.type).toBe('spawnResult');
+  });
+  test('stats jobs reply with the raw sums of the metrics functions over their point range, transferred (SP2b spec §5.4)', () => {
+    const h = createTaskHandler();
+    h.handle(configure(3));
+    const ctx = ctxFor('42');
+    const cases: Array<[unknown, Float64Array]> = [];
+    for (const node of [[], [6], [6, 0]] as const) {
+      const len = splineLen('shape.offset', node);
+      const out = new Float64Array(len);
+      expect(splineStatsInto(ctx, 'shape.offset', node, splineStatPoints(), 1000, 4000, out)).toBe(true);
+      cases.push([stats(20 + node.length, 3, 'splineStats', 1000, 4000, { len, leaf: 'shape.offset', node }), out]);
+    }
+    const shares = new Float64Array(biomeSharesLength());
+    expect(biomeSharesInto(ctx, biomeSharePoints(), BIOME_SHARES_POINTS - 1500, BIOME_SHARES_POINTS, shares)).toBe(true);
+    cases.push([stats(30, 3, 'biomeShares', BIOME_SHARES_POINTS - 1500, BIOME_SHARES_POINTS, { len: biomeSharesLength() }), shares]);
+    for (const [msg, want] of cases) {
+      const r = h.handle(msg);
+      const { jobId, kind } = msg as { jobId: number; kind: string };
+      expect(r.msg).toMatchObject({ type: 'statsResult', jobId, epoch: 3, kind });
+      if (r.msg.type !== 'statsResult') return;
+      expect(r.transfer).toEqual([r.msg.data]);
+      expect(Array.from(new Float64Array(r.msg.data))).toEqual(Array.from(want));
+    }
+  });
+  test('the streams are the metrics streams: splineStats has 60 000 points, biomeShares 100 000', () => {
+    expect([SPLINE_STATS_POINTS, splineStatPoints().n, BIOME_SHARES_POINTS, biomeSharePoints().n]).toEqual([60000, 60000, 100000, 100000]);
+  });
+  test('stats arguments that do not fit the configured params reply BAD_ARGS with the job\'s epoch', () => {
+    const flat = flattenKnot(DEFAULTS.shape.offset, [6], new Float64Array(6), leafOpts('shape.offset'));
+    if (!flat.ok) throw new Error('flatten failed');
+    const h = createTaskHandler();
+    h.handle(configure(3, null, { ...DEFAULTS, shape: { ...DEFAULTS.shape, offset: flat.value } }));
+    const root = splineLen('shape.offset', []);
+    const code = (m: unknown) => {
+      const r = h.handle(m).msg;
+      return r.type === 'error' ? [r.code, r.jobId, r.epoch] : [r.type];
+    };
+    // Node [6] exists in the default offset, not in the configured (flattened) one.
+    expect(code(stats(1, 3, 'splineStats', 0, 10, { len: splineLen('shape.offset', [6]), leaf: 'shape.offset', node: [6] }))).toEqual(['BAD_ARGS', 1, 3]);
+    expect(code(stats(2, 3, 'splineStats', 0, 10, { len: root, leaf: 'shape.offset', node: [0] }))).toEqual(['BAD_ARGS', 2, 3]);
+    expect(code(stats(3, 3, 'splineStats', 0, 10, { len: root, leaf: 'shape.offset', node: [99] }))).toEqual(['BAD_ARGS', 3, 3]);
+    expect(code(stats(4, 3, 'splineStats', 0, 10, { len: root, leaf: 'shape.nope', node: [] }))).toEqual(['BAD_ARGS', 4, 3]);
+    expect(code(stats(5, 3, 'splineStats', 0, 10, { len: root + 2, leaf: 'shape.offset', node: [] }))).toEqual(['BAD_ARGS', 5, 3]);
+    expect(code(stats(6, 3, 'splineStats', 0, SPLINE_STATS_POINTS + 1, { len: root, leaf: 'shape.offset', node: [] }))).toEqual(['BAD_ARGS', 6, 3]);
+    expect(code(stats(7, 3, 'biomeShares', 0, 10, { len: biomeSharesLength() - 1 }))).toEqual(['BAD_ARGS', 7, 3]);
+    expect(code(stats(8, 3, 'biomeShares', BIOME_SHARES_POINTS, BIOME_SHARES_POINTS + 1, { len: biomeSharesLength() }))).toEqual(['BAD_ARGS', 8, 3]);
+    expect(code(stats(9, 3, 'splineStats', 0, 10, { len: root, leaf: 'shape.offset', node: [] }))).toEqual(['statsResult']);
+    expect(code(stats(10, 3, 'splineStats', 0, 10, { len: splineLen('shape.jag', [1]), leaf: 'shape.jag', node: [1] }))).toEqual(['statsResult']);
+  });
+  test('with an abort cell, a stats job whose epoch the cell has left replies ABORTED', () => {
+    const sab = new SharedArrayBuffer(4);
+    const cell = new Int32Array(sab);
+    const h = createTaskHandler();
+    Atomics.store(cell, 0, 3);
+    h.handle(configure(3, sab));
+    Atomics.store(cell, 0, 4);
+    const r = h.handle(stats(1, 3, 'biomeShares', 0, 1000, { len: biomeSharesLength() }));
+    expect(r.msg).toMatchObject({ type: 'error', jobId: 1, epoch: 3, code: 'ABORTED' });
+    expect(r.transfer).toEqual([]);
+    expect(h.handle(stats(2, 3, 'splineStats', 0, 1000, { len: splineLen('shape.offset', []), leaf: 'shape.offset', node: [] })).msg).toMatchObject({ code: 'ABORTED' });
+    Atomics.store(cell, 0, 3);
+    expect(h.handle(stats(3, 3, 'biomeShares', 0, 1000, { len: biomeSharesLength() })).msg.type).toBe('statsResult');
   });
   test('selftest needs no configure and reports digests or errors per key', () => {
     const h = createTaskHandler();
