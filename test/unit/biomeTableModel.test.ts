@@ -4,13 +4,18 @@ import { DEFAULTS } from '../../src/core/params/defaults';
 import { q15 } from '../../src/core/params/canonical';
 import { applyPatch, BOX_AXES, type BoxTable, type Interval, type Issue } from '../../src/core/params/kit';
 import { SCHEMA } from '../../src/core/params/schema';
-import { biomeFamily, biomeId } from '../../src/gen/biomes/registry';
+import { JobCancelled, type WorkerPool } from '../../src/engine/workerPool';
+import { biomeFamily, biomeId, SURFACE_BIOMES, type SurfaceBiome } from '../../src/gen/biomes/registry';
 import { LAYERS } from '../../src/gen/map/layers';
+import { BIOME_SHARES_POINTS, biomeSharesLength, summarizeBiomeShares, type BiomeShareSummary } from '../../src/metrics/biomeShares';
 import {
-  barFraction, barValue, BIOME_TABLE_PATH, dragAxisEnd, HIGHLIGHT_NOTICE, hitBarEnd, intervalText, modifiedRows, resetRow, rowChanges,
-  rowHover, rowIssueText, setAxis, setAxisText, setPriority, setPriorityText, setWSign, swatchColor, TABLE_FAMILIES, tableRows, type TableEdit,
+  barFraction, barValue, BIOME_TABLE_PATH, countText, createShareRequests, dragAxisEnd, HIGHLIGHT_NOTICE, hitBarEnd, intervalText, modifiedRows, resetRow,
+  rowChanges, rowHover, rowIssueText, setAxis, setAxisText, setPriority, setPriorityText, setWSign, SHARE_LIMITS, shareChart, shareScale,
+  sharesStatus, shareText, sharesView, shareWarnings, swatchColor, TABLE_FAMILIES, tableRows, type ShareWarning, type TableEdit,
 } from '../../src/ui/biomeTable/model';
+import type { StatsArgs, StatsKind } from '../../src/workers/protocol';
 import { testRng } from '../harness/stats';
+import { THRESHOLDS } from '../thresholds';
 
 /** Deep-frozen: an edit that mutated its input would throw. */
 const T = DEFAULTS.biomes.table;
@@ -303,5 +308,263 @@ describe('typed cells, bars, row issues and the map highlight (Task 19)', () => 
     expect(swatchColor(biomeId('plains'))).toBe('#8db360');
     expect(swatchColor(biomeId('deep_ocean'))).toBe('#0f2f6a');
     for (const r of tableRows(T, 'priority', null)) expect(swatchColor(r.biome)).toMatch(/^#[0-9a-f]{6}$/);
+  });
+});
+
+describe('biome share preview (Task 22, spec §5.5)', () => {
+  /** Counts of seed 42's default world over the §5.5 stream (100 000 points, measured with biomeSharesInto; 181 outside, no ties). */
+  const SEED42: Readonly<Record<SurfaceBiome, number>> = {
+    ocean: 14751, deep_ocean: 16080, warm_ocean: 9066, frozen_ocean: 4485, beach: 1925, snowy_beach: 471, stony_shore: 1434,
+    river: 1463, frozen_river: 388, plains: 1895, meadow: 2139, forest: 1320, birch_forest: 1286, dark_forest: 2384, taiga: 6693,
+    snowy_taiga: 2789, snowy_plains: 4099, desert: 4210, savanna: 3999, swamp: 589, jungle: 2445, badlands: 2687,
+    windswept_hills: 5079, snowy_slopes: 4995, stony_peaks: 1340, jagged_peaks: 650, frozen_peaks: 692, volcano: 646,
+  };
+  const NB = SURFACE_BIOMES.length;
+  /** The raw sum of a result: per-biome counts, then ties, outside and the total (the counts' sum). */
+  const rawSum = (counts: Readonly<Record<SurfaceBiome, number>>, ties = 0, outside = 0): Float64Array<ArrayBuffer> => {
+    const sum = new Float64Array(biomeSharesLength());
+    SURFACE_BIOMES.forEach((name, id) => {
+      sum[id] = counts[name];
+      sum[NB + 2]! += counts[name];
+    });
+    sum[NB] = ties;
+    sum[NB + 1] = outside;
+    return sum;
+  };
+  const summary = (counts: Readonly<Record<SurfaceBiome, number>>, ties = 0, outside = 0): BiomeShareSummary =>
+    summarizeBiomeShares(rawSum(counts, ties, outside));
+  /** SEED42 with some counts replaced; the total stays 100 000, as in a real result. */
+  const edited = (set: Partial<Record<SurfaceBiome, number>>): Record<SurfaceBiome, number> => {
+    const c = { ...SEED42, ...set };
+    expect(SURFACE_BIOMES.reduce((a, n) => a + c[n], 0)).toBe(100000);
+    return c;
+  };
+  const kinds = (ws: readonly ShareWarning[]) => ws.map((w) => w.kind);
+
+  test('the warning limits are B1\'s thresholds', () => {
+    const b1 = THRESHOLDS.B1!;
+    expect(SHARE_LIMITS).toEqual({
+      unreachable: b1['minRareShare']!.min, dominant: b1['largestLand']!.max, oceanMin: b1['oceanFamilyMin']!.min,
+      oceanMax: b1['oceanFamilyMax']!.max, ties: b1['ties']!.max, outside: b1['outside']!.max,
+    });
+    expect(SHARE_LIMITS).toEqual({ unreachable: 0.001, dominant: 0.16, oceanMin: 0.25, oceanMax: 0.45, ties: 0, outside: 0.02 });
+  });
+  test('shareText: two decimals from 1 %, three below, 0 % for none; countText groups thousands', () => {
+    expect([0.44382, 0.0421, 0.01, 0.161, 1].map(shareText)).toEqual(['44.38 %', '4.21 %', '1.00 %', '16.10 %', '100.00 %']);
+    expect([0.00388, 0.00099, 0.00001].map(shareText)).toEqual(['0.388 %', '0.099 %', '0.001 %']);
+    expect(shareText(0)).toBe('0 %');
+    expect([0, 999, 1000, 100000, 1234567].map(countText)).toEqual(['0', '999', '1 000', '100 000', '1 234 567']);
+  });
+  test('the default world at seed 42 gives no warning', () => {
+    const s = summary(SEED42, 0, 181);
+    expect(s.total).toBe(BIOME_SHARES_POINTS);
+    expect(shareWarnings(s)).toEqual([]);
+  });
+  test('unreachable: a biome under 0.1 % of the points (rivers included); exactly 0.1 % is not', () => {
+    expect(shareWarnings(summary(edited({ volcano: 100, taiga: 6693 + 546 })))).toEqual([]);
+    expect(shareWarnings(summary(edited({ volcano: 99, taiga: 6693 + 547 })))).toEqual([
+      { kind: 'unreachable', biome: biomeId('volcano'), text: 'volcano 0.099 %: unreachable (below 0.1 %)' },
+    ]);
+    expect(shareWarnings(summary(edited({ frozen_river: 0, taiga: 6693 + 388 })))).toEqual([
+      { kind: 'unreachable', biome: biomeId('frozen_river'), text: 'frozen_river 0 %: unreachable (below 0.1 %)' },
+    ]);
+  });
+  test('dominant: a land biome (coast, lowland or highland) above 16 %; exactly 16 %, oceans and rivers are not', () => {
+    expect(shareWarnings(summary(edited({ plains: 16000, deep_ocean: 16080 - 14105 })))).toEqual([]);
+    expect(shareWarnings(summary(edited({ plains: 16100, deep_ocean: 16080 - 14205 })))).toEqual([
+      { kind: 'dominant', biome: biomeId('plains'), text: 'plains 16.10 %: dominant (above 16 % for a land biome)' },
+    ]);
+    expect(shareWarnings(summary(edited({ beach: 16100, deep_ocean: 16080 - 14175 })))).toEqual([
+      { kind: 'dominant', biome: biomeId('beach'), text: 'beach 16.10 %: dominant (above 16 % for a land biome)' },
+    ]);
+    expect(shareWarnings(summary(edited({ river: 17000, deep_ocean: 16080 - 15537 })))).toEqual([]);
+    expect(summary(SEED42).shares[biomeId('deep_ocean')]).toBeGreaterThan(0.16);
+  });
+  test('ocean family outside 25-45 %', () => {
+    expect(shareWarnings(summary(edited({ ocean: 14751 + 617, taiga: 6693 - 617 })))).toEqual([]);
+    expect(shareWarnings(summary(edited({ ocean: 14751 + 1118, taiga: 6693 - 1118 })))).toEqual([
+      { kind: 'ocean', biome: null, text: 'ocean family 45.50 %: outside 25-45 %' },
+    ]);
+    const low = edited({ ocean: 10849, deep_ocean: 100, taiga: 6693 + 6000, desert: 4210 + 6000, savanna: 3999 + 6000, plains: 1895 + 1882 });
+    expect(shareWarnings(summary(low))).toEqual([{ kind: 'ocean', biome: null, text: 'ocean family 24.50 %: outside 25-45 %' }]);
+  });
+  test('ties: any tied point; outside every box: above 2 %', () => {
+    expect(shareWarnings(summary(SEED42, 12))).toEqual([
+      { kind: 'ties', biome: null, text: 'ties 0.012 % (12 points): two boxes fit equally and the priority decides' },
+    ]);
+    expect(shareWarnings(summary(SEED42, 0, 2000))).toEqual([]);
+    expect(shareWarnings(summary(SEED42, 0, 2500))).toEqual([{ kind: 'outside', biome: null, text: 'outside every box 2.50 %: above 2 %' }]);
+  });
+  test('warnings come in the spec\'s order: unreachable and dominant biomes in registry order, ocean family, ties, outside', () => {
+    const c = edited({ frozen_river: 0, volcano: 50, plains: 16100, deep_ocean: 100, ocean: 10000, taiga: 6693 + 2759, desert: 4210 + 4751 });
+    const ws = shareWarnings(summary(c, 3, 2100));
+    expect(kinds(ws)).toEqual(['unreachable', 'unreachable', 'dominant', 'ocean', 'ties', 'outside']);
+    expect(ws.map((w) => w.text)).toEqual([
+      'frozen_river 0 %: unreachable (below 0.1 %)',
+      'volcano 0.050 %: unreachable (below 0.1 %)',
+      'plains 16.10 %: dominant (above 16 % for a land biome)',
+      'ocean family 23.65 %: outside 25-45 %',
+      'ties 0.003 % (3 points): two boxes fit equally and the priority decides',
+      'outside every box 2.10 %: above 2 %',
+    ]);
+  });
+  test('an empty result (no points) has no warnings', () => {
+    expect(shareWarnings(summarizeBiomeShares(new Float64Array(biomeSharesLength())))).toEqual([]);
+  });
+  test('shareScale: the largest share rounded up to 5 %, at least 20 %', () => {
+    expect([0, 0.1608, 0.2, 0.2001, 0.3, 0.55, 0.551, 1].map(shareScale)).toEqual([0.2, 0.2, 0.2, 0.25, 0.3, 0.55, 0.6, 1]);
+  });
+  test('shareChart: one bar per surface biome in registry order, scaled, with its warning and the 16 % mark on land rows', () => {
+    const s = summary(SEED42, 0, 181);
+    const chart = shareChart(s);
+    expect(chart.scale).toBe(0.2);
+    expect(chart.dominantAt).toBeCloseTo(0.8, 12);
+    expect(chart.bars.map((b) => b.name)).toEqual(SURFACE_BIOMES);
+    chart.bars.forEach((b, id) => {
+      expect(b.biome).toBe(id);
+      expect(b.family).toBe(biomeFamily(id));
+      expect(b.land).toBe(b.family !== 'ocean' && b.family !== 'river');
+      expect(b.share).toBe(s.shares[id]);
+      expect(b.fraction).toBeCloseTo(s.shares[id]! / 0.2, 12);
+      expect(b.text).toBe(shareText(s.shares[id]!));
+      expect(b.warning).toBeNull();
+    });
+    expect(chart.bars[biomeId('deep_ocean')]!.text).toBe('16.08 %');
+    expect(chart.warnings).toEqual([]);
+    expect(chart.totals).toBe('ocean family 44.38 % · ties 0 % · outside every box 0.181 % · 100 000 points');
+
+    const c = edited({ frozen_river: 0, volcano: 50, plains: 16100, deep_ocean: 100, ocean: 10000, taiga: 6693 + 2759, desert: 4210 + 4751 });
+    const warned = shareChart(summary(c, 3, 2100));
+    expect(warned.warnings).toEqual(shareWarnings(summary(c, 3, 2100)));
+    expect(warned.bars.filter((b) => b.warning !== null).map((b) => [b.name, b.warning])).toEqual([
+      ['frozen_river', 'unreachable'], ['plains', 'dominant'], ['volcano', 'unreachable'],
+    ]);
+    // Plains as many points as every other biome together: half the points, so the scale is 50 %.
+    const big = shareChart(summary({ ...SEED42, plains: 100000 - 1895 }));
+    expect(big.scale).toBe(0.5);
+    expect(big.dominantAt).toBeCloseTo(0.32, 12);
+    expect(big.bars[biomeId('plains')]!.fraction).toBe(1);
+  });
+  test('sharesView and sharesStatus: none before a result, fresh on its draft, stale from the next change or during a gesture', () => {
+    expect(sharesView(null, 3, false)).toBe('none');
+    expect(sharesView(null, 3, true)).toBe('none');
+    expect(sharesView(3, 3, false)).toBe('fresh');
+    expect(sharesView(3, 3, true)).toBe('stale');
+    expect(sharesView(2, 3, false)).toBe('stale');
+    expect(sharesStatus('none', false)).toBe('shares follow when the preview settles');
+    expect(sharesStatus('none', true)).toBe('computing…');
+    expect(sharesStatus('fresh', false)).toBe('');
+    expect(sharesStatus('stale', false)).toBe('stale: updates when the preview settles');
+    expect(sharesStatus('stale', true)).toBe('stale: computing…');
+  });
+
+  interface StatsCall {
+    readonly kind: StatsKind;
+    readonly n: number;
+    readonly args: unknown;
+    readonly priority: number | undefined;
+    resolve(v: Float64Array<ArrayBuffer>): void;
+    reject(e: unknown): void;
+  }
+  /** createShareRequests over a fake session (epoch 3), a pool whose stats calls the test settles, and a visibility switch. */
+  const requests = () => {
+    const calls: StatsCall[] = [];
+    const session = { state: { epoch: 3 }, inGesture: false };
+    const failures: string[] = [];
+    let visible = true;
+    let changes = 0;
+    const pool: Pick<WorkerPool, 'stats'> = {
+      stats: <K extends StatsKind>(kind: K, n: number, args: StatsArgs<K>, priority?: number) =>
+        new Promise<Float64Array<ArrayBuffer>>((resolve, reject) => { calls.push({ kind, n, args, priority, resolve, reject }); }),
+    };
+    const r = createShareRequests({
+      session, pool, visible: () => visible, changed: () => { changes++; }, failed: (m) => { failures.push(m); },
+    });
+    return { r, calls, session, failures, show: (v: boolean) => { visible = v; }, changes: () => changes };
+  };
+  const flush = () => new Promise<void>((done) => { setTimeout(done, 0); });
+
+  test('requests biomeShares over the whole stream once per session epoch, only when settled, on screen and outside a gesture', async () => {
+    const h = requests();
+    h.r.request(false);
+    h.show(false);
+    h.r.request(true);
+    h.show(true);
+    h.session.inGesture = true;
+    h.r.request(true);
+    expect(h.calls).toHaveLength(0);
+    expect(h.changes()).toBe(0);
+    h.session.inGesture = false;
+    h.r.request(true);
+    expect(h.calls.map((c) => [c.kind, c.n, c.args, c.priority])).toEqual([['biomeShares', BIOME_SHARES_POINTS, { len: biomeSharesLength() }, undefined]]);
+    expect(h.r.pending).toBe(3);
+    expect(h.r.shown).toBeNull();
+    expect(h.changes()).toBe(1);
+    h.r.request(true);
+    expect(h.calls).toHaveLength(1);
+    h.calls[0]!.resolve(rawSum(SEED42, 0, 181));
+    await flush();
+    expect(h.r.pending).toBeNull();
+    expect(h.r.shown?.epoch).toBe(3);
+    expect(h.r.shown?.summary).toEqual(summary(SEED42, 0, 181));
+    expect(h.changes()).toBe(2);
+    h.r.request(true);
+    expect(h.calls).toHaveLength(1);
+    h.session.state = { epoch: 4 };
+    h.r.request(true);
+    expect(h.calls).toHaveLength(2);
+    expect(h.r.pending).toBe(4);
+    expect(h.r.shown?.epoch).toBe(3);
+  });
+  test('only the latest request\'s result is shown', async () => {
+    const h = requests();
+    h.r.request(true);
+    h.session.state = { epoch: 5 };
+    h.r.request(true);
+    h.calls[0]!.resolve(rawSum(SEED42));
+    await flush();
+    expect(h.r.shown).toBeNull();
+    expect(h.r.pending).toBe(5);
+    h.calls[1]!.resolve(rawSum(SEED42, 7));
+    await flush();
+    expect(h.r.shown?.epoch).toBe(5);
+    expect(h.r.shown?.summary.ties).toBe(7 / 100000);
+    expect(h.r.pending).toBeNull();
+  });
+  test('JobCancelled keeps the last result (stale) silently; the next settle requests again', async () => {
+    const h = requests();
+    h.r.request(true);
+    h.calls[0]!.resolve(rawSum(SEED42));
+    await flush();
+    const shown = h.r.shown;
+    h.session.state = { epoch: 4 };
+    h.r.request(true);
+    h.calls[1]!.reject(new JobCancelled());
+    await flush();
+    expect(h.r.shown).toBe(shown);
+    expect(h.r.pending).toBeNull();
+    expect(h.failures).toEqual([]);
+    expect(sharesView(h.r.shown!.epoch, h.session.state.epoch, false)).toBe('stale');
+    h.r.request(true);
+    expect(h.calls).toHaveLength(3);
+  });
+  test('any other error keeps the last result (stale) and reports the failure', async () => {
+    const h = requests();
+    h.r.request(true);
+    h.calls[0]!.resolve(rawSum(SEED42));
+    await flush();
+    const shown = h.r.shown;
+    h.session.state = { epoch: 4 };
+    h.r.request(true);
+    h.calls[1]!.reject(new Error('BAD_ARGS: args.len 30, expected 31'));
+    await flush();
+    expect(h.r.shown).toBe(shown);
+    expect(h.r.pending).toBeNull();
+    expect(h.failures).toEqual(['BAD_ARGS: args.len 30, expected 31']);
+    h.session.state = { epoch: 5 };
+    h.r.request(true);
+    h.calls[2]!.reject('worker gone');
+    await flush();
+    expect(h.failures).toEqual(['BAD_ARGS: args.len 30, expected 31', 'worker gone']);
   });
 });

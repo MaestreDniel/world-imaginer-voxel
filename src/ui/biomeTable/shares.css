@@ -1,0 +1,27 @@
+/* The biome share preview (SP2b spec §5.5): a bar per surface biome, the warnings and the totals; dimmed while stale. */
+.bs { margin-bottom: 8px; padding-bottom: 8px; border-bottom: 1px solid #2c3038; }
+.bs [hidden] { display: none !important; }
+.bs-head { display: flex; flex-wrap: wrap; align-items: baseline; gap: 2px 8px; cursor: pointer; list-style: none; }
+.bs-head::-webkit-details-marker { display: none; }
+.bs-head::before { content: '▾'; width: 0.8em; color: #9aa; }
+.bs:not([open]) .bs-head::before { content: '▸'; }
+.bs-title { font-size: 12px; font-weight: 600; text-transform: uppercase; color: #9aa; }
+.bs-status { font-size: 12px; color: #8a95a8; }
+.bs[data-state="stale"] .bs-status { color: #f0b34a; }
+.bs-help { margin: 4px 0; font-size: 12px; color: #9aa; }
+.bs-warnings { margin: 4px 0 6px; padding: 0; list-style: none; font-size: 12px; }
+.bs-warning { color: #f0b34a; }
+.bs-warning::before { content: '⚠ '; }
+.bs-ok { color: #8a95a8; }
+.bs-chart { display: flex; flex-direction: column; gap: 1px; font-size: 11px; }
+.bs-row { display: grid; grid-template-columns: 10px 8.5em minmax(40px, 1fr) 4.6em; align-items: center; gap: 6px; }
+.bs-swatch { box-sizing: border-box; width: 10px; height: 10px; border: 1px solid rgba(0, 0, 0, 0.5); border-radius: 2px; }
+.bs-name { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: #c8d0dc; }
+.bs-track { position: relative; height: 9px; background: #15171b; border-radius: 1px; }
+.bs-fill { position: absolute; left: 0; top: 0; bottom: 0; background: #4a6fa5; border-radius: 1px; }
+.bs-mark { position: absolute; top: -1px; bottom: -1px; border-left: 1px dashed rgba(240, 179, 74, 0.6); }
+.bs-value { text-align: right; font-family: ui-monospace, monospace; color: #b8c2d0; }
+.bs-row.bs-warn .bs-name, .bs-row.bs-warn .bs-value { color: #f0b34a; }
+.bs-row.bs-warn .bs-fill { background: #b8862f; }
+.bs-totals { margin-top: 4px; font-size: 11px; color: #9aa; }
+.bs[data-state="stale"] .bs-warnings, .bs[data-state="stale"] .bs-chart, .bs[data-state="stale"] .bs-totals { opacity: 0.4; }

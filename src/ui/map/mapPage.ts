@@ -4,8 +4,9 @@
  * configure cycles (§2.6), the map canvas, the URL (§1.4: written on every change, read on `hashchange`)
  * and the global shortcuts (§3.5). The World tab shows the session status, the spawn and the hover readout
  * (§3.3); the Parameters tab holds the parameter panel (§3.2), whose spline "Edit" opens the spline drawer
- * under the map (§4.2); the Biomes tab holds the biome table (§5.2), whose hovered row the canvas highlights
- * on the biome layer (§5.3); the Presets tab exports and imports preset files and holds the JSON patch box (§3.4).
+ * under the map (§4.2); the Biomes tab holds the biome share preview (§5.5) over the biome table (§5.2), whose
+ * hovered row the canvas highlights on the biome layer (§5.3); the Presets tab exports and imports preset files
+ * and holds the JSON patch box (§3.4).
  * `?map&perf=edit` also loads the latency hook (§2.8, `perfHook.ts`), which pins the canvas and the world.
  */
 import './map.css';
@@ -14,6 +15,7 @@ import { createBrowserPool } from '../../engine/workerPool';
 import { biomeName } from '../../gen/biomes/registry';
 import type { Spawn } from '../../gen/column/spawn';
 import { HIGHLIGHT_NOTICE, rowHover } from '../biomeTable/model';
+import { createBiomeShares } from '../biomeTable/shares';
 import { createBiomeTable } from '../biomeTable/table';
 import { el } from '../common/dom';
 import { installShortcuts } from '../common/keys';
@@ -161,8 +163,18 @@ export async function mountMapPage(root: HTMLElement): Promise<void> {
     close: () => layout.closeDrawer(),
   });
 
-  // Biomes tab (§5.2): hovering a row highlights its biome on the biome layer, else shows a notice (§5.3).
-  createBiomeTable(layout.tabs.biomes, { session, edit, hover: hoverBiome });
+  // Biomes tab: the biome share preview (§5.5), requested when the driver settles while the tab is on screen and
+  // when the tab comes on screen; then the table (§5.2), whose hovered row highlights its biome on the biome layer,
+  // else shows a notice (§5.3).
+  const sharesHost = el('div');
+  const tableHost = el('div');
+  layout.tabs.biomes.append(sharesHost, tableHost);
+  const shares = createBiomeShares(sharesHost, {
+    session, notices, pool, driver,
+    tabVisible: () => layout.panelVisible && layout.tab === 'biomes',
+  });
+  layout.onPanelChange(() => shares.shown());
+  createBiomeTable(tableHost, { session, edit, hover: hoverBiome });
 
   // Presets tab (§3.4): export and import of preset files (an import is one undo step) and the JSON patch box.
   createPresetsTab(layout.tabs.presets, { session, notices, edit });

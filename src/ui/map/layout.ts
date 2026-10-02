@@ -127,6 +127,8 @@ export interface PageLayout {
   showTab(id: TabId): void;
   readonly panelVisible: boolean;
   togglePanel(): void;
+  /** Calls `fn` after a tab is shown or the panel is shown or hidden; returns the unsubscribe function. */
+  onPanelChange(fn: () => void): () => void;
   readonly drawerOpen: boolean;
   openDrawer(): void;
   closeDrawer(): void;
@@ -184,6 +186,8 @@ export function createLayout(root: HTMLElement, storage: LayoutStorage | null): 
     page.style.setProperty('--panel-w', `${layout.panelWidth}px`);
     page.style.setProperty('--drawer-h', `${layout.drawerHeight}px`);
   };
+  const panelFns = new Set<() => void>();
+  const panelChanged = () => { for (const fn of [...panelFns]) fn(); };
   function showTab(id: TabId): void {
     for (const t of TAB_IDS) {
       buttons[t].setAttribute('aria-selected', String(t === id));
@@ -191,6 +195,7 @@ export function createLayout(root: HTMLElement, storage: LayoutStorage | null): 
       tabs[t].hidden = t !== id;
     }
     if (layout.tab !== id) commit({ ...layout, tab: id });
+    panelChanged();
   }
   applySizes();
   showTab(layout.tab);
@@ -231,7 +236,14 @@ export function createLayout(root: HTMLElement, storage: LayoutStorage | null): 
     get tab() { return layout.tab; },
     showTab,
     get panelVisible() { return !page.classList.contains('panel-hidden'); },
-    togglePanel() { page.classList.toggle('panel-hidden'); },
+    togglePanel() {
+      page.classList.toggle('panel-hidden');
+      panelChanged();
+    },
+    onPanelChange(fn) {
+      panelFns.add(fn);
+      return () => { panelFns.delete(fn); };
+    },
     get drawerOpen() { return !drawer.hidden; },
     openDrawer() { setDrawer(true); },
     closeDrawer() { setDrawer(false); },
