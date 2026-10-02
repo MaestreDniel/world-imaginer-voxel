@@ -6,7 +6,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 Browser voxel explorer + editor (TypeScript, Vite, three.js r186 WebGL2 with custom GLSL3 ShaderMaterials). Successor of `09-density-terrain` in [world-imaginer](https://github.com/MaestreDniel/world-imaginer); nothing is imported or copied wholesale from there.
 
-**Status:** SP0 complete (2026-09-27), SP1 complete (2026-09-28), SP2a complete (2026-09-30, GENERATOR_VERSION 3). SP2b (parameter tooling) in progress.
+**Status:** SP0 complete (2026-09-27), SP1 complete (2026-09-28), SP2a complete (2026-09-30, GENERATOR_VERSION 3), SP2b complete (2026-10-02, GENERATOR_VERSION 3). SP3 is next.
 
 ## Source of truth
 
@@ -24,7 +24,10 @@ Browser voxel explorer + editor (TypeScript, Vite, three.js r186 WebGL2 with cus
 - `npm run test:accept-schema` — rewrite `test/schema-shape.lock.json` (refuses a removed, renamed or re-kinded leaf unless `SCHEMA_VERSION` was bumped with a migration)
 - `npm run docs:params` — regenerate the README parameter table from the schema
 - `npx --yes bun@1 test/tools/goldensJsc.ts` — recompute every golden (SP1 and SP2a) under JavaScriptCore (D20; SP exit evidence); `?selftest=1` does the same in a real module worker in Chrome and Firefox, and `?lab=noise` keeps the SP1 panel
-- `?map` — the SP2a world map (layers, hover, seed, profiles, JSON patch)
+- `?map` — the world map (SP2a) and the parameter editor (SP2b): toolbar, parameter panel, spline drawer, biome table and share chart, presets, cut-line cross-section, global undo/redo (Ctrl+Z, Ctrl+Shift+Z or Ctrl+Y), P toggles the panel
+- `?map&perf=edit` — the same page with the SP2b latency hook (`src/ui/map/perfHook.ts`, `globalThis.__wiPerf`): pins the canvas to 1100 × 825 at seed 42, default profile, view (0, 0, 64 bpp)
+- `node test/tools/mapLatency.ts [--profile-dir DIR]` — the SP2b §2.8 edit → preview latency runner (not in CI; about 35 min): builds, serves `dist` on its own free port (never 5183), drives its own headless Chrome and writes `docs/superpowers/specs/assets/sp2b/latency-*.json`; `--quick` for a short run
+- `node test/tools/uiSmoke.ts [--profile-dir DIR] [--shots DIR]` — the SP2b UI smoke test (not in CI; about 1 min): `?selftest=1`, then every editor driven with real pointer and key input and checked through the DOM and the URL, no console errors; `--shots` also writes the spec §12 screenshots
 - `docker compose up world-imaginer-voxel`
 - Each sub-project appends its id to `STARTED_SPS` in `test/harness/sp.ts` in its first commit. Appending changes the lock (`test/thresholds.lock.json`), so run `npm run test:accept-thresholds` and amend the spec in the same change.
 

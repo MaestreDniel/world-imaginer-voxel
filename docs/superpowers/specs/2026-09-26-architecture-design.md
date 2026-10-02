@@ -83,6 +83,7 @@ world-imaginer-voxel/          (repository root)
       noise/octave.ts normal.ts cdf.ts   OctaveNoise (per-octave seed + fractional origin), NormalNoise (337/331), CDF remap
       spline/types.ts validate.ts hermite.ts tangents.ts   nested cubic-Hermite splines compiled to Int32Array code + Float64Array numbers,
                                 evaluated by a zero-allocation register-file interpreter; one validator; authoring-time auto tangents
+      spline/edit.ts weights.ts (SP2b) pure editor operations (insert, delete, set, nest, flatten, clamped auto tangents) and Hermite path weights
       params/kit.ts schema.ts meta.ts defaults.ts noises.ts profiles.ts presets.ts migrate.ts canonical.ts graphicsPresets.ts
                                 ParamSchema = single source (types, defaults, UI, scope); defaults referenced by the schema live in core/params
                                 (core cannot import gen/); graphicsPresets.ts = the §4.16 preset table as pure data (graphics + audio rows)
@@ -115,7 +116,8 @@ world-imaginer-voxel/          (repository root)
     sim/fluidSim.ts edits.ts diffStore.ts          L2
     persist/kv.ts idb.ts memory.ts diffCodec.ts wiworld.ts saves.ts   L2 (IStorage adapter; MemoryKV for tests)
     metrics/*.ts                                    pure metric definitions shared by vitest and the in-app dashboard (SP1: noiseStats.ts,
-                                sp1Fixtures.ts, sp1Goldens.ts)
+                                sp1Fixtures.ts, sp1Goldens.ts; SP2a: columnStats.ts, sp2aGoldens.ts; SP2b: biomeShares.ts,
+                                splineStats.ts, liveness.ts, crossSection.ts, also run by the workers' stats job)
     workers/protocol.ts taskHandler.ts task.worker.ts sim.worker.ts   (taskHandler: pure message handler, SP2a)
     engine/                     main thread, no three
       coordinator.ts scheduler.ts rings.ts workerPool.ts throttle.ts uploadBudget.ts session.ts invalidation.ts capabilities.ts
@@ -129,13 +131,15 @@ world-imaginer-voxel/          (repository root)
     sound/                      main thread, the only place WebAudio is used
       engine.ts buses.ts        AudioContext (resumed on first user gesture), master/music/sfx/ambient buses, settings
       sfx.ts footsteps.ts ambience.ts emitters.ts music.ts reverb.ts
-    ui/map/* ui/selftest/*       (SP2a) the standalone ?map page (mounted in-game from SP4) and ?selftest=1
+    ui/map/* ui/selftest/*       (SP2a) the standalone ?map page (mounted in-game from SP4) and ?selftest=1; SP2b makes ?map the editor
+    ui/common/* paramPanel/* splineEditor/* biomeTable/* presets/* crossSection/*   (SP2b) shared DOM helpers, notices and shortcuts;
+                                the parameter panel, spline drawer, biome table, presets tab and cross-section (pure models beside thin DOM)
     ui/lab/* seedBox.ts          (SP1) the ?lab=noise research page; DOM-free seed-box logic
-    ui/shell.ts styles.css paramPanel.ts splineEditor/* biomeTable.ts inspector/* sliceView.ts probe.ts mapView/*
+    ui/shell.ts styles.css inspector/* sliceView.ts probe.ts mapView/*   (paramPanel, splineEditor and biomeTable became directories in SP2b)
        metricsDashboard.ts jsonEditor.ts worldsMenu.ts settingsPanel.ts palette.ts hud.ts debugOverlay.ts help.ts
     main.ts
   tools/detmath-oracle.py       (SP1) CPython port of detMath, a manual oracle for the detMath goldens
-  test/ unit/ metrics/ bench/ arch/ harness/{region,refs,cache,stats,flood}.ts fixtures/ tools/
+  test/ unit/ metrics/ bench/ arch/ harness/{region,refs,cache,stats,flood}.ts fixtures/ tools/ (SP2b: tools/mapLatency.ts, tools/uiSmoke.ts)
         schema-shape.lock.json (SP1)
         thresholds.ts thresholds.lock.json goldens.json baselines.json
 ```
@@ -158,8 +162,8 @@ The authoritative layer table (value and type-only edges, worker edges, `light`/
 
 `test/arch/banned.test.ts` enforces these:
 
-- In `core`, `world` and `gen`: `Math.random`, `Date.now`, `performance.now` and `console.*`.
-- In `core/`, `gen/`, `metrics/sp1Goldens.ts` and `metrics/sp1Fixtures.ts` (and the SP2a equivalents): only exactly-specified `Math` members (the SP0 allowlist minus `fround`), no `**`; no `Intl`, `localeCompare`, `toLocale*`, `String.prototype.normalize`, `TextEncoder` or `TextDecoder` (amended by SP1 and SP2a).
+- In `core`, `world` and `gen`, and in the determinism files of the next rule: `Math.random`, `Date.now`, `performance.now` and `console.*` (amended by SP2b).
+- In `core/`, `gen/` and the determinism files (`DET_FILES` in `test/arch/rules/banned.ts`: `metrics/sp1Goldens.ts`, `metrics/sp1Fixtures.ts`, `metrics/sp2aGoldens.ts`, and the SP2b metrics shared by the tests, the workers and the UI, `metrics/splineStats.ts`, `metrics/biomeShares.ts`, `metrics/liveness.ts` and `metrics/crossSection.ts`): only exactly-specified `Math` members (the SP0 allowlist minus `fround`), no `**`; no `Intl`, `localeCompare`, `toLocale*`, `String.prototype.normalize`, `TextEncoder` or `TextDecoder` (amended by SP1, SP2a and SP2b).
 - In `core/noise/**`, `core/spline/**`, `metrics/**` and `gen/**`: imported value bindings are referenced only through top-level `const` aliases (vitest's transform turns them into getters; amended by SP1 and SP2a).
 - Exported numeric consts anywhere in `gen/` (fixed world constants live only in `core/constants.ts`).
 - Anywhere in the repository: no `.ogg`/`.mp3`/`.wav` files (sound packs are user-supplied, D17) and no import specifier resolving outside the repository (no copy-forward imports from world-imaginer).
@@ -386,7 +390,7 @@ Import validates the magic and version, runs `migrate`, recomputes genKey, and c
 
 **Presets.** Format `{format:'wi10-preset', schemaVersion, name, profile, params}`, where `params` is the minimal patch over `resolveProfile(profile)`. Import checks format → name (profile ids are reserved) → profile → schemaVersion (newer is rejected) → migrate → applyPatch over the profile, showing every error path inline; unknown keys are errors. Import *loads* the preset; export writes the *current draft*. Saves and `.wiworld` store full params and load as migrate → applyPatch over the defaults (SP1 spec §4.5).
 
-**Session.** Settings, last world and panel layout go to localStorage behind try/catch. The URL hash `#seed=…&profile=<ProfileId>&p=<base64url(gzip(params diff vs profile))>` makes a world shareable.
+**Session.** Settings, last world and panel layout go to localStorage behind try/catch. The world URL `?map#base64url(canonicalJSON({v: 1, seed, profile, patch, view}))` makes a world shareable: `patch` is the session's minimal patch over the profile and there is no gzip (a full 52-knot offset edit is about 2.3 KB). It replaces `#seed=…&profile=<ProfileId>&p=<base64url(gzip(params diff vs profile))>` (amended by SP2b).
 
 ## 3. Generation
 
@@ -467,7 +471,7 @@ Warps:
 
 There are no downstream multipliers: the editor's y-axis *is* the terrain.
 
-**Spline semantics (SP1).** Outside the end knots the end value holds (no linear extension, unlike MC). Between knots, `f = y0 + t·dy + t(1−t)((1−t)(d0·h − dy) + t(dy − d1·h))` with `h = x1 − x0`, `t = (q − x0)/h`, `dy = y1 − y0`; a nested knot evaluates only the two bracketing children. Tangents are explicit data, never re-derived at compile or evaluation time. The defaults above get their tangents from the hybrid rule when SP2a authors them (PCHIP inside numeric runs; d = 0 at nested knots, their neighbours and end knots inside (−1,1)); it stays inside the hull of each segment's end values up to rounding (≤ 4 ulp), so consumers that need jag, σ ≥ 0 clamp with `max(0, ·)`. Validation: 1-32 points, strictly increasing x, y within the leaf's range, finite d, no coordinate reused along a path, ≤ 4096 spline objects.
+**Spline semantics (SP1).** Outside the end knots the end value holds (no linear extension, unlike MC). Between knots, `f = y0 + t·dy + t(1−t)((1−t)(d0·h − dy) + t(dy − d1·h))` with `h = x1 − x0`, `t = (q − x0)/h`, `dy = y1 − y0`; a nested knot evaluates only the two bracketing children. Tangents are explicit data, never re-derived at compile or evaluation time. The defaults above get their tangents from the hybrid rule when SP2a authors them (PCHIP inside numeric runs; d = 0 at nested knots, their neighbours and end knots inside (−1,1)); it stays inside the hull of each segment's end values up to rounding (≤ 4 ulp), so consumers that need jag, σ ≥ 0 clamp with `max(0, ·)`. Validation: 1-32 points, strictly increasing x with |x| ≤ 2, y within the leaf's range, finite d with |d| ≤ 1e5, no coordinate reused along a path, ≤ 4096 spline objects; with these bounds a spline without issues evaluates finite everywhere (amended by SP2b).
 
 ### 3.4 Rivers (column stage; exact on the map and LOD)
 
@@ -632,7 +636,7 @@ Two verifier fixes:
 
 **Height filter** (SP2a, 2026-09-30). A column whose offset0 is below sea level takes only the ocean-family boxes; any other column takes only the rest. The shoreline itself, not a C threshold, separates sea biomes from coast and land biomes (the shoreline's C depends on E).
 
-**Fitness.** 09's weighted squared overshoot, with ties broken by an explicit `priority` field, not registry order.
+**Fitness.** The unweighted sum of squared overshoots, with ties broken by an explicit `priority` field, not registry order; the table has no weights (amended by SP2b).
 
 **Evaluation:**
 - Surface biomes per quart from the ColumnSample; per block via a jittered-Voronoi zoom (hash2-jittered quart centres, nearest of 4).
@@ -854,7 +858,7 @@ Main thread: render (three), input/physics/raycast (reads SAB), Coordinator (sta
 
 **Cancellation.**
 - Queued jobs that leave the needed set are dropped.
-- In-flight jobs check their epoch cell between phases and abort.
+- In-flight jobs check their epoch cell between phases and abort. SP2b implements the epoch cell as one pool-wide `SharedArrayBuffer` cell for map, spawn and stats jobs (a stopped job replies `ABORTED`); SP4 widens it to per-scope cells (amended by SP2b).
 - Stale results are discarded.
 
 **Uploads** are capped at 2 ms and 32 section-meshes per frame (Medium). They are served from a distance-ordered ready queue of whole columns; a column's uploads may span several frames, but its reveal happens in one (§4.2).
@@ -1156,6 +1160,8 @@ Target: edit → visible ≤ 50 ms p95, measured in the HUD.
 
 **Preview.** Column-scope edits re-render the map and LOD coarse-first within about 300 ms, before Apply.
 
+**Until SP4** (amended by SP2b): the map previews the draft and there is no Apply. The session's gestures (a drag is one gesture whose edits are not urgent; its release is urgent) and its urgent commits are the hooks SP4's Apply and SP5's fork dialog attach to.
+
 ### 5.2 Panels (CSS grid shell)
 
 - **World:** seed (typed seed is authoritative; separate "Regenerate same seed" and "New seed" buttons), profile, presets, worlds.
@@ -1165,19 +1171,21 @@ Target: edit → visible ≤ 50 ms p95, measured in the HUD.
 
 ### 5.3 Spline editor (nested Hermite)
 
-- A tree navigator with breadcrumbs, e.g. `offset › C=0.30 › E=−0.4`.
-- SVG with draggable points and tangent handles, numeric entry, add and delete, undo/redo (50 steps), reset per spline.
+- A tree navigator with breadcrumbs, e.g. `offset › C=0.30 › E=−0.40`.
+- SVG with draggable points and tangent handles, numeric entry, add, delete, nest and flatten (editor operations), reset per spline.
+- **Tangents are data** (amended by SP2b): moving a knot never changes a tangent; tangents change only by their handle, their numeric field or an explicit auto-tangents action, per node or per spline. A new knot gets the automatic tangent. Automatic tangents are clamped to ±1e5, the validator's bound (§3.3).
+- **Undo and redo are global over the draft** (amended by SP2b): one history of 100 steps for every editor, the seed, the profile and preset loads, instead of 50 steps per spline; one drag is one step.
 - The axis comes from the typed `NestedSpline.coord`, so there is no title sniffing.
-- Overlays show the **histogram of the coordinate's sampled distribution** (flat by construction under CDF-uniform climate) and per-segment area shares ("covers 7.3% of land").
+- Overlays show the **histogram of the coordinate's sampled distribution** and per-segment area shares ("covers 7.3% of land"). Under CDF-uniform climate the histogram is flat only for C, E, W, T and H: PV is folded from W, and nested nodes are conditional on their bracket (amended by SP2b).
 - The y-axis is in blocks.
-- A 1D cross-section profile along a line through the view shows offset ± σ, jag, rivers and lakes from the column stage.
-- The map updates live. Shapes export and import as `{format:'wi10-shape', spline}`.
+- A 1D cross-section profile along a line through the view shows offset ± σ, jag, rivers and lakes from the column stage (SP2b: a two-click line on the map, profiled in a drawer tab).
+- The map updates live. Shapes export and import as `{format: 'wi10-shape', leaf, spline}`; `leaf` is optional on import, and a file naming another leaf imports with a notice if it validates against the open leaf (amended by SP2b).
 
 ### 5.4 Biome table
 
-- Editable 6D boxes, priority and weights for 27 surface and 3 cave biomes.
-- A share preview samples 100k column-stage points on a worker in ≤ 1 s and shows a bar chart.
-- Warnings for unreachable (< 0.1%), dominant (> 16%) and tied biomes.
+- Editable boxes (amended by SP2b): `[lo, hi]` on 5 axes (C, E, PV, T and H, within [−1, 1]), `wSign` (−1, 0, +1) and a unique priority, no weights, for the 26 box rows of the surface biomes. River and frozen river come from the river flag, the height filter narrows the boxes by sea level (§3.10), and the 3 cave biomes arrive in SP6.
+- A share preview samples 100k column-stage points on the pool (≈ 270 ms on 6 workers; amended by SP2b) and shows a bar chart.
+- Warnings for unreachable (< 0.1%), dominant (> 16%) and tied biomes, an ocean family outside 25-45 % and more than 2 % outside every box (B1's limits).
 - Hovering a row highlights that biome on the map.
 
 ### 5.5 Density inspector, taps, mutes, probe, slice view
@@ -1192,7 +1200,7 @@ Target: edit → visible ≤ 50 ms p95, measured in the HUD.
 
 ### 5.6 Map view (M; worker tiles)
 
-- **Tiles:** 256² px, rendered as `MAP_TILE` jobs on the pool through the same column-stage functions, cached by `(layer, zoom, tile, stageHash)` in an LRU of 256, and transferred as ImageBitmap.
+- **Tiles:** 256² px, rendered as `MAP_TILE` jobs on the pool through the same column-stage functions, cached by `(layer, zoom, tile, stageHash)` in an LRU, and transferred as ImageBitmap. The LRU holds `max(256, 3 × (visible target-level tiles + visible preview tiles))` entries (the view's level counted once when it is the preview level), recomputed on resize and on every view change, and biome-layer entries hold `{bitmap, ids}` (amended by SP2b).
 - **Refinement is coarse-first:** a 256 blocks/px preview (climate, shape and biome only), then 64 → 16 → 4 blocks/px (amended by SP2a). Zoom is continuous from 1/4 to 256 blocks/px, anchored at the cursor.
 - **Layers:**
   - biome, shaded relief (surfaceEst), rivers, lakes;
@@ -1363,7 +1371,7 @@ Metric values are written to `test/metrics/.out/*.json` for trends. The harness 
 | E1-E6 | diff codec; `.wiworld` round-trip hash; reload with edits hash; fault-injected aborted flush consistent (flushSeq); edit→unload→reload returns the latest diff; genKey mismatch shows the fork dialog and each option (including Cancel) yields its specified world state | exact |
 | E7 | two worlds with the same genKey: edits in one never appear in the other / delete removes every `diffs` key of that worldId / hotbar and player restored per world / `stateTable` remap on load | exact |
 | U1 | stage-run counters: decorate edit re-runs only {D, L, mesh}; terrain edit spares raw climate; climate re-runs all | exact |
-| U2 | param liveness: ±15% on each non-live param changes its stage output hash in ≥ 1 of 16 columns | 100% |
+| U2 | param liveness: ±15% on each non-live param changes its stage output hash in ≥ 1 of 16 columns. SP2b (its spec §7): perturbations per kind (number and int ±15 % of \|v\| or of the range span, noise wavelength, every numeric spline knot by 15 % of the y span, box intervals shrunk and grown by 15 %); the stage output hash of the leaf's home stage (climate, shape or biome2d); 16 class columns chosen by the lattice conditions under which leaves act (land, coast, channel, gorge, basin, rim and one per lake gate), and bounded witnesses for leaves no class column decides (amended by SP2b) | 100% |
 | U3 | no-placebo: params with `effectMetric` move that metric by > 0.5% at ±15% | 100% |
 | U4 | registry invariants (every leaf has meta and scope, every non-live leaf a covering stage); migration invariant, fixtures and export → import identity; schema-shape lock; README generated block is fresh | exact (0 issues each) |
 | Z1 | amplified: land columns with ≥ 2 transitions (T2) / p99 land height | ≥ 8% / ≥ 250 |
@@ -1534,7 +1542,7 @@ High adds MSAA, a shadow cascade (about 2 ms), LOD 1 km and RD16 (dGPU target). 
 - edit → visible ≤ 50 ms p95; relight ≤ 3 ms;
 - decorate-scope Apply at RD12 in tuning mode ≤ 3 s;
 - terrain Apply: first visible change near the player ≤ 0.5 s;
-- map preview after a spline edit ≤ 300 ms coarse.
+- map preview after a spline edit ≤ 300 ms coarse: from the input event to the draw in which every visible level-256 tile of the draft (or a newer one) is drawn, measured as in the SP2b spec §2.8 (amended by SP2b).
 
 ## 8. Risks (with mitigations and kill criteria)
 
@@ -1598,7 +1606,7 @@ Each sub-project runs its own cycle:
 
 Thresholds are locked (`thresholds.lock.json`) and goldens are gated (§6.2). Sizes: S ≈ 2-4 days, M ≈ 1-2 weeks, L ≈ 2-3 weeks of focused work.
 
-**Cut lines.** Every SP names a cut line: what may slip if it overruns. A slipped item moves to a named receiving SP by amending this section, and the receiving SP adds it to its exit. Default receivers: SP0 Vercel preview check → SP4; SP2b share preview and cross-section → SP10; SP2a raw W/T/H/R map layers and spawn fallback refinement → SP2b; SP3 inspector pins → SP10; SP5 worlds-menu polish and palette search → SP10; SP7 vertex waves → SP11; SP8a animation frames → SP11; SP8a fence gates and trapdoors → SP12; SP8b giant trees, boulders and fossils → SP12; SP8c HRTF → SP11; SP9 jungle temple and village depth > 4 → SP12; SP11 Ultra shadows, 3D clouds and Fabulous water → SP12; SP6 underground-only carver and spaghetti-2D rarity bands → SP12; SP7 extra lava reactions → SP12; SP10 seed sweep and column-status heatmap → SP12. SP12's exit requires no open cut-line items, unless the user explicitly dropped one and the impact on its D-decision is recorded.
+**Cut lines.** Every SP names a cut line: what may slip if it overruns. A slipped item moves to a named receiving SP by amending this section, and the receiving SP adds it to its exit. Default receivers: SP0 Vercel preview check → SP4; SP2b share preview and cross-section → SP10 (both delivered in SP2b, so nothing moved); SP3 inspector pins → SP10; SP5 worlds-menu polish and palette search → SP10; SP7 vertex waves → SP11; SP8a animation frames → SP11; SP8a fence gates and trapdoors → SP12; SP8b giant trees, boulders and fossils → SP12; SP8c HRTF → SP11; SP9 jungle temple and village depth > 4 → SP12; SP11 Ultra shadows, 3D clouds and Fabulous water → SP12; SP6 underground-only carver and spaghetti-2D rarity bands → SP12; SP7 extra lava reactions → SP12; SP10 seed sweep and column-status heatmap → SP12. SP12's exit requires no open cut-line items, unless the user explicitly dropped one and the impact on its D-decision is recorded.
 
 **SP0 — Scaffold and guardrails** (S; no dependencies)
 - Repository scaffold at the root: Vite, TS strict, three `~0.186.1`, vitest projects (unit / arch / metrics-fast / metrics-quick / metrics-full / bench; see the SP0 spec).
@@ -1629,7 +1637,9 @@ Thresholds are locked (`thresholds.lock.json`) and goldens are gated (§6.2). Si
 - Schema-driven parameter panel with scope badges; nested Hermite spline editor (typed coords, histogram overlay, area shares, blocks y-axis, cross-section); biome table with share preview; presets UI over the SP1 envelope (import loads, export writes the draft), all editing `WorldSession`.
 - **Deliverable:** the SP2a map updates live while splines and biome boxes are edited; a 1-10 biome-size slider drives `climate.scaleMul = 4^((v − 5)/5)` (5 = default, 10 = large_biomes; user request 2026-09-29).
 - **Exit:** U2 for column-scope params; spline-edit map preview ≤ 300 ms; preset unit tests; the SP1 deferred minors reachable through the editor (spline knot/tangent bounds, tiny amplitudes).
-- **Cut line:** the biome share preview and the cross-section profile (→ SP10).
+- Received from SP2a (amended by SP2b): the raw W/T/H/R layers and the grid overlay exist; the spawn fallback refinement is closed as not needed (N4 spawnOnLand is 100 % over 64 seeds with the SP2a fallback).
+- Handed on (SP2b spec Appendix A): SP2a minors 5 and 6 → SP3; the `?lab=noise` minors → SP10.
+- **Cut line:** the biome share preview and the cross-section profile (→ SP10). Both were delivered in SP2b, so nothing moved to SP10.
 
 **SP3 — Voxel store, block states, density DAG, surface rules, harness** (L; SP2b)
 - SAB store (two slab pools, CAS free stacks, refcounts, torus table, aux). **The u16 block-state encoding, the fluid byte and the light byte are frozen here, together with the property model, the registry API and the append-only id rule (§2.2).** Frozen means the encoding, the property kinds and the API; later SPs still add block types, SoA columns and per-state values (the block list grows in SP6, SP8a, SP8b and SP9).

@@ -572,6 +572,87 @@ Sources: the SP1 final review (2026-09-27) and the SP2a final review (2026-09-29
 | SP2a 9 | the selftest page leaves a rejected job unhandled and its summary stuck | SP2b §2.3 |
 | SP2a 10 | the 256-entry tile cache thrashes on 4K viewports at level 4 | SP2b §2.5 |
 
+## Exit evidence
+
+Implementation of the plan (2026-10-02, branch `sp2b/parameter-tooling`, Tasks 1-24, measured at Task 24; 12th Gen Intel(R) Core(TM) i7-12700H with 20 threads, Node v24.21.0, Chrome 153.0.8010.36). Every number below was measured on that branch; the dry run's block (scratch branch `dry/sp2b`) is replaced.
+- `npm run typecheck`, `npm run build`, `npm test` (1180 passed, 2 skipped), `npm run test:metrics` (55 s, with other work loading the machine) and `npm run test:metrics:full` (127 s) all green. Three of five `npm test` runs under that load (load average 5-12 from other work) failed only `test/integration/abort.test.ts` (the biomeShares slice answered 68.9 and 51.7 ms after the store in the two runs whose output was kept, against its 50 ms bound); the file passes alone, three times in a row, and on the other full runs.
+- `git diff main -- test/goldens.json` is empty: no golden changed (§9). GENERATOR_VERSION stays 3.
+
+Metrics that SP2b adds or touches (`test/metrics/.out/*.json` after each tier). U2 decides all 51 column-scope leaves on its class columns (land 17, basin 11, channel 10, gorge 4, rim 3, coast 2, one per lake gate), so no witness is needed. B1 equals the SP2a Exit evidence (GENERATOR_VERSION 3 block) on every tier: the counting moved to `src/metrics/biomeShares.ts` without changing a value (§5.5). T6 now uses `pathWeight` from `core/spline/weights.ts` (§4.1). Every other metric is unchanged.
+
+| metric | fast | quick | full |
+|---|---|---|---|
+| U2.value | 1 | 1 | 1 |
+| U4.registryIssues | 0 | 0 | 0 |
+| U4.migrationFailures | 0 | 0 | 0 |
+| U4.shapeLockViolations | 0 | 0 | 0 |
+| U4.readmeStale | 0 | 0 | 0 |
+| B1.minShare | 0.0037 | 0.0037 | 0.0037 |
+| B1.minRareShare | 0.0067 | 0.0065 | 0.0066 |
+| B1.largestLand | 0.0676 | 0.0683 | 0.0682 |
+| B1.oceanFamily | 0.4412 | 0.4407 | 0.4408 |
+| B1.ties | 0 | 0 | 0 |
+| B1.outside | 0.0018 | 0.0017 | 0.0017 |
+| T6.minGain | 9.999999999999979 | 10.00000000000002 | 9.999999999999964 |
+| T6.maxGain | 10.00000000000003 | 10.000000000000052 | 10.00000000000007 |
+
+Edit → preview latency (§2.8; `node test/tools/mapLatency.ts`, Task 21's run of 2026-10-02 at `ae4fe24` with a dirty working tree, JSON in `assets/sp2b/latency-{biome,relief,offset}.json`). Headless Chrome, 6 workers, cross-origin isolated and abortable, 1100 × 825 canvas at DPR 1, seed 42, view (0, 0, 64 bpp). The edit is `shape.offset` knot [6, 0, 1] with a new y each time; "size" rows step the biome-size slider instead. Values are p50 / p95 / max in ms; the D columns give the release max, then the longest stretch without a landing during the drag:
+
+| layer · edit | loads | A idle | B busy | C sustained | D 30 Hz | D 60 Hz | blank draws | verdict |
+|---|---|---|---|---|---|---|---|---|
+| biome · knot | 3 | 94.9 / 121.8 / 136.8 | 96.6 / 122.4 / 133.2 | 166.3 / 184.3 / 199.9 | 171.4 · 201.4 | 188.9 · 150.3 | 0 | pass |
+| relief · knot | 3 | 97.1 / 123.3 / 138.3 | 111.5 / 116.4 / 141 | 180.8 / 183.2 / 184.3 | 161.9 · 164.8 | 192 · 151.1 | 0 | pass |
+| offset · knot | 1 | 91.7 / 117 / 123.8 | 96.8 / 116.5 / 117.2 | 166.2 / 166.6 / 166.6 | 140.7 · 169.3 | 139.7 · 134 | 0 | reported |
+| biome · size | 1 | 95.1 / 110.8 / 119.3 | 96.5 / 113.2 / 113.3 | 166.4 / 167.3 / 171.1 | 0 · 150.2 | 11 · 87.3 | 0 | reported |
+| relief · size | 1 | 90.9 / 122.5 / 124.9 | 97.2 / 122.9 / 125 | 166.4 / 199.7 / 199.7 | 0 · 116.9 | 11.1 · 100 | 0 | reported |
+
+- Every gated row passes: max ≤ 300 ms in A, B and C and for every release, a landing at least every 500 ms during each drag (25-31 landings per 3 s knot drag at 30 Hz and 25-28 at 60 Hz), and no blank draw. In B, 6 level-64 tiles were in flight at every edit, and the all-ready barrier closed within 11.7 ms (A, B and C, every row). No page error.
+
+Bench (`npm run bench`, gated at +30 % against the baseline Task 21 recorded; 18 kernels, 3 of them new in SP2b; `killRatio 0.839`; `column.sample p50 0.398 ms, p99 (≥ p95) 0.517 ms`):
+
+| kernel | ns/eval | ratio to calibration |
+|---|---|---|
+| `calibration.fmix32` | 0.636 | 1 |
+| `lattice3.slice` | 22.164 | 34.863 |
+| `perm512.slice` | 28.099 | 44.198 |
+| `lattice3.random` | 22.62 | 35.58 |
+| `perm512.random` | 26.975 | 42.43 |
+| `normal.z2.climateC` | 314.962 | 495.424 |
+| `normal.z3.density3d` | 215.966 | 339.707 |
+| `spline.offset` | 44.675 | 70.273 |
+| `spline.mix3` | 86.81 | 136.548 |
+| `detErf` | 3.12 | 4.908 |
+| `stageHashes.genKey` | 190152.75 | 299103.558 |
+| `column.point` | 15536.219 | 24437.923 |
+| `column.sample` | 397761 | 625664 |
+| `map.tile.b64.biome` | 375046234 | 589934475.596 |
+| `map.tile.b16.relief` | 356753078.5 | 561159988.297 |
+| `worker.configure` (SP2b) | 677452 | 1065608.061 |
+| `map.tile.b256.biome` (SP2b) | 59423739.5 | 93471442.777 |
+| `map.tile.b256.relief` (SP2b) | 61834440 | 97263389.492 |
+
+JavaScriptCore: `npx --yes bun@1 test/tools/goldensJsc.ts` → `47/47 match on Bun 1.4.2 (JavaScriptCore)`.
+
+Browser checks (`node test/tools/uiSmoke.ts --shots docs/superpowers/specs/assets/sp2b`: `vite preview` on its own port and headless Chrome 153, 1400 × 900 at DPR 1; 42 s including the build) → `smoke: 64/64 checks pass`:
+- `?selftest=1`: `✓ all 47 goldens match (5.5 s)`.
+- `?map` at seed 42: the first preview landed in 177 ms. A typed `rivers.gorgeDepth` 40 shows its modified dot and the counts. A dragged `shape.offset` knot is one undo step, and its statistics go stale during the drag and fresh after the settle. The biome-size slider dragged from 5 to 8 writes `scaleMul` 2.29739670999407 as one step. A typed desert T interval writes the whole table, and the share chart refreshes.
+- The switch to large_biomes asks "Switching to large_biomes clears 4 modified parameters". Switch loads the profile with an empty patch, and the notice's Undo brings the 4 parameters back.
+- The exported `smoke test.wi10-preset.json` is a real download whose `params` equal the draft's patch. After the patch box applies `{}`, importing the file restores the draft as one step.
+- Ctrl+Z walks back the 6 steps to the start, and Ctrl+Shift+Z and Ctrl+Y walk forward again. A reload restores the URL draft, the controls and the stored layout.
+- A two-click cut line opens the Cross-section tab with a fresh profile.
+- No exception, console error or failed load apart from the favicon.ico 404 (index.html declares no icon).
+
+Screenshots (`docs/superpowers/specs/assets/sp2b/`, 1400 × 900, seed 42, 256-colour palette PNGs, written by the smoke test's `--shots`):
+- `panel.png`: the Rivers section with `widthMin` 12 (modified dot, section count, the width noise sub-block);
+- `drawer-overlays.png`: the spline drawer on `shape.offset` with the histogram and the land and world shares, knot 0 selected;
+- `map-drag.png`: the map during a knot drag (preview tiles only, the statistics stale);
+- `biome-table-highlight.png`: the biome table with the pointer on the plains row, highlighted on the biome layer;
+- `presets.png`: the Presets tab with a name typed;
+- `shares.png`: the biome share chart, fresh, with no warning;
+- `cross-section.png`: a cut line across a coast at 4 blocks/px (sea, a river channel, 2 gorges, a lake at 153).
+
+Not yet recorded (§2.8, §12): CI on the pull request, the latency run against production after the merge, and Firefox (`?selftest=1` 47/47 and the editor's status line during edits and a drag) by the user.
+
 ## Threshold log
 
 (One line per commit that changes `test/thresholds.lock.json`.)

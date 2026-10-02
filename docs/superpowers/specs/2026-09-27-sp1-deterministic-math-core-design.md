@@ -276,11 +276,12 @@ The single validator; the ParamSchema `spline` leaf calls it with the leaf's coo
 | `points` is an array of 1-32 points | `POINTS_NOT_ARRAY`, `EMPTY`, `TOO_MANY_POINTS` | `<spline>.points` |
 | each point is `{x, y, d}` with no other key | `POINT_NOT_OBJECT`, `UNKNOWN_KEY` | `<spline>.points[i]`, `….<key>` |
 | x and d are finite numbers | `X_NOT_FINITE`, `D_NOT_FINITE` | `….x`, `….d` |
+| \|x\| ≤ 2 and \|d\| ≤ 1e5 (after q15; amended by SP2b) | `X_OUT_OF_RANGE`, `D_OUT_OF_RANGE` | `….x`, `….d` |
 | y is a finite number within [yMin, yMax], or a nested spline | `Y_NOT_FINITE`, `Y_OUT_OF_RANGE`, `Y_BAD_TYPE` | `….y` |
 | x strictly increases (after q15) | `X_DUPLICATE`, `X_UNSORTED` | the later point's `.x` |
 | at most 4096 spline objects in total | `PROGRAM_TOO_LARGE` | `basePath` |
 
-Paths look like `shape.offset.points[1].y.points[1].x`. |x| > 1 is legal (unreachable knots); editor lints arrive with the editor (SP2/SP10). `normalizeSpline(s)` returns the spline with every number replaced by `q15(v) + 0`.
+Paths look like `shape.offset.points[1].y.points[1].x`. |x| > 1 is legal up to 2 (unreachable knots, which the SP2b editor lints), and tangents are legal up to |d| ≤ 1e5. With these bounds and every y within the leaf's range, a spline without issues evaluates finite everywhere (property-tested; amended by SP2b, its spec §6.1). `normalizeSpline(s)` returns the spline with every number replaced by `q15(v) + 0`.
 
 ### 3.3 Compiled program (`core/spline/hermite.ts`)
 
@@ -302,6 +303,8 @@ Paths look like `shape.offset.points[1].y.points[1].x`. |x| > 1 is legal (unreac
 2. In each run of ≥ 2 knots, compute Fritsch–Carlson PCHIP tangents with SciPy end conditions. Interior: `d_k = 0` if `δ_{k−1}·δ_k ≤ 0`, else `(w1 + w2)/(w1/δ_{k−1} + w2/δ_k)` with `w1 = 2h_k + h_{k−1}`, `w2 = h_k + 2h_{k−1}`. Left end: `e = ((2h0 + h1)δ0 − h0δ1)/(h0 + h1)`, then 0 if `sign(e) ≠ sign(δ0)`, else `3δ0` if `sign(δ0) ≠ sign(δ1)` and `|e| > |3δ0|`; the right end mirrors it with `h_{n−2}, h_{n−3}, δ_{n−2}, δ_{n−3}`. A 2-knot run gets `δ0` at both ends.
 3. Set d = 0 at every nested knot, at every knot adjacent to a nested knot, at a single-knot run and at end knots strictly inside (−1, 1).
 4. Recurse into nested splines.
+
+The SP2b spline editor applies the same rule per node (`insertKnot` for a new knot's tangent, `autoTangentsAt` and "auto tangents" for a node or the whole spline) and clamps each automatic tangent to ±1e5, the validator's bound (amended by SP2b, its spec §4.1); `autoTangents` itself is unchanged and is never called at evaluation time.
 
 In exact arithmetic the rule keeps every segment inside the hull of its end values (PCHIP tangents stay in the monotone region [0, 3δ]², and zeroing stays inside it), and it avoids kinks at hold boundaries. In floating point the canonical formula can leave the hull by a few ulp near knots (measured ≤ 2.8e-14 on offset; jag reached −3.6e-15), so the guarantee is **inside the hull up to 4 ulp of max(|y0|, |y1|)**, and consumers that need a non-negative value (jag, σ) clamp with `max(0, ·)`. PCHIP from child means overshot in the spike (1.9 % of offset segments, negative jag by −0.33). This rule simplifies the spike's variant, which used child means for end formulas; the two differ only at a node end whose third knot is nested.
 
@@ -360,12 +363,12 @@ getPath(value: unknown, path: string): unknown;   patchAt(path: string, value: u
 - **checkParams** validates a complete document with the same rules.
 - **diffParams** recurses into groups and noise leaves. A noise leaf contributes only the NoiseDef keys whose canonical JSON differs (`amplitudes` as a whole array); any other leaf appears whole iff its canonical JSON differs; empty groups and noise leaves are omitted; equal inputs give `{}`. diff → JSON → apply is an identity.
 - **Validated params hold a complete NoiseDef**, so one noise has one spelling (and one stageHash): `{ wavelength, octaves, persistence, lacunarity, amplitudes, yScale, double, remap, clampSigma }` with defaults persistence 0.5, lacunarity 2, amplitudes `null`, yScale 1, double true, remap `'none'`, clampSigma 3. Only patches may be partial.
-- **`NOISE_FIELD_RANGES`** (in `kit.ts`, shared by the validator and the lab widgets; wavelength ranges are per leaf): octaves integer 1-16 (step 1); persistence 0.05-1 (0.01); lacunarity 1.1-4 (0.01); each amplitude −16-16 (0.01); yScale 0.01-100 (0.01), exactly 1 when `dims` is 2; clampSigma 1-8 (0.1). `amplitudes` is `null` or an array of length `octaves`, not all zero; `remap: 'uniform'` requires `double: true` and `dims: 2`.
+- **`NOISE_FIELD_RANGES`** (in `kit.ts`, shared by the validator and the lab widgets; wavelength ranges are per leaf): octaves integer 1-16 (step 1); persistence 0.05-1 (0.01); lacunarity 1.1-4 (0.01); each amplitude −16-16 (0.01); yScale 0.01-100 (0.01), exactly 1 when `dims` is 2; clampSigma 1-8 (0.1). `amplitudes` is `null` or an array of length `octaves`, not all zero; `remap: 'uniform'` requires `double: true` and `dims: 2`. Every non-zero amplitude has |a| ≥ 1e-6 (`AMPLITUDE_TINY`; 0 still silences an octave), and an amplitude item that fails its own check is not counted as 0, so it adds no `AMPLITUDES_ZERO` (amended by SP2b, its spec §6.2).
 - **Issue codes** (`IssueCode` is the union of these and the spline codes of §3.2):
 
 | family | codes |
 |---|---|
-| params | `UNKNOWN_KEY`, `MISSING_KEY`, `NOT_OBJECT`, `NOT_NUMBER`, `NOT_FINITE`, `NOT_INTEGER`, `INT_TOO_LARGE`, `OUT_OF_RANGE`, `NOT_BOOL`, `BAD_ENUM`, `AMPLITUDES_LENGTH`, `AMPLITUDES_ZERO`, `YSCALE_NOT_1`, `REMAP_NEEDS_DOUBLE`, `REMAP_NEEDS_2D` |
+| params | `UNKNOWN_KEY`, `MISSING_KEY`, `NOT_OBJECT`, `NOT_NUMBER`, `NOT_FINITE`, `NOT_INTEGER`, `INT_TOO_LARGE`, `OUT_OF_RANGE`, `NOT_BOOL`, `BAD_ENUM`, `AMPLITUDES_LENGTH`, `AMPLITUDES_ZERO`, `AMPLITUDE_TINY` (SP2b), `YSCALE_NOT_1`, `REMAP_NEEDS_DOUBLE`, `REMAP_NEEDS_2D` |
 | presets | `BAD_FORMAT`, `BAD_NAME`, `RESERVED_NAME`, `UNKNOWN_PROFILE`, `BAD_SCHEMA_VERSION`, `NEWER_SCHEMA_VERSION` |
 | migrations | `MIGRATION_FAILED` |
 

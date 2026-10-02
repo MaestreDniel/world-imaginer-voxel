@@ -6,7 +6,7 @@ It is the successor of [world-imaginer](https://github.com/MaestreDniel/world-im
 
 ## Status
 
-SP0, SP1 and SP2a are complete: `?map` shows the generated world's biomes, relief, rivers and lakes, and `?selftest=1` checks every golden in the browser (deployed at https://world-imaginer-voxel.vercel.app). SP2b (parameter panel, spline editor, biome table, presets) is next.
+SP0, SP1, SP2a and SP2b are complete: `?map` shows the generated world's biomes, relief, rivers and lakes and edits every parameter, spline and biome box with a live preview (parameter panel, spline editor, biome table with share chart, presets, cross-section, undo/redo), and `?selftest=1` checks every golden in the browser (deployed at https://world-imaginer-voxel.vercel.app). SP3 (voxel store, density, surface rules) is next.
 
 ## Development
 
