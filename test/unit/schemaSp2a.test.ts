@@ -27,6 +27,11 @@ describe('SP2a schema groups', () => {
     expect(canonicalJSON(DEFAULTS.shape.sigma)).toBe(canonicalJSON(SIGMA));
     expect(canonicalJSON(DEFAULTS.shape.jag)).toBe(canonicalJSON(JAG));
   });
+  test('the spline leaves are in blocks (SP2b §4.2)', () => {
+    expect(PARAM_META.filter((m) => m.kind === 'spline').map((m) => [m.path, m.unit])).toEqual([
+      ['shape.offset', 'blocks'], ['shape.sigma', 'blocks'], ['shape.jag', 'blocks'],
+    ]);
+  });
   test('river and lake defaults follow master §3.4-3.5', () => {
     const r = DEFAULTS.rivers;
     expect([r.widthMin, r.widthVar, r.valleyBase, r.valleyPerE, r.valleyFloor, r.valleyRise, r.coastFadeLo, r.coastFadeHi, r.altFadeLo, r.altFadeHi, r.depthMin, r.depthVar, r.wetMargin])

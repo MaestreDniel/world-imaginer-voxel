@@ -48,9 +48,9 @@ export const ROOT = group('Parameters', 'World generation parameters.', {
     R: field('Rivers', 'Its zero set gives the river lines.', 1000, 4),
   }),
   shape: group('Shape', 'Target height, overhang and jaggedness in blocks (master §3.3).', {
-    offset: spline(OFFSET_DEFAULT, { ...SHAPE, label: 'Offset', doc: 'Target surface y in blocks from C → E → PV.', coords: SHAPE_COORDS, min: -64, max: 320 }),
-    sigma: spline(SIGMA_DEFAULT, { ...SHAPE, label: 'Sigma', doc: 'Sd of the 3D surface displacement in blocks (clamped at 0).', coords: SHAPE_COORDS, min: -16, max: 64 }),
-    jag: spline(JAG_DEFAULT, { ...SHAPE, label: 'Jaggedness', doc: 'Amplitude of ridged peaks in blocks (clamped at 0).', coords: SHAPE_COORDS, min: -16, max: 128 }),
+    offset: spline(OFFSET_DEFAULT, { ...SHAPE, label: 'Offset', doc: 'Target surface y in blocks from C → E → PV.', unit: 'blocks', coords: SHAPE_COORDS, min: -64, max: 320 }),
+    sigma: spline(SIGMA_DEFAULT, { ...SHAPE, label: 'Sigma', doc: 'Sd of the 3D surface displacement in blocks (clamped at 0).', unit: 'blocks', coords: SHAPE_COORDS, min: -16, max: 64 }),
+    jag: spline(JAG_DEFAULT, { ...SHAPE, label: 'Jaggedness', doc: 'Amplitude of ridged peaks in blocks (clamped at 0).', unit: 'blocks', coords: SHAPE_COORDS, min: -16, max: 128 }),
   }),
   rivers: group('Rivers', 'Channels, valleys and gorges along the zero set of R (master §3.4).', {
     widthMin: blocks(8, 'Minimum width', 'Channel width where the width noise is lowest.', 1, 64),
