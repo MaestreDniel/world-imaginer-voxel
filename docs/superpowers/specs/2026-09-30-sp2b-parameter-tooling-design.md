@@ -243,7 +243,7 @@ A pure module with injected clock, pool and canvas interfaces. It turns session 
 - **Toolbar:** layer select; seed input with "Same seed" (commits the typed text, as Enter does) and "New seed"; profile select (ready profiles); the biome-size slider (§6.4); undo and redo; grid toggle; Cut line (§4.5); the preview status (§2.6).
 - **Profile switch:** when the patch is non-empty, choosing a profile first shows an inline confirmation "Switching to PROFILE clears N modified parameters" with Switch and Cancel (replaces `confirm()` at `mapPage.ts:130`). The confirmation is not modal: the select keeps showing the session's profile, and a newer choice replaces a pending confirmation. Cancel closes it; Switch calls `setProfile` and shows the notice "profile switched" with Undo, which acts only while the draft is still the one the switch made.
 - **Notices** show in a strip under the toolbar, visible from every tab and with the panel hidden.
-- **Tabs:** World (session status, hover readout, spawn), Parameters (§3.2), Biomes (§5), Presets (§3.4).
+- **Tabs:** World (session status, hover readout, spawn), Parameters (§3.2), Biomes (§5), Presets (§3.4). Both tab bars (the side panel's and the drawer's) keep only the selected tab in the Tab order; ArrowRight and ArrowLeft move to the next and previous tab (wrapping), Home and End to the first and last, and the tab they reach is shown and focused. A key with Ctrl, Cmd, Alt or Shift is left to the browser.
 
 ### 3.2 Parameter panel (`ui/paramPanel/`)
 

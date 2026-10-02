@@ -1,6 +1,6 @@
 import { describe, expect, test } from 'vitest';
 import {
-  clampDrawerHeight, clampPanelWidth, DEFAULT_LAYOUT, LAYOUT_KEY, loadLayout, parseLayout, saveLayout, serializeLayout, TAB_IDS, withSection,
+  clampDrawerHeight, clampPanelWidth, DEFAULT_LAYOUT, LAYOUT_KEY, loadLayout, parseLayout, saveLayout, serializeLayout, TAB_IDS, tabKeyTarget, withSection,
   type Layout, type LayoutStorage,
 } from '../../src/ui/map/layout';
 
@@ -95,5 +95,31 @@ describe('layout state (SP2b spec §3.1)', () => {
     expect(saveLayout(s, DEFAULT_LAYOUT)).toBe(false);
     expect(loadLayout(s)).toEqual(l);
     expect(saveLayout(null, l)).toBe(false);
+  });
+});
+
+describe('tab keys (SP2b spec §3.1): the tab bars are reachable from the keyboard', () => {
+  const k = (key: string, mods: Partial<{ ctrlKey: boolean; metaKey: boolean; altKey: boolean; shiftKey: boolean }> = {}) =>
+    ({ key, ctrlKey: false, metaKey: false, altKey: false, shiftKey: false, ...mods });
+
+  test('ArrowRight and ArrowLeft move to the next and previous tab and wrap; Home and End go to the first and last', () => {
+    expect(tabKeyTarget(k('ArrowRight'), 0, 4)).toBe(1);
+    expect(tabKeyTarget(k('ArrowRight'), 3, 4)).toBe(0);
+    expect(tabKeyTarget(k('ArrowLeft'), 2, 4)).toBe(1);
+    expect(tabKeyTarget(k('ArrowLeft'), 0, 4)).toBe(3);
+    expect(tabKeyTarget(k('Home'), 2, 4)).toBe(0);
+    expect(tabKeyTarget(k('End'), 1, 4)).toBe(3);
+    // The two-tab drawer bar.
+    expect(tabKeyTarget(k('ArrowRight'), 1, 2)).toBe(0);
+    expect(tabKeyTarget(k('ArrowLeft'), 1, 2)).toBe(0);
+  });
+
+  test('other keys, modified keys and a focus outside the bar are left to the page and the browser', () => {
+    for (const key of ['ArrowUp', 'ArrowDown', 'Enter', ' ', 'Tab', 'p', 'Escape']) expect(tabKeyTarget(k(key), 1, 4), key).toBeNull();
+    expect(tabKeyTarget(k('ArrowRight', { altKey: true }), 1, 4)).toBeNull();
+    expect(tabKeyTarget(k('ArrowRight', { ctrlKey: true }), 1, 4)).toBeNull();
+    expect(tabKeyTarget(k('ArrowLeft', { metaKey: true }), 1, 4)).toBeNull();
+    expect(tabKeyTarget(k('End', { shiftKey: true }), 1, 4)).toBeNull();
+    expect(tabKeyTarget(k('ArrowRight'), -1, 4)).toBeNull();
   });
 });

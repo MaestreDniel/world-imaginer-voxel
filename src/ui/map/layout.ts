@@ -51,6 +51,29 @@ export function clampDrawerHeight(h: number, viewportHeight: number): number {
   return Math.round(Math.min(hi, Math.max(DRAWER_MIN_PX, v)));
 }
 
+/** The fields of a KeyboardEvent the tab keys read. */
+export interface TabKey {
+  readonly key: string;
+  readonly ctrlKey: boolean;
+  readonly metaKey: boolean;
+  readonly altKey: boolean;
+  readonly shiftKey: boolean;
+}
+
+/**
+ * The tab a key moves to from the focused tab `index` of `count` (a tab bar with roving focus): ArrowRight and
+ * ArrowLeft go to the next and previous tab and wrap, Home and End to the first and last. Null for any other
+ * key, a key with a modifier, or a focus that is not on a tab (`index` −1).
+ */
+export function tabKeyTarget(e: TabKey, index: number, count: number): number | null {
+  if (e.ctrlKey || e.metaKey || e.altKey || e.shiftKey || index < 0 || index >= count) return null;
+  if (e.key === 'ArrowRight') return (index + 1) % count;
+  if (e.key === 'ArrowLeft') return (index + count - 1) % count;
+  if (e.key === 'Home') return 0;
+  if (e.key === 'End') return count - 1;
+  return null;
+}
+
 /** The stored text, field by field: a missing or invalid field gives its default; text that is not a JSON object gives the defaults. */
 export function parseLayout(text: string | null): Layout {
   if (text === null) return DEFAULT_LAYOUT;
@@ -209,6 +232,20 @@ export function createLayout(root: HTMLElement, storage: LayoutStorage | null): 
     drawerBar.append(b);
   }
   drawer.append(drawerBar, ...DRAWER_TAB_IDS.map((id) => drawerTabs[id]));
+  // Only the selected tab of a bar is in the Tab order; the arrow keys, Home and End move to the others (§3.1).
+  const tabKeys = <T extends string>(bar: HTMLElement, ids: readonly T[], tabButtons: Readonly<Record<T, HTMLButtonElement>>, select: (id: T) => void) => {
+    bar.addEventListener('keydown', (e) => {
+      if (e.defaultPrevented) return;
+      const to = tabKeyTarget(e, ids.findIndex((id) => tabButtons[id] === e.target), ids.length);
+      if (to === null) return;
+      e.preventDefault();
+      const id = ids[to]!;
+      select(id);
+      tabButtons[id].focus();
+    });
+  };
+  tabKeys(tabBar, TAB_IDS, buttons, (id) => showTab(id));
+  tabKeys(drawerBar, DRAWER_TAB_IDS, drawerButtons, (id) => setDrawer(true, id));
   page.append(toolbar, notices, map, vsplit, side, hsplit, drawer);
   root.replaceChildren(page);
 

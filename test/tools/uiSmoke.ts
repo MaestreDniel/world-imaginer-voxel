@@ -23,6 +23,7 @@
  * - undo/redo: Ctrl+Z through the whole history, then Ctrl+Shift+Z and Ctrl+Y back;
  * - reload: the draft, the controls and the stored layout come back;
  * - cut line: a two-click line on the map and its profile in the drawer's Cross-section tab;
+ * - tabs: ArrowRight, ArrowLeft, Home and End move the selection and the focus on both tab bars;
  * - console: no exception, console error or failed load, except the known favicon.ico 404.
  * With --shots DIR it then writes the spec §12 screenshots into DIR, at seed 42 from a newly loaded page (the
  * repository keeps them re-saved as 256-colour palette PNGs, as SP1 and SP2a did).
@@ -677,6 +678,25 @@ async function runSmoke(t: Smoke): Promise<void> {
   const line = await p.eval<string>(`document.querySelector('.cs-line').textContent`);
   t.check(/^A \(-?\d+, -?\d+\) → B \(-?\d+, -?\d+\) · [\d ]+ blocks$/.test(line), `the line: ${line}`, line);
   t.check(true, `the profile: ${await p.eval<string>(`document.querySelector('.cs-summary').textContent`)}`);
+
+  t.step('tabs: the arrow keys, Home and End on both tab bars');
+  const shown = (bar: string) => p.eval<string>(`(() => { const s = document.querySelector('${bar} [aria-selected="true"]'); return s === document.activeElement && s.tabIndex === 0 && !document.getElementById(s.getAttribute('aria-controls')).hidden ? s.id : 'focus ' + document.activeElement?.id + ', selected ' + s?.id; })()`);
+  await p.eval<boolean>(`(document.getElementById('map-tab-presets').focus(), true)`);
+  for (const [name, key, code, keyCode, want] of [
+    ['ArrowRight', 'ArrowRight', 'ArrowRight', 39, 'map-tab-world'], ['ArrowRight', 'ArrowRight', 'ArrowRight', 39, 'map-tab-parameters'],
+    ['ArrowLeft', 'ArrowLeft', 'ArrowLeft', 37, 'map-tab-world'], ['End', 'End', 'End', 35, 'map-tab-presets'], ['Home', 'Home', 'Home', 36, 'map-tab-world'],
+  ] as const) {
+    await p.key(key, code, keyCode);
+    const got = await shown('.map-tabs');
+    t.check(got === want, `${name} on the side panel's tabs selects and focuses ${want}`, got);
+  }
+  await p.eval<boolean>(`(document.getElementById('map-drawer-tab-section').focus(), true)`);
+  await p.key('ArrowLeft', 'ArrowLeft', 37);
+  const toSpline = await shown('.map-drawer-tabs');
+  t.check(toSpline === 'map-drawer-tab-spline', 'ArrowLeft on the drawer\'s Cross-section tab shows Spline', toSpline);
+  await p.key('ArrowRight', 'ArrowRight', 39);
+  const toSection = await shown('.map-drawer-tabs');
+  t.check(toSection === 'map-drawer-tab-section', 'ArrowRight shows Cross-section again', toSection);
 }
 
 // ---------------------------------------------------------------- screenshots (spec §12)
