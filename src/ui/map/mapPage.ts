@@ -3,7 +3,8 @@
  * tabs, drawer), the WorldSession that owns the draft, the preview driver that turns its changes into
  * configure cycles (§2.6), the map canvas, the URL (§1.4: written on every change, read on `hashchange`)
  * and the global shortcuts (§3.5). The World tab shows the session status, the spawn and the hover readout
- * (§3.3); the Parameters, Biomes and Presets tabs are the hosts their editors mount into.
+ * (§3.3); the Parameters tab holds the parameter panel (§3.2); the Biomes and Presets tabs are the hosts
+ * their editors mount into.
  */
 import './map.css';
 import { WorldSession, type SessionState } from '../../engine/session';
@@ -14,6 +15,7 @@ import { el } from '../common/dom';
 import { installShortcuts } from '../common/keys';
 import { createNotices } from '../common/notice';
 import { createUrlWriter } from '../common/urlWriter';
+import { createParamPanel } from '../paramPanel/panel';
 import { cryptoSeed } from '../seedBox';
 import { createHoverReadout } from './hoverPanel';
 import { browserStorage, createLayout } from './layout';
@@ -113,6 +115,17 @@ export function mountMapPage(root: HTMLElement): void {
     toolbar.sync();
     writeUrl();
     renderStatus();
+  });
+
+  // Parameters tab (§3.2). It subscribes after the page, so a change reaches the driver before the panel redraws.
+  // A spline's "Edit" opens the drawer on the leaf (the spline editor fills it, Task 18).
+  createParamPanel(layout.tabs.parameters, {
+    session, edit, sections: layout,
+    openSpline: (path) => {
+      layout.drawer.replaceChildren(el('div', 'map-readout', `spline ${path}`));
+      layout.openDrawer();
+    },
+    showBiomes: () => layout.showTab('biomes'),
   });
 
   installShortcuts((a) => {

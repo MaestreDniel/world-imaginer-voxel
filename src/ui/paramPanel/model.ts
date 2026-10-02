@@ -1,11 +1,12 @@
 /**
  * Parameter panel model (SP2b spec §3.2): the panel tree built from the schema, slider mappings, scope
- * badges, tooltips and the rules of the noise sub-block. Pure; the DOM lives in controls.ts and panel.ts.
+ * badges, tooltips, the rules of the noise sub-block and the field rules of the controls (typed values,
+ * issue lines, slider positions). Pure; the DOM lives in controls.ts and panel.ts.
  */
 import type { RegenScope, StageId } from '../../core/ids';
 import type { NoiseDef, NoiseDefPatch } from '../../core/noise/types';
 import { q15 } from '../../core/params/canonical';
-import { AMPLITUDE_MIN, NOISE_FIELD_RANGES, type ParamKind, type ParamMeta } from '../../core/params/kit';
+import { AMPLITUDE_MIN, NOISE_FIELD_RANGES, type Issue, type ParamKind, type ParamMeta } from '../../core/params/kit';
 import { SCHEMA } from '../../core/params/schema';
 
 export interface ControlSpec {
@@ -177,4 +178,97 @@ export function noiseFieldLock(c: ControlSpec, def: NoiseDef, field: keyof Noise
     case 'double': return def.remap === 'uniform' ? "remap 'uniform' needs double: true" : null;
     default: return null;
   }
+}
+
+/** The leaf kinds the panel has a control for (spec §3.2's list); the panel throws for any other kind. */
+export const PANEL_KINDS: readonly ParamKind[] = Object.freeze(['number', 'int', 'noise', 'spline', 'boxTable']);
+
+/** Positions of a log slider, and the most any slider gets. */
+export const SLIDER_POSITIONS = 1000;
+
+/**
+ * Positions of a control's range input: one per step of a linear stepped range (so a keyboard step is one
+ * value step), at most SLIDER_POSITIONS; SLIDER_POSITIONS for a log or unstepped range.
+ */
+export function sliderPositions(c: ControlSpec): number {
+  const [min, max] = sliderRange(c);
+  if (c.scale !== 'linear' || c.step === undefined || !(c.step > 0)) return SLIDER_POSITIONS;
+  const n = Math.round((max - min) / c.step);
+  return n < 1 ? 1 : n > SLIDER_POSITIONS ? SLIDER_POSITIONS : n;
+}
+
+/**
+ * The range input's position for the draft value `v`: `current` while it is a position that shows `v` (a
+ * keyboard step that has not reached the next value keeps its place), else the nearest position to `v`.
+ */
+export function sliderPosition(c: ControlSpec, positions: number, current: number, v: number): number {
+  if (Number.isInteger(current) && current >= 0 && current <= positions && sliderToValue(c, current / positions) === v) return current;
+  return Math.round(valueToSlider(c, v) * positions);
+}
+
+/**
+ * A typed field value: the number its trimmed text spells (`Number`, so '1e3' and '-.5' work), else the
+ * trimmed text itself, so the validator's message names what was typed ('expected a number, got "abc"').
+ */
+export function parseFieldText(text: string): unknown {
+  const t = text.trim();
+  const n = t === '' ? Number.NaN : Number(t);
+  return Number.isNaN(n) && t !== 'NaN' ? t : n;
+}
+
+/**
+ * The issue lines a control shows: the message of an issue at `at`; any other issue prefixed by its path
+ * relative to the leaf `base` (`amplitudes[2]: …`), or by its full path when it is not under the leaf.
+ */
+export function issueLines(issues: readonly Issue[], at: string, base: string): string[] {
+  return issues.map((i) => {
+    if (i.path === at) return i.message;
+    const rel = i.path.startsWith(`${base}.`) ? i.path.slice(base.length + 1) : i.path.startsWith(`${base}[`) ? i.path.slice(base.length) : i.path;
+    return `${rel}: ${i.message}`;
+  });
+}
+
+/** A section header's count: '' when nothing under it is modified. */
+export function modifiedText(n: number): string {
+  return n === 0 ? '' : `${n} modified`;
+}
+
+/** The numeric fields of a noise sub-block besides the wavelength, in NOISE_KEYS order. */
+export type NoiseNumberField = 'octaves' | 'persistence' | 'lacunarity' | 'yScale' | 'clampSigma';
+export const NOISE_NUMBER_FIELDS: readonly NoiseNumberField[] = Object.freeze(['octaves', 'persistence', 'lacunarity', 'yScale', 'clampSigma']);
+
+/** Tooltip text of each field of a noise sub-block. */
+export const NOISE_FIELD_DOCS: Readonly<Record<keyof NoiseDef, string>> = Object.freeze({
+  wavelength: 'Wavelength of the first octave, in blocks.',
+  octaves: 'Number of octaves summed in each stack.',
+  persistence: 'Amplitude ratio between successive octaves while amplitudes is the persistence weighting.',
+  lacunarity: 'Frequency ratio between successive octaves.',
+  amplitudes: 'Off: octave i weighs persistence^i. On: an explicit weight per octave (0 silences an octave).',
+  yScale: 'Vertical frequency multiplier of a 3D noise.',
+  clampSigma: 'The unit-variance sample is clamped to ± this many standard deviations.',
+  double: 'Adds a second, independent stack at 337/331 of the frequency before normalising.',
+  remap: "'uniform' maps the sample to a uniform value in [-1, 1] through its distribution (2D noises with double only).",
+});
+
+/**
+ * A slider control for one numeric field of a noise leaf: the wavelength is the leaf's own log slider, the
+ * other fields range over NOISE_FIELD_RANGES. Its path, `<leaf>.<field>`, is where the validator reports the
+ * field's issues; the panel writes the field as a partial NoiseDef on the leaf.
+ */
+export function noiseFieldControl(c: ControlSpec, field: NoiseNumberField | 'wavelength'): ControlSpec {
+  if (field === 'wavelength') return { ...c, path: `${c.path}.wavelength`, label: 'wavelength', doc: NOISE_FIELD_DOCS.wavelength };
+  const R = NOISE_FIELD_RANGES[field];
+  const kind: ParamKind = field === 'octaves' ? 'int' : 'number';
+  return {
+    path: `${c.path}.${field}`, kind, label: field, doc: NOISE_FIELD_DOCS[field],
+    min: R.min, max: R.max, step: R.step, scale: scaleOf(kind, R.min, R.max), scope: c.scope,
+    ...(c.stage !== undefined ? { stage: c.stage } : {}),
+  };
+}
+
+/** Item `i` of an active amplitudes list replaced by a typed value (the session validates it); {} without a list or for an index outside it. */
+export function amplitudeItemChange(def: NoiseDef, i: number, value: unknown): { readonly amplitudes?: readonly unknown[] } {
+  const list = def.amplitudes;
+  if (list === null || !Number.isInteger(i) || i < 0 || i >= list.length) return {};
+  return { amplitudes: list.map((a, j) => (j === i ? value : a)) };
 }

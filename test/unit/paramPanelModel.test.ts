@@ -3,12 +3,14 @@ import type { RegenScope } from '../../src/core/ids';
 import type { NoiseDef } from '../../src/core/noise/types';
 import { q15 } from '../../src/core/params/canonical';
 import { DEFAULTS } from '../../src/core/params/defaults';
-import { applyPatch, getPath, patchAt } from '../../src/core/params/kit';
+import { applyPatch, getPath, NOISE_KEYS, patchAt, type Issue } from '../../src/core/params/kit';
 import { SCHEMA, type Params } from '../../src/core/params/schema';
+import { WorldSession, type SessionResult } from '../../src/engine/session';
 import { paramLints } from '../../src/ui/paramPanel/lints';
 import {
-  amplitudesToggle, controlTip, noiseFieldLock, octavesChange, panelTree, scopeBadge, sliderToValue, valueToSlider,
-  type ControlSpec, type SectionSpec,
+  amplitudeItemChange, amplitudesToggle, controlTip, issueLines, modifiedText, NOISE_FIELD_DOCS, NOISE_NUMBER_FIELDS, noiseFieldControl,
+  noiseFieldLock, octavesChange, PANEL_KINDS, panelTree, parseFieldText, scopeBadge, sliderPosition, sliderPositions, sliderToValue,
+  valueToSlider, type ControlSpec, type SectionSpec,
 } from '../../src/ui/paramPanel/model';
 
 const sectionsOf = (s: SectionSpec): SectionSpec[] => [s, ...s.sections.flatMap(sectionsOf)];
@@ -275,5 +277,143 @@ describe('cross-field lints', () => {
     const all = params({ rivers: { coastFadeLo: 0.5, altFadeHi: 64 }, lakes: { offsetMax: 0 } });
     expect(paramLints(all).map((l) => l.paths[0])).toEqual(['rivers.coastFadeLo', 'rivers.altFadeLo', 'lakes.offsetMin']);
     expect(paramLints(params({ rivers: { coastFadeLo: 0.5, coastFadeHi: 0.6 } }))).toEqual([]);
+  });
+});
+
+describe('panel controls (Task 17): kinds, slider positions, typed values, issues', () => {
+  test("every control of today's schema has a panel control kind", () => {
+    expect(PANEL_KINDS).toEqual(['number', 'int', 'noise', 'spline', 'boxTable']);
+    for (const c of controlsOf(panelTree())) expect(PANEL_KINDS).toContain(c.kind);
+  });
+
+  test('a linear stepped slider has one position per step (at most 1000); log sliders have 1000', () => {
+    expect(sliderPositions(control('rivers.coastFadeLo'))).toBe(200);
+    expect(sliderPositions(control('biomes.zoomJitter'))).toBe(40);
+    expect(sliderPositions(control('lakes.offsetMin'))).toBe(384);
+    expect(sliderPositions(control('climate.warp.C.amplitude'))).toBe(1000);
+    expect(sliderPositions(control('climate.scaleMul'))).toBe(1000);
+    expect(sliderPositions(control('climate.C'))).toBe(1000);
+    expect(sliderPositions({ ...control('lakes.offsetMin'), min: 0, max: 5000 })).toBe(1000);
+    expect(sliderPositions({ ...control('lakes.offsetMin'), step: undefined })).toBe(1000);
+    expect(() => sliderPositions(control('shape.offset'))).toThrow(/no slider/);
+  });
+
+  test('on a linear stepped slider every keyboard step moves to the next value of the step grid', () => {
+    const linear = [...sliders(), ...NOISE_NUMBER_FIELDS.map((f) => noiseFieldControl(control('climate.C'), f))].filter((c) => c.scale === 'linear');
+    expect(linear.length).toBe(32);
+    for (const c of linear) {
+      const n = sliderPositions(c);
+      expect(n).toBe(Math.round((c.max! - c.min!) / c.step!));
+      for (let k = 0; k <= n; k++) expect(sliderToValue(c, k / n)).toBe(q15(c.min! + k * c.step!));
+    }
+  });
+
+  test('the thumb keeps its position while that position shows the draft value, else moves to the nearest', () => {
+    const c = control('lakes.radius');
+    const n = sliderPositions(c);
+    // a keyboard step from 8 that does not reach 9 keeps its place
+    expect(sliderToValue(c, 1 / n)).toBe(8);
+    expect(sliderPosition(c, n, 1, 8)).toBe(1);
+    expect(sliderPosition(c, n, 0, 8)).toBe(0);
+    // a value written elsewhere (the field, undo, a reset) moves the thumb: log(64 / 8) / log(1024 / 8) = 3/7
+    expect(sliderPosition(c, n, 1, 64)).toBe(429);
+    expect(sliderPosition(c, n, Number.NaN, 8)).toBe(0);
+    expect(sliderPosition(c, n, 2.5, 8)).toBe(0);
+    expect(sliderPosition(c, n, 2000, 1024)).toBe(1000);
+    // a typed value off the slider's grid sits at the nearest position
+    expect(sliderPosition(control('climate.scaleMul'), 1000, 500, 2.01)).toBe(501);
+  });
+
+  test('a typed value is the number its trimmed text spells, else the trimmed text', () => {
+    expect(parseFieldText(' 0.25 ')).toBe(0.25);
+    expect(parseFieldText('1e3')).toBe(1000);
+    expect(parseFieldText('-.5')).toBe(-0.5);
+    expect(parseFieldText('Infinity')).toBe(Number.POSITIVE_INFINITY);
+    expect(parseFieldText('NaN')).toBeNaN();
+    expect(parseFieldText('abc')).toBe('abc');
+    expect(parseFieldText('0,5')).toBe('0,5');
+    expect(parseFieldText('   ')).toBe('');
+  });
+
+  test('issue lines: the message at the control, the relative path under its leaf, the full path elsewhere', () => {
+    const issues: Issue[] = [
+      { path: 'climate.C.octaves', code: 'OUT_OF_RANGE', message: '0 outside [1, 16]' },
+      { path: 'climate.C.amplitudes', code: 'AMPLITUDES_ZERO', message: 'at least one amplitude must be non-zero' },
+      { path: 'climate.C.amplitudes[1]', code: 'NOT_NUMBER', message: 'expected a number, got "x"' },
+      { path: 'climate.Cx', code: 'UNKNOWN_KEY', message: 'unknown key "Cx"' },
+    ];
+    expect(issueLines(issues, 'climate.C.octaves', 'climate.C')).toEqual([
+      '0 outside [1, 16]',
+      'amplitudes: at least one amplitude must be non-zero',
+      'amplitudes[1]: expected a number, got "x"',
+      'climate.Cx: unknown key "Cx"',
+    ]);
+    expect(issueLines(issues.slice(1, 3), 'climate.C.amplitudes', 'climate.C')).toEqual([
+      'at least one amplitude must be non-zero',
+      'amplitudes[1]: expected a number, got "x"',
+    ]);
+    expect(issueLines([], 'lakes.p', 'lakes.p')).toEqual([]);
+  });
+
+  test('a section header counts its modified leaves', () => {
+    expect([0, 1, 12].map(modifiedText)).toEqual(['', '1 modified', '12 modified']);
+  });
+
+  test('a numeric noise field is a slider control over its NOISE_FIELD_RANGES range, at <leaf>.<field>', () => {
+    const c = control('climate.C');
+    expect(NOISE_NUMBER_FIELDS).toEqual(['octaves', 'persistence', 'lacunarity', 'yScale', 'clampSigma']);
+    expect(noiseFieldControl(c, 'octaves')).toEqual({
+      path: 'climate.C.octaves', kind: 'int', label: 'octaves', doc: NOISE_FIELD_DOCS.octaves, min: 1, max: 16, step: 1,
+      scale: 'linear', scope: c.scope, stage: c.stage,
+    });
+    // the §3.2 scale rule applies to the fields too: persistence spans a ratio of 20, yScale 10 000
+    expect(noiseFieldControl(c, 'persistence')).toMatchObject({ kind: 'number', min: 0.05, max: 1, step: 0.01, scale: 'log' });
+    expect(noiseFieldControl(c, 'lacunarity')).toMatchObject({ kind: 'number', min: 1.1, max: 4, step: 0.01, scale: 'linear' });
+    expect(noiseFieldControl(c, 'yScale')).toMatchObject({ kind: 'number', min: 0.01, max: 100, step: 0.01, scale: 'log' });
+    expect(noiseFieldControl(c, 'clampSigma')).toMatchObject({ kind: 'number', min: 1, max: 8, step: 0.1, scale: 'linear' });
+    expect(NOISE_NUMBER_FIELDS.map((f) => sliderPositions(noiseFieldControl(c, f)))).toEqual([15, 1000, 290, 1000, 70]);
+    for (const k of NOISE_KEYS) expect(NOISE_FIELD_DOCS[k].length).toBeGreaterThan(0);
+    // the wavelength row is the leaf's own log slider under its field path
+    expect(noiseFieldControl(c, 'wavelength')).toEqual({ ...c, path: 'climate.C.wavelength', label: 'wavelength', doc: NOISE_FIELD_DOCS.wavelength });
+    expect(controlTip(noiseFieldControl(c, 'wavelength'))).toBe('Wavelength of the first octave, in blocks.\nWavelength: 64 … 20000 blocks\nPath: climate.C.wavelength');
+    expect(controlTip(noiseFieldControl(c, 'octaves'))).toBe('Number of octaves summed in each stack.\nRange: 1 … 16\nPath: climate.C.octaves');
+  });
+
+  test('an amplitude item edit replaces that item of the active list; without a list or outside it, nothing', () => {
+    const d: NoiseDef = { ...noiseAt('climate.E'), octaves: 3, amplitudes: [1, 0.5, 0.25] };
+    expect(amplitudeItemChange(d, 1, 0.75)).toEqual({ amplitudes: [1, 0.75, 0.25] });
+    expect(amplitudeItemChange(d, 2, 'x')).toEqual({ amplitudes: [1, 0.5, 'x'] });
+    expect(d.amplitudes).toEqual([1, 0.5, 0.25]);
+    expect(amplitudeItemChange(d, 3, 1)).toEqual({});
+    expect(amplitudeItemChange(d, -1, 1)).toEqual({});
+    expect(amplitudeItemChange(d, 0.5, 1)).toEqual({});
+    expect(amplitudeItemChange(noiseAt('climate.E'), 0, 1)).toEqual({});
+  });
+
+  test('typed values reach the session as the panel writes them; refusals come back as the validator issue text', () => {
+    const w = new WorldSession(() => [7, 1] as const, { seedText: '1' });
+    const lines = (r: SessionResult, at: string, base = at) => (r.ok ? [] : issueLines(r.issues, at, base));
+    const typed = (path: string, text: string) => w.set(path, parseFieldText(text));
+    expect(lines(typed('lakes.p', ' 0.25 '), 'lakes.p')).toEqual([]);
+    expect([w.state.params.lakes.p, w.modified('lakes.p')]).toEqual([0.25, true]);
+    expect(lines(typed('lakes.p', '5'), 'lakes.p')).toEqual(['5 outside [0, 1]']);
+    expect(lines(typed('lakes.p', 'abc'), 'lakes.p')).toEqual(['expected a number, got "abc"']);
+    expect(lines(typed('lakes.p', ''), 'lakes.p')).toEqual(['expected a number, got ""']);
+    expect(lines(typed('lakes.p', '1e999'), 'lakes.p')).toEqual(['expected a finite number, got Infinity']);
+    expect(lines(typed('rivers.widthVar', '2.5'), 'rivers.widthVar')).toEqual([]);
+    expect(w.state.params.lakes.p).toBe(0.25);
+    expect(lines(w.set('climate.C', { octaves: parseFieldText('2.5') }), 'climate.C.octaves', 'climate.C')).toEqual(['expected an integer, got 2.5']);
+    expect(lines(w.set('climate.C', amplitudesToggle(w.state.params.climate.C, true)), 'climate.C.amplitudes', 'climate.C')).toEqual([]);
+    const def = w.state.params.climate.C;
+    expect(def.amplitudes).toEqual([1, 0.5, 0.25, 0.125, 0.0625, 0.03125]);
+    expect(lines(w.set('climate.C', amplitudeItemChange(def, 2, parseFieldText('1e-7'))), 'climate.C.amplitudes', 'climate.C'))
+      .toEqual(['amplitudes[2]: |1e-7| is below 0.000001; use 0 to silence an octave']);
+    expect(lines(w.set('climate.C', amplitudeItemChange(def, 0, parseFieldText('x'))), 'climate.C.amplitudes', 'climate.C'))
+      .toEqual(['amplitudes[0]: expected a number, got "x"']);
+    expect(lines(w.set('climate.C', { amplitudes: [1, 0, 0, 0, 0, 0] }), 'climate.C.amplitudes', 'climate.C')).toEqual([]);
+    expect(lines(w.set('climate.C', octavesChange(w.state.params.climate.C, 1)), 'climate.C.octaves', 'climate.C')).toEqual([]);
+    expect(w.state.params.climate.C).toMatchObject({ octaves: 1, amplitudes: [1] });
+    expect(lines(w.set('climate.C', amplitudeItemChange(w.state.params.climate.C, 0, 0)), 'climate.C.amplitudes', 'climate.C'))
+      .toEqual(['at least one amplitude must be non-zero']);
   });
 });
