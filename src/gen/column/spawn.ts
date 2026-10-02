@@ -14,6 +14,8 @@ export interface Spawn { readonly x: number; readonly z: number; readonly y: num
 
 const STEP = 64;
 const RINGS = 64;
+const POLL = 32;
+const NEVER = (): boolean => false;
 
 /** Ring offsets (in steps) of ring r, in (dx² + dz², dz, dx) order. */
 export function ringOffsets(r: number): Array<[number, number]> {
@@ -23,10 +25,17 @@ export function ringOffsets(r: number): Array<[number, number]> {
   return out.sort((a, b) => (a[0] * a[0] + a[1] * a[1]) - (b[0] * b[0] + b[1] * b[1]) || a[1] - b[1] || a[0] - b[0]);
 }
 
-export function findSpawn(ctx: GenContext): Spawn {
+/**
+ * findSpawn with a `stop` callback (SP2b spec §2.2), polled at the start of each ring and every 32
+ * candidates within it; null as soon as it returns true.
+ */
+export function findSpawnAbortable(ctx: GenContext, stop: () => boolean): Spawn | null {
   let best: { x: number; z: number; wet: number; steep: number; y: number; biome: number } | null = null;
   for (let r = 0; r <= RINGS; r++) {
-    for (const [dx, dz] of ringOffsets(r)) {
+    const ring = ringOffsets(r);
+    for (let k = 0; k < ring.length; k++) {
+      if (k % POLL === 0 && stop()) return null;
+      const [dx, dz] = ring[k]!;
       const x = dx * STEP;
       const z = dz * STEP;
       const p = POINT(ctx, x, z);
@@ -41,4 +50,8 @@ export function findSpawn(ctx: GenContext): Spawn {
     }
   }
   return { x: best!.x, z: best!.z, y: best!.y, biome: best!.biome, fallback: true };
+}
+
+export function findSpawn(ctx: GenContext): Spawn {
+  return findSpawnAbortable(ctx, NEVER)!;
 }

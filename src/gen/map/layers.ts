@@ -60,7 +60,11 @@ export function layerColor(layer: LayerId, p: PointRecord, k: number): number {
       return !sea && p.riverDist < 64 ? BLEND(base, 0x9cc8f0, 0.6 * (1 - p.riverDist / 64)) : base;
     }
     case 'lakes': {
-      if (p.lakeMask === 1) return BLEND(0x4aa0e0, 0x0c3a8a, (p.lakeLevel - 63) / 137);
+      if (p.lakeMask === 1) {
+        // Lake surfaces from sea level (63) to 200, clamped (SP2b spec §6.3).
+        const t = (p.lakeLevel - 63) / 137;
+        return BLEND(0x4aa0e0, 0x0c3a8a, t < 0 ? 0 : t > 1 ? 1 : t);
+      }
       const base = GREY(reliefColor(p, k));
       return p.lakeMask > 0 ? BLEND(base, 0xe6d58a, 0.8 * p.lakeMask) : base;
     }
