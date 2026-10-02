@@ -97,14 +97,48 @@ describe('columnPoint', () => {
 });
 
 describe('random valid parameters keep every field finite (levels may be −∞)', () => {
-  test('20 random parameter documents × 40 points', async () => {
+  test('20 random parameter documents × 40 points; the documents reach the SP2b §6.1-6.2 bounds', async () => {
     const { randomParams } = await import('../harness/params');
     const { SCHEMA } = await import('../../src/core/params/schema');
+    const { BOX_AXES, getPath } = await import('../../src/core/params/kit');
     const { createGenContext } = await import('../../src/gen/context');
     const { seedFromInput } = await import('../../src/core/seed');
+    type Knots = { readonly points: ReadonlyArray<{ readonly x: number; readonly y: number | Knots; readonly d: number }> };
+    type Row = { readonly priority: number } & Readonly<Record<string, unknown>>;
+    const reached = new Set<string>();
+    const knots = (s: Knots): void => {
+      for (const p of s.points) {
+        if (Math.abs(p.x) === 2) reached.add('knot x at ±2');
+        else if (Math.abs(p.x) > 1) reached.add('knot x in (1, 2)');
+        if (Math.abs(p.d) === 1e5) reached.add('tangent at ±1e5');
+        if (typeof p.y !== 'number') knots(p.y);
+      }
+    };
     const rng = testRng(1004);
     for (let d = 0; d < 20; d++) {
-      const ctx = createGenContext(seedFromInput(String(d)), randomParams(SCHEMA, rng));
+      const params = randomParams(SCHEMA, rng);
+      for (const { path, meta } of SCHEMA.leaves) {
+        const v = getPath(params, path);
+        if (meta.kind === 'spline') knots(v as Knots);
+        if (meta.kind === 'noise') {
+          for (const a of (v as { readonly amplitudes: readonly number[] | null }).amplitudes ?? []) {
+            if (a === 0) reached.add('amplitude 0');
+            else if (Math.abs(a) === 1e-6) reached.add('amplitude at ±1e-6');
+            else if (Math.abs(a) < 1e-3) reached.add('amplitude in (1e-6, 1e-3)');
+          }
+        }
+        if (meta.kind === 'boxTable') {
+          for (const row of Object.values(v as Readonly<Record<string, Row>>)) {
+            if (row.priority > 26) reached.add('priority above 26');
+            for (const axis of BOX_AXES) {
+              const [lo, hi] = row[axis] as readonly [number, number];
+              if (lo === -1 && hi === 1) reached.add('box axis [−1, 1]');
+              if (hi - lo < 0.001) reached.add('box axis narrower than 0.001');
+            }
+          }
+        }
+      }
+      const ctx = createGenContext(seedFromInput(String(d)), params);
       for (let i = 0; i < 40; i++) {
         const p = columnPoint(ctx, -300000 + 600000 * testFloat(rng), -300000 + 600000 * testFloat(rng));
         for (const k of ['C', 'E', 'W', 'T', 'H', 'R', 'PV', 'offset0', 'sigma0', 'jag0', 'steep', 'riverDist', 'riverStrength', 'lakeMask', 'offset', 'sigma', 'jag', 'surfaceEst'] as const) {
@@ -113,6 +147,10 @@ describe('random valid parameters keep every field finite (levels may be −∞)
         for (const k of ['lakeLevel', 'lakeFloor', 'surfaceWaterLevel'] as const) expect(Number.isNaN(p[k])).toBe(false);
       }
     }
+    expect([...reached].sort()).toEqual([
+      'amplitude 0', 'amplitude at ±1e-6', 'amplitude in (1e-6, 1e-3)', 'box axis [−1, 1]', 'box axis narrower than 0.001',
+      'knot x at ±2', 'knot x in (1, 2)', 'priority above 26', 'tangent at ±1e5',
+    ]);
   }, 60_000);
 });
 

@@ -1,5 +1,5 @@
 import { describe, expect, test } from 'vitest';
-import { bool, buildSchema, checkParams, enumOf, group, int, noise, num, spline, type Issue } from '../../src/core/params/kit';
+import { AMPLITUDE_MIN, bool, buildSchema, checkParams, enumOf, group, int, noise, num, spline, type Issue } from '../../src/core/params/kit';
 
 const P = (x: number, y: number, d = 0) => ({ x, y, d });
 const ROOT = group('Test', 'test schema', {
@@ -73,6 +73,15 @@ describe('checkParams codes and paths', () => {
     ['amplitudes all zero', (d) => { d.a.w.amplitudes = [0, 0, 0]; }, ['AMPLITUDES_ZERO @ a.w.amplitudes']],
     ['amplitude range', (d) => { d.a.w.amplitudes = [1, 17, 0]; }, ['OUT_OF_RANGE @ a.w.amplitudes[1]']],
     ['amplitudes wrong type', (d) => { d.a.w.amplitudes = 3; }, ['NOT_OBJECT @ a.w.amplitudes']],
+    ['amplitude tiny', (d) => { d.a.w.amplitudes = [1, 1e-7, 0]; }, ['AMPLITUDE_TINY @ a.w.amplitudes[1]']],
+    ['amplitude tiny and negative', (d) => { d.a.w.amplitudes = [1, 0, -9.99999999999999e-7]; }, ['AMPLITUDE_TINY @ a.w.amplitudes[2]']],
+    ['SP1 minor 1: an underflowing amplitude is tiny, not all-zero', (d) => { d.a.w.amplitudes = [1e-200, 0, 0]; }, ['AMPLITUDE_TINY @ a.w.amplitudes[0]']],
+    ['amplitudes at ±AMPLITUDE_MIN and −0 are legal', (d) => { d.a.w.amplitudes = [1e-6, -0, -1e-6]; }, []],
+    ['−0 items are zeros', (d) => { d.a.w.amplitudes = [-0, 0, -0]; }, ['AMPLITUDES_ZERO @ a.w.amplitudes']],
+    ['SP1 minor 3: a non-number item is not a zero', (d) => { d.a.w.amplitudes = [0, 'x', 0]; }, ['NOT_NUMBER @ a.w.amplitudes[1]']],
+    ['a non-finite item is not a zero', (d) => { d.a.w.amplitudes = [0, NaN, 0]; }, ['NOT_FINITE @ a.w.amplitudes[1]']],
+    ['an out-of-range item is not a zero', (d) => { d.a.w.amplitudes = [0, 0, -17]; }, ['OUT_OF_RANGE @ a.w.amplitudes[2]']],
+    ['bad items and a wrong length', (d) => { d.a.w.amplitudes = [null, 1e-9]; }, ['NOT_NUMBER @ a.w.amplitudes[0]', 'AMPLITUDE_TINY @ a.w.amplitudes[1]', 'AMPLITUDES_LENGTH @ a.w.amplitudes']],
     ['yScale on a 2D noise', (d) => { d.a.w.yScale = 2; }, ['YSCALE_NOT_1 @ a.w.yScale']],
     ['uniform needs double', (d) => { d.a.w.remap = 'uniform'; d.a.w.double = false; }, ['REMAP_NEEDS_DOUBLE @ a.w.remap']],
     ['uniform needs 2D', (d) => { d.a.v.remap = 'uniform'; }, ['REMAP_NEEDS_2D @ a.v.remap']],
@@ -82,6 +91,9 @@ describe('checkParams codes and paths', () => {
     ['spline coord outside the leaf coords', (d) => { d.s.coord = 'T'; }, ['BAD_COORD @ s.coord']],
   ])('%s', (_name, mutate, expected) => {
     expect(check(mutate)).toEqual(expected);
+  });
+  test('AMPLITUDE_MIN is 1e-6 (SP2b §6.2)', () => {
+    expect(AMPLITUDE_MIN).toBe(1e-6);
   });
   test('every issue is collected in schema pre-order', () => {
     expect(check((d) => { d.a.n = -1; d.a.k = 0.5; d.s.points[1].y = 'x'; })).toEqual(['OUT_OF_RANGE @ a.n', 'NOT_INTEGER @ a.k', 'Y_BAD_TYPE @ s.points[1].y']);

@@ -1,5 +1,5 @@
 import { q15 } from '../params/canonical';
-import { SPLINE_COORDS, SPLINE_MAX_OBJECTS, SPLINE_MAX_POINTS, SPLINE_SLOT } from './types';
+import { SPLINE_COORDS, SPLINE_MAX_ABS_D, SPLINE_MAX_ABS_X, SPLINE_MAX_OBJECTS, SPLINE_MAX_POINTS, SPLINE_SLOT } from './types';
 import type { NestedSpline, SplineOpts, SplinePoint } from './types';
 
 const Q15 = q15;
@@ -7,11 +7,13 @@ const COORDS = SPLINE_COORDS;
 const SLOT = SPLINE_SLOT;
 const MAX_POINTS = SPLINE_MAX_POINTS;
 const MAX_OBJECTS = SPLINE_MAX_OBJECTS;
+const MAX_ABS_X = SPLINE_MAX_ABS_X;
+const MAX_ABS_D = SPLINE_MAX_ABS_D;
 
 export type SplineErrorCode =
   | 'NOT_OBJECT' | 'UNKNOWN_KEY' | 'BAD_COORD' | 'COORD_REUSED' | 'POINTS_NOT_ARRAY' | 'EMPTY' | 'TOO_MANY_POINTS'
-  | 'POINT_NOT_OBJECT' | 'X_NOT_FINITE' | 'D_NOT_FINITE' | 'Y_NOT_FINITE' | 'Y_OUT_OF_RANGE' | 'Y_BAD_TYPE'
-  | 'X_DUPLICATE' | 'X_UNSORTED' | 'PROGRAM_TOO_LARGE';
+  | 'POINT_NOT_OBJECT' | 'X_NOT_FINITE' | 'X_OUT_OF_RANGE' | 'D_NOT_FINITE' | 'D_OUT_OF_RANGE' | 'Y_NOT_FINITE'
+  | 'Y_OUT_OF_RANGE' | 'Y_BAD_TYPE' | 'X_DUPLICATE' | 'X_UNSORTED' | 'PROGRAM_TOO_LARGE';
 
 export interface SplineIssue {
   readonly path: string;
@@ -40,7 +42,8 @@ function isFiniteNumber(v: unknown): v is number {
 
 /**
  * The single spline validator (SP1 spec §3.2). Applies q15 before every check, collects every issue in
- * DFS pre-order and never throws; [] exactly when compileSpline(value, opts) succeeds.
+ * DFS pre-order and never throws; [] exactly when compileSpline(value, opts) succeeds. With |x| ≤ 2,
+ * |d| ≤ 1e5 and a finite [yMin, yMax], [] also means every evaluation at finite coords is finite (SP2b §6.1).
  */
 export function validateSpline(value: unknown, basePath = '', opts: SplineOpts = {}): SplineIssue[] {
   const issues: SplineIssue[] = [];
@@ -77,11 +80,17 @@ export function validateSpline(value: unknown, basePath = '', opts: SplineOpts =
         push('X_NOT_FINITE', `${pp}.x`, 'x must be a finite number');
       } else {
         const x = Q15(p['x']);
+        if (Math.abs(x) > MAX_ABS_X) push('X_OUT_OF_RANGE', `${pp}.x`, `x = ${x} outside [${-MAX_ABS_X}, ${MAX_ABS_X}]`);
         if (x === prevX) push('X_DUPLICATE', `${pp}.x`, `x = ${x} duplicates the previous point`);
         else if (x < prevX) push('X_UNSORTED', `${pp}.x`, `x = ${x} is below the previous point (${prevX})`);
         prevX = x;
       }
-      if (!isFiniteNumber(p['d'])) push('D_NOT_FINITE', `${pp}.d`, 'd (tangent) must be a finite number');
+      if (!isFiniteNumber(p['d'])) {
+        push('D_NOT_FINITE', `${pp}.d`, 'd (tangent) must be a finite number');
+      } else {
+        const d = Q15(p['d']);
+        if (Math.abs(d) > MAX_ABS_D) push('D_OUT_OF_RANGE', `${pp}.d`, `d = ${d} outside [${-MAX_ABS_D}, ${MAX_ABS_D}]`);
+      }
       const y: unknown = p['y'];
       if (typeof y === 'number') {
         if (!Number.isFinite(y)) push('Y_NOT_FINITE', `${pp}.y`, 'y must be finite');

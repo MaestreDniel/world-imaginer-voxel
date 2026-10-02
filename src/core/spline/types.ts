@@ -5,6 +5,10 @@ export const SPLINE_COORDS: readonly SplineCoord[] = ['C', 'E', 'W', 'PV', 'T', 
 export const SPLINE_SLOT: Readonly<Record<SplineCoord, number>> = { C: 0, E: 1, W: 2, PV: 3, T: 4, H: 5 };
 export const SPLINE_MAX_POINTS = 32;
 export const SPLINE_MAX_OBJECTS = 4096;
+/** Knots are legal up to |x| ≤ 2 (SP2b §6.1); the climate never reaches beyond ±1. */
+export const SPLINE_MAX_ABS_X = 2;
+/** Tangents are legal up to |d| ≤ 1e5 output units per unit of the node's coordinate (SP2b §6.1). */
+export const SPLINE_MAX_ABS_D = 1e5;
 
 /** d = dy/dx in output units per unit of the node's own coordinate (explicit data; never re-derived). */
 export interface SplinePoint {

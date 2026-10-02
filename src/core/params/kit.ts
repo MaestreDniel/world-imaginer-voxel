@@ -43,7 +43,7 @@ export interface ParamMeta {
 
 export type ParamIssueCode =
   | 'UNKNOWN_KEY' | 'MISSING_KEY' | 'NOT_OBJECT' | 'NOT_NUMBER' | 'NOT_FINITE' | 'NOT_INTEGER' | 'INT_TOO_LARGE'
-  | 'OUT_OF_RANGE' | 'NOT_BOOL' | 'BAD_ENUM' | 'AMPLITUDES_LENGTH' | 'AMPLITUDES_ZERO' | 'YSCALE_NOT_1'
+  | 'OUT_OF_RANGE' | 'NOT_BOOL' | 'BAD_ENUM' | 'AMPLITUDES_LENGTH' | 'AMPLITUDES_ZERO' | 'AMPLITUDE_TINY' | 'YSCALE_NOT_1'
   | 'REMAP_NEEDS_DOUBLE' | 'REMAP_NEEDS_2D' | 'BAD_INTERVAL' | 'DUPLICATE_PRIORITY';
 export type PresetIssueCode = 'BAD_FORMAT' | 'BAD_NAME' | 'RESERVED_NAME' | 'UNKNOWN_PROFILE' | 'BAD_SCHEMA_VERSION' | 'NEWER_SCHEMA_VERSION';
 export type IssueCode = ParamIssueCode | PresetIssueCode | 'MIGRATION_FAILED' | SplineErrorCode;
@@ -163,6 +163,9 @@ export const NOISE_FIELD_RANGES = {
   clampSigma: { min: 1, max: 8, step: 0.1 },
 } as const;
 
+/** Smallest non-zero |amplitude| (SP2b §6.2): Σa² cannot underflow to 0; 0 still silences an octave. */
+export const AMPLITUDE_MIN = 1e-6;
+
 export const NOISE_KEYS = ['wavelength', 'octaves', 'persistence', 'lacunarity', 'amplitudes', 'yScale', 'double', 'remap', 'clampSigma'] as const;
 
 // ---------------------------------------------------------------- validation
@@ -180,6 +183,17 @@ function checkNumber(v: unknown, path: string, out: Issue[], min: number, max: n
   const q = q15(v);
   if (q < min || q > max) { out.push({ path, code: 'OUT_OF_RANGE', message: `${q} outside [${min}, ${max}]` }); return undefined; }
   return q;
+}
+
+/** One explicit octave amplitude: a number in range that is 0 or at least AMPLITUDE_MIN in magnitude. */
+function checkAmplitude(v: unknown, path: string, out: Issue[]): number | undefined {
+  const R = NOISE_FIELD_RANGES.amplitude;
+  const a = checkNumber(v, path, out, R.min, R.max, false);
+  if (a !== undefined && a !== 0 && Math.abs(a) < AMPLITUDE_MIN) {
+    out.push({ path, code: 'AMPLITUDE_TINY', message: `|${a}| is below ${AMPLITUDE_MIN}; use 0 to silence an octave` });
+    return undefined;
+  }
+  return a;
 }
 
 function unknownKeys(v: Record<string, unknown>, known: readonly string[], path: string, out: Issue[]): boolean {
@@ -208,9 +222,11 @@ function checkNoise(v: unknown, path: string, out: Issue[], leaf: Leaf<unknown, 
     if (!Array.isArray(rawAmps)) {
       out.push({ path: ap, code: 'NOT_OBJECT', message: 'expected null or an array of numbers' });
     } else {
-      amplitudes = rawAmps.map((a: unknown, i: number) => checkNumber(a, `${ap}[${i}]`, out, R.amplitude.min, R.amplitude.max, false) ?? 0);
+      // An invalid item is reported at its own path and is not a zero, so it never adds AMPLITUDES_ZERO (SP2b §6.2).
+      const items = rawAmps.map((a: unknown, i: number) => checkAmplitude(a, `${ap}[${i}]`, out));
       if (octaves !== undefined && rawAmps.length !== octaves) out.push({ path: ap, code: 'AMPLITUDES_LENGTH', message: `length ${rawAmps.length} != octaves ${octaves}` });
-      else if (amplitudes.every((a) => a === 0)) out.push({ path: ap, code: 'AMPLITUDES_ZERO', message: 'at least one amplitude must be non-zero' });
+      else if (items.every((a) => a === 0)) out.push({ path: ap, code: 'AMPLITUDES_ZERO', message: 'at least one amplitude must be non-zero' });
+      amplitudes = items as number[];
     }
   }
   const yScale = checkNumber(v['yScale'], join(path, 'yScale'), out, R.yScale.min, R.yScale.max, false);
