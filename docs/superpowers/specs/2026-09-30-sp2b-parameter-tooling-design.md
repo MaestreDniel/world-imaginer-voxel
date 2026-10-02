@@ -577,3 +577,4 @@ Sources: the SP1 final review (2026-09-27) and the SP2a final review (2026-09-29
 (One line per commit that changes `test/thresholds.lock.json`.)
 
 - Task 1: `STARTED_SPS` gains `SP2b`; no threshold rows change.
+- Task 9: new row `U2.value` min 1, active from SP2b, the same on every tier (parameter liveness, §7).

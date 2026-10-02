@@ -1,5 +1,5 @@
 {
-  "sha256": "91dc33712c09d52bef7837260b36b13b351ec3e753e0a86f6a5659a8ba82059f",
+  "sha256": "e53be667238ae3d7b4f0c4f3dc27a09686e304b0c52084b85ec5f39b4b2b18d2",
   "canonical": {
     "startedSps": [
       "SP0",
@@ -179,6 +179,12 @@
         "PV": {
           "activeFrom": "SP2a",
           "min": 10
+        }
+      },
+      "U2": {
+        "value": {
+          "activeFrom": "SP2b",
+          "min": 1
         }
       },
       "U4": {

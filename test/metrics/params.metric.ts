@@ -1,4 +1,5 @@
-import { existsSync, readFileSync } from 'node:fs';
+import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
+import { expect } from 'vitest';
 import { canonicalJSON } from '../../src/core/params/canonical';
 import { DEFAULTS } from '../../src/core/params/defaults';
 import { renderReference } from '../../src/core/params/kit';
@@ -7,6 +8,7 @@ import { exportPreset, importPreset } from '../../src/core/params/presets';
 import { PROFILE_IDS, resolveProfile } from '../../src/core/params/profiles';
 import { SCHEMA } from '../../src/core/params/schema';
 import { checkRegistry, STAGES } from '../../src/core/stage/registry';
+import { u2 } from '../../src/metrics/liveness';
 import { metricTest } from '../harness/metric';
 import { randomParams } from '../harness/params';
 import { currentShape, README_PATH, readmeBlock, readShapeLock, shapeViolations } from '../harness/schemaShape';
@@ -36,4 +38,14 @@ metricTest('U4', ['registryIssues', 'migrationFailures', 'shapeLockViolations', 
   const shapeLockViolations = shapeViolations(readShapeLock(), currentShape(SCHEMA), SCHEMA_VERSION).length;
   const readmeStale = readmeBlock(readFileSync(README_PATH, 'utf8')) === renderReference(SCHEMA) ? 0 : 1;
   return { registryIssues, migrationFailures, shapeLockViolations, readmeStale };
+});
+
+metricTest('U2', ['value'], () => {
+  const r = u2();
+  const out = new URL('./.out/', import.meta.url);
+  mkdirSync(out, { recursive: true });
+  writeFileSync(new URL('U2.leaves.json', out), `${JSON.stringify(r.results, null, 2)}\n`);
+  const dead = r.results.filter((l) => !l.live).map((l) => `${l.path} (class ${l.cls ?? '?'})`);
+  expect.soft(dead, 'dead leaves, each with the class meant to exercise it').toEqual([]);
+  return { value: r.value };
 });
