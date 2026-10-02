@@ -9,7 +9,7 @@ export const SUB_PROJECTS: readonly SubProjectId[] = [
 ];
 
 /** The sub-project this build belongs to; hides profiles whose readyFrom comes later (SP2a spec §4.4). */
-export const CURRENT_SP: SubProjectId = 'SP2a';
+export const CURRENT_SP: SubProjectId = 'SP2b';
 
 /** Every metric id of master spec §6.4 (E1-E6 expanded). */
 export type MetricId =

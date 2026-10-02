@@ -575,3 +575,5 @@ Sources: the SP1 final review (2026-09-27) and the SP2a final review (2026-09-29
 ## Threshold log
 
 (One line per commit that changes `test/thresholds.lock.json`.)
+
+- Task 1: `STARTED_SPS` gains `SP2b`; no threshold rows change.

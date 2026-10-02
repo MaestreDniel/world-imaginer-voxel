@@ -1,10 +1,14 @@
 import { describe, expect, test } from 'vitest';
-import { SUB_PROJECTS } from '../../src/core/ids';
+import { CURRENT_SP, SUB_PROJECTS } from '../../src/core/ids';
 import { SP_DEPS, SP_ORDER, STARTED_SPS, spIndex, validateStarted } from '../harness/sp';
 
 describe('started sub-projects', () => {
   test('the committed list is valid', () => {
     expect(validateStarted(STARTED_SPS)).toEqual([]);
+  });
+
+  test('the current SP has started', () => {
+    expect(STARTED_SPS).toContain(CURRENT_SP);
   });
 
   test('SP_DEPS covers all 16 sub-projects and SP_ORDER follows it', () => {
