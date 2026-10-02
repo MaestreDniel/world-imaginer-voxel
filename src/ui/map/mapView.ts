@@ -3,11 +3,13 @@
  * first, then the view's level on top), keeps showing the last drawn tile of each position until the
  * current source's tile lands there (fallback tiles), asks the pool for missing tiles coarse-first (only
  * preview tiles while interactive), reports preview progress to the preview driver, dims all biomes but a
- * highlighted one, pans by drag, zooms around the cursor, and draws the spawn marker, a grid and the pin.
+ * highlighted one, pans by drag, zooms around the cursor, and draws the spawn marker, a grid, the pin and the
+ * cross-section's cut line (SP2b spec §4.5).
  */
 import { MAP_TILE_PX, type MapLevel } from '../../core/constants';
 import type { Spawn } from '../../gen/column/spawn';
 import { levelFor } from '../../gen/map/tile';
+import type { CutOverlay } from '../crossSection/model';
 import { JobCancelled, WorkerFailed, type WorkerPool } from '../../engine/workerPool';
 import { tileCacheCapacity, TILE_CACHE_MIN } from './capacity';
 import { createFallbacks, type LevelTiles, type TileDraw } from './fallback';
@@ -40,6 +42,10 @@ export interface MapCanvas {
   setGrid(on: boolean): void;
   /** Dims every biome but `id` on the biome layer's tiles (SP2b spec §5.3); null ends the highlight. */
   highlightBiome(id: number | null): void;
+  /** The cut line A → B (SP2b spec §4.5), dashed while pending; null removes it. */
+  setCutLine(line: CutOverlay | null): void;
+  /** A crosshair cursor while the cut-line tool waits for a click. */
+  setCrosshair(on: boolean): void;
   /** Blank draws since the first image (SP2b spec §2.8), for the latency hook. */
   readonly blankDraws: number;
   destroy(): void;
@@ -64,6 +70,7 @@ export function createMapCanvas(host: HTMLElement, pool: WorkerPool, initial: Ma
   let raf = 0;
   let interactive = false;
   let highlight: number | null = null;
+  let cutLine: CutOverlay | null = null;
   const fallbacks = createFallbacks();
   /** Highlight masks of the highlighted biome only, by tile key. */
   const masks = new Map<string, OffscreenCanvas>();
@@ -153,6 +160,36 @@ export function createMapCanvas(host: HTMLElement, pool: WorkerPool, initial: Ma
     };
     if (spawn !== null) marker(spawn.x, spawn.z, '#ff3b30');
     if (pin !== null) marker(pin[0], pin[1], '#ffd60a');
+    if (cutLine !== null) {
+      const [ax, ay] = worldToScreen(view, w, h, cutLine.a[0], cutLine.a[1]);
+      const [bx, by] = worldToScreen(view, w, h, cutLine.b[0], cutLine.b[1]);
+      ctx2d.lineCap = 'round';
+      ctx2d.strokeStyle = 'rgba(0,0,0,0.6)';
+      ctx2d.lineWidth = 4;
+      ctx2d.beginPath();
+      ctx2d.moveTo(ax, ay);
+      ctx2d.lineTo(bx, by);
+      ctx2d.stroke();
+      ctx2d.strokeStyle = '#ffffff';
+      ctx2d.lineWidth = 2;
+      ctx2d.setLineDash(cutLine.pending ? [6, 4] : []);
+      ctx2d.stroke();
+      ctx2d.setLineDash([]);
+      ctx2d.font = 'bold 12px system-ui, sans-serif';
+      ctx2d.lineWidth = 3;
+      const ends: ReadonlyArray<readonly [number, number, string]> = cutLine.pending ? [[ax, ay, 'A']] : [[ax, ay, 'A'], [bx, by, 'B']];
+      for (const [x, y, label] of ends) {
+        ctx2d.fillStyle = '#ffffff';
+        ctx2d.beginPath();
+        ctx2d.arc(x, y, 3.5, 0, 2 * Math.PI);
+        ctx2d.fill();
+        ctx2d.strokeStyle = 'rgba(0,0,0,0.75)';
+        ctx2d.strokeText(label, x + 6, y - 6);
+        ctx2d.fillText(label, x + 6, y - 6);
+      }
+      ctx2d.lineWidth = 1;
+      ctx2d.lineCap = 'butt';
+    }
   };
 
   const draw = () => {
@@ -227,6 +264,8 @@ export function createMapCanvas(host: HTMLElement, pool: WorkerPool, initial: Ma
       masks.clear();
       schedule();
     },
+    setCutLine(line) { cutLine = line; schedule(); },
+    setCrosshair(on) { canvas.classList.toggle('map-canvas-cut', on); },
     get blankDraws() { return fallbacks.blankDraws; },
     destroy() { cancelAnimationFrame(raf); observer.disconnect(); cache.clear(); masks.clear(); canvas.remove(); },
   };

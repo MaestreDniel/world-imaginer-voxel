@@ -1,0 +1,49 @@
+/* The Cross-section tab (SP2b spec §4.5): header, summary, the profile plot, its legend and the hover readout. */
+.cs { display: grid; grid-template-rows: auto auto minmax(0, 1fr) auto auto; height: 100%; min-height: 0; }
+.cs [hidden] { display: none !important; }
+.cs-head { display: flex; flex-wrap: wrap; align-items: baseline; gap: 4px 14px; padding: 4px 10px; border-bottom: 1px solid #333; }
+.cs-title { white-space: nowrap; }
+.cs-line { font-family: ui-monospace, monospace; color: #c8d0dc; }
+.cs-status { font-size: 12px; color: #8a95a8; }
+.cs[data-state="stale"] .cs-status { color: #f0b34a; }
+.cs-actions { display: flex; gap: 4px; margin-left: auto; }
+.cs-actions button { font: inherit; font-size: 12px; padding: 1px 7px; }
+.cs-summary { padding: 3px 10px 0; font-size: 12px; color: #b8c2d0; }
+.cs-summary:empty { display: none; }
+.cs-plotwrap { position: relative; min-width: 0; min-height: 120px; overflow: hidden; }
+.cs-plot { position: absolute; inset: 0; display: block; user-select: none; touch-action: none; }
+.cs-plotwrap.cs-stale .cs-plot { opacity: 0.4; }
+.cs-frame { fill: #15171b; stroke: #34406a; stroke-width: 0.5; }
+.cs-grid { stroke: #252b38; stroke-width: 1; }
+.cs-tick, .cs-axis-label, .cs-sea-label, .cs-lake-label, .cs-end-label, .cs-stale-label { font: 10px ui-monospace, monospace; fill: #8a95a8; }
+.cs-axis-label { fill: #c0c8d8; }
+.cs-end-label { font-weight: 700; fill: #e8ecf2; }
+.cs-ground { fill: #3b3327; }
+.cs-band { fill: #e0b36a; fill-opacity: 0.28; }
+.cs-offset { fill: none; stroke: #e8c88f; stroke-width: 1.6; }
+.cs-offset0 { fill: none; stroke: #c9d1dd; stroke-width: 0.8; stroke-dasharray: 3 2; }
+.cs-water-sea { fill: #2f6db5; fill-opacity: 0.7; }
+.cs-water-lake { fill: #3fb3d6; fill-opacity: 0.75; }
+.cs-sealine { stroke: #5f9bd6; stroke-dasharray: 4 3; }
+.cs-sea-label { fill: #5f9bd6; }
+.cs-lake-label { fill: #7fd3ec; }
+.cs-river .cs-stripe { fill: #6fa8e8; fill-opacity: 0.22; }
+.cs-river .cs-marker { fill: #6fa8e8; }
+.cs-gorge .cs-stripe { fill: #e0904a; fill-opacity: 0.25; }
+.cs-gorge .cs-marker { fill: #e0904a; }
+.cs-jag { fill: #b48ead; fill-opacity: 0.7; }
+.cs-stale-label { fill: #f0b34a; }
+.cs-cursor { stroke: #ffffff; stroke-opacity: 0.6; stroke-width: 1; pointer-events: none; }
+.cs-legend { display: flex; flex-wrap: wrap; gap: 2px 12px; padding: 2px 10px; font-size: 11px; color: #9aa; }
+.cs-key { display: inline-flex; align-items: center; gap: 4px; }
+.cs-swatch { display: inline-block; width: 14px; height: 8px; border-radius: 1px; }
+.cs-key-offset { height: 0; border-top: 2px solid #e8c88f; }
+.cs-key-band { background: rgba(224, 179, 106, 0.4); }
+.cs-key-offset0 { height: 0; border-top: 1px dashed #c9d1dd; }
+.cs-key-sea { background: #2f6db5; }
+.cs-key-lake { background: #3fb3d6; }
+.cs-key-sealine { height: 0; border-top: 1px dashed #5f9bd6; }
+.cs-key-river { background: rgba(111, 168, 232, 0.5); }
+.cs-key-gorge { background: rgba(224, 144, 74, 0.55); }
+.cs-key-jag { background: #b48ead; }
+.cs-readout { padding: 2px 10px 4px; font: 11px ui-monospace, monospace; color: #b8c2d0; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }

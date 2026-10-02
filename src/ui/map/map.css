@@ -14,11 +14,13 @@
 .map-toolbar input[type="text"] { width: 11em; }
 .map-size { width: 110px; }
 .map-approx { display: inline-block; width: 1em; color: #f0b34a; }
+.map-cut[aria-pressed="true"] { color: #fff; background: #4a6fa5; border-color: #6f93c8; }
 .map-status { margin-left: auto; font-family: ui-monospace, monospace; color: #9aa; white-space: nowrap; }
 .map-status-error { color: #ff7b72; }
 .map-notices { grid-area: notices; padding: 4px 10px; border-bottom: 1px solid #333; }
 .map-view { grid-area: view; position: relative; min-width: 0; min-height: 0; overflow: hidden; }
 .map-canvas { display: block; width: 100%; height: 100%; cursor: grab; }
+.map-canvas.map-canvas-cut { cursor: crosshair; }
 .map-split { background: #2a2d34; touch-action: none; }
 .map-split:hover, .map-split.dragging { background: #4a6fa5; }
 .map-split-v { grid-area: vsplit; cursor: col-resize; }
@@ -29,7 +31,12 @@
 .map-tabs button[aria-selected="true"] { color: #eee; border-bottom-color: #4a90d9; }
 .map-tab { flex: 1 1 auto; min-height: 0; overflow: auto; padding: 8px 10px; }
 .map-tab h3 { margin: 10px 0 4px; font-size: 12px; text-transform: uppercase; color: #9aa; }
-.map-drawer { grid-area: drawer; height: max(160px, min(var(--drawer-h), 60vh)); overflow: auto; background: #1f2228; }
+.map-drawer { grid-area: drawer; display: flex; flex-direction: column; height: max(160px, min(var(--drawer-h), 60vh)); overflow: hidden; background: #1f2228; }
+.map-drawer[hidden], .map-drawer-tab[hidden] { display: none; }
+.map-drawer-tabs { display: flex; flex: 0 0 auto; gap: 2px; padding: 0 8px; border-bottom: 1px solid #333; }
+.map-drawer-tabs button { padding: 3px 10px; font: inherit; font-size: 12px; color: #9aa; background: none; border: 0; border-bottom: 2px solid transparent; cursor: pointer; }
+.map-drawer-tabs button[aria-selected="true"] { color: #eee; border-bottom-color: #4a90d9; }
+.map-drawer-tab { flex: 1 1 auto; min-height: 0; overflow: auto; }
 .map-readout { font-family: ui-monospace, monospace; white-space: pre; }
 .map.panel-hidden { grid-template-columns: minmax(0, 1fr) 0 0; }
 .map.panel-hidden .map-side, .map.panel-hidden .map-split-v { display: none; }

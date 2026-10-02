@@ -1,16 +1,20 @@
 /**
  * The editor page layout (SP2b spec §3.1): a CSS grid with the toolbar row, a notice strip, the main row
  * (the map, a splitter and the side panel with the tabs World, Parameters, Biomes and Presets) and the
- * drawer row under both, with its own splitter. The drawer is closed until an editor opens it. Panel width,
- * drawer height, active tab and open sections persist in localStorage under `wi10.layout.v1`: the parsing
- * and clamping are pure, and every storage access is behind try/catch, so a missing, invalid or unreachable
- * value gives the defaults. The map canvas follows its host through mapView's ResizeObserver.
+ * drawer row under both, with its own splitter and the tabs Spline (§4.2) and Cross-section (§4.5). The
+ * drawer is closed until an editor opens it on its tab. Panel width, drawer height, active tab and open
+ * sections persist in localStorage under `wi10.layout.v1`: the parsing and clamping are pure, and every
+ * storage access is behind try/catch, so a missing, invalid or unreachable value gives the defaults. The map
+ * canvas follows its host through mapView's ResizeObserver.
  */
 import { el } from '../common/dom';
 
 export type TabId = 'world' | 'parameters' | 'biomes' | 'presets';
 export const TAB_IDS: readonly TabId[] = Object.freeze(['world', 'parameters', 'biomes', 'presets']);
 const TAB_LABELS: Readonly<Record<TabId, string>> = { world: 'World', parameters: 'Parameters', biomes: 'Biomes', presets: 'Presets' };
+export type DrawerTabId = 'spline' | 'section';
+export const DRAWER_TAB_IDS: readonly DrawerTabId[] = Object.freeze(['spline', 'section']);
+const DRAWER_TAB_LABELS: Readonly<Record<DrawerTabId, string>> = { spline: 'Spline', section: 'Cross-section' };
 
 /** What the page remembers between visits. */
 export interface Layout {
@@ -121,8 +125,8 @@ export interface PageLayout {
   readonly map: HTMLElement;
   /** The host of each tab's content. */
   readonly tabs: Readonly<Record<TabId, HTMLElement>>;
-  /** The drawer's content host (the spline editor, Task 18). */
-  readonly drawer: HTMLElement;
+  /** The host of each drawer tab: the spline editor (§4.2) and the cross-section (§4.5). */
+  readonly drawerTabs: Readonly<Record<DrawerTabId, HTMLElement>>;
   readonly tab: TabId;
   showTab(id: TabId): void;
   readonly panelVisible: boolean;
@@ -130,8 +134,13 @@ export interface PageLayout {
   /** Calls `fn` after a tab is shown or the panel is shown or hidden; returns the unsubscribe function. */
   onPanelChange(fn: () => void): () => void;
   readonly drawerOpen: boolean;
-  openDrawer(): void;
+  /** The drawer tab shown while the drawer is open (not stored; Spline at first). */
+  readonly drawerTab: DrawerTabId;
+  /** Shows the drawer row on `tab`. */
+  openDrawer(tab: DrawerTabId): void;
   closeDrawer(): void;
+  /** Calls `fn` after the drawer opens or closes or, while open, shows another tab; returns the unsubscribe function. */
+  onDrawerChange(fn: () => void): () => void;
   sectionOpen(path: string): boolean;
   setSectionOpen(path: string, open: boolean): void;
 }
@@ -159,6 +168,9 @@ export function createLayout(root: HTMLElement, storage: LayoutStorage | null): 
   const drawer = el('div', 'map-drawer');
   hsplit.hidden = true;
   drawer.hidden = true;
+  const drawerBar = el('div', 'map-drawer-tabs');
+  drawerBar.setAttribute('role', 'tablist');
+  drawerBar.setAttribute('aria-label', 'Drawer');
 
   const buttons = {} as Record<TabId, HTMLButtonElement>;
   const tabs = {} as Record<TabId, HTMLElement>;
@@ -179,6 +191,24 @@ export function createLayout(root: HTMLElement, storage: LayoutStorage | null): 
     tabBar.append(b);
   }
   side.append(tabBar, ...TAB_IDS.map((id) => tabs[id]));
+  const drawerButtons = {} as Record<DrawerTabId, HTMLButtonElement>;
+  const drawerTabs = {} as Record<DrawerTabId, HTMLElement>;
+  for (const id of DRAWER_TAB_IDS) {
+    const b = el('button', '', DRAWER_TAB_LABELS[id]);
+    b.type = 'button';
+    b.id = `map-drawer-tab-${id}`;
+    b.setAttribute('role', 'tab');
+    b.setAttribute('aria-controls', `map-drawer-tabpanel-${id}`);
+    b.addEventListener('click', () => setDrawer(true, id));
+    const host = el('div', 'map-drawer-tab');
+    host.id = `map-drawer-tabpanel-${id}`;
+    host.setAttribute('role', 'tabpanel');
+    host.setAttribute('aria-labelledby', b.id);
+    drawerButtons[id] = b;
+    drawerTabs[id] = host;
+    drawerBar.append(b);
+  }
+  drawer.append(drawerBar, ...DRAWER_TAB_IDS.map((id) => drawerTabs[id]));
   page.append(toolbar, notices, map, vsplit, side, hsplit, drawer);
   root.replaceChildren(page);
 
@@ -229,10 +259,24 @@ export function createLayout(root: HTMLElement, storage: LayoutStorage | null): 
   splitter(vsplit, (from, dx) => ({ panelWidth: clampPanelWidth(from.panelWidth - dx) }));
   splitter(hsplit, (from, _dx, dy) => ({ drawerHeight: clampDrawerHeight(clampDrawerHeight(from.drawerHeight, innerHeight) - dy, innerHeight) }));
 
-  const setDrawer = (open: boolean) => { drawer.hidden = !open; hsplit.hidden = !open; };
+  let drawerTab: DrawerTabId = 'spline';
+  const drawerFns = new Set<() => void>();
+  const setDrawer = (open: boolean, tab: DrawerTabId = drawerTab) => {
+    const changed = open !== !drawer.hidden || (open && tab !== drawerTab);
+    drawerTab = tab;
+    drawer.hidden = !open;
+    hsplit.hidden = !open;
+    for (const t of DRAWER_TAB_IDS) {
+      drawerButtons[t].setAttribute('aria-selected', String(t === tab));
+      drawerButtons[t].tabIndex = t === tab ? 0 : -1;
+      drawerTabs[t].hidden = t !== tab;
+    }
+    if (changed) for (const fn of [...drawerFns]) fn();
+  };
+  setDrawer(false);
 
   return {
-    toolbar, notices, map, tabs, drawer,
+    toolbar, notices, map, tabs, drawerTabs,
     get tab() { return layout.tab; },
     showTab,
     get panelVisible() { return !page.classList.contains('panel-hidden'); },
@@ -245,8 +289,13 @@ export function createLayout(root: HTMLElement, storage: LayoutStorage | null): 
       return () => { panelFns.delete(fn); };
     },
     get drawerOpen() { return !drawer.hidden; },
-    openDrawer() { setDrawer(true); },
+    get drawerTab() { return drawerTab; },
+    openDrawer(tab) { setDrawer(true, tab); },
     closeDrawer() { setDrawer(false); },
+    onDrawerChange(fn) {
+      drawerFns.add(fn);
+      return () => { drawerFns.delete(fn); };
+    },
     sectionOpen(path) { return layout.openSections.includes(path); },
     setSectionOpen(path, open) {
       if (layout.openSections.includes(path) !== open) commit(withSection(layout, path, open));

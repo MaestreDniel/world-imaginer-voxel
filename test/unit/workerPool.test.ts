@@ -2,6 +2,7 @@ import { describe, expect, test } from 'vitest';
 import { DEFAULTS } from '../../src/core/params/defaults';
 import { createWorkerPool, JobCancelled, poolSize, WorkerFailed, type WorkerLike } from '../../src/engine/workerPool';
 import { BIOME_SHARES_POINTS, biomeSharePoints, biomeSharesInto, biomeSharesLength } from '../../src/metrics/biomeShares';
+import { CROSS_SECTION_POINTS, crossSectionInto, crossSectionLength } from '../../src/metrics/crossSection';
 import { SPLINE_STATS_POINTS, splineStatPoints, splineStatsInto, splineStatsLength, splineStatsNode } from '../../src/metrics/splineStats';
 import type { KnotPath } from '../../src/core/spline/types';
 import type { ToWorker } from '../../src/workers/protocol';
@@ -292,6 +293,19 @@ describe('worker pool: stats jobs (SP2b spec §5.4)', () => {
     log.length = 0;
     const none = await pool.stats('biomeShares', 0, SHARES);
     expect([statsOf(log).length, none.length, none.every((v) => v === 0)]).toEqual([0, SHARES.len, true]);
+  });
+
+  test('crossSection runs as one job over [0, n) whatever pool.size (SP2b spec §4.5); its result is the direct profile', async () => {
+    const log: ToWorker[] = [];
+    const pool = createWorkerPool(3, () => fakeWorker(log));
+    await pool.configure('42', DEFAULTS);
+    const args = { len: crossSectionLength(), ax: 5120, az: 3072, bx: 6656, bz: 3072 };
+    const got = await pool.stats('crossSection', CROSS_SECTION_POINTS, args);
+    expect(statsOf(log)).toEqual([['crossSection', 0, CROSS_SECTION_POINTS]]);
+    expect(Array.from(got)).toEqual(Array.from(direct((o) => crossSectionInto(ctxFor('42'), args, 0, CROSS_SECTION_POINTS, o), args.len)));
+    log.length = 0;
+    await pool.stats('crossSection', 100, args);
+    expect(statsOf(log)).toEqual([['crossSection', 0, 100]]);
   });
 
   test('a bad n or len rejects with RangeError before anything is queued', async () => {

@@ -5,14 +5,15 @@
  * SP2b §2.2-2.3: an optional abort cell (one pool-wide Int32 in a SharedArrayBuffer) holds the pool's epoch,
  * so a worker stops a superseded tile, spawn or stats job within a row or 256 points; job-less errors of
  * other epochs are ignored; a worker that raises an error event is removed and its pending work rejected
- * with WorkerFailed. SP2b §5.4: a stats request runs as `size` slices whose raw sums are added element-wise.
+ * with WorkerFailed. SP2b §5.4: a stats request runs as `size` slices whose raw sums are added element-wise
+ * (a crossSection request as one job, §4.5).
  * SP2b §2.8: `probe()` reports what the workers run, for the latency hook.
  */
 import type { MapLevel } from '../core/constants';
 import type { ColumnPoint } from '../gen/column/columnPoint';
 import type { Spawn } from '../gen/column/spawn';
 import type { LayerId } from '../gen/map/layers';
-import { parseFromWorker, type FromWorker, type ReadyMsg, type StatsArgs, type StatsKind, type StatsMsg, type ToWorker } from '../workers/protocol';
+import { parseFromWorker, STATS_KINDS, type FromWorker, type ReadyMsg, type StatsArgs, type StatsKind, type StatsMsg, type ToWorker } from '../workers/protocol';
 
 export interface WorkerLike {
   postMessage(msg: ToWorker, transfer?: Transferable[]): void;
@@ -79,11 +80,12 @@ export interface WorkerPool {
   point(x: number, z: number, priority?: number): Promise<ColumnPoint>;
   spawn(): Promise<Spawn>;
   /**
-   * The raw sums of a stats kind over points [0, n) of its fixed stream (spec §5.4): `size` slices, sent as
-   * ordinary jobs at `priority` (default 500: after preview tiles, before fine tiles), whose Float64 sums of
-   * length args.len are added element-wise in slice order. The first slice that fails rejects the request
-   * with its error (JobCancelled when a configure superseded it) and drops its queued slices; nothing is
-   * retried. Rejects with RangeError when n is not a non-negative integer or args.len not a positive one.
+   * The raw sums of a stats kind over points [0, n) of its fixed stream (spec §5.4): `size` slices (one for a
+   * 'single' kind of STATS_KINDS: crossSection), sent as ordinary jobs at `priority` (default 500: after
+   * preview tiles, before fine tiles), whose Float64 sums of length args.len are added element-wise in slice
+   * order. The first slice that fails rejects the request with its error (JobCancelled when a configure
+   * superseded it) and drops its queued slices; nothing is retried. Rejects with RangeError when n is not a
+   * non-negative integer or args.len not a positive one.
    */
   stats<K extends StatsKind>(kind: K, n: number, args: StatsArgs<K>, priority?: number): Promise<Float64Array<ArrayBuffer>>;
   /** Recomputes one golden in a worker (no configure needed). */
@@ -259,9 +261,10 @@ export function createWorkerPool(size: number, spawn: () => WorkerLike, opts: Po
       const e = epoch;
       const group = nextGroup++;
       const slices: Array<Promise<FromWorker>> = [];
-      for (let i = 0; i < size; i++) {
-        const from = Math.floor((i * n) / size);
-        const to = Math.floor(((i + 1) * n) / size);
+      const parts = STATS_KINDS[kind] === 'split' ? size : 1;
+      for (let i = 0; i < parts; i++) {
+        const from = Math.floor((i * n) / parts);
+        const to = Math.floor(((i + 1) * n) / parts);
         if (from === to) continue;
         slices.push(enqueue(priority, (jobId) => ({ type: 'stats', jobId, epoch: e, kind, from, to, args }) as StatsMsg, null, group));
       }

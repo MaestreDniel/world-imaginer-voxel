@@ -109,7 +109,8 @@ export function createSplineDrawer(host: HTMLElement, deps: DrawerDeps): SplineD
   };
 
   const head = el('div', 'sd-head');
-  const title = el('strong', 'sd-title');
+  // Until a leaf opens (the drawer's Spline tab can be shown first), only this hint shows.
+  const title = el('strong', 'sd-title', 'No spline open: press Edit on a spline in the Parameters tab');
   const crumbs = el('nav', 'sd-crumbs');
   crumbs.setAttribute('aria-label', 'Open node');
   const probes = el('div', 'sd-probes');
@@ -141,9 +142,11 @@ export function createSplineDrawer(host: HTMLElement, deps: DrawerDeps): SplineD
   const importBtn = button('Import shape', 'Replace the spline with a .wi10-shape.json file (one undo step)', () => fileInput.click());
   const closeBtn = button('Close', 'Close the drawer (Escape)', () => deps.close());
   actions.append(autoNode, autoAll, resetBtn, exportBtn, importBtn, closeBtn, fileInput);
+  actions.hidden = true;
   head.append(title, crumbs, probes, actions);
 
   const body = el('div', 'sd-body');
+  body.hidden = true;
   const tree = createSplineTreeView((p) => openNode(p, null));
   const plotHost = el('div', 'sd-plotwrap');
   const side = el('div', 'sd-side');
@@ -575,6 +578,8 @@ export function createSplineDrawer(host: HTMLElement, deps: DrawerDeps): SplineD
 
   return {
     open(next) {
+      body.hidden = false;
+      actions.hidden = false;
       if (next !== leaf) {
         leaf = next;
         nodePath = [];

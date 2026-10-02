@@ -42,6 +42,8 @@ test('bad fixture tree reports every banned use', () => {
     'src/light/dom.ts:1 dom-global',
     'src/metrics/biomeShares.ts:1 nondeterministic',
     'src/metrics/biomeShares.ts:2 math-member',
+    'src/metrics/crossSection.ts:1 nondeterministic',
+    'src/metrics/crossSection.ts:2 math-member',
     'src/metrics/direct.ts:2 hot-import-reference',
     'src/metrics/liveness.ts:1 math-pow-operator',
     'src/metrics/sp1Goldens.ts:1 nondeterministic',

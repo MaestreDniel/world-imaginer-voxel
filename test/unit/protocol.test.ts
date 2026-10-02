@@ -5,6 +5,7 @@ import type { KnotPath } from '../../src/core/spline/types';
 import { columnPoint } from '../../src/gen/column/columnPoint';
 import { findSpawn } from '../../src/gen/column/spawn';
 import { BIOME_SHARES_POINTS, biomeSharePoints, biomeSharesInto, biomeSharesLength } from '../../src/metrics/biomeShares';
+import { CROSS_SECTION_POINTS, crossSectionInto, crossSectionLength } from '../../src/metrics/crossSection';
 import { computeAnyGolden } from '../../src/metrics/sp2aGoldens';
 import { SPLINE_STATS_POINTS, splineStatPoints, splineStatsInto, splineStatsLength, splineStatsNode, type SplineLeaf } from '../../src/metrics/splineStats';
 import { paintTile, paintTileAbortable } from '../../src/gen/map/tile';
@@ -16,6 +17,8 @@ import { ctxFor } from '../harness/gen';
 const tileMsg = { type: 'mapTile', jobId: 1, epoch: 3, layer: 'biome', level: 64, tx: 2, tz: -1 };
 const configure = (epoch: number, abort: SharedArrayBuffer | null = null, params: unknown = DEFAULTS, seedText = '42') => ({ type: 'configure', epoch, seedText, params, abort });
 const stats = (jobId: number, epoch: number, kind: string, from: number, to: number, args: unknown) => ({ type: 'stats', jobId, epoch, kind, from, to, args });
+/** A crossSection job's args: the sum's length and the segment's ends. */
+const line = (ax: number, az: number, bx: number, bz: number, len = 4096) => ({ len, ax, az, bx, bz });
 /** The length of a splineStats sum for the node at `node` of the leaf's default spline. */
 const splineLen = (leaf: SplineLeaf, node: KnotPath) => splineStatsLength(splineStatsNode(DEFAULTS, leaf, node)!.points.length);
 /** Byte equality through Buffer (vitest's deep equality is slow on 262 144-byte arrays). */
@@ -32,6 +35,12 @@ describe('parseToWorker', () => {
     expect(parseToWorker({ type: 'selftest', jobId: 5, key: 'sp1.params' })).not.toBeNull();
     expect(parseToWorker(stats(6, 3, 'splineStats', 0, 100, { len: 87, leaf: 'shape.offset', node: [6, 0] }))).not.toBeNull();
     expect(parseToWorker(stats(7, 3, 'biomeShares', 5, 5, { len: 31 }))).not.toBeNull();
+    expect(parseToWorker(stats(8, 3, 'crossSection', 0, 512, line(5120, 3072, 6656, 3072)))).not.toBeNull();
+  });
+  test('crossSection ends are only checked to be numbers: outside the window, NaN or A = B parse, and the handler answers BAD_ARGS', () => {
+    for (const args of [line(524288, 0, 0, 0), line(Number.NaN, 0, 1, 1), line(0, Infinity, 1, 1), line(7, 7, 7, 7)]) {
+      expect(parseToWorker(stats(8, 3, 'crossSection', 0, 512, args))).not.toBeNull();
+    }
   });
   test.each<[string, unknown]>([
     ['not an object', 5],
@@ -59,6 +68,8 @@ describe('parseToWorker', () => {
     ['splineStats whose leaf is not a string', stats(6, 3, 'splineStats', 0, 9, { len: 87, leaf: 7, node: [] })],
     ['splineStats whose node is not an array', stats(6, 3, 'splineStats', 0, 9, { len: 87, leaf: 'shape.offset', node: '6' })],
     ['splineStats whose node holds a non-integer', stats(6, 3, 'splineStats', 0, 9, { len: 87, leaf: 'shape.offset', node: [0.5] })],
+    ['crossSection whose end is not a number', stats(6, 3, 'crossSection', 0, 512, { len: 4096, ax: '0', az: 0, bx: 1, bz: 1 })],
+    ['crossSection without bz', stats(6, 3, 'crossSection', 0, 512, { len: 4096, ax: 0, az: 0, bx: 1 })],
   ])('%s is rejected', (_n, m) => {
     expect(parseToWorker(m)).toBeNull();
   });
@@ -92,6 +103,7 @@ describe('parseFromWorker', () => {
     const result = (kind: string, data: unknown) => ({ type: 'statsResult', jobId: 6, epoch: 3, kind, data });
     expect(parseFromWorker(result('biomeShares', new ArrayBuffer(8 * 31)))).not.toBeNull();
     expect(parseFromWorker(result('splineStats', new ArrayBuffer(8)))).not.toBeNull();
+    expect(parseFromWorker(result('crossSection', new ArrayBuffer(8 * 4096)))).not.toBeNull();
     expect(parseFromWorker(result('biomeShares', new ArrayBuffer(12)))).toBeNull();
     expect(parseFromWorker(result('biomeShares', new ArrayBuffer(0)))).toBeNull();
     expect(parseFromWorker(result('biomeShares', new Float64Array(31)))).toBeNull();
@@ -189,6 +201,11 @@ describe('task handler', () => {
     const shares = new Float64Array(biomeSharesLength());
     expect(biomeSharesInto(ctx, biomeSharePoints(), BIOME_SHARES_POINTS - 1500, BIOME_SHARES_POINTS, shares)).toBe(true);
     cases.push([stats(30, 3, 'biomeShares', BIOME_SHARES_POINTS - 1500, BIOME_SHARES_POINTS, { len: biomeSharesLength() }), shares]);
+    for (const [from, to] of [[0, CROSS_SECTION_POINTS], [100, 300]] as const) {
+      const section = new Float64Array(crossSectionLength());
+      expect(crossSectionInto(ctx, { ax: 5120, az: 3072, bx: 6656, bz: 3072 }, from, to, section)).toBe(true);
+      cases.push([stats(40 + from, 3, 'crossSection', from, to, line(5120, 3072, 6656, 3072)), section]);
+    }
     for (const [msg, want] of cases) {
       const r = h.handle(msg);
       const { jobId, kind } = msg as { jobId: number; kind: string };
@@ -198,8 +215,8 @@ describe('task handler', () => {
       expect(Array.from(new Float64Array(r.msg.data))).toEqual(Array.from(want));
     }
   });
-  test('the streams are the metrics streams: splineStats has 60 000 points, biomeShares 100 000', () => {
-    expect([SPLINE_STATS_POINTS, splineStatPoints().n, BIOME_SHARES_POINTS, biomeSharePoints().n]).toEqual([60000, 60000, 100000, 100000]);
+  test('the streams are the metrics streams: splineStats has 60 000 points, biomeShares 100 000, crossSection 512 along its line', () => {
+    expect([SPLINE_STATS_POINTS, splineStatPoints().n, BIOME_SHARES_POINTS, biomeSharePoints().n, CROSS_SECTION_POINTS]).toEqual([60000, 60000, 100000, 100000, 512]);
   });
   test('stats arguments that do not fit the configured params reply BAD_ARGS with the job\'s epoch', () => {
     const flat = flattenKnot(DEFAULTS.shape.offset, [6], new Float64Array(6), leafOpts('shape.offset'));
@@ -223,6 +240,25 @@ describe('task handler', () => {
     expect(code(stats(9, 3, 'splineStats', 0, 10, { len: root, leaf: 'shape.offset', node: [] }))).toEqual(['statsResult']);
     expect(code(stats(10, 3, 'splineStats', 0, 10, { len: splineLen('shape.jag', [1]), leaf: 'shape.jag', node: [1] }))).toEqual(['statsResult']);
   });
+  test('a crossSection whose line leaves the half-open world window or has no length replies BAD_ARGS (SP2b spec §4.5)', () => {
+    const h = createTaskHandler();
+    h.handle(configure(3));
+    const reply = (args: unknown, from = 0, to = 512) => {
+      const r = h.handle(stats(1, 3, 'crossSection', from, to, args)).msg;
+      return r.type === 'error' ? [r.code, r.jobId, r.epoch, r.message] : [r.type];
+    };
+    const outside = (end: string, x: string, z: string) => ['BAD_ARGS', 1, 3, `${end} (${x}, ${z}) is outside the world window [-524288, 524288)`];
+    expect(reply(line(524288, 0, 0, 0))).toEqual(outside('A', '524288', '0'));
+    expect(reply(line(0, -524289, 0, 0))).toEqual(outside('A', '0', '-524289'));
+    expect(reply(line(0, 0, 100, 524288))).toEqual(outside('B', '100', '524288'));
+    expect(reply(line(Number.NaN, 0, 100, 0))).toEqual(outside('A', 'NaN', '0'));
+    expect(reply(line(0, 0, -Infinity, 0))).toEqual(outside('B', '-Infinity', '0'));
+    expect(reply(line(-40, 9, -40, 9))).toEqual(['BAD_ARGS', 1, 3, 'A and B are the same point (-40, 9)']);
+    expect(reply(line(0, 0, 100, 0, 4095))).toEqual(['BAD_ARGS', 1, 3, 'args.len 4095, expected 4096']);
+    expect(reply(line(0, 0, 100, 0), 0, 513)).toEqual(['BAD_ARGS', 1, 3, 'points [0, 513) outside the stream of 512']);
+    // The window's own corners are inside: −2^19 is in it, 2^19 − 1 too.
+    expect(reply(line(-524288, -524288, 524287, 524287))).toEqual(['statsResult']);
+  });
   test('with an abort cell, a stats job whose epoch the cell has left replies ABORTED', () => {
     const sab = new SharedArrayBuffer(4);
     const cell = new Int32Array(sab);
@@ -234,6 +270,7 @@ describe('task handler', () => {
     expect(r.msg).toMatchObject({ type: 'error', jobId: 1, epoch: 3, code: 'ABORTED' });
     expect(r.transfer).toEqual([]);
     expect(h.handle(stats(2, 3, 'splineStats', 0, 1000, { len: splineLen('shape.offset', []), leaf: 'shape.offset', node: [] })).msg).toMatchObject({ code: 'ABORTED' });
+    expect(h.handle(stats(4, 3, 'crossSection', 0, 512, line(5120, 3072, 6656, 3072))).msg).toMatchObject({ type: 'error', jobId: 4, epoch: 3, code: 'ABORTED' });
     Atomics.store(cell, 0, 3);
     expect(h.handle(stats(3, 3, 'biomeShares', 0, 1000, { len: biomeSharesLength() })).msg.type).toBe('statsResult');
   });

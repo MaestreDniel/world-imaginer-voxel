@@ -4,7 +4,8 @@
  * tile / pointResult / spawnResult / statsResult / selftestResult / error. selftest needs no configure.
  * Configure carries the pool's abort cell (SP2b spec §2.2), errors carry the epoch of the message they
  * answer (§2.3), biome tiles carry the biome id of every pixel (§5.3), and a stats job returns the raw
- * sums of one kind over a range of the kind's fixed point stream (§5.4).
+ * sums of one kind over a range of the kind's fixed point stream (§5.4) or, for crossSection, of the points
+ * along its line (§4.5).
  */
 import { MAP_LEVELS, MAP_TILE_PX, type MapLevel } from '../core/constants';
 import type { StageId } from '../core/ids';
@@ -32,7 +33,12 @@ interface StatsBase { readonly type: 'stats'; readonly jobId: number; readonly e
 export interface SplineStatsMsg extends StatsBase { readonly kind: 'splineStats'; readonly args: { readonly len: number; readonly leaf: SplineLeaf; readonly node: KnotPath } }
 /** Surface-biome counts, ties, outside and total (spec §5.5). */
 export interface BiomeSharesMsg extends StatsBase { readonly kind: 'biomeShares'; readonly args: { readonly len: number } }
-export type StatsMsg = SplineStatsMsg | BiomeSharesMsg;
+/** The profile along the line A = (ax, az) → B = (bx, bz) at its 512 points (spec §4.5). */
+export interface CrossSectionMsg extends StatsBase {
+  readonly kind: 'crossSection';
+  readonly args: { readonly len: number; readonly ax: number; readonly az: number; readonly bx: number; readonly bz: number };
+}
+export type StatsMsg = SplineStatsMsg | BiomeSharesMsg | CrossSectionMsg;
 export type StatsKind = StatsMsg['kind'];
 export type StatsArgs<K extends StatsKind> = Extract<StatsMsg, { readonly kind: K }>['args'];
 export type ToWorker = ConfigureMsg | MapTileMsg | PointMsg | SpawnMsg | StatsMsg | SelftestMsg;
@@ -56,13 +62,18 @@ const isObj = (v: unknown): v is Record<string, unknown> => typeof v === 'object
 const isInt = (v: unknown): v is number => typeof v === 'number' && Number.isInteger(v);
 const isFiniteNum = (v: unknown): v is number => typeof v === 'number' && Number.isFinite(v);
 const isAbortCell = (v: unknown): boolean => v === null || (typeof SharedArrayBuffer === 'function' && v instanceof SharedArrayBuffer && v.byteLength === 4);
-/** Every stats kind (a record, so a new kind cannot be left out). */
-const STATS_KINDS: Readonly<Record<StatsKind, true>> = { splineStats: true, biomeShares: true };
+/**
+ * Every stats kind (a record, so a new kind cannot be left out) and how the pool runs a request of it (spec
+ * §5.4): 'split' into pool.size slices whose sums it adds, or 'single', one job over the whole range.
+ */
+export const STATS_KINDS: Readonly<Record<StatsKind, 'split' | 'single'>> = Object.freeze({ splineStats: 'split', biomeShares: 'split', crossSection: 'single' });
 const isStatsKind = (v: unknown): v is StatsKind => typeof v === 'string' && Object.hasOwn(STATS_KINDS, v);
+const SEGMENT_KEYS = ['ax', 'az', 'bx', 'bz'] as const;
 /**
  * The shape of a stats job: a point range 0 ≤ from ≤ to and args with a positive integer len; splineStats
- * args also name a leaf (a string) and a node (an array of integers). Whether the leaf, the node, len and
- * `to` fit the configured params is the handler's check (BAD_ARGS).
+ * args also name a leaf (a string) and a node (an array of integers), crossSection args the ends of the line
+ * (numbers). Whether the leaf, the node, the line, len and `to` fit the configured params is the handler's
+ * check (BAD_ARGS).
  */
 const statsOk = (m: Record<string, unknown>): boolean => {
   const from = m['from'];
@@ -71,6 +82,7 @@ const statsOk = (m: Record<string, unknown>): boolean => {
   if (!isInt(m['jobId']) || !isInt(m['epoch']) || !isStatsKind(m['kind'])) return false;
   if (!isInt(from) || !isInt(to) || from < 0 || to < from) return false;
   if (!isObj(args) || !isInt(args['len']) || args['len'] < 1) return false;
+  if (m['kind'] === 'crossSection') return SEGMENT_KEYS.every((k) => typeof args[k] === 'number');
   if (m['kind'] !== 'splineStats') return true;
   const node = args['node'];
   return typeof args['leaf'] === 'string' && Array.isArray(node) && node.every(isInt);

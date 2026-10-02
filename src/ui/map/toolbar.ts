@@ -2,14 +2,15 @@
  * The editor toolbar (SP2b spec §3.1): layer select; seed input with "Same seed" and "New seed"; profile
  * select (ready profiles) with the inline confirmation before a switch that clears modified parameters;
  * the biome-size slider (§6.4: a pointer drag is one gesture, a keyboard step one urgent edit); undo and
- * redo; the grid toggle; the preview status (§2.6). Every edit goes through the session; sync() shows its
- * draft after each change.
+ * redo; the grid toggle; the cut-line button (§4.5); the preview status (§2.6). Every edit goes through the
+ * session; sync() shows its draft after each change.
  */
 import { isProfileId, isProfileReady, PROFILE_IDS, type ProfileId } from '../../core/params/profiles';
 import type { SessionResult, WorldSession } from '../../engine/session';
 import { isLayerId, LAYERS, type LayerId } from '../../gen/map/layers';
 import { el } from '../common/dom';
 import type { Notices } from '../common/notice';
+import { cutButton, CUT_OFF, type CutTool } from '../crossSection/model';
 import { BIOME_SIZE_SCALE, biomeSizePosition } from './biomeSize';
 import type { DriverStatus } from './previewDriver';
 
@@ -50,6 +51,8 @@ export interface ToolbarDeps {
   edit(e: Event, fn: () => void): void;
   onLayer(id: LayerId): void;
   onGrid(on: boolean): void;
+  /** The cut-line button: arms the map's two-click line tool, or cancels it while armed (§4.5). */
+  onCut(): void;
 }
 
 export interface Toolbar {
@@ -57,6 +60,8 @@ export interface Toolbar {
   sync(): void;
   setLayer(id: LayerId): void;
   setStatus(s: DriverStatus): void;
+  /** Shows the cut-line tool's state on its button. */
+  setCut(tool: CutTool): void;
 }
 
 const SCALE_PATH = 'climate.scaleMul';
@@ -109,10 +114,19 @@ export function createToolbar(host: HTMLElement, deps: ToolbarDeps): Toolbar {
   gridBox.type = 'checkbox';
   const gridLabel = el('label', 'map-group', 'grid ');
   gridLabel.append(gridBox);
+  const cutBtn = button('', '');
+  cutBtn.className = 'map-cut';
+  const showCut = (tool: CutTool) => {
+    const b = cutButton(tool);
+    cutBtn.textContent = b.label;
+    cutBtn.title = b.tip;
+    cutBtn.setAttribute('aria-pressed', String(b.pressed));
+  };
+  showCut(CUT_OFF);
   const status = el('span', 'map-status', 'last edit → preview …');
   host.append(
     el('strong', 'map-title', 'world-imaginer-voxel · map'), layerSelect, group('seed', seedInput, sameSeed, newSeed),
-    group('profile', profileSelect), sizeGroup, group('', undoBtn, redoBtn), gridLabel, status,
+    group('profile', profileSelect), sizeGroup, group('', undoBtn, redoBtn), gridLabel, cutBtn, status,
   );
 
   const sync = () => {
@@ -179,6 +193,7 @@ export function createToolbar(host: HTMLElement, deps: ToolbarDeps): Toolbar {
   undoBtn.addEventListener('click', (e) => edit(e, () => session.undo()));
   redoBtn.addEventListener('click', (e) => edit(e, () => session.redo()));
   gridBox.addEventListener('change', () => deps.onGrid(gridBox.checked));
+  cutBtn.addEventListener('click', () => deps.onCut());
 
   sync();
   return {
@@ -188,5 +203,6 @@ export function createToolbar(host: HTMLElement, deps: ToolbarDeps): Toolbar {
       status.textContent = previewStatusText(s);
       status.classList.toggle('map-status-error', s.error !== null);
     },
+    setCut: showCut,
   };
 }

@@ -6,7 +6,8 @@
  * (§3.3); the Parameters tab holds the parameter panel (§3.2), whose spline "Edit" opens the spline drawer
  * under the map (§4.2); the Biomes tab holds the biome share preview (§5.5) over the biome table (§5.2), whose
  * hovered row the canvas highlights on the biome layer (§5.3); the Presets tab exports and imports preset files
- * and holds the JSON patch box (§3.4).
+ * and holds the JSON patch box (§3.4). The toolbar's "Cut line" arms a two-click line tool on the map, whose line
+ * the drawer's Cross-section tab profiles (§4.5).
  * `?map&perf=edit` also loads the latency hook (§2.8, `perfHook.ts`), which pins the canvas and the world.
  */
 import './map.css';
@@ -21,6 +22,8 @@ import { el } from '../common/dom';
 import { installShortcuts } from '../common/keys';
 import { createNotices } from '../common/notice';
 import { createUrlWriter } from '../common/urlWriter';
+import { CUT_ARMED, CUT_OFF, cutClick, cutOverlay, segmentDistance, type CutPoint, type CutTool } from '../crossSection/model';
+import { createCrossSection } from '../crossSection/section';
 import { createParamPanel } from '../paramPanel/panel';
 import { createPresetsTab } from '../presets/presetsTab';
 import { cryptoSeed } from '../seedBox';
@@ -33,6 +36,8 @@ import { applyMapHash, decodeMapState, encodeMapState, type MapView } from './ma
 import { createPreviewDriver, type DriverClock, type DriverDraft, type PreviewDriver } from './previewDriver';
 import { createToolbar } from './toolbar';
 
+/** A click this close to the cut line (screen px) shows its profile instead of pinning the point. */
+const LINE_HIT_PX = 6;
 const draftOf = (s: SessionState): DriverDraft => ({ sessionEpoch: s.epoch, seedText: s.seedText, seedKey: `${s.seed[0]}.${s.seed[1]}`, params: s.params });
 const spawnText = (sp: Spawn): string => `${sp.x}, ${sp.z} (y ${sp.y}, ${biomeName(sp.biome)}${sp.fallback ? ', fallback' : ''})`;
 
@@ -83,10 +88,23 @@ export async function mountMapPage(root: HTMLElement): Promise<void> {
   };
   const edit = (e: Event, fn: () => void): void => { editAt(e.timeStamp, fn); };
 
+  // The cut-line tool (§4.5): while armed, map clicks set A, then B; otherwise a click on the line shows its
+  // profile and any other click pins the point.
+  let cut: CutTool = CUT_OFF;
+  let cutPointer: CutPoint | null = null;
   const canvas = createMapCanvas(layout.map, pool, view, {
     onView: (v) => { view = v; canvas.setView(v); writeUrl(); renderStatus(); },
-    onHover: (x, z) => hover.move(x, z),
-    onClick: (x, z) => { canvas.setPin([x, z]); },
+    onHover: (x, z) => {
+      hover.move(x, z);
+      if (cut.mode !== 'b') return;
+      cutPointer = [x, z];
+      drawCut();
+    },
+    onClick: (x, z) => {
+      if (cut.mode !== 'off') cutAt(x, z);
+      else if (section.line !== null && segmentDistance(section.line, x, z) <= LINE_HIT_PX * view.bpp) layout.openDrawer('section');
+      else canvas.setPin([x, z]);
+    },
     onPreviewProgress: (epoch, drawn, visible) => {
       perf?.drawn(epoch, drawn, visible);
       driver.previewProgress(epoch, drawn, visible);
@@ -126,6 +144,7 @@ export async function mountMapPage(root: HTMLElement): Promise<void> {
     session, notices, layer: view.layer, edit,
     onLayer: (layer) => { setView({ ...view, layer }); writeUrl(); },
     onGrid: (on) => canvas.setGrid(on),
+    onCut: () => setCut(cut.mode === 'off' ? CUT_ARMED : CUT_OFF),
   });
 
   // The hover readout shows points of the canvas source's pool epoch only (§2.5).
@@ -145,22 +164,59 @@ export async function mountMapPage(root: HTMLElement): Promise<void> {
   });
 
   // Parameters tab (§3.2). It subscribes after the page, so a change reaches the driver before the panel redraws.
-  // A spline's "Edit" shows the drawer row and opens the spline drawer on the leaf (§4.2).
+  // A spline's "Edit" opens the spline drawer on the leaf (§4.2), then shows the drawer on its tab, whose change
+  // makes the drawer request the leaf's statistics (not those of a leaf it showed before).
   createParamPanel(layout.tabs.parameters, {
     session, edit, sections: layout,
     openSpline: (path) => {
       if (!isSplineLeaf(path)) return;
-      layout.openDrawer();
       splines.open(path);
+      layout.openDrawer('spline');
     },
     showBiomes: () => layout.showTab('biomes'),
   });
 
-  // The spline drawer (§4.2-4.4): it requests its statistics when the driver settles (§4.3).
-  const splines = createSplineDrawer(layout.drawer, {
+  // The drawer's Spline tab (§4.2-4.4): it requests its statistics when the driver settles (§4.3).
+  const splines = createSplineDrawer(layout.drawerTabs.spline, {
     session, notices, pool, driver, edit,
-    visible: () => layout.drawerOpen,
+    visible: () => layout.drawerOpen && layout.drawerTab === 'spline',
     close: () => layout.closeDrawer(),
+  });
+
+  // The drawer's Cross-section tab (§4.5): the profile along the cut line, requested when the driver settles
+  // while the tab is on screen, when it comes on screen and when a line is drawn.
+  const section = createCrossSection(layout.drawerTabs.section, {
+    session, notices, pool, driver,
+    visible: () => layout.drawerOpen && layout.drawerTab === 'section',
+    arm: () => setCut(CUT_ARMED),
+    clear: () => {
+      section.setLine(null);
+      drawCut();
+    },
+    close: () => layout.closeDrawer(),
+  });
+  function drawCut(): void {
+    canvas.setCutLine(cutOverlay(cut, section.line, cutPointer));
+  }
+  function setCut(next: CutTool): void {
+    cut = next;
+    cutPointer = null;
+    toolbar.setCut(next);
+    canvas.setCrosshair(next.mode !== 'off');
+    drawCut();
+  }
+  function cutAt(x: number, z: number): void {
+    const step = cutClick(cut, x, z);
+    if (step.problem !== null) notices.show(step.problem, { kind: 'warn', timeoutMs: 4000 });
+    if (step.line !== null) section.setLine(step.line);
+    setCut(step.tool);
+    if (step.line !== null) layout.openDrawer('section');
+  }
+  // A tab that comes on screen catches up: the spline drawer renders and requests its statistics, the
+  // cross-section requests its profile.
+  layout.onDrawerChange(() => {
+    if (layout.drawerOpen && layout.drawerTab === 'spline' && splines.leaf !== null) splines.open(splines.leaf);
+    section.shown();
   });
 
   // Biomes tab: the biome share preview (§5.5), requested when the driver settles while the tab is on screen and
@@ -183,6 +239,7 @@ export async function mountMapPage(root: HTMLElement): Promise<void> {
     if (a === 'undo') session.undo();
     else if (a === 'redo') session.redo();
     else if (a === 'togglePanel') layout.togglePanel();
+    else if (cut.mode !== 'off') setCut(CUT_OFF);
     else layout.closeDrawer();
   });
   addEventListener('hashchange', () => {

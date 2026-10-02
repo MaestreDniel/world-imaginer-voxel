@@ -3,7 +3,8 @@
  * and answers each validated message. No DOM and no worker globals, so Node tests drive it directly.
  * Tile, spawn and stats jobs stop as soon as the pool's abort cell leaves their epoch and reply ABORTED
  * (SP2b spec §2.2); point and selftest jobs always run to the end. Stats jobs (§5.4) run the metrics
- * functions over a range of their kind's fixed point stream and reply with the raw sums.
+ * functions over a range of their kind's fixed point stream, or of the points along a crossSection's line
+ * (§4.5), and reply with the raw sums.
  */
 import { hex64 } from '../core/hash';
 import { checkParams } from '../core/params/kit';
@@ -15,6 +16,7 @@ import { columnPoint } from '../gen/column/columnPoint';
 import { findSpawnAbortable } from '../gen/column/spawn';
 import { paintTileAbortable } from '../gen/map/tile';
 import { biomeSharePoints, biomeSharesInto, biomeSharesLength } from '../metrics/biomeShares';
+import { CROSS_SECTION_POINTS, crossSectionInto, crossSectionLength, segmentProblem } from '../metrics/crossSection';
 import type { Points } from '../metrics/noiseStats';
 import { computeAnyGolden } from '../metrics/sp2aGoldens';
 import { splineStatPoints, splineStatsInto, splineStatsLength, splineStatsNode } from '../metrics/splineStats';
@@ -39,6 +41,10 @@ const SPLINE_POINTS = splineStatPoints;
 const SPLINE_INTO = splineStatsInto;
 const SPLINE_LEN = splineStatsLength;
 const SPLINE_NODE = splineStatsNode;
+const SECTION_POINTS = CROSS_SECTION_POINTS;
+const SECTION_INTO = crossSectionInto;
+const SECTION_LEN = crossSectionLength;
+const SEGMENT_PROBLEM = segmentProblem;
 
 export interface Reply {
   readonly msg: FromWorker;
@@ -61,15 +67,15 @@ const intField = (raw: unknown, key: 'jobId' | 'epoch'): number | null => {
 let splinePoints: Points | null = null;
 let sharePoints: Points | null = null;
 
-/** A zeroed sum of `len` values, or the BAD_ARGS message when args.len or the point range does not fit. */
-const sumFor = (m: StatsMsg, len: number, pts: Points): Float64Array<ArrayBuffer> | string =>
+/** A zeroed sum of `len` values, or the BAD_ARGS message when args.len or the point range (of `n` points) does not fit. */
+const sumFor = (m: StatsMsg, len: number, n: number): Float64Array<ArrayBuffer> | string =>
   m.args.len !== len ? `args.len ${m.args.len}, expected ${len}`
-    : m.to > pts.n ? `points [${m.from}, ${m.to}) outside the stream of ${pts.n}`
+    : m.to > n ? `points [${m.from}, ${m.to}) outside the stream of ${n}`
       : new Float64Array(len);
 
 /**
- * A stats job's sum; null when `stop` fired; a string (the BAD_ARGS message) when the node, args.len or
- * the point range does not fit the configured params.
+ * A stats job's sum; null when `stop` fired; a string (the BAD_ARGS message) when the node, the line,
+ * args.len or the point range does not fit the configured params.
  */
 function runStats(ctx: GenContext, m: StatsMsg, stop: () => boolean): Float64Array<ArrayBuffer> | string | null {
   if (m.kind === 'splineStats') {
@@ -77,12 +83,20 @@ function runStats(ctx: GenContext, m: StatsMsg, stop: () => boolean): Float64Arr
     const node = SPLINE_NODE(ctx.params, leaf, path);
     if (node === null) return `no node [${path.join(', ')}] in ${leaf}`;
     const pts = splinePoints ??= SPLINE_POINTS();
-    const out = sumFor(m, SPLINE_LEN(node.points.length), pts);
+    const out = sumFor(m, SPLINE_LEN(node.points.length), pts.n);
     if (typeof out === 'string') return out;
     return SPLINE_INTO(ctx, leaf, path, pts, m.from, m.to, out, stop) ? out : null;
   }
+  if (m.kind === 'crossSection') {
+    const line = { ax: m.args.ax, az: m.args.az, bx: m.args.bx, bz: m.args.bz };
+    const problem = SEGMENT_PROBLEM(line);
+    if (problem !== null) return problem;
+    const out = sumFor(m, SECTION_LEN(), SECTION_POINTS);
+    if (typeof out === 'string') return out;
+    return SECTION_INTO(ctx, line, m.from, m.to, out, stop) ? out : null;
+  }
   const pts = sharePoints ??= SHARE_POINTS();
-  const out = sumFor(m, SHARES_LEN(), pts);
+  const out = sumFor(m, SHARES_LEN(), pts.n);
   if (typeof out === 'string') return out;
   return SHARES_INTO(ctx, pts, m.from, m.to, out, stop) ? out : null;
 }
