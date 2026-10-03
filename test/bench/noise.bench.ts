@@ -16,8 +16,10 @@ import { createGenContext } from '../../src/gen/context';
 import { columnPoint } from '../../src/gen/column/columnPoint';
 import { buildColumnSample, newColumnSample } from '../../src/gen/column/columnStage';
 import { paintTile } from '../../src/gen/map/tile';
+import { fillColumnT } from '../../src/metrics/region';
+import { createStore } from '../../src/world/store/store';
 import { createTaskHandler } from '../../src/workers/taskHandler';
-import { COLUMN_P50_MAX_MS, COLUMN_P95_MAX_MS, gateFailures, type Baselines, type BenchKernel } from './gates';
+import { BENCH_ROWS, COLUMN_P50_MAX_MS, COLUMN_P95_MAX_MS, gateFailures, type Baselines, type BenchKernel } from './gates';
 import { buildPerm, perm3 } from './perm512';
 
 const FMIX = fmix32;
@@ -31,7 +33,7 @@ const BASELINE_PATH = fileURLToPath(new URL('../baselines.json', import.meta.url
 const N = 4096;
 let sink = 0;
 
-test('SP1, SP2a and SP2b kernels', async ({ bench }) => {
+test('SP1, SP2a, SP2b and SP3a kernels', async ({ bench }) => {
   const ns: Record<string, number> = {};
   const measure = async (name: string, evals: number, fn: () => void, iterations?: number) => {
     const r = await bench(name, fn).run(iterations === undefined ? undefined : { iterations, time: 0, warmupIterations: 1 });
@@ -98,7 +100,25 @@ test('SP1, SP2a and SP2b kernels', async ({ bench }) => {
   let pt = 0;
   await measure('map.tile.b256.biome', 1, () => { const [tx, tz] = preview[pt++ % 4]!; paintTile(gen, 'biome', 256, tx, tz, tile); sink += tile[0]!; }, 8);
   await measure('map.tile.b256.relief', 1, () => { const [tx, tz] = preview[pt++ % 4]!; paintTile(gen, 'relief', 256, tx, tz, tile); sink += tile[0]!; }, 8);
+  // SP3a §7, on one shared store (the backend the 4-thread harness and SP4's streaming use): one alloc and free on
+  // the byte pool (the lock, a stack pop and push, the refcount), and one column's provisional T stage including its
+  // ColumnSample, through fillColumnT (claim, 24 sections, aux A, commit) and the freeColumn that recycles its slots.
+  const store = createStore({ shared: true, maxBlockBytes: 32 << 20, maxByteBytes: 16 << 20 });
+  const bytePool = store.bytePool;
+  await measure('store.alloc', N, () => { for (let i = 0; i < N; i++) { const id = bytePool.alloc(); bytePool.free(id); sink += id; } });
+  const never = (): boolean => false;
+  let tc = 0;
+  await measure('terrain.provisional', 1, () => {
+    tc++;
+    const tcx = (tc * 7919) % 60000 - 30000;
+    const tcz = (tc * 104729) % 60000 - 30000;
+    sink += fillColumnT(store, gen, tcx, tcz, never) ? 1 : 0;
+    store.freeColumn(tcx, tcz);
+  });
+  expect(bytePool.slotCount() - bytePool.freeCount(), 'store rows leak no slot').toBe(0);
+  expect(store.blockPool.slotCount() - store.blockPool.freeCount(), 'store rows leak no slot').toBe(0);
 
+  expect(Object.keys(ns), 'the measured rows are BENCH_ROWS').toEqual([...BENCH_ROWS]);
   const calib = ns['calibration.fmix32']!;
   const kernels: Record<string, BenchKernel> = {};
   for (const [name, v] of Object.entries(ns)) kernels[name] = { nsPerEval: Math.round(v * 1000) / 1000, ratio: Math.round((v / calib) * 1000) / 1000 };

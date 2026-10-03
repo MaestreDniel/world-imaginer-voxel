@@ -5,6 +5,18 @@ export const KILL_RATIO_MAX = 1.6;
 export const COLUMN_P50_MAX_MS = 0.7;
 export const COLUMN_P95_MAX_MS = 1.2;
 
+/**
+ * Every gated bench row, in measurement order: `noise.bench.ts` measures exactly these, and `test/baselines.json`
+ * records every one (a unit test), so a row added without `npm run bench:record` cannot stay ungated.
+ * SP3a §7 appends `store.alloc` and `terrain.provisional`.
+ */
+export const BENCH_ROWS = [
+  'calibration.fmix32', 'lattice3.slice', 'perm512.slice', 'lattice3.random', 'perm512.random', 'normal.z2.climateC',
+  'normal.z3.density3d', 'spline.offset', 'spline.mix3', 'detErf', 'stageHashes.genKey', 'column.point', 'column.sample',
+  'map.tile.b64.biome', 'map.tile.b16.relief', 'worker.configure', 'map.tile.b256.biome', 'map.tile.b256.relief',
+  'store.alloc', 'terrain.provisional',
+] as const;
+
 export interface BenchKernel {
   readonly nsPerEval: number;
   /** nsPerEval ÷ the calibration kernel's nsPerEval, measured in the same run. */
