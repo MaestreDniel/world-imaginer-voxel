@@ -10,8 +10,8 @@ import { genRegion, regionDiff, type GenRegionOptions, type RegionResult } from 
  * store written by 4 `worker_threads` running `test/harness/regionWorker.ts` from a dynamic queue gives the same
  * region, byte for byte (region hash and per-channel uniform/dense layout), as the in-process plain ArrayBuffer
  * store, in every dispatch order; its 8 × 8 window at (−4, −4) is the recorded `sp3a.region.T.<profile>` golden.
- * The runs are compared byte for byte (`regionDiff`); hashing a 16 × 16 region costs seconds (≈ 300 KB per column
- * through a byte-wise FNV), so only the golden windows are hashed.
+ * The runs are compared byte for byte (`regionDiff`, which also checks the uniform/dense layout); only the golden
+ * windows are hashed. DT1 (`test/metrics/region.metric.ts`) compares whole-region hashes.
  */
 const DIR = fileURLToPath(new URL('../.cache/regionIntegration/', import.meta.url));
 const GOLDENS = (JSON.parse(readFileSync(GOLDENS_PATH, 'utf8')) as GoldensFile).entries;

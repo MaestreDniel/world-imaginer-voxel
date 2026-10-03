@@ -1,5 +1,5 @@
 {
-  "sha256": "c65639a9c6f45a5e27df2f85ed6a3ec5450b860e439a0c641569e8d96beff608",
+  "sha256": "bd21cc78065fc7dd58240d261fc72635a7443a7a187c9bfeb8cb9fe75140fd86",
   "canonical": {
     "startedSps": [
       "SP0",
@@ -87,6 +87,26 @@
         "perKm2Min": {
           "activeFrom": "SP2a",
           "min": 0.2
+        }
+      },
+      "DT1": {
+        "mismatches": {
+          "activeFrom": "SP3a",
+          "max": 0
+        }
+      },
+      "M1": {
+        "lockChanges": {
+          "activeFrom": "SP3a",
+          "max": 0
+        },
+        "roundTripFailures": {
+          "activeFrom": "SP3a",
+          "max": 0
+        },
+        "states": {
+          "activeFrom": "SP3a",
+          "max": 4096
         }
       },
       "N1": {

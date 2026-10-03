@@ -376,3 +376,4 @@ The plan was dry-run in a scratch worktree: every task was implemented and every
 (One line per commit that changes `test/thresholds.lock.json`.)
 
 - Task 1: `STARTED_SPS` gains `SP3a` (SP3 split into SP3a, SP3b and SP3c); no threshold rows change.
+- Task 12: new rows `DT1.mismatches` max 0 (§6.3) and M1 registry parts `M1.states` max 4096, `M1.roundTripFailures` max 0, `M1.lockChanges` max 0 (§2.4), active from SP3a, the same on every tier.

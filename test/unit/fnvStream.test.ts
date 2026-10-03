@@ -72,6 +72,27 @@ test('updateRepeatU8 and updateRepeatU16LE equal the expanded bytes (a uniform s
   expect(h.digest()).toEqual(fnv1a64Bytes(concat));
 });
 
+test('every update kind, mixed at random, equals fnv1a64Bytes over the expanded bytes (300 streams)', () => {
+  const next = testRng(205);
+  for (let k = 0; k < 300; k++) {
+    const h = createFnv64();
+    const bytes: number[] = [];
+    for (let op = next() % 12; op > 0; op--) {
+      const v = next();
+      const n = next() % 70;
+      switch (next() % 6) {
+        case 0: { const b = randomBytes(next, n); h.update(b); bytes.push(...b); break; }
+        case 1: h.updateU8(v); bytes.push(v & 255); break;
+        case 2: h.updateU16LE(v); bytes.push(v & 255, (v >>> 8) & 255); break;
+        case 3: h.updateU32LE(v); bytes.push(v & 255, (v >>> 8) & 255, (v >>> 16) & 255, v >>> 24); break;
+        case 4: h.updateRepeatU8(v, n); for (let i = 0; i < n; i++) bytes.push(v & 255); break;
+        default: h.updateRepeatU16LE(v, n); for (let i = 0; i < n; i++) bytes.push(v & 255, (v >>> 8) & 255);
+      }
+    }
+    expect(h.digest()).toEqual(fnv1a64Bytes(Uint8Array.from(bytes)));
+  }
+});
+
 test('digest does not finish the stream: later updates continue it', () => {
   const next = testRng(203);
   const a = randomBytes(next, 100), b = randomBytes(next, 57);
