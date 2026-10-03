@@ -2,8 +2,8 @@ import { describe, expect, test } from 'vitest';
 import { canonicalJson, diffGovernance, formatChanges, makeLock, verifyLock, type GovernanceState } from '../harness/lock';
 
 const base: GovernanceState = {
-  thresholds: { T1: { band: { max: 0.25, activeFrom: 'SP3' }, span: { min: 60, activeFrom: 'SP3' } } },
-  startedSps: ['SP0', 'SP1', 'SP2a', 'SP2b', 'SP3'],
+  thresholds: { T1: { band: { max: 0.25, activeFrom: 'SP3a' }, span: { min: 60, activeFrom: 'SP3a' } } },
+  startedSps: ['SP0', 'SP1', 'SP2a', 'SP2b', 'SP3a'],
 };
 
 describe('canonical JSON and lock', () => {
@@ -41,7 +41,7 @@ describe('diffGovernance', () => {
       { path: 'T1.span', detail: 'min 60→50', kind: 'LOOSEN' },
     );
     expect(diffGovernance(base, edit((s) => { s.thresholds.T1!.span!.activeFrom = 'SP6'; }))[0]).toEqual(
-      { path: 'T1.span', detail: 'activeFrom SP3→SP6', kind: 'LOOSEN' },
+      { path: 'T1.span', detail: 'activeFrom SP3a→SP6', kind: 'LOOSEN' },
     );
   });
 
@@ -56,7 +56,7 @@ describe('diffGovernance', () => {
 
   test('removing a started SP loosens; adding one tightens', () => {
     expect(diffGovernance(base, edit((s) => { s.startedSps = ['SP0', 'SP1', 'SP2a', 'SP2b']; }))).toEqual([
-      { path: 'startedSps', detail: 'removed SP3', kind: 'LOOSEN' },
+      { path: 'startedSps', detail: 'removed SP3a', kind: 'LOOSEN' },
     ]);
     expect(diffGovernance(base, edit((s) => { s.startedSps = [...s.startedSps, 'SP4']; }))).toEqual([
       { path: 'startedSps', detail: 'added SP4', kind: 'TIGHTEN' },

@@ -16,16 +16,17 @@ describe('profiles', () => {
   test('ids, readiness and overlays', () => {
     expect(Object.keys(PROFILES)).toEqual([...PROFILE_IDS]);
     expect(PROFILE_IDS.map((id) => [id, PROFILES[id].readyFrom])).toEqual([
-      ['default', 'SP1'], ['large_biomes', 'SP2a'], ['archipelago', 'SP3'], ['amplified', 'SP3'], ['floating_islands', 'SP3'], ['cave_heavy', 'SP6'],
+      ['default', 'SP1'], ['large_biomes', 'SP2a'], ['archipelago', 'SP3c'], ['amplified', 'SP3c'], ['floating_islands', 'SP3c'], ['cave_heavy', 'SP6'],
     ]);
     expect(resolveProfile('large_biomes').climate.scaleMul).toBe(4);
     expect(resolveProfile('archipelago').climate.C.wavelength).toBe(840);
     expect(resolveProfile('default')).toBe(DEFAULTS);
   });
   test('readiness follows CURRENT_SP', () => {
-    expect(CURRENT_SP).toBe('SP2b');
+    expect(CURRENT_SP).toBe('SP3a');
     expect(PROFILE_IDS.filter((id) => isProfileReady(id))).toEqual(['default', 'large_biomes']);
-    expect(isProfileReady('archipelago', 'SP3')).toBe(true);
+    expect(isProfileReady('archipelago', 'SP3c')).toBe(true);
+    expect(isProfileReady('archipelago', 'SP3b')).toBe(false);
     expect(isProfileReady('large_biomes', 'SP1')).toBe(false);
   });
   test('switching profile dirties exactly what its overlay touches', () => {

@@ -17,9 +17,9 @@ export const PROFILE_IDS: readonly ProfileId[] = ['default', 'large_biomes', 'ar
 export const PROFILES: Readonly<Record<ProfileId, Profile>> = {
   default: { overlay: {}, readyFrom: 'SP1' },
   large_biomes: { overlay: { climate: { scaleMul: 4 } }, readyFrom: 'SP2a' },
-  archipelago: { overlay: { climate: { C: { wavelength: 840 } } }, readyFrom: 'SP3' },
-  amplified: { overlay: {}, readyFrom: 'SP3' },
-  floating_islands: { overlay: {}, readyFrom: 'SP3' },
+  archipelago: { overlay: { climate: { C: { wavelength: 840 } } }, readyFrom: 'SP3c' },
+  amplified: { overlay: {}, readyFrom: 'SP3c' },
+  floating_islands: { overlay: {}, readyFrom: 'SP3c' },
   cave_heavy: { overlay: {}, readyFrom: 'SP6' },
 };
 

@@ -1,15 +1,20 @@
-/** Sub-project ids of master spec §10 (SP2 split into SP2a and SP2b on 2026-09-28). */
+/** Sub-project ids of master spec §10 (SP2 split into SP2a and SP2b on 2026-09-28; SP3 into SP3a, SP3b and SP3c on 2026-10-02). */
 export type SubProjectId =
-  | 'SP0' | 'SP1' | 'SP2a' | 'SP2b' | 'SP3' | 'SP4' | 'SP5' | 'SP6' | 'SP7'
+  | 'SP0' | 'SP1' | 'SP2a' | 'SP2b' | 'SP3a' | 'SP3b' | 'SP3c' | 'SP4' | 'SP5' | 'SP6' | 'SP7'
   | 'SP8a' | 'SP8b' | 'SP8c' | 'SP9' | 'SP10' | 'SP11' | 'SP12';
 
 /** Every sub-project in master §10 order. */
 export const SUB_PROJECTS: readonly SubProjectId[] = [
-  'SP0', 'SP1', 'SP2a', 'SP2b', 'SP3', 'SP4', 'SP5', 'SP6', 'SP7', 'SP8a', 'SP8b', 'SP8c', 'SP9', 'SP10', 'SP11', 'SP12',
+  'SP0', 'SP1', 'SP2a', 'SP2b', 'SP3a', 'SP3b', 'SP3c', 'SP4', 'SP5', 'SP6', 'SP7',
+  'SP8a', 'SP8b', 'SP8c', 'SP9', 'SP10', 'SP11', 'SP12',
 ];
 
-/** The sub-project this build belongs to; hides profiles whose readyFrom comes later (SP2a spec §4.4). */
-export const CURRENT_SP: SubProjectId = 'SP2b';
+/**
+ * The sub-project this build belongs to; hides profiles whose readyFrom comes later (SP2a spec §4.4).
+ * It is the last SP of the longest prefix of SUB_PROJECTS whose members have all started (SP3a spec §9),
+ * so an SP running alongside an earlier unstarted one (SP4 before SP3c) does not advance it.
+ */
+export const CURRENT_SP: SubProjectId = 'SP3a';
 
 /** Every metric id of master spec §6.4 (E1-E6 expanded). */
 export type MetricId =
