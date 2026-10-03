@@ -328,10 +328,29 @@ New rows, gated at +30 % like the rest: `store.alloc` (one alloc and free on the
   - the real T writes aux B (biome quarts) and the general v0 water fill (air at y ≤ surfaceWaterLevel above surfaceEst − 12 becomes water sources; SP3a's rule is its no-overhang case), and the `islands` DAG term (−1e6 by default) is part of the default expression;
   - the CI `actions/cache@v6` step for `test/.cache/regions` only (never the bundled `test/.cache/taskHandler*` files), before `npm run test:metrics`, keyed by `hashFiles('src/**', 'test/harness/**', 'package-lock.json')` with no `restore-keys`;
   - SP2a minors 5 (a no-allocation heap assertion; lakes and steep allocate per call) and 6 (`B2.dryRiverBiome` is 0 by construction);
-  - the ocean-floor σ/jag stripe (SP2b §11), lake rims' islets and the shoreline zoom fringe (SP2a §10).
+  - the ocean-floor σ/jag stripe (SP2b §11), lake rims' islets and the shoreline zoom fringe (SP2a §10);
+  - from the SP3a final review: `regionHash` and the region cache dump cover aux A only (`test/harness/region.ts`, `test/harness/cache.ts`). When the real T writes aux B, hash and dump it (bump `REGION_CACHE_FORMAT`) and pin the index order of the quart arrays and of `tintTH`, whose offsets are frozen but not their layout;
+  - harness minors deferred from that review:
+    - DT1 builds its worker in one shared directory per tier, so concurrent tier builds race on `emptyOutDir`: use a per-tier dir;
+    - refresh a dump's mtime on a cache hit (`cache.ts` read path), so the prune grace counts from last use;
+    - the governance test should check `test/stateIds.lock.json` against `GOVERNANCE_BASE`, as it does goldens and thresholds;
+    - validate `SLAB_FUZZ_SEED` (`abc` silently becomes seed 0);
+    - resolve the `masterSpec.test.ts` path through `import.meta.url`, not the cwd;
+    - one shared `ask()` helper (the slab fuzz's copy has no worker exit handling).
 - **SP3c:** archipelago (≈ 60 % ocean) cannot pass B1's 45 % ocean-family cap: decide per-preset gating; amplified's offset multiplier cannot be baked into the offset spline without raising its 320 range; the floating_islands, amplified and archipelago drafts and the islands surface-rule branch.
 - **SP4:** shared streaming across workers on this store, the coordinator and column state machine, `padded.ts` and the connectivity bits, the final heightmaps (`LIGHT_BLOCKING` pinned with the light rule), and replacing the pool-wide abort cell with the store's per-scope epoch cells (master §4.3). If SP4 starts before SP3c, keep `CURRENT_SP` at `'SP3b'` (§9).
+  - store concurrency items from the SP3a final review, all unreachable in SP3a's single-writer use but live once SP4 shares the store (nothing blocking; fix or document each in the SP4 spec):
+    - `find()`, `committed()` and the writer `check()` are ABA-prone: there is no claim generation, so a lookup can mix cx and cz from two holders of one record (`columnTable.ts` `find`, `store.ts` `committed`, `check`). Add a generation int in record int 12, bumped by `claim` and `unclaim`; lookups read it before and after and return −1 on a change; the writer captures it and `check()` compares the epoch;
+    - `blockVersion` and `lightVersion` restart at 0 on every claim (`clearRecord`, `versions()`), so master §4.1's "discard if versions changed" is ABA-prone: keep them monotone across a record's life or pair them with the generation (§3.5 and the unit tests pin "0 after claim");
+    - `proto()` after `freeProto` returns an all-air view instead of null (`store.ts` `freeProto`; the fuzz asserts it): keep the protoFlags alive bit (master §2.3 int 6), set on the first `setProto`, cleared by `freeProto`, and return null when clear (a one-line §3.5 amendment);
+    - a post-commit rewrite frees the old slot before the version bump (`section.ts` `storeChannel`), so a reader can read a recycled slot and still pass its version check: pin a seqlock (version odd while rewriting) or deferred reclamation (per-epoch limbo list) and write the protocol into the SP4 spec;
+    - the `ColumnWriter` contract is single-thread: `check()` runs only at the start of a call, so a concurrent `freeColumn` can double-free (`api.ts` doc sentence overstates it). Reword it; cancel through the epoch cells (§3.4), as `fillColumnT` does;
+    - a worker terminated while holding a pool lock makes every other thread spin forever (`pool.ts` lock spin has no owner or timeout): never `terminate()` an attached worker (abort through the epoch cells), or store `threadId + 1` in the lock word and fail loudly on a dead owner;
+    - `attachStore` and `attachPool` should assert `SharedArrayBuffer` when `h.shared` and `ArrayBuffer` otherwise (a non-shared store's handles cloned to a worker silently fork it);
+    - extend the slab fuzz with column-table races (claim CAS contention, find against takeover and re-claim of the same record) and a cross-thread slot handoff (`fuzzWorker.ts`: each thread now claims only records with slot ≡ thread mod 4);
+    - add a growable `SharedArrayBuffer` / resizable `ArrayBuffer` probe to the capability check (`pool.ts` growth).
 - **SP5:** `PLACEABLE`, `category` and `tags.ts` as new per-type tables (§2.1 growth rule); `stateTable` in saves uses the §2.3 canonical keys.
+- **SP8a:** `sp3a.registry` hashes `FACE_TEX` (and `TINT`, `SOUND`), which SP8a sets, so it would change. Decide in SP8a's spec whether to re-key that golden (e.g. a new key over the final tables) rather than bump `GENERATOR_VERSION` for a texture-only change.
 
 ## 11. Master-spec amendments made with this spec
 

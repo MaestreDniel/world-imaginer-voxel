@@ -846,7 +846,7 @@ Proof suite (DT1/DT2):
 
 ```
 Main thread: render (three), input/physics/raycast (reads SAB), Coordinator (state machine + heap), upload budget, UI, sound (WebAudio)
-  │ SAB: slab pages, slot refcounts, column table, free stack, epoch cells
+  │ SAB: growable slab pools, slot refcounts, column table, free stacks, epoch cells
   ├─ Task pool: N = clamp(hardwareConcurrency − 2, 2, 6) module workers, each with GenContext + LRUs
   │    jobs: T, D, L, MESH, MESH_COLUMN, LOD_TILE, MAP_TILE, SLICE, METRIC, TEXTURES, AUDIO_SYNTH   (message = {jobId, kind, cx, cz, epoch, versions, diff?})
   └─ Sim worker (1): edits, runtime fluid ticks (20 TPS), incremental relight, DiffStore + IndexedDB (single writer of Published columns)
