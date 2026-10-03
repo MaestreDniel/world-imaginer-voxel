@@ -22,6 +22,7 @@ Browser voxel explorer + editor (TypeScript, Vite, three.js r186 WebGL2 with cus
 - `npm run test:accept-thresholds` — rewrite `test/thresholds.lock.json` (needs a spec amendment in the same change; CI checks it)
 - `npm run test:goldens` — record and merge goldens (refuses changed goldens without a `GENERATOR_VERSION` bump)
 - `npm run test:accept-schema` — rewrite `test/schema-shape.lock.json` (refuses a removed, renamed or re-kinded leaf unless `SCHEMA_VERSION` was bumped with a migration)
+- `npm run test:accept-state-ids` — append the states of new block types to `test/stateIds.lock.json` (append-only: refuses a changed id, a removed entry or a new state of a locked type; the commit message says the lock changed)
 - `npm run docs:params` — regenerate the README parameter table from the schema
 - `npx --yes bun@1 test/tools/goldensJsc.ts` — recompute every golden (SP1 and SP2a) under JavaScriptCore (D20; SP exit evidence); `?selftest=1` does the same in a real module worker in Chrome and Firefox, and `?lab=noise` keeps the SP1 panel
 - `?map` — the world map (SP2a) and the parameter editor (SP2b): toolbar, parameter panel, spline drawer, biome table and share chart, presets, cut-line cross-section, global undo/redo (Ctrl+Z, Ctrl+Shift+Z or Ctrl+Y), P toggles the panel
