@@ -1,4 +1,4 @@
-/* The Cross-section tab (SP2b spec §4.5): header, summary, the profile plot, its legend and the hover readout. */
+/* The Cross-section tab (SP2b spec §4.5): header, summary, the profile or Voxels plot (SP3a spec §5.2), its legend and the hover readout. */
 .cs { display: grid; grid-template-rows: auto auto minmax(0, 1fr) auto auto; height: 100%; min-height: 0; }
 .cs [hidden] { display: none !important; }
 .cs-head { display: flex; flex-wrap: wrap; align-items: baseline; gap: 4px 14px; padding: 4px 10px; border-bottom: 1px solid #333; }
@@ -6,13 +6,23 @@
 .cs-line { font-family: ui-monospace, monospace; color: #c8d0dc; }
 .cs-status { font-size: 12px; color: #8a95a8; }
 .cs[data-state="stale"] .cs-status { color: #f0b34a; }
+.cs-modes { display: inline-flex; }
+.cs-mode { font: inherit; font-size: 12px; padding: 1px 8px; border: 1px solid #45506a; background: #1c2029; color: #b8c2d0; }
+.cs-mode + .cs-mode { border-left: none; }
+.cs-mode:first-child { border-radius: 3px 0 0 3px; }
+.cs-mode:last-child { border-radius: 0 3px 3px 0; }
+.cs-mode[aria-pressed="true"] { background: #34406a; color: #e8ecf2; }
 .cs-actions { display: flex; gap: 4px; margin-left: auto; }
 .cs-actions button { font: inherit; font-size: 12px; padding: 1px 7px; }
 .cs-summary { padding: 3px 10px 0; font-size: 12px; color: #b8c2d0; }
 .cs-summary:empty { display: none; }
 .cs-plotwrap { position: relative; min-width: 0; min-height: 120px; overflow: hidden; }
 .cs-plot { position: absolute; inset: 0; display: block; user-select: none; touch-action: none; }
-.cs-plotwrap.cs-stale .cs-plot { opacity: 0.4; }
+.cs-plotwrap.cs-stale .cs-plot, .cs-plotwrap.cs-stale .cs-voxels { opacity: 0.4; }
+.cs-voxels { position: absolute; display: block; image-rendering: pixelated; pointer-events: none; }
+.cs-frame.cs-voxel-frame { fill: none; }
+.cs-tickmark { stroke: #5a6478; stroke-width: 1; }
+.cs-voxel-sealine { stroke-width: 1; stroke-dasharray: 4 3; }
 .cs-frame { fill: #15171b; stroke: #34406a; stroke-width: 0.5; }
 .cs-grid { stroke: #252b38; stroke-width: 1; }
 .cs-tick, .cs-axis-label, .cs-sea-label, .cs-lake-label, .cs-end-label, .cs-stale-label { font: 10px ui-monospace, monospace; fill: #8a95a8; }

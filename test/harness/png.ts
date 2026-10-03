@@ -1,13 +1,15 @@
 /**
  * PNG slices of a generated region (SP3a spec §6.1): a small PNG encoder over `node:zlib` (8-bit RGBA, one IDAT,
  * filter 0 on every row) and vertical (an x or a z plane) and horizontal (a y plane) slices drawn with the Voxels
- * palette of the cut line (§5.2): air in a sky colour, stone grey, bedrock near black, water blue darkening with
- * depth below the water surface, and the sea-level line at y 63 on the air of vertical slices.
+ * palette of the cut line (§5.2, `src/ui/crossSection/voxels.ts`): air in a sky colour, stone grey, bedrock near
+ * black, water blue darkening with depth below the water surface, and the sea-level line at y 63 on the air of
+ * vertical slices.
  */
 import { writeFileSync } from 'node:fs';
 import { deflateSync } from 'node:zlib';
+import { SEA_LEVEL_Y, VOXEL_COLORS, voxelRgb, type Rgb } from '../../src/ui/crossSection/voxels';
 import { fluidType } from '../../src/world/blocks/fluid';
-import { AIR, BEDROCK, STONE } from '../../src/world/blocks/index';
+import { AIR } from '../../src/world/blocks/index';
 import type { RegionView } from './region';
 
 export interface RgbaImage {
@@ -17,40 +19,10 @@ export interface RgbaImage {
   readonly rgba: Uint8Array;
 }
 
-type Rgb = readonly [number, number, number];
-
-/** The Voxels palette (§5.2). `unknown` marks a state the palette does not know (none in SP3a). */
-export const VOXEL_COLORS = {
-  sky: [168, 204, 255],
-  seaLevel: [112, 150, 206],
-  stone: [125, 125, 125],
-  bedrock: [28, 28, 30],
-  water: [40, 92, 222],
-  unknown: [255, 0, 255],
-} as const satisfies Record<string, Rgb>;
-
-export const SEA_LEVEL_Y = 63;
-/** Water loses this share of its brightness per block of depth, down to `WATER_FLOOR`. */
-const WATER_FADE = 1 / 48;
-const WATER_FLOOR = 0.3;
+/** The Voxels palette lives with the cut line's Voxels mode (§5.2), so the PNGs and the page draw the same colours. */
+export { SEA_LEVEL_Y, VOXEL_COLORS, voxelRgb };
 const MIN_Y = -64;
 const MAX_Y = 319;
-
-/**
- * The colour of a voxel: its block state's, or water's when the fluid byte holds a fluid on air, darkened with
- * `depth` (blocks below the water surface of its column, 0 at the surface).
- */
-export function voxelRgb(state: number, fluid: number, depth: number): Rgb {
-  if (state === AIR && fluidType(fluid) !== 0) {
-    const f = Math.max(WATER_FLOOR, 1 - Math.max(0, depth) * WATER_FADE);
-    const [r, g, b] = VOXEL_COLORS.water;
-    return [Math.round(r * f), Math.round(g * f), Math.round(b * f)];
-  }
-  if (state === AIR) return VOXEL_COLORS.sky;
-  if (state === STONE) return VOXEL_COLORS.stone;
-  if (state === BEDROCK) return VOXEL_COLORS.bedrock;
-  return VOXEL_COLORS.unknown;
-}
 
 const CRC_TABLE = (() => {
   const t = new Uint32Array(256);

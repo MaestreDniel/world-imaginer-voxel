@@ -149,7 +149,7 @@ describe('the profile\'s requests and stale state', () => {
     await flush();
     expect(h.r.pending).toBeNull();
     expect(h.r.shown?.epoch).toBe(3);
-    expect(h.r.shown?.profile).toEqual(coast());
+    expect(h.r.shown?.value).toEqual(coast());
     expect(h.changes()).toBe(3);
     h.r.request(true);
     expect(h.calls).toHaveLength(1);

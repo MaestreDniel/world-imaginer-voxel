@@ -8,8 +8,12 @@ import { allGoldenKeys } from '../../src/metrics/sp2aGoldens';
 import { BIOME_SIZE_SCALE } from '../../src/ui/map/biomeSize';
 import { DEFAULT_MAP_STATE, encodeMapState, type MapState } from '../../src/ui/map/mapState';
 import { presetText } from '../../src/ui/presets/presetFile';
+import { sliceSummary, voxelReadout } from '../../src/ui/crossSection/voxels';
+import { WATER_SOURCE } from '../../src/world/blocks/fluid';
+import { AIR, BEDROCK, STONE } from '../../src/world/blocks/index';
+import { SLICE_SAMPLES, sliceIndex } from '../../src/workers/protocol';
 import {
-  canonicalJson, goldenCount, ignoredLog, mapHash, parseArgs, presetProblems, readMapHash, sameJson, selftestAllMatch, SIZE_8, VIEWPORT, type MapUrlState,
+  canonicalJson, goldenCount, ignoredLog, mapHash, parseArgs, presetProblems, readMapHash, sameJson, selftestAllMatch, SIZE_8, VIEWPORT, voxelReadoutOk, voxelSummaryOk, type MapUrlState,
 } from '../tools/uiSmoke';
 
 const EDITED: MapState = {
@@ -76,6 +80,28 @@ describe('UI smoke test: pure parts (SP2b spec §8 Tools, §12)', () => {
     expect(selftestAllMatch('✓ all 47 goldens match (3.2 s)', 50)).toBe(false);
     expect(selftestAllMatch('✗ 1 of 50 goldens differ (3.2 s)', 50)).toBe(false);
     expect(selftestAllMatch('computing 50/50…', 50)).toBe(false);
+  });
+
+  test('the Voxels step reads the page\'s hover readout and summary in the formats the cut line writes (SP3a spec §5.2)', () => {
+    const blocks = new Uint16Array(SLICE_SAMPLES);
+    const fluid = new Uint8Array(SLICE_SAMPLES);
+    for (let i = 0; i < 512; i++) {
+      for (let y = -64; y <= 70; y++) {
+        blocks[sliceIndex(i, y)] = y === -64 ? BEDROCK : y <= (i < 100 ? 40 : 70) ? STONE : AIR;
+        if (i < 100 && y > 40 && y <= 63) fluid[sliceIndex(i, y)] = WATER_SOURCE;
+      }
+    }
+    const s = { blocks, fluid };
+    const line = { ax: -2030, az: 7, bx: 1950, bz: -1990 };
+    for (const [i, y] of [[0, 63], [0, 64], [0, 40], [511, -64], [300, 319]] as const) {
+      const text = voxelReadout(line, s, i, y);
+      expect(voxelReadoutOk(text), text).toBe(true);
+    }
+    expect(voxelReadoutOk('hover the voxels to read a block')).toBe(false);
+    expect(voxelReadoutOk('12.0 blocks from A · x 1.0 z 2.0 · offset0 1.00')).toBe(false);
+    expect(voxelSummaryOk(sliceSummary(s))).toBe(true);
+    expect(voxelSummaryOk(sliceSummary({ blocks: new Uint16Array(SLICE_SAMPLES), fluid: new Uint8Array(SLICE_SAMPLES) }))).toBe(false);
+    expect(voxelSummaryOk('offset 1.0 to 2.0 blocks · water on 0.0 % of the line')).toBe(false);
   });
 
   test('arguments: build, the OS temp directory and no screenshots by default', () => {

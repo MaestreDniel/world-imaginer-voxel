@@ -23,6 +23,7 @@
  * - undo/redo: Ctrl+Z through the whole history, then Ctrl+Shift+Z and Ctrl+Y back;
  * - reload: the draft, the controls and the stored layout come back;
  * - cut line: a two-click line on the map and its profile in the drawer's Cross-section tab;
+ * - voxels: the tab's Voxels mode (SP3a spec §5.2): a fresh, non-empty slice, the hover readout, back to Profile;
  * - tabs: ArrowRight, ArrowLeft, Home and End move the selection and the focus on both tab bars;
  * - console: no exception, console error or failed load, except the known favicon.ico 404.
  * With --shots DIR it then writes the spec §12 screenshots into DIR, at seed 42 from a newly loaded page (the
@@ -88,6 +89,16 @@ export function goldenCount(goldensJson: string): number {
 export function selftestAllMatch(summary: string, count: number): boolean {
   const m = /^✓ all (\d+) goldens match/.exec(summary);
   return m !== null && Number(m[1]) === count;
+}
+
+/** The Voxels mode's hover readout: `(x, y, z) · block · fluid · point i, D blocks from A` (SP3a spec §5.2). */
+export function voxelReadoutOk(text: string): boolean {
+  return /^\(-?\d+, -?\d+, -?\d+\) · (?:[a-z][a-z0-9_]*(?:\[[a-z0-9_=,]+\])?|unknown state \d+) · (?:no fluid|[a-z0-9 ]+, level [0-7](?: \(source\))?(?:, falling)?) · point \d+, \d+\.\d blocks from A$/.test(text);
+}
+
+/** The Voxels mode's summary of a non-empty slice: `ground top y LO to HI · …water…`. */
+export function voxelSummaryOk(text: string): boolean {
+  return /^ground top y -?\d+ to -?\d+ · (?:no water|water on \d+\.\d % of the line, up to \d+ deep)$/.test(text);
 }
 
 /** A page log entry the smoke test does not count: the favicon.ico 404 (index.html declares no icon). */
@@ -696,6 +707,25 @@ async function runSmoke(t: Smoke): Promise<void> {
   t.check(/^A \(-?\d+, -?\d+\) → B \(-?\d+, -?\d+\) · [\d ]+ blocks$/.test(line), `the line: ${line}`, line);
   t.check(true, `the profile: ${await p.eval<string>(`document.querySelector('.cs-summary').textContent`)}`);
 
+  t.step('voxels: the Cross-section tab\'s Voxels mode');
+  await p.click('.cs-mode[data-mode="voxels"]');
+  t.check(await p.eval<boolean>(`document.querySelector('.cs-mode[data-mode="voxels"]').getAttribute('aria-pressed') === 'true' && document.querySelector('.cs').dataset.mode === 'voxels'`), 'the toggle selects Voxels');
+  await p.until(`document.querySelector('.cs').dataset.mode === 'voxels' && document.querySelector('.cs').dataset.state === 'fresh'`, 'a fresh voxel slice');
+  const sliceSum = await p.eval<string>(`document.querySelector('.cs-summary').textContent`);
+  t.check(voxelSummaryOk(sliceSum), `the slice: ${sliceSum}`, sliceSum);
+  const colours = await p.eval<number>(`(() => { const c = document.querySelector('.cs-voxels'); if (c.hidden || c.width !== 512 || c.height !== 384) return -1; const d = c.getContext('2d').getImageData(0, 0, 512, 384).data; const s = new Set(); for (let k = 0; k < d.length; k += 4) s.add(d[k] * 65536 + d[k + 1] * 256 + d[k + 2]); return s.size; })()`);
+  t.check(colours >= 3, `the 512 × 384 slice shows ${colours} colours (air, stone and bedrock at least)`, colours);
+  const covered = await p.eval<string[]>(`[...document.querySelectorAll('.cs-plot rect, .cs-plot path')].filter((e) => getComputedStyle(e).fill !== 'none').map((e) => e.getAttribute('class'))`);
+  t.check(covered.length === 0, 'nothing in the SVG over the slice is filled', covered);
+  const vox = await p.center('.cs-voxels');
+  await p.mouse('mouseMoved', vox.x, vox.box.y + vox.box.height * 0.8);
+  const voxRead = await p.eval<string>(`document.querySelector('.cs-readout').textContent`);
+  t.check(voxelReadoutOk(voxRead), `hover: ${voxRead}`, voxRead);
+  await p.mouse('mouseMoved', vox.x, vox.box.y - 200);
+  await p.click('.cs-mode[data-mode="profile"]');
+  await p.until(`document.querySelector('.cs').dataset.mode === 'profile' && document.querySelector('.cs').dataset.state === 'fresh'`, 'the profile again');
+  t.check(await p.eval<boolean>(`document.querySelector('.cs-voxels').hidden && document.querySelector('.cs-plot .cs-offset') !== null`), 'Profile shows the profile again (kept for the same draft)');
+
   t.step('tabs: the arrow keys, Home and End on both tab bars');
   const shown = (bar: string) => p.eval<string>(`(() => { const s = document.querySelector('${bar} [aria-selected="true"]'); return s === document.activeElement && s.tabIndex === 0 && !document.getElementById(s.getAttribute('aria-controls')).hidden ? s.id : 'focus ' + document.activeElement?.id + ', selected ' + s?.id; })()`);
   await p.eval<boolean>(`(document.getElementById('map-tab-presets').focus(), true)`);
@@ -801,6 +831,14 @@ async function runShots(p: Page, dir: string): Promise<string[]> {
   await p.mouse('mouseMoved', frame.box.x + (frame.box.width * 470) / 511, frame.y);
   await sleep(1500);
   await save('cross-section.png');
+
+  // The same line in the Voxels mode (SP3a spec §5.2), the pointer under the sea near B.
+  await p.click('.cs-mode[data-mode="voxels"]');
+  await p.until(`document.querySelector('.cs').dataset.mode === 'voxels' && document.querySelector('.cs').dataset.state === 'fresh'`, 'a fresh voxel slice');
+  const vox = await p.center('.cs-voxels');
+  await p.mouse('mouseMoved', vox.box.x + vox.box.width * 0.1, vox.box.y + (vox.box.height * (319 - 50)) / 384);
+  await sleep(1000);
+  await save('cross-section-voxels.png');
   return out;
 }
 

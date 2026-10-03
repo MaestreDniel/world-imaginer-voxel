@@ -2,13 +2,14 @@
  * The cross-section's pure parts (SP2b spec §4.5), unit-tested:
  * - the map's two-click cut-line tool: armed from the toolbar or the tab, the first click sets A, the second B
  *   (both rounded to whole blocks, inside the half-open world window, B ≠ A); what the map draws of it;
- * - the profile's requests: one `crossSection` stats job per session epoch and line, made when the preview
- *   driver settles while the tab is on screen, so it runs on the draft the map shows; its stale state;
+ * - the requests: one `crossSection` stats job (the profile) or one `slice` job (the Voxels mode, SP3a spec §5.2)
+ *   per session epoch and line, made when the preview driver settles while the view is on screen, so it runs on
+ *   the draft the map shows; their stale state and the tab's two modes;
  * - the plot model: the value range, the runs of river channels, gorges and water, SVG area paths, the summary
  *   line and the hover readout.
  */
 import { SEA_LEVEL } from '../../core/constants';
-import { JobCancelled, type WorkerPool } from '../../engine/workerPool';
+import { JobCancelled, type SliceResult, type WorkerPool } from '../../engine/workerPool';
 import {
   CROSS_SECTION_POINTS, crossSectionLength, segmentLength, segmentPointAt, summarizeCrossSection, type CrossSectionProfile, type Segment,
 } from '../../metrics/crossSection';
@@ -99,42 +100,41 @@ export function sameSegment(a: Segment | null, b: Segment | null): boolean {
 
 // ---------------------------------------------------------------- requests and stale state
 
-export interface SectionSource {
+/** What a cut-line request stream reads and reports (the profile's and the Voxels mode's). */
+export interface LineSource {
   /** The draft's session epoch and whether a gesture is active (a WorldSession). */
   readonly session: { readonly state: { readonly epoch: number }; readonly inGesture: boolean };
-  readonly pool: Pick<WorkerPool, 'stats'>;
-  /** Whether the Cross-section tab is on screen: a hidden tab requests nothing. */
+  /** Whether this stream's view is on screen (its tab, and its mode): a hidden view requests nothing. */
   visible(): boolean;
-  /** The line, the pending request or the shown profile changed. */
+  /** The line, the pending request or the shown result changed. */
   changed(): void;
-  /** A request failed with something other than JobCancelled (the profile stays stale). */
+  /** A request failed with something other than JobCancelled (the result stays stale). */
   failed(message: string): void;
 }
 
-export interface SectionRequests {
-  /** The line to profile (null: none). A different line drops the shown profile and the pending request. */
+export interface LineRequests<R> {
+  /** The line (null: none). A different line drops the shown result and the pending request. */
   setLine(line: Segment | null): void;
   readonly line: Segment | null;
   /**
-   * Requests the line's profile of the draft when `settled`, the tab is on screen, a line is set and no gesture
-   * is active, unless the shown profile or the pending request is already for this session epoch. The caller
+   * Requests the line's result for the draft when `settled`, the view is on screen, a line is set and no gesture
+   * is active, unless the shown result or the pending request is already for this session epoch. The caller
    * passes the driver's settled state (true from inside onSettled, whose status still reads false).
    */
   request(settled: boolean): void;
-  /** The line's last profile and the session epoch of the draft it ran on. */
-  readonly shown: { readonly epoch: number; readonly profile: CrossSectionProfile } | null;
+  /** The line's last result and the session epoch of the draft it ran on. */
+  readonly shown: { readonly epoch: number; readonly value: R } | null;
   /** The session epoch of the request in flight, if any. Only its result is shown. */
   readonly pending: number | null;
 }
 
 /**
- * The cross-section's requests (spec §4.5): `pool.stats('crossSection', 512, …)` (one job) per session epoch and
- * line. JobCancelled (a newer configure) keeps the last profile silently, any other error reports it; either way
- * the next settle requests again.
+ * One result per session epoch and line from `fetch` (a pool job). JobCancelled (a newer configure) keeps the last
+ * result silently, any other error reports it; either way the next settle requests again.
  */
-export function createSectionRequests(src: SectionSource): SectionRequests {
+export function createLineRequests<R>(src: LineSource, fetch: (line: Segment) => Promise<R>): LineRequests<R> {
   let line: Segment | null = null;
-  let shown: SectionRequests['shown'] = null;
+  let shown: LineRequests<R>['shown'] = null;
   /** A token per request, so that a result for a line replaced in the meantime is dropped even at the same epoch. */
   let pending: { readonly epoch: number } | null = null;
   return {
@@ -154,10 +154,10 @@ export function createSectionRequests(src: SectionSource): SectionRequests {
       const token = { epoch };
       pending = token;
       src.changed();
-      src.pool.stats('crossSection', CROSS_SECTION_POINTS, { len: crossSectionLength(), ax: at.ax, az: at.az, bx: at.bx, bz: at.bz }).then((sum) => {
+      fetch(at).then((value) => {
         if (pending !== token) return;
         pending = null;
-        shown = { epoch, profile: summarizeCrossSection(sum, at) };
+        shown = { epoch, value };
         src.changed();
       }, (e: unknown) => {
         if (pending !== token) return;
@@ -171,6 +171,33 @@ export function createSectionRequests(src: SectionSource): SectionRequests {
   };
 }
 
+export interface SectionSource extends LineSource {
+  readonly pool: Pick<WorkerPool, 'stats'>;
+}
+
+export type SectionRequests = LineRequests<CrossSectionProfile>;
+
+/** The profile's requests (spec §4.5): `pool.stats('crossSection', 512, …)` (one job) per session epoch and line. */
+export function createSectionRequests(src: SectionSource): SectionRequests {
+  return createLineRequests(src, (at) => src.pool.stats('crossSection', CROSS_SECTION_POINTS, { len: crossSectionLength(), ax: at.ax, az: at.az, bx: at.bx, bz: at.bz })
+    .then((sum) => summarizeCrossSection(sum, at)));
+}
+
+export interface SliceSource extends LineSource {
+  readonly pool: Pick<WorkerPool, 'slice'>;
+}
+
+export type SliceRequests = LineRequests<SliceResult>;
+
+/** The Voxels mode's requests (SP3a spec §5.2): `pool.slice(line)` (one job, abortable) per session epoch and line. */
+export function createSliceRequests(src: SliceSource): SliceRequests {
+  return createLineRequests(src, (at) => src.pool.slice(at));
+}
+
+/** The Cross-section tab's modes (SP3a spec §5.2): the SP2b profile, or the voxels of the vertical slice. */
+export type SectionMode = 'profile' | 'voxels';
+export const SECTION_MODES: readonly SectionMode[] = Object.freeze(['profile', 'voxels']);
+
 export type SectionView = 'none' | 'fresh' | 'stale';
 
 /**
@@ -183,10 +210,10 @@ export function sectionView(shownEpoch: number | null, epoch: number, inGesture:
 }
 
 /** The status next to the tab's title; empty while fresh. */
-export function sectionStatus(view: SectionView, pending: boolean, hasLine: boolean): string {
+export function sectionStatus(view: SectionView, pending: boolean, hasLine: boolean, mode: SectionMode = 'profile'): string {
   if (!hasLine) return 'no line: press Cut line in the toolbar, then click A and B on the map';
   if (view === 'fresh') return '';
-  if (view === 'none') return pending ? 'computing…' : 'the profile follows when the preview settles';
+  if (view === 'none') return pending ? 'computing…' : `the ${mode === 'profile' ? 'profile' : 'slice'} follows when the preview settles`;
   return pending ? 'stale: computing…' : 'stale: updates when the preview settles';
 }
 
