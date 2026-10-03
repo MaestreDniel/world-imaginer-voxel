@@ -10,10 +10,11 @@ const PURE_LAYERS = new Set(['core', 'world', 'gen', 'textures', 'audio', 'light
 const MATH_ALLOWED = new Set(['abs', 'floor', 'ceil', 'round', 'trunc', 'sign', 'min', 'max', 'imul', 'clz32', 'sqrt',
   'PI', 'E', 'LN2', 'LN10', 'LOG2E', 'LOG10E', 'SQRT2', 'SQRT1_2']);
 /**
- * Files outside core/ and gen/ that follow the core determinism rules: the golden digests (SP1 spec §1.8) and the
- * SP2b metrics shared by the tests, the workers and the UI (SP2b spec §5.4).
+ * Files outside core/ and gen/ that follow the core determinism rules: the golden digests (SP1 spec §1.8), the
+ * SP2b metrics shared by the tests, the workers and the UI (SP2b spec §5.4) and the SP3a region core (SP3a spec §6.1).
  */
-const DET_FILES = new Set(['metrics/sp1Goldens.ts', 'metrics/sp1Fixtures.ts', 'metrics/sp2aGoldens.ts', 'metrics/biomeShares.ts', 'metrics/liveness.ts', 'metrics/splineStats.ts', 'metrics/crossSection.ts']);
+const DET_FILES = new Set(['metrics/sp1Goldens.ts', 'metrics/sp1Fixtures.ts', 'metrics/sp2aGoldens.ts', 'metrics/biomeShares.ts', 'metrics/liveness.ts', 'metrics/splineStats.ts', 'metrics/crossSection.ts',
+  'metrics/region.ts']);
 /**
  * Directories outside core/ and gen/ that follow the core determinism rules: the block registry, whose ids and tables
  * are hashed into goldens (SP3a spec §2.5). The rest of world/ (the store) keeps the ND bans only.

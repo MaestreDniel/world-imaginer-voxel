@@ -8,6 +8,7 @@
  * `proto`/`final` read it once its status allows; `freeProto` releases the proto set; `freeColumn` releases every
  * reference the record holds and frees the record. `gen` imports only the types of `api.ts`, never this file.
  */
+import { PASS } from '../blocks/index';
 import type { AuxBView, AuxView, ColumnView, ColumnWriter, CommitStatus, NeighborhoodReader } from './api';
 import { allocAux, auxBView, auxView } from './aux';
 import {
@@ -32,12 +33,10 @@ export type { AuxBView, AuxView, ColumnView, ColumnWriter, CommitStatus, Neighbo
 const STATE_TABLE_SIZE = 4096;
 
 /**
- * The `PASS` table the store uses for meta when none is given: state 0 (air) none, every other state opaque — the
- * `PASS` column of the SP3a registry (air, stone, bedrock). The registry lives in `world/blocks`; once both are
- * on one branch, callers that append non-opaque states pass the registry's `PASS`.
+ * The `PASS` table the store uses for meta when none is given: the block registry's own (`world/blocks`), so states
+ * appended later (SP3b's terrain palette) get their pass bits without a store change. Never written.
  */
-export const DEFAULT_PASS: Uint8Array = new Uint8Array(STATE_TABLE_SIZE).fill(1);
-DEFAULT_PASS[0] = 0;
+export const DEFAULT_PASS: Uint8Array = PASS;
 
 export interface StoreOptions {
   readonly shared: boolean;

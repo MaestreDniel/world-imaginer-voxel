@@ -3,6 +3,7 @@ import { fileURLToPath, pathToFileURL } from 'node:url';
 import { mkdirSync } from 'node:fs';
 import { build } from 'vite';
 import { afterAll, describe, expect, test } from 'vitest';
+import { PASS } from '../../src/world/blocks/index';
 import { AUX_A_OFFSETS, AUX_B_OFFSETS } from '../../src/world/store/aux';
 import {
   finalAt, NO_COLUMN, protoAt, RECORD_COUNT, RECORD_INTS, REC_AUX_A, REC_AUX_B, REC_BLOCK_VERSION, REC_CLAIMED,
@@ -244,6 +245,8 @@ describe.each([true, false])('shared %s', (shared) => {
     expect(DEFAULT_PASS[0]).toBe(0);
     expect(DEFAULT_PASS[1]).toBe(1);
     expect(DEFAULT_PASS[2]).toBe(1);
+    // The default is the registry's own PASS table, so appended states (SP3b) get their pass bits.
+    expect(DEFAULT_PASS).toBe(PASS);
     expect(() => createStore({ shared, pass: new Uint8Array(10) })).toThrow(RangeError);
   });
 
