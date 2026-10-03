@@ -371,6 +371,46 @@ The plan was dry-run in a scratch worktree: every task was implemented and every
 5. **Module layout** (Module layout). `workers/sliceJob.ts`, `ui/crossSection/voxels.ts`, the test harness files (`blockFixtures`, `stateLock`, `registryChecks`, `reviewSlices`) and the two metric files are listed; the tsconfig `lib` moves to ES2024 for the growable-buffer types (the target is unchanged).
 6. **Measured, unchanged:** DT1's full tier keeps the four seeds (≈ 130 s cold, after the streaming FNV was made about 8 × faster, bit-identical); the provisional T column costs ≈ 0.67 ms on the reference machine; the 4-thread harness, the slab fuzz (≈ 2 s) and the 10-refresh torus slice test run as specified.
 
+## Exit evidence
+
+Implementation of the plan (2026-10-03, branch `sp3a/blocks-store-harness`, Tasks 1-16; 12th Gen Intel(R) Core(TM) i7-12700H with 20 threads, Node v24.21.0, Chrome 153.0.8010.36). Every number below was measured on this branch.
+- `npm run typecheck`, `npm run build` (run by the smoke test) and `npm test` (121 files and 1575 tests passed, 3 skipped, 42 s) are green. `npm run test:metrics` (61 s) and `npm run test:metrics:full` (146 s, with the region dumps of earlier runs partly present) are green with DT1 and M1 active.
+- `git diff main -- test/goldens.json` adds exactly `sp3a.registry` 5e1febd88b449b63, `sp3a.region.T.default` 943479d09e0e89e3 and `sp3a.region.T.large_biomes` e20fb4ebf0a5e9fc; no other golden changed. `GENERATOR_VERSION` stays 3.
+- Slab fuzz (integration, `SLAB_FUZZ_SEED=1`): 4 threads × 100k ops on both pools, 1.5 s; the pools grew to 3840 block and 3840 byte slots; 0 double allocations, 0 lost slots, exact refcounts at every barrier and 0 after teardown (hard assertions). The 4-thread harness equals the 1-thread one in every order, for both profiles.
+
+| metric | fast | quick | full |
+|---|---|---|---|
+| DT1.mismatches | 0 | 0 | 0 |
+| DT1 regions (5 runs × 2 profiles × seeds) | 10 (8 × 8) | 10 (32 × 32) | 40 (32 × 32; seeds '42', '1', '2', '3') |
+| M1.states | 3 | 3 | 3 |
+| M1.roundTripFailures | 0 | 0 | 0 |
+| M1.lockChanges | 0 | 0 | 0 |
+
+DT1 on the full tier takes 43 s alone with the dumps of an earlier run present (8 first cache hits) and keeps its four seeds (§6.3). Every other metric equals its SP2b value.
+
+Bench (`npm run bench`; 20 kernels, 2 of them new in SP3a). The baseline was recorded on the quiet machine in Task 15 (`npm run bench:record`: killRatio 0.821), and three `npm run bench` runs against it passed (the last two: killRatio 0.845 and 0.830; `column.sample` p50 0.339 and 0.409 ms, p99 ≤ 0.545 ms). The new rows in the recorded baseline:
+
+| kernel | ns/eval | ratio to calibration |
+|---|---|---|
+| `calibration.fmix32` | 0.636 | 1 |
+| `store.alloc` (SP3a; one byte-pool alloc and free) | 174.532 | 274.532 |
+| `terrain.provisional` (SP3a; one column with its ColumnSample) | 656385 | 1032470.415 |
+
+JavaScriptCore: `npx --yes bun@1 test/tools/goldensJsc.ts` → `50/50 match on Bun 1.4.2 (JavaScriptCore)`.
+
+Browser checks (`node test/tools/uiSmoke.ts --shots <dir>`: its own build, `vite preview` on a free port and headless Chrome 153, 1400 × 900 at DPR 1; 49 s) → `smoke: 77/77 checks pass`:
+- `?selftest=1`: `✓ all 50 goldens match (5.7 s)`, and `test/goldens.json` holds 50 entries.
+- The Voxels mode on the line A (−12800, 0) → B (12800, 0): "ground top y 26 to 203 · water on 14.6 % of the line, up to 37 deep", 38 colours in the 512 × 384 slice, hover "(25, 12, 0) · stone · no fluid · point 256, 12825.0 blocks from A"; back to Profile, the profile is kept.
+- No page error apart from the favicon.ico 404.
+- Firefox (`?selftest=1` 50/50) and CI are checked after the merge, as in SP2b.
+
+Visual review (`docs/superpowers/specs/assets/sp3a/`; world seed '42', default profile, provisional T; air in sky blue, stone grey, bedrock near black, water blue darkening with depth). The slices are written by `npm run docs:review-slices` (`test/harness/reviewSlices.ts`). Each site's line is checked against the ColumnSample's land, sea, lake and river positions, and its crop is checked to remove only air and stone. `slices.json` lists the sites and the positions each line crosses.
+- `slice-coast.png` (1024 × 192, y −64 … 127): the z plane −31992 for x −27136 … −26113. The sea is up to 43 deep; a river mouth crosses the coast; a 27-column land strip rises to y 100 before the sea again. Line positions: 567 sea, 436 land, 21 river.
+- `slice-lake.png` (2 px per block, y 32 … 95): the same plane for x −16384 … −15873. A river channel at sea level 63 lies beside a lake whose water stands at y 70, above sea level. Line positions: 138 lake, 30 river, 344 land.
+- `slice-river.png` (2 px per block, y 32 … 95): the same plane for x −15552 … −15041. Three river channels with water up to y 63, at most 4 blocks deep, between land up to y 76. Line positions: 95 river, 417 land.
+- `slice-y62.png` (1024 × 1024): the y plane 62 of the 64 × 64 columns from (cx, cz) = (−1696, −2032), with north at the top. It shows the coastline, river channels, islets and enclosed water: water where the sea or a river reaches y 62, stone where the ground does.
+- `cross-section-voxels.png` (1400 × 900, the smoke test's `--shots`): `?map` with the Voxels mode on a coast line A (5122, 3074) → B (6658, 3074) at 4 blocks/px. The sea is up to 41 deep under the sea-level line, the badlands rise to y 208, and the hover reads a water source.
+
 ## Threshold log
 
 (One line per commit that changes `test/thresholds.lock.json`.)

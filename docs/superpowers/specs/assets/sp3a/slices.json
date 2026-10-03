@@ -1,0 +1,110 @@
+{
+  "seed": "42",
+  "profile": "default",
+  "slices": [
+    {
+      "file": "slice-coast.png",
+      "width": 1024,
+      "height": 192,
+      "site": {
+        "name": "coast",
+        "file": "slice-coast.png",
+        "kind": "vertical",
+        "cx0": -1696,
+        "w": 64,
+        "z": -31992,
+        "yMin": -64,
+        "yMax": 127,
+        "scale": 1,
+        "needs": [
+          "sea",
+          "land"
+        ]
+      },
+      "lineKinds": {
+        "land": 436,
+        "sea": 567,
+        "lake": 0,
+        "river": 21
+      }
+    },
+    {
+      "file": "slice-lake.png",
+      "width": 1024,
+      "height": 128,
+      "site": {
+        "name": "lake",
+        "file": "slice-lake.png",
+        "kind": "vertical",
+        "cx0": -1024,
+        "w": 32,
+        "z": -31992,
+        "yMin": 32,
+        "yMax": 95,
+        "scale": 2,
+        "needs": [
+          "lake",
+          "land"
+        ]
+      },
+      "lineKinds": {
+        "land": 344,
+        "sea": 0,
+        "lake": 138,
+        "river": 30
+      }
+    },
+    {
+      "file": "slice-river.png",
+      "width": 1024,
+      "height": 128,
+      "site": {
+        "name": "river",
+        "file": "slice-river.png",
+        "kind": "vertical",
+        "cx0": -972,
+        "w": 32,
+        "z": -31992,
+        "yMin": 32,
+        "yMax": 95,
+        "scale": 2,
+        "needs": [
+          "river",
+          "land"
+        ]
+      },
+      "lineKinds": {
+        "land": 417,
+        "sea": 0,
+        "lake": 0,
+        "river": 95
+      }
+    },
+    {
+      "file": "slice-y62.png",
+      "width": 1024,
+      "height": 1024,
+      "site": {
+        "name": "y62",
+        "file": "slice-y62.png",
+        "kind": "horizontal",
+        "cx0": -1696,
+        "cz0": -2032,
+        "w": 64,
+        "h": 64,
+        "y": 62,
+        "checkZ": -31992,
+        "needs": [
+          "sea",
+          "land"
+        ]
+      },
+      "lineKinds": {
+        "land": 436,
+        "sea": 567,
+        "lake": 0,
+        "river": 21
+      }
+    }
+  ]
+}

@@ -77,7 +77,10 @@ world-imaginer-voxel/          (repository root)
   src/
     core/                       L0 pure: no DOM, three, worker APIs, Math.random, Date.now, console.*
       constants.ts coords.ts    MIN_Y=-64, HEIGHT=384, SECTIONS=24, SEA=63; keys, voxel/quart index math, torus slots
-      hash.ts rng.ts seed.ts    fmix32, axis pre-mix, hash2/3/4, fnv1a32/64, hashF64, deriveSeed(world,name); xoshiro128** streams; seed text
+                                (SP3a: coords.ts holds x/y/z ↔ cx/cz/sy/lx/ly/lz, voxel and column indices, colKey, sectionKey,
+                                torus slot, quart coordinates and the window check, SP3a spec §1)
+      hash.ts rng.ts seed.ts    fmix32, axis pre-mix, hash2/3/4, fnv1a32/64, hashF64, deriveSeed(world,name); xoshiro128** streams; seed text;
+                                (SP3a) a streaming FNV-1a 64 equal to fnv1a64 over the concatenated bytes
       detMath.ts                detSin/detCos/detExp/detExp2/detErf/detSmoothstep (pinned domains; SP1 spec §1.5); the only transcendentals allowed in gen
       noise/lattice3.ts         hashed-lattice 3D gradient noise, 12 balanced edge gradients, quintic fade, no table, no period
       noise/octave.ts normal.ts cdf.ts   OctaveNoise (per-octave seed + fractional origin), NormalNoise (337/331), CDF remap
@@ -89,9 +92,13 @@ world-imaginer-voxel/          (repository root)
                                 (core cannot import gen/); graphicsPresets.ts = the §4.16 preset table as pure data (graphics + audio rows)
       stage/registry.ts hash.ts StageDef, stageHash, genKey, dirty-stage computation
     world/                      L1 (core only)
-      blocks/registry.ts states.ts shapes.ts tags.ts fluid.ts fluidRules.ts   u16 block-state ids (<= 4096 used), property
-                                model, SoA per-state tables, shape boxes; fluid byte; rules shared by settle + sim
-      store/slab.ts columnTable.ts section.ts aux.ts versions.ts api.ts padded.ts   SAB store; ColumnWriter/NeighborhoodReader
+      blocks/kinds.ts registry.ts defs.ts index.ts fluid.ts light.ts   (SP3a) u16 block-state ids (<= 4096 used): property kinds
+                                and codes, buildRegistry (ids, SoA per-state tables, keys, rotations, mirrors), the definitions, REGISTRY
+                                and its table aliases, fluid and light bytes; states.ts, shapes.ts (shape boxes), tags.ts and fluidRules.ts
+                                (rules shared by settle + sim) arrive with the SPs that need them (amended by SP3a)
+      store/pool.ts columnTable.ts section.ts aux.ts epochs.ts store.ts api.ts   (SP3a) SAB store: slab pools over growable buffers
+                                (pool.ts replaces slab.ts), the torus table (it holds the versions; no versions.ts), section descriptors,
+                                aux slots, per-scope epoch cells; ColumnWriter/ColumnView/NeighborhoodReader; padded.ts arrives in SP4
     gen/                        L1 pure (core + world/api types only)
       context.ts                GenContext per (epoch, paramsHash): noises, splines, compiled density, biome tables, templates, LRUs
       column/climate.ts shape.ts rivers.ts lakes.ts steep.ts columnPoint.ts columnStage.ts columnCache.ts surfaceEstimate.ts spawn.ts
@@ -117,8 +124,10 @@ world-imaginer-voxel/          (repository root)
     persist/kv.ts idb.ts memory.ts diffCodec.ts wiworld.ts saves.ts   L2 (IStorage adapter; MemoryKV for tests)
     metrics/*.ts                                    pure metric definitions shared by vitest and the in-app dashboard (SP1: noiseStats.ts,
                                 sp1Fixtures.ts, sp1Goldens.ts; SP2a: columnStats.ts, sp2aGoldens.ts; SP2b: biomeShares.ts,
-                                splineStats.ts, liveness.ts, crossSection.ts, also run by the workers' stats job)
-    workers/protocol.ts taskHandler.ts task.worker.ts sim.worker.ts   (taskHandler: pure message handler, SP2a)
+                                splineStats.ts, liveness.ts, crossSection.ts, also run by the workers' stats job; SP3a: region.ts
+                                (fillColumnT, genRegionInProcess, regionHash) and sp3aGoldens.ts)
+    workers/protocol.ts taskHandler.ts task.worker.ts sim.worker.ts   (taskHandler: pure message handler, SP2a; SP3a: sliceJob.ts,
+                                the slice job with its worker-local store and LRU)
     engine/                     main thread, no three
       coordinator.ts scheduler.ts rings.ts workerPool.ts throttle.ts uploadBudget.ts session.ts invalidation.ts capabilities.ts
     render/                     the only place three is imported (ui canvases are 2D; amended by SP0)
@@ -133,14 +142,16 @@ world-imaginer-voxel/          (repository root)
       sfx.ts footsteps.ts ambience.ts emitters.ts music.ts reverb.ts
     ui/map/* ui/selftest/*       (SP2a) the standalone ?map page (mounted in-game from SP4) and ?selftest=1; SP2b makes ?map the editor
     ui/common/* paramPanel/* splineEditor/* biomeTable/* presets/* crossSection/*   (SP2b) shared DOM helpers, notices and shortcuts;
-                                the parameter panel, spline drawer, biome table, presets tab and cross-section (pure models beside thin DOM)
+                                the parameter panel, spline drawer, biome table, presets tab and cross-section (pure models beside thin DOM);
+                                SP3a adds the cross-section's Voxels mode
     ui/lab/* seedBox.ts          (SP1) the ?lab=noise research page; DOM-free seed-box logic
     ui/shell.ts styles.css inspector/* sliceView.ts probe.ts mapView/*   (paramPanel, splineEditor and biomeTable became directories in SP2b)
        metricsDashboard.ts jsonEditor.ts worldsMenu.ts settingsPanel.ts palette.ts hud.ts debugOverlay.ts help.ts
     main.ts
   tools/detmath-oracle.py       (SP1) CPython port of detMath, a manual oracle for the detMath goldens
   test/ unit/ metrics/ bench/ arch/ harness/{region,refs,cache,stats,flood}.ts fixtures/ tools/ (SP2b: tools/mapLatency.ts, tools/uiSmoke.ts)
-        schema-shape.lock.json (SP1)
+        (SP3a: harness/{region,cache,png,regionWorker,fuzzWorker}.ts)
+        schema-shape.lock.json (SP1) stateIds.lock.json (SP3a)
         thresholds.ts thresholds.lock.json goldens.json baselines.json
 ```
 
@@ -163,8 +174,8 @@ The authoritative layer table (value and type-only edges, worker edges, `light`/
 `test/arch/banned.test.ts` enforces these:
 
 - In `core`, `world` and `gen`, and in the determinism files of the next rule: `Math.random`, `Date.now`, `performance.now` and `console.*` (amended by SP2b).
-- In `core/`, `gen/` and the determinism files (`DET_FILES` in `test/arch/rules/banned.ts`: `metrics/sp1Goldens.ts`, `metrics/sp1Fixtures.ts`, `metrics/sp2aGoldens.ts`, and the SP2b metrics shared by the tests, the workers and the UI, `metrics/splineStats.ts`, `metrics/biomeShares.ts`, `metrics/liveness.ts` and `metrics/crossSection.ts`): only exactly-specified `Math` members (the SP0 allowlist minus `fround`), no `**`; no `Intl`, `localeCompare`, `toLocale*`, `String.prototype.normalize`, `TextEncoder` or `TextDecoder` (amended by SP1, SP2a and SP2b).
-- In `core/noise/**`, `core/spline/**`, `metrics/**` and `gen/**`: imported value bindings are referenced only through top-level `const` aliases (vitest's transform turns them into getters; amended by SP1 and SP2a).
+- In `core/`, `gen/`, `world/blocks/**` (its ids and tables are hashed into goldens; `world/store/**` keeps only the bans of the previous rule) and the determinism files (`DET_FILES` in `test/arch/rules/banned.ts`: `metrics/sp1Goldens.ts`, `metrics/sp1Fixtures.ts`, `metrics/sp2aGoldens.ts`, the SP2b metrics shared by the tests, the workers and the UI, `metrics/splineStats.ts`, `metrics/biomeShares.ts`, `metrics/liveness.ts` and `metrics/crossSection.ts`, and the SP3a region core and goldens, `metrics/region.ts` and `metrics/sp3aGoldens.ts`): only exactly-specified `Math` members (the SP0 allowlist minus `fround`), no `**`; no `Intl`, `localeCompare`, `toLocale*`, `String.prototype.normalize`, `TextEncoder` or `TextDecoder` (amended by SP1, SP2a, SP2b and SP3a).
+- In `core/noise/**`, `core/spline/**`, `metrics/**`, `gen/**` and `world/blocks/**`: imported value bindings are referenced only through top-level `const` aliases (vitest's transform turns them into getters; amended by SP1, SP2a and SP3a).
 - Exported numeric consts anywhere in `gen/` (fixed world constants live only in `core/constants.ts`).
 - Anywhere in the repository: no `.ogg`/`.mp3`/`.wav` files (sound packs are user-supplied, D17) and no import specifier resolving outside the repository (no copy-forward imports from world-imaginer).
 
@@ -188,6 +199,7 @@ These are rewritten against new tests. Everything else is written fresh:
 - **Indices:** `cx = x>>4` and `sy = (y+64)>>4`. The voxel index inside a section is `ly<<8 | lz<<4 | lx`. Quarts are `qx = x>>2` and `qy = (y+64)>>2`, giving 96 vertical quarts.
 - **Column key:** `colKey = (cx+32768)*65536 + (cz+32768)`, a plain number below 2^32. The section key is `colKey*32 + sy`. No string keys are used anywhere.
 - **Loaded-column table:** a torus of W = 64 ≥ 2·(24+5)+1 = 59 (RD ≤ 24 plus the unload margin of 5, with slack for teleport prefetch; a power of two so `mod` is `& 63`). `slot = (cx & 63) + 64*(cz & 63)`, and each record stores cx and cz for validation.
+- **Directions and faces** (amended by SP3a): north = −z, south = +z, east = +x, west = −x, up = +y. A clockwise quarter turn seen from +y maps a horizontal offset (x, z) to (−z, x): north → east → south → west → north. A face index i ∈ 0..5 follows the `facing6` order: 0 north, 1 east, 2 south, 3 west, 4 up, 5 down; `FULL_FACES` bit i is face i and `FACE_TEX[state·6 + i]` is face i's texture.
 - **Terminology:** a *column* (also *chunk*) is one 16×16 block footprint over the full height; a *section* is 16³; a *render region* is 8×8 columns (§4.5); a *structure region* is a spacing cell (§3.13); a *harness region* is a rectangle of columns whose size each metric states (default 32×32).
 - **Rendering precision:** a floating render origin snaps to 512 blocks and rebases once the camera is more than 1024 blocks away.
 
@@ -206,20 +218,20 @@ These are rewritten against new tests. Everything else is written fresh:
 
 - **Connection-derived shapes are not stored.** Fence/pane connections and stair inner/outer corners are computed by the mesher (and collision/raycast) from neighbours, so edits never need neighbour state updates.
 - Waterlogging is not a property: it is the separate fluid byte.
-- **Append-only ids.** State ids are assigned append-only: `test/stateIds.lock.json` records every `(typeName, props) → id` ever published, and a unit test fails if an existing entry changes (new types and props only append). Each `worlds` record stores `stateTable` (the mapping at save time); load and import remap diffs through it (hotbar slots are stored by type name, §4.12); states whose type no longer exists become AIR, with a warning showing the count.
+- **Append-only ids.** State ids are assigned append-only: `test/stateIds.lock.json` records every `(typeName, props) → id` ever published, and a unit test fails if an existing entry changes (new types and props only append: new types with their full property sets append, and a locked type never gains a property or a value; a variant that needs one is a new type, and `withType` converts between them; amended by SP3a). Each `worlds` record stores `stateTable` (the mapping at save time); load and import remap diffs through it (hotbar slots are stored by type name, §4.12); states whose type no longer exists become AIR, with a warning showing the count.
 - A per-type `PLACEABLE` flag and a `category` (from `tags.ts`) drive the creative palette.
 - A test asserts at most **4096 used states** (`MAX_STATES`); per-state SoA tables are sized to it. `STATE_TYPE: Uint16Array` maps state → type; `stateOf(type, props)`, `propsOf(state)`, `withProp(state, prop, v)` and `withType(state, type)` (keeps the props both types share, defaults the rest; used by per-biome structure palettes) are pure table lookups; `rotateState(state, quarterTurns)` and `mirrorState` serve structure pieces and placement.
 
 Per-state SoA tables:
 - `OPACITY`: 0 transparent, 1 filters sky (leaves, ice, water), 15 opaque;
 - `PASS`: none / opaque / cutout / translucent;
-- `SHAPE`: cube / cross / fluid / pointed / **box model** (index into `SHAPE_BOXES`, a per-state table built at registry init by transforming the model's canonical boxes — facing north, half bottom, closed, hinge left — by the state's props; connection-derived models store one box list per variant: fence and pane 16 arm masks, stairs straight / inner-left / inner-right / outer-left / outer-right). The 11 models: slab, stairs, door, trapdoor, fence, fence gate, pane, torch, wall torch, lantern, ladder;
+- `SHAPE`: none (air; amended by SP3a) / cube / cross / fluid / pointed / **box model** (index into `SHAPE_BOXES`, a per-state table built at registry init by transforming the model's canonical boxes — facing north, half bottom, closed, hinge left — by the state's props; connection-derived models store one box list per variant: fence and pane 16 arm masks, stairs straight / inner-left / inner-right / outer-left / outer-right). The 11 models: slab, stairs, door, trapdoor, fence, fence gate, pane, torch, wall torch, lantern, ladder;
 - `FULL_FACES` (6-bit mask of faces that fully occlude a neighbour; drives face culling and light blocking for partial shapes). For connection-derived models it is the intersection over all derived variants (stairs: only the full half face, i.e. down for half=bottom and up for half=top; fences, panes and fence gates: 0), so culling never depends on a neighbour's neighbours;
 - `EMIT` (0-15), `CARVABLE`, `REPLACEABLE`;
 - `COLLIDE`: none / cube / boxes (`boxes` uses `SHAPE_BOXES`, except that fence and closed fence-gate posts extend to 1.5 blocks; torches, wall torches, lanterns, cross, pointed, ladders and open fence gates are none);
 - `FLUID_MODE` (shared by settle, the sim and the fluid mesher): `block` (fluid never enters: full solids, double slabs, doors), `hold` (keeps its state and takes the fluid byte: kelp, seagrass, leaves, slabs, stairs, fences, fence gates, panes, trapdoors, ladders), `displace` (flow replaces it with AIR plus fluid: torches, lanterns, plants, snow layers);
 - `TINT`: none / grass / foliage / water / fixed;
-- `SOUND`: sound group (stone, dirt, grass, sand, gravel, wood, snow, glass, leaves, metal, abyss) used by `audio`/`sound`.
+- `SOUND`: sound group (none, stone, dirt, grass, sand, gravel, wood, snow, glass, leaves, metal, abyss) used by `audio`/`sound`; none is air's and is never played (amended by SP3a).
 
 `FACE_TEX` is a `Uint16Array(MAX_STATES*6)` of base texture-array layers. This splits 09's overloaded `solid/transparent` into render pass, light opacity, face culling (opaque full faces only) and collision:
 - water: pass translucent, opacity 1, no collision;
@@ -227,6 +239,14 @@ Per-state SoA tables:
 - leaves: cutout with opacity 1;
 - slabs/stairs: opaque pass, OPACITY 0, culling via `FULL_FACES`. **Light never crosses a face that is set in `FULL_FACES`** of the voxel it leaves or of the voxel it enters — in the initial BFS, the straight-down sky fall, incremental relight and the L1/L3 reference BFS. The sky fall enters a voxel unless its up face is full and stops below a voxel whose down face is full; `LIGHT_BLOCKING` is defined the same way. `slabType=double` is a plain full cube (SHAPE cube, OPACITY 15, FULL_FACES 63).
 - **Until SP8a** box-model states use SHAPE cube and FULL_FACES 63, and `COLLIDE: boxes` falls back to cube; OPACITY and `COLLIDE: none` (torches, ladders, …) already have their final values.
+
+**Encoding details** (amended by SP3a; SP3a spec §2.1-2.3, frozen from SP3a):
+- **Property kinds and values**, in kind order: `axis` (x, y, z), `facing4` (north, east, south, west), `facing6` (north, east, south, west, up, down), `half` (bottom, top), `open` (false, true), `hinge` (left, right), `slabType` (bottom, top, double). A property's code is its value's 0-based index.
+- **Enum codes:** every enum table stores the 0-based index of its value in the order written above: `PASS` none 0, opaque 1, cutout 2, translucent 3; `SHAPE` none 0, cube 1, cross 2, fluid 3, pointed 4, box 5; `COLLIDE` none 0, cube 1, boxes 2; `FLUID_MODE` block 0, hold 1, displace 2; `TINT` none 0, grass 1, foliage 2, water 3, fixed 4; `SOUND` none 0, stone 1 … abyss 11.
+- **Id order:** type and state ids start at 0 in definition order; a type's states are contiguous with the default first. With the property combinations numbered in mixed radix (properties in declaration order, values in kind order, the last property fastest), combination k of a type whose default is d takes id `base + (k = d ? 0 : k < d ? k + 1 : k)`, and `DEFAULT_STATE[type] = base`.
+- **Canonical key:** the bare type name for a type without properties; otherwise `name[p1=v1,p2=v2,…]` with every property in declaration order, defaults included, no spaces, each value spelled as its kind value name. Keys are ASCII and unique, and `parseStateKey(stateKey(s)) = s`; the lock and `stateTable` use them.
+- **`withType(state, type)`** keeps a property only when the target declares one with the same name and kind; every other property takes the target's default. **`rotateState(state, q)`** turns clockwise seen from +y by ((q mod 4) + 4) mod 4 quarter turns: horizontal `facing4`/`facing6` values step north → east → south → west, up and down stay, `axis` swaps x ↔ z on odd turns. **`mirrorState(state, 'x' | 'z')`** negates that axis (x: east ↔ west; z: north ↔ south), keeps up and down and flips `hinge`. `half`, `open` and `slabType` never change under either.
+- **The table set only grows:** later SPs add block types, the per-state values of new states and new tables (`PLACEABLE` and `category` in SP5, `SHAPE_BOXES` in SP8a); an existing table never changes its encoding.
 
 **Fluid byte (u8).**
 
@@ -244,10 +264,10 @@ A pure fluid voxel is AIR plus a fluid byte. Waterlogging comes free: a state wh
 
 ### 2.3 SharedArrayBuffer store (`world/store`)
 
-**Slabs.** Two slab pools share one allocator implementation parameterised by slot size: the **block pool** (1 MiB pages of 128 slots × 8 KiB, one u16 per voxel) and the **byte pool** (1 MiB pages of 256 slots × 4 KiB, for light, fluid and the two aux slots). A slot id is `page<<8|slot` within its pool.
-- Allocation uses an Int32 free stack per pool in a SAB, guarded by a CAS spinlock whose critical section is about 10 instructions. Workers allocate and free slots themselves.
-- Only the main thread grows pages. It keeps at least 15% headroom and broadcasts new pages.
-- A per-slot `Int32Array` refcount (Atomics) lets proto and final section sets share unmodified slots.
+**Slabs.** Two slab pools share one allocator implementation parameterised by slot size: the **block pool** (8 KiB slots, one u16 per voxel) and the **byte pool** (4 KiB slots, for light, fluid and the two aux slots). Each pool's slots live in **one growable buffer** (amended by SP3a): a `SharedArrayBuffer` created with `maxByteLength` (default 768 MiB for blocks, 512 MiB for bytes: reserved address space, not committed memory), or, with the same code, a resizable `ArrayBuffer`. A slot id is the slot's index in its pool.
+- Allocation uses an Int32 free stack per pool in a growable buffer, guarded by a CAS spinlock whose critical section is about 10 instructions. Workers allocate and free slots themselves.
+- Whichever thread finds the free stack empty grows its pool by 1 MiB (128 block or 256 byte slots) inside the same lock; length-tracking views see the growth in every thread, so there is no page broadcast (amended by SP3a). A pool at its maximum throws `StoreFull`.
+- A per-slot `Int32Array` refcount (Atomics) lets proto and final section sets share unmodified slots. Every non-negative descriptor entry and every allocated aux slot holds one reference; one free per reference.
 
 **Final section descriptor**, 4 × int32 per section:
 
@@ -255,8 +275,10 @@ A pure fluid voxel is AIR plus a fluid byte. Waterlogging comes free: a state wh
 |---|---|
 | blocks | block-pool slot ≥ 0, or `-1-uniformStateId` |
 | light | slot, or `-1-uniformByte` (all 0 in sealed rock and dark caves, all 0xF0 in open sky) |
-| fluid | slot, or -1 for none |
-| meta | nonAir 13 bits, flags 4 (hasOpaque, hasCutout, hasTranslucent, hasFluid), face-to-face connectivity 15 bits |
+| fluid | slot, or `-1-uniformByte`; -1 is "no fluid" (byte 0), so a full water section of an ocean costs no slot (amended by SP3a) |
+| meta | bits 0-12 nonAir (0-4096), 13 hasOpaque, 14 hasCutout, 15 hasTranslucent (any voxel whose `PASS` is that pass), 16 hasFluid (any fluid type ≠ 0), 17-31 face-to-face connectivity (0 until SP4) (amended by SP3a) |
+
+Each channel is stored on its own: uniform when every value of that channel is equal (no slot), dense otherwise; rewriting a descriptor releases what it held. Unwritten descriptors are −1 (uniform air, light byte 0, no fluid). The connectivity bits and `padded.ts` are SP4's (amended by SP3a).
 
 **Proto section descriptor**, 2 × int32: blocks and fluid. This is the pre-decoration state (terrain, aquifer, surface rules, carvers). It is immutable once T finishes.
 
@@ -269,6 +291,7 @@ A pure fluid voxel is AIR plus a fluid byte. Waterlogging comes free: a state wh
 | 6 | protoFlags (alive, pinnedByTuning) |
 | 7-8 | auxSlotA, auxSlotB |
 | 9-10 | unsettledCount, diffFlag |
+| 11 | `claimed` (Atomics: 0 free, 1 held; claiming a held record throws `SlotBusy`, and a read of a record that holds another column returns absent; amended by SP3a) |
 | 16-111 | final descriptors |
 | 112-159 | proto descriptors |
 
@@ -278,9 +301,11 @@ A pure fluid voxel is AIR plus a fluid byte. Waterlogging comes free: a state wh
 - `surfaceBiome` Uint8[256], taken after the Voronoi zoom;
 - `tintTH` Uint8[3·256]: T, H and an override per block.
 
-**Aux slot B:** `caveBiomeQ` Uint8[4·96·4 = 1536] and `surfaceBiomeQ` Uint8[16].
+Byte offsets (amended by SP3a): `WORLD_SURFACE_WG` 0, `OCEAN_FLOOR_WG` 512, `WORLD_SURFACE` 1024, `MOTION_BLOCKING` 1536, `OCEAN_FLOOR` 2048, `LIGHT_BLOCKING` 2560, `surfaceBiome` 3072, `tintTH` 3328; per-position arrays use the column index `lz·16 + lx`, and Int16 values are little-endian. A heightmap value is the absolute y of the highest qualifying voxel plus one, −64 when none qualifies: `WORLD_SURFACE_WG` and `WORLD_SURFACE` count a state ≠ air or a fluid type ≠ 0; `OCEAN_FLOOR_WG` and `OCEAN_FLOOR` count `COLLIDE` ≠ none (the fluid byte is ignored); `MOTION_BLOCKING` counts `COLLIDE` ≠ none or a fluid type ≠ 0; `LIGHT_BLOCKING` follows the §2.2 light rule, pinned by SP4.
 
-**Epoch cell.** A SAB `Int32Array` epoch cell per scope is checked by workers between phases, so a job can abort mid-run.
+**Aux slot B:** `caveBiomeQ` Uint8[4·96·4 = 1536] at 0 and `surfaceBiomeQ` Uint8[16] at 1536 (offsets amended by SP3a). Both aux slots are zero-filled when allocated (a recycled slot included), so a field no stage has written reads 0.
+
+**Epoch cell.** A SAB `Int32Array` epoch cell per scope is checked by workers between phases, so a job can abort mid-run. SP3a builds the per-scope cells (terrain 0, decorate 1, light 2, mesh 3); SP4 wires them in place of SP2b's pool-wide cell (amended by SP3a).
 
 ### 2.4 ColumnSample (worker-local LRU of 1024, not in the SAB)
 
@@ -295,7 +320,7 @@ A pure fluid voxel is AIR plus a fluid byte. Waterlogging comes free: a state wh
 ```ts
 type Seed64 = readonly [lo: number, hi: number];   // u32 words, value = hi·2^32 + lo, normalised with >>> 0 (SP1); Hash64 alike
 type RegenScope = 'live' | 'remesh' | 'decorate' | 'terrain' | 'climate';
-type SubProjectId = 'SP0'|'SP1'|'SP2a'|'SP2b'|'SP3'|'SP4'|'SP5'|'SP6'|'SP7'|'SP8a'|'SP8b'|'SP8c'|'SP9'|'SP10'|'SP11'|'SP12';
+type SubProjectId = 'SP0'|'SP1'|'SP2a'|'SP2b'|'SP3a'|'SP3b'|'SP3c'|'SP4'|'SP5'|'SP6'|'SP7'|'SP8a'|'SP8b'|'SP8c'|'SP9'|'SP10'|'SP11'|'SP12';
 type StageId = 'climate'|'shape'|'surfaceEst'|'biome2d'|'terrain'|'decorate'|'light'|'mesh'|'lod'|'map';
 interface ParamMeta { path: string; label: string; doc: string; unit?: string;
   kind: 'number'|'int'|'bool'|'enum'|'noise'|'spline'|'expr'|'boxTable'|'ruleTree'|'featureList'|'structureSets';
@@ -326,8 +351,16 @@ type Expr =                                  // 3D density composition (preset d
   | { op:'ref'; id:string };
 interface CompiledDensity { cornerFn(ctx, x:number, y:number, z:number): number; voxelFn(ctx, i:number, interp:Float64Array): number;
   boundsCell(ctx, cellX:number, cellY:number, cellZ:number): [number, number]; point(x:number, y:number, z:number, tap?:string): number; }
-interface ColumnWriter { setProto(sy:number, blocks:Uint16Array, fluid:Uint8Array): void; setFinal(...): void; aux(): AuxView }
-interface NeighborhoodReader { proto(dx:number, dz:number): ColumnView; final(dx:number, dz:number): ColumnView; versions(): Int32Array }
+// From store.claimColumn(cx, cz, epoch) (amended by SP3a; SP3a spec §3.5). Each setter copies its 4096-entry arrays.
+interface ColumnWriter { setProto(sy:number, blocks:Uint16Array, fluid:Uint8Array): void;
+  setFinal(sy:number, blocks:Uint16Array, light:Uint8Array, fluid:Uint8Array): void;
+  shareFinal(sy:number, light:Uint8Array): void /* final blocks and fluid share the proto slots */;
+  aux(): AuxView; auxB(): AuxBView; commit(status: 1|2|3): void /* blockVersion += 1, then status last */ }
+interface ColumnView { block(lx:number, y:number, lz:number): number; fluid(lx:number, y:number, lz:number): number;
+  light(lx:number, y:number, lz:number): number; sectionBlocks(sy:number): Uint16Array|number; sectionFluid(sy:number): Uint8Array|number;
+  aux(): AuxView | null }
+interface NeighborhoodReader { proto(dx:number, dz:number): ColumnView | null; final(dx:number, dz:number): ColumnView | null;
+  versions(): Int32Array /* 3x3 in (dz, dx) order, blockVersion then lightVersion, -1 when absent */ }
 interface SectionMesh { secKey:number; pass:0|1|2; quads:number; position:Uint8Array /*Uint8x4*/; data:Uint32Array; index:Uint32Array;
   bounds:[number,number,number,number] /*sphere*/; seq:number; versions:Int32Array /*3x3 block+light*/;
   emitters?: Float32Array /* audio candidates: kind, x, y, z, strength (§4.18) */ }
@@ -554,7 +587,7 @@ final     = max( min( min(terrain + detail, max(caves, lakeRoof)), 16·noodle ),
 
 ### 3.7 surfaceEstimate and surfaceWaterLevel (shared by map, LOD, aquifer, structures, spawn and teleport)
 
-SP2a uses the 2D estimate `surfaceEst = offset` (after rivers and lakes); SP3 introduces the density-tap search below and bumps the `surfaceEst` stage version.
+SP2a uses the 2D estimate `surfaceEst = offset` (after rivers and lakes); SP3b introduces the density-tap search below and bumps the `surfaceEst` stage version (SP3a keeps the 2D estimate; amended by SP3a).
 
 
 - **surfaceEstimate(x,z):** start at `col.offset`, step ±8 blocks evaluating the `terrain` tap at the point, then bisect 4 times. That is about 6-10 point evaluations, ≈ 8 µs.
@@ -805,7 +838,7 @@ The built-in presets are the `PROFILES` entries of `core/params/profiles.ts` (SP
 Proof suite (DT1/DT2):
 - shuffled vs spiral order, 1 vs 4 `worker_threads`, cold vs warm cache, two runs, and goldens;
 - compiled vs reference bit-exact; probe == bulk; batch == point;
-- a browser self-test page (`?selftest=1`), built in SP2a and extended by every later SP with its stage, that recomputes golden hashes (column stage and map tiles from SP2a, proto regions from SP3, …) in a real module worker, run at every SP exit from SP2a on.
+- a browser self-test page (`?selftest=1`), built in SP2a and extended by every later SP with its stage, that recomputes golden hashes (column stage and map tiles from SP2a, proto regions from SP3a, …) in a real module worker, run at every SP exit from SP2a on.
 
 ## 4. Engine
 
@@ -1247,7 +1280,8 @@ WASD; Space (up/jump); Shift (down/sneak); Ctrl (sprint); F (walk/fly); M (map);
 
 **Harness** (`test/harness/region.ts`): `genRegion({seed, params, cx0, cz0, w, h, upTo:'T'|'D'|'L'|'MESH', order:'spiral'|'shuffled', threads?:1|4, debugTags?})`.
 - It runs the **real stage functions and coordinator prerequisite rules** in-process, on a real SAB store (or a plain ArrayBuffer), with `worker_threads` for the thread matrix.
-- It returns a stitched `RegionView` (block, fluid, light, fields, biome, tags) plus per-stage timings.
+- It returns a `RegionView` (block, fluid, light, fields, biome, tags) plus per-stage timings. The view reads through the store per column and is never stitched into one array (a 32 × 32 region would be about 300 MB; amended by SP3a).
+- SP3a's `genRegion` has `upTo: 'T'` only, plus `cache?` and `shuffleSeed?`, and no coordinator prerequisite rules until SP4 (amended by SP3a).
 
 **References** (`refs.ts`):
 - global reference light BFS;
@@ -1255,7 +1289,7 @@ WASD; Space (up/jump); Shift (down/sneak); Ctrl (sprint); F (walk/fly); M (map);
 - flood from sky and connected components;
 - a raycast visibility reference for cave culling.
 
-**Region cache** (`cache.ts`): binary dumps keyed by `genKey + region + upTo`, plus `stageHash('mesh')` when upTo is 'MESH' in `test/.cache`.
+**Region cache** (`cache.ts`): binary dumps keyed by `genKey + srcKey + REGION_CACHE_FORMAT + region + upTo`, plus `stageHash('mesh')` when upTo is 'MESH', in `test/.cache/regions`. `srcKey` hashes the generator sources and the format version is bumped when the dump layout changes, because `genKey` does not track code changes made without a stage bump (amended by SP3a).
 
 **Suites:**
 
@@ -1548,7 +1582,7 @@ High adds MSAA, a shadow cascade (about 2 ms), LOD 1 km and RD16 (dGPU target). 
 
 1. **COOP/COEP needed for the SAB.**
    - Mitigation: headers in vite.config for dev and preview; Docker runs vite; `vercel.json` sets the same headers on Vercel (D11); a startup `crossOriginIsolated` check with an error screen; packs load from local files only; no cross-origin subresources anywhere (COEP `require-corp`). Isolation also requires a **secure context**: dev, preview and Docker must be opened via `http://localhost:<port>` (or 127.0.0.1) or over HTTPS, and a reverse proxy in front of the container must terminate TLS and pass COOP/COEP through unchanged. When `isSecureContext` is false, the error screen names this cause. Every worker script response (Vite dev `?worker_file` modules, `/node_modules/.vite/deps/*`, built `assets/*.js`) must carry the headers too.
-   - Kill: if SP3/SP4 shows an unfixable isolation or concurrency problem, switch to transferable snapshots. gen/light/mesh already run on plain ArrayBuffers in the harness, so only `store` and the transport change.
+   - Kill: if SP3a-SP4 shows an unfixable isolation or concurrency problem, switch to transferable snapshots. gen/light/mesh already run on plain ArrayBuffers in the harness, so only `store` and the transport change.
 2. **BatchedMesh with custom GLSL3 and an integer `data` attribute.**
    - Mitigation: an SP4 week-1 spike (stress test at Medium scale: ≈ 3.5k section instances, ≈ 0.75 M quads; remesh churn; `optimize`); pin three to `~0.186.1`; `WEBGL_multi_draw` detection; RegionMesh fallback behind the `SectionRenderer` interface.
 3. **T cost of the full cave family in JS, plus DAG closures.**
@@ -1606,11 +1640,11 @@ Each sub-project runs its own cycle:
 
 Thresholds are locked (`thresholds.lock.json`) and goldens are gated (§6.2). Sizes: S ≈ 2-4 days, M ≈ 1-2 weeks, L ≈ 2-3 weeks of focused work.
 
-**Cut lines.** Every SP names a cut line: what may slip if it overruns. A slipped item moves to a named receiving SP by amending this section, and the receiving SP adds it to its exit. Default receivers: SP0 Vercel preview check → SP4; SP2b share preview and cross-section → SP10 (both delivered in SP2b, so nothing moved); SP3 inspector pins → SP10; SP5 worlds-menu polish and palette search → SP10; SP7 vertex waves → SP11; SP8a animation frames → SP11; SP8a fence gates and trapdoors → SP12; SP8b giant trees, boulders and fossils → SP12; SP8c HRTF → SP11; SP9 jungle temple and village depth > 4 → SP12; SP11 Ultra shadows, 3D clouds and Fabulous water → SP12; SP6 underground-only carver and spaghetti-2D rarity bands → SP12; SP7 extra lava reactions → SP12; SP10 seed sweep and column-status heatmap → SP12. SP12's exit requires no open cut-line items, unless the user explicitly dropped one and the impact on its D-decision is recorded.
+**Cut lines.** Every SP names a cut line: what may slip if it overruns. A slipped item moves to a named receiving SP by amending this section, and the receiving SP adds it to its exit. Default receivers: SP0 Vercel preview check → SP4; SP2b share preview and cross-section → SP10 (both delivered in SP2b, so nothing moved); SP3c inspector pins → SP10; SP5 worlds-menu polish and palette search → SP10; SP7 vertex waves → SP11; SP8a animation frames → SP11; SP8a fence gates and trapdoors → SP12; SP8b giant trees, boulders and fossils → SP12; SP8c HRTF → SP11; SP9 jungle temple and village depth > 4 → SP12; SP11 Ultra shadows, 3D clouds and Fabulous water → SP12; SP6 underground-only carver and spaghetti-2D rarity bands → SP12; SP7 extra lava reactions → SP12; SP10 seed sweep and column-status heatmap → SP12. SP12's exit requires no open cut-line items, unless the user explicitly dropped one and the impact on its D-decision is recorded.
 
 **SP0 — Scaffold and guardrails** (S; no dependencies)
 - Repository scaffold at the root: Vite, TS strict, three `~0.186.1`, vitest projects (unit / arch / metrics-fast / metrics-quick / metrics-full / bench; see the SP0 spec).
-- Headers exactly `Cross-Origin-Opener-Policy: same-origin` and `Cross-Origin-Embedder-Policy: require-corp`, set in vite.config `server.headers` and `preview.headers` and in `vercel.json` with `source: "/(.*)"`. Dockerfile and the repository's own `docker-compose.yml` (service `world-imaginer-voxel`, port 5183, default compose network); README and CLAUDE.md updated with the real commands; GitHub Actions CI (`.github/workflows/ci.yml`: `npm ci`, `npm run build`, `npm test`, `npm run test:metrics`, on push and PR; the region-cache step for `npm run test:metrics` arrives in SP3, when the region cache exists).
+- Headers exactly `Cross-Origin-Opener-Policy: same-origin` and `Cross-Origin-Embedder-Policy: require-corp`, set in vite.config `server.headers` and `preview.headers` and in `vercel.json` with `source: "/(.*)"`. Dockerfile and the repository's own `docker-compose.yml` (service `world-imaginer-voxel`, port 5183, default compose network); README and CLAUDE.md updated with the real commands; GitHub Actions CI (`.github/workflows/ci.yml`: `npm ci`, `npm run build`, `npm test`, `npm run test:metrics`, on push and PR; the region-cache step for `npm run test:metrics` arrives in SP3b, caching `test/.cache/regions` only; amended by SP3a).
 - Arch tests (imports, banned APIs, no numeric tunables in `gen/`, no audio assets, no imports outside the project); thresholds-lock (with `activeFrom`) and goldens commands.
 - Capability probe: `isSecureContext`, `crossOriginIsolated` in the page **and in a module worker** sharing one SAB, `WEBGL_multi_draw`, timer query, max texture layers, WebGL renderer string; an error screen that names the missing condition.
 - CSS-grid shell and HUD.
@@ -1625,7 +1659,7 @@ Thresholds are locked (`thresholds.lock.json`) and goldens are gated (§6.2). Si
 - **Cut line:** the lab's A/B mode (→ SP10).
 
 **SP2a — Column stage, worker pool and map** (L; SP1). Spec: `2026-09-28-sp2a-column-stage-map-design.md` (the 2026-09-28 split of the former SP2).
-- Climate with warps and CDF, PV fold; offset / σ / jag splines in blocks; steep from the halo; rivers (channel, valley, gorges) and lakes (column terms); a 2D `surfaceEst = offset` (SP3 replaces it); surface biome registry, picker and zoom; spawn search; ColumnSample LRU; point reference `columnPoint` and batched `buildColumnSample`, bit-exact at quart corners.
+- Climate with warps and CDF, PV fold; offset / σ / jag splines in blocks; steep from the halo; rivers (channel, valley, gorges) and lakes (column terms); a 2D `surfaceEst = offset` (SP3b replaces it); surface biome registry, picker and zoom; spawn search; ColumnSample LRU; point reference `columnPoint` and batched `buildColumnSample`, bit-exact at quart corners.
 - Task pool and protocol (`MAP_TILE`, `point`, `selftest`); the standalone `?map` page (coarse-first tiles; biome, relief, rivers, lakes, raw fields and offset/σ/jag layers; hover; spawn marker; click shows a coordinate); seed box, ready-profile select and a JSON patch box over `WorldSession`, in the URL hash.
 - `?selftest=1` page: recomputes column-stage and map-tile golden hashes in a real module worker.
 - **Deliverable:** an interactive world map of the default and large_biomes worlds, parameterised by URL patch.
@@ -1638,21 +1672,39 @@ Thresholds are locked (`thresholds.lock.json`) and goldens are gated (§6.2). Si
 - **Deliverable:** the SP2a map updates live while splines and biome boxes are edited; a 1-10 biome-size slider drives `climate.scaleMul = 4^((v − 5)/5)` (5 = default, 10 = large_biomes; user request 2026-09-29).
 - **Exit:** U2 for column-scope params; spline-edit map preview ≤ 300 ms; preset unit tests; the SP1 deferred minors reachable through the editor (spline knot/tangent bounds, tiny amplitudes).
 - Received from SP2a (amended by SP2b): the raw W/T/H/R layers and the grid overlay exist; the spawn fallback refinement is closed as not needed (N4 spawnOnLand is 100 % over 64 seeds with the SP2a fallback).
-- Handed on (SP2b spec Appendix A): SP2a minors 5 and 6 → SP3; the `?lab=noise` minors → SP10.
+- Handed on (SP2b spec Appendix A): SP2a minors 5 and 6 → SP3 (SP3b after the split); the `?lab=noise` minors → SP10.
 - **Cut line:** the biome share preview and the cross-section profile (→ SP10). Both were delivered in SP2b, so nothing moved to SP10.
 
-**SP3 — Voxel store, block states, density DAG, surface rules, harness** (L; SP2b)
-- SAB store (two slab pools, CAS free stacks, refcounts, torus table, aux). **The u16 block-state encoding, the fluid byte and the light byte are frozen here, together with the property model, the registry API and the append-only id rule (§2.2).** Frozen means the encoding, the property kinds and the API; later SPs still add block types, SoA columns and per-state values (the block list grows in SP6, SP8a, SP8b and SP9).
-- Density: Expr, closure compiler with stage placement, reference interpreter, interval bounds with early-outs, probe; the default terrain expression without caves; the `islands` DAG term (−1e6 by default) and draft `floating_islands`, `amplified` and `archipelago` presets (terms, splines and params; surface-rule branch for islands), so per-preset goldens and SP11's LOD island scan have a target.
+SP3 was split on 2026-10-02 into SP3a, SP3b and SP3c (amended by SP3a; the SP3a spec's Decisions): the context review sized it at 9-12 weeks, three to four times an "L". SP4 and SP6 depend on SP3b; SP3c can run alongside SP4.
+
+**SP3a — Block registry, voxel store and region harness** (M; SP2b). Spec: `2026-10-02-sp3a-blocks-store-harness-design.md`.
+- SAB store (two slab pools over growable buffers, CAS free stacks, refcounts, torus table, section descriptors, aux, per-scope epoch cells), on a SharedArrayBuffer or a plain ArrayBuffer; the block registry with air, stone and bedrock and `test/stateIds.lock.json`. **The u16 block-state encoding, the fluid byte and the light byte are frozen here, together with the property model, the registry API and the append-only id rule (§2.2).** Frozen means the encoding, the property kinds and the API; later SPs still add block types, SoA columns and per-state values (the block list grows in SP6, SP8a, SP8b and SP9).
+- A provisional T stage that fills columns from the 2D world (bedrock, stone, water up to surfaceWaterLevel, air) through the store API.
+- Harness `genRegion` (orders, 1 or 4 threads, region cache keyed by genKey + srcKey + format, PNG slices); the slice job and a Voxels mode in the `?map` cut-line cross-section; `?selftest=1` extended to proto region hashes (`sp3a.*`).
+- **Deliverable:** real voxels: the vertical slice of the provisional terrain under the cut line, and the harness PNG slices.
+- **Exit:** DT1 on the provisional T; M1 (registry parts); slab fuzz extended to promotion, sharing and the torus (4 threads × 100k ops, both pools, growth; 0 double allocations, 0 lost slots, exact refcounts); `?selftest=1` with the sp3a region hashes.
+- **Cut line:** none named by the SP3a spec.
+
+**SP3b — Density, surfaceEstimate, terrain and surface rules** (L; SP3a)
+- Density: Expr, closure compiler with stage placement, reference interpreter, interval bounds with early-outs, probe; the default terrain expression without caves, with the `islands` DAG term (−1e6 by default).
 - surfaceEstimate by bisection (replaces the 2D relief on the map).
 - Surface-rule data tree, compiler and whole-column scan (bedrock, deepslate, palettes, snowline, cliffs).
-- v0 water fill so oceans, rivers and lakes are visible early (air at y ≤ surfaceWaterLevel above surfaceEst − 12 becomes water sources; everything else stays dry).
-- Harness `genRegion` (orders, threads, cache by genKey, PNG slices); in-app slice viewer and density node inspector; `?selftest=1` extended to proto region hashes.
+- The real T stage with the general v0 water fill so oceans, rivers and lakes are visible early (air at y ≤ surfaceWaterLevel above surfaceEst − 12 becomes water sources; everything else stays dry; SP3a's provisional T is its no-overhang case); it writes aux B and bumps the `terrain` stage and `GENERATOR_VERSION`; the terrain palette appends to the registry and the lock.
+- The CI `actions/cache` step for `test/.cache/regions` before `npm run test:metrics` (moved from SP3a, whose provisional T regenerates a 32 × 32 region in about a second).
+- **Deliverable:** voxel terrain from the density DAG with surface rules and water, in the harness slices and the Voxels mode.
+- **Exit:** DT1 on the real T, DT2 (probe == bulk, compiled == reference bit-exact); T1, T2, T3 on voxel terrain (true top from WORLD_SURFACE_WG), T4, T5; B4 (voxel parts: snow in desert, coast-band beach/stony shore/snowy beach share, land-biome tops below sea level outside rivers and lakes); S1 (buried surface blocks and y mod 16 parts), S2, S3 (snowline part); P1 bench: T without caves ≤ 4 ms p50.
+- Received from SP3a (its spec §10): T3's redefinition before it gates and T1's lowland band; the cost of the biome height filter on the real `surfaceEst` (column stage, map and share preview); the Expr ops' exact semantics and interval rules; an `sp3b.registry` golden over the appended states; SP2a minors 5 and 6 (handed to SP3 by SP2b); the ocean-floor σ/jag stripe, lake-rim islets and the shoreline zoom fringe.
+- **Cut line:** set by the SP3b spec.
+
+**SP3c — Draft presets, inspector and slice viewer** (M; SP3b)
+- Draft `floating_islands`, `amplified` and `archipelago` presets (terms, splines and params; surface-rule branch for islands), so per-preset goldens and SP11's LOD island scan have a target; their profiles become selectable (`readyFrom: 'SP3c'`).
+- In-app slice viewer and density node inspector.
 - **Deliverable:** live terrain cross-sections and the node inspector.
-- **Exit:** DT1, DT2 (probe == bulk, compiled == reference bit-exact); T1, T2, T3 on voxel terrain (true top from WORLD_SURFACE_WG), T4, T5; B4 (voxel parts: snow in desert, coast-band beach/stony shore/snowy beach share, land-biome tops below sea level outside rivers and lakes); S1 (buried surface blocks and y mod 16 parts), S2, S3 (snowline part); M1 (registry parts); slab fuzz (4 threads × 100k alloc/free, 0 double allocations, both pools); P1 bench: T without caves ≤ 4 ms p50.
+- Received from SP3a (its spec §10): archipelago (≈ 60 % ocean) against B1's 45 % ocean-family cap (decide per-preset gating); amplified's offset multiplier and the 320 range.
+- **Exit:** set by the SP3c spec.
 - **Cut line:** inspector pins (→ SP10).
 
-**SP4 — Streaming renderer and light** (L; SP3)
+**SP4 — Streaming renderer and light** (L; SP3b)
 - **Week-1 spike:** RegionBatch with a Uint8x4 `position` plus a uint32 `data` attribute in a custom GLSL3 ShaderMaterial with batching chunks, precomputed spheres, `setGeometryAt` churn, per-region `optimize`, and the multi_draw fallback to RegionMesh, stressed at Medium scale.
 - Coordinator (statuses, rings, heap, epochs, versions, meshSeq, cancellation, unload hysteresis, adaptive throttle, upload budget); D-stage skeleton (pull-model infrastructure, zero features, proto retention); exact light job (FULL_FACES-aware); padded greedy mesher with `PACK_LAYOUT` and connectivity bits; still-water surface mesher.
 - Materials v1 (opaque / cutout / translucent passes; face shade × AO × smooth light × lightmap; spherical fog; Fast water); placeholder flat-colour DataArrayTexture; sky dome with sun; elevation-based day/night.
@@ -1670,7 +1722,7 @@ Thresholds are locked (`thresholds.lock.json`) and goldens are gated (§6.2). Si
 - **Exit:** L3 (including shafts); E1-E7 (including the fault-injected flush and the unload/reload race); G2 (edit part: edit → visible p95 ≤ 50 ms); relight ≤ 3 ms p95; physics and palette unit tests.
 - **Cut line:** worlds-menu polish (rename, duplicate, thumbnails) and palette search (→ SP10).
 
-**SP6 — Caves, carvers and cave biomes** (L; SP3, SP5 for in-game review)
+**SP6 — Caves, carvers and cave biomes** (L; SP3b, SP5 for in-game review)
 - Cave family terms in the default DAG (cheese / layer / pillars, spaghetti 2D and 3D with rarity, noodle, entrances, roughness, cheese roof term, lake roof); worm and canyon carvers (detMath, LRU); 3D quart cave-biome picker (lush, dripstone, **abyss**) with cave floor and ceiling surface rules; the abyss surface-palette blocks (decided in this SP's spec); debug cave-type tag channel, cave-type tint in the slice viewer, map cave slice and cave-biome layers; `cave_heavy` preset; cave culling.
 - **Deliverable:** explorable caves with visible surface entrances and ravines.
 - **Exit:** C1-C6, B3, R3; re-asserted with caves: L2, S1 (grass at sky 0), DT1, DT2 (probe == bulk); P1: T ≤ 10 ms p50; DAG closure overhead vs a hand-inlined default expression measured and recorded (codegen kill criterion, §7).
@@ -1723,17 +1775,17 @@ Thresholds are locked (`thresholds.lock.json`) and goldens are gated (§6.2). Si
 
 **SP12 — Extreme presets and final tuning** (M; SP11)
 - Finalise amplified, archipelago, floating_islands, large_biomes and cave_heavy; goldens per preset; profile gallery in docs; baselines refreshed; README; received cut-line items.
-- A "continental" profile (user request, 2026-09-29): large continents with islands in open ocean, via a much longer C wavelength (about 8000) and deep-ocean-dominated low C; it may move to SP3 by amending this section. With it (user request, 2026-09-30): small islands or archipelagos at extremely low C, with no rivers on islets.
+- A "continental" profile (user request, 2026-09-29): large continents with islands in open ocean, via a much longer C wavelength (about 8000) and deep-ocean-dominated low C; it may move to SP3b or SP3c by amending this section. With it (user request, 2026-09-30): small islands or archipelagos at extremely low C, with no rivers on islets.
 - The volcanic cone (reserved by SP2a, its spec §10): sparse cells in hot high ground add a cone and crater to `offset` and assign the volcano biome by mask; lava in the crater uses SP7's fluids. It may move to an earlier SP by amending this section.
 - **Exit:** Z1-Z4; cave_heavy C1 10-22 %; every other active metric green per preset; DT1 goldens stable; no open cut-line items (unless explicitly dropped by the user with the D-decision impact recorded).
 
 ### Critical path and parallelism
 
-Critical path: SP0 → SP1 → SP2a → SP2b → SP3 → SP4 → SP5 → SP6 → SP7 → SP8b → SP9 → SP10 → SP11 → SP12.
+Critical path: SP0 → SP1 → SP2a → SP2b → SP3a → SP3b → SP4 → SP5 → SP6 → SP7 → SP8b → SP9 → SP10 → SP11 → SP12.
 
-In parallel: SP8a's texture parts after SP4 (alongside SP5-SP7; its shape collision/raycast parts after SP5); SP8c after SP7 (alongside SP8a/SP8b); the persistence codec and `.wiworld` format after SP3; the LOD and cloud parts of SP11 after SP4.
+In parallel: SP8a's texture parts after SP4 (alongside SP5-SP7; its shape collision/raycast parts after SP5); SP8c after SP7 (alongside SP8a/SP8b); the persistence codec and `.wiworld` format after SP3a; SP3c alongside SP4; the LOD and cloud parts of SP11 after SP4.
 
-Visible value in every SP: a map in SP2a (edited live in SP2b), slices in SP3, flight in SP4, editing in SP5, caves in SP6, water in SP7. The riskiest integrations sit early: the SAB store and the u16 state format in SP3, BatchedMesh in SP4 week 1, and fluid byte → light → mesh → edit → diff → IDB → reload in SP3-SP5.
+Visible value in every SP: a map in SP2a (edited live in SP2b), voxel slices in SP3a, terrain in SP3b, flight in SP4, editing in SP5, caves in SP6, water in SP7. The riskiest integrations sit early: the SAB store and the u16 state format in SP3a, BatchedMesh in SP4 week 1, and fluid byte → light → mesh → edit → diff → IDB → reload in SP3a-SP5.
 
 ## 11. Relationship with world-imaginer
 

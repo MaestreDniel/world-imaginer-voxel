@@ -20,7 +20,8 @@
     "test:goldens": "rm -rf test/.cache/goldens-obs && UPDATE_GOLDENS=1 vitest run --project unit --project metrics-quick && MERGE_GOLDENS=1 vitest run --project arch test/arch/goldensMerge.test.ts",
     "test:accept-schema": "ACCEPT_SCHEMA=1 vitest run --project arch test/arch/schemaShape.test.ts",
     "test:accept-state-ids": "ACCEPT_STATE_IDS=1 vitest run --project arch test/arch/stateIds.test.ts",
-    "docs:params": "WRITE_PARAMS_DOC=1 vitest run --project arch test/arch/paramsDoc.test.ts"
+    "docs:params": "WRITE_PARAMS_DOC=1 vitest run --project arch test/arch/paramsDoc.test.ts",
+    "docs:review-slices": "REVIEW_SLICES_DIR=docs/superpowers/specs/assets/sp3a vitest run --project unit test/unit/reviewSlices.test.ts"
   },
   "dependencies": {
     "three": "~0.186.1"
