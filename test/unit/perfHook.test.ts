@@ -154,6 +154,8 @@ describe('instrumented pool (SP2b spec §2.8)', () => {
     log.drawn(0, 1, 1, 100);
     expect(log.record(r.id)).toMatchObject({ poolEpoch: 0, configurePostedAt: 1, readyAt: 2, previewDoneAt: 3, drawnAt: 100, latencyMs: 99.5 });
     expect((await pool.point(1, 2)).z).toBe(2);
+    // Slice jobs (SP3a spec §5.1) pass through untimed.
+    expect((await pool.slice({ ax: 0, az: 0, bx: 40, bz: 3 })).blocks.length).toBe(512 * 384);
     pool.terminate();
   });
 });

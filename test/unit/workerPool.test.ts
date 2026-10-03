@@ -5,7 +5,8 @@ import { BIOME_SHARES_POINTS, biomeSharePoints, biomeSharesInto, biomeSharesLeng
 import { CROSS_SECTION_POINTS, crossSectionInto, crossSectionLength } from '../../src/metrics/crossSection';
 import { SPLINE_STATS_POINTS, splineStatPoints, splineStatsInto, splineStatsLength, splineStatsNode } from '../../src/metrics/splineStats';
 import type { KnotPath } from '../../src/core/spline/types';
-import type { ToWorker } from '../../src/workers/protocol';
+import { SLICE_SAMPLES, type ToWorker } from '../../src/workers/protocol';
+import { createSliceJob } from '../../src/workers/sliceJob';
 import { createTaskHandler } from '../../src/workers/taskHandler';
 import { ctxFor } from '../harness/gen';
 
@@ -434,5 +435,73 @@ describe('worker pool: probe (SP2b spec §2.8)', () => {
     void settle(pool.point(1, 2));
     expect(pool.probe().jobs).toEqual([{ worker: 0, type: 'spawn', epoch: -1, level: null }, { worker: 1, type: 'point', epoch: -1, level: null }]);
     pool.terminate();
+  });
+});
+
+describe('worker pool: slice jobs (SP3a spec §5.1)', () => {
+  const COAST = { ax: -2030.5, az: -2007.25, bx: -1950.75, bz: -1990.5 };
+  const slicesOf = (log: readonly ToWorker[]) => log.flatMap((m) => (m.type === 'slice' ? [[m.jobId, m.epoch, m.ax, m.az, m.bx, m.bz]] : []));
+
+  test('a slice is one job on one worker at the stats priority (500: after preview tiles, before fine tiles); it resolves with the job\'s blocks and fluid', async () => {
+    const log: ToWorker[] = [];
+    const pool = createWorkerPool(1, () => fakeWorker(log));
+    const ready = pool.configure('42', DEFAULTS);
+    const fine = pool.tile(tile(1), 1000);
+    const got = pool.slice(COAST);
+    const preview = pool.tile(tile(0), 3);
+    await ready;
+    const [, r] = await Promise.all([fine, got, preview]);
+    expect(log.flatMap((m) => (m.type === 'mapTile' ? [`tile ${m.tx}`] : m.type === 'slice' ? ['slice'] : []))).toEqual(['tile 0', 'slice', 'tile 1']);
+    expect(slicesOf(log).map((s) => s.slice(1))).toEqual([[0, COAST.ax, COAST.az, COAST.bx, COAST.bz]]);
+    const want = createSliceJob().run(ctxFor('42'), 0, COAST, () => false)!;
+    expect(r.blocks).toBeInstanceOf(Uint16Array);
+    expect(r.fluid).toBeInstanceOf(Uint8Array);
+    expect([r.blocks.length, r.fluid.length]).toEqual([SLICE_SAMPLES, SLICE_SAMPLES]);
+    expect(Buffer.from(r.blocks.buffer).equals(Buffer.from(want.blocks.buffer))).toBe(true);
+    expect(Buffer.from(r.fluid.buffer).equals(Buffer.from(want.fluid.buffer))).toBe(true);
+  });
+  test('a priority can be given; probe shows the job as a slice of level null', async () => {
+    const log: ToWorker[] = [];
+    const pool = createWorkerPool(1, () => fakeWorker(log));
+    const ready = pool.configure('42', DEFAULTS);
+    const jobs = [pool.slice(COAST, 30), pool.tile(tile(1), 20), pool.tile(tile(0), 3)];
+    await ready;
+    await Promise.all(jobs);
+    expect(log.flatMap((m) => (m.type === 'mapTile' ? [`tile ${m.tx}`] : m.type === 'slice' ? ['slice'] : []))).toEqual(['tile 0', 'tile 1', 'slice']);
+    const idle = createWorkerPool(1, () => silentWorker());
+    void settle(idle.slice(COAST));
+    expect(idle.probe().jobs).toEqual([{ worker: 0, type: 'slice', epoch: -1, level: null }]);
+    idle.terminate();
+  });
+  test('a bad line rejects with the worker\'s BAD_ARGS', async () => {
+    const pool = createWorkerPool(1, () => fakeWorker([]));
+    await pool.configure('42', DEFAULTS);
+    await expect(pool.slice({ ax: 3, az: 3, bx: 3, bz: 3 })).rejects.toThrow(/^BAD_ARGS: A and B are the same point/);
+    await expect(pool.slice({ ax: 0, az: 0, bx: 524288, bz: 0 })).rejects.toThrow(/^BAD_ARGS: B \(524288, 0\) is outside/);
+  });
+  test('a configure rejects a queued slice with JobCancelled', async () => {
+    const pool = createWorkerPool(1, () => fakeWorker([]));
+    const first = pool.configure('42', DEFAULTS);
+    const req = settle(pool.slice(COAST));
+    const second = pool.configure('7', DEFAULTS);
+    expect(await settle(first)).toBeInstanceOf(JobCancelled);
+    expect(await req).toBeInstanceOf(JobCancelled);
+    expect((await second).epoch).toBe(1);
+  });
+  test('an in-flight slice of a superseded epoch is aborted by the worker (ABORTED) and rejects as JobCancelled; the next slice runs', async () => {
+    const cell = new Int32Array(new SharedArrayBuffer(4));
+    const log: ToWorker[] = [];
+    const replies: unknown[] = [];
+    const held = heldWorker(log, (m) => m.type === 'slice', replies);
+    const pool = createWorkerPool(1, () => held, { abortCell: cell });
+    await pool.configure('42', DEFAULTS);
+    const req = settle(pool.slice(COAST));
+    const next = pool.configure('42', DEFAULTS);
+    held.flush();
+    expect(await req).toBeInstanceOf(JobCancelled);
+    expect(replies).toContainEqual(expect.objectContaining({ type: 'error', epoch: 0, code: 'ABORTED' }));
+    expect((await next).epoch).toBe(1);
+    held.holding = false;
+    expect((await pool.slice(COAST)).blocks.length).toBe(SLICE_SAMPLES);
   });
 });

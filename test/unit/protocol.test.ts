@@ -10,7 +10,8 @@ import { computeAnyGolden } from '../../src/metrics/sp2aGoldens';
 import { SPLINE_STATS_POINTS, splineStatPoints, splineStatsInto, splineStatsLength, splineStatsNode, type SplineLeaf } from '../../src/metrics/splineStats';
 import { paintTile, paintTileAbortable } from '../../src/gen/map/tile';
 import { leafOpts } from '../../src/ui/splineEditor/model';
-import { parseFromWorker, parseToWorker, pointInWindow, tileInWindow } from '../../src/workers/protocol';
+import { parseFromWorker, parseToWorker, pointInWindow, SLICE_SAMPLES, tileInWindow } from '../../src/workers/protocol';
+import { createSliceJob } from '../../src/workers/sliceJob';
 import { createTaskHandler } from '../../src/workers/taskHandler';
 import { ctxFor } from '../harness/gen';
 
@@ -36,6 +37,7 @@ describe('parseToWorker', () => {
     expect(parseToWorker(stats(6, 3, 'splineStats', 0, 100, { len: 87, leaf: 'shape.offset', node: [6, 0] }))).not.toBeNull();
     expect(parseToWorker(stats(7, 3, 'biomeShares', 5, 5, { len: 31 }))).not.toBeNull();
     expect(parseToWorker(stats(8, 3, 'crossSection', 0, 512, line(5120, 3072, 6656, 3072)))).not.toBeNull();
+    expect(parseToWorker({ type: 'slice', jobId: 9, epoch: 3, ax: 5120, az: 3072, bx: 6656, bz: 3072 })).not.toBeNull();
   });
   test('crossSection ends are only checked to be numbers: outside the window, NaN or A = B parse, and the handler answers BAD_ARGS', () => {
     for (const args of [line(524288, 0, 0, 0), line(Number.NaN, 0, 1, 1), line(0, Infinity, 1, 1), line(7, 7, 7, 7)]) {
@@ -283,5 +285,98 @@ describe('task handler', () => {
     const h = createTaskHandler();
     const r = h.handle(tileMsg).msg;
     expect(r.type === 'error' && r.jobId).toBe(1);
+  });
+});
+
+describe('slice messages and the slice job (SP3a spec §5.1)', () => {
+  const slice = (jobId: number, epoch: number, ax: unknown, az: unknown, bx: unknown, bz: unknown) => ({ type: 'slice', jobId, epoch, ax, az, bx, bz });
+  const COAST = { ax: -2030.5, az: -2007.25, bx: -1950.75, bz: -1990.5 };
+  const coast = (jobId: number, epoch: number) => slice(jobId, epoch, COAST.ax, COAST.az, COAST.bx, COAST.bz);
+  const live = (s: { blockPool: { slotCount(): number; freeCount(): number }; bytePool: { slotCount(): number; freeCount(): number } }) =>
+    [s.blockPool.slotCount() - s.blockPool.freeCount(), s.bytePool.slotCount() - s.bytePool.freeCount()];
+
+  test('parseToWorker: integer jobId and epoch, numeric ends (the window and A ≠ B are the handler\'s BAD_ARGS)', () => {
+    expect(parseToWorker(coast(1, 0))).not.toBeNull();
+    for (const m of [slice(1, 0, 524288, 0, 0, 0), slice(1, 0, Number.NaN, 0, 1, 1), slice(1, 0, 7, 7, 7, 7)]) expect(parseToWorker(m)).not.toBeNull();
+    for (const m of [slice(1.5, 0, 0, 0, 1, 1), slice(1, null as unknown as number, 0, 0, 1, 1), slice(1, 0, '0', 0, 1, 1), slice(1, 0, 0, 0, 1, undefined), { type: 'slice', jobId: 1, epoch: 0, ax: 0, az: 0, bx: 1 }]) {
+      expect(parseToWorker(m)).toBeNull();
+    }
+  });
+  test('parseFromWorker: sliceResult carries 196 608 u16 block states and 196 608 fluid bytes in ArrayBuffers', () => {
+    const result = (blocks: unknown, fluid: unknown, jobId: unknown = 4) => ({ type: 'sliceResult', jobId, epoch: 2, blocks, fluid });
+    expect(parseFromWorker(result(new ArrayBuffer(2 * SLICE_SAMPLES), new ArrayBuffer(SLICE_SAMPLES)))).not.toBeNull();
+    expect(parseFromWorker(result(new ArrayBuffer(SLICE_SAMPLES), new ArrayBuffer(SLICE_SAMPLES)))).toBeNull();
+    expect(parseFromWorker(result(new ArrayBuffer(2 * SLICE_SAMPLES), new ArrayBuffer(2 * SLICE_SAMPLES)))).toBeNull();
+    expect(parseFromWorker(result(new Uint16Array(SLICE_SAMPLES), new ArrayBuffer(SLICE_SAMPLES)))).toBeNull();
+    expect(parseFromWorker(result(new ArrayBuffer(2 * SLICE_SAMPLES), new Uint8Array(SLICE_SAMPLES)))).toBeNull();
+    expect(parseFromWorker(result(new ArrayBuffer(2 * SLICE_SAMPLES), new ArrayBuffer(SLICE_SAMPLES), null))).toBeNull();
+  });
+  test('a slice replies with the slice job\'s blocks and fluid, both transferred, at the job\'s epoch', () => {
+    const h = createTaskHandler();
+    h.handle(configure(3));
+    const r = h.handle(coast(7, 3));
+    expect(r.msg).toMatchObject({ type: 'sliceResult', jobId: 7, epoch: 3 });
+    if (r.msg.type !== 'sliceResult') return;
+    expect(r.transfer).toEqual([r.msg.blocks, r.msg.fluid]);
+    const want = createSliceJob().run(ctxFor('42'), 3, COAST, () => false)!;
+    expect(sameBytes(r.msg.blocks, want.blocks)).toBe(true);
+    expect(sameBytes(r.msg.fluid, want.fluid)).toBe(true);
+  });
+  test('a slice before configure, of a stale epoch or whose line leaves the half-open window or has no length is refused', () => {
+    const h = createTaskHandler();
+    const reply = (m: unknown) => {
+      const r = h.handle(m).msg;
+      return r.type === 'error' ? [r.code, r.jobId, r.epoch, r.message] : [r.type];
+    };
+    expect(reply(coast(1, 3)).slice(0, 3)).toEqual(['NOT_CONFIGURED', 1, 3]);
+    h.handle(configure(3));
+    expect(reply(coast(2, 2)).slice(0, 3)).toEqual(['STALE_EPOCH', 2, 2]);
+    const outside = (end: string, x: string, z: string) => ['BAD_ARGS', 1, 3, `${end} (${x}, ${z}) is outside the world window [-524288, 524288)`];
+    expect(reply(slice(1, 3, 524288, 0, 0, 0))).toEqual(outside('A', '524288', '0'));
+    expect(reply(slice(1, 3, 0, -524289, 0, 0))).toEqual(outside('A', '0', '-524289'));
+    expect(reply(slice(1, 3, 0, 0, 100, 524288))).toEqual(outside('B', '100', '524288'));
+    expect(reply(slice(1, 3, Number.NaN, 0, 100, 0))).toEqual(outside('A', 'NaN', '0'));
+    expect(reply(slice(1, 3, 0, 0, -Infinity, 0))).toEqual(outside('B', '-Infinity', '0'));
+    expect(reply(slice(1, 3, -40, 9, -40, 9))).toEqual(['BAD_ARGS', 1, 3, 'A and B are the same point (-40, 9)']);
+    // The window's own corners are inside.
+    expect(reply(slice(1, 3, -524288, -524288, 524287, 524287))).toEqual(['sliceResult']);
+  });
+  test('with an abort cell, a slice whose epoch the cell has left replies ABORTED and keeps no half-written column', () => {
+    const sab = new SharedArrayBuffer(4);
+    const cell = new Int32Array(sab);
+    const job = createSliceJob();
+    const h = createTaskHandler(job);
+    Atomics.store(cell, 0, 3);
+    h.handle(configure(3, sab));
+    Atomics.store(cell, 0, 4);
+    const r = h.handle(coast(1, 3));
+    expect(r.msg).toMatchObject({ type: 'error', jobId: 1, epoch: 3, code: 'ABORTED' });
+    expect(r.transfer).toEqual([]);
+    expect([job.misses, job.resident()]).toEqual([0, []]);
+    Atomics.store(cell, 0, 3);
+    expect(h.handle(coast(2, 3)).msg.type).toBe('sliceResult');
+  });
+  test('the worker keeps one slice store for its lifetime; a configure frees every resident column and empties the LRU', () => {
+    const job = createSliceJob();
+    const h = createTaskHandler(job);
+    h.handle(configure(3));
+    expect(job.store).toBeNull();
+    const first = h.handle(coast(1, 3)).msg;
+    const store = job.store!;
+    expect(job.resident().length).toBeGreaterThan(0);
+    expect(live(store).every((n) => n > 0)).toBe(true);
+    expect(h.handle(configure(4, null, DEFAULTS, '7')).msg.type).toBe('ready');
+    expect([job.resident(), live(store)]).toEqual([[], [0, 0]]);
+    // A failed configure keeps the configured epoch, its context and its columns.
+    const other = h.handle(coast(2, 4)).msg;
+    const resident = job.resident();
+    expect(h.handle(configure(5, null, { climate: {} })).msg).toMatchObject({ code: 'BAD_PARAMS' });
+    expect(job.resident()).toEqual(resident);
+    expect(h.handle(configure(6)).msg.type).toBe('ready');
+    const again = h.handle(coast(3, 6)).msg;
+    expect(job.store).toBe(store);
+    if (first.type !== 'sliceResult' || other.type !== 'sliceResult' || again.type !== 'sliceResult') throw new Error('no slice');
+    expect(sameBytes(again.blocks, first.blocks)).toBe(true);
+    expect(sameBytes(other.blocks, first.blocks)).toBe(false);
   });
 });

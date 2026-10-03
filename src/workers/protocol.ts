@@ -1,11 +1,11 @@
 /**
  * Task-pool protocol (SP2a spec §5.1): plain messages, validated at both ends by hand-written guards.
- * The main thread sends configure / mapTile / point / spawn / stats / selftest; the worker answers ready /
- * tile / pointResult / spawnResult / statsResult / selftestResult / error. selftest needs no configure.
+ * The main thread sends configure / mapTile / point / spawn / stats / slice / selftest; the worker answers ready /
+ * tile / pointResult / spawnResult / statsResult / sliceResult / selftestResult / error. selftest needs no configure.
  * Configure carries the pool's abort cell (SP2b spec §2.2), errors carry the epoch of the message they
  * answer (§2.3), biome tiles carry the biome id of every pixel (§5.3), and a stats job returns the raw
  * sums of one kind over a range of the kind's fixed point stream (§5.4) or, for crossSection, of the points
- * along its line (§4.5).
+ * along its line (§4.5). A slice job (SP3a spec §5.1) returns the voxels of the vertical slice under a line.
  */
 import { MAP_LEVELS, MAP_TILE_PX, type MapLevel } from '../core/constants';
 import type { StageId } from '../core/ids';
@@ -41,7 +41,12 @@ export interface CrossSectionMsg extends StatsBase {
 export type StatsMsg = SplineStatsMsg | BiomeSharesMsg | CrossSectionMsg;
 export type StatsKind = StatsMsg['kind'];
 export type StatsArgs<K extends StatsKind> = Extract<StatsMsg, { readonly kind: K }>['args'];
-export type ToWorker = ConfigureMsg | MapTileMsg | PointMsg | SpawnMsg | StatsMsg | SelftestMsg;
+/**
+ * The vertical slice under the line A = (ax, az) → B = (bx, bz) (SP3a spec §5.1): one job, never split. The ends are
+ * only checked to be numbers here; an end outside the half-open world window or A = B is the handler's BAD_ARGS.
+ */
+export interface SliceMsg { readonly type: 'slice'; readonly jobId: number; readonly epoch: number; readonly ax: number; readonly az: number; readonly bx: number; readonly bz: number }
+export type ToWorker = ConfigureMsg | MapTileMsg | PointMsg | SpawnMsg | StatsMsg | SliceMsg | SelftestMsg;
 
 export interface ReadyMsg { readonly type: 'ready'; readonly epoch: number; readonly stageHashes: Readonly<Partial<Record<StageId, string>>>; readonly genKey: string }
 /** `ids` (256·256 biome ids, one per pixel) comes with layer 'biome' only. */
@@ -54,9 +59,23 @@ export interface ErrorMsg { readonly type: 'error'; readonly jobId: number | nul
 export interface SpawnResultMsg { readonly type: 'spawnResult'; readonly jobId: number; readonly epoch: number; readonly spawn: Spawn }
 /** `data` holds a Float64Array of the job's raw, unnormalised sums (transferred). */
 export interface StatsResultMsg { readonly type: 'statsResult'; readonly jobId: number; readonly epoch: number; readonly kind: StatsKind; readonly data: ArrayBuffer }
+/**
+ * A slice's voxels (transferred): `blocks` holds SLICE_SAMPLES u16 block states and `fluid` SLICE_SAMPLES fluid
+ * bytes, sample (i, y) at `sliceIndex(i, y)`.
+ */
+export interface SliceResultMsg { readonly type: 'sliceResult'; readonly jobId: number; readonly epoch: number; readonly blocks: ArrayBuffer; readonly fluid: ArrayBuffer }
 /** One recomputed golden: the digest, or the error that stopped it. */
 export interface SelftestResultMsg { readonly type: 'selftestResult'; readonly jobId: number; readonly key: string; readonly actual: string | null; readonly error: string | null }
-export type FromWorker = ReadyMsg | TileMsg | PointResultMsg | SpawnResultMsg | StatsResultMsg | SelftestResultMsg | ErrorMsg;
+export type FromWorker = ReadyMsg | TileMsg | PointResultMsg | SpawnResultMsg | StatsResultMsg | SliceResultMsg | SelftestResultMsg | ErrorMsg;
+
+/** Samples along a slice's line, A and B included (the cross-section's 512 points, SP2b spec §4.5). */
+export const SLICE_POINTS = 512;
+/** Rows of a slice: y 319 down to −64. */
+export const SLICE_ROWS = 384;
+/** Entries of a slice's blocks and fluid arrays: 512 × 384. */
+export const SLICE_SAMPLES = SLICE_POINTS * SLICE_ROWS;
+/** Index of sample (i, y) in a slice: row 0 is y 319, the order the Voxels mode draws in. */
+export const sliceIndex = (i: number, y: number): number => (319 - y) * SLICE_POINTS + i;
 
 const isObj = (v: unknown): v is Record<string, unknown> => typeof v === 'object' && v !== null && !Array.isArray(v);
 const isInt = (v: unknown): v is number => typeof v === 'number' && Number.isInteger(v);
@@ -120,6 +139,8 @@ export function parseToWorker(m: unknown): ToWorker | null {
       return isInt(m['jobId']) && isInt(m['epoch']) ? (m as unknown as SpawnMsg) : null;
     case 'stats':
       return statsOk(m) ? (m as unknown as StatsMsg) : null;
+    case 'slice':
+      return isInt(m['jobId']) && isInt(m['epoch']) && SEGMENT_KEYS.every((k) => typeof m[k] === 'number') ? (m as unknown as SliceMsg) : null;
     case 'selftest':
       return isInt(m['jobId']) && typeof m['key'] === 'string' ? (m as unknown as SelftestMsg) : null;
     default:
@@ -144,6 +165,12 @@ export function parseFromWorker(m: unknown): FromWorker | null {
       // The pool checks the length against the request's args.len (the protocol does not import metrics).
       const data = m['data'];
       return isInt(m['jobId']) && isInt(m['epoch']) && isStatsKind(m['kind']) && data instanceof ArrayBuffer && data.byteLength > 0 && data.byteLength % 8 === 0 ? (m as unknown as StatsResultMsg) : null;
+    }
+    case 'sliceResult': {
+      const blocks = m['blocks'];
+      const fluid = m['fluid'];
+      const ok = blocks instanceof ArrayBuffer && blocks.byteLength === 2 * SLICE_SAMPLES && fluid instanceof ArrayBuffer && fluid.byteLength === SLICE_SAMPLES;
+      return isInt(m['jobId']) && isInt(m['epoch']) && ok ? (m as unknown as SliceResultMsg) : null;
     }
     case 'error': return (m['jobId'] === null || isInt(m['jobId'])) && (m['epoch'] === null || isInt(m['epoch'])) && typeof m['code'] === 'string' && typeof m['message'] === 'string' ? (m as unknown as ErrorMsg) : null;
     default: return null;

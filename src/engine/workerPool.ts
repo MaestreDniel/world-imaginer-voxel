@@ -8,11 +8,13 @@
  * with WorkerFailed. SP2b §5.4: a stats request runs as `size` slices whose raw sums are added element-wise
  * (a crossSection request as one job, §4.5).
  * SP2b §2.8: `probe()` reports what the workers run, for the latency hook.
+ * SP3a §5.1: a slice request (the voxels under a line) runs as one job on one worker, as a crossSection does.
  */
 import type { MapLevel } from '../core/constants';
 import type { ColumnPoint } from '../gen/column/columnPoint';
 import type { Spawn } from '../gen/column/spawn';
 import type { LayerId } from '../gen/map/layers';
+import type { Segment } from '../metrics/crossSection';
 import { parseFromWorker, STATS_KINDS, type FromWorker, type ReadyMsg, type StatsArgs, type StatsKind, type StatsMsg, type ToWorker } from '../workers/protocol';
 
 export interface WorkerLike {
@@ -28,6 +30,15 @@ export interface WorkerLike {
 export interface TileRequest { readonly layer: LayerId; readonly level: MapLevel; readonly tx: number; readonly tz: number }
 /** A painted tile: RGBA bytes, and for layer 'biome' the biome id of every pixel (SP2b spec §5.3). */
 export interface TileResult { readonly rgba: ArrayBuffer; readonly ids: ArrayBuffer | null }
+
+/**
+ * The voxels of the vertical slice under a line (SP3a spec §5.1): SLICE_SAMPLES (512 × 384) block states and fluid
+ * bytes, sample (i, y) at `sliceIndex(i, y)` of `workers/protocol.ts` (row 0 is y 319).
+ */
+export interface SliceResult {
+  readonly blocks: Uint16Array<ArrayBuffer>;
+  readonly fluid: Uint8Array<ArrayBuffer>;
+}
 
 export class JobCancelled extends Error {
   constructor() { super('job cancelled'); }
@@ -88,6 +99,12 @@ export interface WorkerPool {
    * non-negative integer or args.len not a positive one.
    */
   stats<K extends StatsKind>(kind: K, n: number, args: StatsArgs<K>, priority?: number): Promise<Float64Array<ArrayBuffer>>;
+  /**
+   * The slice under `segment` (SP3a spec §5.1): one job on one worker, never split, at `priority` (default 500, the
+   * stats priority). A configure rejects it with JobCancelled, and so does an ABORTED reply; a line with an end
+   * outside the half-open world window or of zero length rejects with the worker's BAD_ARGS.
+   */
+  slice(segment: Segment, priority?: number): Promise<SliceResult>;
   /** Recomputes one golden in a worker (no configure needed). */
   selftest(key: string): Promise<{ actual: string | null; error: string | null }>;
   /** Rejects queued tile jobs matching `pred` with JobCancelled. */
@@ -276,6 +293,13 @@ export function createWorkerPool(size: number, spawn: () => WorkerLike, opts: Po
         for (let k = 0; k < len; k++) sum[k]! += part[k]!;
       }
       return sum;
+    },
+    async slice(segment, priority = 500) {
+      const e = epoch;
+      const { ax, az, bx, bz } = segment;
+      const r = await enqueue(priority, (jobId) => ({ type: 'slice', jobId, epoch: e, ax, az, bx, bz }), null);
+      if (r.type !== 'sliceResult') throw new Error(`unexpected reply ${r.type}`);
+      return { blocks: new Uint16Array(r.blocks), fluid: new Uint8Array(r.fluid) };
     },
     async selftest(key) {
       const r = await enqueue(0, (jobId) => ({ type: 'selftest', jobId, key }), null);
