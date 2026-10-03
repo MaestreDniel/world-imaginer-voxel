@@ -83,6 +83,84 @@ export function fnv1a64Bytes(bytes: Uint8Array): Hash64 {
   return [lo, hi];
 }
 
+/**
+ * A streaming FNV-1a 64 (SP3a spec §6.2): `digest()` after any sequence of updates equals `fnv1a64Bytes` over the
+ * concatenation of the bytes written. Multi-byte values are written little-endian and masked to their width.
+ * `digest()` does not end the stream (FNV has no finalisation); later updates continue it. Updates return the stream.
+ */
+export interface Fnv64 {
+  update(bytes: Uint8Array): Fnv64;
+  updateU8(v: number): Fnv64;
+  updateU16LE(v: number): Fnv64;
+  updateU32LE(v: number): Fnv64;
+  /** `v & 255` written n times. */
+  updateRepeatU8(v: number, n: number): Fnv64;
+  /** `v & 0xffff` written n times, little-endian (a uniform section expanded). */
+  updateRepeatU16LE(v: number, n: number): Fnv64;
+  digest(): Hash64;
+}
+
+/** The step of `fnv1a64Bytes`, byte by byte over a running [lo, hi]. */
+export function createFnv64(): Fnv64 {
+  let lo = 0x84222325;
+  let hi = 0xcbf29ce4;
+  const step = (b: number): void => {
+    lo = (lo ^ b) >>> 0;
+    const p = lo * 0x1b3;
+    const nlo = p >>> 0;
+    hi = (Math.imul(hi, 0x1b3) + (p - nlo) / 4294967296 + (lo << 8)) >>> 0;
+    lo = nlo;
+  };
+  const stream: Fnv64 = {
+    update(bytes) {
+      let l = lo, h = hi;
+      for (let i = 0; i < bytes.length; i++) {
+        l = (l ^ bytes[i]!) >>> 0;
+        const p = l * 0x1b3;
+        const nl = p >>> 0;
+        h = (Math.imul(h, 0x1b3) + (p - nl) / 4294967296 + (l << 8)) >>> 0;
+        l = nl;
+      }
+      lo = l;
+      hi = h;
+      return stream;
+    },
+    updateU8(v) {
+      step(v & 255);
+      return stream;
+    },
+    updateU16LE(v) {
+      step(v & 255);
+      step((v >>> 8) & 255);
+      return stream;
+    },
+    updateU32LE(v) {
+      step(v & 255);
+      step((v >>> 8) & 255);
+      step((v >>> 16) & 255);
+      step((v >>> 24) & 255);
+      return stream;
+    },
+    updateRepeatU8(v, n) {
+      const b = v & 255;
+      for (let i = 0; i < n; i++) step(b);
+      return stream;
+    },
+    updateRepeatU16LE(v, n) {
+      const b0 = v & 255, b1 = (v >>> 8) & 255;
+      for (let i = 0; i < n; i++) {
+        step(b0);
+        step(b1);
+      }
+      return stream;
+    },
+    digest() {
+      return [lo, hi];
+    },
+  };
+  return stream;
+}
+
 export function fnv1a64(str: string): Hash64 {
   return fnv1a64Bytes(utf8Bytes(str));
 }
