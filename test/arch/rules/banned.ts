@@ -14,8 +14,13 @@ const MATH_ALLOWED = new Set(['abs', 'floor', 'ceil', 'round', 'trunc', 'sign', 
  * SP2b metrics shared by the tests, the workers and the UI (SP2b spec §5.4).
  */
 const DET_FILES = new Set(['metrics/sp1Goldens.ts', 'metrics/sp1Fixtures.ts', 'metrics/sp2aGoldens.ts', 'metrics/biomeShares.ts', 'metrics/liveness.ts', 'metrics/splineStats.ts', 'metrics/crossSection.ts']);
+/**
+ * Directories outside core/ and gen/ that follow the core determinism rules: the block registry, whose ids and tables
+ * are hashed into goldens (SP3a spec §2.5). The rest of world/ (the store) keeps the ND bans only.
+ */
+const DET_DIRS = ['world/blocks/'];
 /** Modules whose hot loops must not read imported bindings (vitest turns them into getters; SP1 spec §1.8, SP2a spec §8). */
-const HOT_PREFIXES = ['core/noise/', 'core/spline/', 'metrics/', 'gen/'];
+const HOT_PREFIXES = ['core/noise/', 'core/spline/', 'metrics/', 'gen/', ...DET_DIRS];
 /** Matches the member name alone, so `.normalize.call(…)` and `.localeCompare.bind(…)` are caught too (SP1 review minor). */
 const ENGINE_DEPENDENT = /\bIntl\b|\.\s*(?:localeCompare|toLocale\w*|normalize)\b|\bTextEncoder\b|\bTextDecoder\b/g;
 const IMPORT_STMT = /\bimport\s+(type\s+)?([\w$*{},\s]+?)\s+from\s*(['"])[^'"\n]+\3\s*;?/g;
@@ -172,7 +177,7 @@ export function checkBanned(files: readonly ScannedFile[]): Violation[] {
     }
     if (JS_EXTS.has(ext)) {
       const { code, codeKeepStrings } = f;
-      const detFile = DET_FILES.has(srcRel);
+      const detFile = DET_FILES.has(srcRel) || DET_DIRS.some((p) => srcRel.startsWith(p));
       if (ND_LAYERS.has(layer) || detFile) {
         for (const m of code.matchAll(/\bMath\.random\b|\bDate\.now\b|\bperformance\.now\b|\bconsole\s*\./g)) at(code, m.index, 'nondeterministic', `${m[0]} in ${layer}/`);
       }

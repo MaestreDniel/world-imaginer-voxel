@@ -58,7 +58,14 @@ test('bad fixture tree reports every banned use', () => {
     'src/render/threeAudioReexport.ts:1 three-audio',
     'src/ui/audio.ts:1 webaudio-outside-sound',
     'src/ui/shader.ts:1 glsl-outside-materials',
+    'src/world/blocks/direct.ts:2 hot-import-reference',
+    'src/world/blocks/encoder.ts:1 engine-dependent-api',
+    'src/world/blocks/locale.ts:1 engine-dependent-api',
+    'src/world/blocks/ns.ts:1 hot-import-namespace',
+    'src/world/blocks/pow.ts:1 math-pow-operator',
+    'src/world/blocks/trig.ts:1 math-member',
     'src/world/clock.ts:1 nondeterministic',
+    'src/world/store/clock.ts:1 nondeterministic',
   ]);
 });
 
