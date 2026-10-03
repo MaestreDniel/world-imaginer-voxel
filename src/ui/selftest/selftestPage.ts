@@ -1,5 +1,5 @@
 /**
- * ?selftest=1 (SP2a spec §6.4): recomputes every golden (SP1 and SP2a) in one real module worker and
+ * ?selftest=1 (SP2a spec §6.4): recomputes every golden (SP1, SP2a and SP3a) in one real module worker and
  * compares with the bundled test/goldens.json. A key whose computation throws shows its error, and a job
  * the pool rejects (a failed worker) counts as a failed key, so the summary always completes (SP2a minor 9).
  */

@@ -47,6 +47,9 @@
     "sp2a.tile.rivers.16": "8fc6e210afdfed8c",
     "sp2a.tile.rivers.256": "95bd582b209aa855",
     "sp2a.tile.rivers.4": "72f6d6c446d76cb2",
-    "sp2a.tile.rivers.64": "6da7f75d7a9bfcaf"
+    "sp2a.tile.rivers.64": "6da7f75d7a9bfcaf",
+    "sp3a.region.T.default": "943479d09e0e89e3",
+    "sp3a.region.T.large_biomes": "e20fb4ebf0a5e9fc",
+    "sp3a.registry": "5e1febd88b449b63"
   }
 }

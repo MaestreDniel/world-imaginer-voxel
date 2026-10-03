@@ -1,12 +1,16 @@
+import { readFileSync } from 'node:fs';
 import { describe, expect, test } from 'vitest';
 import { canonicalJSON } from '../../src/core/params/canonical';
 import { applyPatch } from '../../src/core/params/kit';
 import { resolveProfile } from '../../src/core/params/profiles';
 import { SCHEMA } from '../../src/core/params/schema';
+import { allGoldenKeys } from '../../src/metrics/sp2aGoldens';
 import { BIOME_SIZE_SCALE } from '../../src/ui/map/biomeSize';
 import { DEFAULT_MAP_STATE, encodeMapState, type MapState } from '../../src/ui/map/mapState';
 import { presetText } from '../../src/ui/presets/presetFile';
-import { canonicalJson, ignoredLog, mapHash, parseArgs, presetProblems, readMapHash, sameJson, SIZE_8, VIEWPORT, type MapUrlState } from '../tools/uiSmoke';
+import {
+  canonicalJson, goldenCount, ignoredLog, mapHash, parseArgs, presetProblems, readMapHash, sameJson, selftestAllMatch, SIZE_8, VIEWPORT, type MapUrlState,
+} from '../tools/uiSmoke';
 
 const EDITED: MapState = {
   v: 1, seed: '42', profile: 'default',
@@ -57,6 +61,21 @@ describe('UI smoke test: pure parts (SP2b spec §8 Tools, §12)', () => {
     expect(presetProblems(text, { name: 'other', profile: 'large_biomes', patch: {} })).toEqual(['name "smoke test"', 'profile "default"', 'params differ from the draft\'s patch']);
     expect(presetProblems('{"format":"x"}', { name: 'a', profile: 'default', patch: {} })).toEqual(['format "x"', 'name undefined', 'profile undefined', 'schemaVersion undefined', 'params differ from the draft\'s patch']);
     expect(presetProblems('{', { name: 'a', profile: 'default', patch: {} })[0]).toMatch(/^not JSON: /);
+  });
+
+  // Skipped while `npm run test:goldens` records: test/goldens.json gains the new keys only after the run.
+  test.skipIf(process.env.UPDATE_GOLDENS === '1')('test/goldens.json holds every golden key of the build, the count the selftest step expects', () => {
+    const text = readFileSync(new URL('../goldens.json', import.meta.url), 'utf8');
+    expect(goldenCount(text)).toBe(allGoldenKeys().length);
+  });
+
+  test('the selftest step counts the goldens of test/goldens.json and matches the page summary against it', () => {
+    expect(goldenCount('{"generatorVersion":3,"entries":{"a":"1","b":"2"}}')).toBe(2);
+    expect(() => goldenCount('{"generatorVersion":3}')).toThrow(/entries/);
+    expect(selftestAllMatch('✓ all 50 goldens match (3.2 s)', 50)).toBe(true);
+    expect(selftestAllMatch('✓ all 47 goldens match (3.2 s)', 50)).toBe(false);
+    expect(selftestAllMatch('✗ 1 of 50 goldens differ (3.2 s)', 50)).toBe(false);
+    expect(selftestAllMatch('computing 50/50…', 50)).toBe(false);
   });
 
   test('arguments: build, the OS temp directory and no screenshots by default', () => {

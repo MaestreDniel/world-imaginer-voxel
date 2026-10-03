@@ -74,6 +74,22 @@ export function readMapHash(hash: string): MapUrlState | null {
   }
 }
 
+/**
+ * The number of goldens in test/goldens.json: every key of the build, which `?selftest=1` recomputes (SP3a spec §6.4;
+ * this tool runs under plain Node and cannot import `src/` to count `allGoldenKeys()`).
+ */
+export function goldenCount(goldensJson: string): number {
+  const entries = (JSON.parse(goldensJson) as { entries?: unknown }).entries;
+  if (entries === null || typeof entries !== 'object') throw new Error('goldens.json has no entries object');
+  return Object.keys(entries).length;
+}
+
+/** True when the selftest page's summary reports all `count` goldens matching. */
+export function selftestAllMatch(summary: string, count: number): boolean {
+  const m = /^✓ all (\d+) goldens match/.exec(summary);
+  return m !== null && Number(m[1]) === count;
+}
+
 /** A page log entry the smoke test does not count: the favicon.ico 404 (index.html declares no icon). */
 export function ignoredLog(text: string, url: string | undefined): boolean {
   return url !== undefined && /\/favicon\.ico(\?|$)/.test(url) && text.includes('404');
@@ -494,7 +510,8 @@ async function runSmoke(t: Smoke): Promise<void> {
   await p.goto(`${p.base}?selftest=1`, `document.querySelector('h2 + div') !== null`);
   await p.until(`/^[✓✗]/.test(document.querySelector('h2 + div').textContent)`, 'selftest summary', 180000);
   const summary = await p.eval<string>(`document.querySelector('h2 + div').textContent`);
-  t.check(/^✓ all 47 goldens match/.test(summary), `selftest: ${summary}`, summary);
+  const goldens = goldenCount(readFileSync(join(ROOT, 'test/goldens.json'), 'utf8'));
+  t.check(selftestAllMatch(summary, goldens), `selftest: ${summary} (test/goldens.json holds ${goldens})`, summary);
 
   t.step('load: ?map at seed 42, default profile, view (0, 0, 64 blocks/px)');
   await p.goto(`${p.base}?map#${mapHash(START)}`, MAP_READY);

@@ -1,6 +1,7 @@
 /**
  * SP2a golden digests (SP2a spec §7.4), shared by test/unit/goldens.sp2a.test.ts, the ?selftest=1 worker
- * and test/tools/goldensJsc.ts. Follows the core determinism rules (arch-tested). Every value is hex64.
+ * and test/tools/goldensJsc.ts, and the chain of every golden of the build (`allGoldenKeys`/`computeAnyGolden`:
+ * SP1, SP2a, then SP3a, SP3a spec §6.4). Follows the core determinism rules (arch-tested). Every value is hex64.
  */
 import { MAP_LEVELS, type MapLevel } from '../core/constants';
 import { fnv1a32, fnv1a64Bytes, hashF64, hex64 } from '../core/hash';
@@ -14,6 +15,7 @@ import { findSpawn } from '../gen/column/spawn';
 import type { LayerId } from '../gen/map/layers';
 import { paintTile } from '../gen/map/tile';
 import { computeGolden as computeSp1, goldenKeys as sp1Keys } from './sp1Goldens';
+import { computeSp3aGolden, sp3aGoldenKeys } from './sp3aGoldens';
 
 const FNV32 = fnv1a32;
 const FNV_BYTES = fnv1a64Bytes;
@@ -33,6 +35,8 @@ const FIELDS = SAMPLE_FIELDS;
 const LEVEL_F = LEVEL_FIELDS;
 const SP1 = computeSp1;
 const SP1_KEYS = sp1Keys;
+const SP3A = computeSp3aGolden;
+const SP3A_KEYS = sp3aGoldenKeys;
 
 const POINT_PROFILES: readonly ProfileId[] = ['default', 'large_biomes'];
 const TILE_LAYERS: readonly LayerId[] = ['biome', 'relief', 'rivers', 'C'];
@@ -116,11 +120,12 @@ export function computeSp2aGolden(key: string): string {
   throw new Error(`unknown golden ${key}`);
 }
 
-/** Every golden key of the build (SP1 then SP2a). */
+/** Every golden key of the build (SP1, SP2a, then SP3a). */
 export function allGoldenKeys(): string[] {
-  return [...SP1_KEYS(), ...sp2aGoldenKeys()];
+  return [...SP1_KEYS(), ...sp2aGoldenKeys(), ...SP3A_KEYS()];
 }
 
 export function computeAnyGolden(key: string): string {
+  if (key.startsWith('sp3a.')) return SP3A(key);
   return key.startsWith('sp2a.') ? computeSp2aGolden(key) : SP1(key);
 }
