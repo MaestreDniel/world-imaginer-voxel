@@ -1,7 +1,7 @@
 # SP3a — Block registry, voxel store and region harness (Design)
 
 Date: 2026-10-02
-Status: Approved by the user (2026-10-02): the design section by section, then the written spec after the adversarial review, including its three additions (slab fuzz gated by its integration test, not a threshold row, §9; `SHAPE` and `SOUND` gain `none` for air, §2.2, §11; the region-cache CI step moves to SP3b, §9, §11). Revised by the implementation-plan dry run (2026-10-03, §13)
+Status: Complete (2026-10-03), at GENERATOR_VERSION 3; exit evidence below (approved by the user on 2026-10-02: the design section by section, then the written spec after the adversarial review, including its three additions: slab fuzz gated by its integration test, not a threshold row, §9; `SHAPE` and `SOUND` gain `none` for air, §2.2, §11; the region-cache CI step moves to SP3b, §9, §11; revised by the implementation-plan dry run, §13)
 Parent: master spec `2026-09-26-architecture-design.md`. The sections involved are:
 - §10 SP3, which this spec splits into SP3a, SP3b and SP3c;
 - the data model: §2.1 (coordinates and keys), §2.2 (block registry and voxel encoding), §2.3 (the store), §2.5 (key types), §2.6 (byte budgets);
@@ -421,7 +421,7 @@ Browser checks (`node test/tools/uiSmoke.ts --shots <dir>`: its own build, `vite
 - `?selftest=1`: `✓ all 50 goldens match (5.7 s)`, and `test/goldens.json` holds 50 entries.
 - The Voxels mode on the line A (−12800, 0) → B (12800, 0): "ground top y 26 to 203 · water on 14.6 % of the line, up to 37 deep", 38 colours in the 512 × 384 slice, hover "(25, 12, 0) · stone · no fluid · point 256, 12825.0 blocks from A"; back to Profile, the profile is kept.
 - No page error apart from the favicon.ico 404.
-- Firefox (`?selftest=1` 50/50) and CI are checked after the merge, as in SP2b.
+- Firefox and CI were checked after the merge (below).
 
 Visual review (`docs/superpowers/specs/assets/sp3a/`; world seed '42', default profile, provisional T; air in sky blue, stone grey, bedrock near black, water blue darkening with depth). The slices are written by `npm run docs:review-slices` (`test/harness/reviewSlices.ts`). Each site's line is checked against the ColumnSample's land, sea, lake and river positions, and its crop is checked to remove only air and stone. `slices.json` lists the sites and the positions each line crosses.
 - `slice-coast.png` (1024 × 192, y −64 … 127): the z plane −31992 for x −27136 … −26113. The sea is up to 43 deep; a river mouth crosses the coast; a 27-column land strip rises to y 100 before the sea again. Line positions: 567 sea, 436 land, 21 river.
@@ -429,6 +429,13 @@ Visual review (`docs/superpowers/specs/assets/sp3a/`; world seed '42', default p
 - `slice-river.png` (2 px per block, y 32 … 95): the same plane for x −15552 … −15041. Three river channels with water up to y 63, at most 4 blocks deep, between land up to y 76. Line positions: 95 river, 417 land.
 - `slice-y62.png` (1024 × 1024): the y plane 62 of the 64 × 64 columns from (cx, cz) = (−1696, −2032), with north at the top. It shows the coastline, river channels, islets and enclosed water: water where the sea or a river reaches y 62, stone where the ground does.
 - `cross-section-voxels.png` (1400 × 900, the smoke test's `--shots`): `?map` with the Voxels mode on a coast line A (5122, 3074) → B (6658, 3074) at 4 blocks/px. The sea is up to 41 deep under the sea-level line, the badlands rise to y 208, and the hover reads a water source.
+
+Done after the merge (2026-10-03):
+- `main` fast-forwarded to the branch and pushed at aa23cd2 (the user chose a local merge; pushing to `main` is authorised), so the CI evidence is the push run: GitHub Actions green (build, `npm test`, `npm run test:metrics`).
+- Production (Vercel) deployed aa23cd2. In headless Chrome: `?selftest=1` `✓ all 50 goldens match (6.5 s)`; `?map` loads with the cross-section's Voxels mode and no page errors.
+- Production, Firefox 157 (the user): `?selftest=1` 50/50, and every `actual` equals `test/goldens.json`; the JSON is in `assets/sp3a/selftest-firefox.json`.
+
+SP3a is complete (2026-10-03): every §12 exit criterion holds.
 
 ## Threshold log
 
