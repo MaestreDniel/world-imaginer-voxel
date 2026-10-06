@@ -1,7 +1,7 @@
 # SP3b — Density and terrain shape (Design)
 
 Date: 2026-10-07
-Status: Written for review (design approved section by section by the user, 2026-10-06 and 2026-10-07; revised after an adversarial spec review the same day, §15)
+Status: Approved by the user (2026-10-07): the design section by section (2026-10-06 and 2026-10-07), then the written spec after the adversarial review (§15)
 Parent: master spec `2026-09-26-architecture-design.md`. The sections involved are:
 - §10 SP3b, which this spec narrows: its surface-rule half becomes the new SP3c, and the old SP3c becomes SP3d (§12);
 - §2.5 (key types), §3.6 (density DAG), §3.7 (surfaceEstimate and surfaceWaterLevel), §3.16 (cross-column consistency), §3.17 (determinism);
