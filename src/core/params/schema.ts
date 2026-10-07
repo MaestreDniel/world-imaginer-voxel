@@ -103,7 +103,7 @@ export const ROOT = group('Parameters', 'World generation parameters.', {
   density: group('Density', 'Tunables of the default 3D density expression (SP3b spec §3); its structure is code until SP3d.', {
     noises: group('Density noises', 'Noises read by the density expression (noise2 / noise ops), at unscaled world block coordinates.', {
       jag: densityNoise('Jag noise', 'Ridges of jagged peaks: J = (1 − |z / clampSigma|)², times the jag spline.', { wavelength: 28, octaves: 2 }, 2, { min: 16, max: 8192 }),
-      overhang: densityNoise('Overhang noise', '3D surface displacement, times σ and the vertical slide (yScale 1: octaves at λy 32 and 16).', { wavelength: 32, octaves: 2, yScale: 1, persistence: 0.65 }, 3, { min: 16, max: 8192 }),
+      overhang: densityNoise('Overhang noise', '3D surface displacement, times σ and the vertical slide. Its vertical wavelength is λ / yScale; keep its last octave at 16 blocks or more (2 × the 8-block vertical corner step).', { wavelength: 32, octaves: 2, yScale: 1, persistence: 0.65 }, 3, { min: 16, max: 8192 }),
       detail: densityNoise('Detail noise', 'Small 3D surface detail outside the interpolation, times the detail amplitude.', { wavelength: 10, octaves: 1 }, 3, { min: 4, max: 256 }),
     }),
     detailAmpLo: amp(0.6, 'Detail amplitude at E −1', 'Detail amplitude in blocks where E ≤ −1.'),

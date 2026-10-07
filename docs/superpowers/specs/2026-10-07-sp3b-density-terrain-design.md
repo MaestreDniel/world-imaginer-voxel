@@ -214,7 +214,7 @@ SLIDE    = [(−64, 0), (−40, 1), (240, 1), (320, 0)]
 - **Water v0.** `top` is the y of the highest stone voxel at each (x, z) position (−64 when there is none above bedrock). Air with `top − 12 < y ≤ surfaceWaterLevel` becomes a water source (type 1, level 0).
   - `surfaceWaterLevel` is read from the nearest quart corner, as in SP3a.
   - Air under an overhang near the water line fills. Deeper enclosed air stays dry (aquifers, SP6).
-- **Known v0 artefact: water walls.** A position whose own level is −∞ stays dry even when its top drops below an adjacent water surface (σ, detail and the 3D shape make this possible). It leaves a vertical water face beside a dry pit at coasts, lake rims and river banks, until aquifers and the gen-time settle (SP6, SP7). The T metrics record the share of water voxels with a horizontally adjacent air voxel at the same y, as an ungated diagnostic, and the review slices show it to the user.
+- **Known v0 artefact: water walls.** A position whose own level is −∞ stays dry even when its top drops below an adjacent water surface (σ, detail and the 3D shape make this possible). It leaves a vertical water face beside a dry pit at coasts, lake rims and river banks, until aquifers and the gen-time settle (SP6, SP7). The same rule has a second form: `top` is the highest stone of the position, so an overhang or a floating rock more than 12 blocks above the water level makes `top − 12` exceed the level, and the whole water line beneath it stays dry, a dry cavity at the water line open sideways to the water. The T metrics record the share of water voxels with a horizontally adjacent air voxel at the same y, as an ungated diagnostic, and the review slices show it to the user.
 - **Sections.** Sections 0 … 23 go to `setProto` in order, each stored uniform or dense per channel, with `stop()` before each (24 polls, as SP3a). On a true `stop()` the stage returns false without aux or commit; `fillColumnT` frees the column.
 - **Aux A:** `WORLD_SURFACE_WG` and `OCEAN_FLOOR_WG` by scanning the voxels with SP3a §3.4's predicates, and `surfaceBiome` as in SP3a.
 - **Aux B** is written for the first time. The offsets are SP3a §3.4's; the index order is pinned here:
@@ -255,7 +255,7 @@ The Voxels mode shows the real T with no change of its own, because the slice jo
 - **Store API.** `ColumnView.auxB(): AuxBView | null` is added (null when the column has no aux B slot), with a master §2.5 / SP3a §3.5 amendment.
 - **Region hash.** `regionHash` (SP3a §6.2) appends each column's 4096 aux B bytes (zeros when absent) after its aux A bytes.
 - **Region cache.** The dump stores aux A, then aux B, per column, and `REGION_CACHE_FORMAT` goes to 2.
-- **CI.** An `actions/cache@v6` step caches `test/.cache/regions` only (never the bundled worker or `taskHandler*` files). It runs before `npm run test:metrics`, keyed by `hashFiles('src/**', 'test/harness/**', 'package-lock.json')`, with no `restore-keys` (SP3a §10).
+- **CI.** An `actions/cache@v6` step caches `test/.cache/regions` only (never the bundled worker or `taskHandler*` files). It runs before `npm test` (so metrics-fast's DT1 can hit as well as metrics-quick's) and so before `npm run test:metrics`, keyed by `hashFiles('src/**', 'test/harness/**', 'package-lock.json')`, with no `restore-keys` (SP3a §10).
 - **SP3a §10's six harness minors:**
   - a per-tier DT1 worker directory;
   - a dump's mtime refreshed on a hit;
@@ -277,7 +277,7 @@ The Voxels mode shows the real T with no change of its own, because the slice jo
   - The draw is uniform over a square of ±16384 blocks (default) or ±65536 (large_biomes, whose climate is 4 times larger), with `Xoshiro128` and a fixed seed per metric family.
 - **T3** uses the x and z neighbour pairs inside each scattered column (no regions; aux A's `surfaceBiome` is per block, so borders cross the columns everywhere).
 - **Regions.** T4 goes through the harness (`genRegion`, `cache: false`: each region is generated once per run).
-  - T4 uses 16 × 16-column regions (256² blocks) at sites whose 2D `offset` < 40 (open ocean): fast 4, quick 4, full 16.
+  - T4 uses 16 × 16-column regions (256² blocks) at sites whose 2D `offset` < 40 (open ocean), per (profile, seed): fast 4, quick 4, full 16 (64 per profile over full's 4 seeds).
   - Sites are drawn as above.
 - **Insufficient samples.** A part whose population is below its stated minimum fails with "insufficient sample", never passes silently. The minimums:
   - peak positions 20 columns;
@@ -404,10 +404,16 @@ The Voxels mode shows the real T with no change of its own, because the slice jo
 - **SP3d:**
   - `density.defs` as an editable JSON leaf, with the inspector, mutes and slice view (master §5.5);
   - `SLIDE` and the floor and ceiling terms become data;
-  - the floating_islands, amplified and archipelago drafts (SP3a §10's SP3c notes move here).
+  - the floating_islands, amplified and archipelago drafts (SP3a §10's SP3c notes move here);
+  - validation of untrusted `density.defs`, whose gaps an editable leaf makes reachable (in SP3b the expression is code):
+    - an empty def name shares the root's ref bucket (`''`, `expr.ts` `validateExpr`), so `{root: ref '', defs: {'': …}}` gets a false REF_CYCLE and a def `''` inherits the root's refs as its edges: key the root's bucket apart (`null` or a Symbol) or reject empty names;
+    - `validateExpr` recurses per node, so a pathologically deep tree overflows the stack: bound the depth and the node count;
+    - finite but huge `slide` knots give a segment slope of ±∞ (`nodes.ts` `slideAt`), and `(y − y_k)·∞` at y = y_k is NaN, against the NaN-free output rule: reject knots whose slope overflows;
+    - the interval ops pick their endpoints with `<` and `>` (`nodes.ts` `ivMul`, `ivMin`, `ivMax`, `ivHull`; the slot hulls in `bounds.ts`), so a NaN endpoint is dropped instead of propagated and the bound becomes unsound: make them propagate NaN, or widen any NaN endpoint to [−∞, ∞], before editable constants (here) or the level fields' −∞ rule (SP6) can reach an interval.
 - **SP4-SP9:**
   - cache `surfaceEst3` on the quart lattice with its first consumer;
-  - aquifers and the gen-time settle remove the dry pockets and water walls (SP6, SP7);
+  - aquifers and the gen-time settle remove the dry pockets and water walls (SP6, SP7), both forms of §4: a position whose own level is −∞, and the dry water line under an overhang or floating rock more than 12 blocks above the water;
+  - the T stage's cost rests on the solid early-out underground (`lo > 0`, §2.4). Caves of the form min(terrain, cave) make most underground cells straddle unless the cave sub-tree's interval is tight, which removes that early-out (a column evaluated in full costs ≈ 9 ms; at the parameter extremes the tests already allow up to 40 % evaluated cells). Plan cave bounds (e.g. a depth `rangeChoice`, or cave noise with a narrow `clampSigma`) and bench `terrain.real` with caves before relying on the 4 ms gate;
   - caves add their ops on §1's base, add the level fields' −∞ interval rule to `col`, and must keep DT2.
 
 ## 14. Master-spec amendments made with this spec
@@ -510,7 +516,7 @@ The plan was dry-run in a scratch worktree: every task was implemented and every
    - §8.3 names the overhang noise as a T2 knob;
    - §14 gains the parallelism line, SP2a's `surfaceEst` line and the amendments of master §2.3, §6.1, §6.2 and §7.
 7. **Measured, unchanged:**
-   - `terrain.real` p50 1.42-1.46 ms against the 4 ms gate;
+   - `terrain.real` p50 1.42-1.46 ms against the 4 ms gate in the dry run; this branch measured p50 1.49-1.74 ms (Task 14's `bench:record` and `bench` runs 1.71 and 1.74 ms, Task 16's exit run 1.49 ms, p99 2.40 ms), still well under the gate;
    - DT2 draws 5 of its 16 voxels per column from the bulk-evaluated cells and 5 near the top, because uniform voxels alone missed a mutated early-out on the fast tier;
    - a 512-sample slice over distinct columns takes 1.07 s on one worker and 0.29 s on 6;
    - SP2a minor 5 is a retained-heap assertion (< 16 KiB over 1,000 warm columns): the closures and noise calls box about 1.5 MB of short-lived doubles per column, so literal zero allocation would need a compiler rewrite;

@@ -28,7 +28,7 @@ const REGION_HASH = regionHash;
 /** The states SP3a registers (air, stone, bedrock): a fixed count, so appended states never change the digest. */
 const SP3A_STATES = 3;
 const REGION_PROFILES: readonly ProfileIdT[] = ['default', 'large_biomes'];
-/** 64 proto columns need at most 1,536 block and 1,600 byte slots (12 and 6.25 MiB). */
+/** 64 proto columns need at most 1,536 block and 1,664 byte slots (12 and 6.5 MiB; 26 byte slots per column with SP3b's aux B). */
 const MiB = 1048576;
 
 /**

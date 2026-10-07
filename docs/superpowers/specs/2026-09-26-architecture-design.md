@@ -1530,7 +1530,7 @@ Metric values are written to `test/metrics/.out/*.json` for trends. The harness 
 | Mesh | about 9 non-trivial sections × ≤ 1.0 ms | ≈ 9 / 20 |
 | **Total** | | **≈ 26 ms per column** |
 
-- **Measured in SP3b** (amended by SP3b): the column stage's ColumnSample p50 0.34 ms (it keeps the 2D surfaceEst, so the row's surfaceEst cost moves to `surfaceEst3`'s consumers); T without caves (`terrain.real`: ColumnSample, density with early-outs, water, 24 sections, aux A and B) p50 1.42-1.46 ms, p99 2.2-2.4 ms, gated at ≤ 4 ms p50 by `TERRAIN_P50_MAX_MS`; one corner of the default expression ≈ 0.19 µs.
+- **Measured in SP3b** (amended by SP3b): the column stage's ColumnSample p50 0.34 ms (it keeps the 2D surfaceEst, so the row's surfaceEst cost moves to `surfaceEst3`'s consumers); T without caves (`terrain.real`: ColumnSample, density with early-outs, water, 24 sections, aux A and B) p50 1.49-1.74 ms on the SP3b branch (Tasks 14 and 16; the exit run 1.49 ms, p99 2.40 ms; the plan's dry run measured p50 1.42-1.46 ms, p99 2.2-2.4 ms), gated at ≤ 4 ms p50 by `TERRAIN_P50_MAX_MS`; one corner of the default expression ≈ 0.19 µs.
 - **Kill criterion:** if DAG closure overhead exceeds 25% of T (measured by bench against a hand-inlined default expression), add `new Function` codegen behind a CSP probe, keeping `reference.ts` as the oracle.
 - **Fill:** RD12 needs T 755 / D 660 / L 573 / mesh 491 columns ≈ 16-17 CPU-seconds.
   - Wall time ≤ 6 s on the reference laptop with the bench cap of 4 workers and the throttle; ≤ 4 s with the default 6 workers (09 took 71 s at RD16).
@@ -1726,6 +1726,7 @@ SP3b was split on 2026-10-07 into SP3b (density and terrain shape) and a new SP3
 - Draft `floating_islands`, `amplified` and `archipelago` presets (terms, splines and params; surface-rule branch for islands), so per-preset goldens and SP11's LOD island scan have a target; their profiles become selectable (`readyFrom: 'SP3d'`).
 - In-app slice viewer and density node inspector; `density.defs` as an editable JSON leaf with mutes, and SP3b's `SLIDE`, floor and ceiling terms as data (the SP3b spec §13).
 - **Deliverable:** live terrain cross-sections and the node inspector.
+- Received from SP3b (its spec §13): validate untrusted `density.defs` before user JSON reaches `validateExpr`: reject empty def names (or key the root's ref bucket apart), bound the depth and node count, reject `slide` knots whose slope overflows, and make the interval ops propagate NaN (or widen a NaN endpoint to [−∞, ∞]).
 - Received from SP3a (its spec §10): archipelago (≈ 60 % ocean) against B1's 45 % ocean-family cap (decide per-preset gating); amplified's offset multiplier and the 320 range.
 - **Exit:** set by the SP3d spec.
 - **Cut line:** inspector pins (→ SP10).

@@ -108,7 +108,11 @@ export function buildColumnSample(ctx: GenContext, cx: number, cz: number, out: 
 export const riverWetAt = (s: ColumnSample, k: number): boolean => (s.flags[k]! & 1) !== 0;
 export const gorgeAt = (s: ColumnSample, k: number): boolean => (s.flags[k]! & 2) !== 0;
 
-/** Bilinear readout of a continuous field at world (x, z) inside the sample's column; exact at quart corners. */
+/**
+ * Bilinear readout of a continuous field at world (x, z) inside the sample's column. Exact at the quart corners i, j ≤ 3
+ * only: the far corners (i or j = 4, x = 16·cx + 16 or z = 16·cz + 16) are read as the weight-1 end of the last cell's
+ * lerp, which can round the lattice value by a few ulps.
+ */
 export function readField(s: ColumnSample, field: SampleField, x: number, z: number): number {
   const a = s.f[field];
   const u = (x - 16 * s.cx) / 4;
