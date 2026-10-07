@@ -35,7 +35,7 @@ describe('panel tree', () => {
     expect(root.path).toBe('');
     expect(root.label).toBe('Parameters');
     expect(root.controls).toEqual([]);
-    expect(root.sections.map((s) => s.path)).toEqual(['climate', 'shape', 'rivers', 'lakes', 'biomes']);
+    expect(root.sections.map((s) => s.path)).toEqual(['climate', 'shape', 'rivers', 'lakes', 'biomes', 'density']);
     const groups = SCHEMA.nodes.filter((n) => n.node.tag === 'group').map((n) => n.path);
     expect(sectionsOf(root).map((s) => s.path).sort()).toEqual([...groups].sort());
     expect(controlsOf(root).map((c) => c.path).sort()).toEqual(SCHEMA.leaves.map((l) => l.path).sort());
@@ -79,11 +79,12 @@ describe('panel tree', () => {
     expect(log.sort()).toEqual([
       'climate.C', 'climate.E', 'climate.H', 'climate.R', 'climate.T', 'climate.W', 'climate.scaleMul',
       'climate.warp.C.noise', 'climate.warp.R.noise', 'climate.warp.shift.noise',
+      'density.noises.detail', 'density.noises.jag', 'density.noises.overhang',
       'lakes.cell', 'lakes.depthMin', 'lakes.radius', 'lakes.rimNoise', 'lakes.rimWidth', 'lakes.warpNoise',
       'rivers.widthMin', 'rivers.widthNoise',
     ]);
-    // ratio 15 (ringFrac 0.1 … 1.5), min 0 (zoomJitter), negative min (coastFadeLo), splines and the table stay linear
-    for (const p of ['lakes.ringFrac', 'biomes.zoomJitter', 'rivers.coastFadeLo', 'rivers.valleyFloor', 'shape.offset', 'biomes.table']) {
+    // ratio 15 (ringFrac 0.1 … 1.5), min 0 (zoomJitter, the detail amplitudes), negative min (coastFadeLo), splines and the table stay linear
+    for (const p of ['lakes.ringFrac', 'biomes.zoomJitter', 'density.detailAmpLo', 'density.detailAmpHi', 'rivers.coastFadeLo', 'rivers.valleyFloor', 'shape.offset', 'biomes.table']) {
       expect(control(p).scale).toBe('linear');
     }
   });
@@ -253,6 +254,19 @@ describe('noise sub-block', () => {
   });
 });
 
+describe('density noises (SP3b spec §1.1)', () => {
+  test('the remap of a density noise is locked at \'none\', 2D jag included: the schema refuses \'uniform\'', () => {
+    for (const path of ['density.noises.jag', 'density.noises.overhang', 'density.noises.detail']) {
+      const c = control(path);
+      expect(c.remapNone, path).toBe(true);
+      expect(noiseFieldLock(c, noiseAt(path), 'remap'), path).toBe("a density noise keeps remap 'none'");
+    }
+    // The other noises are unchanged: the 2D jag would otherwise offer 'uniform' (double is true).
+    expect(control('lakes.rimNoise').remapNone).toBeUndefined();
+    expect(noiseFieldLock(control('density.noises.jag'), noiseAt('density.noises.jag'), 'double')).toBeNull();
+  });
+});
+
 describe('cross-field lints', () => {
   test('the defaults have no lint', () => {
     expect(paramLints(DEFAULTS)).toEqual([]);
@@ -300,7 +314,7 @@ describe('panel controls (Task 17): kinds, slider positions, typed values, issue
 
   test('on a linear stepped slider every keyboard step moves to the next value of the step grid', () => {
     const linear = [...sliders(), ...NOISE_NUMBER_FIELDS.map((f) => noiseFieldControl(control('climate.C'), f))].filter((c) => c.scale === 'linear');
-    expect(linear.length).toBe(32);
+    expect(linear.length).toBe(34);
     for (const c of linear) {
       const n = sliderPositions(c);
       expect(n).toBe(Math.round((c.max! - c.min!) / c.step!));

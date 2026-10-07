@@ -35,6 +35,8 @@ export interface ParamMeta {
   readonly step?: number;
   readonly options?: readonly string[];
   readonly dims?: 2 | 3;
+  /** Noise leaves whose remap must stay 'none' (SP3b density noises: the density expression rejects any other). */
+  readonly remapNone?: true;
   readonly coords?: readonly SplineCoord[];
   readonly scope: RegenScope;
   readonly stage?: StageId;
@@ -44,7 +46,7 @@ export interface ParamMeta {
 export type ParamIssueCode =
   | 'UNKNOWN_KEY' | 'MISSING_KEY' | 'NOT_OBJECT' | 'NOT_NUMBER' | 'NOT_FINITE' | 'NOT_INTEGER' | 'INT_TOO_LARGE'
   | 'OUT_OF_RANGE' | 'NOT_BOOL' | 'BAD_ENUM' | 'AMPLITUDES_LENGTH' | 'AMPLITUDES_ZERO' | 'AMPLITUDE_TINY' | 'YSCALE_NOT_1'
-  | 'REMAP_NEEDS_DOUBLE' | 'REMAP_NEEDS_2D' | 'BAD_INTERVAL' | 'DUPLICATE_PRIORITY';
+  | 'REMAP_NEEDS_DOUBLE' | 'REMAP_NEEDS_2D' | 'REMAP_NOT_ALLOWED' | 'BAD_INTERVAL' | 'DUPLICATE_PRIORITY';
 export type PresetIssueCode = 'BAD_FORMAT' | 'BAD_NAME' | 'RESERVED_NAME' | 'UNKNOWN_PROFILE' | 'BAD_SCHEMA_VERSION' | 'NEWER_SCHEMA_VERSION';
 export type IssueCode = ParamIssueCode | PresetIssueCode | 'MIGRATION_FAILED' | SplineErrorCode;
 
@@ -71,6 +73,8 @@ export interface Leaf<T, P = T> {
   readonly coords?: readonly SplineCoord[];
   readonly seedName?: string;
   readonly components?: readonly ['x', 'z'];
+  /** A noise leaf whose remap must stay 'none' (NoiseMeta.remapNone). */
+  readonly remapNone?: true;
   /** Phantom: never present at runtime. */
   readonly __patch?: P;
 }
@@ -103,6 +107,11 @@ export type NoiseMeta = MetaInput & {
   readonly dims: 2 | 3;
   readonly seedName?: string;
   readonly components?: readonly ['x', 'z'];
+  /**
+   * The noise must keep remap 'none' (validated: REMAP_NOT_ALLOWED). SP3b's density noises: `validateExpr` rejects a
+   * density noise with another remap, so a schema-valid 'uniform' would make every T column throw.
+   */
+  readonly remapNone?: true;
 };
 export type SplineMeta = MetaInput & { readonly coords: readonly SplineCoord[]; readonly min: number; readonly max: number };
 
@@ -137,6 +146,7 @@ export function noise(def: Pick<NoiseDef, 'wavelength' | 'octaves'> & NoiseDefPa
     min: meta.wavelength.min, max: meta.wavelength.max, dims: meta.dims,
     ...(meta.seedName !== undefined ? { seedName: meta.seedName } : {}),
     ...(meta.components !== undefined ? { components: meta.components } : {}),
+    ...(meta.remapNone === true ? { remapNone: true } : {}),
   };
 }
 
@@ -236,8 +246,12 @@ function checkNoise(v: unknown, path: string, out: Issue[], leaf: Leaf<unknown, 
   if (remap !== 'none' && remap !== 'uniform') out.push({ path: join(path, 'remap'), code: 'BAD_ENUM', message: `expected "none" | "uniform", got ${fmt(remap)}` });
   const clampSigma = checkNumber(v['clampSigma'], join(path, 'clampSigma'), out, R.clampSigma.min, R.clampSigma.max, false);
   if (leaf.dims === 2 && yScale !== undefined && yScale !== 1) out.push({ path: join(path, 'yScale'), code: 'YSCALE_NOT_1', message: 'a 2D noise has yScale 1' });
-  if (remap === 'uniform' && dbl === false) out.push({ path: join(path, 'remap'), code: 'REMAP_NEEDS_DOUBLE', message: "remap 'uniform' needs double: true" });
-  if (remap === 'uniform' && leaf.dims === 3) out.push({ path: join(path, 'remap'), code: 'REMAP_NEEDS_2D', message: "remap 'uniform' is for 2D noises" });
+  if (remap === 'uniform' && leaf.remapNone === true) {
+    out.push({ path: join(path, 'remap'), code: 'REMAP_NOT_ALLOWED', message: "this noise keeps remap 'none' (a density noise)" });
+  } else {
+    if (remap === 'uniform' && dbl === false) out.push({ path: join(path, 'remap'), code: 'REMAP_NEEDS_DOUBLE', message: "remap 'uniform' needs double: true" });
+    if (remap === 'uniform' && leaf.dims === 3) out.push({ path: join(path, 'remap'), code: 'REMAP_NEEDS_2D', message: "remap 'uniform' is for 2D noises" });
+  }
   if (out.length > n0) return undefined;
   return {
     wavelength: wavelength!, octaves: octaves!, persistence: persistence!, lacunarity: lacunarity!, amplitudes,
@@ -354,6 +368,7 @@ function toMeta(path: string, l: Leaf<unknown, unknown>): ParamMeta {
     ...(l.step !== undefined ? { step: l.step } : {}),
     ...(l.options !== undefined ? { options: l.options } : {}),
     ...(l.dims !== undefined ? { dims: l.dims } : {}),
+    ...(l.remapNone === true ? { remapNone: true } : {}),
     ...(l.coords !== undefined ? { coords: l.coords } : {}),
     scope: m.scope,
     ...(m.stage !== undefined ? { stage: m.stage } : {}),

@@ -25,6 +25,8 @@ export interface ControlSpec {
   readonly stage?: StageId;
   /** Noise leaves: whether the noise is 2D or 3D (it decides which noise fields a rule fixes). */
   readonly dims?: 2 | 3;
+  /** Noise leaves whose remap stays 'none' (the density noises, SP3b). */
+  readonly remapNone?: true;
 }
 
 export interface SectionSpec {
@@ -59,6 +61,7 @@ function controlOf(meta: ParamMeta): ControlSpec {
     scope: meta.scope,
     ...(meta.stage !== undefined ? { stage: meta.stage } : {}),
     ...(meta.dims !== undefined ? { dims: meta.dims } : {}),
+    ...(meta.remapNone === true ? { remapNone: true } : {}),
   };
 }
 
@@ -173,6 +176,7 @@ export function noiseFieldLock(c: ControlSpec, def: NoiseDef, field: keyof Noise
   switch (field) {
     case 'yScale': return c.dims === 2 ? 'a 2D noise has yScale 1' : null;
     case 'remap':
+      if (c.remapNone === true) return "a density noise keeps remap 'none'";
       if (c.dims === 3) return "remap 'uniform' is for 2D noises";
       return def.double ? null : "remap 'uniform' needs double: true";
     case 'double': return def.remap === 'uniform' ? "remap 'uniform' needs double: true" : null;

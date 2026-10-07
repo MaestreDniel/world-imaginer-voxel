@@ -10,7 +10,7 @@ import { JAG, OFFSET, SIGMA } from '../../src/metrics/sp1Fixtures';
 
 describe('SP2a schema groups', () => {
   test('leaves, scopes and stages', () => {
-    const rows = PARAM_META.filter((m) => !m.path.startsWith('climate.')).map((m) => `${m.path}:${m.kind}:${m.scope}:${m.stage}`);
+    const rows = PARAM_META.filter((m) => !m.path.startsWith('climate.') && !m.path.startsWith('density.')).map((m) => `${m.path}:${m.kind}:${m.scope}:${m.stage}`);
     const g = (prefix: string, stage: string, names: string) => names.split(' ').map((n) => {
       const [name, kind] = n.split(':');
       return `${prefix}.${name}:${kind ?? 'number'}:terrain:${stage}`;
@@ -43,7 +43,7 @@ describe('SP2a schema groups', () => {
   });
   test('the new noise instances have distinct seed names', () => {
     const names = noiseInstances(SCHEMA, DEFAULTS).map((i) => i.seedName);
-    expect(names.filter((n) => !n.startsWith('climate.'))).toEqual(['rivers.widthNoise', 'lakes.warpNoise.x', 'lakes.warpNoise.z', 'lakes.rimNoise']);
+    expect(names.filter((n) => !n.startsWith('climate.') && !n.startsWith('density.'))).toEqual(['rivers.widthNoise', 'lakes.warpNoise.x', 'lakes.warpNoise.z', 'lakes.rimNoise']);
     expect(new Set(names).size).toBe(names.length);
   });
 });

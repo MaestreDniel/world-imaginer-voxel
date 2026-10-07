@@ -1,9 +1,10 @@
 /**
  * Random valid density expressions for the compile == reference and bounds fuzz (SP3b spec §10).
  *
- * Trees use every op of §1.1 over a set of noise ids: until the schema has its `density.noises` (Task 6) they are the
- * test noises of `fuzzNoiseSource()`; pass `noises` to draw over other ids. Constants are drawn as §1.2 asks
- * (`fuzzConstant`: log-uniform magnitudes in [1e-6, 1e9] with random signs, plus 0, −0 and small integers).
+ * Trees use every op of §1.1 over a set of noise ids: by default the test noises of `fuzzNoiseSource()`; pass `noises`
+ * to draw over other ids (`SCHEMA_DENSITY_NOISES`, evaluated through `densityNoiseSource(ctx)`, for the schema's
+ * `density.noises`). Constants are drawn as §1.2 asks (`fuzzConstant`: log-uniform magnitudes in [1e-6, 1e9] with
+ * random signs, plus 0, −0 and small integers).
  *
  * Every tree is valid by construction: defs reference only earlier defs (no cycles), no `interpolated` is generated
  * inside another (a ref inside `interpolated` targets only a def without one), clamp lo ≤ hi, rangeChoice lo < hi,
@@ -13,7 +14,9 @@
 import { NormalNoise } from '../../src/core/noise/normal';
 import { completeNoiseDef, type NoiseDef } from '../../src/core/noise/types';
 import type { Seed64 } from '../../src/core/hash';
+import { SCHEMA } from '../../src/core/params/schema';
 import { SAMPLE_FIELDS } from '../../src/gen/column/columnStage';
+import { densityNoiseOf } from '../../src/gen/density/context';
 import { exprChildren, type DensityExpr, type DensityNoise, type DensityNoiseSource, type Expr, type SlideKnot } from '../../src/gen/density/expr';
 import { testFloat } from './stats';
 
@@ -27,10 +30,10 @@ export const FUZZ_NOISE_SPECS: readonly FuzzNoiseSpec[] = [
   { id: 'fz3b', dims: 3, def: completeNoiseDef({ wavelength: 32, octaves: 2, yScale: 2, clampSigma: 4 }) },
 ];
 
-/** Wraps a NormalNoise as a DensityNoise (Task 6 does the same for the schema's density noises). */
-export function densityNoiseOf(n: NormalNoise, dims: 2 | 3): DensityNoise {
-  return { dims, remap: n.def.remap, clampSigma: n.clamp, z2: (x, z) => n.z2(x, z), z3: (x, y, z) => n.z3(x, y, z) };
-}
+/** The schema's density noise ids and dims (the keys under `density.noises`), for `randomDensityExpr`'s `noises`. */
+export const SCHEMA_DENSITY_NOISES: readonly { readonly id: string; readonly dims: 2 | 3 }[] = SCHEMA.leaves
+  .filter((l) => l.leaf.kind === 'noise' && l.path.startsWith('density.noises.'))
+  .map((l) => ({ id: l.path.slice('density.noises.'.length), dims: l.leaf.dims ?? 2 }));
 
 /** The test noises as a DensityNoiseSource; seed names are `density.noises.<id>` under `seed`. */
 export function fuzzNoiseSource(seed: Seed64 = [0x5eed, 0x3b]): DensityNoiseSource {

@@ -89,6 +89,11 @@ Generated from `src/core/params/schema.ts` by `npm run docs:params`; a test fail
 | `lakes.sigmaMul` | number | 0.3 | 0 … 1 |  | terrain | Basin sigma: Multiplier of σ inside the basin. |
 | `biomes.table` | boxTable | 26 rows | deep_ocean / ocean / warm_ocean / frozen_ocean / beach / snowy_beach / stony_shore / plains / meadow / forest / birch_forest / dark_forest / taiga / snowy_taiga / snowy_plains / desert / savanna / swamp / jungle / badlands / windswept_hills / snowy_slopes / stony_peaks / jagged_peaks / frozen_peaks / volcano |  | terrain | Biome boxes: Climate box, sign(W) filter and tie-break priority of every box-picked surface biome. |
 | `biomes.zoomJitter` | number | 1.5 | 0 … 2 | blocks | terrain | Zoom jitter: Jitter of the quart centres in the jittered-Voronoi zoom. |
+| `density.noises.jag` | noise | {"amplitudes":null,"clampSigma":3,"double":true,"lacunarity":2,"octaves":2,"persistence":0.5,"remap":"none","wavelength":28,"yScale":1} | wavelength 16 … 8192 |  | terrain | Jag noise: Ridges of jagged peaks: J = (1 − \|z / clampSigma\|)², times the jag spline. |
+| `density.noises.overhang` | noise | {"amplitudes":null,"clampSigma":3,"double":true,"lacunarity":2,"octaves":3,"persistence":0.5,"remap":"none","wavelength":80,"yScale":1.25} | wavelength 16 … 8192 |  | terrain | Overhang noise: 3D surface displacement, times σ and the vertical slide (yScale 1.25: λy 64). |
+| `density.noises.detail` | noise | {"amplitudes":null,"clampSigma":3,"double":true,"lacunarity":2,"octaves":1,"persistence":0.5,"remap":"none","wavelength":10,"yScale":1} | wavelength 4 … 256 |  | terrain | Detail noise: Small 3D surface detail outside the interpolation, times the detail amplitude. |
+| `density.detailAmpLo` | number | 0.6 | 0 … 8 | blocks | terrain | Detail amplitude at E −1: Detail amplitude in blocks where E ≤ −1. |
+| `density.detailAmpHi` | number | 1.5 | 0 … 8 | blocks | terrain | Detail amplitude at E +1: Detail amplitude in blocks where E ≥ 1; linear in (E + 1) / 2 between the two. |
 <!-- params:end -->
 
 ## Requirements

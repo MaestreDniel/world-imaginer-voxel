@@ -105,7 +105,8 @@ export function randomValue(leaf: Leaf<unknown, unknown>, next: () => number): u
         wavelength: between(next, leaf.min!, leaf.max!), octaves,
         persistence: between(next, R.persistence.min, R.persistence.max), lacunarity: between(next, R.lacunarity.min, R.lacunarity.max),
         amplitudes, yScale: leaf.dims === 2 ? 1 : between(next, R.yScale.min, R.yScale.max), double,
-        remap: leaf.dims === 2 && double && (next() & 1) === 1 ? 'uniform' : 'none',
+        // A remapNone leaf (SP3b's density noises) keeps 'none'; the draw is still made, so the stream is unchanged.
+        remap: leaf.dims === 2 && double && (next() & 1) === 1 && leaf.remapNone !== true ? 'uniform' : 'none',
         clampSigma: between(next, R.clampSigma.min, R.clampSigma.max),
       };
     }

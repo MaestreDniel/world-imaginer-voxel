@@ -7,6 +7,7 @@ export { NOISE_FIELD_RANGES } from './kit';
 const CLIMATE = { scope: 'climate', stage: 'climate' } as const;
 const SHAPE = { scope: 'terrain', stage: 'shape' } as const;
 const BIOME = { scope: 'terrain', stage: 'biome2d' } as const;
+const TERRAIN = { scope: 'terrain', stage: 'terrain' } as const;
 const SHAPE_COORDS = ['C', 'E', 'PV'] as const;
 
 const blocks = (def: number, label: string, doc: string, min: number, max: number, step = 1) =>
@@ -27,6 +28,12 @@ const warp = (label: string, doc: string, amplitude: number, wavelength: number,
       wavelength: { min: 16, max: 8192 }, dims: 2, components: ['x', 'z'],
     }),
   });
+
+/** A density noise (SP3b spec §3.3): sampled at unscaled world block coordinates; remap 'none' (validateExpr; the schema refuses another). */
+const densityNoise = (label: string, doc: string, def: { readonly wavelength: number; readonly octaves: number; readonly yScale?: number }, dims: 2 | 3, wavelength: { readonly min: number; readonly max: number }) =>
+  noise(def, { ...TERRAIN, label, doc, wavelength, dims, remapNone: true });
+const amp = (def: number, label: string, doc: string) =>
+  num(def, { ...TERRAIN, label, doc, unit: 'blocks', min: 0, max: 8, step: 0.05 });
 
 const field = (label: string, doc: string, wavelength: number, octaves: number) =>
   noise({ wavelength, octaves, remap: 'uniform' }, { ...CLIMATE, label, doc, wavelength: { min: 64, max: 20000 }, dims: 2 });
@@ -93,6 +100,15 @@ export const ROOT = group('Parameters', 'World generation parameters.', {
     table: boxTable(BIOME_TABLE_DEFAULT, { ...BIOME, label: 'Biome boxes', doc: 'Climate box, sign(W) filter and tie-break priority of every box-picked surface biome.', rows: BOX_BIOMES }),
     zoomJitter: num(1.5, { ...BIOME, label: 'Zoom jitter', doc: 'Jitter of the quart centres in the jittered-Voronoi zoom.', unit: 'blocks', min: 0, max: 2, step: 0.05 }),
   }),
+  density: group('Density', 'Tunables of the default 3D density expression (SP3b spec §3); its structure is code until SP3d.', {
+    noises: group('Density noises', 'Noises read by the density expression (noise2 / noise ops), at unscaled world block coordinates.', {
+      jag: densityNoise('Jag noise', 'Ridges of jagged peaks: J = (1 − |z / clampSigma|)², times the jag spline.', { wavelength: 28, octaves: 2 }, 2, { min: 16, max: 8192 }),
+      overhang: densityNoise('Overhang noise', '3D surface displacement, times σ and the vertical slide (yScale 1.25: λy 64).', { wavelength: 80, octaves: 3, yScale: 1.25 }, 3, { min: 16, max: 8192 }),
+      detail: densityNoise('Detail noise', 'Small 3D surface detail outside the interpolation, times the detail amplitude.', { wavelength: 10, octaves: 1 }, 3, { min: 4, max: 256 }),
+    }),
+    detailAmpLo: amp(0.6, 'Detail amplitude at E −1', 'Detail amplitude in blocks where E ≤ −1.'),
+    detailAmpHi: amp(1.5, 'Detail amplitude at E +1', 'Detail amplitude in blocks where E ≥ 1; linear in (E + 1) / 2 between the two.'),
+  }),
 });
 
 export const SCHEMA = buildSchema(ROOT);
@@ -103,3 +119,4 @@ export interface ShapeParams extends Value<typeof ROOT.children.shape> {}
 export interface RiverParams extends Value<typeof ROOT.children.rivers> {}
 export interface LakeParams extends Value<typeof ROOT.children.lakes> {}
 export interface BiomeParams extends Value<typeof ROOT.children.biomes> {}
+export interface DensityParams extends Value<typeof ROOT.children.density> {}
