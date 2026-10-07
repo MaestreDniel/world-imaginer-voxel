@@ -1,12 +1,13 @@
 {
-  "sha256": "bd21cc78065fc7dd58240d261fc72635a7443a7a187c9bfeb8cb9fe75140fd86",
+  "sha256": "b78d7a082ab396925346c6700bf7152eb24baed96d19dc82df9c405b28bb14f4",
   "canonical": {
     "startedSps": [
       "SP0",
       "SP1",
       "SP2a",
       "SP2b",
-      "SP3a"
+      "SP3a",
+      "SP3b"
     ],
     "thresholds": {
       "B1": {

@@ -519,3 +519,5 @@ The plan was dry-run in a scratch worktree: every task was implemented and every
 ## Threshold log
 
 (One line per commit that changes `test/thresholds.lock.json`.)
+
+- Task 1: `STARTED_SPS` gains `SP3b` (SP3b split into SP3b and a new SP3c; the old SP3c becomes SP3d); no threshold rows change.
