@@ -8,12 +8,15 @@ import { allGoldenKeys } from '../../src/metrics/sp2aGoldens';
 import { BIOME_SIZE_SCALE } from '../../src/ui/map/biomeSize';
 import { DEFAULT_MAP_STATE, encodeMapState, type MapState } from '../../src/ui/map/mapState';
 import { presetText } from '../../src/ui/presets/presetFile';
+import { segmentText } from '../../src/ui/crossSection/model';
 import { sliceSummary, voxelReadout } from '../../src/ui/crossSection/voxels';
 import { WATER_SOURCE } from '../../src/world/blocks/fluid';
 import { AIR, BEDROCK, STONE } from '../../src/world/blocks/index';
 import { SLICE_SAMPLES, sliceIndex } from '../../src/workers/protocol';
+import { REVIEW_SITES } from '../harness/reviewSlices';
 import {
-  canonicalJson, goldenCount, ignoredLog, mapHash, parseArgs, presetProblems, readMapHash, sameJson, selftestAllMatch, SIZE_8, VIEWPORT, voxelReadoutOk, voxelSummaryOk, type MapUrlState,
+  canonicalJson, goldenCount, ignoredLog, mapHash, MOUNTAIN_LINE, parseArgs, parseSegment, presetProblems, readMapHash, sameJson, selftestAllMatch, SIZE_8, VIEWPORT,
+  voxelReadoutOk, voxelSummaryOk, type MapUrlState,
 } from '../tools/uiSmoke';
 
 const EDITED: MapState = {
@@ -102,6 +105,25 @@ describe('UI smoke test: pure parts (SP2b spec §8 Tools, §12)', () => {
     expect(voxelSummaryOk(sliceSummary(s))).toBe(true);
     expect(voxelSummaryOk(sliceSummary({ blocks: new Uint16Array(SLICE_SAMPLES), fluid: new Uint8Array(SLICE_SAMPLES) }))).toBe(false);
     expect(voxelSummaryOk('offset 1.0 to 2.0 blocks · water on 0.0 % of the line')).toBe(false);
+  });
+
+  test('the cut line\'s text reads back as its segment', () => {
+    for (const seg of [{ ax: -1664, az: 8, bx: -640, bz: 8 }, { ax: 5122, az: 3074, bx: 6658, bz: 3074 }, { ax: -2030, az: 7, bx: 1950, bz: -1990 }]) {
+      expect(parseSegment(segmentText(seg))).toEqual(seg);
+    }
+    expect(parseSegment('')).toBeNull();
+    expect(parseSegment('A (1, 2) → B (3, 4)')).toBeNull();
+  });
+
+  test('the mountain line (SP3b spec §7 uiSmoke) is the review mountain\'s line, drawn at 2 blocks/px from the view centre', () => {
+    const m = REVIEW_SITES.find((s) => s.name === 'mountain')!;
+    if (m.kind !== 'vertical') throw new Error('the mountain site is a vertical slice');
+    const { view, a, b } = MOUNTAIN_LINE;
+    expect(a).toEqual([16 * m.cx0, m.z]);
+    expect(b).toEqual([16 * (m.cx0 + m.w), m.z]);
+    expect(view).toEqual({ x: (a[0] + b[0]) / 2, z: m.z, bpp: 2, layer: 'relief' });
+    // ± 256 CSS px from the canvas centre: inside the map canvas of the 1400 px wide page.
+    expect((b[0] - a[0]) / view.bpp).toBe(512);
   });
 
   test('arguments: build, the OS temp directory and no screenshots by default', () => {

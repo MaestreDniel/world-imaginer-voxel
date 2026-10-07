@@ -27,7 +27,8 @@
  * - tabs: ArrowRight, ArrowLeft, Home and End move the selection and the focus on both tab bars;
  * - console: no exception, console error or failed load, except the known favicon.ico 404.
  * With --shots DIR it then writes the spec §12 screenshots into DIR, at seed 42 from a newly loaded page (the
- * repository keeps them re-saved as 256-colour palette PNGs, as SP1 and SP2a did).
+ * repository keeps them re-saved as 256-colour palette PNGs, as SP1 and SP2a did), and last the Voxels mode on the
+ * mountain line (SP3b spec §7: `cross-section-voxels-mountain.png`; the line text and the slice summary are checked).
  * Options: --skip-build, --profile-dir DIR, --shots DIR. The exit code is 0 only when every check passes.
  */
 import { spawn, type ChildProcess, type SpawnOptions } from 'node:child_process';
@@ -100,6 +101,26 @@ export function voxelReadoutOk(text: string): boolean {
 export function voxelSummaryOk(text: string): boolean {
   return /^ground top y -?\d+ to -?\d+ · (?:no water|water on \d+\.\d % of the line, up to \d+ deep)$/.test(text);
 }
+
+/** A cut line's ends, as the cross-section's line text writes them. */
+export interface Segment { readonly ax: number; readonly az: number; readonly bx: number; readonly bz: number }
+
+/** The segment of the cross-section's line text `A (ax, az) → B (bx, bz) · N blocks`, or null. */
+export function parseSegment(text: string): Segment | null {
+  const m = /^A \((-?\d+), (-?\d+)\) → B \((-?\d+), (-?\d+)\) · [\d ]+ blocks$/.exec(text);
+  return m === null ? null : { ax: Number(m[1]), az: Number(m[2]), bx: Number(m[3]), bz: Number(m[4]) };
+}
+
+/**
+ * The mountain line of the Voxels-mode screenshot (SP3b spec §7 uiSmoke, §11): the review slices' mountain site
+ * (`test/harness/reviewSlices.ts`, a highland row with σ > 8 found by a scan; a unit test keeps them equal), from
+ * A (−1664, 8) to B (−640, 8), clicked at ± 256 CSS px around the centre of a view at 2 blocks/px.
+ */
+export const MOUNTAIN_LINE = {
+  view: { x: -1152, z: 8, bpp: 2, layer: 'relief' },
+  a: [-1664, 8],
+  b: [-640, 8],
+} as const satisfies { readonly view: MapUrlView; readonly a: readonly [number, number]; readonly b: readonly [number, number] };
 
 /** A page log entry the smoke test does not count: the favicon.ico 404 (index.html declares no icon). */
 export function ignoredLog(text: string, url: string | undefined): boolean {
@@ -839,6 +860,31 @@ async function runShots(p: Page, dir: string): Promise<string[]> {
   await p.mouse('mouseMoved', vox.box.x + vox.box.width * 0.1, vox.box.y + (vox.box.height * (319 - 50)) / 384);
   await sleep(1000);
   await save('cross-section-voxels.png');
+
+  // The Voxels mode on the mountain line (SP3b spec §7, §11): the real T's peaks, the pointer on the rock below them.
+  const { view: mv, a, b } = MOUNTAIN_LINE;
+  await p.goto(`${p.base}?map#${mapHash({ ...START, view: mv })}`, MAP_READY);
+  await p.click('#map-tab-world');
+  await p.click('.map-cut');
+  const mc = await p.center('.map-canvas');
+  const at = (x: number, z: number): [number, number] => [mc.x + (x - mv.x) / mv.bpp, mc.y + (z - mv.z) / mv.bpp];
+  await p.clickAt(...at(a[0], a[1]));
+  await p.clickAt(...at(b[0], b[1]));
+  await p.until(`document.querySelector('.cs').dataset.state === 'fresh'`, 'a fresh cross-section of the mountain line');
+  const text = await p.eval<string>(`document.querySelector('.cs-line').textContent`);
+  const seg = parseSegment(text);
+  if (seg === null || Math.max(Math.abs(seg.ax - a[0]), Math.abs(seg.az - a[1]), Math.abs(seg.bx - b[0]), Math.abs(seg.bz - b[1])) > 1) {
+    throw new Error(`the mountain line is ${text}, expected A (${a[0]}, ${a[1]}) → B (${b[0]}, ${b[1]})`);
+  }
+  await p.click('.cs-mode[data-mode="voxels"]');
+  await p.until(`document.querySelector('.cs').dataset.mode === 'voxels' && document.querySelector('.cs').dataset.state === 'fresh'`, 'a fresh voxel slice of the mountain line');
+  const summary = await p.eval<string>(`document.querySelector('.cs-summary').textContent`);
+  if (!voxelSummaryOk(summary)) throw new Error(`the mountain slice: ${summary}`);
+  console.log(`  mountain line: ${text}; ${summary}`);
+  const mvox = await p.center('.cs-voxels');
+  await p.mouse('mouseMoved', mvox.box.x + mvox.box.width * 0.4, mvox.box.y + (mvox.box.height * (319 - 120)) / 384);
+  await sleep(1000);
+  await save('cross-section-voxels-mountain.png');
   return out;
 }
 

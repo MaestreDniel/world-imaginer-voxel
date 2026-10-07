@@ -1,0 +1,175 @@
+{
+  "seed": "42",
+  "profile": "default",
+  "slices": [
+    {
+      "file": "slice-coast.png",
+      "width": 1024,
+      "height": 224,
+      "site": {
+        "name": "coast",
+        "file": "slice-coast.png",
+        "kind": "vertical",
+        "cx0": -1696,
+        "w": 64,
+        "z": -31992,
+        "yMin": -64,
+        "yMax": 159,
+        "scale": 1,
+        "needs": [
+          "sea",
+          "land"
+        ]
+      },
+      "summary": {
+        "kinds": {
+          "land": 452,
+          "sea": 551,
+          "lake": 0,
+          "river": 21
+        },
+        "topMin": 18,
+        "topMax": 129,
+        "waterMax": 63,
+        "overhangs": 2,
+        "waterWallFaces": 5,
+        "waterUnderStone": 0
+      }
+    },
+    {
+      "file": "slice-lake.png",
+      "width": 1024,
+      "height": 128,
+      "site": {
+        "name": "lake",
+        "file": "slice-lake.png",
+        "kind": "vertical",
+        "cx0": -1024,
+        "w": 32,
+        "z": -31992,
+        "yMin": 32,
+        "yMax": 95,
+        "scale": 2,
+        "needs": [
+          "lake",
+          "land"
+        ]
+      },
+      "summary": {
+        "kinds": {
+          "land": 345,
+          "sea": 0,
+          "lake": 140,
+          "river": 27
+        },
+        "topMin": 58,
+        "topMax": 89,
+        "waterMax": 82,
+        "overhangs": 0,
+        "waterWallFaces": 9,
+        "waterUnderStone": 0
+      }
+    },
+    {
+      "file": "slice-river.png",
+      "width": 1024,
+      "height": 192,
+      "site": {
+        "name": "river",
+        "file": "slice-river.png",
+        "kind": "vertical",
+        "cx0": -972,
+        "w": 32,
+        "z": -31992,
+        "yMin": 32,
+        "yMax": 127,
+        "scale": 2,
+        "needs": [
+          "river",
+          "land"
+        ]
+      },
+      "summary": {
+        "kinds": {
+          "land": 422,
+          "sea": 0,
+          "lake": 0,
+          "river": 90
+        },
+        "topMin": 56,
+        "topMax": 109,
+        "waterMax": 63,
+        "overhangs": 0,
+        "waterWallFaces": 1,
+        "waterUnderStone": 0
+      }
+    },
+    {
+      "file": "slice-mountain.png",
+      "width": 1024,
+      "height": 256,
+      "site": {
+        "name": "mountain",
+        "file": "slice-mountain.png",
+        "kind": "vertical",
+        "cx0": -104,
+        "w": 64,
+        "z": 8,
+        "yMin": 64,
+        "yMax": 319,
+        "scale": 1,
+        "needs": [
+          "land"
+        ]
+      },
+      "summary": {
+        "kinds": {
+          "land": 1024,
+          "sea": 0,
+          "lake": 0,
+          "river": 0
+        },
+        "topMin": 140,
+        "topMax": 257,
+        "waterMax": null,
+        "overhangs": 214,
+        "waterWallFaces": 0,
+        "waterUnderStone": 0
+      }
+    },
+    {
+      "file": "slice-y62.png",
+      "width": 1024,
+      "height": 1024,
+      "site": {
+        "name": "y62",
+        "file": "slice-y62.png",
+        "kind": "horizontal",
+        "cx0": -1696,
+        "cz0": -2032,
+        "w": 64,
+        "h": 64,
+        "y": 62,
+        "checkZ": -31992,
+        "needs": [
+          "sea",
+          "land"
+        ]
+      },
+      "summary": {
+        "kinds": {
+          "land": 452,
+          "sea": 551,
+          "lake": 0,
+          "river": 21
+        },
+        "topMin": 18,
+        "topMax": 129,
+        "waterMax": 63,
+        "overhangs": 2,
+        "waterWallFaces": 5,
+        "waterUnderStone": 0
+      }
+    }
+  ]
+}
