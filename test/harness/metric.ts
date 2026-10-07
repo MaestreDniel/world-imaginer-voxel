@@ -3,7 +3,7 @@ import { join, relative } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { expect, test } from 'vitest';
 import type { MetricId, SubProjectId } from '../../src/core/ids';
-import { THRESHOLDS, type ThresholdTable } from '../thresholds';
+import { THRESHOLDS, type MetricsTier, type ThresholdTable } from '../thresholds';
 import { STARTED_SPS } from './sp';
 
 const OUT_DIR = fileURLToPath(new URL('../metrics/.out/', import.meta.url));
@@ -11,7 +11,18 @@ const OUT_DIR = fileURLToPath(new URL('../metrics/.out/', import.meta.url));
 export interface MetricEvaluation {
   asserted: string[];
   inactive: string[];
+  /** Active parts whose row lists tiers that exclude this run's tier: measured and recorded, not gated. */
+  otherTier: string[];
   errors: string[];
+}
+
+const TIERS: readonly MetricsTier[] = ['fast', 'quick', 'full'];
+
+/** The tier of this metrics run (`METRICS_TIER`, set per vitest project; 'fast' outside them). */
+export function currentTier(): MetricsTier {
+  const t = process.env.METRICS_TIER ?? 'fast';
+  if (t !== 'fast' && t !== 'quick' && t !== 'full') throw new Error(`METRICS_TIER '${t}' (fast, quick or full)`);
+  return t;
 }
 
 export function evaluateMetric(
@@ -20,8 +31,9 @@ export function evaluateMetric(
   values: Readonly<Record<string, number>>,
   table: ThresholdTable = THRESHOLDS,
   started: readonly SubProjectId[] = STARTED_SPS,
+  tier: MetricsTier = currentTier(),
 ): MetricEvaluation {
-  const result: MetricEvaluation = { asserted: [], inactive: [], errors: [] };
+  const result: MetricEvaluation = { asserted: [], inactive: [], otherTier: [], errors: [] };
   const row = table[id as MetricId];
   for (const part of parts) {
     const t = row?.[part];
@@ -29,6 +41,7 @@ export function evaluateMetric(
     const value = values[part];
     if (value === undefined) { result.errors.push(`${id}.${part}: no value returned`); continue; }
     if (!started.includes(t.activeFrom)) { result.inactive.push(part); continue; }
+    if (t.tiers !== undefined && !t.tiers.includes(tier)) { result.otherTier.push(part); continue; }
     result.asserted.push(part);
     if (t.min !== undefined && value < t.min) result.errors.push(`${id}.${part} = ${value} < min ${t.min}`);
     if (t.max !== undefined && value > t.max) result.errors.push(`${id}.${part} = ${value} > max ${t.max}`);
@@ -36,7 +49,10 @@ export function evaluateMetric(
   return result;
 }
 
-/** Registers one metric test. Inactive parts still run and record their value, then the test is skipped. */
+/**
+ * Registers one metric test. Inactive parts, and parts gated on other tiers only, still run and record their value;
+ * the test is skipped when no part is gated on this run.
+ */
 export function metricTest(
   id: MetricId,
   parts: readonly string[],
@@ -50,8 +66,11 @@ export function metricTest(
     const r = evaluateMetric(id, parts, values);
     expect(r.errors, r.errors.join('\n')).toEqual([]);
     if (r.asserted.length === 0) {
-      const next = r.inactive.map((p) => THRESHOLDS[id]?.[p]?.activeFrom).join(', ');
-      ctx.skip(true, `inactive until ${next} (value recorded)`);
+      const why = [
+        ...r.inactive.map((p) => `${p} inactive until ${THRESHOLDS[id]?.[p]?.activeFrom}`),
+        ...r.otherTier.map((p) => `${p} gated on ${THRESHOLDS[id]?.[p]?.tiers?.join(', ')} only`),
+      ];
+      ctx.skip(true, `${why.join('; ')} (value recorded)`);
     }
   }, timeoutMs);
 }
@@ -100,6 +119,10 @@ export function coverageErrors(
   }
   for (const [id, row] of Object.entries(table)) {
     for (const [part, t] of Object.entries(row ?? {})) {
+      if (t.tiers !== undefined) {
+        const bad = t.tiers.filter((x, i) => !TIERS.includes(x) || t.tiers!.indexOf(x) !== i);
+        if (t.tiers.length === 0 || bad.length > 0) errors.push(`${id}.${part}: tiers [${t.tiers.join(', ')}] (a non-empty subset of fast, quick, full)`);
+      }
       if (!started.includes(t.activeFrom)) continue;
       const n = calls.filter((c) => c.id === id && c.parts.includes(part)).length;
       if (n === 0) errors.push(`${id}.${part} is active but no metricTest covers it`);

@@ -1,5 +1,5 @@
 {
-  "sha256": "6c0f299b4a0cbd10724f64bf9be3c4f07dfee8af547c15d24aab2b7945f9df98",
+  "sha256": "8c64417e7865e7dd7a08a9404c69a1a7a7809cab05bfc04f920dfa47800b9b82",
   "canonical": {
     "startedSps": [
       "SP0",
@@ -176,10 +176,75 @@
           "max": 0.001
         }
       },
+      "T1": {
+        "above120": {
+          "activeFrom": "SP3b",
+          "min": 0.06
+        },
+        "above200": {
+          "activeFrom": "SP3b",
+          "min": 0.005
+        },
+        "band": {
+          "activeFrom": "SP3b",
+          "max": 0.25
+        },
+        "span": {
+          "activeFrom": "SP3b",
+          "min": 60
+        }
+      },
       "T1lowland": {
         "value": {
           "activeFrom": "SP2a",
           "max": 0.4
+        }
+      },
+      "T2": {
+        "overhangs": {
+          "activeFrom": "SP3b",
+          "min": 0.015
+        },
+        "overhangsPeaks": {
+          "activeFrom": "SP3b",
+          "min": 0.1
+        }
+      },
+      "T3": {
+        "value": {
+          "activeFrom": "SP3b",
+          "max": 1.5,
+          "tiers": [
+            "full"
+          ]
+        }
+      },
+      "T4": {
+        "deepFloor": {
+          "activeFrom": "SP3b",
+          "max": 0
+        },
+        "exposedBedrock": {
+          "activeFrom": "SP3b",
+          "max": 0
+        },
+        "floorSd": {
+          "activeFrom": "SP3b",
+          "min": 3
+        }
+      },
+      "T5": {
+        "median": {
+          "activeFrom": "SP3b",
+          "max": 1
+        },
+        "p90": {
+          "activeFrom": "SP3b",
+          "max": 2
+        },
+        "p99": {
+          "activeFrom": "SP3b",
+          "max": 6
         }
       },
       "T6": {

@@ -61,6 +61,14 @@ function partChanges(path: string, prev: ThresholdPart, next: ThresholdPart): Lo
     const loosen = next.max === undefined || (prev.max !== undefined && next.max > prev.max);
     out.push({ path, detail: `max ${prev.max ?? '—'}→${next.max ?? '—'}`, kind: loosen ? 'LOOSEN' : 'TIGHTEN' });
   }
+  const tiers = (p: ThresholdPart): readonly string[] => p.tiers ?? ['fast', 'quick', 'full'];
+  const before = tiers(prev);
+  const after = tiers(next);
+  if (before.length !== after.length || before.some((t) => !after.includes(t))) {
+    const loosen = before.some((t) => !after.includes(t));
+    const show = (p: ThresholdPart): string => (p.tiers === undefined ? 'all' : `[${p.tiers.join(', ')}]`);
+    out.push({ path, detail: `tiers ${show(prev)}→${show(next)}`, kind: loosen ? 'LOOSEN' : 'TIGHTEN' });
+  }
   if (prev.activeFrom !== next.activeFrom) {
     const loosen = spIndex(next.activeFrom) > spIndex(prev.activeFrom);
     out.push({ path, detail: `activeFrom ${prev.activeFrom}→${next.activeFrom}`, kind: loosen ? 'LOOSEN' : 'TIGHTEN' });

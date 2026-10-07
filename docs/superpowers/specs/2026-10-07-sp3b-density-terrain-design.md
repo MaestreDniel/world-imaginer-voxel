@@ -522,3 +522,4 @@ The plan was dry-run in a scratch worktree: every task was implemented and every
 
 - Task 1: `STARTED_SPS` gains `SP3b` (SP3b split into SP3b and a new SP3c; the old SP3c becomes SP3d); no threshold rows change.
 - Task 9: DT2 row added (`probeBulk` max 0, `compiledReference` max 0, activeFrom `SP3b`); no other row changes.
+- Task 13: T1 (`band`, `span`, `above120`, `above200`), T2 (`overhangs`, `overhangsPeaks`), T3 (`value`, `tiers: ['full']`), T4 (`floorSd`, `exposedBedrock`, `deepFloor`) and T5 (`median`, `p90`, `p99`) rows added with §8.2's thresholds, activeFrom `SP3b`; `ThresholdPart` gains the optional `tiers` field (absent = every tier); no existing row changes.

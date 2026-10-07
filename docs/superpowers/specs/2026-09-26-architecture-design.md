@@ -1353,7 +1353,7 @@ Metric values are written to `test/metrics/.out/*.json` for trends. The harness 
 | T1 | land heights: largest 10-block band / p5..p95 span / share y > 120 / share y > 200 | ≤ 25% / ≥ 60 blocks / ≥ 6% / ≥ 0.5% |
 | T1lowland | share of land columns with offset0 in [66, 76) on the pure offset (SP2a) | ≤ 40% |
 | T2 | land columns with ≥ 2 solid→air transitions above surface − 30 (pre-cave) | ≥ 1.5%, ≥ 10% in peaks/windswept (amplified: Z1) |
-| T3 | P(\|Δh\| ≥ 4 across a biome border) / P(within biome) | ≤ 1.5 |
+| T3 | P(\|Δh\| ≥ 4 across a border between two lowland biomes) / P(within those biomes), stratified by the pair's biomes (SP3b spec §8.2); gates on the full metrics tier only, fast and quick record it | ≤ 1.5 |
 | T4 | ocean floor sd per 256² / exposed bedrock under water / floor ≤ −50 | ≥ 3 / 0 / 0 |
 | T5 | surfaceEst vs true top (single-surface, no canopy) | median ≤ 1, p90 ≤ 2, p99 ≤ 6 |
 | T6 | spline gain: raising a knot by 10 blocks, `gain = ΣΔoffset_col / Σw_col` over columns with w_col > 0 (w_col = product of Hermite value-basis weights along the knot path, tangents fixed), one knot per depth | 10 ± 1.5 |
@@ -1693,7 +1693,7 @@ SP3b was split on 2026-10-07 into SP3b (density and terrain shape) and a new SP3
 - The real T stage (air, stone, bedrock and water) with the general v0 water fill so oceans, rivers and lakes are visible early (air with top − 12 < y ≤ surfaceWaterLevel, `top` being the position's highest stone, becomes water sources; everything else stays dry; SP3a's provisional T is its no-overhang case); it writes aux B and bumps the `terrain` stage and `GENERATOR_VERSION`.
 - The slice job split across workers; the CI `actions/cache` step for `test/.cache/regions` before `npm run test:metrics` (moved from SP3a, whose provisional T regenerates a 32 × 32 region in about a second).
 - **Deliverable:** 3D voxel terrain from the density DAG with water, in the harness slices and the Voxels mode.
-- **Exit:** as the SP3b spec §11: DT1 on the real T, DT2 (probe == bulk, compiled == reference bit-exact); T1, T2, T3 (stratified over same-family borders), T4 and T5 on voxel terrain (true top from WORLD_SURFACE_WG); every 2D metric still passes; P1 bench: T without caves ≤ 4 ms p50.
+- **Exit:** as the SP3b spec §11: DT1 on the real T, DT2 (probe == bulk, compiled == reference bit-exact); T1, T2, T3 (stratified over lowland borders, gated on the full tier), T4 and T5 on voxel terrain (true top from WORLD_SURFACE_WG); every 2D metric still passes; P1 bench: T without caves ≤ 4 ms p50.
 - Received from SP3a (its spec §10): T3's redefinition before it gates and T1's lowland band; the cost of the biome height filter on the real `surfaceEst` (settled by keeping the 2D estimate there); the Expr ops' exact semantics and interval rules; SP2a minor 5 (handed to SP3 by SP2b; minor 6 moves to SP3c); the ocean-floor σ/jag stripe.
 - **Cut line:** the worker-split slice (→ SP3d).
 

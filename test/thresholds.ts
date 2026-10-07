@@ -1,10 +1,17 @@
 import type { MetricId, SubProjectId } from '../src/core/ids';
 
+export type MetricsTier = 'fast' | 'quick' | 'full';
+
 export interface ThresholdPart {
   min?: number;
   max?: number;
   /** First sub-project that gates this part (per-part, master §10 Definition of done). */
   activeFrom: SubProjectId;
+  /**
+   * The metrics tiers that gate this part (absent: every tier). On the other tiers its value is measured and recorded
+   * as an ungated diagnostic (SP3b spec §8.2: T3 gates on the full tier only).
+   */
+  tiers?: readonly MetricsTier[];
 }
 
 /** One entry per metric id; part keys are stable slugs, one per threshold cell of the §6.4 row. */
@@ -34,6 +41,14 @@ export const THRESHOLDS: ThresholdTable = {
   B5: { perKm2Min: { min: 0.2, activeFrom: 'SP2a' }, perKm2Max: { max: 2, activeFrom: 'SP2a' }, highShare: { min: 0.3, activeFrom: 'SP2a' } },
   U2: { value: { min: 1, activeFrom: 'SP2b' } },
   DT1: { mismatches: { max: 0, activeFrom: 'SP3a' } },
+  T1: {
+    band: { max: 0.25, activeFrom: 'SP3b' }, span: { min: 60, activeFrom: 'SP3b' },
+    above120: { min: 0.06, activeFrom: 'SP3b' }, above200: { min: 0.005, activeFrom: 'SP3b' },
+  },
+  T2: { overhangs: { min: 0.015, activeFrom: 'SP3b' }, overhangsPeaks: { min: 0.1, activeFrom: 'SP3b' } },
+  T3: { value: { max: 1.5, activeFrom: 'SP3b', tiers: ['full'] } },
+  T4: { floorSd: { min: 3, activeFrom: 'SP3b' }, exposedBedrock: { max: 0, activeFrom: 'SP3b' }, deepFloor: { max: 0, activeFrom: 'SP3b' } },
+  T5: { median: { max: 1, activeFrom: 'SP3b' }, p90: { max: 2, activeFrom: 'SP3b' }, p99: { max: 6, activeFrom: 'SP3b' } },
   DT2: { probeBulk: { max: 0, activeFrom: 'SP3b' }, compiledReference: { max: 0, activeFrom: 'SP3b' } },
   M1: { states: { max: 4096, activeFrom: 'SP3a' }, roundTripFailures: { max: 0, activeFrom: 'SP3a' }, lockChanges: { max: 0, activeFrom: 'SP3a' } },
   U4: {

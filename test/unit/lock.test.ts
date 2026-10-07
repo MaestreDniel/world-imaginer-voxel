@@ -45,6 +45,20 @@ describe('diffGovernance', () => {
     );
   });
 
+  test('restricting a part to fewer tiers loosens; widening its tiers tightens; the lock records them', () => {
+    expect(diffGovernance(base, edit((s) => { s.thresholds.T1!.band!.tiers = ['full']; }))).toEqual([
+      { path: 'T1.band', detail: 'tiers all→[full]', kind: 'LOOSEN' },
+    ]);
+    const fullOnly = edit((s) => { s.thresholds.T1!.band!.tiers = ['full']; });
+    expect(diffGovernance(fullOnly, edit((s) => { s.thresholds.T1!.band!.tiers = ['quick', 'full']; }))).toEqual([
+      { path: 'T1.band', detail: 'tiers [full]→[quick, full]', kind: 'TIGHTEN' },
+    ]);
+    expect(diffGovernance(fullOnly, base)).toEqual([{ path: 'T1.band', detail: 'tiers [full]→all', kind: 'TIGHTEN' }]);
+    expect(diffGovernance(fullOnly, edit((s) => { s.thresholds.T1!.band!.tiers = ['quick']; }))[0]!.kind).toBe('LOOSEN');
+    expect(diffGovernance(base, edit((s) => { s.thresholds.T1!.band!.tiers = ['fast', 'quick', 'full']; }))).toEqual([]);
+    expect(makeLock(fullOnly).sha256).not.toBe(makeLock(base).sha256);
+  });
+
   test('removing an active part loosens; adding a part tightens', () => {
     expect(diffGovernance(base, edit((s) => { delete s.thresholds.T1!.span; }))[0]).toEqual(
       { path: 'T1.span', detail: 'removed', kind: 'LOOSEN' },
