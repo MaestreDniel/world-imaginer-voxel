@@ -1,7 +1,7 @@
 # SP3c — Surface rules and terrain palette (Design)
 
 Date: 2026-10-07
-Status: Revised after the adversarial spec review (2026-10-07; the changes are listed in §13), then amended by the user's Decision 6 (rule order, 2026-10-07). The design was approved section by section by the user on 2026-10-07.
+Status: Approved by the user (2026-10-07): the design section by section, then the written spec after the adversarial review (§13) and Decision 6 (rule order)
 Parent: master spec `2026-09-26-architecture-design.md`. The sections involved are:
 - §10 SP3c (created by SP3b), whose deliverable, exit and cut line this spec sets;
 - §2.2 (block registry: the palette appends), §3.10 (biomes), §3.11 (surface rules), §3.16 (cross-column consistency), §3.17 (determinism);
