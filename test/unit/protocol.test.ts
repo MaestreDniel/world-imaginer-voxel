@@ -10,7 +10,7 @@ import { computeAnyGolden } from '../../src/metrics/sp2aGoldens';
 import { SPLINE_STATS_POINTS, splineStatPoints, splineStatsInto, splineStatsLength, splineStatsNode, type SplineLeaf } from '../../src/metrics/splineStats';
 import { paintTile, paintTileAbortable } from '../../src/gen/map/tile';
 import { leafOpts } from '../../src/ui/splineEditor/model';
-import { parseFromWorker, parseToWorker, pointInWindow, SLICE_SAMPLES, tileInWindow } from '../../src/workers/protocol';
+import { parseFromWorker, parseToWorker, pointInWindow, SLICE_ROWS, SLICE_SAMPLES, sliceIndex, slicePartIndex, tileInWindow } from '../../src/workers/protocol';
 import { createSliceJob } from '../../src/workers/sliceJob';
 import { createTaskHandler } from '../../src/workers/taskHandler';
 import { ctxFor } from '../harness/gen';
@@ -37,7 +37,7 @@ describe('parseToWorker', () => {
     expect(parseToWorker(stats(6, 3, 'splineStats', 0, 100, { len: 87, leaf: 'shape.offset', node: [6, 0] }))).not.toBeNull();
     expect(parseToWorker(stats(7, 3, 'biomeShares', 5, 5, { len: 31 }))).not.toBeNull();
     expect(parseToWorker(stats(8, 3, 'crossSection', 0, 512, line(5120, 3072, 6656, 3072)))).not.toBeNull();
-    expect(parseToWorker({ type: 'slice', jobId: 9, epoch: 3, ax: 5120, az: 3072, bx: 6656, bz: 3072 })).not.toBeNull();
+    expect(parseToWorker({ type: 'slice', jobId: 9, epoch: 3, ax: 5120, az: 3072, bx: 6656, bz: 3072, from: 0, to: 512 })).not.toBeNull();
   });
   test('crossSection ends are only checked to be numbers: outside the window, NaN or A = B parse, and the handler answers BAD_ARGS', () => {
     for (const args of [line(524288, 0, 0, 0), line(Number.NaN, 0, 1, 1), line(0, Infinity, 1, 1), line(7, 7, 7, 7)]) {
@@ -289,38 +289,78 @@ describe('task handler', () => {
 });
 
 describe('slice messages and the slice job (SP3a spec §5.1)', () => {
-  const slice = (jobId: number, epoch: number, ax: unknown, az: unknown, bx: unknown, bz: unknown) => ({ type: 'slice', jobId, epoch, ax, az, bx, bz });
+  const slice = (jobId: number, epoch: number, ax: unknown, az: unknown, bx: unknown, bz: unknown, from: unknown = 0, to: unknown = 512) => ({ type: 'slice', jobId, epoch, ax, az, bx, bz, from, to });
   const COAST = { ax: -2030.5, az: -2007.25, bx: -1950.75, bz: -1990.5 };
-  const coast = (jobId: number, epoch: number) => slice(jobId, epoch, COAST.ax, COAST.az, COAST.bx, COAST.bz);
+  const coast = (jobId: number, epoch: number, from = 0, to = 512) => slice(jobId, epoch, COAST.ax, COAST.az, COAST.bx, COAST.bz, from, to);
   const live = (s: { blockPool: { slotCount(): number; freeCount(): number }; bytePool: { slotCount(): number; freeCount(): number } }) =>
     [s.blockPool.slotCount() - s.blockPool.freeCount(), s.bytePool.slotCount() - s.bytePool.freeCount()];
 
-  test('parseToWorker: integer jobId and epoch, numeric ends (the window and A ≠ B are the handler\'s BAD_ARGS)', () => {
+  test('parseToWorker: integer jobId and epoch, numeric ends and range (the window, A ≠ B and the range are the handler\'s BAD_ARGS)', () => {
     expect(parseToWorker(coast(1, 0))).not.toBeNull();
-    for (const m of [slice(1, 0, 524288, 0, 0, 0), slice(1, 0, Number.NaN, 0, 1, 1), slice(1, 0, 7, 7, 7, 7)]) expect(parseToWorker(m)).not.toBeNull();
-    for (const m of [slice(1.5, 0, 0, 0, 1, 1), slice(1, null as unknown as number, 0, 0, 1, 1), slice(1, 0, '0', 0, 1, 1), slice(1, 0, 0, 0, 1, undefined), { type: 'slice', jobId: 1, epoch: 0, ax: 0, az: 0, bx: 1 }]) {
+    for (const m of [slice(1, 0, 524288, 0, 0, 0), slice(1, 0, Number.NaN, 0, 1, 1), slice(1, 0, 7, 7, 7, 7), slice(1, 0, 0, 0, 1, 1, 1.5, 600), slice(1, 0, 0, 0, 1, 1, Number.NaN, -1)]) expect(parseToWorker(m)).not.toBeNull();
+    for (const m of [slice(1.5, 0, 0, 0, 1, 1), slice(1, null as unknown as number, 0, 0, 1, 1), slice(1, 0, '0', 0, 1, 1), slice(1, 0, 0, 0, 1, undefined), { type: 'slice', jobId: 1, epoch: 0, ax: 0, az: 0, bx: 1, from: 0, to: 512 }]) {
+      expect(parseToWorker(m)).toBeNull();
+    }
+    // SP3b spec §6: the message carries from and to.
+    for (const m of [slice(1, 0, 0, 0, 1, 1, '0', 512), slice(1, 0, 0, 0, 1, 1, 0, null), { type: 'slice', jobId: 1, epoch: 0, ax: 0, az: 0, bx: 1, bz: 1 }, { type: 'slice', jobId: 1, epoch: 0, ax: 0, az: 0, bx: 1, bz: 1, from: 0 }]) {
       expect(parseToWorker(m)).toBeNull();
     }
   });
-  test('parseFromWorker: sliceResult carries 196 608 u16 block states and 196 608 fluid bytes in ArrayBuffers', () => {
-    const result = (blocks: unknown, fluid: unknown, jobId: unknown = 4) => ({ type: 'sliceResult', jobId, epoch: 2, blocks, fluid });
+  test('parseFromWorker: sliceResult carries its range [from, to) and (to − from)·384 u16 block states and fluid bytes in ArrayBuffers', () => {
+    const result = (blocks: unknown, fluid: unknown, jobId: unknown = 4, from: unknown = 0, to: unknown = 512) => ({ type: 'sliceResult', jobId, epoch: 2, from, to, blocks, fluid });
     expect(parseFromWorker(result(new ArrayBuffer(2 * SLICE_SAMPLES), new ArrayBuffer(SLICE_SAMPLES)))).not.toBeNull();
     expect(parseFromWorker(result(new ArrayBuffer(SLICE_SAMPLES), new ArrayBuffer(SLICE_SAMPLES)))).toBeNull();
     expect(parseFromWorker(result(new ArrayBuffer(2 * SLICE_SAMPLES), new ArrayBuffer(2 * SLICE_SAMPLES)))).toBeNull();
     expect(parseFromWorker(result(new Uint16Array(SLICE_SAMPLES), new ArrayBuffer(SLICE_SAMPLES)))).toBeNull();
     expect(parseFromWorker(result(new ArrayBuffer(2 * SLICE_SAMPLES), new Uint8Array(SLICE_SAMPLES)))).toBeNull();
     expect(parseFromWorker(result(new ArrayBuffer(2 * SLICE_SAMPLES), new ArrayBuffer(SLICE_SAMPLES), null))).toBeNull();
+    const part = (from: unknown, to: unknown, w: number) => ({ type: 'sliceResult', jobId: 4, epoch: 2, from, to, blocks: new ArrayBuffer(2 * SLICE_ROWS * w), fluid: new ArrayBuffer(SLICE_ROWS * w) });
+    for (const [from, to] of [[170, 341], [0, 1], [511, 512], [0, 512]] as const) expect(parseFromWorker(part(from, to, to - from))).not.toBeNull();
+    for (const [from, to, w] of [[170, 341, 170], [170, 341, 512], [0, 513, 513], [-1, 1, 2], [5, 5, 0], [1.5, 3, 1.5], ['0', 1, 1], [0, undefined, 512], [undefined, 512, 512]] as const) {
+      expect(parseFromWorker(part(from, to, w)), `[${from}, ${to}) with ${w} samples`).toBeNull();
+    }
   });
   test('a slice replies with the slice job\'s blocks and fluid, both transferred, at the job\'s epoch', () => {
     const h = createTaskHandler();
     h.handle(configure(3));
     const r = h.handle(coast(7, 3));
-    expect(r.msg).toMatchObject({ type: 'sliceResult', jobId: 7, epoch: 3 });
+    expect(r.msg).toMatchObject({ type: 'sliceResult', jobId: 7, epoch: 3, from: 0, to: 512 });
     if (r.msg.type !== 'sliceResult') return;
     expect(r.transfer).toEqual([r.msg.blocks, r.msg.fluid]);
     const want = createSliceJob().run(ctxFor('42'), 3, COAST, () => false)!;
     expect(sameBytes(r.msg.blocks, want.blocks)).toBe(true);
     expect(sameBytes(r.msg.fluid, want.fluid)).toBe(true);
+  });
+  test('a slice of the range [from, to) replies with that part only, indexed (319 − y)·(to − from) + (i − from) (SP3b spec §6)', () => {
+    const h = createTaskHandler();
+    h.handle(configure(3));
+    const full = createSliceJob().run(ctxFor('42'), 3, COAST, () => false)!;
+    for (const [from, to] of [[0, 170], [170, 341], [341, 512], [255, 256]] as const) {
+      const r = h.handle(coast(8, 3, from, to));
+      expect(r.msg).toMatchObject({ type: 'sliceResult', jobId: 8, epoch: 3, from, to });
+      if (r.msg.type !== 'sliceResult') return;
+      expect(r.transfer).toEqual([r.msg.blocks, r.msg.fluid]);
+      const w = to - from;
+      expect([r.msg.blocks.byteLength, r.msg.fluid.byteLength]).toEqual([2 * SLICE_ROWS * w, SLICE_ROWS * w]);
+      const blocks = new Uint16Array(r.msg.blocks);
+      const fluid = new Uint8Array(r.msg.fluid);
+      for (const y of [319, 120, 63, 62, 0, -63, -64]) {
+        for (let i = from; i < to; i++) {
+          expect(blocks[slicePartIndex(i, y, from, to)]).toBe(full.blocks[sliceIndex(i, y)]);
+          expect(fluid[slicePartIndex(i, y, from, to)]).toBe(full.fluid[sliceIndex(i, y)]);
+        }
+      }
+    }
+  });
+  test('a range that is not integers with 0 ≤ from < to ≤ 512 is BAD_ARGS (SP3b spec §6)', () => {
+    const h = createTaskHandler();
+    h.handle(configure(3));
+    const bad = (from: number, to: number) => ['BAD_ARGS', 1, 3, `points [${from}, ${to}) are not integers with 0 ≤ from < to ≤ 512`];
+    for (const [from, to] of [[-1, 512], [0, 513], [5, 5], [6, 5], [1.5, 10], [0, 10.5], [Number.NaN, 10], [0, Number.POSITIVE_INFINITY], [-0.5, 0.5]] as const) {
+      const r = h.handle(coast(1, 3, from, to)).msg;
+      expect(r.type === 'error' ? [r.code, r.jobId, r.epoch, r.message] : [r.type]).toEqual(bad(from, to));
+    }
+    expect(h.handle(coast(2, 3, 511, 512)).msg.type).toBe('sliceResult');
   });
   test('a slice before configure, of a stale epoch or whose line leaves the half-open window or has no length is refused', () => {
     const h = createTaskHandler();

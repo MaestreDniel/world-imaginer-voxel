@@ -189,7 +189,7 @@ export interface SliceSource extends LineSource {
 
 export type SliceRequests = LineRequests<SliceResult>;
 
-/** The Voxels mode's requests (SP3a spec §5.2): `pool.slice(line)` (one job, abortable) per session epoch and line. */
+/** The Voxels mode's requests (SP3a spec §5.2): `pool.slice(line)` (split across the workers, abortable; SP3b spec §6) per session epoch and line. */
 export function createSliceRequests(src: SliceSource): SliceRequests {
   return createLineRequests(src, (at) => src.pool.slice(at));
 }

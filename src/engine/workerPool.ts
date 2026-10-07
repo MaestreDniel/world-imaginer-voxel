@@ -8,14 +8,15 @@
  * with WorkerFailed. SP2b §5.4: a stats request runs as `size` slices whose raw sums are added element-wise
  * (a crossSection request as one job, §4.5).
  * SP2b §2.8: `probe()` reports what the workers run, for the latency hook.
- * SP3a §5.1: a slice request (the voxels under a line) runs as one job on one worker, as a crossSection does.
+ * SP3a §5.1, SP3b §6: a slice request (the voxels under a line) is split into `size` contiguous ranges of its 512
+ * samples, as a stats request is; the parts are merged row by row.
  */
 import type { MapLevel } from '../core/constants';
 import type { ColumnPoint } from '../gen/column/columnPoint';
 import type { Spawn } from '../gen/column/spawn';
 import type { LayerId } from '../gen/map/layers';
 import type { Segment } from '../metrics/crossSection';
-import { parseFromWorker, STATS_KINDS, type FromWorker, type ReadyMsg, type StatsArgs, type StatsKind, type StatsMsg, type ToWorker } from '../workers/protocol';
+import { parseFromWorker, SLICE_POINTS, SLICE_ROWS, SLICE_SAMPLES, STATS_KINDS, type FromWorker, type ReadyMsg, type StatsArgs, type StatsKind, type StatsMsg, type ToWorker } from '../workers/protocol';
 
 export interface WorkerLike {
   postMessage(msg: ToWorker, transfer?: Transferable[]): void;
@@ -100,9 +101,13 @@ export interface WorkerPool {
    */
   stats<K extends StatsKind>(kind: K, n: number, args: StatsArgs<K>, priority?: number): Promise<Float64Array<ArrayBuffer>>;
   /**
-   * The slice under `segment` (SP3a spec §5.1): one job on one worker, never split, at `priority` (default 500, the
-   * stats priority). A configure rejects it with JobCancelled, and so does an ABORTED reply; a line with an end
-   * outside the half-open world window or of zero length rejects with the worker's BAD_ARGS.
+   * The slice under `segment` (SP3a spec §5.1), split as `stats` splits (SP3b spec §6): `size` jobs, one per
+   * contiguous range [from, to) of the 512 samples, at `priority` (default 500, the stats priority). Each part holds
+   * its range only, at `(319 − y)·(to − from) + (i − from)`, and is merged row by row into `(319 − y)·512 + i`; the
+   * result is byte-identical to a single job over the whole line. The first part that fails rejects the request with
+   * its error and drops its queued parts: a configure (or a reply of a superseded epoch, or ABORTED) rejects it with
+   * JobCancelled, and a line with an end outside the half-open world window or of zero length with the worker's
+   * BAD_ARGS.
    */
   slice(segment: Segment, priority?: number): Promise<SliceResult>;
   /** Recomputes one golden in a worker (no configure needed). */
@@ -121,7 +126,7 @@ interface Job {
   readonly priority: number;
   readonly msg: ToWorker;
   readonly tile: TileRequest | null;
-  /** The stats request the job is a slice of (0: none). */
+  /** The stats or slice request the job is a part of (0: none). */
   readonly group: number;
   readonly resolve: (v: FromWorker) => void;
   readonly reject: (e: Error) => void;
@@ -215,7 +220,7 @@ export function createWorkerPool(size: number, spawn: () => WorkerLike, opts: Po
     };
   });
 
-  /** Removes the queued slices of a stats request whose first slice failed (their promises are ignored). */
+  /** Removes the queued parts of a stats or slice request whose first part failed (their promises are ignored). */
   const dropGroup = (group: number) => {
     const dropped = queue.filter((j) => j.group === group);
     if (dropped.length === 0) return;
@@ -297,9 +302,33 @@ export function createWorkerPool(size: number, spawn: () => WorkerLike, opts: Po
     async slice(segment, priority = 500) {
       const e = epoch;
       const { ax, az, bx, bz } = segment;
-      const r = await enqueue(priority, (jobId) => ({ type: 'slice', jobId, epoch: e, ax, az, bx, bz }), null);
-      if (r.type !== 'sliceResult') throw new Error(`unexpected reply ${r.type}`);
-      return { blocks: new Uint16Array(r.blocks), fluid: new Uint8Array(r.fluid) };
+      const group = nextGroup++;
+      const ranges: Array<readonly [number, number]> = [];
+      const parts: Array<Promise<FromWorker>> = [];
+      for (let k = 0; k < size; k++) {
+        const from = Math.floor((k * SLICE_POINTS) / size);
+        const to = Math.floor(((k + 1) * SLICE_POINTS) / size);
+        if (from === to) continue;
+        ranges.push([from, to]);
+        parts.push(enqueue(priority, (jobId) => ({ type: 'slice', jobId, epoch: e, ax, az, bx, bz, from, to }), null, group));
+      }
+      const replies = await Promise.all(parts);
+      const blocks = new Uint16Array(SLICE_SAMPLES);
+      const fluid = new Uint8Array(SLICE_SAMPLES);
+      replies.forEach((r, k) => {
+        if (r.type !== 'sliceResult') throw new Error(`unexpected reply ${r.type}`);
+        const [from, to] = ranges[k]!;
+        if (r.from !== from || r.to !== to) throw new Error(`slice part: samples [${r.from}, ${r.to}), expected [${from}, ${to})`);
+        const w = to - from;
+        const b = new Uint16Array(r.blocks);
+        const f = new Uint8Array(r.fluid);
+        // Part row (319 − y) goes to the same row of the full slice, at column `from`.
+        for (let row = 0; row < SLICE_ROWS; row++) {
+          blocks.set(b.subarray(row * w, row * w + w), row * SLICE_POINTS + from);
+          fluid.set(f.subarray(row * w, row * w + w), row * SLICE_POINTS + from);
+        }
+      });
+      return { blocks, fluid };
     },
     async selftest(key) {
       const r = await enqueue(0, (jobId) => ({ type: 'selftest', jobId, key }), null);

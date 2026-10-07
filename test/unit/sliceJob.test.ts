@@ -6,7 +6,7 @@ import { AIR, BEDROCK, STONE } from '../../src/world/blocks/index';
 import { fluidLevel, fluidType, FLUID_WATER } from '../../src/world/blocks/fluid';
 import { REC_EPOCH } from '../../src/world/store/columnTable';
 import { createStore, type VoxelStore } from '../../src/world/store/store';
-import { SLICE_POINTS, SLICE_ROWS, SLICE_SAMPLES, sliceIndex } from '../../src/workers/protocol';
+import { SLICE_POINTS, SLICE_ROWS, SLICE_SAMPLES, sliceIndex, slicePartIndex, sliceRangeProblem } from '../../src/workers/protocol';
 import { createSliceJob, SLICE_LRU_COLUMNS, SLICE_MAX_BLOCK_BYTES, SLICE_MAX_BYTE_BYTES, type SliceData } from '../../src/workers/sliceJob';
 import { ctxFor } from '../harness/gen';
 import { regionView } from '../harness/region';
@@ -32,9 +32,9 @@ const runOk = (job: ReturnType<typeof createSliceJob>, s: Segment, epoch = 0): S
 const sameBytes = (a: ArrayBufferView, b: ArrayBufferView) =>
   Buffer.from(a.buffer, a.byteOffset, a.byteLength).equals(Buffer.from(b.buffer, b.byteOffset, b.byteLength));
 /** The columns a segment's samples fall in, in sample order, each once. */
-const columnsOf = (s: Segment): Array<[number, number]> => {
+const columnsOf = (s: Segment, from = 0, to = SLICE_POINTS): Array<[number, number]> => {
   const out: Array<[number, number]> = [];
-  for (let i = 0; i < SLICE_POINTS; i++) {
+  for (let i = from; i < to; i++) {
     const [x, z] = segmentPointAt(s, i);
     const c: [number, number] = [Math.floor(x) >> 4, Math.floor(z) >> 4];
     const last = out[out.length - 1];
@@ -50,6 +50,17 @@ describe('slice layout (SP3a spec §5.1)', () => {
   test('512 samples along the line × 384 rows; row 0 is y 319, index (319 − y)·512 + i', () => {
     expect([SLICE_POINTS, SLICE_ROWS, SLICE_SAMPLES, CROSS_SECTION_POINTS]).toEqual([512, 384, 196608, 512]);
     expect([sliceIndex(0, 319), sliceIndex(511, 319), sliceIndex(0, 318), sliceIndex(7, -64), sliceIndex(511, -64)]).toEqual([0, 511, 512, 383 * 512 + 7, SLICE_SAMPLES - 1]);
+  });
+  test('a part [from, to) holds sample (i, y) at (319 − y)·(to − from) + (i − from) (SP3b spec §6)', () => {
+    expect([slicePartIndex(0, 319, 0, 512), slicePartIndex(511, -64, 0, 512), slicePartIndex(7, -64, 0, 512)]).toEqual([0, SLICE_SAMPLES - 1, sliceIndex(7, -64)]);
+    expect([slicePartIndex(170, 319, 170, 341), slicePartIndex(340, 319, 170, 341), slicePartIndex(170, 318, 170, 341), slicePartIndex(340, -64, 170, 341)]).toEqual([0, 170, 171, 384 * 171 - 1]);
+    expect([slicePartIndex(511, 319, 511, 512), slicePartIndex(511, 0, 511, 512), slicePartIndex(511, -64, 511, 512)]).toEqual([0, 319, 383]);
+  });
+  test('a range is integers with 0 ≤ from < to ≤ 512 (SP3b spec §6)', () => {
+    for (const [from, to] of [[0, 512], [0, 1], [511, 512], [170, 341]]) expect(sliceRangeProblem(from!, to!)).toBeNull();
+    for (const [from, to] of [[-1, 10], [0, 513], [5, 5], [6, 5], [1.5, 10], [0, 10.5], [Number.NaN, 10], [0, Number.POSITIVE_INFINITY], [-0.5, 0.5]]) {
+      expect(sliceRangeProblem(from!, to!)).toBe(`points [${from}, ${to}) are not integers with 0 ≤ from < to ≤ 512`);
+    }
   });
   test('the slice store: 32 MiB of blocks, 16 MiB of bytes, an LRU of 64 columns', () => {
     expect([SLICE_MAX_BLOCK_BYTES, SLICE_MAX_BYTE_BYTES, SLICE_LRU_COLUMNS]).toEqual([32 * MiB, 16 * MiB, 64]);
@@ -116,6 +127,47 @@ describe('slice job: samples (SP3a spec §5.1)', () => {
     const job = createSliceJob();
     expect(() => job.run(ctx, 0, seg(524288, 0, 0, 0), NEVER)).toThrow(RangeError);
     expect(() => job.run(ctx, 0, seg(5, 5, 5, 5), NEVER)).toThrow(/same point/);
+  });
+});
+
+describe('slice job: a range of the samples (SP3b spec §6)', () => {
+  let full: SliceData | null = null;
+  const fullCoast = () => (full ??= runOk(createSliceJob(), COAST));
+  test.each<[number, number]>([[0, 512], [0, 170], [170, 341], [341, 512], [100, 101], [511, 512], [0, 1]])('[%i, %i): the part holds the full slice\'s samples i ∈ [from, to), row by row; only the range\'s columns are generated', (from, to) => {
+    const job = createSliceJob();
+    const r = job.run(ctx, 0, COAST, NEVER, from, to);
+    if (r === null) throw new Error('slice stopped');
+    const w = to - from;
+    expect([r.blocks.length, r.fluid.length, r.blocks.buffer.byteLength, r.fluid.buffer.byteLength]).toEqual([w * SLICE_ROWS, w * SLICE_ROWS, 2 * w * SLICE_ROWS, w * SLICE_ROWS]);
+    const f = fullCoast();
+    for (let y = -64; y <= 319; y++) {
+      const at = sliceIndex(from, y);
+      expect(sameBytes(r.blocks.subarray(slicePartIndex(from, y, from, to), slicePartIndex(from, y, from, to) + w), f.blocks.subarray(at, at + w)), `blocks y ${y}`).toBe(true);
+      expect(sameBytes(r.fluid.subarray(slicePartIndex(from, y, from, to), slicePartIndex(from, y, from, to) + w), f.fluid.subarray(at, at + w)), `fluid y ${y}`).toBe(true);
+    }
+    const cols = columnsOf(COAST, from, to);
+    expect([job.misses, job.resident()]).toEqual([cols.length, cols]);
+  });
+  test('two ranges that share a column both generate it', () => {
+    const cols = columnsOf(COAST);
+    // A split point inside a column: samples k − 1 and k fall in the same column.
+    let k = 1;
+    while (k < SLICE_POINTS && String(columnsOf(COAST, k - 1, k)) !== String(columnsOf(COAST, k, k + 1))) k++;
+    expect(k).toBeLessThan(SLICE_POINTS);
+    const left = createSliceJob();
+    const right = createSliceJob();
+    expect(left.run(ctx, 0, COAST, NEVER, 0, k)).not.toBeNull();
+    expect(right.run(ctx, 0, COAST, NEVER, k, SLICE_POINTS)).not.toBeNull();
+    expect(left.resident().at(-1)).toEqual(right.resident()[0]);
+    expect([...left.resident(), ...right.resident().slice(1)]).toEqual(cols);
+    expect(left.misses + right.misses).toBe(cols.length + 1);
+  });
+  test('a bad range throws RangeError (the handler answers BAD_ARGS first)', () => {
+    const job = createSliceJob();
+    for (const [from, to] of [[-1, 10], [0, 513], [7, 7], [1.5, 10]]) {
+      expect(() => job.run(ctx, 0, COAST, NEVER, from!, to!)).toThrow(new RangeError(`slice: points [${from}, ${to}) are not integers with 0 ≤ from < to ≤ 512`));
+    }
+    expect(job.store).toBeNull();
   });
 });
 

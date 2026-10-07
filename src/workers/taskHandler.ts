@@ -4,9 +4,9 @@
  * Tile, spawn, stats and slice jobs stop as soon as the pool's abort cell leaves their epoch and reply ABORTED
  * (SP2b spec §2.2); point and selftest jobs always run to the end. Stats jobs (§5.4) run the metrics
  * functions over a range of their kind's fixed point stream, or of the points along a crossSection's line
- * (§4.5), and reply with the raw sums. Slice jobs (SP3a spec §5.1) read the voxels under a line from the
- * handler's slice job (`sliceJob.ts`: a worker-local store and LRU kept for the handler's lifetime, emptied by every
- * configure) and stop like stats jobs.
+ * (§4.5), and reply with the raw sums. Slice jobs (SP3a spec §5.1) read the voxels of a range of the samples under
+ * a line (SP3b spec §6) from the handler's slice job (`sliceJob.ts`: a worker-local store and LRU kept for the
+ * handler's lifetime, emptied by every configure) and stop like stats jobs.
  */
 import { hex64 } from '../core/hash';
 import { checkParams } from '../core/params/kit';
@@ -22,7 +22,7 @@ import { CROSS_SECTION_POINTS, crossSectionInto, crossSectionLength, segmentProb
 import type { Points } from '../metrics/noiseStats';
 import { computeAnyGolden } from '../metrics/sp2aGoldens';
 import { splineStatPoints, splineStatsInto, splineStatsLength, splineStatsNode } from '../metrics/splineStats';
-import { parseToWorker, type ErrorCode, type FromWorker, type StatsMsg } from './protocol';
+import { parseToWorker, sliceRangeProblem, type ErrorCode, type FromWorker, type StatsMsg } from './protocol';
 import { createSliceJob, type SliceJob } from './sliceJob';
 
 const HEX = hex64;
@@ -48,6 +48,7 @@ const SECTION_POINTS = CROSS_SECTION_POINTS;
 const SECTION_INTO = crossSectionInto;
 const SECTION_LEN = crossSectionLength;
 const SEGMENT_PROBLEM = segmentProblem;
+const RANGE_PROBLEM = sliceRangeProblem;
 const CREATE_SLICE_JOB = createSliceJob;
 
 export interface Reply {
@@ -167,11 +168,12 @@ export function createTaskHandler(slices: SliceJob = CREATE_SLICE_JOB()): TaskHa
         }
         if (m.type === 'slice') {
           const segment = { ax: m.ax, az: m.az, bx: m.bx, bz: m.bz };
-          const problem = SEGMENT_PROBLEM(segment);
+          const problem = SEGMENT_PROBLEM(segment) ?? RANGE_PROBLEM(m.from, m.to);
           if (problem !== null) return err(m.jobId, m.epoch, 'BAD_ARGS', problem);
-          const r = slices.run(ctx, m.epoch, segment, stopFor(m.epoch));
+          const r = slices.run(ctx, m.epoch, segment, stopFor(m.epoch), m.from, m.to);
           if (r === null) return aborted();
-          return { msg: { type: 'sliceResult', jobId: m.jobId, epoch, blocks: r.blocks.buffer, fluid: r.fluid.buffer }, transfer: [r.blocks.buffer, r.fluid.buffer] };
+          const msg: FromWorker = { type: 'sliceResult', jobId: m.jobId, epoch, from: m.from, to: m.to, blocks: r.blocks.buffer, fluid: r.fluid.buffer };
+          return { msg, transfer: [r.blocks.buffer, r.fluid.buffer] };
         }
         return { msg: { type: 'pointResult', jobId: m.jobId, epoch, fields: POINT(ctx, m.x, m.z) }, transfer: [] };
       } catch (e) {

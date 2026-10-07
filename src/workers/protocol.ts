@@ -5,7 +5,8 @@
  * Configure carries the pool's abort cell (SP2b spec §2.2), errors carry the epoch of the message they
  * answer (§2.3), biome tiles carry the biome id of every pixel (§5.3), and a stats job returns the raw
  * sums of one kind over a range of the kind's fixed point stream (§5.4) or, for crossSection, of the points
- * along its line (§4.5). A slice job (SP3a spec §5.1) returns the voxels of the vertical slice under a line.
+ * along its line (§4.5). A slice job (SP3a spec §5.1) returns the voxels of the vertical slice under a line, for a
+ * range [from, to) of its 512 samples (SP3b spec §6: the pool splits a slice across its workers).
  */
 import { MAP_LEVELS, MAP_TILE_PX, type MapLevel } from '../core/constants';
 import type { StageId } from '../core/ids';
@@ -42,10 +43,15 @@ export type StatsMsg = SplineStatsMsg | BiomeSharesMsg | CrossSectionMsg;
 export type StatsKind = StatsMsg['kind'];
 export type StatsArgs<K extends StatsKind> = Extract<StatsMsg, { readonly kind: K }>['args'];
 /**
- * The vertical slice under the line A = (ax, az) → B = (bx, bz) (SP3a spec §5.1): one job, never split. The ends are
- * only checked to be numbers here; an end outside the half-open world window or A = B is the handler's BAD_ARGS.
+ * Samples [from, to) of the vertical slice under the line A = (ax, az) → B = (bx, bz) (SP3a spec §5.1; the range: SP3b
+ * spec §6). The ends and the range are only checked to be numbers here; an end outside the half-open world window,
+ * A = B, or a range that is not integers with 0 ≤ from < to ≤ 512 is the handler's BAD_ARGS.
  */
-export interface SliceMsg { readonly type: 'slice'; readonly jobId: number; readonly epoch: number; readonly ax: number; readonly az: number; readonly bx: number; readonly bz: number }
+export interface SliceMsg {
+  readonly type: 'slice'; readonly jobId: number; readonly epoch: number;
+  readonly ax: number; readonly az: number; readonly bx: number; readonly bz: number;
+  readonly from: number; readonly to: number;
+}
 export type ToWorker = ConfigureMsg | MapTileMsg | PointMsg | SpawnMsg | StatsMsg | SliceMsg | SelftestMsg;
 
 export interface ReadyMsg { readonly type: 'ready'; readonly epoch: number; readonly stageHashes: Readonly<Partial<Record<StageId, string>>>; readonly genKey: string }
@@ -60,10 +66,13 @@ export interface SpawnResultMsg { readonly type: 'spawnResult'; readonly jobId: 
 /** `data` holds a Float64Array of the job's raw, unnormalised sums (transferred). */
 export interface StatsResultMsg { readonly type: 'statsResult'; readonly jobId: number; readonly epoch: number; readonly kind: StatsKind; readonly data: ArrayBuffer }
 /**
- * A slice's voxels (transferred): `blocks` holds SLICE_SAMPLES u16 block states and `fluid` SLICE_SAMPLES fluid
- * bytes, sample (i, y) at `sliceIndex(i, y)`.
+ * The voxels of samples [from, to) of a slice (transferred): `blocks` holds (to − from)·SLICE_ROWS u16 block states and
+ * `fluid` as many fluid bytes, sample (i, y) at `slicePartIndex(i, y, from, to)` (SP3b spec §6).
  */
-export interface SliceResultMsg { readonly type: 'sliceResult'; readonly jobId: number; readonly epoch: number; readonly blocks: ArrayBuffer; readonly fluid: ArrayBuffer }
+export interface SliceResultMsg {
+  readonly type: 'sliceResult'; readonly jobId: number; readonly epoch: number;
+  readonly from: number; readonly to: number; readonly blocks: ArrayBuffer; readonly fluid: ArrayBuffer;
+}
 /** One recomputed golden: the digest, or the error that stopped it. */
 export interface SelftestResultMsg { readonly type: 'selftestResult'; readonly jobId: number; readonly key: string; readonly actual: string | null; readonly error: string | null }
 export type FromWorker = ReadyMsg | TileMsg | PointResultMsg | SpawnResultMsg | StatsResultMsg | SliceResultMsg | SelftestResultMsg | ErrorMsg;
@@ -76,6 +85,16 @@ export const SLICE_ROWS = 384;
 export const SLICE_SAMPLES = SLICE_POINTS * SLICE_ROWS;
 /** Index of sample (i, y) in a slice: row 0 is y 319, the order the Voxels mode draws in. */
 export const sliceIndex = (i: number, y: number): number => (319 - y) * SLICE_POINTS + i;
+/**
+ * Index of sample (i, y), i ∈ [from, to), in a part of a slice (SP3b spec §6): the part holds samples [from, to) only,
+ * row 0 at y 319. With from 0 and to 512 it is `sliceIndex`.
+ */
+export const slicePartIndex = (i: number, y: number, from: number, to: number): number => (319 - y) * (to - from) + (i - from);
+/** Why [from, to) is not a range of a slice's samples (integers with 0 ≤ from < to ≤ 512), or null when it is. */
+export const sliceRangeProblem = (from: number, to: number): string | null =>
+  Number.isInteger(from) && Number.isInteger(to) && from >= 0 && from < to && to <= SLICE_POINTS
+    ? null
+    : `points [${from}, ${to}) are not integers with 0 ≤ from < to ≤ ${SLICE_POINTS}`;
 
 const isObj = (v: unknown): v is Record<string, unknown> => typeof v === 'object' && v !== null && !Array.isArray(v);
 const isInt = (v: unknown): v is number => typeof v === 'number' && Number.isInteger(v);
@@ -88,6 +107,7 @@ const isAbortCell = (v: unknown): boolean => v === null || (typeof SharedArrayBu
 export const STATS_KINDS: Readonly<Record<StatsKind, 'split' | 'single'>> = Object.freeze({ splineStats: 'split', biomeShares: 'split', crossSection: 'single' });
 const isStatsKind = (v: unknown): v is StatsKind => typeof v === 'string' && Object.hasOwn(STATS_KINDS, v);
 const SEGMENT_KEYS = ['ax', 'az', 'bx', 'bz'] as const;
+const SLICE_KEYS = [...SEGMENT_KEYS, 'from', 'to'] as const;
 /**
  * The shape of a stats job: a point range 0 ≤ from ≤ to and args with a positive integer len; splineStats
  * args also name a leaf (a string) and a node (an array of integers), crossSection args the ends of the line
@@ -140,7 +160,7 @@ export function parseToWorker(m: unknown): ToWorker | null {
     case 'stats':
       return statsOk(m) ? (m as unknown as StatsMsg) : null;
     case 'slice':
-      return isInt(m['jobId']) && isInt(m['epoch']) && SEGMENT_KEYS.every((k) => typeof m[k] === 'number') ? (m as unknown as SliceMsg) : null;
+      return isInt(m['jobId']) && isInt(m['epoch']) && SLICE_KEYS.every((k) => typeof m[k] === 'number') ? (m as unknown as SliceMsg) : null;
     case 'selftest':
       return isInt(m['jobId']) && typeof m['key'] === 'string' ? (m as unknown as SelftestMsg) : null;
     default:
@@ -169,7 +189,11 @@ export function parseFromWorker(m: unknown): FromWorker | null {
     case 'sliceResult': {
       const blocks = m['blocks'];
       const fluid = m['fluid'];
-      const ok = blocks instanceof ArrayBuffer && blocks.byteLength === 2 * SLICE_SAMPLES && fluid instanceof ArrayBuffer && fluid.byteLength === SLICE_SAMPLES;
+      const from = m['from'];
+      const to = m['to'];
+      if (typeof from !== 'number' || typeof to !== 'number' || sliceRangeProblem(from, to) !== null) return null;
+      const n = (to - from) * SLICE_ROWS;
+      const ok = blocks instanceof ArrayBuffer && blocks.byteLength === 2 * n && fluid instanceof ArrayBuffer && fluid.byteLength === n;
       return isInt(m['jobId']) && isInt(m['epoch']) && ok ? (m as unknown as SliceResultMsg) : null;
     }
     case 'error': return (m['jobId'] === null || isInt(m['jobId'])) && (m['epoch'] === null || isInt(m['epoch'])) && typeof m['code'] === 'string' && typeof m['message'] === 'string' ? (m as unknown as ErrorMsg) : null;

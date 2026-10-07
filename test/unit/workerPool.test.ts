@@ -438,29 +438,54 @@ describe('worker pool: probe (SP2b spec §2.8)', () => {
   });
 });
 
-describe('worker pool: slice jobs (SP3a spec §5.1)', () => {
+describe('worker pool: slice jobs (SP3a spec §5.1, split across workers: SP3b spec §6)', () => {
   const COAST = { ax: -2030.5, az: -2007.25, bx: -1950.75, bz: -1990.5 };
-  const slicesOf = (log: readonly ToWorker[]) => log.flatMap((m) => (m.type === 'slice' ? [[m.jobId, m.epoch, m.ax, m.az, m.bx, m.bz]] : []));
+  /** About 170 columns: most samples in a column of their own, some columns shared by neighbouring samples. */
+  const LONG = { ax: -3000.5, az: -2100.25, bx: -1000.75, bz: -1500.5 };
+  const slicesOf = (log: readonly ToWorker[]) => log.flatMap((m) => (m.type === 'slice' ? [[m.jobId, m.epoch, m.ax, m.az, m.bx, m.bz, m.from, m.to]] : []));
+  const rangesOf = (log: readonly ToWorker[]) => log.flatMap((m) => (m.type === 'slice' ? [[m.from, m.to]] : []));
+  const same = (a: ArrayBufferView, b: ArrayBufferView) => Buffer.from(a.buffer, a.byteOffset, a.byteLength).equals(Buffer.from(b.buffer, b.byteOffset, b.byteLength));
+  const single = (s: typeof COAST) => createSliceJob().run(ctxFor('42'), 0, s, () => false)!;
 
-  test('a slice is one job on one worker at the stats priority (500: after preview tiles, before fine tiles); it resolves with the job\'s blocks and fluid', async () => {
+  test('a slice is split into pool.size contiguous ranges of the 512 samples, as stats splits, at the stats priority (500: after preview tiles, before fine tiles)', async () => {
     const log: ToWorker[] = [];
-    const pool = createWorkerPool(1, () => fakeWorker(log));
+    const pool = createWorkerPool(2, () => fakeWorker(log));
     const ready = pool.configure('42', DEFAULTS);
     const fine = pool.tile(tile(1), 1000);
     const got = pool.slice(COAST);
     const preview = pool.tile(tile(0), 3);
     await ready;
     const [, r] = await Promise.all([fine, got, preview]);
-    expect(log.flatMap((m) => (m.type === 'mapTile' ? [`tile ${m.tx}`] : m.type === 'slice' ? ['slice'] : []))).toEqual(['tile 0', 'slice', 'tile 1']);
-    expect(slicesOf(log).map((s) => s.slice(1))).toEqual([[0, COAST.ax, COAST.az, COAST.bx, COAST.bz]]);
-    const want = createSliceJob().run(ctxFor('42'), 0, COAST, () => false)!;
+    expect(log.flatMap((m) => (m.type === 'mapTile' ? [`tile ${m.tx}`] : m.type === 'slice' ? [`slice ${m.from}-${m.to}`] : []))).toEqual(['tile 0', 'slice 0-256', 'slice 256-512', 'tile 1']);
+    expect(slicesOf(log).map((s) => s.slice(1))).toEqual([[0, COAST.ax, COAST.az, COAST.bx, COAST.bz, 0, 256], [0, COAST.ax, COAST.az, COAST.bx, COAST.bz, 256, 512]]);
     expect(r.blocks).toBeInstanceOf(Uint16Array);
     expect(r.fluid).toBeInstanceOf(Uint8Array);
     expect([r.blocks.length, r.fluid.length]).toEqual([SLICE_SAMPLES, SLICE_SAMPLES]);
-    expect(Buffer.from(r.blocks.buffer).equals(Buffer.from(want.blocks.buffer))).toBe(true);
-    expect(Buffer.from(r.fluid.buffer).equals(Buffer.from(want.fluid.buffer))).toBe(true);
+    for (const [size, ranges] of [
+      [1, [[0, 512]]],
+      [3, [[0, 170], [170, 341], [341, 512]]],
+      [6, [[0, 85], [85, 170], [170, 256], [256, 341], [341, 426], [426, 512]]],
+    ] as const) {
+      const sized: ToWorker[] = [];
+      const p = createWorkerPool(size, () => fakeWorker(sized));
+      await p.configure('42', DEFAULTS);
+      await p.slice(COAST);
+      expect(rangesOf(sized), `size ${size}`).toEqual(ranges);
+      p.terminate();
+    }
   });
-  test('a priority can be given; probe shows the job as a slice of level null', async () => {
+  test.each([[1], [2], [3], [6]])('pool.size %i: the merged slice is byte-identical to the single-worker slice', async (size) => {
+    const pool = createWorkerPool(size, () => fakeWorker([]));
+    await pool.configure('42', DEFAULTS);
+    for (const s of [COAST, LONG, { ax: LONG.bx, az: LONG.bz, bx: LONG.ax, bz: LONG.az }]) {
+      const want = single(s);
+      const r = await pool.slice(s);
+      expect(same(r.blocks, want.blocks), `blocks ${JSON.stringify(s)}`).toBe(true);
+      expect(same(r.fluid, want.fluid), `fluid ${JSON.stringify(s)}`).toBe(true);
+    }
+    pool.terminate();
+  }, 60_000);
+  test('a priority can be given; probe shows each part as a slice of level null', async () => {
     const log: ToWorker[] = [];
     const pool = createWorkerPool(1, () => fakeWorker(log));
     const ready = pool.configure('42', DEFAULTS);
@@ -468,40 +493,99 @@ describe('worker pool: slice jobs (SP3a spec §5.1)', () => {
     await ready;
     await Promise.all(jobs);
     expect(log.flatMap((m) => (m.type === 'mapTile' ? [`tile ${m.tx}`] : m.type === 'slice' ? ['slice'] : []))).toEqual(['tile 0', 'tile 1', 'slice']);
-    const idle = createWorkerPool(1, () => silentWorker());
+    const idle = createWorkerPool(2, () => silentWorker());
     void settle(idle.slice(COAST));
-    expect(idle.probe().jobs).toEqual([{ worker: 0, type: 'slice', epoch: -1, level: null }]);
+    expect(idle.probe().jobs).toEqual([{ worker: 0, type: 'slice', epoch: -1, level: null }, { worker: 1, type: 'slice', epoch: -1, level: null }]);
     idle.terminate();
   });
   test('a bad line rejects with the worker\'s BAD_ARGS', async () => {
-    const pool = createWorkerPool(1, () => fakeWorker([]));
+    const pool = createWorkerPool(2, () => fakeWorker([]));
     await pool.configure('42', DEFAULTS);
     await expect(pool.slice({ ax: 3, az: 3, bx: 3, bz: 3 })).rejects.toThrow(/^BAD_ARGS: A and B are the same point/);
     await expect(pool.slice({ ax: 0, az: 0, bx: 524288, bz: 0 })).rejects.toThrow(/^BAD_ARGS: B \(524288, 0\) is outside/);
   });
-  test('a configure rejects a queued slice with JobCancelled', async () => {
-    const pool = createWorkerPool(1, () => fakeWorker([]));
+  test('the first failing part rejects the request with its error and drops its queued siblings; nothing is retried', async () => {
+    const log: ToWorker[] = [];
+    let n = 0;
+    const gate = heldWorker(log, (m) => m.type === 'mapTile');
+    const pool = createWorkerPool(2, () => (n++ === 0 ? gate : fakeWorker(log)));
+    await pool.configure('42', DEFAULTS);
+    const held = pool.tile(tile(0), 0);
+    // Worker 1 is busy with the held tile: part 0 runs on worker 2, part 1 waits in the queue.
+    const req = settle(pool.slice({ ax: 3, az: 3, bx: 3, bz: 3 }));
+    expect(pool.queued).toBe(1);
+    const r = await req;
+    expect(r).toBeInstanceOf(Error);
+    expect((r as Error).message).toMatch(/^BAD_ARGS: A and B are the same point/);
+    expect([pool.queued, rangesOf(log)]).toEqual([0, [[0, 256]]]);
+    gate.flush();
+    expect((await held).rgba.byteLength).toBe(262144);
+    expect(rangesOf(log)).toEqual([[0, 256]]);
+    // The pool still slices.
+    expect((await pool.slice(COAST)).blocks.length).toBe(SLICE_SAMPLES);
+  });
+  test('a part reply for another range than its request rejects the request', async () => {
+    const pool = createWorkerPool(2, () => {
+      const inner = fakeWorker([]);
+      const w: WorkerLike = {
+        onmessage: null,
+        postMessage(msg) {
+          inner.onmessage = (e) => {
+            const d = e.data as { type: string; from?: number; to?: number };
+            // Swap the two halves' ranges in the replies (the lengths still fit the range they name).
+            if (d.type === 'sliceResult' && d.from === 256) { w.onmessage?.({ data: { ...d, from: 0, to: 256 } }); return; }
+            w.onmessage?.(e);
+          };
+          inner.postMessage(msg);
+        },
+        terminate() {},
+      };
+      return w;
+    });
+    await pool.configure('42', DEFAULTS);
+    await expect(pool.slice(COAST)).rejects.toThrow(/^slice part: samples \[0, 256\), expected \[256, 512\)$/);
+  });
+  test('a configure rejects every queued part with JobCancelled', async () => {
+    const log: ToWorker[] = [];
+    const pool = createWorkerPool(2, () => fakeWorker(log));
     const first = pool.configure('42', DEFAULTS);
     const req = settle(pool.slice(COAST));
+    expect(pool.queued).toBe(2);
     const second = pool.configure('7', DEFAULTS);
     expect(await settle(first)).toBeInstanceOf(JobCancelled);
     expect(await req).toBeInstanceOf(JobCancelled);
     expect((await second).epoch).toBe(1);
+    expect(rangesOf(log)).toEqual([]);
   });
-  test('an in-flight slice of a superseded epoch is aborted by the worker (ABORTED) and rejects as JobCancelled; the next slice runs', async () => {
+  test('in-flight parts of a superseded epoch are aborted by the workers (ABORTED) and reject as JobCancelled; the next slice runs', async () => {
     const cell = new Int32Array(new SharedArrayBuffer(4));
     const log: ToWorker[] = [];
     const replies: unknown[] = [];
-    const held = heldWorker(log, (m) => m.type === 'slice', replies);
-    const pool = createWorkerPool(1, () => held, { abortCell: cell });
+    const held = [heldWorker(log, (m) => m.type === 'slice', replies), heldWorker(log, (m) => m.type === 'slice', replies)];
+    let n = 0;
+    const pool = createWorkerPool(2, () => held[n++]!, { abortCell: cell });
     await pool.configure('42', DEFAULTS);
     const req = settle(pool.slice(COAST));
+    expect(pool.probe().busy).toBe(2);
     const next = pool.configure('42', DEFAULTS);
-    held.flush();
+    for (const w of held) w.flush();
     expect(await req).toBeInstanceOf(JobCancelled);
-    expect(replies).toContainEqual(expect.objectContaining({ type: 'error', epoch: 0, code: 'ABORTED' }));
+    expect(replies.filter((r) => (r as { code?: string }).code === 'ABORTED')).toEqual([expect.objectContaining({ type: 'error', epoch: 0 }), expect.objectContaining({ type: 'error', epoch: 0 })]);
     expect((await next).epoch).toBe(1);
-    held.holding = false;
-    expect((await pool.slice(COAST)).blocks.length).toBe(SLICE_SAMPLES);
+    for (const w of held) w.holding = false;
+    const again = await pool.slice(COAST);
+    expect(same(again.blocks, single(COAST).blocks)).toBe(true);
+  });
+  test('a part answered after a configure without an abort cell (a stale epoch) rejects the request as JobCancelled', async () => {
+    const log: ToWorker[] = [];
+    const held = [heldWorker(log, (m) => m.type === 'slice'), heldWorker(log, (m) => m.type === 'slice')];
+    let n = 0;
+    const pool = createWorkerPool(2, () => held[n++]!);
+    await pool.configure('42', DEFAULTS);
+    const req = settle(pool.slice(COAST));
+    const next = pool.configure('7', DEFAULTS);
+    for (const w of held) w.flush();
+    expect(await req).toBeInstanceOf(JobCancelled);
+    expect((await next).epoch).toBe(1);
   });
 });
