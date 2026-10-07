@@ -7,7 +7,7 @@ test('20 unique SP2a keys: 2 point profiles, 1 sample, 16 tiles, 1 spawn', () =>
   expect(keys.length).toBe(20);
   expect(new Set(keys).size).toBe(20);
   expect(keys.filter((k) => k.startsWith('sp2a.tile.')).length).toBe(16);
-  expect(allGoldenKeys().length).toBe(50); // 27 SP1 + 20 SP2a + 3 SP3a (SP3a spec §6.4)
+  expect(allGoldenKeys().length).toBe(52); // 27 SP1 + 20 SP2a + 3 SP3a (SP3a spec §6.4) + 2 SP3b (SP3b spec §9)
   expect(() => computeSp2aGolden('sp2a.tile.biome.32')).toThrow(/unknown golden/);
   expect(() => computeSp2aGolden('sp2a.spawn.x')).toThrow(/unknown golden/);
   expect(computeAnyGolden('sp1.params')).toMatch(/^[0-9a-f]{16}$/);

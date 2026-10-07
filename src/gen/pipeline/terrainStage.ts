@@ -14,6 +14,7 @@
  * - Aux B: `surfaceBiomeQ[qz·4 + qx]` is the 2D biome of lattice point (qx, qz), qx, qz ∈ 0 … 3, before the zoom;
  *   `caveBiomeQ[(qy·4 + qz)·4 + qx]` stays 0 (none) until SP6.
  * The stage keeps one DensityContext per GenContext (module-level WeakMap). Follows the gen determinism rules.
+ * `terrainDensityDebug` is a test hook (§2.3, DT2): the same density phase, recording the bulk-evaluated values.
  */
 import { MIN_Y } from '../../core/constants';
 import { WATER_SOURCE } from '../../world/blocks/fluid';
@@ -62,6 +63,8 @@ function densityContextOf(ctx: GenContext): DensityContext {
   }
   return dc;
 }
+
+const NEVER = (): boolean => false;
 
 const clampY = (v: number): number => Math.min(TOP_Y, Math.max(Y0 - 1, v));
 
@@ -122,4 +125,19 @@ export function terrainStage(ctx: GenContext, cx: number, cz: number, w: ColumnW
     for (let qx = 0; qx < 4; qx++) q[qz * 4 + qx] = s.biome[LATTICE(qx, qz)]!;
   }
   return true;
+}
+
+/**
+ * Test hook (SP3b spec §2.3, DT2 `probeBulk`): runs column (cx, cz)'s density phase exactly as `terrainStage` does
+ * (its ColumnSample, then `fillDensityColumn` on the stage's DensityContext of `ctx`, never stopped) and writes no
+ * store. `mask` (98,304 entries, index `((y + 64)·16 + lz)·16 + lx`) is cleared, then set to 1 at every voxel the bulk
+ * evaluated with `voxelFn`, and `out` (same index) receives those voxels' values; the early-out voxels keep mask 0 and
+ * their `out` entries are left untouched. Throws a RangeError when either array is not 98,304 long.
+ */
+export function terrainDensityDebug(ctx: GenContext, cx: number, cz: number, out: Float64Array, mask: Uint8Array): void {
+  if (out.length !== SOLID.length || mask.length !== SOLID.length) {
+    throw new RangeError(`terrainDensityDebug: out has ${out.length} and mask ${mask.length} entries, expected ${SOLID.length}`);
+  }
+  const dc = densityContextOf(ctx);
+  FILL(dc.bounds, BUILD(ctx, cx, cz, SAMPLE), SOLID, out, mask, NEVER);
 }

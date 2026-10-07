@@ -1,5 +1,5 @@
 {
-  "sha256": "b78d7a082ab396925346c6700bf7152eb24baed96d19dc82df9c405b28bb14f4",
+  "sha256": "6c0f299b4a0cbd10724f64bf9be3c4f07dfee8af547c15d24aab2b7945f9df98",
   "canonical": {
     "startedSps": [
       "SP0",
@@ -93,6 +93,16 @@
       "DT1": {
         "mismatches": {
           "activeFrom": "SP3a",
+          "max": 0
+        }
+      },
+      "DT2": {
+        "compiledReference": {
+          "activeFrom": "SP3b",
+          "max": 0
+        },
+        "probeBulk": {
+          "activeFrom": "SP3b",
           "max": 0
         }
       },

@@ -34,6 +34,7 @@ export const THRESHOLDS: ThresholdTable = {
   B5: { perKm2Min: { min: 0.2, activeFrom: 'SP2a' }, perKm2Max: { max: 2, activeFrom: 'SP2a' }, highShare: { min: 0.3, activeFrom: 'SP2a' } },
   U2: { value: { min: 1, activeFrom: 'SP2b' } },
   DT1: { mismatches: { max: 0, activeFrom: 'SP3a' } },
+  DT2: { probeBulk: { max: 0, activeFrom: 'SP3b' }, compiledReference: { max: 0, activeFrom: 'SP3b' } },
   M1: { states: { max: 4096, activeFrom: 'SP3a' }, roundTripFailures: { max: 0, activeFrom: 'SP3a' }, lockChanges: { max: 0, activeFrom: 'SP3a' } },
   U4: {
     registryIssues: { max: 0, activeFrom: 'SP1' },

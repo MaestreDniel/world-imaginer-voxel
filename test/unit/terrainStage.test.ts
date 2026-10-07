@@ -6,7 +6,7 @@ import {
 import type { GenContext } from '../../src/gen/context';
 import { createDensityContext, type DensityContext } from '../../src/gen/density/context';
 import { probe } from '../../src/gen/density/probe';
-import { terrainStage } from '../../src/gen/pipeline/terrainStage';
+import { terrainDensityDebug, terrainStage } from '../../src/gen/pipeline/terrainStage';
 import { fluidType, WATER_SOURCE } from '../../src/world/blocks/fluid';
 import { AIR, BEDROCK, COLLIDE, STONE } from '../../src/world/blocks/index';
 import type { AuxBView, AuxView, ColumnView, ColumnWriter } from '../../src/world/store/api';
@@ -382,5 +382,51 @@ describe('order and abort (§4)', () => {
     expect(differs).toBeGreaterThan(0);
     expect(Array.from(a.aux()!.worldSurfaceWG)).toEqual(Array.from(b.aux()!.worldSurfaceWG));
     expect(Array.from(a.auxB()!.surfaceBiomeQ)).toEqual(Array.from(b.auxB()!.surfaceBiomeQ));
+  });
+});
+
+describe('terrainDensityDebug (§2.3, the DT2 hook)', () => {
+  test.each(FIXTURES)('%s: mask 1 exactly at the bulk-evaluated voxels, whose values are the probe\'s (Object.is); whole cells; the rest untouched', (_name, [cx, cz]) => {
+    const out = new Float64Array(98304).fill(12345);
+    const mask = new Uint8Array(98304).fill(7);
+    terrainDensityDebug(ctx, cx, cz, out, mask);
+    const dc = dcOf(ctx);
+    const e = expectedFor(ctx, [cx, cz]);
+    let set = 0;
+    const bad: string[] = [];
+    for (let y = -64; y <= 319; y++) {
+      for (let lz = 0; lz < 16; lz++) {
+        for (let lx = 0; lx < 16; lx++) {
+          const i = vi(lx, y, lz);
+          const at = `(${lx}, ${y}, ${lz})`;
+          if (mask[i] !== 0 && mask[i] !== 1) bad.push(`${at}: mask ${mask[i]}`);
+          // A cell is evaluated whole or not at all: each voxel's mask equals its cell's first voxel's.
+          if (mask[i] !== mask[vi(lx & ~3, y - ((y + 64) & 7), lz & ~3)]) bad.push(`${at}: mask differs inside its cell`);
+          if (mask[i] === 1) {
+            set++;
+            const v = probe(dc, 16 * cx + lx, y, 16 * cz + lz);
+            if (!Object.is(out[i], v)) bad.push(`${at}: bulk ${out[i]} ≠ probe ${v}`);
+            if (y > -64 && (v > 0 ? STONE : AIR) !== e.blocks[i]) bad.push(`${at}: block ${e.blocks[i]} vs value ${v}`);
+          } else if (out[i] !== 12345) {
+            bad.push(`${at}: out written at an early-out voxel`);
+          }
+        }
+      }
+    }
+    expect(bad.slice(0, 10)).toEqual([]);
+    // Some cells straddle 0 and most early-out (Task 5: about 4 % of the cells evaluate voxels).
+    expect(set).toBeGreaterThan(0);
+    expect(set).toBeLessThan(0.2 * 98304);
+    expect(set % 128).toBe(0);
+  });
+
+  test('it leaves the T stage unchanged: a column generated after it equals the expected column', () => {
+    terrainDensityDebug(ctx, ...OVERHANG, new Float64Array(98304), new Uint8Array(98304));
+    expect(mismatches(generate(ctx, ...COAST).view, expectedFor(ctx, COAST))).toBe(0);
+  });
+
+  test('out and mask must hold 98,304 entries', () => {
+    expect(() => terrainDensityDebug(ctx, ...LAND, new Float64Array(98303), new Uint8Array(98304))).toThrow(RangeError);
+    expect(() => terrainDensityDebug(ctx, ...LAND, new Float64Array(98304), new Uint8Array(4096))).toThrow(RangeError);
   });
 });

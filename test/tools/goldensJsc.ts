@@ -1,5 +1,5 @@
 /**
- * JavaScriptCore check of every golden, SP1, SP2a and SP3a (D20): run with `npx --yes bun@1 test/tools/goldensJsc.ts`
+ * JavaScriptCore check of every golden, SP1, SP2a, SP3a and SP3b (D20): run with `npx --yes bun@1 test/tools/goldensJsc.ts`
  * (Bun runs JavaScriptCore and resolves the repository's extensionless imports; no dependency is added).
  */
 import goldens from '../goldens.json';
