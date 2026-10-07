@@ -28,7 +28,8 @@
  * - console: no exception, console error or failed load, except the known favicon.ico 404.
  * With --shots DIR it then writes the spec §12 screenshots into DIR, at seed 42 from a newly loaded page (the
  * repository keeps them re-saved as 256-colour palette PNGs, as SP1 and SP2a did), and last the Voxels mode on the
- * mountain line (SP3b spec §7: `cross-section-voxels-mountain.png`; the line text and the slice summary are checked).
+ * mountain line (SP3b spec §7: `cross-section-voxels-mountain.png`; the line text is checked, and the slice summary
+ * must show a ground top above y 200 and no water).
  * Options: --skip-build, --profile-dir DIR, --shots DIR. The exit code is 0 only when every check passes.
  */
 import { spawn, type ChildProcess, type SpawnOptions } from 'node:child_process';
@@ -100,6 +101,15 @@ export function voxelReadoutOk(text: string): boolean {
 /** The Voxels mode's summary of a non-empty slice: `ground top y LO to HI · …water…`. */
 export function voxelSummaryOk(text: string): boolean {
   return /^ground top y -?\d+ to -?\d+ · (?:no water|water on \d+\.\d % of the line, up to \d+ deep)$/.test(text);
+}
+
+/**
+ * The Voxels mode's summary of the mountain line (SP3b spec §7, §11): the format of `voxelSummaryOk`, a ground top
+ * above y 200 (the review mountain's `topMax` > 200, as `reviewSlices.test` requires) and no water.
+ */
+export function mountainSummaryOk(text: string): boolean {
+  const m = /^ground top y (-?\d+) to (-?\d+) · no water$/.exec(text);
+  return m !== null && voxelSummaryOk(text) && Number(m[2]) > 200;
 }
 
 /** A cut line's ends, as the cross-section's line text writes them. */
@@ -879,7 +889,7 @@ async function runShots(p: Page, dir: string): Promise<string[]> {
   await p.click('.cs-mode[data-mode="voxels"]');
   await p.until(`document.querySelector('.cs').dataset.mode === 'voxels' && document.querySelector('.cs').dataset.state === 'fresh'`, 'a fresh voxel slice of the mountain line');
   const summary = await p.eval<string>(`document.querySelector('.cs-summary').textContent`);
-  if (!voxelSummaryOk(summary)) throw new Error(`the mountain slice: ${summary}`);
+  if (!mountainSummaryOk(summary)) throw new Error(`the mountain slice: ${summary} (expected a ground top above y 200 and no water)`);
   console.log(`  mountain line: ${text}; ${summary}`);
   const mvox = await p.center('.cs-voxels');
   await p.mouse('mouseMoved', mvox.box.x + mvox.box.width * 0.4, mvox.box.y + (mvox.box.height * (319 - 120)) / 384);

@@ -15,7 +15,7 @@ import { AIR, BEDROCK, STONE } from '../../src/world/blocks/index';
 import { SLICE_SAMPLES, sliceIndex } from '../../src/workers/protocol';
 import { REVIEW_SITES } from '../harness/reviewSlices';
 import {
-  canonicalJson, goldenCount, ignoredLog, mapHash, MOUNTAIN_LINE, parseArgs, parseSegment, presetProblems, readMapHash, sameJson, selftestAllMatch, SIZE_8, VIEWPORT,
+  canonicalJson, goldenCount, ignoredLog, mapHash, MOUNTAIN_LINE, mountainSummaryOk, parseArgs, parseSegment, presetProblems, readMapHash, sameJson, selftestAllMatch, SIZE_8, VIEWPORT,
   voxelReadoutOk, voxelSummaryOk, type MapUrlState,
 } from '../tools/uiSmoke';
 
@@ -124,6 +124,31 @@ describe('UI smoke test: pure parts (SP2b spec §8 Tools, §12)', () => {
     expect(view).toEqual({ x: (a[0] + b[0]) / 2, z: m.z, bpp: 2, layer: 'relief' });
     // ± 256 CSS px from the canvas centre: inside the map canvas of the 1400 px wide page.
     expect((b[0] - a[0]) / view.bpp).toBe(512);
+  });
+
+  test('the mountain slice\'s summary needs a ground top above y 200 and no water, not only the format (SP3b spec §7, §11)', () => {
+    // The recorded runs: "ground top y 140 to 257 · no water" and "ground top y 136 to 267 · no water".
+    expect(mountainSummaryOk('ground top y 140 to 257 · no water')).toBe(true);
+    expect(mountainSummaryOk('ground top y 136 to 267 · no water')).toBe(true);
+    expect(mountainSummaryOk('ground top y -3 to 201 · no water')).toBe(true);
+    // Well-formed, but flat (the highest top at or below 200) or wet.
+    expect(mountainSummaryOk('ground top y 62 to 200 · no water')).toBe(false);
+    expect(mountainSummaryOk('ground top y 62 to 90 · no water')).toBe(false);
+    expect(mountainSummaryOk('ground top y 140 to 257 · water on 3.1 % of the line, up to 4 deep')).toBe(false);
+    expect(mountainSummaryOk('no ground · no water')).toBe(false);
+    expect(mountainSummaryOk('')).toBe(false);
+    // A real summary of a flat, partly wet slice fails although its format passes.
+    const blocks = new Uint16Array(SLICE_SAMPLES);
+    const fluid = new Uint8Array(SLICE_SAMPLES);
+    for (let i = 0; i < 512; i++) {
+      for (let y = -64; y <= 70; y++) {
+        blocks[sliceIndex(i, y)] = y === -64 ? BEDROCK : y <= (i < 100 ? 40 : 70) ? STONE : AIR;
+        if (i < 100 && y > 40 && y <= 63) fluid[sliceIndex(i, y)] = WATER_SOURCE;
+      }
+    }
+    const flat = sliceSummary({ blocks, fluid });
+    expect(voxelSummaryOk(flat)).toBe(true);
+    expect(mountainSummaryOk(flat), flat).toBe(false);
   });
 
   test('arguments: build, the OS temp directory and no screenshots by default', () => {
