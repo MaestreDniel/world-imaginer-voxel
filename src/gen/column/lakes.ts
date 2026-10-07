@@ -2,6 +2,13 @@
  * Lakes at elevation (master §3.5, SP2a spec §2.5): warped Voronoi cells, one possible lake per cell.
  * cellEligible and lakeTerms are the pure formulas; lakeCell evaluates (and memoises) a cell centre with
  * a lake-free column evaluation; sampleLakes applies the F1 cell to a column.
+ *
+ * Allocation (SP2a minor 5, SP3b spec §4): sampleLakes, the column stage's per-point call, allocates no object; it
+ * goes through module scratch (`warpInto`, `nearestInto`) where the exported `lakeSpace` and `nearestCell` return a
+ * fresh tuple and record. A lakeCell miss allocates its memoised LakeCell (bounded by CELL_CACHE_MAX per context), so
+ * a warm cache costs nothing. What remains is V8's short-lived boxing of doubles returned by non-inlined calls (the
+ * noises, here and in climate, shape and rivers), which scavenges collect: measured on the T stage's hot path, about
+ * 1.5 MB of such garbage per column (≈ 190 scavenges per 1000 columns) and no retained growth (test/unit/terrainHeap).
  */
 import { hash2, hash4 } from '../../core/hash';
 import type { LakeParams } from '../../core/params/schema';
@@ -136,15 +143,33 @@ function noises(ctx: GenContext): LakeNoises {
   return n;
 }
 
-/** Warped lake-space position of world (x, z). */
-export function lakeSpace(ctx: GenContext, x: number, z: number): [number, number] {
+/** warpInto's output: the warped (xl, zl). */
+const WARPED = new Float64Array(2);
+/** nearestInto's output: the squared distance to the returned cell's centre. */
+const NEAREST_D2 = new Float64Array(1);
+
+/** Writes the warped lake-space position of world (x, z) into WARPED. */
+function warpInto(ctx: GenContext, x: number, z: number): void {
   const a = ctx.params.lakes.warpAmp;
   const n = noises(ctx);
-  return [x + a * n.wx.z2(x, z), z + a * n.wz.z2(x, z)];
+  WARPED[0] = x + a * n.wx.z2(x, z);
+  WARPED[1] = z + a * n.wz.z2(x, z);
+}
+
+/** Warped lake-space position of world (x, z). */
+export function lakeSpace(ctx: GenContext, x: number, z: number): [number, number] {
+  warpInto(ctx, x, z);
+  return [WARPED[0]!, WARPED[1]!];
 }
 
 /** The F1 (nearest-centre) cell of warped point (xl, zl); ties go to the lower (j, i). */
 export function nearestCell(ctx: GenContext, xl: number, zl: number): { cell: LakeCell; dist: number } {
+  const cell = nearestInto(ctx, xl, zl);
+  return { cell, dist: Math.sqrt(NEAREST_D2[0]!) };
+}
+
+/** nearestCell without the record: returns the cell and writes the squared distance into NEAREST_D2. */
+function nearestInto(ctx: GenContext, xl: number, zl: number): LakeCell {
   const cellSize = ctx.params.lakes.cell;
   const ci = Math.floor(xl / cellSize);
   const cj = Math.floor(zl / cellSize);
@@ -159,20 +184,22 @@ export function nearestCell(ctx: GenContext, xl: number, zl: number): { cell: La
       if (d2 < bestD2) { bestD2 = d2; best = cell; }
     }
   }
-  return { cell: best!, dist: Math.sqrt(bestD2) };
+  NEAREST_D2[0] = bestD2;
+  return best!;
 }
 
 /** Lakes at world (x, z) over a column already adjusted by rivers. */
 export function sampleLakes(ctx: GenContext, x: number, z: number, offset: number, sigma: number, jag: number, out: LakeOut): LakeOut {
   const p = ctx.params.lakes;
-  const [xl, zl] = lakeSpace(ctx, x, z);
-  const { cell, dist } = nearestCell(ctx, xl, zl);
+  warpInto(ctx, x, z);
+  const cell = nearestInto(ctx, WARPED[0]!, WARPED[1]!);
   if (!cell.enabled) {
     out.lakeMask = 0; out.lakeLevel = -Infinity; out.lakeFloor = -Infinity;
     out.offset = offset; out.sigma = sigma; out.jag = jag;
     return out;
   }
   const rim = noises(ctx).rim;
+  const dist = Math.sqrt(NEAREST_D2[0]!);
   const q = dist / p.radius - p.roughness * (rim.z2(x, z) / rim.clamp);
   return lakeTerms(q, cell.Lw, cell.depth, offset, sigma, jag, p, out);
 }

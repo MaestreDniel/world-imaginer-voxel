@@ -6,9 +6,13 @@ import { SCHEMA, type ParamsPatch } from '../../src/core/params/schema';
 import type { NestedSpline } from '../../src/core/spline/types';
 import { buildColumnSample, gorgeAt, newColumnSample, riverWetAt, type ColumnSample } from '../../src/gen/column/columnStage';
 import { cellEligible, lakeCell } from '../../src/gen/column/lakes';
+import { hex64 } from '../../src/core/hash';
 import {
-  cellProbe, findWitness, intendedClass, livenessColumns, perturbations, stageOutputHash, type LivenessClass, type LivenessColumn,
+  cellProbe, findWitness, intendedClass, leafLiveness, livenessColumns, perturbations, stageOutputHash, u2Leaves, type LivenessClass,
+  type LivenessColumn,
 } from '../../src/metrics/liveness';
+import { fillColumnT, regionHash } from '../../src/metrics/region';
+import { createStore } from '../../src/world/store/store';
 import { ctxFor } from '../harness/gen';
 
 const leaf = (path: string) => {
@@ -68,6 +72,26 @@ describe('perturbations', () => {
     expect(nested.points.map((p) => [p.x, p.d])).toEqual((offset.points[5]!.y as NestedSpline).points.map((p) => [p.x, p.d]));
     const [jagDown] = perturbations(leaf('shape.jag'), DEFAULTS.shape.jag) as NestedSpline[];
     expect(jagDown!.points[0]!.y).toBe(-16);
+  });
+
+  test('density leaves (SP3b spec §3.3): every perturbation stays inside the leaf range', () => {
+    const density = SCHEMA.leaves.filter((l) => l.path.startsWith('density.'));
+    expect(density.map((l) => l.path)).toEqual([
+      'density.noises.jag', 'density.noises.overhang', 'density.noises.detail', 'density.detailAmpLo', 'density.detailAmpHi',
+    ]);
+    for (const info of density) {
+      const lo = info.leaf.min!;
+      const hi = info.leaf.max!;
+      for (const v of perturbations(info, getPath(DEFAULTS, info.path))) {
+        const x = info.leaf.kind === 'noise' ? (v as { wavelength: number }).wavelength : (v as number);
+        expect(x >= lo && x <= hi, `${info.path}: ${x} in [${lo}, ${hi}]`).toBe(true);
+      }
+    }
+    expect(perturbations(leaf('density.detailAmpLo'), 0.6)).toEqual([0.51, 0.69]);
+    expect((perturbations(leaf('density.noises.detail'), DEFAULTS.density.noises.detail) as { wavelength: number }[]).map((d) => d.wavelength))
+      .toEqual([8.5, 11.5]);
+    // At the top of the range the upward step clamps back to the value and is dropped.
+    expect(perturbations(leaf('density.detailAmpHi'), 8)).toEqual([6.8]);
   });
 
   test('boxTable: every interval shrunk and grown by 15 % of its width about its centre, within [−1, 1]', () => {
@@ -167,12 +191,63 @@ describe('stage output hashes', () => {
     expect(lattice(jitter)).toEqual(lattice(CTX));
   });
 
+  test('terrain: the region hash of the 1 × 1 window after fillColumnT on a fresh ArrayBuffer store', () => {
+    for (const c of columns().filter((x) => x.cls === 'land' || x.cls === 'coast')) {
+      const store = createStore({ shared: false, maxBlockBytes: 1 << 20, maxByteBytes: 1 << 20 });
+      expect(fillColumnT(store, CTX, c.cx, c.cz, () => false)).toBe(true);
+      const expected = hex64(regionHash(store, c.cx, c.cz, 1, 1));
+      expect(stageOutputHash(CTX, 'terrain', c.cx, c.cz), `${c.cls} (${c.cx}, ${c.cz})`).toBe(expected);
+      expect(stageOutputHash(CTX, 'terrain', c.cx, c.cz)).toBe(expected);
+    }
+    const c = columns()[0]!;
+    const h = (['climate', 'shape', 'biome2d', 'terrain'] as const).map((st) => stageOutputHash(CTX, st, c.cx, c.cz));
+    expect(new Set(h).size).toBe(4);
+  });
+
+  test('a density leaf moves only the terrain hash', () => {
+    const c = columns().find((x) => x.cls === 'land')!;
+    const amp = moved('density.detailAmpHi', 1.725);
+    for (const st of ['climate', 'shape', 'biome2d'] as const) {
+      expect(stageOutputHash(amp, st, c.cx, c.cz), st).toBe(stageOutputHash(CTX, st, c.cx, c.cz));
+    }
+    expect(stageOutputHash(amp, 'terrain', c.cx, c.cz)).not.toBe(stageOutputHash(CTX, 'terrain', c.cx, c.cz));
+  });
+
   test('a climate leaf moves the climate hash; the three hashes are distinct and repeatable', () => {
     const c = columns()[0]!;
     const h = (['climate', 'shape', 'biome2d'] as const).map((st) => stageOutputHash(CTX, st, c.cx, c.cz));
     expect(new Set(h).size).toBe(3);
     expect(stageOutputHash(CTX, 'shape', c.cx, c.cz)).toBe(h[1]);
     expect(stageOutputHash(moved('climate.scaleMul', 1.15), 'climate', c.cx, c.cz)).not.toBe(h[0]);
+  });
+});
+
+describe('the terrain stage in U2 (SP3b spec §3.3)', () => {
+  test('U2 covers the leaves of the climate, shape, biome2d and terrain stages, every density.* leaf among them', () => {
+    const stages = ['climate', 'shape', 'biome2d', 'terrain'];
+    const expected = SCHEMA.leaves.filter((l) => l.meta.stage !== undefined && stages.includes(l.meta.stage)).map((l) => l.path);
+    expect(u2Leaves().map((l) => l.path)).toEqual(expected);
+    const density = SCHEMA.leaves.filter((l) => l.path.startsWith('density.'));
+    expect(density.length).toBe(5);
+    for (const l of density) expect(l.meta.stage, l.path).toBe('terrain');
+    expect(expected).toEqual(expect.arrayContaining(density.map((l) => l.path)));
+    expect(intendedClass('density.detailAmpLo')).toBe('land');
+  });
+
+  test('every density.* leaf is decided on a land or coast column', () => {
+    const density = SCHEMA.leaves.filter((l) => l.path.startsWith('density.'));
+    for (const l of density) {
+      const r = leafLiveness(CTX, l.path, columns());
+      expect(r.live, `${l.path}: ${r.via ?? 'dead'}`).toBe(true);
+      expect(r.via, l.path).toMatch(/^(land|coast) column \(-?\d+, -?\d+\)$/);
+      expect(r.cls === 'land' || r.cls === 'coast', l.path).toBe(true);
+    }
+  });
+
+  test('a terrain leaf is tried on the land and coast columns only, with no stream witness', () => {
+    const others = columns().filter((c) => c.cls !== 'land' && c.cls !== 'coast');
+    expect(others.length).toBe(12);
+    expect(leafLiveness(CTX, 'density.noises.detail', others)).toEqual({ path: 'density.noises.detail', live: false, via: null, cls: 'land' });
   });
 });
 

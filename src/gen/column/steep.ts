@@ -17,9 +17,12 @@ export function steepFrom(east: number, west: number, north: number, south: numb
   return Math.sqrt(gx * gx + gz * gz);
 }
 
-/** offset0 at world (x, z) (climate plus the offset spline). */
+/** offset0At's climate record, reused (SP2a minor 5): offsetFrom reads it before the next call overwrites it. */
+const CLIM = NEW_CLIMATE();
+
+/** offset0 at world (x, z) (climate plus the offset spline). Allocates no record. */
 export function offset0At(ctx: GenContext, x: number, z: number, coords: Float64Array): number {
-  return OFFSET(ctx, CLIMATE(ctx, x, z, NEW_CLIMATE()), coords);
+  return OFFSET(ctx, CLIMATE(ctx, x, z, CLIM), coords);
 }
 
 export function steepAt(ctx: GenContext, x: number, z: number, coords: Float64Array): number {

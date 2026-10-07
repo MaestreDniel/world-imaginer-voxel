@@ -1,9 +1,10 @@
 /**
- * U2, parameter liveness (SP2b spec §7, master §6.4): every column-scope leaf, moved by its per-kind ±15 %
- * perturbation, must change its home stage's output hash on one of 16 class columns or on a witness
- * (seed 42, default profile). The class columns are chosen by the lattice conditions under which the leaves
- * act; lake-gate leaves (lakes.p, minC, offsetMin, offsetMax) get one threshold column each. Follows the core
- * determinism rules (DET_FILES in test/arch/rules/banned.ts).
+ * U2, parameter liveness (SP2b spec §7, master §6.4): every leaf of the climate, shape, biome2d and terrain stages,
+ * moved by its per-kind ±15 % perturbation, must change its home stage's output hash on one of 16 class columns or on
+ * a witness (seed 42, default profile). The class columns are chosen by the lattice conditions under which the leaves
+ * act; lake-gate leaves (lakes.p, minC, offsetMin, offsetMax) get one threshold column each. A `terrain` leaf (SP3b
+ * spec §3.3: the `density.*` group) is tried on the land and coast class columns only, with no witness search: its
+ * output is a whole generated column. Follows the core determinism rules (DET_FILES in test/arch/rules/banned.ts).
  */
 import { SEA_LEVEL } from '../core/constants';
 import { hash4, hashF64, hex64 } from '../core/hash';
@@ -21,7 +22,9 @@ import { buildColumnSample, newColumnSample, readBiome, type ColumnSample } from
 import { cellEligible, lakeCell, lakeSpace, nearestCell, newLake, sampleLakes, type CellProbe, type LakeCell } from '../gen/column/lakes';
 import { newRiver, sampleRivers } from '../gen/column/rivers';
 import { newShape, sampleShape } from '../gen/column/shape';
+import { createStore } from '../world/store/store';
 import { samplePoints } from './noiseStats';
+import { fillColumnT, regionHash } from './region';
 
 const SEA = SEA_LEVEL;
 const H4 = hash4;
@@ -57,6 +60,9 @@ const RIVERS = sampleRivers;
 const NEW_SHAPE = newShape;
 const SHAPE = sampleShape;
 const POINTS = samplePoints;
+const CREATE_STORE = createStore;
+const FILL_T = fillColumnT;
+const REGION_HASH = regionHash;
 
 export type LivenessClass =
   | 'land' | 'coast' | 'channel' | 'gorge' | 'basin' | 'rim'
@@ -64,8 +70,8 @@ export type LivenessClass =
 
 export interface LivenessColumn { readonly cx: number; readonly cz: number; readonly cls: LivenessClass }
 
-/** The stages whose leaves U2 covers today (column scope). */
-export type OutputStage = 'climate' | 'shape' | 'biome2d';
+/** The stages whose leaves U2 covers: the column scope, and the T stage (SP3b spec §3.3). */
+export type OutputStage = 'climate' | 'shape' | 'biome2d' | 'terrain';
 
 /**
  * One leaf's verdict. `via` names the deciding column (a class column or a witness); `cls` is that column's
@@ -87,7 +93,11 @@ const LAND_GRID = 16;
 const LATTICE_REACH = 12;
 /** Coast columns: a lattice point with |offset0 − 63| ≤ 8. */
 const COAST_BAND = 8;
-const COLUMN_STAGES: readonly string[] = ['climate', 'shape', 'biome2d'];
+const OUTPUT_STAGES: readonly string[] = ['climate', 'shape', 'biome2d', 'terrain'];
+/** The class columns a `terrain` leaf is tried on (SP3b spec §3.3). */
+const TERRAIN_CLASSES: readonly LivenessClass[] = ['land', 'coast'];
+/** One column's store: ≤ 24 dense block sections (1 MiB holds 128) and ≤ 26 byte slots (1 MiB holds 256). */
+const STORE_BYTES = 1 << 20;
 const CLASS_ORDER: readonly LivenessClass[] = [
   'land', 'coast', 'channel', 'gorge', 'basin', 'rim',
   'threshold:lakes.p', 'threshold:lakes.minC', 'threshold:lakes.offsetMin', 'threshold:lakes.offsetMax',
@@ -232,12 +242,23 @@ function hashSample(ctx: GenContext, stage: OutputStage, s: ColumnSample): strin
   return digest([s.biome, blocks]);
 }
 
+const NEVER = (): boolean => false;
+
+/** SP3b spec §3.3: `regionHash` of the 1 × 1 window after `fillColumnT` on a fresh `ArrayBuffer` store. */
+function terrainHash(ctx: GenContext, cx: number, cz: number): string {
+  const store = CREATE_STORE({ shared: false, maxBlockBytes: STORE_BYTES, maxByteBytes: STORE_BYTES });
+  if (!FILL_T(store, ctx, cx, cz, NEVER)) throw new Error(`U2: column (${cx}, ${cz}) was not generated`);
+  return HEX64(REGION_HASH(store, cx, cz, 1, 1));
+}
+
 /**
  * Hex digest of a stage's own outputs on column (cx, cz) (spec §7): climate C, E, W, T, H, R, PV at the 49
  * lattice points; shape offset0 … surfaceEst and the river flags; biome2d the lattice biome ids plus the
- * zoomed biome of each of the column's 256 blocks (where biomes.zoomJitter acts).
+ * zoomed biome of each of the column's 256 blocks (where biomes.zoomJitter acts); terrain the region hash of the
+ * generated column (blocks, fluid, aux A and aux B; SP3b spec §3.3).
  */
 export function stageOutputHash(ctx: GenContext, stage: OutputStage, cx: number, cz: number): string {
+  if (stage === 'terrain') return terrainHash(ctx, cx, cz);
   return hashSample(ctx, stage, BUILD(ctx, cx, cz, SAMPLE));
 }
 
@@ -515,8 +536,13 @@ const isGate = (path: string): boolean => GATE_KEYS.some((k) => path === `lakes.
 
 function stageOf(info: LeafInfo): OutputStage {
   const s = info.meta.stage;
-  if (s === undefined || !COLUMN_STAGES.includes(s)) throw new Error(`${info.path} is not a column-scope leaf`);
+  if (s === undefined || !OUTPUT_STAGES.includes(s)) throw new Error(`${info.path} is not a leaf of a stage U2 covers`);
   return s as OutputStage;
+}
+
+/** The leaves U2 decides, in schema order: home stage climate, shape, biome2d or terrain (SP3b spec §3.3). */
+export function u2Leaves(): readonly LeafInfo[] {
+  return SCHEMA_.leaves.filter((l) => l.meta.stage !== undefined && OUTPUT_STAGES.includes(l.meta.stage));
 }
 
 /** Cells of a square spiral from (0, 0): ring r ≥ 1 has 8r cells, from (−r, −r) along j = −r, then i = r, j = r, i = −r. */
@@ -595,28 +621,36 @@ export function findWitness(base: GenContext, path: string, skip: readonly Liven
   return witnessOf(base, info, variantContexts(base, info), skip, baseHasher(base));
 }
 
+function decide(base: GenContext, info: LeafInfo, columns: readonly LivenessColumn[], baseHash: BaseHash): LivenessResult {
+  const stage = stageOf(info);
+  const intended = intendedClass(info.path);
+  const variants = variantContexts(base, info);
+  const tried = stage === 'terrain' ? columns.filter((c) => TERRAIN_CLASSES.includes(c.cls)) : columns;
+  const order = [...tried.filter((c) => c.cls === intended), ...tried.filter((c) => c.cls !== intended)];
+  const hit = order.find((c) => variants.some((v) => stageOutputHash(v, stage, c.cx, c.cz) !== baseHash(stage, c.cx, c.cz)));
+  if (hit !== undefined) return { path: info.path, live: true, via: `${hit.cls} column (${hit.cx}, ${hit.cz})`, cls: hit.cls };
+  const w = stage === 'terrain' ? null : witnessOf(base, info, variants, columns, baseHash);
+  return w !== null ? { path: info.path, live: true, via: w, cls: null } : { path: info.path, live: false, via: null, cls: intended };
+}
+
 /**
- * U2 for every column-scope leaf: live when a perturbation changes the leaf's stage output hash on a class
- * column (its intended class first) or on its witness. value = live leaves / column-scope leaves.
+ * One leaf's U2 verdict over `columns` (the class columns of `base`): its stage output hash on the class columns (the
+ * intended class first; a `terrain` leaf only on the land and coast ones), then, except for a `terrain` leaf, the
+ * witness search.
+ */
+export function leafLiveness(base: GenContext, path: string, columns: readonly LivenessColumn[]): LivenessResult {
+  return decide(base, leafInfo(path), columns, baseHasher(base));
+}
+
+/**
+ * U2 for every leaf of `u2Leaves()`: live when a perturbation changes the leaf's stage output hash on a class
+ * column (its intended class first) or on its witness. value = live leaves / those leaves.
  */
 export function u2(seedText = '42'): { readonly value: number; readonly results: readonly LivenessResult[] } {
   const base = CREATE(SEED(seedText), RESOLVE('default'));
   const columns = livenessColumns(base);
   const baseHash = baseHasher(base);
-  const results: LivenessResult[] = [];
-  for (const info of SCHEMA_.leaves.filter((l) => l.meta.stage !== undefined && COLUMN_STAGES.includes(l.meta.stage))) {
-    const stage = stageOf(info);
-    const intended = intendedClass(info.path);
-    const variants = variantContexts(base, info);
-    const order = [...columns.filter((c) => c.cls === intended), ...columns.filter((c) => c.cls !== intended)];
-    const hit = order.find((c) => variants.some((v) => stageOutputHash(v, stage, c.cx, c.cz) !== baseHash(stage, c.cx, c.cz)));
-    if (hit !== undefined) {
-      results.push({ path: info.path, live: true, via: `${hit.cls} column (${hit.cx}, ${hit.cz})`, cls: hit.cls });
-      continue;
-    }
-    const w = witnessOf(base, info, variants, columns, baseHash);
-    results.push(w !== null ? { path: info.path, live: true, via: w, cls: null } : { path: info.path, live: false, via: null, cls: intended });
-  }
+  const results = u2Leaves().map((info) => decide(base, info, columns, baseHash));
   const live = results.filter((r) => r.live).length;
   return { value: results.length > 0 ? live / results.length : 0, results };
 }
