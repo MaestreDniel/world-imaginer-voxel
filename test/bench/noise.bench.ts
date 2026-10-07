@@ -13,13 +13,14 @@ import { genKey, stageHashes } from '../../src/core/stage/hash';
 import { DENSITY3D_DEF, JAG, OFFSET, SIGMA } from '../../src/metrics/sp1Fixtures';
 import { seedFromInput } from '../../src/core/seed';
 import { createGenContext } from '../../src/gen/context';
+import { createDensityContext } from '../../src/gen/density/context';
 import { columnPoint } from '../../src/gen/column/columnPoint';
 import { buildColumnSample, newColumnSample } from '../../src/gen/column/columnStage';
 import { paintTile } from '../../src/gen/map/tile';
 import { fillColumnT } from '../../src/metrics/region';
 import { createStore } from '../../src/world/store/store';
 import { createTaskHandler } from '../../src/workers/taskHandler';
-import { BENCH_ROWS, COLUMN_P50_MAX_MS, COLUMN_P95_MAX_MS, gateFailures, type Baselines, type BenchKernel } from './gates';
+import { absoluteGateFailures, BENCH_ROWS, gateFailures, type Baselines, type BenchKernel } from './gates';
 import { buildPerm, perm3 } from './perm512';
 
 const FMIX = fmix32;
@@ -33,11 +34,12 @@ const BASELINE_PATH = fileURLToPath(new URL('../baselines.json', import.meta.url
 const N = 4096;
 let sink = 0;
 
-test('SP1, SP2a, SP2b and SP3a kernels', async ({ bench }) => {
+test('SP1, SP2a, SP2b, SP3a and SP3b kernels', async ({ bench }) => {
   const ns: Record<string, number> = {};
   const measure = async (name: string, evals: number, fn: () => void, iterations?: number) => {
     const r = await bench(name, fn).run(iterations === undefined ? undefined : { iterations, time: 0, warmupIterations: 1 });
     ns[name] = (r.latency.p50 * 1e6) / evals;
+    return r;
   };
   const rng = new Xoshiro128(7);
   const ints = Uint32Array.from({ length: N }, () => rng.nextU32());
@@ -101,14 +103,25 @@ test('SP1, SP2a, SP2b and SP3a kernels', async ({ bench }) => {
   await measure('map.tile.b256.biome', 1, () => { const [tx, tz] = preview[pt++ % 4]!; paintTile(gen, 'biome', 256, tx, tz, tile); sink += tile[0]!; }, 8);
   await measure('map.tile.b256.relief', 1, () => { const [tx, tz] = preview[pt++ % 4]!; paintTile(gen, 'relief', 256, tx, tz, tile); sink += tile[0]!; }, 8);
   // SP3a §7, on one shared store (the backend the 4-thread harness and SP4's streaming use): one alloc and free on
-  // the byte pool (the lock, a stack pop and push, the refcount), and one column's provisional T stage including its
-  // ColumnSample, through fillColumnT (claim, 24 sections, aux A, commit) and the freeColumn that recycles its slots.
+  // the byte pool (the lock, a stack pop and push, the refcount), and (SP3b §10) one column's real T stage including
+  // its ColumnSample, through fillColumnT (claim, density phase, water, 24 sections, aux A and B, commit) and the
+  // freeColumn that recycles its slots.
   const store = createStore({ shared: true, maxBlockBytes: 32 << 20, maxByteBytes: 16 << 20 });
   const bytePool = store.bytePool;
   await measure('store.alloc', N, () => { for (let i = 0; i < N; i++) { const id = bytePool.alloc(); bytePool.free(id); sink += id; } });
+  // SP3b §10: one corner of the default density expression (cornerFn: every interpolated slot at one corner, no
+  // early-outs), measured as the 5 × 49 × 5 corners of column (0, 0) with the column's corner cache cleared first.
+  const dc = createDensityContext(gen);
+  dc.column(0, 0);
+  const compiled = dc.compiled;
+  await measure('density.corner', 1225, () => {
+    compiled.cornerReady.fill(0);
+    for (let k = 0; k < 49; k++) for (let j = 0; j < 5; j++) for (let i = 0; i < 5; i++) compiled.cornerFn(i, k, j);
+    sink += compiled.cornerValues[612]!;
+  });
   const never = (): boolean => false;
   let tc = 0;
-  await measure('terrain.provisional', 1, () => {
+  const terrainRun = await measure('terrain.real', 1, () => {
     tc++;
     const tcx = (tc * 7919) % 60000 - 30000;
     const tcz = (tc * 104729) % 60000 - 30000;
@@ -126,8 +139,9 @@ test('SP1, SP2a, SP2b and SP3a kernels', async ({ bench }) => {
   console.table(kernels);
   console.log(`killRatio ${killRatio}`);
   console.log(`column.sample p50 ${columnRun.latency.p50.toFixed(3)} ms, p99 (≥ p95) ${columnP95.toFixed(3)} ms`);
-  expect(columnRun.latency.p50, 'P1 column p50').toBeLessThanOrEqual(COLUMN_P50_MAX_MS);
-  expect(columnP95, 'P1 column p95').toBeLessThanOrEqual(COLUMN_P95_MAX_MS);
+  console.log(`terrain.real p50 ${terrainRun.latency.p50.toFixed(3)} ms, p99 ${terrainRun.latency.p99.toFixed(3)} ms`);
+  // Before the record: bench:record refuses to write when an absolute gate fails.
+  expect(absoluteGateFailures({ columnP50: columnRun.latency.p50, columnP95, terrainP50: terrainRun.latency.p50 }), 'absolute gates').toEqual([]);
   expect(Number.isFinite(sink)).toBe(true);
   if (process.env.BENCH_RECORD === '1') {
     const next: Baselines = { machine: cpus()[0]?.model ?? 'unknown', node: process.version, date: new Date().toISOString().slice(0, 10), kernels, killRatio };
