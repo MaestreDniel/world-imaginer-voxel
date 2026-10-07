@@ -4,11 +4,13 @@
  * parenthetical names every dependency `SP_DEPS` transcribes from it, and the critical path is a dependency chain.
  */
 import { readFileSync } from 'node:fs';
+import { fileURLToPath } from 'node:url';
 import { describe, expect, test } from 'vitest';
 import { SUB_PROJECTS, type SubProjectId } from '../../src/core/ids';
 import { SP_DEPS } from '../harness/sp';
 
-const MASTER = 'docs/superpowers/specs/2026-09-26-architecture-design.md';
+// Resolved from this file, not the cwd (SP3b spec §7), so the test also runs from another directory.
+const MASTER = fileURLToPath(new URL('../../docs/superpowers/specs/2026-09-26-architecture-design.md', import.meta.url));
 const text = readFileSync(MASTER, 'utf8');
 const SP_TOKEN = /\bSP(?:\d+[a-z]?)\b/g;
 

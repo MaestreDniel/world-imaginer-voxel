@@ -1,7 +1,7 @@
 import { Worker } from 'node:worker_threads';
 import { afterAll, beforeAll, expect, test } from 'vitest';
 import { DEFAULTS } from '../../src/core/params/defaults';
-import { buildNodeTaskWorker } from '../harness/nodeWorker';
+import { ask, buildNodeTaskWorker } from '../harness/nodeWorker';
 
 const workers: Worker[] = [];
 
@@ -13,9 +13,6 @@ beforeAll(async () => {
 afterAll(async () => {
   await Promise.all(workers.map((w) => w.terminate()));
 });
-
-const ask = (w: Worker, msg: unknown): Promise<Record<string, unknown>> =>
-  new Promise((resolve) => { w.once('message', resolve); w.postMessage(msg); });
 
 test('two workers produce byte-identical tiles and agree on the stage hashes', async () => {
   const ready = await Promise.all(workers.map((w) => ask(w, { type: 'configure', epoch: 1, seedText: '42', params: DEFAULTS, abort: null })));

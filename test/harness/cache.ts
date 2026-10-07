@@ -4,29 +4,33 @@
  * + upTo`. `srcKey` is the FNV-1a 64 of the sorted paths and bytes of the code the dump depends on, read at test
  * time, so any code change is a miss without a hand-bumped constant; `REGION_CACHE_FORMAT` changes with the dump
  * layout. A hit rebuilds each column through the writer API (`claimColumn`, `setProto` per section with the
- * expanded data, the aux bytes, `commit(1)`), so uniform and dense decisions are made again by the same code.
+ * expanded data, the aux A and aux B bytes, `commit(1)`), so uniform and dense decisions are made again by the same
+ * code. A hit refreshes the dump's mtime, so the prune grace below counts from its last use.
  *
  * Dump layout (little-endian): a 44-byte header (magic `WIRC`, format u32, genKey lo/hi u32, srcKey lo/hi u32,
  * cx0, cz0 i32, w, h u32, upTo as 4 ASCII bytes padded with 0), then per column, cz outer and cx inner: record ints
  * 0-15 (i32), the 24 proto descriptors (blocks, fluid: 48 i32), the dense slots they reference in descriptor order
- * (8192 bytes per block slot, 4096 per fluid slot), and the 4096 aux A bytes (zeros when the column has none); last,
- * the FNV-1a 64 (lo, hi u32) of every byte before it. Anything that disagrees with the expected header, the layout or
+ * (8192 bytes per block slot, 4096 per fluid slot), the 4096 aux A bytes, then the 4096 aux B bytes (each zeros when
+ * the column has no such slot; the record ints say whether it has one); last, the FNV-1a 64 (lo, hi u32) of every
+ * byte before it. Format 1 had no aux B bytes (SP3a); format 2 adds them (SP3b spec §7). Anything that disagrees with the expected header, the layout or
  * the checksum is a miss (a damaged dump is never rebuilt); the caller regenerates and overwrites.
  *
  * Every code change is a new `srcKey`, so the dumps of earlier code can never hit again: writing a dump deletes the
  * `.bin` files of its directory that are not dumps of this format and `srcKey` and were not modified for
  * `REGION_CACHE_PRUNE_MS` (the grace keeps a concurrent run of other code from losing the dump it just wrote).
  */
-import { closeSync, existsSync, mkdirSync, openSync, readdirSync, readFileSync, readSync, renameSync, statSync, unlinkSync, writeFileSync } from 'node:fs';
+import {
+  closeSync, existsSync, mkdirSync, openSync, readdirSync, readFileSync, readSync, renameSync, statSync, unlinkSync, utimesSync, writeFileSync,
+} from 'node:fs';
 import { dirname, join, sep } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { threadId } from 'node:worker_threads';
 import { createFnv64, fnv1a64, hex64, type Hash64 } from '../../src/core/hash';
-import { protoAt, REC_AUX_A, REC_CLAIMED, REC_CX, REC_CZ, REC_STATUS, STATUS_PROTO } from '../../src/world/store/columnTable';
+import { protoAt, REC_AUX_A, REC_AUX_B, REC_CLAIMED, REC_CX, REC_CZ, REC_STATUS, STATUS_PROTO } from '../../src/world/store/columnTable';
 import type { VoxelStore } from '../../src/world/store/store';
 
 /** Bumped whenever the dump layout changes. */
-export const REGION_CACHE_FORMAT = 1;
+export const REGION_CACHE_FORMAT = 2;
 /** A dump that cannot hit for the current code is deleted once it has not been modified for this long (15 min). */
 export const REGION_CACHE_PRUNE_MS = 15 * 60 * 1000;
 
@@ -136,7 +140,7 @@ export function encodeRegionDump(store: VoxelStore, h: RegionCacheHeader): Uint8
   for (let cz = h.cz0; cz < h.cz0 + h.h; cz++) {
     for (let cx = h.cx0; cx < h.cx0 + h.w; cx++) {
       const base = protoBase(store, cx, cz);
-      size += COLUMN_HEAD_BYTES + AUX_BYTES;
+      size += COLUMN_HEAD_BYTES + 2 * AUX_BYTES;
       for (let sy = 0; sy < 24; sy++) {
         const p = protoAt(base, sy);
         if (ints[p]! >= 0) size += BLOCK_SLOT;
@@ -170,6 +174,12 @@ export function encodeRegionDump(store: VoxelStore, h: RegionCacheHeader): Uint8
         b.set(new Uint8Array(a.buffer, a.byteOffset, AUX_BYTES), o);
       }
       o += AUX_BYTES;
+      if (ints[base + REC_AUX_B]! >= 0) {
+        // The aux B fields tile the slot from caveBiomeQ (offset 0) on.
+        const a = store.proto(cx, cz)!.auxB()!.caveBiomeQ;
+        b.set(new Uint8Array(a.buffer, a.byteOffset, AUX_BYTES), o);
+      }
+      o += AUX_BYTES;
     }
   }
   const sum = checksum(b.subarray(0, o));
@@ -191,6 +201,7 @@ interface DumpColumn {
   readonly blocks: Array<Uint8Array | null>;
   readonly fluid: Array<Uint8Array | null>;
   readonly aux: Uint8Array;
+  readonly auxB: Uint8Array;
 }
 
 /** The columns of a dump whose header and layout agree with `h`, or null (a miss). Reads nothing into a store. */
@@ -231,9 +242,9 @@ export function parseRegionDump(bytes: Uint8Array, h: RegionCacheHeader): DumpCo
           o += FLUID_SLOT;
         } else fluid.push(null);
       }
-      if (o + AUX_BYTES > b.length) return null;
-      out.push({ cx, cz, record, descriptors, blocks, fluid, aux: b.subarray(o, o + AUX_BYTES) });
-      o += AUX_BYTES;
+      if (o + 2 * AUX_BYTES > b.length) return null;
+      out.push({ cx, cz, record, descriptors, blocks, fluid, aux: b.subarray(o, o + AUX_BYTES), auxB: b.subarray(o + AUX_BYTES, o + 2 * AUX_BYTES) });
+      o += 2 * AUX_BYTES;
     }
   }
   return o === b.length ? out : null;
@@ -267,6 +278,10 @@ export function rebuildRegion(store: VoxelStore, cols: readonly DumpColumn[]): F
       const a = w.aux().worldSurfaceWG;
       new Uint8Array(a.buffer, a.byteOffset, AUX_BYTES).set(c.aux);
     }
+    if (c.record[REC_AUX_B]! >= 0) {
+      const a = w.auxB().caveBiomeQ;
+      new Uint8Array(a.buffer, a.byteOffset, AUX_BYTES).set(c.auxB);
+    }
     w.commit(1);
     ms[k] = performance.now() - t0;
     const d0 = protoAt(store.table.find(c.cx, c.cz), 0);
@@ -282,9 +297,9 @@ export function rebuildRegion(store: VoxelStore, cols: readonly DumpColumn[]): F
 }
 
 /**
- * On a hit, rebuilds the dump at `path` into `store` and returns the milliseconds per column (row-major); null on a
- * miss (no file or one that cannot be read, another header, a malformed layout, a wrong checksum), in which case
- * `store` is untouched.
+ * On a hit, rebuilds the dump at `path` into `store`, sets the file's mtime to now (so `pruneRegionDumps`' grace
+ * counts from the last use) and returns the milliseconds per column (row-major); null on a miss (no file or one that
+ * cannot be read, another header, a malformed layout, a wrong checksum), in which case `store` is untouched.
  */
 export function readRegionDump(store: VoxelStore, h: RegionCacheHeader, path: string): Float64Array | null {
   if (!existsSync(path)) return null;
@@ -295,7 +310,15 @@ export function readRegionDump(store: VoxelStore, h: RegionCacheHeader, path: st
     return null; // deleted or replaced under us: a miss
   }
   const cols = parseRegionDump(bytes, h);
-  return cols === null ? null : rebuildRegion(store, cols);
+  if (cols === null) return null;
+  const ms = rebuildRegion(store, cols);
+  try {
+    const now = new Date();
+    utimesSync(path, now, now);
+  } catch {
+    // deleted or replaced under us: the next run regenerates it
+  }
+  return ms;
 }
 
 /** The first HEADER_BYTES of a file, or null when it is shorter or cannot be read. */

@@ -151,6 +151,10 @@ export function attachStore(h: StoreHandles): VoxelStore {
         const slot = ints[base + REC_AUX_A]!;
         return slot < 0 ? null : auxView(bytePool, slot);
       },
+      auxB() {
+        const slot = ints[base + REC_AUX_B]!;
+        return slot < 0 ? null : auxBView(bytePool, slot);
+      },
     };
   }
 

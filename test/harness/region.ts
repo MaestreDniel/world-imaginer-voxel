@@ -18,7 +18,7 @@ import { fillColumnT, regionHash } from '../../src/metrics/region';
 import { protoAt } from '../../src/world/store/columnTable';
 import { createStore, type ColumnView, type VoxelStore } from '../../src/world/store/store';
 import { readRegionDump, regionCachePath, srcKey, writeRegionDump, type RegionCacheHeader, type RegionUpTo } from './cache';
-import { buildNodeTaskWorker } from './nodeWorker';
+import { ask, buildNodeTaskWorker } from './nodeWorker';
 import type { RegionAttachMsg, RegionColumnMsg, RegionWorkerReply } from './regionWorker';
 
 export type RegionOrder = 'spiral' | 'shuffled';
@@ -170,8 +170,9 @@ const sameChannel = (a: Uint16Array | Uint8Array | number, b: Uint16Array | Uint
 /**
  * The first difference between two views of the same region, or null when they hold the same proto data: per
  * column, each section's blocks and fluid (uniform against uniform by value, dense against dense by bytes; a
- * uniform section never equals a dense one, so the per-channel layout must match too) and the 4096 aux A bytes.
- * Byte comparison, much faster than hashing both regions.
+ * uniform section never equals a dense one, so the per-channel layout must match too), the 4096 aux A bytes and the
+ * 4096 aux B bytes (an absent slot compares as zeros, as in `regionHash`). Byte comparison, much faster than hashing
+ * both regions.
  */
 export function regionDiff(a: RegionView, b: RegionView): string | null {
   if (a.cx0 !== b.cx0 || a.cz0 !== b.cz0 || a.w !== b.w || a.h !== b.h) return 'the views cover other regions';
@@ -187,6 +188,10 @@ export function regionDiff(a: RegionView, b: RegionView): string | null {
       const xb = vb.aux();
       const bytes = (x: typeof xa) => (x === null ? Buffer.alloc(4096) : Buffer.from(x.worldSurfaceWG.buffer, x.worldSurfaceWG.byteOffset, 4096));
       if (!bytes(xa).equals(bytes(xb))) return `column (${cx}, ${cz}): aux A differs`;
+      const ya = va.auxB();
+      const yb = vb.auxB();
+      const bytesB = (y: typeof ya) => (y === null ? Buffer.alloc(4096) : Buffer.from(y.caveBiomeQ.buffer, y.caveBiomeQ.byteOffset, 4096));
+      if (!bytesB(ya).equals(bytesB(yb))) return `column (${cx}, ${cz}): aux B differs`;
     }
   }
   return null;
@@ -203,19 +208,15 @@ function regionWorkerScript(dir: string): Promise<string> {
   return p;
 }
 
-/** Sends one message and waits for the worker's single reply; rejects if the worker fails or exits first. */
-function ask(w: Worker, msg: RegionAttachMsg | RegionColumnMsg): Promise<RegionWorkerReply> {
-  return new Promise((resolve, reject) => {
-    const onError = (e: Error) => { off(); reject(e); };
-    const onExit = (code: number) => { off(); reject(new Error(`region worker exited (${code})`)); };
-    const onMessage = (r: RegionWorkerReply) => { off(); resolve(r); };
-    const off = () => { w.off('error', onError); w.off('exit', onExit); w.off('message', onMessage); };
-    w.on('error', onError);
-    w.on('exit', onExit);
-    w.on('message', onMessage);
-    w.postMessage(msg);
-  });
+/**
+ * DT1's worker directory for a metrics tier (SP3a §10's minor, SP3b spec §7): one per tier, so the fast, quick and
+ * full tiers running at once never share a build's `emptyOutDir`.
+ */
+export function dt1WorkerDir(tier: 'fast' | 'quick' | 'full'): string {
+  return `dt1RegionWorker-${tier}`;
 }
+
+const askRegion = (w: Worker, msg: RegionAttachMsg | RegionColumnMsg): Promise<RegionWorkerReply> => ask<RegionWorkerReply>(w, msg);
 
 /** Generates `cols` on 4 worker threads over `store` (shared); fills `ms` (row-major) and returns columns per thread. */
 async function generateThreaded(store: VoxelStore, o: GenRegionOptions, cols: ReadonlyArray<[number, number]>, ms: Float64Array): Promise<number[]> {
@@ -224,13 +225,13 @@ async function generateThreaded(store: VoxelStore, o: GenRegionOptions, cols: Re
   const written = new Uint8Array(cols.length);
   const perThread = [0, 0, 0, 0];
   try {
-    const ready = await Promise.all(workers.map((w) => ask(w, { type: 'attach', handles: store.handles(), seedText: o.seed, params: o.params })));
+    const ready = await Promise.all(workers.map((w) => askRegion(w, { type: 'attach', handles: store.handles(), seedText: o.seed, params: o.params })));
     for (const r of ready) if (r.type !== 'ready') throw new Error(`region worker: ${r.type === 'error' ? r.message : r.type}`);
     let next = 0;
     const drain = async (t: number): Promise<void> => {
       while (next < cols.length) {
         const [cx, cz] = cols[next++]!;
-        const r = await ask(workers[t]!, { type: 'column', cx, cz });
+        const r = await askRegion(workers[t]!, { type: 'column', cx, cz });
         if (r.type !== 'done') throw new Error(`region worker ${t}, column (${cx}, ${cz}): ${r.type === 'error' ? r.message : r.type}`);
         if (r.cx !== cx || r.cz !== cz) throw new Error(`region worker ${t}: asked (${cx}, ${cz}), done (${r.cx}, ${r.cz})`);
         const k = (cz - o.cz0) * o.w + (cx - o.cx0);

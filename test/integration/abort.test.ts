@@ -2,7 +2,7 @@ import { Worker } from 'node:worker_threads';
 import { afterAll, beforeAll, expect, test } from 'vitest';
 import { DEFAULTS } from '../../src/core/params/defaults';
 import { BIOME_SHARES_POINTS, biomeSharePoints, biomeSharesInto, biomeSharesLength } from '../../src/metrics/biomeShares';
-import { buildNodeTaskWorker } from '../harness/nodeWorker';
+import { ask, buildNodeTaskWorker } from '../harness/nodeWorker';
 import { ctxFor } from '../harness/gen';
 
 /**
@@ -29,8 +29,6 @@ const start = (): Worker => {
   workers.push(w);
   return w;
 };
-const ask = (w: Worker, msg: unknown): Promise<Record<string, unknown>> =>
-  new Promise((resolve) => { w.once('message', resolve); w.postMessage(msg); });
 const sameBytes = (a: unknown, b: unknown) => Buffer.from(a as ArrayBuffer).equals(Buffer.from(b as ArrayBuffer));
 const configure = (epoch: number, abort: SharedArrayBuffer | null) => ({ type: 'configure', epoch, seedText: '42', params: DEFAULTS, abort });
 /** Milliseconds on the clock the worker's `handledAt` uses (test/harness/nodeWorker.ts). */

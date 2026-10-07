@@ -9,7 +9,27 @@
 import { existsSync, mkdirSync, writeFileSync } from 'node:fs';
 import { basename } from 'node:path';
 import { fileURLToPath } from 'node:url';
+import type { Worker } from 'node:worker_threads';
 import { build } from 'vite';
+
+/**
+ * Posts one message to `w` and waits for its single reply (the one shared helper of every worker-thread test, SP3b
+ * spec §7). Rejects with the worker's error when it throws, or when it exits before replying; every listener it adds
+ * is removed when it settles. One outstanding `ask` per worker: concurrent asks on the same worker would race for
+ * its replies.
+ */
+export function ask<R = Record<string, unknown>>(w: Worker, msg: unknown): Promise<R> {
+  return new Promise<R>((resolve, reject) => {
+    const off = () => { w.off('error', onError); w.off('exit', onExit); w.off('message', onMessage); };
+    const onError = (e: Error) => { off(); reject(e); };
+    const onExit = (code: number) => { off(); reject(new Error(`worker exited (${code}) before replying`)); };
+    const onMessage = (r: R) => { off(); resolve(r); };
+    w.on('error', onError);
+    w.on('exit', onExit);
+    w.on('message', onMessage);
+    w.postMessage(msg);
+  });
+}
 
 /** The default entry, relative to the repository root. */
 const DEFAULT_ENTRY = 'src/workers/taskHandler.ts';

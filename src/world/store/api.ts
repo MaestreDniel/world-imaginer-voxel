@@ -67,6 +67,8 @@ export interface ColumnView {
   sectionFluid(sy: number): Uint8Array | number;
   /** The column's aux A, or null when it has none. */
   aux(): AuxView | null;
+  /** The column's aux B, or null when it has none (no stage of the column called the writer's `auxB()`). */
+  auxB(): AuxBView | null;
 }
 
 /** The 3 × 3 columns around (cx, cz) (SP3a spec §3.5); `dx`, `dz` ∈ {−1, 0, 1}. Consumed from SP4. */

@@ -451,6 +451,33 @@ describe.each([true, false])('shared %s', (shared) => {
     expect(av.surfaceBiome[17]).toBe(9);
   });
 
+  test('ColumnView.auxB (SP3b spec §7): null without a slot; otherwise the writer\'s slot, in the proto and final views', () => {
+    const s = newStore();
+    const w0 = s.claimColumn(0, 0, 0);
+    w0.aux();
+    w0.commit(3);
+    for (const v of [s.proto(0, 0)!, s.final(0, 0)!]) {
+      expect(v.aux()).not.toBeNull();
+      expect(v.auxB()).toBeNull(); // aux A alone allocates no aux B slot
+    }
+    const w = s.claimColumn(1, 0, 0);
+    const b = w.auxB();
+    b.surfaceBiomeQ[15] = 7;
+    b.caveBiomeQ[1535] = 3;
+    w.commit(3);
+    const slotB = s.table.ints[s.table.find(1, 0) + REC_AUX_B]!;
+    for (const v of [s.proto(1, 0)!, s.final(1, 0)!]) {
+      expect(v.aux()).toBeNull();
+      const bv = v.auxB()!;
+      for (const [k, off] of Object.entries(AUX_B_OFFSETS)) expect(bv[k as keyof typeof bv].byteOffset).toBe(slotB * 4096 + off);
+      expect([bv.caveBiomeQ.length, bv.surfaceBiomeQ.length]).toEqual([1536, 16]);
+      expect([bv.surfaceBiomeQ[15], bv.caveBiomeQ[1535], bv.caveBiomeQ[0]]).toEqual([7, 3, 0]);
+    }
+    // The view reads the record live: the writer's later bytes are visible through it.
+    b.surfaceBiomeQ[0] = 5;
+    expect(s.proto(1, 0)!.auxB()!.surfaceBiomeQ[0]).toBe(5);
+  });
+
   test('StoreFull at the maximum; the descriptor keeps its old value and freeColumn releases everything', () => {
     const s = newStore({ maxBlockBytes: MiB, maxByteBytes: MiB }); // 128 block slots, 256 byte slots
     const cols: [number, number][] = [];

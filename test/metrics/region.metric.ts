@@ -2,7 +2,8 @@ import { expect } from 'vitest';
 import { resolveProfile } from '../../src/core/params/profiles';
 import { expectGolden } from '../harness/goldens';
 import { metricTest } from '../harness/metric';
-import { genRegion, type GenRegionOptions, type RegionResult } from '../harness/region';
+import { integerEnv } from '../harness/env';
+import { dt1WorkerDir, genRegion, type GenRegionOptions, type RegionResult } from '../harness/region';
 
 /**
  * DT1 on the provisional T stage (SP3a spec §6.3), threshold exact (0 mismatches), on every tier:
@@ -23,7 +24,7 @@ const PROFILES = ['default', 'large_biomes'] as const;
 const REGION = pick({ cx0: -4, cz0: -4, w: 8, h: 8 }, { cx0: -16, cz0: -16, w: 32, h: 32 }, { cx0: -16, cz0: -16, w: 32, h: 32 });
 /** The spec allows the full tier to drop to two seeds if four are too slow (measured in the plan's dry run). */
 const SEEDS: readonly string[] = pick(['42'], ['42'], ['42', '1', '2', '3']);
-const SHUFFLE_SEED = Number(process.env.DT1_SHUFFLE_SEED ?? 1);
+const SHUFFLE_SEED = integerEnv('DT1_SHUFFLE_SEED', 1);
 const GOLDEN_WINDOW = [-4, -4, 8, 8] as const;
 
 interface Run {
@@ -42,7 +43,6 @@ const RUNS: readonly Run[] = [
 ];
 
 metricTest('DT1', ['mismatches'], async () => {
-  if (!Number.isInteger(SHUFFLE_SEED)) throw new Error(`DT1_SHUFFLE_SEED must be an integer, got ${process.env.DT1_SHUFFLE_SEED}`);
   const problems: string[] = [];
   let invariance = 0;
   let golden = 0;
@@ -56,7 +56,7 @@ metricTest('DT1', ['mismatches'], async () => {
       for (const [i, run] of RUNS.entries()) {
         const r: RegionResult = await genRegion({
           seed, params, ...REGION, upTo: 'T', order: run.order, threads: run.threads, cache: run.cache,
-          shuffleSeed: SHUFFLE_SEED, workerDir: 'dt1RegionWorker',
+          shuffleSeed: SHUFFLE_SEED, workerDir: dt1WorkerDir(TIER),
         });
         genMs += r.timings.totalMs;
         const hash = r.view.hash();

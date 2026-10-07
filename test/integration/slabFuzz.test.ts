@@ -5,7 +5,8 @@ import { FINAL_BLOCKS, FINAL_FLUID, FINAL_LIGHT, PROTO_BLOCKS, PROTO_FLUID } fro
 import { createStore, type VoxelStore } from '../../src/world/store/store';
 import type { SlabPool } from '../../src/world/store/pool';
 import { FUZZ_LIMITS, type FuzzReply, type FuzzStats } from '../harness/fuzzWorker';
-import { buildNodeTaskWorker } from '../harness/nodeWorker';
+import { integerEnv } from '../harness/env';
+import { ask, buildNodeTaskWorker } from '../harness/nodeWorker';
 
 /**
  * Slab fuzz (SP3a spec §3.6, §9): 4 worker threads × 100k random ops on one shared store (64 MiB block pool,
@@ -18,7 +19,7 @@ const THREADS = 4;
 const OPS = 100_000;
 const PHASES = 10;
 const MiB = 1 << 20;
-const SEED = Number(process.env['SLAB_FUZZ_SEED'] ?? '1');
+const SEED = integerEnv('SLAB_FUZZ_SEED', 1);
 
 let script = '';
 const workers: Worker[] = [];
@@ -31,20 +32,9 @@ afterAll(async () => {
   await Promise.all(workers.map((w) => w.terminate()));
 });
 
-const ask = (w: Worker, msg: unknown): Promise<FuzzReply> =>
-  new Promise((resolve, reject) => {
-    const onError = (e: Error) => reject(e);
-    w.once('message', (r: FuzzReply) => {
-      w.off('error', onError);
-      resolve(r);
-    });
-    w.once('error', onError);
-    w.postMessage(msg);
-  });
-
 /** Every reply of a phase (`msg` per thread), failing with the worker's message and the seed on an error reply. */
 async function all(msg: (thread: number) => unknown): Promise<FuzzStats[]> {
-  const replies = await Promise.all(workers.map((w, t) => ask(w, msg(t))));
+  const replies = await Promise.all(workers.map((w, t) => ask<FuzzReply>(w, msg(t))));
   return replies.map((r, t) => {
     if (r.type === 'error') throw new Error(`fuzz thread ${t} (SLAB_FUZZ_SEED=${SEED}): ${r.message}`);
     return r.stats;

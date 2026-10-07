@@ -4,6 +4,7 @@ import { join } from 'node:path';
 import { expect, test } from 'vitest';
 import type { GoldensFile } from '../harness/goldens';
 import { checkGovernance, parseGeneratorVersion } from '../harness/governance';
+import { readStateLock, STATE_LOCK_PATH, type StateIdLock } from '../harness/stateLock';
 import { ROOT } from './scan';
 
 const BASE = process.env.GOVERNANCE_BASE ?? '';
@@ -12,9 +13,10 @@ const showAtBase = (path: string): string | null => {
   try { return git('show', `${BASE}:${path}`); } catch { return null; }
 };
 
-test.skipIf(BASE === '' || /^0+$/.test(BASE))('goldens and threshold lock changes follow governance (CI, against GOVERNANCE_BASE)', () => {
+test.skipIf(BASE === '' || /^0+$/.test(BASE))('goldens, threshold lock and state-id lock changes follow governance (CI, against GOVERNANCE_BASE)', () => {
   const baseGoldensText = showAtBase('test/goldens.json');
   const baseConstants = showAtBase('src/core/constants.ts');
+  const baseStateIdsText = showAtBase('test/stateIds.lock.json');
   const headVersion = parseGeneratorVersion(readFileSync(join(ROOT, 'src/core/constants.ts'), 'utf8'));
   if (headVersion === null) throw new Error('cannot parse GENERATOR_VERSION from src/core/constants.ts');
   const errors = checkGovernance({
@@ -23,6 +25,8 @@ test.skipIf(BASE === '' || /^0+$/.test(BASE))('goldens and threshold lock change
     baseVersion: baseConstants ? parseGeneratorVersion(baseConstants) : null,
     headVersion,
     changedFiles: git('diff', '--name-only', BASE, 'HEAD').split('\n').filter((f) => f.length > 0),
+    baseStateIds: baseStateIdsText ? (JSON.parse(baseStateIdsText) as StateIdLock) : null,
+    headStateIds: readStateLock(STATE_LOCK_PATH),
   });
   expect(errors).toEqual([]);
 });

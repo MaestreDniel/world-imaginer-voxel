@@ -5,9 +5,11 @@ import { afterAll, beforeEach, describe, expect, test } from 'vitest';
 import { fnv1a64, fnv1a64Bytes, hex64, type Hash64 } from '../../src/core/hash';
 import { seedFromInput } from '../../src/core/seed';
 import { genKey, stageHashes } from '../../src/core/stage/hash';
+import { REC_AUX_B } from '../../src/world/store/columnTable';
+import { createStore, type VoxelStore } from '../../src/world/store/store';
 import {
-  REGION_CACHE_DIR, REGION_CACHE_FORMAT, REGION_CACHE_PRUNE_MS, regionCacheKey, regionCachePath, SRC_KEY_SCOPE, srcKey, srcKeyOf,
-  type RegionCacheHeader,
+  encodeRegionDump, parseRegionDump, rebuildRegion, REGION_CACHE_DIR, REGION_CACHE_FORMAT, REGION_CACHE_PRUNE_MS, regionCacheKey,
+  regionCachePath, SRC_KEY_SCOPE, srcKey, srcKeyOf, type RegionCacheHeader,
 } from '../harness/cache';
 import { paramsWith } from '../harness/gen';
 import { genRegion, type GenRegionOptions } from '../harness/region';
@@ -27,8 +29,8 @@ const header = (over: Partial<RegionCacheHeader> = {}): RegionCacheHeader => ({
 });
 
 describe('the cache key (§6.1)', () => {
-  test('REGION_CACHE_FORMAT starts at 1; the dumps live in test/.cache/regions/<hex64 of the key>.bin', () => {
-    expect(REGION_CACHE_FORMAT).toBe(1);
+  test('REGION_CACHE_FORMAT is 2 (SP3b spec §7: aux B joined the dump); the dumps live in test/.cache/regions/<hex64 of the key>.bin', () => {
+    expect(REGION_CACHE_FORMAT).toBe(2);
     expect(REGION_CACHE_DIR).toBe(fileURLToPath(new URL('../.cache/regions/', import.meta.url)));
     const h = header();
     expect(regionCachePath(h)).toBe(join(REGION_CACHE_DIR, `${hex64(regionCacheKey(h))}.bin`));
@@ -187,7 +189,8 @@ describe('genRegion with the cache (§6.1)', () => {
     ['a column record of another column', (b: Buffer) => { b.writeInt32LE(b.readInt32LE(44) + 64, 44); return b; }],
     ['a dense slot overwritten with one value (same length)', (b: Buffer) => { const [o, n] = firstDenseSlot(b); b.fill(0, o, o + n); return b; }],
     ['one flipped bit in a dense slot (same length)', (b: Buffer) => { b[firstDenseSlot(b)[0] + 100]! ^= 1; return b; }],
-    ['one flipped bit in the last column\'s aux bytes (same length)', (b: Buffer) => { b[b.length - 2048]! ^= 4; return b; }],
+    ['one flipped bit in the last column\'s aux A bytes (same length)', (b: Buffer) => { b[b.length - 8 - 4096 - 2048]! ^= 4; return b; }],
+    ['one flipped bit in the last column\'s aux B bytes (same length)', (b: Buffer) => { b[b.length - 8 - 2048]! ^= 4; return b; }],
     ['a trailing byte appended', (b: Buffer) => Buffer.concat([b, Buffer.alloc(1)])],
   ] as const)('%s is a miss and the file is rewritten', async (_what, damage) => {
     const first = await genRegion(base);
@@ -214,6 +217,19 @@ describe('genRegion with the cache (§6.1)', () => {
     expect([b.readInt32LE(44), b.readInt32LE(48), b.readInt32LE(52), b.readInt32LE(56)]).toEqual([3, -1, 1, 0]);
     // The last 8 bytes are the FNV-1a 64 (lo, hi) of everything before them.
     expect([b.readUInt32LE(b.length - 8), b.readUInt32LE(b.length - 4)]).toEqual([...fnv1a64Bytes(b.subarray(0, b.length - 8))]);
+  });
+
+  test('a hit refreshes the dump\'s mtime, so the prune grace counts from its last use', async () => {
+    await genRegion(base);
+    const path = regionCachePath(keyOf(base), DIR);
+    const old = new Date(Date.now() - 2 * REGION_CACHE_PRUNE_MS);
+    utimesSync(path, old, old);
+    expect(statSync(path).mtimeMs).toBeLessThan(Date.now() - REGION_CACHE_PRUNE_MS);
+    expect((await genRegion(base)).cacheHit).toBe(true);
+    expect(statSync(path).mtimeMs).toBeGreaterThan(Date.now() - REGION_CACHE_PRUNE_MS);
+    // A dump of another srcKey written now therefore keeps it: it is no longer old.
+    await genRegion({ ...base, srcKey: [9, 9] });
+    expect(existsSync(path)).toBe(true);
   });
 
   test('writing a dump deletes the dumps of other srcKeys untouched for REGION_CACHE_PRUNE_MS; this srcKey\'s and recent ones stay', async () => {
@@ -246,5 +262,96 @@ describe('genRegion with the cache (§6.1)', () => {
     await genRegion({ ...base, cx0: 5, srcKey: k2 });
     expect(existsSync(at({ cx0: 4 }, k1))).toBe(false);
     expect(existsSync(at({}, k2))).toBe(true);
+  });
+});
+
+describe('the dump with aux B (SP3b spec §7, format 2)', () => {
+  const MiB = 1 << 20;
+  const h: RegionCacheHeader = { genKey: [5, 6], srcKey: [7, 8], cx0: 0, cz0: 0, w: 3, h: 1, upTo: 'T' };
+  /** Column 0 has aux A and aux B, column 1 aux A only, column 2 neither; every section uniform (no dense slot). */
+  const source = (): VoxelStore => {
+    const s = createStore({ shared: false, maxBlockBytes: 4 * MiB, maxByteBytes: 4 * MiB });
+    for (let cx = 0; cx < 3; cx++) {
+      const w = s.claimColumn(cx, 0, 2);
+      for (let sy = 0; sy < 24; sy++) w.setProto(sy, new Uint16Array(4096).fill(sy < 4 ? 1 : 0), new Uint8Array(4096));
+      if (cx < 2) {
+        const a = w.aux();
+        a.worldSurfaceWG[3] = 70 + cx;
+        a.tintTH[767] = 9;
+      }
+      if (cx === 0) {
+        const b = w.auxB();
+        b.caveBiomeQ[0] = 1;
+        b.caveBiomeQ[1535] = 2;
+        b.surfaceBiomeQ[15] = 3;
+      }
+      w.commit(1);
+    }
+    return s;
+  };
+
+  test('per column: record, descriptors, dense slots, 4096 aux A bytes, then 4096 aux B bytes (zeros when absent)', () => {
+    const b = Buffer.from(encodeRegionDump(source(), h));
+    const col = 4 * (16 + 48) + 4096 + 4096;
+    expect(b.length).toBe(44 + 3 * col + 8);
+    const auxA = (k: number) => 44 + k * col + 4 * 64;
+    const auxB = (k: number) => auxA(k) + 4096;
+    expect(b.readInt16LE(auxA(0) + 6)).toBe(70);
+    expect(b.readInt16LE(auxA(1) + 6)).toBe(71);
+    expect([b[auxB(0)], b[auxB(0) + 1535], b[auxB(0) + 1536 + 15]]).toEqual([1, 2, 3]);
+    let other = 0;
+    for (let i = 0; i < 4096; i++) if (i !== 0 && i !== 1535 && i !== 1551 && b[auxB(0) + i] !== 0) other++;
+    expect(other).toBe(0);
+    for (const k of [1, 2]) expect(b.subarray(auxB(k), auxB(k) + 4096).every((x) => x === 0)).toBe(true);
+    expect(b.subarray(auxA(2), auxA(2) + 4096).every((x) => x === 0)).toBe(true);
+  });
+
+  test('a rebuild restores aux B where the column had one and allocates none where it had none', () => {
+    const src = source();
+    const cols = parseRegionDump(encodeRegionDump(src, h), h)!;
+    expect(cols).not.toBeNull();
+    const dst = createStore({ shared: false, maxBlockBytes: 4 * MiB, maxByteBytes: 4 * MiB });
+    rebuildRegion(dst, cols);
+    for (let cx = 0; cx < 3; cx++) {
+      const [a, b] = [src.proto(cx, 0)!, dst.proto(cx, 0)!];
+      const bytesB = (v: typeof a) => {
+        const x = v.auxB();
+        return x === null ? null : [...new Uint8Array(x.caveBiomeQ.buffer, x.caveBiomeQ.byteOffset, 4096)];
+      };
+      expect(bytesB(b), `column ${cx}`).toEqual(bytesB(a));
+      expect(b.aux() === null, `column ${cx}`).toBe(a.aux() === null);
+      expect(b.aux()?.worldSurfaceWG[3]).toBe(a.aux()?.worldSurfaceWG[3]);
+      expect(dst.table.ints[dst.table.find(cx, 0) + REC_AUX_B]! >= 0).toBe(cx === 0);
+    }
+    // Exactly the aux slots of the source: two aux A, one aux B (every section is uniform).
+    expect(dst.bytePool.slotCount() - dst.bytePool.freeCount()).toBe(3);
+    // The dump of the rebuilt region is the dump of the source.
+    expect(Buffer.from(encodeRegionDump(dst, h)).equals(Buffer.from(encodeRegionDump(src, h)))).toBe(true);
+  });
+});
+
+describe('the CI region cache step (SP3b spec §7)', () => {
+  const CI = readFileSync(fileURLToPath(new URL('../../.github/workflows/ci.yml', import.meta.url)), 'utf8');
+  /** The steps of the job: each `- ` item of the `steps:` list with its indented lines. */
+  const steps = CI.slice(CI.indexOf('steps:')).split(/\n\s{6}- /).slice(1);
+
+  test('one actions/cache step: the dumps only, before npm run test:metrics, with no restore-keys', () => {
+    const cache = steps.flatMap((s, i) => (/^uses: actions\/cache@/.test(s) ? [i] : []));
+    expect(cache).toHaveLength(1);
+    const step = steps[cache[0]!]!;
+    // The dumps directory and nothing else: the bundled workers (test/.cache/taskHandler*, …) are rebuilt from the code.
+    expect(step.match(/^\s*path:\s*(.+)$/m)?.[1]?.trim()).toBe('test/.cache/regions');
+    expect(fileURLToPath(new URL('../.cache/regions/', import.meta.url))).toBe(REGION_CACHE_DIR);
+    expect(step).not.toMatch(/restore-keys/);
+    const metrics = steps.findIndex((s) => /^run: npm run test:metrics\s*$/m.test(s));
+    expect(metrics).toBeGreaterThan(cache[0]!);
+  });
+
+  test('its key hashes every file a dump\'s srcKey reads (a srcKey change is always a new key) and the lock file', () => {
+    const key = steps.find((s) => /^uses: actions\/cache@/.test(s))!.match(/^\s*key:\s*(.+)$/m)?.[1] ?? '';
+    const globs = [...(key.match(/hashFiles\(([^)]*)\)/)?.[1] ?? '').matchAll(/'([^']+)'/g)].map((m) => m[1]!);
+    expect(globs).toContain('package-lock.json');
+    const covered = (path: string): boolean => globs.some((g) => (g.endsWith('/**') ? path.startsWith(g.slice(0, -2)) : g === path));
+    for (const entry of SRC_KEY_SCOPE) expect(covered(entry), entry).toBe(true);
   });
 });

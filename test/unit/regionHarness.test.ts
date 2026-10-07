@@ -1,10 +1,11 @@
 import { describe, expect, test } from 'vitest';
 import { hex64 } from '../../src/core/hash';
 import { genRegionInProcess, regionHash } from '../../src/metrics/region';
-import { protoAt, REC_AUX_A } from '../../src/world/store/columnTable';
+import { allocAux } from '../../src/world/store/aux';
+import { protoAt, REC_AUX_A, REC_AUX_B } from '../../src/world/store/columnTable';
 import { createStore } from '../../src/world/store/store';
 import { ctxFor, paramsWith } from '../harness/gen';
-import { genRegion, regionColumns, regionDiff, regionView, type GenRegionOptions } from '../harness/region';
+import { dt1WorkerDir, genRegion, regionColumns, regionDiff, regionView, type GenRegionOptions } from '../harness/region';
 
 const MiB = 1 << 20;
 
@@ -128,6 +129,20 @@ describe('regionDiff (§6.1)', () => {
     expect(regionDiff(a, regionView(b.store, 0, 0, 2, 1))).toBe('the views cover other regions');
   });
 
+  test('aux B: an absent slot equals a zero one; a differing byte is named (SP3b spec §7)', () => {
+    const a = twin();
+    const b = twin();
+    expect(a.store.proto(1, 0)!.auxB()).toBeNull(); // SP3a's T writes no aux B
+    // Give b's (1, 0) a zero-filled aux B slot in its record, as a column whose stage wrote only zero quarts holds.
+    const base = b.store.table.find(1, 0);
+    b.store.table.ints[base + REC_AUX_B] = allocAux(b.store.bytePool);
+    expect(b.store.proto(1, 0)!.auxB()).not.toBeNull();
+    expect(regionDiff(a, b)).toBeNull();
+    b.store.proto(1, 0)!.auxB()!.surfaceBiomeQ[3] = 4;
+    expect(regionDiff(a, b)).toBe('column (1, 0): aux B differs');
+    expect(regionDiff(b, a)).toBe('column (1, 0): aux B differs');
+  });
+
   test('uniform sections compare by value; a uniform section never equals a dense one with the same values', () => {
     const one = (dense: boolean, state5 = 1) => {
       const s = createStore({ shared: false, maxBlockBytes: 8 * MiB, maxByteBytes: 8 * MiB });
@@ -147,6 +162,13 @@ describe('regionDiff (§6.1)', () => {
     expect(regionDiff(one(false), one(false, 2))).toBe('column (0, 0) section 5: blocks differ');
     expect(regionDiff(one(false), one(true))).toBe('column (0, 0) section 3: fluid differs');
   });
+});
+
+test('dt1WorkerDir: one worker directory per metrics tier, none shared with the default (SP3b spec §7)', () => {
+  const dirs = (['fast', 'quick', 'full'] as const).map((t) => dt1WorkerDir(t));
+  expect(new Set([...dirs, 'regionWorker']).size).toBe(4);
+  expect(dt1WorkerDir('quick')).toBe(dt1WorkerDir('quick'));
+  for (const d of dirs) expect(d).toMatch(/^[A-Za-z0-9-]+$/);
 });
 
 describe('genRegion with 1 thread (§6.1)', () => {
