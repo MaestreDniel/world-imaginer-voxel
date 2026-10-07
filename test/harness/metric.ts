@@ -1,7 +1,7 @@
 import { mkdirSync, readdirSync, readFileSync, statSync, writeFileSync } from 'node:fs';
 import { join, relative } from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { expect, test } from 'vitest';
+import { expect, test, type TestContext } from 'vitest';
 import type { MetricId, SubProjectId } from '../../src/core/ids';
 import { THRESHOLDS, type MetricsTier, type ThresholdTable } from '../thresholds';
 import { STARTED_SPS } from './sp';
@@ -43,6 +43,8 @@ export function evaluateMetric(
     if (!started.includes(t.activeFrom)) { result.inactive.push(part); continue; }
     if (t.tiers !== undefined && !t.tiers.includes(tier)) { result.otherTier.push(part); continue; }
     result.asserted.push(part);
+    // NaN compares false against both bounds, so it would pass them: a gated NaN is an error of its own.
+    if (Number.isNaN(value)) { result.errors.push(`${id}.${part} = NaN (not a number)`); continue; }
     if (t.min !== undefined && value < t.min) result.errors.push(`${id}.${part} = ${value} < min ${t.min}`);
     if (t.max !== undefined && value > t.max) result.errors.push(`${id}.${part} = ${value} > max ${t.max}`);
   }
@@ -50,25 +52,41 @@ export function evaluateMetric(
 }
 
 /**
+ * What a metric test runs against. Every field defaults to this run's (vitest's `test`, `THRESHOLDS`, `STARTED_SPS`,
+ * `currentTier()`, `test/metrics/.out/`); the unit tests of the harness override them.
+ */
+export interface MetricEnv {
+  readonly register?: (name: string, fn: (ctx: TestContext) => Promise<void>, timeout?: number) => void;
+  readonly table?: ThresholdTable;
+  readonly started?: readonly SubProjectId[];
+  readonly tier?: MetricsTier;
+  readonly outDir?: string;
+}
+
+/**
  * Registers one metric test. Inactive parts, and parts gated on other tiers only, still run and record their value;
- * the test is skipped when no part is gated on this run.
+ * the test is skipped when no part is gated on this run, unless it has already failed: a skip would replace the
+ * result and drop the errors `expect.soft` recorded (an "insufficient sample", SP3b spec §8.1), so a failed test
+ * stays failed.
  */
 export function metricTest(
   id: MetricId,
   parts: readonly string[],
   run: () => Record<string, number> | Promise<Record<string, number>>,
   timeoutMs = 600_000,
+  env: MetricEnv = {},
 ): void {
-  test(id, async (ctx) => {
+  const { register = test, table = THRESHOLDS, started = STARTED_SPS, outDir = OUT_DIR } = env;
+  register(id, async (ctx) => {
     const values = await run();
-    mkdirSync(OUT_DIR, { recursive: true });
-    writeFileSync(join(OUT_DIR, `${id}.json`), `${JSON.stringify({ id, tier: process.env.METRICS_TIER ?? null, values }, null, 2)}\n`);
-    const r = evaluateMetric(id, parts, values);
+    mkdirSync(outDir, { recursive: true });
+    writeFileSync(join(outDir, `${id}.json`), `${JSON.stringify({ id, tier: process.env.METRICS_TIER ?? null, values }, null, 2)}\n`);
+    const r = evaluateMetric(id, parts, values, table, started, env.tier ?? currentTier());
     expect(r.errors, r.errors.join('\n')).toEqual([]);
-    if (r.asserted.length === 0) {
+    if (r.asserted.length === 0 && ctx.task.result?.state !== 'fail') {
       const why = [
-        ...r.inactive.map((p) => `${p} inactive until ${THRESHOLDS[id]?.[p]?.activeFrom}`),
-        ...r.otherTier.map((p) => `${p} gated on ${THRESHOLDS[id]?.[p]?.tiers?.join(', ')} only`),
+        ...r.inactive.map((p) => `${p} inactive until ${table[id]?.[p]?.activeFrom}`),
+        ...r.otherTier.map((p) => `${p} gated on ${table[id]?.[p]?.tiers?.join(', ')} only`),
       ];
       ctx.skip(true, `${why.join('; ')} (value recorded)`);
     }

@@ -1,5 +1,8 @@
-import { describe, expect, test } from 'vitest';
-import { coverageErrors, evaluateMetric } from '../harness/metric';
+import { mkdtempSync, rmSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
+import { afterAll, describe, expect, test } from 'vitest';
+import { coverageErrors, evaluateMetric, metricTest, type MetricEnv } from '../harness/metric';
 import type { ThresholdTable } from '../thresholds';
 
 const table: ThresholdTable = {
@@ -41,9 +44,42 @@ describe('evaluateMetric', () => {
     }
   });
 
+  test('a NaN value fails a gated part (it would pass both min and max), and is only recorded on an ungated one', () => {
+    expect(evaluateMetric('C1', ['default'], { default: NaN }, table, ['SP6']).errors).toEqual(['C1.default = NaN (not a number)']);
+    const tiered: ThresholdTable = { T3: { value: { max: 1.5, activeFrom: 'SP3b', tiers: ['full'] } } };
+    expect(evaluateMetric('T3', ['value'], { value: NaN }, tiered, ['SP3b'], 'full').errors).toEqual(['T3.value = NaN (not a number)']);
+    expect(evaluateMetric('T3', ['value'], { value: NaN }, tiered, ['SP3b'], 'fast').errors).toEqual([]);
+    expect(evaluateMetric('C1', ['cave_heavy'], { cave_heavy: NaN }, table, ['SP6']).errors).toEqual([]);
+    // ±Infinity still fails on its bound only (T3 writes Infinity for "no expected steep pairs").
+    expect(evaluateMetric('T3', ['value'], { value: Infinity }, tiered, ['SP3b'], 'full').errors).toEqual(['T3.value = Infinity > max 1.5']);
+  });
+
   test('missing values and unknown parts are errors', () => {
     expect(evaluateMetric('C1', ['default'], {}, table, ['SP6']).errors).toEqual(['C1.default: no value returned']);
     expect(evaluateMetric('C1', ['nope'], { nope: 1 }, table, ['SP6']).errors).toEqual(['C1.nope: not in THRESHOLDS']);
+  });
+});
+
+describe('metricTest: a soft failure is never skipped away (SP3b spec §8.1: "never passes silently")', () => {
+  // T3 gates on full only, so on fast its only part is off-tier and metricTest skips the test. In vitest 5 a skip
+  // replaces the result and drops the errors expect.soft recorded (requireSample's "insufficient sample").
+  const tiered: ThresholdTable = { T3: { value: { max: 1.5, activeFrom: 'SP3b', tiers: ['full'] } } };
+  const outDir = mkdtempSync(join(tmpdir(), 'wi10-metric-'));
+  afterAll(() => rmSync(outDir, { recursive: true, force: true }));
+  const env = (register: MetricEnv['register']): MetricEnv => ({ register, table: tiered, started: ['SP3b'], tier: 'fast', outDir });
+
+  // An expected failure: vitest reports it passed only when the metric test itself failed.
+  metricTest('T3', ['value'], () => {
+    expect.soft(1, 'T3 lowland border pairs: insufficient sample (1 < 2000)').toBeGreaterThanOrEqual(2000);
+    return { value: 9 };
+  }, 10_000, env(test.fails));
+  // The same off-tier metric without a soft failure is still skipped (value recorded).
+  metricTest('T3', ['value'], () => ({ value: 9 }), 10_000, env(test));
+
+  test('the off-tier metric with a soft failure failed; the clean one was skipped', (ctx) => {
+    const [failing, clean] = ctx.task.suite!.tasks.filter((t) => t.name === 'T3');
+    expect(failing?.result?.state, 'the soft failure was reported (test.fails inverts it to pass)').toBe('pass');
+    expect(clean?.result?.state).toBe('skip');
   });
 });
 
