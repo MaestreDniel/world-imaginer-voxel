@@ -1,7 +1,7 @@
 # SP3b — Density and terrain shape (Design)
 
 Date: 2026-10-07
-Status: Approved by the user (2026-10-07): the design section by section (2026-10-06 and 2026-10-07), then the written spec after the adversarial review (§15), then the §8.4 retune after the dry run's measurement. Revised by the implementation-plan dry run (2026-10-07, §16)
+Status: Complete (2026-10-07), at GENERATOR_VERSION 4; exit evidence below (approved by the user on 2026-10-07: the design section by section on 2026-10-06 and 2026-10-07, then the written spec after the adversarial review, §15, then the §8.4 retune after the dry run's measurement; revised by the implementation-plan dry run, §16)
 Parent: master spec `2026-09-26-architecture-design.md`. The sections involved are:
 - §10 SP3b, which this spec narrows: its surface-rule half becomes the new SP3c, and the old SP3c becomes SP3d (§12);
 - §2.5 (key types), §3.6 (density DAG), §3.7 (surfaceEstimate and surfaceWaterLevel), §3.16 (cross-column consistency), §3.17 (determinism);
@@ -590,7 +590,7 @@ Browser checks (`node test/tools/uiSmoke.ts --profile-dir <tmp> --shots <dir>`: 
 - The Voxels mode on SP3a's line A (−12800, 0) → B (12800, 0): "ground top y 22 to 248 · water on 14.5 % of the line, up to 41 deep", 38 colours in the 512 × 384 slice, hover "(25, 12, 0) · stone · no fluid".
 - The mountain line A (−1664, 8) → B (−640, 8): "1 024 blocks; ground top y 140 to 257 · no water", screenshot `cross-section-voxels-mountain.png`.
 - No page error apart from the favicon.ico 404.
-- Firefox (`?selftest=1` 52/52) and CI (with the region-cache step) are checked after the merge, as in SP3a.
+- Firefox and CI were checked after the merge (below).
 
 Visual review (`docs/superpowers/specs/assets/sp3b/`; world seed '42', default profile, the real T after the retune; air sky blue, stone grey, water blue darkening with depth). `npm run docs:review-slices` (`test/harness/reviewSlices.ts`) writes the slices. It reads each line's kinds and crop from the voxels, and `slices.json` records each line's summary (kinds, tops, overhangs, water-wall faces).
 - `slice-mountain.png` (1024 × 256, y 64 … 319; x −1664 … −641, z 8; every position highland with σ > 8): the crest is broken into mushroom- and hook-shaped crags that lean over their bases; 214 of 1,024 positions have ≥ 2 solid→air transitions (5 before the retune). Tops 140 … 257. **Floating rocks:** about a dozen islets of 3-15 blocks hang 5-30 blocks above the crest, mostly in the west third and the east half (97 positions by the proxy); small enclosed air pockets sit under the crest at y ≈ 120-170. No water.
@@ -606,6 +606,13 @@ Visual review (`docs/superpowers/specs/assets/sp3b/`; world seed '42', default p
   - zooms of the coast (4 px per block) and the mountain (3 px per block, a 20-block arch with a hole and a floating blob).
 - **Ocean-floor σ/jag stripe** (§8.4 item 4): three 256 × 256-block ocean windows crossed by a river channel (seed '42', cz −1024 … −1009, cx −800, −704 and −688). On the voxel floor, the mean |Δfloor| between x-neighbours is 0.29-0.34 inside the channel's σ-0.5 band against 0.36-0.37 outside. The floor's height map shows no stripe along the channel, so no T4 knob was changed.
 - The user's approval of this visual review is the last exit criterion; the assets are committed (the retune set is byte-identical to the dry run's), and the user reviews them before the merge.
+
+Done after the merge (2026-10-07):
+- `main` fast-forwarded to the branch and pushed at da2ca0e (the user chose a local merge; pushing to `main` is authorised), so the CI evidence is the push run: GitHub Actions green (build, the region-cache step, `npm test`, `npm run test:metrics`).
+- Production (Vercel) deployed da2ca0e. In headless Chrome: `?selftest=1` `✓ all 52 goldens match (7.1 s)`; `?map` loads with the cross-section's Voxels mode and no page errors.
+- Production, Firefox 157 (the user): `?selftest=1` 52/52, and every `actual` equals `test/goldens.json`; the JSON is in `assets/sp3b/selftest-firefox.json`. The user also checked the Voxels mode on a 1,710-block mountain line, A (−7114, −8573) → B (−6809, −6890): "ground top y 63 to 272 · no water", with the retuned overhanging crests and a small floating rock above them.
+
+SP3b is complete (2026-10-07): every §11 exit criterion holds.
 
 ## Threshold log
 
