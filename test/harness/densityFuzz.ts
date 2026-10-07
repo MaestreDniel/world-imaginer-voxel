@@ -158,3 +158,29 @@ export function randomDensityExpr(next: () => number, opts: DensityFuzzOptions =
   }
   return { root: gen(maxDepth, false), defs };
 }
+
+/**
+ * A terrain-shaped stand-in for SP3b §3.1's default expression over the test noises (jag → fz2a, overhang → fz3b,
+ * detail → fz3a), for the bounds tests and the driver's cost until Task 6 brings the real one:
+ * `max(tap('terrain', interpolated(offset + jag·J − y + sigma·slide(N3, SLIDE) + 2·max(0, −56 − y)
+ * − 2·max(0, y − 296))) + N_detail · amp, tap('islands', −1e6))`, J = (1 − |z2 / 3|)², amp = 0.6 + 0.9·clamp((E + 1) / 2, 0, 1).
+ */
+export function terrainStandInExpr(): DensityExpr {
+  const C = (v: number): Expr => ({ op: 'const', v });
+  const Y: Expr = { op: 'y' };
+  const add = (a: Expr, b: Expr): Expr => ({ op: 'add', a, b });
+  const mul = (a: Expr, b: Expr): Expr => ({ op: 'mul', a, b });
+  const max = (a: Expr, b: Expr): Expr => ({ op: 'max', a, b });
+  const neg = (x: Expr): Expr => ({ op: 'neg', x });
+  const J: Expr = { op: 'square', x: add(C(1), neg({ op: 'abs', x: mul({ op: 'noise2', id: 'fz2a' }, C(1 / 3)) })) };
+  const slide: Expr = { op: 'slide', x: { op: 'noise', id: 'fz3b' }, knots: [[-64, 0], [-40, 1], [240, 1], [320, 0]] };
+  let inner = add({ op: 'col', field: 'offset' }, mul({ op: 'col', field: 'jag' }, J));
+  inner = add(inner, neg(Y));
+  inner = add(inner, mul({ op: 'col', field: 'sigma' }, slide));
+  inner = add(inner, mul(C(2), max(C(0), add(C(-56), neg(Y)))));
+  inner = add(inner, neg(mul(C(2), max(C(0), add(Y, C(-296))))));
+  const terrain: Expr = { op: 'tap', name: 'terrain', x: { op: 'interpolated', x: inner } };
+  const amp = add(C(0.6), mul(C(0.9), { op: 'clamp', x: mul(add({ op: 'col', field: 'E' }, C(1)), C(0.5)), lo: 0, hi: 1 }));
+  const detail = mul({ op: 'noise', id: 'fz3a' }, amp);
+  return { root: max(add(terrain, detail), { op: 'tap', name: 'islands', x: C(-1e6) }), defs: {} };
+}
