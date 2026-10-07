@@ -1,5 +1,6 @@
 /**
- * SP3a golden digests (SP3a spec §6.4): the block registry's first states and the provisional T region per profile.
+ * SP3a golden digests (SP3a spec §6.4): the block registry's first states and the T region per profile
+ * (the real T and aux B since GENERATOR_VERSION 4, SP3b spec §9).
  * Chained into `allGoldenKeys`/`computeAnyGolden` (`sp2aGoldens.ts`), so the unit tests, `?selftest=1` and
  * `test/tools/goldensJsc.ts` all check them. Follows the core determinism rules (in `DET_FILES`, arch-tested).
  * Every value is hex64.

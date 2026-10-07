@@ -1,8 +1,11 @@
 import { describe, expect, test } from 'vitest';
+import type { ParamsPatch } from '../../src/core/params/schema';
 import {
   buildColumnSample, latticeIndex, newColumnSample, readBiome, readField, readLevel, type ColumnSample,
 } from '../../src/gen/column/columnStage';
 import type { GenContext } from '../../src/gen/context';
+import { createDensityContext, type DensityContext } from '../../src/gen/density/context';
+import { probe } from '../../src/gen/density/probe';
 import { terrainStage } from '../../src/gen/pipeline/terrainStage';
 import { fluidType, WATER_SOURCE } from '../../src/world/blocks/fluid';
 import { AIR, BEDROCK, COLLIDE, STONE } from '../../src/world/blocks/index';
@@ -16,145 +19,229 @@ const MiB = 1 << 20;
 const NEVER = () => false;
 
 /**
- * Columns of world seed '42' (default profile) found by a scan: every position of LAND is dry, every position of
- * SEA is open ocean, LAKE lies inside one lake, RIVER crosses a wet river channel next to dry land, COAST mixes sea
- * and land. The category tests below re-derive the categories, so a world change fails loudly here.
+ * Columns of world seed '42' (default profile) on the row cz −2000, found by scans: LAND is dry land, SEA open ocean,
+ * LAKE inside one lake, RIVER crosses a wet river channel, COAST mixes sea and land (SP3a's fixtures); OVERHANG holds
+ * water under stone near the water line and WALL water walls (§4) on the real T. The tests below re-derive what they
+ * rely on, so a world change fails loudly here.
  */
 const LAND = [-1963, -2000] as const;
 const SEA = [-2000, -2000] as const;
 const LAKE = [-1001, -2000] as const;
 const RIVER = [-742, -2000] as const;
 const COAST = [-1667, -2000] as const;
+const OVERHANG = [-1238, -2000] as const;
+const WALL = [-1689, -2000] as const;
+const FIXTURES = [['land', LAND], ['sea', SEA], ['lake', LAKE], ['river', RIVER], ['coast', COAST], ['overhang', OVERHANG], ['wall', WALL]] as const;
 
-type Kind = 'land' | 'sea' | 'lake' | 'river';
+/** A shape spline that is `y` everywhere. */
+const flat = (y: number) => ({ coord: 'C' as const, points: [{ x: -1, y, d: 0 }, { x: 1, y, d: 0 }] });
 
-interface Expected { top: Int32Array; swl: Float64Array; kinds: Kind[]; biome: Uint8Array }
+const ctx = ctxFor('42');
+/** An extreme but valid shape (σ 40 everywhere): enclosed air far below the water line under the sea. */
+const ctx40 = ctxFor('42', { shape: { sigma: flat(40) } });
+/** §3.2: σ and jag splines at 0, both detail amplitudes at 0. */
+const REDUCED: ParamsPatch = { shape: { sigma: flat(0), jag: flat(0) }, density: { detailAmpLo: 0, detailAmpHi: 0 } };
+const ctxReduced = ctxFor('42', REDUCED);
 
-/** The §4 inputs per position `lz·16 + lx`, read from the ColumnSample independently of the stage. */
-function expectedOf(ctx: GenContext, cx: number, cz: number): Expected {
-  const s: ColumnSample = buildColumnSample(ctx, cx, cz, newColumnSample());
-  const top = new Int32Array(256);
+const DCS = new Map<GenContext, DensityContext>();
+const dcOf = (c: GenContext): DensityContext => {
+  let dc = DCS.get(c);
+  if (dc === undefined) DCS.set(c, (dc = createDensityContext(c)));
+  return dc;
+};
+
+/** Voxel index `((y + 64)·16 + lz)·16 + lx`. */
+const vi = (lx: number, y: number, lz: number): number => ((y + 64) * 16 + lz) * 16 + lx;
+
+interface Expected {
+  readonly s: ColumnSample;
+  readonly blocks: Uint16Array;
+  readonly fluid: Uint8Array;
+  /** Per position `lz·16 + lx`: the highest stone y (−64 when none), and surfaceWaterLevel (nearest corner). */
+  readonly top: Int32Array;
+  readonly swl: Float64Array;
+}
+
+/** §4 from the probe (no early-outs), independently of the stage: fill, `top` and the water v0 rule. */
+function expectedOf(c: GenContext, cx: number, cz: number): Expected {
+  const dc = dcOf(c);
+  const s = buildColumnSample(c, cx, cz, newColumnSample());
+  const blocks = new Uint16Array(98304);
+  const fluid = new Uint8Array(98304);
+  const top = new Int32Array(256).fill(-64);
   const swl = new Float64Array(256);
-  const biome = new Uint8Array(256);
-  const kinds: Kind[] = [];
   for (let lz = 0; lz < 16; lz++) {
     for (let lx = 0; lx < 16; lx++) {
       const x = 16 * cx + lx;
       const z = 16 * cz + lz;
-      const p = lz * 16 + lx;
-      top[p] = Math.floor(readField(s, 'surfaceEst', x, z));
-      swl[p] = readLevel(s, 'surfaceWaterLevel', x, z);
-      biome[p] = readBiome(s, ctx, x, z);
-      // The nearest quart corner, as readLevel picks it.
-      const k = latticeIndex(Math.min(4, Math.max(0, Math.round(lx / 4 - 1e-9))), Math.min(4, Math.max(0, Math.round(lz / 4 - 1e-9))));
-      const wet = (s.flags[k]! & 1) !== 0;
-      if (swl[p] === -Infinity) kinds.push('land');
-      else if (s.f.lakeMask[k] === 1) kinds.push('lake');
-      else if (wet) kinds.push('river');
-      else kinds.push('sea');
+      blocks[vi(lx, -64, lz)] = BEDROCK;
+      for (let y = -63; y <= 319; y++) {
+        const solid = probe(dc, x, y, z) > 0;
+        blocks[vi(lx, y, lz)] = solid ? STONE : AIR;
+        if (solid) top[lz * 16 + lx] = y;
+      }
+      swl[lz * 16 + lx] = readLevel(s, 'surfaceWaterLevel', x, z);
     }
   }
-  return { top, swl, kinds, biome };
+  for (let p = 0; p < 256; p++) {
+    for (let y = -63; y <= 319; y++) {
+      const i = vi(p & 15, y, p >> 4);
+      if (blocks[i] === AIR && y > top[p]! - 12 && y <= swl[p]!) fluid[i] = WATER_SOURCE;
+    }
+  }
+  return { s, blocks, fluid, top, swl };
 }
 
-/** §4's fill rule. */
-const blockAt = (top: number, y: number): number => (y === -64 ? BEDROCK : y <= top ? STONE : AIR);
-const fluidAt = (top: number, swl: number, y: number): number => (y !== -64 && y > top && y <= swl ? WATER_SOURCE : 0);
-
-function generate(ctx: GenContext, cx: number, cz: number, store: VoxelStore = createStore({ shared: false, maxBlockBytes: 4 * MiB, maxByteBytes: 4 * MiB })): { store: VoxelStore; view: ColumnView } {
+function generate(c: GenContext, cx: number, cz: number, store: VoxelStore = createStore({ shared: false, maxBlockBytes: 4 * MiB, maxByteBytes: 4 * MiB })): { store: VoxelStore; view: ColumnView } {
   const w = store.claimColumn(cx, cz, 0);
-  expect(terrainStage(ctx, cx, cz, w, NEVER)).toBe(true);
+  expect(terrainStage(c, cx, cz, w, NEVER)).toBe(true);
   w.commit(1);
   return { store, view: store.proto(cx, cz)! };
 }
 
-const ctx = ctxFor('42');
+/** Voxels where the view differs from the expected blocks or fluid. */
+function mismatches(view: ColumnView, e: Expected): number {
+  let bad = 0;
+  for (let lz = 0; lz < 16; lz++) {
+    for (let lx = 0; lx < 16; lx++) {
+      for (let y = -64; y <= 319; y++) {
+        const i = vi(lx, y, lz);
+        if (view.block(lx, y, lz) !== e.blocks[i] || view.fluid(lx, y, lz) !== e.fluid[i]) bad++;
+      }
+    }
+  }
+  return bad;
+}
 
-describe('fill rule (§4)', () => {
-  test.each([
-    ['land', LAND], ['sea', SEA], ['lake', LAKE], ['river', RIVER], ['coast', COAST],
-  ] as const)('%s column: every voxel follows the rule', (_name, [cx, cz]) => {
-    const e = expectedOf(ctx, cx, cz);
-    const { view } = generate(ctx, cx, cz);
-    let bad = 0;
-    for (let lz = 0; lz < 16; lz++) {
-      for (let lx = 0; lx < 16; lx++) {
-        const p = lz * 16 + lx;
-        for (let y = -64; y <= 319; y++) {
-          if (view.block(lx, y, lz) !== blockAt(e.top[p]!, y) || view.fluid(lx, y, lz) !== fluidAt(e.top[p]!, e.swl[p]!, y)) bad++;
+const EXPECTED = new Map<string, Expected>();
+const expectedFor = (c: GenContext, [cx, cz]: readonly [number, number]): Expected => {
+  const key = `${c === ctx ? 'd' : c === ctx40 ? 's40' : 'r'}|${cx}|${cz}`;
+  let e = EXPECTED.get(key);
+  if (e === undefined) EXPECTED.set(key, (e = expectedOf(c, cx, cz)));
+  return e;
+};
+
+describe('fill and water v0 (§4)', () => {
+  test.each(FIXTURES)('%s: every voxel is bedrock at −64, stone ⇔ density > 0, water by the v0 rule', (_name, col) => {
+    const e = expectedFor(ctx, col);
+    expect(mismatches(generate(ctx, col[0], col[1]).view, e)).toBe(0);
+  });
+
+  test('σ 40 world: the sea and coast columns follow the rule too', () => {
+    for (const col of [SEA, COAST, OVERHANG]) expect(mismatches(generate(ctx40, col[0], col[1]).view, expectedFor(ctx40, col))).toBe(0);
+  });
+
+  test('the world\'s vertical ends: stone up to y 319 (offset 320, σ 64, jag 128) and a sea down to the floor (offset −64, σ 64) follow the rule, with their heightmaps', () => {
+    const ceiling = ctxFor('42', { shape: { offset: flat(320), sigma: flat(64), jag: flat(128) } });
+    const floor = ctxFor('42', { shape: { offset: flat(-64), sigma: flat(64) } });
+    let at319 = 0, deepWater = 0;
+    for (const [c, [cx, cz]] of [[ceiling, LAND], [ceiling, SEA], [floor, LAND], [floor, SEA]] as const) {
+      const e = expectedOf(c, cx, cz);
+      const { view } = generate(c, cx, cz);
+      expect(mismatches(view, e)).toBe(0);
+      const aux = view.aux()!;
+      for (let p = 0; p < 256; p++) {
+        const lx = p & 15, lz = p >> 4;
+        // WORLD_SURFACE_WG: above the highest non-air or water voxel (320 when it is stone at y 319); OCEAN_FLOOR_WG:
+        // above the highest stone (−63: the bedrock, when none).
+        let surface = -64;
+        for (let y = 319; y > -64; y--) {
+          if (e.blocks[vi(lx, y, lz)] !== AIR || e.fluid[vi(lx, y, lz)] !== 0) { surface = y; break; }
+        }
+        expect([aux.worldSurfaceWG[p], aux.oceanFloorWG[p]]).toEqual([surface + 1, e.top[p]! + 1]);
+        if (e.top[p] === 319) at319++;
+        for (let y = -63; y <= -40; y++) if (e.fluid[vi(lx, y, lz)] !== 0) deepWater++;
+      }
+    }
+    // Both ends are reached: stone in the top row (no row above it to clip), and water within 24 blocks of the bedrock.
+    expect(at319).toBeGreaterThan(64);
+    expect(deepWater).toBeGreaterThan(256);
+  });
+
+  test('air under an overhang near the water line fills', () => {
+    const e = expectedFor(ctx, OVERHANG);
+    const { view } = generate(ctx, ...OVERHANG);
+    let under = 0;
+    for (let p = 0; p < 256; p++) {
+      const lx = p & 15, lz = p >> 4;
+      for (let y = -63; y < e.top[p]!; y++) {
+        if (view.fluid(lx, y, lz) === 0) continue;
+        under++;
+        // Stone above it in its own position, and within 12 of the top.
+        expect(view.block(lx, y, lz)).toBe(AIR);
+        expect(y).toBeGreaterThan(e.top[p]! - 12);
+      }
+    }
+    expect(under).toBeGreaterThan(0);
+  });
+
+  test('deeper enclosed air stays dry (σ 40 sea): air at y ≤ top − 12 below the water level holds no water', () => {
+    const e = expectedFor(ctx40, SEA);
+    const { view } = generate(ctx40, ...SEA);
+    let pockets = 0;
+    for (let p = 0; p < 256; p++) {
+      const lx = p & 15, lz = p >> 4;
+      for (let y = -63; y <= e.top[p]! - 12; y++) {
+        if (view.block(lx, y, lz) !== AIR || y > e.swl[p]!) continue;
+        pockets++;
+        expect(view.fluid(lx, y, lz)).toBe(0);
+      }
+    }
+    expect(pockets).toBeGreaterThan(0);
+  });
+
+  test('water walls: water beside a dry position whose own level is −∞ and whose top is below the water', () => {
+    const e = expectedFor(ctx, WALL);
+    const { view } = generate(ctx, ...WALL);
+    let walls = 0;
+    for (let p = 0; p < 256; p++) {
+      const lx = p & 15, lz = p >> 4;
+      for (let y = -63; y <= 319; y++) {
+        if (view.fluid(lx, y, lz) === 0) continue;
+        for (const [dx, dz] of [[1, 0], [-1, 0], [0, 1], [0, -1]] as const) {
+          const nx = lx + dx, nz = lz + dz;
+          if (nx < 0 || nx > 15 || nz < 0 || nz > 15) continue;
+          const q = nz * 16 + nx;
+          if (view.block(nx, y, nz) === AIR && view.fluid(nx, y, nz) === 0 && e.swl[q] === -Infinity && e.top[q]! < y) walls++;
         }
       }
     }
-    expect(bad).toBe(0);
-  });
-
-  test('land: dry everywhere, stone up to ⌊surfaceEst⌋, air above', () => {
-    const [cx, cz] = LAND;
-    const e = expectedOf(ctx, cx, cz);
-    expect(new Set(e.kinds)).toEqual(new Set(['land']));
-    const { view } = generate(ctx, cx, cz);
-    for (const p of [0, 17, 255]) {
-      const lx = p & 15, lz = p >> 4, t = e.top[p]!;
-      expect([view.block(lx, -64, lz), view.block(lx, t, lz), view.block(lx, t + 1, lz)]).toEqual([BEDROCK, STONE, AIR]);
-      expect(view.fluid(lx, t + 1, lz)).toBe(0);
-    }
-  });
-
-  test('sea: water sources from ⌊surfaceEst⌋ + 1 up to sea level 63, air above', () => {
-    const [cx, cz] = SEA;
-    const e = expectedOf(ctx, cx, cz);
-    expect(new Set(e.kinds)).toEqual(new Set(['sea']));
-    const { view } = generate(ctx, cx, cz);
-    for (let p = 0; p < 256; p++) {
-      const lx = p & 15, lz = p >> 4, t = e.top[p]!;
-      expect(e.swl[p]).toBe(63);
-      expect(t).toBeLessThan(63);
-      expect([view.block(lx, t, lz), view.fluid(lx, t, lz)]).toEqual([t === -64 ? BEDROCK : STONE, 0]);
-      expect([view.block(lx, t + 1, lz), view.fluid(lx, t + 1, lz)]).toEqual([AIR, WATER_SOURCE]);
-      expect([view.block(lx, 63, lz), view.fluid(lx, 63, lz)]).toEqual([AIR, WATER_SOURCE]);
-      expect([view.block(lx, 64, lz), view.fluid(lx, 64, lz)]).toEqual([AIR, 0]);
-    }
-  });
-
-  test('lake: water up to the lake level (not sea level), dry land outside', () => {
-    const [cx, cz] = LAKE;
-    const e = expectedOf(ctx, cx, cz);
-    expect(e.kinds.every((k) => k === 'lake')).toBe(true);
-    const { view } = generate(ctx, cx, cz);
-    let wetCells = 0;
-    for (let p = 0; p < 256; p++) {
-      const lx = p & 15, lz = p >> 4, t = e.top[p]!, w = Math.floor(e.swl[p]!);
-      expect(w).not.toBe(63);
-      if (w <= t) continue;
-      wetCells++;
-      expect(view.fluid(lx, w, lz)).toBe(WATER_SOURCE);
-      expect(view.fluid(lx, w + 1, lz)).toBe(0);
-    }
-    expect(wetCells).toBeGreaterThan(0);
-  });
-
-  test('river: wet channel positions hold water up to 63, beside dry land', () => {
-    const [cx, cz] = RIVER;
-    const e = expectedOf(ctx, cx, cz);
-    expect(e.kinds).toContain('land');
-    const { view } = generate(ctx, cx, cz);
-    let channel = 0;
-    for (let p = 0; p < 256; p++) {
-      if (e.kinds[p] !== 'river' || e.top[p]! >= 63) continue;
-      channel++;
-      const lx = p & 15, lz = p >> 4;
-      expect([view.fluid(lx, 63, lz), view.fluid(lx, 64, lz), view.fluid(lx, e.top[p]!, lz)]).toEqual([WATER_SOURCE, 0, 0]);
-    }
-    expect(channel).toBeGreaterThan(0);
+    expect(walls).toBeGreaterThan(0);
   });
 });
 
-describe('aux A (§3.4, §4)', () => {
-  test.each([
-    ['land', LAND], ['sea', SEA], ['lake', LAKE], ['river', RIVER], ['coast', COAST],
-  ] as const)('%s: heightmaps by the §3.4 predicates, surfaceBiome = the zoomed biome, other fields 0', (_name, [cx, cz]) => {
-    const e = expectedOf(ctx, cx, cz);
-    const { store, view } = generate(ctx, cx, cz);
+describe('reduction to SP3a (§3.2)', () => {
+  test.each([['land', LAND], ['sea', SEA], ['lake', LAKE], ['coast', COAST], ['overhang', OVERHANG]] as const)(
+    '%s: with σ, jag and detail at 0 the column is SP3a\'s y ≤ ⌊surfaceEst⌋ fill', (_name, [cx, cz]) => {
+      const s = buildColumnSample(ctxReduced, cx, cz, newColumnSample());
+      // Away from river channels (rivers hard-code σ 0.5 there): every corner column's σ and jag is 0.
+      for (let j = 0; j <= 4; j++) {
+        for (let i = 0; i <= 4; i++) expect([s.f.sigma[latticeIndex(i, j)], s.f.jag[latticeIndex(i, j)]]).toEqual([0, 0]);
+      }
+      const { view } = generate(ctxReduced, cx, cz);
+      let nearInteger = 0;
+      let bad = 0;
+      for (let lz = 0; lz < 16; lz++) {
+        for (let lx = 0; lx < 16; lx++) {
+          const est = readField(s, 'surfaceEst', 16 * cx + lx, 16 * cz + lz);
+          if (Math.abs(est - Math.round(est)) < 1e-9) { nearInteger++; continue; }
+          const top = Math.floor(est);
+          const swl = readLevel(s, 'surfaceWaterLevel', 16 * cx + lx, 16 * cz + lz);
+          for (let y = -64; y <= 319; y++) {
+            const block = y === -64 ? BEDROCK : y <= top ? STONE : AIR;
+            const fluid = y !== -64 && y > top && y <= swl ? WATER_SOURCE : 0;
+            if (view.block(lx, y, lz) !== block || view.fluid(lx, y, lz) !== fluid) bad++;
+          }
+        }
+      }
+      expect([nearInteger, bad]).toEqual([0, 0]);
+    });
+});
+
+describe('aux A (SP3a §3.4, §4)', () => {
+  test.each(FIXTURES)('%s: heightmaps by the §3.4 predicates, surfaceBiome = the zoomed biome, other fields 0', (_name, [cx, cz]) => {
+    const e = expectedFor(ctx, [cx, cz]);
+    const { view } = generate(ctx, cx, cz);
     const aux = view.aux()!;
     for (let p = 0; p < 256; p++) {
       const lx = p & 15, lz = p >> 4;
@@ -165,72 +252,76 @@ describe('aux A (§3.4, §4)', () => {
         if (of === -64 && COLLIDE[b] !== 0) of = y + 1;
       }
       expect([aux.worldSurfaceWG[p], aux.oceanFloorWG[p]]).toEqual([ws, of]);
-      // §4: land both ⌊surfaceEst⌋ + 1; under water the top water y + 1 and ⌊surfaceEst⌋ + 1.
-      const t = e.top[p]!;
-      const wet = Math.floor(e.swl[p]!) > t;
-      expect([aux.worldSurfaceWG[p], aux.oceanFloorWG[p]]).toEqual([wet ? Math.floor(e.swl[p]!) + 1 : t + 1, t + 1]);
-      expect(aux.surfaceBiome[p]).toBe(e.biome[p]);
+      expect(aux.oceanFloorWG[p]).toBe(e.top[p]! + 1);
+      expect(aux.surfaceBiome[p]).toBe(readBiome(e.s, ctx, 16 * cx + lx, 16 * cz + lz));
     }
     for (const f of ['worldSurface', 'motionBlocking', 'oceanFloor', 'lightBlocking', 'tintTH'] as const) {
       expect(aux[f].every((v) => v === 0)).toBe(true);
     }
-    expect(store.table.ints[store.table.find(cx, cz) + REC_AUX_B]).toBe(-1);
+  });
+});
+
+describe('aux B (§4)', () => {
+  test('surfaceBiomeQ[qz·4 + qx] is lattice point (qx, qz)\'s 2D biome; caveBiomeQ and the rest of the slot are 0', () => {
+    let asymmetric = 0;
+    for (const [, [cx, cz]] of FIXTURES) {
+      const { store, view } = generate(ctx, cx, cz);
+      expect(store.table.ints[store.table.find(cx, cz) + REC_AUX_B]).toBeGreaterThanOrEqual(0);
+      const b = view.auxB()!;
+      const s = buildColumnSample(ctx, cx, cz, newColumnSample());
+      for (let qz = 0; qz < 4; qz++) {
+        for (let qx = 0; qx < 4; qx++) {
+          expect(b.surfaceBiomeQ[qz * 4 + qx]).toBe(s.biome[latticeIndex(qx, qz)]);
+          if (s.biome[latticeIndex(qx, qz)] !== s.biome[latticeIndex(qz, qx)]) asymmetric++;
+        }
+      }
+      const slot = new Uint8Array(b.caveBiomeQ.buffer, b.caveBiomeQ.byteOffset, 4096);
+      let nonZero = 0;
+      for (let i = 0; i < 4096; i++) if ((i < 1536 || i >= 1552) && slot[i] !== 0) nonZero++;
+      expect(nonZero).toBe(0);
+    }
+    // Some fixture's quarts are not symmetric, so the test pins qz·4 + qx against qx·4 + qz.
+    expect(asymmetric).toBeGreaterThan(0);
   });
 });
 
 describe('sections (§4: each channel uniform or dense)', () => {
-  test.each([
-    ['land', LAND], ['sea', SEA], ['lake', LAKE], ['coast', COAST],
-  ] as const)('%s: a channel is uniform exactly when all its 4096 values are equal', (_name, [cx, cz]) => {
-    const e = expectedOf(ctx, cx, cz);
-    const { store } = generate(ctx, cx, cz);
-    const base = store.table.find(cx, cz);
+  test.each(FIXTURES)('%s: a channel is uniform exactly when all its 4096 values are equal', (_name, col) => {
+    const e = expectedFor(ctx, col);
+    const { store } = generate(ctx, col[0], col[1]);
+    const base = store.table.find(col[0], col[1]);
     const ints = store.table.ints;
-    let uniformBlocks = 0, uniformFluid = 0;
     for (let sy = 0; sy < 24; sy++) {
-      const blocks = new Set<number>();
-      const fluid = new Set<number>();
-      for (let ly = 0; ly < 16; ly++) {
-        const y = -64 + 16 * sy + ly;
-        for (let p = 0; p < 256; p++) {
-          blocks.add(blockAt(e.top[p]!, y));
-          fluid.add(fluidAt(e.top[p]!, e.swl[p]!, y));
-        }
-      }
+      const blocks = new Set(e.blocks.subarray(4096 * sy, 4096 * (sy + 1)));
+      const fluid = new Set(e.fluid.subarray(4096 * sy, 4096 * (sy + 1)));
       const b = ints[protoAt(base, sy) + PROTO_BLOCKS]!;
       const f = ints[protoAt(base, sy) + PROTO_FLUID]!;
-      if (blocks.size === 1) { uniformBlocks++; expect(b).toBe(-1 - [...blocks][0]!); } else expect(b).toBeGreaterThanOrEqual(0);
-      if (fluid.size === 1) { uniformFluid++; expect(f).toBe(-1 - [...fluid][0]!); } else expect(f).toBeGreaterThanOrEqual(0);
+      if (blocks.size === 1) expect(b).toBe(-1 - [...blocks][0]!); else expect(b).toBeGreaterThanOrEqual(0);
+      if (fluid.size === 1) expect(f).toBe(-1 - [...fluid][0]!); else expect(f).toBeGreaterThanOrEqual(0);
     }
     // Section 0 holds bedrock and stone (dense); the top section is uniform air without fluid.
     expect(ints[protoAt(base, 0) + PROTO_BLOCKS]).toBeGreaterThanOrEqual(0);
     expect([ints[protoAt(base, 23) + PROTO_BLOCKS], ints[protoAt(base, 23) + PROTO_FLUID]]).toEqual([-1, -1]);
-    expect(uniformBlocks).toBeGreaterThan(10);
-    expect(uniformFluid).toBeGreaterThan(10);
   });
 
-  test('a full stone section costs no slot (uniform stone, −1 − STONE)', () => {
-    const [cx, cz] = LAND;
-    const { store } = generate(ctx, cx, cz);
-    expect(store.table.ints[protoAt(store.table.find(cx, cz), 1) + PROTO_BLOCKS]).toBe(-1 - STONE);
-  });
-
-  test('a full water section of the deep sea costs no slot (air, uniform fluid −1 − WATER_SOURCE)', () => {
-    const [cx, cz] = SEA;
-    const { store } = generate(ctx, cx, cz);
-    const at = protoAt(store.table.find(cx, cz), 7);
-    expect([store.table.ints[at + PROTO_BLOCKS], store.table.ints[at + PROTO_FLUID]]).toEqual([-1 - AIR, -1 - WATER_SOURCE]);
+  test('a full stone section and a full water section of the deep sea cost no slot', () => {
+    const land = generate(ctx, ...LAND).store;
+    expect(land.table.ints[protoAt(land.table.find(...LAND), 1) + PROTO_BLOCKS]).toBe(-1 - STONE);
+    const sea = generate(ctx, ...SEA).store;
+    const at = protoAt(sea.table.find(...SEA), 7);
+    expect([sea.table.ints[at + PROTO_BLOCKS], sea.table.ints[at + PROTO_FLUID]]).toEqual([-1 - AIR, -1 - WATER_SOURCE]);
   });
 });
 
 /** A writer that records the calls (no store). */
-function spyWriter(): { w: ColumnWriter; sections: number[]; aux: number; commits: number } {
-  const log = { sections: [] as number[], aux: 0, commits: 0 };
+function spyWriter(): { w: ColumnWriter; sections: number[]; aux: number; auxB: number; commits: number } {
+  const log = { sections: [] as number[], aux: 0, auxB: 0, commits: 0 };
   const auxView: AuxView = {
     worldSurfaceWG: new Int16Array(256), oceanFloorWG: new Int16Array(256), worldSurface: new Int16Array(256),
     motionBlocking: new Int16Array(256), oceanFloor: new Int16Array(256), lightBlocking: new Int16Array(256),
     surfaceBiome: new Uint8Array(256), tintTH: new Uint8Array(768),
   };
+  const auxBView: AuxBView = { caveBiomeQ: new Uint8Array(1536), surfaceBiomeQ: new Uint8Array(16) };
   const w: ColumnWriter = {
     cx: 0, cz: 0,
     setProto(sy, blocks, fluid) {
@@ -240,38 +331,56 @@ function spyWriter(): { w: ColumnWriter; sections: number[]; aux: number; commit
     setFinal() { throw new Error('the T stage writes no final set'); },
     shareFinal() { throw new Error('the T stage writes no final set'); },
     aux() { log.aux++; return auxView; },
-    auxB(): AuxBView { throw new Error('SP3a allocates no aux B'); },
+    auxB() { log.auxB++; return auxBView; },
     commit() { log.commits++; },
   };
-  return { w, get sections() { return log.sections; }, get aux() { return log.aux; }, get commits() { return log.commits; } };
+  return {
+    w, get sections() { return log.sections; }, get aux() { return log.aux; }, get auxB() { return log.auxB; },
+    get commits() { return log.commits; },
+  };
 }
 
 describe('order and abort (§4)', () => {
-  test('sections 0 … 23 in order, stop polled once before each, then aux; the stage never commits', () => {
+  test('6 density polls, then sections 0 … 23 in order with a poll before each, then aux A and aux B; never commits', () => {
     const spy = spyWriter();
-    let polls = 0;
-    expect(terrainStage(ctx, 3, -2, spy.w, () => { polls++; return false; })).toBe(true);
+    const at: number[] = [];
+    expect(terrainStage(ctx, 3, -2, spy.w, () => { at.push(spy.sections.length); return false; })).toBe(true);
     expect(spy.sections).toEqual(Array.from({ length: 24 }, (_, i) => i));
-    expect(polls).toBe(24);
-    expect([spy.aux, spy.commits]).toEqual([1, 0]);
+    // No section is written during the density phase: the first 7 polls see none.
+    expect(at).toEqual([0, 0, 0, 0, 0, 0, ...Array.from({ length: 24 }, (_, i) => i)]);
+    expect([spy.aux, spy.auxB, spy.commits]).toEqual([1, 1, 0]);
   });
 
-  test.each([0, 1, 7, 23])('stop true before section %i: returns false at once, no aux, no commit', (k) => {
+  test.each([0, 1, 5, 6, 7, 13, 29])('stop true at poll %i: returns false at once, no aux, no commit', (k) => {
     const spy = spyWriter();
     let polls = 0;
     expect(terrainStage(ctx, 3, -2, spy.w, () => ++polls > k)).toBe(false);
-    expect(spy.sections).toEqual(Array.from({ length: k }, (_, i) => i));
+    expect(spy.sections).toEqual(Array.from({ length: Math.max(0, k - 6) }, (_, i) => i));
     expect(polls).toBe(k + 1);
-    expect([spy.aux, spy.commits]).toEqual([0, 0]);
+    expect([spy.aux, spy.auxB, spy.commits]).toEqual([0, 0, 0]);
   });
 
-  test('deterministic: the same column twice gives the same voxels and aux', () => {
+  test('a stop in the density phase leaves no trace: the next column is generated as if alone', () => {
+    let polls = 0;
+    expect(terrainStage(ctx, ...OVERHANG, spyWriter().w, () => ++polls > 3)).toBe(false);
+    expect(mismatches(generate(ctx, ...COAST).view, expectedFor(ctx, COAST))).toBe(0);
+  });
+
+  test('deterministic, and one DensityContext per GenContext: interleaved contexts do not disturb each other', () => {
     const a = generate(ctx, ...COAST).view;
+    const other = generate(ctx40, ...COAST).view;
     const b = generate(ctx, ...COAST).view;
+    const fresh = generate(ctxFor('42'), ...COAST).view;
+    let differs = 0;
     for (let sy = 0; sy < 24; sy++) {
       expect(a.sectionBlocks(sy)).toEqual(b.sectionBlocks(sy));
       expect(a.sectionFluid(sy)).toEqual(b.sectionFluid(sy));
+      expect(fresh.sectionBlocks(sy)).toEqual(a.sectionBlocks(sy));
+      const x = other.sectionBlocks(sy), y = a.sectionBlocks(sy);
+      if (typeof x !== typeof y || (typeof x === 'number' ? x !== y : !(x as Uint16Array).every((v, i) => v === (y as Uint16Array)[i]))) differs++;
     }
+    expect(differs).toBeGreaterThan(0);
     expect(Array.from(a.aux()!.worldSurfaceWG)).toEqual(Array.from(b.aux()!.worldSurfaceWG));
+    expect(Array.from(a.auxB()!.surfaceBiomeQ)).toEqual(Array.from(b.auxB()!.surfaceBiomeQ));
   });
 });

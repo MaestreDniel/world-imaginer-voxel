@@ -3,7 +3,7 @@ import { fnv1a64Bytes, hex64 } from '../../src/core/hash';
 import type { GenContext } from '../../src/gen/context';
 import { fillColumnT, genRegionInProcess, regionHash } from '../../src/metrics/region';
 import { torusSlot as torusSlotOf } from '../../src/core/coords';
-import { protoAt, REC_AUX_A, REC_BLOCK_VERSION, REC_CLAIMED, REC_EPOCH, STATUS_PROTO } from '../../src/world/store/columnTable';
+import { protoAt, REC_AUX_A, REC_AUX_B, REC_BLOCK_VERSION, REC_CLAIMED, REC_EPOCH, STATUS_PROTO } from '../../src/world/store/columnTable';
 import { PROTO_BLOCKS, PROTO_FLUID } from '../../src/world/store/section';
 import { createStore, SlotBusy, StoreFull, type VoxelStore } from '../../src/world/store/store';
 import { ctxFor } from '../harness/gen';
@@ -21,7 +21,7 @@ const slots = (s: VoxelStore) => [s.blockPool.freeCount(), s.blockPool.slotCount
  * pins the order, the little-endian u16s, the uniform expansion and the aux bytes.
  */
 function referenceHash(s: VoxelStore, cx0: number, cz0: number, w: number, h: number): string {
-  const per = 24 * (8192 + 4096) + 4096;
+  const per = 24 * (8192 + 4096) + 2 * 4096;
   const out = new Uint8Array(w * h * per);
   let o = 0;
   for (let cz = cz0; cz < cz0 + h; cz++) {
@@ -40,6 +40,13 @@ function referenceHash(s: VoxelStore, cx0: number, cz0: number, w: number, h: nu
       i16(a.worldSurfaceWG); i16(a.oceanFloorWG); i16(a.worldSurface); i16(a.motionBlocking); i16(a.oceanFloor); i16(a.lightBlocking);
       for (const x of a.surfaceBiome) out[o++] = x;
       for (const x of a.tintTH) out[o++] = x;
+      // Aux B (SP3b spec §7): caveBiomeQ, surfaceBiomeQ, then zeros to 4096 bytes; all zeros without a slot.
+      const b = v.auxB();
+      if (b !== null) {
+        for (const x of b.caveBiomeQ) out[o++] = x;
+        for (const x of b.surfaceBiomeQ) out[o++] = x;
+        o += 4096 - 1536 - 16;
+      } else o += 4096;
     }
   }
   expect(o).toBe(out.length);
@@ -75,7 +82,8 @@ describe('fillColumnT (§4, §6.1)', () => {
     expect(() => fillColumnT(s, ctx, 64, 0, NEVER)).toThrow(SlotBusy);
   });
 
-  test.each([0, 3, 12, 23])('abort before section %i: false, the record is free and no slot leaks', (k) => {
+  // Polls 0 … 5 come before the density phase's cell layers 0, 8, …, 40; polls 6 … 29 before sections 0 … 23.
+  test.each([0, 3, 5, 6, 18, 29])('abort at poll %i: false, the record is free and no slot leaks', (k) => {
     const s = newStore();
     // Warm both pools with a whole column, so the snapshot covers the slots the aborted column takes.
     fillColumnT(s, ctx, 2, 2, NEVER);
@@ -141,6 +149,7 @@ describe('fillColumnT (§4, §6.1)', () => {
         if (s.table.ints[protoAt(base, sy) + PROTO_FLUID]! >= 0) bytes++;
       }
       if (s.table.ints[base + REC_AUX_A]! >= 0) bytes++;
+      if (s.table.ints[base + REC_AUX_B]! >= 0) bytes++;
     }
     expect([s.blockPool.slotCount() - s.blockPool.freeCount(), s.bytePool.slotCount() - s.bytePool.freeCount()]).toEqual([blocks, bytes]);
     // The store stays usable: once columns are freed, the failed column fills and equals a fresh fill.
@@ -184,6 +193,28 @@ describe('regionHash (§6.2)', () => {
     const s = newStore();
     genRegionInProcess(s, ctx, cx0, cz0, w, h);
     expect(hex64(regionHash(s, cx0, cz0, w, h))).toBe(referenceHash(s, cx0, cz0, w, h));
+  });
+
+  test('aux B (SP3b spec §7): every byte of the slot counts; an absent slot hashes like a zero-filled one', () => {
+    const s = newStore();
+    genRegionInProcess(s, ctx, CX0, CZ0, 2, 1);
+    const want = regionHash(s, CX0, CZ0, 2, 1);
+    const b = s.proto(CX0 + 1, CZ0)!.auxB()!;
+    const slot = new Uint8Array(b.caveBiomeQ.buffer, b.caveBiomeQ.byteOffset, 4096);
+    for (const i of [0, 1535, 1536 + 3, 4095]) {
+      slot[i] = slot[i]! ^ 1;
+      expect(regionHash(s, CX0, CZ0, 2, 1), `byte ${i}`).not.toEqual(want);
+      slot[i] = slot[i]! ^ 1;
+    }
+    expect(regionHash(s, CX0, CZ0, 2, 1)).toEqual(want);
+    // Zero the slot, then detach it from the record (the slot leaks; the store is thrown away): same hash.
+    slot.fill(0);
+    const zeroed = regionHash(s, CX0, CZ0, 2, 1);
+    expect(zeroed).not.toEqual(want);
+    s.table.ints[s.table.find(CX0 + 1, CZ0) + REC_AUX_B] = -1;
+    expect(s.proto(CX0 + 1, CZ0)!.auxB()).toBeNull();
+    expect(regionHash(s, CX0, CZ0, 2, 1)).toEqual(zeroed);
+    expect(hex64(zeroed)).toBe(referenceHash(s, CX0, CZ0, 2, 1));
   });
 
   test('independent of backend, generation order and slot layout', () => {

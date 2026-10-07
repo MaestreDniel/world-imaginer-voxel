@@ -132,8 +132,11 @@ describe('regionDiff (§6.1)', () => {
   test('aux B: an absent slot equals a zero one; a differing byte is named (SP3b spec §7)', () => {
     const a = twin();
     const b = twin();
-    expect(a.store.proto(1, 0)!.auxB()).toBeNull(); // SP3a's T writes no aux B
-    // Give b's (1, 0) a zero-filled aux B slot in its record, as a column whose stage wrote only zero quarts holds.
+    // The T stage writes aux B: detach a's (1, 0) slot (it leaks; the store is thrown away) and give b's (1, 0) a fresh
+    // zero-filled slot, as a column whose stage wrote only zero quarts holds.
+    a.store.table.ints[a.store.table.find(1, 0) + REC_AUX_B] = -1;
+    expect(a.store.proto(1, 0)!.auxB()).toBeNull();
+    expect(regionDiff(a, b)).toBe('column (1, 0): aux B differs');
     const base = b.store.table.find(1, 0);
     b.store.table.ints[base + REC_AUX_B] = allocAux(b.store.bytePool);
     expect(b.store.proto(1, 0)!.auxB()).not.toBeNull();

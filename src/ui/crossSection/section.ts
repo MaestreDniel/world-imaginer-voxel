@@ -87,7 +87,7 @@ const HINT = 'hover the plot to read a point';
 const VOXEL_HINT = 'hover the voxels to read a block';
 const MODE_LABELS: Readonly<Record<SectionMode, readonly [string, string]>> = {
   profile: ['Profile', 'The 2D shape along the line: offset, σ, water, rivers, gorges and jag'],
-  voxels: ['Voxels', 'The voxels of the vertical slice under the line (the provisional terrain stage)'],
+  voxels: ['Voxels', 'The voxels of the vertical slice under the line (the terrain stage)'],
 };
 const css = (c: Rgb): string => `rgb(${c[0]}, ${c[1]}, ${c[2]})`;
 

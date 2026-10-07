@@ -6,7 +6,7 @@ import { integerEnv } from '../harness/env';
 import { dt1WorkerDir, genRegion, type GenRegionOptions, type RegionResult } from '../harness/region';
 
 /**
- * DT1 on the provisional T stage (SP3a spec §6.3), threshold exact (0 mismatches), on every tier:
+ * DT1 on the T stage (SP3a spec §6.3; the real T since SP3b), threshold exact (0 mismatches), on every tier:
  * 1. Invariance: per profile (default, large_biomes) and tier seed, five runs of the tier's region give equal region
  *    hashes: spiral / 1 thread / cold, shuffled / 4 threads / cold, a second spiral / 1 thread / cold, and two
  *    `cache: true` runs (shuffled / 4 threads, then spiral / 1 thread), the second of which must be a cache hit.

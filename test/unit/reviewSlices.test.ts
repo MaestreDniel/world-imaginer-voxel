@@ -2,7 +2,7 @@ import { mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { describe, expect, test } from 'vitest';
-import { buildColumnSample, newColumnSample } from '../../src/gen/column/columnStage';
+import { buildColumnSample, newColumnSample, readLevel } from '../../src/gen/column/columnStage';
 import { fluidType } from '../../src/world/blocks/fluid';
 import { BEDROCK } from '../../src/world/blocks/index';
 import { ctxFor, paramsWith } from '../harness/gen';
@@ -62,10 +62,16 @@ describe('vertical review slices over the generated voxels', () => {
     const s = newColumnSample();
     let cx = Number.NaN;
     let lakeAbove63 = 0;
+    // On the real T (SP3b) σ, jag and detail move each position's top away from the 2D estimate, so the 2D kind no
+    // longer predicts every position's water: a wet position needs a finite water level, and each needed kind must
+    // show up wet (land: dry) somewhere on the line. Task 14 derives the kinds from the voxels.
+    const seen = { land: 0, sea: 0, lake: 0, river: 0 };
     for (let x = 16 * site.cx0; x < 16 * (site.cx0 + site.w); x++) {
       if (x >> 4 !== cx) buildColumnSample(ctx, (cx = x >> 4), site.z >> 4, s);
       const kind = positionKind(s, x, site.z);
-      expect(wetAt(view, x, site.z), `(${x}, ${site.z}) is ${kind}`).toBe(kind !== 'land');
+      const wet = wetAt(view, x, site.z);
+      if (wet) expect(readLevel(s, 'surfaceWaterLevel', x, site.z), `(${x}, ${site.z}) is wet`).not.toBe(-Infinity);
+      if (wet === (kind !== 'land')) seen[kind]++;
       const top = view.worldSurfaceWG(x, site.z) - 1;
       const floor = view.oceanFloorWG(x, site.z) - 1;
       expect(top, `(${x}, ${site.z}) top ${top} above the crop`).toBeLessThanOrEqual(site.yMax);
@@ -73,6 +79,7 @@ describe('vertical review slices over the generated voxels', () => {
       if (kind === 'lake' && fluidType(view.fluid(x, top, site.z)) !== 0 && top > 63) lakeAbove63++;
       expect(view.block(x, -64, site.z)).toBe(BEDROCK);
     }
+    for (const k of site.needs) expect(seen[k], `${site.name}: ${k} on the voxels`).toBeGreaterThan(0);
     if (site.needs.includes('lake')) expect(lakeAbove63).toBeGreaterThan(0);
   });
 
@@ -110,8 +117,8 @@ describe('vertical review slices over the generated voxels', () => {
       expect(written!.path).toBe(join(dir, 'small.png'));
       const bytes = readFileSync(written!.path);
       expect(new Uint8Array(bytes)).toEqual(new Uint8Array(encodePng(renderSite(await generateSite('42', params, site), site))));
-      expect([bytes.readUInt32BE(16), bytes.readUInt32BE(20)]).toEqual([64, 192]);
-      expect([written!.width, written!.height, written!.bytes]).toEqual([64, 192, bytes.length]);
+      expect([bytes.readUInt32BE(16), bytes.readUInt32BE(20)]).toEqual([64, 224]);
+      expect([written!.width, written!.height, written!.bytes]).toEqual([64, 224, bytes.length]);
     } finally {
       rmSync(dir, { recursive: true, force: true });
     }

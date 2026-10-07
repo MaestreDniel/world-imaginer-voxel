@@ -1,6 +1,6 @@
 /**
- * The region harness `genRegion` (SP3a spec §6.1): generates a w × h region of columns up to the provisional T
- * stage, in a chosen order, on 1 thread (a plain `ArrayBuffer` store, `fillColumnT` in process) or on 4
+ * The region harness `genRegion` (SP3a spec §6.1): generates a w × h region of columns up to the T stage
+ * (SP3b's density terrain), in a chosen order, on 1 thread (a plain `ArrayBuffer` store, `fillColumnT` in process) or on 4
  * `worker_threads` (a growable `SharedArrayBuffer` store; each worker runs `regionWorker.ts`, and the main thread
  * hands the next column of the list to whichever worker is idle, so every column is written by exactly one thread),
  * optionally through the region cache (`cache.ts`). The result is read through a `RegionView`, which reads the

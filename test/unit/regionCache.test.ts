@@ -153,7 +153,8 @@ describe('genRegion with the cache (§6.1)', () => {
     }
     const s = b.view.store;
     expect(s.blockPool.slotCount() - s.blockPool.freeCount()).toBe(dense);
-    expect(s.bytePool.slotCount() - s.bytePool.freeCount()).toBe(denseBytes + 4);
+    // Each of the 4 columns holds an aux A and an aux B slot.
+    expect(s.bytePool.slotCount() - s.bytePool.freeCount()).toBe(denseBytes + 8);
   });
 
   test('a changed srcKey is a miss and writes its own dump', async () => {

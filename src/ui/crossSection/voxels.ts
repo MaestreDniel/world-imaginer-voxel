@@ -55,7 +55,7 @@ const isWater = (state: number, fluid: number): boolean => state === AIR && flui
 /**
  * The slice as an RGBA image, 512 × 384, pixel (i, row) at `sliceIndex(i, y)` (row 0 is y 319). A water voxel's depth
  * counts from the top of its run of water in the sample column (the voxel under air or a block), which equals the
- * harness's `worldSurfaceWG − 1 − y` for the provisional T's columns (no overhangs).
+ * harness's `worldSurfaceWG − 1 − y` except under an overhang (SP3b's T fills air under stone near the water line).
  */
 export function sliceRgba(s: SliceResult): Uint8ClampedArray<ArrayBuffer> {
   const out = new Uint8ClampedArray(4 * SLICE_SAMPLES);

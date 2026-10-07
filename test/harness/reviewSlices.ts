@@ -87,7 +87,7 @@ const ROW_Z = 16 * ROW_CZ + 8;
  */
 export const REVIEW_SITES: readonly ReviewSite[] = [
   {
-    name: 'coast', file: 'slice-coast.png', kind: 'vertical', cx0: -1696, w: 64, z: ROW_Z, yMin: -64, yMax: 127, scale: 1,
+    name: 'coast', file: 'slice-coast.png', kind: 'vertical', cx0: -1696, w: 64, z: ROW_Z, yMin: -64, yMax: 159, scale: 1,
     needs: ['sea', 'land'],
   },
   {

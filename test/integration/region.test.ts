@@ -28,7 +28,7 @@ function accounting(r: RegionResult) {
         if (d[2 * sy]! >= 0) blocks++;
         if (d[2 * sy + 1]! >= 0) bytes++;
       }
-      bytes++; // aux A
+      bytes += 2; // aux A and aux B
     }
   }
   return {
