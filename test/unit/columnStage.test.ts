@@ -38,7 +38,14 @@ describe('readout', () => {
     for (let j = 0; j <= 4; j++) for (let i = 0; i <= 4; i++) {
       const x = 48 + 4 * i;
       const z = -80 + 4 * j;
-      for (const f of SAMPLE_FIELDS) expect(readField(s, f, x, z)).toBe(s.f[f][latticeIndex(i, j)]);
+      for (const f of SAMPLE_FIELDS) {
+        const v = s.f[f][latticeIndex(i, j)]!;
+        // The column's own block positions (lx, lz ≤ 15) see only corners i, j ≤ 3, read with weight 0: exact. The
+        // far corners (x or z = 16·c + 16, the neighbour's first block) are read as v00 + (v10 − v00)·1, which can
+        // round by an ulp (here steep at corner (4, 0), since the SP3b §8.4 retune).
+        if (i < 4 && j < 4) expect(readField(s, f, x, z)).toBe(v);
+        else expect(Math.abs(readField(s, f, x, z) - v)).toBeLessThanOrEqual(4 * Number.EPSILON * Math.max(1, Math.abs(v)));
+      }
       for (const f of LEVEL_FIELDS) expect(readLevel(s, f, x, z)).toBe(s.f[f][latticeIndex(i, j)]);
     }
   });

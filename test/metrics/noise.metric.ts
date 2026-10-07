@@ -116,7 +116,8 @@ metricTest('N5', ['horizontal', 'vertical'], () => {
       const h = lastOctaveWavelength(nz.def) / 128;
       const f: Field = nz.dims === 2 ? (x, _y, z) => nn.z2(x, z) : (x, y, z) => nn.z3(x, y, z);
       // The vertical rose is measured in lattice coordinates (SP3b spec §3.3, master §6.4 amended): the gradient of
-      // z3(x, y / yScale, z), so an anisotropic noise (overhang: yScale 1.25) is compared with itself on the lattice.
+      // z3(x, y / yScale, z), so an anisotropic noise (yScale ≠ 1; the overhang noise had 1.25 before the SP3b §8.4
+      // retune) is compared with itself on the lattice.
       const ys = nz.def.yScale;
       const g: Field = (x, y, z) => nn.z3(x, y / ys, z);
       const hr = new Rose();

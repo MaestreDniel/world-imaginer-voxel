@@ -25,14 +25,14 @@ describe('SP3b density group (spec §3.3)', () => {
     for (const p of ['density.detailAmpLo', 'density.detailAmpHi']) expect(metaOf(p)).toMatchObject({ min: 0, max: 8, step: 0.05, unit: 'blocks' });
   });
 
-  test('defaults: jag λ 28 × 2 octaves, overhang λ 80 yScale 1.25 × 3, detail λ 10 × 1; amplitudes 0.6 and 1.5', () => {
+  test('defaults: jag λ 28 × 2 octaves, overhang λ 32 yScale 1 × 2 (persistence 0.65, the §8.4 retune), detail λ 10 × 1; amplitudes 0.6 and 1.5', () => {
     const d = DEFAULTS.density;
-    const n = (x: typeof d.noises.jag) => [x.wavelength, x.octaves, x.yScale, x.remap, x.clampSigma, x.double];
-    expect(n(d.noises.jag)).toEqual([28, 2, 1, 'none', 3, true]);
-    expect(n(d.noises.overhang)).toEqual([80, 3, 1.25, 'none', 3, true]);
-    expect(n(d.noises.detail)).toEqual([10, 1, 1, 'none', 3, true]);
-    // λy = λ / yScale = 64 (spec §3.3: overhang λy 64).
-    expect(d.noises.overhang.wavelength / d.noises.overhang.yScale).toBe(64);
+    const n = (x: typeof d.noises.jag) => [x.wavelength, x.octaves, x.yScale, x.persistence, x.remap, x.clampSigma, x.double];
+    expect(n(d.noises.jag)).toEqual([28, 2, 1, 0.5, 'none', 3, true]);
+    expect(n(d.noises.overhang)).toEqual([32, 2, 1, 0.65, 'none', 3, true]);
+    expect(n(d.noises.detail)).toEqual([10, 1, 1, 0.5, 'none', 3, true]);
+    // λy = λ / yScale = 32 (spec §3.3 had λ 80, λy 64 before the retune).
+    expect(d.noises.overhang.wavelength / d.noises.overhang.yScale).toBe(32);
     expect([d.detailAmpLo, d.detailAmpHi]).toEqual([0.6, 1.5]);
   });
 

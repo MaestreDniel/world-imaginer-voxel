@@ -232,8 +232,9 @@ describe('early-outs of the default expression (spec §3.2) and the driver on it
         }
       }
     }
-    // Both rules apply to most cells; few cells straddle the surface.
-    expect(above + below).toBeGreaterThan(0.8 * COLUMNS.length * 768);
+    // Both rules apply to most cells; few cells straddle the surface. Before the §8.4 retune: 3,269 of 3,840 cells
+    // decided by the rules, 177 evaluated; after it (larger σ, a wider open band): 3,029 and 289.
+    expect(above + below).toBeGreaterThan(0.75 * COLUMNS.length * 768);
     expect(below).toBeGreaterThan(COLUMNS.length * 16 * 4);
     expect(evaluated / (COLUMNS.length * 768)).toBeLessThan(0.1);
   });

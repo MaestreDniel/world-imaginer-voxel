@@ -22,9 +22,9 @@ describe('SP2a schema groups', () => {
       ...g('biomes', 'biome2d', 'table:boxTable zoomJitter'),
     ]);
   });
-  test('shape defaults equal the frozen SP1 fixtures (until the first retune)', () => {
-    expect(canonicalJSON(DEFAULTS.shape.offset)).toBe(canonicalJSON(OFFSET));
-    expect(canonicalJSON(DEFAULTS.shape.sigma)).toBe(canonicalJSON(SIGMA));
+  test('shape defaults: jag equals the frozen SP1 fixture; offset and sigma differ from theirs (SP3b retune, terrainRetune.test.ts)', () => {
+    expect(canonicalJSON(DEFAULTS.shape.offset)).not.toBe(canonicalJSON(OFFSET));
+    expect(canonicalJSON(DEFAULTS.shape.sigma)).not.toBe(canonicalJSON(SIGMA));
     expect(canonicalJSON(DEFAULTS.shape.jag)).toBe(canonicalJSON(JAG));
   });
   test('the spline leaves are in blocks (SP2b §4.2)', () => {

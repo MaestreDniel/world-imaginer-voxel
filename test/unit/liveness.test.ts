@@ -205,12 +205,19 @@ describe('stage output hashes', () => {
   });
 
   test('a density leaf moves only the terrain hash', () => {
-    const c = columns().find((x) => x.cls === 'land')!;
+    // On the retuned defaults (SP3b §8.4) the first land column's solidity does not flip at detailAmpHi 1.725; the
+    // second does (U2 decides the leaf there too). The 2D hashes stay on both.
+    const lands = columns().filter((x) => x.cls === 'land');
+    expect(lands.length).toBe(2);
     const amp = moved('density.detailAmpHi', 1.725);
-    for (const st of ['climate', 'shape', 'biome2d'] as const) {
-      expect(stageOutputHash(amp, st, c.cx, c.cz), st).toBe(stageOutputHash(CTX, st, c.cx, c.cz));
+    let movedTerrain = 0;
+    for (const c of lands) {
+      for (const st of ['climate', 'shape', 'biome2d'] as const) {
+        expect(stageOutputHash(amp, st, c.cx, c.cz), st).toBe(stageOutputHash(CTX, st, c.cx, c.cz));
+      }
+      if (stageOutputHash(amp, 'terrain', c.cx, c.cz) !== stageOutputHash(CTX, 'terrain', c.cx, c.cz)) movedTerrain++;
     }
-    expect(stageOutputHash(amp, 'terrain', c.cx, c.cz)).not.toBe(stageOutputHash(CTX, 'terrain', c.cx, c.cz));
+    expect(movedTerrain).toBeGreaterThan(0);
   });
 
   test('a climate leaf moves the climate hash; the three hashes are distinct and repeatable', () => {

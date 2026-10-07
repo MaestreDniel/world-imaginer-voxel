@@ -95,7 +95,7 @@ export const REVIEW_SITES: readonly ReviewSite[] = [
     needs: ['lake', 'land'],
   },
   {
-    name: 'river', file: 'slice-river.png', kind: 'vertical', cx0: -972, w: 32, z: ROW_Z, yMin: 32, yMax: 95, scale: 2,
+    name: 'river', file: 'slice-river.png', kind: 'vertical', cx0: -972, w: 32, z: ROW_Z, yMin: 32, yMax: 127, scale: 2,
     needs: ['river', 'land'],
   },
   {
