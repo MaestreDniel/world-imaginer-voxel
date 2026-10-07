@@ -516,6 +516,91 @@ The plan was dry-run in a scratch worktree: every task was implemented and every
    - SP2a minor 5 is a retained-heap assertion (< 16 KiB over 1,000 warm columns): the closures and noise calls box about 1.5 MB of short-lived doubles per column, so literal zero allocation would need a compiler rewrite;
    - the ocean-floor σ/jag stripe (§8.4 item 4) is not visible on voxels.
 
+## Exit evidence
+
+Measured on branch `sp3b/density-terrain` at the end of Task 16 (2026-10-07; 12th Gen Intel(R) Core(TM) i7-12700H with 20 threads, Node v24.21.0, headless Chrome 155.0.8059.39, Bun 1.4.2). Every figure below was measured on this branch; every metric value and golden equals the dry run's (they are deterministic), and only timings differ.
+- `npm run build` and `npm test` (135 files passed, 2 skipped; 1816 tests passed, 4 skipped; 75 s) are green. The integration project alone: 4 files and 7 tests in 24 s; the 4-thread harness equals the 1-thread one in every order on the real T, for both profiles. `npm run test:metrics` (92 s; peak RSS 0.83 GB) and `npm run test:metrics:full` (252 s; DT1 found the dumps of earlier runs: 2 first cache hits per tier; peak RSS 0.85 GB; the fast tier alone takes 37 s) are green with DT1, DT2 and T1-T5 active.
+- `git diff main -- test/goldens.json`:
+  - `generatorVersion` 3 → 4;
+  - `sp1.params` → 948e09daacb25342 (it hashes `genKey`, so the version);
+  - from the retune: `sp2a.column.point.default` and `.large_biomes`, `sp2a.column.sample`, `sp2a.spawn`, `sp2a.tile.biome.16` and `.64`, `sp2a.tile.relief.{4,16,64,256}` and `sp2a.tile.rivers.{4,16,64,256}`;
+  - `sp3a.region.T.default` → e9992ef6d99595d4 and `sp3a.region.T.large_biomes` → 6dcf464ccfb0f81d;
+  - added `sp3b.density.default` 020212de61dc83da and `sp3b.density.ops` adad71e21efc60cb.
+
+  Unchanged: every other `sp1.*` key, `sp2a.tile.C.*`, `sp2a.tile.biome.4` and `.256` (no moved height threshold crosses them) and `sp3a.registry`. The file holds 52 entries.
+
+Terrain and density metrics. Each part gates the worse profile; the cells show default / large_biomes.
+
+| part | threshold | fast | quick | full |
+|---|---|---|---|---|
+| T1.band | ≤ 0.25 | 0.234 / 0.179 | 0.232 / 0.183 | 0.239 / 0.183 |
+| T1.span | ≥ 60 | 105 / 110 | 107 / 111 | 104 / 107 |
+| T1.above120 | ≥ 0.06 | 0.167 / 0.194 | 0.167 / 0.192 | 0.157 / 0.179 |
+| T1.above200 | ≥ 0.005 | 0.0221 / 0.0224 | 0.0234 / 0.0232 | 0.0204 / 0.0214 |
+| T2.overhangs | ≥ 0.015 | 0.0369 / 0.0445 | 0.0352 / 0.0433 | 0.0373 / 0.0432 |
+| T2.overhangsPeaks | ≥ 0.10 | 0.1035 / 0.1234 | 0.1005 / 0.1202 | 0.1092 / 0.1180 |
+| T3.value (lowland borders) | ≤ 1.5 on full | 1.371 / 0.924, recorded | 1.509 / 0.794, recorded | 1.189 / 0.944 |
+| T4.floorSd | ≥ 3 | 7.46 / 3.16 | 7.46 / 3.16 | 5.69 / 3.19 |
+| T4.exposedBedrock / deepFloor | 0 / 0 | 0 / 0 | 0 / 0 | 0 / 0 |
+| T5 median / p90 / p99 | ≤ 1 / 2 / 6 | 1 / 2 / 4 | 1 / 2 / 4 | 1 / 2 / 4 |
+| DT1.mismatches | 0 | 0 (10 regions) | 0 (10) | 0 (40) |
+| DT2.probeBulk / compiledReference | 0 / 0 | 0 / 0 | 0 / 0 | 0 / 0 |
+
+- **Populations** (default / large_biomes):
+  - columns fast 4,096 / 16,384, quick 8,192 / 32,768, full 16,384 / 65,536 (4 seeds); land positions on full 2.25 M / 9.02 M;
+  - peak columns fast 611 / 2,196, full 2,275 / 8,407;
+  - T5 single-surface positions full 132,188 / 524,890 (multi-surface about 6-7 %; largest error 27 / 55);
+  - T3 lowland border pairs fast 2,613 / 2,843, quick 5,006 / 5,171, full 9,977 / 10,752;
+  - T4 regions 4 / 4 / 64 per profile (fast and quick draw the same 4);
+  - DT2 voxels 512 / 8,192 / 32,768, of which the bulk evaluated 324 / 5,217 / 20,866.
+- **Diagnostics** (ungated):
+  - floating rocks (land positions with a solid run ≤ 6 blocks high on an air gap ≥ 3, y ≥ −56): 1.78 % / 2.03 % of land positions on full, 5.1 % / 5.5 % within the peak biomes, 0.06 / 0.07 voxels per land position; fast and quick are within 0.1 points;
+  - water walls (water voxels with dry air beside them at the same y): 3.6e-4 / 1.0e-4 of the water voxels in the scattered columns on full (fast and quick 3.5-3.8e-4 / 1.0-1.2e-4), and 2.9e-5 in the T4 ocean regions;
+  - T3 of the other families on full: highland 1.277 / 1.080 (9,516 / 9,182 pairs); all same-family pairs together 1.262 / 1.066; coast, ocean and river borders are a few hundred pairs at most (ratio 0, river 38 on 13 large_biomes pairs).
+- **Every 2D metric still passes** (fast / quick / full):
+  - B1 minShare 0.00368 / 0.00372 / 0.00366, largestLand 0.068, oceanFamily 0.441, ties 0, outside 0.0017;
+  - B2 medianLength 403 / 403 / 464, landShare 0.037 / 0.032 / 0.035, mouths 0.65 / 0.70 / 0.60, gorgesPer100km2 5,572 / 7,611 / 6,897, dryRiverBiome 0;
+  - B4 hotColdSpruceWindswept 0, coastBandBeach 0.993 / 0.992 / 0.989; B5 perKm2 1.12 / 1.44 / 1.20, highShare 0.50 / 0.65 / 0.75;
+  - T1lowland 0.078 / 0.076 / 0.076; T6 10; T7 0.997 / 0.989 / 0.999, borderMismatch 0; T8 E 14.04 / 14.08 / 14.14, PV 10.93 / 10.90 / 11.16;
+  - N1 ksD 0.0087 / 0.0094 / 0.0062, sdErr ≤ 0.0087; N2 0.0083 / 0.0133 / 0.0133; N3 0.953 / 0.979 / 0.986; N4 originSdRatio 0.90, spawnTopShare 0.125, 17 distinct, on land 1; N5 horizontal 1.074 / 1.056 / 1.041, vertical 1.062 / 1.048 / 1.038; N6 0.00058 / 0.00052 / 0.00054;
+  - U2 1 (56 leaves, every `density.*` leaf decided); U4 0; M1 3 states, 0, 0.
+
+  Before the retune (quick / full): T1lowland 0.334 / 0.335, T8.E 21.19 / 21.28, B5.highShare 0.474 / 0.462, B2.gorgesPer100km2 8,133 / 7,573.
+
+Bench: `npm run bench` against the baseline recorded by Task 14 on this branch (`63431df`, killRatio 0.841). This run had a quiet machine (99.5 % idle, the load average 1.57 after decaying from the other evidence runs) and took 30 s. PASS: the worst ratio to the baseline is spline.mix3 1.082; killRatio 0.841; `column.sample` p50 0.346 ms, p99 0.486 ms. The SP3b rows:
+
+| kernel | ns/eval | ratio to calibration |
+|---|---|---|
+| `calibration.fmix32` | 0.636 | 1 |
+| `density.corner` (SP3b; one corner of the default expression) | 196.1 | 308.3 |
+| `terrain.real` (SP3b; one column with its ColumnSample, replaces `terrain.provisional`) | 1,492,951 | 2,347,458 |
+
+`terrain.real` p50 1.493 ms and p99 2.397 ms, against `TERRAIN_P50_MAX_MS` 4. SP3a's provisional T took 0.66 ms.
+
+JavaScriptCore: `npx --yes bun@1 test/tools/goldensJsc.ts` → `52/52 match on Bun 1.4.2 (JavaScriptCore)` (6.7 s).
+
+Browser checks (`node test/tools/uiSmoke.ts --profile-dir <tmp> --shots <dir>`: its own build, `vite preview` on a free port and headless Chrome 155, 1400 × 900 at DPR 1; 53 s) → `smoke: 77/77 checks pass`:
+- `?selftest=1`: `✓ all 52 goldens match (6.9 s)`, and `test/goldens.json` holds 52 entries.
+- The Voxels mode on SP3a's line A (−12800, 0) → B (12800, 0): "ground top y 22 to 248 · water on 14.5 % of the line, up to 41 deep", 38 colours in the 512 × 384 slice, hover "(25, 12, 0) · stone · no fluid".
+- The mountain line A (−1664, 8) → B (−640, 8): "1 024 blocks; ground top y 140 to 257 · no water", screenshot `cross-section-voxels-mountain.png`.
+- No page error apart from the favicon.ico 404.
+- Firefox (`?selftest=1` 52/52) and CI (with the region-cache step) are checked after the merge, as in SP3a.
+
+Visual review (`docs/superpowers/specs/assets/sp3b/`; world seed '42', default profile, the real T after the retune; air sky blue, stone grey, water blue darkening with depth). `npm run docs:review-slices` (`test/harness/reviewSlices.ts`) writes the slices. It reads each line's kinds and crop from the voxels, and `slices.json` records each line's summary (kinds, tops, overhangs, water-wall faces).
+- `slice-mountain.png` (1024 × 256, y 64 … 319; x −1664 … −641, z 8; every position highland with σ > 8): the crest is broken into mushroom- and hook-shaped crags that lean over their bases; 214 of 1,024 positions have ≥ 2 solid→air transitions (5 before the retune). Tops 140 … 257. **Floating rocks:** about a dozen islets of 3-15 blocks hang 5-30 blocks above the crest, mostly in the west third and the east half (97 positions by the proxy); small enclosed air pockets sit under the crest at y ≈ 120-170. No water.
+- `slice-coast.png` (1024 × 224, y −64 … 159; x −27136 … −26113, z −31992): the sea fills the west 40 % over a 40-60 floor. The coast plain sits just above the sea (land tops median 67), and a hill at x ≈ −26620 carries a thin needle to 129 with an undercut foot (2 overhang positions). 551 sea, 452 land and 21 river positions. Water walls: 5 faces, a 4-block water face beside a 1-wide dry hole west of the river mouth (x −27026, y 60 … 63).
+- `slice-lake.png` (2 px per block, y 32 … 95; x −16384 … −15873): rolling plains at 62 … 89; the lake stands at y 82, 140 positions, 12-20 deep, with a stone spike to y 89 on its west shore. **Water wall:** between the spike and the water a 1-wide dry slot at x −16094 leaves a 9-block vertical water face (x −16093, y 74 … 82), the v0 artefact of §4. A river pool at y 63 lies west of the spike.
+- `slice-river.png` (2 px per block, y 32 … 127; x −15552 … −15041): a wide valley whose banks rise to plateaus at about 100-109. The river at y 63 fills the valley floor in 5 pools between stone bumps (90 river positions), with 1 water-wall face.
+- `slice-y62.png` (1024 × 1024, the y plane 62 of the coast's 64 × 64 columns): open sea, a peninsula, islands and inland lakes. Dry air at y 62 (0.9 % of the plane) fringes many shores 1-3 blocks wide and fills one inland basin: the v0 water rule's dry hollows next to water, i.e. water walls seen in plan.
+- `cross-section-voxels-mountain.png` (1400 × 900, `uiSmoke.ts --shots`): `?map` in relief at 2 blocks/px with the line across the stony-peaks massif between two lakes, and the drawer in Voxels mode. It matches `slice-mountain.png`; hover "(−1256, 120, 8) · stone · no fluid".
+- `retune/` holds the before/after set the user approved (§8.4), 1 px per block unless noted:
+  - a plain (x −15408 … −14385, z −31400): tops 62 … 85 → 63 … 116: a flat strip just above sea level becomes a gently rolling plateau 20-30 blocks higher inland;
+  - the coast: tops 19 … 144 → 18 … 129, the 80-block jag spike thinner, 0 → 2 overhang positions;
+  - a mountain (x −16864 … −15841, z −12568): tops 41 … 192 → 35 … 238, 0 → 74 overhang positions, crests broken into arches, hooks and undercut ledges, and a few floating rocks above the peaks;
+  - zooms of the coast (4 px per block) and the mountain (3 px per block, a 20-block arch with a hole and a floating blob).
+- **Ocean-floor σ/jag stripe** (§8.4 item 4): three 256 × 256-block ocean windows crossed by a river channel (seed '42', cz −1024 … −1009, cx −800, −704 and −688). On the voxel floor, the mean |Δfloor| between x-neighbours is 0.29-0.34 inside the channel's σ-0.5 band against 0.36-0.37 outside. The floor's height map shows no stripe along the channel, so no T4 knob was changed.
+- The user's approval of this visual review is the last exit criterion; the assets are committed (the retune set is byte-identical to the dry run's), and the user reviews them before the merge.
+
 ## Threshold log
 
 (One line per commit that changes `test/thresholds.lock.json`.)

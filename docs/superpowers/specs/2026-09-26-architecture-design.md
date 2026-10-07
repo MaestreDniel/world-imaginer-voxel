@@ -104,6 +104,8 @@ world-imaginer-voxel/          (repository root)
       column/climate.ts shape.ts rivers.ts lakes.ts steep.ts columnPoint.ts columnStage.ts columnCache.ts surfaceEstimate.ts spawn.ts
       map/layers.ts tile.ts palette.ts   pure map-tile painting (SP2a)
       density/expr.ts nodes.ts compile.ts bounds.ts reference.ts defaults.ts beardifier.ts
+                                (SP3b: + context.ts, the DensityContext of the compiled expression and its caches, and probe.ts;
+                                beardifier.ts arrives with SP9; amended by SP3b)
       caves/carvers.ts carverCache.ts
       fluids/aquifer.ts settle.ts
       biomes/registry.ts picker.ts zoom.ts
@@ -125,9 +127,9 @@ world-imaginer-voxel/          (repository root)
     metrics/*.ts                                    pure metric definitions shared by vitest and the in-app dashboard (SP1: noiseStats.ts,
                                 sp1Fixtures.ts, sp1Goldens.ts; SP2a: columnStats.ts, sp2aGoldens.ts; SP2b: biomeShares.ts,
                                 splineStats.ts, liveness.ts, crossSection.ts, also run by the workers' stats job; SP3a: region.ts
-                                (fillColumnT, genRegionInProcess, regionHash) and sp3aGoldens.ts)
+                                (fillColumnT, genRegionInProcess, regionHash) and sp3aGoldens.ts; SP3b: sp3bGoldens.ts)
     workers/protocol.ts taskHandler.ts task.worker.ts sim.worker.ts   (taskHandler: pure message handler, SP2a; SP3a: sliceJob.ts,
-                                the slice job with its worker-local store and LRU)
+                                the slice job with its worker-local store and LRU; SP3b splits a slice across the workers)
     engine/                     main thread, no three
       coordinator.ts scheduler.ts rings.ts workerPool.ts throttle.ts uploadBudget.ts session.ts invalidation.ts capabilities.ts
     render/                     the only place three is imported (ui canvases are 2D; amended by SP0)
@@ -150,7 +152,7 @@ world-imaginer-voxel/          (repository root)
     main.ts
   tools/detmath-oracle.py       (SP1) CPython port of detMath, a manual oracle for the detMath goldens
   test/ unit/ metrics/ bench/ arch/ harness/{region,refs,cache,stats,flood}.ts fixtures/ tools/ (SP2b: tools/mapLatency.ts, tools/uiSmoke.ts)
-        (SP3a: harness/{region,cache,png,regionWorker,fuzzWorker}.ts)
+        (SP3a: harness/{region,cache,png,regionWorker,fuzzWorker}.ts; SP3b: harness/densityFuzz.ts, metrics/terrain.metric.ts)
         schema-shape.lock.json (SP1) stateIds.lock.json (SP3a)
         thresholds.ts thresholds.lock.json goldens.json baselines.json
 ```
@@ -303,7 +305,7 @@ Each channel is stored on its own: uniform when every value of that channel is e
 
 Byte offsets (amended by SP3a): `WORLD_SURFACE_WG` 0, `OCEAN_FLOOR_WG` 512, `WORLD_SURFACE` 1024, `MOTION_BLOCKING` 1536, `OCEAN_FLOOR` 2048, `LIGHT_BLOCKING` 2560, `surfaceBiome` 3072, `tintTH` 3328; per-position arrays use the column index `lz·16 + lx`, and Int16 values are little-endian. A heightmap value is the absolute y of the highest qualifying voxel plus one, −64 when none qualifies: `WORLD_SURFACE_WG` and `WORLD_SURFACE` count a state ≠ air or a fluid type ≠ 0; `OCEAN_FLOOR_WG` and `OCEAN_FLOOR` count `COLLIDE` ≠ none (the fluid byte is ignored); `MOTION_BLOCKING` counts `COLLIDE` ≠ none or a fluid type ≠ 0; `LIGHT_BLOCKING` follows the §2.2 light rule, pinned by SP4.
 
-**Aux slot B:** `caveBiomeQ` Uint8[4·96·4 = 1536] at 0 and `surfaceBiomeQ` Uint8[16] at 1536 (offsets amended by SP3a). Both aux slots are zero-filled when allocated (a recycled slot included), so a field no stage has written reads 0.
+**Aux slot B:** `caveBiomeQ` Uint8[4·96·4 = 1536] at 0 and `surfaceBiomeQ` Uint8[16] at 1536 (offsets amended by SP3a). The index orders are `surfaceBiomeQ[qz·4 + qx]` (the quart's 2D biome before the zoom) and `caveBiomeQ[(qy·4 + qz)·4 + qx]` with `qy = (y + 64) >> 2`; SP3b's T writes `surfaceBiomeQ` and leaves `caveBiomeQ` 0 until SP6 (amended by SP3b; the SP3b spec §4). Both aux slots are zero-filled when allocated (a recycled slot included), so a field no stage has written reads 0.
 
 **Epoch cell.** A SAB `Int32Array` epoch cell per scope is checked by workers between phases, so a job can abort mid-run. SP3a builds the per-scope cells (terrain 0, decorate 1, light 2, mesh 3); SP4 wires them in place of SP2b's pool-wide cell (amended by SP3a).
 
@@ -349,8 +351,13 @@ type Expr =                                  // 3D density composition (preset d
   | { op:'interpolated'; a:Expr }            // subgraph evaluated at 4x8x4 corners + trilerp
   | { op:'tap'; name:string; a:Expr; mute?:number }   // named intermediate for inspector/probe/mute
   | { op:'ref'; id:string };
+// SP3b implements const, y, col, noise2, noise, add, mul, min, max, neg, abs, square, clamp, slide (x · a piecewise linear s(y)),
+// interpolated, rangeChoice, tap and ref, with the field names of its spec §1.1 (col.field, noise.id, the child of a one-child op
+// is x, slide.knots: [y, v][], ref.name); the other ops arrive with the SPs that need them (amended by SP3b).
 interface CompiledDensity { cornerFn(ctx, x:number, y:number, z:number): number; voxelFn(ctx, i:number, interp:Float64Array): number;
   boundsCell(ctx, cellX:number, cellY:number, cellZ:number): [number, number]; point(x:number, y:number, z:number, tap?:string): number; }
+// SP3b's compileDensity(expr, noises) emits columnFn, positionFn, cornerFn, voxelFn and tapFn closures over its own typed scratch;
+// the cell bounds live in bounds.ts and the point evaluation in probe.ts (the SP3b spec §2; amended by SP3b).
 // From store.claimColumn(cx, cz, epoch) (amended by SP3a; SP3a spec §3.5). Each setter copies its 4096-entry arrays.
 interface ColumnWriter { setProto(sy:number, blocks:Uint16Array, fluid:Uint8Array): void;
   setFinal(sy:number, blocks:Uint16Array, light:Uint8Array, fluid:Uint8Array): void;
@@ -358,7 +365,7 @@ interface ColumnWriter { setProto(sy:number, blocks:Uint16Array, fluid:Uint8Arra
   aux(): AuxView; auxB(): AuxBView; commit(status: 1|2|3): void /* blockVersion += 1, then status last */ }
 interface ColumnView { block(lx:number, y:number, lz:number): number; fluid(lx:number, y:number, lz:number): number;
   light(lx:number, y:number, lz:number): number; sectionBlocks(sy:number): Uint16Array|number; sectionFluid(sy:number): Uint8Array|number;
-  aux(): AuxView | null }
+  aux(): AuxView | null; auxB(): AuxBView | null /* null when the column has no such slot; auxB amended by SP3b */ }
 interface NeighborhoodReader { proto(dx:number, dz:number): ColumnView | null; final(dx:number, dz:number): ColumnView | null;
   versions(): Int32Array /* 3x3 in (dz, dx) order, blockVersion then lightVersion, -1 when absent */ }
 interface SectionMesh { secKey:number; pass:0|1|2; quads:number; position:Uint8Array /*Uint8x4*/; data:Uint32Array; index:Uint32Array;
@@ -563,7 +570,7 @@ Sky costs about 0, and the probe == bulk test (DT2) proves no voxel changes.
 
 ```
 terrain   = tap('terrain', interpolated( col.offset + col.jag·J − y + col.sigma·N3·slide(y) ))
-            J = (1 − |noise2('jag')|)²  (λ 28, 3 oct)     N3 = noise('overhang') λxz 80 λy 48, 3 oct
+            J = (1 − |u|)², u = noise2('jag') / clampSigma (λ 28, 2 oct)     N3 = noise('overhang') λ 32, λy 32, 2 oct, persistence 0.65
             slide(y) = 1 on [−40,240], linear to 0 at −64 and 320; + 2·max(0,−56−y) − 2·max(0,y−296)
 detail    = noise('detail') λ 10, 1 oct × amp(E) 0.6-1.5            (VOXEL, only in straddling cells)
 cheese    = 4·L² + clamp(Nch + 0.27, −1, 1) + clamp((12 − terrain)/24, 0, 0.5)    Nch λxz 96 λy 144, 4 oct; L λxz 96 λy 12
@@ -585,13 +592,21 @@ final     = max( min( min(terrain + detail, max(caves, lakeRoof)), 16·noodle ),
 - `beard` is the structure term (3.13), evaluated per voxel only near pieces.
 - Every term is a `tap`, so the inspector, probe and mutes work on it. In the harness, a debug channel records the winning cave term per carved voxel.
 
+**As built by SP3b** (amended by SP3b; the SP3b spec §1-§3 hold the exact rules):
+- **Ops.** `const`, `y`, `col`, `noise2`, `noise`, `add`, `mul`, `min`, `max`, `neg`, `abs`, `square`, `clamp`, `slide`, `interpolated`, `rangeChoice`, `tap` and `ref`; caves add their ops on the same base in SP6. `slide` is `x · s(y)` with s piecewise linear over half-open segments [y_k, y_{k+1}), constant outside the knots.
+- **Evaluation order.** Every binary op evaluates a, then b; arithmetic is IEEE double in the written order, never fused or reassociated. `min(a, b)` is `b < a ? b : a` and `max(a, b)` is `b > a ? b : a`, so ties (+0 against −0 included) return a; −0 is a valid density. Trilinear interpolation lerps along x, then z, then y, with `lerp(a, b, t) = a + t·(b − a)`.
+- **Placement.** COLUMN nodes depend only on `const`, `col` and `noise2`; CELL nodes are the other nodes inside `interpolated`, VOXEL nodes the other nodes outside it; `y` and `slide` are never COLUMN. CSE is keyed by (structure, inside-`interpolated` flag). The closures are `columnFn` (the COLUMN nodes CELL nodes read, at the 5 × 5 corner columns, reading lattice values exactly), `positionFn` (the COLUMN nodes VOXEL nodes read, at the 16 × 16 block positions: `col` as the bilinear readout, `noise2` at the integer position), `cornerFn` and `voxelFn`. `interpolated` is never nested.
+- **Interval rules.** `noise` and `noise2` are ±clampSigma (amplitude is a `mul`); `col` inside `interpolated` takes the hull of the cell's 4 corner columns; a COLUMN value read at voxel level takes the hull of its 16 position values; `slide` takes s at the cell's ends and at each interior knot. Every interval leaving `interpolated`, and every voxel-level COLUMN interval, is widened by `1e-9 · (1 + max(|lo|, |hi|))`. A cell is non-solid when hi < 0 and solid when lo > 0 (no cave taps before SP6).
+- **`col`** reads finite fields only until SP6, which adds the level fields' −∞ interval rule.
+- **Noises.** Density noises sample unscaled world block coordinates (`large_biomes`' `scaleMul` stretches climate only) and have `remap: 'none'`. J uses `u = z / clampSigma`. Jag has 2 octaves, because a third at λ 7 would alias on the 4-block corner lattice. The overhang noise was retuned with the user's approval (SP3b spec §8.4) to λ 32, 2 octaves, persistence 0.65 and yScale 1: its octaves at λy 32 and 16 stay ≥ 2 × the 8-block vertical corner step.
+- **Code, not data, until SP3d:** `SLIDE`, the floor and ceiling terms and `islands` = −1e6; `density.defs` becomes an editable leaf in SP3d.
+
 ### 3.7 surfaceEstimate and surfaceWaterLevel (shared by map, LOD, aquifer, structures, spawn and teleport)
 
-SP2a uses the 2D estimate `surfaceEst = offset` (after rivers and lakes); SP3b introduces the density-tap search below and bumps the `surfaceEst` stage version (SP3a keeps the 2D estimate; amended by SP3a).
+SP2a uses the 2D estimate `surfaceEst = offset` (after rivers and lakes). SP3b adds the 3D estimate below as `surfaceEst3` (`gen/column/surfaceEstimate.ts`), used by T5 and by later consumers (aquifers, structures, spawn, teleport). The ColumnSample's `surfaceEst`, which the map, the biome picker and the column stage read, stays the 2D `offset`, so the `surfaceEst` stage version is not bumped (amended by SP3b; the SP3b spec's Decision 2 and §5).
 
-
-- **surfaceEstimate(x,z):** start at `col.offset`, step ±8 blocks evaluating the `terrain` tap at the point, then bisect 4 times. That is about 6-10 point evaluations, ≈ 8 µs.
-- The column stage caches it on the 7×7 quart lattice.
+- **surfaceEstimate(x,z)** (`surfaceEst3`): start at ⌊`offset`⌋ (the bilinear ColumnSample value, clamped to [−64, 319]) and step ±8 blocks through the probe of the `terrain` tap (interpolated, without `detail`) until the sign changes, then bisect the 8-block bracket 3 times to one block. No sign change up to 319 returns 319, none down to −64 returns −64. An 8-step scan can cross a gap and return an overhang's underside; T5 measures single-surface positions only (amended by SP3b).
+- Caching on the quart lattice comes with its first consumer (aquifers, structures, spawn, teleport: SP4-SP9; amended by SP3b, which caches nothing).
 - T5 holds `|est − true top|` to median ≤ 1, p90 ≤ 2, p99 ≤ 6.
 - **surfaceWaterLevel:** 63 for ocean and river, Lw for lakes, otherwise −∞.
 - **Teleport:** go to `surfaceEst + 2`, then snap to `MOTION_BLOCKING` once the column is published. While unloaded, the player hovers.
@@ -1289,7 +1304,7 @@ WASD; Space (up/jump); Shift (down/sneak); Ctrl (sprint); F (walk/fly); M (map);
 - flood from sky and connected components;
 - a raycast visibility reference for cave culling.
 
-**Region cache** (`cache.ts`): binary dumps keyed by `genKey + srcKey + REGION_CACHE_FORMAT + region + upTo`, plus `stageHash('mesh')` when upTo is 'MESH', in `test/.cache/regions`. `srcKey` hashes the generator sources and the format version is bumped when the dump layout changes, because `genKey` does not track code changes made without a stage bump (amended by SP3a).
+**Region cache** (`cache.ts`): binary dumps keyed by `genKey + srcKey + REGION_CACHE_FORMAT + region + upTo`, plus `stageHash('mesh')` when upTo is 'MESH', in `test/.cache/regions`. `srcKey` hashes the generator sources and the format version is bumped when the dump layout changes, because `genKey` does not track code changes made without a stage bump (amended by SP3a). Format 2 stores each column's aux A and then aux B, and the region hash covers aux B too; CI restores `test/.cache/regions` with `actions/cache` before `npm run test:metrics` (amended by SP3b).
 
 **Suites:**
 
@@ -1304,7 +1319,7 @@ Metric values are written to `test/metrics/.out/*.json` for trends. The harness 
 
 ### 6.2 Governance
 
-- **Thresholds** live in `test/thresholds.ts`. `thresholds.test.ts` compares a hash against `thresholds.lock.json`, so changing one requires `npm run test:accept-thresholds` and a spec amendment. Agents cannot silently loosen a gate.
+- **Thresholds** live in `test/thresholds.ts`. `thresholds.test.ts` compares a hash against `thresholds.lock.json`, so changing one requires `npm run test:accept-thresholds` and a spec amendment. Agents cannot silently loosen a gate. A part may list the metric tiers it gates on (`tiers`, absent = every tier); on the other tiers its value is recorded, never gated, and dropping a tier counts as loosening (amended by SP3b, whose T3 gates on the full tier only).
 - **Goldens** (region hashes per built-in preset, per stage) change only via `npm run test:goldens`. A golden change requires a `GENERATOR_VERSION` bump, which a test checks.
 - **Dev saves** whose genKey no longer matches (stale generatorVersion or params) go through the fork dialog of §2.7 (option 3 is read-only with a warning).
 
@@ -1348,19 +1363,19 @@ Metric values are written to `test/metrics/.out/*.json` for trends. The harness 
 | N2 | \|r\| between schema noises at the same seed, and f([b,0]) vs g([b+k,0]), k = 1..64, n ≥ 100k random points | ≤ 0.02 |
 | N3 | aperiodicity: mean\|f(p) − f(p+P·λ0·e)\| for P ∈ {256…4096}, e ∈ {x, z, xz} (+y), all noises incl. single-stack | ≥ 0.9 × random-pair mean |
 | N4 | origin: sd of each field at (0,0) over 64 seeds / spawn | ≥ 0.8 × global sd; most common spawn biome ≤ 30%; ≥ 8 distinct spawn biomes; spawn on land 100% |
-| N5 | 16-bin gradient-direction histogram (central differences, h = λ_min/128), max/min, noises with ≥ 2 lattice terms; horizontal plane and vertical plane of 3D noises | ≤ 1.15 each |
+| N5 | 16-bin gradient-direction histogram (central differences, h = λ_min/128), max/min, noises with ≥ 2 lattice terms; horizontal plane and vertical plane of 3D noises, the vertical one in lattice coordinates (the gradient of z3(x, y / yScale, z), so a noise with yScale ≠ 1 is not failed by construction; amended by SP3b) | ≤ 1.15 each |
 | N6 | lattice zeros: P(\|z\| < 1e-6) at integer points and 4×8×4 corners, incl. adversarial single-stack small-λ defs | ≤ 0.1% |
 | T1 | land heights: largest 10-block band / p5..p95 span / share y > 120 / share y > 200 | ≤ 25% / ≥ 60 blocks / ≥ 6% / ≥ 0.5% |
 | T1lowland | share of land columns with offset0 in [66, 76) on the pure offset (SP2a) | ≤ 40% |
 | T2 | land columns with ≥ 2 solid→air transitions above surface − 30 (pre-cave) | ≥ 1.5%, ≥ 10% in peaks/windswept (amplified: Z1) |
 | T3 | P(\|Δh\| ≥ 4 across a border between two lowland biomes) / P(within those biomes), stratified by the pair's biomes (SP3b spec §8.2); gates on the full metrics tier only, fast and quick record it | ≤ 1.5 |
 | T4 | ocean floor sd per 256² / exposed bedrock under water / floor ≤ −50 | ≥ 3 / 0 / 0 |
-| T5 | surfaceEst vs true top (single-surface, no canopy) | median ≤ 1, p90 ≤ 2, p99 ≤ 6 |
+| T5 | surfaceEst vs true top (single-surface, no canopy); SP3b: `surfaceEst3` vs the voxels' true top at land positions with exactly one solid→air transition above y −56 (amended by SP3b) | median ≤ 1, p90 ≤ 2, p99 ≤ 6 |
 | T6 | spline gain: raising a knot by 10 blocks, `gain = ΣΔoffset_col / Σw_col` over columns with w_col > 0 (w_col = product of Hermite value-basis weights along the knot path, tangents fixed), one knot per depth | 10 ± 1.5 |
 | T7 | steep continuity: border/interior gradient ratio | 0.9-1.1 |
 | T8 | per-axis relief in the default profile: sd of land `offset` from varying E_u over [−1,1] (resp. W) at sampled C, W (resp. C, E), on the column-stage point path | E ≥ 10 blocks / PV ≥ 10 blocks |
 | B1 | surface biome shares | each ≥ 0.3% (rare ≥ 0.1%); largest land biome ≤ 16%; ocean family 25-45%; exact ties 0; outside all boxes ≤ 2% |
-| B2 | rivers: water at surface / median connected length / share of land / river-biome columns without surface water / river components ≥ 300 blocks that touch ocean water / gorge columns cut ≥ 8 blocks below offset0 per 100 km² of land with offset0 ≥ 120 | ≥ 95% / ≥ 300 blocks / 2-7% / 0 / ≥ 50% / ≥ 1 |
+| B2 | rivers: water at surface / median connected length / share of land / river-biome columns without surface water (SP2a's 2D statement, kept 2D by SP3b; a voxel river-water check comes with SP3c) / river components ≥ 300 blocks that touch ocean water / gorge columns cut ≥ 8 blocks below offset0 per 100 km² of land with offset0 ≥ 120 | ≥ 95% / ≥ 300 blocks / 2-7% / 0 / ≥ 50% / ≥ 1 |
 | B3 | cave biomes per 8×8 km | lush, dripstone, abyss each ≥ 0.5% of cave air |
 | B4 | hot/cold columns in windswept or spruce / snow in desert / coast-band land columns that are beach, stony shore or snowy beach / land-biome tops below sea level outside rivers and lakes | < 1% / 0 / ≥ 70% / ≤ 1% |
 | B5 | lakes per km² of land / share with Lw ≥ 70 / lake water with air horizontally adjacent | 0.2-2 / ≥ 30% / 0 |
@@ -1388,7 +1403,7 @@ Metric values are written to `test/metrics/.out/*.json` for trends. The harness 
 | X1 | villages per 100 km² / start x mod 16 / piece overlaps / median pieces per village | ±35% of analytic / χ² p ≥ 0.01 / 0 / ≥ 8 |
 | X2 | rigid floor cells supported / clearance above / starts below surfaceEst − 4 | ≥ 95% / ≥ 95% / 0 |
 | DT1 | region hash: spiral vs shuffled, 1 vs 4 threads, cold vs warm, 2 runs, goldens | exact |
-| DT2 | probe == bulk / compiled == reference / batch == point (column stage, at quart corners) | 0 mismatches / bit-exact / bit-exact (tightened by SP2a) |
+| DT2 | probe == bulk / compiled == reference / batch == point (column stage, at quart corners). SP3b's parts: `probeBulk` counts voxels whose probe solidity differs from the block, and voxels the bulk evaluated where `Object.is(probe, bulk)` fails; `compiledReference` counts corner and voxel values where compiled ≠ reference; batch == point stays a unit test (amended by SP3b) | 0 mismatches / bit-exact / bit-exact (tightened by SP2a) |
 | R1 | hidden seam faces emitted / visible faces missing vs brute force | 0 / 0 |
 | R2 | greedy quads per visible face (AO on / off) | ≤ 0.6 / ≤ 0.35 |
 | R3 | wrongly culled sections vs raycast reference / culled from an underground camera | 0 / ≥ 50% |
@@ -1405,7 +1420,7 @@ Metric values are written to `test/metrics/.out/*.json` for trends. The harness 
 | E1-E6 | diff codec; `.wiworld` round-trip hash; reload with edits hash; fault-injected aborted flush consistent (flushSeq); edit→unload→reload returns the latest diff; genKey mismatch shows the fork dialog and each option (including Cancel) yields its specified world state | exact |
 | E7 | two worlds with the same genKey: edits in one never appear in the other / delete removes every `diffs` key of that worldId / hotbar and player restored per world / `stateTable` remap on load | exact |
 | U1 | stage-run counters: decorate edit re-runs only {D, L, mesh}; terrain edit spares raw climate; climate re-runs all | exact |
-| U2 | param liveness: ±15% on each non-live param changes its stage output hash in ≥ 1 of 16 columns. SP2b (its spec §7): perturbations per kind (number and int ±15 % of \|v\| or of the range span, noise wavelength, every numeric spline knot by 15 % of the y span, box intervals shrunk and grown by 15 %); the stage output hash of the leaf's home stage (climate, shape or biome2d); 16 class columns chosen by the lattice conditions under which leaves act (land, coast, channel, gorge, basin, rim and one per lake gate), and bounded witnesses for leaves no class column decides (amended by SP2b) | 100% |
+| U2 | param liveness: ±15% on each non-live param changes its stage output hash in ≥ 1 of 16 columns. SP2b (its spec §7): perturbations per kind (number and int ±15 % of \|v\| or of the range span, noise wavelength, every numeric spline knot by 15 % of the y span, box intervals shrunk and grown by 15 %); the stage output hash of the leaf's home stage (climate, shape or biome2d); 16 class columns chosen by the lattice conditions under which leaves act (land, coast, channel, gorge, basin, rim and one per lake gate), and bounded witnesses for leaves no class column decides (amended by SP2b). SP3b adds the `terrain` stage: its output hash is the region hash of one column after `fillColumnT`, tried at the land and coast class columns only, with no witness search, and every `density.*` leaf must be decided (amended by SP3b) | 100% |
 | U3 | no-placebo: params with `effectMetric` move that metric by > 0.5% at ±15% | 100% |
 | U4 | registry invariants (every leaf has meta and scope, every non-live leaf a covering stage); migration invariant, fixtures and export → import identity; schema-shape lock; README generated block is fresh | exact (0 issues each) |
 | Z1 | amplified: land columns with ≥ 2 transitions (T2) / p99 land height | ≥ 8% / ≥ 250 |
@@ -1515,6 +1530,7 @@ Metric values are written to `test/metrics/.out/*.json` for trends. The harness 
 | Mesh | about 9 non-trivial sections × ≤ 1.0 ms | ≈ 9 / 20 |
 | **Total** | | **≈ 26 ms per column** |
 
+- **Measured in SP3b** (amended by SP3b): the column stage's ColumnSample p50 0.34 ms (it keeps the 2D surfaceEst, so the row's surfaceEst cost moves to `surfaceEst3`'s consumers); T without caves (`terrain.real`: ColumnSample, density with early-outs, water, 24 sections, aux A and B) p50 1.42-1.46 ms, p99 2.2-2.4 ms, gated at ≤ 4 ms p50 by `TERRAIN_P50_MAX_MS`; one corner of the default expression ≈ 0.19 µs.
 - **Kill criterion:** if DAG closure overhead exceeds 25% of T (measured by bench against a hand-inlined default expression), add `new Function` codegen behind a CSP probe, keeping `reference.ts` as the oracle.
 - **Fill:** RD12 needs T 755 / D 660 / L 573 / mesh 491 columns ≈ 16-17 CPU-seconds.
   - Wall time ≤ 6 s on the reference laptop with the bench cap of 4 workers and the throttle; ≤ 4 s with the default 6 workers (09 took 71 s at RD16).
@@ -1659,7 +1675,7 @@ Thresholds are locked (`thresholds.lock.json`) and goldens are gated (§6.2). Si
 - **Cut line:** the lab's A/B mode (→ SP10).
 
 **SP2a — Column stage, worker pool and map** (L; SP1). Spec: `2026-09-28-sp2a-column-stage-map-design.md` (the 2026-09-28 split of the former SP2).
-- Climate with warps and CDF, PV fold; offset / σ / jag splines in blocks; steep from the halo; rivers (channel, valley, gorges) and lakes (column terms); a 2D `surfaceEst = offset` (SP3b replaces it); surface biome registry, picker and zoom; spawn search; ColumnSample LRU; point reference `columnPoint` and batched `buildColumnSample`, bit-exact at quart corners.
+- Climate with warps and CDF, PV fold; offset / σ / jag splines in blocks; steep from the halo; rivers (channel, valley, gorges) and lakes (column terms); a 2D `surfaceEst = offset` (SP3b keeps it for the map, the biome picker and the column stage; its 3D `surfaceEst3` is used by the voxel metrics and later consumers; amended by SP3b); surface biome registry, picker and zoom; spawn search; ColumnSample LRU; point reference `columnPoint` and batched `buildColumnSample`, bit-exact at quart corners.
 - Task pool and protocol (`MAP_TILE`, `point`, `selftest`); the standalone `?map` page (coarse-first tiles; biome, relief, rivers, lakes, raw fields and offset/σ/jag layers; hover; spawn marker; click shows a coordinate); seed box, ready-profile select and a JSON patch box over `WorldSession`, in the URL hash.
 - `?selftest=1` page: recomputes column-stage and map-tile golden hashes in a real module worker.
 - **Deliverable:** an interactive world map of the default and large_biomes worlds, parameterised by URL patch.
@@ -1672,7 +1688,7 @@ Thresholds are locked (`thresholds.lock.json`) and goldens are gated (§6.2). Si
 - **Deliverable:** the SP2a map updates live while splines and biome boxes are edited; a 1-10 biome-size slider drives `climate.scaleMul = 4^((v − 5)/5)` (5 = default, 10 = large_biomes; user request 2026-09-29).
 - **Exit:** U2 for column-scope params; spline-edit map preview ≤ 300 ms; preset unit tests; the SP1 deferred minors reachable through the editor (spline knot/tangent bounds, tiny amplitudes).
 - Received from SP2a (amended by SP2b): the raw W/T/H/R layers and the grid overlay exist; the spawn fallback refinement is closed as not needed (N4 spawnOnLand is 100 % over 64 seeds with the SP2a fallback).
-- Handed on (SP2b spec Appendix A): SP2a minors 5 and 6 → SP3 (SP3b after the split); the `?lab=noise` minors → SP10.
+- Handed on (SP2b spec Appendix A): SP2a minors 5 and 6 → SP3 (SP3b after the split; SP3b moves minor 6 on to SP3c); the `?lab=noise` minors → SP10.
 - **Cut line:** the biome share preview and the cross-section profile (→ SP10). Both were delivered in SP2b, so nothing moved to SP10.
 
 SP3 was split on 2026-10-02 into SP3a, SP3b and SP3c (amended by SP3a; the SP3a spec's Decisions): the context review sized it at 9-12 weeks, three to four times an "L". SP4 and SP6 depend on SP3b; SP3c can run alongside SP4.
