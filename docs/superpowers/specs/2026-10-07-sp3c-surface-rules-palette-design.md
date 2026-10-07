@@ -1,12 +1,12 @@
 # SP3c — Surface rules and terrain palette (Design)
 
 Date: 2026-10-07
-Status: Written for review (design approved section by section by the user, 2026-10-07)
+Status: Revised after the adversarial spec review (2026-10-07; the changes are listed in §13). The design was approved section by section by the user on 2026-10-07.
 Parent: master spec `2026-09-26-architecture-design.md`. The sections involved are:
 - §10 SP3c (created by SP3b), whose deliverable, exit and cut line this spec sets;
 - §2.2 (block registry: the palette appends), §3.10 (biomes), §3.11 (surface rules), §3.16 (cross-column consistency), §3.17 (determinism);
 - §5.1 (parameters and stage hashes), §5.5 (probe: the surface-rule branch path);
-- the testing sections §6.1-6.4 (DT1, DT2, S1, S2, S3, B4, B2, T1-T5, U2, P1) and §7.
+- the testing sections §6.1-6.5 (DT1, DT2, S1, S2, S3, B4, B2, T1-T5, U2, P1) and §7.
 Previous SP: `2026-10-07-sp3b-density-terrain-design.md` (its §13 lists what SP3b handed over).
 
 References written "master §x" point to the master spec, "SP3a §x", "SP3b §x" (and SP2a, SP2b) to those specs, and a bare "§x" to this document.
@@ -37,24 +37,45 @@ Give the voxel terrain its skin. A data-driven surface-rule tree, compiled to cl
 src/world/blocks/defs.ts         + 22 terrain types (§2), appended after bedrock
 src/gen/surface/
   rules.ts         the rule and condition types (JSON-shaped data), validateRules with node paths, rule ids
-  conditions.ts    per-condition semantics shared by compile and reference
+  conditions.ts    per-condition semantics shared by compile and reference (one helper per condition)
   compile.ts       rules → closures over the scan context; the fast-path analysis (§3.4)
-  reference.ts     a tree-walking evaluator (same order, same results) for tests and DT2
-  scan.ts          the whole-column scan: runs, depths, sky, water, steep, T_eff, biome, surfaceDepth
+  reference.ts     a tree-walking evaluator (same order, same results) that records the rule path
+  scan.ts          the whole-column scan: runs, depths, sky, water, steep, T_eff, biome, lake, surfaceDepth
+  bands.ts         the badlands band table (§3.3)
+  pass.ts          surfacePass: scan + compiled rules + fast path over one column (§1, the bench row)
+  context.ts       SurfaceContext: DensityContext, compiled rules, reference tree, band table; memoised per GenContext
   defaults.ts      the default rule tree built from params.surface (§4)
-  probe.ts         surfaceProbe(dc, x, y, z) → { state, path: rule ids }
-src/gen/pipeline/terrainStage.ts   + the surface pass after density and water
+  probe.ts         surfaceProbe(sc, x, y, z) → { state, path } (§3.6)
+src/gen/pipeline/terrainStage.ts   + the per-block biome buffer and the surface pass after density and water (§1)
 src/core/params/schema.ts          + the `surface` group (§3.5)
-src/ui/crossSection/voxels.ts      + colours, legend entries and hover rule path
-src/metrics/sp3cGoldens.ts         sp3c.* goldens (in DET_FILES)
-test/harness/surfaceFuzz.ts        random rule trees for the compile/reference fuzz
-test/metrics/surface.metric.ts     S1, S2, S3, B4 voxel parts, the river check, 2D-defect diagnostics
+src/metrics/liveness.ts            + five SP3c class columns for the terrain stage, found in a third pass (§3.5)
+src/workers/protocol.ts, taskHandler.ts, src/engine/workerPool.ts
+                                   + the `surfaceProbe` job (§6)
+src/ui/crossSection/voxels.ts, section.ts
+                                   + colours, legend entries and the hover rule id (§6)
+src/metrics/sp3cGoldens.ts         sp3c.* goldens (added to DET_FILES in test/arch/rules/banned.ts)
+test/harness/surfaceFuzz.ts        random rule trees for the compile / reference / fast-path fuzz
+test/harness/metric.ts             + `MetricEnv.outName` (§5.2)
+test/harness/reviewSlices.ts       + the `desertTop` and `snowTop` needs (§6)
+test/fixtures/sp3c-default-rules.json   the default tree of §4 as data
+test/metrics/surface.metric.ts     S1, S2, S3, the B4 and B2 voxel parts, the diagnostics
+test/metrics/region.metric.ts      + DT2's surface parts (§5.2)
+test/tools/uiSmoke.ts              + the rule-id readout check
+test/bench/gates.ts, noise.bench.ts   + `surface.column`; the `BENCH_EXEMPT` row list (§7)
 test/stateIds.lock.json            + 22 entries
 ```
 
 ## 1. The T stage after SP3c
 
-T runs, per column: the ColumnSample; SP3b's density phase (solidity); SP3b's water v0; **the surface pass** (§3), which rewrites solid voxels from stone to their final block and sets bedrock; then aux A, aux B and the 24 sections as before (SP3b §4). The surface pass reads only the column's own data (its solidity and water, its ColumnSample, the seed): a column's output still depends only on the seed, the params and (cx, cz) (master §3.16). `stop()` is polled before the surface pass and keeps SP3b's other polls. The `terrain` stage goes to version 3 with `params: ['density', 'surface']`; `GENERATOR_VERSION` goes to 5.
+T runs, per column:
+1. the ColumnSample;
+2. SP3b's density phase (solidity);
+3. SP3b's water v0 (`top` and the water level per position);
+4. the per-block surface biome (`readBiome`, the jittered-Voronoi zoom), computed once into a 256-entry buffer that both the surface pass and aux A's `surfaceBiome` read;
+5. **the surface pass** (§3, `surfacePass` in `pass.ts`): it writes the final state of every solid voxel at y −63 … 319 into a column-wide state scratch (stone becomes its final block); air and water are not touched;
+6. as in SP3b §4: the 24 sections (y −64 is bedrock as before; `stop()` before each; a true stop returns false with no aux written), aux A (reusing the step 4 buffer), aux B.
+
+The surface pass reads only the column's own data (its solidity and water, its ColumnSample, the seed): a column's output still depends only on the seed, the params and (cx, cz) (master §3.16). It never changes solidity, so the heightmaps and water v0 are unchanged. `stop()` is also polled before the surface pass, and SP3b's other polls stay. The `terrain` stage goes to version 3 with `params: ['density', 'surface']`; `GENERATOR_VERSION` goes to 5. The stage's DensityContext memo becomes the SurfaceContext memo (`context.ts`), which holds it.
 
 ## 2. The terrain palette
 
@@ -72,13 +93,13 @@ Twenty-two types without properties append to `BLOCK_DEFS` after bedrock, in thi
 | 8 | `sand` | sand | none | |
 | 9 | `red_sand` | sand | none | badlands top |
 | 10 | `sandstone` | stone | none | under sand |
-| 11 | `red_sandstone` | stone | none | under red sand |
+| 11 | `red_sandstone` | stone | none | under the badlands bands |
 | 12 | `gravel` | gravel | none | |
 | 13 | `clay` | dirt | none | underwater patches |
 | 14 | `calcite` | stone | none | stony-peaks patches |
 | 15 | `snow_block` | snow | none | snowline and snowy peaks |
 | 16 | `packed_ice` | glass | none | frozen-peaks cliffs and patches |
-| 17 | `deepslate` | stone | none | below y 0 (no `axis`: Decision recorded in §2.2) |
+| 17 | `deepslate` | stone | none | y ≤ 0, dithered over 1 … 7 (no `axis`: Decision recorded in §2.2) |
 | 18 | `terracotta` | stone | none | badlands bands |
 | 19 | `white_terracotta` | stone | none | 〃 |
 | 20 | `orange_terracotta` | stone | none | 〃 |
@@ -106,177 +127,363 @@ A surface rule is JSON data:
 | `sequence` | `rules: Rule[]` | the first child that yields a block |
 | `condition` | `if: Condition, then: Rule` | `then`'s result when `if` holds, else none |
 | `block` | `state: string` (canonical key, §2.3 of SP3a) | that state |
-| `bandlands` | — | the badlands band block at the voxel's y (§3.3) |
+| `bandlands` | — | the badlands band block at the voxel's (x, y, z) (§3.3) |
 
-A rule that yields no block leaves the voxel as stone. Every node has a stable id: its path in the default tree (`root.rules[2].then.rules[0]`), recorded by the probe.
+**JSON encoding.** Every rule and every condition is one JSON object whose discriminator is the property `kind` (the kind names of the two tables); its other properties are exactly the fields listed for that kind, all present (`defaults.ts` and the fixture write every field, including `runTop: false`), and nothing else. A condition is nested as the value of `if` (in `condition` and in `not`); there is no single-key wrapper. One literal per kind:
+- `{"kind":"sequence","rules":[R1,R2]}`, `{"kind":"condition","if":C,"then":R}`, `{"kind":"block","state":"grass_block"}`, `{"kind":"bandlands"}`;
+- `{"kind":"biome","biomes":["desert","beach"]}` (in the order written), `{"kind":"stoneDepth","side":"floor","offset":0,"addSurfaceDepth":true}`, `{"kind":"water","offset":-10,"runTop":true}`, `{"kind":"yAbove","minY":80,"runTop":true}`, `{"kind":"verticalGradient","trueAtAndBelow":0,"falseAtAndAbove":8}`, `{"kind":"steep","min":1.2}`, `{"kind":"noiseThreshold","noise":"surface.noises.patch","min":0.55,"max":8}`, `{"kind":"temperatureBelow","t":-0.6}`, `{"kind":"skyOpen"}`, `{"kind":"lake"}`, `{"kind":"not","if":C}`.
 
-Conditions (master §3.11's set without the cave-only ones):
+Numbers are JSON numbers; −0 is never written (`canonicalJSON` throws on it): `validateRules` rejects a −0 with its node path, and `defaults.ts` writes a negated parameter as `0 - t`, which is +0 when t is 0.
+
+A rule that yields no block leaves the voxel as stone. **Rule ids:** every rule node's id is its path in the tree being evaluated: the root is `root`, child k of a sequence `<id>.rules[k]`, the `then` of a condition `<id>.then` (conditions have no ids of their own). A leaf's id therefore names the whole branch. The probe records them (§3.6).
+
+Conditions (master §3.11's set without the cave-only ones, plus `lake`). In the table, y is the voxel's height, yTop its run's top voxel, x and z integer world coordinates:
 
 | condition | fields | holds when |
 |---|---|---|
-| `biome` | `biomes: string[]` | the voxel's per-block surface biome is in the set |
-| `stoneDepth` | `side: floor \| ceiling, offset, addSurfaceDepth: boolean, secondaryDepthRange` | depth from the run's top (floor) or bottom (ceiling) ≤ offset (+ surfaceDepth if `addSurfaceDepth`) (+ the secondary depth if a range is given) |
-| `water` | `offset, mult` | there is no water above the run, or `y ≥ waterTop + offset + mult·depthFromTop` (master's MC-style rule) |
-| `yAbove` | `y, mult` | `y ≥ y0 + mult·depthFromTop` |
-| `verticalGradient` | `trueAtAndBelow, falseAtAndAbove` | hash dither: true below the first, false above the second, linear probability between |
+| `biome` | `biomes: string[]` | the position's per-block surface biome (§1 step 4) is in the set |
+| `stoneDepth` | `side: floor \| ceiling, offset: int, addSurfaceDepth: boolean` | `floorDepth` (floor) or `ceilDepth` (ceiling) ≤ offset (+ surfaceDepth if `addSurfaceDepth`) |
+| `water` | `offset: int, runTop: boolean` | the run has no water directly above its top (`waterAbove` false), or `(runTop ? yTop : y) ≥ waterTop + offset` |
+| `yAbove` | `minY: int, runTop: boolean` | `(runTop ? yTop : y) ≥ minY` |
+| `verticalGradient` | `trueAtAndBelow: int, falseAtAndAbove: int` | hash dither: holds at y ≤ trueAtAndBelow, never at y ≥ falseAtAndAbove, with a probability that falls linearly in between (§3.2) |
 | `steep` | `min` | the position's `steep` ≥ min |
-| `noiseThreshold` | `noise, min, max` | the 2D surface noise at the position is in [min, max] |
+| `noiseThreshold` | `noise, min, max` | min ≤ z ≤ max, where z is the named noise's z2 at (x, z) (remap 'none': unit sd, clamped to ±clampSigma ≤ 8) |
 | `temperatureBelow` | `t` | `T_eff(y) < t` |
 | `skyOpen` | — | the run is the topmost solid run of the position |
+| `lake` | — | the position's nearest quart corner (`readLevel`'s rounding, the corner water v0 reads its level from) has a finite `lakeLevel` (equivalently lakeMask = 1 at that corner) |
 | `not` | `if` | the inner condition does not hold |
 
-`caveBiome` is SP6's; `abovePreliminarySurface` is not needed (SP3b's `surfaceEst3`).
+- `water` and `yAbove` are not MC's exact rules: MC's `waterHeight` is `waterTop + 1`, its `addStoneDepth` is our `runTop`, and our rules have no surfaceDepth multiplier. `runTop: true` makes the whole run decide alike (it reads yTop); `runTop: false` tests the voxel's own y. Both fields default to false.
+- There is no `or` and no `and`: an `and` is two nested conditions; |z| ≥ t is two sibling branches.
+- `caveBiome` is SP6's; `abovePreliminarySurface` is not needed (SP3b's `surfaceEst3`). **`secondaryDepthRange`** (master §3.11) is deferred to the SP whose default rules first need it, together with its own noise leaf (that SP's default tree reads it, so U2 stays satisfied); until then `validateRules` rejects it as an unknown field.
 
-**Validation** (`validateRules`), before compilation, with node-path messages: unknown kinds or fields; an unknown block key (must parse with `parseStateKey`); an unknown biome or noise id; `min > max`, `trueAtAndBelow ≥ falseAtAndAbove`; non-finite numbers; a nesting depth above 32 or more than 4096 nodes (SP3b §13's lesson for editable trees, applied here from the start).
+**Validation** (`validateRules`), before compilation, with node-path messages: unknown kinds or fields; an unknown block key (must parse with `parseStateKey`); an unknown biome; a `noiseThreshold.noise` that is not a dims-2 `surface.noises.*` leaf of the schema; `offset`, `minY`, `trueAtAndBelow`, `falseAtAndAbove` not integers in [−384, 384]; `runTop` or `addSurfaceDepth` not booleans; `min > max`, `trueAtAndBelow ≥ falseAtAndAbove`; non-finite numbers; `bandlands` when the band leaf is absent (§9 cut line); a nesting depth above 32 or more than 4096 nodes (SP3b §13's lesson for editable trees, applied here from the start).
 
 ### 3.2 The scan (`scan.ts`)
 
-For each of the 256 positions, top-down from y 319, over the solidity and water that density and water v0 produced:
+For each of the 256 positions, top-down from y 319 to y −63, over the solidity and water that density and water v0 produced (y −64 is the stage's bedrock and is not scanned):
 - **runs:** maximal vertical runs of solid voxels; the topmost run is the sky-open run (`skyOpen`);
-- per solid voxel: `floorDepth` (0 at its run's top voxel), `ceilDepth` (0 at its run's bottom voxel), `depthFromTop` = floorDepth;
-- per run: `waterAbove` (the voxel above the run's top is water) and `waterTop` (the y of the top water voxel of that water body);
-- per position: `steep` and `T` (bilinear ColumnSample readouts, as SP3b's `col`), the per-block surface biome (aux A's `surfaceBiome`, the jittered-Voronoi zoom), `surfaceDepth = ⌊3 + 2.75·Ns(x, z) + 0.25·hash01(x, z)⌋` with `Ns` the `surface.noises.depth` noise and `hash01` a seeded per-position hash;
+- per solid voxel: `floorDepth` (0 at its run's top voxel), `ceilDepth` (0 at its run's bottom voxel);
+- per run: yTop, `waterAbove` (the voxel above the run's top holds water) and `waterTop` (the y of the highest voxel of the contiguous water directly above the run's top);
+- per position:
+  - `steep` and `T`: bilinear ColumnSample readouts (`readField`, as SP3b's `col`), not `columnPoint`;
+  - the per-block surface biome (the §1 step 4 buffer, the value aux A stores);
+  - `lake` (§3.1);
+  - `surfaceDepth = max(0, ⌊3 + 2.75·depthMul·Ns + 0.25·hash01⌋)`, with `Ns` the z2 of `surface.noises.depth` at (x, z) and `depthMul` the leaf `surface.depthMul`. surfaceDepth is never negative, so the top voxel of every sky-open run passes the `SKIN` gates of §4's branch [2] and surfaceDepth only sets how many under blocks follow it (MC's ON_FLOOR / UNDER_FLOOR split). At 0 a position has its top block only. Its range is [0, SD_MAX] with `SD_MAX = ⌊3.25 + 2.75·depthMul·c⌋`, c the depth noise's `clampSigma` (3 at the defaults, so SD_MAX = ⌊3.25 + 8.25⌋ = 11);
 - per voxel: `T_eff(y) = T − lapse·max(0, y − lapseBase)` (master §3.10: lapse 0.006, base 80; schema leaves).
 
-All hashes derive from the seed through `core/seed` as the zoom does; the scan reads nothing outside its column.
+**Noises and hashes.** Surface noises are sampled at unscaled world block coordinates (x, z), like SP3b's density noises (`climate.scaleMul` does not apply); their values are z2 (remap 'none'). Every seed derives from the world seed through `deriveSeed` and `hash2` / `hash3` of `core/hash`, as the zoom's `biomes.zoom` seed does (`gen/context.ts`):
+- `hash01(x, z) = hash2(deriveSeed(seed, 'surface.depthHash'), x, z) · 2^−32` ∈ [0, 1);
+- `verticalGradient` at (x, y, z): true when y ≤ trueAtAndBelow; false when y ≥ falseAtAndAbove; otherwise true when `u < (falseAtAndAbove − y) / (falseAtAndAbove − trueAtAndBelow)`, with `u = hash3(deriveSeed(seed, 'surface.gradient.' + trueAtAndBelow + '.' + falseAtAndAbove), x, y, z) · 2^−32`. The seed is derived once at compile time; salting it with the bounds keeps a dither stable when a node moves in the tree (SP3d) and needs no extra field. The compiled closures and the reference evaluator call the same helpers (`conditions.ts`).
 
-### 3.3 Bandlands
+The scan reads nothing outside its column.
 
-`bandlands` returns the band block at y from a 192-entry band table built once per GenContext from the seed (`surface.bands`): runs of 1-4 blocks drawn among `terracotta` and the six coloured terracottas, offset by a 2D noise `surface.noises.bandOffset` (±4 blocks), as master §3.11's badlands bands. It is deterministic and column-local.
+### 3.3 Bandlands (`bands.ts`)
+
+`bandlands` returns the band block at (x, y, z) from a 192-entry band table built once per GenContext:
+- **Table:** `r = Xoshiro128(deriveSeed(seed, 'surface.bands'))`; i = 0; while i < 192, one run draws, in this order, first `len = 1 + r.nextInt(4)`, then `colour = r.nextInt(7)`, an index into [`terracotta`, `white_terracotta`, `orange_terracotta`, `yellow_terracotta`, `brown_terracotta`, `red_terracotta`, `light_gray_terracotta`] (repeats allowed); it writes that colour to the entries [i, min(192, i + len)) and sets i += len. No other draw is made from `r`.
+- **Lookup:** `table[((y + o) mod 192 + 192) mod 192]` with `o = Math.round(4 · z / clampSigma)` ∈ [−4, 4], z the z2 of `surface.noises.bandOffset` at (x, z) and clampSigma that leaf's.
+
+It is deterministic and column-local (master §3.11's badlands bands).
 
 ### 3.4 Compiler and fast path (`compile.ts`, `reference.ts`)
 
 - **Compile:** validate, then build one closure per node over a scan-context object (preallocated, no per-voxel allocation). Evaluation order is the tree's: `sequence` children in order, `condition` evaluates `if` then `then`.
-- **Reference:** a tree walk with the same semantics; DT2's `surfaceReference` part requires compiled == reference (same state) at sampled voxels, and the fuzz (`test/harness/surfaceFuzz.ts`) compares them on random trees.
-- **Fast path:** at compile time the compiler derives two bounds from the tree: the deepest `floorDepth` any reachable block rule can need (`maxSurfaceDepth`, from `stoneDepth` offsets plus the maximum `surfaceDepth`), and the y bands any `verticalGradient` or `yAbove` can distinguish. A solid voxel outside both (deeper than `maxSurfaceDepth` below its run's top and outside the dither bands) takes its band's constant result: stone above y 8, deepslate below y 0 — written per section without evaluating rules. A unit test proves the fast path equals full evaluation on every voxel of sampled columns.
+- **Reference:** a tree walk with the same semantics that also records the rule path. DT2's `surfaceReference` part requires compiled == reference (§5.2), and the fuzz (`test/harness/surfaceFuzz.ts`) compares them on random trees.
+- **Fast path** (compile time, general and conservative). The compiler sorts every `block` and `bandlands` leaf by the conditions on its path from the root (the `if`s of its condition ancestors; sequences are ignored):
+  1. *Depth-bounded:* the path holds a `stoneDepth{side floor}` that is not under a `not`. Its bound is the smallest, over those gates, of `offset + (addSurfaceDepth ? SD_MAX : 0)` (§3.2, read from the live params).
+  2. *Y-only:* every condition on the path is a `verticalGradient`, a `yAbove{runTop false}`, or a `not` of these.
+
+  If any leaf is neither, the tree has no fast path and every solid voxel is fully evaluated. Otherwise `maxSurfaceDepth` is the largest bound of the depth-bounded leaves. The y range −63 … 319 is cut at every `yAbove.minY` and at every gradient's dither interval [trueAtAndBelow + 1, falseAtAndAbove − 1]; the dither intervals are always evaluated, and each remaining interval is a constant band. A band's result is the tree evaluated at compile time with every depth-bounded leaf removed (stone when nothing matches). A solid voxel with floorDepth > maxSurfaceDepth in a constant band takes its band's result without evaluating rules; whole sections that qualify are written uniform. Non-solid voxels are never written by the fast path.
+
+  For the default tree (§4): maxSurfaceDepth = SD_MAX + 4 (15 at the defaults); y −59 … 0 deepslate and y 8 … 319 stone; y −63 … −60 and 1 … 7 evaluated.
+- **Tests:** the fast path equals full evaluation on every voxel of sampled real columns (default tree) and of the fuzz's random trees and columns, including trees for which the analysis must turn the fast path off.
 
 ### 3.5 Parameters (`surface` group, scope Terrain, stage `terrain`)
 
 | leaf | default | meta |
 |---|---|---|
-| `surface.noises.depth` | λ 64, 2 octaves | dims 2 (`Ns`) |
-| `surface.noises.patch` | λ 24, 2 octaves | dims 2 (coarse dirt, podzol, mud, gravel, clay, calcite, packed-ice patches) |
-| `surface.noises.bandOffset` | λ 128, 1 octave | dims 2 |
-| `surface.snowline` | −0.6 | `T_eff` threshold for snow (min −1, max 1) |
-| `surface.lapse` | 0.006 | per block (min 0, max 0.05) |
-| `surface.lapseBase` | 80 | y (min −64, max 319) |
-| `surface.cliffSteep` | 1.2 | min 0, max 8 |
-| `surface.cliffMinY` | 80 | y (min −64, max 319) |
-| `surface.patchThreshold` | 0.55 | |Npatch| above it gives a patch (min 0, max 3) |
-| `surface.bands` | seed-derived | not a leaf: the band table is derived from the seed |
+| `surface.noises.depth` | λ 64, 2 octaves | dims 2, wavelength 8 … 1024, `remapNone` (`Ns`) |
+| `surface.noises.patch` | λ 24, 2 octaves | dims 2, wavelength 4 … 512, `remapNone` (every patch, §4) |
+| `surface.noises.bandOffset` | λ 128, 1 octave | dims 2, wavelength 16 … 2048, `remapNone` (absent if the §9 cut is taken) |
+| `surface.depthMul` | 1 | multiplies Ns in surfaceDepth (min 0, max 2, step 0.05) |
+| `surface.snowline` | −0.6 | `T_eff` threshold for snow (min −1, max 1, step 0.01) |
+| `surface.lapse` | 0.006 | per block (min 0, max 0.05, step 0.0005) |
+| `surface.lapseBase` | 80 | y, int (min −64, max 319) |
+| `surface.cliffSteep` | 1.2 | min 0, max 8, step 0.05 |
+| `surface.cliffMinY` | 80 | y, int (min −64, max 319) |
+| `surface.patchThreshold` | 0.55 | t: a single-block patch where Npatch ≥ t; a two-block patch, the first block where Npatch ≥ t and the second where Npatch ≤ −t (min 0, max 3, step 0.01). At 0.55 each patch block covers ≈ 29 % of its biome's tops |
 
-The bedrock (−63 … −60) and deepslate (0 … 8) dither ranges are constants of `defaults.ts`. The schema change is accepted with `npm run test:accept-schema`, the reference with `npm run docs:params`; U2 must decide every new leaf live (its `terrain` output stage, SP3b §3.3).
+- The band table is not a leaf: it is derived from the seed (§3.3). The bedrock (−64, −59) and deepslate (0, 8) gradient bounds are constants of `defaults.ts`; their dithered y are −63 … −60 and 1 … 7.
+- `remapNone` keeps every surface noise unit-sd, so surfaceDepth, the patch ranges and the band offset keep their meaning (a 'uniform' remap is refused, as for the density noises).
+- The schema change is accepted with `npm run test:accept-schema`, the reference with `npm run docs:params`.
+- **U2.** Every `surface.*` leaf must be decided live on the `terrain` output stage (SP3b §3.3: the region hash of one column after `fillColumnT`). The two land and two coast class columns cannot decide all of them (at seed 42 none holds badlands or a steep top within cliffMinY ± 15 %, and unsnowed patch-biome tops are only a few windswept_hills and 9 stony_shore positions), so `livenessColumns` gains five SP3c class slots: `cliffY`, `cliffSteep`, `snowline`, `patch`, `badlands`, in this order. `badlands` is last so that the late bandlands task (§9), which adds it, leaves the other four pins unchanged: a column it takes is one every earlier open slot rejected.
+  - **A third pass.** They are filled by a third pass over the same `sp2b.liveness` stream, after SP2b's two passes (`scan(1)` over every existing slot, `scan(2)` over the gate slots) and skipping every column those passes used. The 16 existing columns, and every climate, shape, biome2d and `density.*` verdict decided on them, are therefore unchanged; `liveness.test.ts` asserts that the first 16 columns equal SP3b's. In the third pass each stream column is offered to the open SP3c slots in the order above; the first slot whose two tests below hold takes it (a column fills one slot).
+  - **Corner prefilter** (cheap, on the column's ColumnSample at its 25 quart corners i, j ∈ 0 … 4, no T run). A corner is *dry* when its `surfaceWaterLevel` is −∞; `T_top = T − lapse·max(0, surfaceEst − lapseBase)`:
+    - `cliffY`: a dry corner with steep ≥ 0.85·cliffSteep and surfaceEst in [0.85·cliffMinY − 8, 1.15·cliffMinY + 8];
+    - `cliffSteep`: a dry corner with steep ≥ 0.85·cliffSteep and surfaceEst ≥ cliffMinY − 8;
+    - `snowline`: a dry corner with steep < cliffSteep, surfaceEst ≥ lapseBase and |T_top − snowline| ≤ 0.1;
+    - `patch`: a dry corner with steep < cliffSteep, T_top ≥ snowline and a 2D biome with top patches (taiga, snowy_taiga, savanna, jungle, swamp, windswept_hills, stony_shore, volcano, stony_peaks, frozen_peaks);
+    - `badlands`: a dry corner whose 2D biome is badlands.
+  - **Acceptance check** (on the generated column; the prefilter alone does not guarantee that a leaf can act: at seed 42 the first column meeting a single cliff prefilter, (23279, 27598), has land tops at y 63-64 only). A prefiltered column is generated once with `fillColumnT` at the default params and scanned (§3.2). The slot accepts it when, for **every** leaf the slot serves (below), some solid voxel of the column within `maxSurfaceDepth` (the larger of the default's and the variant's) of the top of a sky-open run gets, from the reference evaluator (§3.4), a different state under one of the leaf's U2 perturbations (`perturbations`, the other leaves at their defaults) than at the defaults. No `surface.*` leaf changes solidity or water, so the variants re-run only the scan and the rules on the default fill. A slot makes at most 64 acceptance checks; after the 64th failure it stays empty.
+  - **Leaves per class**, each tried on its intended class first, then on land, coast and the other SP3c columns, with no further witness search: `surface.noises.bandOffset` → badlands; `cliffMinY` → cliffY; `cliffSteep` → cliffSteep; `snowline`, `lapse`, `lapseBase` → snowline; `noises.patch`, `patchThreshold` → patch; `noises.depth`, `depthMul` → land. The acceptance check makes each SP3c leaf decided on its own class column; an empty slot leaves its class missing and its leaves fail U2 (never a silent pass).
+  - **Count:** 21 class columns (16 + 5; 20 if the §9 cut is taken).
+  - **Pins.** Pre-measured at seed 42 (default profile) with the scan's readouts on SP3b's T, with the cliff and snow tests of §4 standing in for the rule evaluation (the surface pass did not exist yet): `cliffY` (17107, 13836), stream index 53; `cliffSteep` (−24200, −4864), index 61; `snowline` (−25681, 32120), index 255, its 9th acceptance check; `patch` (−20548, −22882), index 11 (256 patch-eligible tops); `badlands` (−26426, −31088), index 35 (256 badlands tops). Without the `badlands` slot the other four columns are the same. Every slot except `snowline` accepted its first prefiltered column. The implementation re-measures them with the real acceptance check. `liveness.test.ts` re-derives the five columns, pins them (cx, cz) and asserts that every `surface.*` leaf is decided and names its deciding column. A 2D retune that moves them updates the pins with the user's approval. The found columns are recorded in the exit evidence.
 
-### 3.6 Probe
+### 3.6 Probe (`probe.ts`, `context.ts`)
 
-`surfaceProbe(dc, x, y, z)` returns the voxel's final state and the ids of the rule nodes that chose it (the master §5.5 "surface-rule branch path"). The Voxels-mode hover shows them (§6).
+- **SurfaceContext.** `surfaceContextOf(ctx)` returns the SurfaceContext of a GenContext (memoised in a WeakMap, as SP3b's DensityContext): its DensityContext, the compiled default rules, the reference tree, the band table and a one-column cache of the last column the probe rebuilt. `createSurfaceContext(ctx)` builds one apart (DT2 uses it, so a shared-state bug cannot hide).
+- **`surfaceProbe(sc, x, y, z) → { state, path: string[] }`** returns the voxel's final state and the master §5.5 "surface-rule branch path". It rebuilds column (⌊x/16⌋, ⌊z/16⌋) the way T does (ColumnSample, the density fill, water v0, the biome buffer and the §3.2 scan), reusing its column cache when the column is the last one, then walks the reference evaluator at (x, y, z) and never takes the fast path, so a fast-path voxel such as deepslate at y −30 still reports its rule. `path` lists the rule ids from `root` to the `block` or `bandlands` leaf that yielded the state. It is `[]` for air and water, for a solid voxel that no rule matches (stone), and at y −64 (the stage's bedrock). Integer coordinates inside the world window, y in −64 … 319; otherwise a RangeError.
+- The Voxels-mode hover shows the leaf's id (§6).
 
 ## 4. The default rule tree (`defaults.ts`)
 
-First match wins:
+The tree as data. `defaults.ts` must build exactly this tree from `params.surface`; a unit test compares `canonicalJSON(defaultRules(params.surface))` with `test/fixtures/sp3c-default-rules.json`, which is this listing at the default params in §3.1's JSON encoding. Notation (each maps to one §3.1 literal):
+- `seq[…]` is a `sequence` whose children are numbered `[k]`; `if A → R` is `{"kind":"condition","if":A,"then":R}`; `if A ∧ B → R` abbreviates `if A → if B → R`, i.e. `{"kind":"condition","if":A,"then":{"kind":"condition","if":B,"then":R}}` (ids follow the expansion; `if A ∧ B ∧ C → R` nests three deep, A outermost); a bare block name is `{"kind":"block","state":"<name>"}`; `bandlands` is `{"kind":"bandlands"}`.
+- A condition written `kind{field value, …}` is the object with that `kind` and those fields; `biome{a, b}` is `{"kind":"biome","biomes":["a","b"]}` in the order written; `skyOpen` and `lake` are `{"kind":"skyOpen"}` and `{"kind":"lake"}`; `not{A}` is `{"kind":"not","if":A}`.
+- `$name` is the leaf `surface.name`.
+- `TOP = stoneDepth{side floor, offset 0, addSurfaceDepth false}`, `SKIN = stoneDepth{side floor, offset 0, addSurfaceDepth true}`, `BAND4 = stoneDepth{side floor, offset 4, addSurfaceDepth true}`.
+- `P = noiseThreshold{noise 'surface.noises.patch', min $patchThreshold, max 8}`, `Pn = noiseThreshold{noise 'surface.noises.patch', min −8, max 0 − $patchThreshold}` (written as `0 - t`, never −0, §3.1).
 
-1. **Bedrock:** `yAbove` false at −64 → `bedrock`; `verticalGradient(trueAtAndBelow −64, falseAtAndAbove −59)` → `bedrock` (dither over −63 … −60).
-2. **Deepslate:** `verticalGradient(trueAtAndBelow 0, falseAtAndAbove 8)` → `deepslate` (below 0 always; dither over 1 … 7).
-3. **Sky-open run, within `surfaceDepth` of its top** (`skyOpen` and `stoneDepth{floor, offset 0, addSurfaceDepth}`):
-   1. **Under water** (`not water{offset 0}`): `sand` in warm_ocean, beach, snowy_beach and lake shallows (water depth ≤ 2); `gravel` in deep_ocean, frozen_ocean and water deeper than 10 elsewhere; `dirt` in river and frozen_river; `clay` patches (`noiseThreshold` on `surface.noises.patch`) in rivers, swamps and lakes; otherwise `sand` within 10 of the water top, `gravel` below.
-   2. **Cliffs:** `steep{cliffSteep}` and `yAbove{cliffMinY}` → `stone` (`packed_ice` in frozen_peaks).
-   3. **Snow:** top voxel (`stoneDepth{floor, offset 0}`) and `temperatureBelow{snowline}` → `snow_block`.
-   4. **Biome palette** (top voxel / below it within `surfaceDepth` / a secondary band below sand):
+```
+root: seq[
+ [0] if verticalGradient{trueAtAndBelow −64, falseAtAndAbove −59} → bedrock          # dither over −63 … −60
+ [1] if verticalGradient{trueAtAndBelow 0, falseAtAndAbove 8} → deepslate              # y ≤ 0; dither over 1 … 7
+ [2] if skyOpen → seq[
+   [0] if not{water{offset 0, runTop false}} ∧ SKIN → seq[                             # under water
+     [0] if biome{warm_ocean, beach, snowy_beach} → sand
+     [1] if biome{deep_ocean, frozen_ocean} → gravel
+     [2] if biome{river, frozen_river, swamp} ∧ P → clay
+     [3] if lake ∧ P → clay
+     [4] if biome{river, frozen_river} → dirt
+     [5] if lake ∧ water{offset −2, runTop true} → sand                                 # lake shallows: depth ≤ 2
+     [6] if not{water{offset −10, runTop true}} → gravel                               # deeper than 10
+     [7] if water{offset −10, runTop false} → sand                                     # within 10 of the water top
+     [8] gravel ]
+   [1] if steep{min $cliffSteep} ∧ yAbove{minY $cliffMinY, runTop true} ∧ SKIN → seq[  # cliffs
+     [0] if biome{frozen_peaks} → packed_ice
+     [1] stone ]
+   [2] if TOP ∧ temperatureBelow{t $snowline} → snow_block                             # snowline
+   [3] if SKIN → seq[                                                                  # biome palette
+     [0] if biome{desert, beach, snowy_beach, river, frozen_river,
+                  ocean, deep_ocean, warm_ocean, frozen_ocean} → sand                  # incl. islets and banks above water
+     [1] if biome{badlands} → seq[ [0] if TOP → red_sand  [1] bandlands ]
+     [2] if biome{stony_shore, volcano} → seq[ [0] if TOP ∧ P → gravel  [1] stone ]
+     [3] if biome{stony_peaks} → seq[ [0] if TOP ∧ P → calcite  [1] stone ]
+     [4] if biome{frozen_peaks} → seq[ [0] if TOP ∧ P → packed_ice  [1] if TOP → snow_block  [2] stone ]
+     [5] if biome{snowy_slopes, jagged_peaks} → seq[ [0] if TOP → snow_block  [1] stone ]
+     [6] if TOP → seq[
+       [0] if biome{taiga, snowy_taiga} ∧ P → podzol
+       [1] if biome{taiga, snowy_taiga} ∧ Pn → coarse_dirt
+       [2] if biome{savanna} ∧ P → coarse_dirt
+       [3] if biome{jungle} ∧ P → podzol
+       [4] if biome{swamp} ∧ P → mud
+       [5] if biome{windswept_hills} ∧ P → gravel
+       [6] if biome{windswept_hills} ∧ Pn → stone
+       [7] grass_block ]
+     [7] dirt ]
+   [4] if BAND4 → seq[                                                                 # 4 blocks below the skin
+     [0] if biome{desert, beach, snowy_beach} → sandstone
+     [1] if biome{badlands} → red_sandstone ] ] ]
+```
 
-| biomes | top | under | extra |
-|---|---|---|---|
-| plains, meadow, forest, birch_forest, dark_forest, snowy_plains | grass_block | dirt | — |
-| taiga, snowy_taiga | grass_block | dirt | podzol and coarse_dirt patches on top |
-| savanna | grass_block | dirt | coarse_dirt patches |
-| jungle | grass_block | dirt | podzol patches |
-| swamp | grass_block | dirt | mud patches |
-| desert, beach, snowy_beach | sand | sand | sandstone for 4 more blocks below |
-| badlands | red_sand | `bandlands` | red_sandstone under red_sand where bands are skipped |
-| stony_shore, volcano | stone | stone | gravel patches |
-| windswept_hills | grass_block | dirt | gravel and stone patches |
-| snowy_slopes, jagged_peaks | snow_block | stone | — |
-| frozen_peaks | snow_block | stone | packed_ice patches |
-| stony_peaks | stone | stone | calcite patches |
-| river, frozen_river (above water) | sand | sand | — |
-| ocean family (above water: islets) | sand | sand | — |
-
-4. **Runs without sky** (under overhangs): no rule matches, so they stay stone (grass never appears off the sky-open run). SP6 adds cave floors and ceilings here.
+Reading the tree:
+- First match wins. y −64 is never evaluated (the stage writes bedrock there).
+- In branch [2], [2][0], [2][1] and [2][3] cover the skin (floorDepth ≤ surfaceDepth); the snow branch [2][2] tests the top voxel only, so S3 never depends on the depth noise; [2][4] fills floorDepth surfaceDepth + 1 … surfaceDepth + 4 (the voxels above were taken by [2][0]-[2][3], which always yield).
+- Under water (the sky-open run with water directly above): warm ocean and beaches sand; deep and frozen ocean gravel; clay patches in rivers, swamps and lakes; river dirt; lake shallows sand; deeper than 10 gravel; elsewhere sand within 10 of the water top and gravel below. A lake keeps its land biome, so `lake` is the only way to tell it.
+- Cliffs: `runTop` makes the whole skin of a run decide alike. Master §3.11's `steep > 1.2` and y ≥ 90 become `steep ≥ $cliffSteep` (1.2) and yTop ≥ `$cliffMinY` (80).
+- Palette [2][3][0]-[5] cover every non-grassy biome; [6] and [7] are reached only by the grassy ones (plains, meadow, forest, birch_forest, dark_forest, taiga, snowy_taiga, snowy_plains, savanna, swamp, jungle, windswept_hills): the top is grass_block or a patch, the rest of the skin dirt. Patches replace the top voxel only, except clay, which fills the under-water skin.
+- **Snowy biomes.** snowy_plains, snowy_taiga and snowy_beach have T ≤ −0.6 (their boxes), so the snow branch [2][2] makes their top snow_block almost everywhere; their grass_block, patch or sand top shows only where T_eff ≥ snowline (zoom and bilinear-T edges). Their under blocks apply as listed. This is master §3.11's snowline rule; S3 relies on it.
+- Runs without sky (under overhangs) match no rule after [1], so they stay stone, or deepslate where y ≤ 0 (grass never appears off the sky-open run). SP6 adds cave floors and ceilings here.
+- **Cut line variant** (§9): [2][3][1] becomes `seq[ [0] if TOP → red_sand  [1] terracotta ]`.
 
 ## 5. Metrics and tuning
 
 ### 5.1 Sampling
 
-As SP3b §8.1 (scattered columns through the 4-worker sampler; fast 4096 / quick 8192 / full 4096 × 4 seeds per profile; both profiles; insufficient-sample minimums that fail, never pass silently).
+As SP3b §8.1:
+- S1-S3 and the B4 and B2 voxel parts use the same scattered columns as T1-T5 (the same draw: `Xoshiro128` seed, ±16384 / ±65536 blocks, the same counts; the plan may share one generation pass), generated with `fillColumnT` on 4 workers.
+- Seeds per tier as DT1: fast '42'; quick '42'; full '42', '1', '2', '3'. Both profiles.
+- Columns per (profile, seed): fast 4,096 / 16,384, quick 8,192 / 32,768, full 4,096 / 16,384 (default / large_biomes).
+- **Minimums.** Every population-dependent part records its population beside it (`<part>.<profile>`) and fails with "insufficient sample" below 1,000 per profile, on every tier: the land tops (S1 `buried`, `grassNoSky`; S3 `snowNoSky`), the `ymod16` positions, S2's stone-like voxels below y 0 and above y 8, S3's `snowAboveLine` tops, the desert tops (`snowInDesert`), the coast-band tops (`coastBandBeachVoxel`), the `landTopsBelowSea` positions and the river channel positions (`riverChannelWater`). Measured fast-tier populations (seed 42, default) are far above it: 25,300 desert tops, 37,882 coast-band tops, 173,849 snow-eligible tops, 13,824 channel positions. The exception is **`ymod16`** (one position per column, §5.2), measured in the review with its exact eligibility on SP3b's T over 4,096 default columns (±1024 chunks): 1,114 positions for seed '42' (the fast tier's whole default population, an 11 % margin), 1,212 / 1,078 / 1,048 for seeds '1' / '2' / '3'; large_biomes 4,975 (seed '42', 16,384 columns). Quick (8,192 default columns) has about twice the fast population, and full pools its four seeds per profile (§5.2), about 4,450 default. The fast default margin is listed here for the user's approval at the spec review. If a retune or the dry run takes it below 1,000, the part fails "insufficient sample" and the remedy (more columns for this part) is the user's call. A minimum is never lowered without the user's approval.
 
 ### 5.2 Definitions (voxels)
 
+- **Land top:** the top voxel (`OCEAN_FLOOR_WG − 1`) of a position with no water above it (`WORLD_SURFACE_WG == OCEAN_FLOOR_WG`, SP3b §8.2); it is the top of the sky-open run.
+- **Readouts:** T, steep, T_eff, the cliff predicate (`steep ≥ cliffSteep` and y_top ≥ `cliffMinY`, branch [2][1] at the top), the biome, `lake` and the nearest quart corner come from the exported scan helpers (§3.2), so a metric cannot drift from the rules. C and offset0 are bilinear `readField` readouts.
+- **Nearest quart corner:** the corner `readLevel` reads (its rounding, ties to the lower corner), the one water v0 reads its level from. *River-wet* means `riverWetAt` at that corner.
+
 | metric | parts | threshold |
 |---|---|---|
-| S1 | `buried`: top-block types (grass_block, snow_block, sand at the top of a land column, red_sand) with a solid voxel directly above; `grassNoSky`: grass_block not in a sky-open run; `ymod16`: χ² p-value of the land top y mod 16 | 0 / 0 / ≥ 0.001 |
+| S1 | `buried`: grass_block, snow_block or red_sand voxels with a solid voxel directly above (sand is excluded: sand under sand is legitimate); `grassNoSky`: grass_block not in a sky-open run; `ymod16`: χ² test of independence (p-value) of the land top's y mod 16 against the top run's soil depth, below | 0 / 0 / ≥ 0.001 |
 | S2 | `deepslateBelow0`: share of stone-like voxels (stone + deepslate) below y 0 that are deepslate; `deepslateAbove8`: share above y 8 that are deepslate; `bedrockFloor`: share of positions with bedrock at y −64 | ≥ 95 % / ≤ 1 % / 100 % |
-| S3 (snowline part) | `snowAboveLine`: share of sky-open land tops with `T_eff < snowline` (not cliffs) that are snow_block; `snowNoSky`: snow_block not in a sky-open run | ≥ 90 % / 0 |
-| B4 (voxel parts) | `snowInDesert`: desert land tops that are snow_block; `coastBandBeach`: coast-band land tops (C in −0.22 … −0.04, offset0 ≥ 63) that are sand, red_sand, gravel or stone (beach, stony shore); `landTopsBelowSea`: land-biome tops below y 63 outside river and lake positions | 0 / ≥ 70 % / ≤ 1 % |
-| B2 (voxel river check, SP2a minor 6) | `riverChannelWater`: share of river channel positions (wet quart corner and bilinear offset < 63) with a water voxel in their column | threshold set from the dry run's measurement and approved with the spec revision |
+| S3 (snowline part) | `snowAboveLine`: share of land tops with `T_eff(y_top) < snowline` that are not cliffs and are snow_block; `snowNoSky`: snow_block not in a sky-open run | ≥ 90 % / 0 |
+| B4 (voxel parts) | `snowInDesert`: desert land tops that are snow_block; `coastBandBeachVoxel`: share of coast-band land tops (C in −0.22 … −0.04, the C interval of the beach, snowy_beach and stony_shore boxes; offset0 ≥ 63) whose top is sand, red_sand, gravel or stone, or snow_block at a snowy_beach position (beach, stony shore, snowy beach: master §6.4); `landTopsBelowSea`: below | 0 / ≥ 70 % / ≤ 1 % |
+| B2 (voxel river check, SP2a minor 6) | `riverChannelWater`: among positions whose nearest quart corner is river-wet and whose bilinear `offset` < 63, the share with water above their top (`WORLD_SURFACE_WG > OCEAN_FLOOR_WG`) | set from the dry run's value on every tier and both profiles, approved by the user and written into this row by a spec revision (pre-measured: 93.0 % on seed 42, 4,096 default columns); the dry run reports it next to master §6.4's 2D ≥ 95 % |
+| DT2 (SP3c parts) | `probeBulk` (redefined) and the new `surfaceProbeBulk`, `surfaceReference`: below | 0 / 0 / 0 |
 
-- **Ungated diagnostics** (recorded in `test/metrics/.out`): `lakeRimIslets` (land positions inside a lake's mask surrounded by lake water on all four sides), `shorelineFringe` (ocean-family biome on land tops, or land biome under water, within the coast band), per-block shares of every palette block.
-- Rows are `activeFrom: 'SP3c'`, each with a lock accept and a Threshold-log line; as SP3b, rows land after the dry run's measurement and any approved retune.
+- **`S1.ymod16`.** One position per scattered column.
+  - **Choice:** the column's 256 positions are visited in a per-column order, the permutation of the column indices 0 … 255 drawn by a Fisher-Yates shuffle (for i = 255 down to 1: j = `r.nextInt(i + 1)`, swap i and j) with `r = Xoshiro128(hash2(deriveSeed(seed, 'S1.ymod16'), cx, cz))`, and the first eligible one is taken. The order depends only on the world seed and (cx, cz), never on the order in which the workers return columns (`forEachColumnThreaded` visits in completion order).
+  - **Eligible:** a land top at y ≥ 80, not a cliff, `T_eff(y_top) ≥ snowline` (no snow), biome not badlands.
+  - **Soil depth:** the number of contiguous voxels from the land top downward that are neither stone, deepslate nor bedrock (nor air or water), the top included; the count stops at the first stone, deepslate, bedrock, air or water voxel. A stone top gives 0 (e.g. windswept_hills on the Pn patch, even with dirt under it).
+  - **Classes:** 0, 1, 2, 3, 4, 5+. Merging is repeated until every remaining class has ≥ 80 positions: each round takes the first class, in the order 0, 1, 5+, 4, 3, with fewer than 80 positions and merges it into its neighbour toward class 2 (0 → 1, 1 → 2, 5+ → 4, 4 → 3, 3 → 2; the merged class keeps the target's name, so it can merge again in a later round). Class 2 never merges. With k classes left (k = 1 fails the part as "degenerate table"), the 16 rows y mod 16 = 0 … 15, an empty row dropped, give the χ² independence test of the 16 × k table, df (rows − 1)·(k − 1).
+  - **Pooling:** the table pools every seed of the tier per profile (fast and quick: '42'; full: '42', '1', '2', '3'); the population minimum (§5.1) applies to each profile's pooled table. Each profile's p-value is recorded as `ymod16.<profile>` and the part's value is the smaller (SP3b's `perProfile` worst-of, `min`), gated ≥ 0.001. The review measured p 0.066 (seed 42) and 0.047 (four seeds pooled) with a soil-depth proxy, so the test is feasible.
+  - **Rationale:** the land tops' heights are SP3b's density (the surface pass never moves a top, and no §5.3 knob does), and their y mod 16 histogram is not flat (the sea-level pile-up and the density's 8-voxel cell layers; χ² 14,057 against a uniform null on 574,507 fast-tier tops). What master §6.5 targets is banding of the surface material ("chunk-local depth … banding → whole-column scan"): a whole-column scan makes the soil depth independent of where the top falls within a section.
+- **`B4.landTopsBelowSea`.** Population: positions whose aux A `surfaceBiome` family is lowland, highland or coast (SP2b's "land biome"), excluding positions whose nearest quart corner has a finite `lakeLevel`, lakeMask > 0 or is river-wet. Value: the share whose floor (`OCEAN_FLOOR_WG − 1`) is below 63 **with water above it** (`WORLD_SURFACE_WG > OCEAN_FLOOR_WG`): a land biome under water (pre-measured ≈ 0.06 % on seed 42). The dry share (same population, no water above, top < 63; ≈ 2 % on seed 42) is SP3b §4's water-v0 dry pits: the ungated diagnostic `dryPitsBelowSea`, handed to SP6/SP7 (§11).
+- **DT2 after SP3c** (in the existing `metricTest('DT2', …)` call of `region.metric.ts`; same columns and voxels, fast 512, quick 8,192, full 32,768):
+  - `probeBulk`: its block predicate changes from "stone ⇔ solid; any other block counts" to "probe solidity (final > 0) ⇔ block ≠ air" (palette blocks and dithered bedrock are solid; air with or without water is not), y −64 excluded; the masked `Object.is(probe, bulk)` check is unchanged;
+  - `surfaceProbeBulk` (new): DT2 voxels where `surfaceProbe(sc, x, y, z).state` (a SurfaceContext built apart, reference walk, no fast path) ≠ the T stage's stored block (compiled, fast path included);
+  - `surfaceReference` (new): at each DT2 voxel plus 8 per column drawn uniformly within maxSurfaceDepth of the top of a sky-open run, the solid voxels where the compiled tree's state on the stage's scan context ≠ the reference evaluator's state. The 8 extra voxels are drawn from their own stream, `Xoshiro128(hash2(fnv1a32('DT2.surface'), cx, cz))` per column (a position, then a depth 0 … maxSurfaceDepth below its sky-open top), never from DT2's `r`, so DT2's columns and its 16 voxels per column are drawn exactly as in SP3b.
+  - The new parts are exactness checks: they need no dry-run measurement and land with their code.
+  - `probeBulk` keeps its name, its threshold (0) and its lock entry; only its predicate changes, in code, in the same commit as the surface pass (no lock change, no Threshold-log line).
+- **Guards by construction.** `buried`, `grassNoSky`, `snowNoSky`, `snowAboveLine` and all of S2 hold by construction for the default tree; they are regression guards against scan, fast-path and rule-order bugs (master §6.5 "chunk-local depth"), not tuning targets. The dithers are covered by the §8 unit tests.
+- **Ungated diagnostics** (recorded in `test/metrics/.out`):
+  - `landTopYmod16`: the land-top y mod 16 histogram, raw and against the neighbour-average expectation E_r = Σ_{y≡r} (h(y − 1) + h(y + 1)) / 2, with its χ²; any lattice artefact goes to SP3d/SP6 (§11);
+  - `dryPitsBelowSea` (above);
+  - `lakeRimIslets`: land tops whose `surfaceBiome` is ocean-family and whose nearest quart corner has 0 < lakeMask < 1 (a lake rim band, SP2a §2.5), as a share of all sampled positions, beside SP2a's 0.014 % of the world (SP2a §10);
+  - `shorelineFringe`: over near-shore positions (within 2 blocks, inside the column, of a position with the other wet/dry state), excluding the `lakeRimIslets` positions, the share where an ocean-family biome sits on a land top or a land-family biome sits under water;
+  - the surfaceDepth histogram (the share at 0 included);
+  - `patchCoverage` per (biome, patch block), and the per-block shares of every palette block.
+- **Rows.** The SP2a 2D parts (`B4.hotColdSpruceWindswept`, `B4.coastBandBeach`, every B2 part including `dryRiverBiome`) stay unchanged, active and in `biomes.metric.ts` and `water.metric.ts`. The voxel parts are new keys of the existing B4 and B2 rows. `surface.metric.ts` registers them with its own `metricTest('B4', [voxel parts])` and `metricTest('B2', ['riverChannelWater'])` calls (the coverage check allows two calls per id with disjoint parts); `MetricEnv` gains `outName` (default: the id), and these calls pass `B4.voxel` and `B2.voxel`, so `.out/B4.json` and `.out/B2.json` keep the 2D records. Every new part is `activeFrom: 'SP3c'`, each with a lock accept and a Threshold-log line. As in SP3b, the S, B4 and B2 rows land after the dry run's measurement and any approved retune; the DT2 parts land with their code.
 
 ### 5.3 Tuning
 
-The dry run measures S1-S3, B4, B2 and the diagnostics before any retune. If a part fails or the 2D defects show, the knobs are: `surfaceDepth`'s noise, `snowline`, `lapse`/`lapseBase`, `patchThreshold`, `cliffSteep`/`cliffMinY`, and for Decision 2 the lake rim and zoom parameters (`lakes.*`, `biomes.zoomJitter`). The user approves before/after review slices (coast, lake, river, mountain, desert or badlands, snow) and the numbers; a retune of 2D parameters re-runs every 2D metric and re-records the SP2a goldens it moves, all inside `GENERATOR_VERSION` 5.
+The dry run measures S1-S3, B4, B2 and the diagnostics before any retune. If a part fails or the 2D defects show, the knobs are: `surface.depthMul`, `snowline`, `lapse`/`lapseBase`, `patchThreshold`, `cliffSteep`/`cliffMinY`, and for Decision 2 the lake rim and zoom parameters (`lakes.*`, `biomes.zoomJitter`).
+- Whether the Decision 2 defects "show" is the user's call, made from `lakeRimIslets` (against SP2a's 0.014 %), `shorelineFringe` and the lake and coast review slices; there is no gate.
+- The land tops are SP3b's density and water v0: no surface knob moves `ymod16`'s top heights, `landTopsBelowSea` or `dryPitsBelowSea`. A `landTopsBelowSea` failure is shown to the user with its 2D knob (`biomes.zoomJitter`); the dry pits are a diagnostic for SP6/SP7.
+- The user approves before/after review slices (coast, lake, river, mountain, desert, snow) and the numbers. A retune of 2D parameters re-runs every 2D metric and re-records the SP2a goldens it moves, all inside `GENERATOR_VERSION` 5.
 
 ## 6. UI and tools
 
-- **Voxels mode:** `VOXEL_COLORS` gains one colour per palette block (grass green, earth browns, light sand, sandstone, greys for gravel and deepslate, whites for snow and calcite, pale blue for packed ice, oranges and reds for the terracottas); the legend lists them; the hover readout adds the rule path (rule ids) from `surfaceProbe`. The PNG review slices use the same palette.
-- **Review slices** (`npm run docs:review-slices`, `assets/sp3c/`): coast, lake, river, mountain, a desert or badlands site and a snowy site, each re-derived from the voxels by a test as SP3b's.
-- **uiSmoke:** checks the legend and a hover readout with a rule path.
+- **Voxels mode:** `VOXEL_COLORS` gains one colour per palette block (grass green, earth browns, light sand, sandstone, distinct greys for gravel and deepslate, whites for snow and calcite, pale blue for packed ice, oranges and reds for the terracottas); the legend lists them. The PNG review slices use the same palette.
+- **Hover rule id (a worker probe).** The slice buffers do not change. `protocol.ts` gains `SurfaceProbeMsg {type: 'surfaceProbe', jobId, epoch, x, y, z}` and `SurfaceProbeResultMsg {type: 'surfaceProbeResult', jobId, epoch, state, path: string[]}`, each with its guard. Non-integer coordinates, a position outside the world window or y outside −64 … 319 are BAD_ARGS; STALE_EPOCH and ABORTED are handled as for `point`. `taskHandler.ts` answers with `surfaceProbe(surfaceContextOf(ctx), …)` on its configured context. The pool gains `surfaceProbe(x, y, z, priority?)`, a single job. `section.ts` follows the map hover's point-job pattern (`hoverPanel.ts`): one probe in flight, the latest hovered cell wins, replies for an old epoch or cell are dropped. The readout shows SP3a's text at once, then appends ` · rule …` while waiting, replaced by ` · rule <leaf id>` (the last id of `path`, e.g. `root.rules[2].then.rules[3].then.rules[6].then.rules[7]`) or ` · rule none` when `path` is `[]`.
+- **Review slices** (`npm run docs:review-slices`, `assets/sp3c/`): coast, lake, river, mountain, a desert site and a snowy site, each re-derived from the voxels by a test as SP3b's. `needs` gains two kinds read from the voxels: `desertTop` (land positions whose top is sand with surfaceBiome desert) and `snowTop` (land positions whose top is snow_block); the desert and snowy lines must each hold ≥ 64 positions of their kind. The two sites are windows found by a scan, as SP3b found the mountain, recorded in the site's comment. A badlands site is added the same way (`badlandsTop`: red_sand tops) when `bandlands` ships.
+- **uiSmoke:** checks the legend; hovers the top solid voxel of a land sample on the mountain line (found from the slice's ground-top data, not a fixed height) and waits for ` · rule root.…`. `voxelReadoutOk` accepts SP3a's format with an optional ` · rule (…|none|root\S*)` suffix.
 
 ## 7. Goldens and bench
 
-- `GENERATOR_VERSION` 5 re-records `sp1.params` (it hashes `genKey`) and `sp3a.region.T.*` (the surface now in T). `sp3b.density.*` must not change (the density is untouched); SP2a goldens change only through an approved 2D retune (§5.3).
-- New: `sp3c.registry` (§2.2) and `sp3c.surface.ops` (compiled rule results over a fixture tree using every condition and kind, at a fixed point list of real columns). Count 52 → 54; `?selftest=1` (Chrome, Firefox) and Bun check all keys.
-- Bench: a new row `surface.column` (the surface pass of one column, density already done) and `terrain.real` now includes the surface pass; its 4 ms p50 gate stays (SP3b §10). Quiet-machine procedure as SP3a §7.
+- `GENERATOR_VERSION` 5 re-records `sp1.params` (it hashes `genKey`) and `sp3a.region.T.*` (the surface now in T).
+- `sp3b.density.*` change only if an approved 2D retune (§5.3) moves the ColumnSample fields they read (`offset`, `sigma`, `jag`) at their fixed columns (none lies in a lake or rim at the defaults); they are then re-recorded with the SP2a goldens. SP2a goldens change only through an approved 2D retune. Any other change is a bug.
+- New: `sp3c.registry` (§2.2) and `sp3c.surface.ops`: the compiled rule results (u16 LE state ids, FNV-1a 64, as SP3b §9) of a fixture tree that uses every SP3c condition and kind (`lake` included; `bandlands` unless cut), over every voxel of a fixed column list, seed '42', default profile; the fixture tree and the columns are frozen in `sp3cGoldens.ts`, whose unit test asserts `sp3cGoldenKeys().length === 2`. Count 52 → 54; `?selftest=1` (Chrome, Firefox) and Bun check all keys.
+- **Recording happens once**, after the §5.3 dry run and any approved retune, and after the bandlands task or the cut decision (§9): `npm run test:goldens` refuses a changed key at an unchanged `GENERATOR_VERSION`, so any earlier v5 record made during development is discarded by restoring `test/goldens.json` from `main` before the final record (as SP3b §9). Never bump to 6 to get past the refusal.
+- **Bench:** `terrain.real` now includes the surface pass, so its ratio rises by design. In the pre-record run of SP3a §7's procedure (bench against SP3b's baseline), every row must pass its +30 % gate except `terrain.real`, which is checked only against its absolute 4 ms p50 gate (SP3b §10); the record then re-baselines it. The mechanism: `noise.bench.ts` reads `BENCH_EXEMPT`, a comma-separated list of `BENCH_ROWS` names (empty when unset; an unknown name fails the run), and passes it to `gateFailures(baseline, kernels, killRatio, exempt)`, which skips the ratio gate of those rows and prints `<row>: exempt, ratio r vs baseline b`. The kill criterion and the absolute gates (`absoluteGateFailures`, `terrain.real` p50 ≤ 4 ms included) are never exempt, and `bench:record` ignores `BENCH_EXEMPT`. The pre-record run is `BENCH_EXEMPT=terrain.real npm run bench`; the exit run is a plain `npm run bench` against the new baseline. `benchGates.test.ts` covers the exempt list. New row `surface.column`, appended to `BENCH_ROWS` after `terrain.real`: one column's density is filled once, then `surfacePass` (`pass.ts`, the function `terrainStage` calls, so the bench and the stage share one code path) is timed alone. `test/baselines.json` is re-recorded. Quiet-machine procedure as SP3a §7.
 
 ## 8. Tests (summary)
 
-- **Unit:** each condition (value, edges, validation with node paths); the band table; the scan (runs, depths, sky-open under an overhang, water above, surfaceDepth range); the compiler vs the reference (fuzz on random trees); the fast path vs full evaluation on every voxel; the default tree on real columns (grass over dirt, sand and sandstone in the desert, snow above the snowline, stone cliffs, deepslate and dithered bedrock, no grass off the sky-open run); `surfaceProbe` paths; the 22 states' table values; the lock append.
+- **Unit:**
+  - each condition (value, edges, validation with node paths), `lake` at a lake, rim and dry corner, `water` and `yAbove` with both `runTop` values, `verticalGradient`'s ends and probabilities, `noiseThreshold`'s closed ends;
+  - the band table (run lengths, colours, the negative-y wrap, the ±4 offset);
+  - the scan (runs, depths, sky-open under an overhang, water above and `waterTop`, surfaceDepth ∈ [0, SD_MAX] with the maximum reached);
+  - the compiler vs the reference, and the fast path vs full evaluation, on every voxel of sampled real columns and of the fuzz's random trees (with trees whose fast path must be off);
+  - `defaultRules` equals `test/fixtures/sp3c-default-rules.json`;
+  - the default tree on real columns: grass over dirt, sand and sandstone in the desert, snow_block tops where T_eff < snowline (grass_block in snowy biomes only where T_eff ≥ snowline), stone cliffs, deepslate and dithered bedrock, no grass off the sky-open run, clay in a river or lake bed;
+  - `surfaceProbe`: its state equals the T stage's block at sampled voxels (fast-path voxels included), a deepslate voxel at y −30 reports the deepslate rule's path, `[]` for air, water and an overhang's stone;
+  - the 22 states' table values; the lock append;
+  - the Voxels palette: every state 0 … `REGISTRY.stateCount − 1` has its own colour (`voxelRgb` never returns `VOXEL_COLORS.unknown` for one), the non-air colours are pairwise ≥ 24 apart in summed |ΔRGB|;
+  - the protocol guards of the two `surfaceProbe` messages; `MetricEnv.outName`; the five U2 class columns, their acceptance checks and pins (§3.5); `gateFailures`' exempt list (§7).
+- **Replaced** (earlier tests whose pins SP3c changes: SP3b's "solid ⇒ stone" pins, the SP pins, the U2 column list, the bench gate calls):
+  - `terrainStage.test.ts`: the expected-column builder (~l.80), the estimate-column check (~l.231) and the bulk-mask check (~l.409) compare solidity as block ≠ air, or the surfaced palette; the uniform land section 1 (~l.309, y −48 … −33) is uniform deepslate;
+  - `blockDefs.test.ts` (3 types and 3 states) gains the 22 appended types;
+  - `crossSectionVoxels.test.ts`'s `voxelRgb(7) === unknown` moves to a state id ≥ `REGISTRY.stateCount`;
+  - `profiles.test.ts` and `test/arch/sp.test.ts` pin `'SP3c'` (§10);
+  - `liveness.test.ts` (`CLASSES` ~l.26-29, the class-column test ~l.123-129): the expected class list `CLASSES` (in `CLASS_ORDER`, which appends the new classes) gains `cliffY`, `cliffSteep`, `snowline`, `patch` and `badlands` after SP2b's classes, the distinct-column count goes from 16 to 21 (20 if the §9 cut is taken), the first 16 columns are asserted equal to SP3b's, and the "shows its class" test gains the five corner prefilters;
+  - `benchGates.test.ts`: `gateFailures` calls gain the exempt argument (an empty list keeps today's cases).
+  - Unchanged: `sliceJob.test.ts` (its `stone > 0` still holds), and the hand-built views of `reviewSlices.test.ts` and `png.test.ts`.
 - **Integration:** the 4-thread harness against the 1-thread one on the T with surface.
-- **Metrics:** DT1, DT2 (with `surfaceReference`), S1, S2, S3, B4 voxel parts, the B2 river check, T1-T5 still passing, U2 with the `surface.*` leaves, every tier.
+- **Metrics:** DT1, DT2 (with `surfaceProbeBulk` and `surfaceReference`), S1, S2, S3, the B4 voxel parts, the B2 river check, T1-T5 still passing, U2 with the `surface.*` leaves, every tier.
 - **Bench, tools:** as §6-§7.
 
 ## 9. Exit criteria
 
 | criterion | checked by |
 |---|---|
-| build, tests and full metrics with DT1, DT2, S1-S3, B4 voxel parts and the river check active; T1-T5 still pass | `npm run build && npm test && npm run test:metrics:full` |
+| build, tests and full metrics with DT1, DT2 (`probeBulk`, `surfaceProbeBulk`, `surfaceReference`), S1-S3, the B4 voxel parts and the river check active; T1-T5 still pass; U2 decides every `surface.*` leaf | `npm run build && npm test && npm run test:metrics:full` |
 | CI green | GitHub Actions |
 | the 22 states appended; the lock accepted; `sp3c.registry` recorded | lock test, goldens |
 | `GENERATOR_VERSION` 5; only the allowed goldens change; `?selftest=1` all keys in Chrome and Firefox; Bun all keys | goldens tests, browsers, Bun tool |
-| bench within +30 %, `terrain.real` p50 ≤ 4 ms | `npm run bench` |
-| visual review approved by the user, incl. the 2D-defect decision | `assets/sp3c/` slices and a Voxels-mode screenshot |
+| bench: every row recorded before SP3c within +30 % except `terrain.real`; `terrain.real` p50 ≤ 4 ms; the exit run against the new SP3c baseline | `BENCH_EXEMPT=terrain.real npm run bench` (pre-record, against SP3b's baseline), `npm run bench:record`, then `npm run bench` (no exemption) |
+| visual review approved by the user, incl. the 2D-defect decision | `assets/sp3c/` slices and a Voxels-mode screenshot with a hover rule id |
 
-**Cut line:** if SP3c runs short, the `bandlands` rule (and its noise and band table) moves to SP10; badlands then uses `terracotta` as its under block. The terracotta states are still registered, so the lock does not change.
+**Cut line.** If SP3c runs short, `bandlands` is not built and moves to SP10; badlands then uses `terracotta` as its under block (§4's cut variant). To keep the cut free of the schema lock and the goldens, the plan builds `bandlands` as its own late task: that task adds the `surface.noises.bandOffset` leaf, the band table, the `bandlands` kind, its case in the `sp3c.surface.ops` fixture, the badlands branch of §4, the `badlands` U2 class column and the badlands review site. Earlier tasks use the cut variant. The cut is decided when that task starts, before the leaf is accepted with `test:accept-schema` and before the goldens are recorded (§7):
+- if cut, the leaf never reaches `test/schema-shape.lock.json` (no dead leaf for U2), the fixture has no bandlands case, and the §12 amendments and the §10 SP3c deliverable drop the bands;
+- if the leaf was already accepted on the SP3c branch but not pushed to `main`, `test/schema-shape.lock.json` is restored from the base commit and accepted again (no `SCHEMA_VERSION` bump: the leaf never shipped);
+- once the bandlands task is on `main`, it is not cut.
+
+The terracotta states are registered either way, so the state-id lock does not change.
 
 ## 10. Governance
 
-- The first commit appends `'SP3c'` to `STARTED_SPS`, sets `CURRENT_SP = 'SP3c'`, accepts the thresholds lock and appends to the Threshold log.
+- The first commit appends `'SP3c'` to `STARTED_SPS`, sets `CURRENT_SP = 'SP3c'`, moves the `CURRENT_SP` pin of `test/unit/profiles.test.ts` and the `STARTED_SPS` / `CURRENT_SP` pins of `test/arch/sp.test.ts` to SP3c (as SP3b §12), accepts the thresholds lock and appends to the Threshold log.
 - The state-id lock grows by 22 entries through `npm run test:accept-state-ids` (append-only; the commit message says so).
-- New threshold rows (§5.2), `activeFrom: 'SP3c'`.
+- New threshold parts, `activeFrom: 'SP3c'`: S1 (`buried`, `grassNoSky`, `ymod16`), S2 (`deepslateBelow0`, `deepslateAbove8`, `bedrockFloor`), S3 (`snowNoSky`, `snowAboveLine`), B4 (`snowInDesert`, `coastBandBeachVoxel`, `landTopsBelowSea`), B2 (`riverChannelWater`), DT2 (`surfaceProbeBulk`, `surfaceReference`), Each lands with a lock accept and a Threshold-log line (§5.2's order). DT2.`probeBulk`'s predicate changes in code, in the same commit as the surface pass, with no lock change (its name and threshold stay).
+- The master amendments of §12 land with the spec; those `test/arch/masterSpec.test.ts` checks land with the code they describe.
 
 ## 11. Notes handed to later SPs
 
-- **SP3d:** `surface.rules` as an editable JSON leaf with the inspector; `validateRules` already bounds depth and node count.
-- **SP6:** `caveBiome`, cave floor and ceiling rules for runs without sky, the cave palettes.
-- **Decorate (D):** ice on sky-exposed water with `T_eff < −0.45`, snow layers on sky-exposed ground, S3's ice parts.
-- **SP8a:** textures and the per-biome grass tint for `grass_block`.
-- **SP10:** the 2D defects if Decision 2 hands them over.
+- **SP3d:** `surface.rules` as an editable JSON leaf with the inspector (`validateRules` already bounds depth and node count; the fast path is already general, §3.4); block rules naming non-solid states would break the stage's heightmap shortcut (`oceanFloorWG` from solidity), so the editable leaf must reject them or recompute the heightmaps; `stoneDepth.secondaryDepthRange` with its own noise leaf when a default rule needs it.
+- **SP3d / SP6 (density):** the land tops carry an 8-periodic residue artefact from the density's 8-voxel cell layers (fast tier, seed 42, after detrending: −28 % at residue 15, +12 % at residue 0); SP3c records it (`landTopYmod16`) but cannot change the frozen density.
+- **SP6:** `caveBiome`, cave floor and ceiling rules for runs without sky, the cave palettes; `secondaryDepthRange` if its cave rules need it.
+- **SP4 / SP6:** master S1's "grass at sky 0" (≤ 0.1 %) replaces `grassNoSky` once SP4's light exists; SP6's exit re-asserts it.
+- **SP6 / SP7:** `dryPitsBelowSea` (SP3b §4's water-v0 dry pits; ≈ 2 % of land-family positions on seed 42) goes with the aquifers and the settle.
+- **Decorate (D):** ice on sky-exposed water with `T_eff < −0.45`, snow layers on sky-exposed ground, S3's ice parts; D's freezing reads `surface.lapse` and `surface.lapseBase`.
+- **SP8a:** textures and the per-biome grass tint for `grass_block`. `sp3c.registry` hashes `FACE_TEX` (0 until SP8a) over states 3 … 24, so it changes when textures land: decide it together with `sp3a.registry` (SP3a §10), re-keying the registry goldens over the final tables rather than bumping `GENERATOR_VERSION` for a texture-only change.
+- **SP8b:** snowy_taiga and snowy_plains tops are mostly snow_block (§4); master §3.12's tree ground check ("grass, dirt, podzol or snowy grass") must accept snow_block, or the surface tree must exempt these biomes from the snow branch, before spruce placement.
+- **SP10:** the 2D defects if Decision 2 hands them over; `bandlands` if the §9 cut is taken.
 
 ## 12. Master-spec amendments made with this spec
 
-- **§10 SP3c:** deliverable — biome surfaces on the voxel terrain (the 22-block palette, surface rules, dithered bedrock and deepslate, snowline, cliffs, badlands bands), in the slices and the Voxels mode; exit as §9 here; cut line: `bandlands` → SP10.
+- **§10 SP3c:** deliverable — biome surfaces on the voxel terrain (the 22-block palette, surface rules, dithered bedrock and deepslate, snowline, cliffs, badlands bands), in the slices and the Voxels mode with the hover rule id; exit as §9 here; cut line as §9 (`bandlands` → SP10, decided before its leaf enters the schema lock).
+- **§1 (module layout):** `gen/surface/` adds `conditions.ts`, `reference.ts`, `bands.ts`, `pass.ts`, `context.ts` and `probe.ts`; the `metrics/*.ts` entry adds "SP3c: sp3cGoldens.ts" after "SP3b: sp3bGoldens.ts" (master l.130); the `test/` entry adds "SP3c: harness/surfaceFuzz.ts, metrics/surface.metric.ts, fixtures/sp3c-default-rules.json" after the SP3b list (master l.155); the determinism-files list of "Banned APIs" (`DET_FILES`, master l.179) adds `metrics/sp3cGoldens.ts` beside `metrics/sp3aGoldens.ts`, as the module layout here says (and `metrics/sp3bGoldens.ts`, which `test/arch/rules/banned.ts` already lists but the master line omits).
 - **§2.2:** the terrain palette's 22 types and their table values (§2.1 here); `deepslate` without `axis`.
-- **§3.11:** the SP3c condition set and rule kinds (§3.1), the scan's quantities (§3.2), the fast path (§3.4), the parameters (§3.5), the default tree (§4); `abovePreliminarySurface` dropped; ice and snow layers stay in D.
-- **§6.4:** S1's `grassNoSky` replaces "grass at sky 0" until light exists (SP4); B2's voxel river check (§5.2); the voxel B4 parts' definitions.
+- **§3.10:** the T_eff lapse 0.006 and base 80 become `surface.lapse` and `surface.lapseBase`.
+- **§3.11:**
+  - the SP3c condition set and rule kinds (§3.1): `lake` added; `water{offset, runTop}` and `yAbove{minY, runTop}` replace `mult`; `secondaryDepthRange` deferred; `abovePreliminarySurface` dropped; `caveBiome` stays SP6's;
+  - the scan's quantities, hashes and noise sampling (§3.2); `surfaceDepth = max(0, ⌊3 + 2.75·depthMul·Ns + 0.25·hash01⌋)` (the master formula assumed MC's narrower surface noise);
+  - the general fast path (§3.4), the parameters (§3.5) and the default tree (§4): the cliff rule becomes `steep ≥ surface.cliffSteep` (1.2) and yTop ≥ `surface.cliffMinY` (80, was > 1.2 and y ≥ 90); deepslate is dithered over 1 … 7 (was 0 … 8); ice and snow layers stay in D.
+- **§5.5:** the surface-rule branch path reaches the slice view through the `surfaceProbe` worker job (§6).
+- **§6.4:**
+  - S1: `grassNoSky` replaces "grass at sky 0" until light exists (SP4); "surface y mod 16 χ²" becomes the χ² independence of the top's y mod 16 and the soil depth (§5.2), which targets the banding of master §6.5;
+  - S2 and S3 part names as §5.2;
+  - B4's voxel parts: `snowInDesert`, `coastBandBeachVoxel` (snowy beach counted by its snow_block top), `landTopsBelowSea` (land-family positions with water above a floor below 63, outside lake and river-wet corners);
+  - B2: the voxel river check `riverChannelWater` (§5.2);
+  - DT2: `probeBulk` compares probe solidity with block ≠ air; SP3c adds `surfaceProbeBulk` (surfaceProbe == the stored block) and `surfaceReference` (compiled == reference);
+  - U2: SP3c adds five class columns for terrain leaves (`cliffY`, `cliffSteep`, `snowline`, `patch`, `badlands`; 21 class columns, 20 if the §9 cut is taken), found by a third pass after SP2b's two so the existing 16 stay, each accepted only when every leaf it serves changes a voxel of the generated column; every `surface.*` leaf must be decided.
+- **§7 (performance budget):** `terrain.real` (T ≤ 4 ms p50) now includes the surface pass; the bench gains `surface.column`.
+- **§10 SP6:** its exit's "S1 (grass at sky 0)" is master S1's part restored in place of `grassNoSky` once SP4's light exists.
+
+## 13. Changes made after the adversarial spec review (2026-10-07)
+
+All 46 kept findings were taken (none rejected; the per-finding map is in `.superpowers/sp3c/revision-map.md`). Where a finding's fix and its verifiers' better fixes differed, the controller's rulings and the version that is correct against the code were taken. The ones that changed the design:
+- **surfaceDepth.** A unit-sd `Ns` made it negative on ≈ 13 % of positions: bare-stone tops, and S3 capped near 0.87. It is now `max(0, …)` with a new knob `surface.depthMul`; the snow rule is its own top-voxel branch, so S3 never depends on the depth noise. (A 'uniform' remap was the alternative; the clamp keeps the master formula and gives the dry run a real lever.)
+- **The default tree is exact data** (§4) with a fixture test: no dead branch, every parameter and `runTop` given, patches one-sided per sign, the sandstone band reachable (rule [2][4]), red_sandstone placed under the bands.
+- **`lake`** joins the conditions (controller ruling; the verifiers preferred a biome-only rewording, but water v0 levels sea and rivers at 63 everywhere, so only the lake corner tells a lake apart).
+- **`water` and `yAbove`** take `runTop` instead of `mult`, and the MC claim is corrected; **`secondaryDepthRange`** is deferred (no default rule reads it, and a noise leaf for it would be dead for U2).
+- **S1 `ymod16`** is a χ² independence test of soil depth against the top's y mod 16: the top heights are the frozen density, not flat mod 16 (χ² 14,057 against uniform), and no SP3c knob moves them; the height histogram is a diagnostic and its lattice artefact goes to SP3d/SP6.
+- **B4 `landTopsBelowSea`** counts only land-family positions with water above a floor below 63 (≈ 0.06 %); the dry pits (≈ 2 %, SP3b's water v0) are a diagnostic for SP6/SP7. **`coastBandBeachVoxel`** counts snowy beaches and no longer collides with SP2a's 2D part; the voxel calls write their own `.out` files.
+- **DT2** treats palette blocks as solid and gains `surfaceProbeBulk` and `surfaceReference`; the SP3b tests that pin stone are listed as replaced.
+- **U2** gains five SP3c class columns (cliffY, cliffSteep, snowline, patch, badlands) found by a fixed scan with a re-derivation test: at seed 42 the land and coast columns could not decide `bandOffset` or `cliffMinY`.
+- **The fast path** is a general, conservative compile-time analysis with exact band ends, fuzzed on random trees.
+- **The hover rule id** comes from a `surfaceProbe` worker job; the slice buffers do not change.
+- **The cut line** builds `bandlands` as its own late task, decided before its leaf enters the schema lock or the goldens.
+- **The bench** exempts `terrain.real`'s rise from the pre-record ratio gate (its 4 ms gate stays) and times `surfacePass` alone as `surface.column`.
+- **Other fixes:**
+  - §1's stage order (sections, then aux) and the biome buffer computed once;
+  - hashes through `deriveSeed` / `hash2` / `hash3` with named seeds, the dither formula and its ends;
+  - noise metas (wavelength ranges, `remapNone`, unscaled coordinates) and the band algorithm with its ±4 offset;
+  - the probe's semantics, context and empty path;
+  - sampling copied from SP3b with per-part minimums of 1,000;
+  - the B2 river check's exact population (its threshold stays the dry run's, by ruling);
+  - `buried` without the circular sand clause, and the guards stated as such;
+  - S3 and every part read the scan's own readouts;
+  - the golden recording procedure, the `sp3b.density.*` and `sp3c.surface.ops` statements, the SP8a registry note;
+  - the snowy biomes' snow tops stated, with an SP8b note on the tree ground check;
+  - `lakeRimIslets` measures SP2a's rim islets, `shorelineFringe` has a population, and "if they show" is the user's call;
+  - desert and snowy review sites with voxel needs, and a palette-completeness test;
+  - the master amendments and hand-overs completed (§3.10, §3.11 cliff values, §5.5, §6.4 DT2/U2, §10 SP6) and the `CURRENT_SP` pins.
+- **Second check of the revision** (13 problems, all fixed; map in `.superpowers/sp3c/revision-map.md`):
+  - U2's SP3c slots run in a third pass after SP2b's two, so the 16 existing columns and their verdicts stay (scanning them first would have moved land #1 and coast #1). The single cliff slot became `cliffY` and `cliffSteep`, and every SP3c slot has an acceptance check on the generated column, because a corner prefilter alone picked a dead cliff column. The slot order is fixed with `badlands` last, and the pins were pre-measured at seed 42. `liveness.test.ts` (21 columns) is listed as replaced.
+  - `S1.ymod16`: per-column visit orders seeded by (cx, cz), not by worker arrival; soil depth contiguous from the top; repeated class merging in a fixed order; per-profile pooling and worst-of p-value; its thin population margin (1,114 on the fast default) is listed for the user's approval (the controller's one-position-per-column ruling stands).
+  - The JSON encoding of rules and conditions (`kind` discriminator, `if` nesting, every field written, no −0), the band table's draw order, SD_MAX's clampSigma (3, not 11), the `BENCH_EXEMPT` mechanism, `probeBulk`'s predicate change without a lock change, DT2's surface voxels on their own stream, and the master §1 test-side files and `DET_FILES`.
 
 ## Threshold log
 
