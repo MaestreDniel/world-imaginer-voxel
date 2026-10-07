@@ -82,6 +82,40 @@ export function evalNode(e: Expr, env: NodeEnv): number {
   }
 }
 
+// ---- Geometry and interpolation (SP3b spec §2.2) ----
+// A column is 4 × 48 × 4 cells of 4 × 8 × 4 voxels. Corners sit at local x, z ∈ {0, 4, 8, 12, 16} (i, j = 0 … 4,
+// lattice point latticeIndex(i, j)) and y = −64 + 8k (k = 0 … 48). Every fraction below is exact.
+
+/** The cell index along x or z of a local block coordinate 0 … 15. */
+export function cellXZ(l: number): number { return l >> 2; }
+/** The voxel's fraction across its cell along x or z: (l − 4·cell) / 4. */
+export function fracXZ(l: number): number { return (l - 4 * (l >> 2)) / 4; }
+/** The cell layer of a voxel y ∈ [−64, 319]: ⌊(y + 64) / 8⌋. */
+export function cellY(y: number): number { return (y + 64) >> 3; }
+/** The voxel's fraction across its cell layer: (y + 64 − 8·cell) / 8. */
+export function fracY(y: number): number { return (y + 64 - 8 * ((y + 64) >> 3)) / 8; }
+/** The y of corner layer k: −64 + 8k. */
+export function cornerY(k: number): number { return -64 + 8 * k; }
+
+/** lerp(a, b, t) = a + t · (b − a), in that order (the one definition the compiler and the reference share). */
+export function lerp(a: number, b: number, t: number): number { return a + t * (b - a); }
+
+/**
+ * Trilinear interpolation of a cell's 8 corner values in the pinned order: lerp along x on the four x-edges, then
+ * along z, then along y. `cXYZ` is the corner at (x0 + 4X, y0 + 8Y, z0 + 4Z); the arguments come x fastest, then z,
+ * then y (c000, c100, c001, c101 on the lower layer, then the upper layer), followed by tx, ty, tz.
+ */
+export function trilerp(
+  c000: number, c100: number, c001: number, c101: number, c010: number, c110: number, c011: number, c111: number,
+  tx: number, ty: number, tz: number,
+): number {
+  const e00 = lerp(c000, c100, tx);
+  const e01 = lerp(c001, c101, tx);
+  const e10 = lerp(c010, c110, tx);
+  const e11 = lerp(c011, c111, tx);
+  return lerp(lerp(e00, e01, tz), lerp(e10, e11, tz), ty);
+}
+
 // ---- Interval rules (SP3b spec §1.2) ----
 
 /** [lo, hi] as is: `const` is [v, v], `y` the cell's [y0, y1]. */

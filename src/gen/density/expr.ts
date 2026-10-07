@@ -82,6 +82,17 @@ export interface DensityNoiseInfo {
 /** The density noises an expression may use, by id (Task 6 builds it from the schema's `density.noises`). */
 export type DensityNoiseLookup = (id: string) => DensityNoiseInfo | undefined;
 
+/**
+ * A density noise the evaluators sample: its validation info plus `z2(x, z)` / `z3(x, y, z)` in unscaled world block
+ * coordinates (a schema NormalNoise, or a test noise). Values lie in [−clampSigma, clampSigma].
+ */
+export interface DensityNoise extends DensityNoiseInfo {
+  z2(x: number, z: number): number;
+  z3(x: number, y: number, z: number): number;
+}
+/** Injected noises by id; also a DensityNoiseLookup, so the same source validates and evaluates. */
+export type DensityNoiseSource = (id: string) => DensityNoise | undefined;
+
 export type ExprErrorCode =
   | 'NOT_OBJECT' | 'UNKNOWN_OP' | 'UNKNOWN_KEY' | 'NOT_FINITE' | 'BAD_FIELD' | 'UNKNOWN_NOISE' | 'NOISE_DIMS'
   | 'NOISE_REMAP' | 'BAD_NAME' | 'DUPLICATE_TAP' | 'UNKNOWN_REF' | 'REF_CYCLE' | 'NESTED_INTERPOLATED'
