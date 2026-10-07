@@ -24,14 +24,15 @@ jobs:
           cache: npm
       - run: npm ci
       - run: npm run build
-      - run: npm test
-        env:
-          GOVERNANCE_BASE: ${{ github.event.pull_request.base.sha || github.event.before }}
       # The region cache (SP3b spec §7): dumps only, never the bundled workers (test/.cache/taskHandler* etc.). The key
       # covers everything a dump's srcKey hashes; no restore-keys, so a code change starts cold instead of restoring
-      # dumps that can never hit.
+      # dumps that can never hit. Restored before npm test, so metrics-fast's DT1 can hit as well as metrics-quick's;
+      # the post step saves both tiers' dumps.
       - uses: actions/cache@v6
         with:
           path: test/.cache/regions
           key: regions-${{ runner.os }}-${{ hashFiles('src/**', 'test/harness/**', 'package-lock.json') }}
+      - run: npm test
+        env:
+          GOVERNANCE_BASE: ${{ github.event.pull_request.base.sha || github.event.before }}
       - run: npm run test:metrics

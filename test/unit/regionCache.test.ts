@@ -336,7 +336,7 @@ describe('the CI region cache step (SP3b spec §7)', () => {
   /** The steps of the job: each `- ` item of the `steps:` list with its indented lines. */
   const steps = CI.slice(CI.indexOf('steps:')).split(/\n\s{6}- /).slice(1);
 
-  test('one actions/cache step: the dumps only, before npm run test:metrics, with no restore-keys', () => {
+  test('one actions/cache step: the dumps only, before npm test (so the fast tier\'s DT1 can hit too), with no restore-keys', () => {
     const cache = steps.flatMap((s, i) => (/^uses: actions\/cache@/.test(s) ? [i] : []));
     expect(cache).toHaveLength(1);
     const step = steps[cache[0]!]!;
@@ -344,8 +344,10 @@ describe('the CI region cache step (SP3b spec §7)', () => {
     expect(step.match(/^\s*path:\s*(.+)$/m)?.[1]?.trim()).toBe('test/.cache/regions');
     expect(fileURLToPath(new URL('../.cache/regions/', import.meta.url))).toBe(REGION_CACHE_DIR);
     expect(step).not.toMatch(/restore-keys/);
+    const npmTest = steps.findIndex((s) => /^run: npm test\s*$/m.test(s));
     const metrics = steps.findIndex((s) => /^run: npm run test:metrics\s*$/m.test(s));
-    expect(metrics).toBeGreaterThan(cache[0]!);
+    expect(npmTest).toBeGreaterThan(cache[0]!);
+    expect(metrics).toBeGreaterThan(npmTest);
   });
 
   test('its key hashes every file a dump\'s srcKey reads (a srcKey change is always a new key) and the lock file', () => {
