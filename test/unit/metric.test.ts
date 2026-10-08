@@ -1,4 +1,4 @@
-import { mkdtempSync, rmSync } from 'node:fs';
+import { existsSync, mkdtempSync, readFileSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterAll, describe, expect, test } from 'vitest';
@@ -83,12 +83,42 @@ describe('metricTest: a soft failure is never skipped away (SP3b spec §8.1: "ne
   });
 });
 
+describe('MetricEnv.outName (SP3c spec §5.2): two calls for one id write their own .out files', () => {
+  // SP3c registers B4's and B2's voxel parts with a second metricTest call each; `outName` keeps the 2D record.
+  const rows: ThresholdTable = {
+    B4: { coastBandBeach: { min: 0.7, activeFrom: 'SP2a' }, coastBandBeachVoxel: { min: 0.7, activeFrom: 'SP3c' } },
+  };
+  const outDir = mkdtempSync(join(tmpdir(), 'wi10-metric-out-'));
+  afterAll(() => rmSync(outDir, { recursive: true, force: true }));
+  const env = (outName?: string): MetricEnv => ({ table: rows, started: ['SP2a', 'SP3c'], tier: 'fast', outDir, ...(outName === undefined ? {} : { outName }) });
+
+  metricTest('B4', ['coastBandBeach'], () => ({ coastBandBeach: 0.8 }), 10_000, env());
+  metricTest('B4', ['coastBandBeachVoxel'], () => ({ coastBandBeachVoxel: 0.9 }), 10_000, env('B4.voxel'));
+
+  test('the default name is the id; outName names the second record, which keeps the id inside', () => {
+    const read = (name: string): { id: string; values: Record<string, number> } => JSON.parse(readFileSync(join(outDir, `${name}.json`), 'utf8'));
+    expect(read('B4')).toMatchObject({ id: 'B4', values: { coastBandBeach: 0.8 } });
+    expect(read('B4.voxel')).toMatchObject({ id: 'B4', values: { coastBandBeachVoxel: 0.9 } });
+    expect(read('B4').values).not.toHaveProperty('coastBandBeachVoxel');
+    expect(existsSync(join(outDir, 'B4.voxel.json'))).toBe(true);
+  });
+});
+
 describe('coverageErrors', () => {
   test('every active part needs exactly one registering call', () => {
     expect(coverageErrors([], table, ['SP6'])).toEqual(['C1.default is active but no metricTest covers it']);
     const call = { file: 'a.metric.ts', id: 'C1', parts: ['default'] };
     expect(coverageErrors([call], table, ['SP6'])).toEqual([]);
-    expect(coverageErrors([call, call], table, ['SP6'])).toEqual(['C1.default is covered by 2 metricTest calls']);
+    expect(coverageErrors([call, call], table, ['SP6'])).toEqual(['C1: 2 metricTest calls write .out/C1.json', 'C1.default is covered by 2 metricTest calls']);
+  });
+
+  test('two calls writing one .out file (same outName, the id by default) are an error, even over disjoint parts', () => {
+    const rows: ThresholdTable = { B4: { a: { min: 0, activeFrom: 'SP2a' }, b: { min: 0, activeFrom: 'SP3c' } } };
+    const a = { file: 'biomes.metric.ts', id: 'B4', parts: ['a'] };
+    const b = { file: 'surface.metric.ts', id: 'B4', parts: ['b'] };
+    expect(coverageErrors([a, b], rows, ['SP2a', 'SP3c'])).toEqual(['B4: 2 metricTest calls write .out/B4.json']);
+    expect(coverageErrors([a, { ...b, outName: 'B4' }], rows, ['SP2a', 'SP3c'])).toEqual(['B4: 2 metricTest calls write .out/B4.json']);
+    expect(coverageErrors([a, { ...b, outName: 'B4.voxel' }], rows, ['SP2a', 'SP3c'])).toEqual([]);
   });
 
   test('a tier-restricted part still needs exactly one call; its tiers must be a non-empty subset of the tiers', () => {

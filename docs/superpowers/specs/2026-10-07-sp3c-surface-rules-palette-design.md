@@ -562,3 +562,4 @@ The plan was dry-run in a scratch worktree: every task was implemented and every
 
 - Task 1: `STARTED_SPS` gains `SP3c`; no threshold rows change.
 - Task 10: DT2 gains `surfaceProbeBulk` (max 0) and `surfaceReference` (max 0), activeFrom `SP3c` (§5.2's exactness parts, with their code); no other row changes.
+- Task 13: S1 `buried` (max 0), `grassNoSky` (max 0), `ymod16` (min 0.001); S2 `deepslateBelow0` (min 0.95), `deepslateAbove8` (max 0.01), `bedrockFloor` (min 1); S3 `snowNoSky` (max 0), `snowAboveLine` (min 0.9); B4 `snowInDesert` (max 0), `coastBandBeachVoxel` (min 0.7), `landTopsBelowSea` (max 0.01); B2 `riverChannelWater` (min 0.85, approved by the user on 2026-10-08), all activeFrom `SP3c` (§5.2's voxel parts, measured in the dry run on every tier and both profiles; no retune); no other row changes.

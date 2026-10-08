@@ -28,7 +28,10 @@ export const THRESHOLDS: ThresholdTable = {
     minShare: { min: 0.003, activeFrom: 'SP2a' }, minRareShare: { min: 0.001, activeFrom: 'SP2a' }, largestLand: { max: 0.16, activeFrom: 'SP2a' },
     oceanFamilyMin: { min: 0.25, activeFrom: 'SP2a' }, oceanFamilyMax: { max: 0.45, activeFrom: 'SP2a' }, ties: { max: 0, activeFrom: 'SP2a' }, outside: { max: 0.02, activeFrom: 'SP2a' },
   },
-  B4: { hotColdSpruceWindswept: { max: 0.01, activeFrom: 'SP2a' }, coastBandBeach: { min: 0.7, activeFrom: 'SP2a' } },
+  B4: {
+    hotColdSpruceWindswept: { max: 0.01, activeFrom: 'SP2a' }, coastBandBeach: { min: 0.7, activeFrom: 'SP2a' },
+    snowInDesert: { max: 0, activeFrom: 'SP3c' }, coastBandBeachVoxel: { min: 0.7, activeFrom: 'SP3c' }, landTopsBelowSea: { max: 0.01, activeFrom: 'SP3c' },
+  },
   N4: { originSdRatio: { min: 0.8, activeFrom: 'SP2a' }, spawnTopShare: { max: 0.3, activeFrom: 'SP2a' }, spawnDistinct: { min: 8, activeFrom: 'SP2a' }, spawnOnLand: { min: 1, activeFrom: 'SP2a' } },
   T6: { minGain: { min: 8.5, activeFrom: 'SP2a' }, maxGain: { max: 11.5, activeFrom: 'SP2a' } },
   T7: { value: { min: 0.9, max: 1.1, activeFrom: 'SP2a' }, borderMismatch: { max: 0, activeFrom: 'SP2a' } },
@@ -37,6 +40,7 @@ export const THRESHOLDS: ThresholdTable = {
   B2: {
     medianLength: { min: 300, activeFrom: 'SP2a' }, landShareMin: { min: 0.02, activeFrom: 'SP2a' }, landShareMax: { max: 0.07, activeFrom: 'SP2a' },
     mouths: { min: 0.5, activeFrom: 'SP2a' }, gorgesPer100km2: { min: 1, activeFrom: 'SP2a' }, dryRiverBiome: { max: 0, activeFrom: 'SP2a' },
+    riverChannelWater: { min: 0.85, activeFrom: 'SP3c' },
   },
   B5: { perKm2Min: { min: 0.2, activeFrom: 'SP2a' }, perKm2Max: { max: 2, activeFrom: 'SP2a' }, highShare: { min: 0.3, activeFrom: 'SP2a' } },
   U2: { value: { min: 1, activeFrom: 'SP2b' } },
@@ -53,6 +57,9 @@ export const THRESHOLDS: ThresholdTable = {
     probeBulk: { max: 0, activeFrom: 'SP3b' }, compiledReference: { max: 0, activeFrom: 'SP3b' },
     surfaceProbeBulk: { max: 0, activeFrom: 'SP3c' }, surfaceReference: { max: 0, activeFrom: 'SP3c' },
   },
+  S1: { buried: { max: 0, activeFrom: 'SP3c' }, grassNoSky: { max: 0, activeFrom: 'SP3c' }, ymod16: { min: 0.001, activeFrom: 'SP3c' } },
+  S2: { deepslateBelow0: { min: 0.95, activeFrom: 'SP3c' }, deepslateAbove8: { max: 0.01, activeFrom: 'SP3c' }, bedrockFloor: { min: 1, activeFrom: 'SP3c' } },
+  S3: { snowAboveLine: { min: 0.9, activeFrom: 'SP3c' }, snowNoSky: { max: 0, activeFrom: 'SP3c' } },
   M1: { states: { max: 4096, activeFrom: 'SP3a' }, roundTripFailures: { max: 0, activeFrom: 'SP3a' }, lockChanges: { max: 0, activeFrom: 'SP3a' } },
   U4: {
     registryIssues: { max: 0, activeFrom: 'SP1' },

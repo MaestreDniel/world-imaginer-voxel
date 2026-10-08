@@ -4,6 +4,14 @@
  * lake cells, the DensityContext, the store's pools and the JIT are warm) may grow the heap, measured after a full GC
  * on both sides, by less than HEAP_GROWTH_MAX bytes. Short-lived garbage (boxed doubles returned by the noise, climate
  * and density closures) is collected by scavenges and is not counted: see the column stage's notes in `lakes.ts`.
+ *
+ * The heap is measured without V8's JIT spaces (`code_*` and `trusted_*`: machine code, bytecode and deoptimisation
+ * data). What the compiler installs there during the second pass depends on when its background threads finish, which
+ * a loaded machine delays (`npm run test:goldens` runs this file beside metrics-quick). Measured on the SP3c tree:
+ * the second pass grows those spaces by 12,048 bytes when run alone and by −1,296 … +12,048 under load, and the
+ * other spaces by 4,056 … 5,568 bytes in every run; the whole heap grew by 17,824 and 19,000 bytes (> 16 KiB) in the
+ * two failed runs under load. The T stage's own data never lives in the JIT spaces, so a retained object per column
+ * still fails.
  */
 import v8 from 'node:v8';
 import { runInNewContext } from 'node:vm';
@@ -15,15 +23,26 @@ import { testRng } from '../harness/stats';
 
 v8.setFlagsFromString('--expose-gc');
 const gc = runInNewContext('gc') as () => void;
+/** V8's spaces for compiled code and its metadata (code, bytecode, deoptimisation data): not counted. */
+const JIT_SPACE = /^(code|trusted|shared_trusted)_/;
 const used = (): number => {
   gc();
   gc();
-  return v8.getHeapStatistics().used_heap_size;
+  let n = 0;
+  for (const s of v8.getHeapSpaceStatistics()) if (!JIT_SPACE.test(s.space_name)) n += s.space_used_size;
+  return n;
 };
 
-/** 16 bytes per column on average: retaining even one small object per column fails (measured: about −4 KiB). */
+/** 16 bytes per column on average: retaining even one small object per column fails (measured: 4,056 … 5,568 bytes). */
 const HEAP_GROWTH_MAX = 16 * 1024;
 const COLUMNS = 1000;
+
+test('the JIT spaces left out of the measurement exist under these names', () => {
+  const names = v8.getHeapSpaceStatistics().map((s) => s.space_name);
+  expect(names.filter((n) => JIT_SPACE.test(n))).toEqual(expect.arrayContaining(['code_space', 'trusted_space']));
+  expect(names).toEqual(expect.arrayContaining(['new_space', 'old_space', 'large_object_space']));
+  expect(names.filter((n) => !JIT_SPACE.test(n))).not.toContain('code_space');
+});
 
 test(`the T stage's hot path: heap growth over ${COLUMNS} warm columns < ${HEAP_GROWTH_MAX} bytes`, () => {
   const ctx = ctxFor('42');

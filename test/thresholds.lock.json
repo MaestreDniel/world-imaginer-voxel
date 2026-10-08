@@ -1,5 +1,5 @@
 {
-  "sha256": "a2184bbad1de2cb35ce7f753ad0bd758cb9b687c3ec6487854619f45ed25fc42",
+  "sha256": "1f34a7bf9df9e0714eae41a77f6d5e0502848d6b07a7a0a0796b82e9bd5ce35e",
   "canonical": {
     "startedSps": [
       "SP0",
@@ -65,6 +65,10 @@
         "mouths": {
           "activeFrom": "SP2a",
           "min": 0.5
+        },
+        "riverChannelWater": {
+          "activeFrom": "SP3c",
+          "min": 0.85
         }
       },
       "B4": {
@@ -72,9 +76,21 @@
           "activeFrom": "SP2a",
           "min": 0.7
         },
+        "coastBandBeachVoxel": {
+          "activeFrom": "SP3c",
+          "min": 0.7
+        },
         "hotColdSpruceWindswept": {
           "activeFrom": "SP2a",
           "max": 0.01
+        },
+        "landTopsBelowSea": {
+          "activeFrom": "SP3c",
+          "max": 0.01
+        },
+        "snowInDesert": {
+          "activeFrom": "SP3c",
+          "max": 0
         }
       },
       "B5": {
@@ -183,6 +199,44 @@
         "value": {
           "activeFrom": "SP1",
           "max": 0.001
+        }
+      },
+      "S1": {
+        "buried": {
+          "activeFrom": "SP3c",
+          "max": 0
+        },
+        "grassNoSky": {
+          "activeFrom": "SP3c",
+          "max": 0
+        },
+        "ymod16": {
+          "activeFrom": "SP3c",
+          "min": 0.001
+        }
+      },
+      "S2": {
+        "bedrockFloor": {
+          "activeFrom": "SP3c",
+          "min": 1
+        },
+        "deepslateAbove8": {
+          "activeFrom": "SP3c",
+          "max": 0.01
+        },
+        "deepslateBelow0": {
+          "activeFrom": "SP3c",
+          "min": 0.95
+        }
+      },
+      "S3": {
+        "snowAboveLine": {
+          "activeFrom": "SP3c",
+          "min": 0.9
+        },
+        "snowNoSky": {
+          "activeFrom": "SP3c",
+          "max": 0
         }
       },
       "T1": {

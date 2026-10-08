@@ -61,6 +61,11 @@ export interface MetricEnv {
   readonly started?: readonly SubProjectId[];
   readonly tier?: MetricsTier;
   readonly outDir?: string;
+  /**
+   * The `.out` file's base name (default: the metric id). A second `metricTest` call for an id (disjoint parts, e.g.
+   * SP3c's voxel parts of B4 and B2) passes its own name so it does not overwrite the first call's record.
+   */
+  readonly outName?: string;
 }
 
 /**
@@ -76,11 +81,11 @@ export function metricTest(
   timeoutMs = 600_000,
   env: MetricEnv = {},
 ): void {
-  const { register = test, table = THRESHOLDS, started = STARTED_SPS, outDir = OUT_DIR } = env;
+  const { register = test, table = THRESHOLDS, started = STARTED_SPS, outDir = OUT_DIR, outName = id } = env;
   register(id, async (ctx) => {
     const values = await run();
     mkdirSync(outDir, { recursive: true });
-    writeFileSync(join(outDir, `${id}.json`), `${JSON.stringify({ id, tier: process.env.METRICS_TIER ?? null, values }, null, 2)}\n`);
+    writeFileSync(join(outDir, `${outName}.json`), `${JSON.stringify({ id, tier: process.env.METRICS_TIER ?? null, values }, null, 2)}\n`);
     const r = evaluateMetric(id, parts, values, table, started, env.tier ?? currentTier());
     expect(r.errors, r.errors.join('\n')).toEqual([]);
     if (r.asserted.length === 0 && ctx.task.result?.state !== 'fail') {
@@ -97,6 +102,11 @@ export interface MetricCall {
   file: string;
   id: string;
   parts: string[];
+  /**
+   * The `.out` file's base name (`MetricEnv.outName`; absent: the id). null: the call passes an outName that is not a
+   * string literal, which the scan cannot read.
+   */
+  outName?: string | null;
 }
 
 function walk(dir: string, out: string[]): void {
@@ -116,10 +126,15 @@ export function findMetricCalls(root: string): MetricCall[] {
   const re = /metricTest\(\s*['"]([A-Z]+\d+[a-z]*)['"]\s*,\s*\[([^\]]*)\]/g;
   for (const file of files.sort()) {
     const text = readFileSync(file, 'utf8');
-    for (const m of text.matchAll(re)) {
+    const matches = [...text.matchAll(re)];
+    matches.forEach((m, i) => {
       const parts = m[2]!.split(',').map((p) => p.trim().replace(/^['"]|['"]$/g, '')).filter((p) => p.length > 0);
-      calls.push({ file: relative(root, file).split('\\').join('/'), id: m[1]!, parts });
-    }
+      // The call's env is its last argument: an `outName` between this call and the next is this call's.
+      const body = text.slice(m.index, matches[i + 1]?.index ?? text.length);
+      const named = /\boutName\s*:\s*(?:'([^'\n]*)'|"([^"\n]*)")/.exec(body);
+      const outName = named !== null ? (named[1] ?? named[2]!) : /\boutName\b/.test(body) ? null : m[1]!;
+      calls.push({ file: relative(root, file).split('\\').join('/'), id: m[1]!, parts, outName });
+    });
   }
   return calls;
 }
@@ -130,6 +145,16 @@ export function coverageErrors(
   started: readonly SubProjectId[] = STARTED_SPS,
 ): string[] {
   const errors: string[] = [];
+  // SP3c spec §5.2: a second call for an id names its own .out file, so neither record replaces the other.
+  const writers = new Map<string, MetricCall[]>();
+  for (const call of calls) {
+    if (call.outName === null) { errors.push(`${call.file}: ${call.id} has an outName that is not a string literal`); continue; }
+    const name = call.outName ?? call.id;
+    writers.set(name, [...(writers.get(name) ?? []), call]);
+  }
+  for (const [name, w] of writers) {
+    if (w.length > 1) errors.push(`${[...new Set(w.map((c) => c.id))].join(', ')}: ${w.length} metricTest calls write .out/${name}.json`);
+  }
   for (const call of calls) {
     const row = table[call.id as MetricId];
     if (!row) { errors.push(`${call.file}: ${call.id} is not in THRESHOLDS`); continue; }
