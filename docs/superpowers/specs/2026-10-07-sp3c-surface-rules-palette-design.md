@@ -1,7 +1,7 @@
 # SP3c — Surface rules and terrain palette (Design)
 
 Date: 2026-10-07
-Status: Approved by the user (2026-10-07): the design section by section, then the written spec after the adversarial review (§13) and Decision 6 (rule order); the dry run's measurement decided by the user on 2026-10-08 (B2 `riverChannelWater` ≥ 85 %, Decision 2's defects handed to SP10, no retune, `surface.depthMul` unchanged); revised by the implementation-plan dry run (§14)
+Status: Approved by the user (2026-10-07): the design section by section, then the written spec after the adversarial review (§13) and Decision 6 (rule order); the dry run's measurement decided by the user on 2026-10-08 (B2 `riverChannelWater` ≥ 85 %, Decision 2's defects handed to SP10, no retune, `surface.depthMul` unchanged); revised by the implementation-plan dry run (§14). Implemented; exit evidence below (the user's visual review, Firefox and CI after the merge)
 Parent: master spec `2026-09-26-architecture-design.md`. The sections involved are:
 - §10 SP3c (created by SP3b), whose deliverable, exit and cut line this spec sets;
 - §2.2 (block registry: the palette appends), §3.10 (biomes), §3.11 (surface rules), §3.16 (cross-column consistency), §3.17 (determinism);
@@ -555,6 +555,66 @@ The plan was dry-run in a scratch worktree: every task was implemented and every
    - §9: the `sp3c.surface.ops` bandlands case lands with `sp3cGoldens.ts`, after the bandlands task; the exit evidence goes under `## Exit evidence` before the Threshold log;
    - §5.2, §10: one Threshold-log line per commit, naming every part it adds;
    - §12 gains the §10 SP10 hand-over and the two harness files of the master's test/ entry.
+
+## Exit evidence
+
+Measured on the branch `sp3c/surface-rules-palette` at the end of Task 18 (2026-10-08; 12th Gen Intel(R) Core(TM) i7-12700H with 20 threads, Node v24.21.0, headless Chrome 155, Bun 1.4.2; load average 3.5 at the start of `npm test` and the bench run on an otherwise idle machine). Every metric value and golden is deterministic, so the branch's own run repeats them; only timings differ.
+- `npm run build` (1.5 s, typecheck incremental), `npm test` (150 files passed, 2 skipped; 2049 tests passed, 1 expected fail, 5 skipped; 116 s wall) and `npm run test:metrics:full` (9 files, 29 tests; 388 s wall) are green with DT1, DT2 (`probeBulk`, `compiledReference`, `surfaceProbeBulk`, `surfaceReference`), S1-S3, the B4 voxel parts and the river check active, T1-T5 still passing and U2 deciding every `surface.*` leaf. `surface.metric.ts` analyses each scattered column inside its region worker (`test/harness/surfaceScatterWorker.ts`) and the main thread only sums the workers' count records: on full it takes 138 s alone (267 s with the first version's main-thread readout), every gated value, population and diagnostic unchanged (485 of 485 equal), and `test:metrics:full` fell from 458 s to 369 s. `npm test` still costs about 35 s more than before the surface metric (Task 12's tree: 86 s on the same machine and day): `surface.metric.ts` (80 s on fast) runs beside `terrain.metric.ts` in the metrics-fast project and slows it from 60 s to 89 s by sharing the CPUs, so `terrain.metric.ts` is now the long pole of `npm test` and of `test:metrics:full` (368 s).
+- `git diff main -- test/goldens.json`:
+  - `generatorVersion` 4 → 5;
+  - `sp1.params` → 0ef3ba26bfc92a94 (it hashes `genKey`, so the version);
+  - `sp3a.region.T.default` → 454c4d8287c4b075 and `sp3a.region.T.large_biomes` → 67936d16e11d5725 (the surface now in T);
+  - added `sp3c.registry` 2ade4ab7c488e7c2 and `sp3c.surface.ops` df53f0d1115b0d39.
+
+  Unchanged: every other `sp1.*` key, every `sp2a.*` key (no 2D retune), `sp3a.registry` and `sp3b.density.*`. The file holds 54 entries, recorded once from `main`'s file after the bandlands task.
+- State ids: `test/stateIds.lock.json` appended the 22 terrain keys (ids 3 … 24) through `npm run test:accept-state-ids`; the schema lock gained the 10 `surface.*` leaves (additive, `SCHEMA_VERSION` unchanged).
+
+Surface metrics on voxels. Each part gates the worse profile; the cells show default / large_biomes. Quick is Task 13's run of the same code (deterministic).
+
+| part | threshold | fast | quick | full |
+|---|---|---|---|---|
+| S1.buried / grassNoSky | 0 / 0 | 0 / 0 | 0 / 0 | 0 / 0 |
+| S1.ymod16 (p) | ≥ 0.001 | 0.868 / 0.156 | 0.176 / 0.194 | 0.0267 / 0.0965 |
+| S2.deepslateBelow0 | ≥ 0.95 | 1 / 1 | 1 / 1 | 1 / 1 |
+| S2.deepslateAbove8 | ≤ 0.01 | 0 / 0 | 0 / 0 | 0 / 0 |
+| S2.bedrockFloor | 1 | 1 / 1 | 1 / 1 | 1 / 1 |
+| S3.snowNoSky | 0 | 0 / 0 | 0 / 0 | 0 / 0 |
+| S3.snowAboveLine | ≥ 0.9 | 1 / 1 | 1 / 1 | 1 / 1 |
+| B4.snowInDesert | 0 | 0 / 0 | 0 / 0 | 0 / 0 |
+| B4.coastBandBeachVoxel | ≥ 0.7 | 0.871 / 0.919 | 0.868 / 0.917 | 0.896 / 0.928 |
+| B4.landTopsBelowSea | ≤ 0.01 | 0.00062 / 0.00015 | 0.00055 / 0.00014 | 0.00063 / 0.00015 |
+| B2.riverChannelWater | ≥ 0.85 | 0.930 / 0.895 | 0.921 / 0.907 | 0.925 / 0.920 |
+| DT2 (all four parts) | 0 | 0 (512 voxels) | 0 (8,192) | 0 (32,768) |
+| DT1.mismatches | 0 | 0 | 0 | 0 (40 regions) |
+
+- **Populations** (default / large_biomes, every one ≥ 1,000): land tops fast 574,507 / 2,286,613, full 2,251,347 / 9,021,799; `ymod16` positions fast 1,114 / 4,975 (the default's 11 % margin, as §5.1 measured), full 4,531 / 20,225 (df 75, no class merged); snow-line tops fast 173,849 / 751,537, full 599,224 / 2,594,778; desert tops fast 25,300 / 120,139, full 157,133 / 647,918; coast-band tops fast 37,882 / 151,868, full 161,818 / 668,242; `landTopsBelowSea` positions fast 550,892 / 2,195,528, full 2,160,085 / 8,684,594; river channel positions fast 13,824 / 12,271, full 55,162 / 58,482; stone-like voxels below y 0 fast 64.0 M / 255.8 M. The scan's top equals aux A's `OCEAN_FLOOR_WG − 1` at every sampled position.
+- **Diagnostics** (ungated; full, default / large_biomes): `dryPitsBelowSea` 1.95 % / 1.54 %; `lakeRimIslets` 0.026 % / 0.011 % of positions (fast 0.053 % / 0.0065 %); `shorelineFringe` 21.7 % / 34.9 % of near-shore positions (`shorelineFringeSea` 26.3 % / 37.1 %); `oceanBiomeLandTops` 0.79 % / 0.72 %; surfaceDepth 0 on 22.3 % / 22.4 % of positions (mean 2.86, SD_MAX 11 reached; accepted by the user, `depthMul` unchanged); `landTopYmod16` χ² 3,237 / 9,269 against the neighbour average (the density's 8-voxel cell layers: +7.9 % at residue 0, −9.0 % at 14 on full default; §11's SP3d/SP6 note). Patch coverage is ≈ 25-32 % per (biome, patch block) where the population is large, as §3.5 expects.
+- **Unchanged from SP3b** (the surface pass never changes solidity or water): T1 band 0.239 / 0.183, span 104 / 107, above120 0.157 / 0.179, above200 0.0204 / 0.0214; T2 0.0373 / 0.0432, peaks 0.109 / 0.118; T3 lowland 1.189; T4 floorSd 5.69 / 3.19, exposedBedrock 0, deepFloor 0; T5 1 / 2 / 4 (full), equal to SP3b's exit evidence. Every 2D metric passes unchanged (no 2D change). U2 1 over 66 leaves: the five SP3c class columns are exactly §3.5's pins (`cliffY` (17107, 13836) index 53, `cliffSteep` (−24200, −4864) index 61, `snowline` (−25681, 32120) index 255 after 8 rejections, `patch` (−20548, −22882) index 11, `badlands` (−26426, −31088) index 35), SP3b's 16 columns unchanged; `noises.depth` and `depthMul` decided on land, the others on their own class column.
+
+Bench (Task 16, quiet machine: load 0.15-0.87, CPU idle, own process only; each run ≈ 31 s):
+- Pre-record, `BENCH_EXEMPT=terrain.real npm run bench` against SP3b's baseline: exit 0; every pre-SP3c row within its +30 % gate (0.81 … 1.09 × its SP3b ratio); `terrain.real` printed `terrain.real: exempt, ratio 3537752.608 vs baseline 2689148.264` (1.316 ×, the surface pass, by design) at p50 2.251 ms, p99 3.330 ms, under its 4 ms gate; killRatio 0.873.
+- `npm run bench:record` (2026-10-08, killRatio 0.822): `terrain.real` p50 2.616 ms (1.53 × SP3b's ratio); `surface.column` p50 0.832 ms, p99 0.919 ms (column (0, 0) of seed '42': 6,912 of 42,623 solid voxels evaluated, 16 %; the rest take the fast path); `column.sample` p50 0.341 ms.
+- Exit run, plain `npm run bench` against the new baseline: PASS, every row within +30 %; `terrain.real` p50 2.641 ms, p99 3.744 ms; `surface.column` p50 0.838 ms, p99 0.931 ms; killRatio 0.858.
+
+JavaScriptCore: `npx --yes bun@1 test/tools/goldensJsc.ts` → `54/54 match on Bun 1.4.2 (JavaScriptCore)` (6.2 s).
+
+Browser checks (`node test/tools/uiSmoke.ts --profile-dir <tmp> --shots <dir>`: its own build, `vite preview` on a free port and headless Chrome 155, 1400 × 900 at DPR 1; 49 s) → `smoke: 82/82 checks pass`:
+- `?selftest=1`: `✓ all 54 goldens match (6.0 s)`;
+- the Voxels legend lists the 25 states, water and the sea line; the mountain line A (−1664, 8) → B (−640, 8) hovers sample 205's top voxel and reads "(-1254, 209, 8) · stone · no fluid · point 205, 410.8 blocks from A · rule root.rules[1].then.rules[3].then.rules[2].then.rules[1]" (a volcano stone top);
+- no page error apart from the favicon.ico 404.
+- Firefox (`?selftest=1` 54/54) and CI are checked after the merge.
+
+Visual review (`docs/superpowers/specs/assets/sp3c/`; world seed '42', default profile, the surfaced T at `GENERATOR_VERSION` 5, one flat colour per block). `npm run docs:review-slices` writes the slices; `slices.json` records each line's site and summary (kinds, top kinds, tops, overhangs, water-wall faces), and a test re-derives every site's needs from the voxels:
+- `slice-coast.png` (1024 × 224, y −64 … 159; x −27136 … −26113, z −31992): warm_ocean floors sand under water (551 sea positions), the stony_shore plain stone with gravel patches, a volcano/badlands needle with bare stone faces and red_sandstone under its skin, jungle grass and podzol over dirt with beach sand at its shore; deepslate below y 0 with the 1 … 7 dither, the bedrock dither at the bottom.
+- `slice-lake.png` (2 px per block, y 32 … 95; x −16384 … −15873): plains and birch_forest grass over dirt, a river pool with a dirt bed and clay patches, the lake at y 82 (140 positions) with sand shallows, clay patches and gravel where deeper than 10; an 18-block sand river bank between river and lake (river biome above water takes sand).
+- `slice-river.png` (2 px per block, y 32 … 127; x −15552 … −15041): savanna and birch_forest plateaus, the river's five pools with dirt beds and clay patches, sand margins, coarse_dirt patches on the savanna side.
+- `slice-mountain.png` (1024 × 256, y 64 … 319; x −1664 … −641, z 8; the uiSmoke line): the badlands/volcano crest skinned with red_sand tops (519) over the seven-colour terracotta bands and red_sandstone; steep faces, overhang undersides and floating rocks bare stone (cliff branch and volcano palette).
+- `slice-y62.png` (the y plane 62 of the coast's 64 × 64 columns): sand and sandstone rims outline every coast, lake beds of gravel and clay, red_sandstone and a brown_terracotta band where the badlands highland crosses y 62, and SP3b's dry hollows unchanged.
+- `slice-desert.png` (1024 × 192, y −64 … 127; x 14096 … 15119, z −14328; 991 desert sand tops) and `slice-desert-zoom.png` (4 px per block, x 14480 … 14735, y 56 … 119): sand 1 … ~11 deep over a constant 4-voxel sandstone band that follows the surface, stone below; a small desert lake with sand and clay beds.
+- `slice-snow.png` (1024 × 352, y −64 … 287; x −10240 … −9217, z 3080; snowy_slopes, jagged_peaks, frozen_peaks; 906 snow_block tops) and `slice-snow-zoom.png` (4 px per block, x −9472 … −9217, y 96 … 239): a 1-voxel snow_block line over every sky-open top, bare stone on steep faces and every underside, packed_ice (22 tops) on two frozen_peaks summits from the cliff branch; no grass. Packed ice's pale blue is close to the sky colour at a glance (a review point).
+- `slice-badlands.png` (1024 × 256, y −64 … 191; x −1760 … −737, z 2056; 873 red_sand tops) and `slice-badlands-zoom.png` (4 px per block, x −1408 … −1153, y 48 … 127): eroded mesas with a red_sand top over horizontal terracotta strata in the seven colours (runs of 1-4 voxels at fixed y, cutting across the sloping skin, 0 … 11 voxels thick) and 4 voxels of red_sandstone, stone on the steep walls. Whether the band skin should be deeper is the user's call.
+- `cross-section-voxels-mountain.png` (1400 × 900, `uiSmoke.ts --shots`): `?map` in relief with the mountain cut line and the drawer in Voxels mode (the full 25-state legend), the hover crosshair on sample 205 with the readout's rule id `root.rules[1].then.rules[3].then.rules[2].then.rules[1]`.
+- The user's approval of this visual review, including the Decision 2 hand-over (above and §11), is the last exit criterion; the assets are committed and the user reviews them before the merge.
 
 ## Threshold log
 

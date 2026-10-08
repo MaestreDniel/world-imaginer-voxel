@@ -5,13 +5,17 @@
  * SP3b (its spec §14): §2.5's store interfaces name every method of `world/store/api.ts`, and §3.6's default
  * expression states the density noises and amplitudes of the schema defaults, so a retune must amend the master.
  * SP3c (its spec §12): §1's `metrics/*.ts` entry names every golden-digest module of `src/metrics/`, and "Banned APIs"
- * lists exactly the determinism files (`DET_FILES`) of `test/arch/rules/banned.ts`.
+ * lists exactly the determinism files (`DET_FILES`) of `test/arch/rules/banned.ts`; §1's `gen/surface/` entry names
+ * every module of `src/gen/surface/` and its `test/` entry SP3c's test files; §2.2 lists the terrain palette in registry
+ * order; §3.10 and §3.11 state the `surface.*` defaults they name (lapse, snowline, cliffs), so a retune must amend the
+ * master; §10's SP3c entry names its spec and no longer defers its deliverable, exit and cut line to it.
  */
-import { readdirSync, readFileSync } from 'node:fs';
+import { existsSync, readdirSync, readFileSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
 import { describe, expect, test } from 'vitest';
 import { SUB_PROJECTS, type SubProjectId } from '../../src/core/ids';
 import { DEFAULTS } from '../../src/core/params/defaults';
+import { REGISTRY } from '../../src/world/blocks';
 import { SP_DEPS } from '../harness/sp';
 import { DET_FILES } from './rules/banned';
 
@@ -20,6 +24,8 @@ const MASTER = fileURLToPath(new URL('../../docs/superpowers/specs/2026-09-26-ar
 const text = readFileSync(MASTER, 'utf8');
 const API = fileURLToPath(new URL('../../src/world/store/api.ts', import.meta.url));
 const METRICS = fileURLToPath(new URL('../../src/metrics/', import.meta.url));
+const SURFACE = fileURLToPath(new URL('../../src/gen/surface/', import.meta.url));
+const ROOT_DIR = fileURLToPath(new URL('../../', import.meta.url));
 const SP_TOKEN = /\bSP(?:\d+[a-z]?)\b/g;
 
 /** §10 headers: `**SPx — Title** (size; dependencies …)`, in document order. */
@@ -107,5 +113,75 @@ describe('master spec amendments (SP3c §12)', () => {
     expect(line, 'no `DET_FILES` list in "Banned APIs"').toBeDefined();
     const list = line!.slice(line!.indexOf('(`DET_FILES`'), line!.indexOf('):'));
     expect(new Set([...list.matchAll(/`(metrics\/\w+\.ts)`/g)].map((m) => m[1]))).toEqual(new Set(DET_FILES));
+  });
+});
+
+/** A §1 module-layout entry: its first line (matching `head`) and the continuation lines indented deeper than it. */
+function layoutEntry(head: RegExp): string {
+  const lines = text.split('\n');
+  const from = lines.findIndex((l) => head.test(l));
+  if (from < 0) return '';
+  const indent = /^\s*/.exec(lines[from]!)![0].length;
+  let to = from + 1;
+  while (to < lines.length && /^\s*/.exec(lines[to]!)![0].length > indent && lines[to]!.trim() !== '') to++;
+  return lines.slice(from, to).join(' ');
+}
+
+/** A number written in the spec, with its Unicode minus. */
+const num = (s: string): number => Number(s.replace('−', '-'));
+
+describe('master spec amendments (SP3c §12, Task 19)', () => {
+  test('§1\'s gen/surface entry names every module of src/gen/surface', () => {
+    const entry = layoutEntry(/^\s+surface\/rules\.ts\s/);
+    expect(entry, 'no `surface/rules.ts …` entry under gen/ in §1').not.toBe('');
+    const files = readdirSync(SURFACE).filter((f) => f.endsWith('.ts')).sort();
+    expect(files).toContain('pass.ts');
+    for (const f of files) expect(entry, `§1's gen/surface entry misses ${f}`).toMatch(new RegExp(`(^|[\\s/])${f.replace('.', '\\.')}(\\s|,|;|\\)|$)`));
+  });
+
+  test('§1\'s test/ entry names SP3c\'s test files, which exist', () => {
+    const entry = layoutEntry(/^\s+test\/ unit\/ metrics\//);
+    expect(entry, 'no `test/ unit/ metrics/ …` entry in §1').not.toBe('');
+    const sp3c = /SP3c: ([^)]*)\)/.exec(entry);
+    expect(sp3c, "§1's test/ entry has no `SP3c: …` list").not.toBeNull();
+    const named = sp3c![1]!.split(/,\s*/).map((f) => f.trim());
+    expect(named).toEqual([
+      'harness/surfaceFuzz.ts', 'harness/surfaceScatter.ts', 'harness/surfaceScatterWorker.ts', 'metrics/surface.metric.ts',
+      'fixtures/sp3c-default-rules.json',
+    ]);
+    for (const f of named) expect(existsSync(`${ROOT_DIR}test/${f}`), `test/${f} does not exist`).toBe(true);
+  });
+
+  test('§2.2 lists the terrain palette in registry order (state ids 3 … 24)', () => {
+    const line = text.split('\n').find((l) => l.startsWith('**Terrain palette**'));
+    expect(line, 'no `**Terrain palette**` paragraph in §2.2').toBeDefined();
+    const list = line!.slice(line!.indexOf('in this order:'), line!.indexOf('.', line!.indexOf('in this order:')));
+    const names = [...list.matchAll(/`([a-z_]+)`/g)].map((m) => m[1]);
+    const expected = Array.from({ length: 22 }, (_, i) => REGISTRY.typeName(3 + i));
+    expect(names).toEqual(expected);
+  });
+
+  test('§3.10 and §3.11 state the surface schema defaults they name', () => {
+    const s = DEFAULTS.surface;
+    const lapse = /`surface\.lapse` \(([\d.]+)\) and its base `surface\.lapseBase` \((\d+)\)/.exec(text);
+    expect(lapse, 'no "`surface.lapse` (…) and its base `surface.lapseBase` (…)" in §3.10').not.toBeNull();
+    expect([num(lapse![1]!), num(lapse![2]!)]).toEqual([s.lapse, s.lapseBase]);
+    const cliff = /`steep ≥ surface\.cliffSteep` \(([\d.]+)\) and yTop ≥ `surface\.cliffMinY` \((\d+)\)/.exec(text);
+    expect(cliff, 'no "`steep ≥ surface.cliffSteep` (…) and yTop ≥ `surface.cliffMinY` (…)" in §3.11').not.toBeNull();
+    expect([num(cliff![1]!), num(cliff![2]!)]).toEqual([s.cliffSteep, s.cliffMinY]);
+    const snow = /`T_eff < surface\.snowline` \((−?[\d.]+)\)/.exec(text);
+    expect(snow, 'no "`T_eff < surface.snowline` (…)" in §3.11').not.toBeNull();
+    expect(num(snow![1]!)).toBe(s.snowline);
+  });
+
+  test('§10\'s SP3c entry names its spec and sets its deliverable, exit and cut line', () => {
+    const from = text.indexOf('**SP3c — ');
+    expect(from, 'no SP3c header in §10').toBeGreaterThanOrEqual(0);
+    const entry = text.slice(from, text.indexOf('\n**SP3d — ', from));
+    const spec = /Spec: `([^`]+)`/.exec(entry);
+    expect(spec, 'the SP3c header names no spec').not.toBeNull();
+    expect(existsSync(`${ROOT_DIR}docs/superpowers/specs/${spec![1]}`), `${spec![1]} does not exist`).toBe(true);
+    expect(entry).not.toMatch(/set by the SP3c spec/);
+    for (const k of ['Deliverable:', 'Exit:', 'Cut line:']) expect(entry, `SP3c misses **${k}**`).toContain(`**${k}**`);
   });
 });

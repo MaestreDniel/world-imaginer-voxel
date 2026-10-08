@@ -109,7 +109,10 @@ world-imaginer-voxel/          (repository root)
       caves/carvers.ts carverCache.ts
       fluids/aquifer.ts settle.ts
       biomes/registry.ts picker.ts zoom.ts
-      surface/rules.ts compile.ts scan.ts defaults.ts
+      surface/rules.ts conditions.ts compile.ts reference.ts scan.ts bands.ts pass.ts context.ts defaults.ts probe.ts
+                                (SP3c: the rule model and validateRules, the per-condition helpers shared by the compiler and the
+                                reference evaluator, the badlands band table, surfacePass (the T stage's and the bench's code path),
+                                the SurfaceContext memo and surfaceProbe; amended by SP3c)
       features/placement.ts modifiers.ts decorate.ts priority.ts kinds/{tree,foliage,patch,simpleBlock,ore,disk,boulder,
                 dripstone,glowLichen,caveVines,mossPatch,abyssCrystal,deadRoots,fossil,spring,lavaLake,freezeTop}.ts
       structures/sets.ts jigsaw.ts startCache.ts stamp.ts templates/*.ts
@@ -152,7 +155,9 @@ world-imaginer-voxel/          (repository root)
     main.ts
   tools/detmath-oracle.py       (SP1) CPython port of detMath, a manual oracle for the detMath goldens
   test/ unit/ metrics/ bench/ arch/ harness/{region,refs,cache,stats,flood}.ts fixtures/ tools/ (SP2b: tools/mapLatency.ts, tools/uiSmoke.ts)
-        (SP3a: harness/{region,cache,png,regionWorker,fuzzWorker}.ts; SP3b: harness/densityFuzz.ts, metrics/terrain.metric.ts)
+        (SP3a: harness/{region,cache,png,regionWorker,fuzzWorker}.ts; SP3b: harness/densityFuzz.ts, metrics/terrain.metric.ts;
+        SP3c: harness/surfaceFuzz.ts, harness/surfaceScatter.ts, harness/surfaceScatterWorker.ts, metrics/surface.metric.ts,
+        fixtures/sp3c-default-rules.json)
         schema-shape.lock.json (SP1) stateIds.lock.json (SP3a)
         thresholds.ts thresholds.lock.json goldens.json baselines.json
 ```
@@ -249,6 +254,8 @@ Per-state SoA tables:
 - **Canonical key:** the bare type name for a type without properties; otherwise `name[p1=v1,p2=v2,…]` with every property in declaration order, defaults included, no spaces, each value spelled as its kind value name. Keys are ASCII and unique, and `parseStateKey(stateKey(s)) = s`; the lock and `stateTable` use them.
 - **`withType(state, type)`** keeps a property only when the target declares one with the same name and kind; every other property takes the target's default. **`rotateState(state, q)`** turns clockwise seen from +y by ((q mod 4) + 4) mod 4 quarter turns: horizontal `facing4`/`facing6` values step north → east → south → west, up and down stay, `axis` swaps x ↔ z on odd turns. **`mirrorState(state, 'x' | 'z')`** negates that axis (x: east ↔ west; z: north ↔ south), keeps up and down and flips `hinge`. `half`, `open` and `slabType` never change under either.
 - **The table set only grows:** later SPs add block types, the per-state values of new states and new tables (`PLACEABLE` and `category` in SP5, `SHAPE_BOXES` in SP8a); an existing table never changes its encoding.
+
+**Terrain palette** (amended by SP3c; the SP3c spec §2 holds the table): 22 types without properties append after bedrock, state ids 3 … 24, in this order: `grass_block`, `dirt`, `coarse_dirt`, `podzol`, `mud`, `sand`, `red_sand`, `sandstone`, `red_sandstone`, `gravel`, `clay`, `calcite`, `snow_block`, `packed_ice`, `deepslate`, `terracotta`, `white_terracotta`, `orange_terracotta`, `yellow_terracotta`, `brown_terracotta`, `red_terracotta`, `light_gray_terracotta`. Common values: `OPACITY` 15, `PASS` opaque, `SHAPE` cube, `FULL_FACES` 63, `EMIT` 0, `REPLACEABLE` false, `COLLIDE` cube, `FLUID_MODE` block, `FACE_TEX` 0 until SP8a; `CARVABLE` true except `packed_ice`; `SOUND` per type (grass, dirt, sand, stone, gravel, snow, and glass for `packed_ice`), `TINT` grass for `grass_block` and none for the rest. `deepslate` has no `axis` (an axis variant would be a new type, converted with `withType`). Ice, snow layers and every cave or decoration block append with the SPs that need them. The `sp3c.registry` golden hashes states 3 … 24 with SP3a's registry byte stream.
 
 **Fluid byte (u8).**
 
@@ -491,7 +498,7 @@ Warps:
 
 - All six fields are **CDF-uniform** (chosen over MC's 3σ normal so shares are authorable) on [−uMax, uMax] with uMax = 0.9973, so a band inside that range has area share width / 2. Spline knots at ±1 act as end knots. (`X_u` and `X` denote the same uniform field; the suffix is only emphasis.)
 - `climate.scaleMul` divides the climate stage's input coordinates before warping, `(x,z) → (x/s, z/s)`: an exact zoom of every climate λ, warp λ and warp amplitude; `large_biomes` sets it to 4.
-- The altitude lapse `T_eff(y) = T − 0.006·max(0, y − 80)` is used by surface rules and freezing.
+- The altitude lapse `T_eff(y) = T − 0.006·max(0, y − 80)` is used by surface rules and freezing. SP3c makes the lapse the leaf `surface.lapse` (0.006) and its base `surface.lapseBase` (80) (amended by SP3c), which D's freezing reads too.
 - The depth axis for cave biomes is `depth = (surfaceEst − y)/128`.
 
 ### 3.3 Shape (nested cubic-Hermite splines C → E → PV, outputs in blocks)
@@ -699,19 +706,26 @@ Two verifier fixes:
 - `runIsSkyOpen`, `waterAbove`, `waterHeight`;
 - `steep`, `T_eff(y)`, the biome and the cave biome.
 
-**Conditions:** `biome`, `caveBiome`, `stoneDepth{floor|ceiling, offset, addSurfaceDepth, secondaryDepthRange}`, `water{offset, mult}`, `yAbove`, `verticalGradient{trueAtAndBelow, falseAtAndAbove}` (hash dither), `steep{min}`, `noiseThreshold{noise, min, max}`, `temperatureBelow`, `abovePreliminarySurface`, `skyOpen`, `not`, `sequence`, `bandlands`.
+**Conditions:** `biome`, `caveBiome`, `stoneDepth{floor|ceiling, offset, addSurfaceDepth}`, `water{offset, runTop}`, `yAbove{minY, runTop}`, `verticalGradient{trueAtAndBelow, falseAtAndAbove}` (hash dither), `steep{min}`, `noiseThreshold{noise, min, max}`, `temperatureBelow`, `skyOpen`, `lake`, `not`; the rule kinds are `sequence`, `condition`, `block` and `bandlands` (amended by SP3c, its spec §3.1: `lake` added, the position's nearest quart corner has a finite lake level, since water v0 levels sea and rivers alike at 63; `water` and `yAbove` take `runTop` (test the run's top instead of the voxel) in place of `mult`; `secondaryDepthRange` is deferred to the SP whose default rules first need it, with its own noise leaf; `abovePreliminarySurface` is dropped, SP3b's `surfaceEst3` serving its purpose; `caveBiome` stays SP6's).
 
-**Default rules** (first match wins):
+**Default rules** (first match wins). **Order** (amended by SP3c, its Decision 6, as in MC): rule 1, then rule 3, then rule 4, then rule 2 for every solid voxel still left, then stone; rule 2 moved after rules 3 and 4, so every sky-open skin voxel at y ≤ 7 (the skin of deep ocean floors below y 0 included) keeps its surface block and deepslate replaces the stone below the skin and in runs without sky. In SP3c's default tree (its §4) rule 1 is `root.rules[0]`, rule 3 `root.rules[1]` and rule 2 `root.rules[2]`; SP6 inserts rule 4 before rule 2.
 1. Bedrock at y −64, dithered over −63..−60.
-2. Deepslate where y < 0, dithered over 0..8. This uses absolute y, so strata stay coherent under mountains.
+2. Deepslate where y ≤ 0, dithered over 1..7 (was y < 0 over 0..8; amended by SP3c). This uses absolute y, so strata stay coherent under mountains.
 3. Open-sky top run:
-   - `surfaceDepth = floor(3 + 2.75·Ns + 0.25·hash01)`.
+   - `surfaceDepth = max(0, ⌊3 + 2.75·depthMul·Ns + 0.25·hash01⌋)`, with `depthMul` the leaf `surface.depthMul` (1) and range [0, SD_MAX], SD_MAX = ⌊3.25 + 2.75·depthMul·clampSigma⌋ (11 at the defaults); the clamp and the multiplier replace `floor(3 + 2.75·Ns + 0.25·hash01)`, which assumed MC's narrower surface noise and went negative on ≈ 13 % of positions (amended by SP3c).
    - Under fluid: sand (warm ocean, beach, lake shallows), gravel (deep or cold), clay patches, dirt (rivers).
-   - `steep > 1.2` and y ≥ 90 gives stone, or packed ice in frozen peaks.
-   - Snowline: `T_eff < −0.6` gives snow.
-   - Otherwise the biome palette supplies top / under / sandstone ×4, with noise patches (coarse dirt, podzol, gravel, calcite) and badlands terracotta bands.
+   - `steep ≥ surface.cliffSteep` (1.2) and yTop ≥ `surface.cliffMinY` (80) gives stone, or packed ice in frozen peaks (was `steep > 1.2` and y ≥ 90; amended by SP3c).
+   - Snowline: `T_eff < surface.snowline` (−0.6) at the top voxel gives a snow_block top (amended by SP3c: the snow rule is its own top-voxel branch, so S3 never depends on the depth noise).
+   - Otherwise the biome palette supplies top / under / sandstone ×4, with noise patches (coarse dirt, podzol, gravel, calcite, mud, packed ice; `surface.noises.patch` against `surface.patchThreshold`) and badlands terracotta bands (red_sand top, the bands, red_sandstone ×4).
 4. Lower runs use cave-biome floor and ceiling rules: moss ×2 plus clay under water (lush), dripstone blocks (dripstone), the abyss palette (dark abyss stone with faint veins, cracked variants, shale strata, ash floors) in the abyss, otherwise stone or deepslate with gravel under cave water. **Grass never appears below the open-sky run.**
 5. Ice forms only on sky-exposed water where `T_eff < −0.45`, and snow layers only on sky-exposed ground. This runs in D (freeze_top_layer) using a MOTION_BLOCKING computed from K's scratch (§3.12).
+
+**As built by SP3c** (amended by SP3c; the SP3c spec §1-§4 hold the exact rules):
+- **T stage.** After density and water v0, T computes the per-block surface biome once (a 256-entry buffer that aux A's `surfaceBiome` reuses) and runs `surfacePass` over the column, writing the final state of every solid voxel at y −63 … 319 (air and water untouched; solidity, the heightmaps and water v0 unchanged). The `terrain` stage is version 3 with `params: ['density', 'surface']`; `GENERATOR_VERSION` 5.
+- **Scan.** Per position, top-down from 319 to −63 over the column's own solidity and water: the runs (the topmost is the sky-open one), `floorDepth` and `ceilDepth`, per run yTop, `waterAbove` and `waterTop`; `steep` and `T` as bilinear ColumnSample readouts; the surface biome; `lake`; surfaceDepth; `T_eff(y)` per voxel. Surface noises sample unscaled world block coordinates as z2 (remap 'none'); every hash derives from the world seed through `deriveSeed` and `hash2`/`hash3`, the `verticalGradient` dither salted with its bounds. The scan reads nothing outside its column (§3.16).
+- **Compiler and reference.** Rules are JSON data (a `kind` discriminator, every field written, no −0), validated with node paths (depth ≤ 32, ≤ 4096 nodes) and compiled to closures over a preallocated scan context; a tree-walking reference evaluator with the same semantics records the rule ids (the node's path from `root`). A general conservative fast path, computed at compile time, writes the constant y bands of solid voxels deeper than `maxSurfaceDepth` below their run's top (or, in a sky-gated tree, in runs without sky) without evaluating rules; fuzzed against full evaluation on random trees.
+- **Bands.** `bandlands` reads a 192-entry table of the seven terracottas drawn once per seed (runs of 1-4), shifted by `round(4·z/clampSigma)` ∈ [−4, 4] of `surface.noises.bandOffset`.
+- **Parameters** (the `surface` group, scope Terrain): `noises.depth`, `noises.patch`, `noises.bandOffset`, `depthMul`, `snowline`, `lapse`, `lapseBase`, `cliffSteep`, `cliffMinY`, `patchThreshold`; the tree's structure is code until SP3d makes `surface.rules` an editable leaf.
 
 ### 3.12 Decorate stage (pull model; ores, vegetation, cave decoration, structure stamping)
 
@@ -1243,7 +1257,7 @@ Target: edit → visible ≤ 50 ms p95, measured in the HUD.
   - Histogram: p1/p50/p99, sd and % < 0.
   - Up to 3 pinned slices side by side, and a mute toggle per tap.
 - **Slice view (L):** any 3D field (final density, each cave term, carver mask, aquifer level and status, biome3d, stone depth, blocks, cave-type tint, light for loaded columns). It re-renders on param edits.
-- **Probe:** at the crosshair, map hover or slice hover. It shows climate, shape, every tap, carver hit, aquifer cell / level / status, biome 2D and 3D, the **surface-rule branch path taken**, light and stage hashes. A button copies it as JSON.
+- **Probe:** at the crosshair, map hover or slice hover. It shows climate, shape, every tap, carver hit, aquifer cell / level / status, biome 2D and 3D, the **surface-rule branch path taken**, light and stage hashes. A button copies it as JSON. SP3c: `surfaceProbe(sc, x, y, z)` returns the voxel's state and the rule ids from `root` to the leaf that yielded it (`[]` for air, water and unmatched stone), walking the reference evaluator, never the fast path; the branch path reaches the `?map` cross-section's Voxels hover through the `surfaceProbe` worker job, which shows the leaf's id (amended by SP3c).
 - **JSON editors** (textarea plus validation) cover surface rules, placed features and structure sets/pools. A visual editor is out of scope.
 
 ### 5.6 Map view (M; worker tiles)
@@ -1375,9 +1389,9 @@ Metric values are written to `test/metrics/.out/*.json` for trends. The harness 
 | T7 | steep continuity: border/interior gradient ratio | 0.9-1.1 |
 | T8 | per-axis relief in the default profile: sd of land `offset` from varying E_u over [−1,1] (resp. W) at sampled C, W (resp. C, E), on the column-stage point path | E ≥ 10 blocks / PV ≥ 10 blocks |
 | B1 | surface biome shares | each ≥ 0.3% (rare ≥ 0.1%); largest land biome ≤ 16%; ocean family 25-45%; exact ties 0; outside all boxes ≤ 2% |
-| B2 | rivers: water at surface / median connected length / share of land / river-biome columns without surface water (SP2a's 2D statement, kept 2D by SP3b; a voxel river-water check comes with SP3c) / river components ≥ 300 blocks that touch ocean water / gorge columns cut ≥ 8 blocks below offset0 per 100 km² of land with offset0 ≥ 120 | ≥ 95% / ≥ 300 blocks / 2-7% / 0 / ≥ 50% / ≥ 1 |
+| B2 | rivers: water at surface / median connected length / share of land / river-biome columns without surface water (SP2a's 2D statement, kept 2D by SP3b) / river components ≥ 300 blocks that touch ocean water / gorge columns cut ≥ 8 blocks below offset0 per 100 km² of land with offset0 ≥ 120. SP3c's voxel river check `riverChannelWater`: among positions whose nearest quart corner is river-wet and whose bilinear `offset` < 63, the share with water above their top, ≥ 85 % (approved by the user; 94 % of the dry positions are channel-margin tops at y 63-64, so the 2D 95 % does not carry over to the voxels; amended by SP3c) | ≥ 95% / ≥ 300 blocks / 2-7% / 0 / ≥ 50% / ≥ 1 |
 | B3 | cave biomes per 8×8 km | lush, dripstone, abyss each ≥ 0.5% of cave air |
-| B4 | hot/cold columns in windswept or spruce / snow in desert / coast-band land columns that are beach, stony shore or snowy beach / land-biome tops below sea level outside rivers and lakes | < 1% / 0 / ≥ 70% / ≤ 1% |
+| B4 | hot/cold columns in windswept or spruce / snow in desert / coast-band land columns that are beach, stony shore or snowy beach / land-biome tops below sea level outside rivers and lakes. SP3c's voxel parts: `snowInDesert` (desert land tops that are snow_block), `coastBandBeachVoxel` (coast-band land tops that are sand, red_sand, gravel or stone, or snow_block at a snowy_beach position) and `landTopsBelowSea` (land-family positions with water above a floor below 63, outside lake, lake-rim and river-wet corners); the 2D parts stay (amended by SP3c) | < 1% / 0 / ≥ 70% / ≤ 1% |
 | B5 | lakes per km² of land / share with Lw ≥ 70 / lake water with air horizontally adjacent | 0.2-2 / ≥ 30% / 0 |
 | C1 | cave void / underground (y −56..surface − 8) | 5-15%; cave_heavy 10-22% |
 | C2 | sky-connected components reaching ≥ 8 below the pre-cave top / sky-connected share of cave air within 40 blocks of the surface | ≥ 20 per km² / ≥ 20% |
@@ -1389,9 +1403,9 @@ Metric values are written to `test/metrics/.out/*.json` for trends. The harness 
 | A2 | fluid voxels unsupported below or sideways after settle, **counting unsettled** / unsettled share | ≤ 0.1% / ≤ 0.1% of fluid voxels |
 | A3 | 32×32-column harness regions with lava below −54 / aquifer lava above −10 / lava with support / regions where lava touches sky-connected cave air | ≥ 50% / 0 / ≥ 99% / ≥ 25% |
 | A4 | aquifer water bodies per 32×32-column harness region | ≥ 1 |
-| S1 | buried surface blocks / grass at sky 0 / surface y mod 16 χ² | 0 / ≤ 0.1% / p ≥ 0.001 |
-| S2 | deepslate share of stone below 0 / above 8 / bedrock at −64 | ≥ 95% / ≤ 1% / 100% |
-| S3 | ice or snow not sky-exposed / snow at or above snowline(T) / sky-exposed still-water surface voxels with T_eff < −0.45 that are ice / frozen ocean and frozen river columns with an ice top | 0 / ≥ 90% / ≥ 95% / ≥ 90% |
+| S1 | buried surface blocks / grass at sky 0 / surface y mod 16 χ². SP3c's parts: `buried` (grass_block, snow_block or red_sand with a solid voxel directly above); `grassNoSky` (grass_block off the sky-open run, threshold 0) in place of grass at sky 0 until SP4's light exists (SP6's exit restores master's part); `ymod16`, the χ² independence of the land top's y mod 16 and its soil depth (SP3c spec §5.2), which targets §6.5's banding (the tops' heights are the density's, not flat mod 16) (amended by SP3c) | 0 / ≤ 0.1% / p ≥ 0.001 |
+| S2 | deepslate share of stone below 0 / above 8 / bedrock at −64 (SP3c's parts `deepslateBelow0`, `deepslateAbove8`, `bedrockFloor`, over stone-like voxels: stone and deepslate; amended by SP3c) | ≥ 95% / ≤ 1% / 100% |
+| S3 | ice or snow not sky-exposed / snow at or above snowline(T) / sky-exposed still-water surface voxels with T_eff < −0.45 that are ice / frozen ocean and frozen river columns with an ice top. SP3c's snowline parts: `snowNoSky` (snow_block off the sky-open run) and `snowAboveLine` (non-cliff land tops with T_eff(y_top) < snowline that are snow_block); the ice and snow-layer parts come with D (amended by SP3c) | 0 / ≥ 90% / ≥ 95% / ≥ 90% |
 | O1 | each ore in its band per 4×4-column block / iron voxels per column / diamond below 16 / y mod 16 χ² | ≥ 95% / ≥ 30 / ≥ 90% / p ≥ 0.001 |
 | O2 | abyss mineral: 8×8-column blocks containing abyss cave air that contain the mineral / mineral voxels outside the abyss cave biome | ≥ 90% / 0 |
 | V1 | forest Clark-Evans R / VMR at 64-block quadrats / (x mod 5, z mod 5) residues | 0.9-1.2 / > 1.2 / χ² p ≥ 0.01 |
@@ -1403,7 +1417,7 @@ Metric values are written to `test/metrics/.out/*.json` for trends. The harness 
 | X1 | villages per 100 km² / start x mod 16 / piece overlaps / median pieces per village | ±35% of analytic / χ² p ≥ 0.01 / 0 / ≥ 8 |
 | X2 | rigid floor cells supported / clearance above / starts below surfaceEst − 4 | ≥ 95% / ≥ 95% / 0 |
 | DT1 | region hash: spiral vs shuffled, 1 vs 4 threads, cold vs warm, 2 runs, goldens | exact |
-| DT2 | probe == bulk / compiled == reference / batch == point (column stage, at quart corners). SP3b's parts: `probeBulk` counts voxels whose probe solidity differs from the block, and voxels the bulk evaluated where `Object.is(probe, bulk)` fails; `compiledReference` counts corner and voxel values where compiled ≠ reference; batch == point stays a unit test (amended by SP3b) | 0 mismatches / bit-exact / bit-exact (tightened by SP2a) |
+| DT2 | probe == bulk / compiled == reference / batch == point (column stage, at quart corners). SP3b's parts: `probeBulk` counts voxels whose probe solidity differs from the block, and voxels the bulk evaluated where `Object.is(probe, bulk)` fails; `compiledReference` counts corner and voxel values where compiled ≠ reference; batch == point stays a unit test (amended by SP3b). SP3c: `probeBulk` compares probe solidity with block ≠ air (palette blocks are solid); `surfaceProbeBulk` counts voxels whose `surfaceProbe` state ≠ the stored block, and `surfaceReference` voxels where the compiled surface rules ≠ the reference evaluator (amended by SP3c) | 0 mismatches / bit-exact / bit-exact (tightened by SP2a) |
 | R1 | hidden seam faces emitted / visible faces missing vs brute force | 0 / 0 |
 | R2 | greedy quads per visible face (AO on / off) | ≤ 0.6 / ≤ 0.35 |
 | R3 | wrongly culled sections vs raycast reference / culled from an underground camera | 0 / ≥ 50% |
@@ -1420,7 +1434,7 @@ Metric values are written to `test/metrics/.out/*.json` for trends. The harness 
 | E1-E6 | diff codec; `.wiworld` round-trip hash; reload with edits hash; fault-injected aborted flush consistent (flushSeq); edit→unload→reload returns the latest diff; genKey mismatch shows the fork dialog and each option (including Cancel) yields its specified world state | exact |
 | E7 | two worlds with the same genKey: edits in one never appear in the other / delete removes every `diffs` key of that worldId / hotbar and player restored per world / `stateTable` remap on load | exact |
 | U1 | stage-run counters: decorate edit re-runs only {D, L, mesh}; terrain edit spares raw climate; climate re-runs all | exact |
-| U2 | param liveness: ±15% on each non-live param changes its stage output hash in ≥ 1 of 16 columns. SP2b (its spec §7): perturbations per kind (number and int ±15 % of \|v\| or of the range span, noise wavelength, every numeric spline knot by 15 % of the y span, box intervals shrunk and grown by 15 %); the stage output hash of the leaf's home stage (climate, shape or biome2d); 16 class columns chosen by the lattice conditions under which leaves act (land, coast, channel, gorge, basin, rim and one per lake gate), and bounded witnesses for leaves no class column decides (amended by SP2b). SP3b adds the `terrain` stage: its output hash is the region hash of one column after `fillColumnT`, tried at the land and coast class columns only, with no witness search, and every `density.*` leaf must be decided (amended by SP3b) | 100% |
+| U2 | param liveness: ±15% on each non-live param changes its stage output hash in ≥ 1 of 16 columns. SP2b (its spec §7): perturbations per kind (number and int ±15 % of \|v\| or of the range span, noise wavelength, every numeric spline knot by 15 % of the y span, box intervals shrunk and grown by 15 %); the stage output hash of the leaf's home stage (climate, shape or biome2d); 16 class columns chosen by the lattice conditions under which leaves act (land, coast, channel, gorge, basin, rim and one per lake gate), and bounded witnesses for leaves no class column decides (amended by SP2b). SP3b adds the `terrain` stage: its output hash is the region hash of one column after `fillColumnT`, tried at the land and coast class columns only, with no witness search, and every `density.*` leaf must be decided (amended by SP3b). SP3c adds five class columns for the terrain stage's `surface.*` leaves (`cliffY`, `cliffSteep`, `snowline`, `patch`, `badlands`; 21 class columns), found by a third pass over the same stream after SP2b's two so the existing 16 stay, each accepted only when every leaf it serves changes a voxel of the generated column; every `surface.*` leaf must be decided (amended by SP3c) | 100% |
 | U3 | no-placebo: params with `effectMetric` move that metric by > 0.5% at ±15% | 100% |
 | U4 | registry invariants (every leaf has meta and scope, every non-live leaf a covering stage); migration invariant, fixtures and export → import identity; schema-shape lock; README generated block is fresh | exact (0 issues each) |
 | Z1 | amplified: land columns with ≥ 2 transitions (T2) / p99 land height | ≥ 8% / ≥ 250 |
@@ -1531,6 +1545,7 @@ Metric values are written to `test/metrics/.out/*.json` for trends. The harness 
 | **Total** | | **≈ 26 ms per column** |
 
 - **Measured in SP3b** (amended by SP3b): the column stage's ColumnSample p50 0.34 ms (it keeps the 2D surfaceEst, so the row's surfaceEst cost moves to `surfaceEst3`'s consumers); T without caves (`terrain.real`: ColumnSample, density with early-outs, water, 24 sections, aux A and B) p50 1.49-1.74 ms on the SP3b branch (Tasks 14 and 16; the exit run 1.49 ms, p99 2.40 ms; the plan's dry run measured p50 1.42-1.46 ms, p99 2.2-2.4 ms), gated at ≤ 4 ms p50 by `TERRAIN_P50_MAX_MS`; one corner of the default expression ≈ 0.19 µs.
+- **Measured in SP3c** (amended by SP3c): `terrain.real` now includes the surface pass (biome buffer, scan and rules): p50 2.25-2.62 ms, p99 3.3-3.5 ms in the plan's dry run (the pre-record, record and exit runs), still under the 4 ms gate; the bench gains `surface.column` (`surfacePass` alone on one column, the stage's code path) at p50 0.75-0.83 ms, p99 0.83-0.92 ms. A pre-record bench run may exempt rows from the +30 % ratio gate by name (`BENCH_EXEMPT`, never the absolute gates or the kill criterion), as SP3c did for `terrain.real`'s rise by design.
 - **Kill criterion:** if DAG closure overhead exceeds 25% of T (measured by bench against a hand-inlined default expression), add `new Function` codegen behind a CSP probe, keeping `reference.ts` as the oracle.
 - **Fill:** RD12 needs T 755 / D 660 / L 573 / mesh 491 columns ≈ 16-17 CPU-seconds.
   - Wall time ≤ 6 s on the reference laptop with the bench cap of 4 workers and the throttle; ≤ 4 s with the default 6 workers (09 took 71 s at RD16).
@@ -1713,14 +1728,14 @@ SP3b was split on 2026-10-07 into SP3b (density and terrain shape) and a new SP3
 - Received from SP3a (its spec §10): T3's redefinition before it gates and T1's lowland band; the cost of the biome height filter on the real `surfaceEst` (settled by keeping the 2D estimate there); the Expr ops' exact semantics and interval rules; SP2a minor 5 (handed to SP3 by SP2b; minor 6 moves to SP3c); the ocean-floor σ/jag stripe.
 - **Cut line:** the worker-split slice (→ SP3d).
 
-**SP3c — Surface rules and terrain palette** (M; SP3b)
-- Surface-rule data tree, compiler and whole-column scan (§3.11: bedrock, deepslate, palettes, snowline, cliffs); bedrock dithered over −63 … −60.
-- The terrain palette appends to the registry and the lock, with an `sp3c.registry` golden over the appended states.
-- B4's voxel parts (snow in desert, coast-band beach/stony shore/snowy beach share, land-biome tops below sea level outside rivers and lakes), a voxel river-water check (SP2a minor 6) and S1 (buried surface blocks and y mod 16 parts), S2, S3 (snowline part).
-- **Deliverable:** set by the SP3c spec.
-- Received from SP3b (its spec §13): the `sp3b.registry` golden named by SP3a, renamed `sp3c.registry`; SP2a minor 6; lake-rim islets and the shoreline zoom fringe.
-- **Exit:** set by the SP3c spec.
-- **Cut line:** set by the SP3c spec.
+**SP3c — Surface rules and terrain palette** (M; SP3b). Spec: `2026-10-07-sp3c-surface-rules-palette-design.md`.
+- Surface-rule data tree, compiler with a general fast path, reference evaluator and whole-column scan (§3.11: bedrock, the sky-open skin, deepslate, palettes, snowline, cliffs, badlands bands); bedrock dithered over −63 … −60, deepslate over 1 … 7, in MC's order (§3.11, amended by SP3c).
+- The terrain palette (22 types, §2.2) appends to the registry and the lock, with an `sp3c.registry` golden over the appended states and an `sp3c.surface.ops` golden over a fixture tree; `GENERATOR_VERSION` 5.
+- B4's voxel parts (snow in desert, coast-band beach/stony shore/snowy beach share, land-biome tops below sea level outside rivers and lakes), a voxel river-water check (SP2a minor 6) and S1 (buried surface blocks, grass off the sky-open run and y mod 16 parts), S2, S3 (snowline part); DT2's surface parts; U2 over every `surface.*` leaf.
+- **Deliverable:** biome surfaces on the voxel terrain (the 22-block palette, surface rules, dithered bedrock and deepslate, snowline, cliffs, badlands bands), in the harness slices and the Voxels mode with the hover rule id (amended by SP3c).
+- Received from SP3b (its spec §13): the `sp3b.registry` golden named by SP3a, renamed `sp3c.registry`; SP2a minor 6; lake-rim islets and the shoreline zoom fringe (measured on voxels as ungated diagnostics and handed to SP10 by the user's decision, the SP3c spec's Decision 2 and §11).
+- **Exit:** as the SP3c spec §9: build, tests and full metrics with DT1, DT2 (`probeBulk`, `surfaceProbeBulk`, `surfaceReference`), S1-S3, the B4 voxel parts and the river check active, T1-T5 still passing and U2 deciding every `surface.*` leaf; CI green; the 22 states appended and `sp3c.registry` recorded; only the allowed goldens change at `GENERATOR_VERSION` 5, `?selftest=1` in Chrome and Firefox and Bun all keys; the bench (every pre-SP3c row within +30 % except `terrain.real`, `terrain.real` p50 ≤ 4 ms, the exit run against the new baseline); the user's visual review, including the 2D-defect decision.
+- **Cut line:** `bandlands` (→ SP10, with badlands taking `terracotta` as its under block), decided before its leaf enters the schema lock. It was not taken: `bandlands` shipped in SP3c.
 
 **SP3d — Draft presets, inspector and slice viewer** (M; SP3c)
 - Draft `floating_islands`, `amplified` and `archipelago` presets (terms, splines and params; surface-rule branch for islands), so per-preset goldens and SP11's LOD island scan have a target; their profiles become selectable (`readyFrom: 'SP3d'`).
@@ -1752,7 +1767,7 @@ SP3b was split on 2026-10-07 into SP3b (density and terrain shape) and a new SP3
 **SP6 — Caves, carvers and cave biomes** (L; SP3c, SP5 for in-game review)
 - Cave family terms in the default DAG (cheese / layer / pillars, spaghetti 2D and 3D with rarity, noodle, entrances, roughness, cheese roof term, lake roof); worm and canyon carvers (detMath, LRU); 3D quart cave-biome picker (lush, dripstone, **abyss**) with cave floor and ceiling surface rules; the abyss surface-palette blocks (decided in this SP's spec); debug cave-type tag channel, cave-type tint in the slice viewer, map cave slice and cave-biome layers; `cave_heavy` preset; cave culling.
 - **Deliverable:** explorable caves with visible surface entrances and ravines.
-- **Exit:** C1-C6, B3, R3; re-asserted with caves: L2, S1 (grass at sky 0), DT1, DT2 (probe == bulk); P1: T ≤ 10 ms p50; DAG closure overhead vs a hand-inlined default expression measured and recorded (codegen kill criterion, §7).
+- **Exit:** C1-C6, B3, R3; re-asserted with caves: L2, S1 (grass at sky 0: master's part, restored in place of SP3c's `grassNoSky` once SP4's light exists; amended by SP3c), DT1, DT2 (probe == bulk); P1: T ≤ 10 ms p50; DAG closure overhead vs a hand-inlined default expression measured and recorded (codegen kill criterion, §7).
 - **Cut line:** the extra underground-only carver; spaghetti-2D rarity bands.
 
 **SP7 — Water and fluids** (L; SP6, SP5)
@@ -1791,6 +1806,7 @@ SP3b was split on 2026-10-07 into SP3b (density and terrain shape) and a new SP3
 **SP10 — Research tooling completion** (M; SP9)
 - Full stage-hash invalidation for every scope with badges and progress; probe of all stage outputs including the surface-rule branch; slice view of every 3D field; inspector mutes and pins; metrics dashboard (shared metric definitions, compare with previous params, seed sweep for column metrics); complete map layers (structures, carvers, aquifer, status heatmap, bookmarks, teleport snap); JSON editors with validation; full F3 overlay and performance HUD; plus received cut-line items (the generated README parameter reference is already gated since SP1).
 - **Deliverable:** the research workbench — tweak, preview, measure and compare without leaving the app.
+- Received from SP3c (its spec's Decision 2 and §11; amended by SP3c): the 2D defects inherited from SP2a, measured on voxels in SP3c and not fixed there — the lake-rim islets (ocean-family biome on land at a lake rim; the example is a lake perched at y ≈ 100 in a sea area, x −16384 … −16177, z −10624 … at seed 42, whose rim is a sand-topped stone mesa with staircase edges) and the shoreline zoom fringe; SP3c's ungated diagnostics `lakeRimIslets`, `shorelineFringe`, `shorelineFringeSea` and `oceanBiomeLandTops` measure them.
 - **Exit:** U1-U4 (U4 active in full since SP1); G2 (Apply part: first visible change near the player ≤ 0.5 s); dashboard metric == vitest metric (same function, same value); decorate-scope Apply at RD12 ≤ 3 s; inspector slice ≤ 300 ms at 128².
 - **Cut line:** seed sweep; the column-status heatmap (→ SP12).
 
