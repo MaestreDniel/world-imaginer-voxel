@@ -1,5 +1,5 @@
 import { expect } from 'vitest';
-import { fnv1a32 } from '../../src/core/hash';
+import { fnv1a32, hash2 } from '../../src/core/hash';
 import { resolveProfile } from '../../src/core/params/profiles';
 import { Xoshiro128 } from '../../src/core/rng';
 import { seedFromInput } from '../../src/core/seed';
@@ -8,7 +8,10 @@ import { cornerValueIndex } from '../../src/gen/density/compile';
 import { createDensityContext } from '../../src/gen/density/context';
 import { probe } from '../../src/gen/density/probe';
 import { createDensityReference, interpolatedNodes } from '../../src/gen/density/reference';
-import { terrainDensityDebug } from '../../src/gen/pipeline/terrainStage';
+import { terrainDensityDebug, terrainSurfaceDebug } from '../../src/gen/pipeline/terrainStage';
+import { createSurfaceContext, surfaceContextOf } from '../../src/gen/surface/context';
+import { surfaceProbe } from '../../src/gen/surface/probe';
+import { newSurfaceScan, runAt } from '../../src/gen/surface/scan';
 import { fillColumnT } from '../../src/metrics/region';
 import { AIR } from '../../src/world/blocks/index';
 import { createStore } from '../../src/world/store/store';
@@ -116,12 +119,21 @@ metricTest('DT1', ['mismatches'], async () => {
  *   bulk's.
  * - `compiledReference`: values where the compiled closures and the reference interpreter differ (`Object.is`): the
  *   probe at each voxel, and the 8 corner values of its cell for every `interpolated` node.
+ * - `surfaceProbeBulk` (SP3c §5.2): voxels where `surfaceProbe`'s state (a SurfaceContext built apart: its own
+ *   DensityContext and column rebuild, the reference walk, never the fast path) differs from the stored block (the
+ *   stage's compiled tree, fast path included).
+ * - `surfaceReference` (SP3c §5.2): solid voxels where the stage's compiled tree (`surfaceContextOf(ctx).compiled`,
+ *   full evaluation) and the reference evaluator of the SurfaceContext built apart give different states, both on the
+ *   stage's scan context of the column (`terrainSurfaceDebug`): at each DT2 voxel, plus 8 per column drawn from their
+ *   own stream `Xoshiro128(hash2(fnv1a32('DT2.surface'), cx, cz))` (a position, then a depth 0 … maxSurfaceDepth below
+ *   the top of its sky-open run; a draw that lands on a non-solid voxel is skipped), so DT2's columns and its 16
+ *   voxels per column are drawn exactly as in SP3b.
  */
 const DT2_COLUMNS = pick(16, 256, 256);
 const DT2_VOXELS_PER_COLUMN = 16;
 const DT2_RANGE: Readonly<Record<(typeof PROFILES)[number], number>> = { default: 1024, large_biomes: 4096 };
 
-metricTest('DT2', ['probeBulk', 'compiledReference'], () => {
+metricTest('DT2', ['probeBulk', 'compiledReference', 'surfaceProbeBulk', 'surfaceReference'], () => {
   const t0 = performance.now();
   const problems: string[] = [];
   const r = new Xoshiro128(fnv1a32('DT2'));
@@ -129,7 +141,10 @@ metricTest('DT2', ['probeBulk', 'compiledReference'], () => {
   const out = new Float64Array(98304);
   const mask = new Uint8Array(98304);
   const masked = new Int32Array(98304);
+  const scan = newSurfaceScan();
+  const surfaceSeed = fnv1a32('DT2.surface');
   let probeBulk = 0, compiledReference = 0, voxels = 0, maskedVoxels = 0, corners = 0, columns = 0;
+  let surfaceProbeBulk = 0, surfaceReference = 0, surfaceVoxels = 0, surfaceExtraVoxels = 0, surfaceExtraSkipped = 0;
   for (const profile of PROFILES) {
     for (const seed of SEEDS) {
       const ctx = createGenContext(seedFromInput(seed), resolveProfile(profile));
@@ -137,6 +152,11 @@ metricTest('DT2', ['probeBulk', 'compiledReference'], () => {
       const ref = createDensityReference(dc.expr, dc.noises);
       const c = dc.compiled;
       const interp = interpolatedNodes(dc.expr).map((n) => ({ inner: n.x, slot: c.interpolatedSlot(n) }));
+      // The stage's compiled tree, and a SurfaceContext built apart for the probe and the reference evaluator.
+      const compiled = surfaceContextOf(ctx).compiled;
+      const sc = createSurfaceContext(ctx);
+      if (compiled.fastPath === null) throw new Error(`DT2: profile ${profile}, seed '${seed}': the default tree has no fast path`);
+      const maxSurfaceDepth = compiled.fastPath.maxSurfaceDepth;
       const R = DT2_RANGE[profile];
       for (let n = 0; n < DT2_COLUMNS; n++) {
         const cx = -R + r.nextInt(2 * R);
@@ -148,7 +168,20 @@ metricTest('DT2', ['probeBulk', 'compiledReference'], () => {
         let m = 0;
         for (let i = 256; i < 98304; i++) if (mask[i] === 1) masked[m++] = i;
         const s = dc.column(cx, cz);
+        terrainSurfaceDebug(ctx, cx, cz, scan);
         columns++;
+        /** surfaceReference at column index p, height y: counted when solid on the stage's scan. */
+        const checkSurface = (p: number, y: number, what: string): boolean => {
+          if (runAt(scan, p, y) < 0) return false;
+          surfaceVoxels++;
+          const cs = compiled.state(scan, p, y);
+          const rs = sc.reference.state(scan, sc.settings, p, y);
+          if (cs !== rs) {
+            surfaceReference++;
+            problems.push(`${at}: ${what} (${16 * cx + (p & 15)}, ${y}, ${16 * cz + (p >> 4)}) compiled state ${cs} ≠ reference ${rs}`);
+          }
+          return true;
+        };
         for (let v = 0; v < DT2_VOXELS_PER_COLUMN; v++) {
           let i: number;
           if (v >= 11) {
@@ -167,6 +200,12 @@ metricTest('DT2', ['probeBulk', 'compiledReference'], () => {
             probeBulk++;
             problems.push(`${at}: (${x}, ${y}, ${z}) probe ${value}, block ${block}`);
           }
+          const surfaceState = surfaceProbe(sc, x, y, z).state;
+          if (surfaceState !== block) {
+            surfaceProbeBulk++;
+            problems.push(`${at}: (${x}, ${y}, ${z}) surfaceProbe state ${surfaceState} ≠ block ${block}`);
+          }
+          checkSurface(i & 255, y, 'DT2 voxel');
           if (mask[i] === 1) {
             maskedVoxels++;
             if (!Object.is(value, out[i])) {
@@ -194,13 +233,22 @@ metricTest('DT2', ['probeBulk', 'compiledReference'], () => {
             }
           }
         }
+        const rSurface = new Xoshiro128(hash2(surfaceSeed, cx, cz));
+        for (let k = 0; k < 8; k++) {
+          const p = rSurface.nextInt(256);
+          const d = rSurface.nextInt(maxSurfaceDepth + 1);
+          const first = scan.runFirst[p]!;
+          if (first < scan.runFirst[p + 1]! && checkSurface(p, scan.runTop[first]! - d, `skin voxel depth ${d}`)) surfaceExtraVoxels++;
+          else surfaceExtraSkipped++;
+        }
         store.freeColumn(cx, cz);
       }
     }
   }
   expect.soft(problems.slice(0, 20), `DT2 mismatches (tier ${TIER}), first 20 of ${problems.length}`).toEqual([]);
   return {
-    probeBulk, compiledReference, voxels, maskedVoxels, cornerValues: corners, columns,
+    probeBulk, compiledReference, surfaceProbeBulk, surfaceReference, voxels, maskedVoxels, cornerValues: corners, columns,
+    surfaceVoxels, surfaceExtraVoxels, surfaceExtraSkipped,
     seconds: Math.round(performance.now() - t0) / 1000,
   };
 });

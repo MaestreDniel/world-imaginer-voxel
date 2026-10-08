@@ -561,3 +561,4 @@ The plan was dry-run in a scratch worktree: every task was implemented and every
 (One line per commit that changes `test/thresholds.lock.json`.)
 
 - Task 1: `STARTED_SPS` gains `SP3c`; no threshold rows change.
+- Task 10: DT2 gains `surfaceProbeBulk` (max 0) and `surfaceReference` (max 0), activeFrom `SP3c` (§5.2's exactness parts, with their code); no other row changes.

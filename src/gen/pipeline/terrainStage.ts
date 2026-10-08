@@ -20,6 +20,8 @@
  * The stage uses the SurfaceContext of its GenContext (`surfaceContextOf`, memoised), which holds the DensityContext.
  * Follows the gen determinism rules.
  * `terrainDensityDebug` is a test hook (SP3b §2.3, DT2): the same density phase, recording the bulk-evaluated values.
+ * `terrainSurfaceDebug` is another (SP3c §5.2, DT2's `surfaceReference`): the same phases up to the surface pass, which
+ * scans into the caller's scan context.
  */
 import { MIN_Y } from '../../core/constants';
 import { WATER_SOURCE } from '../../world/blocks/fluid';
@@ -30,7 +32,7 @@ import type { GenContext } from '../context';
 import { fillDensityColumn } from '../density/bounds';
 import { surfaceContextOf } from '../surface/context';
 import { surfacePass } from '../surface/pass';
-import { fillSurfaceBiomes } from '../surface/scan';
+import { fillSurfaceBiomes, type SurfaceScan } from '../surface/scan';
 
 const Y0 = MIN_Y;
 const WATER = WATER_SOURCE;
@@ -161,4 +163,20 @@ export function terrainDensityDebug(ctx: GenContext, cx: number, cz: number, out
     throw new RangeError(`terrainDensityDebug: out has ${out.length} and mask ${mask.length} entries, expected ${SOLID.length}`);
   }
   FILL(SURFACE_CONTEXT(ctx).density.bounds, BUILD(ctx, cx, cz, SAMPLE), SOLID, out, mask, NEVER);
+}
+
+/**
+ * Test hook (SP3c spec §5.2, DT2 `surfaceReference`): runs column (cx, cz) exactly as `terrainStage` does up to and
+ * including the surface pass (its ColumnSample, the density fill, water v0, the biome buffer, then `surfacePass` on
+ * `surfaceContextOf(ctx)`, never stopped), with `scan` as the pass's scan context, and writes no store. Afterwards
+ * `scan` holds the stage's scan of the column, on which the stage's compiled tree and the reference evaluator can be
+ * compared voxel by voxel. Returns the pass's evaluated-voxel count.
+ */
+export function terrainSurfaceDebug(ctx: GenContext, cx: number, cz: number, scan: SurfaceScan): number {
+  const sc = SURFACE_CONTEXT(ctx);
+  const s = BUILD(ctx, cx, cz, SAMPLE);
+  FILL(sc.density.bounds, s, SOLID, null, null, NEVER);
+  columnWaterV0(s, SOLID, TOP, WATER_TOP, WATER_V);
+  SURFACE_BIOMES(s, ctx, BIOMES);
+  return SURFACE_PASS(sc, s, SOLID, WATER_V, BIOMES, STATE, scan);
 }

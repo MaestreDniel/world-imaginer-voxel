@@ -49,7 +49,10 @@ export const THRESHOLDS: ThresholdTable = {
   T3: { value: { max: 1.5, activeFrom: 'SP3b', tiers: ['full'] } },
   T4: { floorSd: { min: 3, activeFrom: 'SP3b' }, exposedBedrock: { max: 0, activeFrom: 'SP3b' }, deepFloor: { max: 0, activeFrom: 'SP3b' } },
   T5: { median: { max: 1, activeFrom: 'SP3b' }, p90: { max: 2, activeFrom: 'SP3b' }, p99: { max: 6, activeFrom: 'SP3b' } },
-  DT2: { probeBulk: { max: 0, activeFrom: 'SP3b' }, compiledReference: { max: 0, activeFrom: 'SP3b' } },
+  DT2: {
+    probeBulk: { max: 0, activeFrom: 'SP3b' }, compiledReference: { max: 0, activeFrom: 'SP3b' },
+    surfaceProbeBulk: { max: 0, activeFrom: 'SP3c' }, surfaceReference: { max: 0, activeFrom: 'SP3c' },
+  },
   M1: { states: { max: 4096, activeFrom: 'SP3a' }, roundTripFailures: { max: 0, activeFrom: 'SP3a' }, lockChanges: { max: 0, activeFrom: 'SP3a' } },
   U4: {
     registryIssues: { max: 0, activeFrom: 'SP1' },

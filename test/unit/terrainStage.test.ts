@@ -6,9 +6,10 @@ import {
 import type { GenContext } from '../../src/gen/context';
 import { createDensityContext, type DensityContext } from '../../src/gen/density/context';
 import { probe } from '../../src/gen/density/probe';
-import { terrainDensityDebug, terrainStage } from '../../src/gen/pipeline/terrainStage';
-import { createSurfaceContext, type SurfaceContext } from '../../src/gen/surface/context';
-import { surfaceProbe } from '../../src/gen/surface/probe';
+import { terrainDensityDebug, terrainStage, terrainSurfaceDebug } from '../../src/gen/pipeline/terrainStage';
+import { createSurfaceContext, surfaceContextOf, type SurfaceContext } from '../../src/gen/surface/context';
+import { surfaceProbe, surfaceProbeColumn } from '../../src/gen/surface/probe';
+import { newSurfaceScan, runAt, type SurfaceScan } from '../../src/gen/surface/scan';
 import { fluidType, WATER_SOURCE } from '../../src/world/blocks/fluid';
 import { AIR, BEDROCK, COLLIDE, DEEPSLATE, REGISTRY, STONE } from '../../src/world/blocks/index';
 import type { AuxBView, AuxView, ColumnView, ColumnWriter } from '../../src/world/store/api';
@@ -503,5 +504,53 @@ describe('terrainDensityDebug (§2.3, the DT2 hook)', () => {
   test('out and mask must hold 98,304 entries', () => {
     expect(() => terrainDensityDebug(ctx, ...LAND, new Float64Array(98303), new Uint8Array(98304))).toThrow(RangeError);
     expect(() => terrainDensityDebug(ctx, ...LAND, new Float64Array(98304), new Uint8Array(4096))).toThrow(RangeError);
+  });
+});
+
+/** Every field of a scan that `scanColumn` writes (the per-run arrays over the runs in use), as plain arrays. */
+function scanSnapshot(scan: SurfaceScan): unknown {
+  const runs = scan.runFirst[256]!;
+  return {
+    cx: scan.cx, cz: scan.cz, runFirst: Array.from(scan.runFirst),
+    runTop: Array.from(scan.runTop.subarray(0, runs)), runBottom: Array.from(scan.runBottom.subarray(0, runs)),
+    runWaterAbove: Array.from(scan.runWaterAbove.subarray(0, runs)), runWaterTop: Array.from(scan.runWaterTop.subarray(0, runs)),
+    steep: Array.from(scan.steep), T: Array.from(scan.T), biome: Array.from(scan.biome),
+    lakeLevel: Array.from(scan.lakeLevel), surfaceDepth: Array.from(scan.surfaceDepth),
+  };
+}
+
+describe('terrainSurfaceDebug (SP3c §5.2, the DT2 surface hook)', () => {
+  test.each(FIXTURES)('%s: the stage\'s scan equals the probe column\'s; solid ⇔ block ≠ air; the stage\'s compiled tree gives the stored block at every solid voxel', (_name, [cx, cz]) => {
+    const { view } = generate(ctx, cx, cz);
+    const scan = newSurfaceScan();
+    const evaluated = terrainSurfaceDebug(ctx, cx, cz, scan);
+    expect(scanSnapshot(scan)).toEqual(scanSnapshot(surfaceProbeColumn(scOf(ctx), cx, cz).scan));
+    const compiled = surfaceContextOf(ctx).compiled;
+    const bad: string[] = [];
+    let solid = 0;
+    for (let p = 0; p < 256; p++) {
+      const lx = p & 15, lz = p >> 4;
+      for (let y = -63; y <= 319; y++) {
+        const block = view.block(lx, y, lz);
+        const r = runAt(scan, p, y);
+        if ((r >= 0) !== (block !== AIR)) bad.push(`(${lx}, ${y}, ${lz}): run ${r}, block ${block}`);
+        if (r < 0) continue;
+        solid++;
+        const c = compiled.state(scan, p, y);
+        if (c !== block) bad.push(`(${lx}, ${y}, ${lz}): compiled ${c} ≠ block ${block}`);
+      }
+    }
+    expect(bad.slice(0, 10)).toEqual([]);
+    // The pass's evaluated-voxel count: some voxels, never all of them (the fast path takes the deep ones).
+    expect(evaluated).toBeGreaterThan(0);
+    expect(evaluated).toBeLessThan(solid / 2);
+  });
+
+  test('the scan passed is the hook\'s alone: a later stage run does not touch it, and the stage is unchanged by the hook', () => {
+    const scan = newSurfaceScan();
+    terrainSurfaceDebug(ctx, ...OVERHANG, scan);
+    const before = scanSnapshot(scan);
+    expect(mismatches(generate(ctx, ...COAST).view, expectedFor(ctx, COAST))).toBe(0);
+    expect(scanSnapshot(scan)).toEqual(before);
   });
 });
