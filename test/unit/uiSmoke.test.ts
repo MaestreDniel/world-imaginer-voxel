@@ -79,10 +79,10 @@ describe('UI smoke test: pure parts (SP2b spec §8 Tools, §12)', () => {
   test('the selftest step counts the goldens of test/goldens.json and matches the page summary against it', () => {
     expect(goldenCount('{"generatorVersion":3,"entries":{"a":"1","b":"2"}}')).toBe(2);
     expect(() => goldenCount('{"generatorVersion":3}')).toThrow(/entries/);
-    expect(selftestAllMatch('✓ all 52 goldens match (3.2 s)', 52)).toBe(true);
-    expect(selftestAllMatch('✓ all 50 goldens match (3.2 s)', 52)).toBe(false);
-    expect(selftestAllMatch('✗ 1 of 52 goldens differ (3.2 s)', 52)).toBe(false);
-    expect(selftestAllMatch('computing 52/52…', 52)).toBe(false);
+    expect(selftestAllMatch('✓ all 54 goldens match (3.2 s)', 54)).toBe(true);
+    expect(selftestAllMatch('✓ all 52 goldens match (3.2 s)', 54)).toBe(false);
+    expect(selftestAllMatch('✗ 1 of 54 goldens differ (3.2 s)', 54)).toBe(false);
+    expect(selftestAllMatch('computing 54/54…', 54)).toBe(false);
   });
 
   test('the Voxels step reads the page\'s hover readout and summary in the formats the cut line writes (SP3a spec §5.2)', () => {

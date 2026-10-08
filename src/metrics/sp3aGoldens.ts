@@ -32,14 +32,15 @@ const REGION_PROFILES: readonly ProfileIdT[] = ['default', 'large_biomes'];
 const MiB = 1048576;
 
 /**
- * FNV-1a 64 over states 0 … 2 of `reg`: per state, its canonical key's ASCII bytes and a 0 byte, then `STATE_TYPE`
- * (u16 LE), `OPACITY`, `PASS`, `SHAPE`, `FULL_FACES`, `EMIT`, `CARVABLE`, `REPLACEABLE`, `COLLIDE`, `FLUID_MODE`,
- * `TINT`, `SOUND` (u8 each) and the six `FACE_TEX` entries (u16 LE). Throws when `reg` has fewer states.
+ * FNV-1a 64 over states `first` … `first + count − 1` of `reg` (SP3a §6.4's byte stream): per state, its canonical
+ * key's ASCII bytes and a 0 byte, then `STATE_TYPE` (u16 LE), `OPACITY`, `PASS`, `SHAPE`, `FULL_FACES`, `EMIT`,
+ * `CARVABLE`, `REPLACEABLE`, `COLLIDE`, `FLUID_MODE`, `TINT`, `SOUND` (u8 each) and the six `FACE_TEX` entries
+ * (u16 LE). Throws a RangeError when `reg` has fewer states. `sp3a.registry` is states 0 … 2, `sp3c.registry` 3 … 24.
  */
-export function registryDigest(reg: BlockRegistryT = REG): string {
-  if (reg.stateCount < SP3A_STATES) throw new RangeError(`registryDigest: the registry has ${reg.stateCount} states, fewer than ${SP3A_STATES}`);
+export function registryStatesDigest(reg: BlockRegistryT, first: number, count: number): string {
+  if (reg.stateCount < first + count) throw new RangeError(`registry digest of states ${first} … ${first + count - 1}: the registry has ${reg.stateCount} states`);
   const fnv = CREATE_FNV();
-  for (let s = 0; s < SP3A_STATES; s++) {
+  for (let s = first; s < first + count; s++) {
     const key = reg.stateKey(s);
     for (let i = 0; i < key.length; i++) {
       const c = key.charCodeAt(i);
@@ -54,6 +55,11 @@ export function registryDigest(reg: BlockRegistryT = REG): string {
     for (let f = 0; f < 6; f++) fnv.updateU16LE(reg.FACE_TEX[6 * s + f]!);
   }
   return HEX64(fnv.digest());
+}
+
+/** `sp3a.registry`: the digest of states 0 … 2 (a fixed count, so appended states never change it). */
+export function registryDigest(reg: BlockRegistryT = REG): string {
+  return registryStatesDigest(reg, 0, SP3A_STATES);
 }
 
 /**

@@ -36,12 +36,12 @@ function opsOf(e: DensityExpr): Set<string> {
 /** Corner (i, k, j) of value index `idx` in a column's 1225 corner values: i fastest, then j, then k. */
 const cornerOf = (idx: number): [number, number, number] => [idx % 5, Math.floor(idx / 25), Math.floor(idx / 5) % 5];
 
-test('2 unique SP3b keys, chained into allGoldenKeys after SP3a\'s', () => {
+test('2 unique SP3b keys, chained into allGoldenKeys after SP3a\'s (SP3c\'s 2 follow)', () => {
   const keys = sp3bGoldenKeys();
   expect(keys).toEqual(['sp3b.density.ops', 'sp3b.density.default']);
   expect(sp3bGoldenKeys().length).toBe(2);
-  expect(allGoldenKeys().slice(-2)).toEqual(keys);
-  expect(allGoldenKeys().slice(-5, -2)).toEqual(['sp3a.registry', 'sp3a.region.T.default', 'sp3a.region.T.large_biomes']);
+  expect(allGoldenKeys().slice(-4, -2)).toEqual(keys);
+  expect(allGoldenKeys().slice(-7, -4)).toEqual(['sp3a.registry', 'sp3a.region.T.default', 'sp3a.region.T.large_biomes']);
   expect(new Set(allGoldenKeys()).size).toBe(allGoldenKeys().length);
   for (const bad of ['sp3b.density', 'sp3b.density.ops.x', 'sp3b.density.large_biomes', 'sp3b.registry', 'sp3b.nope']) {
     expect(() => computeSp3bGolden(bad)).toThrow(/unknown golden/);

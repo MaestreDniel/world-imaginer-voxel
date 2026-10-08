@@ -52,6 +52,8 @@
     "sp3a.region.T.large_biomes": "67936d16e11d5725",
     "sp3a.registry": "5e1febd88b449b63",
     "sp3b.density.default": "020212de61dc83da",
-    "sp3b.density.ops": "adad71e21efc60cb"
+    "sp3b.density.ops": "adad71e21efc60cb",
+    "sp3c.registry": "2ade4ab7c488e7c2",
+    "sp3c.surface.ops": "df53f0d1115b0d39"
   }
 }

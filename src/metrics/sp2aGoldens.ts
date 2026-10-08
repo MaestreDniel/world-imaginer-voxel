@@ -1,7 +1,7 @@
 /**
  * SP2a golden digests (SP2a spec §7.4), shared by test/unit/goldens.sp2a.test.ts, the ?selftest=1 worker
  * and test/tools/goldensJsc.ts, and the chain of every golden of the build (`allGoldenKeys`/`computeAnyGolden`:
- * SP1, SP2a, then SP3a, SP3a spec §6.4, then SP3b, SP3b spec §9). Follows the core determinism rules (arch-tested). Every value is hex64.
+ * SP1, SP2a, then SP3a, SP3a spec §6.4, then SP3b, SP3b spec §9, then SP3c, SP3c spec §7). Follows the core determinism rules (arch-tested). Every value is hex64.
  */
 import { MAP_LEVELS, type MapLevel } from '../core/constants';
 import { fnv1a32, fnv1a64Bytes, hashF64, hex64 } from '../core/hash';
@@ -17,6 +17,7 @@ import { paintTile } from '../gen/map/tile';
 import { computeGolden as computeSp1, goldenKeys as sp1Keys } from './sp1Goldens';
 import { computeSp3aGolden, sp3aGoldenKeys } from './sp3aGoldens';
 import { computeSp3bGolden, sp3bGoldenKeys } from './sp3bGoldens';
+import { computeSp3cGolden, sp3cGoldenKeys } from './sp3cGoldens';
 
 const FNV32 = fnv1a32;
 const FNV_BYTES = fnv1a64Bytes;
@@ -40,6 +41,8 @@ const SP3A = computeSp3aGolden;
 const SP3A_KEYS = sp3aGoldenKeys;
 const SP3B = computeSp3bGolden;
 const SP3B_KEYS = sp3bGoldenKeys;
+const SP3C = computeSp3cGolden;
+const SP3C_KEYS = sp3cGoldenKeys;
 
 const POINT_PROFILES: readonly ProfileId[] = ['default', 'large_biomes'];
 const TILE_LAYERS: readonly LayerId[] = ['biome', 'relief', 'rivers', 'C'];
@@ -123,13 +126,14 @@ export function computeSp2aGolden(key: string): string {
   throw new Error(`unknown golden ${key}`);
 }
 
-/** Every golden key of the build (SP1, SP2a, SP3a, then SP3b). */
+/** Every golden key of the build (SP1, SP2a, SP3a, SP3b, then SP3c). */
 export function allGoldenKeys(): string[] {
-  return [...SP1_KEYS(), ...sp2aGoldenKeys(), ...SP3A_KEYS(), ...SP3B_KEYS()];
+  return [...SP1_KEYS(), ...sp2aGoldenKeys(), ...SP3A_KEYS(), ...SP3B_KEYS(), ...SP3C_KEYS()];
 }
 
 export function computeAnyGolden(key: string): string {
   if (key.startsWith('sp3a.')) return SP3A(key);
   if (key.startsWith('sp3b.')) return SP3B(key);
+  if (key.startsWith('sp3c.')) return SP3C(key);
   return key.startsWith('sp2a.') ? computeSp2aGolden(key) : SP1(key);
 }

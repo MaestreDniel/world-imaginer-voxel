@@ -4,18 +4,22 @@
  * parenthetical names every dependency `SP_DEPS` transcribes from it, and the critical path is a dependency chain.
  * SP3b (its spec §14): §2.5's store interfaces name every method of `world/store/api.ts`, and §3.6's default
  * expression states the density noises and amplitudes of the schema defaults, so a retune must amend the master.
+ * SP3c (its spec §12): §1's `metrics/*.ts` entry names every golden-digest module of `src/metrics/`, and "Banned APIs"
+ * lists exactly the determinism files (`DET_FILES`) of `test/arch/rules/banned.ts`.
  */
-import { readFileSync } from 'node:fs';
+import { readdirSync, readFileSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
 import { describe, expect, test } from 'vitest';
 import { SUB_PROJECTS, type SubProjectId } from '../../src/core/ids';
 import { DEFAULTS } from '../../src/core/params/defaults';
 import { SP_DEPS } from '../harness/sp';
+import { DET_FILES } from './rules/banned';
 
 // Resolved from this file, not the cwd (SP3b spec §7), so the test also runs from another directory.
 const MASTER = fileURLToPath(new URL('../../docs/superpowers/specs/2026-09-26-architecture-design.md', import.meta.url));
 const text = readFileSync(MASTER, 'utf8');
 const API = fileURLToPath(new URL('../../src/world/store/api.ts', import.meta.url));
+const METRICS = fileURLToPath(new URL('../../src/metrics/', import.meta.url));
 const SP_TOKEN = /\bSP(?:\d+[a-z]?)\b/g;
 
 /** §10 headers: `**SPx — Title** (size; dependencies …)`, in document order. */
@@ -83,5 +87,25 @@ describe('master spec amendments (SP3b §14)', () => {
     const det = /detail {4}= noise\('detail'\) λ (\d+), (\d+) oct × amp\(E\) ([\d.]+)-([\d.]+)/.exec(text);
     expect(det, "no `detail = noise('detail') λ …, … oct × amp(E) …-…` in §3.6").not.toBeNull();
     expect(det!.slice(1).map(Number)).toEqual([d.noises.detail.wavelength, d.noises.detail.octaves, d.detailAmpLo, d.detailAmpHi]);
+  });
+});
+
+describe('master spec amendments (SP3c §12)', () => {
+  test('§1\'s metrics/*.ts entry names every golden-digest module of src/metrics', () => {
+    const lines = text.split('\n');
+    const from = lines.findIndex((l) => /^\s+metrics\/\*\.ts\s/.test(l));
+    expect(from, 'no `metrics/*.ts` entry in §1').toBeGreaterThanOrEqual(0);
+    const to = lines.findIndex((l, i) => i > from && /^\s+workers\//.test(l));
+    const entry = lines.slice(from, to).join(' ');
+    const goldens = readdirSync(METRICS).filter((f) => /Goldens\.ts$/.test(f)).sort();
+    expect(goldens).toContain('sp3cGoldens.ts');
+    for (const f of goldens) expect(entry, `§1's metrics entry misses ${f}`).toContain(f);
+  });
+
+  test('"Banned APIs" lists exactly the determinism files of test/arch/rules/banned.ts', () => {
+    const line = text.split('\n').find((l) => l.includes('(`DET_FILES` in `test/arch/rules/banned.ts`:'));
+    expect(line, 'no `DET_FILES` list in "Banned APIs"').toBeDefined();
+    const list = line!.slice(line!.indexOf('(`DET_FILES`'), line!.indexOf('):'));
+    expect(new Set([...list.matchAll(/`(metrics\/\w+\.ts)`/g)].map((m) => m[1]))).toEqual(new Set(DET_FILES));
   });
 });

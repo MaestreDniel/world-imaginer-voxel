@@ -31,7 +31,7 @@ test('3 unique SP3a keys: the registry and one 8 × 8 region per profile, chaine
   const keys = sp3aGoldenKeys();
   expect(keys).toEqual(['sp3a.registry', 'sp3a.region.T.default', 'sp3a.region.T.large_biomes']);
   expect(sp3aGoldenKeys().length).toBe(3);
-  expect(allGoldenKeys().slice(-5, -2)).toEqual(keys); // SP3b's 2 keys follow (SP3b spec §9)
+  expect(allGoldenKeys().slice(-7, -4)).toEqual(keys); // SP3b's 2 keys and SP3c's 2 follow (SP3b spec §9, SP3c spec §7)
   expect(new Set(allGoldenKeys()).size).toBe(allGoldenKeys().length);
   expect(computeAnyGolden('sp3a.registry')).toBe(computeSp3aGolden('sp3a.registry'));
   for (const bad of ['sp3a.region.T.amplified', 'sp3a.region.T', 'sp3a.region.D.default', 'sp3a.registry.x', 'sp3a.nope']) {
