@@ -23,8 +23,11 @@
  * - undo/redo: Ctrl+Z through the whole history, then Ctrl+Shift+Z and Ctrl+Y back;
  * - reload: the draft, the controls and the stored layout come back;
  * - cut line: a two-click line on the map and its profile in the drawer's Cross-section tab;
- * - voxels: the tab's Voxels mode (SP3a spec §5.2): a fresh, non-empty slice, the hover readout, back to Profile;
+ * - voxels: the tab's Voxels mode (SP3a spec §5.2): a fresh, non-empty slice, its legend (every registry state, water and
+ *   the sea line: SP3c spec §6), the hover readout, back to Profile;
  * - tabs: ArrowRight, ArrowLeft, Home and End move the selection and the focus on both tab bars;
+ * - rule: the Voxels mode on the mountain line (SP3c spec §6): the pointer on the top solid voxel of a sample (found in
+ *   the slice image, not at a fixed height) shows the readout at once, then its surface rule id ` · rule root.…`;
  * - console: no exception, console error or failed load, except the known favicon.ico 404.
  * With --shots DIR it then writes the spec §12 screenshots into DIR, at seed 42 from a newly loaded page (the
  * repository keeps them re-saved as 256-colour palette PNGs, as SP1 and SP2a did), and last the Voxels mode on the
@@ -93,9 +96,50 @@ export function selftestAllMatch(summary: string, count: number): boolean {
   return m !== null && Number(m[1]) === count;
 }
 
-/** The Voxels mode's hover readout: `(x, y, z) · block · fluid · point i, D blocks from A` (SP3a spec §5.2). */
+/** A surface-rule id (SP3c spec §3.1): `root`, then `.rules[k]` and `.then` steps. */
+const RULE_ID = String.raw`root(?:\.rules\[\d+\]|\.then)*`;
+const VOXEL_READOUT = String.raw`\(-?\d+, -?\d+, -?\d+\) · (?:[a-z][a-z0-9_]*(?:\[[a-z0-9_=,]+\])?|unknown state \d+) · (?:no fluid|[a-z0-9 ]+, level [0-7](?: \(source\))?(?:, falling)?) · point \d+, \d+\.\d blocks from A`;
+
+/**
+ * The Voxels mode's hover readout: `(x, y, z) · block · fluid · point i, D blocks from A` (SP3a spec §5.2), with the
+ * optional hover rule suffix ` · rule …` (the probe runs), ` · rule none` or ` · rule <rule id>` (SP3c spec §6).
+ */
 export function voxelReadoutOk(text: string): boolean {
-  return /^\(-?\d+, -?\d+, -?\d+\) · (?:[a-z][a-z0-9_]*(?:\[[a-z0-9_=,]+\])?|unknown state \d+) · (?:no fluid|[a-z0-9 ]+, level [0-7](?: \(source\))?(?:, falling)?) · point \d+, \d+\.\d blocks from A$/.test(text);
+  return new RegExp(`^${VOXEL_READOUT}(?: · rule (?:…|none|${RULE_ID}))?$`).test(text);
+}
+
+/** The rule id a Voxels readout ends with (` · rule root…`), or null while it waits, for none, or without one. */
+export function voxelRuleId(text: string): string | null {
+  const m = new RegExp(`^${VOXEL_READOUT} · rule (${RULE_ID})$`).exec(text);
+  return m === null ? null : m[1]!;
+}
+
+/**
+ * The Voxels legend's labels the page must show (SP3c spec §6): every state of the state-id lock (`test/stateIds.lock.json`,
+ * the canonical keys) in state-id order, then the water and the sea-level keys. Throws when the lock's ids are not 0 … n − 1.
+ */
+export function voxelLegendLabels(stateIdsLockJson: string): string[] {
+  const lock = JSON.parse(stateIdsLockJson) as Record<string, number>;
+  const keys = Object.keys(lock).sort((a, b) => lock[a]! - lock[b]!);
+  if (!keys.every((k, i) => lock[k] === i)) throw new Error('the state-id lock\'s state ids are not 0 … n − 1');
+  return [...keys, 'water, darker with depth', 'sea level 63'];
+}
+
+/** Air's colour in the Voxels slice image (`VOXEL_COLORS.sky`; a unit test keeps them equal). */
+export const SKY_RGB = [168, 204, 255] as const;
+
+/**
+ * The row (0 at y 319) of the top solid voxel of one sample column of the slice image, given as its 384 RGBA pixels top
+ * down (`getImageData(i, 0, 1, 384).data`): the first pixel that is not air's colour (on a dry line, the column's ground
+ * top), or null when the column is all air.
+ */
+export function groundTopRow(column: ArrayLike<number>): number | null {
+  if (column.length !== 4 * 384) throw new Error(`a sample column of the slice image is 384 RGBA pixels, not ${column.length} bytes`);
+  for (let row = 0; row < 384; row++) {
+    const k = 4 * row;
+    if (column[k] !== SKY_RGB[0] || column[k + 1] !== SKY_RGB[1] || column[k + 2] !== SKY_RGB[2]) return row;
+  }
+  return null;
 }
 
 /** The Voxels mode's summary of a non-empty slice: `ground top y LO to HI · …water…`. */
@@ -746,6 +790,9 @@ async function runSmoke(t: Smoke): Promise<void> {
   t.check(voxelSummaryOk(sliceSum), `the slice: ${sliceSum}`, sliceSum);
   const colours = await p.eval<number>(`(() => { const c = document.querySelector('.cs-voxels'); if (c.hidden || c.width !== 512 || c.height !== 384) return -1; const d = c.getContext('2d').getImageData(0, 0, 512, 384).data; const s = new Set(); for (let k = 0; k < d.length; k += 4) s.add(d[k] * 65536 + d[k + 1] * 256 + d[k + 2]); return s.size; })()`);
   t.check(colours >= 3, `the 512 × 384 slice shows ${colours} colours (air, stone and bedrock at least)`, colours);
+  const legendWant = voxelLegendLabels(readFileSync(join(ROOT, 'test/stateIds.lock.json'), 'utf8'));
+  const legendGot = await p.eval<string[]>(`(() => { const l = document.querySelector('.cs-voxel-legend'); return l === null || l.hidden ? [] : [...l.querySelectorAll('.cs-key')].map((k) => k.textContent); })()`);
+  t.check(sameJson(legendGot, legendWant), `the legend keys the ${legendWant.length - 2} registry states, water and the sea line (SP3c spec §6)`, legendGot);
   const covered = await p.eval<string[]>(`[...document.querySelectorAll('.cs-plot rect, .cs-plot path')].filter((e) => getComputedStyle(e).fill !== 'none').map((e) => e.getAttribute('class'))`);
   t.check(covered.length === 0, 'nothing in the SVG over the slice is filled', covered);
   const vox = await p.center('.cs-voxels');
@@ -775,6 +822,51 @@ async function runSmoke(t: Smoke): Promise<void> {
   await p.key('ArrowRight', 'ArrowRight', 39);
   const toSection = await shown('.map-drawer-tabs');
   t.check(toSection === 'map-drawer-tab-section', 'ArrowRight shows Cross-section again', toSection);
+
+  t.step('rule: the hover rule id of a land top on the mountain line (SP3c spec §6)');
+  const { text: lineText, summary: mountain } = await openMountainVoxels(p);
+  t.check(mountainSummaryOk(mountain), `the mountain line ${lineText}: ${mountain}`, mountain);
+  // The top solid voxel of the sample at 40 % of the line, read from the slice image (not a fixed height).
+  const i = 205;
+  const column = await p.eval<number[]>(`Array.from(document.querySelector('.cs-voxels').getContext('2d').getImageData(${i}, 0, 1, 384).data)`);
+  const row = groundTopRow(column);
+  t.check(row !== null, `sample ${i} has a ground top (row ${row}, y ${row === null ? '-' : 319 - row})`);
+  if (row !== null) {
+    const mbox = (await p.center('.cs-voxels')).box;
+    await p.mouse('mouseMoved', mbox.x + ((i + 0.5) * mbox.width) / 512, mbox.y + ((row + 0.5) * mbox.height) / 384);
+    const first = await p.eval<string>(`document.querySelector('.cs-readout').textContent`);
+    const top = new RegExp(`^\\(-?\\d+, ${319 - row}, -?\\d+\\) · (?!air )`);
+    t.check(voxelReadoutOk(first) && top.test(first), `hover on the top voxel: ${first}`, first);
+    await p.until(`/ · rule root\\S*$/.test(document.querySelector('.cs-readout').textContent)`, 'the hover rule id', 10000);
+    const ruled = await p.eval<string>(`document.querySelector('.cs-readout').textContent`);
+    const id = voxelRuleId(ruled);
+    t.check(voxelReadoutOk(ruled) && top.test(ruled) && id !== null && id.startsWith('root.rules[1].then.'), `the rule of the land top: ${ruled}`, ruled);
+  }
+}
+
+/**
+ * Opens the Voxels mode on the mountain line (SP3b spec §7, §11): a new page at MOUNTAIN_LINE's view, the cut line
+ * clicked at its ends, Voxels selected, a fresh slice. Throws when the line drawn is not the mountain line; returns the
+ * line text and the slice summary.
+ */
+async function openMountainVoxels(p: Page): Promise<{ readonly text: string; readonly summary: string }> {
+  const { view: mv, a, b } = MOUNTAIN_LINE;
+  await p.goto(`${p.base}?map#${mapHash({ ...START, view: mv })}`, MAP_READY);
+  await p.click('#map-tab-world');
+  await p.click('.map-cut');
+  const mc = await p.center('.map-canvas');
+  const at = (x: number, z: number): [number, number] => [mc.x + (x - mv.x) / mv.bpp, mc.y + (z - mv.z) / mv.bpp];
+  await p.clickAt(...at(a[0], a[1]));
+  await p.clickAt(...at(b[0], b[1]));
+  await p.until(`document.querySelector('.cs').dataset.state === 'fresh'`, 'a fresh cross-section of the mountain line');
+  const text = await p.eval<string>(`document.querySelector('.cs-line').textContent`);
+  const seg = parseSegment(text);
+  if (seg === null || Math.max(Math.abs(seg.ax - a[0]), Math.abs(seg.az - a[1]), Math.abs(seg.bx - b[0]), Math.abs(seg.bz - b[1])) > 1) {
+    throw new Error(`the mountain line is ${text}, expected A (${a[0]}, ${a[1]}) → B (${b[0]}, ${b[1]})`);
+  }
+  await p.click('.cs-mode[data-mode="voxels"]');
+  await p.until(`document.querySelector('.cs').dataset.mode === 'voxels' && document.querySelector('.cs').dataset.state === 'fresh'`, 'a fresh voxel slice of the mountain line');
+  return { text, summary: await p.eval<string>(`document.querySelector('.cs-summary').textContent`) };
 }
 
 // ---------------------------------------------------------------- screenshots (spec §12)
@@ -872,23 +964,7 @@ async function runShots(p: Page, dir: string): Promise<string[]> {
   await save('cross-section-voxels.png');
 
   // The Voxels mode on the mountain line (SP3b spec §7, §11): the real T's peaks, the pointer on the rock below them.
-  const { view: mv, a, b } = MOUNTAIN_LINE;
-  await p.goto(`${p.base}?map#${mapHash({ ...START, view: mv })}`, MAP_READY);
-  await p.click('#map-tab-world');
-  await p.click('.map-cut');
-  const mc = await p.center('.map-canvas');
-  const at = (x: number, z: number): [number, number] => [mc.x + (x - mv.x) / mv.bpp, mc.y + (z - mv.z) / mv.bpp];
-  await p.clickAt(...at(a[0], a[1]));
-  await p.clickAt(...at(b[0], b[1]));
-  await p.until(`document.querySelector('.cs').dataset.state === 'fresh'`, 'a fresh cross-section of the mountain line');
-  const text = await p.eval<string>(`document.querySelector('.cs-line').textContent`);
-  const seg = parseSegment(text);
-  if (seg === null || Math.max(Math.abs(seg.ax - a[0]), Math.abs(seg.az - a[1]), Math.abs(seg.bx - b[0]), Math.abs(seg.bz - b[1])) > 1) {
-    throw new Error(`the mountain line is ${text}, expected A (${a[0]}, ${a[1]}) → B (${b[0]}, ${b[1]})`);
-  }
-  await p.click('.cs-mode[data-mode="voxels"]');
-  await p.until(`document.querySelector('.cs').dataset.mode === 'voxels' && document.querySelector('.cs').dataset.state === 'fresh'`, 'a fresh voxel slice of the mountain line');
-  const summary = await p.eval<string>(`document.querySelector('.cs-summary').textContent`);
+  const { text, summary } = await openMountainVoxels(p);
   if (!mountainSummaryOk(summary)) throw new Error(`the mountain slice: ${summary} (expected a ground top above y 200 and no water)`);
   console.log(`  mountain line: ${text}; ${summary}`);
   const mvox = await p.center('.cs-voxels');

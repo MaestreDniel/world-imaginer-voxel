@@ -1,12 +1,12 @@
 import { describe, expect, test } from 'vitest';
 import { SEA_LEVEL } from '../../src/core/constants';
-import { JobCancelled, type SliceResult, type WorkerPool } from '../../src/engine/workerPool';
+import { JobCancelled, type SliceResult, type SurfaceProbeResult, type WorkerPool } from '../../src/engine/workerPool';
 import { segmentPointAt, type Segment } from '../../src/metrics/crossSection';
 import { genRegionInProcess } from '../../src/metrics/region';
 import { createSliceRequests, sectionStatus, SECTION_MODES } from '../../src/ui/crossSection/model';
 import {
-  blockName, fluidText, sliceRgba, sliceSummary, SEA_LEVEL_Y, VOXEL_COLORS, voxelCell, voxelLegend, voxelPlots, voxelReadout, voxelRgb,
-  type Rgb,
+  blockName, createRuleReadout, fluidText, RULE_WAITING, ruleSuffix, sliceRgba, sliceSummary, SEA_LEVEL_Y, VOXEL_COLORS, voxelCell, voxelLegend, voxelPlots,
+  voxelPosition, voxelReadout, voxelRgb, type Rgb, type RuleCell,
 } from '../../src/ui/crossSection/voxels';
 import { toPx } from '../../src/ui/splineEditor/model';
 import { FLUID_LAVA, FLUID_WATER, packFluid, WATER_SOURCE } from '../../src/world/blocks/fluid';
@@ -336,3 +336,146 @@ describe('the Voxels requests (SP3a spec §5.2: the profile\'s rules)', () => {
   });
 });
 
+
+describe('the Voxels hover rule id (SP3c spec §6: a surfaceProbe job, the map hover\'s pattern)', () => {
+  const GRASS = ['root', 'root.rules[1]', 'root.rules[1].then', 'root.rules[1].then.rules[3]', 'root.rules[1].then.rules[3].then',
+    'root.rules[1].then.rules[3].then.rules[6]', 'root.rules[1].then.rules[3].then.rules[6].then', 'root.rules[1].then.rules[3].then.rules[6].then.rules[7]'];
+  const flush = () => new Promise<void>((done) => { setTimeout(done, 0); });
+  interface Probe { readonly x: number; readonly y: number; readonly z: number; resolve(r: SurfaceProbeResult): void; reject(e: unknown): void }
+  const harness = () => {
+    const probes: Probe[] = [];
+    const shown: Array<[RuleCell, string]> = [];
+    const session = { epoch: 7 };
+    const pool: Pick<WorkerPool, 'surfaceProbe'> = {
+      surfaceProbe: (x, y, z) => new Promise<SurfaceProbeResult>((resolve, reject) => { probes.push({ x, y, z, resolve, reject }); }),
+    };
+    const rules = createRuleReadout(pool, () => session.epoch, (cell, suffix) => { shown.push([cell, suffix]); });
+    return { rules, probes, shown, session };
+  };
+  const cell = (x: number, y: number, z: number, epoch = 7): RuleCell => ({ epoch, x, y, z });
+  const at = (p: Probe) => [p.x, p.y, p.z];
+
+  test('ruleSuffix: the last id of the path (the yielding leaf), or none for []', () => {
+    expect(RULE_WAITING).toBe(' · rule …');
+    expect(ruleSuffix([])).toBe(' · rule none');
+    expect(ruleSuffix(GRASS)).toBe(' · rule root.rules[1].then.rules[3].then.rules[6].then.rules[7]');
+    expect(ruleSuffix(['root', 'root.rules[2]', 'root.rules[2].then'])).toBe(' · rule root.rules[2].then');
+  });
+  test('voxelPosition: the readout\'s integer voxel (⌊xᵢ⌋, y, ⌊zᵢ⌋), the one the slice job samples', () => {
+    const line: Segment = { ax: -3, az: 0, bx: 7, bz: 5 };
+    expect(voxelPosition(line, 0, 63)).toEqual({ x: -3, y: 63, z: 0 });
+    expect(voxelPosition(line, 511, 70)).toEqual({ x: 7, y: 70, z: 5 });
+    expect(voxelPosition(line, 1, -64)).toEqual({ x: -3, y: -64, z: 0 });
+    expect(voxelPosition({ ax: -0.5, az: -10.5, bx: -0.5, bz: -20.5 }, 0, 0)).toEqual({ x: -1, y: 0, z: -11 });
+    for (const i of [0, 100, 255, 511]) {
+      const [px, pz] = segmentPointAt(line, i);
+      const v = voxelPosition(line, i, 12);
+      expect(voxelReadout(line, slice(), i, 12).startsWith(`(${v.x}, 12, ${v.z}) · `)).toBe(true);
+      expect([v.x, v.z]).toEqual([Math.floor(px), Math.floor(pz)]);
+    }
+  });
+  test('a hovered voxel shows … at once and its rule when the probe answers; the same voxel again needs no probe', async () => {
+    const h = harness();
+    expect(h.rules.hover(cell(1, 70, 2))).toBe(RULE_WAITING);
+    expect(h.rules.hover(cell(1, 70, 2))).toBe(RULE_WAITING);
+    expect(h.probes.map(at)).toEqual([[1, 70, 2]]);
+    h.probes[0]!.resolve({ state: 3, path: GRASS });
+    await flush();
+    expect(h.shown).toEqual([[cell(1, 70, 2), ruleSuffix(GRASS)]]);
+    expect(h.rules.hover(cell(1, 70, 2))).toBe(ruleSuffix(GRASS));
+    expect(h.probes).toHaveLength(1);
+    expect(h.rules.hover(cell(1, 71, 2))).toBe(RULE_WAITING);
+    h.probes[1]!.resolve({ state: 0, path: [] });
+    await flush();
+    expect(h.shown.at(-1)).toEqual([cell(1, 71, 2), ' · rule none']);
+  });
+  test('latest wins: one probe in flight; an answer for a cell the pointer left is dropped and only the newest cell is probed next', async () => {
+    const h = harness();
+    h.rules.hover(cell(1, 1, 1));
+    h.rules.hover(cell(2, 2, 2));
+    h.rules.hover(cell(3, 3, 3));
+    expect(h.probes.map(at)).toEqual([[1, 1, 1]]);
+    h.probes[0]!.resolve({ state: 1, path: [] });
+    await flush();
+    expect(h.shown).toEqual([]);
+    expect(h.probes.map(at)).toEqual([[1, 1, 1], [3, 3, 3]]);
+    h.probes[1]!.resolve({ state: 3, path: GRASS });
+    await flush();
+    expect(h.shown).toEqual([[cell(3, 3, 3), ruleSuffix(GRASS)]]);
+    expect(h.probes).toHaveLength(2);
+  });
+  test('back on the cell in flight before it answers: its answer is shown and nothing more is probed', async () => {
+    const h = harness();
+    h.rules.hover(cell(1, 1, 1));
+    h.rules.hover(cell(2, 2, 2));
+    expect(h.rules.hover(cell(1, 1, 1))).toBe(RULE_WAITING);
+    h.probes[0]!.resolve({ state: 3, path: GRASS });
+    await flush();
+    expect(h.shown).toEqual([[cell(1, 1, 1), ruleSuffix(GRASS)]]);
+    expect(h.probes).toHaveLength(1);
+  });
+  test('off the slice (null) nothing is shown or probed; the answer in flight is dropped', async () => {
+    const h = harness();
+    expect(h.rules.hover(null)).toBe('');
+    h.rules.hover(cell(1, 1, 1));
+    h.rules.hover(cell(2, 2, 2));
+    expect(h.rules.hover(null)).toBe('');
+    h.probes[0]!.resolve({ state: 3, path: GRASS });
+    await flush();
+    expect([h.shown, h.probes.length]).toEqual([[], 1]);
+  });
+  test('a slice of an older session epoch (stale) gets no rule; an answer that lands after the epoch moved is dropped', async () => {
+    const h = harness();
+    expect(h.rules.hover(cell(1, 1, 1, 6))).toBe('');
+    expect(h.probes).toHaveLength(0);
+    h.rules.hover(cell(1, 1, 1));
+    h.session.epoch = 8;
+    h.probes[0]!.resolve({ state: 3, path: GRASS });
+    await flush();
+    expect(h.shown).toEqual([]);
+    // Not remembered either: the slice of epoch 8 at the same voxel asks again.
+    expect(h.rules.hover(cell(1, 1, 1, 8))).toBe(RULE_WAITING);
+    expect(h.probes).toHaveLength(2);
+  });
+  test('JobCancelled at the same epoch probes again; any other error is shown as the rule and not retried', async () => {
+    const h = harness();
+    h.rules.hover(cell(5, 6, 7));
+    h.probes[0]!.reject(new JobCancelled());
+    await flush();
+    expect([h.shown, h.probes.map(at)]).toEqual([[], [[5, 6, 7], [5, 6, 7]]]);
+    h.probes[1]!.reject(new Error('BAD_ARGS: y 400'));
+    await flush();
+    expect(h.shown).toEqual([[cell(5, 6, 7), ' · rule failed: BAD_ARGS: y 400']]);
+    expect(h.probes).toHaveLength(2);
+    h.rules.hover(cell(1, 1, 1));
+    h.session.epoch = 8;
+    h.probes[2]!.reject(new JobCancelled());
+    await flush();
+    expect(h.probes).toHaveLength(3);
+  });
+  test('a cell whose probe failed keeps its failure text and is not probed again at the same epoch', async () => {
+    const h = harness();
+    expect(h.rules.hover(cell(5, 6, 7))).toBe(RULE_WAITING);
+    h.probes[0]!.reject(new Error('INTERNAL: boom'));
+    await flush();
+    expect(h.shown).toEqual([[cell(5, 6, 7), ' · rule failed: INTERNAL: boom']]);
+    // The pointer keeps moving inside the same voxel: the failure stays and no job is sent.
+    expect(h.rules.hover(cell(5, 6, 7))).toBe(' · rule failed: INTERNAL: boom');
+    expect(h.rules.hover(cell(5, 6, 7))).toBe(' · rule failed: INTERNAL: boom');
+    expect(h.probes).toHaveLength(1);
+    // A failure that lands after the pointer left is kept as an answer is: back on that voxel, no new job.
+    h.rules.hover(cell(1, 1, 1));
+    h.rules.hover(cell(2, 2, 2));
+    h.probes[1]!.reject(new Error('WorkerFailed: worker 0 exited'));
+    await flush();
+    expect(h.probes.map(at)).toEqual([[5, 6, 7], [1, 1, 1], [2, 2, 2]]);
+    expect(h.rules.hover(cell(1, 1, 1))).toBe(' · rule failed: WorkerFailed: worker 0 exited');
+    expect(h.probes).toHaveLength(3);
+    // A new epoch (a reconfigure) probes the failed voxel again.
+    h.probes[2]!.resolve({ state: 3, path: GRASS });
+    await flush();
+    h.session.epoch = 8;
+    expect(h.rules.hover(cell(1, 1, 1, 8))).toBe(RULE_WAITING);
+    expect(h.probes.map(at)).toEqual([[5, 6, 7], [1, 1, 1], [2, 2, 2], [1, 1, 1]]);
+  });
+});

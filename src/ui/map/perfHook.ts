@@ -222,6 +222,7 @@ export function instrumentPool(pool: WorkerPool, log: LatencyLog, now: () => num
     spawn: () => pool.spawn(),
     stats: (kind, n, args, priority) => pool.stats(kind, n, args, priority),
     slice: (segment, priority) => pool.slice(segment, priority),
+    surfaceProbe: (x, y, z, priority) => pool.surfaceProbe(x, y, z, priority),
     selftest: (key) => pool.selftest(key),
     cancelTiles: (pred) => pool.cancelTiles(pred),
     probe: () => pool.probe(),

@@ -6,7 +6,9 @@
  * functions over a range of their kind's fixed point stream, or of the points along a crossSection's line
  * (§4.5), and reply with the raw sums. Slice jobs (SP3a spec §5.1) read the voxels of a range of the samples under
  * a line (SP3b spec §6) from the handler's slice job (`sliceJob.ts`: a worker-local store and LRU kept for the
- * handler's lifetime, emptied by every configure) and stop like stats jobs.
+ * handler's lifetime, emptied by every configure) and stop like stats jobs. A surfaceProbe job (SP3c spec §6) answers
+ * `surfaceProbe` on the configured context's SurfaceContext (memoised per GenContext, with its one-column cache) and,
+ * like a point job, always runs to the end.
  */
 import { hex64 } from '../core/hash';
 import { checkParams } from '../core/params/kit';
@@ -17,12 +19,14 @@ import { createGenContext, type GenContext } from '../gen/context';
 import { columnPoint } from '../gen/column/columnPoint';
 import { findSpawnAbortable } from '../gen/column/spawn';
 import { paintTileAbortable } from '../gen/map/tile';
+import { surfaceContextOf } from '../gen/surface/context';
+import { surfaceProbe } from '../gen/surface/probe';
 import { biomeSharePoints, biomeSharesInto, biomeSharesLength } from '../metrics/biomeShares';
 import { CROSS_SECTION_POINTS, crossSectionInto, crossSectionLength, segmentProblem } from '../metrics/crossSection';
 import type { Points } from '../metrics/noiseStats';
 import { computeAnyGolden } from '../metrics/sp2aGoldens';
 import { splineStatPoints, splineStatsInto, splineStatsLength, splineStatsNode } from '../metrics/splineStats';
-import { parseToWorker, sliceRangeProblem, type ErrorCode, type FromWorker, type StatsMsg } from './protocol';
+import { parseToWorker, sliceRangeProblem, surfaceProbeProblem, type ErrorCode, type FromWorker, type StatsMsg } from './protocol';
 import { createSliceJob, type SliceJob } from './sliceJob';
 
 const HEX = hex64;
@@ -50,6 +54,9 @@ const SECTION_LEN = crossSectionLength;
 const SEGMENT_PROBLEM = segmentProblem;
 const RANGE_PROBLEM = sliceRangeProblem;
 const CREATE_SLICE_JOB = createSliceJob;
+const SURFACE_CONTEXT = surfaceContextOf;
+const SURFACE_PROBE = surfaceProbe;
+const PROBE_PROBLEM = surfaceProbeProblem;
 
 export interface Reply {
   readonly msg: FromWorker;
@@ -174,6 +181,12 @@ export function createTaskHandler(slices: SliceJob = CREATE_SLICE_JOB()): TaskHa
           if (r === null) return aborted();
           const msg: FromWorker = { type: 'sliceResult', jobId: m.jobId, epoch, from: m.from, to: m.to, blocks: r.blocks.buffer, fluid: r.fluid.buffer };
           return { msg, transfer: [r.blocks.buffer, r.fluid.buffer] };
+        }
+        if (m.type === 'surfaceProbe') {
+          const problem = PROBE_PROBLEM(m.x, m.y, m.z);
+          if (problem !== null) return err(m.jobId, m.epoch, 'BAD_ARGS', problem);
+          const r = SURFACE_PROBE(SURFACE_CONTEXT(ctx), m.x, m.y, m.z);
+          return { msg: { type: 'surfaceProbeResult', jobId: m.jobId, epoch, state: r.state, path: [...r.path] }, transfer: [] };
         }
         return { msg: { type: 'pointResult', jobId: m.jobId, epoch, fields: POINT(ctx, m.x, m.z) }, transfer: [] };
       } catch (e) {

@@ -6,11 +6,13 @@
  * - the slice image: one RGBA pixel per sample of a `pool.slice` result (512 × 384, row 0 at y 319);
  * - the plot: sample cells over the drawer, a distance axis whose point i sits at the centre of pixel column i,
  *   and the hover mapping from a pixel to the sample (i, y) under it;
- * - the hover readout (the integer (⌊xᵢ⌋, y, ⌊zᵢ⌋), the block's canonical key and the fluid) and the summary line.
+ * - the hover readout (the integer (⌊xᵢ⌋, y, ⌊zᵢ⌋), the block's canonical key and the fluid) and the summary line;
+ * - the hover rule id (SP3c spec §6): one `surfaceProbe` job at a time for the hovered voxel, the latest hovered voxel
+ *   wins, and the readout's ` · rule …` suffix becomes ` · rule <leaf id>` or ` · rule none` when the probe answers.
  */
 import { MIN_Y, SEA_LEVEL } from '../../core/constants';
 import { MAX_Y } from '../../core/coords';
-import type { SliceResult } from '../../engine/workerPool';
+import { JobCancelled, type SliceResult, type SurfaceProbeResult } from '../../engine/workerPool';
 import { segmentLength, segmentPointAt, type Segment } from '../../metrics/crossSection';
 import { FLUID_LAVA, FLUID_WATER, fluidFalling, fluidLevel, fluidType } from '../../world/blocks/fluid';
 import { AIR, REGISTRY } from '../../world/blocks/index';
@@ -170,12 +172,109 @@ export function fluidText(b: number): string {
   return `${FLUID_NAMES[type] ?? `fluid ${type}`}, level ${level}${level === 0 ? ' (source)' : ''}${fluidFalling(b) ? ', falling' : ''}`;
 }
 
+/** A world voxel position. */
+export interface VoxelPosition {
+  readonly x: number;
+  readonly y: number;
+  readonly z: number;
+}
+
+/** The voxel of sample (i, y): (⌊xᵢ⌋, y, ⌊zᵢ⌋), the one the slice job reads and the readout names. */
+export function voxelPosition(line: Segment, i: number, y: number): VoxelPosition {
+  const [px, pz] = segmentPointAt(line, i);
+  return { x: Math.floor(px), y, z: Math.floor(pz) };
+}
+
 /** The hover readout of sample (i, y): `(x, y, z) · block · fluid · point i, D blocks from A`. */
 export function voxelReadout(line: Segment, s: SliceResult, i: number, y: number): string {
-  const [px, pz] = segmentPointAt(line, i);
+  const v = voxelPosition(line, i, y);
   const k = (MAX_Y - y) * SLICE_POINTS + i;
   const d = (segmentLength(line) * i) / (SLICE_POINTS - 1);
-  return `(${Math.floor(px)}, ${y}, ${Math.floor(pz)}) · ${blockName(s.blocks[k]!)} · ${fluidText(s.fluid[k]!)} · point ${i}, ${d.toFixed(1)} blocks from A`;
+  return `(${v.x}, ${y}, ${v.z}) · ${blockName(s.blocks[k]!)} · ${fluidText(s.fluid[k]!)} · point ${i}, ${d.toFixed(1)} blocks from A`;
+}
+
+/** The readout's rule suffix while the hovered voxel's probe runs. */
+export const RULE_WAITING = ' · rule …';
+
+/** The readout's rule suffix for a branch path: ` · rule <leaf id>` (its last id), or ` · rule none` for []. */
+export function ruleSuffix(path: readonly string[]): string {
+  return ` · rule ${path.length === 0 ? 'none' : path[path.length - 1]!}`;
+}
+
+/** A voxel whose rule the readout asks for, and the session epoch of the slice it was read from. */
+export interface RuleCell extends VoxelPosition {
+  readonly epoch: number;
+}
+
+/** Whether two rule cells are the same voxel at the same epoch. */
+export const sameRuleCell = (a: RuleCell, b: RuleCell): boolean => a.epoch === b.epoch && a.x === b.x && a.y === b.y && a.z === b.z;
+
+export interface RuleReadout {
+  /**
+   * The pointer is over `cell` (null: off the slice). Returns the rule suffix to show at once: the answer (or the
+   * failure) when this voxel was answered at its epoch, RULE_WAITING while its probe is queued or in flight, and '' for null or for a cell
+   * of a slice that is not the current session epoch's (a stale slice: no probe, the pool runs another draft).
+   */
+  hover(cell: RuleCell | null): string;
+}
+
+/**
+ * The Voxels mode's hover rule id (SP3c spec §6), as the map hover's point jobs (`hoverPanel.ts`): one probe in flight,
+ * the latest hovered voxel waits and wins. `epoch()` is the session's current epoch. `show(cell, suffix)` reports an
+ * answer for the voxel still hovered at the epoch it was asked for; an answer for a voxel the pointer left, or that
+ * lands after the epoch moved, is dropped. JobCancelled at the same epoch asks again; any other error is shown as
+ * ` · rule failed: <message>` and kept as the voxel's answer, so it is not retried at that epoch.
+ */
+export function createRuleReadout(pool: { surfaceProbe(x: number, y: number, z: number): Promise<SurfaceProbeResult> }, epoch: () => number,
+  show: (cell: RuleCell, suffix: string) => void): RuleReadout {
+  let busy: RuleCell | null = null;
+  let next: RuleCell | null = null;
+  let current: RuleCell | null = null;
+  let answered: { readonly cell: RuleCell; readonly suffix: string } | null = null;
+  const live = (cell: RuleCell): boolean => current !== null && sameRuleCell(current, cell) && cell.epoch === epoch();
+
+  const run = (cell: RuleCell) => {
+    busy = cell;
+    pool.surfaceProbe(cell.x, cell.y, cell.z).then((r) => {
+      if (cell.epoch !== epoch()) return;
+      const suffix = ruleSuffix(r.path);
+      answered = { cell, suffix };
+      if (live(cell)) show(cell, suffix);
+    }, (e: unknown) => {
+      if (cell.epoch !== epoch()) return;
+      if (e instanceof JobCancelled) {
+        if (live(cell)) next ??= cell;
+        return;
+      }
+      // Kept as an answer is, so the pointer moving inside the failed voxel does not probe it again at this epoch.
+      const suffix = ` · rule failed: ${e instanceof Error ? e.message : String(e)}`;
+      answered = { cell, suffix };
+      if (live(cell)) show(cell, suffix);
+    }).finally(() => {
+      busy = null;
+      const n = next;
+      next = null;
+      if (n !== null && live(n)) run(n);
+    });
+  };
+
+  return {
+    hover(cell) {
+      if (cell === null || cell.epoch !== epoch()) {
+        current = null;
+        next = null;
+        return '';
+      }
+      current = cell;
+      if (answered !== null && sameRuleCell(answered.cell, cell)) {
+        next = null;
+        return answered.suffix;
+      }
+      if (busy === null) run(cell);
+      else next = sameRuleCell(busy, cell) ? null : cell;
+      return RULE_WAITING;
+    },
+  };
 }
 
 /**

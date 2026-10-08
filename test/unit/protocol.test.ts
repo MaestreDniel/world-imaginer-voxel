@@ -5,12 +5,15 @@ import type { KnotPath } from '../../src/core/spline/types';
 import { columnPoint } from '../../src/gen/column/columnPoint';
 import { findSpawn } from '../../src/gen/column/spawn';
 import { BIOME_SHARES_POINTS, biomeSharePoints, biomeSharesInto, biomeSharesLength } from '../../src/metrics/biomeShares';
-import { CROSS_SECTION_POINTS, crossSectionInto, crossSectionLength } from '../../src/metrics/crossSection';
+import { CROSS_SECTION_POINTS, crossSectionInto, crossSectionLength, segmentPointAt } from '../../src/metrics/crossSection';
 import { computeAnyGolden } from '../../src/metrics/sp2aGoldens';
 import { SPLINE_STATS_POINTS, splineStatPoints, splineStatsInto, splineStatsLength, splineStatsNode, type SplineLeaf } from '../../src/metrics/splineStats';
 import { paintTile, paintTileAbortable } from '../../src/gen/map/tile';
+import { createSurfaceContext } from '../../src/gen/surface/context';
+import { surfaceProbe } from '../../src/gen/surface/probe';
+import { AIR, BEDROCK, DEEPSLATE, SNOW_BLOCK } from '../../src/world/blocks/index';
 import { leafOpts } from '../../src/ui/splineEditor/model';
-import { parseFromWorker, parseToWorker, pointInWindow, SLICE_ROWS, SLICE_SAMPLES, sliceIndex, slicePartIndex, tileInWindow } from '../../src/workers/protocol';
+import { parseFromWorker, parseToWorker, pointInWindow, SLICE_ROWS, SLICE_SAMPLES, sliceIndex, slicePartIndex, tileInWindow, type FromWorker } from '../../src/workers/protocol';
 import { createSliceJob } from '../../src/workers/sliceJob';
 import { createTaskHandler } from '../../src/workers/taskHandler';
 import { ctxFor } from '../harness/gen';
@@ -418,5 +421,122 @@ describe('slice messages and the slice job (SP3a spec §5.1)', () => {
     if (first.type !== 'sliceResult' || other.type !== 'sliceResult' || again.type !== 'sliceResult') throw new Error('no slice');
     expect(sameBytes(again.blocks, first.blocks)).toBe(true);
     expect(sameBytes(other.blocks, first.blocks)).toBe(false);
+  });
+});
+
+describe('surfaceProbe messages and the handler (SP3c spec §6)', () => {
+  const probe = (jobId: unknown, epoch: unknown, x: unknown, y: unknown, z: unknown) => ({ type: 'surfaceProbe', jobId, epoch, x, y, z });
+  const result = (path: unknown, state: unknown = 3, jobId: unknown = 4) => ({ type: 'surfaceProbeResult', jobId, epoch: 2, state, path });
+  /** A surfaceProbe reply's state and path (throws on any other reply). */
+  const probed = (m: FromWorker): { readonly state: number; readonly path: readonly string[] } => {
+    if (m.type !== 'surfaceProbeResult') throw new Error(`not a surfaceProbeResult: ${JSON.stringify(m)}`);
+    return m;
+  };
+  /** The slice job's coast line of the slice tests, whose samples the probe must read alike. */
+  const COAST = { ax: -2030.5, az: -2007.25, bx: -1950.75, bz: -1990.5 };
+
+  test('parseToWorker: integer jobId and epoch, numeric x, y, z (integers, the window and the y range are the handler\'s BAD_ARGS)', () => {
+    for (const m of [probe(1, 0, 5, 70, -9), probe(1, 0, 1.5, 70, 0), probe(1, 0, 524288, 0, 0), probe(1, 0, 0, -65, 0), probe(1, 0, Number.NaN, 0, 0), probe(1, 0, 0, 320.5, Infinity)]) {
+      expect(parseToWorker(m)).not.toBeNull();
+    }
+    for (const m of [probe(1.5, 0, 0, 0, 0), probe(1, null, 0, 0, 0), probe(1, 0, '0', 0, 0), probe(1, 0, 0, undefined, 0), { type: 'surfaceProbe', jobId: 1, epoch: 0, x: 0, y: 0 }]) {
+      expect(parseToWorker(m)).toBeNull();
+    }
+  });
+
+  test('parseFromWorker: surfaceProbeResult carries a state id (a non-negative integer) and a path of rule ids (strings)', () => {
+    for (const m of [result([]), result(['root', 'root.rules[2]', 'root.rules[2].then'], 17), result(['root'], 0, 0)]) expect(parseFromWorker(m)).not.toBeNull();
+    for (const m of [result(null), result('root'), result([1]), result(['root', null]), result([], -1), result([], 1.5), result([], '3'), result([], 3, 1.5), { type: 'surfaceProbeResult', jobId: 4, epoch: 2, state: 3 }, { ...result([]), epoch: null }]) {
+      expect(parseFromWorker(m)).toBeNull();
+    }
+  });
+
+  test('a surfaceProbe replies with surfaceProbe on the configured context: the state and the branch path of the voxel (SP3c spec §3.6)', () => {
+    const h = createTaskHandler();
+    h.handle(configure(3));
+    const sc = createSurfaceContext(ctxFor('42'));
+    // A land column of the slice tests' coast line, from above its top to the bedrock.
+    const x = -1990;
+    const z = -1999;
+    let top: number | null = null;
+    for (let y = 319; y >= -64; y--) {
+      const r = h.handle(probe(10 + y, 3, x, y, z));
+      const want = surfaceProbe(sc, x, y, z);
+      expect(r.msg, `y ${y}`).toEqual({ type: 'surfaceProbeResult', jobId: 10 + y, epoch: 3, state: want.state, path: [...want.path] });
+      expect(r.transfer).toEqual([]);
+      if (top === null && want.state !== AIR) top = y;
+    }
+    expect(top).not.toBeNull();
+    const at = (y: number) => probed(h.handle(probe(1, 3, x, y, z)).msg);
+    // The top voxel always has a rule of the sky-open branch; air above it and y −64 have none.
+    expect(at(top!).path.at(-1)).toMatch(/^root\.rules\[1\]\.then\./);
+    expect(at(top! + 1)).toMatchObject({ state: AIR, path: [] });
+    expect(at(-64)).toMatchObject({ state: BEDROCK, path: [] });
+    expect(at(-30)).toMatchObject({ state: DEEPSLATE, path: ['root', 'root.rules[2]', 'root.rules[2].then'] });
+  });
+
+  test('the probe reads the voxel the slice shows: its state is the slice\'s block at (⌊xᵢ⌋, y, ⌊zᵢ⌋) for every y', () => {
+    const h = createTaskHandler();
+    h.handle(configure(3));
+    const s = h.handle({ type: 'slice', jobId: 1, epoch: 3, ...COAST, from: 0, to: 512 }).msg;
+    if (s.type !== 'sliceResult') throw new Error(`no slice: ${s.type}`);
+    const blocks = new Uint16Array(s.blocks);
+    const states = new Set<number>();
+    for (const i of [0, 137, 300, 511]) {
+      const [px, pz] = segmentPointAt(COAST, i);
+      for (let y = -64; y <= 319; y++) {
+        const r = h.handle(probe(2, 3, Math.floor(px), y, Math.floor(pz))).msg;
+        if (r.type !== 'surfaceProbeResult') throw new Error(`no probe result: ${JSON.stringify(r)}`);
+        expect(r.state, `i ${i}, y ${y}`).toBe(blocks[sliceIndex(i, y)]);
+        states.add(r.state);
+      }
+    }
+    expect(states.size).toBeGreaterThan(4);
+  });
+
+  test('a position that is not integers in the world window, or a y outside −64 … 319, is BAD_ARGS with the job\'s epoch', () => {
+    const h = createTaskHandler();
+    h.handle(configure(3));
+    const reply = (m: unknown) => {
+      const r = h.handle(m).msg;
+      return r.type === 'error' ? [r.code, r.jobId, r.epoch] : [r.type];
+    };
+    for (const [x, y, z] of [[1.5, 70, 0], [0, 70.25, 0], [0, 70, -0.5], [524288, 70, 0], [0, 70, -524289], [Number.NaN, 70, 0], [0, -65, 0], [0, 320, 0], [0, Infinity, 0]] as const) {
+      expect(reply(probe(5, 3, x, y, z)), `${x}, ${y}, ${z}`).toEqual(['BAD_ARGS', 5, 3]);
+    }
+    for (const [x, y, z] of [[-524288, -64, -524288], [524287, 319, 524287]] as const) expect(reply(probe(5, 3, x, y, z))).toEqual(['surfaceProbeResult']);
+  });
+
+  test('before configure NOT_CONFIGURED, at another epoch STALE_EPOCH; with an abort cell it never aborts (as point)', () => {
+    const sab = new SharedArrayBuffer(4);
+    const cell = new Int32Array(sab);
+    const h = createTaskHandler();
+    const reply = (m: unknown) => {
+      const r = h.handle(m).msg;
+      return r.type === 'error' ? [r.code, r.jobId, r.epoch] : [r.type];
+    };
+    expect(reply(probe(1, 3, 0, 70, 0))).toEqual(['NOT_CONFIGURED', 1, 3]);
+    Atomics.store(cell, 0, 3);
+    expect(reply(configure(3, sab))).toEqual(['ready']);
+    expect(reply(probe(2, 2, 0, 70, 0))).toEqual(['STALE_EPOCH', 2, 2]);
+    Atomics.store(cell, 0, 4);
+    expect(reply(probe(3, 3, 0, 70, 0))).toEqual(['surfaceProbeResult']);
+  });
+
+  test('a configure with other params answers with their tree: the snowline moves a snowed top to its palette block', () => {
+    const h = createTaskHandler();
+    h.handle(configure(3));
+    // The snowy_taiga column of the surface-pass tests: every top is snow_block at the defaults.
+    const x = -530 * 16 + 5;
+    const z = -1008 * 16 + 9;
+    let top = 319;
+    while (probed(h.handle(probe(1, 3, x, top, z)).msg).state === AIR) top--;
+    const snowed = probed(h.handle(probe(1, 3, x, top, z)).msg);
+    expect(snowed.state).toBe(SNOW_BLOCK);
+    expect(snowed.path.at(-1)).toBe('root.rules[1].then.rules[2].then.then');
+    h.handle(configure(4, null, { ...DEFAULTS, surface: { ...DEFAULTS.surface, snowline: -1, lapse: 0 } }));
+    const warm = probed(h.handle(probe(2, 4, x, top, z)).msg);
+    expect(warm.state).not.toBe(SNOW_BLOCK);
+    expect(warm.path.at(-1)).toMatch(/^root\.rules\[1\]\.then\.rules\[3\]\.then\./);
   });
 });

@@ -2,6 +2,8 @@ import { describe, expect, test } from 'vitest';
 import { DEFAULTS } from '../../src/core/params/defaults';
 import { createWorkerPool, JobCancelled, poolSize, WorkerFailed, type WorkerLike } from '../../src/engine/workerPool';
 import { BIOME_SHARES_POINTS, biomeSharePoints, biomeSharesInto, biomeSharesLength } from '../../src/metrics/biomeShares';
+import { createSurfaceContext } from '../../src/gen/surface/context';
+import { surfaceProbe } from '../../src/gen/surface/probe';
 import { CROSS_SECTION_POINTS, crossSectionInto, crossSectionLength } from '../../src/metrics/crossSection';
 import { SPLINE_STATS_POINTS, splineStatPoints, splineStatsInto, splineStatsLength, splineStatsNode } from '../../src/metrics/splineStats';
 import type { KnotPath } from '../../src/core/spline/types';
@@ -587,5 +589,57 @@ describe('worker pool: slice jobs (SP3a spec §5.1, split across workers: SP3b s
     for (const w of held) w.flush();
     expect(await req).toBeInstanceOf(JobCancelled);
     expect((await next).epoch).toBe(1);
+  });
+});
+
+describe('worker pool: surfaceProbe jobs (SP3c spec §6)', () => {
+  const probesOf = (log: readonly ToWorker[]) => log.flatMap((m) => (m.type === 'surfaceProbe' ? [[m.jobId, m.epoch, m.x, m.y, m.z]] : []));
+
+  test('one job per probe, at the point priority (−1) by default, resolving with the voxel\'s state and branch path', async () => {
+    const log: ToWorker[] = [];
+    const pool = createWorkerPool(2, () => fakeWorker(log));
+    await pool.configure('42', DEFAULTS);
+    const sc = createSurfaceContext(ctxFor('42'));
+    for (const [x, y, z] of [[-1990, -30, -1999], [-1990, 300, -1999], [-1990, -64, -1999], [5, 64, -9]] as const) {
+      const want = surfaceProbe(sc, x, y, z);
+      expect(await pool.surfaceProbe(x, y, z)).toEqual({ state: want.state, path: [...want.path] });
+    }
+    expect(probesOf(log).map((m) => m.slice(1))).toEqual([[0, -1990, -30, -1999], [0, -1990, 300, -1999], [0, -1990, -64, -1999], [0, 5, 64, -9]]);
+    expect((await pool.surfaceProbe(-1990, -30, -1999)).path).toEqual(['root', 'root.rules[2]', 'root.rules[2].then']);
+    pool.terminate();
+  });
+  test('it runs before preview tiles unless given another priority; probe shows it with level null', async () => {
+    const order: string[] = [];
+    const pool = createWorkerPool(1, () => {
+      const w = fakeWorker([]);
+      const post = w.postMessage.bind(w);
+      w.postMessage = (m) => { if (m.type !== 'configure') order.push(m.type === 'mapTile' ? `tile ${m.tx}` : m.type); post(m); };
+      return w;
+    });
+    const ready = pool.configure('42', DEFAULTS);
+    const jobs = [pool.tile({ layer: 'C', level: 256, tx: 0, tz: 0 }, 0), pool.surfaceProbe(0, 70, 0), pool.tile({ layer: 'C', level: 256, tx: 1, tz: 0 }, 0), pool.surfaceProbe(1, 70, 0, 10)];
+    await ready;
+    await Promise.all(jobs);
+    expect(order).toEqual(['surfaceProbe', 'tile 0', 'tile 1', 'surfaceProbe']);
+    const idle = createWorkerPool(2, () => silentWorker());
+    void settle(idle.surfaceProbe(0, 70, 0));
+    expect(idle.probe().jobs).toEqual([{ worker: 0, type: 'surfaceProbe', epoch: -1, level: null }]);
+    idle.terminate();
+  });
+  test('a bad position rejects with the worker\'s BAD_ARGS; a configure rejects a queued probe with JobCancelled', async () => {
+    const log: ToWorker[] = [];
+    const pool = createWorkerPool(2, () => fakeWorker(log));
+    await pool.configure('42', DEFAULTS);
+    await expect(pool.surfaceProbe(0.5, 70, 0)).rejects.toThrow(/^BAD_ARGS: /);
+    await expect(pool.surfaceProbe(0, 320, 0)).rejects.toThrow(/^BAD_ARGS: /);
+    await expect(pool.surfaceProbe(524288, 70, 0)).rejects.toThrow(/^BAD_ARGS: /);
+    const queued = pool.configure('42', DEFAULTS);
+    const req = settle(pool.surfaceProbe(0, 70, 0));
+    const next = pool.configure('7', DEFAULTS);
+    expect(await settle(queued)).toBeInstanceOf(JobCancelled);
+    expect(await req).toBeInstanceOf(JobCancelled);
+    expect((await next).epoch).toBe(2);
+    expect(probesOf(log).map((m) => m[1])).toEqual([0, 0, 0]);
+    pool.terminate();
   });
 });

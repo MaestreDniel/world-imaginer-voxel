@@ -156,6 +156,9 @@ describe('instrumented pool (SP2b spec §2.8)', () => {
     expect((await pool.point(1, 2)).z).toBe(2);
     // Slice jobs (SP3a spec §5.1) pass through untimed.
     expect((await pool.slice({ ax: 0, az: 0, bx: 40, bz: 3 })).blocks.length).toBe(512 * 384);
+    // So do surfaceProbe jobs (SP3c spec §6).
+    expect(await pool.surfaceProbe(0, -64, 0)).toEqual({ state: 2, path: [] });
+    expect((await pool.surfaceProbe(0, -30, 0)).path).toEqual(['root', 'root.rules[2]', 'root.rules[2].then']);
     pool.terminate();
   });
 });

@@ -9,14 +9,14 @@ import { BIOME_SIZE_SCALE } from '../../src/ui/map/biomeSize';
 import { DEFAULT_MAP_STATE, encodeMapState, type MapState } from '../../src/ui/map/mapState';
 import { presetText } from '../../src/ui/presets/presetFile';
 import { segmentText } from '../../src/ui/crossSection/model';
-import { sliceSummary, voxelReadout } from '../../src/ui/crossSection/voxels';
+import { RULE_WAITING, ruleSuffix, sliceRgba, sliceSummary, VOXEL_COLORS, voxelLegend, voxelReadout } from '../../src/ui/crossSection/voxels';
 import { WATER_SOURCE } from '../../src/world/blocks/fluid';
-import { AIR, BEDROCK, STONE } from '../../src/world/blocks/index';
+import { AIR, BEDROCK, GRASS_BLOCK, SNOW_BLOCK, STONE } from '../../src/world/blocks/index';
 import { SLICE_SAMPLES, sliceIndex } from '../../src/workers/protocol';
 import { REVIEW_SITES } from '../harness/reviewSlices';
 import {
-  canonicalJson, goldenCount, ignoredLog, mapHash, MOUNTAIN_LINE, mountainSummaryOk, parseArgs, parseSegment, presetProblems, readMapHash, sameJson, selftestAllMatch, SIZE_8, VIEWPORT,
-  voxelReadoutOk, voxelSummaryOk, type MapUrlState,
+  canonicalJson, goldenCount, groundTopRow, ignoredLog, mapHash, MOUNTAIN_LINE, mountainSummaryOk, parseArgs, parseSegment, presetProblems, readMapHash, sameJson, selftestAllMatch,
+  SIZE_8, SKY_RGB, VIEWPORT, voxelLegendLabels, voxelReadoutOk, voxelRuleId, voxelSummaryOk, type MapUrlState,
 } from '../tools/uiSmoke';
 
 const EDITED: MapState = {
@@ -105,6 +105,50 @@ describe('UI smoke test: pure parts (SP2b spec §8 Tools, §12)', () => {
     expect(voxelSummaryOk(sliceSummary(s))).toBe(true);
     expect(voxelSummaryOk(sliceSummary({ blocks: new Uint16Array(SLICE_SAMPLES), fluid: new Uint8Array(SLICE_SAMPLES) }))).toBe(false);
     expect(voxelSummaryOk('offset 1.0 to 2.0 blocks · water on 0.0 % of the line')).toBe(false);
+  });
+
+  test('the Voxels readout may end with the hover rule id: … while the probe runs, none, or a rule id from root (SP3c spec §6)', () => {
+    const blocks = new Uint16Array(SLICE_SAMPLES);
+    const fluid = new Uint8Array(SLICE_SAMPLES);
+    blocks[sliceIndex(3, 70)] = GRASS_BLOCK;
+    const base = voxelReadout({ ax: -2030, az: 7, bx: 1950, bz: -1990 }, { blocks, fluid }, 3, 70);
+    expect(base.includes(' · grass_block · ')).toBe(true);
+    const grass = ruleSuffix(['root', 'root.rules[1]', 'root.rules[1].then', 'root.rules[1].then.rules[3]', 'root.rules[1].then.rules[3].then',
+      'root.rules[1].then.rules[3].then.rules[6]', 'root.rules[1].then.rules[3].then.rules[6].then', 'root.rules[1].then.rules[3].then.rules[6].then.rules[7]']);
+    for (const suffix of ['', RULE_WAITING, ruleSuffix([]), grass, ruleSuffix(['root', 'root.rules[2]', 'root.rules[2].then'])]) {
+      expect(voxelReadoutOk(base + suffix), base + suffix).toBe(true);
+    }
+    for (const suffix of [' · rule ', ' · rule stone', ' · rule failed: BAD_ARGS: y', ' · rule root.rules[1] x', ' · rule none · rule none']) {
+      expect(voxelReadoutOk(base + suffix), base + suffix).toBe(false);
+    }
+    expect(voxelRuleId(base + grass)).toBe('root.rules[1].then.rules[3].then.rules[6].then.rules[7]');
+    expect(voxelRuleId(base + ruleSuffix(['root', 'root.rules[0]', 'root.rules[0].then']))).toBe('root.rules[0].then');
+    for (const text of [base, base + RULE_WAITING, base + ruleSuffix([]), 'hover the voxels to read a block']) expect(voxelRuleId(text)).toBeNull();
+  });
+
+  test('the Voxels legend\'s labels: every state of the state-id lock in id order, as the page writes them, then water and the sea line', () => {
+    const labels = voxelLegendLabels(readFileSync(new URL('../stateIds.lock.json', import.meta.url), 'utf8'));
+    expect(labels).toEqual([...voxelLegend().map((k) => k.label), 'water, darker with depth', 'sea level 63']);
+    expect(labels).toHaveLength(27);
+    expect(labels.slice(0, 4)).toEqual(['air', 'stone', 'bedrock', 'grass_block']);
+    expect(() => voxelLegendLabels('{"stone":1,"air":0,"bedrock":3}')).toThrow(/state ids/);
+  });
+
+  test('groundTopRow reads the top solid voxel of a sample column from the slice image: the first row not in the sky colour', () => {
+    expect(SKY_RGB).toEqual(VOXEL_COLORS.sky);
+    const blocks = new Uint16Array(SLICE_SAMPLES);
+    const fluid = new Uint8Array(SLICE_SAMPLES);
+    for (let y = -64; y <= 140; y++) blocks[sliceIndex(10, y)] = y === -64 ? BEDROCK : y === 140 ? SNOW_BLOCK : STONE;
+    blocks[sliceIndex(11, 319)] = GRASS_BLOCK;
+    blocks[sliceIndex(12, -64)] = BEDROCK;
+    const rgba = sliceRgba({ blocks, fluid });
+    // The page reads one sample column, getImageData(i, 0, 1, 384): its 384 pixels top down.
+    const column = (i: number) => Array.from({ length: 4 * 384 }, (_, k) => rgba[4 * (Math.floor(k / 4) * 512 + i) + (k % 4)]!);
+    expect(groundTopRow(column(10))).toBe(319 - 140);
+    expect(groundTopRow(column(11))).toBe(0);
+    expect(groundTopRow(column(12))).toBe(383);
+    expect(groundTopRow(column(13))).toBeNull();
+    expect(() => groundTopRow(new Uint8ClampedArray(16))).toThrow(/384 RGBA pixels/);
   });
 
   test('the cut line\'s text reads back as its segment', () => {

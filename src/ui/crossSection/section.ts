@@ -9,7 +9,9 @@
  *   edge; under the axis a strip with jag. Hovering the plot reads the nearest point.
  * - A `Profile | Voxels` toggle in the header (SP3a spec §5.2). Voxels draws the vertical slice under the line
  *   from one `slice` job: one pixel per sample (512 × 384, row 0 at y 319) scaled to the drawer, in the palette
- *   of voxels.ts, with the sea-level line at 63; hovering reads the voxel (⌊xᵢ⌋, y, ⌊zᵢ⌋), its block and fluid.
+ *   of voxels.ts, with the sea-level line at 63; hovering reads the voxel (⌊xᵢ⌋, y, ⌊zᵢ⌋), its block and fluid, then
+ *   appends the surface rule that made it (SP3c spec §6: ` · rule …` while one `surfaceProbe` job runs, the latest
+ *   hovered voxel wins, then ` · rule <leaf id>` or ` · rule none`; none for a stale slice).
  *   Its legend keys every registry state (air, stone, bedrock and the SP3c terrain palette), water and the sea line.
  * - The current mode's result is requested (model.ts createSectionRequests, createSliceRequests) when the preview
  *   driver settles while the tab is on screen, when the tab or the mode comes on screen while it is settled and
@@ -34,13 +36,16 @@ import {
   areaPath, createSectionRequests, createSliceRequests, flagRuns, nearestPoint, runSpan, sectionRange, sectionReadout, sectionStatus, sectionSummary,
   sectionView, segmentText, waterRuns, SECTION_MODES, type Run, type SectionMode,
 } from './model';
-import { sliceRgba, sliceSummary, SEA_LEVEL_Y, VOXEL_COLORS, voxelCell, voxelLegend, voxelPlots, voxelReadout, voxelRgb, type Rgb } from './voxels';
+import {
+  createRuleReadout, sameRuleCell, sliceRgba, sliceSummary, SEA_LEVEL_Y, VOXEL_COLORS, voxelCell, voxelLegend, voxelPlots, voxelPosition, voxelReadout, voxelRgb,
+  type Rgb, type RuleCell,
+} from './voxels';
 
 export interface SectionDeps {
   readonly session: WorldSession;
   readonly notices: Notices;
-  /** The pool's statistics jobs (spec §5.4) and slice jobs (SP3a spec §5.1). */
-  readonly pool: Pick<WorkerPool, 'stats' | 'slice'>;
+  /** The pool's statistics jobs (spec §5.4), slice jobs (SP3a spec §5.1) and surfaceProbe jobs (SP3c spec §6). */
+  readonly pool: Pick<WorkerPool, 'stats' | 'slice' | 'surfaceProbe'>;
   /** The preview driver: the profile is requested when it settles. */
   readonly driver: Pick<PreviewDriver, 'onSettled' | 'status'>;
   /** Whether the drawer shows this tab. */
@@ -189,6 +194,12 @@ export function createCrossSection(host: HTMLElement, deps: SectionDeps): CrossS
     failed: (m) => deps.notices.show(`voxel slice failed: ${m}`, { kind: 'warn' }),
   });
   const current = () => (mode === 'profile' ? requests : slices);
+  /** The hovered voxel and its SP3a readout text, which an answered rule id is appended to. */
+  let hovered: { readonly cell: RuleCell; readonly text: string } | null = null;
+  const rules = createRuleReadout(deps.pool, () => session.state.epoch, (cell, suffix) => {
+    const h = hovered;
+    if (h !== null && sameRuleCell(h.cell, cell)) readout.textContent = h.text + suffix;
+  });
 
   function draw(p: CrossSectionProfile | null, stale: boolean): void {
     plot = null;
@@ -345,6 +356,8 @@ export function createCrossSection(host: HTMLElement, deps: SectionDeps): CrossS
   };
 
   function hint(): void {
+    hovered = null;
+    rules.hover(null);
     readout.textContent = mode === 'profile' ? HINT : VOXEL_HINT;
     delete readout.dataset['point'];
     delete readout.dataset['y'];
@@ -386,9 +399,10 @@ export function createCrossSection(host: HTMLElement, deps: SectionDeps): CrossS
   }
 
   function hoverVoxels(e: PointerEvent): void {
-    const s = slices.shown?.value;
+    const shownSlice = slices.shown;
     const line = slices.line;
-    if (plot === null || cursor === null || cursorY === null || s === undefined || line === null) return;
+    if (plot === null || cursor === null || cursorY === null || shownSlice === null || line === null) return;
+    const s = shownSlice.value;
     const r = root.getBoundingClientRect();
     const cell = voxelCell(plot, e.clientX - r.left, e.clientY - r.top);
     if (cell === null) {
@@ -405,7 +419,10 @@ export function createCrossSection(host: HTMLElement, deps: SectionDeps): CrossS
     cursorY.setAttribute('y2', String(y));
     cursor.setAttribute('visibility', 'visible');
     cursorY.setAttribute('visibility', 'visible');
-    readout.textContent = voxelReadout(line, s, cell.i, cell.y);
+    const text = voxelReadout(line, s, cell.i, cell.y);
+    const at: RuleCell = { epoch: shownSlice.epoch, ...voxelPosition(line, cell.i, cell.y) };
+    hovered = { cell: at, text };
+    readout.textContent = text + rules.hover(at);
     readout.dataset['point'] = String(cell.i);
     readout.dataset['y'] = String(cell.y);
   }

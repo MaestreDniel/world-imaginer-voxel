@@ -10,6 +10,7 @@
  * SP2b §2.8: `probe()` reports what the workers run, for the latency hook.
  * SP3a §5.1, SP3b §6: a slice request (the voxels under a line) is split into `size` contiguous ranges of its 512
  * samples, as a stats request is; the parts are merged row by row.
+ * SP3c §6: a surfaceProbe request (one voxel's final state and surface-rule branch path) is a single job, as a point.
  */
 import type { MapLevel } from '../core/constants';
 import type { ColumnPoint } from '../gen/column/columnPoint';
@@ -39,6 +40,12 @@ export interface TileResult { readonly rgba: ArrayBuffer; readonly ids: ArrayBuf
 export interface SliceResult {
   readonly blocks: Uint16Array<ArrayBuffer>;
   readonly fluid: Uint8Array<ArrayBuffer>;
+}
+
+/** A voxel's final state id and its surface-rule branch path (rule ids from `root` to the yielding leaf; [] for none). */
+export interface SurfaceProbeResult {
+  readonly state: number;
+  readonly path: readonly string[];
 }
 
 export class JobCancelled extends Error {
@@ -110,6 +117,12 @@ export interface WorkerPool {
    * BAD_ARGS.
    */
   slice(segment: Segment, priority?: number): Promise<SliceResult>;
+  /**
+   * The final state and the surface-rule branch path of voxel (x, y, z) (SP3c spec §6): one job at `priority` (default
+   * −1, the point priority: before preview tiles). Rejects with the worker's BAD_ARGS for non-integers, a position
+   * outside the half-open world window or a y outside −64 … 319, and with JobCancelled when a configure supersedes it.
+   */
+  surfaceProbe(x: number, y: number, z: number, priority?: number): Promise<SurfaceProbeResult>;
   /** Recomputes one golden in a worker (no configure needed). */
   selftest(key: string): Promise<{ actual: string | null; error: string | null }>;
   /** Rejects queued tile jobs matching `pred` with JobCancelled. */
@@ -329,6 +342,12 @@ export function createWorkerPool(size: number, spawn: () => WorkerLike, opts: Po
         }
       });
       return { blocks, fluid };
+    },
+    async surfaceProbe(x, y, z, priority = -1) {
+      const e = epoch;
+      const r = await enqueue(priority, (jobId) => ({ type: 'surfaceProbe', jobId, epoch: e, x, y, z }), null);
+      if (r.type !== 'surfaceProbeResult') throw new Error(`unexpected reply ${r.type}`);
+      return { state: r.state, path: r.path };
     },
     async selftest(key) {
       const r = await enqueue(0, (jobId) => ({ type: 'selftest', jobId, key }), null);

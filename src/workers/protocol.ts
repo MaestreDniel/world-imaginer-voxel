@@ -1,12 +1,13 @@
 /**
  * Task-pool protocol (SP2a spec §5.1): plain messages, validated at both ends by hand-written guards.
- * The main thread sends configure / mapTile / point / spawn / stats / slice / selftest; the worker answers ready /
- * tile / pointResult / spawnResult / statsResult / sliceResult / selftestResult / error. selftest needs no configure.
+ * The main thread sends configure / mapTile / point / spawn / stats / slice / surfaceProbe / selftest; the worker answers
+ * ready / tile / pointResult / spawnResult / statsResult / sliceResult / surfaceProbeResult / selftestResult / error. selftest needs no configure.
  * Configure carries the pool's abort cell (SP2b spec §2.2), errors carry the epoch of the message they
  * answer (§2.3), biome tiles carry the biome id of every pixel (§5.3), and a stats job returns the raw
  * sums of one kind over a range of the kind's fixed point stream (§5.4) or, for crossSection, of the points
  * along its line (§4.5). A slice job (SP3a spec §5.1) returns the voxels of the vertical slice under a line, for a
- * range [from, to) of its 512 samples (SP3b spec §6: the pool splits a slice across its workers).
+ * range [from, to) of its 512 samples (SP3b spec §6: the pool splits a slice across its workers). A surfaceProbe job (SP3c
+ * spec §6) returns one voxel's final state and its surface-rule branch path, for the Voxels mode's hover.
  */
 import { MAP_LEVELS, MAP_TILE_PX, type MapLevel } from '../core/constants';
 import type { StageId } from '../core/ids';
@@ -52,7 +53,13 @@ export interface SliceMsg {
   readonly ax: number; readonly az: number; readonly bx: number; readonly bz: number;
   readonly from: number; readonly to: number;
 }
-export type ToWorker = ConfigureMsg | MapTileMsg | PointMsg | SpawnMsg | StatsMsg | SliceMsg | SelftestMsg;
+/**
+ * The final state and the surface-rule branch path of voxel (x, y, z) (SP3c spec §6). The position is only checked to be
+ * numbers here; non-integers, a position outside the half-open world window or a y outside −64 … 319 is the handler's
+ * BAD_ARGS (`surfaceProbeProblem`).
+ */
+export interface SurfaceProbeMsg { readonly type: 'surfaceProbe'; readonly jobId: number; readonly epoch: number; readonly x: number; readonly y: number; readonly z: number }
+export type ToWorker = ConfigureMsg | MapTileMsg | PointMsg | SpawnMsg | StatsMsg | SliceMsg | SurfaceProbeMsg | SelftestMsg;
 
 export interface ReadyMsg { readonly type: 'ready'; readonly epoch: number; readonly stageHashes: Readonly<Partial<Record<StageId, string>>>; readonly genKey: string }
 /** `ids` (256·256 biome ids, one per pixel) comes with layer 'biome' only. */
@@ -75,7 +82,12 @@ export interface SliceResultMsg {
 }
 /** One recomputed golden: the digest, or the error that stopped it. */
 export interface SelftestResultMsg { readonly type: 'selftestResult'; readonly jobId: number; readonly key: string; readonly actual: string | null; readonly error: string | null }
-export type FromWorker = ReadyMsg | TileMsg | PointResultMsg | SpawnResultMsg | StatsResultMsg | SliceResultMsg | SelftestResultMsg | ErrorMsg;
+/**
+ * A voxel's final state id and its surface-rule branch path: the rule ids from `root` to the yielding leaf, [] for air,
+ * water, y −64 and a stone no rule yields (SP3c spec §3.6).
+ */
+export interface SurfaceProbeResultMsg { readonly type: 'surfaceProbeResult'; readonly jobId: number; readonly epoch: number; readonly state: number; readonly path: readonly string[] }
+export type FromWorker = ReadyMsg | TileMsg | PointResultMsg | SpawnResultMsg | StatsResultMsg | SliceResultMsg | SurfaceProbeResultMsg | SelftestResultMsg | ErrorMsg;
 
 /** Samples along a slice's line, A and B included (the cross-section's 512 points, SP2b spec §4.5). */
 export const SLICE_POINTS = 512;
@@ -108,6 +120,7 @@ export const STATS_KINDS: Readonly<Record<StatsKind, 'split' | 'single'>> = Obje
 const isStatsKind = (v: unknown): v is StatsKind => typeof v === 'string' && Object.hasOwn(STATS_KINDS, v);
 const SEGMENT_KEYS = ['ax', 'az', 'bx', 'bz'] as const;
 const SLICE_KEYS = [...SEGMENT_KEYS, 'from', 'to'] as const;
+const VOXEL_KEYS = ['x', 'y', 'z'] as const;
 /**
  * The shape of a stats job: a point range 0 ≤ from ≤ to and args with a positive integer len; splineStats
  * args also name a leaf (a string) and a node (an array of integers), crossSection args the ends of the line
@@ -131,6 +144,14 @@ const statsOk = (m: Record<string, unknown>): boolean => {
 const WINDOW = 524288;
 /** Whether block position (x, z) lies in the world window [−2^19, 2^19); false for NaN. */
 export const pointInWindow = (x: number, z: number): boolean => x >= -WINDOW && x < WINDOW && z >= -WINDOW && z < WINDOW;
+/**
+ * Why (x, y, z) is not a voxel a surfaceProbe can read (integers, (x, z) in the half-open world window, y in −64 … 319),
+ * or null when it is.
+ */
+export const surfaceProbeProblem = (x: number, y: number, z: number): string | null =>
+  !(Number.isInteger(x) && Number.isInteger(z) && pointInWindow(x, z)) ? `(x, z) = (${x}, ${z}) is not an integer position in the world window`
+    : !(Number.isInteger(y) && y >= -64 && y <= 319) ? `y ${y} is not an integer in −64 … 319`
+      : null;
 /**
  * Whether tile column (or row) `t` of `level` lies in the world window: its blocks [t·s, (t+1)·s) with
  * s = 256 · level. Every level's s divides 2^19, so a tile starting inside the window ends inside it.
@@ -161,6 +182,8 @@ export function parseToWorker(m: unknown): ToWorker | null {
       return statsOk(m) ? (m as unknown as StatsMsg) : null;
     case 'slice':
       return isInt(m['jobId']) && isInt(m['epoch']) && SLICE_KEYS.every((k) => typeof m[k] === 'number') ? (m as unknown as SliceMsg) : null;
+    case 'surfaceProbe':
+      return isInt(m['jobId']) && isInt(m['epoch']) && VOXEL_KEYS.every((k) => typeof m[k] === 'number') ? (m as unknown as SurfaceProbeMsg) : null;
     case 'selftest':
       return isInt(m['jobId']) && typeof m['key'] === 'string' ? (m as unknown as SelftestMsg) : null;
     default:
@@ -195,6 +218,12 @@ export function parseFromWorker(m: unknown): FromWorker | null {
       const n = (to - from) * SLICE_ROWS;
       const ok = blocks instanceof ArrayBuffer && blocks.byteLength === 2 * n && fluid instanceof ArrayBuffer && fluid.byteLength === n;
       return isInt(m['jobId']) && isInt(m['epoch']) && ok ? (m as unknown as SliceResultMsg) : null;
+    }
+    case 'surfaceProbeResult': {
+      const path = m['path'];
+      const state = m['state'];
+      const pathOk = Array.isArray(path) && path.every((id) => typeof id === 'string');
+      return isInt(m['jobId']) && isInt(m['epoch']) && isInt(state) && state >= 0 && pathOk ? (m as unknown as SurfaceProbeResultMsg) : null;
     }
     case 'error': return (m['jobId'] === null || isInt(m['jobId'])) && (m['epoch'] === null || isInt(m['epoch'])) && typeof m['code'] === 'string' && typeof m['message'] === 'string' ? (m as unknown as ErrorMsg) : null;
     default: return null;
