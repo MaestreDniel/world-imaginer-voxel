@@ -131,11 +131,19 @@ export function readField(s: ColumnSample, field: SampleField, x: number, z: num
   return top + (bottom - top) * fz;
 }
 
-/** Level fields from the nearest quart corner (ties to the lower corner). */
-export function readLevel(s: ColumnSample, field: LevelField, x: number, z: number): number {
+/**
+ * The lattice index of world (x, z)'s nearest quart corner inside the sample's column (ties to the lower corner): the
+ * corner `readLevel` reads, so water v0, the surface rules' `lake` and the metrics name the same corner.
+ */
+export function nearestCornerIndex(s: ColumnSample, x: number, z: number): number {
   const i = Math.min(4, Math.max(0, Math.round((x - 16 * s.cx) / 4 - 1e-9)));
   const j = Math.min(4, Math.max(0, Math.round((z - 16 * s.cz) / 4 - 1e-9)));
-  return s.f[field][latticeIndex(i, j)]!;
+  return latticeIndex(i, j);
+}
+
+/** Level fields from the nearest quart corner (ties to the lower corner). */
+export function readLevel(s: ColumnSample, field: LevelField, x: number, z: number): number {
+  return s.f[field][nearestCornerIndex(s, x, z)]!;
 }
 
 const Q: [number, number] = [0, 0];
