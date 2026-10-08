@@ -10,7 +10,7 @@ import { probe } from '../../src/gen/density/probe';
 import { createDensityReference, interpolatedNodes } from '../../src/gen/density/reference';
 import { terrainDensityDebug } from '../../src/gen/pipeline/terrainStage';
 import { fillColumnT } from '../../src/metrics/region';
-import { AIR, STONE } from '../../src/world/blocks/index';
+import { AIR } from '../../src/world/blocks/index';
 import { createStore } from '../../src/world/store/store';
 import { expectGolden } from '../harness/goldens';
 import { metricTest } from '../harness/metric';
@@ -111,8 +111,9 @@ metricTest('DT1', ['mismatches'], async () => {
  *   `OCEAN_FLOOR_WG − 1 + d`, d uniform in −4 … 4 (where a wrong early-out would show). Fast 512, quick 8,192, full
  *   32,768 voxels.
  * - `probeBulk`: voxels whose probe solidity (final > 0, a DensityContext compiled apart from the stage's) differs from
- *   the block (stone ⇔ solid; air, with or without water, ⇔ not solid; any other block counts), plus voxels with mask 1
- *   whose probe value is not `Object.is` the bulk's.
+ *   the block's (SP3c §5.2: solid ⇔ block ≠ air, palette blocks and dithered bedrock included; air, with or without
+ *   water, is not solid; y −64 is never drawn), plus voxels with mask 1 whose probe value is not `Object.is` the
+ *   bulk's.
  * - `compiledReference`: values where the compiled closures and the reference interpreter differ (`Object.is`): the
  *   probe at each voxel, and the 8 corner values of its cell for every `interpolated` node.
  */
@@ -162,7 +163,7 @@ metricTest('DT2', ['probeBulk', 'compiledReference'], () => {
           const value = probe(dc, x, y, z);
           const block = view.block(lx, y, lz);
           voxels++;
-          if ((block !== STONE && block !== AIR) || (value > 0) !== (block === STONE)) {
+          if ((value > 0) !== (block !== AIR)) {
             probeBulk++;
             problems.push(`${at}: (${x}, ${y}, ${z}) probe ${value}, block ${block}`);
           }

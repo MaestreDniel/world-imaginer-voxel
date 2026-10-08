@@ -15,7 +15,7 @@ describe('registry', () => {
   test('the SP2a schema and stage list satisfy every invariant', () => {
     expect(checkRegistry(SCHEMA, STAGES)).toEqual([]);
     expect(ALL).toEqual(['climate', 'shape', 'surfaceEst', 'biome2d', 'terrain', 'decorate', 'light', 'mesh', 'lod', 'map']);
-    expect(STAGES.map((s) => `${s.id}@${s.version}`)).toEqual(['climate@1', 'shape@2', 'surfaceEst@2', 'biome2d@2', 'terrain@2', 'decorate@1', 'light@1', 'mesh@1', 'lod@1', 'map@2']);
+    expect(STAGES.map((s) => `${s.id}@${s.version}`)).toEqual(['climate@1', 'shape@2', 'surfaceEst@2', 'biome2d@2', 'terrain@3', 'decorate@1', 'light@1', 'mesh@1', 'lod@1', 'map@2']);
   });
   test('prefixes match on dot boundaries', () => {
     expect(prefixCovers('climate', 'climate.C')).toBe(true);

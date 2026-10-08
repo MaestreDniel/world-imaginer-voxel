@@ -2,7 +2,7 @@ import { describe, expect, test } from 'vitest';
 import { canonicalJSON } from '../../src/core/params/canonical';
 import { noiseFor, type GenContext } from '../../src/gen/context';
 import { columnWaterV0, terrainStage } from '../../src/gen/pipeline/terrainStage';
-import { createSurfaceContext, surfaceNoiseSource, type SurfaceContext } from '../../src/gen/surface/context';
+import { createSurfaceContext, surfaceContextOf, surfaceNoiseSource, type SurfaceContext } from '../../src/gen/surface/context';
 import { defaultSurfaceRules } from '../../src/gen/surface/defaults';
 import { surfaceProbe, surfaceProbeColumn } from '../../src/gen/surface/probe';
 import { RuleValidationError } from '../../src/gen/surface/rules';
@@ -88,6 +88,23 @@ describe('SurfaceContext (spec §3.6)', () => {
     // The settings follow the context's params.
     const flat = createSurfaceContext(ctxFor('42', { surface: { depthMul: 0, lapse: 0.01, lapseBase: 100 } }), RULES);
     expect([flat.settings.sdMax, flat.settings.depthMul, flat.settings.lapse, flat.settings.lapseBase, flat.compiled.fastPath!.maxSurfaceDepth]).toEqual([3, 0, 0.01, 100, 7]);
+  });
+
+  test('surfaceContextOf memoises the default SurfaceContext per GenContext; createSurfaceContext(ctx) builds the default tree apart', () => {
+    const c = ctxFor('42');
+    const sc = surfaceContextOf(c);
+    expect(surfaceContextOf(c)).toBe(sc);
+    expect(surfaceContextOf(CTX)).not.toBe(sc);
+    expect(sc.ctx).toBe(c);
+    expect(canonicalJSON(sc.rules)).toBe(canonicalJSON(defaultSurfaceRules(c.params.surface)));
+    const apart = createSurfaceContext(c);
+    expect(apart).not.toBe(sc);
+    expect(apart.density).not.toBe(sc.density);
+    expect(canonicalJSON(apart.rules)).toBe(canonicalJSON(sc.rules));
+    // The default tree follows the context's params.
+    const warm = surfaceContextOf(ctxFor('42', { surface: { snowline: -0.9, cliffMinY: 120 } }));
+    expect(canonicalJSON(warm.rules)).toBe(canonicalJSON(defaultSurfaceRules(warm.params)));
+    expect(canonicalJSON(warm.rules)).not.toBe(canonicalJSON(sc.rules));
   });
 
   test('an invalid tree throws a RuleValidationError', () => {

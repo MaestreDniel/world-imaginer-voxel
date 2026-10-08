@@ -82,8 +82,9 @@ describe('fillColumnT (§4, §6.1)', () => {
     expect(() => fillColumnT(s, ctx, 64, 0, NEVER)).toThrow(SlotBusy);
   });
 
-  // Polls 0 … 5 come before the density phase's cell layers 0, 8, …, 40; polls 6 … 29 before sections 0 … 23.
-  test.each([0, 3, 5, 6, 18, 29])('abort at poll %i: false, the record is free and no slot leaks', (k) => {
+  // Polls 0 … 5 come before the density phase's cell layers 0, 8, …, 40; poll 6 before the surface pass (SP3c §1);
+  // polls 7 … 30 before sections 0 … 23.
+  test.each([0, 3, 5, 6, 7, 18, 30])('abort at poll %i: false, the record is free and no slot leaks', (k) => {
     const s = newStore();
     // Warm both pools with a whole column, so the snapshot covers the slots the aborted column takes.
     fillColumnT(s, ctx, 2, 2, NEVER);

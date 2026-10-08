@@ -2,13 +2,14 @@ import { readFileSync, rmSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
 import { describe, expect, test } from 'vitest';
 import { resolveProfile } from '../../src/core/params/profiles';
+import { DEEPSLATE, DIRT, GRASS_BLOCK } from '../../src/world/blocks/index';
 import { GOLDENS_PATH, type GoldensFile } from '../harness/goldens';
 import { genRegion, regionDiff, type GenRegionOptions, type RegionResult } from '../harness/region';
 
 /**
- * The region harness with 4 worker threads against 1 thread (SP3a spec §6.1, §8): a growable SharedArrayBuffer
- * store written by 4 `worker_threads` running `test/harness/regionWorker.ts` from a dynamic queue gives the same
- * region, byte for byte (region hash and per-channel uniform/dense layout), as the in-process plain ArrayBuffer
+ * The region harness with 4 worker threads against 1 thread (SP3a spec §6.1, §8; the surfaced T since SP3c §8): a
+ * growable SharedArrayBuffer store written by 4 `worker_threads` running `test/harness/regionWorker.ts` from a dynamic
+ * queue gives the same region, byte for byte (region hash and per-channel uniform/dense layout), as the in-process plain ArrayBuffer
  * store, in every dispatch order; its 8 × 8 window at (−4, −4) is the recorded `sp3a.region.T.<profile>` golden.
  * The runs are compared byte for byte (`regionDiff`, which also checks the uniform/dense layout); only the golden
  * windows are hashed. DT1 (`test/metrics/region.metric.ts`) compares whole-region hashes.
@@ -51,6 +52,18 @@ describe.each(['default', 'large_biomes'] as const)('genRegion, profile %s', (pr
     const [, ref] = runs[0]!;
     expect(ref.view.hash(-4, -4, 8, 8)).toBe(GOLDENS[`sp3a.region.T.${profile}`]);
     expect(runs[1]![1].view.hash(-4, -4, 8, 8), 'shuffled/4').toBe(GOLDENS[`sp3a.region.T.${profile}`]);
+    // The T is surfaced (SP3c §1): this region is grassland, grass_block over dirt, with deepslate at y −30.
+    let grassOverDirt = 0;
+    let deepslate = 0;
+    for (let x = -128; x < 128; x += 3) {
+      for (let z = -128; z < 128; z += 3) {
+        const top = ref.view.oceanFloorWG(x, z) - 1;
+        if (ref.view.block(x, top, z) === GRASS_BLOCK && ref.view.block(x, top - 1, z) === DIRT) grassOverDirt++;
+        if (ref.view.block(x, -30, z) === DEEPSLATE) deepslate++;
+      }
+    }
+    expect(grassOverDirt).toBeGreaterThan(5000);
+    expect(deepslate).toBeGreaterThan(5000);
     for (const [what, r] of runs) {
       expect(regionDiff(r.view, ref.view), what).toBeNull();
       expect(r.cacheHit).toBe(false);

@@ -1,42 +1,49 @@
 /**
- * The T stage (SP3b spec §4): fills a column's proto set with the density terrain, through the store API.
+ * The T stage (SP3b spec §4, SP3c spec §1): fills a column's proto set with the surfaced density terrain, through the
+ * store API.
  * - Density phase: the column's ColumnSample, then `fillDensityColumn` (columnFn, positionFn, then the 48 cell layers
  *   bottom up with bounds and early-outs) into a column-wide solidity scratch; `stop()` is polled before every 8 cell
  *   layers (6 polls). No section is written in this phase: water needs the whole column's `top`.
- * - Fill: y = −64 bedrock; otherwise density > 0 stone, anything else air.
- * - Water v0: `top` is the y of the highest stone voxel per position (−64 when there is none above bedrock); air with
- *   `top − 12 < y ≤ surfaceWaterLevel` (nearest quart corner, as SP3a) becomes a water source. Air under an overhang
- *   near the water line fills; deeper enclosed air stays dry (aquifers, SP6). A position whose own level is −∞ stays
- *   dry beside a neighbour's water (the v0 "water wall").
+ * - Water v0: `top` is the y of the highest solid voxel per position (−64 when there is none above bedrock); air with
+ *   `top − 12 < y ≤ surfaceWaterLevel` (nearest quart corner, as SP3a) becomes a water source, recorded in a
+ *   column-wide water scratch. Air under an overhang near the water line fills; deeper enclosed air stays dry
+ *   (aquifers, SP6). A position whose own level is −∞ stays dry beside a neighbour's water (the v0 "water wall").
+ * - The per-block surface biome (`readBiome`), computed once into a 256-entry buffer for the surface pass and aux A.
+ * - Surface pass (SP3c §3, `surfacePass`): after a `stop()` poll (the 7th), the whole-column scan and the compiled
+ *   rules (fast path included) give every solid voxel at y −63 … 319 its final state in a column-wide state scratch.
+ * - Fill: y = −64 bedrock; a solid voxel its surface state; anything else air (with its water).
  * - Sections 0 … 23 go to `setProto` in order (each channel uniform or dense), `stop()` before each (24 polls). On a
- *   true `stop()` in either phase the stage returns false at once, without aux.
- * - Aux A: `worldSurfaceWG`, `oceanFloorWG` (SP3a §3.4 predicates) and `surfaceBiome` (the zoomed biome).
+ *   true `stop()` in any phase the stage returns false at once, without aux.
+ * - Aux A: `worldSurfaceWG`, `oceanFloorWG` (SP3a §3.4 predicates) and `surfaceBiome` (the step's biome buffer).
  * - Aux B: `surfaceBiomeQ[qz·4 + qx]` is the 2D biome of lattice point (qx, qz), qx, qz ∈ 0 … 3, before the zoom;
  *   `caveBiomeQ[(qy·4 + qz)·4 + qx]` stays 0 (none) until SP6.
- * The stage keeps one DensityContext per GenContext (module-level WeakMap). Follows the gen determinism rules.
- * `terrainDensityDebug` is a test hook (§2.3, DT2): the same density phase, recording the bulk-evaluated values.
+ * The stage uses the SurfaceContext of its GenContext (`surfaceContextOf`, memoised), which holds the DensityContext.
+ * Follows the gen determinism rules.
+ * `terrainDensityDebug` is a test hook (SP3b §2.3, DT2): the same density phase, recording the bulk-evaluated values.
  */
 import { MIN_Y } from '../../core/constants';
 import { WATER_SOURCE } from '../../world/blocks/fluid';
-import { AIR, BEDROCK, STONE } from '../../world/blocks/index';
+import { AIR, BEDROCK } from '../../world/blocks/index';
 import type { ColumnWriter as ColumnWriterT } from '../../world/store/api';
-import { buildColumnSample, latticeIndex, newColumnSample, readBiome, readLevel, type ColumnSample } from '../column/columnStage';
+import { buildColumnSample, latticeIndex, newColumnSample, readLevel, type ColumnSample } from '../column/columnStage';
 import type { GenContext } from '../context';
 import { fillDensityColumn } from '../density/bounds';
-import { createDensityContext, type DensityContext } from '../density/context';
+import { surfaceContextOf } from '../surface/context';
+import { surfacePass } from '../surface/pass';
+import { fillSurfaceBiomes } from '../surface/scan';
 
 const Y0 = MIN_Y;
 const WATER = WATER_SOURCE;
 const AIR_ = AIR;
-const STONE_ = STONE;
 const BEDROCK_ = BEDROCK;
 const BUILD = buildColumnSample;
 const NEW_SAMPLE = newColumnSample;
 const LATTICE = latticeIndex;
 const LEVEL = readLevel;
-const BIOME = readBiome;
 const FILL = fillDensityColumn;
-const CREATE_DC = createDensityContext;
+const SURFACE_CONTEXT = surfaceContextOf;
+const SURFACE_PASS = surfacePass;
+const SURFACE_BIOMES = fillSurfaceBiomes;
 
 /** Highest y of the world (MIN_Y + 384 − 1); water tops are clamped to [Y0 − 1, TOP_Y], which changes no comparison. */
 const TOP_Y = Y0 + 383;
@@ -46,23 +53,17 @@ const WATER_DEPTH = 12;
 const SAMPLE = NEW_SAMPLE();
 /** Solidity per voxel `((y + 64)·16 + lz)·16 + lx` (fillDensityColumn's order): section sy is 4096·sy … + 4095. */
 const SOLID = new Uint8Array(98304);
-/** Per column index `lz·16 + lx`: the highest stone y (Y0 when none) and ⌊surfaceWaterLevel⌋ (−∞ becomes Y0 − 1). */
+/** Water v0 per voxel (same index): 1 where the stage writes a water source. */
+const WATER_V = new Uint8Array(98304);
+/** The surface pass's final state per solid voxel (same index; other entries stale). */
+const STATE = new Uint16Array(98304);
+/** The per-block surface biome per column index `lz·16 + lx` (SP3c §1 step 4). */
+const BIOMES = new Uint8Array(256);
+/** Per column index `lz·16 + lx`: the highest solid y (Y0 when none) and ⌊surfaceWaterLevel⌋ (−∞ becomes Y0 − 1). */
 const TOP = new Int32Array(256);
 const WATER_TOP = new Int32Array(256);
 const BLOCKS = new Uint16Array(4096);
 const FLUID = new Uint8Array(4096);
-
-const DCS = new WeakMap<GenContext, DensityContext>();
-
-/** The stage's DensityContext for `ctx` (built on first use). */
-function densityContextOf(ctx: GenContext): DensityContext {
-  let dc = DCS.get(ctx);
-  if (dc === undefined) {
-    dc = CREATE_DC(ctx);
-    DCS.set(ctx, dc);
-  }
-  return dc;
-}
 
 const NEVER = (): boolean => false;
 
@@ -105,44 +106,41 @@ export function columnWaterV0(s: ColumnSample, solid: Uint8Array, top: Int32Arra
  * `stop()` returns true. Never commits: the caller does (`fillColumnT`, `metrics/region.ts`).
  */
 export function terrainStage(ctx: GenContext, cx: number, cz: number, w: ColumnWriterT, stop: () => boolean): boolean {
-  const dc = densityContextOf(ctx);
+  const sc = SURFACE_CONTEXT(ctx);
   const s = BUILD(ctx, cx, cz, SAMPLE);
-  if (!FILL(dc.bounds, s, SOLID, null, null, stop)) return false;
-  const x0 = 16 * cx;
-  const z0 = 16 * cz;
-  columnWaterV0(s, SOLID, TOP, WATER_TOP, null);
+  if (!FILL(sc.density.bounds, s, SOLID, null, null, stop)) return false;
+  columnWaterV0(s, SOLID, TOP, WATER_TOP, WATER_V);
+  SURFACE_BIOMES(s, ctx, BIOMES);
+  if (stop()) return false;
+  SURFACE_PASS(sc, s, SOLID, WATER_V, BIOMES, STATE);
   for (let sy = 0; sy < 24; sy++) {
     if (stop()) return false;
-    const yBase = Y0 + 16 * sy;
     const base = 4096 * sy;
-    for (let ly = 0; ly < 16; ly++) {
-      const y = yBase + ly;
-      const row = ly << 8;
-      for (let p = 0; p < 256; p++) {
-        const i = row | p;
-        if (y === Y0) {
-          BLOCKS[i] = BEDROCK_;
-          FLUID[i] = 0;
-        } else if (SOLID[base + i] !== 0) {
-          BLOCKS[i] = STONE_;
-          FLUID[i] = 0;
-        } else {
-          BLOCKS[i] = AIR_;
-          FLUID[i] = y > TOP[p]! - WATER_DEPTH && y <= WATER_TOP[p]! ? WATER : 0;
-        }
+    for (let i = 0; i < 4096; i++) {
+      const j = base + i;
+      if (j < 256) {
+        BLOCKS[i] = BEDROCK_;
+        FLUID[i] = 0;
+      } else if (SOLID[j] !== 0) {
+        BLOCKS[i] = STATE[j]!;
+        FLUID[i] = 0;
+      } else {
+        BLOCKS[i] = AIR_;
+        FLUID[i] = WATER_V[j] !== 0 ? WATER : 0;
       }
     }
     w.setProto(sy, BLOCKS, FLUID);
   }
   const aux = w.aux();
   for (let p = 0; p < 256; p++) {
-    // OCEAN_FLOOR_WG: the highest colliding voxel is the highest stone, or the bedrock at Y0. WORLD_SURFACE_WG also
-    // counts water: when WATER_TOP > top, the air at WATER_TOP is above every stone and > top − 12, so it holds
-    // water; otherwise every water voxel lies below top. Both equal a top-down scan with the SP3a §3.4 predicates.
+    // OCEAN_FLOOR_WG: the highest colliding voxel is the highest solid one (every surface state collides), or the
+    // bedrock at Y0. WORLD_SURFACE_WG also counts water: when WATER_TOP > top, the air at WATER_TOP is above every
+    // solid voxel and > top − 12, so it holds water; otherwise every water voxel lies below top. Both equal a top-down
+    // scan with the SP3a §3.4 predicates.
     const top = TOP[p]!;
     aux.oceanFloorWG[p] = top + 1;
     aux.worldSurfaceWG[p] = Math.max(top, WATER_TOP[p]!) + 1;
-    aux.surfaceBiome[p] = BIOME(s, ctx, x0 + (p & 15), z0 + (p >> 4));
+    aux.surfaceBiome[p] = BIOMES[p]!;
   }
   const q = w.auxB().surfaceBiomeQ;
   for (let qz = 0; qz < 4; qz++) {
@@ -153,7 +151,7 @@ export function terrainStage(ctx: GenContext, cx: number, cz: number, w: ColumnW
 
 /**
  * Test hook (SP3b spec §2.3, DT2 `probeBulk`): runs column (cx, cz)'s density phase exactly as `terrainStage` does
- * (its ColumnSample, then `fillDensityColumn` on the stage's DensityContext of `ctx`, never stopped) and writes no
+ * (its ColumnSample, then `fillDensityColumn` on the DensityContext of `surfaceContextOf(ctx)`, never stopped) and writes no
  * store. `mask` (98,304 entries, index `((y + 64)·16 + lz)·16 + lx`) is cleared, then set to 1 at every voxel the bulk
  * evaluated with `voxelFn`, and `out` (same index) receives those voxels' values; the early-out voxels keep mask 0 and
  * their `out` entries are left untouched. Throws a RangeError when either array is not 98,304 long.
@@ -162,6 +160,5 @@ export function terrainDensityDebug(ctx: GenContext, cx: number, cz: number, out
   if (out.length !== SOLID.length || mask.length !== SOLID.length) {
     throw new RangeError(`terrainDensityDebug: out has ${out.length} and mask ${mask.length} entries, expected ${SOLID.length}`);
   }
-  const dc = densityContextOf(ctx);
-  FILL(dc.bounds, BUILD(ctx, cx, cz, SAMPLE), SOLID, out, mask, NEVER);
+  FILL(SURFACE_CONTEXT(ctx).density.bounds, BUILD(ctx, cx, cz, SAMPLE), SOLID, out, mask, NEVER);
 }

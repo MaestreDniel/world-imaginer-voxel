@@ -7,8 +7,10 @@ import type { GenContext } from '../../src/gen/context';
 import { createDensityContext, type DensityContext } from '../../src/gen/density/context';
 import { probe } from '../../src/gen/density/probe';
 import { terrainDensityDebug, terrainStage } from '../../src/gen/pipeline/terrainStage';
+import { createSurfaceContext, type SurfaceContext } from '../../src/gen/surface/context';
+import { surfaceProbe } from '../../src/gen/surface/probe';
 import { fluidType, WATER_SOURCE } from '../../src/world/blocks/fluid';
-import { AIR, BEDROCK, COLLIDE, STONE } from '../../src/world/blocks/index';
+import { AIR, BEDROCK, COLLIDE, DEEPSLATE, REGISTRY, STONE } from '../../src/world/blocks/index';
 import type { AuxBView, AuxView, ColumnView, ColumnWriter } from '../../src/world/store/api';
 import { protoAt, REC_AUX_B } from '../../src/world/store/columnTable';
 import { PROTO_BLOCKS, PROTO_FLUID } from '../../src/world/store/section';
@@ -49,6 +51,13 @@ const dcOf = (c: GenContext): DensityContext => {
   if (dc === undefined) DCS.set(c, (dc = createDensityContext(c)));
   return dc;
 };
+/** A SurfaceContext built apart from the stage's (its own DensityContext, compiled tree and reference evaluator). */
+const SCS = new Map<GenContext, SurfaceContext>();
+const scOf = (c: GenContext): SurfaceContext => {
+  let sc = SCS.get(c);
+  if (sc === undefined) SCS.set(c, (sc = createSurfaceContext(c)));
+  return sc;
+};
 
 /** Voxel index `((y + 64)·16 + lz)·16 + lx`. */
 const vi = (lx: number, y: number, lz: number): number => ((y + 64) * 16 + lz) * 16 + lx;
@@ -62,9 +71,15 @@ interface Expected {
   readonly swl: Float64Array;
 }
 
-/** §4 from the probe (no early-outs), independently of the stage: fill, `top` and the water v0 rule. */
+/**
+ * SP3b §4 and SP3c §1 independently of the stage: solidity from the density probe (no early-outs), `top` and the
+ * water v0 rule; each solid voxel's state from `surfaceProbe` on a SurfaceContext built apart (the reference
+ * evaluator, never the fast path; it rebuilds the column with its own early-outs, so a solidity disagreement shows as
+ * air).
+ */
 function expectedOf(c: GenContext, cx: number, cz: number): Expected {
   const dc = dcOf(c);
+  const sc = scOf(c);
   const s = buildColumnSample(c, cx, cz, newColumnSample());
   const blocks = new Uint16Array(98304);
   const fluid = new Uint8Array(98304);
@@ -77,7 +92,7 @@ function expectedOf(c: GenContext, cx: number, cz: number): Expected {
       blocks[vi(lx, -64, lz)] = BEDROCK;
       for (let y = -63; y <= 319; y++) {
         const solid = probe(dc, x, y, z) > 0;
-        blocks[vi(lx, y, lz)] = solid ? STONE : AIR;
+        blocks[vi(lx, y, lz)] = solid ? surfaceProbe(sc, x, y, z).state : AIR;
         if (solid) top[lz * 16 + lx] = y;
       }
       swl[lz * 16 + lx] = readLevel(s, 'surfaceWaterLevel', x, z);
@@ -121,10 +136,24 @@ const expectedFor = (c: GenContext, [cx, cz]: readonly [number, number]): Expect
   return e;
 };
 
-describe('fill and water v0 (§4)', () => {
-  test.each(FIXTURES)('%s: every voxel is bedrock at −64, stone ⇔ density > 0, water by the v0 rule', (_name, col) => {
+describe('fill and water v0 (§4), surface (SP3c §1)', () => {
+  test.each(FIXTURES)('%s: every voxel is bedrock at −64, solid ⇔ density > 0 with surfaceProbe\'s state, water by the v0 rule', (_name, col) => {
     const e = expectedFor(ctx, col);
     expect(mismatches(generate(ctx, col[0], col[1]).view, e)).toBe(0);
+  });
+
+  test('the fixtures are surfaced: stone, deepslate and more than one other palette state; never a non-solid state', () => {
+    const seen = new Set<number>();
+    for (const [, [cx, cz]] of FIXTURES) {
+      const v = generate(ctx, cx, cz).view;
+      for (let y = -63; y <= 319; y++) {
+        for (let p = 0; p < 256; p++) seen.add(v.block(p & 15, y, p >> 4));
+      }
+    }
+    expect(seen.has(STONE) && seen.has(DEEPSLATE) && seen.has(BEDROCK)).toBe(true);
+    const others = [...seen].filter((b) => b !== AIR && b !== STONE && b !== DEEPSLATE && b !== BEDROCK);
+    expect(others.length).toBeGreaterThan(3);
+    for (const b of others) expect(COLLIDE[b], REGISTRY.stateKey(b)).not.toBe(0);
   });
 
   test('σ 40 world: the sea and coast columns follow the rule too', () => {
@@ -156,6 +185,48 @@ describe('fill and water v0 (§4)', () => {
     // Both ends are reached: stone in the top row (no row above it to clip), and water within 24 blocks of the bedrock.
     expect(at319).toBeGreaterThan(64);
     expect(deepWater).toBeGreaterThan(256);
+  });
+
+  /**
+   * Surface params at their schema ends (the ?map panel's sliders, a URL): SD_MAX from 3 (depthMul 0) to 47 (depthMul 2
+   * × depth clampSigma 8), fractional clampSigma, every snow, cliff and patch knob at an end. The stage (compiled tree,
+   * fast path with maxSurfaceDepth = SD_MAX + 4) must still equal surfaceProbe's reference walk at every voxel.
+   */
+  const SURFACE_ENDS: ReadonlyArray<readonly [string, ParamsPatch, number]> = [
+    ['depthMul 0 (SD_MAX 3)', { surface: { depthMul: 0 } }, 3],
+    ['depthMul 2, depth clampSigma 8 (SD_MAX 47)', { surface: { depthMul: 2, noises: { depth: { clampSigma: 8 } } } }, 47],
+    ['depthMul 1.35, depth clampSigma 6.7 (SD_MAX 28)', { surface: { depthMul: 1.35, noises: { depth: { clampSigma: 6.7 } } } }, 28],
+    ['lapse 0.05 from y −64, cliffSteep 0 from y −64, patchThreshold 0, snowline 1', { surface: { lapse: 0.05, lapseBase: -64, cliffSteep: 0, cliffMinY: -64, patchThreshold: 0, snowline: 1 } }, 11],
+    ['lapse 0, patchThreshold 3, snowline −1, cliffSteep 8 from y 319', { surface: { lapse: 0, patchThreshold: 3, snowline: -1, cliffSteep: 8, cliffMinY: 319 } }, 11],
+  ];
+  /**
+   * Columns where the depth noise peaks (z up to ≈ 2.9; found by a scan of the row cz −2010 at depthMul 2): DEEP
+   * (windswept_hills, 822 dirt voxels more than 15 below their top) and DEEP_BED (a frozen_river bed: sand and clay
+   * more than 15 below it). At depthMul 2 their skins go deeper than the default fast path's maxSurfaceDepth 15.
+   */
+  const DEEP = [-1916, -2010] as const;
+  const DEEP_BED = [-2031, -2010] as const;
+  test.each(SURFACE_ENDS)('surface params at their ends, %s: land, sea, lake, river and deep-skin columns equal the probe at every voxel', (_name, patch, sdMax) => {
+    const c = ctxFor('42', patch);
+    const sc = scOf(c);
+    expect(sc.settings.sdMax).toBe(sdMax);
+    expect(sc.compiled.fastPath?.maxSurfaceDepth).toBe(sdMax + 4);
+    let deepSkin = 0;
+    for (const [cx, cz] of [LAND, SEA, LAKE, RIVER, DEEP, DEEP_BED]) {
+      const e = expectedOf(c, cx, cz);
+      expect(mismatches(generate(c, cx, cz).view, e), `(${cx}, ${cz})`).toBe(0);
+      // Skin blocks (neither stone, deepslate nor bedrock) more than the default's 15 below a sky-open top.
+      for (let p = 0; p < 256; p++) {
+        for (let y = e.top[p]! - 16; y >= Math.max(-63, e.top[p]! - sdMax - 4); y--) {
+          const b = e.blocks[vi(p & 15, y, p >> 4)]!;
+          if (b === AIR) break;
+          if (b !== STONE && b !== DEEPSLATE && b !== BEDROCK) deepSkin++;
+        }
+      }
+    }
+    // At depthMul 2 deep skins exist where the default's fast path (maxSurfaceDepth 15) would cut them.
+    if (patch.surface?.depthMul === 2) expect(deepSkin).toBeGreaterThan(800);
+    else if (sdMax <= 11) expect(deepSkin).toBe(0);
   });
 
   test('air under an overhang near the water line fills', () => {
@@ -212,7 +283,7 @@ describe('fill and water v0 (§4)', () => {
 
 describe('reduction to SP3a (§3.2)', () => {
   test.each([['land', LAND], ['sea', SEA], ['lake', LAKE], ['coast', COAST], ['overhang', OVERHANG]] as const)(
-    '%s: with σ, jag and detail at 0 the column is SP3a\'s y ≤ ⌊surfaceEst⌋ fill', (_name, [cx, cz]) => {
+    '%s: with σ, jag and detail at 0 the column\'s solidity is SP3a\'s y ≤ ⌊surfaceEst⌋ fill', (_name, [cx, cz]) => {
       const s = buildColumnSample(ctxReduced, cx, cz, newColumnSample());
       // Away from river channels (rivers hard-code σ 0.5 there): every corner column's σ and jag is 0.
       for (let j = 0; j <= 4; j++) {
@@ -228,9 +299,11 @@ describe('reduction to SP3a (§3.2)', () => {
           const top = Math.floor(est);
           const swl = readLevel(s, 'surfaceWaterLevel', 16 * cx + lx, 16 * cz + lz);
           for (let y = -64; y <= 319; y++) {
-            const block = y === -64 ? BEDROCK : y <= top ? STONE : AIR;
+            // Solidity only: the surface pass gives the solid voxels their palette states.
+            const b = view.block(lx, y, lz);
+            const solid = y === -64 ? b === BEDROCK : (b !== AIR) === (y <= top);
             const fluid = y !== -64 && y > top && y <= swl ? WATER_SOURCE : 0;
-            if (view.block(lx, y, lz) !== block || view.fluid(lx, y, lz) !== fluid) bad++;
+            if (!solid || view.fluid(lx, y, lz) !== fluid) bad++;
           }
         }
       }
@@ -299,14 +372,14 @@ describe('sections (§4: each channel uniform or dense)', () => {
       if (blocks.size === 1) expect(b).toBe(-1 - [...blocks][0]!); else expect(b).toBeGreaterThanOrEqual(0);
       if (fluid.size === 1) expect(f).toBe(-1 - [...fluid][0]!); else expect(f).toBeGreaterThanOrEqual(0);
     }
-    // Section 0 holds bedrock and stone (dense); the top section is uniform air without fluid.
+    // Section 0 holds bedrock and deepslate (dense); the top section is uniform air without fluid.
     expect(ints[protoAt(base, 0) + PROTO_BLOCKS]).toBeGreaterThanOrEqual(0);
     expect([ints[protoAt(base, 23) + PROTO_BLOCKS], ints[protoAt(base, 23) + PROTO_FLUID]]).toEqual([-1, -1]);
   });
 
-  test('a full stone section and a full water section of the deep sea cost no slot', () => {
+  test('a full deepslate section (y −48 … −33, far below the land top: Decision 6) and a full water section of the deep sea cost no slot', () => {
     const land = generate(ctx, ...LAND).store;
-    expect(land.table.ints[protoAt(land.table.find(...LAND), 1) + PROTO_BLOCKS]).toBe(-1 - STONE);
+    expect(land.table.ints[protoAt(land.table.find(...LAND), 1) + PROTO_BLOCKS]).toBe(-1 - DEEPSLATE);
     const sea = generate(ctx, ...SEA).store;
     const at = protoAt(sea.table.find(...SEA), 7);
     expect([sea.table.ints[at + PROTO_BLOCKS], sea.table.ints[at + PROTO_FLUID]]).toEqual([-1 - AIR, -1 - WATER_SOURCE]);
@@ -340,33 +413,35 @@ function spyWriter(): { w: ColumnWriter; sections: number[]; aux: number; auxB: 
   };
 }
 
-describe('order and abort (§4)', () => {
-  test('6 density polls, then sections 0 … 23 in order with a poll before each, then aux A and aux B; never commits', () => {
+describe('order and abort (§4, SP3c §1)', () => {
+  test('6 density polls, 1 before the surface pass, then sections 0 … 23 in order with a poll before each, then aux A and aux B; never commits', () => {
     const spy = spyWriter();
     const at: number[] = [];
     expect(terrainStage(ctx, 3, -2, spy.w, () => { at.push(spy.sections.length); return false; })).toBe(true);
     expect(spy.sections).toEqual(Array.from({ length: 24 }, (_, i) => i));
-    // No section is written during the density phase: the first 7 polls see none.
-    expect(at).toEqual([0, 0, 0, 0, 0, 0, ...Array.from({ length: 24 }, (_, i) => i)]);
+    // No section is written during the density phase or the surface pass: the first 8 polls see none.
+    expect(at).toEqual([0, 0, 0, 0, 0, 0, 0, ...Array.from({ length: 24 }, (_, i) => i)]);
     expect([spy.aux, spy.auxB, spy.commits]).toEqual([1, 1, 0]);
   });
 
-  test.each([0, 1, 5, 6, 7, 13, 29])('stop true at poll %i: returns false at once, no aux, no commit', (k) => {
+  test.each([0, 1, 5, 6, 7, 8, 14, 30])('stop true at poll %i: returns false at once, no aux, no commit', (k) => {
     const spy = spyWriter();
     let polls = 0;
     expect(terrainStage(ctx, 3, -2, spy.w, () => ++polls > k)).toBe(false);
-    expect(spy.sections).toEqual(Array.from({ length: Math.max(0, k - 6) }, (_, i) => i));
+    expect(spy.sections).toEqual(Array.from({ length: Math.max(0, k - 7) }, (_, i) => i));
     expect(polls).toBe(k + 1);
     expect([spy.aux, spy.auxB, spy.commits]).toEqual([0, 0, 0]);
   });
 
-  test('a stop in the density phase leaves no trace: the next column is generated as if alone', () => {
-    let polls = 0;
-    expect(terrainStage(ctx, ...OVERHANG, spyWriter().w, () => ++polls > 3)).toBe(false);
-    expect(mismatches(generate(ctx, ...COAST).view, expectedFor(ctx, COAST))).toBe(0);
+  test('a stop in the density phase or at the surface pass leaves no trace: the next column is generated as if alone', () => {
+    for (const k of [3, 6]) {
+      let polls = 0;
+      expect(terrainStage(ctx, ...OVERHANG, spyWriter().w, () => ++polls > k)).toBe(false);
+      expect(mismatches(generate(ctx, ...COAST).view, expectedFor(ctx, COAST))).toBe(0);
+    }
   });
 
-  test('deterministic, and one DensityContext per GenContext: interleaved contexts do not disturb each other', () => {
+  test('deterministic, and one SurfaceContext per GenContext: interleaved contexts do not disturb each other', () => {
     const a = generate(ctx, ...COAST).view;
     const other = generate(ctx40, ...COAST).view;
     const b = generate(ctx, ...COAST).view;
@@ -406,7 +481,7 @@ describe('terrainDensityDebug (§2.3, the DT2 hook)', () => {
             set++;
             const v = probe(dc, 16 * cx + lx, y, 16 * cz + lz);
             if (!Object.is(out[i], v)) bad.push(`${at}: bulk ${out[i]} ≠ probe ${v}`);
-            if (y > -64 && (v > 0 ? STONE : AIR) !== e.blocks[i]) bad.push(`${at}: block ${e.blocks[i]} vs value ${v}`);
+            if (y > -64 && (v > 0) !== (e.blocks[i] !== AIR)) bad.push(`${at}: block ${e.blocks[i]} vs value ${v}`);
           } else if (out[i] !== 12345) {
             bad.push(`${at}: out written at an early-out voxel`);
           }

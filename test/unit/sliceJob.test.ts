@@ -233,10 +233,10 @@ describe('slice job: abort (SP3a spec §5.1)', () => {
     const job = createSliceJob();
     const cols = columnsOf(COAST);
     expect(cols.length).toBeGreaterThanOrEqual(3);
-    // Column 0: 1 job poll + 6 density polls + 24 section polls; column 1: 1 + 30; column 2: its job poll, then the
-    // stage's polls: stop at the 5th (in the density phase) …
+    // Column 0: 1 job poll + 6 density polls + 1 surface-pass poll + 24 section polls; column 1: 1 + 31; column 2: its
+    // job poll, then the stage's polls: stop at the 5th (in the density phase) …
     let calls = 0;
-    expect(job.run(ctx, 0, COAST, () => ++calls > 2 * 31 + 1 + 4)).toBeNull();
+    expect(job.run(ctx, 0, COAST, () => ++calls > 2 * 32 + 1 + 4)).toBeNull();
     const store = job.store!;
     expect(job.resident()).toEqual(cols.slice(0, 2));
     expect(store.table.find(cols[2]![0], cols[2]![1])).toBe(-1);
@@ -245,7 +245,7 @@ describe('slice job: abort (SP3a spec §5.1)', () => {
     // … or in its section phase (before its 5th section): the same.
     const late = createSliceJob();
     let lateCalls = 0;
-    expect(late.run(ctx, 0, COAST, () => ++lateCalls > 2 * 31 + 1 + 6 + 4)).toBeNull();
+    expect(late.run(ctx, 0, COAST, () => ++lateCalls > 2 * 32 + 1 + 7 + 4)).toBeNull();
     expect(late.resident()).toEqual(cols.slice(0, 2));
     expect(live(late.store!)).toEqual(liveOf(cols.slice(0, 2)));
     // A stop before the first column generates nothing.

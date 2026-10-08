@@ -106,7 +106,7 @@ describe('the default rule tree (spec §4)', () => {
     expect(validateRules(tree, NOISES).filter((i) => i.code === 'NEGATIVE_ZERO')).toEqual([]);
   });
 
-  test('it validates against the schema noises, at the defaults and at the leaves\' range ends (only palette keys a branch without the palette lacks may be reported)', () => {
+  test('it validates against the schema noises and the registry (palette included), at the defaults and at the leaves\' range ends', () => {
     const variants: SurfaceParams[] = [
       DEFAULTS.surface,
       paramsWith({ surface: { patchThreshold: 0, snowline: -1, cliffSteep: 0, cliffMinY: -64 } }).surface,
@@ -114,12 +114,9 @@ describe('the default rule tree (spec §4)', () => {
     ];
     for (const p of variants) {
       const tree = defaultSurfaceRules(p);
-      const issues = validateRules(tree, NOISES);
-      for (const i of issues) {
-        expect(i.code, i.path).toBe('UNKNOWN_BLOCK');
-        expect(registeredKey(JSON.parse(i.message.split(' ')[0]!) as string, '')).toBe('');
-      }
-      expect(validateRules(withRegisteredBlocks(tree), NOISES)).toEqual([]);
+      expect(validateRules(tree, NOISES)).toEqual([]);
+      // Every block key is registered: the stand-in copy is exact.
+      expect(canonicalJSON(withRegisteredBlocks(tree))).toBe(canonicalJSON(tree));
     }
     // Far inside §3.1's limits (depth 32, 4096 nodes).
     expect(nodeCount(fixture())).toBeLessThan(200);
