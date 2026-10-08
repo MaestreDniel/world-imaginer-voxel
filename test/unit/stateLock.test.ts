@@ -143,7 +143,7 @@ describe('the real lock against a changed copy of the real definitions', () => {
   test('swapping stone and bedrock is refused', () => {
     const lock = readStateLock();
     expect(lock).not.toBeNull();
-    expect(refusals(lock, [BLOCK_DEFS[0]!, BLOCK_DEFS[2]!, BLOCK_DEFS[1]!])).toEqual([
+    expect(refusals(lock, [BLOCK_DEFS[0]!, BLOCK_DEFS[2]!, BLOCK_DEFS[1]!, ...BLOCK_DEFS.slice(3)])).toEqual([
       'stone is id 2, locked as 1: locked ids never change (append new types at the end)',
       'bedrock is id 1, locked as 2: locked ids never change (append new types at the end)',
     ]);

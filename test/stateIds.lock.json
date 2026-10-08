@@ -1,5 +1,27 @@
 {
   "air": 0,
   "stone": 1,
-  "bedrock": 2
+  "bedrock": 2,
+  "grass_block": 3,
+  "dirt": 4,
+  "coarse_dirt": 5,
+  "podzol": 6,
+  "mud": 7,
+  "sand": 8,
+  "red_sand": 9,
+  "sandstone": 10,
+  "red_sandstone": 11,
+  "gravel": 12,
+  "clay": 13,
+  "calcite": 14,
+  "snow_block": 15,
+  "packed_ice": 16,
+  "deepslate": 17,
+  "terracotta": 18,
+  "white_terracotta": 19,
+  "orange_terracotta": 20,
+  "yellow_terracotta": 21,
+  "brown_terracotta": 22,
+  "red_terracotta": 23,
+  "light_gray_terracotta": 24
 }

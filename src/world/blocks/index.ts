@@ -31,3 +31,27 @@ export const FACE_TEX = REGISTRY.FACE_TEX;
 export const AIR: number = REGISTRY.parseStateKey('air');
 export const STONE: number = REGISTRY.parseStateKey('stone');
 export const BEDROCK: number = REGISTRY.parseStateKey('bedrock');
+
+/** State ids of the SP3c terrain palette (SP3c spec §2.1), 3 … 24, in `BLOCK_DEFS` order. */
+export const GRASS_BLOCK: number = REGISTRY.parseStateKey('grass_block');
+export const DIRT: number = REGISTRY.parseStateKey('dirt');
+export const COARSE_DIRT: number = REGISTRY.parseStateKey('coarse_dirt');
+export const PODZOL: number = REGISTRY.parseStateKey('podzol');
+export const MUD: number = REGISTRY.parseStateKey('mud');
+export const SAND: number = REGISTRY.parseStateKey('sand');
+export const RED_SAND: number = REGISTRY.parseStateKey('red_sand');
+export const SANDSTONE: number = REGISTRY.parseStateKey('sandstone');
+export const RED_SANDSTONE: number = REGISTRY.parseStateKey('red_sandstone');
+export const GRAVEL: number = REGISTRY.parseStateKey('gravel');
+export const CLAY: number = REGISTRY.parseStateKey('clay');
+export const CALCITE: number = REGISTRY.parseStateKey('calcite');
+export const SNOW_BLOCK: number = REGISTRY.parseStateKey('snow_block');
+export const PACKED_ICE: number = REGISTRY.parseStateKey('packed_ice');
+export const DEEPSLATE: number = REGISTRY.parseStateKey('deepslate');
+export const TERRACOTTA: number = REGISTRY.parseStateKey('terracotta');
+export const WHITE_TERRACOTTA: number = REGISTRY.parseStateKey('white_terracotta');
+export const ORANGE_TERRACOTTA: number = REGISTRY.parseStateKey('orange_terracotta');
+export const YELLOW_TERRACOTTA: number = REGISTRY.parseStateKey('yellow_terracotta');
+export const BROWN_TERRACOTTA: number = REGISTRY.parseStateKey('brown_terracotta');
+export const RED_TERRACOTTA: number = REGISTRY.parseStateKey('red_terracotta');
+export const LIGHT_GRAY_TERRACOTTA: number = REGISTRY.parseStateKey('light_gray_terracotta');
