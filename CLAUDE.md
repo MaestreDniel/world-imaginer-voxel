@@ -6,7 +6,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 Browser voxel explorer + editor (TypeScript, Vite, three.js r186 WebGL2 with custom GLSL3 ShaderMaterials). Successor of `09-density-terrain` in [world-imaginer](https://github.com/MaestreDniel/world-imaginer); nothing is imported or copied wholesale from there.
 
-**Status:** SP0 complete (2026-09-27), SP1 complete (2026-09-28), SP2a complete (2026-09-30, GENERATOR_VERSION 3), SP2b complete (2026-10-02, GENERATOR_VERSION 3), SP3a complete (2026-10-03, GENERATOR_VERSION 3), SP3b complete (2026-10-07, GENERATOR_VERSION 4). SP3c is next.
+**Status:** SP0 complete (2026-09-27), SP1 complete (2026-09-28), SP2a complete (2026-09-30, GENERATOR_VERSION 3), SP2b complete (2026-10-02, GENERATOR_VERSION 3), SP3a complete (2026-10-03, GENERATOR_VERSION 3), SP3b complete (2026-10-07, GENERATOR_VERSION 4). SP3c (surface rules and terrain palette) in progress.
 
 ## Source of truth
 

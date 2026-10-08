@@ -17,7 +17,7 @@ export const SUB_PROJECTS: readonly SubProjectId[] = [
  * It is the last SP of the longest prefix of SUB_PROJECTS whose members have all started (SP3a spec §9),
  * so an SP running alongside an earlier unstarted one (SP4 before SP3c or SP3d) does not advance it.
  */
-export const CURRENT_SP: SubProjectId = 'SP3b';
+export const CURRENT_SP: SubProjectId = 'SP3c';
 
 /** Every metric id of master spec §6.4 (E1-E6 expanded). */
 export type MetricId =

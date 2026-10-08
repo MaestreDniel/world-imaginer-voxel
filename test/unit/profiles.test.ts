@@ -23,7 +23,7 @@ describe('profiles', () => {
     expect(resolveProfile('default')).toBe(DEFAULTS);
   });
   test('readiness follows CURRENT_SP', () => {
-    expect(CURRENT_SP).toBe('SP3b');
+    expect(CURRENT_SP).toBe('SP3c');
     expect(PROFILE_IDS.filter((id) => isProfileReady(id))).toEqual(['default', 'large_biomes']);
     expect(isProfileReady('archipelago', 'SP3d')).toBe(true);
     expect(isProfileReady('archipelago', 'SP3c')).toBe(false);
