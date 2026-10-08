@@ -56,6 +56,15 @@
     "rivers.widthVar": "number",
     "shape.jag": "spline",
     "shape.offset": "spline",
-    "shape.sigma": "spline"
+    "shape.sigma": "spline",
+    "surface.cliffMinY": "int",
+    "surface.cliffSteep": "number",
+    "surface.depthMul": "number",
+    "surface.lapse": "number",
+    "surface.lapseBase": "int",
+    "surface.noises.depth": "noise",
+    "surface.noises.patch": "noise",
+    "surface.patchThreshold": "number",
+    "surface.snowline": "number"
   }
 }

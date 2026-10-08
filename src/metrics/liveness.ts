@@ -540,9 +540,20 @@ function stageOf(info: LeafInfo): OutputStage {
   return s as OutputStage;
 }
 
-/** The leaves U2 decides, in schema order: home stage climate, shape, biome2d or terrain (SP3b spec §3.3). */
+/**
+ * Terrain-stage leaves U2 does not decide yet: SP3c's `surface.*` group, which no stage reads before the surface pass
+ * and whose class columns (cliffY, cliffSteep, snowline, patch, badlands) come with SP3c's U2 task (SP3c spec §3.5).
+ * That task empties this list.
+ */
+export const U2_DEFERRED_PREFIXES: readonly string[] = ['surface.'];
+
+/**
+ * The leaves U2 decides, in schema order: home stage climate, shape, biome2d or terrain (SP3b spec §3.3), except the
+ * deferred ones (`U2_DEFERRED_PREFIXES`).
+ */
 export function u2Leaves(): readonly LeafInfo[] {
-  return SCHEMA_.leaves.filter((l) => l.meta.stage !== undefined && OUTPUT_STAGES.includes(l.meta.stage));
+  return SCHEMA_.leaves.filter((l) => l.meta.stage !== undefined && OUTPUT_STAGES.includes(l.meta.stage)
+    && !U2_DEFERRED_PREFIXES.some((pre) => l.path.startsWith(pre)));
 }
 
 /** Cells of a square spiral from (0, 0): ring r ≥ 1 has 8r cells, from (−r, −r) along j = −r, then i = r, j = r, i = −r. */

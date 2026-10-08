@@ -1,5 +1,5 @@
 import { BIOME_TABLE_DEFAULT, BOX_BIOMES } from './biomeDefaults';
-import { boxTable, buildSchema, group, noise, num, spline, type Patch, type Value } from './kit';
+import { boxTable, buildSchema, group, int, noise, num, spline, type Patch, type Value } from './kit';
 import { JAG_DEFAULT, OFFSET_DEFAULT, SIGMA_DEFAULT } from './shapeDefaults';
 
 export { NOISE_FIELD_RANGES } from './kit';
@@ -34,6 +34,12 @@ const densityNoise = (label: string, doc: string, def: { readonly wavelength: nu
   noise(def, { ...TERRAIN, label, doc, wavelength, dims, remapNone: true });
 const amp = (def: number, label: string, doc: string) =>
   num(def, { ...TERRAIN, label, doc, unit: 'blocks', min: 0, max: 8, step: 0.05 });
+
+/** A surface noise (SP3c spec §3.5): 2D, sampled at unscaled world block coordinates; remap 'none' (validateRules refuses another). */
+const surfaceNoise = (label: string, doc: string, def: { readonly wavelength: number; readonly octaves: number }, wavelength: { readonly min: number; readonly max: number }) =>
+  noise(def, { ...TERRAIN, label, doc, wavelength, dims: 2, remapNone: true });
+/** A world height (SP3c spec §3.5): an int in y −64 … 319. */
+const worldY = (def: number, label: string, doc: string) => int(def, { ...TERRAIN, label, doc, unit: 'y', min: -64, max: 319 });
 
 const field = (label: string, doc: string, wavelength: number, octaves: number) =>
   noise({ wavelength, octaves, remap: 'uniform' }, { ...CLIMATE, label, doc, wavelength: { min: 64, max: 20000 }, dims: 2 });
@@ -109,6 +115,19 @@ export const ROOT = group('Parameters', 'World generation parameters.', {
     detailAmpLo: amp(0.6, 'Detail amplitude at E −1', 'Detail amplitude in blocks where E ≤ −1.'),
     detailAmpHi: amp(1.5, 'Detail amplitude at E +1', 'Detail amplitude in blocks where E ≥ 1; linear in (E + 1) / 2 between the two.'),
   }),
+  surface: group('Surface', 'Tunables of the default surface-rule tree (SP3c spec §3.5, §4); its structure is code until SP3d.', {
+    noises: group('Surface noises', 'Noises read by the surface scan and rules, at unscaled world block coordinates (z2, unit sd).', {
+      depth: surfaceNoise('Depth noise', 'Ns of the surface depth: max(0, ⌊3 + 2.75 · depthMul · Ns + 0.25 · hash⌋) blocks of under blocks below each top.', { wavelength: 64, octaves: 2 }, { min: 8, max: 1024 }),
+      patch: surfaceNoise('Patch noise', 'Every surface patch (clay, podzol, coarse dirt, mud, gravel, calcite, packed ice): a patch block where it is ≥ the patch threshold, a second one where it is ≤ −threshold.', { wavelength: 24, octaves: 2 }, { min: 4, max: 512 }),
+    }),
+    depthMul: num(1, { ...TERRAIN, label: 'Surface depth multiplier', doc: 'Multiplies the depth noise in the surface depth (0: three under blocks everywhere).', min: 0, max: 2, step: 0.05 }),
+    snowline: num(-0.6, { ...TERRAIN, label: 'Snowline', doc: 'Tops whose T_eff (T lowered by the lapse rate with height) is below this are snow.', min: -1, max: 1, step: 0.01 }),
+    lapse: num(0.006, { ...TERRAIN, label: 'Lapse rate', doc: 'T_eff = T − lapse · max(0, y − lapse base): temperature drop per block of height.', min: 0, max: 0.05, step: 0.0005 }),
+    lapseBase: worldY(80, 'Lapse base', 'Height from which T_eff falls with the lapse rate.'),
+    cliffSteep: num(1.2, { ...TERRAIN, label: 'Cliff steepness', doc: 'A sky-open run whose position is at least this steep and whose top is at or above the cliff height shows stone (packed ice on frozen peaks).', min: 0, max: 8, step: 0.05 }),
+    cliffMinY: worldY(80, 'Cliff height', 'Lowest run top that can be a cliff.'),
+    patchThreshold: num(0.55, { ...TERRAIN, label: 'Patch threshold', doc: 'A patch block where the patch noise is ≥ this; the second block of a two-block patch where it is ≤ −this (≈ 29 % of the tops each at 0.55).', min: 0, max: 3, step: 0.01 }),
+  }),
 });
 
 export const SCHEMA = buildSchema(ROOT);
@@ -120,3 +139,4 @@ export interface RiverParams extends Value<typeof ROOT.children.rivers> {}
 export interface LakeParams extends Value<typeof ROOT.children.lakes> {}
 export interface BiomeParams extends Value<typeof ROOT.children.biomes> {}
 export interface DensityParams extends Value<typeof ROOT.children.density> {}
+export interface SurfaceParams extends Value<typeof ROOT.children.surface> {}

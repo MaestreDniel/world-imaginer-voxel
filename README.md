@@ -94,6 +94,15 @@ Generated from `src/core/params/schema.ts` by `npm run docs:params`; a test fail
 | `density.noises.detail` | noise | {"amplitudes":null,"clampSigma":3,"double":true,"lacunarity":2,"octaves":1,"persistence":0.5,"remap":"none","wavelength":10,"yScale":1} | wavelength 4 … 256 |  | terrain | Detail noise: Small 3D surface detail outside the interpolation, times the detail amplitude. |
 | `density.detailAmpLo` | number | 0.6 | 0 … 8 | blocks | terrain | Detail amplitude at E −1: Detail amplitude in blocks where E ≤ −1. |
 | `density.detailAmpHi` | number | 1.5 | 0 … 8 | blocks | terrain | Detail amplitude at E +1: Detail amplitude in blocks where E ≥ 1; linear in (E + 1) / 2 between the two. |
+| `surface.noises.depth` | noise | {"amplitudes":null,"clampSigma":3,"double":true,"lacunarity":2,"octaves":2,"persistence":0.5,"remap":"none","wavelength":64,"yScale":1} | wavelength 8 … 1024 |  | terrain | Depth noise: Ns of the surface depth: max(0, ⌊3 + 2.75 · depthMul · Ns + 0.25 · hash⌋) blocks of under blocks below each top. |
+| `surface.noises.patch` | noise | {"amplitudes":null,"clampSigma":3,"double":true,"lacunarity":2,"octaves":2,"persistence":0.5,"remap":"none","wavelength":24,"yScale":1} | wavelength 4 … 512 |  | terrain | Patch noise: Every surface patch (clay, podzol, coarse dirt, mud, gravel, calcite, packed ice): a patch block where it is ≥ the patch threshold, a second one where it is ≤ −threshold. |
+| `surface.depthMul` | number | 1 | 0 … 2 |  | terrain | Surface depth multiplier: Multiplies the depth noise in the surface depth (0: three under blocks everywhere). |
+| `surface.snowline` | number | -0.6 | -1 … 1 |  | terrain | Snowline: Tops whose T_eff (T lowered by the lapse rate with height) is below this are snow. |
+| `surface.lapse` | number | 0.006 | 0 … 0.05 |  | terrain | Lapse rate: T_eff = T − lapse · max(0, y − lapse base): temperature drop per block of height. |
+| `surface.lapseBase` | int | 80 | -64 … 319 | y | terrain | Lapse base: Height from which T_eff falls with the lapse rate. |
+| `surface.cliffSteep` | number | 1.2 | 0 … 8 |  | terrain | Cliff steepness: A sky-open run whose position is at least this steep and whose top is at or above the cliff height shows stone (packed ice on frozen peaks). |
+| `surface.cliffMinY` | int | 80 | -64 … 319 | y | terrain | Cliff height: Lowest run top that can be a cliff. |
+| `surface.patchThreshold` | number | 0.55 | 0 … 3 |  | terrain | Patch threshold: A patch block where the patch noise is ≥ this; the second block of a two-block patch where it is ≤ −this (≈ 29 % of the tops each at 0.55). |
 <!-- params:end -->
 
 ## Requirements

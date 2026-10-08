@@ -55,13 +55,17 @@ describe('SP3b density group (spec §3.3)', () => {
       const r = applyPatch(SCHEMA, DEFAULTS, { density: { noises: { [id]: { remap: 'uniform' } } } });
       expect(r.ok ? [] : r.issues.map((i) => `${i.path} ${i.code}`)).toEqual([`density.noises.${id}.remap REMAP_NOT_ALLOWED`]);
     }
-    expect(PARAM_META.filter((m) => m.remapNone === true).map((m) => m.path)).toEqual(['density.noises.jag', 'density.noises.overhang', 'density.noises.detail']);
+    // ... and SP3c's surface noises (schemaSp3c.test.ts).
+    expect(PARAM_META.filter((m) => m.remapNone === true).map((m) => m.path)).toEqual([
+      'density.noises.jag', 'density.noises.overhang', 'density.noises.detail', 'surface.noises.depth', 'surface.noises.patch',
+    ]);
     // A 2D noise outside the density group keeps 'uniform'.
     expect(applyPatch(SCHEMA, DEFAULTS, { lakes: { rimNoise: { remap: 'uniform' } } }).ok).toBe(true);
   });
 
   test('the terrain stage hashes the density group (U4 registry invariants hold)', () => {
-    expect(STAGES.find((s) => s.id === 'terrain')!.params).toEqual(['density']);
+    // SP3c adds the surface group after it (schemaSp3c.test.ts).
+    expect(STAGES.find((s) => s.id === 'terrain')!.params).toEqual(['density', 'surface']);
     expect(checkRegistry(SCHEMA, STAGES)).toEqual([]);
     const moved = applyPatch(SCHEMA, DEFAULTS, { density: { detailAmpHi: 2 } });
     if (!moved.ok) throw new Error('bad patch');

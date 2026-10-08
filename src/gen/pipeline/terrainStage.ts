@@ -20,7 +20,7 @@ import { MIN_Y } from '../../core/constants';
 import { WATER_SOURCE } from '../../world/blocks/fluid';
 import { AIR, BEDROCK, STONE } from '../../world/blocks/index';
 import type { ColumnWriter as ColumnWriterT } from '../../world/store/api';
-import { buildColumnSample, latticeIndex, newColumnSample, readBiome, readLevel } from '../column/columnStage';
+import { buildColumnSample, latticeIndex, newColumnSample, readBiome, readLevel, type ColumnSample } from '../column/columnStage';
 import type { GenContext } from '../context';
 import { fillDensityColumn } from '../density/bounds';
 import { createDensityContext, type DensityContext } from '../density/context';
@@ -69,6 +69,38 @@ const NEVER = (): boolean => false;
 const clampY = (v: number): number => Math.min(TOP_Y, Math.max(Y0 - 1, v));
 
 /**
+ * Water v0 (§4) of column (s.cx, s.cz) from its solidity `solid` (98,304 entries, index `256·(y + 64) + p`, p = lz·16 +
+ * lx; the y −64 entries are ignored): `top[p]` is the y of the highest solid voxel above the bedrock (Y0 when none)
+ * and `waterTop[p]` ⌊surfaceWaterLevel⌋ at the nearest quart corner, clamped to [Y0 − 1, 319] (−∞ becomes Y0 − 1).
+ * With `water` (98,304 entries), every entry is set: 1 at a non-solid voxel y −63 … 319 with
+ * `top − 12 < y ≤ waterTop` (a water source in T), 0 elsewhere (solid voxels and y −64 included). The T stage and the
+ * surface probe (which rebuilds a column the way T does) share it. Throws a RangeError on other sizes.
+ */
+export function columnWaterV0(s: ColumnSample, solid: Uint8Array, top: Int32Array, waterTop: Int32Array, water: Uint8Array | null): void {
+  if (solid.length !== 98304 || top.length !== 256 || waterTop.length !== 256 || (water !== null && water.length !== 98304)) {
+    throw new RangeError('columnWaterV0: solid and water need 98,304 entries, top and waterTop 256');
+  }
+  const x0 = 16 * s.cx;
+  const z0 = 16 * s.cz;
+  for (let p = 0; p < 256; p++) {
+    let t = Y0;
+    // From y 319 down to y −63 (index 256·(y + 64) + p); bedrock at Y0 is not stone.
+    for (let i = 98048 + p; i >= 256; i -= 256) {
+      if (solid[i] !== 0) { t = (i >> 8) + Y0; break; }
+    }
+    top[p] = t;
+    waterTop[p] = clampY(Math.floor(LEVEL(s, 'surfaceWaterLevel', x0 + (p & 15), z0 + (p >> 4))));
+  }
+  if (water === null) return;
+  water.fill(0, 0, 256);
+  for (let i = 256; i < 98304; i++) {
+    const p = i & 255;
+    const y = (i >> 8) + Y0;
+    water[i] = solid[i] === 0 && y > top[p]! - WATER_DEPTH && y <= waterTop[p]! ? 1 : 0;
+  }
+}
+
+/**
  * Writes column (cx, cz)'s proto sections, aux A and aux B through `w`; false (nothing more written) as soon as
  * `stop()` returns true. Never commits: the caller does (`fillColumnT`, `metrics/region.ts`).
  */
@@ -78,15 +110,7 @@ export function terrainStage(ctx: GenContext, cx: number, cz: number, w: ColumnW
   if (!FILL(dc.bounds, s, SOLID, null, null, stop)) return false;
   const x0 = 16 * cx;
   const z0 = 16 * cz;
-  for (let p = 0; p < 256; p++) {
-    let top = Y0;
-    // From y 319 down to y −63 (index 256·(y + 64) + p); bedrock at Y0 is not stone.
-    for (let i = 98048 + p; i >= 256; i -= 256) {
-      if (SOLID[i] !== 0) { top = (i >> 8) + Y0; break; }
-    }
-    TOP[p] = top;
-    WATER_TOP[p] = clampY(Math.floor(LEVEL(s, 'surfaceWaterLevel', x0 + (p & 15), z0 + (p >> 4))));
-  }
+  columnWaterV0(s, SOLID, TOP, WATER_TOP, null);
   for (let sy = 0; sy < 24; sy++) {
     if (stop()) return false;
     const yBase = Y0 + 16 * sy;

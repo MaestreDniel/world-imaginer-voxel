@@ -8,7 +8,8 @@ import { buildColumnSample, gorgeAt, newColumnSample, riverWetAt, type ColumnSam
 import { cellEligible, lakeCell } from '../../src/gen/column/lakes';
 import { hex64 } from '../../src/core/hash';
 import {
-  cellProbe, findWitness, intendedClass, leafLiveness, livenessColumns, perturbations, stageOutputHash, u2Leaves, type LivenessClass,
+  cellProbe, findWitness, intendedClass, leafLiveness, livenessColumns, perturbations, stageOutputHash, U2_DEFERRED_PREFIXES, u2Leaves,
+  type LivenessClass,
   type LivenessColumn,
 } from '../../src/metrics/liveness';
 import { fillColumnT, regionHash } from '../../src/metrics/region';
@@ -230,9 +231,13 @@ describe('stage output hashes', () => {
 });
 
 describe('the terrain stage in U2 (SP3b spec §3.3)', () => {
-  test('U2 covers the leaves of the climate, shape, biome2d and terrain stages, every density.* leaf among them', () => {
+  test('U2 covers the leaves of the climate, shape, biome2d and terrain stages, every density.* leaf among them, except the deferred surface.* group (SP3c spec §3.5: its class columns are SP3c\'s U2 task)', () => {
     const stages = ['climate', 'shape', 'biome2d', 'terrain'];
-    const expected = SCHEMA.leaves.filter((l) => l.meta.stage !== undefined && stages.includes(l.meta.stage)).map((l) => l.path);
+    expect(U2_DEFERRED_PREFIXES).toEqual(['surface.']);
+    const surface = SCHEMA.leaves.filter((l) => l.path.startsWith('surface.'));
+    expect(surface.length).toBe(9);
+    for (const l of surface) expect(l.meta.stage, l.path).toBe('terrain');
+    const expected = SCHEMA.leaves.filter((l) => l.meta.stage !== undefined && stages.includes(l.meta.stage) && !l.path.startsWith('surface.')).map((l) => l.path);
     expect(u2Leaves().map((l) => l.path)).toEqual(expected);
     const density = SCHEMA.leaves.filter((l) => l.path.startsWith('density.'));
     expect(density.length).toBe(5);

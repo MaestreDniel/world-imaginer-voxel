@@ -1,0 +1,324 @@
+{
+  "kind": "sequence",
+  "rules": [
+    {
+      "kind": "condition",
+      "if": { "kind": "verticalGradient", "trueAtAndBelow": -64, "falseAtAndAbove": -59 },
+      "then": { "kind": "block", "state": "bedrock" }
+    },
+    {
+      "kind": "condition",
+      "if": { "kind": "skyOpen" },
+      "then": {
+        "kind": "sequence",
+        "rules": [
+          {
+            "kind": "condition",
+            "if": { "kind": "not", "if": { "kind": "water", "offset": 0, "runTop": false } },
+            "then": {
+              "kind": "condition",
+              "if": { "kind": "stoneDepth", "side": "floor", "offset": 0, "addSurfaceDepth": true },
+              "then": {
+                "kind": "sequence",
+                "rules": [
+                  {
+                    "kind": "condition",
+                    "if": { "kind": "biome", "biomes": ["warm_ocean", "beach", "snowy_beach"] },
+                    "then": { "kind": "block", "state": "sand" }
+                  },
+                  {
+                    "kind": "condition",
+                    "if": { "kind": "biome", "biomes": ["deep_ocean", "frozen_ocean"] },
+                    "then": { "kind": "block", "state": "gravel" }
+                  },
+                  {
+                    "kind": "condition",
+                    "if": { "kind": "biome", "biomes": ["river", "frozen_river", "swamp"] },
+                    "then": {
+                      "kind": "condition",
+                      "if": { "kind": "noiseThreshold", "noise": "surface.noises.patch", "min": 0.55, "max": 8 },
+                      "then": { "kind": "block", "state": "clay" }
+                    }
+                  },
+                  {
+                    "kind": "condition",
+                    "if": { "kind": "lake" },
+                    "then": {
+                      "kind": "condition",
+                      "if": { "kind": "noiseThreshold", "noise": "surface.noises.patch", "min": 0.55, "max": 8 },
+                      "then": { "kind": "block", "state": "clay" }
+                    }
+                  },
+                  {
+                    "kind": "condition",
+                    "if": { "kind": "biome", "biomes": ["river", "frozen_river"] },
+                    "then": { "kind": "block", "state": "dirt" }
+                  },
+                  {
+                    "kind": "condition",
+                    "if": { "kind": "lake" },
+                    "then": {
+                      "kind": "condition",
+                      "if": { "kind": "water", "offset": -2, "runTop": true },
+                      "then": { "kind": "block", "state": "sand" }
+                    }
+                  },
+                  {
+                    "kind": "condition",
+                    "if": { "kind": "not", "if": { "kind": "water", "offset": -10, "runTop": true } },
+                    "then": { "kind": "block", "state": "gravel" }
+                  },
+                  {
+                    "kind": "condition",
+                    "if": { "kind": "water", "offset": -10, "runTop": false },
+                    "then": { "kind": "block", "state": "sand" }
+                  },
+                  { "kind": "block", "state": "gravel" }
+                ]
+              }
+            }
+          },
+          {
+            "kind": "condition",
+            "if": { "kind": "steep", "min": 1.2 },
+            "then": {
+              "kind": "condition",
+              "if": { "kind": "yAbove", "minY": 80, "runTop": true },
+              "then": {
+                "kind": "condition",
+                "if": { "kind": "stoneDepth", "side": "floor", "offset": 0, "addSurfaceDepth": true },
+                "then": {
+                  "kind": "sequence",
+                  "rules": [
+                    {
+                      "kind": "condition",
+                      "if": { "kind": "biome", "biomes": ["frozen_peaks"] },
+                      "then": { "kind": "block", "state": "packed_ice" }
+                    },
+                    { "kind": "block", "state": "stone" }
+                  ]
+                }
+              }
+            }
+          },
+          {
+            "kind": "condition",
+            "if": { "kind": "stoneDepth", "side": "floor", "offset": 0, "addSurfaceDepth": false },
+            "then": {
+              "kind": "condition",
+              "if": { "kind": "temperatureBelow", "t": -0.6 },
+              "then": { "kind": "block", "state": "snow_block" }
+            }
+          },
+          {
+            "kind": "condition",
+            "if": { "kind": "stoneDepth", "side": "floor", "offset": 0, "addSurfaceDepth": true },
+            "then": {
+              "kind": "sequence",
+              "rules": [
+                {
+                  "kind": "condition",
+                  "if": {
+                    "kind": "biome",
+                    "biomes": ["desert", "beach", "snowy_beach", "river", "frozen_river", "ocean", "deep_ocean", "warm_ocean", "frozen_ocean"]
+                  },
+                  "then": { "kind": "block", "state": "sand" }
+                },
+                {
+                  "kind": "condition",
+                  "if": { "kind": "biome", "biomes": ["badlands"] },
+                  "then": {
+                    "kind": "sequence",
+                    "rules": [
+                      {
+                        "kind": "condition",
+                        "if": { "kind": "stoneDepth", "side": "floor", "offset": 0, "addSurfaceDepth": false },
+                        "then": { "kind": "block", "state": "red_sand" }
+                      },
+                      { "kind": "block", "state": "terracotta" }
+                    ]
+                  }
+                },
+                {
+                  "kind": "condition",
+                  "if": { "kind": "biome", "biomes": ["stony_shore", "volcano"] },
+                  "then": {
+                    "kind": "sequence",
+                    "rules": [
+                      {
+                        "kind": "condition",
+                        "if": { "kind": "stoneDepth", "side": "floor", "offset": 0, "addSurfaceDepth": false },
+                        "then": {
+                          "kind": "condition",
+                          "if": { "kind": "noiseThreshold", "noise": "surface.noises.patch", "min": 0.55, "max": 8 },
+                          "then": { "kind": "block", "state": "gravel" }
+                        }
+                      },
+                      { "kind": "block", "state": "stone" }
+                    ]
+                  }
+                },
+                {
+                  "kind": "condition",
+                  "if": { "kind": "biome", "biomes": ["stony_peaks"] },
+                  "then": {
+                    "kind": "sequence",
+                    "rules": [
+                      {
+                        "kind": "condition",
+                        "if": { "kind": "stoneDepth", "side": "floor", "offset": 0, "addSurfaceDepth": false },
+                        "then": {
+                          "kind": "condition",
+                          "if": { "kind": "noiseThreshold", "noise": "surface.noises.patch", "min": 0.55, "max": 8 },
+                          "then": { "kind": "block", "state": "calcite" }
+                        }
+                      },
+                      { "kind": "block", "state": "stone" }
+                    ]
+                  }
+                },
+                {
+                  "kind": "condition",
+                  "if": { "kind": "biome", "biomes": ["frozen_peaks"] },
+                  "then": {
+                    "kind": "sequence",
+                    "rules": [
+                      {
+                        "kind": "condition",
+                        "if": { "kind": "stoneDepth", "side": "floor", "offset": 0, "addSurfaceDepth": false },
+                        "then": {
+                          "kind": "condition",
+                          "if": { "kind": "noiseThreshold", "noise": "surface.noises.patch", "min": 0.55, "max": 8 },
+                          "then": { "kind": "block", "state": "packed_ice" }
+                        }
+                      },
+                      {
+                        "kind": "condition",
+                        "if": { "kind": "stoneDepth", "side": "floor", "offset": 0, "addSurfaceDepth": false },
+                        "then": { "kind": "block", "state": "snow_block" }
+                      },
+                      { "kind": "block", "state": "stone" }
+                    ]
+                  }
+                },
+                {
+                  "kind": "condition",
+                  "if": { "kind": "biome", "biomes": ["snowy_slopes", "jagged_peaks"] },
+                  "then": {
+                    "kind": "sequence",
+                    "rules": [
+                      {
+                        "kind": "condition",
+                        "if": { "kind": "stoneDepth", "side": "floor", "offset": 0, "addSurfaceDepth": false },
+                        "then": { "kind": "block", "state": "snow_block" }
+                      },
+                      { "kind": "block", "state": "stone" }
+                    ]
+                  }
+                },
+                {
+                  "kind": "condition",
+                  "if": { "kind": "stoneDepth", "side": "floor", "offset": 0, "addSurfaceDepth": false },
+                  "then": {
+                    "kind": "sequence",
+                    "rules": [
+                      {
+                        "kind": "condition",
+                        "if": { "kind": "biome", "biomes": ["taiga", "snowy_taiga"] },
+                        "then": {
+                          "kind": "condition",
+                          "if": { "kind": "noiseThreshold", "noise": "surface.noises.patch", "min": 0.55, "max": 8 },
+                          "then": { "kind": "block", "state": "podzol" }
+                        }
+                      },
+                      {
+                        "kind": "condition",
+                        "if": { "kind": "biome", "biomes": ["taiga", "snowy_taiga"] },
+                        "then": {
+                          "kind": "condition",
+                          "if": { "kind": "noiseThreshold", "noise": "surface.noises.patch", "min": -8, "max": -0.55 },
+                          "then": { "kind": "block", "state": "coarse_dirt" }
+                        }
+                      },
+                      {
+                        "kind": "condition",
+                        "if": { "kind": "biome", "biomes": ["savanna"] },
+                        "then": {
+                          "kind": "condition",
+                          "if": { "kind": "noiseThreshold", "noise": "surface.noises.patch", "min": 0.55, "max": 8 },
+                          "then": { "kind": "block", "state": "coarse_dirt" }
+                        }
+                      },
+                      {
+                        "kind": "condition",
+                        "if": { "kind": "biome", "biomes": ["jungle"] },
+                        "then": {
+                          "kind": "condition",
+                          "if": { "kind": "noiseThreshold", "noise": "surface.noises.patch", "min": 0.55, "max": 8 },
+                          "then": { "kind": "block", "state": "podzol" }
+                        }
+                      },
+                      {
+                        "kind": "condition",
+                        "if": { "kind": "biome", "biomes": ["swamp"] },
+                        "then": {
+                          "kind": "condition",
+                          "if": { "kind": "noiseThreshold", "noise": "surface.noises.patch", "min": 0.55, "max": 8 },
+                          "then": { "kind": "block", "state": "mud" }
+                        }
+                      },
+                      {
+                        "kind": "condition",
+                        "if": { "kind": "biome", "biomes": ["windswept_hills"] },
+                        "then": {
+                          "kind": "condition",
+                          "if": { "kind": "noiseThreshold", "noise": "surface.noises.patch", "min": 0.55, "max": 8 },
+                          "then": { "kind": "block", "state": "gravel" }
+                        }
+                      },
+                      {
+                        "kind": "condition",
+                        "if": { "kind": "biome", "biomes": ["windswept_hills"] },
+                        "then": {
+                          "kind": "condition",
+                          "if": { "kind": "noiseThreshold", "noise": "surface.noises.patch", "min": -8, "max": -0.55 },
+                          "then": { "kind": "block", "state": "stone" }
+                        }
+                      },
+                      { "kind": "block", "state": "grass_block" }
+                    ]
+                  }
+                },
+                { "kind": "block", "state": "dirt" }
+              ]
+            }
+          },
+          {
+            "kind": "condition",
+            "if": { "kind": "stoneDepth", "side": "floor", "offset": 4, "addSurfaceDepth": true },
+            "then": {
+              "kind": "sequence",
+              "rules": [
+                {
+                  "kind": "condition",
+                  "if": { "kind": "biome", "biomes": ["desert", "beach", "snowy_beach"] },
+                  "then": { "kind": "block", "state": "sandstone" }
+                },
+                {
+                  "kind": "condition",
+                  "if": { "kind": "biome", "biomes": ["badlands"] },
+                  "then": { "kind": "block", "state": "red_sandstone" }
+                }
+              ]
+            }
+          }
+        ]
+      }
+    },
+    {
+      "kind": "condition",
+      "if": { "kind": "verticalGradient", "trueAtAndBelow": 0, "falseAtAndAbove": 8 },
+      "then": { "kind": "block", "state": "deepslate" }
+    }
+  ]
+}

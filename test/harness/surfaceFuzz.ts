@@ -292,3 +292,28 @@ export function randomSurfaceRules(next: () => number, opts: SurfaceRulesOptions
   if (style === 'nearMiss') branches.splice(next() % (branches.length + 1), 0, offPath());
   return { kind: 'sequence', rules: branches };
 }
+
+/** `key` when it is a registered canonical state key, else `standIn`. */
+export function registeredKey(key: string, standIn = 'bedrock'): string {
+  try {
+    REGISTRY.parseStateKey(key);
+    return key;
+  } catch {
+    return standIn;
+  }
+}
+
+/**
+ * A deep copy of the rule tree `rules` whose `block` keys the registry lacks are replaced by `standIn` (rule ids and
+ * conditions unchanged). On a branch without the SP3c palette it lets the real default tree (§4) compile with the
+ * three SP3a states; once the palette is registered it is an exact copy, so the same tests then run the real tree.
+ */
+export function withRegisteredBlocks(rules: unknown, standIn = 'bedrock'): unknown {
+  if (Array.isArray(rules)) return rules.map((r: unknown) => withRegisteredBlocks(r, standIn));
+  if (typeof rules !== 'object' || rules === null) return rules;
+  const o = rules as Record<string, unknown>;
+  const out: Record<string, unknown> = {};
+  for (const k of Object.keys(o)) out[k] = withRegisteredBlocks(o[k], standIn);
+  if (o['kind'] === 'block' && typeof o['state'] === 'string') out['state'] = registeredKey(o['state'], standIn);
+  return out;
+}
