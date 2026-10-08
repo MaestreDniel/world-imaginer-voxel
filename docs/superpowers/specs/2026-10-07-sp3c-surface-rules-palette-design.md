@@ -1,7 +1,7 @@
 # SP3c — Surface rules and terrain palette (Design)
 
 Date: 2026-10-07
-Status: Approved by the user (2026-10-07): the design section by section, then the written spec after the adversarial review (§13) and Decision 6 (rule order); the dry run's measurement decided by the user on 2026-10-08 (B2 `riverChannelWater` ≥ 85 %, Decision 2's defects handed to SP10, no retune, `surface.depthMul` unchanged); revised by the implementation-plan dry run (§14). Implemented; exit evidence below (the user's visual review, Firefox and CI after the merge)
+Status: Complete (2026-10-09), at GENERATOR_VERSION 5; exit evidence below (approved by the user on 2026-10-07: the design section by section, then the written spec after the adversarial review, §13, and Decision 6, rule order; the dry run's measurement decided by the user on 2026-10-08: B2 `riverChannelWater` ≥ 85 %, Decision 2's defects handed to SP10, no retune, `surface.depthMul` unchanged; revised by the implementation-plan dry run, §14)
 Parent: master spec `2026-09-26-architecture-design.md`. The sections involved are:
 - §10 SP3c (created by SP3b), whose deliverable, exit and cut line this spec sets;
 - §2.2 (block registry: the palette appends), §3.10 (biomes), §3.11 (surface rules), §3.16 (cross-column consistency), §3.17 (determinism);
@@ -603,7 +603,7 @@ Browser checks (`node test/tools/uiSmoke.ts --profile-dir <tmp> --shots <dir>`: 
 - `?selftest=1`: `✓ all 54 goldens match` (its timing on this branch was not recorded; 6.0 s in the plan's dry run);
 - the Voxels legend lists the 25 states, water and the sea line; the mountain line A (−1664, 8) → B (−640, 8) hovers sample 205's top voxel and reads "(-1254, 209, 8) · stone · no fluid · point 205, 410.8 blocks from A · rule root.rules[1].then.rules[3].then.rules[2].then.rules[1]" (a volcano stone top);
 - no page error apart from the favicon.ico 404.
-- Firefox (`?selftest=1` 54/54) and CI are checked after the merge.
+- Firefox and CI were checked after the merge (below).
 
 Visual review (`docs/superpowers/specs/assets/sp3c/`; world seed '42', default profile, the surfaced T at `GENERATOR_VERSION` 5, one flat colour per block). `npm run docs:review-slices` writes the slices; `slices.json` records each line's site and summary (kinds, top kinds, tops, overhangs, water-wall faces), and a test re-derives every site's needs from the voxels:
 - `slice-coast.png` (1024 × 224, y −64 … 159; x −27136 … −26113, z −31992): warm_ocean floors sand under water (551 sea positions), the stony_shore plain stone with gravel patches, a volcano/badlands needle with bare stone faces and red_sandstone under its skin, jungle grass and podzol over dirt with beach sand at its shore; deepslate below y 0 with the 1 … 7 dither, the bedrock dither at the bottom.
@@ -616,6 +616,13 @@ Visual review (`docs/superpowers/specs/assets/sp3c/`; world seed '42', default p
 - `slice-badlands.png` (1024 × 256, y −64 … 191; x −1760 … −737, z 2056; 873 red_sand tops) and `slice-badlands-zoom.png` (4 px per block, x −1408 … −1153, y 48 … 127): eroded mesas with a red_sand top over horizontal terracotta strata in the seven colours (runs of 1-4 voxels at fixed y, cutting across the sloping skin, 0 … 11 voxels thick) and 4 voxels of red_sandstone, stone on the steep walls. Whether the band skin should be deeper is the user's call.
 - `cross-section-voxels-mountain.png` (1400 × 900, `uiSmoke.ts --shots`): `?map` in relief with the mountain cut line and the drawer in Voxels mode (the full 25-state legend), the hover crosshair on sample 205 with the readout's rule id `root.rules[1].then.rules[3].then.rules[2].then.rules[1]`.
 - The user's approval of this visual review, including the Decision 2 hand-over (above and §11), is the last exit criterion; the assets are committed and the user reviews them before the merge.
+
+Done after the merge (2026-10-09):
+- `main` fast-forwarded to the branch and pushed at 5f8d1e9 (the user chose a local merge; pushing to `main` is authorised; three commit messages were reworded first with the user's go-ahead, tree unchanged), so the CI evidence is the push run: GitHub Actions green in 6 min 8 s (build, the region-cache step, `npm test`, `npm run test:metrics`).
+- Production (Vercel) deployed 5f8d1e9 (the bundle hash equals a local build of it). In headless Chrome: `?selftest=1` `✓ all 54 goldens match (6.4 s)`; `?map` loads with the cross-section's Voxels mode and no page errors.
+- Production, Firefox 157 (the user): `?selftest=1` 54/54, and every `actual` equals `test/goldens.json`; the JSON is in `assets/sp3c/selftest-firefox.json`. The user checked the Voxels mode on a 349-block line, A (20789, −9678) → B (20934, −9996): "ground top y 80 to 147 · no water", the surfaced skin over stone, deepslate below y 0 with the dither and the bedrock floor, the 25-state legend, and the hover readout "(20821, −32, −9749) · deepslate · no fluid · point 113, 77.3 blocks from A · rule root.rules[2].then" (the deepslate rule of Decision 6's order). The user approved the visual review, including the Decision 2 hand-over to SP10; packed ice's colour near the sky's and the thin badlands band skin stay notes for SP8a / SP10.
+
+SP3c is complete (2026-10-09): every §9 exit criterion holds.
 
 ## Threshold log
 
