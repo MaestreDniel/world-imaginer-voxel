@@ -11,13 +11,13 @@ export const TERRAIN_P50_MAX_MS = 4;
  * Every gated bench row, in measurement order: `noise.bench.ts` measures exactly these, and `test/baselines.json`
  * records every one (a unit test), so a row added without `npm run bench:record` cannot stay ungated.
  * SP3a §7 appends `store.alloc` and `terrain.provisional`; SP3b §10 appends `density.corner` and replaces
- * `terrain.provisional` by `terrain.real`.
+ * `terrain.provisional` by `terrain.real`; SP3c §7 appends `surface.column` (the surface pass alone).
  */
 export const BENCH_ROWS = [
   'calibration.fmix32', 'lattice3.slice', 'perm512.slice', 'lattice3.random', 'perm512.random', 'normal.z2.climateC',
   'normal.z3.density3d', 'spline.offset', 'spline.mix3', 'detErf', 'stageHashes.genKey', 'column.point', 'column.sample',
   'map.tile.b64.biome', 'map.tile.b16.relief', 'worker.configure', 'map.tile.b256.biome', 'map.tile.b256.relief',
-  'store.alloc', 'density.corner', 'terrain.real',
+  'store.alloc', 'density.corner', 'terrain.real', 'surface.column',
 ] as const;
 
 export interface BenchKernel {
@@ -34,15 +34,46 @@ export interface Baselines {
   readonly killRatio: number;
 }
 
-export function gateFailures(baseline: Baselines | null, kernels: Readonly<Record<string, BenchKernel>>, killRatio: number): string[] {
+/**
+ * The ratio gates (each row within `P1_MAX_REGRESSION` × its baseline ratio; rows without a baseline are skipped) and
+ * the kill criterion. `exempt` (SP3c §7, `BENCH_EXEMPT`) names rows whose ratio gate is skipped: each such row with a
+ * baseline is printed through `log` as `<row>: exempt, ratio r vs baseline b` instead. The kill criterion is never
+ * exempt (nor are the absolute gates, which `absoluteGateFailures` checks).
+ */
+export function gateFailures(
+  baseline: Baselines | null, kernels: Readonly<Record<string, BenchKernel>>, killRatio: number, exempt: readonly string[],
+  log: (line: string) => void = (line) => { console.log(line); },
+): string[] {
   const out: string[] = [];
   if (killRatio > KILL_RATIO_MAX) out.push(`kill criterion: lattice3/perm512 = ${killRatio.toFixed(3)} > ${KILL_RATIO_MAX}`);
   if (baseline !== null) {
     for (const [name, k] of Object.entries(kernels)) {
       const b = baseline.kernels[name];
       if (b === undefined) continue;
+      if (exempt.includes(name)) {
+        log(`${name}: exempt, ratio ${k.ratio.toFixed(3)} vs baseline ${b.ratio.toFixed(3)}`);
+        continue;
+      }
       if (k.ratio > b.ratio * P1_MAX_REGRESSION) out.push(`${name}: ratio ${k.ratio.toFixed(3)} > ${P1_MAX_REGRESSION} × baseline ${b.ratio.toFixed(3)}`);
     }
+  }
+  return out;
+}
+
+/**
+ * `BENCH_EXEMPT` (SP3c §7): a comma-separated list of `BENCH_ROWS` names (blanks around a name ignored, repeats kept
+ * once); unset or empty → []. An unknown name or an empty entry throws, so a typo fails the run instead of gating
+ * the row. `npm run bench:record` never reads it.
+ */
+export function parseBenchExempt(value: string | undefined): string[] {
+  if (value === undefined || value.trim() === '') return [];
+  const rows: readonly string[] = BENCH_ROWS;
+  const out: string[] = [];
+  for (const raw of value.split(',')) {
+    const name = raw.trim();
+    if (name === '') throw new Error(`BENCH_EXEMPT: empty entry in '${value}'`);
+    if (!rows.includes(name)) throw new Error(`BENCH_EXEMPT: unknown bench row '${name}' (one of ${BENCH_ROWS.join(', ')})`);
+    if (!out.includes(name)) out.push(name);
   }
   return out;
 }

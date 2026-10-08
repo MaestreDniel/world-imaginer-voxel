@@ -14,13 +14,16 @@ import { DENSITY3D_DEF, JAG, OFFSET, SIGMA } from '../../src/metrics/sp1Fixtures
 import { seedFromInput } from '../../src/core/seed';
 import { createGenContext } from '../../src/gen/context';
 import { createDensityContext } from '../../src/gen/density/context';
+import { surfaceContextOf } from '../../src/gen/surface/context';
+import { surfacePass } from '../../src/gen/surface/pass';
+import { surfaceProbeColumn } from '../../src/gen/surface/probe';
 import { columnPoint } from '../../src/gen/column/columnPoint';
 import { buildColumnSample, newColumnSample } from '../../src/gen/column/columnStage';
 import { paintTile } from '../../src/gen/map/tile';
 import { fillColumnT } from '../../src/metrics/region';
 import { createStore } from '../../src/world/store/store';
 import { createTaskHandler } from '../../src/workers/taskHandler';
-import { absoluteGateFailures, BENCH_ROWS, gateFailures, type Baselines, type BenchKernel } from './gates';
+import { absoluteGateFailures, BENCH_ROWS, gateFailures, parseBenchExempt, type Baselines, type BenchKernel } from './gates';
 import { buildPerm, perm3 } from './perm512';
 
 const FMIX = fmix32;
@@ -34,7 +37,10 @@ const BASELINE_PATH = fileURLToPath(new URL('../baselines.json', import.meta.url
 const N = 4096;
 let sink = 0;
 
-test('SP1, SP2a, SP2b, SP3a and SP3b kernels', async ({ bench }) => {
+test('SP1, SP2a, SP2b, SP3a, SP3b and SP3c kernels', async ({ bench }) => {
+  // SP3c §7: BENCH_EXEMPT names rows whose ratio gate is skipped (an unknown name fails here, before measuring);
+  // bench:record never reads it.
+  const exempt = process.env.BENCH_RECORD === '1' ? [] : parseBenchExempt(process.env.BENCH_EXEMPT);
   const ns: Record<string, number> = {};
   const measure = async (name: string, evals: number, fn: () => void, iterations?: number) => {
     const r = await bench(name, fn).run(iterations === undefined ? undefined : { iterations, time: 0, warmupIterations: 1 });
@@ -128,6 +134,22 @@ test('SP1, SP2a, SP2b, SP3a and SP3b kernels', async ({ bench }) => {
     sink += fillColumnT(store, gen, tcx, tcz, never) ? 1 : 0;
     store.freeColumn(tcx, tcz);
   });
+  // SP3c §7: the surface pass alone (`surfacePass`, the function the T stage calls) over one column whose density,
+  // water v0 and surface biome buffer are built once beforehand, as the stage builds them (`surfaceProbeColumn` on
+  // the stage's own SurfaceContext): column (0, 0), the density.corner column.
+  const sc = surfaceContextOf(gen);
+  const sCol = surfaceProbeColumn(sc, 0, 0);
+  const sSample = sc.density.columns.get(0, 0);
+  const states = new Uint16Array(98304);
+  let evaluated = 0;
+  const surfaceRun = await measure('surface.column', 1, () => {
+    evaluated = surfacePass(sc, sSample, sCol.solid, sCol.water, sCol.biomes, states);
+    sink += states[98303]!;
+  });
+  let solidVoxels = 0;
+  for (let i = 256; i < 98304; i++) solidVoxels += sCol.solid[i]!;
+  expect(evaluated, 'surface.column evaluates part of the column (the fast path takes the rest)').toBeGreaterThan(0);
+  expect(evaluated).toBeLessThan(solidVoxels);
   expect(bytePool.slotCount() - bytePool.freeCount(), 'store rows leak no slot').toBe(0);
   expect(store.blockPool.slotCount() - store.blockPool.freeCount(), 'store rows leak no slot').toBe(0);
 
@@ -140,6 +162,7 @@ test('SP1, SP2a, SP2b, SP3a and SP3b kernels', async ({ bench }) => {
   console.log(`killRatio ${killRatio}`);
   console.log(`column.sample p50 ${columnRun.latency.p50.toFixed(3)} ms, p99 (≥ p95) ${columnP95.toFixed(3)} ms`);
   console.log(`terrain.real p50 ${terrainRun.latency.p50.toFixed(3)} ms, p99 ${terrainRun.latency.p99.toFixed(3)} ms`);
+  console.log(`surface.column p50 ${surfaceRun.latency.p50.toFixed(3)} ms, p99 ${surfaceRun.latency.p99.toFixed(3)} ms (column (0, 0): ${evaluated} of ${solidVoxels} solid voxels evaluated)`);
   // Before the record: bench:record refuses to write when an absolute gate fails.
   expect(absoluteGateFailures({ columnP50: columnRun.latency.p50, columnP95, terrainP50: terrainRun.latency.p50 }), 'absolute gates').toEqual([]);
   expect(Number.isFinite(sink)).toBe(true);
@@ -150,5 +173,5 @@ test('SP1, SP2a, SP2b, SP3a and SP3b kernels', async ({ bench }) => {
   }
   const baseline = existsSync(BASELINE_PATH) ? (JSON.parse(readFileSync(BASELINE_PATH, 'utf8')) as Baselines) : null;
   if (baseline === null) console.log('no test/baselines.json yet: P1 not gated (run npm run bench:record on the reference machine)');
-  expect(gateFailures(baseline, kernels, killRatio)).toEqual([]);
+  expect(gateFailures(baseline, kernels, killRatio, exempt)).toEqual([]);
 }, 600_000);
