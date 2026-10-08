@@ -57,7 +57,7 @@ describe('SurfaceContext (spec §3.6)', () => {
   test('surfaceNoiseSource: the GenContext\'s surface.noises.* NormalNoises by schema path, 2D, remap none, clampSigma 3; nothing else', () => {
     const src = surfaceNoiseSource(CTX);
     const next = testRng(81);
-    for (const path of ['surface.noises.depth', 'surface.noises.patch']) {
+    for (const path of ['surface.noises.depth', 'surface.noises.patch', 'surface.noises.bandOffset']) {
       const n = src(path)!;
       expect([n.dims, n.remap, n.clampSigma]).toEqual([2, 'none', 3]);
       const ref = noiseFor(CTX, path);
@@ -66,7 +66,7 @@ describe('SurfaceContext (spec §3.6)', () => {
         expect(Object.is(n.z2(x, z), ref.z2(x, z))).toBe(true);
       }
     }
-    for (const name of ['density.noises.jag', 'surface.noises.bandOffset', 'depth', 'surface.depthMul']) expect(src(name), name).toBeUndefined();
+    for (const name of ['density.noises.jag', 'surface.noises.fuzzB', 'depth', 'surface.depthMul']) expect(src(name), name).toBeUndefined();
   });
 
   test('createSurfaceContext: settings from params.surface, the tree validated, compiled and its reference; its own DensityContext and probe column', () => {
@@ -109,7 +109,7 @@ describe('SurfaceContext (spec §3.6)', () => {
 
   test('an invalid tree throws a RuleValidationError', () => {
     expect(() => createSurfaceContext(CTX, { kind: 'block', state: 'not_a_block' })).toThrow(RuleValidationError);
-    expect(() => createSurfaceContext(CTX, { kind: 'condition', if: { kind: 'noiseThreshold', noise: 'surface.noises.bandOffset', min: 0, max: 1 }, then: { kind: 'block', state: 'stone' } })).toThrow(RuleValidationError);
+    expect(() => createSurfaceContext(CTX, { kind: 'condition', if: { kind: 'noiseThreshold', noise: 'surface.noises.missing', min: 0, max: 1 }, then: { kind: 'block', state: 'stone' } })).toThrow(RuleValidationError);
   });
 });
 
@@ -197,6 +197,35 @@ describe('surfaceProbe (spec §3.6)', () => {
     expect(c.scan.runBottom[r0]).toBe(-63);
     expect(c.scan.runTop[r0]! - -30).toBeGreaterThan(SC.compiled.fastPath!.maxSurfaceDepth);
     expect(surfaceProbe(SC, 16 * cx, -30, 16 * cz)).toEqual({ state: DEEPSLATE, path: ['root', 'root.rules[2]', 'root.rules[2].then'] });
+  });
+
+  test('a badlands band voxel reports the bandlands leaf ([1][3][1][1]) with the stage\'s terracotta; its top the red_sand leaf', () => {
+    // U2's badlands class column (SP3c spec §3.5): every position is badlands, none a cliff.
+    const [cx, cz] = [-26426, -31088] as const;
+    const c = surfaceProbeColumn(SC, cx, cz);
+    const view = viewOf([cx, cz]);
+    /** The rule ids from root to a leaf id. */
+    const chain = (leaf: string): string[] => {
+      const out = ['root'];
+      let id = 'root';
+      for (const m of leaf.slice(4).matchAll(/\.rules\[\d+\]|\.then/g)) out.push((id += m[0]));
+      return out;
+    };
+    const BADLANDS = 'root.rules[1].then.rules[3].then.rules[1].then';
+    let bands = 0;
+    for (let p = 0; p < 256; p++) {
+      const top = c.scan.runTop[c.scan.runFirst[p]!]!;
+      const x = 16 * cx + (p & 15), z = 16 * cz + (p >> 4);
+      expect(surfaceProbe(SC, x, top, z)).toEqual({ state: REGISTRY.parseStateKey('red_sand'), path: chain(`${BADLANDS}.rules[0].then`) });
+      for (let d = 1; d <= c.scan.surfaceDepth[p]!; d++) {
+        const got = surfaceProbe(SC, x, top - d, z);
+        expect(got.path).toEqual(chain(`${BADLANDS}.rules[1]`));
+        expect(REGISTRY.stateKey(got.state)).toMatch(/terracotta$/);
+        expect(got.state).toBe(view.block(p & 15, top - d, p >> 4));
+        bands++;
+      }
+    }
+    expect(bands).toBeGreaterThan(200);
   });
 
   test('[] for air, water and y −64 (bedrock); [] and stone for an overhang\'s stone at y ≥ 8 (a run without sky)', () => {

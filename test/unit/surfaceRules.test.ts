@@ -7,6 +7,7 @@ import {
 const NOISES = new Map<string, SurfaceNoiseInfo>([
   ['surface.noises.patch', { dims: 2, remap: 'none', clampSigma: 3 }],
   ['surface.noises.depth', { dims: 2, remap: 'none', clampSigma: 3 }],
+  ['surface.noises.bandOffset', { dims: 2, remap: 'none', clampSigma: 3 }],
   ['surface.noises.vol', { dims: 3, remap: 'none', clampSigma: 3 }],
   ['surface.noises.flat', { dims: 2, remap: 'uniform', clampSigma: 3 }],
   ['density.noises.jag', { dims: 2, remap: 'none', clampSigma: 3 }],
@@ -33,7 +34,7 @@ const EVERY_CONDITION: readonly Condition[] = [
   { kind: 'lake' },
   { kind: 'not', if: { kind: 'stoneDepth', side: 'ceiling', offset: 3, addSurfaceDepth: false } },
 ];
-const EVERY_KIND: Rule = seq(...EVERY_CONDITION.map((c, k) => cond(c, block(k % 2 === 0 ? 'stone' : 'bedrock'))), block('stone'));
+const EVERY_KIND: Rule = seq(...EVERY_CONDITION.map((c, k) => cond(c, block(k % 2 === 0 ? 'stone' : 'bedrock'))), { kind: 'bandlands' }, block('stone'));
 
 /** n condition rules nested through `then`, ending in a block: the block (and the last `if`) sit at depth n + 1. */
 function chain(n: number): Rule {
@@ -43,8 +44,8 @@ function chain(n: number): Rule {
 }
 
 describe('rule model (SP3c spec §3.1)', () => {
-  test('RULE_KINDS and CONDITION_KINDS list the kinds of the two tables (bandlands is added by the bandlands task)', () => {
-    expect([...RULE_KINDS]).toEqual(['sequence', 'condition', 'block']);
+  test('RULE_KINDS and CONDITION_KINDS list the kinds of the two tables', () => {
+    expect([...RULE_KINDS]).toEqual(['sequence', 'condition', 'block', 'bandlands']);
     expect([...CONDITION_KINDS]).toEqual([
       'biome', 'stoneDepth', 'water', 'yAbove', 'verticalGradient', 'steep', 'noiseThreshold', 'temperatureBelow', 'skyOpen', 'lake', 'not',
     ]);
@@ -57,23 +58,25 @@ describe('rule model (SP3c spec §3.1)', () => {
     expect(sequenceChildId(conditionThenId(sequenceChildId('root', 1)), 3)).toBe('root.rules[1].then.rules[3]');
   });
 
-  test('ruleLeaves lists every block leaf in tree order with its id and the ifs of its condition ancestors', () => {
+  test('ruleLeaves lists every block and bandlands leaf in tree order with its id and the ifs of its condition ancestors', () => {
     const notWater: Condition = { kind: 'not', if: { kind: 'water', offset: 0, runTop: false } };
     const tree = seq(
       cond({ kind: 'verticalGradient', trueAtAndBelow: -64, falseAtAndAbove: -59 }, block('bedrock')),
-      cond(SKY, seq(cond(notWater, cond({ kind: 'lake' }, block('stone'))), block('air'))),
+      cond(SKY, seq(cond(notWater, cond({ kind: 'lake' }, block('stone'))), block('air'), { kind: 'bandlands' })),
       block('stone'),
     );
     const leaves = ruleLeaves(tree);
     expect(leaves.map((l) => l.id)).toEqual([
-      'root.rules[0].then', 'root.rules[1].then.rules[0].then.then', 'root.rules[1].then.rules[1]', 'root.rules[2]',
+      'root.rules[0].then', 'root.rules[1].then.rules[0].then.then', 'root.rules[1].then.rules[1]', 'root.rules[1].then.rules[2]', 'root.rules[2]',
     ]);
-    expect(leaves.map((l) => l.rule.state)).toEqual(['bedrock', 'stone', 'air', 'stone']);
+    expect(leaves.map((l) => (l.rule.kind === 'block' ? l.rule.state : l.rule.kind))).toEqual(['bedrock', 'stone', 'air', 'bandlands', 'stone']);
     expect(leaves[0]!.conditions.map((c) => c.kind)).toEqual(['verticalGradient']);
     expect(leaves[1]!.conditions).toEqual([SKY, notWater, { kind: 'lake' }]);
     expect(leaves[2]!.conditions).toEqual([SKY]);
-    expect(leaves[3]!.conditions).toEqual([]);
+    expect(leaves[3]!.conditions).toEqual([SKY]);
+    expect(leaves[4]!.conditions).toEqual([]);
     expect(ruleLeaves(block('stone'))).toEqual([{ id: 'root', rule: block('stone'), conditions: [] }]);
+    expect(ruleLeaves({ kind: 'bandlands' })).toEqual([{ id: 'root', rule: { kind: 'bandlands' }, conditions: [] }]);
   });
 });
 
@@ -88,8 +91,8 @@ describe('validateRules (SP3c spec §3.1)', () => {
   });
 
   test('unknown kinds, a rule kind where a condition goes and the reverse, non-objects', () => {
-    expect(issues({ kind: 'bandlands' })).toEqual(['root: UNKNOWN_KIND']);
     expect(issues({ kind: 'mystery' })).toEqual(['root: UNKNOWN_KIND']);
+    expect(issues(cond({ kind: 'bandlands' } as unknown as Condition, block('stone')))).toEqual(['root.if: UNKNOWN_KIND']);
     expect(issues({ state: 'stone' })).toEqual(['root: UNKNOWN_KIND']);
     expect(issues(SKY)).toEqual(['root: UNKNOWN_KIND']);
     expect(issues(seq(cond(block('stone') as unknown as Condition, block('stone'))))).toEqual(['root.rules[0].if: UNKNOWN_KIND']);
@@ -120,6 +123,21 @@ describe('validateRules (SP3c spec §3.1)', () => {
     expect(issues(cond({ kind: 'biome', biomes: ['desert', 'atlantis', 7] } as unknown as Condition, block('stone'))))
       .toEqual(['root.if.biomes[1]: UNKNOWN_BIOME', 'root.if.biomes[2]: UNKNOWN_BIOME']);
     expect(issues(cond({ kind: 'biome', biomes: 'desert' } as unknown as Condition, block('stone')))).toEqual(['root.if.biomes: NOT_ARRAY']);
+  });
+
+  test('bandlands: no fields; valid only when the lookup holds a dims-2, remap-none surface.noises.bandOffset (§3.1, §9 cut line)', () => {
+    const band: Rule = { kind: 'bandlands' };
+    expect(issues(band)).toEqual([]);
+    expect(issues(seq(block('stone'), cond(SKY, band)))).toEqual([]);
+    expect(issues({ kind: 'bandlands', state: 'terracotta' })).toEqual(['root.state: UNKNOWN_FIELD']);
+    const without = (info: SurfaceNoiseInfo | undefined) => (value: unknown): string[] =>
+      validateRules(value, (name) => (name === 'surface.noises.bandOffset' ? info : LOOKUP(name))).map((i) => `${i.path}: ${i.code}`);
+    // The band leaf is absent (the §9 cut taken): every bandlands node is rejected at its own path.
+    expect(without(undefined)(seq(block('stone'), cond(SKY, band), band))).toEqual(['root.rules[1].then: NO_BAND_NOISE', 'root.rules[2]: NO_BAND_NOISE']);
+    expect(without(undefined)(block('stone'))).toEqual([]);
+    expect(without({ dims: 3, remap: 'none', clampSigma: 3 })(band)).toEqual(['root: NOISE_DIMS']);
+    expect(without({ dims: 2, remap: 'uniform', clampSigma: 3 })(band)).toEqual(['root: NOISE_REMAP']);
+    expect(validateRules(band, () => undefined)[0]!.message).toMatch(/surface\.noises\.bandOffset/);
   });
 
   test('noiseThreshold.noise must be a dims-2 surface.noises.* leaf (remap none)', () => {

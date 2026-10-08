@@ -32,7 +32,7 @@ const moved = (path: string, value: unknown) => ctxFor('42', patchAt(path, value
 const CLASSES: readonly LivenessClass[] = [
   'land', 'land', 'coast', 'coast', 'channel', 'channel', 'gorge', 'gorge', 'basin', 'basin', 'rim', 'rim',
   'threshold:lakes.p', 'threshold:lakes.minC', 'threshold:lakes.offsetMin', 'threshold:lakes.offsetMax',
-  'cliffY', 'cliffSteep', 'snowline', 'patch',
+  'cliffY', 'cliffSteep', 'snowline', 'patch', 'badlands',
 ];
 /** SP3b's 16 class columns at seed 42 (the third pass leaves them, and every verdict decided on them, unchanged). */
 const SP3B_COLUMNS: readonly (readonly [number, number])[] = [
@@ -46,6 +46,7 @@ const SURFACE_PINS: Readonly<Record<SurfaceClass, readonly [number, number, numb
   cliffSteep: [-24200, -4864, 61],
   snowline: [-25681, 32120, 255],
   patch: [-20548, -22882, 11],
+  badlands: [-26426, -31088, 35],
 };
 const SURFACE_LEAVES = SCHEMA.leaves.filter((l) => l.path.startsWith('surface.')).map((l) => l.path);
 let cached: LivenessColumn[] | null = null;
@@ -68,6 +69,7 @@ function surfaceShows(s: ColumnSample): Record<SurfaceClass, () => boolean> {
     cliffSteep: dry((k) => f.steep[k]! >= 0.85 * p.cliffSteep && f.surfaceEst[k]! >= p.cliffMinY - 8),
     snowline: dry((k) => f.steep[k]! < p.cliffSteep && f.surfaceEst[k]! >= p.lapseBase && Math.abs(tTop(k) - p.snowline) <= 0.1),
     patch: dry((k) => f.steep[k]! < p.cliffSteep && tTop(k) >= p.snowline && PATCH_BIOMES.includes(biomeName(s.biome[k]!))),
+    badlands: dry((k) => biomeName(s.biome[k]!) === 'badlands'),
   };
 }
 
@@ -166,12 +168,12 @@ describe('class columns', () => {
     const empty = [...new Set(CLASSES)].filter((c) => got.filter((g) => g === c).length < CLASSES.filter((e) => e === c).length);
     expect(empty, `empty classes: ${empty.join(', ')}`).toEqual([]);
     expect(got).toEqual(CLASSES);
-    expect(new Set(columns().map((c) => `${c.cx},${c.cz}`)).size).toBe(20);
+    expect(new Set(columns().map((c) => `${c.cx},${c.cz}`)).size).toBe(21);
   });
 
   test('the first 16 columns are SP3b\'s; the surface classes come after, in the third pass order', () => {
     expect(columns().slice(0, 16).map((c) => [c.cx, c.cz])).toEqual(SP3B_COLUMNS);
-    expect(SURFACE_CLASSES).toEqual(['cliffY', 'cliffSteep', 'snowline', 'patch']);
+    expect(SURFACE_CLASSES).toEqual(['cliffY', 'cliffSteep', 'snowline', 'patch', 'badlands']);
     expect(columns().slice(16).map((c) => c.cls)).toEqual(SURFACE_CLASSES);
   });
 
@@ -253,6 +255,7 @@ describe('class columns', () => {
     for (const p of ['surface.snowline', 'surface.lapse', 'surface.lapseBase']) expect(intendedClass(p), p).toBe('snowline');
     for (const p of ['surface.noises.patch', 'surface.patchThreshold']) expect(intendedClass(p), p).toBe('patch');
     for (const p of ['surface.noises.depth', 'surface.depthMul']) expect(intendedClass(p), p).toBe('land');
+    expect(intendedClass('surface.noises.bandOffset')).toBe('badlands');
   });
 });
 
@@ -260,7 +263,7 @@ describe('surface class columns (SP3c spec §3.5)', () => {
   test('the slots serve every surface.* leaf except the depth ones, which belong to land', () => {
     expect(SURFACE_CLASSES.map((c) => surfaceSlotLeaves(c))).toEqual([
       ['surface.cliffMinY'], ['surface.cliffSteep'], ['surface.snowline', 'surface.lapse', 'surface.lapseBase'],
-      ['surface.noises.patch', 'surface.patchThreshold'],
+      ['surface.noises.patch', 'surface.patchThreshold'], ['surface.noises.bandOffset'],
     ]);
     const served = [...SURFACE_CLASSES.flatMap((c) => surfaceSlotLeaves(c)), 'surface.noises.depth', 'surface.depthMul'];
     expect([...served].sort()).toEqual([...SURFACE_LEAVES].sort());
@@ -360,7 +363,7 @@ describe('the terrain stage in U2 (SP3b spec §3.3)', () => {
   test('U2 covers the leaves of the climate, shape, biome2d and terrain stages, every density.* and surface.* leaf among them', () => {
     const stages = ['climate', 'shape', 'biome2d', 'terrain'];
     const surface = SCHEMA.leaves.filter((l) => l.path.startsWith('surface.'));
-    expect(surface.length).toBe(9);
+    expect(surface.length).toBe(10);
     for (const l of surface) expect(l.meta.stage, l.path).toBe('terrain');
     const expected = SCHEMA.leaves.filter((l) => l.meta.stage !== undefined && stages.includes(l.meta.stage)).map((l) => l.path);
     expect(u2Leaves().map((l) => l.path)).toEqual(expected);
@@ -399,6 +402,9 @@ describe('the terrain stage in U2 (SP3b spec §3.3)', () => {
     const terrain: readonly LivenessClass[] = ['land', 'coast', ...SURFACE_CLASSES];
     const others = columns().filter((c) => !terrain.includes(c.cls));
     expect(others.length).toBe(12);
+    // bandOffset acts only through the badlands bands: dead without the badlands column, never a silent pass.
+    expect(leafLiveness(CTX, 'surface.noises.bandOffset', columns().filter((c) => c.cls !== 'badlands')))
+      .toEqual({ path: 'surface.noises.bandOffset', live: false, via: null, cls: 'badlands' });
     expect(leafLiveness(CTX, 'density.noises.detail', others)).toEqual({ path: 'density.noises.detail', live: false, via: null, cls: 'land' });
   });
 });

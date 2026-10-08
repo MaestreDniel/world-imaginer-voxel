@@ -62,6 +62,7 @@
     "surface.depthMul": "number",
     "surface.lapse": "number",
     "surface.lapseBase": "int",
+    "surface.noises.bandOffset": "noise",
     "surface.noises.depth": "noise",
     "surface.noises.patch": "noise",
     "surface.patchThreshold": "number",

@@ -135,7 +135,7 @@
                         "if": { "kind": "stoneDepth", "side": "floor", "offset": 0, "addSurfaceDepth": false },
                         "then": { "kind": "block", "state": "red_sand" }
                       },
-                      { "kind": "block", "state": "terracotta" }
+                      { "kind": "bandlands" }
                     ]
                   }
                 },

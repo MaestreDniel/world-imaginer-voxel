@@ -5,10 +5,11 @@
  *   names a `noiseThreshold` uses), each a dims-2 NormalNoise with remap and clampSigma from its leaf;
  * - `settings`: the scan settings (`surfaceScanSettings(seed, params.surface, noises)`: the depth noise, the depth
  *   hash seed, depthMul, lapse, lapseBase, SD_MAX);
+ * - `bands`: the badlands band table of the world seed (§3.3, bands.ts), built once and shared by both evaluators;
  * - `compiled` and `reference`: the tree (by default `defaultSurfaceRules(params.surface)`) compiled for those
  *   settings, and its reference evaluator (validated once each; a RuleValidationError otherwise);
  * - `probeColumn`: the one-column cache of the last column `surfaceProbe` rebuilt (probe.ts).
- * The badlands band table joins it with the bandlands task (§9). `surfaceContextOf(ctx)` memoises the default
+ * `surfaceContextOf(ctx)` memoises the default
  * SurfaceContext per GenContext (a WeakMap); `createSurfaceContext(ctx)` builds one apart (DT2 uses it, so a
  * shared-state bug cannot hide). Follows the gen determinism rules.
  */
@@ -16,6 +17,7 @@ import type { NormalNoise } from '../../core/noise/normal';
 import { SCHEMA, type SurfaceParams } from '../../core/params/schema';
 import { noiseFor, type GenContext } from '../context';
 import { createDensityContext, type DensityContext } from '../density/context';
+import { bandlandsTable } from './bands';
 import { compileSurfaceRules, type CompiledSurfaceRules } from './compile';
 import { defaultSurfaceRules } from './defaults';
 import { createSurfaceReference, type SurfaceReference } from './reference';
@@ -30,6 +32,7 @@ const REFERENCE = createSurfaceReference;
 const DEFAULT_RULES = defaultSurfaceRules;
 const SETTINGS = surfaceScanSettings;
 const NEW_SCAN = newSurfaceScan;
+const BAND_TABLE = bandlandsTable;
 
 /** The schema path prefix of the surface noises. */
 const PREFIX = 'surface.noises.';
@@ -55,6 +58,8 @@ export interface SurfaceContext {
   readonly density: DensityContext;
   readonly noises: SurfaceNoiseSource;
   readonly settings: SurfaceScanSettings;
+  /** The badlands band table (192 state ids, §3.3) of the context's seed. */
+  readonly bands: Uint16Array;
   /** The validated rule tree. */
   readonly rules: Rule;
   readonly compiled: CompiledSurfaceRules;
@@ -88,10 +93,11 @@ export function createSurfaceContext(ctx: GenContext, rules: unknown = DEFAULT_R
   const params = ctx.params.surface;
   const noises = surfaceNoiseSource(ctx);
   const settings = SETTINGS(ctx.seed, params, noises);
-  const compiled = COMPILE(ctx.seed, rules, noises, settings);
-  const reference = REFERENCE(ctx.seed, rules, noises);
+  const bands = BAND_TABLE(ctx.seed);
+  const compiled = COMPILE(ctx.seed, rules, noises, settings, bands);
+  const reference = REFERENCE(ctx.seed, rules, noises, bands);
   return {
-    ctx, params, density: CREATE_DC(ctx), noises, settings, rules: compiled.rules, compiled, reference,
+    ctx, params, density: CREATE_DC(ctx), noises, settings, bands, rules: compiled.rules, compiled, reference,
     probeColumn: {
       cx: 0, cz: 0, valid: false,
       solid: new Uint8Array(98304), water: new Uint8Array(98304), biomes: new Uint8Array(256), scan: NEW_SCAN(),

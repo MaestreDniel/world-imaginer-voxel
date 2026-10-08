@@ -4,23 +4,27 @@
  * the value of `if` (in `condition` and in `not`). This module holds the types, the kinds, the rule ids (a rule node's
  * id is its path: `root`, `<id>.rules[k]`, `<id>.then`; conditions have no ids), `ruleLeaves` (each leaf with the
  * conditions on its path, for the compiler's fast-path analysis) and `validateRules` with node-path messages.
- * Per-condition semantics are in conditions.ts. The `bandlands` kind is added by the bandlands task (§9's cut line);
- * until then it is an unknown kind.
+ * Per-condition semantics are in conditions.ts. A `bandlands` leaf (the badlands band block, bands.ts) is valid only
+ * when the noise lookup knows `surface.noises.bandOffset` (§3.1: rejected when the band leaf is absent, §9's cut line).
  */
 import { SURFACE_BIOMES, type SurfaceBiome } from '../biomes/registry';
 import { REGISTRY } from '../../world/blocks/index';
+import { BAND_OFFSET_NOISE } from './bands';
 
 const BIOMES = SURFACE_BIOMES;
 const BLOCKS = REGISTRY;
+const BAND_NOISE = BAND_OFFSET_NOISE;
 
 export interface SequenceRule { readonly kind: 'sequence'; readonly rules: readonly Rule[] }
 export interface ConditionRule { readonly kind: 'condition'; readonly if: Condition; readonly then: Rule }
 /** `state` is a canonical state key (SP3a §2.3). */
 export interface BlockRule { readonly kind: 'block'; readonly state: string }
-export type Rule = SequenceRule | ConditionRule | BlockRule;
+/** The badlands band block at the voxel's (x, y, z) (§3.3, bands.ts). */
+export interface BandlandsRule { readonly kind: 'bandlands' }
+export type Rule = SequenceRule | ConditionRule | BlockRule | BandlandsRule;
 export type RuleKind = Rule['kind'];
 /** A leaf: a rule that yields a block by itself. */
-export type LeafRule = BlockRule;
+export type LeafRule = BlockRule | BandlandsRule;
 
 export interface BiomeCondition { readonly kind: 'biome'; readonly biomes: readonly SurfaceBiome[] }
 export type StoneDepthSide = 'floor' | 'ceiling';
@@ -44,8 +48,8 @@ export type Condition =
   | NoiseThresholdCondition | TemperatureBelowCondition | SkyOpenCondition | LakeCondition | NotCondition;
 export type ConditionKind = Condition['kind'];
 
-/** The rule kinds of §3.1's first table (without `bandlands` until the bandlands task). */
-export const RULE_KINDS: readonly RuleKind[] = ['sequence', 'condition', 'block'];
+/** The rule kinds of §3.1's first table, in its order. */
+export const RULE_KINDS: readonly RuleKind[] = ['sequence', 'condition', 'block', 'bandlands'];
 /** The condition kinds of §3.1's second table, in its order. */
 export const CONDITION_KINDS: readonly ConditionKind[] = [
   'biome', 'stoneDepth', 'water', 'yAbove', 'verticalGradient', 'steep', 'noiseThreshold', 'temperatureBelow', 'skyOpen', 'lake', 'not',
@@ -97,7 +101,7 @@ export function ruleLeaves(root: Rule): RuleLeaf[] {
       case 'condition':
         walk(r.then, conditionThenId(id), [...conds, r.if]);
         break;
-      case 'block':
+      case 'block': case 'bandlands':
         out.push({ id, rule: r, conditions: conds });
         break;
     }
@@ -109,7 +113,7 @@ export function ruleLeaves(root: Rule): RuleLeaf[] {
 export type RuleErrorCode =
   | 'NOT_OBJECT' | 'NOT_ARRAY' | 'UNKNOWN_KIND' | 'UNKNOWN_FIELD' | 'MISSING_FIELD' | 'UNKNOWN_BLOCK' | 'UNKNOWN_BIOME'
   | 'UNKNOWN_NOISE' | 'NOISE_DIMS' | 'NOISE_REMAP' | 'NOT_FINITE' | 'NOT_INTEGER' | 'OUT_OF_RANGE' | 'NEGATIVE_ZERO'
-  | 'NOT_BOOLEAN' | 'BAD_SIDE' | 'RANGE_ORDER' | 'GRADIENT_ORDER' | 'TOO_DEEP' | 'TOO_MANY_NODES';
+  | 'NOT_BOOLEAN' | 'BAD_SIDE' | 'RANGE_ORDER' | 'GRADIENT_ORDER' | 'TOO_DEEP' | 'TOO_MANY_NODES' | 'NO_BAND_NOISE';
 
 export interface RuleIssue {
   /** The node path: a rule's id (`root.rules[1].then`), `.if` / `.if.if` for conditions, then the field (`.offset`, `.biomes[2]`). */
@@ -128,7 +132,7 @@ export class RuleValidationError extends Error {
 
 /** The fields of each kind besides `kind`, in the order they are checked. */
 const FIELDS: { readonly [K in RuleKind | ConditionKind]: readonly string[] } = {
-  sequence: ['rules'], condition: ['if', 'then'], block: ['state'],
+  sequence: ['rules'], condition: ['if', 'then'], block: ['state'], bandlands: [],
   biome: ['biomes'], stoneDepth: ['side', 'offset', 'addSurfaceDepth'], water: ['offset', 'runTop'], yAbove: ['minY', 'runTop'],
   verticalGradient: ['trueAtAndBelow', 'falseAtAndAbove'], steep: ['min'], noiseThreshold: ['noise', 'min', 'max'],
   temperatureBelow: ['t'], skyOpen: [], lake: [], not: ['if'],
@@ -163,6 +167,8 @@ function isBlockKey(v: unknown): boolean {
  * condition kind where a condition goes), unknown and missing fields, block keys (`parseStateKey`), biomes, the noise
  * of `noiseThreshold` (a dims-2, remap-'none' `surface.noises.*` leaf known to `noises`), integer fields in
  * [−384, 384], finite numbers, booleans, `side`, `min ≤ max`, `trueAtAndBelow < falseAtAndAbove`, −0 anywhere, a
+ * `bandlands` leaf without a dims-2, remap-'none' `surface.noises.bandOffset` in `noises` (NO_BAND_NOISE when the leaf
+ * is absent, §9's cut line), a
  * nesting depth above 32 (each node past it is reported and not entered) and more than 4096 nodes (reported once, at
  * `root`; the walk stops there).
  */
@@ -298,6 +304,13 @@ export function validateRules(value: unknown, noises: SurfaceNoiseLookup): RuleI
       case 'block':
         if (complete && !isBlockKey(node['state'])) push(`${path}.state`, 'UNKNOWN_BLOCK', `${JSON.stringify(node['state'])} is not a registered state key`);
         break;
+      case 'bandlands': {
+        const info = noises(BAND_NOISE);
+        if (info === undefined) push(path, 'NO_BAND_NOISE', `bandlands needs the ${BAND_NOISE} leaf, which is absent`);
+        else if (info.dims !== 2) push(path, 'NOISE_DIMS', `bandlands needs a 2D ${BAND_NOISE}; it is ${info.dims}D`);
+        else if (info.remap !== 'none') push(path, 'NOISE_REMAP', `surface noise ${BAND_NOISE} must have remap 'none'`);
+        break;
+      }
     }
   };
 

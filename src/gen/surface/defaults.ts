@@ -4,9 +4,9 @@
  * over −63 … −60), [1] the sky-open surface skin (under water, cliffs, the snowline, the biome palette, the
  * sandstone band), [2] the deepslate gradient (0 … 8, dithered over 1 … 7) for every solid voxel left, then stone.
  *
- * Until the bandlands task (§9's cut line) the badlands branch [1][3][1] is the cut variant
- * `seq[ [0] if TOP → red_sand  [1] terracotta ]`. `test/fixtures/sp3c-default-rules.json` is this tree at the
- * defaults. The gradient bounds are constants of this module; the parameters are `cliffSteep`, `cliffMinY`,
+ * The badlands branch [1][3][1] is `seq[ [0] if TOP → red_sand  [1] bandlands ]` (the band block under the red sand
+ * top, §3.3; §9's cut is not taken). `test/fixtures/sp3c-default-rules.json` is this tree at the defaults. The
+ * gradient bounds are constants of this module; the parameters are `cliffSteep`, `cliffMinY`,
  * `snowline` and `patchThreshold` (the patch noise is `surface.noises.patch`). A negated parameter is written
  * `0 - t`, which is +0 when t is 0 (−0 is never written, §3.1).
  */
@@ -34,7 +34,7 @@ const floor = (offset: number, addSurfaceDepth: boolean): Condition => ({ kind: 
 const water = (offset: number, runTop: boolean): Condition => ({ kind: 'water', offset, runTop });
 const gradient = (trueAtAndBelow: number, falseAtAndAbove: number): Condition => ({ kind: 'verticalGradient', trueAtAndBelow, falseAtAndAbove });
 
-/** The default rule tree of SP3c spec §4 (cut variant at [1][3][1]) for `p` (= `params.surface`). */
+/** The default rule tree of SP3c spec §4 for `p` (= `params.surface`). */
 export function defaultSurfaceRules(p: SurfaceParams): Rule {
   const TOP = floor(0, false);
   const SKIN = floor(0, true);
@@ -67,7 +67,7 @@ export function defaultSurfaceRules(p: SurfaceParams): Rule {
   );
   const palette = seq(
     when([biome('desert', 'beach', 'snowy_beach', 'river', 'frozen_river', 'ocean', 'deep_ocean', 'warm_ocean', 'frozen_ocean')], block('sand')),
-    when([biome('badlands')], seq(when([TOP], block('red_sand')), block('terracotta'))),
+    when([biome('badlands')], seq(when([TOP], block('red_sand')), { kind: 'bandlands' })),
     when([biome('stony_shore', 'volcano')], seq(when([TOP, P], block('gravel')), block('stone'))),
     when([biome('stony_peaks')], seq(when([TOP, P], block('calcite')), block('stone'))),
     when([biome('frozen_peaks')], seq(when([TOP, P], block('packed_ice')), when([TOP], block('snow_block')), block('stone'))),

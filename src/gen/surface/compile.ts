@@ -9,8 +9,8 @@
  * run is sky-open when it is its position's first, T_eff(y) from the position's T and the settings' lapse), so the
  * compiled tree equals the reference on every voxel. Nothing yielded leaves the voxel stone.
  *
- * Fast path (`surfaceFastPath`, compile time, general and conservative). Every leaf is classed by the `if`s on its
- * path (sequences ignored):
+ * Fast path (`surfaceFastPath`, compile time, general and conservative). Every leaf (`block` or `bandlands`) is classed
+ * by the `if`s on its path (sequences ignored):
  * - depth-bounded: a path `if` is `stoneDepth{side floor}` (not under a `not`); its bound is the smallest, over those
  *   gates, of offset + (addSurfaceDepth ? SD_MAX : 0);
  * - Y-only: every path `if` is a `verticalGradient`, a `yAbove{runTop false}` or a `not` of these.
@@ -19,12 +19,15 @@
  * holds a `skyOpen` `if`. The y range −63 … 319 is cut only by the Y-only leaves' conditions: at each such
  * `yAbove{runTop false}`'s minY and at each such gradient's ends; a gradient's dither interval
  * [trueAtAndBelow + 1, falseAtAndAbove − 1] is always evaluated; every other interval is a constant band whose state is
- * the tree evaluated at compile time without its depth-bounded leaves (stone when nothing matches). `fillColumn` gives
+ * the tree evaluated at compile time without its depth-bounded leaves (stone when nothing matches); a band whose first
+ * holding Y-only leaf is a `bandlands` has no constant state (the band block varies with x, y, z) and is always
+ * evaluated, like a dither interval. `fillColumn` gives
  * a solid voxel of a constant band its band's state without evaluating when floorDepth > maxSurfaceDepth or, in a
  * sky-gated tree, when its run is not sky-open; non-solid voxels are never written. Follows the gen determinism rules.
  */
 import type { Seed64 } from '../../core/hash';
 import { REGISTRY, STONE } from '../../world/blocks/index';
+import { BAND_OFFSET_NOISE, bandlandsOffset, bandlandsState, bandlandsTable, isBandlandsTable } from './bands';
 import {
   biomeHolds, biomeMask, gradientSeed, lakeHolds, noiseThresholdHolds, skyOpenHolds, steepHolds, stoneDepthHolds,
   temperatureBelowHolds, verticalGradientHolds, waterHolds, yAboveHolds,
@@ -50,6 +53,11 @@ const NOISE_OK = noiseThresholdHolds;
 const TEMP_OK = temperatureBelowHolds;
 const SKY_OK = skyOpenHolds;
 const LAKE_OK = lakeHolds;
+const BAND_NOISE = BAND_OFFSET_NOISE;
+const BAND_TABLE = bandlandsTable;
+const IS_BAND_TABLE = isBandlandsTable;
+const BAND_OFFSET = bandlandsOffset;
+const BAND_STATE = bandlandsState;
 
 /** Voxels per column, index `256·(y + 64) + p` (the T stage's order). */
 const COLUMN_VOXELS = 98304;
@@ -62,7 +70,10 @@ export interface SurfaceBand {
   readonly yMax: number;
   /** A dither interval of a Y-only gradient: always evaluated. */
   readonly dither: boolean;
-  /** The constant band's state (the tree without its depth-bounded leaves); −1 for a dither interval. */
+  /**
+   * The constant band's state (the tree without its depth-bounded leaves); −1 for a dither interval and for a band
+   * whose result is a `bandlands` leaf (both always evaluated).
+   */
   readonly state: number;
 }
 
@@ -154,7 +165,8 @@ export function surfaceFastPath(root: Rule, sdMax: number): SurfaceFastPath | nu
       maxSurfaceDepth = Math.max(maxSurfaceDepth, bound);
       if (!sky) skyGated = false;
     } else if (leaf.conditions.every(isYOnly)) {
-      yLeaves.push({ state: BLOCKS.parseStateKey(leaf.rule.state), conditions: leaf.conditions });
+      // A bandlands leaf's block varies with (x, y, z): a band it decides is evaluated (state −1).
+      yLeaves.push({ state: leaf.rule.kind === 'block' ? BLOCKS.parseStateKey(leaf.rule.state) : -1, conditions: leaf.conditions });
     } else {
       return null;
     }
@@ -206,11 +218,17 @@ type RuleFn = () => number;
 
 /**
  * Validates `rules` (`requireValidRules` against `noises`: a RuleValidationError lists every issue) and compiles it for
- * the world seed `seed` (the gradient seeds), the surface noises `noises` and the scan settings `set` (SD_MAX for the
- * fast path; lapse and lapseBase for T_eff). Scans evaluated with it must be made with the same settings.
+ * the world seed `seed` (the gradient seeds, the band table), the surface noises `noises` and the scan settings `set`
+ * (SD_MAX for the fast path; lapse and lapseBase for T_eff). Scans evaluated with it must be made with the same
+ * settings. `bands` is the band table of `seed` when the caller already holds it (the SurfaceContext's); by default it
+ * is built when the tree has a `bandlands` leaf.
  */
-export function compileSurfaceRules(seed: Seed64, rules: unknown, noises: SurfaceNoiseSource, set: SurfaceScanSettings): CompiledSurfaceRules {
+export function compileSurfaceRules(
+  seed: Seed64, rules: unknown, noises: SurfaceNoiseSource, set: SurfaceScanSettings, bands?: Uint16Array,
+): CompiledSurfaceRules {
   const tree = VALID(rules, noises);
+  if (bands !== undefined && !IS_BAND_TABLE(bands)) throw new RangeError(`compileSurfaceRules: the band table has ${bands.length} entries`);
+  let table: Uint16Array | null = null;
   const lapse = set.lapse;
   const lapseBase = set.lapseBase;
   const cur: Cursor = {
@@ -292,6 +310,22 @@ export function compileSurfaceRules(seed: Seed64, rules: unknown, noises: Surfac
       case 'block': {
         const s = BLOCKS.parseStateKey(r.state);
         return () => s;
+      }
+      case 'bandlands': {
+        table ??= bands ?? BAND_TABLE(seed);
+        const t = table;
+        const n = noises(BAND_NOISE)!;
+        const cs = n.clampSigma;
+        // The offset depends on (x, z) only: sampled once per position.
+        let stamp = -1;
+        let o = 0;
+        return () => {
+          if (stamp !== cur.stamp) {
+            o = BAND_OFFSET(n.z2(cur.x, cur.z), cs);
+            stamp = cur.stamp;
+          }
+          return BAND_STATE(t, cur.y, o);
+        };
       }
     }
   };

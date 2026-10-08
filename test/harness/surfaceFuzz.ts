@@ -2,7 +2,8 @@
  * Random valid surface-rule trees and random hand-built columns for the compile / reference / fast-path fuzz (SP3c
  * spec §3.4, §8).
  *
- * Trees (`randomSurfaceRules`) use every rule kind and condition kind of §3.1 with values aimed at the columns below
+ * Trees (`randomSurfaceRules`) use every rule kind (one leaf in 8 is a `bandlands`) and condition kind of §3.1 with
+ * values aimed at the columns below
  * (y bounds over the whole height and its edges, gradients with and without a dither interval, offsets around the
  * skin depths, thresholds inside the noises' ranges and at their clamps); they are valid by construction (no −0,
  * integers in range, min ≤ max, trueAtAndBelow < falseAtAndAbove, nesting ≤ `maxDepth` ≤ 32). Three styles:
@@ -31,15 +32,19 @@ import { testFloat } from './stats';
 
 export interface SurfaceFuzzNoiseSpec { readonly id: string; readonly def: NoiseDef }
 
-/** The fuzz's surface noises (2D, remap none): the depth noise the scan needs and two for `noiseThreshold`. */
+/**
+ * The fuzz's surface noises (2D, remap none): the depth noise the scan needs, two for `noiseThreshold` and the band
+ * offset noise `bandlands` needs (short wavelength, so the offset changes within a column).
+ */
 export const SURFACE_FUZZ_NOISE_SPECS: readonly SurfaceFuzzNoiseSpec[] = [
   { id: 'surface.noises.depth', def: completeNoiseDef({ wavelength: 16, octaves: 2 }) },
   { id: 'surface.noises.patch', def: completeNoiseDef({ wavelength: 8, octaves: 1 }) },
   { id: 'surface.noises.fuzzB', def: completeNoiseDef({ wavelength: 32, octaves: 2, clampSigma: 2 }) },
+  { id: 'surface.noises.bandOffset', def: completeNoiseDef({ wavelength: 12, octaves: 1 }) },
 ];
 
-/** The schema paths of the fuzz noises a tree may name. */
-export const SURFACE_FUZZ_NOISES: readonly string[] = SURFACE_FUZZ_NOISE_SPECS.map((n) => n.id);
+/** The schema paths of the fuzz noises a `noiseThreshold` may name (the band offset noise is `bandlands`'). */
+export const SURFACE_FUZZ_NOISES: readonly string[] = SURFACE_FUZZ_NOISE_SPECS.map((n) => n.id).filter((id) => id !== 'surface.noises.bandOffset');
 
 /** The fuzz noises as a SurfaceNoiseSource (each seeded by its schema path under `seed`). */
 export function surfaceFuzzNoiseSource(seed: Seed64 = [0x5eed, 0x3c]): SurfaceNoiseSource {
@@ -193,7 +198,9 @@ export function randomSurfaceRules(next: () => number, opts: SurfaceRulesOptions
   const yValue = (): number => (bool() ? pick(Y_POINTS) + (next() % 3) - 1 : -64 + (next() % 385));
   const threshold = (): number => (next() % 3 === 0 ? pick(THRESHOLDS) : plus0(Math.round((testFloat(next) - 0.5) * 700) / 100));
 
-  const block = (): Rule => ({ kind: 'block', state: REGISTRY.stateKey(1 + (next() % (REGISTRY.stateCount - 1))) });
+  /** A leaf: a `bandlands` one time in 8, else a block of any registered state but air. */
+  const block = (): Rule =>
+    next() % 8 === 0 ? { kind: 'bandlands' } : { kind: 'block', state: REGISTRY.stateKey(1 + (next() % (REGISTRY.stateCount - 1))) };
 
   const gradient = (): Condition => {
     const lo = bool() ? pick(Y_POINTS) - (next() % 3) : -66 + (next() % 380);

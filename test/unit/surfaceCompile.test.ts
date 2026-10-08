@@ -111,7 +111,8 @@ describe('surface rule compiler (SP3c spec §3.4)', () => {
 
   test('compiling validates the tree and binds the settings', () => {
     expect(() => compileSurfaceRules(SEED, { kind: 'block', state: 'not_a_block' }, NOISES, set)).toThrow(RuleValidationError);
-    expect(() => compileSurfaceRules(SEED, { kind: 'bandlands' }, NOISES, set)).toThrow(/UNKNOWN_KIND/);
+    expect(() => compileSurfaceRules(SEED, { kind: 'bandlands' }, (n) => (n === 'surface.noises.bandOffset' ? undefined : NOISES(n)), set)).toThrow(/NO_BAND_NOISE/);
+    expect(() => compileSurfaceRules(SEED, { kind: 'bandlands' }, NOISES, set, new Uint16Array(193))).toThrow(RangeError);
     const c = compileSurfaceRules(SEED, DEFAULT_SHAPE, NOISES, set);
     expect(c.rules).toBe(DEFAULT_SHAPE);
     expect(c.settings).toBe(set);
@@ -183,6 +184,41 @@ describe('surface rule compiler (SP3c spec §3.4)', () => {
     });
   });
 
+  test('bandlands: a band whose first holding Y-only leaf is bandlands is always evaluated (state −1, not a dither); compiled == reference', () => {
+    const BAND: Rule = { kind: 'bandlands' };
+    const tree = SEQ(
+      IF(grad(0, 8), B('bedrock')),
+      IFS([yAbove(40, false), NOT(yAbove(60, false))], BAND),
+      IFS([SKY, TOP], BAND),
+    );
+    const fp = surfaceFastPath(tree, 11)!;
+    expect(fp).toEqual({
+      maxSurfaceDepth: 0,
+      skyGated: true,
+      bands: [band(-63, 0, BEDROCK), dither(1, 7), band(8, 39, STONE), { yMin: 40, yMax: 59, dither: false, state: -1 }, band(60, 319, STONE)],
+    });
+    const col = handColumn((p) => 70 + (p % 5));
+    const scan = scanOf(col, set);
+    const ref = createSurfaceReference(SEED, tree, NOISES);
+    const c = compileSurfaceRules(SEED, tree, NOISES, set);
+    const slow = fill(c, scan, false), fast = fill(c, scan, true);
+    expect(Buffer.from(fast.out).equals(Buffer.from(slow.out))).toBe(true);
+    expect(fast.evaluated).toBe(fastVoxels(fp, scan).solid - fastVoxels(fp, scan).fast);
+    const colours = new Set<number>();
+    for (let p = 0; p < 256; p++) {
+      for (let y = -63; y <= scan.runTop[scan.runFirst[p]!]!; y++) {
+        expect(slow.out[at(p, y)]).toBe(ref.state(scan, set, p, y));
+        if (y >= 40 && y <= 59) colours.add(slow.out[at(p, y)]!);
+      }
+    }
+    // The bands vary along y and with the offset noise: several terracottas in y 40 … 59, all rule-evaluated.
+    expect(colours.size).toBeGreaterThanOrEqual(4);
+    expect([...colours].every((s) => REGISTRY.stateKey(s).endsWith('terracotta'))).toBe(true);
+    // A table passed in is the one used.
+    const flat = new Uint16Array(192).fill(AIR);
+    expect(compileSurfaceRules(SEED, tree, NOISES, set, flat).state(scan, 0, 50)).toBe(AIR);
+  });
+
   test('fillColumn: band states below maxSurfaceDepth and in runs without sky, rules elsewhere, non-solid untouched', () => {
     const noises = maxDepthNoises();
     const mset = surfaceScanSettings(SEED, SURFACE_FUZZ_PARAMS, noises);
@@ -248,8 +284,10 @@ describe('surface rule compiler (SP3c spec §3.4)', () => {
       ['free', undefined], ['fastPath', true], ['fastPath', false], ['fastPath', undefined], ['nearMiss', true], ['nearMiss', undefined],
     ];
     const isFloor = (c: Condition) => c.kind === 'stoneDepth' && c.side === 'floor';
-    const tally = { refChecked: 0, voxels: 0, fast: 0, noSkyNearTop: 0, fastTrees: 0, offTrees: 0, gated: 0, ungated: 0, yBefore: 0, yAfter: 0 };
-    for (let round = 0; round < 40; round++) {
+    const tally = {
+      refChecked: 0, voxels: 0, fast: 0, noSkyNearTop: 0, fastTrees: 0, offTrees: 0, gated: 0, ungated: 0, yBefore: 0, yAfter: 0, bandlandsBands: 0,
+    };
+    for (let round = 0; round < 44; round++) {
       const seed: Seed64 = [next(), next()];
       const noises = surfaceFuzzNoiseSource(SEED);
       const rset = surfaceFuzzSettings(seed, round % 2 === 0 ? randomSurfaceParams(next) : undefined, noises);
@@ -294,6 +332,7 @@ describe('surface rule compiler (SP3c spec §3.4)', () => {
         tally.fast += v.fast;
         tally.noSkyNearTop += v.noSkyNearTop;
         if (fp.skyGated) tally.gated++; else tally.ungated++;
+        if (fp.bands.some((b) => !b.dither && b.state < 0)) tally.bandlandsBands++;
         const leaves = ruleLeaves(c.rules);
         const db = leaves.map((l) => l.conditions.some(isFloor));
         if (db.indexOf(false) >= 0 && db.indexOf(false) < db.indexOf(true)) tally.yBefore++;
@@ -309,6 +348,8 @@ describe('surface rule compiler (SP3c spec §3.4)', () => {
     expect(tally.ungated).toBeGreaterThan(40);
     expect(tally.yBefore).toBeGreaterThan(30);
     expect(tally.yAfter).toBeGreaterThan(30);
+    // Fast-path trees with a band a Y-only bandlands leaf decides (evaluated, state −1).
+    expect(tally.bandlandsBands).toBeGreaterThan(10);
   });
 
   test('the biome masks and every condition compile alike for every surface biome', () => {

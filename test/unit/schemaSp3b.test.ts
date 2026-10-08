@@ -58,6 +58,7 @@ describe('SP3b density group (spec §3.3)', () => {
     // ... and SP3c's surface noises (schemaSp3c.test.ts).
     expect(PARAM_META.filter((m) => m.remapNone === true).map((m) => m.path)).toEqual([
       'density.noises.jag', 'density.noises.overhang', 'density.noises.detail', 'surface.noises.depth', 'surface.noises.patch',
+      'surface.noises.bandOffset',
     ]);
     // A 2D noise outside the density group keeps 'uniform'.
     expect(applyPatch(SCHEMA, DEFAULTS, { lakes: { rimNoise: { remap: 'uniform' } } }).ok).toBe(true);

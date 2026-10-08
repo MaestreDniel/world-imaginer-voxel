@@ -3,7 +3,7 @@
  * moved by its per-kind ±15 % perturbation, must change its home stage's output hash on one of the class columns or on
  * a witness (seed 42, default profile). SP2b's 16 class columns are chosen by the lattice conditions under which the
  * leaves act; lake-gate leaves (lakes.p, minC, offsetMin, offsetMax) get one threshold column each. SP3c's surface
- * class columns (SP3c spec §3.5: cliffY, cliffSteep, snowline, patch) are found by a third pass, after SP2b's two:
+ * class columns (SP3c spec §3.5: cliffY, cliffSteep, snowline, patch, badlands) are found by a third pass, after SP2b's two:
  * a corner prefilter on the ColumnSample, then an acceptance check on the generated column (every leaf the slot
  * serves changes the reference evaluator's state of a voxel near a sky-open top). A `terrain` leaf (SP3b spec §3.3:
  * the `density.*` group; SP3c: the `surface.*` group) is tried on the land, coast and surface class columns only (its
@@ -80,7 +80,7 @@ const NEW_SCAN = newSurfaceScan;
 const SCAN_COLUMN = scanColumn;
 
 /** SP3c's surface class slots (SP3c spec §3.5), in the order a third-pass column is offered to them. */
-export const SURFACE_CLASSES = ['cliffY', 'cliffSteep', 'snowline', 'patch'] as const;
+export const SURFACE_CLASSES = ['cliffY', 'cliffSteep', 'snowline', 'patch', 'badlands'] as const;
 export type SurfaceClass = (typeof SURFACE_CLASSES)[number];
 
 export type LivenessClass =
@@ -136,6 +136,7 @@ const LEAF_CLASS: ReadonlyMap<string, LivenessClass> = new Map<string, LivenessC
   ['surface.cliffMinY', 'cliffY'], ['surface.cliffSteep', 'cliffSteep'],
   ['surface.snowline', 'snowline'], ['surface.lapse', 'snowline'], ['surface.lapseBase', 'snowline'],
   ['surface.noises.patch', 'patch'], ['surface.patchThreshold', 'patch'],
+  ['surface.noises.bandOffset', 'badlands'],
 ]);
 
 /** The class whose columns are meant to exercise a leaf (named when the leaf is dead). */
@@ -488,12 +489,15 @@ const SURFACE_SLOT_LEAVES: Readonly<Record<SurfaceClass, readonly string[]>> = {
   cliffSteep: ['surface.cliffSteep'],
   snowline: ['surface.snowline', 'surface.lapse', 'surface.lapseBase'],
   patch: ['surface.noises.patch', 'surface.patchThreshold'],
+  badlands: ['surface.noises.bandOffset'],
 };
 /** The 2D biomes whose tops have patches in the default tree (SP3c spec §3.5 `patch` prefilter). */
 const PATCH_BIOMES: readonly SurfaceBiome[] = [
   'taiga', 'snowy_taiga', 'savanna', 'jungle', 'swamp', 'windswept_hills', 'stony_shore', 'volcano', 'stony_peaks', 'frozen_peaks',
 ];
 const PATCH_BIOME_IDS: ReadonlySet<number> = new Set(PATCH_BIOMES.map((b) => BIOME_ID(b)));
+/** The 2D biome of the `badlands` prefilter. */
+const BADLANDS_ID = BIOME_ID('badlands');
 /** The column's 25 quart corners (i, j ∈ 0 … 4) as lattice indices. */
 const CORNERS: readonly number[] = Array.from({ length: 25 }, (_, n) => LATTICE(n % 5, Math.floor(n / 5)));
 /** The prefilters' y margin (blocks) and the snowline band (|T_top − snowline| ≤ 0.1). */
@@ -513,7 +517,8 @@ export function surfaceSlotLeaves(cls: SurfaceClass): readonly string[] {
  * - cliffY: steep ≥ 0.85·cliffSteep and surfaceEst ∈ [0.85·cliffMinY − 8, 1.15·cliffMinY + 8];
  * - cliffSteep: steep ≥ 0.85·cliffSteep and surfaceEst ≥ cliffMinY − 8;
  * - snowline: steep < cliffSteep, surfaceEst ≥ lapseBase and |T_top − snowline| ≤ 0.1;
- * - patch: steep < cliffSteep, T_top ≥ snowline and a 2D biome with top patches.
+ * - patch: steep < cliffSteep, T_top ≥ snowline and a 2D biome with top patches;
+ * - badlands: the 2D biome is badlands.
  */
 export function surfacePrefilter(ctx: GenContext, cls: SurfaceClass, s: ColumnSample): boolean {
   const p = ctx.params.surface;
@@ -537,6 +542,9 @@ export function surfacePrefilter(ctx: GenContext, cls: SurfaceClass, s: ColumnSa
         break;
       case 'patch':
         ok = steep < p.cliffSteep && tTop >= p.snowline && PATCH_BIOME_IDS.has(s.biome[k]!);
+        break;
+      case 'badlands':
+        ok = s.biome[k] === BADLANDS_ID;
         break;
     }
     if (ok) return true;

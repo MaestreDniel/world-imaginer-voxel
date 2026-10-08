@@ -40,16 +40,16 @@ describe('surfaceFuzz: random rule trees and hand-built columns (SP3c spec §3.4
     return Array.from({ length: n }, () => randomSurfaceRules(next, { style, skyGated }));
   };
 
-  test('the fuzz noises: 2D, remap none, within ±clampSigma, the depth noise among them', () => {
+  test('the fuzz noises: 2D, remap none, within ±clampSigma, the depth noise among them; the band offset noise for bandlands', () => {
     expect(SURFACE_FUZZ_NOISES).toContain('surface.noises.depth');
-    for (const id of SURFACE_FUZZ_NOISES) {
+    expect(SURFACE_FUZZ_NOISES).not.toContain('surface.noises.bandOffset');
+    for (const id of [...SURFACE_FUZZ_NOISES, 'surface.noises.bandOffset']) {
       const n = NOISES(id)!;
       expect(n).toMatchObject({ dims: 2, remap: 'none' });
       const v = n.z2(13, -7);
       expect(Math.abs(v)).toBeLessThanOrEqual(n.clampSigma);
       expect(v).not.toBe(n.z2(29, -7));
     }
-    expect(NOISES('surface.noises.bandOffset')).toBeUndefined();
     expect(surfaceFuzzSettings().sdMax).toBe(11);
     const next = testRng(5);
     for (let i = 0; i < 200; i++) {
@@ -83,13 +83,15 @@ describe('surfaceFuzz: random rule trees and hand-built columns (SP3c spec §3.4
     const kinds = new Set<string>();
     const flags = new Set<string>();
     const blocks = new Set<string>();
-    let gradientNoBand = 0, emptySeq = 0, equalRange = 0;
+    let gradientNoBand = 0, emptySeq = 0, equalRange = 0, bandlands = 0, leaves = 0;
     for (const t of trees(23, 400, 'free')) {
       for (const { node } of nodes(t)) {
         kinds.add(node.kind);
         if (node.kind === 'stoneDepth') flags.add(`${node.side}.${node.addSurfaceDepth}`);
         if (node.kind === 'water' || node.kind === 'yAbove') flags.add(`${node.kind}.${node.runTop}`);
         if (node.kind === 'block') blocks.add(node.state);
+        if (node.kind === 'block' || node.kind === 'bandlands') leaves++;
+        if (node.kind === 'bandlands') bandlands++;
         if (node.kind === 'verticalGradient' && node.falseAtAndAbove === node.trueAtAndBelow + 1) gradientNoBand++;
         if (node.kind === 'sequence' && node.rules.length === 0) emptySeq++;
         if (node.kind === 'noiseThreshold' && node.min === node.max) equalRange++;
@@ -104,10 +106,12 @@ describe('surfaceFuzz: random rule trees and hand-built columns (SP3c spec §3.4
     expect(gradientNoBand).toBeGreaterThan(0);
     expect(emptySeq).toBeGreaterThan(0);
     expect(equalRange).toBeGreaterThan(0);
+    // One leaf in 8 is a bandlands.
+    expect(Math.abs(bandlands / leaves - 1 / 8)).toBeLessThan(0.03);
   });
 
-  test('fastPath trees: every leaf depth-bounded or Y-only; Y-only leaves before and after depth-bounded ones', () => {
-    let before = 0, after = 0, gated = 0, ungated = 0, yOnPath = 0;
+  test('fastPath trees: every leaf depth-bounded or Y-only; Y-only leaves before and after depth-bounded ones; bandlands in both classes', () => {
+    let before = 0, after = 0, gated = 0, ungated = 0, yOnPath = 0, yBandlands = 0, dbBandlands = 0;
     for (const skyGated of [true, false, undefined]) {
       for (const t of trees(24, 300, 'fastPath', skyGated)) {
         const leaves = ruleLeaves(t);
@@ -123,6 +127,8 @@ describe('surfaceFuzz: random rule trees and hand-built columns (SP3c spec §3.4
         if (leaves.slice(0, firstDb).some((l) => !depthBounded(l))) before++;
         if (leaves.slice(lastDb + 1).some((l) => !depthBounded(l))) after++;
         if (db.some((l) => l.conditions.some((c) => c.kind === 'yAbove' || c.kind === 'verticalGradient'))) yOnPath++;
+        if (leaves.some((l) => l.rule.kind === 'bandlands' && !depthBounded(l))) yBandlands++;
+        if (db.some((l) => l.rule.kind === 'bandlands')) dbBandlands++;
       }
     }
     expect(before).toBeGreaterThan(100);
@@ -130,6 +136,8 @@ describe('surfaceFuzz: random rule trees and hand-built columns (SP3c spec §3.4
     expect(gated).toBeGreaterThan(300);
     expect(ungated).toBeGreaterThan(300);
     expect(yOnPath).toBeGreaterThan(100);
+    expect(yBandlands).toBeGreaterThan(50);
+    expect(dbBandlands).toBeGreaterThan(50);
   });
 
   test('nearMiss trees: at least one leaf is neither depth-bounded nor Y-only', () => {

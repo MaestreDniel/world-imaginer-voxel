@@ -119,6 +119,7 @@ export const ROOT = group('Parameters', 'World generation parameters.', {
     noises: group('Surface noises', 'Noises read by the surface scan and rules, at unscaled world block coordinates (z2, unit sd).', {
       depth: surfaceNoise('Depth noise', 'Ns of the surface depth: max(0, ⌊3 + 2.75 · depthMul · Ns + 0.25 · hash⌋) blocks of under blocks below each top.', { wavelength: 64, octaves: 2 }, { min: 8, max: 1024 }),
       patch: surfaceNoise('Patch noise', 'Every surface patch (clay, podzol, coarse dirt, mud, gravel, calcite, packed ice): a patch block where it is ≥ the patch threshold, a second one where it is ≤ −threshold.', { wavelength: 24, octaves: 2 }, { min: 4, max: 512 }),
+      bandOffset: surfaceNoise('Band offset noise', 'Shifts the badlands terracotta bands up or down by round(4 · z / clampSigma) blocks (−4 … 4), so the bands waver across the badlands.', { wavelength: 128, octaves: 1 }, { min: 16, max: 2048 }),
     }),
     depthMul: num(1, { ...TERRAIN, label: 'Surface depth multiplier', doc: 'Multiplies the depth noise in the surface depth (0: three under blocks everywhere).', min: 0, max: 2, step: 0.05 }),
     snowline: num(-0.6, { ...TERRAIN, label: 'Snowline', doc: 'Tops whose T_eff (T lowered by the lapse rate with height) is below this are snow.', min: -1, max: 1, step: 0.01 }),

@@ -52,8 +52,8 @@ describe('the default rule tree (spec §4)', () => {
     expect(canonicalJSON(defaultSurfaceRules(DEFAULTS.surface))).toBe(canonicalJSON(fixture()));
   });
 
-  test('the leaves in evaluation order, with their ids (Decision 6: bedrock, the sky-open skin, deepslate; the cut variant at [1][3][1])', () => {
-    const leaves = ruleLeaves(defaultSurfaceRules(DEFAULTS.surface)).map((l) => `${l.id} ${l.rule.state}`);
+  test('the leaves in evaluation order, with their ids (Decision 6: bedrock, the sky-open skin, deepslate; bandlands at [1][3][1][1])', () => {
+    const leaves = ruleLeaves(defaultSurfaceRules(DEFAULTS.surface)).map((l) => `${l.id} ${l.rule.kind === 'block' ? l.rule.state : l.rule.kind}`);
     const S = 'root.rules[1].then';
     const W = `${S}.rules[0].then.then`;
     const PAL = `${S}.rules[3].then`;
@@ -65,7 +65,7 @@ describe('the default rule tree (spec §4)', () => {
       `${S}.rules[1].then.then.then.rules[0].then packed_ice`, `${S}.rules[1].then.then.then.rules[1] stone`,
       `${S}.rules[2].then.then snow_block`,
       `${PAL}.rules[0].then sand`,
-      `${PAL}.rules[1].then.rules[0].then red_sand`, `${PAL}.rules[1].then.rules[1] terracotta`,
+      `${PAL}.rules[1].then.rules[0].then red_sand`, `${PAL}.rules[1].then.rules[1] bandlands`,
       `${PAL}.rules[2].then.rules[0].then.then gravel`, `${PAL}.rules[2].then.rules[1] stone`,
       `${PAL}.rules[3].then.rules[0].then.then calcite`, `${PAL}.rules[3].then.rules[1] stone`,
       `${PAL}.rules[4].then.rules[0].then.then packed_ice`, `${PAL}.rules[4].then.rules[1].then snow_block`, `${PAL}.rules[4].then.rules[2] stone`,
@@ -106,7 +106,7 @@ describe('the default rule tree (spec §4)', () => {
     expect(validateRules(tree, NOISES).filter((i) => i.code === 'NEGATIVE_ZERO')).toEqual([]);
   });
 
-  test('it validates against the schema noises and the registry (palette included), at the defaults and at the leaves\' range ends', () => {
+  test('it validates against the schema noises (bandOffset included) and the registry (palette included), at the defaults and at the leaves\' range ends', () => {
     const variants: SurfaceParams[] = [
       DEFAULTS.surface,
       paramsWith({ surface: { patchThreshold: 0, snowline: -1, cliffSteep: 0, cliffMinY: -64 } }).surface,
@@ -120,6 +120,9 @@ describe('the default rule tree (spec §4)', () => {
     }
     // Far inside §3.1's limits (depth 32, 4096 nodes).
     expect(nodeCount(fixture())).toBeLessThan(200);
+    // Without the band leaf (§9's cut) the default tree's bandlands leaf is refused, and only it.
+    expect(validateRules(defaultSurfaceRules(DEFAULTS.surface), (n) => (n === 'surface.noises.bandOffset' ? undefined : NOISES(n))).map((i) => `${i.path} ${i.code}`))
+      .toEqual(['root.rules[1].then.rules[3].then.rules[1].then.rules[1] NO_BAND_NOISE']);
   });
 
   test('its fast path (§3.4): maxSurfaceDepth = SD_MAX + 4 from BAND4, sky-gated, bands y −59 … 0 (deepslate) and 8 … 319 (stone), y −63 … −60 and 1 … 7 evaluated', () => {

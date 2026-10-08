@@ -1,7 +1,8 @@
 /**
  * The reference evaluator of the surface rules (SP3c spec §3.4): a plain tree walk over a validated rule tree with
  * §3.1's semantics (a `sequence` yields its first child that yields a block, a `condition` evaluates `if` then `then`,
- * a `block` yields its state; nothing yielded leaves the voxel stone), evaluated at one solid voxel of a scanned
+ * a `block` yields its state, a `bandlands` the band block at the voxel (bands.ts); nothing yielded leaves the voxel
+ * stone), evaluated at one solid voxel of a scanned
  * column, recording the rule path. It never takes the fast path. It is the oracle of the compiled closures (DT2's
  * `surfaceReference`, the compile fuzz) and the evaluator of `surfaceProbe` (§3.6) and U2's acceptance check (§3.5).
  *
@@ -9,17 +10,18 @@
  * ceilDepth = y − runBottom of the voxel's run (`runAt`), yTop = runTop, `waterAbove` / `waterTop` of the run, the
  * run is sky-open when it is its position's first run, and T_eff(y) from the position's T and the settings' lapse.
  * Noises sample unscaled world block coordinates (x, z) = (16·cx + lx, 16·cz + lz). The per-node preparation (a
- * biome mask, a gradient's derived seed, a block's state id, a noise) is done once at creation. Follows the gen
- * determinism rules.
+ * biome mask, a gradient's derived seed, a block's state id, a noise, the band table and the band offset noise) is done
+ * once at creation. Follows the gen determinism rules.
  */
 import type { Seed64 } from '../../core/hash';
 import { REGISTRY, STONE } from '../../world/blocks/index';
+import { BAND_OFFSET_NOISE, bandlandsOffset, bandlandsState, bandlandsTable, isBandlandsTable } from './bands';
 import {
   biomeHolds, biomeMask, gradientSeed, lakeHolds, noiseThresholdHolds, skyOpenHolds, steepHolds, stoneDepthHolds,
   temperatureBelowHolds, verticalGradientHolds, waterHolds, yAboveHolds,
 } from './conditions';
 import {
-  conditionThenId, requireValidRules, ROOT_RULE_ID, sequenceChildId, type BlockRule, type Condition, type Rule,
+  conditionThenId, requireValidRules, ROOT_RULE_ID, ruleLeaves, sequenceChildId, type BlockRule, type Condition, type Rule,
   type SurfaceNoise, type SurfaceNoiseSource,
 } from './rules';
 import { runAt, tEff, type SurfaceScan, type SurfaceScanSettings } from './scan';
@@ -44,6 +46,12 @@ const NOISE_OK = noiseThresholdHolds;
 const TEMP_OK = temperatureBelowHolds;
 const SKY_OK = skyOpenHolds;
 const LAKE_OK = lakeHolds;
+const LEAVES = ruleLeaves;
+const BAND_NOISE = BAND_OFFSET_NOISE;
+const BAND_TABLE = bandlandsTable;
+const IS_BAND_TABLE = isBandlandsTable;
+const BAND_OFFSET = bandlandsOffset;
+const BAND_STATE = bandlandsState;
 
 /** The surface rules' answer at one voxel. */
 export interface SurfaceRuleResult {
@@ -79,11 +87,17 @@ interface Voxel {
 
 /**
  * Validates `rules` (`requireValidRules` against `noises`: throws a RuleValidationError listing every issue) and returns
- * its reference evaluator for the world seed `seed` (the `verticalGradient` seeds) and the surface noises `noises`
- * (`noiseThreshold`, sampled through the same source).
+ * its reference evaluator for the world seed `seed` (the `verticalGradient` seeds, the band table) and the surface
+ * noises `noises` (`noiseThreshold` and `bandlands`' band offset, sampled through the same source). `bands` is the band
+ * table of `seed` when the caller already holds it (the SurfaceContext's); by default it is built when the tree has a
+ * `bandlands` leaf.
  */
-export function createSurfaceReference(seed: Seed64, rules: unknown, noises: SurfaceNoiseSource): SurfaceReference {
+export function createSurfaceReference(seed: Seed64, rules: unknown, noises: SurfaceNoiseSource, bands?: Uint16Array): SurfaceReference {
   const tree = VALID(rules, noises);
+  if (bands !== undefined && !IS_BAND_TABLE(bands)) throw new RangeError(`surface reference: the band table has ${bands.length} entries`);
+  const banded = LEAVES(tree).some((l) => l.rule.kind === 'bandlands');
+  const table = banded ? bands ?? BAND_TABLE(seed) : null;
+  const bandNoise = banded ? noises(BAND_NOISE)! : null;
   const masks = new Map<Condition, Uint8Array>();
   const seeds = new Map<Condition, number>();
   const noiseOf = new Map<Condition, SurfaceNoise>();
@@ -103,6 +117,7 @@ export function createSurfaceReference(seed: Seed64, rules: unknown, noises: Sur
       case 'sequence': for (const c of r.rules) prepRule(c); break;
       case 'condition': prepCondition(r.if); prepRule(r.then); break;
       case 'block': states.set(r, BLOCKS.parseStateKey(r.state)); break;
+      case 'bandlands': break;
     }
   };
   prepRule(tree);
@@ -139,6 +154,9 @@ export function createSurfaceReference(seed: Seed64, rules: unknown, noises: Sur
         break;
       case 'block':
         s = states.get(r)!;
+        break;
+      case 'bandlands':
+        s = BAND_STATE(table!, v.y, BAND_OFFSET(bandNoise!.z2(v.x, v.z), bandNoise!.clampSigma));
         break;
     }
     if (s >= 0 && trail !== null) trail.push(id);

@@ -1,4 +1,7 @@
 import { describe, expect, test } from 'vitest';
+import { deriveSeed } from '../../src/core/hash';
+import { Xoshiro128 } from '../../src/core/rng';
+import { noiseFor } from '../../src/gen/context';
 import { biomeId, biomeName, type SurfaceBiome } from '../../src/gen/biomes/registry';
 import { buildColumnSample, nearestCornerIndex, newColumnSample, type ColumnSample } from '../../src/gen/column/columnStage';
 import { terrainStage } from '../../src/gen/pipeline/terrainStage';
@@ -7,7 +10,7 @@ import { surfacePass } from '../../src/gen/surface/pass';
 import { surfaceProbeColumn } from '../../src/gen/surface/probe';
 import { newSurfaceScan, scanColumn, tEff, type SurfaceScan } from '../../src/gen/surface/scan';
 import {
-  BEDROCK, CLAY, DEEPSLATE, DIRT, GRASS_BLOCK, GRAVEL, PACKED_ICE, REGISTRY, SAND, SANDSTONE, SNOW_BLOCK, STONE,
+  BEDROCK, CLAY, DEEPSLATE, DIRT, GRASS_BLOCK, GRAVEL, PACKED_ICE, RED_SAND, RED_SANDSTONE, REGISTRY, SAND, SANDSTONE, SNOW_BLOCK, STONE,
 } from '../../src/world/blocks/index';
 import type { ColumnView } from '../../src/world/store/api';
 import { createStore } from '../../src/world/store/store';
@@ -24,8 +27,9 @@ const P = CTX.params.surface;
  * terrainStage fixtures LAND (windswept_hills: grass, gravel and stone patches, stone cliffs), RIVER (meadow grass and
  * a river bed with clay), SEA and OVERHANG (runs without sky); DESERT (all 256 positions desert, sand over sandstone),
  * SNOW (snowy_taiga, every top under the snowline), FROZEN (frozen_peaks cliffs of packed ice, runs without sky) and
- * JAGGED (jagged_peaks stone cliffs and snowy_slopes snow). The tests count what they rely on, so a world change that
- * moves these away fails loudly.
+ * JAGGED (jagged_peaks stone cliffs and snowy_slopes snow), and BADLANDS (U2's badlands class column, SP3c spec §3.5:
+ * red_sand tops over the terracotta bands and red_sandstone). The tests count what they rely on, so a world change
+ * that moves these away fails loudly.
  */
 const LAND = [-1963, -2000] as const;
 const RIVER = [-742, -2000] as const;
@@ -35,7 +39,11 @@ const DESERT = [610, -1024] as const;
 const SNOW = [-530, -1008] as const;
 const FROZEN = [-495, -1008] as const;
 const JAGGED = [-384, -1024] as const;
-const REAL = [['land', LAND], ['river', RIVER], ['sea', SEA], ['overhang', OVERHANG], ['desert', DESERT], ['snow', SNOW], ['frozen', FROZEN], ['jagged', JAGGED]] as const;
+const BADLANDS = [-26426, -31088] as const;
+const REAL = [
+  ['land', LAND], ['river', RIVER], ['sea', SEA], ['overhang', OVERHANG], ['desert', DESERT], ['snow', SNOW], ['frozen', FROZEN], ['jagged', JAGGED],
+  ['badlands', BADLANDS],
+] as const;
 
 const key = (state: number): string => REGISTRY.stateKey(state);
 const ids = (...names: SurfaceBiome[]): Set<number> => new Set(names.map((n) => biomeId(n)));
@@ -43,6 +51,25 @@ const ids = (...names: SurfaceBiome[]): Set<number> => new Set(names.map((n) => 
 const GRASSY_PLAIN = ids('plains', 'meadow', 'forest', 'birch_forest', 'dark_forest', 'snowy_plains');
 /** §4 [1][4]: the biomes with a block 4 below the skin. */
 const BAND4 = ids('desert', 'beach', 'snowy_beach', 'badlands');
+
+/** §3.3's band block at (x, y, z) for seed '42', written from the spec (the table's Xoshiro128 runs, the offset noise). */
+const BAND_TABLE: readonly number[] = (() => {
+  const colours = ['terracotta', 'white_terracotta', 'orange_terracotta', 'yellow_terracotta', 'brown_terracotta', 'red_terracotta', 'light_gray_terracotta']
+    .map((k) => REGISTRY.parseStateKey(k));
+  const r = new Xoshiro128(deriveSeed(CTX.seed, 'surface.bands'));
+  const t: number[] = [];
+  while (t.length < 192) {
+    const len = 1 + r.nextInt(4);
+    const c = colours[r.nextInt(7)]!;
+    for (let k = 0; k < len; k++) t.push(c);
+  }
+  return t.slice(0, 192);
+})();
+const BAND_NOISE = noiseFor(CTX, 'surface.noises.bandOffset');
+function bandAt(x: number, y: number, z: number): number {
+  const o = Math.round((4 * BAND_NOISE.z2(x, z)) / BAND_NOISE.clamp);
+  return BAND_TABLE[(((y + o) % 192) + 192) % 192]!;
+}
 
 function generate(cx: number, cz: number): ColumnView {
   const store = createStore({ shared: false, maxBlockBytes: 4 * MiB, maxByteBytes: 4 * MiB });
@@ -71,6 +98,10 @@ interface Seen {
   noSkyStoneAbove8: number;
   ditherBedrock: number;
   ditherDeepslate: number;
+  badlandsTops: number;
+  bandVoxels: number;
+  bandColours: Set<number>;
+  redSandstone: number;
   checked: number;
 }
 
@@ -135,6 +166,20 @@ function checkColumn(scan: SurfaceScan, block: (p: number, y: number) => number,
         if (biome === biomeId('desert')) {
           expectIn(p, y, [fd <= sd ? SAND : SANDSTONE], fd <= sd ? 'desert skin' : 'desert band');
           if (fd === sd + 1) seen.desertSandstone++;
+        } else if (biome === biomeId('badlands')) {
+          // §4 [1][3][1]: red_sand top, the band block (§3.3) below it to surfaceDepth, then [1][4][1] red_sandstone.
+          const x = 16 * scan.cx + (p & 15), z = 16 * scan.cz + (p >> 4);
+          if (fd === 0) {
+            expectIn(p, y, [RED_SAND], 'badlands top');
+            seen.badlandsTops++;
+          } else if (fd <= sd) {
+            expectIn(p, y, [bandAt(x, y, z)], 'badlands band');
+            seen.bandVoxels++;
+            seen.bandColours.add(b);
+          } else {
+            expectIn(p, y, [RED_SANDSTONE], 'badlands band 4');
+            seen.redSandstone++;
+          }
         } else if (GRASSY_PLAIN.has(biome)) {
           if (fd === 0) expectIn(p, y, [GRASS_BLOCK], 'grassy top');
           else if (fd <= sd) {
@@ -150,7 +195,7 @@ function checkColumn(scan: SurfaceScan, block: (p: number, y: number) => number,
 
 const newSeen = (): Seen => ({
   grassOverDirt: 0, desertSandstone: 0, snowTops: 0, cliffStone: 0, cliffIce: 0, clay: 0, deepslateBelowSkin: 0,
-  noSkyStoneAbove8: 0, ditherBedrock: 0, ditherDeepslate: 0, checked: 0,
+  noSkyStoneAbove8: 0, ditherBedrock: 0, ditherDeepslate: 0, badlandsTops: 0, bandVoxels: 0, bandColours: new Set(), redSandstone: 0, checked: 0,
 });
 
 describe('surfacePass (spec §1 step 5)', () => {
@@ -190,7 +235,7 @@ describe('surfacePass (spec §1 step 5)', () => {
 });
 
 describe('the default tree on real columns (spec §4, §8)', () => {
-  test('bedrock and its dither, deepslate below the skin, the snowline, cliffs, sand over sandstone, grass over dirt, clay in a river bed (the stage\'s blocks)', () => {
+  test('bedrock and its dither, deepslate below the skin, the snowline, cliffs, sand over sandstone, grass over dirt, clay in a river bed, the badlands bands (the stage\'s blocks)', () => {
     const seen = newSeen();
     const problems: string[] = [];
     for (const [name, [cx, cz]] of REAL) {
@@ -209,6 +254,11 @@ describe('the default tree on real columns (spec §4, §8)', () => {
     expect(seen.clay).toBeGreaterThan(10);
     expect(seen.deepslateBelowSkin).toBeGreaterThan(100_000);
     expect(seen.noSkyStoneAbove8).toBeGreaterThan(100);
+    // The badlands: red_sand tops over the bands (many colours: the table's runs and the offset), red_sandstone below.
+    expect(seen.badlandsTops).toBeGreaterThan(100);
+    expect(seen.bandVoxels).toBeGreaterThan(200);
+    expect(seen.bandColours.size).toBeGreaterThanOrEqual(4);
+    expect(seen.redSandstone).toBeGreaterThan(400);
     // The bedrock dither over y −63 … −60 shows both states.
     expect(seen.ditherBedrock).toBeGreaterThan(500);
     expect(seen.ditherDeepslate).toBeGreaterThan(500);

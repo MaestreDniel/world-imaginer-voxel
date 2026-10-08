@@ -1,5 +1,6 @@
 import { describe, expect, test } from 'vitest';
 import { deriveSeed, hash2, hash3, type Seed64 } from '../../src/core/hash';
+import { Xoshiro128 } from '../../src/core/rng';
 import { readField, readLevel } from '../../src/gen/column/columnStage';
 import { SURFACE_BIOMES } from '../../src/gen/biomes/registry';
 import { createSurfaceReference } from '../../src/gen/surface/reference';
@@ -72,6 +73,24 @@ function oracleHolds(c: Condition, col: SurfaceFuzzColumn, set: SurfaceScanSetti
   }
 }
 
+const TERRACOTTAS = [
+  'terracotta', 'white_terracotta', 'orange_terracotta', 'yellow_terracotta', 'brown_terracotta', 'red_terracotta', 'light_gray_terracotta',
+].map((k) => REGISTRY.parseStateKey(k));
+
+/** §3.3's band block at (x, y, z), recomputed: the table from its Xoshiro128 runs, the offset from the band noise. */
+function oracleBand(seed: Seed64, x: number, y: number, z: number): number {
+  const r = new Xoshiro128(deriveSeed(seed, 'surface.bands'));
+  const table: number[] = [];
+  while (table.length < 192) {
+    const len = 1 + r.nextInt(4);
+    const colour = TERRACOTTAS[r.nextInt(7)]!;
+    for (let k = 0; k < len; k++) table.push(colour);
+  }
+  const n = NOISES('surface.noises.bandOffset')!;
+  const o = Math.round((4 * n.z2(x, z)) / n.clampSigma);
+  return table[(((y + o) % 192) + 192) % 192]!;
+}
+
 /** The rule ids from root to a leaf id: every prefix ending at a `.rules[k]` or `.then` segment. */
 function idChain(leafId: string): string[] {
   const out = ['root'];
@@ -84,7 +103,8 @@ function idChain(leafId: string): string[] {
 function oracle(tree: Rule, col: SurfaceFuzzColumn, set: SurfaceScanSettings, seed: Seed64, v: OracleVoxel) {
   for (const leaf of ruleLeaves(tree)) {
     if (leaf.conditions.every((c) => oracleHolds(c, col, set, seed, v))) {
-      return { state: REGISTRY.parseStateKey(leaf.rule.state), path: idChain(leaf.id) };
+      const state = leaf.rule.kind === 'block' ? REGISTRY.parseStateKey(leaf.rule.state) : oracleBand(seed, v.x, v.y, v.z);
+      return { state, path: idChain(leaf.id) };
     }
   }
   return { state: STONE, path: [] as string[] };
@@ -157,6 +177,33 @@ describe('surface reference evaluator (SP3c spec §3.4)', () => {
     expect(ref.state(scan, set, 0, 40)).toBe(REGISTRY.parseStateKey('air'));
   });
 
+  test('bandlands yields the band block of (x, y, z): the seed\'s table, shifted by the band noise; its path ends at the leaf', () => {
+    const col = handColumn(() => 200);
+    const scan = scanOf(col, set);
+    const tree = SEQ(IF({ kind: 'yAbove', minY: 150, runTop: false }, { kind: 'bandlands' }), B('bedrock'));
+    const ref = createSurfaceReference(SEED, tree, NOISES);
+    const other = createSurfaceReference([43, 0], tree, NOISES);
+    const colours = new Set<number>();
+    let differ = 0;
+    for (let p = 0; p < 256; p += 3) {
+      for (let y = 150; y <= 200; y++) {
+        const x = 16 * col.sample.cx + (p & 15), z = 16 * col.sample.cz + (p >> 4);
+        const got = ref.evaluate(scan, set, p, y);
+        expect(got).toEqual({ state: oracleBand(SEED, x, y, z), path: ['root', 'root.rules[0]', 'root.rules[0].then'] });
+        colours.add(got.state);
+        if (other.state(scan, set, p, y) !== got.state) differ++;
+      }
+      expect(ref.state(scan, set, p, 149)).toBe(BEDROCK);
+    }
+    expect([...colours].every((c) => TERRACOTTAS.includes(c))).toBe(true);
+    expect(colours.size).toBeGreaterThanOrEqual(5);
+    expect(differ).toBeGreaterThan(100);
+    // A table passed in is used as is (the SurfaceContext shares one); a tree without bandlands needs none.
+    const flat = new Uint16Array(192).fill(BEDROCK);
+    expect(createSurfaceReference(SEED, tree, NOISES, flat).state(scan, set, 7, 180)).toBe(BEDROCK);
+    expect(createSurfaceReference(SEED, B('stone'), NOISES, flat).state(scan, set, 7, 180)).toBe(STONE);
+  });
+
   test('a voxel no rule matches is stone with an empty path', () => {
     const col = handColumn(() => 10);
     const scan = scanOf(col, set);
@@ -199,7 +246,8 @@ describe('surface reference evaluator (SP3c spec §3.4)', () => {
   test('creation validates the tree; evaluation needs a solid voxel at integer p 0 … 255, y −63 … 319', () => {
     expect(() => createSurfaceReference(SEED, { kind: 'block', state: 'not_a_block' }, NOISES)).toThrow(RuleValidationError);
     expect(() => createSurfaceReference(SEED, IF({ kind: 'noiseThreshold', noise: 'surface.noises.none', min: 0, max: 1 }, B('stone')), NOISES)).toThrow(RuleValidationError);
-    expect(() => createSurfaceReference(SEED, { kind: 'bandlands' }, NOISES)).toThrow(/UNKNOWN_KIND/);
+    expect(() => createSurfaceReference(SEED, { kind: 'bandlands' }, (n) => (n === 'surface.noises.bandOffset' ? undefined : NOISES(n)))).toThrow(/NO_BAND_NOISE/);
+    expect(() => createSurfaceReference(SEED, { kind: 'bandlands' }, NOISES, new Uint16Array(64))).toThrow(RangeError);
     const col = handColumn((p) => (p === 9 ? -63 : 30));
     const scan = scanOf(col, set);
     const ref = createSurfaceReference(SEED, B('stone'), NOISES);
@@ -223,7 +271,7 @@ describe('surface reference evaluator (SP3c spec §3.4)', () => {
       e[v ? 0 : 1]++;
       seen.set(k, e);
     };
-    let checked = 0, matched = 0;
+    let checked = 0, matched = 0, banded = 0;
     for (let round = 0; round < 24; round++) {
       const seed: Seed64 = [next(), next()];
       const noises = surfaceFuzzNoiseSource(SEED);
@@ -246,12 +294,14 @@ describe('surface reference evaluator (SP3c spec §3.4)', () => {
             expect(ref.state(scan, rset, p, y)).toBe(got.state);
             checked++;
             if (got.path.length > 0) matched++;
+            if (got.path.length > 0 && leaves.find((l) => l.id === got.path[got.path.length - 1])!.rule.kind === 'bandlands') banded++;
             if ((p + y) % 5 === 0) for (const l of leaves) for (const c of l.conditions) note(c, oracleHolds(c, col, rset, seed, v));
           }
         }
       }
     }
     expect(checked).toBeGreaterThan(100_000);
+    expect(banded).toBeGreaterThan(1_000);
     expect(matched / checked).toBeGreaterThan(0.2);
     expect(matched / checked).toBeLessThan(0.95);
     for (const k of ['biome', 'stoneDepth.floor', 'stoneDepth.ceiling', 'water', 'yAbove', 'verticalGradient', 'steep', 'noiseThreshold', 'temperatureBelow', 'skyOpen', 'lake', 'not']) {
