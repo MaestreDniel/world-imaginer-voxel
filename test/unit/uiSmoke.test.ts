@@ -15,8 +15,8 @@ import { AIR, BEDROCK, GRASS_BLOCK, SNOW_BLOCK, STONE } from '../../src/world/bl
 import { SLICE_SAMPLES, sliceIndex } from '../../src/workers/protocol';
 import { REVIEW_SITES } from '../harness/reviewSlices';
 import {
-  canonicalJson, goldenCount, groundTopRow, ignoredLog, mapHash, MOUNTAIN_LINE, mountainSummaryOk, parseArgs, parseSegment, presetProblems, readMapHash, sameJson, selftestAllMatch,
-  SIZE_8, SKY_RGB, VIEWPORT, voxelLegendLabels, voxelReadoutOk, voxelRuleId, voxelSummaryOk, type MapUrlState,
+  canonicalJson, goldenCount, groundTopRow, ignoredLog, mapHash, MOUNTAIN_LINE, mountainSummaryOk, parseArgs, parseSegment, presetProblems, readMapHash, RULE_SAMPLE,
+  sameJson, selftestAllMatch, SIZE_8, SKY_RGB, sliceCellPoint, VIEWPORT, voxelLegendLabels, voxelReadoutOk, voxelRuleId, voxelSummaryOk, type MapUrlState,
 } from '../tools/uiSmoke';
 
 const EDITED: MapState = {
@@ -149,6 +149,17 @@ describe('UI smoke test: pure parts (SP2b spec §8 Tools, §12)', () => {
     expect(groundTopRow(column(12))).toBe(383);
     expect(groundTopRow(column(13))).toBeNull();
     expect(() => groundTopRow(new Uint8ClampedArray(16))).toThrow(/384 RGBA pixels/);
+  });
+
+  test('the rule step and the mountain screenshot hover the centre of the top voxel\'s cell of sample 205 (40 % of the line, SP3c spec §6, §9)', () => {
+    expect(RULE_SAMPLE).toBe(Math.round(0.4 * 512));
+    // The slice image drawn 1:1 at (100, 400), then stretched to 1024 × 768.
+    expect(sliceCellPoint({ x: 100, y: 400, width: 512, height: 384 }, RULE_SAMPLE, 0)).toEqual([305.5, 400.5]);
+    expect(sliceCellPoint({ x: 100, y: 400, width: 512, height: 384 }, 0, 383)).toEqual([100.5, 783.5]);
+    expect(sliceCellPoint({ x: 0, y: 0, width: 1024, height: 768 }, 511, 319 - 120)).toEqual([1023, 399]);
+    for (const [i, row] of [[-1, 0], [512, 0], [0, -1], [0, 384], [0.5, 0], [0, Number.NaN]] as const) {
+      expect(() => sliceCellPoint({ x: 0, y: 0, width: 512, height: 384 }, i, row)).toThrow(RangeError);
+    }
   });
 
   test('the cut line\'s text reads back as its segment', () => {

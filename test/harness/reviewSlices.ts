@@ -13,13 +13,13 @@ import { mkdirSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import type { Params } from '../../src/core/params/schema';
 import { seedFromInput } from '../../src/core/seed';
-import { biomeFamily } from '../../src/gen/biomes/registry';
+import { biomeFamily, biomeId } from '../../src/gen/biomes/registry';
 import {
   buildColumnSample, latticeIndex, newColumnSample, readBiome, readField, riverWetAt, type ColumnSample,
 } from '../../src/gen/column/columnStage';
 import { createGenContext, type GenContext } from '../../src/gen/context';
 import { fluidType } from '../../src/world/blocks/fluid';
-import { AIR } from '../../src/world/blocks/index';
+import { AIR, RED_SAND, SAND, SNOW_BLOCK } from '../../src/world/blocks/index';
 import { genRegion, type RegionView } from './region';
 import { encodePng, sliceY, sliceZ, type RgbaImage } from './png';
 
@@ -27,6 +27,20 @@ import { encodePng, sliceY, sliceZ, type RgbaImage } from './png';
 export type ReviewKind = 'land' | 'sea' | 'lake' | 'river';
 
 export const REVIEW_KINDS: readonly ReviewKind[] = ['land', 'sea', 'lake', 'river'];
+
+/**
+ * A land position's surface top, read from the voxels (SP3c spec §6 `needs`): `desertTop`, sand with the surface biome
+ * (aux A) desert; `snowTop`, snow_block; `badlandsTop`, red_sand.
+ */
+export type TopKind = 'desertTop' | 'snowTop' | 'badlandsTop';
+
+export const TOP_KINDS: readonly TopKind[] = ['desertTop', 'snowTop', 'badlandsTop'];
+
+/** What a site's line must cross: a kind of position (at least one), or a top kind (at least MIN_TOP_POSITIONS). */
+export type ReviewNeed = ReviewKind | TopKind;
+
+/** The positions of a top kind a line that needs it must hold (SP3c spec §6: "each hold ≥ 64 positions of their kind"). */
+export const MIN_TOP_POSITIONS = 64;
 
 /** The σ a mountain site's line must exceed (SP3b spec §7 "a highland site with σ > 8"). */
 export const MOUNTAIN_SIGMA = 8;
@@ -98,9 +112,23 @@ export function kindReader(ctx: GenContext, view: RegionView, z: number): (x: nu
   };
 }
 
+const DESERT = biomeId('desert');
+
+/** The top kind of position (x, z), or null: a wet position (water above its highest solid voxel) has none. */
+export function topKind(view: RegionView, x: number, z: number): TopKind | null {
+  const floor = view.oceanFloorWG(x, z);
+  if (view.worldSurfaceWG(x, z) > floor) return null;
+  const top = view.block(x, floor - 1, z);
+  if (top === SAND) return view.biome(x, z) === DESERT ? 'desertTop' : null;
+  if (top === SNOW_BLOCK) return 'snowTop';
+  return top === RED_SAND ? 'badlandsTop' : null;
+}
+
 /** A line's kinds and voxel facts, for the slices' summary (`slices.json`) and the rulings. */
 export interface LineSummary {
   readonly kinds: Record<ReviewKind, number>;
+  /** Land positions of each top kind (SP3c spec §6). */
+  readonly tops: Record<TopKind, number>;
   /** The lowest and highest true top on the line. */
   readonly topMin: number;
   readonly topMax: number;
@@ -117,6 +145,7 @@ export interface LineSummary {
 /** The summary of the n positions x0 … x0 + n − 1 of row z of `view`, with each position's kind from `kindOf`. */
 export function lineSummary(view: RegionView, z: number, x0: number, n: number, kindOf: (x: number) => ReviewKind): LineSummary {
   const kinds: Record<ReviewKind, number> = { land: 0, sea: 0, lake: 0, river: 0 };
+  const tops: Record<TopKind, number> = { desertTop: 0, snowTop: 0, badlandsTop: 0 };
   let topMin = Infinity;
   let topMax = -Infinity;
   let waterMax: number | null = null;
@@ -127,6 +156,8 @@ export function lineSummary(view: RegionView, z: number, x0: number, n: number, 
   for (let x = x0; x < x0 + n; x++) {
     const kind = kindOf(x);
     kinds[kind]++;
+    const t = topKind(view, x, z);
+    if (t !== null) tops[t]++;
     const p = positionVoxels(view, x, z);
     topMin = Math.min(topMin, p.top);
     topMax = Math.max(topMax, p.top);
@@ -139,7 +170,23 @@ export function lineSummary(view: RegionView, z: number, x0: number, n: number, 
       if (dryAir(x + 1, y)) waterWallFaces++;
     }
   }
-  return { kinds, topMin, topMax, waterMax, overhangs, waterWallFaces, waterUnderStone };
+  return { kinds, tops, topMin, topMax, waterMax, overhangs, waterWallFaces, waterUnderStone };
+}
+
+/**
+ * What a line's summary lacks of a site's needs: a kind of position with no position, or a top kind with fewer than
+ * MIN_TOP_POSITIONS positions; [] when every need is met.
+ */
+export function needProblems(needs: readonly ReviewNeed[], summary: LineSummary): string[] {
+  const out: string[] = [];
+  for (const k of needs) {
+    if (k === 'desertTop' || k === 'snowTop' || k === 'badlandsTop') {
+      if (summary.tops[k] < MIN_TOP_POSITIONS) out.push(`needs ${MIN_TOP_POSITIONS} ${k} positions, has ${summary.tops[k]}`);
+    } else if (summary.kinds[k] === 0) {
+      out.push(`needs ${k}, has none`);
+    }
+  }
+  return out;
 }
 
 /**
@@ -158,7 +205,7 @@ export interface VerticalSite {
   /** Nearest-neighbour upscale of the PNG (1: one pixel per block). */
   readonly scale: number;
   /** Kinds the slice line must cross. */
-  readonly needs: readonly ReviewKind[];
+  readonly needs: readonly ReviewNeed[];
 }
 
 /** A horizontal slice: the y plane `y` of a w × h region, x across, z down (north at the top). */
@@ -173,7 +220,7 @@ export interface HorizontalSite {
   readonly y: number;
   /** The row checked against `needs` (a full-region check would generate all w × h columns). */
   readonly checkZ: number;
-  readonly needs: readonly ReviewKind[];
+  readonly needs: readonly ReviewNeed[];
 }
 
 export type ReviewSite = VerticalSite | HorizontalSite;
@@ -192,6 +239,20 @@ const ROW_Z = 16 * ROW_CZ + 8;
  * cx −104 … −41 at cz 0 ranked first, with all 256 points (σ up to 15.9). After the SP3b retune (§8.4) the scan
  * gives seven rows a full 256-point window; the six generated have 75 … 214 overhang positions of 1024 and this row
  * the most (214), so the line stays: its voxel tops run 140 … 257, with undercut crests and floating rocks.
+ *
+ * The SP3c sites (SP3c spec §6) were found by the same scan (rows cz −1024 … 960 step 64, the best 64-column window
+ * of each row over cx −1088 … 1023, scored by the quart points of the row lz 8 whose 2D biome is in the site's set);
+ * the eight best rows' windows were generated on the voxels:
+ * - desert (2D desert): the window cx 881 … 944 at cz −896 ranked first with all 256 points (991 desert sand tops of
+ *   1024; tops 66 … 116);
+ * - snow (2D snowy_slopes, jagged_peaks or frozen_peaks): the eight windows have 256 or 255 points; cx −640 … −577 at
+ *   cz 192 (255 points) is the only one with three snowy biomes, the most packed_ice cliff tops (22) and the highest
+ *   tops (272), with 906 snow_block tops; the first-ranked window (−438, −1024) has no packed ice;
+ * - badlands (2D badlands, SP3c Task 15's scan): cx −110 … −47 at cz 128 ranked first with 251 points (873 red_sand
+ *   tops; 2,282 terracotta voxels of the bands).
+ * Each is drawn whole (y −64 up, deepslate and the bedrock dither included) at 1 px/block, and a 16-column zoom of
+ * it at 4 px/block: the desert's sand over its sandstone band, the frozen_peaks packed ice and the snow line, the
+ * badlands' terracotta bands under red sand.
  */
 export const REVIEW_SITES: readonly ReviewSite[] = [
   {
@@ -213,6 +274,30 @@ export const REVIEW_SITES: readonly ReviewSite[] = [
   {
     name: 'y62', file: 'slice-y62.png', kind: 'horizontal', cx0: -1696, cz0: ROW_CZ - 32, w: 64, h: 64, y: 62, checkZ: ROW_Z,
     needs: ['sea', 'land'],
+  },
+  {
+    name: 'desert', file: 'slice-desert.png', kind: 'vertical', cx0: 881, w: 64, z: -14328, yMin: -64, yMax: 127, scale: 1,
+    needs: ['land', 'desertTop'],
+  },
+  {
+    name: 'desert-zoom', file: 'slice-desert-zoom.png', kind: 'vertical', cx0: 905, w: 16, z: -14328, yMin: 56, yMax: 119, scale: 4,
+    needs: ['land', 'desertTop'],
+  },
+  {
+    name: 'snow', file: 'slice-snow.png', kind: 'vertical', cx0: -640, w: 64, z: 3080, yMin: -64, yMax: 287, scale: 1,
+    needs: ['land', 'snowTop'],
+  },
+  {
+    name: 'snow-zoom', file: 'slice-snow-zoom.png', kind: 'vertical', cx0: -592, w: 16, z: 3080, yMin: 96, yMax: 239, scale: 4,
+    needs: ['land', 'snowTop'],
+  },
+  {
+    name: 'badlands', file: 'slice-badlands.png', kind: 'vertical', cx0: -110, w: 64, z: 2056, yMin: -64, yMax: 191, scale: 1,
+    needs: ['land', 'badlandsTop'],
+  },
+  {
+    name: 'badlands-zoom', file: 'slice-badlands-zoom.png', kind: 'vertical', cx0: -88, w: 16, z: 2056, yMin: 48, yMax: 127, scale: 4,
+    needs: ['land', 'badlandsTop'],
   },
 ];
 

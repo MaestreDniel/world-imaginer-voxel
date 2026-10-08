@@ -1,0 +1,434 @@
+{
+  "seed": "42",
+  "profile": "default",
+  "slices": [
+    {
+      "file": "slice-coast.png",
+      "width": 1024,
+      "height": 224,
+      "site": {
+        "name": "coast",
+        "file": "slice-coast.png",
+        "kind": "vertical",
+        "cx0": -1696,
+        "w": 64,
+        "z": -31992,
+        "yMin": -64,
+        "yMax": 159,
+        "scale": 1,
+        "needs": [
+          "sea",
+          "land"
+        ]
+      },
+      "summary": {
+        "kinds": {
+          "land": 452,
+          "sea": 551,
+          "lake": 0,
+          "river": 21
+        },
+        "tops": {
+          "desertTop": 0,
+          "snowTop": 0,
+          "badlandsTop": 0
+        },
+        "topMin": 18,
+        "topMax": 129,
+        "waterMax": 63,
+        "overhangs": 2,
+        "waterWallFaces": 5,
+        "waterUnderStone": 0
+      }
+    },
+    {
+      "file": "slice-lake.png",
+      "width": 1024,
+      "height": 128,
+      "site": {
+        "name": "lake",
+        "file": "slice-lake.png",
+        "kind": "vertical",
+        "cx0": -1024,
+        "w": 32,
+        "z": -31992,
+        "yMin": 32,
+        "yMax": 95,
+        "scale": 2,
+        "needs": [
+          "lake",
+          "land"
+        ]
+      },
+      "summary": {
+        "kinds": {
+          "land": 345,
+          "sea": 0,
+          "lake": 140,
+          "river": 27
+        },
+        "tops": {
+          "desertTop": 0,
+          "snowTop": 0,
+          "badlandsTop": 0
+        },
+        "topMin": 58,
+        "topMax": 89,
+        "waterMax": 82,
+        "overhangs": 0,
+        "waterWallFaces": 9,
+        "waterUnderStone": 0
+      }
+    },
+    {
+      "file": "slice-river.png",
+      "width": 1024,
+      "height": 192,
+      "site": {
+        "name": "river",
+        "file": "slice-river.png",
+        "kind": "vertical",
+        "cx0": -972,
+        "w": 32,
+        "z": -31992,
+        "yMin": 32,
+        "yMax": 127,
+        "scale": 2,
+        "needs": [
+          "river",
+          "land"
+        ]
+      },
+      "summary": {
+        "kinds": {
+          "land": 422,
+          "sea": 0,
+          "lake": 0,
+          "river": 90
+        },
+        "tops": {
+          "desertTop": 0,
+          "snowTop": 0,
+          "badlandsTop": 0
+        },
+        "topMin": 56,
+        "topMax": 109,
+        "waterMax": 63,
+        "overhangs": 0,
+        "waterWallFaces": 1,
+        "waterUnderStone": 0
+      }
+    },
+    {
+      "file": "slice-mountain.png",
+      "width": 1024,
+      "height": 256,
+      "site": {
+        "name": "mountain",
+        "file": "slice-mountain.png",
+        "kind": "vertical",
+        "cx0": -104,
+        "w": 64,
+        "z": 8,
+        "yMin": 64,
+        "yMax": 319,
+        "scale": 1,
+        "needs": [
+          "land"
+        ]
+      },
+      "summary": {
+        "kinds": {
+          "land": 1024,
+          "sea": 0,
+          "lake": 0,
+          "river": 0
+        },
+        "tops": {
+          "desertTop": 0,
+          "snowTop": 0,
+          "badlandsTop": 519
+        },
+        "topMin": 140,
+        "topMax": 257,
+        "waterMax": null,
+        "overhangs": 214,
+        "waterWallFaces": 0,
+        "waterUnderStone": 0
+      }
+    },
+    {
+      "file": "slice-y62.png",
+      "width": 1024,
+      "height": 1024,
+      "site": {
+        "name": "y62",
+        "file": "slice-y62.png",
+        "kind": "horizontal",
+        "cx0": -1696,
+        "cz0": -2032,
+        "w": 64,
+        "h": 64,
+        "y": 62,
+        "checkZ": -31992,
+        "needs": [
+          "sea",
+          "land"
+        ]
+      },
+      "summary": {
+        "kinds": {
+          "land": 452,
+          "sea": 551,
+          "lake": 0,
+          "river": 21
+        },
+        "tops": {
+          "desertTop": 0,
+          "snowTop": 0,
+          "badlandsTop": 0
+        },
+        "topMin": 18,
+        "topMax": 129,
+        "waterMax": 63,
+        "overhangs": 2,
+        "waterWallFaces": 5,
+        "waterUnderStone": 0
+      }
+    },
+    {
+      "file": "slice-desert.png",
+      "width": 1024,
+      "height": 192,
+      "site": {
+        "name": "desert",
+        "file": "slice-desert.png",
+        "kind": "vertical",
+        "cx0": 881,
+        "w": 64,
+        "z": -14328,
+        "yMin": -64,
+        "yMax": 127,
+        "scale": 1,
+        "needs": [
+          "land",
+          "desertTop"
+        ]
+      },
+      "summary": {
+        "kinds": {
+          "land": 991,
+          "sea": 0,
+          "lake": 33,
+          "river": 0
+        },
+        "tops": {
+          "desertTop": 991,
+          "snowTop": 0,
+          "badlandsTop": 0
+        },
+        "topMin": 66,
+        "topMax": 116,
+        "waterMax": 87,
+        "overhangs": 4,
+        "waterWallFaces": 0,
+        "waterUnderStone": 0
+      }
+    },
+    {
+      "file": "slice-desert-zoom.png",
+      "width": 1024,
+      "height": 256,
+      "site": {
+        "name": "desert-zoom",
+        "file": "slice-desert-zoom.png",
+        "kind": "vertical",
+        "cx0": 905,
+        "w": 16,
+        "z": -14328,
+        "yMin": 56,
+        "yMax": 119,
+        "scale": 4,
+        "needs": [
+          "land",
+          "desertTop"
+        ]
+      },
+      "summary": {
+        "kinds": {
+          "land": 256,
+          "sea": 0,
+          "lake": 0,
+          "river": 0
+        },
+        "tops": {
+          "desertTop": 256,
+          "snowTop": 0,
+          "badlandsTop": 0
+        },
+        "topMin": 78,
+        "topMax": 116,
+        "waterMax": null,
+        "overhangs": 2,
+        "waterWallFaces": 0,
+        "waterUnderStone": 0
+      }
+    },
+    {
+      "file": "slice-snow.png",
+      "width": 1024,
+      "height": 352,
+      "site": {
+        "name": "snow",
+        "file": "slice-snow.png",
+        "kind": "vertical",
+        "cx0": -640,
+        "w": 64,
+        "z": 3080,
+        "yMin": -64,
+        "yMax": 287,
+        "scale": 1,
+        "needs": [
+          "land",
+          "snowTop"
+        ]
+      },
+      "summary": {
+        "kinds": {
+          "land": 1021,
+          "sea": 0,
+          "lake": 0,
+          "river": 3
+        },
+        "tops": {
+          "desertTop": 0,
+          "snowTop": 906,
+          "badlandsTop": 0
+        },
+        "topMin": 58,
+        "topMax": 272,
+        "waterMax": 63,
+        "overhangs": 106,
+        "waterWallFaces": 0,
+        "waterUnderStone": 0
+      }
+    },
+    {
+      "file": "slice-snow-zoom.png",
+      "width": 1024,
+      "height": 576,
+      "site": {
+        "name": "snow-zoom",
+        "file": "slice-snow-zoom.png",
+        "kind": "vertical",
+        "cx0": -592,
+        "w": 16,
+        "z": 3080,
+        "yMin": 96,
+        "yMax": 239,
+        "scale": 4,
+        "needs": [
+          "land",
+          "snowTop"
+        ]
+      },
+      "summary": {
+        "kinds": {
+          "land": 256,
+          "sea": 0,
+          "lake": 0,
+          "river": 0
+        },
+        "tops": {
+          "desertTop": 0,
+          "snowTop": 189,
+          "badlandsTop": 0
+        },
+        "topMin": 101,
+        "topMax": 236,
+        "waterMax": null,
+        "overhangs": 20,
+        "waterWallFaces": 0,
+        "waterUnderStone": 0
+      }
+    },
+    {
+      "file": "slice-badlands.png",
+      "width": 1024,
+      "height": 256,
+      "site": {
+        "name": "badlands",
+        "file": "slice-badlands.png",
+        "kind": "vertical",
+        "cx0": -110,
+        "w": 64,
+        "z": 2056,
+        "yMin": -64,
+        "yMax": 191,
+        "scale": 1,
+        "needs": [
+          "land",
+          "badlandsTop"
+        ]
+      },
+      "summary": {
+        "kinds": {
+          "land": 1024,
+          "sea": 0,
+          "lake": 0,
+          "river": 0
+        },
+        "tops": {
+          "desertTop": 0,
+          "snowTop": 0,
+          "badlandsTop": 873
+        },
+        "topMin": 61,
+        "topMax": 188,
+        "waterMax": null,
+        "overhangs": 131,
+        "waterWallFaces": 0,
+        "waterUnderStone": 0
+      }
+    },
+    {
+      "file": "slice-badlands-zoom.png",
+      "width": 1024,
+      "height": 320,
+      "site": {
+        "name": "badlands-zoom",
+        "file": "slice-badlands-zoom.png",
+        "kind": "vertical",
+        "cx0": -88,
+        "w": 16,
+        "z": 2056,
+        "yMin": 48,
+        "yMax": 127,
+        "scale": 4,
+        "needs": [
+          "land",
+          "badlandsTop"
+        ]
+      },
+      "summary": {
+        "kinds": {
+          "land": 256,
+          "sea": 0,
+          "lake": 0,
+          "river": 0
+        },
+        "tops": {
+          "desertTop": 0,
+          "snowTop": 0,
+          "badlandsTop": 208
+        },
+        "topMin": 66,
+        "topMax": 125,
+        "waterMax": null,
+        "overhangs": 18,
+        "waterWallFaces": 0,
+        "waterUnderStone": 0
+      }
+    }
+  ]
+}

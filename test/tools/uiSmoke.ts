@@ -32,7 +32,8 @@
  * With --shots DIR it then writes the spec §12 screenshots into DIR, at seed 42 from a newly loaded page (the
  * repository keeps them re-saved as 256-colour palette PNGs, as SP1 and SP2a did), and last the Voxels mode on the
  * mountain line (SP3b spec §7: `cross-section-voxels-mountain.png`; the line text is checked, and the slice summary
- * must show a ground top above y 200 and no water).
+ * must show a ground top above y 200 and no water) with the pointer on the rule step's top voxel and its readout
+ * showing the surface rule id (SP3c spec §6, §9: "a Voxels-mode screenshot with a hover rule id").
  * Options: --skip-build, --profile-dir DIR, --shots DIR. The exit code is 0 only when every check passes.
  */
 import { spawn, type ChildProcess, type SpawnOptions } from 'node:child_process';
@@ -140,6 +141,18 @@ export function groundTopRow(column: ArrayLike<number>): number | null {
     if (column[k] !== SKY_RGB[0] || column[k + 1] !== SKY_RGB[1] || column[k + 2] !== SKY_RGB[2]) return row;
   }
   return null;
+}
+
+/** The sample the rule step and the mountain screenshot hover: 40 % of the line's 512 samples. */
+export const RULE_SAMPLE = 205;
+
+/**
+ * The page point (CSS px) at the centre of the cell (sample i, image row `row`, 0 at y 319) of the 512 × 384 Voxels
+ * slice image drawn in `box` (the `.cs-voxels` canvas's box).
+ */
+export function sliceCellPoint(box: { readonly x: number; readonly y: number; readonly width: number; readonly height: number }, i: number, row: number): [number, number] {
+  if (!Number.isInteger(i) || i < 0 || i > 511 || !Number.isInteger(row) || row < 0 || row > 383) throw new RangeError(`sliceCellPoint: cell (${i}, ${row}) outside the 512 × 384 slice`);
+  return [box.x + ((i + 0.5) * box.width) / 512, box.y + ((row + 0.5) * box.height) / 384];
 }
 
 /** The Voxels mode's summary of a non-empty slice: `ground top y LO to HI · …water…`. */
@@ -826,22 +839,34 @@ async function runSmoke(t: Smoke): Promise<void> {
   t.step('rule: the hover rule id of a land top on the mountain line (SP3c spec §6)');
   const { text: lineText, summary: mountain } = await openMountainVoxels(p);
   t.check(mountainSummaryOk(mountain), `the mountain line ${lineText}: ${mountain}`, mountain);
-  // The top solid voxel of the sample at 40 % of the line, read from the slice image (not a fixed height).
-  const i = 205;
-  const column = await p.eval<number[]>(`Array.from(document.querySelector('.cs-voxels').getContext('2d').getImageData(${i}, 0, 1, 384).data)`);
-  const row = groundTopRow(column);
-  t.check(row !== null, `sample ${i} has a ground top (row ${row}, y ${row === null ? '-' : 319 - row})`);
-  if (row !== null) {
-    const mbox = (await p.center('.cs-voxels')).box;
-    await p.mouse('mouseMoved', mbox.x + ((i + 0.5) * mbox.width) / 512, mbox.y + ((row + 0.5) * mbox.height) / 384);
-    const first = await p.eval<string>(`document.querySelector('.cs-readout').textContent`);
-    const top = new RegExp(`^\\(-?\\d+, ${319 - row}, -?\\d+\\) · (?!air )`);
-    t.check(voxelReadoutOk(first) && top.test(first), `hover on the top voxel: ${first}`, first);
-    await p.until(`/ · rule root\\S*$/.test(document.querySelector('.cs-readout').textContent)`, 'the hover rule id', 10000);
-    const ruled = await p.eval<string>(`document.querySelector('.cs-readout').textContent`);
-    const id = voxelRuleId(ruled);
-    t.check(voxelReadoutOk(ruled) && top.test(ruled) && id !== null && id.startsWith('root.rules[1].then.'), `the rule of the land top: ${ruled}`, ruled);
+  const hover = await hoverTopRule(p);
+  t.check(hover !== null, `sample ${RULE_SAMPLE} has a ground top (row ${hover?.row ?? '-'}, y ${hover === null ? '-' : 319 - hover.row})`);
+  if (hover !== null) {
+    t.check(hover.firstOk, `hover on the top voxel: ${hover.first}`, hover.first);
+    t.check(hover.ruledOk, `the rule of the land top: ${hover.ruled}`, hover.ruled);
   }
+}
+
+/**
+ * On the open Voxels slice: the pointer on the top solid voxel of sample RULE_SAMPLE, read from the slice image (not a
+ * fixed height); the readout at once (`first`: SP3a's format, that voxel's y, not air) and, after waiting for
+ * ` · rule root…`, with its rule id (`ruled`: a top voxel's rule is in the sky-open branch, `root.rules[1].then.…`).
+ * Null when the sample column is all air.
+ */
+async function hoverTopRule(p: Page): Promise<{ readonly row: number; readonly first: string; readonly firstOk: boolean; readonly ruled: string; readonly ruledOk: boolean } | null> {
+  const column = await p.eval<number[]>(`Array.from(document.querySelector('.cs-voxels').getContext('2d').getImageData(${RULE_SAMPLE}, 0, 1, 384).data)`);
+  const row = groundTopRow(column);
+  if (row === null) return null;
+  await p.mouse('mouseMoved', ...sliceCellPoint((await p.center('.cs-voxels')).box, RULE_SAMPLE, row));
+  const first = await p.eval<string>(`document.querySelector('.cs-readout').textContent`);
+  const top = new RegExp(`^\\(-?\\d+, ${319 - row}, -?\\d+\\) · (?!air )`);
+  await p.until(`/ · rule root\\S*$/.test(document.querySelector('.cs-readout').textContent)`, 'the hover rule id', 10000);
+  const ruled = await p.eval<string>(`document.querySelector('.cs-readout').textContent`);
+  const id = voxelRuleId(ruled);
+  return {
+    row, first, firstOk: voxelReadoutOk(first) && top.test(first),
+    ruled, ruledOk: voxelReadoutOk(ruled) && top.test(ruled) && id !== null && id.startsWith('root.rules[1].then.'),
+  };
 }
 
 /**
@@ -963,12 +988,14 @@ async function runShots(p: Page, dir: string): Promise<string[]> {
   await sleep(1000);
   await save('cross-section-voxels.png');
 
-  // The Voxels mode on the mountain line (SP3b spec §7, §11): the real T's peaks, the pointer on the rock below them.
+  // The Voxels mode on the mountain line (SP3b spec §7, §11): the real T's peaks, the pointer on the top voxel of the
+  // rule step's sample and the readout with its surface rule id (SP3c spec §6, §9).
   const { text, summary } = await openMountainVoxels(p);
   if (!mountainSummaryOk(summary)) throw new Error(`the mountain slice: ${summary} (expected a ground top above y 200 and no water)`);
   console.log(`  mountain line: ${text}; ${summary}`);
-  const mvox = await p.center('.cs-voxels');
-  await p.mouse('mouseMoved', mvox.box.x + mvox.box.width * 0.4, mvox.box.y + (mvox.box.height * (319 - 120)) / 384);
+  const hover = await hoverTopRule(p);
+  if (hover === null || !hover.ruledOk) throw new Error(`the mountain screenshot's hover: ${hover?.ruled ?? `sample ${RULE_SAMPLE} is all air`}`);
+  console.log(`  hover: ${hover.ruled}`);
   await sleep(1000);
   await save('cross-section-voxels-mountain.png');
   return out;
