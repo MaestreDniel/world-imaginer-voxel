@@ -7,11 +7,16 @@ import type { NestedSpline } from '../../src/core/spline/types';
 import { buildColumnSample, gorgeAt, newColumnSample, riverWetAt, type ColumnSample } from '../../src/gen/column/columnStage';
 import { cellEligible, lakeCell } from '../../src/gen/column/lakes';
 import { hex64 } from '../../src/core/hash';
+import { latticeIndex } from '../../src/gen/column/columnStage';
+import { biomeName } from '../../src/gen/biomes/registry';
 import {
-  cellProbe, findWitness, intendedClass, leafLiveness, livenessColumns, perturbations, stageOutputHash, U2_DEFERRED_PREFIXES, u2Leaves,
+  cellProbe, findWitness, intendedClass, leafLiveness, livenessColumns, perturbations, stageOutputHash, surfaceAcceptance,
+  SURFACE_CLASSES, surfacePrefilter, surfaceSlotLeaves, u2Leaves,
   type LivenessClass,
   type LivenessColumn,
+  type SurfaceClass,
 } from '../../src/metrics/liveness';
+import { samplePoints } from '../../src/metrics/noiseStats';
 import { fillColumnT, regionHash } from '../../src/metrics/region';
 import { createStore } from '../../src/world/store/store';
 import { ctxFor } from '../harness/gen';
@@ -27,10 +32,44 @@ const moved = (path: string, value: unknown) => ctxFor('42', patchAt(path, value
 const CLASSES: readonly LivenessClass[] = [
   'land', 'land', 'coast', 'coast', 'channel', 'channel', 'gorge', 'gorge', 'basin', 'basin', 'rim', 'rim',
   'threshold:lakes.p', 'threshold:lakes.minC', 'threshold:lakes.offsetMin', 'threshold:lakes.offsetMax',
+  'cliffY', 'cliffSteep', 'snowline', 'patch',
 ];
+/** SP3b's 16 class columns at seed 42 (the third pass leaves them, and every verdict decided on them, unchanged). */
+const SP3B_COLUMNS: readonly (readonly [number, number])[] = [
+  [-25833, 16792], [-15542, -30245], [23279, 27598], [-1451, 21847], [6298, -18132], [13027, -10891], [-2619, 6024],
+  [31185, -27596], [-13409, -28645], [-22814, -6798], [-10536, 924], [-31628, -24239], [-24389, -23313], [23605, 2444],
+  [-16278, -8451], [26525, 25423],
+];
+/** SP3c spec §3.5's pins: (cx, cz) and the stream index of each surface class column at seed 42. */
+const SURFACE_PINS: Readonly<Record<SurfaceClass, readonly [number, number, number]>> = {
+  cliffY: [17107, 13836, 53],
+  cliffSteep: [-24200, -4864, 61],
+  snowline: [-25681, 32120, 255],
+  patch: [-20548, -22882, 11],
+};
+const SURFACE_LEAVES = SCHEMA.leaves.filter((l) => l.path.startsWith('surface.')).map((l) => l.path);
 let cached: LivenessColumn[] | null = null;
 /** The class columns of seed 42 and the default params (the scan runs once per file). */
 const columns = (): LivenessColumn[] => (cached ??= livenessColumns(CTX));
+
+const PATCH_BIOMES = ['taiga', 'snowy_taiga', 'savanna', 'jungle', 'swamp', 'windswept_hills', 'stony_shore', 'volcano', 'stony_peaks', 'frozen_peaks'];
+/**
+ * SP3c spec §3.5's corner prefilters at the default params, written from the spec: a dry corner (surfaceWaterLevel −∞)
+ * of the 25 quart corners (i, j ∈ 0 … 4) with T_top = T − lapse·max(0, surfaceEst − lapseBase).
+ */
+function surfaceShows(s: ColumnSample): Record<SurfaceClass, () => boolean> {
+  const f = s.f;
+  const p = DEFAULTS.surface;
+  const corners = Array.from({ length: 25 }, (_, n) => latticeIndex(n % 5, Math.floor(n / 5)));
+  const dry = (holds: (k: number) => boolean) => () => corners.some((k) => f.surfaceWaterLevel[k] === -Infinity && holds(k));
+  const tTop = (k: number) => f.T[k]! - p.lapse * Math.max(0, f.surfaceEst[k]! - p.lapseBase);
+  return {
+    cliffY: dry((k) => f.steep[k]! >= 0.85 * p.cliffSteep && f.surfaceEst[k]! >= 0.85 * p.cliffMinY - 8 && f.surfaceEst[k]! <= 1.15 * p.cliffMinY + 8),
+    cliffSteep: dry((k) => f.steep[k]! >= 0.85 * p.cliffSteep && f.surfaceEst[k]! >= p.cliffMinY - 8),
+    snowline: dry((k) => f.steep[k]! < p.cliffSteep && f.surfaceEst[k]! >= p.lapseBase && Math.abs(tTop(k) - p.snowline) <= 0.1),
+    patch: dry((k) => f.steep[k]! < p.cliffSteep && tTop(k) >= p.snowline && PATCH_BIOMES.includes(biomeName(s.biome[k]!))),
+  };
+}
 
 describe('perturbations', () => {
   test('every leaf of the schema gets two distinct perturbed values, each valid for the leaf', () => {
@@ -127,7 +166,25 @@ describe('class columns', () => {
     const empty = [...new Set(CLASSES)].filter((c) => got.filter((g) => g === c).length < CLASSES.filter((e) => e === c).length);
     expect(empty, `empty classes: ${empty.join(', ')}`).toEqual([]);
     expect(got).toEqual(CLASSES);
-    expect(new Set(columns().map((c) => `${c.cx},${c.cz}`)).size).toBe(16);
+    expect(new Set(columns().map((c) => `${c.cx},${c.cz}`)).size).toBe(20);
+  });
+
+  test('the first 16 columns are SP3b\'s; the surface classes come after, in the third pass order', () => {
+    expect(columns().slice(0, 16).map((c) => [c.cx, c.cz])).toEqual(SP3B_COLUMNS);
+    expect(SURFACE_CLASSES).toEqual(['cliffY', 'cliffSteep', 'snowline', 'patch']);
+    expect(columns().slice(16).map((c) => c.cls)).toEqual(SURFACE_CLASSES);
+  });
+
+  test('the surface class columns are the pinned ones (SP3c spec §3.5), each at its pinned stream index', () => {
+    const pts = samplePoints('sp2b.liveness', 512);
+    const firstIndex = (cx: number, cz: number): number =>
+      Array.from({ length: 512 }, (_, n) => n).find((n) => Math.floor(pts.x[n]! / 16) === cx && Math.floor(pts.z[n]! / 16) === cz) ?? -1;
+    for (const cls of SURFACE_CLASSES) {
+      const c = columns().find((x) => x.cls === cls)!;
+      const [cx, cz, index] = SURFACE_PINS[cls];
+      expect([c.cx, c.cz], cls).toEqual([cx, cz]);
+      expect(firstIndex(c.cx, c.cz), cls).toBe(index);
+    }
   });
 
   test('each column shows its class on its ColumnSample lattice', () => {
@@ -143,10 +200,21 @@ describe('class columns', () => {
         gorge: () => any((k) => river(k) && f.offset0[k]! > 120 && f.offset0[k]! < 170),
         basin: () => any((k) => f.lakeMask[k] === 1),
         rim: () => any((k) => f.lakeMask[k]! > 0 && f.lakeMask[k]! < 1),
+        ...surfaceShows(s),
       };
       const ok = c.cls.startsWith('threshold:') ? any((k) => f.lakeMask[k]! > 0) : shows[c.cls]!();
       expect(ok, `${c.cls} (${c.cx}, ${c.cz})`).toBe(true);
     }
+  });
+
+  test('the surface prefilters, written here from SP3c spec §3.5, hold on their columns at a dry corner', () => {
+    const s = newColumnSample();
+    for (const cls of SURFACE_CLASSES) {
+      const c = columns().find((x) => x.cls === cls)!;
+      expect(surfaceShows(buildColumnSample(CTX, c.cx, c.cz, s))[cls](), cls).toBe(true);
+    }
+    // The cliff column met by the cliffY prefilter in SP3c's pre-measurement is a coast column of the first passes.
+    expect(surfaceShows(buildColumnSample(CTX, 23279, 27598, s)).cliffY()).toBe(true);
   });
 
   test('each threshold column changes its shape hash when its gate leaf moves', () => {
@@ -162,7 +230,9 @@ describe('class columns', () => {
     // lakes.p = 0: no cell is eligible, so no variant closes a lake; the variant p = 0.15 opens some.
     const ctx0 = ctxFor('42', { lakes: { p: 0 } });
     const cols = livenessColumns(ctx0, 400);
-    expect(cols.map((c) => c.cls)).toEqual(['land', 'land', 'coast', 'coast', 'channel', 'channel', 'gorge', 'gorge', 'threshold:lakes.p']);
+    expect(cols.map((c) => c.cls)).toEqual([
+      'land', 'land', 'coast', 'coast', 'channel', 'channel', 'gorge', 'gorge', 'threshold:lakes.p', ...SURFACE_CLASSES,
+    ]);
     const p = cols[8]!;
     const s = buildColumnSample(ctx0, p.cx, p.cz, newColumnSample());
     expect(Array.from(s.f.lakeMask).every((m) => m === 0)).toBe(true);
@@ -178,6 +248,62 @@ describe('class columns', () => {
     expect(intendedClass('rivers.wetMargin')).toBe('channel');
     expect(intendedClass('climate.C')).toBe('land');
     expect(intendedClass('biomes.zoomJitter')).toBe('land');
+    expect(intendedClass('surface.cliffMinY')).toBe('cliffY');
+    expect(intendedClass('surface.cliffSteep')).toBe('cliffSteep');
+    for (const p of ['surface.snowline', 'surface.lapse', 'surface.lapseBase']) expect(intendedClass(p), p).toBe('snowline');
+    for (const p of ['surface.noises.patch', 'surface.patchThreshold']) expect(intendedClass(p), p).toBe('patch');
+    for (const p of ['surface.noises.depth', 'surface.depthMul']) expect(intendedClass(p), p).toBe('land');
+  });
+});
+
+describe('surface class columns (SP3c spec §3.5)', () => {
+  test('the slots serve every surface.* leaf except the depth ones, which belong to land', () => {
+    expect(SURFACE_CLASSES.map((c) => surfaceSlotLeaves(c))).toEqual([
+      ['surface.cliffMinY'], ['surface.cliffSteep'], ['surface.snowline', 'surface.lapse', 'surface.lapseBase'],
+      ['surface.noises.patch', 'surface.patchThreshold'],
+    ]);
+    const served = [...SURFACE_CLASSES.flatMap((c) => surfaceSlotLeaves(c)), 'surface.noises.depth', 'surface.depthMul'];
+    expect([...served].sort()).toEqual([...SURFACE_LEAVES].sort());
+  });
+
+  test('every leaf a surface column serves acts on it (the acceptance check)', () => {
+    const acceptance = surfaceAcceptance(CTX);
+    for (const cls of SURFACE_CLASSES) {
+      const c = columns().find((x) => x.cls === cls)!;
+      expect(acceptance.accepts(cls, c.cx, c.cz), cls).toBe(true);
+      for (const path of surfaceSlotLeaves(cls)) expect(acceptance.leafActs(path, c.cx, c.cz), `${cls}: ${path}`).toBe(true);
+    }
+  });
+
+  test('surfacePrefilter equals the prefilters written from the spec on the first 400 stream columns', () => {
+    const pts = samplePoints('sp2b.liveness', 400);
+    const s = newColumnSample();
+    const hits = new Map<SurfaceClass, number>(SURFACE_CLASSES.map((c) => [c, 0]));
+    for (let n = 0; n < 400; n++) {
+      buildColumnSample(CTX, Math.floor(pts.x[n]! / 16), Math.floor(pts.z[n]! / 16), s);
+      const shows = surfaceShows(s);
+      for (const cls of SURFACE_CLASSES) {
+        const want = shows[cls]();
+        expect(surfacePrefilter(CTX, cls, s), `${cls} at stream index ${n}`).toBe(want);
+        if (want) hits.set(cls, hits.get(cls)! + 1);
+      }
+    }
+    for (const cls of SURFACE_CLASSES) expect(hits.get(cls)!, cls).toBeGreaterThan(3);
+  });
+
+  test('the acceptance check looks below the top: the depth leaves act on the first land column', () => {
+    // surfaceDepth never changes a top voxel's block (every SKIN gate holds there), only how many under blocks follow it.
+    const acceptance = surfaceAcceptance(CTX);
+    const land = columns()[0]!;
+    for (const path of ['surface.noises.depth', 'surface.depthMul']) expect(acceptance.leafActs(path, land.cx, land.cz), path).toBe(true);
+  });
+
+  test('a prefiltered column whose leaf cannot act is rejected: coast column (23279, 27598) for cliffY', () => {
+    // Its dry steep corners meet the cliffY prefilter, but its land tops lie at y 63-64, far below cliffMinY ± 15 %.
+    const acceptance = surfaceAcceptance(CTX);
+    expect(acceptance.leafActs('surface.cliffMinY', 23279, 27598)).toBe(false);
+    expect(acceptance.accepts('cliffY', 23279, 27598)).toBe(false);
+    expect(() => acceptance.leafActs('density.detailAmpLo', 23279, 27598)).toThrow(/not a surface leaf/);
   });
 });
 
@@ -231,14 +357,14 @@ describe('stage output hashes', () => {
 });
 
 describe('the terrain stage in U2 (SP3b spec §3.3)', () => {
-  test('U2 covers the leaves of the climate, shape, biome2d and terrain stages, every density.* leaf among them, except the deferred surface.* group (SP3c spec §3.5: its class columns are SP3c\'s U2 task)', () => {
+  test('U2 covers the leaves of the climate, shape, biome2d and terrain stages, every density.* and surface.* leaf among them', () => {
     const stages = ['climate', 'shape', 'biome2d', 'terrain'];
-    expect(U2_DEFERRED_PREFIXES).toEqual(['surface.']);
     const surface = SCHEMA.leaves.filter((l) => l.path.startsWith('surface.'));
     expect(surface.length).toBe(9);
     for (const l of surface) expect(l.meta.stage, l.path).toBe('terrain');
-    const expected = SCHEMA.leaves.filter((l) => l.meta.stage !== undefined && stages.includes(l.meta.stage) && !l.path.startsWith('surface.')).map((l) => l.path);
+    const expected = SCHEMA.leaves.filter((l) => l.meta.stage !== undefined && stages.includes(l.meta.stage)).map((l) => l.path);
     expect(u2Leaves().map((l) => l.path)).toEqual(expected);
+    expect(expected).toEqual(expect.arrayContaining(surface.map((l) => l.path)));
     const density = SCHEMA.leaves.filter((l) => l.path.startsWith('density.'));
     expect(density.length).toBe(5);
     for (const l of density) expect(l.meta.stage, l.path).toBe('terrain');
@@ -256,8 +382,22 @@ describe('the terrain stage in U2 (SP3b spec §3.3)', () => {
     }
   });
 
-  test('a terrain leaf is tried on the land and coast columns only, with no stream witness', () => {
-    const others = columns().filter((c) => c.cls !== 'land' && c.cls !== 'coast');
+  test('every surface.* leaf is decided: each on its own class column, the depth leaves on a land column', () => {
+    for (const path of SURFACE_LEAVES) {
+      const r = leafLiveness(CTX, path, columns());
+      const cls = intendedClass(path);
+      const c = columns().find((x) => x.cls === cls)!;
+      expect(r, path).toEqual({ path, live: true, via: `${cls} column (${c.cx}, ${c.cz})`, cls });
+    }
+  });
+
+  test('a surface leaf whose class column is missing is dead, never a silent pass: cliffMinY on SP3b\'s 16 columns', () => {
+    expect(leafLiveness(CTX, 'surface.cliffMinY', columns().slice(0, 16))).toEqual({ path: 'surface.cliffMinY', live: false, via: null, cls: 'cliffY' });
+  });
+
+  test('a terrain leaf is tried on the land, coast and surface columns only, with no stream witness', () => {
+    const terrain: readonly LivenessClass[] = ['land', 'coast', ...SURFACE_CLASSES];
+    const others = columns().filter((c) => !terrain.includes(c.cls));
     expect(others.length).toBe(12);
     expect(leafLiveness(CTX, 'density.noises.detail', others)).toEqual({ path: 'density.noises.detail', live: false, via: null, cls: 'land' });
   });

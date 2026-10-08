@@ -1,10 +1,14 @@
 /**
  * U2, parameter liveness (SP2b spec §7, master §6.4): every leaf of the climate, shape, biome2d and terrain stages,
- * moved by its per-kind ±15 % perturbation, must change its home stage's output hash on one of 16 class columns or on
- * a witness (seed 42, default profile). The class columns are chosen by the lattice conditions under which the leaves
- * act; lake-gate leaves (lakes.p, minC, offsetMin, offsetMax) get one threshold column each. A `terrain` leaf (SP3b
- * spec §3.3: the `density.*` group) is tried on the land and coast class columns only, with no witness search: its
- * output is a whole generated column. Follows the core determinism rules (DET_FILES in test/arch/rules/banned.ts).
+ * moved by its per-kind ±15 % perturbation, must change its home stage's output hash on one of the class columns or on
+ * a witness (seed 42, default profile). SP2b's 16 class columns are chosen by the lattice conditions under which the
+ * leaves act; lake-gate leaves (lakes.p, minC, offsetMin, offsetMax) get one threshold column each. SP3c's surface
+ * class columns (SP3c spec §3.5: cliffY, cliffSteep, snowline, patch) are found by a third pass, after SP2b's two:
+ * a corner prefilter on the ColumnSample, then an acceptance check on the generated column (every leaf the slot
+ * serves changes the reference evaluator's state of a voxel near a sky-open top). A `terrain` leaf (SP3b spec §3.3:
+ * the `density.*` group; SP3c: the `surface.*` group) is tried on the land, coast and surface class columns only (its
+ * intended class first), with no witness search: its output is a whole generated column. Follows the core
+ * determinism rules (DET_FILES in test/arch/rules/banned.ts).
  */
 import { SEA_LEVEL } from '../core/constants';
 import { hash4, hashF64, hex64 } from '../core/hash';
@@ -18,10 +22,14 @@ import type { NestedSpline } from '../core/spline/types';
 import { createGenContext, noiseFor, type GenContext } from '../gen/context';
 import { newClimate, sampleClimate } from '../gen/column/climate';
 import { newPointRecord, samplePoint, waterLevel } from '../gen/column/columnPoint';
-import { buildColumnSample, newColumnSample, readBiome, type ColumnSample } from '../gen/column/columnStage';
+import { buildColumnSample, latticeIndex, newColumnSample, readBiome, type ColumnSample } from '../gen/column/columnStage';
 import { cellEligible, lakeCell, lakeSpace, nearestCell, newLake, sampleLakes, type CellProbe, type LakeCell } from '../gen/column/lakes';
 import { newRiver, sampleRivers } from '../gen/column/rivers';
 import { newShape, sampleShape } from '../gen/column/shape';
+import { biomeId, type SurfaceBiome } from '../gen/biomes/registry';
+import { createSurfaceContext, surfaceContextOf, type SurfaceContext } from '../gen/surface/context';
+import { surfaceProbeColumn } from '../gen/surface/probe';
+import { newSurfaceScan, scanColumn, type SurfaceScan } from '../gen/surface/scan';
 import { createStore } from '../world/store/store';
 import { samplePoints } from './noiseStats';
 import { fillColumnT, regionHash } from './region';
@@ -63,10 +71,22 @@ const POINTS = samplePoints;
 const CREATE_STORE = createStore;
 const FILL_T = fillColumnT;
 const REGION_HASH = regionHash;
+const LATTICE = latticeIndex;
+const BIOME_ID = biomeId;
+const SURFACE_CONTEXT = surfaceContextOf;
+const CREATE_SURFACE = createSurfaceContext;
+const PROBE_COLUMN = surfaceProbeColumn;
+const NEW_SCAN = newSurfaceScan;
+const SCAN_COLUMN = scanColumn;
+
+/** SP3c's surface class slots (SP3c spec §3.5), in the order a third-pass column is offered to them. */
+export const SURFACE_CLASSES = ['cliffY', 'cliffSteep', 'snowline', 'patch'] as const;
+export type SurfaceClass = (typeof SURFACE_CLASSES)[number];
 
 export type LivenessClass =
   | 'land' | 'coast' | 'channel' | 'gorge' | 'basin' | 'rim'
-  | 'threshold:lakes.p' | 'threshold:lakes.minC' | 'threshold:lakes.offsetMin' | 'threshold:lakes.offsetMax';
+  | 'threshold:lakes.p' | 'threshold:lakes.minC' | 'threshold:lakes.offsetMin' | 'threshold:lakes.offsetMax'
+  | SurfaceClass;
 
 export interface LivenessColumn { readonly cx: number; readonly cz: number; readonly cls: LivenessClass }
 
@@ -94,13 +114,14 @@ const LATTICE_REACH = 12;
 /** Coast columns: a lattice point with |offset0 − 63| ≤ 8. */
 const COAST_BAND = 8;
 const OUTPUT_STAGES: readonly string[] = ['climate', 'shape', 'biome2d', 'terrain'];
-/** The class columns a `terrain` leaf is tried on (SP3b spec §3.3). */
-const TERRAIN_CLASSES: readonly LivenessClass[] = ['land', 'coast'];
+/** The class columns a `terrain` leaf is tried on (SP3b spec §3.3, SP3c spec §3.5). */
+const TERRAIN_CLASSES: readonly LivenessClass[] = ['land', 'coast', ...SURFACE_CLASSES];
 /** One column's store: ≤ 24 dense block sections (1 MiB holds 128) and ≤ 26 byte slots (1 MiB holds 256). */
 const STORE_BYTES = 1 << 20;
 const CLASS_ORDER: readonly LivenessClass[] = [
   'land', 'coast', 'channel', 'gorge', 'basin', 'rim',
   'threshold:lakes.p', 'threshold:lakes.minC', 'threshold:lakes.offsetMin', 'threshold:lakes.offsetMax',
+  ...SURFACE_CLASSES,
 ];
 const GATE_KEYS = ['p', 'minC', 'offsetMin', 'offsetMax'] as const;
 type GateKey = (typeof GATE_KEYS)[number];
@@ -112,6 +133,9 @@ const LEAF_CLASS: ReadonlyMap<string, LivenessClass> = new Map<string, LivenessC
   ['lakes.rimWidth', 'rim'], ['lakes.rimRise', 'rim'], ['lakes.rimSigma', 'rim'],
   ['rivers.gorgeDepth', 'gorge'], ['rivers.altFadeLo', 'gorge'], ['rivers.altFadeHi', 'gorge'],
   ['rivers.coastFadeLo', 'coast'], ['rivers.coastFadeHi', 'coast'],
+  ['surface.cliffMinY', 'cliffY'], ['surface.cliffSteep', 'cliffSteep'],
+  ['surface.snowline', 'snowline'], ['surface.lapse', 'snowline'], ['surface.lapseBase', 'snowline'],
+  ['surface.noises.patch', 'patch'], ['surface.patchThreshold', 'patch'],
 ]);
 
 /** The class whose columns are meant to exercise a leaf (named when the leaf is dead). */
@@ -456,6 +480,133 @@ function isLand(ctx: GenContext, L: Lattice, cx: number, cz: number): boolean {
   return true;
 }
 
+// ---------------------------------------------------------------- SP3c surface class columns
+
+/** The leaves each surface slot serves (SP3c spec §3.5); its acceptance check requires every one of them to act. */
+const SURFACE_SLOT_LEAVES: Readonly<Record<SurfaceClass, readonly string[]>> = {
+  cliffY: ['surface.cliffMinY'],
+  cliffSteep: ['surface.cliffSteep'],
+  snowline: ['surface.snowline', 'surface.lapse', 'surface.lapseBase'],
+  patch: ['surface.noises.patch', 'surface.patchThreshold'],
+};
+/** The 2D biomes whose tops have patches in the default tree (SP3c spec §3.5 `patch` prefilter). */
+const PATCH_BIOMES: readonly SurfaceBiome[] = [
+  'taiga', 'snowy_taiga', 'savanna', 'jungle', 'swamp', 'windswept_hills', 'stony_shore', 'volcano', 'stony_peaks', 'frozen_peaks',
+];
+const PATCH_BIOME_IDS: ReadonlySet<number> = new Set(PATCH_BIOMES.map((b) => BIOME_ID(b)));
+/** The column's 25 quart corners (i, j ∈ 0 … 4) as lattice indices. */
+const CORNERS: readonly number[] = Array.from({ length: 25 }, (_, n) => LATTICE(n % 5, Math.floor(n / 5)));
+/** The prefilters' y margin (blocks) and the snowline band (|T_top − snowline| ≤ 0.1). */
+const PREFILTER_Y = 8;
+const SNOW_BAND = 0.1;
+/** Acceptance checks a surface slot makes before it stays empty. */
+const MAX_CHECKS = 64;
+
+/** The leaves a surface slot serves (SP3c spec §3.5 "Leaves per class"). */
+export function surfaceSlotLeaves(cls: SurfaceClass): readonly string[] {
+  return SURFACE_SLOT_LEAVES[cls];
+}
+
+/**
+ * The corner prefilter of a surface slot (SP3c spec §3.5) on a column's ColumnSample, at its 25 quart corners, with
+ * `ctx.params.surface`: a dry corner (surfaceWaterLevel −∞) where, with T_top = T − lapse·max(0, surfaceEst − lapseBase),
+ * - cliffY: steep ≥ 0.85·cliffSteep and surfaceEst ∈ [0.85·cliffMinY − 8, 1.15·cliffMinY + 8];
+ * - cliffSteep: steep ≥ 0.85·cliffSteep and surfaceEst ≥ cliffMinY − 8;
+ * - snowline: steep < cliffSteep, surfaceEst ≥ lapseBase and |T_top − snowline| ≤ 0.1;
+ * - patch: steep < cliffSteep, T_top ≥ snowline and a 2D biome with top patches.
+ */
+export function surfacePrefilter(ctx: GenContext, cls: SurfaceClass, s: ColumnSample): boolean {
+  const p = ctx.params.surface;
+  const f = s.f;
+  const steepMin = (1 - STEP) * p.cliffSteep;
+  for (const k of CORNERS) {
+    if (f.surfaceWaterLevel[k]! > -Infinity) continue;
+    const steep = f.steep[k]!;
+    const est = f.surfaceEst[k]!;
+    const tTop = f.T[k]! - p.lapse * Math.max(0, est - p.lapseBase);
+    let ok: boolean;
+    switch (cls) {
+      case 'cliffY':
+        ok = steep >= steepMin && est >= (1 - STEP) * p.cliffMinY - PREFILTER_Y && est <= (1 + STEP) * p.cliffMinY + PREFILTER_Y;
+        break;
+      case 'cliffSteep':
+        ok = steep >= steepMin && est >= p.cliffMinY - PREFILTER_Y;
+        break;
+      case 'snowline':
+        ok = steep < p.cliffSteep && est >= p.lapseBase && Math.abs(tTop - p.snowline) <= SNOW_BAND;
+        break;
+      case 'patch':
+        ok = steep < p.cliffSteep && tTop >= p.snowline && PATCH_BIOME_IDS.has(s.biome[k]!);
+        break;
+    }
+    if (ok) return true;
+  }
+  return false;
+}
+
+/** One U2 perturbation of a surface leaf: its SurfaceContext (built apart) and the tree's maxSurfaceDepth. */
+interface SurfaceVariant { readonly sc: SurfaceContext; readonly maxDepth: number }
+
+function maxSurfaceDepthOf(sc: SurfaceContext): number {
+  const fp = sc.compiled.fastPath;
+  if (fp === null) throw new Error('U2: the default surface tree has no fast path');
+  return fp.maxSurfaceDepth;
+}
+
+/** Acceptance checks over one base context; the variants' SurfaceContexts are built once per leaf. */
+export interface SurfaceAcceptance {
+  /** True when perturbing `path` (some U2 perturbation) changes the state of a voxel near a sky-open top of (cx, cz). */
+  leafActs(path: string, cx: number, cz: number): boolean;
+  /** The acceptance check of slot `cls` on column (cx, cz): every leaf the slot serves acts there. */
+  accepts(cls: SurfaceClass, cx: number, cz: number): boolean;
+}
+
+/**
+ * SP3c spec §3.5's acceptance check. Column (cx, cz) is generated once at `base`'s params (the T stage's density fill,
+ * water v0 and biome buffer, `surfaceProbeColumn`) and scanned; a leaf acts when, for one of its U2 perturbations (the
+ * other leaves at `base`'s values), some solid voxel within maxSurfaceDepth (the larger of the base tree's and the
+ * variant's) of the top of a sky-open run gets a different state from the reference evaluator than at `base`. No
+ * `surface.*` leaf changes solidity, water or the biomes, so a variant re-runs only the scan (its settings) and its
+ * rules (its tree) on the base fill.
+ */
+export function surfaceAcceptance(base: GenContext): SurfaceAcceptance {
+  const sc = SURFACE_CONTEXT(base);
+  const baseDepth = maxSurfaceDepthOf(sc);
+  const variants = new Map<string, readonly SurfaceVariant[]>();
+  const vscan: SurfaceScan = NEW_SCAN();
+  const variantsOf = (path: string): readonly SurfaceVariant[] => {
+    let v = variants.get(path);
+    if (v === undefined) {
+      v = variantContexts(base, leafInfo(path)).map((c) => {
+        const vsc = CREATE_SURFACE(c);
+        return { sc: vsc, maxDepth: Math.max(baseDepth, maxSurfaceDepthOf(vsc)) };
+      });
+      variants.set(path, v);
+    }
+    return v;
+  };
+  const leafActs = (path: string, cx: number, cz: number): boolean => {
+    if (!path.startsWith('surface.')) throw new Error(`U2: ${path} is not a surface leaf`);
+    const col = PROBE_COLUMN(sc, cx, cz);
+    const scan = col.scan;
+    const s = sc.density.columns.get(cx, cz);
+    for (const v of variantsOf(path)) {
+      SCAN_COLUMN(vscan, v.sc.settings, s, col.solid, col.water, col.biomes);
+      for (let p = 0; p < 256; p++) {
+        const r0 = scan.runFirst[p]!;
+        if (r0 === scan.runFirst[p + 1]) continue;
+        const top = scan.runTop[r0]!;
+        for (let y = top; y >= Math.max(-63, top - v.maxDepth); y--) {
+          if (col.solid[((y + 64) << 8) | p] === 0) continue;
+          if (sc.reference.state(scan, sc.settings, p, y) !== v.sc.reference.state(vscan, v.sc.settings, p, y)) return true;
+        }
+      }
+    }
+    return false;
+  };
+  return { leafActs, accepts: (cls, cx, cz) => SURFACE_SLOT_LEAVES[cls].every((path) => leafActs(path, cx, cz)) };
+}
+
 interface Slot {
   readonly cls: LivenessClass;
   readonly gate: Gate | null;
@@ -463,11 +614,14 @@ interface Slot {
 }
 
 /**
- * The 16 class columns of spec §7, scanning samplePoints('sp2b.liveness', 200000): 2 land, 2 coast, 2 channel
- * (one with a land point in the wetMargin band), 2 gorge, 2 basin, 2 rim and one threshold column per lake-gate
- * leaf. Rarer classes take a column first; a column fills one slot. A gate whose band a variant closes is never
- * met in the scan falls back to the band a variant opens. Returned in class order; an empty class is missing.
- * `streamLength` shortens the scan (tests only).
+ * The class columns, scanning samplePoints('sp2b.liveness', 200000). First SP2b's 16 of spec §7: 2 land, 2 coast,
+ * 2 channel (one with a land point in the wetMargin band), 2 gorge, 2 basin, 2 rim and one threshold column per
+ * lake-gate leaf; rarer classes take a column first; a gate whose band a variant closes is never met in the scan
+ * falls back to the band a variant opens. Then SP3c's third pass (SP3c spec §3.5) over the same stream, skipping every
+ * column already taken: each column is offered to the open surface slots in `SURFACE_CLASSES` order and the first
+ * whose corner prefilter and acceptance check both hold takes it; a slot makes at most 64 acceptance checks, then
+ * stays empty. A column fills one slot. Returned in class order; an empty class is missing. `streamLength` shortens
+ * the scan (tests only).
  */
 export function livenessColumns(ctx: GenContext, streamLength = STREAM_N): LivenessColumn[] {
   const pts = POINTS(STREAM, streamLength);
@@ -525,6 +679,27 @@ export function livenessColumns(ctx: GenContext, streamLength = STREAM_N): Liven
   };
   scan(1, slots.map((_, s) => s));
   scan(2, slots.map((_, s) => s).filter((s) => slots[s]!.gate !== null));
+  // The third pass: SP3c's surface slots (SP2b's 16 columns, and every verdict decided on them, stay).
+  const acceptance = surfaceAcceptance(ctx);
+  const checks = new Map<SurfaceClass, number>(SURFACE_CLASSES.map((c) => [c, 0]));
+  for (let n = 0; n < streamLength; n++) {
+    const open = SURFACE_CLASSES.filter((c) => checks.get(c)! < MAX_CHECKS && !chosen.some((x) => x !== null && x.cls === c));
+    if (open.length === 0) break;
+    const cx = Math.floor(pts.x[n]! / 16);
+    const cz = Math.floor(pts.z[n]! / 16);
+    const key = (cx + 32768) * 65536 + (cz + 32768);
+    if (used.has(key)) continue;
+    const s = BUILD(ctx, cx, cz, SAMPLE);
+    for (const cls of open) {
+      if (!surfacePrefilter(ctx, cls, s)) continue;
+      checks.set(cls, checks.get(cls)! + 1);
+      if (acceptance.accepts(cls, cx, cz)) {
+        chosen.push({ cx, cz, cls });
+        used.add(key);
+        break;
+      }
+    }
+  }
   const out: LivenessColumn[] = [];
   for (const cls of CLASS_ORDER) for (const c of chosen) if (c !== null && c.cls === cls) out.push(c);
   return out;
@@ -540,20 +715,9 @@ function stageOf(info: LeafInfo): OutputStage {
   return s as OutputStage;
 }
 
-/**
- * Terrain-stage leaves U2 does not decide yet: SP3c's `surface.*` group, which no stage reads before the surface pass
- * and whose class columns (cliffY, cliffSteep, snowline, patch, badlands) come with SP3c's U2 task (SP3c spec §3.5).
- * That task empties this list.
- */
-export const U2_DEFERRED_PREFIXES: readonly string[] = ['surface.'];
-
-/**
- * The leaves U2 decides, in schema order: home stage climate, shape, biome2d or terrain (SP3b spec §3.3), except the
- * deferred ones (`U2_DEFERRED_PREFIXES`).
- */
+/** The leaves U2 decides, in schema order: home stage climate, shape, biome2d or terrain (SP3b spec §3.3). */
 export function u2Leaves(): readonly LeafInfo[] {
-  return SCHEMA_.leaves.filter((l) => l.meta.stage !== undefined && OUTPUT_STAGES.includes(l.meta.stage)
-    && !U2_DEFERRED_PREFIXES.some((pre) => l.path.startsWith(pre)));
+  return SCHEMA_.leaves.filter((l) => l.meta.stage !== undefined && OUTPUT_STAGES.includes(l.meta.stage));
 }
 
 /** Cells of a square spiral from (0, 0): ring r ≥ 1 has 8r cells, from (−r, −r) along j = −r, then i = r, j = r, i = −r. */
@@ -646,8 +810,8 @@ function decide(base: GenContext, info: LeafInfo, columns: readonly LivenessColu
 
 /**
  * One leaf's U2 verdict over `columns` (the class columns of `base`): its stage output hash on the class columns (the
- * intended class first; a `terrain` leaf only on the land and coast ones), then, except for a `terrain` leaf, the
- * witness search.
+ * intended class first; a `terrain` leaf only on the land, coast and surface ones), then, except for a `terrain` leaf,
+ * the witness search.
  */
 export function leafLiveness(base: GenContext, path: string, columns: readonly LivenessColumn[]): LivenessResult {
   return decide(base, leafInfo(path), columns, baseHasher(base));
