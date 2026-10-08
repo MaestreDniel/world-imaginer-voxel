@@ -10,6 +10,7 @@
  * - A `Profile | Voxels` toggle in the header (SP3a spec §5.2). Voxels draws the vertical slice under the line
  *   from one `slice` job: one pixel per sample (512 × 384, row 0 at y 319) scaled to the drawer, in the palette
  *   of voxels.ts, with the sea-level line at 63; hovering reads the voxel (⌊xᵢ⌋, y, ⌊zᵢ⌋), its block and fluid.
+ *   Its legend keys every registry state (air, stone, bedrock and the SP3c terrain palette), water and the sea line.
  * - The current mode's result is requested (model.ts createSectionRequests, createSliceRequests) when the preview
  *   driver settles while the tab is on screen, when the tab or the mode comes on screen while it is settled and
  *   when a new line is set, so it always runs on the draft the map shows. It is stale (dimmed, with its status)
@@ -33,7 +34,7 @@ import {
   areaPath, createSectionRequests, createSliceRequests, flagRuns, nearestPoint, runSpan, sectionRange, sectionReadout, sectionStatus, sectionSummary,
   sectionView, segmentText, waterRuns, SECTION_MODES, type Run, type SectionMode,
 } from './model';
-import { sliceRgba, sliceSummary, SEA_LEVEL_Y, VOXEL_COLORS, voxelCell, voxelPlots, voxelReadout, voxelRgb, type Rgb } from './voxels';
+import { sliceRgba, sliceSummary, SEA_LEVEL_Y, VOXEL_COLORS, voxelCell, voxelLegend, voxelPlots, voxelReadout, voxelRgb, type Rgb } from './voxels';
 
 export interface SectionDeps {
   readonly session: WorldSession;
@@ -140,26 +141,27 @@ export function createCrossSection(host: HTMLElement, deps: SectionDeps): CrossS
     item.append(el('span', `cs-swatch ${cls}`), el('span', '', label));
     legend.append(item);
   }
-  const voxelLegend = el('div', 'cs-legend');
-  voxelLegend.hidden = true;
+  const voxelKeys = el('div', 'cs-legend cs-voxel-legend');
+  voxelKeys.hidden = true;
   const deep = voxelRgb(AIR, WATER_SOURCE, 48);
+  // Every registry state in state order (air, stone, bedrock, the SP3c terrain palette), then water and the sea line.
   for (const [bg, label] of [
-    [css(VOXEL_COLORS.sky), 'air'], [css(VOXEL_COLORS.stone), 'stone'], [css(VOXEL_COLORS.bedrock), 'bedrock'],
-    [`linear-gradient(to right, ${css(VOXEL_COLORS.water)}, ${css(deep)})`, 'water, darker with depth'],
-  ] as const) {
+    ...voxelLegend().map((k) => [css(k.rgb), k.label] as const),
+    [`linear-gradient(to right, ${css(VOXEL_COLORS.water)}, ${css(deep)})`, 'water, darker with depth'] as const,
+  ]) {
     const item = el('span', 'cs-key');
     const sw = el('span', 'cs-swatch');
     sw.style.background = bg;
     item.append(sw, el('span', '', label));
-    voxelLegend.append(item);
+    voxelKeys.append(item);
   }
   const seaKey = el('span', 'cs-key');
   const seaSwatch = el('span', 'cs-swatch cs-key-sealine');
   seaSwatch.style.borderTopColor = css(VOXEL_COLORS.seaLevel);
   seaKey.append(seaSwatch, el('span', '', `sea level ${SEA_LEVEL_Y}`));
-  voxelLegend.append(seaKey);
+  voxelKeys.append(seaKey);
   const readout = el('div', 'cs-readout', HINT);
-  element.append(head, summary, plotHost, legend, voxelLegend, readout);
+  element.append(head, summary, plotHost, legend, voxelKeys, readout);
   host.replaceChildren(element);
 
   let w = 0;
@@ -361,7 +363,7 @@ export function createCrossSection(host: HTMLElement, deps: SectionDeps): CrossS
     clearBtn.disabled = line === null;
     for (const b of modeButtons) b.setAttribute('aria-pressed', String(b.dataset['mode'] === mode));
     legend.hidden = mode !== 'profile';
-    voxelLegend.hidden = mode !== 'voxels';
+    voxelKeys.hidden = mode !== 'voxels';
     const profile = mode === 'profile' ? requests.shown?.value ?? null : null;
     const slice = mode === 'voxels' ? slices.shown?.value ?? null : null;
     summary.textContent = profile !== null ? sectionSummary(profile) : slice !== null ? sliceText(slice) : '';

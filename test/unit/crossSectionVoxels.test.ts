@@ -5,11 +5,14 @@ import { segmentPointAt, type Segment } from '../../src/metrics/crossSection';
 import { genRegionInProcess } from '../../src/metrics/region';
 import { createSliceRequests, sectionStatus, SECTION_MODES } from '../../src/ui/crossSection/model';
 import {
-  blockName, fluidText, sliceRgba, sliceSummary, SEA_LEVEL_Y, VOXEL_COLORS, voxelCell, voxelPlots, voxelReadout, voxelRgb,
+  blockName, fluidText, sliceRgba, sliceSummary, SEA_LEVEL_Y, VOXEL_COLORS, voxelCell, voxelLegend, voxelPlots, voxelReadout, voxelRgb,
+  type Rgb,
 } from '../../src/ui/crossSection/voxels';
 import { toPx } from '../../src/ui/splineEditor/model';
 import { FLUID_LAVA, FLUID_WATER, packFluid, WATER_SOURCE } from '../../src/world/blocks/fluid';
-import { AIR, BEDROCK, STONE } from '../../src/world/blocks/index';
+import {
+  AIR, BEDROCK, DEEPSLATE, GRASS_BLOCK, GRAVEL, PACKED_ICE, REGISTRY, SNOW_BLOCK, STONE, TERRACOTTA, CALCITE,
+} from '../../src/world/blocks/index';
 import { createStore } from '../../src/world/store/store';
 import { SLICE_POINTS, SLICE_SAMPLES, sliceIndex } from '../../src/workers/protocol';
 import { createSliceJob } from '../../src/workers/sliceJob';
@@ -49,10 +52,57 @@ describe('the Voxels palette (SP3a spec §5.2)', () => {
     expect(voxelRgb(STONE, 0, 0)).toEqual(VOXEL_COLORS.stone);
     expect(voxelRgb(BEDROCK, 0, 0)).toEqual(VOXEL_COLORS.bedrock);
     expect(voxelRgb(STONE, WATER_SOURCE, 3)).toEqual(VOXEL_COLORS.stone);
-    expect(voxelRgb(7, 0, 0)).toEqual(VOXEL_COLORS.unknown);
+    expect(voxelRgb(REGISTRY.stateCount, 0, 0)).toEqual(VOXEL_COLORS.unknown);
+    expect(voxelRgb(4095, 0, 0)).toEqual(VOXEL_COLORS.unknown);
+    expect(voxelRgb(-1, 0, 0)).toEqual(VOXEL_COLORS.unknown);
     const [r, g, b] = VOXEL_COLORS.stone;
     expect(r === g && g === b).toBe(true);
     expect(Math.max(...VOXEL_COLORS.bedrock)).toBeLessThan(40);
+  });
+  test('every registry state has its own colour, keyed by its type name; the non-air colours are ≥ 24 apart (SP3c spec §6, §8)', () => {
+    const dist = (a: Rgb, b: Rgb): number => Math.abs(a[0] - b[0]) + Math.abs(a[1] - b[1]) + Math.abs(a[2] - b[2]);
+    const colors = VOXEL_COLORS as Readonly<Record<string, Rgb>>;
+    expect(REGISTRY.stateCount).toBe(25);
+    const named: [string, Rgb][] = [['sky (air)', VOXEL_COLORS.sky], ['water', VOXEL_COLORS.water], ['unknown', VOXEL_COLORS.unknown]];
+    for (let s = 0; s < REGISTRY.stateCount; s++) {
+      const c = voxelRgb(s, 0, 0);
+      expect(c, REGISTRY.stateKey(s)).not.toEqual(VOXEL_COLORS.unknown);
+      if (s === AIR) continue;
+      expect(c, REGISTRY.stateKey(s)).toBe(colors[REGISTRY.typeName(REGISTRY.STATE_TYPE[s]!)]);
+      named.push([REGISTRY.stateKey(s), c]);
+    }
+    const close: string[] = [];
+    for (let i = 0; i < named.length; i++) {
+      for (let j = i + 1; j < named.length; j++) {
+        const d = dist(named[i]![1], named[j]![1]);
+        if (d < 24) close.push(`${named[i]![0]} / ${named[j]![0]}: ${d}`);
+      }
+    }
+    expect(close).toEqual([]);
+    // The spec's hues: grass green, whites for snow and calcite, pale blue for packed ice, grey gravel and deepslate,
+    // terracotta reddish-brown.
+    const [gr, gg, gb] = voxelRgb(GRASS_BLOCK, 0, 0);
+    expect(gg > gr && gg > gb).toBe(true);
+    for (const s of [SNOW_BLOCK, CALCITE]) expect(Math.min(...voxelRgb(s, 0, 0))).toBeGreaterThanOrEqual(200);
+    const [ir, ig, ib] = voxelRgb(PACKED_ICE, 0, 0);
+    expect(ib > ig && ig > ir && ir >= 128).toBe(true);
+    for (const s of [GRAVEL, DEEPSLATE]) {
+      const c = voxelRgb(s, 0, 0);
+      expect(Math.max(...c) - Math.min(...c)).toBeLessThanOrEqual(12);
+    }
+    const [tr, tg, tb] = voxelRgb(TERRACOTTA, 0, 0);
+    expect(tr > tg && tg > tb).toBe(true);
+  });
+  test('voxelLegend: every registry state in state order, labelled by its canonical key, in its voxel colour', () => {
+    const legend = voxelLegend();
+    expect(legend.map((k) => k.state)).toEqual(Array.from({ length: REGISTRY.stateCount }, (_, s) => s));
+    expect(legend.map((k) => k.label)).toEqual([
+      'air', 'stone', 'bedrock', 'grass_block', 'dirt', 'coarse_dirt', 'podzol', 'mud', 'sand', 'red_sand', 'sandstone',
+      'red_sandstone', 'gravel', 'clay', 'calcite', 'snow_block', 'packed_ice', 'deepslate', 'terracotta', 'white_terracotta',
+      'orange_terracotta', 'yellow_terracotta', 'brown_terracotta', 'red_terracotta', 'light_gray_terracotta',
+    ]);
+    for (const k of legend) expect(k.rgb).toEqual(voxelRgb(k.state, 0, 0));
+    expect(legend[0]!.rgb).toEqual(VOXEL_COLORS.sky);
   });
   test('water is blue and darkens by 1/48 per block below its surface, down to 30 %', () => {
     const [r, g, b] = VOXEL_COLORS.water;

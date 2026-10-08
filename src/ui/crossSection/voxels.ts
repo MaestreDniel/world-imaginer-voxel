@@ -1,7 +1,8 @@
 /**
  * The Voxels mode's pure parts (SP3a spec §5.2), unit-tested:
  * - the palette, shared with the harness PNG slices (`test/harness/png.ts` re-exports it): air in a sky colour,
- *   stone grey, bedrock near black, water blue darkening with depth below its surface;
+ *   stone grey, bedrock near black, one flat colour per SP3c terrain block (SP3c spec §6), water blue darkening with
+ *   depth below its surface; the legend's block keys (every registry state in state order);
  * - the slice image: one RGBA pixel per sample of a `pool.slice` result (512 × 384, row 0 at y 319);
  * - the plot: sample cells over the drawer, a distance axis whose point i sits at the centre of pixel column i,
  *   and the hover mapping from a pixel to the sample (i, y) under it;
@@ -12,13 +13,17 @@ import { MAX_Y } from '../../core/coords';
 import type { SliceResult } from '../../engine/workerPool';
 import { segmentLength, segmentPointAt, type Segment } from '../../metrics/crossSection';
 import { FLUID_LAVA, FLUID_WATER, fluidFalling, fluidLevel, fluidType } from '../../world/blocks/fluid';
-import { AIR, BEDROCK, REGISTRY, STONE } from '../../world/blocks/index';
+import { AIR, REGISTRY } from '../../world/blocks/index';
 import { SLICE_POINTS, SLICE_ROWS, SLICE_SAMPLES } from '../../workers/protocol';
 import type { Plot, PlotBox } from '../splineEditor/model';
 
 export type Rgb = readonly [number, number, number];
 
-/** The Voxels palette. `seaLevel` is the sea-level line; `unknown` marks a state the palette does not know (none in SP3a). */
+/**
+ * The Voxels palette. `sky` is air's colour, `seaLevel` the sea-level line, `water` a water surface; every other block
+ * type's colour sits under its type name (each state of a type takes it). `unknown` marks a state id outside the
+ * registry (every registered state has a colour, pairwise ≥ 24 apart in summed |ΔRGB|, SP3c spec §8).
+ */
 export const VOXEL_COLORS = {
   sky: [168, 204, 255],
   seaLevel: [112, 150, 206],
@@ -26,7 +31,35 @@ export const VOXEL_COLORS = {
   bedrock: [28, 28, 30],
   water: [40, 92, 222],
   unknown: [255, 0, 255],
+  // The SP3c terrain palette (SP3c spec §2.1, §6), in state order.
+  grass_block: [95, 159, 53],
+  dirt: [122, 88, 58],
+  coarse_dirt: [100, 72, 50],
+  podzol: [91, 63, 24],
+  mud: [60, 57, 61],
+  sand: [219, 207, 160],
+  red_sand: [214, 120, 46],
+  sandstone: [190, 174, 120],
+  red_sandstone: [160, 80, 28],
+  gravel: [152, 143, 140],
+  clay: [160, 166, 180],
+  calcite: [222, 223, 218],
+  snow_block: [250, 253, 255],
+  packed_ice: [142, 180, 250],
+  deepslate: [78, 78, 84],
+  terracotta: [152, 94, 67],
+  white_terracotta: [214, 180, 168],
+  orange_terracotta: [184, 104, 40],
+  yellow_terracotta: [186, 133, 35],
+  brown_terracotta: [77, 51, 36],
+  red_terracotta: [143, 61, 47],
+  light_gray_terracotta: [135, 107, 98],
 } as const satisfies Record<string, Rgb>;
+
+const COLOR_OF_TYPE: Readonly<Record<string, Rgb | undefined>> = VOXEL_COLORS;
+/** Each registry state's colour, by state id: air's is the sky, any other state's its type's (unknown if none). */
+const STATE_RGB: readonly Rgb[] = Array.from({ length: REGISTRY.stateCount }, (_, s) =>
+  s === AIR ? VOXEL_COLORS.sky : (COLOR_OF_TYPE[REGISTRY.typeName(REGISTRY.STATE_TYPE[s]!)] ?? VOXEL_COLORS.unknown));
 
 /** The sea-level line's y. */
 export const SEA_LEVEL_Y = SEA_LEVEL;
@@ -44,10 +77,19 @@ export function voxelRgb(state: number, fluid: number, depth: number): Rgb {
     const [r, g, b] = VOXEL_COLORS.water;
     return [Math.round(r * f), Math.round(g * f), Math.round(b * f)];
   }
-  if (state === AIR) return VOXEL_COLORS.sky;
-  if (state === STONE) return VOXEL_COLORS.stone;
-  if (state === BEDROCK) return VOXEL_COLORS.bedrock;
-  return VOXEL_COLORS.unknown;
+  return Number.isInteger(state) && state >= 0 && state < STATE_RGB.length ? STATE_RGB[state]! : VOXEL_COLORS.unknown;
+}
+
+/** A block key of the Voxels legend: a registry state, its canonical key and its colour. */
+export interface VoxelLegendKey {
+  readonly state: number;
+  readonly label: string;
+  readonly rgb: Rgb;
+}
+
+/** The legend's block keys: every registry state in state order (air first, in the sky colour). */
+export function voxelLegend(): readonly VoxelLegendKey[] {
+  return STATE_RGB.map((rgb, state) => ({ state, label: REGISTRY.stateKey(state), rgb }));
 }
 
 const isWater = (state: number, fluid: number): boolean => state === AIR && fluidType(fluid) !== 0;
