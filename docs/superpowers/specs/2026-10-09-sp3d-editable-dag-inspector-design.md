@@ -1,7 +1,7 @@
 # SP3d — Editable density and surface rules, inspector and slice viewer (Design)
 
 Date: 2026-10-09
-Status: Draft for the user's review, revised after the adversarial spec review of 2026-10-09 (§15). The design was approved by the user section by section on 2026-10-09 (`.superpowers/sp3d/design-brief.md`); this text adds the decisions the code survey and the review required ("Decisions taken by this spec") and lists the points that need the user ("Open points for the user").
+Status: Draft for the user's review, revised after the adversarial spec review of 2026-10-09 (§15). The design was approved by the user section by section on 2026-10-09 (`.superpowers/sp3d/design-brief.md`); this text adds the decisions the code survey and the review required ("Decisions taken by this spec") and records the three points the user decided after the review ("Points decided by the user after the review").
 Parent: master spec `2026-09-26-architecture-design.md`. The sections involved are:
 - §10 SP3d, which this spec narrows to the tooling, and a new SP3e (the three draft presets) inserted after it (§14);
 - §1 (module layout), §2.5 (key types: `SubProjectId`, `ParamMeta.kind`, `Expr`), §2.7 (presets and the world URL), §3.6 (density DAG), §3.11 (surface rules), §3.15 (extreme presets), §3.17 (determinism);
@@ -60,12 +60,12 @@ The brief left these open or the code survey and the review forced them. Each st
 - **D19 Hand-overs**: the land-top y mod 16 residue goes to SP6 (§13).
 - **D20 The slice evaluation lives in gen** (`src/gen/inspect/`, §5.1), under the determinism rules; the worker only handles messages.
 
-## Open points for the user
+## Points decided by the user after the review (2026-10-10)
 
-The review raised three points that touch the brief's wording. The spec keeps the brief's decisions and states its reading; each needs a yes or a correction.
-1. **Running slice parts are not interrupted** (brief §3: "any earlier slice still running is cancelled"). A new request drops the earlier request's queued parts and discards the results of its running parts, but a running part finishes (§4.5): interrupting it needs a second abort cell, which breaks the 4-byte abort protocol (`src/workers/protocol.ts:114`). The work bound keeps a density part to about 115 ms, and a `blocks` or `rule` part to one T column (at most 64 × today's, §1.7). Keep this, or ask for a per-request abort cell (a protocol change).
-2. **A mute does not change the 2D map.** Brief §1 says a mute "affects everything (map, Voxels, slices)". The map's layers (climate, shape, biomes) are upstream of `terrain` and are keyed by their own stage hashes (`src/gen/map/layers.ts:27-31`), so a tree edit shows in the slices, the cross-section's Voxels mode and the hover values, never in the 2D map. The tab says so (§3.1). No change is proposed.
-3. **Heavy nodes may get only a draft, or no slice.** The work bound (§5.2) refuses a 128² slice of a node whose evaluation costs more than about 14 × the default's, and any slice above about 27 ×; the hover value still works up to the tier-2 bounds. Tier 2 also refuses trees whose T column costs more than 64 × the default's (§1.7). Keep these factors, or name others.
+The review raised three points that touched the brief's wording; the user confirmed the spec's reading of each on 2026-10-10:
+1. **Running slice parts are not interrupted** (brief §3: "any earlier slice still running is cancelled"). A new request drops the earlier request's queued parts and discards the results of its running parts, but a running part finishes (§4.5): interrupting it would need a second abort cell, which breaks the 4-byte abort protocol (`src/workers/protocol.ts:114`). The work bound keeps a density part to about 115 ms, and a `blocks` or `rule` part to one T column (at most 64 × today's, §1.7). **Kept as specified.**
+2. **A mute does not change the 2D map** (brief §1 said a mute "affects everything (map, Voxels, slices)"). The map's layers (climate, shape, biomes) are upstream of `terrain` and keyed by their own stage hashes (`src/gen/map/layers.ts:27-31`), so a tree edit shows in the slices, the cross-section's Voxels mode and the hover values, never in the 2D map. The tab says so (§3.1). **Confirmed; no map layer is added.**
+3. **Heavy nodes may get only a draft, or no slice.** The work bound (§5.2) refuses a 128² slice of a node whose evaluation costs more than about 14 × the default's, and any slice above about 27 ×; the hover value still works up to the tier-2 bounds. Tier 2 also refuses trees whose T column costs more than 64 × the default's (§1.7). **The factors are kept.**
 
 ## Module layout after SP3d
 
