@@ -1,7 +1,7 @@
 # SP3d — Editable density and surface rules, inspector and slice viewer (Design)
 
 Date: 2026-10-09
-Status: Draft for the user's review, revised after the adversarial spec review of 2026-10-09 (§15). The design was approved by the user section by section on 2026-10-09 (`.superpowers/sp3d/design-brief.md`); this text adds the decisions the code survey and the review required ("Decisions taken by this spec") and records the three points the user decided after the review ("Points decided by the user after the review").
+Status: Approved by the user (2026-10-10): the design section by section on 2026-10-09 (`.superpowers/sp3d/design-brief.md`), then the written spec after the adversarial review of 2026-10-09 (§15) and the three review points decided on 2026-10-10. This text adds the decisions the code survey and the review required ("Decisions taken by this spec").
 Parent: master spec `2026-09-26-architecture-design.md`. The sections involved are:
 - §10 SP3d, which this spec narrows to the tooling, and a new SP3e (the three draft presets) inserted after it (§14);
 - §1 (module layout), §2.5 (key types: `SubProjectId`, `ParamMeta.kind`, `Expr`), §2.7 (presets and the world URL), §3.6 (density DAG), §3.11 (surface rules), §3.15 (extreme presets), §3.17 (determinism);
