@@ -323,4 +323,17 @@ describe('issue codes', () => {
     const code: IssueCode = 'JSON_TOO_DEEP';
     expect(code).toBe('JSON_TOO_DEEP');
   });
+
+  test('rejected keys count against the value budget: a shared object with bad keys stops the walk fast', () => {
+    const bad: Record<string, unknown> = {};
+    for (let i = 0; i < 4000; i++) bad[`1_${i}`] = 0;
+    const row = Array.from({ length: 1024 }, () => bad);
+    const root = Array.from({ length: 32 }, () => row);
+    const t0 = performance.now();
+    const r = run(root);
+    expect(r.issues).toEqual(['density.defs JSON_TOO_MANY_VALUES']);
+    const huge = run([{ ['1' + 'x'.repeat(100_000)]: 0 }]);
+    expect(huge.issues).toEqual(['density.defs[0]."1xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx BAD_KEY']);
+    expect(performance.now() - t0).toBeLessThan(2000);
+  });
 });

@@ -66,7 +66,14 @@ const childPath = (parent: string, key: string): string => (parent === '' ? key 
 
 /** JSON.stringify(key) cut to 40 characters, never between the two halves of a surrogate pair. */
 function quotedKey(key: string): string {
-  const q = JSON.stringify(key);
+  // Only a prefix is stringified (every unit prints as at least one character), so a huge key costs O(1) here.
+  let head = key;
+  if (key.length > KEY_PATH_CHARS) {
+    head = key.slice(0, KEY_PATH_CHARS);
+    const end = head.charCodeAt(KEY_PATH_CHARS - 1);
+    if (end >= 0xd800 && end <= 0xdbff) head = head.slice(0, KEY_PATH_CHARS - 1);
+  }
+  const q = JSON.stringify(head);
   if (q.length <= KEY_PATH_CHARS) return q;
   const last = q.charCodeAt(KEY_PATH_CHARS - 1);
   return q.slice(0, last >= 0xd800 && last <= 0xdbff ? KEY_PATH_CHARS - 1 : KEY_PATH_CHARS);
@@ -111,8 +118,9 @@ export function checkJson(v: unknown, path: string, out: Issue[], format: JsonFo
   const stack: Visit[] = [{ v, path: top, level: 0, parent: null, key: 0 }];
   while (stack.length > 0) {
     const t = stack.pop()!;
-    if (t.bad !== undefined) { report(t.path, t.bad.code, t.bad.message); continue; }
+    // Every visit counts, rejected ones too: a shared object with bad keys must not escape the budget.
     if (++values > L.values) { stop = { path: fullPath(path, top), code: 'JSON_TOO_MANY_VALUES', message: `more than ${L.values} values` }; break; }
+    if (t.bad !== undefined) { report(t.path, t.bad.code, t.bad.message); continue; }
     if (t.level > height) height = t.level;
     const x = t.v;
     let clone: unknown;
@@ -167,7 +175,8 @@ export function checkJson(v: unknown, path: string, out: Issue[], format: JsonFo
           for (let i = keys.length - 1; i >= 0; i--) {
             const k = keys[i]!;
             if (!TREE_KEY_RE.test(k)) {
-              stack.push({ v: undefined, path: childPath(t.path, quotedKey(k)), level: depth, parent: c, key: k, bad: { code: 'BAD_KEY', message: `key ${quotedKey(k)} does not match ${TREE_KEY_RE.source}` } });
+              const qk = quotedKey(k);
+              stack.push({ v: undefined, path: childPath(t.path, qk), level: depth, parent: c, key: k, bad: { code: 'BAD_KEY', message: `key ${qk} does not match ${TREE_KEY_RE.source}` } });
               continue;
             }
             const p = childPath(t.path, k);
