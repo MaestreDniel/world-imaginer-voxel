@@ -6,14 +6,20 @@
  * conditions on its path, for the compiler's fast-path analysis) and `validateRules` with node-path messages.
  * Per-condition semantics are in conditions.ts. A `bandlands` leaf (the badlands band block, bands.ts) is valid only
  * when the noise lookup knows `surface.noises.bandOffset` (§3.1: rejected when the band leaf is absent, §9's cut line).
+ * `validateRules` also has the source mode of SP3d (spec §1.3, §1.7) that `validateRulesSource` (source.ts) runs on an
+ * edited tree: parameter refs in the numeric fields, every check over their static ranges, literal ranges, the biome
+ * list length and solid block states.
  */
 import { SURFACE_BIOMES, type SurfaceBiome } from '../biomes/registry';
-import { REGISTRY } from '../../world/blocks/index';
+import { COLLIDE, REGISTRY } from '../../world/blocks/index';
+import { COLLIDE_NONE } from '../../world/blocks/kinds';
 import { BAND_OFFSET_NOISE } from './bands';
 
 const BIOMES = SURFACE_BIOMES;
 const BLOCKS = REGISTRY;
 const BAND_NOISE = BAND_OFFSET_NOISE;
+const COLLIDES = COLLIDE;
+const NO_COLLISION = COLLIDE_NONE;
 
 export interface SequenceRule { readonly kind: 'sequence'; readonly rules: readonly Rule[] }
 export interface ConditionRule { readonly kind: 'condition'; readonly if: Condition; readonly then: Rule }
@@ -122,6 +128,33 @@ export interface RuleIssue {
   readonly message: string;
 }
 
+/**
+ * The codes the source mode adds (SP3d spec §1.3, §1.7): a malformed ref (`BAD_FIELD`), a ref to a path that is not a
+ * target (`UNKNOWN_PARAM`) or to a non-`int` target in an int field (`PARAM_KIND`), a literal beyond ±1e9
+ * (`LITERAL_RANGE`), a `biome` list of more than 64 entries (`TOO_MANY_BIOMES`), a block state that does not collide
+ * (`NOT_SOLID`).
+ */
+export type RuleRefCode = 'BAD_FIELD' | 'UNKNOWN_PARAM' | 'PARAM_KIND' | 'LITERAL_RANGE' | 'TOO_MANY_BIOMES' | 'NOT_SOLID';
+
+/** An issue of the source mode: `validateRules`' paths, never `.param` (a ref's issue is at its field). */
+export interface RuleSourceIssue {
+  readonly path: string;
+  readonly code: RuleErrorCode | RuleRefCode;
+  readonly message: string;
+}
+
+/** A ref target: its static range and whether it is an `int` leaf (the only targets an int field takes). */
+export interface RuleRefTarget {
+  readonly lo: number;
+  readonly hi: number;
+  readonly int: boolean;
+}
+
+/** The source mode: the ref targets by path (own entries only; undefined: not a target). */
+export interface RuleSourceMode {
+  readonly target: (path: string) => RuleRefTarget | undefined;
+}
+
 export class RuleValidationError extends Error {
   readonly issues: readonly RuleIssue[];
   constructor(issues: readonly RuleIssue[]) {
@@ -146,6 +179,11 @@ const INT_LIMIT = 384;
 const MAX_DEPTH = 32;
 const MAX_NODES = 4096;
 const NOISE_PREFIX = 'surface.noises.';
+/** Source mode: literals in number fields are at most this in magnitude; `biome` lists hold at most MAX_BIOMES. */
+const LITERAL_LIMIT = 1e9;
+const MAX_BIOMES = 64;
+/** The keys of a ref (`{param}` or `{param, neg: true}`). */
+const REF_KEYS = new Set(['param', 'neg']);
 
 function isRecord(v: unknown): v is Record<string, unknown> {
   return typeof v === 'object' && v !== null && !Array.isArray(v);
@@ -171,10 +209,21 @@ function isBlockKey(v: unknown): boolean {
  * is absent, §9's cut line), a
  * nesting depth above 32 (each node past it is reported and not entered) and more than 4096 nodes (reported once, at
  * `root`; the walk stops there).
+ *
+ * With `source` (SP3d spec §1.3, §1.7), each of the nine numeric fields may instead hold a ref `{param: <path>}` or
+ * `{param: <path>, neg: true}` (value v, or 0 − v): a malformed ref is BAD_FIELD, a path that `source.target` does not
+ * know UNKNOWN_PARAM, a non-`int` target in an int field PARAM_KIND, all at the field's path. Every check then holds over
+ * the static ranges (a negated ref's is [0 − hi, 0 − lo]; two refs are independent, even to the same leaf): an int
+ * field's range inside [−384, 384] (OUT_OF_RANGE), RANGE_ORDER when the largest `min` exceeds the smallest `max`,
+ * GRADIENT_ORDER when the largest `trueAtAndBelow` is not below the smallest `falseAtAndAbove`. Also: number-field
+ * literals beyond ±1e9 (LITERAL_RANGE), a `biome` list of more than 64 entries (TOO_MANY_BIOMES at `.biomes`, entries not
+ * checked) and a block state that does not collide (NOT_SOLID).
  */
-export function validateRules(value: unknown, noises: SurfaceNoiseLookup): RuleIssue[] {
-  const issues: RuleIssue[] = [];
-  const push = (path: string, code: RuleErrorCode, message: string) => issues.push({ path, code, message });
+export function validateRules(value: unknown, noises: SurfaceNoiseLookup): RuleIssue[];
+export function validateRules(value: unknown, noises: SurfaceNoiseLookup, source: RuleSourceMode): RuleSourceIssue[];
+export function validateRules(value: unknown, noises: SurfaceNoiseLookup, source?: RuleSourceMode): RuleSourceIssue[] {
+  const issues: RuleSourceIssue[] = [];
+  const push = (path: string, code: RuleErrorCode | RuleRefCode, message: string) => issues.push({ path, code, message });
   let nodes = 0;
   let overflow = false;
 
@@ -206,22 +255,55 @@ export function validateRules(value: unknown, noises: SurfaceNoiseLookup): RuleI
     return complete;
   };
 
-  /** A finite number, not −0. */
-  const num = (node: Record<string, unknown>, kind: string, k: string, path: string): boolean => {
-    const v = node[k];
-    if (typeof v !== 'number' || !Number.isFinite(v)) { push(`${path}.${k}`, 'NOT_FINITE', `${kind}.${k} must be a finite number`); return false; }
-    if (Object.is(v, -0)) { push(`${path}.${k}`, 'NEGATIVE_ZERO', `${kind}.${k} is −0 (write 0)`); return false; }
-    return true;
+  /**
+   * A ref's static range (source mode, `v` an object): [lo, hi], or undefined after its issue (BAD_FIELD,
+   * UNKNOWN_PARAM, PARAM_KIND) at the field's path.
+   */
+  const ref = (v: Record<string, unknown>, kind: string, k: string, path: string, isInt: boolean): readonly [number, number] | undefined => {
+    const where = `${path}.${k}`;
+    const param = Object.hasOwn(v, 'param') ? v['param'] : undefined;
+    const negated = Object.hasOwn(v, 'neg');
+    if (typeof param !== 'string' || Object.keys(v).some((key) => !REF_KEYS.has(key)) || (negated && v['neg'] !== true)) {
+      push(where, 'BAD_FIELD', `${kind}.${k} must be a number, {"param": <path>} or {"param": <path>, "neg": true}`);
+      return undefined;
+    }
+    const t = source!.target(param);
+    if (t === undefined) { push(where, 'UNKNOWN_PARAM', `${JSON.stringify(param)} is not a parameter a tree may reference`); return undefined; }
+    if (isInt && !t.int) { push(where, 'PARAM_KIND', `${kind}.${k} is an integer field; ${param} is not an int parameter`); return undefined; }
+    return negated ? [0 - t.hi, 0 - t.lo] : [t.lo, t.hi];
   };
-  /** An integer in [−384, 384], not −0. */
-  const int = (node: Record<string, unknown>, kind: string, k: string, path: string): boolean => {
+  /** A finite number, not −0 (source mode: or a ref; a literal within ±1e9). Its static range, or undefined. */
+  const num = (node: Record<string, unknown>, kind: string, k: string, path: string): readonly [number, number] | undefined => {
     const v = node[k];
-    if (typeof v === 'number' && !Number.isFinite(v)) { push(`${path}.${k}`, 'NOT_FINITE', `${kind}.${k} must be a finite integer`); return false; }
-    if (typeof v !== 'number' || !Number.isInteger(v)) { push(`${path}.${k}`, 'NOT_INTEGER', `${kind}.${k} must be an integer`); return false; }
-    if (Object.is(v, -0)) { push(`${path}.${k}`, 'NEGATIVE_ZERO', `${kind}.${k} is −0 (write 0)`); return false; }
-    if (v < -INT_LIMIT || v > INT_LIMIT) { push(`${path}.${k}`, 'OUT_OF_RANGE', `${kind}.${k} ${v} is outside [−${INT_LIMIT}, ${INT_LIMIT}]`); return false; }
-    return true;
+    if (source !== undefined && isRecord(v)) return ref(v, kind, k, path, false);
+    if (typeof v !== 'number' || !Number.isFinite(v)) { push(`${path}.${k}`, 'NOT_FINITE', `${kind}.${k} must be a finite number`); return undefined; }
+    if (Object.is(v, -0)) { push(`${path}.${k}`, 'NEGATIVE_ZERO', `${kind}.${k} is −0 (write 0)`); return undefined; }
+    if (source !== undefined && (v < -LITERAL_LIMIT || v > LITERAL_LIMIT)) {
+      push(`${path}.${k}`, 'LITERAL_RANGE', `${kind}.${k} ${v} is outside ±${LITERAL_LIMIT}`);
+      return undefined;
+    }
+    return [v, v];
   };
+  /** An integer in [−384, 384], not −0 (source mode: or a ref to an int leaf whose static range lies there). Its static range, or undefined. */
+  const int = (node: Record<string, unknown>, kind: string, k: string, path: string): readonly [number, number] | undefined => {
+    const v = node[k];
+    if (source !== undefined && isRecord(v)) {
+      const r = ref(v, kind, k, path, true);
+      if (r !== undefined && (r[0] < -INT_LIMIT || r[1] > INT_LIMIT)) {
+        push(`${path}.${k}`, 'OUT_OF_RANGE', `${kind}.${k}'s parameter range [${r[0]}, ${r[1]}] is outside [−${INT_LIMIT}, ${INT_LIMIT}]`);
+        return undefined;
+      }
+      return r;
+    }
+    if (typeof v === 'number' && !Number.isFinite(v)) { push(`${path}.${k}`, 'NOT_FINITE', `${kind}.${k} must be a finite integer`); return undefined; }
+    if (typeof v !== 'number' || !Number.isInteger(v)) { push(`${path}.${k}`, 'NOT_INTEGER', `${kind}.${k} must be an integer`); return undefined; }
+    if (Object.is(v, -0)) { push(`${path}.${k}`, 'NEGATIVE_ZERO', `${kind}.${k} is −0 (write 0)`); return undefined; }
+    if (v < -INT_LIMIT || v > INT_LIMIT) { push(`${path}.${k}`, 'OUT_OF_RANGE', `${kind}.${k} ${v} is outside [−${INT_LIMIT}, ${INT_LIMIT}]`); return undefined; }
+    return [v, v];
+  };
+  /** The ref note of an order message (source mode only). */
+  const overRefs = (a: unknown, b: unknown): string => (isRecord(a) || isRecord(b)
+    ? ' for every value of its parameters (refs are judged independently, even two to the same parameter)' : '');
   const bool = (node: Record<string, unknown>, kind: string, k: string, path: string): void => {
     if (typeof node[k] !== 'boolean') push(`${path}.${k}`, 'NOT_BOOLEAN', `${kind}.${k} must be a boolean`);
   };
@@ -237,6 +319,7 @@ export function validateRules(value: unknown, noises: SurfaceNoiseLookup): RuleI
       case 'biome': {
         const list = node['biomes'];
         if (!Array.isArray(list)) { push(`${path}.biomes`, 'NOT_ARRAY', 'biome.biomes must be an array of surface biome names'); break; }
+        if (source !== undefined && list.length > MAX_BIOMES) { push(`${path}.biomes`, 'TOO_MANY_BIOMES', `${list.length} biomes, more than ${MAX_BIOMES}`); break; }
         for (let i = 0; i < list.length; i++) {
           const b: unknown = list[i];
           if (typeof b !== 'string' || !BIOME_SET.has(b)) push(`${path}.biomes[${i}]`, 'UNKNOWN_BIOME', `unknown surface biome ${JSON.stringify(b)}`);
@@ -260,8 +343,8 @@ export function validateRules(value: unknown, noises: SurfaceNoiseLookup): RuleI
         break;
       case 'verticalGradient': {
         const lo = int(node, c, 'trueAtAndBelow', path), hi = int(node, c, 'falseAtAndAbove', path);
-        if (lo && hi && (node['trueAtAndBelow'] as number) >= (node['falseAtAndAbove'] as number)) {
-          push(path, 'GRADIENT_ORDER', 'verticalGradient needs trueAtAndBelow < falseAtAndAbove');
+        if (lo !== undefined && hi !== undefined && lo[1] >= hi[0]) {
+          push(path, 'GRADIENT_ORDER', `verticalGradient needs trueAtAndBelow < falseAtAndAbove${overRefs(node['trueAtAndBelow'], node['falseAtAndAbove'])}`);
         }
         break;
       }
@@ -274,7 +357,9 @@ export function validateRules(value: unknown, noises: SurfaceNoiseLookup): RuleI
         else if (info.dims !== 2) push(`${path}.noise`, 'NOISE_DIMS', `noiseThreshold needs a 2D noise; ${String(name)} is ${info.dims}D`);
         else if (info.remap !== 'none') push(`${path}.noise`, 'NOISE_REMAP', `surface noise ${String(name)} must have remap 'none'`);
         const lo = num(node, c, 'min', path), hi = num(node, c, 'max', path);
-        if (lo && hi && (node['min'] as number) > (node['max'] as number)) push(path, 'RANGE_ORDER', 'noiseThreshold needs min ≤ max');
+        if (lo !== undefined && hi !== undefined && lo[1] > hi[0]) {
+          push(path, 'RANGE_ORDER', `noiseThreshold needs min ≤ max${overRefs(node['min'], node['max'])}`);
+        }
         break;
       }
       case 'skyOpen': case 'lake': break;
@@ -302,7 +387,11 @@ export function validateRules(value: unknown, noises: SurfaceNoiseLookup): RuleI
         if (Object.hasOwn(node, 'then')) rule(node['then'], conditionThenId(path), depth + 1);
         break;
       case 'block':
-        if (complete && !isBlockKey(node['state'])) push(`${path}.state`, 'UNKNOWN_BLOCK', `${JSON.stringify(node['state'])} is not a registered state key`);
+        if (!complete) break;
+        if (!isBlockKey(node['state'])) push(`${path}.state`, 'UNKNOWN_BLOCK', `${JSON.stringify(node['state'])} is not a registered state key`);
+        else if (source !== undefined && COLLIDES[BLOCKS.parseStateKey(node['state'] as string)] === NO_COLLISION) {
+          push(`${path}.state`, 'NOT_SOLID', `${node['state'] as string} does not collide; a surface rule yields solid blocks only`);
+        }
         break;
       case 'bandlands': {
         const info = noises(BAND_NOISE);

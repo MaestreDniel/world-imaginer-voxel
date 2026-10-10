@@ -116,10 +116,11 @@ world-imaginer-voxel/          (repository root)
       inspect/cost.ts           (SP3d) the structural, work and column costs of density and surface-rule trees, one function
                                 each, shared by tier-2 validation, the inspector and the worker
       biomes/registry.ts picker.ts zoom.ts
-      surface/rules.ts conditions.ts compile.ts reference.ts scan.ts bands.ts pass.ts context.ts defaults.ts probe.ts
+      surface/rules.ts conditions.ts compile.ts reference.ts scan.ts bands.ts pass.ts context.ts defaults.ts probe.ts source.ts
                                 (SP3c: the rule model and validateRules, the per-condition helpers shared by the compiler and the
                                 reference evaluator, the badlands band table, surfacePass (the T stage's and the bench's code path),
-                                the SurfaceContext memo and surfaceProbe; amended by SP3c)
+                                the SurfaceContext memo and surfaceProbe; amended by SP3c. SP3d: source.ts, the `surface.rules`
+                                leaf's source model with parameter refs and its tier-2 validator validateRulesSource; amended by SP3d)
       features/placement.ts modifiers.ts decorate.ts priority.ts kinds/{tree,foliage,patch,simpleBlock,ore,disk,boulder,
                 dripstone,glowLichen,caveVines,mossPatch,abyssCrystal,deadRoots,fossil,spring,lavaLake,freezeTop}.ts
       structures/sets.ts jigsaw.ts startCache.ts stamp.ts templates/*.ts

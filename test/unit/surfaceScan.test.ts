@@ -4,13 +4,17 @@ import {
   buildColumnSample, latticeIndex, LEVEL_FIELDS, nearestCornerIndex, newColumnSample, readBiome, readField, readLevel,
   SAMPLE_FIELDS, type ColumnSample,
 } from '../../src/gen/column/columnStage';
-import type { SurfaceNoise, SurfaceNoiseSource } from '../../src/gen/surface/rules';
+import { compileSurfaceRules } from '../../src/gen/surface/compile';
+import { surfaceContextOf } from '../../src/gen/surface/context';
+import { surfaceProbeColumn } from '../../src/gen/surface/probe';
+import type { Rule, SurfaceNoise, SurfaceNoiseSource } from '../../src/gen/surface/rules';
 import {
   depthHash01, depthHashSeed, fillSurfaceBiomes, newSurfaceScan, runAt, scanColumn, SURFACE_DEPTH_NOISE, surfaceDepthOf,
   surfaceDepthMax, surfaceScanSettings, tEff, type SurfaceScanParams, type SurfaceScanSettings,
 } from '../../src/gen/surface/scan';
 import { ctxFor } from '../harness/gen';
 import { testRng } from '../harness/stats';
+import { randomSurfaceColumn, randomSurfaceParams, surfaceFuzzNoiseSource } from '../harness/surfaceFuzz';
 
 /** A uniform [0, 1) stream over the harness's u32 test RNG. */
 function unit(seed: number): () => number {
@@ -305,5 +309,89 @@ describe('surface scan (SP3c spec §3.2)', () => {
     expect(Array.from(a.runTop.subarray(0, n))).toEqual(Array.from(b.runTop.subarray(0, n)));
     expect(Array.from(a.runBottom.subarray(0, n))).toEqual(Array.from(b.runBottom.subarray(0, n)));
     expect(Array.from(a.runWaterAbove.subarray(0, n))).toEqual(Array.from(b.runWaterAbove.subarray(0, n)));
+  });
+});
+
+describe('the fast-path depth contract (SP3d spec §1.10)', () => {
+  const biomes = new Uint8Array(256);
+
+  test('surfaceScanSettings throws a RangeError for a negative or non-finite depthMul', () => {
+    for (const depthMul of [-1, -0.05, -1e-300, NaN, Infinity, -Infinity]) {
+      expect(() => settingsWith(constNoise(0), { ...DEFAULT_PARAMS, depthMul }), String(depthMul)).toThrow(RangeError);
+    }
+    expect(() => settingsWith(constNoise(0), { ...DEFAULT_PARAMS, depthMul: -1 })).toThrow(/depthMul -1 must be finite and ≥ 0/);
+    for (const depthMul of [0, 0.05, 1, 2]) expect(settingsWith(constNoise(0), { ...DEFAULT_PARAMS, depthMul }).depthMul).toBe(depthMul);
+  });
+
+  test('scanColumn clamps Ns to ±clampSigma: an out-of-clamp injected depth noise keeps surfaceDepth in [0, SD_MAX]', () => {
+    const scan = newSurfaceScan();
+    const empty = new Uint8Array(VOXELS);
+    scanColumn(scan, settingsWith(constNoise(9)), flatSample(), empty, empty, biomes);
+    expect(Array.from(scan.surfaceDepth).every((d) => d === 11)).toBe(true);
+    scanColumn(scan, settingsWith(constNoise(-9)), flatSample(), empty, empty, biomes);
+    expect(Array.from(scan.surfaceDepth).every((d) => d === 0)).toBe(true);
+    // A varying noise three times out of its clamp: each position's depth is that of the clamped Ns.
+    const ns: SurfaceNoise = { dims: 2, remap: 'none', clampSigma: 3, z2: (x, z) => Math.sin(0.37 * x + 0.11 * z) * 9 };
+    const set = settingsWith(ns, { ...DEFAULT_PARAMS, depthMul: 2 });
+    scanColumn(scan, set, flatSample(-40, 13), empty, empty, biomes);
+    const hs = depthHashSeed(SEED);
+    for (let p = 0; p < 256; p++) {
+      const x = -640 + (p & 15);
+      const z = 208 + (p >> 4);
+      const clamped = Math.min(3, Math.max(-3, ns.z2(x, z)));
+      expect(scan.surfaceDepth[p]).toBe(surfaceDepthOf(clamped, depthHash01(hs, x, z), 2));
+      expect(scan.surfaceDepth[p]).toBeLessThanOrEqual(set.sdMax);
+    }
+  });
+
+  test('fast == full fillColumn with an out-of-clamp depth noise (a depth-bounded leaf over a constant band)', () => {
+    // [0] if stoneDepth{floor, 0 + surfaceDepth} → dirt; [1] stone: the fast path gives stone below top − SD_MAX − 1.
+    const tree: Rule = {
+      kind: 'sequence', rules: [
+        { kind: 'condition', if: { kind: 'stoneDepth', side: 'floor', offset: 0, addSurfaceDepth: true }, then: { kind: 'block', state: 'dirt' } },
+        { kind: 'block', state: 'stone' },
+      ],
+    };
+    const solid = new Uint8Array(VOXELS);
+    for (let p = 0; p < 256; p++) fill(solid, p, -64, 60 + (p % 7));
+    const water = new Uint8Array(VOXELS);
+    for (const v of [9, 4, -9]) {
+      const n = constNoise(v);
+      const set = settingsWith(n);
+      const c = compileSurfaceRules(SEED, tree, sourceOf(n), set);
+      expect(c.fastPath).not.toBeNull();
+      const scan = scanColumn(newSurfaceScan(), set, flatSample(), solid, water, biomes);
+      const fast = new Uint16Array(VOXELS), full = new Uint16Array(VOXELS);
+      const evaluated = c.fillColumn(scan, fast, true);
+      c.fillColumn(scan, full, false);
+      let differ = 0;
+      for (let i = 0; i < VOXELS; i++) if (fast[i] !== full[i]) differ++;
+      expect(differ, `Ns ${v}`).toBe(0);
+      expect(evaluated).toBeLessThan(256 * 125);
+    }
+  });
+
+  test('surfaceDepth ≤ SD_MAX on sampled columns: seed 42\'s T-stage columns, and random columns with a 3× out-of-clamp noise', () => {
+    const sc = surfaceContextOf(ctxFor('42'));
+    for (const [cx, cz] of [[0, 0], [-104, 0], [37, -91], [1500, -820]] as const) {
+      const scan = surfaceProbeColumn(sc, cx, cz).scan;
+      for (let p = 0; p < 256; p++) expect(scan.surfaceDepth[p]).toBeLessThanOrEqual(sc.settings.sdMax);
+    }
+    const next = testRng(3203);
+    const noises = surfaceFuzzNoiseSource(SEED);
+    const depth = noises(SURFACE_DEPTH_NOISE)!;
+    const loud: SurfaceNoise = { ...depth, z2: (x, z) => 3 * depth.z2(x, z) };
+    let above = 0;
+    for (let k = 0; k < 16; k++) {
+      const set = surfaceScanSettings(SEED, randomSurfaceParams(next), (name) => (name === SURFACE_DEPTH_NOISE ? loud : noises(name)));
+      const col = randomSurfaceColumn(next);
+      const scan = scanColumn(newSurfaceScan(), set, col.sample, col.solid, col.water, col.biomes);
+      for (let p = 0; p < 256; p++) {
+        expect(scan.surfaceDepth[p]).toBeLessThanOrEqual(set.sdMax);
+        if (Math.abs(loud.z2(16 * col.sample.cx + (p & 15), 16 * col.sample.cz + (p >> 4))) > depth.clampSigma) above++;
+      }
+    }
+    // The injected noise does leave its clamp (the bound is not vacuous).
+    expect(above).toBeGreaterThan(256);
   });
 });

@@ -8,7 +8,8 @@
  * - per solid voxel at y of run r: floorDepth = runTop[r] − y (0 at the run's top voxel), ceilDepth = y − runBottom[r];
  * - per position: `steep` and `T` (bilinear `readField`, as SP3b's `col`), the per-block surface biome (the stage's
  *   256-entry buffer, `fillSurfaceBiomes`), `lakeLevel` at the nearest quart corner (`readLevel`'s corner) and
- *   surfaceDepth = max(0, ⌊3 + 2.75·depthMul·Ns + 0.25·hash01⌋) ∈ [0, SD_MAX];
+ *   surfaceDepth = max(0, ⌊3 + 2.75·depthMul·Ns + 0.25·hash01⌋) ∈ [0, SD_MAX], Ns clamped to ±the depth noise's
+ *   clampSigma (SP3d spec §1.10: a schema noise already is; the clamp keeps the fast-path contract for any noise);
  * - per voxel: T_eff(y) = T − lapse·max(0, y − lapseBase) (`tEff`).
  * The scan reads nothing outside its column. `SurfaceScanSettings` carries what it needs from the seed and the
  * parameters (the depth noise through a SurfaceNoiseSource, `depthMul`, `lapse`, `lapseBase`), so it runs on
@@ -112,8 +113,14 @@ export function tEff(t: number, y: number, lapse: number, lapseBase: number): nu
   return t - lapse * Math.max(0, y - lapseBase);
 }
 
-/** The scan settings of a seed and parameters; `noises` must hold a dims-2 `surface.noises.depth` (else throws). */
+/**
+ * The scan settings of a seed and parameters; `noises` must hold a dims-2 `surface.noises.depth` (else throws), and
+ * `depthMul` must be finite and ≥ 0 (else a RangeError: SD_MAX bounds surfaceDepth only then, SP3d spec §1.10).
+ */
 export function surfaceScanSettings(seed: Seed64, params: SurfaceScanParams, noises: SurfaceNoiseSource): SurfaceScanSettings {
+  if (!(params.depthMul >= 0) || !Number.isFinite(params.depthMul)) {
+    throw new RangeError(`surface scan: depthMul ${params.depthMul} must be finite and ≥ 0`);
+  }
   const n = noises(SURFACE_DEPTH_NOISE);
   if (n === undefined) throw new Error(`surface scan: no noise ${SURFACE_DEPTH_NOISE}`);
   if (n.dims !== 2) throw new Error(`surface scan: ${SURFACE_DEPTH_NOISE} must be a 2D noise, not ${n.dims}D`);
@@ -149,6 +156,7 @@ export function scanColumn(
   const x0 = 16 * s.cx;
   const z0 = 16 * s.cz;
   const noise = set.depthNoise;
+  const clamp = noise.clampSigma;
   const depthMul = set.depthMul;
   const hashSeed = set.depthHashSeed;
   const lakeLevel = s.f.lakeLevel;
@@ -193,7 +201,8 @@ export function scanColumn(
     scan.T[p] = READ_FIELD(s, 'T', x, z);
     scan.biome[p] = biomes[p]!;
     scan.lakeLevel[p] = lakeLevel[CORNER(s, x, z)]!;
-    scan.surfaceDepth[p] = surfaceDepthOf(noise.z2(x, z), depthHash01(hashSeed, x, z), depthMul);
+    const ns = noise.z2(x, z);
+    scan.surfaceDepth[p] = surfaceDepthOf(ns < -clamp ? -clamp : ns > clamp ? clamp : ns, depthHash01(hashSeed, x, z), depthMul);
   }
   runFirst[256] = r;
   return scan;
