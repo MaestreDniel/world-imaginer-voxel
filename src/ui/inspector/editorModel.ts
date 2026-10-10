@@ -40,7 +40,7 @@ export function leafValue(params: Params, leaf: TreeLeaf): JsonValue {
 }
 
 /** `params` with the leaf's value replaced by `value` (the other leaf and groups shared). */
-function withLeaf(params: Params, leaf: TreeLeaf, value: JsonValue): Params {
+export function withLeaf(params: Params, leaf: TreeLeaf, value: JsonValue): Params {
   if (leaf === 'density.defs') return { ...params, density: { ...params.density, defs: value } };
   return { ...params, surface: { ...params.surface, rules: value } };
 }

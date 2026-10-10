@@ -18,7 +18,7 @@
  * `Object.defineProperty`, so a typed `__proto__` def name reaches tier 1 as `BAD_KEY`. Pure; no DOM.
  */
 import { DEFAULT_DENSITY_TREE } from '../../core/params/defaultTrees';
-import type { JsonFormat } from '../../core/params/json';
+import type { JsonFormat, JsonValue } from '../../core/params/json';
 import { getPath } from '../../core/params/kit';
 import { SCHEMA, type Params } from '../../core/params/schema';
 import { SURFACE_BIOMES } from '../../gen/biomes/registry';
@@ -31,7 +31,7 @@ import { surfaceDepthMax } from '../../gen/surface/scan';
 import { resolveRules } from '../../gen/surface/source';
 import { COLLIDE, REGISTRY } from '../../world/blocks/index';
 import { COLLIDE_NONE } from '../../world/blocks/kinds';
-import { checkLeafCandidate, formatOfLeaf, leafValue, type EditorIssue, type EditorSession, type TreeLeaf } from './editorModel';
+import { checkLeafCandidate, formatOfLeaf, leafValue, stripLeaf, withLeaf, type EditorIssue, type EditorSession, type TreeLeaf } from './editorModel';
 import { findNode, followNode, pathSteps, type Selection, type TreeNode } from './model';
 
 /** What a form operation yields: the leaf's candidate value and the selection after it, or a refusal. */
@@ -377,7 +377,7 @@ export function deleteNode(params: Params, sel: Selection): FormEdit {
   if (typeof last === 'number') {
     const seqSteps = at.steps.slice(0, -1);
     const value = updateAt(at.value, seqSteps, (rules) => (rules as readonly unknown[]).filter((_, i) => i !== last));
-    const after = followNode(withLeafValue(params, at.leaf, value), sel);
+    const after = followNode(withLeaf(params, at.leaf, value as JsonValue), sel);
     return edit(at, value, after.path);
   }
   if (at.node['kind'] === 'not') return replaceNode(at, (old) => own(old, 'if'), sel.path);
@@ -556,11 +556,6 @@ export function formFields(params: Params, sel: Selection): FormField[] {
   });
 }
 
-function withLeafValue(params: Params, leaf: TreeLeaf, value: unknown): Params {
-  if (leaf === 'density.defs') return { ...params, density: { ...params.density, defs: value as Params['density']['defs'] } };
-  return { ...params, surface: { ...params.surface, rules: value as Params['surface']['rules'] } };
-}
-
 /**
  * Commits a form edit (§3.3): both tiers first (`checkLeafCandidate`, so an invalid tree is never sent), then one
  * `session.set('<leaf>', clone)`; a refusal returns the issues (node paths inside the leaf) and the caller keeps its
@@ -572,8 +567,7 @@ export function commitFormEdit(session: EditorSession, e: FormEdit): FormCommit 
   if (checked.value === null) return { ok: false, issues: checked.issues };
   const r = session.set(e.leaf, checked.value);
   if (!r.ok) {
-    const prefix = `${e.leaf}.`;
-    return { ok: false, issues: r.issues.map((i) => ({ path: i.path === e.leaf ? '' : i.path.startsWith(prefix) ? i.path.slice(prefix.length) : i.path, code: i.code, message: i.message })) };
+    return { ok: false, issues: r.issues.map((i) => ({ path: stripLeaf(i.path, e.leaf), code: i.code, message: i.message })) };
   }
   return { ok: true, select: followNode(session.state.params, e.select) };
 }
