@@ -83,6 +83,8 @@ export function createJsonEditor(deps: JsonEditorDeps): JsonEditorView {
   text.setAttribute('autocapitalize', 'off');
   text.setAttribute('aria-label', 'Tree as JSON');
   box.append(mirror, text);
+  const resizeObserver = typeof ResizeObserver === 'undefined' ? null : new ResizeObserver(() => { syncGutters(); });
+  resizeObserver?.observe(text);
 
   const bar = el('div', 'je-bar');
   const button = (label: string, tip: string, run: (e: MouseEvent) => void): HTMLButtonElement => {
@@ -105,7 +107,24 @@ export function createJsonEditor(deps: JsonEditorDeps): JsonEditorView {
   const issues = el('div', 'je-issues');
   element.append(box, bar, stale, issues);
 
+  /**
+   * The textarea's scrollbars take room from its client box and the mirror (overflow hidden) has none, so at the scroll
+   * extremes the textarea could scroll further than the mirror and the highlight would drift. The mirror's box is
+   * shrunk by the same gutters, so both have the same client size and the same scroll range.
+   */
+  let gutterKey = '';
+  const syncGutters = (): void => {
+    const right = Math.max(0, text.offsetWidth - text.clientWidth);
+    const bottom = Math.max(0, text.offsetHeight - text.clientHeight);
+    const key = `${String(right)}|${String(bottom)}`;
+    if (key === gutterKey) return;
+    gutterKey = key;
+    mirror.style.right = `${String(right)}px`;
+    mirror.style.bottom = `${String(bottom)}px`;
+  };
+
   const paintMirror = (s: EditorState): void => {
+    syncGutters();
     const key = `${String(s.revision)}|${s.text.length}|${range === null ? '' : `${String(range.start)}-${String(range.end)}`}|${s.text}`;
     if (key === mirrorKey) return;
     mirrorKey = key;
@@ -121,6 +140,7 @@ export function createJsonEditor(deps: JsonEditorDeps): JsonEditorView {
     if (to === null) return;
     text.scrollTop = to.top;
     text.scrollLeft = to.left;
+    syncGutters();
     mirror.scrollTop = text.scrollTop;
     mirror.scrollLeft = text.scrollLeft;
   };
@@ -192,6 +212,7 @@ export function createJsonEditor(deps: JsonEditorDeps): JsonEditorView {
     if (e.key.startsWith('Arrow') || e.key === 'Home' || e.key === 'End' || e.key === 'PageUp' || e.key === 'PageDown') reportCaret();
   });
   text.addEventListener('scroll', () => {
+    syncGutters();
     mirror.scrollTop = text.scrollTop;
     mirror.scrollLeft = text.scrollLeft;
     model?.setCaret(text.selectionStart, anchorOfScroll(text.value, text.scrollTop, EDITOR_LINE_PX));
@@ -230,6 +251,7 @@ export function createJsonEditor(deps: JsonEditorDeps): JsonEditorView {
       write(keeper.shown(text.value, viewOf()));
     },
     dispose() {
+      resizeObserver?.disconnect();
       unsubscribe?.();
       unsubscribe = null;
       model = null;
