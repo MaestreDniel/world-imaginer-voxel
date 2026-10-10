@@ -4,11 +4,18 @@
  * 0-level contour by marching squares, the 64-bin histogram with nearest-rank p1/p50/p99, sd and % < 0 against
  * hand-computed values (incl. p1 = p99), the field select and `selected`'s resolution, `initialSliceState` and the
  * vertical empty state, and the model's use of the geometry (Task 11's `gen/inspect/fieldSlice.ts` functions and
- * metrics' `segmentPointAt`; the formulas themselves are pinned by `fieldSliceGeometry.test.ts`, not re-derived here).
+ * metrics' `segmentPointAt`; the formulas themselves are pinned by `fieldSliceGeometry.test.ts`, not re-derived here);
+ * and the request stream (§4.5) with a fake pool of deferred promises: draft then full, supersession (cancel, discarded
+ * results: P1), stale and failed states, requests on the pool's resolved configure, the node path in the key only for
+ * `selected`, and the work bound's two notices with `planFieldSlice`'s limits (P3).
  */
 import { describe, expect, test } from 'vitest';
+import { COLUMN_SAMPLE_COST, CORNER_SAMPLE_COST, CORNER_STEEP_COST, DRAFT_BUDGET, REQUEST_BUDGET, SLICE_RULE_NA } from '../../src/core/constants';
 import { WINDOW_HALF } from '../../src/core/coords';
-import { horizontalCoord, sliceRowY, sliceSampleVoxel, squareProblem } from '../../src/gen/inspect/fieldSlice';
+import { DEFAULTS } from '../../src/core/params/defaults';
+import type { Params } from '../../src/core/params/schema';
+import { JobCancelled, SliceTooHeavy, type FieldSliceOptions, type FieldSliceResult } from '../../src/engine/workerPool';
+import { horizontalCoord, sliceCostOf, sliceRowY, sliceSampleVoxel, squareProblem } from '../../src/gen/inspect/fieldSlice';
 import { segmentPointAt, segmentProblem, type Segment } from '../../src/metrics/crossSection';
 import { voxelRgb } from '../../src/ui/crossSection/voxels';
 import type { Selection } from '../../src/ui/inspector/model';
@@ -18,7 +25,13 @@ import {
   ruleRgba, ruleShare, ruleShareText, resolveField, SCALE_MAX, SLICE_BLUE, SLICE_DEFAULT_EXTENT, SLICE_DEFAULT_Y, SLICE_GREY,
   SLICE_RED, SLICE_WHITE, RULE_NA, RULE_OFF, RULE_ON, scaleOf, sliceAxisLabels, sliceEmptyText, sliceGeometryOf, sliceRgba,
   sliceStats, type SliceState,
+  createFieldSliceRequests, fieldSliceSpec, fieldSliceView, sliceRequestKey, tooHeavyText, BLOCKS_HORIZONTAL_NOTE, RULE_HORIZONTAL_NOTE,
+  SLICE_DRAFT_N, SLICE_DRAFT_PRIORITY, SLICE_FULL_N, SLICE_FULL_PRIORITY, type ConfiguredDraft, type SliceWant,
 } from '../../src/ui/inspector/sliceModel';
+import { planFieldSlice, type FieldSliceSpec } from '../../src/workers/protocol';
+import { partWorstParams } from '../harness/sliceTrees';
+import { paramsWith } from '../harness/gen';
+import { steepTree } from './fixtures/editedTrees';
 import { WATER_SOURCE } from '../../src/world/blocks/fluid';
 import { AIR, REGISTRY, STONE } from '../../src/world/blocks/index';
 
@@ -244,6 +257,7 @@ describe('blocks and rule fields', () => {
     const vert = ruleRgba(v, n, 'vertical');
     expect([rgb(vert, 0), rgb(vert, 1), rgb(vert, 2), rgb(vert, 3)]).toEqual([RULE_ON, RULE_OFF, SLICE_GREY, RULE_ON]);
     expect(RULE_NA).toBe(255);
+    expect(RULE_NA).toBe(SLICE_RULE_NA);
     expect(ruleShare(v)).toEqual({ ones: 2, solid: 3, na: 1 });
     expect(ruleShareText(ruleShare(v))).toBe('rule share 66.7 % (2 of 3 solid voxels)');
     expect(ruleShareText(ruleShare(Uint8Array.from([RULE_NA, RULE_NA])))).toBe('no solid voxel');
@@ -363,5 +377,307 @@ describe('the geometry, used from gen/inspect/fieldSlice.ts and metrics/crossSec
     expect(sliceAxisLabels(v, LINE)).toEqual({ left: 'A (-1664, 8)', right: 'B (-640, 8) · 1024 blocks', top: 'y 319', bottom: 'y -64' });
     expect(sliceAxisLabels({ ...v, plane: 'horizontal', cx: 0, cz: 100, extent: 256 }, null))
       .toEqual({ left: 'x -128', right: 'x 128', top: 'z -28', bottom: 'z 228' });
+  });
+});
+
+describe('the request stream (§4.5: draft then full on the resolved configure, supersession, stale and failed)', () => {
+  const flush = () => new Promise<void>((done) => { setTimeout(done, 0); });
+  interface Call {
+    readonly req: FieldSliceSpec;
+    readonly opts: FieldSliceOptions;
+    resolve(r: FieldSliceResult): void;
+    reject(e: unknown): void;
+    cancelled: boolean;
+  }
+  /**
+   * A fake pool of deferred promises: `cancel()` only records the cancellation (the real pool rejects JobCancelled at
+   * once; here the stream's token must discard a result that still lands, as a running part's does, P1).
+   */
+  const harness = (params: Params = DEFAULTS) => {
+    const calls: Call[] = [];
+    const pool = {
+      size: 3,
+      epoch: 4,
+      fieldSlice(req: FieldSliceSpec, opts: FieldSliceOptions) {
+        let resolve!: (r: FieldSliceResult) => void;
+        let reject!: (e: unknown) => void;
+        const promise = new Promise<FieldSliceResult>((a, b) => { resolve = a; reject = b; });
+        const call: Call = { req, opts, resolve, reject, cancelled: false };
+        calls.push(call);
+        return { promise, cancel: () => { call.cancelled = true; } };
+      },
+    };
+    const h = {
+      calls, pool,
+      session: { state: { epoch: 7 } },
+      cfg: { poolEpoch: 4, sessionEpoch: 7, params } as ConfiguredDraft | null,
+      visible: true,
+      changes: 0,
+    };
+    const r = createFieldSliceRequests({
+      pool: h.pool, session: h.session, configured: () => h.cfg, visible: () => h.visible, changed: () => { h.changes++; },
+    });
+    return { ...h, r, h };
+  };
+  const density = (n: number, v = n): FieldSliceResult => ({ n, field: 'density', values: new Float64Array(n * n).fill(v), fluid: null });
+  const VERT: SliceState = { plane: 'vertical', field: 'density', y: 63, extent: 2048, cx: 0, cz: 0 };
+  const HORI: SliceState = { ...VERT, plane: 'horizontal', cx: 100, cz: -200, extent: 512 };
+  const TAP_TERRAIN: Selection = { leaf: 'density.defs', path: 'root.a.a' };
+  const TAP_ISLANDS: Selection = { leaf: 'density.defs', path: 'root.b' };
+  const want = (state: SliceState = VERT, line: Segment | null = LINE, selection: Selection = TAP_TERRAIN): SliceWant => ({ state, line, selection });
+
+  test('a 32² draft at priority 2, then the 128² slice at priority 500, with sliceCostOf\'s column costs and the two budgets', async () => {
+    expect([SLICE_DRAFT_N, SLICE_FULL_N, SLICE_DRAFT_PRIORITY, SLICE_FULL_PRIORITY]).toEqual([32, 128, 2, 500]);
+    const { r, calls } = harness();
+    r.request(want());
+    expect(calls).toHaveLength(1);
+    expect(calls[0]!.req).toEqual({ plane: 'vertical', ax: -1664, az: 8, bx: -640, bz: 8, y: 63, n: 32, field: 'density', path: '' });
+    expect(calls[0]!.opts).toEqual({ priority: 2, columnCost: sliceCostOf(DEFAULTS, 'density', '', 'vertical', 32), budget: DRAFT_BUDGET });
+    expect(r.key).toBe(sliceRequestKey(VERT, LINE, 'density', ''));
+    expect(r.pending).toEqual({ sessionEpoch: 7, key: r.key, n: 32 });
+    expect([r.shown, r.notice, fieldSliceView(r, 7)]).toEqual([null, null, 'none']);
+    r.request(want());
+    expect(calls).toHaveLength(1);
+    const d = density(32);
+    calls[0]!.resolve(d);
+    await flush();
+    expect(r.shown?.result).toBe(d);
+    expect([r.shown?.sessionEpoch, r.shown?.key, fieldSliceView(r, 7)]).toEqual([7, r.key, 'fresh']);
+    expect(calls).toHaveLength(2);
+    expect(calls[1]!.req).toEqual({ ...calls[0]!.req, n: 128 });
+    expect(calls[1]!.opts).toEqual({ priority: 500, columnCost: 105_600, budget: REQUEST_BUDGET });
+    expect(r.pending).toEqual({ sessionEpoch: 7, key: r.key, n: 128 });
+    const f = density(128);
+    calls[1]!.resolve(f);
+    await flush();
+    expect([r.shown?.result, r.pending, r.notice, fieldSliceView(r, 7)]).toEqual([f, null, null, 'fresh']);
+    // The shown geometry is the result's: a pixel names the voxel that was evaluated.
+    const g = sliceGeometryOf(VERT, LINE, 128);
+    if (!g.ok) throw new Error(g.problem);
+    expect(pixelVoxel(r.shown!.geometry, 127, 64)).toEqual(pixelVoxel(g.geometry, 127, 64));
+    // One result per (session epoch, key): asking again sends nothing.
+    r.request(want());
+    expect(calls).toHaveLength(2);
+  });
+
+  test('a horizontal plane sends its own keys only, with the corner-sample cost', () => {
+    const { r, calls } = harness();
+    r.request(want(HORI, LINE));
+    expect(calls[0]!.req).toEqual({ plane: 'horizontal', cx: 100, cz: -200, extent: 512, y: 63, n: 32, field: 'density', path: '' });
+    expect(calls[0]!.opts.columnCost).toBe(32 * (569 + CORNER_SAMPLE_COST));
+    expect(fieldSliceSpec(HORI, null, 'node', 'root.b', 128)).toEqual({ plane: 'horizontal', cx: 100, cz: -200, extent: 512, y: 63, n: 128, field: 'node', path: 'root.b' });
+  });
+
+  test('requests run on the pool\'s resolved configure, for the session epoch it holds; a newer session shows the slice stale', async () => {
+    const { r, calls, h } = harness();
+    h.cfg = null;
+    r.request(want());
+    expect([calls.length, r.pending]).toEqual([0, null]);
+    expect(r.key).toBe(sliceRequestKey(VERT, LINE, 'density', ''));
+    // A configure is in flight (the pool's epoch is past the resolved one): wait for its resolution.
+    h.cfg = { poolEpoch: 5, sessionEpoch: 7, params: DEFAULTS };
+    h.pool.epoch = 6;
+    r.request(want());
+    expect(calls).toHaveLength(0);
+    h.pool.epoch = 5;
+    r.request(want());
+    expect(calls).toHaveLength(1);
+    calls[0]!.resolve(density(32));
+    await flush();
+    calls[1]!.resolve(density(128));
+    await flush();
+    // An edit: the session is at 8, the pool still holds 7's draft. Nothing new to ask; the slice is stale.
+    h.session.state.epoch = 8;
+    r.request(want());
+    expect(calls).toHaveLength(2);
+    expect(fieldSliceView(r, 8)).toBe('stale');
+    // The configure of 8 resolves: a draft for 8.
+    h.cfg = { poolEpoch: 6, sessionEpoch: 8, params: DEFAULTS };
+    h.pool.epoch = 6;
+    r.request(want());
+    expect(calls).toHaveLength(3);
+    expect([calls[2]!.req.n, r.pending?.sessionEpoch, fieldSliceView(r, 8)]).toEqual([32, 8, 'stale']);
+    calls[2]!.resolve(density(32, 8));
+    await flush();
+    expect([r.shown?.sessionEpoch, fieldSliceView(r, 8)]).toEqual([8, 'fresh']);
+    // A result older than the session is stale whatever its key.
+    expect(fieldSliceView(r, 9)).toBe('stale');
+  });
+
+  test('a new request supersedes the previous one: its queued parts are cancelled and its running parts\' results discarded (P1)', async () => {
+    const { r, calls } = harness();
+    r.request(want());
+    const other: Segment = { ax: -1664, az: 8, bx: -640, bz: 600 };
+    r.request(want(VERT, other));
+    expect(calls.map((c) => c.cancelled)).toEqual([true, false]);
+    expect(calls[1]!.req).toMatchObject({ bz: 600, n: 32 });
+    // The superseded draft still lands (a running part finishes): discarded.
+    calls[0]!.resolve(density(32, 1));
+    await flush();
+    expect(r.shown).toBeNull();
+    expect(calls).toHaveLength(2);
+    const d = density(32, 2);
+    calls[1]!.resolve(d);
+    await flush();
+    expect(r.shown?.result).toBe(d);
+    // Superseded during the full slice: the draft stays shown (stale: another key) until the new draft lands.
+    r.request(want());
+    expect(calls.map((c) => c.cancelled)).toEqual([true, false, true, false]);
+    calls[2]!.resolve(density(128, 3));
+    await flush();
+    expect([r.shown?.result, fieldSliceView(r, 7)]).toEqual([d, 'stale']);
+    expect(r.pending).toEqual({ sessionEpoch: 7, key: sliceRequestKey(VERT, LINE, 'density', ''), n: 32 });
+  });
+
+  test('JobCancelled keeps the last image silently and asks again; any other error is `failed: …` and is not retried at that epoch and key', async () => {
+    const { r, calls, h } = harness();
+    r.request(want());
+    calls[0]!.reject(new JobCancelled());
+    await flush();
+    expect([r.shown, r.pending, r.notice]).toEqual([null, null, null]);
+    r.request(want());
+    expect(calls).toHaveLength(2);
+    calls[1]!.reject(new Error('BAD_ARGS: path "root.zz" names no node of density.defs'));
+    await flush();
+    expect(r.notice).toBe('failed: BAD_ARGS: path "root.zz" names no node of density.defs');
+    expect(r.pending).toBeNull();
+    r.request(want());
+    expect(calls).toHaveLength(2);
+    // The next session epoch asks again and clears the notice; a failure of the full slice keeps the draft.
+    h.cfg = { poolEpoch: 4, sessionEpoch: 8, params: DEFAULTS };
+    h.session.state.epoch = 8;
+    r.request(want());
+    expect([calls.length, r.notice]).toEqual([3, null]);
+    const d = density(32);
+    calls[2]!.resolve(d);
+    await flush();
+    calls[3]!.reject(new Error('worker 2 of 3 failed: boom'));
+    await flush();
+    expect([r.shown?.result, r.notice, r.pending, fieldSliceView(r, 8)]).toEqual([d, 'failed: worker 2 of 3 failed: boom', null, 'fresh']);
+    // JobCancelled during the full slice: the draft stays, the next request starts again with a draft.
+    h.cfg = { poolEpoch: 4, sessionEpoch: 9, params: DEFAULTS };
+    r.request(want());
+    calls[4]!.resolve(density(32, 9));
+    await flush();
+    calls[5]!.reject(new JobCancelled());
+    await flush();
+    expect([r.shown?.sessionEpoch, r.shown?.result.n, r.pending, r.notice]).toEqual([9, 32, null, null]);
+    r.request(want());
+    expect(calls.map((c) => c.req.n)).toEqual([32, 32, 32, 128, 32, 128, 32]);
+  });
+
+  test('the node path is in the key only for the selected field', () => {
+    const { r, calls } = harness();
+    r.request(want(VERT, LINE, TAP_TERRAIN));
+    r.request(want(VERT, LINE, TAP_ISLANDS));
+    r.request(want(VERT, LINE, RULE_SEL));
+    expect(calls).toHaveLength(1);
+    r.request(want({ ...VERT, field: 'blocks' }, LINE, TAP_TERRAIN));
+    r.request(want({ ...VERT, field: 'blocks' }, LINE, TAP_ISLANDS));
+    expect(calls.map((c) => [c.req.field, c.req.path])).toEqual([['density', ''], ['blocks', '']]);
+    r.request(want({ ...VERT, field: 'selected' }, LINE, TAP_TERRAIN));
+    r.request(want({ ...VERT, field: 'selected' }, LINE, TAP_TERRAIN));
+    r.request(want({ ...VERT, field: 'selected' }, LINE, TAP_ISLANDS));
+    r.request(want({ ...VERT, field: 'selected' }, LINE, RULE_SEL));
+    expect(calls.slice(2).map((c) => [c.req.field, c.req.path])).toEqual([['node', 'root.a.a'], ['node', 'root.b'], ['rule', 'root.rules[1]']]);
+    expect(calls.map((c) => c.cancelled)).toEqual([true, true, true, true, false]);
+    expect(calls[2]!.opts.columnCost).toBe(sliceCostOf(DEFAULTS, 'node', 'root.a.a', 'vertical', 32));
+    expect(calls[4]!.opts.columnCost).toBe(sliceCostOf(DEFAULTS, 'rule', 'root.rules[1]', 'vertical', 32));
+    // The keys: y is part of a horizontal plane's key only.
+    expect(sliceRequestKey(VERT, LINE, 'density', 'root.b')).toBe(sliceRequestKey(VERT, LINE, 'density', ''));
+    expect(sliceRequestKey(VERT, LINE, 'blocks', 'root.b')).toBe(sliceRequestKey(VERT, LINE, 'blocks', ''));
+    expect(sliceRequestKey(VERT, LINE, 'node', 'root.b')).not.toBe(sliceRequestKey(VERT, LINE, 'node', 'root.a'));
+    expect(sliceRequestKey({ ...VERT, y: 10 }, LINE, 'density', '')).toBe(sliceRequestKey(VERT, LINE, 'density', ''));
+    expect(sliceRequestKey({ ...HORI, y: 10 }, null, 'density', '')).not.toBe(sliceRequestKey(HORI, null, 'density', ''));
+    expect(sliceRequestKey({ ...HORI, extent: 256 }, null, 'density', '')).not.toBe(sliceRequestKey(HORI, null, 'density', ''));
+  });
+
+  test('nothing to slice: a disabled field or a missing line is the notice, with no request; a hidden view asks nothing', () => {
+    const { r, calls, h } = harness();
+    h.visible = false;
+    r.request(want());
+    expect([calls.length, r.key, r.notice]).toEqual([0, null, null]);
+    h.visible = true;
+    r.request(want());
+    expect(calls).toHaveLength(1);
+    r.request(want({ ...HORI, field: 'selected' }, LINE, RULE_SEL));
+    expect([calls[0]!.cancelled, r.key, r.notice, r.pending]).toEqual([true, null, RULE_HORIZONTAL_NOTE, null]);
+    r.request(want({ ...HORI, field: 'blocks' }));
+    expect([r.key, r.notice]).toEqual([null, BLOCKS_HORIZONTAL_NOTE]);
+    r.request(want(VERT, null));
+    expect([r.key, r.notice]).toEqual([null, NO_LINE_TEXT]);
+    expect(calls).toHaveLength(1);
+    // Back to a valid plane: a request, and the notice is gone.
+    r.request(want(HORI, null));
+    expect([calls.length, r.notice]).toEqual([2, null]);
+  });
+
+  describe('the work bound\'s notices, with planFieldSlice\'s limits (P3)', () => {
+    // An interpolated sum of L 16-octave double detail noises: work cost 1 + 8 × (129·L − 1) per sample.
+    const P8 = partWorstParams(8);
+    const P16 = partWorstParams(16);
+
+    test('the full slice refused: the draft is kept with "node too heavy for a 128² slice" (vertical limit 7 936, horizontal 6 144)', async () => {
+      for (const [state, limit] of [[VERT, 7936], [HORI, 6144]] as const) {
+        const { r, calls } = harness(P8);
+        const plan = planFieldSlice(128, sliceCostOf(P8, 'density', '', state.plane, 128), 3, REQUEST_BUDGET);
+        if (!plan.refused) throw new Error('expected a refusal');
+        expect(state.plane === 'vertical' ? (plan.limit - COLUMN_SAMPLE_COST) / 128 : plan.limit / 128 - CORNER_SAMPLE_COST).toBe(limit);
+        r.request(want(state));
+        expect(calls).toHaveLength(1);
+        const d = density(32);
+        calls[0]!.resolve(d);
+        await flush();
+        expect(calls).toHaveLength(1);
+        expect([r.shown?.result, r.pending]).toEqual([d, null]);
+        expect(r.notice).toBe(`node too heavy for a 128² slice (cost 8 249, limit ${limit === 7936 ? '7 936' : '6 144'})`);
+        r.request(want(state));
+        expect(calls).toHaveLength(1);
+      }
+    });
+
+    test('the draft refused: no job and "node too heavy to slice" (vertical limit 15 360, horizontal 14 336)', () => {
+      for (const [state, limit] of [[VERT, '15 360'], [HORI, '14 336']] as const) {
+        const { r, calls } = harness(P16);
+        r.request(want(state));
+        expect([calls.length, r.pending, r.shown]).toEqual([0, null, null]);
+        expect(r.notice).toBe(`node too heavy to slice (cost 16 505, limit ${limit})`);
+        // The selected node of the same tree (its root) is refused alike; a blocks slice never is.
+        r.request(want({ ...state, field: 'selected' }, LINE, { leaf: 'density.defs', path: 'root' }));
+        expect(r.notice).toBe(`node too heavy to slice (cost 16 505, limit ${limit})`);
+        if (state.plane === 'vertical') {
+          r.request(want({ ...state, field: 'blocks' }));
+          expect([calls.length, calls[0]!.opts.budget, r.notice]).toEqual([1, DRAFT_BUDGET, null]);
+        }
+      }
+    });
+
+    test('a tree that reads col steep: the horizontal draft and then the 128² slice are requested with no notice; its limit is 3 072, never 0', async () => {
+      const steep = paramsWith({ density: { defs: steepTree() } } as never);
+      const { r, calls } = harness(steep);
+      r.request(want(HORI));
+      expect(calls).toHaveLength(1);
+      expect(calls[0]!.opts).toEqual({ priority: 2, columnCost: 32 * (571 + CORNER_STEEP_COST), budget: DRAFT_BUDGET });
+      calls[0]!.resolve(density(32));
+      await flush();
+      expect(calls).toHaveLength(2);
+      expect([calls[1]!.req.n, calls[1]!.opts]).toEqual([128, { priority: 500, columnCost: 128 * (571 + CORNER_STEEP_COST), budget: REQUEST_BUDGET }]);
+      const f = density(128);
+      calls[1]!.resolve(f);
+      await flush();
+      expect([r.shown?.result, r.pending, r.notice]).toEqual([f, null, null]);
+      // The notice a heavier steep tree would get: the limit is the largest work cost accepted, 3 072 (11 264 for a draft).
+      expect(tooHeavyText('full', steep, 'density', '', 128, sliceCostOf(steep, 'density', '', 'horizontal', 128), 2 ** 20)).toBe('node too heavy for a 128² slice (cost 571, limit 3 072)');
+      expect(tooHeavyText('draft', steep, 'density', '', 32, sliceCostOf(steep, 'density', '', 'horizontal', 32), 2 ** 19)).toBe('node too heavy to slice (cost 571, limit 11 264)');
+    });
+
+    test('a SliceTooHeavy from the pool gives the same notice; tooHeavyText converts planFieldSlice\'s column-cost limit', async () => {
+      const { r, calls } = harness();
+      r.request(want());
+      calls[0]!.reject(new SliceTooHeavy(calls[0]!.opts.columnCost, 2 ** 19));
+      await flush();
+      expect(r.notice).toBe('node too heavy to slice (cost 569, limit 15 360)');
+      expect(tooHeavyText('full', DEFAULTS, 'density', '', 128, 105_600, 2 ** 20)).toBe('node too heavy for a 128² slice (cost 569, limit 7 936)');
+    });
   });
 });

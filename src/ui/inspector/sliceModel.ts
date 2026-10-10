@@ -1,6 +1,6 @@
 /**
- * The Density tab's slice viewer model, drawing half (SP3d spec §4.1 field select, §4.3 drawing, §3.7 first show and
- * empty state, D16, D18). Pure; no DOM (`sliceView.ts` binds it). The request stream is added by a later task.
+ * The Density tab's slice viewer model (SP3d spec §4.1 field select, §4.3 drawing, §3.7 first show and empty state, §4.5
+ * requests, §5.2 refusal notices, D16, D18, P1, P3). Pure; no DOM (`sliceView.ts` binds it).
  *
  * - **Planes and pixels.** A slice holds n × n samples in sample order, sample k of sample column c at c·n + k (the
  *   worker's reply layout). Vertical: sample column c is the line's point c (A on the left), sample k the row of
@@ -19,13 +19,24 @@
  *   "constant v".
  * - **Blocks** use the Voxels palette and legend; **rule** masks two colours, grey for n/a, and the share of 1s among
  *   the solid voxels.
+ * - **Requests** (`createFieldSliceRequests`, §4.5): per (session epoch, request key), a 32² draft at priority 2 then the
+ *   128² slice at priority 500, on the draft the pool's last resolved configure holds; a new request supersedes the
+ *   previous one (its queued parts dropped, its running parts' results discarded: P1); a density or node slice refused
+ *   by the work bound (`planFieldSlice`, never re-derived: P3) keeps the draft with its notice.
  */
-import { HEIGHT, MIN_Y, SEA_LEVEL, SLICE_EXTENTS } from '../../core/constants';
+import { DRAFT_BUDGET, HEIGHT, MIN_Y, REQUEST_BUDGET, SEA_LEVEL, SLICE_EXTENTS, SLICE_NS, SLICE_RULE_NA } from '../../core/constants';
 import { MAX_Y, WINDOW_HALF } from '../../core/coords';
-import { sliceGeometryProblem, sliceRowY, sliceSampleVoxel, type SliceGeometry } from '../../gen/inspect/fieldSlice';
+import type { Params } from '../../core/params/schema';
+import { JobCancelled, SliceTooHeavy, type FieldSliceHandle, type FieldSliceResult, type WorkerPool } from '../../engine/workerPool';
+import { workCost } from '../../gen/inspect/cost';
+import {
+  evaluatedExpression, sliceCostOf, sliceGeometryProblem, sliceRowY, sliceSampleVoxel, type SliceField, type SliceGeometry,
+} from '../../gen/inspect/fieldSlice';
 import { segmentLength, segmentPointAt, segmentProblem, type Segment } from '../../metrics/crossSection';
 import { fluidType } from '../../world/blocks/fluid';
 import { AIR, REGISTRY } from '../../world/blocks/index';
+import { isRefusableField, planFieldSlice, type FieldSliceSpec } from '../../workers/protocol';
+import { countText } from '../biomeTable/model';
 import { VOXEL_COLORS, voxelRgb, type Rgb } from '../crossSection/voxels';
 import type { SlicePlane } from '../map/clickAction';
 import type { Selection } from './model';
@@ -36,12 +47,9 @@ import type { Selection } from './model';
 export type FieldChoice = 'density' | 'selected' | 'blocks';
 export const FIELD_CHOICES: readonly FieldChoice[] = Object.freeze(['density', 'selected', 'blocks']);
 
-/** The evaluated field of a slice (§4.1, the worker's `field`): `selected` resolves to `node` or `rule`. */
-export type SliceFieldKind = 'density' | 'node' | 'blocks' | 'rule';
-
 /** A choice resolved on a plane: the field and its node path ('' for density and blocks), or why it has no slice. */
 export type ResolvedField =
-  | { readonly ok: true; readonly field: SliceFieldKind; readonly path: string }
+  | { readonly ok: true; readonly field: SliceField; readonly path: string }
   | { readonly ok: false; readonly note: string };
 
 export const RULE_HORIZONTAL_NOTE = 'a rule node has a mask on vertical planes only';
@@ -459,8 +467,8 @@ export function blocksLegend(states: Uint16Array, fluid: Uint8Array): BlocksLege
   return keys;
 }
 
-/** The rule field's n/a (air and water: no surface run), as the worker writes it. */
-export const RULE_NA = 255;
+/** The rule field's n/a (air and water: no surface run), as the worker writes it (core's SLICE_RULE_NA). */
+export const RULE_NA = SLICE_RULE_NA;
 export const RULE_ON: Rgb = Object.freeze([230, 126, 34] as const);
 export const RULE_OFF: Rgb = Object.freeze([44, 62, 80] as const);
 
@@ -493,4 +501,231 @@ export function ruleShare(values: Uint8Array): RuleShare {
 export function ruleShareText(r: RuleShare): string {
   if (r.solid === 0) return 'no solid voxel';
   return `rule share ${((100 * r.ones) / r.solid).toFixed(1)} % (${r.ones} of ${r.solid} solid voxels)`;
+}
+
+// ---------------------------------------------------------------- requests (§4.5)
+
+/** The draft's and the full slice's sizes (SLICE_NS) and priorities: the draft follows the preview tiles at distance 0 and 1, the full slice queues behind every preview tile. */
+export const SLICE_DRAFT_N = SLICE_NS[0];
+export const SLICE_FULL_N = SLICE_NS[1];
+export const SLICE_DRAFT_PRIORITY = 2;
+export const SLICE_FULL_PRIORITY = 500;
+
+/** What the view wants sliced now: its state, the cross-section's line and the tree's selection. */
+export interface SliceWant {
+  readonly state: SliceState;
+  readonly line: Segment | null;
+  readonly selection: Selection;
+}
+
+/**
+ * The request key of a resolved field on a state: everything the samples depend on besides the session epoch. The
+ * plane's own geometry only (the line on a vertical plane; the centre, extent and y on a horizontal one: y is unused by
+ * a vertical evaluation), and the node path only for `node` and `rule` (the `selected` choice), so selecting another
+ * node never re-requests a density or blocks slice.
+ */
+export function sliceRequestKey(s: SliceState, line: Segment | null, field: SliceField, path: string): string {
+  const p = field === 'node' || field === 'rule' ? path : '';
+  if (s.plane === 'vertical') {
+    if (line === null) throw new RangeError('sliceRequestKey: a vertical plane needs a line');
+    return `vertical|${field}|${p}|${line.ax},${line.az},${line.bx},${line.bz}`;
+  }
+  return `horizontal|${field}|${p}|${s.cx},${s.cz},${s.extent},${s.y}`;
+}
+
+/** The pool's request for a field at size n: the plane's own keys only. */
+export function fieldSliceSpec(s: SliceState, line: Segment | null, field: SliceField, path: string, n: number): FieldSliceSpec {
+  if (s.plane === 'vertical') {
+    if (line === null) throw new RangeError('fieldSliceSpec: a vertical plane needs a line');
+    return { plane: 'vertical', ax: line.ax, az: line.az, bx: line.bx, bz: line.bz, y: s.y, n, field, path };
+  }
+  return { plane: 'horizontal', cx: s.cx, cz: s.cz, extent: s.extent, y: s.y, n, field, path };
+}
+
+/**
+ * The refusal notice of a density or node slice whose column cost exceeds `limit` (`planFieldSlice`'s, in column-cost
+ * units), in §5.2's per-sample units: c = the evaluated expression's work cost, L = the largest c accepted =
+ * c + ⌊(limit − columnCost) / n⌋ (the column cost is n × c plus the acquisition, linear in c). The draft's (`draft`)
+ * reads "node too heavy to slice", the full slice's "node too heavy for a 128² slice".
+ */
+export function tooHeavyText(stage: 'draft' | 'full', params: Params, field: 'density' | 'node', path: string, n: number, columnCost: number, limit: number): string {
+  const c = workCost(evaluatedExpression(params, field, path), params);
+  const l = c + Math.floor((limit - columnCost) / n);
+  const what = stage === 'draft' ? 'node too heavy to slice' : `node too heavy for a ${SLICE_FULL_N}² slice`;
+  return `${what} (cost ${countText(c)}, limit ${countText(l)})`;
+}
+
+/** The pool's last resolved configure (`DriverStatus.poolEpoch`, `sessionEpoch`) and the params of the draft it holds. */
+export interface ConfiguredDraft {
+  readonly poolEpoch: number;
+  readonly sessionEpoch: number;
+  readonly params: Params;
+}
+
+export interface FieldSliceSource {
+  readonly pool: Pick<WorkerPool, 'fieldSlice' | 'size' | 'epoch'>;
+  /** The session's current epoch: a result of an older one is stale. */
+  readonly session: { readonly state: { readonly epoch: number } };
+  /** The pool's last resolved configure, null before the first. */
+  configured(): ConfiguredDraft | null;
+  /** Whether the slice view is on screen (the Density tab shown): a hidden view requests nothing. */
+  visible(): boolean;
+  /** The shown result, the request in flight, the key or the notice changed. */
+  changed(): void;
+}
+
+/** A slice as it is shown: the session epoch and key it ran for, its plane and geometry (the hover's pixel → voxel) and its samples. */
+export interface SliceShown {
+  readonly sessionEpoch: number;
+  readonly key: string;
+  readonly geometry: SliceGeometry;
+  readonly result: FieldSliceResult;
+}
+
+export interface FieldSliceRequests {
+  /**
+   * The view's current want (call it on every edit of the state, the line or the selection, and on every driver status
+   * change). A different key supersedes the request in flight; then, once the pool's resolved configure is its current
+   * epoch, requests the draft and the full slice for (that configure's session epoch, key), unless they are already in
+   * flight or done (shown, refused or failed) for it.
+   */
+  request(want: SliceWant): void;
+  /** The current key; null when nothing can be sliced (a disabled field, no line, a refused geometry). */
+  readonly key: string | null;
+  /** The last slice drawn (the draft, then the full one); kept across keys and epochs until replaced (shown stale). */
+  readonly shown: SliceShown | null;
+  /** The stage in flight: its session epoch, key and size. */
+  readonly pending: { readonly sessionEpoch: number; readonly key: string; readonly n: number } | null;
+  /** The field's note, the geometry's problem, a refusal notice or `failed: <message>`; null when there is none. */
+  readonly notice: string | null;
+}
+
+/** How the view shows the last slice: none yet; fresh when it is of the current key and session epoch; else stale (dimmed). */
+export function fieldSliceView(r: Pick<FieldSliceRequests, 'key' | 'shown'>, sessionEpoch: number): 'none' | 'fresh' | 'stale' {
+  if (r.shown === null) return 'none';
+  return r.shown.key === r.key && r.shown.sessionEpoch === sessionEpoch ? 'fresh' : 'stale';
+}
+
+interface Run {
+  readonly sessionEpoch: number;
+  readonly key: string;
+  n: number;
+  handle: FieldSliceHandle | null;
+}
+
+const messageOf = (e: unknown): string => (e instanceof Error ? e.message : String(e));
+
+/**
+ * The slice view's request stream (§4.5), the cross-section streams' rules (`createLineRequests`): one result per
+ * (session epoch, request key), a token per request, JobCancelled keeps the last image silently (the next `request`
+ * asks again), any other error is the notice `failed: <message>` and is not retried at that epoch and key.
+ */
+export function createFieldSliceRequests(src: FieldSliceSource): FieldSliceRequests {
+  let key: string | null = null;
+  let notice: string | null = null;
+  let shown: SliceShown | null = null;
+  let run: Run | null = null;
+  /** The session epoch whose request for `key` is over (full slice shown, refused or failed). */
+  let done: number | null = null;
+
+  /** Drops the request in flight: its queued parts are dropped, its running parts finish and their results are discarded (P1). */
+  const supersede = () => {
+    const r = run;
+    run = null;
+    r?.handle?.cancel();
+  };
+
+  const finish = (r: Run, text: string | null) => {
+    run = null;
+    done = r.sessionEpoch;
+    notice = text;
+    src.changed();
+  };
+
+  const stage = (r: Run, want: SliceWant, cfg: ConfiguredDraft, field: SliceField, path: string, n: number) => {
+    const { state, line } = want;
+    const g = sliceGeometryOf(state, line, n);
+    if (!g.ok) { finish(r, g.problem); return; }
+    let cost: number;
+    try {
+      cost = sliceCostOf(cfg.params, field, path, state.plane, n);
+    } catch (e) {
+      finish(r, `failed: ${messageOf(e)}`);
+      return;
+    }
+    const draft = n === SLICE_DRAFT_N;
+    const budget = draft ? DRAFT_BUDGET : REQUEST_BUDGET;
+    const heavy = (limit: number): string =>
+      tooHeavyText(draft ? 'draft' : 'full', cfg.params, field as 'density' | 'node', path, n, cost, limit);
+    if (isRefusableField(field)) {
+      const plan = planFieldSlice(n, cost, src.pool.size, budget);
+      if (plan.refused) { finish(r, heavy(plan.limit)); return; }
+    }
+    r.n = n;
+    const handle = src.pool.fieldSlice(fieldSliceSpec(state, line, field, path, n), {
+      priority: draft ? SLICE_DRAFT_PRIORITY : SLICE_FULL_PRIORITY, columnCost: cost, budget,
+    });
+    r.handle = handle;
+    handle.promise.then((result) => {
+      if (run !== r) return;
+      shown = { sessionEpoch: r.sessionEpoch, key: r.key, geometry: g.geometry, result };
+      if (draft) {
+        stage(r, want, cfg, field, path, SLICE_FULL_N);
+        if (run === r) src.changed();
+      } else finish(r, null);
+    }, (e: unknown) => {
+      if (run !== r) return;
+      if (e instanceof JobCancelled) {
+        run = null;
+        src.changed();
+        return;
+      }
+      finish(r, e instanceof SliceTooHeavy && isRefusableField(field) ? heavy(e.limit) : `failed: ${messageOf(e)}`);
+    });
+  };
+
+  const block = (text: string) => {
+    if (key === null && notice === text && run === null) return;
+    supersede();
+    key = null;
+    done = null;
+    notice = text;
+    src.changed();
+  };
+
+  return {
+    request(want) {
+      if (!src.visible()) return;
+      const f = resolveField(want.state.field, want.state.plane, want.selection);
+      if (!f.ok) { block(f.note); return; }
+      const g = sliceGeometryOf(want.state, want.line, SLICE_DRAFT_N);
+      if (!g.ok) { block(g.problem); return; }
+      const k = sliceRequestKey(want.state, want.line, f.field, f.path);
+      let moved = false;
+      if (k !== key) {
+        supersede();
+        key = k;
+        done = null;
+        notice = null;
+        moved = true;
+      }
+      const cfg = src.configured();
+      // Requests run on the pool's resolved configure only: while a newer configure is in flight, its resolution
+      // changes the driver's status and the view calls `request` again.
+      if (cfg === null || src.pool.epoch !== cfg.poolEpoch || run?.sessionEpoch === cfg.sessionEpoch || done === cfg.sessionEpoch) {
+        if (moved) src.changed();
+        return;
+      }
+      supersede();
+      notice = null;
+      const r: Run = { sessionEpoch: cfg.sessionEpoch, key: k, n: SLICE_DRAFT_N, handle: null };
+      run = r;
+      stage(r, want, cfg, f.field, f.path, SLICE_DRAFT_N);
+      if (run === r) src.changed();
+    },
+    get key() { return key; },
+    get shown() { return shown; },
+    get pending() { return run === null ? null : { sessionEpoch: run.sessionEpoch, key: run.key, n: run.n }; },
+    get notice() { return notice; },
+  };
 }
