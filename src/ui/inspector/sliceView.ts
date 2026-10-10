@@ -13,6 +13,10 @@
  *   session change, driver status change, line change and selection change. The state starts at the first show
  *   (`initialSliceState`) and is reported to the page (`onState`: the map's square and the click routing); a map click on
  *   the horizontal plane sets the centre (`setCentre`). The slice hover reports its voxel (`onHover`) for the form's value.
+ * - Pinned slices (§11's cut line; master §5.5): "Pin" copies the live slice's plane, field and node into a pin (up to
+ *   3, side by side under the live slice); each pin has its own request stream (`createSlicePins`), asked on every
+ *   `update()` like the live one, and shows its label, image (the live scale setting, the 0-contour and the sea level),
+ *   a hover readout of its own samples (not fed to the form), stale dimming, its status and its notice; × unpins it.
  * Text only through `textContent`. DOM only: the rules are in sliceModel.ts.
  */
 import { SEA_LEVEL, SLICE_EXTENTS } from '../../core/constants';
@@ -23,10 +27,10 @@ import type { SlicePlane } from '../map/clickAction';
 import type { HoverVoxel } from './hoverModel';
 import type { Selection } from './model';
 import {
-  blocksLegend, blocksRgba, contourSegments, createFieldSliceRequests, fieldOptionLabel, fieldOptions, fieldSliceView, histogram,
-  histogramLabels, imageOrder, initialSliceState, levelLine, parseScale, parseSliceY, ruleRgba, ruleShare, ruleShareText, scaleOf,
-  sliceAxisLabels, sliceBoxSide, sliceEmptyText, sliceHoverText, slicePixel, sliceRgba, sliceStats, sliceStatusText, withCentre,
-  withExtent, type ConfiguredDraft, type FieldChoice, type SliceShown, type SliceStart, type SliceState,
+  blocksLegend, contourPath, createFieldSliceRequests, createSlicePins, fieldOptionLabel, fieldOptions, fieldSliceView, histogram,
+  histogramLabels, initialSliceState, levelLine, parseScale, parseSliceY, PIN_FULL_TEXT, PIN_MAX, ruleShare, ruleShareText,
+  sliceAxisLabels, sliceBoxSide, sliceEmptyText, sliceHoverText, sliceImage, slicePixel, sliceStatusText, withCentre, withExtent,
+  type ConfiguredDraft, type FieldChoice, type SlicePin, type SliceShown, type SliceStart, type SliceState,
 } from './sliceModel';
 
 /** The note under the plane controls (§3.1, §1.5). */
@@ -72,6 +76,7 @@ function svg<K extends keyof SVGElementTagNameMap>(tag: K, attrs: Readonly<Recor
 /** The aside's width and its gap to the box (CSS px; inspector.css's .sv-aside and .sv-row). */
 const ASIDE_PX = 168 + 10;
 const PLANE_LABELS: Readonly<Record<SlicePlane, string>> = { vertical: 'vertical (cut line)', horizontal: 'horizontal (XZ)' };
+const PIN_TITLE = `Pin this slice: it keeps its plane, field and node and follows every edit (up to ${PIN_MAX})`;
 const rgbCss = (c: readonly [number, number, number]): string => `rgb(${c[0]}, ${c[1]}, ${c[2]})`;
 
 export function createSliceView(host: HTMLElement, deps: SliceViewDeps): SliceView {
@@ -121,7 +126,10 @@ export function createSliceView(host: HTMLElement, deps: SliceViewDeps): SliceVi
   autoLabel.append(autoBox, el('span', '', 'Auto'));
   const scaleControl = el('span', 'sv-control');
   scaleControl.append(el('span', 'sv-label', 'scale'), autoLabel, scaleInput);
-  controls.append(label('plane', planeSelect), label('field', fieldSelect), label('y', yInput), extentControl, scaleControl);
+  const pinButton = el('button', 'sv-button', 'Pin');
+  pinButton.type = 'button';
+  pinButton.title = PIN_TITLE;
+  controls.append(label('plane', planeSelect), label('field', fieldSelect), label('y', yInput), extentControl, scaleControl, pinButton);
   const note = el('div', 'sv-note', DENSITY_NOTE);
 
   const body = el('div', 'sv-body');
@@ -130,10 +138,10 @@ export function createSliceView(host: HTMLElement, deps: SliceViewDeps): SliceVi
   const box = el('div', 'sv-box');
   const canvas = el('canvas', 'sv-image');
   const overlay = svg('svg', { class: 'sv-overlay', preserveAspectRatio: 'none' });
-  const contourPath = svg('path', { class: 'sv-contour' });
+  const contourEl = svg('path', { class: 'sv-contour' });
   const seaLine = svg('line', { class: 'sv-sea' });
   const yLine = svg('line', { class: 'sv-level' });
-  overlay.append(contourPath, seaLine, yLine);
+  overlay.append(contourEl, seaLine, yLine);
   const readout = el('div', 'sv-readout');
   readout.hidden = true;
   const staleLabel = el('div', 'sv-stale-label', 'stale');
@@ -153,15 +161,31 @@ export function createSliceView(host: HTMLElement, deps: SliceViewDeps): SliceVi
   body.append(topLabel, row, empty, bottomLabel, ends);
   const status = el('div', 'sv-status');
   const notice = el('div', 'sv-notice');
-  element.append(controls, note, status, notice, body);
+  const pinNotice = el('div', 'sv-notice');
+  pinNotice.hidden = true;
+  const pinStrip = el('div', 'sv-pins');
+  pinStrip.hidden = true;
+  element.append(controls, note, status, notice, pinNotice, body, pinStrip);
   host.append(element);
 
-  const requests = createFieldSliceRequests({
+  const source = {
     pool: deps.pool,
     session: deps.session,
     configured: () => deps.configured(),
     visible: () => shown && state !== null,
     changed: () => render(),
+  };
+  const requests = createFieldSliceRequests(source);
+  const pins = createSlicePins(source);
+  /** The pins' DOM by id, created on add and removed on unpin. */
+  const pinViews = new Map<number, PinView>();
+  const showPinNotice = (text: string | null): void => {
+    pinNotice.textContent = text ?? '';
+    pinNotice.hidden = text === null;
+  };
+  pinButton.addEventListener('click', () => {
+    if (state === null) return;
+    showPinNotice(pins.add({ state, line: deps.line(), selection: deps.selection() }));
   });
 
   // ---------------------------------------------------------------- state
@@ -271,16 +295,13 @@ export function createSliceView(host: HTMLElement, deps: SliceViewDeps): SliceVi
     canvas.width = n;
     canvas.height = n;
     overlay.setAttribute('viewBox', `0 0 ${n} ${n}`);
-    let rgba: Uint8ClampedArray<ArrayBuffer>;
-    let contour = '';
+    const img = sliceImage(r, plane, fixedScale);
     histo.replaceChildren();
     legend.replaceChildren();
     histo.style.display = 'none';
     switch (r.field) {
       case 'density': case 'node': {
-        const st = sliceStats(r.values);
-        rgba = sliceRgba(r.values, n, plane, scaleOf(st, fixedScale));
-        contour = contourSegments(imageOrder(r.values, n, plane), n).map(([x0, y0, x1, y1]) => `M${x0} ${y0}L${x1} ${y1}`).join('');
+        const st = img.stats;
         stats.textContent = histogramLabels(st).join('\n');
         if (st !== null) {
           const h = histogram(r.values, st);
@@ -292,7 +313,6 @@ export function createSliceView(host: HTMLElement, deps: SliceViewDeps): SliceVi
         break;
       }
       case 'blocks':
-        rgba = blocksRgba(r.values, r.fluid, n);
         stats.textContent = '';
         legend.append(...blocksLegend(r.values, r.fluid).map((k) => {
           const key = el('span', 'sv-key');
@@ -303,12 +323,11 @@ export function createSliceView(host: HTMLElement, deps: SliceViewDeps): SliceVi
         }));
         break;
       case 'rule':
-        rgba = ruleRgba(r.values, n, plane);
         stats.textContent = ruleShareText(ruleShare(r.values));
         break;
     }
-    canvas.getContext('2d')?.putImageData(new ImageData(rgba, n, n), 0, 0);
-    contourPath.setAttribute('d', contour);
+    canvas.getContext('2d')?.putImageData(new ImageData(img.rgba, n, n), 0, 0);
+    contourEl.setAttribute('d', contourPath(img.contour));
   };
 
   function render(): void {
@@ -350,11 +369,144 @@ export function createSliceView(host: HTMLElement, deps: SliceViewDeps): SliceVi
       lineEl.setAttribute('y1', String(at));
       lineEl.setAttribute('y2', String(at));
     }
+    renderPins();
+  }
+
+  // ---------------------------------------------------------------- pinned slices
+  interface PinView {
+    readonly element: HTMLElement;
+    readonly box: HTMLElement;
+    readonly canvas: HTMLCanvasElement;
+    readonly overlay: SVGSVGElement;
+    readonly contour: SVGPathElement;
+    readonly sea: SVGLineElement;
+    readonly stale: HTMLElement;
+    readonly readout: HTMLElement;
+    readonly status: HTMLElement;
+    readonly notice: HTMLElement;
+    drawn: { readonly shown: SliceShown; readonly fixed: number | null } | null;
+    hoverPx: { px: number; py: number } | null;
+  }
+
+  const pinHover = (pin: SlicePin, v: PinView): void => {
+    const s = pin.requests.shown;
+    const h = v.hoverPx;
+    if (h === null || s === null || s.result.n !== s.geometry.n || h.px >= s.geometry.n || h.py >= s.geometry.n) {
+      v.readout.hidden = true;
+      return;
+    }
+    const t = sliceHoverText(s, h.px, h.py).text;
+    v.readout.textContent = t;
+    v.readout.title = t;
+    v.readout.hidden = false;
+  };
+
+  const createPinView = (pin: SlicePin): PinView => {
+    const cell = el('div', 'sv-pin');
+    const head = el('div', 'sv-pin-head');
+    const title = el('span', 'sv-pin-label', pin.label);
+    title.title = pin.label;
+    const close = el('button', 'sv-pin-close', '×');
+    close.type = 'button';
+    close.title = 'Unpin this slice';
+    close.addEventListener('click', () => {
+      pins.remove(pin.id);
+      showPinNotice(null);
+    });
+    head.append(title, close);
+    const pbox = el('div', 'sv-pin-box');
+    const pcanvas = el('canvas', 'sv-image');
+    const pover = svg('svg', { class: 'sv-overlay', preserveAspectRatio: 'none' });
+    const pcontour = svg('path', { class: 'sv-contour' });
+    const psea = svg('line', { class: 'sv-sea' });
+    pover.append(pcontour, psea);
+    const pstale = el('div', 'sv-stale-label', 'stale');
+    const preadout = el('div', 'sv-readout');
+    preadout.hidden = true;
+    pbox.append(pcanvas, pover, pstale, preadout);
+    const pstatus = el('div', 'sv-status');
+    const pnotice = el('div', 'sv-notice');
+    cell.append(head, pbox, pstatus, pnotice);
+    const v: PinView = {
+      element: cell, box: pbox, canvas: pcanvas, overlay: pover, contour: pcontour, sea: psea, stale: pstale, readout: preadout,
+      status: pstatus, notice: pnotice, drawn: null, hoverPx: null,
+    };
+    pbox.addEventListener('pointermove', (e) => {
+      const s = pin.requests.shown;
+      const r = pcanvas.getBoundingClientRect();
+      const n = s === null ? 0 : s.result.n;
+      const px = slicePixel(e.clientX - r.left, r.width, n);
+      const py = slicePixel(e.clientY - r.top, r.height, n);
+      v.hoverPx = px === null || py === null ? null : { px, py };
+      pinHover(pin, v);
+    });
+    pbox.addEventListener('pointerleave', () => {
+      v.hoverPx = null;
+      pinHover(pin, v);
+    });
+    return v;
+  };
+
+  const drawPin = (v: PinView, s: SliceShown): void => {
+    const n = s.result.n;
+    const img = sliceImage(s.result, s.geometry.plane, fixedScale);
+    v.canvas.width = n;
+    v.canvas.height = n;
+    v.overlay.setAttribute('viewBox', `0 0 ${n} ${n}`);
+    v.canvas.getContext('2d')?.putImageData(new ImageData(img.rgba, n, n), 0, 0);
+    v.contour.setAttribute('d', contourPath(img.contour));
+    const vertical = s.geometry.plane === 'vertical';
+    v.sea.style.display = vertical ? '' : 'none';
+    if (vertical) {
+      const at = String(levelLine(SEA_LEVEL, n));
+      v.sea.setAttribute('x1', '0');
+      v.sea.setAttribute('x2', String(n));
+      v.sea.setAttribute('y1', at);
+      v.sea.setAttribute('y2', at);
+    }
+  };
+
+  function renderPins(): void {
+    const list = pins.pins;
+    const ids = new Set(list.map((p) => p.id));
+    for (const [id, v] of pinViews) {
+      if (ids.has(id)) continue;
+      v.element.remove();
+      pinViews.delete(id);
+    }
+    const epoch = deps.session.state.epoch;
+    for (const pin of list) {
+      let v = pinViews.get(pin.id);
+      if (v === undefined) {
+        v = createPinView(pin);
+        pinViews.set(pin.id, v);
+        pinStrip.append(v.element);
+      }
+      const s = pin.requests.shown;
+      const view = fieldSliceView(pin.requests, epoch);
+      v.box.classList.toggle('sv-stale', view === 'stale');
+      v.stale.hidden = view !== 'stale';
+      v.box.classList.toggle('sv-pin-empty', s === null);
+      v.status.textContent = sliceStatusText(pin.requests, epoch);
+      v.notice.textContent = pin.requests.notice ?? '';
+      v.notice.hidden = pin.requests.notice === null;
+      if (s !== null && (v.drawn === null || v.drawn.shown !== s || v.drawn.fixed !== fixedScale)) {
+        v.drawn = { shown: s, fixed: fixedScale };
+        drawPin(v, s);
+        pinHover(pin, v);
+      }
+    }
+    pinStrip.hidden = list.length === 0;
+    pinButton.disabled = list.length >= PIN_MAX;
+    pinButton.title = list.length >= PIN_MAX ? PIN_FULL_TEXT : PIN_TITLE;
   }
 
   function update(): void {
     if (state === null) return;
-    if (shown) requests.request({ state, line: deps.line(), selection: deps.selection() });
+    if (shown) {
+      requests.request({ state, line: deps.line(), selection: deps.selection() });
+      pins.update();
+    }
     render();
   }
 
@@ -370,6 +522,10 @@ export function createSliceView(host: HTMLElement, deps: SliceViewDeps): SliceVi
       if (!on) {
         hoverPx = null;
         readout.hidden = true;
+        for (const v of pinViews.values()) {
+          v.hoverPx = null;
+          v.readout.hidden = true;
+        }
       }
       update();
     },

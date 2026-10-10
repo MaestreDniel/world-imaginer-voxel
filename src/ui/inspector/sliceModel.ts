@@ -23,6 +23,9 @@
  *   128² slice at priority 500, on the draft the pool's last resolved configure holds; a new request supersedes the
  *   previous one (its queued parts dropped, its running parts' results discarded: P1); a density or node slice refused
  *   by the work bound (`planFieldSlice`, never re-derived: P3) keeps the draft with its notice.
+ * - **Pinned slices** (§11's cut line, built; master §5.5: up to 3 side by side): a pin is a frozen copy of the live
+ *   slice's want (its plane with the line or the square and y, its field, its node) with a request stream of its own,
+ *   asked again on every edit like the live slice (`createSlicePins`); `sliceImage` draws a pin as the live image.
  * - **The view's rules** (`sliceView.ts`, `mapPage.ts`, §4.3, §3.6, §3.7): the square box's side, the pointer → pixel
  *   `⌊(px / side) · n⌋`, the slice and map hover voxels and readouts, the centre and extent changes clamped into the
  *   window, the y control, the map's square, the status and hover lines, and the params of the configured draft.
@@ -425,6 +428,11 @@ export function contourSegments(img: ArrayLike<number>, n: number): ContourSegme
   return out;
 }
 
+/** The contour's segments as an SVG path (`M x0 y0 L x1 y1` per segment, in image pixels). */
+export function contourPath(segs: readonly ContourSegment[]): string {
+  return segs.map(([x0, y0, x1, y1]) => `M${x0} ${y0}L${x1} ${y1}`).join('');
+}
+
 // ---------------------------------------------------------------- blocks and rule
 
 const isWater = (state: number, fluid: number): boolean => state === AIR && fluidType(fluid) !== 0;
@@ -603,6 +611,11 @@ export interface FieldSliceRequests {
   readonly pending: { readonly sessionEpoch: number; readonly key: string; readonly n: number } | null;
   /** The field's note, the geometry's problem, a refusal notice or `failed: <message>`; null when there is none. */
   readonly notice: string | null;
+  /**
+   * Drops the request in flight (an unpinned slice): its queued parts are cancelled and whatever still lands is
+   * discarded (P1); the key and the notice are cleared, the shown slice kept. The next `request` starts afresh.
+   */
+  stop(): void;
 }
 
 /** How the view shows the last slice: none yet; fresh when it is of the current key and session epoch; else stale (dimmed). */
@@ -732,6 +745,134 @@ export function createFieldSliceRequests(src: FieldSliceSource): FieldSliceReque
     get shown() { return shown; },
     get pending() { return run === null ? null : { sessionEpoch: run.sessionEpoch, key: run.key, n: run.n }; },
     get notice() { return notice; },
+    stop() {
+      supersede();
+      key = null;
+      done = null;
+      notice = null;
+    },
+  };
+}
+
+// ---------------------------------------------------------------- one image, and the pinned slices (§11's cut line)
+
+/** A slice's pixels as drawn: RGBA in image order, the 0-contour (density and node) and the statistics (density and node). */
+export interface SliceImage {
+  readonly rgba: Uint8ClampedArray<ArrayBuffer>;
+  readonly contour: readonly ContourSegment[];
+  readonly stats: SliceStats | null;
+}
+
+/**
+ * The image of a slice result on its plane, as the live view and every pin draw it: density and node through the
+ * diverging colormap at `scaleOf(stats, fixed)` (one fixed scale for all, else each image's own auto scale) with the
+ * 0-contour; blocks in the Voxels palette; rule masks in their two colours and grey.
+ */
+export function sliceImage(r: FieldSliceResult, plane: SlicePlane, fixed: number | null): SliceImage {
+  switch (r.field) {
+    case 'density': case 'node': {
+      const stats = sliceStats(r.values);
+      return {
+        rgba: sliceRgba(r.values, r.n, plane, scaleOf(stats, fixed)),
+        contour: contourSegments(imageOrder(r.values, r.n, plane), r.n),
+        stats,
+      };
+    }
+    case 'blocks': return { rgba: blocksRgba(r.values, r.fluid, r.n), contour: [], stats: null };
+    case 'rule': return { rgba: ruleRgba(r.values, r.n, plane), contour: [], stats: null };
+  }
+}
+
+/** Pinned slices beside the live one (master §5.5: up to 3 side by side). */
+export const PIN_MAX = 3;
+export const PIN_FULL_TEXT = `at most ${PIN_MAX} pinned slices: unpin one first`;
+export const PIN_DUPLICATE_TEXT = 'this slice is already pinned';
+
+export type PinWant =
+  | { readonly ok: true; readonly want: SliceWant; readonly key: string; readonly label: string }
+  | { readonly ok: false; readonly note: string };
+
+/**
+ * What a pin of the live want holds: a frozen copy of its state, of its line (vertical planes; a horizontal pin holds
+ * none, its key and job read the square and y) and of its selection, so the pin keeps its own plane, field and node
+ * whatever the live slice, the cut line or the tree's selection do next; its request key and its label
+ * (`<field> · <plane>`: `density`, `blocks`, `node <path>` or `rule <path>`, then `(ax, az) → (bx, bz)` or
+ * `y <y>, <extent> at (cx, cz)`). Nothing to pin (a disabled field, no line, a refused geometry): `nothing to pin: <why>`.
+ */
+export function pinWant(want: SliceWant): PinWant {
+  const s = want.state;
+  const f = resolveField(s.field, s.plane, want.selection);
+  if (!f.ok) return { ok: false, note: `nothing to pin: ${f.note}` };
+  const g = sliceGeometryOf(s, want.line, SLICE_DRAFT_N);
+  if (!g.ok) return { ok: false, note: `nothing to pin: ${g.problem}` };
+  const l = s.plane === 'vertical' ? want.line : null;
+  const line: Segment | null = l === null ? null : Object.freeze({ ax: l.ax, az: l.az, bx: l.bx, bz: l.bz });
+  const state: SliceState = Object.freeze({ plane: s.plane, field: s.field, y: s.y, extent: s.extent, cx: s.cx, cz: s.cz });
+  const selection: Selection = Object.freeze({ leaf: want.selection.leaf, path: want.selection.path });
+  const what = f.field === 'node' || f.field === 'rule' ? `${f.field} ${f.path}` : f.field;
+  const where = line !== null
+    ? `(${line.ax}, ${line.az}) → (${line.bx}, ${line.bz})`
+    : `y ${state.y}, ${state.extent} at (${state.cx}, ${state.cz})`;
+  return {
+    ok: true,
+    want: Object.freeze({ state, line, selection }),
+    key: sliceRequestKey(state, line, f.field, f.path),
+    label: `${what} · ${where}`,
+  };
+}
+
+/** A pinned slice: its id (1, 2, … never reused), its frozen want, key and label, and its own request stream. */
+export interface SlicePin {
+  readonly id: number;
+  readonly want: SliceWant;
+  readonly key: string;
+  readonly label: string;
+  readonly requests: FieldSliceRequests;
+}
+
+export interface SlicePins {
+  /** The pins in the order they were added. */
+  readonly pins: readonly SlicePin[];
+  /** Pins the live want and requests it at once; null, or why it is refused (PIN_FULL_TEXT, PIN_DUPLICATE_TEXT, nothing to pin). */
+  add(want: SliceWant): string | null;
+  /** Unpins: its request in flight is dropped (`stop`). False for an unknown id. */
+  remove(id: number): boolean;
+  /** Something a slice depends on changed (an edit, a driver status change, the tab shown): every pin asks again for its own want. */
+  update(): void;
+}
+
+/**
+ * The pinned slices (§11's cut line): each pin is a `createFieldSliceRequests` stream of its own on the same source
+ * (pool, session, resolved configure, visibility), asked with its frozen want, so it re-renders on every edit like the
+ * live slice (a draft then the full slice per session epoch, stale in between) under the same budgets and refusals.
+ */
+export function createSlicePins(src: FieldSliceSource): SlicePins {
+  let pins: readonly SlicePin[] = Object.freeze([]);
+  let nextId = 1;
+  return {
+    get pins() { return pins; },
+    add(want) {
+      if (pins.length >= PIN_MAX) return PIN_FULL_TEXT;
+      const p = pinWant(want);
+      if (!p.ok) return p.note;
+      if (pins.some((q) => q.key === p.key)) return PIN_DUPLICATE_TEXT;
+      const pin: SlicePin = Object.freeze({ id: nextId++, want: p.want, key: p.key, label: p.label, requests: createFieldSliceRequests(src) });
+      pins = Object.freeze([...pins, pin]);
+      pin.requests.request(pin.want);
+      src.changed();
+      return null;
+    },
+    remove(id) {
+      const pin = pins.find((q) => q.id === id);
+      if (pin === undefined) return false;
+      pins = Object.freeze(pins.filter((q) => q !== pin));
+      pin.requests.stop();
+      src.changed();
+      return true;
+    },
+    update() {
+      for (const p of pins) p.requests.request(p.want);
+    },
   };
 }
 

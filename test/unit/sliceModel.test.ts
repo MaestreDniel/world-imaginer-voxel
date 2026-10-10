@@ -7,7 +7,8 @@
  * metrics' `segmentPointAt`; the formulas themselves are pinned by `fieldSliceGeometry.test.ts`, not re-derived here);
  * and the request stream (§4.5) with a fake pool of deferred promises: draft then full, supersession (cancel, discarded
  * results: P1), stale and failed states, requests on the pool's resolved configure, the node path in the key only for
- * `selected`, and the work bound's two notices with `planFieldSlice`'s limits (P3).
+ * `selected`, and the work bound's two notices with `planFieldSlice`'s limits (P3); and the pinned slices (§11's cut line:
+ * up to 3, each with its own plane, field and node, re-requested on every edit like the live slice; `sliceImage`).
  */
 import { describe, expect, test } from 'vitest';
 import { COLUMN_SAMPLE_COST, CORNER_SAMPLE_COST, CORNER_STEEP_COST, DRAFT_BUDGET, REQUEST_BUDGET, SLICE_RULE_NA } from '../../src/core/constants';
@@ -27,6 +28,7 @@ import {
   sliceStats, type SliceState,
   createFieldSliceRequests, fieldSliceSpec, fieldSliceView, sliceRequestKey, tooHeavyText, BLOCKS_HORIZONTAL_NOTE, RULE_HORIZONTAL_NOTE,
   SLICE_DRAFT_N, SLICE_DRAFT_PRIORITY, SLICE_FULL_N, SLICE_FULL_PRIORITY, type ConfiguredDraft, type SliceWant,
+  contourPath, createSlicePins, pinWant, PIN_DUPLICATE_TEXT, PIN_FULL_TEXT, PIN_MAX, sliceImage,
 } from '../../src/ui/inspector/sliceModel';
 import { planFieldSlice, type FieldSliceSpec } from '../../src/workers/protocol';
 import { partWorstParams } from '../harness/sliceTrees';
@@ -678,6 +680,184 @@ describe('the request stream (§4.5: draft then full on the resolved configure, 
       await flush();
       expect(r.notice).toBe('node too heavy to slice (cost 569, limit 15 360)');
       expect(tooHeavyText('full', DEFAULTS, 'density', '', 128, 105_600, 2 ** 20)).toBe('node too heavy for a 128² slice (cost 569, limit 7 936)');
+    });
+  });
+
+  describe('pinned slices (§11 cut line, master §5.5: up to 3 side by side, each with its own plane, field and node)', () => {
+    const pinsOf = (x: ReturnType<typeof harness>) => createSlicePins({
+      pool: x.pool, session: x.session, configured: () => x.h.cfg, visible: () => x.h.visible, changed: () => { x.h.changes++; },
+    });
+    const islandsSel = (s: SliceState = VERT): SliceWant => want({ ...s, field: 'selected' }, LINE, TAP_ISLANDS);
+
+    test('pinWant: a frozen copy of the live want (the line or the square, the field, the node), its key and its label', () => {
+      const line: { ax: number; az: number; bx: number; bz: number } = { ...LINE };
+      const sel = { leaf: 'density.defs', path: 'root.b' } as Selection;
+      const p = pinWant(want({ ...VERT, field: 'selected', y: 40 }, line, sel));
+      if (!p.ok) throw new Error(p.note);
+      expect(p.key).toBe(sliceRequestKey(VERT, LINE, 'node', 'root.b'));
+      expect(p.label).toBe('node root.b · (-1664, 8) → (-640, 8)');
+      expect(p.want).toEqual({ state: { ...VERT, field: 'selected', y: 40 }, line: LINE, selection: TAP_ISLANDS });
+      // The caller's objects can change afterwards: the pin keeps its own.
+      line.bz = 600;
+      (sel as { path: string }).path = 'root.a';
+      expect([p.want.line, p.want.selection.path]).toEqual([LINE, 'root.b']);
+      expect(Object.isFrozen(p.want) && Object.isFrozen(p.want.state) && Object.isFrozen(p.want.line) && Object.isFrozen(p.want.selection)).toBe(true);
+      // A horizontal pin holds no line (its key and job do not read one).
+      const h = pinWant(want(HORI, LINE));
+      if (!h.ok) throw new Error(h.note);
+      expect([h.want.line, h.key, h.label]).toEqual([null, sliceRequestKey(HORI, null, 'density', ''), 'density · y 63, 512 at (100, -200)']);
+      const b = pinWant(want({ ...VERT, field: 'blocks' }));
+      const r = pinWant(want({ ...VERT, field: 'selected' }, LINE, RULE_SEL));
+      expect([b.ok && b.label, r.ok && r.label]).toEqual(['blocks · (-1664, 8) → (-640, 8)', 'rule root.rules[1] · (-1664, 8) → (-640, 8)']);
+      // Nothing to pin: the field's note or the geometry's problem.
+      expect(pinWant(want({ ...HORI, field: 'blocks' }))).toEqual({ ok: false, note: `nothing to pin: ${BLOCKS_HORIZONTAL_NOTE}` });
+      expect(pinWant(want(VERT, null))).toEqual({ ok: false, note: `nothing to pin: ${NO_LINE_TEXT}` });
+      expect(pinWant(want(VERT, { ax: 0, az: 0, bx: 0, bz: 0 }))).toEqual({ ok: false, note: `nothing to pin: ${segmentProblem({ ax: 0, az: 0, bx: 0, bz: 0 })}` });
+    });
+
+    test('a pin requests its own slice at once (draft then full) and keeps its plane, field and node whatever the live slice does', async () => {
+      const x = harness();
+      const pins = pinsOf(x);
+      expect(pins.add(islandsSel())).toBeNull();
+      expect(pins.pins.map((p) => [p.id, p.key, p.label])).toEqual([[1, sliceRequestKey(VERT, LINE, 'node', 'root.b'), 'node root.b · (-1664, 8) → (-640, 8)']]);
+      expect(x.calls.map((c) => [c.req.field, c.req.path, c.req.n, c.opts.priority])).toEqual([['node', 'root.b', 32, 2]]);
+      expect(x.h.changes).toBeGreaterThan(0);
+      // The live slice moves (another selection, another line, the other plane): the pin asks nothing new.
+      x.r.request(want({ ...VERT, field: 'selected' }, { ...LINE, bz: 600 }, TAP_TERRAIN));
+      x.r.request(want(HORI));
+      pins.update();
+      expect(x.calls.filter((c) => c.req.path === 'root.b')).toHaveLength(1);
+      expect(x.calls[0]!.cancelled).toBe(false);
+      const pin = pins.pins[0]!;
+      x.calls[0]!.resolve(density(32, 5));
+      await flush();
+      expect([pin.requests.shown?.result.n, pin.requests.shown?.key]).toEqual([32, pin.key]);
+      const full = x.calls.find((c) => c.req.path === 'root.b' && c.req.n === 128)!;
+      expect([full.req.field, full.opts.priority, full.opts.budget]).toEqual(['node', 500, REQUEST_BUDGET]);
+      full.resolve(density(128, 5));
+      await flush();
+      expect([pin.requests.shown?.result.n, fieldSliceView(pin.requests, 7)]).toEqual([128, 'fresh']);
+      // The live stream's results never land in the pin's.
+      expect(x.r.shown).toBeNull();
+    });
+
+    test('a pin re-renders on every edit like the live slice: stale on a newer session, a new draft on its resolved configure', async () => {
+      const x = harness();
+      const pins = pinsOf(x);
+      pins.add(want());
+      pins.add(islandsSel(HORI));
+      expect(x.calls.map((c) => [c.req.plane, c.req.field, c.req.n])).toEqual([['vertical', 'density', 32], ['horizontal', 'node', 32]]);
+      x.calls[0]!.resolve(density(32));
+      x.calls[1]!.resolve(density(32));
+      await flush();
+      expect(x.calls).toHaveLength(4);
+      // An edit: session 8, the pool still holds 7's draft. Both pins are stale and ask nothing yet.
+      x.h.session.state.epoch = 8;
+      pins.update();
+      expect(x.calls).toHaveLength(4);
+      expect(pins.pins.map((p) => fieldSliceView(p.requests, 8))).toEqual(['stale', 'stale']);
+      // The configure of 8 resolves: each pin supersedes its run of 7 (queued parts cancelled) and drafts again.
+      x.h.cfg = { poolEpoch: 4, sessionEpoch: 8, params: DEFAULTS };
+      pins.update();
+      expect(x.calls.map((c) => c.cancelled)).toEqual([false, false, true, true, false, false]);
+      expect(x.calls.slice(4).map((c) => [c.req.plane, c.req.field, c.req.path, c.req.n])).toEqual([
+        ['vertical', 'density', '', 32], ['horizontal', 'node', 'root.b', 32],
+      ]);
+      x.calls[4]!.resolve(density(32, 8));
+      await flush();
+      expect(pins.pins.map((p) => [p.requests.shown?.sessionEpoch, fieldSliceView(p.requests, 8)])).toEqual([[8, 'fresh'], [7, 'stale']]);
+      // A hidden tab asks nothing.
+      x.h.visible = false;
+      x.h.cfg = { poolEpoch: 4, sessionEpoch: 9, params: DEFAULTS };
+      const before = x.calls.length;
+      pins.update();
+      expect(x.calls).toHaveLength(before);
+    });
+
+    test('a pinned node an edit removed fails with its notice; it slices again once the node is back', async () => {
+      const x = harness();
+      const pins = pinsOf(x);
+      pins.add(islandsSel());
+      x.calls[0]!.resolve(density(32));
+      await flush();
+      x.calls[1]!.resolve(density(128));
+      await flush();
+      const constRoot = { ...DEFAULTS, density: { ...DEFAULTS.density, defs: { root: { op: 'const', v: 1 } } } } as Params;
+      x.h.cfg = { poolEpoch: 4, sessionEpoch: 8, params: constRoot };
+      x.h.session.state.epoch = 8;
+      pins.update();
+      const pin = pins.pins[0]!;
+      expect(x.calls).toHaveLength(2);
+      expect(pin.requests.notice).toMatch(/^failed: /);
+      expect([pin.requests.pending, pin.requests.shown?.sessionEpoch, fieldSliceView(pin.requests, 8)]).toEqual([null, 7, 'stale']);
+      x.h.cfg = { poolEpoch: 4, sessionEpoch: 9, params: DEFAULTS };
+      x.h.session.state.epoch = 9;
+      pins.update();
+      expect([x.calls.length, x.calls[2]!.req.path, pin.requests.notice]).toEqual([3, 'root.b', null]);
+    });
+
+    test('at most 3 pins, no duplicate, nothing to pin refused; unpinning drops its request in flight (P1)', async () => {
+      const x = harness();
+      const pins = pinsOf(x);
+      expect(PIN_MAX).toBe(3);
+      expect(pins.add(want(VERT, null))).toBe(`nothing to pin: ${NO_LINE_TEXT}`);
+      expect(pins.add(want())).toBeNull();
+      expect(pins.add(want({ ...VERT, y: 10 }))).toBe(PIN_DUPLICATE_TEXT);
+      expect(pins.add(islandsSel())).toBeNull();
+      expect(pins.add(want(HORI))).toBeNull();
+      expect(pins.add(want({ ...VERT, field: 'blocks' }))).toBe(PIN_FULL_TEXT);
+      expect(PIN_FULL_TEXT).toBe('at most 3 pinned slices: unpin one first');
+      expect(pins.pins.map((p) => p.id)).toEqual([1, 2, 3]);
+      expect(x.calls).toHaveLength(3);
+      // Unpin the second: its draft is cancelled and a result that still lands is discarded.
+      expect(pins.remove(2)).toBe(true);
+      expect(pins.remove(2)).toBe(false);
+      expect(x.calls.map((c) => c.cancelled)).toEqual([false, true, false]);
+      x.calls[1]!.resolve(density(32));
+      await flush();
+      expect(x.calls).toHaveLength(3);
+      expect(pins.pins.map((p) => p.id)).toEqual([1, 3]);
+      // Room again: a new pin takes a fresh id.
+      expect(pins.add(want({ ...VERT, field: 'blocks' }))).toBeNull();
+      expect(pins.pins.map((p) => p.id)).toEqual([1, 3, 4]);
+      expect(x.calls[3]!.req).toMatchObject({ field: 'blocks', n: 32 });
+    });
+
+    test('stop() drops the stream\'s request in flight and its key; the next request starts afresh', async () => {
+      const { r, calls } = harness();
+      r.request(want());
+      r.stop();
+      expect([calls[0]!.cancelled, r.key, r.pending, r.notice]).toEqual([true, null, null, null]);
+      calls[0]!.resolve(density(32));
+      await flush();
+      expect([r.shown, calls.length]).toEqual([null, 1]);
+      r.request(want());
+      expect(calls).toHaveLength(2);
+    });
+
+    test('sliceImage draws a pin as the live slice: the colormap at the shared scale, the 0-contour, the blocks and rule colours', () => {
+      const n = 2;
+      const values = Float64Array.from([-1, 2, 3, -4]);
+      const d: FieldSliceResult = { n, field: 'node', values, fluid: null };
+      for (const plane of ['vertical', 'horizontal'] as const) {
+        for (const fixed of [null, 8]) {
+          const img = sliceImage(d, plane, fixed);
+          const st = sliceStats(values);
+          expect(img.stats).toEqual(st);
+          expect(img.rgba).toEqual(sliceRgba(values, n, plane, scaleOf(st, fixed)));
+          expect(img.contour).toEqual(contourSegments(imageOrder(values, n, plane), n));
+        }
+      }
+      expect(contourPath([[0, 0.5, 1, 1.5], [2, 3, 4, 5]])).toBe('M0 0.5L1 1.5M2 3L4 5');
+      expect(contourPath([])).toBe('');
+      // Blocks are drawn on a vertical slice of SLICE_NS (the water's run top reads sliceRowY).
+      const states = new Uint16Array(32 * 32).map((_, i) => (i % 32 < 16 ? STONE : AIR));
+      const fluid = new Uint8Array(32 * 32);
+      const blk = sliceImage({ n: 32, field: 'blocks', values: states, fluid }, 'vertical', 3);
+      expect([blk.rgba, blk.contour, blk.stats]).toEqual([blocksRgba(states, fluid, 32), [], null]);
+      const mask = Uint8Array.from([1, 0, RULE_NA, 1]);
+      const rule = sliceImage({ n, field: 'rule', values: mask, fluid: null }, 'vertical', null);
+      expect([rule.rgba, rule.contour, rule.stats]).toEqual([ruleRgba(mask, n, 'vertical'), [], null]);
     });
   });
 });
