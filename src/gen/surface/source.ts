@@ -14,6 +14,7 @@
  */
 import { RULES_COLUMN_COST_MAX } from '../../core/constants';
 import { NOISE_FIELD_RANGES, SCHEMA } from '../../core/params/schema';
+import { ALLOWED_REF_TARGETS } from '../density/source';
 import { rulesColumnCost } from '../inspect/cost';
 import {
   validateRules, type RuleErrorCode, type RuleRefCode, type RuleRefTarget, type RuleSourceMode, type SurfaceNoiseInfo,
@@ -21,6 +22,7 @@ import {
 } from './rules';
 
 const SCHEMA_ = SCHEMA;
+const REF_TARGETS = ALLOWED_REF_TARGETS;
 const NOISE_RANGES = NOISE_FIELD_RANGES;
 const VALIDATE = validateRules;
 const COLUMN_COST = rulesColumnCost;
@@ -46,20 +48,13 @@ export interface RulesSourceIssue {
 const MAX_ISSUES = 50;
 
 /**
- * The ref targets (§1.3): every `number` or `int` leaf under `density.` or `surface.`, and the `clampSigma` field of
- * their noise leaves, each with its static range ([min, max], or `NOISE_FIELD_RANGES.clampSigma`); only `int` leaves
- * may stand in an int field.
+ * The ref targets (§1.3): the spec's single table, `ALLOWED_REF_TARGETS` (every `number` or `int` leaf under `density.`
+ * or `surface.`, and the `clampSigma` field of their noise leaves, each with its static range), as `validateRules`
+ * reads it; only `int` leaves may stand in an int field.
  */
 const TARGETS: ReadonlyMap<string, RuleRefTarget> = (() => {
   const out = new Map<string, RuleRefTarget>();
-  for (const { path, meta } of SCHEMA_.leaves) {
-    if (!path.startsWith('density.') && !path.startsWith('surface.')) continue;
-    if ((meta.kind === 'number' || meta.kind === 'int') && meta.min !== undefined && meta.max !== undefined) {
-      out.set(path, Object.freeze({ lo: meta.min, hi: meta.max, int: meta.kind === 'int' }));
-    } else if (meta.kind === 'noise') {
-      out.set(`${path}.clampSigma`, Object.freeze({ lo: NOISE_RANGES.clampSigma.min, hi: NOISE_RANGES.clampSigma.max, int: false }));
-    }
-  }
+  for (const [path, t] of REF_TARGETS) out.set(path, Object.freeze({ lo: t.lo, hi: t.hi, int: t.kind === 'int' }));
   return out;
 })();
 
