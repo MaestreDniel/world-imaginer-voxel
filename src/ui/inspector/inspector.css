@@ -1,0 +1,76 @@
+/* The drawer's Density tab (SP3d spec §3.1): tree | node form | JSON editor | slice viewer; sub-tabs below 1,200 px,
+   stacked below 900 px (data-layout, set from the tab's own width by densityTab.ts). */
+.it { display: grid; height: 100%; min-height: 0; font-size: 12px; }
+.it [hidden] { display: none !important; }
+.it[data-layout="grid"] { grid-template-columns: 220px 280px minmax(0, 1fr) minmax(0, 1.2fr); grid-template-rows: minmax(0, 1fr); grid-template-areas: "tree form json slice"; }
+.it[data-layout="tabs"] { grid-template-columns: 220px 280px minmax(0, 1fr); grid-template-rows: auto minmax(0, 1fr); grid-template-areas: "tree form sub" "tree form pane"; }
+.it[data-layout="stack"] { height: auto; grid-template-columns: minmax(0, 1fr); grid-template-rows: auto; grid-template-areas: "tree" "form" "sub" "pane"; }
+.it-tree { grid-area: tree; min-height: 0; overflow: auto; border-right: 1px solid #2c3038; }
+.it-form { grid-area: form; min-height: 0; overflow: auto; padding: 4px 8px; border-right: 1px solid #2c3038; }
+.it-subtabs { grid-area: sub; display: flex; gap: 2px; padding: 0 8px; border-bottom: 1px solid #333; }
+.it-subtabs button { padding: 3px 10px; font: inherit; color: #9aa; background: none; border: 0; border-bottom: 2px solid transparent; cursor: pointer; }
+.it-subtabs button[aria-selected="true"] { color: #eee; border-bottom-color: #4a90d9; }
+.it-json { grid-area: json; min-width: 0; min-height: 0; border-right: 1px solid #2c3038; }
+.it-slice { grid-area: slice; min-width: 128px; min-height: 128px; overflow: auto; }
+.it[data-layout="tabs"] .it-json, .it[data-layout="tabs"] .it-slice, .it[data-layout="stack"] .it-json, .it[data-layout="stack"] .it-slice { grid-area: pane; }
+.it[data-layout="stack"] .it-tree { max-height: 220px; border-right: 0; border-bottom: 1px solid #2c3038; }
+.it[data-layout="stack"] .it-form { border-right: 0; border-bottom: 1px solid #2c3038; }
+.it[data-layout="stack"] .it-json { height: 320px; border-right: 0; }
+
+/* Tree (§3.2). */
+.it-tree-head { position: sticky; top: 0; z-index: 1; padding: 3px 6px; background: #1f2228; border-bottom: 1px solid #2c3038; }
+.it-tree-head button, .it-actions button, .it-knots button { font: inherit; padding: 1px 7px; }
+.it-group { padding: 4px 6px 2px; font-weight: 600; color: #9aa; text-transform: uppercase; font-size: 11px; }
+.it-row { display: flex; align-items: center; gap: 2px; white-space: nowrap; }
+.it-row:hover { background: #262a31; }
+.it-toggle { flex: 0 0 14px; width: 14px; padding: 0; font: inherit; color: #9aa; background: none; border: 0; cursor: pointer; }
+.it-toggle:disabled { cursor: default; }
+.it-node { flex: 1 1 auto; min-width: 0; overflow: hidden; text-overflow: ellipsis; padding: 1px 4px; font: 12px ui-monospace, monospace; text-align: left; color: #bbb; background: none; border: 0; cursor: pointer; }
+.it-node[aria-current="true"] { color: #fff; background: #2b3a52; }
+.it-tail { color: #7f8a9c; margin-right: 6px; }
+.it-mute { flex: 0 0 auto; margin: 0 6px 0 2px; }
+.it-muted .it-summary { color: #f0b34a; }
+.it-dimmed { opacity: 0.45; }
+
+/* Node form (§3.3). */
+.it-path { font: 12px ui-monospace, monospace; color: #c0c8d8; overflow-wrap: anywhere; margin-bottom: 4px; }
+.it-actions { display: flex; flex-wrap: wrap; gap: 4px; margin: 4px 0; }
+.it-fields { display: flex; flex-direction: column; gap: 4px; }
+.it-field { display: flex; flex-wrap: wrap; align-items: center; gap: 4px 6px; }
+.it-name { flex: 0 0 5.5em; overflow: hidden; text-overflow: ellipsis; color: #9aa; font-family: ui-monospace, monospace; }
+.it-input, .it-select, .it-op, .it-ref, .it-biomes { min-width: 0; padding: 1px 4px; font: 12px ui-monospace, monospace; color: #ddd; background: #15171b; border: 1px solid #3a3f48; border-radius: 2px; }
+.it-input { flex: 1 1 5em; width: 5em; }
+.it-ref { flex: 1 1 8em; max-width: 100%; }
+.it-select, .it-op { flex: 1 1 auto; }
+.it-biomes { flex: 1 1 auto; }
+.it-invalid { border-color: #ff7b72; outline-color: #ff7b72; }
+.it-check { display: inline-flex; align-items: center; gap: 3px; }
+.it-target { flex: 1 1 100%; padding-left: calc(5.5em + 6px); }
+.it-knots { display: flex; flex-direction: column; gap: 3px; }
+.it-knot-table { display: flex; flex-direction: column; gap: 3px; }
+.it-knot { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1fr) auto; gap: 4px; align-items: start; }
+.it-knot .it-name { flex-basis: 2.5em; }
+.it-hover { margin-top: 6px; font: 12px ui-monospace, monospace; color: #b8c2d0; overflow-wrap: anywhere; }
+.it-issues { margin-top: 4px; color: #ff7b72; white-space: pre-wrap; overflow-wrap: anywhere; }
+.it-lints { display: flex; flex-direction: column; gap: 2px; margin-top: 6px; padding: 4px 6px; border: 1px solid #6b5424; border-radius: 3px; color: #f0b34a; }
+.it-lints::before { content: 'Warnings'; font-size: 11px; text-transform: uppercase; }
+
+/* JSON editor (§3.5): a textarea over a mirror <pre> with the same font, line height and padding. */
+.je { display: grid; grid-template-rows: minmax(0, 1fr) auto auto auto; height: 100%; min-height: 0; }
+.je-box { position: relative; min-height: 0; overflow: hidden; background: #15171b; }
+.je-mirror, .je-text { box-sizing: border-box; margin: 0; padding: 4px 6px; font: 12px/16px ui-monospace, monospace; tab-size: 2; white-space: pre; border: 0; }
+.je-mirror { position: absolute; inset: 0; overflow: hidden; color: transparent; pointer-events: none; }
+.je-mark { color: transparent; background: #2b3a52; border-radius: 2px; }
+.je-text { position: relative; display: block; width: 100%; height: 100%; resize: none; overflow: auto; color: #ddd; background: transparent; caret-color: #fff; outline: none; }
+.je-text.je-dirty { color: #f2e6c9; }
+.je-bar { display: flex; align-items: center; gap: 6px; padding: 3px 6px; border-top: 1px solid #2c3038; }
+.je-bar button { font: inherit; padding: 1px 8px; }
+.je-status { color: #8a95a8; }
+.je-status[data-status="valid"] { color: #9fd08f; }
+.je-status[data-status="invalid"], .je-status[data-status="syntax"], .je-status[data-status="tooLarge"] { color: #ff7b72; }
+.je-stale { padding: 2px 6px; color: #f0b34a; }
+.je-stale button { font: inherit; padding: 0; color: #6fa8e8; text-decoration: underline; background: none; border: 0; cursor: pointer; }
+.je-issues { max-height: 8em; overflow: auto; padding: 0 6px 4px; }
+.je-issue { display: block; width: 100%; padding: 0; font: 12px ui-monospace, monospace; text-align: left; color: #ff7b72; background: none; border: 0; overflow-wrap: anywhere; white-space: pre-wrap; }
+button.je-issue { cursor: pointer; }
+button.je-issue:hover { text-decoration: underline; }

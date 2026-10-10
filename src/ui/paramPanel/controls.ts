@@ -8,6 +8,7 @@
  * - spline: an "Edit" button that opens the drawer on the leaf;
  * - boxTable: a link to the Biomes tab;
  * - json (SP3d spec §1.1): a link "Edit in Density" that opens the drawer's Density tab on the tree.
+ * The Density tab's node form shows the number row of a ref's target (`createTargetRow`, SP3d spec §3.3).
  * Every control has a scope badge, a modified dot, a reset button and a tooltip (doc, range, unit, path).
  * A slider drag is one gesture (§1.3); a numeric field commits on Enter or blur (urgent) and Escape restores
  * the draft value; a refused value keeps its text with a red border and the issue text under its row, and is
@@ -19,7 +20,7 @@ import type { SessionResult, SessionState, WorldSession } from '../../engine/ses
 import { el } from '../common/dom';
 import {
   amplitudeItemChange, amplitudesToggle, controlTip, issueLines, NOISE_FIELD_DOCS, NOISE_NUMBER_FIELDS, noiseFieldControl, noiseFieldLock,
-  octavesChange, parseFieldText, scopeBadge, sliderPosition, sliderPositions, sliderToValue, type ControlSpec, type NoiseNumberField,
+  octavesChange, parseFieldText, refTargetControl, refTargetWrite, scopeBadge, sliderPosition, sliderPositions, sliderToValue, type ControlSpec, type NoiseNumberField,
 } from './model';
 
 export interface ControlDeps {
@@ -50,8 +51,11 @@ export interface PanelControl {
   focus(): void;
 }
 
+/** What a slider row needs of the deps (the Density tab's target slider has no panel around it). */
+export type RowDeps = Pick<ControlDeps, 'session' | 'edit'>;
+
 /** Runs a session call through the page's `edit`, keeping its result. */
-function run(deps: ControlDeps, e: Event, fn: () => SessionResult): SessionResult {
+function run(deps: RowDeps, e: Event, fn: () => SessionResult): SessionResult {
   const out: { r?: SessionResult } = {};
   deps.edit(e, () => { out.r = fn(); });
   if (out.r === undefined) throw new Error('edit did not run the session call');
@@ -111,7 +115,7 @@ interface ValueField {
   restore(): void;
 }
 
-function valueField(deps: ControlDeps, id: string, issues: IssueBox, at: string, base: string, write: (value: unknown) => SessionResult): ValueField {
+function valueField(deps: RowDeps, id: string, issues: IssueBox, at: string, base: string, write: (value: unknown) => SessionResult): ValueField {
   const input = el('input', 'pp-field');
   input.type = 'text';
   input.id = id;
@@ -168,7 +172,7 @@ interface NumberRow {
   lock(reason: string | null): void;
 }
 
-function numberRow(deps: ControlDeps, spec: ControlSpec, base: string, labelled: boolean, write: (value: unknown) => SessionResult): NumberRow {
+function numberRow(deps: RowDeps, spec: ControlSpec, base: string, labelled: boolean, write: (value: unknown) => SessionResult): NumberRow {
   const element = el('div', 'pp-field-row');
   const line = el('div', 'pp-row');
   const issues = issueBox();
@@ -282,6 +286,28 @@ function numberControl(deps: ControlDeps, c: ControlSpec): PanelControl {
     restore: () => row.restore(),
     setLint: (t) => f.setLint(t),
     focus: () => row.field.input.focus(),
+  };
+}
+
+/** A ref target's slider row in the Density tab's node form (SP3d spec §3.3). */
+export interface TargetRow {
+  readonly element: HTMLElement;
+  /** Shows the draft's value of the target. */
+  sync(s: SessionState): void;
+  restore(): void;
+}
+
+/**
+ * The parameter panel's slider and field for the target of a tree field's ref (`refTargetControl`): moving it sets the
+ * target leaf (a noise's clampSigma as a partial noise), exactly as the Parameters tab does.
+ */
+export function createTargetRow(deps: RowDeps, path: string): TargetRow {
+  const t = refTargetControl(path);
+  const row = numberRow(deps, t.spec, t.leaf, true, (v) => deps.session.set(t.leaf, refTargetWrite(t, v)));
+  return {
+    element: row.element,
+    sync(s) { row.show(getPath(s.params, path) as number); },
+    restore: () => row.restore(),
   };
 }
 

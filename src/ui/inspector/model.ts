@@ -11,7 +11,8 @@
  * edit it follows the longest prefix of its path that still names a node (`followNode`). The JSON editor's caret selects
  * the innermost node holding it only while the buffer is clean or parses and only when the path exists in the session's
  * tree (a buffer-only path moves the editor's highlight, not the selection). Every lookup keyed by tree content reads
- * own properties only (`constructor`, `toString`, … are valid names). Pure; no DOM.
+ * own properties only (`constructor`, `toString`, … are valid names). The tab's layout by drawer width (§3.1: the four
+ * columns from 1,200 px, the Slice/JSON sub-tabs below, "Slice" first, stacked below 900 px) is here too. Pure; no DOM.
  */
 import type { JsonFormat } from '../../core/params/json';
 import type { Params } from '../../core/params/schema';
@@ -429,4 +430,27 @@ export function caretTarget(editor: Pick<EditorState, 'leaf' | 'ranges' | 'caret
 export function highlightRange(editor: Pick<EditorState, 'leaf' | 'ranges'>, sel: Selection): TextRange | null {
   if (editor.leaf !== sel.leaf || editor.ranges === null || !editor.ranges.nodes.includes(sel.path)) return null;
   return editor.ranges.byPath.get(sel.path) ?? null;
+}
+
+/** The tab's layout by drawer width (§3.1): the four columns from DENSITY_WIDE_PX, Slice/JSON sub-tabs below, stacked below DENSITY_STACK_PX. */
+export const DENSITY_WIDE_PX = 1200;
+export const DENSITY_STACK_PX = 900;
+export type DensityLayout = 'grid' | 'tabs' | 'stack';
+
+/** The layout for a drawer width in CSS px; a hidden tab (width 0, or not a number) keeps `last`. */
+export function densityLayout(width: number, last: DensityLayout = 'grid'): DensityLayout {
+  if (!(width > 0)) return last;
+  return width >= DENSITY_WIDE_PX ? 'grid' : width >= DENSITY_STACK_PX ? 'tabs' : 'stack';
+}
+
+/** The sub-tabs that share the last column below DENSITY_WIDE_PX; "Slice" is shown first (§3.1). */
+export type DensitySubTab = 'slice' | 'json';
+export const DENSITY_SUB_TABS: readonly DensitySubTab[] = Object.freeze(['slice', 'json']);
+export const DENSITY_SUB_TAB_LABELS: Readonly<Record<DensitySubTab, string>> = Object.freeze({ slice: 'Slice', json: 'JSON' });
+export const DEFAULT_SUB_TAB: DensitySubTab = 'slice';
+
+/** Which of the JSON editor and the slice viewer a layout shows, and whether the sub-tab bar is shown. */
+export function shownPanes(layout: DensityLayout, sub: DensitySubTab): { slice: boolean; json: boolean; subTabs: boolean } {
+  if (layout === 'grid') return { slice: true, json: true, subTabs: false };
+  return { slice: sub === 'slice', json: sub === 'json', subTabs: true };
 }

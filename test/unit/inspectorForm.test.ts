@@ -12,16 +12,20 @@ import type { Seed64 } from '../../src/core/hash';
 import { DEFAULTS } from '../../src/core/params/defaults';
 import type { JsonValue } from '../../src/core/params/json';
 import type { Params } from '../../src/core/params/schema';
+import { seedFromInput } from '../../src/core/seed';
 import { WorldSession } from '../../src/engine/session';
+import { createGenContext } from '../../src/gen/context';
 import { ALLOWED_REF_TARGETS, SOURCE_CHILD_KEYS, SOURCE_OPS } from '../../src/gen/density/source';
+import { probeField } from '../../src/gen/inspect/fieldSlice';
 import { CONDITION_KINDS, RULE_KINDS } from '../../src/gen/surface/rules';
 import { validateParamTrees } from '../../src/gen/trees';
 import type { EditorSession, TreeLeaf } from '../../src/ui/inspector/editorModel';
 import {
   addDef, addRule, BLOCK_STATE_OPTIONS, commitFormEdit, deleteNode, densityCostLint, formActions, formFields, LINT_NO_FAST_PATH,
-  muteValue, opOptions, refOptions, renameDef, replaceOp, setField, setKnots, setNumber, toggleMute, treeLints, wrapNode,
-  type FormEdit,
+  muteValue, opOptions, refOptions, renameDef, replaceOp, selectionAfterCommit, setField, setKnots, setNumber, setTypedNumber,
+  toggleMute, treeLints, wrapNode, type FormEdit,
 } from '../../src/ui/inspector/form';
+import { parseFieldText } from '../../src/ui/paramPanel/model';
 import type { Selection } from '../../src/ui/inspector/model';
 
 const random = (): Seed64 => [5, 11];
@@ -388,6 +392,59 @@ describe('commit through the session', () => {
     const leaf: TreeLeaf = 'density.defs';
     const r2 = commitFormEdit(refusing, toggleMute(w.state.params, { leaf, path: 'root.b' }));
     expect(r2.ok ? [] : r2.issues.map((i) => `${i.path}: ${i.code}`)).toEqual(['root: UNKNOWN_OP', ': COLUMN_COST']);
+  });
+});
+
+describe('the Density tab\'s commits (§3.2, §3.3: as the parameter panel\'s valueField)', () => {
+  test('typed literal text commits like valueField: the panel\'s parse, NOT_NUMBER naming the text, a typed −0 as 0', () => {
+    const outcome = (text: string, sel: Selection = D('root.b.x'), key = 'v'): string => {
+      const w = session();
+      const r = commitFormEdit(w, setTypedNumber(w.state.params, sel, key, text));
+      if (!r.ok) return r.issues.map((i) => `${i.path}: ${i.code} — ${i.message}`).join('; ');
+      const node = JSON.parse(JSON.stringify(w.state.params.density.defs)).root.b.x as Record<string, unknown>;
+      return `ok ${Object.is(node[key], -0) ? '-0' : String(node[key])}`;
+    };
+    expect(outcome('0,5')).toBe('root.b.x.v: NOT_NUMBER — expected a number, got "0,5"');
+    expect(outcome('1,5')).toBe('root.b.x.v: NOT_NUMBER — expected a number, got "1,5"');
+    expect(outcome('')).toBe('root.b.x.v: NOT_NUMBER — expected a number, got ""');
+    expect(outcome('   ')).toBe('root.b.x.v: NOT_NUMBER — expected a number, got ""');
+    expect(outcome(' 7 ')).toBe('ok 7');
+    expect(outcome('-0')).toBe('ok 0');
+    expect(outcome('0x10')).toBe('ok 16');
+    expect(outcome('-.5e1')).toBe('ok -5');
+    expect(outcome('1e999')).toBe('root.b.x.v: NOT_FINITE — expected a finite number, got Infinity');
+    expect(outcome('NaN')).toBe('root.b.x.v: NOT_FINITE — expected a finite number, got NaN');
+    // The same reading as the panel's field: a number for the same texts, the trimmed text otherwise.
+    for (const text of ['0,5', '', ' 7 ', '-0', '0x10', '1e999', 'abc']) {
+      const v = parseFieldText(text);
+      const e = setTypedNumber(DEFAULTS, D('root.b.x'), 'v', text);
+      expect(e.ok, text).toBe(typeof v === 'number');
+    }
+    // A clamp bound and a knot cell take the same reading.
+    const clamp = withDensity({ root: { op: 'clamp', x: { op: 'y' }, lo: 0, hi: 1 }, defs: {} });
+    expect((valueOf(setTypedNumber(clamp, D('root'), 'hi', ' 2.5 ')) as { root: { hi: number } }).root.hi).toBe(2.5);
+    const refused = setTypedNumber(clamp, D('root'), 'lo', '0,25');
+    expect(refused.ok ? [] : refused.issues).toEqual([{ path: 'root.lo', code: 'NOT_NUMBER', message: 'expected a number, got "0,25"' }]);
+    const slide = withDensity({ root: { op: 'slide', x: { op: 'y' }, knots: [[-64, 0], [320, 1]] }, defs: {} });
+    expect((valueOf(setTypedNumber(slide, D('root'), 'knots[1][1]', '-0')) as { root: { knots: number[][] } }).root.knots[1]![1]).toBe(0);
+  });
+
+  test('a row mute keeps the current selection; the form mute keeps the tap', () => {
+    const w = session();
+    const before = w.state.params;
+    const r = commitFormEdit(w, toggleMute(before, D('root.a.a')));
+    if (!r.ok) throw new Error('refused');
+    // The form's own mute acts on the selected tap and keeps it; the row's checkbox keeps whatever was selected.
+    expect(selectionAfterCommit('form', D('root.a.a'), r.select)).toEqual(D('root.a.a'));
+    expect(selectionAfterCommit('row', D('root'), r.select)).toEqual(D('root'));
+    expect(selectionAfterCommit('row', D('root.b.x'), r.select)).toEqual(D('root.b.x'));
+    expect(selectionAfterCommit('row', R('root.rules[1]'), r.select)).toEqual(R('root.rules[1]'));
+    // Why it matters: the selected root shows the muted world, while a selected muted tap shows its unmuted subtree.
+    const ctx0 = createGenContext(seedFromInput('42'), before);
+    const ctx1 = createGenContext(seedFromInput('42'), w.state.params);
+    const at = (ctx: typeof ctx0, path: string) => probeField(ctx, 'node', path, 5, 70, -9, () => false);
+    expect(at(ctx1, 'root')).not.toBe(at(ctx0, 'root'));
+    expect(at(ctx1, 'root.a.a')).toBe(at(ctx0, 'root.a.a'));
   });
 });
 

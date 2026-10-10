@@ -31,6 +31,7 @@ import { surfaceDepthMax } from '../../gen/surface/scan';
 import { resolveRules } from '../../gen/surface/source';
 import { COLLIDE, REGISTRY } from '../../world/blocks/index';
 import { COLLIDE_NONE } from '../../world/blocks/kinds';
+import { parseFieldText } from '../paramPanel/model';
 import { checkLeafCandidate, formatOfLeaf, leafValue, stripLeaf, withLeaf, type EditorIssue, type EditorSession, type TreeLeaf } from './editorModel';
 import { findNode, followNode, pathSteps, type Selection, type TreeNode } from './model';
 
@@ -502,6 +503,20 @@ export function setNumber(params: Params, sel: Selection, key: string, choice: N
   return replaceNode(at, (n) => withKey(n, 'knots', sortKnots(params, knots)), sel.path);
 }
 
+/**
+ * A literal typed in a numeric field (§3.3: the form's fields behave as the parameter panel's `valueField`), read by the
+ * panel's `parseFieldText`: the number its trimmed text spells (as `Number` reads it: '1e3', '-.5', '0x10'), a typed
+ * −0 written 0 (the panel's q15 stores −0 as 0); text that spells no number ('0,5', '') is refused with NOT_NUMBER
+ * naming what was typed, as the panel refuses it; a non-finite number reaches tier 1 (NOT_FINITE), as in the panel.
+ */
+export function setTypedNumber(params: Params, sel: Selection, key: string, text: string): FormEdit {
+  const v = parseFieldText(text);
+  if (typeof v !== 'number') {
+    return { ok: false, issues: [{ path: `${sel.path}.${key}`, code: 'NOT_NUMBER', message: `expected a number, got ${JSON.stringify(v)}` }] };
+  }
+  return setNumber(params, sel, key, { kind: 'literal', value: v === 0 ? 0 : v });
+}
+
 /** Sets a non-numeric field (a select, a boolean, a tap name, a biome list); RangeError for a numeric or unknown one. */
 export function setField(params: Params, sel: Selection, key: string, value: string | boolean | readonly string[]): FormEdit {
   const at = locate(params, sel);
@@ -570,6 +585,16 @@ export function commitFormEdit(session: EditorSession, e: FormEdit): FormCommit 
     return { ok: false, issues: r.issues.map((i) => ({ path: stripLeaf(i.path, e.leaf), code: i.code, message: i.message })) };
   }
   return { ok: true, select: followNode(session.state.params, e.select) };
+}
+
+/**
+ * The selection after a successful commit (§3.2): an edit made in the node form selects the node it returns (the
+ * edited node, or the one a renumbering moved it to); a tap's mute toggled from its tree row is a plain edit of another
+ * row and keeps the current selection (followed on the new tree by the caller), so the selected node's slice and hover
+ * value show the muted world.
+ */
+export function selectionAfterCommit(source: 'form' | 'row', current: Selection, committed: Selection): Selection {
+  return source === 'row' ? current : committed;
 }
 
 /**

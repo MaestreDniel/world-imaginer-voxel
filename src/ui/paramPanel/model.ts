@@ -276,3 +276,33 @@ export function amplitudeItemChange(def: NoiseDef, i: number, value: unknown): {
   if (list === null || !Number.isInteger(i) || i < 0 || i >= list.length) return {};
   return { amplitudes: list.map((a, j) => (j === i ? value : a)) };
 }
+
+/**
+ * The slider of a parameter ref's target (SP3d spec §3.3: while a tree field is a ref, the Density tab's form shows
+ * the target's slider, and moving it sets the target, as this panel does): a number or int leaf is its own control and
+ * is written on itself; a numeric field of a noise leaf (`<noise>.clampSigma`, the only one refs name) is the noise
+ * sub-block's slider and is written as a partial noise on the noise leaf. RangeError for any other path.
+ */
+export interface RefTargetControl {
+  readonly spec: ControlSpec;
+  /** The leaf the slider writes (`session.set(leaf, refTargetWrite(t, v))`). */
+  readonly leaf: string;
+  /** The noise field written, or null for a number or int leaf. */
+  readonly field: NoiseNumberField | null;
+}
+
+export function refTargetControl(path: string): RefTargetControl {
+  const metas = new Map(SCHEMA.leaves.map((l) => [l.path, l.meta] as const));
+  const meta = metas.get(path);
+  if (meta !== undefined && (meta.kind === 'number' || meta.kind === 'int')) return { spec: controlOf(meta), leaf: path, field: null };
+  const cut = path.lastIndexOf('.');
+  const noise = cut > 0 ? metas.get(path.slice(0, cut)) : undefined;
+  const field = path.slice(cut + 1) as NoiseNumberField;
+  if (noise === undefined || noise.kind !== 'noise' || !NOISE_NUMBER_FIELDS.includes(field)) throw new RangeError(`no slider for ${path}`);
+  return { spec: noiseFieldControl(controlOf(noise), field), leaf: noise.path, field };
+}
+
+/** The value `session.set(t.leaf, …)` takes for the target value `v`. */
+export function refTargetWrite(t: RefTargetControl, v: unknown): unknown {
+  return t.field === null ? v : { [t.field]: v };
+}

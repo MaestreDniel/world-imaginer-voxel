@@ -8,14 +8,15 @@
  * the buffer). The dirty-buffer rule: when the leaf's value changes from elsewhere (undo, a form edit, a preset load) a
  * clean buffer is re-printed and a dirty one is kept with `stale` set ("Revert to the current tree"); other leaves
  * never touch it. Every re-print restores the caret and the scroll anchor on the same node path. `jsonEditor.ts`
- * binds it to the DOM.
+ * binds it to the DOM; the binding's arithmetic (offset ↔ line, a range scrolled into view by its line index × the line
+ * height, the scroll anchor, the mirror's highlight split, Ctrl/Cmd+Enter and Escape) is at the end of this file.
  */
 import { checkJson, type JsonFormat, type JsonValue } from '../../core/params/json';
 import type { Issue } from '../../core/params/kit';
 import type { Params } from '../../core/params/schema';
 import type { SessionResult } from '../../engine/session';
 import { validateParamTrees } from '../../gen/trees';
-import { nodeAt, parseTree, printTree, type SyntaxIssue, type TreeRanges } from './jsonText';
+import { nodeAt, parseTree, printTree, type SyntaxIssue, type TextRange, type TreeRanges } from './jsonText';
 
 /** The two tree leaves (§1.2). */
 export type TreeLeaf = 'density.defs' | 'surface.rules';
@@ -344,4 +345,142 @@ export function createEditorModel(leaf: TreeLeaf, session: EditorSession, clock:
       listeners.clear();
     },
   };
+}
+
+// ------------------------------------------------------------------------------------------------ the DOM's arithmetic
+// jsonEditor.ts binds the model to a textarea over a mirror <pre>; the decidable parts of that binding are here.
+
+/** The editor's line height in CSS px (inspector.css: `.je-text` and `.je-mirror` share it); scrolling is by lines. */
+export const EDITOR_LINE_PX = 16;
+
+/** The 0-based line of `offset` in `text` (lines end at '\n'; an offset past the end is on the last line). */
+export function lineIndexAt(text: string, offset: number): number {
+  let line = 0;
+  for (let i = text.indexOf('\n'); i !== -1 && i < offset; i = text.indexOf('\n', i + 1)) line++;
+  return line;
+}
+
+/** The offset where 0-based line `line` starts; `text.length` past the last line. */
+export function lineStart(text: string, line: number): number {
+  let at = 0;
+  for (let l = 0; l < line; l++) {
+    const nl = text.indexOf('\n', at);
+    if (nl === -1) return text.length;
+    at = nl + 1;
+  }
+  return at;
+}
+
+/**
+ * The scrollTop that shows line `line` (§3.5: a range is scrolled into view by its line index × the line height): the
+ * current one while the line is wholly visible, else the line a third of the view from the top (whole lines).
+ */
+export function scrollTopForLine(line: number, lineHeight: number, viewHeight: number, scrollTop: number): number {
+  const top = line * lineHeight;
+  if (top >= scrollTop && top + lineHeight <= scrollTop + viewHeight) return scrollTop;
+  return Math.max(0, top - Math.floor(viewHeight / lineHeight / 3) * lineHeight);
+}
+
+/** The scroll anchor the model keeps: the offset of the first line shown at `scrollTop`. */
+export function anchorOfScroll(text: string, scrollTop: number, lineHeight: number): number {
+  const last = lineIndexAt(text, text.length);
+  return lineStart(text, Math.min(last, Math.max(0, Math.floor(scrollTop / lineHeight))));
+}
+
+/** The scrollTop that shows the anchor's line first. */
+export function scrollOfAnchor(text: string, anchor: number, lineHeight: number): number {
+  return lineIndexAt(text, anchor) * lineHeight;
+}
+
+/**
+ * A scroll the JSON editor owes its text: a line to bring into view (a selected node, an issue), an anchor to show
+ * first (a re-print, §3.5), or the offsets the view had when it was hidden (§3.1).
+ */
+export type ScrollRequest =
+  | { readonly kind: 'line'; readonly line: number }
+  | { readonly kind: 'anchor'; readonly anchor: number }
+  | { readonly kind: 'offset'; readonly top: number; readonly left: number };
+
+/** The text view as the DOM reports it: a textarea that is not displayed (its pane or its tab hidden) is 0 tall. */
+export interface ScrollView {
+  readonly height: number;
+  readonly top: number;
+  readonly left: number;
+}
+
+/** The scroll offsets to write for `req` in a displayed view (`left` kept unless the request is an offset). */
+export function scrollTarget(req: ScrollRequest, text: string, view: ScrollView): { top: number; left: number } {
+  switch (req.kind) {
+    case 'line': return { top: scrollTopForLine(req.line, EDITOR_LINE_PX, view.height, view.top), left: view.left };
+    case 'anchor': return { top: scrollOfAnchor(text, req.anchor, EDITOR_LINE_PX), left: view.left };
+    case 'offset': return { top: req.top, left: req.left };
+  }
+}
+
+/**
+ * The JSON editor's owed scroll (§3.1, §3.2, §3.5). A textarea that is not displayed ignores scroll writes (below
+ * 1,200 px the JSON pane shares its column with the slice behind the Slice/JSON sub-tabs, and the drawer hides whole
+ * tabs), so a request made while the view is 0 tall is kept, the latest winning, and written when the view shows
+ * again; hiding a displayed view keeps its offsets the same way unless a request is already owed. So a row selected
+ * while the JSON pane is hidden is in view when it is shown, and a re-print while the tab is hidden shows the anchor
+ * the model mapped, not the offsets saved before it.
+ */
+export interface ScrollKeeper {
+  /** Asks for `req`: the offsets to write now, or null when the view is hidden (kept for `shown`). */
+  request(req: ScrollRequest, text: string, view: ScrollView): { top: number; left: number } | null;
+  /** The view is about to be hidden: a displayed view's offsets are kept, unless a request is owed. */
+  hidden(view: ScrollView): void;
+  /** The view may show again: the owed offsets to write (then nothing is owed), or null (nothing owed, or still hidden). */
+  shown(text: string, view: ScrollView): { top: number; left: number } | null;
+  readonly owed: ScrollRequest | null;
+}
+
+export function createScrollKeeper(): ScrollKeeper {
+  let owed: ScrollRequest | null = null;
+  const displayed = (view: ScrollView): boolean => view.height > 0;
+  return {
+    get owed() { return owed; },
+    request(req, text, view) {
+      if (!displayed(view)) {
+        owed = req;
+        return null;
+      }
+      owed = null;
+      return scrollTarget(req, text, view);
+    },
+    hidden(view) {
+      if (owed === null && displayed(view)) owed = { kind: 'offset', top: view.top, left: view.left };
+    },
+    shown(text, view) {
+      if (owed === null || !displayed(view)) return null;
+      const target = scrollTarget(owed, text, view);
+      owed = null;
+      return target;
+    },
+  };
+}
+
+/** The mirror's three parts: the text before the highlighted range, the range, the text after (clamped to the text). */
+export function highlightParts(text: string, range: TextRange | null): [string, string, string] {
+  if (range === null) return [text, '', ''];
+  const a = Math.min(Math.max(0, range.start), text.length);
+  const b = Math.min(Math.max(a, range.end), text.length);
+  return [text.slice(0, a), text.slice(a, b), text.slice(b)];
+}
+
+/** The fields of a KeyboardEvent the editor reads. */
+export interface EditorKey {
+  readonly key: string;
+  readonly ctrlKey: boolean;
+  readonly metaKey: boolean;
+  readonly altKey: boolean;
+  readonly shiftKey: boolean;
+}
+
+/** Ctrl/Cmd+Enter applies, Escape (no modifier) reverts the buffer (§3.5); anything else is the textarea's. */
+export function editorKeyAction(e: EditorKey): 'apply' | 'revert' | null {
+  if (e.altKey) return null;
+  if (e.key === 'Enter' && (e.ctrlKey || e.metaKey)) return 'apply';
+  if (e.key === 'Escape' && !e.ctrlKey && !e.metaKey && !e.shiftKey) return 'revert';
+  return null;
 }
