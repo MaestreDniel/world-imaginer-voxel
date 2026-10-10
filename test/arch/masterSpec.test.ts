@@ -9,6 +9,7 @@
  * every module of `src/gen/surface/` and its `test/` entry SP3c's test files; §2.2 lists the terrain palette in registry
  * order; §3.10 and §3.11 state the `surface.*` defaults they name (lapse, snowline, cliffs), so a retune must amend the
  * master; §10's SP3c entry names its spec and no longer defers its deliverable, exit and cut line to it.
+ * SP3d (its spec §12): §10's SP3d entry names its spec and no longer defers its deliverable, exit and cut line to it.
  */
 import { existsSync, readdirSync, readFileSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
@@ -183,5 +184,21 @@ describe('master spec amendments (SP3c §12, Task 19)', () => {
     expect(existsSync(`${ROOT_DIR}docs/superpowers/specs/${spec![1]}`), `${spec![1]} does not exist`).toBe(true);
     expect(entry).not.toMatch(/set by the SP3c spec/);
     for (const k of ['Deliverable:', 'Exit:', 'Cut line:']) expect(entry, `SP3c misses **${k}**`).toContain(`**${k}**`);
+  });
+});
+
+describe('master spec amendments (SP3d §12)', () => {
+  test('§10\'s SP3d entry names its spec and sets its deliverable, exit and cut line', () => {
+    const from = text.indexOf('**SP3d — ');
+    expect(from, 'no SP3d header in §10').toBeGreaterThanOrEqual(0);
+    const to = text.indexOf('\n**SP3e — ', from);
+    expect(to, 'no SP3e header after SP3d in §10').toBeGreaterThan(from);
+    const entry = text.slice(from, to);
+    const spec = /Spec: `([^`]+)`/.exec(entry);
+    expect(spec, 'the SP3d header names no spec').not.toBeNull();
+    expect(spec![1]).toBe('2026-10-09-sp3d-editable-dag-inspector-design.md');
+    expect(existsSync(`${ROOT_DIR}docs/superpowers/specs/${spec![1]}`), `${spec![1]} does not exist`).toBe(true);
+    expect(entry).not.toMatch(/set by the SP3d spec/);
+    for (const k of ['Deliverable:', 'Exit:', 'Cut line:']) expect(entry, `SP3d misses **${k}**`).toContain(`**${k}**`);
   });
 });

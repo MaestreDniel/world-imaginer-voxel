@@ -329,7 +329,7 @@ Byte offsets (amended by SP3a): `WORLD_SURFACE_WG` 0, `OCEAN_FLOOR_WG` 512, `WOR
 ```ts
 type Seed64 = readonly [lo: number, hi: number];   // u32 words, value = hi·2^32 + lo, normalised with >>> 0 (SP1); Hash64 alike
 type RegenScope = 'live' | 'remesh' | 'decorate' | 'terrain' | 'climate';
-type SubProjectId = 'SP0'|'SP1'|'SP2a'|'SP2b'|'SP3a'|'SP3b'|'SP3c'|'SP3d'|'SP4'|'SP5'|'SP6'|'SP7'|'SP8a'|'SP8b'|'SP8c'|'SP9'|'SP10'|'SP11'|'SP12';
+type SubProjectId = 'SP0'|'SP1'|'SP2a'|'SP2b'|'SP3a'|'SP3b'|'SP3c'|'SP3d'|'SP3e'|'SP4'|'SP5'|'SP6'|'SP7'|'SP8a'|'SP8b'|'SP8c'|'SP9'|'SP10'|'SP11'|'SP12';
 type StageId = 'climate'|'shape'|'surfaceEst'|'biome2d'|'terrain'|'decorate'|'light'|'mesh'|'lod'|'map';
 interface ParamMeta { path: string; label: string; doc: string; unit?: string;
   kind: 'number'|'int'|'bool'|'enum'|'noise'|'spline'|'expr'|'boxTable'|'ruleTree'|'featureList'|'structureSets';
@@ -828,7 +828,7 @@ Map markers come from the same start function. Structure starts never lie below 
 
 ### 3.15 Extreme presets (data only: splines + climate params + DAG terms)
 
-The built-in presets are the `PROFILES` entries of `core/params/profiles.ts` (SP1): overlays over the defaults, each hidden in the UI until its `readyFrom` sub-project.
+The built-in presets are the `PROFILES` entries of `core/params/profiles.ts` (SP1): overlays over the defaults, each hidden in the UI until its `readyFrom` sub-project. The amplified, archipelago and floating_islands rows are drafted in SP3e and finalised in SP12 (amended by SP3d).
 
 | preset | changes |
 |---|---|
@@ -1437,7 +1437,7 @@ Metric values are written to `test/metrics/.out/*.json` for trends. The harness 
 | U2 | param liveness: ±15% on each non-live param changes its stage output hash in ≥ 1 of 16 columns. SP2b (its spec §7): perturbations per kind (number and int ±15 % of \|v\| or of the range span, noise wavelength, every numeric spline knot by 15 % of the y span, box intervals shrunk and grown by 15 %); the stage output hash of the leaf's home stage (climate, shape or biome2d); 16 class columns chosen by the lattice conditions under which leaves act (land, coast, channel, gorge, basin, rim and one per lake gate), and bounded witnesses for leaves no class column decides (amended by SP2b). SP3b adds the `terrain` stage: its output hash is the region hash of one column after `fillColumnT`, tried at the land and coast class columns only, with no witness search, and every `density.*` leaf must be decided (amended by SP3b). SP3c adds five class columns for the terrain stage's `surface.*` leaves (`cliffY`, `cliffSteep`, `snowline`, `patch`, `badlands`; 21 class columns), found by a third pass over the same stream after SP2b's two so the existing 16 stay, each accepted only when every leaf it serves changes a voxel of the generated column; every `surface.*` leaf must be decided (amended by SP3c) | 100% |
 | U3 | no-placebo: params with `effectMetric` move that metric by > 0.5% at ±15% | 100% |
 | U4 | registry invariants (every leaf has meta and scope, every non-live leaf a covering stage); migration invariant, fixtures and export → import identity; schema-shape lock; README generated block is fresh | exact (0 issues each) |
-| Z1 | amplified: land columns with ≥ 2 transitions (T2) / p99 land height | ≥ 8% / ≥ 250 |
+| Z1 | amplified: land columns with ≥ 2 transitions (T2) / p99 land height. Z1-Z3 are first measured on SP3e's drafts; SP12 stays their final gate (amended by SP3d) | ≥ 8% / ≥ 250 |
 | Z2 | archipelago: ocean share / islands ≥ 1 km² per 100 km² | 60-75% / ≥ 20 |
 | Z3 | floating_islands: 8×8 km columns with solid ground at y 190-270 / island top runs that are grass | ≥ 3% / ≥ 90% |
 | Z4 | large_biomes: mean surface-biome patch area vs default | ≥ 8× |
@@ -1671,7 +1671,7 @@ Each sub-project runs its own cycle:
 
 Thresholds are locked (`thresholds.lock.json`) and goldens are gated (§6.2). Sizes: S ≈ 2-4 days, M ≈ 1-2 weeks, L ≈ 2-3 weeks of focused work.
 
-**Cut lines.** Every SP names a cut line: what may slip if it overruns. A slipped item moves to a named receiving SP by amending this section, and the receiving SP adds it to its exit. Default receivers: SP0 Vercel preview check → SP4; SP2b share preview and cross-section → SP10 (both delivered in SP2b, so nothing moved); SP3b worker-split slice → SP3d; SP3d inspector pins → SP10; SP5 worlds-menu polish and palette search → SP10; SP7 vertex waves → SP11; SP8a animation frames → SP11; SP8a fence gates and trapdoors → SP12; SP8b giant trees, boulders and fossils → SP12; SP8c HRTF → SP11; SP9 jungle temple and village depth > 4 → SP12; SP11 Ultra shadows, 3D clouds and Fabulous water → SP12; SP6 underground-only carver and spaghetti-2D rarity bands → SP12; SP7 extra lava reactions → SP12; SP10 seed sweep and column-status heatmap → SP12. SP12's exit requires no open cut-line items, unless the user explicitly dropped one and the impact on its D-decision is recorded.
+**Cut lines.** Every SP names a cut line: what may slip if it overruns. A slipped item moves to a named receiving SP by amending this section, and the receiving SP adds it to its exit. Default receivers: SP0 Vercel preview check → SP4; SP2b share preview and cross-section → SP10 (both delivered in SP2b, so nothing moved); SP3b worker-split slice → SP3d (delivered in SP3b, so nothing moved); SP3d inspector pins → SP10; SP5 worlds-menu polish and palette search → SP10; SP7 vertex waves → SP11; SP8a animation frames → SP11; SP8a fence gates and trapdoors → SP12; SP8b giant trees, boulders and fossils → SP12; SP8c HRTF → SP11; SP9 jungle temple and village depth > 4 → SP12; SP11 Ultra shadows, 3D clouds and Fabulous water → SP12; SP6 underground-only carver and spaghetti-2D rarity bands → SP12; SP7 extra lava reactions → SP12; SP10 seed sweep and column-status heatmap → SP12. SP12's exit requires no open cut-line items, unless the user explicitly dropped one and the impact on its D-decision is recorded.
 
 **SP0 — Scaffold and guardrails** (S; no dependencies)
 - Repository scaffold at the root: Vite, TS strict, three `~0.186.1`, vitest projects (unit / arch / metrics-fast / metrics-quick / metrics-full / bench; see the SP0 spec).
@@ -1710,6 +1710,8 @@ SP3 was split on 2026-10-02 into SP3a, SP3b and SP3c (amended by SP3a; the SP3a 
 
 SP3b was split on 2026-10-07 into SP3b (density and terrain shape) and a new SP3c (surface rules and terrain palette), and the former SP3c (draft presets, inspector and slice viewer) became SP3d (amended by SP3b; the SP3b spec's Decision 1 and §12). SP4 depends on SP3b and SP6 on SP3c; SP3c and SP3d can run alongside SP4.
 
+SP3d was split on 2026-10-09 into SP3d (editable density and surface rules, inspector and slice viewer) and a new SP3e (the draft presets), at the user's request (the SP3d spec's Decision 1). SP3e depends on SP3d; SP3c, SP3d and SP3e can run alongside SP4.
+
 **SP3a — Block registry, voxel store and region harness** (M; SP2b). Spec: `2026-10-02-sp3a-blocks-store-harness-design.md`.
 - SAB store (two slab pools over growable buffers, CAS free stacks, refcounts, torus table, section descriptors, aux, per-scope epoch cells), on a SharedArrayBuffer or a plain ArrayBuffer; the block registry with air, stone and bedrock and `test/stateIds.lock.json`. **The u16 block-state encoding, the fluid byte and the light byte are frozen here, together with the property model, the registry API and the append-only id rule (§2.2).** Frozen means the encoding, the property kinds and the API; later SPs still add block types, SoA columns and per-state values (the block list grows in SP6, SP8a, SP8b and SP9).
 - A provisional T stage that fills columns from the 2D world (bedrock, stone, water up to surfaceWaterLevel, air) through the store API.
@@ -1726,7 +1728,7 @@ SP3b was split on 2026-10-07 into SP3b (density and terrain shape) and a new SP3
 - **Deliverable:** 3D voxel terrain from the density DAG with water, in the harness slices and the Voxels mode.
 - **Exit:** as the SP3b spec §11: DT1 on the real T, DT2 (probe == bulk, compiled == reference bit-exact); T1, T2, T3 (stratified over lowland borders, gated on the full tier), T4 and T5 on voxel terrain (true top from WORLD_SURFACE_WG); every 2D metric still passes; P1 bench: T without caves ≤ 4 ms p50.
 - Received from SP3a (its spec §10): T3's redefinition before it gates and T1's lowland band; the cost of the biome height filter on the real `surfaceEst` (settled by keeping the 2D estimate there); the Expr ops' exact semantics and interval rules; SP2a minor 5 (handed to SP3 by SP2b; minor 6 moves to SP3c); the ocean-floor σ/jag stripe.
-- **Cut line:** the worker-split slice (→ SP3d).
+- **Cut line:** the worker-split slice (→ SP3d). It was not taken: the slice was split across the workers in SP3b, so nothing moved.
 
 **SP3c — Surface rules and terrain palette** (M; SP3b). Spec: `2026-10-07-sp3c-surface-rules-palette-design.md`.
 - Surface-rule data tree, compiler with a general fast path, reference evaluator and whole-column scan (§3.11: bedrock, the sky-open skin, deepslate, palettes, snowline, cliffs, badlands bands); bedrock dithered over −63 … −60, deepslate over 1 … 7, in MC's order (§3.11, amended by SP3c).
@@ -1737,14 +1739,20 @@ SP3b was split on 2026-10-07 into SP3b (density and terrain shape) and a new SP3
 - **Exit:** as the SP3c spec §9: build, tests and full metrics with DT1, DT2 (`probeBulk`, `surfaceProbeBulk`, `surfaceReference`), S1-S3, the B4 voxel parts and the river check active, T1-T5 still passing and U2 deciding every `surface.*` leaf; CI green; the 22 states appended and `sp3c.registry` recorded; only the allowed goldens change at `GENERATOR_VERSION` 5, `?selftest=1` in Chrome and Firefox and Bun all keys; the bench (every pre-SP3c row within +30 % except `terrain.real`, `terrain.real` p50 ≤ 4 ms, the exit run against the new baseline); the user's visual review, including the 2D-defect decision.
 - **Cut line:** `bandlands` (→ SP10, with badlands taking `terracotta` as its under block), decided before its leaf enters the schema lock. It was not taken: `bandlands` shipped in SP3c.
 
-**SP3d — Draft presets, inspector and slice viewer** (M; SP3c)
-- Draft `floating_islands`, `amplified` and `archipelago` presets (terms, splines and params; surface-rule branch for islands), so per-preset goldens and SP11's LOD island scan have a target; their profiles become selectable (`readyFrom: 'SP3d'`).
-- In-app slice viewer and density node inspector; `density.defs` as an editable JSON leaf with mutes, and SP3b's `SLIDE`, floor and ceiling terms as data (the SP3b spec §13).
-- **Deliverable:** live terrain cross-sections and the node inspector.
-- Received from SP3b (its spec §13): validate untrusted `density.defs` before user JSON reaches `validateExpr`: reject empty def names (or key the root's ref bucket apart), bound the depth and node count, reject `slide` knots whose slope overflows, and make the interval ops propagate NaN (or widen a NaN endpoint to [−∞, ∞]).
-- Received from SP3a (its spec §10): archipelago (≈ 60 % ocean) against B1's 45 % ocean-family cap (decide per-preset gating); amplified's offset multiplier and the 320 range.
-- **Exit:** set by the SP3d spec.
+**SP3d — Editable density and surface rules, inspector and slice viewer** (M; SP3c). Spec: `2026-10-09-sp3d-editable-dag-inspector-design.md`.
+- `density.defs` and `surface.rules` as editable `json` leaves whose defaults are today's trees as data with parameter refs (SP3b's `SLIDE`, floor and ceiling terms and `islands` included), tap mutes, untrusted-JSON validation (canonical-safe bounds, refs over static ranges in every numeric field, bounds on every def and muted subtree, a column-cost bound, NaN-free magnitude analysis, interval poison, no non-colliding rule states), `SCHEMA_VERSION` 2.
+- The Density tab of `?map`: tree, node form, JSON editor, hover value; the slice viewer (final density, any node, blocks and rule masks on vertical slices along the cut line, horizontal XZ slices of 256-8192 blocks; diverging colormap, 0-contour, histogram; a 32² draft then 128²; a deterministic op-weighted work bound) on the new `fieldSlice` and `fieldProbe` jobs.
+- **Deliverable:** editable terrain trees with live slices and the node inspector.
+- Received from SP3b (its spec §13): the validation of untrusted `density.defs` (delivered: the SP3d spec §1.7, §1.9); from SP3c (its §11): `surface.rules` editable, non-colliding states rejected, the fast-path contract.
+- **Exit:** as the SP3d spec §11.
 - **Cut line:** inspector pins (→ SP10).
+
+**SP3e — Draft presets** (M; SP3d)
+- Draft `floating_islands`, `amplified` and `archipelago` presets on the editable DAG (terms, splines and params; the islands surface-rule branch and island-edge springs), so per-preset goldens and SP11's LOD island scan have a target; their profiles become selectable (`readyFrom: 'SP3e'`); Z1-Z3 measured on the drafts (SP12 stays their final gate).
+- **Deliverable:** the three selectable draft presets.
+- Received from SP3a (its spec §10, moved from SP3d): archipelago (≈ 60 % ocean) against B1's 45 % ocean-family cap (decide per-preset gating); amplified's offset multiplier and the 320 range.
+- **Exit:** set by the SP3e spec.
+- **Cut line:** set by the SP3e spec.
 
 **SP4 — Streaming renderer and light** (L; SP3b)
 - **Week-1 spike:** RegionBatch with a Uint8x4 `position` plus a uint32 `data` attribute in a custom GLSL3 ShaderMaterial with batching chunks, precomputed spheres, `setGeometryAt` churn, per-region `optimize`, and the multi_draw fallback to RegionMesh, stressed at Medium scale.
@@ -1818,7 +1826,7 @@ SP3b was split on 2026-10-07 into SP3b (density and terrain shape) and a new SP3
 
 **SP12 — Extreme presets and final tuning** (M; SP11)
 - Finalise amplified, archipelago, floating_islands, large_biomes and cave_heavy; goldens per preset; profile gallery in docs; baselines refreshed; README; received cut-line items.
-- A "continental" profile (user request, 2026-09-29): large continents with islands in open ocean, via a much longer C wavelength (about 8000) and deep-ocean-dominated low C; it may move to SP3b or SP3d by amending this section. With it (user request, 2026-09-30): small islands or archipelagos at extremely low C, with no rivers on islets.
+- A "continental" profile (user request, 2026-09-29): large continents with islands in open ocean, via a much longer C wavelength (about 8000) and deep-ocean-dominated low C; it may move to SP3e by amending this section. With it (user request, 2026-09-30): small islands or archipelagos at extremely low C, with no rivers on islets.
 - The volcanic cone (reserved by SP2a, its spec §10): sparse cells in hot high ground add a cone and crater to `offset` and assign the volcano biome by mask; lava in the crater uses SP7's fluids. It may move to an earlier SP by amending this section.
 - **Exit:** Z1-Z4; cave_heavy C1 10-22 %; every other active metric green per preset; DT1 goldens stable; no open cut-line items (unless explicitly dropped by the user with the D-decision impact recorded).
 
@@ -1826,7 +1834,7 @@ SP3b was split on 2026-10-07 into SP3b (density and terrain shape) and a new SP3
 
 Critical path: SP0 → SP1 → SP2a → SP2b → SP3a → SP3b → SP4 → SP5 → SP6 → SP7 → SP8b → SP9 → SP10 → SP11 → SP12.
 
-In parallel: SP8a's texture parts after SP4 (alongside SP5-SP7; its shape collision/raycast parts after SP5); SP8c after SP7 (alongside SP8a/SP8b); the persistence codec and `.wiworld` format after SP3a; SP3c and SP3d alongside SP4; the LOD and cloud parts of SP11 after SP4.
+In parallel: SP8a's texture parts after SP4 (alongside SP5-SP7; its shape collision/raycast parts after SP5); SP8c after SP7 (alongside SP8a/SP8b); the persistence codec and `.wiworld` format after SP3a; SP3c, SP3d and SP3e alongside SP4; the LOD and cloud parts of SP11 after SP4.
 
 Visible value in every SP: a map in SP2a (edited live in SP2b), voxel slices in SP3a, terrain in SP3b, flight in SP4, editing in SP5, caves in SP6, water in SP7. The riskiest integrations sit early: the SAB store and the u16 state format in SP3a, BatchedMesh in SP4 week 1, and fluid byte → light → mesh → edit → diff → IDB → reload in SP3a-SP5.
 
