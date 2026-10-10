@@ -386,17 +386,69 @@ describe('preview driver (SP2b spec §2.6, §2.7)', () => {
     expect(configured(r)).toEqual(['s0', 's1', 's2', 's2']);
   });
 
+  test('status.sessionEpoch is the session epoch of the draft the last resolved configure holds (SP3d spec §4.5)', async () => {
+    const r = rig();
+    edit(r, 0, URGENT);
+    expect(r.driver.status).toMatchObject({ poolEpoch: null, sessionEpoch: null });
+    await r.pool.ready();
+    expect(r.driver.status).toMatchObject({ poolEpoch: -1, sessionEpoch: 0 });
+    land(r);
+    // A new draft is posted: until its configure resolves the pool's resolved configure still holds epoch 0.
+    edit(r, 1, URGENT);
+    expect(r.driver.status).toMatchObject({ pending: true, poolEpoch: -1, sessionEpoch: 0 });
+    // A drag's draft waits in the slot while epoch 1 is configured: the status names 1, not the session's 3.
+    edit(r, 2, DRAG);
+    edit(r, 3, DRAG);
+    await r.pool.ready();
+    expect(r.driver.status).toMatchObject({ poolEpoch: 2, sessionEpoch: 1 });
+    land(r);
+    await r.pool.ready();
+    expect(r.driver.status).toMatchObject({ poolEpoch: 5, sessionEpoch: 3 });
+    // Every status a listener heard carries the pair (poolEpoch, sessionEpoch) of one resolved configure.
+    const pairs = r.statuses.map((s) => `${String(s.poolEpoch)}/${String(s.sessionEpoch)}`);
+    expect([...new Set(pairs)]).toEqual(['null/null', '-1/0', '2/1', '5/3']);
+    // A failed configure leaves the pair of the last one that resolved.
+    edit(r, 4, URGENT);
+    r.pool.configures.at(-1)!.reject(new Error('boom'));
+    await flush();
+    expect(r.driver.status).toMatchObject({ poolEpoch: 5, sessionEpoch: 3, error: 'boom' });
+  });
+
+  test('the status change test includes sessionEpoch: a status differing only in it is emitted', async () => {
+    // The real pool gives every configure a new epoch, so the two move together; a pool that resolves two
+    // configures with the same epoch isolates the change test.
+    const clock = new FakeClock();
+    const pool = new FakePool(6);
+    pool.configure = function (seedText: string): ReturnType<FakePool['configure']> {
+      const c = FakePool.prototype.configure.call(this, seedText, PARAMS);
+      return c.then((ready) => ({ ...ready, epoch: 7 }));
+    };
+    const canvas = new FakeCanvas();
+    const driver = createPreviewDriver(pool, canvas, clock);
+    const statuses: DriverStatus[] = [];
+    driver.onStatus((st) => statuses.push(st));
+    driver.change(draft(0), URGENT, 0);
+    await pool.ready();
+    driver.previewProgress(7, 4, 4);
+    driver.change(draft(1), URGENT, 0);
+    const before = statuses.length;
+    expect(driver.status).toMatchObject({ pending: true, settled: false, poolEpoch: 7, sessionEpoch: 0 });
+    await pool.ready();
+    expect(statuses.slice(before)).toEqual([{ lastLatencyMs: 0, pending: true, settled: false, poolEpoch: 7, sessionEpoch: 1, error: null }]);
+    expect(statuses.at(-1)).toBe(driver.status);
+  });
+
   test('status: pending, settled, pool epoch and the input → preview latency; listeners hear changes only', async () => {
     const r = rig();
     r.clock.t = 100;
     r.driver.change(draft(0), URGENT, 95);
-    expect(r.driver.status).toEqual({ lastLatencyMs: null, pending: true, settled: false, poolEpoch: null, error: null });
+    expect(r.driver.status).toEqual({ lastLatencyMs: null, pending: true, settled: false, poolEpoch: null, sessionEpoch: null, error: null });
     await r.pool.ready();
     expect(r.driver.status.poolEpoch).toBe(-1);
     await r.clock.advance(120);
     land(r);
     land(r);
-    expect(r.driver.status).toEqual({ lastLatencyMs: 125, pending: false, settled: true, poolEpoch: -1, error: null });
+    expect(r.driver.status).toEqual({ lastLatencyMs: 125, pending: false, settled: true, poolEpoch: -1, sessionEpoch: 0, error: null });
     expect(r.statuses).toHaveLength(3);
     expect(r.statuses.at(-1)).toBe(r.driver.status);
     const heard: number[] = [];

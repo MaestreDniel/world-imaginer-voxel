@@ -1,6 +1,6 @@
 import { describe, expect, test } from 'vitest';
 import {
-  clampDrawerHeight, clampPanelWidth, DEFAULT_LAYOUT, LAYOUT_KEY, loadLayout, parseLayout, saveLayout, serializeLayout, TAB_IDS, tabKeyTarget, withSection,
+  clampDrawerHeight, clampPanelWidth, DEFAULT_LAYOUT, DRAWER_TAB_IDS, DRAWER_TAB_LABELS, LAYOUT_KEY, loadLayout, parseLayout, saveLayout, serializeLayout, TAB_IDS, tabKeyTarget, withSection,
   type Layout, type LayoutStorage,
 } from '../../src/ui/map/layout';
 
@@ -24,6 +24,18 @@ describe('layout state (SP2b spec §3.1)', () => {
     expect(DEFAULT_LAYOUT).toEqual({ panelWidth: 340, drawerHeight: 300, tab: 'world', openSections: [] });
     expect(TAB_IDS).toEqual(['world', 'parameters', 'biomes', 'presets']);
     expect(LAYOUT_KEY).toBe('wi10.layout.v1');
+  });
+
+  test('the drawer tabs in key order: Spline, Cross-section, then Density appended last (SP3d spec §3.1)', () => {
+    expect(DRAWER_TAB_IDS).toEqual(['spline', 'section', 'density']);
+    expect(Object.isFrozen(DRAWER_TAB_IDS)).toBe(true);
+    expect(DRAWER_TAB_IDS.map((id) => DRAWER_TAB_LABELS[id])).toEqual(['Spline', 'Cross-section', 'Density']);
+    // The uiSmoke tabs step: ArrowLeft on Cross-section shows Spline, ArrowRight shows Cross-section again.
+    const at = DRAWER_TAB_IDS.indexOf('section');
+    const k = (key: string) => ({ key, ctrlKey: false, metaKey: false, altKey: false, shiftKey: false });
+    expect(DRAWER_TAB_IDS[tabKeyTarget(k('ArrowLeft'), at, DRAWER_TAB_IDS.length)!]).toBe('spline');
+    expect(DRAWER_TAB_IDS[tabKeyTarget(k('ArrowRight'), 0, DRAWER_TAB_IDS.length)!]).toBe('section');
+    expect(DRAWER_TAB_IDS[tabKeyTarget(k('ArrowRight'), at, DRAWER_TAB_IDS.length)!]).toBe('density');
   });
 
   test('serializeLayout and parseLayout round-trip', () => {

@@ -7,7 +7,8 @@
  * under the map (§4.2); the Biomes tab holds the biome share preview (§5.5) over the biome table (§5.2), whose
  * hovered row the canvas highlights on the biome layer (§5.3); the Presets tab exports and imports preset files
  * and holds the JSON patch box (§3.4). The toolbar's "Cut line" arms a two-click line tool on the map, whose line
- * the drawer's Cross-section tab profiles (§4.5).
+ * the drawer's Cross-section tab profiles (§4.5). The drawer's Density tab (SP3d spec §3.1) follows the same line;
+ * while it is shown, map clicks are routed by `mapClickAction` (SP3d spec §3.7).
  * `?map&perf=edit` also loads the latency hook (§2.8, `perfHook.ts`), which pins the canvas and the world.
  */
 import './map.css';
@@ -15,6 +16,7 @@ import { WorldSession, type SessionState } from '../../engine/session';
 import { createBrowserPool } from '../../engine/workerPool';
 import { biomeName } from '../../gen/biomes/registry';
 import type { Spawn } from '../../gen/column/spawn';
+import type { Segment } from '../../metrics/crossSection';
 import { HIGHLIGHT_NOTICE, rowHover } from '../biomeTable/model';
 import { createBiomeShares } from '../biomeTable/shares';
 import { createBiomeTable } from '../biomeTable/table';
@@ -22,13 +24,14 @@ import { el } from '../common/dom';
 import { installShortcuts } from '../common/keys';
 import { createNotices } from '../common/notice';
 import { createUrlWriter } from '../common/urlWriter';
-import { CUT_ARMED, CUT_OFF, cutClick, cutOverlay, segmentDistance, type CutPoint, type CutTool } from '../crossSection/model';
+import { CUT_ARMED, CUT_OFF, cutClick, cutOverlay, segmentDistance, segmentText, type CutPoint, type CutTool } from '../crossSection/model';
 import { createCrossSection } from '../crossSection/section';
 import { createParamPanel } from '../paramPanel/panel';
 import { createPresetsTab } from '../presets/presetsTab';
 import { cryptoSeed } from '../seedBox';
 import { createSplineDrawer } from '../splineEditor/drawer';
 import { isSplineLeaf } from '../splineEditor/model';
+import { mapClickAction, type SlicePlane } from './clickAction';
 import { createHoverReadout } from './hoverPanel';
 import { browserStorage, createLayout } from './layout';
 import { createMapCanvas } from './mapView';
@@ -38,6 +41,10 @@ import { createToolbar } from './toolbar';
 
 /** A click this close to the cut line (screen px) shows its profile instead of pinning the point. */
 const LINE_HIT_PX = 6;
+/** The Density tab's note under its plane controls (SP3d spec §3.1, §1.5). */
+const DENSITY_NOTE = 'Tree edits show in the slices, the Voxels mode and the hover values; the 2D map is upstream of the terrain';
+/** The vertical plane without a cut line (SP3d spec §3.7). */
+const DENSITY_NO_LINE = 'Draw a cut line on the map for a vertical slice';
 const draftOf = (s: SessionState): DriverDraft => ({ sessionEpoch: s.epoch, seedText: s.seedText, seedKey: `${s.seed[0]}.${s.seed[1]}`, params: s.params });
 const spawnText = (sp: Spawn): string => `${sp.x}, ${sp.z} (y ${sp.y}, ${biomeName(sp.biome)}${sp.fallback ? ', fallback' : ''})`;
 
@@ -89,9 +96,14 @@ export async function mountMapPage(root: HTMLElement): Promise<void> {
   const edit = (e: Event, fn: () => void): void => { editAt(e.timeStamp, fn); };
 
   // The cut-line tool (§4.5): while armed, map clicks set A, then B; otherwise a click on the line shows its
-  // profile and any other click pins the point.
+  // profile and any other click pins the point. While the Density tab is shown a finished line keeps it shown, a
+  // click on the line does not open Cross-section, and on its horizontal plane a click sets the plane's centre
+  // (SP3d spec §3.7).
   let cut: CutTool = CUT_OFF;
   let cutPointer: CutPoint | null = null;
+  /** The Density tab's plane and its horizontal plane's centre (set by map clicks; null: the view's centre). */
+  const densityPlane: SlicePlane = 'vertical';
+  let densityCentre: CutPoint | null = null;
   const canvas = createMapCanvas(layout.map, pool, view, {
     onView: (v) => { view = v; canvas.setView(v); writeUrl(); renderStatus(); },
     onHover: (x, z) => {
@@ -101,9 +113,18 @@ export async function mountMapPage(root: HTMLElement): Promise<void> {
       drawCut();
     },
     onClick: (x, z) => {
-      if (cut.mode !== 'off') cutAt(x, z);
-      else if (section.line !== null && segmentDistance(section.line, x, z) <= LINE_HIT_PX * view.bpp) layout.openDrawer('section');
-      else canvas.setPin([x, z]);
+      const action = mapClickAction({
+        drawerTab: layout.drawerOpen ? layout.drawerTab : null,
+        plane: densityPlane,
+        nearLine: section.line !== null && segmentDistance(section.line, x, z) <= LINE_HIT_PX * view.bpp,
+        cutArmed: cut.mode !== 'off',
+      });
+      switch (action.kind) {
+        case 'cut': cutAt(x, z, action.openSection); break;
+        case 'openSection': layout.openDrawer('section'); break;
+        case 'centre': densityCentre = [Math.floor(x), Math.floor(z)]; break;
+        case 'pin': canvas.setPin([x, z]); break;
+      }
     },
     onPreviewProgress: (epoch, drawn, visible) => {
       perf?.drawn(epoch, drawn, visible);
@@ -205,13 +226,25 @@ export async function mountMapPage(root: HTMLElement): Promise<void> {
     canvas.setCrosshair(next.mode !== 'off');
     drawCut();
   }
-  function cutAt(x: number, z: number): void {
+  function cutAt(x: number, z: number, openSection: boolean): void {
     const step = cutClick(cut, x, z);
     if (step.problem !== null) notices.show(step.problem, { kind: 'warn', timeoutMs: 4000 });
     if (step.line !== null) section.setLine(step.line);
     setCut(step.tool);
-    if (step.line !== null) layout.openDrawer('section');
+    if (step.line !== null && openSection) layout.openDrawer('section');
   }
+
+  // The drawer's Density tab (SP3d spec §3.1): the vertical plane follows the cut line (§3.7); without a line it
+  // shows the empty state. The note says why the 2D map does not change with tree edits (§1.5).
+  const densityState = el('div', 'map-density-state');
+  const densityLine = (line: Segment | null) => {
+    densityState.textContent = line === null ? DENSITY_NO_LINE : `vertical slice along ${segmentText(line)}`;
+  };
+  const densityPanel = el('div', 'map-density');
+  densityPanel.append(densityState, el('div', 'map-density-note', DENSITY_NOTE));
+  layout.drawerTabs.density.append(densityPanel);
+  densityLine(section.line);
+  section.onLineChange(densityLine);
   // A tab that comes on screen catches up: the spline drawer renders and requests its statistics, the
   // cross-section requests its profile.
   layout.onDrawerChange(() => {

@@ -1,20 +1,21 @@
 /**
  * The editor page layout (SP2b spec §3.1): a CSS grid with the toolbar row, a notice strip, the main row
  * (the map, a splitter and the side panel with the tabs World, Parameters, Biomes and Presets) and the
- * drawer row under both, with its own splitter and the tabs Spline (§4.2) and Cross-section (§4.5). The
- * drawer is closed until an editor opens it on its tab. Panel width, drawer height, active tab and open
- * sections persist in localStorage under `wi10.layout.v1`: the parsing and clamping are pure, and every
- * storage access is behind try/catch, so a missing, invalid or unreachable value gives the defaults. The map
- * canvas follows its host through mapView's ResizeObserver.
+ * drawer row under both, with its own splitter and the tabs Spline (§4.2), Cross-section (§4.5) and Density
+ * (SP3d spec §3.1). The drawer is closed until an editor opens it on its tab. Panel width, drawer height,
+ * active tab and open sections persist in localStorage under `wi10.layout.v1`: the parsing and clamping are
+ * pure, and every storage access is behind try/catch, so a missing, invalid or unreachable value gives the
+ * defaults. The map canvas follows its host through mapView's ResizeObserver.
  */
 import { el } from '../common/dom';
 
 export type TabId = 'world' | 'parameters' | 'biomes' | 'presets';
 export const TAB_IDS: readonly TabId[] = Object.freeze(['world', 'parameters', 'biomes', 'presets']);
 const TAB_LABELS: Readonly<Record<TabId, string>> = { world: 'World', parameters: 'Parameters', biomes: 'Biomes', presets: 'Presets' };
-export type DrawerTabId = 'spline' | 'section';
-export const DRAWER_TAB_IDS: readonly DrawerTabId[] = Object.freeze(['spline', 'section']);
-const DRAWER_TAB_LABELS: Readonly<Record<DrawerTabId, string>> = { spline: 'Spline', section: 'Cross-section' };
+/** The drawer tabs in key order; Density (SP3d spec §3.1) is appended last, so the tab keys keep their order. */
+export type DrawerTabId = 'spline' | 'section' | 'density';
+export const DRAWER_TAB_IDS: readonly DrawerTabId[] = Object.freeze(['spline', 'section', 'density']);
+export const DRAWER_TAB_LABELS: Readonly<Record<DrawerTabId, string>> = Object.freeze({ spline: 'Spline', section: 'Cross-section', density: 'Density' });
 
 /** What the page remembers between visits. */
 export interface Layout {
@@ -148,7 +149,7 @@ export interface PageLayout {
   readonly map: HTMLElement;
   /** The host of each tab's content. */
   readonly tabs: Readonly<Record<TabId, HTMLElement>>;
-  /** The host of each drawer tab: the spline editor (§4.2) and the cross-section (§4.5). */
+  /** The host of each drawer tab: the spline editor (§4.2), the cross-section (§4.5) and Density (SP3d spec §3.1). */
   readonly drawerTabs: Readonly<Record<DrawerTabId, HTMLElement>>;
   readonly tab: TabId;
   showTab(id: TabId): void;

@@ -3,8 +3,8 @@
  * first, then the view's level on top), keeps showing the last drawn tile of each position until the
  * current source's tile lands there (fallback tiles), asks the pool for missing tiles coarse-first (only
  * preview tiles while interactive), reports preview progress to the preview driver, dims all biomes but a
- * highlighted one, pans by drag, zooms around the cursor, and draws the spawn marker, a grid, the pin and the
- * cross-section's cut line (SP2b spec §4.5).
+ * highlighted one, pans by drag, zooms around the cursor, and draws the spawn marker, a grid, the pin, the
+ * cross-section's cut line (SP2b spec §4.5) and the Density tab's horizontal-plane square (SP3d spec §3.7).
  */
 import { MAP_TILE_PX, type MapLevel } from '../../core/constants';
 import type { Spawn } from '../../gen/column/spawn';
@@ -31,6 +31,14 @@ export interface MapViewOptions {
   onPreviewProgress(poolEpoch: number, nearestDrawn: number, visible: number): void;
 }
 
+/** The horizontal slice plane's square (SP3d spec §4.2): the blocks [cx − E/2, cx + E/2) × [cz − E/2, cz + E/2). */
+export interface MapSquare {
+  readonly cx: number;
+  readonly cz: number;
+  /** The side E in blocks. */
+  readonly extent: number;
+}
+
 export interface MapCanvas {
   setView(v: MapView): void;
   /** The pool finished configuring `epoch`: the seed words and the stage hashes (hex) by stage id. */
@@ -44,6 +52,8 @@ export interface MapCanvas {
   highlightBiome(id: number | null): void;
   /** The cut line A → B (SP2b spec §4.5), dashed while pending; null removes it. */
   setCutLine(line: CutOverlay | null): void;
+  /** The horizontal slice plane's square with a centre mark (SP3d spec §3.7); null removes it. */
+  setSquare(square: MapSquare | null): void;
   /** A crosshair cursor while the cut-line tool waits for a click. */
   setCrosshair(on: boolean): void;
   /** Blank draws since the first image (SP2b spec §2.8), for the latency hook. */
@@ -71,6 +81,7 @@ export function createMapCanvas(host: HTMLElement, pool: WorkerPool, initial: Ma
   let interactive = false;
   let highlight: number | null = null;
   let cutLine: CutOverlay | null = null;
+  let square: MapSquare | null = null;
   const fallbacks = createFallbacks();
   /** Highlight masks of the highlighted biome only, by tile key. */
   const masks = new Map<string, OffscreenCanvas>();
@@ -158,6 +169,27 @@ export function createMapCanvas(host: HTMLElement, pool: WorkerPool, initial: Ma
       ctx2d.stroke();
       ctx2d.lineWidth = 1;
     };
+    if (square !== null) {
+      const half = square.extent / 2;
+      const [x0, y0] = worldToScreen(view, w, h, square.cx - half, square.cz - half);
+      const [x1, y1] = worldToScreen(view, w, h, square.cx + half, square.cz + half);
+      const [mx, my] = worldToScreen(view, w, h, square.cx, square.cz);
+      ctx2d.strokeStyle = 'rgba(0,0,0,0.6)';
+      ctx2d.lineWidth = 4;
+      ctx2d.strokeRect(x0, y0, x1 - x0, y1 - y0);
+      ctx2d.strokeStyle = '#7fd3ec';
+      ctx2d.lineWidth = 2;
+      ctx2d.setLineDash([6, 4]);
+      ctx2d.strokeRect(x0, y0, x1 - x0, y1 - y0);
+      ctx2d.setLineDash([]);
+      ctx2d.beginPath();
+      ctx2d.moveTo(mx - 5, my);
+      ctx2d.lineTo(mx + 5, my);
+      ctx2d.moveTo(mx, my - 5);
+      ctx2d.lineTo(mx, my + 5);
+      ctx2d.stroke();
+      ctx2d.lineWidth = 1;
+    }
     if (spawn !== null) marker(spawn.x, spawn.z, '#ff3b30');
     if (pin !== null) marker(pin[0], pin[1], '#ffd60a');
     if (cutLine !== null) {
@@ -265,6 +297,7 @@ export function createMapCanvas(host: HTMLElement, pool: WorkerPool, initial: Ma
       schedule();
     },
     setCutLine(line) { cutLine = line; schedule(); },
+    setSquare(sq) { square = sq; schedule(); },
     setCrosshair(on) { canvas.classList.toggle('map-canvas-cut', on); },
     get blankDraws() { return fallbacks.blankDraws; },
     destroy() { cancelAnimationFrame(raf); observer.disconnect(); cache.clear(); masks.clear(); canvas.remove(); },

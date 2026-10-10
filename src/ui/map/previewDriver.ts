@@ -34,6 +34,12 @@ export interface DriverStatus {
   readonly settled: boolean;
   /** The pool epoch of the canvas source (the last configure that resolved). */
   readonly poolEpoch: number | null;
+  /**
+   * The session epoch of the draft that configure holds (SP3d spec §4.5), null before the first one resolves: a
+   * view that requests jobs per (poolEpoch, sessionEpoch) runs them on that draft, which may be older than the
+   * session's while a newer draft is being configured or waits in the slot.
+   */
+  readonly sessionEpoch: number | null;
   readonly error: string | null;
 }
 
@@ -76,19 +82,21 @@ export function createPreviewDriver(pool: DriverPool, canvas: DriverCanvas, cloc
   let interactive = false;
   let settled = false;
   let sourceEpoch: number | null = null;
+  let sourceSession: number | null = null;
   let spawnedFor: number | null = null;
   let ewma: number | null = null;
   let lastLatencyMs: number | null = null;
   let error: string | null = null;
-  let status: DriverStatus = { lastLatencyMs, pending: false, settled, poolEpoch: sourceEpoch, error };
+  let status: DriverStatus = { lastLatencyMs, pending: false, settled, poolEpoch: sourceEpoch, sessionEpoch: sourceSession, error };
   const settledFns = new Set<(poolEpoch: number) => void>();
   const statusFns = new Set<(s: DriverStatus) => void>();
 
   const emitStatus = () => {
     const pending = (latest !== null && latest.state === 'running') || slot !== null;
     const s = status;
-    if (s.lastLatencyMs === lastLatencyMs && s.pending === pending && s.settled === settled && s.poolEpoch === sourceEpoch && s.error === error) return;
-    status = { lastLatencyMs, pending, settled, poolEpoch: sourceEpoch, error };
+    if (s.lastLatencyMs === lastLatencyMs && s.pending === pending && s.settled === settled && s.poolEpoch === sourceEpoch
+      && s.sessionEpoch === sourceSession && s.error === error) return;
+    status = { lastLatencyMs, pending, settled, poolEpoch: sourceEpoch, sessionEpoch: sourceSession, error };
     for (const fn of [...statusFns]) fn(status);
   };
 
@@ -146,6 +154,7 @@ export function createPreviewDriver(pool: DriverPool, canvas: DriverCanvas, cloc
       if (latest !== c) return;
       c.poolEpoch = ready.epoch;
       sourceEpoch = ready.epoch;
+      sourceSession = c.sessionEpoch;
       error = null;
       canvas.setSource(ready.epoch, c.seedKey, ready.stageHashes);
       refresh();

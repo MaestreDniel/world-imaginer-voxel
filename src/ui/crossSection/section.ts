@@ -18,6 +18,8 @@
  *   when a new line is set, so it always runs on the draft the map shows. It is stale (dimmed, with its status)
  *   from the next session change, or during a gesture, until a new result arrives; a cancelled request stays
  *   stale silently, any other failure also shows a notice. The mode is not stored: a page starts on Profile.
+ * - The hover readout is an overlay over the top of the plot that wraps, with its full text in `title` (SP3d spec
+ *   §3.6); `onLineChange` tells other views (the Density tab, SP3d spec §3.7) about every `setLine`.
  */
 import './section.css';
 import { SEA_LEVEL } from '../../core/constants';
@@ -63,6 +65,8 @@ export interface CrossSection {
   /** Profiles `line` (null: none); requests the current mode's result at once if the tab is on screen and the driver is settled. */
   setLine(line: Segment | null): void;
   readonly line: Segment | null;
+  /** Calls `fn` with the line after every `setLine` (SP3d spec §3.7: the Density tab's vertical plane follows it); returns the unsubscribe function. */
+  onLineChange(fn: (line: Segment | null) => void): () => void;
   /** The tab came on screen: renders and requests the current mode's result if the driver is settled and it is not current. */
   shown(): void;
   /** Profile or Voxels (the header's toggle). */
@@ -165,8 +169,16 @@ export function createCrossSection(host: HTMLElement, deps: SectionDeps): CrossS
   seaSwatch.style.borderTopColor = css(VOXEL_COLORS.seaLevel);
   seaKey.append(seaSwatch, el('span', '', `sea level ${SEA_LEVEL_Y}`));
   voxelKeys.append(seaKey);
-  const readout = el('div', 'cs-readout', HINT);
-  element.append(head, summary, plotHost, legend, voxelKeys, readout);
+  // The readout is an overlay over the top of the plot (SP3d spec §3.6): it wraps instead of being cut, and as it
+  // is outside the grid rows its wrapping never changes the plot's height (no redraw under the pointer).
+  const readout = el('div', 'cs-readout');
+  const say = (text: string) => {
+    readout.textContent = text;
+    readout.title = text;
+  };
+  say(HINT);
+  plotHost.append(readout);
+  element.append(head, summary, plotHost, legend, voxelKeys);
   host.replaceChildren(element);
 
   let w = 0;
@@ -198,7 +210,7 @@ export function createCrossSection(host: HTMLElement, deps: SectionDeps): CrossS
   let hovered: { readonly cell: RuleCell; readonly text: string } | null = null;
   const rules = createRuleReadout(deps.pool, () => session.state.epoch, (cell, suffix) => {
     const h = hovered;
-    if (h !== null && sameRuleCell(h.cell, cell)) readout.textContent = h.text + suffix;
+    if (h !== null && sameRuleCell(h.cell, cell)) say(h.text + suffix);
   });
 
   function draw(p: CrossSectionProfile | null, stale: boolean): void {
@@ -358,7 +370,7 @@ export function createCrossSection(host: HTMLElement, deps: SectionDeps): CrossS
   function hint(): void {
     hovered = null;
     rules.hover(null);
-    readout.textContent = mode === 'profile' ? HINT : VOXEL_HINT;
+    say(mode === 'profile' ? HINT : VOXEL_HINT);
     delete readout.dataset['point'];
     delete readout.dataset['y'];
   }
@@ -422,7 +434,7 @@ export function createCrossSection(host: HTMLElement, deps: SectionDeps): CrossS
     const text = voxelReadout(line, s, cell.i, cell.y);
     const at: RuleCell = { epoch: shownSlice.epoch, ...voxelPosition(line, cell.i, cell.y) };
     hovered = { cell: at, text };
-    readout.textContent = text + rules.hover(at);
+    say(text + rules.hover(at));
     readout.dataset['point'] = String(cell.i);
     readout.dataset['y'] = String(cell.y);
   }
@@ -438,7 +450,7 @@ export function createCrossSection(host: HTMLElement, deps: SectionDeps): CrossS
     const px = e.clientX - r.left;
     if (px < plot.left - 2 || px > plot.left + plot.width + 2) {
       cursor.setAttribute('visibility', 'hidden');
-      readout.textContent = HINT;
+      say(HINT);
       return;
     }
     const i = nearestPoint(plot, px);
@@ -446,7 +458,7 @@ export function createCrossSection(host: HTMLElement, deps: SectionDeps): CrossS
     cursor.setAttribute('x1', String(x));
     cursor.setAttribute('x2', String(x));
     cursor.setAttribute('visibility', 'visible');
-    readout.textContent = sectionReadout(p, i);
+    say(sectionReadout(p, i));
     readout.dataset['point'] = String(i);
   });
   root.addEventListener('pointerleave', () => {
@@ -462,6 +474,7 @@ export function createCrossSection(host: HTMLElement, deps: SectionDeps): CrossS
     render();
   }).observe(plotHost);
 
+  const lineFns = new Set<(line: Segment | null) => void>();
   const offSession = session.subscribe(() => render());
   // The driver's status still reads unsettled while it runs its onSettled listeners.
   const offSettled = deps.driver.onSettled(() => current().request(true));
@@ -473,8 +486,13 @@ export function createCrossSection(host: HTMLElement, deps: SectionDeps): CrossS
       requests.setLine(line);
       slices.setLine(line);
       current().request(deps.driver.status.settled);
+      for (const fn of [...lineFns]) fn(requests.line);
     },
     get line() { return requests.line; },
+    onLineChange(fn) {
+      lineFns.add(fn);
+      return () => { lineFns.delete(fn); };
+    },
     shown() {
       render();
       current().request(deps.driver.status.settled);

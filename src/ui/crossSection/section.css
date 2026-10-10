@@ -1,5 +1,5 @@
-/* The Cross-section tab (SP2b spec §4.5): header, summary, the profile or Voxels plot (SP3a spec §5.2), its legend and the hover readout. */
-.cs { display: grid; grid-template-rows: auto auto minmax(0, 1fr) auto auto; height: 100%; min-height: 0; }
+/* The Cross-section tab (SP2b spec §4.5): header, summary, the profile or Voxels plot (SP3a spec §5.2) with the hover readout over it, and its legend. */
+.cs { display: grid; grid-template-rows: auto auto minmax(0, 1fr) auto; height: 100%; min-height: 0; }
 .cs [hidden] { display: none !important; }
 .cs-head { display: flex; flex-wrap: wrap; align-items: baseline; gap: 4px 14px; padding: 4px 10px; border-bottom: 1px solid #333; }
 .cs-title { white-space: nowrap; }
@@ -58,4 +58,9 @@
 .cs-key-river { background: rgba(111, 168, 232, 0.5); }
 .cs-key-gorge { background: rgba(224, 144, 74, 0.55); }
 .cs-key-jag { background: #b48ead; }
-.cs-readout { padding: 2px 10px 4px; font: 11px ui-monospace, monospace; color: #b8c2d0; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+/* The readout overlays the top of the plot (SP3d spec §3.6): outside the grid rows, so wrapping never resizes the plot. */
+.cs-readout {
+  position: absolute; top: 0; left: 0; right: 0; z-index: 1; pointer-events: none;
+  padding: 2px 10px 3px; font: 11px ui-monospace, monospace; color: #c8d0dc; background: rgba(21, 23, 27, 0.72);
+  white-space: normal; overflow-wrap: anywhere;
+}

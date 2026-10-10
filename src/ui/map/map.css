@@ -52,3 +52,7 @@
   .map-side { border-top: 1px solid #333; }
   .map-tab { overflow: visible; }
 }
+/* The drawer's Density tab (SP3d spec §3.1). */
+.map-density { padding: 8px 10px; }
+.map-density-state { color: #c8d0dc; }
+.map-density-note { margin-top: 4px; font-size: 12px; color: #8a95a8; }
