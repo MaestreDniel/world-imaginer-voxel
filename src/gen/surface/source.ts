@@ -20,7 +20,7 @@
 import { RULES_COLUMN_COST_MAX } from '../../core/constants';
 import { getPath } from '../../core/params/kit';
 import { NOISE_FIELD_RANGES, SCHEMA, type Params } from '../../core/params/schema';
-import { ALLOWED_REF_TARGETS } from '../density/source';
+import { ALLOWED_REF_TARGETS, freezeTree } from '../density/source';
 import { rulesColumnCost } from '../inspect/cost';
 import {
   RuleValidationError, validateRules, type Rule, type RuleErrorCode, type RuleRefCode, type RuleRefTarget,
@@ -133,34 +133,13 @@ export function rulesSourceValidations(): number {
   return validations;
 }
 
-/** True for a plain object (prototype Object.prototype or null) or an array: the containers a rule tree is made of. */
-function isTreeContainer(v: unknown): v is object {
-  if (typeof v !== 'object' || v === null) return false;
-  if (Array.isArray(v)) return true;
-  const proto: unknown = Object.getPrototypeOf(v);
-  return proto === Object.prototype || proto === null;
-}
-
 /**
- * Deep-freezes `tree` in place and returns it (§1.6, D10): an iterative walk over its plain objects and arrays that,
- * unlike `deepFreeze`, does not stop at an already-frozen node (a partly frozen tree ends frozen at every depth). Shared
- * and cyclic sub-objects are visited once; other values are left alone. Identity and values are unchanged.
+ * Deep-freezes `tree` in place and returns it (§1.6, D10): the density source's `freezeTree` (one walk for both rule
+ * languages), under the rules-side name. Identity and values are unchanged.
  */
+const FREEZE_TREE = freezeTree;
 export function freezeRules<T>(tree: T): T {
-  if (!isTreeContainer(tree)) return tree;
-  const seen = new Set<object>();
-  const stack: object[] = [tree];
-  while (stack.length > 0) {
-    const x = stack.pop()!;
-    if (seen.has(x)) continue;
-    seen.add(x);
-    Object.freeze(x);
-    for (const k of Object.keys(x)) {
-      const c: unknown = (x as Record<string, unknown>)[k];
-      if (isTreeContainer(c)) stack.push(c);
-    }
-  }
-  return tree;
+  return FREEZE_TREE(tree);
 }
 
 /** A ref's value in `params` (§1.3): the target's value v, or 0 − v with `neg`. Only called on a validated tree. */
