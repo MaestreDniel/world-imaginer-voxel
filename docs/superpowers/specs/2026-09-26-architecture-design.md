@@ -88,9 +88,10 @@ world-imaginer-voxel/          (repository root)
                                 evaluated by a zero-allocation register-file interpreter; one validator; authoring-time auto tangents
       spline/edit.ts weights.ts (SP2b) pure editor operations (insert, delete, set, nest, flatten, clamped auto tangents) and Hermite path weights
       params/kit.ts schema.ts meta.ts defaults.ts noises.ts profiles.ts presets.ts migrate.ts canonical.ts graphicsPresets.ts json.ts
-                                ParamSchema = single source (types, defaults, UI, scope); defaults referenced by the schema live in core/params
+      params/defaultTrees.ts    ParamSchema = single source (types, defaults, UI, scope); defaults referenced by the schema live in core/params
                                 (core cannot import gen/); graphicsPresets.ts = the §4.16 preset table as pure data (graphics + audio rows);
-                                json.ts = the `json` leaf kind's tier-1 validator and the tree issue codes (SP3d)
+                                json.ts = the `json` leaf kind's tier-1 validator and the tree issue codes (SP3d); defaultTrees.ts =
+                                DEFAULT_DENSITY_TREE and DEFAULT_SURFACE_RULES as data, the json leaves' defaults (SP3d)
       stage/registry.ts hash.ts StageDef, stageHash, genKey, dirty-stage computation
     world/                      L1 (core only)
       blocks/kinds.ts registry.ts defs.ts index.ts fluid.ts light.ts   (SP3a) u16 block-state ids (<= 4096 used): property kinds
