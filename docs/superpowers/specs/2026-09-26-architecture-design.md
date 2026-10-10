@@ -172,6 +172,7 @@ world-imaginer-voxel/          (repository root)
         (SP3a: harness/{region,cache,png,regionWorker,fuzzWorker}.ts; SP3b: harness/densityFuzz.ts, metrics/terrain.metric.ts;
         SP3c: harness/surfaceFuzz.ts, harness/surfaceScatter.ts, harness/surfaceScatterWorker.ts, metrics/surface.metric.ts,
         fixtures/sp3c-default-rules.json)
+        (SP3d: harness/legacyTrees.ts, harness/treeMutator.ts, fixtures/preset-v1.json, fixtures/expected-v1.json)
         schema-shape.lock.json (SP1) stateIds.lock.json (SP3a)
         thresholds.ts thresholds.lock.json goldens.json baselines.json
 ```
@@ -1434,7 +1435,7 @@ Metric values are written to `test/metrics/.out/*.json` for trends. The harness 
 | X1 | villages per 100 km² / start x mod 16 / piece overlaps / median pieces per village | ±35% of analytic / χ² p ≥ 0.01 / 0 / ≥ 8 |
 | X2 | rigid floor cells supported / clearance above / starts below surfaceEst − 4 | ≥ 95% / ≥ 95% / 0 |
 | DT1 | region hash: spiral vs shuffled, 1 vs 4 threads, cold vs warm, 2 runs, goldens | exact |
-| DT2 | probe == bulk / compiled == reference / batch == point (column stage, at quart corners). SP3b's parts: `probeBulk` counts voxels whose probe solidity differs from the block, and voxels the bulk evaluated where `Object.is(probe, bulk)` fails; `compiledReference` counts corner and voxel values where compiled ≠ reference; batch == point stays a unit test (amended by SP3b). SP3c: `probeBulk` compares probe solidity with block ≠ air (palette blocks are solid); `surfaceProbeBulk` counts voxels whose `surfaceProbe` state ≠ the stored block, and `surfaceReference` voxels where the compiled surface rules ≠ the reference evaluator (amended by SP3c) | 0 mismatches / bit-exact / bit-exact (tightened by SP2a) |
+| DT2 | probe == bulk / compiled == reference / batch == point (column stage, at quart corners). SP3b's parts: `probeBulk` counts voxels whose probe solidity differs from the block, and voxels the bulk evaluated where `Object.is(probe, bulk)` fails; `compiledReference` counts corner and voxel values where compiled ≠ reference; batch == point stays a unit test (amended by SP3b). SP3c: `probeBulk` compares probe solidity with block ≠ air (palette blocks are solid); `surfaceProbeBulk` counts voxels whose `surfaceProbe` state ≠ the stored block, and `surfaceReference` voxels where the compiled surface rules ≠ the reference evaluator (amended by SP3c). SP3d: `editedDensityReference` and `editedSurfaceReference` count compiled ≠ reference on edited trees (amended by SP3d) | 0 mismatches / bit-exact / bit-exact (tightened by SP2a) |
 | R1 | hidden seam faces emitted / visible faces missing vs brute force | 0 / 0 |
 | R2 | greedy quads per visible face (AO on / off) | ≤ 0.6 / ≤ 0.35 |
 | R3 | wrongly culled sections vs raycast reference / culled from an underground camera | 0 / ≥ 50% |

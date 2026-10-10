@@ -755,3 +755,4 @@ The plan was dry-run on the branch `dry/sp3d`: each of its 30 tasks was implemen
 (One line per commit that changes `test/thresholds.lock.json`.)
 
 - Task 1: `STARTED_SPS` gains `SP3d` (SP3d split into SP3d and a new SP3e, the draft presets); no threshold rows change.
+- Task 16: DT2 gains `editedDensityReference` and `editedSurfaceReference` (max 0, activeFrom SP3d): compiled ≠ reference on edited `density.defs` / `surface.rules` trees (§7).

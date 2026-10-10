@@ -9,7 +9,8 @@
  * every module of `src/gen/surface/` and its `test/` entry SP3c's test files; §2.2 lists the terrain palette in registry
  * order; §3.10 and §3.11 state the `surface.*` defaults they name (lapse, snowline, cliffs), so a retune must amend the
  * master; §10's SP3c entry names its spec and no longer defers its deliverable, exit and cut line to it.
- * SP3d (its spec §12): §10's SP3d entry names its spec and no longer defers its deliverable, exit and cut line to it.
+ * SP3d (its spec §12): §10's SP3d entry names its spec and no longer defers its deliverable, exit and cut line to it;
+ * §1's `test/` entry names SP3d's test files, which exist (it lands with the last of them, `harness/treeMutator.ts`).
  */
 import { existsSync, readdirSync, readFileSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
@@ -195,6 +196,15 @@ describe('master spec amendments (SP3c §12, Task 19)', () => {
 });
 
 describe('master spec amendments (SP3d §12)', () => {
+  test('§1\'s test/ entry names SP3d\'s test files, which exist', () => {
+    const entry = layoutEntry(/^\s+test\/ unit\/ metrics\//);
+    const sp3d = /SP3d: ([^)]*)\)/.exec(entry);
+    expect(sp3d, "§1's test/ entry has no `SP3d: …` list").not.toBeNull();
+    const named = sp3d![1]!.split(/,\s*/).map((f) => f.trim());
+    expect(named).toEqual(['harness/legacyTrees.ts', 'harness/treeMutator.ts', 'fixtures/preset-v1.json', 'fixtures/expected-v1.json']);
+    for (const f of named) expect(existsSync(`${ROOT_DIR}test/${f}`), `test/${f} does not exist`).toBe(true);
+  });
+
   test('§10\'s SP3d entry names its spec and sets its deliverable, exit and cut line', () => {
     const from = text.indexOf('**SP3d — ');
     expect(from, 'no SP3d header in §10').toBeGreaterThanOrEqual(0);

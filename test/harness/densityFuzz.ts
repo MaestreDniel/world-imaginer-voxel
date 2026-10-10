@@ -4,7 +4,9 @@
  * Trees use every op of §1.1 over a set of noise ids: by default the test noises of `fuzzNoiseSource()`; pass `noises`
  * to draw over other ids (`SCHEMA_DENSITY_NOISES`, evaluated through `densityNoiseSource(ctx)`, for the schema's
  * `density.noises`). Constants are drawn as §1.2 asks (`fuzzConstant`: log-uniform magnitudes in [1e-6, 1e9] with
- * random signs, plus 0, −0 and small integers).
+ * random signs, plus 0, −0 and small integers). SP3d (its spec §10): `negativeZero: false` writes every −0 the stream
+ * draws as +0, so a tree over `SCHEMA_DENSITY_NOISES` is a `density.defs` value tier 1 accepts (it refuses −0); the
+ * stream, and so every other choice of the tree, is unchanged.
  *
  * Every tree is valid by construction: defs reference only earlier defs (no cycles), no `interpolated` is generated
  * inside another (a ref inside `interpolated` targets only a def without one), clamp lo ≤ hi, rangeChoice lo < hi,
@@ -58,6 +60,10 @@ function threshold(next: () => number): number {
   return next() % 2 === 0 ? (testFloat(next) - 0.5) * 16 : fuzzConstant(next);
 }
 
+/** +0 for a −0, any other value unchanged. */
+const plus0 = (v: number): number => (v === 0 ? 0 : v);
+const same = (v: number): number => v;
+
 function knots(next: () => number): SlideKnot[] {
   const n = 2 + (next() % 4);
   const out: SlideKnot[] = [];
@@ -91,6 +97,8 @@ export interface DensityFuzzOptions {
   readonly maxDepth?: number;
   /** Maximum number of defs (default 3). */
   readonly maxDefs?: number;
+  /** false: every −0 drawn (constants, clamp and rangeChoice bounds) is written +0, with the same draws (default true). */
+  readonly negativeZero?: boolean;
 }
 
 type Op = Expr['op'];
@@ -102,6 +110,7 @@ export function randomDensityExpr(next: () => number, opts: DensityFuzzOptions =
   const noises = opts.noises ?? FUZZ_NOISE_SPECS;
   const n2 = noises.filter((n) => n.dims === 2), n3 = noises.filter((n) => n.dims === 3);
   const maxDepth = opts.maxDepth ?? 6;
+  const z = opts.negativeZero === false ? plus0 : same;
   const defs: Record<string, Expr> = {};
   const defInfo: Array<{ name: string; height: number; interp: boolean }> = [];
   let taps = 0;
@@ -111,7 +120,7 @@ export function randomDensityExpr(next: () => number, opts: DensityFuzzOptions =
     for (;;) {
       const op = pick(LEAF_OPS);
       switch (op) {
-        case 'const': return { op, v: fuzzConstant(next) };
+        case 'const': return { op, v: z(fuzzConstant(next)) };
         case 'y': return { op };
         case 'col': return { op, field: pick(SAMPLE_FIELDS) };
         case 'noise2': if (n2.length > 0) return { op, id: pick(n2).id }; break;
@@ -135,14 +144,14 @@ export function randomDensityExpr(next: () => number, opts: DensityFuzzOptions =
         case 'add': case 'mul': case 'min': case 'max': return { op, a: gen(sub, inside), b: gen(sub, inside) };
         case 'neg': case 'abs': case 'square': return { op, x: gen(sub, inside) };
         case 'clamp': {
-          const a = threshold(next), b = threshold(next);
+          const a = z(threshold(next)), b = z(threshold(next));
           return { op, x: gen(sub, inside), lo: a <= b ? a : b, hi: a <= b ? b : a };
         }
         case 'slide': return { op, x: gen(sub, inside), knots: knots(next) };
         case 'interpolated': if (!inside) return { op, x: gen(sub, true) }; break;
         case 'rangeChoice': {
-          const a = threshold(next);
-          let b = threshold(next);
+          const a = z(threshold(next));
+          let b = z(threshold(next));
           if (b === a) b = a + 1;
           return { op, x: gen(sub, inside), lo: a < b ? a : b, hi: a < b ? b : a, inside: gen(sub, inside), outside: gen(sub, inside) };
         }

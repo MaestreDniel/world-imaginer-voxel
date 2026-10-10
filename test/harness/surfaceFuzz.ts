@@ -27,6 +27,7 @@ import { LEVEL_FIELDS, newColumnSample, SAMPLE_FIELDS, type ColumnSample } from 
 import { SURFACE_BIOMES, type SurfaceBiome } from '../../src/gen/biomes/registry';
 import { ruleLeaves, type Condition, type Rule, type SurfaceNoise, type SurfaceNoiseSource } from '../../src/gen/surface/rules';
 import { surfaceScanSettings, type SurfaceScanParams, type SurfaceScanSettings } from '../../src/gen/surface/scan';
+import { SCHEMA } from '../../src/core/params/schema';
 import { REGISTRY } from '../../src/world/blocks/index';
 import { testFloat } from './stats';
 
@@ -45,6 +46,15 @@ export const SURFACE_FUZZ_NOISE_SPECS: readonly SurfaceFuzzNoiseSpec[] = [
 
 /** The schema paths of the fuzz noises a `noiseThreshold` may name (the band offset noise is `bandlands`'). */
 export const SURFACE_FUZZ_NOISES: readonly string[] = SURFACE_FUZZ_NOISE_SPECS.map((n) => n.id).filter((id) => id !== 'surface.noises.bandOffset');
+
+/**
+ * The schema's surface noises (every `surface.noises.*` leaf, by path), for `randomSurfaceRules`' `noises` when a tree
+ * must pass tier 2 as a `surface.rules` value (SP3d spec §10: `surface.noises.fuzzB` is not a schema noise, so tier 2
+ * refuses it as `UNKNOWN_NOISE`); evaluated through the GenContext's `surfaceNoiseSource`.
+ */
+export const SCHEMA_SURFACE_NOISES: readonly string[] = SCHEMA.leaves
+  .filter((l) => l.leaf.kind === 'noise' && l.path.startsWith('surface.noises.'))
+  .map((l) => l.path);
 
 /** The fuzz noises as a SurfaceNoiseSource (each seeded by its schema path under `seed`). */
 export function surfaceFuzzNoiseSource(seed: Seed64 = [0x5eed, 0x3c]): SurfaceNoiseSource {

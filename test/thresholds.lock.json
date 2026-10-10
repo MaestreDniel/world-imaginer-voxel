@@ -1,5 +1,5 @@
 {
-  "sha256": "5eab635bf74d0f6dff94182b46d7db26d1bf11829a33ccf44a989a4514d9a8e3",
+  "sha256": "574a17049b2b93a5ff52310dd7edf8ebc49f1255a74c89ca30286db6857a1832",
   "canonical": {
     "startedSps": [
       "SP0",
@@ -117,6 +117,14 @@
       "DT2": {
         "compiledReference": {
           "activeFrom": "SP3b",
+          "max": 0
+        },
+        "editedDensityReference": {
+          "activeFrom": "SP3d",
+          "max": 0
+        },
+        "editedSurfaceReference": {
+          "activeFrom": "SP3d",
           "max": 0
         },
         "probeBulk": {
