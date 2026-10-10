@@ -10,15 +10,21 @@
  * `RULES_COLUMN_COST_MAX`). It collects at most 50 issues (then one TOO_MANY_ISSUES, "N more", at the leaf path) and
  * never throws. Validity is a pure function of the tree, so the result is memoised by the tree object when the tree is
  * deep-frozen (tier 1's clones and the contexts' frozen trees are); any other tree is validated on every call.
+ *
+ * `resolveRules` (§1.6) runs `validateRulesSource` first (a RuleValidationError with the source paths when it fails),
+ * then builds a fresh, deep-frozen tree in which every ref is its number: the target's value in `params` (a schema
+ * leaf's q15-normalised value, or a noise leaf's `clampSigma`), or `0 − v` with `neg` (+0 when v is 0, never −0);
+ * nothing else changes. `freezeRules` deep-freezes an explicit tree in place (identity kept) for the SurfaceContext.
  * Follows the gen determinism rules.
  */
 import { RULES_COLUMN_COST_MAX } from '../../core/constants';
-import { NOISE_FIELD_RANGES, SCHEMA } from '../../core/params/schema';
+import { getPath } from '../../core/params/kit';
+import { NOISE_FIELD_RANGES, SCHEMA, type Params } from '../../core/params/schema';
 import { ALLOWED_REF_TARGETS } from '../density/source';
 import { rulesColumnCost } from '../inspect/cost';
 import {
-  validateRules, type RuleErrorCode, type RuleRefCode, type RuleRefTarget, type RuleSourceMode, type SurfaceNoiseInfo,
-  type SurfaceNoiseLookup,
+  RuleValidationError, validateRules, type Rule, type RuleErrorCode, type RuleRefCode, type RuleRefTarget,
+  type RuleSourceMode, type SurfaceNoiseInfo, type SurfaceNoiseLookup,
 } from './rules';
 
 const SCHEMA_ = SCHEMA;
@@ -27,6 +33,8 @@ const NOISE_RANGES = NOISE_FIELD_RANGES;
 const VALIDATE = validateRules;
 const COLUMN_COST = rulesColumnCost;
 const COLUMN_COST_MAX = RULES_COLUMN_COST_MAX;
+const GET_PATH = getPath;
+const INVALID = RuleValidationError;
 
 /** A parameter ref in a numeric field: the target's value v, or 0 − v with `neg` (never −0). */
 export interface RuleParamRef {
@@ -123,4 +131,67 @@ export function validateRulesSource(source: unknown): readonly RulesSourceIssue[
 /** How many times `validateRulesSource` validated a tree (memo misses); for the tests of the memo (§1.8). */
 export function rulesSourceValidations(): number {
   return validations;
+}
+
+/** True for a plain object (prototype Object.prototype or null) or an array: the containers a rule tree is made of. */
+function isTreeContainer(v: unknown): v is object {
+  if (typeof v !== 'object' || v === null) return false;
+  if (Array.isArray(v)) return true;
+  const proto: unknown = Object.getPrototypeOf(v);
+  return proto === Object.prototype || proto === null;
+}
+
+/**
+ * Deep-freezes `tree` in place and returns it (§1.6, D10): an iterative walk over its plain objects and arrays that,
+ * unlike `deepFreeze`, does not stop at an already-frozen node (a partly frozen tree ends frozen at every depth). Shared
+ * and cyclic sub-objects are visited once; other values are left alone. Identity and values are unchanged.
+ */
+export function freezeRules<T>(tree: T): T {
+  if (!isTreeContainer(tree)) return tree;
+  const seen = new Set<object>();
+  const stack: object[] = [tree];
+  while (stack.length > 0) {
+    const x = stack.pop()!;
+    if (seen.has(x)) continue;
+    seen.add(x);
+    Object.freeze(x);
+    for (const k of Object.keys(x)) {
+      const c: unknown = (x as Record<string, unknown>)[k];
+      if (isTreeContainer(c)) stack.push(c);
+    }
+  }
+  return tree;
+}
+
+/** A ref's value in `params` (§1.3): the target's value v, or 0 − v with `neg`. Only called on a validated tree. */
+function refValue(ref: Record<string, unknown>, params: Params): number {
+  const path = ref['param'] as string;
+  const v = GET_PATH(params, path);
+  if (typeof v !== 'number' || !Number.isFinite(v)) throw new RangeError(`resolveRules: ${path} is not a finite number in params`);
+  return ref['neg'] === true ? 0 - v : v;
+}
+
+/**
+ * A fresh frozen copy of the validated node `v`: every object without a `kind` (after validation, exactly the refs in
+ * the nine numeric fields) becomes its number. Recursion is bounded by `validateRules`' depth limit (32 nodes).
+ */
+function resolveNode(v: unknown, params: Params): unknown {
+  if (Array.isArray(v)) return Object.freeze(v.map((x: unknown) => resolveNode(x, params)));
+  if (typeof v !== 'object' || v === null) return v;
+  const o = v as Record<string, unknown>;
+  if (!Object.hasOwn(o, 'kind')) return refValue(o, params);
+  const out: Record<string, unknown> = {};
+  for (const k of Object.keys(o)) out[k] = resolveNode(o[k], params);
+  return Object.freeze(out);
+}
+
+/**
+ * The rule tree of the source `source` for `params` (§1.6): tier 2 first (`validateRulesSource`, memoised for frozen
+ * sources; a RuleValidationError listing its issues with their source paths when it fails), then a fresh deep-frozen
+ * tree with every ref replaced by its number (`0 − v` for `neg`, never −0). The source is not modified.
+ */
+export function resolveRules(source: unknown, params: Params): Rule {
+  const issues = validateRulesSource(source);
+  if (issues.length > 0) throw new INVALID(issues);
+  return resolveNode(source, params) as Rule;
 }

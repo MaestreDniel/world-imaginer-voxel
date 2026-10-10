@@ -6,30 +6,35 @@
  * - `settings`: the scan settings (`surfaceScanSettings(seed, params.surface, noises)`: the depth noise, the depth
  *   hash seed, depthMul, lapse, lapseBase, SD_MAX);
  * - `bands`: the badlands band table of the world seed (§3.3, bands.ts), built once and shared by both evaluators;
- * - `compiled` and `reference`: the tree (by default `defaultSurfaceRules(params.surface)`) compiled for those
- *   settings, and its reference evaluator (validated once each; a RuleValidationError otherwise);
+ * - `rules`, `compiled` and `reference`: one frozen tree (by default `resolveRules(DEFAULT_SURFACE_RULES, params)`,
+ *   the default source resolved for the context's params, SP3d spec §1.6, §2.2; an explicit tree is deep-frozen in place
+ *   by `freezeRules`, identity kept), compiled for those settings, and its reference evaluator (validated once each; a
+ *   RuleValidationError otherwise);
  * - `probeColumn`: the one-column cache of the last column `surfaceProbe` rebuilt (probe.ts).
  * `surfaceContextOf(ctx)` memoises the default
  * SurfaceContext per GenContext (a WeakMap); `createSurfaceContext(ctx)` builds one apart (DT2 uses it, so a
  * shared-state bug cannot hide). Follows the gen determinism rules.
  */
 import type { NormalNoise } from '../../core/noise/normal';
+import { DEFAULT_SURFACE_RULES } from '../../core/params/defaultTrees';
 import { SCHEMA, type SurfaceParams } from '../../core/params/schema';
 import { noiseFor, type GenContext } from '../context';
 import { createDensityContext, type DensityContext } from '../density/context';
 import { bandlandsTable } from './bands';
 import { compileSurfaceRules, type CompiledSurfaceRules } from './compile';
-import { defaultSurfaceRules } from './defaults';
 import { createSurfaceReference, type SurfaceReference } from './reference';
 import type { Rule, SurfaceNoise, SurfaceNoiseSource } from './rules';
 import { newSurfaceScan, surfaceScanSettings, type SurfaceScan, type SurfaceScanSettings } from './scan';
+import { freezeRules, resolveRules } from './source';
 
 const SCHEMA_ = SCHEMA;
 const NOISE_FOR = noiseFor;
 const CREATE_DC = createDensityContext;
 const COMPILE = compileSurfaceRules;
 const REFERENCE = createSurfaceReference;
-const DEFAULT_RULES = defaultSurfaceRules;
+const DEFAULT_SOURCE = DEFAULT_SURFACE_RULES;
+const RESOLVE = resolveRules;
+const FREEZE = freezeRules;
 const SETTINGS = surfaceScanSettings;
 const NEW_SCAN = newSurfaceScan;
 const BAND_TABLE = bandlandsTable;
@@ -60,7 +65,7 @@ export interface SurfaceContext {
   readonly settings: SurfaceScanSettings;
   /** The badlands band table (192 state ids, §3.3) of the context's seed. */
   readonly bands: Uint16Array;
-  /** The validated rule tree. */
+  /** The validated rule tree: deep-frozen, the same object as `compiled.rules` and `reference.rules`. */
   readonly rules: Rule;
   readonly compiled: CompiledSurfaceRules;
   readonly reference: SurfaceReference;
@@ -86,16 +91,20 @@ export function surfaceNoiseSource(ctx: GenContext): SurfaceNoiseSource {
 }
 
 /**
- * A SurfaceContext for `ctx` over `rules` (default: §4's tree from `ctx.params.surface`), with its own
- * DensityContext. Throws a RuleValidationError when `rules` is not a valid tree for the schema's surface noises.
+ * A SurfaceContext for `ctx` over `rules`, with its own DensityContext. Without `rules` the tree is the default source
+ * resolved for `ctx.params` (`resolveRules`, a fresh frozen tree); an explicit `rules` is deep-frozen in place
+ * (`freezeRules`, identity kept: mutating it afterwards throws). Throws a RuleValidationError when the tree is not
+ * valid (for the default: tier 2 with its source paths; for an explicit tree: `validateRules` over the schema's
+ * surface noises).
  */
-export function createSurfaceContext(ctx: GenContext, rules: unknown = DEFAULT_RULES(ctx.params.surface)): SurfaceContext {
+export function createSurfaceContext(ctx: GenContext, rules?: unknown): SurfaceContext {
+  const tree = rules === undefined ? RESOLVE(DEFAULT_SOURCE, ctx.params) : FREEZE(rules);
   const params = ctx.params.surface;
   const noises = surfaceNoiseSource(ctx);
   const settings = SETTINGS(ctx.seed, params, noises);
   const bands = BAND_TABLE(ctx.seed);
-  const compiled = COMPILE(ctx.seed, rules, noises, settings, bands);
-  const reference = REFERENCE(ctx.seed, rules, noises, bands);
+  const compiled = COMPILE(ctx.seed, tree, noises, settings, bands);
+  const reference = REFERENCE(ctx.seed, tree, noises, bands);
   return {
     ctx, params, density: CREATE_DC(ctx), noises, settings, bands, rules: compiled.rules, compiled, reference,
     probeColumn: {

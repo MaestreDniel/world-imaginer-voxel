@@ -140,6 +140,13 @@ describe('master spec amendments (SP3c §12, Task 19)', () => {
     for (const f of files) expect(entry, `§1's gen/surface entry misses ${f}`).toMatch(new RegExp(`(^|[\\s/])${f.replace('.', '\\.')}(\\s|,|;|\\)|$)`));
   });
 
+  test('§1\'s gen/surface entry names source.ts and no defaults.ts (SP3d spec §12: the default rules are data)', () => {
+    const entry = layoutEntry(/^\s+surface\/rules\.ts\s/);
+    expect(entry).toMatch(/\ssource\.ts\s/);
+    expect(entry, "§1's gen/surface entry still names defaults.ts").not.toMatch(/defaults\.ts/);
+    expect(existsSync(`${SURFACE}defaults.ts`), 'src/gen/surface/defaults.ts still exists').toBe(false);
+  });
+
   test('§1\'s test/ entry names SP3c\'s test files, which exist', () => {
     const entry = layoutEntry(/^\s+test\/ unit\/ metrics\//);
     expect(entry, 'no `test/ unit/ metrics/ …` entry in §1').not.toBe('');

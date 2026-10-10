@@ -3,7 +3,6 @@ import { canonicalJSON } from '../../src/core/params/canonical';
 import { noiseFor, type GenContext } from '../../src/gen/context';
 import { columnWaterV0, terrainStage } from '../../src/gen/pipeline/terrainStage';
 import { createSurfaceContext, surfaceContextOf, surfaceNoiseSource, type SurfaceContext } from '../../src/gen/surface/context';
-import { defaultSurfaceRules } from '../../src/gen/surface/defaults';
 import { surfaceProbe, surfaceProbeColumn } from '../../src/gen/surface/probe';
 import { RuleValidationError } from '../../src/gen/surface/rules';
 import { surfaceScanSettings } from '../../src/gen/surface/scan';
@@ -11,6 +10,7 @@ import { AIR, BEDROCK, REGISTRY, STONE } from '../../src/world/blocks/index';
 import type { ColumnView } from '../../src/world/store/api';
 import { createStore } from '../../src/world/store/store';
 import { ctxFor } from '../harness/gen';
+import { legacyDefaultSurfaceRules } from '../harness/legacyTrees';
 import { testFloat, testRng } from '../harness/stats';
 import { registeredKey, withRegisteredBlocks } from '../harness/surfaceFuzz';
 
@@ -32,8 +32,8 @@ const WALL = [-1689, -2000] as const;
 const FIXTURES = [['land', LAND], ['sea', SEA], ['lake', LAKE], ['river', RIVER], ['coast', COAST], ['overhang', OVERHANG], ['wall', WALL]] as const;
 
 const CTX = ctxFor('42');
-/** The default tree, with a stand-in for palette keys this branch may not register (an exact copy once it does). */
-const RULES = withRegisteredBlocks(defaultSurfaceRules(CTX.params.surface));
+/** The legacy default tree (SP3d: the data default resolves to it, §2.2), as an exact copy of registered keys. */
+const RULES = withRegisteredBlocks(legacyDefaultSurfaceRules(CTX.params.surface));
 const SC = createSurfaceContext(CTX, RULES);
 const DEEPSLATE = REGISTRY.parseStateKey(registeredKey('deepslate'));
 
@@ -96,14 +96,14 @@ describe('SurfaceContext (spec §3.6)', () => {
     expect(surfaceContextOf(c)).toBe(sc);
     expect(surfaceContextOf(CTX)).not.toBe(sc);
     expect(sc.ctx).toBe(c);
-    expect(canonicalJSON(sc.rules)).toBe(canonicalJSON(defaultSurfaceRules(c.params.surface)));
+    expect(canonicalJSON(sc.rules)).toBe(canonicalJSON(legacyDefaultSurfaceRules(c.params.surface)));
     const apart = createSurfaceContext(c);
     expect(apart).not.toBe(sc);
     expect(apart.density).not.toBe(sc.density);
     expect(canonicalJSON(apart.rules)).toBe(canonicalJSON(sc.rules));
     // The default tree follows the context's params.
     const warm = surfaceContextOf(ctxFor('42', { surface: { snowline: -0.9, cliffMinY: 120 } }));
-    expect(canonicalJSON(warm.rules)).toBe(canonicalJSON(defaultSurfaceRules(warm.params)));
+    expect(canonicalJSON(warm.rules)).toBe(canonicalJSON(legacyDefaultSurfaceRules(warm.params)));
     expect(canonicalJSON(warm.rules)).not.toBe(canonicalJSON(sc.rules));
   });
 

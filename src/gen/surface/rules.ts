@@ -155,9 +155,19 @@ export interface RuleSourceMode {
   readonly target: (path: string) => RuleRefTarget | undefined;
 }
 
+/**
+ * An issue a RuleValidationError carries: `validateRules`' (code-built trees, through `requireValidRules`) or tier 2's
+ * (`resolveRules`, SP3d spec §1.6: the source mode's codes, `COLUMN_COST` and `TOO_MANY_ISSUES` at '').
+ */
+export interface RuleValidationIssue {
+  readonly path: string;
+  readonly code: RuleErrorCode | RuleRefCode | 'COLUMN_COST' | 'TOO_MANY_ISSUES';
+  readonly message: string;
+}
+
 export class RuleValidationError extends Error {
-  readonly issues: readonly RuleIssue[];
-  constructor(issues: readonly RuleIssue[]) {
+  readonly issues: readonly RuleValidationIssue[];
+  constructor(issues: readonly RuleValidationIssue[]) {
     super(`invalid surface rules: ${issues.map((i) => `${i.path}: ${i.code}`).join('; ')}`);
     this.issues = issues;
   }

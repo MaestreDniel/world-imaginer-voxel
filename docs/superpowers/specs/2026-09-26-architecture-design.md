@@ -116,11 +116,12 @@ world-imaginer-voxel/          (repository root)
       inspect/cost.ts           (SP3d) the structural, work and column costs of density and surface-rule trees, one function
                                 each, shared by tier-2 validation, the inspector and the worker
       biomes/registry.ts picker.ts zoom.ts
-      surface/rules.ts conditions.ts compile.ts reference.ts scan.ts bands.ts pass.ts context.ts defaults.ts probe.ts source.ts
+      surface/rules.ts conditions.ts compile.ts reference.ts scan.ts bands.ts pass.ts context.ts probe.ts source.ts
                                 (SP3c: the rule model and validateRules, the per-condition helpers shared by the compiler and the
                                 reference evaluator, the badlands band table, surfacePass (the T stage's and the bench's code path),
                                 the SurfaceContext memo and surfaceProbe; amended by SP3c. SP3d: source.ts, the `surface.rules`
-                                leaf's source model with parameter refs and its tier-2 validator validateRulesSource; amended by SP3d)
+                                leaf's source model with parameter refs, its tier-2 validator validateRulesSource and resolveRules;
+                                the default tree is data, so the builder module of SP3c is removed; amended by SP3d)
       features/placement.ts modifiers.ts decorate.ts priority.ts kinds/{tree,foliage,patch,simpleBlock,ore,disk,boulder,
                 dripstone,glowLichen,caveVines,mossPatch,abyssCrystal,deadRoots,fossil,spring,lavaLake,freezeTop}.ts
       structures/sets.ts jigsaw.ts startCache.ts stamp.ts templates/*.ts
@@ -736,7 +737,7 @@ Two verifier fixes:
 - **Scan.** Per position, top-down from 319 to −63 over the column's own solidity and water: the runs (the topmost is the sky-open one), `floorDepth` and `ceilDepth`, per run yTop, `waterAbove` and `waterTop`; `steep` and `T` as bilinear ColumnSample readouts; the surface biome; `lake`; surfaceDepth; `T_eff(y)` per voxel. Surface noises sample unscaled world block coordinates as z2 (remap 'none'); every hash derives from the world seed through `deriveSeed` and `hash2`/`hash3`, the `verticalGradient` dither salted with its bounds. The scan reads nothing outside its column (§3.16).
 - **Compiler and reference.** Rules are JSON data (a `kind` discriminator, every field written, no −0), validated with node paths (depth ≤ 32, ≤ 4096 nodes) and compiled to closures over a preallocated scan context; a tree-walking reference evaluator with the same semantics records the rule ids (the node's path from `root`). A general conservative fast path, computed at compile time, writes the constant y bands of solid voxels deeper than `maxSurfaceDepth` below their run's top (or, in a sky-gated tree, in runs without sky) without evaluating rules; fuzzed against full evaluation on random trees.
 - **Bands.** `bandlands` reads a 192-entry table of the seven terracottas drawn once per seed (runs of 1-4), shifted by `round(4·z/clampSigma)` ∈ [−4, 4] of `surface.noises.bandOffset`.
-- **Parameters** (the `surface` group, scope Terrain): `noises.depth`, `noises.patch`, `noises.bandOffset`, `depthMul`, `snowline`, `lapse`, `lapseBase`, `cliffSteep`, `cliffMinY`, `patchThreshold`; the tree's structure is code until SP3d makes `surface.rules` an editable leaf.
+- **Parameters** (the `surface` group, scope Terrain): `noises.depth`, `noises.patch`, `noises.bandOffset`, `depthMul`, `snowline`, `lapse`, `lapseBase`, `cliffSteep`, `cliffMinY`, `patchThreshold`; the tree is the `surface.rules` leaf, its four tunables read through refs, and its block states must collide (amended by SP3d).
 
 ### 3.12 Decorate stage (pull model; ores, vegetation, cave decoration, structure stamping)
 

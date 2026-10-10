@@ -1,21 +1,28 @@
 import { readFileSync } from 'node:fs';
 import { describe, expect, test } from 'vitest';
 import { canonicalJSON } from '../../src/core/params/canonical';
+import { DEFAULT_SURFACE_RULES } from '../../src/core/params/defaultTrees';
 import { DEFAULTS } from '../../src/core/params/defaults';
-import type { SurfaceParams } from '../../src/core/params/schema';
+import { SCHEMA, type Params, type ParamsPatch, type SurfaceParams } from '../../src/core/params/schema';
 import { surfaceFastPath } from '../../src/gen/surface/compile';
-import { surfaceNoiseSource } from '../../src/gen/surface/context';
-import { defaultSurfaceRules } from '../../src/gen/surface/defaults';
+import { createSurfaceContext, surfaceContextOf, surfaceNoiseSource } from '../../src/gen/surface/context';
+import { surfaceProbeColumn } from '../../src/gen/surface/probe';
 import { ruleLeaves, validateRules, type Rule } from '../../src/gen/surface/rules';
 import { surfaceScanSettings } from '../../src/gen/surface/scan';
+import { resolveRules } from '../../src/gen/surface/source';
 import { REGISTRY, STONE } from '../../src/world/blocks/index';
 import { ctxFor, paramsWith } from '../harness/gen';
+import { legacyDefaultSurfaceRules } from '../harness/legacyTrees';
+import { randomValue } from '../harness/params';
+import { testRng } from '../harness/stats';
 import { registeredKey, withRegisteredBlocks } from '../harness/surfaceFuzz';
 
 const FIXTURE = new URL('../fixtures/sp3c-default-rules.json', import.meta.url);
 const fixture = (): unknown => JSON.parse(readFileSync(FIXTURE, 'utf8')) as unknown;
 const CTX = ctxFor('42');
 const NOISES = surfaceNoiseSource(CTX);
+/** The default tree at `params` (SP3d: the `surface.rules` data default resolved, spec §2.2). */
+const defaultRulesAt = (params: Params): Rule => resolveRules(DEFAULT_SURFACE_RULES, params);
 
 /** The fixture with the parameters' values substituted (the only numbers §4 takes from `params.surface`). */
 function fixtureAt(p: SurfaceParams): unknown {
@@ -47,13 +54,20 @@ function nodeCount(v: unknown): number {
   return (typeof o['kind'] === 'string' ? 1 : 0) + Object.values(o).reduce<number>((n, x) => n + nodeCount(x), 0);
 }
 
-describe('the default rule tree (spec §4)', () => {
-  test('defaultSurfaceRules(params.surface) equals test/fixtures/sp3c-default-rules.json (canonical JSON)', () => {
-    expect(canonicalJSON(defaultSurfaceRules(DEFAULTS.surface))).toBe(canonicalJSON(fixture()));
+/** The defaults and every surface leaf's range ends (the variants of the SP3c pins). */
+const RANGE_ENDS: readonly Params[] = [
+  DEFAULTS,
+  paramsWith({ surface: { patchThreshold: 0, snowline: -1, cliffSteep: 0, cliffMinY: -64 } }),
+  paramsWith({ surface: { patchThreshold: 3, snowline: 1, cliffSteep: 8, cliffMinY: 319 } }),
+];
+
+describe('the default rule tree (spec §4; SP3d: the resolved data default)', () => {
+  test('resolveRules(DEFAULT_SURFACE_RULES, DEFAULTS) equals test/fixtures/sp3c-default-rules.json (canonical JSON)', () => {
+    expect(canonicalJSON(defaultRulesAt(DEFAULTS))).toBe(canonicalJSON(fixture()));
   });
 
   test('the leaves in evaluation order, with their ids (Decision 6: bedrock, the sky-open skin, deepslate; bandlands at [1][3][1][1])', () => {
-    const leaves = ruleLeaves(defaultSurfaceRules(DEFAULTS.surface)).map((l) => `${l.id} ${l.rule.kind === 'block' ? l.rule.state : l.rule.kind}`);
+    const leaves = ruleLeaves(defaultRulesAt(DEFAULTS)).map((l) => `${l.id} ${l.rule.kind === 'block' ? l.rule.state : l.rule.kind}`);
     const S = 'root.rules[1].then';
     const W = `${S}.rules[0].then.then`;
     const PAL = `${S}.rules[3].then`;
@@ -81,16 +95,16 @@ describe('the default rule tree (spec §4)', () => {
   });
 
   test('the parameters flow in: patchThreshold (P and Pn), snowline, cliffSteep, cliffMinY; the other leaves leave the tree alone', () => {
-    const p = paramsWith({ surface: { patchThreshold: 0.8, snowline: -0.35, cliffSteep: 2.5, cliffMinY: 120 } }).surface;
-    expect(canonicalJSON(defaultSurfaceRules(p))).toBe(canonicalJSON(fixtureAt(p)));
-    expect(canonicalJSON(defaultSurfaceRules(p))).not.toBe(canonicalJSON(fixture()));
-    const q = paramsWith({ surface: { depthMul: 0.4, lapse: 0.01, lapseBase: 100, noises: { depth: { wavelength: 32 }, patch: { octaves: 3 } } } }).surface;
-    expect(canonicalJSON(defaultSurfaceRules(q))).toBe(canonicalJSON(fixture()));
+    const p = paramsWith({ surface: { patchThreshold: 0.8, snowline: -0.35, cliffSteep: 2.5, cliffMinY: 120 } });
+    expect(canonicalJSON(defaultRulesAt(p))).toBe(canonicalJSON(fixtureAt(p.surface)));
+    expect(canonicalJSON(defaultRulesAt(p))).not.toBe(canonicalJSON(fixture()));
+    const q = paramsWith({ surface: { depthMul: 0.4, lapse: 0.01, lapseBase: 100, noises: { depth: { wavelength: 32 }, patch: { octaves: 3 } } } });
+    expect(canonicalJSON(defaultRulesAt(q))).toBe(canonicalJSON(fixture()));
   });
 
   test('patchThreshold 0 writes Pn\'s max as +0, never −0 (canonicalJSON and validateRules accept it)', () => {
-    const p = paramsWith({ surface: { patchThreshold: 0 } }).surface;
-    const tree = defaultSurfaceRules(p);
+    const p = paramsWith({ surface: { patchThreshold: 0 } });
+    const tree = defaultRulesAt(p);
     const maxima: number[] = [];
     const walk = (v: unknown): void => {
       if (Array.isArray(v)) { v.forEach(walk); return; }
@@ -107,13 +121,8 @@ describe('the default rule tree (spec §4)', () => {
   });
 
   test('it validates against the schema noises (bandOffset included) and the registry (palette included), at the defaults and at the leaves\' range ends', () => {
-    const variants: SurfaceParams[] = [
-      DEFAULTS.surface,
-      paramsWith({ surface: { patchThreshold: 0, snowline: -1, cliffSteep: 0, cliffMinY: -64 } }).surface,
-      paramsWith({ surface: { patchThreshold: 3, snowline: 1, cliffSteep: 8, cliffMinY: 319 } }).surface,
-    ];
-    for (const p of variants) {
-      const tree = defaultSurfaceRules(p);
+    for (const p of RANGE_ENDS) {
+      const tree = defaultRulesAt(p);
       expect(validateRules(tree, NOISES)).toEqual([]);
       // Every block key is registered: the stand-in copy is exact.
       expect(canonicalJSON(withRegisteredBlocks(tree))).toBe(canonicalJSON(tree));
@@ -121,7 +130,7 @@ describe('the default rule tree (spec §4)', () => {
     // Far inside §3.1's limits (depth 32, 4096 nodes).
     expect(nodeCount(fixture())).toBeLessThan(200);
     // Without the band leaf (§9's cut) the default tree's bandlands leaf is refused, and only it.
-    expect(validateRules(defaultSurfaceRules(DEFAULTS.surface), (n) => (n === 'surface.noises.bandOffset' ? undefined : NOISES(n))).map((i) => `${i.path} ${i.code}`))
+    expect(validateRules(defaultRulesAt(DEFAULTS), (n) => (n === 'surface.noises.bandOffset' ? undefined : NOISES(n))).map((i) => `${i.path} ${i.code}`))
       .toEqual(['root.rules[1].then.rules[3].then.rules[1].then.rules[1] NO_BAND_NOISE']);
   });
 
@@ -131,7 +140,7 @@ describe('the default rule tree (spec §4)', () => {
       const ctx = ctxFor('42', patch);
       const set = surfaceScanSettings(ctx.seed, ctx.params.surface, surfaceNoiseSource(ctx));
       expect(set.sdMax).toBe(sdMax);
-      const fp = surfaceFastPath(withRegisteredBlocks(defaultSurfaceRules(ctx.params.surface)) as Rule, set.sdMax)!;
+      const fp = surfaceFastPath(withRegisteredBlocks(defaultRulesAt(ctx.params)) as Rule, set.sdMax)!;
       expect(fp.maxSurfaceDepth).toBe(sdMax + 4);
       expect(fp.skyGated).toBe(true);
       expect(fp.bands).toEqual([
@@ -140,6 +149,59 @@ describe('the default rule tree (spec §4)', () => {
         { yMin: 1, yMax: 7, dither: true, state: -1 },
         { yMin: 8, yMax: 319, dither: false, state: STONE },
       ]);
+    }
+  });
+});
+
+describe('the data default resolves to the legacy builder\'s tree (SP3d spec §2.2)', () => {
+  const legacyAt = (p: Params): unknown => legacyDefaultSurfaceRules(p.surface);
+
+  test('at the defaults, at patchThreshold 0 (+0 in Pn.max) and at every leaf\'s range ends', () => {
+    const variants: Params[] = [
+      ...RANGE_ENDS,
+      paramsWith({ surface: { patchThreshold: 0 } }),
+      paramsWith({ surface: { patchThreshold: 3, snowline: -1, cliffSteep: 8, cliffMinY: -64 } }),
+      paramsWith({ surface: { patchThreshold: 0, snowline: 1, cliffSteep: 0, cliffMinY: 319 } }),
+    ];
+    for (const p of variants) expect(canonicalJSON(defaultRulesAt(p))).toBe(canonicalJSON(legacyAt(p)));
+  });
+
+  test('at 64 random schema-valid surface groups (noise leaves included, q15 through checkParams)', () => {
+    const next = testRng(1010);
+    const leaves = SCHEMA.leaves.filter((l) => l.path.startsWith('surface.'));
+    for (let t = 0; t < 64; t++) {
+      const noises: Record<string, unknown> = {};
+      const surface: Record<string, unknown> = { noises };
+      for (const { path, leaf } of leaves) {
+        const key = path.slice('surface.'.length);
+        if (key.startsWith('noises.')) noises[key.slice('noises.'.length)] = randomValue(leaf, next);
+        else surface[key] = randomValue(leaf, next);
+      }
+      const p = paramsWith({ surface } as ParamsPatch);
+      expect(canonicalJSON(defaultRulesAt(p)), JSON.stringify(surface)).toBe(canonicalJSON(legacyAt(p)));
+    }
+  });
+
+  test('the compiled states equal the legacy tree\'s at every voxel of the columns (0, 0), (5, −7), (−68, 100)', () => {
+    for (const patch of [{}, { surface: { patchThreshold: 3, snowline: 1, cliffSteep: 8, cliffMinY: 319 } }] as const) {
+      const c = ctxFor('42', patch);
+      const data = surfaceContextOf(c);
+      const legacy = createSurfaceContext(c, legacyAt(c.params));
+      const a = new Uint16Array(98304), b = new Uint16Array(98304);
+      let written = 0;
+      for (const [cx, cz] of [[0, 0], [5, -7], [-68, 100]] as const) {
+        a.fill(0xffff);
+        b.fill(0xffff);
+        data.compiled.fillColumn(surfaceProbeColumn(data, cx, cz).scan, a, true);
+        legacy.compiled.fillColumn(surfaceProbeColumn(legacy, cx, cz).scan, b, true);
+        let diff = 0;
+        for (let i = 0; i < a.length; i++) {
+          if (a[i] !== b[i]) diff++;
+          if (a[i] !== 0xffff) written++;
+        }
+        expect(diff, `column (${cx}, ${cz})`).toBe(0);
+      }
+      expect(written).toBeGreaterThan(0);
     }
   });
 });
