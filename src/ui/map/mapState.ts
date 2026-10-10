@@ -31,6 +31,8 @@ export interface MapState {
 export const MAP_MIN_BPP = 0.25;
 export const MAP_MAX_BPP = 256;
 const WINDOW = 524288;
+/** A hash longer than this (1 MiB of text) is refused before it is decoded (SP3d spec §1.12). */
+export const MAP_HASH_READ_MAX = 1048576;
 export const DEFAULT_MAP_STATE: MapState = { v: 1, seed: '42', profile: 'default', patch: {}, view: { x: 0, z: 0, bpp: 64, layer: 'biome' } };
 
 const q = (v: number) => q15(v) + 0;
@@ -67,6 +69,7 @@ export function decodeMapState(hash: string): { state: MapState; error: string |
   const text = hash.replace(/^#/, '');
   if (text === '') return { state: DEFAULT_MAP_STATE, error: null };
   const fail = (why: string) => ({ state: DEFAULT_MAP_STATE, error: `map URL ignored: ${why}` });
+  if (text.length > MAP_HASH_READ_MAX) return fail(`too long (${text.length} characters, limit ${MAP_HASH_READ_MAX})`);
   const bytes = base64urlDecode(text);
   if (bytes === null) return fail('not base64url');
   let json: unknown;

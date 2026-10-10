@@ -2,7 +2,7 @@ import { describe, expect, test } from 'vitest';
 import { utf8Bytes, type Seed64 } from '../../src/core/hash';
 import { WorldSession, type SessionChange } from '../../src/engine/session';
 import { base64urlEncode } from '../../src/ui/common/base64url';
-import { applyMapHash, decodeMapState, DEFAULT_MAP_STATE, encodeMapState, type MapState, type MapView } from '../../src/ui/map/mapState';
+import { applyMapHash, decodeMapState, DEFAULT_MAP_STATE, encodeMapState, MAP_HASH_READ_MAX, type MapState, type MapView } from '../../src/ui/map/mapState';
 import { createTileCache, tileKey } from '../../src/ui/map/tileCache';
 import { planTiles, screenToWorld, visibleTiles, worldToScreen } from '../../src/ui/map/viewMath';
 
@@ -35,6 +35,20 @@ describe('map URL state', () => {
     const r = decodeMapState(hash);
     expect(r.state).toEqual(DEFAULT_MAP_STATE);
     expect(r.error).toMatch(/^map URL ignored: /);
+  });
+});
+
+describe('the 1 MiB read cap (SP3d spec §1.12)', () => {
+  test('a hash longer than 1 MiB is refused before it is decoded; one at the cap is decoded', () => {
+    expect(MAP_HASH_READ_MAX).toBe(1048576);
+    const over = decodeMapState(`#${'A'.repeat(MAP_HASH_READ_MAX + 1)}`);
+    expect(over).toEqual({ state: DEFAULT_MAP_STATE, error: 'map URL ignored: too long (1048577 characters, limit 1048576)' });
+    // At the cap the text is decoded (and is then no JSON): only the length is refused early.
+    expect(decodeMapState(`#${'A'.repeat(MAP_HASH_READ_MAX)}`).error).toBe('map URL ignored: not JSON');
+  });
+  test('the cap counts the text after #, so a long valid state still loads', () => {
+    const s: MapState = { ...DEFAULT_MAP_STATE, seed: 'x'.repeat(5000) };
+    expect(decodeMapState(`#${encodeMapState(s)}`)).toEqual({ state: s, error: null });
   });
 });
 

@@ -4,7 +4,7 @@
  * change. Every editor, the biome-size slider, the URL and preset loads go through it; gestures, a
  * global undo/redo history and change notifications sit on top (§1.3).
  */
-import { hex64, type Seed64 } from '../core/hash';
+import { fnv1a64, hex64, type Seed64 } from '../core/hash';
 import { canonicalJSON } from '../core/params/canonical';
 import { applyPatch, checkLeaf, deepFreeze, diffParams, getPath, isObj, patchAt, type Issue, type Node } from '../core/params/kit';
 import { isProfileId, isProfileReady, resolveProfile, type ProfileId } from '../core/params/profiles';
@@ -20,6 +20,20 @@ export interface SessionState {
   readonly patch: ParamsPatch;
   readonly params: Params;
   readonly epoch: number;
+}
+
+/**
+ * Tier-2 validation of a whole params document (SP3d spec §1.8): the UI injects `validateParamTrees`
+ * (the engine may not value-import gen). An empty list accepts the params.
+ */
+export type ParamsValidator = (params: Params) => readonly Issue[];
+
+export interface SessionInit {
+  readonly seedText?: string;
+  readonly profile?: ProfileId;
+  readonly patch?: unknown;
+  /** Run on every params document the session produces: constructor, setProfile, commits, load, restore. */
+  readonly validateParams?: ParamsValidator;
 }
 
 export type SessionResult = { readonly ok: true; readonly state: SessionState } | { readonly ok: false; readonly issues: readonly Issue[] };
@@ -47,6 +61,7 @@ export const HISTORY_STEPS = 100;
 
 interface HistoryEntry {
   readonly snap: SessionSnapshot;
+  /** `draftKeyOf(snap)`: a hash, so 101 entries never hold 101 copies of two capped trees' text (SP3d §1.12). */
   readonly key: string;
 }
 
@@ -99,16 +114,25 @@ function undefinedIssues(node: Node, path: string): Issue[] {
 }
 
 const epochKeyOf = (seed: Seed64, params: Params): string => `${seed[0]}|${seed[1]}|${hex64(paramsHash(params))}`;
-const draftKeyOf = (s: SessionSnapshot): string => canonicalJSON({ seedText: s.seedText, profile: s.profile, patch: s.patch });
+/**
+ * The draft's identity: fnv1a64 of the snapshot's canonical text, as 16 hex digits (SP3d spec §1.12). The
+ * session compares drafts and history steps by it; two different drafts colliding is a 2^-64 event.
+ */
+export const draftKeyOf = (s: SessionSnapshot): string => hex64(fnv1a64(canonicalJSON({ seedText: s.seedText, profile: s.profile, patch: s.patch })));
+
+const NO_ISSUES: readonly Issue[] = Object.freeze([]);
+const acceptAll: ParamsValidator = () => NO_ISSUES;
+const issueText = (i: Issue): string => `${i.path === '' ? '<root>' : i.path} ${i.code}`;
 
 export class WorldSession {
   /** Non-null when the initial profile or patch was refused and the session opened `default` with `{}` (SP2a minor 8). */
   readonly initNotice: string | null;
   private readonly random: () => Seed64;
+  private readonly validate: ParamsValidator;
   private s: SessionState;
   /** Seed and params hash: the epoch bumps when it changes. */
   private epochKey: string;
-  /** canonicalJSON of the snapshot: the draft changed when it changes (the patch is minimal, so it never throws). */
+  /** draftKeyOf the snapshot: the draft changed when it changes (the patch is minimal, so it never throws). */
   private draftKey: string;
   /** history[cursor] equals the draft except inside a gesture that changed it. */
   private readonly history: HistoryEntry[];
@@ -116,8 +140,9 @@ export class WorldSession {
   private gesture = false;
   private readonly listeners = new Set<SessionListener>();
 
-  constructor(random: () => Seed64, init: { readonly seedText?: string; readonly profile?: ProfileId; readonly patch?: unknown } = {}) {
+  constructor(random: () => Seed64, init: SessionInit = {}) {
     this.random = random;
+    this.validate = init.validateParams ?? acceptAll;
     const seed = resolveSeedText(init.seedText ?? '', random);
     const wanted = init.profile ?? 'default';
     let profile: ProfileId = 'default';
@@ -127,12 +152,12 @@ export class WorldSession {
     if (bad !== null) notice = `${bad.message}; opened the default profile with no changes`;
     else {
       const r = applyPatch(SCHEMA, resolveProfile(wanted), init.patch === undefined ? {} : init.patch);
-      if (r.ok) {
+      const issues = r.ok ? this.validate(r.value) : r.issues;
+      if (r.ok && issues.length === 0) {
         profile = wanted;
         params = r.value;
       } else {
-        const i = r.issues[0]!;
-        notice = `invalid patch (${i.path === '' ? '<root>' : i.path} ${i.code}); opened the default profile with no changes`;
+        notice = `invalid patch (${issueText(issues[0]!)}); opened the default profile with no changes`;
       }
     }
     this.initNotice = notice;
@@ -214,12 +239,17 @@ export class WorldSession {
     return this.setSeedText('');
   }
 
-  /** Switches to a ready profile and clears the patch. The page asks for confirmation, never the session. */
+  /**
+   * Switches to a ready profile and clears the patch; a profile whose params the validator refuses is
+   * refused and nothing changes. The page asks for confirmation, never the session.
+   */
   setProfile(id: ProfileId): SessionResult {
     this.endGesture();
     const bad = profileIssue(id);
     if (bad !== null) return { ok: false, issues: [bad] };
     const base = resolveProfile(id);
+    const issues = this.validate(base);
+    if (issues.length > 0) return { ok: false, issues };
     return { ok: true, state: this.commit('profile', this.s.seedText, this.s.seed, id, base, base) };
   }
 
@@ -241,9 +271,9 @@ export class WorldSession {
 
   /**
    * Atomic load: resolves `seedText` when given (otherwise keeps the seed), validates the patch over a
-   * ready profile, then replaces seed, profile and patch in one commit (one notification, at most one
-   * epoch bump). Records one history step unless `record` is false; then the change replaces the step at
-   * the cursor instead. On failure nothing changes.
+   * ready profile and the validator, then replaces seed, profile and patch in one commit (one notification,
+   * at most one epoch bump). Records one history step unless `record` is false; then the change replaces the
+   * step at the cursor instead. On failure nothing changes.
    */
   load(s: { readonly seedText?: string; readonly profile: ProfileId; readonly patch: unknown }, opts: { readonly record?: boolean } = {}): SessionResult {
     this.endGesture();
@@ -252,6 +282,8 @@ export class WorldSession {
     const base = resolveProfile(s.profile);
     const r = applyPatch(SCHEMA, base, s.patch);
     if (!r.ok) return { ok: false, issues: r.issues };
+    const issues = this.validate(r.value);
+    if (issues.length > 0) return { ok: false, issues };
     const seed = s.seedText === undefined ? { text: this.s.seedText, seed: this.s.seed } : resolveSeedText(s.seedText, this.random);
     return { ok: true, state: this.commit('load', seed.text, seed.seed, s.profile, base, r.value, opts.record ?? true) };
   }
@@ -276,6 +308,8 @@ export class WorldSession {
     const base = resolveProfile(this.s.profile);
     const r = applyPatch(SCHEMA, base, patch);
     if (!r.ok) return { ok: false, issues: r.issues };
+    const issues = this.validate(r.value);
+    if (issues.length > 0) return { ok: false, issues };
     return { ok: true, state: this.commit(kind, this.s.seedText, this.s.seed, this.s.profile, base, r.value) };
   }
 
@@ -315,12 +349,17 @@ export class WorldSession {
     this.cursor = this.history.length - 1;
   }
 
-  /** Applies the snapshot at the cursor as load(snapshot, {record: false}) does; always notifies (the cursor moved). */
+  /**
+   * Applies the snapshot at the cursor as load(snapshot, {record: false}) does; always notifies (the cursor
+   * moved). Every snapshot passed applyPatch and the validator when it was recorded, and validity is a pure
+   * function of the params, so a refusal here is a bug: it throws.
+   */
   private restore(kind: 'undo' | 'redo'): void {
     const { snap } = this.history[this.cursor]!;
     const base = resolveProfile(snap.profile);
     const r = applyPatch(SCHEMA, base, snap.patch);
-    if (!r.ok) throw new Error(`history snapshot no longer loads: ${r.issues[0]!.path} ${r.issues[0]!.code}`);
+    const issues = r.ok ? this.validate(r.value) : r.issues;
+    if (!r.ok || issues.length > 0) throw new Error(`history snapshot no longer loads: ${issues[0]!.path} ${issues[0]!.code}`);
     const seed = resolveSeedText(snap.seedText, this.random);
     this.write(seed.text, seed.seed, snap.profile, base, r.value);
     this.emit(kind);

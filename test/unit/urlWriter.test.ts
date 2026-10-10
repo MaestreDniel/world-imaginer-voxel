@@ -1,5 +1,5 @@
-import { afterEach, beforeEach, expect, test, vi } from 'vitest';
-import { createUrlWriter } from '../../src/ui/common/urlWriter';
+import { afterEach, beforeEach, describe, expect, test, vi } from 'vitest';
+import { createUrlWriter, URL_HASH_MAX, URL_OVERSIZE_NOTICE, urlHashLength } from '../../src/ui/common/urlWriter';
 
 beforeEach(() => { vi.useFakeTimers(); });
 afterEach(() => { vi.useRealTimers(); });
@@ -31,4 +31,58 @@ test('flush writes the pending value immediately; a newer set wins over a retry'
   w.flush();
   w.flush();
   expect(writes).toEqual(['#x']);
+});
+
+describe('the 64 KiB hash cap (SP3d spec §1.12)', () => {
+  const url = (hashChars: number) => `?map#${'A'.repeat(hashChars)}`;
+
+  test('URL_HASH_MAX is 64 KiB of hash text; urlHashLength counts after the first #', () => {
+    expect(URL_HASH_MAX).toBe(65536);
+    expect([urlHashLength('?map'), urlHashLength('?map#'), urlHashLength('?map#abc'), urlHashLength('?lab=noise#a#b')]).toEqual([0, 0, 3, 3]);
+    expect(URL_OVERSIZE_NOTICE).toBe('The edited trees are too large for the URL; export a preset to share them');
+  });
+
+  test('a hash above the cap is not written; the address bar keeps the last URL that fit', () => {
+    const writes: string[] = [];
+    const states: boolean[] = [];
+    const w = createUrlWriter((u) => writes.push(u), 200, 1000, (o) => states.push(o));
+    w.set(url(URL_HASH_MAX));
+    vi.advanceTimersByTime(200);
+    w.set(url(URL_HASH_MAX + 1));
+    vi.advanceTimersByTime(200);
+    w.flush();
+    vi.advanceTimersByTime(5000);
+    expect(writes.map((u) => u.length)).toEqual([URL_HASH_MAX + 5]);
+    expect(states).toEqual([true]);
+  });
+
+  test('the callback reports transitions only: true while oversize, false once a URL fits again', () => {
+    const writes: string[] = [];
+    const states: boolean[] = [];
+    const w = createUrlWriter((u) => writes.push(u), 200, 1000, (o) => states.push(o));
+    for (const n of [10, 70000, 80000, 90000, 20, 30, 100000, 40]) {
+      w.set(url(n));
+      vi.advanceTimersByTime(200);
+    }
+    expect(states).toEqual([true, false, true, false]);
+    expect(writes.map(urlHashLength)).toEqual([10, 20, 30, 40]);
+  });
+
+  test('an oversize value superseded within the debounce is never measured', () => {
+    const states: boolean[] = [];
+    const w = createUrlWriter(() => {}, 200, 1000, (o) => states.push(o));
+    w.set(url(70000));
+    vi.advanceTimersByTime(100);
+    w.set(url(5));
+    vi.advanceTimersByTime(200);
+    expect(states).toEqual([]);
+  });
+
+  test('without a callback an oversize URL is still dropped (the lab writer)', () => {
+    const writes: string[] = [];
+    const w = createUrlWriter((u) => writes.push(u));
+    w.set(url(70000));
+    w.flush();
+    expect(writes).toEqual([]);
+  });
 });
