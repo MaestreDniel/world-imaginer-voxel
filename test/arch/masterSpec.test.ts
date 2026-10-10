@@ -14,13 +14,17 @@
  * §1's `ui/inspector/*` entry names every module of the Density tab, and the reserved top-level `sliceView.ts`,
  * `probe.ts` and `jsonEditor.ts` are dropped (it lands with the last of them, `sliceView.ts`); §7's inspector slice line
  * names the three slice bench rows that gate it, which `BENCH_ROWS` measures, and no longer promises the 256² refinement
- * (it lands with the rows).
+ * (it lands with the rows). The exit commit: §10's SP10 entry no longer lists the inspector mutes and pins, the density and
+ * surface-rule JSON editors or the 128² slice target, which SP3d delivered; since the pins were built (`PIN_MAX` exists),
+ * the SP3d entry's cut line says it was not taken, the cut-line receivers say nothing moved and §5.5 no longer sends them
+ * to SP10.
  */
 import { existsSync, readdirSync, readFileSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
 import { describe, expect, test } from 'vitest';
 import { SUB_PROJECTS, type SubProjectId } from '../../src/core/ids';
 import { DEFAULTS } from '../../src/core/params/defaults';
+import { PIN_MAX } from '../../src/ui/inspector/sliceModel';
 import { REGISTRY } from '../../src/world/blocks';
 import { BENCH_ROWS } from '../bench/gates';
 import { SP_DEPS } from '../harness/sp';
@@ -248,5 +252,37 @@ describe('master spec amendments (SP3d §12)', () => {
     for (const f of ['sliceView.ts', 'probe.ts', 'jsonEditor.ts']) {
       expect(shell, `§1's ui/shell.ts entry still reserves ${f}`).not.toMatch(new RegExp(`(^|\\s)${f.replace('.', '\\.')}(\\s|$)`));
     }
+  });
+});
+
+/** A §10 entry: from its header to the next sub-project's header. */
+function spEntry(id: SubProjectId, next: SubProjectId): string {
+  const from = text.indexOf(`**${id} — `);
+  expect(from, `no ${id} header in §10`).toBeGreaterThanOrEqual(0);
+  const to = text.indexOf(`\n**${next} — `, from);
+  expect(to, `no ${next} header after ${id} in §10`).toBeGreaterThan(from);
+  return text.slice(from, to);
+}
+
+describe('master spec amendments (SP3d §12, exit)', () => {
+  test('§10\'s SP10 entry hands over only what SP3d did not deliver', () => {
+    const entry = spEntry('SP10', 'SP11');
+    expect(entry).not.toMatch(/inspector mutes and pins;/);
+    expect(entry).toContain('inspector mutes and pins delivered by SP3d');
+    expect(entry).toContain('JSON editors with validation of placed features and structure sets/pools (the density and surface-rule editors are delivered by SP3d)');
+    expect(entry).not.toMatch(/inspector slice ≤ 300 ms at 128²/);
+    expect(entry).toContain('inspector slice 256² refinement (128² ≤ 300 ms delivered by SP3d)');
+  });
+
+  test('the pins were built, so SP3d\'s cut line was not taken and nothing moved to SP10', () => {
+    expect(PIN_MAX).toBe(3);
+    const cut = spEntry('SP3d', 'SP3e').split('\n').find((l) => l.startsWith('- **Cut line:**'));
+    expect(cut, 'SP3d has no cut line').toBeDefined();
+    expect(cut).toMatch(/^- \*\*Cut line:\*\* inspector pins \(→ SP10\)\. It was not taken: /);
+    expect(text).toContain('SP3d inspector pins → SP10 (delivered in SP3d, so nothing moved)');
+    const pins = text.split('\n').find((l) => l.startsWith('  - A mute toggle per tap (SP3d)'));
+    expect(pins, 'no `- A mute toggle per tap (SP3d) …` line in §5.5').toBeDefined();
+    expect(pins).toContain(`up to ${PIN_MAX} pinned slices side by side`);
+    expect(pins).not.toMatch(/else SP10/);
   });
 });
