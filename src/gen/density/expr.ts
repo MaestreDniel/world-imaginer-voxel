@@ -178,7 +178,8 @@ interface FieldRange { readonly lo: number; readonly hi: number; readonly ref: b
  * DFS pre-order (root, then defs in key order), then unknown refs and ref cycles, then interpolated nesting (only when
  * the refs resolve). [] means the value is a `DensityExpr` the compiler and the reference accept. Beyond the spec's
  * list it also rejects unknown keys, a noise used with the wrong dimension and duplicate tap names (rulings, Task 2).
- * The root's refs have their own bucket, so a def named '' is never taken for the root (SP3d spec §1.7 step 3).
+ * The root's refs have their own bucket, so a def named '' is never taken for the root, and the def graph and the
+ * nesting walk are iterative, so no chain of defs can overflow the stack (SP3d spec §1.7 step 3).
  *
  * With `source` (SP3d spec §1.7 tier 2 step 1, called by gen/density/source.ts) it validates a source tree: also the
  * ops `param` (`path` names one of `source.targets`, else `UNKNOWN_PARAM` at `.path`) and `recip` (of a `const` or a
@@ -188,7 +189,8 @@ interface FieldRange { readonly lo: number; readonly hi: number; readonly ref: b
  * `CLAMP_ORDER`, `RANGE_ORDER` and `KNOTS_ORDER` over the static ranges (a negated ref spans [0 − hi, 0 − lo]); every
  * slide segment's `v1 − vk` and `(v1 − vk) / (y1 − yk)` finite at the range ends that maximise them (`SLIDE_SLOPE`, at
  * the segment's upper knot); tap names matching the key pattern (`BAD_NAME`). Mutes are ignored by the walks (the
- * muted subtree is validated like any other).
+ * muted subtree is validated like any other). The source mode stops after the def graph: the interpolated nesting is
+ * tier 2's step 5 (`nestedInterpolatedIssues`), which runs only once the whole-tree bounds hold.
  */
 export function validateExpr(value: unknown, noises: DensityNoiseLookup, source?: ExprSourceMode): ExprIssue[] {
   const issues: ExprIssue[] = [];
@@ -389,52 +391,112 @@ export function validateExpr(value: unknown, noises: DensityNoiseLookup, source?
   else for (const name of defNames) walk(defs[name], `defs.${name}`, name);
   const structuralOk = issues.length === 0;
 
-  // Ref cycles: DFS over the defs graph; each back edge is one issue at the ref that closes it.
+  // Ref cycles: an iterative DFS over the defs graph (explicit stack: no recursion, however long a chain of defs; SP3d
+  // spec §1.7 step 3); each back edge is one issue at the ref that closes it.
   let cycles = false;
   const state = new Map<string, 'open' | 'done'>();
-  const stack: string[] = [];
-  const visit = (name: string): void => {
+  const open: string[] = [];
+  const next: number[] = [];
+  const openAt = new Map<string, number>();
+  const enter = (name: string): void => {
     state.set(name, 'open');
-    stack.push(name);
-    for (const r of refs.get(name) ?? []) {
+    openAt.set(name, open.length);
+    open.push(name);
+    next.push(0);
+  };
+  for (const start of defNames) {
+    if (state.has(start)) continue;
+    enter(start);
+    while (open.length > 0) {
+      const top = open.length - 1;
+      const name = open[top]!;
+      const list = refs.get(name) ?? [];
+      const i = next[top]!;
+      if (i >= list.length) {
+        open.pop();
+        next.pop();
+        openAt.delete(name);
+        state.set(name, 'done');
+        continue;
+      }
+      next[top] = i + 1;
+      const r = list[i]!;
       const s = state.get(r.name);
       if (s === 'open') {
         cycles = true;
-        const loop = [...stack.slice(stack.indexOf(r.name)), r.name].map((n) => `defs.${n}`).join(' → ');
-        push(r.path, 'REF_CYCLE', `ref cycle ${loop}`);
-      } else if (s === undefined) visit(r.name);
+        push(r.path, 'REF_CYCLE', `ref cycle ${loopText(open.slice(openAt.get(r.name)!), r.name)}`);
+      } else if (s === undefined) enter(r.name);
     }
-    stack.pop();
-    state.set(name, 'done');
-  };
-  for (const name of defNames) if (!state.has(name)) visit(name);
+  }
 
-  // Interpolated nesting through refs, from the root, then from the defs the root does not reach (each def once per flag).
-  if (structuralOk && !cycles) {
-    const reported = new Set<string>();
-    const seen = new Set<string>();
-    const nest = (node: Expr, path: string, outer: string | null): void => {
-      if (node.op === 'interpolated') {
+  // Interpolated nesting through refs (code-built trees; a source tree gets it at tier 2 step 5, gen/density/source.ts).
+  if (source === undefined && structuralOk && !cycles) nestingWalk(value['root'], defs, defNames, push);
+  return issues;
+}
+
+/** A cycle's text: `defs.a → defs.b → defs.a`; past 16 defs only the first and last 8 are named (a long loop stays short). */
+function loopText(loop: readonly string[], closing: string): string {
+  const names = loop.length <= 16 ? loop : [...loop.slice(0, 8), `… ${loop.length - 16} more`, ...loop.slice(-8)];
+  return [...names.map((n) => (n.startsWith('… ') ? n : `defs.${n}`)), `defs.${closing}`].join(' → ');
+}
+
+/**
+ * The interpolated-nesting walk (SP3b spec §1.1): an `interpolated` inside another, also through refs, is one
+ * `NESTED_INTERPOLATED` at the inner one's path; from the root, then from each def the walk has not entered with the
+ * same flag (each def once per flag: inside an interpolated or not). Iterative, in the recursive walk's pre-order;
+ * own-property reads only, so any value is safe (a non-object is skipped, an unknown op has no children, an unknown ref
+ * is a leaf).
+ */
+function nestingWalk(
+  root: unknown, defs: Readonly<Record<string, unknown>> | null, defNames: readonly string[],
+  push: (path: string, code: ExprIssue['code'], message: string) => void,
+): void {
+  const reported = new Set<string>();
+  const seen = new Set<string>();
+  const stack: Array<{ readonly node: unknown; readonly path: string; readonly outer: string | null }> = [];
+  const run = (start: unknown, startPath: string): void => {
+    stack.push({ node: start, path: startPath, outer: null });
+    while (stack.length > 0) {
+      const { node, path, outer } = stack.pop()!;
+      if (!isRecord(node)) continue;
+      const op = node['op'];
+      if (op === 'interpolated') {
         if (outer !== null && !reported.has(path)) {
           reported.add(path);
           push(path, 'NESTED_INTERPOLATED', `an interpolated inside another (the outer one at ${outer})`);
         }
-        nest(node.x, `${path}.x`, outer ?? path);
-        return;
+        stack.push({ node: node['x'], path: `${path}.x`, outer: outer ?? path });
+        continue;
       }
-      if (node.op === 'ref') {
-        const key = `${node.name}|${outer === null ? 0 : 1}`;
-        if (seen.has(key)) return;
+      if (op === 'ref') {
+        const name = node['name'];
+        if (typeof name !== 'string' || defs === null || !Object.hasOwn(defs, name)) continue;
+        const key = `${name}|${outer === null ? 0 : 1}`;
+        if (seen.has(key)) continue;
         seen.add(key);
-        nest((defs as Record<string, Expr>)[node.name]!, `defs.${node.name}`, outer);
-        return;
+        stack.push({ node: defs[name], path: `defs.${name}`, outer });
+        continue;
       }
-      const rec = node as unknown as Record<string, Expr>;
-      for (const k of children.get(node.op)!) nest(rec[k]!, `${path}.${k}`, outer);
-    };
-    nest(value['root'] as Expr, 'root', null);
-    for (const name of defNames) nest({ op: 'ref', name }, `defs.${name}`, null);
-  }
+      const kids = typeof op === 'string' ? SOURCE_CHILDREN.get(op) : undefined;
+      if (kids === undefined) continue;
+      for (let k = kids.length - 1; k >= 0; k--) stack.push({ node: node[kids[k]!], path: `${path}.${kids[k]!}`, outer });
+    }
+  };
+  run(root, 'root');
+  for (const name of defNames) run({ op: 'ref', name }, `defs.${name}`);
+}
+
+/**
+ * The interpolated-nesting check of a density source tree `{root, defs}` (SP3d spec §1.7 tier 2 step 5, called by
+ * gen/density/source.ts once steps 1-4 hold): `NESTED_INTERPOLATED` through refs, as `validateExpr` reports it for
+ * code-built trees. Mutes are ignored (a muted subtree is walked). Never throws.
+ */
+export function nestedInterpolatedIssues(value: unknown): ExprIssue[] {
+  const issues: ExprIssue[] = [];
+  if (!isRecord(value)) return issues;
+  const defs = Object.hasOwn(value, 'defs') && isRecord(value['defs']) ? value['defs'] : null;
+  nestingWalk(Object.hasOwn(value, 'root') ? value['root'] : undefined, defs, defs === null ? [] : Object.keys(defs),
+    (path, code, message) => issues.push({ path, code, message }));
   return issues;
 }
 

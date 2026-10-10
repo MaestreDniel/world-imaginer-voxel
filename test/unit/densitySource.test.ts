@@ -269,3 +269,120 @@ describe('validateDensitySource: issue cap and memo (SP3d spec §1.6, §1.7)', (
     for (const h of hostile) expect(() => validateDensitySource(h)).not.toThrow();
   });
 });
+
+describe('validateDensitySource: whole-tree bounds (SP3d spec §1.7 steps 2-5)', () => {
+  const ref = (name: string): unknown => ({ op: 'ref', name });
+  /** k nested `neg`s over `x`; `negPath(p, k)` is the path of the node under them. */
+  const negs = (k: number, x: unknown): unknown => {
+    let out = x;
+    for (let i = 0; i < k; i++) out = { op: 'neg', x: out };
+    return out;
+  };
+  const negPath = (p: string, k: number): string => p + '.x'.repeat(k);
+  /** A full binary `add` tree of `levels` levels over const leaves: 2^levels − 1 nodes. */
+  const full = (levels: number): unknown => (levels === 1 ? C(1) : { op: 'add', a: full(levels - 1), b: full(levels - 1) });
+  /** A balanced sum of the given terms. */
+  const sum = (terms: unknown[]): unknown => (terms.length === 1 ? terms[0] : {
+    op: 'add', a: sum(terms.slice(0, terms.length >> 1)), b: sum(terms.slice(terms.length >> 1)),
+  });
+  /** dᵢ = add(ref dᵢ₋₁, ref dᵢ₋₁) over d0 = y: structural cost 2^(i+1) − 1, expanded depth 2i + 1. */
+  const doubling = (n: number): Record<string, unknown> => {
+    const defs: Record<string, unknown> = { d0: Y };
+    for (let i = 1; i < n; i++) defs[`d${i}`] = { op: 'add', a: ref(`d${i - 1}`), b: ref(`d${i - 1}`) };
+    return defs;
+  };
+
+  test('at most 4,096 nodes over the root and every def (TOO_MANY_NODES at the value) and 64 defs (TOO_MANY_DEFS at defs)', () => {
+    expect(issues(doc({ op: 'neg', x: full(12) }))).toEqual([]);
+    expect(issues(doc({ op: 'add', a: full(12), b: Y }))).toEqual([': TOO_MANY_NODES']);
+    expect(one(doc({ op: 'add', a: full(12), b: Y })).message).toBe('4097 nodes (at most 4096)');
+    expect(issues(doc(ref('a'), { a: full(12) }))).toEqual([]);
+    expect(issues(doc(ref('a'), { a: full(12), b: Y }))).toEqual([': TOO_MANY_NODES']);
+    const defs: Record<string, unknown> = {};
+    for (let i = 0; i < 64; i++) defs[`e${i}`] = Y;
+    expect(issues(doc(Y, defs))).toEqual([]);
+    expect(issues(doc(Y, { ...defs, e64: Y }))).toEqual(['defs: TOO_MANY_DEFS']);
+    expect(one(doc(Y, { ...defs, e64: Y })).message).toBe('65 defs (at most 64)');
+    // The counts come first, so the 50-issue cap never hides them.
+    expect(issues(doc({ op: 'bogus' }, { ...defs, e64: Y }))).toEqual(['defs: TOO_MANY_DEFS', 'root: UNKNOWN_OP']);
+  });
+
+  test('the 60-def doubling chain is refused at defs.d<k> for k ≥ 16, unreachable or under a mute (TOO_COSTLY)', () => {
+    const tooCostly = Array.from({ length: 44 }, (_, k) => `defs.d${k + 16}: TOO_COSTLY`);
+    expect(issues(doc(C(0), doubling(60)))).toEqual(tooCostly);
+    expect(issues(doc({ op: 'tap', name: 't', mute: 0, x: ref('d59') }, doubling(60)))).toEqual(['root: TOO_COSTLY', ...tooCostly]);
+    const d16 = validateDensitySource(doc(C(0), doubling(17)));
+    expect(d16).toEqual([{ path: 'defs.d16', code: 'TOO_COSTLY', message: 'defs.d16 has structural cost 131071 (at most 65536)' }]);
+    // 65,536 is accepted, 65,537 is not (an unreachable def costs like any other root).
+    expect(issues(doc(Y, { ...doubling(16), e: { op: 'neg', x: ref('d15') } }))).toEqual([]);
+    expect(issues(doc(Y, { ...doubling(16), e: negs(2, ref('d15')) }))).toEqual(['defs.e: TOO_COSTLY']);
+    // interpolated costs 1 + 8 × its child.
+    expect(issues(doc(Y, { ...doubling(13), e: { op: 'interpolated', x: ref('d12') } }))).toEqual([]);
+    expect(issues(doc(Y, { ...doubling(14), e: { op: 'interpolated', x: ref('d13') } }))).toEqual(['defs.e: TOO_COSTLY']);
+  });
+
+  test('the expanded depth counts through refs, at most 128 for every root (EXPANDED_TOO_DEEP at its deepest node)', () => {
+    // a: 41 levels; b: 40 + the ref + 41 = 82; the root's chain of k negs then the ref reaches k + 1 + 82.
+    const defs = { a: negs(40, Y), b: negs(40, ref('a')) };
+    expect(issues(doc(negs(45, ref('b')), defs))).toEqual([]);
+    const deep = validateDensitySource(doc(negs(46, ref('b')), defs));
+    expect(deep).toEqual([{ path: negPath('root', 46), code: 'EXPANDED_TOO_DEEP', message: 'root reaches depth 129 through refs (at most 128)' }]);
+    // An unreachable def and a muted subtree are bounded alike (mutes ignored).
+    expect(issues(doc(Y, { ...defs, c: negs(46, ref('b')) }))).toEqual([`${negPath('defs.c', 46)}: EXPANDED_TOO_DEEP`]);
+    expect(issues(doc({ op: 'tap', name: 't', mute: 0, x: negs(45, ref('b')) }, defs))).toEqual([`${negPath('root', 46)}: EXPANDED_TOO_DEEP`]);
+    // Every root that exceeds is named at a node of its own.
+    expect(issues(doc(ref('c'), { ...defs, c: negs(46, ref('b')) })))
+      .toEqual([`root: EXPANDED_TOO_DEEP`, `${negPath('defs.c', 46)}: EXPANDED_TOO_DEEP`]);
+    // The 60-def doubling chain stays within the depth (d59: 119).
+    expect(issues(doc(C(0), doubling(60))).every((s) => s.endsWith('TOO_COSTLY'))).toBe(true);
+  });
+
+  test('the column cost (mutes applied, refs expanded, noises at their maximum) is at most DENSITY_COLUMN_COST_MAX', () => {
+    // 75 `noise detail` refs: (75 × 128 + 74) × 98,304 = 950,992,896 ≤ 954,106,688; 76: 963,674,112.
+    const noiseDef = { n: { op: 'noise', id: 'detail' } };
+    const terms = (k: number): unknown[] => Array.from({ length: k }, () => ref('n'));
+    expect(issues(doc(sum(terms(75)), noiseDef))).toEqual([]);
+    expect(validateDensitySource(doc(sum(terms(76)), noiseDef)))
+      .toEqual([{ path: '', code: 'COLUMN_COST', message: 'column cost 963674112 (at most 954106688, 64 × the default tree\'s)' }]);
+    // A muted tap costs its mute; an interpolated subtree 1,225 per node.
+    expect(issues(doc({ op: 'tap', name: 't', mute: 0, x: sum(terms(76)) }, noiseDef))).toEqual([]);
+    expect(issues(doc({ op: 'interpolated', x: sum(terms(76)) }, noiseDef))).toEqual([]);
+    // An unreachable def does not count (the column evaluates the root).
+    expect(issues(doc(Y, { ...noiseDef, big: sum(terms(76)) }))).toEqual([]);
+  });
+
+  test('steps 4-5 wait for the earlier steps: a cycle or an over-count skips them, any issue skips step 5', () => {
+    const noiseDef = { n: { op: 'noise', id: 'detail' } };
+    const big = sum(Array.from({ length: 76 }, () => ref('n')));
+    // Step 1 issue + a column-cost excess: only the step-1 issue.
+    expect(issues(doc({ op: 'add', a: big, b: { op: 'noise2', id: 'nope' } }, noiseDef))).toEqual(['root.b.id: UNKNOWN_NOISE']);
+    // Step 4 issue + a nested interpolated: no nesting issue yet.
+    const nested = { op: 'interpolated', x: { op: 'interpolated', x: Y } };
+    expect(issues(doc({ op: 'add', a: nested, b: ref('d16') }, doubling(17))))
+      .toEqual(['root: TOO_COSTLY', 'defs.d16: TOO_COSTLY']);
+    expect(issues(doc(nested))).toEqual(['root.x: NESTED_INTERPOLATED']);
+    // A step-1 issue does not hide step 4.
+    expect(issues(doc({ op: 'add', a: C(2e9), b: ref('d16') }, doubling(17))))
+      .toEqual(['root.a.v: LITERAL_RANGE', 'root: TOO_COSTLY', 'defs.d16: TOO_COSTLY']);
+    // A ref cycle skips step 4 (no topological order).
+    expect(issues(doc(C(0), { ...doubling(17), z: negs(2, ref('z')) }))).toEqual([`${negPath('defs.z', 2)}: REF_CYCLE`]);
+  });
+
+  test('a 20,000-def chain never overflows: the two counts (and a cycle) only', () => {
+    const chain: Record<string, unknown> = { d0: Y };
+    for (let i = 1; i < 20000; i++) chain[`d${i}`] = ref(`d${i - 1}`);
+    expect(issues(doc(ref('d19999'), chain))).toEqual([': TOO_MANY_NODES', 'defs: TOO_MANY_DEFS']);
+    expect(issues(doc(C(0), { ...chain, d0: ref('d19999') }))).toEqual([': TOO_MANY_NODES', 'defs: TOO_MANY_DEFS', 'defs.d1: REF_CYCLE']);
+  });
+
+  test('the default tree and the U2 / uiSmoke variants pass (terrain muted; islands −10)', () => {
+    const copy = (): { root: Record<string, Record<string, Record<string, unknown>>> } => JSON.parse(JSON.stringify(DEFAULT_DENSITY_TREE));
+    const muted = copy();
+    expect(muted.root['a']!['a']!['name']).toBe('terrain');
+    muted.root['a']!['a']!['mute'] = 0;
+    const islands = copy();
+    expect(islands.root['b']!['name']).toBe('islands');
+    (islands.root['b']!['x'] as Record<string, unknown>)['v'] = -10;
+    for (const t of [DEFAULT_DENSITY_TREE, muted, islands]) expect(validateDensitySource(t)).toEqual([]);
+  });
+});

@@ -126,6 +126,28 @@ describe('validateExpr (SP3b spec §1.1)', () => {
     expect(issues(doc({ op: 'ref', name: '' }, { '': { op: 'neg', x: { op: 'ref', name: '' } } }))).toEqual(['defs..x: REF_CYCLE']);
   });
 
+  test('the def graph and the nesting walk are iterative: a 20,000-def chain never overflows (SP3d spec §1.7 step 3)', () => {
+    const N = 20000;
+    const chain: Record<string, unknown> = { d0: Y };
+    for (let i = 1; i < N; i++) chain[`d${i}`] = { op: 'ref', name: `d${i - 1}` };
+    expect(validateExpr(doc({ op: 'interpolated', x: { op: 'ref', name: `d${N - 1}` } }, chain), LOOKUP)).toEqual([]);
+    // Closed into a ring: one REF_CYCLE at the ref that closes it, the loop named by its first and last 8 defs.
+    const ring = { ...chain, d0: { op: 'ref', name: `d${N - 1}` } };
+    const out = validateExpr(doc(C(0), ring), LOOKUP);
+    expect(out.map((i) => `${i.path}: ${i.code}`)).toEqual(['defs.d1: REF_CYCLE']);
+    const loop = ['d0', ...Array.from({ length: N - 1 }, (_, k) => `d${N - 1 - k}`)];
+    const named = (ns: string[]) => ns.map((n) => `defs.${n}`);
+    expect(out[0]!.message).toBe(`ref cycle ${[...named(loop.slice(0, 8)), `… ${N - 16} more`, ...named(loop.slice(-8)), 'defs.d0'].join(' → ')}`);
+    // A loop of 16 defs is named in full.
+    const short: Record<string, unknown> = {};
+    for (let i = 0; i < 16; i++) short[`s${i}`] = { op: 'ref', name: `s${(i + 1) % 16}` };
+    expect(validateExpr(doc(C(0), short), LOOKUP).map((i) => i.message))
+      .toEqual([`ref cycle ${[...Array.from({ length: 16 }, (_, i) => `defs.s${i}`), 'defs.s0'].join(' → ')}`]);
+    // A nested interpolated at the far end of the chain is still found.
+    const deep = { ...chain, d0: { op: 'interpolated', x: Y } };
+    expect(issues(doc({ op: 'interpolated', x: { op: 'ref', name: `d${N - 1}` } }, deep))).toEqual(['defs.d0: NESTED_INTERPOLATED']);
+  });
+
   test('an interpolated inside another is rejected, also through a ref', () => {
     const inner = { op: 'interpolated', x: Y };
     expect(issues(doc({ op: 'interpolated', x: { op: 'neg', x: inner } }))).toEqual(['root.x.x: NESTED_INTERPOLATED']);
