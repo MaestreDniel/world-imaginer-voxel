@@ -131,6 +131,28 @@ export function issueLines(s: EditorState): string[] {
   return lines;
 }
 
+/** A candidate value for a tree leaf after both tiers: the registered tier-1 clone, or null and the issues. */
+export interface CheckedCandidate {
+  readonly value: JsonValue | null;
+  /** Node paths inside the leaf ('' = the value); tier 1's when it fails, else tier 2's for this leaf. */
+  readonly issues: readonly EditorIssue[];
+}
+
+/**
+ * Validates `value` as the leaf's new value the way the session will (§1.8 "in the editors"): tier 1 (`checkJson`),
+ * then tier 2 (`validateParamTrees` on `params` with the leaf replaced, keeping only this leaf's issues). The editor's
+ * validate-as-you-type and the node form's commit (`form.ts`) both call it.
+ */
+export function checkLeafCandidate(params: Params, leaf: TreeLeaf, value: unknown): CheckedCandidate {
+  const tier1: Issue[] = [];
+  const clone = checkJson(value, '', tier1, formatOfLeaf(leaf));
+  if (clone === undefined) return { value: null, issues: tier1 };
+  const tier2 = validateParamTrees(withLeaf(params, leaf, clone))
+    .filter((i) => i.path === leaf || i.path.startsWith(`${leaf}.`) || i.path.startsWith(`${leaf}[`))
+    .map((i) => ({ path: stripLeaf(i.path, leaf), code: i.code, message: i.message }));
+  return tier2.length > 0 ? { value: null, issues: tier2 } : { value: clone, issues: [] };
+}
+
 /** Caps a validator's list at EDITOR_ISSUE_LINES; a TOO_MANY_ISSUES entry ("<n> more") adds its n to `more`. */
 function capIssues(all: readonly EditorIssue[]): { issues: EditorIssue[]; more: number } {
   const issues: EditorIssue[] = [];
@@ -244,14 +266,9 @@ export function createEditorModel(leaf: TreeLeaf, session: EditorSession, clock:
       return;
     }
     s.ranges = parsed.ranges;
-    const tier1: Issue[] = [];
-    const clone = checkJson(parsed.value, '', tier1, format);
-    if (clone === undefined) { showIssues(tier1, 'invalid'); return; }
-    const tier2 = validateParamTrees(withLeaf(session.state.params, leaf, clone))
-      .filter((i) => i.path === leaf || i.path.startsWith(`${leaf}.`) || i.path.startsWith(`${leaf}[`))
-      .map((i) => ({ path: stripLeaf(i.path, leaf), code: i.code, message: i.message }));
-    if (tier2.length > 0) { showIssues(tier2, 'invalid'); return; }
-    candidate = clone;
+    const checked = checkLeafCandidate(session.state.params, leaf, parsed.value);
+    if (checked.value === null) { showIssues(checked.issues, 'invalid'); return; }
+    candidate = checked.value;
     showIssues([], 'valid');
   };
   const refused = (r: SessionResult): boolean => {

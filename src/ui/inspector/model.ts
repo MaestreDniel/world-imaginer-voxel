@@ -177,7 +177,7 @@ export function nodePaths(value: unknown, format: JsonFormat): string[] {
 }
 
 /** The steps of a node path after the value's top path: `.key` and `[i]`; null when it does not parse. */
-function pathSteps(path: string, format: JsonFormat): (string | number)[] | null {
+export function pathSteps(path: string, format: JsonFormat): (string | number)[] | null {
   const top = topPathOf(format);
   let rest: string;
   if (top === '') rest = `.${path}`;
