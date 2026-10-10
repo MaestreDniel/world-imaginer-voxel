@@ -892,7 +892,7 @@ export function sliceBoxSide(width: number, height: number): number {
  * (§4.3), or null outside [0, side) (the pointer left the image).
  */
 export function slicePixel(offset: number, side: number, n: number): number | null {
-  if (!(side > 0) || !(offset >= 0) || !(offset < side)) return null;
+  if (!(side > 0) || !(offset >= 0) || !(offset < side) || !(n >= 1)) return null;
   return Math.min(n - 1, Math.floor((offset / side) * n));
 }
 

@@ -43,6 +43,8 @@ describe('pointer → sample (§4.3: ⌊(px / side) · n⌋ inside the box, null
     for (const px of [-0.001, 256, 300, Number.NaN, Infinity]) expect(slicePixel(px, 256, 128), String(px)).toBeNull();
     expect(slicePixel(10, 0, 128)).toBeNull();
     expect(slicePixel(10, Number.NaN, 128)).toBeNull();
+    // nothing drawn yet (n = 0): no pixel, not -1 (a pin box hovered before its first draft lands)
+    expect(slicePixel(10, 256, 0)).toBeNull();
   });
 
   test('a 200 px box showing a 32² draft: every offset gives ⌊(px / side) · n⌋ and every sample is reached', () => {
