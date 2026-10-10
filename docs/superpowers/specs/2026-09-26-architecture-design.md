@@ -113,8 +113,11 @@ world-imaginer-voxel/          (repository root)
                                 so the builder module of SP3b is removed; amended by SP3d)
       caves/carvers.ts carverCache.ts
       fluids/aquifer.ts settle.ts
-      inspect/cost.ts           (SP3d) the structural, work and column costs of density and surface-rule trees, one function
-                                each, shared by tier-2 validation, the inspector and the worker
+      inspect/cost.ts fieldSlice.ts   (SP3d) cost.ts: the structural, work and column costs of density and surface-rule
+                                trees, one function each, shared by tier-2 validation, the inspector and the worker; fieldSlice.ts:
+                                the slice sample geometry (the vertical points injected from metrics/crossSection.ts's
+                                segmentPointAt), the horizontal planes' corner samples (columnStage.ts's buildCornerSample) and
+                                their per-part memo
       biomes/registry.ts picker.ts zoom.ts
       surface/rules.ts conditions.ts compile.ts reference.ts scan.ts bands.ts pass.ts context.ts probe.ts source.ts
                                 (SP3c: the rule model and validateRules, the per-condition helpers shared by the compiler and the

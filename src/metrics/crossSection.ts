@@ -64,11 +64,12 @@ export function segmentLength(s: Segment): number {
 }
 
 /**
- * Point i (0 … 511) of the segment: A + (B − A) · i/511, kept within the segment's bounding box, so a rounding
- * overshoot never leaves the window.
+ * Point i (0 … n − 1) of n points of the segment, A and B included: A + (B − A) · i/(n − 1), kept within the segment's
+ * bounding box, so a rounding overshoot never leaves the window. n defaults to the cross-section's 512 points; the
+ * slice viewer's vertical planes use n = 32 and 128 (SP3d spec §4.2).
  */
-export function segmentPointAt(s: Segment, i: number): [number, number] {
-  const t = i / (N - 1);
+export function segmentPointAt(s: Segment, i: number, n: number = N): [number, number] {
+  const t = i / (n - 1);
   const x = s.ax + (s.bx - s.ax) * t;
   const z = s.az + (s.bz - s.az) * t;
   return [Math.min(Math.max(x, Math.min(s.ax, s.bx)), Math.max(s.ax, s.bx)), Math.min(Math.max(z, Math.min(s.az, s.bz)), Math.max(s.az, s.bz))];

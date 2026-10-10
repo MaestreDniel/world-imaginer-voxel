@@ -3,12 +3,13 @@
  * lattice (the column's 5 × 5 corners plus a one-quart halo), computed by the same per-point functions
  * as columnPoint in the same order, so each lattice value equals columnPoint's bit for bit (DT2).
  * Shared work: lattice climate and offset0 feed the steep stencil; lake cells are memoised per context.
+ * buildCornerSample (SP3d spec §4.4) fills only the four quart corners one voxel reads, from columnPoint's functions.
  */
 import { pickBiome } from '../biomes/picker';
 import { zoomQuart } from '../biomes/zoom';
 import type { GenContext } from '../context';
 import { newClimate, sampleClimate, type ClimateOut } from './climate';
-import { waterLevel } from './columnPoint';
+import { newPointRecord, samplePoint, waterLevel, type ColumnPoint } from './columnPoint';
 import { newLake, sampleLakes } from './lakes';
 import { newRiver, sampleRivers } from './rivers';
 import { newShape, sampleShape } from './shape';
@@ -25,6 +26,8 @@ const NEW_RIVER = newRiver;
 const LAKES = sampleLakes;
 const NEW_LAKE = newLake;
 const WATER = waterLevel;
+const SAMPLE_POINT = samplePoint;
+const NEW_POINT = newPointRecord;
 const PICK = pickBiome;
 const ZOOM = zoomQuart;
 
@@ -100,6 +103,52 @@ export function buildColumnSample(ctx: GenContext, cx: number, cz: number, out: 
       f.islandMask[k] = 0;
       out.flags[k] = (r.wet ? 1 : 0) | (r.gorge ? 2 : 0);
       out.biome[k] = PICK(ctx, c.C, c.E, c.PV, c.T, c.H, c.W, o[k]!, r.wet);
+    }
+  }
+  return out;
+}
+
+/** A point at world (x, z) as `samplePoint` computes it; `buildCornerSample`'s injected source (a memo, for instance). */
+export type CornerPointSource = (x: number, z: number) => ColumnPoint;
+
+const POINT = NEW_POINT();
+const ALL_FIELDS: readonly (SampleField | LevelField)[] = [...SAMPLE_FIELDS, ...LEVEL_FIELDS];
+
+/**
+ * The corner sample of the voxel column at integer world (x, z) (SP3d spec §4.4): a ColumnSample of column
+ * (x >> 4, z >> 4) whose four quart corners around (x, z) — lattice (ci, cj), (ci + 1, cj), (ci, cj + 1),
+ * (ci + 1, cj + 1) with ci = (x & 15) >> 2, cj = (z & 15) >> 2, the corners `interpolated` and `readField` read at
+ * that voxel — hold the point values (`samplePoint`, equal to the lattice's bit for bit, DT2); every other entry
+ * is NaN (fields) or 0 (flags, biome). Steep is computed only `withSteep` (else NaN, whatever `pointAt` returns).
+ * `pointAt` replaces the direct `samplePoint` call (it must sample with steep when `withSteep`). Never touches a
+ * ColumnCache. Throws a RangeError for non-integer coordinates.
+ */
+export function buildCornerSample(
+  ctx: GenContext, x: number, z: number, withSteep: boolean, out: ColumnSample = newColumnSample(), pointAt?: CornerPointSource,
+): ColumnSample {
+  if (!Number.isInteger(x) || !Number.isInteger(z)) throw new RangeError(`corner sample: (${x}, ${z}) is not a pair of integers`);
+  const f = out.f;
+  for (const k of ALL_FIELDS) f[k].fill(Number.NaN);
+  out.flags.fill(0);
+  out.biome.fill(0);
+  const cx = x >> 4;
+  const cz = z >> 4;
+  const ci = (x & 15) >> 2;
+  const cj = (z & 15) >> 2;
+  out.cx = cx;
+  out.cz = cz;
+  for (let b = 0; b <= 1; b++) {
+    for (let a = 0; a <= 1; a++) {
+      const i = ci + a;
+      const j = cj + b;
+      const wx = 16 * cx + 4 * i;
+      const wz = 16 * cz + 4 * j;
+      const p = pointAt === undefined ? SAMPLE_POINT(ctx, wx, wz, withSteep, POINT) : pointAt(wx, wz);
+      const k = latticeIndex(i, j);
+      for (const name of ALL_FIELDS) f[name][k] = p[name];
+      if (!withSteep) f.steep[k] = Number.NaN;
+      out.flags[k] = (p.riverWet ? 1 : 0) | (p.gorge ? 2 : 0);
+      out.biome[k] = p.biome;
     }
   }
   return out;

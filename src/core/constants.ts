@@ -90,3 +90,11 @@ export const COL_FIELD_BOUNDS = Object.freeze({
  */
 export const DENSITY_COLUMN_COST_MAX = 954_106_688;
 export const RULES_COLUMN_COST_MAX = 138_870_784;
+
+/**
+ * The slice viewer's sizes and extents (SP3d spec §4.2, `gen/inspect/fieldSlice.ts`): n × n samples, a 32² draft then
+ * the 128² slice; a horizontal plane's side E in blocks. Every allowed E and n give integer sample coordinates
+ * (E / (2n) ≥ 1 is an integer). Shared by gen, the workers and the UI.
+ */
+export const SLICE_NS = Object.freeze([32, 128] as const);
+export const SLICE_EXTENTS = Object.freeze([256, 512, 1024, 2048, 4096, 8192] as const);
