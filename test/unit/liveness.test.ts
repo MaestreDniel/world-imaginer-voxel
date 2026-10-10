@@ -74,12 +74,13 @@ function surfaceShows(s: ColumnSample): Record<SurfaceClass, () => boolean> {
 }
 
 describe('perturbations', () => {
-  test('every leaf of the schema gets two distinct perturbed values, each valid for the leaf', () => {
+  test('every leaf of the schema gets two distinct perturbed values (a json leaf its one pinned variant), each valid for the leaf', () => {
     for (const info of SCHEMA.leaves) {
       const value = getPath(DEFAULTS, info.path);
       const values = perturbations(info, value);
-      expect(values, info.path).toHaveLength(2);
-      expect(new Set([value, ...values].map((v) => canonicalJSON(v))).size, info.path).toBe(3);
+      const n = info.leaf.kind === 'json' ? 1 : 2;
+      expect(values, info.path).toHaveLength(n);
+      expect(new Set([value, ...values].map((v) => canonicalJSON(v))).size, info.path).toBe(n + 1);
       for (const v of values) {
         const issues: Issue[] = [];
         checkLeaf(info.leaf, v, info.path, issues);
@@ -116,12 +117,12 @@ describe('perturbations', () => {
     expect(jagDown!.points[0]!.y).toBe(-16);
   });
 
-  test('density leaves (SP3b spec §3.3): every perturbation stays inside the leaf range', () => {
+  test('density leaves (SP3b spec §3.3): every perturbation stays inside the leaf range (the json leaf has none)', () => {
     const density = SCHEMA.leaves.filter((l) => l.path.startsWith('density.'));
     expect(density.map((l) => l.path)).toEqual([
-      'density.noises.jag', 'density.noises.overhang', 'density.noises.detail', 'density.detailAmpLo', 'density.detailAmpHi',
+      'density.noises.jag', 'density.noises.overhang', 'density.noises.detail', 'density.detailAmpLo', 'density.detailAmpHi', 'density.defs',
     ]);
-    for (const info of density) {
+    for (const info of density.filter((l) => l.leaf.kind !== 'json')) {
       const lo = info.leaf.min!;
       const hi = info.leaf.max!;
       for (const v of perturbations(info, getPath(DEFAULTS, info.path))) {
@@ -143,6 +144,22 @@ describe('perturbations', () => {
     expect(shrunk!['beach']!.PV).toEqual([-0.85, 0.85]);
     expect(grown!['beach']!.PV).toEqual([-1, 1]);
     expect([grown!['beach']!.wSign, grown!['beach']!.priority]).toEqual([0, 5]);
+  });
+
+  test('json (SP3d spec §7): density.defs mutes the terrain tap to 0, surface.rules moves the deepslate gradient top 8 → 12; nothing else changes', () => {
+    const tree = DEFAULTS.density.defs as Record<string, any>;
+    const [muted] = perturbations(leaf('density.defs'), tree) as Record<string, any>[];
+    expect(muted!.root.a.a).toEqual({ ...tree.root.a.a, mute: 0 });
+    expect(canonicalJSON({ ...muted, root: { ...muted!.root, a: { ...muted!.root.a, a: tree.root.a.a } } })).toBe(canonicalJSON(tree));
+    expect(tree.root.a.a.mute).toBeUndefined();
+    const rules = DEFAULTS.surface.rules as Record<string, any>;
+    const [higher] = perturbations(leaf('surface.rules'), rules) as Record<string, any>[];
+    expect(rules.rules[2].if).toMatchObject({ kind: 'verticalGradient', trueAtAndBelow: 0, falseAtAndAbove: 8 });
+    expect(higher!.rules[2].if).toEqual({ ...rules.rules[2].if, falseAtAndAbove: 12 });
+    expect(canonicalJSON({ ...higher, rules: rules.rules })).toBe(canonicalJSON(rules));
+    // A tree without the pinned node (an edited profile) has no U2 variant: a clear error, not a wrong one.
+    expect(() => perturbations(leaf('density.defs'), { root: { op: 'y' }, defs: {} })).toThrow(/density\.defs has no/);
+    expect(() => perturbations(leaf('surface.rules'), { kind: 'sequence', rules: [] })).toThrow(/surface\.rules has no/);
   });
 });
 
@@ -260,12 +277,12 @@ describe('class columns', () => {
 });
 
 describe('surface class columns (SP3c spec §3.5)', () => {
-  test('the slots serve every surface.* leaf except the depth ones, which belong to land', () => {
+  test('the slots serve every surface.* leaf except the depth ones and the rule tree, which belong to land', () => {
     expect(SURFACE_CLASSES.map((c) => surfaceSlotLeaves(c))).toEqual([
       ['surface.cliffMinY'], ['surface.cliffSteep'], ['surface.snowline', 'surface.lapse', 'surface.lapseBase'],
       ['surface.noises.patch', 'surface.patchThreshold'], ['surface.noises.bandOffset'],
     ]);
-    const served = [...SURFACE_CLASSES.flatMap((c) => surfaceSlotLeaves(c)), 'surface.noises.depth', 'surface.depthMul'];
+    const served = [...SURFACE_CLASSES.flatMap((c) => surfaceSlotLeaves(c)), 'surface.noises.depth', 'surface.depthMul', 'surface.rules'];
     expect([...served].sort()).toEqual([...SURFACE_LEAVES].sort());
   });
 
@@ -363,16 +380,17 @@ describe('the terrain stage in U2 (SP3b spec §3.3)', () => {
   test('U2 covers the leaves of the climate, shape, biome2d and terrain stages, every density.* and surface.* leaf among them', () => {
     const stages = ['climate', 'shape', 'biome2d', 'terrain'];
     const surface = SCHEMA.leaves.filter((l) => l.path.startsWith('surface.'));
-    expect(surface.length).toBe(10);
+    expect(surface.length).toBe(11);
     for (const l of surface) expect(l.meta.stage, l.path).toBe('terrain');
     const expected = SCHEMA.leaves.filter((l) => l.meta.stage !== undefined && stages.includes(l.meta.stage)).map((l) => l.path);
     expect(u2Leaves().map((l) => l.path)).toEqual(expected);
     expect(expected).toEqual(expect.arrayContaining(surface.map((l) => l.path)));
     const density = SCHEMA.leaves.filter((l) => l.path.startsWith('density.'));
-    expect(density.length).toBe(5);
+    expect(density.length).toBe(6);
     for (const l of density) expect(l.meta.stage, l.path).toBe('terrain');
     expect(expected).toEqual(expect.arrayContaining(density.map((l) => l.path)));
     expect(intendedClass('density.detailAmpLo')).toBe('land');
+    for (const p of ['density.defs', 'surface.rules']) expect(intendedClass(p), p).toBe('land');
   });
 
   test('every density.* leaf is decided on a land or coast column', () => {
@@ -385,7 +403,7 @@ describe('the terrain stage in U2 (SP3b spec §3.3)', () => {
     }
   });
 
-  test('every surface.* leaf is decided: each on its own class column, the depth leaves on a land column', () => {
+  test('every surface.* leaf is decided: each on its own class column, the depth leaves and the rule tree on a land column', () => {
     for (const path of SURFACE_LEAVES) {
       const r = leafLiveness(CTX, path, columns());
       const cls = intendedClass(path);

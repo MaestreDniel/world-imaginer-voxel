@@ -15,7 +15,9 @@ describe('SP3b density group (spec §3.3)', () => {
       'density.noises.detail:noise:terrain:terrain',
       'density.detailAmpLo:number:terrain:terrain',
       'density.detailAmpHi:number:terrain:terrain',
+      'density.defs:json:terrain:terrain',
     ]);
+    expect(metaOf('density.defs')?.format).toBe('density');
   });
 
   test('meta: dims and wavelength ranges of the noises, ranges of the amplitudes', () => {

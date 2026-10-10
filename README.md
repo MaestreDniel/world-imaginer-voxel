@@ -96,6 +96,7 @@ Generated from `src/core/params/schema.ts` by `npm run docs:params`; a test fail
 | `density.noises.detail` | noise | {"amplitudes":null,"clampSigma":3,"double":true,"lacunarity":2,"octaves":1,"persistence":0.5,"remap":"none","wavelength":10,"yScale":1} | wavelength 4 … 256 |  | terrain | Detail noise: Small 3D surface detail outside the interpolation, times the detail amplitude. |
 | `density.detailAmpLo` | number | 0.6 | 0 … 8 | blocks | terrain | Detail amplitude at E −1: Detail amplitude in blocks where E ≤ −1. |
 | `density.detailAmpHi` | number | 1.5 | 0 … 8 | blocks | terrain | Detail amplitude at E +1: Detail amplitude in blocks where E ≥ 1; linear in (E + 1) / 2 between the two. |
+| `density.defs` | json | density tree, 60 nodes |  |  | terrain | Density expression: The density expression {root, defs} as data (SP3d spec §1-§2): its numbers may read the density and surface tunables through parameter refs, and its taps may be muted. Edit it in the Density tab. |
 | `surface.noises.depth` | noise | {"amplitudes":null,"clampSigma":3,"double":true,"lacunarity":2,"octaves":2,"persistence":0.5,"remap":"none","wavelength":64,"yScale":1} | wavelength 8 … 1024 |  | terrain | Depth noise: Ns of the surface depth: max(0, ⌊3 + 2.75 · depthMul · Ns + 0.25 · hash⌋) blocks of under blocks below each top. |
 | `surface.noises.patch` | noise | {"amplitudes":null,"clampSigma":3,"double":true,"lacunarity":2,"octaves":2,"persistence":0.5,"remap":"none","wavelength":24,"yScale":1} | wavelength 4 … 512 |  | terrain | Patch noise: Every surface patch (clay, podzol, coarse dirt, mud, gravel, calcite, packed ice): a patch block where it is ≥ the patch threshold, a second one where it is ≤ −threshold. |
 | `surface.noises.bandOffset` | noise | {"amplitudes":null,"clampSigma":3,"double":true,"lacunarity":2,"octaves":1,"persistence":0.5,"remap":"none","wavelength":128,"yScale":1} | wavelength 16 … 2048 |  | terrain | Band offset noise: Shifts the badlands terracotta bands up or down by round(4 · z / clampSigma) blocks (−4 … 4), so the bands waver across the badlands. |
@@ -106,6 +107,7 @@ Generated from `src/core/params/schema.ts` by `npm run docs:params`; a test fail
 | `surface.cliffSteep` | number | 1.2 | 0 … 8 |  | terrain | Cliff steepness: A sky-open run whose position is at least this steep and whose top is at or above the cliff height shows stone (packed ice on frozen peaks). |
 | `surface.cliffMinY` | int | 80 | -64 … 319 | y | terrain | Cliff height: Lowest run top that can be a cliff. |
 | `surface.patchThreshold` | number | 0.55 | 0 … 3 |  | terrain | Patch threshold: A patch block where the patch noise is ≥ this; the second block of a two-block patch where it is ≤ −this (≈ 29 % of the tops each at 0.55). |
+| `surface.rules` | json | surfaceRules tree, 163 nodes |  |  | terrain | Surface rules: The surface-rule tree as data (SP3d spec §1-§2): its numeric fields may read the density and surface tunables through parameter refs, and its block states must be solid. Edit it in the Density tab. |
 <!-- params:end -->
 
 ## Requirements

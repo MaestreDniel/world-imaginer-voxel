@@ -195,6 +195,9 @@ export async function mountMapPage(root: HTMLElement): Promise<void> {
       layout.openDrawer('spline');
     },
     showBiomes: () => layout.showTab('biomes'),
+    // A tree's "Edit in Density" opens the drawer's Density tab (SP3d spec §1.1); selecting the leaf's root there
+    // arrives with the tab's tree (the panel link selects the root).
+    openTree: () => layout.openDrawer('density'),
   });
 
   // The drawer's Spline tab (§4.2-4.4): it requests its statistics when the driver settles (§4.3).

@@ -194,10 +194,53 @@ function scaleBoxes(t: BoxTable, dir: number): BoxTable {
 }
 
 /**
+ * U2's one variant of each `json` leaf (SP3d spec §7, D15): the node at JSON path `at` inside the leaf value must have
+ * the fields of `is`; the variant sets its field `key` to `value`. `density.defs`: the `terrain` tap muted to 0 (its
+ * toggle's value under `add`); `surface.rules`: the deepslate gradient's `falseAtAndAbove` 8 → 12 (rule id
+ * `root.rules[2].if`), which keeps the tree's fast path. Both are decided on the land column (`intendedClass`).
+ */
+interface JsonVariant {
+  readonly at: readonly (string | number)[];
+  readonly is: Readonly<Record<string, string | number>>;
+  readonly key: string;
+  readonly value: number;
+}
+const JSON_VARIANTS: ReadonlyMap<string, JsonVariant> = new Map<string, JsonVariant>([
+  ['density.defs', { at: ['root', 'a', 'a'], is: { op: 'tap', name: 'terrain' }, key: 'mute', value: 0 }],
+  ['surface.rules', { at: ['rules', 2, 'if'], is: { kind: 'verticalGradient', falseAtAndAbove: 8 }, key: 'falseAtAndAbove', value: 12 }],
+]);
+
+/** A copy of `v` (plain objects and arrays copied along `at`, the rest shared) with `key` of the node at `at` set. */
+function withJsonField(path: string, v: unknown, at: readonly (string | number)[], key: string, value: number): unknown {
+  if (typeof v !== 'object' || v === null) throw new Error(`U2: no node at ${path} ${JSON.stringify(at)}`);
+  if (at.length === 0) return { ...(v as Record<string, unknown>), [key]: value };
+  const [k, ...rest] = at;
+  if (Array.isArray(v)) {
+    if (typeof k !== 'number' || k >= v.length) throw new Error(`U2: no node at ${path} ${JSON.stringify(at)}`);
+    return v.map((x, i) => (i === k ? withJsonField(path, x, rest, key, value) : x));
+  }
+  const o = v as Record<string, unknown>;
+  if (typeof k !== 'string' || !Object.hasOwn(o, k)) throw new Error(`U2: no node at ${path} ${JSON.stringify(at)}`);
+  return { ...o, [k]: withJsonField(path, o[k], rest, key, value) };
+}
+
+function jsonVariants(path: string, value: unknown): unknown[] {
+  const spec = JSON_VARIANTS.get(path);
+  if (spec === undefined) throw new Error(`U2 has no perturbation for ${path} (kind json)`);
+  let node: unknown = value;
+  for (const k of spec.at) node = typeof node === 'object' && node !== null && Object.hasOwn(node, k) ? (node as Record<string | number, unknown>)[k] : undefined;
+  const fits = typeof node === 'object' && node !== null
+    && Object.entries(spec.is).every(([f, x]) => Object.hasOwn(node as object, f) && (node as Record<string, unknown>)[f] === x);
+  if (!fits) throw new Error(`U2: ${path} has no ${JSON.stringify(spec.is)} node at ${JSON.stringify(spec.at)}`);
+  return [withJsonField(path, value, spec.at, spec.key, spec.value)];
+}
+
+/**
  * The perturbed values of a leaf (spec §7), each valid for the leaf; values equal to `value` or to each other
  * are dropped. number/int: v ± 15 % of |v|, or ± 15 % of the range span when v is 0 or the step leaves the
  * range (at least 1 for int), clamped; noise: wavelength × 0.85 and × 1.15 within its range; spline: every
- * numeric knot moved by ±15 % of the y span, clamped; boxTable: every interval shrunk and grown by 15 % of its width.
+ * numeric knot moved by ±15 % of the y span, clamped; boxTable: every interval shrunk and grown by 15 % of its width;
+ * json: the leaf's one pinned variant (`JSON_VARIANTS`, SP3d spec §7).
  */
 export function perturbations(leaf: LeafInfo, value: unknown): unknown[] {
   const l = leaf.leaf;
@@ -219,6 +262,9 @@ export function perturbations(leaf: LeafInfo, value: unknown): unknown[] {
       break;
     case 'boxTable':
       values = [-1, 1].map((dir) => scaleBoxes(value as BoxTable, dir));
+      break;
+    case 'json':
+      values = jsonVariants(leaf.path, value);
       break;
     default:
       throw new Error(`U2 has no perturbation for ${leaf.path} (kind ${l.kind})`);

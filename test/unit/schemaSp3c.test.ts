@@ -21,9 +21,11 @@ describe('SP3c surface group (spec §3.5)', () => {
       'surface.cliffSteep:number:terrain:terrain',
       'surface.cliffMinY:int:terrain:terrain',
       'surface.patchThreshold:number:terrain:terrain',
+      'surface.rules:json:terrain:terrain',
     ]);
+    expect(metaOf('surface.rules')?.format).toBe('surfaceRules');
     const paths = PARAM_META.map((m) => m.path);
-    expect(paths.indexOf('surface.noises.depth')).toBe(paths.indexOf('density.detailAmpHi') + 1);
+    expect(paths.indexOf('surface.noises.depth')).toBe(paths.indexOf('density.defs') + 1);
   });
 
   test('meta: noise dims, wavelength ranges and remapNone; the number and int ranges', () => {

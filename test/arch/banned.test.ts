@@ -29,6 +29,8 @@ test('bad fixture tree reports every banned use', () => {
     'src/gen/computed.ts:1 math-computed',
     'src/gen/data.ts:1 numeric-data-export',
     'src/gen/defaultNumeric.ts:1 numeric-export',
+    // SP3d: no gen defaults.ts is left, so the data exemption is gone (SP3d spec, module layout).
+    'src/gen/density/defaults.ts:1 numeric-data-export',
     'src/gen/destructureMath.ts:1 math-as-value',
     'src/gen/intl.ts:1 engine-dependent-api',
     'src/gen/log.ts:1 nondeterministic',

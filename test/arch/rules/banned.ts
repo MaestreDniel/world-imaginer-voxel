@@ -78,7 +78,9 @@ function splitTopLevel(s: string): string[] {
 
 function numericExportViolations(f: ScannedFile, srcRel: string): Violation[] {
   const out: Violation[] = [];
-  const dataAllowed = /^gen\/(?:.*\/)?defaults\.ts$/.test(srcRel) || srcRel.startsWith('gen/structures/templates/');
+  // Only the structure templates may export data with numbers (SP3d removed the gen `defaults.ts` files and their
+  // exemption: every number shared across layers lives in core/constants.ts).
+  const dataAllowed = srcRel.startsWith('gen/structures/templates/');
   const at = (index: number, rule: string, message: string) => out.push({ file: f.path, line: lineAt(f.code, index), rule, message });
   for (const m of f.code.matchAll(/\bexport\s+(?:const|let|var)\s+/g)) {
     for (const decl of splitTopLevel(readStatement(f.code, m.index + m[0].length))) {
@@ -86,7 +88,7 @@ function numericExportViolations(f: ScannedFile, srcRel: string): Violation[] {
       if (!d) continue;
       const init = d[2]!.trim();
       if (isNumericExpr(init)) at(m.index, 'numeric-export', `exported numeric constant ${d[1]} (use ParamSchema or core/constants)`);
-      else if (!dataAllowed && /^[{[]/.test(init) && /(?<![\w$])\d/.test(init)) at(m.index, 'numeric-data-export', `exported data with numbers ${d[1]} outside defaults.ts/templates`);
+      else if (!dataAllowed && /^[{[]/.test(init) && /(?<![\w$])\d/.test(init)) at(m.index, 'numeric-data-export', `exported data with numbers ${d[1]} outside the structure templates`);
     }
   }
   for (const m of f.code.matchAll(/\bexport\s+default\s+([^;\n]+)/g)) {

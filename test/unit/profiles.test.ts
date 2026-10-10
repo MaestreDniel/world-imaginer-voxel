@@ -50,6 +50,15 @@ describe('migrations', () => {
     const r = migrate(doc, SCHEMA_VERSION);
     expect(r.ok && r.value).toBe(doc);
   });
+  test('SCHEMA_VERSION 2 (SP3d spec §1.11): one migration, 1 → 2 the identity (the trees a v1 document lacks are the profile\'s)', () => {
+    expect([SCHEMA_VERSION, MIGRATIONS.length]).toEqual([2, 1]);
+    const doc = { climate: { scaleMul: 2 }, density: { detailAmpLo: 0.8 } } as JsonObject;
+    const r = migrate(doc, 1);
+    expect(r.ok && r.value).toBe(doc);
+    const imported = importPreset({ format: 'wi10-preset', schemaVersion: 1, name: 'Old', profile: 'default', params: doc });
+    expect(imported.ok && imported.value.params.density.defs).toBe(DEFAULTS.density.defs);
+    expect(imported.ok && imported.value.params.surface.rules).toBe(DEFAULTS.surface.rules);
+  });
   test('an injected v1 → v2 rename', () => {
     const toV2 = (d: JsonObject) => renamePath(d, 'climate.zoom', 'climate.scaleMul');
     const r = migrate({ climate: { zoom: 3, C: { octaves: 5 } } }, 1, [toV2]);
@@ -103,7 +112,7 @@ describe('presets', () => {
     ['reserved name', (d) => { d.name = 'large_biomes'; }, ['RESERVED_NAME @ name']],
     ['unknown profile', (d) => { d.profile = 'nope'; }, ['UNKNOWN_PROFILE @ profile']],
     ['bad schema version', (d) => { d.schemaVersion = 1.5; }, ['BAD_SCHEMA_VERSION @ schemaVersion']],
-    ['newer schema version', (d) => { d.schemaVersion = 2; }, ['NEWER_SCHEMA_VERSION @ schemaVersion']],
+    ['newer schema version', (d) => { d.schemaVersion = 3; }, ['NEWER_SCHEMA_VERSION @ schemaVersion']],
     ['params not an object', (d) => { d.params = []; }, ['NOT_OBJECT @ params']],
     ['typo in params', (d) => { d.params = { climate: { scaleMull: 4 } }; }, ['UNKNOWN_KEY @ params.climate.scaleMull']],
     ['invalid value', (d) => { d.params = { climate: { scaleMul: 99 } }; }, ['OUT_OF_RANGE @ params.climate.scaleMul']],

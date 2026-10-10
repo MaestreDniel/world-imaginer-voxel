@@ -333,9 +333,13 @@ describe('the density at its parameter extremes (spec §1.2, §2.4: early-outs e
         if (key.startsWith('noises.')) noises[key.slice('noises.'.length)] = randomValue(leaf, next);
         else density[key] = randomValue(leaf, next);
       }
-      const what = `group ${t}: ${JSON.stringify(density)}`;
+      // SP3d: the group includes the tree leaf, whose random value is the default tree (no draw, so the other leaves'
+      // values are unchanged); the context resolves it at the group's tunables.
+      expect(density['defs']).toBe(DEFAULT_DENSITY_TREE);
+      const what = `group ${t}: ${JSON.stringify({ ...density, defs: '<default>' })}`;
       // A schema-valid group must compile: validateExpr rejected a 'uniform' jag (NOISE_REMAP) before the schema refused it.
       const c = ctxFor('42', { density } as ParamsPatch);
+      expect(c.params.density.defs).toBe(DEFAULT_DENSITY_TREE);
       const [cx, cz] = COLUMNS[t % COLUMNS.length]!;
       checkColumn(c, cx, cz, next, what);
     }

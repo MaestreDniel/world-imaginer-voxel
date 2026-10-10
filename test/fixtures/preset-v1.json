@@ -1,0 +1,23 @@
+{
+  "format": "wi10-preset",
+  "schemaVersion": 1,
+  "name": "Version 1 world",
+  "profile": "large_biomes",
+  "params": {
+    "climate": {
+      "T": {
+        "wavelength": 6000
+      }
+    },
+    "rivers": {
+      "widthMin": 6
+    },
+    "density": {
+      "detailAmpLo": 0.8
+    },
+    "surface": {
+      "snowline": -0.5,
+      "cliffMinY": 96
+    }
+  }
+}

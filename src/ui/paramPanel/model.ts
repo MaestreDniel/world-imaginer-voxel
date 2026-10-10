@@ -185,7 +185,7 @@ export function noiseFieldLock(c: ControlSpec, def: NoiseDef, field: keyof Noise
 }
 
 /** The leaf kinds the panel has a control for (spec §3.2's list); the panel throws for any other kind. */
-export const PANEL_KINDS: readonly ParamKind[] = Object.freeze(['number', 'int', 'noise', 'spline', 'boxTable']);
+export const PANEL_KINDS: readonly ParamKind[] = Object.freeze(['number', 'int', 'noise', 'spline', 'boxTable', 'json']);
 
 /** Positions of a log slider, and the most any slider gets. */
 export const SLIDER_POSITIONS = 1000;

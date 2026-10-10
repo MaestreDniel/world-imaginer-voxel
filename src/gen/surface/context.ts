@@ -6,17 +6,16 @@
  * - `settings`: the scan settings (`surfaceScanSettings(seed, params.surface, noises)`: the depth noise, the depth
  *   hash seed, depthMul, lapse, lapseBase, SD_MAX);
  * - `bands`: the badlands band table of the world seed (§3.3, bands.ts), built once and shared by both evaluators;
- * - `rules`, `compiled` and `reference`: one frozen tree (by default `resolveRules(DEFAULT_SURFACE_RULES, params)`,
- *   the default source resolved for the context's params, SP3d spec §1.6, §2.2; an explicit tree is deep-frozen in place
- *   by `freezeRules`, identity kept), compiled for those settings, and its reference evaluator (validated once each; a
- *   RuleValidationError otherwise);
+ * - `rules`, `compiled` and `reference`: one frozen tree (by default `resolveRules(params.surface.rules, params)`,
+ *   the `surface.rules` leaf resolved for the context's params, SP3d spec §1.6, §2.2; an explicit tree is deep-frozen
+ *   in place by `freezeRules`, identity kept), compiled for those settings, and its reference evaluator (validated once
+ *   each; a RuleValidationError otherwise);
  * - `probeColumn`: the one-column cache of the last column `surfaceProbe` rebuilt (probe.ts).
  * `surfaceContextOf(ctx)` memoises the default
  * SurfaceContext per GenContext (a WeakMap); `createSurfaceContext(ctx)` builds one apart (DT2 uses it, so a
  * shared-state bug cannot hide). Follows the gen determinism rules.
  */
 import type { NormalNoise } from '../../core/noise/normal';
-import { DEFAULT_SURFACE_RULES } from '../../core/params/defaultTrees';
 import { SCHEMA, type SurfaceParams } from '../../core/params/schema';
 import { noiseFor, type GenContext } from '../context';
 import { createDensityContext, type DensityContext } from '../density/context';
@@ -32,7 +31,6 @@ const NOISE_FOR = noiseFor;
 const CREATE_DC = createDensityContext;
 const COMPILE = compileSurfaceRules;
 const REFERENCE = createSurfaceReference;
-const DEFAULT_SOURCE = DEFAULT_SURFACE_RULES;
 const RESOLVE = resolveRules;
 const FREEZE = freezeRules;
 const SETTINGS = surfaceScanSettings;
@@ -91,14 +89,14 @@ export function surfaceNoiseSource(ctx: GenContext): SurfaceNoiseSource {
 }
 
 /**
- * A SurfaceContext for `ctx` over `rules`, with its own DensityContext. Without `rules` the tree is the default source
- * resolved for `ctx.params` (`resolveRules`, a fresh frozen tree); an explicit `rules` is deep-frozen in place
+ * A SurfaceContext for `ctx` over `rules`, with its own DensityContext. Without `rules` the tree is the `surface.rules`
+ * leaf of `ctx.params` resolved for them (`resolveRules`, a fresh frozen tree); an explicit `rules` is deep-frozen in place
  * (`freezeRules`, identity kept: mutating it afterwards throws). Throws a RuleValidationError when the tree is not
- * valid (for the default: tier 2 with its source paths; for an explicit tree: `validateRules` over the schema's
+ * valid (for the leaf: tier 2 with its source paths; for an explicit tree: `validateRules` over the schema's
  * surface noises).
  */
 export function createSurfaceContext(ctx: GenContext, rules?: unknown): SurfaceContext {
-  const tree = rules === undefined ? RESOLVE(DEFAULT_SOURCE, ctx.params) : FREEZE(rules);
+  const tree = rules === undefined ? RESOLVE(ctx.params.surface.rules, ctx.params) : FREEZE(rules);
   const params = ctx.params.surface;
   const noises = surfaceNoiseSource(ctx);
   const settings = SETTINGS(ctx.seed, params, noises);

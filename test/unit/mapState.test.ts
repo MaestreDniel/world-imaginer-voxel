@@ -1,10 +1,15 @@
 import { describe, expect, test } from 'vitest';
 import { utf8Bytes, type Seed64 } from '../../src/core/hash';
+import { canonicalJSON } from '../../src/core/params/canonical';
+import { DEFAULT_DENSITY_TREE, DEFAULT_SURFACE_RULES } from '../../src/core/params/defaultTrees';
+import { paramsHash } from '../../src/core/stage/hash';
 import { WorldSession, type SessionChange } from '../../src/engine/session';
+import { validateParamTrees } from '../../src/gen/trees';
 import { base64urlEncode } from '../../src/ui/common/base64url';
 import { applyMapHash, decodeMapState, DEFAULT_MAP_STATE, encodeMapState, MAP_HASH_READ_MAX, type MapState, type MapView } from '../../src/ui/map/mapState';
 import { createTileCache, tileKey } from '../../src/ui/map/tileCache';
 import { planTiles, screenToWorld, visibleTiles, worldToScreen } from '../../src/ui/map/viewMath';
+import { editedPatch } from './fixtures/editedTrees';
 
 const enc = (o: unknown) => `#${base64urlEncode(utf8Bytes(JSON.stringify(o)))}`;
 
@@ -116,6 +121,47 @@ describe('hashchange (SP2b spec §1.4)', () => {
     expect(Object.is((session.state.patch as { lakes: { rimRise: number } }).lakes.rimRise, 0)).toBe(true);
     const s = session.state;
     expect(decodeMapState(`#${encodeMapState({ v: 1, seed: s.seedText, profile: s.profile, patch: s.patch, view: VIEW })}`).error).toBeNull();
+  });
+});
+
+describe('edited trees in the map URL (SP3d spec §1.11)', () => {
+  const random = (): Seed64 => [1, 2];
+  const open = (patch?: unknown) => new WorldSession(random, { seedText: '42', ...(patch !== undefined ? { patch } : {}), validateParams: validateParamTrees });
+
+  test('both trees edited: encodeMapState → decodeMapState → session.load gives equal canonical params, paramsHash and modifiedCount', () => {
+    const a = open(editedPatch());
+    expect(a.initNotice).toBeNull();
+    expect([a.modifiedCount(''), a.modified('density.defs'), a.modified('surface.rules')]).toEqual([2, true, true]);
+    const s = a.state;
+    const hash = `#${encodeMapState({ v: 1, seed: s.seedText, profile: s.profile, patch: s.patch, view: DEFAULT_MAP_STATE.view })}`;
+    const decoded = decodeMapState(hash);
+    expect(decoded.error).toBeNull();
+    expect(canonicalJSON(decoded.state.patch)).toBe(canonicalJSON(s.patch));
+    const b = open();
+    expect(applyMapHash(hash, b, () => {})).toBeNull();
+    expect(canonicalJSON(b.state.params)).toBe(canonicalJSON(s.params));
+    expect(paramsHash(b.state.params)).toEqual(paramsHash(s.params));
+    expect(b.modifiedCount('')).toBe(a.modifiedCount(''));
+    // A fresh tab opening the same hash (the constructor) gives the same draft.
+    const c = open(decoded.state.patch);
+    expect([c.initNotice, canonicalJSON(c.state.params)]).toEqual([null, canonicalJSON(s.params)]);
+  });
+
+  test('a version-1 ?map# hash recorded at 9fababa (before the trees) loads with the default trees', () => {
+    const V1 = 'eyJwYXRjaCI6eyJjbGltYXRlIjp7InNjYWxlTXVsIjoyfSwiZGVuc2l0eSI6eyJkZXRhaWxBbXBMbyI6MC44fSwic3VyZmFjZSI6eyJzbm93bGluZSI6LTAuNX19LCJwcm9maWxlIjoiZGVmYXVsdCIsInNlZWQiOiI0MiIsInYiOjEsInZpZXciOnsiYnBwIjo4LCJsYXllciI6ImJpb21lIiwieCI6LTEwMjQsInoiOjUxMn19';
+    const d = decodeMapState(`#${V1}`);
+    expect(d).toEqual({
+      state: {
+        v: 1, seed: '42', profile: 'default', patch: { climate: { scaleMul: 2 }, density: { detailAmpLo: 0.8 }, surface: { snowline: -0.5 } },
+        view: { x: -1024, z: 512, bpp: 8, layer: 'biome' },
+      },
+      error: null,
+    });
+    const s = open();
+    expect(applyMapHash(`#${V1}`, s, () => {})).toBeNull();
+    expect(s.state.params.density.defs).toBe(DEFAULT_DENSITY_TREE);
+    expect(s.state.params.surface.rules).toBe(DEFAULT_SURFACE_RULES);
+    expect([s.modifiedCount(''), s.modified('density.defs'), s.modified('surface.rules')]).toEqual([3, false, false]);
   });
 });
 

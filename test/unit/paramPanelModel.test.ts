@@ -297,8 +297,11 @@ describe('cross-field lints', () => {
 });
 
 describe('panel controls (Task 17): kinds, slider positions, typed values, issues', () => {
-  test("every control of today's schema has a panel control kind", () => {
-    expect(PANEL_KINDS).toEqual(['number', 'int', 'noise', 'spline', 'boxTable']);
+  test("every control of today's schema has a panel control kind (SP3d: json, the trees' link to the Density tab)", () => {
+    expect(PANEL_KINDS).toEqual(['number', 'int', 'noise', 'spline', 'boxTable', 'json']);
+    expect(controlsOf(panelTree()).filter((c) => c.kind === 'json').map((c) => [c.path, c.label])).toEqual([
+      ['density.defs', 'Density expression'], ['surface.rules', 'Surface rules'],
+    ]);
     for (const c of controlsOf(panelTree())) expect(PANEL_KINDS).toContain(c.kind);
   });
 

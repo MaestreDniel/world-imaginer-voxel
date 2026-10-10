@@ -1,5 +1,6 @@
 import { BIOME_TABLE_DEFAULT, BOX_BIOMES } from './biomeDefaults';
-import { boxTable, buildSchema, group, int, noise, num, spline, type Patch, type Value } from './kit';
+import { DEFAULT_DENSITY_TREE, DEFAULT_SURFACE_RULES } from './defaultTrees';
+import { boxTable, buildSchema, group, int, jsonLeaf, noise, num, spline, type Patch, type Value } from './kit';
 import { JAG_DEFAULT, OFFSET_DEFAULT, SIGMA_DEFAULT } from './shapeDefaults';
 
 export { NOISE_FIELD_RANGES } from './kit';
@@ -106,7 +107,7 @@ export const ROOT = group('Parameters', 'World generation parameters.', {
     table: boxTable(BIOME_TABLE_DEFAULT, { ...BIOME, label: 'Biome boxes', doc: 'Climate box, sign(W) filter and tie-break priority of every box-picked surface biome.', rows: BOX_BIOMES }),
     zoomJitter: num(1.5, { ...BIOME, label: 'Zoom jitter', doc: 'Jitter of the quart centres in the jittered-Voronoi zoom.', unit: 'blocks', min: 0, max: 2, step: 0.05 }),
   }),
-  density: group('Density', 'Tunables of the default 3D density expression (SP3b spec §3); its structure is code until SP3d.', {
+  density: group('Density', 'Tunables of the default 3D density expression (SP3b spec §3); its structure is the `defs` tree.', {
     noises: group('Density noises', 'Noises read by the density expression (noise2 / noise ops), at unscaled world block coordinates.', {
       jag: densityNoise('Jag noise', 'Ridges of jagged peaks: J = (1 − |z / clampSigma|)², times the jag spline.', { wavelength: 28, octaves: 2 }, 2, { min: 16, max: 8192 }),
       overhang: densityNoise('Overhang noise', '3D surface displacement, times σ and the vertical slide. Its vertical wavelength is λ / yScale; keep its last octave at 16 blocks or more (2 × the 8-block vertical corner step).', { wavelength: 32, octaves: 2, yScale: 1, persistence: 0.65 }, 3, { min: 16, max: 8192 }),
@@ -114,8 +115,9 @@ export const ROOT = group('Parameters', 'World generation parameters.', {
     }),
     detailAmpLo: amp(0.6, 'Detail amplitude at E −1', 'Detail amplitude in blocks where E ≤ −1.'),
     detailAmpHi: amp(1.5, 'Detail amplitude at E +1', 'Detail amplitude in blocks where E ≥ 1; linear in (E + 1) / 2 between the two.'),
+    defs: jsonLeaf(DEFAULT_DENSITY_TREE, 'density', { ...TERRAIN, label: 'Density expression', doc: 'The density expression {root, defs} as data (SP3d spec §1-§2): its numbers may read the density and surface tunables through parameter refs, and its taps may be muted. Edit it in the Density tab.' }),
   }),
-  surface: group('Surface', 'Tunables of the default surface-rule tree (SP3c spec §3.5, §4); its structure is code until SP3d.', {
+  surface: group('Surface', 'Tunables of the default surface-rule tree (SP3c spec §3.5, §4); its structure is the `rules` tree.', {
     noises: group('Surface noises', 'Noises read by the surface scan and rules, at unscaled world block coordinates (z2, unit sd).', {
       depth: surfaceNoise('Depth noise', 'Ns of the surface depth: max(0, ⌊3 + 2.75 · depthMul · Ns + 0.25 · hash⌋) blocks of under blocks below each top.', { wavelength: 64, octaves: 2 }, { min: 8, max: 1024 }),
       patch: surfaceNoise('Patch noise', 'Every surface patch (clay, podzol, coarse dirt, mud, gravel, calcite, packed ice): a patch block where it is ≥ the patch threshold, a second one where it is ≤ −threshold.', { wavelength: 24, octaves: 2 }, { min: 4, max: 512 }),
@@ -128,6 +130,7 @@ export const ROOT = group('Parameters', 'World generation parameters.', {
     cliffSteep: num(1.2, { ...TERRAIN, label: 'Cliff steepness', doc: 'A sky-open run whose position is at least this steep and whose top is at or above the cliff height shows stone (packed ice on frozen peaks).', min: 0, max: 8, step: 0.05 }),
     cliffMinY: worldY(80, 'Cliff height', 'Lowest run top that can be a cliff.'),
     patchThreshold: num(0.55, { ...TERRAIN, label: 'Patch threshold', doc: 'A patch block where the patch noise is ≥ this; the second block of a two-block patch where it is ≤ −this (≈ 29 % of the tops each at 0.55).', min: 0, max: 3, step: 0.01 }),
+    rules: jsonLeaf(DEFAULT_SURFACE_RULES, 'surfaceRules', { ...TERRAIN, label: 'Surface rules', doc: 'The surface-rule tree as data (SP3d spec §1-§2): its numeric fields may read the density and surface tunables through parameter refs, and its block states must be solid. Edit it in the Density tab.' }),
   }),
 });
 

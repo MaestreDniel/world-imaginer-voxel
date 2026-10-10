@@ -6,7 +6,8 @@
  *   fields a rule fixes are disabled with the reason in their tooltip; one modified dot and one reset for the
  *   whole leaf;
  * - spline: an "Edit" button that opens the drawer on the leaf;
- * - boxTable: a link to the Biomes tab.
+ * - boxTable: a link to the Biomes tab;
+ * - json (SP3d spec §1.1): a link "Edit in Density" that opens the drawer's Density tab on the tree.
  * Every control has a scope badge, a modified dot, a reset button and a tooltip (doc, range, unit, path).
  * A slider drag is one gesture (§1.3); a numeric field commits on Enter or blur (urgent) and Escape restores
  * the draft value; a refused value keeps its text with a red border and the issue text under its row, and is
@@ -29,6 +30,8 @@ export interface ControlDeps {
   openSpline(path: string): void;
   /** A boxTable leaf's link: shows the Biomes tab. */
   showBiomes(): void;
+  /** A json leaf's "Edit in Density" link: opens the drawer's Density tab on the leaf's tree. */
+  openTree(path: string): void;
 }
 
 export interface PanelControl {
@@ -462,6 +465,23 @@ function tableControl(deps: ControlDeps, c: ControlSpec): PanelControl {
   };
 }
 
+/** A json leaf (SP3d spec §1.1): the label, the modified dot and reset, and the link to the Density tab. */
+function treeControl(deps: ControlDeps, c: ControlSpec): PanelControl {
+  const link = el('button', 'pp-link', 'Edit in Density');
+  link.type = 'button';
+  link.title = `Edit ${c.label} in the Density tab`;
+  link.addEventListener('click', () => deps.openTree(c.path));
+  const f = frame(deps, c, () => {}, [link]);
+  return {
+    path: c.path,
+    element: f.element,
+    sync() { f.setModified(deps.session.modified(c.path)); },
+    restore() {},
+    setLint: (t) => f.setLint(t),
+    focus: () => link.focus(),
+  };
+}
+
 /** The control of one leaf; throws for a kind the panel has no control for (model.ts PANEL_KINDS). */
 export function createControl(c: ControlSpec, deps: ControlDeps): PanelControl {
   switch (c.kind) {
@@ -470,6 +490,7 @@ export function createControl(c: ControlSpec, deps: ControlDeps): PanelControl {
     case 'noise': return noiseControl(deps, c);
     case 'spline': return splineControl(deps, c);
     case 'boxTable': return tableControl(deps, c);
+    case 'json': return treeControl(deps, c);
     default: throw new Error(`no panel control for ${c.path} (${c.kind})`);
   }
 }

@@ -1,3 +1,4 @@
+import { readFileSync } from 'node:fs';
 import { describe, expect, test } from 'vitest';
 import type { Seed64 } from '../../src/core/hash';
 import { canonicalJSON } from '../../src/core/params/canonical';
@@ -6,6 +7,9 @@ import { applyPatch, diffParams } from '../../src/core/params/kit';
 import { exportPreset, importPreset } from '../../src/core/params/presets';
 import { isProfileReady, PROFILE_IDS, PROFILES, resolveProfile, type ProfileId } from '../../src/core/params/profiles';
 import { SCHEMA } from '../../src/core/params/schema';
+import { paramsHash } from '../../src/core/stage/hash';
+import { DEFAULT_DENSITY_TREE, DEFAULT_SURFACE_RULES } from '../../src/core/params/defaultTrees';
+import { validateParamTrees } from '../../src/gen/trees';
 import { knotAt, setKnot } from '../../src/core/spline/edit';
 import { WorldSession } from '../../src/engine/session';
 import { setPriority } from '../../src/ui/biomeTable/model';
@@ -15,6 +19,7 @@ import {
 import { leafOpts } from '../../src/ui/splineEditor/model';
 import { randomParams } from '../harness/params';
 import { testRng } from '../harness/stats';
+import { editedPatch } from './fixtures/editedTrees';
 
 const READY = PROFILE_IDS.filter((id) => isProfileReady(id));
 const UNREADY = PROFILE_IDS.filter((id) => !isProfileReady(id));
@@ -82,11 +87,11 @@ describe('presetFileName', () => {
 describe('presetText', () => {
   test('pretty JSON of exportPreset in envelope order, with a final newline', () => {
     expect(presetText(' My world ', 'default', withScaleMul(2))).toBe(
-      '{\n  "format": "wi10-preset",\n  "schemaVersion": 1,\n  "name": "My world",\n  "profile": "default",\n' +
+      '{\n  "format": "wi10-preset",\n  "schemaVersion": 2,\n  "name": "My world",\n  "profile": "default",\n' +
       '  "params": {\n    "climate": {\n      "scaleMul": 2\n    }\n  }\n}\n',
     );
     expect(presetText('Big', 'large_biomes', resolveProfile('large_biomes'))).toBe(
-      '{\n  "format": "wi10-preset",\n  "schemaVersion": 1,\n  "name": "Big",\n  "profile": "large_biomes",\n  "params": {}\n}\n',
+      '{\n  "format": "wi10-preset",\n  "schemaVersion": 2,\n  "name": "Big",\n  "profile": "large_biomes",\n  "params": {}\n}\n',
     );
   });
   test('equals exportPreset for random drafts', () => {
@@ -143,7 +148,7 @@ describe('readPresetText', () => {
     ]],
     ['reserved name', doc({ name: 'default' }), ['name: RESERVED_NAME — "default" is a built-in profile name']],
     ['unknown profile', doc({ profile: 'nope' }), ['profile: UNKNOWN_PROFILE — unknown profile "nope"']],
-    ['newer schema version', doc({ schemaVersion: 2 }), ['schemaVersion: NEWER_SCHEMA_VERSION — schemaVersion 2 is newer than this build (1)']],
+    ['newer schema version', doc({ schemaVersion: 3 }), ['schemaVersion: NEWER_SCHEMA_VERSION — schemaVersion 3 is newer than this build (2)']],
     ['a profile that is not ready', doc({ profile: 'archipelago' }), ['profile archipelago arrives in SP3e']],
     ['a profile that is not ready, with invalid params: import issues first', doc({ profile: 'archipelago', params: { climate: { scaleMull: 4 } } }), [
       'params.climate.scaleMull: UNKNOWN_KEY — unknown key "scaleMull"',
@@ -327,5 +332,42 @@ describe('presets tab logic', () => {
     r.issues.forEach((line, i) => expect(line).toMatch(issues[i]!));
     expect(s.state).toBe(state);
     expect(seen).toEqual([]);
+  });
+});
+
+describe('edited trees and version-1 presets (SP3d spec §1.11)', () => {
+  const random = (): Seed64 => [1, 2];
+  const open = (init: { patch?: unknown; profile?: ProfileId } = {}) => new WorldSession(random, { seedText: '42', ...init, validateParams: validateParamTrees });
+  const fixture = (name: string): string => readFileSync(new URL(`../fixtures/${name}`, import.meta.url), 'utf8');
+
+  test('both trees edited: exportPreset → importPreset → session.load gives equal canonical params, paramsHash and modifiedCount', () => {
+    const a = open({ patch: editedPatch(), profile: 'large_biomes' });
+    expect(a.initNotice).toBeNull();
+    const text = presetText('Edited trees', a.state.profile, a.state.params);
+    expect(JSON.parse(text).schemaVersion).toBe(2);
+    const imported = importPreset(JSON.parse(text) as unknown);
+    expect(imported.ok).toBe(true);
+    if (!imported.ok) return;
+    expect(canonicalJSON(imported.value.params)).toBe(canonicalJSON(a.state.params));
+    const b = open();
+    expect(loadPresetText(b, text)).toEqual({ ok: true, name: 'Edited trees', changed: true });
+    expect(canonicalJSON(b.state.params)).toBe(canonicalJSON(a.state.params));
+    expect(paramsHash(b.state.params)).toEqual(paramsHash(a.state.params));
+    expect(b.modifiedCount('')).toBe(a.modifiedCount(''));
+    expect(b.modifiedCount('')).toBe(2);
+  });
+
+  test('U4\'s fixture preset-v1.json (exported at 9fababa, schemaVersion 1) imports to expected-v1.json and loads with the default trees', () => {
+    const r = importPreset(JSON.parse(fixture('preset-v1.json')) as unknown);
+    expect(r.ok).toBe(true);
+    if (!r.ok) return;
+    expect(canonicalJSON(r.value.params)).toBe(canonicalJSON(JSON.parse(fixture('expected-v1.json'))));
+    expect(r.value.params.density.defs).toBe(DEFAULT_DENSITY_TREE);
+    expect(r.value.params.surface.rules).toBe(DEFAULT_SURFACE_RULES);
+    const s = open();
+    expect(loadPresetText(s, fixture('preset-v1.json'))).toEqual({ ok: true, name: 'Version 1 world', changed: true });
+    expect(s.state.profile).toBe('large_biomes');
+    expect(canonicalJSON(s.state.params)).toBe(canonicalJSON(r.value.params));
+    expect([s.modifiedCount(''), s.modified('density.defs'), s.modified('surface.rules')]).toEqual([5, false, false]);
   });
 });

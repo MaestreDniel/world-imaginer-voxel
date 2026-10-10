@@ -7,9 +7,13 @@ export interface JsonObject {
 
 export type Migration = (doc: JsonObject) => JsonObject;
 
-export const SCHEMA_VERSION = 1;
-/** MIGRATIONS[v - 1] upgrades a version-v document to v + 1; invariant: length === SCHEMA_VERSION - 1. */
-export const MIGRATIONS: readonly Migration[] = [];
+export const SCHEMA_VERSION = 2;
+/**
+ * MIGRATIONS[v - 1] upgrades a version-v document to v + 1; invariant: length === SCHEMA_VERSION - 1.
+ * 1 → 2 (SP3d spec §1.11): the identity — version 2 adds the `json` leaves `density.defs` and `surface.rules`, which a
+ * version-1 document lacks, and a missing leaf takes the profile's value.
+ */
+export const MIGRATIONS: readonly Migration[] = [(doc) => doc];
 
 const isObject = (v: unknown): v is JsonObject => typeof v === 'object' && v !== null && !Array.isArray(v);
 

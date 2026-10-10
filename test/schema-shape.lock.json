@@ -1,5 +1,5 @@
 {
-  "schemaVersion": 1,
+  "schemaVersion": 2,
   "leaves": {
     "biomes.table": "boxTable",
     "biomes.zoomJitter": "number",
@@ -16,6 +16,7 @@
     "climate.warp.R.noise": "noise",
     "climate.warp.shift.amplitude": "number",
     "climate.warp.shift.noise": "noise",
+    "density.defs": "json:density",
     "density.detailAmpHi": "number",
     "density.detailAmpLo": "number",
     "density.noises.detail": "noise",
@@ -66,6 +67,7 @@
     "surface.noises.depth": "noise",
     "surface.noises.patch": "noise",
     "surface.patchThreshold": "number",
+    "surface.rules": "json:surfaceRules",
     "surface.snowline": "number"
   }
 }

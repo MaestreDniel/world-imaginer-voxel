@@ -2,16 +2,15 @@
  * DensityContext (SP3b spec §2.3): what evaluating the density of one GenContext needs, built once per context.
  * - `noises`: the GenContext's schema noises `density.noises.<id>` (seed name = leaf path) as a DensityNoiseSource,
  *   with each leaf's dims; ids are the keys under `density.noises`.
- * - `expr`, `compiled` and `bounds`: one frozen expression (by default `resolveDensity(DEFAULT_DENSITY_TREE, params)`,
- *   the default source resolved for the context's params, SP3d spec §1.6, §2.1; an explicit expression is deep-frozen
- *   in place by `freezeTree`, identity kept) compiled once; its scratch is the per-column cache of the `columnFn` and
- *   `positionFn` values and of the corners evaluated so far.
+ * - `expr`, `compiled` and `bounds`: one frozen expression (by default `resolveDensity(params.density.defs, params)`,
+ *   the `density.defs` leaf resolved for the context's params, SP3d spec §1.6, §2.1; an explicit expression is
+ *   deep-frozen in place by `freezeTree`, identity kept) compiled once; its scratch is the per-column cache of the
+ *   `columnFn` and `positionFn` values and of the corners evaluated so far.
  * - `columns`: a ColumnCache (SP2a), so that probes and surfaceEst3 do not rebuild a ColumnSample per call.
  * `column(cx, cz)` makes (cx, cz) the compiled expression's current column, running columnFn and positionFn only when
  * another column was current; a T-stage `fillDensityColumn` on `bounds` leaves its column current as well.
  */
 import type { NormalNoise } from '../../core/noise/normal';
-import { DEFAULT_DENSITY_TREE } from '../../core/params/defaultTrees';
 import { SCHEMA } from '../../core/params/schema';
 import { createColumnCache, type ColumnCache } from '../column/columnCache';
 import type { ColumnSample } from '../column/columnStage';
@@ -26,7 +25,6 @@ const NOISE_FOR = noiseFor;
 const CACHE = createColumnCache;
 const COMPILE = compileDensity;
 const BOUNDS = createDensityBounds;
-const DEFAULT_SOURCE = DEFAULT_DENSITY_TREE;
 const RESOLVE = resolveDensity;
 const FREEZE = freezeTree;
 
@@ -61,13 +59,13 @@ export function densityNoiseSource(ctx: GenContext): DensityNoiseSource {
 }
 
 /**
- * A DensityContext for `ctx` over `expr`. Without `expr` the expression is the default source resolved for `ctx.params`
- * (`resolveDensity`: tier 2 first, then a fresh frozen tree; an invalid source throws an ExprValidationError with its
- * source paths); an explicit `expr` is deep-frozen in place (`freezeTree`, identity kept: mutating it afterwards
- * throws) and validated by the compiler (ExprValidationError).
+ * A DensityContext for `ctx` over `expr`. Without `expr` the expression is the `density.defs` leaf of `ctx.params`
+ * resolved for them (`resolveDensity`: tier 2 first, then a fresh frozen tree; an invalid source throws an
+ * ExprValidationError with its source paths); an explicit `expr` is deep-frozen in place (`freezeTree`, identity
+ * kept: mutating it afterwards throws) and validated by the compiler (ExprValidationError).
  */
 export function createDensityContext(ctx: GenContext, expr?: DensityExpr): DensityContext {
-  const tree = expr === undefined ? RESOLVE(DEFAULT_SOURCE, ctx.params) : FREEZE(expr);
+  const tree = expr === undefined ? RESOLVE(ctx.params.density.defs, ctx.params) : FREEZE(expr);
   const noises = densityNoiseSource(ctx);
   const compiled = COMPILE(tree, noises);
   const bounds = BOUNDS(compiled, noises);
