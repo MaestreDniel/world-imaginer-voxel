@@ -111,6 +111,8 @@ export function randomValue(leaf: Leaf<unknown, unknown>, next: () => number): u
       };
     }
     case 'spline': return randomSplineLike(leaf.def as NestedSpline, next, Math.max(leaf.min!, -1000), Math.min(leaf.max!, 1000));
+    // A tree leaf keeps its default and makes no draw (SP3d spec §1.1): random trees come from the dedicated fuzz.
+    case 'json': return leaf.def;
     case 'boxTable': {
       const table: Record<string, unknown> = {};
       const priorities = randomPriorities(next, leaf.options!.length);
@@ -138,10 +140,12 @@ export function randomParams<R extends Group>(s: Schema<R>, next: () => number):
   return r.value;
 }
 
-/** A random valid patch: each leaf with probability ½; noise leaves get either a whole def or only a wavelength. */
+/** A random valid patch: each leaf with probability ½ (json leaves never); noise leaves get either a whole def or only a wavelength. */
 export function randomPatch<R extends Group>(s: Schema<R>, next: () => number): Record<string, unknown> {
   const walk = (n: Node): unknown => {
     if (n.tag === 'leaf') {
+      // Tree leaves are skipped before their inclusion bit, so every other leaf's draws are unchanged (SP3d spec §1.1).
+      if (n.kind === 'json') return undefined;
       if ((next() & 1) === 0) return undefined;
       if (n.kind === 'noise' && (next() & 1) === 0) return { wavelength: between(next, n.min!, n.max!) };
       return randomValue(n, next);

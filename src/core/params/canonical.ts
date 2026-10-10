@@ -11,13 +11,38 @@ export class CanonicalError extends Error {
   }
 }
 
+/** canonicalJSON's nesting limit: a value deeper than this throws. */
+const MAX_NESTING = 64;
+
+interface CachedText {
+  readonly text: string;
+  /** The deepest nesting offset inside the value (its top is 0): the uncached walk throws iff depth + height > 64. */
+  readonly height: number;
+}
+/** Canonical text of the deep-frozen values tier 1 registered (`checkJson`, SP3d spec §1.12), keyed by identity. */
+const TEXT_CACHE = new WeakMap<object, CachedText>();
+let cacheHits = 0;
+
+/**
+ * Records the canonical text of a deep-frozen value; only `checkJson` (`json.ts`) calls it, for the clones it
+ * registers, so a cached text can never go stale.
+ */
+export function rememberCanonical(v: object, text: string, height: number): void {
+  TEXT_CACHE.set(v, { text, height });
+}
+
+/** How many times canonicalJSON printed a value from the text cache (tests). */
+export function canonicalCacheHits(): number {
+  return cacheHits;
+}
+
 function isPlainObject(v: object): boolean {
   const p: unknown = Object.getPrototypeOf(v);
   return p === Object.prototype || p === null;
 }
 
 function enc(v: unknown, path: string, depth: number): string {
-  if (depth > 64) throw new CanonicalError(path, 'nesting deeper than 64');
+  if (depth > MAX_NESTING) throw new CanonicalError(path, `nesting deeper than ${MAX_NESTING}`);
   switch (typeof v) {
     case 'string':
       return JSON.stringify(v);
@@ -29,6 +54,12 @@ function enc(v: unknown, path: string, depth: number): string {
       return String(v);
     case 'object': {
       if (v === null) return 'null';
+      // A cached value prints in O(1); one nested too deep takes the walk below, which throws at its exact path.
+      const cached = TEXT_CACHE.get(v);
+      if (cached !== undefined && depth + cached.height <= MAX_NESTING) {
+        cacheHits++;
+        return cached.text;
+      }
       if (Array.isArray(v)) {
         let s = '[';
         for (let i = 0; i < v.length; i++) {
@@ -56,7 +87,10 @@ function enc(v: unknown, path: string, depth: number): string {
   }
 }
 
-/** RFC 8785 (JCS), stricter: NaN, ±Infinity, −0, non-plain objects and undefined array items throw. */
+/**
+ * RFC 8785 (JCS), stricter: NaN, ±Infinity, −0, non-plain objects and undefined array items throw. The values tier 1
+ * registered print from their cached text.
+ */
 export function canonicalJSON(v: unknown): string {
   return enc(v, '', 0);
 }

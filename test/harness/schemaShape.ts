@@ -14,9 +14,10 @@ const BUMP = 'bump SCHEMA_VERSION and add a migration';
 const BEGIN = '<!-- params:begin -->';
 const END = '<!-- params:end -->';
 
+/** Each leaf's kind; a `json` leaf's is `json:<format>`, so a format switch is a re-kind (SP3d spec §1.1). */
 export function currentShape<R extends Group>(schema: Schema<R>): Record<string, string> {
   const out: Record<string, string> = {};
-  for (const { path, meta } of schema.leaves) out[path] = meta.kind;
+  for (const { path, meta } of schema.leaves) out[path] = meta.kind === 'json' ? `json:${meta.format}` : meta.kind;
   return out;
 }
 

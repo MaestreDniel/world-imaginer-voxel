@@ -8,9 +8,10 @@ import { NOISE_DEF_DEFAULTS, type NoiseDef, type NoiseDefPatch } from '../noise/
 import type { NestedSpline, SplineCoord } from '../spline/types';
 import { normalizeSpline, validateSpline, type SplineErrorCode } from '../spline/validate';
 import { canonicalJSON, q15 } from './canonical';
+import { checkJson, countTreeNodes, type JsonFormat, type JsonIssueCode, type JsonValue, type TreeIssueCode } from './json';
 
 export type ParamKind =
-  | 'number' | 'int' | 'bool' | 'enum' | 'noise' | 'spline' | 'expr' | 'boxTable' | 'ruleTree' | 'featureList' | 'structureSets';
+  | 'number' | 'int' | 'bool' | 'enum' | 'noise' | 'spline' | 'json' | 'boxTable' | 'featureList' | 'structureSets';
 
 /** Live leaves are hashed by no stage; every other leaf names its home stage. */
 export type Placement =
@@ -38,6 +39,8 @@ export interface ParamMeta {
   /** Noise leaves whose remap must stay 'none' (SP3b density noises: the density expression rejects any other). */
   readonly remapNone?: true;
   readonly coords?: readonly SplineCoord[];
+  /** Present exactly on `json` leaves (SP3d spec §1.1). */
+  readonly format?: JsonFormat;
   readonly scope: RegenScope;
   readonly stage?: StageId;
   readonly effectMetric?: MetricId;
@@ -48,7 +51,7 @@ export type ParamIssueCode =
   | 'OUT_OF_RANGE' | 'NOT_BOOL' | 'BAD_ENUM' | 'AMPLITUDES_LENGTH' | 'AMPLITUDES_ZERO' | 'AMPLITUDE_TINY' | 'YSCALE_NOT_1'
   | 'REMAP_NEEDS_DOUBLE' | 'REMAP_NEEDS_2D' | 'REMAP_NOT_ALLOWED' | 'BAD_INTERVAL' | 'DUPLICATE_PRIORITY';
 export type PresetIssueCode = 'BAD_FORMAT' | 'BAD_NAME' | 'RESERVED_NAME' | 'UNKNOWN_PROFILE' | 'BAD_SCHEMA_VERSION' | 'NEWER_SCHEMA_VERSION';
-export type IssueCode = ParamIssueCode | PresetIssueCode | 'MIGRATION_FAILED' | SplineErrorCode;
+export type IssueCode = ParamIssueCode | PresetIssueCode | 'MIGRATION_FAILED' | SplineErrorCode | JsonIssueCode | TreeIssueCode;
 
 export interface Issue {
   readonly path: string;
@@ -75,6 +78,8 @@ export interface Leaf<T, P = T> {
   readonly components?: readonly ['x', 'z'];
   /** A noise leaf whose remap must stay 'none' (NoiseMeta.remapNone). */
   readonly remapNone?: true;
+  /** The tree format of a `json` leaf (present exactly on them). */
+  readonly format?: JsonFormat;
   /** Phantom: never present at runtime. */
   readonly __patch?: P;
 }
@@ -157,6 +162,14 @@ export function spline(def: NestedSpline, meta: SplineMeta): Leaf<NestedSpline> 
 /** A table of named boxes (the biome table); patches replace it whole. `rows` fixes the row names. */
 export function boxTable<const K extends string>(def: BoxTable<K>, meta: BoxTableMeta<K>): Leaf<BoxTable<K>> {
   return { tag: 'leaf', kind: 'boxTable', merge: 'atomic', def, meta, options: meta.rows };
+}
+
+/**
+ * A tree leaf (SP3d spec §1.1): a JSON value of `format`, validated by tier 1 (`checkJson`) in `checkLeaf`; patches
+ * replace it whole (atomic), and the schema default is tier 1's registered frozen clone of `def`.
+ */
+export function jsonLeaf(def: JsonValue, format: JsonFormat, meta: MetaInput): Leaf<JsonValue> {
+  return { tag: 'leaf', kind: 'json', merge: 'atomic', format, def, meta };
 }
 
 export function group<const C extends Children>(label: string, doc: string, children: C): Group<C> {
@@ -324,6 +337,9 @@ export function checkLeaf(leaf: Leaf<unknown, unknown>, v: unknown, path: string
     case 'noise': return checkNoise(v, path, out, leaf);
     case 'spline': return checkSpline(v, path, out, leaf);
     case 'boxTable': return checkBoxTable(v, path, out, leaf);
+    case 'json':
+      if (leaf.format === undefined) throw new Error(`json leaf at ${path} has no format`);
+      return checkJson(v, path, out, leaf.format);
     default: throw new Error(`no validator for kind ${leaf.kind} yet`);
   }
 }
@@ -370,6 +386,7 @@ function toMeta(path: string, l: Leaf<unknown, unknown>): ParamMeta {
     ...(l.dims !== undefined ? { dims: l.dims } : {}),
     ...(l.remapNone === true ? { remapNone: true } : {}),
     ...(l.coords !== undefined ? { coords: l.coords } : {}),
+    ...(l.format !== undefined ? { format: l.format } : {}),
     scope: m.scope,
     ...(m.stage !== undefined ? { stage: m.stage } : {}),
     ...(m.effectMetric !== undefined ? { effectMetric: m.effectMetric } : {}),
@@ -460,10 +477,14 @@ export function applyPatch<R extends Group>(s: Schema<R>, base: Value<R>, patch:
   return out.length > 0 ? { ok: false, issues: out } : { ok: true, value: deepFreeze(value) as Value<R> };
 }
 
-/** Minimal patch with applyPatch(s, base, diffParams(s, base, v)) canonically equal to v. */
+/**
+ * Minimal patch with applyPatch(s, base, diffParams(s, base, v)) canonically equal to v. A leaf that is the same object
+ * as the base's is unchanged without being printed (a tree is compared in O(1); SP3d spec §1.12).
+ */
 export function diffParams<R extends Group>(s: Schema<R>, base: Value<R>, value: Value<R>): Patch<R> {
   const walk = (n: Node, b: unknown, x: unknown): unknown => {
     if (n.tag === 'leaf') {
+      if (b === x) return undefined;
       if (n.merge === 'fields' && isObj(b) && isObj(x)) {
         const d: Record<string, unknown> = {};
         for (const k of NOISE_KEYS) if (canonicalJSON(x[k]) !== canonicalJSON(b[k])) d[k] = x[k];
@@ -508,7 +529,9 @@ export function renderReference<R extends Group>(s: Schema<R>): string {
   const rows = ['| path | kind | default | range | unit | scope | doc |', '|---|---|---|---|---|---|---|'];
   for (const { path, meta } of s.leaves) {
     const value = getPath(s.defaults, path);
-    const def = meta.kind === 'boxTable' ? `${Object.keys(value as object).length} rows` : canonicalJSON(value);
+    const def = meta.kind === 'boxTable' ? `${Object.keys(value as object).length} rows`
+      : meta.kind === 'json' ? `${meta.format} tree, ${countTreeNodes(value, meta.format!)} nodes`
+      : canonicalJSON(value);
     const range = meta.options !== undefined ? meta.options.join(' / ')
       : meta.kind === 'noise' ? `wavelength ${meta.min} … ${meta.max}`
       : meta.min !== undefined ? `${meta.min} … ${meta.max}` : '';

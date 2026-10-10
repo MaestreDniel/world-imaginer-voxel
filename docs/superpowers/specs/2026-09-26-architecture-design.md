@@ -87,9 +87,10 @@ world-imaginer-voxel/          (repository root)
       spline/types.ts validate.ts hermite.ts tangents.ts   nested cubic-Hermite splines compiled to Int32Array code + Float64Array numbers,
                                 evaluated by a zero-allocation register-file interpreter; one validator; authoring-time auto tangents
       spline/edit.ts weights.ts (SP2b) pure editor operations (insert, delete, set, nest, flatten, clamped auto tangents) and Hermite path weights
-      params/kit.ts schema.ts meta.ts defaults.ts noises.ts profiles.ts presets.ts migrate.ts canonical.ts graphicsPresets.ts
+      params/kit.ts schema.ts meta.ts defaults.ts noises.ts profiles.ts presets.ts migrate.ts canonical.ts graphicsPresets.ts json.ts
                                 ParamSchema = single source (types, defaults, UI, scope); defaults referenced by the schema live in core/params
-                                (core cannot import gen/); graphicsPresets.ts = the §4.16 preset table as pure data (graphics + audio rows)
+                                (core cannot import gen/); graphicsPresets.ts = the §4.16 preset table as pure data (graphics + audio rows);
+                                json.ts = the `json` leaf kind's tier-1 validator and the tree issue codes (SP3d)
       stage/registry.ts hash.ts StageDef, stageHash, genKey, dirty-stage computation
     world/                      L1 (core only)
       blocks/kinds.ts registry.ts defs.ts index.ts fluid.ts light.ts   (SP3a) u16 block-state ids (<= 4096 used): property kinds
@@ -332,8 +333,9 @@ type RegenScope = 'live' | 'remesh' | 'decorate' | 'terrain' | 'climate';
 type SubProjectId = 'SP0'|'SP1'|'SP2a'|'SP2b'|'SP3a'|'SP3b'|'SP3c'|'SP3d'|'SP3e'|'SP4'|'SP5'|'SP6'|'SP7'|'SP8a'|'SP8b'|'SP8c'|'SP9'|'SP10'|'SP11'|'SP12';
 type StageId = 'climate'|'shape'|'surfaceEst'|'biome2d'|'terrain'|'decorate'|'light'|'mesh'|'lod'|'map';
 interface ParamMeta { path: string; label: string; doc: string; unit?: string;
-  kind: 'number'|'int'|'bool'|'enum'|'noise'|'spline'|'expr'|'boxTable'|'ruleTree'|'featureList'|'structureSets';
+  kind: 'number'|'int'|'bool'|'enum'|'noise'|'spline'|'json'|'boxTable'|'featureList'|'structureSets';
   min?: number; max?: number; step?: number; options?: readonly string[]; dims?: 2|3; coords?: readonly SplineCoord[];
+  format?: 'density'|'surfaceRules' /* json leaves only (amended by SP3d) */;
   scope: RegenScope; stage?: StageId /* present exactly when scope !== 'live' (SP1) */; effectMetric?: MetricId; }
 interface StageDef { id: StageId; version: number; reads: StageId[]; params: string[] /* path prefixes */;
   checkpoint: 'columnSample'|'proto'|'final'|'none'; }
