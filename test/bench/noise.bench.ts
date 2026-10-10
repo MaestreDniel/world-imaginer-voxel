@@ -10,6 +10,7 @@ import { DEFAULTS } from '../../src/core/params/defaults';
 import { Xoshiro128 } from '../../src/core/rng';
 import { compileSpline, evalSpline } from '../../src/core/spline/hermite';
 import { genKey, stageHashes } from '../../src/core/stage/hash';
+import { canonicalJSON } from '../../src/core/params/canonical';
 import { DENSITY3D_DEF, JAG, OFFSET, SIGMA } from '../../src/metrics/sp1Fixtures';
 import { seedFromInput } from '../../src/core/seed';
 import { createGenContext } from '../../src/gen/context';
@@ -23,6 +24,14 @@ import { paintTile } from '../../src/gen/map/tile';
 import { fillColumnT } from '../../src/metrics/region';
 import { createStore } from '../../src/world/store/store';
 import { createTaskHandler } from '../../src/workers/taskHandler';
+import { PART_BUDGET, REQUEST_BUDGET } from '../../src/core/constants';
+import type { Params } from '../../src/core/params/schema';
+import { sliceCostOf } from '../../src/gen/inspect/fieldSlice';
+import { runFieldSlice } from '../../src/workers/fieldSliceJob';
+import { planFieldSlice, type FieldSliceMsg, type FieldSliceSpec } from '../../src/workers/protocol';
+import { DEFAULT_MAP_STATE, openMapSession, type MapState } from '../../src/ui/map/mapState';
+import { capDensityTree, capSurfaceRules } from '../harness/capTrees';
+import { PART_WORST_LEAVES, partWorstParams } from '../harness/sliceTrees';
 import { absoluteGateFailures, BENCH_ROWS, gateFailures, parseBenchExempt, type Baselines, type BenchKernel } from './gates';
 import { buildPerm, perm3 } from './perm512';
 
@@ -37,7 +46,34 @@ const BASELINE_PATH = fileURLToPath(new URL('../baselines.json', import.meta.url
 const N = 4096;
 let sink = 0;
 
-test('SP1, SP2a, SP2b, SP3a, SP3b and SP3c kernels', async ({ bench }) => {
+/**
+ * SP3d §9: the slice rows' evaluation as one worker of the pool would run it — each part [from, to) of `spec` through
+ * the handler's path (`runFieldSlice`: the BAD_ARGS checks and the part bound on `sliceCostOf`, recomputed from the
+ * configured params, then `gen/inspect/fieldSlice.ts`'s evaluation), on a fresh GenContext per slice (cold caches: the
+ * case right after an edit; the parts share it, as one worker's configured context). A refused part or an empty reply
+ * throws, so a row can never time a BAD_ARGS. The density field reads no T column.
+ */
+const NO_T_COLUMNS = (): never => { throw new Error('a density slice reads no T column'); };
+const NEVER = (): boolean => false;
+function slice(params: Params, spec: FieldSliceSpec, ranges: readonly (readonly [number, number])[]): number {
+  const ctx = createGenContext(seedFromInput('42'), params);
+  let s = 0;
+  for (const [from, to] of ranges) {
+    const msg: FieldSliceMsg = { ...spec, type: 'fieldSlice', jobId: 0, epoch: 0, from, to };
+    const r = runFieldSlice(ctx, msg, NEVER, NO_T_COLUMNS);
+    if (r === null || 'badArgs' in r) throw new Error(`slice part [${from}, ${to}) refused: ${r === null ? 'stopped' : r.badArgs}`);
+    s += new Float64Array(r.msg.values)[0]!;
+  }
+  return s;
+}
+/** The pool's split at pool size 1 of a whole n × n density slice (`planFieldSlice` with REQUEST_BUDGET): its ranges. */
+function poolOfOne(params: Params, spec: FieldSliceSpec): readonly (readonly [number, number])[] {
+  const plan = planFieldSlice(spec.n, sliceCostOf(params, spec.field, spec.path, spec.plane, spec.n), 1, REQUEST_BUDGET);
+  if (plan.refused) throw new Error(`the ${spec.plane} ${spec.n}² slice is refused (limit ${plan.limit})`);
+  return plan.ranges;
+}
+
+test('SP1, SP2a, SP2b, SP3a, SP3b, SP3c and SP3d kernels', async ({ bench }) => {
   // SP3c §7: BENCH_EXEMPT names rows whose ratio gate is skipped (an unknown name fails here, before measuring);
   // bench:record never reads it.
   const exempt = process.env.BENCH_RECORD === '1' ? [] : parseBenchExempt(process.env.BENCH_EXEMPT);
@@ -146,6 +182,40 @@ test('SP1, SP2a, SP2b, SP3a, SP3b and SP3c kernels', async ({ bench }) => {
     evaluated = surfacePass(sc, sSample, sCol.solid, sCol.water, sCol.biomes, states);
     sink += states[98303]!;
   });
+  // SP3d §9: the slice rows, one thread, in-process, 9 timed runs after one warm-up each, a fresh GenContext per slice.
+  // slice.vertical128: field density at n = 128 on uiSmoke's mountain line A (−1664, 8) → B (−640, 8), split as the
+  // pool of one worker splits it (k = 79 sample columns per part: 2 parts).
+  const vSpec: FieldSliceSpec = { plane: 'vertical', ax: -1664, az: 8, bx: -640, bz: 8, y: 63, n: 128, field: 'density', path: '' };
+  const vRanges = poolOfOne(DEFAULTS, vSpec);
+  const vRun = await measure('slice.vertical128', 1, () => { sink += slice(DEFAULTS, vSpec, vRanges); }, 9);
+  // slice.horizontal128: the XZ plane at y 63 centred on (0, 0), extent 8192, from corner samples (k = 25: 6 parts).
+  const hSpec: FieldSliceSpec = { plane: 'horizontal', cx: 0, cz: 0, extent: 8192, y: 63, n: 128, field: 'density', path: '' };
+  const hRanges = poolOfOne(DEFAULTS, hSpec);
+  const hRun = await measure('slice.horizontal128', 1, () => { sink += slice(DEFAULTS, hSpec, hRanges); }, 9);
+  // slice.partWorst: one part at PART_BUDGET — one 32-sample vertical column of the interpolated add of
+  // PART_WORST_LEAVES 16-octave double `noise detail` leaves (Task 19's calibration tree) — below the request check
+  // (planFieldSlice refuses the whole slice; the handler's part bound accepts this part).
+  const worst = partWorstParams();
+  const wSpec: FieldSliceSpec = { ...vSpec, n: 32 };
+  const wCost = sliceCostOf(worst, 'density', '', 'vertical', 32);
+  expect(wCost, 'slice.partWorst: one sample column within PART_BUDGET').toBeLessThanOrEqual(PART_BUDGET);
+  expect(planFieldSlice(32, wCost, 1, REQUEST_BUDGET).refused, 'slice.partWorst: the whole slice is refused').toBe(true);
+  const wRun = await measure('slice.partWorst', 1, () => { sink += slice(worst, wSpec, [[0, 1]]); }, 9);
+  // session.commitMaxTree (SP3d §1.12): one slider commit (`set`, outside a gesture) of the page's session
+  // (`openMapSession`: tier 2 as its validator) holding both trees at the 128 KiB cap.
+  const capped = { ...DEFAULT_MAP_STATE, patch: { density: { defs: capDensityTree() }, surface: { rules: capSurfaceRules() } } as MapState['patch'] };
+  const session = openMapSession(capped, () => [3, 9]);
+  const cappedDefs = session.state.params.density.defs;
+  expect(canonicalJSON(cappedDefs).length, 'session.commitMaxTree: the session holds the capped density tree').toBeGreaterThan(131_000);
+  expect(canonicalJSON(session.state.params.surface.rules).length, 'session.commitMaxTree: and the capped rules').toBeGreaterThan(131_000);
+  let commits = 0;
+  const commitRun = await measure('session.commitMaxTree', 1, () => {
+    const r = session.set('climate.scaleMul', 1 + (++commits & 1));
+    if (!r.ok) throw new Error('session.commitMaxTree: the commit was refused');
+    sink += r.state.epoch;
+  });
+  expect(session.state.params.density.defs, 'session.commitMaxTree: the commits keep the tree by identity').toBe(cappedDefs);
+
   let solidVoxels = 0;
   for (let i = 256; i < 98304; i++) solidVoxels += sCol.solid[i]!;
   expect(evaluated, 'surface.column evaluates part of the column (the fast path takes the rest)').toBeGreaterThan(0);
@@ -163,8 +233,16 @@ test('SP1, SP2a, SP2b, SP3a, SP3b and SP3c kernels', async ({ bench }) => {
   console.log(`column.sample p50 ${columnRun.latency.p50.toFixed(3)} ms, p99 (≥ p95) ${columnP95.toFixed(3)} ms`);
   console.log(`terrain.real p50 ${terrainRun.latency.p50.toFixed(3)} ms, p99 ${terrainRun.latency.p99.toFixed(3)} ms`);
   console.log(`surface.column p50 ${surfaceRun.latency.p50.toFixed(3)} ms, p99 ${surfaceRun.latency.p99.toFixed(3)} ms (column (0, 0): ${evaluated} of ${solidVoxels} solid voxels evaluated)`);
+  const ms = (r: { latency: { p50: number; p99: number } }): string => `p50 ${r.latency.p50.toFixed(3)} ms, p99 ${r.latency.p99.toFixed(3)} ms`;
+  console.log(`slice.vertical128 ${ms(vRun)} (${vRanges.length} parts at pool size 1: ${JSON.stringify(vRanges)})`);
+  console.log(`slice.horizontal128 ${ms(hRun)} (${hRanges.length} parts at pool size 1: ${JSON.stringify(hRanges)})`);
+  console.log(`slice.partWorst ${ms(wRun)} (${PART_WORST_LEAVES} leaves, one 32-sample column of ${wCost} work units)`);
+  console.log(`session.commitMaxTree ${ms(commitRun)} (${commits} commits; trees of ${canonicalJSON(cappedDefs).length} and ${canonicalJSON(session.state.params.surface.rules).length} characters)`);
   // Before the record: bench:record refuses to write when an absolute gate fails.
-  expect(absoluteGateFailures({ columnP50: columnRun.latency.p50, columnP95, terrainP50: terrainRun.latency.p50 }), 'absolute gates').toEqual([]);
+  expect(absoluteGateFailures({
+    columnP50: columnRun.latency.p50, columnP95, terrainP50: terrainRun.latency.p50,
+    sliceV128P50: vRun.latency.p50, slicePartP50: wRun.latency.p50, sessionCommitP50: commitRun.latency.p50,
+  }), 'absolute gates').toEqual([]);
   expect(Number.isFinite(sink)).toBe(true);
   if (process.env.BENCH_RECORD === '1') {
     const next: Baselines = { machine: cpus()[0]?.model ?? 'unknown', node: process.version, date: new Date().toISOString().slice(0, 10), kernels, killRatio };

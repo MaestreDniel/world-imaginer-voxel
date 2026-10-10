@@ -1624,7 +1624,7 @@ High adds MSAA, a shadow cascade (about 2 ms), LOD 1 km and RD16 (dGPU target). 
 **Map, inspector and LOD throughput** (honest figures):
 - A 256² map tile at 4 blocks/px with relief ≈ 0.9 s CPU; biome-only ≈ 0.4 s.
 - First full-screen coarse image (32 blocks/px) ≤ 0.3 s; full refinement ≤ 6 s on 4 idle workers.
-- Inspector slice: 128² first in ≤ 300 ms, refined to 256².
+- Inspector slice: a 32² draft, then 128² with the vertical slice ≤ 300 ms p50 on one thread (bench row `slice.vertical128`) and a slice part ≤ 250 ms (`slice.partWorst`); the horizontal 128² at extent 8192 is reported (`slice.horizontal128`); the 256² refinement is SP10's (amended by SP3d).
 - LOD L0 ring at 512 ≈ 44k samples ≈ 0.5 s CPU; tile ≤ 60 ms.
 
 **Latency:**

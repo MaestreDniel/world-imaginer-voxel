@@ -53,6 +53,27 @@ test('utf8Bytes equals TextEncoder on 20k random strings with lone surrogates', 
   }
 });
 
+test('fnv1a64 of a string is fnv1a64Bytes of its utf8Bytes, on 20k random strings with lone surrogates and on long ASCII', () => {
+  // SP3d §1.12: fnv1a64 streams the UTF-8 bytes from the string; every hash (paramsHash, stage hashes, goldens) is unchanged.
+  const next = testRng(13);
+  for (let i = 0; i < 20000; i++) {
+    const n = next() % 12;
+    let s = '';
+    for (let k = 0; k < n; k++) {
+      const r = next() % 6;
+      if (r === 0) s += String.fromCharCode(0xd800 + (next() % 0x800));
+      else if (r === 1) s += String.fromCodePoint(0x10000 + (next() % 0xfffff));
+      else if (r === 2) s += String.fromCharCode(0x80 + (next() % 0x780));
+      else if (r === 3) s += String.fromCharCode(next() % 0x80);
+      else s += String.fromCharCode(next() % 0x10000);
+    }
+    expect(fnv1a64(s)).toEqual(fnv1a64Bytes(utf8Bytes(s)));
+  }
+  for (const s of ['\ud800', '\udc00', 'a\ud800', '\ud800\ud800\udc00', '\udbff\udfff', '\u07ff\u0800\uffff', 'x'.repeat(100_000) + '\u00e9']) {
+    expect(fnv1a64(s), JSON.stringify(s.slice(0, 8))).toEqual(fnv1a64Bytes(utf8Bytes(s)));
+  }
+});
+
 test('hashF64 writes every NaN as 0x7FF8000000000000', () => {
   const neg = new Float64Array(1);
   new DataView(neg.buffer).setUint32(4, 0xfff80000, true);

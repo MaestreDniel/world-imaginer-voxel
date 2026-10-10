@@ -186,8 +186,51 @@ export function createFnv64(): Fnv64 {
   return stream;
 }
 
+/**
+ * `fnv1a64Bytes(utf8Bytes(str))`, streamed from the string without building the byte array (SP3d spec §1.12, §9: the
+ * session hashes the canonical text of the params and of the draft on every commit, up to about 270 K characters with
+ * two capped trees; the array was 3/4 of the cost). The same UTF-8 encoding as `utf8Bytes`, a lone surrogate included.
+ */
 export function fnv1a64(str: string): Hash64 {
-  return fnv1a64Bytes(utf8Bytes(str));
+  let lo = 0x84222325;
+  let hi = 0xcbf29ce4;
+  const n = str.length;
+  for (let i = 0; i < n; i++) {
+    let c = str.charCodeAt(i);
+    if (c < 0x80) {
+      lo = (lo ^ c) >>> 0;
+      const p = lo * 0x1b3;
+      const nlo = p >>> 0;
+      hi = (Math.imul(hi, 0x1b3) + (p - nlo) / 4294967296 + (lo << 8)) >>> 0;
+      lo = nlo;
+      continue;
+    }
+    if (c >= 0xd800 && c <= 0xdbff) {
+      const d = i + 1 < n ? str.charCodeAt(i + 1) : 0;
+      if (d >= 0xdc00 && d <= 0xdfff) {
+        c = 0x10000 + ((c - 0xd800) << 10) + (d - 0xdc00);
+        i++;
+      } else {
+        c = 0xfffd;
+      }
+    } else if (c >= 0xdc00 && c <= 0xdfff) {
+      c = 0xfffd;
+    }
+    // The 2-4 bytes of c, lead byte first, packed little-end-first into `seq` (each 8 bits).
+    let count: number;
+    let seq: number;
+    if (c < 0x800) { count = 2; seq = (0xc0 | (c >> 6)) | ((0x80 | (c & 63)) << 8); }
+    else if (c < 0x10000) { count = 3; seq = (0xe0 | (c >> 12)) | ((0x80 | ((c >> 6) & 63)) << 8) | ((0x80 | (c & 63)) << 16); }
+    else { count = 4; seq = ((0xf0 | (c >> 18)) | ((0x80 | ((c >> 12) & 63)) << 8) | ((0x80 | ((c >> 6) & 63)) << 16) | ((0x80 | (c & 63)) << 24)) >>> 0; }
+    for (let k = 0; k < count; k++) {
+      lo = (lo ^ ((seq >>> (8 * k)) & 255)) >>> 0;
+      const p = lo * 0x1b3;
+      const nlo = p >>> 0;
+      hi = (Math.imul(hi, 0x1b3) + (p - nlo) / 4294967296 + (lo << 8)) >>> 0;
+      lo = nlo;
+    }
+  }
+  return [lo, hi];
 }
 
 export function hex64(h: Hash64): string {

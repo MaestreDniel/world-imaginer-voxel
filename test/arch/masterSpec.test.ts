@@ -12,7 +12,9 @@
  * SP3d (its spec §12): §10's SP3d entry names its spec and no longer defers its deliverable, exit and cut line to it;
  * §1's `test/` entry names SP3d's test files, which exist (it lands with the last of them, `harness/treeMutator.ts`);
  * §1's `ui/inspector/*` entry names every module of the Density tab, and the reserved top-level `sliceView.ts`,
- * `probe.ts` and `jsonEditor.ts` are dropped (it lands with the last of them, `sliceView.ts`).
+ * `probe.ts` and `jsonEditor.ts` are dropped (it lands with the last of them, `sliceView.ts`); §7's inspector slice line
+ * names the three slice bench rows that gate it, which `BENCH_ROWS` measures, and no longer promises the 256² refinement
+ * (it lands with the rows).
  */
 import { existsSync, readdirSync, readFileSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
@@ -20,6 +22,7 @@ import { describe, expect, test } from 'vitest';
 import { SUB_PROJECTS, type SubProjectId } from '../../src/core/ids';
 import { DEFAULTS } from '../../src/core/params/defaults';
 import { REGISTRY } from '../../src/world/blocks';
+import { BENCH_ROWS } from '../bench/gates';
 import { SP_DEPS } from '../harness/sp';
 import { DET_FILES } from './rules/banned';
 
@@ -220,6 +223,18 @@ describe('master spec amendments (SP3d §12)', () => {
     expect(existsSync(`${ROOT_DIR}docs/superpowers/specs/${spec![1]}`), `${spec![1]} does not exist`).toBe(true);
     expect(entry).not.toMatch(/set by the SP3d spec/);
     for (const k of ['Deliverable:', 'Exit:', 'Cut line:']) expect(entry, `SP3d misses **${k}**`).toContain(`**${k}**`);
+  });
+
+  test('§7\'s inspector slice line names the slice bench rows, which BENCH_ROWS measures; the 256² refinement is SP10\'s', () => {
+    const line = text.split('\n').find((l) => l.startsWith('- Inspector slice: '));
+    expect(line, 'no `- Inspector slice: …` line in §7').toBeDefined();
+    expect(line).not.toMatch(/refined to 256²/);
+    expect(line).toMatch(/256² refinement is SP10's/);
+    const rows: readonly string[] = BENCH_ROWS;
+    for (const row of ['slice.vertical128', 'slice.partWorst', 'slice.horizontal128']) {
+      expect(line, `§7's inspector slice line does not name ${row}`).toContain(`\`${row}\``);
+      expect(rows, `BENCH_ROWS does not measure ${row}`).toContain(row);
+    }
   });
 
   test('§1\'s ui/inspector entry names every module of src/ui/inspector; the reserved top-level sliceView.ts, probe.ts and jsonEditor.ts are dropped', () => {

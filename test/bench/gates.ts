@@ -6,18 +6,28 @@ export const COLUMN_P50_MAX_MS = 0.7;
 export const COLUMN_P95_MAX_MS = 1.2;
 /** SP3b exit (master §10, SP3b spec §10): the real T stage's `terrain.real` p50 in ms per column, its ColumnSample included. */
 export const TERRAIN_P50_MAX_MS = 4;
+/**
+ * SP3d (its spec §9, master §7): the vertical 128² density slice on one thread (`slice.vertical128`), one slice part at
+ * PART_BUDGET of the heaviest noise tree (`slice.partWorst`, which pins the work unit of spec §5.2) and one slider commit
+ * of a session whose two trees are at the 128 KiB cap (`session.commitMaxTree`), p50 in ms.
+ */
+export const SLICE_V128_P50_MAX_MS = 300;
+export const SLICE_PART_P50_MAX_MS = 250;
+export const SESSION_COMMIT_P50_MAX_MS = 4;
 
 /**
  * Every gated bench row, in measurement order: `noise.bench.ts` measures exactly these, and `test/baselines.json`
  * records every one (a unit test), so a row added without `npm run bench:record` cannot stay ungated.
  * SP3a §7 appends `store.alloc` and `terrain.provisional`; SP3b §10 appends `density.corner` and replaces
- * `terrain.provisional` by `terrain.real`; SP3c §7 appends `surface.column` (the surface pass alone).
+ * `terrain.provisional` by `terrain.real`; SP3c §7 appends `surface.column` (the surface pass alone); SP3d §9 appends
+ * the slice rows `slice.vertical128`, `slice.horizontal128`, `slice.partWorst` and the session row `session.commitMaxTree`.
  */
 export const BENCH_ROWS = [
   'calibration.fmix32', 'lattice3.slice', 'perm512.slice', 'lattice3.random', 'perm512.random', 'normal.z2.climateC',
   'normal.z3.density3d', 'spline.offset', 'spline.mix3', 'detErf', 'stageHashes.genKey', 'column.point', 'column.sample',
   'map.tile.b64.biome', 'map.tile.b16.relief', 'worker.configure', 'map.tile.b256.biome', 'map.tile.b256.relief',
   'store.alloc', 'density.corner', 'terrain.real', 'surface.column',
+  'slice.vertical128', 'slice.horizontal128', 'slice.partWorst', 'session.commitMaxTree',
 ] as const;
 
 export interface BenchKernel {
@@ -83,10 +93,14 @@ export interface AbsoluteLatencies {
   readonly columnP50: number;
   readonly columnP95: number;
   readonly terrainP50: number;
+  /** SP3d §9: `slice.vertical128`, `slice.partWorst` and `session.commitMaxTree` p50. */
+  readonly sliceV128P50: number;
+  readonly slicePartP50: number;
+  readonly sessionCommitP50: number;
 }
 
 /**
- * The absolute gates (P1 column budget, SP2a; the real T budget, SP3b): checked by `npm run bench` and before
+ * The absolute gates (P1 column budget, SP2a; the real T budget, SP3b; the slice and session commit budgets, SP3d): checked by `npm run bench` and before
  * `npm run bench:record` writes, so a record refuses to write when one fails.
  */
 export function absoluteGateFailures(l: AbsoluteLatencies): string[] {
@@ -94,5 +108,8 @@ export function absoluteGateFailures(l: AbsoluteLatencies): string[] {
   if (l.columnP50 > COLUMN_P50_MAX_MS) out.push(`P1 column p50 ${l.columnP50.toFixed(3)} ms > ${COLUMN_P50_MAX_MS} ms`);
   if (l.columnP95 > COLUMN_P95_MAX_MS) out.push(`P1 column p95 ${l.columnP95.toFixed(3)} ms > ${COLUMN_P95_MAX_MS} ms`);
   if (l.terrainP50 > TERRAIN_P50_MAX_MS) out.push(`terrain.real p50 ${l.terrainP50.toFixed(3)} ms > ${TERRAIN_P50_MAX_MS} ms`);
+  if (l.sliceV128P50 > SLICE_V128_P50_MAX_MS) out.push(`slice.vertical128 p50 ${l.sliceV128P50.toFixed(3)} ms > ${SLICE_V128_P50_MAX_MS} ms`);
+  if (l.slicePartP50 > SLICE_PART_P50_MAX_MS) out.push(`slice.partWorst p50 ${l.slicePartP50.toFixed(3)} ms > ${SLICE_PART_P50_MAX_MS} ms`);
+  if (l.sessionCommitP50 > SESSION_COMMIT_P50_MAX_MS) out.push(`session.commitMaxTree p50 ${l.sessionCommitP50.toFixed(3)} ms > ${SESSION_COMMIT_P50_MAX_MS} ms`);
   return out;
 }
