@@ -17,18 +17,28 @@
  * valid names). Its whole-tree bounds (node and def counts; per tree root, reachable or not, the expanded depth and the
  * structural cost; the column cost) bound everything that recurses through refs (the compiler, the reference,
  * `exprHash`, the bounds) and a column's work; its static magnitude analysis (§1.9 S, `VALUE_RANGE`) keeps every value
- * of a valid tree within ±1e100, so no NaN or ±∞ can occur; every walk of this module is iterative.
+ * of a valid tree within ±1e100, so no NaN or ±∞ can occur; every walk of the validation is iterative.
+ *
+ * `resolveDensity` (§1.6) runs tier 2 first (an ExprValidationError with the source paths when it fails), then builds a
+ * fresh, deep-frozen `DensityExpr`: params and ref-valued fields become numbers (`0 − v` for `neg`), a muted tap yields
+ * `const(mute)`, `recip` becomes `const(1 / c)`, and all-constant `add`/`mul`/`min`/`max`/`neg`/`abs`/`square`/`clamp`
+ * nodes fold with nodes.ts's value functions, so the resolved default is the very tree SP3b's builder made (§2.1); its
+ * recursion runs on validated trees only (expanded depth ≤ 128). `resolveDensityNode` (§3.4) resolves one node's source
+ * subtree on its own, with its placement, for the inspector; `freezeTree` deep-freezes an explicit tree in place for the
+ * DensityContext (D10). Follows the gen determinism rules.
  */
 import { COL_FIELD_BOUNDS, DENSITY_COLUMN_COST_MAX } from '../../core/constants';
-import { NOISE_FIELD_RANGES, SCHEMA } from '../../core/params/schema';
+import { getPath } from '../../core/params/kit';
+import { NOISE_FIELD_RANGES, SCHEMA, type Params } from '../../core/params/schema';
 import type { SampleField } from '../column/columnStage';
 import { densityColumnCost, structuralCost } from '../inspect/cost';
 import {
-  EXPR_CHILD_KEYS, EXPR_OPS, nestedInterpolatedIssues, validateExpr, type DensityNoiseInfo, type ExprIssue, type ExprOp,
-  type RefTarget,
+  EXPR_CHILD_KEYS, EXPR_OPS, ExprValidationError, nestedInterpolatedIssues, validateExpr, type DensityExpr,
+  type DensityNoiseInfo, type Expr, type ExprIssue, type ExprOp, type RefTarget,
 } from './expr';
 import {
   cornerY, ivAbs, ivAdd, ivClamp, ivHull, ivMax, ivMin, ivMul, ivNeg, ivSet, ivSquare, ivUnknown, ivWiden, rangeChoiceCase,
+  valAbs, valAdd, valClamp, valMax, valMin, valMul, valNeg, valSquare,
 } from './nodes';
 
 const SCHEMA_ = SCHEMA;
@@ -55,6 +65,16 @@ const IV_SQUARE = ivSquare;
 const IV_UNKNOWN = ivUnknown;
 const IV_WIDEN = ivWiden;
 const RANGE_CASE = rangeChoiceCase;
+const GET_PATH = getPath;
+const INVALID = ExprValidationError;
+const VAL_ADD = valAdd;
+const VAL_MUL = valMul;
+const VAL_MIN = valMin;
+const VAL_MAX = valMax;
+const VAL_NEG = valNeg;
+const VAL_ABS = valAbs;
+const VAL_SQUARE = valSquare;
+const VAL_CLAMP = valClamp;
 
 /** A numeric field of a source node: a literal, or a parameter ref (`neg`: the value is 0 − v, never −0). */
 export interface ParamRef { readonly param: string; readonly neg?: true }
@@ -508,4 +528,246 @@ export function validateDensitySource(source: unknown): readonly ExprIssue[] {
 /** How many times `validateDensitySource` validated (memo misses), for the tests of the memo (§1.8). */
 export function densitySourceValidations(): number {
   return validations;
+}
+
+// ---- Resolution and freezing (§1.6, §3.4) ----
+
+/** True for a plain object (prototype Object.prototype or null) or an array: the containers a tree is made of. */
+function isTreeContainer(v: unknown): v is object {
+  if (typeof v !== 'object' || v === null) return false;
+  if (Array.isArray(v)) return true;
+  const proto: unknown = Object.getPrototypeOf(v);
+  return proto === Object.prototype || proto === null;
+}
+
+/**
+ * Deep-freezes `tree` in place and returns it (§1.6, D10): an iterative walk over its plain objects and arrays that,
+ * unlike `deepFreeze`, does not stop at an already-frozen node (a partly frozen tree ends frozen at every depth). Shared
+ * and cyclic sub-objects are visited once; other values (typed arrays, class instances) are left alone. Identity and
+ * values are unchanged. The DensityContext freezes an explicit tree with it.
+ */
+export function freezeTree<T>(tree: T): T {
+  if (!isTreeContainer(tree)) return tree;
+  const seen = new Set<object>();
+  const stack: object[] = [tree];
+  while (stack.length > 0) {
+    const x = stack.pop()!;
+    if (seen.has(x)) continue;
+    seen.add(x);
+    Object.freeze(x);
+    for (const k of Object.keys(x)) {
+      const c: unknown = (x as Record<string, unknown>)[k];
+      if (isTreeContainer(c)) stack.push(c);
+    }
+  }
+  return tree;
+}
+
+/** A parameter's value in `params` (§1.3; a schema leaf's q15-normalised value or a noise leaf's field). */
+function paramValue(params: Params, path: string): number {
+  const v = GET_PATH(params, path);
+  if (typeof v !== 'number' || !Number.isFinite(v)) throw new RangeError(`resolveDensity: ${path} is not a finite number in params`);
+  return v;
+}
+
+/** A numeric scalar field's number: a literal, or its ref's value (`0 − v` with `neg`: +0 for v = 0, never −0). */
+function fieldValue(params: Params, f: SourceNumber): number {
+  if (typeof f === 'number') return f;
+  const v = paramValue(params, f.param);
+  return f.neg === true ? 0 - v : v;
+}
+
+const frozenConst = (v: number): Expr => Object.freeze({ op: 'const', v });
+const isConst = (e: Expr): e is Extract<Expr, { op: 'const' }> => e.op === 'const';
+
+/**
+ * The resolved, frozen copy of a validated source node (§1.6 steps 1-4, bottom-up): `param` → `const(value)`, ref-valued
+ * fields → numbers, a muted tap → `tap(const(mute))` (unless `ownMute` is false: the inspector's selected tap), `recip`
+ * → `const(1 / c)`, and an `add`, `mul`, `min`, `max`, `neg`, `abs`, `square` or `clamp` whose children are all `const`
+ * → `const(v)` with nodes.ts's value functions; `tap`, `interpolated`, `slide`, `rangeChoice` and `ref` are never folded.
+ * Each node is rebuilt in place of its source node, so every surviving node keeps its path. The recursion is bounded by
+ * tier 2's expanded depth (128).
+ */
+function resolveNode(node: SourceExpr, params: Params, ownMute = true): Expr {
+  const res = (e: SourceExpr): Expr => resolveNode(e, params);
+  const num = (f: SourceNumber): number => fieldValue(params, f);
+  switch (node.op) {
+    case 'const': return frozenConst(node.v);
+    case 'param': return frozenConst(paramValue(params, node.path));
+    case 'recip': {
+      const x = node.x;
+      return frozenConst(1 / (x.op === 'const' ? x.v : paramValue(params, x.path)));
+    }
+    case 'y': return Object.freeze({ op: 'y' });
+    case 'col': return Object.freeze({ op: 'col', field: node.field });
+    case 'noise2': case 'noise': return Object.freeze({ op: node.op, id: node.id });
+    case 'add': case 'mul': case 'min': case 'max': {
+      const a = res(node.a), b = res(node.b);
+      if (isConst(a) && isConst(b)) {
+        const f = node.op === 'add' ? VAL_ADD : node.op === 'mul' ? VAL_MUL : node.op === 'min' ? VAL_MIN : VAL_MAX;
+        return frozenConst(f(a.v, b.v));
+      }
+      return Object.freeze({ op: node.op, a, b });
+    }
+    case 'neg': case 'abs': case 'square': {
+      const x = res(node.x);
+      if (isConst(x)) return frozenConst((node.op === 'neg' ? VAL_NEG : node.op === 'abs' ? VAL_ABS : VAL_SQUARE)(x.v));
+      return Object.freeze({ op: node.op, x });
+    }
+    case 'clamp': {
+      const x = res(node.x), lo = num(node.lo), hi = num(node.hi);
+      return isConst(x) ? frozenConst(VAL_CLAMP(x.v, lo, hi)) : Object.freeze({ op: 'clamp', x, lo, hi });
+    }
+    case 'slide': {
+      const x = res(node.x);
+      const knots = Object.freeze(node.knots.map((k) => Object.freeze([num(k[0]), num(k[1])] as const)));
+      return Object.freeze({ op: 'slide', x, knots });
+    }
+    case 'interpolated': return Object.freeze({ op: 'interpolated', x: res(node.x) });
+    case 'rangeChoice': {
+      const x = res(node.x), lo = num(node.lo), hi = num(node.hi);
+      return Object.freeze({ op: 'rangeChoice', x, lo, hi, inside: res(node.inside), outside: res(node.outside) });
+    }
+    case 'tap': {
+      const x = ownMute && node.mute !== undefined ? frozenConst(num(node.mute)) : res(node.x);
+      return Object.freeze({ op: 'tap', name: node.name, x });
+    }
+    case 'ref': return Object.freeze({ op: 'ref', name: node.name });
+  }
+}
+
+/** A frozen defs object with `entries` as own data properties (defineProperty: no name reaches a setter). */
+function frozenDefs(entries: ReadonlyArray<readonly [string, Expr]>): Readonly<Record<string, Expr>> {
+  const out: Record<string, Expr> = {};
+  for (const [name, e] of entries) Object.defineProperty(out, name, { value: e, enumerable: true, writable: true, configurable: true });
+  return Object.freeze(out);
+}
+
+/** Tier 2, then the source narrowed (throws ExprValidationError with the source paths when it fails). */
+function validated(source: unknown): DensitySource {
+  const issues = validateDensitySource(source);
+  if (issues.length > 0) throw new INVALID(issues);
+  return source as DensitySource;
+}
+
+const defNamesOf = (s: DensitySource): string[] => Object.keys(s.defs);
+
+/**
+ * The density expression of the source `source` for `params` (§1.6): tier 2 first (`validateDensitySource`, memoised for
+ * frozen sources, so the default is validated once; an ExprValidationError listing its issues with their source paths
+ * when it fails), then a fresh, deep-frozen `DensityExpr` with steps 1-4 applied to `root` and to every def (each def
+ * folded inside itself; refs stay refs). The source is neither changed nor frozen; every call builds a new tree (no
+ * resolution memo: two contexts never share one, so identity-keyed caches stay per context).
+ */
+export function resolveDensity(source: unknown, params: Params): DensityExpr {
+  return resolveValid(validated(source), params);
+}
+
+/** `resolveDensity` of a source tier 2 accepted. */
+function resolveValid(s: DensitySource, params: Params): DensityExpr {
+  const defs = frozenDefs(defNamesOf(s).map((name) => [name, resolveNode(s.defs[name]!, params)] as const));
+  return Object.freeze({ root: resolveNode(s.root, params), defs });
+}
+
+/** A node of the source found by its path: the node, the def whose tree holds it (null: the root's), and whether an
+ * `interpolated` strictly above it in that tree contains it. */
+interface FoundNode { readonly node: SourceExpr; readonly def: string | null; readonly inside: boolean }
+
+/** The node at `path` (`root…` or `defs.<name>…`, child slots joined by dots, as tier 2's paths), or null. */
+function findNode(s: DensitySource, path: string): FoundNode | null {
+  const starts: Array<{ readonly node: unknown; readonly path: string; readonly def: string | null }> = [{ node: s.root, path: 'root', def: null }];
+  for (const name of defNamesOf(s)) starts.push({ node: s.defs[name], path: `defs.${name}`, def: name });
+  for (const start of starts) {
+    if (path !== start.path && !path.startsWith(`${start.path}.`)) continue;
+    let node: unknown = start.node;
+    let at = start.path;
+    let inside = false;
+    while (at !== path) {
+      const rec = node as Rec;
+      const op = rec['op'];
+      const key = path.slice(at.length + 1).split('.')[0]!;
+      const kids = typeof op === 'string' ? CHILD_SLOTS.get(op) : undefined;
+      if (kids === undefined || !kids.includes(key) || !Object.hasOwn(rec, key)) { node = undefined; break; }
+      if (op === 'interpolated') inside = true;
+      node = rec[key];
+      at = `${at}.${key}`;
+    }
+    if (at === path && isRec(node)) return { node: node as unknown as SourceExpr, def: start.def, inside };
+  }
+  return null;
+}
+
+/**
+ * Whether each def is evaluated inside `interpolated` (§3.4): the placement of its first reference in source DFS order —
+ * the root first, entering a def at its first reference (the rule `findTap` uses), then every def not reached yet in
+ * key order at voxel placement (an unreachable def). Mutes are ignored (a muted subtree is still source structure).
+ */
+function defPlacements(s: DensitySource): Map<string, boolean> {
+  const placed = new Map<string, boolean>();
+  const stack: Array<{ readonly node: unknown; readonly inside: boolean }> = [];
+  const run = (): void => {
+    while (stack.length > 0) {
+      const { node, inside } = stack.pop()!;
+      if (!isRec(node)) continue;
+      const op = node['op'];
+      if (op === 'ref') {
+        const name = node['name'] as string;
+        if (Object.hasOwn(s.defs, name) && !placed.has(name)) {
+          placed.set(name, inside);
+          stack.push({ node: s.defs[name], inside });
+        }
+        continue;
+      }
+      const kids = typeof op === 'string' ? CHILD_SLOTS.get(op) ?? [] : [];
+      const childInside = inside || op === 'interpolated';
+      for (let k = kids.length - 1; k >= 0; k--) stack.push({ node: node[kids[k]!], inside: childInside });
+    }
+  };
+  stack.push({ node: s.root, inside: false });
+  run();
+  for (const name of defNamesOf(s)) {
+    if (placed.has(name)) continue;
+    placed.set(name, false);
+    stack.push({ node: s.defs[name], inside: false });
+    run();
+  }
+  return placed;
+}
+
+/**
+ * The expression the inspector evaluates for the density node at `path` (§3.4): the node's source subtree resolved on
+ * its own (§1.6), so a node under a muted tap or below a folded node is evaluated like any other. Mutes strictly inside
+ * the subtree apply; the node's own mute and its ancestors' do not. The output's `defs` are the resolved defs the node
+ * reaches (transitively, in key order). Placement: a node with an `interpolated` ancestor in its tree, or in a def whose
+ * first reference (source DFS order: root first, then defs in key order) is inside `interpolated`, is wrapped as
+ * `{op: 'interpolated', x: node}` at voxel placement; an unreachable def is at voxel placement. `root` is the final
+ * density: `resolveDensity`'s tree. Validates first (ExprValidationError); a path that names no node (a field, an
+ * unknown key) throws a RangeError. The output is fresh and deep-frozen.
+ */
+export function resolveDensityNode(source: unknown, path: string, params: Params): DensityExpr {
+  const s = validated(source);
+  if (path === 'root') return resolveValid(s, params);
+  const found = findNode(s, path);
+  if (found === null) throw new RangeError(`resolveDensityNode: ${JSON.stringify(path)} names no node of the tree`);
+  const inside = found.inside || (found.def !== null && defPlacements(s).get(found.def) === true);
+  const node = resolveNode(found.node, params, false);
+  // The defs the node reaches, resolved once each (an iterative walk of the resolved trees).
+  const reached = new Map<string, Expr>();
+  const stack: Expr[] = [node];
+  while (stack.length > 0) {
+    const e = stack.pop()!;
+    if (e.op === 'ref') {
+      if (!reached.has(e.name) && Object.hasOwn(s.defs, e.name)) {
+        const d = resolveNode(s.defs[e.name]!, params);
+        reached.set(e.name, d);
+        stack.push(d);
+      }
+      continue;
+    }
+    const rec = e as unknown as Record<string, Expr>;
+    for (const k of EXPR_CHILDREN[e.op]) stack.push(rec[k]!);
+  }
+  const defs = frozenDefs(defNamesOf(s).filter((n) => reached.has(n)).map((n) => [n, reached.get(n)!] as const));
+  const root: Expr = inside ? Object.freeze({ op: 'interpolated', x: node }) : node;
+  return Object.freeze({ root, defs });
 }

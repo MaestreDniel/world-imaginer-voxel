@@ -1,17 +1,18 @@
 import { describe, expect, test } from 'vitest';
 import { DEFAULTS } from '../../src/core/params/defaults';
+import { DEFAULT_DENSITY_TREE } from '../../src/core/params/defaultTrees';
 import { SCHEMA, type ParamsPatch } from '../../src/core/params/schema';
 import { latticeIndex, type ColumnSample } from '../../src/gen/column/columnStage';
 import type { GenContext } from '../../src/gen/context';
 import { fillDensityColumn } from '../../src/gen/density/bounds';
 import { createDensityContext, densityNoiseSource, type DensityContext } from '../../src/gen/density/context';
-import { defaultDensityExpr } from '../../src/gen/density/defaults';
 import { validateExpr, type DensityExpr, type Expr } from '../../src/gen/density/expr';
 import { cornerY } from '../../src/gen/density/nodes';
 import { probe } from '../../src/gen/density/probe';
 import { createDensityReference, findTap, interpolatedNodes } from '../../src/gen/density/reference';
+import { resolveDensity } from '../../src/gen/density/source';
 import { randomDensityExpr, SCHEMA_DENSITY_NOISES } from '../harness/densityFuzz';
-import { ctxFor } from '../harness/gen';
+import { ctxFor, paramsWith } from '../harness/gen';
 import { randomValue } from '../harness/params';
 import { testRng } from '../harness/stats';
 
@@ -29,9 +30,12 @@ function walk(e: Expr, visit: (e: Expr) => void): void {
 const ops = (e: DensityExpr): Expr[] => { const out: Expr[] = []; walk(e.root, (n) => out.push(n)); return out; };
 const consts = (e: DensityExpr): number[] => ops(e).flatMap((n) => (n.op === 'const' ? [n.v] : []));
 
-describe('the default expression (SP3b spec §3.1)', () => {
+/** The default expression for DEFAULTS ⊕ patch: the `density.defs` default resolved (SP3d spec §1.6, §2.1). */
+const defaultExpr = (patch: ParamsPatch = {}): DensityExpr => resolveDensity(DEFAULT_DENSITY_TREE, paramsWith(patch));
+
+describe('the default expression (SP3b spec §3.1; SP3d spec §2.1: the resolved data default)', () => {
   test('it validates against the schema density noises', () => {
-    const e = defaultDensityExpr(DEFAULTS.density);
+    const e = defaultExpr();
     expect(validateExpr(e, densityNoiseSource(CTX))).toEqual([]);
     expect(Object.keys(e.defs)).toEqual([]);
     const noiseIds = ops(e).flatMap((n) => (n.op === 'noise2' || n.op === 'noise' ? [`${n.op}:${n.id}`] : []));
@@ -41,7 +45,7 @@ describe('the default expression (SP3b spec §3.1)', () => {
   });
 
   test('taps: terrain outside interpolated (its value is the interpolated field), islands −1e6', () => {
-    const e = defaultDensityExpr(DEFAULTS.density);
+    const e = defaultExpr();
     expect(findTap(e, 'terrain')).toMatchObject({ inside: false, node: { x: { op: 'interpolated' } } });
     expect(findTap(e, 'islands')).toMatchObject({ inside: false, node: { x: { op: 'const', v: -1e6 } } });
     expect(interpolatedNodes(e)).toHaveLength(1);
@@ -60,13 +64,12 @@ describe('the default expression (SP3b spec §3.1)', () => {
     for (const n of c.nodes) if (n.op === 'y' || n.op === 'slide') expect(n.cls, n.op).toBe('cell');
   });
 
-  test('the tunables come from params.density: 1 / jag clampSigma, ampLo and ampHi − ampLo', () => {
-    const base = consts(defaultDensityExpr(DEFAULTS.density));
+  test('the tunables come from params.density through refs: 1 / jag clampSigma, ampLo and ampHi − ampLo', () => {
+    const base = consts(defaultExpr());
     expect(base).toContain(1 / 3);
     expect(base).toContain(0.6);
     expect(base).toContain(1.5 - 0.6);
-    const d = { ...DEFAULTS.density, noises: { ...DEFAULTS.density.noises, jag: { ...DEFAULTS.density.noises.jag, clampSigma: 2.5 } }, detailAmpLo: 0.25, detailAmpHi: 4 };
-    const moved = consts(defaultDensityExpr(d));
+    const moved = consts(defaultExpr({ density: { noises: { jag: { clampSigma: 2.5 } }, detailAmpLo: 0.25, detailAmpHi: 4 } }));
     expect(moved).toContain(1 / 2.5);
     expect(moved).toContain(0.25);
     expect(moved).toContain(3.75);

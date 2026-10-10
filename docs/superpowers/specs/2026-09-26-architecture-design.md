@@ -105,11 +105,12 @@ world-imaginer-voxel/          (repository root)
       context.ts                GenContext per (epoch, paramsHash): noises, splines, compiled density, biome tables, templates, LRUs
       column/climate.ts shape.ts rivers.ts lakes.ts steep.ts columnPoint.ts columnStage.ts columnCache.ts surfaceEstimate.ts spawn.ts
       map/layers.ts tile.ts palette.ts   pure map-tile painting (SP2a)
-      density/expr.ts nodes.ts compile.ts bounds.ts reference.ts defaults.ts beardifier.ts
+      density/expr.ts nodes.ts compile.ts bounds.ts reference.ts beardifier.ts
                                 (SP3b: + context.ts, the DensityContext of the compiled expression and its caches, and probe.ts;
                                 beardifier.ts arrives with SP9; amended by SP3b)
-                                (SP3d: + source.ts, the source model of the `density.defs` leaf (param refs, recip, tap mutes)
-                                and its tier-2 validation; amended by SP3d)
+                                (SP3d: + source.ts, the source model of the `density.defs` leaf (param refs, recip, tap mutes),
+                                its tier-2 validation, resolveDensity and resolveDensityNode; the default expression is data,
+                                so the builder module of SP3b is removed; amended by SP3d)
       caves/carvers.ts carverCache.ts
       fluids/aquifer.ts settle.ts
       inspect/cost.ts           (SP3d) the structural, work and column costs of density and surface-rule trees, one function
@@ -582,7 +583,7 @@ Per 4×8×4 cell:
 
 Sky costs about 0, and the probe == bulk test (DT2) proves no voxel changes.
 
-**Default expression (`density/defaults.ts`, shown as formulas):**
+**Default expression (the `density.defs` leaf's default since SP3d, shown as formulas):**
 
 ```
 terrain   = tap('terrain', interpolated( col.offset + col.jag·J − y + col.sigma·N3·slide(y) ))
@@ -604,7 +605,7 @@ final     = max( min( min(terrain + detail, max(caves, lakeRoof)), 16·noodle ),
 - Entrance air appears wherever `16·entr < terrain`, even one block below the surface, and the same field continues downward. This replaces 09's `|base|·cs`, which made carving impossible shallower than 15-19 blocks.
 - Noodle is a separate `min` applied after interpolation, which fixes 09's dead `max()`.
 - The cheese roof term keeps big caverns about 12 blocks below the surface; entrances, noodles and carvers still breach it.
-- `islands` is `−1e6` except in the floating_islands preset.
+- `islands` is `−1e6` except in the floating_islands preset (SP3e).
 - `beard` is the structure term (3.13), evaluated per voxel only near pieces.
 - Every term is a `tap`, so the inspector, probe and mutes work on it. In the harness, a debug channel records the winning cave term per carved voxel.
 
@@ -615,7 +616,7 @@ final     = max( min( min(terrain + detail, max(caves, lakeRoof)), 16·noodle ),
 - **Interval rules.** `noise` and `noise2` are ±clampSigma (amplitude is a `mul`); `col` inside `interpolated` takes the hull of the cell's 4 corner columns; a COLUMN value read at voxel level takes the hull of its 16 position values; `slide` takes s at the cell's ends and at each interior knot. Every interval leaving `interpolated`, and every voxel-level COLUMN interval, is widened by `1e-9 · (1 + max(|lo|, |hi|))`. A cell is non-solid when hi < 0 and solid when lo > 0 (no cave taps before SP6).
 - **`col`** reads finite fields only until SP6, which adds the level fields' −∞ interval rule.
 - **Noises.** Density noises sample unscaled world block coordinates (`large_biomes`' `scaleMul` stretches climate only) and have `remap: 'none'`. J uses `u = z / clampSigma`. Jag has 2 octaves, because a third at λ 7 would alias on the 4-block corner lattice. The overhang noise was retuned with the user's approval (SP3b spec §8.4) to λ 32, 2 octaves, persistence 0.65 and yScale 1: its octaves at λy 32 and 16 stay ≥ 2 × the 8-block vertical corner step.
-- **Code, not data, until SP3d:** `SLIDE`, the floor and ceiling terms and `islands` = −1e6; `density.defs` becomes an editable leaf in SP3d.
+- **As built by SP3d:** the expression is the `density.defs` leaf, with `SLIDE`, the floor and ceiling terms and `islands` = −1e6 as data and `1/clampSigma`, `detailAmpLo` and `detailAmpHi − detailAmpLo` as refs; the SP3d spec §1-§2 hold the exact rules.
 
 ### 3.7 surfaceEstimate and surfaceWaterLevel (shared by map, LOD, aquifer, structures, spawn and teleport)
 

@@ -1,13 +1,14 @@
 import { describe, expect, test } from 'vitest';
 import { hashF64, hex64 } from '../../src/core/hash';
+import { DEFAULT_DENSITY_TREE } from '../../src/core/params/defaultTrees';
 import { resolveProfile } from '../../src/core/params/profiles';
 import { seedFromInput } from '../../src/core/seed';
 import { buildColumnSample, newColumnSample } from '../../src/gen/column/columnStage';
 import { createGenContext } from '../../src/gen/context';
 import { densityNoiseSource } from '../../src/gen/density/context';
-import { defaultDensityExpr } from '../../src/gen/density/defaults';
 import { EXPR_OPS, validateExpr, type DensityExpr, type Expr } from '../../src/gen/density/expr';
 import { createDensityReference, interpolatedNodes } from '../../src/gen/density/reference';
+import { resolveDensity } from '../../src/gen/density/source';
 import { terrainDensityDebug } from '../../src/gen/pipeline/terrainStage';
 import { allGoldenKeys, computeAnyGolden } from '../../src/metrics/sp2aGoldens';
 import {
@@ -101,7 +102,7 @@ describe('sp3b.density.default (§9)', () => {
   });
 
   test('corners and sampled voxels equal the reference (Object.is); the bulk agrees where it evaluated', () => {
-    const e = defaultDensityExpr(CTX.params.density);
+    const e = resolveDensity(DEFAULT_DENSITY_TREE, CTX.params);
     const r = createDensityReference(e, densityNoiseSource(CTX));
     const inner = interpolatedNodes(e)[0]!.x;
     const s = buildColumnSample(CTX, 0, 0, newColumnSample());
