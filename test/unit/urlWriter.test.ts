@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, describe, expect, test, vi } from 'vitest';
-import { createUrlWriter, URL_HASH_MAX, URL_OVERSIZE_NOTICE, urlHashLength } from '../../src/ui/common/urlWriter';
+import { createUrlWriter, oversizeNotice, URL_HASH_MAX, URL_OVERSIZE_NOTICE, urlHashLength } from '../../src/ui/common/urlWriter';
 
 beforeEach(() => { vi.useFakeTimers(); });
 afterEach(() => { vi.useRealTimers(); });
@@ -84,5 +84,19 @@ describe('the 64 KiB hash cap (SP3d spec §1.12)', () => {
     w.set(url(70000));
     w.flush();
     expect(writes).toEqual([]);
+  });
+
+  test('the page\'s notice: shown as a warning without a timeout while oversize, hidden once a URL fits (SP3d Task 15)', () => {
+    const log: string[] = [];
+    const notices = {
+      show: (text: string, opts?: { kind?: string; timeoutMs?: number }) => log.push(`show ${opts?.kind} ${opts?.timeoutMs} ${text}`),
+      hide: (text: string) => log.push(`hide ${text}`),
+    };
+    const w = createUrlWriter(() => {}, 200, 1000, oversizeNotice(notices));
+    for (const n of [10, 70000, 80000, 20]) {
+      w.set(url(n));
+      vi.advanceTimersByTime(200);
+    }
+    expect(log).toEqual([`show warn undefined ${URL_OVERSIZE_NOTICE}`, `hide ${URL_OVERSIZE_NOTICE}`]);
   });
 });

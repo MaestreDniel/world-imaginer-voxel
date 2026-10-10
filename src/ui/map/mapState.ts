@@ -1,15 +1,19 @@
 /**
  * The ?map URL state (SP2a spec §6.3, SP2b spec §1.4): {v: 1, seed, profile, patch, view: {x, z, bpp,
  * layer}} as canonical JSON in base64url, with the session's minimal patch. A bad hash opens the defaults
- * with a notice; a `hashchange` applies the view, then loads the draft in one session step.
+ * with a notice; a `hashchange` applies the view, then loads the draft in one session step. The page's session comes
+ * from `openMapSession`, which wires tier 2 of the trees (SP3d spec §1.8): `decodeMapState` checks tier 1 only, so
+ * the session refuses a semantically invalid tree in a link, at the constructor (a fresh tab) or at `load` (a
+ * `hashchange`).
  */
-import { utf8Bytes } from '../../core/hash';
+import { utf8Bytes, type Seed64 } from '../../core/hash';
 import { canonicalJSON, q15 } from '../../core/params/canonical';
 import { applyPatch, isObj } from '../../core/params/kit';
 import { isProfileId, isProfileReady, resolveProfile, type ProfileId } from '../../core/params/profiles';
 import { SCHEMA, type ParamsPatch } from '../../core/params/schema';
-import type { SessionResult } from '../../engine/session';
+import { WorldSession, type SessionResult } from '../../engine/session';
 import { isLayerId, type LayerId } from '../../gen/map/layers';
+import { validateParamTrees } from '../../gen/trees';
 import { base64urlDecode, base64urlEncode } from '../common/base64url';
 
 export interface MapView {
@@ -84,6 +88,17 @@ export function decodeMapState(hash: string): { state: MapState; error: string |
   return { state: { ...s, seed: s.seed.trim() }, error: null };
 }
 
+/**
+ * The ?map page's WorldSession for the decoded (or perf-pinned) start state, with tier 2 of the trees as its
+ * `validateParams` (SP3d spec §1.8, D2): an initial patch whose trees tier 2 refuses opens the default profile with
+ * no changes and `initNotice` `invalid patch (<path> <code>); opened the default profile with no changes`, and
+ * `setProfile`, the commits, `load` (so a `hashchange`) and undo/redo run the same check. Every page session is built
+ * here (the arch test greps `new WorldSession(` under src/ui/ for `validateParams`).
+ */
+export function openMapSession(decoded: MapState, random: () => Seed64): WorldSession {
+  return new WorldSession(random, { seedText: decoded.seed, profile: decoded.profile, patch: decoded.patch, validateParams: validateParamTrees });
+}
+
 /** The session call a hash load needs (WorldSession satisfies it). */
 export interface HashTarget {
   load(s: { readonly seedText?: string; readonly profile: ProfileId; readonly patch: unknown }): SessionResult;
@@ -94,7 +109,9 @@ export interface HashTarget {
  * changes nothing. Otherwise the view goes to `setView` (never a history step), then seed, profile and patch
  * go to one `load` (urgent, one step; a no-op when they are unchanged). The raw decoded patch only reaches
  * the session, which stores its minimal form, so a −0 in it never reaches canonicalJSON. An empty hash is
- * the defaults, as when the page opens. Returns null, or a notice when the load is refused.
+ * the defaults, as when the page opens. Returns null, or a notice when the load is refused: a hash whose trees pass
+ * tier 1 but not tier 2 (SP3d spec §1.8) is refused by the session's validator, after the view was applied, so the
+ * view moves and the draft does not.
  */
 export function applyMapHash(hash: string, session: HashTarget, setView: (v: MapView) => void): string | null {
   const d = decodeMapState(hash);

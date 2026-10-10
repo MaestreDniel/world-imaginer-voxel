@@ -6,8 +6,9 @@
  * Size cap (SP3d spec §1.12): a URL whose hash is longer than URL_HASH_MAX characters is not written (the
  * address bar keeps the last state that fit), and `onOversize` reports the transitions of that state:
  * true when a URL is first dropped for its size, false when one fits again. The page shows
- * URL_OVERSIZE_NOTICE while it is true.
+ * URL_OVERSIZE_NOTICE while it is true (`oversizeNotice`).
  */
+import type { Notices } from './notice';
 
 /** 64 KiB of hash text (base64url is ASCII, so characters are bytes). */
 export const URL_HASH_MAX = 65536;
@@ -18,6 +19,17 @@ export const URL_OVERSIZE_NOTICE = 'The edited trees are too large for the URL; 
 export function urlHashLength(url: string): number {
   const i = url.indexOf('#');
   return i < 0 ? 0 : url.length - i - 1;
+}
+
+/**
+ * The page's `onOversize` (SP3d spec §1.12): shows URL_OVERSIZE_NOTICE as a warning without a timeout when a URL is
+ * first dropped for its size and hides it when one fits again (the viewer may dismiss it earlier).
+ */
+export function oversizeNotice(notices: Pick<Notices, 'show' | 'hide'>): (oversize: boolean) => void {
+  return (oversize) => {
+    if (oversize) notices.show(URL_OVERSIZE_NOTICE, { kind: 'warn' });
+    else notices.hide(URL_OVERSIZE_NOTICE);
+  };
 }
 
 export function createUrlWriter(

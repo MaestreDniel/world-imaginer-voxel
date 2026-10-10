@@ -160,6 +160,22 @@ describe('task handler', () => {
     expect(last.type).toBe('error');
     if (last.type === 'error') expect(last.code).toBe(code);
   });
+  test('configure runs tier 2 of the trees after checkParams: BAD_PARAMS with the first 5 issues, the configured epoch kept (SP3d spec §1.8)', () => {
+    const h = createTaskHandler();
+    const withDefs = (defs: unknown) => ({ ...DEFAULTS, density: { ...DEFAULTS.density, defs } });
+    const one = { root: { op: 'add', a: { op: 'y' }, b: { op: 'bogus' } }, defs: {} };
+    const seven = { root: { op: 'y' }, defs: Object.fromEntries([1, 2, 3, 4, 5, 6, 7].map((i) => [`d${i}`, { op: `bogus${i}` }])) };
+    expect(h.handle(configure(4)).msg.type).toBe('ready');
+    expect(h.handle(configure(5, null, withDefs(one))).msg).toEqual({ type: 'error', jobId: null, epoch: 5, code: 'BAD_PARAMS', message: 'density.defs.root.b: UNKNOWN_OP' });
+    const many = h.handle(configure(6, null, withDefs(seven))).msg;
+    expect(many).toMatchObject({ type: 'error', code: 'BAD_PARAMS', epoch: 6 });
+    if (many.type === 'error') expect(many.message.split('; ')).toEqual([1, 2, 3, 4, 5].map((i) => `density.defs.defs.d${i}: UNKNOWN_OP`));
+    // A rules issue carries its leaf path too; the context of epoch 4 still answers.
+    const rules = { kind: 'sequence', rules: [{ kind: 'block', state: 'no_such_block' }] };
+    const r = h.handle(configure(7, null, { ...DEFAULTS, surface: { ...DEFAULTS.surface, rules } })).msg;
+    expect(r).toEqual({ type: 'error', jobId: null, epoch: 7, code: 'BAD_PARAMS', message: 'surface.rules.root.rules[0].state: UNKNOWN_BLOCK' });
+    expect(h.handle({ type: 'point', jobId: 9, epoch: 4, x: 1.5, z: -7 }).msg.type).toBe('pointResult');
+  });
   test('errors carry the epoch of their message, or null (SP2a minor 4)', () => {
     const h = createTaskHandler();
     const pick = (raw: unknown) => {

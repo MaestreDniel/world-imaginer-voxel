@@ -8,7 +8,9 @@
  * a line (SP3b spec §6) from the handler's slice job (`sliceJob.ts`: a worker-local store and LRU kept for the
  * handler's lifetime, emptied by every configure) and stop like stats jobs. A surfaceProbe job (SP3c spec §6) answers
  * `surfaceProbe` on the configured context's SurfaceContext (memoised per GenContext, with its one-column cache) and,
- * like a point job, always runs to the end.
+ * like a point job, always runs to the end. Configure runs tier 2 of the trees after `checkParams` (SP3d spec §1.8): a
+ * params document whose trees `validateParamTrees` refuses gets BAD_PARAMS with its first 5 issues, so an invalid tree
+ * never reaches a job's lazy compile (the session never sends one; this guards against bugs).
  */
 import { hex64 } from '../core/hash';
 import { checkParams } from '../core/params/kit';
@@ -21,6 +23,7 @@ import { findSpawnAbortable } from '../gen/column/spawn';
 import { paintTileAbortable } from '../gen/map/tile';
 import { surfaceContextOf } from '../gen/surface/context';
 import { surfaceProbe } from '../gen/surface/probe';
+import { validateParamTrees } from '../gen/trees';
 import { biomeSharePoints, biomeSharesInto, biomeSharesLength } from '../metrics/biomeShares';
 import { CROSS_SECTION_POINTS, crossSectionInto, crossSectionLength, segmentProblem } from '../metrics/crossSection';
 import type { Points } from '../metrics/noiseStats';
@@ -31,6 +34,7 @@ import { createSliceJob, type SliceJob } from './sliceJob';
 
 const HEX = hex64;
 const CHECK = checkParams;
+const TREES = validateParamTrees;
 const SCHEMA_ = SCHEMA;
 const SEED = seedFromInput;
 const GEN_KEY = genKey;
@@ -132,7 +136,8 @@ export function createTaskHandler(slices: SliceJob = CREATE_SLICE_JOB()): TaskHa
       try {
         if (m.type === 'configure') {
           const r = CHECK(SCHEMA_, m.params);
-          if (!r.ok) return err(null, m.epoch, 'BAD_PARAMS', r.issues.slice(0, 5).map((i) => `${i.path}: ${i.code}`).join('; '));
+          const issues = r.ok ? TREES(r.value) : r.issues;
+          if (!r.ok || issues.length > 0) return err(null, m.epoch, 'BAD_PARAMS', issues.slice(0, 5).map((i) => `${i.path}: ${i.code}`).join('; '));
           const params: Params = r.value;
           const seed = SEED(m.seedText);
           ctx = CREATE(seed, params);

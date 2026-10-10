@@ -12,7 +12,7 @@
  * `?map&perf=edit` also loads the latency hook (§2.8, `perfHook.ts`), which pins the canvas and the world.
  */
 import './map.css';
-import { WorldSession, type SessionState } from '../../engine/session';
+import type { SessionState } from '../../engine/session';
 import { createBrowserPool } from '../../engine/workerPool';
 import { biomeName } from '../../gen/biomes/registry';
 import type { Spawn } from '../../gen/column/spawn';
@@ -23,7 +23,7 @@ import { createBiomeTable } from '../biomeTable/table';
 import { el } from '../common/dom';
 import { installShortcuts } from '../common/keys';
 import { createNotices } from '../common/notice';
-import { createUrlWriter } from '../common/urlWriter';
+import { createUrlWriter, oversizeNotice } from '../common/urlWriter';
 import { CUT_ARMED, CUT_OFF, cutClick, cutOverlay, segmentDistance, segmentText, type CutPoint, type CutTool } from '../crossSection/model';
 import { createCrossSection } from '../crossSection/section';
 import { createParamPanel } from '../paramPanel/panel';
@@ -35,7 +35,7 @@ import { mapClickAction, type SlicePlane } from './clickAction';
 import { createHoverReadout } from './hoverPanel';
 import { browserStorage, createLayout } from './layout';
 import { createMapCanvas } from './mapView';
-import { applyMapHash, decodeMapState, encodeMapState, type MapView } from './mapState';
+import { applyMapHash, decodeMapState, encodeMapState, openMapSession, type MapView } from './mapState';
 import { createPreviewDriver, type DriverClock, type DriverDraft, type PreviewDriver } from './previewDriver';
 import { createToolbar } from './toolbar';
 
@@ -53,7 +53,8 @@ export async function mountMapPage(root: HTMLElement): Promise<void> {
   const perf = new URLSearchParams(location.search).get('perf') === 'edit' ? (await import('./perfHook')).createPerfHook() : null;
   const decoded = decodeMapState(location.hash);
   const initial = perf?.initialState(decoded.state) ?? decoded.state;
-  const session = new WorldSession(cryptoSeed, { seedText: initial.seed, profile: initial.profile, patch: initial.patch });
+  // Tier 2 of the trees runs in the session (SP3d spec §1.8): a link with an invalid tree opens the defaults.
+  const session = openMapSession(initial, cryptoSeed);
   let view: MapView = initial.view;
 
   const layout = createLayout(root, browserStorage());
@@ -64,7 +65,8 @@ export async function mountMapPage(root: HTMLElement): Promise<void> {
   const browserPool = createBrowserPool(undefined, { onFailure: () => notices.show('a worker failed; reload the page', { kind: 'error' }) });
   const pool = perf?.instrument(browserPool) ?? browserPool;
   if (!pool.abortable) notices.show('live preview is slower without cross-origin isolation', { kind: 'info' });
-  const url = createUrlWriter((u) => history.replaceState(null, '', u));
+  // A draft whose URL is over the cap is not written; the notice stays until one fits (SP3d spec §1.12).
+  const url = createUrlWriter((u) => history.replaceState(null, '', u), undefined, undefined, oversizeNotice(notices));
   addEventListener('pagehide', () => url.flush());
   const writeUrl = () => {
     const s = session.state;

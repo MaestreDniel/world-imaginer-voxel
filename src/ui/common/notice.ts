@@ -22,6 +22,8 @@ export interface NoticeOptions {
 export interface Notices {
   /** Adds a notice; one with the same text is replaced. An action button runs its action and removes the notice. */
   show(text: string, opts?: NoticeOptions): void;
+  /** Removes the notice showing `text`, if any (a notice that stays until its condition ends, SP3d spec §1.12). */
+  hide(text: string): void;
   /** Removes every notice; a pending confirmation resolves false. */
   clear(): void;
   /**
@@ -82,6 +84,9 @@ export function createNotices(host: HTMLElement): Notices {
     show(text, opts = {}) {
       const buttons = (opts.actions ?? []).map((a): Button => ({ label: a.label, className: 'notice-action', run: () => a.run() }));
       add(text, opts.kind ?? 'info', buttons, true, opts.timeoutMs, () => {});
+    },
+    hide(text) {
+      for (const [row, entry] of [...rows]) if (entry.text === text) remove(row);
     },
     clear() {
       for (const row of [...rows.keys()]) remove(row);
