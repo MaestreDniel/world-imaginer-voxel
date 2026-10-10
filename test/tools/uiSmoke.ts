@@ -28,12 +28,36 @@
  * - tabs: ArrowRight, ArrowLeft, Home and End move the selection and the focus on both tab bars;
  * - rule: the Voxels mode on the mountain line (SP3c spec §6): the pointer on the top solid voxel of a sample (found in
  *   the slice image, not at a fixed height) shows the readout at once, then its surface rule id ` · rule root.…`;
- * - console: no exception, console error or failed load, except the known favicon.ico 404.
+ * - the Density tab (SP3d spec §6 steps 1-7), on that mountain page:
+ *   - density tab: opened with the line drawn (the vertical plane), the field set to `density`; the slice hover and the
+ *     node form's "value at the hover" (a `fieldProbe` job) agree;
+ *   - density node: the `islands` const `root.b.x` edited from −1e6 to −10: the slice's p1 becomes −10, its share below
+ *     0 (solidity) is unchanged;
+ *   - density mute: the `terrain` tap muted from its row (0, under an add) while the root is selected with the field on
+ *     `selected`: the selection stays on the root (a row's mute is a plain edit, §3.2), its slice changes and equals the
+ *     `density` field's; the URL length with the edited tree;
+ *   - density json: an unknown op typed at the islands tap's child: the issue `root.b.x: UNKNOWN_OP`, the session, URL
+ *     and slice untouched; Escape reverts the buffer; the toolbar Undo twice: the start state, the default tree rows
+ *     and a clean buffer;
+ *   - density narrow: the viewport narrowed until the tab is 1,000 px wide (the Slice/JSON sub-tabs, "Slice" shown): a
+ *     row selected there, then the JSON sub-tab: the node's highlighted text is inside the editor's view (§3.2, the
+ *     scroll owed while the text was hidden), and stays there across a Slice/JSON switch;
+ *   - density horizontal: the horizontal plane; a map click moves its centre (the square's centre cross follows on the
+ *     map, a fresh slice arrives); a cut line drawn while Density is shown keeps it shown;
+ *   - density drag: the biome-size slider dragged 5 → 6, held, → 7: at least one 32² draft is drawn during the drag;
+ *   - density times: the browser wall times of the vertical 128² slice and of the horizontal one at extent 8192 (a
+ *     control change, and three tree edits each, to the fresh 128²), and the URL length;
+ * - console: no exception, console error or failed load, except the known favicon.ico 404; every step ran.
  * With --shots DIR it then writes the spec §12 screenshots into DIR, at seed 42 from a newly loaded page (the
- * repository keeps them re-saved as 256-colour palette PNGs, as SP1 and SP2a did), and last the Voxels mode on the
+ * repository keeps them re-saved as 256-colour palette PNGs, as SP1 and SP2a did), then the Voxels mode on the
  * mountain line (SP3b spec §7: `cross-section-voxels-mountain.png`; the line text is checked, and the slice summary
  * must show a ground top above y 200 and no water) with the pointer on the rule step's top voxel and its readout
- * showing the surface rule id (SP3c spec §6, §9: "a Voxels-mode screenshot with a hover rule id").
+ * showing the surface rule id (SP3c spec §6, §9: "a Voxels-mode screenshot with a hover rule id"), and last the
+ * Density tab on the same line with the drawer at its tallest (SP3d spec §6 step 7, §11's review):
+ * `density-vertical-hover.png` (the vertical density slice, the pointer on a ground voxel: the readout and the form's
+ * value at the hover agree), `density-muted-terrain.png`, `density-broken-json.png` (the issue line, the world
+ * untouched), `density-horizontal-8192.png` and `density-stacked-800.png` (the viewport narrowed until the tab is
+ * 800 px wide: the stacked layout).
  * Options: --skip-build, --profile-dir DIR, --shots DIR. The exit code is 0 only when every check passes.
  */
 import { spawn, type ChildProcess, type SpawnOptions } from 'node:child_process';
@@ -211,6 +235,163 @@ export function presetProblems(text: string, expected: { readonly name: string; 
   return out;
 }
 
+// ---------------------------------------------------------------- the Density tab steps (SP3d spec §6)
+
+/**
+ * Every step in its order: a step title is `<id>: <what>`, and the runner checks that the ids come in this order. The
+ * Density steps run after `rule` and before `console`, on the mountain page the rule step opened, so the earlier
+ * history and "4 modified" checks are untouched.
+ */
+export const SMOKE_STEPS = [
+  'selftest', 'load', 'number', 'knot', 'slider', 'box', 'profile', 'presets', 'undo/redo', 'reload', 'cut line', 'voxels', 'tabs', 'rule',
+  'density tab', 'density node', 'density mute', 'density json', 'density narrow', 'density horizontal', 'density drag', 'density times',
+  'console',
+] as const;
+export type SmokeStep = (typeof SMOKE_STEPS)[number];
+
+/** The step id of a step title `<id>: <what>`. */
+export function stepId(title: string): SmokeStep {
+  const i = title.indexOf(': ');
+  if (i < 0) throw new Error(`a step title is "<step>: <what>", not ${JSON.stringify(title)}`);
+  const id = title.slice(0, i);
+  const step = SMOKE_STEPS.find((s) => s === id);
+  if (step === undefined) throw new Error(`${JSON.stringify(id)} is not a smoke step`);
+  return step;
+}
+
+/** BIOME_SIZE_SCALE[6]: biome-size position 7, where the Density step's drag ends (a unit test keeps them equal). */
+export const SIZE_7 = 1.74110112659225;
+
+/** The slice status line of a fresh n² slice with nothing in flight (`sliceStatusText`: `n²`, else `stale` / `slicing …`). */
+export function freshSlice(status: string, n: number): boolean {
+  return status === `${n}²`;
+}
+
+/** The histogram's statistics as the slice view prints them (`histogramLabels`); `below0` in % (one decimal), null when constant. */
+export interface SliceStatsText {
+  readonly p1: number;
+  readonly p50: number;
+  readonly p99: number;
+  /** The value of a constant field (p1 = p99), else null. */
+  readonly constant: number | null;
+  readonly below0: number | null;
+}
+
+/** A value as `formatSliceValue` prints it, read back. */
+const sliceNumber = (t: string): number => (t === '+∞' ? Infinity : t === '−∞' ? -Infinity : Number(t));
+
+/** The statistics of the slice view's histogram text, or null (no finite value, or not that text). */
+export function parseSliceStats(text: string): SliceStatsText | null {
+  const lines = text.split('\n');
+  const c = /^constant (\S+)$/.exec(lines[0] ?? '');
+  if (c !== null) {
+    const v = sliceNumber(c[1]!);
+    return { p1: v, p50: v, p99: v, constant: v, below0: null };
+  }
+  const m = /^p1 (\S+) · p50 (\S+) · p99 (\S+)$/.exec(lines[0] ?? '');
+  const s = /^sd \S+ · < 0: (\d+\.\d) %$/.exec(lines[1] ?? '');
+  if (m === null || s === null) return null;
+  return { p1: sliceNumber(m[1]!), p50: sliceNumber(m[2]!), p99: sliceNumber(m[3]!), constant: null, below0: Number(s[1]) };
+}
+
+/**
+ * The islands const edited from −1e6 to `floor` (SP3d spec §6 step 2): the air values are floored there, so p1 becomes
+ * `floor` (the slice holds more than 1 % air), and solidity is unchanged, so the share below 0 stays the same.
+ */
+export function islandsFloorOk(before: SliceStatsText, after: SliceStatsText, floor: number): boolean {
+  return after.constant === null && before.below0 !== null && before.p1 < floor && after.p1 === floor && after.below0 === before.below0;
+}
+
+/** The slice hover readout `(x, y, z) · <field> <value>` (`sliceHoverText`), read back; null otherwise. */
+export function parseSliceReadout(text: string): { readonly x: number; readonly y: number; readonly z: number; readonly field: string; readonly value: string } | null {
+  const m = /^\((-?\d+), (-?\d+), (-?\d+)\) · (density|node|blocks|rule) (\S+)$/.exec(text);
+  return m === null ? null : { x: Number(m[1]), y: Number(m[2]), z: Number(m[3]), field: m[4]!, value: m[5]! };
+}
+
+/**
+ * The slice hover readout and the node form's line `value at the hover: <value> at (x, y, z)` name the same voxel and
+ * the same value: the `fieldProbe` job agrees with the slice sample (SP3d spec §3.6, §5.3).
+ */
+export function hoverAgrees(readout: string, hoverLine: string): boolean {
+  const r = parseSliceReadout(readout);
+  const m = /^value at the hover: (\S+) at \((-?\d+), (-?\d+), (-?\d+)\)$/.exec(hoverLine);
+  return r !== null && m !== null && m[1] === r.value && Number(m[2]) === r.x && Number(m[3]) === r.y && Number(m[4]) === r.z;
+}
+
+/**
+ * The JSON editor's text of the density tree with the `islands` tap's child op replaced by `bogus` (SP3d spec §6 step
+ * 4): the editor then reports `root.b.x: UNKNOWN_OP`. Throws when the text holds no islands tap with an `x` child.
+ */
+export function brokenIslandsJson(text: string): string {
+  const tap = text.indexOf('"name": "islands"');
+  const x = tap < 0 ? -1 : text.indexOf('"x": {', tap);
+  const op = x < 0 ? -1 : text.indexOf('"op": "', x);
+  if (op < 0) throw new Error('the text has no islands tap with an x child');
+  const start = op + '"op": "'.length;
+  return `${text.slice(0, start)}bogus${text.slice(text.indexOf('"', start))}`;
+}
+
+/** An editor issue line `<node path>: CODE — message` at exactly `path` with `code`. */
+export function issueLineOk(line: string, path: string, code: string): boolean {
+  return line.startsWith(`${path}: ${code} — `);
+}
+
+/** The slice extents (`SLICE_EXTENTS`) and the world window's half-size (`WINDOW_HALF`). */
+const SLICE_EXTENTS = [256, 512, 1024, 2048, 4096, 8192] as const;
+const WINDOW_HALF = 524288;
+
+/**
+ * The horizontal plane's centre after a map click at page point (sx, sy) on the map canvas `box` (its page position and
+ * its canvas size in px, DPR 1) showing `view` (SP3d spec §3.7): the clicked block, clamped so the square of `extent`
+ * stays in the world window, as the page's `withCentre` computes it.
+ */
+export function clickCentre(view: MapUrlView, box: { readonly x: number; readonly y: number; readonly width: number; readonly height: number }, sx: number, sy: number, extent: number): [number, number] {
+  if (!(SLICE_EXTENTS as readonly number[]).includes(extent)) throw new RangeError(`extent ${extent} is not a slice extent`);
+  const h = extent / 2;
+  const clamp = (v: number) => Math.min(Math.max(Math.floor(v), -WINDOW_HALF + h), WINDOW_HALF - h);
+  return [clamp(view.x + (sx - box.x - box.width / 2) * view.bpp), clamp(view.z + (sy - box.y - box.height / 2) * view.bpp)];
+}
+
+/** The horizontal slice's axis end labels for the square of `extent` centred on (cx, cz) (`sliceAxisLabels`). */
+export function squareLabels(cx: number, cz: number, extent: number): { readonly left: string; readonly right: string; readonly top: string; readonly bottom: string } {
+  const h = extent / 2;
+  return { left: `x ${cx - h}`, right: `x ${cx + h}`, top: `z ${cz - h}`, bottom: `z ${cz + h}` };
+}
+
+/** The colour of the horizontal plane's square and centre cross on the map (`mapView.ts`; a unit test keeps them equal). */
+export const SQUARE_RGB = [127, 211, 236] as const;
+
+/**
+ * The pixels of the square's colour (within 24 per channel: antialiased edges) in the (2r + 1)² window around (sx, sy)
+ * of an RGBA image `width` px wide, clipped at its edges (the map's centre cross is two 11 px strokes 2 px wide).
+ */
+export function crossPixels(rgba: ArrayLike<number>, width: number, sx: number, sy: number, r = 7): number {
+  const height = Math.floor(rgba.length / (4 * width));
+  const x0 = Math.round(sx);
+  const y0 = Math.round(sy);
+  let count = 0;
+  for (let y = Math.max(0, y0 - r); y <= Math.min(height - 1, y0 + r); y++) {
+    for (let x = Math.max(0, x0 - r); x <= Math.min(width - 1, x0 + r); x++) {
+      const k = 4 * (y * width + x);
+      if (SQUARE_RGB.every((c, i) => Math.abs(rgba[k + i]! - c) <= 24)) count++;
+    }
+  }
+  return count;
+}
+
+/** The viewport width at which the Density tab (`drawer` px wide at `viewport`) is `want` px wide: the drawer spans the page. */
+export function viewportForDrawer(now: { readonly viewport: number; readonly drawer: number }, want: number): number {
+  if (!(now.drawer > 0) || !(now.viewport > 0)) throw new RangeError(`no drawer width at viewport ${now.viewport}: ${now.drawer}`);
+  return now.viewport - now.drawer + want;
+}
+
+/** Wall times as `p50 M ms (a, b, …)`: the nearest-rank median and every run sorted, rounded to the ms. */
+export function timesText(ms: readonly number[]): string {
+  if (ms.length === 0) throw new RangeError('no times');
+  const s = [...ms].sort((a, b) => a - b).map((v) => Math.round(v));
+  return `p50 ${s[Math.ceil(s.length / 2) - 1]} ms (${s.join(', ')})`;
+}
+
 export interface SmokeArgs {
   readonly build: boolean;
   /** The parent of the temporary Chrome profile (default: the OS temp directory). */
@@ -254,7 +435,46 @@ interface SmokePage {
   box(selector: string): Box | null;
   /** Resolves with the wait in ms once `pred` holds on an animation frame; rejects after `ms`. */
   until(pred: () => boolean, ms: number, what: string): Promise<number>;
+  /** As `until`, resolving with `performance.now()` at the frame where `pred` held. */
+  untilAt(pred: () => boolean, ms: number, what: string): Promise<number>;
+  /** The Density tab's slice view as it reads (SP3d spec §4.3). */
+  slice(): SliceRead;
+  /** Sets a select's value and fires its change event (headless Chrome has no popup to pick an option from). */
+  choose(selector: string, value: string): boolean;
+  /** Starts recording every image the slice view draws (its histogram text is rewritten with each), with its size. */
+  recordDraws(): boolean;
+  /** The draws recorded since `recordDraws`: page time and n (the canvas size). */
+  draws(): Array<{ t: number; n: number }>;
+  /** The map canvas's RGBA pixels in the (2r + 1)² window around page point (sx, sy) (clipped), and the window's width. */
+  mapPixels(sx: number, sy: number, r: number): { rgba: number[]; width: number; cx: number; cy: number };
 }
+
+/** The slice view's texts (`.sv`): status, histogram, notice, the four axis labels, the controls, readout and canvas size. */
+interface SliceRead {
+  readonly status: string;
+  readonly stats: string;
+  readonly notice: string;
+  readonly top: string;
+  readonly bottom: string;
+  readonly left: string;
+  readonly right: string;
+  readonly plane: string;
+  readonly field: string;
+  readonly readout: string | null;
+  /** The node form's "value at the hover" line, null while hidden. */
+  readonly hover: string | null;
+  readonly n: number;
+}
+
+/** The Density tab's elements the smoke drives (`sliceView.ts`, `densityTab.ts`, `jsonEditor.ts`). */
+const SV_PLANE = '.sv > .sv-controls > label:nth-of-type(1) > select';
+const SV_FIELD = '.sv > .sv-controls > label:nth-of-type(2) > select';
+const SV_EXTENT = '.sv > .sv-controls > label:nth-of-type(4) > select';
+const SV_BOX = '.sv > .sv-body .sv-box';
+const ROW = (path: string) => `.it-row[title="density.defs.${path}"]`;
+const FORM_V = '.it-fields input.it-input[aria-label="v"]';
+const JE_TEXT = '.je-text';
+const DENSITY_SHOWN = `!document.querySelector('.map-drawer').hidden && document.getElementById('map-drawer-tab-density').getAttribute('aria-selected') === 'true'`;
 
 /**
  * The page helpers, installed as `globalThis.__wiSmoke` on every new document from this function's source: it may
@@ -262,6 +482,20 @@ interface SmokePage {
  */
 function pageHelpers(): SmokePage {
   const q = (sel: string): HTMLElement | null => (sel.startsWith('#') ? document.getElementById(sel.slice(1)) : document.querySelector<HTMLElement>(sel));
+  const drawLog: Array<{ t: number; n: number }> = [];
+  let observer: MutationObserver | null = null;
+  const untilAt = (pred: () => boolean, ms: number, what: string): Promise<number> => new Promise((resolve, reject) => {
+    const t0 = performance.now();
+    const step = () => {
+      let ok = false;
+      try { ok = pred(); } catch { ok = false; }
+      const now = performance.now();
+      if (ok) resolve(now);
+      else if (now - t0 > ms) reject(new Error(`no ${what} within ${ms} ms`));
+      else requestAnimationFrame(step);
+    };
+    step();
+  });
   return {
     state() {
       const h = location.hash.slice(1);
@@ -288,17 +522,56 @@ function pageHelpers(): SmokePage {
       return { x: r.left, y: r.top, width: r.width, height: r.height };
     },
     until(pred, ms, what) {
-      return new Promise((resolve, reject) => {
-        const t0 = performance.now();
-        const step = () => {
-          let ok = false;
-          try { ok = pred(); } catch { ok = false; }
-          if (ok) resolve(performance.now() - t0);
-          else if (performance.now() - t0 > ms) reject(new Error(`no ${what} within ${ms} ms`));
-          else requestAnimationFrame(step);
-        };
-        step();
-      });
+      const t0 = performance.now();
+      return untilAt(pred, ms, what).then((t) => t - t0);
+    },
+    untilAt,
+    slice() {
+      const text = (sel: string): string => q(sel)?.textContent ?? '';
+      const shown = (sel: string): string | null => { const e = q(sel); return e === null || e.hidden ? null : e.textContent ?? ''; };
+      const axes = [...document.querySelectorAll('.sv > .sv-body > .sv-axis')].map((e) => e.textContent ?? '');
+      const ends = [...document.querySelectorAll('.sv > .sv-body > .sv-ends > span')].map((e) => e.textContent ?? '');
+      return {
+        status: text('.sv > .sv-status'), stats: text('.sv > .sv-body .sv-stats'), notice: text('.sv > .sv-notice'),
+        top: axes[0] ?? '', bottom: axes[1] ?? '', left: ends[0] ?? '', right: ends[1] ?? '',
+        plane: (q('.sv > .sv-controls > label:nth-of-type(1) > select') as HTMLSelectElement | null)?.value ?? '',
+        field: (q('.sv > .sv-controls > label:nth-of-type(2) > select') as HTMLSelectElement | null)?.value ?? '',
+        readout: shown('.sv > .sv-body .sv-box > .sv-readout'), hover: shown('.it-hover'),
+        n: (q('.sv > .sv-body .sv-box > canvas.sv-image') as HTMLCanvasElement | null)?.width ?? 0,
+      };
+    },
+    choose(sel, value) {
+      const e = q(sel) as HTMLSelectElement | null;
+      if (e === null) throw new Error(`no select ${sel}`);
+      if (![...e.options].some((o) => o.value === value && !o.disabled)) throw new Error(`${sel} has no enabled option ${value}`);
+      e.focus();
+      e.value = value;
+      e.dispatchEvent(new Event('input', { bubbles: true }));
+      e.dispatchEvent(new Event('change', { bubbles: true }));
+      return true;
+    },
+    recordDraws() {
+      drawLog.length = 0;
+      observer?.disconnect();
+      const stats = q('.sv > .sv-body .sv-stats');
+      const canvas = q('.sv > .sv-body .sv-box > canvas.sv-image') as HTMLCanvasElement | null;
+      if (stats === null || canvas === null) throw new Error('no slice view');
+      observer = new MutationObserver(() => { drawLog.push({ t: performance.now(), n: canvas.width }); });
+      observer.observe(stats, { childList: true, characterData: true, subtree: true });
+      return true;
+    },
+    draws: () => drawLog.slice(),
+    mapPixels(sx, sy, r) {
+      const c = q('.map-canvas') as HTMLCanvasElement;
+      const b = c.getBoundingClientRect();
+      const cx = Math.round(sx - b.left);
+      const cy = Math.round(sy - b.top);
+      const x0 = Math.max(0, cx - r);
+      const y0 = Math.max(0, cy - r);
+      const x1 = Math.min(c.width - 1, cx + r);
+      const y1 = Math.min(c.height - 1, cy + r);
+      const data = c.getContext('2d')!.getImageData(x0, y0, x1 - x0 + 1, y1 - y0 + 1).data;
+      return { rgba: Array.from(data), width: x1 - x0 + 1, cx: cx - x0, cy: cy - y0 };
     },
   };
 }
@@ -482,6 +755,21 @@ class Page {
     throw new Error('the page was not ready 30 s after the reload');
   }
 
+  /** As `until`, resolving with the page's `performance.now()` at the frame where `pred` held. */
+  untilAt(pred: string, what: string, ms = SETTLE_MS): Promise<number> {
+    return this.eval<number>(`__wiSmoke.untilAt(() => (${pred}), ${ms}, ${JSON.stringify(what)})`);
+  }
+
+  now(): Promise<number> { return this.eval('performance.now()'); }
+
+  /** The page expression "the slice view shows a fresh n² slice with nothing in flight" (`freshSlice`), and `extra`. */
+  static fresh(n: number, extra = 'true'): string {
+    return `document.querySelector('.sv > .sv-status').textContent === ${JSON.stringify(`${n}²`)} && (${extra})`;
+  }
+
+  slice(): Promise<SliceRead> { return this.eval('__wiSmoke.slice()'); }
+  choose(selector: string, value: string): Promise<boolean> { return this.eval(`__wiSmoke.choose(${JSON.stringify(selector)}, ${JSON.stringify(value)})`); }
+
   state(): Promise<MapUrlState | null> { return this.eval('__wiSmoke.state()'); }
   hash(): Promise<string> { return this.eval('location.hash'); }
 
@@ -580,6 +868,8 @@ interface Check { readonly step: string; readonly ok: boolean; readonly what: st
 
 class Smoke {
   readonly checks: Check[] = [];
+  /** The steps begun, in order (their ids). */
+  readonly ran: SmokeStep[] = [];
   private stepName = '';
   readonly page: Page;
   readonly downloads: string;
@@ -588,9 +878,14 @@ class Smoke {
     this.downloads = downloads;
   }
 
+  /** Begins the step titled `<id>: <what>`; its id must come after the last one's in SMOKE_STEPS. */
   step(name: string): void {
+    const id = stepId(name);
+    const last = this.ran.at(-1);
     this.stepName = name;
     console.log(`\n${name}`);
+    if (last !== undefined && SMOKE_STEPS.indexOf(id) <= SMOKE_STEPS.indexOf(last)) this.check(false, `step ${id} runs after ${last}, out of SMOKE_STEPS order`);
+    this.ran.push(id);
   }
 
   check(ok: boolean, what: string, detail?: unknown): void {
@@ -845,6 +1140,259 @@ async function runSmoke(t: Smoke): Promise<void> {
     t.check(hover.firstOk, `hover on the top voxel: ${hover.first}`, hover.first);
     t.check(hover.ruledOk, `the rule of the land top: ${hover.ruled}`, hover.ruled);
   }
+
+  await runDensity(t);
+}
+
+const statsOf = (s: SliceRead): SliceStatsText | null => parseSliceStats(s.stats);
+
+/**
+ * The pointer on the live slice at (fx, fy) of its box (fractions), until the slice readout and the node form's "value
+ * at the hover" line (the `fieldProbe` job) both show a value; then the pointer leaves the box. Null when they do not.
+ */
+async function hoverSlice(p: Page, fx: number, fy: number, leave = true): Promise<{ readonly readout: string; readonly hover: string } | null> {
+  const box = await p.center(SV_BOX);
+  await p.mouse('mouseMoved', box.box.x + fx * box.box.width, box.box.y + fy * box.box.height);
+  try {
+    await p.until(`(() => { const s = __wiSmoke.slice(); return s.readout !== null && s.hover !== null && !s.hover.includes('…') && s.hover.endsWith(s.readout.slice(0, s.readout.indexOf(')') + 1)); })()`, 'the slice readout and the value at the hover', 10000);
+  } catch {
+    return null;
+  }
+  const s = await p.slice();
+  if (leave) await p.mouse('mouseMoved', box.box.x - 40, box.box.y - 40);
+  return s.readout === null || s.hover === null ? null : { readout: s.readout, hover: s.hover };
+}
+const sliceLabels = (s: SliceRead) => ({ left: s.left, right: s.right, top: s.top, bottom: s.bottom });
+
+/**
+ * The Density tab's steps (SP3d spec §6 steps 1-7), on the mountain page the rule step opened: the mountain line drawn,
+ * the drawer on Cross-section, nothing modified.
+ */
+async function runDensity(t: Smoke): Promise<void> {
+  const p = t.page;
+  const { view: mv, a, b } = MOUNTAIN_LINE;
+  const startState = await p.state();
+
+  t.step('density tab: the Density tab with the mountain cut line drawn, the field set to density');
+  await p.click('#map-drawer-tab-density');
+  t.check(await p.eval<boolean>(DENSITY_SHOWN), 'the drawer shows the Density tab');
+  t.check((await p.slice()).plane === 'vertical', 'the first show is the vertical plane (a line exists, §3.7)');
+  await p.choose(SV_FIELD, 'density');
+  await p.until(Page.fresh(128), 'a fresh 128² density slice');
+  const s0 = await p.slice();
+  t.check(s0.field === 'density' && s0.n === 128, `field ${s0.field}, ${s0.status}`, s0);
+  t.check(s0.left === `A (${a[0]}, ${a[1]})` && s0.right.startsWith(`B (${b[0]}, ${b[1]}) · `) && s0.top === 'y 319' && s0.bottom === 'y -64', `along the line: ${s0.left} … ${s0.right}, ${s0.top} … ${s0.bottom}`, sliceLabels(s0));
+  const st0 = statsOf(s0);
+  t.check(st0 !== null && st0.constant === null && st0.p1 < -10 && st0.p99 > 0, `the histogram: ${s0.stats.replace(/\n/g, ' · ')}`, s0.stats);
+  const hovered = await hoverSlice(p, 0.4, 0.5);
+  t.check(hovered !== null && hoverAgrees(hovered.readout, hovered.hover), `the slice hover and the form's value at the hover agree (probe == slice): ${hovered?.readout ?? '-'} | ${hovered?.hover ?? '-'}`, hovered);
+  const rows0 = await p.eval<string[]>(`[...document.querySelectorAll('.it-row')].map((r) => r.title + ' ' + r.textContent)`);
+  t.check(rows0.length > 0, `${rows0.length} tree rows`);
+
+  t.step('density node: the islands const root.b.x edited from -1e6 to -10');
+  await p.click(`${ROW('root.b.x')} .it-node`);
+  t.check(await p.eval<string>(`document.querySelector('.it-path').textContent`) === 'density.defs.root.b.x', 'the row selects root.b.x');
+  t.check(await p.eval<string>(`document.querySelector(${JSON.stringify(FORM_V)}).value`) === '-1000000', 'the form shows v -1000000');
+  let before = await p.hash();
+  await p.typeInto(FORM_V, '-10');
+  await p.enter();
+  const n1 = await p.changed(before, 'the islands edit');
+  const tree1 = (patchOf(n1)['density'] as { defs?: { root?: { b?: { x?: { v?: unknown } } } } } | undefined)?.defs;
+  t.check(tree1?.root?.b?.x?.v === -10 && Object.keys(patchOf(n1)).join() === 'density', 'the patch holds the edited density tree (islands -10)', patchOf(n1));
+  await p.until(Page.fresh(128, `document.querySelector('.sv > .sv-body .sv-stats').textContent !== ${JSON.stringify(s0.stats)}`), 'the density slice after the edit');
+  const s1 = await p.slice();
+  const st1 = statsOf(s1);
+  t.check(st0 !== null && st1 !== null && islandsFloorOk(st0, st1, -10), `the air is floored at -10, solidity unchanged: ${s1.stats.replace(/\n/g, ' · ')}`, s1.stats);
+
+  t.step('density mute: the terrain tap muted from its row, the root selected and the field on selected');
+  await p.click(`${ROW('root')} .it-node`);
+  await p.choose(SV_FIELD, 'selected');
+  await p.until(Page.fresh(128, `document.querySelector('.it-path').textContent === 'density.defs.root'`), 'a fresh slice of the selected root');
+  const s1sel = await p.slice();
+  t.check(s1sel.stats === s1.stats, `the selected root's slice is the density's: ${s1sel.stats.replace(/\n/g, ' · ')}`, s1sel.stats);
+  before = await p.hash();
+  await p.click(`${ROW('root.a.a')} .it-mute`);
+  const n2 = await p.changed(before, 'the mute');
+  const tree2 = (patchOf(n2)['density'] as { defs?: { root?: { a?: { a?: { mute?: unknown } }; b?: { x?: { v?: unknown } } } } } | undefined)?.defs;
+  t.check(tree2?.root?.a?.a?.mute === 0 && tree2.root.b?.x?.v === -10, 'the patch mutes terrain to 0 (its parent is an add) and keeps islands -10', tree2);
+  t.check(await p.eval<boolean>(`document.querySelector(${JSON.stringify(ROW('root.a.a'))}).classList.contains('it-muted')`), `the row reads muted: ${await p.eval<string>(`document.querySelector(${JSON.stringify(ROW('root.a.a'))}).textContent`)}`);
+  const current = await p.eval<string | null>(`document.querySelector('.it-node[aria-current]')?.closest('.it-row')?.title ?? null`);
+  t.check(current === 'density.defs.root' && await p.eval<string>(`document.querySelector('.it-path').textContent`) === 'density.defs.root',
+    `the row's mute keeps the selection on the root (the current row: ${current ?? 'none'})`);
+  await p.until(Page.fresh(128, `document.querySelector('.sv > .sv-body .sv-stats').textContent !== ${JSON.stringify(s1.stats)}`), 'the selected root\'s slice after the mute');
+  const s2sel = await p.slice();
+  await p.choose(SV_FIELD, 'density');
+  await p.until(Page.fresh(128, `document.querySelector('.sv > .sv-body .sv-stats').textContent !== ${JSON.stringify(s1.stats)}`), 'the density slice after the mute');
+  const s2 = await p.slice();
+  t.check(s2.stats !== s1.stats && s2sel.stats === s2.stats, `the slice changed, and the selected root's equals the density's: ${s2.stats.replace(/\n/g, ' · ')}`, [s2sel.stats, s2.stats]);
+  const href2 = await p.eval<string>('location.href');
+  const hash2 = await p.hash();
+  t.check(hash2.length - 1 <= 65536 && !(await p.eval<string[]>('__wiSmoke.notices()')).some((n) => n.includes('too large for the URL')),
+    `the URL with the edited density tree: ${href2.length} characters (hash ${hash2.length - 1}), under the 64 KiB cap`);
+
+  t.step('density json: a broken JSON in the editor, Escape, then the toolbar Undo twice');
+  const printed = await p.eval<string>(`document.querySelector('${JE_TEXT}').value`);
+  t.check(await p.eval<string>(`document.querySelector('.je-status').dataset.status`) === 'clean', 'the editor holds the current tree, clean');
+  before = await p.hash();
+  await p.click(JE_TEXT);
+  await p.eval(`(document.querySelector('${JE_TEXT}').select(), true)`);
+  await p.cdp.send('Input.insertText', { text: brokenIslandsJson(printed) });
+  await p.until(`document.querySelector('.je-status').dataset.status === 'invalid'`, 'the editor\'s verdict', 5000);
+  const issues = await p.eval<string[]>(`[...document.querySelectorAll('.je-issues .je-issue')].map((e) => e.textContent)`);
+  t.check(issues.length === 1 && issueLineOk(issues[0]!, 'root.b.x', 'UNKNOWN_OP'), `the issue: ${issues.join(' | ')}`, issues);
+  const s3 = await p.slice();
+  t.check((await p.hash()) === before && await p.eval<boolean>('__wiSmoke.settled()') && freshSlice(s3.status, 128) && s3.stats === s2.stats,
+    `the map stays drawn: the session, the URL and the slice are unchanged (${await p.eval<string>('__wiSmoke.status()')})`);
+  await p.key('Escape', 'Escape', 27);
+  t.check(await p.eval<boolean>(`document.querySelector('.je-status').dataset.status === 'clean' && document.querySelector('${JE_TEXT}').value === ${JSON.stringify(printed)}`), 'Escape reverts the buffer: clean');
+  t.check(await p.eval<boolean>(DENSITY_SHOWN), 'the drawer stays on Density after Escape');
+  await p.blur();
+  for (const what of ['the mute', 'the islands edit']) {
+    before = await p.hash();
+    await p.click('.map-toolbar button[title^="Undo"]');
+    await p.changed(before, `the toolbar Undo of ${what}`);
+  }
+  t.check(sameJson(await p.state(), startState), 'both edits are undone: the URL holds the page\'s start state', await p.state());
+  const rows = await p.eval<string[]>(`[...document.querySelectorAll('.it-row')].map((r) => r.title + ' ' + r.textContent)`);
+  t.check(sameJson(rows, rows0) && await p.eval<number>(`document.querySelectorAll('.it-row.it-muted').length`) === 0
+    && await p.eval<string>(`document.querySelector(${JSON.stringify(`${ROW('root.b.x')} .it-summary`)}).textContent`) === 'const -1000000', 'the tree rows show the default (islands -1000000, nothing muted)');
+  t.check(await p.eval<string>(`document.querySelector('.je-status').dataset.status`) === 'clean', 'the buffer is clean');
+  await p.until(Page.fresh(128, `document.querySelector('.sv > .sv-body .sv-stats').textContent === ${JSON.stringify(s0.stats)}`), 'the default slice again');
+  t.check(true, 'the slice is the first one again (same histogram)');
+
+  t.step('density narrow: the tab 1,000 px wide (Slice/JSON sub-tabs), a row selected under Slice, then the JSON sub-tab');
+  // The root selected first, in the grid: its text starts the buffer, so the editor is scrolled to the top.
+  await p.click(`${ROW('root')} .it-node`);
+  await p.until(`document.querySelector('${JE_TEXT}').scrollTop === 0`, 'the editor scrolled to the root', 5000);
+  let narrow: number = VIEWPORT.width;
+  for (let i = 0; i < 4; i++) {
+    const drawer = await p.eval<number>(`Math.round(document.querySelector('.it').getBoundingClientRect().width)`);
+    if (drawer === 1000) break;
+    narrow = viewportForDrawer({ viewport: narrow, drawer }, 1000);
+    await p.cdp.send('Emulation.setDeviceMetricsOverride', { width: narrow, height: VIEWPORT.height, deviceScaleFactor: 1, mobile: false });
+    await sleep(500);
+  }
+  await p.until(`document.querySelector('.it').dataset.layout === 'tabs'`, 'the Slice/JSON sub-tabs at 1,000 px', 10000);
+  t.check(await p.eval<boolean>(`document.querySelector('.it-json').hidden && !document.querySelector('.it-slice').hidden && document.querySelector('.it-subtabs button[aria-selected="true"]').textContent === 'Slice'`),
+    `viewport ${narrow} px: the tab is ${await p.eval<number>(`Math.round(document.querySelector('.it').getBoundingClientRect().width)`)} px wide, the Slice sub-tab shown first`);
+  await p.click(`${ROW('root.b.x')} .it-node`);
+  await p.click('.it-subtabs button:nth-of-type(2)');
+  await sleep(300);
+  /** The highlighted node's text against the editor's view: its line's top in the text, the view's top and height. */
+  const MARK_IN_VIEW = `(() => { const t = document.querySelector('${JE_TEXT}'); const pre = document.querySelector('.je-mirror'); const m = pre.querySelector('mark'); const tr = t.getBoundingClientRect(); const mr = m.getBoundingClientRect(); return { line: Math.round(mr.top - pre.getBoundingClientRect().top + pre.scrollTop), scroll: t.scrollTop, height: t.clientHeight, inView: m.textContent.length > 0 && mr.top >= tr.top - 1 && mr.top + 16 <= tr.bottom + 1 }; })()`;
+  const mark1 = await p.eval<{ line: number; scroll: number; height: number; inView: boolean }>(MARK_IN_VIEW);
+  t.check(!(await p.eval<boolean>(`document.querySelector('.it-json').hidden`)) && mark1.line > mark1.height && mark1.inView,
+    `the JSON sub-tab shows root.b.x's highlighted text (its line at ${mark1.line} px, below the first view of ${mark1.height} px): scrolled to ${mark1.scroll} px`, mark1);
+  await p.click('.it-subtabs button:nth-of-type(1)');
+  await sleep(200);
+  await p.click('.it-subtabs button:nth-of-type(2)');
+  await sleep(300);
+  const mark2 = await p.eval<{ line: number; scroll: number; height: number; inView: boolean }>(MARK_IN_VIEW);
+  t.check(mark2.inView && mark2.scroll === mark1.scroll, `a Slice/JSON switch keeps the text's scroll (${mark2.scroll} px)`, mark2);
+  await p.click('.it-subtabs button:nth-of-type(1)');
+  await p.click(`${ROW('root')} .it-node`);
+  await p.cdp.send('Emulation.setDeviceMetricsOverride', { width: VIEWPORT.width, height: VIEWPORT.height, deviceScaleFactor: 1, mobile: false });
+  await p.until(`document.querySelector('.it').dataset.layout === 'grid'`, 'the grid layout again', 10000);
+  await p.until(Page.fresh(128), 'a fresh slice in the grid layout');
+
+  t.step('density horizontal: the horizontal plane, a map click moves its centre, a cut line drawn with Density shown');
+  await p.choose(SV_PLANE, 'horizontal');
+  const sq0 = squareLabels(Math.floor(mv.x), Math.floor(mv.z), 2048);
+  await p.until(Page.fresh(128, `document.querySelector('.sv > .sv-body > .sv-ends > span').textContent === ${JSON.stringify(sq0.left)}`), 'a fresh horizontal slice at the view centre');
+  t.check(sameJson(sliceLabels(await p.slice()), sq0), `the square of 2048 at the view's centre (${Math.floor(mv.x)}, ${Math.floor(mv.z)})`, sliceLabels(await p.slice()));
+  const mapBox = await p.eval<{ x: number; y: number; width: number; height: number }>(`(() => { const c = document.querySelector('.map-canvas'); const r = c.getBoundingClientRect(); return { x: r.left, y: r.top, width: c.width, height: c.height }; })()`);
+  const mid = [mapBox.x + mapBox.width / 2, mapBox.y + mapBox.height / 2] as const;
+  const cross = async (sx: number, sy: number): Promise<number> => {
+    const w = await p.eval<{ rgba: number[]; width: number; cx: number; cy: number }>(`__wiSmoke.mapPixels(${sx}, ${sy}, 7)`);
+    return crossPixels(w.rgba, w.width, w.cx, w.cy);
+  };
+  const cross0 = await cross(mid[0], mid[1]);
+  t.check(cross0 >= 4, `the square's centre cross is drawn at the view centre (${cross0} px; the cut line covers its horizontal arm)`);
+  const click = [Math.round(mid[0] + 150), Math.round(mid[1] + 80)] as const;
+  const centre = clickCentre(mv, mapBox, click[0], click[1], 2048);
+  const sq1 = squareLabels(centre[0], centre[1], 2048);
+  await p.clickAt(click[0], click[1]);
+  await p.until(Page.fresh(128, `document.querySelector('.sv > .sv-body > .sv-ends > span').textContent === ${JSON.stringify(sq1.left)}`), 'a fresh slice at the clicked centre');
+  t.check(sameJson(sliceLabels(await p.slice()), sq1), `the click moves the centre to (${centre[0]}, ${centre[1]}) and a fresh 128² slice arrives`, sliceLabels(await p.slice()));
+  await sleep(300);
+  const crossNew = await cross(click[0], click[1]);
+  const crossOld = await cross(mid[0], mid[1]);
+  t.check(crossNew >= 8 && crossOld < 3, `the square overlay follows: its centre cross at the click (${crossNew} px), none at the old centre (${crossOld} px)`);
+  const lineBefore = await p.eval<string>(`document.querySelector('.cs-line').textContent`);
+  await p.click('.map-cut');
+  await p.clickAt(Math.round(mid[0] - 120), Math.round(mid[1] - 60));
+  await p.clickAt(Math.round(mid[0] + 120), Math.round(mid[1] - 60));
+  t.check(await p.eval<boolean>(DENSITY_SHOWN), 'a cut line drawn while Density is shown keeps Density shown (§3.7)');
+  const lineAfter = await p.eval<string>(`document.querySelector('.cs-line').textContent`);
+  t.check(lineAfter !== lineBefore && parseSegment(lineAfter) !== null, `the new line: ${lineAfter}`, lineAfter);
+  t.check((await p.slice()).plane === 'horizontal', 'the plane stays horizontal');
+
+  t.step('density drag: the biome-size slider dragged 5 → 6, held, then → 7, with Density shown');
+  t.check(await p.eval<string>(`document.querySelector('.map-size').value`) === '5', 'the slider starts at 5');
+  const sl = await p.center('.map-size');
+  before = await p.hash();
+  await p.eval('__wiSmoke.recordDraws()');
+  let x = sl.box.x + 8 + (4 / 9) * (sl.box.width - 16);
+  await p.mouse('mouseMoved', x, sl.y);
+  await p.mouse('mousePressed', x, sl.y);
+  const pressedAt = await p.now();
+  const moveTo = async (value: string): Promise<void> => {
+    for (let i = 0; i < 200 && (await p.eval<string>(`document.querySelector('.map-size').value`)) !== value; i++) {
+      x += 1;
+      await p.mouse('mouseMoved', x, sl.y);
+      await sleep(16);
+    }
+  };
+  await moveTo('6');
+  const at6 = await p.now();
+  let draftAt: number | null = null;
+  try {
+    draftAt = await p.untilAt(`__wiSmoke.draws().some((d) => d.n === 32 && d.t > ${at6})`, 'a draft drawn while the slider is held at 6', 15000);
+  } catch { draftAt = null; }
+  await moveTo('7');
+  const releasedAt = await p.now();
+  await p.mouse('mouseReleased', x, sl.y);
+  const s6 = await p.changed(before, 'the slider drag');
+  const during = (await p.eval<Array<{ t: number; n: number }>>('__wiSmoke.draws()')).filter((d) => d.t > pressedAt && d.t < releasedAt);
+  t.check(sameJson(patchOf(s6), { climate: { scaleMul: SIZE_7 } }), `the patch gains climate.scaleMul ${SIZE_7}`, s6.patch);
+  t.check(during.some((d) => d.n === 32), `drafts drawn during the drag: ${during.filter((d) => d.n === 32).length} of 32², ${during.filter((d) => d.n === 128).length} of 128²${draftAt === null ? '' : `; the first draft ${Math.round(draftAt - at6)} ms after the slider reached 6`}`, during);
+  await p.until(Page.fresh(128), 'a fresh slice after the drag');
+
+  t.step('density times: the URL length and the browser wall times of the 128² slices');
+  const workers = /workers (\d+)/.exec(await p.eval<string>('__wiSmoke.world()'))?.[1] ?? '?';
+  await p.click(`${ROW('root.b.x')} .it-node`);
+  /** The time from a control change to the fresh 128² slice (the draft first), in the page's clock. */
+  const timeChange = async (selector: string, value: string, extra: string): Promise<number> => {
+    const t0 = await p.eval<number>(`(() => { const t0 = performance.now(); __wiSmoke.choose(${JSON.stringify(selector)}, ${JSON.stringify(value)}); return t0; })()`);
+    return (await p.untilAt(Page.fresh(128, extra), `a fresh 128² slice after ${selector} = ${value}`)) - t0;
+  };
+  /** The time from a typed islands value (Enter) to the fresh 128² slice of the new session epoch. */
+  const timeEdit = async (v: string): Promise<number> => {
+    await p.typeInto(FORM_V, v);
+    const t0 = await p.now();
+    await p.enter();
+    await p.until(`!(${Page.fresh(128)})`, 'the slice going stale after the edit', 5000);
+    return (await p.untilAt(Page.fresh(128), `a fresh 128² slice after islands ${v}`)) - t0;
+  };
+  // The vertical slice on the mountain line again (the line of the bench's slice.vertical128), drawn with Density shown.
+  await drawMountainLine(p);
+  const mountain = await p.eval<string>(`document.querySelector('.cs-line').textContent`);
+  t.check(await p.eval<boolean>(DENSITY_SHOWN) && mountain.startsWith(`A (${a[0]}, ${a[1]}) → B (${b[0]}, ${b[1]})`), `the mountain line again: ${mountain}`, mountain);
+  const vSwitch = await timeChange(SV_PLANE, 'vertical', `document.querySelector('.sv > .sv-body > .sv-ends > span').textContent === ${JSON.stringify(`A (${a[0]}, ${a[1]})`)}`);
+  const vEdits: number[] = [];
+  for (const v of ['-999999', '-1000000', '-999999']) vEdits.push(await timeEdit(v));
+  await p.choose(SV_PLANE, 'horizontal');
+  await p.until(Page.fresh(128), 'a fresh horizontal slice');
+  const sq8 = squareLabels(centre[0], centre[1], 8192);
+  const hSwitch = await timeChange(SV_EXTENT, '8192', `document.querySelector('.sv > .sv-body > .sv-ends > span').textContent === ${JSON.stringify(sq8.left)}`);
+  const hEdits: number[] = [];
+  for (const v of ['-1000000', '-999999', '-1000000']) hEdits.push(await timeEdit(v));
+  t.check(true, `browser wall times with ${workers} workers, change → fresh 128² (32² draft first, frame-polled): vertical along ${mountain}: plane switch ${Math.round(vSwitch)} ms, after an edit ${timesText(vEdits)}; horizontal extent 8192 at (${centre[0]}, ${centre[1]}): extent switch ${Math.round(hSwitch)} ms, after an edit ${timesText(hEdits)}`);
+  // The page writes the URL 200 ms after the last change.
+  await sleep(600);
+  const href7 = await p.eval<string>('location.href');
+  const hash7 = await p.hash();
+  t.check(hash7.length - 1 <= 65536, `the URL at the end: ${href7.length} characters (hash ${hash7.length - 1}): ${canonicalJson(await p.state())}`);
 }
 
 /**
@@ -869,20 +1417,26 @@ async function hoverTopRule(p: Page): Promise<{ readonly row: number; readonly f
   };
 }
 
+/** Arms the cut tool and clicks the mountain line's ends on a map showing MOUNTAIN_LINE's view. */
+async function drawMountainLine(p: Page): Promise<void> {
+  const { view: mv, a, b } = MOUNTAIN_LINE;
+  await p.click('.map-cut');
+  const mc = await p.center('.map-canvas');
+  const at = (x: number, z: number): [number, number] => [mc.x + (x - mv.x) / mv.bpp, mc.y + (z - mv.z) / mv.bpp];
+  await p.clickAt(...at(a[0], a[1]));
+  await p.clickAt(...at(b[0], b[1]));
+}
+
 /**
  * Opens the Voxels mode on the mountain line (SP3b spec §7, §11): a new page at MOUNTAIN_LINE's view, the cut line
  * clicked at its ends, Voxels selected, a fresh slice. Throws when the line drawn is not the mountain line; returns the
  * line text and the slice summary.
  */
 async function openMountainVoxels(p: Page): Promise<{ readonly text: string; readonly summary: string }> {
-  const { view: mv, a, b } = MOUNTAIN_LINE;
-  await p.goto(`${p.base}?map#${mapHash({ ...START, view: mv })}`, MAP_READY);
+  await p.goto(`${p.base}?map#${mapHash({ ...START, view: MOUNTAIN_LINE.view })}`, MAP_READY);
   await p.click('#map-tab-world');
-  await p.click('.map-cut');
-  const mc = await p.center('.map-canvas');
-  const at = (x: number, z: number): [number, number] => [mc.x + (x - mv.x) / mv.bpp, mc.y + (z - mv.z) / mv.bpp];
-  await p.clickAt(...at(a[0], a[1]));
-  await p.clickAt(...at(b[0], b[1]));
+  await drawMountainLine(p);
+  const { a, b } = MOUNTAIN_LINE;
   await p.until(`document.querySelector('.cs').dataset.state === 'fresh'`, 'a fresh cross-section of the mountain line');
   const text = await p.eval<string>(`document.querySelector('.cs-line').textContent`);
   const seg = parseSegment(text);
@@ -998,6 +1552,82 @@ async function runShots(p: Page, dir: string): Promise<string[]> {
   console.log(`  hover: ${hover.ruled}`);
   await sleep(1000);
   await save('cross-section-voxels-mountain.png');
+
+  // The Density tab on the same line (SP3d spec §6 step 7, §11's review): the vertical density slice with the pointer
+  // on a ground voxel near the top of sample 51 (40 % of the line), the readout and the form's value at the hover.
+  await p.click('#map-drawer-tab-density');
+  // The drawer dragged to its tallest (60 % of the viewport), so the slice box is large enough to read.
+  const split = await p.center('.map-split-h');
+  const top = await p.dragBy(split.x, split.y, 0, -15, 20);
+  await p.mouse('mouseReleased', top.x, top.y);
+  await p.choose(SV_FIELD, 'density');
+  await p.until(Page.fresh(128), 'a fresh 128² density slice of the mountain line');
+  console.log(`  drawer ${await p.eval<number>(`Math.round(document.querySelector('.map-drawer').getBoundingClientRect().height)`)} px, slice box ${await p.eval<number>(`Math.round(document.querySelector('${SV_BOX}').getBoundingClientRect().width)`)} px`);
+  const groundRow = await p.eval<number>(`(() => { const d = document.querySelector('.sv > .sv-body .sv-box > canvas.sv-image').getContext('2d').getImageData(51, 0, 1, 128).data; for (let r = 0; r < 128; r++) if (d[4 * r] > d[4 * r + 2] + 8) return r; return -1; })()`);
+  if (groundRow < 0) throw new Error('sample 51 of the mountain density slice has no solid voxel');
+  const fy = (groundRow + 3.5) / 128;
+  const vh = await hoverSlice(p, 51.5 / 128, fy, false);
+  if (vh === null || !hoverAgrees(vh.readout, vh.hover)) throw new Error(`the Density hover: ${vh?.readout ?? '-'} | ${vh?.hover ?? '-'}`);
+  console.log(`  density hover: ${vh.readout} | ${vh.hover}`);
+  await sleep(500);
+  await save('density-vertical-hover.png');
+
+  // The terrain tap selected and muted from its row (the row's mute keeps the selection, so the form shows the tap):
+  // the slice is the detail noise alone; the pointer back on the same voxel.
+  await p.mouse('mouseMoved', 5, 5);
+  await p.click(`${ROW('root.a.a')} .it-node`);
+  await p.click(`${ROW('root.a.a')} .it-mute`);
+  await p.until(Page.fresh(128, `document.querySelector(${JSON.stringify(ROW('root.a.a'))}).classList.contains('it-muted')`), 'the slice of the muted terrain');
+  const mh = await hoverSlice(p, 51.5 / 128, fy, false);
+  console.log(`  muted hover: ${mh?.readout ?? '-'} | ${mh?.hover ?? '-'}`);
+  await sleep(500);
+  await save('density-muted-terrain.png');
+
+  // A broken JSON (an unknown op at the islands tap's child): the issue with its path, the world untouched.
+  await p.mouse('mouseMoved', 5, 5);
+  const printed = await p.eval<string>(`document.querySelector('${JE_TEXT}').value`);
+  await p.click(JE_TEXT);
+  await p.eval(`(document.querySelector('${JE_TEXT}').select(), true)`);
+  await p.cdp.send('Input.insertText', { text: brokenIslandsJson(printed) });
+  await p.until(`document.querySelector('.je-status').dataset.status === 'invalid'`, 'the editor\'s verdict', 5000);
+  await sleep(500);
+  await save('density-broken-json.png');
+  await p.key('Escape', 'Escape', 27);
+  await p.blur();
+  before = await p.hash();
+  await p.click('.map-toolbar button[title^="Undo"]');
+  await p.changed(before, 'the toolbar Undo of the mute');
+
+  // The horizontal plane at extent 8192 around the view centre, the root selected, the pointer at the slice's centre.
+  await p.click(`${ROW('root')} .it-node`);
+  await p.choose(SV_PLANE, 'horizontal');
+  await p.choose(SV_EXTENT, '8192');
+  await p.until(Page.fresh(128, `document.querySelector('.sv > .sv-body > .sv-ends > span').textContent === 'x -5248'`), 'a fresh horizontal slice at extent 8192');
+  const hh = await hoverSlice(p, 0.5, 0.5, false);
+  console.log(`  horizontal hover: ${hh?.readout ?? '-'} | ${hh?.hover ?? '-'}`);
+  await sleep(500);
+  await save('density-horizontal-8192.png');
+
+  // The stacked layout: the viewport narrowed until the Density tab is 800 px wide, the vertical slice scrolled into view.
+  await p.mouse('mouseMoved', 5, 5);
+  await p.choose(SV_PLANE, 'vertical');
+  await p.until(Page.fresh(128), 'a fresh vertical slice');
+  // The narrow page scrolls, so its scrollbar takes width too: the viewport is corrected until the tab is 800 px.
+  let width: number = VIEWPORT.width;
+  for (let i = 0; i < 4; i++) {
+    const drawer = await p.eval<number>(`Math.round(document.querySelector('.it').getBoundingClientRect().width)`);
+    if (drawer === 800) break;
+    width = viewportForDrawer({ viewport: width, drawer }, 800);
+    await p.cdp.send('Emulation.setDeviceMetricsOverride', { width, height: VIEWPORT.height, deviceScaleFactor: 1, mobile: false });
+    await sleep(500);
+  }
+  await p.until(`document.querySelector('.it').dataset.layout === 'stack' && Math.round(document.querySelector('.it').getBoundingClientRect().width) === 800`, 'the stacked layout at 800 px', 10000);
+  console.log(`  viewport ${width} × ${VIEWPORT.height}: the Density tab is 800 px wide`);
+  await p.eval(`(document.querySelector('.it-slice').scrollIntoView({ block: 'end' }), true)`);
+  await p.until(Page.fresh(128), 'a fresh slice in the stacked layout');
+  await sleep(1000);
+  await save('density-stacked-800.png');
+  await p.cdp.send('Emulation.setDeviceMetricsOverride', { width: VIEWPORT.width, height: VIEWPORT.height, deviceScaleFactor: 1, mobile: false });
   return out;
 }
 
@@ -1073,6 +1703,8 @@ async function main(argv: readonly string[]): Promise<number> {
       smoke.check(false, `the step stopped: ${e instanceof Error ? e.message : String(e)}`);
     }
     smoke.step('console: no page errors (the favicon.ico 404 aside)');
+    const missing = SMOKE_STEPS.filter((s) => !smoke.ran.includes(s));
+    smoke.check(missing.length === 0, `every step of SMOKE_STEPS ran (${smoke.ran.length})`, missing);
     for (const l of ignored) console.log(`  ignored ${l}`);
     smoke.check(pageErrors.length === 0, `${pageErrors.length} page error(s)`, pageErrors);
     if (args.shots !== null) await runShots(page, args.shots);

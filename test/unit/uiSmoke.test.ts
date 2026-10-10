@@ -13,10 +13,22 @@ import { RULE_WAITING, ruleSuffix, sliceRgba, sliceSummary, VOXEL_COLORS, voxelL
 import { WATER_SOURCE } from '../../src/world/blocks/fluid';
 import { AIR, BEDROCK, GRASS_BLOCK, SNOW_BLOCK, STONE } from '../../src/world/blocks/index';
 import { SLICE_SAMPLES, sliceIndex } from '../../src/workers/protocol';
+import { DEFAULT_DENSITY_TREE } from '../../src/core/params/defaultTrees';
+import type { Segment } from '../../src/metrics/crossSection';
+import { checkLeafCandidate, issueText } from '../../src/ui/inspector/editorModel';
+import { parseTree, printTree } from '../../src/ui/inspector/jsonText';
+import { densityLayout } from '../../src/ui/inspector/model';
+import {
+  clampCentre, formatSliceValue, histogramLabels, hoverLineText, sliceAxisLabels, sliceGeometryOf, sliceHoverText, sliceStats, sliceStatusText,
+  type SliceShown,
+} from '../../src/ui/inspector/sliceModel';
+import { screenToWorld } from '../../src/ui/map/viewMath';
 import { REVIEW_SITES } from '../harness/reviewSlices';
 import {
-  canonicalJson, goldenCount, groundTopRow, ignoredLog, mapHash, MOUNTAIN_LINE, mountainSummaryOk, parseArgs, parseSegment, presetProblems, readMapHash, RULE_SAMPLE,
-  sameJson, selftestAllMatch, SIZE_8, SKY_RGB, sliceCellPoint, VIEWPORT, voxelLegendLabels, voxelReadoutOk, voxelRuleId, voxelSummaryOk, type MapUrlState,
+  brokenIslandsJson, canonicalJson, clickCentre, crossPixels, freshSlice, goldenCount, groundTopRow, hoverAgrees, ignoredLog, islandsFloorOk, issueLineOk, mapHash,
+  MOUNTAIN_LINE, mountainSummaryOk, parseArgs, parseSegment, parseSliceReadout, parseSliceStats, presetProblems, readMapHash, RULE_SAMPLE, sameJson,
+  selftestAllMatch, SIZE_7, SIZE_8, SKY_RGB, sliceCellPoint, SMOKE_STEPS, SQUARE_RGB, squareLabels, stepId, timesText, VIEWPORT, viewportForDrawer,
+  voxelLegendLabels, voxelReadoutOk, voxelRuleId, voxelSummaryOk, type MapUrlState,
 } from '../tools/uiSmoke';
 
 const EDITED: MapState = {
@@ -206,6 +218,175 @@ describe('UI smoke test: pure parts (SP2b spec §8 Tools, §12)', () => {
     expect(mountainSummaryOk(flat), flat).toBe(false);
   });
 
+  test('the steps run in SMOKE_STEPS order: the Density steps after rule and before console (SP3d spec §6)', () => {
+    expect(SMOKE_STEPS).toEqual([
+      'selftest', 'load', 'number', 'knot', 'slider', 'box', 'profile', 'presets', 'undo/redo', 'reload', 'cut line', 'voxels', 'tabs', 'rule',
+      'density tab', 'density node', 'density mute', 'density json', 'density narrow', 'density horizontal', 'density drag', 'density times',
+      'console',
+    ]);
+    expect(SMOKE_STEPS.indexOf('density tab')).toBe(SMOKE_STEPS.indexOf('rule') + 1);
+    expect(SMOKE_STEPS.indexOf('console')).toBe(SMOKE_STEPS.length - 1);
+    expect(stepId('density node: the islands const root.b.x edited from -1e6 to -10')).toBe('density node');
+    expect(stepId('undo/redo: Ctrl+Z through the 6 steps')).toBe('undo/redo');
+    expect(() => stepId('no step name here')).toThrow(/step title/);
+    expect(() => stepId('density: an unknown step')).toThrow(/not a smoke step/);
+  });
+
+  test('the Density drag ends at biome-size position 7, after a hold at 6', () => {
+    expect(SIZE_7).toBe(BIOME_SIZE_SCALE[6]);
+  });
+});
+
+/** A vertical slice on the mountain line at n, with `values` in sample order, as the page shows it. */
+function mountainShown(values: Float64Array<ArrayBuffer>, n: number): SliceShown {
+  const line: Segment = { ax: MOUNTAIN_LINE.a[0], az: MOUNTAIN_LINE.a[1], bx: MOUNTAIN_LINE.b[0], bz: MOUNTAIN_LINE.b[1] };
+  const g = sliceGeometryOf({ plane: 'vertical', field: 'density', y: 63, extent: 2048, cx: 0, cz: 0 }, line, n);
+  if (!g.ok) throw new Error(g.problem);
+  return { sessionEpoch: 1, key: 'k', geometry: g.geometry, result: { field: 'density', values, fluid: null, n } };
+}
+
+/** Slice-like values: air (negative) above a surface, solid (positive) below, one value per sample. */
+function airAndGround(n: number, seed: number): Float64Array<ArrayBuffer> {
+  const v = new Float64Array(n * n);
+  for (let c = 0; c < n; c++) {
+    for (let k = 0; k < n; k++) v[c * n + k] = (k - n / 2 - ((c * seed) % 7)) * 2.37 + ((c * 31 + k * seed) % 11) / 10;
+  }
+  return v;
+}
+
+describe('UI smoke test: the Density tab steps\' pure parts (SP3d spec §6)', () => {
+  test('the slice status is fresh at n exactly when it reads "n²" with nothing in flight, as sliceStatusText writes it', () => {
+    const shown = mountainShown(airAndGround(128, 3), 128);
+    const draft = mountainShown(airAndGround(32, 3), 32);
+    const text = (s: SliceShown | null, key: string | null, pending: { sessionEpoch: number; key: string; n: number } | null, epoch: number) =>
+      sliceStatusText({ shown: s, key, pending }, epoch);
+    expect(freshSlice(text(shown, 'k', null, 1), 128)).toBe(true);
+    expect(freshSlice(text(draft, 'k', null, 1), 32)).toBe(true);
+    expect(freshSlice(text(draft, 'k', { sessionEpoch: 1, key: 'k', n: 128 }, 1), 128)).toBe(false);
+    expect(freshSlice(text(draft, 'k', { sessionEpoch: 1, key: 'k', n: 128 }, 1), 32)).toBe(false);
+    expect(freshSlice(text(shown, 'k', null, 2), 128)).toBe(false);
+    expect(freshSlice(text(shown, 'other', null, 1), 128)).toBe(false);
+    expect(freshSlice(text(null, 'k', { sessionEpoch: 1, key: 'k', n: 32 }, 1), 128)).toBe(false);
+  });
+
+  test('the histogram text reads back as the statistics it prints, constant fields included', () => {
+    for (const values of [airAndGround(128, 3), airAndGround(32, 5), Float64Array.from([1e-7, 2.5, -1e9, 0.1234567, 7e12, -3])]) {
+      const st = sliceStats(values)!;
+      const got = parseSliceStats(histogramLabels(st).join('\n'));
+      expect(got).toEqual({
+        p1: Number(formatSliceValue(st.p1)), p50: Number(formatSliceValue(st.p50)), p99: Number(formatSliceValue(st.p99)),
+        constant: null, below0: Number((100 * st.below0).toFixed(1)),
+      });
+    }
+    expect(parseSliceStats(histogramLabels(sliceStats(new Float64Array(16).fill(-1e6))).join('\n'))).toEqual({ p1: -1e6, p50: -1e6, p99: -1e6, constant: -1e6, below0: null });
+    expect(parseSliceStats(histogramLabels(sliceStats(Float64Array.from([Number.NaN, 1, Infinity]))).join('\n'))?.constant).toBe(1);
+    expect(parseSliceStats('no finite value')).toBeNull();
+    expect(parseSliceStats('')).toBeNull();
+  });
+
+  test('the islands const at -10 floors the air at -10 and keeps every sign: p1 is -10 and the share below 0 is unchanged', () => {
+    const before = airAndGround(128, 3);
+    const after = before.map((v) => Math.max(v, -10));
+    const b = parseSliceStats(histogramLabels(sliceStats(before)).join('\n'))!;
+    const a = parseSliceStats(histogramLabels(sliceStats(after)).join('\n'))!;
+    expect(islandsFloorOk(b, a, -10)).toBe(true);
+    expect(islandsFloorOk(b, b, -10)).toBe(false);
+    // A floor that changed the solidity (here 1: every air value becomes solid) fails.
+    const solid = parseSliceStats(histogramLabels(sliceStats(before.map((v) => Math.max(v, 1)))).join('\n'))!;
+    expect(islandsFloorOk(b, solid, 1)).toBe(false);
+  });
+
+  test('the slice hover readout and the form\'s "value at the hover" line name the same voxel and value (probe == slice)', () => {
+    const shown = mountainShown(airAndGround(128, 3), 128);
+    for (const [px, py] of [[0, 0], [51, 40], [127, 127], [64, 100]] as const) {
+      const h = sliceHoverText(shown, px, py);
+      const r = parseSliceReadout(h.text);
+      expect(r).not.toBeNull();
+      expect([r!.x, r!.y, r!.z]).toEqual([h.voxel.x, h.voxel.y, h.voxel.z]);
+      expect(r!.field).toBe('density');
+      const line = `value at the hover: ${hoverLineText(h.voxel, r!.value, '')!}`;
+      expect(hoverAgrees(h.text, line)).toBe(true);
+      expect(hoverAgrees(h.text, `value at the hover: ${hoverLineText({ ...h.voxel, y: h.voxel.y + 1 }, r!.value, '')!}`)).toBe(false);
+      expect(hoverAgrees(h.text, `value at the hover: ${hoverLineText(h.voxel, `${r!.value}1`, '')!}`)).toBe(false);
+    }
+    expect(parseSliceReadout('(1, 2, 3) · density NaN')).toEqual({ x: 1, y: 2, z: 3, field: 'density', value: 'NaN' });
+    expect(parseSliceReadout('(1, 2, 3) · node −∞')?.value).toBe('−∞');
+    expect(parseSliceReadout('hover the slice')).toBeNull();
+    expect(hoverAgrees('(1, 2, 3) · density 4', 'value at the hover: …')).toBe(false);
+  });
+
+  test('the broken JSON replaces the islands tap\'s child op: the editor reports root.b.x UNKNOWN_OP (expr.ts reports it at the node)', () => {
+    const r = applyPatch(SCHEMA, resolveProfile('default'), {});
+    if (!r.ok) throw new Error('bad params');
+    // The default tree, and the tree the smoke has at that step: islands -10, terrain muted to 0.
+    const stepTree = JSON.parse(JSON.stringify(DEFAULT_DENSITY_TREE)) as { root: { a: { a: Record<string, unknown> }; b: { x: { v: number } } } };
+    stepTree.root.b.x.v = -10;
+    stepTree.root.a.a['mute'] = 0;
+    for (const tree of [DEFAULT_DENSITY_TREE, stepTree]) {
+      const text = printTree(tree, 'density').text;
+      const broken = brokenIslandsJson(text);
+      expect(broken).not.toBe(text);
+      const parsed = parseTree(broken, 'density');
+      if (!parsed.ok) throw new Error(parsed.error.message);
+      const checked = checkLeafCandidate(r.value, 'density.defs', parsed.value);
+      expect(checked.issues.map((i) => [i.path, i.code])).toEqual([['root.b.x', 'UNKNOWN_OP']]);
+      expect(issueLineOk(issueText(checked.issues[0]!, 'density.defs'), 'root.b.x', 'UNKNOWN_OP')).toBe(true);
+    }
+    expect(() => brokenIslandsJson('{"root": {"op": "y"}, "defs": {}}')).toThrow(/islands/);
+    expect(issueLineOk('root.b.x: UNKNOWN_OPX — unknown op "bogus"', 'root.b.x', 'UNKNOWN_OP')).toBe(false);
+    expect(issueLineOk('root.b.x.v: UNKNOWN_OP — unknown op "bogus"', 'root.b.x', 'UNKNOWN_OP')).toBe(false);
+  });
+
+  test('a horizontal map click: the centre is the clicked block, clamped for the extent, and the axis labels name its square', () => {
+    const view = { x: -1152, z: 8, bpp: 2, layer: 'relief' } as const;
+    const box = { x: 0, y: 70, width: 1031, height: 527 };
+    for (const [dx, dy] of [[150, 80], [0, 0], [-201.5, 33.25]] as const) {
+      const sx = box.x + box.width / 2 + dx;
+      const sy = box.y + box.height / 2 + dy;
+      const [wx, wz] = screenToWorld(view, box.width, box.height, sx - box.x, sy - box.y);
+      expect(clickCentre(view, box, sx, sy, 2048)).toEqual(clampCentre(wx, wz, 2048));
+    }
+    expect(clickCentre({ ...view, x: 524000 }, box, box.width, box.height / 2, 8192)[0]).toBe(524288 - 4096);
+    for (const [cx, cz, e] of [[-852, 168, 2048], [-1152, 8, 8192], [0, 0, 256]] as const) {
+      const st = { plane: 'horizontal', field: 'density', y: 63, extent: e, cx, cz } as const;
+      expect(squareLabels(cx, cz, e)).toEqual(sliceAxisLabels(st, null));
+    }
+  });
+
+  test('the square\'s centre cross is counted in the map canvas by its colour, the map view\'s', () => {
+    expect(readFileSync(new URL('../../src/ui/map/mapView.ts', import.meta.url), 'utf8')).toContain(`ctx2d.strokeStyle = '#${SQUARE_RGB.map((c) => c.toString(16).padStart(2, '0')).join('')}';`);
+    const w = 40;
+    const rgba = new Uint8ClampedArray(w * w * 4).fill(30);
+    const paint = (x: number, y: number, c: readonly number[]) => { rgba.set([c[0]!, c[1]!, c[2]!, 255], 4 * (y * w + x)); };
+    expect(crossPixels(rgba, w, 20, 20)).toBe(0);
+    for (let d = -5; d <= 5; d++) { paint(20 + d, 20, SQUARE_RGB); paint(20, 20 + d, SQUARE_RGB); }
+    expect(crossPixels(rgba, w, 20, 20)).toBe(21);
+    expect(crossPixels(rgba, w, 30, 30)).toBe(0);
+    // Antialiased pixels within 24 of the colour per channel count; the cut line's white does not.
+    paint(19, 19, [140, 200, 225]);
+    paint(21, 21, [255, 255, 255]);
+    expect(crossPixels(rgba, w, 20, 20)).toBe(22);
+    // The window is clipped at the canvas edges.
+    expect(crossPixels(rgba, w, 0, 0)).toBe(0);
+  });
+
+  test('the stacked layout\'s screenshot: the viewport that makes the Density tab 800 px wide', () => {
+    expect(densityLayout(800)).toBe('stack');
+    expect(densityLayout(1400)).toBe('grid');
+    expect(viewportForDrawer({ viewport: 1400, drawer: 1400 }, 800)).toBe(800);
+    expect(viewportForDrawer({ viewport: 1400, drawer: 1384 }, 800)).toBe(816);
+    expect(() => viewportForDrawer({ viewport: 1400, drawer: 0 }, 800)).toThrow(RangeError);
+  });
+
+  test('times are reported as their median and every run', () => {
+    expect(timesText([300.4, 100.2, 200.7])).toBe('p50 201 ms (100, 201, 300)');
+    expect(timesText([5])).toBe('p50 5 ms (5)');
+    expect(timesText([4, 1, 3, 2])).toBe('p50 2 ms (1, 2, 3, 4)');
+    expect(() => timesText([])).toThrow(RangeError);
+  });
+});
+
+describe('UI smoke test: arguments', () => {
   test('arguments: build, the OS temp directory and no screenshots by default', () => {
     expect(parseArgs([])).toEqual({ build: true, profileDir: null, shots: null });
     expect(parseArgs(['--skip-build', '--profile-dir', '/tmp/p', '--shots', 'docs/x'])).toEqual({ build: false, profileDir: '/tmp/p', shots: 'docs/x' });
