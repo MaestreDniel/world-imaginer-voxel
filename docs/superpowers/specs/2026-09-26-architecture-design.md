@@ -146,7 +146,9 @@ world-imaginer-voxel/          (repository root)
                                 splineStats.ts, liveness.ts, crossSection.ts, also run by the workers' stats job; SP3a: region.ts
                                 (fillColumnT, genRegionInProcess, regionHash) and sp3aGoldens.ts; SP3b: sp3bGoldens.ts; SP3c: sp3cGoldens.ts)
     workers/protocol.ts taskHandler.ts task.worker.ts sim.worker.ts   (taskHandler: pure message handler, SP2a; SP3a: sliceJob.ts,
-                                the slice job with its worker-local store and LRU; SP3b splits a slice across the workers)
+                                the slice job with its worker-local store and LRU; SP3b splits a slice across the workers; SP3d:
+                                fieldSliceJob.ts, the fieldSlice and fieldProbe jobs' message handling, the evaluation being
+                                gen/inspect/fieldSlice.ts, and protocol.ts's planFieldSlice, the work bound's split and refusals)
     engine/                     main thread, no three
       coordinator.ts scheduler.ts rings.ts workerPool.ts throttle.ts uploadBudget.ts session.ts invalidation.ts capabilities.ts
     render/                     the only place three is imported (ui canvases are 2D; amended by SP0)

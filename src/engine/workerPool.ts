@@ -11,13 +11,21 @@
  * SP3a §5.1, SP3b §6: a slice request (the voxels under a line) is split into `size` contiguous ranges of its 512
  * samples, as a stats request is; the parts are merged row by row.
  * SP3c §6: a surfaceProbe request (one voxel's final state and surface-rule branch path) is a single job, as a point.
+ * SP3d §5: a fieldSlice request is split by `planFieldSlice` (or refused before any job), its parts merged by index into
+ * one n × n buffer, each part's reply checked against its request; its handle's `cancel()` drops the queued parts and
+ * discards the running ones (they are not interrupted, P1). A fieldProbe request is a single job. A reply that fails its
+ * guard rejects its job with BAD_MESSAGE and frees the worker.
  */
 import type { MapLevel } from '../core/constants';
 import type { ColumnPoint } from '../gen/column/columnPoint';
 import type { Spawn } from '../gen/column/spawn';
+import type { FieldSliceValues } from '../gen/inspect/fieldSlice';
 import type { LayerId } from '../gen/map/layers';
 import type { Segment } from '../metrics/crossSection';
-import { parseFromWorker, SLICE_POINTS, SLICE_ROWS, SLICE_SAMPLES, STATS_KINDS, type FromWorker, type ReadyMsg, type StatsArgs, type StatsKind, type StatsMsg, type ToWorker } from '../workers/protocol';
+import {
+  isRefusableField, parseFromWorker, planFieldSlice, SLICE_POINTS, SLICE_ROWS, SLICE_SAMPLES, STATS_KINDS,
+  type FieldProbeSpec, type FieldSliceMsg, type FieldSliceSpec, type FromWorker, type ReadyMsg, type StatsArgs, type StatsKind, type StatsMsg, type ToWorker,
+} from '../workers/protocol';
 
 export interface WorkerLike {
   postMessage(msg: ToWorker, transfer?: Transferable[]): void;
@@ -50,6 +58,35 @@ export interface SurfaceProbeResult {
 
 export class JobCancelled extends Error {
   constructor() { super('job cancelled'); }
+}
+
+/**
+ * A density or node slice refused by the work bound before any job (SP3d spec §5.2): its column cost is above `limit`,
+ * the largest column cost `planFieldSlice` accepts for its n and budget.
+ */
+export class SliceTooHeavy extends Error {
+  readonly columnCost: number;
+  readonly limit: number;
+  constructor(columnCost: number, limit: number) {
+    super(`too heavy: column cost ${columnCost}, limit ${limit}`);
+    this.name = 'SliceTooHeavy';
+    this.columnCost = columnCost;
+    this.limit = limit;
+  }
+}
+
+/** How a field slice runs (SP3d spec §4.5, §5.2): its priority, its column cost (`sliceCostOf`) and its budget (DRAFT_BUDGET or REQUEST_BUDGET). */
+export interface FieldSliceOptions {
+  readonly priority: number;
+  readonly columnCost: number;
+  readonly budget: number;
+}
+/** A merged field slice: n × n samples, sample k of sample column c at c·n + k. */
+export type FieldSliceResult = FieldSliceValues & { readonly n: number };
+/** A running field slice: its result, and `cancel()`, which rejects it with JobCancelled (a no-op once it settled). */
+export interface FieldSliceHandle {
+  readonly promise: Promise<FieldSliceResult>;
+  cancel(): void;
 }
 
 /** A worker raised an error or messageerror event: its in-flight job and a pending configure reject with this. */
@@ -123,6 +160,20 @@ export interface WorkerPool {
    * outside the half-open world window or a y outside −64 … 319, and with JobCancelled when a configure supersedes it.
    */
   surfaceProbe(x: number, y: number, z: number, priority?: number): Promise<SurfaceProbeResult>;
+  /**
+   * A field slice (SP3d spec §5.1, §5.2): split by `planFieldSlice(n, columnCost, size, budget)` (budget null for blocks and
+   * rule, which are never refused) into contiguous ranges of sample columns, sent as one group at `priority`, merged by
+   * index. A refused request rejects with SliceTooHeavy before any job; a bad request with the worker's BAD_ARGS (the
+   * worker recomputes the column cost and refuses a part above its bound); a configure, or `cancel()`, with JobCancelled.
+   * `cancel()` drops the queued parts; parts already running finish and their results are discarded. A part whose reply
+   * names another n, field or range than its request rejects the request.
+   */
+  fieldSlice(req: FieldSliceSpec, opts: FieldSliceOptions): FieldSliceHandle;
+  /**
+   * The value of a field at voxel (x, y, z) (SP3d spec §5.3): one job at `priority` (default −1, the point priority). Any
+   * number (NaN and ±∞ included); rejects with the worker's BAD_ARGS (position, path, the bound) or JobCancelled.
+   */
+  fieldProbe(req: FieldProbeSpec, priority?: number): Promise<number>;
   /** Recomputes one golden in a worker (no configure needed). */
   selftest(key: string): Promise<{ actual: string | null; error: string | null }>;
   /** Rejects queued tile jobs matching `pred` with JobCancelled. */
@@ -205,6 +256,14 @@ export function createWorkerPool(size: number, spawn: () => WorkerLike, opts: Po
       if (!alive[w]) return;
       const msg = parseFromWorker(event.data);
       if (msg === null) return;
+      if ('bad' in msg) {
+        // SP3d spec §5.1: a reply failing its guard settles its job (BAD_MESSAGE) and frees the worker.
+        const job = busy[w];
+        busy[w] = null;
+        if (job !== null && msg.jobId === job.id) job.reject(new Error(`BAD_MESSAGE: ${msg.reason}`));
+        pump();
+        return;
+      }
       if (msg.type === 'ready') {
         const pr = pendingReady;
         if (pr === null || msg.epoch !== epoch) return;
@@ -348,6 +407,56 @@ export function createWorkerPool(size: number, spawn: () => WorkerLike, opts: Po
       const r = await enqueue(priority, (jobId) => ({ type: 'surfaceProbe', jobId, epoch: e, x, y, z }), null);
       if (r.type !== 'surfaceProbeResult') throw new Error(`unexpected reply ${r.type}`);
       return { state: r.state, path: r.path };
+    },
+    fieldSlice(req, opts) {
+      const e = epoch;
+      const group = nextGroup++;
+      const { n, field } = req;
+      let cancel = (): void => undefined;
+      const promise = new Promise<FieldSliceResult>((resolve, reject) => {
+        const plan = planFieldSlice(n, opts.columnCost, size, isRefusableField(field) ? opts.budget : null);
+        if (plan.refused) { reject(new SliceTooHeavy(opts.columnCost, plan.limit)); return; }
+        let done = false;
+        const fail = (err: Error) => {
+          if (done) return;
+          done = true;
+          dropGroup(group);
+          reject(err);
+        };
+        cancel = () => fail(new JobCancelled());
+        const out: FieldSliceResult = field === 'density' || field === 'node'
+          ? { n, field, values: new Float64Array(n * n), fluid: null }
+          : field === 'blocks' ? { n, field, values: new Uint16Array(n * n), fluid: new Uint8Array(n * n) } : { n, field, values: new Uint8Array(n * n), fluid: null };
+        const base = req.plane === 'vertical'
+          ? { plane: req.plane, ax: req.ax, az: req.az, bx: req.bx, bz: req.bz }
+          : { plane: req.plane, cx: req.cx, cz: req.cz, extent: req.extent };
+        let left = plan.ranges.length;
+        for (const [from, to] of plan.ranges) {
+          const build = (jobId: number) => ({ type: 'fieldSlice', jobId, epoch: e, ...base, y: req.y, n, field, path: req.path, from, to }) as FieldSliceMsg;
+          enqueue(opts.priority, build, null, group).then((r) => {
+            if (done) return;
+            if (r.type !== 'fieldSliceResult') throw new Error(`unexpected reply ${r.type}`);
+            if (r.n !== n || r.field !== field || r.from !== from || r.to !== to) {
+              throw new Error(`fieldSlice part: n ${r.n}, field ${r.field}, samples [${r.from}, ${r.to}); expected n ${n}, field ${field}, samples [${from}, ${to})`);
+            }
+            // Sample column c's n samples sit at (c − from)·n + k in the part and at c·n + k in the whole.
+            if (out.field === 'blocks') {
+              out.values.set(new Uint16Array(r.values), from * n);
+              out.fluid.set(new Uint8Array(r.fluid!), from * n);
+            } else if (out.field === 'rule') out.values.set(new Uint8Array(r.values), from * n);
+            else out.values.set(new Float64Array(r.values), from * n);
+            if (--left === 0) { done = true; resolve(out); }
+          }).catch((err: unknown) => fail(err instanceof Error ? err : new Error(String(err))));
+        }
+      });
+      return { promise, cancel: () => cancel() };
+    },
+    async fieldProbe(req, priority = -1) {
+      const e = epoch;
+      const { field, path, x, y, z } = req;
+      const r = await enqueue(priority, (jobId) => ({ type: 'fieldProbe', jobId, epoch: e, field, path, x, y, z }), null);
+      if (r.type !== 'fieldProbeResult') throw new Error(`unexpected reply ${r.type}`);
+      return r.value;
     },
     async selftest(key) {
       const r = await enqueue(0, (jobId) => ({ type: 'selftest', jobId, key }), null);

@@ -7,10 +7,13 @@
  * (§4.5), and reply with the raw sums. Slice jobs (SP3a spec §5.1) read the voxels of a range of the samples under
  * a line (SP3b spec §6) from the handler's slice job (`sliceJob.ts`: a worker-local store and LRU kept for the
  * handler's lifetime, emptied by every configure) and stop like stats jobs. A surfaceProbe job (SP3c spec §6) answers
- * `surfaceProbe` on the configured context's SurfaceContext (memoised per GenContext, with its one-column cache) and,
- * like a point job, always runs to the end. Configure runs tier 2 of the trees after `checkParams` (SP3d spec §1.8): a
- * params document whose trees `validateParamTrees` refuses gets BAD_PARAMS with its first 5 issues, so an invalid tree
- * never reaches a job's lazy compile (the session never sends one; this guards against bugs).
+ * `surfaceProbe` on the configured context's SurfaceContext (memoised per GenContext, with its one-column cache); it polls
+ * the abort cell once, before its column build (SP3d spec §5.3). Configure runs tier 2 of the trees after `checkParams`
+ * (SP3d spec §1.8): a params document whose trees `validateParamTrees` refuses gets BAD_PARAMS with its first 5 issues,
+ * so an invalid tree never reaches a job's lazy compile (the session never sends one; this guards against bugs).
+ * fieldSlice and fieldProbe jobs (SP3d spec §5.1, §5.3) are `fieldSliceJob.ts`'s: BAD_ARGS for their arguments and the
+ * work bound, ABORTED when the cell leaves their epoch (polled once per sample), and `blocks` reads the slice job's
+ * columns. Every message type has its own branch of an exhaustive switch.
  */
 import { hex64 } from '../core/hash';
 import { checkParams } from '../core/params/kit';
@@ -29,6 +32,7 @@ import { CROSS_SECTION_POINTS, crossSectionInto, crossSectionLength, segmentProb
 import type { Points } from '../metrics/noiseStats';
 import { computeAnyGolden } from '../metrics/sp2aGoldens';
 import { splineStatPoints, splineStatsInto, splineStatsLength, splineStatsNode } from '../metrics/splineStats';
+import { runFieldProbe, runFieldSlice, sliceJobColumns, type FieldJobReply } from './fieldSliceJob';
 import { parseToWorker, sliceRangeProblem, surfaceProbeProblem, type ErrorCode, type FromWorker, type StatsMsg } from './protocol';
 import { createSliceJob, type SliceJob } from './sliceJob';
 
@@ -61,6 +65,9 @@ const CREATE_SLICE_JOB = createSliceJob;
 const SURFACE_CONTEXT = surfaceContextOf;
 const SURFACE_PROBE = surfaceProbe;
 const PROBE_PROBLEM = surfaceProbeProblem;
+const FIELD_SLICE = runFieldSlice;
+const FIELD_PROBE = runFieldProbe;
+const SLICE_COLUMNS = sliceJobColumns;
 
 export interface Reply {
   readonly msg: FromWorker;
@@ -159,41 +166,56 @@ export function createTaskHandler(slices: SliceJob = CREATE_SLICE_JOB()): TaskHa
         if (ctx === null) return err(m.jobId, m.epoch, 'NOT_CONFIGURED', 'no configure yet');
         if (m.epoch !== epoch) return err(m.jobId, m.epoch, 'STALE_EPOCH', `job epoch ${m.epoch}, worker epoch ${epoch}`);
         const aborted = (): Reply => err(m.jobId, m.epoch, 'ABORTED', `epoch ${m.epoch} was superseded`);
-        if (m.type === 'mapTile') {
-          const rgba = new ArrayBuffer(256 * 256 * 4);
-          const ids = m.layer === 'biome' ? new ArrayBuffer(256 * 256) : null;
-          const done = PAINT(ctx, m.layer, m.level, m.tx, m.tz, new Uint8ClampedArray(rgba), stopFor(m.epoch), ids === null ? undefined : new Uint8Array(ids));
-          if (done === null) return aborted();
-          return ids === null
-            ? { msg: { type: 'tile', jobId: m.jobId, epoch, rgba }, transfer: [rgba] }
-            : { msg: { type: 'tile', jobId: m.jobId, epoch, rgba, ids }, transfer: [rgba, ids] };
+        /** A fieldSlice or fieldProbe job's outcome as a reply. */
+        const fieldReply = (r: FieldJobReply<FromWorker>): Reply => (r === null ? aborted() : 'badArgs' in r ? err(m.jobId, m.epoch, 'BAD_ARGS', r.badArgs) : r);
+        switch (m.type) {
+          case 'mapTile': {
+            const rgba = new ArrayBuffer(256 * 256 * 4);
+            const ids = m.layer === 'biome' ? new ArrayBuffer(256 * 256) : null;
+            const done = PAINT(ctx, m.layer, m.level, m.tx, m.tz, new Uint8ClampedArray(rgba), stopFor(m.epoch), ids === null ? undefined : new Uint8Array(ids));
+            if (done === null) return aborted();
+            return ids === null
+              ? { msg: { type: 'tile', jobId: m.jobId, epoch, rgba }, transfer: [rgba] }
+              : { msg: { type: 'tile', jobId: m.jobId, epoch, rgba, ids }, transfer: [rgba, ids] };
+          }
+          case 'spawn': {
+            const spawn = SPAWN(ctx, stopFor(m.epoch));
+            return spawn === null ? aborted() : { msg: { type: 'spawnResult', jobId: m.jobId, epoch, spawn }, transfer: [] };
+          }
+          case 'stats': {
+            const sum = runStats(ctx, m, stopFor(m.epoch));
+            if (sum === null) return aborted();
+            if (typeof sum === 'string') return err(m.jobId, m.epoch, 'BAD_ARGS', sum);
+            return { msg: { type: 'statsResult', jobId: m.jobId, epoch, kind: m.kind, data: sum.buffer }, transfer: [sum.buffer] };
+          }
+          case 'slice': {
+            const segment = { ax: m.ax, az: m.az, bx: m.bx, bz: m.bz };
+            const problem = SEGMENT_PROBLEM(segment) ?? RANGE_PROBLEM(m.from, m.to);
+            if (problem !== null) return err(m.jobId, m.epoch, 'BAD_ARGS', problem);
+            const r = slices.run(ctx, m.epoch, segment, stopFor(m.epoch), m.from, m.to);
+            if (r === null) return aborted();
+            const msg: FromWorker = { type: 'sliceResult', jobId: m.jobId, epoch, from: m.from, to: m.to, blocks: r.blocks.buffer, fluid: r.fluid.buffer };
+            return { msg, transfer: [r.blocks.buffer, r.fluid.buffer] };
+          }
+          case 'surfaceProbe': {
+            const problem = PROBE_PROBLEM(m.x, m.y, m.z);
+            if (problem !== null) return err(m.jobId, m.epoch, 'BAD_ARGS', problem);
+            // SP3d spec §5.3: polled before the column build (one T column, bounded by tier 2's column cost).
+            if (stopFor(m.epoch)()) return aborted();
+            const r = SURFACE_PROBE(SURFACE_CONTEXT(ctx), m.x, m.y, m.z);
+            return { msg: { type: 'surfaceProbeResult', jobId: m.jobId, epoch, state: r.state, path: [...r.path] }, transfer: [] };
+          }
+          case 'point':
+            return { msg: { type: 'pointResult', jobId: m.jobId, epoch, fields: POINT(ctx, m.x, m.z) }, transfer: [] };
+          case 'fieldSlice':
+            return fieldReply(FIELD_SLICE(ctx, m, stopFor(m.epoch), SLICE_COLUMNS(slices, ctx, m.epoch)));
+          case 'fieldProbe':
+            return fieldReply(FIELD_PROBE(ctx, m, stopFor(m.epoch)));
+          default: {
+            const never: never = m;
+            return err(jobId, msgEpoch, 'BAD_MESSAGE', `no handler for ${(never as { type: string }).type}`);
+          }
         }
-        if (m.type === 'spawn') {
-          const spawn = SPAWN(ctx, stopFor(m.epoch));
-          return spawn === null ? aborted() : { msg: { type: 'spawnResult', jobId: m.jobId, epoch, spawn }, transfer: [] };
-        }
-        if (m.type === 'stats') {
-          const sum = runStats(ctx, m, stopFor(m.epoch));
-          if (sum === null) return aborted();
-          if (typeof sum === 'string') return err(m.jobId, m.epoch, 'BAD_ARGS', sum);
-          return { msg: { type: 'statsResult', jobId: m.jobId, epoch, kind: m.kind, data: sum.buffer }, transfer: [sum.buffer] };
-        }
-        if (m.type === 'slice') {
-          const segment = { ax: m.ax, az: m.az, bx: m.bx, bz: m.bz };
-          const problem = SEGMENT_PROBLEM(segment) ?? RANGE_PROBLEM(m.from, m.to);
-          if (problem !== null) return err(m.jobId, m.epoch, 'BAD_ARGS', problem);
-          const r = slices.run(ctx, m.epoch, segment, stopFor(m.epoch), m.from, m.to);
-          if (r === null) return aborted();
-          const msg: FromWorker = { type: 'sliceResult', jobId: m.jobId, epoch, from: m.from, to: m.to, blocks: r.blocks.buffer, fluid: r.fluid.buffer };
-          return { msg, transfer: [r.blocks.buffer, r.fluid.buffer] };
-        }
-        if (m.type === 'surfaceProbe') {
-          const problem = PROBE_PROBLEM(m.x, m.y, m.z);
-          if (problem !== null) return err(m.jobId, m.epoch, 'BAD_ARGS', problem);
-          const r = SURFACE_PROBE(SURFACE_CONTEXT(ctx), m.x, m.y, m.z);
-          return { msg: { type: 'surfaceProbeResult', jobId: m.jobId, epoch, state: r.state, path: [...r.path] }, transfer: [] };
-        }
-        return { msg: { type: 'pointResult', jobId: m.jobId, epoch, fields: POINT(ctx, m.x, m.z) }, transfer: [] };
       } catch (e) {
         return err(jobId, msgEpoch, 'INTERNAL', e instanceof Error ? e.message : String(e));
       }

@@ -131,6 +131,28 @@ describe('worker pool', () => {
     await expect(pool.tile(tile(0), 0)).rejects.toThrow(/INTERNAL: boom/);
     expect((await pool.point(1, 2)).z).toBe(2);
   });
+  test('a reply that fails its guard rejects the busy job with BAD_MESSAGE: <reason> and frees the worker (SP3d spec §5.1)', async () => {
+    const pool = createWorkerPool(1, () => {
+      const inner = fakeWorker([]);
+      const w: WorkerLike = {
+        onmessage: null,
+        postMessage(msg) {
+          if (msg.type === 'mapTile') { setTimeout(() => w.onmessage?.({ data: { type: 'tile', jobId: msg.jobId, epoch: msg.epoch, rgba: new ArrayBuffer(10) } }), 0); return; }
+          inner.onmessage = (e) => w.onmessage?.(e);
+          inner.postMessage(msg);
+        },
+        terminate() {},
+      };
+      return w;
+    });
+    await pool.configure('42', DEFAULTS);
+    const bad = pool.tile(tile(0), 0);
+    const queued = pool.point(1, 2);
+    expect(pool.queued).toBe(1);
+    await expect(bad).rejects.toThrow('BAD_MESSAGE: tile: rgba is not an ArrayBuffer of 262144 bytes');
+    expect((await queued).z).toBe(2);
+    expect(pool.probe()).toEqual({ busy: 0, queued: 0, configuring: false, jobs: [] });
+  });
   test('cancelTiles rejects matching queued jobs; points still run', async () => {
     const pool = createWorkerPool(1, () => fakeWorker([]));
     await pool.configure('42', DEFAULTS);

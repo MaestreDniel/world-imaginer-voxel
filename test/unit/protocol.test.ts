@@ -28,6 +28,12 @@ const splineLen = (leaf: SplineLeaf, node: KnotPath) => splineStatsLength(spline
 /** Byte equality through Buffer (vitest's deep equality is slow on 262 144-byte arrays). */
 const sameBytes = (a: ArrayBufferLike, b: ArrayBufferLike | ArrayBufferView) =>
   Buffer.from(a).equals(ArrayBuffer.isView(b) ? Buffer.from(b.buffer, b.byteOffset, b.byteLength) : Buffer.from(b));
+/** A reply the pool accepts, and one it does not (null, or SP3d's `{bad, jobId, reason}` when its jobId is readable). */
+const valid = (m: unknown): boolean => {
+  const r = parseFromWorker(m);
+  return r !== null && !('bad' in r);
+};
+const invalid = (m: unknown): boolean => !valid(m);
 
 describe('parseToWorker', () => {
   test('valid messages pass', () => {
@@ -92,28 +98,28 @@ describe('parseToWorker', () => {
 
 describe('parseFromWorker', () => {
   test('tile buffers must be 256·256·4 bytes; ids, when present, 256·256 bytes', () => {
-    expect(parseFromWorker({ type: 'tile', jobId: 1, epoch: 0, rgba: new ArrayBuffer(262144) })).not.toBeNull();
-    expect(parseFromWorker({ type: 'tile', jobId: 1, epoch: 0, rgba: new ArrayBuffer(10) })).toBeNull();
-    expect(parseFromWorker({ type: 'tile', jobId: 1, epoch: 0, rgba: new ArrayBuffer(262144), ids: new ArrayBuffer(65536) })).not.toBeNull();
-    expect(parseFromWorker({ type: 'tile', jobId: 1, epoch: 0, rgba: new ArrayBuffer(262144), ids: new ArrayBuffer(10) })).toBeNull();
-    expect(parseFromWorker({ type: 'tile', jobId: 1, epoch: 0, rgba: new ArrayBuffer(262144), ids: null })).toBeNull();
+    expect(valid({ type: 'tile', jobId: 1, epoch: 0, rgba: new ArrayBuffer(262144) })).toBe(true);
+    expect(invalid({ type: 'tile', jobId: 1, epoch: 0, rgba: new ArrayBuffer(10) })).toBe(true);
+    expect(valid({ type: 'tile', jobId: 1, epoch: 0, rgba: new ArrayBuffer(262144), ids: new ArrayBuffer(65536) })).toBe(true);
+    expect(invalid({ type: 'tile', jobId: 1, epoch: 0, rgba: new ArrayBuffer(262144), ids: new ArrayBuffer(10) })).toBe(true);
+    expect(invalid({ type: 'tile', jobId: 1, epoch: 0, rgba: new ArrayBuffer(262144), ids: null })).toBe(true);
   });
   test('errors carry an epoch (an integer or null)', () => {
-    expect(parseFromWorker({ type: 'error', jobId: null, epoch: null, code: 'BAD_MESSAGE', message: 'x' })).not.toBeNull();
-    expect(parseFromWorker({ type: 'error', jobId: 4, epoch: 3, code: 'ABORTED', message: 'x' })).not.toBeNull();
-    expect(parseFromWorker({ type: 'error', jobId: null, code: 'BAD_MESSAGE', message: 'x' })).toBeNull();
-    expect(parseFromWorker({ type: 'error', jobId: null, epoch: 1.5, code: 'BAD_MESSAGE', message: 'x' })).toBeNull();
+    expect(valid({ type: 'error', jobId: null, epoch: null, code: 'BAD_MESSAGE', message: 'x' })).toBe(true);
+    expect(valid({ type: 'error', jobId: 4, epoch: 3, code: 'ABORTED', message: 'x' })).toBe(true);
+    expect(invalid({ type: 'error', jobId: null, code: 'BAD_MESSAGE', message: 'x' })).toBe(true);
+    expect(invalid({ type: 'error', jobId: null, epoch: 1.5, code: 'BAD_MESSAGE', message: 'x' })).toBe(true);
   });
   test('stats results carry a whole, non-zero number of Float64 values in an ArrayBuffer', () => {
     const result = (kind: string, data: unknown) => ({ type: 'statsResult', jobId: 6, epoch: 3, kind, data });
-    expect(parseFromWorker(result('biomeShares', new ArrayBuffer(8 * 31)))).not.toBeNull();
-    expect(parseFromWorker(result('splineStats', new ArrayBuffer(8)))).not.toBeNull();
-    expect(parseFromWorker(result('crossSection', new ArrayBuffer(8 * 4096)))).not.toBeNull();
-    expect(parseFromWorker(result('biomeShares', new ArrayBuffer(12)))).toBeNull();
-    expect(parseFromWorker(result('biomeShares', new ArrayBuffer(0)))).toBeNull();
-    expect(parseFromWorker(result('biomeShares', new Float64Array(31)))).toBeNull();
-    expect(parseFromWorker(result('nope', new ArrayBuffer(8)))).toBeNull();
-    expect(parseFromWorker({ ...result('biomeShares', new ArrayBuffer(8)), jobId: null })).toBeNull();
+    expect(valid(result('biomeShares', new ArrayBuffer(8 * 31)))).toBe(true);
+    expect(valid(result('splineStats', new ArrayBuffer(8)))).toBe(true);
+    expect(valid(result('crossSection', new ArrayBuffer(8 * 4096)))).toBe(true);
+    expect(invalid(result('biomeShares', new ArrayBuffer(12)))).toBe(true);
+    expect(invalid(result('biomeShares', new ArrayBuffer(0)))).toBe(true);
+    expect(invalid(result('biomeShares', new Float64Array(31)))).toBe(true);
+    expect(invalid(result('nope', new ArrayBuffer(8)))).toBe(true);
+    expect(invalid({ ...result('biomeShares', new ArrayBuffer(8)), jobId: null })).toBe(true);
   });
 });
 
@@ -327,16 +333,16 @@ describe('slice messages and the slice job (SP3a spec §5.1)', () => {
   });
   test('parseFromWorker: sliceResult carries its range [from, to) and (to − from)·384 u16 block states and fluid bytes in ArrayBuffers', () => {
     const result = (blocks: unknown, fluid: unknown, jobId: unknown = 4, from: unknown = 0, to: unknown = 512) => ({ type: 'sliceResult', jobId, epoch: 2, from, to, blocks, fluid });
-    expect(parseFromWorker(result(new ArrayBuffer(2 * SLICE_SAMPLES), new ArrayBuffer(SLICE_SAMPLES)))).not.toBeNull();
-    expect(parseFromWorker(result(new ArrayBuffer(SLICE_SAMPLES), new ArrayBuffer(SLICE_SAMPLES)))).toBeNull();
-    expect(parseFromWorker(result(new ArrayBuffer(2 * SLICE_SAMPLES), new ArrayBuffer(2 * SLICE_SAMPLES)))).toBeNull();
-    expect(parseFromWorker(result(new Uint16Array(SLICE_SAMPLES), new ArrayBuffer(SLICE_SAMPLES)))).toBeNull();
-    expect(parseFromWorker(result(new ArrayBuffer(2 * SLICE_SAMPLES), new Uint8Array(SLICE_SAMPLES)))).toBeNull();
-    expect(parseFromWorker(result(new ArrayBuffer(2 * SLICE_SAMPLES), new ArrayBuffer(SLICE_SAMPLES), null))).toBeNull();
+    expect(valid(result(new ArrayBuffer(2 * SLICE_SAMPLES), new ArrayBuffer(SLICE_SAMPLES)))).toBe(true);
+    expect(invalid(result(new ArrayBuffer(SLICE_SAMPLES), new ArrayBuffer(SLICE_SAMPLES)))).toBe(true);
+    expect(invalid(result(new ArrayBuffer(2 * SLICE_SAMPLES), new ArrayBuffer(2 * SLICE_SAMPLES)))).toBe(true);
+    expect(invalid(result(new Uint16Array(SLICE_SAMPLES), new ArrayBuffer(SLICE_SAMPLES)))).toBe(true);
+    expect(invalid(result(new ArrayBuffer(2 * SLICE_SAMPLES), new Uint8Array(SLICE_SAMPLES)))).toBe(true);
+    expect(invalid(result(new ArrayBuffer(2 * SLICE_SAMPLES), new ArrayBuffer(SLICE_SAMPLES), null))).toBe(true);
     const part = (from: unknown, to: unknown, w: number) => ({ type: 'sliceResult', jobId: 4, epoch: 2, from, to, blocks: new ArrayBuffer(2 * SLICE_ROWS * w), fluid: new ArrayBuffer(SLICE_ROWS * w) });
-    for (const [from, to] of [[170, 341], [0, 1], [511, 512], [0, 512]] as const) expect(parseFromWorker(part(from, to, to - from))).not.toBeNull();
+    for (const [from, to] of [[170, 341], [0, 1], [511, 512], [0, 512]] as const) expect(valid(part(from, to, to - from))).toBe(true);
     for (const [from, to, w] of [[170, 341, 170], [170, 341, 512], [0, 513, 513], [-1, 1, 2], [5, 5, 0], [1.5, 3, 1.5], ['0', 1, 1], [0, undefined, 512], [undefined, 512, 512]] as const) {
-      expect(parseFromWorker(part(from, to, w)), `[${from}, ${to}) with ${w} samples`).toBeNull();
+      expect(invalid(part(from, to, w)), `[${from}, ${to}) with ${w} samples`).toBe(true);
     }
   });
   test('a slice replies with the slice job\'s blocks and fluid, both transferred, at the job\'s epoch', () => {
@@ -461,9 +467,9 @@ describe('surfaceProbe messages and the handler (SP3c spec §6)', () => {
   });
 
   test('parseFromWorker: surfaceProbeResult carries a state id (a non-negative integer) and a path of rule ids (strings)', () => {
-    for (const m of [result([]), result(['root', 'root.rules[2]', 'root.rules[2].then'], 17), result(['root'], 0, 0)]) expect(parseFromWorker(m)).not.toBeNull();
+    for (const m of [result([]), result(['root', 'root.rules[2]', 'root.rules[2].then'], 17), result(['root'], 0, 0)]) expect(valid(m)).toBe(true);
     for (const m of [result(null), result('root'), result([1]), result(['root', null]), result([], -1), result([], 1.5), result([], '3'), result([], 3, 1.5), { type: 'surfaceProbeResult', jobId: 4, epoch: 2, state: 3 }, { ...result([]), epoch: null }]) {
-      expect(parseFromWorker(m)).toBeNull();
+      expect(invalid(m)).toBe(true);
     }
   });
 
@@ -523,7 +529,7 @@ describe('surfaceProbe messages and the handler (SP3c spec §6)', () => {
     for (const [x, y, z] of [[-524288, -64, -524288], [524287, 319, 524287]] as const) expect(reply(probe(5, 3, x, y, z))).toEqual(['surfaceProbeResult']);
   });
 
-  test('before configure NOT_CONFIGURED, at another epoch STALE_EPOCH; with an abort cell it never aborts (as point)', () => {
+  test('before configure NOT_CONFIGURED, at another epoch STALE_EPOCH; with an abort cell it polls before its column build (SP3d spec §5.3)', () => {
     const sab = new SharedArrayBuffer(4);
     const cell = new Int32Array(sab);
     const h = createTaskHandler();
@@ -536,7 +542,9 @@ describe('surfaceProbe messages and the handler (SP3c spec §6)', () => {
     expect(reply(configure(3, sab))).toEqual(['ready']);
     expect(reply(probe(2, 2, 0, 70, 0))).toEqual(['STALE_EPOCH', 2, 2]);
     Atomics.store(cell, 0, 4);
-    expect(reply(probe(3, 3, 0, 70, 0))).toEqual(['surfaceProbeResult']);
+    expect(reply(probe(3, 3, 0, 70, 0))).toEqual(['ABORTED', 3, 3]);
+    Atomics.store(cell, 0, 3);
+    expect(reply(probe(4, 3, 0, 70, 0))).toEqual(['surfaceProbeResult']);
   });
 
   test('a configure with other params answers with their tree: the snowline moves a snowed top to its palette block', () => {
