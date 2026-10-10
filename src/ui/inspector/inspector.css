@@ -74,3 +74,42 @@
 .je-issue { display: block; width: 100%; padding: 0; font: 12px ui-monospace, monospace; text-align: left; color: #ff7b72; background: none; border: 0; overflow-wrap: anywhere; white-space: pre-wrap; }
 button.je-issue { cursor: pointer; }
 button.je-issue:hover { text-decoration: underline; }
+
+/* Slice viewer (§4.3): controls, the plane note, status, the square box (canvas + SVG overlay + readout) and its aside. */
+.sv { display: flex; flex-direction: column; height: 100%; min-height: 0; padding: 4px 8px; box-sizing: border-box; }
+.sv [hidden] { display: none !important; }
+.sv-controls { display: flex; flex-wrap: wrap; align-items: center; gap: 3px 10px; }
+.sv-control { display: inline-flex; align-items: center; gap: 4px; }
+.sv-label { color: #9aa; }
+.sv-select, .sv-input { padding: 1px 4px; font: 12px ui-monospace, monospace; color: #ddd; background: #15171b; border: 1px solid #3a3f48; border-radius: 2px; }
+.sv-input:disabled { opacity: 0.5; }
+.sv-invalid { border-color: #ff7b72; }
+.sv-check { display: inline-flex; align-items: center; gap: 2px; }
+.sv-note { margin-top: 2px; font-size: 11px; color: #8a95a8; }
+.sv-status { min-height: 14px; font: 11px ui-monospace, monospace; color: #8a95a8; }
+.sv-notice { color: #f0b34a; overflow-wrap: anywhere; }
+.sv-body { display: flex; flex-direction: column; flex: 1 1 auto; min-width: 0; min-height: 128px; }
+.sv-row { display: flex; align-items: flex-start; gap: 10px; }
+.sv-axis, .sv-ends { font: 10px ui-monospace, monospace; color: #8a95a8; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.sv-ends { display: flex; justify-content: space-between; gap: 8px; width: fit-content; max-width: 100%; }
+.sv-box { position: relative; flex: 0 0 auto; width: 128px; height: 128px; background: #15171b; outline: 1px solid #34406a; }
+.sv-image { position: absolute; inset: 0; width: 100%; height: 100%; image-rendering: pixelated; }
+.sv-overlay { position: absolute; inset: 0; width: 100%; height: 100%; pointer-events: none; overflow: visible; }
+.sv-contour { fill: none; stroke: #111; stroke-width: 1.2; vector-effect: non-scaling-stroke; }
+.sv-sea { stroke: #5f9bd6; stroke-width: 1; stroke-dasharray: 4 3; vector-effect: non-scaling-stroke; }
+.sv-level { stroke: #f0b34a; stroke-width: 1; stroke-dasharray: 2 3; vector-effect: non-scaling-stroke; }
+.sv-box.sv-stale .sv-image, .sv-box.sv-stale .sv-overlay { opacity: 0.4; }
+.sv-stale-label { position: absolute; right: 4px; bottom: 2px; font: 11px ui-monospace, monospace; color: #f0b34a; pointer-events: none; }
+.sv-readout {
+  position: absolute; top: 0; left: 0; right: 0; z-index: 1; pointer-events: none;
+  padding: 2px 6px 3px; font: 11px ui-monospace, monospace; color: #c8d0dc; background: rgba(21, 23, 27, 0.72);
+  white-space: normal; overflow-wrap: anywhere;
+}
+.sv-empty { padding: 12px 4px; color: #c8d0dc; }
+.sv-aside { flex: 0 0 168px; display: flex; flex-direction: column; gap: 4px; min-width: 0; overflow: auto; }
+.sv-histogram { width: 100%; height: 56px; background: #15171b; }
+.sv-bar { fill: #7f9cc7; }
+.sv-stats { font: 11px ui-monospace, monospace; color: #b8c2d0; white-space: pre-wrap; overflow-wrap: anywhere; }
+.sv-legend { display: flex; flex-wrap: wrap; gap: 2px 10px; font-size: 11px; color: #9aa; }
+.sv-key { display: inline-flex; align-items: center; gap: 4px; }
+.sv-swatch { display: inline-block; width: 14px; height: 8px; border-radius: 1px; outline: 1px solid rgba(160, 170, 180, 0.45); }

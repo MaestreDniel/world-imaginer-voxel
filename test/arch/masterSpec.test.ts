@@ -10,7 +10,9 @@
  * order; §3.10 and §3.11 state the `surface.*` defaults they name (lapse, snowline, cliffs), so a retune must amend the
  * master; §10's SP3c entry names its spec and no longer defers its deliverable, exit and cut line to it.
  * SP3d (its spec §12): §10's SP3d entry names its spec and no longer defers its deliverable, exit and cut line to it;
- * §1's `test/` entry names SP3d's test files, which exist (it lands with the last of them, `harness/treeMutator.ts`).
+ * §1's `test/` entry names SP3d's test files, which exist (it lands with the last of them, `harness/treeMutator.ts`);
+ * §1's `ui/inspector/*` entry names every module of the Density tab, and the reserved top-level `sliceView.ts`,
+ * `probe.ts` and `jsonEditor.ts` are dropped (it lands with the last of them, `sliceView.ts`).
  */
 import { existsSync, readdirSync, readFileSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
@@ -27,6 +29,7 @@ const text = readFileSync(MASTER, 'utf8');
 const API = fileURLToPath(new URL('../../src/world/store/api.ts', import.meta.url));
 const METRICS = fileURLToPath(new URL('../../src/metrics/', import.meta.url));
 const SURFACE = fileURLToPath(new URL('../../src/gen/surface/', import.meta.url));
+const INSPECTOR = fileURLToPath(new URL('../../src/ui/inspector/', import.meta.url));
 const ROOT_DIR = fileURLToPath(new URL('../../', import.meta.url));
 const SP_TOKEN = /\bSP(?:\d+[a-z]?)\b/g;
 
@@ -217,5 +220,18 @@ describe('master spec amendments (SP3d §12)', () => {
     expect(existsSync(`${ROOT_DIR}docs/superpowers/specs/${spec![1]}`), `${spec![1]} does not exist`).toBe(true);
     expect(entry).not.toMatch(/set by the SP3d spec/);
     for (const k of ['Deliverable:', 'Exit:', 'Cut line:']) expect(entry, `SP3d misses **${k}**`).toContain(`**${k}**`);
+  });
+
+  test('§1\'s ui/inspector entry names every module of src/ui/inspector; the reserved top-level sliceView.ts, probe.ts and jsonEditor.ts are dropped', () => {
+    const entry = layoutEntry(/^\s+ui\/inspector\/\*\s/);
+    expect(entry, 'no `ui/inspector/* …` entry in §1').not.toBe('');
+    const files = readdirSync(INSPECTOR).filter((f) => /\.(ts|css)$/.test(f)).sort();
+    expect(files).toContain('sliceView.ts');
+    expect([...new Set(entry.match(/\b[A-Za-z]+\.(?:ts|css)\b/g))].sort()).toEqual(files);
+    const shell = layoutEntry(/^\s+ui\/shell\.ts\s/);
+    expect(shell, 'no `ui/shell.ts …` entry in §1').not.toBe('');
+    for (const f of ['sliceView.ts', 'probe.ts', 'jsonEditor.ts']) {
+      expect(shell, `§1's ui/shell.ts entry still reserves ${f}`).not.toMatch(new RegExp(`(^|\\s)${f.replace('.', '\\.')}(\\s|$)`));
+    }
   });
 });

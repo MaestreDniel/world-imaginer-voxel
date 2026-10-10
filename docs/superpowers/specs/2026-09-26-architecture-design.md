@@ -166,8 +166,11 @@ world-imaginer-voxel/          (repository root)
                                 the parameter panel, spline drawer, biome table, presets tab and cross-section (pure models beside thin DOM);
                                 SP3a adds the cross-section's Voxels mode
     ui/lab/* seedBox.ts          (SP1) the ?lab=noise research page; DOM-free seed-box logic
-    ui/shell.ts styles.css inspector/* sliceView.ts probe.ts mapView/*   (paramPanel, splineEditor and biomeTable became directories in SP2b)
-       metricsDashboard.ts jsonEditor.ts worldsMenu.ts settingsPanel.ts palette.ts hud.ts debugOverlay.ts help.ts
+    ui/inspector/*              (SP3d) the ?map Density tab. Pure: model.ts form.ts jsonText.ts editorModel.ts hoverModel.ts
+                                sliceModel.ts; DOM: jsonEditor.ts sliceView.ts densityTab.ts inspector.css (SP10's full probe and
+                                further JSON editors go here too)
+    ui/shell.ts styles.css mapView/*   (paramPanel, splineEditor and biomeTable became directories in SP2b)
+       metricsDashboard.ts worldsMenu.ts settingsPanel.ts palette.ts hud.ts debugOverlay.ts help.ts
     main.ts
   tools/detmath-oracle.py       (SP1) CPython port of detMath, a manual oracle for the detMath goldens
   test/ unit/ metrics/ bench/ arch/ harness/{region,refs,cache,stats,flood}.ts fixtures/ tools/ (SP2b: tools/mapLatency.ts, tools/uiSmoke.ts)
@@ -1272,10 +1275,11 @@ Target: edit → visible ≤ 50 ms p95, measured in the HUD.
 
 ### 5.5 Density inspector, taps, mutes, probe, slice view
 
-- **Inspector:** a tree of `density.defs` and taps, with a param form per node and a JSON text editor with schema validation.
-  - Slice preview: XZ@y, XY@z or ZY@x; extent 256-8192; diverging colormap with a 0-contour and a sea-level line.
+- **Inspector:** the `?map` Density tab (SP3d): a tree of `density.defs` and `surface.rules`, a node form with param refs, and JSON editors for both trees with validation (amended by SP3d).
+  - Slice preview: vertical along the cut line (XY@z and ZY@x are its axis-aligned cases) and XZ@y with extent 256-8192; a 32² draft, then 128²; diverging colormap with a 0-contour and a sea-level line.
   - Histogram: p1/p50/p99, sd and % < 0.
-  - Up to 3 pinned slices side by side, and a mute toggle per tap.
+  - A mute toggle per tap (SP3d); up to 3 pinned slices side by side (SP3d's cut line, else SP10).
+  - The SP3d slice fields are the final density, any density node, and blocks and rule masks on vertical planes; the other fields arrive with their SPs. The hover value comes from the `fieldProbe` worker job.
 - **Slice view (L):** any 3D field (final density, each cave term, carver mask, aquifer level and status, biome3d, stone depth, blocks, cave-type tint, light for loaded columns). It re-renders on param edits.
 - **Probe:** at the crosshair, map hover or slice hover. It shows climate, shape, every tap, carver hit, aquifer cell / level / status, biome 2D and 3D, the **surface-rule branch path taken**, light and stage hashes. A button copies it as JSON. SP3c: `surfaceProbe(sc, x, y, z)` returns the voxel's state and the rule ids from `root` to the leaf that yielded it (`[]` for air, water and unmatched stone), walking the reference evaluator, never the fast path; the branch path reaches the `?map` cross-section's Voxels hover through the `surfaceProbe` worker job, which shows the leaf's id (amended by SP3c).
 - **JSON editors** (textarea plus validation) cover surface rules, placed features and structure sets/pools. A visual editor is out of scope.

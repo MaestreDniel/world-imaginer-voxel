@@ -23,6 +23,9 @@
  *   128² slice at priority 500, on the draft the pool's last resolved configure holds; a new request supersedes the
  *   previous one (its queued parts dropped, its running parts' results discarded: P1); a density or node slice refused
  *   by the work bound (`planFieldSlice`, never re-derived: P3) keeps the draft with its notice.
+ * - **The view's rules** (`sliceView.ts`, `mapPage.ts`, §4.3, §3.6, §3.7): the square box's side, the pointer → pixel
+ *   `⌊(px / side) · n⌋`, the slice and map hover voxels and readouts, the centre and extent changes clamped into the
+ *   window, the y control, the map's square, the status and hover lines, and the params of the configured draft.
  */
 import { DRAFT_BUDGET, HEIGHT, MIN_Y, REQUEST_BUDGET, SEA_LEVEL, SLICE_EXTENTS, SLICE_NS, SLICE_RULE_NA } from '../../core/constants';
 import { MAX_Y, WINDOW_HALF } from '../../core/coords';
@@ -39,6 +42,8 @@ import { isRefusableField, planFieldSlice, type FieldSliceSpec } from '../../wor
 import { countText } from '../biomeTable/model';
 import { VOXEL_COLORS, voxelRgb, type Rgb } from '../crossSection/voxels';
 import type { SlicePlane } from '../map/clickAction';
+import type { MapSquare } from '../map/mapView';
+import type { HoverVoxel } from './hoverModel';
 import type { Selection } from './model';
 
 // ---------------------------------------------------------------- fields
@@ -727,5 +732,127 @@ export function createFieldSliceRequests(src: FieldSliceSource): FieldSliceReque
     get shown() { return shown; },
     get pending() { return run === null ? null : { sessionEpoch: run.sessionEpoch, key: run.key, n: run.n }; },
     get notice() { return notice; },
+  };
+}
+
+// ---------------------------------------------------------------- the view's rules (sliceView.ts, mapPage.ts)
+
+/** The slice box's smallest side in CSS px (§3.1, §4.3); the drawer scrolls below it. */
+export const SLICE_BOX_MIN_PX = 128;
+
+/** The side of the square slice box: the smaller of its cell's width and height, at least SLICE_BOX_MIN_PX (§4.3). */
+export function sliceBoxSide(width: number, height: number): number {
+  const s = Math.floor(Math.min(width, height));
+  return Number.isFinite(s) && s > SLICE_BOX_MIN_PX ? s : SLICE_BOX_MIN_PX;
+}
+
+/**
+ * The image pixel (one axis) under a pointer `offset` CSS px into a box of `side` px showing n pixels: ⌊(offset / side) · n⌋
+ * (§4.3), or null outside [0, side) (the pointer left the image).
+ */
+export function slicePixel(offset: number, side: number, n: number): number | null {
+  if (!(side > 0) || !(offset >= 0) || !(offset < side)) return null;
+  return Math.min(n - 1, Math.floor((offset / side) * n));
+}
+
+/** The shown field's value at a sample (from the slice buffer: the function that computed it), as the readouts print it. */
+function sampleText(r: FieldSliceResult, i: number): string {
+  switch (r.field) {
+    case 'density': case 'node': return formatSliceValue(r.values[i]!);
+    case 'blocks': return isWater(r.values[i]!, r.fluid[i]!) ? 'water' : REGISTRY.stateKey(r.values[i]!);
+    case 'rule': return r.values[i] === 1 ? 'yes' : r.values[i] === 0 ? 'no' : r.values[i] === RULE_NA ? 'n/a' : String(r.values[i]);
+  }
+}
+
+/**
+ * The slice hover (§3.6): the voxel of image pixel (px, py) of a shown slice and its readout, `(x, y, z) · <field> <value>`
+ * with the value from the slice buffer. Throws a RangeError for a pixel outside the slice.
+ */
+export function sliceHoverText(shown: SliceShown, px: number, py: number): { readonly voxel: HoverVoxel; readonly text: string } {
+  const g = shown.geometry;
+  const [x, y, z] = pixelVoxel(g, px, py);
+  const { c, k } = pixelSample(g.plane, g.n, px, py);
+  return { voxel: { x, y, z }, text: `(${x}, ${y}, ${z}) · ${shown.result.field} ${sampleText(shown.result, c * g.n + k)}` };
+}
+
+/** The voxel of a map hover while the Density tab is shown (§3.6): the hovered block at the y control; null outside the world window. */
+export function mapHoverVoxel(x: number, z: number, y: number): HoverVoxel | null {
+  const bx = Math.floor(x);
+  const bz = Math.floor(z);
+  if (!(bx >= -W && bx < W && bz >= -W && bz < W)) return null;
+  return { x: bx, y, z: bz };
+}
+
+/** A map click on the horizontal plane (§3.7): the centre at the clicked block, clamped into the window for the extent. */
+export function withCentre(s: SliceState, x: number, z: number): SliceState {
+  const [cx, cz] = clampCentre(x, z, s.extent);
+  return { ...s, cx, cz };
+}
+
+/** Another extent (SLICE_EXTENTS, else a RangeError): the centre is kept where the square fits, else clamped. */
+export function withExtent(s: SliceState, extent: number): SliceState {
+  const [cx, cz] = clampCentre(s.cx, s.cz, extent);
+  return { ...s, extent, cx, cz };
+}
+
+/** The y control's text: an integer in −64 … 319, else null (refused). */
+export function parseSliceY(text: string): number | null {
+  const t = text.trim();
+  if (!/^-?\d+$/.test(t)) return null;
+  const y = Number(t);
+  return y >= MIN_Y && y <= MAX_Y ? y : null;
+}
+
+/** The horizontal plane's square on the map (§3.7), or null (no state yet, or the vertical plane). */
+export function sliceSquare(s: SliceState | null): MapSquare | null {
+  return s === null || s.plane !== 'horizontal' ? null : { cx: s.cx, cz: s.cz, extent: s.extent };
+}
+
+/** The field select's label: `selected` names the selected node's path (§4.1). */
+export function fieldOptionLabel(choice: FieldChoice, sel: Selection): string {
+  return choice === 'selected' ? `selected (${sel.path})` : choice;
+}
+
+/** The status line: the shown slice (its size when fresh, "stale" otherwise), then the stage in flight. */
+export function sliceStatusText(r: Pick<FieldSliceRequests, 'key' | 'shown' | 'pending'>, sessionEpoch: number): string {
+  const view = fieldSliceView(r, sessionEpoch);
+  const parts: string[] = [];
+  if (view === 'fresh') parts.push(`${r.shown!.result.n}²`);
+  else if (view === 'stale') parts.push('stale');
+  if (r.pending !== null) parts.push(`slicing ${r.pending.n}² …`);
+  return parts.join(' · ');
+}
+
+/** The form's "value at the hover" (§3.6): the value (and a rule node's rule suffix) at the voxel, or null (nothing to show). */
+export function hoverLineText(voxel: HoverVoxel | null, value: string, rule: string): string | null {
+  if (voxel === null || value === '') return null;
+  return `${value}${rule} at (${voxel.x}, ${voxel.y}, ${voxel.z})`;
+}
+
+/** The params of the drafts handed to the preview driver, by session epoch: `configured` names the one the pool holds. */
+export interface DraftLog {
+  remember(sessionEpoch: number, params: Params): void;
+  /** The pool's last resolved configure (`DriverStatus`) and its draft's params; null before one or for an unknown draft. */
+  configured(status: { readonly poolEpoch: number | null; readonly sessionEpoch: number | null }): ConfiguredDraft | null;
+  /** Drafts remembered. */
+  readonly size: number;
+}
+
+/**
+ * Configures resolve in session order, so the drafts before the configured one are never configured again and are
+ * dropped (`DriverStatus` holds no params: SP3d spec §4.5 costs a slice on the draft the workers hold).
+ */
+export function createDraftLog(): DraftLog {
+  const drafts = new Map<number, Params>();
+  return {
+    remember(sessionEpoch, params) { drafts.set(sessionEpoch, params); },
+    configured({ poolEpoch, sessionEpoch }) {
+      if (poolEpoch === null || sessionEpoch === null) return null;
+      const params = drafts.get(sessionEpoch);
+      if (params === undefined) return null;
+      for (const e of drafts.keys()) if (e < sessionEpoch) drafts.delete(e);
+      return { poolEpoch, sessionEpoch, params };
+    },
+    get size() { return drafts.size; },
   };
 }

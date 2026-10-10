@@ -7,8 +7,10 @@
  * under the map (§4.2); the Biomes tab holds the biome share preview (§5.5) over the biome table (§5.2), whose
  * hovered row the canvas highlights on the biome layer (§5.3); the Presets tab exports and imports preset files
  * and holds the JSON patch box (§3.4). The toolbar's "Cut line" arms a two-click line tool on the map, whose line
- * the drawer's Cross-section tab profiles (§4.5). The drawer's Density tab (SP3d spec §3.1) follows the same line;
- * while it is shown, map clicks are routed by `mapClickAction` (SP3d spec §3.7).
+ * the drawer's Cross-section tab profiles (§4.5). The drawer's Density tab (SP3d spec §3.1-§3.7) holds the tree, the
+ * node form, the JSON editor and the slice viewer on the same session; its vertical plane follows the same line, its
+ * slices and hover values run on the pool's resolved configure, and while it is shown map clicks are routed by
+ * `mapClickAction` (a horizontal plane's centre) and the map hover probes the selected node at the y control.
  * `?map&perf=edit` also loads the latency hook (§2.8, `perfHook.ts`), which pins the canvas and the world.
  */
 import './map.css';
@@ -16,7 +18,6 @@ import type { SessionState } from '../../engine/session';
 import { createBrowserPool } from '../../engine/workerPool';
 import { biomeName } from '../../gen/biomes/registry';
 import type { Spawn } from '../../gen/column/spawn';
-import type { Segment } from '../../metrics/crossSection';
 import { HIGHLIGHT_NOTICE, rowHover } from '../biomeTable/model';
 import { createBiomeShares } from '../biomeTable/shares';
 import { createBiomeTable } from '../biomeTable/table';
@@ -24,14 +25,20 @@ import { el } from '../common/dom';
 import { installShortcuts } from '../common/keys';
 import { createNotices } from '../common/notice';
 import { createUrlWriter, oversizeNotice } from '../common/urlWriter';
-import { CUT_ARMED, CUT_OFF, cutClick, cutOverlay, segmentDistance, segmentText, type CutPoint, type CutTool } from '../crossSection/model';
+import { CUT_ARMED, CUT_OFF, cutClick, cutOverlay, segmentDistance, type CutPoint, type CutTool } from '../crossSection/model';
 import { createCrossSection } from '../crossSection/section';
+import { createRuleReadout } from '../crossSection/voxels';
+import { createDensityTab } from '../inspector/densityTab';
+import { TREE_LEAVES } from '../inspector/editorModel';
+import { createHoverModel, hoverTarget, type HoverVoxel } from '../inspector/hoverModel';
+import { createDraftLog, hoverLineText, mapHoverVoxel, sliceSquare } from '../inspector/sliceModel';
+import { createSliceView } from '../inspector/sliceView';
 import { createParamPanel } from '../paramPanel/panel';
 import { createPresetsTab } from '../presets/presetsTab';
 import { cryptoSeed } from '../seedBox';
 import { createSplineDrawer } from '../splineEditor/drawer';
 import { isSplineLeaf } from '../splineEditor/model';
-import { mapClickAction, type SlicePlane } from './clickAction';
+import { mapClickAction } from './clickAction';
 import { createHoverReadout } from './hoverPanel';
 import { browserStorage, createLayout } from './layout';
 import { createMapCanvas } from './mapView';
@@ -41,10 +48,6 @@ import { createToolbar } from './toolbar';
 
 /** A click this close to the cut line (screen px) shows its profile instead of pinning the point. */
 const LINE_HIT_PX = 6;
-/** The Density tab's note under its plane controls (SP3d spec §3.1, §1.5). */
-const DENSITY_NOTE = 'Tree edits show in the slices, the Voxels mode and the hover values; the 2D map is upstream of the terrain';
-/** The vertical plane without a cut line (SP3d spec §3.7). */
-const DENSITY_NO_LINE = 'Draw a cut line on the map for a vertical slice';
 const draftOf = (s: SessionState): DriverDraft => ({ sessionEpoch: s.epoch, seedText: s.seedText, seedKey: `${s.seed[0]}.${s.seed[1]}`, params: s.params });
 const spawnText = (sp: Spawn): string => `${sp.x}, ${sp.z} (y ${sp.y}, ${biomeName(sp.biome)}${sp.fallback ? ', fallback' : ''})`;
 
@@ -103,13 +106,15 @@ export async function mountMapPage(root: HTMLElement): Promise<void> {
   // (SP3d spec §3.7).
   let cut: CutTool = CUT_OFF;
   let cutPointer: CutPoint | null = null;
-  /** The Density tab's plane and its horizontal plane's centre (set by map clicks; null: the view's centre). */
-  const densityPlane: SlicePlane = 'vertical';
-  let densityCentre: CutPoint | null = null;
+  /** The map's pin (the Density tab's first horizontal centre when set, SP3d spec §3.7). */
+  let pin: CutPoint | null = null;
+  const densityShown = (): boolean => layout.drawerOpen && layout.drawerTab === 'density';
   const canvas = createMapCanvas(layout.map, pool, view, {
     onView: (v) => { view = v; canvas.setView(v); writeUrl(); renderStatus(); },
     onHover: (x, z) => {
       hover.move(x, z);
+      // While Density is shown the form probes the selected node at the hovered block and the y control (SP3d spec §3.6).
+      if (densityShown() && slices.state !== null) hoverAt(mapHoverVoxel(x, z, slices.state.y));
       if (cut.mode !== 'b') return;
       cutPointer = [x, z];
       drawCut();
@@ -117,15 +122,15 @@ export async function mountMapPage(root: HTMLElement): Promise<void> {
     onClick: (x, z) => {
       const action = mapClickAction({
         drawerTab: layout.drawerOpen ? layout.drawerTab : null,
-        plane: densityPlane,
+        plane: slices.state?.plane ?? 'vertical',
         nearLine: section.line !== null && segmentDistance(section.line, x, z) <= LINE_HIT_PX * view.bpp,
         cutArmed: cut.mode !== 'off',
       });
       switch (action.kind) {
         case 'cut': cutAt(x, z, action.openSection); break;
         case 'openSection': layout.openDrawer('section'); break;
-        case 'centre': densityCentre = [Math.floor(x), Math.floor(z)]; break;
-        case 'pin': canvas.setPin([x, z]); break;
+        case 'centre': slices.setCentre(x, z); break;
+        case 'pin': pin = [x, z]; canvas.setPin([x, z]); break;
       }
     },
     onPreviewProgress: (epoch, drawn, visible) => {
@@ -172,18 +177,28 @@ export async function mountMapPage(root: HTMLElement): Promise<void> {
 
   // The hover readout shows points of the canvas source's pool epoch only (§2.5).
   let shownEpoch: number | null = null;
+  // The Density tab's slices and hover values run on the pool's resolved configure (SP3d spec §4.5): every status
+  // change may let them request.
   driver.onStatus((st) => {
     toolbar.setStatus(st);
     if (st.poolEpoch !== shownEpoch) {
       shownEpoch = st.poolEpoch;
       hover.refresh();
     }
+    if (densityShown()) {
+      slices.update();
+      hoverAt(hoverVoxel);
+    }
   });
+  /** The params of every draft handed to the driver, so a slice is costed on the draft the workers hold (§4.5). */
+  const drafts = createDraftLog();
   session.subscribe((s, change) => {
+    drafts.remember(s.epoch, s.params);
     driver.change(draftOf(s), change, inputAt ?? performance.now());
     toolbar.sync();
     writeUrl();
     renderStatus();
+    slices.update();
   });
 
   // Parameters tab (§3.2). It subscribes after the page, so a change reaches the driver before the panel redraws.
@@ -197,9 +212,12 @@ export async function mountMapPage(root: HTMLElement): Promise<void> {
       layout.openDrawer('spline');
     },
     showBiomes: () => layout.showTab('biomes'),
-    // A tree's "Edit in Density" opens the drawer's Density tab (SP3d spec §1.1); selecting the leaf's root there
-    // arrives with the tab's tree (the panel link selects the root).
-    openTree: () => layout.openDrawer('density'),
+    // A tree's "Edit in Density" opens the drawer's Density tab on that leaf's root (SP3d spec §1.1).
+    openTree: (path) => {
+      layout.openDrawer('density');
+      const leaf = TREE_LEAVES.find((l) => l === path);
+      if (leaf !== undefined) densityTab.select({ leaf, path: 'root' });
+    },
   });
 
   // The drawer's Spline tab (§4.2-4.4): it requests its statistics when the driver settles (§4.3).
@@ -239,22 +257,54 @@ export async function mountMapPage(root: HTMLElement): Promise<void> {
     if (step.line !== null && openSection) layout.openDrawer('section');
   }
 
-  // The drawer's Density tab (SP3d spec §3.1): the vertical plane follows the cut line (§3.7); without a line it
-  // shows the empty state. The note says why the 2D map does not change with tree edits (§1.5).
-  const densityState = el('div', 'map-density-state');
-  const densityLine = (line: Segment | null) => {
-    densityState.textContent = line === null ? DENSITY_NO_LINE : `vertical slice along ${segmentText(line)}`;
+  // The drawer's Density tab (SP3d spec §3.1-§3.7): tree, node form and JSON editor (densityTab.ts) and the slice
+  // viewer in its slice cell (sliceView.ts). The vertical plane is the cut line; the first show picks the plane
+  // (§3.7); the horizontal plane's square is drawn on the map while the tab is shown.
+  const densityTab = createDensityTab(layout.drawerTabs.density, { session, edit });
+  const slices = createSliceView(densityTab.sliceHost, {
+    session, pool,
+    configured: () => drafts.configured(driver.status),
+    line: () => section.line,
+    selection: () => densityTab.selection,
+    start: () => ({ line: section.line, viewCentre: [view.x, view.z], pin }),
+    onState: (s) => canvas.setSquare(densityShown() ? sliceSquare(s) : null),
+    onHover: (v) => hoverAt(v),
+  });
+  // The form's "value at the hover" (§3.6): the selected node's value at the hovered voxel (a fieldProbe job), and for a
+  // rule node the voxel's rule (a surfaceProbe job), both on the draft the pool's resolved configure holds.
+  let hoverVoxel: HoverVoxel | null = null;
+  let hoverValue = '';
+  let hoverRule = '';
+  const showHover = () => densityTab.setHoverValue(hoverLineText(hoverVoxel, hoverValue, hoverRule));
+  const probe = createHoverModel(pool, () => driver.status.sessionEpoch, (_, text) => { hoverValue = text; showHover(); });
+  const ruleProbe = createRuleReadout(pool, () => driver.status.sessionEpoch ?? -1, (_, suffix) => { hoverRule = suffix; showHover(); });
+  function hoverAt(v: HoverVoxel | null): void {
+    hoverVoxel = densityShown() ? v : null;
+    const sel = densityTab.selection;
+    hoverValue = probe.hover(hoverVoxel, hoverVoxel === null ? null : hoverTarget(sel));
+    const e = driver.status.sessionEpoch;
+    hoverRule = ruleProbe.hover(hoverVoxel !== null && e !== null && sel.leaf === 'surface.rules' ? { ...hoverVoxel, epoch: e } : null);
+    showHover();
+  }
+  densityTab.onSelect(() => {
+    slices.update();
+    hoverAt(hoverVoxel);
+  });
+  section.onLineChange(() => slices.update());
+  const densityChanged = () => {
+    const on = densityShown();
+    densityTab.setShown(on);
+    slices.setShown(on);
+    canvas.setSquare(on ? sliceSquare(slices.state) : null);
+    if (!on) hoverAt(null);
   };
-  const densityPanel = el('div', 'map-density');
-  densityPanel.append(densityState, el('div', 'map-density-note', DENSITY_NOTE));
-  layout.drawerTabs.density.append(densityPanel);
-  densityLine(section.line);
-  section.onLineChange(densityLine);
+  densityChanged();
   // A tab that comes on screen catches up: the spline drawer renders and requests its statistics, the
-  // cross-section requests its profile.
+  // cross-section requests its profile, the Density tab restores its scroll and requests its slice.
   layout.onDrawerChange(() => {
     if (layout.drawerOpen && layout.drawerTab === 'spline' && splines.leaf !== null) splines.open(splines.leaf);
     section.shown();
+    densityChanged();
   });
 
   // Biomes tab: the biome share preview (§5.5), requested when the driver settles while the tab is on screen and
@@ -287,6 +337,7 @@ export async function mountMapPage(root: HTMLElement): Promise<void> {
   });
 
   // The first cycle is an urgent load (Task 10); the URL is rewritten in canonical form.
+  drafts.remember(session.state.epoch, session.state.params);
   driver.change(draftOf(session.state), { kind: 'load', urgent: true, gesture: false }, performance.now());
   toolbar.setStatus(driver.status);
   writeUrl();
