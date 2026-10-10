@@ -79,6 +79,15 @@ function quotedKey(key: string): string {
   return q.slice(0, last >= 0xd800 && last <= 0xdbff ? KEY_PATH_CHARS - 1 : KEY_PATH_CHARS);
 }
 
+/**
+ * The node path of key `key` of the object at node path `parent`, as tier 1 writes it (§1.2): `parent.key` (the key
+ * alone under ''), or, for a key that does not match TREE_KEY_RE, `parent.` + JSON.stringify(key) cut to 40 characters.
+ * The inspector's printer and parser name their text ranges with it, so an issue path finds its text.
+ */
+export function treeKeyPath(parent: string, key: string): string {
+  return childPath(parent, TREE_KEY_RE.test(key) ? key : quotedKey(key));
+}
+
 interface Visit {
   readonly v: unknown;
   /** Node path in the format's syntax. */
@@ -176,10 +185,10 @@ export function checkJson(v: unknown, path: string, out: Issue[], format: JsonFo
             const k = keys[i]!;
             if (!TREE_KEY_RE.test(k)) {
               const qk = quotedKey(k);
-              stack.push({ v: undefined, path: childPath(t.path, qk), level: depth, parent: c, key: k, bad: { code: 'BAD_KEY', message: `key ${qk} does not match ${TREE_KEY_RE.source}` } });
+              stack.push({ v: undefined, path: treeKeyPath(t.path, k), level: depth, parent: c, key: k, bad: { code: 'BAD_KEY', message: `key ${qk} does not match ${TREE_KEY_RE.source}` } });
               continue;
             }
-            const p = childPath(t.path, k);
+            const p = treeKeyPath(t.path, k);
             const d = Object.getOwnPropertyDescriptor(x, k)!;
             if (d.get !== undefined || d.set !== undefined) stack.push({ v: undefined, path: p, level: depth, parent: c, key: k, bad: { code: 'NOT_JSON', message: 'an accessor property' } });
             else stack.push({ v: d.value, path: p, level: depth, parent: c, key: k });

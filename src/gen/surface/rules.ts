@@ -173,13 +173,17 @@ export class RuleValidationError extends Error {
   }
 }
 
-/** The fields of each kind besides `kind`, in the order they are checked. */
-const FIELDS: { readonly [K in RuleKind | ConditionKind]: readonly string[] } = {
-  sequence: ['rules'], condition: ['if', 'then'], block: ['state'], bandlands: [],
-  biome: ['biomes'], stoneDepth: ['side', 'offset', 'addSurfaceDepth'], water: ['offset', 'runTop'], yAbove: ['minY', 'runTop'],
-  verticalGradient: ['trueAtAndBelow', 'falseAtAndAbove'], steep: ['min'], noiseThreshold: ['noise', 'min', 'max'],
-  temperatureBelow: ['t'], skyOpen: [], lake: [], not: ['if'],
-};
+/**
+ * The fields of each kind besides `kind`, in §3.1's table order, which is also the order they are checked (field names
+ * only, frozen; look a kind up with `Object.hasOwn`). The inspector's printer and node form read it (SP3d spec §3.3, §3.5).
+ */
+export const FIELDS: { readonly [K in RuleKind | ConditionKind]: readonly string[] } = Object.freeze({
+  sequence: Object.freeze(['rules']), condition: Object.freeze(['if', 'then']), block: Object.freeze(['state']), bandlands: Object.freeze([]),
+  biome: Object.freeze(['biomes']), stoneDepth: Object.freeze(['side', 'offset', 'addSurfaceDepth']), water: Object.freeze(['offset', 'runTop']),
+  yAbove: Object.freeze(['minY', 'runTop']), verticalGradient: Object.freeze(['trueAtAndBelow', 'falseAtAndAbove']), steep: Object.freeze(['min']),
+  noiseThreshold: Object.freeze(['noise', 'min', 'max']), temperatureBelow: Object.freeze(['t']), skyOpen: Object.freeze([]), lake: Object.freeze([]),
+  not: Object.freeze(['if']),
+});
 const RULE_SET = new Set<string>(RULE_KINDS);
 const CONDITION_SET = new Set<string>(CONDITION_KINDS);
 const BIOME_SET = new Set<string>(BIOMES);
