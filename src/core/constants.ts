@@ -98,3 +98,21 @@ export const RULES_COLUMN_COST_MAX = 138_870_784;
  */
 export const SLICE_NS = Object.freeze([32, 128] as const);
 export const SLICE_EXTENTS = Object.freeze([256, 512, 1024, 2048, 4096, 8192] as const);
+
+/**
+ * The slice work bound (SP3d spec §5.2), in work units of about 14 ns of reference evaluation on one thread
+ * (`gen/inspect/cost.ts` `workCost`): the acquisition costs of a sample column's samples — one full ColumnSample per
+ * vertical sample column (about 430 µs), one horizontal sample's four corner points (about 26 µs) or with steep (about
+ * 64.5 µs, calibrated: 2^13 would leave a 128² horizontal slice no room, 128² × 2^13 = REQUEST_BUDGET) — and the
+ * budgets: one part (about 115 ms), a 32² draft and a 128² request in total. One source for gen's `sliceCostOf`, the
+ * worker's bound check and the pool's split (`workers/protocol.ts` re-exports them).
+ */
+export const COLUMN_SAMPLE_COST = 32_768;
+export const CORNER_SAMPLE_COST = 2_048;
+export const CORNER_STEEP_COST = 5_120;
+export const PART_BUDGET = 8_388_608;
+export const DRAFT_BUDGET = 16_777_216;
+export const REQUEST_BUDGET = 134_217_728;
+
+/** The `rule` slice field's value on a voxel the rules never evaluate (air, water, the bedrock at y −64): n/a (§4.1). */
+export const SLICE_RULE_NA = 255;

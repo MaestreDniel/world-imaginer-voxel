@@ -29,6 +29,34 @@ export function terrainMuted(mute = 0): Tree {
   return t;
 }
 
+/**
+ * A tree that reads `col steep` at the default's weight (work cost 569 + 2): the islands const replaced by
+ * add(const −1e6, col steep), so its horizontal slices take corner samples with steep (spec §4.4, §5.2).
+ */
+export function steepTree(): Tree {
+  const t = densityTree();
+  t['root'].b.x = { op: 'add', a: { op: 'const', v: -1000000 }, b: { op: 'col', field: 'steep' } };
+  return t;
+}
+
+/**
+ * A heavy tier-2-valid density patch (spec §4.5, §10: a configure stops a part within 50 ms for every field): the
+ * default root plus mul(20, a balanced add of `leaves` (a power of 2) `noise detail` leaves), the detail noise at 16
+ * octaves, double. At 32 leaves its column cost is about 0.4 G of `DENSITY_COLUMN_COST_MAX`'s 0.95 G, and the T column
+ * (or a rule probe column) takes about 0.1 s to fill.
+ */
+export function heavyDetailPatch(leaves = 32): ParamsPatch {
+  let level: Tree[] = Array.from({ length: leaves }, () => ({ op: 'noise', id: 'detail' }));
+  while (level.length > 1) {
+    const next: Tree[] = [];
+    for (let i = 0; i < level.length; i += 2) next.push({ op: 'add', a: level[i], b: level[i + 1] });
+    level = next;
+  }
+  const t = densityTree();
+  t['root'] = { op: 'add', a: t['root'], b: { op: 'mul', a: { op: 'const', v: 20 }, b: level[0] } };
+  return { density: { noises: { detail: { octaves: 16, double: true } }, defs: t } } as ParamsPatch;
+}
+
 /** U2's rules variant (spec §7): the deepslate gradient's `falseAtAndAbove` 8 → `top`. */
 export function gradientTop(top = 12): Tree {
   const t = rulesTree();

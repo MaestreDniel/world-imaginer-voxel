@@ -12,6 +12,12 @@
  * - `rulesColumnCost(source)`: the rule and condition node count times the voxels a column evaluates: 98,304 without a
  *   fast path, or 256 × (1 + the fast path's largest depth bound) with one (SP3c §3.4), each ref at the end of its
  *   static range that maximises the bound and SD_MAX at its static maximum.
+ * - `tColumnCost(params)` (§5.2, the `blocks` and `rule` slice fields): one T column's work, the density column cost
+ *   of `density.defs` with the configured noise weights (`densityColumnCost(source, params)`) plus the rules column
+ *   cost of `surface.rules`; `ruleNodeCount(source)` is the rule and condition count both rule costs use.
+ * The slice column cost (`sliceCostOf`) composes these with the evaluated expression of a field, which needs the
+ * resolvers of `gen/density/source.ts`; that module imports this one (tier 2's costs), so `sliceCostOf` lives in
+ * `gen/inspect/fieldSlice.ts` to keep the import graph acyclic.
  * The weights and factors are module-private (gen exports no numbers); every sum and product saturates at 2^31.
  *
  * Trees are read as JSON values (a source tree, a resolved or a code-built one), never trusted: every walk is iterative
@@ -195,10 +201,17 @@ const DENSITY_COLUMN: Model = {
  * The density column cost of the source `{root, defs}` (§1.7 tier 2 step 5): the root's nodes with mutes applied and
  * refs expanded, each noise at its static maximum weight (128), each node at voxel placement × 98,304 and under
  * `interpolated` × 1,225; value-independent, saturating at 2^31. Tier 2 refuses it above `DENSITY_COLUMN_COST_MAX`.
+ * With `params`, each noise weighs its configured leaf instead (as `workCost`; §5.2's T column work for the `blocks`
+ * and `rule` slice fields).
  */
-export function densityColumnCost(source: unknown): number {
+export function densityColumnCost(source: unknown, params?: Params): number {
   if (!isRec(source)) return 0;
-  return treeCost(Object.hasOwn(source, 'root') ? source['root'] : undefined, Object.hasOwn(source, 'defs') ? source['defs'] : undefined, DENSITY_COLUMN);
+  const model: Model = params === undefined ? DENSITY_COLUMN : {
+    own: (n, op, corner) => (isNoise(op) ? noiseWeight(params, n['id']) : 1) * (corner ? COLUMN_CORNERS : COLUMN_VOXELS),
+    factor: DENSITY_COLUMN.factor,
+    mutes: true,
+  };
+  return treeCost(Object.hasOwn(source, 'root') ? source['root'] : undefined, Object.hasOwn(source, 'defs') ? source['defs'] : undefined, model);
 }
 
 /** The largest value a numeric rule field can take: a literal, or a ref at the top of its static range (`neg`: 0 − lo). */
@@ -245,6 +258,26 @@ interface RulePath {
  * `RULES_COLUMN_COST_MAX`.
  */
 export function rulesColumnCost(source: unknown): number {
+  const { nodes, perNode } = rulesCost(source);
+  return sat(nodes * perNode);
+}
+
+/** The rule and condition objects of the source root rule reached through `rules[]`, `then` and `if` (§5.2 `rule`). */
+export function ruleNodeCount(source: unknown): number {
+  return rulesCost(source).nodes;
+}
+
+/**
+ * One T column's work (§5.2, the `blocks` and `rule` slice fields' per-column cost): the density column cost of
+ * `params.density.defs` with the configured noise weights plus the rules column cost of `params.surface.rules`,
+ * saturating at 2^31.
+ */
+export function tColumnCost(params: Params): number {
+  return sat(densityColumnCost(params.density.defs, params) + rulesColumnCost(params.surface.rules));
+}
+
+/** The node count and the voxels each node is evaluated at per column (the fast-path rule of `rulesColumnCost`). */
+function rulesCost(source: unknown): { readonly nodes: number; readonly perNode: number } {
   let nodes = 0;
   let fast = true;
   let maxBound = -1;
@@ -280,5 +313,5 @@ export function rulesColumnCost(source: unknown): number {
     }
   }
   const perNode = fast ? Math.min(COLUMN_VOXELS, COLUMN_POSITIONS * (1 + Math.max(0, maxBound))) : COLUMN_VOXELS;
-  return sat(nodes * perNode);
+  return { nodes, perNode };
 }

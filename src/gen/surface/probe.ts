@@ -30,14 +30,18 @@ const EMPTY: readonly string[] = Object.freeze([]);
 
 /**
  * Column (cx, cz) of `sc` rebuilt as the T stage builds it (density fill, water v0, the biome buffer) and scanned with
- * `sc.settings`: the SurfaceContext's one-column cache, rebuilt unless it already holds (cx, cz).
+ * `sc.settings`: the SurfaceContext's one-column cache, rebuilt unless it already holds (cx, cz). With `stop`, the
+ * density fill polls it (every 8 corner rows, as the T stage's) and the build returns null when it fires, leaving the
+ * cache empty: a slice's `rule` part on a tree near the column-cost maximum stops within §4.5's 50 ms.
  */
-export function surfaceProbeColumn(sc: SurfaceContext, cx: number, cz: number): SurfaceProbeColumn {
+export function surfaceProbeColumn(sc: SurfaceContext, cx: number, cz: number): SurfaceProbeColumn;
+export function surfaceProbeColumn(sc: SurfaceContext, cx: number, cz: number, stop: () => boolean): SurfaceProbeColumn | null;
+export function surfaceProbeColumn(sc: SurfaceContext, cx: number, cz: number, stop: () => boolean = NEVER): SurfaceProbeColumn | null {
   const c = sc.probeColumn;
   if (c.valid && c.cx === cx && c.cz === cz) return c;
   c.valid = false;
   const s = sc.density.columns.get(cx, cz);
-  FILL(sc.density.bounds, s, c.solid, null, null, NEVER);
+  if (!FILL(sc.density.bounds, s, c.solid, null, null, stop)) return null;
   WATER_V0(s, c.solid, TOP, WATER_TOP, c.water);
   BIOMES(s, sc.ctx, c.biomes);
   SCAN(c.scan, sc.settings, s, c.solid, c.water, c.biomes);

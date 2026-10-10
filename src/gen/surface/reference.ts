@@ -12,6 +12,10 @@
  * Noises sample unscaled world block coordinates (x, z) = (16·cx + lx, 16·cz + lz). The per-node preparation (a
  * biome mask, a gradient's derived seed, a block's state id, a noise, the band table and the band offset noise) is done
  * once at creation. Follows the gen determinism rules.
+ *
+ * For the slice viewer's `rule` field (SP3d spec §4.1): `nodeAt(id)` finds a rule or condition of the tree by its id
+ * (`root`, `.rules[k]`, `.then`, then `.if` for a condition rule's condition and for each `not`'s operand), and
+ * `conditionHolds(id, …)` decides that condition alone at a solid voxel, with the same per-node preparation.
  */
 import type { Seed64 } from '../../core/hash';
 import { REGISTRY, STONE } from '../../world/blocks/index';
@@ -61,9 +65,63 @@ export interface SurfaceRuleResult {
   readonly path: readonly string[];
 }
 
+/** A node of a rule tree found by its id: a rule (`root`, `….rules[k]`, `….then`) or a condition (`….if`, `….if.if`). */
+export type RuleNodeRef =
+  | { readonly kind: 'rule'; readonly rule: Rule }
+  | { readonly kind: 'condition'; readonly condition: Condition };
+
+const RULES_STEP = /^\.rules\[(0|[1-9][0-9]{0,8})\]/;
+
+/**
+ * The rule or condition of `tree` with id `id` (SP3c's ids: `root`, then `.rules[k]` into a sequence's child k and
+ * `.then` into a condition rule's `then`, then `.if` into a condition rule's condition and `.if` again into each
+ * `not`'s operand), or undefined when `id` names no node (a field suffix such as `.min`, an index out of range, a
+ * leading zero, a step the node's kind does not have).
+ */
+export function ruleNodeAt(tree: Rule, id: string): RuleNodeRef | undefined {
+  if (id !== ROOT && !id.startsWith(`${ROOT}.`)) return undefined;
+  let rest = id.slice(ROOT.length);
+  let rule: Rule = tree;
+  for (;;) {
+    if (rest === '') return { kind: 'rule', rule };
+    const m = RULES_STEP.exec(rest);
+    if (m !== null) {
+      if (rule.kind !== 'sequence') return undefined;
+      const k = Number(m[1]);
+      if (k >= rule.rules.length) return undefined;
+      rule = rule.rules[k]!;
+      rest = rest.slice(m[0].length);
+    } else if (rest.startsWith('.then')) {
+      if (rule.kind !== 'condition') return undefined;
+      rule = rule.then;
+      rest = rest.slice(5);
+    } else if (rest.startsWith('.if')) {
+      if (rule.kind !== 'condition') return undefined;
+      let c: Condition = rule.if;
+      rest = rest.slice(3);
+      while (rest !== '') {
+        if (!rest.startsWith('.if') || c.kind !== 'not') return undefined;
+        c = c.if;
+        rest = rest.slice(3);
+      }
+      return { kind: 'condition', condition: c };
+    } else {
+      return undefined;
+    }
+  }
+}
+
 export interface SurfaceReference {
   /** The validated tree. */
   readonly rules: Rule;
+  /** `ruleNodeAt(rules, id)`: the tree's own rule or condition object with id `id`, or undefined. */
+  nodeAt(id: string): RuleNodeRef | undefined;
+  /**
+   * Whether the condition with id `id` (`nodeAt(id)` must be a condition, else a RangeError) holds at the solid voxel
+   * (p, y) of the column last scanned into `scan`, evaluated alone (whether or not the walk reaches it), with the
+   * arguments and RangeErrors of `evaluate`.
+   */
+  conditionHolds(id: string, scan: SurfaceScan, set: SurfaceScanSettings, p: number, y: number): boolean;
   /**
    * The state and rule path at the solid voxel (p, y) of the column last scanned into `scan` (with `set`): p = lz·16 + lx
    * in 0 … 255, y in −63 … 319, both integers. Throws a RangeError outside, or when the voxel is not solid (y −64 is
@@ -84,6 +142,8 @@ interface Voxel {
   x: number;
   z: number;
 }
+
+const NODE_AT = ruleNodeAt;
 
 /**
  * Validates `rules` (`requireValidRules` against `noises`: throws a RuleValidationError listing every issue) and returns
@@ -173,6 +233,12 @@ export function createSurfaceReference(seed: Seed64, rules: unknown, noises: Sur
 
   return {
     rules: tree,
+    nodeAt: (id) => NODE_AT(tree, id),
+    conditionHolds(id, scan, set, p, y) {
+      const found = NODE_AT(tree, id);
+      if (found === undefined || found.kind !== 'condition') throw new RangeError(`surface reference: ${JSON.stringify(id)} names no condition of the tree`);
+      return holds(found.condition, voxel(scan, set, p, y));
+    },
     evaluate(scan, set, p, y) {
       const trail: string[] = [];
       const s = walk(tree, ROOT, voxel(scan, set, p, y), trail);
