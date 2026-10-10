@@ -117,6 +117,15 @@ describe('validateExpr (SP3b spec §1.1)', () => {
     expect(cyc.map((i) => i.message)).toEqual(['ref cycle defs.a → defs.b → defs.a']);
   });
 
+  test('the root\'s refs have their own bucket: a def named "" is not the root (SP3d spec §1.7 step 3)', () => {
+    // The three false REF_CYCLE trees of map-density.md §1, valid and acyclic.
+    expect(issues(doc({ op: 'ref', name: '' }, { '': { op: 'ref', name: 'a' }, a: C(1) }))).toEqual([]);
+    expect(issues(doc({ op: 'add', a: { op: 'ref', name: '' }, b: C(1) }, { '': C(2) }))).toEqual([]);
+    expect(issues(doc({ op: 'ref', name: 'x' }, { x: { op: 'ref', name: '' }, '': C(3) }))).toEqual([]);
+    // A real cycle through the empty name is still one.
+    expect(issues(doc({ op: 'ref', name: '' }, { '': { op: 'neg', x: { op: 'ref', name: '' } } }))).toEqual(['defs..x: REF_CYCLE']);
+  });
+
   test('an interpolated inside another is rejected, also through a ref', () => {
     const inner = { op: 'interpolated', x: Y };
     expect(issues(doc({ op: 'interpolated', x: { op: 'neg', x: inner } }))).toEqual(['root.x.x: NESTED_INTERPOLATED']);

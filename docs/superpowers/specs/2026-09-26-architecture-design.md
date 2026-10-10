@@ -108,6 +108,8 @@ world-imaginer-voxel/          (repository root)
       density/expr.ts nodes.ts compile.ts bounds.ts reference.ts defaults.ts beardifier.ts
                                 (SP3b: + context.ts, the DensityContext of the compiled expression and its caches, and probe.ts;
                                 beardifier.ts arrives with SP9; amended by SP3b)
+                                (SP3d: + source.ts, the source model of the `density.defs` leaf (param refs, recip, tap mutes)
+                                and its tier-2 validation; amended by SP3d)
       caves/carvers.ts carverCache.ts
       fluids/aquifer.ts settle.ts
       inspect/cost.ts           (SP3d) the structural, work and column costs of density and surface-rule trees, one function
@@ -366,6 +368,8 @@ type Expr =                                  // 3D density composition (preset d
 // SP3b implements const, y, col, noise2, noise, add, mul, min, max, neg, abs, square, clamp, slide (x · a piecewise linear s(y)),
 // interpolated, rangeChoice, tap and ref, with the field names of its spec §1.1 (col.field, noise.id, the child of a one-child op
 // is x, slide.knots: [y, v][], ref.name); the other ops arrive with the SPs that need them (amended by SP3b).
+// SP3d adds the source-only op `param` (a numeric `density.*`/`surface.*` leaf or a noise `clampSigma`), the `{param, neg?}` form
+// of every numeric field, `recip` (of a constant) and tap `mute`, resolved to the ops above before compilation (amended by SP3d).
 interface CompiledDensity { cornerFn(ctx, x:number, y:number, z:number): number; voxelFn(ctx, i:number, interp:Float64Array): number;
   boundsCell(ctx, cellX:number, cellY:number, cellZ:number): [number, number]; point(x:number, y:number, z:number, tap?:string): number; }
 // SP3b's compileDensity(expr, noises) emits columnFn, positionFn, cornerFn, voxelFn and tapFn closures over its own typed scratch;
