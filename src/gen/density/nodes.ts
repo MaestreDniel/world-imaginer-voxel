@@ -8,7 +8,11 @@
  *
  * Intervals are written as two doubles `out[k] = lo`, `out[k + 1] = hi` (allocation-free). Endpoint arithmetic is
  * sound because rounding is monotone; interpolation is not, so callers widen what leaves an `interpolated` node and
- * every voxel-level COLUMN read with `ivWiden`. Endpoints are assumed finite.
+ * every voxel-level COLUMN read with `ivWiden`. Poison (SP3d spec §1.9 D): every interval op returns UNKNOWN =
+ * [−∞, +∞] when an input endpoint is not finite (UNKNOWN itself included, and NaN) or a result endpoint is NaN, by an
+ * explicit test (`<` and `>` would silently drop a NaN endpoint), so UNKNOWN propagates to the root and `clamp` and
+ * `rangeChoice` never make it known again. A finite input may still give an infinite result endpoint (an overflow, never
+ * NaN): it holds every value, and the parent is UNKNOWN. With finite intervals every result is exactly SP3b's.
  */
 import type { ColExpr, Expr, ExprOp, InterpolatedExpr, Noise2Expr, NoiseExpr, RefExpr, SlideKnot } from './expr';
 
@@ -116,91 +120,116 @@ export function trilerp(
   return lerp(lerp(e00, e01, tz), lerp(e10, e11, tz), ty);
 }
 
-// ---- Interval rules (SP3b spec §1.2) ----
+// ---- Interval rules (SP3b spec §1.2; poison, SP3d spec §1.9 D) ----
 
-/** [lo, hi] as is: `const` is [v, v], `y` the cell's [y0, y1]. */
+const FINITE = Number.isFinite;
+const IS_NAN = Number.isNaN;
+
+/** UNKNOWN = [−∞, +∞]: a node whose values no finite interval holds (a NaN or ±∞ may occur). */
+export function ivUnknown(out: Float64Array, k: number): void {
+  out[k] = -Infinity;
+  out[k + 1] = Infinity;
+}
+
+/** The result [lo, hi], or UNKNOWN when an endpoint is NaN. */
+function ivResult(lo: number, hi: number, out: Float64Array, k: number): void {
+  if (IS_NAN(lo) || IS_NAN(hi)) { ivUnknown(out, k); return; }
+  out[k] = lo;
+  out[k + 1] = hi;
+}
+
+/** [lo, hi] as is (UNKNOWN unless both are finite): `const` is [v, v], `y` the cell's [y0, y1], tap passes its child. */
 export function ivSet(lo: number, hi: number, out: Float64Array, k: number): void {
+  if (!(FINITE(lo) && FINITE(hi))) { ivUnknown(out, k); return; }
   out[k] = lo;
   out[k + 1] = hi;
 }
 
 /** `noise2` / `noise`: [−clampSigma, clampSigma]. */
 export function ivNoise(clampSigma: number, out: Float64Array, k: number): void {
-  out[k] = -clampSigma;
-  out[k + 1] = clampSigma;
+  ivSet(-clampSigma, clampSigma, out, k);
 }
 
 export function ivAdd(a0: number, a1: number, b0: number, b1: number, out: Float64Array, k: number): void {
-  out[k] = a0 + b0;
-  out[k + 1] = a1 + b1;
+  if (!(FINITE(a0) && FINITE(a1) && FINITE(b0) && FINITE(b1))) { ivUnknown(out, k); return; }
+  ivResult(a0 + b0, a1 + b1, out, k);
 }
 
 /** The min and max of the four endpoint products. */
 export function ivMul(a0: number, a1: number, b0: number, b1: number, out: Float64Array, k: number): void {
+  if (!(FINITE(a0) && FINITE(a1) && FINITE(b0) && FINITE(b1))) { ivUnknown(out, k); return; }
   const p = a0 * b0, q = a0 * b1, r = a1 * b0, s = a1 * b1;
   let lo = p, hi = p;
   if (q < lo) lo = q; if (q > hi) hi = q;
   if (r < lo) lo = r; if (r > hi) hi = r;
   if (s < lo) lo = s; if (s > hi) hi = s;
-  out[k] = lo;
-  out[k + 1] = hi;
+  ivResult(lo, hi, out, k);
 }
 
 export function ivMin(a0: number, a1: number, b0: number, b1: number, out: Float64Array, k: number): void {
-  out[k] = b0 < a0 ? b0 : a0;
-  out[k + 1] = b1 < a1 ? b1 : a1;
+  if (!(FINITE(a0) && FINITE(a1) && FINITE(b0) && FINITE(b1))) { ivUnknown(out, k); return; }
+  ivResult(b0 < a0 ? b0 : a0, b1 < a1 ? b1 : a1, out, k);
 }
 
 export function ivMax(a0: number, a1: number, b0: number, b1: number, out: Float64Array, k: number): void {
-  out[k] = b0 > a0 ? b0 : a0;
-  out[k + 1] = b1 > a1 ? b1 : a1;
+  if (!(FINITE(a0) && FINITE(a1) && FINITE(b0) && FINITE(b1))) { ivUnknown(out, k); return; }
+  ivResult(b0 > a0 ? b0 : a0, b1 > a1 ? b1 : a1, out, k);
 }
 
 export function ivNeg(x0: number, x1: number, out: Float64Array, k: number): void {
-  out[k] = -x1;
-  out[k + 1] = -x0;
+  if (!(FINITE(x0) && FINITE(x1))) { ivUnknown(out, k); return; }
+  ivResult(-x1, -x0, out, k);
 }
 
 /** The exact image of |x|. */
 export function ivAbs(x0: number, x1: number, out: Float64Array, k: number): void {
-  if (x0 >= 0) { out[k] = x0; out[k + 1] = x1; }
-  else if (x1 <= 0) { out[k] = -x1; out[k + 1] = -x0; }
-  else { out[k] = 0; out[k + 1] = -x0 > x1 ? -x0 : x1; }
+  if (!(FINITE(x0) && FINITE(x1))) { ivUnknown(out, k); return; }
+  if (x0 >= 0) ivResult(x0, x1, out, k);
+  else if (x1 <= 0) ivResult(-x1, -x0, out, k);
+  else ivResult(0, -x0 > x1 ? -x0 : x1, out, k);
 }
 
 /** The exact image of x · x. */
 export function ivSquare(x0: number, x1: number, out: Float64Array, k: number): void {
+  if (!(FINITE(x0) && FINITE(x1))) { ivUnknown(out, k); return; }
   const a = x0 * x0, b = x1 * x1;
-  if (x0 >= 0) { out[k] = a; out[k + 1] = b; }
-  else if (x1 <= 0) { out[k] = b; out[k + 1] = a; }
-  else { out[k] = 0; out[k + 1] = a > b ? a : b; }
+  if (x0 >= 0) ivResult(a, b, out, k);
+  else if (x1 <= 0) ivResult(b, a, out, k);
+  else ivResult(0, a > b ? a : b, out, k);
 }
 
-/** The exact image of clamp (monotone). */
+/** The exact image of clamp (monotone); UNKNOWN in, UNKNOWN out (clamp of a NaN is NaN). */
 export function ivClamp(x0: number, x1: number, lo: number, hi: number, out: Float64Array, k: number): void {
-  out[k] = valClamp(x0, lo, hi);
-  out[k + 1] = valClamp(x1, lo, hi);
+  if (!(FINITE(x0) && FINITE(x1) && FINITE(lo) && FINITE(hi))) { ivUnknown(out, k); return; }
+  ivResult(valClamp(x0, lo, hi), valClamp(x1, lo, hi), out, k);
 }
 
 /**
  * The range of s over [y0, y1]: s(y0), s(y1) and, at each interior knot y_k ∈ (y0, y1], both v_k and the left
- * segment's formula at y_k (which can differ from v_k by an ulp). s is monotone between knots, so this is sound.
+ * segment's formula at y_k (which can differ from v_k by an ulp). s is monotone between knots, so this is sound. UNKNOWN
+ * when any of these values is not finite: a segment whose difference or slope overflows makes s NaN at its lower knot
+ * (0 · ∞), which these points need not include.
  */
 export function ivSlideFactor(knots: readonly SlideKnot[], y0: number, y1: number, out: Float64Array, k: number): void {
   let lo = slideAt(knots, y0), hi = lo;
+  let finite = FINITE(lo);
   const e = slideAt(knots, y1);
+  finite = finite && FINITE(e);
   if (e < lo) lo = e; if (e > hi) hi = e;
   for (let i = 0; i < knots.length; i++) {
     const [yk, vk] = knots[i]!;
     if (yk <= y0) continue;
     if (yk > y1) break;
+    finite = finite && FINITE(vk);
     if (vk < lo) lo = vk; if (vk > hi) hi = vk;
     if (i > 0) {
       const [ya, va] = knots[i - 1]!;
       const left = va + (yk - ya) * ((vk - va) / (yk - ya));
+      finite = finite && FINITE(left);
       if (left < lo) lo = left; if (left > hi) hi = left;
     }
   }
+  if (!finite) { ivUnknown(out, k); return; }
   out[k] = lo;
   out[k + 1] = hi;
 }
@@ -220,15 +249,32 @@ export function rangeChoiceCase(x0: number, x1: number, lo: number, hi: number):
 
 /** The hull of two intervals (rangeChoice when both branches are reachable). */
 export function ivHull(a0: number, a1: number, b0: number, b1: number, out: Float64Array, k: number): void {
-  out[k] = b0 < a0 ? b0 : a0;
-  out[k + 1] = b1 > a1 ? b1 : a1;
+  if (!(FINITE(a0) && FINITE(a1) && FINITE(b0) && FINITE(b1))) { ivUnknown(out, k); return; }
+  ivResult(b0 < a0 ? b0 : a0, b1 > a1 ? b1 : a1, out, k);
+}
+
+/**
+ * rangeChoice(x, lo, hi, inside, outside): the branch x's interval decides, else the hull of both. UNKNOWN when any of
+ * x, inside and outside is (an op with an UNKNOWN input is UNKNOWN, whichever branch is taken).
+ */
+export function ivRangeChoice(
+  x0: number, x1: number, lo: number, hi: number, i0: number, i1: number, o0: number, o1: number, out: Float64Array, k: number,
+): void {
+  if (!(FINITE(x0) && FINITE(x1) && FINITE(lo) && FINITE(hi) && FINITE(i0) && FINITE(i1) && FINITE(o0) && FINITE(o1))) {
+    ivUnknown(out, k);
+    return;
+  }
+  const which = rangeChoiceCase(x0, x1, lo, hi);
+  if (which === 'inside') ivResult(i0, i1, out, k);
+  else if (which === 'outside') ivResult(o0, o1, out, k);
+  else ivHull(i0, i1, o0, o1, out, k);
 }
 
 /** Widening: both ends move out by w = 1e-9 · (1 + max(|lo|, |hi|)). */
 export function ivWiden(lo: number, hi: number, out: Float64Array, k: number): void {
+  if (!(FINITE(lo) && FINITE(hi))) { ivUnknown(out, k); return; }
   const w = 1e-9 * (1 + Math.max(Math.abs(lo), Math.abs(hi)));
-  out[k] = lo - w;
-  out[k + 1] = hi + w;
+  ivResult(lo - w, hi + w, out, k);
 }
 
 // ---- Class rule (SP3b spec §2.1) ----

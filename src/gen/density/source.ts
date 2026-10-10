@@ -16,9 +16,10 @@
  * lookup. Every lookup keyed by tree content is a `Map`, a `Set` or `Object.hasOwn` (`constructor`, `toString`, … are
  * valid names). Its whole-tree bounds (node and def counts; per tree root, reachable or not, the expanded depth and the
  * structural cost; the column cost) bound everything that recurses through refs (the compiler, the reference,
- * `exprHash`, the bounds) and a column's work; every walk of this module is iterative.
+ * `exprHash`, the bounds) and a column's work; its static magnitude analysis (§1.9 S, `VALUE_RANGE`) keeps every value
+ * of a valid tree within ±1e100, so no NaN or ±∞ can occur; every walk of this module is iterative.
  */
-import { DENSITY_COLUMN_COST_MAX } from '../../core/constants';
+import { COL_FIELD_BOUNDS, DENSITY_COLUMN_COST_MAX } from '../../core/constants';
 import { NOISE_FIELD_RANGES, SCHEMA } from '../../core/params/schema';
 import type { SampleField } from '../column/columnStage';
 import { densityColumnCost, structuralCost } from '../inspect/cost';
@@ -26,6 +27,9 @@ import {
   EXPR_CHILD_KEYS, EXPR_OPS, nestedInterpolatedIssues, validateExpr, type DensityNoiseInfo, type ExprIssue, type ExprOp,
   type RefTarget,
 } from './expr';
+import {
+  cornerY, ivAbs, ivAdd, ivClamp, ivHull, ivMax, ivMin, ivMul, ivNeg, ivSet, ivSquare, ivUnknown, ivWiden, rangeChoiceCase,
+} from './nodes';
 
 const SCHEMA_ = SCHEMA;
 const NOISE_RANGES = NOISE_FIELD_RANGES;
@@ -36,6 +40,21 @@ const NESTING = nestedInterpolatedIssues;
 const STRUCTURAL_COST = structuralCost;
 const COLUMN_COST = densityColumnCost;
 const COLUMN_COST_MAX = DENSITY_COLUMN_COST_MAX;
+const FIELD_BOUNDS = COL_FIELD_BOUNDS;
+const CORNER_Y = cornerY;
+const IV_ABS = ivAbs;
+const IV_ADD = ivAdd;
+const IV_CLAMP = ivClamp;
+const IV_HULL = ivHull;
+const IV_MAX = ivMax;
+const IV_MIN = ivMin;
+const IV_MUL = ivMul;
+const IV_NEG = ivNeg;
+const IV_SET = ivSet;
+const IV_SQUARE = ivSquare;
+const IV_UNKNOWN = ivUnknown;
+const IV_WIDEN = ivWiden;
+const RANGE_CASE = rangeChoiceCase;
 
 /** A numeric field of a source node: a literal, or a parameter ref (`neg`: the value is 0 − v, never −0). */
 export interface ParamRef { readonly param: string; readonly neg?: true }
@@ -138,6 +157,8 @@ const MAX_DEFS = 64;
 /** §1.7 step 4, per tree root: the depth counting through refs, and the structural cost (gen/inspect/cost.ts). */
 const MAX_EXPANDED_DEPTH = 128;
 const MAX_STRUCTURAL_COST = 65536;
+/** §1.9 S: every node's static interval stays within ±1e100 (`VALUE_RANGE`). */
+const VALUE_LIMIT = 1e100;
 
 /** Child slots by source op (a Map: an op is tree content). */
 const CHILD_SLOTS: ReadonlyMap<string, readonly string[]> = new Map(Object.entries(SOURCE_CHILD_KEYS));
@@ -174,20 +195,16 @@ function ownNodes(start: unknown, startPath: string, defs: Rec | null): OwnNode[
 interface TreeRoot { readonly path: string; readonly node: unknown; readonly def: string | null; readonly nodes: readonly OwnNode[] }
 
 /**
- * The expanded height of every def (the depth of its deepest node counting through refs, a `ref` being one level above
- * its def's root), in topological order of the def graph (an iterative post-order, no recursion through refs). Called
- * on an acyclic graph; a def met again while open (impossible then) adds nothing.
+ * The defs in topological order of the def graph (each after every def it refers to): an iterative post-order from
+ * each def in key order, no recursion through refs. Called on an acyclic graph; a def met again while open (impossible
+ * then) is skipped.
  */
-function defHeights(trees: ReadonlyMap<string, TreeRoot>): Map<string, number> {
-  const height = new Map<string, number>();
+function defOrder(trees: ReadonlyMap<string, TreeRoot>): string[] {
+  const order: string[] = [];
+  const done = new Set<string>();
   const open = new Set<string>();
-  const heightOf = (t: TreeRoot): number => {
-    let h = 0;
-    for (const n of t.nodes) h = Math.max(h, n.depth + (n.ref === null ? 0 : height.get(n.ref) ?? 0));
-    return h;
-  };
   for (const start of trees.keys()) {
-    if (height.has(start)) continue;
+    if (done.has(start)) continue;
     const stack: Array<{ readonly name: string; i: number }> = [{ name: start, i: 0 }];
     open.add(start);
     while (stack.length > 0) {
@@ -195,7 +212,7 @@ function defHeights(trees: ReadonlyMap<string, TreeRoot>): Map<string, number> {
       const t = trees.get(f.name)!;
       if (f.i < t.nodes.length) {
         const target = t.nodes[f.i++]!.ref;
-        if (target !== null && !height.has(target) && !open.has(target)) {
+        if (target !== null && !done.has(target) && !open.has(target)) {
           open.add(target);
           stack.push({ name: target, i: 0 });
         }
@@ -203,10 +220,197 @@ function defHeights(trees: ReadonlyMap<string, TreeRoot>): Map<string, number> {
       }
       stack.pop();
       open.delete(f.name);
-      height.set(f.name, heightOf(t));
+      done.add(f.name);
+      order.push(f.name);
     }
   }
+  return order;
+}
+
+/**
+ * The expanded height of every def (the depth of its deepest node counting through refs, a `ref` being one level above
+ * its def's root), in topological order of the def graph.
+ */
+function defHeights(trees: ReadonlyMap<string, TreeRoot>, order: readonly string[]): Map<string, number> {
+  const height = new Map<string, number>();
+  for (const name of order) {
+    let h = 0;
+    for (const n of trees.get(name)!.nodes) h = Math.max(h, n.depth + (n.ref === null ? 0 : height.get(n.ref) ?? 0));
+    height.set(name, h);
+  }
   return height;
+}
+
+// ---- The static magnitude analysis (§1.9 S) ----
+
+/** A static interval [lo, hi]. */
+type Iv = readonly [lo: number, hi: number];
+const UNKNOWN_IV: Iv = Object.freeze([-Infinity, Infinity] as const);
+/** `y` over every voxel and corner: [cornerY(0), cornerY(48)] = [−64, 320]. */
+const Y_IV: Iv = Object.freeze([CORNER_Y(0), CORNER_Y(48)] as const);
+/** `noise` and `noise2` at clampSigma's static maximum: [−8, 8]. */
+const NOISE_IV: Iv = Object.freeze([-NOISE_RANGES.clampSigma.max, NOISE_RANGES.clampSigma.max] as const);
+/** `col` fields (a Map: a field name is tree content). */
+const FIELD_IV: ReadonlyMap<string, Iv> = new Map(Object.entries(FIELD_BOUNDS));
+const SCRATCH = new Float64Array(2);
+const scratch = (): Iv => [SCRATCH[0]!, SCRATCH[1]!];
+
+/** A numeric scalar field's static range: a literal [v, v], a ref its target's range (negated: [0 − hi, 0 − lo]). */
+function fieldIv(v: unknown): Iv {
+  if (typeof v === 'number') return [v, v];
+  if (!isRec(v) || typeof v['param'] !== 'string') return UNKNOWN_IV;
+  const t = ALLOWED_REF_TARGETS.get(v['param']);
+  if (t === undefined) return UNKNOWN_IV;
+  return Object.hasOwn(v, 'neg') ? [0 - t.hi, 0 - t.lo] : [t.lo, t.hi];
+}
+
+/**
+ * One node's static interval from its children's (`kid(key)`), with the interval functions of nodes.ts (an UNKNOWN
+ * input gives UNKNOWN). `ref` takes its def's interval; a muted tap the hull of its mute's range and its child's;
+ * `clamp` and `rangeChoice` bounds and slide knots their ranges; `slide` multiplies x by the hull of every knot value
+ * range, widened (s(y) lies between two consecutive knot values up to rounding); `interpolated` widens its child.
+ */
+function nodeIv(node: Rec, kid: (key: string) => Iv, defIv: ReadonlyMap<string, Iv>): Iv {
+  const op = node['op'];
+  switch (op) {
+    case 'const': IV_SET(node['v'] as number, node['v'] as number, SCRATCH, 0); return scratch();
+    case 'y': return Y_IV;
+    case 'noise': case 'noise2': return NOISE_IV;
+    case 'col': return (typeof node['field'] === 'string' ? FIELD_IV.get(node['field']) : undefined) ?? UNKNOWN_IV;
+    case 'param': {
+      const t = typeof node['path'] === 'string' ? ALLOWED_REF_TARGETS.get(node['path']) : undefined;
+      return t === undefined ? UNKNOWN_IV : [t.lo, t.hi];
+    }
+    case 'recip': {
+      // 1 / x is decreasing on each side of 0, and division rounds monotonically.
+      const [x0, x1] = kid('x');
+      if (!(Number.isFinite(x0) && Number.isFinite(x1)) || (x0 <= 0 && x1 >= 0)) return UNKNOWN_IV;
+      IV_SET(1 / x1, 1 / x0, SCRATCH, 0);
+      return scratch();
+    }
+    case 'add': case 'mul': case 'min': case 'max': {
+      const [a0, a1] = kid('a'), [b0, b1] = kid('b');
+      (op === 'add' ? IV_ADD : op === 'mul' ? IV_MUL : op === 'min' ? IV_MIN : IV_MAX)(a0, a1, b0, b1, SCRATCH, 0);
+      return scratch();
+    }
+    case 'neg': case 'abs': case 'square': {
+      const [x0, x1] = kid('x');
+      (op === 'neg' ? IV_NEG : op === 'abs' ? IV_ABS : IV_SQUARE)(x0, x1, SCRATCH, 0);
+      return scratch();
+    }
+    case 'clamp': {
+      // clamp is nondecreasing in x, lo and hi while lo ≤ hi (CLAMP_ORDER holds over the ranges).
+      const [x0, x1] = kid('x'), [l0, l1] = fieldIv(node['lo']), [h0, h1] = fieldIv(node['hi']);
+      IV_CLAMP(x0, x1, l0, h0, SCRATCH, 0);
+      const lo = SCRATCH[0]!, hi0 = SCRATCH[1]!;
+      IV_CLAMP(x0, x1, l1, h1, SCRATCH, 0);
+      IV_HULL(lo, hi0, SCRATCH[0]!, SCRATCH[1]!, SCRATCH, 0);
+      return scratch();
+    }
+    case 'slide': {
+      const knots = node['knots'];
+      if (!Array.isArray(knots) || knots.length === 0) return UNKNOWN_IV;
+      const knotV = (kn: unknown): Iv => (Array.isArray(kn) ? fieldIv(kn[1]) : UNKNOWN_IV);
+      let [f0, f1] = knotV(knots[0]);
+      for (let i = 1; i < knots.length; i++) {
+        const [v0, v1] = knotV(knots[i]);
+        IV_HULL(f0, f1, v0, v1, SCRATCH, 0);
+        f0 = SCRATCH[0]!;
+        f1 = SCRATCH[1]!;
+      }
+      IV_WIDEN(f0, f1, SCRATCH, 0);
+      const [x0, x1] = kid('x');
+      IV_MUL(x0, x1, SCRATCH[0]!, SCRATCH[1]!, SCRATCH, 0);
+      return scratch();
+    }
+    case 'interpolated': { const [x0, x1] = kid('x'); IV_WIDEN(x0, x1, SCRATCH, 0); return scratch(); }
+    case 'rangeChoice': {
+      // inside for every (lo, hi) when x ⊆ [max lo, min hi); outside when x < min lo or x ≥ max hi.
+      const [x0, x1] = kid('x'), [l0, l1] = fieldIv(node['lo']), [h0, h1] = fieldIv(node['hi']);
+      const [i0, i1] = kid('inside'), [o0, o1] = kid('outside');
+      if (!(Number.isFinite(x0) && Number.isFinite(x1))) return UNKNOWN_IV;
+      if (RANGE_CASE(x0, x1, l1, h0) === 'inside') IV_SET(i0, i1, SCRATCH, 0);
+      else if (RANGE_CASE(x0, x1, l0, h1) === 'outside') IV_SET(o0, o1, SCRATCH, 0);
+      else IV_HULL(i0, i1, o0, o1, SCRATCH, 0);
+      return scratch();
+    }
+    case 'tap': {
+      const [x0, x1] = kid('x');
+      if (!Object.hasOwn(node, 'mute')) { IV_SET(x0, x1, SCRATCH, 0); return scratch(); }
+      const [m0, m1] = fieldIv(node['mute']);
+      IV_HULL(m0, m1, x0, x1, SCRATCH, 0);
+      return scratch();
+    }
+    case 'ref': return (typeof node['name'] === 'string' ? defIv.get(node['name']) : undefined) ?? UNKNOWN_IV;
+    default: IV_UNKNOWN(SCRATCH, 0); return scratch();
+  }
+}
+
+/** A node whose static interval leaves ±1e100, with that interval. */
+interface ValueRangeHit { readonly path: string; readonly iv: Iv }
+
+/**
+ * The static intervals of one tree root's nodes, children before parents (an iterative post-order of its own structure;
+ * a ref takes its def's interval from `defIv`): the root's interval and the first node, in that post-order, whose
+ * interval leaves ±1e100.
+ */
+function treeIv(start: unknown, startPath: string, defIv: ReadonlyMap<string, Iv>): { readonly iv: Iv; readonly hit: ValueRangeHit | null } {
+  const ivs = new Map<object, Iv>();
+  /** Nodes whose children are being computed: met again (an in-memory cycle) it is UNKNOWN, never re-entered. */
+  const open = new Set<object>();
+  let hit: ValueRangeHit | null = null;
+  const stack: Array<{ readonly node: unknown; readonly path: string; open: boolean }> = [{ node: start, path: startPath, open: false }];
+  while (stack.length > 0) {
+    const f = stack[stack.length - 1]!;
+    if (!isRec(f.node) || ivs.has(f.node) || (!f.open && open.has(f.node))) { stack.pop(); continue; }
+    const node = f.node;
+    const op = Object.hasOwn(node, 'op') ? node['op'] : undefined;
+    const kids = typeof op === 'string' ? CHILD_SLOTS.get(op) ?? [] : [];
+    if (!f.open) {
+      f.open = true;
+      open.add(node);
+      for (let k = kids.length - 1; k >= 0; k--) {
+        const key = kids[k]!;
+        stack.push({ node: Object.hasOwn(node, key) ? node[key] : undefined, path: `${f.path}.${key}`, open: false });
+      }
+      continue;
+    }
+    stack.pop();
+    open.delete(node);
+    const kid = (key: string): Iv => {
+      const c = Object.hasOwn(node, key) ? node[key] : undefined;
+      return (isRec(c) ? ivs.get(c) : undefined) ?? UNKNOWN_IV;
+    };
+    const iv = nodeIv(node, kid, defIv);
+    ivs.set(node, iv);
+    if (hit === null && !(iv[0] >= -VALUE_LIMIT && iv[1] <= VALUE_LIMIT)) hit = { path: f.path, iv };
+  }
+  return { iv: (isRec(start) ? ivs.get(start) : undefined) ?? UNKNOWN_IV, hit };
+}
+
+/**
+ * §1.9 S on an acyclic, otherwise valid source: every node of `root` and of every def (reachable or not) gets a static
+ * interval, defs once each in topological order (the per-def memo), from y ∈ [−64, 320], noises ∈ [−8, 8], `col` fields
+ * at `COL_FIELD_BOUNDS`, consts exact, params and ref-valued fields at their static ranges, `recip` 1 / its operand's
+ * range, a muted tap the hull of its mute and its child. `VALUE_RANGE` at the first node, over `root` then each def in
+ * key order, each in post-order (so the node named is the one whose own op leaves ±1e100, or a ref whose def does).
+ */
+function valueRangeIssue(source: Rec, roots: readonly TreeRoot[], byDef: ReadonlyMap<string, TreeRoot>, order: readonly string[]): ExprIssue | null {
+  const defIv = new Map<string, Iv>();
+  const hits = new Map<string, ValueRangeHit>();
+  for (const name of order) {
+    const r = treeIv(byDef.get(name)!.node, `defs.${name}`, defIv);
+    defIv.set(name, r.iv);
+    if (r.hit !== null) hits.set(name, r.hit);
+  }
+  const rootHit = Object.hasOwn(source, 'root') ? treeIv(source['root'], 'root', defIv).hit : null;
+  let hit = rootHit;
+  for (const t of roots) if (hit === null && t.def !== null) hit = hits.get(t.def) ?? null;
+  if (hit === null) return null;
+  return {
+    path: hit.path, code: 'VALUE_RANGE',
+    message: `${hit.path} may take values in [${String(hit.iv[0])}, ${String(hit.iv[1])}], outside ±1e100 (literals, parameters, noises, y and col fields at their static ranges)`,
+  };
 }
 
 /**
@@ -241,7 +445,8 @@ function checkSource(source: unknown): ExprIssue[] {
   // Step 4: every tree root, reachable or not, mutes ignored.
   const byDef = new Map<string, TreeRoot>();
   for (const t of roots) if (t.def !== null) byDef.set(t.def, t);
-  const heights = defHeights(byDef);
+  const order = defOrder(byDef);
+  const heights = defHeights(byDef, order);
   for (const t of roots) {
     let deepest: OwnNode | null = null;
     let depth = 0;
@@ -259,8 +464,10 @@ function checkSource(source: unknown): ExprIssue[] {
   }
   if (issues.length > 0) return issues;
 
-  // Step 5: the checks that walk through refs (VALUE_RANGE joins them in the next task), then the column cost.
+  // Step 5: the checks that walk through refs, the static magnitude analysis, then the column cost.
   issues.push(...NESTING(source));
+  const range = valueRangeIssue(source, roots, byDef, order);
+  if (range !== null) issues.push(range);
   const column = COLUMN_COST(source);
   if (column > COLUMN_COST_MAX) {
     issues.push({ path: '', code: 'COLUMN_COST', message: `column cost ${column} (at most ${COLUMN_COST_MAX}, 64 × the default tree's)` });
@@ -272,13 +479,14 @@ const MEMO = new WeakMap<object, readonly ExprIssue[]>();
 let validations = 0;
 
 /**
- * Tier 2 for a density source tree (§1.7 steps 1-5; `VALUE_RANGE` comes with the static magnitude analysis): the counts
+ * Tier 2 for a density source tree (§1.7 steps 1-5): the counts
  * (`TOO_MANY_NODES` at the value '', `TOO_MANY_DEFS` at `defs`), `validateExpr`'s source mode over the schema's density
  * noises and `ALLOWED_REF_TARGETS` with the iterative def graph (`UNKNOWN_REF`, `REF_CYCLE`), then — when the counts hold
  * and the graph is acyclic — for `root` and every def, reachable or not, mutes ignored: the expanded depth
  * (`EXPANDED_TOO_DEEP` at the deepest node of that root's own structure, a ref standing for its def's expansion) and the
- * structural cost (`TOO_COSTLY` at the root's path), and only when nothing else is wrong `NESTED_INTERPOLATED` and the
- * column cost (`COLUMN_COST` at ''). Never throws; at most 50 issues, then
+ * structural cost (`TOO_COSTLY` at the root's path), and only when nothing else is wrong `NESTED_INTERPOLATED`, the
+ * static magnitude analysis (`VALUE_RANGE` at the first node whose static interval leaves ±1e100, §1.9) and the column
+ * cost (`COLUMN_COST` at ''). Never throws; at most 50 issues, then
  * `{path: '', code: 'TOO_MANY_ISSUES', message: '<N> more'}`. The result (frozen, as are its issues) is memoised by
  * identity when `source` is a frozen object: validity is a pure function of the tree, so a frozen tree is validated once.
  */

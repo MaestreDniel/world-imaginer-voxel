@@ -1,7 +1,9 @@
 import { describe, expect, expectTypeOf, test } from 'vitest';
+import { COL_FIELD_BOUNDS } from '../../src/core/constants';
 import { DEFAULT_DENSITY_TREE } from '../../src/core/params/defaultTrees';
 import { checkJson, type TreeIssueCode } from '../../src/core/params/json';
 import type { Issue } from '../../src/core/params/kit';
+import { SAMPLE_FIELDS } from '../../src/gen/column/columnStage';
 import { EXPR_CHILD_KEYS, EXPR_OPS, validateExpr, type DensitySourceCode, type ExprErrorCode, type ExprIssue } from '../../src/gen/density/expr';
 import {
   ALLOWED_REF_TARGETS, densitySourceValidations, SOURCE_CHILD_KEYS, SOURCE_OPS, validateDensitySource,
@@ -384,5 +386,128 @@ describe('validateDensitySource: whole-tree bounds (SP3d spec §1.7 steps 2-5)',
     expect(islands.root['b']!['name']).toBe('islands');
     (islands.root['b']!['x'] as Record<string, unknown>)['v'] = -10;
     for (const t of [DEFAULT_DENSITY_TREE, muted, islands]) expect(validateDensitySource(t)).toEqual([]);
+  });
+});
+
+describe('validateDensitySource: the static magnitude analysis (SP3d spec §1.9 S, VALUE_RANGE)', () => {
+  const mul = (a: unknown, b: unknown): unknown => ({ op: 'mul', a, b });
+  const ref = (name: string): unknown => ({ op: 'ref', name });
+  /** x × k1 × k2 × …, innermost first: the outermost `mul` multiplies by the last factor. */
+  const times = (x: unknown, ks: readonly number[]): unknown => ks.reduce((acc: unknown, k) => mul(acc, C(k)), x);
+  /** k factors of 1e9: × 1e9^k. */
+  const e9 = (k: number): number[] => Array.from({ length: k }, () => 1e9);
+  /** The path of the node j levels under `p` along the `a` slots. */
+  const down = (p: string, j: number): string => p + '.a'.repeat(j);
+  const vr = (value: unknown): string[] => validateDensitySource(value).filter((i) => i.code === 'VALUE_RANGE').map((i) => i.path);
+  /**
+   * x × f × 1e9^n passes with f = `ok` and is refused with f = `bad`, at the outermost mul (under add(·, 0), so the path
+   * `root.a` also shows that the node named is the first in post-order, not the root).
+   */
+  const edge = (x: unknown, ok: number, bad: number, n = 11): void => {
+    expect(issues(doc({ op: 'add', a: times(x, [ok, ...e9(n)]), b: C(0) }))).toEqual([]);
+    expect(issues(doc({ op: 'add', a: times(x, [bad, ...e9(n)]), b: C(0) }))).toEqual(['root.a: VALUE_RANGE']);
+  };
+
+  test('literals: a 1e9 product chain is refused at the first node past ±1e100, in post-order (children first)', () => {
+    // 1e9 × 1e9^10 = 1e99 passes; × 1e9^11 = 1e108 is refused at the 11th mul (the root, then one level down).
+    expect(issues(doc(times(C(1e9), e9(10))))).toEqual([]);
+    expect(issues(doc(times(C(1e9), e9(11))))).toEqual(['root: VALUE_RANGE']);
+    expect(issues(doc(times(C(1e9), e9(12))))).toEqual([`${down('root', 1)}: VALUE_RANGE`]);
+    // Past the largest double the endpoints are ±∞ and every parent UNKNOWN: still one issue, at the first node.
+    expect(issues(doc(times(C(1e9), e9(40))))).toEqual([`${down('root', 29)}: VALUE_RANGE`]);
+    const [i] = validateDensitySource(doc({ op: 'add', a: times(C(-1e9), e9(11)), b: C(0) }));
+    expect(i!.path).toBe('root.a');
+    expect(i!.message).toMatch(/^root\.a may take values in \[-1(\.\d+)?e\+108, -1(\.\d+)?e\+108\], outside ±1e100 /);
+  });
+
+  test('y ∈ [−64, 320], noise and noise2 ∈ [−8, 8] (clampSigma\'s static maximum), whatever the configured clampSigma', () => {
+    edge(Y, 0.0312, 0.0313); // 320 × 0.0312 × 1e99 = 9.984e99; × 0.0313: 1.0016e100
+    edge({ op: 'noise', id: 'detail' }, 1.24, 1.26); // 8 × 1.24 × 1e99 = 9.92e99; × 1.26: 1.008e100
+    edge({ op: 'noise2', id: 'jag' }, 1.24, 1.26);
+    edge({ op: 'neg', x: Y }, 0.0312, 0.0313);
+  });
+
+  test('every col field reads its COL_FIELD_BOUNDS entry (islandMask [0, 0] never leaves)', () => {
+    for (const f of SAMPLE_FIELDS) {
+      const [lo, hi] = COL_FIELD_BOUNDS[f];
+      const m = Math.max(Math.abs(lo), Math.abs(hi));
+      const x = { op: 'col', field: f };
+      if (m === 0) {
+        expect(issues(doc(times(x, [...e9(40)])))).toEqual([]);
+        continue;
+      }
+      // m × (9.9 / m) × 1e99 ≈ 9.9e99 passes; m × (10.1 / m) × 1e99 ≈ 1.01e100 is refused.
+      edge(x, 9.9 / m, 10.1 / m);
+    }
+    expect(COL_FIELD_BOUNDS.offset).toEqual([-600000, 600000]);
+  });
+
+  test('params, ref-valued fields and recip at their static ranges; a negated ref spans [0 − max, 0 − min]', () => {
+    edge(P(HI), 1.24, 1.26); // detailAmpHi [0, 8]
+    // recip of clampSigma [1, 8] is [0.125, 1]; recip(const 0.5) is [2, 2].
+    edge({ op: 'recip', x: P(CS) }, 9.9, 10.1);
+    edge({ op: 'recip', x: C(0.5) }, 4.9, 5.1);
+    // clamp(col offset, −1, ref detailAmpHi): [−1, 8].
+    edge({ op: 'clamp', x: { op: 'col', field: 'offset' }, lo: -1, hi: R(HI) }, 1.24, 1.26);
+    // clamp's lower end with a negated ref: lo ∈ [−8, 0], x ≤ −6e5 → [−8, 0].
+    edge({ op: 'clamp', x: C(-1e6), lo: R(HI, true), hi: 5 }, 1.24, 1.26);
+    // A negated ref in a mute: detailAmpHi negated is [−8, 0], so max(·, 0) is [0, 0] whatever follows.
+    const negMuted = { op: 'max', a: { op: 'tap', name: 't', x: C(0), mute: R(HI, true) }, b: C(0) };
+    expect(issues(doc(times(negMuted, e9(40))))).toEqual([]);
+    const posMuted = { op: 'max', a: { op: 'tap', name: 't', x: C(0), mute: R(HI) }, b: C(0) };
+    expect(vr(doc(times(posMuted, e9(40))))).toHaveLength(1);
+    // slide multiplies x by the hull of its knot values (here [0, 8] from a ref), widened.
+    edge({ op: 'slide', x: C(1), knots: [[0, 0], [10, R(HI)]] }, 1.24, 1.26);
+  });
+
+  test('a muted tap is the hull of its mute and its child: bounded as the tree evaluates it and as the inspector does', () => {
+    const tap = (mute?: unknown): unknown => (mute === undefined ? { op: 'tap', name: 't', x: C(1) } : { op: 'tap', name: 't', x: C(1), mute });
+    edge(tap(1e9), 9.9, 10.1, 10); // 1e9 × 10.1 × 1e90 = 1.01e100
+    expect(issues(doc(times(tap(), [10.1, ...e9(10)])))).toEqual([]);
+    // The muted subtree itself is analysed: a chain under a mute is refused inside it.
+    expect(issues(doc({ op: 'tap', name: 't', mute: 0, x: times(C(1e9), e9(11)) }))).toEqual(['root.x: VALUE_RANGE']);
+  });
+
+  test('rangeChoice takes the branch x decides over every value of its bounds, else the hull of both', () => {
+    const big = C(1e9);
+    const rc = (x: unknown, lo: unknown): unknown => ({ op: 'rangeChoice', x, lo, hi: 400, inside: big, outside: C(1) });
+    // x = −100 < min lo (cliffMinY ≥ −64): always outside, [1, 1] (× 9.9e99 passes).
+    expect(issues(doc(times(rc(C(-100), R(CLIFF_Y)), [9.9, ...e9(11)])))).toEqual([]);
+    // x = −50 may be inside for lo = −64: the hull [1, 1e9].
+    expect(vr(doc(times(rc(C(-50), R(CLIFF_Y)), [9.9, ...e9(11)])))).toEqual(['root']);
+    // x ∈ [−64, 320] ⊆ [−100, 400): always inside, [1e9, 1e9].
+    expect(vr(doc(times(rc(Y, -100), [9.9, ...e9(10)])))).toEqual([]);
+    expect(vr(doc(times(rc(Y, -100), [10.1, ...e9(10)])))).toEqual(['root']);
+  });
+
+  test('root first, then each def in key order (reachable or not); a ref takes its def\'s interval (once per def)', () => {
+    const chain = times(C(1e9), e9(11)); // refused at its own top
+    const ok = times(C(1e9), e9(10)); // 1e99
+    expect(issues(doc(Y, { a: C(1), b: chain, c: chain }))).toEqual(['defs.b: VALUE_RANGE']);
+    expect(issues(doc(Y, { a: C(1), c: chain, b: chain }))).toEqual(['defs.c: VALUE_RANGE']);
+    expect(issues(doc({ op: 'add', a: ref('b'), b: C(0) }, { b: chain }))).toEqual(['root.a: VALUE_RANGE']);
+    expect(issues(doc(mul(ref('h'), C(9.9)), { h: ok }))).toEqual([]);
+    expect(issues(doc(mul(ref('h'), C(10.1)), { h: ok }))).toEqual(['root: VALUE_RANGE']);
+    // Through a chain of defs, a def's interval is its own after its refs' (topological order).
+    expect(issues(doc(Y, { a: mul(ref('b'), C(10.1)), b: ref('c'), c: ok }))).toEqual(['defs.a: VALUE_RANGE']);
+    // Doubling defs (2^10 paths to d0): each def analysed once; y doubled 10 times stays far inside.
+    const defs: Record<string, unknown> = { d0: Y };
+    for (let i = 1; i <= 10; i++) defs[`d${i}`] = { op: 'add', a: ref(`d${i - 1}`), b: ref(`d${i - 1}`) };
+    expect(issues(doc(ref('d10'), defs))).toEqual([]);
+    // d10 is y × 1,024: [−65,536, 327,680]; × 3.0e-5 × 1e99 ≈ 9.83e99 passes, × 3.1e-5 ≈ 1.016e100 is refused.
+    expect(issues(doc(times(ref('d10'), [3.0e-5, ...e9(11)]), defs))).toEqual([]);
+    expect(issues(doc(times(ref('d10'), [3.1e-5, ...e9(11)]), defs))).toEqual(['root: VALUE_RANGE']);
+
+  });
+
+  test('step 5 only: VALUE_RANGE after NESTED_INTERPOLATED and before COLUMN_COST; an earlier issue hides it', () => {
+    const chain = times(C(1e9), e9(11));
+    const noiseDef = { n: { op: 'noise', id: 'detail' } };
+    let big: unknown = ref('n');
+    for (let i = 1; i < 76; i++) big = { op: 'add', a: big, b: ref('n') };
+    const nested = { op: 'interpolated', x: { op: 'interpolated', x: Y } };
+    expect(issues(doc({ op: 'add', a: { op: 'add', a: nested, b: chain }, b: big }, noiseDef)))
+      .toEqual(['root.a.a.x: NESTED_INTERPOLATED', 'root.a.b: VALUE_RANGE', ': COLUMN_COST']);
+    expect(issues(doc({ op: 'add', a: chain, b: { op: 'noise', id: 'nope' } }))).toEqual(['root.b.id: UNKNOWN_NOISE']);
   });
 });

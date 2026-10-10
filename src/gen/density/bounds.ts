@@ -9,6 +9,10 @@
  *   its 4 × 4 position values, widened (spec §1.2: every voxel-level COLUMN value interval is widened);
  * - `noise` is [−clampSigma, clampSigma]; a `const` is [v, v]; `interpolated` is its child's interval, widened, or,
  *   once the cell's corners exist (`cellIntervalCorners`), the hull of its 8 corner values, widened;
+ * - poison (SP3d spec §1.9 D): the interval ops of nodes.ts turn a non-finite input or a NaN result into UNKNOWN =
+ *   [−∞, +∞], and every slot and corner hull tests each value it folds in for NaN and the finished hull for
+ *   finiteness (never its ±Infinity seed), so a NaN or ±∞ slot or corner value makes the hull UNKNOWN; an UNKNOWN root
+ *   decides nothing and the cell's voxels are evaluated. A hull of finite values is exactly SP3b's;
  * - a COLUMN node that no non-COLUMN node reads (only COLUMN parents, which take their hull from slot values) gets no
  *   interval (NaN in `nodeIntervals`).
  *
@@ -21,23 +25,25 @@ import type { ColumnSample } from '../column/columnStage';
 import type { CompiledDensity } from './compile';
 import type { DensityNoiseSource, SlideKnot } from './expr';
 import {
-  cornerY, ivAbs, ivAdd, ivClamp, ivHull, ivMax, ivMin, ivMul, ivNeg, ivSet, ivSlide, ivSquare, ivWiden, rangeChoiceCase,
+  cornerY, ivAbs, ivAdd, ivClamp, ivMax, ivMin, ivMul, ivNeg, ivRangeChoice, ivSet, ivSlide, ivSquare, ivUnknown, ivWiden,
 } from './nodes';
 
 const CORNER_Y = cornerY;
 const IV_ABS = ivAbs;
 const IV_ADD = ivAdd;
 const IV_CLAMP = ivClamp;
-const IV_HULL = ivHull;
 const IV_MAX = ivMax;
 const IV_MIN = ivMin;
 const IV_MUL = ivMul;
 const IV_NEG = ivNeg;
+const IV_RANGE = ivRangeChoice;
 const IV_SET = ivSet;
 const IV_SLIDE = ivSlide;
 const IV_SQUARE = ivSquare;
+const IV_UNKNOWN = ivUnknown;
 const IV_WIDEN = ivWiden;
-const RANGE_CASE = rangeChoiceCase;
+const FINITE = Number.isFinite;
+const IS_NAN = Number.isNaN;
 
 /** Offsets of a cell's other 3 corner columns from its (ci, cj) one in a colValues slot: x +1, z +5. */
 const COLUMN_OFFSETS = Int32Array.of(1, 5, 6);
@@ -145,30 +151,34 @@ export function createDensityBounds(c: CompiledDensity, noises: DensityNoiseSour
       for (let cj = 0; cj < 4; cj++) {
         for (let ci = 0; ci < 4; ci++) {
           const base = slot * 25 + cj * 5 + ci;
-          let lo = colValues[base]!, hi = lo;
+          let lo = colValues[base]!, hi = lo, nan = IS_NAN(lo);
           for (let q = 0; q < 3; q++) {
             const v = colValues[base + COLUMN_OFFSETS[q]!]!;
+            if (IS_NAN(v)) nan = true;
             if (v < lo) lo = v;
             if (v > hi) hi = v;
           }
           const h = (slot * 16 + cj * 4 + ci) * 2;
-          colHull[h] = lo;
-          colHull[h + 1] = hi;
+          if (nan || !FINITE(lo) || !FINITE(hi)) IV_UNKNOWN(colHull, h);
+          else { colHull[h] = lo; colHull[h + 1] = hi; }
         }
       }
     }
     for (let slot = 0; slot < c.positionSlotCount; slot++) {
       for (let cj = 0; cj < 4; cj++) {
         for (let ci = 0; ci < 4; ci++) {
-          let lo = Infinity, hi = -Infinity;
+          let lo = Infinity, hi = -Infinity, nan = false;
           for (let lz = 4 * cj; lz < 4 * cj + 4; lz++) {
             for (let lx = 4 * ci; lx < 4 * ci + 4; lx++) {
               const v = posValues[slot * 256 + lz * 16 + lx]!;
+              if (IS_NAN(v)) nan = true;
               if (v < lo) lo = v;
               if (v > hi) hi = v;
             }
           }
-          IV_WIDEN(lo, hi, posHull, (slot * 16 + cj * 4 + ci) * 2);
+          const h = (slot * 16 + cj * 4 + ci) * 2;
+          if (nan || !FINITE(lo) || !FINITE(hi)) IV_UNKNOWN(posHull, h);
+          else IV_WIDEN(lo, hi, posHull, h);
         }
       }
     }
@@ -198,21 +208,20 @@ export function createDensityBounds(c: CompiledDensity, noises: DensityNoiseSour
         case I_INTERP: {
           if (!corners) { IV_WIDEN(iv[a]!, iv[a + 1]!, iv, o); break; }
           const base = B[q]! * 1225 + (ck * 5 + cj) * 5 + ci;
-          let lo = cornerValues[base]!, hi = lo;
+          let lo = cornerValues[base]!, hi = lo, nan = IS_NAN(lo);
           for (let q = 0; q < 7; q++) {
             const v = cornerValues[base + CORNER_OFFSETS[q]!]!;
+            if (IS_NAN(v)) nan = true;
             if (v < lo) lo = v;
             if (v > hi) hi = v;
           }
-          IV_WIDEN(lo, hi, iv, o);
+          if (nan || !FINITE(lo) || !FINITE(hi)) IV_UNKNOWN(iv, o);
+          else IV_WIDEN(lo, hi, iv, o);
           break;
         }
         case I_RANGE: {
           const b = 2 * B[q]!, d = 2 * K3[q]!;
-          const which = RANGE_CASE(iv[a]!, iv[a + 1]!, P0[q]!, P1[q]!);
-          if (which === 'inside') IV_SET(iv[b]!, iv[b + 1]!, iv, o);
-          else if (which === 'outside') IV_SET(iv[d]!, iv[d + 1]!, iv, o);
-          else IV_HULL(iv[b]!, iv[b + 1]!, iv[d]!, iv[d + 1]!, iv, o);
+          IV_RANGE(iv[a]!, iv[a + 1]!, P0[q]!, P1[q]!, iv[b]!, iv[b + 1]!, iv[d]!, iv[d + 1]!, iv, o);
           break;
         }
         case I_PASS: IV_SET(iv[a]!, iv[a + 1]!, iv, o); break;
