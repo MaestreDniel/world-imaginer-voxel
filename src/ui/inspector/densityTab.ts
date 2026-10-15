@@ -156,43 +156,114 @@ export function createDensityTab(host: HTMLElement, deps: DensityTabDeps): Densi
   treePane.append(treeHead, treeRows);
   let treeKey = '';
 
-  const rowElement = (r: TreeRow): HTMLElement => {
-    const row = el('div', `it-row${r.dimmed ? ' it-dimmed' : ''}${r.muted ? ' it-muted' : ''}`);
-    row.style.paddingLeft = `${r.indent}px`;
-    row.title = r.title;
-    const toggle = el('button', 'it-toggle', r.expandable ? (r.expanded ? '▾' : '▸') : '');
+  /**
+   * A tree row's elements, kept across renders (keyed by leaf and path) and updated in place, so a click whose mousedown
+   * commits a field on blur (which changes the rows) still reaches the row it started on, and keyboard focus stays on its
+   * control (SP3d final review). The handlers read the row's current data.
+   */
+  interface RowView {
+    data: TreeRow;
+    readonly row: HTMLElement;
+    readonly toggle: HTMLButtonElement;
+    readonly node: HTMLButtonElement;
+    readonly tail: HTMLElement;
+    readonly summary: HTMLElement;
+    mute: HTMLInputElement | null;
+  }
+  const rowViews = new Map<string, RowView>();
+  const groupViews = new Map<string, HTMLElement>();
+  const rowId = (r: { readonly leaf: TreeLeaf; readonly path: string }): string => `${r.leaf}|${r.path}`;
+
+  const createRow = (r: TreeRow): RowView => {
+    const row = el('div', 'it-row');
+    const toggle = el('button', 'it-toggle');
     toggle.type = 'button';
     toggle.tabIndex = -1;
-    toggle.disabled = !r.expandable;
-    if (r.expandable) toggle.setAttribute('aria-label', `${r.expanded ? 'Collapse' : 'Expand'} ${r.title}`);
-    toggle.addEventListener('click', () => {
-      expansion = toggleExpansion(expansion, r.leaf, r.path, r.depth);
-      renderTree();
-    });
     const node = el('button', 'it-node');
     node.type = 'button';
-    node.append(el('span', 'it-tail', r.tail), el('span', 'it-summary', r.summary));
-    if (r.selected) node.setAttribute('aria-current', 'true');
-    node.addEventListener('click', () => choose({ leaf: r.leaf, path: r.path }, true));
+    const tail = el('span', 'it-tail');
+    const summary = el('span', 'it-summary');
+    node.append(tail, summary);
     row.append(toggle, node);
-    if (r.tap) {
+    const v: RowView = { data: r, row, toggle, node, tail, summary, mute: null };
+    toggle.addEventListener('click', () => {
+      const d = v.data;
+      if (!d.expandable) return;
+      expansion = toggleExpansion(expansion, d.leaf, d.path, d.depth);
+      renderTree();
+    });
+    node.addEventListener('click', () => choose({ leaf: v.data.leaf, path: v.data.path }, true));
+    return v;
+  };
+
+  const updateRow = (v: RowView, r: TreeRow): void => {
+    v.data = r;
+    v.row.className = `it-row${r.dimmed ? ' it-dimmed' : ''}${r.muted ? ' it-muted' : ''}`;
+    v.row.style.paddingLeft = `${r.indent}px`;
+    v.row.title = r.title;
+    v.toggle.textContent = r.expandable ? (r.expanded ? '▾' : '▸') : '';
+    v.toggle.disabled = !r.expandable;
+    if (r.expandable) v.toggle.setAttribute('aria-label', `${r.expanded ? 'Collapse' : 'Expand'} ${r.title}`);
+    else v.toggle.removeAttribute('aria-label');
+    v.tail.textContent = r.tail;
+    v.summary.textContent = r.summary;
+    if (r.selected) v.node.setAttribute('aria-current', 'true');
+    else v.node.removeAttribute('aria-current');
+    if (!r.tap) {
+      v.mute?.remove();
+      v.mute = null;
+      return;
+    }
+    if (v.mute === null) {
       const mute = el('input', 'it-mute');
       mute.type = 'checkbox';
-      mute.checked = r.muted;
-      mute.title = r.muted ? 'Unmute this tap' : "Mute this tap: the neutral value of its parent replaces its subtree";
-      mute.setAttribute('aria-label', `mute ${r.title}`);
-      const at: Selection = { leaf: r.leaf, path: r.path };
-      mute.addEventListener('change', (e) => commit(e, () => toggleMute(params(), at), r.leaf, () => { mute.checked = r.muted; }, 'row'));
-      row.append(mute);
+      mute.addEventListener('change', (e) => {
+        const d = v.data;
+        const at: Selection = { leaf: d.leaf, path: d.path };
+        commit(e, () => toggleMute(params(), at), d.leaf, () => { mute.checked = v.data.muted; }, 'row');
+      });
+      v.row.append(mute);
+      v.mute = mute;
     }
-    return row;
+    v.mute.checked = r.muted;
+    v.mute.title = r.muted ? 'Unmute this tap' : "Mute this tap: the neutral value of its parent replaces its subtree";
+    v.mute.setAttribute('aria-label', `mute ${r.title}`);
   };
 
   function renderTree(): void {
     const t = inspectorTree(params(), expansion, selection);
     if (t.key === treeKey) return;
     treeKey = t.key;
-    treeRows.replaceChildren(...t.groups.flatMap((g) => [el('div', 'it-group', g.label), ...g.rows.map(rowElement)]));
+    const wanted: HTMLElement[] = [];
+    const rowsSeen = new Set<string>();
+    const groupsSeen = new Set<string>();
+    for (const g of t.groups) {
+      let ge = groupViews.get(g.label);
+      if (ge === undefined) {
+        ge = el('div', 'it-group', g.label);
+        groupViews.set(g.label, ge);
+      }
+      groupsSeen.add(g.label);
+      wanted.push(ge);
+      for (const r of g.rows) {
+        const id = rowId(r);
+        let v = rowViews.get(id);
+        if (v === undefined) {
+          v = createRow(r);
+          rowViews.set(id, v);
+        }
+        updateRow(v, r);
+        rowsSeen.add(id);
+        wanted.push(v.row);
+      }
+    }
+    for (const [id, v] of rowViews) if (!rowsSeen.has(id)) { v.row.remove(); rowViews.delete(id); }
+    for (const [label, ge] of groupViews) if (!groupsSeen.has(label)) { ge.remove(); groupViews.delete(label); }
+    // Only rows that appear or move are (re)inserted: a row that stays in place is never detached.
+    for (let i = 0; i < wanted.length; i++) {
+      const at = treeRows.children[i];
+      if (at !== wanted[i]) treeRows.insertBefore(wanted[i]!, at ?? null);
+    }
   }
 
   // ---------------------------------------------------------------- node form
@@ -207,6 +278,9 @@ export function createDensityTab(host: HTMLElement, deps: DensityTabDeps): Densi
   lintBox.hidden = true;
   formPane.append(formHead, formActionsBox, formFieldsBox, hoverLine, formIssues, lintBox);
   let formKey = '';
+  /** The keys of the form's head (path and op select) and of its action buttons, each rebuilt only when it changes. */
+  let headKey = '';
+  let actionsKey = '';
   /** What each control refreshes on a session change that keeps the form's structure (ref labels, target sliders). */
   let syncs: ((s: SessionState) => void)[] = [];
   let lintKey: readonly unknown[] = [];
@@ -396,36 +470,46 @@ export function createDensityTab(host: HTMLElement, deps: DensityTabDeps): Densi
     formKey = key;
     syncs = [];
     const density = sel.leaf === 'density.defs';
-    const path = el('div', 'it-path', `${sel.leaf}.${sel.path}`);
-    path.title = `${sel.leaf}.${sel.path}`;
-    const op = el('select', 'it-op');
-    op.setAttribute('aria-label', density ? 'op' : 'kind');
-    for (const o of ops) {
-      const opt = new Option(o.op, o.op);
-      opt.disabled = o.disabled;
-      op.append(opt);
+    const head = keyOf([sel, ops]);
+    if (head !== headKey) {
+      headKey = head;
+      const path = el('div', 'it-path', `${sel.leaf}.${sel.path}`);
+      path.title = `${sel.leaf}.${sel.path}`;
+      const op = el('select', 'it-op');
+      op.setAttribute('aria-label', density ? 'op' : 'kind');
+      for (const o of ops) {
+        const opt = new Option(o.op, o.op);
+        opt.disabled = o.disabled;
+        op.append(opt);
+      }
+      const current = ops.find((o) => o.current)?.op ?? '';
+      op.value = current;
+      op.addEventListener('change', (e) => commit(e, () => replaceOp(params(), sel, op.value), sel.leaf, () => { op.value = current; }));
+      formHead.replaceChildren(path, fieldRow(density ? 'op' : 'kind', op));
     }
-    const current = ops.find((o) => o.current)?.op ?? '';
-    op.value = current;
-    op.addEventListener('change', (e) => commit(e, () => replaceOp(params(), sel, op.value), sel.leaf, () => { op.value = current; }));
-    formHead.replaceChildren(path, fieldRow(density ? 'op' : 'kind', op));
-    const acts: HTMLElement[] = [];
-    if (actions.wrap) acts.push(button('Wrap', density ? 'Wrap the node in a tap with a fresh name' : 'Wrap the rule in a one-child sequence', (e) => commit(e, () => wrapNode(params(), sel), sel.leaf)));
-    if (actions.delete) acts.push(button('Delete', 'Delete the node (one-child nodes are unwrapped)', (e) => commit(e, () => deleteNode(params(), sel), sel.leaf)));
-    if (actions.addRule) acts.push(button('Add rule', 'Append a block stone rule to this sequence', (e) => commit(e, () => addRule(params(), sel), sel.leaf)));
-    if (density) acts.push(button('Add def', 'Add a def (const 0) and select it', (e) => commit(e, () => addDef(params()), 'density.defs')));
-    if (actions.mute) {
-      const muted = fields.some((f) => f.key === 'mute');
-      const mute = el('input');
-      mute.type = 'checkbox';
-      mute.checked = muted;
-      const label = el('label', 'it-check', ' muted');
-      label.prepend(mute);
-      label.title = 'A muted tap evaluates to its mute value (the neutral value of its parent at first)';
-      mute.addEventListener('change', (e) => commit(e, () => toggleMute(params(), sel), sel.leaf, () => { mute.checked = muted; }));
-      acts.push(label);
+    // The action buttons are rebuilt only when the set changes, and act on the selection at click time: a click whose
+    // mousedown commits a field on blur (which rebuilds the fields) still reaches its button (SP3d final review).
+    const muted = fields.some((f) => f.key === 'mute');
+    const acting = keyOf([density, actions, muted]);
+    if (acting !== actionsKey) {
+      actionsKey = acting;
+      const acts: HTMLElement[] = [];
+      if (actions.wrap) acts.push(button('Wrap', density ? 'Wrap the node in a tap with a fresh name' : 'Wrap the rule in a one-child sequence', (e) => commit(e, () => wrapNode(params(), selection), selection.leaf)));
+      if (actions.delete) acts.push(button('Delete', 'Delete the node (one-child nodes are unwrapped)', (e) => commit(e, () => deleteNode(params(), selection), selection.leaf)));
+      if (actions.addRule) acts.push(button('Add rule', 'Append a block stone rule to this sequence', (e) => commit(e, () => addRule(params(), selection), selection.leaf)));
+      if (density) acts.push(button('Add def', 'Add a def (const 0) and select it', (e) => commit(e, () => addDef(params()), 'density.defs')));
+      if (actions.mute) {
+        const mute = el('input');
+        mute.type = 'checkbox';
+        mute.checked = muted;
+        const label = el('label', 'it-check', ' muted');
+        label.prepend(mute);
+        label.title = 'A muted tap evaluates to its mute value (the neutral value of its parent at first)';
+        mute.addEventListener('change', (e) => commit(e, () => toggleMute(params(), selection), selection.leaf, () => { mute.checked = muted; }));
+        acts.push(label);
+      }
+      formActionsBox.replaceChildren(...acts);
     }
-    formActionsBox.replaceChildren(...acts);
     formFieldsBox.replaceChildren(...fields.map(controlOf));
   }
 

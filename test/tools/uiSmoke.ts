@@ -31,8 +31,9 @@
  * - the Density tab (SP3d spec §6 steps 1-7), on that mountain page:
  *   - density tab: opened with the line drawn (the vertical plane), the field set to `density`; the slice hover and the
  *     node form's "value at the hover" (a `fieldProbe` job) agree;
- *   - density node: the `islands` const `root.b.x` edited from −1e6 to −10: the slice's p1 becomes −10, its share below
- *     0 (solidity) is unchanged;
+ *   - density node: the `islands` const `root.b.x` edited from −1e6 to −10, committed by the blur of a click on the root
+ *     row (no Enter): that one click selects the root; the slice's p1 becomes −10, its share below 0 (solidity) is
+ *     unchanged;
  *   - density mute: the `terrain` tap muted from its row (0, under an add) while the root is selected with the field on
  *     `selected`: the selection stays on the root (a row's mute is a plain edit, §3.2), its slice changes and equals the
  *     `density` field's; the URL length with the edited tree;
@@ -1189,14 +1190,19 @@ async function runDensity(t: Smoke): Promise<void> {
   const rows0 = await p.eval<string[]>(`[...document.querySelectorAll('.it-row')].map((r) => r.title + ' ' + r.textContent)`);
   t.check(rows0.length > 0, `${rows0.length} tree rows`);
 
-  t.step('density node: the islands const root.b.x edited from -1e6 to -10');
+  t.step('density node: the islands const root.b.x edited from -1e6 to -10, committed by a click on the root row (no Enter)');
   await p.click(`${ROW('root.b.x')} .it-node`);
   t.check(await p.eval<string>(`document.querySelector('.it-path').textContent`) === 'density.defs.root.b.x', 'the row selects root.b.x');
   t.check(await p.eval<string>(`document.querySelector(${JSON.stringify(FORM_V)}).value`) === '-1000000', 'the form shows v -1000000');
   let before = await p.hash();
   await p.typeInto(FORM_V, '-10');
-  await p.enter();
+  // The mousedown blurs the field, whose change commits (the tree's rows change); the click must still reach the row
+  // (SP3d final review: the re-rendered rows swallowed it).
+  await p.click(`${ROW('root')} .it-node`);
   const n1 = await p.changed(before, 'the islands edit');
+  t.check(await p.eval<string>(`document.querySelector('.it-path').textContent`) === 'density.defs.root'
+    && await p.eval<string | null>(`document.querySelector('.it-node[aria-current]')?.closest('.it-row')?.title ?? null`) === 'density.defs.root',
+  `one click on the root row after the blur commit selects the root (the form: ${await p.eval<string>(`document.querySelector('.it-path').textContent`)})`);
   const tree1 = (patchOf(n1)['density'] as { defs?: { root?: { b?: { x?: { v?: unknown } } } } } | undefined)?.defs;
   t.check(tree1?.root?.b?.x?.v === -10 && Object.keys(patchOf(n1)).join() === 'density', 'the patch holds the edited density tree (islands -10)', patchOf(n1));
   await p.until(Page.fresh(128, `document.querySelector('.sv > .sv-body .sv-stats').textContent !== ${JSON.stringify(s0.stats)}`), 'the density slice after the edit');
