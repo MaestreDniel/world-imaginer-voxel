@@ -205,8 +205,8 @@ describe('the draft the pool\'s resolved configure holds (§4.5: requests run on
     const log = createDraftLog();
     const p1: Params = { ...DEFAULTS };
     const p2: Params = { ...DEFAULTS };
-    log.remember(1, p1);
-    log.remember(2, p2);
+    log.remember(1, p1, null);
+    log.remember(2, p2, null);
     expect(log.configured({ poolEpoch: null, sessionEpoch: null })).toBeNull();
     const c1 = log.configured({ poolEpoch: 4, sessionEpoch: 1 });
     expect(c1).toEqual({ poolEpoch: 4, sessionEpoch: 1, params: p1 });
@@ -216,5 +216,23 @@ describe('the draft the pool\'s resolved configure holds (§4.5: requests run on
     expect(log.configured({ poolEpoch: 4, sessionEpoch: 1 })).toBeNull();
     expect(log.configured({ poolEpoch: 6, sessionEpoch: 7 })).toBeNull();
     expect(log.size).toBe(1);
+  });
+
+  test('remember drops the drafts below the resolved one, so a page that never shows Density keeps only the in-flight drafts', () => {
+    // SP3d final review (Task 26 M2): configured() runs only while the slice view requests; every session change remembers.
+    const log = createDraftLog();
+    const p: Params = { ...DEFAULTS };
+    log.remember(0, p, null);
+    for (let e = 1; e <= 500; e++) log.remember(e, p, e - 3); // a slider gesture: the pool resolves 3 drafts behind
+    expect(log.size).toBe(4); // epochs 497 (resolved) … 500
+    expect(log.configured({ poolEpoch: 9, sessionEpoch: 497 })!.params).toBe(p);
+    expect(log.configured({ poolEpoch: 9, sessionEpoch: 496 })).toBeNull();
+    // The resolved draft itself is kept (its params cost the slice); null (no configure yet) prunes nothing.
+    const fresh = createDraftLog();
+    fresh.remember(1, p, null);
+    fresh.remember(2, p, null);
+    fresh.remember(3, p, 2);
+    expect(fresh.size).toBe(2);
+    expect(fresh.configured({ poolEpoch: 1, sessionEpoch: 2 })!.params).toBe(p);
   });
 });

@@ -972,7 +972,12 @@ export function hoverLineText(voxel: HoverVoxel | null, value: string, rule: str
 
 /** The params of the drafts handed to the preview driver, by session epoch: `configured` names the one the pool holds. */
 export interface DraftLog {
-  remember(sessionEpoch: number, params: Params): void;
+  /**
+   * The draft of session epoch `sessionEpoch`, handed to the driver; `resolved` is the session epoch of the pool's last
+   * resolved configure (`DriverStatus.sessionEpoch`, null before one): the drafts below it are dropped, so the log holds
+   * only the resolved and the in-flight drafts even while no slice view asks `configured`.
+   */
+  remember(sessionEpoch: number, params: Params, resolved: number | null): void;
   /** The pool's last resolved configure (`DriverStatus`) and its draft's params; null before one or for an unknown draft. */
   configured(status: { readonly poolEpoch: number | null; readonly sessionEpoch: number | null }): ConfiguredDraft | null;
   /** Drafts remembered. */
@@ -986,7 +991,10 @@ export interface DraftLog {
 export function createDraftLog(): DraftLog {
   const drafts = new Map<number, Params>();
   return {
-    remember(sessionEpoch, params) { drafts.set(sessionEpoch, params); },
+    remember(sessionEpoch, params, resolved) {
+      drafts.set(sessionEpoch, params);
+      if (resolved !== null) for (const e of drafts.keys()) if (e < resolved) drafts.delete(e);
+    },
     configured({ poolEpoch, sessionEpoch }) {
       if (poolEpoch === null || sessionEpoch === null) return null;
       const params = drafts.get(sessionEpoch);

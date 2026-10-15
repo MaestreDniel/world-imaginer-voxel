@@ -193,7 +193,7 @@ export async function mountMapPage(root: HTMLElement): Promise<void> {
   /** The params of every draft handed to the driver, so a slice is costed on the draft the workers hold (§4.5). */
   const drafts = createDraftLog();
   session.subscribe((s, change) => {
-    drafts.remember(s.epoch, s.params);
+    drafts.remember(s.epoch, s.params, driver.status.sessionEpoch);
     driver.change(draftOf(s), change, inputAt ?? performance.now());
     toolbar.sync();
     writeUrl();
@@ -337,7 +337,7 @@ export async function mountMapPage(root: HTMLElement): Promise<void> {
   });
 
   // The first cycle is an urgent load (Task 10); the URL is rewritten in canonical form.
-  drafts.remember(session.state.epoch, session.state.params);
+  drafts.remember(session.state.epoch, session.state.params, driver.status.sessionEpoch);
   driver.change(draftOf(session.state), { kind: 'load', urgent: true, gesture: false }, performance.now());
   toolbar.setStatus(driver.status);
   writeUrl();
