@@ -28,9 +28,10 @@ import type { HoverVoxel } from './hoverModel';
 import type { Selection } from './model';
 import {
   blocksLegend, contourPath, createFieldSliceRequests, createSlicePins, fieldOptionLabel, fieldOptions, fieldSliceView, histogram,
-  histogramLabels, initialSliceState, levelLine, parseScale, parseSliceY, PIN_FULL_TEXT, PIN_MAX, ruleShare, ruleShareText,
-  sliceAxisLabels, sliceBoxSide, sliceEmptyText, sliceHoverText, sliceImage, slicePixel, sliceStatusText, withCentre, withExtent,
-  type ConfiguredDraft, type FieldChoice, type SlicePin, type SliceShown, type SliceStart, type SliceState,
+  histogramLabels, initialSliceState, levelLine, parseScale, parseSliceY, PIN_FULL_TEXT, PIN_MAX, pointerPixel, ruleShare,
+  ruleShareText, sliceAxisLabels, sliceBoxSide, sliceEmptyText, sliceHoverText, sliceImage, slicePointer, sliceStatusText,
+  withCentre, withExtent, type ConfiguredDraft, type FieldChoice, type SlicePin, type SlicePointer, type SliceShown,
+  type SliceStart, type SliceState,
 } from './sliceModel';
 
 /** The note under the plane controls (§3.1, §1.5). */
@@ -85,7 +86,8 @@ export function createSliceView(host: HTMLElement, deps: SliceViewDeps): SliceVi
   let fixedScale: number | null = null;
   /** The image last drawn: redrawn only when the shown slice or the scale changes. */
   let drawn: { readonly shown: SliceShown; readonly fixed: number | null } | null = null;
-  let hoverPx: { px: number; py: number } | null = null;
+  /** The pointer over the live box (fractions: the sample under it follows the shown slice's n). */
+  let hoverAt: SlicePointer | null = null;
 
   // ---------------------------------------------------------------- DOM
   const element = el('div', 'sv');
@@ -239,30 +241,29 @@ export function createSliceView(host: HTMLElement, deps: SliceViewDeps): SliceVi
 
   const showHover = (): void => {
     const s = requests.shown;
-    if (hoverPx === null || s === null || s.result.n !== s.geometry.n || hoverPx.px >= s.geometry.n || hoverPx.py >= s.geometry.n) {
+    const at = s === null ? null : pointerPixel(hoverAt, s.result.n);
+    if (at === null || s === null || s.result.n !== s.geometry.n || at.px >= s.geometry.n || at.py >= s.geometry.n) {
       readout.hidden = true;
       deps.onHover(null);
       return;
     }
-    const h = sliceHoverText(s, hoverPx.px, hoverPx.py);
+    const h = sliceHoverText(s, at.px, at.py);
     readout.textContent = h.text;
     readout.title = h.text;
     readout.hidden = false;
     deps.onHover(h.voxel);
   };
   box.addEventListener('pointermove', (e) => {
-    const s = requests.shown;
     const r = canvas.getBoundingClientRect();
-    const n = s === null ? 0 : s.result.n;
-    const px = slicePixel(e.clientX - r.left, r.width, n);
-    const py = slicePixel(e.clientY - r.top, r.height, n);
-    const next = px === null || py === null ? null : { px, py };
-    if (next?.px === hoverPx?.px && next?.py === hoverPx?.py) return;
-    hoverPx = next;
+    const next = slicePointer(e.clientX - r.left, e.clientY - r.top, r.width, r.height);
+    const n = requests.shown?.result.n ?? 0;
+    const was = pointerPixel(hoverAt, n), now = pointerPixel(next, n);
+    hoverAt = next;
+    if (was?.px === now?.px && was?.py === now?.py) return;
     showHover();
   });
   box.addEventListener('pointerleave', () => {
-    hoverPx = null;
+    hoverAt = null;
     showHover();
   });
 
@@ -385,12 +386,13 @@ export function createSliceView(host: HTMLElement, deps: SliceViewDeps): SliceVi
     readonly status: HTMLElement;
     readonly notice: HTMLElement;
     drawn: { readonly shown: SliceShown; readonly fixed: number | null } | null;
-    hoverPx: { px: number; py: number } | null;
+    /** The pointer over the pin's box (fractions, as the live box's). */
+    hoverAt: SlicePointer | null;
   }
 
   const pinHover = (pin: SlicePin, v: PinView): void => {
     const s = pin.requests.shown;
-    const h = v.hoverPx;
+    const h = s === null ? null : pointerPixel(v.hoverAt, s.result.n);
     if (h === null || s === null || s.result.n !== s.geometry.n || h.px >= s.geometry.n || h.py >= s.geometry.n) {
       v.readout.hidden = true;
       return;
@@ -429,19 +431,15 @@ export function createSliceView(host: HTMLElement, deps: SliceViewDeps): SliceVi
     cell.append(head, pbox, pstatus, pnotice);
     const v: PinView = {
       element: cell, box: pbox, canvas: pcanvas, overlay: pover, contour: pcontour, sea: psea, stale: pstale, readout: preadout,
-      status: pstatus, notice: pnotice, drawn: null, hoverPx: null,
+      status: pstatus, notice: pnotice, drawn: null, hoverAt: null,
     };
     pbox.addEventListener('pointermove', (e) => {
-      const s = pin.requests.shown;
       const r = pcanvas.getBoundingClientRect();
-      const n = s === null ? 0 : s.result.n;
-      const px = slicePixel(e.clientX - r.left, r.width, n);
-      const py = slicePixel(e.clientY - r.top, r.height, n);
-      v.hoverPx = px === null || py === null ? null : { px, py };
+      v.hoverAt = slicePointer(e.clientX - r.left, e.clientY - r.top, r.width, r.height);
       pinHover(pin, v);
     });
     pbox.addEventListener('pointerleave', () => {
-      v.hoverPx = null;
+      v.hoverAt = null;
       pinHover(pin, v);
     });
     return v;
@@ -520,10 +518,10 @@ export function createSliceView(host: HTMLElement, deps: SliceViewDeps): SliceVi
         return;
       }
       if (!on) {
-        hoverPx = null;
+        hoverAt = null;
         readout.hidden = true;
         for (const v of pinViews.values()) {
-          v.hoverPx = null;
+          v.hoverAt = null;
           v.readout.hidden = true;
         }
       }

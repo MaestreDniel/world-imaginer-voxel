@@ -896,6 +896,25 @@ export function slicePixel(offset: number, side: number, n: number): number | nu
   return Math.min(n - 1, Math.floor((offset / side) * n));
 }
 
+/**
+ * A pointer over a slice box, as fractions of the box (§4.3). The views keep this, not the sample indices, so a slice of
+ * another size that replaces the shown one (the 32² draft, then the 128² slice) reads the sample under the pointer.
+ */
+export interface SlicePointer { readonly fx: number; readonly fy: number }
+
+/** The pointer at CSS offset (x, y) in a box of `width` × `height` px, or null outside [0, width) × [0, height). */
+export function slicePointer(x: number, y: number, width: number, height: number): SlicePointer | null {
+  if (!(width > 0) || !(height > 0) || !(x >= 0) || !(x < width) || !(y >= 0) || !(y < height)) return null;
+  return { fx: x / width, fy: y / height };
+}
+
+/** The sample under the pointer in a slice of n × n samples (`slicePixel` on the box), or null (no pointer, n < 1). */
+export function pointerPixel(p: SlicePointer | null, n: number): { readonly px: number; readonly py: number } | null {
+  if (p === null) return null;
+  const px = slicePixel(p.fx, 1, n), py = slicePixel(p.fy, 1, n);
+  return px === null || py === null ? null : { px, py };
+}
+
 /** The shown field's value at a sample (from the slice buffer: the function that computed it), as the readouts print it. */
 function sampleText(r: FieldSliceResult, i: number): string {
   switch (r.field) {

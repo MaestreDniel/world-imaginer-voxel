@@ -16,8 +16,8 @@ import type { Segment } from '../../src/metrics/crossSection';
 import type { Selection } from '../../src/ui/inspector/model';
 import {
   createDraftLog, fieldOptionLabel, formatSliceValue, hoverLineText, initialSliceState, mapHoverVoxel, parseSliceY, pixelVoxel,
-  RULE_NA, SLICE_BOX_MIN_PX, sliceBoxSide, sliceGeometryOf, sliceHoverText, slicePixel, sliceSquare, sliceStatusText, withCentre,
-  withExtent, type SliceShown, type SliceState,
+  pointerPixel, RULE_NA, SLICE_BOX_MIN_PX, sliceBoxSide, sliceGeometryOf, sliceHoverText, slicePixel, sliceSquare, sliceStatusText, withCentre,
+  slicePointer, withExtent, type SliceShown, type SliceState,
 } from '../../src/ui/inspector/sliceModel';
 import { WATER_SOURCE } from '../../src/world/blocks/fluid';
 import { AIR, REGISTRY, STONE } from '../../src/world/blocks/index';
@@ -45,6 +45,25 @@ describe('pointer → sample (§4.3: ⌊(px / side) · n⌋ inside the box, null
     expect(slicePixel(10, Number.NaN, 128)).toBeNull();
     // nothing drawn yet (n = 0): no pixel, not -1 (a pin box hovered before its first draft lands)
     expect(slicePixel(10, 256, 0)).toBeNull();
+  });
+
+  test('the pointer is kept as fractions of the box, so a slice of another size reads the sample under it', () => {
+    // SP3d final review (Task 26 M1 / Task 27): the indices of the last move named another voxel once a 128² slice
+    // replaced the 32² draft under a still pointer (the readout at (−616, 63, −616) for a pointer over (616, 63, 616)).
+    const at = slicePointer(320, 240, 400, 300);
+    expect(at).toEqual({ fx: 0.8, fy: 0.8 });
+    expect(pointerPixel(at, 32)).toEqual({ px: 25, py: 25 });
+    expect(pointerPixel(at, 128)).toEqual({ px: 102, py: 102 });
+    // The same pixel as slicePixel on the box's own size, for every offset and size.
+    for (const n of [32, 128]) {
+      for (let x = 0; x < 400; x += 0.75) {
+        expect(pointerPixel(slicePointer(x, 0, 400, 300), n)?.px).toBe(slicePixel(x, 400, n));
+      }
+    }
+    for (const [x, y] of [[-1, 10], [400, 10], [10, 300], [Number.NaN, 0]] as const) expect(slicePointer(x, y, 400, 300)).toBeNull();
+    expect(slicePointer(10, 10, 0, 300)).toBeNull();
+    expect(pointerPixel(null, 128)).toBeNull();
+    expect(pointerPixel(at, 0)).toBeNull(); // nothing drawn yet
   });
 
   test('a 200 px box showing a 32² draft: every offset gives ⌊(px / side) · n⌋ and every sample is reached', () => {
