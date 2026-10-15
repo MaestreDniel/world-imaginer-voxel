@@ -26,7 +26,7 @@
 import { latticeIndex, readField, type ColumnSample } from '../column/columnStage';
 import {
   EXPR_CHILD_KEYS, ExprValidationError, validateExpr,
-  type DensityExpr, type DensityNoise, type DensityNoiseSource, type Expr, type ExprOp, type InterpolatedExpr,
+  type DensityExpr, type DensityNoise, type DensityNoiseSource, type Expr, type ExprOp, type InterpolatedExpr, type SlideKnot,
 } from './expr';
 import { cornerY, joinClass, ownClass, slideAt, trilerp, type DensityClass } from './nodes';
 import { findTap } from './reference';
@@ -285,7 +285,13 @@ export function compileDensity(expr: DensityExpr, noises: DensityNoiseSource): C
         f = () => { const v = x(); return v < lo ? lo : v > hi ? hi : v; };
         break;
       }
-      case 'slide': { const x = kid(0), knots = e.knots; f = () => x() * SLIDE_AT(knots, py); break; }
+      case 'slide': {
+        // A thawed copy of the knots (the same doubles): element reads of the resolved tree's frozen arrays made the
+        // corner kernel 17-28 % slower in V8 (SP3d final review).
+        const x = kid(0), knots = e.knots.map((k): SlideKnot => [k[0], k[1]]);
+        f = () => x() * SLIDE_AT(knots, py);
+        break;
+      }
       case 'interpolated': {
         const base = n.interpSlot * 1225;
         f = () => {

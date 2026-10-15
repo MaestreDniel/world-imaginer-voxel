@@ -16,16 +16,15 @@
  * Noises are injected (`DensityNoiseSource`), so the reference runs on schema noises and on test noises alike.
  */
 import { latticeIndex, readField, type ColumnSample } from '../column/columnStage';
-import { EXPR_CHILD_KEYS, exprChildren, ExprValidationError, validateExpr, type DensityExpr, type DensityNoise, type DensityNoiseSource, type Expr, type InterpolatedExpr, type SlideKnot, type TapExpr } from './expr';
-import { cellXZ, cellY, cornerY, evalNode, fracXZ, fracY, trilerp, valSlide, type DelegatedExpr, type NodeEnv } from './nodes';
+import { EXPR_CHILD_KEYS, exprChildren, ExprValidationError, validateExpr, type DensityExpr, type DensityNoise, type DensityNoiseSource, type Expr, type InterpolatedExpr, type SlideExpr, type SlideKnot, type TapExpr } from './expr';
+import { cellXZ, cellY, cornerY, evalNode, fracXZ, fracY, trilerp, type DelegatedExpr, type NodeEnv } from './nodes';
 
 const LATTICE = latticeIndex;
 const READ_FIELD = readField;
 const VALIDATE = validateExpr;
 const INVALID = ExprValidationError;
 const CHILD_KEYS = EXPR_CHILD_KEYS;
-const EVAL_NODE = evalNode;
-const VAL_SLIDE = valSlide;
+const EVAL = evalNode;
 const CHILDREN = exprChildren;
 const CELL_XZ = cellXZ;
 const CELL_Y = cellY;
@@ -77,9 +76,7 @@ export function createDensityReference(expr: DensityExpr, noises: DensityNoiseSo
     if (e.op === 'slide') thawed.set(e, e.knots.map((k): SlideKnot => [k[0], k[1]]));
     for (const c of CHILDREN(e)) stack.push(c);
   }
-  /** evalNode, with a slide reading its thawed knots (the same order: x first, then the factor). */
-  const evaluate = (e: Expr, env: NodeEnv): number =>
-    (e.op === 'slide' ? VAL_SLIDE(env.child(e.x), thawed.get(e) ?? e.knots, env.y) : EVAL_NODE(e, env));
+  const knots = (e: SlideExpr): readonly SlideKnot[] => thawed.get(e) ?? e.knots;
   const noise = (id: string): DensityNoise => {
     const n = noises(id);
     if (n === undefined) throw new Error(`unknown density noise ${id}`);
@@ -93,18 +90,19 @@ export function createDensityReference(expr: DensityExpr, noises: DensityNoiseSo
     const cx = 16 * s.cx + 4 * i, cy = CORNER_Y(k), cz = 16 * s.cz + 4 * j, li = LATTICE(i, j);
     const env: NodeEnv = {
       y: cy,
-      child: (c) => evaluate(c, env),
+      knots,
+      child: (c) => EVAL(c, env),
       read: (r: DelegatedExpr) => {
         switch (r.op) {
           case 'col': return s.f[r.field][li]!;
           case 'noise2': return noise(r.id).z2(cx, cz);
           case 'noise': return noise(r.id).z3(cx, cy, cz);
-          case 'ref': return evaluate(defs[r.name]!, env);
+          case 'ref': return EVAL(defs[r.name]!, env);
           case 'interpolated': throw new Error('an interpolated cannot be evaluated at a corner (nested interpolated)');
         }
       },
     };
-    return evaluate(e, env);
+    return EVAL(e, env);
   };
 
   const voxel = (s: ColumnSample, x: number, y: number, z: number, e: Expr = expr.root): number => {
@@ -116,13 +114,14 @@ export function createDensityReference(expr: DensityExpr, noises: DensityNoiseSo
     const tx = FRAC_XZ(lx), ty = FRAC_Y(y), tz = FRAC_XZ(lz);
     const env: NodeEnv = {
       y,
-      child: (c) => evaluate(c, env),
+      knots,
+      child: (c) => EVAL(c, env),
       read: (r: DelegatedExpr) => {
         switch (r.op) {
           case 'col': return READ_FIELD(s, r.field, x, z);
           case 'noise2': return noise(r.id).z2(x, z);
           case 'noise': return noise(r.id).z3(x, y, z);
-          case 'ref': return evaluate(defs[r.name]!, env);
+          case 'ref': return EVAL(defs[r.name]!, env);
           case 'interpolated': {
             const c = r.x;
             return TRILERP(
@@ -134,7 +133,7 @@ export function createDensityReference(expr: DensityExpr, noises: DensityNoiseSo
         }
       },
     };
-    return evaluate(e, env);
+    return EVAL(e, env);
   };
 
   const tap = (s: ColumnSample, name: string, x: number, y: number, z: number): number => {

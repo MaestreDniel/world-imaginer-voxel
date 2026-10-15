@@ -258,7 +258,8 @@ describe('treeMutator: the untrusted-JSON fuzz (SP3d spec §10)', () => {
         if (cls === 'breaking') expect(acc / all).toBeLessThan(0.25);
         else expect(acc / all).toBeGreaterThan(0.5);
       }
-    });
+      // About 5 s alone (rules); twice it ran over the default 30 s under `npm run test:goldens`' full load.
+    }, 120_000);
   }
 });
 

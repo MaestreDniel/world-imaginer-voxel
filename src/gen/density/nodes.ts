@@ -14,7 +14,7 @@
  * `rangeChoice` never make it known again. A finite input may still give an infinite result endpoint (an overflow, never
  * NaN): it holds every value, and the parent is UNKNOWN. With finite intervals every result is exactly SP3b's.
  */
-import type { ColExpr, Expr, ExprOp, InterpolatedExpr, Noise2Expr, NoiseExpr, RefExpr, SlideKnot } from './expr';
+import type { ColExpr, Expr, ExprOp, InterpolatedExpr, Noise2Expr, NoiseExpr, RefExpr, SlideExpr, SlideKnot } from './expr';
 
 export function valAdd(a: number, b: number): number { return a + b; }
 export function valMul(a: number, b: number): number { return a * b; }
@@ -69,6 +69,11 @@ export interface NodeEnv {
   child(e: Expr): number;
   /** `col`, `noise2`, `noise`, `interpolated` and `ref`: the caller samples, interpolates or resolves them. */
   read(e: DelegatedExpr): number;
+  /**
+   * A slide's knots, when the caller holds a copy (the reference reads thawed copies of a resolved tree's frozen arrays:
+   * the same doubles, faster element reads in V8); absent, the node's own.
+   */
+  readonly knots?: (e: SlideExpr) => readonly SlideKnot[];
 }
 
 /**
@@ -88,7 +93,7 @@ export function evalNode(e: Expr, env: NodeEnv): number {
     case 'abs': return valAbs(env.child(e.x));
     case 'square': return valSquare(env.child(e.x));
     case 'clamp': return valClamp(env.child(e.x), e.lo, e.hi);
-    case 'slide': return valSlide(env.child(e.x), e.knots, env.y);
+    case 'slide': return valSlide(env.child(e.x), env.knots === undefined ? e.knots : env.knots(e), env.y);
     case 'rangeChoice': { const x = env.child(e.x); return inRange(x, e.lo, e.hi) ? env.child(e.inside) : env.child(e.outside); }
     case 'tap': return env.child(e.x);
   }
