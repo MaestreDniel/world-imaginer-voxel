@@ -107,13 +107,14 @@ export type ExprErrorCode =
 
 /**
  * The codes only a density source tree can get (SP3d spec §1.7 tier 2, density): the source mode of `validateExpr`
- * reports `UNKNOWN_PARAM`, `RECIP_OPERAND`, `RECIP_ZERO`, `LITERAL_RANGE` and `SLIDE_SLOPE`; gen/density/source.ts the
- * others (counts, expanded depth and cost, value range, column cost, and the 50-issue cap). Every density field is a
- * number field, which takes any target, so `PARAM_KIND` (an int field given a number target) is a rules code only.
+ * reports `UNKNOWN_PARAM`, `RECIP_OPERAND`, `RECIP_ZERO`, `LITERAL_RANGE`, `SLIDE_SLOPE` and `TOO_MANY_KNOTS`;
+ * gen/density/source.ts the others (counts, expanded depth and cost, value range, column cost, and the 50-issue cap).
+ * Every density field is a number field, which takes any target, so `PARAM_KIND` (an int field given a number target)
+ * is a rules code only.
  */
 export type DensitySourceCode =
-  | 'UNKNOWN_PARAM' | 'RECIP_OPERAND' | 'RECIP_ZERO' | 'LITERAL_RANGE' | 'SLIDE_SLOPE' | 'TOO_MANY_NODES' | 'TOO_MANY_DEFS'
-  | 'EXPANDED_TOO_DEEP' | 'TOO_COSTLY' | 'VALUE_RANGE' | 'COLUMN_COST' | 'TOO_MANY_ISSUES';
+  | 'UNKNOWN_PARAM' | 'RECIP_OPERAND' | 'RECIP_ZERO' | 'LITERAL_RANGE' | 'SLIDE_SLOPE' | 'TOO_MANY_KNOTS' | 'TOO_MANY_NODES'
+  | 'TOO_MANY_DEFS' | 'EXPANDED_TOO_DEEP' | 'TOO_COSTLY' | 'VALUE_RANGE' | 'COLUMN_COST' | 'TOO_MANY_ISSUES';
 
 export interface ExprIssue {
   /**
@@ -167,6 +168,11 @@ const NO_TARGETS: ReadonlyMap<string, RefTarget> = new Map();
 
 /** A source literal stays within ±LITERAL_MAX (SP3d spec §1.7; the master's cave formulas use ±1e9 and ±1e6). */
 const LITERAL_MAX = 1e9;
+/**
+ * A source slide holds at most MAX_KNOTS knots (SP3d final review): every cost model charges a slide 1 whatever its
+ * knot count, and `slideAt`'s binary search reads about log2 n of them, so the cap bounds that search to 6 probes.
+ */
+const MAX_KNOTS = 64;
 /** Appended to an order issue that involves a ref (SP3d spec §1.3, value-independence). */
 const REF_NOTE = ' for every value of its parameter refs (each ref is judged over its whole static range, independently: two refs to the same parameter too)';
 
@@ -188,9 +194,10 @@ interface FieldRange { readonly lo: number; readonly hi: number; readonly ref: b
  * (`UNKNOWN_PARAM`, or `BAD_FIELD` for a malformed ref, at the field's path); literals within ±1e9 (`LITERAL_RANGE`);
  * `CLAMP_ORDER`, `RANGE_ORDER` and `KNOTS_ORDER` over the static ranges (a negated ref spans [0 − hi, 0 − lo]); every
  * slide segment's `v1 − vk` and `(v1 − vk) / (y1 − yk)` finite at the range ends that maximise them (`SLIDE_SLOPE`, at
- * the segment's upper knot); tap names matching the key pattern (`BAD_NAME`). Mutes are ignored by the walks (the
- * muted subtree is validated like any other). The source mode stops after the def graph: the interpolated nesting is
- * tier 2's step 5 (`nestedInterpolatedIssues`), which runs only once the whole-tree bounds hold.
+ * the segment's upper knot); at most 64 knots per slide (`TOO_MANY_KNOTS` at `.knots`, its knots then unchecked); tap
+ * names matching the key pattern (`BAD_NAME`). Mutes are ignored by the walks (the muted subtree is validated like any
+ * other). The source mode stops after the def graph: the interpolated nesting is tier 2's step 5
+ * (`nestedInterpolatedIssues`), which runs only once the whole-tree bounds hold.
  */
 export function validateExpr(value: unknown, noises: DensityNoiseLookup, source?: ExprSourceMode): ExprIssue[] {
   const issues: ExprIssue[] = [];
@@ -291,6 +298,7 @@ export function validateExpr(value: unknown, noises: DensityNoiseLookup, source?
         child('x');
         const knots = node['knots'];
         if (!Array.isArray(knots) || knots.length < 2) { push(at('knots'), 'KNOTS_SHAPE', 'slide needs at least 2 knots [y, v]'); break; }
+        if (source !== undefined && knots.length > MAX_KNOTS) { push(at('knots'), 'TOO_MANY_KNOTS', `${knots.length} knots, more than ${MAX_KNOTS}`); break; }
         if (source === undefined) {
           let prev = -Infinity;
           for (let i = 0; i < knots.length; i++) {

@@ -1,6 +1,6 @@
 import { loadavg } from 'node:os';
 import { describe, expect, test } from 'vitest';
-import { COLUMN_SAMPLE_COST, CORNER_SAMPLE_COST, CORNER_STEEP_COST, PART_BUDGET } from '../../src/core/constants';
+import { COLUMN_SAMPLE_COST, CORNER_SAMPLE_COST, CORNER_STEEP_COST, PART_BUDGET, REQUEST_BUDGET } from '../../src/core/constants';
 import { DEFAULTS } from '../../src/core/params/defaults';
 import type { Params } from '../../src/core/params/schema';
 import { seedFromInput } from '../../src/core/seed';
@@ -10,6 +10,8 @@ import { createCornerSampler, evaluatedExpression, evaluateFieldSlice, horizonta
 import { surfaceContextOf } from '../../src/gen/surface/context';
 import { validateParamTrees } from '../../src/gen/trees';
 import { segmentPointAt, type Segment } from '../../src/metrics/crossSection';
+import { planFieldSlice } from '../../src/workers/protocol';
+import { paramsWith } from '../harness/gen';
 import { noiseSumTree, PART_WORST_LEAVES, partWorstParams } from '../harness/sliceTrees';
 
 /**
@@ -94,6 +96,41 @@ function timePart(part: Part): { cold: number; warm: number } {
   evaluateFieldSlice(ctx, req, NEVER);
   return { cold, warm: now() - t };
 }
+
+/**
+ * SP3d final review (untrusted I1, workers I1): a slide's knot count is free in every cost model, so a fan-out of refs to
+ * one long slide (the reference evaluator does not merge refs) must not run over the part budget. The tree: a balanced
+ * `add` of `refs` refs to `defs.s = slide(const 1, knots)`, its work cost 3 × refs + 5 under the 128² limit.
+ */
+function slideFanParams(refs: number, knots: number): Params {
+  let level: unknown[] = Array.from({ length: refs }, () => ({ op: 'ref', name: 's' }));
+  while (level.length > 1) {
+    const next: unknown[] = [];
+    for (let i = 0; i + 1 < level.length; i += 2) next.push({ op: 'add', a: level[i], b: level[i + 1] });
+    if (level.length % 2 === 1) next.push(level[level.length - 1]);
+    level = next;
+  }
+  const slide = { op: 'slide', x: { op: 'const', v: 1 }, knots: Array.from({ length: knots }, (_, i) => [-80 + (i * 400) / knots, (i % 3) - 1]) };
+  return paramsWith({ density: { defs: { root: level[0], defs: { s: slide } } } } as never);
+}
+
+describe('a slide fan-out at the knot cap stays within the part budget (SP3d final review)', () => {
+  test('1,024 knots are refused by tier 2 (TOO_MANY_KNOTS); at 64 knots the largest planned 128² part takes ≤ 250 ms', () => {
+    expect(validateParamTrees(slideFanParams(2000, 1024)).map((i) => `${i.path}: ${i.code}`)).toEqual(['density.defs.defs.s.knots: TOO_MANY_KNOTS']);
+    const p = slideFanParams(2000, 64);
+    expect(validateParamTrees(p)).toEqual([]);
+    const geometry = vertical(128);
+    const plan = planFieldSlice(128, sliceCostOf(p, 'density', '', 'vertical', 128), 6, REQUEST_BUDGET);
+    if (plan.refused) throw new Error(`refused, limit ${plan.limit}`);
+    const widest = plan.ranges.reduce((a, r) => (r[1] - r[0] > a[1] - a[0] ? r : a));
+    const ctx = fresh(p);
+    const t = now();
+    evaluateFieldSlice(ctx, { geometry, field: 'density', path: '', from: widest[0], to: widest[1] }, NEVER);
+    const ms = now() - t;
+    console.log(`MEASUREMENT: slide fan-out (2,000 refs, 64 knots): part [${widest[0]}, ${widest[1]}) of ${plan.ranges.length}, ${ms.toFixed(1)} ms`);
+    expect(ms).toBeLessThanOrEqual(PART_P50_MAX_MS);
+  });
+});
 
 describe.runIf(CALIBRATE)('calibration of the work unit and the acquisition costs (SP3d spec §5.2) — SLICE_CALIBRATION=1', () => {
   test('a part at PART_BUDGET takes ≤ 250 ms p50 on one thread; the acquisition costs are within 2 × of their constants', () => {

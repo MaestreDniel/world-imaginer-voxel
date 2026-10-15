@@ -128,7 +128,8 @@ export function createDensityBounds(c: CompiledDensity, noises: DensityNoiseSour
         case 'abs': push(I_ABS, id, a, 0, 0, 0, 0, null); break;
         case 'square': push(I_SQUARE, id, a, 0, 0, 0, 0, null); break;
         case 'clamp': push(I_CLAMP, id, a, 0, 0, e.lo, e.hi, null); break;
-        case 'slide': push(I_SLIDE, id, a, 0, 0, inside ? 8 : 7, 0, e.knots); break;
+        // Thawed knots: element reads of a resolved tree's frozen arrays are slower in V8 (SP3d final review).
+        case 'slide': push(I_SLIDE, id, a, 0, 0, inside ? 8 : 7, 0, e.knots.map((k): SlideKnot => [k[0], k[1]])); break;
         case 'interpolated': push(I_INTERP, id, a, node.interpSlot, 0, 0, 0, null); break;
         case 'rangeChoice': push(I_RANGE, id, a, b, k3, e.lo, e.hi, null); break;
         case 'tap': push(I_PASS, id, a, 0, 0, 0, 0, null); break;

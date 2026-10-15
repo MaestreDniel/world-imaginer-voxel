@@ -77,8 +77,8 @@ describe('the source model (SP3d spec §1.3, §1.4)', () => {
     expectTypeOf<ExprErrorCode>().toExtend<TreeIssueCode>();
     expectTypeOf<DensitySourceCode>().toExtend<TreeIssueCode>();
     expectTypeOf<DensitySourceCode>().toEqualTypeOf<
-      'UNKNOWN_PARAM' | 'RECIP_OPERAND' | 'RECIP_ZERO' | 'LITERAL_RANGE' | 'SLIDE_SLOPE' | 'TOO_MANY_NODES' | 'TOO_MANY_DEFS'
-      | 'EXPANDED_TOO_DEEP' | 'TOO_COSTLY' | 'VALUE_RANGE' | 'COLUMN_COST' | 'TOO_MANY_ISSUES'>();
+      'UNKNOWN_PARAM' | 'RECIP_OPERAND' | 'RECIP_ZERO' | 'LITERAL_RANGE' | 'SLIDE_SLOPE' | 'TOO_MANY_KNOTS' | 'TOO_MANY_NODES'
+      | 'TOO_MANY_DEFS' | 'EXPANDED_TOO_DEEP' | 'TOO_COSTLY' | 'VALUE_RANGE' | 'COLUMN_COST' | 'TOO_MANY_ISSUES'>();
     expectTypeOf<ExprIssue['code']>().toEqualTypeOf<ExprErrorCode | DensitySourceCode>();
   });
 });
@@ -195,6 +195,17 @@ describe('validateDensitySource: recip, names, literals and slopes (SP3d spec §
     expect(one(doc({ op: 'slide', x: Y, knots: [[0, 0], [5e-324, 1]] })).message).toMatch(/finite/);
     // Code-built trees keep SP3b's rules.
     expect(validateExpr(doc({ op: 'slide', x: Y, knots: [[0, -1e308], [1, 1e308]] }), () => undefined)).toEqual([]);
+  });
+
+  test('a slide holds at most 64 knots (TOO_MANY_KNOTS at .knots, its knots then unchecked); code-built trees keep SP3b\'s rule', () => {
+    // SP3d final review (untrusted I1): every cost model charges a slide 1 whatever its knot count.
+    const knots = (n: number, bad = false): unknown[] => Array.from({ length: n }, (_, i) => [i, bad && i === n - 1 ? 2e9 : (i % 3) - 1]);
+    expect(issues(doc({ op: 'slide', x: Y, knots: knots(64) }))).toEqual([]);
+    expect(issues(doc({ op: 'slide', x: Y, knots: knots(65) }))).toEqual(['root.knots: TOO_MANY_KNOTS']);
+    expect(issues(doc({ op: 'slide', x: Y, knots: knots(1024, true) }))).toEqual(['root.knots: TOO_MANY_KNOTS']);
+    expect(issues(doc(Y, { s: { op: 'slide', x: C(1), knots: knots(200) } }))).toEqual(['defs.s.knots: TOO_MANY_KNOTS']);
+    expect(one(doc({ op: 'slide', x: Y, knots: knots(1024) })).message).toBe('1024 knots, more than 64');
+    expect(validateExpr(doc({ op: 'slide', x: Y, knots: knots(1024) }), () => undefined)).toEqual([]);
   });
 
   test('source ops are unknown to the code-built validator, and tap.mute an unknown key there', () => {

@@ -317,8 +317,8 @@ describe('issue codes', () => {
       | 'STRING_TOO_LONG' | 'JSON_TOO_LARGE' | 'TOO_MANY_ISSUES'>();
     expectTypeOf<ExprErrorCode>().toExtend<TreeIssueCode>();
     expectTypeOf<RuleErrorCode>().toExtend<TreeIssueCode>();
-    expectTypeOf<'UNKNOWN_PARAM' | 'PARAM_KIND' | 'RECIP_OPERAND' | 'RECIP_ZERO' | 'LITERAL_RANGE' | 'SLIDE_SLOPE' | 'TOO_MANY_DEFS'
-      | 'EXPANDED_TOO_DEEP' | 'TOO_COSTLY' | 'VALUE_RANGE' | 'COLUMN_COST' | 'TOO_MANY_BIOMES' | 'NOT_SOLID' | 'TOO_MANY_ISSUES'>().toExtend<TreeIssueCode>();
+    expectTypeOf<'UNKNOWN_PARAM' | 'PARAM_KIND' | 'RECIP_OPERAND' | 'RECIP_ZERO' | 'LITERAL_RANGE' | 'SLIDE_SLOPE' | 'TOO_MANY_KNOTS'
+      | 'TOO_MANY_DEFS' | 'EXPANDED_TOO_DEEP' | 'TOO_COSTLY' | 'VALUE_RANGE' | 'COLUMN_COST' | 'TOO_MANY_BIOMES' | 'NOT_SOLID' | 'TOO_MANY_ISSUES'>().toExtend<TreeIssueCode>();
     expectTypeOf<JsonIssueCode | TreeIssueCode>().toExtend<IssueCode>();
     const code: IssueCode = 'JSON_TOO_DEEP';
     expect(code).toBe('JSON_TOO_DEEP');

@@ -326,6 +326,87 @@ describe('slide', () => {
       }
     }
   });
+
+  // SP3d final review (untrusted I1, workers I1): every cost model charges a slide 1 whatever its knot count, so its
+  // segment search must not scan the knots: a binary search finds the same segment, hence bit-identical values.
+  /** SP3b's linear segment scan, the semantics the search must keep. */
+  function linearSlideAt(knots: readonly SlideKnot[], y: number): number {
+    const n = knots.length;
+    if (y < knots[0]![0]) return knots[0]![1];
+    if (y >= knots[n - 1]![0]) return knots[n - 1]![1];
+    let k = 0;
+    while (y >= knots[k + 1]![0]) k++;
+    const [yk, vk] = knots[k]!;
+    const [y1, v1] = knots[k + 1]!;
+    return vk + (y - yk) * ((v1 - vk) / (y1 - yk));
+  }
+  /** SP3d's linear ivSlideFactor, the interval the faster start must keep. */
+  function linearSlideFactor(knots: readonly SlideKnot[], y0: number, y1: number): [number, number] {
+    let lo = linearSlideAt(knots, y0), hi = lo;
+    let finite = Number.isFinite(lo);
+    const e = linearSlideAt(knots, y1);
+    finite = finite && Number.isFinite(e);
+    if (e < lo) lo = e; if (e > hi) hi = e;
+    for (let i = 0; i < knots.length; i++) {
+      const [yk, vk] = knots[i]!;
+      if (yk <= y0) continue;
+      if (yk > y1) break;
+      finite = finite && Number.isFinite(vk);
+      if (vk < lo) lo = vk; if (vk > hi) hi = vk;
+      if (i > 0) {
+        const [ya, va] = knots[i - 1]!;
+        const left = va + (yk - ya) * ((vk - va) / (yk - ya));
+        finite = finite && Number.isFinite(left);
+        if (left < lo) lo = left; if (left > hi) hi = left;
+      }
+    }
+    return finite ? [lo, hi] : [-Infinity, Infinity];
+  }
+  /** `knots` behind a Proxy that counts the element reads. */
+  function counted(knots: readonly SlideKnot[]): { knots: readonly SlideKnot[]; reads: () => number; reset: () => void } {
+    let reads = 0;
+    const proxy = new Proxy(knots as SlideKnot[], {
+      get(target, key, receiver) {
+        if (typeof key === 'string' && /^\d+$/.test(key)) reads++;
+        return Reflect.get(target, key, receiver) as unknown;
+      },
+    });
+    return { knots: proxy, reads: () => reads, reset: () => { reads = 0; } };
+  }
+  const LONG: readonly SlideKnot[] = Array.from({ length: 1024 }, (_, i): SlideKnot => [-1100 + i + (i % 3) * 0.25, ((i * 37) % 11) / 5 - 1]);
+
+  test('a 1,024-knot slide: slideAt reads O(log n) knots and equals the linear scan bit for bit', () => {
+    const c = counted(LONG);
+    const ys: number[] = [-2000, NaN, 5000, LONG[0]![0], LONG[1023]![0], nextDown(LONG[1023]![0])];
+    for (const [y] of LONG) ys.push(y, nextDown(y), nextUp(y), y + 0.3);
+    const next = testRng(403);
+    for (let n = 0; n < 2000; n++) ys.push(-1120 + 1080 * testFloat(next));
+    let worst = 0;
+    for (const y of ys) {
+      c.reset();
+      const v = slideAt(c.knots, y);
+      worst = Math.max(worst, c.reads());
+      expect(Object.is(v, linearSlideAt(LONG, y)), `y ${y}`).toBe(true);
+    }
+    // first, last, ≤ ⌈log2 1023⌉ = 10 probes, then the segment's two knots.
+    expect(worst).toBeLessThanOrEqual(14);
+  });
+
+  test('a 1,024-knot slide: ivSlideFactor starts at the first knot above y0 and equals the linear interval', () => {
+    const c = counted(LONG);
+    const next = testRng(404);
+    let worst = 0;
+    for (let n = 0; n < 2000; n++) {
+      const y0 = n % 7 === 0 ? LONG[next() % 1024]![0] : -1120 + 1080 * testFloat(next);
+      const y1 = y0 + (n % 5 === 0 ? 0 : 8 * testFloat(next));
+      c.reset();
+      const s = iv((o, k) => ivSlideFactor(c.knots, y0, y1, o, k));
+      worst = Math.max(worst, c.reads());
+      expect(s).toEqual(linearSlideFactor(LONG, y0, y1));
+    }
+    // Two slideAt calls (≤ 14 reads each), ≤ 11 probes for the start, and ≤ 3 reads per knot of the span (≤ 9 knots).
+    expect(worst).toBeLessThanOrEqual(80);
+  });
 });
 
 describe('structure', () => {

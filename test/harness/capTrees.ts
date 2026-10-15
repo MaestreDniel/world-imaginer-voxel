@@ -4,7 +4,8 @@
  * characters) as their padding unit allows, without exceeding it.
  * - Density: the default tree plus unreachable defs (tier 2 bounds every def, reachable or not, §1.7): balanced `add`s of
  *   `const` leaves with 17-digit literals up to 4,000 nodes in all (tier 2's bound is 4,096), then `slide` defs over a
- *   `const` whose knot count fills the text to within one knot (≈ 30 characters) of the cap.
+ *   `const` of up to 64 knots (tier 2's `TOO_MANY_KNOTS` bound), the last one's knot count filling the text to within
+ *   one knot (≈ 30 characters) of the cap.
  * - Rules: the default tree with Y-only `verticalGradient` conditions appended to its root sequence, in nested sequences
  *   of at most 512 (tier 1 caps arrays at 1,024), so the fast path holds and the column cost stays within tier 2's
  *   maximum; it fills to within one condition (≈ 130 characters) of the cap.
@@ -20,6 +21,8 @@ const CAP = TREE_LIMITS.textUnits;
 const DENSITY_NODES = 4000;
 /** `const` leaves per padding `add` def (2 × 250 − 1 = 499 nodes). */
 const LEAVES_PER_DEF = 250;
+/** Knots per padding slide (tier 2: at most 64 per slide). */
+const KNOTS_PER_SLIDE = 64;
 /** Conditions per nested padding sequence (tier 1: arrays ≤ 1,024 items). */
 const RULES_PER_SEQUENCE = 512;
 
@@ -70,13 +73,13 @@ export function capDensityTree(): Obj {
     nodes += 2 * LEAVES_PER_DEF - 1;
     pad++;
   }
-  // Slide defs of up to 1,000 knots, the last one cut to the largest knot count that fits.
+  // Slide defs of KNOTS_PER_SLIDE knots, the last one cut to the largest knot count that fits.
   for (let s = 0; textOf(tree) < CAP; s++) {
     const name = `padSlide${s}`;
-    defs[name] = slide(1000);
+    defs[name] = slide(KNOTS_PER_SLIDE);
     if (textOf(tree) <= CAP) continue;
     let lo = 2;
-    let hi = 1000;
+    let hi = KNOTS_PER_SLIDE;
     defs[name] = slide(lo);
     if (textOf(tree) > CAP) { delete defs[name]; break; }
     while (lo < hi) {

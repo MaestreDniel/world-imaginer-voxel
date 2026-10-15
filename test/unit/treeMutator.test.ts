@@ -304,6 +304,40 @@ describe('treeMutator: the mutator', () => {
     expect(new Set([...BREAKING_MUTATIONS, ...PRESERVING_MUTATIONS]).size).toBe(BREAKING_MUTATIONS.length + PRESERVING_MUTATIONS.length);
   });
 
+  test('knotsGrow: a slide of more than 64 knots is refused (TOO_MANY_KNOTS at its knots), one of 64 mostly accepted', () => {
+    // SP3d final review (untrusted I1): tier 2 caps a slide's knots, since every cost model charges a slide 1.
+    const longest = (v: unknown): number => {
+      let most = 0;
+      const stack: unknown[] = [v];
+      while (stack.length > 0) {
+        const x = stack.pop();
+        if (typeof x !== 'object' || x === null) continue;
+        if (!Array.isArray(x) && x['op' as never] === 'slide') most = Math.max(most, (x['knots' as never] as unknown[]).length);
+        for (const y of Object.values(x)) stack.push(y);
+      }
+      return most;
+    };
+    const next = testRng(12);
+    let refused = 0, at64 = 0, accepted64 = 0;
+    for (let i = 0; i < 2000; i++) {
+      const m = mutateTree(next, DEFAULT_DENSITY_TREE, 'density', { cls: 'breaking', count: 1 });
+      if (m.names[0] !== 'knotsGrow') continue;
+      const j = judge(m.value, 'density');
+      if (longest(m.value) > 64) {
+        expect(j.params).toBeNull();
+        expect(j.issues.some((x) => x.code === 'TOO_MANY_KNOTS' && x.path.startsWith('density.defs.') && x.path.endsWith('.knots'))).toBe(true);
+        refused++;
+      } else {
+        expect(longest(m.value)).toBe(64);
+        at64++;
+        if (j.params !== null) accepted64++;
+      }
+    }
+    expect(refused).toBeGreaterThan(50);
+    expect(at64).toBeGreaterThan(10);
+    expect(accepted64 / at64).toBeGreaterThan(0.5);
+  });
+
   test('preserving mutations of the defaults are accepted and differ from the default most of the time', () => {
     for (const format of ['density', 'surfaceRules'] as const) {
       const next = testRng(9);

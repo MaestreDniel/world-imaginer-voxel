@@ -11,7 +11,8 @@
  *   ±1e308, ±(1e9 + 1) and huge or tiny exponents, very deep and very wide nesting, arrays, strings and other
  *   primitives in node slots, def, tap, biome, block, noise and field names empty, dotted, `__proto__` (an own key, as
  *   `JSON.parse` makes it), `constructor`, `toString` and over-long, param paths of the same names and to missing or
- *   non-numeric targets, refs to missing defs, ref cycles, knots with overflowing slopes, air and unknown blocks,
+ *   non-numeric targets, refs to missing defs, ref cycles, knots with overflowing slopes, long knot lists (64 knots,
+ *   the most tier 2 accepts, or 65, 200 and 1,024), air and unknown blocks,
  *   oversized values (too many values, too long arrays and strings, too large a text).
  * - Structure-preserving mutations (`PRESERVING_MUTATIONS`): change a literal within its range, swap two siblings,
  *   replace a literal by a param ref (int fields take only int targets), wrap a node in a tap (rules: a rule in a
@@ -38,13 +39,13 @@ export type MutationClass = 'breaking' | 'preserving';
 
 export const BREAKING_MUTATIONS = [
   'deleteKey', 'addKey', 'swapOp', 'badNumber', 'deepNesting', 'wideNesting', 'wrongType', 'badName', 'refCycle',
-  'missingTarget', 'knotsOverflow', 'airBlock', 'oversized',
+  'missingTarget', 'knotsOverflow', 'knotsGrow', 'airBlock', 'oversized',
 ] as const;
 export const PRESERVING_MUTATIONS = ['changeLiteral', 'swapSiblings', 'literalToParam', 'wrap', 'muteTap', 'addDef'] as const;
 export type MutationName = (typeof BREAKING_MUTATIONS)[number] | (typeof PRESERVING_MUTATIONS)[number];
 
 /** The mutations that exist for a format (the others have no counterpart there). */
-const DENSITY_ONLY: ReadonlySet<MutationName> = new Set(['refCycle', 'knotsOverflow', 'muteTap']);
+const DENSITY_ONLY: ReadonlySet<MutationName> = new Set(['refCycle', 'knotsOverflow', 'knotsGrow', 'muteTap']);
 const RULES_ONLY: ReadonlySet<MutationName> = new Set(['airBlock']);
 export function mutationsOf(format: JsonFormat, cls: MutationClass): readonly MutationName[] {
   const all: readonly MutationName[] = cls === 'breaking' ? BREAKING_MUTATIONS : PRESERVING_MUTATIONS;
@@ -438,6 +439,17 @@ class Mutator {
           [[0, -1e9], [5e-324, 1e9]], [[0, -1e308], [1, 1e308]], [[-64, 0], [1e-300, 1e9], [320, 0]],
           [[0, { param: 'density.detailAmpLo' }], [1e-310, { param: 'density.detailAmpHi', neg: true }]],
         ]);
+        const n = getSlot(slot);
+        if (own(n, 'op') === 'slide') define(n, 'knots', knots);
+        else setSlot(slot, { op: 'slide', x: n, knots });
+        return true;
+      }
+      case 'knotsGrow': {
+        // A slide of 64 knots (accepted: the binary segment search of a long list in the fuzz's soundness check) or
+        // more (TOO_MANY_KNOTS), spread over the world's height with finite slopes.
+        if (slot === undefined) return false;
+        const count = this.pick([64, 65, 200, 1024]);
+        const knots = Array.from({ length: count }, (_, i) => [-80 + (i * 400) / count, (i % 3) - 1]);
         const n = getSlot(slot);
         if (own(n, 'op') === 'slide') define(n, 'knots', knots);
         else setSlot(slot, { op: 'slide', x: n, knots });

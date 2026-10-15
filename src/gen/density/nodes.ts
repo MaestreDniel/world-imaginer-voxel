@@ -29,7 +29,10 @@ export function valClamp(x: number, lo: number, hi: number): number { return x <
 
 /**
  * The slide factor s(y): v_0 below the first knot, v_last at and above the last, and on the half-open segment
- * [y_k, y_{k+1}) `v_k + (y − y_k) · ((v_{k+1} − v_k) / (y_{k+1} − y_k))`, in that order.
+ * [y_k, y_{k+1}) `v_k + (y − y_k) · ((v_{k+1} − v_k) / (y_{k+1} − y_k))`, in that order. The segment is found by
+ * binary search (the largest k ≤ n − 2 with y_k ≤ y; the knots are strictly increasing, so it is the segment the linear
+ * scan of SP3b found, and a NaN y gives k = 0 as it did): every cost model charges a slide 1 whatever its knot count
+ * (SP3d final review).
  */
 export function slideAt(knots: readonly SlideKnot[], y: number): number {
   const n = knots.length;
@@ -38,9 +41,14 @@ export function slideAt(knots: readonly SlideKnot[], y: number): number {
   const last = knots[n - 1]!;
   if (y >= last[0]) return last[1];
   let k = 0;
-  while (y >= knots[k + 1]![0]) k++;
-  const [yk, vk] = knots[k]!;
-  const [y1, v1] = knots[k + 1]!;
+  let hi = n - 2;
+  while (k < hi) {
+    const mid = (k + hi + 1) >> 1;
+    if (y >= knots[mid]![0]) k = mid;
+    else hi = mid - 1;
+  }
+  const a = knots[k]!, b = knots[k + 1]!;
+  const yk = a[0], vk = a[1], y1 = b[0], v1 = b[1];
   return vk + (y - yk) * ((v1 - vk) / (y1 - yk));
 }
 
@@ -216,9 +224,16 @@ export function ivSlideFactor(knots: readonly SlideKnot[], y0: number, y1: numbe
   const e = slideAt(knots, y1);
   finite = finite && FINITE(e);
   if (e < lo) lo = e; if (e > hi) hi = e;
-  for (let i = 0; i < knots.length; i++) {
+  // Start at the first knot above y0, found by binary search (the knots are strictly increasing; a NaN y0 starts at 0,
+  // as the linear skip did).
+  let i = 0;
+  for (let top = knots.length; i < top;) {
+    const mid = (i + top) >> 1;
+    if (knots[mid]![0] <= y0) i = mid + 1;
+    else top = mid;
+  }
+  for (; i < knots.length; i++) {
     const [yk, vk] = knots[i]!;
-    if (yk <= y0) continue;
     if (yk > y1) break;
     finite = finite && FINITE(vk);
     if (vk < lo) lo = vk; if (vk > hi) hi = vk;
