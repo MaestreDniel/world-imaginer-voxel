@@ -1,7 +1,7 @@
 # SP3e — Draft presets: amplified, archipelago and floating islands (Design)
 
 Date: 2026-10-16
-Status: Draft for the user's review, revised after the adversarial spec review (2026-10-16, §14). The design was approved by the user section by section on 2026-10-16 (`.superpowers/sp3e/design-brief.md`); this text adds the decisions the code survey and the review required ("Decisions taken by this spec"), each with its alternative, and the points the user still has to settle ("Open points for the user").
+Status: Draft for the user's review, revised after the adversarial spec review (2026-10-16, §14). The design was approved by the user section by section on 2026-10-16 (`.superpowers/sp3e/design-brief.md`); this text adds the decisions the code survey and the review required ("Decisions taken by this spec"), each with its alternative, and the points the user still has to settle ("Points decided by the user after the review").
 Parent: master spec `2026-09-26-architecture-design.md`. The sections involved are:
 - §10 SP3e (created by SP3d), whose deliverable, exit and cut line this spec sets, and the SP6, SP8b, SP11 and SP12 entries it hands work to;
 - §2.4-§2.5 (the `islandMask` ColumnSample field), §3.6 (density DAG: the `islands` tap), §3.11 (surface rules), §3.15 (extreme presets), §3.16-§3.17 (consistency and determinism);
@@ -70,13 +70,13 @@ The brief left these open, or the code survey and the review showed the brief's 
 - **D20 The map layer is appended** after `jag` (§2.6), with the other raw ColumnSample-field layers, and the level-256 preview computes the mask too (`sampleCoarse` writes 0 today, `src/gen/column/columnPoint.ts:99`).
 - **D21 The ground under an island** (§3.5, §4.5): the default rules' sky-open run is the first run of a position (`reference.ts:199`), so under an island the ground's top run is not sky-open and, with a sky-gated tree, takes the band state (`src/gen/surface/compile.ts:389-391`): bare stone at y ≥ 8 on the ground and the sea floor under every island (a "shadow"; roughly 10 % of the area at c = 0, less with c = 0.9). (a) Accept it for the draft and hand it to SP12 (built as written: no scan change). (b) The ground keeps its palette: with `islands.enabled` the scan's sky-open run is the highest run whose bottom is below 181, and the island branch becomes its own child before the sky-open sequence (§4.5). The spec builds (a); the before set (§1.5) shows its Voxels shot and Z3's measured `shadowDiff`, and the user chooses (open point 1).
 
-## Open points for the user
+## Points decided by the user after the review (2026-10-16)
 
-Each keeps the user's decisions as approved; the spec's recommendation is stated.
-1. **The ground under islands (D21).** The brief says "the normal ground stays as default", but with the default rules the ground and sea floor under every island turn to bare stone. The spec builds option (a) (accept, SP12) and specifies (b) (the ground keeps its palette, at the cost of a scan change and of the surface pass's sky gate, §4.5). Choose now, or at the before set with the measured `shadowDiff` and a Voxels shot.
-2. **Amplified's ceiling knee at y 270 (D2).** The brief moves "the slide knots and the ceiling term" to 300-316. The slide knots are 300-316; the recommended ceiling starts at 270 with slope 3, because the slope-8 ceiling at 300 piles the top 2 % of the land into a shelf at y 300-313. Alternatives in D2.
-3. **Z2's "islands ≥ 1 km² per 100 km²" is out of reach of SP3e's levers.** Measured 4.9-6.9 per 100 km² with the draft and at most ≈ 10 with any combination of φ shift, C wavelength (480-1200), C octaves and warp (Z2 wants ≥ 20): thresholding one fBm field makes one large island (53-92 km²) plus hundreds of islets. The spec proposes, at the approval of the before set, to accept the miss and hand it to SP12 with the numbers (§1.5, §12).
-4. **Archipelago's B1 minShare.** With D8's land share (≈ 36 %, from ≈ 56 %) the rarest land biome is estimated at ≈ 0.24 %, below B1's 0.3 % floor; the part is not loosened silently, so the dry run is expected to come back with the options of §5.4.
+The review raised four points; the user decided each on 2026-10-16 (every recommendation was taken):
+1. **The ground under islands (D21): decided at the before set.** The spec builds (a) (accept the shadow, hand it to SP12). In the dry run's before set (§1.5) the user sees a Voxels shot of the ground under a cluster and Z3's measured `shadowDiff`, and chooses then between keeping (a) and building (b) (§4.5).
+2. **Amplified's ceiling (D2): the soft knee from y 270** (`−3·max(0, y − 270)`), with the slide knots at 300-316 as designed.
+3. **Z2's "islands ≥ 1 km² per 100 km²": accepted as a miss and handed to SP12** with the measured numbers and the cause (thresholding one fBm field gives one large island and hundreds of islets; a different coastline generator is needed). Z2's ocean share part is met (63-65 %), and Z2 is a diagnostic in SP3e (§5.3, §12).
+4. **Archipelago's B1 minShare: decided on the measurement.** The dry run measures it; if it falls below 0.3 %, it comes back to the user with the options of §5.4 (a per-profile floor or a biome-box tuning) and the numbers.
 
 ## Module layout after SP3e
 
