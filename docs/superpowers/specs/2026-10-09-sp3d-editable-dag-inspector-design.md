@@ -1,7 +1,7 @@
 # SP3d — Editable density and surface rules, inspector and slice viewer (Design)
 
 Date: 2026-10-09
-Status: Approved by the user (2026-10-10): the design section by section on 2026-10-09 (`.superpowers/sp3d/design-brief.md`), then the written spec after the adversarial review of 2026-10-09 (§15) and the three review points decided on 2026-10-10; revised by the implementation-plan dry run (§16). This text adds the decisions the code survey and the review required ("Decisions taken by this spec"). Implemented (2026-10-10): the exit evidence is under `## Exit evidence`; CI and the user's visual review are pending.
+Status: Complete (2026-10-16), at GENERATOR_VERSION 5 with the world unchanged; exit evidence below. Approved by the user (2026-10-10): the design section by section on 2026-10-09 (`.superpowers/sp3d/design-brief.md`), then the written spec after the adversarial review of 2026-10-09 (§15) and the three review points decided on 2026-10-10; revised by the implementation-plan dry run (§16). This text adds the decisions the code survey and the review required ("Decisions taken by this spec"). Implemented (2026-10-10): the exit evidence is under `## Exit evidence`; CI and the user's visual review are pending.
 Parent: master spec `2026-09-26-architecture-design.md`. The sections involved are:
 - §10 SP3d, which this spec narrows to the tooling, and a new SP3e (the three draft presets) inserted after it (§14);
 - §1 (module layout), §2.5 (key types: `SubProjectId`, `ParamMeta.kind`, `Expr`), §2.7 (presets and the world URL), §3.6 (density DAG), §3.11 (surface rules), §3.15 (extreme presets), §3.17 (determinism);
@@ -426,7 +426,7 @@ The expression carries only the resolved defs the node reaches (transitively), s
 ### 3.7 Map interaction while Density is shown
 
 - The vertical plane is the cross-section's line (`section.line`, `src/ui/crossSection/section.ts:472-477`). `section` gains `onLineChange(listener)`, fired by `setLine`, so the Density view follows the line.
-- A map click is routed by the pure `mapClickAction({drawerTab, plane, nearLine, cutArmed})` (`src/ui/map/clickAction.ts`), unit-tested: a finished cut line sets the line and opens the Cross-section tab today (`mapPage.ts:211-213`), but while Density is shown it sets the line and keeps Density shown; a click near the line opens Cross-section (`mapPage.ts:105`) unless Density is shown; with the horizontal plane selected and Density shown, a click (not near the line, cut tool not armed) sets the plane's centre instead of the pin (`mapPage.ts:106`); otherwise a click sets the pin as today.
+- A map click is routed by the pure `mapClickAction({drawerTab, plane, nearLine, cutArmed})` (`src/ui/map/clickAction.ts`), unit-tested: a finished cut line sets the line and opens the Cross-section tab today (`mapPage.ts:211-213`), but while Density is shown it sets the line and keeps Density shown; a click near the line opens Cross-section (`mapPage.ts:105`) unless Density is shown; with the horizontal plane selected and Density shown, a click (cut tool not armed; near the line or not, since `nearLine` is ignored while Density is shown — as built, Task 13's review) sets the plane's centre instead of the pin (`mapPage.ts:106`); otherwise a click sets the pin as today.
 - `mapView` gains `setSquare(square | null)`, which draws the horizontal plane's square as an overlay (`mapView.ts:138-193` draws the others).
 - **First show and empty state.** The tab opens on the vertical plane when a line exists, else on the horizontal plane centred on the map view's centre (or the pin, when set), with field `density`; the vertical plane without a line shows "Draw a cut line on the map for a vertical slice".
 
@@ -771,7 +771,12 @@ Measured on the implementation branch `sp3d/editable-dag-inspector` at its last 
 - **Cut line not taken:** the pinned slices were built (up to 3 side by side, each with its own plane, field and node, re-rendered on every edit; `sliceModel.test.ts`), before the bench and the smoke so both cover them; master §5.5, §10's SP3d and SP10 entries and the cut-line receivers say so.
 - **D19 restated:** the land-top y mod 16 residue of the density's 8-voxel cell layers (SP3c §11) is handed to SP6 (§13); SP3d changes no density, so no code.
 - **Master amendments:** every §14 amendment is in the master, each in the commit §12 assigns; the arch-checked ones (`test/arch/masterSpec.test.ts`: the SP3d and SP3e entries, §1's `gen/surface`, `test/` SP3d list and `ui/inspector/*` entries, §7's slice rows, the SP10 entry and the pins' cut line) pass.
-- **Still open:** CI (GitHub Actions) is confirmed on the push; the user's visual review in production (edit a node, mute a tap, the horizontal and the vertical slice, a broken JSON's error with its path) against the screenshots in `assets/sp3d/` (`density-vertical-hover.png`, `density-muted-terrain.png`, `density-broken-json.png`, `density-horizontal-8192.png`, `density-stacked-800.png`).
+Done after the merge (2026-10-16):
+- `main` fast-forwarded to the branch and pushed at b2abf65 (the user chose a local merge with push; the Task 27 commit's Co-Authored-By trailer was reworded first with the user's go-ahead, tree unchanged), so the CI evidence is the push run: GitHub Actions green in 6 min 48 s.
+- Production (Vercel) deployed b2abf65 (its bundle equals a local build of it). In headless Chrome: `?selftest=1` `✓ all 54 goldens match (6.5 s)`; `?map` loads with the cross-section's Voxels mode and the Density tab, and no page errors.
+- Production, Firefox 157 (the user): `?selftest=1` 54/54, and every `actual` equals `test/goldens.json`; the JSON is in `assets/sp3d/selftest-firefox.json`. The user tried the Density tab in production (editing a node, muting a tap, the vertical and the horizontal slice, a broken JSON's error with its path) and approved the visual review.
+
+SP3d is complete (2026-10-16): every §11 exit criterion holds.
 
 ## Threshold log
 
