@@ -1,7 +1,7 @@
 # SP3e — Draft presets: amplified, archipelago and floating islands (Design)
 
 Date: 2026-10-16
-Status: Draft for the user's review, revised after the adversarial spec review (2026-10-16, §14). The design was approved by the user section by section on 2026-10-16 (`.superpowers/sp3e/design-brief.md`); this text adds the decisions the code survey and the review required ("Decisions taken by this spec"), each with its alternative, and the points the user still has to settle ("Points decided by the user after the review").
+Status: Approved by the user (2026-10-16): the design section by section (`.superpowers/sp3e/design-brief.md`), then the written spec after the adversarial review (§14) and the four review points decided the same day. This text adds the decisions the code survey and the review required ("Decisions taken by this spec").
 Parent: master spec `2026-09-26-architecture-design.md`. The sections involved are:
 - §10 SP3e (created by SP3d), whose deliverable, exit and cut line this spec sets, and the SP6, SP8b, SP11 and SP12 entries it hands work to;
 - §2.4-§2.5 (the `islandMask` ColumnSample field), §3.6 (density DAG: the `islands` tap), §3.11 (surface rules), §3.15 (extreme presets), §3.16-§3.17 (consistency and determinism);
