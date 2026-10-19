@@ -31,6 +31,7 @@
 .pp-field { flex: 0 0 6.5em; width: 6.5em; padding: 1px 4px; font: 12px ui-monospace, monospace; color: #ddd; background: #15171b; border: 1px solid #3a3f48; border-radius: 2px; }
 .pp-field.pp-invalid { border-color: #ff7b72; outline-color: #ff7b72; }
 .pp-check { display: inline-flex; align-items: center; gap: 4px; }
+.pp-bool { margin: 0; }
 .pp-amps { display: flex; flex-wrap: wrap; gap: 3px; margin: 3px 0 0 calc(6.5em + 6px); }
 .pp-amps .pp-field { flex: 0 0 5em; width: 5em; }
 .pp-noise-body { padding-left: 8px; }

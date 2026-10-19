@@ -240,7 +240,7 @@ function jsonVariants(path: string, value: unknown): unknown[] {
  * are dropped. number/int: v ± 15 % of |v|, or ± 15 % of the range span when v is 0 or the step leaves the
  * range (at least 1 for int), clamped; noise: wavelength × 0.85 and × 1.15 within its range; spline: every
  * numeric knot moved by ±15 % of the y span, clamped; boxTable: every interval shrunk and grown by 15 % of its width;
- * json: the leaf's one pinned variant (`JSON_VARIANTS`, SP3d spec §7).
+ * json: the leaf's one pinned variant (`JSON_VARIANTS`, SP3d spec §7); bool: its negation (SP3e spec §5.6).
  */
 export function perturbations(leaf: LeafInfo, value: unknown): unknown[] {
   const l = leaf.leaf;
@@ -265,6 +265,9 @@ export function perturbations(leaf: LeafInfo, value: unknown): unknown[] {
       break;
     case 'json':
       values = jsonVariants(leaf.path, value);
+      break;
+    case 'bool':
+      values = [!(value as boolean)];
       break;
     default:
       throw new Error(`U2 has no perturbation for ${leaf.path} (kind ${l.kind})`);

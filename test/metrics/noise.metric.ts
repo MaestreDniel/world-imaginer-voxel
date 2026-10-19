@@ -30,6 +30,55 @@ export const CLIMATE_NOISES: readonly MetricNoise[] = SCHEMA_NOISES.filter((n) =
 /** Adversarial single-stack defs plus the 3D density-like def. */
 export const TEST_NOISES: readonly MetricNoise[] = [...ADVERSARIAL_DEFS, DENSITY3D_DEF].map((f) => ({ name: f.seedName, def: f.def, dims: f.dims, corners: f.corners }));
 
+/**
+ * The schema noise instances at main 634d81a, before SP3e (SP3e spec §5.7, D19). N1, N2, N3, N5 and N6 are maxima or
+ * minima over every schema noise, so a new noise may move them; each also records its aggregate over this set (plus
+ * the test noises, which are not schema noises) as `<value>.preSp3e`, which must equal main's plain value, and each
+ * schema noise outside it its own value as `<value>.<noise>`.
+ */
+const PRE_SP3E_NOISES: ReadonlySet<string> = new Set([
+  'climate.warp.shift.noise.x', 'climate.warp.shift.noise.z', 'climate.warp.C.noise.x', 'climate.warp.C.noise.z',
+  'climate.warp.R.noise.x', 'climate.warp.R.noise.z', 'climate.C', 'climate.E', 'climate.W', 'climate.T', 'climate.H', 'climate.R',
+  'rivers.widthNoise', 'lakes.warpNoise.x', 'lakes.warpNoise.z', 'lakes.rimNoise',
+  'density.noises.jag', 'density.noises.overhang', 'density.noises.detail',
+  'surface.noises.depth', 'surface.noises.patch', 'surface.noises.bandOffset',
+]);
+const SCHEMA_NAMES = new Set(SCHEMA_NOISES.map((n) => n.name));
+for (const name of PRE_SP3E_NOISES) if (!SCHEMA_NAMES.has(name)) throw new Error(`PRE_SP3E_NOISES names ${name}, which is not a schema noise`);
+/** The schema noises SP3e added (outside PRE_SP3E_NOISES); the test noises are never new. */
+const isNew = (n: MetricNoise): boolean => SCHEMA_NAMES.has(n.name) && !PRE_SP3E_NOISES.has(n.name);
+
+/** A running maximum or minimum over all noises, over the pre-SP3e set, and per new noise. */
+interface Aggregate {
+  readonly fold: (a: number, b: number) => number;
+  all: number;
+  pre: number;
+  readonly perNew: Map<string, number>;
+}
+const aggregate = (fold: (a: number, b: number) => number, init: number): Aggregate => ({ fold, all: init, pre: init, perNew: new Map() });
+/** Folds `v`, a value measured on `noises` (one noise, or a pair for N2), into the aggregate. */
+function fold(a: Aggregate, v: number, ...noises: MetricNoise[]): void {
+  a.all = a.fold(a.all, v);
+  const fresh = noises.filter(isNew);
+  if (fresh.length === 0) a.pre = a.fold(a.pre, v);
+  for (const n of fresh) {
+    const old = a.perNew.get(n.name);
+    a.perNew.set(n.name, old === undefined ? v : a.fold(old, v));
+  }
+}
+/** The aggregate's extras: `key.preSp3e`, then `key.<noise>` per new noise in measuring order. */
+function extras(out: Record<string, number>, key: string, a: Aggregate): void {
+  out[`${key}.preSp3e`] = a.pre;
+  for (const [name, v] of a.perNew) out[`${key}.${name}`] = v;
+}
+/** Plain values first (the gated parts), then each value's extras. */
+function values(entries: readonly (readonly [string, Aggregate])[]): Record<string, number> {
+  const out: Record<string, number> = {};
+  for (const [k, a] of entries) out[k] = a.all;
+  for (const [k, a] of entries) extras(out, k, a);
+  return out;
+}
+
 export function field(seed: Seed64, n: MetricNoise): Field {
   const nn = new Normal(seed, n.name, n.def);
   return n.dims === 2 ? (x, _y, z) => nn.z2(x, z) : (x, y, z) => nn.z3(x, y, z);
@@ -40,8 +89,8 @@ metricTest('N1', ['ksD', 'sdErr'], () => {
   const n = pick(50000, 50000, 200000);
   const pts = samplePoints('N1', n);
   const u = new Float64Array(n);
-  let ksD = 0;
-  let sdErr = 0;
+  const ksD = aggregate(Math.max, 0);
+  const sdErr = aggregate(Math.max, 0);
   for (let s = 1; s <= seeds; s++) {
     for (const nz of CLIMATE_NOISES) {
       const nn = new Normal([s, 0], nz.name, nz.def);
@@ -51,11 +100,11 @@ metricTest('N1', ['ksD', 'sdErr'], () => {
         m.add(z);
         u[i] = U(z);
       }
-      ksD = Math.max(ksD, ksUniform(u));
-      sdErr = Math.max(sdErr, Math.abs(m.sd - 1));
+      fold(ksD, ksUniform(u), nz);
+      fold(sdErr, Math.abs(m.sd - 1), nz);
     }
   }
-  return { ksD, sdErr };
+  return values([['ksD', ksD], ['sdErr', sdErr]]);
 });
 
 metricTest('N2', ['value'], () => {
@@ -70,23 +119,23 @@ metricTest('N2', ['value'], () => {
     for (let i = 0; i < n; i++) v[i] = nn.z2(pts.x[i]!, pts.z[i]!);
     return v;
   });
-  let worst = 0;
+  const worst = aggregate(Math.max, 0);
   for (const b of bases) {
     const base = valuesAt(b);
-    for (let i = 0; i < set.length; i++) for (let j = i + 1; j < set.length; j++) worst = Math.max(worst, Math.abs(pearson(base[i]!, base[j]!)));
+    for (let i = 0; i < set.length; i++) for (let j = i + 1; j < set.length; j++) fold(worst, Math.abs(pearson(base[i]!, base[j]!)), set[i]!, set[j]!);
     for (let k = 1; k <= K; k++) {
       const other = valuesAt(b + k);
-      for (let i = 0; i < set.length; i++) for (let j = 0; j < set.length; j++) worst = Math.max(worst, Math.abs(pearson(base[i]!, other[j]!)));
+      for (let i = 0; i < set.length; i++) for (let j = 0; j < set.length; j++) fold(worst, Math.abs(pearson(base[i]!, other[j]!)), set[i]!, set[j]!);
     }
   }
-  return { value: worst };
+  return values([['value', worst]]);
 });
 
 metricTest('N3', ['value'], () => {
   const n = pick(5000, 20000, 50000);
   const a = samplePoints('N3.a', n);
   const b = samplePoints('N3.b', n);
-  let worst = Infinity;
+  const worst = aggregate(Math.min, Infinity);
   for (const s of [1, 2]) {
     for (const nz of [...SCHEMA_NOISES, ...TEST_NOISES]) {
       const f = field([s, 0], nz);
@@ -94,11 +143,11 @@ metricTest('N3', ['value'], () => {
       const dirs: Array<[number, number, number]> = nz.dims === 3 ? [[1, 0, 0], [0, 0, 1], [1, 0, 1], [0, 1, 0]] : [[1, 0, 0], [0, 0, 1], [1, 0, 1]];
       for (const P of [256, 512, 1024, 2048, 4096, 65536]) {
         const L = P * nz.def.wavelength;
-        for (const e of dirs) worst = Math.min(worst, meanAbsShiftDiff(f, a, [L * e[0], L * e[1], L * e[2]], nz.corners) / base);
+        for (const e of dirs) fold(worst, meanAbsShiftDiff(f, a, [L * e[0], L * e[1], L * e[2]], nz.corners) / base, nz);
       }
     }
   }
-  return { value: worst };
+  return values([['value', worst]]);
 });
 
 const latticeTerms = (def: NoiseDef) => def.octaves * (def.double ? 2 : 1);
@@ -106,8 +155,8 @@ const latticeTerms = (def: NoiseDef) => def.octaves * (def.double ? 2 : 1);
 metricTest('N5', ['horizontal', 'vertical'], () => {
   const n = pick(100000, 200000, 400000);
   const pts = samplePoints('N5', n);
-  let horizontal = 0;
-  let vertical = 0;
+  const horizontal = aggregate(Math.max, 0);
+  const vertical = aggregate(Math.max, 0);
   const DENSITY = TEST_NOISES.find((t) => t.name === 'test.density3d')!;
   for (const s of [1, 2]) {
     for (const nz of [...SCHEMA_NOISES, DENSITY].filter((t) => latticeTerms(t.def) >= 2)) {
@@ -132,17 +181,17 @@ metricTest('N5', ['horizontal', 'vertical'], () => {
           if (Math.abs(gxp) !== c && Math.abs(gxm) !== c && Math.abs(yp) !== c && Math.abs(ym) !== c) vr.add(gxp - gxm, yp - ym);
         }
       }
-      horizontal = Math.max(horizontal, hr.ratio());
-      if (nz.dims === 3) vertical = Math.max(vertical, vr.ratio());
+      fold(horizontal, hr.ratio(), nz);
+      if (nz.dims === 3) fold(vertical, vr.ratio(), nz);
     }
   }
-  return { horizontal, vertical };
+  return values([['horizontal', horizontal], ['vertical', vertical]]);
 });
 
 metricTest('N6', ['value'], () => {
   const n = pick(50000, 200000, 1000000);
   const pts = samplePoints('N6', n);
-  let worst = 0;
-  for (const s of [1, 2]) for (const nz of [...SCHEMA_NOISES, ...TEST_NOISES]) worst = Math.max(worst, zeroRate(field([s, 0], nz), pts, nz.corners));
-  return { value: worst };
+  const worst = aggregate(Math.max, 0);
+  for (const s of [1, 2]) for (const nz of [...SCHEMA_NOISES, ...TEST_NOISES]) fold(worst, zeroRate(field([s, 0], nz), pts, nz.corners), nz);
+  return values([['value', worst]]);
 });

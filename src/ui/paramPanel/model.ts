@@ -6,7 +6,7 @@
 import type { RegenScope, StageId } from '../../core/ids';
 import type { NoiseDef, NoiseDefPatch } from '../../core/noise/types';
 import { q15 } from '../../core/params/canonical';
-import { AMPLITUDE_MIN, NOISE_FIELD_RANGES, type Issue, type ParamKind, type ParamMeta } from '../../core/params/kit';
+import { AMPLITUDE_MIN, getPath, NOISE_FIELD_RANGES, type Issue, type LeafInfo, type NodeInfo, type ParamKind, type ParamMeta } from '../../core/params/kit';
 import { SCHEMA } from '../../core/params/schema';
 
 export interface ControlSpec {
@@ -75,12 +75,18 @@ interface SectionDraft {
 
 const parentOf = (path: string): string => (path.includes('.') ? path.slice(0, path.lastIndexOf('.')) : '');
 
-/** The panel tree from `SCHEMA.nodes` (pre-order): the root group is the root section. */
-export function panelTree(): SectionSpec {
-  const metas = new Map(SCHEMA.leaves.map((l) => [l.path, l.meta] as const));
+/** What the panel tree reads of a schema (a synthetic schema in tests, SP3e: the first bool leaf's control). */
+export interface PanelSchema {
+  readonly nodes: readonly NodeInfo[];
+  readonly leaves: readonly LeafInfo[];
+}
+
+/** The panel tree from the schema's nodes (pre-order; `SCHEMA` by default): the root group is the root section. */
+export function panelTree(schema: PanelSchema = SCHEMA): SectionSpec {
+  const metas = new Map(schema.leaves.map((l) => [l.path, l.meta] as const));
   const sections = new Map<string, SectionDraft>();
   let root: SectionDraft | undefined;
-  for (const { path, node } of SCHEMA.nodes) {
+  for (const { path, node } of schema.nodes) {
     if (node.tag === 'group') {
       const s: SectionDraft = { path, label: node.label, doc: node.doc, controls: [], sections: [] };
       sections.set(path, s);
@@ -184,8 +190,25 @@ export function noiseFieldLock(c: ControlSpec, def: NoiseDef, field: keyof Noise
   }
 }
 
-/** The leaf kinds the panel has a control for (spec §3.2's list); the panel throws for any other kind. */
-export const PANEL_KINDS: readonly ParamKind[] = Object.freeze(['number', 'int', 'noise', 'spline', 'boxTable', 'json']);
+/** The leaf kinds the panel has a control for (spec §3.2's list; SP3e: bool); the panel throws for any other kind. */
+export const PANEL_KINDS: readonly ParamKind[] = Object.freeze(['number', 'int', 'noise', 'spline', 'boxTable', 'json', 'bool']);
+
+/** A bool leaf's checkbox (SP3e spec §2.1): the value `session.set(path, …)` takes when the box changes is its checked state. */
+export function boolWrite(checked: boolean): boolean {
+  return checked;
+}
+
+/** The checked state a bool leaf's checkbox shows: the leaf's value in `params` (the draft); a non-boolean throws. */
+export function boolShown(params: unknown, path: string): boolean {
+  const v = getPath(params, path);
+  if (typeof v !== 'boolean') throw new Error(`${path} is not a bool (${String(v)})`);
+  return v;
+}
+
+/** A control's modified marks: the dot is lit and the reset button enabled exactly while the leaf differs from the profile. */
+export function modifiedMarks(modified: boolean): { readonly dot: boolean; readonly resetDisabled: boolean } {
+  return { dot: modified, resetDisabled: !modified };
+}
 
 /** Positions of a log slider, and the most any slider gets. */
 export const SLIDER_POSITIONS = 1000;

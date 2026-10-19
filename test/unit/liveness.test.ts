@@ -1,7 +1,7 @@
 import { describe, expect, test } from 'vitest';
 import { canonicalJSON } from '../../src/core/params/canonical';
 import { DEFAULTS } from '../../src/core/params/defaults';
-import { checkLeaf, getPath, patchAt, type BoxTable, type Issue } from '../../src/core/params/kit';
+import { bool, buildSchema, checkLeaf, getPath, group, patchAt, type BoxTable, type Issue } from '../../src/core/params/kit';
 import { SCHEMA, type ParamsPatch } from '../../src/core/params/schema';
 import type { NestedSpline } from '../../src/core/spline/types';
 import { buildColumnSample, gorgeAt, newColumnSample, riverWetAt, type ColumnSample } from '../../src/gen/column/columnStage';
@@ -74,11 +74,11 @@ function surfaceShows(s: ColumnSample): Record<SurfaceClass, () => boolean> {
 }
 
 describe('perturbations', () => {
-  test('every leaf of the schema gets two distinct perturbed values (a json leaf its one pinned variant), each valid for the leaf', () => {
+  test('every leaf of the schema gets two distinct perturbed values (a json leaf its one pinned variant, a bool leaf its negation), each valid for the leaf', () => {
     for (const info of SCHEMA.leaves) {
       const value = getPath(DEFAULTS, info.path);
       const values = perturbations(info, value);
-      const n = info.leaf.kind === 'json' ? 1 : 2;
+      const n = info.leaf.kind === 'json' || info.leaf.kind === 'bool' ? 1 : 2;
       expect(values, info.path).toHaveLength(n);
       expect(new Set([value, ...values].map((v) => canonicalJSON(v))).size, info.path).toBe(n + 1);
       for (const v of values) {
@@ -86,6 +86,18 @@ describe('perturbations', () => {
         checkLeaf(info.leaf, v, info.path, issues);
         expect(issues, info.path).toEqual([]);
       }
+    }
+  });
+
+  test('bool (SP3e spec §5.6): one variant, the negation', () => {
+    const S = buildSchema(group('Test', 'test schema', { flag: bool(false, { label: 'Flag', doc: 'a switch', scope: 'terrain', stage: 'shape' }) }));
+    const info = S.leaves[0]!;
+    expect(perturbations(info, false)).toEqual([true]);
+    expect(perturbations(info, true)).toEqual([false]);
+    for (const v of [true, false]) {
+      const issues: Issue[] = [];
+      checkLeaf(info.leaf, perturbations(info, v)[0], info.path, issues);
+      expect(issues).toEqual([]);
     }
   });
 

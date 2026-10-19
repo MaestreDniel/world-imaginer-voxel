@@ -3,12 +3,12 @@ import type { RegenScope } from '../../src/core/ids';
 import type { NoiseDef } from '../../src/core/noise/types';
 import { q15 } from '../../src/core/params/canonical';
 import { DEFAULTS } from '../../src/core/params/defaults';
-import { applyPatch, getPath, NOISE_KEYS, patchAt, type Issue } from '../../src/core/params/kit';
+import { applyPatch, bool, buildSchema, getPath, group, NOISE_KEYS, num, patchAt, type Issue } from '../../src/core/params/kit';
 import { SCHEMA, type Params } from '../../src/core/params/schema';
 import { WorldSession, type SessionResult } from '../../src/engine/session';
 import { paramLints } from '../../src/ui/paramPanel/lints';
 import {
-  amplitudeItemChange, amplitudesToggle, controlTip, issueLines, modifiedText, NOISE_FIELD_DOCS, NOISE_NUMBER_FIELDS, noiseFieldControl,
+  amplitudeItemChange, amplitudesToggle, boolShown, boolWrite, controlTip, issueLines, modifiedMarks, modifiedText, NOISE_FIELD_DOCS, NOISE_NUMBER_FIELDS, noiseFieldControl,
   noiseFieldLock, octavesChange, PANEL_KINDS, panelTree, parseFieldText, scopeBadge, sliderPosition, sliderPositions, sliderToValue,
   valueToSlider, type ControlSpec, type SectionSpec,
 } from '../../src/ui/paramPanel/model';
@@ -297,8 +297,8 @@ describe('cross-field lints', () => {
 });
 
 describe('panel controls (Task 17): kinds, slider positions, typed values, issues', () => {
-  test("every control of today's schema has a panel control kind (SP3d: json, the trees' link to the Density tab)", () => {
-    expect(PANEL_KINDS).toEqual(['number', 'int', 'noise', 'spline', 'boxTable', 'json']);
+  test("every control of today's schema has a panel control kind (SP3d: json, the trees' link to the Density tab; SP3e: bool, a checkbox)", () => {
+    expect(PANEL_KINDS).toEqual(['number', 'int', 'noise', 'spline', 'boxTable', 'json', 'bool']);
     expect(controlsOf(panelTree()).filter((c) => c.kind === 'json').map((c) => [c.path, c.label])).toEqual([
       ['density.defs', 'Density expression'], ['surface.rules', 'Surface rules'],
     ]);
@@ -435,5 +435,43 @@ describe('panel controls (Task 17): kinds, slider positions, typed values, issue
     expect(w.state.params.climate.C).toMatchObject({ octaves: 1, amplitudes: [1] });
     expect(lines(w.set('climate.C', amplitudeItemChange(w.state.params.climate.C, 0, 0)), 'climate.C.amplitudes', 'climate.C'))
       .toEqual(['at least one amplitude must be non-zero']);
+  });
+});
+
+describe('bool leaves (SP3e spec §2.1, D10): the checkbox control', () => {
+  const FLAG_DOC = 'A synthetic switch.';
+  const S = buildSchema(group('Test', 'test schema', {
+    g: group('G', 'a group', {
+      n: num(0.5, { label: 'n', doc: 'a number', min: 0, max: 1, step: 0.05, scope: 'terrain', stage: 'shape' }),
+      flag: bool(false, { label: 'Flag', doc: FLAG_DOC, scope: 'terrain', stage: 'shape' }),
+    }),
+  }));
+  const flag = (): ControlSpec => {
+    const c = controlsOf(panelTree(S)).find((x) => x.path === 'g.flag');
+    if (c === undefined) throw new Error('no control g.flag');
+    return c;
+  };
+
+  test("a bool leaf's panel tree entry is a bool control with a panel kind, no range and no slider", () => {
+    expect(panelTree(S).sections.map((s) => s.path)).toEqual(['g']);
+    expect(controlsOf(panelTree(S)).map((c) => [c.path, c.kind])).toEqual([['g.n', 'number'], ['g.flag', 'bool']]);
+    expect(flag()).toEqual({ path: 'g.flag', kind: 'bool', label: 'Flag', doc: FLAG_DOC, scale: 'linear', scope: 'terrain', stage: 'shape' });
+    expect(PANEL_KINDS).toContain(flag().kind);
+    expect(controlTip(flag())).toBe(`${FLAG_DOC}\nPath: g.flag`);
+    expect(() => sliderPositions(flag())).toThrow(/no slider for g\.flag \(bool\)/);
+  });
+
+  test('the checkbox commits its checked state and shows the draft value', () => {
+    expect(boolWrite(true)).toBe(true);
+    expect(boolWrite(false)).toBe(false);
+    expect(boolShown({ g: { n: 0.5, flag: true } }, 'g.flag')).toBe(true);
+    expect(boolShown(S.defaults, 'g.flag')).toBe(false);
+    expect(() => boolShown({ g: { flag: 1 } }, 'g.flag')).toThrow(/g\.flag is not a bool/);
+    expect(() => boolShown({ g: {} }, 'g.flag')).toThrow(/g\.flag is not a bool/);
+  });
+
+  test('the modified dot is lit and reset enabled exactly while the leaf differs from the profile', () => {
+    expect(modifiedMarks(true)).toEqual({ dot: true, resetDisabled: false });
+    expect(modifiedMarks(false)).toEqual({ dot: false, resetDisabled: true });
   });
 });

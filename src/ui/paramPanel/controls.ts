@@ -7,7 +7,8 @@
  *   whole leaf;
  * - spline: an "Edit" button that opens the drawer on the leaf;
  * - boxTable: a link to the Biomes tab;
- * - json (SP3d spec §1.1): a link "Edit in Density" that opens the drawer's Density tab on the tree.
+ * - json (SP3d spec §1.1): a link "Edit in Density" that opens the drawer's Density tab on the tree;
+ * - bool (SP3e spec §2.1): a checkbox that commits on change; a refusal shows the draft's value again.
  * The Density tab's node form shows the number row of a ref's target (`createTargetRow`, SP3d spec §3.3).
  * Every control has a scope badge, a modified dot, a reset button and a tooltip (doc, range, unit, path).
  * A slider drag is one gesture (§1.3); a numeric field commits on Enter or blur (urgent) and Escape restores
@@ -19,7 +20,7 @@ import { getPath, type Issue } from '../../core/params/kit';
 import type { SessionResult, SessionState, WorldSession } from '../../engine/session';
 import { el } from '../common/dom';
 import {
-  amplitudeItemChange, amplitudesToggle, controlTip, issueLines, NOISE_FIELD_DOCS, NOISE_NUMBER_FIELDS, noiseFieldControl, noiseFieldLock,
+  amplitudeItemChange, amplitudesToggle, boolShown, boolWrite, controlTip, issueLines, modifiedMarks, NOISE_FIELD_DOCS, NOISE_NUMBER_FIELDS, noiseFieldControl, noiseFieldLock,
   octavesChange, parseFieldText, refTargetControl, refTargetWrite, scopeBadge, sliderPosition, sliderPositions, sliderToValue, type ControlSpec, type NoiseNumberField,
 } from './model';
 
@@ -260,8 +261,9 @@ function frame(deps: ControlDeps, c: ControlSpec, onReset: () => void, extra: re
     element,
     label,
     setModified(on) {
-      dot.classList.toggle('on', on);
-      reset.disabled = !on;
+      const m = modifiedMarks(on);
+      dot.classList.toggle('on', m.dot);
+      reset.disabled = m.resetDisabled;
     },
     setLint(text) {
       lint.textContent = text ?? '';
@@ -508,6 +510,42 @@ function treeControl(deps: ControlDeps, c: ControlSpec): PanelControl {
   };
 }
 
+/** A bool leaf (SP3e spec §2.1): a checkbox in the header that commits its checked state on change. */
+function boolControl(deps: ControlDeps, c: ControlSpec): PanelControl {
+  const box = el('input', 'pp-bool');
+  box.type = 'checkbox';
+  box.id = `pp-${c.path}`;
+  const issues = issueBox();
+  const show = (params: unknown) => { box.checked = boolShown(params, c.path); };
+  box.addEventListener('change', (e) => {
+    const r = run(deps, e, () => deps.session.set(c.path, boolWrite(box.checked)));
+    if (r.ok) {
+      issues.clear(box);
+      return;
+    }
+    issues.show(box, r.issues, c.path, c.path);
+    show(deps.session.state.params);
+  });
+  const restore = () => {
+    issues.clear();
+    show(deps.session.state.params);
+  };
+  const f = frame(deps, c, restore, [box]);
+  f.label.htmlFor = box.id;
+  f.element.insertBefore(issues.element, f.element.lastChild);
+  return {
+    path: c.path,
+    element: f.element,
+    sync(s) {
+      show(s.params);
+      f.setModified(deps.session.modified(c.path));
+    },
+    restore,
+    setLint: (t) => f.setLint(t),
+    focus: () => box.focus(),
+  };
+}
+
 /** The control of one leaf; throws for a kind the panel has no control for (model.ts PANEL_KINDS). */
 export function createControl(c: ControlSpec, deps: ControlDeps): PanelControl {
   switch (c.kind) {
@@ -517,6 +555,7 @@ export function createControl(c: ControlSpec, deps: ControlDeps): PanelControl {
     case 'spline': return splineControl(deps, c);
     case 'boxTable': return tableControl(deps, c);
     case 'json': return treeControl(deps, c);
+    case 'bool': return boolControl(deps, c);
     default: throw new Error(`no panel control for ${c.path} (${c.kind})`);
   }
 }
