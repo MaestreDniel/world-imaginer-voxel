@@ -27,6 +27,12 @@ export const THRESHOLDS: ThresholdTable = {
   B1: {
     minShare: { min: 0.003, activeFrom: 'SP2a' }, minRareShare: { min: 0.001, activeFrom: 'SP2a' }, largestLand: { max: 0.16, activeFrom: 'SP2a' },
     oceanFamilyMin: { min: 0.25, activeFrom: 'SP2a' }, oceanFamilyMax: { max: 0.45, activeFrom: 'SP2a' }, ties: { max: 0, activeFrom: 'SP2a' }, outside: { max: 0.02, activeFrom: 'SP2a' },
+    // SP3e spec §5.4 (D15): archipelago's own parts (`.out/B1.presets.json`); its minShare floor is the user's per-profile
+    // 0.25 % (point 4: measured 0.27 % quick, limited by frozen_river), the other floors as the default's.
+    oceanFamilyArchipelago: { min: 0.55, max: 0.8, activeFrom: 'SP3e' }, minShareArchipelago: { min: 0.0025, activeFrom: 'SP3e' },
+    minRareShareArchipelago: { min: 0.001, activeFrom: 'SP3e' }, largestLandArchipelago: { max: 0.16, activeFrom: 'SP3e' },
+    tiesArchipelago: { max: 0, activeFrom: 'SP3e' }, outsideArchipelago: { max: 0.02, activeFrom: 'SP3e' },
+    presetInputsDiffer: { max: 0, activeFrom: 'SP3e' },
   },
   B4: {
     hotColdSpruceWindswept: { max: 0.01, activeFrom: 'SP2a' }, coastBandBeach: { min: 0.7, activeFrom: 'SP2a' },
@@ -57,6 +63,11 @@ export const THRESHOLDS: ThresholdTable = {
     probeBulk: { max: 0, activeFrom: 'SP3b' }, compiledReference: { max: 0, activeFrom: 'SP3b' },
     surfaceProbeBulk: { max: 0, activeFrom: 'SP3c' }, surfaceReference: { max: 0, activeFrom: 'SP3c' },
     editedDensityReference: { max: 0, activeFrom: 'SP3d' }, editedSurfaceReference: { max: 0, activeFrom: 'SP3d' },
+    // SP3e spec §5.2: the presets' exactness parts (`.out/DT2.presets.json`).
+    presetProbeBulk: { max: 0, activeFrom: 'SP3e' }, presetCompiledReference: { max: 0, activeFrom: 'SP3e' },
+    presetSurfaceProbeBulk: { max: 0, activeFrom: 'SP3e' }, presetSurfaceReference: { max: 0, activeFrom: 'SP3e' },
+    presetNonFinite: { max: 0, activeFrom: 'SP3e' }, presetHeightmaps: { max: 0, activeFrom: 'SP3e' },
+    presetNoFeatureColumn: { max: 0, activeFrom: 'SP3e' },
   },
   S1: { buried: { max: 0, activeFrom: 'SP3c' }, grassNoSky: { max: 0, activeFrom: 'SP3c' }, ymod16: { min: 0.001, activeFrom: 'SP3c' } },
   S2: { deepslateBelow0: { min: 0.95, activeFrom: 'SP3c' }, deepslateAbove8: { max: 0.01, activeFrom: 'SP3c' }, bedrockFloor: { min: 1, activeFrom: 'SP3c' } },

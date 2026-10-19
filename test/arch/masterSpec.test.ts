@@ -23,6 +23,8 @@
  * names `islands.ts`, and its `core/params/` entry `presetTrees.ts`, which exist (each lands with its file). §6.4's U2
  * row states the leaf count U2 covers (the schema's climate, shape, biome2d and terrain leaves: 73 with
  * `density.noises.islands`), and §3.6 sends the islands term to the SP3e spec §3 (both land with `FLOATING_DENSITY_TREE`).
+ * §6.4's B1 row states archipelago's per-profile parts with the minShare floor THRESHOLDS gates, and its DT2 row the
+ * presets' parts (`DT2.presets`), which THRESHOLDS lists (both land with `presets.metric.ts`).
  */
 import { existsSync, readdirSync, readFileSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
@@ -33,6 +35,7 @@ import { SCHEMA } from '../../src/core/params/schema';
 import { PIN_MAX } from '../../src/ui/inspector/sliceModel';
 import { REGISTRY } from '../../src/world/blocks';
 import { BENCH_ROWS } from '../bench/gates';
+import { THRESHOLDS } from '../thresholds';
 import { SP_DEPS } from '../harness/sp';
 import { DET_FILES } from './rules/banned';
 
@@ -321,6 +324,25 @@ describe('master spec amendments (SP3e §11, §13)', () => {
     expect(n).toBe(73);
     expect(u2).toContain(`the islands leaves are decided on a floating_islands island column; U2 covers ${n} leaves (amended by SP3e)`);
     expect(text).toContain('- `islands` is `−1e6` except in the floating_islands preset (SP3e) (SP3e spec §3).');
+  });
+
+  test('§6.4\'s B1 row states archipelago\'s own parts and floor, its DT2 row the presets\' parts (DT2.presets)', () => {
+    const b1 = text.split('\n').find((l) => l.startsWith('| B1 |'));
+    expect(b1, 'no B1 row in §6.4').toBeDefined();
+    const floor = THRESHOLDS.B1?.minShareArchipelago?.min;
+    expect(floor).toBe(0.0025);
+    expect(b1).toContain(`per profile: archipelago's ocean family 55-80 % with its own parts (\`B1.presets\`; its minShare floor is ${floor! * 100} %`);
+    expect(b1).toContain('amplified and floating_islands share the default\'s B1 inputs (amended by SP3e)');
+    const ocean = THRESHOLDS.B1?.oceanFamilyArchipelago;
+    expect([ocean?.min, ocean?.max]).toEqual([0.55, 0.8]);
+    const dt2 = text.split('\n').find((l) => l.startsWith('| DT2 |'));
+    expect(dt2, 'no DT2 row in §6.4').toBeDefined();
+    expect(dt2).toContain('SP3e: the four exactness parts, non-finite values, heightmaps and feature-column searches on the presets (`DT2.presets`) (amended by SP3e)');
+    const parts = Object.keys(THRESHOLDS.DT2 ?? {}).filter((k) => k.startsWith('preset'));
+    expect(parts).toEqual([
+      'presetProbeBulk', 'presetCompiledReference', 'presetSurfaceProbeBulk', 'presetSurfaceReference', 'presetNonFinite',
+      'presetHeightmaps', 'presetNoFeatureColumn',
+    ]);
   });
 
   test('§1\'s core/params entry names presetTrees.ts (the preset trees), which exists', () => {

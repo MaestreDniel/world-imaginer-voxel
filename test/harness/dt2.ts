@@ -11,6 +11,7 @@ import { surfaceProbe } from '../../src/gen/surface/probe';
 import { newSurfaceScan, runAt } from '../../src/gen/surface/scan';
 import { fillColumnT } from '../../src/metrics/region';
 import { AIR } from '../../src/world/blocks/index';
+import type { ColumnView } from '../../src/world/store/api';
 import { createStore, type VoxelStore } from '../../src/world/store/store';
 
 /**
@@ -20,9 +21,45 @@ import { createStore, type VoxelStore } from '../../src/world/store/store';
  * plus the 8 skin voxels of its own `DT2.surface` stream, adding into `acc`. Definitions: region.metric.ts' DT2
  * comment (SP3b spec §8.2, SP3c spec §5.2). region.metric.ts keeps its profiles, its shared `fnv1a32('DT2')` stream,
  * `DT2_RANGE` and the edited parts, and calls this per column, so its draws and outputs are unchanged (spec §5.7).
+ * SP3e's `DT2.presets` (spec §5.2, `test/metrics/presets.metric.ts`) passes the optional trailing `Dt2Extension`:
+ * extra voxels in a y range (amplified's slide and ceiling) and observers for its non-finite, heightmap and population
+ * values; without it a call draws and counts exactly as before.
  */
 
 export const DT2_VOXELS_PER_COLUMN = 16;
+
+/** The stratum a checked voxel was drawn in: DT2's three (6 uniform, 5 bulk-evaluated, 5 near the top), or an extra. */
+export type Dt2Stratum = 'uniform' | 'bulk' | 'top' | 'extra';
+
+/** One checked voxel, as `Dt2Extension.voxel` sees it. */
+export interface Dt2Voxel {
+  readonly stratum: Dt2Stratum;
+  /** World coordinates and the column index `((y + 64) << 8) | p`. */
+  readonly x: number;
+  readonly y: number;
+  readonly z: number;
+  readonly index: number;
+  /** The compiled probe's value and the reference interpreter's. */
+  readonly value: number;
+  readonly reference: number;
+  /** The stored block. */
+  readonly block: number;
+  /** The bottom voxel's y of the voxel's solid run on the stage's scan; null when the scan has it in no run. */
+  readonly runBottom: number | null;
+}
+
+/**
+ * The optional trailing argument of `dt2Column` (SP3e spec §5.2): `extra` draws `count` more voxels from `r` after the
+ * 16 (each a uniform position, then y uniform in yLo … yHi) and checks them as DT2 voxels, cell corners included;
+ * `voxel` and `corner` observe every checked voxel and corner value (compiled and reference); `column` sees the
+ * generated column before it is freed.
+ */
+export interface Dt2Extension {
+  readonly extra?: { readonly count: number; readonly yLo: number; readonly yHi: number };
+  readonly voxel?: (v: Dt2Voxel) => void;
+  readonly corner?: (compiled: number, reference: number) => void;
+  readonly column?: (view: ColumnView) => void;
+}
 
 /** DT2's counters (the metric's parts and populations) and its mismatch texts. */
 export interface Dt2Acc {
@@ -98,14 +135,22 @@ const SURFACE_SEED = fnv1a32('DT2.surface');
  * DT2's checks on chunk column (cx, cz) of `ctx`: the column is generated with `fillColumnT` on a fresh column of an
  * `ArrayBuffer` store and run through `terrainDensityDebug` and `terrainSurfaceDebug`; its 16 voxels are drawn from
  * `r` (6 uniform over y −63 … 319; 5 uniform over the bulk-evaluated voxels, or the column when there are none; 5 at
- * a uniform position and `OCEAN_FLOOR_WG − 1 + d`, d in −4 … 4), and 8 skin voxels from
- * `Xoshiro128(hash2(fnv1a32('DT2.surface'), cx, cz))`. Adds the counts and mismatch texts to `acc` and returns the 16
- * voxel indices (`((y + 64) << 8) | p`, in draw order). Throws when the column cannot be generated.
+ * a uniform position and `OCEAN_FLOOR_WG − 1 + d`, d in −4 … 4), then `ext.extra`'s voxels, and 8 skin voxels from
+ * `Xoshiro128(hash2(fnv1a32('DT2.surface'), cx, cz))`. Adds the counts and mismatch texts to `acc` and returns the
+ * voxel indices (`((y + 64) << 8) | p`, in draw order: the 16, then the extras). Throws when the column cannot be
+ * generated or `ext.extra`'s range is not integers within y −63 … 319.
  */
-export function dt2Column(ctx: GenContext, cx: number, cz: number, r: Xoshiro128, acc: Dt2Acc): number[] {
+export function dt2Column(ctx: GenContext, cx: number, cz: number, r: Xoshiro128, acc: Dt2Acc, ext?: Dt2Extension): number[] {
   const { dc, ref, interp, compiled, sc, maxSurfaceDepth } = dt2Setup(ctx, acc.label);
   const c = dc.compiled;
   const at = `${acc.label}, column (${cx}, ${cz})`;
+  const extra = ext?.extra;
+  if (extra !== undefined && !(Number.isInteger(extra.count) && extra.count >= 0 && Number.isInteger(extra.yLo)
+    && Number.isInteger(extra.yHi) && -63 <= extra.yLo && extra.yLo <= extra.yHi && extra.yHi <= 319)) {
+    throw new RangeError(`DT2: ${at}: extra voxels ${JSON.stringify(extra)} (count ≥ 0, −63 ≤ yLo ≤ yHi ≤ 319, integers)`);
+  }
+  const onVoxel = ext?.voxel;
+  const onCorner = ext?.corner;
   store ??= createStore({ shared: false, maxBlockBytes: 4 << 20, maxByteBytes: 4 << 20 });
   if (!fillColumnT(store, ctx, cx, cz, () => false)) throw new Error(`DT2: ${at}: fillColumnT did not complete`);
   const view = store.proto(cx, cz)!;
@@ -128,9 +173,14 @@ export function dt2Column(ctx: GenContext, cx: number, cz: number, r: Xoshiro128
     }
     return true;
   };
-  for (let v = 0; v < DT2_VOXELS_PER_COLUMN; v++) {
+  const total = DT2_VOXELS_PER_COLUMN + (extra?.count ?? 0);
+  for (let v = 0; v < total; v++) {
     let i: number;
-    if (v >= 11) {
+    if (v >= DT2_VOXELS_PER_COLUMN) {
+      const p = r.nextInt(256);
+      const y = extra!.yLo + r.nextInt(extra!.yHi - extra!.yLo + 1);
+      i = ((y + 64) << 8) | p;
+    } else if (v >= 11) {
       const p = r.nextInt(256);
       const y = Math.min(319, Math.max(-63, view.aux()!.oceanFloorWG[p]! - 1 + r.nextInt(9) - 4));
       i = ((y + 64) << 8) | p;
@@ -165,6 +215,11 @@ export function dt2Column(ctx: GenContext, cx: number, cz: number, r: Xoshiro128
       acc.compiledReference++;
       acc.problems.push(`${at}: (${x}, ${y}, ${z}) compiled ${value} ≠ reference ${rv}`);
     }
+    if (onVoxel !== undefined) {
+      const k = runAt(SCAN, i & 255, y);
+      const stratum: Dt2Stratum = v >= DT2_VOXELS_PER_COLUMN ? 'extra' : v >= 11 ? 'top' : v >= 6 ? 'bulk' : 'uniform';
+      onVoxel({ stratum, x, y, z, index: i, value, reference: rv, block, runBottom: k >= 0 ? SCAN.runBottom[k]! : null });
+    }
     const ci = lx >> 2, ck = (y + 64) >> 3, cj = lz >> 2;
     c.cellCorners(ci, ck, cj);
     for (const { inner, slot } of interp) {
@@ -173,6 +228,7 @@ export function dt2Column(ctx: GenContext, cx: number, cz: number, r: Xoshiro128
         const cv = c.cornerValues[cornerValueIndex(slot, ii, kk, jj)]!;
         const rc = ref.corner(s, inner, ii, kk, jj);
         acc.corners++;
+        onCorner?.(cv, rc);
         if (!Object.is(cv, rc)) {
           acc.compiledReference++;
           acc.problems.push(`${at}: corner (${ii}, ${kk}, ${jj}) compiled ${cv} ≠ reference ${rc}`);
@@ -188,6 +244,7 @@ export function dt2Column(ctx: GenContext, cx: number, cz: number, r: Xoshiro128
     if (first < SCAN.runFirst[p + 1]! && checkSurface(p, SCAN.runTop[first]! - d, `skin voxel depth ${d}`)) acc.surfaceExtraVoxels++;
     else acc.surfaceExtraSkipped++;
   }
+  ext?.column?.(view);
   store.freeColumn(cx, cz);
   return indices;
 }

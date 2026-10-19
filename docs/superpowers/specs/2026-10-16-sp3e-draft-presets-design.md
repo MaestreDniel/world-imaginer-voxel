@@ -691,3 +691,4 @@ The plan was dry-run on the branch `dry/sp3e`: each of its 24 tasks was implemen
 (One line per commit that changes `test/thresholds.lock.json`.)
 
 - Task 1: `STARTED_SPS` gains `SP3e`; no threshold rows change.
+- Task 15: B1 gains seven parts, written to `.out/B1.presets.json` (§5.4): `oceanFamilyArchipelago` min 0.55 max 0.80, `minShareArchipelago` min 0.0025 (the user's per-profile floor, point 4; measured 0.27 % on quick), `minRareShareArchipelago` min 0.001, `largestLandArchipelago` max 0.16, `tiesArchipelago` max 0, `outsideArchipelago` max 0.02, `presetInputsDiffer` max 0; DT2 gains seven parts, written to `.out/DT2.presets.json` (§5.2): `presetProbeBulk`, `presetCompiledReference`, `presetSurfaceProbeBulk`, `presetSurfaceReference`, `presetNonFinite`, `presetHeightmaps`, `presetNoFeatureColumn`, each max 0. All 14 activeFrom SP3e, every tier.

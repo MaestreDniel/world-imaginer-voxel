@@ -15,7 +15,8 @@ import { newSurfaceScan, runAt } from '../../src/gen/surface/scan';
 import { fillColumnT } from '../../src/metrics/region';
 import { AIR } from '../../src/world/blocks/index';
 import { createStore } from '../../src/world/store/store';
-import { DT2_VOXELS_PER_COLUMN, dt2Column, dt2Setup, newDt2Acc, type Dt2Acc } from '../harness/dt2';
+import { DT2_VOXELS_PER_COLUMN, dt2Column, dt2Setup, newDt2Acc, type Dt2Acc, type Dt2Stratum, type Dt2Voxel } from '../harness/dt2';
+import { topDownHeightmaps } from '../harness/heightmaps';
 
 /**
  * `dt2Column` (SP3e spec §5.1 "Extractions", D18): DT2's per-column checks moved out of `region.metric.ts`. The
@@ -204,6 +205,90 @@ describe('dt2Column (SP3e spec §5.1, D18)', () => {
     const sc = surfaceContextOf(ctx2);
     Object.defineProperty(sc, 'compiled', { value: { ...sc.compiled, fastPath: null } });
     expect(() => dt2Setup(ctx2, LABEL)).toThrow(`DT2: ${LABEL}: the default tree has no fast path`);
+  });
+});
+
+describe('dt2Column\'s optional trailing argument (SP3e spec §5.2: DT2.presets)', () => {
+  it('without it nothing changes; with it the 16 voxels are the same, the extras follow from the same stream', () => {
+    const ctx = ctxOf();
+    const a = firstColumn();
+    const b = firstColumn();
+    const plain = newDt2Acc(LABEL);
+    const plainIdx = dt2Column(ctx, a.cx, a.cz, a.r, plain);
+    const acc = newDt2Acc(LABEL);
+    const seen: Dt2Voxel[] = [];
+    const corners: [number, number][] = [];
+    const views: [number, number][] = [];
+    const idx = dt2Column(ctx, b.cx, b.cz, b.r, acc, {
+      extra: { count: 2, yLo: 296, yHi: 319 },
+      voxel: (v) => seen.push(v),
+      corner: (cv, rc) => corners.push([cv, rc]),
+      column: (view) => {
+        views.push([view.cx, view.cz]);
+        for (let p = 0; p < 256; p++) {
+          const aux = view.aux()!;
+          expect([aux.worldSurfaceWG[p], aux.oceanFloorWG[p]]).toEqual(topDownHeightmaps(view, p & 15, p >> 4));
+        }
+      },
+    });
+    expect(idx.slice(0, DT2_VOXELS_PER_COLUMN)).toEqual(plainIdx);
+    expect(idx).toHaveLength(DT2_VOXELS_PER_COLUMN + 2);
+    for (const i of idx.slice(DT2_VOXELS_PER_COLUMN)) expect((i >> 8) - 64).toBeGreaterThanOrEqual(296);
+    // The extras draw a position, then y in 296 … 319, from DT2's stream after the 16 (a's stream is there now).
+    const want: number[] = [];
+    for (let k = 0; k < 2; k++) {
+      const p = a.r.nextInt(256);
+      want.push(((296 + a.r.nextInt(24) + 64) << 8) | p);
+    }
+    expect(idx.slice(DT2_VOXELS_PER_COLUMN)).toEqual(want);
+    expect(b.r.nextU32()).toBe(a.r.nextU32());
+    expect(acc.voxels).toBe(DT2_VOXELS_PER_COLUMN + 2);
+    expect(failures(acc)).toEqual([0, 0, 0, 0]);
+    expect(acc.corners).toBeGreaterThan(plain.corners);
+    expect(corners).toHaveLength(acc.corners);
+    expect(corners.every(([cv, rc]) => Object.is(cv, rc))).toBe(true);
+    expect(views).toEqual([[b.cx, b.cz]]);
+    const strata = new Map<Dt2Stratum, number>();
+    for (const v of seen) strata.set(v.stratum, (strata.get(v.stratum) ?? 0) + 1);
+    expect(Object.fromEntries(strata)).toEqual({ uniform: 6, bulk: 5, top: 5, extra: 2 });
+    expect(seen.map((v) => v.index)).toEqual(idx);
+    for (const v of seen) {
+      expect(Object.is(v.value, v.reference)).toBe(true);
+      expect(v.index).toBe(((v.y + 64) << 8) | ((v.z - 16 * b.cz) << 4) | (v.x - 16 * b.cx));
+      if (v.runBottom !== null) expect(v.runBottom).toBeLessThanOrEqual(v.y);
+      expect(v.runBottom !== null).toBe(v.block !== AIR);
+    }
+  });
+
+  it('extras on an amplified column with offset0 ≥ 180 check the moved slide and ceiling (y 296 … 319) exactly', () => {
+    const ctx = createGenContext(seedFromInput('42'), resolveProfile('amplified'));
+    const acc = newDt2Acc("profile amplified, seed '42'");
+    const r = new Xoshiro128(fnv1a32('dt2Column.amplified'));
+    let nonFinite = 0;
+    const extraYs: number[] = [];
+    // Task 4's first offset0 ≥ 180 column of the terrain.real scan (offset0 201.7, top 305).
+    dt2Column(ctx, -13197, 10773, r, acc, {
+      extra: { count: 24, yLo: 296, yHi: 319 },
+      voxel: (v) => {
+        if (!Number.isFinite(v.value) || !Number.isFinite(v.reference)) nonFinite++;
+        if (v.stratum === 'extra') extraYs.push(v.y);
+      },
+      corner: (cv, rc) => { if (!Number.isFinite(cv) || !Number.isFinite(rc)) nonFinite++; },
+    });
+    expect(acc.problems).toEqual([]);
+    expect(failures(acc)).toEqual([0, 0, 0, 0]);
+    expect(nonFinite).toBe(0);
+    expect(extraYs).toHaveLength(24);
+    expect(Math.min(...extraYs)).toBeGreaterThanOrEqual(296);
+    expect(Math.max(...extraYs)).toBeLessThanOrEqual(319);
+  });
+
+  it('refuses an extra range outside y −63 … 319 or not made of integers', () => {
+    const ctx = ctxOf();
+    const { r, cx, cz } = firstColumn();
+    for (const extra of [{ count: 1, yLo: -64, yHi: 0 }, { count: 1, yLo: 300, yHi: 320 }, { count: 1, yLo: 10, yHi: 9 }, { count: 1.5, yLo: 0, yHi: 1 }]) {
+      expect(() => dt2Column(ctx, cx, cz, r, newDt2Acc(LABEL), { extra })).toThrow(/extra voxels/);
+    }
   });
 });
 

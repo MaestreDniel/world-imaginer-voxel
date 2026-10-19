@@ -1,5 +1,5 @@
 {
-  "sha256": "c2b0bad1881d6f13775ba1e8d5db27d6cea6eaf75fb107e134d8dfd912d3914d",
+  "sha256": "3e520fef4ef8b0240aa3d8c16293a11523c1bcef8e363b9f2263825e5382e494",
   "canonical": {
     "startedSps": [
       "SP0",
@@ -18,13 +18,30 @@
           "activeFrom": "SP2a",
           "max": 0.16
         },
+        "largestLandArchipelago": {
+          "activeFrom": "SP3e",
+          "max": 0.16
+        },
         "minRareShare": {
           "activeFrom": "SP2a",
+          "min": 0.001
+        },
+        "minRareShareArchipelago": {
+          "activeFrom": "SP3e",
           "min": 0.001
         },
         "minShare": {
           "activeFrom": "SP2a",
           "min": 0.003
+        },
+        "minShareArchipelago": {
+          "activeFrom": "SP3e",
+          "min": 0.0025
+        },
+        "oceanFamilyArchipelago": {
+          "activeFrom": "SP3e",
+          "max": 0.8,
+          "min": 0.55
         },
         "oceanFamilyMax": {
           "activeFrom": "SP2a",
@@ -38,8 +55,20 @@
           "activeFrom": "SP2a",
           "max": 0.02
         },
+        "outsideArchipelago": {
+          "activeFrom": "SP3e",
+          "max": 0.02
+        },
+        "presetInputsDiffer": {
+          "activeFrom": "SP3e",
+          "max": 0
+        },
         "ties": {
           "activeFrom": "SP2a",
+          "max": 0
+        },
+        "tiesArchipelago": {
+          "activeFrom": "SP3e",
           "max": 0
         }
       },
@@ -126,6 +155,34 @@
         },
         "editedSurfaceReference": {
           "activeFrom": "SP3d",
+          "max": 0
+        },
+        "presetCompiledReference": {
+          "activeFrom": "SP3e",
+          "max": 0
+        },
+        "presetHeightmaps": {
+          "activeFrom": "SP3e",
+          "max": 0
+        },
+        "presetNoFeatureColumn": {
+          "activeFrom": "SP3e",
+          "max": 0
+        },
+        "presetNonFinite": {
+          "activeFrom": "SP3e",
+          "max": 0
+        },
+        "presetProbeBulk": {
+          "activeFrom": "SP3e",
+          "max": 0
+        },
+        "presetSurfaceProbeBulk": {
+          "activeFrom": "SP3e",
+          "max": 0
+        },
+        "presetSurfaceReference": {
+          "activeFrom": "SP3e",
           "max": 0
         },
         "probeBulk": {
