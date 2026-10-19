@@ -1,15 +1,12 @@
-import { Worker } from 'node:worker_threads';
 import { expect } from 'vitest';
 import { fnv1a32 } from '../../src/core/hash';
 import { resolveProfile } from '../../src/core/params/profiles';
-import type { Params } from '../../src/core/params/schema';
 import { Xoshiro128 } from '../../src/core/rng';
 import { REGISTRY } from '../../src/world/blocks/index';
 import { metricTest } from '../harness/metric';
-import { ask, buildNodeTaskWorker } from '../harness/nodeWorker';
-import { YMOD16_CLASSES, ymod16Test } from '../harness/stats';
-import { mergeSurfaceAcc, newSurfaceAcc, SURFACE_STATES, surfaceBiomeId, TOP_PATCHES, type SurfaceAcc } from '../harness/surfaceScatter';
-import type { SurfaceScatterMsg, SurfaceScatterReply } from '../harness/surfaceScatterWorker';
+import { analyseColumnsThreaded, MIN_SURFACE_POPULATION, s1Values, s2Values, s3Values, surfaceCommonValues } from '../harness/surfaceAnalysis';
+import { newSurfaceAcc, SURFACE_STATES, type SurfaceAcc } from '../harness/surfaceScatter';
+import type { PopulationMode } from '../harness/terrainScatter';
 
 /**
  * S1, S2, S3, the B4 voxel parts and the B2 river check on the surfaced voxels (SP3c spec §5.1, §5.2), with the
@@ -19,8 +16,10 @@ import type { SurfaceScatterMsg, SurfaceScatterReply } from '../harness/surfaceS
  * seed ('42'; full '42', '1', '2', '3'), `COLUMNS` columns drawn by one `Xoshiro128(fnv1a32('T1-T5'))` in the same
  * order (profile, then seed, then column) uniformly over ±1024 chunks (default) or ±4096 (large_biomes), generated with
  * `fillColumnT` AND analysed on 4 region workers (`test/harness/surfaceScatterWorker.ts`, the analysis in
- * `test/harness/surfaceScatter.ts`); this thread only merges the workers' count records (`mergeSurfaceAcc`, an exact
- * sum: every accumulator is order-independent; `ymod16`'s position choice depends only on the seed and (cx, cz)).
+ * `test/harness/surfaceScatter.ts`, driven by `analyseColumnsThreaded` of `test/harness/surfaceAnalysis.ts`, SP3e spec
+ * §5.1); this thread only merges the workers' count records (`mergeSurfaceAcc`, an exact sum: every accumulator is
+ * order-independent; `ymod16`'s position choice depends only on the seed and (cx, cz)). S1-S3's values per profile
+ * are the part bodies of `surfaceAnalysis.ts` (`s1Values` …, `'enforce'` mode); B4 and B2 stay here.
  * Vitest isolates metric files, so this file draws and generates the columns again rather than sharing
  * terrain.metric.ts's pass.
  *
@@ -73,57 +72,15 @@ const COLUMNS: Readonly<Record<Profile, number>> = pick(
 );
 const SCATTER_WORKER_DIR = `surfaceScatterWorker-${TIER}`;
 
-/** §5.1: every population-dependent part needs 1,000 per profile. */
-const MIN_POPULATION = 1000;
-
 const STATES = SURFACE_STATES;
 const NAMES: readonly string[] = Array.from({ length: STATES }, (_, s) => REGISTRY.stateKey(s));
-const B = surfaceBiomeId;
 
 /** Fails the running metric test (soft) when a population is below its minimum. */
-function requireSample(what: string, n: number, min = MIN_POPULATION): void {
+function requireSample(what: string, n: number, min = MIN_SURFACE_POPULATION): void {
   expect.soft(n, `${what}: insufficient sample (${n} < ${min})`).toBeGreaterThanOrEqual(min);
 }
 
 type Acc = SurfaceAcc;
-
-let scatterScript: Promise<string> | null = null;
-const askWorker = (w: Worker, msg: SurfaceScatterMsg): Promise<SurfaceScatterReply> => ask<SurfaceScatterReply>(w, msg);
-const fail = (what: string, r: SurfaceScatterReply): Error => new Error(`${what}: ${r.type === 'error' ? r.message : r.type}`);
-
-/**
- * Generates and analyses scattered (possibly repeated) columns on 4 surface scatter workers, each with its own small
- * store (one column at a time: claimed, analysed, freed), handing out the next column to whichever worker is free, and
- * adds the workers' counts into `acc`.
- */
-async function analyseColumnsThreaded(
-  seed: string,
-  params: Params,
-  cols: ReadonlyArray<readonly [number, number]>,
-  acc: Acc,
-): Promise<void> {
-  scatterScript ??= buildNodeTaskWorker(SCATTER_WORKER_DIR, { entry: 'test/harness/surfaceScatterWorker.ts' });
-  const script = await scatterScript;
-  const workers = Array.from({ length: 4 }, () => new Worker(script));
-  try {
-    const ready = await Promise.all(workers.map((w) => askWorker(w, { type: 'attach', seedText: seed, params })));
-    for (const r of ready) if (r.type !== 'ready') throw fail('surface scatter worker', r);
-    let next = 0;
-    const drain = async (t: number): Promise<void> => {
-      while (next < cols.length) {
-        const [cx, cz] = cols[next++]!;
-        const r = await askWorker(workers[t]!, { type: 'column', cx, cz });
-        if (r.type !== 'done') throw fail(`surface scatter worker ${t}, column (${cx}, ${cz})`, r);
-      }
-      const r = await askWorker(workers[t]!, { type: 'take' });
-      if (r.type !== 'acc') throw fail(`surface scatter worker ${t}`, r);
-      mergeSurfaceAcc(acc, r.acc);
-    };
-    await Promise.all(workers.map((_, t) => drain(t)));
-  } finally {
-    await Promise.all(workers.map((w) => w.terminate()));
-  }
-}
 
 let scatteredMemo: Promise<Record<Profile, Acc>> | null = null;
 
@@ -144,7 +101,7 @@ async function scatter(): Promise<Record<Profile, Acc>> {
     for (const seed of SEEDS) {
       const cols: Array<[number, number]> = [];
       for (let n = 0; n < COLUMNS[profile]; n++) cols.push([-R + r.nextInt(2 * R), -R + r.nextInt(2 * R)]);
-      await analyseColumnsThreaded(seed, params, cols, a);
+      await analyseColumnsThreaded(SCATTER_WORKER_DIR, seed, params, cols, a);
     }
     a.seconds = Math.round(performance.now() - t0) / 1000;
     out[profile] = a;
@@ -173,114 +130,44 @@ function population(rec: Record<string, number>, part: string, n: Record<Profile
 }
 
 function common(rec: Record<string, number>, sc: Record<Profile, Acc>): void {
-  for (const p of PROFILES) {
-    rec[`columns.${p}`] = sc[p].columns;
-    rec[`seconds.${p}`] = sc[p].seconds;
-    rec[`topMismatch.${p}`] = sc[p].topMismatch;
-  }
+  for (const p of PROFILES) for (const [k, v] of Object.entries(surfaceCommonValues(sc[p]))) rec[`${k}.${p}`] = v;
 }
 
-metricTest('S1', ['buried', 'grassNoSky', 'ymod16'], async () => {
-  const sc = await scattered();
-  const rec: Record<string, number> = {};
-  perProfile(rec, 'buried', byProfile((p) => sc[p].buried), 'sum');
-  perProfile(rec, 'grassNoSky', byProfile((p) => sc[p].grassNoSky), 'sum');
-  population(rec, 'buried', byProfile((p) => sc[p].landTops));
-  population(rec, 'grassNoSky', byProfile((p) => sc[p].landTops));
-  const y = byProfile((p) => ymod16Test(sc[p].ymod).p);
-  perProfile(rec, 'ymod16', y, 'min');
-  population(rec, 'ymod16', byProfile((p) => sc[p].ymodColumns));
-  for (const p of PROFILES) {
-    const a = sc[p];
-    const t = ymod16Test(a.ymod);
-    expect.soft(t.degenerate, `S1.ymod16 (${p}): degenerate table (classes ${t.classes.join(', ')})`).toBe(false);
-    rec[`ymod16.chi2.${p}`] = t.chi2;
-    rec[`ymod16.df.${p}`] = t.df;
-    rec[`ymod16.rows.${p}`] = t.rows;
-    rec[`ymod16.classesLeft.${p}`] = t.classes.length;
-    for (let k = 0; k < YMOD16_CLASSES; k++) {
-      let n = 0;
-      for (let r = 0; r < 16; r++) n += a.ymod[6 * r + k]!;
-      rec[`ymod16.class${k === 5 ? '5plus' : k}.${p}`] = n;
-    }
-    // landTopYmod16: the land-top y mod 16 histogram, raw and against E_r = Σ_{y≡r} (h(y − 1) + h(y + 1)) / 2.
-    const h = a.topHist;
-    const O = new Float64Array(16);
-    const E = new Float64Array(16);
-    for (let yi = 0; yi < 384; yi++) {
-      const r16 = (yi - 64) & 15;
-      O[r16]! += h[yi]!;
-      E[r16]! += ((yi > 0 ? h[yi - 1]! : 0) + (yi < 383 ? h[yi + 1]! : 0)) / 2;
-    }
-    let chi2 = 0;
-    for (let r16 = 0; r16 < 16; r16++) {
-      rec[`landTopYmod16.raw.${r16}.${p}`] = O[r16]!;
-      rec[`landTopYmod16.ratio.${r16}.${p}`] = share(O[r16]!, E[r16]!);
-      if (E[r16]! > 0) chi2 += (O[r16]! - E[r16]!) ** 2 / E[r16]!;
-    }
-    rec[`landTopYmod16.chi2.${p}`] = chi2;
-    // surfaceDepth histogram over every position.
-    let sdSum = 0;
-    for (let d = 0; d < 64; d++) {
-      if (a.sdHist[d]! > 0 || d <= 11) rec[`surfaceDepth.${d}.${p}`] = share(a.sdHist[d]!, a.positions);
-      sdSum += d * a.sdHist[d]!;
-    }
-    rec[`surfaceDepth.mean.${p}`] = share(sdSum, a.positions);
-    // patchCoverage per (biome, patch block), over eligible land tops of the biome.
-    for (const [bn, block] of TOP_PATCHES) {
-      const b = B(bn);
-      rec[`patchCoverage.${bn}.${NAMES[block]}.${p}`] = share(a.patchStates[b * STATES + block]!, a.patchTops[b]!);
-      rec[`patchCoverage.${bn}.n.${p}`] = a.patchTops[b]!;
-    }
-    rec[`patchCoverage.riverSwamp.clay.${p}`] = share(a.clayWet, a.clayWetTops);
-    rec[`patchCoverage.riverSwamp.n.${p}`] = a.clayWetTops;
-    rec[`patchCoverage.lake.clay.${p}`] = share(a.lakeClay, a.lakeWetTops);
-    rec[`patchCoverage.lake.n.${p}`] = a.lakeWetTops;
-    // Per-block shares: of every solid voxel, of the land tops and of the wet tops.
-    let solid = 0;
-    for (let s = 1; s < STATES; s++) solid += a.blocks[s]!;
-    for (let s = 1; s < STATES; s++) {
-      rec[`blockShare.${NAMES[s]}.${p}`] = share(a.blocks[s]!, solid);
-      rec[`landTopShare.${NAMES[s]}.${p}`] = share(a.landTopStates[s]!, a.landTops);
-      rec[`wetTopShare.${NAMES[s]}.${p}`] = share(a.wetTopStates[s]!, a.wetTops);
-    }
-    rec[`landTops.${p}`] = a.landTops;
-    rec[`wetTops.${p}`] = a.wetTops;
-  }
-  common(rec, sc);
-  return rec;
-});
+type Body = (a: Acc, mode: PopulationMode, label: string) => Record<string, number>;
+type Step = readonly [kind: 'part', key: string, worst: 'max' | 'min' | 'sum'] | readonly [kind: 'n', key: string];
 
-metricTest('S2', ['deepslateBelow0', 'deepslateAbove8', 'bedrockFloor'], async () => {
+/**
+ * One S metric in today's .out layout from its per-profile bodies (`surfaceAnalysis.ts`, enforce mode, each profile's
+ * population checked in turn): the `steps` in order (a part as `<part>.<profile>` and its worst-of `<part>`; a
+ * population as `<part>.n.<profile>`), then every other key of the bodies as `<key>.<profile>` profile by profile,
+ * then the common keys.
+ */
+async function sMetric(body: Body, steps: readonly Step[]): Promise<Record<string, number>> {
   const sc = await scattered();
+  const v = Object.fromEntries(PROFILES.map((p) => [p, body(sc[p], 'enforce', p)])) as Record<Profile, Record<string, number>>;
   const rec: Record<string, number> = {};
-  perProfile(rec, 'deepslateBelow0', byProfile((p) => share(sc[p].deepBelow0, sc[p].stoneBelow0)), 'min');
-  perProfile(rec, 'deepslateAbove8', byProfile((p) => share(sc[p].deepAbove8, sc[p].stoneAbove8)), 'max');
-  perProfile(rec, 'bedrockFloor', byProfile((p) => share(sc[p].bedrockFloor, sc[p].positions)), 'min');
-  population(rec, 'deepslateBelow0', byProfile((p) => sc[p].stoneBelow0));
-  population(rec, 'deepslateAbove8', byProfile((p) => sc[p].stoneAbove8));
-  for (const p of PROFILES) {
-    rec[`stoneBelow0.${p}`] = sc[p].stoneBelow0 - sc[p].deepBelow0;
-    rec[`positions.${p}`] = sc[p].positions;
+  const placed = new Set(Object.keys(surfaceCommonValues(sc[PROFILES[0]])));
+  for (const s of steps) {
+    if (s[0] === 'part') perProfile(rec, s[1], byProfile((p) => v[p][s[1]]!), s[2]);
+    else for (const p of PROFILES) rec[`${s[1]}.n.${p}`] = v[p][`${s[1]}.n`]!;
+    placed.add(s[0] === 'part' ? s[1] : `${s[1]}.n`);
   }
+  for (const p of PROFILES) for (const [k, x] of Object.entries(v[p])) if (!placed.has(k)) rec[`${k}.${p}`] = x;
   common(rec, sc);
   return rec;
-});
+}
 
-metricTest('S3', ['snowAboveLine', 'snowNoSky'], async () => {
-  const sc = await scattered();
-  const rec: Record<string, number> = {};
-  perProfile(rec, 'snowAboveLine', byProfile((p) => share(sc[p].snowLineSnow, sc[p].snowLineTops)), 'min');
-  perProfile(rec, 'snowNoSky', byProfile((p) => sc[p].snowNoSky), 'sum');
-  population(rec, 'snowAboveLine', byProfile((p) => sc[p].snowLineTops));
-  population(rec, 'snowNoSky', byProfile((p) => sc[p].landTops));
-  for (const p of PROFILES) {
-    rec[`snowLineCliffTops.${p}`] = sc[p].snowLineCliffs;
-    rec[`snowLineNotSnow.${p}`] = sc[p].snowLineTops - sc[p].snowLineSnow;
-  }
-  common(rec, sc);
-  return rec;
-});
+metricTest('S1', ['buried', 'grassNoSky', 'ymod16'], () => sMetric(s1Values, [
+  ['part', 'buried', 'sum'], ['part', 'grassNoSky', 'sum'], ['n', 'buried'], ['n', 'grassNoSky'], ['part', 'ymod16', 'min'], ['n', 'ymod16'],
+]));
+
+metricTest('S2', ['deepslateBelow0', 'deepslateAbove8', 'bedrockFloor'], () => sMetric(s2Values, [
+  ['part', 'deepslateBelow0', 'min'], ['part', 'deepslateAbove8', 'max'], ['part', 'bedrockFloor', 'min'], ['n', 'deepslateBelow0'], ['n', 'deepslateAbove8'],
+]));
+
+metricTest('S3', ['snowAboveLine', 'snowNoSky'], () => sMetric(s3Values, [
+  ['part', 'snowAboveLine', 'min'], ['part', 'snowNoSky', 'sum'], ['n', 'snowAboveLine'], ['n', 'snowNoSky'],
+]));
 
 metricTest('B4', ['snowInDesert', 'coastBandBeachVoxel', 'landTopsBelowSea'], async () => {
   const sc = await scattered();
