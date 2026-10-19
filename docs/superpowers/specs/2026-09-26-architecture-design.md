@@ -343,7 +343,7 @@ Byte offsets (amended by SP3a): `WORLD_SURFACE_WG` 0, `OCEAN_FLOOR_WG` 512, `WOR
 
 - **Lattice:** a 7×7 quart grid, the column's 5×5 quart corners plus a one-quart halo for gradients.
 - **Raw climate** (kept separately so a spline edit re-derives shape without resampling noise): `C E W T H R` (uniform on [−uMax, uMax], uMax = 0.9973), `PV`.
-- **Derived fields:** `offset, sigma, jag, riverDist, riverStrength, lakeMask, lakeLevel, lakeFloor, surfaceWaterLevel, steep, surfaceEst, islandMask`, and `surfaceBiomeQ[49]`. `islandMask` is 0 unless `islands.enabled` (the floating_islands preset) (amended by SP3e).
+- **Derived fields:** `offset, sigma, jag, riverDist, riverStrength, lakeMask, lakeLevel, lakeFloor, surfaceWaterLevel, steep, surfaceEst, islandMask`, and `surfaceBiomeQ[49]`. `islandMask` is 0 unless `islands.enabled` (the floating_islands preset), which also switches water v0's island rule (amended by SP3e).
 - **Size:** about 6.5 KB.
 - **Readout:** fields are bilinear between quart points, so values at 4-aligned corners are exact and every column sharing a corner computes it identically.
 
@@ -368,7 +368,7 @@ interface NoiseDef { wavelength: number; octaves: number; persistence?: number; 
 // remap 'none', clampSigma 3); only patches may be partial (SP1).
 interface SplinePoint { x: number; y: number | NestedSpline; d: number }   // d = dy/dx per unit of the node's coord (explicit data)
 interface NestedSpline { coord: 'C'|'E'|'W'|'PV'|'T'|'H'; points: SplinePoint[] }
-type ColField = 'C'|'E'|'W'|'PV'|'T'|'H'|'offset'|'sigma'|'jag'|'riverStrength'|'lakeMask'|'lakeFloor'|'islandMask';   // islandMask = the §3.15 cluster mask m, 0 unless `islands.enabled` (the floating_islands preset), a derived ColumnSample field (amended by SP3e)
+type ColField = 'C'|'E'|'W'|'PV'|'T'|'H'|'offset'|'sigma'|'jag'|'riverStrength'|'lakeMask'|'lakeFloor'|'islandMask';   // islandMask = the §3.15 cluster mask m, 0 unless `islands.enabled` (the floating_islands preset), which also switches water v0's island rule, a derived ColumnSample field (amended by SP3e)
 type Expr =                                  // 3D density composition (preset data), ~22 node types
   | { op:'const'; v:number } | { op:'y' } | { op:'col'; f:ColField }
   | { op:'noise'; name:string } | { op:'noise2'; name:string } | { op:'beard' }

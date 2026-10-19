@@ -134,7 +134,7 @@ export const ROOT = group('Parameters', 'World generation parameters.', {
   }),
   // Last in the schema (SP3e spec §2.1, D9), so randomParams and randomPatch draw every earlier group as before.
   islands: group('Islands', 'The island cluster mask of the floating_islands preset (SP3e spec §2): islandMask = smoothstep(lo, hi, u) of a 2D noise.', {
-    enabled: bool(false, { ...SHAPE, label: 'Enabled', doc: 'Computes the island cluster mask `islandMask` (off: 0); on in floating_islands.' }),
+    enabled: bool(false, { ...SHAPE, label: 'Enabled', doc: 'Computes the island cluster mask `islandMask` (off: 0) and makes water v0 fill the sea under runs lying above y 180 (on in floating_islands).' }),
     noise: shapeNoise('Cluster noise', 'u = U(z2) of this noise sets the mask.', 700, 2, { remap: 'uniform' }),
     lo: frac(0.55, 'Mask start', 'u where `islandMask` starts to rise from 0.', -1, 1),
     hi: frac(0.8, 'Mask full', 'u from which `islandMask` is 1 (lo ≥ hi: a step at lo).', -1, 1),

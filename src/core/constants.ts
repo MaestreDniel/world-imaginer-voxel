@@ -86,6 +86,14 @@ export const COL_FIELD_BOUNDS = Object.freeze({
 });
 
 /**
+ * The lowest bottom voxel y of an island run (SP3e spec §3.5, §4.1): a maximal solid run of a position whose bottom
+ * voxel is at y ≥ 181 lies "above y 180" and is an island run. One constant for water v0's island rule
+ * (`gen/pipeline/terrainStage.ts`), the islands surface branch's `minY` and Z3; the floating_islands term puts its
+ * island voxels in y 193-263 (SP3e spec §3.2), 12 above it.
+ */
+export const ISLAND_RUN_MIN_BOTTOM = 181;
+
+/**
  * The largest density and rules column costs tier 2 accepts (SP3d spec §1.7, `gen/inspect/cost.ts`): 64 × the default
  * trees' (`DEFAULT_DENSITY_TREE` 14,907,917; `DEFAULT_SURFACE_RULES` 163 nodes × 256 × (1 + 51) = 2,169,856, its
  * largest depth bound being a floor `stoneDepth` offset 4 plus SD_MAX's static maximum 47). A unit test recomputes both.

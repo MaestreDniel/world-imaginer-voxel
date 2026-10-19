@@ -42,7 +42,7 @@ export function surfaceProbeColumn(sc: SurfaceContext, cx: number, cz: number, s
   c.valid = false;
   const s = sc.density.columns.get(cx, cz);
   if (!FILL(sc.density.bounds, s, c.solid, null, null, stop)) return null;
-  WATER_V0(s, c.solid, TOP, WATER_TOP, c.water);
+  WATER_V0(s, c.solid, TOP, WATER_TOP, c.water, sc.ctx.params.islands.enabled);
   BIOMES(s, sc.ctx, c.biomes);
   SCAN(c.scan, sc.settings, s, c.solid, c.water, c.biomes);
   c.cx = cx;

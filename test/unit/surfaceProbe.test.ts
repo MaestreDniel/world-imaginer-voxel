@@ -1,5 +1,7 @@
 import { describe, expect, test } from 'vitest';
 import { canonicalJSON } from '../../src/core/params/canonical';
+import { DEFAULT_DENSITY_TREE } from '../../src/core/params/defaultTrees';
+import type { JsonValue } from '../../src/core/params/json';
 import { noiseFor, type GenContext } from '../../src/gen/context';
 import { columnWaterV0, terrainStage } from '../../src/gen/pipeline/terrainStage';
 import { createSurfaceContext, surfaceContextOf, surfaceNoiseSource, type SurfaceContext } from '../../src/gen/surface/context';
@@ -138,9 +140,32 @@ describe('the probe\'s column rebuild (spec §3.6): the T stage\'s fill, water v
   test('columnWaterV0 checks its array sizes', () => {
     const s = SC.density.columns.get(0, 0);
     const ok = new Uint8Array(98304);
-    expect(() => columnWaterV0(s, new Uint8Array(4096), new Int32Array(256), new Int32Array(256), null)).toThrow(RangeError);
-    expect(() => columnWaterV0(s, ok, new Int32Array(255), new Int32Array(256), null)).toThrow(RangeError);
-    expect(() => columnWaterV0(s, ok, new Int32Array(256), new Int32Array(256), new Uint8Array(256))).toThrow(RangeError);
+    for (const flag of [false, true]) {
+      expect(() => columnWaterV0(s, new Uint8Array(4096), new Int32Array(256), new Int32Array(256), null, flag)).toThrow(RangeError);
+      expect(() => columnWaterV0(s, ok, new Int32Array(255), new Int32Array(256), null, flag)).toThrow(RangeError);
+      expect(() => columnWaterV0(s, ok, new Int32Array(256), new Int32Array(256), new Uint8Array(256), flag)).toThrow(RangeError);
+    }
+  });
+
+  test('with islands.enabled the rebuild applies water v0\'s island rule as the T stage does (SP3e spec §3.5): a slab island over the sea', () => {
+    // The default tree with the islands tap's child replaced by a slab solid at y 200 … 210 (voxel placement).
+    const tree = JSON.parse(JSON.stringify(DEFAULT_DENSITY_TREE)) as { root: { b: { x: unknown } } };
+    tree.root.b.x = { op: 'rangeChoice', x: { op: 'y' }, lo: 200, hi: 211, inside: { op: 'const', v: 1 }, outside: { op: 'const', v: -1000000 } };
+    const slab = ctxFor('42', { density: { defs: tree as unknown as JsonValue }, islands: { enabled: true } });
+    const view = generate(slab, ...SEA);
+    const c = surfaceProbeColumn(createSurfaceContext(slab), ...SEA);
+    let bad = 0, under = 0;
+    for (let y = -63; y <= 319; y++) {
+      for (let p = 0; p < 256; p++) {
+        const i = ((y + 64) << 8) | p;
+        const lx = p & 15, lz = p >> 4;
+        if ((c.solid[i] !== 0) !== (view.block(lx, y, lz) !== AIR)) bad++;
+        if ((c.water[i] !== 0) !== (view.fluid(lx, y, lz) !== 0)) bad++;
+        if (c.water[i] !== 0 && y < 200) under++;
+      }
+    }
+    expect(bad).toBe(0);
+    expect(under).toBeGreaterThan(0);
   });
 
   test('the one-column cache: a second probe in the column reuses it; another column rebuilds it', () => {

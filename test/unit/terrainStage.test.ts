@@ -1,4 +1,7 @@
 import { describe, expect, test } from 'vitest';
+import { ISLAND_RUN_MIN_BOTTOM } from '../../src/core/constants';
+import { DEFAULT_DENSITY_TREE } from '../../src/core/params/defaultTrees';
+import type { JsonValue } from '../../src/core/params/json';
 import type { ParamsPatch } from '../../src/core/params/schema';
 import {
   buildColumnSample, latticeIndex, newColumnSample, readBiome, readField, readLevel, type ColumnSample,
@@ -6,17 +9,18 @@ import {
 import type { GenContext } from '../../src/gen/context';
 import { createDensityContext, type DensityContext } from '../../src/gen/density/context';
 import { probe } from '../../src/gen/density/probe';
-import { terrainDensityDebug, terrainStage, terrainSurfaceDebug } from '../../src/gen/pipeline/terrainStage';
+import { columnWaterV0, terrainDensityDebug, terrainStage, terrainSurfaceDebug } from '../../src/gen/pipeline/terrainStage';
 import { createSurfaceContext, surfaceContextOf, type SurfaceContext } from '../../src/gen/surface/context';
 import { surfaceProbe, surfaceProbeColumn } from '../../src/gen/surface/probe';
 import { newSurfaceScan, runAt, type SurfaceScan } from '../../src/gen/surface/scan';
-import { fluidType, WATER_SOURCE } from '../../src/world/blocks/fluid';
+import { WATER_SOURCE } from '../../src/world/blocks/fluid';
 import { AIR, BEDROCK, COLLIDE, DEEPSLATE, REGISTRY, STONE } from '../../src/world/blocks/index';
 import type { AuxBView, AuxView, ColumnView, ColumnWriter } from '../../src/world/store/api';
 import { protoAt, REC_AUX_B } from '../../src/world/store/columnTable';
 import { PROTO_BLOCKS, PROTO_FLUID } from '../../src/world/store/section';
 import { createStore, type VoxelStore } from '../../src/world/store/store';
 import { ctxFor } from '../harness/gen';
+import { topDownHeightmaps } from '../harness/heightmaps';
 
 const MiB = 1 << 20;
 const NEVER = () => false;
@@ -319,13 +323,7 @@ describe('aux A (SP3a §3.4, §4)', () => {
     const aux = view.aux()!;
     for (let p = 0; p < 256; p++) {
       const lx = p & 15, lz = p >> 4;
-      let ws = -64, of = -64;
-      for (let y = 319; y >= -64 && (ws === -64 || of === -64); y--) {
-        const b = view.block(lx, y, lz);
-        if (ws === -64 && (b !== AIR || fluidType(view.fluid(lx, y, lz)) !== 0)) ws = y + 1;
-        if (of === -64 && COLLIDE[b] !== 0) of = y + 1;
-      }
-      expect([aux.worldSurfaceWG[p], aux.oceanFloorWG[p]]).toEqual([ws, of]);
+      expect([aux.worldSurfaceWG[p], aux.oceanFloorWG[p]]).toEqual(topDownHeightmaps(view, lx, lz));
       expect(aux.oceanFloorWG[p]).toBe(e.top[p]! + 1);
       expect(aux.surfaceBiome[p]).toBe(readBiome(e.s, ctx, 16 * cx + lx, 16 * cz + lz));
     }
@@ -552,5 +550,165 @@ describe('terrainSurfaceDebug (SP3c §5.2, the DT2 surface hook)', () => {
     const before = scanSnapshot(scan);
     expect(mismatches(generate(ctx, ...COAST).view, expectedFor(ctx, COAST))).toBe(0);
     expect(scanSnapshot(scan)).toEqual(before);
+  });
+});
+
+describe('water v0 under island runs (SP3e spec §3.5, D5)', () => {
+  /** columnWaterV0's index `256·(y + 64) + p`. */
+  const wi = (y: number, p: number): number => ((y + 64) << 8) | p;
+  /** The SEA fixture's ColumnSample: its surfaceWaterLevel (63 at every position) is all columnWaterV0 reads of it. */
+  const S_SEA = buildColumnSample(ctx, SEA[0], SEA[1], newColumnSample());
+  /** A constructed solidity: at each position p the solid runs `runsAt(p)` ([bottom, top], inclusive). */
+  const solidOf = (runsAt: (p: number) => ReadonlyArray<readonly [number, number]>): Uint8Array => {
+    const solid = new Uint8Array(98304);
+    for (let p = 0; p < 256; p++) {
+      for (const [lo, hi] of runsAt(p)) for (let y = lo; y <= hi; y++) solid[wi(y, p)] = 1;
+    }
+    return solid;
+  };
+  const waterOf = (solid: Uint8Array, skipIslandRuns: boolean) => {
+    const top = new Int32Array(256), waterTop = new Int32Array(256), water = new Uint8Array(98304);
+    columnWaterV0(S_SEA, solid, top, waterTop, water, skipIslandRuns);
+    return { top, waterTop, water };
+  };
+  const count = (a: Uint8Array): number => a.reduce((n, v) => n + v, 0);
+  const GROUND = [-63, 20] as const;
+  const B = ISLAND_RUN_MIN_BOTTOM;
+
+  test('ISLAND_RUN_MIN_BOTTOM is 181 (§4.1: one constant for water v0, the islands branch and Z3)', () => {
+    expect(ISLAND_RUN_MIN_BOTTOM).toBe(181);
+  });
+
+  test('the sea fixture fills to y 63 at every position', () => {
+    const { waterTop } = waterOf(solidOf(() => [GROUND]), false);
+    expect([...new Set(waterTop)]).toEqual([63]);
+  });
+
+  test('an island run over the sea: with the flag the water equals the column\'s with the island removed; top stays the island\'s', () => {
+    const ground = waterOf(solidOf(() => [GROUND]), true);
+    const island = solidOf(() => [GROUND, [200, 230]]);
+    const on = waterOf(island, true);
+    expect(count(ground.water)).toBe(256 * (63 - 20));
+    expect(on.water).toEqual(ground.water);
+    expect([...new Set(on.top)]).toEqual([230]);
+    expect(on.waterTop).toEqual(ground.waterTop);
+    // Without the flag, today's rule: the island's top is the water base, so the sea under it is a dry hole.
+    const off = waterOf(island, false);
+    expect(count(off.water)).toBe(0);
+    expect(off.top).toEqual(on.top);
+    // Without the ground run the base is Y0: the water reaches down to y −63.
+    const alone = waterOf(solidOf(() => [[200, 230]]), true);
+    expect(alone.water).toEqual(waterOf(solidOf(() => []), false).water);
+    expect(count(alone.water)).toBe(256 * (63 + 63 + 1));
+  });
+
+  test('a run with bottom 180 is ground, one with bottom 181 an island; stacked islands are skipped; an overhang lip and a peak are ground', () => {
+    const ground = waterOf(solidOf(() => [GROUND]), true).water;
+    // The cases cycle over the positions, so each position's base is its own.
+    const CASES: ReadonlyArray<ReadonlyArray<readonly [number, number]>> = [
+      [GROUND, [B - 1, 230]], // bottom 180: ground, base 230, dry as today
+      [GROUND, [B, 230]], // bottom 181: an island, base 20
+      [GROUND, [200, 210], [240, 250]], // stacked islands, base 20
+      [GROUND, [150, 200]], // an overhang lip reaching above 180: ground, base 200
+      [[-63, 300]], // a peak: base = top
+      [GROUND, [B, B]], // a one-voxel island at 181
+      [GROUND, [30, 40], [B + 10, 260]], // an island over a low floating rock: base 40, so y 29 … 63 hold water around it
+    ];
+    const solid = solidOf((p) => CASES[p % CASES.length]!);
+    const on = waterOf(solid, true);
+    const off = waterOf(solid, false);
+    for (let p = 0; p < 256; p++) {
+      const k = p % CASES.length;
+      for (let y = -63; y <= 319; y++) {
+        const i = wi(y, p);
+        const expected = k === 1 || k === 2 || k === 5 ? ground[i]
+          : k === 6 ? (solid[i] === 0 && y > 40 - 12 && y <= 63 ? 1 : 0)
+          : off.water[i];
+        if (on.water[i] !== expected) throw new Error(`case ${k}, p ${p}, y ${y}: ${on.water[i]} ≠ ${expected}`);
+      }
+    }
+    // The flag never touches `top`; off, the rule is today's.
+    expect(on.top).toEqual(off.top);
+    expect(count(on.water)).toBeGreaterThan(count(off.water));
+  });
+
+  test('with water null only top and waterTop are written, flag or not', () => {
+    const solid = solidOf(() => [GROUND, [200, 230]]);
+    for (const flag of [false, true]) {
+      const top = new Int32Array(256), waterTop = new Int32Array(256);
+      columnWaterV0(S_SEA, solid, top, waterTop, null, flag);
+      expect([...new Set(top)]).toEqual([230]);
+      expect([...new Set(waterTop)]).toEqual([63]);
+    }
+  });
+
+  /**
+   * A real island over the sea: the default tree with its islands tap's child (`root.b.x`, const −1e6) replaced by a
+   * slab, solid at y 200 … 210 everywhere (voxel placement), with `islands.enabled` (the flag); MUTED is the same world
+   * with the default tree (the tap muted).
+   */
+  const slabTree = (): JsonValue => {
+    const t = JSON.parse(JSON.stringify(DEFAULT_DENSITY_TREE)) as { root: { b: { x: unknown } } };
+    t.root.b.x = { op: 'rangeChoice', x: { op: 'y' }, lo: 200, hi: 211, inside: { op: 'const', v: 1 }, outside: { op: 'const', v: -1000000 } };
+    return t as unknown as JsonValue;
+  };
+  const SLAB = ctxFor('42', { density: { defs: slabTree() }, islands: { enabled: true } });
+  const SLAB_OFF = ctxFor('42', { density: { defs: slabTree() } });
+  const MUTED = ctxFor('42', { islands: { enabled: true } });
+
+  test('a slab island over the sea fixture: the water under it equals the muted column\'s; heightmaps are the island top + 1, the top-down scan', () => {
+    const slab = generate(SLAB, ...SEA).view;
+    const muted = generate(MUTED, ...SEA).view;
+    const off = generate(SLAB_OFF, ...SEA).view;
+    const aux = slab.aux()!;
+    let under = 0, offUnder = 0;
+    for (let p = 0; p < 256; p++) {
+      const lx = p & 15, lz = p >> 4;
+      for (let y = -63; y <= 319; y++) {
+        const island = y >= 200 && y <= 210;
+        // Solidity: the muted column's plus the slab (the slab's states and those under it may differ: D21).
+        expect(slab.block(lx, y, lz) !== AIR).toBe(island || muted.block(lx, y, lz) !== AIR);
+        expect(slab.fluid(lx, y, lz)).toBe(island ? 0 : muted.fluid(lx, y, lz));
+        if (y < 200 && slab.fluid(lx, y, lz) !== 0) under++;
+        if (off.fluid(lx, y, lz) !== 0) offUnder++;
+      }
+      expect([aux.worldSurfaceWG[p], aux.oceanFloorWG[p]]).toEqual([211, 211]);
+      expect(topDownHeightmaps(slab, lx, lz)).toEqual([211, 211]);
+    }
+    expect(under).toBeGreaterThan(256 * 20);
+    // Flag off (today's rule): no water anywhere in the column.
+    expect(offUnder).toBe(0);
+  });
+
+  test('the probe column and terrainSurfaceDebug pass the flag: the slab column\'s scans agree and the sea floor runs have water above them', () => {
+    const scan = newSurfaceScan();
+    terrainSurfaceDebug(SLAB, ...SEA, scan);
+    const probeScan = surfaceProbeColumn(scOf(SLAB), ...SEA).scan;
+    expect(scanSnapshot(scan)).toEqual(scanSnapshot(probeScan));
+    let wet = 0;
+    for (let p = 0; p < 256; p++) {
+      const first = scan.runFirst[p]!;
+      // Two runs: the slab, then the sea floor under 63 with water above its top.
+      expect(scan.runFirst[p + 1]! - first).toBe(2);
+      expect([scan.runTop[first], scan.runBottom[first]]).toEqual([210, 200]);
+      if (scan.runWaterAbove[first + 1] === 1 && scan.runWaterTop[first + 1] === 63) wet++;
+    }
+    expect(wet).toBe(256);
+  });
+
+  test.each(FIXTURES)('%s: on a default-tree column the flag changes nothing (blocks, fluid, heightmaps, aux B)', (_name, [cx, cz]) => {
+    const a = generate(ctx, cx, cz).view;
+    const b = generate(MUTED, cx, cz).view;
+    let bad = 0;
+    for (let y = -64; y <= 319; y++) {
+      for (let p = 0; p < 256; p++) {
+        if (a.block(p & 15, y, p >> 4) !== b.block(p & 15, y, p >> 4) || a.fluid(p & 15, y, p >> 4) !== b.fluid(p & 15, y, p >> 4)) bad++;
+      }
+    }
+    expect(bad).toBe(0);
+    expect(Array.from(b.aux()!.worldSurfaceWG)).toEqual(Array.from(a.aux()!.worldSurfaceWG));
+    expect(Array.from(b.aux()!.oceanFloorWG)).toEqual(Array.from(a.aux()!.oceanFloorWG));
+    expect(Array.from(b.aux()!.surfaceBiome)).toEqual(Array.from(a.aux()!.surfaceBiome));
+    expect(Array.from(b.auxB()!.surfaceBiomeQ)).toEqual(Array.from(a.auxB()!.surfaceBiomeQ));
   });
 });

@@ -8,6 +8,8 @@
  *   `top − 12 < y ≤ surfaceWaterLevel` (nearest quart corner, as SP3a) becomes a water source, recorded in a
  *   column-wide water scratch. Air under an overhang near the water line fills; deeper enclosed air stays dry
  *   (aquifers, SP6). A position whose own level is −∞ stays dry beside a neighbour's water (the v0 "water wall").
+ *   With `islands.enabled` (SP3e spec §3.5) the fill's base skips island runs (bottom voxel ≥ ISLAND_RUN_MIN_BOTTOM,
+ *   181), so the sea under a floating island fills as if the island were not there; `top` is unchanged.
  * - The per-block surface biome (`readBiome`), computed once into a 256-entry buffer for the surface pass and aux A.
  * - Surface pass (SP3c §3, `surfacePass`): after a `stop()` poll (the 7th), the whole-column scan and the compiled
  *   rules (fast path included) give every solid voxel at y −63 … 319 its final state in a column-wide state scratch.
@@ -23,7 +25,7 @@
  * `terrainSurfaceDebug` is another (SP3c §5.2, DT2's `surfaceReference`): the same phases up to the surface pass, which
  * scans into the caller's scan context.
  */
-import { MIN_Y } from '../../core/constants';
+import { ISLAND_RUN_MIN_BOTTOM, MIN_Y } from '../../core/constants';
 import { WATER_SOURCE } from '../../world/blocks/fluid';
 import { AIR, BEDROCK } from '../../world/blocks/index';
 import type { ColumnWriter as ColumnWriterT } from '../../world/store/api';
@@ -35,6 +37,7 @@ import { surfacePass } from '../surface/pass';
 import { fillSurfaceBiomes, type SurfaceScan } from '../surface/scan';
 
 const Y0 = MIN_Y;
+const ISLAND_BOTTOM = ISLAND_RUN_MIN_BOTTOM;
 const WATER = WATER_SOURCE;
 const AIR_ = AIR;
 const BEDROCK_ = BEDROCK;
@@ -64,6 +67,8 @@ const BIOMES = new Uint8Array(256);
 /** Per column index `lz·16 + lx`: the highest solid y (Y0 when none) and ⌊surfaceWaterLevel⌋ (−∞ becomes Y0 − 1). */
 const TOP = new Int32Array(256);
 const WATER_TOP = new Int32Array(256);
+/** columnWaterV0's water base per column index under `skipIslandRuns` (SP3e spec §3.5); stale between calls. */
+const BASE = new Int32Array(256);
 const BLOCKS = new Uint16Array(4096);
 const FLUID = new Uint8Array(4096);
 
@@ -76,10 +81,15 @@ const clampY = (v: number): number => Math.min(TOP_Y, Math.max(Y0 - 1, v));
  * lx; the y −64 entries are ignored): `top[p]` is the y of the highest solid voxel above the bedrock (Y0 when none)
  * and `waterTop[p]` ⌊surfaceWaterLevel⌋ at the nearest quart corner, clamped to [Y0 − 1, 319] (−∞ becomes Y0 − 1).
  * With `water` (98,304 entries), every entry is set: 1 at a non-solid voxel y −63 … 319 with
- * `top − 12 < y ≤ waterTop` (a water source in T), 0 elsewhere (solid voxels and y −64 included). The T stage and the
- * surface probe (which rebuilds a column the way T does) share it. Throws a RangeError on other sizes.
+ * `base − 12 < y ≤ waterTop` (a water source in T), 0 elsewhere (solid voxels and y −64 included). Without
+ * `skipIslandRuns` the base is `top` (the code path before SP3e); with it (`islands.enabled`, SP3e spec §3.5) the base
+ * is the top voxel of the position's highest maximal solid run whose bottom voxel is below ISLAND_RUN_MIN_BOTTOM (181),
+ * Y0 when there is none, so island runs never shelter the sea under them. `top` is the same either way. The T stage
+ * and the surface probe (which rebuilds a column the way T does) share it. Throws a RangeError on other sizes.
  */
-export function columnWaterV0(s: ColumnSample, solid: Uint8Array, top: Int32Array, waterTop: Int32Array, water: Uint8Array | null): void {
+export function columnWaterV0(
+  s: ColumnSample, solid: Uint8Array, top: Int32Array, waterTop: Int32Array, water: Uint8Array | null, skipIslandRuns: boolean,
+): void {
   if (solid.length !== 98304 || top.length !== 256 || waterTop.length !== 256 || (water !== null && water.length !== 98304)) {
     throw new RangeError('columnWaterV0: solid and water need 98,304 entries, top and waterTop 256');
   }
@@ -96,10 +106,31 @@ export function columnWaterV0(s: ColumnSample, solid: Uint8Array, top: Int32Arra
   }
   if (water === null) return;
   water.fill(0, 0, 256);
+  if (!skipIslandRuns) {
+    for (let i = 256; i < 98304; i++) {
+      const p = i & 255;
+      const y = (i >> 8) + Y0;
+      water[i] = solid[i] === 0 && y > top[p]! - WATER_DEPTH && y <= waterTop[p]! ? 1 : 0;
+    }
+    return;
+  }
+  // SP3e spec §3.5: position p's water base is the top voxel of the highest maximal solid run whose bottom voxel lies
+  // below ISLAND_RUN_MIN_BOTTOM (Y0 when none). That run is the one holding the highest solid voxel at y ≤ 180 (a run
+  // with a lower bottom has a voxel there), so the base is that voxel followed upward through its run.
+  for (let p = 0; p < 256; p++) {
+    let i = 256 * (ISLAND_BOTTOM - 1 - Y0) + p;
+    while (i >= 256 && solid[i] === 0) i -= 256;
+    if (i < 256) {
+      BASE[p] = Y0;
+      continue;
+    }
+    while (i + 256 < 98304 && solid[i + 256] !== 0) i += 256;
+    BASE[p] = (i >> 8) + Y0;
+  }
   for (let i = 256; i < 98304; i++) {
     const p = i & 255;
     const y = (i >> 8) + Y0;
-    water[i] = solid[i] === 0 && y > top[p]! - WATER_DEPTH && y <= waterTop[p]! ? 1 : 0;
+    water[i] = solid[i] === 0 && y > BASE[p]! - WATER_DEPTH && y <= waterTop[p]! ? 1 : 0;
   }
 }
 
@@ -111,7 +142,7 @@ export function terrainStage(ctx: GenContext, cx: number, cz: number, w: ColumnW
   const sc = SURFACE_CONTEXT(ctx);
   const s = BUILD(ctx, cx, cz, SAMPLE);
   if (!FILL(sc.density.bounds, s, SOLID, null, null, stop)) return false;
-  columnWaterV0(s, SOLID, TOP, WATER_TOP, WATER_V);
+  columnWaterV0(s, SOLID, TOP, WATER_TOP, WATER_V, ctx.params.islands.enabled);
   SURFACE_BIOMES(s, ctx, BIOMES);
   if (stop()) return false;
   SURFACE_PASS(sc, s, SOLID, WATER_V, BIOMES, STATE);
@@ -137,8 +168,9 @@ export function terrainStage(ctx: GenContext, cx: number, cz: number, w: ColumnW
   for (let p = 0; p < 256; p++) {
     // OCEAN_FLOOR_WG: the highest colliding voxel is the highest solid one (every surface state collides), or the
     // bedrock at Y0. WORLD_SURFACE_WG also counts water: when WATER_TOP > top, the air at WATER_TOP is above every
-    // solid voxel and > top − 12, so it holds water; otherwise every water voxel lies below top. Both equal a top-down
-    // scan with the SP3a §3.4 predicates.
+    // solid voxel and > top − 12 ≥ base − 12 (base ≤ top, also when water v0 skips island runs), so it holds water;
+    // otherwise every water voxel lies at ≤ WATER_TOP ≤ top, and the highest non-air voxel is the solid top (an
+    // island's, over the sea under it). Both equal a top-down scan with the SP3a §3.4 predicates.
     const top = TOP[p]!;
     aux.oceanFloorWG[p] = top + 1;
     aux.worldSurfaceWG[p] = Math.max(top, WATER_TOP[p]!) + 1;
@@ -176,7 +208,7 @@ export function terrainSurfaceDebug(ctx: GenContext, cx: number, cz: number, sca
   const sc = SURFACE_CONTEXT(ctx);
   const s = BUILD(ctx, cx, cz, SAMPLE);
   FILL(sc.density.bounds, s, SOLID, null, null, NEVER);
-  columnWaterV0(s, SOLID, TOP, WATER_TOP, WATER_V);
+  columnWaterV0(s, SOLID, TOP, WATER_TOP, WATER_V, ctx.params.islands.enabled);
   SURFACE_BIOMES(s, ctx, BIOMES);
   return SURFACE_PASS(sc, s, SOLID, WATER_V, BIOMES, STATE, scan);
 }
