@@ -24,7 +24,8 @@
  * row states the leaf count U2 covers (the schema's climate, shape, biome2d and terrain leaves: 73 with
  * `density.noises.islands`), and §3.6 sends the islands term to the SP3e spec §3 (both land with `FLOATING_DENSITY_TREE`).
  * §6.4's B1 row states archipelago's per-profile parts with the minShare floor THRESHOLDS gates, and its DT2 row the
- * presets' parts (`DT2.presets`), which THRESHOLDS lists (both land with `presets.metric.ts`).
+ * presets' parts (`DT2.presets`), which THRESHOLDS lists (both land with `presets.metric.ts`). §1's `metrics/*.ts` entry
+ * names `sp3eGoldens.ts` and "Banned APIs" lists it as a determinism file (both land with the window search).
  */
 import { existsSync, readdirSync, readFileSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
@@ -350,5 +351,16 @@ describe('master spec amendments (SP3e §11, §13)', () => {
     expect(entry, 'no `params/defaultTrees.ts …` entry under core/ in §1').not.toBe('');
     expect(entry).toMatch(/\spresetTrees\.ts(\s|$)/);
     expect(existsSync(`${ROOT_DIR}src/core/params/presetTrees.ts`), 'src/core/params/presetTrees.ts does not exist').toBe(true);
+  });
+
+  test('§1\'s metrics entry and "Banned APIs" name sp3eGoldens.ts (the preset window search), which exists', () => {
+    const entry = layoutEntry(/^\s+metrics\/\*\.ts\s/);
+    expect(entry, 'no `metrics/*.ts …` entry in §1').not.toBe('');
+    expect(entry).toMatch(/SP3e: sp3eGoldens\.ts\b/);
+    expect(existsSync(`${ROOT_DIR}src/metrics/sp3eGoldens.ts`), 'src/metrics/sp3eGoldens.ts does not exist').toBe(true);
+    expect(DET_FILES.has('metrics/sp3eGoldens.ts')).toBe(true);
+    const line = text.split('\n').find((l) => l.includes('(`DET_FILES` in `test/arch/rules/banned.ts`:'));
+    expect(line).toContain('`metrics/sp3eGoldens.ts`');
+    expect(line).toContain('(amended by SP1, SP2a, SP2b, SP3a, SP3c and SP3e)');
   });
 });
