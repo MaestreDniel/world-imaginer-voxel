@@ -1,11 +1,13 @@
 /**
  * The preset trees (SP3e spec §1.1, §1.2, D1, D2, D12, D13, user point 2): the derivation helper of
- * `core/params/presetTrees.ts` (its refusals and its registration), and `AMPLIFIED_DENSITY_TREE` = the default density
- * tree with exactly §1.2's six path replacements: identity across `resolveProfile`, node count, tier 2, the static costs,
- * the inspector's cost lint, the y ≥ 316 bound on the largest-offset column of a 4,096-column scan, compiled == reference
- * and probe == bulk on columns with offset0 ≥ 180 (voxels and corners in y 296-319), and `surfaceEst3`; and
+ * `core/params/presetTrees.ts` (its refusals, its insertions and its registration), and `AMPLIFIED_DENSITY_TREE` = the
+ * default density tree with exactly §1.2's six path replacements: identity across `resolveProfile`, node count, tier 2,
+ * the static costs, the inspector's cost lint, the y ≥ 316 bound on the largest-offset column of a 4,096-column scan,
+ * compiled == reference and probe == bulk on columns with offset0 ≥ 180 (voxels and corners in y 296-319), and
+ * `surfaceEst3`; and
  * `FLOATING_DENSITY_TREE` (§3.1, §3.4, D3, D4) = the default with exactly `root.b.x` replaced: identity, node count,
- * tier 2, the static costs and the lint (its real columns are `floatingIslands.test.ts`').
+ * tier 2, the static costs and the lint (its real columns are `floatingIslands.test.ts`'). `FLOATING_SURFACE_RULES`
+ * is `floatingRules.test.ts`'.
  */
 import { describe, expect, test } from 'vitest';
 import { fnv1a32 } from '../../src/core/hash';
@@ -89,6 +91,22 @@ describe('deriveTree (SP3e spec §1.1, D12)', () => {
     const copy = JSON.parse(JSON.stringify(DEFAULT_SURFACE_RULES)) as { rules: Array<{ if: Rec }> };
     copy.rules[2]!.if['falseAtAndAbove'] = 12;
     expect(canonicalJSON(t)).toBe(canonicalJSON(copy));
+  });
+
+  test('an insertion (`insert: true`) puts `by` before the array item the path names, which must be `was`', () => {
+    const rules = { kind: 'sequence', rules: [{ kind: 'block', state: 'stone' }, { kind: 'block', state: 'dirt' }] };
+    const t = deriveTree(rules, 'surface.rules', 'surfaceRules', [
+      { path: 'root.rules[1]', was: { kind: 'block', state: 'dirt' }, by: { kind: 'block', state: 'grass_block' }, insert: true },
+    ]);
+    expect(canonicalJSON(t)).toBe(canonicalJSON({ kind: 'sequence', rules: [
+      { kind: 'block', state: 'stone' }, { kind: 'block', state: 'grass_block' }, { kind: 'block', state: 'dirt' }] }));
+    expect(rules.rules).toHaveLength(2);
+    const insert = (path: string, was: JsonValue) => () =>
+      deriveTree(rules, 'surface.rules', 'surfaceRules', [{ path, was, by: { kind: 'block', state: 'stone' }, insert: true }]);
+    expect(insert('root.rules[2]', { kind: 'block' })).toThrow('surface.rules: no node at root.rules[2]');
+    expect(insert('root.rules[0]', { kind: 'block', state: 'dirt' })).toThrow('surface.rules: root.rules[0] is {"kind":"block","state":"stone"}, not {"kind":"block","state":"dirt"}');
+    expect(insert('root.rules', [])).toThrow('surface.rules: root.rules is not an array item');
+    expect(insert('root.kind', 'sequence')).toThrow('surface.rules: root.kind is not an array item');
   });
 
   test('refusals: a missing path, a wrong node (op, const value, scalar), an inherited key, an unregistrable tree', () => {

@@ -1,7 +1,7 @@
 import { CURRENT_SP, SUB_PROJECTS, type SubProjectId } from '../ids';
 import { DEFAULTS } from './defaults';
 import { applyPatch } from './kit';
-import { AMPLIFIED_DENSITY_TREE, FLOATING_DENSITY_TREE } from './presetTrees';
+import { AMPLIFIED_DENSITY_TREE, FLOATING_DENSITY_TREE, FLOATING_SURFACE_RULES } from './presetTrees';
 import { SCHEMA, type Params, type ParamsPatch } from './schema';
 
 export type ProfileId = 'default' | 'large_biomes' | 'archipelago' | 'amplified' | 'floating_islands' | 'cave_heavy';
@@ -20,7 +20,10 @@ export const PROFILES: Readonly<Record<ProfileId, Profile>> = {
   large_biomes: { overlay: { climate: { scaleMul: 4 } }, readyFrom: 'SP2a' },
   archipelago: { overlay: { climate: { C: { wavelength: 840 } } }, readyFrom: 'SP3e' },
   amplified: { overlay: { density: { defs: AMPLIFIED_DENSITY_TREE } }, readyFrom: 'SP3e' },
-  floating_islands: { overlay: { islands: { enabled: true }, density: { defs: FLOATING_DENSITY_TREE } }, readyFrom: 'SP3e' },
+  floating_islands: {
+    overlay: { islands: { enabled: true }, density: { defs: FLOATING_DENSITY_TREE }, surface: { rules: FLOATING_SURFACE_RULES } },
+    readyFrom: 'SP3e',
+  },
   cave_heavy: { overlay: {}, readyFrom: 'SP6' },
 };
 

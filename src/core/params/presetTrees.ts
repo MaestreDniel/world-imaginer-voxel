@@ -1,11 +1,12 @@
 /**
- * The preset trees (SP3e spec §1.1, D12): the `density.defs` (and later `surface.rules`) values the PROFILES overlays
+ * The preset trees (SP3e spec §1.1, D12): the `density.defs` and `surface.rules` values the PROFILES overlays
  * carry, derived from the default trees by subtree replacements at JSON paths and registered at module load, so
  * `checkJson` returns each as itself, `resolveProfile` yields the same identity on every call and the tier-2 memos hit.
  * Every number in them is a tree literal (D13: no new leaves, no refs to upstream groups). Core data: imports only core.
  */
+import { ISLAND_RUN_MIN_BOTTOM } from '../constants';
 import { canonicalJSON } from './canonical';
-import { DEFAULT_DENSITY_TREE, registeredTree } from './defaultTrees';
+import { DEFAULT_DENSITY_TREE, DEFAULT_SURFACE_RULES, registeredTree } from './defaultTrees';
 import type { JsonFormat, JsonValue } from './json';
 
 /** One subtree replacement of `deriveTree`. */
@@ -21,6 +22,11 @@ export interface TreeReplacement {
    */
   readonly was: JsonValue;
   readonly by: JsonValue;
+  /**
+   * When true, `by` is inserted before the array item the path names (which must be `was`) instead of replacing it,
+   * so that item and the ones after it move up by one index.
+   */
+  readonly insert?: boolean;
 }
 
 type Container = Record<string, unknown> | unknown[];
@@ -62,13 +68,14 @@ function matches(v: unknown, was: JsonValue): boolean {
 }
 
 /**
- * `base` (a deep JSON clone of it) with each replacement applied in order, through `registeredTree`. Throws at module
- * load when a path names nothing (`<leaf>: no node at <path>`) or names another node than `was`
- * (`<leaf>: <path> is <node>, not <was>`), or when the result fails tier 1. Own-property lookups only.
+ * `base` (a deep JSON clone of it) with each replacement (or insertion) applied in order, through `registeredTree`.
+ * Throws at module load when a path names nothing (`<leaf>: no node at <path>`), an insertion's path names no array
+ * item (`<leaf>: <path> is not an array item`), a path names another node than `was` (`<leaf>: <path> is <node>, not
+ * <was>`), or the result fails tier 1. Own-property lookups only.
  */
 export function deriveTree(base: JsonValue, leaf: string, format: JsonFormat, replacements: readonly TreeReplacement[]): JsonValue {
   const holder: unknown[] = [JSON.parse(JSON.stringify(base)) as unknown];
-  for (const { path, was, by } of replacements) {
+  for (const { path, was, by, insert } of replacements) {
     const s = steps(path, format);
     let parent: Container = holder;
     let key: string | number = 0;
@@ -80,9 +87,12 @@ export function deriveTree(base: JsonValue, leaf: string, format: JsonFormat, re
       key = step;
     }
     if (!ok) throw new Error(`${leaf}: no node at ${path}`);
+    // The holder is an array too, so `root` itself is not an item: its key is the holder's 0 with no step.
+    if (insert === true && (!Array.isArray(parent) || parent === holder)) throw new Error(`${leaf}: ${path} is not an array item`);
     const node: unknown = Array.isArray(parent) ? parent[key as number] : parent[key as string];
     if (!matches(node, was)) throw new Error(`${leaf}: ${path} is ${brief(node)}, not ${canonicalJSON(was)}`);
-    if (Array.isArray(parent)) parent[key as number] = by;
+    if (insert === true) (parent as unknown[]).splice(key as number, 0, by);
+    else if (Array.isArray(parent)) parent[key as number] = by;
     else parent[key as string] = by;
   }
   return registeredTree(holder[0] as JsonValue, leaf, format);
@@ -157,4 +167,43 @@ const ISLANDS_TERM: JsonValue = {
  */
 export const FLOATING_DENSITY_TREE: JsonValue = deriveTree(DEFAULT_DENSITY_TREE, 'density.defs', 'density', [
   { path: 'root.b.x', was: num(-1000000), by: ISLANDS_TERM },
+]);
+
+const cond = (c: JsonValue, then: JsonValue): JsonValue => ({ kind: 'condition', if: c, then });
+const block = (state: string): JsonValue => ({ kind: 'block', state });
+const stoneDepth = (side: 'floor' | 'ceiling', offset: number, addSurfaceDepth: boolean): JsonValue =>
+  ({ kind: 'stoneDepth', side, offset, addSurfaceDepth });
+
+/**
+ * The islands surface branch (SP3e spec §4.1, §4.2, D6, D7). "On a floating island" = `yAbove{ISLAND_RUN_MIN_BOTTOM,
+ * runTop}` then `stoneDepth{ceiling, 100}`: the run's top is ≥ 181 and the voxel within 100 blocks of its bottom, which
+ * holds for every island run (y 193-263) and never for a run resting on the bedrock; it also passes overhang lips and
+ * floating rocks over peaks above y 180 (§4.1). Gated by `stoneDepth{floor, 4, +SD}` (so the tree keeps its fast path
+ * and `maxSurfaceDepth` = 4 + SD_MAX), it yields: grass on the top voxel (first, so thin islands are grass-topped), stone
+ * on the bottom three voxels (the underside), dirt within the position's surface depth, and stone for the rest of the
+ * skin, so the ground biome's palette never reaches an island. 17 nodes, colliding states only (tier 2's NOT_SOLID).
+ */
+const ISLANDS_BRANCH: JsonValue = cond({ kind: 'yAbove', minY: ISLAND_RUN_MIN_BOTTOM, runTop: true },
+  cond(stoneDepth('ceiling', 100, false),
+    cond(stoneDepth('floor', 4, true), { kind: 'sequence', rules: [
+      cond(stoneDepth('floor', 0, false), block('grass_block')),
+      cond(stoneDepth('ceiling', 2, false), block('stone')),
+      cond(stoneDepth('floor', 0, true), block('dirt')),
+      block('stone'),
+    ] })));
+
+/**
+ * floating_islands' rules (SP3e spec §4.2): the default rules with the islands branch inserted as the first child of the
+ * sky-open sequence (`root.rules[1].then.rules[0]`; the default's five children move to 1-5). Every branch leaf has
+ * `skyOpen` and a floor `stoneDepth` on its path, so the tree stays sky-gated with a fast path; `root.rules[0]` (bedrock)
+ * and `root.rules[2]` (the deepslate gradient U2 perturbs) keep their places. Under D21 (a) only the first run of a
+ * position is sky-open: the ground and a stacked island under an island take the band state. 180 nodes.
+ */
+export const FLOATING_SURFACE_RULES: JsonValue = deriveTree(DEFAULT_SURFACE_RULES, 'surface.rules', 'surfaceRules', [
+  {
+    path: 'root.rules[1].then.rules[0]',
+    was: { kind: 'condition', if: { kind: 'not', if: { kind: 'water', offset: 0, runTop: false } } },
+    by: ISLANDS_BRANCH,
+    insert: true,
+  },
 ]);

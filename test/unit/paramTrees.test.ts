@@ -8,6 +8,7 @@ import { canonicalJSON } from '../../src/core/params/canonical';
 import { DEFAULTS } from '../../src/core/params/defaults';
 import { DEFAULT_DENSITY_TREE, DEFAULT_SURFACE_RULES } from '../../src/core/params/defaultTrees';
 import { applyPatch, renderReference, type Issue } from '../../src/core/params/kit';
+import { FLOATING_SURFACE_RULES } from '../../src/core/params/presetTrees';
 import { exportPreset, importPreset } from '../../src/core/params/presets';
 import { PROFILE_IDS, resolveProfile } from '../../src/core/params/profiles';
 import { SCHEMA, type Params, type ParamsPatch } from '../../src/core/params/schema';
@@ -39,7 +40,10 @@ describe('the two leaves (SP3d spec §1.2)', () => {
     expect(DEFAULTS.density.defs).toBe(DEFAULT_DENSITY_TREE);
     expect(DEFAULTS.surface.rules).toBe(DEFAULT_SURFACE_RULES);
     expect(paramsWith({ climate: { scaleMul: 2 } }).density.defs).toBe(DEFAULT_DENSITY_TREE);
-    for (const id of PROFILE_IDS) expect(resolveProfile(id).surface.rules, id).toBe(DEFAULT_SURFACE_RULES);
+    // Per profile (SP3e spec §4.2, §9): floating_islands carries its own rules, every other profile the default's.
+    for (const id of PROFILE_IDS) {
+      expect(resolveProfile(id).surface.rules, id).toBe(id === 'floating_islands' ? FLOATING_SURFACE_RULES : DEFAULT_SURFACE_RULES);
+    }
   });
 
   test('the README rows: `<format> tree, <n> nodes`, no range; scope terrain', () => {
