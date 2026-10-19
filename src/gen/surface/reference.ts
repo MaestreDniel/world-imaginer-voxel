@@ -8,7 +8,8 @@
  *
  * Every condition is decided by its helper in conditions.ts on the scan's readouts (§3.2): floorDepth = runTop − y and
  * ceilDepth = y − runBottom of the voxel's run (`runAt`), yTop = runTop, `waterAbove` / `waterTop` of the run, the
- * run is sky-open when it is its position's first run, and T_eff(y) from the position's T and the settings' lapse.
+ * run is sky-open when it is its position's sky-open run (the scan's `skyRun`: the first run, or under islands the highest
+ * run reaching below y 181, SP3e spec §4.5), and T_eff(y) from the position's T and the settings' lapse.
  * Noises sample unscaled world block coordinates (x, z) = (16·cx + lx, 16·cz + lz). The per-node preparation (a
  * biome mask, a gradient's derived seed, a block's state id, a noise, the band table and the band offset noise) is done
  * once at creation. Follows the gen determinism rules.
@@ -196,7 +197,7 @@ export function createSurfaceReference(seed: Seed64, rules: unknown, noises: Sur
       case 'steep': return STEEP_OK(scan.steep[p]!, c.min);
       case 'noiseThreshold': return NOISE_OK(noiseOf.get(c)!.z2(v.x, v.z), c.min, c.max);
       case 'temperatureBelow': return TEMP_OK(T_EFF(scan.T[p]!, y, v.set.lapse, v.set.lapseBase), c.t);
-      case 'skyOpen': return SKY_OK(r === scan.runFirst[p]);
+      case 'skyOpen': return SKY_OK(r === scan.skyRun[p]);
       case 'lake': return LAKE_OK(scan.lakeLevel[p]!);
       case 'not': return !holds(c.if, v);
     }

@@ -1,6 +1,6 @@
 /**
  * The preset trees (SP3e spec §1.1, §1.2, D1, D2, D12, D13, user point 2): the derivation helper of
- * `core/params/presetTrees.ts` (its refusals, its insertions and its registration), and `AMPLIFIED_DENSITY_TREE` = the
+ * `core/params/presetTrees.ts` (its refusals, its insertions, its wrappers and its registration), and `AMPLIFIED_DENSITY_TREE` = the
  * default density tree with exactly §1.2's six path replacements: identity across `resolveProfile`, node count, tier 2,
  * the static costs, the inspector's cost lint, the y ≥ 316 bound on the largest-offset column of a 4,096-column scan,
  * compiled == reference and probe == bulk on columns with offset0 ≥ 180 (voxels and corners in y 296-319), and
@@ -107,6 +107,26 @@ describe('deriveTree (SP3e spec §1.1, D12)', () => {
     expect(insert('root.rules[0]', { kind: 'block', state: 'dirt' })).toThrow('surface.rules: root.rules[0] is {"kind":"block","state":"stone"}, not {"kind":"block","state":"dirt"}');
     expect(insert('root.rules', [])).toThrow('surface.rules: root.rules is not an array item');
     expect(insert('root.kind', 'sequence')).toThrow('surface.rules: root.kind is not an array item');
+  });
+
+  test('a wrapper (`by` a function) replaces the node the path names by its result on a clone of that node', () => {
+    const sky: JsonValue = { kind: 'condition', if: { kind: 'skyOpen' }, then: { kind: 'block', state: 'dirt' } };
+    const rules: JsonValue = { kind: 'sequence', rules: [{ kind: 'block', state: 'stone' }, sky] };
+    let seen: JsonValue | undefined;
+    const t = deriveTree(rules, 'surface.rules', 'surfaceRules', [{
+      path: 'root.rules[1]', was: { kind: 'condition', if: { kind: 'skyOpen' } },
+      by: (node) => { seen = node; return { kind: 'sequence', rules: [{ kind: 'block', state: 'grass_block' }, node] }; },
+    }]);
+    expect(canonicalJSON(t)).toBe(canonicalJSON({ kind: 'sequence', rules: [
+      { kind: 'block', state: 'stone' },
+      { kind: 'sequence', rules: [{ kind: 'block', state: 'grass_block' }, { kind: 'condition', if: { kind: 'skyOpen' }, then: { kind: 'block', state: 'dirt' } }] }] }));
+    expect(seen).not.toBe(sky);
+    expect(seen).toEqual(sky);
+    expect(canonicalJSON(rules)).toBe(canonicalJSON({ kind: 'sequence', rules: [{ kind: 'block', state: 'stone' }, sky] }));
+    // The path and `was` are checked before the function runs.
+    const wrap = (path: string, was: JsonValue) => () => deriveTree(rules, 'surface.rules', 'surfaceRules', [{ path, was, by: (n) => n }]);
+    expect(wrap('root.rules[2]', { kind: 'block' })).toThrow('surface.rules: no node at root.rules[2]');
+    expect(wrap('root.rules[1]', { kind: 'condition', if: { kind: 'lake' } })).toThrow('surface.rules: root.rules[1] is {"kind":"condition"}, not {"if":{"kind":"lake"},"kind":"condition"}');
   });
 
   test('refusals: a missing path, a wrong node (op, const value, scalar), an inherited key, an unregistrable tree', () => {

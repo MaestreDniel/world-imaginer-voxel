@@ -13,8 +13,8 @@ import { createGenContext, noiseFor } from '../../src/gen/context';
 import { ctxFor } from '../harness/gen';
 import { testFloat, testRng } from '../harness/stats';
 
-/** `islands.enabled`'s doc: the mask and water v0's island rule (the SP3e spec §2.1 table, §3.5). */
-const ENABLED_DOC = 'Computes the island cluster mask `islandMask` (off: 0) and makes water v0 fill the sea under runs lying above y 180 (on in floating_islands).';
+/** `islands.enabled`'s doc: the mask, water v0's island rule, the scan's sky-open run and what it does not switch (the SP3e spec §2.1 table, §3.5, §4.5). */
+const ENABLED_DOC = 'Computes the island cluster mask `islandMask` (off: 0), makes water v0 fill the sea under runs lying above y 180 and makes the surface rules\' sky-open run the highest run reaching below y 181 (on in floating_islands). It switches no tree: off in floating_islands, its rules still give peaks topped above y 180 the islands palette; on elsewhere, a run lying above y 180 (a detached peak) loses the sky-open palette (snow becomes stone).';
 const FLOATING = createGenContext(seedFromInput('42'), resolveProfile('floating_islands'));
 
 /** n points uniform over the colKey window [−2^19, 2^19)², from testRng(seed). */

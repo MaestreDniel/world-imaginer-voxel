@@ -696,9 +696,16 @@ describe('water v0 under island runs (SP3e spec §3.5, D5)', () => {
     expect(wet).toBe(256);
   });
 
-  test.each(FIXTURES)('%s: on a default-tree column the flag changes nothing (blocks, fluid, heightmaps, aux B)', (_name, [cx, cz]) => {
+  test.each(FIXTURES)('%s: on a default-tree column without a run above y 180 the flag changes nothing (blocks, fluid, heightmaps, aux B)', (_name, [cx, cz]) => {
     const a = generate(ctx, cx, cz).view;
     const b = generate(MUTED, cx, cz).view;
+    // The premise: no run whose bottom voxel is ≥ ISLAND_RUN_MIN_BOTTOM (a detached peak above y 180 would lose its
+    // sky-open palette with the flag, D21 (b); floatingRules.test.ts pins that on amplified's window).
+    let high = 0;
+    for (let p = 0; p < 256; p++) {
+      for (let y = ISLAND_RUN_MIN_BOTTOM; y <= 319; y++) if (a.block(p & 15, y, p >> 4) !== AIR && a.block(p & 15, y - 1, p >> 4) === AIR) high++;
+    }
+    expect(high).toBe(0);
     let bad = 0;
     for (let y = -64; y <= 319; y++) {
       for (let p = 0; p < 256; p++) {

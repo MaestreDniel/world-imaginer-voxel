@@ -2,7 +2,10 @@
  * The whole-column scan of the surface pass (SP3c spec §3.2). Over one column's solidity and water (the T stage's
  * density and water v0, or a hand-built column), for each of the 256 positions top-down from y 319 to y −63 (y −64 is
  * the stage's bedrock and is not scanned):
- * - runs: maximal vertical runs of solid voxels, stored top-down per position; the first is the sky-open run;
+ * - runs: maximal vertical runs of solid voxels, stored top-down per position;
+ * - per position: the sky-open run (`skyRun`): the first run, or, when the settings' `islandRuns` is set (the
+ *   `islands.enabled` flag, SP3e spec §4.5, D21 (b)), the highest run whose bottom voxel is below
+ *   `ISLAND_RUN_MIN_BOTTOM`, so the ground under a floating island keeps its palette; none (−1) when no run qualifies;
  * - per run: yTop (`runTop`), its bottom voxel (`runBottom`), `waterAbove` (the voxel above yTop holds water) and
  *   `waterTop` (the highest voxel of the contiguous water directly above yTop);
  * - per solid voxel at y of run r: floorDepth = runTop[r] − y (0 at the run's top voxel), ceilDepth = y − runBottom[r];
@@ -12,16 +15,17 @@
  *   clampSigma (SP3d spec §1.10: a schema noise already is; the clamp keeps the fast-path contract for any noise);
  * - per voxel: T_eff(y) = T − lapse·max(0, y − lapseBase) (`tEff`).
  * The scan reads nothing outside its column. `SurfaceScanSettings` carries what it needs from the seed and the
- * parameters (the depth noise through a SurfaceNoiseSource, `depthMul`, `lapse`, `lapseBase`), so it runs on
+ * parameters (the depth noise through a SurfaceNoiseSource, `depthMul`, `lapse`, `lapseBase`, `islandRuns`), so it runs on
  * hand-built columns and noises as well as on the schema's. Follows the gen determinism rules.
  */
-import { MIN_Y } from '../../core/constants';
+import { ISLAND_RUN_MIN_BOTTOM, MIN_Y } from '../../core/constants';
 import { deriveSeed, hash2, type Seed64 } from '../../core/hash';
 import { nearestCornerIndex, readBiome, readField, type ColumnSample } from '../column/columnStage';
 import type { GenContext } from '../context';
 import type { SurfaceNoise, SurfaceNoiseSource } from './rules';
 
 const Y0 = MIN_Y;
+const ISLAND_MIN_BOTTOM = ISLAND_RUN_MIN_BOTTOM;
 const DERIVE = deriveSeed;
 const HASH2 = hash2;
 const READ_FIELD = readField;
@@ -54,14 +58,24 @@ export interface SurfaceScanSettings extends SurfaceScanParams {
   readonly depthHashSeed: number;
   /** ⌊3.25 + 2.75·depthMul·clampSigma⌋ of the depth noise: the largest surfaceDepth. */
   readonly sdMax: number;
+  /**
+   * `islands.enabled` (SP3e spec §4.5): the sky-open run is the highest run whose bottom voxel is below
+   * ISLAND_RUN_MIN_BOTTOM instead of the first.
+   */
+  readonly islandRuns: boolean;
 }
 
 /** One column's scan; preallocated by `newSurfaceScan`, overwritten by every `scanColumn`. */
 export interface SurfaceScan {
   cx: number;
   cz: number;
-  /** Position p's runs are runFirst[p] … runFirst[p + 1] − 1, top-down (the first is the sky-open run); 257 entries. */
+  /** Position p's runs are runFirst[p] … runFirst[p + 1] − 1, top-down; 257 entries. */
   readonly runFirst: Int32Array;
+  /**
+   * Per position: the index of its sky-open run (the first run; with `islandRuns`, the highest whose bottom voxel is
+   * below ISLAND_RUN_MIN_BOTTOM), or −1 when it has none.
+   */
+  readonly skyRun: Int32Array;
   /** Per run: yTop, the y of its top voxel. */
   readonly runTop: Int16Array;
   /** Per run: the y of its bottom voxel (−63 for a run resting on the bedrock). */
@@ -81,7 +95,7 @@ export interface SurfaceScan {
 export function newSurfaceScan(): SurfaceScan {
   return {
     cx: 0, cz: 0,
-    runFirst: new Int32Array(257), runTop: new Int16Array(MAX_RUNS), runBottom: new Int16Array(MAX_RUNS),
+    runFirst: new Int32Array(257), skyRun: new Int32Array(256), runTop: new Int16Array(MAX_RUNS), runBottom: new Int16Array(MAX_RUNS),
     runWaterAbove: new Uint8Array(MAX_RUNS), runWaterTop: new Int16Array(MAX_RUNS),
     steep: new Float64Array(256), T: new Float64Array(256), biome: new Uint8Array(256), lakeLevel: new Float64Array(256),
     surfaceDepth: new Int32Array(256),
@@ -116,8 +130,9 @@ export function tEff(t: number, y: number, lapse: number, lapseBase: number): nu
 /**
  * The scan settings of a seed and parameters; `noises` must hold a dims-2 `surface.noises.depth` (else throws), and
  * `depthMul` must be finite and ≥ 0 (else a RangeError: SD_MAX bounds surfaceDepth only then, SP3d spec §1.10).
+ * `islandRuns` is `islands.enabled` (the sky-open run under islands, SP3e spec §4.5); false by default.
  */
-export function surfaceScanSettings(seed: Seed64, params: SurfaceScanParams, noises: SurfaceNoiseSource): SurfaceScanSettings {
+export function surfaceScanSettings(seed: Seed64, params: SurfaceScanParams, noises: SurfaceNoiseSource, islandRuns = false): SurfaceScanSettings {
   if (!(params.depthMul >= 0) || !Number.isFinite(params.depthMul)) {
     throw new RangeError(`surface scan: depthMul ${params.depthMul} must be finite and ≥ 0`);
   }
@@ -127,6 +142,7 @@ export function surfaceScanSettings(seed: Seed64, params: SurfaceScanParams, noi
   return {
     depthMul: params.depthMul, lapse: params.lapse, lapseBase: params.lapseBase,
     depthNoise: n, depthHashSeed: depthHashSeed(seed), sdMax: surfaceDepthMax(params.depthMul, n.clampSigma),
+    islandRuns,
   };
 }
 
@@ -150,7 +166,8 @@ export function scanColumn(
   if (solid.length !== COLUMN_VOXELS || water.length !== COLUMN_VOXELS || biomes.length !== 256) {
     throw new RangeError(`scanColumn: solid ${solid.length}, water ${water.length}, biomes ${biomes.length} entries; expected ${COLUMN_VOXELS}, ${COLUMN_VOXELS}, 256`);
   }
-  const { runFirst, runTop, runBottom, runWaterAbove, runWaterTop } = scan;
+  const { runFirst, skyRun, runTop, runBottom, runWaterAbove, runWaterTop } = scan;
+  const islandRuns = set.islandRuns;
   scan.cx = s.cx;
   scan.cz = s.cz;
   const x0 = 16 * s.cx;
@@ -194,6 +211,15 @@ export function scanColumn(
     if (inRun) {
       runBottom[r] = Y0 + 1;
       r++;
+    }
+    const first = runFirst[p]!;
+    if (!islandRuns) {
+      skyRun[p] = first < r ? first : -1;
+    } else {
+      // The highest run reaching below ISLAND_RUN_MIN_BOTTOM: the runs are top-down.
+      let k = first;
+      while (k < r && runBottom[k]! >= ISLAND_MIN_BOTTOM) k++;
+      skyRun[p] = k < r ? k : -1;
     }
     const x = x0 + (p & 15);
     const z = z0 + (p >> 4);

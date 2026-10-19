@@ -3,8 +3,8 @@
  * - `density`: its own DensityContext (the T stage's memo becomes this one's in the surface-pass task);
  * - `noises`: the GenContext's schema noises `surface.noises.<id>` as a SurfaceNoiseSource keyed by schema path (the
  *   names a `noiseThreshold` uses), each a dims-2 NormalNoise with remap and clampSigma from its leaf;
- * - `settings`: the scan settings (`surfaceScanSettings(seed, params.surface, noises)`: the depth noise, the depth
- *   hash seed, depthMul, lapse, lapseBase, SD_MAX);
+ * - `settings`: the scan settings (`surfaceScanSettings(seed, params.surface, noises, params.islands.enabled)`: the
+ *   depth noise, the depth hash seed, depthMul, lapse, lapseBase, SD_MAX, and the sky-open run under islands);
  * - `bands`: the badlands band table of the world seed (§3.3, bands.ts), built once and shared by both evaluators;
  * - `rules`, `compiled` and `reference`: one frozen tree (by default `resolveRules(params.surface.rules, params)`,
  *   the `surface.rules` leaf resolved for the context's params, SP3d spec §1.6, §2.2; an explicit tree is deep-frozen
@@ -99,7 +99,7 @@ export function createSurfaceContext(ctx: GenContext, rules?: unknown): SurfaceC
   const tree = rules === undefined ? RESOLVE(ctx.params.surface.rules, ctx.params) : FREEZE(rules);
   const params = ctx.params.surface;
   const noises = surfaceNoiseSource(ctx);
-  const settings = SETTINGS(ctx.seed, params, noises);
+  const settings = SETTINGS(ctx.seed, params, noises, ctx.params.islands.enabled);
   const bands = BAND_TABLE(ctx.seed);
   const compiled = COMPILE(ctx.seed, tree, noises, settings, bands);
   const reference = REFERENCE(ctx.seed, tree, noises, bands);

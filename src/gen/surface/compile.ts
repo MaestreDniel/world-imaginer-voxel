@@ -6,7 +6,7 @@
  * Evaluation order is the tree's (a `sequence` yields its first child that yields, a `condition` evaluates `if` then
  * `then`); every condition is decided by its helper in conditions.ts on the same readouts the reference evaluator
  * uses (floorDepth = runTop − y, ceilDepth = y − runBottom, yTop = runTop, `waterAbove` / `waterTop` of the run, the
- * run is sky-open when it is its position's first, T_eff(y) from the position's T and the settings' lapse), so the
+ * run is sky-open when it is the scan's `skyRun` of its position, T_eff(y) from the position's T and the settings' lapse), so the
  * compiled tree equals the reference on every voxel. Nothing yielded leaves the voxel stone.
  *
  * Fast path (`surfaceFastPath`, compile time, general and conservative). Every leaf (`block` or `bandlands`) is classed
@@ -366,7 +366,7 @@ export function compileSurfaceRules(
       const r = RUN_AT(scan, p, y);
       if (r < 0) throw new RangeError(`compiled surface rules: voxel (p ${p}, y ${y}) is not solid`);
       setPosition(scan, p);
-      setRun(scan, r, r === scan.runFirst[p]);
+      setRun(scan, r, r === scan.skyRun[p]);
       cur.y = y;
       const s = root();
       return s < 0 ? STONE_STATE : s;
@@ -376,19 +376,20 @@ export function compileSurfaceRules(
       const useFast = fast && fastPath !== null;
       const maxSd = fastPath === null ? 0 : fastPath.maxSurfaceDepth;
       const skyGated = fastPath !== null && fastPath.skyGated;
-      const { runFirst, runTop, runBottom } = scan;
+      const { runFirst, skyRun, runTop, runBottom } = scan;
       let evaluated = 0;
       for (let p = 0; p < 256; p++) {
         setPosition(scan, p);
         const first = runFirst[p]!;
         const end = runFirst[p + 1]!;
+        const sky = skyRun[p]!;
         for (let r = first; r < end; r++) {
-          setRun(scan, r, r === first);
+          setRun(scan, r, r === sky);
           const top = runTop[r]!;
           const bottom = runBottom[r]!;
           // Voxels at y ≤ deep may take their band's state: floorDepth > maxSurfaceDepth, or the whole run when the
-          // tree is sky-gated and the run has no sky.
-          const deep = !useFast ? Y_MIN - 2 : skyGated && r !== first ? top : top - maxSd - 1;
+          // tree is sky-gated and the run is not the sky-open one.
+          const deep = !useFast ? Y_MIN - 2 : skyGated && r !== sky ? top : top - maxSd - 1;
           for (let y = top; y >= bottom; y--) {
             const i = ((y + 64) << 8) | p;
             if (y <= deep) {

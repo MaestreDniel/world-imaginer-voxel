@@ -21,7 +21,11 @@ export interface TreeReplacement {
    * equals the node's; for a field, its value. Compared canonically.
    */
   readonly was: JsonValue;
-  readonly by: JsonValue;
+  /**
+   * The replacement; a function receives the node the path names (a deep clone, after the `was` check) and returns
+   * it, so a wrapper keeps the replaced subtree without restating it.
+   */
+  readonly by: JsonValue | ((node: JsonValue) => JsonValue);
   /**
    * When true, `by` is inserted before the array item the path names (which must be `was`) instead of replacing it,
    * so that item and the ones after it move up by one index.
@@ -68,7 +72,7 @@ function matches(v: unknown, was: JsonValue): boolean {
 }
 
 /**
- * `base` (a deep JSON clone of it) with each replacement (or insertion) applied in order, through `registeredTree`.
+ * `base` (a deep JSON clone of it) with each replacement (or insertion, or wrapper) applied in order, through `registeredTree`.
  * Throws at module load when a path names nothing (`<leaf>: no node at <path>`), an insertion's path names no array
  * item (`<leaf>: <path> is not an array item`), a path names another node than `was` (`<leaf>: <path> is <node>, not
  * <was>`), or the result fails tier 1. Own-property lookups only.
@@ -91,9 +95,10 @@ export function deriveTree(base: JsonValue, leaf: string, format: JsonFormat, re
     if (insert === true && (!Array.isArray(parent) || parent === holder)) throw new Error(`${leaf}: ${path} is not an array item`);
     const node: unknown = Array.isArray(parent) ? parent[key as number] : parent[key as string];
     if (!matches(node, was)) throw new Error(`${leaf}: ${path} is ${brief(node)}, not ${canonicalJSON(was)}`);
-    if (insert === true) (parent as unknown[]).splice(key as number, 0, by);
-    else if (Array.isArray(parent)) parent[key as number] = by;
-    else parent[key as string] = by;
+    const value: unknown = typeof by === 'function' ? by(node as JsonValue) : by;
+    if (insert === true) (parent as unknown[]).splice(key as number, 0, value);
+    else if (Array.isArray(parent)) parent[key as number] = value;
+    else parent[key as string] = value;
   }
   return registeredTree(holder[0] as JsonValue, leaf, format);
 }
@@ -182,6 +187,7 @@ const stoneDepth = (side: 'floor' | 'ceiling', offset: number, addSurfaceDepth: 
  * and `maxSurfaceDepth` = 4 + SD_MAX), it yields: grass on the top voxel (first, so thin islands are grass-topped), stone
  * on the bottom three voxels (the underside), dirt within the position's surface depth, and stone for the rest of the
  * skin, so the ground biome's palette never reaches an island. 17 nodes, colliding states only (tier 2's NOT_SOLID).
+ * It has no `skyOpen`: under D21 (b) it applies to every run, a stacked island's included (§4.5).
  */
 const ISLANDS_BRANCH: JsonValue = cond({ kind: 'yAbove', minY: ISLAND_RUN_MIN_BOTTOM, runTop: true },
   cond(stoneDepth('ceiling', 100, false),
@@ -193,17 +199,18 @@ const ISLANDS_BRANCH: JsonValue = cond({ kind: 'yAbove', minY: ISLAND_RUN_MIN_BO
     ] })));
 
 /**
- * floating_islands' rules (SP3e spec §4.2): the default rules with the islands branch inserted as the first child of the
- * sky-open sequence (`root.rules[1].then.rules[0]`; the default's five children move to 1-5). Every branch leaf has
- * `skyOpen` and a floor `stoneDepth` on its path, so the tree stays sky-gated with a fast path; `root.rules[0]` (bedrock)
- * and `root.rules[2]` (the deepslate gradient U2 perturbs) keep their places. Under D21 (a) only the first run of a
- * position is sky-open: the ground and a stacked island under an island take the band state. 180 nodes.
+ * floating_islands' rules (SP3e spec §4.2, §4.5, D21 (b), user point 1): the default rules with `root.rules[1]` (the
+ * sky-open condition) wrapped as `sequence[islands branch, the sky-open condition]`. The branch leaves the sky-open
+ * sequence, so it applies to every run (stacked islands are grass-topped) while the ground under an island, which the
+ * scan makes the sky-open run with `islands.enabled` (the highest run reaching below y 181), keeps the default palette.
+ * Every branch leaf keeps its floor `stoneDepth` gate, so the tree has a fast path with `maxSurfaceDepth` = 4 + SD_MAX,
+ * but it is not sky-gated (the pass evaluates the top 4 + SD + 1 voxels of every run). `root.rules[0]` (bedrock) and
+ * `root.rules[2]` (the deepslate gradient U2 perturbs) keep their places. 181 nodes.
  */
 export const FLOATING_SURFACE_RULES: JsonValue = deriveTree(DEFAULT_SURFACE_RULES, 'surface.rules', 'surfaceRules', [
   {
-    path: 'root.rules[1].then.rules[0]',
-    was: { kind: 'condition', if: { kind: 'not', if: { kind: 'water', offset: 0, runTop: false } } },
-    by: ISLANDS_BRANCH,
-    insert: true,
+    path: 'root.rules[1]',
+    was: { kind: 'condition', if: { kind: 'skyOpen' } },
+    by: (skyOpen) => ({ kind: 'sequence', rules: [ISLANDS_BRANCH, skyOpen] }),
   },
 ]);
