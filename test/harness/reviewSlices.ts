@@ -8,9 +8,14 @@
  * the voxels (SP3b §7): a position is wet when water stands above its highest stone, and only the water body (sea,
  * lake or river) comes from the ColumnSample, so a world change that moves a coast, a lake or a river away from its
  * site fails the unit test instead of silently writing a slice without it, and an overhang is checked as voxels.
+ *
+ * SP3e (spec §8) adds the draft presets' sites at fixed lines through their window centres (`presetReviewSites`),
+ * written once per preset with that preset's params, and `slices.json` names the profile (`slicesJson`).
  */
 import { mkdirSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
+import { WINDOW_HALF } from '../../src/core/coords';
+import { isProfileId, PROFILE_IDS, type ProfileId } from '../../src/core/params/profiles';
 import type { Params } from '../../src/core/params/schema';
 import { seedFromInput } from '../../src/core/seed';
 import { biomeFamily, biomeId } from '../../src/gen/biomes/registry';
@@ -301,6 +306,56 @@ export const REVIEW_SITES: readonly ReviewSite[] = [
   },
 ];
 
+/** The three draft presets of SP3e, in `PROFILE_IDS` order (SP3e spec §8). */
+export type DraftPresetId = Extract<ProfileId, 'archipelago' | 'amplified' | 'floating_islands'>;
+
+export const DRAFT_PRESETS: readonly DraftPresetId[] = PROFILE_IDS.filter(
+  (p): p is DraftPresetId => p === 'archipelago' || p === 'amplified' || p === 'floating_islands',
+);
+
+/** A block position (x, z): a preset window's centre (SP3e spec §6: window w(a, b)'s centre is (128a, 128b)). */
+export interface BlockXZ {
+  readonly x: number;
+  readonly z: number;
+}
+
+/** The blocks of a preset review line: the middle half of uiSmoke's 1,024-block cross-section line (SP3e spec §8). */
+export const PRESET_LINE_BLOCKS = 512;
+
+/** Each draft preset's review site name and its crop (SP3e spec §8). */
+const PRESET_SITE: Readonly<Record<DraftPresetId, { readonly name: string; readonly yMin: number; readonly yMax: number }>> = {
+  archipelago: { name: 'archipelago-coast', yMin: -64, yMax: 160 },
+  amplified: { name: 'amplified-mountain', yMin: -64, yMax: 319 },
+  floating_islands: { name: 'islands-cluster', yMin: -64, yMax: 319 },
+};
+
+/**
+ * A draft preset's review site (SP3e spec §8): the vertical slice along x through `centre`, 512 blocks (the 32 columns
+ * cx (x >> 4) − 16 … (x >> 4) + 15, so x − 256 … x + 255), at z = centre.z, 1 px/block, with no `needs` (no
+ * `ReviewKind` describes an island or an islet; the window search and the goldens test check what the lines show).
+ * `amplified-mountain` and `islands-cluster` are drawn whole (y −64 … 319: the island, the water under it and the
+ * ground's shadow are all in the slice); `archipelago-coast` stops at y 160 (its crop removes only dry air above).
+ * The centre's x must be a multiple of 16 (a window centre is a multiple of 128) and the line inside the world window.
+ */
+export function presetReviewSite(profile: DraftPresetId, centre: BlockXZ): VerticalSite {
+  if (!Object.hasOwn(PRESET_SITE, profile)) throw new RangeError(`presetReviewSite: ${String(profile)} is not a draft preset`);
+  const { x, z } = centre;
+  if (!Number.isInteger(x) || !Number.isInteger(z) || (x & 15) !== 0) {
+    throw new RangeError(`presetReviewSite: centre (${x}, ${z}) must be integers with x a multiple of 16`);
+  }
+  const half = PRESET_LINE_BLOCKS / 2;
+  if (x - half < -WINDOW_HALF || x + half > WINDOW_HALF || z < -WINDOW_HALF || z >= WINDOW_HALF) {
+    throw new RangeError(`presetReviewSite: the line through (${x}, ${z}) leaves the world window`);
+  }
+  const { name, yMin, yMax } = PRESET_SITE[profile];
+  return { name, file: `slice-${name}.png`, kind: 'vertical', cx0: (x - half) >> 4, w: PRESET_LINE_BLOCKS / 16, z, yMin, yMax, scale: 1, needs: [] };
+}
+
+/** The three draft presets' review sites, from their window centres, in `DRAFT_PRESETS` order (index i ↔ DRAFT_PRESETS[i]). */
+export function presetReviewSites(centres: Readonly<Record<DraftPresetId, BlockXZ>>): VerticalSite[] {
+  return DRAFT_PRESETS.map((p) => presetReviewSite(p, centres[p]));
+}
+
 /** The line a site's kinds are read on: the vertical slice's line, or a horizontal site's `checkZ` row. */
 export function siteLine(site: ReviewSite): { readonly z: number; readonly x0: number; readonly n: number } {
   return { z: site.kind === 'vertical' ? site.z : site.checkZ, x0: 16 * site.cx0, n: 16 * site.w };
@@ -393,4 +448,14 @@ export async function writeReviewSlices(dir: string, seed: string, params: Param
     out.push({ site, path, width: img.width, height: img.height, bytes: png.length, summary: lineSummary(view, z, x0, n, kindReader(ctx, view, z)) });
   }
   return out;
+}
+
+/**
+ * The text of a slice directory's `slices.json`: the seed, the profile the slices were generated with (SP3e spec §8:
+ * one `writeReviewSlices` call per preset, each directory naming its profile) and each slice with its line summary.
+ */
+export function slicesJson(seed: string, profile: ProfileId, written: readonly WrittenSlice[]): string {
+  if (!isProfileId(profile)) throw new RangeError(`slicesJson: unknown profile ${String(profile)}`);
+  const slices = written.map((w) => ({ file: w.site.file, width: w.width, height: w.height, site: w.site, summary: w.summary }));
+  return `${JSON.stringify({ seed, profile, slices }, null, 2)}\n`;
 }

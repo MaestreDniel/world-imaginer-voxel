@@ -2,6 +2,8 @@ import { mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { beforeAll, describe, expect, test } from 'vitest';
+import { WINDOW_HALF } from '../../src/core/coords';
+import { PROFILE_IDS } from '../../src/core/params/profiles';
 import { biomeId } from '../../src/gen/biomes/registry';
 import { buildColumnSample, newColumnSample, readField, readLevel } from '../../src/gen/column/columnStage';
 import { fluidType, WATER_SOURCE } from '../../src/world/blocks/fluid';
@@ -13,9 +15,10 @@ import { ctxFor, paramsWith } from '../harness/gen';
 import { encodePng, VOXEL_COLORS } from '../harness/png';
 import type { RegionView } from '../harness/region';
 import {
-  cropProblems, generateLine, generateSite, kindReader, lineSummary, MIN_TOP_POSITIONS, MOUNTAIN_SIGMA, mountainShare, needProblems,
-  positionKind, positionVoxels, renderSite, REVIEW_KINDS, REVIEW_SITES, siteLine, TOP_KINDS, topKind, upscale, writeReviewSlices,
-  type LineSummary, type ReviewKind, type ReviewSite, type VerticalSite,
+  cropProblems, DRAFT_PRESETS, generateLine, generateSite, kindReader, lineSummary, MIN_TOP_POSITIONS, MOUNTAIN_SIGMA, mountainShare,
+  needProblems, positionKind, positionVoxels, PRESET_LINE_BLOCKS, presetReviewSite, presetReviewSites, renderSite, REVIEW_KINDS,
+  REVIEW_SITES, siteLine, slicesJson, TOP_KINDS, topKind, upscale, writeReviewSlices,
+  type DraftPresetId, type LineSummary, type ReviewKind, type ReviewSite, type VerticalSite, type WrittenSlice,
 } from '../harness/reviewSlices';
 
 const ctx = ctxFor('42');
@@ -362,6 +365,108 @@ describe('review slice images', () => {
   });
 });
 
+describe('SP3e preset review sites (SP3e spec §8, §1.5 step 1): fixed lines through the window centres', () => {
+  // Constructed data only: the window search (and so the real centres) lands later; any multiple of 16 will do here.
+  const centres = { archipelago: { x: -2560, z: 1408 }, amplified: { x: 1280, z: -640 }, floating_islands: { x: 0, z: 37 } } as const;
+
+  test('presetReviewSites: three vertical 512-block lines along x centred on each centre, in PROFILE_IDS order, no needs', () => {
+    expect(DRAFT_PRESETS).toEqual(['archipelago', 'amplified', 'floating_islands']);
+    expect(DRAFT_PRESETS).toEqual(PROFILE_IDS.filter((p) => p === 'archipelago' || p === 'amplified' || p === 'floating_islands'));
+    expect(PRESET_LINE_BLOCKS).toBe(512);
+    const sites = presetReviewSites(centres);
+    expect(sites.map((s) => [s.name, s.file, s.kind, s.cx0, s.w, s.z, s.yMin, s.yMax, s.scale, s.needs])).toEqual([
+      ['archipelago-coast', 'slice-archipelago-coast.png', 'vertical', -176, 32, 1408, -64, 160, 1, []],
+      ['amplified-mountain', 'slice-amplified-mountain.png', 'vertical', 64, 32, -640, -64, 319, 1, []],
+      ['islands-cluster', 'slice-islands-cluster.png', 'vertical', -16, 32, 37, -64, 319, 1, []],
+    ]);
+    DRAFT_PRESETS.forEach((p, i) => {
+      const c = centres[p];
+      expect(sites[i]).toEqual(presetReviewSite(p, c));
+      // The line is x − 256 … x + 255 at the centre's z: the middle half of uiSmoke's 1,024-block line (spec §8).
+      expect(siteLine(sites[i]!)).toEqual({ z: c.z, x0: c.x - 256, n: 512 });
+    });
+    // Disjoint from the default sites' names and files (the preset slices live in their own directories anyway).
+    const defaults = new Set(REVIEW_SITES.flatMap((s) => [s.name, s.file]));
+    for (const s of sites) expect(defaults.has(s.name) || defaults.has(s.file), s.name).toBe(false);
+  });
+
+  test('presetReviewSite refuses a centre off the 16-block grid, a non-integer one, a line leaving the world window, a non-draft profile', () => {
+    expect(() => presetReviewSite('amplified', { x: 100, z: 0 })).toThrow(RangeError);
+    expect(() => presetReviewSite('amplified', { x: 0, z: 0.5 })).toThrow(RangeError);
+    // The world window is half-open [−2^19, 2^19): x − 256 … x + 255 must fit.
+    expect(presetReviewSite('amplified', { x: -WINDOW_HALF + 256, z: -WINDOW_HALF }).cx0).toBe(-WINDOW_HALF / 16);
+    expect(siteLine(presetReviewSite('amplified', { x: WINDOW_HALF - 256, z: WINDOW_HALF - 1 })).x0 + 511).toBe(WINDOW_HALF - 1);
+    expect(() => presetReviewSite('amplified', { x: -WINDOW_HALF + 240, z: 0 })).toThrow(RangeError);
+    expect(() => presetReviewSite('amplified', { x: WINDOW_HALF - 240, z: 0 })).toThrow(RangeError);
+    expect(() => presetReviewSite('amplified', { x: 0, z: WINDOW_HALF })).toThrow(RangeError);
+    expect(() => presetReviewSite('default' as DraftPresetId, { x: 0, z: 0 })).toThrow(RangeError);
+  });
+
+  // Constructed slices shaped like the three, on the real sites through (256, 0), so the line is positions 0 … 511.
+  const at = (p: DraftPresetId): VerticalSite => presetReviewSite(p, { x: 256, z: 0 });
+
+  test('islands-cluster: the crop of :129-141 keeps an island run, the water under it and the ground below whole', () => {
+    const site = at('floating_islands');
+    const island = { stone: [[-63, 40], [200, 230]], water: [[41, 63]] } as const;
+    const stacked = { stone: [[-63, 40], [190, 200], [250, 319]], water: [[41, 63]] } as const;
+    const v = fakeView([...Array<FakeColumn>(100).fill(island), stacked]);
+    expect(positionVoxels(v, 0, 0)).toEqual({ top: 230, water: null, lowestOpen: 41, highestFilled: 230, transitions: 1, waterUnderTop: 23 });
+    expect(cropProblems(v, site)).toEqual([]);
+    // The crop rule bites on these columns: a crop at y 120 (the review's defect 28) cuts the islands, one above the
+    // sea floor cuts the water under them.
+    expect(cropProblems(v, { ...site, yMax: 120 })).toEqual([
+      ...Array.from({ length: 100 }, (_, x) => `(${x}, 0): filled at y 230, above the crop`),
+      '(100, 0): filled at y 319, above the crop',
+    ]);
+    expect(cropProblems(v, { ...site, yMin: 42 })).toHaveLength(512);
+    // The image keeps every y of the world (its first 16 columns rendered: the fake view is one column wide).
+    expect(renderSite(v, site).height).toBe(384);
+  });
+
+  test('archipelago-coast: y −64 … 160 removes only dry air above 160 and nothing else', () => {
+    const site = at('archipelago');
+    const sea = { stone: [[-63, 40]], water: [[41, 63]] } as const;
+    const v = fakeView([...Array<FakeColumn>(256).fill(sea), ...Array<FakeColumn>(44).fill({ stone: [[-63, 150]] }), { stone: [[-63, 160]] }]);
+    expect(cropProblems(v, site)).toEqual([]);
+    // Every voxel above y 160 on the line is dry air; y −64 (bedrock) is the slice's bottom row.
+    let notDryAbove = 0;
+    for (let x = 0; x < 512; x++) for (let y = 161; y <= 319; y++) if (v.block(x, y, 0) !== AIR || fluidType(v.fluid(x, y, 0)) !== 0) notDryAbove++;
+    expect(notDryAbove).toBe(0);
+    const img = renderSite(v, site);
+    expect([img.width, img.height]).toEqual([16, 225]);
+    const last = 4 * img.width * (img.height - 1);
+    expect([...img.rgba.subarray(last, last + 3)]).toEqual([...VOXEL_COLORS.bedrock]);
+    // A land voxel at y 161 would be cut: the crop is checked, not assumed.
+    const spike = fakeView([...Array<FakeColumn>(300).fill(sea), { stone: [[-63, 161]] }]);
+    expect(cropProblems(spike, site)).toEqual(['(300, 0): filled at y 161, above the crop']);
+  });
+
+  test('amplified-mountain: y −64 … 319 keeps a mountain up to the world top with its overhang', () => {
+    const site = at('amplified');
+    const v = fakeView([{ stone: [[-63, 250], [260, 319]] }, { stone: [[-63, 300]] }]);
+    expect(positionVoxels(v, 0, 0).highestFilled).toBe(319);
+    expect(cropProblems(v, site)).toEqual([]);
+    expect(cropProblems(v, { ...site, yMax: 318 })).toEqual(['(0, 0): filled at y 319, above the crop']);
+  });
+
+  test('slicesJson: slices.json names the profile the caller passes, then each slice with its summary', () => {
+    const summary: LineSummary = {
+      kinds: { land: 3, sea: 1, lake: 0, river: 0 }, tops: { desertTop: 0, snowTop: 0, badlandsTop: 0 },
+      topMin: 40, topMax: 230, waterMax: 63, overhangs: 0, waterWallFaces: 0, waterUnderStone: 23,
+    };
+    const site = at('floating_islands');
+    const written: WrittenSlice[] = [{ site, path: '/x/slice-islands-cluster.png', width: 512, height: 384, bytes: 1234, summary }];
+    const text = slicesJson('42', 'floating_islands', written);
+    expect(text.endsWith('}\n')).toBe(true);
+    expect(Object.keys(JSON.parse(text) as object)).toEqual(['seed', 'profile', 'slices']);
+    expect(JSON.parse(text)).toEqual({ seed: '42', profile: 'floating_islands', slices: [{ file: site.file, width: 512, height: 384, site, summary }] });
+    // The default sites' file keeps its exact text (the writer below passes 'default').
+    const slices = written.map((w) => ({ file: w.site.file, width: w.width, height: w.height, site: w.site, summary: w.summary }));
+    expect(slicesJson('42', 'default', written)).toBe(`${JSON.stringify({ seed: '42', profile: 'default', slices }, null, 2)}\n`);
+    expect(() => slicesJson('42', 'nope' as DraftPresetId, written)).toThrow(RangeError);
+  });
+});
+
 /**
  * `npm run docs:review-slices` sets REVIEW_SLICES_DIR to `docs/superpowers/specs/assets/sp3c` and writes every site
  * there (the 64 × 64 horizontal slice takes several seconds), plus `slices.json` (each site and its line summary read
@@ -370,6 +475,5 @@ describe('review slice images', () => {
 test.runIf(process.env.REVIEW_SLICES_DIR !== undefined)('write the review slices into REVIEW_SLICES_DIR', async () => {
   const written = await writeReviewSlices(process.env.REVIEW_SLICES_DIR!, '42', params);
   expect(written.map((w) => w.site.file)).toEqual(REVIEW_SITES.map((s) => s.file));
-  const slices = written.map((w) => ({ file: w.site.file, width: w.width, height: w.height, site: w.site, summary: w.summary }));
-  writeFileSync(join(process.env.REVIEW_SLICES_DIR!, 'slices.json'), `${JSON.stringify({ seed: '42', profile: 'default', slices }, null, 2)}\n`);
+  writeFileSync(join(process.env.REVIEW_SLICES_DIR!, 'slices.json'), slicesJson('42', 'default', written));
 }, 300_000);
