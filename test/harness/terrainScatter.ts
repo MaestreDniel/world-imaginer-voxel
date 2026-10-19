@@ -43,8 +43,8 @@ export interface ScatterColumn {
   aux(): Pick<AuxView, 'worldSurfaceWG' | 'oceanFloorWG' | 'surfaceBiome'> | null;
 }
 
-/** Column solidity, index ((y + 64) << 8) | (lz << 4) | lx, from the proto sections. */
-function solidity(view: ScatterColumn, out: Uint8Array): Uint8Array {
+/** Column solidity, index ((y + 64) << 8) | (lz << 4) | lx, from the proto sections (also Z1's, SP3e spec §5.3). */
+export function solidity(view: ScatterColumn, out: Uint8Array): Uint8Array {
   for (let sy = 0; sy < 24; sy++) {
     const b = view.sectionBlocks(sy);
     const base = sy << 12;
@@ -54,8 +54,8 @@ function solidity(view: ScatterColumn, out: Uint8Array): Uint8Array {
   return out;
 }
 
-/** Solid→air transitions at y ∈ [y0, y1] (y0 ≥ −64) of position p. */
-function transitions(solid: Uint8Array, p: number, y0: number, y1: number): number {
+/** Solid→air transitions at y ∈ [y0, y1] (y0 ≥ −64) of position p (T2's and Z1's overhang count). */
+export function transitions(solid: Uint8Array, p: number, y0: number, y1: number): number {
   let n = 0;
   for (let y = Math.max(-64, y0); y <= y1; y++) {
     if (solid[((y + 64) << 8) | p] === 1 && (y === 319 || solid[((y + 65) << 8) | p] === 0)) n++;
@@ -425,4 +425,21 @@ export function t5Values(s: Scattered, mode: PopulationMode, label: string): Rec
   };
   populations(rec, mode, ['median', 'p90', 'p99'], sorted.length);
   return rec;
+}
+
+/** The draft presets whose full-tier records `presetRecord` keys (SP3e spec §5.5). */
+const RECORD_PRESETS: ReadonlySet<string> = new Set(['archipelago', 'amplified', 'floating_islands']);
+
+/**
+ * One preset's record-mode values keyed for the presets' full-tier records (SP3e spec §5.5): every key `<k>` becomes
+ * `<k>.<preset>`, so a part's value `<part>` becomes `<part>.<preset>` and its population `<part>.population` becomes
+ * `<part>.population.<preset>` (extras likewise); values, NaN included, are kept as they are. Used by the T and S
+ * records of `presets.metric.ts`, which merge the three presets' records into one `.out` record (nothing enters a
+ * per-profile worst-of). RangeError for a profile that is not a draft preset.
+ */
+export function presetRecord(values: Readonly<Record<string, number>>, preset: string): Record<string, number> {
+  if (!RECORD_PRESETS.has(preset)) throw new RangeError(`presetRecord: ${preset} is not a draft preset`);
+  const out: Record<string, number> = {};
+  for (const [k, v] of Object.entries(values)) out[`${k}.${preset}`] = v;
+  return out;
 }

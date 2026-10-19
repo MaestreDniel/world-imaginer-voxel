@@ -2,7 +2,8 @@ import { afterEach, describe, expect, test, vi } from 'vitest';
 import { biomeId } from '../../src/gen/biomes/registry';
 import { AIR } from '../../src/world/blocks/index';
 import {
-  analyseColumn, newScatterScratch, newScattered, t1Values, t2Values, t3Values, t5Values, type ScatterColumn, type Scattered,
+  analyseColumn, newScatterScratch, newScattered, presetRecord, solidity, t1Values, t2Values, t3Values, t5Values, transitions,
+  type ScatterColumn, type Scattered,
 } from '../harness/terrainScatter';
 
 /**
@@ -214,5 +215,42 @@ describe("population modes (SP3e spec §5.5: 'Populations are recorded, never en
       'T5 (large_biomes) single-surface positions: insufficient sample (0 < 1000)',
     ]);
     expect(Object.keys(all).filter((k) => k.includes('population'))).toEqual([]);
+  });
+});
+
+describe('the presets\' full-tier records and Z1 (SP3e spec §5.3, §5.5)', () => {
+  test('solidity and transitions are T2\'s: the overhang position has 2 transitions at y ≥ top − 30, the cave one 1', () => {
+    const solid = solidity(testColumn(), new Uint8Array(98304));
+    expect(solid[((70 + 64) << 8) | 1]).toBe(1);
+    expect(solid[((61 + 64) << 8) | 1]).toBe(0);
+    expect(transitions(solid, 1, 40, 70)).toBe(2);
+    expect(transitions(solid, 34, 40, 70)).toBe(1);
+    expect(transitions(solid, 34, -56, 70)).toBe(2);
+    expect(transitions(solid, 2, -64, 319)).toBe(1);
+  });
+
+  test('presetRecord: <part> → <part>.<preset>, <part>.population → <part>.population.<preset>, extras likewise', () => {
+    const t2 = t2Values(filled(), 'record', 'amplified');
+    const rec = presetRecord(t2, 'amplified');
+    expect(rec['overhangs.amplified']).toBe(t2.overhangs);
+    expect(rec['overhangs.population.amplified']).toBe(40);
+    expect(rec['overhangsPeaks.population.amplified']).toBe(1);
+    expect(rec['floatingRockShare.amplified']).toBe(t2.floatingRockShare);
+    expect(Object.keys(rec)).toEqual(Object.keys(t2).map((k) => `${k}.amplified`));
+    expect(presetRecord({ value: 1.25, 'value.population': 2048, seconds: 3 }, 'floating_islands')).toEqual({
+      'value.floating_islands': 1.25, 'value.population.floating_islands': 2048, 'seconds.floating_islands': 3,
+    });
+  });
+
+  test('presetRecord keeps an empty population\'s NaN value and its population 0', () => {
+    const rec = presetRecord(t5Values(newScattered(), 'record', 'archipelago'), 'archipelago');
+    expect(rec['median.archipelago']).toBeNaN();
+    expect(rec['p99.population.archipelago']).toBe(0);
+    expect(rec['singleSurface.archipelago']).toBe(0);
+  });
+
+  test('presetRecord refuses a profile that is not a draft preset', () => {
+    expect(() => presetRecord({ band: 0 }, 'default')).toThrow(RangeError);
+    expect(() => presetRecord({ band: 0 }, 'toString')).toThrow('presetRecord: toString is not a draft preset');
   });
 });

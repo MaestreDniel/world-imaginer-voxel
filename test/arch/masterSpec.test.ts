@@ -25,7 +25,9 @@
  * `density.noises.islands`), and §3.6 sends the islands term to the SP3e spec §3 (both land with `FLOATING_DENSITY_TREE`).
  * §6.4's B1 row states archipelago's per-profile parts with the minShare floor THRESHOLDS gates, and its DT2 row the
  * presets' parts (`DT2.presets`), which THRESHOLDS lists (both land with `presets.metric.ts`). §1's `metrics/*.ts` entry
- * names `sp3eGoldens.ts` and "Banned APIs" lists it as a determinism file (both land with the window search).
+ * names `sp3eGoldens.ts` and "Banned APIs" lists it as a determinism file (both land with the window search). §6.4's
+ * Z1-Z3 rows state SP3e's definitions and that the rows are recorded from SP3e and gated from SP12 on the quick and full
+ * tiers, as THRESHOLDS has them (they land with the Z rows).
  */
 import { existsSync, readdirSync, readFileSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
@@ -325,6 +327,30 @@ describe('master spec amendments (SP3e §11, §13)', () => {
     expect(n).toBe(73);
     expect(u2).toContain(`the islands leaves are decided on a floating_islands island column; U2 covers ${n} leaves (amended by SP3e)`);
     expect(text).toContain('- `islands` is `−1e6` except in the floating_islands preset (SP3e) (SP3e spec §3).');
+  });
+
+  test('§6.4\'s Z1-Z3 rows state SP3e\'s definitions; THRESHOLDS records them from SP3e and gates them from SP12 (quick, full)', () => {
+    const tail = 'recorded on every tier from SP3e, rows activeFrom SP12 gated on the quick and full tiers (amended by SP3e)';
+    const defs: Record<'Z1' | 'Z2' | 'Z3', string> = {
+      Z1: 'SP3e: amplified: among land positions (worldSurfaceWG = oceanFloorWG, top = the highest solid voxel) of uniform chunk columns in ±1024 chunks, the share with ≥ 2 solid → air transitions within 30 blocks below the top / the p99 of those tops',
+      Z2: 'SP3e: archipelago: the share of cells with offset0 < 63 on a step-64 raster centred on (0, 0) / 4-connected land components of ≥ 1 km² (border-clipped areas counted) per 100 km² of raster',
+      Z3: 'SP3e: floating_islands: positions holding a solid run whose bottom voxel is at y ≥ 181, over uniform columns in [−4096, 4096)² / the share of those positions whose highest such run\'s top is grass_block',
+    };
+    const parts: Record<'Z1' | 'Z2' | 'Z3', readonly string[]> = {
+      Z1: ['overhangs', 'p99Top'], Z2: ['oceanShare', 'islandsPer100km2'], Z3: ['islandColumns', 'grassTops'],
+    };
+    for (const id of ['Z1', 'Z2', 'Z3'] as const) {
+      const row = text.split('\n').find((l) => l.startsWith(`| ${id} |`));
+      expect(row, `no ${id} row in §6.4`).toBeDefined();
+      expect(row).toContain(`${defs[id]}; ${tail}`);
+      expect(Object.keys(THRESHOLDS[id] ?? {})).toEqual(parts[id]);
+      for (const part of parts[id]) {
+        expect(THRESHOLDS[id]![part], `${id}.${part}`).toMatchObject({ activeFrom: 'SP12', tiers: ['quick', 'full'] });
+      }
+    }
+    expect([THRESHOLDS.Z1?.overhangs?.min, THRESHOLDS.Z1?.p99Top?.min]).toEqual([0.08, 250]);
+    expect([THRESHOLDS.Z2?.oceanShare?.min, THRESHOLDS.Z2?.oceanShare?.max, THRESHOLDS.Z2?.islandsPer100km2?.min]).toEqual([0.6, 0.75, 20]);
+    expect([THRESHOLDS.Z3?.islandColumns?.min, THRESHOLDS.Z3?.grassTops?.min]).toEqual([0.03, 0.9]);
   });
 
   test('§6.4\'s B1 row states archipelago\'s own parts and floor, its DT2 row the presets\' parts (DT2.presets)', () => {

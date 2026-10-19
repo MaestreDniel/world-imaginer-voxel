@@ -72,6 +72,18 @@ export const THRESHOLDS: ThresholdTable = {
   S1: { buried: { max: 0, activeFrom: 'SP3c' }, grassNoSky: { max: 0, activeFrom: 'SP3c' }, ymod16: { min: 0.001, activeFrom: 'SP3c' } },
   S2: { deepslateBelow0: { min: 0.95, activeFrom: 'SP3c' }, deepslateAbove8: { max: 0.01, activeFrom: 'SP3c' }, bedrockFloor: { min: 1, activeFrom: 'SP3c' } },
   S3: { snowAboveLine: { min: 0.9, activeFrom: 'SP3c' }, snowNoSky: { max: 0, activeFrom: 'SP3c' } },
+  // SP3e spec §5.3 (D16): the master's diagnostics on the drafts, recorded on every tier from SP3e (`.out/Z1-Z3.json`),
+  // gated on the quick and full tiers once SP12 starts.
+  Z1: {
+    overhangs: { min: 0.08, activeFrom: 'SP12', tiers: ['quick', 'full'] }, p99Top: { min: 250, activeFrom: 'SP12', tiers: ['quick', 'full'] },
+  },
+  Z2: {
+    oceanShare: { min: 0.6, max: 0.75, activeFrom: 'SP12', tiers: ['quick', 'full'] },
+    islandsPer100km2: { min: 20, activeFrom: 'SP12', tiers: ['quick', 'full'] },
+  },
+  Z3: {
+    islandColumns: { min: 0.03, activeFrom: 'SP12', tiers: ['quick', 'full'] }, grassTops: { min: 0.9, activeFrom: 'SP12', tiers: ['quick', 'full'] },
+  },
   M1: { states: { max: 4096, activeFrom: 'SP3a' }, roundTripFailures: { max: 0, activeFrom: 'SP3a' }, lockChanges: { max: 0, activeFrom: 'SP3a' } },
   U4: {
     registryIssues: { max: 0, activeFrom: 'SP1' },

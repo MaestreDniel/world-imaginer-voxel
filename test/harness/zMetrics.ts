@@ -108,3 +108,56 @@ export function sizeClasses(c: Components, step: number): Record<SizeClass, numb
   }
   return out;
 }
+
+/** What `columnStates` reads of a generated column: its 24 proto block sections (a `ColumnView` is one). */
+export interface BlockSections {
+  sectionBlocks(sy: number): Uint16Array | number;
+}
+
+/**
+ * A generated column's block states in the chunk layout `((y + 64) << 8) | p` (uniform sections expanded), written into
+ * `out` and returned. Air is state 0, so `positionColumn(states, p)` reads a position's solidity out of it (Z3 reads
+ * the states of island tops and ground tops from the same array).
+ */
+export function columnStates(view: BlockSections, out: Uint16Array = new Uint16Array(HEIGHT << 8)): Uint16Array {
+  for (let sy = 0; sy < HEIGHT >> 4; sy++) {
+    const b = view.sectionBlocks(sy);
+    const base = sy << 12;
+    if (typeof b === 'number') out.fill(b, base, base + 4096);
+    else out.set(b, base);
+  }
+  return out;
+}
+
+/**
+ * Whether the islands surface branch's predicate (SP3e spec §4.1: `yAbove{minY: minBottom, runTop: true}` then
+ * `stoneDepth{ceiling, ceilingOffset}`, which hold iff runTop ≥ minBottom and y − runBottom ≤ ceilingOffset) holds at
+ * the top voxel of `run`, i.e. the branch gives that run its grass top when the run is sky-open. Z3's
+ * `branchFalsePositives` applies it to a position's sky-open run (its highest) whose bottom is < minBottom (a peak or an
+ * overhang lip capped with grass) or at islandMask 0. Decided from solidity alone, so it holds with either rules tree.
+ */
+export function branchHoldsAtTop(run: Run, minBottom: number, ceilingOffset: number): boolean {
+  return run.top >= minBottom && run.top - run.bottom <= ceilingOffset;
+}
+
+/** Nearest-rank quantile of an ascending array (q ∈ (0, 1]); NaN for an empty one. */
+export function nearestRank(sorted: ArrayLike<number>, q: number): number {
+  return sorted.length === 0 ? NaN : sorted[Math.max(0, Math.ceil(q * sorted.length) - 1)]!;
+}
+
+/**
+ * Z1's top histogram: counts of the values in [lo, hi] per `bin`-block bin [b, b + bin) (the last bin is cut at hi),
+ * keyed `<prefix><b>`, b = lo, lo + bin, …, in that order (every bin present, zeros included).
+ */
+export function binCounts(values: ArrayLike<number>, lo: number, hi: number, bin: number, prefix: string): Record<string, number> {
+  if (!(bin > 0) || !(hi >= lo)) throw new RangeError(`binCounts: bins of ${bin} over [${lo}, ${hi}]`);
+  const out: Record<string, number> = {};
+  for (let b = lo; b <= hi; b += bin) out[`${prefix}${b}`] = 0;
+  for (let i = 0; i < values.length; i++) {
+    const v = values[i]!;
+    if (v < lo || v > hi) continue;
+    const key = `${prefix}${lo + Math.floor((v - lo) / bin) * bin}`;
+    out[key]!++;
+  }
+  return out;
+}

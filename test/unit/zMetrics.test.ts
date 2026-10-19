@@ -4,7 +4,8 @@ import { waterRaster } from '../../src/metrics/columnStats';
 import { components } from '../harness/flood';
 import { ctxFor } from '../harness/gen';
 import {
-  componentKm2, groundRun, islandCount, islandRuns, islandsPer100km2, landComponents, positionColumn, sizeClasses, solidRuns,
+  binCounts, branchHoldsAtTop, columnStates, componentKm2, groundRun, islandCount, islandRuns, islandsPer100km2, landComponents,
+  nearestRank, positionColumn, sizeClasses, solidRuns,
 } from '../harness/zMetrics';
 
 /** Z3's island-run threshold (Task 17 passes `ISLAND_RUN_MIN_BOTTOM`, 181). */
@@ -172,5 +173,50 @@ describe('islands per 100 km² and size classes', () => {
     expect(sizeClasses(c, 1000)).toEqual({ lt1: 0, '1to5': 2, '5to25': 2, '25to100': 2, ge100: 2 });
     expect(sizeClasses(c, 500)).toEqual({ lt1: 1, '1to5': 2, '5to25': 3, '25to100': 2, ge100: 0 });
     expect(Object.keys(sizeClasses(c, 1))).toEqual(['lt1', '1to5', '5to25', '25to100', 'ge100']);
+  });
+});
+
+describe('Z1-Z3 per-column helpers (SP3e spec §5.3)', () => {
+  test('columnStates expands the 24 proto sections into ((y + 64) << 8) | p; positionColumn reads its solidity', () => {
+    const dense = new Uint16Array(4096);
+    dense[(3 << 8) | 17] = 9; // y = −64 + 16 + 3 = −45, p 17
+    const view = { sectionBlocks: (sy: number): Uint16Array | number => (sy === 0 ? 5 : sy === 1 ? dense : 0) };
+    const states = columnStates(view);
+    expect(states.length).toBe(384 * 256);
+    expect(states[(0 << 8) | 200]).toBe(5);
+    expect(states[(15 << 8) | 255]).toBe(5);
+    expect(states[((-45 + 64) << 8) | 17]).toBe(9);
+    expect(states[((-45 + 64) << 8) | 16]).toBe(0);
+    expect(states[((319 + 64) << 8) | 17]).toBe(0);
+    expect(solidRuns(positionColumn(states, 17))).toEqual([{ bottom: -64, top: -49 }, { bottom: -45, top: -45 }]);
+    const out = new Uint16Array(384 * 256).fill(7);
+    expect(columnStates({ sectionBlocks: () => 0 }, out)).toBe(out);
+    expect(out.every((v) => v === 0)).toBe(true);
+  });
+
+  test('the branch predicate at a run\'s top: runTop ≥ 181 and top − bottom ≤ 100', () => {
+    expect(branchHoldsAtTop({ bottom: 200, top: 230 }, MIN_BOTTOM, 100)).toBe(true); // an island
+    expect(branchHoldsAtTop({ bottom: 170, top: 200 }, MIN_BOTTOM, 100)).toBe(true); // an overhang lip: a false positive
+    expect(branchHoldsAtTop({ bottom: 81, top: 181 }, MIN_BOTTOM, 100)).toBe(true); // both bounds inclusive
+    expect(branchHoldsAtTop({ bottom: 80, top: 181 }, MIN_BOTTOM, 100)).toBe(false);
+    expect(branchHoldsAtTop({ bottom: 100, top: 180 }, MIN_BOTTOM, 100)).toBe(false);
+    expect(branchHoldsAtTop({ bottom: -63, top: 260 }, MIN_BOTTOM, 100)).toBe(false); // a peak on the bedrock
+  });
+
+  test('nearestRank: ceil(q·n)-th smallest, NaN when empty', () => {
+    const sorted = [1, 2, 3, 4, 5, 6, 7, 8, 9, 10];
+    expect(nearestRank(sorted, 0.5)).toBe(5);
+    expect(nearestRank(sorted, 0.99)).toBe(10);
+    expect(nearestRank(sorted, 0.05)).toBe(1);
+    expect(nearestRank([7], 0.99)).toBe(7);
+    expect(nearestRank([], 0.5)).toBeNaN();
+  });
+
+  test('binCounts: every bin present in order, the last cut at hi, values outside ignored', () => {
+    expect(binCounts([249, 250, 259, 260, 305, 310, 319, 320], 250, 319, 10, 'topHist.')).toEqual({
+      'topHist.250': 2, 'topHist.260': 1, 'topHist.270': 0, 'topHist.280': 0, 'topHist.290': 0, 'topHist.300': 1, 'topHist.310': 2,
+    });
+    expect(Object.keys(binCounts([], 250, 319, 10, 'h'))).toEqual(['h250', 'h260', 'h270', 'h280', 'h290', 'h300', 'h310']);
+    expect(() => binCounts([], 0, 10, 0, 'h')).toThrow(RangeError);
   });
 });

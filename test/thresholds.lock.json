@@ -1,5 +1,5 @@
 {
-  "sha256": "3e520fef4ef8b0240aa3d8c16293a11523c1bcef8e363b9f2263825e5382e494",
+  "sha256": "9460bf346b68d02f3d6845d956e3992b00d8b413f25bd9d06778ed40149fbd23",
   "canonical": {
     "startedSps": [
       "SP0",
@@ -430,6 +430,61 @@
         "shapeLockViolations": {
           "activeFrom": "SP1",
           "max": 0
+        }
+      },
+      "Z1": {
+        "overhangs": {
+          "activeFrom": "SP12",
+          "min": 0.08,
+          "tiers": [
+            "quick",
+            "full"
+          ]
+        },
+        "p99Top": {
+          "activeFrom": "SP12",
+          "min": 250,
+          "tiers": [
+            "quick",
+            "full"
+          ]
+        }
+      },
+      "Z2": {
+        "islandsPer100km2": {
+          "activeFrom": "SP12",
+          "min": 20,
+          "tiers": [
+            "quick",
+            "full"
+          ]
+        },
+        "oceanShare": {
+          "activeFrom": "SP12",
+          "max": 0.75,
+          "min": 0.6,
+          "tiers": [
+            "quick",
+            "full"
+          ]
+        }
+      },
+      "Z3": {
+        "grassTops": {
+          "activeFrom": "SP12",
+          "min": 0.9,
+          "tiers": [
+            "quick",
+            "full"
+          ]
+        },
+        "islandColumns": {
+          "activeFrom": "SP12",
+          "min": 0.03,
+          "tiers": [
+            "quick",
+            "full"
+          ]
         }
       }
     }
