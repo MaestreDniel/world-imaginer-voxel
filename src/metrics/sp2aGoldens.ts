@@ -1,7 +1,9 @@
 /**
  * SP2a golden digests (SP2a spec §7.4), shared by test/unit/goldens.sp2a.test.ts, the ?selftest=1 worker
  * and test/tools/goldensJsc.ts, and the chain of every golden of the build (`allGoldenKeys`/`computeAnyGolden`:
- * SP1, SP2a, then SP3a, SP3a spec §6.4, then SP3b, SP3b spec §9, then SP3c, SP3c spec §7). Follows the core determinism rules (arch-tested). Every value is hex64.
+ * SP1, SP2a, then SP3a, SP3a spec §6.4, then SP3b, SP3b spec §9, then SP3c, SP3c spec §7, then SP3e, SP3e spec §6). The column-point
+ * digest lives in `pointDigest.ts` (SP3e spec §6: `sp3eGoldens.ts` hashes it too). Follows the core determinism rules (arch-tested).
+ * Every value is hex64.
  */
 import { MAP_LEVELS, type MapLevel } from '../core/constants';
 import { fnv1a32, fnv1a64Bytes, hashF64, hex64 } from '../core/hash';
@@ -9,15 +11,16 @@ import { resolveProfile, type ProfileId } from '../core/params/profiles';
 import { Xoshiro128 } from '../core/rng';
 import { seedFromInput } from '../core/seed';
 import { createGenContext, type GenContext } from '../gen/context';
-import { columnPoint, type ColumnPoint } from '../gen/column/columnPoint';
 import { buildColumnSample, LEVEL_FIELDS, newColumnSample, SAMPLE_FIELDS } from '../gen/column/columnStage';
 import { findSpawn } from '../gen/column/spawn';
 import type { LayerId } from '../gen/map/layers';
 import { paintTile } from '../gen/map/tile';
+import { pointDigest } from './pointDigest';
 import { computeGolden as computeSp1, goldenKeys as sp1Keys } from './sp1Goldens';
 import { computeSp3aGolden, sp3aGoldenKeys } from './sp3aGoldens';
 import { computeSp3bGolden, sp3bGoldenKeys } from './sp3bGoldens';
 import { computeSp3cGolden, sp3cGoldenKeys } from './sp3cGoldens';
+import { computeSp3eGolden, sp3eGoldenKeys } from './sp3eGoldens';
 
 const FNV32 = fnv1a32;
 const FNV_BYTES = fnv1a64Bytes;
@@ -27,7 +30,7 @@ const RESOLVE = resolveProfile;
 const Rng = Xoshiro128;
 const SEED = seedFromInput;
 const CREATE = createGenContext;
-const POINT = columnPoint;
+const POINT_DIGEST = pointDigest;
 const BUILD = buildColumnSample;
 const NEW_SAMPLE = newColumnSample;
 const SPAWN = findSpawn;
@@ -43,32 +46,13 @@ const SP3B = computeSp3bGolden;
 const SP3B_KEYS = sp3bGoldenKeys;
 const SP3C = computeSp3cGolden;
 const SP3C_KEYS = sp3cGoldenKeys;
+const SP3E = computeSp3eGolden;
+const SP3E_KEYS = sp3eGoldenKeys;
 
 const POINT_PROFILES: readonly ProfileId[] = ['default', 'large_biomes'];
 const TILE_LAYERS: readonly LayerId[] = ['biome', 'relief', 'rivers', 'C'];
-const N_POINTS = 4096;
 
 const ctxFor = (profile: ProfileId): GenContext => CREATE(SEED('42'), RESOLVE(profile));
-
-/** Every ColumnPoint field in a fixed order (booleans as 0/1). */
-function pointValues(p: ColumnPoint, out: Float64Array, o: number): void {
-  const v = [p.C, p.E, p.W, p.T, p.H, p.R, p.PV, p.offset0, p.sigma0, p.jag0, p.steep, p.riverDist, p.riverStrength, p.riverWet ? 1 : 0, p.gorge ? 1 : 0,
-    p.lakeMask, p.lakeLevel, p.lakeFloor, p.offset, p.sigma, p.jag, p.surfaceWaterLevel, p.surfaceEst, p.islandMask, p.biome];
-  for (let k = 0; k < 25; k++) out[o + k] = v[k]!;
-}
-
-/** columnPoint at 4096 points from Xoshiro128(fnv1a32('sp2a.point')) in the colKey window, world seed '42'. */
-export function pointDigest(profile: ProfileId): string {
-  const ctx = ctxFor(profile);
-  const r = new Rng(FNV32('sp2a.point'));
-  const out = new Float64Array(N_POINTS * 25);
-  for (let i = 0; i < N_POINTS; i++) {
-    const x = -524288 + 1048576 * r.nextFloat();
-    const z = -524288 + 1048576 * r.nextFloat();
-    pointValues(POINT(ctx, x, z), out, 25 * i);
-  }
-  return HEX64(HASH_F64(out));
-}
 
 /** 64 full ColumnSamples at columns from Xoshiro128(fnv1a32('sp2a.sample')), default profile. */
 export function sampleDigest(): string {
@@ -115,7 +99,7 @@ export function sp2aGoldenKeys(): string[] {
 export function computeSp2aGolden(key: string): string {
   const m = /^sp2a\.(column\.point|column\.sample|tile|spawn)(?:\.(.+))?$/.exec(key);
   if (m !== null) {
-    if (m[1] === 'column.point' && (POINT_PROFILES as readonly string[]).includes(m[2] ?? '')) return pointDigest(m[2] as ProfileId);
+    if (m[1] === 'column.point' && (POINT_PROFILES as readonly string[]).includes(m[2] ?? '')) return POINT_DIGEST(m[2] as ProfileId);
     if (m[1] === 'column.sample' && m[2] === undefined) return sampleDigest();
     if (m[1] === 'spawn' && m[2] === undefined) return spawnDigest();
     if (m[1] === 'tile') {
@@ -126,14 +110,15 @@ export function computeSp2aGolden(key: string): string {
   throw new Error(`unknown golden ${key}`);
 }
 
-/** Every golden key of the build (SP1, SP2a, SP3a, SP3b, then SP3c). */
+/** Every golden key of the build (SP1, SP2a, SP3a, SP3b, SP3c, then SP3e). */
 export function allGoldenKeys(): string[] {
-  return [...SP1_KEYS(), ...sp2aGoldenKeys(), ...SP3A_KEYS(), ...SP3B_KEYS(), ...SP3C_KEYS()];
+  return [...SP1_KEYS(), ...sp2aGoldenKeys(), ...SP3A_KEYS(), ...SP3B_KEYS(), ...SP3C_KEYS(), ...SP3E_KEYS()];
 }
 
 export function computeAnyGolden(key: string): string {
   if (key.startsWith('sp3a.')) return SP3A(key);
   if (key.startsWith('sp3b.')) return SP3B(key);
   if (key.startsWith('sp3c.')) return SP3C(key);
+  if (key.startsWith('sp3e.')) return SP3E(key);
   return key.startsWith('sp2a.') ? computeSp2aGolden(key) : SP1(key);
 }

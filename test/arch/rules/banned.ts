@@ -12,12 +12,13 @@ const MATH_ALLOWED = new Set(['abs', 'floor', 'ceil', 'round', 'trunc', 'sign', 
 /**
  * Files outside core/ and gen/ that follow the core determinism rules: the golden digests (SP1 spec §1.8), the
  * SP2b metrics shared by the tests, the workers and the UI (SP2b spec §5.4), the SP3a region core (SP3a spec §6.1),
- * the SP3a, SP3b and SP3c golden digests (SP3a spec §6.4, SP3b spec §9, SP3c spec §7) and the SP3e golden module with
- * its preset window search (SP3e spec §6). Exported for the master-spec check (`masterSpec.test.ts`: master "Banned
- * APIs" lists exactly these).
+ * the SP3a, SP3b and SP3c golden digests (SP3a spec §6.4, SP3b spec §9, SP3c spec §7), the SP3e golden digests with
+ * the preset window search and the column-point digest they share with SP2a's (SP3e spec §6). Exported for the
+ * master-spec check (`masterSpec.test.ts`: master "Banned APIs" lists exactly these).
  */
 export const DET_FILES: ReadonlySet<string> = new Set(['metrics/sp1Goldens.ts', 'metrics/sp1Fixtures.ts', 'metrics/sp2aGoldens.ts', 'metrics/biomeShares.ts', 'metrics/liveness.ts', 'metrics/splineStats.ts', 'metrics/crossSection.ts',
-  'metrics/region.ts', 'metrics/sp3aGoldens.ts', 'metrics/sp3bGoldens.ts', 'metrics/sp3cGoldens.ts', 'metrics/sp3eGoldens.ts']);
+  'metrics/region.ts', 'metrics/sp3aGoldens.ts', 'metrics/sp3bGoldens.ts', 'metrics/sp3cGoldens.ts', 'metrics/sp3eGoldens.ts',
+  'metrics/pointDigest.ts']);
 /**
  * Directories outside core/ and gen/ that follow the core determinism rules: the block registry, whose ids and tables
  * are hashed into goldens (SP3a spec §2.5). The rest of world/ (the store) keeps the ND bans only.

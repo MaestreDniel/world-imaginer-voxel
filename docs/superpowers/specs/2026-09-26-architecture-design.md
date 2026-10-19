@@ -148,7 +148,8 @@ world-imaginer-voxel/          (repository root)
                                 sp1Fixtures.ts, sp1Goldens.ts; SP2a: columnStats.ts, sp2aGoldens.ts; SP2b: biomeShares.ts,
                                 splineStats.ts, liveness.ts, crossSection.ts, also run by the workers' stats job; SP3a: region.ts
                                 (fillColumnT, genRegionInProcess, regionHash) and sp3aGoldens.ts; SP3b: sp3bGoldens.ts; SP3c: sp3cGoldens.ts;
-                                SP3e: sp3eGoldens.ts, the preset window search (SP3e spec §6))
+                                SP3e: sp3eGoldens.ts, the preset window search and the sp3e.* goldens, and pointDigest.ts, the
+                                column-point digest shared with sp2aGoldens.ts (SP3e spec §6))
     workers/protocol.ts taskHandler.ts task.worker.ts sim.worker.ts   (taskHandler: pure message handler, SP2a; SP3a: sliceJob.ts,
                                 the slice job with its worker-local store and LRU; SP3b splits a slice across the workers; SP3d:
                                 fieldSliceJob.ts, the fieldSlice and fieldProbe jobs' message handling, the evaluation being
@@ -182,6 +183,8 @@ world-imaginer-voxel/          (repository root)
         SP3c: harness/surfaceFuzz.ts, harness/surfaceScatter.ts, harness/surfaceScatterWorker.ts, metrics/surface.metric.ts,
         fixtures/sp3c-default-rules.json)
         (SP3d: harness/legacyTrees.ts, harness/treeMutator.ts, fixtures/preset-v1.json, fixtures/expected-v1.json)
+        (SP3e: metrics/presets.metric.ts, harness/terrainScatter.ts, harness/dt2.ts, harness/surfaceAnalysis.ts, harness/heightmaps.ts,
+        harness/zMetrics.ts, unit/goldens.sp3e.test.ts)
         schema-shape.lock.json (SP1) stateIds.lock.json (SP3a)
         thresholds.ts thresholds.lock.json goldens.json baselines.json
 ```
@@ -205,7 +208,7 @@ The authoritative layer table (value and type-only edges, worker edges, `light`/
 `test/arch/banned.test.ts` enforces these:
 
 - In `core`, `world` and `gen`, and in the determinism files of the next rule: `Math.random`, `Date.now`, `performance.now` and `console.*` (amended by SP2b).
-- In `core/`, `gen/`, `world/blocks/**` (its ids and tables are hashed into goldens; `world/store/**` keeps only the bans of the previous rule) and the determinism files (`DET_FILES` in `test/arch/rules/banned.ts`: `metrics/sp1Goldens.ts`, `metrics/sp1Fixtures.ts`, `metrics/sp2aGoldens.ts`, the SP2b metrics shared by the tests, the workers and the UI, `metrics/splineStats.ts`, `metrics/biomeShares.ts`, `metrics/liveness.ts` and `metrics/crossSection.ts`, the SP3a region core and goldens, `metrics/region.ts` and `metrics/sp3aGoldens.ts`, and the SP3b and SP3c goldens, `metrics/sp3bGoldens.ts` and `metrics/sp3cGoldens.ts`, and the SP3e golden module with the preset window search, `metrics/sp3eGoldens.ts`): only exactly-specified `Math` members (the SP0 allowlist minus `fround`), no `**`; no `Intl`, `localeCompare`, `toLocale*`, `String.prototype.normalize`, `TextEncoder` or `TextDecoder` (amended by SP1, SP2a, SP2b, SP3a, SP3c and SP3e).
+- In `core/`, `gen/`, `world/blocks/**` (its ids and tables are hashed into goldens; `world/store/**` keeps only the bans of the previous rule) and the determinism files (`DET_FILES` in `test/arch/rules/banned.ts`: `metrics/sp1Goldens.ts`, `metrics/sp1Fixtures.ts`, `metrics/sp2aGoldens.ts`, the SP2b metrics shared by the tests, the workers and the UI, `metrics/splineStats.ts`, `metrics/biomeShares.ts`, `metrics/liveness.ts` and `metrics/crossSection.ts`, the SP3a region core and goldens, `metrics/region.ts` and `metrics/sp3aGoldens.ts`, and the SP3b and SP3c goldens, `metrics/sp3bGoldens.ts` and `metrics/sp3cGoldens.ts`, and the SP3e goldens with the preset window search, `metrics/sp3eGoldens.ts`, and the column-point digest they share with SP2a's, `metrics/pointDigest.ts`): only exactly-specified `Math` members (the SP0 allowlist minus `fround`), no `**`; no `Intl`, `localeCompare`, `toLocale*`, `String.prototype.normalize`, `TextEncoder` or `TextDecoder` (amended by SP1, SP2a, SP2b, SP3a, SP3c and SP3e).
 - In `core/noise/**`, `core/spline/**`, `metrics/**`, `gen/**` and `world/blocks/**`: imported value bindings are referenced only through top-level `const` aliases (vitest's transform turns them into getters; amended by SP1, SP2a and SP3a).
 - Exported numeric consts anywhere in `gen/` (fixed world constants live only in `core/constants.ts`).
 - Anywhere in the repository: no `.ogg`/`.mp3`/`.wav` files (sound packs are user-supplied, D17) and no import specifier resolving outside the repository (no copy-forward imports from world-imaginer).
@@ -1362,7 +1365,7 @@ Metric values are written to `test/metrics/.out/*.json` for trends. The harness 
 ### 6.2 Governance
 
 - **Thresholds** live in `test/thresholds.ts`. `thresholds.test.ts` compares a hash against `thresholds.lock.json`, so changing one requires `npm run test:accept-thresholds` and a spec amendment. Agents cannot silently loosen a gate. A part may list the metric tiers it gates on (`tiers`, absent = every tier); on the other tiers its value is recorded, never gated, and dropping a tier counts as loosening (amended by SP3b, whose T3 gates on the full tier only).
-- **Goldens** (region hashes per built-in preset, per stage) change only via `npm run test:goldens`. A golden change requires a `GENERATOR_VERSION` bump, which a test checks.
+- **Goldens** (region hashes per built-in preset, per stage; SP3e: `sp3e.region.T.<preset>` and the column points of archipelago and floating_islands) change only via `npm run test:goldens`. A golden change requires a `GENERATOR_VERSION` bump, which a test checks.
 - **Dev saves** whose genKey no longer matches (stale generatorVersion or params) go through the fork dialog of §2.7 (option 3 is read-only with a warning).
 
 ### 6.3 Unit tests (selection)
@@ -1856,7 +1859,7 @@ SP3d was split on 2026-10-09 into SP3d (editable density and surface rules, insp
 - **Cut line:** Ultra shadows, 3D clouds, Fabulous water (→ SP12).
 
 **SP12 — Extreme presets and final tuning** (M; SP11)
-- Finalise amplified, archipelago, floating_islands, large_biomes and cave_heavy; goldens per preset; profile gallery in docs; baselines refreshed; README; received cut-line items.
+- Finalise amplified, archipelago, floating_islands, large_biomes and cave_heavy; goldens per preset (SP3e's drafts are pinned by `sp3e.*`; finalising them bumps `GENERATOR_VERSION`); profile gallery in docs; baselines refreshed; README; received cut-line items.
 - A "continental" profile (user request, 2026-09-29): large continents with islands in open ocean, via a much longer C wavelength (about 8000) and deep-ocean-dominated low C; it may move to SP3e by amending this section. With it (user request, 2026-09-30): small islands or archipelagos at extremely low C, with no rivers on islets.
 - The volcanic cone (reserved by SP2a, its spec §10): sparse cells in hot high ground add a cone and crater to `offset` and assign the volcano biome by mask; lava in the crater uses SP7's fluids. It may move to an earlier SP by amending this section.
 - **Exit:** Z1-Z4; cave_heavy C1 10-22 %; every other active metric green per preset; DT1 goldens stable; no open cut-line items (unless explicitly dropped by the user with the D-decision impact recorded).

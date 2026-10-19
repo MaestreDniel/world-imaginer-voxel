@@ -54,6 +54,11 @@
     "sp3b.density.default": "020212de61dc83da",
     "sp3b.density.ops": "adad71e21efc60cb",
     "sp3c.registry": "2ade4ab7c488e7c2",
-    "sp3c.surface.ops": "df53f0d1115b0d39"
+    "sp3c.surface.ops": "df53f0d1115b0d39",
+    "sp3e.column.point.archipelago": "576dcc24bc474a96",
+    "sp3e.column.point.floating_islands": "38ad6e018c200781",
+    "sp3e.region.T.amplified": "4154a9618fba00c5",
+    "sp3e.region.T.archipelago": "acf38af4e7775370",
+    "sp3e.region.T.floating_islands": "e8e632117b08d820"
   }
 }

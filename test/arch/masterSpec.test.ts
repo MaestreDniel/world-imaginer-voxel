@@ -29,6 +29,9 @@
  * Z1-Z3 rows state SP3e's definitions and that the rows are recorded from SP3e and gated from SP12 on the quick and full
  * tiers, as THRESHOLDS has them (they land with the Z rows). §7's "Measured in SP3e" line names the `terrain.islands`
  * bench row, which `BENCH_ROWS` measures, and its p50 gate at `TERRAIN_P50_MAX_MS` on cluster columns (it lands with the row).
+ * The goldens commit: §1's `metrics/*.ts` entry and "Banned APIs" name `pointDigest.ts`; §1's `test/` entry names SP3e's
+ * test files in their own parentheses (it lands with the last of them, `unit/goldens.sp3e.test.ts`); §6.2's goldens line
+ * names the `sp3e.*` keys and §10's SP12 says SP3e's drafts are pinned by them.
  */
 import { existsSync, readdirSync, readFileSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
@@ -389,6 +392,38 @@ describe('master spec amendments (SP3e §11, §13)', () => {
     const line = text.split('\n').find((l) => l.includes('(`DET_FILES` in `test/arch/rules/banned.ts`:'));
     expect(line).toContain('`metrics/sp3eGoldens.ts`');
     expect(line).toContain('(amended by SP1, SP2a, SP2b, SP3a, SP3c and SP3e)');
+  });
+
+  test('§1\'s metrics entry and "Banned APIs" name pointDigest.ts (the column-point digest), which exists', () => {
+    const entry = layoutEntry(/^\s+metrics\/\*\.ts\s/);
+    expect(entry).toMatch(/SP3e: sp3eGoldens\.ts\b[^)]*\bpointDigest\.ts\b/);
+    expect(existsSync(`${ROOT_DIR}src/metrics/pointDigest.ts`), 'src/metrics/pointDigest.ts does not exist').toBe(true);
+    expect(DET_FILES.has('metrics/pointDigest.ts')).toBe(true);
+    const line = text.split('\n').find((l) => l.includes('(`DET_FILES` in `test/arch/rules/banned.ts`:'));
+    expect(line).toContain('`metrics/pointDigest.ts`');
+  });
+
+  test('§1\'s test/ entry names SP3e\'s test files in their own parentheses, which exist', () => {
+    const entry = layoutEntry(/^\s+test\/ unit\/ metrics\//);
+    const sp3e = /\(SP3e: ([^)]*)\)/.exec(entry);
+    expect(sp3e, "§1's test/ entry has no `(SP3e: …)` list").not.toBeNull();
+    const named = sp3e![1]!.split(/,\s*/).map((f) => f.trim());
+    expect(named).toEqual([
+      'metrics/presets.metric.ts', 'harness/terrainScatter.ts', 'harness/dt2.ts', 'harness/surfaceAnalysis.ts',
+      'harness/heightmaps.ts', 'harness/zMetrics.ts', 'unit/goldens.sp3e.test.ts',
+    ]);
+    for (const f of named) expect(existsSync(`${ROOT_DIR}test/${f}`), `test/${f} does not exist`).toBe(true);
+    // SP3d's list still reads alone.
+    expect(/SP3d: ([^)]*)\)/.exec(entry)![1]).not.toContain('SP3e');
+  });
+
+  test('§6.2\'s goldens line names the sp3e.* keys; §10\'s SP12 "goldens per preset" says SP3e pins the drafts', () => {
+    const goldens = text.split('\n').find((l) => l.startsWith('- **Goldens** (region hashes per built-in preset, per stage'));
+    expect(goldens, 'no §6.2 goldens line').toBeDefined();
+    expect(goldens).toContain('SP3e: `sp3e.region.T.<preset>` and the column points of archipelago and floating_islands');
+    const from = text.indexOf('**SP12 — ');
+    const sp12 = text.slice(from, text.indexOf('### Critical path', from));
+    expect(sp12).toContain('goldens per preset (SP3e\'s drafts are pinned by `sp3e.*`; finalising them bumps `GENERATOR_VERSION`)');
   });
 
   test('§7\'s "Measured in SP3e" line names the terrain.islands bench row, which BENCH_ROWS measures, gated at p50 ≤ 4 ms on cluster columns', () => {

@@ -17,7 +17,7 @@ import { createDensityContext } from '../../src/gen/density/context';
 import { biomeSharesInto, biomeSharesLength, summarizeBiomeShares } from '../../src/metrics/biomeShares';
 import { waterRaster } from '../../src/metrics/columnStats';
 import { samplePoints } from '../../src/metrics/noiseStats';
-import { presetWindow } from '../../src/metrics/sp3eGoldens';
+import { sp3eWindow } from '../../src/metrics/sp3eGoldens';
 import { AIR, GRASS_BLOCK } from '../../src/world/blocks/index';
 import type { ColumnView } from '../../src/world/store/api';
 import { dt2Column, newDt2Acc, type Dt2Extension, type Dt2Stratum } from '../harness/dt2';
@@ -81,7 +81,7 @@ import {
  *     run with bottom < 181 — differs from DEFAULTS', D21's shadow) and its count, `gateLoss` (island-run voxels of the
  *     ungated tree — the m `rangeChoice` replaced by its `inside` — minus the gated tree's, over the ungated count),
  *     `islandComponents` / `largestFootprint` (4-connected components of the island positions over the floating_islands
- *     window of seed '42', `presetWindow` called at run time, and the largest one's share of its 128² positions).
+ *     golden window of seed '42', `sp3eWindow`, and the largest one's share of its 128² positions).
  * - Full tier only: the record-only calls `T1.presets`, `T2.presets`, `T3.presets`, `T5.presets` (`fnv1a32('T1-T5.presets')`)
  *   and `S1.presets` … `S3.presets` (`fnv1a32('S1-S3.presets')`, worker dir `presetSurfaceWorker-full`), seed '42',
  *   4096 columns per preset in ±1024 chunks, through `terrainScatter.ts` / `surfaceAnalysis.ts` in `'record'` mode;
@@ -443,8 +443,8 @@ metricTest('Z3', ['islandColumns', 'grassTops'], async () => {
       ungatedVoxels += u.islandVoxels;
     });
   }
-  // The floating_islands window of seed '42' (§6), searched at run time so a retune moves it until the goldens freeze it.
-  const w = presetWindow('floating_islands');
+  // The floating_islands golden window of seed '42' (§6), frozen by the goldens commit (the search is re-run by goldens.sp3e.test.ts).
+  const w = sp3eWindow('floating_islands');
   const wcols: Array<[number, number]> = [];
   for (let dz = 0; dz < 8; dz++) for (let dx = 0; dx < 8; dx++) wcols.push([w.chunkX + dx, w.chunkZ + dz]);
   const foot = new Uint8Array(128 * 128);

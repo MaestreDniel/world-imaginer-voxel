@@ -85,7 +85,7 @@ describe('the three preset windows (seed 42)', () => {
     expect(earlier).toBe(r === 0 ? 0 : (2 * r - 1) * (2 * r - 1) + ringCandidates(r).findIndex(([a, b]) => a === w.a && b === w.b));
   });
 
-  test('the predicates, re-stated on columnPoint at the found centres', () => {
+  test('the predicates, re-stated on columnPoint at the found centres (archipelago\'s probes on the review line, z = centre)', () => {
     const amp = presetWindow('amplified');
     expect(columnPoint(ctxOf('amplified'), amp.centreX, amp.centreZ).offset0).toBeGreaterThanOrEqual(180);
     const fl = presetWindow('floating_islands');
@@ -94,9 +94,18 @@ describe('the three preset windows (seed 42)', () => {
     expect(fp.offset0).toBeLessThan(63);
     const ar = presetWindow('archipelago');
     const actx = ctxOf('archipelago');
-    const pts = [[0, 0], [-60, -60], [-60, 60], [60, -60], [60, 60]].map(([dx, dz]) => columnPoint(actx, ar.centreX + dx!, ar.centreZ + dz!).offset0);
+    // Checkpoint M (controller ruling): the centre and x ± 60 along the review line, not the diagonal (128a ± 60, 128b ± 60).
+    const pts = [-60, 0, 60].map((dx) => columnPoint(actx, ar.centreX + dx, ar.centreZ).offset0);
     expect(pts.some((o) => o < 63)).toBe(true);
     expect(pts.some((o) => o >= 63)).toBe(true);
+  });
+
+  test('archipelago: w(−2, 2), whose diagonal probes hold sea and land while its review line is land, no longer holds', () => {
+    const actx = ctxOf('archipelago');
+    const diag = [[-60, -60], [-60, 60], [60, -60], [60, 60]].map(([dx, dz]) => columnPoint(actx, -256 + dx!, 256 + dz!).offset0);
+    expect(diag.some((o) => o < 63)).toBe(true);
+    for (const dx of [-60, 0, 60]) expect(columnPoint(actx, -256 + dx, 256).offset0).toBeGreaterThanOrEqual(63);
+    expect(windowHolds('archipelago', actx, -2, 2)).toBe(false);
   });
 
   test('another seed text searches on its own ctx', () => {
