@@ -115,13 +115,16 @@ const lakeFade = (k: number, d = k): JsonValue => ({ op: 'add', a: num(k), b: { 
  * - offset' = offset + (0.9 − 0.9·lakeMask)·max(0, offset − 64): outside lakes the identity at offset ≤ 64 and
  *   64 + 1.9·(offset − 64) above (D1); faded by `lakeMask`, so a lake basin (lakeMask 1) keeps the default's offset and
  *   holds water at its unamplified level Lw, and the rim band blends to the amplified ground (SP3e Review Focus);
- * - jag × 1.6 and σ × (1.6 − 0.6·lakeMask), wrapping the `col` reads (so the jag term associates as (jag·1.6)·J;
- *   IEEE order is meaning): σ × 1.6 outside lakes, the default's σ in a basin (inside it the lake already sets jag 0);
- * - the slide fades σ over y 300-316 (knots [[−64, 0], [−40, 1], [300, 1], [316, 0]]);
+ * - jag × 1.6 and σ × (2.2 − 1.2·lakeMask), wrapping the `col` reads (so the jag term associates as (jag·1.6)·J;
+ *   IEEE order is meaning): σ × 2.2 outside lakes, the default's σ (× 1 + 2⁻⁵²) in a basin (where the lake already
+ *   sets jag 0);
+ * - the slide fades σ over y 300-314 (knots [[−64, 0], [−40, 1], [300, 1], [314, 0]]);
  * - the ceiling −3·max(0, y − 270) (a soft knee from 270; the default's is −2·max(0, y − 296)).
- * Where lakeMask is 0 each fade is `k + (−k)·0` = k bit for bit, so the tree equals the plain factors there. The
- * corner bound of §1.2 (lakeMask in [0, 1] up to a few ulps, so the factors are at most 0.9 and 1.6) then leaves no solid voxel at y ≥ 316.
- * 80 nodes; the new subtrees read only `col` and `const`, so they stay in their column slot.
+ * σ × 2.2 and the slide end 314 are the user's approved retune (SP3e dry run, Checkpoint M; the spec drafted × 1.6
+ * and 316): Z1's overhangs reach the master's 8 %. Where lakeMask is 0 each fade is `k + (−d)·0` = k bit for bit, so
+ * the tree equals the plain factors there. The corner bound of §1.2 (lakeMask in [0, 1] up to a few ulps, so the
+ * factors are at most 0.9 and 2.2: σ' ≤ 57.2; corners ≤ 15.9 at y 312 and ≤ −40.6 at 320) then leaves no solid voxel
+ * at y ≥ 315. 80 nodes; the new subtrees read only `col` and `const`, so they stay in their column slot.
  */
 export const AMPLIFIED_DENSITY_TREE: JsonValue = deriveTree(DEFAULT_DENSITY_TREE, 'density.defs', 'density', [
   {
@@ -130,8 +133,8 @@ export const AMPLIFIED_DENSITY_TREE: JsonValue = deriveTree(DEFAULT_DENSITY_TREE
     by: { op: 'add', a: col('offset'), b: { op: 'mul', a: lakeFade(0.9), b: { op: 'max', a: num(0), b: { op: 'add', a: col('offset'), b: num(-64) } } } },
   },
   { path: 'root.a.a.x.x.a.a.a.a.b.a', was: col('jag'), by: { op: 'mul', a: col('jag'), b: num(1.6) } },
-  { path: 'root.a.a.x.x.a.a.b.a', was: col('sigma'), by: { op: 'mul', a: col('sigma'), b: lakeFade(1.6, 0.6) } },
-  { path: 'root.a.a.x.x.a.a.b.b.knots', was: [[-64, 0], [-40, 1], [240, 1], [320, 0]], by: [[-64, 0], [-40, 1], [300, 1], [316, 0]] },
+  { path: 'root.a.a.x.x.a.a.b.a', was: col('sigma'), by: { op: 'mul', a: col('sigma'), b: lakeFade(2.2, 1.2) } },
+  { path: 'root.a.a.x.x.a.a.b.b.knots', was: [[-64, 0], [-40, 1], [240, 1], [320, 0]], by: [[-64, 0], [-40, 1], [300, 1], [314, 0]] },
   { path: 'root.a.a.x.x.b.x.a.v', was: 2, by: 3 },
   { path: 'root.a.a.x.x.b.x.b.b.b.v', was: -296, by: -270 },
 ]);

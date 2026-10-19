@@ -2,7 +2,8 @@
  * The preset trees (SP3e spec §1.1, §1.2, D1, D2, D12, D13, user point 2): the derivation helper of
  * `core/params/presetTrees.ts` (its refusals, its insertions, its wrappers and its registration), and `AMPLIFIED_DENSITY_TREE` = the
  * default density tree with exactly §1.2's six path replacements: identity across `resolveProfile`, node count, tier 2,
- * the static costs, the inspector's cost lint, the y ≥ 316 bound on the largest-offset column of a 4,096-column scan,
+ * the static costs, the inspector's cost lint, §1.2's corner bound computed from the tree's literals (no solid voxel at
+ * y ≥ 315 since the approved retune: σ × 2.2, slide end 314) and checked on the largest-offset column of a 4,096-column scan,
  * compiled == reference and probe == bulk on columns with offset0 ≥ 180 (voxels and corners in y 296-319), and
  * `surfaceEst3`; and
  * `FLOATING_DENSITY_TREE` (§3.1, §3.4, D3, D4) = the default with exactly `root.b.x` replaced: identity, node count,
@@ -164,8 +165,9 @@ describe('AMPLIFIED_DENSITY_TREE (SP3e spec §1.2, D1, D2, user point 2)', () =>
       // The amplification and the σ factor fade with lakeMask: k + (−d)·lakeMask (SP3e Review Focus: lakes hold water).
       [col('offset'), { op: 'add', a: col('offset'), b: { op: 'mul', a: fade(0.9, 0.9), b: { op: 'max', a: c(0), b: { op: 'add', a: col('offset'), b: c(-64) } } } }],
       [col('jag'), { op: 'mul', a: col('jag'), b: c(1.6) }],
-      [col('sigma'), { op: 'mul', a: col('sigma'), b: fade(1.6, 0.6) }],
-      [[[-64, 0], [-40, 1], [240, 1], [320, 0]], [[-64, 0], [-40, 1], [300, 1], [316, 0]]],
+      // The approved retune (Checkpoint M, proposal-1): σ × 2.2 (was 1.6) and the slide's last knot 314 (was 316).
+      [col('sigma'), { op: 'mul', a: col('sigma'), b: fade(2.2, 1.2) }],
+      [[[-64, 0], [-40, 1], [240, 1], [320, 0]], [[-64, 0], [-40, 1], [300, 1], [314, 0]]],
       [2, 3],
       [-296, -270],
     ];
@@ -194,6 +196,40 @@ describe('AMPLIFIED_DENSITY_TREE (SP3e spec §1.2, D1, D2, user point 2)', () =>
   test('the inspector\'s cost lint does not fire (work ≤ 4 × the default) and the rules keep their fast path', () => {
     expect(treeLints(amplified)).toEqual([]);
   });
+
+  test('§1.2\'s corner bound, computed from the tree\'s literals, leaves no solid voxel at y ≥ 315 (§1.5 step 5\'s invariant: ≥ 316)', () => {
+    const v = (path: string): number => nodeAt(AMPLIFIED_DENSITY_TREE, path) as number;
+    // The fades' k (their value where lakeMask is 0, the largest since lakeMask ≥ 0 up to a few ulps).
+    const offsetFactor = v('root.a.a.x.x.a.a.a.a.a.b.a.a.v'), offsetKnee = -v('root.a.a.x.x.a.a.a.a.a.b.b.b.b.v');
+    const jagFactor = v('root.a.a.x.x.a.a.a.a.b.a.b.v'), sigmaFactor = v('root.a.a.x.x.a.a.b.a.b.a.v');
+    const knots = nodeAt(AMPLIFIED_DENSITY_TREE, 'root.a.a.x.x.a.a.b.b.knots') as Array<[number, number]>;
+    const slope = v('root.a.a.x.x.b.x.a.v'), knee = -v('root.a.a.x.x.b.x.b.b.b.v');
+    expect([offsetFactor, offsetKnee, jagFactor, sigmaFactor, slope, knee]).toEqual([0.9, 64, 1.6, 2.2, 3, 270]);
+    // The shape splines' largest knots (shapeDefaults.ts: offset 210, jag 55, σ 26), J ≤ 1, |N| ≤ clampSigma (3), and
+    // the detail term ≤ detailAmpHi × its clampSigma (1.5 × 3), outside `interpolated`.
+    const offsetMax = 210 + offsetFactor * (210 - offsetKnee), jagMax = 55 * jagFactor, sigmaMax = 26 * sigmaFactor;
+    const nMax = DEFAULTS.density.noises.overhang.clampSigma;
+    const detailMax = DEFAULTS.density.detailAmpHi * DEFAULTS.density.noises.detail.clampSigma;
+    const slide = (y: number): number => {
+      if (y <= knots[0]![0]) return knots[0]![1];
+      for (let i = 1; i < knots.length; i++) {
+        const [y0, s0] = knots[i - 1]!, [y1, s1] = knots[i]!;
+        if (y <= y1) return s0 + ((y - y0) / (y1 - y0)) * (s1 - s0);
+      }
+      return knots[knots.length - 1]![1];
+    };
+    const corner = (y: number): number => offsetMax + jagMax - y + sigmaMax * nMax * slide(y) - slope * Math.max(0, y - knee);
+    const voxel = (y: number): number => {
+      const y0 = Math.floor(y / 8) * 8, t = (y - y0) / 8;
+      return (1 - t) * corner(y0) + t * corner(y0 + 8) + detailMax;
+    };
+    let lowest = 320;
+    while (lowest > -64 && voxel(lowest - 1) < 0) lowest--;
+    expect(corner(312)).toBeCloseTo(15.914, 3);
+    expect(corner(320)).toBeCloseTo(-40.6, 9);
+    // y 315 = 312 + 8·(3/8): t > 0.361 makes the voxel bound negative; the spec's invariant (y ≥ 316) holds with a block to spare.
+    expect(lowest).toBe(315);
+  });
 });
 
 describe('amplified on real columns (seed 42; SP3e spec §1.2)', () => {
@@ -218,7 +254,7 @@ describe('amplified on real columns (seed 42; SP3e spec §1.2)', () => {
   const high = scan.filter((c) => c.offset0 >= 180).slice(0, 3);
   const store = createStore({ shared: false, maxBlockBytes: 4 << 20, maxByteBytes: 4 << 20 });
 
-  test('no solid voxel at y ≥ 316 at the largest-offset column (the §1.2 corner bound), and it is amplified', () => {
+  test('no solid voxel at y ≥ 315 at the largest-offset column (the §1.2 corner bound), and it is amplified', () => {
     expect(largest.offset0).toBeGreaterThan(190);
     const { cx, cz } = largest;
     expect(fillColumnT(store, ctx, cx, cz, () => false)).toBe(true);
@@ -227,11 +263,11 @@ describe('amplified on real columns (seed 42; SP3e spec §1.2)', () => {
     let top = -65;
     for (let p = 0; p < 256; p++) {
       const lx = p & 15, lz = p >> 4;
-      for (let y = 319; y >= 316; y--) {
+      for (let y = 319; y >= 315; y--) {
         expect(view.block(lx, y, lz), `(${lx}, ${y}, ${lz})`).toBe(AIR);
         expect(probe(dc, 16 * cx + lx, y, 16 * cz + lz)).toBeLessThanOrEqual(0);
       }
-      for (let y = 315; y > top; y--) if (view.block(lx, y, lz) !== AIR) { top = y; break; }
+      for (let y = 314; y > top; y--) if (view.block(lx, y, lz) !== AIR) { top = y; break; }
     }
     store.freeColumn(cx, cz);
     // The default tree tops out near offset0 + jag; the amplified one far above it.
@@ -356,10 +392,10 @@ describe('amplified lakes hold water (seed 42; SP3e spec §1.2, Review Focus)', 
     expect(high).toBeGreaterThan(50);
   });
 
-  test('where lakeMask is 0 the fades are the plain factors bit for bit (0.9 and 1.6)', () => {
+  test('where lakeMask is 0 the fades are the plain factors bit for bit (0.9 and 2.2)', () => {
     const plain = deriveTree(AMPLIFIED_DENSITY_TREE, 'density.defs', 'density', [
       { path: 'root.a.a.x.x.a.a.a.a.a.b.a', was: { op: 'add' }, by: { op: 'const', v: 0.9 } },
-      { path: 'root.a.a.x.x.a.a.b.a.b', was: { op: 'add' }, by: { op: 'const', v: 1.6 } },
+      { path: 'root.a.a.x.x.a.a.b.a.b', was: { op: 'add' }, by: { op: 'const', v: 2.2 } },
     ]);
     const dc = createDensityContext(ctx);
     const dp = createDensityContext(createGenContext(seedFromInput('42'), { ...amplified, density: { ...amplified.density, defs: plain } }));

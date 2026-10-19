@@ -411,7 +411,7 @@ describe('islands.enabled on trees that do not match it (amplified\'s window, se
     expect({ solidity, fluid, outside, changed, columns }).toEqual({ solidity: 0, fluid: 0, outside: 0, changed: 23585, columns: 47 });
   }, 120_000);
 
-  test.each([['default', 5953, 1373, 34, 0], ['amplified', 4144, 783, 26, 543]] as const)('%s with the flag on: the same solidity and water; states change only where a run lies above y 180, stage == reference == compiled.state there', (id, wantVoxels, wantPositions, wantColumns, wantSnowToStone) => {
+  test.each([['default', 5953, 1373, 34, 0], ['amplified', 9705, 2073, 41, 1613]] as const)('%s with the flag on: the same solidity and water; states change only where a run lies above y 180, stage == reference == compiled.state there', (id, wantVoxels, wantPositions, wantColumns, wantSnowToStone) => {
     const params = resolveProfile(id);
     const on = withFlag(params, true), off = withFlag(params, false);
     const probeSc = createSurfaceContext(on);
