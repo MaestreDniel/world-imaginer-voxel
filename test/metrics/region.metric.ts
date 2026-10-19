@@ -1,5 +1,5 @@
 import { expect } from 'vitest';
-import { fnv1a32, hash2 } from '../../src/core/hash';
+import { fnv1a32 } from '../../src/core/hash';
 import { canonicalJSON } from '../../src/core/params/canonical';
 import { applyPatch } from '../../src/core/params/kit';
 import { resolveProfile } from '../../src/core/params/profiles';
@@ -11,17 +11,14 @@ import { cornerValueIndex } from '../../src/gen/density/compile';
 import { createDensityContext } from '../../src/gen/density/context';
 import { probe } from '../../src/gen/density/probe';
 import { createDensityReference, interpolatedNodes } from '../../src/gen/density/reference';
-import { terrainDensityDebug, terrainSurfaceDebug } from '../../src/gen/pipeline/terrainStage';
+import { terrainSurfaceDebug } from '../../src/gen/pipeline/terrainStage';
 import { createSurfaceContext, surfaceContextOf } from '../../src/gen/surface/context';
-import { surfaceProbe } from '../../src/gen/surface/probe';
 import { newSurfaceScan, runAt, type SurfaceScan } from '../../src/gen/surface/scan';
 import { validateParamTrees } from '../../src/gen/trees';
-import { fillColumnT } from '../../src/metrics/region';
-import { AIR } from '../../src/world/blocks/index';
-import { createStore } from '../../src/world/store/store';
 import { expectGolden } from '../harness/goldens';
 import { metricTest } from '../harness/metric';
 import { integerEnv } from '../harness/env';
+import { dt2Column, dt2Setup, newDt2Acc } from '../harness/dt2';
 import { dt1WorkerDir, genRegion, type GenRegionOptions, type RegionResult } from '../harness/region';
 import { mutateTree } from '../harness/treeMutator';
 
@@ -143,9 +140,10 @@ metricTest('DT1', ['mismatches'], async () => {
  *   that are solid plus 8 per column within maxSurfaceDepth of the sky-open top (drawn from the edited stream), the
  *   stage's compiled tree (full evaluation) ≠ the reference evaluator of a SurfaceContext built apart, on the stage's
  *   scan of the column (`terrainSurfaceDebug`). The existing parts draw exactly as before.
+ * The per-column checks of the first four parts are `dt2Column` (`test/harness/dt2.ts`, SP3e spec §5.1, D18): this file
+ * keeps the profiles, the shared `DT2` stream, `DT2_RANGE` and the edited parts and calls it per column.
  */
 const DT2_COLUMNS = pick(16, 256, 256);
-const DT2_VOXELS_PER_COLUMN = 16;
 const DT2_RANGE: Readonly<Record<(typeof PROFILES)[number], number>> = { default: 1024, large_biomes: 4096 };
 const EDITED_TREES = pick(2, 8, 16);
 const EDITED_COLUMNS = pick(8, 32, 64);
@@ -261,131 +259,38 @@ function editedParts(
 
 metricTest('DT2', ['probeBulk', 'compiledReference', 'surfaceProbeBulk', 'surfaceReference', 'editedDensityReference', 'editedSurfaceReference'], () => {
   const t0 = performance.now();
-  const problems: string[] = [];
   const r = new Xoshiro128(fnv1a32('DT2'));
-  const store = createStore({ shared: false, maxBlockBytes: 4 << 20, maxByteBytes: 4 << 20 });
-  const out = new Float64Array(98304);
-  const mask = new Uint8Array(98304);
-  const masked = new Int32Array(98304);
   const scan = newSurfaceScan();
-  const surfaceSeed = fnv1a32('DT2.surface');
   const rE = new Xoshiro128(fnv1a32('DT2.edited'));
   const edited: EditedCounts = {
     densityReference: 0, surfaceReference: 0, densityTrees: 0, surfaceTrees: 0, draws: 0,
     densityVoxels: 0, densityCorners: 0, densityNonFinite: 0, surfaceVoxels: 0, surfaceExtraVoxels: 0,
   };
-  let probeBulk = 0, compiledReference = 0, voxels = 0, maskedVoxels = 0, corners = 0, columns = 0;
-  let surfaceProbeBulk = 0, surfaceReference = 0, surfaceVoxels = 0, surfaceExtraVoxels = 0, surfaceExtraSkipped = 0;
+  const acc = newDt2Acc();
+  const problems = acc.problems;
   for (const profile of PROFILES) {
     for (const seed of SEEDS) {
       const params = resolveProfile(profile);
       const ctx = createGenContext(seedFromInput(seed), params);
       const editedColumns: EditedColumn[] = [];
-      const dc = createDensityContext(ctx);
-      const ref = createDensityReference(dc.expr, dc.noises);
-      const c = dc.compiled;
-      const interp = interpolatedNodes(dc.expr).map((n) => ({ inner: n.x, slot: c.interpolatedSlot(n) }));
-      // The stage's compiled tree, and a SurfaceContext built apart for the probe and the reference evaluator.
-      const compiled = surfaceContextOf(ctx).compiled;
-      const sc = createSurfaceContext(ctx);
-      if (compiled.fastPath === null) throw new Error(`DT2: profile ${profile}, seed '${seed}': the default tree has no fast path`);
-      const maxSurfaceDepth = compiled.fastPath.maxSurfaceDepth;
+      acc.label = `profile ${profile}, seed '${seed}'`;
+      const { maxSurfaceDepth } = dt2Setup(ctx, acc.label);
       const R = DT2_RANGE[profile];
       for (let n = 0; n < DT2_COLUMNS; n++) {
         const cx = -R + r.nextInt(2 * R);
         const cz = -R + r.nextInt(2 * R);
-        const at = `profile ${profile}, seed '${seed}', column (${cx}, ${cz})`;
-        expect(fillColumnT(store, ctx, cx, cz, () => false)).toBe(true);
-        const view = store.proto(cx, cz)!;
-        terrainDensityDebug(ctx, cx, cz, out, mask);
-        let m = 0;
-        for (let i = 256; i < 98304; i++) if (mask[i] === 1) masked[m++] = i;
-        const s = dc.column(cx, cz);
-        terrainSurfaceDebug(ctx, cx, cz, scan);
-        columns++;
-        const editedVoxels: number[] | null = n < EDITED_COLUMNS ? [] : null;
-        if (editedVoxels !== null) editedColumns.push({ cx, cz, voxels: editedVoxels });
-        /** surfaceReference at column index p, height y: counted when solid on the stage's scan. */
-        const checkSurface = (p: number, y: number, what: string): boolean => {
-          if (runAt(scan, p, y) < 0) return false;
-          surfaceVoxels++;
-          const cs = compiled.state(scan, p, y);
-          const rs = sc.reference.state(scan, sc.settings, p, y);
-          if (cs !== rs) {
-            surfaceReference++;
-            problems.push(`${at}: ${what} (${16 * cx + (p & 15)}, ${y}, ${16 * cz + (p >> 4)}) compiled state ${cs} ≠ reference ${rs}`);
-          }
-          return true;
-        };
-        for (let v = 0; v < DT2_VOXELS_PER_COLUMN; v++) {
-          let i: number;
-          if (v >= 11) {
-            const p = r.nextInt(256);
-            const y = Math.min(319, Math.max(-63, view.aux()!.oceanFloorWG[p]! - 1 + r.nextInt(9) - 4));
-            i = ((y + 64) << 8) | p;
-          } else {
-            i = v >= 6 && m > 0 ? masked[r.nextInt(m)]! : 256 + r.nextInt(98304 - 256);
-          }
-          editedVoxels?.push(i);
-          const lx = i & 15, lz = (i >> 4) & 15, y = (i >> 8) - 64;
-          const x = 16 * cx + lx, z = 16 * cz + lz;
-          const value = probe(dc, x, y, z);
-          const block = view.block(lx, y, lz);
-          voxels++;
-          if ((value > 0) !== (block !== AIR)) {
-            probeBulk++;
-            problems.push(`${at}: (${x}, ${y}, ${z}) probe ${value}, block ${block}`);
-          }
-          const surfaceState = surfaceProbe(sc, x, y, z).state;
-          if (surfaceState !== block) {
-            surfaceProbeBulk++;
-            problems.push(`${at}: (${x}, ${y}, ${z}) surfaceProbe state ${surfaceState} ≠ block ${block}`);
-          }
-          checkSurface(i & 255, y, 'DT2 voxel');
-          if (mask[i] === 1) {
-            maskedVoxels++;
-            if (!Object.is(value, out[i])) {
-              probeBulk++;
-              problems.push(`${at}: (${x}, ${y}, ${z}) probe ${value} ≠ bulk ${out[i]}`);
-            }
-          }
-          const rv = ref.voxel(s, x, y, z);
-          if (!Object.is(value, rv)) {
-            compiledReference++;
-            problems.push(`${at}: (${x}, ${y}, ${z}) compiled ${value} ≠ reference ${rv}`);
-          }
-          const ci = lx >> 2, ck = (y + 64) >> 3, cj = lz >> 2;
-          c.cellCorners(ci, ck, cj);
-          for (const { inner, slot } of interp) {
-            for (let d = 0; d < 8; d++) {
-              const ii = ci + (d & 1), kk = ck + ((d >> 2) & 1), jj = cj + ((d >> 1) & 1);
-              const cv = c.cornerValues[cornerValueIndex(slot, ii, kk, jj)]!;
-              const rc = ref.corner(s, inner, ii, kk, jj);
-              corners++;
-              if (!Object.is(cv, rc)) {
-                compiledReference++;
-                problems.push(`${at}: corner (${ii}, ${kk}, ${jj}) compiled ${cv} ≠ reference ${rc}`);
-              }
-            }
-          }
-        }
-        const rSurface = new Xoshiro128(hash2(surfaceSeed, cx, cz));
-        for (let k = 0; k < 8; k++) {
-          const p = rSurface.nextInt(256);
-          const d = rSurface.nextInt(maxSurfaceDepth + 1);
-          const first = scan.runFirst[p]!;
-          if (first < scan.runFirst[p + 1]! && checkSurface(p, scan.runTop[first]! - d, `skin voxel depth ${d}`)) surfaceExtraVoxels++;
-          else surfaceExtraSkipped++;
-        }
-        store.freeColumn(cx, cz);
+        const voxels = dt2Column(ctx, cx, cz, r, acc);
+        if (n < EDITED_COLUMNS) editedColumns.push({ cx, cz, voxels });
       }
-      editedParts(`profile ${profile}, seed '${seed}'`, seed, params, editedColumns, maxSurfaceDepth, rE, scan, edited, problems);
+      editedParts(acc.label, seed, params, editedColumns, maxSurfaceDepth, rE, scan, edited, problems);
     }
   }
   expect.soft(problems.slice(0, 20), `DT2 mismatches (tier ${TIER}), first 20 of ${problems.length}`).toEqual([]);
   return {
-    probeBulk, compiledReference, surfaceProbeBulk, surfaceReference, voxels, maskedVoxels, cornerValues: corners, columns,
-    surfaceVoxels, surfaceExtraVoxels, surfaceExtraSkipped,
+    probeBulk: acc.probeBulk, compiledReference: acc.compiledReference, surfaceProbeBulk: acc.surfaceProbeBulk,
+    surfaceReference: acc.surfaceReference, voxels: acc.voxels, maskedVoxels: acc.maskedVoxels, cornerValues: acc.corners,
+    columns: acc.columns, surfaceVoxels: acc.surfaceVoxels, surfaceExtraVoxels: acc.surfaceExtraVoxels,
+    surfaceExtraSkipped: acc.surfaceExtraSkipped,
     editedDensityReference: edited.densityReference, editedSurfaceReference: edited.surfaceReference,
     editedDensityTrees: edited.densityTrees, editedSurfaceTrees: edited.surfaceTrees, editedDraws: edited.draws,
     editedDensityVoxels: edited.densityVoxels, editedDensityCorners: edited.densityCorners, editedDensityNonFinite: edited.densityNonFinite,
