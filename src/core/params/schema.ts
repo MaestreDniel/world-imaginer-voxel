@@ -1,6 +1,6 @@
 import { BIOME_TABLE_DEFAULT, BOX_BIOMES } from './biomeDefaults';
 import { DEFAULT_DENSITY_TREE, DEFAULT_SURFACE_RULES } from './defaultTrees';
-import { boxTable, buildSchema, group, int, jsonLeaf, noise, num, spline, type Patch, type Value } from './kit';
+import { bool, boxTable, buildSchema, group, int, jsonLeaf, noise, num, spline, type Patch, type Value } from './kit';
 import { JAG_DEFAULT, OFFSET_DEFAULT, SIGMA_DEFAULT } from './shapeDefaults';
 
 export { NOISE_FIELD_RANGES } from './kit';
@@ -132,6 +132,13 @@ export const ROOT = group('Parameters', 'World generation parameters.', {
     patchThreshold: num(0.55, { ...TERRAIN, label: 'Patch threshold', doc: 'A patch block where the patch noise is ≥ this; the second block of a two-block patch where it is ≤ −this (≈ 29 % of the tops each at 0.55).', min: 0, max: 3, step: 0.01 }),
     rules: jsonLeaf(DEFAULT_SURFACE_RULES, 'surfaceRules', { ...TERRAIN, label: 'Surface rules', doc: 'The surface-rule tree as data (SP3d spec §1-§2): its numeric fields may read the density and surface tunables through parameter refs, and its block states must be solid. Edit it in the Density tab.' }),
   }),
+  // Last in the schema (SP3e spec §2.1, D9), so randomParams and randomPatch draw every earlier group as before.
+  islands: group('Islands', 'The island cluster mask of the floating_islands preset (SP3e spec §2): islandMask = smoothstep(lo, hi, u) of a 2D noise.', {
+    enabled: bool(false, { ...SHAPE, label: 'Enabled', doc: 'Computes the island cluster mask `islandMask` (off: 0); on in floating_islands.' }),
+    noise: shapeNoise('Cluster noise', 'u = U(z2) of this noise sets the mask.', 700, 2, { remap: 'uniform' }),
+    lo: frac(0.55, 'Mask start', 'u where `islandMask` starts to rise from 0.', -1, 1),
+    hi: frac(0.8, 'Mask full', 'u from which `islandMask` is 1 (lo ≥ hi: a step at lo).', -1, 1),
+  }),
 });
 
 export const SCHEMA = buildSchema(ROOT);
@@ -144,3 +151,4 @@ export interface LakeParams extends Value<typeof ROOT.children.lakes> {}
 export interface BiomeParams extends Value<typeof ROOT.children.biomes> {}
 export interface DensityParams extends Value<typeof ROOT.children.density> {}
 export interface SurfaceParams extends Value<typeof ROOT.children.surface> {}
+export interface IslandParams extends Value<typeof ROOT.children.islands> {}

@@ -2,7 +2,11 @@ import { describe, expect, test } from 'vitest';
 import { pickBiome } from '../../src/gen/biomes/picker';
 import { biomeFamily, biomeName } from '../../src/gen/biomes/registry';
 import { newClimate, sampleClimate } from '../../src/gen/column/climate';
-import { columnPoint, newPointRecord, samplePoint, waterLevel } from '../../src/gen/column/columnPoint';
+import { resolveProfile } from '../../src/core/params/profiles';
+import { seedFromInput } from '../../src/core/seed';
+import { columnPoint, newPointRecord, sampleCoarse, samplePoint, waterLevel } from '../../src/gen/column/columnPoint';
+import { islandMaskAt } from '../../src/gen/column/islands';
+import { createGenContext } from '../../src/gen/context';
 import { newLake, sampleLakes } from '../../src/gen/column/lakes';
 import { newRiver, sampleRivers } from '../../src/gen/column/rivers';
 import { newShape, sampleShape } from '../../src/gen/column/shape';
@@ -94,6 +98,25 @@ describe('columnPoint', () => {
       expect(Number.isNaN(rec.steep)).toBe(true);
     }
   });
+  test('floating_islands (SP3e spec §2.3): columnPoint, samplePoint and sampleCoarse write islandMaskAt; every other field is the default\'s', () => {
+    const fl = createGenContext(seedFromInput('42'), resolveProfile('floating_islands'));
+    const rec = newPointRecord();
+    let edge = 0;
+    let one = 0;
+    for (const [x, z] of pts) {
+      const m = islandMaskAt(fl, x, z);
+      const p = columnPoint(fl, x, z);
+      expect(Object.is(p.islandMask, m)).toBe(true);
+      expect({ ...p, islandMask: 0 }).toEqual(columnPoint(ctx, x, z));
+      expect(Object.is(samplePoint(fl, x, z, false, rec).islandMask, m)).toBe(true);
+      expect(Object.is(sampleCoarse(fl, x, z, rec).islandMask, m)).toBe(true);
+      expect(Object.is(sampleCoarse(ctx, x, z, rec).islandMask, 0)).toBe(true);
+      if (m > 0 && m < 1) edge++;
+      if (m === 1) one++;
+    }
+    expect(edge).toBeGreaterThan(0);
+    expect(one).toBeGreaterThan(0);
+  });
 });
 
 describe('random valid parameters keep every field finite (levels may be −∞)', () => {
@@ -114,6 +137,7 @@ describe('random valid parameters keep every field finite (levels may be −∞)
         if (typeof p.y !== 'number') knots(p.y);
       }
     };
+    const islandCases = new Set<string>();
     const rng = testRng(1004);
     for (let d = 0; d < 20; d++) {
       const params = randomParams(SCHEMA, rng);
@@ -145,8 +169,13 @@ describe('random valid parameters keep every field finite (levels may be −∞)
           expect(Number.isFinite(p[k]), `doc ${d} ${k} = ${p[k]}`).toBe(true);
         }
         for (const k of ['lakeLevel', 'lakeFloor', 'surfaceWaterLevel'] as const) expect(Number.isNaN(p[k])).toBe(false);
+        // SP3e spec §2.1-§2.2: random enabled, lo and hi (lo ≥ hi included) never give NaN, −0 or a mask outside [0, 1].
+        expect(p.islandMask >= 0 && p.islandMask <= 1 && !Object.is(p.islandMask, -0), `doc ${d} islandMask = ${p.islandMask}`).toBe(true);
       }
+      const isl = params.islands;
+      islandCases.add(!isl.enabled ? 'off' : isl.lo < isl.hi ? 'on, lo < hi' : 'on, lo ≥ hi');
     }
+    expect([...islandCases].sort()).toEqual(['off', 'on, lo < hi', 'on, lo ≥ hi']);
     expect([...reached].sort()).toEqual([
       'amplitude 0', 'amplitude at ±1e-6', 'amplitude in (1e-6, 1e-3)', 'box axis [−1, 1]', 'box axis narrower than 0.001',
       'knot x at ±2', 'knot x in (1, 2)', 'priority above 26', 'tangent at ±1e5',

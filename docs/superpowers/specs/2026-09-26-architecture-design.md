@@ -105,7 +105,8 @@ world-imaginer-voxel/          (repository root)
       context.ts                GenContext per (epoch, paramsHash): noises, splines, compiled density, biome tables, templates, LRUs
       trees.ts                  (SP3d) validateParamTrees: tier 2 of a params document's `density.defs` and `surface.rules`
                                 leaves, issues prefixed by the leaf path (the session hook, the worker's configure, the editors)
-      column/climate.ts shape.ts rivers.ts lakes.ts steep.ts columnPoint.ts columnStage.ts columnCache.ts surfaceEstimate.ts spawn.ts
+      column/climate.ts shape.ts rivers.ts lakes.ts steep.ts columnPoint.ts columnStage.ts columnCache.ts surfaceEstimate.ts spawn.ts islands.ts
+                                (SP3e: islands.ts, islandMaskAt, the island cluster mask the three column writers call; amended by SP3e)
       map/layers.ts tile.ts palette.ts   pure map-tile painting (SP2a)
       density/expr.ts nodes.ts compile.ts bounds.ts reference.ts beardifier.ts
                                 (SP3b: + context.ts, the DensityContext of the compiled expression and its caches, and probe.ts;
@@ -340,7 +341,7 @@ Byte offsets (amended by SP3a): `WORLD_SURFACE_WG` 0, `OCEAN_FLOOR_WG` 512, `WOR
 
 - **Lattice:** a 7×7 quart grid, the column's 5×5 quart corners plus a one-quart halo for gradients.
 - **Raw climate** (kept separately so a spline edit re-derives shape without resampling noise): `C E W T H R` (uniform on [−uMax, uMax], uMax = 0.9973), `PV`.
-- **Derived fields:** `offset, sigma, jag, riverDist, riverStrength, lakeMask, lakeLevel, lakeFloor, surfaceWaterLevel, steep, surfaceEst, islandMask`, and `surfaceBiomeQ[49]`.
+- **Derived fields:** `offset, sigma, jag, riverDist, riverStrength, lakeMask, lakeLevel, lakeFloor, surfaceWaterLevel, steep, surfaceEst, islandMask`, and `surfaceBiomeQ[49]`. `islandMask` is 0 unless `islands.enabled` (the floating_islands preset) (amended by SP3e).
 - **Size:** about 6.5 KB.
 - **Readout:** fields are bilinear between quart points, so values at 4-aligned corners are exact and every column sharing a corner computes it identically.
 
@@ -365,7 +366,7 @@ interface NoiseDef { wavelength: number; octaves: number; persistence?: number; 
 // remap 'none', clampSigma 3); only patches may be partial (SP1).
 interface SplinePoint { x: number; y: number | NestedSpline; d: number }   // d = dy/dx per unit of the node's coord (explicit data)
 interface NestedSpline { coord: 'C'|'E'|'W'|'PV'|'T'|'H'; points: SplinePoint[] }
-type ColField = 'C'|'E'|'W'|'PV'|'T'|'H'|'offset'|'sigma'|'jag'|'riverStrength'|'lakeMask'|'lakeFloor'|'islandMask';   // islandMask = the §3.15 cluster mask m (0 outside floating_islands), a derived ColumnSample field
+type ColField = 'C'|'E'|'W'|'PV'|'T'|'H'|'offset'|'sigma'|'jag'|'riverStrength'|'lakeMask'|'lakeFloor'|'islandMask';   // islandMask = the §3.15 cluster mask m, 0 unless `islands.enabled` (the floating_islands preset), a derived ColumnSample field (amended by SP3e)
 type Expr =                                  // 3D density composition (preset data), ~22 node types
   | { op:'const'; v:number } | { op:'y' } | { op:'col'; f:ColField }
   | { op:'noise'; name:string } | { op:'noise2'; name:string } | { op:'beard' }
@@ -1233,7 +1234,7 @@ Target: edit → visible ≤ 50 ms p95, measured in the HUD.
 | Live | time of day, fog, graphics, biome blend radius, colours, tint colormaps, packs (same layer count), audio | nothing (uniforms, textures) | all |
 | Remesh | AO/smooth light, leaves mode | mesh | all voxels |
 | Decorate | features, ores, vegetation, structure sets without beard | D → L → mesh (T re-runs only where the proto is gone; tuning mode keeps every proto) | ColumnSample, proto |
-| Terrain | splines, rivers, lakes, density DAG, caves, carvers, aquifer, surface rules, biome tables, cave biomes, beard-carrying structures | derived shape → T → … | raw climate noise |
+| Terrain | splines, rivers, lakes, island cluster mask, density DAG, caves, carvers, aquifer, surface rules, biome tables, cave biomes, beard-carrying structures | derived shape → T → … | raw climate noise |
 | Climate | seed¹, climate noise defs, warps, scaleMul | everything | nothing |
 
 ¹ The seed is WorldSession state, not a leaf; it enters genKey directly. A profile is an overlay, not a leaf: switching profile has the scope of the earliest stage it dirties (`dirtyStages`).
@@ -1458,7 +1459,7 @@ Metric values are written to `test/metrics/.out/*.json` for trends. The harness 
 | E1-E6 | diff codec; `.wiworld` round-trip hash; reload with edits hash; fault-injected aborted flush consistent (flushSeq); edit→unload→reload returns the latest diff; genKey mismatch shows the fork dialog and each option (including Cancel) yields its specified world state | exact |
 | E7 | two worlds with the same genKey: edits in one never appear in the other / delete removes every `diffs` key of that worldId / hotbar and player restored per world / `stateTable` remap on load | exact |
 | U1 | stage-run counters: decorate edit re-runs only {D, L, mesh}; terrain edit spares raw climate; climate re-runs all | exact |
-| U2 | param liveness: ±15% on each non-live param changes its stage output hash in ≥ 1 of 16 columns. SP2b (its spec §7): perturbations per kind (number and int ±15 % of \|v\| or of the range span, noise wavelength, every numeric spline knot by 15 % of the y span, box intervals shrunk and grown by 15 %); the stage output hash of the leaf's home stage (climate, shape or biome2d); 16 class columns chosen by the lattice conditions under which leaves act (land, coast, channel, gorge, basin, rim and one per lake gate), and bounded witnesses for leaves no class column decides (amended by SP2b). SP3b adds the `terrain` stage: its output hash is the region hash of one column after `fillColumnT`, tried at the land and coast class columns only, with no witness search, and every `density.*` leaf must be decided (amended by SP3b). SP3c adds five class columns for the terrain stage's `surface.*` leaves (`cliffY`, `cliffSteep`, `snowline`, `patch`, `badlands`; 21 class columns), found by a third pass over the same stream after SP2b's two so the existing 16 stay, each accepted only when every leaf it serves changes a voxel of the generated column; every `surface.*` leaf must be decided (amended by SP3c). SP3d: a `json` leaf's perturbation is pinned per leaf (`density.defs`: the `terrain` tap muted to 0; `surface.rules`: the deepslate gradient's upper bound 8 → 12), decided on the land column; U2 covers 68 leaves (amended by SP3d) | 100% |
+| U2 | param liveness: ±15% on each non-live param changes its stage output hash in ≥ 1 of 16 columns. SP2b (its spec §7): perturbations per kind (number and int ±15 % of \|v\| or of the range span, noise wavelength, every numeric spline knot by 15 % of the y span, box intervals shrunk and grown by 15 %); the stage output hash of the leaf's home stage (climate, shape or biome2d); 16 class columns chosen by the lattice conditions under which leaves act (land, coast, channel, gorge, basin, rim and one per lake gate), and bounded witnesses for leaves no class column decides (amended by SP2b). SP3b adds the `terrain` stage: its output hash is the region hash of one column after `fillColumnT`, tried at the land and coast class columns only, with no witness search, and every `density.*` leaf must be decided (amended by SP3b). SP3c adds five class columns for the terrain stage's `surface.*` leaves (`cliffY`, `cliffSteep`, `snowline`, `patch`, `badlands`; 21 class columns), found by a third pass over the same stream after SP2b's two so the existing 16 stay, each accepted only when every leaf it serves changes a voxel of the generated column; every `surface.*` leaf must be decided (amended by SP3c). SP3d: a `json` leaf's perturbation is pinned per leaf (`density.defs`: the `terrain` tap muted to 0; `surface.rules`: the deepslate gradient's upper bound 8 → 12), decided on the land column; U2 covers 68 leaves (amended by SP3d). SP3e: a `bool` leaf's perturbation is its negation; the islands leaves are decided on a floating_islands island column; U2 covers 72 leaves (amended by SP3e) | 100% |
 | U3 | no-placebo: params with `effectMetric` move that metric by > 0.5% at ±15% | 100% |
 | U4 | registry invariants (every leaf has meta and scope, every non-live leaf a covering stage); migration invariant, fixtures and export → import identity; schema-shape lock; README generated block is fresh | exact (0 issues each) |
 | Z1 | amplified: land columns with ≥ 2 transitions (T2) / p99 land height. Z1-Z3 are first measured on SP3e's drafts; SP12 stays their final gate (amended by SP3d) | ≥ 8% / ≥ 250 |

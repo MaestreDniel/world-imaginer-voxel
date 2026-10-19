@@ -10,6 +10,7 @@ import { zoomQuart } from '../biomes/zoom';
 import type { GenContext } from '../context';
 import { newClimate, sampleClimate, type ClimateOut } from './climate';
 import { newPointRecord, samplePoint, waterLevel, type ColumnPoint } from './columnPoint';
+import { islandMaskAt } from './islands';
 import { newLake, sampleLakes } from './lakes';
 import { newRiver, sampleRivers } from './rivers';
 import { newShape, sampleShape } from './shape';
@@ -30,6 +31,7 @@ const SAMPLE_POINT = samplePoint;
 const NEW_POINT = newPointRecord;
 const PICK = pickBiome;
 const ZOOM = zoomQuart;
+const ISLAND_MASK = islandMaskAt;
 
 /** Continuous fields: bilinear between quart corners. */
 export const SAMPLE_FIELDS = [
@@ -100,7 +102,7 @@ export function buildColumnSample(ctx: GenContext, cx: number, cz: number, out: 
       f.offset[k] = l.offset; f.sigma[k] = l.sigma; f.jag[k] = l.jag;
       f.surfaceWaterLevel[k] = WATER(l.offset, r.wet, l.lakeMask, l.lakeLevel);
       f.surfaceEst[k] = l.offset;
-      f.islandMask[k] = 0;
+      f.islandMask[k] = ISLAND_MASK(ctx, x, z);
       out.flags[k] = (r.wet ? 1 : 0) | (r.gorge ? 2 : 0);
       out.biome[k] = PICK(ctx, c.C, c.E, c.PV, c.T, c.H, c.W, o[k]!, r.wet);
     }

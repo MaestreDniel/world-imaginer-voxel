@@ -19,7 +19,7 @@ export const PROFILES: Readonly<Record<ProfileId, Profile>> = {
   large_biomes: { overlay: { climate: { scaleMul: 4 } }, readyFrom: 'SP2a' },
   archipelago: { overlay: { climate: { C: { wavelength: 840 } } }, readyFrom: 'SP3e' },
   amplified: { overlay: {}, readyFrom: 'SP3e' },
-  floating_islands: { overlay: {}, readyFrom: 'SP3e' },
+  floating_islands: { overlay: { islands: { enabled: true } }, readyFrom: 'SP3e' },
   cave_heavy: { overlay: {}, readyFrom: 'SP6' },
 };
 

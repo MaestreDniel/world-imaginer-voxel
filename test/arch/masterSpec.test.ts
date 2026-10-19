@@ -19,7 +19,8 @@
  * the SP3d entry's cut line says it was not taken, the cut-line receivers say nothing moved and §5.5 no longer sends them
  * to SP10.
  * SP3e (its spec §11, §13): §10's SP3e entry names its spec and no longer defers its deliverable, exit and cut line to it
- * (the cut line is the islands' own surface branch, → SP12); it lands with the first commit.
+ * (the cut line is the islands' own surface branch, → SP12); it lands with the first commit. §1's `gen/column/` entry
+ * names `islands.ts`, which exists (it lands with the file).
  */
 import { existsSync, readdirSync, readFileSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
@@ -301,5 +302,12 @@ describe('master spec amendments (SP3e §11, §13)', () => {
     expect(entry).toContain('- **Exit:** as the SP3e spec §10.');
     expect(entry.split('\n').find((l) => l.startsWith('- **Cut line:**'))).toMatch(/^- \*\*Cut line:\*\* the islands' own surface branch \(→ SP12\)/);
     expect(entry, 'island-edge springs stay with SP8b').toContain('island-edge springs stay with SP8b');
+  });
+
+  test('§1\'s gen/column entry names islands.ts (the island cluster mask), which exists', () => {
+    const entry = layoutEntry(/^\s+column\/climate\.ts\s/);
+    expect(entry, 'no `column/climate.ts …` entry under gen/ in §1').not.toBe('');
+    expect(entry).toMatch(/\sislands\.ts(\s|$)/);
+    expect(existsSync(`${ROOT_DIR}src/gen/column/islands.ts`), 'src/gen/column/islands.ts does not exist').toBe(true);
   });
 });

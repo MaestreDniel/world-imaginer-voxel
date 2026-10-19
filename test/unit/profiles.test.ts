@@ -33,14 +33,27 @@ describe('profiles', () => {
     expect(isProfileReady('archipelago', 'SP3b')).toBe(false);
     expect(isProfileReady('large_biomes', 'SP1')).toBe(false);
   });
-  test('switching profile dirties exactly what its overlay touches', () => {
+  test('switching profile dirties exactly what its overlay touches (SP3e spec §1.1: per profile, from the overlay\'s top-level keys and the registry)', () => {
     const base = stageHashes(DEFAULTS);
+    // A stage is dirty when it hashes a top-level group of the overlay, or reads a dirty stage.
+    const expected = (id: (typeof PROFILE_IDS)[number]): string[] => {
+      const keys = Object.keys(PROFILES[id].overlay);
+      const dirty = new Set<string>();
+      for (const s of STAGES) {
+        if (s.params.some((p) => keys.some((k) => p === k || p.startsWith(`${k}.`))) || s.reads.some((r) => dirty.has(r))) dirty.add(s.id);
+      }
+      return STAGES.map((s) => s.id).filter((st) => dirty.has(st));
+    };
     const all = STAGES.map((s) => s.id);
+    const butClimate = all.filter((st) => st !== 'climate');
+    const table: Record<(typeof PROFILE_IDS)[number], readonly string[]> = {
+      default: [], large_biomes: all, archipelago: all, amplified: [], floating_islands: butClimate, cave_heavy: [],
+    };
     for (const id of PROFILE_IDS) {
       const h = stageHashes(resolveProfile(id));
-      const empty = Object.keys(PROFILES[id].overlay).length === 0;
-      expect(dirtyStages(base, h)).toEqual(empty ? [] : all);
-      if (empty) expect(hex64(genKey([42, 0], h))).toBe(hex64(genKey([42, 0], base)));
+      expect(dirtyStages(base, h), id).toEqual(expected(id));
+      expect(dirtyStages(base, h), id).toEqual(table[id]);
+      if (table[id].length === 0) expect(hex64(genKey([42, 0], h))).toBe(hex64(genKey([42, 0], base)));
     }
   });
 });

@@ -11,8 +11,9 @@ import { buildColumnSample, newColumnSample, readField, SAMPLE_FIELDS, type Samp
 import { createGenContext, type GenContext } from '../../src/gen/context';
 import { paramsWith } from '../harness/gen';
 
-/** DT2's columns (test/metrics/region.metric.ts): per profile, uniform over ±1024 chunks (default) or ±4096 (large_biomes). */
-const DT2_RANGE = { default: 1024, large_biomes: 4096 } as const;
+/** DT2's columns (test/metrics/region.metric.ts): per profile, uniform over ±1024 chunks (default) or ±4096 (large_biomes);
+ * floating_islands (SP3e spec §2.5) over ±1024, drawn after the other two so their columns stay. */
+const DT2_RANGE = { default: 1024, large_biomes: 4096, floating_islands: 1024 } as const;
 const COLUMNS = 16;
 
 /** Every field value of `n` columns of `ctx` (the 49 lattice points and `readField` at the 256 positions) outside its bound. */
@@ -68,13 +69,17 @@ describe('COL_FIELD_BOUNDS (SP3d spec §1.9)', () => {
     expect(COL_FIELD_BOUNDS.E).toEqual([-1, 1]);
   });
 
-  test("sampled values over DT2's columns (seed '42', both profiles) lie inside their bounds", () => {
+  test("sampled values over DT2's columns (seed '42', both profiles, and floating_islands with its mask on) lie inside their bounds", () => {
     const r = new Xoshiro128(fnv1a32('DT2'));
-    for (const profile of ['default', 'large_biomes'] as const) {
+    for (const profile of ['default', 'large_biomes', 'floating_islands'] as const) {
       const ctx = createGenContext(seedFromInput('42'), resolveProfile(profile));
       const R = DT2_RANGE[profile];
       const columns = Array.from({ length: COLUMNS }, () => [-R + r.nextInt(2 * R), -R + r.nextInt(2 * R)] as const);
-      expect(violations(ctx, columns), profile).toEqual([]);
+      const seen = new Map<SampleField, [number, number]>();
+      expect(violations(ctx, columns, seen), profile).toEqual([]);
+      // SP3e spec §2.5: the [0, 1] bound is exercised by real mask values on floating_islands; 0 elsewhere.
+      if (profile === 'floating_islands') expect(seen.get('islandMask')![1]).toBeGreaterThan(0);
+      else expect(seen.get('islandMask')).toEqual([0, 0]);
     }
   });
 

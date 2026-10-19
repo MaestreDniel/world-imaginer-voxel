@@ -110,6 +110,10 @@ Generated from `src/core/params/schema.ts` by `npm run docs:params`; a test fail
 | `surface.cliffMinY` | int | 80 | -64 … 319 | y | terrain | Cliff height: Lowest run top that can be a cliff. |
 | `surface.patchThreshold` | number | 0.55 | 0 … 3 |  | terrain | Patch threshold: A patch block where the patch noise is ≥ this; the second block of a two-block patch where it is ≤ −this (≈ 29 % of the tops each at 0.55). |
 | `surface.rules` | json | surfaceRules tree, 163 nodes |  |  | terrain | Surface rules: The surface-rule tree as data (SP3d spec §1-§2): its numeric fields may read the density and surface tunables through parameter refs, and its block states must be solid. Edit it in the Density tab. |
+| `islands.enabled` | bool | false |  |  | terrain | Enabled: Computes the island cluster mask `islandMask` (off: 0); on in floating_islands. |
+| `islands.noise` | noise | {"amplitudes":null,"clampSigma":3,"double":true,"lacunarity":2,"octaves":2,"persistence":0.5,"remap":"uniform","wavelength":700,"yScale":1} | wavelength 16 … 8192 |  | terrain | Cluster noise: u = U(z2) of this noise sets the mask. |
+| `islands.lo` | number | 0.55 | -1 … 1 |  | terrain | Mask start: u where `islandMask` starts to rise from 0. |
+| `islands.hi` | number | 0.8 | -1 … 1 |  | terrain | Mask full: u from which `islandMask` is 1 (lo ≥ hi: a step at lo). |
 <!-- params:end -->
 
 ## Requirements

@@ -46,7 +46,7 @@ describe('stage hashes', () => {
   const H = stageHashes(DEFAULTS);
   test('preimages', () => {
     expect(hex64(H.climate!)).toBe(hex64(fnv1a64(`climate|1|${canonicalJSON({ climate: DEFAULTS.climate })}|`)));
-    const shapeSlice = { lakes: DEFAULTS.lakes, rivers: DEFAULTS.rivers, shape: DEFAULTS.shape };
+    const shapeSlice = { islands: DEFAULTS.islands, lakes: DEFAULTS.lakes, rivers: DEFAULTS.rivers, shape: DEFAULTS.shape };
     expect(hex64(H.shape!)).toBe(hex64(fnv1a64(`shape|2|${canonicalJSON(shapeSlice)}|${hex64(H.climate!)}`)));
     expect(hex64(H.surfaceEst!)).toBe(hex64(fnv1a64(`surfaceEst|2|{}|${hex64(H.shape!)}`)));
     expect(hex64(H.biome2d!)).toBe(hex64(fnv1a64(`biome2d|2|${canonicalJSON({ biomes: DEFAULTS.biomes })}|${hex64(H.climate!)},${hex64(H.shape!)},${hex64(H.surfaceEst!)}`)));

@@ -79,8 +79,10 @@ export const COL_FIELD_BOUNDS = Object.freeze({
   jag: bound(0, 500_000),
   /** surfaceEst = offset (`columnStage.ts`, `columnPoint.ts`). */
   surfaceEst: bound(-600_000, 600_000),
-  /** islandMask = 0 (no island term until SP3e). */
-  islandMask: bound(0, 0),
+  /** islandMask (SP3e spec §2.2, §2.5, `gen/column/islands.ts`): the literal +0 when `islands.enabled` is off; on,
+   * smoothstep(lo, hi, u) = t·t·(3 − 2t) with t clamped to [0, 1] (t·t ≥ +0, 3 − 2t ≥ 1), capped by `s > 1 ? 1 : s`,
+   * or the literals 0 and 1 of the step when lo ≥ hi: within [0, 1] by construction. */
+  islandMask: bound(0, 1),
 });
 
 /**

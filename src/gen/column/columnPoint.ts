@@ -1,6 +1,6 @@
 /**
  * The point reference (SP2a spec §2.6): climate → shape → steep → rivers → lakes → water level →
- * surfaceEst → biome, in this order, at one world position. samplePoint writes into a reused record
+ * surfaceEst → islandMask (SP3e spec §2.3) → biome, in this order, at one world position. samplePoint writes into a reused record
  * (map tiles skip steep); columnPoint returns a fresh record with steep. buildColumnSample must
  * reproduce every field bit for bit at quart corners.
  */
@@ -8,6 +8,7 @@ import { SEA_LEVEL } from '../../core/constants';
 import { pickBiome } from '../biomes/picker';
 import type { GenContext } from '../context';
 import { newClimate, sampleClimate } from './climate';
+import { islandMaskAt } from './islands';
 import { newLake, sampleLakes } from './lakes';
 import { newRiver, sampleRivers } from './rivers';
 import { newShape, sampleShape } from './shape';
@@ -24,6 +25,7 @@ const NEW_RIVER = newRiver;
 const LAKES = sampleLakes;
 const NEW_LAKE = newLake;
 const PICK = pickBiome;
+const ISLAND_MASK = islandMaskAt;
 
 export interface PointRecord {
   x: number; z: number;
@@ -71,7 +73,7 @@ export function samplePoint(ctx: GenContext, x: number, z: number, withSteep: bo
   out.offset = l.offset; out.sigma = l.sigma; out.jag = l.jag;
   out.surfaceWaterLevel = waterLevel(l.offset, r.wet, l.lakeMask, l.lakeLevel);
   out.surfaceEst = l.offset;
-  out.islandMask = 0;
+  out.islandMask = ISLAND_MASK(ctx, x, z);
   out.biome = PICK(ctx, c.C, c.E, c.PV, c.T, c.H, c.W, s.offset0, r.wet);
   return out;
 }
@@ -81,8 +83,8 @@ export function columnPoint(ctx: GenContext, x: number, z: number): ColumnPoint 
 }
 
 /**
- * The preview-level point (SP2a spec §6.1): climate, shape and biome only. Rivers and lakes are
- * narrower than a 256-block pixel, so they are left out: no river, no lake, offset = offset0.
+ * The preview-level point (SP2a spec §6.1): climate, shape, the island mask (SP3e spec §2.3, D20) and biome only.
+ * Rivers and lakes are narrower than a 256-block pixel, so they are left out: no river, no lake, offset = offset0.
  */
 export function sampleCoarse(ctx: GenContext, x: number, z: number, out: PointRecord): PointRecord {
   const c = CLIMATE(ctx, x, z, C_);
@@ -96,7 +98,7 @@ export function sampleCoarse(ctx: GenContext, x: number, z: number, out: PointRe
   out.offset = s.offset0; out.sigma = s.sigma0; out.jag = s.jag0;
   out.surfaceWaterLevel = waterLevel(s.offset0, false, 0, -Infinity);
   out.surfaceEst = s.offset0;
-  out.islandMask = 0;
+  out.islandMask = ISLAND_MASK(ctx, x, z);
   out.biome = PICK(ctx, c.C, c.E, c.PV, c.T, c.H, c.W, s.offset0, false);
   return out;
 }

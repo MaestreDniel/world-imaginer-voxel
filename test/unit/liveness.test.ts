@@ -1,16 +1,16 @@
 import { describe, expect, test } from 'vitest';
 import { canonicalJSON } from '../../src/core/params/canonical';
 import { DEFAULTS } from '../../src/core/params/defaults';
-import { bool, buildSchema, checkLeaf, getPath, group, patchAt, type BoxTable, type Issue } from '../../src/core/params/kit';
+import { applyPatch, bool, buildSchema, checkLeaf, getPath, group, patchAt, type BoxTable, type Issue } from '../../src/core/params/kit';
 import { SCHEMA, type ParamsPatch } from '../../src/core/params/schema';
 import type { NestedSpline } from '../../src/core/spline/types';
 import { buildColumnSample, gorgeAt, newColumnSample, riverWetAt, type ColumnSample } from '../../src/gen/column/columnStage';
 import { cellEligible, lakeCell } from '../../src/gen/column/lakes';
-import { hex64 } from '../../src/core/hash';
+import { fnv1a32, hex64 } from '../../src/core/hash';
 import { latticeIndex } from '../../src/gen/column/columnStage';
 import { biomeName } from '../../src/gen/biomes/registry';
 import {
-  cellProbe, findWitness, intendedClass, leafLiveness, livenessColumns, perturbations, stageOutputHash, surfaceAcceptance,
+  cellProbe, findWitness, intendedClass, islandColumn, islandLeaves, leafLiveness, livenessColumns, perturbations, stageOutputHash, surfaceAcceptance,
   SURFACE_CLASSES, surfacePrefilter, surfaceSlotLeaves, u2Leaves,
   type LivenessClass,
   type LivenessColumn,
@@ -19,7 +19,15 @@ import {
 import { samplePoints } from '../../src/metrics/noiseStats';
 import { fillColumnT, regionHash } from '../../src/metrics/region';
 import { createStore } from '../../src/world/store/store';
+import { resolveProfile } from '../../src/core/params/profiles';
+import { Xoshiro128 } from '../../src/core/rng';
+import { seedFromInput } from '../../src/core/seed';
+import { createGenContext } from '../../src/gen/context';
 import { ctxFor } from '../harness/gen';
+
+/** SP3e's island class column at seed 42 (spec §5.6) and its index among the U2.islands draws. */
+const ISLAND_PIN: LivenessColumn = { cx: 975, cz: -735, cls: 'island' };
+const ISLAND_DRAW = 33;
 
 const leaf = (path: string) => {
   const info = SCHEMA.leaves.find((l) => l.path === path);
@@ -285,6 +293,7 @@ describe('class columns', () => {
     for (const p of ['surface.noises.patch', 'surface.patchThreshold']) expect(intendedClass(p), p).toBe('patch');
     for (const p of ['surface.noises.depth', 'surface.depthMul']) expect(intendedClass(p), p).toBe('land');
     expect(intendedClass('surface.noises.bandOffset')).toBe('badlands');
+    for (const p of ['islands.enabled', 'islands.noise', 'islands.lo', 'islands.hi']) expect(intendedClass(p), p).toBe('island');
   });
 });
 
@@ -436,6 +445,55 @@ describe('the terrain stage in U2 (SP3b spec §3.3)', () => {
     expect(leafLiveness(CTX, 'surface.noises.bandOffset', columns().filter((c) => c.cls !== 'badlands')))
       .toEqual({ path: 'surface.noises.bandOffset', live: false, via: null, cls: 'badlands' });
     expect(leafLiveness(CTX, 'density.noises.detail', others)).toEqual({ path: 'density.noises.detail', live: false, via: null, cls: 'land' });
+  });
+});
+
+describe('the islands base (SP3e spec §5.6)', () => {
+  const ISLANDS = createGenContext(seedFromInput('42'), resolveProfile('floating_islands'));
+  let found: LivenessColumn | null | undefined;
+  /** The island class column of seed 42 on floating_islands (searched once per file). */
+  const island = (): LivenessColumn => {
+    if (found === undefined) found = islandColumn(ISLANDS);
+    expect(found, 'no island column').not.toBeNull();
+    return found!;
+  };
+
+  test('the islands leaves are the islands.* group, decided apart; U2 covers 72 leaves', () => {
+    expect(islandLeaves().map((l) => l.path)).toEqual(['islands.enabled', 'islands.noise', 'islands.lo', 'islands.hi']);
+    expect(u2Leaves().length).toBe(72);
+    expect(u2Leaves().slice(-4)).toEqual(islandLeaves());
+  });
+
+  test('the island column: the first draw of U2.islands whose lattice holds 0 < m < 1 and m ≥ 0.75 and on which every islands leaf acts', () => {
+    const c = island();
+    expect(c).toEqual(ISLAND_PIN);
+    const m = Array.from(buildColumnSample(ISLANDS, c.cx, c.cz, newColumnSample()).f.islandMask);
+    expect(m.some((v) => v > 0 && v < 1)).toBe(true);
+    expect(m.some((v) => v >= 0.75)).toBe(true);
+    // The draws of Xoshiro128(fnv1a32('U2.islands')), uniform in [−2048, 2048)²: the column is among the first 4096.
+    const r = new Xoshiro128(fnv1a32('U2.islands'));
+    const draws = Array.from({ length: 4096 }, () => [-2048 + r.nextInt(4096), -2048 + r.nextInt(4096)] as const);
+    const at = draws.findIndex(([cx, cz]) => cx === c.cx && cz === c.cz);
+    expect(at).toBe(ISLAND_DRAW);
+  });
+
+  test('every islands.* leaf is live on the island column, through the shape digest (islandMask is hashed)', () => {
+    const c = island();
+    for (const l of islandLeaves()) {
+      expect(leafLiveness(ISLANDS, l.path, [c]), l.path).toEqual({ path: l.path, live: true, via: `island column (${c.cx}, ${c.cz})`, cls: 'island' });
+    }
+    // Only the mask moves: the shape digest changes, the climate digest does not.
+    const off = createGenContext(ISLANDS.seed, (() => {
+      const r = applyPatch(SCHEMA, ISLANDS.params, { islands: { enabled: false } });
+      if (!r.ok) throw new Error('bad patch');
+      return r.value;
+    })());
+    expect(stageOutputHash(off, 'shape', c.cx, c.cz)).not.toBe(stageOutputHash(ISLANDS, 'shape', c.cx, c.cz));
+    expect(stageOutputHash(off, 'climate', c.cx, c.cz)).toBe(stageOutputHash(ISLANDS, 'climate', c.cx, c.cz));
+  });
+
+  test('no island column where the mask is off: the default base finds none (U2 then fails with "no island column")', () => {
+    expect(islandColumn(CTX, islandLeaves(), 64)).toBeNull();
   });
 });
 

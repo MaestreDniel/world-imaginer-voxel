@@ -5,6 +5,9 @@ import {
   buildColumnSample, gorgeAt, latticeIndex, LEVEL_FIELDS, newColumnSample, readBiome, readField, readLevel, riverWetAt, SAMPLE_FIELDS,
 } from '../../src/gen/column/columnStage';
 import { zoomQuart } from '../../src/gen/biomes/zoom';
+import { resolveProfile } from '../../src/core/params/profiles';
+import { seedFromInput } from '../../src/core/seed';
+import { createGenContext } from '../../src/gen/context';
 import { ctxFor } from '../harness/gen';
 import { testRng } from '../harness/stats';
 
@@ -29,6 +32,29 @@ describe('DT2: batch == point, bit for bit at every lattice point', () => {
     }
     expect(mismatches).toBe(0);
   }, 120_000);
+
+  test('floating_islands (SP3e spec §2.3): with the mask on, every field too, and the lattice holds 0 < m < 1 and m = 1', () => {
+    const ctx = createGenContext(seedFromInput('42'), resolveProfile('floating_islands'));
+    const s = newColumnSample();
+    let mismatches = 0;
+    let edge = 0;
+    let full = 0;
+    for (const [cx, cz] of columns(512, 13)) {
+      buildColumnSample(ctx, cx, cz, s);
+      for (let j = -1; j <= 5; j++) for (let i = -1; i <= 5; i++) {
+        const k = latticeIndex(i, j);
+        const p = columnPoint(ctx, 16 * cx + 4 * i, 16 * cz + 4 * j);
+        for (const f of [...SAMPLE_FIELDS, ...LEVEL_FIELDS]) if (!Object.is(s.f[f][k], p[f])) mismatches++;
+        if (s.biome[k] !== p.biome || riverWetAt(s, k) !== p.riverWet || gorgeAt(s, k) !== p.gorge) mismatches++;
+        const m = s.f.islandMask[k]!;
+        if (m > 0 && m < 1) edge++;
+        if (m === 1) full++;
+      }
+    }
+    expect(mismatches).toBe(0);
+    expect(edge).toBeGreaterThan(0);
+    expect(full).toBeGreaterThan(0);
+  }, 60_000);
 });
 
 describe('readout', () => {

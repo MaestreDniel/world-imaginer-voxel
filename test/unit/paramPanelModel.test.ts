@@ -35,7 +35,7 @@ describe('panel tree', () => {
     expect(root.path).toBe('');
     expect(root.label).toBe('Parameters');
     expect(root.controls).toEqual([]);
-    expect(root.sections.map((s) => s.path)).toEqual(['climate', 'shape', 'rivers', 'lakes', 'biomes', 'density', 'surface']);
+    expect(root.sections.map((s) => s.path)).toEqual(['climate', 'shape', 'rivers', 'lakes', 'biomes', 'density', 'surface', 'islands']);
     const groups = SCHEMA.nodes.filter((n) => n.node.tag === 'group').map((n) => n.path);
     expect(sectionsOf(root).map((s) => s.path).sort()).toEqual([...groups].sort());
     expect(controlsOf(root).map((c) => c.path).sort()).toEqual(SCHEMA.leaves.map((l) => l.path).sort());
@@ -50,6 +50,16 @@ describe('panel tree', () => {
         expect(idx).toEqual([...idx].sort((a, b) => a - b));
       }
     }
+  });
+
+  test('SP3e spec §2.1: the Islands section, last, holds the schema\'s first bool leaf as a checkbox control', () => {
+    const islands = panelTree().sections.at(-1)!;
+    expect([islands.path, islands.label]).toEqual(['islands', 'Islands']);
+    expect(islands.controls.map((c) => [c.path, c.kind])).toEqual([
+      ['islands.enabled', 'bool'], ['islands.noise', 'noise'], ['islands.lo', 'number'], ['islands.hi', 'number'],
+    ]);
+    expect(islands.sections).toEqual([]);
+    expect(boolShown(DEFAULTS, 'islands.enabled')).toBe(false);
   });
 
   test("a section's own controls come before its sub-sections (climate: the fields, then Warps)", () => {
@@ -80,6 +90,7 @@ describe('panel tree', () => {
       'climate.C', 'climate.E', 'climate.H', 'climate.R', 'climate.T', 'climate.W', 'climate.scaleMul',
       'climate.warp.C.noise', 'climate.warp.R.noise', 'climate.warp.shift.noise',
       'density.noises.detail', 'density.noises.jag', 'density.noises.overhang',
+      'islands.noise',
       'lakes.cell', 'lakes.depthMin', 'lakes.radius', 'lakes.rimNoise', 'lakes.rimWidth', 'lakes.warpNoise',
       'rivers.widthMin', 'rivers.widthNoise',
       'surface.noises.bandOffset', 'surface.noises.depth', 'surface.noises.patch',
@@ -319,8 +330,8 @@ describe('panel controls (Task 17): kinds, slider positions, typed values, issue
 
   test('on a linear stepped slider every keyboard step moves to the next value of the step grid', () => {
     const linear = [...sliders(), ...NOISE_NUMBER_FIELDS.map((f) => noiseFieldControl(control('climate.C'), f))].filter((c) => c.scale === 'linear');
-    // 34 before SP3c, + the 7 number and int leaves of the surface group.
-    expect(linear.length).toBe(41);
+    // 34 before SP3c, + the 7 number and int leaves of the surface group, + islands.lo and islands.hi (SP3e).
+    expect(linear.length).toBe(43);
     for (const c of linear) {
       const n = sliderPositions(c);
       expect(n).toBe(Math.round((c.max! - c.min!) / c.step!));

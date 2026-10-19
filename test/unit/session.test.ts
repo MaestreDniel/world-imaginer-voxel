@@ -142,6 +142,18 @@ describe('reset and modified', () => {
     expect(w.reset('').ok && [w.state.patch, w.state.params]).toEqual([{}, DEFAULTS]);
     expect(w.reset('shape.offset').ok).toBe(true);
   });
+  test('on floating_islands, reset(\'islands\') returns the group to the preset\'s values (SP3e spec §1.1: enabled true)', () => {
+    const w = session();
+    expect(w.setProfile('floating_islands').ok).toBe(true);
+    expect(w.state.params.islands.enabled).toBe(true);
+    const r = w.set('islands.enabled', false);
+    expect(r.ok && [r.state.params.islands.enabled, r.state.patch]).toEqual([false, { islands: { enabled: false } }]);
+    expect(w.modified('islands.enabled')).toBe(true);
+    const back = w.reset('islands');
+    expect(back.ok && [back.state.params.islands, back.state.patch]).toEqual([resolveProfile('floating_islands').islands, {}]);
+    expect(w.state.params.islands.enabled).toBe(true);
+    expect(w.modified('islands')).toBe(false);
+  });
   test('modified and modifiedCount on leaves, noise leaves, groups and the root', () => {
     const w = session();
     expect([w.modified(''), w.modifiedCount('')]).toEqual([false, 0]);

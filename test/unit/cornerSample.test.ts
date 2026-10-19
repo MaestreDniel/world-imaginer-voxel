@@ -1,5 +1,8 @@
 import { describe, expect, test } from 'vitest';
 import { DEFAULTS } from '../../src/core/params/defaults';
+import { resolveProfile } from '../../src/core/params/profiles';
+import { seedFromInput } from '../../src/core/seed';
+import { createGenContext } from '../../src/gen/context';
 import { columnPoint } from '../../src/gen/column/columnPoint';
 import {
   buildColumnSample, buildCornerSample, gorgeAt, latticeIndex, LEVEL_FIELDS, newColumnSample, riverWetAt, SAMPLE_FIELDS,
@@ -95,6 +98,47 @@ describe('buildCornerSample (SP3d spec §4.4)', () => {
         }
       }
     }
+  });
+
+  test('floating_islands (SP3e spec §2.3): the corners inherit islandMask; the reads equal the full sample\'s at voxels with 0 < m < 1 and m = 1', () => {
+    const fl = createGenContext(seedFromInput('42'), resolveProfile('floating_islands'));
+    const next = testRng(4412);
+    const full = newColumnSample();
+    const corner = newColumnSample();
+    let edge = 0;
+    let one = 0;
+    let picked = 0;
+    for (let n = 0; n < 4096 && picked < 24; n++) {
+      const cx = (next() % 65536) - 32768;
+      const cz = (next() % 65536) - 32768;
+      buildColumnSample(fl, cx, cz, full);
+      const m = full.f.islandMask;
+      if (!m.some((v) => v > 0)) continue;
+      picked++;
+      for (let v = 0; v < 8; v++) {
+        const x = 16 * cx + (next() % 16);
+        const y = (next() % 384) - 64;
+        const z = 16 * cz + (next() % 16);
+        buildCornerSample(fl, x, z, false, corner);
+        for (const k of cornersOf(x, z)) {
+          const i = (k % 7) - 1;
+          const j = Math.floor(k / 7) - 1;
+          const p = columnPoint(fl, 16 * cx + 4 * i, 16 * cz + 4 * j);
+          expect(Object.is(corner.f.islandMask[k], p.islandMask)).toBe(true);
+          expect(Object.is(corner.f.islandMask[k], m[k])).toBe(true);
+          if (p.islandMask > 0 && p.islandMask < 1) edge++;
+          if (p.islandMask === 1) one++;
+        }
+        for (const [f, outside, inside] of REFS) {
+          if (f === 'steep') continue;
+          expect(Object.is(outside.voxel(corner, x, y, z), outside.voxel(full, x, y, z)), f).toBe(true);
+          expect(Object.is(inside.voxel(corner, x, y, z), inside.voxel(full, x, y, z)), f).toBe(true);
+        }
+      }
+    }
+    expect(picked).toBe(24);
+    expect(edge).toBeGreaterThan(0);
+    expect(one).toBeGreaterThan(0);
   });
 
   test('a reused output is fully overwritten; a fresh one is made when none is passed', () => {

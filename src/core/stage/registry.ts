@@ -14,7 +14,7 @@ export interface StageDef {
 /** Topological order (SP1 spec §5). SP1 registers every stage; later SPs add prefixes and bump versions (SP2a spec §4.2). */
 export const STAGES: readonly StageDef[] = [
   { id: 'climate', version: 1, reads: [], params: ['climate'], checkpoint: 'columnSample' },
-  { id: 'shape', version: 2, reads: ['climate'], params: ['shape', 'rivers', 'lakes'], checkpoint: 'columnSample' },
+  { id: 'shape', version: 2, reads: ['climate'], params: ['shape', 'rivers', 'lakes', 'islands'], checkpoint: 'columnSample' },
   { id: 'surfaceEst', version: 2, reads: ['shape'], params: [], checkpoint: 'columnSample' },
   { id: 'biome2d', version: 2, reads: ['climate', 'shape', 'surfaceEst'], params: ['biomes'], checkpoint: 'columnSample' },
   { id: 'terrain', version: 3, reads: ['shape', 'surfaceEst', 'biome2d'], params: ['density', 'surface'], checkpoint: 'proto' },

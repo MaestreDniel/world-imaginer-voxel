@@ -438,17 +438,14 @@ describe('validateDensitySource: the static magnitude analysis (SP3d spec §1.9 
     edge({ op: 'neg', x: Y }, 0.0312, 0.0313);
   });
 
-  test('every col field reads its COL_FIELD_BOUNDS entry (islandMask [0, 0] never leaves)', () => {
+  test('every col field reads its COL_FIELD_BOUNDS entry (SP3e spec §2.5: islandMask [0, 1])', () => {
+    expect(COL_FIELD_BOUNDS.islandMask).toEqual([0, 1]);
     for (const f of SAMPLE_FIELDS) {
       const [lo, hi] = COL_FIELD_BOUNDS[f];
       const m = Math.max(Math.abs(lo), Math.abs(hi));
-      const x = { op: 'col', field: f };
-      if (m === 0) {
-        expect(issues(doc(times(x, [...e9(40)])))).toEqual([]);
-        continue;
-      }
+      expect(m, f).toBeGreaterThan(0);
       // m × (9.9 / m) × 1e99 ≈ 9.9e99 passes; m × (10.1 / m) × 1e99 ≈ 1.01e100 is refused.
-      edge(x, 9.9 / m, 10.1 / m);
+      edge({ op: 'col', field: f }, 9.9 / m, 10.1 / m);
     }
     expect(COL_FIELD_BOUNDS.offset).toEqual([-600000, 600000]);
   });

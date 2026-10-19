@@ -9,14 +9,18 @@
  * the `density.*` group; SP3c: the `surface.*` group) is tried on the land, coast and surface class columns only (its
  * intended class first), with no witness search: its output is a whole generated column. Follows the core
  * determinism rules (DET_FILES in test/arch/rules/banned.ts).
+ * SP3e (its spec §5.6): a `bool` leaf's perturbation is its negation; the shape digest hashes islandMask; the `islands.*`
+ * leaves, dead on the default base (the mask is off), are decided on a floating_islands base at an island class column
+ * found by its own stream, so the 21 class columns and their stream stay.
  */
 import { SEA_LEVEL } from '../core/constants';
-import { hash4, hashF64, hex64 } from '../core/hash';
+import { fnv1a32, hash4, hashF64, hex64 } from '../core/hash';
 import type { NoiseDef } from '../core/noise/types';
 import { canonicalJSON, q15 } from '../core/params/canonical';
 import { applyPatch, BOX_AXES, getPath, patchAt, type BoxTable, type LeafInfo } from '../core/params/kit';
 import { resolveProfile } from '../core/params/profiles';
 import { SCHEMA, type LakeParams, type Params } from '../core/params/schema';
+import { Xoshiro128 } from '../core/rng';
 import { seedFromInput } from '../core/seed';
 import type { NestedSpline } from '../core/spline/types';
 import { createGenContext, noiseFor, type GenContext } from '../gen/context';
@@ -35,6 +39,8 @@ import { samplePoints } from './noiseStats';
 import { fillColumnT, regionHash } from './region';
 
 const SEA = SEA_LEVEL;
+const FNV32 = fnv1a32;
+const Rng = Xoshiro128;
 const H4 = hash4;
 const HASH_F64 = hashF64;
 const HEX64 = hex64;
@@ -86,7 +92,9 @@ export type SurfaceClass = (typeof SURFACE_CLASSES)[number];
 export type LivenessClass =
   | 'land' | 'coast' | 'channel' | 'gorge' | 'basin' | 'rim'
   | 'threshold:lakes.p' | 'threshold:lakes.minC' | 'threshold:lakes.offsetMin' | 'threshold:lakes.offsetMax'
-  | SurfaceClass;
+  | SurfaceClass
+  /** SP3e spec §5.6: the floating_islands base's column, where the islands leaves are decided. */
+  | 'island';
 
 export interface LivenessColumn { readonly cx: number; readonly cz: number; readonly cls: LivenessClass }
 
@@ -139,10 +147,20 @@ const LEAF_CLASS: ReadonlyMap<string, LivenessClass> = new Map<string, LivenessC
   ['surface.noises.bandOffset', 'badlands'],
 ]);
 
+/** SP3e spec §5.6: the island class column's stream, its chunk range [−2048, 2048)², its draw limit and its core mask. */
+const ISLAND_STREAM = 'U2.islands';
+const ISLAND_RANGE = 2048;
+const ISLAND_DRAWS = 4096;
+const ISLAND_CORE = 0.75;
+
+/** The leaves decided on the islands base (SP3e spec §5.6): the `islands` group. */
+const isIslandLeaf = (path: string): boolean => path.startsWith('islands.');
+
 /** The class whose columns are meant to exercise a leaf (named when the leaf is dead). */
 export function intendedClass(path: string): LivenessClass {
   const c = LEAF_CLASS.get(path);
   if (c !== undefined) return c;
+  if (isIslandLeaf(path)) return 'island';
   if (path.startsWith('lakes.')) return 'basin';
   if (path.startsWith('rivers.')) return 'channel';
   return 'land';
@@ -309,7 +327,7 @@ function hashSample(ctx: GenContext, stage: OutputStage, s: ColumnSample): strin
   if (stage === 'climate') return digest([f.C, f.E, f.W, f.T, f.H, f.R, f.PV]);
   if (stage === 'shape') {
     return digest([f.offset0, f.sigma0, f.jag0, f.offset, f.sigma, f.jag, f.riverDist, f.riverStrength, s.flags,
-      f.lakeMask, f.lakeLevel, f.lakeFloor, f.surfaceWaterLevel, f.surfaceEst]);
+      f.lakeMask, f.lakeLevel, f.lakeFloor, f.surfaceWaterLevel, f.surfaceEst, f.islandMask]);
   }
   const blocks = new Uint8Array(256);
   for (let bz = 0; bz < 16; bz++) for (let bx = 0; bx < 16; bx++) blocks[16 * bz + bx] = READ_BIOME(s, ctx, 16 * s.cx + bx, 16 * s.cz + bz);
@@ -327,7 +345,7 @@ function terrainHash(ctx: GenContext, cx: number, cz: number): string {
 
 /**
  * Hex digest of a stage's own outputs on column (cx, cz) (spec §7): climate C, E, W, T, H, R, PV at the 49
- * lattice points; shape offset0 … surfaceEst and the river flags; biome2d the lattice biome ids plus the
+ * lattice points; shape offset0 … surfaceEst, islandMask (SP3e spec §5.6) and the river flags; biome2d the lattice biome ids plus the
  * zoomed biome of each of the column's 256 blocks (where biomes.zoomJitter acts); terrain the region hash of the
  * generated column (blocks, fluid, aux A and aux B; SP3b spec §3.3).
  */
@@ -777,6 +795,11 @@ export function u2Leaves(): readonly LeafInfo[] {
   return SCHEMA_.leaves.filter((l) => l.meta.stage !== undefined && OUTPUT_STAGES.includes(l.meta.stage));
 }
 
+/** The leaves of `u2Leaves()` decided on the islands base (SP3e spec §5.6), in schema order. */
+export function islandLeaves(): readonly LeafInfo[] {
+  return u2Leaves().filter((l) => isIslandLeaf(l.path));
+}
+
 /** Cells of a square spiral from (0, 0): ring r ≥ 1 has 8r cells, from (−r, −r) along j = −r, then i = r, j = r, i = −r. */
 function someSpiralCell(max: number, visit: (i: number, j: number) => boolean): boolean {
   if (visit(0, 0)) return true;
@@ -875,14 +898,61 @@ export function leafLiveness(base: GenContext, path: string, columns: readonly L
 }
 
 /**
+ * The island class column of `base` (SP3e spec §5.6; a floating_islands base): chunk columns drawn from
+ * `Xoshiro128(fnv1a32('U2.islands'))` uniform in [−2048, 2048)² (cx then cz), the first whose 7 × 7 lattice holds an
+ * islandMask in (0, 1) and one ≥ 0.75, and on which every leaf of `leaves` changes its home-stage output (SP3c's
+ * acceptance rule); null after `draws` draws (4096 in U2).
+ */
+export function islandColumn(base: GenContext, leaves: readonly LeafInfo[] = islandLeaves(), draws = ISLAND_DRAWS): LivenessColumn | null {
+  const r = new Rng(FNV32(ISLAND_STREAM));
+  const baseHash = baseHasher(base);
+  const variants = new Map<string, readonly GenContext[]>();
+  const variantsOf = (info: LeafInfo): readonly GenContext[] => {
+    let v = variants.get(info.path);
+    if (v === undefined) { v = variantContexts(base, info); variants.set(info.path, v); }
+    return v;
+  };
+  for (let n = 0; n < draws; n++) {
+    const cx = -ISLAND_RANGE + r.nextInt(2 * ISLAND_RANGE);
+    const cz = -ISLAND_RANGE + r.nextInt(2 * ISLAND_RANGE);
+    const m = BUILD(base, cx, cz, SAMPLE).f.islandMask;
+    let edge = false;
+    let core = false;
+    for (let k = 0; k < 49; k++) {
+      const v = m[k]!;
+      if (v > 0 && v < 1) edge = true;
+      if (v >= ISLAND_CORE) core = true;
+    }
+    if (!edge || !core) continue;
+    const acts = (info: LeafInfo): boolean => {
+      const stage = stageOf(info);
+      const h = baseHash(stage, cx, cz);
+      return variantsOf(info).some((v) => stageOutputHash(v, stage, cx, cz) !== h);
+    };
+    if (leaves.every(acts)) return { cx, cz, cls: 'island' };
+  }
+  return null;
+}
+
+/**
  * U2 for every leaf of `u2Leaves()`: live when a perturbation changes the leaf's stage output hash on a class
- * column (its intended class first) or on its witness. value = live leaves / those leaves.
+ * column (its intended class first) or on its witness. value = live leaves / those leaves. The islands leaves are
+ * decided on `RESOLVE('floating_islands')` at its island class column (SP3e spec §5.6); none found: "no island column".
  */
 export function u2(seedText = '42'): { readonly value: number; readonly results: readonly LivenessResult[] } {
   const base = CREATE(SEED(seedText), RESOLVE('default'));
   const columns = livenessColumns(base);
   const baseHash = baseHasher(base);
-  const results = u2Leaves().map((info) => decide(base, info, columns, baseHash));
+  const islands = islandLeaves();
+  let decideIsland = (info: LeafInfo): LivenessResult => { throw new Error(`U2: ${info.path} has no islands base`); };
+  if (islands.length > 0) {
+    const ib = CREATE(SEED(seedText), RESOLVE('floating_islands'));
+    const col = islandColumn(ib, islands);
+    if (col === null) throw new Error('U2: no island column');
+    const ibHash = baseHasher(ib);
+    decideIsland = (info) => decide(ib, info, [col], ibHash);
+  }
+  const results = u2Leaves().map((info) => (isIslandLeaf(info.path) ? decideIsland(info) : decide(base, info, columns, baseHash)));
   const live = results.filter((r) => r.live).length;
   return { value: results.length > 0 ? live / results.length : 0, results };
 }
