@@ -1,7 +1,7 @@
 import { describe, expect, test } from 'vitest';
 import { BIOME_SIZE_SCALE } from '../../src/ui/map/biomeSize';
 import type { DriverStatus } from '../../src/ui/map/previewDriver';
-import { biomeSizeView, previewStatusText, profileSwitchText } from '../../src/ui/map/toolbar';
+import { biomeSizeView, previewStatusText, profileOptions, profileSwitchText } from '../../src/ui/map/toolbar';
 
 const status = (s: Partial<DriverStatus>): DriverStatus => ({ lastLatencyMs: null, pending: false, settled: false, poolEpoch: null, sessionEpoch: null, error: null, ...s });
 
@@ -16,6 +16,10 @@ describe('toolbar texts (SP2b spec §2.6, §3.1, §6.4)', () => {
   test('the profile switch confirmation counts the modified parameters', () => {
     expect(profileSwitchText('large_biomes', 1)).toBe('Switching to large_biomes clears 1 modified parameter');
     expect(profileSwitchText('default', 3)).toBe('Switching to default clears 3 modified parameters');
+  });
+
+  test('the profile select lists the ready profiles in PROFILE_IDS order: every one but cave_heavy from SP3e (SP3e spec §11)', () => {
+    expect(profileOptions()).toEqual(['default', 'large_biomes', 'archipelago', 'amplified', 'floating_islands']);
   });
 
   test('every table value shows its own position without "≈"', () => {

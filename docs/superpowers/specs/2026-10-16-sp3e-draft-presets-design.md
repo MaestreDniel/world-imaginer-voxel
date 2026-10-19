@@ -689,3 +689,5 @@ The plan was dry-run on the branch `dry/sp3e`: each of its 24 tasks was implemen
 ## Threshold log
 
 (One line per commit that changes `test/thresholds.lock.json`.)
+
+- Task 1: `STARTED_SPS` gains `SP3e`; no threshold rows change.

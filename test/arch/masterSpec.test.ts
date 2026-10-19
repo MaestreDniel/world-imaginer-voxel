@@ -18,6 +18,8 @@
  * surface-rule JSON editors or the 128² slice target, which SP3d delivered; since the pins were built (`PIN_MAX` exists),
  * the SP3d entry's cut line says it was not taken, the cut-line receivers say nothing moved and §5.5 no longer sends them
  * to SP10.
+ * SP3e (its spec §11, §13): §10's SP3e entry names its spec and no longer defers its deliverable, exit and cut line to it
+ * (the cut line is the islands' own surface branch, → SP12); it lands with the first commit.
  */
 import { existsSync, readdirSync, readFileSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
@@ -284,5 +286,20 @@ describe('master spec amendments (SP3d §12, exit)', () => {
     expect(pins, 'no `- A mute toggle per tap (SP3d) …` line in §5.5').toBeDefined();
     expect(pins).toContain(`up to ${PIN_MAX} pinned slices side by side`);
     expect(pins).not.toMatch(/else SP10/);
+  });
+});
+
+describe('master spec amendments (SP3e §11, §13)', () => {
+  test('§10\'s SP3e entry names its spec and sets its deliverable, exit and cut line', () => {
+    const entry = spEntry('SP3e', 'SP4');
+    const spec = /Spec: `([^`]+)`/.exec(entry);
+    expect(spec, 'the SP3e header names no spec').not.toBeNull();
+    expect(spec![1]).toBe('2026-10-16-sp3e-draft-presets-design.md');
+    expect(existsSync(`${ROOT_DIR}docs/superpowers/specs/${spec![1]}`), `${spec![1]} does not exist`).toBe(true);
+    expect(entry).not.toMatch(/set by the SP3e spec/);
+    for (const k of ['Deliverable:', 'Exit:', 'Cut line:']) expect(entry, `SP3e misses **${k}**`).toContain(`**${k}**`);
+    expect(entry).toContain('- **Exit:** as the SP3e spec §10.');
+    expect(entry.split('\n').find((l) => l.startsWith('- **Cut line:**'))).toMatch(/^- \*\*Cut line:\*\* the islands' own surface branch \(→ SP12\)/);
+    expect(entry, 'island-edge springs stay with SP8b').toContain('island-edge springs stay with SP8b');
   });
 });

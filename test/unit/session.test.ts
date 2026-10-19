@@ -39,10 +39,16 @@ describe('WorldSession', () => {
     expect(w.state.params.climate.scaleMul).toBe(2);
     const r = w.setProfile('large_biomes');
     expect(r.ok && [r.state.profile, r.state.patch, r.state.params.climate.scaleMul, r.state.epoch]).toEqual(['large_biomes', {}, 4, 1]);
-    const bad = w.setProfile('archipelago');
+    const bad = w.setProfile('cave_heavy');
     expect(issuesOf(bad)).toEqual(['profile BAD_ENUM']);
     expect(issuesOf(w.setProfile('nope' as never))).toEqual(['profile BAD_ENUM']);
     expect(w.state.profile).toBe('large_biomes');
+  });
+  test.each(['archipelago', 'amplified', 'floating_islands'] as const)('setProfile accepts the SP3e draft %s (SP3e spec §11)', (id) => {
+    const w = new WorldSession(random, { seedText: '1', patch: { rivers: { widthMin: 6 } } });
+    const r = w.setProfile(id);
+    expect(r.ok && [r.state.profile, r.state.patch, r.state.epoch]).toEqual([id, {}, 1]);
+    expect(canonicalJSON(w.state.params)).toBe(canonicalJSON(resolveProfile(id)));
   });
 });
 
@@ -173,7 +179,7 @@ describe('load', () => {
     const w = session();
     w.set('rivers.widthMin', 6);
     const before = w.state;
-    expect(issuesOf(w.load({ seedText: '5', profile: 'archipelago', patch: {} }))).toEqual(['profile BAD_ENUM']);
+    expect(issuesOf(w.load({ seedText: '5', profile: 'cave_heavy', patch: {} }))).toEqual(['profile BAD_ENUM']);
     expect(issuesOf(w.load({ seedText: '5', profile: 'default', patch: { climate: { scaleMul: 99 } } }))).toEqual(['climate.scaleMul OUT_OF_RANGE']);
     expect(issuesOf(w.load({ profile: 'default', patch: null }))).toEqual([' NOT_OBJECT']);
     expect(w.state).toBe(before);
@@ -291,7 +297,7 @@ describe('gestures and notifications', () => {
     w.setSeedText(' 2 ');
     w.newSeed();
     w.setProfile('large_biomes');
-    w.setProfile('archipelago');
+    w.setProfile('cave_heavy');
     w.load({ profile: 'default', patch: {} });
     w.undo();
     w.redo();

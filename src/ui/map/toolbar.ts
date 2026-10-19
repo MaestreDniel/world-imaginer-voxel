@@ -27,6 +27,11 @@ export function profileSwitchText(id: ProfileId, n: number): string {
   return `Switching to ${id} clears ${n} modified parameter${n === 1 ? '' : 's'}`;
 }
 
+/** The profile select's options: the ready profiles (`isProfileReady` at `CURRENT_SP`) in `PROFILE_IDS` order. */
+export function profileOptions(): ProfileId[] {
+  return PROFILE_IDS.filter((p) => isProfileReady(p));
+}
+
 export interface BiomeSizeView {
   /** The slider position, 1-10. */
   readonly v: number;
@@ -98,7 +103,7 @@ export function createToolbar(host: HTMLElement, deps: ToolbarDeps): Toolbar {
   const sameSeed = button('Same seed', 'Use the typed seed (as Enter does)');
   const newSeed = button('New seed', 'Draw a random seed');
   const profileSelect = el('select');
-  for (const p of PROFILE_IDS) if (isProfileReady(p)) profileSelect.append(new Option(p, p));
+  for (const p of profileOptions()) profileSelect.append(new Option(p, p));
   profileSelect.title = 'Profile';
   const slider = el('input', 'map-size');
   slider.type = 'range';

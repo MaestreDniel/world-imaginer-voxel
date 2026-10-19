@@ -1771,12 +1771,13 @@ SP3d was split on 2026-10-09 into SP3d (editable density and surface rules, insp
 - **Exit:** as the SP3d spec §11.
 - **Cut line:** inspector pins (→ SP10). It was not taken: up to 3 pinned slices shipped in SP3d, so nothing moved.
 
-**SP3e — Draft presets** (M; SP3d)
-- Draft `floating_islands`, `amplified` and `archipelago` presets on the editable DAG (terms, splines and params; the islands surface-rule branch and island-edge springs), so per-preset goldens and SP11's LOD island scan have a target; their profiles become selectable (`readyFrom: 'SP3e'`); Z1-Z3 measured on the drafts (SP12 stays their final gate).
+**SP3e — Draft presets** (M; SP3d). Spec: `2026-10-16-sp3e-draft-presets-design.md`.
+- Draft `floating_islands`, `amplified` and `archipelago` presets on the editable DAG (terms, splines and params; the islands surface-rule branch), so per-preset goldens and SP11's LOD island scan have a target; their profiles become selectable (`readyFrom: 'SP3e'`); the `islands` group and a real `islandMask`; Z1-Z3 measured on the drafts (SP12 stays their final gate); island-edge springs stay with SP8b.
 - **Deliverable:** the three selectable draft presets.
-- Received from SP3a (its spec §10, moved from SP3d): archipelago (≈ 60 % ocean) against B1's 45 % ocean-family cap (decide per-preset gating); amplified's offset multiplier and the 320 range.
-- **Exit:** set by the SP3e spec.
-- **Cut line:** set by the SP3e spec.
+- Received from SP3a (its spec §10, moved from SP3d): archipelago's ocean share against B1's 45 % cap (delivered: per-profile B1 parts, archipelago 55-80 %); amplified's offset multiplier and the 320 range (delivered: in the density tree, with the slide at 300-316 and a soft ceiling from 270).
+- Received from SP3d (its spec §13): presets as overlays holding whole trees, the islands term and `islandMask` in `COL_FIELD_BOUNDS`, the islands surface-rule branch, Z1-Z3 on the drafts and per-preset goldens (delivered: SP3e spec §1-§6); island-edge springs → SP8b; ref-target widening and the defs-based restructuring closed as not needed (SP3e spec D12-D13); the column-cost maxima unchanged (every preset tree ≤ 1.6 % of them).
+- **Exit:** as the SP3e spec §10.
+- **Cut line:** the islands' own surface branch (→ SP12).
 
 **SP4 — Streaming renderer and light** (L; SP3b)
 - **Week-1 spike:** RegionBatch with a Uint8x4 `position` plus a uint32 `data` attribute in a custom GLSL3 ShaderMaterial with batching chunks, precomputed spheres, `setGeometryAt` churn, per-region `optimize`, and the multi_draw fallback to RegionMesh, stressed at Medium scale.

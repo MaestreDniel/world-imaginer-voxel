@@ -149,8 +149,8 @@ describe('readPresetText', () => {
     ['reserved name', doc({ name: 'default' }), ['name: RESERVED_NAME — "default" is a built-in profile name']],
     ['unknown profile', doc({ profile: 'nope' }), ['profile: UNKNOWN_PROFILE — unknown profile "nope"']],
     ['newer schema version', doc({ schemaVersion: 3 }), ['schemaVersion: NEWER_SCHEMA_VERSION — schemaVersion 3 is newer than this build (2)']],
-    ['a profile that is not ready', doc({ profile: 'archipelago' }), ['profile archipelago arrives in SP3e']],
-    ['a profile that is not ready, with invalid params: import issues first', doc({ profile: 'archipelago', params: { climate: { scaleMull: 4 } } }), [
+    ['a profile that is not ready', doc({ profile: 'cave_heavy' }), ['profile cave_heavy arrives in SP6']],
+    ['a profile that is not ready, with invalid params: import issues first', doc({ profile: 'cave_heavy', params: { climate: { scaleMull: 4 } } }), [
       'params.climate.scaleMull: UNKNOWN_KEY — unknown key "scaleMull"',
     ]],
   ])('%s', (_name, text, issues) => {
@@ -255,7 +255,7 @@ describe('presets tab logic', () => {
     ['not JSON', '{"format":', [/^file is not JSON: ./]],
     ['an invalid parameter', doc({ params: { rivers: { widthMin: 999 } } }), ['params.rivers.widthMin: OUT_OF_RANGE — 999 outside [1, 64]']],
     ['an unknown key', doc({ extra: true }), ['extra: UNKNOWN_KEY — unknown key "extra"']],
-    ['a profile that is not ready', doc({ profile: 'archipelago' }), ['profile archipelago arrives in SP3e']],
+    ['a profile that is not ready', doc({ profile: 'cave_heavy' }), ['profile cave_heavy arrives in SP6']],
   ])('a refused file (%s) lists its issues and leaves the session alone', (_name, text, issues) => {
     const s = edited();
     const state = s.state;
