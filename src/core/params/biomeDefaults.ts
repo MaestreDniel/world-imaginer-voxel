@@ -70,3 +70,25 @@ export const BIOME_TABLE_DEFAULT: BoxTable<BoxBiome> = {
   frozen_peaks: box(INLAND, MOUNT, PEAK, COLDISH, ALL, 25, -1),
   volcano: box(INLAND, MOUNT, PEAK, HOT, ALL, 26),
 };
+
+/**
+ * Archipelago's C map φ (SP3e spec §1.3, D8) at the C endpoints the default boxes use, written as literals:
+ * deep ocean −0.55 → −0.305, ocean / coast −0.1 → 0.32, coast −0.22 → 0.2, inland −0.04 → 0.38; ±1 stay.
+ */
+const ARCHIPELAGO_C = new Map<number, number>([[-1, -1], [-0.55, -0.305], [-0.22, 0.2], [-0.1, 0.32], [-0.04, 0.38], [1, 1]]);
+
+function archipelagoC(c: number): number {
+  const v = ARCHIPELAGO_C.get(c);
+  if (v === undefined) throw new Error(`archipelago biome table: no φ literal for the C endpoint ${c}`);
+  return v;
+}
+
+/**
+ * The archipelago preset's boxes (SP3e spec §1.3): BIOME_TABLE_DEFAULT with every C endpoint mapped by φ, so the
+ * beaches sit at the new shore (deep_ocean C [−1, −0.305], ocean [−0.305, 0.32], warm and frozen ocean [−1, 0.32],
+ * COAST [0.2, 0.38], INLAND [0.38, 1]); E, PV, T, H, the W signs and the priorities are the default's.
+ */
+export const ARCHIPELAGO_BIOME_TABLE: BoxTable<BoxBiome> = Object.fromEntries(BOX_BIOMES.map((b): [BoxBiome, BoxRow] => {
+  const r = BIOME_TABLE_DEFAULT[b];
+  return [b, box([archipelagoC(r.C[0]), archipelagoC(r.C[1])], r.E, r.PV, r.T, r.H, r.priority, r.wSign)];
+})) as BoxTable<BoxBiome>;

@@ -29,3 +29,27 @@ export const JAG_DEFAULT: NestedSpline = autoTangents(S('C', [
   [-0.1, 0],
   [0.05, S('E', [[-1, PVJ()], [-0.5, PVJ()], [-0.4, 0]])],
 ]));
+
+/*
+ * The archipelago preset's splines (SP3e spec §1.3, D8): the defaults' knots and values carried through the C map
+ * φ (shift 0.42: C + 0.42 for C ≥ −0.24; below, piecewise linear through (−1, −1), (−0.6, −0.39), (−0.4, −0.05),
+ * (−0.24, 0.18)), so the shore (offset0 = 63) lies at C 0.26-0.32 and every C < 0.2 is ocean. Offset drops the
+ * default's C 0.3 and 0.6 knots (the big-mountain E splines): beyond its last knot a spline holds its last value,
+ * so every C ≥ 0.47 is near-inland (offset0 ≤ 130). Every value is written as its literal (in doubles
+ * −0.22 + 0.42 is not 0.2). A unit test (archipelago.test.ts) pins the knots against φ of the defaults.
+ */
+export const ARCHIPELAGO_OFFSET: NestedSpline = autoTangents(S('C', [
+  [-1, 16], [-0.39, 26], [-0.05, 40], [0.18, 52], [0.26, 60],
+  [0.32, S('E', [[-1, 70], [0, 64], [1, 63]])],
+  [0.47, S('E', [[-1, PV3(72, 96, 130)], [-0.4, PV3(68, 82, 100)], [0.2, PV3(72, 84, 98)], [1, 76]])],
+]));
+
+export const ARCHIPELAGO_SIGMA: NestedSpline = autoTangents(S('C', [
+  [-1, 3], [0.26, 3], [0.32, 1.5],
+  [0.47, S('E', [[-1, S('PV', [[-1, 12], [1, 26]])], [0, 6], [1, 3]])],
+]));
+
+export const ARCHIPELAGO_JAG: NestedSpline = autoTangents(S('C', [
+  [0.32, 0],
+  [0.47, S('E', [[-1, PVJ()], [-0.5, PVJ()], [-0.4, 0]])],
+]));
