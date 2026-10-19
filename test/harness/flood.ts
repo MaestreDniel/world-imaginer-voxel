@@ -1,4 +1,6 @@
-/** 8-connected component labelling of a row-major n × n mask (union-find). Labels 0 = background, 1..count. */
+/** Cell adjacency of `components`: 4 = edge neighbours only, 8 = edge and corner neighbours. */
+export type Connectivity = 4 | 8;
+
 export interface Components {
   readonly label: Int32Array;
   readonly count: number;
@@ -8,7 +10,18 @@ export interface Components {
   readonly bbox: Int32Array;
 }
 
-export function components(mask: Uint8Array, n: number): Components {
+/** Already-visited neighbours of a cell in the row-major scan (west, north-west, north, north-east). */
+const BACK_8 = [[-1, 0], [-1, -1], [0, -1], [1, -1]] as const;
+const BACK_4 = [[-1, 0], [0, -1]] as const;
+
+/**
+ * Component labelling of a row-major n × n mask (union-find), 8-connected by default (B2, B5) or 4-connected (Z2,
+ * SP3e spec §5.3: islands across a one-cell diagonal strait stay apart). Labels 0 = background, 1..count, in scan
+ * order of each component's first cell.
+ */
+export function components(mask: Uint8Array, n: number, connectivity: Connectivity = 8): Components {
+  if (connectivity !== 4 && connectivity !== 8) throw new Error(`components: connectivity ${String(connectivity)} is not 4 or 8`);
+  const back = connectivity === 8 ? BACK_8 : BACK_4;
   const parent = new Int32Array(n * n).fill(-1);
   const find = (a: number): number => {
     while (parent[a]! !== a) { parent[a] = parent[parent[a]!]!; a = parent[a]!; }
@@ -23,7 +36,7 @@ export function components(mask: Uint8Array, n: number): Components {
     const k = j * n + i;
     if (mask[k] === 0) continue;
     parent[k] = k;
-    for (const [di, dj] of [[-1, 0], [-1, -1], [0, -1], [1, -1]] as const) {
+    for (const [di, dj] of back) {
       const ii = i + di;
       const jj = j + dj;
       if (ii < 0 || jj < 0 || ii >= n) continue;
