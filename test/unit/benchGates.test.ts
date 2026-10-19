@@ -1,7 +1,8 @@
 import { readFileSync } from 'node:fs';
+import { Bench } from 'tinybench';
 import { expect, test } from 'vitest';
 import {
-  absoluteGateFailures, BENCH_ROWS, COLUMN_P50_MAX_MS, COLUMN_P95_MAX_MS, gateFailures, KILL_RATIO_MAX, P1_MAX_REGRESSION, parseBenchExempt,
+  absoluteGateFailures, BENCH_ROWS, COLUMN_P50_MAX_MS, COLUMN_P95_MAX_MS, gateFailures, ISLANDS_COLUMNS, ISLANDS_RUN, KILL_RATIO_MAX, P1_MAX_REGRESSION, parseBenchExempt,
   SESSION_COMMIT_P50_MAX_MS, SLICE_PART_P50_MAX_MS, SLICE_V128_P50_MAX_MS, TERRAIN_P50_MAX_MS, type Baselines,
 } from '../bench/gates';
 
@@ -15,7 +16,7 @@ test('constants', () => {
 });
 
 /** Latencies within every absolute gate, at their bounds. */
-const AT_GATES = { columnP50: 0.7, columnP95: 1.2, terrainP50: 4, sliceV128P50: 300, slicePartP50: 250, sessionCommitP50: 4 };
+const AT_GATES = { columnP50: 0.7, columnP95: 1.2, terrainP50: 4, sliceV128P50: 300, slicePartP50: 250, sessionCommitP50: 4, islandsP50: 4 };
 
 test('absolute gates: column p50 / p95 (P1, SP2a) and the real T column p50 (SP3b §10), inclusive', () => {
   expect(absoluteGateFailures(AT_GATES)).toEqual([]);
@@ -35,6 +36,19 @@ test('absolute gates (SP3d §9): slice.vertical128 ≤ 300 ms, slice.partWorst �
   ]);
   expect(absoluteGateFailures({ ...AT_GATES, slicePartP50: 251 })).toEqual(['slice.partWorst p50 251.000 ms > 250 ms']);
   expect(absoluteGateFailures({ ...AT_GATES, sliceV128P50: 187, slicePartP50: 65, sessionCommitP50: 0.2 })).toEqual([]);
+});
+
+test('absolute gate (SP3e §7): terrain.islands p50 ≤ TERRAIN_P50_MAX_MS (4 ms) on cluster columns, inclusive, after the slice rows', () => {
+  expect(absoluteGateFailures({ ...AT_GATES, islandsP50: 3.5 })).toEqual([]);
+  expect(absoluteGateFailures({ ...AT_GATES, islandsP50: 4.01 })).toEqual(['terrain.islands p50 4.010 ms > 4 ms']);
+  // terrain.real's gate does not cover it: each row has its own line, in the order the gates are listed.
+  expect(absoluteGateFailures({ ...AT_GATES, terrainP50: 2.4, islandsP50: 4.5 })).toEqual(['terrain.islands p50 4.500 ms > 4 ms']);
+  expect(absoluteGateFailures({ ...AT_GATES, terrainP50: 4.01, slicePartP50: 251, islandsP50: 4.2, sessionCommitP50: 4.01 })).toEqual([
+    'terrain.real p50 4.010 ms > 4 ms',
+    'slice.partWorst p50 251.000 ms > 250 ms',
+    'terrain.islands p50 4.200 ms > 4 ms',
+    'session.commitMaxTree p50 4.010 ms > 4 ms',
+  ]);
 });
 
 test('no baseline: only the kill criterion gates', () => {
@@ -84,13 +98,13 @@ test('parseBenchExempt: a comma-separated list of BENCH_ROWS names, empty when u
   expect(parseBenchExempt([...BENCH_ROWS].reverse().join(','))).toEqual([...BENCH_ROWS].reverse());
 });
 
-test('the bench rows: SP1 to SP2b, the SP3a store row, the SP3b density corner and real T rows, SP3c surface.column, then SP3d\'s slice and session rows', () => {
+test('the bench rows: SP1 to SP2b, the SP3a store row, the SP3b density corner and real T rows, SP3c surface.column, SP3d\'s slice and session rows, then SP3e\'s terrain.islands', () => {
   expect(BENCH_ROWS).toEqual([
     'calibration.fmix32', 'lattice3.slice', 'perm512.slice', 'lattice3.random', 'perm512.random', 'normal.z2.climateC',
     'normal.z3.density3d', 'spline.offset', 'spline.mix3', 'detErf', 'stageHashes.genKey', 'column.point', 'column.sample',
     'map.tile.b64.biome', 'map.tile.b16.relief', 'worker.configure', 'map.tile.b256.biome', 'map.tile.b256.relief',
     'store.alloc', 'density.corner', 'terrain.real', 'surface.column',
-    'slice.vertical128', 'slice.horizontal128', 'slice.partWorst', 'session.commitMaxTree',
+    'slice.vertical128', 'slice.horizontal128', 'slice.partWorst', 'session.commitMaxTree', 'terrain.islands',
   ]);
   expect(BENCH_ROWS).not.toContain('terrain.provisional');
   expect(new Set(BENCH_ROWS).size).toBe(BENCH_ROWS.length);
@@ -105,3 +119,29 @@ test('test/baselines.json records every bench row, so none is silently ungated',
   }
   expect(baseline.kernels['calibration.fmix32']!.ratio).toBe(1);
 });
+
+/** Calls of a ≈ 0.8 ms busy function under tinybench's Bench built as vitest's bench provider builds it (options spread). */
+async function benchCalls(options: Record<string, number>): Promise<number> {
+  let calls = 0;
+  const b = new Bench({ ...options });
+  b.add('busy', () => {
+    calls++;
+    const t = performance.now();
+    while (performance.now() - t < 0.8) { /* busy */ }
+  });
+  await b.run();
+  return calls;
+}
+
+test('terrain.islands run options (SP3e §7): exactly one warm-up call, so its 258 calls never pass the 512 precomputed columns', async () => {
+  expect(ISLANDS_RUN).toEqual({ iterations: 256, time: 0, warmupIterations: 1, warmupTime: 0 });
+  expect(ISLANDS_COLUMNS).toBe(512);
+  // A column about 4 × faster than this machine's 3.5 ms: tinybench's probe call when the function is added (does it
+  // return a promise?), one warm-up call and the 256 timed ones.
+  const calls = await benchCalls(ISLANDS_RUN);
+  expect(calls).toBe(258);
+  expect(calls).toBeLessThanOrEqual(ISLANDS_COLUMNS);
+  // Without warmupTime, tinybench warms up for 250 ms: far more than one call (about 310 at 0.8 ms on a quiet machine,
+  // which took the row's index past its 512 columns).
+  expect(await benchCalls({ iterations: 256, time: 0, warmupIterations: 1 })).toBeGreaterThan(258 + 50);
+}, 30_000);

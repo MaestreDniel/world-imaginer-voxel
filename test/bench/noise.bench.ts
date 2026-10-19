@@ -7,6 +7,7 @@ import { fmix32 } from '../../src/core/hash';
 import { lattice3 } from '../../src/core/noise/lattice3';
 import { NormalNoise } from '../../src/core/noise/normal';
 import { DEFAULTS } from '../../src/core/params/defaults';
+import { resolveProfile } from '../../src/core/params/profiles';
 import { Xoshiro128 } from '../../src/core/rng';
 import { compileSpline, evalSpline } from '../../src/core/spline/hermite';
 import { genKey, stageHashes } from '../../src/core/stage/hash';
@@ -32,7 +33,7 @@ import { planFieldSlice, type FieldSliceMsg, type FieldSliceSpec } from '../../s
 import { DEFAULT_MAP_STATE, openMapSession, type MapState } from '../../src/ui/map/mapState';
 import { capDensityTree, capSurfaceRules } from '../harness/capTrees';
 import { PART_WORST_LEAVES, partWorstParams } from '../harness/sliceTrees';
-import { absoluteGateFailures, BENCH_ROWS, gateFailures, parseBenchExempt, type Baselines, type BenchKernel } from './gates';
+import { absoluteGateFailures, BENCH_ROWS, gateFailures, ISLANDS_COLUMNS, ISLANDS_RUN, parseBenchExempt, type Baselines, type BenchKernel } from './gates';
 import { buildPerm, perm3 } from './perm512';
 
 const FMIX = fmix32;
@@ -73,13 +74,14 @@ function poolOfOne(params: Params, spec: FieldSliceSpec): readonly (readonly [nu
   return plan.ranges;
 }
 
-test('SP1, SP2a, SP2b, SP3a, SP3b, SP3c and SP3d kernels', async ({ bench }) => {
+test('SP1, SP2a, SP2b, SP3a, SP3b, SP3c, SP3d and SP3e kernels', async ({ bench }) => {
   // SP3c §7: BENCH_EXEMPT names rows whose ratio gate is skipped (an unknown name fails here, before measuring);
   // bench:record never reads it.
   const exempt = process.env.BENCH_RECORD === '1' ? [] : parseBenchExempt(process.env.BENCH_EXEMPT);
   const ns: Record<string, number> = {};
-  const measure = async (name: string, evals: number, fn: () => void, iterations?: number) => {
-    const r = await bench(name, fn).run(iterations === undefined ? undefined : { iterations, time: 0, warmupIterations: 1 });
+  /** A row's p50 per evaluation; `run`: a fixed iteration count (`time: 0`, one warm-up iteration) or explicit options. */
+  const measure = async (name: string, evals: number, fn: () => void, run?: number | typeof ISLANDS_RUN) => {
+    const r = await bench(name, fn).run(run === undefined ? undefined : typeof run === 'number' ? { iterations: run, time: 0, warmupIterations: 1 } : { ...run });
     ns[name] = (r.latency.p50 * 1e6) / evals;
     return r;
   };
@@ -215,12 +217,39 @@ test('SP1, SP2a, SP2b, SP3a, SP3b, SP3c and SP3d kernels', async ({ bench }) => 
     sink += r.state.epoch;
   });
   expect(session.state.params.density.defs, 'session.commitMaxTree: the commits keep the tree by identity').toBe(cappedDefs);
+  // SP3e §7 (D17): terrain.islands — fillColumnT on the floating_islands params at cluster columns: the terrain.real
+  // candidate sequence kept where columnPoint (on a separate GenContext, so the timed context's column cache stays cold)
+  // gives islandMask ≥ 0.5 at the column's centre block, until 512 are accepted; 256 timed iterations after one
+  // warm-up (ISLANDS_RUN: warmupTime 0, so the warm-up is one call), each on the next precomputed column, freed after
+  // (no column twice, so the column cache never hits).
+  const islandsParams = resolveProfile('floating_islands');
+  const islandsGen = createGenContext(seedFromInput('42'), islandsParams);
+  const islandsProbe = createGenContext(seedFromInput('42'), islandsParams);
+  const islandsStore = createStore({ shared: true, maxBlockBytes: 32 << 20, maxByteBytes: 16 << 20 });
+  const islandCols: (readonly [number, number])[] = [];
+  let islandTried = 0;
+  for (let t = 1; islandCols.length < ISLANDS_COLUMNS; t++) {
+    islandTried++;
+    const icx = (t * 7919) % 60000 - 30000;
+    const icz = (t * 104729) % 60000 - 30000;
+    if (columnPoint(islandsProbe, 16 * icx + 8, 16 * icz + 8).islandMask >= 0.5) islandCols.push([icx, icz]);
+  }
+  let ic = 0;
+  const islandsRun = await measure('terrain.islands', 1, () => {
+    const [icx, icz] = islandCols[ic++]!;
+    sink += fillColumnT(islandsStore, islandsGen, icx, icz, never) ? 1 : 0;
+    islandsStore.freeColumn(icx, icz);
+  }, ISLANDS_RUN);
+  // tinybench calls the function once when it is added (to see whether it returns a promise), then the one warm-up
+  // call and the 256 timed ones: 258 of the 512 columns.
+  expect(ic, 'terrain.islands: one probe, one warm-up and 256 timed calls, each on its own precomputed column').toBe(1 + ISLANDS_RUN.warmupIterations + ISLANDS_RUN.iterations);
 
   let solidVoxels = 0;
   for (let i = 256; i < 98304; i++) solidVoxels += sCol.solid[i]!;
   expect(evaluated, 'surface.column evaluates part of the column (the fast path takes the rest)').toBeGreaterThan(0);
   expect(evaluated).toBeLessThan(solidVoxels);
   expect(bytePool.slotCount() - bytePool.freeCount(), 'store rows leak no slot').toBe(0);
+  expect(islandsStore.blockPool.slotCount() - islandsStore.blockPool.freeCount(), 'terrain.islands leaks no slot').toBe(0);
   expect(store.blockPool.slotCount() - store.blockPool.freeCount(), 'store rows leak no slot').toBe(0);
 
   expect(Object.keys(ns), 'the measured rows are BENCH_ROWS').toEqual([...BENCH_ROWS]);
@@ -237,11 +266,13 @@ test('SP1, SP2a, SP2b, SP3a, SP3b, SP3c and SP3d kernels', async ({ bench }) => 
   console.log(`slice.vertical128 ${ms(vRun)} (${vRanges.length} parts at pool size 1: ${JSON.stringify(vRanges)})`);
   console.log(`slice.horizontal128 ${ms(hRun)} (${hRanges.length} parts at pool size 1: ${JSON.stringify(hRanges)})`);
   console.log(`slice.partWorst ${ms(wRun)} (${PART_WORST_LEAVES} leaves, one 32-sample column of ${wCost} work units)`);
+  console.log(`terrain.islands ${ms(islandsRun)} (${islandCols.length} cluster columns accepted of ${islandTried} candidates: ${((100 * islandCols.length) / islandTried).toFixed(1)} %; ${ic} columns used)`);
   console.log(`session.commitMaxTree ${ms(commitRun)} (${commits} commits; trees of ${canonicalJSON(cappedDefs).length} and ${canonicalJSON(session.state.params.surface.rules).length} characters)`);
   // Before the record: bench:record refuses to write when an absolute gate fails.
   expect(absoluteGateFailures({
     columnP50: columnRun.latency.p50, columnP95, terrainP50: terrainRun.latency.p50,
     sliceV128P50: vRun.latency.p50, slicePartP50: wRun.latency.p50, sessionCommitP50: commitRun.latency.p50,
+    islandsP50: islandsRun.latency.p50,
   }), 'absolute gates').toEqual([]);
   expect(Number.isFinite(sink)).toBe(true);
   if (process.env.BENCH_RECORD === '1') {

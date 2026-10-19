@@ -27,7 +27,8 @@
  * presets' parts (`DT2.presets`), which THRESHOLDS lists (both land with `presets.metric.ts`). §1's `metrics/*.ts` entry
  * names `sp3eGoldens.ts` and "Banned APIs" lists it as a determinism file (both land with the window search). §6.4's
  * Z1-Z3 rows state SP3e's definitions and that the rows are recorded from SP3e and gated from SP12 on the quick and full
- * tiers, as THRESHOLDS has them (they land with the Z rows).
+ * tiers, as THRESHOLDS has them (they land with the Z rows). §7's "Measured in SP3e" line names the `terrain.islands`
+ * bench row, which `BENCH_ROWS` measures, and its p50 gate at `TERRAIN_P50_MAX_MS` on cluster columns (it lands with the row).
  */
 import { existsSync, readdirSync, readFileSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
@@ -37,7 +38,7 @@ import { DEFAULTS } from '../../src/core/params/defaults';
 import { SCHEMA } from '../../src/core/params/schema';
 import { PIN_MAX } from '../../src/ui/inspector/sliceModel';
 import { REGISTRY } from '../../src/world/blocks';
-import { BENCH_ROWS } from '../bench/gates';
+import { BENCH_ROWS, TERRAIN_P50_MAX_MS } from '../bench/gates';
 import { THRESHOLDS } from '../thresholds';
 import { SP_DEPS } from '../harness/sp';
 import { DET_FILES } from './rules/banned';
@@ -388,5 +389,21 @@ describe('master spec amendments (SP3e §11, §13)', () => {
     const line = text.split('\n').find((l) => l.includes('(`DET_FILES` in `test/arch/rules/banned.ts`:'));
     expect(line).toContain('`metrics/sp3eGoldens.ts`');
     expect(line).toContain('(amended by SP1, SP2a, SP2b, SP3a, SP3c and SP3e)');
+  });
+
+  test('§7\'s "Measured in SP3e" line names the terrain.islands bench row, which BENCH_ROWS measures, gated at p50 ≤ 4 ms on cluster columns', () => {
+    const line = text.split('\n').find((l) => l.startsWith('- **Measured in SP3e** (amended by SP3e):'));
+    expect(line, 'no `- **Measured in SP3e** (amended by SP3e): …` line in §7').toBeDefined();
+    expect(line).toContain('`terrain.islands`');
+    expect(line).toContain(`p50 ≤ ${TERRAIN_P50_MAX_MS} ms on cluster columns`);
+    expect(line).toContain('`TERRAIN_P50_MAX_MS`');
+    const rows: readonly string[] = BENCH_ROWS;
+    expect(rows).toContain('terrain.islands');
+    // It follows SP3c's measured line, inside §7.
+    const sp3c = text.indexOf('- **Measured in SP3c** (amended by SP3c):');
+    const at = text.indexOf(line!);
+    expect(sp3c).toBeGreaterThan(text.indexOf('## 7. Performance budget'));
+    expect(at).toBeGreaterThan(sp3c);
+    expect(at).toBeLessThan(text.indexOf('## 8. Risks'));
   });
 });

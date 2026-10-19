@@ -4,7 +4,10 @@ export const KILL_RATIO_MAX = 1.6;
 /** P1 column-stage budget (master §3.0): buildColumnSample p50 / p95 in ms on the reference machine (SP2a; p95 gated through p99). */
 export const COLUMN_P50_MAX_MS = 0.7;
 export const COLUMN_P95_MAX_MS = 1.2;
-/** SP3b exit (master §10, SP3b spec §10): the real T stage's `terrain.real` p50 in ms per column, its ColumnSample included. */
+/**
+ * SP3b exit (master §10, SP3b spec §10): the real T stage's `terrain.real` p50 in ms per column, its ColumnSample included;
+ * SP3e §7 gates `terrain.islands` (floating_islands cluster columns) at the same bound.
+ */
 export const TERRAIN_P50_MAX_MS = 4;
 /**
  * SP3d (its spec §9, master §7): the vertical 128² density slice on one thread (`slice.vertical128`), one slice part at
@@ -16,18 +19,28 @@ export const SLICE_PART_P50_MAX_MS = 250;
 export const SESSION_COMMIT_P50_MAX_MS = 4;
 
 /**
+ * `terrain.islands`' run (SP3e §7): 256 timed iterations after exactly one warm-up call, each call on the next of its
+ * ISLANDS_COLUMNS precomputed cluster columns, so no column is generated twice. tinybench warms up until both
+ * `warmupIterations` and `warmupTime` (250 ms when unset) are reached, so `warmupTime: 0` is what keeps the warm-up
+ * to one call: unset, a 3.5 ms column gave about 70 more, and a column under about 1 ms would run past the 512.
+ */
+export const ISLANDS_RUN = Object.freeze({ iterations: 256, time: 0, warmupIterations: 1, warmupTime: 0 });
+export const ISLANDS_COLUMNS = 512;
+
+/**
  * Every gated bench row, in measurement order: `noise.bench.ts` measures exactly these, and `test/baselines.json`
  * records every one (a unit test), so a row added without `npm run bench:record` cannot stay ungated.
  * SP3a §7 appends `store.alloc` and `terrain.provisional`; SP3b §10 appends `density.corner` and replaces
  * `terrain.provisional` by `terrain.real`; SP3c §7 appends `surface.column` (the surface pass alone); SP3d §9 appends
- * the slice rows `slice.vertical128`, `slice.horizontal128`, `slice.partWorst` and the session row `session.commitMaxTree`.
+ * the slice rows `slice.vertical128`, `slice.horizontal128`, `slice.partWorst` and the session row `session.commitMaxTree`;
+ * SP3e §7 appends `terrain.islands` (fillColumnT on floating_islands at cluster columns).
  */
 export const BENCH_ROWS = [
   'calibration.fmix32', 'lattice3.slice', 'perm512.slice', 'lattice3.random', 'perm512.random', 'normal.z2.climateC',
   'normal.z3.density3d', 'spline.offset', 'spline.mix3', 'detErf', 'stageHashes.genKey', 'column.point', 'column.sample',
   'map.tile.b64.biome', 'map.tile.b16.relief', 'worker.configure', 'map.tile.b256.biome', 'map.tile.b256.relief',
   'store.alloc', 'density.corner', 'terrain.real', 'surface.column',
-  'slice.vertical128', 'slice.horizontal128', 'slice.partWorst', 'session.commitMaxTree',
+  'slice.vertical128', 'slice.horizontal128', 'slice.partWorst', 'session.commitMaxTree', 'terrain.islands',
 ] as const;
 
 export interface BenchKernel {
@@ -97,6 +110,8 @@ export interface AbsoluteLatencies {
   readonly sliceV128P50: number;
   readonly slicePartP50: number;
   readonly sessionCommitP50: number;
+  /** SP3e §7: `terrain.islands` p50 (floating_islands cluster columns), gated at TERRAIN_P50_MAX_MS. */
+  readonly islandsP50: number;
 }
 
 /**
@@ -110,6 +125,7 @@ export function absoluteGateFailures(l: AbsoluteLatencies): string[] {
   if (l.terrainP50 > TERRAIN_P50_MAX_MS) out.push(`terrain.real p50 ${l.terrainP50.toFixed(3)} ms > ${TERRAIN_P50_MAX_MS} ms`);
   if (l.sliceV128P50 > SLICE_V128_P50_MAX_MS) out.push(`slice.vertical128 p50 ${l.sliceV128P50.toFixed(3)} ms > ${SLICE_V128_P50_MAX_MS} ms`);
   if (l.slicePartP50 > SLICE_PART_P50_MAX_MS) out.push(`slice.partWorst p50 ${l.slicePartP50.toFixed(3)} ms > ${SLICE_PART_P50_MAX_MS} ms`);
+  if (l.islandsP50 > TERRAIN_P50_MAX_MS) out.push(`terrain.islands p50 ${l.islandsP50.toFixed(3)} ms > ${TERRAIN_P50_MAX_MS} ms`);
   if (l.sessionCommitP50 > SESSION_COMMIT_P50_MAX_MS) out.push(`session.commitMaxTree p50 ${l.sessionCommitP50.toFixed(3)} ms > ${SESSION_COMMIT_P50_MAX_MS} ms`);
   return out;
 }
