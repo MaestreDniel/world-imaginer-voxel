@@ -1294,7 +1294,7 @@ Target: edit → visible ≤ 50 ms p95, measured in the HUD.
 - **Layers:**
   - biome, shaded relief (surfaceEst), rivers, lakes;
   - raw T/H/C/E/W/PV/R;
-  - offset, σ, jag;
+  - offset, σ, jag; `islandMask`, the floating_islands cluster mask (shape stage; amended by SP3e);
   - cave slice at y (final < 0 plus aquifer fluid), cave-biome slice;
   - structure starts and pieces, carver tunnels;
   - spawn, player with view cone, grid, column-status heatmap, bookmarks per save.

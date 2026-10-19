@@ -1,10 +1,17 @@
 import { describe, expect, test } from 'vitest';
+import { DEFAULTS } from '../../src/core/params/defaults';
+import { resolveProfile } from '../../src/core/params/profiles';
+import { hex64 } from '../../src/core/hash';
+import { seedFromInput } from '../../src/core/seed';
+import { stageHashes } from '../../src/core/stage/hash';
 import { biomeColor } from '../../src/gen/biomes/registry';
 import { newPointRecord, sampleCoarse, samplePoint } from '../../src/gen/column/columnPoint';
-import type { GenContext } from '../../src/gen/context';
-import { isLayerId, layerColor, layerStage, LAYERS, slopeShade, type LayerId } from '../../src/gen/map/layers';
+import { islandMaskAt } from '../../src/gen/column/islands';
+import { createGenContext, type GenContext } from '../../src/gen/context';
+import { isLayerId, layerColor, layerStage, LAYERS, needsRelief, slopeShade, type LayerId } from '../../src/gen/map/layers';
 import { diverging, hypsometric, sequential } from '../../src/gen/map/palette';
 import { isLevel, levelFor, paintTile, paintTileAbortable, samplePixel } from '../../src/gen/map/tile';
+import { createTileSource } from '../../src/ui/map/tileSource';
 import { ctxFor } from '../harness/gen';
 
 const rgbAt = (t: Uint8ClampedArray, i: number, j: number) => {
@@ -52,10 +59,12 @@ function previewSampledTwice(ctx: GenContext, layer: LayerId, tx: number, tz: nu
 
 describe('layers and palette', () => {
   test('layer ids and their invalidating stage', () => {
-    expect(LAYERS.length).toBe(14);
+    expect(LAYERS.length).toBe(15);
+    expect(LAYERS.slice(-2)).toEqual(['jag', 'islandMask']);
     expect(isLayerId('relief')).toBe(true);
+    expect(isLayerId('islandMask')).toBe(true);
     expect(isLayerId('nope')).toBe(false);
-    expect(['biome', 'relief', 'rivers', 'C', 'PV', 'offset'].map((l) => layerStage(l as never))).toEqual(['biome2d', 'shape', 'shape', 'climate', 'climate', 'shape']);
+    expect(['biome', 'relief', 'rivers', 'C', 'PV', 'offset', 'islandMask'].map((l) => layerStage(l as never))).toEqual(['biome2d', 'shape', 'shape', 'climate', 'climate', 'shape', 'shape']);
   });
   test('ramps hit their end colours', () => {
     expect([diverging(-1), diverging(1), hypsometric(63), hypsometric(263), sequential(0, 0, 1), sequential(1, 0, 1)])
@@ -197,5 +206,55 @@ describe('paintTileAbortable (SP2b spec §2.2, §2.4, §5.3)', () => {
       paintTileAbortable(ctx, layer, b, 0, 0, newTile(), NEVER, ids);
       expect([layer, ids.every((v) => v === 200)]).toEqual([layer, true]);
     }
+  });
+});
+
+/** The distinct 0xRRGGBB colours of a tile. */
+const colours = (t: Uint8ClampedArray) => {
+  const set = new Set<number>();
+  for (let k = 0; k < 65536; k++) set.add(rgbAt(t, k & 255, k >> 8));
+  return set;
+};
+
+describe('the islandMask layer (SP3e spec §2.6, D20)', () => {
+  const floating = createGenContext(seedFromInput('42'), resolveProfile('floating_islands'));
+  test('unshaded, coloured by sequential(m, 0, 1)', () => {
+    expect(needsRelief('islandMask')).toBe(false);
+    for (const m of [0, 0.25, 0.5, 1]) expect(layerColor('islandMask', { ...newPointRecord(), islandMask: m }, 1)).toBe(sequential(m, 0, 1));
+  });
+  test('the level-256 preview computes the mask (sampleCoarse), one sample per 2 × 2 block, and is not blank', () => {
+    const t = paintTile(floating, 'islandMask', 256, 0, 0, newTile());
+    for (const [i, j] of PIX) {
+      const bi = i >> 1;
+      const bj = j >> 1;
+      expect(rgbAt(t, i, j)).toBe(sequential(islandMaskAt(floating, 256 * (2 * bi + 1), 256 * (2 * bj + 1)), 0, 1));
+    }
+    expect(colours(t).size).toBeGreaterThanOrEqual(2);
+  });
+  test('a fine tile over a cluster paints the pixel-centre mask and holds empty, rising and full cells', () => {
+    const t = paintTile(floating, 'islandMask', 4, 0, 0, newTile());
+    for (const [i, j] of PIX) expect(rgbAt(t, i, j)).toBe(sequential(islandMaskAt(floating, 4 * (i + 0.5), 4 * (j + 0.5)), 0, 1));
+    const seen = colours(t);
+    expect([seen.has(sequential(0, 0, 1)), seen.has(sequential(1, 0, 1)), seen.size >= 3]).toEqual([true, true, true]);
+  });
+  test('on the default profile the layer is uniformly 0, at the preview and at a fine level', () => {
+    const ctx = ctxFor('42');
+    for (const [b, tx, tz] of [[256, 0, 0], [4, 0, 0], [16, -1, 1]] as const) {
+      expect([b, [...colours(paintTile(ctx, 'islandMask', b, tx, tz, newTile()))]]).toEqual([b, [sequential(0, 0, 1)]]);
+    }
+  });
+  test('its tiles are keyed by the shape hash, which covers the islands group', () => {
+    const src = createTileSource();
+    const hexHashes = (params: unknown) => Object.fromEntries(Object.entries(stageHashes(params)).map(([k, v]) => [k, hex64(v)]));
+    const key = (params: unknown, epoch: number) => {
+      src.set(epoch, '42.0', hexHashes(params));
+      return src.keyFor('islandMask', 64, 0, 0, epoch);
+    };
+    const base = key(DEFAULTS, 1);
+    expect(base).toContain(`:${hexHashes(DEFAULTS)['shape']}:`);
+    expect(key(resolveProfile('floating_islands'), 2)).not.toBe(base);
+    expect(key({ ...DEFAULTS, islands: { ...DEFAULTS.islands, lo: 0.5 } }, 3)).not.toBe(base);
+    // A biome edit moves biome2d, not shape: the layer's tiles stay valid.
+    expect(key({ ...DEFAULTS, biomes: { ...DEFAULTS.biomes, zoomJitter: 1.25 } }, 4)).toBe(base);
   });
 });

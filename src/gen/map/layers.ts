@@ -1,6 +1,8 @@
 /**
  * Map layers (SP2a spec §6.2): what each layer paints from a sampled point, and which stage hash
  * invalidates its tiles. Relief and the relief-based layers also need the 4 neighbour heights.
+ * `islandMask` (SP3e spec §2.6) is the floating_islands cluster mask, keyed by the shape hash (which
+ * covers the `islands` group); it is uniformly 0 in every other profile.
  */
 import type { StageId } from '../../core/ids';
 import { biomeColor } from '../biomes/registry';
@@ -16,7 +18,7 @@ const SHADE = shade;
 const GREY = grey;
 const BLEND = blend;
 
-export const LAYERS = ['biome', 'relief', 'rivers', 'lakes', 'C', 'E', 'PV', 'W', 'T', 'H', 'R', 'offset', 'sigma', 'jag'] as const;
+export const LAYERS = ['biome', 'relief', 'rivers', 'lakes', 'C', 'E', 'PV', 'W', 'T', 'H', 'R', 'offset', 'sigma', 'jag', 'islandMask'] as const;
 export type LayerId = (typeof LAYERS)[number];
 
 export function isLayerId(v: unknown): v is LayerId {
@@ -78,5 +80,6 @@ export function layerColor(layer: LayerId, p: PointRecord, k: number): number {
     case 'offset': return SEQ(p.offset, -64, 320);
     case 'sigma': return SEQ(p.sigma, 0, 16);
     case 'jag': return SEQ(p.jag, 0, 55);
+    case 'islandMask': return SEQ(p.islandMask, 0, 1);
   }
 }

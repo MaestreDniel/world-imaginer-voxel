@@ -43,7 +43,7 @@ import { fileURLToPath, pathToFileURL } from 'node:url';
 import type { PerfApi, PerfInfo, PerfRecord } from '../../src/ui/map/perfHook';
 
 /** The map layers (src/gen/map/layers.ts LAYERS; a unit test keeps them equal). */
-export const MAP_LAYERS: readonly string[] = ['biome', 'relief', 'rivers', 'lakes', 'C', 'E', 'PV', 'W', 'T', 'H', 'R', 'offset', 'sigma', 'jag'];
+export const MAP_LAYERS: readonly string[] = ['biome', 'relief', 'rivers', 'lakes', 'C', 'E', 'PV', 'W', 'T', 'H', 'R', 'offset', 'sigma', 'jag', 'islandMask'];
 export const LIMIT_MS = 300;
 export const GAP_LIMIT_MS = 500;
 const DEV_PORT = 5183;
