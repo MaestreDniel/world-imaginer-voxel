@@ -47,7 +47,7 @@ describe('profiles', () => {
     const all = STAGES.map((s) => s.id);
     const butClimate = all.filter((st) => st !== 'climate');
     const table: Record<(typeof PROFILE_IDS)[number], readonly string[]> = {
-      default: [], large_biomes: all, archipelago: all, amplified: [], floating_islands: butClimate, cave_heavy: [],
+      default: [], large_biomes: all, archipelago: all, amplified: ['terrain', 'decorate', 'light', 'mesh'], floating_islands: butClimate, cave_heavy: [],
     };
     for (const id of PROFILE_IDS) {
       const h = stageHashes(resolveProfile(id));

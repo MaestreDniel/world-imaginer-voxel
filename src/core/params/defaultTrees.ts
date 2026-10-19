@@ -11,8 +11,11 @@
 import { checkJson, type JsonFormat, type JsonValue } from './json';
 import type { Issue } from './kit';
 
-/** Tier 1's registered clone of a default tree; throws on any issue (a default that fails tier 1 is a bug). */
-function registeredTree(tree: JsonValue, leaf: string, format: JsonFormat): JsonValue {
+/**
+ * Tier 1's registered clone of a default or preset tree (SP3e spec §1.1: `presetTrees.ts` registers the preset trees
+ * through it); throws on any issue (a built-in tree that fails tier 1 is a bug).
+ */
+export function registeredTree(tree: JsonValue, leaf: string, format: JsonFormat): JsonValue {
   const issues: Issue[] = [];
   const clone = checkJson(tree, leaf, issues, format);
   if (clone === undefined) throw new Error(`the default ${leaf} tree fails tier 1: ${issues.map((i) => `${i.path} ${i.code}`).join(', ')}`);

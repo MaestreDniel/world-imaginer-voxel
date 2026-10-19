@@ -20,7 +20,7 @@
  * to SP10.
  * SP3e (its spec §11, §13): §10's SP3e entry names its spec and no longer defers its deliverable, exit and cut line to it
  * (the cut line is the islands' own surface branch, → SP12); it lands with the first commit. §1's `gen/column/` entry
- * names `islands.ts`, which exists (it lands with the file).
+ * names `islands.ts`, and its `core/params/` entry `presetTrees.ts`, which exist (each lands with its file).
  */
 import { existsSync, readdirSync, readFileSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
@@ -309,5 +309,12 @@ describe('master spec amendments (SP3e §11, §13)', () => {
     expect(entry, 'no `column/climate.ts …` entry under gen/ in §1').not.toBe('');
     expect(entry).toMatch(/\sislands\.ts(\s|$)/);
     expect(existsSync(`${ROOT_DIR}src/gen/column/islands.ts`), 'src/gen/column/islands.ts does not exist').toBe(true);
+  });
+
+  test('§1\'s core/params entry names presetTrees.ts (the preset trees), which exists', () => {
+    const entry = layoutEntry(/^\s+params\/defaultTrees\.ts\s/);
+    expect(entry, 'no `params/defaultTrees.ts …` entry under core/ in §1').not.toBe('');
+    expect(entry).toMatch(/\spresetTrees\.ts(\s|$)/);
+    expect(existsSync(`${ROOT_DIR}src/core/params/presetTrees.ts`), 'src/core/params/presetTrees.ts does not exist').toBe(true);
   });
 });

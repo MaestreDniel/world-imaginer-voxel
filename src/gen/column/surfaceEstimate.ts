@@ -1,6 +1,7 @@
 /**
  * surfaceEst3 (SP3b spec §5, master §3.7): the 3D surface estimate, a search of the density's `terrain` tap
- * (interpolated, without `detail`) through the probe. Used for voxels and T5 only: the ColumnSample's `surfaceEst`
+ * (interpolated, without `detail`) through the probe. Used for voxels, T5 and the spawn's y under a non-default density
+ * tree (`spawn.ts`, SP3e spec §1.2) only: the ColumnSample's `surfaceEst`
  * (map, biome picker, column stage) stays the 2D `offset`. Not cached (the quart-lattice cache comes with its first
  * consumer, SP4-SP7). Follows the gen determinism rules.
  */
