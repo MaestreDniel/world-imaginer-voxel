@@ -3,7 +3,9 @@
  * `core/params/presetTrees.ts` (its refusals and its registration), and `AMPLIFIED_DENSITY_TREE` = the default density
  * tree with exactly §1.2's six path replacements: identity across `resolveProfile`, node count, tier 2, the static costs,
  * the inspector's cost lint, the y ≥ 316 bound on the largest-offset column of a 4,096-column scan, compiled == reference
- * and probe == bulk on columns with offset0 ≥ 180 (voxels and corners in y 296-319), and `surfaceEst3`.
+ * and probe == bulk on columns with offset0 ≥ 180 (voxels and corners in y 296-319), and `surfaceEst3`; and
+ * `FLOATING_DENSITY_TREE` (§3.1, §3.4, D3, D4) = the default with exactly `root.b.x` replaced: identity, node count,
+ * tier 2, the static costs and the lint (its real columns are `floatingIslands.test.ts`').
  */
 import { describe, expect, test } from 'vitest';
 import { fnv1a32 } from '../../src/core/hash';
@@ -12,7 +14,7 @@ import { DEFAULTS } from '../../src/core/params/defaults';
 import { DEFAULT_DENSITY_TREE, DEFAULT_SURFACE_RULES } from '../../src/core/params/defaultTrees';
 import { checkJson, countTreeNodes, type JsonValue } from '../../src/core/params/json';
 import type { Issue } from '../../src/core/params/kit';
-import { AMPLIFIED_DENSITY_TREE, deriveTree } from '../../src/core/params/presetTrees';
+import { AMPLIFIED_DENSITY_TREE, deriveTree, FLOATING_DENSITY_TREE } from '../../src/core/params/presetTrees';
 import { resolveProfile } from '../../src/core/params/profiles';
 import type { Params } from '../../src/core/params/schema';
 import { Xoshiro128 } from '../../src/core/rng';
@@ -340,5 +342,58 @@ describe('amplified lakes hold water (seed 42; SP3e spec §1.2, Review Focus)', 
       }
     }
     expect(compared).toBe(8 * 256);
+  });
+});
+
+/** SP3e spec §3.1's replacement of `root.b.x`, written as the spec writes it (`op` first). */
+const ISLANDS_BODY = { op: 'mul', a: { op: 'const', v: 20 }, b:
+  { op: 'add',
+    a: { op: 'add',
+      a: { op: 'add', a: { op: 'noise', id: 'islands' }, b: { op: 'const', v: -0.9 } },
+      b: { op: 'neg', x: { op: 'mul', a: { op: 'const', v: 3 }, b:
+        { op: 'square', x: { op: 'mul', a: { op: 'add', a: { op: 'y' }, b: { op: 'const', v: -230 } },
+          b: { op: 'const', v: 0.025 } } } } } },
+    b: { op: 'mul', a: { op: 'const', v: 4 }, b: { op: 'add', a: { op: 'col', field: 'islandMask' }, b: { op: 'const', v: -1 } } } } };
+const ISLANDS_TERM = { op: 'interpolated', x:
+  { op: 'rangeChoice', x: { op: 'col', field: 'islandMask' }, lo: 0.25, hi: 2,
+    inside: { op: 'rangeChoice', x: { op: 'y' }, lo: 192, hi: 265,
+      inside: ISLANDS_BODY,
+      outside: { op: 'const', v: -1000000 } },
+    outside: { op: 'const', v: -1000000 } } };
+
+describe('FLOATING_DENSITY_TREE (SP3e spec §3.1, §3.3, §3.4, D3, D4, D12, D13)', () => {
+  const floating = resolveProfile('floating_islands');
+
+  test('the overlay holds the registered tree; resolveProfile keeps its identity; checkJson returns it as itself', () => {
+    expect(floating.density.defs).toBe(FLOATING_DENSITY_TREE);
+    expect(resolveProfile('floating_islands').density.defs).toBe(FLOATING_DENSITY_TREE);
+    expect(Object.isFrozen(FLOATING_DENSITY_TREE)).toBe(true);
+    expect(checkJson(FLOATING_DENSITY_TREE, 'density.defs', [], 'density')).toBe(FLOATING_DENSITY_TREE);
+    expect(floating.islands.enabled).toBe(true);
+  });
+
+  test('a canonical diff against the default lists exactly root.b.x, replaced by §3.1\'s term; the root keeps the default\'s shape', () => {
+    expect(treeDiff(DEFAULT_DENSITY_TREE, FLOATING_DENSITY_TREE)).toEqual(['root.b.x']);
+    expect(canonicalJSON(nodeAt(FLOATING_DENSITY_TREE, 'root.b.x'))).toBe(canonicalJSON(ISLANDS_TERM));
+    expect(nodeAt(FLOATING_DENSITY_TREE, 'root')).toMatchObject({ op: 'max' });
+    expect(nodeAt(FLOATING_DENSITY_TREE, 'root.a.a')).toMatchObject({ op: 'tap', name: 'terrain' });
+    expect(nodeAt(FLOATING_DENSITY_TREE, 'root.b')).toMatchObject({ op: 'tap', name: 'islands' });
+    // 0.025 is the double nearest 1/40, the one recip(const 40) gives (§3.1).
+    expect(0.025).toBe(1 / 40);
+    expect(nodeAt(DEFAULT_DENSITY_TREE, 'root.b.x')).toEqual({ op: 'const', v: -1e6 });
+  });
+
+  test('87 nodes (BODY 21, the replacement 28); tier 2 []; the inspector\'s cost lint does not fire', () => {
+    expect(countTreeNodes(ISLANDS_BODY as JsonValue, 'density')).toBe(21);
+    expect(countTreeNodes(FLOATING_DENSITY_TREE, 'density')).toBe(87);
+    expect(validateParamTrees(floating)).toEqual([]);
+    expect(treeLints(floating)).toEqual([]);
+  });
+
+  test('static costs: structural 549, column 15,096,567, work 905 (§3.4\'s computed figures, measured)', () => {
+    const t = FLOATING_DENSITY_TREE as unknown as { root: unknown; defs: unknown };
+    expect(structuralCost(t.root, t.defs)).toBe(549);
+    expect(densityColumnCost(FLOATING_DENSITY_TREE)).toBe(15_096_567);
+    expect(workCost(resolveDensity(FLOATING_DENSITY_TREE, floating), floating)).toBe(905);
   });
 });

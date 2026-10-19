@@ -20,6 +20,7 @@
     "density.detailAmpHi": "number",
     "density.detailAmpLo": "number",
     "density.noises.detail": "noise",
+    "density.noises.islands": "noise",
     "density.noises.jag": "noise",
     "density.noises.overhang": "noise",
     "islands.enabled": "bool",

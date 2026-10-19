@@ -10,8 +10,9 @@
  * intended class first), with no witness search: its output is a whole generated column. Follows the core
  * determinism rules (DET_FILES in test/arch/rules/banned.ts).
  * SP3e (its spec §5.6): a `bool` leaf's perturbation is its negation; the shape digest hashes islandMask; the `islands.*`
- * leaves, dead on the default base (the mask is off), are decided on a floating_islands base at an island class column
- * found by its own stream, so the 21 class columns and their stream stay.
+ * leaves and `density.noises.islands` (NI), dead on the default base (the mask is off, no default tree reads NI), are
+ * decided on a floating_islands base at an island class column found by its own stream (NI through the T column's
+ * region hash), so the 21 class columns and their stream stay.
  */
 import { SEA_LEVEL } from '../core/constants';
 import { fnv1a32, hash4, hashF64, hex64 } from '../core/hash';
@@ -122,8 +123,11 @@ const LATTICE_REACH = 12;
 /** Coast columns: a lattice point with |offset0 − 63| ≤ 8. */
 const COAST_BAND = 8;
 const OUTPUT_STAGES: readonly string[] = ['climate', 'shape', 'biome2d', 'terrain'];
-/** The class columns a `terrain` leaf is tried on (SP3b spec §3.3, SP3c spec §3.5). */
-const TERRAIN_CLASSES: readonly LivenessClass[] = ['land', 'coast', ...SURFACE_CLASSES];
+/**
+ * The class columns a `terrain` leaf is tried on (SP3b spec §3.3, SP3c spec §3.5), and the islands base's island column
+ * for `density.noises.islands` (SP3e spec §5.6; the default base has no island column).
+ */
+const TERRAIN_CLASSES: readonly LivenessClass[] = ['land', 'coast', ...SURFACE_CLASSES, 'island'];
 /** One column's store: ≤ 24 dense block sections (1 MiB holds 128) and ≤ 26 byte slots (1 MiB holds 256). */
 const STORE_BYTES = 1 << 20;
 const CLASS_ORDER: readonly LivenessClass[] = [
@@ -153,8 +157,8 @@ const ISLAND_RANGE = 2048;
 const ISLAND_DRAWS = 4096;
 const ISLAND_CORE = 0.75;
 
-/** The leaves decided on the islands base (SP3e spec §5.6): the `islands` group. */
-const isIslandLeaf = (path: string): boolean => path.startsWith('islands.');
+/** The leaves decided on the islands base (SP3e spec §5.6): the `islands` group and NI, `density.noises.islands`. */
+const isIslandLeaf = (path: string): boolean => path.startsWith('islands.') || path === 'density.noises.islands';
 
 /** The class whose columns are meant to exercise a leaf (named when the leaf is dead). */
 export function intendedClass(path: string): LivenessClass {

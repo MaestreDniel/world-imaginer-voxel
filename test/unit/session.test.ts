@@ -2,7 +2,7 @@ import { describe, expect, test } from 'vitest';
 import { canonicalJSON } from '../../src/core/params/canonical';
 import { DEFAULTS } from '../../src/core/params/defaults';
 import { DEFAULT_DENSITY_TREE } from '../../src/core/params/defaultTrees';
-import { AMPLIFIED_DENSITY_TREE } from '../../src/core/params/presetTrees';
+import { AMPLIFIED_DENSITY_TREE, FLOATING_DENSITY_TREE } from '../../src/core/params/presetTrees';
 import { resolveProfile } from '../../src/core/params/profiles';
 import { seedFromInput } from '../../src/core/seed';
 import { HISTORY_STEPS, WorldSession, type SessionState } from '../../src/engine/session';
@@ -166,6 +166,16 @@ describe('reset and modified', () => {
     const back = w.reset('density.defs');
     expect(back.ok && [back.state.patch, w.modified('density.defs')]).toEqual([{}, false]);
     expect(w.state.params.density.defs).toBe(AMPLIFIED_DENSITY_TREE);
+  });
+  test('on floating_islands, reset(\'density.defs\') returns the preset\'s tree by identity (SP3e spec §1.1)', () => {
+    const w = session();
+    expect(w.setProfile('floating_islands').ok).toBe(true);
+    expect(w.state.params.density.defs).toBe(FLOATING_DENSITY_TREE);
+    const r = w.set('density.defs', DEFAULT_DENSITY_TREE);
+    expect(r.ok && r.state.params.density.defs).toBe(DEFAULT_DENSITY_TREE);
+    const back = w.reset('density.defs');
+    expect(back.ok && [back.state.patch, w.modified('density.defs')]).toEqual([{}, false]);
+    expect(w.state.params.density.defs).toBe(FLOATING_DENSITY_TREE);
   });
   test('modified and modifiedCount on leaves, noise leaves, groups and the root', () => {
     const w = session();

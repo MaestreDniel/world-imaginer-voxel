@@ -120,3 +120,41 @@ export const AMPLIFIED_DENSITY_TREE: JsonValue = deriveTree(DEFAULT_DENSITY_TREE
   { path: 'root.a.a.x.x.b.x.a.v', was: 2, by: 3 },
   { path: 'root.a.a.x.x.b.x.b.b.b.v', was: -296, by: -270 },
 ]);
+
+const y = (): JsonValue => ({ op: 'y' });
+const add = (a: JsonValue, b: JsonValue): JsonValue => ({ op: 'add', a, b });
+const mul = (a: JsonValue, b: JsonValue): JsonValue => ({ op: 'mul', a, b });
+const rangeChoice = (x: JsonValue, lo: number, hi: number, inside: JsonValue, outside: JsonValue): JsonValue =>
+  ({ op: 'rangeChoice', x, lo, hi, inside, outside });
+
+/**
+ * floating_islands' islands term (SP3e spec §3.1, D3, D4): BODY = 20·(NI − 0.9 − 3·q + 4·(m − 1)), q = ((y − 230)·0.025)²
+ * (no subtraction or division in the op set; 0.025 is the double nearest 1/40), m = `col islandMask`, NI the
+ * `density.noises.islands` noise. Inside `interpolated` (NI sampled at the 4 × 8 × 4 corners only), gated by
+ * `rangeChoice` on m ≥ 0.25 and on the corner y in [192, 265) (the corners 192 … 264), −1e6 elsewhere. With a = 3 ≥
+ * clampSigma, k = 4 and c = 0.9 both gates are exact (§3.2: BODY ≤ 0 at the corners 184, 264 + 8 and beyond, and
+ * wherever m ≤ 0.475), so island voxels lie in y 193-263, above `ISLAND_RUN_MIN_BOTTOM`.
+ */
+const ISLANDS_TERM: JsonValue = {
+  op: 'interpolated',
+  x: rangeChoice(col('islandMask'), 0.25, 2,
+    rangeChoice(y(), 192, 265,
+      mul(num(20), add(
+        add(
+          add({ op: 'noise', id: 'islands' }, num(-0.9)),
+          { op: 'neg', x: mul(num(3), { op: 'square', x: mul(add(y(), num(-230)), num(0.025)) }) },
+        ),
+        mul(num(4), add(col('islandMask'), num(-1))),
+      )),
+      num(-1000000)),
+    num(-1000000)),
+};
+
+/**
+ * floating_islands (SP3e spec §3.1): the default density tree with the islands tap's child `root.b.x` (const −1e6)
+ * replaced by the islands term. The root stays `max(add(tap terrain, detail), tap islands)`; the tap stays outside
+ * `interpolated`, so its child is a sibling of the terrain's `interpolated` and its mute writes −1e6. 87 nodes.
+ */
+export const FLOATING_DENSITY_TREE: JsonValue = deriveTree(DEFAULT_DENSITY_TREE, 'density.defs', 'density', [
+  { path: 'root.b.x', was: num(-1000000), by: ISLANDS_TERM },
+]);

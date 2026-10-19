@@ -112,6 +112,8 @@ export const ROOT = group('Parameters', 'World generation parameters.', {
       jag: densityNoise('Jag noise', 'Ridges of jagged peaks: J = (1 − |z / clampSigma|)², times the jag spline.', { wavelength: 28, octaves: 2 }, 2, { min: 16, max: 8192 }),
       overhang: densityNoise('Overhang noise', '3D surface displacement, times σ and the vertical slide. Its vertical wavelength is λ / yScale; keep its last octave at 16 blocks or more (2 × the 8-block vertical corner step).', { wavelength: 32, octaves: 2, yScale: 1, persistence: 0.65 }, 3, { min: 16, max: 8192 }),
       detail: densityNoise('Detail noise', 'Small 3D surface detail outside the interpolation, times the detail amplitude.', { wavelength: 10, octaves: 1 }, 3, { min: 4, max: 256 }),
+      // SP3e spec §2.1, §3.1: NI of FLOATING_DENSITY_TREE (λxz 72, λy 36); after `detail`, so no earlier draw moves.
+      islands: densityNoise('Island noise', 'NI of the floating_islands islands term, sampled at the 4 × 8 × 4 corners; vertical wavelength λ / yScale. The preset\'s band window and cluster gate are exact for clampSigma ≤ 3; above, they cut where NI > 3.', { wavelength: 72, octaves: 2, yScale: 2 }, 3, { min: 16, max: 8192 }),
     }),
     detailAmpLo: amp(0.6, 'Detail amplitude at E −1', 'Detail amplitude in blocks where E ≤ −1.'),
     detailAmpHi: amp(1.5, 'Detail amplitude at E +1', 'Detail amplitude in blocks where E ≥ 1; linear in (E + 1) / 2 between the two.'),

@@ -20,13 +20,16 @@
  * to SP10.
  * SP3e (its spec §11, §13): §10's SP3e entry names its spec and no longer defers its deliverable, exit and cut line to it
  * (the cut line is the islands' own surface branch, → SP12); it lands with the first commit. §1's `gen/column/` entry
- * names `islands.ts`, and its `core/params/` entry `presetTrees.ts`, which exist (each lands with its file).
+ * names `islands.ts`, and its `core/params/` entry `presetTrees.ts`, which exist (each lands with its file). §6.4's U2
+ * row states the leaf count U2 covers (the schema's climate, shape, biome2d and terrain leaves: 73 with
+ * `density.noises.islands`), and §3.6 sends the islands term to the SP3e spec §3 (both land with `FLOATING_DENSITY_TREE`).
  */
 import { existsSync, readdirSync, readFileSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
 import { describe, expect, test } from 'vitest';
 import { SUB_PROJECTS, type SubProjectId } from '../../src/core/ids';
 import { DEFAULTS } from '../../src/core/params/defaults';
+import { SCHEMA } from '../../src/core/params/schema';
 import { PIN_MAX } from '../../src/ui/inspector/sliceModel';
 import { REGISTRY } from '../../src/world/blocks';
 import { BENCH_ROWS } from '../bench/gates';
@@ -309,6 +312,15 @@ describe('master spec amendments (SP3e §11, §13)', () => {
     expect(entry, 'no `column/climate.ts …` entry under gen/ in §1').not.toBe('');
     expect(entry).toMatch(/\sislands\.ts(\s|$)/);
     expect(existsSync(`${ROOT_DIR}src/gen/column/islands.ts`), 'src/gen/column/islands.ts does not exist').toBe(true);
+  });
+
+  test('§6.4\'s U2 row covers the schema\'s U2 leaves (73) and §3.6 sends the islands term to the SP3e spec §3', () => {
+    const u2 = text.split('\n').find((l) => l.startsWith('| U2 |'));
+    expect(u2, 'no U2 row in §6.4').toBeDefined();
+    const n = SCHEMA.leaves.filter((l) => l.meta.stage !== undefined && ['climate', 'shape', 'biome2d', 'terrain'].includes(l.meta.stage)).length;
+    expect(n).toBe(73);
+    expect(u2).toContain(`the islands leaves are decided on a floating_islands island column; U2 covers ${n} leaves (amended by SP3e)`);
+    expect(text).toContain('- `islands` is `−1e6` except in the floating_islands preset (SP3e) (SP3e spec §3).');
   });
 
   test('§1\'s core/params entry names presetTrees.ts (the preset trees), which exists', () => {

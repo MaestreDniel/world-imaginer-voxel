@@ -140,7 +140,8 @@ describe('perturbations', () => {
   test('density leaves (SP3b spec §3.3): every perturbation stays inside the leaf range (the json leaf has none)', () => {
     const density = SCHEMA.leaves.filter((l) => l.path.startsWith('density.'));
     expect(density.map((l) => l.path)).toEqual([
-      'density.noises.jag', 'density.noises.overhang', 'density.noises.detail', 'density.detailAmpLo', 'density.detailAmpHi', 'density.defs',
+      'density.noises.jag', 'density.noises.overhang', 'density.noises.detail', 'density.noises.islands', 'density.detailAmpLo',
+      'density.detailAmpHi', 'density.defs',
     ]);
     for (const info of density.filter((l) => l.leaf.kind !== 'json')) {
       const lo = info.leaf.min!;
@@ -293,7 +294,7 @@ describe('class columns', () => {
     for (const p of ['surface.noises.patch', 'surface.patchThreshold']) expect(intendedClass(p), p).toBe('patch');
     for (const p of ['surface.noises.depth', 'surface.depthMul']) expect(intendedClass(p), p).toBe('land');
     expect(intendedClass('surface.noises.bandOffset')).toBe('badlands');
-    for (const p of ['islands.enabled', 'islands.noise', 'islands.lo', 'islands.hi']) expect(intendedClass(p), p).toBe('island');
+    for (const p of ['density.noises.islands', 'islands.enabled', 'islands.noise', 'islands.lo', 'islands.hi']) expect(intendedClass(p), p).toBe('island');
   });
 });
 
@@ -407,15 +408,18 @@ describe('the terrain stage in U2 (SP3b spec §3.3)', () => {
     expect(u2Leaves().map((l) => l.path)).toEqual(expected);
     expect(expected).toEqual(expect.arrayContaining(surface.map((l) => l.path)));
     const density = SCHEMA.leaves.filter((l) => l.path.startsWith('density.'));
-    expect(density.length).toBe(6);
+    expect(density.length).toBe(7);
     for (const l of density) expect(l.meta.stage, l.path).toBe('terrain');
     expect(expected).toEqual(expect.arrayContaining(density.map((l) => l.path)));
     expect(intendedClass('density.detailAmpLo')).toBe('land');
     for (const p of ['density.defs', 'surface.rules']) expect(intendedClass(p), p).toBe('land');
   });
 
-  test('every density.* leaf is decided on a land or coast column', () => {
-    const density = SCHEMA.leaves.filter((l) => l.path.startsWith('density.'));
+  test('every density.* leaf but density.noises.islands is decided on a land or coast column; NI is dead on the default base', () => {
+    const density = SCHEMA.leaves.filter((l) => l.path.startsWith('density.') && l.path !== 'density.noises.islands');
+    expect(density.length).toBe(6);
+    // No default tree reads NI (SP3e spec §5.6): it is decided on the islands base (below).
+    expect(leafLiveness(CTX, 'density.noises.islands', columns())).toEqual({ path: 'density.noises.islands', live: false, via: null, cls: 'island' });
     for (const l of density) {
       const r = leafLiveness(CTX, l.path, columns());
       expect(r.live, `${l.path}: ${r.via ?? 'dead'}`).toBe(true);
@@ -458,10 +462,10 @@ describe('the islands base (SP3e spec §5.6)', () => {
     return found!;
   };
 
-  test('the islands leaves are the islands.* group, decided apart; U2 covers 72 leaves', () => {
-    expect(islandLeaves().map((l) => l.path)).toEqual(['islands.enabled', 'islands.noise', 'islands.lo', 'islands.hi']);
-    expect(u2Leaves().length).toBe(72);
-    expect(u2Leaves().slice(-4)).toEqual(islandLeaves());
+  test('the islands leaves are density.noises.islands and the islands.* group, decided apart; U2 covers 73 leaves', () => {
+    expect(islandLeaves().map((l) => l.path)).toEqual(['density.noises.islands', 'islands.enabled', 'islands.noise', 'islands.lo', 'islands.hi']);
+    expect(u2Leaves().length).toBe(73);
+    expect(u2Leaves().slice(-4)).toEqual(islandLeaves().slice(1));
   });
 
   test('the island column: the first draw of U2.islands whose lattice holds 0 < m < 1 and m ≥ 0.75 and on which every islands leaf acts', () => {
@@ -477,7 +481,7 @@ describe('the islands base (SP3e spec §5.6)', () => {
     expect(at).toBe(ISLAND_DRAW);
   });
 
-  test('every islands.* leaf is live on the island column, through the shape digest (islandMask is hashed)', () => {
+  test('every islands leaf is live on the island column: islands.* through the shape digest, NI through the T column', () => {
     const c = island();
     for (const l of islandLeaves()) {
       expect(leafLiveness(ISLANDS, l.path, [c]), l.path).toEqual({ path: l.path, live: true, via: `island column (${c.cx}, ${c.cz})`, cls: 'island' });

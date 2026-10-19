@@ -330,7 +330,9 @@ describe('ref ↔ literal on every numeric field, and neg', () => {
     }
     expect(refOptions(DEFAULTS, true).map((o) => o.path)).toEqual(['surface.lapseBase', 'surface.cliffMinY']);
     expect(refOptions(DEFAULTS, false).map((o) => o.path)).toEqual([...ALLOWED_REF_TARGETS.keys()]);
-    expect(refOptions(DEFAULTS, false)[3]).toEqual({ path: 'density.detailAmpLo', label: `density.detailAmpLo = ${String(lo)}`, value: lo, int: false });
+    // SP3e adds density.noises.islands.clampSigma after the three SP3b noises (SP3e spec §2.1).
+    expect(refOptions(DEFAULTS, false)[3]).toEqual({ path: 'density.noises.islands.clampSigma', label: 'density.noises.islands.clampSigma = 3', value: 3, int: false });
+    expect(refOptions(DEFAULTS, false)[4]).toEqual({ path: 'density.detailAmpLo', label: `density.detailAmpLo = ${String(lo)}`, value: lo, int: false });
   });
   test('a non-int target in an int field is refused at commit (PARAM_KIND)', () => {
     const w = session();
@@ -346,7 +348,7 @@ describe('the fields of a node', () => {
     const keys = (q: Params, path: string) => formFields(q, D(path)).map((f) => `${f.type}:${f.key}`);
     const q = withDensity(tree({ op: 'add', a: { op: 'noise', id: 'overhang' }, b: { op: 'ref', name: 'd' } }, { d: { op: 'col', field: 'E' } }));
     expect(keys(q, 'defs.d')).toEqual(['name:defName', 'select:field']);
-    expect(formFields(q, D('root.a'))).toEqual([{ type: 'select', key: 'id', value: 'overhang', options: ['overhang', 'detail'] }]);
+    expect(formFields(q, D('root.a'))).toEqual([{ type: 'select', key: 'id', value: 'overhang', options: ['overhang', 'detail', 'islands'] }]);
     expect(formFields(q, D('root.b'))).toEqual([{ type: 'select', key: 'name', value: 'd', options: ['d'] }]);
     expect(keys(withDensity((toggleMute(DEFAULTS, D('root.b')) as { value: unknown }).value), 'root.b')).toEqual(['name:name', 'number:mute']);
     expect(keys(DEFAULTS, 'root.a')).toEqual([]);

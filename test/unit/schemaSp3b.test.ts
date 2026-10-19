@@ -13,6 +13,7 @@ describe('SP3b density group (spec §3.3)', () => {
       'density.noises.jag:noise:terrain:terrain',
       'density.noises.overhang:noise:terrain:terrain',
       'density.noises.detail:noise:terrain:terrain',
+      'density.noises.islands:noise:terrain:terrain',
       'density.detailAmpLo:number:terrain:terrain',
       'density.detailAmpHi:number:terrain:terrain',
       'density.defs:json:terrain:terrain',
@@ -24,6 +25,11 @@ describe('SP3b density group (spec §3.3)', () => {
     expect(metaOf('density.noises.jag')).toMatchObject({ dims: 2, min: 16, max: 8192 });
     expect(metaOf('density.noises.overhang')).toMatchObject({ dims: 3, min: 16, max: 8192 });
     expect(metaOf('density.noises.detail')).toMatchObject({ dims: 3, min: 4, max: 256 });
+    // SP3e spec §2.1, §3.1: NI of the floating_islands islands term.
+    expect(metaOf('density.noises.islands')).toMatchObject({
+      dims: 3, min: 16, max: 8192, label: 'Island noise',
+      doc: 'NI of the floating_islands islands term, sampled at the 4 × 8 × 4 corners; vertical wavelength λ / yScale. The preset\'s band window and cluster gate are exact for clampSigma ≤ 3; above, they cut where NI > 3.',
+    });
     for (const p of ['density.detailAmpLo', 'density.detailAmpHi']) expect(metaOf(p)).toMatchObject({ min: 0, max: 8, step: 0.05, unit: 'blocks' });
   });
 
@@ -33,6 +39,9 @@ describe('SP3b density group (spec §3.3)', () => {
     expect(n(d.noises.jag)).toEqual([28, 2, 1, 0.5, 'none', 3, true]);
     expect(n(d.noises.overhang)).toEqual([32, 2, 1, 0.65, 'none', 3, true]);
     expect(n(d.noises.detail)).toEqual([10, 1, 1, 0.5, 'none', 3, true]);
+    // SP3e spec §2.1: NI λxz 72, λy 72 / 2 = 36 (octave λy 36 and 18 ≥ 16, the 2 × corner-step rule).
+    expect(n(d.noises.islands)).toEqual([72, 2, 2, 0.5, 'none', 3, true]);
+    expect(d.noises.islands.wavelength / d.noises.islands.yScale).toBe(36);
     // λy = λ / yScale = 32 (spec §3.3 had λ 80, λy 64 before the retune).
     expect(d.noises.overhang.wavelength / d.noises.overhang.yScale).toBe(32);
     expect([d.detailAmpLo, d.detailAmpHi]).toEqual([0.6, 1.5]);
@@ -40,7 +49,7 @@ describe('SP3b density group (spec §3.3)', () => {
 
   test('the noise instances: seed names are the leaf paths, with their dims', () => {
     const inst = noiseInstances(SCHEMA, DEFAULTS).filter((i) => i.path.startsWith('density.'));
-    expect(inst.map((i) => `${i.seedName}|${i.dims}`)).toEqual(['density.noises.jag|2', 'density.noises.overhang|3', 'density.noises.detail|3']);
+    expect(inst.map((i) => `${i.seedName}|${i.dims}`)).toEqual(['density.noises.jag|2', 'density.noises.overhang|3', 'density.noises.detail|3', 'density.noises.islands|3']);
   });
 
   test('a 2D jag noise refuses yScale ≠ 1; the 3D noises accept it', () => {
@@ -53,14 +62,14 @@ describe('SP3b density group (spec §3.3)', () => {
     // jag is 2D with double: true, so only this rule stops 'uniform' (a preset, a URL or the panel's remap select).
     const jag = applyPatch(SCHEMA, DEFAULTS, { density: { noises: { jag: { remap: 'uniform' } } } });
     expect(jag.ok ? [] : jag.issues.map((i) => `${i.path} ${i.code}`)).toEqual(['density.noises.jag.remap REMAP_NOT_ALLOWED']);
-    for (const id of ['overhang', 'detail'] as const) {
+    for (const id of ['overhang', 'detail', 'islands'] as const) {
       const r = applyPatch(SCHEMA, DEFAULTS, { density: { noises: { [id]: { remap: 'uniform' } } } });
       expect(r.ok ? [] : r.issues.map((i) => `${i.path} ${i.code}`)).toEqual([`density.noises.${id}.remap REMAP_NOT_ALLOWED`]);
     }
     // ... and SP3c's surface noises (schemaSp3c.test.ts).
     expect(PARAM_META.filter((m) => m.remapNone === true).map((m) => m.path)).toEqual([
-      'density.noises.jag', 'density.noises.overhang', 'density.noises.detail', 'surface.noises.depth', 'surface.noises.patch',
-      'surface.noises.bandOffset',
+      'density.noises.jag', 'density.noises.overhang', 'density.noises.detail', 'density.noises.islands', 'surface.noises.depth',
+      'surface.noises.patch', 'surface.noises.bandOffset',
     ]);
     // A 2D noise outside the density group keeps 'uniform'.
     expect(applyPatch(SCHEMA, DEFAULTS, { lakes: { rimNoise: { remap: 'uniform' } } }).ok).toBe(true);

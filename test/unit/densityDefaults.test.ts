@@ -89,7 +89,7 @@ describe('DensityContext (spec §2.3)', () => {
         expect(n.z3(x, y, z)).toBe(nn.z3(x, y, z));
       }
     }
-    expect(SCHEMA_DENSITY_NOISES).toEqual([{ id: 'jag', dims: 2 }, { id: 'overhang', dims: 3 }, { id: 'detail', dims: 3 }]);
+    expect(SCHEMA_DENSITY_NOISES).toEqual([{ id: 'jag', dims: 2 }, { id: 'overhang', dims: 3 }, { id: 'detail', dims: 3 }, { id: 'islands', dims: 3 }]);
     expect(src('climate.C')).toBeUndefined();
     expect(src('nope')).toBeUndefined();
   });

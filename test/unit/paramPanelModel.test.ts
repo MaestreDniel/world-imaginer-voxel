@@ -89,7 +89,7 @@ describe('panel tree', () => {
     expect(log.sort()).toEqual([
       'climate.C', 'climate.E', 'climate.H', 'climate.R', 'climate.T', 'climate.W', 'climate.scaleMul',
       'climate.warp.C.noise', 'climate.warp.R.noise', 'climate.warp.shift.noise',
-      'density.noises.detail', 'density.noises.jag', 'density.noises.overhang',
+      'density.noises.detail', 'density.noises.islands', 'density.noises.jag', 'density.noises.overhang',
       'islands.noise',
       'lakes.cell', 'lakes.depthMin', 'lakes.radius', 'lakes.rimNoise', 'lakes.rimWidth', 'lakes.warpNoise',
       'rivers.widthMin', 'rivers.widthNoise',

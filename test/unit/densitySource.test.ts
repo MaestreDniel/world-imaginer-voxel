@@ -33,12 +33,13 @@ describe('the source model (SP3d spec §1.3, §1.4)', () => {
     expect(ALLOWED_REF_TARGETS).toBeInstanceOf(Map);
     expect([...ALLOWED_REF_TARGETS.keys()]).toEqual([
       'density.noises.jag.clampSigma', 'density.noises.overhang.clampSigma', 'density.noises.detail.clampSigma',
-      'density.detailAmpLo', 'density.detailAmpHi',
+      'density.noises.islands.clampSigma', 'density.detailAmpLo', 'density.detailAmpHi',
       'surface.noises.depth.clampSigma', 'surface.noises.patch.clampSigma', 'surface.noises.bandOffset.clampSigma',
       'surface.depthMul', 'surface.snowline', 'surface.lapse', 'surface.lapseBase', 'surface.cliffSteep', 'surface.cliffMinY',
       'surface.patchThreshold',
     ]);
     expect(ALLOWED_REF_TARGETS.get(CS)).toEqual({ kind: 'number', lo: 1, hi: 8 });
+    expect(ALLOWED_REF_TARGETS.get('density.noises.islands.clampSigma')).toEqual({ kind: 'number', lo: 1, hi: 8 });
     expect(ALLOWED_REF_TARGETS.get(LO)).toEqual({ kind: 'number', lo: 0, hi: 8 });
     expect(ALLOWED_REF_TARGETS.get(SNOW)).toEqual({ kind: 'number', lo: -1, hi: 1 });
     expect(ALLOWED_REF_TARGETS.get('surface.lapseBase')).toEqual({ kind: 'int', lo: -64, hi: 319 });
