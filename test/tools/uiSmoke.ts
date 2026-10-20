@@ -1738,8 +1738,10 @@ async function runPresetProfiles(t: Smoke): Promise<void> {
         t.check(voxelReadoutOk(read) && read.includes(`, ${319 - island.groundRow}, `) && id !== null, `the ground under the island takes a surface rule (D21 (b)): ${read}`, read);
         await p.mouse('mouseMoved', 5, 5);
       }
-      const n = distinctColours((await openPresetMap(p, preset, 'islandMask')).rgba);
-      t.check(n >= 2, `floating_islands' islandMask layer around the window (4096² blocks, 16 blocks/px) draws ${n} colours (≥ 16 px each)`, n);
+      // Each colour must cover >= 1 % of the square: the spawn marker ring (32 px, #ff3b30) is an overlay, not mask data.
+      const minPx = Math.ceil(0.01 * PRESET_MAP.px * PRESET_MAP.px);
+      const n = distinctColours((await openPresetMap(p, preset, 'islandMask')).rgba, minPx);
+      t.check(n >= 2, `floating_islands' islandMask layer around the window (4096² blocks, 16 blocks/px) draws ${n} colours (≥ ${minPx} px = 1 % each)`, n);
     } else if (preset === 'archipelago') {
       const counts = biomePixels((await openPresetMap(p, preset, 'biome')).rgba);
       t.check(oceanAndLandOk(counts), `archipelago's biome layer around the window (4096² blocks): ocean ${counts.ocean}, land ${counts.land}, other ${counts.other} px`, counts);

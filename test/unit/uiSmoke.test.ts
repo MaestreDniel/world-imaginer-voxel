@@ -563,6 +563,9 @@ describe('UI smoke test: the preset profiles step and the preset shots (SP3e spe
     expect(distinctColours(img([[0x101010, 400], [0xff3b30, 16]]))).toBe(2);
     expect(distinctColours(img([[0x101010, 4], [0x202020, 4], [0x303030, 4]]), 4)).toBe(3);
     expect(distinctColours([])).toBe(0);
+    // A flat mask layer plus the 32-px spawn marker ring is one colour at the 1 % threshold of the 256² square (656 px), not two.
+    expect(distinctColours(img([[0x0d0887, 65536 - 32], [0xff3b30, 32]]), 656)).toBe(1);
+    expect(distinctColours(img([[0x0d0887, 65536 - 656], [0xf0f921, 656]]), 656)).toBe(2);
   });
 });
 
