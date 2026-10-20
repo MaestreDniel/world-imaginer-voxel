@@ -48,6 +48,13 @@
  *   - density drag: the biome-size slider dragged 5 → 6, held, → 7: at least one 32² draft is drawn during the drag;
  *   - density times: the browser wall times of the vertical 128² slice and of the horizontal one at extent 8192 (a
  *     control change, and three tree edits each, to the fresh 128²), and the URL length;
+ * - preset profiles (SP3e spec §8): archipelago, amplified and floating_islands, each opened by URL
+ *   (`mapHash({...START, profile, view})`) on its 1,024-block line along x centred on its golden window's centre
+ *   (`sp3eWindow`, seed 42; the review slice is the line's middle half): the profile select shows it among the five
+ *   ready profiles, the URL and the World tab name it, no page error, and the Voxels summary reports a ground top
+ *   ≥ 250 (amplified), ≥ 193 (floating_islands) or water on the line (archipelago); floating_islands' line holds an
+ *   island over ground whose top voxel takes a surface rule (D21 (b)), and its `islandMask` layer over 4096² blocks
+ *   around the window (16 blocks/px) draws ≥ 2 colours; archipelago's `biome` layer there holds ocean and land colours;
  * - console: no exception, console error or failed load, except the known favicon.ico 404; every step ran.
  * With --shots DIR it then writes the spec §12 screenshots into DIR, at seed 42 from a newly loaded page (the
  * repository keeps them re-saved as 256-colour palette PNGs, as SP1 and SP2a did), then the Voxels mode on the
@@ -58,7 +65,11 @@
  * `density-vertical-hover.png` (the vertical density slice, the pointer on a ground voxel: the readout and the form's
  * value at the hover agree), `density-muted-terrain.png`, `density-broken-json.png` (the issue line, the world
  * untouched), `density-horizontal-8192.png` and `density-stacked-800.png` (the viewport narrowed until the tab is
- * 800 px wide: the stacked layout).
+ * 800 px wide: the stacked layout), and last the SP3e preset shots (spec §8, committed to `assets/sp3e/`):
+ * `preset-archipelago.png`, `preset-amplified.png` and `preset-floating_islands.png` (the Voxels mode on each preset's
+ * line, the drawer at its tallest, the pointer on a top voxel — floating_islands' on the ground under an island), then
+ * `preset-archipelago-map.png` (`biome`) and `preset-floating_islands-islandMask.png` (`islandMask`): 4096 × 4096
+ * blocks centred on the window at 16 blocks/px, a 256 × 256 px clip of the map.
  * Options: --skip-build, --profile-dir DIR, --shots DIR. The exit code is 0 only when every check passes.
  */
 import { spawn, type ChildProcess, type SpawnOptions } from 'node:child_process';
@@ -214,6 +225,177 @@ export const MOUNTAIN_LINE = {
   b: [-640, 8],
 } as const satisfies { readonly view: MapUrlView; readonly a: readonly [number, number]; readonly b: readonly [number, number] };
 
+// ---------------------------------------------------------------- the draft presets (SP3e spec §8)
+
+/** The page's start state: seed 42, the default profile, view (0, 0, 64 blocks/px) on the biome layer. */
+export const START: MapUrlState = { v: 1, seed: '42', profile: 'default', patch: {}, view: { x: 0, z: 0, bpp: 64, layer: 'biome' } };
+
+/** The draft presets, in `PROFILE_IDS` order (a unit test keeps them equal to `WINDOW_PRESETS`). */
+export const SMOKE_PRESETS = ['archipelago', 'amplified', 'floating_islands'] as const;
+export type SmokePreset = (typeof SMOKE_PRESETS)[number];
+
+/** The profile select's options at SP3e: every ready profile in `PROFILE_IDS` order (`profileOptions()`; a unit test keeps them equal). */
+export const READY_PROFILES = ['default', 'large_biomes', 'archipelago', 'amplified', 'floating_islands'] as const;
+
+/**
+ * Each draft preset's golden window centre block on seed 42 (`sp3eWindow(p).centreX`, `.centreZ` of
+ * `src/metrics/sp3eGoldens.ts`; this tool runs under plain Node and cannot import `src/`, so a unit test keeps them equal).
+ */
+const PRESET_CENTRES = new Map<SmokePreset, readonly [number, number]>([
+  ['archipelago', [128, -128]],
+  ['amplified', [-640, 0]],
+  ['floating_islands', [-768, -1408]],
+]);
+
+/** A cut line the smoke draws: the map view it is drawn on and its ends A and B (blocks). */
+export interface SmokeLine { readonly view: MapUrlView; readonly a: readonly [number, number]; readonly b: readonly [number, number] }
+
+/** The window centre block of a draft preset (seed 42). */
+export function presetCentre(preset: SmokePreset): readonly [number, number] {
+  const c = PRESET_CENTRES.get(preset);
+  if (c === undefined) throw new RangeError(`${String(preset)} is not a draft preset`);
+  return c;
+}
+
+/**
+ * A preset's smoke line (SP3e spec §8 "The line"): 1,024 blocks along x centred on its window centre, drawn as the
+ * mountain line is (± 256 CSS px around the centre of a view at 2 blocks/px on the relief layer); the review slice's
+ * 512 blocks are its middle half.
+ */
+export function presetLine(preset: SmokePreset): SmokeLine {
+  const [x, z] = presetCentre(preset);
+  return { view: { x, z, bpp: 2, layer: 'relief' }, a: [x - 512, z], b: [x + 512, z] };
+}
+
+/** The URL state opening `profile` at `view`: the start state with that profile (`mapHash({...START, profile, view})`). */
+export function presetState(profile: string, view: MapUrlView): MapUrlState {
+  return { ...START, profile, view };
+}
+
+/** The highest ground top of a Voxels summary `ground top y LO to HI · …`, or null when the text is not a summary. */
+export function summaryTopMax(text: string): number | null {
+  const m = /^ground top y (-?\d+) to (-?\d+) · /.exec(text);
+  return m === null || !voxelSummaryOk(text) ? null : Number(m[2]);
+}
+
+/** The lowest highest-ground-top each preset's Voxels summary must report on its line (SP3e spec §8; none for archipelago). */
+export const PRESET_TOP_MIN = { amplified: 250, floating_islands: 193 } as const;
+
+/**
+ * A preset's Voxels summary on its line (SP3e spec §8): the summary format, then amplified a ground top ≥ 250 (its
+ * review line's top ≥ 250 is asserted by `goldens.sp3e.test.ts`), floating_islands a top ≥ 193 (an island: island
+ * voxels lie in y 193-263), archipelago water on the line (its window holds sea and land on the line).
+ */
+export function presetSummaryOk(preset: SmokePreset, text: string): boolean {
+  const top = summaryTopMax(text);
+  if (top === null) return false;
+  if (preset === 'amplified') return top >= PRESET_TOP_MIN.amplified;
+  if (preset === 'floating_islands') return top >= PRESET_TOP_MIN.floating_islands;
+  return / · water on /.test(text);
+}
+
+/** Column `i` of a 512 × 384 RGBA slice image (row-major), as `getImageData(i, 0, 1, 384).data` reads it: 384 pixels top down. */
+export function sliceColumn(rgba: ArrayLike<number>, i: number): number[] {
+  if (rgba.length !== 4 * 512 * 384) throw new Error(`a slice image is 512 × 384 RGBA pixels, not ${rgba.length} bytes`);
+  if (!Number.isInteger(i) || i < 0 || i > 511) throw new RangeError(`sliceColumn: sample ${i} outside 0 … 511`);
+  const out = new Array<number>(4 * 384);
+  for (let row = 0; row < 384; row++) for (let c = 0; c < 4; c++) out[4 * row + c] = rgba[4 * (row * 512 + i) + c]!;
+  return out;
+}
+
+/** A water surface's colour in the Voxels slice image (`VOXEL_COLORS.water`; a unit test keeps them equal). */
+export const WATER_RGB = [40, 92, 222] as const;
+
+/** True for a water pixel of the slice image: `WATER_RGB` darkened by a factor in [0.3, 1] (`voxelRgb`'s depth fade). */
+export function waterPixel(r: number, g: number, b: number): boolean {
+  const f = b / WATER_RGB[2];
+  return f >= 0.29 && f <= 1 && Math.abs(r - WATER_RGB[0] * f) <= 1 && Math.abs(g - WATER_RGB[1] * f) <= 1;
+}
+
+/** The lowest bottom voxel of an island run (`ISLAND_RUN_MIN_BOTTOM` in `src/core/constants.ts`; a unit test keeps them equal). */
+export const ISLAND_MIN_BOTTOM_Y = 181;
+
+/**
+ * In one sample column of the Voxels slice image (384 RGBA pixels top down, row 0 at y 319): the highest solid run,
+ * when it is an island (its bottom voxel at y ≥ `ISLAND_MIN_BOTTOM_Y`) with only air and water below it down to more
+ * ground, and the row of that ground's top voxel (the ground under the island, D21's shadow). Null otherwise.
+ */
+export function islandOverGround(column: ArrayLike<number>): { readonly islandTop: number; readonly islandBottom: number; readonly groundRow: number } | null {
+  if (column.length !== 4 * 384) throw new Error(`a sample column of the slice image is 384 RGBA pixels, not ${column.length} bytes`);
+  const sky = (row: number) => column[4 * row] === SKY_RGB[0] && column[4 * row + 1] === SKY_RGB[1] && column[4 * row + 2] === SKY_RGB[2];
+  const water = (row: number) => waterPixel(column[4 * row]!, column[4 * row + 1]!, column[4 * row + 2]!);
+  let row = 0;
+  while (row < 384 && sky(row)) row++;
+  if (row === 384 || water(row)) return null;
+  const top = row;
+  while (row < 384 && !sky(row) && !water(row)) row++;
+  const bottom = row - 1;
+  if (319 - bottom < ISLAND_MIN_BOTTOM_Y || row === 384) return null;
+  while (row < 384 && (sky(row) || water(row))) row++;
+  return row === 384 ? null : { islandTop: 319 - top, islandBottom: 319 - bottom, groundRow: row };
+}
+
+/** The biome layer's colours (`biomeColor`), with each biome's family, in `SURFACE_BIOMES` order (a unit test keeps them equal). */
+export const BIOME_RGB: ReadonlyArray<readonly ['ocean' | 'coast' | 'river' | 'lowland' | 'highland', number]> = [
+  ['ocean', 0x1f4f9a], ['ocean', 0x0f2f6a], ['ocean', 0x2a8fb0], ['ocean', 0x8fb4d8],
+  ['coast', 0xe8dca0], ['coast', 0xf2f0e6], ['coast', 0x8a8a84],
+  ['river', 0x3f76e4], ['river', 0xa0c4f0],
+  ['lowland', 0x8db360], ['lowland', 0xa8c96a], ['lowland', 0x3f7a2a], ['lowland', 0x6fa04a], ['lowland', 0x2a4a1c],
+  ['lowland', 0x3a6b4a], ['lowland', 0x5a7a6a], ['lowland', 0xe8eef2],
+  ['lowland', 0xe0c878], ['lowland', 0xbfb055], ['lowland', 0x4c6b3a], ['lowland', 0x2f8a1e], ['highland', 0xc1653a],
+  ['highland', 0x7c8a6a], ['highland', 0xd8e2ea], ['highland', 0x9a9a9a], ['highland', 0xc8d0dc], ['highland', 0xaec4e0],
+  ['highland', 0x5a2a24],
+];
+
+/**
+ * The pixels of an RGBA image whose colour is within `tol` per channel of a biome colour of the ocean family (`ocean`) or
+ * of a land family — coast, lowland, highland (`land`); river colours and every other pixel (a tile edge blended by the
+ * canvas's scaling, an overlay) count as `other`. The nearest biome colour decides.
+ */
+export function biomePixels(rgba: ArrayLike<number>, tol = 6): { readonly ocean: number; readonly land: number; readonly other: number } {
+  let ocean = 0;
+  let land = 0;
+  let other = 0;
+  for (let k = 0; k + 3 < rgba.length; k += 4) {
+    let best = Infinity;
+    let family = '';
+    for (const [f, c] of BIOME_RGB) {
+      const d = Math.max(Math.abs(rgba[k]! - (c >> 16)), Math.abs(rgba[k + 1]! - ((c >> 8) & 255)), Math.abs(rgba[k + 2]! - (c & 255)));
+      if (d < best) { best = d; family = f; }
+    }
+    if (best > tol || family === 'river') other++;
+    else if (family === 'ocean') ocean++;
+    else land++;
+  }
+  return { ocean, land, other };
+}
+
+/** The biome map region holds both ocean and land: each at least 1 % of its pixels (SP3e spec §8, archipelago's tile). */
+export function oceanAndLandOk(counts: { readonly ocean: number; readonly land: number; readonly other: number }): boolean {
+  const n = counts.ocean + counts.land + counts.other;
+  return n > 0 && counts.ocean >= 0.01 * n && counts.land >= 0.01 * n;
+}
+
+/** The number of distinct RGB colours covering at least `minPixels` pixels each (alpha ignored). */
+export function distinctColours(rgba: ArrayLike<number>, minPixels = 16): number {
+  const n = new Map<number, number>();
+  for (let k = 0; k + 3 < rgba.length; k += 4) {
+    const c = rgba[k]! * 65536 + rgba[k + 1]! * 256 + rgba[k + 2]!;
+    n.set(c, (n.get(c) ?? 0) + 1);
+  }
+  let out = 0;
+  for (const v of n.values()) if (v >= minPixels) out++;
+  return out;
+}
+
+/** The map region of the preset shots and checks (SP3e spec §8): 4096 × 4096 blocks centred on the window, 16 blocks/px. */
+export const PRESET_MAP = { bpp: 16, px: 256 } as const;
+
+/** The five preset screenshots `--shots` writes (SP3e spec §8), in the order they are taken. */
+export const PRESET_SHOTS = [
+  'preset-archipelago.png', 'preset-amplified.png', 'preset-floating_islands.png', 'preset-archipelago-map.png', 'preset-floating_islands-islandMask.png',
+] as const;
+
 /** A page log entry the smoke test does not count: the favicon.ico 404 (index.html declares no icon). */
 export function ignoredLog(text: string, url: string | undefined): boolean {
   return url !== undefined && /\/favicon\.ico(\?|$)/.test(url) && text.includes('404');
@@ -241,12 +423,13 @@ export function presetProblems(text: string, expected: { readonly name: string; 
 /**
  * Every step in its order: a step title is `<id>: <what>`, and the runner checks that the ids come in this order. The
  * Density steps run after `rule` and before `console`, on the mountain page the rule step opened, so the earlier
- * history and "4 modified" checks are untouched.
+ * history and "4 modified" checks are untouched; SP3e's `preset profiles` step (its own id: `presets` is the preset-file
+ * step) follows them on pages of its own and comes before `console`.
  */
 export const SMOKE_STEPS = [
   'selftest', 'load', 'number', 'knot', 'slider', 'box', 'profile', 'presets', 'undo/redo', 'reload', 'cut line', 'voxels', 'tabs', 'rule',
   'density tab', 'density node', 'density mute', 'density json', 'density narrow', 'density horizontal', 'density drag', 'density times',
-  'console',
+  'preset profiles', 'console',
 ] as const;
 export type SmokeStep = (typeof SMOKE_STEPS)[number];
 
@@ -854,15 +1037,15 @@ class Page {
   /** Moves focus out of every field, so that Ctrl+Z reaches the page's shortcuts (§3.5). */
   blur(): Promise<boolean> { return this.eval('(document.activeElement instanceof HTMLElement && document.activeElement.blur(), true)'); }
 
-  async shot(path: string): Promise<void> {
-    const r = await this.cdp.send('Page.captureScreenshot', { format: 'png', captureBeyondViewport: false });
+  /** A PNG of the viewport, or of the page region `clip` (CSS px). */
+  async shot(path: string, clip?: Box): Promise<void> {
+    const r = await this.cdp.send('Page.captureScreenshot', { format: 'png', captureBeyondViewport: false, ...(clip === undefined ? {} : { clip: { ...clip, scale: 1 } }) });
     writeFileSync(path, Buffer.from(String(r['data']), 'base64'));
   }
 }
 
 // ---------------------------------------------------------------- the smoke steps
 
-const START: MapUrlState = { v: 1, seed: '42', profile: 'default', patch: {}, view: { x: 0, z: 0, bpp: 64, layer: 'biome' } };
 const MAP_READY = `document.querySelector('.map-status') !== null && __wiSmoke.settled()`;
 
 interface Check { readonly step: string; readonly ok: boolean; readonly what: string }
@@ -874,9 +1057,12 @@ class Smoke {
   private stepName = '';
   readonly page: Page;
   readonly downloads: string;
-  constructor(page: Page, downloads: string) {
+  /** The page errors seen so far (exceptions, console errors, failed loads; the favicon 404 aside), appended as they come. */
+  readonly errors: readonly string[];
+  constructor(page: Page, downloads: string, errors: readonly string[]) {
     this.page = page;
     this.downloads = downloads;
+    this.errors = errors;
   }
 
   /** Begins the step titled `<id>: <what>`; its id must come after the last one's in SMOKE_STEPS. */
@@ -1143,6 +1329,7 @@ async function runSmoke(t: Smoke): Promise<void> {
   }
 
   await runDensity(t);
+  await runPresetProfiles(t);
 }
 
 const statsOf = (s: SliceRead): SliceStatsText | null => parseSliceStats(s.stats);
@@ -1423,9 +1610,9 @@ async function hoverTopRule(p: Page): Promise<{ readonly row: number; readonly f
   };
 }
 
-/** Arms the cut tool and clicks the mountain line's ends on a map showing MOUNTAIN_LINE's view. */
-async function drawMountainLine(p: Page): Promise<void> {
-  const { view: mv, a, b } = MOUNTAIN_LINE;
+/** Arms the cut tool and clicks a line's ends on a map showing its view (by default the mountain line). */
+async function drawMountainLine(p: Page, line: SmokeLine = MOUNTAIN_LINE): Promise<void> {
+  const { view: mv, a, b } = line;
   await p.click('.map-cut');
   const mc = await p.center('.map-canvas');
   const at = (x: number, z: number): [number, number] => [mc.x + (x - mv.x) / mv.bpp, mc.y + (z - mv.z) / mv.bpp];
@@ -1438,20 +1625,127 @@ async function drawMountainLine(p: Page): Promise<void> {
  * clicked at its ends, Voxels selected, a fresh slice. Throws when the line drawn is not the mountain line; returns the
  * line text and the slice summary.
  */
-async function openMountainVoxels(p: Page): Promise<{ readonly text: string; readonly summary: string }> {
-  await p.goto(`${p.base}?map#${mapHash({ ...START, view: MOUNTAIN_LINE.view })}`, MAP_READY);
+function openMountainVoxels(p: Page): Promise<{ readonly text: string; readonly summary: string }> {
+  return openLineVoxels(p, { ...START, view: MOUNTAIN_LINE.view }, MOUNTAIN_LINE, 'the mountain line');
+}
+
+/** As `openMountainVoxels`, for the page opened with `state` (its view is `line`'s) and the line `line`, named `name`. */
+async function openLineVoxels(p: Page, state: MapUrlState, line: SmokeLine, name: string): Promise<{ readonly text: string; readonly summary: string }> {
+  await p.goto(`${p.base}?map#${mapHash(state)}`, MAP_READY);
   await p.click('#map-tab-world');
-  await drawMountainLine(p);
-  const { a, b } = MOUNTAIN_LINE;
-  await p.until(`document.querySelector('.cs').dataset.state === 'fresh'`, 'a fresh cross-section of the mountain line');
+  await drawMountainLine(p, line);
+  const { a, b } = line;
+  await p.until(`document.querySelector('.cs').dataset.state === 'fresh'`, `a fresh cross-section of ${name}`);
   const text = await p.eval<string>(`document.querySelector('.cs-line').textContent`);
   const seg = parseSegment(text);
   if (seg === null || Math.max(Math.abs(seg.ax - a[0]), Math.abs(seg.az - a[1]), Math.abs(seg.bx - b[0]), Math.abs(seg.bz - b[1])) > 1) {
-    throw new Error(`the mountain line is ${text}, expected A (${a[0]}, ${a[1]}) → B (${b[0]}, ${b[1]})`);
+    throw new Error(`${name} is ${text}, expected A (${a[0]}, ${a[1]}) → B (${b[0]}, ${b[1]})`);
   }
   await p.click('.cs-mode[data-mode="voxels"]');
-  await p.until(`document.querySelector('.cs').dataset.mode === 'voxels' && document.querySelector('.cs').dataset.state === 'fresh'`, 'a fresh voxel slice of the mountain line');
+  await p.until(`document.querySelector('.cs').dataset.mode === 'voxels' && document.querySelector('.cs').dataset.state === 'fresh'`, `a fresh voxel slice of ${name}`);
   return { text, summary: await p.eval<string>(`document.querySelector('.cs-summary').textContent`) };
+}
+
+/** The Voxels slice image (512 × 384 RGBA, row-major) as the page draws it. */
+function voxelImage(p: Page): Promise<number[]> {
+  return p.eval<number[]>(`Array.from(document.querySelector('.cs-voxels').getContext('2d').getImageData(0, 0, 512, 384).data)`);
+}
+
+/** The sample nearest the line's middle whose column holds an island over ground (`islandOverGround`), or null. */
+function islandSample(image: ArrayLike<number>): { readonly i: number; readonly islandTop: number; readonly islandBottom: number; readonly groundRow: number } | null {
+  const order = [...Array(512).keys()].sort((x, y) => Math.abs(x - 256) - Math.abs(y - 256) || x - y);
+  for (const i of order) {
+    const hit = islandOverGround(sliceColumn(image, i));
+    if (hit !== null) return { i, ...hit };
+  }
+  return null;
+}
+
+/** The sample whose ground top is highest (the first such from A), with its row, or null on an all-air slice. */
+function highestSample(image: ArrayLike<number>): { readonly i: number; readonly row: number } | null {
+  let best: { i: number; row: number } | null = null;
+  for (let i = 0; i < 512; i++) {
+    const row = groundTopRow(sliceColumn(image, i));
+    if (row !== null && (best === null || row < best.row)) best = { i, row };
+  }
+  return best;
+}
+
+/** The pointer on the cell (sample i, image row `row`) of the Voxels slice; resolves with the readout once it names a rule (or after 10 s). */
+async function hoverVoxel(p: Page, i: number, row: number): Promise<string> {
+  await p.mouse('mouseMoved', ...sliceCellPoint((await p.center('.cs-voxels')).box, i, row));
+  await p.until(`/ · rule (?:root\\S*|none)$/.test(document.querySelector('.cs-readout').textContent)`, 'the hover rule id', 10000).catch(() => undefined);
+  return p.eval<string>(`document.querySelector('.cs-readout').textContent`);
+}
+
+/** The map canvas's pixels in the PRESET_MAP.px² square centred on the canvas centre (the view centre), RGBA row-major. */
+async function presetMapPixels(p: Page): Promise<{ readonly rgba: number[]; readonly clip: Box }> {
+  const mc = await p.center('.map-canvas');
+  const half = PRESET_MAP.px / 2;
+  const w = await p.eval<{ rgba: number[]; width: number; cx: number; cy: number }>(`__wiSmoke.mapPixels(${mc.x}, ${mc.y}, ${half})`);
+  // mapPixels reads the (2·half + 1)² window around the centre; keep its first PRESET_MAP.px rows and columns.
+  const rgba: number[] = [];
+  for (let y = 0; y < PRESET_MAP.px; y++) rgba.push(...w.rgba.slice(4 * y * w.width, 4 * (y * w.width + PRESET_MAP.px)));
+  return { rgba, clip: { x: Math.round(mc.x) - half, y: Math.round(mc.y) - half, width: PRESET_MAP.px, height: PRESET_MAP.px } };
+}
+
+/**
+ * Opens `preset` on its window centre at PRESET_MAP's scale on `layer`, settled, and waits until the map square reads
+ * the same twice 500 ms apart (the fine tiles replace the upscaled previews after the first preview lands); resolves
+ * with that square.
+ */
+async function openPresetMap(p: Page, preset: SmokePreset, layer: string): Promise<{ readonly rgba: number[]; readonly clip: Box }> {
+  const [x, z] = presetCentre(preset);
+  await p.goto(`${p.base}?map#${mapHash(presetState(preset, { x, z, bpp: PRESET_MAP.bpp, layer }))}`, MAP_READY);
+  let last = await presetMapPixels(p);
+  for (let i = 0; i < 30; i++) {
+    await sleep(500);
+    await p.until('__wiSmoke.settled()', `the ${layer} map of ${preset}`);
+    const now = await presetMapPixels(p);
+    if (sameJson(now.rgba, last.rgba)) return now;
+    last = now;
+  }
+  throw new Error(`the ${layer} map of ${preset} kept changing for 15 s`);
+}
+
+/**
+ * The `preset profiles` step (SP3e spec §8): each draft preset opened by URL with its profile on its line — the select
+ * shows it among the five ready profiles, the World tab and the URL name it, the Voxels summary holds what the preset
+ * promises (`presetSummaryOk`), and no page error; floating_islands' line holds an island over ground whose top voxel
+ * takes a surface rule (D21 (b)) and its `islandMask` layer draws ≥ 2 colours; archipelago's `biome` layer around its
+ * window holds ocean and land.
+ */
+async function runPresetProfiles(t: Smoke): Promise<void> {
+  const p = t.page;
+  t.step('preset profiles: each draft preset opened by URL on its window line, its map layer around the window');
+  for (const preset of SMOKE_PRESETS) {
+    const errors0 = t.errors.length;
+    const line = presetLine(preset);
+    const state = presetState(preset, line.view);
+    const { text, summary } = await openLineVoxels(p, state, line, `${preset}'s line`);
+    const select = await p.eval<{ value: string; options: string[] }>(`(() => { const s = document.querySelector('.map-toolbar select[title="Profile"]'); return { value: s.value, options: [...s.options].filter((o) => !o.disabled).map((o) => o.value) }; })()`);
+    t.check(select.value === preset && sameJson(select.options, READY_PROFILES), `${preset}: the profile select shows it among ${select.options.join(', ')}`, select);
+    const url = await p.state();
+    t.check(url !== null && url.profile === preset && sameJson(url.patch, {}), `${preset}: the URL holds the profile, nothing modified`, url);
+    t.check((await p.eval<string>('__wiSmoke.world()')).includes(`profile ${preset}\n`), `${preset}: the World tab shows the profile`);
+    t.check(presetSummaryOk(preset, summary), `${preset} on ${text}: ${summary}`, summary);
+    if (preset === 'floating_islands') {
+      const island = islandSample(await voxelImage(p));
+      t.check(island !== null, `an island over ground on the line: ${island === null ? 'none' : `sample ${island.i}, island y ${island.islandBottom}-${island.islandTop}, ground top y ${319 - island.groundRow}`}`);
+      if (island !== null) {
+        const read = await hoverVoxel(p, island.i, island.groundRow);
+        const id = voxelRuleId(read);
+        t.check(voxelReadoutOk(read) && read.includes(`, ${319 - island.groundRow}, `) && id !== null, `the ground under the island takes a surface rule (D21 (b)): ${read}`, read);
+        await p.mouse('mouseMoved', 5, 5);
+      }
+      const n = distinctColours((await openPresetMap(p, preset, 'islandMask')).rgba);
+      t.check(n >= 2, `floating_islands' islandMask layer around the window (4096² blocks, 16 blocks/px) draws ${n} colours (≥ 16 px each)`, n);
+    } else if (preset === 'archipelago') {
+      const counts = biomePixels((await openPresetMap(p, preset, 'biome')).rgba);
+      t.check(oceanAndLandOk(counts), `archipelago's biome layer around the window (4096² blocks): ocean ${counts.ocean}, land ${counts.land}, other ${counts.other} px`, counts);
+    }
+    t.check(t.errors.length === errors0, `${preset}: no page error`, t.errors.slice(errors0));
+  }
 }
 
 // ---------------------------------------------------------------- screenshots (spec §12)
@@ -1634,6 +1928,43 @@ async function runShots(p: Page, dir: string): Promise<string[]> {
   await sleep(1000);
   await save('density-stacked-800.png');
   await p.cdp.send('Emulation.setDeviceMetricsOverride', { width: VIEWPORT.width, height: VIEWPORT.height, deviceScaleFactor: 1, mobile: false });
+
+  // The draft presets (SP3e spec §8): the Voxels mode on each preset's line with the drawer at its tallest — archipelago
+  // with the pointer on the top of the line's middle sample, amplified on its highest top, floating_islands on the
+  // ground under the island nearest the middle (D21 (b): its palette and rule) —, then the two map layers.
+  for (const preset of SMOKE_PRESETS) {
+    const line = presetLine(preset);
+    const { text: pl, summary: ps } = await openLineVoxels(p, presetState(preset, line.view), line, `${preset}'s line`);
+    if (!presetSummaryOk(preset, ps)) throw new Error(`${preset}'s slice: ${ps}`);
+    const split = await p.center('.map-split-h');
+    const up = await p.dragBy(split.x, split.y, 0, -15, 25);
+    await p.mouse('mouseReleased', up.x, up.y);
+    await sleep(800);
+    const image = await voxelImage(p);
+    let at: { i: number; row: number } | null;
+    if (preset === 'floating_islands') {
+      const island = islandSample(image);
+      at = island === null ? null : { i: island.i, row: island.groundRow };
+    } else if (preset === 'amplified') {
+      at = highestSample(image);
+    } else {
+      const row = groundTopRow(sliceColumn(image, 256));
+      at = row === null ? null : { i: 256, row };
+    }
+    if (at === null) throw new Error(`${preset}'s line has no sample to hover`);
+    const read = await hoverVoxel(p, at.i, at.row);
+    console.log(`  ${preset} line: ${pl}; ${ps}; hover: ${read}`);
+    await sleep(800);
+    await save(`preset-${preset}.png`);
+    await p.mouse('mouseMoved', 5, 5);
+  }
+  for (const [preset, layer, name] of [['archipelago', 'biome', 'preset-archipelago-map.png'], ['floating_islands', 'islandMask', 'preset-floating_islands-islandMask.png']] as const) {
+    const { clip } = await openPresetMap(p, preset, layer);
+    const f = join(dir, name);
+    await p.shot(f, clip);
+    out.push(f);
+    console.log(`  wrote ${f} (${layer}, ${PRESET_MAP.px * PRESET_MAP.bpp}² blocks around ${presetCentre(preset).join(', ')})`);
+  }
   return out;
 }
 
@@ -1702,7 +2033,7 @@ async function main(argv: readonly string[]): Promise<number> {
     console.log(`${version.Browser ?? 'Chrome'}, ${VIEWPORT.width} × ${VIEWPORT.height} CSS px at DPR 1`);
 
     const page = new Page(cdp, server.url);
-    const smoke = new Smoke(page, downloads);
+    const smoke = new Smoke(page, downloads, pageErrors);
     try {
       await runSmoke(smoke);
     } catch (e) {
