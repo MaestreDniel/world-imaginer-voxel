@@ -1,0 +1,13 @@
+{
+  "id": "B1",
+  "tier": "quick",
+  "values": {
+    "minShare": 0.0037175,
+    "minRareShare": 0.0065175,
+    "largestLand": 0.0683225,
+    "oceanFamilyMin": 0.44072249999999996,
+    "oceanFamilyMax": 0.44072249999999996,
+    "ties": 0,
+    "outside": 0.001735
+  }
+}

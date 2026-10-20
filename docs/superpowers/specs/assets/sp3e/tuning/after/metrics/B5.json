@@ -1,0 +1,9 @@
+{
+  "id": "B5",
+  "tier": "quick",
+  "values": {
+    "perKm2Min": 1.43538582022539,
+    "perKm2Max": 1.43538582022539,
+    "highShare": 0.65
+  }
+}

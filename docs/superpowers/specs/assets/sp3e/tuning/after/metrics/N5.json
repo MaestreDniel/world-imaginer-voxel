@@ -1,0 +1,13 @@
+{
+  "id": "N5",
+  "tier": "quick",
+  "values": {
+    "horizontal": 1.071488015978695,
+    "vertical": 1.0481769766489144,
+    "horizontal.preSp3e": 1.071488015978695,
+    "horizontal.density.noises.islands": 1.038153594771242,
+    "horizontal.islands.noise": 1.0475878450323532,
+    "vertical.preSp3e": 1.0481769766489144,
+    "vertical.density.noises.islands": 1.0330011436039863
+  }
+}

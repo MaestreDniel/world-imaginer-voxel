@@ -1,0 +1,10 @@
+{
+  "id": "N4",
+  "tier": "quick",
+  "values": {
+    "originSdRatio": 0.9008179936105434,
+    "spawnTopShare": 0.125,
+    "spawnDistinct": 17,
+    "spawnOnLand": 1
+  }
+}

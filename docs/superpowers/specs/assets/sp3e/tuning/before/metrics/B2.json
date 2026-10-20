@@ -1,0 +1,12 @@
+{
+  "id": "B2",
+  "tier": "quick",
+  "values": {
+    "medianLength": 403.0682324371396,
+    "landShareMin": 0.031635917101524635,
+    "landShareMax": 0.031635917101524635,
+    "mouths": 0.7,
+    "gorgesPer100km2": 7610.977299944831,
+    "dryRiverBiome": 0
+  }
+}

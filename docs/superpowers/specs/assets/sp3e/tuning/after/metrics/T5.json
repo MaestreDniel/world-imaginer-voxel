@@ -1,0 +1,25 @@
+{
+  "id": "T5",
+  "tier": "quick",
+  "values": {
+    "median.default": 1,
+    "median.large_biomes": 1,
+    "median": 1,
+    "p90.default": 2,
+    "p90.large_biomes": 2,
+    "p90": 2,
+    "p99.default": 4,
+    "p99.large_biomes": 4,
+    "p99": 4,
+    "max.default": 30,
+    "mean.default": 0.8013638104215146,
+    "singleSurface.default": 67898,
+    "landPositions.default": 72125,
+    "multiSurface.default": 4227,
+    "max.large_biomes": 38,
+    "mean.large_biomes": 0.7850285894140482,
+    "singleSurface.large_biomes": 266882,
+    "landPositions.large_biomes": 287134,
+    "multiSurface.large_biomes": 20252
+  }
+}

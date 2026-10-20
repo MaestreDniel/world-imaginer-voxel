@@ -1,0 +1,54 @@
+{
+  "archipelago": {
+    "line": "A (-768, 256) → B (256, 256) · 1 024 blocks",
+    "seg": {
+      "ax": -768,
+      "az": 256,
+      "bx": 256,
+      "bz": 256
+    },
+    "summary": "ground top y 52 to 139 · water on 5.7 % of the line, up to 11 deep"
+  },
+  "amplified": {
+    "line": "A (-1152, 0) → B (-128, 0) · 1 024 blocks",
+    "seg": {
+      "ax": -1152,
+      "az": 0,
+      "bx": -128,
+      "bz": 0
+    },
+    "summary": "ground top y 104 to 307 · no water"
+  },
+  "floating_islands": {
+    "line": "A (-1280, -1408) → B (-256, -1408) · 1 024 blocks",
+    "seg": {
+      "ax": -1280,
+      "az": -1408,
+      "bx": -256,
+      "bz": -1408
+    },
+    "summary": "ground top y 23 to 251 · water on 97.5 % of the line, up to 40 deep",
+    "hover": {
+      "sample": 247,
+      "row": 286,
+      "y": 33,
+      "readout": "(-786, 33, -1408) · stone · no fluid · point 247, 495.0 blocks from A · rule none"
+    }
+  },
+  "floating_islands-land": {
+    "line": "A (-256, 384) → B (768, 384) · 1 024 blocks",
+    "seg": {
+      "ax": -256,
+      "az": 384,
+      "bx": 768,
+      "bz": 384
+    },
+    "summary": "ground top y 62 to 258 · no water",
+    "hover": {
+      "sample": 255,
+      "row": 207,
+      "y": 112,
+      "readout": "(254, 112, 384) · stone · no fluid · point 255, 511.0 blocks from A · rule none"
+    }
+  }
+}

@@ -1,0 +1,26 @@
+{
+  "id": "T2",
+  "tier": "quick",
+  "values": {
+    "overhangs.default": 0.03520875141142006,
+    "overhangs.large_biomes": 0.04329049474509011,
+    "overhangs": 0.03520875141142006,
+    "overhangsPeaks.default": 0.10049160394178334,
+    "overhangsPeaks.large_biomes": 0.1202172868906498,
+    "overhangsPeaks": 0.10049160394178334,
+    "peakPositions.default": 268102,
+    "peakColumns.default": 1170,
+    "overhangPositions.default": 40599,
+    "floatingRockShare.default": 0.016722834391645434,
+    "floatingRockVoxels.default": 0.056758599038760064,
+    "floatingRockPeaksShare.default": 0.04670610439310412,
+    "floatingRockPositions.default": 19283,
+    "peakPositions.large_biomes": 1095142,
+    "peakColumns.large_biomes": 4426,
+    "overhangPositions.large_biomes": 198839,
+    "floatingRockShare.large_biomes": 0.020117205402064343,
+    "floatingRockVoxels.large_biomes": 0.0685767209440702,
+    "floatingRockPeaksShare.large_biomes": 0.05455365605556174,
+    "floatingRockPositions.large_biomes": 92401
+  }
+}

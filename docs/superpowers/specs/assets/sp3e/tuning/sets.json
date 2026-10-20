@@ -1,0 +1,37 @@
+{
+  "seed": "42",
+  "lines": {
+    "archipelago": { "window": [-2, 2], "centre": { "x": -256, "z": 256 } },
+    "amplified": { "window": [-5, 0], "centre": { "x": -640, "z": 0 } },
+    "floating_islands": { "window": [-6, -11], "centre": { "x": -768, "z": -1408 } }
+  },
+  "linesNote": "The review lines of the first window search (spec §1.5 step 1), the same in both sets: slices along x through each centre (512 blocks), Voxels shots on the 1,024-block line centred there (shots/shots.json). amplified's and floating_islands' are the committed windows of sp3eGoldens.ts; archipelago's is the first search's w(-2, 2), whose line is almost all land (4 sea positions of 512): the goldens commit moved its predicate onto the line, so the committed window is w(1, -1), centre (128, -128), and assets/sp3e/archipelago/ shows that line (archipelago's generation did not change between the sets, so its slice and shots are the same in both).",
+  "sets": [
+    {
+      "name": "before",
+      "what": "the drafts as specified (SP3e spec §1.2-§1.4; D21 (a): the ground under islands in band stone), at Checkpoint M",
+      "metrics": "metrics/: the whole quick tier, cold (presets.metric.ts: Z1-Z3 with their extras, DT2.presets, B1.presets)",
+      "measured": {
+        "Z1": { "overhangs": 0.0613, "p99Top": 282 },
+        "Z2": { "oceanShare": 0.6275, "islandsPer100km2": 8.196 },
+        "Z3": { "islandColumns": 0.0627, "grassTops": 1, "shadowDiff": 0.899 },
+        "terrainIslandsP50Ms": 3.545,
+        "presetsMetricFastSeconds": [4.74, 4.87]
+      },
+      "extras": "shots/preset-floating_islands-land.png (a line over land showing the ground under islands), shots/footprint-floating-window.png and ../footprint-c-0.7-0.9-1.1.png (the core's break-up c at 0.7, 0.9, 1.1), slices/floating_islands/slice-islands-cluster-zoom.png"
+    },
+    {
+      "name": "after",
+      "what": "the approved set: D21 (b) (the ground keeps its palette under islands) and amplified's σ factor 2.2 with the slide ending at y 314; c stays 0.9; Z2's islands count handed to SP12",
+      "metrics": "metrics/: the whole quick tier, cold, on the approved values",
+      "measured": {
+        "Z1": { "overhangs": 0.08638, "p99Top": 284 },
+        "Z2": { "oceanShare": 0.6275, "islandsPer100km2": 8.196 },
+        "Z3": { "islandColumns": 0.0627, "grassTops": 1, "shadowDiff": 0.08 },
+        "terrainIslandsP50Ms": 3.646,
+        "presetsMetricFastSeconds": [4.79, 4.93]
+      },
+      "extras": "as the before set"
+    }
+  ]
+}

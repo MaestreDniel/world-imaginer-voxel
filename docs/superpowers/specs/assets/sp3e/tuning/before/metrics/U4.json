@@ -1,0 +1,10 @@
+{
+  "id": "U4",
+  "tier": "quick",
+  "values": {
+    "registryIssues": 0,
+    "migrationFailures": 0,
+    "shapeLockViolations": 0,
+    "readmeStale": 0
+  }
+}

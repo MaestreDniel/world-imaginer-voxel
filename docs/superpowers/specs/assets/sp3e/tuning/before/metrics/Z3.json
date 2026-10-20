@@ -1,0 +1,29 @@
+{
+  "id": "Z3",
+  "tier": "quick",
+  "values": {
+    "islandColumns": 0.0627288818359375,
+    "grassTops": 1,
+    "islandPositions": 4111,
+    "positions": 65536,
+    "runsPerIsland": 1.1162734127949403,
+    "topsAbove250": 0.03064947701289224,
+    "topsBelow200": 0.018000486499635125,
+    "islandColumnsLiteral": 0.065185546875,
+    "islandColumnsDefault": 0.0081329345703125,
+    "branchFalsePositives": 161,
+    "branchFalsePositivesShare": 0.0024566650390625,
+    "shadowDiff": 0.8988080758939431,
+    "shadowDiffPositions": 3695,
+    "gateLoss": 0,
+    "islandVoxels": 67976,
+    "islandVoxelsUngated": 67976,
+    "islandVoxelsDefault": 3975,
+    "islandComponents": 5,
+    "largestFootprint": 0.14495849609375,
+    "windowA": -6,
+    "windowB": -11,
+    "windowIslandPositions": 3969,
+    "seconds": 7.537
+  }
+}

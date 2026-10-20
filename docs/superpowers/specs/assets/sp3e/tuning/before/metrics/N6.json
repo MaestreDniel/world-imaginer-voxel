@@ -1,0 +1,10 @@
+{
+  "id": "N6",
+  "tier": "quick",
+  "values": {
+    "value": 0.000515,
+    "value.preSp3e": 0.000515,
+    "value.density.noises.islands": 0,
+    "value.islands.noise": 0
+  }
+}

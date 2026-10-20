@@ -1,0 +1,42 @@
+{
+  "seed": "42",
+  "profile": "floating_islands",
+  "slices": [
+    {
+      "file": "slice-islands-cluster.png",
+      "width": 512,
+      "height": 384,
+      "site": {
+        "name": "islands-cluster",
+        "file": "slice-islands-cluster.png",
+        "kind": "vertical",
+        "cx0": -64,
+        "w": 32,
+        "z": -1408,
+        "yMin": -64,
+        "yMax": 319,
+        "scale": 1,
+        "needs": []
+      },
+      "summary": {
+        "kinds": {
+          "land": 57,
+          "sea": 455,
+          "lake": 0,
+          "river": 0
+        },
+        "tops": {
+          "desertTop": 0,
+          "snowTop": 0,
+          "badlandsTop": 0
+        },
+        "topMin": 23,
+        "topMax": 251,
+        "waterMax": 63,
+        "overhangs": 0,
+        "waterWallFaces": 0,
+        "waterUnderStone": 1772
+      }
+    }
+  ]
+}

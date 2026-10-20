@@ -1,0 +1,28 @@
+{
+  "id": "DT2",
+  "tier": "quick",
+  "values": {
+    "probeBulk": 0,
+    "compiledReference": 0,
+    "surfaceProbeBulk": 0,
+    "surfaceReference": 0,
+    "voxels": 8192,
+    "maskedVoxels": 5217,
+    "cornerValues": 65536,
+    "columns": 512,
+    "surfaceVoxels": 7857,
+    "surfaceExtraVoxels": 4055,
+    "surfaceExtraSkipped": 41,
+    "editedDensityReference": 0,
+    "editedSurfaceReference": 0,
+    "editedDensityTrees": 16,
+    "editedSurfaceTrees": 16,
+    "editedDraws": 38,
+    "editedDensityVoxels": 8192,
+    "editedDensityCorners": 53248,
+    "editedDensityNonFinite": 0,
+    "editedSurfaceVoxels": 8205,
+    "editedSurfaceExtraVoxels": 4093,
+    "seconds": 18.78
+  }
+}

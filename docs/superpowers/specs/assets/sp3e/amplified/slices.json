@@ -1,0 +1,42 @@
+{
+  "seed": "42",
+  "profile": "amplified",
+  "slices": [
+    {
+      "file": "slice-amplified-mountain.png",
+      "width": 512,
+      "height": 384,
+      "site": {
+        "name": "amplified-mountain",
+        "file": "slice-amplified-mountain.png",
+        "kind": "vertical",
+        "cx0": -56,
+        "w": 32,
+        "z": 0,
+        "yMin": -64,
+        "yMax": 319,
+        "scale": 1,
+        "needs": []
+      },
+      "summary": {
+        "kinds": {
+          "land": 512,
+          "sea": 0,
+          "lake": 0,
+          "river": 0
+        },
+        "tops": {
+          "desertTop": 0,
+          "snowTop": 131,
+          "badlandsTop": 124
+        },
+        "topMin": 175,
+        "topMax": 304,
+        "waterMax": null,
+        "overhangs": 83,
+        "waterWallFaces": 0,
+        "waterUnderStone": 0
+      }
+    }
+  ]
+}

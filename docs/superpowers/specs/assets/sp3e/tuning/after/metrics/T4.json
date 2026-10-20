@@ -1,0 +1,26 @@
+{
+  "id": "T4",
+  "tier": "quick",
+  "values": {
+    "wetPositions.default": 258551,
+    "minFloor.default": 8,
+    "regions.default": 4,
+    "wetPositions.large_biomes": 262144,
+    "minFloor.large_biomes": 4,
+    "regions.large_biomes": 4,
+    "floorSd.default": 7.461797971627696,
+    "floorSd.large_biomes": 3.1643944787997107,
+    "floorSd": 3.1643944787997107,
+    "exposedBedrock.default": 0,
+    "deepFloor.default": 0,
+    "exposedBedrock.large_biomes": 0,
+    "deepFloor.large_biomes": 0,
+    "exposedBedrock": 0,
+    "deepFloor": 0,
+    "siteDraws": 28,
+    "waterWallVoxels": 85,
+    "waterVoxels": 19696515,
+    "waterWallShare": 0.000004315484236678417,
+    "seconds": 5.509
+  }
+}

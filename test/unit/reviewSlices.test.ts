@@ -1,11 +1,15 @@
-import { mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdtempSync, readdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { beforeAll, describe, expect, test } from 'vitest';
+import { ISLAND_RUN_MIN_BOTTOM } from '../../src/core/constants';
 import { WINDOW_HALF } from '../../src/core/coords';
-import { PROFILE_IDS } from '../../src/core/params/profiles';
+import { PROFILE_IDS, resolveProfile } from '../../src/core/params/profiles';
+import { seedFromInput } from '../../src/core/seed';
 import { biomeId } from '../../src/gen/biomes/registry';
 import { buildColumnSample, newColumnSample, readField, readLevel } from '../../src/gen/column/columnStage';
+import { createGenContext } from '../../src/gen/context';
+import { sp3eWindow } from '../../src/metrics/sp3eGoldens';
 import { fluidType, WATER_SOURCE } from '../../src/world/blocks/fluid';
 import {
   AIR, BEDROCK, BROWN_TERRACOTTA, DIRT, GRASS_BLOCK, LIGHT_GRAY_TERRACOTTA, ORANGE_TERRACOTTA, PACKED_ICE, RED_SAND, RED_TERRACOTTA, SAND,
@@ -18,7 +22,7 @@ import {
   cropProblems, DRAFT_PRESETS, generateLine, generateSite, kindReader, lineSummary, MIN_TOP_POSITIONS, MOUNTAIN_SIGMA, mountainShare,
   needProblems, positionKind, positionVoxels, PRESET_LINE_BLOCKS, presetReviewSite, presetReviewSites, renderSite, REVIEW_KINDS,
   REVIEW_SITES, siteLine, slicesJson, TOP_KINDS, topKind, upscale, writeReviewSlices,
-  type DraftPresetId, type LineSummary, type ReviewKind, type ReviewSite, type VerticalSite, type WrittenSlice,
+  type BlockXZ, type DraftPresetId, type LineSummary, type ReviewKind, type ReviewSite, type VerticalSite, type WrittenSlice,
 } from '../harness/reviewSlices';
 
 const ctx = ctxFor('42');
@@ -359,9 +363,11 @@ describe('review slice images', () => {
     }
   });
 
-  test('npm run docs:review-slices writes SP3c\'s assets (SP3a\'s and SP3b\'s stay)', () => {
+  test('npm run docs:review-slices writes SP3e\'s preset assets (the default sites stay in assets/sp3c, SP3a\'s and SP3b\'s in theirs)', () => {
     const pkg = JSON.parse(readFileSync(new URL('../../package.json', import.meta.url), 'utf8')) as { scripts: Record<string, string> };
-    expect(pkg.scripts['docs:review-slices']).toBe('REVIEW_SLICES_DIR=docs/superpowers/specs/assets/sp3c vitest run --project unit test/unit/reviewSlices.test.ts');
+    expect(pkg.scripts['docs:review-slices']).toBe('REVIEW_SLICES_DIR=docs/superpowers/specs/assets/sp3e vitest run --project unit test/unit/reviewSlices.test.ts');
+    // The default world does not change in SP3e, so SP3c's slices of the default sites stay valid where they are.
+    for (const s of REVIEW_SITES) expect(existsSync(new URL(`../../docs/superpowers/specs/assets/sp3c/${s.file}`, import.meta.url)), s.file).toBe(true);
   });
 });
 
@@ -467,13 +473,164 @@ describe('SP3e preset review sites (SP3e spec §8, §1.5 step 1): fixed lines th
   });
 });
 
+/** The SP3e assets directory (spec §8): one directory per draft preset, and the tuning sets (§1.5). */
+const SP3E_ASSETS = new URL('../../docs/superpowers/specs/assets/sp3e/', import.meta.url);
+const WRITING = process.env.REVIEW_SLICES_DIR !== undefined;
+
+/** A preset's review site at its committed window centre (`sp3eGoldens.ts`, frozen by the goldens). */
+const presetSite = (p: DraftPresetId): VerticalSite => {
+  const w = sp3eWindow(p);
+  return presetReviewSite(p, { x: w.centreX, z: w.centreZ });
+};
+
 /**
- * `npm run docs:review-slices` sets REVIEW_SLICES_DIR to `docs/superpowers/specs/assets/sp3c` and writes every site
- * there (the 64 × 64 horizontal slice takes several seconds), plus `slices.json` (each site and its line summary read
- * from the voxels); without it nothing is written.
+ * The bottom voxel of the highest solid run of position (x, z) when it is an island run (bottom ≥ ISLAND_RUN_MIN_BOTTOM)
+ * with water below it and solid ground below that water; else null.
  */
-test.runIf(process.env.REVIEW_SLICES_DIR !== undefined)('write the review slices into REVIEW_SLICES_DIR', async () => {
-  const written = await writeReviewSlices(process.env.REVIEW_SLICES_DIR!, '42', params);
-  expect(written.map((w) => w.site.file)).toEqual(REVIEW_SITES.map((s) => s.file));
-  writeFileSync(join(process.env.REVIEW_SLICES_DIR!, 'slices.json'), slicesJson('42', 'default', written));
+function islandOverWaterOverGround(view: RegionView, x: number, z: number): number | null {
+  let y = 319;
+  while (y >= -64 && view.block(x, y, z) === AIR) y--;
+  if (y < -64) return null;
+  while (y > -64 && view.block(x, y - 1, z) !== AIR) y--;
+  if (y < ISLAND_RUN_MIN_BOTTOM) return null;
+  let yy = y - 1;
+  while (yy >= -64 && !(view.block(x, yy, z) === AIR && fluidType(view.fluid(x, yy, z)) !== 0)) yy--;
+  if (yy < -64) return null;
+  while (yy >= -64 && view.block(x, yy, z) === AIR) yy--;
+  return yy >= -64 ? y : null;
+}
+
+describe('SP3e preset review slices on the real lines (spec §8): the committed window centres, each preset\'s params', () => {
+  const lines = new Map<DraftPresetId, RegionView>();
+  beforeAll(async () => {
+    for (const p of DRAFT_PRESETS) lines.set(p, await generateLine('42', resolveProfile(p), presetSite(p)));
+  }, 120_000);
+  const summaryOf = (p: DraftPresetId): LineSummary => {
+    const site = presetSite(p);
+    const { z, x0, n } = siteLine(site);
+    const view = lines.get(p)!;
+    return lineSummary(view, z, x0, n, kindReader(createGenContext(seedFromInput('42'), resolveProfile(p)), view, z));
+  };
+
+  test('the lines through the committed centres: archipelago (128, −128), amplified (−640, 0), floating_islands (−768, −1408)', () => {
+    expect(DRAFT_PRESETS.map((p) => [presetSite(p).name, siteLine(presetSite(p))])).toEqual([
+      ['archipelago-coast', { z: -128, x0: -128, n: 512 }],
+      ['amplified-mountain', { z: 0, x0: -896, n: 512 }],
+      ['islands-cluster', { z: -1408, x0: -1024, n: 512 }],
+    ]);
+  });
+
+  test.each(DRAFT_PRESETS.map((p) => [p] as const))('%s: the crop removes only dry air, read from the voxels', (p) => {
+    const view = lines.get(p)!;
+    expect(cropProblems(view, presetSite(p))).toEqual([]);
+    const { z, x0, n } = siteLine(presetSite(p));
+    for (let x = x0; x < x0 + n; x++) expect(view.block(x, -64, z)).toBe(BEDROCK);
+  });
+
+  test('islands-cluster keeps the island, the water under it and the ground below it whole (y −64 … 319)', () => {
+    const view = lines.get('floating_islands')!;
+    const site = presetSite('floating_islands');
+    const { z, x0, n } = siteLine(site);
+    let islands = 0;
+    for (let x = x0; x < x0 + n; x++) {
+      const bottom = islandOverWaterOverGround(view, x, z);
+      if (bottom === null) continue;
+      islands++;
+      // The whole column is in the slice: the island's top, the water and the ground below it.
+      const p = positionVoxels(view, x, z);
+      expect(p.highestFilled, `(${x}, ${z})`).toBeLessThanOrEqual(site.yMax);
+      expect(p.lowestOpen, `(${x}, ${z})`).toBeGreaterThanOrEqual(site.yMin);
+    }
+    expect(islands, 'positions with an island run over water over ground').toBeGreaterThanOrEqual(16);
+    const sum = summaryOf('floating_islands');
+    expect(sum.topMax).toBeGreaterThanOrEqual(ISLAND_RUN_MIN_BOTTOM);
+    expect(sum.waterUnderStone).toBeGreaterThan(0);
+  });
+
+  test('archipelago-coast crosses a coast and its crop at y 160 removes only dry air', () => {
+    const view = lines.get('archipelago')!;
+    const { z, x0, n } = siteLine(presetSite('archipelago'));
+    const sum = summaryOf('archipelago');
+    expect(sum.kinds.sea, JSON.stringify(sum.kinds)).toBeGreaterThan(0);
+    expect(sum.kinds.land, JSON.stringify(sum.kinds)).toBeGreaterThan(0);
+    let notDryAbove = 0;
+    for (let x = x0; x < x0 + n; x++) for (let y = 161; y <= 319; y++) if (view.block(x, y, z) !== AIR || fluidType(view.fluid(x, y, z)) !== 0) notDryAbove++;
+    expect(notDryAbove).toBe(0);
+    expect(sum.topMax).toBeLessThanOrEqual(160);
+  });
+
+  test('amplified-mountain reaches above y 250 on its line', () => {
+    expect(summaryOf('amplified').topMax).toBeGreaterThanOrEqual(250);
+  });
+
+  test.skipIf(WRITING).each(DRAFT_PRESETS.map((p) => [p] as const))('assets/sp3e/%s holds exactly its slice and slices.json, as generated now', (p) => {
+    const dir = new URL(`${p}/`, SP3E_ASSETS);
+    const site = presetSite(p);
+    expect(readdirSync(dir).sort()).toEqual([site.file, 'slices.json'].sort());
+    const png = encodePng(renderSite(lines.get(p)!, site));
+    const bytes = new Uint8Array(readFileSync(new URL(site.file, dir)));
+    expect(bytes.length, site.file).toBe(png.length);
+    expect(Buffer.compare(Buffer.from(bytes), Buffer.from(png)), site.file).toBe(0);
+    const img = renderSite(lines.get(p)!, site);
+    const written: WrittenSlice[] = [{ site, path: '', width: img.width, height: img.height, bytes: png.length, summary: summaryOf(p) }];
+    expect(readFileSync(new URL('slices.json', dir), 'utf8')).toBe(slicesJson('42', p, written));
+    expect((JSON.parse(readFileSync(new URL('slices.json', dir), 'utf8')) as { profile: string }).profile).toBe(p);
+  });
+});
+
+describe('SP3e tuning sets (spec §1.5, §8): the before set and the approved after set at the review lines', () => {
+  const TUNING = new URL('tuning/', SP3E_ASSETS);
+  interface SetsJson {
+    readonly seed: string;
+    readonly lines: Readonly<Record<DraftPresetId, { readonly window: readonly [number, number]; readonly centre: BlockXZ }>>;
+    readonly sets: ReadonlyArray<{ readonly name: string }>;
+  }
+  const sets = (): SetsJson => JSON.parse(readFileSync(new URL('sets.json', TUNING), 'utf8')) as SetsJson;
+
+  test('sets.json names the before and after sets and the lines they were taken on', () => {
+    const j = sets();
+    expect(j.seed).toBe('42');
+    expect(j.sets.map((s) => s.name)).toEqual(['before', 'after']);
+    expect(Object.keys(j.lines)).toEqual([...DRAFT_PRESETS]);
+    // amplified's and floating_islands' tuning lines are the committed windows' lines; archipelago's is Task 16's first
+    // window w(−2, 2), from before the goldens moved its predicate onto the line (w(1, −1)), so its tuning slices and
+    // shots show a line that is not the committed one.
+    for (const p of ['amplified', 'floating_islands'] as const) {
+      const w = sp3eWindow(p);
+      expect(j.lines[p], p).toEqual({ window: [w.a, w.b], centre: { x: w.centreX, z: w.centreZ } });
+    }
+    expect(j.lines.archipelago).toEqual({ window: [-2, 2], centre: { x: -256, z: 256 } });
+    expect([sp3eWindow('archipelago').a, sp3eWindow('archipelago').b]).not.toEqual([-2, 2]);
+  });
+
+  test.each(['before', 'after'].flatMap((set) => DRAFT_PRESETS.map((p) => [set, p] as const)))('%s/slices/%s: slices.json names the profile and the set\'s line', (set, p) => {
+    const dir = new URL(`${set}/slices/${p}/`, TUNING);
+    const j = JSON.parse(readFileSync(new URL('slices.json', dir), 'utf8')) as { seed: string; profile: string; slices: Array<{ file: string; site: VerticalSite }> };
+    expect([j.seed, j.profile]).toEqual(['42', p]);
+    expect(j.slices[0]!.site).toEqual(presetReviewSite(p, sets().lines[p].centre));
+    for (const s of j.slices) expect(existsSync(new URL(s.file, dir)), s.file).toBe(true);
+  });
+
+  test.each(['before', 'after'])('%s/: the quick metrics of presets.metric.ts and the shots', (set) => {
+    const dir = new URL(`${set}/`, TUNING);
+    for (const f of ['Z1.json', 'Z2.json', 'Z3.json', 'DT2.presets.json', 'B1.presets.json']) expect(existsSync(new URL(`metrics/${f}`, dir)), f).toBe(true);
+    for (const f of ['preset-amplified.png', 'preset-archipelago.png', 'preset-floating_islands.png', 'preset-archipelago-map.png', 'preset-floating_islands-islandMask.png']) {
+      expect(existsSync(new URL(`shots/${f}`, dir)), f).toBe(true);
+    }
+  });
+});
+
+/**
+ * `npm run docs:review-slices` sets REVIEW_SLICES_DIR to `docs/superpowers/specs/assets/sp3e` and writes each draft
+ * preset's review slice into its own directory `<preset>/` with that preset's params (spec §8: `writeReviewSlices`
+ * takes one params per call), plus its `slices.json` naming the profile; without it nothing is written. The default
+ * sites are not rewritten: the default world does not change, so `assets/sp3c/` stays valid.
+ */
+test.runIf(WRITING)('write the preset review slices into REVIEW_SLICES_DIR/<preset>', async () => {
+  for (const p of DRAFT_PRESETS) {
+    const dir = join(process.env.REVIEW_SLICES_DIR!, p);
+    const written = await writeReviewSlices(dir, '42', resolveProfile(p), [presetSite(p)]);
+    expect(written.map((w) => w.site.file)).toEqual([presetSite(p).file]);
+    writeFileSync(join(dir, 'slices.json'), slicesJson('42', p, written));
+  }
 }, 300_000);

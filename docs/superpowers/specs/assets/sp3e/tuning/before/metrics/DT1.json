@@ -1,0 +1,12 @@
+{
+  "id": "DT1",
+  "tier": "quick",
+  "values": {
+    "mismatches": 0,
+    "invarianceMismatches": 0,
+    "goldenMismatches": 0,
+    "firstCacheHits": 0,
+    "regions": 10,
+    "genSeconds": 44.962
+  }
+}

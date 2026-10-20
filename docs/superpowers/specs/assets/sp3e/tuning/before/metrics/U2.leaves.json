@@ -1,0 +1,440 @@
+[
+  {
+    "path": "climate.scaleMul",
+    "live": true,
+    "via": "land column (-25833, 16792)",
+    "cls": "land"
+  },
+  {
+    "path": "climate.warp.shift.amplitude",
+    "live": true,
+    "via": "land column (-25833, 16792)",
+    "cls": "land"
+  },
+  {
+    "path": "climate.warp.shift.noise",
+    "live": true,
+    "via": "land column (-25833, 16792)",
+    "cls": "land"
+  },
+  {
+    "path": "climate.warp.C.amplitude",
+    "live": true,
+    "via": "land column (-15542, -30245)",
+    "cls": "land"
+  },
+  {
+    "path": "climate.warp.C.noise",
+    "live": true,
+    "via": "land column (-25833, 16792)",
+    "cls": "land"
+  },
+  {
+    "path": "climate.warp.R.amplitude",
+    "live": true,
+    "via": "land column (-25833, 16792)",
+    "cls": "land"
+  },
+  {
+    "path": "climate.warp.R.noise",
+    "live": true,
+    "via": "land column (-25833, 16792)",
+    "cls": "land"
+  },
+  {
+    "path": "climate.C",
+    "live": true,
+    "via": "land column (-25833, 16792)",
+    "cls": "land"
+  },
+  {
+    "path": "climate.E",
+    "live": true,
+    "via": "land column (-25833, 16792)",
+    "cls": "land"
+  },
+  {
+    "path": "climate.W",
+    "live": true,
+    "via": "land column (-25833, 16792)",
+    "cls": "land"
+  },
+  {
+    "path": "climate.T",
+    "live": true,
+    "via": "land column (-25833, 16792)",
+    "cls": "land"
+  },
+  {
+    "path": "climate.H",
+    "live": true,
+    "via": "land column (-25833, 16792)",
+    "cls": "land"
+  },
+  {
+    "path": "climate.R",
+    "live": true,
+    "via": "land column (-25833, 16792)",
+    "cls": "land"
+  },
+  {
+    "path": "shape.offset",
+    "live": true,
+    "via": "land column (-25833, 16792)",
+    "cls": "land"
+  },
+  {
+    "path": "shape.sigma",
+    "live": true,
+    "via": "land column (-25833, 16792)",
+    "cls": "land"
+  },
+  {
+    "path": "shape.jag",
+    "live": true,
+    "via": "land column (-25833, 16792)",
+    "cls": "land"
+  },
+  {
+    "path": "rivers.widthMin",
+    "live": true,
+    "via": "channel column (6298, -18132)",
+    "cls": "channel"
+  },
+  {
+    "path": "rivers.widthVar",
+    "live": true,
+    "via": "channel column (6298, -18132)",
+    "cls": "channel"
+  },
+  {
+    "path": "rivers.widthNoise",
+    "live": true,
+    "via": "channel column (6298, -18132)",
+    "cls": "channel"
+  },
+  {
+    "path": "rivers.valleyBase",
+    "live": true,
+    "via": "channel column (6298, -18132)",
+    "cls": "channel"
+  },
+  {
+    "path": "rivers.valleyPerE",
+    "live": true,
+    "via": "channel column (6298, -18132)",
+    "cls": "channel"
+  },
+  {
+    "path": "rivers.valleyFloor",
+    "live": true,
+    "via": "channel column (6298, -18132)",
+    "cls": "channel"
+  },
+  {
+    "path": "rivers.valleyRise",
+    "live": true,
+    "via": "channel column (6298, -18132)",
+    "cls": "channel"
+  },
+  {
+    "path": "rivers.coastFadeLo",
+    "live": true,
+    "via": "coast column (23279, 27598)",
+    "cls": "coast"
+  },
+  {
+    "path": "rivers.coastFadeHi",
+    "live": true,
+    "via": "coast column (23279, 27598)",
+    "cls": "coast"
+  },
+  {
+    "path": "rivers.altFadeLo",
+    "live": true,
+    "via": "gorge column (-2619, 6024)",
+    "cls": "gorge"
+  },
+  {
+    "path": "rivers.altFadeHi",
+    "live": true,
+    "via": "gorge column (-2619, 6024)",
+    "cls": "gorge"
+  },
+  {
+    "path": "rivers.depthMin",
+    "live": true,
+    "via": "channel column (6298, -18132)",
+    "cls": "channel"
+  },
+  {
+    "path": "rivers.depthVar",
+    "live": true,
+    "via": "channel column (6298, -18132)",
+    "cls": "channel"
+  },
+  {
+    "path": "rivers.wetMargin",
+    "live": true,
+    "via": "channel column (6298, -18132)",
+    "cls": "channel"
+  },
+  {
+    "path": "rivers.gorgeDepth",
+    "live": true,
+    "via": "gorge column (-2619, 6024)",
+    "cls": "gorge"
+  },
+  {
+    "path": "lakes.cell",
+    "live": true,
+    "via": "basin column (-13409, -28645)",
+    "cls": "basin"
+  },
+  {
+    "path": "lakes.jitter",
+    "live": true,
+    "via": "basin column (-13409, -28645)",
+    "cls": "basin"
+  },
+  {
+    "path": "lakes.warpAmp",
+    "live": true,
+    "via": "basin column (-13409, -28645)",
+    "cls": "basin"
+  },
+  {
+    "path": "lakes.warpNoise",
+    "live": true,
+    "via": "basin column (-13409, -28645)",
+    "cls": "basin"
+  },
+  {
+    "path": "lakes.p",
+    "live": true,
+    "via": "threshold:lakes.p column (-24389, -23313)",
+    "cls": "threshold:lakes.p"
+  },
+  {
+    "path": "lakes.minC",
+    "live": true,
+    "via": "threshold:lakes.minC column (23605, 2444)",
+    "cls": "threshold:lakes.minC"
+  },
+  {
+    "path": "lakes.offsetMin",
+    "live": true,
+    "via": "threshold:lakes.offsetMin column (-16278, -8451)",
+    "cls": "threshold:lakes.offsetMin"
+  },
+  {
+    "path": "lakes.offsetMax",
+    "live": true,
+    "via": "threshold:lakes.offsetMax column (26525, 25423)",
+    "cls": "threshold:lakes.offsetMax"
+  },
+  {
+    "path": "lakes.radius",
+    "live": true,
+    "via": "basin column (-13409, -28645)",
+    "cls": "basin"
+  },
+  {
+    "path": "lakes.rimWidth",
+    "live": true,
+    "via": "rim column (-10536, 924)",
+    "cls": "rim"
+  },
+  {
+    "path": "lakes.roughness",
+    "live": true,
+    "via": "basin column (-13409, -28645)",
+    "cls": "basin"
+  },
+  {
+    "path": "lakes.rimNoise",
+    "live": true,
+    "via": "basin column (-13409, -28645)",
+    "cls": "basin"
+  },
+  {
+    "path": "lakes.ringFrac",
+    "live": true,
+    "via": "basin column (-13409, -28645)",
+    "cls": "basin"
+  },
+  {
+    "path": "lakes.depthMin",
+    "live": true,
+    "via": "basin column (-13409, -28645)",
+    "cls": "basin"
+  },
+  {
+    "path": "lakes.depthVar",
+    "live": true,
+    "via": "basin column (-13409, -28645)",
+    "cls": "basin"
+  },
+  {
+    "path": "lakes.rimRise",
+    "live": true,
+    "via": "rim column (-10536, 924)",
+    "cls": "rim"
+  },
+  {
+    "path": "lakes.rimSigma",
+    "live": true,
+    "via": "rim column (-10536, 924)",
+    "cls": "rim"
+  },
+  {
+    "path": "lakes.sigmaMul",
+    "live": true,
+    "via": "basin column (-13409, -28645)",
+    "cls": "basin"
+  },
+  {
+    "path": "biomes.table",
+    "live": true,
+    "via": "land column (-25833, 16792)",
+    "cls": "land"
+  },
+  {
+    "path": "biomes.zoomJitter",
+    "live": true,
+    "via": "gorge column (-2619, 6024)",
+    "cls": "gorge"
+  },
+  {
+    "path": "density.noises.jag",
+    "live": true,
+    "via": "land column (-25833, 16792)",
+    "cls": "land"
+  },
+  {
+    "path": "density.noises.overhang",
+    "live": true,
+    "via": "land column (-25833, 16792)",
+    "cls": "land"
+  },
+  {
+    "path": "density.noises.detail",
+    "live": true,
+    "via": "land column (-25833, 16792)",
+    "cls": "land"
+  },
+  {
+    "path": "density.noises.islands",
+    "live": true,
+    "via": "island column (975, -735)",
+    "cls": "island"
+  },
+  {
+    "path": "density.detailAmpLo",
+    "live": true,
+    "via": "land column (-25833, 16792)",
+    "cls": "land"
+  },
+  {
+    "path": "density.detailAmpHi",
+    "live": true,
+    "via": "land column (-15542, -30245)",
+    "cls": "land"
+  },
+  {
+    "path": "density.defs",
+    "live": true,
+    "via": "land column (-25833, 16792)",
+    "cls": "land"
+  },
+  {
+    "path": "surface.noises.depth",
+    "live": true,
+    "via": "land column (-25833, 16792)",
+    "cls": "land"
+  },
+  {
+    "path": "surface.noises.patch",
+    "live": true,
+    "via": "patch column (-20548, -22882)",
+    "cls": "patch"
+  },
+  {
+    "path": "surface.noises.bandOffset",
+    "live": true,
+    "via": "badlands column (-26426, -31088)",
+    "cls": "badlands"
+  },
+  {
+    "path": "surface.depthMul",
+    "live": true,
+    "via": "land column (-25833, 16792)",
+    "cls": "land"
+  },
+  {
+    "path": "surface.snowline",
+    "live": true,
+    "via": "snowline column (-25681, 32120)",
+    "cls": "snowline"
+  },
+  {
+    "path": "surface.lapse",
+    "live": true,
+    "via": "snowline column (-25681, 32120)",
+    "cls": "snowline"
+  },
+  {
+    "path": "surface.lapseBase",
+    "live": true,
+    "via": "snowline column (-25681, 32120)",
+    "cls": "snowline"
+  },
+  {
+    "path": "surface.cliffSteep",
+    "live": true,
+    "via": "cliffSteep column (-24200, -4864)",
+    "cls": "cliffSteep"
+  },
+  {
+    "path": "surface.cliffMinY",
+    "live": true,
+    "via": "cliffY column (17107, 13836)",
+    "cls": "cliffY"
+  },
+  {
+    "path": "surface.patchThreshold",
+    "live": true,
+    "via": "patch column (-20548, -22882)",
+    "cls": "patch"
+  },
+  {
+    "path": "surface.rules",
+    "live": true,
+    "via": "land column (-25833, 16792)",
+    "cls": "land"
+  },
+  {
+    "path": "islands.enabled",
+    "live": true,
+    "via": "island column (975, -735)",
+    "cls": "island"
+  },
+  {
+    "path": "islands.noise",
+    "live": true,
+    "via": "island column (975, -735)",
+    "cls": "island"
+  },
+  {
+    "path": "islands.lo",
+    "live": true,
+    "via": "island column (975, -735)",
+    "cls": "island"
+  },
+  {
+    "path": "islands.hi",
+    "live": true,
+    "via": "island column (975, -735)",
+    "cls": "island"
+  }
+]

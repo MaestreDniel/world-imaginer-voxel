@@ -1,8 +1,8 @@
 /**
  * The visual review (SP3b spec §7, §11; SP3a spec §12; master §10 "PNG slices … attached to the SP spec"): the harness
  * PNG slices of the T stage, at world seed '42' on the default profile — vertical slices across a coast, a lake, a
- * river and a mountain, and a horizontal slice at y 62 — written by `npm run docs:review-slices` into
- * `docs/superpowers/specs/assets/sp3b/` (SP3a's slices of the provisional T stay in `assets/sp3a/`).
+ * river and a mountain, and a horizontal slice at y 62 (SP3c adds a desert, a snowy mountain and a badlands site),
+ * committed in `docs/superpowers/specs/assets/sp3c/` (SP3a's slices of the provisional T stay in `assets/sp3a/`).
  *
  * Each site states which kinds of position its line crosses (`needs`). The kinds and the crop checks are read from
  * the voxels (SP3b §7): a position is wet when water stands above its highest stone, and only the water body (sea,
@@ -10,7 +10,8 @@
  * site fails the unit test instead of silently writing a slice without it, and an overhang is checked as voxels.
  *
  * SP3e (spec §8) adds the draft presets' sites at fixed lines through their window centres (`presetReviewSites`),
- * written once per preset with that preset's params, and `slices.json` names the profile (`slicesJson`).
+ * written once per preset with that preset's params, and `slices.json` names the profile (`slicesJson`);
+ * `npm run docs:review-slices` writes them into `docs/superpowers/specs/assets/sp3e/<preset>/`.
  */
 import { mkdirSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';

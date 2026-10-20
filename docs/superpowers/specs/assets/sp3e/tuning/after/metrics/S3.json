@@ -1,0 +1,26 @@
+{
+  "id": "S3",
+  "tier": "quick",
+  "values": {
+    "snowAboveLine.default": 1,
+    "snowAboveLine.large_biomes": 1,
+    "snowAboveLine": 1,
+    "snowNoSky.default": 0,
+    "snowNoSky.large_biomes": 0,
+    "snowNoSky": 0,
+    "snowAboveLine.n.default": 343707,
+    "snowAboveLine.n.large_biomes": 1512031,
+    "snowNoSky.n.default": 1153094,
+    "snowNoSky.n.large_biomes": 4593133,
+    "snowLineCliffTops.default": 12206,
+    "snowLineNotSnow.default": 0,
+    "snowLineCliffTops.large_biomes": 118,
+    "snowLineNotSnow.large_biomes": 0,
+    "columns.default": 8192,
+    "seconds.default": 37.294,
+    "topMismatch.default": 0,
+    "columns.large_biomes": 32768,
+    "seconds.large_biomes": 111.106,
+    "topMismatch.large_biomes": 0
+  }
+}

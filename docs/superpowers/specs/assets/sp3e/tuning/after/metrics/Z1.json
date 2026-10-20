@@ -1,0 +1,26 @@
+{
+  "id": "Z1",
+  "tier": "quick",
+  "values": {
+    "overhangs": 0.08637856570201981,
+    "p99Top": 284,
+    "p5Top": 63,
+    "p50Top": 108,
+    "p95Top": 259,
+    "maxTop": 309,
+    "topsAbove300": 0.006620632580753614,
+    "topHist.250": 658,
+    "topHist.260": 669,
+    "topHist.270": 730,
+    "topHist.280": 251,
+    "topHist.290": 13,
+    "topHist.300": 256,
+    "topHist.310": 0,
+    "cappedTops": 0,
+    "landPositions": 38667,
+    "overhangPositions": 3340,
+    "positions": 65536,
+    "columns": 256,
+    "seconds": 2.663
+  }
+}

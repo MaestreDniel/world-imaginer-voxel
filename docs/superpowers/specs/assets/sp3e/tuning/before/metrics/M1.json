@@ -1,0 +1,9 @@
+{
+  "id": "M1",
+  "tier": "quick",
+  "values": {
+    "states": 25,
+    "roundTripFailures": 0,
+    "lockChanges": 0
+  }
+}

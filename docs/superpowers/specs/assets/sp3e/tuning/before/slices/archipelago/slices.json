@@ -1,0 +1,42 @@
+{
+  "seed": "42",
+  "profile": "archipelago",
+  "slices": [
+    {
+      "file": "slice-archipelago-coast.png",
+      "width": 512,
+      "height": 225,
+      "site": {
+        "name": "archipelago-coast",
+        "file": "slice-archipelago-coast.png",
+        "kind": "vertical",
+        "cx0": -32,
+        "w": 32,
+        "z": 256,
+        "yMin": -64,
+        "yMax": 160,
+        "scale": 1,
+        "needs": []
+      },
+      "summary": {
+        "kinds": {
+          "land": 508,
+          "sea": 4,
+          "lake": 0,
+          "river": 0
+        },
+        "tops": {
+          "desertTop": 0,
+          "snowTop": 0,
+          "badlandsTop": 0
+        },
+        "topMin": 61,
+        "topMax": 134,
+        "waterMax": 63,
+        "overhangs": 23,
+        "waterWallFaces": 2,
+        "waterUnderStone": 0
+      }
+    }
+  ]
+}

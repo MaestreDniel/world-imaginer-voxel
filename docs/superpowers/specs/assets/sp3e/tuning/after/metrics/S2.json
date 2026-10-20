@@ -1,0 +1,29 @@
+{
+  "id": "S2",
+  "tier": "quick",
+  "values": {
+    "deepslateBelow0.default": 1,
+    "deepslateBelow0.large_biomes": 1,
+    "deepslateBelow0": 1,
+    "deepslateAbove8.default": 0,
+    "deepslateAbove8.large_biomes": 0,
+    "deepslateAbove8": 0,
+    "bedrockFloor.default": 1,
+    "bedrockFloor.large_biomes": 1,
+    "bedrockFloor": 1,
+    "deepslateBelow0.n.default": 127926317,
+    "deepslateBelow0.n.large_biomes": 511703138,
+    "deepslateAbove8.n.default": 117539146,
+    "deepslateAbove8.n.large_biomes": 496139845,
+    "stoneBelow0.default": 0,
+    "positions.default": 2097152,
+    "stoneBelow0.large_biomes": 0,
+    "positions.large_biomes": 8388608,
+    "columns.default": 8192,
+    "seconds.default": 37.294,
+    "topMismatch.default": 0,
+    "columns.large_biomes": 32768,
+    "seconds.large_biomes": 111.106,
+    "topMismatch.large_biomes": 0
+  }
+}

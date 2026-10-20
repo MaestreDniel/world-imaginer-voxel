@@ -1,0 +1,23 @@
+{
+  "id": "Z2",
+  "tier": "quick",
+  "values": {
+    "oceanShare": 0.627532958984375,
+    "islandsPer100km2": 8.195638656616211,
+    "islandCount": 88,
+    "sizeClass.lt1": 1446,
+    "sizeClass.1to5": 72,
+    "sizeClass.5to25": 15,
+    "sizeClass.25to100": 1,
+    "sizeClass.ge100": 0,
+    "largestIslandKm2": 28.69248,
+    "islandsPer100km2Step32": 8.195638656616211,
+    "landTopP99": 164,
+    "landTopMax": 209,
+    "beachShare": 0.11144023697061885,
+    "landTopPositions": 24982,
+    "cells": 262144,
+    "rasterKm2": 1073.741824,
+    "seconds": 19.382
+  }
+}
