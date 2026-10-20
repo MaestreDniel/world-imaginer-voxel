@@ -16,7 +16,8 @@
         "Z2": { "oceanShare": 0.6275, "islandsPer100km2": 8.196 },
         "Z3": { "islandColumns": 0.0627, "grassTops": 1, "shadowDiff": 0.899 },
         "terrainIslandsP50Ms": 3.545,
-        "presetsMetricFastSeconds": [4.74, 4.87]
+        "presetsMetricFastSecondsDryRun": [4.74, 4.87],
+        "presetsMetricFastSecondsNote": "not measured on this branch: the dry run's times for this set (the before set was not re-measured at 2ed55e4)"
       },
       "extras": "shots/preset-floating_islands-land.png (a line over land showing the ground under islands), shots/footprint-floating-window.png and ../footprint-c-0.7-0.9-1.1.png (the core's break-up c at 0.7, 0.9, 1.1), slices/floating_islands/slice-islands-cluster-zoom.png"
     },
@@ -29,7 +30,7 @@
         "Z2": { "oceanShare": 0.6275, "islandsPer100km2": 8.196 },
         "Z3": { "islandColumns": 0.0627, "grassTops": 1, "shadowDiff": 0.08 },
         "terrainIslandsP50Ms": 3.646,
-        "presetsMetricFastSeconds": [4.79, 4.93]
+        "presetsMetricFastSeconds": [4.79, 4.87]
       },
       "extras": "as the before set"
     }
