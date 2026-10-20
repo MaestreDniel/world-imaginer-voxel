@@ -856,7 +856,7 @@ Map markers come from the same start function. Structure starts never lie below 
 
 **Budget:** at most 20k voxel visits per job.
 
-### 3.15 Extreme presets (data only: splines + climate params + DAG terms)
+### 3.15 Extreme presets (data only: splines + climate params + DAG terms; SP3e adds the island cluster mask, water v0's island rule and the sky-open run under islands as code)
 
 The built-in presets are the `PROFILES` entries of `core/params/profiles.ts` (SP1): overlays over the defaults, each hidden in the UI until its `readyFrom` sub-project. The amplified, archipelago and floating_islands rows are drafted in SP3e and finalised in SP12 (amended by SP3d).
 
@@ -864,9 +864,9 @@ The built-in presets are the `PROFILES` entries of `core/params/profiles.ts` (SP
 |---|---|
 | default | as above |
 | large_biomes | `climate.scaleMul = 4` |
-| amplified | `offset' = 64 + 1.9·(offset − 64)` where offset > 64; σ ×1.6; jag ×1.6; top slide moved to 300-316 |
-| archipelago | C λ ×0.35; offset spline remapped so C_u < 0.2 is ocean (about 60%); only the coast and near-inland E splines are used |
-| floating_islands | `islands = 20·(NI − 0.35·((y − 230)/40)² + m − 1)` on y ∈ [190, 270], where NI has λxz 72 and λy 36 over 2 octaves and `m = smoothstep(0.55, 0.8, u(λ 700))` clusters islands; plus its own surface-rule branch (grass tops, stone undersides) and island-edge springs |
+| amplified | `offset' = offset + 0.9·(1 − lakeMask)·max(0, offset − 64)` (`64 + 1.9·(offset − 64)` where offset > 64 outside lakes, the identity below; a lake basin keeps its offset, so it holds water at its level); σ ×2.2 (2.2 − 1.2·lakeMask: the default's σ in a lake basin); jag ×1.6; slide 300-314; ceiling `−3·max(0, y − 270)`; all in `density.defs` (SP3e) |
+| archipelago | C λ 840 (×0.35); the φ remap of the SP3e spec §1.3 (shift 0.42: the shore at C_u 0.26-0.32, every C_u < 0.2 ocean, ≈ 63-65 % ocean) on the offset, sigma and jag splines, the coast fade 0.3-0.4, `lakes.minC` 0.32 and the biome boxes' C bounds; near-inland (C 0.47) is the highest C knot, so only the coast and near-inland E splines are used (SP3e) |
+| floating_islands | `islands = 20·(NI − 0.9 − 3·q + 4·(m − 1))`, q = ((y − 230)/40)², NI λxz 72 λy 36 over 2 octaves, inside `interpolated` with the gates m ≥ 0.25 and the corners y 192-264 (island voxels in y 193-263); `m = smoothstep(0.55, 0.8, u(λ 700))` clusters islands, u the climate-style uniform at block coordinates (`islands.enabled`); its own surface-rule branch (grass tops, dirt, stone undersides) on every island run, the ground under an island keeping its palette (the sky-open run is the highest run reaching below y 181); water v0 filling the sea under island runs (bottom ≥ 181) (SP3e) |
 | cave_heavy | cheese offset 0.27 → 0.20, entrance offset 0.37 → 0.30, noodle band widened to y ≤ 120, carver p ×1.5 |
 
 ### 3.16 Cross-column consistency contract
@@ -1703,7 +1703,7 @@ Each sub-project runs its own cycle:
 
 Thresholds are locked (`thresholds.lock.json`) and goldens are gated (§6.2). Sizes: S ≈ 2-4 days, M ≈ 1-2 weeks, L ≈ 2-3 weeks of focused work.
 
-**Cut lines.** Every SP names a cut line: what may slip if it overruns. A slipped item moves to a named receiving SP by amending this section, and the receiving SP adds it to its exit. Default receivers: SP0 Vercel preview check → SP4; SP2b share preview and cross-section → SP10 (both delivered in SP2b, so nothing moved); SP3b worker-split slice → SP3d (delivered in SP3b, so nothing moved); SP3d inspector pins → SP10 (delivered in SP3d, so nothing moved); SP5 worlds-menu polish and palette search → SP10; SP7 vertex waves → SP11; SP8a animation frames → SP11; SP8a fence gates and trapdoors → SP12; SP8b giant trees, boulders and fossils → SP12; SP8c HRTF → SP11; SP9 jungle temple and village depth > 4 → SP12; SP11 Ultra shadows, 3D clouds and Fabulous water → SP12; SP6 underground-only carver and spaghetti-2D rarity bands → SP12; SP7 extra lava reactions → SP12; SP10 seed sweep and column-status heatmap → SP12. SP12's exit requires no open cut-line items, unless the user explicitly dropped one and the impact on its D-decision is recorded.
+**Cut lines.** Every SP names a cut line: what may slip if it overruns. A slipped item moves to a named receiving SP by amending this section, and the receiving SP adds it to its exit. Default receivers: SP0 Vercel preview check → SP4; SP2b share preview and cross-section → SP10 (both delivered in SP2b, so nothing moved); SP3b worker-split slice → SP3d (delivered in SP3b, so nothing moved); SP3d inspector pins → SP10 (delivered in SP3d, so nothing moved); SP3e islands surface branch → SP12 (delivered in SP3e, so nothing moved); SP5 worlds-menu polish and palette search → SP10; SP7 vertex waves → SP11; SP8a animation frames → SP11; SP8a fence gates and trapdoors → SP12; SP8b giant trees, boulders and fossils → SP12; SP8c HRTF → SP11; SP9 jungle temple and village depth > 4 → SP12; SP11 Ultra shadows, 3D clouds and Fabulous water → SP12; SP6 underground-only carver and spaghetti-2D rarity bands → SP12; SP7 extra lava reactions → SP12; SP10 seed sweep and column-status heatmap → SP12. SP12's exit requires no open cut-line items, unless the user explicitly dropped one and the impact on its D-decision is recorded.
 
 **SP0 — Scaffold and guardrails** (S; no dependencies)
 - Repository scaffold at the root: Vite, TS strict, three `~0.186.1`, vitest projects (unit / arch / metrics-fast / metrics-quick / metrics-full / bench; see the SP0 spec).
@@ -1782,10 +1782,10 @@ SP3d was split on 2026-10-09 into SP3d (editable density and surface rules, insp
 **SP3e — Draft presets** (M; SP3d). Spec: `2026-10-16-sp3e-draft-presets-design.md`.
 - Draft `floating_islands`, `amplified` and `archipelago` presets on the editable DAG (terms, splines and params; the islands surface-rule branch), so per-preset goldens and SP11's LOD island scan have a target; their profiles become selectable (`readyFrom: 'SP3e'`); the `islands` group and a real `islandMask`; Z1-Z3 measured on the drafts (SP12 stays their final gate); island-edge springs stay with SP8b.
 - **Deliverable:** the three selectable draft presets.
-- Received from SP3a (its spec §10, moved from SP3d): archipelago's ocean share against B1's 45 % cap (delivered: per-profile B1 parts, archipelago 55-80 %); amplified's offset multiplier and the 320 range (delivered: in the density tree, with the slide at 300-316 and a soft ceiling from 270).
+- Received from SP3a (its spec §10, moved from SP3d): archipelago's ocean share against B1's 45 % cap (delivered: per-profile B1 parts, archipelago 55-80 %); amplified's offset multiplier and the 320 range (delivered: in the density tree, with the slide at 300-314 and a soft ceiling from 270).
 - Received from SP3d (its spec §13): presets as overlays holding whole trees, the islands term and `islandMask` in `COL_FIELD_BOUNDS`, the islands surface-rule branch, Z1-Z3 on the drafts and per-preset goldens (delivered: SP3e spec §1-§6); island-edge springs → SP8b; ref-target widening and the defs-based restructuring closed as not needed (SP3e spec D12-D13); the column-cost maxima unchanged (every preset tree ≤ 1.6 % of them).
 - **Exit:** as the SP3e spec §10.
-- **Cut line:** the islands' own surface branch (→ SP12).
+- **Cut line:** the islands' own surface branch (→ SP12). It was not taken: the branch shipped in SP3e, so nothing moved.
 
 **SP4 — Streaming renderer and light** (L; SP3b)
 - **Week-1 spike:** RegionBatch with a Uint8x4 `position` plus a uint32 `data` attribute in a custom GLSL3 ShaderMaterial with batching chunks, precomputed spheres, `setGeometryAt` churn, per-region `optimize`, and the multi_draw fallback to RegionMesh, stressed at Medium scale.
@@ -1808,6 +1808,7 @@ SP3d was split on 2026-10-09 into SP3d (editable density and surface rules, insp
 **SP6 — Caves, carvers and cave biomes** (L; SP3c, SP5 for in-game review)
 - Cave family terms in the default DAG (cheese / layer / pillars, spaghetti 2D and 3D with rarity, noodle, entrances, roughness, cheese roof term, lake roof); worm and canyon carvers (detMath, LRU); 3D quart cave-biome picker (lush, dripstone, **abyss**) with cave floor and ceiling surface rules; the abyss surface-palette blocks (decided in this SP's spec); debug cave-type tag channel, cave-type tint in the slice viewer, map cave slice and cave-biome layers; `cave_heavy` preset; cave culling.
 - **Deliverable:** explorable caves with visible surface entrances and ravines.
+- Received from SP3e (its spec §12): exclude cave-detached runs above y 180 from the floating_islands island branch, water v0's island rule and the surface scan's sky-open run under islands when caves reach y ≥ 181.
 - **Exit:** C1-C6, B3, R3; re-asserted with caves: L2, S1 (grass at sky 0: master's part, restored in place of SP3c's `grassNoSky` once SP4's light exists; amended by SP3c), DT1, DT2 (probe == bulk); P1: T ≤ 10 ms p50; DAG closure overhead vs a hand-inlined default expression measured and recorded (codegen kill criterion, §7).
 - **Cut line:** the extra underground-only carver; spaghetti-2D rarity bands.
 
@@ -1826,7 +1827,7 @@ SP3d was split on 2026-10-09 into SP3d (editable density and surface rules, insp
 - **Cut line:** animation frames (→ SP11); fence gates and trapdoors (→ SP12).
 
 **SP8b — Decorate content: features, ores, vegetation, cave decoration** (L; SP7, SP8a)
-- Placed-feature data, modifiers and pull-model priority writes; trees (9 species families) and plant patches; cave decoration (glow lichen, cave vines with berries, moss, dripstone, and the **abyss** decoration set: dark crystals, dead roots, fossils, the exclusive mineral — concrete list in this SP's spec); ores; freeze_top_layer; springs, lava lakes and island-edge springs feeding settle; tuning mode (keep every proto) and the decorate-scope Apply path.
+- Placed-feature data, modifiers and pull-model priority writes; trees (9 species families) and plant patches; cave decoration (glow lichen, cave vines with berries, moss, dripstone, and the **abyss** decoration set: dark crystals, dead roots, fossils, the exclusive mineral — concrete list in this SP's spec); ores; freeze_top_layer; springs, lava lakes and island-edge springs feeding settle (island-edge springs on SP3e's islands term, `islandMask` and island runs; SP3e spec §12); tuning mode (keep every proto) and the decorate-scope Apply path.
 - **Deliverable:** forests with groves and clearings; decorated lush, dripstone and abyss caves; ores everywhere.
 - **Exit:** O1, O2, V1-V6, S3 (all parts); R4 asserted with caves, water and leaves (if it fails, §2.6 and §7 memory budgets are re-derived by amendment); DT1 with features; U1 (a decorate edit re-runs only D, L and mesh in tuning mode); P1: D ≤ 3 ms p50; AU4 re-run over the SP8b block states if SP8c is already done.
 - **Cut line:** jungle and dark-oak giant trees, boulders, fossils (→ SP12).
@@ -1853,14 +1854,15 @@ SP3d was split on 2026-10-09 into SP3d (editable density and surface rules, insp
 - **Cut line:** seed sweep; the column-status heatmap (→ SP12).
 
 **SP11 — Graphics scale-up** (L; SP10 for integration, most parts need only SP8a)
-- Presets Low to Ultra: adds the **Graphics** section to `ui/settingsPanel.ts` and the graphics rows to `core/params/graphicsPresets.ts` (AO scaled by preset); moon and stars; flat and 3D clouds; Fabulous water (colour and depth copy); custom shadow depth pass (High 1 cascade, Ultra 2); MSAA rebuild path; painters v2 with animation; resource packs with overlays and colormaps; LOD clipmap with fill mask and island terms; plus received cut-line items.
+- Presets Low to Ultra: adds the **Graphics** section to `ui/settingsPanel.ts` and the graphics rows to `core/params/graphicsPresets.ts` (AO scaled by preset); moon and stars; flat and 3D clouds; Fabulous water (colour and depth copy); custom shadow depth pass (High 1 cascade, Ultra 2); MSAA rebuild path; painters v2 with animation; resource packs with overlays and colormaps; LOD clipmap with fill mask and island terms (the islands tap is non-positive outside the corners y 192-264 and where islandMask < 0.25; SP3e spec §12); plus received cut-line items.
 - **Deliverable:** 1-2 km vistas; presets that switch live; a user-supplied texture pack.
 - **Exit:** G1 in full (Medium on the reference Iris Xe with LOD 512; High on the reference RTX 3060 Mobile); R6; T5 on LOD samples; pack-parser and settings-mapping unit tests.
 - **Cut line:** Ultra shadows, 3D clouds, Fabulous water (→ SP12).
 
 **SP12 — Extreme presets and final tuning** (M; SP11)
 - Finalise amplified, archipelago, floating_islands, large_biomes and cave_heavy; goldens per preset (SP3e's drafts are pinned by `sp3e.*`; finalising them bumps `GENERATOR_VERSION`); profile gallery in docs; baselines refreshed; README; received cut-line items.
-- A "continental" profile (user request, 2026-09-29): large continents with islands in open ocean, via a much longer C wavelength (about 8000) and deep-ocean-dominated low C; it may move to SP3e by amending this section. With it (user request, 2026-09-30): small islands or archipelagos at extremely low C, with no rivers on islets.
+- Received from SP3e (its spec §12): finalise the three drafts with the Z1-Z3 gates active (their rows activate when SP12 starts); Z2's islands part (handed over by the user): 8.20 islands ≥ 1 km² per 100 km² on the quick tier (8.14 on the full tier's four seeds) against ≥ 20, the one Z miss of the drafts: a C-threshold archipelago gives one large island and hundreds of islets and no SP3e lever exceeds 10, so SP12 needs a different coastline mechanism (for example a cluster mask on C, or a second, island-scale C octave set) or the user revises the threshold; the islands coefficients (a = 3, k = 4, c = 0.9) and the core's break-up (Z3's `islandComponents` and `largestFootprint`); the islands `detail` term (8-block facets today); amplified's ceiling (its highest columns cap flat at y 300-310) and `surfaceEst3`'s longer climbs; archipelago's minShare (its own floor of 0.25 %, `frozen_river` at 0.27 %) and its jagged island peaks; B1 on large_biomes and cave_heavy as their presets are finalised.
+- A "continental" profile (user request, 2026-09-29): large continents with islands in open ocean, via a much longer C wavelength (about 8000) and deep-ocean-dominated low C; it stays with SP12 (SP3e did not take it). With it (user request, 2026-09-30): small islands or archipelagos at extremely low C, with no rivers on islets.
 - The volcanic cone (reserved by SP2a, its spec §10): sparse cells in hot high ground add a cone and crater to `offset` and assign the volcano biome by mask; lava in the crater uses SP7's fluids. It may move to an earlier SP by amending this section.
 - **Exit:** Z1-Z4; cave_heavy C1 10-22 %; every other active metric green per preset; DT1 goldens stable; no open cut-line items (unless explicitly dropped by the user with the D-decision impact recorded).
 

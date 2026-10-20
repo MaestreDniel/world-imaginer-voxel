@@ -32,12 +32,23 @@
  * The goldens commit: §1's `metrics/*.ts` entry and "Banned APIs" name `pointDigest.ts`; §1's `test/` entry names SP3e's
  * test files in their own parentheses (it lands with the last of them, `unit/goldens.sp3e.test.ts`); §6.2's goldens line
  * names the `sp3e.*` keys and §10's SP12 says SP3e's drafts are pinned by them.
+ * The exit commit (SP3e §12, §13): the cut-line texts are worded by whether the islands surface branch was built
+ * (`FLOATING_SURFACE_RULES` exists and is floating_islands' rules): built, the SP3e entry's cut line says it was not taken
+ * and the receivers say nothing moved; cut, SP12 receives the branch. §3.15's title names the code SP3e adds and its
+ * amplified, archipelago and floating_islands rows state the final constants, read from the preset trees and overlays;
+ * SP3e's "Received from SP3a" states amplified's final slide; SP6, SP8b and SP11 carry SP3e's notes (the island-run
+ * threshold `ISLAND_RUN_MIN_BOTTOM`, the islands tap's gate and corners read from `FLOATING_DENSITY_TREE`); SP12 receives
+ * SP3e's §12 list with Z2's islands part at its measured value (the committed after set's `Z2.json`), and the continental
+ * profile stays with SP12.
  */
 import { existsSync, readdirSync, readFileSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
 import { describe, expect, test } from 'vitest';
 import { SUB_PROJECTS, type SubProjectId } from '../../src/core/ids';
+import { ISLAND_RUN_MIN_BOTTOM } from '../../src/core/constants';
 import { DEFAULTS } from '../../src/core/params/defaults';
+import * as presetTrees from '../../src/core/params/presetTrees';
+import { resolveProfile } from '../../src/core/params/profiles';
 import { SCHEMA } from '../../src/core/params/schema';
 import { PIN_MAX } from '../../src/ui/inspector/sliceModel';
 import { REGISTRY } from '../../src/world/blocks';
@@ -440,5 +451,120 @@ describe('master spec amendments (SP3e §11, §13)', () => {
     expect(sp3c).toBeGreaterThan(text.indexOf('## 7. Performance budget'));
     expect(at).toBeGreaterThan(sp3c);
     expect(at).toBeLessThan(text.indexOf('## 8. Risks'));
+  });
+});
+
+/** The node at a dotted path of a density tree (object keys only). */
+function nodeAt(tree: unknown, path: string): unknown {
+  let x = tree;
+  for (const k of path.split('.')) {
+    expect(x !== null && typeof x === 'object' && Object.hasOwn(x, k), `no ${k} in ${path}`).toBe(true);
+    x = (x as Record<string, unknown>)[k];
+  }
+  return x;
+}
+
+/** §10's SP12 entry: from its header to the critical path. */
+function sp12Entry(): string {
+  const from = text.indexOf('**SP12 — ');
+  expect(from, 'no SP12 header in §10').toBeGreaterThanOrEqual(0);
+  return text.slice(from, text.indexOf('### Critical path', from));
+}
+
+/** A §3.15 table row of a preset. */
+function presetRow(id: string): string {
+  const from = text.indexOf('### 3.15 Extreme presets');
+  const to = text.indexOf('### 3.16', from);
+  const row = text.slice(from, to).split('\n').find((l) => l.startsWith(`| ${id} |`));
+  expect(row, `no ${id} row in §3.15`).toBeDefined();
+  return row!;
+}
+
+describe('master spec amendments (SP3e §12, §13, exit)', () => {
+  // The cut line (SP3e spec §4.4): built iff floating_islands carries FLOATING_SURFACE_RULES.
+  const built = Object.hasOwn(presetTrees, 'FLOATING_SURFACE_RULES')
+    && resolveProfile('floating_islands').surface.rules === (presetTrees as Record<string, unknown>).FLOATING_SURFACE_RULES;
+  const amp = presetTrees.AMPLIFIED_DENSITY_TREE;
+  const v = (path: string): number => nodeAt(amp, path) as number;
+  const knots = nodeAt(amp, 'root.a.a.x.x.a.a.b.b.knots') as Array<[number, number]>;
+  const slideFrom = knots[2]![0], slideTo = knots[3]![0];
+  // The islands term (SP3e spec §3.1): the m gate, the y window [lo, hi) and BODY's literals.
+  const gate = nodeAt(presetTrees.FLOATING_DENSITY_TREE, 'root.b.x.x') as { lo: number };
+  const band = nodeAt(presetTrees.FLOATING_DENSITY_TREE, 'root.b.x.x.inside') as { lo: number; hi: number };
+  const body = (path: string): number => nodeAt(presetTrees.FLOATING_DENSITY_TREE, `root.b.x.x.inside.inside.${path}`) as number;
+  const lastCorner = band.hi - 1 - ((band.hi - 1 + 64) % 8);
+
+  test('the islands surface branch decides the cut-line texts: SP3e\'s cut line, the receivers, SP12 and SP3e\'s received list', () => {
+    expect(built, 'the dry run built the branch (SP3e spec §4.4)').toBe(true);
+    const entry = spEntry('SP3e', 'SP4');
+    const cut = entry.split('\n').find((l) => l.startsWith('- **Cut line:**'));
+    const fromSp3d = entry.split('\n').find((l) => l.startsWith('- Received from SP3d (its spec §13):'));
+    expect(fromSp3d, 'SP3e has no "Received from SP3d" line').toBeDefined();
+    const sp12 = sp12Entry();
+    if (built) {
+      expect(cut).toBe('- **Cut line:** the islands\' own surface branch (→ SP12). It was not taken: the branch shipped in SP3e, so nothing moved.');
+      expect(text).toContain('SP3e islands surface branch → SP12 (delivered in SP3e, so nothing moved)');
+      expect(fromSp3d).toContain('(delivered: SP3e spec §1-§6);');
+      expect(sp12).not.toContain('the islands surface-rule branch');
+    } else {
+      expect(cut).toBe('- **Cut line:** the islands\' own surface branch (→ SP12).');
+      expect(text).toMatch(/SP3e islands surface branch → SP12[;.]/);
+      expect(fromSp3d).toContain('(delivered: SP3e spec §1-§6, except the islands surface-rule branch, cut to SP12)');
+      expect(sp12).toContain('the islands surface-rule branch');
+    }
+  });
+
+  test('SP3e\'s "Received from SP3a" states amplified\'s final slide and ceiling knee', () => {
+    const line = spEntry('SP3e', 'SP4').split('\n').find((l) => l.startsWith('- Received from SP3a'));
+    expect(line).toContain(`(delivered: in the density tree, with the slide at ${slideFrom}-${slideTo} and a soft ceiling from ${-v('root.a.a.x.x.b.x.b.b.b.v')}).`);
+  });
+
+  test('§3.15\'s title names the code SP3e adds; its draft rows state the final constants of the preset trees and overlays', () => {
+    expect(text).toContain('### 3.15 Extreme presets (data only: splines + climate params + DAG terms; SP3e adds the island cluster mask, water v0\'s island rule and the sky-open run under islands as code)');
+    const a = presetRow('amplified');
+    // The amplification and σ's factor fade with lakeMask: k + (−d)·lakeMask (the SP3e Review Focus).
+    const factor = v('root.a.a.x.x.a.a.a.a.a.b.a.a.v'), knee = -v('root.a.a.x.x.a.a.a.a.a.b.b.b.b.v');
+    expect(-v('root.a.a.x.x.a.a.a.a.a.b.a.b.a.v'), 'the offset fade is k·(1 − lakeMask)').toBe(factor);
+    expect(a).toContain(`\`offset' = offset + ${factor}·(1 − lakeMask)·max(0, offset − ${knee})\``);
+    const sigma = v('root.a.a.x.x.a.a.b.a.b.a.v'), sigmaFade = -v('root.a.a.x.x.a.a.b.a.b.b.a.v');
+    expect(a).toContain(`σ ×${sigma} (${sigma} − ${sigmaFade}·lakeMask: the default's σ in a lake basin); jag ×${v('root.a.a.x.x.a.a.a.a.b.a.b.v')}; slide ${slideFrom}-${slideTo}`);
+    expect(a).toContain(`ceiling \`−${v('root.a.a.x.x.b.x.a.v')}·max(0, y − ${-v('root.a.a.x.x.b.x.b.b.b.v')})\``);
+    expect(a).toContain('in `density.defs`');
+    const arch = resolveProfile('archipelago');
+    const r = presetRow('archipelago');
+    expect(r).toContain(`C λ ${arch.climate.C.wavelength}`);
+    expect(arch.climate.C.wavelength / DEFAULTS.climate.C.wavelength).toBeCloseTo(0.35, 12);
+    expect(r).toContain('shift 0.42: the shore at C_u 0.26-0.32, every C_u < 0.2 ocean');
+    expect(r).toContain(`\`lakes.minC\` ${arch.lakes.minC}`);
+    expect(r).toContain(`coast fade ${arch.rivers.coastFadeLo}-${arch.rivers.coastFadeHi}`);
+    const f = presetRow('floating_islands');
+    const fl = resolveProfile('floating_islands');
+    const ni = fl.density.noises.islands;
+    expect(f).toContain(`\`islands = ${body('a.v')}·(NI − ${-body('b.a.a.b.v')} − ${body('b.a.b.x.a.v')}·q + ${body('b.b.a.v')}·(m − 1))\`, q = ((y − ${-body('b.a.b.x.b.x.a.b.v')})/${1 / body('b.a.b.x.b.x.b.v')})²`);
+    expect(f).toContain(`NI λxz ${ni.wavelength} λy ${ni.wavelength / ni.yScale} over ${ni.octaves} octaves`);
+    expect(f).toContain(`the gates m ≥ ${gate.lo} and the corners y ${band.lo}-${lastCorner}`);
+    expect(f).toContain(`\`m = smoothstep(${fl.islands.lo}, ${fl.islands.hi}, u(λ ${fl.islands.noise.wavelength}))\``);
+    expect(f).toContain(`water v0 filling the sea under island runs (bottom ≥ ${ISLAND_RUN_MIN_BOTTOM})`);
+    if (built) expect(f).toContain('its own surface-rule branch (grass tops, dirt, stone undersides');
+    expect(f, 'island-edge springs moved to SP8b').not.toMatch(/springs/);
+  });
+
+  test('§10\'s SP6, SP8b and SP11 carry SP3e\'s notes', () => {
+    expect(spEntry('SP6', 'SP7')).toContain(`- Received from SP3e (its spec §12): exclude cave-detached runs above y ${ISLAND_RUN_MIN_BOTTOM - 1} from the floating_islands island branch, water v0's island rule and the surface scan's sky-open run under islands when caves reach y ≥ ${ISLAND_RUN_MIN_BOTTOM}.`);
+    expect(spEntry('SP8b', 'SP8c')).toContain('springs, lava lakes and island-edge springs feeding settle (island-edge springs on SP3e\'s islands term, `islandMask` and island runs; SP3e spec §12)');
+    expect(spEntry('SP11', 'SP12')).toContain(`LOD clipmap with fill mask and island terms (the islands tap is non-positive outside the corners y ${band.lo}-${lastCorner} and where islandMask < ${gate.lo}; SP3e spec §12)`);
+  });
+
+  test('§10\'s SP12 receives SP3e\'s §12 list with Z2\'s islands part at its measured value; the continental profile stays with SP12', () => {
+    const sp12 = sp12Entry();
+    const line = sp12.split('\n').find((l) => l.startsWith('- Received from SP3e (its spec §12):'));
+    expect(line, 'SP12 has no "Received from SP3e" line').toBeDefined();
+    const z2 = JSON.parse(readFileSync(`${ROOT_DIR}docs/superpowers/specs/assets/sp3e/tuning/after/metrics/Z2.json`, 'utf8')) as { values: Record<string, number> };
+    const measured = z2.values.islandsPer100km2!.toFixed(2);
+    expect(line).toContain(`Z2's islands part (handed over by the user): ${measured} islands ≥ 1 km² per 100 km² on the quick tier`);
+    expect(line).toContain(`against ≥ ${THRESHOLDS.Z2!.islandsPer100km2!.min}`);
+    expect(line).toContain('the Z1-Z3 gates active');
+    expect(sp12).not.toContain('it may move to SP3e');
+    expect(sp12).toContain('it stays with SP12 (SP3e did not take it)');
   });
 });
