@@ -1,7 +1,7 @@
 # SP4a — The world in 3D, loaded once: renderer, light and meshing (Design)
 
 Date: 2026-10-20
-Status: Draft for the user's review. Written from the design brief the user approved in brainstorming (2026-10-20, `.superpowers/sp4/design-brief.md`, "Lo veo todo correcto"), including its split of SP4 into SP4a (this spec) and SP4b (streaming and life, a later SP). This text adds the decisions the code survey required ("Decisions taken by this spec"), each with its recommendation and the alternative. Revised the same day after the builder check: the user's answers, the user's capability check and the controller's calls are folded in place ("Points decided by the user", "Changes after the builder check").
+Status: Approved by the user (2026-10-20): the design in brainstorming (`.superpowers/sp4/design-brief.md`, incl. the SP4a/SP4b split), then this written spec after the builder check, with the user's answers (water light, island shadow, the start screen at `/`, who runs the measurements) and the user's capability check (Firefox lacks `WEBGL_multi_draw`: RegionMesh in SP4a).
 Parent: master spec `2026-09-26-architecture-design.md`. The sections involved are:
 - §10 SP4, which this spec splits into SP4a and SP4b (§14), and the SP5, SP6, SP7, SP8a, SP8c, SP10 and SP11 entries it hands work to;
 - §2.2 (the light rule and the fluid byte's effective opacity), §2.3 (store: final heightmaps, meta connectivity, epoch cells), §2.5 (`ColumnWriter`, `SectionMesh`, `SubProjectId`), §3.0 and §3.12 (the D stage's skeleton);
