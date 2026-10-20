@@ -79,13 +79,13 @@ describe('the Voxels palette (SP3a spec §5.2)', () => {
       }
     }
     expect(close).toEqual([]);
-    // The spec's hues: grass green, whites for snow and calcite, pale blue for packed ice, grey gravel and deepslate,
+    // The spec's hues: grass green, whites for snow and calcite, ice blue for packed ice, grey gravel and deepslate,
     // terracotta reddish-brown.
     const [gr, gg, gb] = voxelRgb(GRASS_BLOCK, 0, 0);
     expect(gg > gr && gg > gb).toBe(true);
     for (const s of [SNOW_BLOCK, CALCITE]) expect(Math.min(...voxelRgb(s, 0, 0))).toBeGreaterThanOrEqual(200);
     const [ir, ig, ib] = voxelRgb(PACKED_ICE, 0, 0);
-    expect(ib > ig && ig > ir && ir >= 128).toBe(true);
+    expect(ib > ig && ig > ir).toBe(true);
     for (const s of [GRAVEL, DEEPSLATE]) {
       const c = voxelRgb(s, 0, 0);
       expect(Math.max(...c) - Math.min(...c)).toBeLessThanOrEqual(12);

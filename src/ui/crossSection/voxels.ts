@@ -14,6 +14,7 @@ import { MIN_Y, SEA_LEVEL } from '../../core/constants';
 import { MAX_Y } from '../../core/coords';
 import { JobCancelled, type SliceResult, type SurfaceProbeResult } from '../../engine/workerPool';
 import { segmentLength, segmentPointAt, type Segment } from '../../metrics/crossSection';
+import { FLAT_COLORS } from '../../textures/flatColors';
 import { FLUID_LAVA, FLUID_WATER, fluidFalling, fluidLevel, fluidType } from '../../world/blocks/fluid';
 import { AIR, REGISTRY } from '../../world/blocks/index';
 import { SLICE_POINTS, SLICE_ROWS, SLICE_SAMPLES } from '../../workers/protocol';
@@ -21,41 +22,49 @@ import type { Plot, PlotBox } from '../splineEditor/model';
 
 export type Rgb = readonly [number, number, number];
 
+/** A block type's flat colour (SP4a spec §6.3, D14); every block type of the palette has one. */
+function flat(name: string): Rgb {
+  const c = FLAT_COLORS.get(name);
+  if (c === undefined) throw new Error(`VOXEL_COLORS: no flat colour for ${name}`);
+  return c;
+}
+
 /**
  * The Voxels palette. `sky` is air's colour, `seaLevel` the sea-level line, `water` a water surface; every other block
- * type's colour sits under its type name (each state of a type takes it). `unknown` marks a state id outside the
- * registry (every registered state has a colour, pairwise ≥ 24 apart in summed |ΔRGB|, SP3c spec §8).
+ * type's colour sits under its type name (each state of a type takes it), read from the flat-colour table
+ * (`textures/flatColors.ts`, SP4a spec §6.3, D14). `unknown` marks a state id outside the registry (every registered
+ * state has a colour, pairwise ≥ 24 apart in summed |ΔRGB|, SP3c spec §8).
  */
 export const VOXEL_COLORS = {
   sky: [168, 204, 255],
   seaLevel: [112, 150, 206],
-  stone: [125, 125, 125],
-  bedrock: [28, 28, 30],
+  stone: flat('stone'),
+  bedrock: flat('bedrock'),
   water: [40, 92, 222],
   unknown: [255, 0, 255],
   // The SP3c terrain palette (SP3c spec §2.1, §6), in state order.
-  grass_block: [95, 159, 53],
-  dirt: [122, 88, 58],
-  coarse_dirt: [100, 72, 50],
-  podzol: [91, 63, 24],
-  mud: [60, 57, 61],
-  sand: [219, 207, 160],
-  red_sand: [214, 120, 46],
-  sandstone: [190, 174, 120],
-  red_sandstone: [160, 80, 28],
-  gravel: [152, 143, 140],
-  clay: [160, 166, 180],
-  calcite: [222, 223, 218],
-  snow_block: [250, 253, 255],
-  packed_ice: [142, 180, 250],
-  deepslate: [78, 78, 84],
-  terracotta: [152, 94, 67],
-  white_terracotta: [214, 180, 168],
-  orange_terracotta: [184, 104, 40],
-  yellow_terracotta: [186, 133, 35],
-  brown_terracotta: [77, 51, 36],
-  red_terracotta: [143, 61, 47],
-  light_gray_terracotta: [135, 107, 98],
+  grass_block: flat('grass_block'),
+  dirt: flat('dirt'),
+  coarse_dirt: flat('coarse_dirt'),
+  podzol: flat('podzol'),
+  mud: flat('mud'),
+  sand: flat('sand'),
+  red_sand: flat('red_sand'),
+  sandstone: flat('sandstone'),
+  red_sandstone: flat('red_sandstone'),
+  gravel: flat('gravel'),
+  clay: flat('clay'),
+  calcite: flat('calcite'),
+  snow_block: flat('snow_block'),
+  packed_ice: flat('packed_ice'),
+  deepslate: flat('deepslate'),
+  terracotta: flat('terracotta'),
+  white_terracotta: flat('white_terracotta'),
+  orange_terracotta: flat('orange_terracotta'),
+  yellow_terracotta: flat('yellow_terracotta'),
+  brown_terracotta: flat('brown_terracotta'),
+  red_terracotta: flat('red_terracotta'),
+  light_gray_terracotta: flat('light_gray_terracotta'),
 } as const satisfies Record<string, Rgb>;
 
 const COLOR_OF_TYPE: Readonly<Record<string, Rgb | undefined>> = VOXEL_COLORS;
