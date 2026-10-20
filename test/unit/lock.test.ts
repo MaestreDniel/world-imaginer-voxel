@@ -72,8 +72,8 @@ describe('diffGovernance', () => {
     expect(diffGovernance(base, edit((s) => { s.startedSps = ['SP0', 'SP1', 'SP2a', 'SP2b']; }))).toEqual([
       { path: 'startedSps', detail: 'removed SP3a', kind: 'LOOSEN' },
     ]);
-    expect(diffGovernance(base, edit((s) => { s.startedSps = [...s.startedSps, 'SP4']; }))).toEqual([
-      { path: 'startedSps', detail: 'added SP4', kind: 'TIGHTEN' },
+    expect(diffGovernance(base, edit((s) => { s.startedSps = [...s.startedSps, 'SP4a']; }))).toEqual([
+      { path: 'startedSps', detail: 'added SP4a', kind: 'TIGHTEN' },
     ]);
   });
 

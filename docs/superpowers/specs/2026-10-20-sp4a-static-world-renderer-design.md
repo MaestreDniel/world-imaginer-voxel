@@ -676,3 +676,7 @@ Applied when the user approves this spec, each in the commit §12 assigns (the s
 - **§8:** risk 1 "SP3a-SP4" → "SP3a-SP4b"; risk 2 "an SP4 week-1 spike" → "an SP4a week-1 spike".
 
 ## Threshold log
+
+(One line per commit that changes `test/thresholds.lock.json`.)
+
+- 2026-10-21 — SP4a Task 1: startedSps gains 'SP4a' (SP4 split into SP4a and SP4b, spec §12).

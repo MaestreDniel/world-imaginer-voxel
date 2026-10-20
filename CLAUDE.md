@@ -6,7 +6,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 Browser voxel explorer + editor (TypeScript, Vite, three.js r186 WebGL2 with custom GLSL3 ShaderMaterials). Successor of `09-density-terrain` in [world-imaginer](https://github.com/MaestreDniel/world-imaginer); nothing is imported or copied wholesale from there.
 
-**Status:** SP0 complete (2026-09-27), SP1 complete (2026-09-28), SP2a complete (2026-09-30, GENERATOR_VERSION 3), SP2b complete (2026-10-02, GENERATOR_VERSION 3), SP3a complete (2026-10-03, GENERATOR_VERSION 3), SP3b complete (2026-10-07, GENERATOR_VERSION 4), SP3c complete (2026-10-09, GENERATOR_VERSION 5). SP3d complete (2026-10-16, GENERATOR_VERSION 5, the world unchanged: editable density and surface rules, inspector and slice viewer). SP3e complete (2026-10-20, GENERATOR_VERSION 5, the default world unchanged, 59 goldens: the draft presets amplified, archipelago and floating islands). SP4 is next.
+**Status:** SP0 complete (2026-09-27), SP1 complete (2026-09-28), SP2a complete (2026-09-30, GENERATOR_VERSION 3), SP2b complete (2026-10-02, GENERATOR_VERSION 3), SP3a complete (2026-10-03, GENERATOR_VERSION 3), SP3b complete (2026-10-07, GENERATOR_VERSION 4), SP3c complete (2026-10-09, GENERATOR_VERSION 5). SP3d complete (2026-10-16, GENERATOR_VERSION 5, the world unchanged: editable density and surface rules, inspector and slice viewer). SP3e complete (2026-10-20, GENERATOR_VERSION 5, the default world unchanged, 59 goldens: the draft presets amplified, archipelago and floating islands). SP4 was split into SP4a and SP4b (2026-10-20): SP4a (the world in 3D, loaded once) is in progress, SP4b (streaming and life) is next.
 
 ## Source of truth
 

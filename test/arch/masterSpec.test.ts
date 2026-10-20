@@ -316,7 +316,7 @@ describe('master spec amendments (SP3d §12, exit)', () => {
 
 describe('master spec amendments (SP3e §11, §13)', () => {
   test('§10\'s SP3e entry names its spec and sets its deliverable, exit and cut line', () => {
-    const entry = spEntry('SP3e', 'SP4');
+    const entry = spEntry('SP3e', 'SP4a');
     const spec = /Spec: `([^`]+)`/.exec(entry);
     expect(spec, 'the SP3e header names no spec').not.toBeNull();
     expect(spec![1]).toBe('2026-10-16-sp3e-draft-presets-design.md');
@@ -496,7 +496,7 @@ describe('master spec amendments (SP3e §12, §13, exit)', () => {
 
   test('the islands surface branch decides the cut-line texts: SP3e\'s cut line, the receivers, SP12 and SP3e\'s received list', () => {
     expect(built, 'the dry run built the branch (SP3e spec §4.4)').toBe(true);
-    const entry = spEntry('SP3e', 'SP4');
+    const entry = spEntry('SP3e', 'SP4a');
     const cut = entry.split('\n').find((l) => l.startsWith('- **Cut line:**'));
     const fromSp3d = entry.split('\n').find((l) => l.startsWith('- Received from SP3d (its spec §13):'));
     expect(fromSp3d, 'SP3e has no "Received from SP3d" line').toBeDefined();
@@ -515,7 +515,7 @@ describe('master spec amendments (SP3e §12, §13, exit)', () => {
   });
 
   test('SP3e\'s "Received from SP3a" states amplified\'s final slide and ceiling knee', () => {
-    const line = spEntry('SP3e', 'SP4').split('\n').find((l) => l.startsWith('- Received from SP3a'));
+    const line = spEntry('SP3e', 'SP4a').split('\n').find((l) => l.startsWith('- Received from SP3a'));
     expect(line).toContain(`(delivered: in the density tree, with the slide at ${slideFrom}-${slideTo} and a soft ceiling from ${-v('root.a.a.x.x.b.x.b.b.b.v')}).`);
   });
 

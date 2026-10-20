@@ -22,8 +22,8 @@ describe('profiles', () => {
     expect(resolveProfile('archipelago').climate.C.wavelength).toBe(840);
     expect(resolveProfile('default')).toBe(DEFAULTS);
   });
-  test('readiness follows CURRENT_SP: from SP3e every profile but cave_heavy is ready (SP3e spec §11)', () => {
-    expect(CURRENT_SP).toBe('SP3e');
+  test('readiness follows CURRENT_SP: from SP3e every profile but cave_heavy is ready (SP3e spec §11; SP4a spec §12)', () => {
+    expect(CURRENT_SP).toBe('SP4a');
     expect(PROFILE_IDS.filter((id) => isProfileReady(id))).toEqual(['default', 'large_biomes', 'archipelago', 'amplified', 'floating_islands']);
     expect(isProfileReady('cave_heavy')).toBe(false);
     expect(isProfileReady('cave_heavy', 'SP6')).toBe(true);
