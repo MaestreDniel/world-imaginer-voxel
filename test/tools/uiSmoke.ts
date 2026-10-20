@@ -4,11 +4,11 @@
  * Run it with `node test/tools/uiSmoke.ts [options]`: Node 24 strips the types, CDP runs over the global
  * WebSocket, and nothing is added to the dependencies.
  *
- * Processes, as in mapLatency.ts: `npm run build`; its own `vite preview --host 127.0.0.1 --port <P> --strictPort`
- * on a free port P found by binding port 0 (never 5183), ready only when that child prints its URL; its own
- * headless Chrome with a temporary profile (in the OS temp directory or --profile-dir; Chrome's singleton socket
- * stays in $TMPDIR, whose path must be short) and DevTools port 0. At the end it stops only what it started and
- * removes the profile (downloads included).
+ * Processes (helpers in cdp.ts, shared with measureChrome.ts), as in mapLatency.ts: `npm run build`; its own
+ * `vite preview --host 127.0.0.1 --port <P> --strictPort` on a free port P found by binding port 0 (never 5183), ready
+ * only when that child prints its URL; its own headless Chrome with a temporary profile (in the OS temp directory or
+ * --profile-dir; Chrome's singleton socket stays in $TMPDIR, whose path must be short) and DevTools port 0. At the end
+ * it stops only what it started and removes the profile (downloads included).
  *
  * The page is 1400 × 900 CSS px at DPR 1. The steps, in order, each with its checks:
  * - selftest: `?selftest=1` matches every golden in a real module worker;
@@ -72,17 +72,15 @@
  * blocks centred on the window at 16 blocks/px, a 256 × 256 px clip of the map.
  * Options: --skip-build, --profile-dir DIR, --shots DIR. The exit code is 0 only when every check passes.
  */
-import { spawn, type ChildProcess, type SpawnOptions } from 'node:child_process';
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
-import { createServer } from 'node:net';
 import { tmpdir } from 'node:os';
 import { join, resolve } from 'node:path';
-import { fileURLToPath, pathToFileURL } from 'node:url';
+import { pathToFileURL } from 'node:url';
+import {
+  connect, freePort, ignoredLog, npmBuild, ROOT, running, sleep, startChrome, startPreview, stopStarted, type Cdp, type ChromeHandle,
+} from './cdp.ts';
 
 export const VIEWPORT = { width: 1400, height: 900 } as const;
-const DEV_PORT = 5183;
-const CHROME = '/usr/bin/google-chrome';
-const ROOT = fileURLToPath(new URL('../../', import.meta.url));
 /** BIOME_SIZE_SCALE[7]: biome-size position 8 (src/ui/map/biomeSize.ts; a unit test keeps them equal). */
 export const SIZE_8 = 2.29739670999407;
 const SETTLE_MS = 30000;
@@ -396,10 +394,8 @@ export const PRESET_SHOTS = [
   'preset-archipelago.png', 'preset-amplified.png', 'preset-floating_islands.png', 'preset-archipelago-map.png', 'preset-floating_islands-islandMask.png',
 ] as const;
 
-/** A page log entry the smoke test does not count: the favicon.ico 404 (index.html declares no icon). */
-export function ignoredLog(text: string, url: string | undefined): boolean {
-  return url !== undefined && /\/favicon\.ico(\?|$)/.test(url) && text.includes('404');
-}
+/** A page log entry the smoke test does not count: the favicon.ico 404 (index.html declares no icon); shared with measureChrome. */
+export { ignoredLog };
 
 /** What is wrong with a downloaded preset file, compared with the draft it was exported from. */
 export function presetProblems(text: string, expected: { readonly name: string; readonly profile: string; readonly patch: unknown }): string[] {
@@ -757,138 +753,6 @@ function pageHelpers(): SmokePage {
       const data = c.getContext('2d')!.getImageData(x0, y0, x1 - x0 + 1, y1 - y0 + 1).data;
       return { rgba: Array.from(data), width: x1 - x0 + 1, cx: cx - x0, cy: cy - y0 };
     },
-  };
-}
-
-// ---------------------------------------------------------------- processes and CDP
-
-const sleep = (ms: number) => new Promise<void>((r) => setTimeout(r, ms));
-
-/** Every child this runner started, so the cleanup stops exactly those. */
-const started: ChildProcess[] = [];
-
-function start(cmd: string, args: readonly string[], opts: SpawnOptions): ChildProcess {
-  const c = spawn(cmd, args, opts);
-  c.on('error', (e) => console.error(`${cmd}: ${e.message}`));
-  started.push(c);
-  return c;
-}
-
-const running = (c: ChildProcess): boolean => c.exitCode === null && c.signalCode === null;
-
-async function stop(c: ChildProcess): Promise<void> {
-  if (!running(c)) return;
-  const exited = new Promise<void>((r) => c.once('exit', () => r()));
-  c.kill('SIGTERM');
-  if (await Promise.race([exited.then(() => true), sleep(5000).then(() => false)])) return;
-  c.kill('SIGKILL');
-  await exited;
-}
-
-async function npmBuild(): Promise<void> {
-  const c = start('npm', ['run', 'build'], { cwd: ROOT, stdio: 'inherit' });
-  const code = await new Promise<number | null>((r) => c.once('exit', (n) => r(n)));
-  if (code !== 0) throw new Error(`npm run build exited with ${code}`);
-}
-
-/** A free TCP port on 127.0.0.1 (bind port 0, read it, release it), never the dev server's 5183. */
-async function freePort(): Promise<number> {
-  for (;;) {
-    const port = await new Promise<number>((resolve, reject) => {
-      const srv = createServer();
-      srv.once('error', reject);
-      srv.listen(0, '127.0.0.1', () => {
-        const a = srv.address();
-        const p = typeof a === 'object' && a !== null ? a.port : 0;
-        srv.close(() => resolve(p));
-      });
-    });
-    if (port !== 0 && port !== DEV_PORT) return port;
-  }
-}
-
-/** Our own `vite preview` on `port`: ready when it prints its URL; an exit first (for example a taken port) fails. */
-async function startPreview(port: number): Promise<{ readonly child: ChildProcess; readonly url: string }> {
-  const url = `http://127.0.0.1:${port}/`;
-  const child = start(process.execPath, [join(ROOT, 'node_modules/vite/bin/vite.js'), 'preview', '--host', '127.0.0.1', '--port', String(port), '--strictPort'], {
-    cwd: ROOT, stdio: ['ignore', 'pipe', 'pipe'],
-  });
-  let out = '';
-  await new Promise<void>((resolve, reject) => {
-    const timer = setTimeout(() => reject(new Error(`vite preview did not print ${url} within 30 s:\n${out}`)), 30000);
-    const seen = () => {
-      if (out.replace(/\x1b\[[0-9;]*m/g, '').includes(url)) {
-        clearTimeout(timer);
-        resolve();
-      }
-    };
-    child.stdout?.on('data', (d: Buffer) => { out += d.toString(); seen(); });
-    child.stderr?.on('data', (d: Buffer) => { out += d.toString(); });
-    child.once('exit', (code, signal) => {
-      clearTimeout(timer);
-      reject(new Error(`vite preview exited (${code ?? signal}) before it was ready:\n${out}`));
-    });
-  });
-  return { child, url };
-}
-
-/** Our own headless Chrome; it binds a free DevTools port and writes it into the profile's DevToolsActivePort. */
-async function startChrome(profile: string): Promise<{ readonly child: ChildProcess; readonly port: number; readonly browserWs: string }> {
-  const child = start(CHROME, [
-    '--headless=new', `--user-data-dir=${profile}`, '--remote-debugging-port=0', '--no-first-run', '--no-default-browser-check',
-    '--disable-background-timer-throttling', '--disable-backgrounding-occluded-windows', '--disable-renderer-backgrounding',
-    `--window-size=${VIEWPORT.width},${VIEWPORT.height}`, 'about:blank',
-  ], { stdio: 'ignore' });
-  const file = join(profile, 'DevToolsActivePort');
-  for (let i = 0; i < 150; i++) {
-    if (!running(child)) throw new Error('Chrome exited during start-up');
-    if (existsSync(file)) {
-      const [port, path] = readFileSync(file, 'utf8').split('\n');
-      if (port !== undefined && port !== '' && path !== undefined && path !== '') return { child, port: Number(port), browserWs: `ws://127.0.0.1:${port}${path}` };
-    }
-    await sleep(100);
-  }
-  throw new Error('Chrome did not open its DevTools port within 15 s');
-}
-
-interface Cdp {
-  send(method: string, params?: Record<string, unknown>): Promise<Record<string, unknown>>;
-  on(method: string, fn: (params: Record<string, unknown>) => void): void;
-  close(): void;
-}
-
-async function connect(wsUrl: string): Promise<Cdp> {
-  const ws = new WebSocket(wsUrl);
-  await new Promise<void>((resolve, reject) => {
-    ws.addEventListener('open', () => resolve(), { once: true });
-    ws.addEventListener('error', () => reject(new Error(`cannot connect to ${wsUrl}`)), { once: true });
-  });
-  let id = 0;
-  const pending = new Map<number, { resolve: (v: Record<string, unknown>) => void; reject: (e: Error) => void }>();
-  const listeners = new Map<string, Array<(p: Record<string, unknown>) => void>>();
-  ws.addEventListener('message', (ev) => {
-    const m = JSON.parse(String(ev.data)) as { id?: number; method?: string; params?: Record<string, unknown>; result?: Record<string, unknown>; error?: { message: string } };
-    if (m.id !== undefined) {
-      const p = pending.get(m.id);
-      pending.delete(m.id);
-      if (m.error !== undefined) p?.reject(new Error(m.error.message));
-      else p?.resolve(m.result ?? {});
-    } else if (m.method !== undefined) for (const fn of listeners.get(m.method) ?? []) fn(m.params ?? {});
-  });
-  ws.addEventListener('close', () => {
-    for (const p of pending.values()) p.reject(new Error('CDP connection closed'));
-    pending.clear();
-  });
-  return {
-    send(method, params = {}) {
-      return new Promise((resolve, reject) => {
-        const i = ++id;
-        pending.set(i, { resolve, reject });
-        ws.send(JSON.stringify({ id: i, method, params }));
-      });
-    },
-    on(method, fn) { listeners.set(method, [...(listeners.get(method) ?? []), fn]); },
-    close() { ws.close(); },
   };
 }
 
@@ -1974,22 +1838,22 @@ async function runShots(p: Page, dir: string): Promise<string[]> {
 
 async function main(argv: readonly string[]): Promise<number> {
   const args = parseArgs(argv);
-  let chrome: { readonly child: ChildProcess; readonly port: number; readonly browserWs: string } | null = null;
+  let chrome: ChromeHandle | null = null;
   let cdp: Cdp | null = null;
   let profile: string | null = null;
   const pageErrors: string[] = [];
   const ignored: string[] = [];
   const cleanup = async () => {
     cdp?.close();
-    if (chrome !== null && running(chrome.child)) {
+    if (chrome !== null && running(chrome.proc)) {
       try {
-        const browser = await connect(chrome.browserWs);
+        const browser = await connect(chrome.wsUrl);
         await Promise.race([browser.send('Browser.close'), sleep(3000)]).catch(() => undefined);
         browser.close();
       } catch { /* the stop below still ends it */ }
-      if (running(chrome.child)) await Promise.race([new Promise<void>((r) => chrome!.child.once('exit', () => r())), sleep(5000)]);
+      if (running(chrome.proc)) await Promise.race([new Promise<void>((r) => chrome!.proc.once('exit', () => r())), sleep(5000)]);
     }
-    for (const c of started) await stop(c);
+    await stopStarted();
     if (profile !== null) rmSync(profile, { recursive: true, force: true });
   };
   const onSignal = () => { void cleanup().finally(() => process.exit(130)); };
@@ -1999,12 +1863,12 @@ async function main(argv: readonly string[]): Promise<number> {
     if (args.build) await npmBuild();
     const port = await freePort();
     const server = await startPreview(port);
-    console.log(`vite preview (pid ${server.child.pid}) on ${server.url}`);
+    console.log(`vite preview (pid ${server.proc.pid}) on ${server.url}`);
     profile = mkdtempSync(join(resolve(args.profileDir ?? tmpdir()), 'wi10-smoke-chrome-'));
     const downloads = join(profile, 'downloads');
     mkdirSync(downloads);
-    chrome = await startChrome(profile);
-    console.log(`headless Chrome (pid ${chrome.child.pid}) with DevTools on port ${chrome.port}, profile ${profile}`);
+    chrome = await startChrome({ headless: true, profileDir: profile, args: [`--window-size=${VIEWPORT.width},${VIEWPORT.height}`], env: {} });
+    console.log(`headless Chrome (pid ${chrome.proc.pid}) with DevTools on port ${chrome.port}, profile ${profile}`);
     const version = await (await fetch(`http://127.0.0.1:${chrome.port}/json/version`)).json() as { Browser?: string };
     const targets = await (await fetch(`http://127.0.0.1:${chrome.port}/json/list`)).json() as Array<{ type: string; webSocketDebuggerUrl: string }>;
     const target = targets.find((t) => t.type === 'page');
