@@ -106,7 +106,7 @@ describe('condition helpers (SP3c spec §3.1, §3.2)', () => {
     expect(temperatureBelowHolds(0.2, -0.6)).toBe(false);
   });
 
-  test('skyOpen: the run is the topmost solid run', () => {
+  test('skyOpen: the run is its position\'s sky-open run (the scan\'s skyRun)', () => {
     expect(skyOpenHolds(true)).toBe(true);
     expect(skyOpenHolds(false)).toBe(false);
   });

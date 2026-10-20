@@ -79,7 +79,11 @@ export function temperatureBelowHolds(tEff: number, t: number): boolean {
   return tEff < t;
 }
 
-/** `skyOpen`: the voxel's run is the topmost solid run of its position. */
+/**
+ * `skyOpen`: the voxel's run is its position's sky-open run (`SurfaceScan.skyRun`): the first run, or, with
+ * `islands.enabled`, the highest run whose bottom voxel is below y 181 (`ISLAND_RUN_MIN_BOTTOM`); none when no run
+ * qualifies.
+ */
 export function skyOpenHolds(runIsSkyOpen: boolean): boolean {
   return runIsSkyOpen;
 }
