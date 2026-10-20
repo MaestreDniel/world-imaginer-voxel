@@ -331,30 +331,48 @@ describe('the dump with aux B (SP3b spec §7, format 2)', () => {
   });
 });
 
-describe('the CI region cache step (SP3b spec §7)', () => {
+describe('the CI region cache steps (SP3b spec §7; one per metrics job since the parallel CI jobs)', () => {
   const CI = readFileSync(fileURLToPath(new URL('../../.github/workflows/ci.yml', import.meta.url)), 'utf8');
-  /** The steps of the job: each `- ` item of the `steps:` list with its indented lines. */
-  const steps = CI.slice(CI.indexOf('steps:')).split(/\n\s{6}- /).slice(1);
+  /** Each job under `jobs:` with its steps: each `- ` item of its `steps:` list with its indented lines. */
+  const jobs = CI.slice(CI.indexOf('\njobs:\n')).split(/\n {2}(?=[a-z][\w-]*:\n)/).slice(1).map((text) => ({
+    name: text.slice(0, text.indexOf(':')),
+    steps: text.includes('steps:') ? text.slice(text.indexOf('steps:')).split(/\n\s{6}- /).slice(1) : [],
+  }));
+  const isCache = (s: string): boolean => /^uses: actions\/cache@/.test(s);
+  const runsMetrics = (s: string): boolean => /--project metrics-|metricShards\.mjs run/.test(s) && /^(run|name):/.test(s);
+  const metricJobs = jobs.filter((j) => j.steps.some(runsMetrics));
 
-  test('one actions/cache step: the dumps only, before npm test (so the fast tier\'s DT1 can hit too), with no restore-keys', () => {
-    const cache = steps.flatMap((s, i) => (/^uses: actions\/cache@/.test(s) ? [i] : []));
-    expect(cache).toHaveLength(1);
-    const step = steps[cache[0]!]!;
-    // The dumps directory and nothing else: the bundled workers (test/.cache/taskHandler*, …) are rebuilt from the code.
-    expect(step.match(/^\s*path:\s*(.+)$/m)?.[1]?.trim()).toBe('test/.cache/regions');
-    expect(fileURLToPath(new URL('../.cache/regions/', import.meta.url))).toBe(REGION_CACHE_DIR);
-    expect(step).not.toMatch(/restore-keys/);
-    const npmTest = steps.findIndex((s) => /^run: npm test\s*$/m.test(s));
-    const metrics = steps.findIndex((s) => /^run: npm run test:metrics\s*$/m.test(s));
-    expect(npmTest).toBeGreaterThan(cache[0]!);
-    expect(metrics).toBeGreaterThan(npmTest);
+  test('every metrics tier runs in a job (metrics-fast, every metrics-quick shard) and only those jobs cache', () => {
+    expect(metricJobs.map((j) => j.name).sort()).toEqual(['metrics-fast', 'metrics-quick']);
+    expect(metricJobs.find((j) => j.name === 'metrics-quick')!.steps.some((s) => /metricShards\.mjs run "\$SHARD"/.test(s))).toBe(true);
+    for (const j of jobs) if (!metricJobs.includes(j)) expect(j.steps.filter(isCache), j.name).toEqual([]);
   });
 
-  test('its key hashes every file a dump\'s srcKey reads (a srcKey change is always a new key) and the lock file', () => {
-    const key = steps.find((s) => /^uses: actions\/cache@/.test(s))!.match(/^\s*key:\s*(.+)$/m)?.[1] ?? '';
-    const globs = [...(key.match(/hashFiles\(([^)]*)\)/)?.[1] ?? '').matchAll(/'([^']+)'/g)].map((m) => m[1]!);
-    expect(globs).toContain('package-lock.json');
-    const covered = (path: string): boolean => globs.some((g) => (g.endsWith('/**') ? path.startsWith(g.slice(0, -2)) : g === path));
-    for (const entry of SRC_KEY_SCOPE) expect(covered(entry), entry).toBe(true);
+  test('one actions/cache step per metrics job: the dumps only, before its metrics run, with no restore-keys and a key of its own', () => {
+    const keys: string[] = [];
+    for (const j of metricJobs) {
+      const cache = j.steps.flatMap((s, i) => (isCache(s) ? [i] : []));
+      expect(cache, j.name).toHaveLength(1);
+      const step = j.steps[cache[0]!]!;
+      // The dumps directory and nothing else: the bundled workers (test/.cache/taskHandler*, …) are rebuilt from the code.
+      expect(step.match(/^\s*path:\s*(.+)$/m)?.[1]?.trim(), j.name).toBe('test/.cache/regions');
+      expect(step, j.name).not.toMatch(/restore-keys/);
+      expect(j.steps.findIndex(runsMetrics), j.name).toBeGreaterThan(cache[0]!);
+      keys.push(step.match(/^\s*key:\s*(.+)$/m)?.[1] ?? '');
+    }
+    expect(fileURLToPath(new URL('../.cache/regions/', import.meta.url))).toBe(REGION_CACHE_DIR);
+    // Each job (and each shard of the matrix) restores and saves its own dumps.
+    expect(keys.find((k) => k.includes('-metrics-fast-'))).toBeDefined();
+    expect(keys.find((k) => k.includes('-metrics-quick-${{ matrix.shard }}-'))).toBeDefined();
+  });
+
+  test('each key hashes every file a dump\'s srcKey reads (a srcKey change is always a new key) and the lock file', () => {
+    for (const j of metricJobs) {
+      const key = j.steps.find(isCache)!.match(/^\s*key:\s*(.+)$/m)?.[1] ?? '';
+      const globs = [...(key.match(/hashFiles\(([^)]*)\)/)?.[1] ?? '').matchAll(/'([^']+)'/g)].map((m) => m[1]!);
+      expect(globs, j.name).toContain('package-lock.json');
+      const covered = (path: string): boolean => globs.some((g) => (g.endsWith('/**') ? path.startsWith(g.slice(0, -2)) : g === path));
+      for (const entry of SRC_KEY_SCOPE) expect(covered(entry), `${j.name}: ${entry}`).toBe(true);
+    }
   });
 });

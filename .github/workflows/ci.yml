@@ -11,8 +11,33 @@ concurrency:
   group: ci-${{ github.ref }}
   cancel-in-progress: true
 
+# Jobs: `changes` decides the docs-only fast path and the metrics-quick shards; `check` (build, unit, arch,
+# integration), `metrics-fast` and the `metrics-quick` shards run in parallel after it; `ci-ok` is the one status to
+# require. Every vitest job writes a JSON report and lists its slowest files in the job summary.
 jobs:
-  test:
+  changes:
+    runs-on: ubuntu-latest
+    outputs:
+      docs_only: ${{ steps.changes.outputs.docs_only }}
+      shards: ${{ steps.shards.outputs.shards }}
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          fetch-depth: 0
+      - run: node .github/scripts/changes.mjs --self-test
+      # Docs only (docs/**, *.md at any depth, nothing else) against the PR base or the push's `before`; a new
+      # branch, a force push or any doubt runs the full path.
+      - id: changes
+        run: node .github/scripts/changes.mjs
+        env:
+          BEFORE: ${{ github.event.before }}
+          FORCED: ${{ github.event.forced }}
+          PR_BASE: ${{ github.event.pull_request.base.sha }}
+      - id: shards
+        run: echo "shards=$(node .github/scripts/metricShards.mjs matrix)" >> "$GITHUB_OUTPUT"
+
+  check:
+    needs: changes
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v7
@@ -24,15 +49,91 @@ jobs:
           cache: npm
       - run: npm ci
       - run: npm run build
+      # The docs-only path runs unit and arch (arch's master spec, governance and threshold-log tests read the docs)
+      # and skips integration.
+      - name: vitest unit, arch and integration
+        run: |
+          projects="--project unit --project arch"
+          if [ "$DOCS_ONLY" != true ]; then projects="$projects --project integration"; fi
+          npx vitest run $projects --reporter=default --reporter=json --outputFile.json="$RUNNER_TEMP/vitest.json"
+        env:
+          DOCS_ONLY: ${{ needs.changes.outputs.docs_only }}
+          GOVERNANCE_BASE: ${{ github.event.pull_request.base.sha || github.event.before }}
+      - if: ${{ !cancelled() }}
+        run: node .github/scripts/slowest.mjs --title "Slowest test files (check)" "$RUNNER_TEMP/vitest.json"
+
+  metrics-fast:
+    needs: changes
+    if: needs.changes.outputs.docs_only != 'true'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-node@v7
+        with:
+          node-version-file: .nvmrc
+          cache: npm
+      - run: npm ci
       # The region cache (SP3b spec §7): dumps only, never the bundled workers (test/.cache/taskHandler* etc.). The key
       # covers everything a dump's srcKey hashes; no restore-keys, so a code change starts cold instead of restoring
-      # dumps that can never hit. Restored before npm test, so metrics-fast's DT1 can hit as well as metrics-quick's;
-      # the post step saves both tiers' dumps.
+      # dumps that can never hit. Each metrics job (metrics-fast, every metrics-quick shard) has its own key suffix, so
+      # each restores and saves only the dumps of its own tier and files.
       - uses: actions/cache@v6
         with:
           path: test/.cache/regions
-          key: regions-${{ runner.os }}-${{ hashFiles('src/**', 'test/harness/**', 'package-lock.json') }}
-      - run: npm test
+          key: regions-${{ runner.os }}-metrics-fast-${{ hashFiles('src/**', 'test/harness/**', 'package-lock.json') }}
+      - run: npx vitest run --project metrics-fast --reporter=default --reporter=json --outputFile.json="$RUNNER_TEMP/vitest.json"
+      - if: ${{ !cancelled() }}
+        run: node .github/scripts/slowest.mjs --title "Slowest test files (metrics-fast)" "$RUNNER_TEMP/vitest.json"
+
+  # metrics-quick split by .github/scripts/metricShards.mjs: named heavy files in their own shards plus a catch-all
+  # shard that excludes them, so a new metric file always runs; its `check` fails the job unless the shards cover the
+  # project's files exactly once.
+  metrics-quick:
+    needs: changes
+    if: needs.changes.outputs.docs_only != 'true'
+    name: metrics-quick (${{ matrix.shard }})
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        shard: ${{ fromJSON(needs.changes.outputs.shards) }}
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-node@v7
+        with:
+          node-version-file: .nvmrc
+          cache: npm
+      - run: npm ci
+      - run: node .github/scripts/metricShards.mjs check
+      # The region cache: see metrics-fast (dumps only, no restore-keys, a key per job).
+      - uses: actions/cache@v6
+        with:
+          path: test/.cache/regions
+          key: regions-${{ runner.os }}-metrics-quick-${{ matrix.shard }}-${{ hashFiles('src/**', 'test/harness/**', 'package-lock.json') }}
+      - run: node .github/scripts/metricShards.mjs run "$SHARD" "$RUNNER_TEMP/vitest.json"
         env:
-          GOVERNANCE_BASE: ${{ github.event.pull_request.base.sha || github.event.before }}
-      - run: npm run test:metrics
+          SHARD: ${{ matrix.shard }}
+      - if: ${{ !cancelled() }}
+        run: node .github/scripts/slowest.mjs --title "Slowest test files (metrics-quick $SHARD)" "$RUNNER_TEMP/vitest.json"
+        env:
+          SHARD: ${{ matrix.shard }}
+
+  # The status to require: every job green, except that the docs-only path skips the metrics jobs.
+  ci-ok:
+    needs: [changes, check, metrics-fast, metrics-quick]
+    if: always()
+    runs-on: ubuntu-latest
+    steps:
+      - run: |
+          echo "docs_only=$DOCS_ONLY changes=$CHANGES check=$CHECK metrics-fast=$FAST metrics-quick=$QUICK"
+          [ "$CHANGES" = success ] || { echo "::error::changes: $CHANGES"; exit 1; }
+          [ "$CHECK" = success ] || { echo "::error::check: $CHECK"; exit 1; }
+          if [ "$DOCS_ONLY" = true ]; then want=skipped; else want=success; fi
+          [ "$FAST" = "$want" ] || { echo "::error::metrics-fast: $FAST (want $want)"; exit 1; }
+          [ "$QUICK" = "$want" ] || { echo "::error::metrics-quick: $QUICK (want $want)"; exit 1; }
+        env:
+          DOCS_ONLY: ${{ needs.changes.outputs.docs_only }}
+          CHANGES: ${{ needs.changes.result }}
+          CHECK: ${{ needs.check.result }}
+          FAST: ${{ needs.metrics-fast.result }}
+          QUICK: ${{ needs.metrics-quick.result }}

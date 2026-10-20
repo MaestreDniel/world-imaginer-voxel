@@ -65,7 +65,7 @@ D1-D20 are decisions. Metric IDs (N*, T*, B*, C*, A*, S*, O*, V*, X*, DT*, R*, L
 ```
 world-imaginer-voxel/          (repository root)
   README.md CLAUDE.md .gitignore
-  .github/workflows/ci.yml   npm ci → build → npm test → npm run test:metrics (quick, cached) on push and PR
+  .github/workflows/ci.yml   on push and PR, in parallel jobs: check (npm ci → build → unit, arch, integration), metrics-fast and the metrics-quick shards (cached); a docs-only change runs build, unit and arch only (amended 2026-10-20: parallel CI jobs)
   docker-compose.yml         service world-imaginer-voxel, port 5183, default compose network
   docs/superpowers/specs/ plans/   this spec and every SP spec/plan
   package.json        deps: three@~0.186.1 | dev: vite, typescript, vitest, @types/three, @types/node (tests/arch/worker_threads; amended by SP0)
@@ -1349,7 +1349,7 @@ WASD; Space (up/jump); Shift (down/sneak); Ctrl (sprint); F (walk/fly); M (map);
 - flood from sky and connected components;
 - a raycast visibility reference for cave culling.
 
-**Region cache** (`cache.ts`): binary dumps keyed by `genKey + srcKey + REGION_CACHE_FORMAT + region + upTo`, plus `stageHash('mesh')` when upTo is 'MESH', in `test/.cache/regions`. `srcKey` hashes the generator sources and the format version is bumped when the dump layout changes, because `genKey` does not track code changes made without a stage bump (amended by SP3a). Format 2 stores each column's aux A and then aux B, and the region hash covers aux B too; CI restores `test/.cache/regions` with `actions/cache` before `npm run test:metrics` (amended by SP3b).
+**Region cache** (`cache.ts`): binary dumps keyed by `genKey + srcKey + REGION_CACHE_FORMAT + region + upTo`, plus `stageHash('mesh')` when upTo is 'MESH', in `test/.cache/regions`. `srcKey` hashes the generator sources and the format version is bumped when the dump layout changes, because `genKey` does not track code changes made without a stage bump (amended by SP3a). Format 2 stores each column's aux A and then aux B, and the region hash covers aux B too; CI restores `test/.cache/regions` with `actions/cache` before `npm run test:metrics` (amended by SP3b), with a key of its own in each metrics job (amended 2026-10-20: parallel CI jobs).
 
 **Suites:**
 

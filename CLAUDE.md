@@ -37,6 +37,7 @@ Browser voxel explorer + editor (TypeScript, Vite, three.js r186 WebGL2 with cus
 
 - TypeScript strict. Runtime dependency: `three` only. Dev dependencies: `vite`, `typescript`, `vitest`, `@types/three`, `@types/node`.
 - Tests are mandatory (vitest): unit, arch and metric tests. Metric thresholds are locked (`test/thresholds.lock.json`); never loosen one without amending the spec. A part may gate on some tiers only (`tiers`; SP3b's T3 gates on full and is recorded on fast and quick), and dropping a tier counts as loosening. Golden changes require a `GENERATOR_VERSION` bump.
+- CI runs `check` (build, unit, arch, integration), `metrics-fast` and the `metrics-quick` shards (`.github/scripts/metricShards.mjs`; a new metric file lands in the catch-all `rest`) in parallel, gated by `ci-ok`; a docs-only change (`docs/**`, `*.md`) runs build, unit and arch only. Each SP spec states its expected CI wall-time impact, and its exit evidence records the CI run's wall time.
 - Layer rules (spec §1) are enforced by arch tests: `core` ← `world` ← `gen` ← L2 (`light`, `mesh`, `sim`, `persist`, `metrics`); `render/` is the only place three is imported and `render/materials/**` the only place GLSL lives; `sound/` is the only place WebAudio is used.
 - In `core/`, `world/` and `gen/`: no `Math.random`, `Date.now`, `performance.now` or `console.*`; in `gen/` no `Math.sin/cos/exp/...` (use `core/detMath`) and no exported numeric constants (tunables live in `ParamSchema`).
 - No audio files (`.ogg`/`.mp3`/`.wav`) in the repository; sound packs are user-supplied.
