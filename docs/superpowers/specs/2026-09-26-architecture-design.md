@@ -1084,7 +1084,7 @@ This is a custom depth pass (the `shadowDepth` material decodes the same vertex 
 
 ### 4.9 Sky, day/night, clouds
 
-- **Phases** come from sun elevation: dawn and dusk are elevation ∈ (−6°, 10°). This fixes 09's dusk-after-sunset. The default cycle is 20 min, with controls for cycle length, time, pause and night floor.
+- **Phases** come from sun elevation: dawn and dusk are elevation ∈ (−6°, 10°). This fixes 09's dusk-after-sunset. The default cycle is 20 min (SP4a: the sun on a path tilted 20°, t 0 at sunrise, the world opening at 08:00; T cycles the time speed ×1, ×10, ×60, paused), with controls for cycle length, time, pause and night floor.
 - **Sky dome:** zenith and horizon gradient, sun disc with glow, a moon quad opposite the sun with 8 phases, and 1500 stars as Points fading with elevation. `skyColor(dir)` is shared with fog and water.
 - **Clouds:** a seeded 256² cell bitmap with 12-block cells at y 192-196, scrolling. Flat and translucent at Medium, greedy boxes 4 blocks thick at High+. Clouds fade with fog.
 
