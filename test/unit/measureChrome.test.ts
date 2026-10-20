@@ -1,6 +1,9 @@
+import type { ChildProcess } from 'node:child_process';
+import { EventEmitter } from 'node:events';
 import { describe, expect, test } from 'vitest';
 import {
-  chromeArgs, flightLine, gpuMatches, launchEnv, MEASURE_LOAD_MAX, outputName, parseMeasureArgs, routePath, viewportProblem, type MeasureArgs,
+  chromeArgs, flightLine, gpuMatches, launchEnv, MEASURE_LOAD_MAX, outputName, parseMeasureArgs, pollResult, routePath, viewportProblem, watchPage,
+  withTimeout, type MeasureArgs,
 } from '../tools/measureChrome';
 
 const IRIS = 'ANGLE (Intel, Mesa Intel(R) Iris(R) Xe Graphics (ADL GT2), OpenGL 4.6)';
@@ -110,5 +113,79 @@ describe('measureChrome: the flight summary line (ruling P9)', () => {
     expect(flightLine({ frames: { p95: 16.667 }, drawCalls: { max: 84 }, main: { p95: 2.5 } })).toBe('frame p95 16.667 ms, draw calls max 84, main p95 2.5 ms');
     expect(flightLine({ frames: {} })).toBe('frame p95 n/a, draw calls max n/a, main p95 n/a');
     expect(flightLine(null)).toBe('frame p95 n/a, draw calls max n/a, main p95 n/a');
+  });
+});
+
+describe('measureChrome: the result poll never hangs (Task 2 review, Important 1)', () => {
+  const never = () => new Promise<never>(() => undefined);
+  const fast = { pollMs: 1, callTimeoutMs: 20, timeoutMs: 60_000 };
+
+  test('withTimeout passes a value through and rejects a promise that never settles', async () => {
+    await expect(withTimeout(Promise.resolve(7), 20, 'x')).resolves.toBe(7);
+    await expect(withTimeout(never(), 20, 'Runtime.evaluate')).rejects.toThrow(/Runtime\.evaluate timed out after 20 ms/);
+  });
+
+  test('pollResult returns the first non-null result', async () => {
+    const reads = [null, null, '{"verdict":"pass"}'];
+    await expect(pollResult({ ...fast, read: async () => reads.shift() ?? null, dead: () => null })).resolves.toBe('{"verdict":"pass"}');
+  });
+
+  test('a read that never settles (the closed socket) is bounded, and a dead Chrome then fails the poll', async () => {
+    let calls = 0;
+    const t0 = Date.now();
+    await expect(pollResult({ ...fast, read: () => { calls++; return never(); }, dead: () => (calls > 0 ? 'Chrome exited (null) during the run' : null) }))
+      .rejects.toThrow(/Chrome exited/);
+    expect(calls).toBe(1);
+    expect(Date.now() - t0).toBeLessThan(5000);
+  });
+
+  test('a dead page is refused before any read', async () => {
+    let calls = 0;
+    await expect(pollResult({ ...fast, read: async () => { calls++; return null; }, dead: () => 'the page crashed (Inspector.targetCrashed)' }))
+      .rejects.toThrow(/targetCrashed/);
+    expect(calls).toBe(0);
+  });
+
+  test('the overall timeout still fires when every read hangs, and names the last read error', async () => {
+    await expect(pollResult({ pollMs: 1, callTimeoutMs: 10, timeoutMs: 60, read: never, dead: () => null }))
+      .rejects.toThrow(/no result within 60 ms; last read error: Runtime\.evaluate timed out after 10 ms/);
+    await expect(pollResult({ pollMs: 1, callTimeoutMs: 10, timeoutMs: 30, read: () => Promise.reject(new Error('page error: boom')), dead: () => null }))
+      .rejects.toThrow(/last read error: page error: boom/);
+  });
+
+  test('watchPage: Chrome exiting, the target crashing or DevTools detaching mark the page lost and reject `lost`', async () => {
+    const fake = () => {
+      const listeners = new Map<string, (p: Record<string, unknown>) => void>();
+      const proc = Object.assign(new EventEmitter(), { exitCode: null as number | null, signalCode: null as string | null });
+      return { cdp: { on: (m: string, fn: (p: Record<string, unknown>) => void) => { listeners.set(m, fn); } }, listeners, proc };
+    };
+    {
+      const f = fake();
+      const w = watchPage(f.cdp, f.proc as unknown as ChildProcess);
+      expect(w.dead()).toBeNull();
+      f.listeners.get('Inspector.targetCrashed')!({});
+      expect(w.dead()).toMatch(/crashed/);
+      await expect(w.lost).rejects.toThrow(/crashed/);
+    }
+    {
+      const f = fake();
+      const w = watchPage(f.cdp, f.proc as unknown as ChildProcess);
+      f.proc.exitCode = 0;
+      f.proc.emit('exit', 0, null);
+      expect(w.dead()).toMatch(/Chrome exited/);
+      await expect(w.lost).rejects.toThrow(/Chrome exited/);
+    }
+    {
+      const f = fake();
+      const w = watchPage(f.cdp, f.proc as unknown as ChildProcess);
+      f.listeners.get('Inspector.detached')!({ reason: 'target_closed' });
+      expect(w.dead()).toMatch(/detached.*target_closed/);
+    }
+    {
+      const f = fake();
+      const w = watchPage(f.cdp, f.proc as unknown as ChildProcess);
+      f.proc.signalCode = 'SIGKILL';
+      expect(w.dead()).toMatch(/Chrome exited/);
+    }
   });
 });

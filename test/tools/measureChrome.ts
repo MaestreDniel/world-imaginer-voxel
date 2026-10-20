@@ -15,13 +15,14 @@
  * 5. it probes the WebGL renderer and refuses unless it names the expected GPU (`gpuMatches`), then refuses unless the
  *    viewport is exactly 1920 × 1080 @ 1 (ruling P7); --probe-only stops here with exit 0;
  * 6. it records the page's console errors (ruling P8), navigates, and polls the route's result every second (15 min);
+ *    every CDP call is bounded, and the poll fails fast when Chrome exits or the tab crashes (`pollResult`, `watchPage`);
  * 7. it adds who measured, the load averages, the Chrome version, the viewport and the console errors, writes the
  *    JSON pretty-printed and prints its path and summary (ruling P9);
  * 8. it stops only its own Chrome and preview, then removes the profile.
  *
  * Tools run under plain Node (type stripping), so this file imports no `src/` module.
  */
-import { execFileSync } from 'node:child_process';
+import { execFileSync, type ChildProcess } from 'node:child_process';
 import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
 import { loadavg, tmpdir } from 'node:os';
 import { join } from 'node:path';
@@ -35,6 +36,11 @@ export const MEASURE_LOAD_MAX = 2;
 const SCREEN = { width: 1920, height: 1080, dpr: 1 } as const;
 const POLL_MS = 1000;
 const RESULT_TIMEOUT_MS = 15 * 60 * 1000;
+/**
+ * The longest any one CDP call may take. A send on a closed socket never settles (Node's WebSocket.send returns
+ * silently once CLOSED) and a crashed tab never answers Runtime.evaluate, so an unbounded await would hang the tool.
+ */
+const CDP_CALL_TIMEOUT_MS = 30_000;
 /** How long the fullscreen window may take to reach its size before the viewport check refuses. */
 const VIEWPORT_SETTLE_MS = 5000;
 const ASSETS = 'docs/superpowers/specs/assets/sp4a';
@@ -185,8 +191,18 @@ const readResult = (a: MeasureArgs) => `(() => {
 
 type Viewport = { innerWidth: number; innerHeight: number; devicePixelRatio: number };
 
+/** `p`, or a rejection naming `what` after `ms`; the timer is cleared either way, so it never holds the process. */
+export function withTimeout<T>(p: Promise<T>, ms: number, what: string): Promise<T> {
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  const timeout = new Promise<never>((_, reject) => { timer = setTimeout(() => reject(new Error(`${what} timed out after ${ms} ms`)), ms); });
+  return Promise.race([p, timeout]).finally(() => clearTimeout(timer));
+}
+
+/** One CDP call, bounded by CDP_CALL_TIMEOUT_MS (cdp.ts's bodies stay as moved, ruling P4: the bound lives here). */
+const call = (cdp: Cdp, method: string, params: Record<string, unknown> = {}) => withTimeout(cdp.send(method, params), CDP_CALL_TIMEOUT_MS, method);
+
 async function evaluate<T>(cdp: Cdp, expression: string): Promise<T> {
-  const r = await cdp.send('Runtime.evaluate', { expression, awaitPromise: true, returnByValue: true });
+  const r = await call(cdp, 'Runtime.evaluate', { expression, awaitPromise: true, returnByValue: true });
   const ex = r['exceptionDetails'] as { text?: string; exception?: { description?: string } } | undefined;
   if (ex !== undefined) throw new Error(`page error: ${ex.exception?.description ?? ex.text ?? 'unknown'}`);
   return (r['result'] as { value?: unknown }).value as T;
@@ -199,6 +215,76 @@ async function settledViewport(cdp: Cdp): Promise<Viewport> {
     const v = await evaluate<Viewport>(cdp, READ_VIEWPORT);
     if (viewportProblem(v) === null || Date.now() - t0 >= VIEWPORT_SETTLE_MS) return v;
     await sleep(250);
+  }
+}
+
+// ---------------------------------------------------------------- the poll
+
+/** Whether the measured page can still answer, and a promise that rejects the moment it cannot. */
+export interface PageWatch {
+  /** Rejects with the reason once Chrome exits, the tab crashes or DevTools detaches; never resolves. */
+  readonly lost: Promise<never>;
+  /** Why the page can no longer answer, or null while it can. */
+  dead(): string | null;
+}
+
+/**
+ * Watches our Chrome and its page target: the process's exit, `Inspector.targetCrashed` (an out-of-memory tab, for
+ * example) and `Inspector.detached` (the target closed). The caller enables the Inspector domain.
+ */
+export function watchPage(cdp: Pick<Cdp, 'on'>, proc: ChildProcess): PageWatch {
+  let why: string | null = null;
+  let reject: (e: Error) => void = () => undefined;
+  const lost = new Promise<never>((_, r) => { reject = r; });
+  lost.catch(() => undefined); // observed through dead() as well; never an unhandled rejection
+  const mark = (reason: string) => {
+    if (why !== null) return;
+    why = reason;
+    reject(new Error(reason));
+  };
+  cdp.on('Inspector.targetCrashed', () => mark('the page crashed (Inspector.targetCrashed)'));
+  cdp.on('Inspector.detached', (e) => mark(`DevTools detached from the page (${String(e['reason'] ?? 'unknown')})`));
+  proc.once('exit', (code: number | null, signal: string | null) => mark(`Chrome exited (${code ?? signal}) during the run`));
+  return {
+    lost,
+    dead: () => why ?? (running(proc) ? null : `Chrome exited (${proc.exitCode ?? proc.signalCode}) during the run`),
+  };
+}
+
+export interface ResultPoll {
+  /** One read of the route's result: its JSON text, or null while the page has none yet. */
+  read(): Promise<string | null>;
+  /** Why the page can no longer answer (`PageWatch.dead`), or null. */
+  dead(): string | null;
+  readonly pollMs: number;
+  /** The bound on each read. */
+  readonly callTimeoutMs: number;
+  /** The overall bound (brief step 7: 15 min). */
+  readonly timeoutMs: number;
+}
+
+const durationText = (ms: number) => (ms % 60_000 === 0 ? `${ms / 60_000} min` : `${ms} ms`);
+
+/**
+ * Polls `read` every `pollMs` until it returns a result. Each read is bounded, so the overall timeout is always
+ * reached; a dead page fails at once; a read error (a page exception, a timeout) is kept and named in the timeout.
+ */
+export async function pollResult(o: ResultPoll): Promise<string> {
+  const t0 = Date.now();
+  let lastError: string | null = null;
+  for (;;) {
+    const why = o.dead();
+    if (why !== null) throw new Error(`no result: ${why}${lastError === null ? '' : `; last read error: ${lastError}`}`);
+    if (Date.now() - t0 > o.timeoutMs) {
+      throw new Error(`no result within ${durationText(o.timeoutMs)}${lastError === null ? '' : `; last read error: ${lastError}`}`);
+    }
+    await sleep(o.pollMs);
+    try {
+      const text = await withTimeout(o.read(), o.callTimeoutMs, 'Runtime.evaluate');
+      if (text !== null) return text;
+    } catch (e) {
+      lastError = e instanceof Error ? e.message : String(e);
+    }
   }
 }
 
@@ -285,8 +371,10 @@ async function main(argv: readonly string[]): Promise<number> {
       if (entry.level !== 'error' || ignoredLog(entry.text, entry.url)) return;
       consoleErrors.push(`log: ${entry.text}${entry.url === undefined ? '' : ` (${entry.url})`}`);
     });
-    await cdp.send('Runtime.enable');
-    await cdp.send('Log.enable');
+    const watch = watchPage(cdp, chrome.proc);
+    await call(cdp, 'Runtime.enable');
+    await call(cdp, 'Log.enable');
+    await call(cdp, 'Inspector.enable');
 
     const renderer = await evaluate<string>(cdp, PROBE_RENDERER);
     console.log(`renderer: ${renderer}`);
@@ -308,16 +396,17 @@ async function main(argv: readonly string[]): Promise<number> {
 
     const url = new URL(routePath(a), server.url).href;
     console.log(`navigating to ${url}`);
-    await cdp.send('Page.navigate', { url });
-    const t0 = Date.now();
-    let text: string | null = null;
-    while (text === null) {
-      if (Date.now() - t0 > RESULT_TIMEOUT_MS) {
-        throw new Error(`no result within ${RESULT_TIMEOUT_MS / 60000} min${consoleErrors.length === 0 ? '' : `; console errors:\n${consoleErrors.join('\n')}`}`);
-      }
-      await sleep(POLL_MS);
-      text = await evaluate<string | null>(cdp, readResult(a)).catch(() => null);
-    }
+    await call(cdp, 'Page.navigate', { url });
+    const page = cdp;
+    const text = await pollResult({
+      read: () => Promise.race([evaluate<string | null>(page, readResult(a)), watch.lost]),
+      dead: watch.dead,
+      pollMs: POLL_MS,
+      callTimeoutMs: CDP_CALL_TIMEOUT_MS,
+      timeoutMs: RESULT_TIMEOUT_MS,
+    }).catch((e: unknown) => {
+      throw new Error(`${e instanceof Error ? e.message : String(e)}${consoleErrors.length === 0 ? '' : `; console errors:\n${consoleErrors.join('\n')}`}`);
+    });
     const loadAvg1After = loadavg()[0]!;
     const viewport = await evaluate<Viewport>(cdp, READ_VIEWPORT);
     const result: Record<string, unknown> = {
