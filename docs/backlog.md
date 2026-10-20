@@ -1,0 +1,9 @@
+# Backlog (outside any sub-project's scope)
+
+Improvements noted for later. They belong to no SP spec; pick them up when convenient.
+
+## CI
+
+- **Shard the unit project.** Since the parallel CI (2026-10-20), the `check` job (build, unit, arch, integration) is the longest job: unit and arch alone take about 157 s on the 4-vCPU runner. Splitting the unit project across two jobs (for example `vitest --shard`, or named heavy files plus a catch-all as `.github/scripts/metricShards.mjs` does) would bring a full run from about 3.5 min to about 2-2.5 min, and the docs-only path from about 3.3 min to about 1.5 min.
+- **Require `ci-ok` in branch protection** if branch protection is enabled for `main`: it is the one status that summarises every job, and it treats the skipped metrics jobs as success only on the docs-only path.
+- **Rebalance the metrics-quick shards** when a job's slow-test summary shows one shard running much longer than the others (the shards are listed only in `metricShards.mjs`).
