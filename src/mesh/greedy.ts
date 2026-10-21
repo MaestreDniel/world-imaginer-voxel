@@ -16,12 +16,14 @@
  *   `AO_FACTORS[ao2 v1] + AO_FACTORS[ao2 v3] > AO_FACTORS[ao2 v0] + AO_FACTORS[ao2 v2]`, else along v0-v2.
  *
  * With `ao` off every `ao2` is 0; with `smoothLight` off every vertex carries F's light. `layer` is the state id,
- * `tint` is `TINT[state]` and `flags` 0 (SP4a spec §5.5).
+ * `tint` is `TINT[state]` and `flags` 0 (SP4a spec §5.5). The face tables, the corner light, the merge loop and the
+ * corner positions are `mesh/faces.ts`'s, shared with `mesh/fluid.ts`.
  */
 import { FULL_FACES, PASS, TINT } from '../world/blocks/index';
 import { ALL_FACES, PASS_CUTOUT, PASS_OPAQUE } from '../world/blocks/kinds';
-import { PAD, padIndex, type PaddedSection } from '../world/store/padded';
+import type { PaddedSection } from '../world/store/padded';
 import type { MeshBuilder, MeshPass } from './builder';
+import { AXIS_N, AXIS_U, AXIS_V, OPPOSITE, ORIGIN, SIGN, STRIDE, cornerLight, mergeSlice, quadCorners, type QuadSink } from './faces';
 import { PACK_LAYOUT } from './packing';
 
 /** The per-state tables the mesher reads (the registry's `PASS`, `FULL_FACES` and `TINT`, or injected ones). */
@@ -67,23 +69,6 @@ const FULL = ALL_FACES;
 const OPAQUE = PASS_OPAQUE;
 const CUTOUT = PASS_CUTOUT;
 
-/** Padded-view strides per axis (0 x, 1 y, 2 z): `padIndex` adds 1 per x, 18 per z and 324 per y. */
-const STRIDE = [1, PAD * PAD, PAD] as const;
-/** The padded index of section-local (0, 0, 0). */
-const ORIGIN = padIndex(0, 0, 0);
-
-/**
- * Per face (north −z, east +x, south +z, west −x, up +y, down −y; `world/blocks/kinds.ts`): the normal axis and sign,
- * and the in-plane axes u and v of the mask, chosen so that u × v is the outward normal. A quad's corners
- * v0 = (u0, v0), v1 = (u1, v0), v2 = (u1, v1), v3 = (u0, v1) are then counter-clockwise seen from outside.
- */
-const AXIS_N = [2, 0, 2, 0, 1, 1] as const;
-const SIGN = [-1, 1, 1, -1, 1, -1] as const;
-const AXIS_U = [1, 1, 0, 2, 2, 0] as const;
-const AXIS_V = [0, 2, 1, 1, 0, 2] as const;
-/** The face of the neighbour that faces back: its bit in the neighbour's `fullFaces` decides occlusion. */
-const OPPOSITE = [2, 3, 0, 1, 5, 4] as const;
-
 /** Key A's bits: layer 0-9, tint 10-12, flags 13-16, face 17-19, ao2 of v0 … v3 20-27, and bit 31 "a face here". */
 const KA_TINT = 10;
 const KA_FACE = 17;
@@ -91,48 +76,16 @@ const KA_AO = 20;
 const KA_PRESENT = 0x80000000;
 const LAYER_MASK = 0x3FF;
 
-/** The two key masks of one slice (index v·16 + u), reused by every call (the mesher runs one section at a time). */
+/**
+ * The key masks of one slice (index v·16 + u), reused by every call (the mesher runs one section at a time). Opaque and
+ * cutout faces have two keys, so the third mask `mergeSlice` compares stays all zero.
+ */
 const MASK_A = new Uint32Array(256);
 const MASK_B = new Uint32Array(256);
+const NO_KEY = new Uint32Array(256);
+const VERTS = new Uint16Array(4);
 const CORNERS = new Uint8Array(12);
 const WORDS = new Uint32Array(4);
-
-/**
- * One vertex's AO and smooth light (SP4a spec §5.3), packed as `ao2 | sky << 2 | block << 6`. `lf` is F's light
- * byte; e1, e2 are the two edge voxels and c the corner, with their opacity flags o1, o2, oc. `mesh/fluid.ts` reuses
- * it for water's smooth light (with `ao` off).
- */
-export function vertexOf(
-  light: Uint8Array, o: MeshOptions, lf: number, e1: number, o1: number, e2: number, o2: number, c: number, oc: number,
-): number {
-  const ao = o.ao ? (o1 & o2 ? 3 : o1 + o2 + oc) : 0;
-  if (!o.smoothLight) return ao | (lf >> 4) << 2 | (lf & 15) << 6;
-  let sky = lf >> 4;
-  let blk = lf & 15;
-  let n = 1;
-  if (!o1) {
-    const l = light[e1]!;
-    sky += l >> 4;
-    blk += l & 15;
-    n++;
-  }
-  if (!o2) {
-    const l = light[e2]!;
-    sky += l >> 4;
-    blk += l & 15;
-    n++;
-  }
-  if (!oc && !(o1 & o2)) {
-    const l = light[c]!;
-    sky += l >> 4;
-    blk += l & 15;
-    n++;
-  }
-  // ⌊(2·sum + n) / (2n)⌋, the mean rounded half up: sums ≤ 60 and n ≤ 4, so the floor of the quotient is exact.
-  const s = Math.floor((2 * sky + n) / (2 * n));
-  const b = Math.floor((2 * blk + n) / (2 * n));
-  return ao | s << 2 | b << 6;
-}
 
 /**
  * Meshes the opaque and cutout faces of the padded section `p` into `b` (passes 0 and 1), adding to what `b` holds
@@ -146,6 +99,7 @@ export function meshSolid(p: PaddedSection, o: MeshOptions, b: MeshBuilder, t: M
   const leaves = t.leaves;
   /** 1 when the state is opaque for AO, smooth light and connectivity (PASS opaque, `fullFaces` 63), else 0. */
   const solid = (s: number): number => (pass[s] === OPAQUE && full[s] === FULL ? 1 : 0);
+  const sink: QuadSink = (f, d, i, j, w, h, ka, kb) => emit(f, d, i, j, w, h, ka, kb, b, pass);
   for (let f = 0; f < 6; f++) {
     const sa = STRIDE[AXIS_N[f]!];
     const su = STRIDE[AXIS_U[f]!];
@@ -167,81 +121,20 @@ export function meshSolid(p: PaddedSection, o: MeshOptions, b: MeshBuilder, t: M
           const ns = blocks[q]!;
           if (pass[ns] === OPAQUE && (full[ns]! & oppBit) !== 0) continue;
           if (ps === CUTOUT && ns === s && (leaves === undefined || leaves[s] === 0)) continue;
-          // The eight voxels around F in the face plane: the edges at −u, +u, −v, +v and the four corners.
-          const uM = q - su;
-          const uP = q + su;
-          const vM = q - sv;
-          const vP = q + sv;
-          const oUM = solid(blocks[uM]!);
-          const oUP = solid(blocks[uP]!);
-          const oVM = solid(blocks[vM]!);
-          const oVP = solid(blocks[vP]!);
-          const lf = light[q]!;
-          // v0 (−u, −v), v1 (+u, −v), v2 (+u, +v), v3 (−u, +v).
-          const c0 = vertexOf(light, o, lf, uM, oUM, vM, oVM, uM - sv, solid(blocks[uM - sv]!));
-          const c1 = vertexOf(light, o, lf, uP, oUP, vM, oVM, uP - sv, solid(blocks[uP - sv]!));
-          const c2 = vertexOf(light, o, lf, uP, oUP, vP, oVP, uP + sv, solid(blocks[uP + sv]!));
-          const c3 = vertexOf(light, o, lf, uM, oUM, vP, oVP, uM + sv, solid(blocks[uM + sv]!));
-          MASK_A[m] = (KA_PRESENT | s | tint[s]! << KA_TINT | faceBits
-            | (c0 & 3) << KA_AO | (c1 & 3) << (KA_AO + 2) | (c2 & 3) << (KA_AO + 4) | (c3 & 3) << (KA_AO + 6)) >>> 0;
-          MASK_B[m] = ((c0 >> 2 & 15) | (c1 >> 2 & 15) << 4 | (c2 >> 2 & 15) << 8 | (c3 >> 2 & 15) << 12
-            | (c0 >> 6) << 16 | (c1 >> 6) << 20 | (c2 >> 6) << 24 | (c3 >> 6) << 28) >>> 0;
+          MASK_B[m] = cornerLight(light, blocks, solid, o, q, su, sv, VERTS);
+          MASK_A[m] = (KA_PRESENT | s | tint[s]! << KA_TINT | faceBits | (VERTS[0]! & 3) << KA_AO
+            | (VERTS[1]! & 3) << (KA_AO + 2) | (VERTS[2]! & 3) << (KA_AO + 4) | (VERTS[3]! & 3) << (KA_AO + 6)) >>> 0;
           any = true;
         }
       }
-      if (any) mergeSlice(f, d, b, pass);
-    }
-  }
-}
-
-/** Greedy-merges the slice's mask into quads (rows of equal keys along u, then extended along v) and emits them. */
-function mergeSlice(f: number, d: number, b: MeshBuilder, pass: Uint8Array): void {
-  for (let j = 0; j < 16; j++) {
-    for (let i = 0; i < 16;) {
-      const m = j * 16 + i;
-      const ka = MASK_A[m]!;
-      if (ka === 0) {
-        i++;
-        continue;
-      }
-      const kb = MASK_B[m]!;
-      let w = 1;
-      while (i + w < 16 && MASK_A[m + w] === ka && MASK_B[m + w] === kb) w++;
-      let h = 1;
-      grow: while (j + h < 16) {
-        const row = m + 16 * h;
-        for (let k = 0; k < w; k++) if (MASK_A[row + k] !== ka || MASK_B[row + k] !== kb) break grow;
-        h++;
-      }
-      for (let y = 0; y < h; y++) MASK_A.fill(0, m + 16 * y, m + 16 * y + w);
-      emit(f, d, i, j, w, h, ka, kb, b, pass);
-      i += w;
+      if (any) mergeSlice(f, d, MASK_A, MASK_B, NO_KEY, sink);
     }
   }
 }
 
 /** Writes one merged quad: corners in 1/8 units, the four data words from the keys, and its diagonal. */
 function emit(f: number, d: number, i: number, j: number, w: number, h: number, ka: number, kb: number, b: MeshBuilder, pass: Uint8Array): void {
-  const an = AXIS_N[f]!;
-  const au = AXIS_U[f]!;
-  const av = AXIS_V[f]!;
-  const plane = 8 * (SIGN[f]! > 0 ? d + 1 : d);
-  const u0 = 8 * i;
-  const u1 = 8 * (i + w);
-  const v0 = 8 * j;
-  const v1 = 8 * (j + h);
-  CORNERS[an] = plane;
-  CORNERS[3 + an] = plane;
-  CORNERS[6 + an] = plane;
-  CORNERS[9 + an] = plane;
-  CORNERS[au] = u0;
-  CORNERS[av] = v0;
-  CORNERS[3 + au] = u1;
-  CORNERS[3 + av] = v0;
-  CORNERS[6 + au] = u1;
-  CORNERS[6 + av] = v1;
-  CORNERS[9 + au] = u0;
-  CORNERS[9 + av] = v1;
+  quadCorners(f, d, i, j, w, h, CORNERS);
   const layer = ka & LAYER_MASK;
   const base = layer | f << FACE_SHIFT | (ka >>> KA_TINT & 7) << TINT_SHIFT;
   const a0 = ka >>> KA_AO & 3;

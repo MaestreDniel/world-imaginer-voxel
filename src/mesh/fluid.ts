@@ -13,14 +13,16 @@
  *   `(layer, tint)` (spec §5.6; the third key is constant in SP4a's world, where a water voxel's state is air, and
  *   keeps a merged quad's words exact if a waterlogged state ever meshes here). Water quads split along v0-v2.
  *
- * Flowing levels, falling water and lava are SP7's: lava is not meshed here.
+ * The face tables, the corner light, the merge loop and the corner positions are `mesh/faces.ts`'s, shared with
+ * `mesh/greedy.ts`. Flowing levels, falling water and lava are SP7's: lava is not meshed here.
  */
 import { FLUID_WATER, fluidType, hasFluid } from '../world/blocks/fluid';
 import { ALL_FACES, PASS_OPAQUE } from '../world/blocks/kinds';
 import type { NeighborhoodReader } from '../world/store/api';
-import { PAD, padIndex, type PaddedSection } from '../world/store/padded';
+import { PAD, type PaddedSection } from '../world/store/padded';
 import type { MeshBuilder } from './builder';
-import { DEFAULT_MESH_TABLES, vertexOf, type MeshOptions, type MeshTables } from './greedy';
+import { AXIS_N, AXIS_U, AXIS_V, OPPOSITE, ORIGIN, SIGN, STRIDE, cornerLight, mergeSlice, quadCorners, type QuadSink } from './faces';
+import { DEFAULT_MESH_TABLES, type MeshOptions, type MeshTables } from './greedy';
 import { PACK_LAYOUT } from './packing';
 
 const WATER = FLUID_WATER;
@@ -43,19 +45,11 @@ const SMOOTH: MeshOptions = Object.freeze({ ao: false, smoothLight: true });
 /** The translucent pass (`MESH_PASS_TRANSLUCENT`). */
 const PASS_WATER = 2;
 
-/** Padded-view strides per axis (0 x, 1 y, 2 z), and the section-local (`depth`) strides: x 1, y 256, z 16. */
-const STRIDE = [1, PAD * PAD, PAD] as const;
+/** The section-local (`depth`) strides per axis (0 x, 1 y, 2 z), and the padded stride of +y. */
 const LOCAL = [1, 256, 16] as const;
-const ORIGIN = padIndex(0, 0, 0);
 const UP = PAD * PAD;
 
-/** Per face (north, east, south, west, up, down): as `mesh/greedy.ts`, so u × v is the outward normal. */
-const AXIS_N = [2, 0, 2, 0, 1, 1] as const;
-const SIGN = [-1, 1, 1, -1, 1, -1] as const;
-const AXIS_U = [1, 1, 0, 2, 2, 0] as const;
-const AXIS_V = [0, 2, 1, 1, 0, 2] as const;
-const OPPOSITE = [2, 3, 0, 1, 5, 4] as const;
-/** The face index of up and down. */
+/** The face index of up and down (`mesh/faces.ts`'s face order). */
 const FACE_UP = 4;
 const FACE_DOWN = 5;
 
@@ -68,6 +62,7 @@ const KA_PRESENT = 0x80000000;
 const MASK_A = new Uint32Array(256);
 const MASK_B = new Uint32Array(256);
 const MASK_C = new Uint32Array(256);
+const VERTS = new Uint16Array(4);
 const CORNERS = new Uint8Array(12);
 const WORDS = new Uint32Array(4);
 
@@ -83,6 +78,7 @@ export function meshFluid(p: PaddedSection, depth: Uint8Array, b: MeshBuilder, t
   const tint = t.tint;
   /** 1 when the state is opaque for smooth light (PASS opaque, `fullFaces` 63), else 0. */
   const solid = (s: number): number => (pass[s] === OPAQUE && full[s] === FULL ? 1 : 0);
+  const sink: QuadSink = (f, d, i, j, w, h, ka, kb, kc) => emit(f, d, i, j, w, h, ka, kb, kc, b);
   for (let f = 0; f < 6; f++) {
     const an = AXIS_N[f]!;
     const au = AXIS_U[f]!;
@@ -112,85 +108,24 @@ export function meshFluid(p: PaddedSection, depth: Uint8Array, b: MeshBuilder, t
           if (typeOf(fluid[q]!) === WATER) continue;
           const dep = depth[d * la + i * lu + j * lv]!;
           const top = typeOf(fluid[v + UP]!) === WATER ? 0 : topMask;
-          const uM = q - su;
-          const uP = q + su;
-          const vM = q - sv;
-          const vP = q + sv;
-          const oUM = solid(blocks[uM]!);
-          const oUP = solid(blocks[uP]!);
-          const oVM = solid(blocks[vM]!);
-          const oVP = solid(blocks[vP]!);
-          const lf = light[q]!;
-          // v0 (−u, −v), v1 (+u, −v), v2 (+u, +v), v3 (−u, +v); each `ao | sky << 2 | block << 6`, ao 0.
-          const c0 = vertexOf(light, SMOOTH, lf, uM, oUM, vM, oVM, uM - sv, solid(blocks[uM - sv]!));
-          const c1 = vertexOf(light, SMOOTH, lf, uP, oUP, vM, oVM, uP - sv, solid(blocks[uP - sv]!));
-          const c2 = vertexOf(light, SMOOTH, lf, uP, oUP, vP, oVP, uP + sv, solid(blocks[uP + sv]!));
-          const c3 = vertexOf(light, SMOOTH, lf, uM, oUM, vP, oVP, uM + sv, solid(blocks[uM + sv]!));
           // cornerDrop is 1 on the top corners of a surface voxel (spec §5.5: a still source sits at 8/9).
           MASK_A[m] = (KA_PRESENT | f | dep << KA_DEPTH
             | (top & 1) << KA_DROP | (top >> 1 & 1) << (KA_DROP + 4) | (top >> 2 & 1) << (KA_DROP + 8)
             | (top >> 3 & 1) << (KA_DROP + 12)) >>> 0;
-          MASK_B[m] = ((c0 >> 2 & 15) | (c1 >> 2 & 15) << 4 | (c2 >> 2 & 15) << 8 | (c3 >> 2 & 15) << 12
-            | (c0 >> 6) << 16 | (c1 >> 6) << 20 | (c2 >> 6) << 24 | (c3 >> 6) << 28) >>> 0;
+          MASK_B[m] = cornerLight(light, blocks, solid, SMOOTH, q, su, sv, VERTS);
           const s = blocks[v]!;
           MASK_C[m] = s | tint[s]! << 10;
           any = true;
         }
       }
-      if (any) mergeSlice(f, d, b);
-    }
-  }
-}
-
-/** Greedy-merges the slice's mask into quads (rows of equal keys along u, then extended along v) and emits them. */
-function mergeSlice(f: number, d: number, b: MeshBuilder): void {
-  for (let j = 0; j < 16; j++) {
-    for (let i = 0; i < 16;) {
-      const m = j * 16 + i;
-      const ka = MASK_A[m]!;
-      if (ka === 0) {
-        i++;
-        continue;
-      }
-      const kb = MASK_B[m]!;
-      const kc = MASK_C[m]!;
-      let w = 1;
-      while (i + w < 16 && MASK_A[m + w] === ka && MASK_B[m + w] === kb && MASK_C[m + w] === kc) w++;
-      let h = 1;
-      grow: while (j + h < 16) {
-        const row = m + 16 * h;
-        for (let k = 0; k < w; k++) if (MASK_A[row + k] !== ka || MASK_B[row + k] !== kb || MASK_C[row + k] !== kc) break grow;
-        h++;
-      }
-      for (let y = 0; y < h; y++) MASK_A.fill(0, m + 16 * y, m + 16 * y + w);
-      emit(f, d, i, j, w, h, ka, kb, kc, b);
-      i += w;
+      if (any) mergeSlice(f, d, MASK_A, MASK_B, MASK_C, sink);
     }
   }
 }
 
 /** Writes one merged water quad: full-height corners in 1/8 units and the four fluid data words from the keys. */
 function emit(f: number, d: number, i: number, j: number, w: number, h: number, ka: number, kb: number, kc: number, b: MeshBuilder): void {
-  const an = AXIS_N[f]!;
-  const au = AXIS_U[f]!;
-  const av = AXIS_V[f]!;
-  const plane = 8 * (SIGN[f]! > 0 ? d + 1 : d);
-  const u0 = 8 * i;
-  const u1 = 8 * (i + w);
-  const v0 = 8 * j;
-  const v1 = 8 * (j + h);
-  CORNERS[an] = plane;
-  CORNERS[3 + an] = plane;
-  CORNERS[6 + an] = plane;
-  CORNERS[9 + an] = plane;
-  CORNERS[au] = u0;
-  CORNERS[av] = v0;
-  CORNERS[3 + au] = u1;
-  CORNERS[3 + av] = v0;
-  CORNERS[6 + au] = u1;
-  CORNERS[6 + av] = v1;
-  CORNERS[9 + au] = u0;
-  CORNERS[9 + av] = v1;
+  quadCorners(f, d, i, j, w, h, CORNERS);
   const base = (kc & 0x3FF) | f << FACE_SHIFT | (ka >>> KA_DEPTH & 15) << DEPTH_SHIFT | (kc >>> 10 & 7) << TINT_SHIFT;
   for (let k = 0; k < 4; k++) {
     const sky = kb >>> (4 * k) & 15;
