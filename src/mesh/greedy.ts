@@ -99,9 +99,10 @@ const WORDS = new Uint32Array(4);
 
 /**
  * One vertex's AO and smooth light (SP4a spec §5.3), packed as `ao2 | sky << 2 | block << 6`. `lf` is F's light
- * byte; e1, e2 are the two edge voxels and c the corner, with their opacity flags o1, o2, oc.
+ * byte; e1, e2 are the two edge voxels and c the corner, with their opacity flags o1, o2, oc. `mesh/fluid.ts` reuses
+ * it for water's smooth light (with `ao` off).
  */
-function vertexOf(
+export function vertexOf(
   light: Uint8Array, o: MeshOptions, lf: number, e1: number, o1: number, e2: number, o2: number, c: number, oc: number,
 ): number {
   const ao = o.ao ? (o1 & o2 ? 3 : o1 + o2 + oc) : 0;
