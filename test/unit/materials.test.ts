@@ -1,0 +1,225 @@
+import { Color, DoubleSide, GLSL3, NoColorSpace, SRGBColorSpace, type ShaderMaterial } from 'three';
+import { describe, expect, test } from 'vitest';
+import { skyColors, sunDirection } from '../../src/daynight/dayNight';
+import { packingGlsl } from '../../src/render/materials/glsl/packing.glsl';
+import { createMaterialSystem, EDGE_FADE, fogRange, type MaterialSystem, type MaterialVariant } from '../../src/render/materials/index';
+import type { FrameState } from '../../src/render/frameState';
+import { createFlatColorArray } from '../../src/render/textureArray';
+
+const ALBEDO = createFlatColorArray();
+const system = (variant: MaterialVariant, ao = true, smoothLight = true): MaterialSystem =>
+  createMaterialSystem({ variant, ao, smoothLight }, ALBEDO);
+const SYSTEMS = { batch: system('batch'), mesh: system('mesh') } as const;
+const VARIANTS = ['batch', 'mesh'] as const;
+
+const all = (m: MaterialSystem): Record<string, ShaderMaterial> => ({
+  terrainOpaque: m.terrainOpaque, terrainCutout: m.terrainCutout, water: m.water, sky: m.sky, decodeDebug: m.decodeDebug,
+});
+/** The terrain and water materials: the ones with a batched and a RegionMesh variant. */
+const terrainAndWater = (m: MaterialSystem): ShaderMaterial[] => [m.terrainOpaque, m.terrainCutout, m.water];
+
+const FRAME: FrameState = { t: 1 / 12, brightness: 0.3, eyeSky: 15, rd: 12, fogBand: 64, edgeCentre: [0, 0] };
+
+describe('materials v1 (SP4a spec §6.4-§6.6)', () => {
+  test('every material is a GLSL3 ShaderMaterial', () => {
+    for (const v of VARIANTS) {
+      for (const [name, m] of Object.entries(all(SYSTEMS[v]))) {
+        expect(m.glslVersion, `${v} ${name}`).toBe(GLSL3);
+        expect(m.isShaderMaterial, `${v} ${name}`).toBe(true);
+      }
+      expect(SYSTEMS[v].variant).toBe(v);
+    }
+  });
+
+  test('batch terrain and water vertex shaders contain both batching includes; mesh ones #define REGION_MESH and neither', () => {
+    for (const m of terrainAndWater(SYSTEMS.batch)) {
+      expect(m.vertexShader).toContain('#include <batching_pars_vertex>');
+      expect(m.vertexShader).toContain('#include <batching_vertex>');
+      expect(m.vertexShader).not.toContain('#define REGION_MESH');
+    }
+    for (const m of terrainAndWater(SYSTEMS.mesh)) {
+      expect(m.vertexShader).toContain('#define REGION_MESH');
+      expect(m.vertexShader).not.toContain('batching_pars_vertex');
+      expect(m.vertexShader).not.toContain('batching_vertex');
+    }
+  });
+
+  test('terrain and water fragments contain the colour-space chunk and length(viewPos); decodeDebug has no colour-space chunk', () => {
+    for (const v of VARIANTS) {
+      for (const m of terrainAndWater(SYSTEMS[v])) {
+        expect(m.fragmentShader).toContain('#include <colorspace_fragment>');
+        expect(m.fragmentShader).toContain('length(viewPos)');
+      }
+      expect(SYSTEMS[v].decodeDebug.fragmentShader).not.toContain('colorspace_fragment');
+      expect(SYSTEMS[v].decodeDebug.fragmentShader).not.toContain('linearToOutputTexel');
+    }
+  });
+
+  test('every fragment shader declares pc_fragColor (ruling P14)', () => {
+    for (const v of VARIANTS) {
+      for (const [name, m] of Object.entries(all(SYSTEMS[v]))) {
+        expect(m.fragmentShader, `${v} ${name}`).toContain('layout(location = 0) out highp vec4 pc_fragColor;');
+      }
+    }
+  });
+
+  test('terrain and water define gl_FragColor as pc_fragColor before the colour-space chunk (ruling P14)', () => {
+    for (const v of VARIANTS) {
+      for (const m of terrainAndWater(SYSTEMS[v])) {
+        const define = m.fragmentShader.indexOf('#define gl_FragColor pc_fragColor');
+        expect(define).toBeGreaterThanOrEqual(0);
+        expect(define).toBeLessThan(m.fragmentShader.indexOf('#include <colorspace_fragment>'));
+      }
+    }
+  });
+
+  test('terrain and water look the lightmap up through lightmapAt, the fog at (block 0, eyeSky) (ruling P15)', () => {
+    for (const v of VARIANTS) {
+      for (const m of terrainAndWater(SYSTEMS[v])) {
+        expect(m.fragmentShader).toContain('lightmapAt(');
+        expect(m.fragmentShader).toContain('lightmapAt(0.0, eyeSky)');
+        expect(m.fragmentShader).toContain('vec3 lightmapAt(float block, float sky)');
+        expect(m.fragmentShader).toContain('texture(lightmap, (vec2(block, sky) + 0.5) / 16.0).rgb');
+      }
+    }
+  });
+
+  test('every shader that decodes contains packingGlsl() verbatim', () => {
+    for (const v of VARIANTS) {
+      for (const m of terrainAndWater(SYSTEMS[v])) {
+        expect(m.vertexShader).toContain(packingGlsl());
+        expect(m.vertexShader).toContain('in uint data;');
+      }
+    }
+  });
+
+  test('the water material is transparent, writes depth, is double-sided, and its alpha uniform is 0.72', () => {
+    for (const v of VARIANTS) {
+      const w = SYSTEMS[v].water;
+      expect(w.transparent).toBe(true);
+      expect(w.depthWrite).toBe(true);
+      expect(w.side).toBe(DoubleSide);
+      expect(w.uniforms['alpha']!.value).toBe(0.72);
+      expect(w.vertexShader).toContain('cornerDrop');
+    }
+  });
+
+  test('the water colours are the sRGB shallow and deep colours converted to linear on the CPU', () => {
+    const w = SYSTEMS.batch.water;
+    const linear = (r: number, g: number, b: number) => new Color().setRGB(r / 255, g / 255, b / 255, SRGBColorSpace);
+    expect((w.uniforms['waterShallow']!.value as Color).equals(linear(64, 128, 230))).toBe(true);
+    expect((w.uniforms['waterDeep']!.value as Color).equals(linear(16, 40, 96))).toBe(true);
+    expect((w.uniforms['waterShallow']!.value as Color).r).toBeLessThan(64 / 255);
+  });
+
+  test('the sky writes no depth and sits at the far plane; the cutout pass is double-sided', () => {
+    for (const v of VARIANTS) {
+      const m = SYSTEMS[v];
+      expect(m.sky.depthWrite).toBe(false);
+      expect(m.sky.vertexShader).toContain('gl_Position = vec4(position.xy, 1.0, 1.0)');
+      expect(m.terrainCutout.side).toBe(DoubleSide);
+      expect(m.terrainCutout.defines['CUTOUT']).toBeDefined();
+      expect(m.terrainOpaque.defines['CUTOUT']).toBeUndefined();
+    }
+  });
+
+  test('ao and smoothLight become defines of the terrain and water materials', () => {
+    const on = system('batch', true, true);
+    const off = system('batch', false, false);
+    expect(on.terrainOpaque.defines['TERRAIN_AO']).toBeDefined();
+    expect(on.terrainOpaque.defines['SMOOTH_LIGHT']).toBeDefined();
+    expect(on.water.defines['SMOOTH_LIGHT']).toBeDefined();
+    expect(off.terrainOpaque.defines['TERRAIN_AO']).toBeUndefined();
+    expect(off.terrainOpaque.defines['SMOOTH_LIGHT']).toBeUndefined();
+    expect(off.water.defines['SMOOTH_LIGHT']).toBeUndefined();
+  });
+
+  test('fogRange: end (rd − 0.5)·16, start 64 blocks before, never below 0 (spec §6.6)', () => {
+    expect(fogRange(12, 64)).toEqual({ start: 120, end: 184 });
+    expect(fogRange(8, 64)).toEqual({ start: 56, end: 120 });
+    expect(fogRange(4, 64)).toEqual({ start: 0, end: 56 });
+    expect(EDGE_FADE).toBe(24);
+  });
+
+  test('setFrameUniforms at rd 12: the edge is 184, its fade starts at 160, the fog spans 120-184', () => {
+    const m = system('batch');
+    m.setFrameUniforms({ ...FRAME, edgeCentre: [5, -7] });
+    const u = m.terrainOpaque.uniforms;
+    expect(u['edge']!.value).toBe(184);
+    expect(u['edgeFadeStart']!.value).toBe(160);
+    expect(u['fogStart']!.value).toBe(120);
+    expect(u['fogEnd']!.value).toBe(184);
+    expect(u['edgeCentre']!.value.toArray()).toEqual([5, -7]);
+  });
+
+  test('setFrameUniforms({ …, eyeSky: 7 }) sets the eyeSky uniform to 7 (ruling P15)', () => {
+    const m = system('mesh');
+    m.setFrameUniforms({ ...FRAME, eyeSky: 7 });
+    expect(m.terrainOpaque.uniforms['eyeSky']!.value).toBe(7);
+    expect(m.water.uniforms['eyeSky']!.value).toBe(7);
+  });
+
+  test('every material shares one uniform object per name, so one update reaches all of them', () => {
+    const m = system('batch');
+    for (const name of ['lightmap', 'fogStart', 'fogEnd', 'edge', 'edgeFadeStart', 'edgeCentre', 'eyeSky', 'skyZenith', 'skyHorizon', 'sunDir']) {
+      expect(m.water.uniforms[name], name).toBe(m.terrainOpaque.uniforms[name]);
+      expect(m.terrainCutout.uniforms[name], name).toBe(m.terrainOpaque.uniforms[name]);
+    }
+    for (const name of ['skyZenith', 'skyHorizon', 'sunDir']) expect(m.sky.uniforms[name], name).toBe(m.terrainOpaque.uniforms[name]);
+    expect(m.water.uniforms['albedo']).toBeUndefined();
+    expect(m.terrainCutout.uniforms['albedo']).toBe(m.terrainOpaque.uniforms['albedo']);
+  });
+
+  test('setFrameUniforms writes the sky stops in linear and the sun direction of t', () => {
+    const m = system('batch');
+    const t = 0.4;
+    m.setFrameUniforms({ ...FRAME, t });
+    const { zenith, horizon } = skyColors(t);
+    const u = m.sky.uniforms;
+    expect((u['skyZenith']!.value as Color).equals(new Color().setRGB(...zenith, SRGBColorSpace))).toBe(true);
+    expect((u['skyHorizon']!.value as Color).equals(new Color().setRGB(...horizon, SRGBColorSpace))).toBe(true);
+    const sun = sunDirection(t);
+    expect(u['sunDir']!.value.toArray().map((x: number, i: number) => x - sun[i]!).every((d: number) => Math.abs(d) < 1e-12)).toBe(true);
+  });
+
+  test('setFrameUniforms rebuilds the lightmap only when the time or the brightness changes', () => {
+    const m = system('batch');
+    const tex = m.lightmap.texture;
+    m.setFrameUniforms(FRAME);
+    const v1 = tex.version;
+    const noon = Array.from(tex.image.data as Uint8Array);
+    m.setFrameUniforms(FRAME);
+    expect(tex.version).toBe(v1);
+    m.setFrameUniforms({ ...FRAME, t: 0.75 });
+    expect(tex.version).toBeGreaterThan(v1);
+    expect(Array.from(tex.image.data as Uint8Array)).not.toEqual(noon);
+    const v2 = tex.version;
+    m.setFrameUniforms({ ...FRAME, t: 0.75, brightness: 1 });
+    expect(tex.version).toBeGreaterThan(v2);
+  });
+
+  test('the albedo uniform keeps SRGBColorSpace and the lightmap NoColorSpace', () => {
+    for (const v of VARIANTS) {
+      const u = SYSTEMS[v].terrainOpaque.uniforms;
+      expect(u['albedo']!.value).toBe(ALBEDO);
+      expect(u['albedo']!.value.colorSpace).toBe(SRGBColorSpace);
+      expect(u['lightmap']!.value).toBe(SYSTEMS[v].lightmap.texture);
+      expect(u['lightmap']!.value.colorSpace).toBe(NoColorSpace);
+    }
+  });
+
+  test('the face shade follows kinds.ts face ids: N/S 0.8, E/W 0.6, up 1, down 0.5', () => {
+    expect(SYSTEMS.batch.terrainOpaque.fragmentShader).toContain('const float FACE_SHADE[6] = float[6](0.8, 0.6, 0.8, 0.6, 1.0, 0.5);');
+    expect(SYSTEMS.batch.terrainOpaque.vertexShader).toContain('const float AO_FACTOR[4] = float[4](1.0, 0.8, 0.6, 0.45);');
+  });
+
+  test('dispose frees every material and the lightmap, not the albedo it was given', () => {
+    const m = system('mesh');
+    const disposed: string[] = [];
+    for (const [name, mat] of Object.entries(all(m))) mat.addEventListener('dispose', () => disposed.push(name));
+    m.lightmap.texture.addEventListener('dispose', () => disposed.push('lightmap'));
+    ALBEDO.addEventListener('dispose', () => disposed.push('albedo'));
+    m.dispose();
+    expect(disposed.sort()).toEqual(['decodeDebug', 'lightmap', 'sky', 'terrainCutout', 'terrainOpaque', 'water']);
+  });
+});

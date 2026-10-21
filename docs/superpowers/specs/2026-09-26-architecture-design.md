@@ -89,7 +89,8 @@ world-imaginer-voxel/          (repository root)
       spline/edit.ts weights.ts (SP2b) pure editor operations (insert, delete, set, nest, flatten, clamped auto tangents) and Hermite path weights
       params/kit.ts schema.ts meta.ts defaults.ts noises.ts profiles.ts presets.ts migrate.ts canonical.ts graphicsPresets.ts json.ts
       params/defaultTrees.ts presetTrees.ts   ParamSchema = single source (types, defaults, UI, scope); defaults referenced by the schema live in core/params
-                                (core cannot import gen/); graphicsPresets.ts = the §4.16 preset table as pure data (graphics + audio rows);
+                                (core cannot import gen/); graphicsPresets.ts = the §4.16 preset table as pure data (graphics + audio rows;
+                                created by SP4a with the Medium fields it uses; SP8c adds the audio rows, SP11 the other rows);
                                 json.ts = the `json` leaf kind's tier-1 validator and the tree issue codes (SP3d); defaultTrees.ts =
                                 DEFAULT_DENSITY_TREE and DEFAULT_SURFACE_RULES as data, the json leaves' defaults (SP3d); presetTrees.ts =
                                 the preset trees of the PROFILES overlays, derived from the default trees by subtree replacements at JSON
@@ -1031,7 +1032,7 @@ On Ultra, passes 2-4 (after the LOD depth clear) render into a `WebGLRenderTarge
 
 **No Lambert and no sun term on terrain.** Caves go dark and block light does not dim at night.
 
-**Fog** is spherical, `f = smoothstep(fogStart, fogEnd, length(viewPos))`. Its colour comes from `skyColor(horizonDir)` in `common.glsl` and is darkened by the eye's sky light. When the eye is in water, fog switches to exponential (about 48-60 blocks) with a screen tint.
+**Fog** is spherical, `f = smoothstep(fogStart, fogEnd, length(viewPos))` (SP4a: end (RD − 0.5)·16, start 64 blocks before; an edge fade around the load centre until SP4b streams). Its colour comes from `skyColor(horizonDir)` in `common.glsl` and is darkened by the eye's sky light. When the eye is in water, fog switches to exponential (about 48-60 blocks) with a screen tint.
 
 **Colour management:** textures use `SRGBColorSpace`, output is sRGB, and tints are converted to linear on the CPU.
 
@@ -1186,6 +1187,7 @@ Target: edit → visible ≤ 50 ms p95, measured in the HUD.
 - Every setting can be overridden individually: RD, LOD, FOV, brightness, fog start, resolution scale, FPS cap, anisotropy, biome blend, water tier, shadows, clouds, AO.
 - Changes are Live, except MSAA (a controlled renderer rebuild that keeps the world store) and AO or leaves (a remesh of loaded sections through mesh jobs).
 - Settings persist in localStorage (try/catch).
+- `core/params/graphicsPresets.ts` is created by SP4a with the Medium fields it uses; SP8c adds the audio rows, SP11 the other rows.
 
 ### 4.17 Player
 
