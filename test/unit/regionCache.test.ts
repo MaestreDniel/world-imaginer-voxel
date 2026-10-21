@@ -5,14 +5,14 @@ import { afterAll, beforeEach, describe, expect, test } from 'vitest';
 import { fnv1a64, fnv1a64Bytes, hex64, type Hash64 } from '../../src/core/hash';
 import { seedFromInput } from '../../src/core/seed';
 import { genKey, stageHashes } from '../../src/core/stage/hash';
-import { REC_AUX_B } from '../../src/world/store/columnTable';
+import { finalAt, protoAt, REC_AUX_B } from '../../src/world/store/columnTable';
 import { createStore, type VoxelStore } from '../../src/world/store/store';
 import {
   encodeRegionDump, parseRegionDump, rebuildRegion, REGION_CACHE_DIR, REGION_CACHE_FORMAT, REGION_CACHE_PRUNE_MS, regionCacheKey,
   regionCachePath, SRC_KEY_SCOPE, srcKey, srcKeyOf, type RegionCacheHeader,
 } from '../harness/cache';
 import { paramsWith } from '../harness/gen';
-import { genRegion, type GenRegionOptions } from '../harness/region';
+import { genRegion, litRegionHash, type GenRegionOptions } from '../harness/region';
 
 const DIR = fileURLToPath(new URL('../.cache/regionCacheUnit/', import.meta.url));
 const SCRATCH = fileURLToPath(new URL('../.cache/regionCacheUnitSrc/', import.meta.url));
@@ -29,8 +29,8 @@ const header = (over: Partial<RegionCacheHeader> = {}): RegionCacheHeader => ({
 });
 
 describe('the cache key (§6.1)', () => {
-  test('REGION_CACHE_FORMAT is 2 (SP3b spec §7: aux B joined the dump); the dumps live in test/.cache/regions/<hex64 of the key>.bin', () => {
-    expect(REGION_CACHE_FORMAT).toBe(2);
+  test('REGION_CACHE_FORMAT is 3 (SP4a spec §9.2: the final light joined the dump); the dumps live in test/.cache/regions/<hex64 of the key>.bin', () => {
+    expect(REGION_CACHE_FORMAT).toBe(3);
     expect(REGION_CACHE_DIR).toBe(fileURLToPath(new URL('../.cache/regions/', import.meta.url)));
     const h = header();
     expect(regionCachePath(h)).toBe(join(REGION_CACHE_DIR, `${hex64(regionCacheKey(h))}.bin`));
@@ -49,8 +49,10 @@ describe('the cache key (§6.1)', () => {
 });
 
 describe('srcKey (§6.1)', () => {
-  test('the scope is src/core, src/world, src/gen, src/metrics/region.ts and test/harness/cache.ts', () => {
-    expect([...SRC_KEY_SCOPE]).toEqual(['src/core/', 'src/world/', 'src/gen/', 'src/metrics/region.ts', 'test/harness/cache.ts']);
+  test('SRC_KEY_SCOPE includes src/light/, src/mesh/ and src/workers/worldJobs.ts', () => {
+    expect([...SRC_KEY_SCOPE]).toEqual([
+      'src/core/', 'src/world/', 'src/gen/', 'src/light/', 'src/mesh/', 'src/metrics/region.ts', 'src/workers/worldJobs.ts', 'test/harness/cache.ts',
+    ]);
   });
 
   test('FNV-1a 64 of the sorted paths and bytes: any change in scope is a new key, outside scope none', () => {
@@ -263,6 +265,85 @@ describe('genRegion with the cache (§6.1)', () => {
     await genRegion({ ...base, cx0: 5, srcKey: k2 });
     expect(existsSync(at({ cx0: 4 }, k1))).toBe(false);
     expect(existsSync(at({}, k2))).toBe(true);
+  });
+
+  test('a format-2 dump is ignored', async () => {
+    const first = await genRegion(base);
+    const path = regionCachePath(keyOf(base), DIR);
+    // A T dump of format 3 has format 2's layout: relabel it as format 2 and sum it again, a well-formed format-2 dump.
+    const two = Buffer.from(readFileSync(path));
+    two.writeUInt32LE(2, 4);
+    const sum = fnv1a64Bytes(two.subarray(0, two.length - 8));
+    two.writeUInt32LE(sum[0], two.length - 8);
+    two.writeUInt32LE(sum[1], two.length - 4);
+    const k = keyOf(base);
+    // Under its format-2 name it is never read, and once it is old the next write prunes it.
+    const name2 = `${hex64(fnv1a64(`${hex64(k.genKey)}|${hex64(k.srcKey)}|2|${k.cx0}|${k.cz0}|${k.w}|${k.h}|${k.upTo}`))}.bin`;
+    expect(name2).not.toBe(path.slice(DIR.length));
+    writeFileSync(join(DIR, name2), two);
+    // Under this format's name it is a miss, and the dump is rewritten.
+    writeFileSync(path, two);
+    const r = await genRegion(base);
+    expect(r.cacheHit).toBe(false);
+    expect(r.view.hash()).toBe(first.view.hash());
+    expect(readFileSync(path).readUInt32LE(4)).toBe(3);
+    const old = new Date(Date.now() - 2 * REGION_CACHE_PRUNE_MS);
+    utimesSync(join(DIR, name2), old, old);
+    await genRegion({ ...base, cx0: 4 });
+    expect(existsSync(join(DIR, name2))).toBe(false);
+    expect((await genRegion(base)).cacheHit).toBe(true);
+  });
+});
+
+describe('the dump of D and L regions (SP4a spec §9.2, format 3; ruling P31)', () => {
+  const o: GenRegionOptions = { seed: '42', params: paramsWith(), cx0: -7, cz0: 2, w: 2, h: 1, upTo: 'L', order: 'spiral', threads: 1 };
+  const header = (upTo: 'D' | 'L'): RegionCacheHeader => ({ genKey: [5, 6], srcKey: [7, 8], cx0: -7, cz0: 2, w: 2, h: 1, upTo });
+
+  test.each(['D', 'L'] as const)('upTo %s: the dump holds R at its status with the final light and aux A, and rebuilds it exactly', async (upTo) => {
+    const src = (await genRegion({ ...o, upTo })).view.store;
+    const h = header(upTo);
+    const bytes = encodeRegionDump(src, h);
+    const b = Buffer.from(bytes);
+    // Column (−7, 2) first: cx, cz, status (Decorated 2 or Published 3), epoch 0, blockVersion 2, lightVersion 0 or 1.
+    expect([b.readInt32LE(44), b.readInt32LE(48), b.readInt32LE(52), b.readInt32LE(56), b.readInt32LE(60), b.readInt32LE(64)])
+      .toEqual([-7, 2, upTo === 'L' ? 3 : 2, 0, 2, upTo === 'L' ? 1 : 0]);
+    const cols = parseRegionDump(bytes, h)!;
+    expect(cols).not.toBeNull();
+    // The other header (upTo) is a miss.
+    expect(parseRegionDump(bytes, header(upTo === 'L' ? 'D' : 'L'))).toBeNull();
+    const dst = createStore({ shared: false, maxBlockBytes: 64 * (1 << 20), maxByteBytes: 64 * (1 << 20) });
+    rebuildRegion(dst, cols);
+    for (let cx = -7; cx < -5; cx++) {
+      const [bs, bd] = [src.table.find(cx, 2), dst.table.find(cx, 2)];
+      expect([dst.table.status(bd), dst.table.blockVersion(bd), dst.table.lightVersion(bd)])
+        .toEqual([src.table.status(bs), src.table.blockVersion(bs), src.table.lightVersion(bs)]);
+      const [fs, fd] = [src.final(cx, 2)!, dst.final(cx, 2)!];
+      for (let sy = 0; sy < 24; sy++) {
+        const [ls, ld] = [fs.sectionLight(sy), fd.sectionLight(sy)];
+        expect(typeof ld).toBe(typeof ls);
+        expect(typeof ld === 'number' ? ld : [...ld]).toEqual(typeof ls === 'number' ? ls : [...ls]);
+        // D shares the proto into the final set, and the rebuild shares it too.
+        expect(dst.table.ints[finalAt(bd, sy)]).toBe(dst.table.ints[protoAt(bd, sy)]);
+        expect(dst.table.ints[finalAt(bd, sy) + 2]).toBe(dst.table.ints[protoAt(bd, sy) + 1]);
+      }
+      const aux = (v: typeof fs) => [...new Uint8Array(v.aux()!.worldSurfaceWG.buffer, v.aux()!.worldSurfaceWG.byteOffset, 4096)];
+      expect(aux(fd)).toEqual(aux(fs));
+    }
+    expect(litRegionHash(dst, -7, 2, 2, 1)).toBe(litRegionHash(src, -7, 2, 2, 1));
+    // The rebuilt region dumps to the same layout (slot ids aside, which depend on the allocation order).
+    const again = Buffer.from(encodeRegionDump(dst, h));
+    expect(again.length).toBe(b.length);
+    expect(again.readInt32LE(52)).toBe(b.readInt32LE(52));
+    // One flipped bit in the last column's last dense slot (same length) is a miss.
+    const damaged = Buffer.from(b);
+    damaged[damaged.length - 8 - 2 * 4096 - 100]! ^= 1;
+    expect(parseRegionDump(damaged, h)).toBeNull();
+  });
+
+  test("a dump of R needs R at upTo's status; 'MESH' is never dumped", async () => {
+    const t = (await genRegion({ ...o, upTo: 'T' })).view.store;
+    expect(() => encodeRegionDump(t, header('L'))).toThrow(/not at status Published/);
+    expect(() => encodeRegionDump(t, { ...header('L'), upTo: 'MESH' })).toThrow(/MESH/);
   });
 });
 

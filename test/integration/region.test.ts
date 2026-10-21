@@ -1,10 +1,10 @@
-import { readFileSync, rmSync } from 'node:fs';
+import { readdirSync, readFileSync, rmSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
 import { describe, expect, test } from 'vitest';
 import { resolveProfile } from '../../src/core/params/profiles';
 import { DEEPSLATE, DIRT, GRASS_BLOCK } from '../../src/world/blocks/index';
 import { GOLDENS_PATH, type GoldensFile } from '../harness/goldens';
-import { genRegion, regionDiff, type GenRegionOptions, type RegionResult } from '../harness/region';
+import { genRegion, regionDiff, regionWorkersSpawned, type GenRegionOptions, type RegionResult } from '../harness/region';
 
 /**
  * The region harness with 4 worker threads against 1 thread (SP3a spec §6.1, §8; the surfaced T since SP3c §8): a
@@ -96,3 +96,95 @@ test('4 threads with the cache: a miss writes the dump, a hit rebuilds it into a
   expect(b.view.hash()).toBe(cold.view.hash());
   rmSync(DIR, { recursive: true, force: true });
 }, 120_000);
+
+describe('genRegion up to L and MESH on 4 threads (SP4a spec §9.2, rulings P31, P33)', () => {
+  const LDIR = fileURLToPath(new URL('../.cache/regionIntegrationLit/', import.meta.url));
+  const base: GenRegionOptions = {
+    seed: '42', params: resolveProfile('default'), cx0: -2, cz0: 1, w: 4, h: 4, upTo: 'L', order: 'spiral', threads: 1,
+  };
+
+  test('genRegion upTo L, 1 vs 4 threads, spiral vs shuffled: equal light and aux at every voxel of a 4 × 4 region', async () => {
+    const runs: Array<[string, RegionResult]> = [];
+    for (const [order, threads] of [['spiral', 1], ['shuffled', 1], ['spiral', 4], ['shuffled', 4]] as const) {
+      runs.push([`${order}/${threads}`, await genRegion({ ...base, order, threads, shuffleSeed: 4 })]);
+    }
+    const [, ref] = runs[0]!;
+    let lit = 0;
+    for (const [what, r] of runs.slice(1)) {
+      expect(r.view.store.shared, what).toBe(what.endsWith('/4'));
+      expect(regionDiff(r.view, ref.view), what).toBeNull();
+      expect(r.view.litHash(), what).toBe(ref.view.litHash());
+      // T on 8 × 8, D on 6 × 6, L on 4 × 4: 116 jobs, spread over the four threads.
+      expect(r.columnsPerThread.reduce((s, n) => s + n, 0), what).toBe(116);
+      if (what.endsWith('/4')) for (const n of r.columnsPerThread) expect(n, what).toBeGreaterThan(0);
+      for (let cz = 1; cz < 5; cz++) {
+        for (let cx = -2; cx < 2; cx++) {
+          const [a, b] = [r.view.aux(cx, cz), ref.view.aux(cx, cz)];
+          const bytes = (x: typeof a) => Buffer.from(x.worldSurfaceWG.buffer, x.worldSurfaceWG.byteOffset, 4096);
+          expect(bytes(a).equals(bytes(b)), `${what} (${cx}, ${cz}) aux`).toBe(true);
+          for (let y = -64; y < 320; y++) {
+            for (let lz = 0; lz < 16; lz++) {
+              for (let lx = 0; lx < 16; lx++) {
+                const x = 16 * cx + lx;
+                const z = 16 * cz + lz;
+                const l = r.view.light(x, y, z);
+                if (l !== ref.view.light(x, y, z)) expect(l, `${what} light at (${x}, ${y}, ${z})`).toBe(ref.view.light(x, y, z));
+                if (l !== 0) lit++;
+              }
+            }
+          }
+        }
+      }
+    }
+    expect(lit).toBeGreaterThan(0);
+  }, 120_000);
+
+  test('upTo L writes a format-3 dump and a second call reads it (no worker spawned)', async () => {
+    rmSync(LDIR, { recursive: true, force: true });
+    const o: GenRegionOptions = { ...base, w: 3, h: 2, order: 'shuffled', threads: 4, cache: true, cacheDir: LDIR };
+    const cold = await genRegion({ ...o, threads: 1, cache: false });
+    const s0 = regionWorkersSpawned();
+    const a = await genRegion(o);
+    expect(regionWorkersSpawned() - s0).toBe(4);
+    const files = readdirSync(LDIR);
+    expect(files).toHaveLength(1);
+    expect(readFileSync(`${LDIR}${files[0]!}`).readUInt32LE(4)).toBe(3);
+    const s1 = regionWorkersSpawned();
+    const b = await genRegion(o);
+    expect(regionWorkersSpawned()).toBe(s1);
+    expect([a.cacheHit, b.cacheHit]).toEqual([false, true]);
+    expect(b.columnsPerThread).toEqual([0]);
+    expect(b.view.store.shared).toBe(true);
+    for (const r of [a, b]) {
+      expect(regionDiff(r.view, cold.view)).toBeNull();
+      expect(r.view.litHash()).toBe(cold.view.litHash());
+    }
+    rmSync(LDIR, { recursive: true, force: true });
+  }, 120_000);
+
+  test("a second cached upTo 'MESH' call hits the grown L dump and spawns no worker; 4 threads mesh as 1 does", async () => {
+    rmSync(LDIR, { recursive: true, force: true });
+    const o: GenRegionOptions = { ...base, cx0: 7, cz0: -4, w: 2, h: 3, upTo: 'MESH', order: 'shuffled', threads: 4, cache: true, cacheDir: LDIR };
+    const one = await genRegion({ ...o, threads: 1, cache: false });
+    const s0 = regionWorkersSpawned();
+    const a = await genRegion(o);
+    expect(regionWorkersSpawned() - s0).toBe(4);
+    const s1 = regionWorkersSpawned();
+    const b = await genRegion(o);
+    expect(regionWorkersSpawned()).toBe(s1);
+    expect([a.cacheHit, b.cacheHit]).toEqual([false, true]);
+    expect(readdirSync(LDIR)).toHaveLength(1);
+    for (let cz = -4; cz < -1; cz++) {
+      for (let cx = 7; cx < 9; cx++) {
+        const want = one.view.mesh(cx, cz)!;
+        for (const [what, r] of [['4 threads', a], ['hit', b]] as const) {
+          const p = r.view.mesh(cx, cz)!;
+          for (const k of ['versions', 'connectivity', 'position', 'data', 'index', 'rows', 'spheres'] as const) {
+            expect([...p[k]], `${what} (${cx}, ${cz}) ${k}`).toEqual([...want[k]]);
+          }
+        }
+      }
+    }
+    rmSync(LDIR, { recursive: true, force: true });
+  }, 120_000);
+});

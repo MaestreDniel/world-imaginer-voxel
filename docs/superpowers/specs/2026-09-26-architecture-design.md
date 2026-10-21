@@ -1356,7 +1356,7 @@ WASD; Space (up/jump); Shift (down/sneak); Ctrl (sprint); F (walk/fly); M (map);
 - flood from sky and connected components;
 - a raycast visibility reference for cave culling.
 
-**Region cache** (`cache.ts`): binary dumps keyed by `genKey + srcKey + REGION_CACHE_FORMAT + region + upTo`, plus `stageHash('mesh')` when upTo is 'MESH', in `test/.cache/regions`. `srcKey` hashes the generator sources and the format version is bumped when the dump layout changes, because `genKey` does not track code changes made without a stage bump (amended by SP3a). Format 2 stores each column's aux A and then aux B, and the region hash covers aux B too; CI restores `test/.cache/regions` with `actions/cache` before `npm run test:metrics` (amended by SP3b), with a key of its own in each metrics job (amended 2026-10-20: parallel CI jobs).
+**Region cache** (`cache.ts`): binary dumps keyed by `genKey + srcKey + REGION_CACHE_FORMAT + region + upTo` (SP4a: upTo 'MESH' meshes the cached 'L' region in process and is not cached; format 3 dumps the final light), in `test/.cache/regions`. `srcKey` hashes the generator sources and the format version is bumped when the dump layout changes, because `genKey` does not track code changes made without a stage bump (amended by SP3a). Format 2 stores each column's aux A and then aux B, and the region hash covers aux B too; CI restores `test/.cache/regions` with `actions/cache` before `npm run test:metrics` (amended by SP3b), with a key of its own in each metrics job (amended 2026-10-20: parallel CI jobs).
 
 **Suites:**
 

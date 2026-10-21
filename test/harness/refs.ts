@@ -1,12 +1,19 @@
 /**
  * Brute-force references for SP4a's light and meshing (SP4a spec §9.1, §9.2). `referenceLight` is the global light
  * reference of L1 (SP4a spec §4.1, §4.2): it shares no code with `light/initial.ts` beyond the rule's block side
- * (`fallBlocked`, `effOpacity`, `effEmit`) and works on a whole box with no heightmaps and no padding. Task 17 adds
- * the face counts.
+ * (`fallBlocked`, `effOpacity`, `effEmit`) and works on a whole box with no heightmaps and no padding. `bruteFaces`
+ * and `meshFaceCounts` are R1's two sides (ruling P32): every visible unit face by §5.2's rules, read voxel by voxel
+ * through a `RegionView`, against the unit faces a column's mesh payload covers, decoded from its quads' corners. They
+ * share no code with `mesh/` beyond the block tables.
  */
-import { AIR } from '../../src/world/blocks/index';
-import { FACE_DOWN, FACE_EAST, FACE_NORTH, FACE_SOUTH, FACE_UP, FACE_WEST } from '../../src/world/blocks/kinds';
+import { DEFAULT_MESH_TABLES, type MeshTables } from '../../src/mesh/greedy';
+import { PACK_LAYOUT } from '../../src/mesh/packing';
+import type { ColumnMeshPayload } from '../../src/mesh/column';
+import { FLUID_WATER, fluidType } from '../../src/world/blocks/fluid';
+import { AIR, BEDROCK } from '../../src/world/blocks/index';
+import { FACE_DOWN, FACE_EAST, FACE_NORTH, FACE_SOUTH, FACE_UP, FACE_WEST, PASS_CUTOUT, PASS_OPAQUE } from '../../src/world/blocks/kinds';
 import { DEFAULT_LIGHT_TABLES, effEmit, effOpacity, fallBlocked, type LightTables } from '../../src/world/blocks/light';
+import type { RegionView } from './region';
 
 /** The six faces as [face, dx, dy, dz, the opposite face]. */
 const FACES: ReadonlyArray<readonly [number, number, number, number, number]> = [
@@ -92,4 +99,112 @@ export function referenceLight(
   const out = new Uint8Array(w * h * 384);
   for (let i = 0; i < out.length; i++) out[i] = (sky[i]! << 4) | blk[i]!;
   return out;
+}
+
+/** A face's unit key (ruling P32): `((y + 64)·256 + lz·16 + lx)·6 + face`, (lx, y, lz) the voxel that owns the face. */
+const faceKey = (lx: number, y: number, lz: number, face: number): number => ((y + 64) * 256 + lz * 16 + lx) * 6 + face;
+
+/**
+ * Every visible unit face of column (cx, cz) of `view` by SP4a spec §5.2's rules, one sorted, unique key per face
+ * (`faceKey`), in two categories (ruling P32):
+ * - `opaque`: the faces of PASS opaque and cutout states (passes 0 and 1) against a neighbour that does not occlude
+ *   them (PASS opaque with the facing bit in `fullFaces`), a cutout face also not against the same block unless
+ *   `leaves` marks it (SP4a's world has no cutout state);
+ * - `water`: the faces of water voxels (fluid type water) against a neighbour that does not occlude them and is not
+ *   water (§5.6).
+ * Below y −64 is bedrock (opaque) and above y 319 air without fluid, as in the padded view (§5.1). PASS translucent
+ * states are not counted (SP4a's world has none; SP8a meshes them). The column's four side neighbours must be in the
+ * view (RangeError otherwise).
+ */
+export function bruteFaces(view: RegionView, cx: number, cz: number, t: MeshTables = DEFAULT_MESH_TABLES): { opaque: Uint32Array; water: Uint32Array } {
+  if (cx - 1 < view.cx0 || cx + 1 >= view.cx0 + view.w || cz - 1 < view.cz0 || cz + 1 >= view.cz0 + view.h) {
+    throw new RangeError(`bruteFaces: column (${cx}, ${cz}) needs its four side neighbours inside the view`);
+  }
+  const { pass, fullFaces, leaves } = t;
+  const blockAt = (x: number, y: number, z: number): number => (y < -64 ? BEDROCK : y > 319 ? AIR : view.block(x, y, z));
+  const waterAt = (x: number, y: number, z: number): boolean => y >= -64 && y <= 319 && fluidType(view.fluid(x, y, z)) === FLUID_WATER;
+  const opaque: number[] = [];
+  const water: number[] = [];
+  for (let y = -64; y < 320; y++) {
+    for (let lz = 0; lz < 16; lz++) {
+      for (let lx = 0; lx < 16; lx++) {
+        const x = 16 * cx + lx;
+        const z = 16 * cz + lz;
+        const s = view.block(x, y, z);
+        const ps = pass[s];
+        const solid = ps === PASS_OPAQUE || ps === PASS_CUTOUT;
+        const wet = fluidType(view.fluid(x, y, z)) === FLUID_WATER;
+        if (!solid && !wet) continue;
+        // FACES is in face order (north, east, south, west, up, down), so the keys come out sorted.
+        for (const [f, dx, dy, dz, opp] of FACES) {
+          const ns = blockAt(x + dx, y + dy, z + dz);
+          if (pass[ns] === PASS_OPAQUE && ((fullFaces[ns]! >> opp) & 1) !== 0) continue;
+          if (solid && !(ps === PASS_CUTOUT && ns === s && (leaves === undefined || leaves[s] === 0))) opaque.push(faceKey(lx, y, lz, f));
+          if (wet && !waterAt(x + dx, y + dy, z + dz)) water.push(faceKey(lx, y, lz, f));
+        }
+      }
+    }
+  }
+  return { opaque: Uint32Array.from(opaque), water: Uint32Array.from(water) };
+}
+
+/**
+ * The unit faces the quads of a column mesh payload cover (ruling P32), as sorted `faceKey`s with duplicates kept (a
+ * face two quads cover counts twice), in `bruteFaces`' categories: rows of passes 0 and 1 are `opaque`, pass 2
+ * `water`; and the quads per category. Each quad is the row's next four vertices; its face is its first vertex's
+ * `face` field, its plane the corners' common coordinate P on the face's axis (in blocks), and it covers every unit
+ * cell between its corners in the plane, owned by the voxel at P − 1 for a + face (east, south, up) and at P for a −
+ * face. Water tops sit at the voxel's full height (ruling P25), so they need no special case. Throws on a quad that is
+ * not an axis-aligned rectangle on whole blocks, or whose owner lies outside its section.
+ */
+export function meshFaceCounts(p: ColumnMeshPayload): { opaque: Uint32Array; water: Uint32Array; quadsOpaque: number; quadsWater: number } {
+  const opaque: number[] = [];
+  const water: number[] = [];
+  let quadsOpaque = 0;
+  let quadsWater = 0;
+  const lo = [0, 0, 0];
+  const hi = [0, 0, 0];
+  const at = [0, 0, 0];
+  for (let r = 0; r < p.rows.length / 6; r++) {
+    const [sy, pass, vertexStart, vertexCount] = [p.rows[6 * r]!, p.rows[6 * r + 1]!, p.rows[6 * r + 2]!, p.rows[6 * r + 3]!];
+    if (vertexCount % 4 !== 0) throw new Error(`meshFaceCounts: row ${r} has ${vertexCount} vertices, not whole quads`);
+    const out = pass === 2 ? water : opaque;
+    const faceField = pass === 2 ? PACK_LAYOUT.fluid.face : PACK_LAYOUT.solid.face;
+    for (let v = vertexStart; v < vertexStart + vertexCount; v += 4) {
+      if (pass === 2) quadsWater++;
+      else quadsOpaque++;
+      const face = (p.data[v]! >>> faceField.offset) & ((1 << faceField.bits) - 1);
+      const dir = FACES[face];
+      if (dir === undefined) throw new Error(`meshFaceCounts: row ${r} vertex ${v}: face ${face}`);
+      const [, dx, dy, dz] = dir;
+      const axis = dx !== 0 ? 0 : dy !== 0 ? 1 : 2;
+      const plus = dx + dy + dz > 0;
+      for (let a = 0; a < 3; a++) {
+        lo[a] = Infinity;
+        hi[a] = -Infinity;
+      }
+      for (let k = 0; k < 4; k++) {
+        for (let a = 0; a < 3; a++) {
+          const c = p.position[4 * (v + k) + a]!;
+          if (c % 8 !== 0) throw new Error(`meshFaceCounts: row ${r} vertex ${v + k}: position ${c} is not on a whole block`);
+          lo[a] = Math.min(lo[a]!, c / 8);
+          hi[a] = Math.max(hi[a]!, c / 8);
+        }
+      }
+      if (lo[axis] !== hi[axis]) throw new Error(`meshFaceCounts: row ${r} vertex ${v}: the quad is not in a plane of its face ${face}`);
+      const u = axis === 0 ? 1 : 0;
+      const w = axis === 2 ? 1 : 2;
+      at[axis] = plus ? lo[axis]! - 1 : lo[axis]!;
+      for (at[u] = lo[u]!; at[u]! < hi[u]!; at[u]!++) {
+        for (at[w] = lo[w]!; at[w]! < hi[w]!; at[w]!++) {
+          const [lx, ly, lz] = at as [number, number, number];
+          if (lx < 0 || lx > 15 || ly < 0 || ly > 15 || lz < 0 || lz > 15) {
+            throw new Error(`meshFaceCounts: row ${r} vertex ${v}: owner (${lx}, ${ly}, ${lz}) outside section ${sy}`);
+          }
+          out.push(faceKey(lx, sy * 16 - 64 + ly, lz, face));
+        }
+      }
+    }
+  }
+  return { opaque: Uint32Array.from(opaque).sort(), water: Uint32Array.from(water).sort(), quadsOpaque, quadsWater };
 }
