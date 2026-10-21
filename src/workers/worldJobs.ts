@@ -1,12 +1,14 @@
 /**
  * The world column jobs on the attached shared store (SP4a spec §2.3), run by the task handler. SP4a builds them in
- * turn: so far the D and L jobs' cores, `fillColumnD` and `fillColumnL`; T is `fillColumnT` (`metrics/region.ts`),
- * and MESH_COLUMN and the reply wrappers follow.
+ * turn: so far the D, L and MESH_COLUMN jobs' cores, `fillColumnD`, `fillColumnL` and `meshColumnJob`; T is
+ * `fillColumnT` (`metrics/region.ts`), and the reply wrappers follow.
  */
 import type { GenContext } from '../gen/context';
 import { decorateStage } from '../gen/pipeline/decorateStage';
 import { centreSection, lightRegion, type LightScratch } from '../light/initial';
-import { SECTIONS } from '../world/store/columnTable';
+import { meshColumnPayload, type ColumnMeshPayload, type MeshScratch } from '../mesh/column';
+import type { MeshOptions } from '../mesh/greedy';
+import { SECTIONS, STATUS_PUBLISHED } from '../world/store/columnTable';
 import { copyLightRegion } from '../world/store/padded';
 import type { VoxelStore } from '../world/store/store';
 
@@ -15,6 +17,8 @@ const COPY_LIGHT_REGION = copyLightRegion;
 const LIGHT_REGION = lightRegion;
 const CENTRE_SECTION = centreSection;
 const SECTION_COUNT = SECTIONS;
+const MESH_COLUMN = meshColumnPayload;
+const PUBLISHED = STATUS_PUBLISHED;
 
 /**
  * The D job of (cx, cz) (SP4a spec §2.3): `reopenColumn(cx, cz, 1)`, the D skeleton over `store.neighborhood(cx, cz)`
@@ -48,4 +52,22 @@ export function fillColumnL(store: VoxelStore, cx: number, cz: number, s: LightS
   for (let sy = 0; sy < SECTION_COUNT; sy++) w.setLight(sy, CENTRE_SECTION(s, sy));
   w.commit(3);
   return versions;
+}
+
+/**
+ * The MESH_COLUMN job of (cx, cz) (SP4a spec §2.3, §5.8): the column payload of `meshColumnPayload` over
+ * `store.neighborhood(cx, cz)`, its `versions` read before the copy. Throws unless every column of the 3 × 3 is
+ * Published (the coordinator never runs it earlier). It writes nothing to the store and takes no stop: the reply
+ * wrapper polls once before it (ruling P29).
+ */
+export function meshColumnJob(store: VoxelStore, cx: number, cz: number, s: MeshScratch, o: MeshOptions): ColumnMeshPayload {
+  for (let dz = -1; dz <= 1; dz++) {
+    for (let dx = -1; dx <= 1; dx++) {
+      const base = store.table.find(cx + dx, cz + dz);
+      if (base < 0 || store.table.status(base) < PUBLISHED) {
+        throw new Error(`meshColumnJob: column (${cx + dx}, ${cz + dz}) of the 3 × 3 of (${cx}, ${cz}) is not Published`);
+      }
+    }
+  }
+  return MESH_COLUMN(store.neighborhood(cx, cz), s, o);
 }

@@ -313,9 +313,9 @@ A pure fluid voxel is AIR plus a fluid byte. Waterlogging comes free: a state wh
 | blocks | block-pool slot ≥ 0, or `-1-uniformStateId` |
 | light | slot, or `-1-uniformByte` (all 0 in sealed rock and dark caves, all 0xF0 in open sky) |
 | fluid | slot, or `-1-uniformByte`; -1 is "no fluid" (byte 0), so a full water section of an ocean costs no slot (amended by SP3a) |
-| meta | bits 0-12 nonAir (0-4096), 13 hasOpaque, 14 hasCutout, 15 hasTranslucent (any voxel whose `PASS` is that pass), 16 hasFluid (any fluid type ≠ 0), 17-31 face-to-face connectivity (0 until SP4) (amended by SP3a) |
+| meta | bits 0-12 nonAir (0-4096), 13 hasOpaque, 14 hasCutout, 15 hasTranslucent (any voxel whose `PASS` is that pass), 16 hasFluid (any fluid type ≠ 0), 17-31 face-to-face connectivity (0; SP4a computes connectivity15 in the mesh job and carries it in the mesh result; SP6 decides whether the meta holds it) (amended by SP3a) |
 
-Each channel is stored on its own: uniform when every value of that channel is equal (no slot), dense otherwise; rewriting a descriptor releases what it held. Unwritten descriptors are −1 (uniform air, light byte 0, no fluid). The connectivity bits and `padded.ts` are SP4's (amended by SP3a).
+Each channel is stored on its own: uniform when every value of that channel is equal (no slot), dense otherwise; rewriting a descriptor releases what it held. Unwritten descriptors are −1 (uniform air, light byte 0, no fluid). The connectivity bits and `padded.ts` are SP4a's (amended by SP3a).
 
 **Proto section descriptor**, 2 × int32: blocks and fluid. This is the pre-decoration state (terrain, aquifer, surface rules, carvers). It is immutable once T finishes.
 
@@ -410,6 +410,7 @@ interface ColumnView { block(lx:number, y:number, lz:number): number; fluid(lx:n
 interface NeighborhoodReader { proto(dx:number, dz:number): ColumnView | null; final(dx:number, dz:number): ColumnView | null;
   versions(): Int32Array /* 3x3 in (dz, dx) order, blockVersion then lightVersion, -1 when absent */ }
 interface SectionMesh { secKey:number; pass:0|1|2; quads:number; position:Uint8Array /*Uint8x4*/; data:Uint32Array; index:Uint32Array;
+  connectivity:number /* connectivity15, the same on each pass of a section (SP4a) */;
   bounds:[number,number,number,number] /*sphere*/; seq:number; versions:Int32Array /*3x3 block+light*/;
   emitters?: Float32Array /* audio candidates: kind, x, y, z, strength (§4.18) */ }
 interface MetricDef { id: MetricId; run(region: RegionView): Record<string, number> /* value per threshold part */; scope:'column'|'voxel'|'render'|'audio' }
@@ -963,7 +964,7 @@ Main thread: render (three), input/physics/raycast (reads SAB), Coordinator (sta
 
 ### 4.4 Meshing and vertex format
 
-**Input.** The job copies an 18³ padded view of blocks, light and fluid from the SAB (about 20 µs). Below the world counts as opaque; above it counts as air with sky 15. Neighbours are always real data, so there are zero seam faces and AO and light are correct at borders.
+**Input.** The job copies an 18³ padded view of blocks, light and fluid from the SAB (about 20 µs). Below the world counts as opaque; above it counts as air with sky 15. Neighbours are always real data, so there are zero seam faces and AO and light are correct at borders. A section is trivial, and skipped, when it and its six face neighbours are all uniform air without fluid (connectivity all 15 bits) or all uniform opaque full cubes (connectivity 0) (SP4a).
 
 **Face visibility.** A neighbour *occludes* a face when it is PASS opaque and its `FULL_FACES` has the facing bit (all six for cubes):
 - opaque faces are emitted only against a neighbour that does not occlude them — a partial shape never hides a neighbour's face;
@@ -974,7 +975,7 @@ In AO, smooth light and connectivity15, "opaque" means PASS opaque with `FULL_FA
 
 **Greedy meshing.** Per axis slice with a 16×16 mask of two u32 keys: `(layer, tint, flags, ao×4)` and `(sky×4, block×4)`. The measured ratio is about 0.56 quads per face.
 - AO uses 09's 3-sample table [1, .8, .6, .45] with the diagonal flip.
-- Smooth light (MC "Maximum"): average the 4 air-side voxels per vertex, skipping the corner when both edges are opaque.
+- Smooth light (MC "Maximum"): average the 4 air-side voxels per vertex, skipping the corner when both edges are opaque (SP4a: the samples are the face voxel and the non-opaque edge and corner voxels; per channel `v = ⌊(2·sum + n) / (2n)⌋` over the n ≥ 1 samples, rounding half up with integers only, so every engine agrees).
 - With AO and smooth light off (Low preset), the key is block-only, giving about 0.28.
 
 **Cross sprites** are 2 quads with a hashed ±0.25 xz offset.
@@ -993,6 +994,7 @@ In AO, smooth light and connectivity15, "opaque" means PASS opaque with `FULL_FA
 - `data`: uint32, bound as an integer automatically because it is a Uint32Array.
   - opaque/cutout: `layer10 | face3 | ao2 | sky4 | block4 | tint3 | flags4 (emissive, waving, randomRotate, upper) | 2 spare`;
   - fluid: `layer10 | face3 | sky4 | block4 | depth4 | tint3 | cornerDrop4`.
+  - Fields run from bit 0 in the order listed (SP4a): opaque/cutout `layer` 0-9, `face` 10-12, `ao` 13-14, `sky` 15-18, `block` 19-22, `tint` 23-25, `flags` 26-29, spare 30-31; fluid `layer` 0-9, `face` 10-12, `sky` 13-16, `block` 17-20, `depth` 21-24, `tint` 25-27, `cornerDrop` 28-31. `cornerDrop` counts ninths of a block below the voxel's top (0 full height; a still source's surface is 8/9, drop 1; flowing levels reach 8).
 - UVs are derived in the fragment shader from the interpolated position projected onto the face plane, so greedy quads tile.
 
 **Output.** Up to 3 SectionMeshes per section, each with its own index (Uint32), a precomputed bounding sphere and connectivity15. Buffers are transferred and wrapped with `new BufferAttribute(typed, n)`.
