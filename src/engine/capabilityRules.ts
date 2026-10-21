@@ -7,6 +7,13 @@ export interface CapabilityReport {
   /** null unless the worker replied. */
   workerIsolated: boolean | null;
   sabShared: boolean;
+  /** `new SharedArrayBuffer(0, {maxByteLength})` is growable and grows once (SP4a spec §8.5). */
+  growableSab: boolean;
+  /**
+   * The largest store reservation the browser accepted: (768, 512) MiB, then halves, down to (192, 128) MiB of block
+   * and byte pool maxima; null when even the smallest was refused (SP4a spec §8.5).
+   */
+  reservation: StoreReservation | null;
   webgl2: boolean;
   multiDraw: boolean;
   timerQuery: boolean;
@@ -18,9 +25,15 @@ export interface CapabilityReport {
   deviceMemory: number | null;
 }
 
+/** The block and byte pools' maxima, in bytes (`createStore`'s `maxBlockBytes` and `maxByteBytes`). */
+export interface StoreReservation {
+  blockBytes: number;
+  byteBytes: number;
+}
+
 export type CauseCode =
   | 'insecure-context' | 'page-not-isolated' | 'worker-not-isolated' | 'worker-load-error' | 'worker-timeout'
-  | 'sab-not-shared' | 'no-webgl2' | 'no-multi-draw' | 'no-timer-query';
+  | 'sab-not-shared' | 'no-webgl2' | 'no-growable-sab' | 'no-reservation' | 'no-multi-draw' | 'no-timer-query';
 
 export interface Cause {
   code: CauseCode;
@@ -41,8 +54,10 @@ const MESSAGES: Record<CauseCode, string> = {
   'worker-timeout': 'The worker did not answer within 5 s.',
   'sab-not-shared': 'SharedArrayBuffer is not shared between the page and its workers.',
   'no-webgl2': 'WebGL2 is not available in this browser.',
-  'no-multi-draw': 'WEBGL_multi_draw is missing: rendering will use the per-region fallback (SP4).',
-  'no-timer-query': 'EXT_disjoint_timer_query_webgl2 is missing: GPU timings are unavailable.',
+  'no-growable-sab': 'SharedArrayBuffer cannot grow (new SharedArrayBuffer(0, {maxByteLength}) failed): the 3D world needs a growable shared store.',
+  'no-reservation': 'The browser refused even the smallest store reservation (192 MiB of blocks, 128 MiB of bytes): the 3D world cannot create its store.',
+  'no-multi-draw': 'WEBGL_multi_draw is missing: the world renders through the per-region path (RegionMesh)',
+  'no-timer-query': 'GPU time unavailable; frame timing is CPU-side only',
 };
 
 const WORKER_CAUSE: Record<Exclude<WorkerProbe, 'ok'>, CauseCode> = {
@@ -51,7 +66,27 @@ const WORKER_CAUSE: Record<Exclude<WorkerProbe, 'ok'>, CauseCode> = {
   timeout: 'worker-timeout',
 };
 
+const cause = (code: CauseCode): Cause => ({ code, message: MESSAGES[code] });
+
+/** The base rules (today's boot page): isolation, a shared SAB and WebGL2 block; missing extensions only warn. */
 export function evaluateCapabilities(report: CapabilityReport): Evaluation {
+  const { blocking, warnings } = causesOf(report);
+  return { ok: blocking.length === 0, blocking: blocking.map(cause), warnings: warnings.map(cause) };
+}
+
+/**
+ * The 3D page's rules (SP4a spec §8.5, D23): today's blocking causes, then a SharedArrayBuffer that cannot grow and a
+ * refused store reservation (even at 192/128 MiB). A reduced reservation does not block; it caps the render distance
+ * (`renderDistance.ts`). The warnings are today's.
+ */
+export function evaluateWorldCapabilities(report: CapabilityReport): Evaluation {
+  const { blocking, warnings } = causesOf(report);
+  if (!report.growableSab) blocking.push('no-growable-sab');
+  if (report.reservation === null) blocking.push('no-reservation');
+  return { ok: blocking.length === 0, blocking: blocking.map(cause), warnings: warnings.map(cause) };
+}
+
+function causesOf(report: CapabilityReport): { blocking: CauseCode[]; warnings: CauseCode[] } {
   const blocking: CauseCode[] = [];
   const warnings: CauseCode[] = [];
   if (!report.secureContext) blocking.push('insecure-context');
@@ -63,6 +98,5 @@ export function evaluateCapabilities(report: CapabilityReport): Evaluation {
     if (!report.multiDraw) warnings.push('no-multi-draw');
     if (!report.timerQuery) warnings.push('no-timer-query');
   }
-  const cause = (code: CauseCode): Cause => ({ code, message: MESSAGES[code] });
-  return { ok: blocking.length === 0, blocking: blocking.map(cause), warnings: warnings.map(cause) };
+  return { blocking, warnings };
 }
