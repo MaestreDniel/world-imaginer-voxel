@@ -22,6 +22,8 @@ import type { Spawn } from '../gen/column/spawn';
 import type { ProbeField, SliceField } from '../gen/inspect/fieldSlice';
 import { isLayerId, type LayerId } from '../gen/map/layers';
 import type { SplineLeaf } from '../metrics/splineStats';
+import type { ColumnView } from '../world/store/api';
+import type { StoreHandles } from '../world/store/store';
 
 export { COLUMN_SAMPLE_COST, CORNER_SAMPLE_COST, CORNER_STEEP_COST, DRAFT_BUDGET, PART_BUDGET, REQUEST_BUDGET, SLICE_RULE_NA } from '../core/constants';
 
@@ -382,4 +384,82 @@ export function parseFromWorker(m: unknown): FromWorker | BadReply | null {
   if (!isInt(jobId)) return null;
   const reason = REPLY_CHECKS[type]!(m);
   return reason === null ? (m as unknown as FromWorker) : { bad: true, jobId, reason: `${type}: ${reason}` };
+}
+
+// ---------------------------------------------------------------- the spike's shared store (SP4a spec §1.2 item 6)
+
+/**
+ * The store spike's messages (SP4a spec §1.1, §1.2 item 6; ruling P18), outside `ToWorker`: the page posts its store's
+ * handles with `spikeWrite`; worker `index` attaches, claims columns (index, 0 … columnsPerWorker − 1), writes 24 dense
+ * proto sections into each with `spikeSectionFill` and commits them. After every worker has answered, `spikeCrossRead`
+ * asks it to check the columns (cx, 0 … columnsPerWorker − 1) another worker wrote.
+ */
+export interface SpikeWriteMsg { readonly type: 'spikeWrite'; readonly handles: StoreHandles; readonly index: number; readonly columnsPerWorker: number }
+export interface SpikeCrossReadMsg { readonly type: 'spikeCrossRead'; readonly cx: number; readonly columnsPerWorker: number }
+export type SpikeStoreToWorker = SpikeWriteMsg | SpikeCrossReadMsg;
+/** `blockMiB` and `byteMiB` are the pools' byte lengths this worker sees after its writes. */
+export interface SpikeWrittenMsg { readonly type: 'spikeWritten'; readonly index: number; readonly blockMiB: number; readonly byteMiB: number; readonly errors: readonly string[] }
+export interface SpikeCrossCheckedMsg { readonly type: 'spikeCrossChecked'; readonly ok: number; readonly total: number; readonly errors: readonly string[] }
+export type SpikeStoreFromWorker = SpikeWrittenMsg | SpikeCrossCheckedMsg;
+
+/** A worker's columns lie on one torus row: at most 64 (`TORUS`, world/store/columnTable.ts). */
+const SPIKE_COLUMNS_MAX = 64;
+
+const isCount = (v: unknown): v is number => isInt(v) && v >= 1 && v <= SPIKE_COLUMNS_MAX;
+const isStrings = (v: unknown): v is readonly string[] => Array.isArray(v) && v.every((e) => typeof e === 'string');
+const isSize = (v: unknown): v is number => typeof v === 'number' && Number.isFinite(v) && v >= 0;
+/** The shape of `VoxelStore.handles()`; whether the buffers attach is `attachStore`'s check. */
+const isStoreHandles = (v: unknown): v is StoreHandles =>
+  isObj(v) && typeof v['shared'] === 'boolean' && isObj(v['blocks']) && isObj(v['bytes']) && typeof v['table'] === 'object' && v['table'] !== null
+  && typeof v['epochs'] === 'object' && v['epochs'] !== null && v['pass'] instanceof Uint8Array;
+
+/** A store spike message to the worker, or null. */
+export function parseSpikeStoreToWorker(m: unknown): SpikeStoreToWorker | null {
+  if (!isObj(m)) return null;
+  if (m['type'] === 'spikeWrite') {
+    return isStoreHandles(m['handles']) && isInt(m['index']) && m['index'] >= 0 && isCount(m['columnsPerWorker']) ? (m as unknown as SpikeWriteMsg) : null;
+  }
+  if (m['type'] === 'spikeCrossRead') return isInt(m['cx']) && isCount(m['columnsPerWorker']) ? (m as unknown as SpikeCrossReadMsg) : null;
+  return null;
+}
+
+/** A store spike reply, or null. */
+export function parseSpikeStoreFromWorker(m: unknown): SpikeStoreFromWorker | null {
+  if (!isObj(m) || !isStrings(m['errors'])) return null;
+  if (m['type'] === 'spikeWritten') {
+    return isInt(m['index']) && isSize(m['blockMiB']) && isSize(m['byteMiB']) ? (m as unknown as SpikeWrittenMsg) : null;
+  }
+  if (m['type'] === 'spikeCrossChecked') {
+    const { ok, total } = m;
+    return isInt(ok) && isInt(total) && ok >= 0 && ok <= total ? (m as unknown as SpikeCrossCheckedMsg) : null;
+  }
+  return null;
+}
+
+/**
+ * The store spike's fill of section `sy` of column (cx, cz), shared by the writing worker, the reading worker and the
+ * page: 4096 block states and 4096 fluid bytes that vary with the voxel (dense, never uniform) and with the column.
+ */
+export function spikeSectionFill(cx: number, cz: number, sy: number, blocks: Uint16Array, fluid: Uint8Array): void {
+  for (let i = 0; i < 4096; i++) {
+    blocks[i] = (i * 7 + cx * 131 + cz * 31 + sy * 17) & 4095;
+    fluid[i] = (i + cx * 3 + cz * 5 + sy) & 255;
+  }
+}
+
+/** Null when the proto set of (cx, cz) holds `spikeSectionFill`'s values in all 24 sections, otherwise the first problem. */
+export function spikeColumnProblem(view: ColumnView | null, cx: number, cz: number): string | null {
+  if (view === null) return `column (${cx}, ${cz}) is absent`;
+  const blocks = new Uint16Array(4096);
+  const fluid = new Uint8Array(4096);
+  for (let sy = 0; sy < 24; sy++) {
+    spikeSectionFill(cx, cz, sy, blocks, fluid);
+    const b = view.sectionBlocks(sy);
+    const f = view.sectionFluid(sy);
+    if (typeof b === 'number' || typeof f === 'number') return `column (${cx}, ${cz}) section ${sy} is uniform`;
+    for (let i = 0; i < 4096; i++) {
+      if (b[i] !== blocks[i] || f[i] !== fluid[i]) return `column (${cx}, ${cz}) section ${sy} voxel ${i} differs`;
+    }
+  }
+  return null;
 }

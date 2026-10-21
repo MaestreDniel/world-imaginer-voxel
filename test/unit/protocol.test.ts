@@ -13,9 +13,10 @@ import { createSurfaceContext } from '../../src/gen/surface/context';
 import { surfaceProbe } from '../../src/gen/surface/probe';
 import { AIR, BEDROCK, DEEPSLATE, SNOW_BLOCK } from '../../src/world/blocks/index';
 import { leafOpts } from '../../src/ui/splineEditor/model';
-import { parseFromWorker, parseToWorker, pointInWindow, SLICE_ROWS, SLICE_SAMPLES, sliceIndex, slicePartIndex, tileInWindow, type FromWorker } from '../../src/workers/protocol';
+import { parseFromWorker, parseSpikeStoreFromWorker, parseSpikeStoreToWorker, parseToWorker, pointInWindow, SLICE_ROWS, SLICE_SAMPLES, sliceIndex, slicePartIndex, tileInWindow, type FromWorker } from '../../src/workers/protocol';
 import { createSliceJob } from '../../src/workers/sliceJob';
 import { createTaskHandler } from '../../src/workers/taskHandler';
+import { createStore } from '../../src/world/store/store';
 import { ctxFor } from '../harness/gen';
 
 const tileMsg = { type: 'mapTile', jobId: 1, epoch: 3, layer: 'biome', level: 64, tx: 2, tz: -1 };
@@ -562,5 +563,43 @@ describe('surfaceProbe messages and the handler (SP3c spec §6)', () => {
     const warm = probed(h.handle(probe(2, 4, x, top, z)).msg);
     expect(warm.state).not.toBe(SNOW_BLOCK);
     expect(warm.path.at(-1)).toMatch(/^root\.rules\[1\]\.then\.rules\[3\]\.then\./);
+  });
+});
+
+describe('the store spike\'s messages (SP4a spec §1.2 item 6, ruling P18)', () => {
+  const handles = createStore({ shared: false, maxBlockBytes: 1 << 20, maxByteBytes: 1 << 20 }).handles();
+  test('valid messages to the worker pass', () => {
+    expect(parseSpikeStoreToWorker({ type: 'spikeWrite', handles, index: 0, columnsPerWorker: 32 })).not.toBeNull();
+    expect(parseSpikeStoreToWorker({ type: 'spikeWrite', handles, index: 5, columnsPerWorker: 1 })).not.toBeNull();
+    expect(parseSpikeStoreToWorker({ type: 'spikeCrossRead', cx: 3, columnsPerWorker: 32 })).not.toBeNull();
+  });
+  test.each<[string, unknown]>([
+    ['not an object', 7],
+    ['a ToWorker message', { type: 'spawn', jobId: 1, epoch: 0 }],
+    ['write without handles', { type: 'spikeWrite', index: 0, columnsPerWorker: 32 }],
+    ['handles not a store\'s', { type: 'spikeWrite', handles: { shared: true }, index: 0, columnsPerWorker: 32 }],
+    ['a negative index', { type: 'spikeWrite', handles, index: -1, columnsPerWorker: 32 }],
+    ['a fractional index', { type: 'spikeWrite', handles, index: 0.5, columnsPerWorker: 32 }],
+    ['zero columns', { type: 'spikeWrite', handles, index: 0, columnsPerWorker: 0 }],
+    ['more columns than the torus', { type: 'spikeWrite', handles, index: 0, columnsPerWorker: 65 }],
+    ['a cross read without cx', { type: 'spikeCrossRead', columnsPerWorker: 32 }],
+    ['a cross read with a fractional cx', { type: 'spikeCrossRead', cx: 1.5, columnsPerWorker: 32 }],
+  ])('a bad message to the worker is null: %s', (_, m) => {
+    expect(parseSpikeStoreToWorker(m)).toBeNull();
+  });
+  test('valid replies pass', () => {
+    expect(parseSpikeStoreFromWorker({ type: 'spikeWritten', index: 2, blockMiB: 12, byteMiB: 13, errors: [] })).not.toBeNull();
+    expect(parseSpikeStoreFromWorker({ type: 'spikeCrossChecked', ok: 32, total: 32, errors: ['x'] })).not.toBeNull();
+  });
+  test.each<[string, unknown]>([
+    ['not an object', null],
+    ['unknown type', { type: 'spikeNope' }],
+    ['written without errors', { type: 'spikeWritten', index: 2, blockMiB: 12, byteMiB: 13 }],
+    ['written with a non-string error', { type: 'spikeWritten', index: 2, blockMiB: 12, byteMiB: 13, errors: [1] }],
+    ['written with a NaN size', { type: 'spikeWritten', index: 2, blockMiB: Number.NaN, byteMiB: 13, errors: [] }],
+    ['checked with a fractional ok', { type: 'spikeCrossChecked', ok: 1.5, total: 32, errors: [] }],
+    ['checked with ok above total', { type: 'spikeCrossChecked', ok: 33, total: 32, errors: [] }],
+  ])('a bad reply is null: %s', (_, m) => {
+    expect(parseSpikeStoreFromWorker(m)).toBeNull();
   });
 });

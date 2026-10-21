@@ -213,6 +213,30 @@ D2's rule built RegionMesh (master §4.5's fallback, §6.2) in SP4a if any targe
 
 Firefox exposes `WEBGL_multi_draw` on no GPU, so the Firefox/Iris Xe cell is taken to lack it as well (its spike report confirms it). What follows in this spec: both Firefox cells render on RegionMesh (§6.2); GPU-time measurements degrade to CPU-side frame timing where the timer query is missing (§9.5); the renderer string is recorded as reported and not trusted on Firefox (§8.5, §9.5); 2048 layers cover the flat-colour array (one layer per state id, §6.3).
 
+### Spike evidence
+
+The spike's cells (§1.2, §1.3), each JSON in `docs/superpowers/specs/assets/sp4a/`. The Chrome cells were measured at the display's 143.6 Hz (the user's decision of 2026-10-21): frame times snap to the measured display interval, 6.965 ms, and the thresholds stay as §1.3 states them.
+
+| | Chrome / RTX 3060 Mobile (`spike-chrome-rtx.json`) |
+|---|---|
+| renderer (as reported) | ANGLE (NVIDIA Corporation, NVIDIA GeForce RTX 3060 Laptop GPU/PCIe/SSE2, OpenGL 4.5.0); `multiDraw` true, `timerQuery` true; Chrome 155.0.8059.39, PRIME 'nvidia', 1920 × 1080 @ 1 |
+| section renderer | RegionBatch (`batch`) |
+| scene | 489 columns, 3,565 section rows, 734,109 quads, 15 regions |
+| 1 decode | 0 mismatches of 1,024 words |
+| 2 static p50 / p95 / max | 6.965 / 1,002.96 / 1,009.92 ms (**not valid**, see below) |
+| 2 draw calls | 19 max, 16.0 mean |
+| 2 main thread p95 | 0.83 ms |
+| 3 upload | 0.232 ms per 1k quads (build 170.6 ms), first render 42.0 ms; projected RD12 0.32 s |
+| 4 churn | 32 `setGeometryAt` per frame: main p95 1.08 ms, frame p95 6.965 ms; `optimize()` of region (0, 0) opaque: 1.98 ms over 7.47 MB; re-add of 32: 0.23 ms; `setGeometrySize` × 1.5: 1.88 ms |
+| 5 noMultiDraw | `WEBGL_multi_draw` masked: 1,202 draw calls max (1,069 mean), frame p50 / p95 / max 6.965 / 6.965 / 6.965 ms, main p95 1.03 ms |
+| 6 store | 768 / 512 MiB reserved; grew to 36 / 18 MiB; 384 of 384 reads exact; no error |
+| console errors | none |
+| verdict | `basicPass` true; `gatePass` false (static p95 only) |
+
+- **The RTX cell's frame figures need a rerun with the display awake.** The run (2026-10-21, 06:20) found the user's session locked: GNOME's screensaver had been active since 06:03 and DPMS reported the monitor off. At least one frame in twenty of item 2 (its p95) took about 1,003 ms, 144 display intervals, the 1 Hz rAF of an unseen page; item 5 ran clean at one interval per frame. The CPU-side figures (draw calls, main thread, upload, churn) and the basic criteria (decode, store, console) do not depend on frame pacing and stand; frame p95 does not. A second run, still locked, was stopped when its rAF stayed throttled.
+- **Chrome / Iris Xe:** pending: measured before Task 30 (the user's decision of 2026-10-21: one PRIME switch for every Iris cell).
+- **Firefox / Iris Xe, Firefox / RTX 3060 Mobile:** pending (Task 33).
+
 ## 2. The one-shot load
 
 ### 2.1 Rings (`engine/rings.ts`)

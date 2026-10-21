@@ -30,7 +30,9 @@ const start: Promise<void> = query.get('lab') === 'noise'
     ? import('./ui/map/mapPage').then((m) => m.mountMapPage(root))
     : query.get('selftest') === '1'
       ? import('./ui/selftest/selftestPage').then((m) => m.mountSelftestPage(root))
-      : boot(root);
+      : query.get('spike') === 'batch'
+        ? import('./ui/spike/spikePage').then((m) => m.mountSpikePage(root))
+        : boot(root);
 start.catch((error: unknown) => {
   const pre = document.createElement('pre');
   pre.textContent = `Boot failed: ${error instanceof Error ? error.stack ?? error.message : String(error)}`;

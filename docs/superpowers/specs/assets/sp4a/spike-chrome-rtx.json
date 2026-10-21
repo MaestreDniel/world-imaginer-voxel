@@ -1,0 +1,147 @@
+{
+  "route": "spike",
+  "capability": {
+    "secureContext": true,
+    "pageIsolated": true,
+    "workerProbe": "ok",
+    "workerIsolated": true,
+    "sabShared": true,
+    "webgl2": true,
+    "multiDraw": true,
+    "timerQuery": true,
+    "maxArrayTextureLayers": 2048,
+    "maxTextureSize": 32768,
+    "renderer": "ANGLE (NVIDIA Corporation, NVIDIA GeForce RTX 3060 Laptop GPU/PCIe/SSE2, OpenGL 4.5.0)",
+    "vendor": "Google Inc. (NVIDIA Corporation)",
+    "hardwareConcurrency": 20,
+    "deviceMemory": 16
+  },
+  "sectionRenderer": "batch",
+  "userAgent": "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/155.0.0.0 Safari/537.36",
+  "screen": {
+    "width": 1920,
+    "height": 1080
+  },
+  "dpr": 1,
+  "displayIntervalMs": 6.965,
+  "items": {
+    "scene": {
+      "columns": 489,
+      "sections": 3565,
+      "quads": 734109,
+      "regions": 15
+    },
+    "decode": {
+      "words": 1024,
+      "mismatches": 0,
+      "firstMismatches": [],
+      "error": null
+    },
+    "static": {
+      "sectionRenderer": "batch",
+      "multiDrawMasked": false,
+      "canvas": {
+        "width": 1920,
+        "height": 1080,
+        "pixelRatio": 1
+      },
+      "displayIntervalMs": 6.965,
+      "frames": 600,
+      "frame": {
+        "p50": 6.964999999999918,
+        "p95": 1002.9599999999882,
+        "max": 1009.9249999999881
+      },
+      "main": {
+        "p50": 0.4299999997019768,
+        "p95": 0.8250000029802322,
+        "max": 1.1449999995529652
+      },
+      "drawCalls": 19,
+      "drawCallsMean": 16.005,
+      "trianglesMax": 486171,
+      "error": null
+    },
+    "upload": {
+      "quads": 734109,
+      "sections": 3565,
+      "buildMs": 170.63499999791384,
+      "msPer1kQuads": 0.23243823464623622,
+      "firstRenderMs": 41.96000000089407,
+      "projectedRd12Seconds": 0.31666666666666665,
+      "error": null
+    },
+    "churn": {
+      "frames": 120,
+      "setGeometryPerFrame": 32,
+      "mainP95": 1.0799999982118607,
+      "frameP95": 6.964999999999918,
+      "deleted": 32,
+      "optimize": [
+        {
+          "rx": 0,
+          "rz": 0,
+          "pass": 0,
+          "ms": 1.9800000004470348,
+          "mb": 7.474
+        }
+      ],
+      "readdMs": 0.22500000149011612,
+      "setGeometrySizeMs": 1.8799999989569187,
+      "error": null
+    },
+    "noMultiDraw": {
+      "sectionRenderer": "batch",
+      "multiDrawMasked": true,
+      "canvas": {
+        "width": 1920,
+        "height": 1080,
+        "pixelRatio": 1
+      },
+      "displayIntervalMs": 6.965,
+      "frames": 600,
+      "frame": {
+        "p50": 6.964999999999918,
+        "p95": 6.964999999999918,
+        "max": 6.964999999999918
+      },
+      "main": {
+        "p50": 0.5149999968707561,
+        "p95": 1.030000001192093,
+        "max": 1.3350000008940697
+      },
+      "drawCalls": 1202,
+      "drawCallsMean": 1069.085,
+      "trianglesMax": 486171,
+      "error": null
+    }
+  },
+  "store": {
+    "reservedBlockMiB": 768,
+    "reservedByteMiB": 512,
+    "grewTo": {
+      "blockMiB": 36,
+      "byteMiB": 18
+    },
+    "crossReadsOk": 384,
+    "crossReadsTotal": 384,
+    "errors": []
+  },
+  "verdict": {
+    "gatePass": false,
+    "basicPass": true,
+    "failures": [
+      "static p95 1002.9599999999882 ms > 16.7 ms"
+    ]
+  },
+  "measuredBy": "measureChrome",
+  "loadAvg1Before": 0.87,
+  "loadAvg1After": 0.74,
+  "chromeVersion": "Chrome/155.0.8059.39",
+  "viewport": {
+    "innerWidth": 1920,
+    "innerHeight": 1080,
+    "devicePixelRatio": 1
+  },
+  "consoleErrors": []
+}
