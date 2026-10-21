@@ -163,6 +163,10 @@ export function attachStore(h: StoreHandles): VoxelStore {
         checkSy(sy);
         return sectionBytes(bytePool, ints[fluidAt(sy)]!);
       },
+      sectionLight(sy) {
+        checkSy(sy);
+        return final ? sectionBytes(bytePool, ints[finalAt(base, sy) + FINAL_LIGHT]!) : 0;
+      },
       aux() {
         const slot = ints[base + REC_AUX_A]!;
         return slot < 0 ? null : auxView(bytePool, slot);

@@ -141,6 +141,7 @@ describe('the analyser and the worker handler on real columns', () => {
         light: (lx, y, lz) => view.light(lx, y, lz),
         sectionBlocks: (sy) => { const b = view.sectionBlocks(sy); return typeof b === 'number' ? new Uint16Array(4096).fill(b) : b; },
         sectionFluid: (sy) => view.sectionFluid(sy),
+        sectionLight: (sy) => view.sectionLight(sy),
         aux: () => view.aux(),
         auxB: () => view.auxB(),
       };
@@ -171,6 +172,7 @@ describe('the analyser and the worker handler on real columns', () => {
       light: () => 0,
       sectionBlocks: (sy) => (dense ? new Uint16Array(4096).fill(stateOf(sy + shift)) : stateOf(sy + shift)),
       sectionFluid: () => 0,
+      sectionLight: () => 0,
       aux: () => real.aux(),
       auxB: () => real.auxB(),
     });

@@ -272,7 +272,7 @@ Per-state SoA tables:
 - water: pass translucent, opacity 1, no collision;
 - glass: cutout;
 - leaves: cutout with opacity 1;
-- slabs/stairs: opaque pass, OPACITY 0, culling via `FULL_FACES`. **Light never crosses a face that is set in `FULL_FACES`** of the voxel it leaves or of the voxel it enters — in the initial BFS, the straight-down sky fall, incremental relight and the L1/L3 reference BFS. The sky fall enters a voxel unless its up face is full and stops below a voxel whose down face is full; `LIGHT_BLOCKING` is defined the same way. `slabType=double` is a plain full cube (SHAPE cube, OPACITY 15, FULL_FACES 63).
+- slabs/stairs: opaque pass, OPACITY 0, culling via `FULL_FACES`. **Light never crosses a face that is set in `FULL_FACES`** of the voxel it leaves or of the voxel it enters — in the initial BFS, the straight-down sky fall, incremental relight and the L1/L3 reference BFS. The sky fall enters a voxel unless its up face is full and stops below a voxel whose down face is full; `LIGHT_BLOCKING` is defined the same way. A fluid voxel has effective opacity 1, so water stops the straight sky fall, and every BFS step entering a voxel costs `max(1, effective opacity)` (SP4a spec §4.1). `slabType=double` is a plain full cube (SHAPE cube, OPACITY 15, FULL_FACES 63).
 - **Until SP8a** box-model states use SHAPE cube and FULL_FACES 63, and `COLLIDE: boxes` falls back to cube; OPACITY and `COLLIDE: none` (torches, ladders, …) already have their final values.
 
 **Encoding details** (amended by SP3a; SP3a spec §2.1-2.3, frozen from SP3a):
@@ -405,6 +405,7 @@ interface ColumnWriter { setProto(sy:number, blocks:Uint16Array, fluid:Uint8Arra
   commit(status: 1|2|3): void /* blockVersion += 1 when blocks or fluid were written, lightVersion += 1 when light was, then status last */ }
 interface ColumnView { block(lx:number, y:number, lz:number): number; fluid(lx:number, y:number, lz:number): number;
   light(lx:number, y:number, lz:number): number; sectionBlocks(sy:number): Uint16Array|number; sectionFluid(sy:number): Uint8Array|number;
+  sectionLight(sy:number): Uint8Array|number /* the final light entry; 0 on a proto view (SP4a: padded.ts copies through it) */;
   aux(): AuxView | null; auxB(): AuxBView | null /* null when the column has no such slot; auxB amended by SP3b */ }
 interface NeighborhoodReader { proto(dx:number, dz:number): ColumnView | null; final(dx:number, dz:number): ColumnView | null;
   versions(): Int32Array /* 3x3 in (dz, dx) order, blockVersion then lightVersion, -1 when absent */ }
@@ -1059,7 +1060,7 @@ On Ultra, passes 2-4 (after the LOD depth clear) render into a `WebGLRenderTarge
 **Initial light job:**
 1. Copy the 3×3 final blocks and fluids for a 46×384×46 region (about 1-2 ms).
 2. Seed 15 above `LIGHT_BLOCKING` and let it fall straight down at 15. Propagation (here and in every BFS below) never crosses a face set in `FULL_FACES` of the voxel it leaves or enters (§2.2).
-3. Run the BFS with an Int32 ring queue, stepping −1 plus the opacity of filtering blocks. Only boundary seeds are enqueued.
+3. Run the BFS with an Int32 ring queue, stepping −max(1, effective opacity). Only boundary seeds are enqueued.
 4. Run the block-light BFS from emitters: lava 15, glow berries 14, torch 14, glow lichen 7, abyss crystal 2-3.
 5. Write only the centre 16×384×16, turning uniform sections into descriptors.
 

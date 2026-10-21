@@ -84,6 +84,11 @@ export interface ColumnView {
   sectionBlocks(sy: number): Uint16Array | number;
   /** A view over the section's fluid slot (4096 bytes), or its uniform fluid byte. */
   sectionFluid(sy: number): Uint8Array | number;
+  /**
+   * A view over the section's light slot (4096 bytes), or its uniform light byte (SP4a spec §4.3: `padded.ts` copies
+   * through it). A proto view has no light and returns 0.
+   */
+  sectionLight(sy: number): Uint8Array | number;
   /** The column's aux A, or null when it has none. */
   aux(): AuxView | null;
   /** The column's aux B, or null when it has none (no stage of the column called the writer's `auxB()`). */
