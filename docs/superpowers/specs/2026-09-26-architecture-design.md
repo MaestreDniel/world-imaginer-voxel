@@ -940,7 +940,7 @@ Main thread: render (three), input/physics/raycast (reads SAB), Coordinator (sta
 
 ### 4.3 Scheduling
 
-**Needed sets** come from integer rings `dist² ≤ (R + 0.5)²`. They are recomputed only on a column crossing or an RD change, using the precomputed spiral offsets and zero allocations.
+**Needed sets** come from integer rings `dist² ≤ (R + 0.5)²`. They are recomputed only on a column crossing or an RD change, using the precomputed spiral offsets and zero allocations. The mesh set is the integer disc `dist² ≤ (RD + 0.5)²`; the L, D and T sets are each the previous set grown by the 3 × 3, so every job's prerequisites lie in the previous stage's set (discs at RD + 1 … RD + 3 would miss some of them) (amended by SP4a).
 
 **Priority** (lower runs first): `score = d_h − 3·max(0, cos θ)·[d_h > 2] − stageBonus`.
 - stageBonus: MESH 1.5, L 1.0, D 0.5, T 0.
@@ -1383,7 +1383,7 @@ Metric values are written to `test/metrics/.out/*.json` for trends. The harness 
 - **Packing:** round-trip, and the GLSL defines equal the TS constants.
 - **Store:** slab fuzz (4 threads × 100k alloc/free, 0 double allocations); uniform ↔ dense promotion; refcounted proto/final sharing.
 - **Compiler:** DAG validation errors carry the node path; compiled == reference bit-exactly on 100k points for every built-in preset.
-- **Scheduler:**
+- **Scheduler** (SP4a: nearest-first, prerequisites, stale results; SP4b: cancel, zero allocation, Apply, throttle; amended by SP4a):
   - nearest-first;
   - no D before 3×3 T, no L before 3×3 D, no mesh before 3×3 L;
   - stale epoch, version or `meshSeq` results are dropped;
@@ -1586,7 +1586,7 @@ Metric values are written to `test/metrics/.out/*.json` for trends. The harness 
 - **Measured in SP3c** (amended by SP3c): `terrain.real` now includes the surface pass (biome buffer, scan and rules): p50 2.25-2.62 ms, p99 3.3-3.5 ms in the plan's dry run (the pre-record, record and exit runs), still under the 4 ms gate; the bench gains `surface.column` (`surfacePass` alone on one column, the stage's code path) at p50 0.75-0.83 ms, p99 0.83-0.92 ms. A pre-record bench run may exempt rows from the +30 % ratio gate by name (`BENCH_EXEMPT`, never the absolute gates or the kill criterion), as SP3c did for `terrain.real`'s rise by design.
 - **Measured in SP3e** (amended by SP3e): the bench gains `terrain.islands` (`fillColumnT` on the floating_islands preset at cluster columns: the `terrain.real` candidates whose centre block has islandMask ≥ 0.5, 512 precomputed, 256 timed, each used once), gated at p50 ≤ 4 ms on cluster columns by `TERRAIN_P50_MAX_MS` like `terrain.real`: p50 3.08-3.60 ms, p99 4.4-5.2 ms in the plan's dry run (the pre-record, record and exit runs), `terrain.real` unchanged at p50 2.25-2.27 ms; the amplified preset has no row (`terrain.real`'s closure on its params, with the lake fades: p50 2.298 ms in the plan's dry run and 2.326 ms on the SP3e branch, each the median of three runs).
 - **Kill criterion:** if DAG closure overhead exceeds 25% of T (measured by bench against a hand-inlined default expression), add `new Function` codegen behind a CSP probe, keeping `reference.ts` as the oracle.
-- **Fill:** RD12 needs T 755 / D 660 / L 573 / mesh 491 columns ≈ 16-17 CPU-seconds.
+- **Fill:** RD12 needs T 755 / D 660 / L 573 / mesh 491 columns (exact sets: T 825 / D 705 / L 593 / mesh 489; amended by SP4a) ≈ 16-17 CPU-seconds.
   - Wall time ≤ 6 s on the reference laptop with the bench cap of 4 workers and the throttle; ≤ 4 s with the default 6 workers (09 took 71 s at RD16).
   - First playable (RD4 meshed) ≤ 1 s.
   - RD16 ≈ 28 CPU-s, ≤ 6 s on 6 workers.
