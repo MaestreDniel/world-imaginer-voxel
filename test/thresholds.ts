@@ -50,7 +50,8 @@ export const THRESHOLDS: ThresholdTable = {
   },
   B5: { perKm2Min: { min: 0.2, activeFrom: 'SP2a' }, perKm2Max: { max: 2, activeFrom: 'SP2a' }, highShare: { min: 0.3, activeFrom: 'SP2a' } },
   U2: { value: { min: 1, activeFrom: 'SP2b' } },
-  DT1: { mismatches: { max: 0, activeFrom: 'SP3a' } },
+  // SP4a spec §9.1 (D25): the light part, the upTo 'L' region hash over threads and orders (`light.metric.ts`).
+  DT1: { mismatches: { max: 0, activeFrom: 'SP3a' }, lightMismatches: { max: 0, activeFrom: 'SP4a' } },
   T1: {
     band: { max: 0.25, activeFrom: 'SP3b' }, span: { min: 60, activeFrom: 'SP3b' },
     above120: { min: 0.06, activeFrom: 'SP3b' }, above200: { min: 0.005, activeFrom: 'SP3b' },
@@ -69,7 +70,11 @@ export const THRESHOLDS: ThresholdTable = {
     presetNonFinite: { max: 0, activeFrom: 'SP3e' }, presetHeightmaps: { max: 0, activeFrom: 'SP3e' },
     presetNoFeatureColumn: { max: 0, activeFrom: 'SP3e' },
   },
-  S1: { buried: { max: 0, activeFrom: 'SP3c' }, grassNoSky: { max: 0, activeFrom: 'SP3c' }, ymod16: { min: 0.001, activeFrom: 'SP3c' } },
+  // SP4a spec §9.1 (D26): `grassSky0`, the master's grass at sky 0, recorded from SP4a (`light.metric.ts`), gated by SP6.
+  S1: {
+    buried: { max: 0, activeFrom: 'SP3c' }, grassNoSky: { max: 0, activeFrom: 'SP3c' }, ymod16: { min: 0.001, activeFrom: 'SP3c' },
+    grassSky0: { max: 0.001, activeFrom: 'SP6' },
+  },
   S2: { deepslateBelow0: { min: 0.95, activeFrom: 'SP3c' }, deepslateAbove8: { max: 0.01, activeFrom: 'SP3c' }, bedrockFloor: { min: 1, activeFrom: 'SP3c' } },
   S3: { snowAboveLine: { min: 0.9, activeFrom: 'SP3c' }, snowNoSky: { max: 0, activeFrom: 'SP3c' } },
   // SP4a spec §9.1 (D26): the mesher's rows (`render.metric.ts`). R2 is retuned to SP3b's density terrain (0.85 / 0.55,
@@ -78,6 +83,9 @@ export const THRESHOLDS: ThresholdTable = {
   R2: { quadsPerFaceAo: { max: 0.85, activeFrom: 'SP4a' }, quadsPerFaceNoAo: { max: 0.55, activeFrom: 'SP4a' } },
   R4: { medianQuads: { max: 2000, activeFrom: 'SP8b' }, p95Quads: { max: 4000, activeFrom: 'SP8b' } },
   R5: { waterQuadsPerFace: { max: 0.1, activeFrom: 'SP7' } },
+  // SP4a spec §9.1: the light against the global reference BFS, and enclosed air with sky light (`light.metric.ts`).
+  L1: { mismatches: { max: 0, activeFrom: 'SP4a' } },
+  L2: { enclosedLit: { max: 0, activeFrom: 'SP4a' } },
   // SP3e spec §5.3 (D16): the master's diagnostics on the drafts, recorded on every tier from SP3e (`.out/Z1-Z3.json`),
   // gated on the quick and full tiers once SP12 starts.
   Z1: {

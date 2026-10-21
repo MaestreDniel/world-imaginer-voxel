@@ -1,5 +1,5 @@
 {
-  "sha256": "21c71c62fdfeb61895406e79be8f11dcd56a5312afecb5a2d28da53ba4a0a2a0",
+  "sha256": "14f2f57d16a7b08ea474fbcd858af66cb9e350895afbed535e3cb8d5fe88063c",
   "canonical": {
     "startedSps": [
       "SP0",
@@ -140,6 +140,10 @@
         }
       },
       "DT1": {
+        "lightMismatches": {
+          "activeFrom": "SP4a",
+          "max": 0
+        },
         "mismatches": {
           "activeFrom": "SP3a",
           "max": 0
@@ -196,6 +200,18 @@
         },
         "surfaceReference": {
           "activeFrom": "SP3c",
+          "max": 0
+        }
+      },
+      "L1": {
+        "mismatches": {
+          "activeFrom": "SP4a",
+          "max": 0
+        }
+      },
+      "L2": {
+        "enclosedLit": {
+          "activeFrom": "SP4a",
           "max": 0
         }
       },
@@ -313,6 +329,10 @@
         "grassNoSky": {
           "activeFrom": "SP3c",
           "max": 0
+        },
+        "grassSky0": {
+          "activeFrom": "SP6",
+          "max": 0.001
         },
         "ymod16": {
           "activeFrom": "SP3c",

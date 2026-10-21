@@ -22,8 +22,9 @@ const DIR = 'test/metrics';
 export const SHARDS = {
   terrain: [`${DIR}/terrain.metric.ts`],
   surface: [`${DIR}/surface.metric.ts`],
-  // SP4a spec §10 (D28): the renderer's metric files (R1, R2, R4, R5 so far), with their cold region caches.
-  render: [`${DIR}/render.metric.ts`],
+  // SP4a spec §10 (D28): the renderer's and the light's metric files (R1, R2, R4, R5; L1, L2, DT1.light, S1.light),
+  // with their cold region caches.
+  render: [`${DIR}/render.metric.ts`, `${DIR}/light.metric.ts`],
   rest: null,
 };
 
