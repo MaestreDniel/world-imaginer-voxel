@@ -338,7 +338,7 @@ Each channel is stored on its own: uniform when every value of that channel is e
 - `surfaceBiome` Uint8[256], taken after the Voronoi zoom;
 - `tintTH` Uint8[3·256]: T, H and an override per block.
 
-Byte offsets (amended by SP3a): `WORLD_SURFACE_WG` 0, `OCEAN_FLOOR_WG` 512, `WORLD_SURFACE` 1024, `MOTION_BLOCKING` 1536, `OCEAN_FLOOR` 2048, `LIGHT_BLOCKING` 2560, `surfaceBiome` 3072, `tintTH` 3328; per-position arrays use the column index `lz·16 + lx`, and Int16 values are little-endian. A heightmap value is the absolute y of the highest qualifying voxel plus one, −64 when none qualifies: `WORLD_SURFACE_WG` and `WORLD_SURFACE` count a state ≠ air or a fluid type ≠ 0; `OCEAN_FLOOR_WG` and `OCEAN_FLOOR` count `COLLIDE` ≠ none (the fluid byte is ignored); `MOTION_BLOCKING` counts `COLLIDE` ≠ none or a fluid type ≠ 0; `LIGHT_BLOCKING` follows the §2.2 light rule, pinned by SP4.
+Byte offsets (amended by SP3a): `WORLD_SURFACE_WG` 0, `OCEAN_FLOOR_WG` 512, `WORLD_SURFACE` 1024, `MOTION_BLOCKING` 1536, `OCEAN_FLOOR` 2048, `LIGHT_BLOCKING` 2560, `surfaceBiome` 3072, `tintTH` 3328; per-position arrays use the column index `lz·16 + lx`, and Int16 values are little-endian. A heightmap value is the absolute y of the highest qualifying voxel plus one, −64 when none qualifies: `WORLD_SURFACE_WG` and `WORLD_SURFACE` count a state ≠ air or a fluid type ≠ 0; `OCEAN_FLOOR_WG` and `OCEAN_FLOOR` count `COLLIDE` ≠ none (the fluid byte is ignored); `MOTION_BLOCKING` counts `COLLIDE` ≠ none or a fluid type ≠ 0; `LIGHT_BLOCKING` follows the §2.2 light rule (SP4a spec §4.1: 1 + the highest voxel the fall does not enter).
 
 **Aux slot B:** `caveBiomeQ` Uint8[4·96·4 = 1536] at 0 and `surfaceBiomeQ` Uint8[16] at 1536 (offsets amended by SP3a). The index orders are `surfaceBiomeQ[qz·4 + qx]` (the quart's 2D biome before the zoom) and `caveBiomeQ[(qy·4 + qz)·4 + qx]` with `qy = (y + 64) >> 2`; SP3b's T writes `surfaceBiomeQ` and leaves `caveBiomeQ` 0 until SP6 (amended by SP3b; the SP3b spec §4). Both aux slots are zero-filled when allocated (a recycled slot included), so a field no stage has written reads 0.
 
@@ -481,7 +481,7 @@ Import validates the magic and version, runs `migrate`, recomputes genKey, and c
 |---|---|---|---|---|
 | Column | seed, params, (cx,cz) | `ColumnSample` (cached) | none; the halo is recomputed locally | 0.7 / 1.2 ms (0 on cache hit) |
 | T (terrain) | ColumnSample, carver sources, structure starts (all pure) | proto sections (blocks+fluid), proto heightmaps, biome quarts, aux | none | ≤ 10 / 20 ms |
-| D (decorate) | 3×3 **proto** (read-only), own diff | final blocks+fluid, final heightmaps, tint | 3×3 at ≥ Proto | ≤ 3 / 8 ms |
+| D (decorate) | 3×3 **proto** (read-only), own diff | final blocks+fluid, final heightmaps, tint (SP4a: the skeleton shares the proto into the final set and writes the four final heightmaps; `tintTH` waits for SP8a) | 3×3 at ≥ Proto | ≤ 3 / 8 ms |
 | L (light) | 3×3 **final** (read-only) | own light | 3×3 at ≥ Decorated | ≤ 4 / 8 ms |
 | Mesh | initial: a whole column (all non-trivial sections, each with its 26 neighbours) in one `MESH_COLUMN` job; edits: single sections | SectionMesh × 3 passes + connectivity | 3×3 at ≥ Published | ≤ 1.0 / 2.5 ms per non-trivial section |
 
@@ -771,7 +771,7 @@ Two verifier fixes:
 
 **Steps:** raw_generation, lakes (lava lakes underground), local_modifications, underground_structures, surface_structures, underground_ores, underground_decoration, fluid_springs, vegetal_decoration, top_layer_modification.
 
-**Pull model.** `decorate(K)` receives the 3×3 **proto** (read-only) and the diff of K. For every source chunk S in the 3×3, every step and every feature of the biomes present in S, it computes placements with `rng = xoshiro(hash(seed, S.cx, S.cz, step·1000 + featureIdx))`.
+**Pull model.** `decorate(K)` receives the 3×3 **proto** (read-only) and the diff of K (SP4a: the skeleton shares the proto into the final set and writes the four final heightmaps; `tintTH` waits for SP8a). For every source chunk S in the 3×3, every step and every feature of the biomes present in S, it computes placements with `rng = xoshiro(hash(seed, S.cx, S.cz, step·1000 + featureIdx))`.
 
 Consistency rules, asserted in dev and proven by DT1:
 1. Whole-feature decisions (place or not, height, crown, species) read only S's own proto (heightmaps, blocks, biome) and pure functions (structure pieces, column stage). Every receiver sees the same S.
