@@ -13,6 +13,10 @@
  * fields; the work bound's costs and budgets (core/constants.ts, re-exported here) and `planFieldSlice`, the one
  * implementation of the split and refusal math, serve the workers, the pool and the UI alike. A reply whose envelope
  * (type, jobId) reads but whose body fails its guard parses as `{bad, jobId, reason}`, so the pool can reject that job.
+ * SP4a (spec §2.3): `attach` hands a worker the page's shared store once (answered `attached`, which has no job), and the
+ * four world jobs `terrain`, `decorate`, `light` and `meshColumn` of one column answer `columnDone` or `meshColumnResult`;
+ * the attach guard checks every buffer is a `SharedArrayBuffer` of the documented size (ruling P23), and the mesh reply's
+ * table is checked against its buffers (`payloadProblem`).
  */
 import { MAP_LEVELS, MAP_TILE_PX, PART_BUDGET, SLICE_NS, type MapLevel } from '../core/constants';
 import type { StageId } from '../core/ids';
@@ -22,8 +26,12 @@ import type { Spawn } from '../gen/column/spawn';
 import type { ProbeField, SliceField } from '../gen/inspect/fieldSlice';
 import { isLayerId, type LayerId } from '../gen/map/layers';
 import type { SplineLeaf } from '../metrics/splineStats';
+import { payloadProblem, type ColumnMeshPayload } from '../mesh/column';
 import type { ColumnView } from '../world/store/api';
-import type { StoreHandles } from '../world/store/store';
+import { COLUMN_TABLE_BYTES } from '../world/store/columnTable';
+import { EPOCH_CELL_COUNT } from '../world/store/epochs';
+import { BLOCK_SLOT_BYTES, BYTE_SLOT_BYTES, GROW_BYTES, type PoolHandles } from '../world/store/pool';
+import { STATE_TABLE_SIZE, type StoreHandles } from '../world/store/store';
 
 export { COLUMN_SAMPLE_COST, CORNER_SAMPLE_COST, CORNER_STEEP_COST, DRAFT_BUDGET, PART_BUDGET, REQUEST_BUDGET, SLICE_RULE_NA } from '../core/constants';
 
@@ -87,14 +95,28 @@ export type FieldSliceMsg = FieldSliceSpec & { readonly type: 'fieldSlice'; read
 /** The value of a field at voxel (x, y, z) (SP3d spec §5.3); the position, the path and the bound are the handler's BAD_ARGS. */
 export interface FieldProbeSpec { readonly field: ProbeField; readonly path: string; readonly x: number; readonly y: number; readonly z: number }
 export type FieldProbeMsg = FieldProbeSpec & { readonly type: 'fieldProbe'; readonly jobId: number; readonly epoch: number };
-export type ToWorker = ConfigureMsg | MapTileMsg | PointMsg | SpawnMsg | StatsMsg | SliceMsg | SurfaceProbeMsg | SelftestMsg | FieldSliceMsg | FieldProbeMsg;
+/**
+ * The page's shared store, sent once per worker before its configure (SP4a spec §2.3); answered `attached`, or a job-less
+ * BAD_MESSAGE (a second attach, or handles the guard refuses).
+ */
+export interface AttachMsg { readonly type: 'attach'; readonly handles: StoreHandles }
+/** The four world jobs (SP4a spec §2.3): T, the D skeleton, the exact light and the column mesh. */
+export type WorldJobType = 'terrain' | 'decorate' | 'light' | 'meshColumn';
+/** A world job on column (cx, cz) of the attached store; cx and cz are integers whose blocks lie in the world window. */
+export interface WorldJobMsg { readonly type: WorldJobType; readonly jobId: number; readonly epoch: number; readonly cx: number; readonly cz: number }
+export type ToWorker = ConfigureMsg | MapTileMsg | PointMsg | SpawnMsg | StatsMsg | SliceMsg | SurfaceProbeMsg | SelftestMsg | FieldSliceMsg | FieldProbeMsg
+  | AttachMsg | WorldJobMsg;
 
 export interface ReadyMsg { readonly type: 'ready'; readonly epoch: number; readonly stageHashes: Readonly<Partial<Record<StageId, string>>>; readonly genKey: string }
 /** `ids` (256·256 biome ids, one per pixel) comes with layer 'biome' only. */
 export interface TileMsg { readonly type: 'tile'; readonly jobId: number; readonly epoch: number; readonly rgba: ArrayBuffer; readonly ids?: ArrayBuffer }
 export interface PointResultMsg { readonly type: 'pointResult'; readonly jobId: number; readonly epoch: number; readonly fields: ColumnPoint }
-/** ABORTED: the abort cell left the job's epoch (the pool reads it as JobCancelled). BAD_ARGS: a stats job's arguments do not fit the configured params. */
-export type ErrorCode = 'BAD_MESSAGE' | 'BAD_PARAMS' | 'NOT_CONFIGURED' | 'STALE_EPOCH' | 'INTERNAL' | 'ABORTED' | 'BAD_ARGS';
+/**
+ * ABORTED: the abort cell left the job's epoch (the pool reads it as JobCancelled). BAD_ARGS: a stats job's arguments do
+ * not fit the configured params. NOT_ATTACHED: a world job before `attach`. STORE_FULL: a world job's store pool is at its
+ * maximum (`StoreFull`; the pool rejects with `StoreFullError`).
+ */
+export type ErrorCode = 'BAD_MESSAGE' | 'BAD_PARAMS' | 'NOT_CONFIGURED' | 'STALE_EPOCH' | 'INTERNAL' | 'ABORTED' | 'BAD_ARGS' | 'NOT_ATTACHED' | 'STORE_FULL';
 /** `epoch` is the epoch of the message answered (a configure's or a job's), null when it had none. */
 export interface ErrorMsg { readonly type: 'error'; readonly jobId: number | null; readonly epoch: number | null; readonly code: ErrorCode; readonly message: string }
 export interface SpawnResultMsg { readonly type: 'spawnResult'; readonly jobId: number; readonly epoch: number; readonly spawn: Spawn }
@@ -127,7 +149,29 @@ export interface FieldSliceResultMsg {
 }
 /** A fieldProbe's value: any number (NaN and ±∞ are shown as such); 0, 1 or SLICE_RULE_NA for rule. */
 export interface FieldProbeResultMsg { readonly type: 'fieldProbeResult'; readonly jobId: number; readonly epoch: number; readonly value: number }
-export type FromWorker = ReadyMsg | TileMsg | PointResultMsg | SpawnResultMsg | StatsResultMsg | SliceResultMsg | SurfaceProbeResultMsg | SelftestResultMsg | FieldSliceResultMsg | FieldProbeResultMsg | ErrorMsg;
+/** The answer to an `attach` (no jobId, no epoch; ruling P28). */
+export interface AttachedMsg { readonly type: 'attached' }
+/**
+ * A T, D or L job done (SP4a spec §2.3): its column and the job's time in ms. `versions` is the light job's 3 × 3
+ * versions read before it (an Int32Array(18), 72 bytes, transferred), null for terrain and decorate.
+ */
+export interface ColumnDoneMsg {
+  readonly type: 'columnDone'; readonly jobId: number; readonly epoch: number;
+  readonly job: 'terrain' | 'decorate' | 'light'; readonly cx: number; readonly cz: number; readonly ms: number;
+  readonly versions: ArrayBuffer | null;
+}
+/**
+ * A column's mesh payload (SP4a spec §5.8), each of its seven arrays as its own transferred buffer: versions Int32 × 18,
+ * connectivity Uint16 × 24, position Uint8 × 4 per vertex, data Uint32 per vertex, index Uint32, rows Int32 × `ROW_INTS`
+ * per row, spheres Float32 × 4 per row. `payloadOfMeshResult` rebuilds the payload.
+ */
+export interface MeshColumnResultMsg {
+  readonly type: 'meshColumnResult'; readonly jobId: number; readonly epoch: number; readonly cx: number; readonly cz: number; readonly ms: number;
+  readonly versions: ArrayBuffer; readonly connectivity: ArrayBuffer; readonly position: ArrayBuffer; readonly data: ArrayBuffer;
+  readonly index: ArrayBuffer; readonly rows: ArrayBuffer; readonly spheres: ArrayBuffer;
+}
+export type FromWorker = ReadyMsg | TileMsg | PointResultMsg | SpawnResultMsg | StatsResultMsg | SliceResultMsg | SurfaceProbeResultMsg | SelftestResultMsg | FieldSliceResultMsg | FieldProbeResultMsg | ErrorMsg
+  | AttachedMsg | ColumnDoneMsg | MeshColumnResultMsg;
 /** A job's reply whose envelope (type, jobId) reads but whose body fails its guard (SP3d spec §5.1): the pool rejects job `jobId` with BAD_MESSAGE. */
 export interface BadReply { readonly bad: true; readonly jobId: number; readonly reason: string }
 
@@ -277,6 +321,36 @@ export const tileInWindow = (t: number, level: number): boolean => {
 };
 const tileOk = (t: unknown, level: number): boolean => isInt(t) && tileInWindow(t, level);
 
+/** Whether column (cx, cz) is a pair of integers whose blocks lie in the world window (cx, cz ∈ [−2^15, 2^15)). */
+const isColumn = (cx: unknown, cz: unknown): boolean => isInt(cx) && isInt(cz) && pointInWindow(16 * cx, 16 * cz);
+const isShared = (v: unknown): v is SharedArrayBuffer => typeof SharedArrayBuffer === 'function' && v instanceof SharedArrayBuffer;
+/**
+ * A shared pool's handles of the documented sizes (ruling P23; `pool.ts`): `ctl` 16 bytes; `data`, `stack` and `refs`
+ * growable, `data`'s maximum a positive multiple of `GROW_BYTES` and of `slotBytes`, `stack` and `refs` 4 bytes per slot of
+ * it. Current lengths are never checked (another thread may grow the pool).
+ */
+const sharedPoolOk = (p: unknown, slotBytes: number): boolean => {
+  if (!isObj(p) || p['shared'] !== true || p['slotBytes'] !== slotBytes) return false;
+  const { data, ctl, stack, refs } = p as unknown as PoolHandles;
+  if (!isShared(data) || !isShared(ctl) || !isShared(stack) || !isShared(refs)) return false;
+  if (ctl.byteLength !== 16 || !data.growable || !stack.growable || !refs.growable) return false;
+  const max = data.maxByteLength;
+  if (!(max > 0 && max % GROW_BYTES === 0 && max % slotBytes === 0)) return false;
+  const stackBytes = 4 * (max / slotBytes);
+  return stack.maxByteLength === stackBytes && refs.maxByteLength === stackBytes;
+};
+/**
+ * The attach guard (SP4a spec §2.3, ruling P23): a shared store whose eight state buffers (table, epochs, and each pool's
+ * data, ctl, stack and refs) are `SharedArrayBuffer`s of the documented sizes, and a 4096-entry `pass` table (a private
+ * copy on an ArrayBuffer, exempt from the kind rule).
+ */
+const storeHandlesOk = (h: unknown): boolean =>
+  isObj(h) && h['shared'] === true
+  && isShared(h['table']) && h['table'].byteLength === COLUMN_TABLE_BYTES
+  && isShared(h['epochs']) && h['epochs'].byteLength === 4 * EPOCH_CELL_COUNT
+  && sharedPoolOk(h['blocks'], BLOCK_SLOT_BYTES) && sharedPoolOk(h['bytes'], BYTE_SLOT_BYTES)
+  && h['pass'] instanceof Uint8Array && h['pass'].length === STATE_TABLE_SIZE;
+
 /** Validates a message sent to a worker; null when malformed. */
 export function parseToWorker(m: unknown): ToWorker | null {
   if (!isObj(m)) return null;
@@ -305,6 +379,10 @@ export function parseToWorker(m: unknown): ToWorker | null {
       return fieldSliceOk(m) ? (m as unknown as FieldSliceMsg) : null;
     case 'fieldProbe':
       return fieldProbeOk(m) ? (m as unknown as FieldProbeMsg) : null;
+    case 'attach':
+      return storeHandlesOk(m['handles']) ? (m as unknown as AttachMsg) : null;
+    case 'terrain': case 'decorate': case 'light': case 'meshColumn':
+      return isInt(m['jobId']) && isInt(m['epoch']) && isColumn(m['cx'], m['cz']) ? (m as unknown as WorldJobMsg) : null;
     default:
       return null;
   }
@@ -354,6 +432,40 @@ const fieldSliceCheck: ReplyCheck = (m) => {
   const b = fieldSliceBytes(n, field as SliceField, to - from);
   return all(epochProblem(m), bufferProblem('values', m['values'], b.values), bufferProblem('fluid', m['fluid'], b.fluid));
 };
+const COLUMN_DONE_JOBS: readonly string[] = ['terrain', 'decorate', 'light'];
+/** Bytes of a light job's or a mesh payload's 3 × 3 versions (Int32 × 18) and of a payload's connectivity (Uint16 × 24). */
+const VERSIONS_BYTES = 72;
+const CONNECTIVITY_BYTES = 48;
+/** Bytes per row of a payload's table (Int32 × `ROW_INTS`) and of its spheres (Float32 × 4). */
+const ROW_BYTES = 24;
+const SPHERE_BYTES = 16;
+/** The column and the time a world reply carries. */
+const columnProblem = (m: Record<string, unknown>): string | null =>
+  all(epochProblem(m), isColumn(m['cx'], m['cz']) ? null : `cx, cz (${String(m['cx'])}, ${String(m['cz'])}) is not a column of the world window`,
+    isFiniteNum(m['ms']) && m['ms'] >= 0 ? null : 'ms is not a finite non-negative number');
+const columnDoneCheck: ReplyCheck = (m) => {
+  const job = m['job'];
+  if (typeof job !== 'string' || !COLUMN_DONE_JOBS.includes(job)) return `job ${String(job)} is not terrain, decorate or light`;
+  return all(columnProblem(m), bufferProblem('versions', m['versions'], job === 'light' ? VERSIONS_BYTES : 0));
+};
+/** Why `v` is not an ArrayBuffer of a whole number of `unit`-byte items, or null. */
+const unitsProblem = (name: string, v: unknown, unit: number): string | null =>
+  v instanceof ArrayBuffer && v.byteLength % unit === 0 ? null : `${name} is not an ArrayBuffer of a multiple of ${unit} bytes`;
+/** Why `v` is not an ArrayBuffer of exactly `bytes` bytes (0 included), or null. */
+const exactProblem = (name: string, v: unknown, bytes: number): string | null =>
+  v instanceof ArrayBuffer && v.byteLength === bytes ? null : `${name} is not an ArrayBuffer of ${bytes} bytes`;
+const meshColumnCheck: ReplyCheck = (m) => {
+  const shape = all(columnProblem(m),
+    exactProblem('versions', m['versions'], VERSIONS_BYTES), exactProblem('connectivity', m['connectivity'], CONNECTIVITY_BYTES),
+    unitsProblem('position', m['position'], 4), unitsProblem('data', m['data'], 4), unitsProblem('index', m['index'], 4),
+    unitsProblem('rows', m['rows'], ROW_BYTES));
+  if (shape !== null) return shape;
+  const r = m as unknown as MeshColumnResultMsg;
+  // One Uint8 × 4 position and one Uint32 data word per vertex; one sphere per row.
+  return all(r.position.byteLength === r.data.byteLength ? null : `position (${r.position.byteLength} bytes) and data (${r.data.byteLength} bytes) hold different vertex counts`,
+    exactProblem('spheres', r.spheres, SPHERE_BYTES * (r.rows.byteLength / ROW_BYTES)))
+    ?? payloadProblem(payloadOfMeshResult(r));
+};
 /** Each job reply's body check; a reply type absent here (ready) has no job. */
 const REPLY_CHECKS: Readonly<Record<string, ReplyCheck>> = Object.freeze({
   tile: tileCheck,
@@ -366,6 +478,8 @@ const REPLY_CHECKS: Readonly<Record<string, ReplyCheck>> = Object.freeze({
   surfaceProbeResult: surfaceProbeCheck,
   fieldSliceResult: fieldSliceCheck,
   fieldProbeResult: (m) => all(epochProblem(m), typeof m['value'] === 'number' ? null : 'value is not a number'),
+  columnDone: columnDoneCheck,
+  meshColumnResult: meshColumnCheck,
   error: (m) => (m['epoch'] === null || isInt(m['epoch'])) && typeof m['code'] === 'string' && typeof m['message'] === 'string' ? null : 'epoch, code or message is malformed',
 });
 
@@ -378,12 +492,25 @@ export function parseFromWorker(m: unknown): FromWorker | BadReply | null {
   if (!isObj(m)) return null;
   const type = m['type'];
   if (type === 'ready') return isInt(m['epoch']) && isObj(m['stageHashes']) && typeof m['genKey'] === 'string' ? (m as unknown as ReadyMsg) : null;
+  if (type === 'attached') return m as unknown as AttachedMsg;
   if (typeof type !== 'string' || !Object.hasOwn(REPLY_CHECKS, type)) return null;
   const jobId = m['jobId'];
   if (type === 'error' && jobId === null) return REPLY_CHECKS[type]!(m) === null ? (m as unknown as ErrorMsg) : null;
   if (!isInt(jobId)) return null;
   const reason = REPLY_CHECKS[type]!(m);
   return reason === null ? (m as unknown as FromWorker) : { bad: true, jobId, reason: `${type}: ${reason}` };
+}
+
+/**
+ * The column payload of a `meshColumnResult` (SP4a spec §5.8): whole-buffer typed views over its seven transferred
+ * buffers (ruling P27). The byte lengths must already be whole items (the reply guard checks them first).
+ */
+export function payloadOfMeshResult(m: MeshColumnResultMsg): ColumnMeshPayload {
+  return {
+    cx: m.cx, cz: m.cz,
+    versions: new Int32Array(m.versions), connectivity: new Uint16Array(m.connectivity), position: new Uint8Array(m.position),
+    data: new Uint32Array(m.data), index: new Uint32Array(m.index), rows: new Int32Array(m.rows), spheres: new Float32Array(m.spheres),
+  };
 }
 
 // ---------------------------------------------------------------- the spike's shared store (SP4a spec §1.2 item 6)

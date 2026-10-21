@@ -31,7 +31,7 @@ export { StoreFull } from './pool';
 export type { AuxBView, AuxView, ColumnView, ColumnWriter, CommitStatus, NeighborhoodReader } from './api';
 
 /** Entries of a per-state table (the registry's `MAX_STATES`). */
-const STATE_TABLE_SIZE = 4096;
+export const STATE_TABLE_SIZE = 4096;
 
 /**
  * The `PASS` table the store uses for meta when none is given: the block registry's own (`world/blocks`), so states

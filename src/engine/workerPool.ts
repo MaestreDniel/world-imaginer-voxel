@@ -15,6 +15,10 @@
  * one n × n buffer, each part's reply checked against its request; its handle's `cancel()` drops the queued parts and
  * discards the running ones (they are not interrupted, P1). A fieldProbe request is a single job. A reply that fails its
  * guard rejects its job with BAD_MESSAGE and frees the worker.
+ * SP4a §2.3: `attachStore` hands every worker the page's shared store and waits for each `attached`, behind its own
+ * barrier (ruling P28); the four world jobs (`terrain`, `decorate`, `light`, `meshColumn`) are single jobs at priority 0
+ * (the coordinator orders them), each reply checked against its request's job and column. STORE_FULL rejects with
+ * `StoreFullError`.
  */
 import type { MapLevel } from '../core/constants';
 import type { ColumnPoint } from '../gen/column/columnPoint';
@@ -22,10 +26,13 @@ import type { Spawn } from '../gen/column/spawn';
 import type { FieldSliceValues } from '../gen/inspect/fieldSlice';
 import type { LayerId } from '../gen/map/layers';
 import type { Segment } from '../metrics/crossSection';
+import type { ColumnMeshPayload } from '../mesh/column';
 import {
-  isRefusableField, parseFromWorker, planFieldSlice, SLICE_POINTS, SLICE_ROWS, SLICE_SAMPLES, STATS_KINDS,
+  isRefusableField, parseFromWorker, payloadOfMeshResult, planFieldSlice, SLICE_POINTS, SLICE_ROWS, SLICE_SAMPLES, STATS_KINDS,
   type FieldProbeSpec, type FieldSliceMsg, type FieldSliceSpec, type FromWorker, type ReadyMsg, type StatsArgs, type StatsKind, type StatsMsg, type ToWorker,
+  type WorldJobType,
 } from '../workers/protocol';
+import type { StoreHandles } from '../world/store/store';
 
 export interface WorkerLike {
   postMessage(msg: ToWorker, transfer?: Transferable[]): void;
@@ -97,8 +104,27 @@ export class WorkerFailed extends Error {
   }
 }
 
-/** The type of a queued job (a configure is not a job). */
-export type JobType = Exclude<ToWorker['type'], 'configure'>;
+/** A world job's store pool was at its maximum (the worker's STORE_FULL, `StoreFull`; SP4a spec §2.2: suggests a lower RD). */
+export class StoreFullError extends Error {
+  constructor(message: string) {
+    super(message);
+    this.name = 'StoreFullError';
+  }
+}
+
+/**
+ * A T, D or L job done (SP4a spec §2.3, ruling P30): its column, the worker's time in ms and, for light, the 3 × 3
+ * versions it read before the job (18 values); null for terrain and decorate.
+ */
+export interface ColumnDone {
+  readonly cx: number;
+  readonly cz: number;
+  readonly ms: number;
+  readonly versions: Int32Array | null;
+}
+
+/** The type of a queued job (a configure or an attach is not a job). */
+export type JobType = Exclude<ToWorker['type'], 'configure' | 'attach'>;
 
 /** A job a worker is running (SP2b spec §2.8). */
 export interface InFlightJob {
@@ -131,6 +157,22 @@ export interface WorkerPool {
   readonly abortable: boolean;
   /** Starts a new epoch on every worker; resolves with the (identical) ready message. */
   configure(seedText: string, params: unknown): Promise<ReadyMsg>;
+  /**
+   * Hands every live worker the page's shared store (SP4a spec §2.3), once, before the world jobs; resolves when each has
+   * answered `attached`. Jobs wait behind it as behind a configure. Rejects with the first job-less error a worker sends
+   * meanwhile (`${code}: ${message}`), with WorkerFailed when a worker fails, and when another attach is pending.
+   */
+  attachStore(h: StoreHandles): Promise<void>;
+  /**
+   * The world jobs of column (cx, cz) on the attached store (SP4a spec §2.3), each one job at priority 0: T, D and L resolve
+   * `ColumnDone`, MESH_COLUMN the column payload over the transferred buffers. They reject with JobCancelled (a configure,
+   * a reply of an old epoch, ABORTED), StoreFullError (STORE_FULL), WorkerFailed, or the worker's other error
+   * (NOT_ATTACHED, NOT_CONFIGURED, INTERNAL: a prerequisite missing, BAD_MESSAGE).
+   */
+  terrain(cx: number, cz: number): Promise<ColumnDone>;
+  decorate(cx: number, cz: number): Promise<ColumnDone>;
+  light(cx: number, cz: number): Promise<ColumnDone>;
+  meshColumn(cx: number, cz: number): Promise<ColumnMeshPayload>;
   /** Lower priority runs first. */
   tile(req: TileRequest, priority: number): Promise<TileResult>;
   point(x: number, z: number, priority?: number): Promise<ColumnPoint>;
@@ -216,10 +258,12 @@ export function createWorkerPool(size: number, spawn: () => WorkerLike, opts: Po
   let nextId = 1;
   let nextGroup = 1;
   let pendingReady: { need: number; got: ReadyMsg[]; resolve: (r: ReadyMsg) => void; reject: (e: Error) => void } | null = null;
+  /** The attach barrier (ruling P28), separate from the configure's. */
+  let pendingAttach: { need: number; got: number; resolve: () => void; reject: (e: Error) => void } | null = null;
   if (cell !== null) Atomics.store(cell, 0, epoch);
 
   const pump = () => {
-    if (pendingReady !== null) return;
+    if (pendingReady !== null || pendingAttach !== null) return;
     for (let w = 0; w < size && queue.length > 0; w++) {
       if (!alive[w] || busy[w] !== null) continue;
       queue.sort((a, b) => a.priority - b.priority || a.id - b.id);
@@ -244,6 +288,7 @@ export function createWorkerPool(size: number, spawn: () => WorkerLike, opts: Po
     busy[w] = null;
     job?.reject(e);
     if (pendingReady !== null) { const pr = pendingReady; pendingReady = null; pr.reject(e); }
+    if (pendingAttach !== null) { const pa = pendingAttach; pendingAttach = null; pa.reject(e); }
     if (live === 0) { for (const j of queue) j.reject(e); queue = []; }
     opts.onFailure?.(e);
     pump();
@@ -276,15 +321,27 @@ export function createWorkerPool(size: number, spawn: () => WorkerLike, opts: Po
         pump();
         return;
       }
+      if (msg.type === 'attached') {
+        // An attached reply with no attach pending is ignored (ruling P28).
+        const pa = pendingAttach;
+        if (pa === null || ++pa.got < pa.need) return;
+        pendingAttach = null;
+        pa.resolve();
+        pump();
+        return;
+      }
       if (msg.type === 'error' && msg.jobId === null) {
         // A late error of a superseded configure must not reject the current one (SP2a minor 4).
         if (pendingReady !== null && msg.epoch === epoch) { const pr = pendingReady; pendingReady = null; pr.reject(new Error(`${msg.code}: ${msg.message}`)); }
+        // An attach's error has no epoch (ruling P28): the attach failed, and the jobs it holds back are released.
+        else if (pendingAttach !== null && msg.epoch === null) { const pa = pendingAttach; pendingAttach = null; pa.reject(new Error(`${msg.code}: ${msg.message}`)); pump(); }
         return;
       }
       const job = busy[w];
       busy[w] = null;
       if (job !== null && msg.jobId === job.id) {
         if (job.epoch !== epoch || (msg.type === 'error' && msg.code === 'ABORTED')) job.reject(new JobCancelled());
+        else if (msg.type === 'error' && msg.code === 'STORE_FULL') job.reject(new StoreFullError(`${msg.code}: ${msg.message}`));
         else if (msg.type === 'error') job.reject(new Error(`${msg.code}: ${msg.message}`));
         else job.resolve(msg);
       }
@@ -311,6 +368,18 @@ export function createWorkerPool(size: number, spawn: () => WorkerLike, opts: Po
       pump();
     });
 
+  /** A T, D or L job of (cx, cz) at priority 0; its reply must name the same job and column. */
+  const columnJob = async (type: 'terrain' | 'decorate' | 'light', cx: number, cz: number): Promise<ColumnDone> => {
+    const r = await worldJob(type, cx, cz);
+    if (r.type !== 'columnDone') throw new Error(`unexpected reply ${r.type}`);
+    if (r.job !== type || r.cx !== cx || r.cz !== cz) throw new Error(`world job reply: ${r.job} of column (${r.cx}, ${r.cz}), expected ${type} (${cx}, ${cz})`);
+    return { cx, cz, ms: r.ms, versions: r.versions === null ? null : new Int32Array(r.versions) };
+  };
+  const worldJob = (type: WorldJobType, cx: number, cz: number): Promise<FromWorker> => {
+    const e = epoch;
+    return enqueue(0, (jobId) => ({ type, jobId, epoch: e, cx, cz }), null);
+  };
+
   return {
     size,
     abortable: cell !== null,
@@ -329,6 +398,24 @@ export function createWorkerPool(size: number, spawn: () => WorkerLike, opts: Po
         const msg: ToWorker = { type: 'configure', epoch, seedText, params, abort: cell === null ? null : cell.buffer };
         workers.forEach((w, i) => { if (alive[i]) w.postMessage(msg); });
       });
+    },
+    attachStore(h) {
+      if (pendingAttach !== null) return Promise.reject(new Error('attachStore: an attach is pending'));
+      if (live === 0) return Promise.reject(new WorkerFailed('every worker failed'));
+      return new Promise<void>((resolve, reject) => {
+        pendingAttach = { need: live, got: 0, resolve, reject };
+        const msg: ToWorker = { type: 'attach', handles: h };
+        workers.forEach((w, i) => { if (alive[i]) w.postMessage(msg); });
+      });
+    },
+    terrain: (cx, cz) => columnJob('terrain', cx, cz),
+    decorate: (cx, cz) => columnJob('decorate', cx, cz),
+    light: (cx, cz) => columnJob('light', cx, cz),
+    async meshColumn(cx, cz) {
+      const r = await worldJob('meshColumn', cx, cz);
+      if (r.type !== 'meshColumnResult') throw new Error(`unexpected reply ${r.type}`);
+      if (r.cx !== cx || r.cz !== cz) throw new Error(`world job reply: meshColumn of column (${r.cx}, ${r.cz}), expected meshColumn (${cx}, ${cz})`);
+      return payloadOfMeshResult(r);
     },
     async tile(req, priority) {
       const e = epoch;
@@ -472,7 +559,7 @@ export function createWorkerPool(size: number, spawn: () => WorkerLike, opts: Po
     probe() {
       const jobs: InFlightJob[] = [];
       busy.forEach((j, worker) => {
-        if (j !== null && j.msg.type !== 'configure') jobs.push({ worker, type: j.msg.type, epoch: j.epoch, level: j.tile === null ? null : j.tile.level });
+        if (j !== null && j.msg.type !== 'configure' && j.msg.type !== 'attach') jobs.push({ worker, type: j.msg.type, epoch: j.epoch, level: j.tile === null ? null : j.tile.level });
       });
       return { busy: jobs.length, queued: queue.length, configuring: pendingReady !== null, jobs };
     },
