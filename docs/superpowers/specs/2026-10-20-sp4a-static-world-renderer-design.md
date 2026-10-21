@@ -526,7 +526,7 @@ Nothing of the world is visible before step 5 (the user's priority 1). The page 
 | row | parts | SP4a | file |
 |---|---|---|---|
 | R1 | `hiddenEmitted` max 0, `visibleMissing` max 0 (opaque and water faces of interior columns vs the brute-force count) | gated, every tier | render.metric.ts |
-| R2 | `quadsPerFaceAo` max 0.6, `quadsPerFaceNoAo` max 0.35 | gated, every tier | render.metric.ts |
+| R2 | `quadsPerFaceAo` max 0.85, `quadsPerFaceNoAo` max 0.55, retuned from the master's 0.6 / 0.35 by the user's decision of 2026-10-22: those came from world-imaginer 09's nearly flat terrain, while SP3b's density terrain measures 0.70-0.79 / 0.44-0.50 (Task 18, all tiers) with a mesher that R1 shows exact and that stays within 0.7 % of the exact minimum rectangle partition for its keys; the geometry alone gives 0.42-0.49, per-corner AO adds ≈ 0.26 (master §4.4) | gated, every tier | render.metric.ts |
 | R4 | `medianQuads` max 2000, `p95Quads` max 4000 per column | recorded (activeFrom SP8b, the master's) | render.metric.ts |
 | R5 | `waterQuadsPerFace` max 0.1 | recorded (activeFrom SP7, D26) | render.metric.ts |
 | L1 | `mismatches` max 0: light bytes of interior columns vs the global reference BFS, sky and block (block is 0 everywhere until emitters exist; the block BFS is unit-tested, §9.7) | gated, every tier | light.metric.ts |
@@ -683,7 +683,7 @@ Applied when the user approves this spec, each in the commit §12 assigns (the s
 - **§3.0 and §3.12:** the D stage "(SP4a: the skeleton shares the proto into the final set and writes the four final heightmaps; `tintTH` waits for SP8a)".
 - **§3.7:** "teleport: SP4b; SP4a places the camera from the loaded `MOTION_BLOCKING`"; "SP4-SP9" → "SP4b-SP9".
 - **§4.3:** "SP4 widens it to per-scope cells" → "SP4b".
-- **§4.4:** the `data` field order and offsets of the SP4a spec §5.5, `cornerDrop` in ninths of a block, the smooth light's rounding (§5.3) and the trivial-section rule (§5.1).
+- **§4.4:** the `data` field order and offsets of the SP4a spec §5.5, `cornerDrop` in ninths of a block, the smooth light's rounding (§5.3) and the trivial-section rule (§5.1); the greedy ratios "about 0.56 / 0.28" become 09's flat-terrain figures beside SP3b's measured 0.70-0.79 / 0.44-0.50 (Task 18, the user's decision of 2026-10-22).
 - **§4.5:** "the SP4 spike" → "the SP4a spike" (twice); "Vertex and index capacity are reserved per preset" gains "(SP4b; SP4a sizes each region exactly at load)"; the Fallback paragraph gains "(built in SP4a: Firefox exposes `WEBGL_multi_draw` on no GPU, the user's capability check of 2026-10-20; SP4a writes each region's merged buffers once with Uint16 region-local positions, and the sub-allocated ranges and `addUpdateRange` serve SP4b's streaming)".
 - **§4.6:** fog values "(SP4a: end (RD − 0.5)·16, start 64 blocks before; an edge fade around the load centre until SP4b streams)".
 - **§4.8:** step 3 "stepping −1 plus the opacity of filtering blocks" → "stepping −max(1, effective opacity)".
@@ -695,7 +695,7 @@ Applied when the user approves this spec, each in the commit §12 assigns (the s
 - **§5.9:** gains "T (time speed, SP4a), R (load the world around you, SP4a until SP4b streams), `+`/`-` (fly speed)".
 - **§6.1:** "no coordinator prerequisite rules until SP4" → "until SP4a"; the region cache: "plus `stageHash('mesh')` when upTo is 'MESH'" → "(SP4a: upTo 'MESH' meshes the cached 'L' region in process and is not cached; format 3 dumps the final light)".
 - **§6.3:** the rendering-setup bullet's water clause becomes "water (a fluid byte on air) has effective opacity 1 and no collision, is meshed in the translucent pass, and sky light 3 blocks under open still water is 12"; the scheduler bullet gains "(SP4a: nearest-first, prerequisites, stale results; SP4b: cancel, zero allocation, Apply, throttle)".
-- **§6.4:** R4 "measured in SP4a"; R5 "recorded from SP4a"; R7 "(SP4b)"; L1 "(sky from SP4a; block light from the first emitters, unit-tested before)"; DT1 gains "SP4a: the lit region hash over threads and orders (`DT1.light`)"; S1's "until SP4's light exists" reads "SP4a's" and the row gains "the grass at sky 0 part is recorded from SP4a and gated from SP6"; G1 gains "SP4a gates the Medium p95, draw-call and main-thread cells on the static world from the `?flight` artifact (frame times snapped to the display interval); SP4b gates them while streaming with the other cells".
+- **§6.4:** R2 ≤ 0.85 / ≤ 0.55 (§9.1, the user's decision of 2026-10-22); R4 "measured in SP4a"; R5 "recorded from SP4a"; R7 "(SP4b)"; L1 "(sky from SP4a; block light from the first emitters, unit-tested before)"; DT1 gains "SP4a: the lit region hash over threads and orders (`DT1.light`)"; S1's "until SP4's light exists" reads "SP4a's" and the row gains "the grass at sky 0 part is recorded from SP4a and gated from SP6"; G1 gains "SP4a gates the Medium p95, draw-call and main-thread cells on the static world from the `?flight` artifact (frame times snapped to the display interval); SP4b gates them while streaming with the other cells".
 - **§7:** "Measured in SP4a" with `light.column` and `mesh.section` (values from the bench); "R4 measures the quad assumption in SP4a".
 - **§8:** risk 1 "SP3a-SP4" → "SP3a-SP4b"; risk 2 "an SP4 week-1 spike" → "an SP4a week-1 spike".
 
@@ -704,3 +704,4 @@ Applied when the user approves this spec, each in the commit §12 assigns (the s
 (One line per commit that changes `test/thresholds.lock.json`.)
 
 - 2026-10-21 — SP4a Task 1: startedSps gains 'SP4a' (SP4 split into SP4a and SP4b, spec §12).
+- 2026-10-21 — SP4a Task 18: R1 `hiddenEmitted` max 0 and `visibleMissing` max 0, and R2 `quadsPerFaceAo` max 0.85 and `quadsPerFaceNoAo` max 0.55, gated from SP4a on every tier; R2's parts are retuned (loosened from the master's 0.6 / 0.35) by the user's decision of 2026-10-22, on the exact-optimum study (a reference greedy and the exact minimum rectangle partition, independently verified: the mesher is within 0.7 % of the optimum for its keys, and SP3b's terrain measures 0.70-0.79 / 0.44-0.50; §9.1, master §4.4); R4 `medianQuads` max 2000 and `p95Quads` max 4000 (activeFrom SP8b) and R5 `waterQuadsPerFace` max 0.1 (activeFrom SP7) recorded, as planned.

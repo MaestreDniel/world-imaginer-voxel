@@ -72,6 +72,12 @@ export const THRESHOLDS: ThresholdTable = {
   S1: { buried: { max: 0, activeFrom: 'SP3c' }, grassNoSky: { max: 0, activeFrom: 'SP3c' }, ymod16: { min: 0.001, activeFrom: 'SP3c' } },
   S2: { deepslateBelow0: { min: 0.95, activeFrom: 'SP3c' }, deepslateAbove8: { max: 0.01, activeFrom: 'SP3c' }, bedrockFloor: { min: 1, activeFrom: 'SP3c' } },
   S3: { snowAboveLine: { min: 0.9, activeFrom: 'SP3c' }, snowNoSky: { max: 0, activeFrom: 'SP3c' } },
+  // SP4a spec §9.1 (D26): the mesher's rows (`render.metric.ts`). R2 is retuned to SP3b's density terrain (0.85 / 0.55,
+  // the user's decision of 2026-10-22; the master's 0.6 / 0.35 came from 09's flat terrain); R4 and R5 are recorded.
+  R1: { hiddenEmitted: { max: 0, activeFrom: 'SP4a' }, visibleMissing: { max: 0, activeFrom: 'SP4a' } },
+  R2: { quadsPerFaceAo: { max: 0.85, activeFrom: 'SP4a' }, quadsPerFaceNoAo: { max: 0.55, activeFrom: 'SP4a' } },
+  R4: { medianQuads: { max: 2000, activeFrom: 'SP8b' }, p95Quads: { max: 4000, activeFrom: 'SP8b' } },
+  R5: { waterQuadsPerFace: { max: 0.1, activeFrom: 'SP7' } },
   // SP3e spec §5.3 (D16): the master's diagnostics on the drafts, recorded on every tier from SP3e (`.out/Z1-Z3.json`),
   // gated on the quick and full tiers once SP12 starts.
   Z1: {

@@ -1,5 +1,5 @@
 {
-  "sha256": "cfe1ebae7ec652ae50cbb872d2bf2997a8e32cde27aa4604857081a09096d69b",
+  "sha256": "21c71c62fdfeb61895406e79be8f11dcd56a5312afecb5a2d28da53ba4a0a2a0",
   "canonical": {
     "startedSps": [
       "SP0",
@@ -267,6 +267,42 @@
         "value": {
           "activeFrom": "SP1",
           "max": 0.001
+        }
+      },
+      "R1": {
+        "hiddenEmitted": {
+          "activeFrom": "SP4a",
+          "max": 0
+        },
+        "visibleMissing": {
+          "activeFrom": "SP4a",
+          "max": 0
+        }
+      },
+      "R2": {
+        "quadsPerFaceAo": {
+          "activeFrom": "SP4a",
+          "max": 0.85
+        },
+        "quadsPerFaceNoAo": {
+          "activeFrom": "SP4a",
+          "max": 0.55
+        }
+      },
+      "R4": {
+        "medianQuads": {
+          "activeFrom": "SP8b",
+          "max": 2000
+        },
+        "p95Quads": {
+          "activeFrom": "SP8b",
+          "max": 4000
+        }
+      },
+      "R5": {
+        "waterQuadsPerFace": {
+          "activeFrom": "SP7",
+          "max": 0.1
         }
       },
       "S1": {

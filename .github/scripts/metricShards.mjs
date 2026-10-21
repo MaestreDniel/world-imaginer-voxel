@@ -22,6 +22,8 @@ const DIR = 'test/metrics';
 export const SHARDS = {
   terrain: [`${DIR}/terrain.metric.ts`],
   surface: [`${DIR}/surface.metric.ts`],
+  // SP4a spec §10 (D28): the renderer's metric files (R1, R2, R4, R5 so far), with their cold region caches.
+  render: [`${DIR}/render.metric.ts`],
   rest: null,
 };
 

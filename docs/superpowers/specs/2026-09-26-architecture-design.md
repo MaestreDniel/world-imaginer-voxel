@@ -973,10 +973,10 @@ Main thread: render (three), input/physics/raycast (reads SAB), Coordinator (sta
 
 In AO, smooth light and connectivity15, "opaque" means PASS opaque with `FULL_FACES` = 63 (`hasOpaque` stays "contains any PASS-opaque state"); slabs, stairs, doors, fences and other partial states count as open.
 
-**Greedy meshing.** Per axis slice with a 16×16 mask of two u32 keys: `(layer, tint, flags, ao×4)` and `(sky×4, block×4)`. The measured ratio is about 0.56 quads per face.
+**Greedy meshing.** Per axis slice with a 16×16 mask of two u32 keys: `(layer, tint, flags, ao×4)` and `(sky×4, block×4)`. Quads per visible face with AO on / off: 0.56 / 0.28 were measured on world-imaginer 09's nearly flat terrain; SP3b's density terrain measures 0.70-0.79 / 0.44-0.50 (SP4a Task 18): the geometry alone (keys (layer, face), exact minimum partition) gives 0.42-0.49 and per-corner AO adds ≈ 0.26; the greedy is within 0.7 % of the exact optimum for its keys; R2 is re-baselined at SP6 (caves) and SP8b (leaves and content) (amended by SP4a).
 - AO uses 09's 3-sample table [1, .8, .6, .45] with the diagonal flip.
 - Smooth light (MC "Maximum"): average the 4 air-side voxels per vertex, skipping the corner when both edges are opaque (SP4a: the samples are the face voxel and the non-opaque edge and corner voxels; per channel `v = ⌊(2·sum + n) / (2n)⌋` over the n ≥ 1 samples, rounding half up with integers only, so every engine agrees).
-- With AO and smooth light off (Low preset), the key is block-only, giving about 0.28.
+- With AO and smooth light off (Low preset), the key is block-only, giving the "off" ratio above.
 
 **Cross sprites** are 2 quads with a hashed ±0.25 xz offset.
 
@@ -1457,11 +1457,11 @@ Metric values are written to `test/metrics/.out/*.json` for trends. The harness 
 | DT1 | region hash: spiral vs shuffled, 1 vs 4 threads, cold vs warm, 2 runs, goldens | exact |
 | DT2 | probe == bulk / compiled == reference / batch == point (column stage, at quart corners). SP3b's parts: `probeBulk` counts voxels whose probe solidity differs from the block, and voxels the bulk evaluated where `Object.is(probe, bulk)` fails; `compiledReference` counts corner and voxel values where compiled ≠ reference; batch == point stays a unit test (amended by SP3b). SP3c: `probeBulk` compares probe solidity with block ≠ air (palette blocks are solid); `surfaceProbeBulk` counts voxels whose `surfaceProbe` state ≠ the stored block, and `surfaceReference` voxels where the compiled surface rules ≠ the reference evaluator (amended by SP3c). SP3d: `editedDensityReference` and `editedSurfaceReference` count compiled ≠ reference on edited trees (amended by SP3d). SP3e: the four exactness parts, non-finite values, heightmaps and feature-column searches on the presets (`DT2.presets`) (amended by SP3e) | 0 mismatches / bit-exact / bit-exact (tightened by SP2a) |
 | R1 | hidden seam faces emitted / visible faces missing vs brute force | 0 / 0 |
-| R2 | greedy quads per visible face (AO on / off) | ≤ 0.6 / ≤ 0.35 |
+| R2 | greedy quads per visible face (AO on / off) | ≤ 0.85 / ≤ 0.55 (retuned from 0.6 / 0.35, which came from 09's nearly flat terrain, to SP3b's density terrain by the user's decision of 2026-10-22, §4.4; re-baselined at SP6 and SP8b; amended by SP4a) |
 | R3 | wrongly culled sections vs raycast reference / culled from an underground camera | 0 / ≥ 50% |
-| R7 | atomic reveal during the bench flight and a terrain Apply: frames in which a column shows some but not all of its non-empty sections, or mixes old- and new-epoch sections (edit/fluid remeshes excluded) | 0 |
-| R4 | quads per column, incl. cave walls, leaves, water | median ≤ 2000, p95 ≤ 4000 (measured in SP4; asserted with full content in SP8b; sets the GPU budget) |
-| R5 | water surface quads per face | ≤ 0.1 |
+| R7 | atomic reveal during the bench flight and a terrain Apply: frames in which a column shows some but not all of its non-empty sections, or mixes old- and new-epoch sections (edit/fluid remeshes excluded) | 0 (SP4b) |
+| R4 | quads per column, incl. cave walls, leaves, water | median ≤ 2000, p95 ≤ 4000 (measured in SP4a; asserted with full content in SP8b; sets the GPU budget) |
+| R5 | water surface quads per face | ≤ 0.1 (recorded from SP4a; gated from SP7) |
 | R6 | fill-mask consistency during the bench flight: columns with the mask set but unmeshed non-empty sections / columns in LOD range with neither mask nor an uploaded LOD tile / LOD island top and bottom vs voxel (floating_islands) | 0 / 0 / ±8 blocks |
 | L1 | light vs global reference BFS (sky + block), interior columns | 0 mismatches |
 | L2 | enclosed cave air ≥ 16 deep with sky > 0 | 0 |
@@ -1634,7 +1634,7 @@ High adds MSAA, a shadow cascade (about 2 ms), LOD 1 km and RD16 (dGPU target). 
 - Medium GPU total ≈ 80 MB, against a brief target < 150 MB.
 - JS heap + SAB ≤ 450 MB at High, including the hysteresis worst case (gated by G1). Ultra is desktop-only.
 - Audio: one-shots ≈ 3-6 MB (≤ 4 variants × ~60 sounds, 48 kHz mono, ≤ 0.5 s each); 4 ambience loops of 8 s ≈ 6 MB; 3 reverb IRs (0.4 / 1.2 / 2.5 s stereo) ≈ 1.6 MB; at most 2 resident music phrases ≈ 6 MB. Audio total ≤ 24 MB.
-- R4 measures the quad assumption in SP4 and gates it with full content in SP8b.
+- R4 measures the quad assumption in SP4a and gates it with full content in SP8b.
 
 **Map, inspector and LOD throughput** (honest figures):
 - A 256² map tile at 4 blocks/px with relief ≈ 0.9 s CPU; biome-only ≈ 0.4 s.
