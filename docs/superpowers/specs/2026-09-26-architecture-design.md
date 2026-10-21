@@ -324,7 +324,7 @@ Each channel is stored on its own: uniform when every value of that channel is e
 | ints | fields |
 |---|---|
 | 0-3 | cx, cz, `status` (Atomics: 0 Absent, 1 Proto, 2 Decorated, 3 Published), `epoch` |
-| 4-5 | `blockVersion`, `lightVersion` (Atomics.add on every committed change) |
+| 4-5 | `blockVersion`, `lightVersion` (Atomics.add on every committed change of that channel; SP4a) |
 | 6 | protoFlags (alive, pinnedByTuning) |
 | 7-8 | auxSlotA, auxSlotB |
 | 9-10 | unsettledCount, diffFlag |
@@ -400,7 +400,9 @@ interface CompiledDensity { cornerFn(ctx, x:number, y:number, z:number): number;
 interface ColumnWriter { setProto(sy:number, blocks:Uint16Array, fluid:Uint8Array): void;
   setFinal(sy:number, blocks:Uint16Array, light:Uint8Array, fluid:Uint8Array): void;
   shareFinal(sy:number, light:Uint8Array): void /* final blocks and fluid share the proto slots */;
-  aux(): AuxView; auxB(): AuxBView; commit(status: 1|2|3): void /* blockVersion += 1, then status last */ }
+  setLight(sy:number, light:Uint8Array): void /* light only; refused over a dense light entry until SP4b's reclamation (SP4a) */;
+  aux(): AuxView; auxB(): AuxBView;
+  commit(status: 1|2|3): void /* blockVersion += 1 when blocks or fluid were written, lightVersion += 1 when light was, then status last */ }
 interface ColumnView { block(lx:number, y:number, lz:number): number; fluid(lx:number, y:number, lz:number): number;
   light(lx:number, y:number, lz:number): number; sectionBlocks(sy:number): Uint16Array|number; sectionFluid(sy:number): Uint8Array|number;
   aux(): AuxView | null; auxB(): AuxBView | null /* null when the column has no such slot; auxB amended by SP3b */ }

@@ -28,10 +28,15 @@ export interface AuxBView {
 export type CommitStatus = 1 | 2 | 3;
 
 /**
- * Writes one claimed column (SP3a spec §3.5); obtained from `store.claimColumn` and owned by one thread. Every
- * array argument is copied (callers reuse scratch buffers) and stored per channel: uniform when all 4096 values are
- * equal (no slot), dense otherwise; rewriting a section releases what it held. A writer whose column has been freed
- * throws on every call.
+ * Writes one column (SP3a spec §3.5); obtained from `store.claimColumn`, or from `store.reopenColumn` for a
+ * committed column (SP4a spec §2.5). Every array argument is copied (callers reuse scratch buffers) and stored per
+ * channel: uniform when all 4096 values are equal (no slot), dense otherwise; rewriting a section releases what it
+ * held. A writer whose column has been freed throws on every call.
+ *
+ * Thread contract (SP4a spec §2.4, §2.6): a writer is used by one thread, and a column has one writer at a time,
+ * chosen by the coordinator's states (T claims, D reopens at Proto, L reopens at Decorated). A writer is not safe
+ * against a concurrent `freeColumn` of its column (a double free): no column is freed during an SP4a session, and
+ * SP4b's cancellation through the epoch cells lifts this.
  */
 export interface ColumnWriter {
   readonly cx: number;
@@ -42,11 +47,25 @@ export interface ColumnWriter {
   setFinal(sy: number, blocks: Uint16Array, light: Uint8Array, fluid: Uint8Array): void;
   /** The final blocks and fluid of `sy` become its proto entries (dense slots retained); light and meta as `setFinal`. */
   shareFinal(sy: number, light: Uint8Array): void;
-  /** Aux A, allocated and zero-filled on the first call; later calls view the same slot. */
+  /**
+   * The light channel of final section `sy` only (uniform or dense; the meta word does not depend on light). Throws
+   * `light already written` when the entry already holds a slot: SP4a's light-once invariant, so a light slot is
+   * never freed under a reader (SP4a spec §2.4, §2.5); SP4b's reclamation protocol replaces the refusal.
+   */
+  setLight(sy: number, light: Uint8Array): void;
+  /**
+   * Aux A: the record's slot when it has one (a reopened column), otherwise allocated and zero-filled on the first
+   * call; later calls view the same slot.
+   */
   aux(): AuxView;
   /** Aux B, likewise. */
   auxB(): AuxBView;
-  /** `blockVersion` + 1, then `status` (stored last, so a reader never sees a partial column). */
+  /**
+   * `blockVersion` + 1 when this writer wrote blocks or fluid since its previous commit (`setProto`, `setFinal`,
+   * `shareFinal`), `lightVersion` + 1 when it wrote light (`setFinal`, `setLight`, or `shareFinal` with a non-zero
+   * light byte; the D skeleton's all-zero light is no light change), then `status` (stored last, so a reader never
+   * sees a partial column). A commit with no write bumps no version (SP4a spec §2.5).
+   */
   commit(status: CommitStatus): void;
 }
 

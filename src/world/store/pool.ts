@@ -112,7 +112,21 @@ export function createPool(opts: PoolOptions): SlabPool {
   });
 }
 
+/**
+ * Throws `TypeError` unless `buf` is a `SharedArrayBuffer` when `shared`, or an `ArrayBuffer` otherwise (SP4a spec
+ * §2.5, SP3a §10's item 7): a store whose buffers are of the wrong kind would silently stop being shared.
+ */
+export function assertBufferKind(buf: unknown, shared: boolean, what: string): void {
+  const ok = shared ? buf instanceof SharedArrayBuffer : buf instanceof ArrayBuffer;
+  if (!ok) {
+    const kind = buf instanceof SharedArrayBuffer ? 'a SharedArrayBuffer' : buf instanceof ArrayBuffer ? 'an ArrayBuffer' : typeof buf;
+    throw new TypeError(`${what}: ${kind}, expected ${shared ? 'a SharedArrayBuffer (shared)' : 'an ArrayBuffer (not shared)'}`);
+  }
+}
+
+/** The pool over existing handles; throws `TypeError` when a buffer is not of the kind `shared` names. */
 export function attachPool(h: PoolHandles): SlabPool {
+  for (const key of ['data', 'ctl', 'stack', 'refs'] as const) assertBufferKind(h[key], h.shared, `pool: ${key}`);
   const { shared, slotBytes, data, stack: stackBuf, refs: refsBuf } = h;
   const maxSlots = data.maxByteLength / slotBytes;
   const slotsPerGrow = GROW_BYTES / slotBytes;

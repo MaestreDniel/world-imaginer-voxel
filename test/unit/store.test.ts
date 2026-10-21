@@ -105,19 +105,23 @@ describe.each([true, false])('shared %s', (shared) => {
     expect(s.final(-3, 70)).toBeNull();
   });
 
-  test('commit: blockVersion + 1, then status; proto visible from Proto, final from Decorated', () => {
+  test('commit: blockVersion + 1 after a block write, then status; proto visible from Proto, final from Decorated', () => {
     const s = newStore();
     const w = s.claimColumn(1, 2, 0);
     const base = s.table.find(1, 2);
+    w.setProto(0, words(1), bytes(0));
     w.commit(1);
     expect(s.table.blockVersion(base)).toBe(1);
     expect(s.table.status(base)).toBe(1);
     expect(s.proto(1, 2)).not.toBeNull();
     expect(s.final(1, 2)).toBeNull();
+    w.shareFinal(0, bytes(0));
     w.commit(2);
     expect(s.table.blockVersion(base)).toBe(2);
     expect(s.final(1, 2)).not.toBeNull();
+    // A commit with no write since the previous one bumps no version (SP4a spec §2.5).
     w.commit(3);
+    expect(s.table.blockVersion(base)).toBe(2);
     expect(s.table.status(base)).toBe(3);
     expect(() => w.commit(0 as 1)).toThrow(RangeError);
     expect(() => w.commit(4 as 1)).toThrow(RangeError);
@@ -530,9 +534,9 @@ describe.each([true, false])('shared %s', (shared) => {
     expect(v).toBeInstanceOf(Int32Array);
     expect(v.length).toBe(18);
     const expected = new Array(18).fill(-1);
-    expected[0] = 2;
+    expected[0] = 1; // a's second commit writes nothing (SP4a spec §2.5)
     expected[1] = 0;
-    expected[10] = 1;
+    expected[10] = 0; // b's commit writes nothing
     expected[11] = 0;
     expect(Array.from(v)).toEqual(expected);
     expect(n.proto(-1, -1)!.block(0, -64, 0)).toBe(1);
@@ -541,7 +545,7 @@ describe.each([true, false])('shared %s', (shared) => {
     expect(n.proto(0, 1)).toBeNull();
     expect(n.proto(0, 0)).toBeNull();
     c.commit(1);
-    expect(n.versions()[14]).toBe(1);
+    expect(n.versions()[14]).toBe(0);
     expect(() => n.proto(2, 0)).toThrow(RangeError);
     expect(() => n.final(0, -2)).toThrow(RangeError);
   });
