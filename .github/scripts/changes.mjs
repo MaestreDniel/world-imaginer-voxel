@@ -5,14 +5,19 @@
 //   node .github/scripts/changes.mjs              writes docs_only=true|false to $GITHUB_OUTPUT (stdout without it)
 //   node .github/scripts/changes.mjs --self-test  checks the decision rules on sample inputs
 //
-// Docs are `docs/**` and `*.md` at any depth, nothing else. Any doubt runs the full path: an unknown event, a new
+// Docs are `docs/**` and `*.md` at any depth, nothing else, except the JSON under `docs/superpowers/specs/assets/`:
+// a committed measurement can be a gated input (SP4a's g1.metric.ts reads the Chrome flight JSON), so a change to one
+// runs the metrics. Any doubt runs the full path: an unknown event, a new
 // branch (all-zero `before`), a force push, a `before` that is not in the clone or not an ancestor of HEAD, an empty
 // diff, or a git error.
 import { execFileSync } from 'node:child_process';
 import { appendFileSync } from 'node:fs';
 import { pathToFileURL } from 'node:url';
 
-export const isDocPath = (path) => path.startsWith('docs/') || path.endsWith('.md');
+/** A spec asset JSON: a committed measurement that a metric may read (g1.metric.ts), never docs-only. */
+const isSpecAssetJson = (path) => path.startsWith('docs/superpowers/specs/assets/') && path.endsWith('.json');
+
+export const isDocPath = (path) => (path.startsWith('docs/') && !isSpecAssetJson(path)) || path.endsWith('.md');
 
 /** @returns {{ docsOnly: boolean, reason: string }} */
 export function decide({ files }) {
@@ -73,7 +78,12 @@ function selfTest() {
   const docs = (files) => decide({ files }).docsOnly;
   check('docs/ only', docs(['docs/superpowers/specs/x-design.md', 'docs/superpowers/specs/assets/sp3e/a.png']), true);
   check('root and nested .md', docs(['README.md', 'CLAUDE.md', 'test/metrics/README.md']), true);
-  check('docs json asset', docs(['docs/superpowers/specs/assets/sp3e/selftest-firefox.json']), true);
+  // A spec asset JSON can be a gated input (SP4a's g1.metric.ts reads the committed flight JSON): full path.
+  check('docs spec asset json', docs(['docs/superpowers/specs/assets/sp4a/flight-iris-chrome.json']), false);
+  check('docs spec asset json, nested', docs(['docs/superpowers/specs/assets/sp3e/selftest-firefox.json']), false);
+  check('docs spec asset json with a doc', docs(['docs/a.md', 'docs/superpowers/specs/assets/sp4a/spike-chrome-rtx.json']), false);
+  check('docs spec asset image', docs(['docs/superpowers/specs/assets/sp4a/review-ocean.png']), true);
+  check('docs json outside the spec assets', docs(['docs/notes/data.json']), true);
   check('md plus source', docs(['README.md', 'src/gen/terrain.ts']), false);
   check('lock file', docs(['docs/a.md', 'test/thresholds.lock.json']), false);
   check('workflow', docs(['.github/workflows/ci.yml']), false);
