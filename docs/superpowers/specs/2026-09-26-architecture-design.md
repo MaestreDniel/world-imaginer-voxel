@@ -74,6 +74,7 @@ world-imaginer-voxel/          (repository root)
   vitest.config.ts    projects: unit | arch | metrics-fast | metrics-quick | metrics-full | bench (amended by SP0)
   Dockerfile          node:24-slim, `npx vite --host 0.0.0.0 --port 5183` (headers from vite.config)
   index.html          CSS-grid shell (toolbar | canvas | side panel), ResizeObserver-driven; no fixed 80px
+  public/panoramas/   (SP4a) manifest.json and the loading screen's WebP panoramas, written by `npm run assets:panoramas`
   src/
     core/                       L0 pure: no DOM, three, worker APIs, Math.random, Date.now, console.*
       constants.ts coords.ts    MIN_Y=-64, HEIGHT=384, SECTIONS=24, SEA=63; keys, voxel/quart index math, torus slots
@@ -103,7 +104,8 @@ world-imaginer-voxel/          (repository root)
                                 (rules shared by settle + sim) arrive with the SPs that need them (amended by SP3a)
       store/pool.ts columnTable.ts section.ts aux.ts epochs.ts store.ts api.ts   (SP3a) SAB store: slab pools over growable buffers
                                 (pool.ts replaces slab.ts), the torus table (it holds the versions; no versions.ts), section descriptors,
-                                aux slots, per-scope epoch cells; ColumnWriter/ColumnView/NeighborhoodReader; padded.ts arrives in SP4
+                                aux slots, per-scope epoch cells; ColumnWriter/ColumnView/NeighborhoodReader; padded.ts arrives in SP4a
+                                (the 18³ padded section and the 46 × 384 × 46 light region, copied out of the store for the light and mesh jobs)
     gen/                        L1 pure (core + world/api types only)
       context.ts                GenContext per (epoch, paramsHash): noises, splines, compiled density, biome tables, templates, LRUs
       trees.ts                  (SP3d) validateParamTrees: tier 2 of a params document's `density.defs` and `surface.rules`
@@ -134,11 +136,15 @@ world-imaginer-voxel/          (repository root)
       features/placement.ts modifiers.ts decorate.ts priority.ts kinds/{tree,foliage,patch,simpleBlock,ore,disk,boulder,
                 dripstone,glowLichen,caveVines,mossPatch,abyssCrystal,deadRoots,fossil,spring,lavaLake,freezeTop}.ts
       structures/sets.ts jigsaw.ts startCache.ts stamp.ts templates/*.ts
-      pipeline/terrainStage.ts decorateStage.ts status.ts
-    textures/painters/*.ts palette.ts layers.ts resourcePack.ts   pure RGBA byte painters + manifest parsing
+      pipeline/terrainStage.ts decorateStage.ts status.ts finalHeightmaps.ts   (SP4a: decorateStage.ts holds the D skeleton;
+                                finalHeightmaps.ts writes a final column's WORLD_SURFACE, MOTION_BLOCKING, OCEAN_FLOOR and LIGHT_BLOCKING)
+    textures/painters/*.ts palette.ts layers.ts resourcePack.ts flatColors.ts   pure RGBA byte painters + manifest parsing;
+                                flatColors.ts (SP4a): the flat block colours of SP4a's 1 × 1 texture array and the Voxels palette
     light/initial.ts relight.ts queue.ts           L2
     mesh/greedy.ts cross.ts fluid.ts shapes.ts packing.ts connectivity.ts lodTile.ts   L2 (packing exports PACK_LAYOUT; render/materials turns it into #defines;
-                                shapes.ts meshes non-cube states, deriving fence/pane/stair connections from neighbours)
+                                shapes.ts meshes non-cube states, deriving fence/pane/stair connections from neighbours; SP4a: column.ts, one column's
+                                sections → the column payload; builder.ts, the growable per-pass buffers; faces.ts, the face geometry, per-vertex light
+                                and greedy merge shared by greedy.ts and fluid.ts)
     audio/synth/*.ts                                L2 pure DSP → Float32Array (no WebAudio; node-testable, runs in workers)
     audio/soundPack.ts                              pure manifest parsing (wi10-sounds)
     audio/model/ambienceModel.ts emitterCluster.ts footstepCadence.ts musicScheduler.ts   pure decision logic used by sound/
@@ -154,24 +160,34 @@ world-imaginer-voxel/          (repository root)
     workers/protocol.ts taskHandler.ts task.worker.ts sim.worker.ts   (taskHandler: pure message handler, SP2a; SP3a: sliceJob.ts,
                                 the slice job with its worker-local store and LRU; SP3b splits a slice across the workers; SP3d:
                                 fieldSliceJob.ts, the fieldSlice and fieldProbe jobs' message handling, the evaluation being
-                                gen/inspect/fieldSlice.ts, and protocol.ts's planFieldSlice, the work bound's split and refusals)
+                                gen/inspect/fieldSlice.ts, and protocol.ts's planFieldSlice, the work bound's split and refusals;
+                                SP4a: worldJobs.ts, the T, D, L and MESH_COLUMN handlers over the attached store; spikeStore.worker.ts and
+                                spikeStoreHandler.ts, the week-1 spike's shared-store check)
     engine/                     main thread, no three
       coordinator.ts scheduler.ts rings.ts workerPool.ts throttle.ts uploadBudget.ts session.ts invalidation.ts capabilities.ts
+      renderDistance.ts spikeStore.ts   (SP4a: the default render distance from the capability report; the spike's shared store)
     render/                     the only place three is imported (ui canvases are 2D; amended by SP0)
       renderer.ts sectionRenderer.ts (interface) regionBatch.ts regionMesh.ts (fallback) floatingOrigin.ts selection.ts
+      fpsLimiter.ts frameState.ts frameTiming.ts regionGrid.ts spike/   (SP4a: the FPS cap; the per-frame inputs of the materials;
+                                rAF-delta snapping and percentiles; the region grid both section renderers share; the week-1 spike's stress scene
+                                and bench behind `?spike=batch`)
       materials/index.ts uniforms.ts glsl/*.glsl.ts   THE ONLY module that creates ShaderMaterial/GLSL (TSL port seam)
       lightmap.ts sky.ts clouds.ts shadows.ts textureArray.ts tintTexture.ts colormap.ts
       lod/rings.ts fillMask.ts  culling/frustum.ts caveCulling.ts
-    player/fly.ts walk.ts physics.ts raycast.ts interaction.ts hotbar.ts
+    player/fly.ts keymap.ts input.ts walk.ts physics.ts raycast.ts interaction.ts hotbar.ts   (SP4a: fly.ts, the spectator
+                                controller; keymap.ts, the key map as data; input.ts, the DOM input)
     daynight/dayNight.ts
     sound/                      main thread, the only place WebAudio is used
       engine.ts buses.ts        AudioContext (resumed on first user gesture), master/music/sfx/ambient buses, settings
       sfx.ts footsteps.ts ambience.ts emitters.ts music.ts reverb.ts
-    ui/map/* ui/selftest/*       (SP2a) the standalone ?map page (mounted in-game from SP4) and ?selftest=1; SP2b makes ?map the editor
+    ui/map/* ui/selftest/*       (SP2a) the standalone ?map page (mounted in-game from SP4b) and ?selftest=1; SP2b makes ?map the editor
     ui/common/* paramPanel/* splineEditor/* biomeTable/* presets/* crossSection/*   (SP2b) shared DOM helpers, notices and shortcuts;
                                 the parameter panel, spline drawer, biome table, presets tab and cross-section (pure models beside thin DOM);
                                 SP3a adds the cross-section's Voxels mode
     ui/lab/* seedBox.ts          (SP1) the ?lab=noise research page; DOM-free seed-box logic
+    ui/world/* ui/loading/* ui/spike/* settings.ts   (SP4a) the 3D page: the minimal start screen at `/`, the world page, the
+                                flight (`?flight=sp4a`) and panorama (`?pano`) routes; the loading screen with panoramas, tips and progress; the spike
+                                page (`?spike=batch`); the world's small settings block (SP5's settings panel replaces it)
     ui/inspector/*              (SP3d) the ?map Density tab. Pure: model.ts form.ts jsonText.ts editorModel.ts hoverModel.ts
                                 sliceModel.ts; DOM: jsonEditor.ts sliceView.ts densityTab.ts inspector.css (SP10's full probe and
                                 further JSON editors go here too)
@@ -186,6 +202,7 @@ world-imaginer-voxel/          (repository root)
         (SP3d: harness/legacyTrees.ts, harness/treeMutator.ts, fixtures/preset-v1.json, fixtures/expected-v1.json)
         (SP3e: metrics/presets.metric.ts, harness/terrainScatter.ts, harness/dt2.ts, harness/surfaceAnalysis.ts, harness/heightmaps.ts,
         harness/zMetrics.ts, unit/goldens.sp3e.test.ts)
+        (SP4a: metrics/render.metric.ts, metrics/light.metric.ts, metrics/g1.metric.ts, tools/cdp.ts, tools/panoramas.ts, tools/measureChrome.ts)
         schema-shape.lock.json (SP1) stateIds.lock.json (SP3a)
         thresholds.ts thresholds.lock.json goldens.json baselines.json
 ```
@@ -342,7 +359,7 @@ Byte offsets (amended by SP3a): `WORLD_SURFACE_WG` 0, `OCEAN_FLOOR_WG` 512, `WOR
 
 **Aux slot B:** `caveBiomeQ` Uint8[4·96·4 = 1536] at 0 and `surfaceBiomeQ` Uint8[16] at 1536 (offsets amended by SP3a). The index orders are `surfaceBiomeQ[qz·4 + qx]` (the quart's 2D biome before the zoom) and `caveBiomeQ[(qy·4 + qz)·4 + qx]` with `qy = (y + 64) >> 2`; SP3b's T writes `surfaceBiomeQ` and leaves `caveBiomeQ` 0 until SP6 (amended by SP3b; the SP3b spec §4). Both aux slots are zero-filled when allocated (a recycled slot included), so a field no stage has written reads 0.
 
-**Epoch cell.** A SAB `Int32Array` epoch cell per scope is checked by workers between phases, so a job can abort mid-run. SP3a builds the per-scope cells (terrain 0, decorate 1, light 2, mesh 3); SP4 wires them in place of SP2b's pool-wide cell (amended by SP3a).
+**Epoch cell.** A SAB `Int32Array` epoch cell per scope is checked by workers between phases, so a job can abort mid-run. SP3a builds the per-scope cells (terrain 0, decorate 1, light 2, mesh 3); SP4b wires them in place of SP2b's pool-wide cell (amended by SP3a and SP4a).
 
 ### 2.4 ColumnSample (worker-local LRU of 1024, not in the SAB)
 
@@ -1395,7 +1412,7 @@ Metric values are written to `test/metrics/.out/*.json` for trends. The harness 
   - the throttle reacts to a simulated frame p95.
 - **Fluid rules:** diamond of radius 7; fall; infinite source; drain; reactions; the settle distance cap.
 - **Lightmap:** (0,0) ≤ 0.02 luminance; block light independent of time; phases match the sign of sun elevation.
-- **Rendering setup:** colour-space assertion; glass meshed in the cutout pass; the fog shader uses `length(viewPos)`; water has OPACITY 1, PASS translucent and no collision, is meshed in the translucent pass, and sky light 3 blocks under open still water is > 0.
+- **Rendering setup:** colour-space assertion; glass meshed in the cutout pass; the fog shader uses `length(viewPos)`; water (a fluid byte on air) has effective opacity 1 and no collision, is meshed in the translucent pass, and sky light 3 blocks under open still water is 12 (amended by SP4a).
 - **Mesher AO:** the per-vertex 3-sample table [1, .8, .6, .45] and the diagonal flip (quad split chosen by AO sums) on canned 3×3×3 neighbourhoods.
 - **FPS limiter:** ≥ 59.5 fps at cap 60 on simulated 60 Hz timestamps.
 - **Physics:** swept, step-up, swim, sink in water, unloaded ≠ solid.
@@ -1587,7 +1604,7 @@ Metric values are written to `test/metrics/.out/*.json` for trends. The harness 
 - **Measured in SP3b** (amended by SP3b): the column stage's ColumnSample p50 0.34 ms (it keeps the 2D surfaceEst, so the row's surfaceEst cost moves to `surfaceEst3`'s consumers); T without caves (`terrain.real`: ColumnSample, density with early-outs, water, 24 sections, aux A and B) p50 1.49-1.74 ms on the SP3b branch (Tasks 14 and 16; the exit run 1.49 ms, p99 2.40 ms; the plan's dry run measured p50 1.42-1.46 ms, p99 2.2-2.4 ms), gated at ≤ 4 ms p50 by `TERRAIN_P50_MAX_MS`; one corner of the default expression ≈ 0.19 µs.
 - **Measured in SP3c** (amended by SP3c): `terrain.real` now includes the surface pass (biome buffer, scan and rules): p50 2.25-2.62 ms, p99 3.3-3.5 ms in the plan's dry run (the pre-record, record and exit runs), still under the 4 ms gate; the bench gains `surface.column` (`surfacePass` alone on one column, the stage's code path) at p50 0.75-0.83 ms, p99 0.83-0.92 ms. A pre-record bench run may exempt rows from the +30 % ratio gate by name (`BENCH_EXEMPT`, never the absolute gates or the kill criterion), as SP3c did for `terrain.real`'s rise by design.
 - **Measured in SP3e** (amended by SP3e): the bench gains `terrain.islands` (`fillColumnT` on the floating_islands preset at cluster columns: the `terrain.real` candidates whose centre block has islandMask ≥ 0.5, 512 precomputed, 256 timed, each used once), gated at p50 ≤ 4 ms on cluster columns by `TERRAIN_P50_MAX_MS` like `terrain.real`: p50 3.08-3.60 ms, p99 4.4-5.2 ms in the plan's dry run (the pre-record, record and exit runs), `terrain.real` unchanged at p50 2.25-2.27 ms; the amplified preset has no row (`terrain.real`'s closure on its params, with the lake fades: p50 2.298 ms in the plan's dry run and 2.326 ms on the SP3e branch, each the median of three runs).
-- **Measured in SP4a** (amended by SP4a): the bench gains `light.column` (§4.2's light job without the store's commit: the neighbourhood, the region copy, the sky fall, seeds and BFS, and the 24 output sections; on the 256 interior columns of an 18 × 18 region at `terrain.real`'s first candidate, generated to D outside the timing, each timed once), gated at p50 ≤ 4 ms, p99 ≤ 8 ms: p50 2.56-2.92 ms, p99 3.9-5.1 ms; and `mesh.section` (one non-trivial section's padded copy, solid and fluid passes and connectivity at the Medium preset's AO and smooth light; 1024 of the region's 1692 non-trivial sections, lit to L, each timed once), gated at p50 ≤ 1.0 ms, p99 ≤ 2.5 ms: p50 0.25-0.26 ms, p99 1.18-1.26 ms (the pre-record, record and exit runs on the SP4a branch). So the L row (≤ 4 / 8) and the Mesh row's ≤ 1.0 ms per section hold. `light/` and `mesh/` read their imports through top-level aliases (the hot-import rule now covers them): vitest's bench mode tracks every export-getter read, which made the un-aliased jobs about 5-6× slower there (a production bundle has no such getters).
+- **Measured in SP4a** (amended by SP4a): the bench gains `light.column` (§4.2's light job without the store's commit: the neighbourhood, the region copy, the sky fall, seeds and BFS, and the 24 output sections; on the 256 interior columns of an 18 × 18 region at `terrain.real`'s first candidate, generated to D outside the timing, each timed once), gated at p50 ≤ 4 ms, p99 ≤ 8 ms: p50 2.56-2.92 ms, p99 3.9-5.1 ms; and `mesh.section` (one non-trivial section's padded copy, solid and fluid passes and connectivity at the Medium preset's AO and smooth light; 1024 of the 1692 non-trivial sections of the region's 14 × 14 inner columns, whose 3 × 3 is lit to L, evenly spread, each timed once), gated at p50 ≤ 1.0 ms, p99 ≤ 2.5 ms: p50 0.25-0.26 ms, p99 1.18-1.26 ms (the pre-record, record and exit runs on the SP4a branch). So the L row (≤ 4 / 8) and the Mesh row's ≤ 1.0 ms per section hold. `light/` and `mesh/` read their imports through top-level aliases (the hot-import rule now covers them): vitest's bench mode tracks every export-getter read, which made the un-aliased jobs about 5-6× slower there (a production bundle has no such getters).
 - **Kill criterion:** if DAG closure overhead exceeds 25% of T (measured by bench against a hand-inlined default expression), add `new Function` codegen behind a CSP probe, keeping `reference.ts` as the oracle.
 - **Fill:** RD12 needs T 755 / D 660 / L 573 / mesh 491 columns (exact sets: T 825 / D 705 / L 593 / mesh 489; amended by SP4a) ≈ 16-17 CPU-seconds.
   - Wall time ≤ 6 s on the reference laptop with the bench cap of 4 workers and the throttle; ≤ 4 s with the default 6 workers (09 took 71 s at RD16).
@@ -1713,7 +1730,7 @@ Each sub-project runs its own cycle:
 
 Thresholds are locked (`thresholds.lock.json`) and goldens are gated (§6.2). Sizes: S ≈ 2-4 days, M ≈ 1-2 weeks, L ≈ 2-3 weeks of focused work.
 
-**Cut lines.** Every SP names a cut line: what may slip if it overruns. A slipped item moves to a named receiving SP by amending this section, and the receiving SP adds it to its exit. Default receivers: SP0 Vercel preview check → SP4a (not needed: the production deploy was verified, so nothing moved); SP2b share preview and cross-section → SP10 (both delivered in SP2b, so nothing moved); SP3b worker-split slice → SP3d (delivered in SP3b, so nothing moved); SP3d inspector pins → SP10 (delivered in SP3d, so nothing moved); SP3e islands surface branch → SP12 (delivered in SP3e, so nothing moved); SP4a loading-screen panoramas → SP4b; SP5 worlds-menu polish and palette search → SP10; SP7 vertex waves → SP11; SP8a animation frames → SP11; SP8a fence gates and trapdoors → SP12; SP8b giant trees, boulders and fossils → SP12; SP8c HRTF → SP11; SP9 jungle temple and village depth > 4 → SP12; SP11 Ultra shadows, 3D clouds and Fabulous water → SP12; SP6 underground-only carver and spaghetti-2D rarity bands → SP12; SP7 extra lava reactions → SP12; SP10 seed sweep and column-status heatmap → SP12. SP12's exit requires no open cut-line items, unless the user explicitly dropped one and the impact on its D-decision is recorded.
+**Cut lines.** Every SP names a cut line: what may slip if it overruns. A slipped item moves to a named receiving SP by amending this section, and the receiving SP adds it to its exit. Default receivers: SP0 Vercel preview check → SP4a (not needed: the production deploy was verified, so nothing moved); SP2b share preview and cross-section → SP10 (both delivered in SP2b, so nothing moved); SP3b worker-split slice → SP3d (delivered in SP3b, so nothing moved); SP3d inspector pins → SP10 (delivered in SP3d, so nothing moved); SP3e islands surface branch → SP12 (delivered in SP3e, so nothing moved); SP4a loading-screen panoramas → SP4b (delivered in SP4a, so nothing moved); SP5 worlds-menu polish and palette search → SP10; SP7 vertex waves → SP11; SP8a animation frames → SP11; SP8a fence gates and trapdoors → SP12; SP8b giant trees, boulders and fossils → SP12; SP8c HRTF → SP11; SP9 jungle temple and village depth > 4 → SP12; SP11 Ultra shadows, 3D clouds and Fabulous water → SP12; SP6 underground-only carver and spaghetti-2D rarity bands → SP12; SP7 extra lava reactions → SP12; SP10 seed sweep and column-status heatmap → SP12. SP12's exit requires no open cut-line items, unless the user explicitly dropped one and the impact on its D-decision is recorded.
 
 **SP0 — Scaffold and guardrails** (S; no dependencies)
 - Repository scaffold at the root: Vite, TS strict, three `~0.186.1`, vitest projects (unit / arch / metrics-fast / metrics-quick / metrics-full / bench; see the SP0 spec).
@@ -1803,7 +1820,7 @@ SP4 was split on 2026-10-20 into SP4a (the world in 3D, loaded once) and SP4b (s
 - The week-1 spike (RegionBatch, the shared store in the browser); RegionMesh as the second `SectionRenderer`, selected without `WEBGL_multi_draw` (Firefox); the one-shot load around the spawn or a chosen point (rings, the coordinator's core, T/D/L/MESH_COLUMN jobs on the shared store); the D skeleton with the final heightmaps; the exact light job (FULL_FACES-aware, water stopping the sky fall and dimming by 1 per block); the padded greedy mesher with `PACK_LAYOUT`, AO, smooth light and connectivity; the still-water mesher; materials v1 with Fast water, the flat-colour array, sky dome with sun, elevation-based day/night, fog; the spectator controller, floating origin, FPS limiter, HUD counts, `ui/help.ts` with the key map as data; a minimal start screen at `/` (the full start and worlds menu is SP5's); the loading screen with panoramas, tips and progress; the flight route.
 - **Deliverable:** fly through the RD12 world around the spawn with day/night and translucent oceans, after a start screen and a loading screen, in Chrome and Firefox.
 - **Exit:** as the SP4a spec §11.
-- **Cut line:** the panoramas (→ SP4b); the RegionMesh fallback was required by the capability probe (Firefox lacks `WEBGL_multi_draw`), so it is not cuttable.
+- **Cut line:** the panoramas (→ SP4b). It was not taken: the panorama tool and its six panoramas shipped in SP4a, so nothing moved. The RegionMesh fallback was required by the capability probe (Firefox lacks `WEBGL_multi_draw`), so it is not cuttable.
 
 **SP4b — Streaming and life** (L; SP4a)
 - The store's concurrency fixes (SP3a §10, as the SP4a spec §2.6 hands them over) and the per-scope epoch cells; the streaming coordinator (statuses, rings, heap, epochs, versions, meshSeq, cancellation, unload hysteresis, proto retention, adaptive throttle, upload budget, atomic column reveal); RegionMesh's streaming half (sub-allocated ranges, `addUpdateRange`); the M map overlay with teleport (the map-page refactor); Apply v1 live; the `?bench` route with renderer-string capture and the optional 4-worker cap.
@@ -1861,7 +1878,7 @@ SP4 was split on 2026-10-20 into SP4a (the world in 3D, loaded once) and SP4b (s
 - **Cut line:** jungle temple; village depth > 4 (→ SP12).
 
 **SP10 — Research tooling completion** (M; SP9)
-- Full stage-hash invalidation for every scope with badges and progress; probe of all stage outputs including the surface-rule branch; slice view of every 3D field (inspector mutes and pins delivered by SP3d); metrics dashboard (shared metric definitions, compare with previous params, seed sweep for column metrics); complete map layers (structures, carvers, aquifer, status heatmap, bookmarks, teleport snap on the map (on SP4b's teleport)); JSON editors with validation of placed features and structure sets/pools (the density and surface-rule editors are delivered by SP3d); full F3 overlay and performance HUD; plus received cut-line items (the generated README parameter reference is already gated since SP1).
+- Full stage-hash invalidation for every scope with badges and progress; probe of all stage outputs including the surface-rule branch; slice view of every 3D field (inspector mutes and pins delivered by SP3d); metrics dashboard (shared metric definitions, compare with previous params, seed sweep for column metrics); complete map layers (structures, carvers, aquifer, status heatmap, bookmarks, teleport snap on the map, on SP4b's teleport); JSON editors with validation of placed features and structure sets/pools (the density and surface-rule editors are delivered by SP3d); full F3 overlay and performance HUD; plus received cut-line items (the generated README parameter reference is already gated since SP1).
 - **Deliverable:** the research workbench — tweak, preview, measure and compare without leaving the app.
 - Received from SP3c (its spec's Decision 2 and §11; amended by SP3c): the 2D defects inherited from SP2a, measured on voxels in SP3c and not fixed there — the lake-rim islets (ocean-family biome on land at a lake rim; the example is a lake perched at y ≈ 100 in a sea area, x −16384 … −16177, z −10624 … at seed 42, whose rim is a sand-topped stone mesa with staircase edges) and the shoreline zoom fringe; SP3c's ungated diagnostics `lakeRimIslets`, `shorelineFringe`, `shorelineFringeSea` and `oceanBiomeLandTops` measure them.
 - Received from SP3d (its spec §13; amended by SP3d): the slice view of the other 3D fields and the 256² refinement; resizable inspector columns; a time-budgeted slice or a per-request abort cell if SP3d's deterministic work bound proves too coarse in use; packed_ice's pale blue close to the sky colour (SP3c's review point, inherited by the slice's blocks field through `VOXEL_COLORS`; with SP8a).

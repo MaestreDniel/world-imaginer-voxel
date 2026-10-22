@@ -42,6 +42,11 @@
  * profile stays with SP12.
  * SP4a (its spec §9.3, §12): §7's "Measured in SP4a" line names the `light.column` and `mesh.section` bench rows, which
  * `BENCH_ROWS` measures, with their absolute gates (`LIGHT_P50_MAX_MS` … `MESH_P99_MAX_MS`); it lands with the rows.
+ * The exit commit (SP4a §12, §14): §1 names SP4a's new modules, which exist, and its `test/` entry SP4a's test files in
+ * their own parentheses (it lands with the last of them, `tools/measureChrome.ts`'s cells); the cut-line texts are
+ * worded by whether the panoramas were built (`public/panoramas/manifest.json` lists any): built, the SP4a entry's cut
+ * line says it was not taken and the receivers say nothing moved; and a bare `SP4` is left only in the §10 split
+ * paragraphs and the parallelism line, where spec §14's own wording keeps it.
  */
 import { existsSync, readdirSync, readFileSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
@@ -588,5 +593,69 @@ describe('master spec amendments (SP4a §9.3)', () => {
     expect(sp3e).toBeGreaterThan(text.indexOf('## 7. Performance budget'));
     expect(at).toBeGreaterThan(sp3e);
     expect(at).toBeLessThan(text.indexOf('## 8. Risks'));
+  });
+});
+
+describe('master spec amendments (SP4a §14)', () => {
+  test('§1\'s test/ entry names SP4a\'s test files in their own parentheses, which exist', () => {
+    const entry = layoutEntry(/^\s+test\/ unit\/ metrics\//);
+    const sp4a = /\(SP4a: ([^)]*)\)/.exec(entry);
+    expect(sp4a, "§1's test/ entry has no `(SP4a: …)` list").not.toBeNull();
+    const named = sp4a![1]!.split(/,\s*/).map((f) => f.trim());
+    expect(named).toEqual([
+      'metrics/render.metric.ts', 'metrics/light.metric.ts', 'metrics/g1.metric.ts', 'tools/cdp.ts', 'tools/panoramas.ts',
+      'tools/measureChrome.ts',
+    ]);
+    for (const f of named) expect(existsSync(`${ROOT_DIR}test/${f}`), `test/${f} does not exist`).toBe(true);
+    // SP3e's list still reads alone.
+    expect(/\(SP3e: ([^)]*)\)/.exec(entry)![1]).not.toContain('SP4a');
+  });
+
+  test('§1 names SP4a\'s new modules in their directories\' entries, and each exists', () => {
+    const named: ReadonlyArray<readonly [RegExp, string, readonly string[]]> = [
+      [/^\s+store\/pool\.ts /, 'src/world/store/', ['padded.ts']],
+      [/^\s+pipeline\/terrainStage\.ts /, 'src/gen/pipeline/', ['decorateStage.ts', 'finalHeightmaps.ts']],
+      [/^\s+textures\/painters\//, 'src/textures/', ['flatColors.ts']],
+      [/^\s+mesh\/greedy\.ts /, 'src/mesh/', ['greedy.ts', 'fluid.ts', 'packing.ts', 'connectivity.ts', 'column.ts', 'builder.ts', 'faces.ts']],
+      [/^\s+workers\/protocol\.ts /, 'src/workers/', ['worldJobs.ts', 'spikeStore.worker.ts', 'spikeStoreHandler.ts']],
+      [/^\s+engine\/\s/, 'src/engine/', ['coordinator.ts', 'rings.ts', 'uploadBudget.ts', 'renderDistance.ts', 'spikeStore.ts']],
+      [/^\s+render\/\s/, 'src/render/', ['fpsLimiter.ts', 'frameState.ts', 'frameTiming.ts', 'regionGrid.ts', 'spike/']],
+      [/^\s+player\/fly\.ts /, 'src/player/', ['fly.ts', 'keymap.ts', 'input.ts']],
+      [/^\s+ui\/world\/\* /, 'src/ui/', ['world/', 'loading/', 'spike/', 'settings.ts']],
+      [/^\s+public\/panoramas\/ /, 'public/', ['panoramas/']],
+    ];
+    for (const [head, dir, files] of named) {
+      const entry = layoutEntry(head);
+      expect(entry, `§1 has no entry matching ${head}`).not.toBe('');
+      for (const f of files) {
+        expect(entry, `§1's ${dir} entry does not name ${f}`).toContain(f.endsWith('/') ? `${f}` : ` ${f}`);
+        expect(existsSync(`${ROOT_DIR}${dir}${f}`), `${dir}${f} does not exist`).toBe(true);
+      }
+    }
+    expect(layoutEntry(/^\s+store\/pool\.ts /)).toContain('padded.ts arrives in SP4a');
+    expect(text).toContain('the standalone ?map page (mounted in-game from SP4b)');
+  });
+
+  test('the panoramas decide the cut-line texts: SP4a\'s cut line and the receivers', () => {
+    const manifest = JSON.parse(readFileSync(`${ROOT_DIR}public/panoramas/manifest.json`, 'utf8')) as unknown[];
+    const built = manifest.length > 0;
+    expect(built, 'the panoramas were built (SP4a spec §8.3, §11)').toBe(true);
+    const cut = spEntry('SP4a', 'SP4b').split('\n').find((l) => l.startsWith('- **Cut line:**'));
+    const fallback = 'The RegionMesh fallback was required by the capability probe (Firefox lacks `WEBGL_multi_draw`), so it is not cuttable.';
+    if (built) {
+      expect(cut).toBe(`- **Cut line:** the panoramas (→ SP4b). It was not taken: the panorama tool and its six panoramas shipped in SP4a, so nothing moved. ${fallback}`);
+      expect(manifest).toHaveLength(6);
+      expect(text).toContain('SP4a loading-screen panoramas → SP4b (delivered in SP4a, so nothing moved);');
+    } else {
+      expect(cut).toBe(`- **Cut line:** the panoramas (→ SP4b). ${fallback}`);
+      expect(text).toContain('SP4a loading-screen panoramas → SP4b (the loading screen shipped with its neutral background);');
+    }
+  });
+
+  test('a bare SP4 is left only where spec §14 keeps it: the §10 split paragraphs and the parallelism line', () => {
+    const kept = ['SP3 was split on ', 'SP3b was split on ', 'SP3d was split on ', 'SP4 was split on ', 'In parallel: '];
+    const bare = text.split('\n').filter((l) => /\bSP4\b/.test(l));
+    for (const l of bare) expect(kept.some((k) => l.startsWith(k)), `a bare SP4 outside the kept lines: ${l.slice(0, 120)}`).toBe(true);
+    expect(text).toContain('SP4b wires them in place of SP2b\'s pool-wide cell');
   });
 });
