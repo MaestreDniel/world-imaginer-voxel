@@ -81,6 +81,16 @@ export interface WorldPageOptions {
   readonly createRenderer?: typeof createWorldRenderer;
 }
 
+declare global {
+  interface Window {
+    /**
+     * The page's progress for the browser tools (SP4a spec §9.6; ruling P48), set on every mount: `revealed` turns true
+     * in the reveal frame, and `frames` is the n of the frames rendered after it (as `onFrame` receives it).
+     */
+    __wiWorld?: { revealed: boolean; frames: number };
+  }
+}
+
 /** The load's figures for the flight JSON (SP4a spec §8.4, §9.5). */
 export interface LoadStats {
   /** ms from `mountWorldPage` to the reveal frame; null before it. */
@@ -305,6 +315,10 @@ export function mountWorldPage(root: HTMLElement, q: WorldQuery, hash: string, o
   const hashText = hash.replace(/^#/, '');
   const hashPart = hashText === '' ? '' : `#${hashText}`;
   const mapHref = hashText === '' ? '?map' : `?map#${hashText}`;
+
+  // The tools' hook (ruling P48): uiSmoke's `world` step waits for `revealed`, `world-mesh` for `frames >= 3`.
+  const progressHook = { revealed: false, frames: 0 };
+  window.__wiWorld = progressHook;
 
   const stats: LoadStats = { revealMs: null, stageMs: { T: null, D: null, L: null, MESH: null }, mergeMs: 0, longTasks: null, first120MaxMs: null };
   let state: WorldPage['state'] = 'loading';
@@ -540,6 +554,7 @@ export function mountWorldPage(root: HTMLElement, q: WorldQuery, hash: string, o
     placeCamera();
     world.frame(frameState());
     state = 'revealed';
+    progressHook.revealed = true;
     stats.revealMs = performance.now() - t0;
     stats.mergeMs = sections.counts().mergeMs;
     if (longTasks !== null) {
@@ -702,6 +717,7 @@ export function mountWorldPage(root: HTMLElement, q: WorldQuery, hash: string, o
         placeCamera();
         world.frame(frameState());
         n++;
+        progressHook.frames = n;
         opts.onFrame?.(n);
       } catch (e) {
         // After the reveal there is no failure panel: stop the loop and report the error once, not on every frame.

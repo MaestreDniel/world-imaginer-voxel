@@ -34,8 +34,11 @@ import {
   parseSliceStats, presetCentre, presetLine, PRESET_MAP, PRESET_SHOTS, PRESET_TOP_MIN, presetProblems, presetState, presetSummaryOk, readMapHash, READY_PROFILES,
   RULE_SAMPLE, sameJson, selftestAllMatch, SIZE_7, SIZE_8, SKY_RGB, sliceCellPoint, sliceColumn, SMOKE_PRESETS, SMOKE_STEPS, SQUARE_RGB, squareLabels, START, stepId,
   summaryTopMax, timesText, VIEWPORT, viewportForDrawer, voxelLegendLabels, voxelReadoutOk, voxelRuleId, voxelSummaryOk, WATER_RGB, waterPixel, type MapUrlState,
-  type SmokePreset,
+  type SmokePreset, pixelDiffShare, SWIFTSHADER_ARGS, START_SEED_7_HASH, PARITY_VIEW, WORLD_RD, worldMeshQuery, PARITY_TOL, PARITY_MAX_SHARE, leaveGuardLog,
 } from '../tools/uiSmoke';
+import { findSpawn } from '../../src/gen/column/spawn';
+import { parseWorldQuery } from '../../src/ui/world/query';
+import { ctxFor } from '../harness/gen';
 
 const EDITED: MapState = {
   v: 1, seed: '42', profile: 'default',
@@ -224,15 +227,19 @@ describe('UI smoke test: pure parts (SP2b spec §8 Tools, §12)', () => {
     expect(mountainSummaryOk(flat), flat).toBe(false);
   });
 
-  test('the steps run in SMOKE_STEPS order: the Density steps after rule, then preset profiles (SP3e) before console (SP3d spec §6, SP3e spec §8)', () => {
+  test('the steps run in SMOKE_STEPS order: the Density steps after rule, then preset profiles (SP3e), then start, world and world-mesh (SP4a) before console (SP3d spec §6, SP3e spec §8, SP4a spec §9.6, ruling P52)', () => {
     expect(SMOKE_STEPS).toEqual([
       'selftest', 'load', 'number', 'knot', 'slider', 'box', 'profile', 'presets', 'undo/redo', 'reload', 'cut line', 'voxels', 'tabs', 'rule',
       'density tab', 'density node', 'density mute', 'density json', 'density narrow', 'density horizontal', 'density drag', 'density times',
-      'preset profiles', 'console',
+      'preset profiles', 'start', 'world', 'world-mesh', 'console',
     ]);
     expect(SMOKE_STEPS.indexOf('density tab')).toBe(SMOKE_STEPS.indexOf('rule') + 1);
-    expect(SMOKE_STEPS.indexOf('preset profiles')).toBe(SMOKE_STEPS.indexOf('console') - 1);
+    expect(SMOKE_STEPS.indexOf('start')).toBe(SMOKE_STEPS.indexOf('preset profiles') + 1);
+    expect(SMOKE_STEPS.indexOf('world')).toBe(SMOKE_STEPS.indexOf('start') + 1);
+    expect(SMOKE_STEPS.indexOf('world-mesh')).toBe(SMOKE_STEPS.indexOf('console') - 1);
     expect(SMOKE_STEPS.indexOf('console')).toBe(SMOKE_STEPS.length - 1);
+    expect(stepId('world-mesh: the parity of mesh and batch')).toBe('world-mesh');
+    expect(stepId('world: /?rd=4 to the reveal')).toBe('world');
     // Its own id: `presets` is the preset-file step.
     expect(stepId('preset profiles: each draft preset opened by URL')).toBe('preset profiles');
     expect(stepId('presets: export, apply {} in the patch box, import the exported file')).toBe('presets');
@@ -566,6 +573,63 @@ describe('UI smoke test: the preset profiles step and the preset shots (SP3e spe
     // A flat mask layer plus the 32-px spawn marker ring is one colour at the 1 % threshold of the 256² square (656 px), not two.
     expect(distinctColours(img([[0x0d0887, 65536 - 32], [0xff3b30, 32]]), 656)).toBe(1);
     expect(distinctColours(img([[0x0d0887, 65536 - 656], [0xf0f921, 656]]), 656)).toBe(2);
+  });
+});
+
+describe('UI smoke test: the 3D world steps (SP4a spec §9.6)', () => {
+  test('pixelDiffShare: the share of pixels where any channel differs by more than tol', () => {
+    const a = new Uint8Array([10, 20, 30, 255, 40, 50, 60, 255, 70, 80, 90, 255, 100, 110, 120, 255]);
+    expect(pixelDiffShare(a, a.slice(), 2)).toBe(0);
+    // Half the pixels differ by 3 (one channel each): 0.5 at tol 2; by 2: 0.
+    const by = (d: number) => { const b = a.slice(); b[0]! += d; b[4 + 2]! -= d; return b; };
+    expect(pixelDiffShare(a, by(3), 2)).toBe(0.5);
+    expect(pixelDiffShare(a, by(2), 2)).toBe(0);
+    // Every channel counts, alpha included, and a pixel counts once however many channels differ.
+    const all = a.slice();
+    for (let i = 0; i < 4; i++) all[12 + i]! -= 9;
+    all[3] = 200;
+    expect(pixelDiffShare(a, all, 2)).toBe(0.5);
+    expect(pixelDiffShare(new Uint8Array(0), new Uint8Array(0), 2)).toBe(0);
+    expect(() => pixelDiffShare(a, a.subarray(0, 12), 2)).toThrow(RangeError);
+    expect(() => pixelDiffShare(a.subarray(0, 6), a.subarray(0, 6), 2)).toThrow(RangeError);
+  });
+
+  test('leaving a revealed world page: Chrome\'s blocked-beforeunload notice is ignored for the world pages only', () => {
+    const text = "Blocked attempt to show a 'beforeunload' confirmation panel for a frame that never had a user gesture since its load. https://www.chromestatus.com/feature/5082396709879808";
+    expect(leaveGuardLog(text, 'http://127.0.0.1:4000/?rd=4')).toBe(true);
+    expect(leaveGuardLog(text, `http://127.0.0.1:4000/${worldMeshQuery('mesh')}`)).toBe(true);
+    expect(leaveGuardLog(text, 'http://127.0.0.1:4000/')).toBe(false);
+    expect(leaveGuardLog(text, 'http://127.0.0.1:4000/?map#abc')).toBe(false);
+    expect(leaveGuardLog(text, undefined)).toBe(false);
+    expect(leaveGuardLog('Uncaught TypeError: x', 'http://127.0.0.1:4000/?rd=4')).toBe(false);
+  });
+
+  test('the smoke Chrome renders through SwiftShader (spec §9.6)', () => {
+    expect(SWIFTSHADER_ARGS).toEqual(['--use-angle=swiftshader', '--enable-unsafe-swiftshader', '--ignore-gpu-blocklist']);
+  });
+
+  test('the start step\'s second hash names seed 7 in ?map\'s encoding', () => {
+    const d = decodeMapState(START_SEED_7_HASH);
+    expect(d.error).toBeNull();
+    expect(d.state.seed).toBe('7');
+    expect(d.state.profile).toBe('default');
+  });
+
+  test('world-mesh loads at seed 42\'s spawn (the literal is findSpawn\'s) with the capture mode, at RD 4, for both renderers', () => {
+    const spawn = findSpawn(ctxFor('42'));
+    expect([PARITY_VIEW.at.x, PARITY_VIEW.at.z]).toEqual([spawn.x, spawn.z]);
+    expect(WORLD_RD).toBe(4);
+    for (const renderer of ['mesh', 'batch'] as const) {
+      const url = worldMeshQuery(renderer);
+      expect(url.startsWith('?rd=4&')).toBe(true);
+      const q = parseWorldQuery(new URLSearchParams(url));
+      expect(q).toEqual({
+        at: PARITY_VIEW.at, y: PARITY_VIEW.y, yaw: PARITY_VIEW.yaw, pitch: PARITY_VIEW.pitch, rd: 4, workers: null, renderer, shot: true, time: null,
+      });
+    }
+    // The page's own default hour in the capture mode is the opening 08:00 (main.ts: q.time ?? 8).
+    expect(PARITY_TOL).toBe(2);
+    expect(PARITY_MAX_SHARE).toBe(0.01);
   });
 });
 

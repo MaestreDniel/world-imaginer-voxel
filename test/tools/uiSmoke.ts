@@ -7,8 +7,9 @@
  * Processes (helpers in cdp.ts, shared with measureChrome.ts), as in mapLatency.ts: `npm run build`; its own
  * `vite preview --host 127.0.0.1 --port <P> --strictPort` on a free port P found by binding port 0 (never 5183), ready
  * only when that child prints its URL; its own headless Chrome with a temporary profile (in the OS temp directory or
- * --profile-dir; Chrome's singleton socket stays in $TMPDIR, whose path must be short) and DevTools port 0. At the end
- * it stops only what it started and removes the profile (downloads included).
+ * --profile-dir; Chrome's singleton socket stays in $TMPDIR, whose path must be short), DevTools port 0 and WebGL2
+ * through SwiftShader (`SWIFTSHADER_ARGS`, SP4a spec §9.6). At the end it stops only what it started and removes the
+ * profile (downloads included).
  *
  * The page is 1400 × 900 CSS px at DPR 1. The steps, in order, each with its checks:
  * - selftest: `?selftest=1` matches every golden in a real module worker;
@@ -55,7 +56,18 @@
  *   ≥ 250 (amplified), ≥ 193 (floating_islands) or water on the line (archipelago); floating_islands' line holds an
  *   island over ground whose top voxel takes a surface rule (D21 (b)), and its `islandMask` layer over 4096² blocks
  *   around the window (16 blocks/px) draws ≥ 2 colours; archipelago's `biome` layer there holds ocean and land colours;
- * - console: no exception, console error or failed load, except the known favicon.ico 404; every step ran.
+ * - the 3D world (SP4a spec §9.6), on pages of their own:
+ *   - start: bare `/` shows the start screen with seed 42, the default profile and both buttons, nothing loading and no
+ *     page error (`start.png`); `/#<seed 7's hash>` names seed 7; "Enter the world" on a bare `/` brings up the loading
+ *     screen in the same page (the URL and the history unchanged), and the step stops there;
+ *   - world: `/?rd=4` shows no start screen and reveals (`window.__wiWorld.revealed`, set by the page), with no page
+ *     error (`world.png`);
+ *   - world-mesh: `?renderer=mesh` and `?renderer=batch` at RD 4, seed 42's spawn and one fixed camera, in the capture
+ *     mode (`&shot=1`: 08:00 paused, no HUD, no overlay), each read back after the reveal and three frames
+ *     (`__wiWorld.frames`): at most 1 % of the pixels may differ by more than 2/255 in a channel (`pixelDiffShare`);
+ *     `world-mesh.png` is the RegionMesh image;
+ * - console: no exception, console error or failed load, except the known favicon.ico 404 and Chrome's notice that it
+ *   blocked a world page's `beforeunload` prompt when a step left it (`leaveGuardLog`); every step ran.
  * With --shots DIR it then writes the spec §12 screenshots into DIR, at seed 42 from a newly loaded page (the
  * repository keeps them re-saved as 256-colour palette PNGs, as SP1 and SP2a did), then the Voxels mode on the
  * mountain line (SP3b spec §7: `cross-section-voxels-mountain.png`; the line text is checked, and the slice summary
@@ -70,6 +82,7 @@
  * line, the drawer at its tallest, the pointer on a top voxel — floating_islands' on the ground under an island), then
  * `preset-archipelago-map.png` (`biome`) and `preset-floating_islands-islandMask.png` (`islandMask`): 4096 × 4096
  * blocks centred on the window at 16 blocks/px, a 256 × 256 px clip of the map.
+ * The 3D steps save `start.png`, `world.png` and `world-mesh.png` into DIR as they run, with --shots only.
  * Options: --skip-build, --profile-dir DIR, --shots DIR. The exit code is 0 only when every check passes.
  */
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
@@ -420,12 +433,13 @@ export function presetProblems(text: string, expected: { readonly name: string; 
  * Every step in its order: a step title is `<id>: <what>`, and the runner checks that the ids come in this order. The
  * Density steps run after `rule` and before `console`, on the mountain page the rule step opened, so the earlier
  * history and "4 modified" checks are untouched; SP3e's `preset profiles` step (its own id: `presets` is the preset-file
- * step) follows them on pages of its own and comes before `console`.
+ * step) follows them on pages of its own. SP4a's 3D steps `start`, `world` and `world-mesh` (spec §9.6) come next, on
+ * pages of their own, inside `runSmoke`; `console` stays last, the closing step main() runs after `runSmoke` (ruling P52).
  */
 export const SMOKE_STEPS = [
   'selftest', 'load', 'number', 'knot', 'slider', 'box', 'profile', 'presets', 'undo/redo', 'reload', 'cut line', 'voxels', 'tabs', 'rule',
   'density tab', 'density node', 'density mute', 'density json', 'density narrow', 'density horizontal', 'density drag', 'density times',
-  'preset profiles', 'console',
+  'preset profiles', 'start', 'world', 'world-mesh', 'console',
 ] as const;
 export type SmokeStep = (typeof SMOKE_STEPS)[number];
 
@@ -437,6 +451,70 @@ export function stepId(title: string): SmokeStep {
   const step = SMOKE_STEPS.find((s) => s === id);
   if (step === undefined) throw new Error(`${JSON.stringify(id)} is not a smoke step`);
   return step;
+}
+
+// ---------------------------------------------------------------- the 3D world steps (SP4a spec §9.6)
+
+/** The smoke Chrome's WebGL2 through SwiftShader, whatever GPU the machine has (SP4a spec §9.6, ruling P4). */
+export const SWIFTSHADER_ARGS = ['--use-angle=swiftshader', '--enable-unsafe-swiftshader', '--ignore-gpu-blocklist'] as const;
+
+/** The `start` step's second URL fragment: `?map`'s encoding of seed 7, the default profile (a unit test decodes it). */
+export const START_SEED_7_HASH = `#${mapHash({ ...START, seed: '7' })}`;
+
+/** The render distance of the `world` and `world-mesh` loads: the smallest (spec §8.1), so SwiftShader loads it quickly. */
+export const WORLD_RD = 4;
+
+/**
+ * The parity view of `world-mesh`: seed 42's spawn (x, z) as `findSpawn` gives it (a unit test pins the literal; this
+ * tool cannot import `src/`), with the camera above it looking down across the terrain, so both renderers draw the
+ * same opaque, water and sky pixels: 15 blocks above the spawn's ground, pitched 45° down, so the loaded terrain
+ * (not the sky or the fog) fills most of the image.
+ */
+export const PARITY_VIEW = { at: { x: 0, z: 0 }, y: 112, yaw: 45, pitch: -45 } as const;
+
+/** Spec §9.6's parity check: at most 1 % of the pixels may differ by more than 2/255 in a channel. */
+export const PARITY_TOL = 2;
+export const PARITY_MAX_SHARE = 0.01;
+
+/**
+ * The query of one `world-mesh` load: RD 4 at the parity view, the section renderer forced, and the capture mode
+ * (`shot=1`: no HUD, no overlay, the clock fixed at the opening 08:00; ruling P48).
+ */
+export function worldMeshQuery(renderer: 'batch' | 'mesh'): string {
+  const v = PARITY_VIEW;
+  return `?rd=${WORLD_RD}&renderer=${renderer}&at=${v.at.x},${v.at.z}&y=${v.y}&yaw=${v.yaw}&pitch=${v.pitch}&shot=1`;
+}
+
+/**
+ * Chrome's console error when a page's `beforeunload` guard meets a navigation the tool started without a user gesture:
+ * the world page arms its Ctrl+W guard after the reveal (SP4a spec §7.1), and the steps leave each world page (every
+ * one loaded with `?rd`) by navigating. It is the guard working, not a page error, so it is ignored for those pages
+ * only; the same message from any other page still counts.
+ */
+export function leaveGuardLog(text: string, url: string | undefined): boolean {
+  if (!text.startsWith("Blocked attempt to show a 'beforeunload' confirmation panel") || url === undefined) return false;
+  try {
+    const u = new URL(url);
+    return u.pathname === '/' && u.searchParams.has('rd') && !u.searchParams.has('map');
+  } catch {
+    return false;
+  }
+}
+
+/**
+ * The share of pixels of two same-sized RGBA images where any channel (alpha included) differs by more than `tol`;
+ * 0 for two empty images. Throws RangeError when the lengths differ or are not whole pixels.
+ */
+export function pixelDiffShare(a: Uint8Array, b: Uint8Array, tol: number): number {
+  if (a.length !== b.length) throw new RangeError(`images of ${a.length} and ${b.length} bytes`);
+  if (a.length % 4 !== 0) throw new RangeError(`${a.length} bytes are not whole RGBA pixels`);
+  const n = a.length / 4;
+  if (n === 0) return 0;
+  let differ = 0;
+  for (let i = 0; i < a.length; i += 4) {
+    if (Math.abs(a[i]! - b[i]!) > tol || Math.abs(a[i + 1]! - b[i + 1]!) > tol || Math.abs(a[i + 2]! - b[i + 2]!) > tol || Math.abs(a[i + 3]! - b[i + 3]!) > tol) differ++;
+  }
+  return differ / n;
 }
 
 /** BIOME_SIZE_SCALE[6]: biome-size position 7, where the Density step's drag ends (a unit test keeps them equal). */
@@ -627,6 +705,8 @@ interface SmokePage {
   draws(): Array<{ t: number; n: number }>;
   /** The map canvas's RGBA pixels in the (2r + 1)² window around page point (sx, sy) (clipped), and the window's width. */
   mapPixels(sx: number, sy: number, r: number): { rgba: number[]; width: number; cx: number; cy: number };
+  /** A PNG (base64) decoded by the browser: its size and its RGBA bytes (base64), unconverted and unpremultiplied. */
+  pngRgba(png: string): Promise<{ width: number; height: number; rgba: string }>;
 }
 
 /** The slice view's texts (`.sv`): status, histogram, notice, the four axis labels, the controls, readout and canvas size. */
@@ -752,6 +832,19 @@ function pageHelpers(): SmokePage {
       const y1 = Math.min(c.height - 1, cy + r);
       const data = c.getContext('2d')!.getImageData(x0, y0, x1 - x0 + 1, y1 - y0 + 1).data;
       return { rgba: Array.from(data), width: x1 - x0 + 1, cx: cx - x0, cy: cy - y0 };
+    },
+    async pngRgba(png) {
+      const bin = atob(png);
+      const bytes = new Uint8Array(bin.length);
+      for (let i = 0; i < bin.length; i++) bytes[i] = bin.charCodeAt(i);
+      const bmp = await createImageBitmap(new Blob([bytes], { type: 'image/png' }), { colorSpaceConversion: 'none', premultiplyAlpha: 'none' });
+      const c = new OffscreenCanvas(bmp.width, bmp.height);
+      const g = c.getContext('2d', { willReadFrequently: true })!;
+      g.drawImage(bmp, 0, 0);
+      const data = g.getImageData(0, 0, bmp.width, bmp.height).data;
+      let text = '';
+      for (let i = 0; i < data.length; i += 0x8000) text += String.fromCharCode(...data.subarray(i, i + 0x8000));
+      return { width: bmp.width, height: bmp.height, rgba: btoa(text) };
     },
   };
 }
@@ -906,6 +999,14 @@ class Page {
     const r = await this.cdp.send('Page.captureScreenshot', { format: 'png', captureBeyondViewport: false, ...(clip === undefined ? {} : { clip: { ...clip, scale: 1 } }) });
     writeFileSync(path, Buffer.from(String(r['data']), 'base64'));
   }
+
+  /** The viewport as a PNG and as its RGBA pixels (decoded by the page's browser), read back from one capture. */
+  async capture(): Promise<{ readonly png: Buffer; readonly width: number; readonly height: number; readonly rgba: Uint8Array }> {
+    const r = await this.cdp.send('Page.captureScreenshot', { format: 'png', captureBeyondViewport: false });
+    const png = String(r['data']);
+    const d = await this.eval<{ width: number; height: number; rgba: string }>(`__wiSmoke.pngRgba(${JSON.stringify(png)})`);
+    return { png: Buffer.from(png, 'base64'), width: d.width, height: d.height, rgba: new Uint8Array(Buffer.from(d.rgba, 'base64')) };
+  }
 }
 
 // ---------------------------------------------------------------- the smoke steps
@@ -923,10 +1024,22 @@ class Smoke {
   readonly downloads: string;
   /** The page errors seen so far (exceptions, console errors, failed loads; the favicon 404 aside), appended as they come. */
   readonly errors: readonly string[];
-  constructor(page: Page, downloads: string, errors: readonly string[]) {
+  /** Where the 3D steps save `start.png`, `world.png` and `world-mesh.png` (--shots); null: they save nothing. */
+  readonly shots: string | null;
+  constructor(page: Page, downloads: string, errors: readonly string[], shots: string | null = null) {
     this.page = page;
     this.downloads = downloads;
     this.errors = errors;
+    this.shots = shots;
+  }
+
+  /** Saves `png` as `name` in the --shots directory, if one was given. */
+  save(name: string, png: Buffer): void {
+    if (this.shots === null) return;
+    mkdirSync(this.shots, { recursive: true });
+    const f = join(this.shots, name);
+    writeFileSync(f, png);
+    console.log(`  saved ${f}`);
   }
 
   /** Begins the step titled `<id>: <what>`; its id must come after the last one's in SMOKE_STEPS. */
@@ -1194,6 +1307,7 @@ async function runSmoke(t: Smoke): Promise<void> {
 
   await runDensity(t);
   await runPresetProfiles(t);
+  await runWorld(t);
 }
 
 const statsOf = (s: SliceRead): SliceStatsText | null => parseSliceStats(s.stats);
@@ -1614,6 +1728,117 @@ async function runPresetProfiles(t: Smoke): Promise<void> {
   }
 }
 
+// ---------------------------------------------------------------- the 3D world (SP4a spec §9.6)
+
+/** The longest wait for a world load at RD 4 under SwiftShader, ms (the page's own watchdog fails a stall after 30 s). */
+const WORLD_MS = 240000;
+/** The page expression "the world page settled": revealed, or the failure panel or the error screen showing. */
+const WORLD_SETTLED = `window.__wiWorld?.revealed === true || (document.getElementById('loading-fail')?.hidden === false) || document.getElementById('error-screen') !== null`;
+/** The start screen's texts and buttons as they read. */
+const START_READ = `(() => {
+  const t = (id) => document.getElementById(id)?.textContent ?? null;
+  const enter = document.getElementById('start-enter');
+  const map = document.getElementById('start-map');
+  return {
+    seed: t('start-seed'), profile: t('start-profile'), error: document.getElementById('start-error')?.hidden === false ? t('start-error') : null,
+    enter: enter === null ? null : { text: enter.textContent, disabled: enter.disabled }, map: map === null ? null : { text: map.textContent, href: map.getAttribute('href') },
+    loading: document.getElementById('loading-screen') !== null, canvas: document.querySelector('canvas') !== null,
+  };
+})()`;
+interface StartRead {
+  readonly seed: string | null;
+  readonly profile: string | null;
+  readonly error: string | null;
+  readonly enter: { readonly text: string; readonly disabled: boolean } | null;
+  readonly map: { readonly text: string; readonly href: string | null } | null;
+  readonly loading: boolean;
+  readonly canvas: boolean;
+}
+
+/** Waits for the world page to settle; true when it revealed, else a failed check names the cause. */
+async function worldRevealed(t: Smoke, what: string): Promise<boolean> {
+  const p = t.page;
+  try {
+    const ms = await p.until(WORLD_SETTLED, `${what} settled`, WORLD_MS);
+    const revealed = await p.eval<boolean>('window.__wiWorld?.revealed === true');
+    const cause = revealed ? '' : await p.eval<string>(`document.getElementById('loading-cause')?.textContent ?? document.getElementById('error-screen')?.textContent ?? ''`);
+    t.check(revealed, `${what}: revealed after ${(ms / 1000).toFixed(1)} s`, cause);
+    return revealed;
+  } catch (e) {
+    t.check(false, `${what}: revealed within ${WORLD_MS / 1000} s`, e instanceof Error ? e.message : String(e));
+    return false;
+  }
+}
+
+async function runWorld(t: Smoke): Promise<void> {
+  const p = t.page;
+
+  t.step('start: bare / shows the start screen (seed 42, the default profile, both buttons), a hash names its seed, "Enter the world" brings up the loading screen');
+  let errors0 = t.errors.length;
+  await p.goto(p.base, `document.getElementById('start-enter') !== null`);
+  // The backdrop fetches the panorama manifest; let it land before the console is read.
+  await sleep(1000);
+  const bare = await p.eval<StartRead>(START_READ);
+  t.check(bare.seed === 'Seed: 42' && bare.profile === 'Profile: default' && bare.error === null, `bare /: ${bare.seed} · ${bare.profile}`, bare);
+  t.check(bare.enter !== null && bare.enter.text === 'Enter the world' && !bare.enter.disabled && bare.map !== null && bare.map.text === 'Open the map' && bare.map.href === '?map',
+    'both buttons: "Enter the world" and "Open the map" (?map)', bare);
+  t.check(!bare.loading && !bare.canvas, 'nothing loads while the start screen shows (no loading screen, no canvas)', bare);
+  t.check(t.errors.length === errors0, 'bare /: no page error', t.errors.slice(errors0));
+  t.save('start.png', (await p.capture()).png);
+
+  await p.goto(`${p.base}${START_SEED_7_HASH}`, `document.getElementById('start-seed') !== null`);
+  const seven = await p.eval<StartRead>(START_READ);
+  t.check(seven.seed === 'Seed: 7' && seven.profile === 'Profile: default' && seven.map?.href === `?map${START_SEED_7_HASH}`, `/#<seed 7>: ${seven.seed} · ${seven.profile}, the map link keeps the hash`, seven);
+
+  await p.goto(p.base, `document.getElementById('start-enter') !== null`);
+  errors0 = t.errors.length;
+  const before = await p.eval<{ href: string; history: number }>('({ href: location.href, history: history.length })');
+  await p.click('#start-enter');
+  const ms = await p.until(`document.getElementById('loading-screen') !== null && document.getElementById('start-screen') === null`, 'the loading screen after "Enter the world"', 10000);
+  const after = await p.eval<{ href: string; history: number }>('({ href: location.href, history: history.length })');
+  t.check(after.href === before.href && after.history === before.history, `"Enter the world": the loading screen after ${Math.round(ms)} ms in the same page (URL ${after.href}, no history entry)`, { before, after });
+  t.check(t.errors.length === errors0, '"Enter the world": no page error', t.errors.slice(errors0));
+
+  t.step(`world: /?rd=${WORLD_RD} (no start screen) to the reveal, a clean console, world.png`);
+  errors0 = t.errors.length;
+  await p.goto(`${p.base}?rd=${WORLD_RD}`, `window.__wiWorld !== undefined`);
+  t.check(await p.eval<boolean>(`document.getElementById('start-screen') === null && (document.getElementById('loading-screen') !== null || window.__wiWorld.revealed)`), `/?rd=${WORLD_RD}: the loading screen, no start screen`);
+  if (await worldRevealed(t, `/?rd=${WORLD_RD}`)) {
+    // Past the 300 ms fade of the overlay.
+    await p.until('window.__wiWorld.frames >= 3', 'three frames after the reveal', 30000);
+    await sleep(500);
+    t.save('world.png', (await p.capture()).png);
+  }
+  t.check(t.errors.length === errors0, `/?rd=${WORLD_RD}: no page error`, t.errors.slice(errors0));
+
+  t.step('world-mesh: RegionMesh and RegionBatch at the same view in the capture mode (08:00, no HUD), read back after the reveal and three frames');
+  const shots: Partial<Record<'mesh' | 'batch', { readonly png: Buffer; readonly width: number; readonly height: number; readonly rgba: Uint8Array }>> = {};
+  for (const renderer of ['mesh', 'batch'] as const) {
+    errors0 = t.errors.length;
+    const url = `${p.base}${worldMeshQuery(renderer)}`;
+    await p.goto(url, `window.__wiWorld !== undefined`);
+    if (!(await worldRevealed(t, `renderer=${renderer}`))) continue;
+    await p.until('window.__wiWorld.frames >= 3', `three frames after the ${renderer} reveal`, 30000);
+    const bare3d = await p.eval<boolean>(`document.querySelector('.world-hud') === null && document.getElementById('loading-screen') === null && document.getElementById('world-click-hint') === null`);
+    t.check(bare3d, `renderer=${renderer}: no HUD, no overlay, no "Click to fly"`);
+    const shot = await p.capture();
+    shots[renderer] = shot;
+    // Not blank: the lit, fogged terrain and the sky draw many distinct colours (a cleared canvas draws one).
+    const colours = distinctColours(shot.rgba, 1);
+    t.check(colours >= 256, `renderer=${renderer}: the view is drawn (${colours} distinct colours)`, colours);
+    t.check(t.errors.length === errors0, `renderer=${renderer}: no page error`, t.errors.slice(errors0));
+  }
+  const mesh = shots.mesh;
+  const batch = shots.batch;
+  if (mesh !== undefined && batch !== undefined) {
+    const share = pixelDiffShare(mesh.rgba, batch.rgba, PARITY_TOL);
+    t.check(share <= PARITY_MAX_SHARE, `parity: ${(share * 100).toFixed(3)} % of ${mesh.width} × ${mesh.height} pixels differ by more than ${PARITY_TOL}/255 (≤ ${PARITY_MAX_SHARE * 100} %)`, share);
+    t.save('world-mesh.png', mesh.png);
+  } else {
+    t.check(false, 'parity: both renderers revealed');
+  }
+}
+
 // ---------------------------------------------------------------- screenshots (spec §12)
 
 async function runShots(p: Page, dir: string): Promise<string[]> {
@@ -1867,7 +2092,7 @@ async function main(argv: readonly string[]): Promise<number> {
     profile = mkdtempSync(join(resolve(args.profileDir ?? tmpdir()), 'wi10-smoke-chrome-'));
     const downloads = join(profile, 'downloads');
     mkdirSync(downloads);
-    chrome = await startChrome({ headless: true, profileDir: profile, args: [`--window-size=${VIEWPORT.width},${VIEWPORT.height}`], env: {} });
+    chrome = await startChrome({ headless: true, profileDir: profile, args: [`--window-size=${VIEWPORT.width},${VIEWPORT.height}`, ...SWIFTSHADER_ARGS], env: {} });
     console.log(`headless Chrome (pid ${chrome.proc.pid}) with DevTools on port ${chrome.port}, profile ${profile}`);
     const version = await (await fetch(`http://127.0.0.1:${chrome.port}/json/version`)).json() as { Browser?: string };
     const targets = await (await fetch(`http://127.0.0.1:${chrome.port}/json/list`)).json() as Array<{ type: string; webSocketDebuggerUrl: string }>;
@@ -1886,8 +2111,15 @@ async function main(argv: readonly string[]): Promise<number> {
       const entry = e['entry'] as { level: string; text: string; url?: string };
       if (entry.level !== 'error') return;
       const line = `log: ${entry.text}${entry.url === undefined ? '' : ` (${entry.url})`}`;
-      if (ignoredLog(entry.text, entry.url)) ignored.push(line);
+      if (ignoredLog(entry.text, entry.url) || leaveGuardLog(entry.text, entry.url)) ignored.push(line);
       else pageErrors.push(line);
+    });
+    // The world page arms a Ctrl+W guard (`beforeunload`) after its reveal (SP4a spec §7.1): the steps' own navigations
+    // leave it, so its prompt is accepted; any other dialog stays unanswered (and the step times out).
+    cdp.on('Page.javascriptDialogOpening', (e) => {
+      if (e['type'] !== 'beforeunload') return;
+      console.log('  (accepted the page\'s beforeunload prompt)');
+      void cdp?.send('Page.handleJavaScriptDialog', { accept: true }).catch(() => undefined);
     });
     await cdp.send('Runtime.enable');
     await cdp.send('Page.enable');
@@ -1899,7 +2131,7 @@ async function main(argv: readonly string[]): Promise<number> {
     console.log(`${version.Browser ?? 'Chrome'}, ${VIEWPORT.width} × ${VIEWPORT.height} CSS px at DPR 1`);
 
     const page = new Page(cdp, server.url);
-    const smoke = new Smoke(page, downloads, pageErrors);
+    const smoke = new Smoke(page, downloads, pageErrors, args.shots);
     try {
       await runSmoke(smoke);
     } catch (e) {
