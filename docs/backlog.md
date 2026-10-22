@@ -14,7 +14,7 @@ Improvements noted for later. They belong to no SP spec; pick them up when conve
 
 ## Rendering
 
-- **The T-junction pinhole specks (SP4a).** Isolated bright single-pixel specks where merged quads meet, likely T-junction pinholes letting the sky through: about 55 pixels in SP4a's `review-spawn-day.png`, 31 in the islands shot, 30-130 per panorama (SP4a spec, Exit evidence). No SP owns them; after the user's check, pick a fix (for example a tiny overlap of merged quads, or splitting T-junction edges in the mesher) when convenient, or hand it to SP4b's mesher work or SP11's quality pass.
+- **The T-junction pinhole specks (SP4a).** Isolated bright single-pixel specks where merged quads meet, likely T-junction pinholes letting the sky through: about 55 pixels in SP4a's `review-spawn-day.png`, 31 in the islands shot, 30-130 per panorama (SP4a spec, Exit evidence). The user (2026-10-23) sees them only in heavily shadowed or dimly lit places and keeps them for later. No SP owns them; after the user's check, pick a fix (for example a tiny overlap of merged quads, or splitting T-junction edges in the mesher) when convenient, or hand it to SP4b's mesher work or SP11's quality pass.
 
 ## Code
 
