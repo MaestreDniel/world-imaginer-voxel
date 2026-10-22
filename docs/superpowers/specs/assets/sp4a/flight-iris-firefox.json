@@ -1,0 +1,109 @@
+{
+  "route": "flight=sp4a",
+  "seed": "42",
+  "profile": "default",
+  "rd": 12,
+  "workers": 6,
+  "sectionRenderer": "mesh",
+  "userAgent": "Mozilla/5.0 (X11; Ubuntu; Linux x86_64; rv:158.0) Gecko/20100101 Firefox/158.0",
+  "renderer": "Intel(R) HD Graphics, or similar",
+  "vendor": "Intel",
+  "multiDraw": false,
+  "timerQuery": false,
+  "screen": {
+    "width": 1760,
+    "height": 990
+  },
+  "dpr": 1.0909090909090908,
+  "pixelRatio": 1,
+  "displayIntervalMs": 4.2199999999998,
+  "load": {
+    "revealMs": 3262.2,
+    "stageMs": {
+      "T": 3001.8,
+      "D": 3004.6,
+      "L": 3011.46,
+      "MESH": 3015.88
+    },
+    "mergeMs": 31.199999999999818,
+    "longTasks": null,
+    "first120MaxMs": 5.080000000000382
+  },
+  "frames": {
+    "count": 14023,
+    "p50": 4.2199999999998,
+    "p95": 4.2199999999998,
+    "p99": 8.4399999999996,
+    "max": 16.8799999999992,
+    "over33": 0
+  },
+  "main": {
+    "p50": 0.37999999999738066,
+    "p95": 0.680000000000291,
+    "max": 7
+  },
+  "gpuMs": null,
+  "drawCalls": {
+    "max": 13,
+    "mean": 8.961063966341012
+  },
+  "triangles": {
+    "max": 375533
+  },
+  "heapMB": null,
+  "sabMB": 40.54789733886719,
+  "longFrames": [],
+  "durationMs": 60000,
+  "waypoints": [
+    {
+      "x": 0,
+      "y": 121,
+      "z": -109
+    },
+    {
+      "x": 50,
+      "y": 153,
+      "z": -50
+    },
+    {
+      "x": 109,
+      "y": 156,
+      "z": 0
+    },
+    {
+      "x": 50,
+      "y": 184,
+      "z": 50
+    },
+    {
+      "x": 0,
+      "y": 204,
+      "z": 109
+    },
+    {
+      "x": -50,
+      "y": 195,
+      "z": 50
+    },
+    {
+      "x": -109,
+      "y": 175,
+      "z": 0
+    },
+    {
+      "x": -50,
+      "y": 114,
+      "z": -50
+    }
+  ],
+  "waypointsAbove": [
+    40,
+    50,
+    60,
+    70,
+    80,
+    65,
+    50,
+    35
+  ]
+}
