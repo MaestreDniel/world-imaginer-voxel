@@ -6,13 +6,18 @@
     "workerProbe": "ok",
     "workerIsolated": true,
     "sabShared": true,
+    "growableSab": true,
+    "reservation": {
+      "blockBytes": 805306368,
+      "byteBytes": 536870912
+    },
     "webgl2": true,
     "multiDraw": true,
     "timerQuery": true,
     "maxArrayTextureLayers": 2048,
     "maxTextureSize": 32768,
-    "renderer": "ANGLE (NVIDIA Corporation, NVIDIA GeForce RTX 3060 Laptop GPU/PCIe/SSE2, OpenGL 4.5.0)",
-    "vendor": "Google Inc. (NVIDIA Corporation)",
+    "renderer": "ANGLE (NVIDIA, Vulkan 1.4.329 (NVIDIA NVIDIA GeForce RTX 3060 Laptop GPU (0x00002520)), NVIDIA)",
+    "vendor": "Google Inc. (NVIDIA)",
     "hardwareConcurrency": 20,
     "deviceMemory": 16
   },
@@ -23,7 +28,7 @@
     "height": 1080
   },
   "dpr": 1,
-  "displayIntervalMs": 6.965,
+  "displayIntervalMs": 4.165,
   "items": {
     "scene": {
       "columns": 489,
@@ -45,49 +50,53 @@
         "height": 1080,
         "pixelRatio": 1
       },
-      "displayIntervalMs": 6.965,
+      "displayIntervalMs": 4.165,
       "frames": 600,
       "frame": {
-        "p50": 6.964999999999918,
-        "p95": 1002.9599999999882,
-        "max": 1009.9249999999881
+        "p50": 4.164999999999964,
+        "p95": 4.164999999999964,
+        "max": 4.164999999999964
       },
       "main": {
-        "p50": 0.4299999997019768,
-        "p95": 0.8250000029802322,
-        "max": 1.1449999995529652
+        "p50": 0.44999999925494194,
+        "p95": 0.9250000007450581,
+        "max": 1.7149999998509884
       },
       "drawCalls": 19,
       "drawCallsMean": 16.005,
       "trianglesMax": 486171,
+      "longFrames": {
+        "count": 0,
+        "first": []
+      },
       "error": null
     },
     "upload": {
       "quads": 734109,
       "sections": 3565,
-      "buildMs": 170.63499999791384,
-      "msPer1kQuads": 0.23243823464623622,
-      "firstRenderMs": 41.96000000089407,
-      "projectedRd12Seconds": 0.31666666666666665,
+      "buildMs": 43.86500000208616,
+      "msPer1kQuads": 0.05975270702591327,
+      "firstRenderMs": 49.63500000163913,
+      "projectedRd12Seconds": 0.13333333333333333,
       "error": null
     },
     "churn": {
       "frames": 120,
       "setGeometryPerFrame": 32,
-      "mainP95": 1.0799999982118607,
-      "frameP95": 6.964999999999918,
+      "mainP95": 1.5249999985098839,
+      "frameP95": 4.164999999999964,
       "deleted": 32,
       "optimize": [
         {
           "rx": 0,
           "rz": 0,
           "pass": 0,
-          "ms": 1.9800000004470348,
+          "ms": 2.1149999983608723,
           "mb": 7.474
         }
       ],
-      "readdMs": 0.22500000149011612,
-      "setGeometrySizeMs": 1.8799999989569187,
+      "readdMs": 0.5049999989569187,
+      "setGeometrySizeMs": 2.8099999986588955,
       "error": null
     },
     "noMultiDraw": {
@@ -98,21 +107,25 @@
         "height": 1080,
         "pixelRatio": 1
       },
-      "displayIntervalMs": 6.965,
+      "displayIntervalMs": 4.165,
       "frames": 600,
       "frame": {
-        "p50": 6.964999999999918,
-        "p95": 6.964999999999918,
-        "max": 6.964999999999918
+        "p50": 4.164999999999964,
+        "p95": 4.164999999999964,
+        "max": 4.164999999999964
       },
       "main": {
-        "p50": 0.5149999968707561,
-        "p95": 1.030000001192093,
-        "max": 1.3350000008940697
+        "p50": 0.8650000020861626,
+        "p95": 1.5100000016391277,
+        "max": 2.3950000032782555
       },
       "drawCalls": 1202,
       "drawCallsMean": 1069.085,
       "trianglesMax": 486171,
+      "longFrames": {
+        "count": 0,
+        "first": []
+      },
       "error": null
     }
   },
@@ -128,16 +141,21 @@
     "errors": []
   },
   "verdict": {
-    "gatePass": false,
+    "gatePass": true,
     "basicPass": true,
-    "failures": [
-      "static p95 1002.9599999999882 ms > 16.7 ms"
-    ]
+    "failures": []
   },
   "measuredBy": "measureChrome",
-  "loadAvg1Before": 0.87,
+  "loadAvg1Before": 0.56,
   "loadAvg1After": 0.74,
   "chromeVersion": "Chrome/155.0.8059.39",
+  "window": {
+    "left": 0,
+    "top": 0,
+    "width": 1920,
+    "height": 1080,
+    "windowState": "fullscreen"
+  },
   "viewport": {
     "innerWidth": 1920,
     "innerHeight": 1080,

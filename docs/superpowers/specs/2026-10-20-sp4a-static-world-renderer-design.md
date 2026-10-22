@@ -215,26 +215,29 @@ Firefox exposes `WEBGL_multi_draw` on no GPU, so the Firefox/Iris Xe cell is tak
 
 ### Spike evidence
 
-The spike's cells (§1.2, §1.3), each JSON in `docs/superpowers/specs/assets/sp4a/`. The Chrome cells were measured at the display's 143.6 Hz (the user's decision of 2026-10-21): frame times snap to the measured display interval, 6.965 ms, and the thresholds stay as §1.3 states them.
+The spike's cells (§1.2, §1.3), each JSON in `docs/superpowers/specs/assets/sp4a/`. The Chrome cells were measured on 2026-10-22 under the PRIME on-demand profile, with the user's session unlocked and the display awake, in a fullscreen window on the laptop panel **eDP-1 at 240 Hz** (the display's native rate, as the user chose on 2026-10-21; eDP-1 is the primary panel under on-demand). Frame times snap to the measured display interval, 4.165 ms, so 16.7 ms is four intervals, the 60 Hz budget the gate encodes; the thresholds stay as §1.3 states them. The two GPUs differ in ANGLE backend as well as hardware: the Iris Xe renders through ANGLE's default OpenGL backend, the RTX through ANGLE Vulkan under PRIME offload (`__NV_PRIME_RENDER_OFFLOAD=1`, `__GLX_VENDOR_LIBRARY_NAME=nvidia`, `__VK_LAYER_NV_optimus=NVIDIA_only`, `--use-angle=vulkan`), because ANGLE's GL backend fails `eglInitialize` there.
 
-| | Chrome / RTX 3060 Mobile (`spike-chrome-rtx.json`) |
-|---|---|
-| renderer (as reported) | ANGLE (NVIDIA Corporation, NVIDIA GeForce RTX 3060 Laptop GPU/PCIe/SSE2, OpenGL 4.5.0); `multiDraw` true, `timerQuery` true; Chrome 155.0.8059.39, PRIME 'nvidia', 1920 × 1080 @ 1 |
-| section renderer | RegionBatch (`batch`) |
-| scene | 489 columns, 3,565 section rows, 734,109 quads, 15 regions |
-| 1 decode | 0 mismatches of 1,024 words |
-| 2 static p50 / p95 / max | 6.965 / 1,002.96 / 1,009.92 ms (**not valid**, see below) |
-| 2 draw calls | 19 max, 16.0 mean |
-| 2 main thread p95 | 0.83 ms |
-| 3 upload | 0.232 ms per 1k quads (build 170.6 ms), first render 42.0 ms; projected RD12 0.32 s |
-| 4 churn | 32 `setGeometryAt` per frame: main p95 1.08 ms, frame p95 6.965 ms; `optimize()` of region (0, 0) opaque: 1.98 ms over 7.47 MB; re-add of 32: 0.23 ms; `setGeometrySize` × 1.5: 1.88 ms |
-| 5 noMultiDraw | `WEBGL_multi_draw` masked: 1,202 draw calls max (1,069 mean), frame p50 / p95 / max 6.965 / 6.965 / 6.965 ms, main p95 1.03 ms |
-| 6 store | 768 / 512 MiB reserved; grew to 36 / 18 MiB; 384 of 384 reads exact; no error |
-| console errors | none |
-| verdict | `basicPass` true; `gatePass` false (static p95 only) |
+| | Chrome / Iris Xe (`spike-chrome-iris.json`), **the gate cell** | Chrome / RTX 3060 Mobile (`spike-chrome-rtx.json`) |
+|---|---|---|
+| renderer (as reported) | ANGLE (Intel, Mesa Intel(R) Iris(R) Xe Graphics (ADL GT2), OpenGL 4.6) | ANGLE (NVIDIA, Vulkan 1.4.329 (NVIDIA NVIDIA GeForce RTX 3060 Laptop GPU (0x00002520)), NVIDIA) |
+| capability | `multiDraw` true, `timerQuery` true; Chrome 155.0.8059.39, 1920 × 1080 @ 1 | `multiDraw` true, `timerQuery` true; Chrome 155.0.8059.39, 1920 × 1080 @ 1 |
+| display | eDP-1 at 240 Hz, interval 4.165 ms | eDP-1 at 240 Hz, interval 4.165 ms |
+| section renderer | RegionBatch (`batch`) | RegionBatch (`batch`) |
+| scene | 489 columns, 3,565 section rows, 734,109 quads, 15 regions | the same |
+| 1 decode | 0 mismatches of 1,024 words | 0 mismatches of 1,024 words |
+| 2 static p50 / p95 / max | 4.165 / 8.33 / 12.495 ms; 0 long frames in 600 | 4.165 / 4.165 / 4.165 ms; 0 long frames in 600 |
+| 2 draw calls | 19 max, 16.0 mean | 19 max, 16.0 mean |
+| 2 main thread p95 | 2.01 ms | 0.93 ms |
+| 3 upload | 0.058 ms per 1k quads (build 42.4 ms), first render 33.2 ms; projected RD12 0.12 s | 0.060 ms per 1k quads (build 43.9 ms), first render 49.6 ms; projected RD12 0.13 s |
+| 4 churn | 32 `setGeometryAt` per frame: main p95 2.68 ms, frame p95 8.33 ms; `optimize()` of region (0, 0) opaque: 3.21 ms over 7.47 MB; re-add of 32: 0.47 ms; `setGeometrySize` × 1.5: 3.47 ms | 32 `setGeometryAt` per frame: main p95 1.52 ms, frame p95 4.165 ms; `optimize()` of region (0, 0) opaque: 2.11 ms over 7.47 MB; re-add of 32: 0.50 ms; `setGeometrySize` × 1.5: 2.81 ms |
+| 5 noMultiDraw | `WEBGL_multi_draw` masked: 1,202 draw calls max (1,069 mean), frame p50 / p95 / max 4.165 / 8.33 / 12.495 ms, main p95 2.27 ms | `WEBGL_multi_draw` masked: 1,202 draw calls max (1,069 mean), frame p50 / p95 / max 4.165 / 4.165 / 4.165 ms, main p95 1.51 ms |
+| 6 store | 768 / 512 MiB reserved; grew to 36 / 18 MiB; 384 of 384 reads exact; no error | 768 / 512 MiB reserved; grew to 36 / 18 MiB; 384 of 384 reads exact; no error |
+| console errors | none | none |
+| verdict | `basicPass` true; **`gatePass` true** (no failure) | `basicPass` true; `gatePass` true (recorded, not gated) |
 
-- **The RTX cell's frame figures need a rerun with the display awake.** The run (2026-10-21, 06:20) found the user's session locked: GNOME's screensaver had been active since 06:03 and DPMS reported the monitor off. At least one frame in twenty of item 2 (its p95) took about 1,003 ms, 144 display intervals, the 1 Hz rAF of an unseen page; item 5 ran clean at one interval per frame. The CPU-side figures (draw calls, main thread, upload, churn) and the basic criteria (decode, store, console) do not depend on frame pacing and stand; frame p95 does not. A second run, still locked, was stopped when its rAF stayed throttled.
-- **Chrome / Iris Xe:** pending: measured before Task 30 (the user's decision of 2026-10-21: one PRIME switch for every Iris cell).
+- **The gate (§1.3) passes on Chrome / Iris Xe:** 0 mismatches; static p95 8.33 ms ≤ 16.7, 19 draw calls ≤ 100, main thread p95 2.01 ms ≤ 3; RD12's uploads project to 0.12 s ≤ 2 s; no store error. The plan continues.
+- **The Iris cell was run twice.** The first run also passed the gate (static p50 / p95 / max 4.165 / 8.33 / 154.1 ms, main p95 1.88 ms), but item 2 had one long frame (frame 522 of 600, 154 ms, main thread 0.49 ms, so not the page's own work). With the session still unlocked, the re-run had no long frame, and its JSON is the committed one.
+- **The earlier Chrome / RTX run is replaced.** That run (2026-10-21, 06:20, PRIME 'nvidia', HDMI at 143.6 Hz, ANGLE OpenGL) found the user's session locked: GNOME's screensaver had been active since 06:03 and DPMS reported the monitor off, so rAF ran at about 1 Hz and its item-2 p95 read 1,002.96 ms. Its item 2 was invalid; its basic criteria (decode, store, console) stood. The new run, with the display awake, has 0 long frames in item 2 and in item 5 and a p95 of one interval, which confirms that the old figure was environmental (the throttled rAF of an unseen page), not the renderer's.
 - **Firefox / Iris Xe, Firefox / RTX 3060 Mobile:** pending (Task 33).
 
 ## 2. The one-shot load
