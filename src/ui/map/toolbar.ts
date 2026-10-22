@@ -2,8 +2,8 @@
  * The editor toolbar (SP2b spec §3.1): layer select; seed input with "Same seed" and "New seed"; profile
  * select (ready profiles) with the inline confirmation before a switch that clears modified parameters;
  * the biome-size slider (§6.4: a pointer drag is one gesture, a keyboard step one urgent edit); undo and
- * redo; the grid toggle; the cut-line button (§4.5); the preview status (§2.6). Every edit goes through the
- * session; sync() shows its draft after each change.
+ * redo; the grid toggle; the cut-line button (§4.5); the preview status (§2.6); "Open in 3D" (SP4a spec §8.2). Every
+ * edit goes through the session; sync() shows its draft after each change.
  */
 import { isProfileId, isProfileReady, PROFILE_IDS, type ProfileId } from '../../core/params/profiles';
 import type { SessionResult, WorldSession } from '../../engine/session';
@@ -48,6 +48,15 @@ export function biomeSizeView(scaleMul: number): BiomeSizeView {
     : { v: p.v, mark: '≈', tip: `Biome size ≈ ${p.v} of 10: climate.scaleMul is ${scaleMul}; moving the slider writes the table value` };
 }
 
+/**
+ * "Open in 3D" (SP4a spec §8.2; ruling P51): `/?at=<x>,<z><hash>` at the rounded pin, else the rounded view centre;
+ * `hash` carries its leading '#' and is kept unchanged. With `?at` the root skips the start screen.
+ */
+export function open3dHref(pin: readonly [number, number] | null, centre: readonly [number, number], hash: string): string {
+  const [x, z] = pin ?? centre;
+  return `/?at=${Math.round(x) + 0},${Math.round(z) + 0}${hash}`;
+}
+
 export interface ToolbarDeps {
   readonly session: WorldSession;
   readonly notices: Notices;
@@ -58,6 +67,8 @@ export interface ToolbarDeps {
   onGrid(on: boolean): void;
   /** The cut-line button: arms the map's two-click line tool, or cancels it while armed (§4.5). */
   onCut(): void;
+  /** "Open in 3D"'s URL, read at click time (`open3dHref` over the map's pin, view and hash). */
+  open3dHref(): string;
 }
 
 export interface Toolbar {
@@ -129,9 +140,10 @@ export function createToolbar(host: HTMLElement, deps: ToolbarDeps): Toolbar {
   };
   showCut(CUT_OFF);
   const status = el('span', 'map-status', 'last edit → preview …');
+  const open3d = button('Open in 3D', 'Open this world in 3D at the pin, else at the view centre');
   host.append(
     el('strong', 'map-title', 'world-imaginer-voxel · map'), layerSelect, group('seed', seedInput, sameSeed, newSeed),
-    group('profile', profileSelect), sizeGroup, group('', undoBtn, redoBtn), gridLabel, cutBtn, status,
+    group('profile', profileSelect), sizeGroup, group('', undoBtn, redoBtn), gridLabel, cutBtn, open3d, status,
   );
 
   const sync = () => {
@@ -199,6 +211,8 @@ export function createToolbar(host: HTMLElement, deps: ToolbarDeps): Toolbar {
   redoBtn.addEventListener('click', (e) => edit(e, () => session.redo()));
   gridBox.addEventListener('change', () => deps.onGrid(gridBox.checked));
   cutBtn.addEventListener('click', () => deps.onCut());
+  // The same tab (SP4a spec §8.2).
+  open3d.addEventListener('click', () => location.assign(deps.open3dHref()));
 
   sync();
   return {

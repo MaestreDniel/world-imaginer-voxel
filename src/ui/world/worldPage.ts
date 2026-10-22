@@ -22,6 +22,12 @@
  * (T cycles the time speed), `FrameState` (its `eyeSky` read from the page's attached store), the HUD (F3) and the help
  * (H, F1). Load errors (`LoadError`, `StoreFullError`, `WorkerFailed`, the watchdog) show the failure panel, with a link
  * to the next lower RD when rd > 4 (P49). `WorldPage.loadStats` holds the load's figures for the flight JSON (§9.5).
+ *
+ * After the reveal (spec §7.1, §7.5, §8.2, §8.5; rulings P49, P50): the Ctrl+W guard (`beforeunload`) is armed; every
+ * navigation the page starts (R, the RD setting, the slow-frame link, the context-loss Reload, "Open the map here")
+ * goes through one reloader, which disarms the guard and navigates at most once; at the edge of the loaded disc a
+ * notice offers R, which reloads around the camera (`hereUrl`) at any time; a slow first 300 frames suggest the next
+ * lower RD in a dismissible notice; `webglcontextlost` stops the frame loop and offers a Reload around the camera.
  */
 import { colKey } from '../../core/coords';
 import { MEDIUM } from '../../core/params/graphicsPresets';
@@ -29,11 +35,11 @@ import { OPENING_T, TIME_SPEEDS, advanceTime } from '../../daynight/dayNight';
 import { probeCapabilities } from '../../engine/capabilities';
 import { evaluateWorldCapabilities, type CapabilityReport } from '../../engine/capabilityRules';
 import { LoadError, createCoordinator, phaseName, progressFraction, worldJobsOf, type LoadProgress } from '../../engine/coordinator';
-import { RD_MIN, resolveRenderDistance } from '../../engine/renderDistance';
+import { resolveRenderDistance } from '../../engine/renderDistance';
 import { stageOffsets, type Stage } from '../../engine/rings';
 import { createUploadBudget } from '../../engine/uploadBudget';
 import { StoreFullError, WorkerFailed, createBrowserPool, poolSize, type WorkerPool } from '../../engine/workerPool';
-import { SPEED_DEFAULT, applyCameraRotation, look, stepFly, stepSpeed, type FlyBounds, type FlyState } from '../../player/fly';
+import { SPEED_DEFAULT, applyCameraRotation, atEdge, look, stepFly, stepSpeed, type FlyBounds, type FlyState } from '../../player/fly';
 import { attachInput } from '../../player/input';
 import { DEFAULT_KEYMAP, type Action } from '../../player/keymap';
 import { createFpsLimiter, type FpsLimiter } from '../../render/fpsLimiter';
@@ -52,6 +58,8 @@ import { decodeMapState, encodeMapState, openMapSession } from '../map/mapState'
 import { cryptoSeed } from '../seedBox';
 import { loadSettings, saveSettings, type WorldSettings } from '../settings';
 import { firstView } from './firstView';
+import { createFrameNotice, lowerRd } from './frameNotice';
+import { createReloader, hereUrl, installLeaveGuard, type Reloader } from './reload';
 import { Y_MAX, Y_MIN, type WorldQuery } from './query';
 
 /** The capture and test options (ruling P48). */
@@ -151,11 +159,6 @@ function motionBlockingAt(store: VoxelStore, x: number, z: number): number {
   return aux === null ? Number.POSITIVE_INFINITY : aux.motionBlocking[((bz & 15) << 4) | (bx & 15)]!;
 }
 
-/** The URL that reloads the world around the camera: `/?at=x,z&y=..&yaw=..&pitch=..#hash` (no rd: the setting applies). */
-function aroundUrl(f: FlyState, hashPart: string): string {
-  return `/?at=${Math.round(f.x)},${Math.round(f.z)}&y=${Math.round(f.y)}&yaw=${f.yaw.toFixed(1)}&pitch=${f.pitch.toFixed(1)}${hashPart}`;
-}
-
 const nextFrame = (): Promise<number> => new Promise((resolve) => requestAnimationFrame(resolve));
 
 /**
@@ -178,6 +181,115 @@ export function everyFrameUntil(request: (cb: () => void) => void, step: () => b
     };
     request(tick);
   });
+}
+
+/** The page's notices over the world (spec §7.5, §8.5; Review Focus 5). */
+export interface WorldNotices {
+  /** Shows or hides "Edge of the loaded world — press R to load the world around you" (spec §7.5). */
+  edge(show: boolean): void;
+  /**
+   * The dismissible "Frames are slow at RD <rd> — try RD <lower>" (spec §8.5): its link reloads through the reloader
+   * at `href()`, read when shown and again on the click (the camera may have moved).
+   */
+  slow(rd: number, lower: number, href: () => string): void;
+  /** "The graphics context was lost" with a Reload link to `href` through the reloader; shown once. */
+  contextLost(href: string): void;
+  dispose(): void;
+}
+
+/** A link whose click is prevented and reloads `href()` through the reloader instead (ruling P50). */
+function reloadLink(reloader: Reloader, id: string, text: string, href: () => string): HTMLAnchorElement {
+  const a = el('a', 'world-notice-link', text);
+  a.id = id;
+  a.href = href();
+  a.addEventListener('click', (e) => {
+    e.preventDefault();
+    reloader.reload(href());
+  });
+  return a;
+}
+
+/** Mounts the notices' container in `host`; each notice is built when first shown. */
+export function createWorldNotices(host: HTMLElement, reloader: Reloader): WorldNotices {
+  const box = el('div', 'world-notices');
+  box.id = 'world-notices';
+  const edge = el('div', 'world-notice', 'Edge of the loaded world — press R to load the world around you');
+  edge.id = 'world-edge-notice';
+  edge.hidden = true;
+  box.append(edge);
+  host.append(box);
+  let edgeShown = false;
+  let slow: HTMLElement | null = null;
+  let lost = false;
+  return {
+    edge(show) {
+      if (show === edgeShown) return;
+      edgeShown = show;
+      edge.hidden = !show;
+    },
+    slow(rd, lower, href) {
+      slow?.remove();
+      const panel = el('div', 'world-notice', `Frames are slow at RD ${rd} — try `);
+      panel.id = 'world-slow-notice';
+      const dismiss = el('button', 'world-notice-dismiss', 'Dismiss');
+      dismiss.id = 'world-slow-dismiss';
+      dismiss.type = 'button';
+      dismiss.title = 'Dismiss this notice';
+      dismiss.addEventListener('click', () => {
+        panel.remove();
+        if (slow === panel) slow = null;
+      });
+      panel.append(reloadLink(reloader, 'world-slow-link', `RD ${lower}`, href), ' ', dismiss);
+      slow = panel;
+      box.append(panel);
+    },
+    contextLost(href) {
+      if (lost) return;
+      lost = true;
+      const panel = el('div', 'world-notice world-notice-error', 'The graphics context was lost. ');
+      panel.id = 'world-context-lost';
+      panel.append(reloadLink(reloader, 'world-context-reload', 'Reload', () => href));
+      box.append(panel);
+    },
+    dispose() {
+      box.remove();
+    },
+  };
+}
+
+/**
+ * The page's `webglcontextlost` handler (Review Focus 5): through `WorldRenderer.onContextLost`, it stops the frame
+ * loop once and shows "The graphics context was lost" with a Reload link around the camera (`hereHref`, read at the
+ * loss). Without it the page would freeze on its last frame with no explanation.
+ */
+export function handleContextLoss(
+  wr: Pick<WorldRenderer, 'onContextLost'>,
+  o: { stop(): void; readonly notices: WorldNotices; hereHref(): string },
+): void {
+  let lost = false;
+  wr.onContextLost(() => {
+    if (lost) return;
+    lost = true;
+    o.stop();
+    o.notices.contextLost(o.hereHref());
+  });
+}
+
+/**
+ * The help's "Fullscreen" (spec §7.1): requests fullscreen, then, where Chromium's Keyboard Lock exists
+ * (`navigator.keyboard.lock()`), captures Ctrl+W so that it reaches the page; Firefox keeps the `beforeunload` prompt.
+ * A refusal is ignored.
+ */
+export async function enterFullscreen(
+  doc: { readonly documentElement: { requestFullscreen(): Promise<void> } },
+  nav: { readonly keyboard?: { lock?(): Promise<void> } },
+): Promise<void> {
+  try {
+    await doc.documentElement.requestFullscreen();
+    await nav.keyboard?.lock?.();
+  } catch {
+    // Fullscreen refused (no user gesture, an iframe) or the lock refused: the guard still asks before closing.
+  }
 }
 
 /**
@@ -228,10 +340,10 @@ export function mountWorldPage(root: HTMLElement, q: WorldQuery, hash: string, o
   });
   loading.progress(0, 'Generating');
 
-  const lowerRdHref = (): string | null =>
-    rd !== null && rd > RD_MIN
-      ? `/?rd=${Math.max(RD_MIN, rd - 2)}${centre === null ? '' : `&at=${centre.x},${centre.z}`}${hashPart}`
-      : null;
+  const lowerRdHref = (): string | null => {
+    const lower = rd === null ? null : lowerRd(rd);
+    return lower === null ? null : `/?rd=${lower}${centre === null ? '' : `&at=${centre.x},${centre.z}`}${hashPart}`;
+  };
 
   const details = (e: unknown): string => [
     e === null ? null : e instanceof Error ? (e.stack ?? `${e.name}: ${e.message}`) : String(e),
@@ -342,6 +454,8 @@ export function mountWorldPage(root: HTMLElement, q: WorldQuery, hash: string, o
       brightness: settings.brightness,
     });
     wr = world;
+    // A context lost before the reveal is a load failure; after it, the page's handler takes over (Review Focus 5).
+    world.onContextLost(() => fail('The graphics context was lost.', null));
     const sections = world.sections;
     // The load centre sets the first floating origin (spec §6.8), before anything is staged.
     if (world.origin.update(at.x, 0, at.z)) sections.setOrigin(world.origin.x, world.origin.y, world.origin.z);
@@ -438,6 +552,25 @@ export function mountWorldPage(root: HTMLElement, q: WorldQuery, hash: string, o
       longTasks = null;
     }
 
+    // Every navigation the page starts disarms the Ctrl+W guard first and happens once (spec §7.1; ruling P50).
+    const disarm = installLeaveGuard(window);
+    teardown.push(disarm);
+    const reloader = createReloader((url) => location.assign(url), disarm);
+    const here = (rdOf: number | null): string => hereUrl(fly, rdOf, hash);
+    const notices = createWorldNotices(host, reloader);
+    teardown.push(() => notices.dispose());
+    let stopped = false;
+    handleContextLoss(world, {
+      stop: () => {
+        stopped = true;
+        cancelAnimationFrame(raf);
+      },
+      notices,
+      // The query's rd stays (a lower-RD reload keeps its rd); without one the setting applies.
+      hereHref: () => here(q.rd),
+    });
+    const slowFrames = createFrameNotice((lower) => notices.slow(loadRd, lower, () => here(lower)), loadRd);
+
     const canvas = world.renderer.domElement;
     if (overlay) {
       void loading.fadeOut(FADE_MS);
@@ -494,7 +627,7 @@ export function mountWorldPage(root: HTMLElement, q: WorldQuery, hash: string, o
       settings = s;
       saveSettings(storage, s);
       // The render distance applies to a new load only: reload around the camera, without ?rd so the setting applies.
-      if (rdChanged) location.assign(aroundUrl(fly, hashPart));
+      if (rdChanged) reloader.reload(here(null));
     };
     const help: Help = mountHelp(host, {
       map: DEFAULT_KEYMAP,
@@ -509,8 +642,10 @@ export function mountWorldPage(root: HTMLElement, q: WorldQuery, hash: string, o
         patch: session.state.patch,
         view: { ...decoded.state.view, x: Math.round(fly.x), z: Math.round(fly.z) },
       })}`,
+      navigate: (href) => reloader.reload(href),
       onFullscreen: () => {
-        document.documentElement.requestFullscreen().catch(() => {});
+        // Keyboard Lock is Chromium's and not in the DOM typings.
+        void enterFullscreen(document, navigator as Navigator & { readonly keyboard?: { lock?(): Promise<void> } });
       },
       onClose: () => {},
     });
@@ -528,7 +663,9 @@ export function mountWorldPage(root: HTMLElement, q: WorldQuery, hash: string, o
             help.open();
           }
           break;
-        default: break; // movement and sprint are held; R (loadHere) reloads at the edge (spec §7.5)
+        // R reloads around the camera at any time (spec §7.5), keeping the query's rd.
+        case 'loadHere': reloader.reload(here(q.rd)); break;
+        default: break; // movement and sprint are held; Esc (releasePointer) is the browser's
       }
     };
     const input = attachInput(canvas, {
@@ -547,17 +684,20 @@ export function mountWorldPage(root: HTMLElement, q: WorldQuery, hash: string, o
     let n = 0;
     let firstMax = 0;
     const loop = (now: number): void => {
+      if (stopped) return;
       raf = requestAnimationFrame(loop);
       if (!limiter.tick(now)) return;
       try {
         const dtMs = Math.max(0, now - last);
         last = now;
         frames.push(dtMs);
+        slowFrames.push(dtMs);
         if (n < FIRST_FRAMES) {
           firstMax = Math.max(firstMax, dtMs);
           if (n + 1 === FIRST_FRAMES) stats.first120MaxMs = firstMax;
         }
         if (!help.isOpen) stepFly(fly, input.held, Math.min(dtMs / 1000, MAX_STEP_S), bounds);
+        notices.edge(atEdge(fly, bounds));
         t = advanceTime(t, dtMs, timeSpeed());
         placeCamera();
         world.frame(frameState());

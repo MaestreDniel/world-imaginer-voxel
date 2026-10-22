@@ -29,6 +29,13 @@ body { background: #0f1629; color: var(--text); font: 13px/1.4 system-ui, sans-s
 .world-hud { position: absolute; top: .5rem; left: .5rem; z-index: 2; padding: .35rem .6rem; border-radius: 4px; background: rgb(0 0 0 / .45); color: #f0f0f0; font: 12px/1.45 ui-monospace, monospace; font-variant-numeric: tabular-nums; pointer-events: none; white-space: pre; }
 .world-help { position: absolute; inset: 0; z-index: 3; display: grid; gap: 1rem; align-content: start; grid-template-columns: repeat(auto-fit, minmax(18rem, 1fr)); padding: 1.5rem; overflow: auto; background: rgb(15 22 41 / .92); }
 .world-hud[hidden], .world-help[hidden] { display: none; }
+/* The world's notices (SP4a spec §7.5, §8.5): the edge, the slow frames, the lost graphics context. */
+.world-notices { position: absolute; left: 50%; bottom: 1.2rem; z-index: 2; display: grid; gap: .4rem; justify-items: center; transform: translateX(-50%); max-width: calc(100vw - 2rem); }
+.world-notice { padding: .45rem .9rem; border-radius: 6px; background: rgb(10 16 32 / .7); color: #f4f7ff; text-align: center; }
+.world-notice[hidden] { display: none; }
+.world-notice-error { background: rgb(80 16 24 / .85); }
+.world-notice-link { color: #8ab4ff; }
+.world-notice-dismiss { margin-left: .4rem; padding: .1rem .5rem; border: 1px solid rgb(255 255 255 / .35); border-radius: 4px; background: transparent; color: inherit; font: inherit; cursor: pointer; }
 .world-help .help-head { grid-column: 1 / -1; display: flex; justify-content: space-between; align-items: center; }
 .world-help h3 { margin-bottom: .4rem; }
 .world-help h4 { margin: .5rem 0 .2rem; opacity: .8; }

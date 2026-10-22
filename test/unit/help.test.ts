@@ -109,6 +109,26 @@ describe('mountHelp (SP4a spec §7.4, D31)', () => {
     expect(o.onClose).toHaveBeenCalledTimes(1);
   });
 
+  test('with navigate (ruling P50), "Open the map here" is prevented and its fresh URL passed to navigate', () => {
+    const navigate = vi.fn<(href: string) => void>();
+    const o = {
+      map: DEFAULT_KEYMAP, settings: SETTINGS_DEFAULTS, onSettings: vi.fn(), report: REPORT,
+      evaluation: evaluateWorldCapabilities(REPORT), mapHereHref: vi.fn(() => '/?map#v1.abc'), navigate, onFullscreen: vi.fn(), onClose: vi.fn(),
+    };
+    mountHelp(dom.body as unknown as HTMLElement, o).open();
+    const click = new Event('click', { cancelable: true });
+    dom.el('help-map-here').dispatchEvent(click);
+    expect(click.defaultPrevented).toBe(true);
+    expect(navigate).toHaveBeenCalledWith('/?map#v1.abc');
+  });
+
+  test('without navigate, "Open the map here" navigates by itself', () => {
+    mount().help.open();
+    const click = new Event('click', { cancelable: true });
+    dom.el('help-map-here').dispatchEvent(click);
+    expect(click.defaultPrevented).toBe(false);
+  });
+
   test('"Fullscreen" calls onFullscreen', () => {
     const { o } = mount();
     dom.el('help-fullscreen').click();

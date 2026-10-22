@@ -23,6 +23,11 @@ export interface HelpOptions {
   readonly evaluation: Evaluation;
   /** The `?map` URL centred on the camera, read each time the overlay opens. */
   mapHereHref: () => string;
+  /**
+   * When given, a click on "Open the map here" is prevented and its URL passed here: the page's reloader, which disarms
+   * the Ctrl+W guard first (SP4a ruling P50). Without it the link navigates by itself.
+   */
+  navigate?(href: string): void;
   onFullscreen(): void;
   /** Called once each time the overlay closes. */
   onClose(): void;
@@ -155,6 +160,11 @@ export function mountHelp(host: HTMLElement, o: HelpOptions): Help {
   // Links.
   const mapHere = el('a', 'help-link', 'Open the map here');
   mapHere.id = 'help-map-here';
+  mapHere.addEventListener('click', (e) => {
+    if (o.navigate === undefined) return;
+    e.preventDefault();
+    o.navigate(o.mapHereHref());
+  });
   const fullscreen = el('button', 'help-link', 'Fullscreen');
   fullscreen.id = 'help-fullscreen';
   fullscreen.type = 'button';

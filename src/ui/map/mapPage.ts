@@ -44,7 +44,7 @@ import { browserStorage, createLayout } from './layout';
 import { createMapCanvas } from './mapView';
 import { applyMapHash, decodeMapState, encodeMapState, openMapSession, type MapView } from './mapState';
 import { createPreviewDriver, type DriverClock, type DriverDraft, type PreviewDriver } from './previewDriver';
-import { createToolbar } from './toolbar';
+import { createToolbar, open3dHref } from './toolbar';
 
 /** A click this close to the cut line (screen px) shows its profile instead of pinning the point. */
 const LINE_HIT_PX = 6;
@@ -71,9 +71,13 @@ export async function mountMapPage(root: HTMLElement): Promise<void> {
   // A draft whose URL is over the cap is not written; the notice stays until one fits (SP3d spec §1.12).
   const url = createUrlWriter((u) => history.replaceState(null, '', u), undefined, undefined, oversizeNotice(notices));
   addEventListener('pagehide', () => url.flush());
-  const writeUrl = () => {
+  /** The map's hash (without '#'): the session's draft and the view, as the URL and "Open in 3D" carry it. */
+  const mapHash = (): string => {
     const s = session.state;
-    url.set(`?map#${encodeMapState({ v: 1, seed: s.seedText, profile: s.profile, patch: s.patch, view })}`);
+    return encodeMapState({ v: 1, seed: s.seedText, profile: s.profile, patch: s.patch, view });
+  };
+  const writeUrl = () => {
+    url.set(`?map#${mapHash()}`);
   };
 
   // World tab (§3.3): session status, spawn and hover readout.
@@ -173,6 +177,7 @@ export async function mountMapPage(root: HTMLElement): Promise<void> {
     onLayer: (layer) => { setView({ ...view, layer }); writeUrl(); },
     onGrid: (on) => canvas.setGrid(on),
     onCut: () => setCut(cut.mode === 'off' ? CUT_ARMED : CUT_OFF),
+    open3dHref: () => open3dHref(pin, [view.x, view.z], `#${mapHash()}`),
   });
 
   // The hover readout shows points of the canvas source's pool epoch only (§2.5).
