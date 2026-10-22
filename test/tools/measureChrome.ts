@@ -9,7 +9,8 @@
  * 1. it refuses without DISPLAY or WAYLAND_DISPLAY: headful only, since headless rAF is not tied to the display;
  * 2. it refuses when the 1-minute load average is above MEASURE_LOAD_MAX, printing `uptime` (a quiet machine);
  * 3. it reads the PRIME profile (`prime-select query`, never with an argument) and passes the GPU choice to Chrome as
- *    environment (`launchEnv`, ruling P6): nothing spawns prime-run;
+ *    environment (`launchEnv`, ruling P6): nothing spawns prime-run; the RTX also gets ANGLE's Vulkan backend
+ *    (`chromeArgs`, ruling P60);
  * 4. it builds (unless --skip-build), starts its own `vite preview` on a free port (never 5183) and its own headful
  *    Chrome, fullscreen at 1920 × 1080 @ 1, with a fresh temporary profile and no SwiftShader flag;
  * 5. it probes the WebGL renderer and refuses unless it names the expected GPU (`gpuMatches`), then refuses unless the
@@ -134,11 +135,19 @@ export function launchEnv(gpu: 'iris' | 'rtx', primeProfile: string | null): Rec
 }
 
 /**
+ * ANGLE's Vulkan backend for the RTX (ruling P60). With the offload variables, ANGLE's default OpenGL backend on X11
+ * fails `eglInitialize` ("Invalid visual ID requested") and Chrome has no WebGL2; ANGLE Vulkan renders on the RTX with
+ * hardware compositing. `--use-angle=vulkan` alone gives no context: it needs the VulkanFromANGLE feature too. Chrome
+ * keeps only the last `--enable-features`, so this list holds the only one.
+ */
+const RTX_ANGLE_VULKAN = ['--use-angle=vulkan', '--enable-features=Vulkan,VulkanFromANGLE'] as const;
+
+/**
  * The headful window's flags, added after startChrome's own (ruling P4; the `--user-data-dir` repeat is harmless and
- * keeps this list complete on its own). No flag depends on the GPU: the environment carries that choice (ruling P6).
+ * keeps this list complete on its own). The environment carries the GPU choice (ruling P6); the RTX alone also gets
+ * ANGLE's Vulkan backend (ruling P60), while the Iris Xe keeps ANGLE's default OpenGL backend.
  */
 export function chromeArgs(a: MeasureArgs, profileDir: string): string[] {
-  void a;
   return [
     `--user-data-dir=${profileDir}`,
     '--window-position=0,0',
@@ -148,6 +157,7 @@ export function chromeArgs(a: MeasureArgs, profileDir: string): string[] {
     '--ignore-gpu-blocklist',
     '--disable-backgrounding-occluded-windows',
     '--password-store=basic',
+    ...(a.gpu === 'rtx' ? RTX_ANGLE_VULKAN : []),
   ];
 }
 

@@ -101,6 +101,29 @@ describe('measureChrome: the headful window', () => {
     }
   });
 
+  test('chromeArgs for --gpu rtx adds --use-angle=vulkan and --enable-features=Vulkan,VulkanFromANGLE', () => {
+    for (const a of [args({ gpu: 'rtx' }), args({ route: 'flight', gpu: 'rtx', workers: 4 })]) {
+      const c = chromeArgs(a, '/tmp/wi10-x');
+      expect(c).toContain('--use-angle=vulkan');
+      expect(c).toContain('--enable-features=Vulkan,VulkanFromANGLE');
+    }
+  });
+
+  test('chromeArgs for --gpu iris has no --use-angle and no --enable-features', () => {
+    for (const a of [args({}), args({ route: 'flight', workers: 4 })]) {
+      const c = chromeArgs(a, '/tmp/wi10-x');
+      expect(c.filter((f) => f.startsWith('--use-angle'))).toEqual([]);
+      expect(c.filter((f) => f.startsWith('--enable-features'))).toEqual([]);
+    }
+  });
+
+  test('at most one --enable-features flag', () => {
+    // Chrome keeps only the last --enable-features, so a second one would silently drop the first one's features.
+    for (const gpu of ['iris', 'rtx'] as const) {
+      expect(chromeArgs(args({ gpu }), '/tmp/wi10-x').filter((f) => f.startsWith('--enable-features')).length).toBeLessThanOrEqual(1);
+    }
+  });
+
   test('viewportProblem: null only for exactly 1920 × 1080 at dpr 1 (ruling P7)', () => {
     expect(viewportProblem({ innerWidth: 1920, innerHeight: 1080, devicePixelRatio: 1 })).toBeNull();
     expect(viewportProblem({ innerWidth: 1920, innerHeight: 987, devicePixelRatio: 1 })).toMatch(/1920.*987/);
