@@ -17,6 +17,15 @@ export const TERRAIN_P50_MAX_MS = 4;
 export const SLICE_V128_P50_MAX_MS = 300;
 export const SLICE_PART_P50_MAX_MS = 250;
 export const SESSION_COMMIT_P50_MAX_MS = 4;
+/**
+ * SP4a §9.3 (master §7's L and Mesh rows): one column's light job (`light.column`: the region copy, the BFS and the
+ * 24 output sections) and one non-trivial section's padded copy and mesh (`mesh.section`), p50 and p99 in ms (p99 as
+ * the upper bound of p95, the `column.sample` precedent).
+ */
+export const LIGHT_P50_MAX_MS = 4;
+export const LIGHT_P99_MAX_MS = 8;
+export const MESH_P50_MAX_MS = 1.0;
+export const MESH_P99_MAX_MS = 2.5;
 
 /**
  * `terrain.islands`' run (SP3e §7): 256 timed iterations after exactly one warm-up call, each call on the next of its
@@ -28,12 +37,21 @@ export const ISLANDS_RUN = Object.freeze({ iterations: 256, time: 0, warmupItera
 export const ISLANDS_COLUMNS = 512;
 
 /**
+ * The SP4a rows' runs (§9.3), on `ISLANDS_RUN`'s pattern: exactly one warm-up call, then one timed call per lit column
+ * (`light.column`, 256) or per non-trivial section (`mesh.section`, 1024). Each row walks its items cyclically, so the
+ * probe and the warm-up take the first two and the last two timed calls take them again: every item is timed once.
+ */
+export const LIGHT_RUN = Object.freeze({ iterations: 256, time: 0, warmupIterations: 1, warmupTime: 0 });
+export const MESH_RUN = Object.freeze({ iterations: 1024, time: 0, warmupIterations: 1, warmupTime: 0 });
+
+/**
  * Every gated bench row, in measurement order: `noise.bench.ts` measures exactly these, and `test/baselines.json`
  * records every one (a unit test), so a row added without `npm run bench:record` cannot stay ungated.
  * SP3a §7 appends `store.alloc` and `terrain.provisional`; SP3b §10 appends `density.corner` and replaces
  * `terrain.provisional` by `terrain.real`; SP3c §7 appends `surface.column` (the surface pass alone); SP3d §9 appends
  * the slice rows `slice.vertical128`, `slice.horizontal128`, `slice.partWorst` and the session row `session.commitMaxTree`;
- * SP3e §7 appends `terrain.islands` (fillColumnT on floating_islands at cluster columns).
+ * SP3e §7 appends `terrain.islands` (fillColumnT on floating_islands at cluster columns); SP4a §9.3 appends
+ * `light.column` (one column's light job) and `mesh.section` (one non-trivial section's padded copy and mesh).
  */
 export const BENCH_ROWS = [
   'calibration.fmix32', 'lattice3.slice', 'perm512.slice', 'lattice3.random', 'perm512.random', 'normal.z2.climateC',
@@ -41,6 +59,7 @@ export const BENCH_ROWS = [
   'map.tile.b64.biome', 'map.tile.b16.relief', 'worker.configure', 'map.tile.b256.biome', 'map.tile.b256.relief',
   'store.alloc', 'density.corner', 'terrain.real', 'surface.column',
   'slice.vertical128', 'slice.horizontal128', 'slice.partWorst', 'session.commitMaxTree', 'terrain.islands',
+  'light.column', 'mesh.section',
 ] as const;
 
 export interface BenchKernel {
@@ -112,10 +131,16 @@ export interface AbsoluteLatencies {
   readonly sessionCommitP50: number;
   /** SP3e §7: `terrain.islands` p50 (floating_islands cluster columns), gated at TERRAIN_P50_MAX_MS. */
   readonly islandsP50: number;
+  /** SP4a §9.3: `light.column` and `mesh.section` p50 and p99 (p99 bounds p95 from above). */
+  readonly lightP50: number;
+  readonly lightP99: number;
+  readonly meshP50: number;
+  readonly meshP99: number;
 }
 
 /**
- * The absolute gates (P1 column budget, SP2a; the real T budget, SP3b; the slice and session commit budgets, SP3d): checked by `npm run bench` and before
+ * The absolute gates (P1 column budget, SP2a; the real T budget, SP3b; the slice and session commit budgets, SP3d; the
+ * light and mesh budgets, SP4a): checked by `npm run bench` and before
  * `npm run bench:record` writes, so a record refuses to write when one fails.
  */
 export function absoluteGateFailures(l: AbsoluteLatencies): string[] {
@@ -127,5 +152,9 @@ export function absoluteGateFailures(l: AbsoluteLatencies): string[] {
   if (l.slicePartP50 > SLICE_PART_P50_MAX_MS) out.push(`slice.partWorst p50 ${l.slicePartP50.toFixed(3)} ms > ${SLICE_PART_P50_MAX_MS} ms`);
   if (l.islandsP50 > TERRAIN_P50_MAX_MS) out.push(`terrain.islands p50 ${l.islandsP50.toFixed(3)} ms > ${TERRAIN_P50_MAX_MS} ms`);
   if (l.sessionCommitP50 > SESSION_COMMIT_P50_MAX_MS) out.push(`session.commitMaxTree p50 ${l.sessionCommitP50.toFixed(3)} ms > ${SESSION_COMMIT_P50_MAX_MS} ms`);
+  if (l.lightP50 > LIGHT_P50_MAX_MS) out.push(`light.column p50 ${l.lightP50.toFixed(3)} ms > ${LIGHT_P50_MAX_MS} ms`);
+  if (l.lightP99 > LIGHT_P99_MAX_MS) out.push(`light.column p99 ${l.lightP99.toFixed(3)} ms > ${LIGHT_P99_MAX_MS} ms`);
+  if (l.meshP50 > MESH_P50_MAX_MS) out.push(`mesh.section p50 ${l.meshP50.toFixed(3)} ms > ${MESH_P50_MAX_MS} ms`);
+  if (l.meshP99 > MESH_P99_MAX_MS) out.push(`mesh.section p99 ${l.meshP99.toFixed(3)} ms > ${MESH_P99_MAX_MS} ms`);
   return out;
 }

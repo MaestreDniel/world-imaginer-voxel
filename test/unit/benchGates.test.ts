@@ -2,7 +2,8 @@ import { readFileSync } from 'node:fs';
 import { Bench } from 'tinybench';
 import { expect, test } from 'vitest';
 import {
-  absoluteGateFailures, BENCH_ROWS, COLUMN_P50_MAX_MS, COLUMN_P95_MAX_MS, gateFailures, ISLANDS_COLUMNS, ISLANDS_RUN, KILL_RATIO_MAX, P1_MAX_REGRESSION, parseBenchExempt,
+  absoluteGateFailures, BENCH_ROWS, COLUMN_P50_MAX_MS, COLUMN_P95_MAX_MS, gateFailures, ISLANDS_COLUMNS, ISLANDS_RUN, KILL_RATIO_MAX,
+  LIGHT_P50_MAX_MS, LIGHT_P99_MAX_MS, LIGHT_RUN, MESH_P50_MAX_MS, MESH_P99_MAX_MS, MESH_RUN, P1_MAX_REGRESSION, parseBenchExempt,
   SESSION_COMMIT_P50_MAX_MS, SLICE_PART_P50_MAX_MS, SLICE_V128_P50_MAX_MS, TERRAIN_P50_MAX_MS, type Baselines,
 } from '../bench/gates';
 
@@ -13,10 +14,15 @@ test('constants', () => {
   expect([COLUMN_P50_MAX_MS, COLUMN_P95_MAX_MS, TERRAIN_P50_MAX_MS]).toEqual([0.7, 1.2, 4]);
   // SP3d §9 (master §7): the vertical 128² slice, a slice part at PART_BUDGET, a slider commit with two capped trees.
   expect([SLICE_V128_P50_MAX_MS, SLICE_PART_P50_MAX_MS, SESSION_COMMIT_P50_MAX_MS]).toEqual([300, 250, 4]);
+  // SP4a §9.3 (master §7's L and Mesh rows): one light job per column, one non-trivial section's copy and mesh.
+  expect([LIGHT_P50_MAX_MS, LIGHT_P99_MAX_MS, MESH_P50_MAX_MS, MESH_P99_MAX_MS]).toEqual([4, 8, 1.0, 2.5]);
 });
 
 /** Latencies within every absolute gate, at their bounds. */
-const AT_GATES = { columnP50: 0.7, columnP95: 1.2, terrainP50: 4, sliceV128P50: 300, slicePartP50: 250, sessionCommitP50: 4, islandsP50: 4 };
+const AT_GATES = {
+  columnP50: 0.7, columnP95: 1.2, terrainP50: 4, sliceV128P50: 300, slicePartP50: 250, sessionCommitP50: 4, islandsP50: 4,
+  lightP50: 4, lightP99: 8, meshP50: 1.0, meshP99: 2.5,
+};
 
 test('absolute gates: column p50 / p95 (P1, SP2a) and the real T column p50 (SP3b §10), inclusive', () => {
   expect(absoluteGateFailures(AT_GATES)).toEqual([]);
@@ -48,6 +54,25 @@ test('absolute gate (SP3e §7): terrain.islands p50 ≤ TERRAIN_P50_MAX_MS (4 ms
     'slice.partWorst p50 251.000 ms > 250 ms',
     'terrain.islands p50 4.200 ms > 4 ms',
     'session.commitMaxTree p50 4.010 ms > 4 ms',
+  ]);
+});
+
+test('absolute gates (SP4a §9.3): light.column p50 ≤ 4 ms, p99 ≤ 8 ms; mesh.section p50 ≤ 1.0 ms, p99 ≤ 2.5 ms, inclusive, after the earlier rows', () => {
+  expect(absoluteGateFailures({ ...AT_GATES, lightP50: 1.6, lightP99: 3.1, meshP50: 0.2, meshP99: 0.9 })).toEqual([]);
+  expect(absoluteGateFailures({ ...AT_GATES, lightP50: 4.01, lightP99: 8.01, meshP50: 1.01, meshP99: 2.51 })).toEqual([
+    'light.column p50 4.010 ms > 4 ms',
+    'light.column p99 8.010 ms > 8 ms',
+    'mesh.section p50 1.010 ms > 1 ms',
+    'mesh.section p99 2.510 ms > 2.5 ms',
+  ]);
+  // Each bound has its own line: a p99 over its gate fails with the p50 under its own.
+  expect(absoluteGateFailures({ ...AT_GATES, lightP50: 2, lightP99: 9 })).toEqual(['light.column p99 9.000 ms > 8 ms']);
+  expect(absoluteGateFailures({ ...AT_GATES, meshP50: 1.2, meshP99: 2 })).toEqual(['mesh.section p50 1.200 ms > 1 ms']);
+  // They follow the earlier rows' lines.
+  expect(absoluteGateFailures({ ...AT_GATES, terrainP50: 4.01, sessionCommitP50: 4.01, meshP99: 3 })).toEqual([
+    'terrain.real p50 4.010 ms > 4 ms',
+    'session.commitMaxTree p50 4.010 ms > 4 ms',
+    'mesh.section p99 3.000 ms > 2.5 ms',
   ]);
 });
 
@@ -98,13 +123,14 @@ test('parseBenchExempt: a comma-separated list of BENCH_ROWS names, empty when u
   expect(parseBenchExempt([...BENCH_ROWS].reverse().join(','))).toEqual([...BENCH_ROWS].reverse());
 });
 
-test('the bench rows: SP1 to SP2b, the SP3a store row, the SP3b density corner and real T rows, SP3c surface.column, SP3d\'s slice and session rows, then SP3e\'s terrain.islands', () => {
+test('the bench rows: SP1 to SP2b, the SP3a store row, the SP3b density corner and real T rows, SP3c surface.column, SP3d\'s slice and session rows, SP3e\'s terrain.islands, then SP4a\'s light.column and mesh.section', () => {
   expect(BENCH_ROWS).toEqual([
     'calibration.fmix32', 'lattice3.slice', 'perm512.slice', 'lattice3.random', 'perm512.random', 'normal.z2.climateC',
     'normal.z3.density3d', 'spline.offset', 'spline.mix3', 'detErf', 'stageHashes.genKey', 'column.point', 'column.sample',
     'map.tile.b64.biome', 'map.tile.b16.relief', 'worker.configure', 'map.tile.b256.biome', 'map.tile.b256.relief',
     'store.alloc', 'density.corner', 'terrain.real', 'surface.column',
     'slice.vertical128', 'slice.horizontal128', 'slice.partWorst', 'session.commitMaxTree', 'terrain.islands',
+    'light.column', 'mesh.section',
   ]);
   expect(BENCH_ROWS).not.toContain('terrain.provisional');
   expect(new Set(BENCH_ROWS).size).toBe(BENCH_ROWS.length);
@@ -144,4 +170,13 @@ test('terrain.islands run options (SP3e §7): exactly one warm-up call, so its 2
   // Without warmupTime, tinybench warms up for 250 ms: far more than one call (about 310 at 0.8 ms on a quiet machine,
   // which took the row's index past its 512 columns).
   expect(await benchCalls({ iterations: 256, time: 0, warmupIterations: 1 })).toBeGreaterThan(258 + 50);
+}, 30_000);
+
+test('light.column and mesh.section run options (SP4a §9.3): one probe, one warm-up and 256 or 1024 timed calls', async () => {
+  expect(LIGHT_RUN).toEqual({ iterations: 256, time: 0, warmupIterations: 1, warmupTime: 0 });
+  expect(MESH_RUN).toEqual({ iterations: 1024, time: 0, warmupIterations: 1, warmupTime: 0 });
+  // The row walks its 256 columns (1024 sections) cyclically: the probe and the warm-up take the first two, which the
+  // last two timed calls then take again, so each is timed exactly once.
+  expect(await benchCalls(LIGHT_RUN)).toBe(1 + 1 + 256);
+  expect(await benchCalls(MESH_RUN)).toBe(1 + 1 + 1024);
 }, 30_000);

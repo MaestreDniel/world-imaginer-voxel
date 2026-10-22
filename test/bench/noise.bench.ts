@@ -25,6 +25,15 @@ import { paintTile } from '../../src/gen/map/tile';
 import { fillColumnT } from '../../src/metrics/region';
 import { createStore } from '../../src/world/store/store';
 import { createTaskHandler } from '../../src/workers/taskHandler';
+import { fillColumnD, fillColumnL } from '../../src/workers/worldJobs';
+import { MEDIUM } from '../../src/core/params/graphicsPresets';
+import { centreSection, createLightScratch, lightRegion } from '../../src/light/initial';
+import { createMeshScratch, isTrivial } from '../../src/mesh/column';
+import { connectivity15 } from '../../src/mesh/connectivity';
+import { fluidDepths, meshFluid } from '../../src/mesh/fluid';
+import { meshSolid, type MeshOptions } from '../../src/mesh/greedy';
+import type { NeighborhoodReader } from '../../src/world/store/api';
+import { copyLightRegion, copyPaddedSection } from '../../src/world/store/padded';
 import { PART_BUDGET, REQUEST_BUDGET } from '../../src/core/constants';
 import type { Params } from '../../src/core/params/schema';
 import { sliceCostOf } from '../../src/gen/inspect/fieldSlice';
@@ -33,7 +42,9 @@ import { planFieldSlice, type FieldSliceMsg, type FieldSliceSpec } from '../../s
 import { DEFAULT_MAP_STATE, openMapSession, type MapState } from '../../src/ui/map/mapState';
 import { capDensityTree, capSurfaceRules } from '../harness/capTrees';
 import { PART_WORST_LEAVES, partWorstParams } from '../harness/sliceTrees';
-import { absoluteGateFailures, BENCH_ROWS, gateFailures, ISLANDS_COLUMNS, ISLANDS_RUN, parseBenchExempt, type Baselines, type BenchKernel } from './gates';
+import {
+  absoluteGateFailures, BENCH_ROWS, gateFailures, ISLANDS_COLUMNS, ISLANDS_RUN, LIGHT_RUN, MESH_RUN, parseBenchExempt, type Baselines, type BenchKernel,
+} from './gates';
 import { buildPerm, perm3 } from './perm512';
 
 const FMIX = fmix32;
@@ -74,13 +85,13 @@ function poolOfOne(params: Params, spec: FieldSliceSpec): readonly (readonly [nu
   return plan.ranges;
 }
 
-test('SP1, SP2a, SP2b, SP3a, SP3b, SP3c, SP3d and SP3e kernels', async ({ bench }) => {
+test('SP1, SP2a, SP2b, SP3a, SP3b, SP3c, SP3d, SP3e and SP4a kernels', async ({ bench }) => {
   // SP3c §7: BENCH_EXEMPT names rows whose ratio gate is skipped (an unknown name fails here, before measuring);
   // bench:record never reads it.
   const exempt = process.env.BENCH_RECORD === '1' ? [] : parseBenchExempt(process.env.BENCH_EXEMPT);
   const ns: Record<string, number> = {};
   /** A row's p50 per evaluation; `run`: a fixed iteration count (`time: 0`, one warm-up iteration) or explicit options. */
-  const measure = async (name: string, evals: number, fn: () => void, run?: number | typeof ISLANDS_RUN) => {
+  const measure = async (name: string, evals: number, fn: () => void, run?: number | typeof ISLANDS_RUN | typeof LIGHT_RUN | typeof MESH_RUN) => {
     const r = await bench(name, fn).run(run === undefined ? undefined : typeof run === 'number' ? { iterations: run, time: 0, warmupIterations: 1 } : { ...run });
     ns[name] = (r.latency.p50 * 1e6) / evals;
     return r;
@@ -244,6 +255,66 @@ test('SP1, SP2a, SP2b, SP3a, SP3b, SP3c, SP3d and SP3e kernels', async ({ bench 
   // call and the 256 timed ones: 258 of the 512 columns.
   expect(ic, 'terrain.islands: one probe, one warm-up and 256 timed calls, each on its own precomputed column').toBe(1 + ISLANDS_RUN.warmupIterations + ISLANDS_RUN.iterations);
 
+  // SP4a §9.3: the region R of the light and mesh rows, 18 × 18 columns with its corner at terrain.real's first
+  // candidate (tc = 1), generated outside the timing on one shared store: T on R grown by one ring, D on R. Its 16 × 16
+  // interior has its 3 × 3 at Decorated, so each of those 256 columns can run the light job.
+  const worldGen = createGenContext(seedFromInput('42'), DEFAULTS);
+  const worldStore = createStore({ shared: true });
+  const rx0 = 7919 % 60000 - 30000;
+  const rz0 = 104729 % 60000 - 30000;
+  for (let z = rz0 - 1; z < rz0 + 19; z++) for (let x = rx0 - 1; x < rx0 + 19; x++) fillColumnT(worldStore, worldGen, x, z, never);
+  for (let z = rz0; z < rz0 + 18; z++) {
+    for (let x = rx0; x < rx0 + 18; x++) if (!fillColumnD(worldStore, worldGen, x, z, never)) throw new Error(`D of (${x}, ${z}) stopped`);
+  }
+  const litCols: (readonly [number, number])[] = [];
+  for (let z = rz0 + 1; z < rz0 + 17; z++) for (let x = rx0 + 1; x < rx0 + 17; x++) litCols.push([x, z]);
+  // light.column: spec §4.2's job without the store's commit — the neighbourhood, the region copy (`copyLightRegion`),
+  // the sky fall, seeds and BFS (`lightRegion`) and the 24 centre sections written to the output arrays — on the next of
+  // the 256 interior columns (LIGHT_RUN: cyclic, each column timed once). It writes nothing to the store, so the probe
+  // and warm-up columns can run again.
+  const lightScratch = createLightScratch();
+  const lightOut = new Uint8Array(24 * 4096);
+  let lc = 0;
+  const lightRun = await measure('light.column', 1, () => {
+    const [lx, lz] = litCols[lc++ % litCols.length]!;
+    copyLightRegion(worldStore.neighborhood(lx, lz), lightScratch.region);
+    lightRegion(lightScratch);
+    for (let sy = 0; sy < 24; sy++) lightOut.set(centreSection(lightScratch, sy), sy * 4096);
+    sink += lightOut[24 * 4096 - 1]!;
+  }, LIGHT_RUN);
+  expect(lc, 'light.column: one probe, one warm-up and 256 timed calls, each column timed once').toBe(1 + LIGHT_RUN.warmupIterations + LIGHT_RUN.iterations);
+  // The 256 columns lit to L for real (fillColumnL commits them Published), then the non-trivial sections (`isTrivial`)
+  // of the 14 × 14 columns whose 3 × 3 is Published, in (cz, cx, sy) order; 1024 of them evenly spread over the list.
+  for (const [x, z] of litCols) if (fillColumnL(worldStore, x, z, lightScratch, never) === null) throw new Error(`L of (${x}, ${z}) stopped`);
+  const nonTrivial: { readonly nb: NeighborhoodReader; readonly sy: number }[] = [];
+  for (let z = rz0 + 2; z < rz0 + 16; z++) {
+    for (let x = rx0 + 2; x < rx0 + 16; x++) {
+      const nb = worldStore.neighborhood(x, z);
+      for (let sy = 0; sy < 24; sy++) if (isTrivial(nb, sy) === 0) nonTrivial.push({ nb, sy });
+    }
+  }
+  expect(nonTrivial.length, 'mesh.section: the region has at least 1024 non-trivial sections').toBeGreaterThanOrEqual(MESH_RUN.iterations);
+  const meshSections = Array.from({ length: MESH_RUN.iterations }, (_, i) => nonTrivial[Math.floor((i * nonTrivial.length) / MESH_RUN.iterations)]!);
+  // mesh.section: one non-trivial section as the mesh job runs it (`meshColumnPayload`'s per-section work, without the
+  // column buffers' append): the padded copy, the solid passes, the water depths and still water, and the
+  // connectivity, with the Medium preset's AO and smooth light (the page's jobs); cyclic, each section timed once.
+  const meshScratch = createMeshScratch();
+  const meshOptions: MeshOptions = { ao: MEDIUM.ao, smoothLight: MEDIUM.smoothLight };
+  let mc = 0;
+  let quads = 0;
+  const meshRun = await measure('mesh.section', 1, () => {
+    const { nb, sy } = meshSections[mc++ % meshSections.length]!;
+    copyPaddedSection(nb, sy, meshScratch.padded);
+    meshScratch.builder.reset();
+    meshSolid(meshScratch.padded, meshOptions, meshScratch.builder);
+    fluidDepths(nb, sy, meshScratch.depth);
+    meshFluid(meshScratch.padded, meshScratch.depth, meshScratch.builder);
+    sink += connectivity15(meshScratch.padded);
+    for (let pass = 0 as 0 | 1 | 2; pass <= 2; pass++) quads += meshScratch.builder.view(pass).indices / 6;
+  }, MESH_RUN);
+  expect(mc, 'mesh.section: one probe, one warm-up and 1024 timed calls, each section timed once').toBe(1 + MESH_RUN.warmupIterations + MESH_RUN.iterations);
+  expect(quads, 'mesh.section meshes quads').toBeGreaterThan(0);
+
   let solidVoxels = 0;
   for (let i = 256; i < 98304; i++) solidVoxels += sCol.solid[i]!;
   expect(evaluated, 'surface.column evaluates part of the column (the fast path takes the rest)').toBeGreaterThan(0);
@@ -268,11 +339,14 @@ test('SP1, SP2a, SP2b, SP3a, SP3b, SP3c, SP3d and SP3e kernels', async ({ bench 
   console.log(`slice.partWorst ${ms(wRun)} (${PART_WORST_LEAVES} leaves, one 32-sample column of ${wCost} work units)`);
   console.log(`terrain.islands ${ms(islandsRun)} (${islandCols.length} cluster columns accepted of ${islandTried} candidates: ${((100 * islandCols.length) / islandTried).toFixed(1)} %; ${ic} columns used)`);
   console.log(`session.commitMaxTree ${ms(commitRun)} (${commits} commits; trees of ${canonicalJSON(cappedDefs).length} and ${canonicalJSON(session.state.params.surface.rules).length} characters)`);
+  console.log(`light.column ${ms(lightRun)} (${litCols.length} interior columns of the 18 × 18 region at (${rx0}, ${rz0}); ${lc} calls)`);
+  console.log(`mesh.section ${ms(meshRun)} (${meshSections.length} of the ${nonTrivial.length} non-trivial sections of its 14 × 14 inner columns; ${mc} calls, ${quads} quads)`);
   // Before the record: bench:record refuses to write when an absolute gate fails.
   expect(absoluteGateFailures({
     columnP50: columnRun.latency.p50, columnP95, terrainP50: terrainRun.latency.p50,
     sliceV128P50: vRun.latency.p50, slicePartP50: wRun.latency.p50, sessionCommitP50: commitRun.latency.p50,
     islandsP50: islandsRun.latency.p50,
+    lightP50: lightRun.latency.p50, lightP99: lightRun.latency.p99, meshP50: meshRun.latency.p50, meshP99: meshRun.latency.p99,
   }), 'absolute gates').toEqual([]);
   expect(Number.isFinite(sink)).toBe(true);
   if (process.env.BENCH_RECORD === '1') {

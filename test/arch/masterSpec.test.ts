@@ -40,6 +40,8 @@
  * threshold `ISLAND_RUN_MIN_BOTTOM`, the islands tap's gate and corners read from `FLOATING_DENSITY_TREE`); SP12 receives
  * SP3e's §12 list with Z2's islands part at its measured value (the committed after set's `Z2.json`), and the continental
  * profile stays with SP12.
+ * SP4a (its spec §9.3, §12): §7's "Measured in SP4a" line names the `light.column` and `mesh.section` bench rows, which
+ * `BENCH_ROWS` measures, with their absolute gates (`LIGHT_P50_MAX_MS` … `MESH_P99_MAX_MS`); it lands with the rows.
  */
 import { existsSync, readdirSync, readFileSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
@@ -52,7 +54,7 @@ import { resolveProfile } from '../../src/core/params/profiles';
 import { SCHEMA } from '../../src/core/params/schema';
 import { PIN_MAX } from '../../src/ui/inspector/sliceModel';
 import { REGISTRY } from '../../src/world/blocks';
-import { BENCH_ROWS, TERRAIN_P50_MAX_MS } from '../bench/gates';
+import { BENCH_ROWS, LIGHT_P50_MAX_MS, LIGHT_P99_MAX_MS, MESH_P50_MAX_MS, MESH_P99_MAX_MS, TERRAIN_P50_MAX_MS } from '../bench/gates';
 import { THRESHOLDS } from '../thresholds';
 import { SP_DEPS } from '../harness/sp';
 import { DET_FILES } from './rules/banned';
@@ -566,5 +568,25 @@ describe('master spec amendments (SP3e §12, §13, exit)', () => {
     expect(line).toContain('the Z1-Z3 gates active');
     expect(sp12).not.toContain('it may move to SP3e');
     expect(sp12).toContain('it stays with SP12 (SP3e did not take it)');
+  });
+});
+
+describe('master spec amendments (SP4a §9.3)', () => {
+  test('§7\'s "Measured in SP4a" line names the light.column and mesh.section bench rows, which BENCH_ROWS measures, with their gates', () => {
+    const line = text.split('\n').find((l) => l.startsWith('- **Measured in SP4a** (amended by SP4a):'));
+    expect(line, 'no `- **Measured in SP4a** (amended by SP4a): …` line in §7').toBeDefined();
+    const rows: readonly string[] = BENCH_ROWS;
+    for (const row of ['light.column', 'mesh.section']) {
+      expect(line, `§7's "Measured in SP4a" line does not name ${row}`).toContain(`\`${row}\``);
+      expect(rows, `BENCH_ROWS does not measure ${row}`).toContain(row);
+    }
+    expect(line).toContain(`p50 ≤ ${LIGHT_P50_MAX_MS} ms, p99 ≤ ${LIGHT_P99_MAX_MS} ms`);
+    expect(line).toContain(`p50 ≤ ${MESH_P50_MAX_MS.toFixed(1)} ms, p99 ≤ ${MESH_P99_MAX_MS} ms`);
+    // It follows SP3e's measured line, inside §7.
+    const sp3e = text.indexOf('- **Measured in SP3e** (amended by SP3e):');
+    const at = text.indexOf(line!);
+    expect(sp3e).toBeGreaterThan(text.indexOf('## 7. Performance budget'));
+    expect(at).toBeGreaterThan(sp3e);
+    expect(at).toBeLessThan(text.indexOf('## 8. Risks'));
   });
 });
