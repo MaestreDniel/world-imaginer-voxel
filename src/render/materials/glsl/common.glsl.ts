@@ -28,10 +28,10 @@ vec3 lightmapAt(float block, float sky) {
 `;
 
 /**
- * skyColor(dir), shared by the sky dome, the fog and the water (spec §6.5, master §4.6): the gradient from the horizon
- * stop (at and below the horizon) to the zenith stop, both `skyColors(t)` in linear, plus a sun disc of 2° radius with a
- * glow to 12° that sinks below the horizon with the sun. The gradient's curve, the soft edge of the disc and the sun's
- * colours are this plan's choices.
+ * The sky (spec §6.5, master §4.6). skyGradient(dir), shared by the sky dome and the fog: the gradient from the horizon
+ * stop (at and below the horizon) to the zenith stop, both `skyColors(t)` in linear. skyColor(dir), the sky dome's: the
+ * gradient plus a sun disc of 2° radius with a glow to 12° that sinks below the horizon with the sun. The gradient's
+ * curve, the soft edge of the disc and the sun's colours are this plan's choices.
  */
 export const SKY_GLSL = `
 uniform vec3 skyZenith;
@@ -42,8 +42,11 @@ const float SUN_DISC_SOFT = ${rad(0.25)};
 const float SUN_GLOW = ${rad(12)};
 const vec3 SUN_COLOR = vec3(1.0, 0.92, 0.78);
 const vec3 SUN_GLOW_COLOR = vec3(1.0, 0.72, 0.42);
+vec3 skyGradient(vec3 dir) {
+  return mix(skyHorizon, skyZenith, smoothstep(0.0, 0.6, max(dir.y, 0.0)));
+}
 vec3 skyColor(vec3 dir) {
-  vec3 c = mix(skyHorizon, skyZenith, smoothstep(0.0, 0.6, max(dir.y, 0.0)));
+  vec3 c = skyGradient(dir);
   float a = acos(clamp(dot(dir, sunDir), -1.0, 1.0));
   float above = smoothstep(-0.02, 0.02, dir.y);
   float glow = 1.0 - smoothstep(SUN_DISC, SUN_GLOW, a);
@@ -55,9 +58,11 @@ vec3 skyColor(vec3 dir) {
 
 /**
  * The fog (spec §6.6, D15): spherical, f = smoothstep(fogStart, fogEnd, |viewPos|), raised to the edge fade
- * smoothstep(edge − 24, edge, horizontal distance from the load centre); its colour is the sky towards the fragment's
- * horizon darkened by the lightmap's sky term at the eye's sky light (block 0, ruling P15). Needs SKY_GLSL and
- * LIGHTMAP_GLSL before it; `worldPos` and `edgeCentre` are relative to the floating origin, as `cameraPosition` is.
+ * smoothstep(edge − 24, edge, horizontal distance from the load centre); its colour is the sky gradient towards the
+ * fragment's horizon, without the sun's disc and glow (they would paint a bright stripe on the fogged terrain under a
+ * low sun; final review B-M1), darkened by the lightmap's sky term at the eye's sky light (block 0, ruling P15). Needs
+ * SKY_GLSL and LIGHTMAP_GLSL before it; `worldPos` and `edgeCentre` are relative to the floating origin, as
+ * `cameraPosition` is.
  */
 export const FOG_GLSL = `
 uniform float fogStart;
@@ -71,7 +76,7 @@ vec3 applyFog(vec3 color, vec3 viewPos, vec3 worldPos) {
   f = max(f, smoothstep(edgeFadeStart, edge, length(worldPos.xz - edgeCentre)));
   vec3 h = vec3(worldPos.x - cameraPosition.x, 0.0, worldPos.z - cameraPosition.z);
   vec3 horizonDir = dot(h, h) > 1e-8 ? normalize(h) : vec3(0.0, 0.0, -1.0);
-  vec3 fogColor = skyColor(horizonDir) * lightmapAt(0.0, eyeSky);
+  vec3 fogColor = skyGradient(horizonDir) * lightmapAt(0.0, eyeSky);
   return mix(color, fogColor, f);
 }
 `;

@@ -84,6 +84,24 @@ describe('materials v1 (SP4a spec §6.4-§6.6)', () => {
     }
   });
 
+  test('the fog colour is the sky gradient towards the horizon, without the sun disc or glow (final review B-M1)', () => {
+    for (const v of VARIANTS) {
+      for (const m of terrainAndWater(SYSTEMS[v])) {
+        const src = m.fragmentShader;
+        const fog = src.slice(src.indexOf('vec3 applyFog('), src.indexOf('\n}', src.indexOf('vec3 applyFog(')));
+        expect(fog).toContain('vec3 fogColor = skyGradient(horizonDir) * lightmapAt(0.0, eyeSky);');
+        expect(fog).not.toContain('skyColor(');
+        expect(fog).not.toContain('SUN_');
+      }
+      // The sky dome keeps the disc and the glow, over the same gradient.
+      const sky = SYSTEMS[v].sky.fragmentShader;
+      const body = sky.slice(sky.indexOf('vec3 skyColor('), sky.indexOf('\n}', sky.indexOf('vec3 skyColor(')));
+      expect(body).toContain('vec3 c = skyGradient(dir);');
+      expect(body).toContain('SUN_GLOW_COLOR');
+      expect(body).toContain('SUN_COLOR');
+    }
+  });
+
   test('every shader that decodes contains packingGlsl() verbatim', () => {
     for (const v of VARIANTS) {
       for (const m of terrainAndWater(SYSTEMS[v])) {
