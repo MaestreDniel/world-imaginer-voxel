@@ -41,7 +41,9 @@ test('bad fixture tree reports every banned use', () => {
     'src/gen/tunable.ts:1 numeric-export',
     'src/gen/tunables2.ts:2 numeric-export',
     'src/gen/wrappedInit.ts:1 numeric-export',
+    'src/light/direct.ts:2 hot-import-reference',
     'src/light/dom.ts:1 dom-global',
+    'src/mesh/direct.ts:2 hot-import-reference',
     'src/metrics/biomeShares.ts:1 nondeterministic',
     'src/metrics/biomeShares.ts:2 math-member',
     'src/metrics/crossSection.ts:1 nondeterministic',
@@ -83,6 +85,7 @@ test('bad fixture tree reports every banned use', () => {
     'src/world/blocks/trig.ts:1 math-member',
     'src/world/clock.ts:1 nondeterministic',
     'src/world/store/clock.ts:1 nondeterministic',
+    'src/world/store/padded.ts:2 hot-import-reference',
   ]);
 });
 

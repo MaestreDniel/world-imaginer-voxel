@@ -26,6 +26,26 @@ import type { MeshBuilder, MeshPass } from './builder';
 import { AXIS_N, AXIS_U, AXIS_V, OPPOSITE, ORIGIN, SIGN, STRIDE, cornerLight, mergeSlice, quadCorners, type QuadSink } from './faces';
 import { PACK_LAYOUT } from './packing';
 
+// Imported values are read through top-level aliases: vitest's bench mode turns every read of an import binding into
+// a tracked getter, which the per-face loops below would pay thousands of times per section (SP4a Task P1).
+const PASS_OF = PASS;
+const FULL_FACES_OF = FULL_FACES;
+const TINT_OF = TINT;
+const ALL = ALL_FACES;
+const OPAQUE = PASS_OPAQUE;
+const CUTOUT = PASS_CUTOUT;
+const AX_N = AXIS_N;
+const AX_U = AXIS_U;
+const AX_V = AXIS_V;
+const OPP = OPPOSITE;
+const ORIGIN_AT = ORIGIN;
+const SIGNS = SIGN;
+const STRIDES = STRIDE;
+const CORNER_LIGHT = cornerLight;
+const MERGE_SLICE = mergeSlice;
+const QUAD_CORNERS = quadCorners;
+const LAYOUT = PACK_LAYOUT;
+
 /** The per-state tables the mesher reads (the registry's `PASS`, `FULL_FACES` and `TINT`, or injected ones). */
 export interface MeshTables {
   readonly pass: Uint8Array;
@@ -39,7 +59,7 @@ export interface MeshTables {
 }
 
 /** The registry's own tables (never written). */
-export const DEFAULT_MESH_TABLES: MeshTables = { pass: PASS, fullFaces: FULL_FACES, tint: TINT };
+export const DEFAULT_MESH_TABLES: MeshTables = { pass: PASS_OF, fullFaces: FULL_FACES_OF, tint: TINT_OF };
 
 export interface MeshOptions {
   readonly ao: boolean;
@@ -59,15 +79,13 @@ export function flipDiagonal(a0: number, a1: number, a2: number, a3: number): bo
   return AO_WEIGHT[a1]! + AO_WEIGHT[a3]! > AO_WEIGHT[a0]! + AO_WEIGHT[a2]!;
 }
 
-const SOLID = PACK_LAYOUT.solid;
+const SOLID = LAYOUT.solid;
 const FACE_SHIFT = SOLID.face.offset;
 const AO_SHIFT = SOLID.ao.offset;
 const SKY_SHIFT = SOLID.sky.offset;
 const BLOCK_SHIFT = SOLID.block.offset;
 const TINT_SHIFT = SOLID.tint.offset;
-const FULL = ALL_FACES;
-const OPAQUE = PASS_OPAQUE;
-const CUTOUT = PASS_CUTOUT;
+const FULL = ALL;
 
 /** Key A's bits: layer 0-9, tint 10-12, flags 13-16, face 17-19, ao2 of v0 … v3 20-27, and bit 31 "a face here". */
 const KA_TINT = 10;
@@ -101,11 +119,11 @@ export function meshSolid(p: PaddedSection, o: MeshOptions, b: MeshBuilder, t: M
   const solid = (s: number): number => (pass[s] === OPAQUE && full[s] === FULL ? 1 : 0);
   const sink: QuadSink = (f, d, i, j, w, h, ka, kb) => emit(f, d, i, j, w, h, ka, kb, b, pass);
   for (let f = 0; f < 6; f++) {
-    const sa = STRIDE[AXIS_N[f]!];
-    const su = STRIDE[AXIS_U[f]!];
-    const sv = STRIDE[AXIS_V[f]!];
-    const normal = SIGN[f]! * sa;
-    const oppBit = 1 << OPPOSITE[f]!;
+    const sa = STRIDES[AX_N[f]!];
+    const su = STRIDES[AX_U[f]!];
+    const sv = STRIDES[AX_V[f]!];
+    const normal = SIGNS[f]! * sa;
+    const oppBit = 1 << OPP[f]!;
     const faceBits = f << KA_FACE;
     for (let d = 0; d < 16; d++) {
       let any = false;
@@ -113,7 +131,7 @@ export function meshSolid(p: PaddedSection, o: MeshOptions, b: MeshBuilder, t: M
         for (let i = 0; i < 16; i++) {
           const m = j * 16 + i;
           MASK_A[m] = 0;
-          const v = ORIGIN + d * sa + i * su + j * sv;
+          const v = ORIGIN_AT + d * sa + i * su + j * sv;
           const s = blocks[v]!;
           const ps = pass[s];
           if (ps !== OPAQUE && ps !== CUTOUT) continue;
@@ -121,20 +139,20 @@ export function meshSolid(p: PaddedSection, o: MeshOptions, b: MeshBuilder, t: M
           const ns = blocks[q]!;
           if (pass[ns] === OPAQUE && (full[ns]! & oppBit) !== 0) continue;
           if (ps === CUTOUT && ns === s && (leaves === undefined || leaves[s] === 0)) continue;
-          MASK_B[m] = cornerLight(light, blocks, solid, o, q, su, sv, VERTS);
+          MASK_B[m] = CORNER_LIGHT(light, blocks, solid, o, q, su, sv, VERTS);
           MASK_A[m] = (KA_PRESENT | s | tint[s]! << KA_TINT | faceBits | (VERTS[0]! & 3) << KA_AO
             | (VERTS[1]! & 3) << (KA_AO + 2) | (VERTS[2]! & 3) << (KA_AO + 4) | (VERTS[3]! & 3) << (KA_AO + 6)) >>> 0;
           any = true;
         }
       }
-      if (any) mergeSlice(f, d, MASK_A, MASK_B, NO_KEY, sink);
+      if (any) MERGE_SLICE(f, d, MASK_A, MASK_B, NO_KEY, sink);
     }
   }
 }
 
 /** Writes one merged quad: corners in 1/8 units, the four data words from the keys, and its diagonal. */
 function emit(f: number, d: number, i: number, j: number, w: number, h: number, ka: number, kb: number, b: MeshBuilder, pass: Uint8Array): void {
-  quadCorners(f, d, i, j, w, h, CORNERS);
+  QUAD_CORNERS(f, d, i, j, w, h, CORNERS);
   const layer = ka & LAYER_MASK;
   const base = layer | f << FACE_SHIFT | (ka >>> KA_TINT & 7) << TINT_SHIFT;
   const a0 = ka >>> KA_AO & 3;

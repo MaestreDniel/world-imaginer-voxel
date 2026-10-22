@@ -27,6 +27,8 @@ const MESH_SOLID = meshSolid;
 const MESH_FLUID = meshFluid;
 const FLUID_DEPTHS = fluidDepths;
 const CONNECTIVITY = connectivity15;
+const NEW_PADDED = createPaddedSection;
+const NEW_BUILDER = createMeshBuilder;
 
 /** The three passes of a row (SP4a spec §5.2). */
 export const MESH_PASS_OPAQUE = 0;
@@ -128,8 +130,8 @@ export interface MeshScratch {
 
 export function createMeshScratch(): MeshScratch {
   return {
-    padded: createPaddedSection(),
-    builder: createMeshBuilder(),
+    padded: NEW_PADDED(),
+    builder: NEW_BUILDER(),
     depth: new Uint8Array(4096),
     column: {
       position: new Uint8Array(4 * INITIAL_VERTICES),

@@ -91,21 +91,63 @@ function finalOf(nb: NeighborhoodReader, dx: number, dz: number, who: string): C
 /**
  * Writes the box of section-local voxels lx ∈ [x0, x1), ly ∈ [y0, y1), lz ∈ [z0, z1) of one channel (`src`: a
  * 4096-entry section, voxel `ly<<8|lz<<4|lx`, or a uniform value) into a padded array at `dst` index `base` +
- * `ly·layer + lz·row + lx`.
+ * `ly·layer + lz·row + lx`. The uniform/dense branch is taken once per box, and the dense copy has one routine per
+ * element type, so each loop's typed-array accesses stay monomorphic (SP4a Task P1: the light job's region copy).
  */
-function copyBox(
-  dst: Uint8Array | Uint16Array, src: Uint8Array | Uint16Array | number, base: number, row: number, layer: number,
+function copyBox16(
+  dst: Uint16Array, src: Uint16Array | number, base: number, row: number, layer: number,
+  x0: number, x1: number, y0: number, y1: number, z0: number, z1: number,
+): void {
+  if (typeof src === 'number') fillBox(dst, src, base, row, layer, x0, x1, y0, y1, z0, z1);
+  else copyRows16(dst, src, base, row, layer, x0, x1, y0, y1, z0, z1);
+}
+
+/** `copyBox16` for the byte channels (light, fluid). */
+function copyBox8(
+  dst: Uint8Array, src: Uint8Array | number, base: number, row: number, layer: number,
+  x0: number, x1: number, y0: number, y1: number, z0: number, z1: number,
+): void {
+  if (typeof src === 'number') fillBox(dst, src, base, row, layer, x0, x1, y0, y1, z0, z1);
+  else copyRows8(dst, src, base, row, layer, x0, x1, y0, y1, z0, z1);
+}
+
+/** A uniform section's box: one fill per row. */
+function fillBox(
+  dst: Uint8Array | Uint16Array, value: number, base: number, row: number, layer: number,
   x0: number, x1: number, y0: number, y1: number, z0: number, z1: number,
 ): void {
   for (let ly = y0; ly < y1; ly++) {
     for (let lz = z0; lz < z1; lz++) {
       const d = base + ly * layer + lz * row;
-      if (typeof src === 'number') {
-        dst.fill(src, d + x0, d + x1);
-      } else {
-        const s = (ly << 8) | (lz << 4);
-        for (let lx = x0; lx < x1; lx++) dst[d + lx] = src[s + lx]!;
-      }
+      dst.fill(value, d + x0, d + x1);
+    }
+  }
+}
+
+/** A dense u16 section's box, voxel by voxel. */
+function copyRows16(
+  dst: Uint16Array, src: Uint16Array, base: number, row: number, layer: number,
+  x0: number, x1: number, y0: number, y1: number, z0: number, z1: number,
+): void {
+  for (let ly = y0; ly < y1; ly++) {
+    for (let lz = z0; lz < z1; lz++) {
+      const d = base + ly * layer + lz * row;
+      const s = (ly << 8) | (lz << 4);
+      for (let lx = x0; lx < x1; lx++) dst[d + lx] = src[s + lx]!;
+    }
+  }
+}
+
+/** A dense u8 section's box, voxel by voxel. */
+function copyRows8(
+  dst: Uint8Array, src: Uint8Array, base: number, row: number, layer: number,
+  x0: number, x1: number, y0: number, y1: number, z0: number, z1: number,
+): void {
+  for (let ly = y0; ly < y1; ly++) {
+    for (let lz = z0; lz < z1; lz++) {
+      const d = base + ly * layer + lz * row;
+      const s = (ly << 8) | (lz << 4);
+      for (let lx = x0; lx < x1; lx++) dst[d + lx] = src[s + lx]!;
     }
   }
 }
@@ -140,9 +182,9 @@ export function copyPaddedSection(nb: NeighborhoodReader, sy: number, out: Padde
         const b = below ? BEDROCK_STATE : above ? AIR_STATE : v.sectionBlocks(s);
         const l = below ? 0 : above ? ABOVE_LIGHT : v.sectionLight(s);
         const f = below || above ? 0 : v.sectionFluid(s);
-        copyBox(blocks, b, base, PAD, PAD_LAYER, x0, x1, y0, y1, z0, z1);
-        copyBox(light, l, base, PAD, PAD_LAYER, x0, x1, y0, y1, z0, z1);
-        copyBox(fluid, f, base, PAD, PAD_LAYER, x0, x1, y0, y1, z0, z1);
+        copyBox16(blocks, b, base, PAD, PAD_LAYER, x0, x1, y0, y1, z0, z1);
+        copyBox8(light, l, base, PAD, PAD_LAYER, x0, x1, y0, y1, z0, z1);
+        copyBox8(fluid, f, base, PAD, PAD_LAYER, x0, x1, y0, y1, z0, z1);
       }
     }
   }
@@ -172,8 +214,8 @@ export function copyLightRegion(nb: NeighborhoodReader, out: LightRegion): void 
       }
       for (let sy = 0; sy < SECTIONS; sy++) {
         const base = lightIndex(16 * dx, Y_MIN + 16 * sy, 16 * dz);
-        copyBox(out.blocks, v.sectionBlocks(sy), base, LIGHT_W, LIGHT_LAYER, x0, x1, 0, 16, z0, z1);
-        copyBox(out.fluid, v.sectionFluid(sy), base, LIGHT_W, LIGHT_LAYER, x0, x1, 0, 16, z0, z1);
+        copyBox16(out.blocks, v.sectionBlocks(sy), base, LIGHT_W, LIGHT_LAYER, x0, x1, 0, 16, z0, z1);
+        copyBox8(out.fluid, v.sectionFluid(sy), base, LIGHT_W, LIGHT_LAYER, x0, x1, 0, 16, z0, z1);
       }
     }
   }

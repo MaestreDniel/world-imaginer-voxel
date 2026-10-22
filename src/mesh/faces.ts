@@ -11,10 +11,14 @@
 import { PAD, padIndex } from '../world/store/padded';
 import type { MeshOptions } from './greedy';
 
+// Imported values are read through top-level aliases (vitest's bench mode turns import reads into getters; SP4a Task P1).
+const SIDE = PAD;
+const PAD_INDEX = padIndex;
+
 /** Padded-view strides per axis (0 x, 1 y, 2 z): `padIndex` adds 1 per x, 18 per z and 324 per y. */
-export const STRIDE = [1, PAD * PAD, PAD] as const;
+export const STRIDE = [1, SIDE * SIDE, SIDE] as const;
 /** The padded index of section-local (0, 0, 0). */
-export const ORIGIN = padIndex(0, 0, 0);
+export const ORIGIN = PAD_INDEX(0, 0, 0);
 
 /**
  * Per face (north −z, east +x, south +z, west −x, up +y, down −y; `world/blocks/kinds.ts`): the normal axis and sign,

@@ -25,13 +25,28 @@ import { AXIS_N, AXIS_U, AXIS_V, OPPOSITE, ORIGIN, SIGN, STRIDE, cornerLight, me
 import { DEFAULT_MESH_TABLES, type MeshOptions, type MeshTables } from './greedy';
 import { PACK_LAYOUT } from './packing';
 
+// Imported values are read through top-level aliases: vitest's bench mode turns every read of an import binding into
+// a tracked getter, which the per-face loops below would pay thousands of times per section (SP4a Task P1).
 const WATER = FLUID_WATER;
 const typeOf = fluidType;
 const isFluid = hasFluid;
 const OPAQUE = PASS_OPAQUE;
 const FULL = ALL_FACES;
+const SIDE = PAD;
+const AX_N = AXIS_N;
+const AX_U = AXIS_U;
+const AX_V = AXIS_V;
+const OPP = OPPOSITE;
+const ORIGIN_AT = ORIGIN;
+const SIGNS = SIGN;
+const STRIDES = STRIDE;
+const CORNER_LIGHT = cornerLight;
+const MERGE_SLICE = mergeSlice;
+const QUAD_CORNERS = quadCorners;
+const TABLES = DEFAULT_MESH_TABLES;
+const LAYOUT = PACK_LAYOUT;
 
-const FLUID = PACK_LAYOUT.fluid;
+const FLUID = LAYOUT.fluid;
 const FACE_SHIFT = FLUID.face.offset;
 const SKY_SHIFT = FLUID.sky.offset;
 const BLOCK_SHIFT = FLUID.block.offset;
@@ -47,7 +62,7 @@ const PASS_WATER = 2;
 
 /** The section-local (`depth`) strides per axis (0 x, 1 y, 2 z), and the padded stride of +y. */
 const LOCAL = [1, 256, 16] as const;
-const UP = PAD * PAD;
+const UP = SIDE * SIDE;
 
 /** The face index of up and down (`mesh/faces.ts`'s face order). */
 const FACE_UP = 4;
@@ -71,7 +86,7 @@ const WORDS = new Uint32Array(4);
  * (SP4a spec §5.6). `depth` holds 4096 values, section-local `y·256 + z·16 + x` (`fluidDepths`); the padded view is
  * used for face visibility and light only.
  */
-export function meshFluid(p: PaddedSection, depth: Uint8Array, b: MeshBuilder, t: MeshTables = DEFAULT_MESH_TABLES): void {
+export function meshFluid(p: PaddedSection, depth: Uint8Array, b: MeshBuilder, t: MeshTables = TABLES): void {
   const { blocks, light, fluid } = p;
   const pass = t.pass;
   const full = t.fullFaces;
@@ -80,17 +95,17 @@ export function meshFluid(p: PaddedSection, depth: Uint8Array, b: MeshBuilder, t
   const solid = (s: number): number => (pass[s] === OPAQUE && full[s] === FULL ? 1 : 0);
   const sink: QuadSink = (f, d, i, j, w, h, ka, kb, kc) => emit(f, d, i, j, w, h, ka, kb, kc, b);
   for (let f = 0; f < 6; f++) {
-    const an = AXIS_N[f]!;
-    const au = AXIS_U[f]!;
-    const av = AXIS_V[f]!;
-    const sa = STRIDE[an];
-    const su = STRIDE[au];
-    const sv = STRIDE[av];
+    const an = AX_N[f]!;
+    const au = AX_U[f]!;
+    const av = AX_V[f]!;
+    const sa = STRIDES[an];
+    const su = STRIDES[au];
+    const sv = STRIDES[av];
     const la = LOCAL[an];
     const lu = LOCAL[au];
     const lv = LOCAL[av];
-    const normal = SIGN[f]! * sa;
-    const oppBit = 1 << OPPOSITE[f]!;
+    const normal = SIGNS[f]! * sa;
+    const oppBit = 1 << OPP[f]!;
     // Which corners of a face of a surface voxel are its top corners: all four up, none down, and on a side the
     // two at +y (v1, v2 when u is y; v2, v3 when v is y).
     const topMask = f === FACE_UP ? 0b1111 : f === FACE_DOWN ? 0 : au === 1 ? 0b0110 : 0b1100;
@@ -100,7 +115,7 @@ export function meshFluid(p: PaddedSection, depth: Uint8Array, b: MeshBuilder, t
         for (let i = 0; i < 16; i++) {
           const m = j * 16 + i;
           MASK_A[m] = 0;
-          const v = ORIGIN + d * sa + i * su + j * sv;
+          const v = ORIGIN_AT + d * sa + i * su + j * sv;
           if (typeOf(fluid[v]!) !== WATER) continue;
           const q = v + normal;
           const ns = blocks[q]!;
@@ -112,20 +127,20 @@ export function meshFluid(p: PaddedSection, depth: Uint8Array, b: MeshBuilder, t
           MASK_A[m] = (KA_PRESENT | f | dep << KA_DEPTH
             | (top & 1) << KA_DROP | (top >> 1 & 1) << (KA_DROP + 4) | (top >> 2 & 1) << (KA_DROP + 8)
             | (top >> 3 & 1) << (KA_DROP + 12)) >>> 0;
-          MASK_B[m] = cornerLight(light, blocks, solid, SMOOTH, q, su, sv, VERTS);
+          MASK_B[m] = CORNER_LIGHT(light, blocks, solid, SMOOTH, q, su, sv, VERTS);
           const s = blocks[v]!;
           MASK_C[m] = s | tint[s]! << 10;
           any = true;
         }
       }
-      if (any) mergeSlice(f, d, MASK_A, MASK_B, MASK_C, sink);
+      if (any) MERGE_SLICE(f, d, MASK_A, MASK_B, MASK_C, sink);
     }
   }
 }
 
 /** Writes one merged water quad: full-height corners in 1/8 units and the four fluid data words from the keys. */
 function emit(f: number, d: number, i: number, j: number, w: number, h: number, ka: number, kb: number, kc: number, b: MeshBuilder): void {
-  quadCorners(f, d, i, j, w, h, CORNERS);
+  QUAD_CORNERS(f, d, i, j, w, h, CORNERS);
   const base = (kc & 0x3FF) | f << FACE_SHIFT | (ka >>> KA_DEPTH & 15) << DEPTH_SHIFT | (kc >>> 10 & 7) << TINT_SHIFT;
   for (let k = 0; k < 4; k++) {
     const sky = kb >>> (4 * k) & 15;

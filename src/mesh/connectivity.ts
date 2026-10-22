@@ -10,8 +10,12 @@ import { ALL_FACES, PASS_OPAQUE } from '../world/blocks/kinds';
 import { PAD, padIndex, type PaddedSection } from '../world/store/padded';
 import { DEFAULT_MESH_TABLES, type MeshTables } from './greedy';
 
+// Imported values are read through top-level aliases (vitest's bench mode turns import reads into getters; SP4a Task P1).
 const OPAQUE = PASS_OPAQUE;
 const FULL = ALL_FACES;
+const SIDE = PAD;
+const PAD_INDEX = padIndex;
+const TABLES = DEFAULT_MESH_TABLES;
 
 /** Every pair's bit set. */
 const ALL_PAIRS = 0x7FFF;
@@ -39,8 +43,8 @@ for (let set = 0; set < 64; set++) {
 /** 1 for a non-opaque voxel not yet flooded (section-local `y·256 + z·16 + x`), and the flood's stack. */
 const OPEN = new Uint8Array(4096);
 const STACK = new Uint16Array(4096);
-const ORIGIN = padIndex(0, 0, 0);
-const LAYER = PAD * PAD;
+const ORIGIN = PAD_INDEX(0, 0, 0);
+const LAYER = SIDE * SIDE;
 
 /** The faces a section-local voxel lies on, as a 6-bit set (bit = face index). */
 function facesOf(i: number): number {
@@ -51,14 +55,14 @@ function facesOf(i: number): number {
 }
 
 /** The 15 face-to-face bits of the padded section `p` (SP4a spec §5.7). */
-export function connectivity15(p: PaddedSection, t: MeshTables = DEFAULT_MESH_TABLES): number {
+export function connectivity15(p: PaddedSection, t: MeshTables = TABLES): number {
   const blocks = p.blocks;
   const pass = t.pass;
   const full = t.fullFaces;
   let open = 0;
   for (let y = 0; y < 16; y++) {
     for (let z = 0; z < 16; z++) {
-      const row = ORIGIN + y * LAYER + z * PAD;
+      const row = ORIGIN + y * LAYER + z * SIDE;
       const o = (y << 8) | (z << 4);
       for (let x = 0; x < 16; x++) {
         const s = blocks[row + x]!;

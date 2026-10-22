@@ -24,8 +24,11 @@ export const DET_FILES: ReadonlySet<string> = new Set(['metrics/sp1Goldens.ts', 
  * are hashed into goldens (SP3a spec §2.5). The rest of world/ (the store) keeps the ND bans only.
  */
 const DET_DIRS = ['world/blocks/'];
-/** Modules whose hot loops must not read imported bindings (vitest turns them into getters; SP1 spec §1.8, SP2a spec §8). */
-const HOT_PREFIXES = ['core/noise/', 'core/spline/', 'metrics/', 'gen/', ...DET_DIRS];
+/**
+ * Modules whose hot loops must not read imported bindings (vitest turns them into getters; SP1 spec §1.8, SP2a spec §8):
+ * SP4a adds the light and mesh jobs and the padded copies they run on (its spec §9.3 bench rows, Task P1).
+ */
+const HOT_PREFIXES = ['core/noise/', 'core/spline/', 'metrics/', 'gen/', ...DET_DIRS, 'light/', 'mesh/', 'world/store/padded.ts'];
 /** Matches the member name alone, so `.normalize.call(…)` and `.localeCompare.bind(…)` are caught too (SP1 review minor). */
 const ENGINE_DEPENDENT = /\bIntl\b|\.\s*(?:localeCompare|toLocale\w*|normalize)\b|\bTextEncoder\b|\bTextDecoder\b/g;
 const IMPORT_STMT = /\bimport\s+(type\s+)?([\w$*{},\s]+?)\s+from\s*(['"])[^'"\n]+\3\s*;?/g;
