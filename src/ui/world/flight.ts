@@ -69,7 +69,7 @@ export interface FlightPose extends Waypoint {
 
 /**
  * The flight's eight waypoints (spec §9.5): a deterministic loop around the spawn at yaw 0°, 45° … 315° (ruling P42's
- * `forwardXZ`), alternately at 0.85 and 0.55 of (rd − 4)·16 blocks, each `ABOVE[k]` blocks (30-80) above
+ * `forwardXZ`), alternately at 0.85 and 0.55 of (rd − 4)·16 blocks, each `ABOVE[k]` blocks (35-80) above
  * `MOTION_BLOCKING` there. When the disc of radius 0.85·(rd − 4)·16 has water (searched on a 4-block grid in row
  * order), the water sample nearest to a waypoint replaces that waypoint, 20 blocks above `MOTION_BLOCKING` (the water's
  * surface): the one low leg over water.
