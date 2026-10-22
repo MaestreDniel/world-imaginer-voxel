@@ -1,1 +1,80 @@
-[]
+[
+  {
+    "id": "coast",
+    "file": "coast.webp",
+    "seed": "42",
+    "profile": "default",
+    "x": -26624,
+    "z": -31992,
+    "yaw": 135,
+    "pitch": -10,
+    "time": 17,
+    "commit": "23ce6e9",
+    "renderer": "ANGLE (Google, Vulkan 1.3.0 (SwiftShader Device (Subzero) (0x0000C0DE)), SwiftShader driver)"
+  },
+  {
+    "id": "mountain",
+    "file": "mountain.webp",
+    "seed": "42",
+    "profile": "default",
+    "x": -1152,
+    "z": 8,
+    "yaw": 225,
+    "pitch": -10,
+    "time": 8,
+    "commit": "23ce6e9",
+    "renderer": "ANGLE (Google, Vulkan 1.3.0 (SwiftShader Device (Subzero) (0x0000C0DE)), SwiftShader driver)"
+  },
+  {
+    "id": "badlands",
+    "file": "badlands.webp",
+    "seed": "42",
+    "profile": "default",
+    "x": -1248,
+    "z": 2056,
+    "yaw": 315,
+    "pitch": -10,
+    "time": 17,
+    "commit": "23ce6e9",
+    "renderer": "ANGLE (Google, Vulkan 1.3.0 (SwiftShader Device (Subzero) (0x0000C0DE)), SwiftShader driver)"
+  },
+  {
+    "id": "archipelago",
+    "file": "archipelago.webp",
+    "seed": "42",
+    "profile": "archipelago",
+    "x": 128,
+    "z": -128,
+    "yaw": 90,
+    "pitch": -10,
+    "time": 17,
+    "commit": "23ce6e9",
+    "renderer": "ANGLE (Google, Vulkan 1.3.0 (SwiftShader Device (Subzero) (0x0000C0DE)), SwiftShader driver)"
+  },
+  {
+    "id": "amplified",
+    "file": "amplified.webp",
+    "seed": "42",
+    "profile": "amplified",
+    "x": -640,
+    "z": 0,
+    "yaw": 270,
+    "pitch": -10,
+    "time": 8,
+    "commit": "23ce6e9",
+    "renderer": "ANGLE (Google, Vulkan 1.3.0 (SwiftShader Device (Subzero) (0x0000C0DE)), SwiftShader driver)"
+  },
+  {
+    "id": "floating_islands",
+    "file": "floating_islands.webp",
+    "seed": "42",
+    "profile": "floating_islands",
+    "x": -768,
+    "z": -1408,
+    "yaw": 90,
+    "pitch": -10,
+    "time": 17,
+    "commit": "23ce6e9",
+    "renderer": "ANGLE (Google, Vulkan 1.3.0 (SwiftShader Device (Subzero) (0x0000C0DE)), SwiftShader driver)"
+  }
+]

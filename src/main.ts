@@ -7,8 +7,9 @@ import type { Seed64 } from './core/hash';
  * hash alone); "Enter the world" then mounts the world page in the same page, with no navigation. `?at`, `?rd` or
  * `?workers` go straight to the loading screen. `?shot=1` is the capture mode (no HUD, no overlay, the clock fixed at
  * `?time` or 08:00; ruling P48). `?flight=sp4a` is the flight route (spec §9.5, `ui/world/flight.ts`): the world page at
- * seed 42, the default profile and RD 12, then a 60 s scripted flight whose JSON measureChrome reads. `?pano` arrives
- * with its task.
+ * seed 42, the default profile and RD 12, then a 60 s scripted flight whose JSON measureChrome reads. `?pano=<id>` is
+ * the panorama capture route (spec §8.3, `ui/world/panoramaRoute.ts`): the world page at one of the six viewpoints,
+ * read by `test/tools/panoramas.ts`.
  */
 
 const root = document.getElementById('app');
@@ -61,5 +62,7 @@ const started: Promise<void> = query.get('lab') === 'noise'
         ? import('./ui/spike/spikePage').then((m) => m.mountSpikePage(app))
         : query.get('flight') === 'sp4a'
           ? import('./ui/world/flight').then((m) => m.mountFlightRoute(app, query))
-          : world(query);
+          : query.has('pano')
+            ? import('./ui/world/panoramaRoute').then((m) => m.mountPanoramaRoute(app, query.get('pano') ?? ''))
+            : world(query);
 started.catch(showBootFailure);
