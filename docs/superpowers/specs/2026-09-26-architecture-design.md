@@ -1196,7 +1196,7 @@ Target: edit → visible ≤ 50 ms p95, measured in the HUD.
 
 ### 4.17 Player
 
-- **Fly:** first-person pointer lock, dt-scaled 12 blocks/s (adjust with Alt+wheel), Ctrl sprint ×4.
+- **Fly:** first-person pointer lock, dt-scaled 12 blocks/s (adjust with the wheel and `+`/`-` until SP5's hotbar takes the wheel, SP5 choosing its modifier (SP4a)), Ctrl sprint ×4; spectator: forward along the look vector.
 - **Ladders:** while the player AABB overlaps a ladder, vertical speed is clamped to ±2.35 blocks/s and Space climbs.
 - **Walk:**
   - 0.6×1.8 swept AABB with per-axis substeps ≤ 0.35 blocks, terminal velocity 78, step-up 0.6;
@@ -1339,7 +1339,7 @@ Target: edit → visible ≤ 50 ms p95, measured in the HUD.
 
 ### 5.9 Controls
 
-WASD; Space (up/jump); Shift (down/sneak); Ctrl (sprint); F (walk/fly); M (map); L (slice); I (inspector); P (params); G (graphics); E (creative palette); F3 (debug); H/F1 (help); 1-9 and wheel (hotbar); LMB / RMB / MMB (break / place / pick); Esc (release pointer). Audio volumes and music frequency live in Settings.
+WASD; Space (up/jump); Shift (down/sneak); Ctrl (sprint); F (walk/fly); M (map); L (slice); I (inspector); P (params); G (graphics); E (creative palette); F3 (debug); H/F1 (help); 1-9 and wheel (hotbar); LMB / RMB / MMB (break / place / pick); Esc (release pointer); T (time speed, SP4a), R (load the world around you, SP4a until SP4b streams), `+`/`-` (fly speed). Audio volumes and music frequency live in Settings.
 
 ## 6. Testing
 

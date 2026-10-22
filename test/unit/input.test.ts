@@ -1,0 +1,192 @@
+import { describe, expect, test, vi } from 'vitest';
+import { attachInput } from '../../src/player/input';
+import type { Action } from '../../src/player/keymap';
+
+/** Fake target, document and window (ruling P41): plain EventTargets with the members input.ts reads. */
+function setup(textFocus = false) {
+  const target = Object.assign(new EventTarget(), { requestPointerLock: vi.fn(() => Promise.resolve()) });
+  const doc = Object.assign(new EventTarget(), { pointerLockElement: null as unknown });
+  const win = new EventTarget();
+  const addSpy = vi.spyOn(target, 'addEventListener');
+  const actions: Action[] = [];
+  const looks: Array<[number, number]> = [];
+  let text = textFocus;
+  const input = attachInput(target as unknown as HTMLElement, {
+    onAction: (a) => actions.push(a),
+    onLook: (dx, dy) => looks.push([dx, dy]),
+    isTextFocus: () => text,
+    doc: doc as unknown as Pick<Document, 'addEventListener' | 'removeEventListener' | 'pointerLockElement'>,
+    win: win as unknown as Pick<Window, 'addEventListener' | 'removeEventListener'>,
+  });
+  return { target, doc, win, addSpy, actions, looks, input, setText: (v: boolean) => { text = v; } };
+}
+
+const key = (type: 'keydown' | 'keyup', code: string, k: string, mods: { ctrlKey?: boolean; repeat?: boolean } = {}) =>
+  Object.assign(new Event(type, { cancelable: true }), { code, key: k, ctrlKey: false, shiftKey: false, altKey: false, metaKey: false, repeat: false, ...mods });
+const wheel = (deltaY: number, ctrlKey = false) => Object.assign(new Event('wheel', { cancelable: true }), { deltaY, deltaX: 0, deltaMode: 0, ctrlKey });
+const mouse = (dx: number, dy: number) => Object.assign(new Event('mousemove'), { movementX: dx, movementY: dy });
+
+describe('input (SP4a spec §7.1, master §4.17)', () => {
+  test('keydown of a bound action while the world has focus calls preventDefault, Ctrl held included (Ctrl+D, Ctrl+S, Ctrl+A)', () => {
+    const { doc, input, actions } = setup();
+    const ctrl = key('keydown', 'ControlLeft', 'Control', { ctrlKey: true });
+    doc.dispatchEvent(ctrl);
+    expect(ctrl.defaultPrevented).toBe(true);
+    const cases: Array<[string, string, Action]> = [['KeyD', 'd', 'right'], ['KeyS', 's', 'back'], ['KeyA', 'a', 'left']];
+    for (const [code, k, a] of cases) {
+      const e = key('keydown', code, k, { ctrlKey: true });
+      doc.dispatchEvent(e);
+      expect(e.defaultPrevented, `Ctrl+${k}`).toBe(true);
+      expect(input.held.has(a), a).toBe(true);
+    }
+    expect(input.held.has('sprint')).toBe(true);
+    // Non-movement actions fire once per press, also prevented (H, F1 open the help: spec §7.4).
+    const f1 = key('keydown', 'F1', 'F1');
+    doc.dispatchEvent(f1);
+    expect(f1.defaultPrevented).toBe(true);
+    doc.dispatchEvent(key('keydown', 'KeyT', 't'));
+    doc.dispatchEvent(key('keydown', 'KeyT', 't', { repeat: true }));
+    expect(actions).toEqual(['help', 'timeSpeed']);
+    // Releasing one key leaves the others held.
+    doc.dispatchEvent(key('keyup', 'KeyD', 'd'));
+    expect([...input.held].sort()).toEqual(['back', 'left', 'sprint']);
+    input.dispose();
+  });
+
+  test('wheel with Ctrl held changes the speed and calls preventDefault (listener registered with passive: false)', () => {
+    const { target, addSpy, actions, input } = setup();
+    const call = addSpy.mock.calls.find((c) => c[0] === 'wheel');
+    expect(call, 'no wheel listener on the target').toBeDefined();
+    expect(call![2]).toMatchObject({ passive: false });
+    const up = wheel(-100, true);
+    target.dispatchEvent(up);
+    expect(up.defaultPrevented).toBe(true);
+    const down = wheel(100, true);
+    target.dispatchEvent(down);
+    expect(down.defaultPrevented).toBe(true);
+    const plain = wheel(-3);
+    target.dispatchEvent(plain);
+    expect(plain.defaultPrevented).toBe(true);
+    expect(actions).toEqual(['speedUp', 'speedDown', 'speedUp']);
+    input.dispose();
+  });
+
+  test('+ and - (key bindings) change the speed', () => {
+    const { doc, actions, input } = setup();
+    const plus = key('keydown', 'BracketRight', '+');
+    doc.dispatchEvent(plus);
+    doc.dispatchEvent(key('keydown', 'Slash', '-'));
+    expect(plus.defaultPrevented).toBe(true);
+    expect(actions).toEqual(['speedUp', 'speedDown']);
+    expect(input.held.size).toBe(0);
+    input.dispose();
+  });
+
+  test('keys cleared on blur and on pointer unlock', () => {
+    const { target, doc, win, input } = setup();
+    doc.dispatchEvent(key('keydown', 'KeyW', 'w'));
+    doc.dispatchEvent(key('keydown', 'ShiftLeft', 'Shift'));
+    expect([...input.held].sort()).toEqual(['down', 'forward']);
+    win.dispatchEvent(new Event('blur'));
+    expect(input.held.size).toBe(0);
+
+    doc.pointerLockElement = target;
+    doc.dispatchEvent(new Event('pointerlockchange'));
+    doc.dispatchEvent(key('keydown', 'KeyW', 'w'));
+    doc.dispatchEvent(new Event('pointerlockchange'));
+    // Still locked to the target: nothing cleared.
+    expect([...input.held]).toEqual(['forward']);
+    doc.pointerLockElement = null;
+    doc.dispatchEvent(new Event('pointerlockchange'));
+    expect(input.held.size).toBe(0);
+    // A keyup after the clear is harmless.
+    doc.dispatchEvent(key('keyup', 'KeyW', 'w'));
+    expect(input.held.size).toBe(0);
+    input.dispose();
+  });
+
+  test('ignored while a text input has focus', () => {
+    const { target, doc, actions, input, setText } = setup(true);
+    const w = key('keydown', 'KeyW', 'w');
+    const h = key('keydown', 'KeyH', 'h');
+    doc.dispatchEvent(w);
+    doc.dispatchEvent(h);
+    target.dispatchEvent(wheel(-100));
+    expect(w.defaultPrevented).toBe(false);
+    expect(h.defaultPrevented).toBe(false);
+    expect(input.held.size).toBe(0);
+    expect(actions).toEqual([]);
+    setText(false);
+    doc.dispatchEvent(key('keydown', 'KeyW', 'w'));
+    expect(input.held.has('forward')).toBe(true);
+    // A key released while typing still releases (no stuck movement).
+    setText(true);
+    doc.dispatchEvent(key('keyup', 'KeyW', 'w'));
+    expect(input.held.size).toBe(0);
+    input.dispose();
+  });
+
+  test('an unbound key is not prevented', () => {
+    const { doc, actions, input } = setup();
+    for (const [code, k, ctrl] of [['KeyF', 'f', true], ['KeyF', 'f', false], ['KeyQ', 'q', false], ['Tab', 'Tab', false]] as const) {
+      const e = key('keydown', code, k, { ctrlKey: ctrl });
+      doc.dispatchEvent(e);
+      expect(e.defaultPrevented, `${ctrl ? 'Ctrl+' : ''}${k}`).toBe(false);
+    }
+    // Esc is listed only: the browser releases the pointer.
+    const esc = key('keydown', 'Escape', 'Escape');
+    doc.dispatchEvent(esc);
+    expect(esc.defaultPrevented).toBe(false);
+    expect(actions).toEqual([]);
+    expect(input.held.size).toBe(0);
+    input.dispose();
+  });
+
+  test('a click requests pointer lock; mouse movement looks only while locked to the target', () => {
+    const { target, doc, looks, input } = setup();
+    target.dispatchEvent(new Event('click'));
+    expect(target.requestPointerLock).toHaveBeenCalledTimes(1);
+    target.dispatchEvent(mouse(5, -3));
+    expect(looks).toEqual([]);
+    doc.pointerLockElement = target;
+    target.dispatchEvent(mouse(5, -3));
+    expect(looks).toEqual([[5, -3]]);
+    input.dispose();
+  });
+
+  test('a rejected pointer-lock request is swallowed', async () => {
+    const { target, input } = setup();
+    target.requestPointerLock.mockImplementationOnce(() => Promise.reject(new Error('SecurityError')));
+    const unhandled = vi.fn();
+    process.on('unhandledRejection', unhandled);
+    target.dispatchEvent(new Event('click'));
+    await new Promise((r) => setTimeout(r, 0));
+    process.off('unhandledRejection', unhandled);
+    expect(unhandled).not.toHaveBeenCalled();
+    input.dispose();
+  });
+
+  test('dispose removes every listener', () => {
+    const { target, doc, win, actions, looks, input } = setup();
+    doc.dispatchEvent(key('keydown', 'KeyW', 'w'));
+    input.dispose();
+    doc.pointerLockElement = target;
+    const s = key('keydown', 'KeyS', 's');
+    doc.dispatchEvent(s);
+    doc.dispatchEvent(key('keydown', 'KeyH', 'h'));
+    expect(s.defaultPrevented).toBe(false);
+    expect([...input.held]).toEqual(['forward']);
+    const w = wheel(-100);
+    target.dispatchEvent(w);
+    target.dispatchEvent(mouse(1, 1));
+    target.dispatchEvent(new Event('click'));
+    expect(actions).toEqual([]);
+    expect(looks).toEqual([]);
+    expect(w.defaultPrevented).toBe(false);
+    expect(target.requestPointerLock).not.toHaveBeenCalled();
+    // Neither blur nor a keyup reaches it after dispose: held stays as it was.
+    win.dispatchEvent(new Event('blur'));
+    doc.dispatchEvent(key('keyup', 'KeyW', 'w'));
+    expect([...input.held]).toEqual(['forward']);
+  });
+});
