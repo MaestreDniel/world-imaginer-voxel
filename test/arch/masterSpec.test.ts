@@ -42,11 +42,11 @@
  * profile stays with SP12.
  * SP4a (its spec §9.3, §12): §7's "Measured in SP4a" line names the `light.column` and `mesh.section` bench rows, which
  * `BENCH_ROWS` measures, with their absolute gates (`LIGHT_P50_MAX_MS` … `MESH_P99_MAX_MS`); it lands with the rows.
- * The exit commit (SP4a §12, §14): §1 names SP4a's new modules, which exist, and its `test/` entry SP4a's test files in
- * their own parentheses (it lands with the last of them, `tools/measureChrome.ts`'s cells); the cut-line texts are
- * worded by whether the panoramas were built (`public/panoramas/manifest.json` lists any): built, the SP4a entry's cut
- * line says it was not taken and the receivers say nothing moved; and a bare `SP4` is left only in the §10 split
- * paragraphs and the parallelism line, where spec §14's own wording keeps it.
+ * The exit commit (SP4a §12, §14): §1 lists SP4a's new modules on its entries' list lines (not only in their prose),
+ * which exist, and its `test/` entry SP4a's test files in their own parentheses (it lands with the last of them,
+ * `tools/measureChrome.ts`'s cells); the panoramas were built (`public/panoramas/manifest.json` lists all six), so the
+ * SP4a entry's cut line says it was not taken and the receivers say nothing moved; and a bare `SP4` is left only in the
+ * §10 split paragraphs and the parallelism line, where spec §14's own wording keeps it.
  */
 import { existsSync, readdirSync, readFileSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
@@ -171,6 +171,30 @@ function layoutEntry(head: RegExp): string {
   let to = from + 1;
   while (to < lines.length && /^\s*/.exec(lines[to]!)![0].length > indent && lines[to]!.trim() !== '') to++;
   return lines.slice(from, to).join(' ');
+}
+
+/** The column where §1's prose continuations start; lines indented less are list lines. */
+const PROSE_INDENT = 32;
+
+/**
+ * The file tokens of a §1 entry's list lines (SP4a §14): the head line and its deeper lines indented below the prose
+ * column, each up to its first gap of two or more spaces, split on spaces. Prose continuation lines are skipped, so a
+ * file named only in a description does not count as listed.
+ */
+function listTokens(head: RegExp): string[] {
+  const lines = text.split('\n');
+  const from = lines.findIndex((l) => head.test(l));
+  if (from < 0) return [];
+  const indent = /^\s*/.exec(lines[from]!)![0].length;
+  const out: string[] = [];
+  for (let i = from; i < lines.length; i++) {
+    const l = lines[i]!;
+    const at = /^\s*/.exec(l)![0].length;
+    if (i > from && (at <= indent || l.trim() === '')) break;
+    if (i > from && at >= PROSE_INDENT) continue;
+    out.push(...l.trim().split(/\s{2,}/)[0]!.split(/\s+/));
+  }
+  return out;
 }
 
 /** A number written in the spec, with its Unicode minus. */
@@ -611,45 +635,41 @@ describe('master spec amendments (SP4a §14)', () => {
     expect(/\(SP3e: ([^)]*)\)/.exec(entry)![1]).not.toContain('SP4a');
   });
 
-  test('§1 names SP4a\'s new modules in their directories\' entries, and each exists', () => {
-    const named: ReadonlyArray<readonly [RegExp, string, readonly string[]]> = [
-      [/^\s+store\/pool\.ts /, 'src/world/store/', ['padded.ts']],
-      [/^\s+pipeline\/terrainStage\.ts /, 'src/gen/pipeline/', ['decorateStage.ts', 'finalHeightmaps.ts']],
-      [/^\s+textures\/painters\//, 'src/textures/', ['flatColors.ts']],
-      [/^\s+mesh\/greedy\.ts /, 'src/mesh/', ['greedy.ts', 'fluid.ts', 'packing.ts', 'connectivity.ts', 'column.ts', 'builder.ts', 'faces.ts']],
-      [/^\s+workers\/protocol\.ts /, 'src/workers/', ['worldJobs.ts', 'spikeStore.worker.ts', 'spikeStoreHandler.ts']],
-      [/^\s+engine\/\s/, 'src/engine/', ['coordinator.ts', 'rings.ts', 'uploadBudget.ts', 'renderDistance.ts', 'spikeStore.ts']],
-      [/^\s+render\/\s/, 'src/render/', ['fpsLimiter.ts', 'frameState.ts', 'frameTiming.ts', 'regionGrid.ts', 'spike/']],
-      [/^\s+player\/fly\.ts /, 'src/player/', ['fly.ts', 'keymap.ts', 'input.ts']],
-      [/^\s+ui\/world\/\* /, 'src/ui/', ['world/', 'loading/', 'spike/', 'settings.ts']],
-      [/^\s+public\/panoramas\/ /, 'public/', ['panoramas/']],
+  test('§1 lists SP4a\'s new modules in their directories\' entries, and each exists', () => {
+    // [entry head, the list tokens it must hold, the files on disk]; a token counts only on a list line (below).
+    const named: ReadonlyArray<readonly [RegExp, readonly string[], readonly string[]]> = [
+      [/^\s+pipeline\/terrainStage\.ts /, ['decorateStage.ts', 'finalHeightmaps.ts'], ['src/gen/pipeline/decorateStage.ts', 'src/gen/pipeline/finalHeightmaps.ts']],
+      [/^\s+textures\/painters\//, ['flatColors.ts'], ['src/textures/flatColors.ts']],
+      [/^\s+mesh\/greedy\.ts /, ['mesh/greedy.ts', 'fluid.ts', 'packing.ts', 'connectivity.ts', 'column.ts', 'builder.ts', 'faces.ts'],
+        ['greedy.ts', 'fluid.ts', 'packing.ts', 'connectivity.ts', 'column.ts', 'builder.ts', 'faces.ts'].map((f) => `src/mesh/${f}`)],
+      [/^\s+workers\/protocol\.ts /, ['worldJobs.ts', 'spikeStore.worker.ts', 'spikeStoreHandler.ts'],
+        ['worldJobs.ts', 'spikeStore.worker.ts', 'spikeStoreHandler.ts'].map((f) => `src/workers/${f}`)],
+      [/^\s+engine\/\s/, ['coordinator.ts', 'rings.ts', 'uploadBudget.ts', 'renderDistance.ts', 'spikeStore.ts'],
+        ['coordinator.ts', 'rings.ts', 'uploadBudget.ts', 'renderDistance.ts', 'spikeStore.ts'].map((f) => `src/engine/${f}`)],
+      [/^\s+render\/\s/, ['fpsLimiter.ts', 'frameState.ts', 'frameTiming.ts', 'regionGrid.ts', 'spike/'],
+        ['fpsLimiter.ts', 'frameState.ts', 'frameTiming.ts', 'regionGrid.ts', 'spike/'].map((f) => `src/render/${f}`)],
+      [/^\s+player\/fly\.ts /, ['player/fly.ts', 'keymap.ts', 'input.ts'], ['fly.ts', 'keymap.ts', 'input.ts'].map((f) => `src/player/${f}`)],
+      [/^\s+ui\/world\/\* /, ['ui/world/*', 'ui/loading/*', 'ui/spike/*', 'settings.ts'], ['src/ui/world/', 'src/ui/loading/', 'src/ui/spike/', 'src/ui/settings.ts']],
+      [/^\s+public\/panoramas\/ /, ['public/panoramas/'], ['public/panoramas/manifest.json']],
     ];
-    for (const [head, dir, files] of named) {
-      const entry = layoutEntry(head);
-      expect(entry, `§1 has no entry matching ${head}`).not.toBe('');
-      for (const f of files) {
-        expect(entry, `§1's ${dir} entry does not name ${f}`).toContain(f.endsWith('/') ? `${f}` : ` ${f}`);
-        expect(existsSync(`${ROOT_DIR}${dir}${f}`), `${dir}${f} does not exist`).toBe(true);
-      }
+    for (const [head, tokens, files] of named) {
+      const listed = listTokens(head);
+      expect(listed, `§1 has no entry matching ${head}`).not.toEqual([]);
+      for (const t of tokens) expect(listed, `§1's ${head} entry does not list ${t}`).toContain(t);
+      for (const f of files) expect(existsSync(`${ROOT_DIR}${f}`), `${f} does not exist`).toBe(true);
     }
+    // padded.ts is named in the store entry's prose, as spec §14 words it.
     expect(layoutEntry(/^\s+store\/pool\.ts /)).toContain('padded.ts arrives in SP4a');
+    expect(existsSync(`${ROOT_DIR}src/world/store/padded.ts`)).toBe(true);
     expect(text).toContain('the standalone ?map page (mounted in-game from SP4b)');
   });
 
-  test('the panoramas decide the cut-line texts: SP4a\'s cut line and the receivers', () => {
+  test('the panoramas were built, so SP4a\'s cut line says it was not taken and the receivers say nothing moved', () => {
     const manifest = JSON.parse(readFileSync(`${ROOT_DIR}public/panoramas/manifest.json`, 'utf8')) as unknown[];
-    const built = manifest.length > 0;
-    expect(built, 'the panoramas were built (SP4a spec §8.3, §11)').toBe(true);
+    expect(manifest, 'the six panoramas of SP4a spec §8.3').toHaveLength(6);
     const cut = spEntry('SP4a', 'SP4b').split('\n').find((l) => l.startsWith('- **Cut line:**'));
-    const fallback = 'The RegionMesh fallback was required by the capability probe (Firefox lacks `WEBGL_multi_draw`), so it is not cuttable.';
-    if (built) {
-      expect(cut).toBe(`- **Cut line:** the panoramas (→ SP4b). It was not taken: the panorama tool and its six panoramas shipped in SP4a, so nothing moved. ${fallback}`);
-      expect(manifest).toHaveLength(6);
-      expect(text).toContain('SP4a loading-screen panoramas → SP4b (delivered in SP4a, so nothing moved);');
-    } else {
-      expect(cut).toBe(`- **Cut line:** the panoramas (→ SP4b). ${fallback}`);
-      expect(text).toContain('SP4a loading-screen panoramas → SP4b (the loading screen shipped with its neutral background);');
-    }
+    expect(cut).toBe('- **Cut line:** the panoramas (→ SP4b). It was not taken: the panorama tool and its six panoramas shipped in SP4a, so nothing moved. The RegionMesh fallback was required by the capability probe (Firefox lacks `WEBGL_multi_draw`), so it is not cuttable.');
+    expect(text).toContain('SP4a loading-screen panoramas → SP4b (delivered in SP4a, so nothing moved);');
   });
 
   test('a bare SP4 is left only where spec §14 keeps it: the §10 split paragraphs and the parallelism line', () => {
