@@ -1,5 +1,6 @@
 import { describe, expect, test, vi } from 'vitest';
-import { createFrameNotice, lowerRd } from '../../src/ui/world/frameNotice';
+import { createFpsLimiter } from '../../src/render/fpsLimiter';
+import { createFrameClock, createFrameNotice, lowerRd } from '../../src/ui/world/frameNotice';
 
 /** Pushes `n` frames of `ms` each. */
 function feed(notice: { push(frameMs: number): void }, n: number, ms: number): void {
@@ -76,5 +77,43 @@ describe('createFrameNotice (SP4a spec §8.5: p95 > 25 ms over the first 300 fra
     expect(lowerRd(6)).toBe(4);
     expect(lowerRd(5)).toBe(4);
     expect(lowerRd(4)).toBeNull();
+  });
+});
+
+describe('createFrameClock (the page feeds the notice raw rAF deltas, before the FPS limiter)', () => {
+  const HZ60 = 1000 / 60;
+
+  test('a 30 fps cap on a fast 60 Hz display suggests nothing (the cap is the user\'s, not a slow GPU)', () => {
+    const onSuggest = vi.fn<(rd: number) => void>();
+    const clock = createFrameClock(createFpsLimiter(30), createFrameNotice(onSuggest, 12), 0);
+    const rendered: number[] = [];
+    for (let i = 1; i <= 600; i++) {
+      const dt = clock.tick(i * HZ60);
+      if (dt !== null) rendered.push(dt);
+    }
+    expect(onSuggest).not.toHaveBeenCalled();
+    // Every other tick renders, so the rendered frames' deltas are the cap's 33.3 ms: judged, they would suggest.
+    expect(rendered.length).toBe(300);
+    expect(rendered.slice(1).every((dt) => Math.abs(dt - 2 * HZ60) < 1e-6)).toBe(true);
+    const judged = vi.fn<(rd: number) => void>();
+    const onRendered = createFrameNotice(judged, 12);
+    for (const dt of rendered) onRendered.push(dt);
+    expect(judged).toHaveBeenCalledWith(10);
+  });
+
+  test('a 30 fps cap with slow frames (50 ms rAF deltas) still suggests the next lower RD', () => {
+    const onSuggest = vi.fn<(rd: number) => void>();
+    const clock = createFrameClock(createFpsLimiter(30), createFrameNotice(onSuggest, 12), 0);
+    for (let i = 1; i <= 300; i++) clock.tick(i * 50);
+    expect(onSuggest).toHaveBeenCalledTimes(1);
+    expect(onSuggest).toHaveBeenCalledWith(10);
+  });
+
+  test('without a cap every tick renders and returns its delta from the previous rendered frame', () => {
+    const clock = createFrameClock(createFpsLimiter(0), createFrameNotice(() => {}, 12), 100);
+    expect(clock.tick(110)).toBe(10);
+    expect(clock.tick(126)).toBe(16);
+    // A timestamp before the previous one (never from rAF) reads 0, not a negative delta.
+    expect(clock.tick(120)).toBe(0);
   });
 });

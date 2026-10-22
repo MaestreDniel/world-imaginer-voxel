@@ -58,7 +58,7 @@ import { decodeMapState, encodeMapState, openMapSession } from '../map/mapState'
 import { cryptoSeed } from '../seedBox';
 import { loadSettings, saveSettings, type WorldSettings } from '../settings';
 import { firstView } from './firstView';
-import { createFrameNotice, lowerRd } from './frameNotice';
+import { createFrameClock, createFrameNotice, lowerRd } from './frameNotice';
 import { createReloader, hereUrl, installLeaveGuard, type Reloader } from './reload';
 import { Y_MAX, Y_MIN, type WorldQuery } from './query';
 
@@ -680,18 +680,18 @@ export function mountWorldPage(root: HTMLElement, q: WorldQuery, hash: string, o
     });
     teardown.push(() => input.dispose());
 
-    let last = revealTs;
+    // The slow-frame notice gets every raw rAF delta before the limiter, so an FPS cap of 30 is not read as slow.
+    const clock = createFrameClock(limiter, slowFrames, revealTs);
     let n = 0;
     let firstMax = 0;
     const loop = (now: number): void => {
       if (stopped) return;
       raf = requestAnimationFrame(loop);
-      if (!limiter.tick(now)) return;
       try {
-        const dtMs = Math.max(0, now - last);
-        last = now;
+        // The tick may show the slow-frame notice, so it runs inside the guard.
+        const dtMs = clock.tick(now);
+        if (dtMs === null) return;
         frames.push(dtMs);
-        slowFrames.push(dtMs);
         if (n < FIRST_FRAMES) {
           firstMax = Math.max(firstMax, dtMs);
           if (n + 1 === FIRST_FRAMES) stats.first120MaxMs = firstMax;
