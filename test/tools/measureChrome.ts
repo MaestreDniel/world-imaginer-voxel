@@ -13,12 +13,13 @@
  *    (`chromeArgs`, ruling P60);
  * 4. it builds (unless --skip-build), starts its own `vite preview` on a free port (never 5183) and its own headful
  *    Chrome, fullscreen at 1920 × 1080 @ 1, with a fresh temporary profile and no SwiftShader flag;
- * 5. it probes the WebGL renderer and refuses unless it names the expected GPU (`gpuMatches`), then refuses unless the
- *    viewport is exactly 1920 × 1080 @ 1 (ruling P7); --probe-only stops here with exit 0;
+ * 5. it probes the WebGL renderer and refuses unless it names the expected GPU (`gpuMatches`); it makes sure the window is
+ *    fullscreen on the panel eDP-1 at (0, 0) (`placeWindow`, ruling P59) and refuses otherwise (`windowProblem`), then
+ *    refuses unless the viewport is exactly 1920 × 1080 @ 1 (ruling P7); --probe-only stops here with exit 0;
  * 6. it records the page's console errors (ruling P8), navigates, and polls the route's result every second (15 min);
  *    every CDP call is bounded, and the poll fails fast when Chrome exits or the tab crashes (`pollResult`, `watchPage`);
- * 7. it adds who measured, the load averages, the Chrome version, the viewport and the console errors, writes the
- *    JSON pretty-printed and prints its path and summary (ruling P9);
+ * 7. it adds who measured, the load averages, the Chrome version, the window (warning when it left eDP-1), the viewport
+ *    and the console errors, writes the JSON pretty-printed and prints its path and summary (ruling P9);
  * 8. it stops only its own Chrome and preview, then removes the profile.
  *
  * Tools run under plain Node (type stripping), so this file imports no `src/` module.
@@ -44,6 +45,13 @@ const RESULT_TIMEOUT_MS = 15 * 60 * 1000;
 const CDP_CALL_TIMEOUT_MS = 30_000;
 /** How long the fullscreen window may take to reach its size before the viewport check refuses. */
 const VIEWPORT_SETTLE_MS = 5000;
+/** How many times `placeWindow` runs its normal → (0, 0) 1920 × 1080 → fullscreen sequence before the tool refuses. */
+export const PLACE_ATTEMPTS = 3;
+/** The window's reads while it settles (at start-up, and after each sequence): every WINDOW_POLL_MS, WINDOW_READS times. */
+const WINDOW_POLL_MS = 250;
+const WINDOW_READS = 8;
+/** The pause between two steps of the sequence, so the window manager applies each one before the next. */
+const WINDOW_STEP_MS = 300;
 const ASSETS = 'docs/superpowers/specs/assets/sp4a';
 
 export interface MeasureArgs {
@@ -167,6 +175,63 @@ export function viewportProblem(v: { innerWidth: number; innerHeight: number; de
   return `the viewport is ${v.innerWidth}x${v.innerHeight}@${v.devicePixelRatio}, not ${SCREEN.width}x${SCREEN.height}@${SCREEN.dpr}`;
 }
 
+/** `Browser.getWindowForTarget`'s bounds, also `Browser.setWindowBounds`'s argument (every field optional in CDP). */
+export interface WindowBounds {
+  readonly left?: number;
+  readonly top?: number;
+  readonly width?: number;
+  readonly height?: number;
+  readonly windowState?: string;
+}
+
+/**
+ * Null only for a fullscreen window at (0, 0), which is the panel eDP-1 (the primary output at +0+0; HDMI-1-0 sits at
+ * +1920+0): the cells are measured there (ruling P59). Otherwise the bounds and the state. The viewport check alone
+ * (ruling P7) cannot tell the panels apart: a window fullscreen on HDMI-1-0 is 1920 × 1080 @ 1 too, at 143.6 Hz.
+ */
+export function windowProblem(b: WindowBounds): string | null {
+  if (b.left === 0 && b.top === 0 && b.windowState === 'fullscreen') return null;
+  return `the window is ${b.windowState ?? 'unknown'} at ${b.left ?? '?'},${b.top ?? '?'} (${b.width ?? '?'}x${b.height ?? '?'}), not fullscreen at 0,0 on eDP-1`;
+}
+
+/** The window as `placeWindow` sees it: CDP's Browser domain in the tool, a fake in the tests. */
+export interface WindowControl {
+  read(): Promise<WindowBounds>;
+  set(bounds: WindowBounds): Promise<void>;
+  sleep(ms: number): Promise<void>;
+}
+
+/** Reads the window until `windowProblem` clears or WINDOW_READS more reads have passed; returns the last bounds. */
+async function settledWindow(w: WindowControl, b: WindowBounds): Promise<WindowBounds> {
+  for (let i = 0; i < WINDOW_READS && windowProblem(b) !== null; i++) {
+    await w.sleep(WINDOW_POLL_MS);
+    b = await w.read();
+  }
+  return b;
+}
+
+/**
+ * Makes sure the window is fullscreen on eDP-1 (ruling P59). `--window-position=0,0` and `--start-fullscreen` are
+ * hints the window manager may ignore: it has left the window maximized (inner height 958), opened it on HDMI-1-0
+ * (maximized, 993; or fullscreen, which the viewport check accepts). A window already placed is left alone, since the
+ * sequence itself can leave a placed window normal. Otherwise: normal, then (0, 0) at 1920 × 1080, then fullscreen,
+ * re-read until settled, at most `attempts` times. Returns the last bounds and how many sequences ran; the caller
+ * refuses on `windowProblem`.
+ */
+export async function placeWindow(w: WindowControl, attempts = PLACE_ATTEMPTS): Promise<{ bounds: WindowBounds; attempts: number }> {
+  let b = await settledWindow(w, await w.read());
+  let i = 0;
+  for (; i < attempts && windowProblem(b) !== null; i++) {
+    await w.set({ windowState: 'normal' });
+    await w.sleep(WINDOW_STEP_MS);
+    await w.set({ left: 0, top: 0, width: SCREEN.width, height: SCREEN.height });
+    await w.sleep(WINDOW_STEP_MS);
+    await w.set({ windowState: 'fullscreen' });
+    b = await settledWindow(w, await w.read());
+  }
+  return { bounds: b, attempts: i };
+}
+
 /** A number at `path` in an unknown JSON value, or undefined. */
 function numberAt(v: unknown, path: readonly string[]): number | undefined {
   let cur = v;
@@ -226,6 +291,16 @@ async function settledViewport(cdp: Cdp): Promise<Viewport> {
     if (viewportProblem(v) === null || Date.now() - t0 >= VIEWPORT_SETTLE_MS) return v;
     await sleep(250);
   }
+}
+
+/** The page's window through the browser target's Browser domain (`getWindowForTarget`, `setWindowBounds`). */
+function windowControl(browser: Cdp, targetId: string): WindowControl {
+  const get = () => call(browser, 'Browser.getWindowForTarget', { targetId });
+  return {
+    read: async () => (await get())['bounds'] as WindowBounds,
+    set: async (bounds) => { await call(browser, 'Browser.setWindowBounds', { windowId: (await get())['windowId'] as number, bounds: { ...bounds } }); },
+    sleep,
+  };
 }
 
 // ---------------------------------------------------------------- the poll
@@ -336,10 +411,12 @@ async function main(argv: readonly string[]): Promise<number> {
 
   let chrome: ChromeHandle | null = null;
   let cdp: Cdp | null = null;
+  let browserCdp: Cdp | null = null;
   let profile: string | null = null;
   const consoleErrors: string[] = [];
   const cleanup = async () => {
     cdp?.close();
+    browserCdp?.close();
     if (chrome !== null && running(chrome.proc)) {
       try {
         const browser = await connect(chrome.wsUrl);
@@ -364,7 +441,7 @@ async function main(argv: readonly string[]): Promise<number> {
     console.log(`headful Chrome (pid ${chrome.proc.pid}) with DevTools on port ${chrome.port}, profile ${profile}, PRIME ${prime ?? 'unknown'}, ${envText}`);
     const version = await (await fetch(`http://127.0.0.1:${chrome.port}/json/version`)).json() as { Browser?: string };
     const chromeVersion = version.Browser ?? 'unknown';
-    const targets = await (await fetch(`http://127.0.0.1:${chrome.port}/json/list`)).json() as Array<{ type: string; webSocketDebuggerUrl: string }>;
+    const targets = await (await fetch(`http://127.0.0.1:${chrome.port}/json/list`)).json() as Array<{ type: string; id: string; webSocketDebuggerUrl: string }>;
     const target = targets.find((t) => t.type === 'page');
     if (target === undefined) throw new Error('Chrome has no page target');
     cdp = await connect(target.webSocketDebuggerUrl);
@@ -395,6 +472,16 @@ async function main(argv: readonly string[]): Promise<number> {
       }
       return 1;
     }
+    browserCdp = await connect(chrome.wsUrl);
+    const win = windowControl(browserCdp, target.id);
+    const { bounds: placed, attempts } = await placeWindow(win);
+    const how = attempts === 0 ? 'as opened' : `after ${attempts} placement attempt${attempts === 1 ? '' : 's'}`;
+    console.log(`window: ${placed.windowState ?? 'unknown'} at ${placed.left ?? '?'},${placed.top ?? '?'} ${placed.width ?? '?'}x${placed.height ?? '?'}, ${how}`);
+    const misplaced = windowProblem(placed);
+    if (misplaced !== null) {
+      console.error(`refused: ${misplaced}, ${how}`);
+      return 1;
+    }
     const vp = await settledViewport(cdp);
     console.log(`viewport: ${vp.innerWidth}x${vp.innerHeight}@${vp.devicePixelRatio}`);
     const problem = viewportProblem(vp);
@@ -419,9 +506,10 @@ async function main(argv: readonly string[]): Promise<number> {
     });
     const loadAvg1After = loadavg()[0]!;
     const viewport = await evaluate<Viewport>(cdp, READ_VIEWPORT);
+    const windowBounds = await win.read();
     const result: Record<string, unknown> = {
       ...(JSON.parse(text) as Record<string, unknown>),
-      measuredBy: 'measureChrome', loadAvg1Before, loadAvg1After, chromeVersion, viewport, consoleErrors: [...consoleErrors],
+      measuredBy: 'measureChrome', loadAvg1Before, loadAvg1After, chromeVersion, window: windowBounds, viewport, consoleErrors: [...consoleErrors],
     };
     const file = join(ROOT, ASSETS, outputName(a));
     mkdirSync(join(ROOT, ASSETS), { recursive: true });
@@ -430,6 +518,8 @@ async function main(argv: readonly string[]): Promise<number> {
     if (a.route === 'spike') console.log(`verdict: ${JSON.stringify(result['verdict'] ?? null)}`);
     else console.log(flightLine(result));
     if (loadAvg1After > MEASURE_LOAD_MAX) console.warn(`WARNING: the load average rose to ${loadAvg1After.toFixed(2)} during the run; rerun this cell on a quiet machine`);
+    const movedAway = windowProblem(windowBounds);
+    if (movedAway !== null) console.warn(`WARNING: at the end of the run ${movedAway}; rerun this cell`);
     if (consoleErrors.length > 0) console.warn(`WARNING: ${consoleErrors.length} console error(s):\n${consoleErrors.join('\n')}`);
     return 0;
   } finally {

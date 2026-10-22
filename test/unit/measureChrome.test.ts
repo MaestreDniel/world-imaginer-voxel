@@ -2,8 +2,8 @@ import type { ChildProcess } from 'node:child_process';
 import { EventEmitter } from 'node:events';
 import { describe, expect, test } from 'vitest';
 import {
-  chromeArgs, flightLine, gpuMatches, launchEnv, MEASURE_LOAD_MAX, outputName, parseMeasureArgs, pollResult, routePath, viewportProblem, watchPage,
-  withTimeout, type MeasureArgs,
+  chromeArgs, flightLine, gpuMatches, launchEnv, MEASURE_LOAD_MAX, outputName, parseMeasureArgs, PLACE_ATTEMPTS, placeWindow, pollResult, routePath,
+  viewportProblem, watchPage, windowProblem, withTimeout, type MeasureArgs, type WindowBounds,
 } from '../tools/measureChrome';
 
 const IRIS = 'ANGLE (Intel, Mesa Intel(R) Iris(R) Xe Graphics (ADL GT2), OpenGL 4.6)';
@@ -128,6 +128,71 @@ describe('measureChrome: the headful window', () => {
     expect(viewportProblem({ innerWidth: 1920, innerHeight: 1080, devicePixelRatio: 1 })).toBeNull();
     expect(viewportProblem({ innerWidth: 1920, innerHeight: 987, devicePixelRatio: 1 })).toMatch(/1920.*987/);
     expect(viewportProblem({ innerWidth: 1920, innerHeight: 1080, devicePixelRatio: 1.25 })).toMatch(/1\.25/);
+  });
+});
+
+describe('measureChrome: the window on the panel eDP-1 (ruling P59)', () => {
+  const FULL_EDP = { left: 0, top: 0, width: 1920, height: 1080, windowState: 'fullscreen' } as const;
+  const FULL_HDMI = { left: 1920, top: 0, width: 1920, height: 1080, windowState: 'fullscreen' } as const;
+  const MAXIMIZED = { left: 0, top: 35, width: 1920, height: 1045, windowState: 'maximized' } as const;
+
+  test('windowProblem: null only for a fullscreen window at (0, 0), and otherwise the bounds and the state', () => {
+    expect(windowProblem(FULL_EDP)).toBeNull();
+    expect(windowProblem(FULL_HDMI)).toMatch(/fullscreen at 1920,0/);
+    expect(windowProblem(MAXIMIZED)).toMatch(/maximized at 0,35/);
+    expect(windowProblem({ left: 0, top: 0, width: 1920, height: 1080, windowState: 'normal' })).toMatch(/normal/);
+    expect(windowProblem({ windowState: 'fullscreen' })).not.toBeNull();
+  });
+
+  /** A fake window: `read` returns `states` in turn (the last one repeats); `set` and `sleep` are recorded. */
+  const fakeWindow = (states: readonly WindowBounds[]) => {
+    const sets: WindowBounds[] = [];
+    let reads = 0;
+    return {
+      sets,
+      reads: () => reads,
+      control: {
+        read: async () => states[Math.min(reads++, states.length - 1)]!,
+        set: async (b: WindowBounds) => { sets.push(b); },
+        sleep: async () => undefined,
+      },
+    };
+  };
+  const SEQUENCE = [{ windowState: 'normal' }, { left: 0, top: 0, width: 1920, height: 1080 }, { windowState: 'fullscreen' }];
+
+  test('placeWindow leaves a window already fullscreen at (0, 0) alone', async () => {
+    const w = fakeWindow([FULL_EDP]);
+    expect(await placeWindow(w.control)).toEqual({ bounds: FULL_EDP, attempts: 0 });
+    expect(w.sets).toEqual([]);
+  });
+
+  test('placeWindow moves a window fullscreen on HDMI-1-0 or maximized: normal, then (0, 0) 1920 × 1080, then fullscreen', async () => {
+    for (const start of [FULL_HDMI, MAXIMIZED]) {
+      // The window keeps its start bounds until the sequence's fullscreen step, then reads fullscreen at (0, 0).
+      let placed = false;
+      const w = fakeWindow([start]);
+      w.control.read = async () => (placed ? FULL_EDP : start);
+      w.control.set = async (b: WindowBounds) => { w.sets.push(b); if (b.windowState === 'fullscreen') placed = true; };
+      expect(await placeWindow(w.control)).toEqual({ bounds: FULL_EDP, attempts: 1 });
+      expect(w.sets).toEqual(SEQUENCE);
+    }
+  });
+
+  test('placeWindow retries when a sequence does not take, and stops at PLACE_ATTEMPTS with the last bounds and the count', async () => {
+    const stuck = { left: 0, top: 0, width: 1761, height: 991, windowState: 'normal' } as const;
+    const w = fakeWindow([stuck]);
+    expect(await placeWindow(w.control)).toEqual({ bounds: stuck, attempts: 3 });
+    expect(PLACE_ATTEMPTS).toBe(3);
+    expect(w.sets).toEqual([...SEQUENCE, ...SEQUENCE, ...SEQUENCE]);
+  });
+
+  test('placeWindow: a second attempt that takes ends the retries', async () => {
+    let fullscreens = 0;
+    const w = fakeWindow([MAXIMIZED]);
+    w.control.read = async () => (fullscreens >= 2 ? FULL_EDP : MAXIMIZED);
+    w.control.set = async (b: WindowBounds) => { w.sets.push(b); if (b.windowState === 'fullscreen') fullscreens++; };
+    expect(await placeWindow(w.control)).toEqual({ bounds: FULL_EDP, attempts: 2 });
+    expect(w.sets).toEqual([...SEQUENCE, ...SEQUENCE]);
   });
 });
 
