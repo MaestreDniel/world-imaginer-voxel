@@ -12,6 +12,10 @@ Improvements noted for later. They belong to no SP spec; pick them up when conve
 
 - **Verify the 3D page in Safari and other browsers (SP4a §11).** SP4a was measured and checked in Chrome (RegionBatch) and Firefox (RegionMesh) on Linux only. Safari needs a look at least for `SharedArrayBuffer` growth under COOP/COEP, `WEBGL_multi_draw` (which decides the section renderer) and the pointer lock.
 
+## Rendering
+
+- **The T-junction pinhole specks (SP4a).** Isolated bright single-pixel specks where merged quads meet, likely T-junction pinholes letting the sky through: about 55 pixels in SP4a's `review-spawn-day.png`, 31 in the islands shot, 30-130 per panorama (SP4a spec, Exit evidence). No SP owns them; after the user's check, pick a fix (for example a tiny overlap of merged quads, or splitting T-junction edges in the mesher) when convenient, or hand it to SP4b's mesher work or SP11's quality pass.
+
 ## Code
 
 - **Remove the dead `ui/shell.ts` and `ui/hud.ts`'s `mountHud`** (with their `.shell`, `.toolbar`, `.hud` and `.side-panel` CSS): the 3D page replaced SP0's boot shell in SP4a, so nothing mounts them. Removing them also updates master §1's `ui/shell.ts` entry and its pin in `test/arch/masterSpec.test.ts`.

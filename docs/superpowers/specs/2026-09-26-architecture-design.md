@@ -413,7 +413,9 @@ interface CompiledDensity { cornerFn(ctx, x:number, y:number, z:number): number;
   boundsCell(ctx, cellX:number, cellY:number, cellZ:number): [number, number]; point(x:number, y:number, z:number, tap?:string): number; }
 // SP3b's compileDensity(expr, noises) emits columnFn, positionFn, cornerFn, voxelFn and tapFn closures over its own typed scratch;
 // the cell bounds live in bounds.ts and the point evaluation in probe.ts (the SP3b spec §2; amended by SP3b).
-// From store.claimColumn(cx, cz, epoch) (amended by SP3a; SP3a spec §3.5). Each setter copies its 4096-entry arrays.
+// From store.claimColumn(cx, cz, epoch) (amended by SP3a; SP3a spec §3.5), or from store.reopenColumn(cx, cz, from: 1 | 2)
+// for the next stage of a committed column (D at Proto, L at Decorated; clears nothing; amended by SP4a, SP4a spec §2.5, D4).
+// Each setter copies its 4096-entry arrays.
 interface ColumnWriter { setProto(sy:number, blocks:Uint16Array, fluid:Uint8Array): void;
   setFinal(sy:number, blocks:Uint16Array, light:Uint8Array, fluid:Uint8Array): void;
   shareFinal(sy:number, light:Uint8Array): void /* final blocks and fluid share the proto slots */;
@@ -442,7 +444,7 @@ interface MetricDef { id: MetricId; run(region: RegionView): Record<string, numb
 | column record + aux | 0.64 + 8 KiB |
 | typical final column (~13 block + ~5 light + ~1.5 fluid slots + aux) | ≈ 138 KiB (104 + 20 + 6 + 8) |
 | extra proto slots (sections D modified, mostly ore-bearing; ~7 block + ~1.5 fluid slots) | ≈ 62 KiB, kept only in the outer rings RD+2..RD+3 (≈ 11.5 MB at RD12), or everywhere in tuning mode (+≈ 45 MB at RD12) |
-| SAB store at RD12 / RD16 / RD24 (T ring = RD+3: 755 / 1195 / 2376 columns) | ≈ 115 / 180 / 350 MB (≈ +55-60 % vs a u8 store; ≈ +20 % of total app memory) |
+| SAB store at RD12 / RD16 / RD24 (the T set: the RD disc grown by 3 columns in each direction, 825 / 1293 / 2509 columns, SP4a's exact sets; amended by SP4a from the disc estimates 755 / 1195 / 2376) | ≈ 126 / 195 / 370 MB (scaled from 115 / 180 / 350 by the exact counts; ≈ +55-60 % vs a u8 store; ≈ +20 % of total app memory) |
 | SAB store worst case inside the RD+4..RD+5 unload hysteresis (962 / 1452 / 2734 columns) | ≈ 145 / 213 / 390 MB |
 | vertex | 8 B: `position` Uint8x4 + `data` uint32 |
 | quad, indexed | 56 B (4 × 8 B + 6 × Uint32 index, since BatchedMesh copies per-geometry indices) |
@@ -1054,7 +1056,7 @@ On Ultra, passes 2-4 (after the LOD depth clear) render into a `WebGLRenderTarge
 
 **No Lambert and no sun term on terrain.** Caves go dark and block light does not dim at night.
 
-**Fog** is spherical, `f = smoothstep(fogStart, fogEnd, length(viewPos))` (SP4a: end (RD − 0.5)·16, start 64 blocks before; an edge fade around the load centre until SP4b streams). Its colour comes from `skyColor(horizonDir)` in `common.glsl` and is darkened by the eye's sky light. When the eye is in water, fog switches to exponential (about 48-60 blocks) with a screen tint.
+**Fog** is spherical, `f = smoothstep(fogStart, fogEnd, length(viewPos))` (SP4a: end (RD − 0.5)·16, start 64 blocks before; an edge fade around the load centre until SP4b streams). Its colour comes from the sky gradient towards the fragment's horizon (`skyGradient(horizonDir)` in `common.glsl`: the sky without the sun's disc and glow, which would paint a stripe on the fogged terrain under a low sun; amended by SP4a) and is darkened by the eye's sky light. When the eye is in water, fog switches to exponential (about 48-60 blocks) with a screen tint.
 
 **Colour management:** textures use `SRGBColorSpace`, output is sRGB, and tints are converted to linear on the CPU.
 
@@ -1108,7 +1110,7 @@ This is a custom depth pass (the `shadowDepth` material decodes the same vertex 
 ### 4.9 Sky, day/night, clouds
 
 - **Phases** come from sun elevation: dawn and dusk are elevation ∈ (−6°, 10°). This fixes 09's dusk-after-sunset. The default cycle is 20 min (SP4a: the sun on a path tilted 20°, t 0 at sunrise, the world opening at 08:00; T cycles the time speed ×1, ×10, ×60, paused), with controls for cycle length, time, pause and night floor.
-- **Sky dome:** zenith and horizon gradient, sun disc with glow, a moon quad opposite the sun with 8 phases, and 1500 stars as Points fading with elevation. `skyColor(dir)` is shared with fog and water.
+- **Sky dome:** zenith and horizon gradient, sun disc with glow, a moon quad opposite the sun with 8 phases, and 1500 stars as Points fading with elevation. `skyColor(dir)` is shared with water; the fog uses its gradient without the sun (`skyGradient`, amended by SP4a).
 - **Clouds:** a seeded 256² cell bitmap with 12-block cells at y 192-196, scrolling. Flat and translucent at Medium, greedy boxes 4 blocks thick at High+. Clouds fade with fog.
 
 ### 4.10 Water tiers
