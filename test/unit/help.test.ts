@@ -62,6 +62,18 @@ describe('mountHelp (SP4a spec §7.4, D31)', () => {
     expect(dom.el('help-system').textContent).toContain('Copy as JSON');
   });
 
+  test('the System table shows the growable-SAB probe and the reservation in MiB (final review C-M7)', () => {
+    mount();
+    const rows = dom.el('help-system').querySelectorAll('tr').map((r) => r.querySelectorAll('td').map((c) => c.textContent));
+    expect(rows).toContainEqual(['Growable SharedArrayBuffer', 'true']);
+    expect(rows).toContainEqual(['Store reservation (blocks/bytes)', '768/512 MiB']);
+    dom.body.replaceChildren();
+    mount({ report: { ...REPORT, growableSab: false, reservation: null } });
+    const none = dom.el('help-system').querySelectorAll('tr').map((r) => r.querySelectorAll('td').map((c) => c.textContent));
+    expect(none).toContainEqual(['Growable SharedArrayBuffer', 'false']);
+    expect(none).toContainEqual(['Store reservation (blocks/bytes)', '—']);
+  });
+
   test('changing RD calls onSettings with the new rd', () => {
     const { o } = mount();
     change('setting-rd', '8');
@@ -127,6 +139,28 @@ describe('mountHelp (SP4a spec §7.4, D31)', () => {
     const click = new Event('click', { cancelable: true });
     dom.el('help-map-here').dispatchEvent(click);
     expect(click.defaultPrevented).toBe(false);
+  });
+
+  test('Esc closes the help while it is open (final review C-M3); Esc while closed does nothing', () => {
+    const { help, o } = mount();
+    const esc = () => {
+      const e = Object.assign(new Event('keydown', { cancelable: true }), { code: 'Escape', key: 'Escape' });
+      dom.document.dispatchEvent(e);
+      return e;
+    };
+    esc();
+    expect(o.onClose).not.toHaveBeenCalled();
+    help.open();
+    const other = Object.assign(new Event('keydown', { cancelable: true }), { code: 'KeyQ', key: 'q' });
+    dom.document.dispatchEvent(other);
+    expect(help.isOpen).toBe(true);
+    esc();
+    expect(help.isOpen).toBe(false);
+    expect(dom.el('world-help').hidden).toBe(true);
+    expect(o.onClose).toHaveBeenCalledTimes(1);
+    // The listener goes with the overlay: a later Esc does not call onClose again.
+    esc();
+    expect(o.onClose).toHaveBeenCalledTimes(1);
   });
 
   test('"Fullscreen" calls onFullscreen', () => {

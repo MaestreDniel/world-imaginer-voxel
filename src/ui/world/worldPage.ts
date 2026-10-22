@@ -41,7 +41,7 @@ import { stageOffsets, type Stage } from '../../engine/rings';
 import { createUploadBudget } from '../../engine/uploadBudget';
 import { StoreFullError, WorkerFailed, createBrowserPool, poolSize, type WorkerPool } from '../../engine/workerPool';
 import { SPEED_DEFAULT, applyCameraRotation, atEdge, look, stepFly, stepSpeed, type FlyBounds, type FlyState } from '../../player/fly';
-import { attachInput } from '../../player/input';
+import { attachInput, isTextEntry } from '../../player/input';
 import { DEFAULT_KEYMAP, type Action } from '../../player/keymap';
 import { createFpsLimiter, type FpsLimiter } from '../../render/fpsLimiter';
 import type { FrameState } from '../../render/frameState';
@@ -61,7 +61,7 @@ import { SETTINGS_DEFAULTS, loadSettings, saveSettings, type WorldSettings } fro
 import { firstView } from './firstView';
 import type { FlightContext } from './flight';
 import { createFrameClock, createFrameNotice, lowerRd } from './frameNotice';
-import { createReloader, hereUrl, installLeaveGuard, type Reloader } from './reload';
+import { createReloader, hereUrl, installLeaveGuard, navigateTo, type Reloader } from './reload';
 import { Y_MAX, Y_MIN, type WorldQuery } from './query';
 
 /** The capture and test options (ruling P48). */
@@ -197,6 +197,20 @@ function storeSabMiB(store: VoxelStore): number {
 const nextFrame = (): Promise<number> => new Promise((resolve) => requestAnimationFrame(resolve));
 
 /**
+ * What the failure panel frees (spec §8.5): the long-task observer, the pool and the renderer with its WebGL context, so
+ * a load that failed (StoreFull on a weak machine) holds no workers or GPU memory behind the panel (final review B-M4).
+ */
+export function releaseOnFailure(o: {
+  readonly longTasks: { disconnect(): void } | null;
+  readonly pool: { terminate(): void } | null;
+  readonly renderer: { dispose(): void } | null;
+}): void {
+  o.longTasks?.disconnect();
+  o.pool?.terminate();
+  o.renderer?.dispose();
+}
+
+/**
  * Calls `step` once per frame (scheduled through `request`) until it returns true, then resolves. A throw from `step`
  * rejects with it and requests no further frame: an error while building is a load error that must reach the failure
  * panel (SP4a spec §8.3), not die uncaught in a rAF callback and surface 30 s later as the watchdog's "stall".
@@ -311,17 +325,28 @@ export function handleContextLoss(
 }
 
 /**
+ * The keys Keyboard Lock captures in fullscreen: W, T and N, so that Ctrl+W, Ctrl+T and Ctrl+N reach the page. Esc is
+ * not locked, so a short Esc still frees the mouse and leaves fullscreen (spec §7.1; final review C-M13).
+ */
+const LOCKED_KEYS: readonly string[] = ['KeyW', 'KeyT', 'KeyN'];
+
+/** Chromium's Keyboard Lock, which is not in the DOM typings. */
+export interface KeyboardLockNavigator {
+  readonly keyboard?: { lock?(keyCodes?: readonly string[]): Promise<void> };
+}
+
+/**
  * The help's "Fullscreen" (spec §7.1): requests fullscreen, then, where Chromium's Keyboard Lock exists
  * (`navigator.keyboard.lock()`), captures Ctrl+W so that it reaches the page; Firefox keeps the `beforeunload` prompt.
  * A refusal is ignored.
  */
 export async function enterFullscreen(
   doc: { readonly documentElement: { requestFullscreen(): Promise<void> } },
-  nav: { readonly keyboard?: { lock?(): Promise<void> } },
+  nav: KeyboardLockNavigator,
 ): Promise<void> {
   try {
     await doc.documentElement.requestFullscreen();
-    await nav.keyboard?.lock?.();
+    await nav.keyboard?.lock?.(LOCKED_KEYS);
   } catch {
     // Fullscreen refused (no user gesture, an iframe) or the lock refused: the guard still asks before closing.
   }
@@ -396,9 +421,11 @@ export function mountWorldPage(root: HTMLElement, q: WorldQuery, hash: string, o
   function fail(cause: string, e: unknown): void {
     if (state !== 'loading') return;
     state = 'failed';
-    longTasks?.disconnect();
-    pool?.terminate();
-    loading.fail(cause, details(e), { map: mapHref, lowerRd: lowerRdHref() });
+    // The details read the pool's size, so the panel is filled first; dispose() then finds no renderer to free twice.
+    const shown = details(e);
+    releaseOnFailure({ longTasks, pool, renderer: wr });
+    wr = null;
+    loading.fail(cause, shown, { map: mapHref, lowerRd: lowerRdHref() });
     settle();
   }
 
@@ -636,7 +663,7 @@ export function mountWorldPage(root: HTMLElement, q: WorldQuery, hash: string, o
     // Every navigation the page starts disarms the Ctrl+W guard first and happens once (spec §7.1; ruling P50).
     const disarm = installLeaveGuard(window);
     teardown.push(disarm);
-    const reloader = createReloader((url) => location.assign(url), disarm);
+    const reloader = createReloader((url) => navigateTo(url, location), disarm);
     const here = (rdOf: number | null): string => hereUrl(fly, rdOf, hash);
     const notices = createWorldNotices(host, reloader);
     teardown.push(() => notices.dispose());
@@ -726,10 +753,12 @@ export function mountWorldPage(root: HTMLElement, q: WorldQuery, hash: string, o
       navigate: (href) => reloader.reload(href),
       onFullscreen: () => {
         // Keyboard Lock is Chromium's and not in the DOM typings.
-        void enterFullscreen(document, navigator as Navigator & { readonly keyboard?: { lock?(): Promise<void> } });
+        void enterFullscreen(document, navigator as Navigator & KeyboardLockNavigator);
       },
       onClose: () => {},
     });
+    // Closing removes the help's Esc listener from the document.
+    teardown.push(() => help.close());
 
     const onAction = (a: Action): void => {
       switch (a) {
@@ -752,10 +781,8 @@ export function mountWorldPage(root: HTMLElement, q: WorldQuery, hash: string, o
     const input = attachInput(canvas, {
       onAction,
       onLook: (dx, dy) => look(fly, dx, dy, settings.sensitivity * LOOK_DEG_PER_PIXEL),
-      isTextFocus: () => {
-        const a = document.activeElement;
-        return a !== null && (a.tagName === 'INPUT' || a.tagName === 'SELECT' || a.tagName === 'TEXTAREA');
-      },
+      // Only text-entry controls (spec §7.1): a focused slider or select leaves H and F1 working (final review C-I2).
+      isTextFocus: () => isTextEntry(document.activeElement as HTMLElement | null),
       doc: document,
       win: window,
     });

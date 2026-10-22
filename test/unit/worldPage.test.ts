@@ -1,5 +1,5 @@
-import { describe, expect, test } from 'vitest';
-import { everyFrameUntil } from '../../src/ui/world/worldPage';
+import { describe, expect, test, vi } from 'vitest';
+import { everyFrameUntil, releaseOnFailure } from '../../src/ui/world/worldPage';
 
 /** A frame scheduler that queues callbacks; `flush` runs one frame. */
 function frames() {
@@ -39,5 +39,21 @@ describe('everyFrameUntil (the load build loop, SP4a spec §8.3)', () => {
     f.flush();
     await expect(done).rejects.toBe(boom);
     expect(f.pending()).toBe(0);
+  });
+});
+
+describe('releaseOnFailure (the failure panel frees the load, final review B-M4)', () => {
+  test('disconnects the long-task observer, terminates the pool and disposes the renderer, each once', () => {
+    const longTasks = { disconnect: vi.fn() };
+    const pool = { terminate: vi.fn() };
+    const renderer = { dispose: vi.fn() };
+    releaseOnFailure({ longTasks, pool, renderer });
+    expect(longTasks.disconnect).toHaveBeenCalledTimes(1);
+    expect(pool.terminate).toHaveBeenCalledTimes(1);
+    expect(renderer.dispose).toHaveBeenCalledTimes(1);
+  });
+
+  test('a failure before the pool or the renderer exists releases what there is', () => {
+    expect(() => releaseOnFailure({ longTasks: null, pool: null, renderer: null })).not.toThrow();
   });
 });

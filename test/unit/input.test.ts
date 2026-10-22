@@ -1,5 +1,5 @@
 import { describe, expect, test, vi } from 'vitest';
-import { attachInput } from '../../src/player/input';
+import { attachInput, createWheelSteps, isTextEntry } from '../../src/player/input';
 import type { Action } from '../../src/player/keymap';
 
 /** Fake target, document and window (ruling P41): plain EventTargets with the members input.ts reads. */
@@ -23,7 +23,7 @@ function setup(textFocus = false) {
 
 const key = (type: 'keydown' | 'keyup', code: string, k: string, mods: { ctrlKey?: boolean; repeat?: boolean } = {}) =>
   Object.assign(new Event(type, { cancelable: true }), { code, key: k, ctrlKey: false, shiftKey: false, altKey: false, metaKey: false, repeat: false, ...mods });
-const wheel = (deltaY: number, ctrlKey = false) => Object.assign(new Event('wheel', { cancelable: true }), { deltaY, deltaX: 0, deltaMode: 0, ctrlKey });
+const wheel = (deltaY: number, ctrlKey = false, deltaMode = 0) => Object.assign(new Event('wheel', { cancelable: true }), { deltaY, deltaX: 0, deltaMode, ctrlKey });
 const mouse = (dx: number, dy: number) => Object.assign(new Event('mousemove'), { movementX: dx, movementY: dy });
 
 describe('input (SP4a spec §7.1, master §4.17)', () => {
@@ -64,7 +64,7 @@ describe('input (SP4a spec §7.1, master §4.17)', () => {
     const down = wheel(100, true);
     target.dispatchEvent(down);
     expect(down.defaultPrevented).toBe(true);
-    const plain = wheel(-3);
+    const plain = wheel(-100);
     target.dispatchEvent(plain);
     expect(plain.defaultPrevented).toBe(true);
     expect(actions).toEqual(['speedUp', 'speedDown', 'speedUp']);
@@ -124,6 +124,76 @@ describe('input (SP4a spec §7.1, master §4.17)', () => {
     doc.dispatchEvent(key('keyup', 'KeyW', 'w'));
     expect(input.held.size).toBe(0);
     input.dispose();
+  });
+
+  test('isTextEntry: only text-entry controls count as text focus (spec §7.1; final review C-I2)', () => {
+    const input = (type: string) => ({ tagName: 'INPUT', type });
+    for (const t of ['', 'text', 'search', 'email', 'url', 'tel', 'password', 'number', 'TEXT']) expect(isTextEntry(input(t)), `input ${t}`).toBe(true);
+    for (const t of ['range', 'checkbox', 'radio', 'button', 'color', 'submit']) expect(isTextEntry(input(t)), `input ${t}`).toBe(false);
+    expect(isTextEntry({ tagName: 'TEXTAREA' })).toBe(true);
+    expect(isTextEntry({ tagName: 'DIV', isContentEditable: true })).toBe(true);
+    for (const tag of ['SELECT', 'BUTTON', 'BODY', 'CANVAS']) expect(isTextEntry({ tagName: tag }), tag).toBe(false);
+    expect(isTextEntry(null)).toBe(false);
+  });
+
+  test('with a range input or a select focused, H toggles the help and F1 is prevented', () => {
+    for (const focused of [{ tagName: 'INPUT', type: 'range' }, { tagName: 'SELECT', type: 'select-one' }]) {
+      const target = Object.assign(new EventTarget(), { requestPointerLock: vi.fn() });
+      const doc = Object.assign(new EventTarget(), { pointerLockElement: null as unknown });
+      const actions: Action[] = [];
+      const input = attachInput(target as unknown as HTMLElement, {
+        onAction: (a) => actions.push(a),
+        onLook: () => {},
+        isTextFocus: () => isTextEntry(focused),
+        doc: doc as unknown as Pick<Document, 'addEventListener' | 'removeEventListener' | 'pointerLockElement'>,
+        win: new EventTarget() as unknown as Pick<Window, 'addEventListener' | 'removeEventListener'>,
+      });
+      const h = key('keydown', 'KeyH', 'h');
+      const f1 = key('keydown', 'F1', 'F1');
+      doc.dispatchEvent(h);
+      doc.dispatchEvent(f1);
+      expect(h.defaultPrevented, focused.tagName).toBe(true);
+      expect(f1.defaultPrevented, focused.tagName).toBe(true);
+      expect(actions, focused.tagName).toEqual(['help', 'help']);
+      input.dispose();
+    }
+  });
+
+  test('the wheel steps once per 100 px of deltaY: one mouse notch is one step, twenty 5 px touchpad events are one', () => {
+    const { target, actions, input } = setup();
+    // One notch of a mouse wheel (Chrome: 100-120 px) is one step.
+    target.dispatchEvent(wheel(-100));
+    target.dispatchEvent(wheel(120));
+    expect(actions).toEqual(['speedUp', 'speedDown']);
+    actions.length = 0;
+    // A touchpad swipe: twenty events of 5 px are one step, not twenty; every event is still prevented.
+    const events = Array.from({ length: 20 }, () => wheel(5));
+    for (const e of events) target.dispatchEvent(e);
+    expect(actions).toEqual(['speedDown']);
+    expect(events.every((e) => e.defaultPrevented)).toBe(true);
+    input.dispose();
+  });
+
+  test('createWheelSteps: normalises deltaMode, keeps no remainder past a step and resets on a direction change', () => {
+    const steps = createWheelSteps();
+    // Pixels: 99 px is no step, the 100th is one; the remainder is dropped after a step.
+    expect(steps.push(99, 0)).toBe(0);
+    expect(steps.push(1, 0)).toBe(1);
+    expect(steps.push(60, 0)).toBe(0);
+    // A direction change starts over: the 60 px down do not cancel the way up.
+    expect(steps.push(-60, 0)).toBe(0);
+    expect(steps.push(-40, 0)).toBe(-1);
+    // A large pixel delta is several steps.
+    expect(steps.push(-250, 0)).toBe(-2);
+    // Lines (16 px; Firefox's mouse notch is 3 lines) and pages are discrete notches: at least one step each, and a
+    // page notch is one step, not a screen's height of steps.
+    expect(steps.push(3, 1)).toBe(1);
+    expect(steps.push(-1, 1)).toBe(-1);
+    expect(steps.push(-13, 1)).toBe(-2);
+    expect(steps.push(1, 2)).toBe(1);
+    // 0 and NaN step nothing.
+    expect(steps.push(0, 0)).toBe(0);
+    expect(steps.push(Number.NaN, 0)).toBe(0);
   });
 
   test('an unbound key is not prevented', () => {

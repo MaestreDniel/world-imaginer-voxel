@@ -1,7 +1,7 @@
 import { PerspectiveCamera } from 'three';
 import { describe, expect, test, vi } from 'vitest';
 import { createMaterialSystem } from '../../src/render/materials/index';
-import { applyViewport, cameraFar, opaquePassSort } from '../../src/render/renderer';
+import { applyViewport, cameraFar, opaquePassSort, releaseGl } from '../../src/render/renderer';
 import { createSky, SKY_RENDER_ORDER } from '../../src/render/sky';
 import { createFlatColorArray } from '../../src/render/textureArray';
 
@@ -70,5 +70,16 @@ describe('the world renderer helpers (SP4a spec §6.1)', () => {
       item('opaque near', materials.terrainOpaque, 2),
     ];
     expect(items.sort(sort).map((i) => i.name)).toEqual(['opaque near', 'opaque far', 'sky', 'cutout near', 'cutout far']);
+  });
+});
+
+describe('releaseGl (final review B-M4)', () => {
+  test('disposes three\'s renderer, then loses the WebGL context, then detaches the canvas', () => {
+    const order: string[] = [];
+    releaseGl(
+      { dispose: () => { order.push('dispose'); }, forceContextLoss: () => { order.push('forceContextLoss'); } },
+      { remove: () => { order.push('remove'); } },
+    );
+    expect(order).toEqual(['dispose', 'forceContextLoss', 'remove']);
   });
 });

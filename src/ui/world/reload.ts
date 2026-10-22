@@ -53,6 +53,16 @@ export function createReloader(navigate: (url: string) => void, disarm: () => vo
 }
 
 /**
+ * Navigates the page to `url` (the reloader's `navigate`). A URL that resolves to the current one is reloaded: with a
+ * `#` hash, `location.assign` of the same URL is a fragment navigation and loads nothing, so R, the RD setting or the
+ * context-loss Reload pressed before the camera moved would do nothing and spend the reloader (final review C-I1).
+ */
+export function navigateTo(url: string, loc: Pick<Location, 'href' | 'assign' | 'reload'>): void {
+  if (new URL(url, loc.href).href === loc.href) loc.reload();
+  else loc.assign(url);
+}
+
+/**
  * Installs the Ctrl+W guard (spec §7.1): a `beforeunload` listener that asks before the tab closes (Ctrl+W, Ctrl+T and
  * Ctrl+N cannot be prevented by a key handler). Returns its disarm, which removes the listener (idempotent).
  */

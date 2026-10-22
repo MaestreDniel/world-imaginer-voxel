@@ -14,6 +14,52 @@ import { DEFAULT_KEYMAP, resolveKey, resolveWheel, type Action, type KeyEntry } 
 /** The actions held while their keys are down; the others fire `onAction`. */
 const HELD: ReadonlySet<Action> = new Set<Action>(['forward', 'back', 'left', 'right', 'up', 'down', 'sprint']);
 
+/** The `<input>` types a person types text into; a range, checkbox, radio, button or colour input is not one. */
+const TEXT_INPUT_TYPES: ReadonlySet<string> = new Set(['', 'text', 'search', 'email', 'url', 'tel', 'password', 'number']);
+
+/**
+ * Whether `el` is a text-entry control, where keys are ignored (spec §7.1 "while focus is in a text input"): a text-like
+ * `<input>`, a `<textarea>` or contenteditable content. A focused range slider or `<select>` is not one, so H and F1
+ * still close the help after a setting is touched (final review C-I2).
+ */
+export function isTextEntry(el: { readonly tagName: string; readonly type?: string; readonly isContentEditable?: boolean } | null): boolean {
+  if (el === null) return false;
+  if (el.isContentEditable === true) return true;
+  if (el.tagName === 'TEXTAREA') return true;
+  return el.tagName === 'INPUT' && TEXT_INPUT_TYPES.has((el.type ?? '').toLowerCase());
+}
+
+/** The wheel distance of one speed step (spec §7.2, "one step per notch"): a mouse notch is 100-120 px in Chrome. */
+const WHEEL_STEP_PX = 100;
+/** A line of a line-mode wheel event (Firefox's mouse notch is 3 lines). */
+const WHEEL_LINE_PX = 16;
+
+/**
+ * Turns wheel deltas into signed speed steps (negative: up, away from the user). Pixel deltas accumulate and step once
+ * per 100 px, so a touchpad swipe of many small events steps a few times instead of once per event; the remainder is
+ * dropped after a step, so a 120 px notch is one step, and a direction change starts over. Line and page events are
+ * discrete notches: lines count 16 px, and each event steps at least once; a page event is one step.
+ */
+export function createWheelSteps(): { push(deltaY: number, deltaMode: number): number } {
+  let acc = 0;
+  return {
+    push(deltaY, deltaMode) {
+      if (!(deltaY < 0 || deltaY > 0)) return 0; // 0, and NaN from a broken event
+      const sign = deltaY < 0 ? -1 : 1;
+      let px: number;
+      if (deltaMode === 0) px = deltaY;
+      else if (deltaMode === 1) px = sign * Math.max(Math.abs(deltaY) * WHEEL_LINE_PX, WHEEL_STEP_PX);
+      else px = sign * WHEEL_STEP_PX;
+      if (acc !== 0 && Math.sign(acc) !== sign) acc = 0;
+      acc += px;
+      const n = Math.trunc(Math.abs(acc) / WHEEL_STEP_PX);
+      if (n === 0) return 0;
+      acc = 0;
+      return sign * n;
+    },
+  };
+}
+
 export function attachInput(
   target: HTMLElement,
   o: {
@@ -73,12 +119,15 @@ export function attachInput(
     if (o.doc.pointerLockElement !== target) return;
     o.onLook(e.movementX, e.movementY);
   };
+  const wheelSteps = createWheelSteps();
   const onWheel = (e: WheelEvent): void => {
     // The world never scrolls, and Ctrl+wheel must change the speed, not zoom the page.
     e.preventDefault();
     if (o.isTextFocus()) return;
-    const a = resolveWheel(e.deltaY, map);
-    if (a !== null) o.onAction(a);
+    const n = wheelSteps.push(e.deltaY, e.deltaMode);
+    const a = resolveWheel(n, map);
+    if (a === null) return;
+    for (let i = Math.abs(n); i > 0; i--) o.onAction(a);
   };
 
   const wheelOpts: AddEventListenerOptions = { passive: false };

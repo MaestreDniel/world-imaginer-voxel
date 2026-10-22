@@ -6,6 +6,8 @@ const ROWS: ReadonlyArray<[keyof CapabilityReport, string]> = [
   ['workerProbe', 'Worker probe'],
   ['workerIsolated', 'Worker cross-origin isolated'],
   ['sabShared', 'SharedArrayBuffer shared'],
+  ['growableSab', 'Growable SharedArrayBuffer'],
+  ['reservation', 'Store reservation (blocks/bytes)'],
   ['webgl2', 'WebGL2'],
   ['multiDraw', 'WEBGL_multi_draw'],
   ['timerQuery', 'GPU timer query'],
@@ -46,13 +48,26 @@ function causeList(causes: readonly Cause[], className: string): HTMLUListElemen
   return ul;
 }
 
+const MIB = 1024 * 1024;
+
+/** A row's value as text: the store reservation as `<block>/<byte> MiB` (the probe that caps the RD), null as '—'. */
+function valueText(key: keyof CapabilityReport, report: CapabilityReport): string {
+  if (key === 'reservation') {
+    const r = report.reservation;
+    return r === null ? '—' : `${Math.round(r.blockBytes / MIB)}/${Math.round(r.byteBytes / MIB)} MiB`;
+  }
+  const value = report[key];
+  return value === null ? '—' : String(value);
+}
+
 /** The capability table, one row per probed value. */
 function capabilityTable(report: CapabilityReport): HTMLTableElement {
   const table = el('table', undefined, 'cap-table');
   for (const [key, label] of ROWS) {
     const value = report[key];
     const row = el('tr');
-    row.append(el('td', label), el('td', value === null ? '—' : String(value), valueClass(key, value)));
+    const cls = key === 'reservation' ? (value === null ? 'bad' : 'ok') : valueClass(key, value);
+    row.append(el('td', label), el('td', valueText(key, report), cls));
     table.append(row);
   }
   return table;

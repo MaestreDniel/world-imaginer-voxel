@@ -162,6 +162,16 @@ function createGpuTimer(gl: WebGL2RenderingContext): (GpuTimer & { dispose(): vo
   };
 }
 
+/**
+ * Releases three's renderer and its WebGL context, then detaches the canvas. `dispose()` alone frees three's resources
+ * but keeps the context, and browsers cap live contexts at about 16 (final review B-M4).
+ */
+export function releaseGl(renderer: Pick<WebGLRenderer, 'dispose' | 'forceContextLoss'>, canvas: { remove(): void }): void {
+  renderer.dispose();
+  renderer.forceContextLoss();
+  canvas.remove();
+}
+
 /** The world renderer in `host`, with the section renderer of `o.kind` over its own materials (spec §6.1). */
 export function createWorldRenderer(host: HTMLElement, o: WorldRendererOptions): WorldRenderer {
   const albedo = createFlatColorArray();
@@ -281,8 +291,8 @@ export function createWorldRenderer(host: HTMLElement, o: WorldRendererOptions):
       sky.geometry.dispose();
       materials.dispose();
       albedo.dispose();
-      renderer.dispose();
-      canvas.remove();
+      // The context-lost listener is already removed, so the forced loss below reaches no handler.
+      releaseGl(renderer, canvas);
     },
   };
 }

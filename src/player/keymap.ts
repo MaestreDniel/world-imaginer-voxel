@@ -67,7 +67,10 @@ export function resolveKey(e: { code: string; key: string }, map: readonly KeyEn
   return null;
 }
 
-/** The action of a wheel event by its `deltaY` sign (negative: up, away from the user; one step per event), or null for 0. */
+/**
+ * The action of a wheel step by its sign (negative: up, away from the user), or null for 0. The input layer turns raw
+ * `deltaY`s into steps first (input.ts `createWheelSteps`: one step per notch or per 100 px of a touchpad swipe).
+ */
 export function resolveWheel(deltaY: number, map: readonly KeyEntry[] = DEFAULT_KEYMAP): Action | null {
   if (!(deltaY < 0 || deltaY > 0)) return null; // 0, and NaN from a broken event
   const dir = deltaY < 0 ? 'up' : 'down';

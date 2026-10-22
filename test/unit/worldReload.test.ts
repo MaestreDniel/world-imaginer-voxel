@@ -1,6 +1,6 @@
 import { afterEach, beforeEach, describe, expect, test, vi } from 'vitest';
 import { parseWorldQuery } from '../../src/ui/world/query';
-import { createReloader, hereUrl, installLeaveGuard } from '../../src/ui/world/reload';
+import { createReloader, hereUrl, installLeaveGuard, navigateTo } from '../../src/ui/world/reload';
 import { createWorldNotices, enterFullscreen, handleContextLoss } from '../../src/ui/world/worldPage';
 import { installDom, type FakeElement } from './fixtures/domShim';
 
@@ -48,6 +48,27 @@ describe('createReloader (Review Focus 3; ruling P50)', () => {
   });
 });
 
+describe('navigateTo (final review C-I1)', () => {
+  function fakeLocation(href: string) {
+    return { href, assign: vi.fn<(url: string) => void>(), reload: vi.fn<() => void>() };
+  }
+
+  test('a URL that resolves to the current one reloads (assign would only jump to the fragment)', () => {
+    const loc = fakeLocation('http://127.0.0.1:4173/?at=1,2&y=80&yaw=0.0&pitch=0.0#v1.abc');
+    navigateTo('/?at=1,2&y=80&yaw=0.0&pitch=0.0#v1.abc', loc);
+    expect(loc.reload).toHaveBeenCalledTimes(1);
+    expect(loc.assign).not.toHaveBeenCalled();
+  });
+
+  test('any other URL is assigned', () => {
+    const loc = fakeLocation('http://127.0.0.1:4173/?at=1,2&y=80&yaw=0.0&pitch=0.0#v1.abc');
+    navigateTo('/?at=1,3&y=80&yaw=0.0&pitch=0.0#v1.abc', loc);
+    navigateTo('?map#v1.abc', loc);
+    expect(loc.assign.mock.calls).toEqual([['/?at=1,3&y=80&yaw=0.0&pitch=0.0#v1.abc'], ['?map#v1.abc']]);
+    expect(loc.reload).not.toHaveBeenCalled();
+  });
+});
+
 describe('the Ctrl+W guard (SP4a spec §7.1)', () => {
   test('beforeunload is prevented while armed; disarm removes the listener', () => {
     const win = new EventTarget();
@@ -65,8 +86,11 @@ describe('the Ctrl+W guard (SP4a spec §7.1)', () => {
   test('"Fullscreen" requests fullscreen, then locks the keyboard when navigator.keyboard exists', async () => {
     const order: string[] = [];
     const doc = { documentElement: { requestFullscreen: () => { order.push('fullscreen'); return Promise.resolve(); } } };
-    await enterFullscreen(doc, { keyboard: { lock: () => { order.push('lock'); return Promise.resolve(); } } });
+    let locked: readonly string[] | undefined;
+    await enterFullscreen(doc, { keyboard: { lock: (keys) => { order.push('lock'); locked = keys; return Promise.resolve(); } } });
     expect(order).toEqual(['fullscreen', 'lock']);
+    // Only Ctrl+W, Ctrl+T and Ctrl+N's keys: Esc stays the browser's, so a short Esc frees the mouse (spec §7.1).
+    expect(locked).toEqual(['KeyW', 'KeyT', 'KeyN']);
     // Firefox: no Keyboard Lock; a refused fullscreen does not throw either.
     await expect(enterFullscreen(doc, {})).resolves.toBeUndefined();
     await expect(enterFullscreen({ documentElement: { requestFullscreen: () => Promise.reject(new Error('denied')) } }, {})).resolves.toBeUndefined();

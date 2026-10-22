@@ -2,7 +2,8 @@
  * The help overlay (SP4a spec §7.4, D31): **Keys** generated from the key map, **Settings** (the small block SP5's
  * settings panel replaces), **System** (the capability report with "Copy as JSON" and the hidden `#capability-json`,
  * moved here from the SP0 page, D21), and the links "Open the map here" and "Fullscreen". All text goes through
- * `textContent`. The page opens it on H or F1 and releases the pointer; closing it and clicking the canvas re-locks.
+ * `textContent`. The page opens it on H or F1 and releases the pointer; H, F1 or Esc closes it, and clicking the canvas
+ * re-locks.
  */
 import type { CapabilityReport, Evaluation } from '../engine/capabilityRules';
 import { defaultRenderDistance, RD_MIN, reservationRdCap } from '../engine/renderDistance';
@@ -177,16 +178,24 @@ export function mountHelp(host: HTMLElement, o: HelpOptions): Help {
   overlay.append(head, keysSection(o.map), settingsSection, system, links);
   host.append(overlay);
 
+  // Esc closes the open overlay, as a person expects of a panel (final review C-M3). The pointer is already free while
+  // the help is open, so the browser's own Esc (releasing the pointer) has nothing to do.
+  const onKeyDown = (e: KeyboardEvent): void => {
+    if (e.code === 'Escape' || e.key === 'Escape') close();
+  };
+
   function close(): void {
     if (!isOpen) return;
     isOpen = false;
     overlay.hidden = true;
+    document.removeEventListener('keydown', onKeyDown);
     o.onClose();
   }
 
   return {
     open() {
       mapHere.href = o.mapHereHref();
+      if (!isOpen) document.addEventListener('keydown', onKeyDown);
       isOpen = true;
       overlay.hidden = false;
     },
