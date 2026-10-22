@@ -1,5 +1,5 @@
 import {
-  BatchedMesh, Box3, BufferAttribute, BufferGeometry, Color, Matrix4, Mesh, NearestFilter, OrthographicCamera, PerspectiveCamera,
+  BatchedMesh, Box3, BufferAttribute, BufferGeometry, Color, Matrix4, NearestFilter, OrthographicCamera, PerspectiveCamera,
   RGBAFormat, Scene, Sphere, UnsignedByteType, WebGLRenderer, WebGLRenderTarget, type DataArrayTexture,
 } from 'three';
 import { MEDIUM } from '../../core/params/graphicsPresets';
@@ -9,6 +9,7 @@ import type { FrameState } from '../frameState';
 import { medianInterval, percentile, snapFrameTime } from '../frameTiming';
 import { createMaterialSystem, type MaterialSystem } from '../materials/index';
 import { createSectionRenderer, type SectionRenderer, type SectionRendererKind } from '../sectionRenderer';
+import { createSky } from '../sky';
 import { createFlatColorArray } from '../textureArray';
 import { stressPayloads } from './stressScene';
 
@@ -290,17 +291,6 @@ interface Built {
   dispose(): void;
 }
 
-/** The sky dome's full-screen triangle (clip-space positions, render/materials/glsl/sky.glsl.ts). */
-function skyMesh(materials: MaterialSystem): Mesh {
-  const g = new BufferGeometry();
-  g.setAttribute('position', new BufferAttribute(new Float32Array([-1, -1, 0, 3, -1, 0, -1, 3, 0]), 3));
-  const sky = new Mesh(g, materials.sky);
-  sky.frustumCulled = false;
-  // After the opaque sections (spec §6.1's pass order); the water draws in three's transparent list, after both.
-  sky.renderOrder = 1;
-  return sky;
-}
-
 /** The stress scene staged, built (timed) and revealed in a section renderer of `kind`, with the sky. */
 function buildScene(kind: SectionRendererKind, albedo: DataArrayTexture, payloads: ReturnType<typeof stressPayloads>): Built {
   const materials = createMaterialSystem({ variant: kind, ao: MEDIUM.ao, smoothLight: MEDIUM.smoothLight }, albedo);
@@ -319,7 +309,8 @@ function buildScene(kind: SectionRendererKind, albedo: DataArrayTexture, payload
   sections.revealAll();
   const scene = new Scene();
   scene.add(sections.root);
-  const sky = skyMesh(materials);
+  // The world renderer's sky dome (render/sky.ts); the water draws in three's transparent list, after it.
+  const sky = createSky(materials);
   scene.add(sky);
   materials.setFrameUniforms(FRAME);
   return {

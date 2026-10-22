@@ -441,7 +441,7 @@ A 16 × 16 RGBA8 `DataTexture` rebuilt on the CPU when time or brightness change
 ### 6.8 Floating origin and FPS limiter (`render/floatingOrigin.ts`, `fpsLimiter.ts`)
 
 - **Floating origin** (master §2.1): snapped to 512 blocks, rebased when the camera is more than 1024 blocks from it (instance matrices re-set). The load centre sets the first origin; within SP4a's clamp a rebase does not trigger, but the rule is unit-tested at ±500,000.
-- **FPS limiter** (master §4.17): caps off (the display's rate), 30, 60, 120, 144; on each rAF `acc += Δ`; a frame renders when `acc ≥ 1000/cap − h`, h half the display interval (median of recent rAF deltas), then `acc = clamp(acc − 1000/cap, 0, 1000/cap)`; frames that do not render skip input-free work.
+- **FPS limiter** (master §4.17): caps off (the display's rate), 30, 60, 120, 144; on each rAF `acc += Δ`; a frame renders when `acc ≥ 1000/cap − h`, h half the display interval (median of recent rAF deltas), then `acc = clamp(acc − 1000/cap, −h, 1000/cap)` (the floor −h carries up to half an interval of deficit, so a cap that does not divide the display rate still averages the cap: 144 Hz at cap 60 gives 60 fps, where a floor of 0 gives about 72); frames that do not render skip input-free work.
 
 ### 6.9 HUD (`ui/hud.ts`, D30)
 
