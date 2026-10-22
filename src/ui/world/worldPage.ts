@@ -159,6 +159,28 @@ function aroundUrl(f: FlyState, hashPart: string): string {
 const nextFrame = (): Promise<number> => new Promise((resolve) => requestAnimationFrame(resolve));
 
 /**
+ * Calls `step` once per frame (scheduled through `request`) until it returns true, then resolves. A throw from `step`
+ * rejects with it and requests no further frame: an error while building is a load error that must reach the failure
+ * panel (SP4a spec §8.3), not die uncaught in a rAF callback and surface 30 s later as the watchdog's "stall".
+ */
+export function everyFrameUntil(request: (cb: () => void) => void, step: () => boolean): Promise<void> {
+  return new Promise<void>((resolve, reject) => {
+    const tick = (): void => {
+      let done: boolean;
+      try {
+        done = step();
+      } catch (e) {
+        reject(e);
+        return;
+      }
+      if (done) resolve();
+      else request(tick);
+    };
+    request(tick);
+  });
+}
+
+/**
  * Mounts the world page in `root` (replacing what it holds) and resolves once it settles: revealed, or failed with the
  * failure panel or the error screen showing. It never rejects for a load error; the page shows it.
  */
@@ -345,24 +367,20 @@ export function mountWorldPage(root: HTMLElement, q: WorldQuery, hash: string, o
     coordinator.load(cx0, cz0, loadRd).then(() => { meshed = true; }, (e: unknown) => fail(causeOf(e), e));
 
     const budget = createUploadBudget(LOAD_UPLOAD_MS, () => performance.now());
-    await new Promise<void>((resolve) => {
-      const step = (): void => {
-        if (state !== 'loading') {
-          resolve();
-          return;
-        }
+    try {
+      await everyFrameUntil((cb) => { raf = requestAnimationFrame(cb); }, () => {
+        if (state !== 'loading') return true;
         budget.start();
         sections.buildNext(() => budget.exhausted());
         const c = sections.counts();
         if (progress !== null) loading.progress(progressFraction(progress, c.builtRegions, c.regions), phaseName(progress, c.builtRegions, c.regions));
-        if (meshed && c.builtRegions === c.regions) {
-          resolve();
-          return;
-        }
-        raf = requestAnimationFrame(step);
-      };
-      raf = requestAnimationFrame(step);
-    });
+        return meshed && c.builtRegions === c.regions;
+      });
+    } catch (e) {
+      // A build error (a BatchedMesh `addGeometry` that does not fit, a merge error) is a load error (spec §8.3).
+      fail(`The view could not be built: ${errorText(e)}`, e);
+      return;
+    }
     if (state !== 'loading') return;
 
     // 5. Compile, place the camera, warm up behind the overlay, reveal.
@@ -531,19 +549,25 @@ export function mountWorldPage(root: HTMLElement, q: WorldQuery, hash: string, o
     const loop = (now: number): void => {
       raf = requestAnimationFrame(loop);
       if (!limiter.tick(now)) return;
-      const dtMs = Math.max(0, now - last);
-      last = now;
-      frames.push(dtMs);
-      if (n < FIRST_FRAMES) {
-        firstMax = Math.max(firstMax, dtMs);
-        if (n + 1 === FIRST_FRAMES) stats.first120MaxMs = firstMax;
+      try {
+        const dtMs = Math.max(0, now - last);
+        last = now;
+        frames.push(dtMs);
+        if (n < FIRST_FRAMES) {
+          firstMax = Math.max(firstMax, dtMs);
+          if (n + 1 === FIRST_FRAMES) stats.first120MaxMs = firstMax;
+        }
+        if (!help.isOpen) stepFly(fly, input.held, Math.min(dtMs / 1000, MAX_STEP_S), bounds);
+        t = advanceTime(t, dtMs, timeSpeed());
+        placeCamera();
+        world.frame(frameState());
+        n++;
+        opts.onFrame?.(n);
+      } catch (e) {
+        // After the reveal there is no failure panel: stop the loop and report the error once, not on every frame.
+        cancelAnimationFrame(raf);
+        console.error('The frame loop stopped:', e);
       }
-      if (!help.isOpen) stepFly(fly, input.held, Math.min(dtMs / 1000, MAX_STEP_S), bounds);
-      t = advanceTime(t, dtMs, timeSpeed());
-      placeCamera();
-      world.frame(frameState());
-      n++;
-      opts.onFrame?.(n);
     };
     raf = requestAnimationFrame(loop);
     settle();
