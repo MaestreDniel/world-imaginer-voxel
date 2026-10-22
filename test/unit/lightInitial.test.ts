@@ -181,6 +181,21 @@ describe('lightRegion (SP4a spec §4.1, §4.2)', () => {
     expect(blockAt(s, 19, 30, 15)).toBe(14);
   });
 
+  test('an injected emitting table seeds the block BFS in a region without lava (the table check alone, Task P1)', () => {
+    // No fluid anywhere, so only the injected table's emitter (emit 13) can seed: lightRegion must check `t.emit`.
+    const t = injected(0, 0, 13);
+    const scene: At = (x, y, z) => (x === 7 && y === 25 && z === 3 ? DIRT : y <= 100 && (y < 10 || y > 40) ? STONE : AIR);
+    fill(s, scene, noFluid, t);
+    expect(s.region.fluid.every((f) => f === NO_FLUID)).toBe(true);
+    lightRegion(s, t);
+    for (let d = 0; d <= 15; d++) {
+      expect(blockAt(s, 7 - d, 25, 3), `emitter −x ${d}`).toBe(Math.max(0, 13 - d));
+      expect(blockAt(s, 7, 25 - d, 3), `emitter −y ${d}`).toBe(Math.max(0, 13 - d));
+      expect(blockAt(s, 7, 25, 3 + d), `emitter +z ${d}`).toBe(Math.max(0, 13 - d));
+    }
+    expect(skyAt(s, 7, 25, 3)).toBe(0);
+  });
+
   test('without an emitting state lava alone seeds the block BFS: in every byte lane of a word and with any level, falling, unsettled or bit 7; water and type 3 seed nothing', () => {
     // The registry's tables emit nothing, so lightRegion seeds the block BFS only when its lava check finds lava (Task P1).
     expect(DEFAULT_LIGHT_TABLES.emit.every((e) => e === 0)).toBe(true);

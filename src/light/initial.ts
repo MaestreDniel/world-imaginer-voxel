@@ -145,6 +145,19 @@ function tableEmits(emit: Uint8Array): boolean {
   return false;
 }
 
+/** The word view of the last fluid array `anyLava` read: a worker lights one region, so the view is made once. */
+let viewOf: Uint8Array | null = null;
+let view: Uint32Array = new Uint32Array(0);
+
+/** `fluid` (byteOffset a multiple of 4) as 32-bit words, its trailing `length % 4` bytes left out. */
+function wordsOf(fluid: Uint8Array): Uint32Array {
+  if (viewOf !== fluid) {
+    view = new Uint32Array(fluid.buffer, fluid.byteOffset, fluid.length >> 2);
+    viewOf = fluid;
+  }
+  return view;
+}
+
 /**
  * True when some voxel's fluid byte has the lava type (bits 4-5 = 2). Four bytes per step: in each byte of the word,
  * bit 5 set and bit 4 clear, both shifted to the byte's lowest bit (`0x01010101`), so the test is per byte whatever
@@ -153,7 +166,7 @@ function tableEmits(emit: Uint8Array): boolean {
 function anyLava(fluid: Uint8Array): boolean {
   let i = 0;
   if ((fluid.byteOffset & 3) === 0) {
-    const words = new Uint32Array(fluid.buffer, fluid.byteOffset, fluid.length >> 2);
+    const words = wordsOf(fluid);
     for (let k = 0; k < words.length; k++) {
       const w = words[k]!;
       if (((w >>> 5) & ~(w >>> 4) & 0x01010101) !== 0) return true;
