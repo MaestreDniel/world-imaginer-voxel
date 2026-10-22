@@ -1,0 +1,171 @@
+{
+  "route": "spike",
+  "capability": {
+    "secureContext": true,
+    "pageIsolated": true,
+    "workerProbe": "ok",
+    "workerIsolated": true,
+    "sabShared": true,
+    "growableSab": true,
+    "reservation": {
+      "blockBytes": 805306368,
+      "byteBytes": 536870912
+    },
+    "webgl2": true,
+    "multiDraw": true,
+    "timerQuery": true,
+    "maxArrayTextureLayers": 2048,
+    "maxTextureSize": 16384,
+    "renderer": "ANGLE (Intel, Mesa Intel(R) Iris(R) Xe Graphics (ADL GT2), OpenGL 4.6)",
+    "vendor": "Google Inc. (Intel)",
+    "hardwareConcurrency": 20,
+    "deviceMemory": 16
+  },
+  "sectionRenderer": "batch",
+  "userAgent": "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/155.0.0.0 Safari/537.36",
+  "screen": {
+    "width": 1920,
+    "height": 1080
+  },
+  "dpr": 1,
+  "displayIntervalMs": 4.165,
+  "items": {
+    "scene": {
+      "columns": 489,
+      "sections": 3565,
+      "quads": 734109,
+      "regions": 15
+    },
+    "decode": {
+      "words": 1024,
+      "mismatches": 0,
+      "firstMismatches": [],
+      "error": null
+    },
+    "static": {
+      "sectionRenderer": "batch",
+      "multiDrawMasked": false,
+      "canvas": {
+        "width": 1920,
+        "height": 1080,
+        "pixelRatio": 1
+      },
+      "displayIntervalMs": 4.165,
+      "frames": 600,
+      "frame": {
+        "p50": 4.164999999999964,
+        "p95": 8.329999999999927,
+        "max": 154.10499999999865
+      },
+      "main": {
+        "p50": 1.2549999989569187,
+        "p95": 1.8799999989569187,
+        "max": 153.33000000193715
+      },
+      "drawCalls": 19,
+      "drawCallsMean": 16.005,
+      "trianglesMax": 486171,
+      "longFrames": {
+        "count": 1,
+        "first": [
+          {
+            "frame": 522,
+            "deltaMs": 154.105,
+            "mainMs": 0.49
+          }
+        ]
+      },
+      "error": null
+    },
+    "upload": {
+      "quads": 734109,
+      "sections": 3565,
+      "buildMs": 44.309999998658895,
+      "msPer1kQuads": 0.06035888403310529,
+      "firstRenderMs": 31.25,
+      "projectedRd12Seconds": 0.11666666666666667,
+      "error": null
+    },
+    "churn": {
+      "frames": 120,
+      "setGeometryPerFrame": 32,
+      "mainP95": 2.7650000005960464,
+      "frameP95": 8.329999999999927,
+      "deleted": 32,
+      "optimize": [
+        {
+          "rx": 0,
+          "rz": 0,
+          "pass": 0,
+          "ms": 3.9149999991059303,
+          "mb": 7.474
+        }
+      ],
+      "readdMs": 1.0599999986588955,
+      "setGeometrySizeMs": 4.669999998062849,
+      "error": null
+    },
+    "noMultiDraw": {
+      "sectionRenderer": "batch",
+      "multiDrawMasked": true,
+      "canvas": {
+        "width": 1920,
+        "height": 1080,
+        "pixelRatio": 1
+      },
+      "displayIntervalMs": 4.165,
+      "frames": 600,
+      "frame": {
+        "p50": 4.164999999999964,
+        "p95": 8.329999999999927,
+        "max": 12.49499999999989
+      },
+      "main": {
+        "p50": 1.6600000001490116,
+        "p95": 2.3200000002980232,
+        "max": 3.3150000013411045
+      },
+      "drawCalls": 1202,
+      "drawCallsMean": 1069.085,
+      "trianglesMax": 486171,
+      "longFrames": {
+        "count": 0,
+        "first": []
+      },
+      "error": null
+    }
+  },
+  "store": {
+    "reservedBlockMiB": 768,
+    "reservedByteMiB": 512,
+    "grewTo": {
+      "blockMiB": 36,
+      "byteMiB": 18
+    },
+    "crossReadsOk": 384,
+    "crossReadsTotal": 384,
+    "errors": []
+  },
+  "verdict": {
+    "gatePass": true,
+    "basicPass": true,
+    "failures": []
+  },
+  "measuredBy": "measureChrome",
+  "loadAvg1Before": 0.65,
+  "loadAvg1After": 0.67,
+  "chromeVersion": "Chrome/155.0.8059.39",
+  "window": {
+    "left": 0,
+    "top": 0,
+    "width": 1920,
+    "height": 1080,
+    "windowState": "fullscreen"
+  },
+  "viewport": {
+    "innerWidth": 1920,
+    "innerHeight": 1080,
+    "devicePixelRatio": 1
+  },
+  "consoleErrors": []
+}
