@@ -86,6 +86,9 @@ export const THRESHOLDS: ThresholdTable = {
   // SP4a spec §9.1: the light against the global reference BFS, and enclosed air with sky light (`light.metric.ts`).
   L1: { mismatches: { max: 0, activeFrom: 'SP4a' } },
   L2: { enclosedLit: { max: 0, activeFrom: 'SP4a' } },
+  // SP4a spec §9.1, §9.5 (D24): G1's three Medium cells on the static world, from the committed Chrome flight on the Iris
+  // Xe (`g1.metric.ts`, `flight-iris-chrome.json`); SP4b re-asserts them while streaming and adds the streaming cells.
+  G1: { mediumStaticP95: { max: 16.7, activeFrom: 'SP4a' }, mediumStaticDrawCalls: { max: 100, activeFrom: 'SP4a' }, mediumStaticMainP95: { max: 6, activeFrom: 'SP4a' } },
   // SP3e spec §5.3 (D16): the master's diagnostics on the drafts, recorded on every tier from SP3e (`.out/Z1-Z3.json`),
   // gated on the quick and full tiers once SP12 starts.
   Z1: {

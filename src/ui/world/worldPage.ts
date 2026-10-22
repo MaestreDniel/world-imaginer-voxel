@@ -21,7 +21,8 @@
  * The frame loop: the FPS limiter, the fly controller within the loaded disc (§7.5), the floating origin, the clock
  * (T cycles the time speed), `FrameState` (its `eyeSky` read from the page's attached store), the HUD (F3) and the help
  * (H, F1). Load errors (`LoadError`, `StoreFullError`, `WorkerFailed`, the watchdog) show the failure panel, with a link
- * to the next lower RD when rd > 4 (P49). `WorldPage.loadStats` holds the load's figures for the flight JSON (§9.5).
+ * to the next lower RD when rd > 4 (P49). `WorldPage.loadStats` holds the load's figures for the flight JSON (§9.5);
+ * with `opts.flight` (the `?flight=sp4a` route, `flight.ts`) the flight drives the camera and the clock after the reveal.
  *
  * After the reveal (spec §7.1, §7.5, §8.2, §8.5; rulings P49, P50): the Ctrl+W guard (`beforeunload`) is armed; every
  * navigation the page starts (R, the RD setting, the slow-frame link, the context-loss Reload, "Open the map here")
@@ -56,8 +57,9 @@ import { mountLoadingScreen } from '../loading/loadingScreen';
 import { tips } from '../loading/tips';
 import { decodeMapState, encodeMapState, openMapSession } from '../map/mapState';
 import { cryptoSeed } from '../seedBox';
-import { loadSettings, saveSettings, type WorldSettings } from '../settings';
+import { SETTINGS_DEFAULTS, loadSettings, saveSettings, type WorldSettings } from '../settings';
 import { firstView } from './firstView';
+import type { FlightContext } from './flight';
 import { createFrameClock, createFrameNotice, lowerRd } from './frameNotice';
 import { createReloader, hereUrl, installLeaveGuard, type Reloader } from './reload';
 import { Y_MAX, Y_MIN, type WorldQuery } from './query';
@@ -79,6 +81,12 @@ export interface WorldPageOptions {
   readonly onFrame?: (n: number) => void;
   /** The world renderer's factory (a test's fake); default `createWorldRenderer`. */
   readonly createRenderer?: typeof createWorldRenderer;
+  /**
+   * The flight route's hook (SP4a spec §9.5): with it the stored settings are not read (the defaults apply), and at the
+   * reveal the page removes the loading screen and hands the frame loop to `flight` instead of starting its own (no
+   * input, HUD, help, notices or leave guard).
+   */
+  readonly flight?: (ctx: FlightContext) => void;
 }
 
 declare global {
@@ -167,6 +175,23 @@ function motionBlockingAt(store: VoxelStore, x: number, z: number): number {
   const bz = Math.floor(z);
   const aux = store.final(bx >> 4, bz >> 4)?.aux() ?? null;
   return aux === null ? Number.POSITIVE_INFINITY : aux.motionBlocking[((bz & 15) << 4) | (bx & 15)]!;
+}
+
+/** Whether block (x, z) holds water at its top: `MOTION_BLOCKING` (which counts fluid) above `OCEAN_FLOOR` (which does not). */
+function hasWaterAt(store: VoxelStore, x: number, z: number): boolean {
+  const bx = Math.floor(x);
+  const bz = Math.floor(z);
+  const aux = store.final(bx >> 4, bz >> 4)?.aux() ?? null;
+  if (aux === null) return false;
+  const p = ((bz & 15) << 4) | (bx & 15);
+  return aux.motionBlocking[p]! > aux.oceanFloor[p]!;
+}
+
+/** The store's SharedArrayBuffers (column table, epochs and both pools' buffers) in MiB. */
+function storeSabMiB(store: VoxelStore): number {
+  const h = store.handles();
+  const pools = [h.blocks, h.bytes].flatMap((p) => [p.data, p.ctl, p.stack, p.refs]);
+  return [h.table, h.epochs, ...pools].reduce((sum, b) => sum + b.byteLength, 0) / (1 << 20);
 }
 
 const nextFrame = (): Promise<number> => new Promise((resolve) => requestAnimationFrame(resolve));
@@ -436,7 +461,8 @@ export function mountWorldPage(root: HTMLElement, q: WorldQuery, hash: string, o
     profile = session.state.profile;
     if (session.initNotice !== null) loading.warn(session.initNotice);
     const storage = storageOrNull();
-    let settings: WorldSettings = loadSettings(storage);
+    // The flight route measures with the defaults, never a user's stored cap or FOV (spec §9.5).
+    let settings: WorldSettings = opts.flight === undefined ? loadSettings(storage) : { ...SETTINGS_DEFAULTS };
     const loadRd = resolveRenderDistance(caps, q.rd, settings.rd);
     rd = loadRd;
     const store = createStore({ shared: true, maxBlockBytes: caps.reservation.blockBytes, maxByteBytes: caps.reservation.byteBytes });
@@ -565,6 +591,46 @@ export function mountWorldPage(root: HTMLElement, q: WorldQuery, hash: string, o
       }
       longTasks.disconnect();
       longTasks = null;
+    }
+
+    // The flight route (spec §9.5): the flight drives the camera and the clock; the page's own loop never starts.
+    if (opts.flight !== undefined) {
+      loading.dispose();
+      let lost = false;
+      world.onContextLost(() => { lost = true; });
+      let flown = 0;
+      opts.flight({
+        host,
+        world,
+        centre: at,
+        rd: loadRd,
+        workers: workers.size,
+        kind,
+        report: caps,
+        seed: session.state.seedText,
+        profile: session.state.profile,
+        loadStats: stats,
+        revealTs,
+        motionBlockingAt: (x, z) => motionBlockingAt(store, x, z),
+        hasWater: (x, z) => hasWaterAt(store, x, z),
+        render(pose, tt) {
+          fly.x = pose.x;
+          fly.y = pose.y;
+          fly.z = pose.z;
+          fly.yaw = pose.yaw;
+          fly.pitch = pose.pitch;
+          t = tt;
+          placeCamera();
+          world.frame(frameState());
+          flown++;
+          progressHook.frames = flown;
+          opts.onFrame?.(flown);
+        },
+        sabMB: () => storeSabMiB(store),
+        lost: () => lost,
+      });
+      settle();
+      return;
     }
 
     // Every navigation the page starts disarms the Ctrl+W guard first and happens once (spec §7.1; ruling P50).

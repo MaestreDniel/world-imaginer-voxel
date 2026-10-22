@@ -1,5 +1,5 @@
 {
-  "sha256": "14f2f57d16a7b08ea474fbcd858af66cb9e350895afbed535e3cb8d5fe88063c",
+  "sha256": "28cfb5b051b6e45c379a594b877691bac165da45c83c2f88ebb10ca1000e6429",
   "canonical": {
     "startedSps": [
       "SP0",
@@ -201,6 +201,20 @@
         "surfaceReference": {
           "activeFrom": "SP3c",
           "max": 0
+        }
+      },
+      "G1": {
+        "mediumStaticDrawCalls": {
+          "activeFrom": "SP4a",
+          "max": 100
+        },
+        "mediumStaticMainP95": {
+          "activeFrom": "SP4a",
+          "max": 6
+        },
+        "mediumStaticP95": {
+          "activeFrom": "SP4a",
+          "max": 16.7
         }
       },
       "L1": {

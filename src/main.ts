@@ -6,7 +6,9 @@ import type { Seed64 } from './core/hash';
  * everything else is `/`, the 3D world. `startModeOf` decides whether the start screen shows first (a bare `/` or a `#`
  * hash alone); "Enter the world" then mounts the world page in the same page, with no navigation. `?at`, `?rd` or
  * `?workers` go straight to the loading screen. `?shot=1` is the capture mode (no HUD, no overlay, the clock fixed at
- * `?time` or 08:00; ruling P48). `?flight` and `?pano` arrive with their tasks.
+ * `?time` or 08:00; ruling P48). `?flight=sp4a` is the flight route (spec §9.5, `ui/world/flight.ts`): the world page at
+ * seed 42, the default profile and RD 12, then a 60 s scripted flight whose JSON measureChrome reads. `?pano` arrives
+ * with its task.
  */
 
 const root = document.getElementById('app');
@@ -57,5 +59,7 @@ const started: Promise<void> = query.get('lab') === 'noise'
       ? import('./ui/selftest/selftestPage').then((m) => m.mountSelftestPage(app))
       : query.get('spike') === 'batch'
         ? import('./ui/spike/spikePage').then((m) => m.mountSpikePage(app))
-        : world(query);
+        : query.get('flight') === 'sp4a'
+          ? import('./ui/world/flight').then((m) => m.mountFlightRoute(app, query))
+          : world(query);
 started.catch(showBootFailure);
