@@ -22,3 +22,16 @@ body { background: #0f1629; color: var(--text); font: 13px/1.4 system-ui, sans-s
   .shell { grid-template-columns: 1fr; grid-template-rows: auto 1fr auto; grid-template-areas: "toolbar" "canvas" "panel"; }
   .side-panel { max-height: 40vh; border-left: 0; border-top: 1px solid var(--line); }
 }
+/* The world HUD (SP4a spec §6.9) and the help overlay (§7.4). */
+.world-hud { position: absolute; top: .5rem; left: .5rem; z-index: 2; padding: .35rem .6rem; border-radius: 4px; background: rgb(0 0 0 / .45); color: #f0f0f0; font: 12px/1.45 ui-monospace, monospace; font-variant-numeric: tabular-nums; pointer-events: none; white-space: pre; }
+.world-help { position: absolute; inset: 0; z-index: 3; display: grid; gap: 1rem; align-content: start; grid-template-columns: repeat(auto-fit, minmax(18rem, 1fr)); padding: 1.5rem; overflow: auto; background: rgb(15 22 41 / .92); }
+.world-hud[hidden], .world-help[hidden] { display: none; }
+.world-help .help-head { grid-column: 1 / -1; display: flex; justify-content: space-between; align-items: center; }
+.world-help h3 { margin-bottom: .4rem; }
+.world-help h4 { margin: .5rem 0 .2rem; opacity: .8; }
+.help-key-table { width: 100%; border-collapse: collapse; }
+.help-key-table td { padding: 2px 4px; border-bottom: 1px solid var(--line); }
+.help-key-bindings { text-align: right; font-family: ui-monospace, monospace; }
+.help-setting { display: grid; grid-template-columns: 11rem 1fr 4rem; gap: .5rem; align-items: center; margin: .3rem 0; }
+.help-links { grid-column: 1 / -1; display: flex; gap: 1rem; align-items: center; }
+.help-links a { color: #8ab4ff; }
