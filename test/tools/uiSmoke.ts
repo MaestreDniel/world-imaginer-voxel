@@ -62,10 +62,11 @@
  *     screen in the same page (the URL and the history unchanged), and the step stops there;
  *   - world: `/?rd=4` shows no start screen and reveals (`window.__wiWorld.revealed`, set by the page), with no page
  *     error (`world.png`);
- *   - world-mesh: `?renderer=mesh` and `?renderer=batch` at RD 4, seed 42's spawn and one fixed camera, in the capture
- *     mode (`&shot=1`: 08:00 paused, no HUD, no overlay), each read back after the reveal and three frames
- *     (`__wiWorld.frames`): at most 1 % of the pixels may differ by more than 2/255 in a channel (`pixelDiffShare`);
- *     `world-mesh.png` is the RegionMesh image;
+ *   - world-mesh: `?renderer=mesh` and `?renderer=batch` at RD 4 and two fixed cameras (`PARITY_VIEWS`: seed 42's
+ *     spawn, and the ocean site over open water and a shore), in the capture mode (`&shot=1`: 08:00 paused, no HUD, no
+ *     overlay), each read back after the reveal and three frames (`__wiWorld.frames`): per view, at most 1 % of the
+ *     pixels may differ by more than 2/255 in a channel (`pixelDiffShare`); `world-mesh.png` and
+ *     `world-mesh-water.png` are the RegionMesh images;
  * - console: no exception, console error or failed load, except the known favicon.ico 404 and Chrome's notice that it
  *   blocked a world page's `beforeunload` prompt when a step left it (`leaveGuardLog`); every step ran.
  * With --shots DIR it then writes the spec §12 screenshots into DIR, at seed 42 from a newly loaded page (the
@@ -82,7 +83,8 @@
  * line, the drawer at its tallest, the pointer on a top voxel — floating_islands' on the ground under an island), then
  * `preset-archipelago-map.png` (`biome`) and `preset-floating_islands-islandMask.png` (`islandMask`): 4096 × 4096
  * blocks centred on the window at 16 blocks/px, a 256 × 256 px clip of the map.
- * The 3D steps save `start.png`, `world.png` and `world-mesh.png` into DIR as they run, with --shots only.
+ * The 3D steps save `start.png`, `world.png`, `world-mesh.png` and `world-mesh-water.png` into DIR as they run, with
+ * --shots only.
  * Options: --skip-build, --profile-dir DIR, --shots DIR. The exit code is 0 only when every check passes.
  */
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
@@ -472,16 +474,33 @@ export const WORLD_RD = 4;
  */
 export const PARITY_VIEW = { at: { x: 0, z: 0 }, y: 112, yaw: 45, pitch: -45 } as const;
 
+/**
+ * The water parity view of `world-mesh` (final review B-I1): the ocean site of `review-ocean.png` (−939, −782), 11
+ * blocks above the sea, looking north-west and 35° down over open water with the shore beside the camera, so both
+ * renderers draw translucent water (RegionMesh's water shader, its per-region `renderOrder` and the double-sided
+ * two-pass draw) inside RD 4's fog. A unit test checks with the generator's surface estimate that the centre ray meets
+ * open water and that land lies near the camera.
+ */
+export const PARITY_WATER_VIEW = { at: { x: -939, z: -782 }, y: 74, yaw: 311, pitch: -35 } as const;
+
+/** One parity view: its camera, as `?at`, `y`, `yaw` and `pitch` (degrees) give it. */
+export type ParityView = { readonly at: { readonly x: number; readonly z: number }; readonly y: number; readonly yaw: number; readonly pitch: number };
+
+/** The views `world-mesh` compares, in order, with the file its RegionMesh image is saved as (--shots). */
+export const PARITY_VIEWS: ReadonlyArray<{ readonly name: 'spawn' | 'water'; readonly view: ParityView; readonly file: string }> = [
+  { name: 'spawn', view: PARITY_VIEW, file: 'world-mesh.png' },
+  { name: 'water', view: PARITY_WATER_VIEW, file: 'world-mesh-water.png' },
+];
+
 /** Spec §9.6's parity check: at most 1 % of the pixels may differ by more than 2/255 in a channel. */
 export const PARITY_TOL = 2;
 export const PARITY_MAX_SHARE = 0.01;
 
 /**
- * The query of one `world-mesh` load: RD 4 at the parity view, the section renderer forced, and the capture mode
- * (`shot=1`: no HUD, no overlay, the clock fixed at the opening 08:00; ruling P48).
+ * The query of one `world-mesh` load: RD 4 at a parity view (the spawn's by default), the section renderer forced, and
+ * the capture mode (`shot=1`: no HUD, no overlay, the clock fixed at the opening 08:00; ruling P48).
  */
-export function worldMeshQuery(renderer: 'batch' | 'mesh'): string {
-  const v = PARITY_VIEW;
+export function worldMeshQuery(renderer: 'batch' | 'mesh', v: ParityView = PARITY_VIEW): string {
   return `?rd=${WORLD_RD}&renderer=${renderer}&at=${v.at.x},${v.at.z}&y=${v.y}&yaw=${v.yaw}&pitch=${v.pitch}&shot=1`;
 }
 
@@ -1024,7 +1043,7 @@ class Smoke {
   readonly downloads: string;
   /** The page errors seen so far (exceptions, console errors, failed loads; the favicon 404 aside), appended as they come. */
   readonly errors: readonly string[];
-  /** Where the 3D steps save `start.png`, `world.png` and `world-mesh.png` (--shots); null: they save nothing. */
+  /** Where the 3D steps save `start.png`, `world.png`, `world-mesh.png` and `world-mesh-water.png` (--shots); null: none. */
   readonly shots: string | null;
   constructor(page: Page, downloads: string, errors: readonly string[], shots: string | null = null) {
     this.page = page;
@@ -1811,31 +1830,33 @@ async function runWorld(t: Smoke): Promise<void> {
   }
   t.check(t.errors.length === errors0, `/?rd=${WORLD_RD}: no page error`, t.errors.slice(errors0));
 
-  t.step('world-mesh: RegionMesh and RegionBatch at the same view in the capture mode (08:00, no HUD), read back after the reveal and three frames');
-  const shots: Partial<Record<'mesh' | 'batch', { readonly png: Buffer; readonly width: number; readonly height: number; readonly rgba: Uint8Array }>> = {};
-  for (const renderer of ['mesh', 'batch'] as const) {
-    errors0 = t.errors.length;
-    const url = `${p.base}${worldMeshQuery(renderer)}`;
-    await p.goto(url, `window.__wiWorld !== undefined`);
-    if (!(await worldRevealed(t, `renderer=${renderer}`))) continue;
-    await p.until('window.__wiWorld.frames >= 3', `three frames after the ${renderer} reveal`, 30000);
-    const bare3d = await p.eval<boolean>(`document.querySelector('.world-hud') === null && document.getElementById('loading-screen') === null && document.getElementById('world-click-hint') === null`);
-    t.check(bare3d, `renderer=${renderer}: no HUD, no overlay, no "Click to fly"`);
-    const shot = await p.capture();
-    shots[renderer] = shot;
-    // Not blank: the lit, fogged terrain and the sky draw many distinct colours (a cleared canvas draws one).
-    const colours = distinctColours(shot.rgba, 1);
-    t.check(colours >= 256, `renderer=${renderer}: the view is drawn (${colours} distinct colours)`, colours);
-    t.check(t.errors.length === errors0, `renderer=${renderer}: no page error`, t.errors.slice(errors0));
-  }
-  const mesh = shots.mesh;
-  const batch = shots.batch;
-  if (mesh !== undefined && batch !== undefined) {
-    const share = pixelDiffShare(mesh.rgba, batch.rgba, PARITY_TOL);
-    t.check(share <= PARITY_MAX_SHARE, `parity: ${(share * 100).toFixed(3)} % of ${mesh.width} × ${mesh.height} pixels differ by more than ${PARITY_TOL}/255 (≤ ${PARITY_MAX_SHARE * 100} %)`, share);
-    t.save('world-mesh.png', mesh.png);
-  } else {
-    t.check(false, 'parity: both renderers revealed');
+  t.step('world-mesh: RegionMesh and RegionBatch at the same views (the spawn, the ocean) in the capture mode (08:00, no HUD), read back after the reveal and three frames');
+  for (const { name, view, file } of PARITY_VIEWS) {
+    const shots: Partial<Record<'mesh' | 'batch', { readonly png: Buffer; readonly width: number; readonly height: number; readonly rgba: Uint8Array }>> = {};
+    for (const renderer of ['mesh', 'batch'] as const) {
+      errors0 = t.errors.length;
+      const url = `${p.base}${worldMeshQuery(renderer, view)}`;
+      await p.goto(url, `window.__wiWorld !== undefined`);
+      if (!(await worldRevealed(t, `${name}, renderer=${renderer}`))) continue;
+      await p.until('window.__wiWorld.frames >= 3', `three frames after the ${name} ${renderer} reveal`, 30000);
+      const bare3d = await p.eval<boolean>(`document.querySelector('.world-hud') === null && document.getElementById('loading-screen') === null && document.getElementById('world-click-hint') === null`);
+      t.check(bare3d, `${name}, renderer=${renderer}: no HUD, no overlay, no "Click to fly"`);
+      const shot = await p.capture();
+      shots[renderer] = shot;
+      // Not blank: the lit, fogged terrain and the sky draw many distinct colours (a cleared canvas draws one).
+      const colours = distinctColours(shot.rgba, 1);
+      t.check(colours >= 256, `${name}, renderer=${renderer}: the view is drawn (${colours} distinct colours)`, colours);
+      t.check(t.errors.length === errors0, `${name}, renderer=${renderer}: no page error`, t.errors.slice(errors0));
+    }
+    const mesh = shots.mesh;
+    const batch = shots.batch;
+    if (mesh !== undefined && batch !== undefined) {
+      const share = pixelDiffShare(mesh.rgba, batch.rgba, PARITY_TOL);
+      t.check(share <= PARITY_MAX_SHARE, `parity (${name}): ${(share * 100).toFixed(3)} % of ${mesh.width} × ${mesh.height} pixels differ by more than ${PARITY_TOL}/255 (≤ ${PARITY_MAX_SHARE * 100} %)`, share);
+      t.save(file, mesh.png);
+    } else {
+      t.check(false, `parity (${name}): both renderers revealed`);
+    }
   }
 }
 

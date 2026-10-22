@@ -34,9 +34,12 @@ import {
   parseSliceStats, presetCentre, presetLine, PRESET_MAP, PRESET_SHOTS, PRESET_TOP_MIN, presetProblems, presetState, presetSummaryOk, readMapHash, READY_PROFILES,
   RULE_SAMPLE, sameJson, selftestAllMatch, SIZE_7, SIZE_8, SKY_RGB, sliceCellPoint, sliceColumn, SMOKE_PRESETS, SMOKE_STEPS, SQUARE_RGB, squareLabels, START, stepId,
   summaryTopMax, timesText, VIEWPORT, viewportForDrawer, voxelLegendLabels, voxelReadoutOk, voxelRuleId, voxelSummaryOk, WATER_RGB, waterPixel, type MapUrlState,
-  type SmokePreset, pixelDiffShare, SWIFTSHADER_ARGS, START_SEED_7_HASH, PARITY_VIEW, WORLD_RD, worldMeshQuery, PARITY_TOL, PARITY_MAX_SHARE, leaveGuardLog,
+  type SmokePreset, pixelDiffShare, SWIFTSHADER_ARGS, START_SEED_7_HASH, PARITY_VIEW, PARITY_WATER_VIEW, PARITY_VIEWS, WORLD_RD, worldMeshQuery, PARITY_TOL, PARITY_MAX_SHARE, leaveGuardLog,
 } from '../tools/uiSmoke';
 import { findSpawn } from '../../src/gen/column/spawn';
+import { columnPoint } from '../../src/gen/column/columnPoint';
+import { SEA_LEVEL } from '../../src/core/constants';
+import { lookVector } from '../../src/player/fly';
 import { parseWorldQuery } from '../../src/ui/world/query';
 import { ctxFor } from '../harness/gen';
 
@@ -630,6 +633,40 @@ describe('UI smoke test: the 3D world steps (SP4a spec §9.6)', () => {
     // The page's own default hour in the capture mode is the opening 08:00 (main.ts: q.time ?? 8).
     expect(PARITY_TOL).toBe(2);
     expect(PARITY_MAX_SHARE).toBe(0.01);
+  });
+});
+
+describe('UI smoke test: the water parity view (final review B-I1)', () => {
+  test('world-mesh also loads the ocean site of review-ocean.png at RD 4, both renderers, saved as world-mesh-water.png', () => {
+    expect(PARITY_WATER_VIEW.at).toEqual({ x: -939, z: -782 });
+    expect(PARITY_VIEWS.map((v) => [v.name, v.file])).toEqual([['spawn', 'world-mesh.png'], ['water', 'world-mesh-water.png']]);
+    expect(PARITY_VIEWS[0]!.view).toBe(PARITY_VIEW);
+    expect(PARITY_VIEWS[1]!.view).toBe(PARITY_WATER_VIEW);
+    for (const renderer of ['mesh', 'batch'] as const) {
+      const q = parseWorldQuery(new URLSearchParams(worldMeshQuery(renderer, PARITY_WATER_VIEW)));
+      expect(q).toEqual({
+        at: PARITY_WATER_VIEW.at, y: PARITY_WATER_VIEW.y, yaw: PARITY_WATER_VIEW.yaw, pitch: PARITY_WATER_VIEW.pitch, rd: 4, workers: null, renderer, shot: true, time: null,
+      });
+    }
+    // The default view is still the spawn's.
+    expect(worldMeshQuery('mesh')).toBe(worldMeshQuery('mesh', PARITY_VIEW));
+  });
+
+  test('the water view looks down at open water within the fog (RD 4: 0-56 blocks), with a shore near the camera', () => {
+    const ctx = ctxFor('42');
+    const v = PARITY_WATER_VIEW;
+    expect(v.y).toBeGreaterThan(SEA_LEVEL);
+    expect(v.pitch).toBeLessThan(0);
+    // The centre ray meets the sea plane well inside the fog's end, over water (the 2D surface estimate below the sea).
+    const [lx, ly, lz] = lookVector(v.yaw, v.pitch);
+    const t = (SEA_LEVEL - v.y) / ly;
+    const hit = { x: v.at.x + lx * t, z: v.at.z + lz * t, d: t };
+    expect(hit.d).toBeLessThan(40);
+    expect(columnPoint(ctx, Math.round(hit.x), Math.round(hit.z)).surfaceEst).toBeLessThan(SEA_LEVEL - 4);
+    // A shore: land above the sea within 24 blocks of the camera.
+    let land = false;
+    for (let dz = -24; dz <= 24 && !land; dz += 4) for (let dx = -24; dx <= 24 && !land; dx += 4) land = columnPoint(ctx, v.at.x + dx, v.at.z + dz).surfaceEst >= SEA_LEVEL;
+    expect(land).toBe(true);
   });
 });
 
