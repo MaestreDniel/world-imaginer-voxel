@@ -1,40 +1,61 @@
 import './ui/styles.css';
-import { probeCapabilities } from './engine/capabilities';
-import { evaluateCapabilities } from './engine/capabilityRules';
-import { startSkyRenderer } from './render/renderer';
-import { renderCapabilityReport, renderErrorScreen } from './ui/capabilityReport';
-import { createFrameStats } from './ui/frameStats';
-import { mountHud } from './ui/hud';
-import { createShell } from './ui/shell';
+import type { Seed64 } from './core/hash';
 
-async function boot(root: HTMLElement): Promise<void> {
-  const report = await probeCapabilities();
-  const evaluation = evaluateCapabilities(report);
-  if (!evaluation.ok) {
-    renderErrorScreen(root, report, evaluation);
-    return;
-  }
-  const shell = createShell(root);
-  renderCapabilityReport(shell.sidePanel, report, evaluation);
-  const stats = createFrameStats();
-  mountHud(shell.toolbar, stats);
-  startSkyRenderer(shell.canvasHost, (ms) => stats.push(ms));
-}
+/**
+ * The routes (SP4a spec §8.1, D21): `?lab=noise`, `?map`, `?selftest=1` and `?spike=batch` are their own pages;
+ * everything else is `/`, the 3D world. `startModeOf` decides whether the start screen shows first (a bare `/` or a `#`
+ * hash alone); "Enter the world" then mounts the world page in the same page, with no navigation. `?at`, `?rd` or
+ * `?workers` go straight to the loading screen. `?shot=1` is the capture mode (no HUD, no overlay, the clock fixed at
+ * `?time` or 08:00; ruling P48). `?flight` and `?pano` arrive with their tasks.
+ */
 
 const root = document.getElementById('app');
 if (root === null) throw new Error('#app element missing from index.html');
-const query = new URLSearchParams(location.search);
-const start: Promise<void> = query.get('lab') === 'noise'
-  ? import('./ui/lab/noiseLab').then((m) => m.mountNoiseLab(root))
-  : query.has('map')
-    ? import('./ui/map/mapPage').then((m) => m.mountMapPage(root))
-    : query.get('selftest') === '1'
-      ? import('./ui/selftest/selftestPage').then((m) => m.mountSelftestPage(root))
-      : query.get('spike') === 'batch'
-        ? import('./ui/spike/spikePage').then((m) => m.mountSpikePage(root))
-        : boot(root);
-start.catch((error: unknown) => {
+const app: HTMLElement = root;
+
+function showBootFailure(error: unknown): void {
   const pre = document.createElement('pre');
   pre.textContent = `Boot failed: ${error instanceof Error ? error.stack ?? error.message : String(error)}`;
-  root.replaceChildren(pre);
-});
+  app.replaceChildren(pre);
+}
+
+/** The panorama manifest, or null when it is not served (the loading screen keeps its gradient; ruling P46). */
+const loadManifest = (): Promise<unknown> => fetch('/panoramas/manifest.json').then((r) => (r.ok ? r.json() : null));
+
+async function world(query: URLSearchParams): Promise<void> {
+  const [{ parseWorldQuery }, { startModeOf, mountStartScreen }, { cryptoSeed }] = await Promise.all([
+    import('./ui/world/query'),
+    import('./ui/world/startScreen'),
+    import('./ui/seedBox'),
+  ]);
+  const q = parseWorldQuery(query);
+  // Without `shot`, `time` is ignored (ruling P48).
+  const opts = q.shot ? { hud: false, overlay: false, timeHours: q.time ?? 8 } : {};
+  const enter = async (): Promise<void> => {
+    const { mountWorldPage } = await import('./ui/world/worldPage');
+    await mountWorldPage(app, q, location.hash, opts);
+  };
+  if (startModeOf(query) === 'world') return enter();
+  const start = mountStartScreen(app, {
+    hash: location.hash,
+    onEnter: () => {
+      start.dispose();
+      enter().catch(showBootFailure);
+    },
+    random: (): Seed64 => cryptoSeed(),
+    loadManifest,
+    rand: Math.random,
+  });
+}
+
+const query = new URLSearchParams(location.search);
+const started: Promise<void> = query.get('lab') === 'noise'
+  ? import('./ui/lab/noiseLab').then((m) => m.mountNoiseLab(app))
+  : query.has('map')
+    ? import('./ui/map/mapPage').then((m) => m.mountMapPage(app))
+    : query.get('selftest') === '1'
+      ? import('./ui/selftest/selftestPage').then((m) => m.mountSelftestPage(app))
+      : query.get('spike') === 'batch'
+        ? import('./ui/spike/spikePage').then((m) => m.mountSpikePage(app))
+        : world(query);
+started.catch(showBootFailure);

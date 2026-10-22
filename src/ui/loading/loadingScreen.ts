@@ -14,6 +14,8 @@ import { mountBackdrop } from './panoramas';
 export interface LoadingScreen {
   /** The load's fraction in [0, 1] (the bar never moves back) and the current phase's name. */
   progress(fraction: number, phase: string): void;
+  /** Shows a warning line under the progress (a session's tier-2 notice, ruling P47); the load goes on. */
+  warn(text: string): void;
   /** Shows the failure panel and stops the watchdog and the tips. `lowerRd` null hides that link. */
   fail(cause: string, details: string, links: { map: string; lowerRd: string | null }): void;
   /** Fades the screen out over `ms`, then removes it. */
@@ -57,7 +59,10 @@ export function mountLoadingScreen(root: HTMLElement, o: LoadingScreenOptions): 
   bar.append(fill);
   const phase = el('p', 'loading-phase');
   phase.id = 'loading-phase';
-  front.append(tip, bar, phase);
+  const warning = el('p', 'loading-warn warn');
+  warning.id = 'loading-warn';
+  warning.hidden = true;
+  front.append(tip, bar, phase, warning);
 
   // The failure panel, hidden until `fail`.
   const failPanel = el('section', 'loading-fail');
@@ -143,6 +148,10 @@ export function mountLoadingScreen(root: HTMLElement, o: LoadingScreenOptions): 
         fill.style.width = `${Math.round(f * 1000) / 10}%`;
       }
       phase.textContent = phaseName;
+    },
+    warn(text) {
+      warning.textContent = text;
+      warning.hidden = false;
     },
     fail(causeText, detailText, l) {
       stopTimers();

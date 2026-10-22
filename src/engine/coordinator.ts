@@ -24,6 +24,7 @@
 import { colKey } from '../core/coords';
 import type { ColumnMeshPayload } from '../mesh/column';
 import { assertTorusSafe, stageOffsets, type Stage } from './rings';
+import type { ColumnDone, WorkerPool } from './workerPool';
 
 /** What a job resolved with: T and D carry no versions; L its 3 × 3 versions (18); MESH its payload and its versions. */
 export interface JobOutcome {
@@ -31,9 +32,28 @@ export interface JobOutcome {
   readonly payload: ColumnMeshPayload | null;
 }
 
-/** The pool seen by the coordinator: one call per job (Task 27's `worldJobsOf`). */
+/** The pool seen by the coordinator: one call per job (`worldJobsOf` adapts the pool). */
 export interface CoordinatorJobs {
   run(stage: Stage, cx: number, cz: number): Promise<JobOutcome>;
+}
+
+/**
+ * The pool as the coordinator's jobs (ruling P30): T, D, L and MESH run `terrain`, `decorate`, `light` and `meshColumn`.
+ * T, D and L resolve `{ versions: done.versions, payload: null }` (light's 18 versions, null for terrain and decorate),
+ * MESH `{ versions: p.versions, payload: p }`. Rejections pass through unchanged; the coordinator wraps them in LoadError.
+ */
+export function worldJobsOf(pool: Pick<WorkerPool, 'terrain' | 'decorate' | 'light' | 'meshColumn'>): CoordinatorJobs {
+  const column = (d: ColumnDone): JobOutcome => ({ versions: d.versions, payload: null });
+  return {
+    run(stage, cx, cz) {
+      switch (stage) {
+        case 'T': return pool.terrain(cx, cz).then(column);
+        case 'D': return pool.decorate(cx, cz).then(column);
+        case 'L': return pool.light(cx, cz).then(column);
+        case 'MESH': return pool.meshColumn(cx, cz).then((p) => ({ versions: p.versions, payload: p }));
+      }
+    },
+  };
 }
 
 export interface CoordinatorOptions {

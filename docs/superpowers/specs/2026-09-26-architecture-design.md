@@ -651,7 +651,7 @@ SP2a uses the 2D estimate `surfaceEst = offset` (after rivers and lakes). SP3b a
 - Caching on the quart lattice comes with its first consumer (aquifers, structures, spawn, teleport: SP4b-SP9; amended by SP3b, which caches nothing).
 - T5 holds `|est − true top|` to median ≤ 1, p90 ≤ 2, p99 ≤ 6.
 - **surfaceWaterLevel:** 63 for ocean and river, Lw for lakes, otherwise −∞.
-- **Teleport:** go to `surfaceEst + 2`, then snap to `MOTION_BLOCKING` once the column is published. While unloaded, the player hovers.
+- **Teleport** (SP4b; SP4a places the camera from the loaded `MOTION_BLOCKING`): go to `surfaceEst + 2`, then snap to `MOTION_BLOCKING` once the column is published. While unloaded, the player hovers.
 
 ### 3.8 Carvers (stage T, after density)
 

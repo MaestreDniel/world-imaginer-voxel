@@ -1,4 +1,4 @@
-import { Color, PerspectiveCamera, Scene, SRGBColorSpace, WebGLRenderer, type RenderItem } from 'three';
+import { PerspectiveCamera, Scene, SRGBColorSpace, WebGLRenderer, type Object3D, type RenderItem } from 'three';
 import { MEDIUM } from '../core/params/graphicsPresets';
 import { OPENING_T } from '../daynight/dayNight';
 import { createFloatingOrigin } from './floatingOrigin';
@@ -12,53 +12,12 @@ import { createFlatColorArray } from './textureArray';
  * The world renderer (SP4a spec §6.1): a `WebGLRenderer` with SP0's defaults (antialias off, pixel ratio
  * min(dpr, pixelRatioCap), output sRGB), a perspective camera (near 0.1, far (RD + 2)·16·1.5), and a scene holding the
  * section renderer's regions (§6.2) and the sky dome (§6.5). It builds the flat-colour array, the material system and
- * the section renderer itself, because the page (`ui`) may not touch `render/materials/`.
+ * the section renderer itself, because the page (`ui`) may not touch `render/materials/`. It replaces SP0's sky page.
  *
  * Pass order (master §4.5): opaque (front side, front to back), the sky dome, cutout (double side, alpha test), then
  * translucent (blended, back to front). The first three share three's opaque list, ordered by `opaquePassSort`; the
  * water is in three's transparent list, which draws after it.
  */
-
-const SKY = 0x87b8e8;
-
-export interface SkyRenderer {
-  dispose(): void;
-}
-
-/** SP0's sky page; Task 27 removes it with its only caller. */
-export function startSkyRenderer(host: HTMLElement, onFrame: (frameMs: number) => void): SkyRenderer {
-  const renderer = new WebGLRenderer({ antialias: false });
-  renderer.setPixelRatio(Math.min(window.devicePixelRatio, 1));
-  renderer.outputColorSpace = SRGBColorSpace;
-  renderer.setClearColor(new Color(SKY), 1);
-  host.appendChild(renderer.domElement);
-
-  const resize = () => renderer.setSize(Math.max(1, host.clientWidth), Math.max(1, host.clientHeight), false);
-  const observer = new ResizeObserver(resize);
-  observer.observe(host);
-  resize();
-
-  let last = performance.now();
-  let raf = 0;
-  const loop = (now: number) => {
-    onFrame(now - last);
-    last = now;
-    renderer.clear();
-    raf = requestAnimationFrame(loop);
-  };
-  raf = requestAnimationFrame(loop);
-
-  return {
-    dispose() {
-      cancelAnimationFrame(raf);
-      observer.disconnect();
-      renderer.dispose();
-      renderer.domElement.remove();
-    },
-  };
-}
-
-// ---------------------------------------------------------------- the world renderer
 
 /** The camera's near plane, in blocks (spec §6.1). */
 const NEAR = 0.1;
@@ -118,10 +77,19 @@ export interface WorldRenderer {
   /** The floating origin (spec §6.8); the page calls `update` and, on true, `sections.setOrigin`. */
   readonly origin: ReturnType<typeof createFloatingOrigin>;
   readonly sections: SectionRenderer;
-  /** Compiles every material behind the loading screen (`renderer.compileAsync`, spec §6.4, §8.4). */
+  /**
+   * Compiles every material behind the loading screen (`renderer.compileAsync`, spec §6.4, §8.4), for every built
+   * section whether revealed or not: three compiles only visible objects, and a `BatchedMesh` or region mesh needs its
+   * own program variant, so the sections are counted visible for the compile's synchronous walk.
+   */
   compile(): Promise<void>;
   /** Sorts the translucent regions from the camera, writes the frame uniforms and renders (inside the GPU timer). */
   frame(state: FrameState): void;
+  /**
+   * One frame behind the opaque loading overlay (spec §8.4 step 5's three frames): as `frame`, with every built section
+   * drawn whether revealed or not, so its buffers reach the GPU before the reveal; the sections stay hidden after it.
+   */
+  warmUp(state: FrameState): void;
   /** The last frame's draw calls and triangles. */
   info(): { calls: number; triangles: number };
   /** The GPU timer, or null without `EXT_disjoint_timer_query_webgl2`; `frame` begins and ends it itself. */
@@ -247,6 +215,30 @@ export function createWorldRenderer(host: HTMLElement, o: WorldRendererOptions):
   watchDpr();
   resize();
 
+  /** Runs `fn` with every hidden object under the sections' root counted visible, then hides them again. */
+  const withSectionsShown = <T>(fn: () => T): T => {
+    const hidden: Object3D[] = [];
+    sections.root.traverse((o) => {
+      if (!o.visible) {
+        hidden.push(o);
+        o.visible = true;
+      }
+    });
+    try {
+      return fn();
+    } finally {
+      for (const o of hidden) o.visible = false;
+    }
+  };
+  const draw = (state: FrameState): void => {
+    // The camera in scene coordinates, relative to the floating origin (ruling P17).
+    sections.sortTranslucent(camera.position.x, camera.position.y, camera.position.z);
+    materials.setFrameUniforms(state);
+    timer?.begin();
+    renderer.render(scene, camera);
+    timer?.end();
+  };
+
   const lostListeners: Array<() => void> = [];
   const onLost = (): void => {
     for (const fn of lostListeners) fn();
@@ -259,15 +251,14 @@ export function createWorldRenderer(host: HTMLElement, o: WorldRendererOptions):
     origin,
     sections,
     async compile() {
-      await renderer.compileAsync(scene, camera);
+      // compileAsync walks the scene synchronously (`compile`), then only waits for the programs.
+      await withSectionsShown(() => renderer.compileAsync(scene, camera));
     },
     frame(state) {
-      // The camera in scene coordinates, relative to the floating origin (ruling P17).
-      sections.sortTranslucent(camera.position.x, camera.position.y, camera.position.z);
-      materials.setFrameUniforms(state);
-      timer?.begin();
-      renderer.render(scene, camera);
-      timer?.end();
+      draw(state);
+    },
+    warmUp(state) {
+      withSectionsShown(() => draw(state));
     },
     info() {
       return { calls: renderer.info.render.calls, triangles: renderer.info.render.triangles };

@@ -16,12 +16,15 @@ body { background: #0f1629; color: var(--text); font: 13px/1.4 system-ui, sans-s
 .cap-table { width: 100%; border-collapse: collapse; }
 .cap-table td { padding: 2px 4px; border-bottom: 1px solid var(--line); vertical-align: top; }
 .ok { color: #7bd88f; } .bad { color: #ff6b6b; } .warn { color: #ffd166; }
-.error-screen { display: grid; gap: 1rem; align-content: center; height: 100%; max-width: 48rem; margin: 0 auto; padding: 2rem; overflow: auto; }
+.error-screen { display: grid; gap: 1rem; align-content: safe center; height: 100%; max-width: 48rem; margin: 0 auto; padding: 2rem; overflow: auto; }
 .error-screen pre { white-space: pre-wrap; background: var(--panel); padding: .8rem; border-radius: 4px; }
 @media (max-width: 720px) {
   .shell { grid-template-columns: 1fr; grid-template-rows: auto 1fr auto; grid-template-areas: "toolbar" "canvas" "panel"; }
   .side-panel { max-height: 40vh; border-left: 0; border-top: 1px solid var(--line); }
 }
+/* The world page (SP4a spec §8.4): the canvas host and "Click to fly". */
+.world-host { position: fixed; inset: 0; overflow: hidden; background: #000; }
+.world-click-hint { position: absolute; left: 50%; top: 50%; z-index: 1; transform: translate(-50%, -50%); padding: .6rem 1.2rem; border-radius: 6px; background: rgb(10 16 32 / .6); color: #f4f7ff; font-size: 1.1rem; pointer-events: none; }
 /* The world HUD (SP4a spec §6.9) and the help overlay (§7.4). */
 .world-hud { position: absolute; top: .5rem; left: .5rem; z-index: 2; padding: .35rem .6rem; border-radius: 4px; background: rgb(0 0 0 / .45); color: #f0f0f0; font: 12px/1.45 ui-monospace, monospace; font-variant-numeric: tabular-nums; pointer-events: none; white-space: pre; }
 .world-help { position: absolute; inset: 0; z-index: 3; display: grid; gap: 1rem; align-content: start; grid-template-columns: repeat(auto-fit, minmax(18rem, 1fr)); padding: 1.5rem; overflow: auto; background: rgb(15 22 41 / .92); }
@@ -50,6 +53,7 @@ body { background: #0f1629; color: var(--text); font: 13px/1.4 system-ui, sans-s
 .loading-bar { width: 100%; height: 3px; border-radius: 2px; background: rgb(255 255 255 / .2); overflow: hidden; }
 .loading-bar-fill { height: 100%; background: #f4f7ff; transition: width .2s linear; }
 .loading-phase { font-size: 12px; opacity: .8; }
+.loading-warn { font-size: 12px; }
 .loading-links a { color: #8ab4ff; }
 .loading-details { max-height: 30vh; max-width: 100%; overflow: auto; text-align: left; white-space: pre-wrap; font-size: 11px; opacity: .85; }
 .start-screen [hidden], .loading-screen [hidden] { display: none; }

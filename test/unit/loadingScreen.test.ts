@@ -175,6 +175,18 @@ describe('the loading screen (SP4a spec §8.3, D22)', () => {
     await settle();
   });
 
+  test('warn shows a warning line and keeps the progress (ruling P47: a tier-2 notice)', async () => {
+    const s = mount();
+    expect(dom.el('loading-warn').hidden).toBe(true);
+    s.warn('invalid patch (terrain.x bad); opened the default profile with no changes');
+    expect(dom.el('loading-warn').hidden).toBe(false);
+    expect(dom.el('loading-warn').textContent).toBe('invalid patch (terrain.x bad); opened the default profile with no changes');
+    s.progress(0.5, 'Lighting');
+    expect(dom.el('loading-phase').textContent).toBe('Lighting');
+    expect(dom.el('loading-fail').hidden).toBe(true);
+    await settle();
+  });
+
   test('fail without a lower RD shows only the map link', async () => {
     vi.stubGlobal('navigator', {});
     const s = mount();

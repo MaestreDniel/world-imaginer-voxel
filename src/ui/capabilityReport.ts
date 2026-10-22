@@ -46,7 +46,8 @@ function causeList(causes: readonly Cause[], className: string): HTMLUListElemen
   return ul;
 }
 
-export function renderCapabilityReport(panel: HTMLElement, report: CapabilityReport, evaluation: Evaluation): void {
+/** The capability table, one row per probed value. */
+function capabilityTable(report: CapabilityReport): HTMLTableElement {
   const table = el('table', undefined, 'cap-table');
   for (const [key, label] of ROWS) {
     const value = report[key];
@@ -54,6 +55,11 @@ export function renderCapabilityReport(panel: HTMLElement, report: CapabilityRep
     row.append(el('td', label), el('td', value === null ? '—' : String(value), valueClass(key, value)));
     table.append(row);
   }
+  return table;
+}
+
+export function renderCapabilityReport(panel: HTMLElement, report: CapabilityReport, evaluation: Evaluation): void {
+  const table = capabilityTable(report);
   const copy = el('button', 'Copy as JSON');
   copy.type = 'button';
   copy.onclick = () => {
@@ -66,11 +72,21 @@ export function renderCapabilityReport(panel: HTMLElement, report: CapabilityRep
   panel.append(copy, jsonBlock(report));
 }
 
-export function renderErrorScreen(root: HTMLElement, report: CapabilityReport, evaluation: Evaluation): void {
+/**
+ * The blocking error screen (SP4a spec §8.5): the causes, the capability table, a link to `mapHref` when given (the
+ * map needs no SharedArrayBuffer or WebGL2), and the full report.
+ */
+export function renderErrorScreen(root: HTMLElement, report: CapabilityReport, evaluation: Evaluation, mapHref: string | null = null): void {
   const screen = el('div', undefined, 'error-screen');
+  screen.id = 'error-screen';
+  screen.append(el('h1', 'world-imaginer-voxel cannot start'), causeList(evaluation.blocking, 'bad'), capabilityTable(report));
+  if (mapHref !== null) {
+    const map = el('a', 'Open the map instead');
+    map.id = 'error-map';
+    map.href = mapHref;
+    screen.append(map);
+  }
   screen.append(
-    el('h1', 'world-imaginer-voxel cannot start'),
-    causeList(evaluation.blocking, 'bad'),
     el('p', 'Fix the causes above and reload. Full report:'),
     el('pre', JSON.stringify(report, null, 2)),
     jsonBlock(report),

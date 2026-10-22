@@ -1,9 +1,9 @@
 import { describe, expect, test } from 'vitest';
 import { colKey } from '../../src/core/coords';
 import {
-  LoadError, createCoordinator, phaseName, progressFraction, type CoordinatorJobs, type JobOutcome, type LoadProgress,
+  LoadError, createCoordinator, phaseName, progressFraction, worldJobsOf, type CoordinatorJobs, type JobOutcome, type LoadProgress,
 } from '../../src/engine/coordinator';
-import { JobCancelled } from '../../src/engine/workerPool';
+import { JobCancelled, StoreFullError, type ColumnDone, type WorkerPool } from '../../src/engine/workerPool';
 import { discOffsets, type Stage } from '../../src/engine/rings';
 import type { ColumnMeshPayload } from '../../src/mesh/column';
 
@@ -250,5 +250,48 @@ describe('progressFraction and phaseName (SP4a spec §8.3)', () => {
     expect(phaseName(p({ T: 10, D: 10, L: 3 }), 0, 0)).toBe('Lighting');
     expect(phaseName(p({ T: 10, D: 10, L: 10, MESH: 9 }), 0, 0)).toBe('Meshing');
     expect(phaseName(p({ T: 10, D: 10, L: 10, MESH: 10 }), 4, 4)).toBe('Preparing the view');
+  });
+});
+
+describe('worldJobsOf (ruling P30)', () => {
+  const done = (cx: number, cz: number, versions: Int32Array | null): ColumnDone => ({ cx, cz, ms: 3, versions });
+  const lightVersions = Int32Array.from({ length: 18 }, (_, i) => i + 1);
+  const payload = { cx: 4, cz: 5, versions: Int32Array.from({ length: 18 }, (_, i) => 100 + i) } as unknown as ColumnMeshPayload;
+  const calls: string[] = [];
+  const pool = {
+    terrain: (cx: number, cz: number) => { calls.push(`terrain ${cx} ${cz}`); return Promise.resolve(done(cx, cz, null)); },
+    decorate: (cx: number, cz: number) => { calls.push(`decorate ${cx} ${cz}`); return Promise.resolve(done(cx, cz, null)); },
+    light: (cx: number, cz: number) => { calls.push(`light ${cx} ${cz}`); return Promise.resolve(done(cx, cz, lightVersions)); },
+    meshColumn: (cx: number, cz: number) => { calls.push(`meshColumn ${cx} ${cz}`); return Promise.resolve(payload); },
+  } as unknown as WorkerPool;
+
+  test('T, D, L and MESH map to terrain, decorate, light and meshColumn', async () => {
+    calls.length = 0;
+    const jobs = worldJobsOf(pool);
+    expect(await jobs.run('T', 1, -2)).toEqual({ versions: null, payload: null });
+    expect(await jobs.run('D', 1, -2)).toEqual({ versions: null, payload: null });
+    const l = await jobs.run('L', 1, -2);
+    expect(l.versions).toBe(lightVersions);
+    expect(l.payload).toBeNull();
+    const m = await jobs.run('MESH', 4, 5);
+    expect(m.payload).toBe(payload);
+    expect(m.versions).toBe(payload.versions);
+    expect(calls).toEqual(['terrain 1 -2', 'decorate 1 -2', 'light 1 -2', 'meshColumn 4 5']);
+  });
+
+  test('rejections pass through unchanged', async () => {
+    const full = new StoreFullError('blocks full');
+    const cancelled = new JobCancelled();
+    const failing = {
+      terrain: () => Promise.reject(full),
+      decorate: () => Promise.reject(cancelled),
+      light: () => Promise.reject(full),
+      meshColumn: () => Promise.reject(cancelled),
+    } as unknown as WorkerPool;
+    const jobs = worldJobsOf(failing);
+    await expect(jobs.run('T', 0, 0)).rejects.toBe(full);
+    await expect(jobs.run('D', 0, 0)).rejects.toBe(cancelled);
+    await expect(jobs.run('L', 0, 0)).rejects.toBe(full);
+    await expect(jobs.run('MESH', 0, 0)).rejects.toBe(cancelled);
   });
 });
