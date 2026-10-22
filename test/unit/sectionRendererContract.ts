@@ -8,7 +8,7 @@ import { fakePayload } from './fixtures/payloads';
 
 /**
  * The `SectionRenderer` contract (SP4a spec §6.2, §9.7): staging, hidden until one reveal, origin rebase, counts. It is
- * run against both implementations, RegionBatch (`regionBatch.test.ts`) and RegionMesh (Task 22). The checks read only
+ * run against both implementations, RegionBatch (`regionBatch.test.ts`) and RegionMesh (`regionMesh.test.ts`). The checks read only
  * what three exposes on the renderer's `root`: meshes, and a BatchedMesh's instance matrices.
  */
 

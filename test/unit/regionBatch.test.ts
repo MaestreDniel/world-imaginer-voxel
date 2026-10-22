@@ -211,9 +211,9 @@ describe('selectSectionRenderer and createSectionRenderer (SP4a spec §6.2)', ()
     expect(selectSectionRenderer({ multiDraw: false }, 'batch')).toBe('batch');
   });
 
-  test('the mesh kind throws until Task 22, and a mismatched material variant throws', () => {
-    expect(() => createSectionRenderer('mesh', system('mesh'))).toThrow('RegionMesh arrives in Task 22');
-    expect(() => createSectionRenderer('mesh', system('batch'))).toThrow();
+  test('a mismatched material variant throws', () => {
+    expect(() => createSectionRenderer('mesh', system('batch'))).toThrow(/variant/);
+    expect(() => createSectionRenderer('batch', system('mesh'))).toThrow(/variant/);
   });
 
   test('regionOf is cx >> 3, cz >> 3', () => {

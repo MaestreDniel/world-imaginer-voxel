@@ -1002,12 +1002,12 @@ In AO, smooth light and connectivity15, "opaque" means PASS opaque with `FULL_FA
 ### 4.5 Render structure
 
 **RegionBatch** covers 8×8 columns × full height. It owns 3 BatchedMesh objects (opaque, cutout, translucent), with one instance per section; the instance matrix translates to the section origin relative to the floating origin.
-- Vertex and index capacity are reserved per preset; opaque starts at a reservation sized so the sum over regions matches §7 (≈ 100k vertices for a typical region) and grows ×1.5 via `setGeometrySize`.
+- Vertex and index capacity are reserved per preset (SP4b; SP4a sizes each region exactly at load); opaque starts at a reservation sized so the sum over regions matches §7 (≈ 100k vertices for a typical region) and grows ×1.5 via `setGeometrySize`.
 - Remeshes go through `setGeometryAt` when they fit their power-of-two reservation; otherwise the geometry is deleted and re-added.
 - `optimize()` runs when fragmentation exceeds 40%. It is per region, up to about 5 MB at 1500 quads/column (the < 1 ms claim is re-measured in the SP4a spike).
 - `geometry.boundingSphere` is set before `addGeometry`, so three clones it instead of scanning positions.
 
-**Fallback.** `capabilities.ts` detects `WEBGL_multi_draw` at startup. If it is missing, or the SP4a spike fails, the `SectionRenderer` interface switches to `RegionMesh`: one merged buffer per region per pass with sub-allocated ranges and `addUpdateRange`, and culling per region.
+**Fallback.** `capabilities.ts` detects `WEBGL_multi_draw` at startup. If it is missing, or the SP4a spike fails, the `SectionRenderer` interface switches to `RegionMesh`: one merged buffer per region per pass with sub-allocated ranges and `addUpdateRange`, and culling per region (built in SP4a: Firefox exposes `WEBGL_multi_draw` on no GPU, the user's capability check of 2026-10-20; SP4a writes each region's merged buffers once with Uint16 region-local positions, and the sub-allocated ranges and `addUpdateRange` serve SP4b's streaming).
 
 **Pass order:**
 1. LOD tiles (own near/far), then clear depth.

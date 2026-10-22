@@ -2,13 +2,14 @@ import type { Group } from 'three';
 import type { ColumnMeshPayload } from '../mesh/column';
 import type { MaterialSystem } from './materials/index';
 import { createRegionBatch } from './regionBatch';
+import { createRegionMesh } from './regionMesh';
 
 export { regionOf } from './regionGrid';
 
 /**
  * The section renderers (SP4a spec §6.2): the interface the page talks to, and the choice between RegionBatch (one
  * `BatchedMesh` per region and pass, wherever `WEBGL_multi_draw` exists) and RegionMesh (merged buffers per region
- * and pass, Task 22). Both share the payload, the materials' GLSL and the region grid (`regionGrid.ts`).
+ * and pass, `regionMesh.ts`). Both share the payload, the materials' GLSL and the region grid (`regionGrid.ts`).
  *
  * Geometry is in 1/8-block units: every instance or mesh matrix is `T(origin − floatingOrigin) · S(1/8)`, the origin
  * being the section's `(cx·16, sy·16 − 64, cz·16)` on RegionBatch and the region's on RegionMesh.
@@ -52,7 +53,7 @@ export interface SectionRenderer {
   /**
    * Orders translucent geometry back to front from the camera at (camX, camY, camZ), given in the frame of
    * `camera.position`, that is relative to the current floating origin (ruling P17). A no-op on RegionBatch, where
-   * `BatchedMesh` sorts its instances itself; RegionMesh (Task 22) orders its regions.
+   * `BatchedMesh` sorts its instances itself; RegionMesh orders its regions by centre.
    */
   sortTranslucent(camX: number, camY: number, camZ: number): void;
   counts(): SectionRendererCounts;
@@ -70,6 +71,5 @@ export function createSectionRenderer(kind: SectionRendererKind, materials: Mate
   if (materials.variant !== kind) {
     throw new Error(`a '${kind}' section renderer needs the '${kind}' material variant, got '${materials.variant}'`);
   }
-  if (kind === 'mesh') throw new Error('RegionMesh arrives in Task 22');
-  return createRegionBatch(materials);
+  return kind === 'mesh' ? createRegionMesh(materials) : createRegionBatch(materials);
 }
