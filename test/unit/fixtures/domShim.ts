@@ -40,6 +40,8 @@ export class FakeElement extends EventTarget {
   hidden = false;
   disabled = false;
   href = '';
+  /** An image's source (its `decode()` asks the owner document's `decodeImage`). */
+  src = '';
   title = '';
   type = '';
   style: Record<string, string> = {};
@@ -47,6 +49,8 @@ export class FakeElement extends EventTarget {
   /** The DOM's `onclick` property: called after the 'click' listeners when the element is clicked. */
   onclick: ((e: Event) => unknown) | null = null;
   parentElement: FakeElement | null = null;
+  /** The document that created the element (null for one built with `new`). */
+  ownerDocument: FakeDocument | null = null;
   readonly childNodes: Child[] = [];
   private readonly attrs = new Map<string, string>();
   private ownValue: string | null = null;
@@ -119,6 +123,13 @@ export class FakeElement extends EventTarget {
     else this.attrs.set(name, String(value));
   }
 
+  removeAttribute(name: string): void {
+    if (name === 'id') this.id = '';
+    else if (name === 'class') this.className = '';
+    else if (name === 'href') this.href = '';
+    this.attrs.delete(name);
+  }
+
   getAttribute(name: string): string | null {
     if (name === 'id') return this.id === '' ? null : this.id;
     if (name === 'class') return this.className === '' ? null : this.className;
@@ -131,6 +142,11 @@ export class FakeElement extends EventTarget {
     const e = new Event('click', { cancelable: true });
     this.dispatchEvent(e);
     this.onclick?.(e);
+  }
+
+  /** An image's `decode()`: the owner document's `decodeImage(src)` (resolves when there is no owner). */
+  decode(): Promise<void> {
+    return this.ownerDocument === null ? Promise.resolve() : this.ownerDocument.decodeImage(this.src);
   }
 
   /** The first descendant matching '#id' or a tag name, depth-first. */
@@ -184,14 +200,20 @@ function selectorMatcher(selector: string): (e: FakeElement) => boolean {
   throw new Error(`domShim: unsupported selector '${selector}' (only '#id' and tag names)`);
 }
 
-/** The document: element factories, lookups over `body`, settable `hidden` and `visibilityState`, and events. */
+/**
+ * The document: element factories, lookups over `body`, settable `hidden` and `visibilityState`, events, and
+ * `decodeImage`, which every image's `decode()` calls (a test replaces it to make a decode fail or wait).
+ */
 export class FakeDocument extends EventTarget {
   readonly body = new FakeElement('body');
   hidden = false;
   visibilityState: 'visible' | 'hidden' = 'visible';
+  decodeImage: (src: string) => Promise<void> = () => Promise.resolve();
 
   createElement(tag: string): FakeElement {
-    return new FakeElement(tag);
+    const e = new FakeElement(tag);
+    e.ownerDocument = this;
+    return e;
   }
 
   createTextNode(text: string): FakeText {
