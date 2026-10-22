@@ -1,0 +1,140 @@
+{
+  "route": "spike",
+  "capability": {
+    "secureContext": true,
+    "pageIsolated": true,
+    "workerProbe": "ok",
+    "workerIsolated": true,
+    "sabShared": true,
+    "growableSab": true,
+    "reservation": {
+      "blockBytes": 805306368,
+      "byteBytes": 536870912
+    },
+    "webgl2": true,
+    "multiDraw": false,
+    "timerQuery": false,
+    "maxArrayTextureLayers": 2048,
+    "maxTextureSize": 32768,
+    "renderer": "NVIDIA GeForce GTX 980, or similar",
+    "vendor": "NVIDIA Corporation",
+    "hardwareConcurrency": 20,
+    "deviceMemory": null
+  },
+  "sectionRenderer": "mesh",
+  "userAgent": "Mozilla/5.0 (X11; Ubuntu; Linux x86_64; rv:158.0) Gecko/20100101 Firefox/158.0",
+  "screen": {
+    "width": 1760,
+    "height": 990
+  },
+  "dpr": 1.0909090909090908,
+  "displayIntervalMs": 4.2,
+  "items": {
+    "scene": {
+      "columns": 489,
+      "sections": 3565,
+      "quads": 734109,
+      "regions": 15
+    },
+    "decode": {
+      "words": 1024,
+      "mismatches": 0,
+      "firstMismatches": [],
+      "error": null
+    },
+    "static": {
+      "sectionRenderer": "mesh",
+      "multiDrawMasked": false,
+      "canvas": {
+        "width": 1920,
+        "height": 1080,
+        "pixelRatio": 1
+      },
+      "displayIntervalMs": 4.2,
+      "frames": 600,
+      "frame": {
+        "p50": 4.2000000000000455,
+        "p95": 4.2000000000000455,
+        "max": 8.400000000000091
+      },
+      "main": {
+        "p50": 0.17999999999938154,
+        "p95": 0.2600000000002183,
+        "max": 2.6799999999998363
+      },
+      "drawCalls": 23,
+      "drawCallsMean": 19.871666666666666,
+      "trianglesMax": 1318265,
+      "longFrames": {
+        "count": 0,
+        "first": []
+      },
+      "error": null
+    },
+    "upload": {
+      "quads": 734109,
+      "sections": 3565,
+      "buildMs": 28.8599999999999,
+      "msPer1kQuads": 0.03931296306134361,
+      "firstRenderMs": 52.42000000000007,
+      "projectedRd12Seconds": 0.11666666666666667,
+      "error": null
+    },
+    "churn": {
+      "frames": 0,
+      "setGeometryPerFrame": 32,
+      "mainP95": null,
+      "frameP95": null,
+      "deleted": 0,
+      "optimize": [],
+      "readdMs": null,
+      "setGeometrySizeMs": null,
+      "error": "Error: churn needs RegionBatch's BatchedMesh; the 'mesh' renderer has none"
+    },
+    "noMultiDraw": {
+      "sectionRenderer": "mesh",
+      "multiDrawMasked": false,
+      "canvas": {
+        "width": 1920,
+        "height": 1080,
+        "pixelRatio": 1
+      },
+      "displayIntervalMs": 4.2,
+      "frames": 600,
+      "frame": {
+        "p50": 4.2000000000000455,
+        "p95": 4.2000000000000455,
+        "max": 8.400000000000091
+      },
+      "main": {
+        "p50": 0.17999999999938154,
+        "p95": 0.24000000000069122,
+        "max": 2.4799999999995634
+      },
+      "drawCalls": 23,
+      "drawCallsMean": 19.871666666666666,
+      "trianglesMax": 1318265,
+      "longFrames": {
+        "count": 0,
+        "first": []
+      },
+      "error": null
+    }
+  },
+  "store": {
+    "reservedBlockMiB": 768,
+    "reservedByteMiB": 512,
+    "grewTo": {
+      "blockMiB": 36,
+      "byteMiB": 18
+    },
+    "crossReadsOk": 384,
+    "crossReadsTotal": 384,
+    "errors": []
+  },
+  "verdict": {
+    "gatePass": true,
+    "basicPass": true,
+    "failures": []
+  }
+}
