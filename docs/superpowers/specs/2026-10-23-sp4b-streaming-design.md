@@ -1,7 +1,7 @@
 # SP4b — Streaming: the world without an edge (Design)
 
 Date: 2026-10-23
-Status: **Draft for the user's review** (revised after the spec review of 2026-10-23; the user's one choice, the fog's end, is recorded under Points decided by the user). The design was agreed with the user in brainstorming (`.superpowers/sp4b/design-brief.md`, incl. the SP4b/SP4c split: "Sí, partirlo en SP4b-1 y SP4b-2 me parece bien"); this written spec turns it into decisions, values and tests, and marks every point the brief did not settle as a decision taken by this spec, with its alternative.
+Status: **Approved by the user (2026-10-23)** ("Queda aprobado"), after the spec review of 2026-10-23; the user's one choice, the fog's end, is recorded under Points decided by the user. The design was agreed with the user in brainstorming (`.superpowers/sp4b/design-brief.md`, incl. the SP4b/SP4c split: "Sí, partirlo en SP4b-1 y SP4b-2 me parece bien"); this written spec turns it into decisions, values and tests, and marks every point the brief did not settle as a decision taken by this spec, with its alternative.
 Parent: master spec `2026-09-26-architecture-design.md`. The sections involved are:
 - §10 SP4b, which this spec splits into SP4b (streaming) and SP4c (the map in the world and live editing) (§11, §13), and the SP5, SP10 and SP11 entries it hands work to;
 - §2.3 (store: the column record, slabs, epoch cells), §2.5 (`ColumnWriter`, `VoxelStore`, `SubProjectId`);
