@@ -6,15 +6,18 @@
  *
  * Column lifecycle: `claimColumn` takes the record and returns a `ColumnWriter`; `commit` publishes it (status last);
  * `reopenColumn` returns a writer for a committed column, for the next stage (SP4a: D at Proto, L at Decorated);
- * `proto`/`final` read it once its status allows; `freeProto` releases the proto set; `freeColumn` releases every
- * reference the record holds and frees the record. `gen` imports only the types of `api.ts`, never this file.
+ * `proto`/`final` read it once its status allows (`proto` also needs the alive bit, which a claim writer's commit
+ * sets and `freeProto` clears, SP4b spec §2.4); `freeProto` releases the proto set; `freeColumn` releases every
+ * reference the record holds and frees the record. A writer captures the record's claim generation and throws
+ * `WriterStale` once the record was freed or claimed again (SP4b spec §2.2). `gen` imports only the types of
+ * `api.ts`, never this file.
  */
 import { PASS } from '../blocks/index';
 import type { AuxBView, AuxView, ColumnView, ColumnWriter, CommitStatus, NeighborhoodReader } from './api';
 import { allocAux, auxBView, auxView } from './aux';
 import {
-  attachColumnTable, createColumnTable, finalAt, protoAt, REC_AUX_A, REC_AUX_B, REC_CLAIMED, REC_CX, REC_CZ,
-  SECTIONS, STATUS_ABSENT, STATUS_DECORATED, STATUS_PROTO, type ColumnTable,
+  attachColumnTable, createColumnTable, finalAt, PROTO_ALIVE, protoAt, REC_AUX_A, REC_AUX_B, REC_CLAIMED, REC_CX, REC_CZ,
+  REC_GEN, REC_PROTO_FLAGS, SECTIONS, STATUS_ABSENT, STATUS_DECORATED, STATUS_PROTO, WriterStale, type ColumnTable,
 } from './columnTable';
 import { attachEpochCells, createEpochCells, type EpochCells } from './epochs';
 import {
@@ -26,7 +29,7 @@ import {
   sectionBytes, sectionWords, SECTION_VOXELS, shareEntry, storeBytes, storeWords, wordAt,
 } from './section';
 
-export { SlotBusy } from './columnTable';
+export { SlotBusy, WriterStale } from './columnTable';
 export { StoreFull } from './pool';
 export type { AuxBView, AuxView, ColumnView, ColumnWriter, CommitStatus, NeighborhoodReader } from './api';
 
@@ -76,9 +79,12 @@ export interface VoxelStore {
   reopenColumn(cx: number, cz: number, from: 1 | 2): ColumnWriter;
   /** Releases every reference the record holds and frees it; nothing unless the record holds (cx, cz). */
   freeColumn(cx: number, cz: number): void;
-  /** Releases the proto entries only (resets them to −1); nothing unless the record holds (cx, cz). */
+  /**
+   * Releases the proto entries only (resets them to −1), then clears the alive bit (SP4b spec §2.4); nothing unless
+   * the record holds (cx, cz).
+   */
   freeProto(cx: number, cz: number): void;
-  /** The proto set, or null unless the record holds (cx, cz) at status ≥ Proto. */
+  /** The proto set, or null unless the record holds (cx, cz) at status ≥ Proto with the alive bit set. */
   proto(cx: number, cz: number): ColumnView | null;
   /** The final set, or null unless the record holds (cx, cz) at status ≥ Decorated. */
   final(cx: number, cz: number): ColumnView | null;
@@ -193,20 +199,27 @@ export function attachStore(h: StoreHandles): VoxelStore {
   }
 
   /**
-   * The writer of the record at `base`, which holds (cx, cz): a fresh claim's or a reopened column's. Its aux
-   * accessors view the record's slot when it has one and allocate otherwise; `wroteBlocks`/`wroteLight` record the
-   * channels written since the previous commit (SP4a spec §2.5), set before a store so a write that throws midway
-   * still counts.
+   * The writer of the record at `base`, which holds (cx, cz): a fresh claim's (`from` 0) or a reopened column's
+   * (`from` the status it reopened at). Its aux accessors view the record's slot when it has one and allocate
+   * otherwise; `wroteBlocks`/`wroteLight` record the channels written since the previous commit (SP4a spec §2.5), set
+   * before a store so a write that throws midway still counts. It captures the record's generation now (SP4b spec
+   * §2.2), and its commits set the alive bit only when it was opened by a claim (SP4b spec §2.4).
    */
-  function writer(base: number, cx: number, cz: number): ColumnWriter {
+  function writer(base: number, cx: number, cz: number, from: 0 | 1 | 2): ColumnWriter {
+    const gen = Atomics.load(ints, base + REC_GEN);
     let auxA: AuxView | null = null;
     let auxB: AuxBView | null = null;
     let wroteBlocks = false;
     let wroteLight = false;
-    /** The record still holds this writer's column (it has not been freed, nor taken by another column). */
+    /** The last status this writer committed (`from` before its first commit). */
+    let last: number = from;
+    /** The record still holds this writer's claim: not freed, nor claimed again by any column (SP4b spec §2.2). */
     const check = (): void => {
-      if (Atomics.load(ints, base + REC_CLAIMED) !== 1 || Atomics.load(ints, base + REC_CX) !== cx || Atomics.load(ints, base + REC_CZ) !== cz) {
-        throw new Error(`store: the record no longer holds column (${cx}, ${cz})`);
+      if (
+        Atomics.load(ints, base + REC_GEN) !== gen || Atomics.load(ints, base + REC_CLAIMED) !== 1 ||
+        Atomics.load(ints, base + REC_CX) !== cx || Atomics.load(ints, base + REC_CZ) !== cz
+      ) {
+        throw new WriterStale(`store: the record no longer holds column (${cx}, ${cz})`);
       }
     };
     const setMeta = (sy: number): void => {
@@ -282,10 +295,16 @@ export function attachStore(h: StoreHandles): VoxelStore {
       commit(status: CommitStatus) {
         check();
         if (status !== 1 && status !== 2 && status !== 3) throw new RangeError(`store: commit status ${String(status)}`);
+        // The status guard (SP4b spec §2.4): above the status the writer opened at, never below its own last commit.
+        if (status <= from || status < last) {
+          throw new RangeError(`store: commit status ${status} of column (${cx}, ${cz}), a writer opened at ${from} that last committed ${last}`);
+        }
+        if (from === 0) Atomics.or(ints, base + REC_PROTO_FLAGS, PROTO_ALIVE);
         if (wroteBlocks) table.bumpBlockVersion(base);
         if (wroteLight) table.bumpLightVersion(base);
         wroteBlocks = false;
         wroteLight = false;
+        last = status;
         table.setStatus(base, status);
       },
     };
@@ -300,14 +319,14 @@ export function attachStore(h: StoreHandles): VoxelStore {
     handles: () => h,
 
     claimColumn(cx, cz, epoch) {
-      return writer(table.claim(cx, cz, epoch), cx, cz);
+      return writer(table.claim(cx, cz, epoch), cx, cz, 0);
     },
 
     reopenColumn(cx, cz, from) {
       if (from !== 1 && from !== 2) throw new RangeError(`store: reopenColumn from status ${String(from)}`);
       const base = table.find(cx, cz);
       if (base < 0 || table.status(base) !== from) throw new Error(`reopenColumn: (${cx}, ${cz}) is not at status ${from}`);
-      return writer(base, cx, cz);
+      return writer(base, cx, cz, from);
     },
 
     freeColumn(cx, cz) {
@@ -328,12 +347,14 @@ export function attachStore(h: StoreHandles): VoxelStore {
 
     freeProto(cx, cz) {
       const base = table.find(cx, cz);
-      if (base >= 0) releaseProto(base);
+      if (base < 0) return;
+      releaseProto(base);
+      Atomics.and(ints, base + REC_PROTO_FLAGS, ~PROTO_ALIVE);
     },
 
     proto(cx, cz) {
       const base = committed(cx, cz, STATUS_PROTO);
-      return base < 0 ? null : view(base, cx, cz, false);
+      return base < 0 || (Atomics.load(ints, base + REC_PROTO_FLAGS) & PROTO_ALIVE) === 0 ? null : view(base, cx, cz, false);
     },
 
     final(cx, cz) {

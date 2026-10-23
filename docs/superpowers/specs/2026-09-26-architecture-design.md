@@ -341,11 +341,12 @@ Each channel is stored on its own: uniform when every value of that channel is e
 | ints | fields |
 |---|---|
 | 0-3 | cx, cz, `status` (Atomics: 0 Absent, 1 Proto, 2 Decorated, 3 Published), `epoch` |
-| 4-5 | `blockVersion`, `lightVersion` (Atomics.add on every committed change of that channel; SP4a) |
-| 6 | protoFlags (alive, pinnedByTuning) |
+| 4-5 | `blockVersion`, `lightVersion` (Atomics.add on every committed change of that channel; SP4a; never reset by a claim: monotone over the record's life (SP4b)) |
+| 6 | protoFlags: bit 0 alive (set by a claim writer's commit, i.e. T's, and by `commitProto`; cleared by `freeProto`; `proto()` is null when clear), bit 1 pinnedByTuning (SP8b) |
 | 7-8 | auxSlotA, auxSlotB |
 | 9-10 | unsettledCount, diffFlag |
 | 11 | `claimed` (Atomics: 0 free, 1 held; claiming a held record throws `SlotBusy`, and a read of a record that holds another column returns absent; amended by SP3a) |
+| 12 | claim generation (Atomics; even free, odd held; bumped by claim and unclaim; lookups and writers validate it; SP4b) |
 | 16-111 | final descriptors |
 | 112-159 | proto descriptors |
 

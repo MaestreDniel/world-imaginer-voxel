@@ -243,9 +243,9 @@ describe.each([true, false])('shared %s', (shared) => {
     expect([at(0, 0), at(1, 0)]).toEqual([[2, 0], [1, 0]]);
     runL(s, 10, 10);
     expect([at(0, 0), at(1, 0)]).toEqual([[2, 1], [1, 0]]);
-    // A commit with no write changes no version.
+    // A commit at the status the writer opened at is refused (SP4b spec §2.4) and changes no version.
     const idle = s.reopenColumn(11, 10, 1);
-    idle.commit(1);
+    expect(() => idle.commit(1)).toThrow(RangeError);
     expect(at(1, 0)).toEqual([1, 0]);
     // setFinal writes both channels; shareFinal with a non-zero light byte writes light too.
     const d = s.reopenColumn(11, 10, 1);
@@ -263,6 +263,25 @@ describe.each([true, false])('shared %s', (shared) => {
     e.commit(2);
     expect(at(-1, 0)).toEqual([2, 1]);
     expect(at(0, -1)).toEqual([-1, -1]);
+  });
+
+  test('a commit at the status the writer was opened at throws RangeError and bumps nothing', () => {
+    const s = newStore();
+    runT(s, 10, 10);
+    const d = s.reopenColumn(10, 10, 1);
+    d.setFinal(0, mixedBlocks(), denseLight(1), bytes(0));
+    expect(() => d.commit(1)).toThrow(RangeError);
+    expect(versionsOf(s, 10, 10)).toEqual([1, 0, 1]);
+    // A commit with no write since the writer opened bumps no version (SP4a spec §2.5).
+    const idle = s.reopenColumn(10, 10, 1);
+    idle.commit(2);
+    expect(versionsOf(s, 10, 10)).toEqual([1, 0, 2]);
+    const l = s.reopenColumn(10, 10, 2);
+    l.setLight(1, denseLight(2));
+    expect(() => l.commit(2)).toThrow(RangeError);
+    expect(versionsOf(s, 10, 10)).toEqual([1, 0, 2]);
+    l.commit(3);
+    expect(versionsOf(s, 10, 10)).toEqual([1, 1, 3]);
   });
 });
 

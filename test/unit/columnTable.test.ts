@@ -1,7 +1,7 @@
 import { describe, expect, test } from 'vitest';
 import {
   attachColumnTable, COLUMN_TABLE_BYTES, createColumnTable, finalAt, NO_COLUMN, protoAt, RECORD_COUNT, RECORD_INTS, recordBase,
-  REC_AUX_A, REC_AUX_B, REC_BLOCK_VERSION, REC_CLAIMED, REC_CX, REC_CZ, REC_DIFF_FLAG, REC_EPOCH, REC_FINAL,
+  REC_AUX_A, REC_AUX_B, REC_BLOCK_VERSION, REC_CLAIMED, REC_CX, REC_CZ, REC_DIFF_FLAG, REC_EPOCH, REC_FINAL, REC_GEN,
   REC_LIGHT_VERSION, REC_PROTO, REC_PROTO_FLAGS, REC_STATUS, REC_UNSETTLED, SECTIONS, SlotBusy, STATUS_ABSENT,
   STATUS_DECORATED, STATUS_PROTO, STATUS_PUBLISHED, TORUS, type ColumnTable,
 } from '../../src/world/store/columnTable';
@@ -10,6 +10,7 @@ import {
 function expectFree(t: ColumnTable, base: number): void {
   const r = t.ints;
   expect(r[base + REC_CLAIMED]).toBe(0);
+  expect(r[base + REC_GEN]! & 1).toBe(0);
   expect([r[base + REC_CX], r[base + REC_CZ]]).toEqual([NO_COLUMN, NO_COLUMN]);
   expect(r[base + REC_STATUS]).toBe(STATUS_ABSENT);
   expect(r[base + REC_AUX_A]).toBe(-1);
@@ -31,6 +32,7 @@ test('record layout (SP3a spec §3.2, master §2.3)', () => {
   expect([REC_CX, REC_CZ, REC_STATUS, REC_EPOCH]).toEqual([0, 1, 2, 3]);
   expect([REC_BLOCK_VERSION, REC_LIGHT_VERSION, REC_PROTO_FLAGS]).toEqual([4, 5, 6]);
   expect([REC_AUX_A, REC_AUX_B, REC_UNSETTLED, REC_DIFF_FLAG, REC_CLAIMED]).toEqual([7, 8, 9, 10, 11]);
+  expect(REC_GEN).toBe(12);
   expect([REC_FINAL, REC_PROTO]).toEqual([16, 112]);
   expect([STATUS_ABSENT, STATUS_PROTO, STATUS_DECORATED, STATUS_PUBLISHED]).toEqual([0, 1, 2, 3]);
   // 24 final descriptors of 4 ints fill 16-111, 24 proto descriptors of 2 ints fill 112-159.
@@ -102,7 +104,7 @@ describe.each([true, false])('shared %s', (shared) => {
     expect(t.find(5, 5)).toBe(base);
   });
 
-  test('unclaim frees the record; a later claim of another column on it succeeds and starts initial', () => {
+  test('unclaim frees the record; a later claim of another column on it succeeds and starts initial, versions kept (SP4b spec §2.3)', () => {
     const t = createColumnTable(shared);
     const base = t.claim(0, 0, 4);
     t.setStatus(base, STATUS_PROTO);
@@ -119,14 +121,14 @@ describe.each([true, false])('shared %s', (shared) => {
     expect(t.claim(64, 64, 5)).toBe(base);
     expect(t.find(64, 64)).toBe(base);
     expect(t.status(base)).toBe(STATUS_ABSENT);
-    expect(t.blockVersion(base)).toBe(0);
-    expect(t.lightVersion(base)).toBe(0);
+    expect(t.blockVersion(base)).toBe(1);
+    expect(t.lightVersion(base)).toBe(1);
     expect(t.ints[base + REC_PROTO_FLAGS]).toBe(0);
     expect(t.ints[base + REC_UNSETTLED]).toBe(0);
     expect(t.ints[base + REC_DIFF_FLAG]).toBe(0);
   });
 
-  test('claim resets a record left dirty by a holder (versions, descriptors, aux ids)', () => {
+  test('claim resets a record left dirty by a holder (descriptors, aux ids), versions kept (SP4b spec §2.3)', () => {
     const t = createColumnTable(shared);
     const base = t.claim(1, 2, 0);
     t.ints[finalAt(base, 3) + 3] = 99;
@@ -137,7 +139,68 @@ describe.each([true, false])('shared %s', (shared) => {
     t.claim(1, 2, 1);
     t.unclaim(base);
     expectFree(t, base);
-    expect(t.blockVersion(base)).toBe(0);
+    expect(t.blockVersion(base)).toBe(1);
+  });
+
+  test('the generation is even while free and odd while held: 0, claim → 1, unclaim → 2, claim → 3 (SP4b spec §2.2)', () => {
+    const t = createColumnTable(shared);
+    const base = recordBase(7, 9);
+    expect(REC_GEN).toBe(12);
+    expect(t.generation(base)).toBe(0);
+    expect(t.claim(7, 9, 0)).toBe(base);
+    expect(t.generation(base)).toBe(1);
+    t.unclaim(base);
+    expect(t.generation(base)).toBe(2);
+    t.claim(7 + 64, 9, 0);
+    expect(t.generation(base)).toBe(3);
+    expect(t.ints[base + REC_GEN]).toBe(3);
+    // A failed claim (SlotBusy) leaves the generation alone.
+    expect(() => t.claim(7, 9, 0)).toThrow(SlotBusy);
+    expect(t.generation(base)).toBe(3);
+  });
+
+  test('find against a re-claim: a base found before an unclaim and re-claim of another column is not returned for the old column (g changed)', () => {
+    const t = createColumnTable(shared);
+    const base = t.claim(3, 4, 0);
+    expect(t.find(3, 4)).toBe(base);
+    const g = t.generation(base);
+    t.unclaim(base);
+    expect(t.find(3, 4)).toBe(-1);
+    t.claim(3 - 64, 4 + 64, 1);
+    expect(t.generation(base)).toBe(g + 2);
+    expect(t.find(3, 4)).toBe(-1);
+    expect(t.find(3 - 64, 4 + 64)).toBe(base);
+    // A record whose generation is even reads as free, whatever its other fields say (a claim between its
+    // compare-exchange and its generation bump, or an unclaim between its bump and its cx/cz stores).
+    t.unclaim(base);
+    Atomics.store(t.ints, base + REC_CLAIMED, 1);
+    Atomics.store(t.ints, base + REC_CX, 3);
+    Atomics.store(t.ints, base + REC_CZ, 4);
+    expect(t.generation(base) % 2).toBe(0);
+    expect(t.find(3, 4)).toBe(-1);
+  });
+
+  test('versions never decrease across claims: claim (0, 0), bump block and light, unclaim, claim (64, 0) on the same record → blockVersion 1, lightVersion 1', () => {
+    const t = createColumnTable(shared);
+    const base = t.claim(0, 0, 0);
+    t.bumpBlockVersion(base);
+    t.bumpLightVersion(base);
+    t.clear(base);
+    t.unclaim(base);
+    expect(t.claim(64, 0, 1)).toBe(base);
+    expect(t.blockVersion(base)).toBe(1);
+    expect(t.lightVersion(base)).toBe(1);
+    expect(t.bumpBlockVersion(base)).toBe(2);
+  });
+
+  test('a never-used record starts at versions 0', () => {
+    const t = createColumnTable(shared);
+    for (const rec of [0, 1, 4095]) {
+      const base = rec * RECORD_INTS;
+      expect([t.blockVersion(base), t.lightVersion(base), t.generation(base)]).toEqual([0, 0, 0]);
+    }
+    const base = t.claim(-1, -1, 0);
+    expect([t.blockVersion(base), t.lightVersion(base)]).toEqual([0, 0]);
   });
 
   test('status, epoch and versions', () => {

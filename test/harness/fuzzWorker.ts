@@ -17,6 +17,10 @@
  *   one, still held it).
  * Raw slots carry a stamp (thread, counter) in their first two words, checked before every retain and free.
  *
+ * Versions and the alive bit (SP4b spec §2.3, §2.4): a record's versions survive a free and re-claim, so the model
+ * counts commits per record (`commits[r]`), not per column; a commit sets the column's alive flag and `freeProto`
+ * clears it, and `proto()` must be null while it is clear.
+ *
  * Torus: thread t owns the records whose slot ≡ t (mod 4), i.e. cx ≡ t (mod 4); it uses 12 of them, records
  * (t + 4i, j) for i < 3, j < 4, and claims columns 64 apart on each (cx − 64, cx, cx + 64, each at cz and cz + 64),
  * at most 8 held at once.
@@ -84,9 +88,10 @@ interface Col {
   cz: number;
   base: number;
   w: ColumnWriter;
-  /** The last committed status (0 before the first commit) and the number of commits (= blockVersion). */
+  /** The last committed status (0 before the first commit). */
   status: number;
-  commits: number;
+  /** The proto alive bit: set by every commit (a claim writer's), cleared by `freeProto` (SP4b spec §2.4). */
+  alive: boolean;
   /** Expected block state at voxel 0 of each proto and final section. */
   proto: Int32Array;
   final: Int32Array;
@@ -122,6 +127,8 @@ function createFuzzer(m: AttachMsg) {
   const stampOf = [new Int32Array(pools[0].maxSlots), new Int32Array(pools[1].maxSlots)] as const;
   const refs: [number[], number[]] = [[], []];
   const cols: (Col | null)[] = new Array<Col | null>(RECORDS_X * RECORDS_Z).fill(null);
+  /** Commits per record (= its blockVersion: every commit here follows a write); kept across a free and re-claim. */
+  const commits = new Int32Array(RECORDS_X * RECORDS_Z);
   const st = newStats();
   let stamp = 0;
   let tag = 0;
@@ -316,7 +323,7 @@ function createFuzzer(m: AttachMsg) {
       freeCol(live[rng.nextInt(live.length)]!);
     }
     const w = store.claimColumn(cx, cz, rng.nextInt(1000));
-    cols[r] = { cx, cz, base: recordBase(cx, cz), w, status: 0, commits: 0, proto: new Int32Array(SECTIONS), final: new Int32Array(SECTIONS) };
+    cols[r] = { cx, cz, base: recordBase(cx, cz), w, status: 0, alive: false, proto: new Int32Array(SECTIONS), final: new Int32Array(SECTIONS) };
     if (store.table.find(cx, cz) !== recordBase(cx, cz) || store.proto(cx, cz) !== null) st.wrongLookups++;
     st.maxColumns = Math.max(st.maxColumns, heldCount());
     st.counts.claim++;
@@ -351,10 +358,13 @@ function createFuzzer(m: AttachMsg) {
     }
   }
 
+  /** Commits `status`, or the writer's last status when that is higher: a writer never lowers its own status (SP4b). */
   function commit(c: Col, status: 1 | 2): void {
-    c.w.commit(status);
-    c.status = status;
-    c.commits++;
+    const s = Math.max(status, c.status) as 1 | 2;
+    c.w.commit(s);
+    c.status = s;
+    c.alive = true;
+    commits[cols.indexOf(c)]++;
   }
 
   function auxOp(c: Col): void {
@@ -381,7 +391,7 @@ function createFuzzer(m: AttachMsg) {
       if (store.table.find(cx, cz) !== (mine === null ? -1 : mine.base)) st.wrongLookups++;
       const sy = rng.nextInt(SECTIONS);
       const pv = store.proto(cx, cz);
-      if (mine === null || mine.status < 1) {
+      if (mine === null || mine.status < 1 || !mine.alive) {
         if (pv !== null) st.wrongLookups++;
       } else if (pv === null || pv.cx !== cx || pv.cz !== cz) {
         st.wrongLookups++;
@@ -397,7 +407,7 @@ function createFuzzer(m: AttachMsg) {
         st.dataMismatches++;
       }
       const v = store.neighborhood(cx, cz).versions();
-      if (v[8] !== (mine === null || mine.status < 1 ? -1 : mine.commits)) st.wrongLookups++;
+      if (v[8] !== (mine === null || mine.status < 1 ? -1 : commits[r])) st.wrongLookups++;
     }
     st.counts.lookup++;
   }
@@ -434,6 +444,8 @@ function createFuzzer(m: AttachMsg) {
     } else if (k < 76) {
       tracked(allProtoPos(c.base), () => store.freeProto(c.cx, c.cz));
       c.proto.fill(0);
+      c.alive = false;
+      if (store.proto(c.cx, c.cz) !== null) st.wrongLookups++;
       st.counts.freeProto++;
     } else if (k < 80) {
       freeCol(cols.indexOf(c));

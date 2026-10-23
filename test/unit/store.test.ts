@@ -7,7 +7,8 @@ import { PASS } from '../../src/world/blocks/index';
 import { AUX_A_OFFSETS, AUX_B_OFFSETS } from '../../src/world/store/aux';
 import {
   finalAt, NO_COLUMN, protoAt, RECORD_COUNT, RECORD_INTS, REC_AUX_A, REC_AUX_B, REC_BLOCK_VERSION, REC_CLAIMED,
-  REC_CX, REC_CZ, REC_EPOCH, REC_LIGHT_VERSION, REC_STATUS, SECTIONS, STATUS_ABSENT,
+  REC_CX, REC_CZ, REC_EPOCH, REC_LIGHT_VERSION, REC_PROTO_FLAGS, REC_STATUS, SECTIONS, STATUS_ABSENT, PROTO_ALIVE,
+  WriterStale,
 } from '../../src/world/store/columnTable';
 import { EPOCH_CELL } from '../../src/world/store/epochs';
 import { DEFAULT_MAX_BLOCK_BYTES, DEFAULT_MAX_BYTE_BYTES, type SlabPool } from '../../src/world/store/pool';
@@ -358,6 +359,119 @@ describe.each([true, false])('shared %s', (shared) => {
     s.claimColumn(64, 0, 0); // same record, another column
     expect(() => w.setFinal(0, words(1), bytes(0), bytes(0))).toThrow(/no longer holds/);
     expect(s.blockPool.slotCount()).toBe(0);
+  });
+
+  test('a writer whose record was freed and re-claimed by another column throws WriterStale on setProto, aux and commit', () => {
+    const s = newStore();
+    const w = s.claimColumn(5, 6, 0);
+    w.setProto(0, words(1), bytes(0));
+    s.freeColumn(5, 6);
+    const other = s.claimColumn(5 + 64, 6 - 64, 1); // same record, another column
+    const calls: Array<[string, () => unknown]> = [
+      ['setProto', () => w.setProto(0, words(2), bytes(0))],
+      ['aux', () => w.aux()],
+      ['auxB', () => w.auxB()],
+      ['commit', () => w.commit(1)],
+    ];
+    for (const [what, call] of calls) {
+      let err: unknown;
+      try { call(); } catch (e) { err = e; }
+      expect(err, what).toBeInstanceOf(WriterStale);
+      expect((err as Error).name).toBe('WriterStale');
+    }
+    // The new holder is untouched: no write, no version, no status from the stale writer.
+    const base = s.table.find(5 + 64, 6 - 64);
+    expect([s.table.status(base), s.table.blockVersion(base)]).toEqual([STATUS_ABSENT, 0]);
+    expect(s.table.ints[base + REC_AUX_A]).toBe(-1);
+    other.commit(1);
+    expect(s.proto(5 + 64, 6 - 64)!.block(0, -64, 0)).toBe(0);
+    // The same column freed and claimed again (the ABA the generation catches): the old writer is still stale.
+    const w2 = s.claimColumn(0, 0, 0);
+    s.freeColumn(0, 0);
+    s.claimColumn(0, 0, 0);
+    expect(() => w2.setProto(0, words(1), bytes(0))).toThrow(WriterStale);
+    expect(() => w2.commit(1)).toThrow(WriterStale);
+  });
+
+  test("every commit of a claim writer sets the alive bit (T's commit(1), and a claim committed straight at 2 or 3); a reopenColumn writer's commit does not set it; after freeProto, proto() is null and the bit is clear, final() still reads the shared slots", () => {
+    const s = newStore();
+    const flags = (cx: number, cz: number) => s.table.ints[s.table.find(cx, cz) + REC_PROTO_FLAGS]!;
+    expect(PROTO_ALIVE).toBe(1);
+    // T's commit(1).
+    const t = s.claimColumn(0, 0, 0);
+    t.setProto(0, mixedBlocks(), bytes(0));
+    expect(flags(0, 0)).toBe(0);
+    t.commit(1);
+    expect(flags(0, 0) & PROTO_ALIVE).toBe(PROTO_ALIVE);
+    // Claims committed straight at 2 and at 3.
+    for (const [cx, status] of [[1, 2], [2, 3]] as const) {
+      const w = s.claimColumn(cx, 0, 0);
+      w.setProto(6, mixedBlocks(), mixedFluid());
+      w.shareFinal(6, bytes(0));
+      w.commit(status);
+      expect(flags(cx, 0) & PROTO_ALIVE).toBe(PROTO_ALIVE);
+      expect(s.proto(cx, 0)).not.toBeNull();
+    }
+    // freeProto clears bit 0 only (bit 1, pinnedByTuning, is SP8b's).
+    Atomics.or(s.table.ints, s.table.find(1, 0) + REC_PROTO_FLAGS, 2);
+    s.freeProto(1, 0);
+    expect(flags(1, 0)).toBe(2);
+    expect(s.proto(1, 0)).toBeNull();
+    expect(s.neighborhood(0, 0).proto(1, 0)).toBeNull();
+    const f = s.final(1, 0)!;
+    expect(f.block(0, 32, 0)).toBe(2);
+    expect(f.fluid(0, 32, 0)).toBe(WATER);
+    // A reopenColumn writer's commit leaves the bit as it is.
+    s.freeProto(0, 0);
+    expect(flags(0, 0)).toBe(0);
+    const d = s.reopenColumn(0, 0, 1);
+    d.shareFinal(0, bytes(0));
+    d.commit(2);
+    expect(flags(0, 0)).toBe(0);
+    expect(s.proto(0, 0)).toBeNull();
+    expect(s.final(0, 0)).not.toBeNull();
+    const l = s.reopenColumn(0, 0, 2);
+    l.commit(3);
+    expect(flags(0, 0)).toBe(0);
+    // A free and re-claim starts with the bit clear.
+    s.freeColumn(2, 0);
+    s.claimColumn(2 + 64, 0, 0);
+    expect(flags(2 + 64, 0)).toBe(0);
+    expect(s.proto(2 + 64, 0)).toBeNull();
+  });
+
+  test('the status guard: a claim writer\'s commit(0 as 1) throws; reopenColumn(…, 2).commit(2) throws RangeError with blockVersion and lightVersion unchanged; reopenColumn(…, 1).commit(2) then commit(2) is legal; commit(3) then commit(2) throws', () => {
+    const s = newStore();
+    const w = s.claimColumn(3, 3, 0);
+    w.setProto(0, mixedBlocks(), bytes(0));
+    expect(() => w.commit(0 as 1)).toThrow(RangeError);
+    const base = s.table.find(3, 3);
+    expect([s.table.blockVersion(base), s.table.status(base)]).toEqual([0, 0]);
+    w.commit(1);
+    w.commit(1); // a repeat of the writer's own last status stays legal
+    expect([s.table.blockVersion(base), s.table.status(base)]).toEqual([1, 1]);
+    // reopenColumn(…, 1).commit(2) then commit(2) is legal.
+    const d = s.reopenColumn(3, 3, 1);
+    d.shareFinal(0, bytes(0));
+    d.commit(2);
+    d.commit(2);
+    expect(() => d.commit(1)).toThrow(RangeError);
+    expect([s.table.blockVersion(base), s.table.lightVersion(base), s.table.status(base)]).toEqual([2, 0, 2]);
+    // reopenColumn(…, 2).commit(2) throws before any version bump.
+    const l = s.reopenColumn(3, 3, 2);
+    l.setFinal(1, mixedBlocks(), bytes(7), bytes(0));
+    expect(() => l.commit(2)).toThrow(RangeError);
+    expect([s.table.blockVersion(base), s.table.lightVersion(base), s.table.status(base)]).toEqual([2, 0, 2]);
+    // commit(3) then commit(2) throws, and leaves the status at 3.
+    l.commit(3);
+    expect([s.table.blockVersion(base), s.table.lightVersion(base), s.table.status(base)]).toEqual([3, 1, 3]);
+    expect(() => l.commit(2)).toThrow(RangeError);
+    expect(s.table.status(base)).toBe(3);
+    const c = s.claimColumn(4, 3, 0);
+    c.commit(3);
+    expect(() => c.commit(2)).toThrow(RangeError);
+    expect(() => c.commit(1)).toThrow(RangeError);
+    expect(s.table.status(s.table.find(4, 3))).toBe(3);
   });
 
   test('bad section indices and channel lengths are refused', () => {

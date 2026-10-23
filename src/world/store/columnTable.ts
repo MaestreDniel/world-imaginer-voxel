@@ -1,14 +1,20 @@
 /**
  * The column table (SP3a spec §3.2, master §2.3): a fixed buffer of 64 × 64 records of 160 int32, one per torus
  * slot `(cx & 63) + 64·(cz & 63)`. A record holds at most one column; `claimed` (int 11) says whether it is held,
- * and cx, cz say by which column. `status`, `epoch`, `claimed` and the versions are read and written with Atomics.
+ * and cx, cz say by which column. `status`, `epoch`, `claimed`, the versions, protoFlags and the generation are read
+ * and written with Atomics.
  *
- * Record layout: 0-3 cx, cz, status, epoch; 4-5 blockVersion, lightVersion; 6 protoFlags; 7-8 aux A and aux B
- * slots (−1 when not allocated); 9-10 unsettledCount, diffFlag; 11 claimed; 12-15 unassigned; 16-111 the final
- * section descriptors (24 × 4: blocks, light, fluid, meta); 112-159 the proto descriptors (24 × 2: blocks, fluid).
+ * Record layout: 0-3 cx, cz, status, epoch; 4-5 blockVersion, lightVersion (never reset by a claim: monotone over
+ * the record's life, SP4b spec §2.3); 6 protoFlags (bit 0 `PROTO_ALIVE`, bit 1 pinnedByTuning reserved for SP8b);
+ * 7-8 aux A and aux B slots (−1 when not allocated); 9-10 unsettledCount, diffFlag; 11 claimed; 12 the claim
+ * generation (`REC_GEN`, SP4b spec §2.2); 13-15 unassigned; 16-111 the final section descriptors (24 × 4: blocks,
+ * light, fluid, meta); 112-159 the proto descriptors (24 × 2: blocks, fluid).
  *
  * A free record has cx = cz = `NO_COLUMN`, and a claim writes cx and cz only after it holds the record, so `find`
- * never matches a record that is free or being taken by another column.
+ * never matches a record that is free or being taken by another column. The generation is even while the record is
+ * free and odd while it is held; `claim` bumps it last and `unclaim` first, so `find` returns a base only when it
+ * read the same odd generation before and after checking `claimed`, cx and cz, and a writer whose record was freed
+ * and claimed again, by any column, sees its generation changed (`WriterStale`).
  *
  * The table only keeps records: releasing the slots a record references is the store's job (`section.ts`), done
  * before `unclaim`.
@@ -33,6 +39,8 @@ export const REC_AUX_B = 8;
 export const REC_UNSETTLED = 9;
 export const REC_DIFF_FLAG = 10;
 export const REC_CLAIMED = 11;
+/** The claim generation (SP4b spec §2.2): even while free, odd while held; bumped by `claim` and `unclaim`. */
+export const REC_GEN = 12;
 export const REC_FINAL = 16;
 export const REC_PROTO = 112;
 
@@ -40,6 +48,9 @@ export const STATUS_ABSENT = 0;
 export const STATUS_PROTO = 1;
 export const STATUS_DECORATED = 2;
 export const STATUS_PUBLISHED = 3;
+
+/** protoFlags bit 0 (SP4b spec §2.4): the proto set is alive; `proto()` is null when clear. Bit 1 (pinnedByTuning) is SP8b's. */
+export const PROTO_ALIVE = 1;
 
 /** cx and cz of a free record: outside every coordinate range, so a stale record never matches a lookup. */
 export const NO_COLUMN = 0x7fffffff;
@@ -52,6 +63,17 @@ export class SlotBusy extends Error {
   constructor(message: string) {
     super(message);
     this.name = 'SlotBusy';
+  }
+}
+
+/**
+ * A writer used after its record was freed, or freed and claimed again by any column (SP4b spec §2.2): the record's
+ * generation, `claimed`, cx or cz is no longer what the writer captured at its claim or reopen.
+ */
+export class WriterStale extends Error {
+  constructor(message: string) {
+    super(message);
+    this.name = 'WriterStale';
   }
 }
 
@@ -75,17 +97,25 @@ export interface ColumnTable {
   /** Every record, `RECORD_INTS` per record; descriptors are plain ints published by `status` (Atomics). */
   readonly ints: Int32Array;
   /**
-   * Takes the record of (cx, cz) (compare-exchange of `claimed` 0 → 1; `SlotBusy` if held) and writes cx, cz and
-   * `epoch`; the rest of the record is reset to its initial values (status Absent, versions 0, descriptors −1,
-   * meta 0, aux ids −1). Returns the record's base.
+   * Takes the record of (cx, cz) (compare-exchange of `claimed` 0 → 1; `SlotBusy` if held), resets it to its initial
+   * values (status Absent, protoFlags 0, descriptors −1, meta 0, aux ids −1; the versions are kept, SP4b spec §2.3),
+   * writes cx, cz and `epoch`, then bumps the generation (odd). Returns the record's base.
    */
   claim(cx: number, cz: number, epoch: number): number;
-  /** The base of the record holding (cx, cz), or −1 when the record is free or holds another column. */
+  /**
+   * The base of the record holding (cx, cz), or −1 when the record is free or holds another column: the generation
+   * is read before and after `claimed`, cx and cz, and must be odd and unchanged (SP4b spec §2.2).
+   */
   find(cx: number, cz: number): number;
-  /** Writes the initial values into every field but cx, cz, epoch and `claimed`; releases nothing. */
+  /** Writes the initial values into every field but cx, cz, epoch, `claimed`, the versions and the generation; releases nothing. */
   clear(base: number): void;
-  /** Stores cx and cz `NO_COLUMN`, then `claimed` 0. The caller has released every slot the record referenced. */
+  /**
+   * Bumps the generation (even), stores cx and cz `NO_COLUMN`, then `claimed` 0. The caller has released every slot
+   * the record referenced.
+   */
   unclaim(base: number): void;
+  /** The record's claim generation (SP4b spec §2.2): even while free, odd while held. */
+  generation(base: number): number;
   status(base: number): number;
   setStatus(base: number, status: number): void;
   epoch(base: number): number;
@@ -96,11 +126,10 @@ export interface ColumnTable {
   bumpLightVersion(base: number): number;
 }
 
+/** The initial values of every field but cx, cz, epoch, `claimed`, the versions (monotone, SP4b D5) and the generation. */
 function clearRecord(ints: Int32Array, base: number): void {
   Atomics.store(ints, base + REC_STATUS, STATUS_ABSENT);
-  Atomics.store(ints, base + REC_BLOCK_VERSION, 0);
-  Atomics.store(ints, base + REC_LIGHT_VERSION, 0);
-  ints[base + REC_PROTO_FLAGS] = 0;
+  Atomics.store(ints, base + REC_PROTO_FLAGS, 0);
   ints[base + REC_AUX_A] = -1;
   ints[base + REC_AUX_B] = -1;
   ints[base + REC_UNSETTLED] = 0;
@@ -148,20 +177,25 @@ export function attachColumnTable(buffer: SharedArrayBuffer | ArrayBuffer): Colu
       Atomics.store(ints, base + REC_CX, cx);
       Atomics.store(ints, base + REC_CZ, cz);
       Atomics.store(ints, base + REC_EPOCH, epoch);
+      Atomics.add(ints, base + REC_GEN, 1);
       return base;
     },
     find(cx, cz) {
       const base = recordBase(cx, cz);
+      const g1 = Atomics.load(ints, base + REC_GEN);
+      if ((g1 & 1) === 0) return -1;
       if (Atomics.load(ints, base + REC_CLAIMED) !== 1) return -1;
       if (Atomics.load(ints, base + REC_CX) !== cx || Atomics.load(ints, base + REC_CZ) !== cz) return -1;
-      return base;
+      return Atomics.load(ints, base + REC_GEN) === g1 ? base : -1;
     },
     clear: (base) => clearRecord(ints, base),
     unclaim(base) {
+      Atomics.add(ints, base + REC_GEN, 1);
       Atomics.store(ints, base + REC_CX, NO_COLUMN);
       Atomics.store(ints, base + REC_CZ, NO_COLUMN);
       Atomics.store(ints, base + REC_CLAIMED, 0);
     },
+    generation: (base) => Atomics.load(ints, base + REC_GEN),
     status: (base) => Atomics.load(ints, base + REC_STATUS),
     setStatus(base, status) {
       Atomics.store(ints, base + REC_STATUS, status);

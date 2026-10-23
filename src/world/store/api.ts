@@ -24,14 +24,18 @@ export interface AuxBView {
   readonly surfaceBiomeQ: Uint8Array;
 }
 
-/** A `commit` status: 1 Proto, 2 Decorated, 3 Published (SP3a spec §3.2). */
+/**
+ * A `commit` status: 1 Proto, 2 Decorated, 3 Published (SP3a spec §3.2). A writer commits only a status above the one
+ * it opened at (0 for a claim) and never below its own last commit (SP4b spec §2.4).
+ */
 export type CommitStatus = 1 | 2 | 3;
 
 /**
  * Writes one column (SP3a spec §3.5); obtained from `store.claimColumn`, or from `store.reopenColumn` for a
  * committed column (SP4a spec §2.5). Every array argument is copied (callers reuse scratch buffers) and stored per
  * channel: uniform when all 4096 values are equal (no slot), dense otherwise; rewriting a section releases what it
- * held. A writer whose column has been freed throws on every call.
+ * held. A writer whose column has been freed, or whose record has been claimed again since (by any column), throws
+ * `WriterStale` on every call (SP4b spec §2.2).
  *
  * Thread contract (SP4a spec §2.4, §2.6): a writer is used by one thread, and a column has one writer at a time,
  * chosen by the coordinator's states (T claims, D reopens at Proto, L reopens at Decorated). A writer is not safe
@@ -64,7 +68,9 @@ export interface ColumnWriter {
    * `blockVersion` + 1 when this writer wrote blocks or fluid since its previous commit (`setProto`, `setFinal`,
    * `shareFinal`), `lightVersion` + 1 when it wrote light (`setFinal`, `setLight`, or `shareFinal` with a non-zero
    * light byte; the D skeleton's all-zero light is no light change), then `status` (stored last, so a reader never
-   * sees a partial column). A commit with no write bumps no version (SP4a spec §2.5).
+   * sees a partial column). A commit with no write bumps no version (SP4a spec §2.5). `status` is a status above the
+   * one the writer opened at, never below its last commit (SP4b): anything else throws `RangeError` before any version
+   * bump. Every commit of a writer from `claimColumn` sets the proto alive bit first (SP4b spec §2.4).
    */
   commit(status: CommitStatus): void;
 }
