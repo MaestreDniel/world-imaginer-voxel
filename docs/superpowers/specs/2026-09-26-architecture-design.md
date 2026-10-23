@@ -65,7 +65,7 @@ D1-D20 are decisions. Metric IDs (N*, T*, B*, C*, A*, S*, O*, V*, X*, DT*, R*, L
 ```
 world-imaginer-voxel/          (repository root)
   README.md CLAUDE.md .gitignore
-  .github/workflows/ci.yml   on push and PR, in parallel jobs: check (npm ci → build → unit, arch, integration), metrics-fast and the metrics-quick shards (cached); a docs-only change runs build, unit and arch only (amended 2026-10-20: parallel CI jobs)
+  .github/workflows/ci.yml   on push and PR, in parallel jobs: check (npm ci → build → arch, integration), the two unit shards (`.github/scripts/unitShards.mjs`), metrics-fast and the metrics-quick shards (cached); a docs-only change runs build, arch and the unit shards only (amended 2026-10-20: parallel CI jobs; SP4b: the unit shards)
   docker-compose.yml         service world-imaginer-voxel, port 5183, default compose network
   docs/superpowers/specs/ plans/   this spec and every SP spec/plan
   package.json        deps: three@~0.186.1 | dev: vite, typescript, vitest, @types/three, @types/node (tests/arch/worker_threads; amended by SP0)

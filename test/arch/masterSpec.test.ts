@@ -47,6 +47,8 @@
  * `tools/measureChrome.ts`'s cells); the panoramas were built (`public/panoramas/manifest.json` lists all six), so the
  * SP4a entry's cut line says it was not taken and the receivers say nothing moved; and a bare `SP4` is left only in the
  * §10 split paragraphs and the parallelism line, where spec §14's own wording keeps it.
+ * SP4b (its spec §13): the split; §1's `ci.yml` line names the unit shards (it lands with `unitShards.mjs`); §1 names each
+ * SP4b module in its entry, which exists (`SP4B_MODULES`, a row added by each task that adds a module).
  */
 import { existsSync, readdirSync, readFileSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
@@ -692,5 +694,24 @@ describe('master spec amendments (SP4b §13)', () => {
     expect(scheduler, 'no `- **Scheduler** (…` header in §6.3').toBeDefined();
     expect(scheduler).toContain('SP4b: cancel, zero allocation, throttle; SP4c: Apply; amended by SP4a and SP4b');
     expect(text).toContain('\n  - old meshes are kept on Apply (SP4c);\n');
+  });
+
+  test('§1\'s ci.yml line names the unit shards', () => {
+    expect(layoutEntry(/^\s+\.github\/workflows\/ci\.yml /)).toContain('the two unit shards (`.github/scripts/unitShards.mjs`)');
+    expect(existsSync(`${ROOT_DIR}.github/scripts/unitShards.mjs`)).toBe(true);
+  });
+
+  /** [§1 entry head, the token its entry holds, the file on disk]; Tasks 5, 10, 16 and 26 append theirs. */
+  const SP4B_MODULES: Array<[head: RegExp, token: string, file: string]> = [
+    [/^\s+\.github\/workflows\/ci\.yml /, '.github/scripts/unitShards.mjs', '.github/scripts/unitShards.mjs'],
+  ];
+
+  test('§1 names each SP4b module in its entry, which exists', () => {
+    for (const [head, token, file] of SP4B_MODULES) {
+      const entry = layoutEntry(head);
+      expect(entry, `§1 has no entry matching ${head}`).not.toBe('');
+      expect(entry, `§1's ${head} entry does not name ${token}`).toContain(token);
+      expect(existsSync(`${ROOT_DIR}${file}`), `${file} does not exist`).toBe(true);
+    }
   });
 });

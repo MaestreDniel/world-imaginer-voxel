@@ -11,15 +11,16 @@ concurrency:
   group: ci-${{ github.ref }}
   cancel-in-progress: true
 
-# Jobs: `changes` decides the docs-only fast path and the metrics-quick shards; `check` (build, unit, arch,
-# integration), `metrics-fast` and the `metrics-quick` shards run in parallel after it; `ci-ok` is the one status to
-# require. Every vitest job writes a JSON report and lists its slowest files in the job summary.
+# Jobs: `changes` decides the docs-only fast path, the unit shards and the metrics-quick shards; `check` (build, arch,
+# integration), the `unit` shards, `metrics-fast` and the `metrics-quick` shards run in parallel after it; `ci-ok` is
+# the one status to require. Every vitest job writes a JSON report and lists its slowest files in the job summary.
 jobs:
   changes:
     runs-on: ubuntu-latest
     outputs:
       docs_only: ${{ steps.changes.outputs.docs_only }}
       shards: ${{ steps.shards.outputs.shards }}
+      unit_shards: ${{ steps.unit_shards.outputs.unit_shards }}
     steps:
       - uses: actions/checkout@v7
         with:
@@ -35,6 +36,8 @@ jobs:
           PR_BASE: ${{ github.event.pull_request.base.sha }}
       - id: shards
         run: echo "shards=$(node .github/scripts/metricShards.mjs matrix)" >> "$GITHUB_OUTPUT"
+      - id: unit_shards
+        run: echo "unit_shards=$(node .github/scripts/unitShards.mjs matrix)" >> "$GITHUB_OUTPUT"
 
   check:
     needs: changes
@@ -49,11 +52,12 @@ jobs:
           cache: npm
       - run: npm ci
       - run: npm run build
-      # The docs-only path runs unit and arch (arch's master spec, governance and threshold-log tests read the docs)
-      # and skips integration.
-      - name: vitest unit, arch and integration
+      # The docs-only path runs arch (its master spec, governance and threshold-log tests read the docs) and skips
+      # integration; the unit shards run on both paths, because uiSmoke.test.ts and reviewSlices.test.ts read files
+      # under docs/.
+      - name: vitest arch and integration
         run: |
-          projects="--project unit --project arch"
+          projects="--project arch"
           if [ "$DOCS_ONLY" != true ]; then projects="$projects --project integration"; fi
           npx vitest run $projects --reporter=default --reporter=json --outputFile.json="$RUNNER_TEMP/vitest.json"
         env:
@@ -61,6 +65,34 @@ jobs:
           GOVERNANCE_BASE: ${{ github.event.pull_request.base.sha || github.event.before }}
       - if: ${{ !cancelled() }}
         run: node .github/scripts/slowest.mjs --title "Slowest test files (check)" "$RUNNER_TEMP/vitest.json"
+
+  # The unit project split by .github/scripts/unitShards.mjs (SP4b spec §1.2): named heavy files in `heavy` plus the
+  # catch-all `rest`, so a new unit file always runs; its `check` fails the job unless the shards cover the project's
+  # files exactly once. On both paths; no build (vitest transpiles; the typecheck stays in `check`) and no cache (only
+  # the metrics jobs cache).
+  unit:
+    needs: changes
+    name: unit (${{ matrix.shard }})
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        shard: ${{ fromJSON(needs.changes.outputs.unit_shards) }}
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-node@v7
+        with:
+          node-version-file: .nvmrc
+          cache: npm
+      - run: npm ci
+      - run: node .github/scripts/unitShards.mjs check
+      - run: node .github/scripts/unitShards.mjs run "$SHARD" "$RUNNER_TEMP/vitest.json"
+        env:
+          SHARD: ${{ matrix.shard }}
+      - if: ${{ !cancelled() }}
+        run: node .github/scripts/slowest.mjs --title "Slowest test files (unit $SHARD)" "$RUNNER_TEMP/vitest.json"
+        env:
+          SHARD: ${{ matrix.shard }}
 
   metrics-fast:
     needs: changes
@@ -120,14 +152,15 @@ jobs:
 
   # The status to require: every job green, except that the docs-only path skips the metrics jobs.
   ci-ok:
-    needs: [changes, check, metrics-fast, metrics-quick]
+    needs: [changes, check, unit, metrics-fast, metrics-quick]
     if: always()
     runs-on: ubuntu-latest
     steps:
       - run: |
-          echo "docs_only=$DOCS_ONLY changes=$CHANGES check=$CHECK metrics-fast=$FAST metrics-quick=$QUICK"
+          echo "docs_only=$DOCS_ONLY changes=$CHANGES check=$CHECK unit=$UNIT metrics-fast=$FAST metrics-quick=$QUICK"
           [ "$CHANGES" = success ] || { echo "::error::changes: $CHANGES"; exit 1; }
           [ "$CHECK" = success ] || { echo "::error::check: $CHECK"; exit 1; }
+          [ "$UNIT" = success ] || { echo "::error::unit: $UNIT"; exit 1; }
           if [ "$DOCS_ONLY" = true ]; then want=skipped; else want=success; fi
           [ "$FAST" = "$want" ] || { echo "::error::metrics-fast: $FAST (want $want)"; exit 1; }
           [ "$QUICK" = "$want" ] || { echo "::error::metrics-quick: $QUICK (want $want)"; exit 1; }
@@ -135,5 +168,6 @@ jobs:
           DOCS_ONLY: ${{ needs.changes.outputs.docs_only }}
           CHANGES: ${{ needs.changes.result }}
           CHECK: ${{ needs.check.result }}
+          UNIT: ${{ needs.unit.result }}
           FAST: ${{ needs.metrics-fast.result }}
           QUICK: ${{ needs.metrics-quick.result }}
