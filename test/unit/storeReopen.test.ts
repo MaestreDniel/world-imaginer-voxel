@@ -1,9 +1,12 @@
 /**
  * The SP4a store changes (SP4a spec §2.5, D4): `reopenColumn`, `ColumnWriter.setLight` and its light-once refusal,
  * per-channel version bumps at commit, and `attachStore`/`attachPool` asserting the buffer kind (§2.6's item 7).
+ * SP4b's writers (SP4b spec §2.4): `ColumnWriter.resetLight` (L's retry) and `reopenProto`'s `ProtoWriter`.
  */
 import { describe, expect, test } from 'vitest';
-import { finalAt, REC_AUX_A, REC_AUX_B, RECORD_INTS, SECTIONS } from '../../src/world/store/columnTable';
+import {
+  finalAt, PROTO_ALIVE, REC_AUX_A, REC_AUX_B, REC_PROTO_FLAGS, RECORD_INTS, SECTIONS, WriterStale,
+} from '../../src/world/store/columnTable';
 import { attachPool, type SlabPool } from '../../src/world/store/pool';
 import { FINAL_LIGHT } from '../../src/world/store/section';
 import { attachStore, createStore, type StoreHandles, type VoxelStore } from '../../src/world/store/store';
@@ -282,6 +285,124 @@ describe.each([true, false])('shared %s', (shared) => {
     expect(versionsOf(s, 10, 10)).toEqual([1, 0, 2]);
     l.commit(3);
     expect(versionsOf(s, 10, 10)).toEqual([1, 1, 3]);
+  });
+
+  test('resetLight releases the 24 light entries to uniform 0, then 24 setLight succeed after a partial write', () => {
+    const s = newStore();
+    runT(s, 6, -2);
+    runD(s, 6, -2);
+    const base = s.table.find(6, -2);
+    const used0 = used(s.bytePool);
+    // An L job writes 5 dense lights, then throws: the writer is abandoned uncommitted.
+    const first = s.reopenColumn(6, -2, 2);
+    for (let sy = 0; sy < 5; sy++) first.setLight(sy, denseLight(sy));
+    expect(used(s.bytePool)).toBe(used0 + 5);
+    // The retry: without the reset its first setLight is refused (the light-once invariant).
+    const retry = s.reopenColumn(6, -2, 2);
+    expect(() => retry.setLight(0, denseLight(9))).toThrow('light already written');
+    retry.resetLight();
+    for (let sy = 0; sy < SECTIONS; sy++) expect(s.table.ints[finalAt(base, sy) + FINAL_LIGHT], `section ${sy}`).toBe(-1);
+    expect(used(s.bytePool)).toBe(used0);
+    expect(s.final(6, -2)!.light(0, -64, 0)).toBe(0);
+    for (let sy = 0; sy < SECTIONS; sy++) retry.setLight(sy, sy % 2 === 0 ? denseLight(sy + 100) : bytes(15));
+    retry.commit(3);
+    expect(versionsOf(s, 6, -2)).toEqual([2, 1, 3]);
+    const f = s.final(6, -2)!;
+    expect(f.light(3, -64, 0)).toBe(denseLight(100)[3]);
+    expect(f.light(3, -48, 0)).toBe(15);
+    expect(used(s.bytePool)).toBe(used0 + SECTIONS / 2);
+    // A stale writer refuses the reset like every other call.
+    s.freeColumn(6, -2);
+    expect(() => retry.resetLight()).toThrow(WriterStale);
+  });
+
+  test('reopenProto throws (`not at status ≥ 2 with a freed proto`) at status 1, for an absent column, and while the alive bit is set; after freeProto at status 2 it writes the 24 proto sections, and commitProto sets the bit and leaves blockVersion, lightVersion and status unchanged', () => {
+    const s = newStore();
+    const refused = (cx: number, cz: number) => `reopenProto: (${cx}, ${cz}) is not at status ≥ 2 with a freed proto`;
+    expect(() => s.reopenProto(5, 5)).toThrow(refused(5, 5));
+    s.claimColumn(5, 5, 0); // claimed, never committed
+    expect(() => s.reopenProto(5, 5)).toThrow(refused(5, 5));
+    runT(s, 0, 0);
+    expect(() => s.reopenProto(0, 0)).toThrow(refused(0, 0)); // status 1, alive
+    s.freeProto(0, 0);
+    expect(() => s.reopenProto(0, 0)).toThrow(refused(0, 0)); // status 1, freed
+    runT(s, 1, 0);
+    runD(s, 1, 0);
+    expect(() => s.reopenProto(1, 0)).toThrow(refused(1, 0)); // status 2, alive
+    expect(() => s.reopenProto(1 + 64, 0)).toThrow(refused(1 + 64, 0)); // another column's record
+    runL(s, 1, 0);
+    expect(() => s.reopenProto(1, 0)).toThrow(refused(1, 0)); // status 3, alive
+
+    runT(s, 2, 0);
+    runD(s, 2, 0);
+    s.freeProto(2, 0);
+    const base = s.table.find(2, 0);
+    expect(s.table.ints[base + REC_PROTO_FLAGS]! & PROTO_ALIVE).toBe(0);
+    const v0 = versionsOf(s, 2, 0);
+    expect(v0).toEqual([2, 0, 2]);
+    const p = s.reopenProto(2, 0);
+    expect([p.cx, p.cz]).toEqual([2, 0]);
+    for (let sy = 0; sy < SECTIONS; sy++) p.setProto(sy, sy % 2 === 0 ? mixedBlocks() : words(1), sy % 3 === 0 ? mixedFluid() : bytes(0));
+    expect(s.proto(2, 0)).toBeNull(); // not alive until commitProto
+    p.commitProto();
+    expect(s.table.ints[base + REC_PROTO_FLAGS]! & PROTO_ALIVE).toBe(PROTO_ALIVE);
+    expect(versionsOf(s, 2, 0)).toEqual(v0);
+    const view = s.proto(2, 0)!;
+    expect(view.block(0, -64, 0)).toBe(1);
+    expect(view.block(0, -64 + 8, 0)).toBe(0);
+    expect(view.block(0, -48 + 8, 0)).toBe(1);
+    expect(view.fluid(0, -64, 0)).toBe(WATER);
+    expect(view.fluid(0, -48, 0)).toBe(0);
+    // The final set D shared is untouched.
+    expect(s.final(2, 0)!.block(0, -64, 0)).toBe(1);
+    // Alive again: a second reopen is refused; after another free it is allowed at status 3 too.
+    expect(() => s.reopenProto(2, 0)).toThrow(refused(2, 0));
+    runL(s, 2, 0);
+    s.freeProto(2, 0);
+    const q = s.reopenProto(2, 0);
+    q.setProto(0, words(1), bytes(0));
+    q.commitProto();
+    expect(versionsOf(s, 2, 0)).toEqual([2, 1, 3]);
+    expect(s.proto(2, 0)!.block(0, -64, 0)).toBe(1);
+    // A stale ProtoWriter throws WriterStale.
+    s.freeColumn(2, 0);
+    expect(() => q.setProto(0, words(1), bytes(0))).toThrow(WriterStale);
+    expect(() => q.commitProto()).toThrow(WriterStale);
+  });
+
+  test("reopenProto never touches the record's aux A and aux B bytes (byte-for-byte equal before and after)", () => {
+    const s = newStore();
+    runT(s, -3, 8);
+    runD(s, -3, 8);
+    runL(s, -3, 8);
+    s.freeProto(-3, 8);
+    const base = s.table.find(-3, 8);
+    const slotA = s.table.ints[base + REC_AUX_A]!;
+    const slotB = s.table.ints[base + REC_AUX_B]!;
+    const auxBytes = () => [Array.from(s.bytePool.u8(slotA)), Array.from(s.bytePool.u8(slotB))];
+    const a0 = auxBytes();
+    const used0 = [used(s.blockPool), used(s.bytePool)];
+    const p = s.reopenProto(-3, 8);
+    // T's code writes the aux views it is handed: here worker-local scratch, zeroed and discarded.
+    const a = p.aux();
+    const b = p.auxB();
+    expect(p.aux()).toBe(a);
+    expect(p.auxB()).toBe(b);
+    expect(a.worldSurfaceWG.buffer).not.toBe(s.bytePool.buffer);
+    expect(b.caveBiomeQ.buffer).not.toBe(s.bytePool.buffer);
+    expect(a.worldSurfaceWG.every((v) => v === 0)).toBe(true);
+    expect(b.caveBiomeQ.every((v) => v === 0)).toBe(true);
+    a.worldSurfaceWG.fill(-5);
+    a.oceanFloorWG.fill(17);
+    a.surfaceBiome.fill(3);
+    b.surfaceBiomeQ.fill(4);
+    b.caveBiomeQ.fill(6);
+    for (let sy = 0; sy < SECTIONS; sy++) p.setProto(sy, words(1), bytes(0));
+    p.commitProto();
+    expect([s.table.ints[base + REC_AUX_A], s.table.ints[base + REC_AUX_B]]).toEqual([slotA, slotB]);
+    expect(auxBytes()).toEqual(a0);
+    // No aux slot was allocated (uniform proto sections take no slot either).
+    expect([used(s.blockPool), used(s.bytePool)]).toEqual(used0);
   });
 });
 

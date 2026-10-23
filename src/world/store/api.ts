@@ -24,6 +24,9 @@ export interface AuxBView {
   readonly surfaceBiomeQ: Uint8Array;
 }
 
+/** The six aux A heightmaps, by field name (`store.heightAt`, SP4b spec §2.4). */
+export type HeightmapKind = 'worldSurfaceWG' | 'oceanFloorWG' | 'worldSurface' | 'motionBlocking' | 'oceanFloor' | 'lightBlocking';
+
 /**
  * A `commit` status: 1 Proto, 2 Decorated, 3 Published (SP3a spec §3.2). A writer commits only a status above the one
  * it opened at (0 for a claim) and never below its own last commit (SP4b spec §2.4).
@@ -37,10 +40,10 @@ export type CommitStatus = 1 | 2 | 3;
  * held. A writer whose column has been freed, or whose record has been claimed again since (by any column), throws
  * `WriterStale` on every call (SP4b spec §2.2).
  *
- * Thread contract (SP4a spec §2.4, §2.6): a writer is used by one thread, and a column has one writer at a time,
- * chosen by the coordinator's states (T claims, D reopens at Proto, L reopens at Decorated). A writer is not safe
- * against a concurrent `freeColumn` of its column (a double free): no column is freed during an SP4a session, and
- * SP4b's cancellation through the epoch cells lifts this.
+ * Thread contract (SP4a spec §2.4, §2.6; SP4b spec §2.1, §2.10): a writer is used by one thread, and a column has one
+ * writer at a time, chosen by the coordinator's states (T claims, D reopens at Proto, L reopens at Decorated); the
+ * coordinator's reader pins forbid freeing a column while a job of it or its 3 × 3 runs, and queued jobs are dropped
+ * with `cancelWorld` (SP4b).
  */
 export interface ColumnWriter {
   readonly cx: number;
@@ -53,10 +56,17 @@ export interface ColumnWriter {
   shareFinal(sy: number, light: Uint8Array): void;
   /**
    * The light channel of final section `sy` only (uniform or dense; the meta word does not depend on light). Throws
-   * `light already written` when the entry already holds a slot: SP4a's light-once invariant, so a light slot is
-   * never freed under a reader (SP4a spec §2.4, §2.5); SP4b's reclamation protocol replaces the refusal.
+   * `light already written` when the entry already holds a slot: the light-once invariant inside one job, so a light
+   * slot is never freed under a reader (SP4a spec §2.4, §2.5). The refusal stays in SP4b; SP5's relight lifts it
+   * under the reclamation protocol (SP4b spec §2.4).
    */
   setLight(sy: number, light: Uint8Array): void;
+  /**
+   * Releases the 24 final light entries to uniform 0 (SP4b spec §2.4): L's first step, so a retry after a partial
+   * `setLight` run succeeds. Counts as a light write when an entry was not already uniform 0. The releases go through
+   * deferred reclamation (SP4b spec §2.5).
+   */
+  resetLight(): void;
   /**
    * Aux A: the record's slot when it has one (a reopened column), otherwise allocated and zero-filled on the first
    * call; later calls view the same slot.
@@ -101,6 +111,30 @@ export interface ColumnView {
   auxB(): AuxBView | null;
 }
 
+/**
+ * The writer `terrainStage` takes (SP4b spec §2.4): the subset of `ColumnWriter` that `ProtoWriter` shares, so
+ * `T(protoOnly)` runs T's own code.
+ */
+export type TerrainWriter = Pick<ColumnWriter, 'setProto' | 'aux' | 'auxB'>;
+
+/**
+ * Rewrites the freed proto set of a Decorated or Published column (SP4b spec §2.4, §3.7): `T(protoOnly)`'s writer,
+ * from `store.reopenProto`. It writes only the proto descriptors and the alive bit, never the final set nor the
+ * record's aux slots; it throws `WriterStale` once the record was freed or claimed again, as `ColumnWriter`.
+ */
+export interface ProtoWriter {
+  readonly cx: number;
+  readonly cz: number;
+  /** Section `sy` (0 … 23) of the proto set, as `ColumnWriter.setProto`. */
+  setProto(sy: number, blocks: Uint16Array, fluid: Uint8Array): void;
+  /** Worker-local zeroed scratch (not the record's slot), discarded: T's aux A writes go nowhere. */
+  aux(): AuxView;
+  /** Aux B, likewise. */
+  auxB(): AuxBView;
+  /** Sets the proto alive bit; bumps no version and leaves the status (T is pure: the proto equals the freed one). */
+  commitProto(): void;
+}
+
 /** The 3 × 3 columns around (cx, cz) (SP3a spec §3.5); `dx`, `dz` ∈ {−1, 0, 1}. Consumed from SP4. */
 export interface NeighborhoodReader {
   readonly cx: number;
@@ -113,4 +147,6 @@ export interface NeighborhoodReader {
    * −1 for an absent column (record free, held by another column, or claimed and not yet committed).
    */
   versions(): Int32Array;
+  /** The 18 values of `versions()` into `out[0 … 17]` (`out.length` ≥ 18, else `RangeError`), allocation-free (SP4b spec §2.3). */
+  versionsInto(out: Int32Array): void;
 }

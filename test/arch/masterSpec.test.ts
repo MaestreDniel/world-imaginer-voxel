@@ -123,7 +123,7 @@ function interfaceMethods(source: string, name: string): string[] {
 }
 
 describe('master spec amendments (SP3b §14)', () => {
-  test.each(['ColumnWriter', 'ColumnView', 'NeighborhoodReader'])('§2.5 %s names every method of world/store/api.ts', (name) => {
+  test.each(['ColumnWriter', 'ColumnView', 'NeighborhoodReader', 'ProtoWriter'])('§2.5 %s names every method of world/store/api.ts', (name) => {
     const api = interfaceMethods(readFileSync(API, 'utf8'), name);
     expect(api.length, `no interface ${name} in api.ts`).toBeGreaterThan(0);
     expect(new Set(interfaceMethods(text, name))).toEqual(new Set(api));

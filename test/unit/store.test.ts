@@ -664,6 +664,106 @@ describe.each([true, false])('shared %s', (shared) => {
     expect(() => n.final(0, -2)).toThrow(RangeError);
   });
 
+  test('versionsInto writes what versions() returns, into a reused array, for a centre with absent neighbours (−1)', () => {
+    const s = newStore();
+    const n = s.neighborhood(20, -20);
+    const out = new Int32Array(18).fill(7);
+    n.versionsInto(out);
+    expect(Array.from(out)).toEqual(new Array(18).fill(-1));
+    const a = s.claimColumn(19, -21, 0); // (−1, −1)
+    a.setProto(0, words(1), bytes(0));
+    a.commit(1);
+    const b = s.claimColumn(21, -20, 0); // (1, 0)
+    b.setFinal(0, mixedBlocks(), bytes(3), bytes(0));
+    b.commit(2);
+    s.claimColumn(20, -19, 0); // (0, 1): claimed, never committed
+    n.versionsInto(out);
+    expect(Array.from(out)).toEqual(Array.from(n.versions()));
+    expect([out[0], out[1], out[10], out[11], out[14], out[8]]).toEqual([1, 0, 1, 1, -1, -1]);
+    // Reused: a freed neighbour's entries go back to −1, and the store-level form writes the same values.
+    s.freeColumn(19, -21);
+    out.fill(7);
+    s.versionsInto(20, -20, out);
+    expect(Array.from(out)).toEqual(Array.from(n.versions()));
+    expect([out[0], out[1]]).toEqual([-1, -1]);
+    // Only the first 18 entries of a longer array are written; a shorter one is refused.
+    const long = new Int32Array(20).fill(99);
+    n.versionsInto(long);
+    expect(Array.from(long.subarray(0, 18))).toEqual(Array.from(out));
+    expect([long[18], long[19]]).toEqual([99, 99]);
+    expect(() => n.versionsInto(new Int32Array(17))).toThrow(RangeError);
+    expect(() => s.versionsInto(20, -20, new Int32Array(17))).toThrow(RangeError);
+  });
+
+  test("lightAt and heightAt read a Published column; −1 and null at status 2 and for an absent column; heightAt('motionBlocking', …) equals final().aux().motionBlocking at the same position", () => {
+    const s = newStore();
+    const kinds = ['worldSurfaceWG', 'oceanFloorWG', 'worldSurface', 'motionBlocking', 'oceanFloor', 'lightBlocking'] as const;
+    const [cx, cz] = [5, -3];
+    const light = new Uint8Array(4096);
+    for (let i = 0; i < 4096; i++) light[i] = (i * 7) & 255;
+    const w = s.claimColumn(cx, cz, 0);
+    w.setFinal(0, mixedBlocks(), light, bytes(0));
+    w.setFinal(23, words(1), bytes(9), bytes(0));
+    const aux = w.aux();
+    kinds.forEach((k, j) => {
+      for (let p = 0; p < 256; p++) aux[k][p] = ((p * 13 + j * 31) % 385) - 64; // −64 … 320
+    });
+    w.commit(2);
+    const bx = (lx: number) => cx * 16 + lx;
+    const bz = (lz: number) => cz * 16 + lz;
+    expect(s.lightAt(bx(3), -64, bz(2))).toBe(-1);
+    expect(s.heightAt('motionBlocking', bx(3), bz(2))).toBeNull();
+    s.reopenColumn(cx, cz, 2).commit(3);
+    const f = s.final(cx, cz)!;
+    for (const [lx, y, lz] of [[0, -64, 0], [3, -64, 2], [15, -49, 15], [7, -60, 11], [4, 300, 9], [4, 310, 9], [0, 319, 15], [9, 100, 1]] as const) {
+      expect(s.lightAt(bx(lx), y, bz(lz)), `(${lx}, ${y}, ${lz})`).toBe(f.light(lx, y, lz));
+    }
+    expect(s.lightAt(bx(3), -64, bz(2))).toBe(light[(2 << 4) | 3]);
+    expect(s.lightAt(bx(4), 310, bz(9))).toBe(9); // section 23: y 304 … 319
+    for (const k of kinds) {
+      for (let p = 0; p < 256; p++) expect(s.heightAt(k, bx(p & 15), bz(p >> 4))).toBe(f.aux()![k][p]);
+    }
+    expect(s.heightAt('motionBlocking', bx(6), bz(13))).toBe(f.aux()!.motionBlocking[13 * 16 + 6]);
+    expect(kinds.some((k) => [...f.aux()![k]].includes(-64))).toBe(true);
+    expect(kinds.some((k) => [...f.aux()![k]].includes(320))).toBe(true);
+    // y outside −64 … 319, or not an integer: RangeError; an unknown heightmap kind too.
+    for (const y of [-65, 320, 1.5]) expect(() => s.lightAt(bx(0), y, bz(0))).toThrow(RangeError);
+    expect(() => s.heightAt('surfaceBiome' as 'motionBlocking', bx(0), bz(0))).toThrow(RangeError);
+    // Absent columns: never claimed, and a record held by another column.
+    expect(s.lightAt(bx(0) + 16, 0, bz(0))).toBe(-1);
+    expect(s.heightAt('worldSurface', bx(0) + 16, bz(0))).toBeNull();
+    expect(s.lightAt(bx(0) + 64 * 16, 0, bz(0))).toBe(-1);
+    expect(s.heightAt('worldSurface', bx(0), bz(0) - 64 * 16)).toBeNull();
+    // A Published column without aux A: light reads, the heightmap is null.
+    s.claimColumn(cx + 2, cz, 0).commit(3);
+    expect(s.lightAt(bx(0) + 32, 0, bz(0))).toBe(0);
+    expect(s.heightAt('motionBlocking', bx(0) + 32, bz(0))).toBeNull();
+    // Freed: absent again.
+    s.freeColumn(cx, cz);
+    expect(s.lightAt(bx(3), -64, bz(2))).toBe(-1);
+    expect(s.heightAt('motionBlocking', bx(3), bz(2))).toBeNull();
+  });
+
+  test('holder: free, self (claimed, uncommitted included), other (the record held by (cx + 64, cz))', () => {
+    const s = newStore();
+    expect(s.holder(3, 4)).toBe('free');
+    expect(s.holder(3 + 64, 4)).toBe('free');
+    const w = s.claimColumn(3, 4, 0);
+    expect(s.holder(3, 4)).toBe('self');
+    expect(s.holder(3 + 64, 4)).toBe('other');
+    expect(s.holder(3, 4 - 64)).toBe('other');
+    expect(s.holder(3 - 64, 4)).toBe('other');
+    w.commit(1);
+    expect(s.holder(3, 4)).toBe('self');
+    expect(s.holder(4, 4)).toBe('free');
+    s.freeColumn(3, 4);
+    expect(s.holder(3, 4)).toBe('free');
+    expect(s.holder(3 + 64, 4)).toBe('free');
+    s.claimColumn(3 + 64, 4, 0);
+    expect(s.holder(3 + 64, 4)).toBe('self');
+    expect(s.holder(3, 4)).toBe('other');
+  });
+
   test('attachStore in the same thread: one store, two handles; growth is seen without rebuilding', () => {
     const s = newStore();
     const t = attachStore(s.handles());

@@ -7,17 +7,24 @@
  * Column lifecycle: `claimColumn` takes the record and returns a `ColumnWriter`; `commit` publishes it (status last);
  * `reopenColumn` returns a writer for a committed column, for the next stage (SP4a: D at Proto, L at Decorated);
  * `proto`/`final` read it once its status allows (`proto` also needs the alive bit, which a claim writer's commit
- * sets and `freeProto` clears, SP4b spec §2.4); `freeProto` releases the proto set; `freeColumn` releases every
- * reference the record holds and frees the record. A writer captures the record's claim generation and throws
- * `WriterStale` once the record was freed or claimed again (SP4b spec §2.2). `gen` imports only the types of
- * `api.ts`, never this file.
+ * sets and `freeProto` clears, SP4b spec §2.4); `freeProto` releases the proto set; `reopenProto` returns a
+ * `ProtoWriter` that rewrites a freed proto of a Decorated or Published column (`T(protoOnly)`, SP4b spec §2.4, §3.7);
+ * `freeColumn` releases every reference the record holds and frees the record. A writer captures the record's claim
+ * generation and throws `WriterStale` once the record was freed or claimed again (SP4b spec §2.2).
+ *
+ * The main thread's per-frame reads take no view (SP4b spec §2.4, §3.10): `lightAt` and `heightAt` read a Published
+ * column directly, `versionsInto` fills the coordinator's scratch, and `holder` tells which column holds a record.
+ * `gen` imports only the types of `api.ts`, never this file.
  */
 import { PASS } from '../blocks/index';
-import type { AuxBView, AuxView, ColumnView, ColumnWriter, CommitStatus, NeighborhoodReader } from './api';
-import { allocAux, auxBView, auxView } from './aux';
+import type {
+  AuxBView, AuxView, ColumnView, ColumnWriter, CommitStatus, HeightmapKind, NeighborhoodReader, ProtoWriter,
+} from './api';
+import { allocAux, AUX_A_OFFSETS, AUX_BYTES, auxBView, auxView, createScratchAux } from './aux';
 import {
-  attachColumnTable, createColumnTable, finalAt, PROTO_ALIVE, protoAt, REC_AUX_A, REC_AUX_B, REC_CLAIMED, REC_CX, REC_CZ,
-  REC_GEN, REC_PROTO_FLAGS, SECTIONS, STATUS_ABSENT, STATUS_DECORATED, STATUS_PROTO, WriterStale, type ColumnTable,
+  attachColumnTable, createColumnTable, finalAt, PROTO_ALIVE, protoAt, recordBase, REC_AUX_A, REC_AUX_B, REC_CLAIMED,
+  REC_CX, REC_CZ, REC_GEN, REC_PROTO_FLAGS, SECTIONS, STATUS_ABSENT, STATUS_DECORATED, STATUS_PROTO, STATUS_PUBLISHED,
+  WriterStale, type ColumnTable,
 } from './columnTable';
 import { attachEpochCells, createEpochCells, type EpochCells } from './epochs';
 import {
@@ -31,7 +38,9 @@ import {
 
 export { SlotBusy, WriterStale } from './columnTable';
 export { StoreFull } from './pool';
-export type { AuxBView, AuxView, ColumnView, ColumnWriter, CommitStatus, NeighborhoodReader } from './api';
+export type {
+  AuxBView, AuxView, ColumnView, ColumnWriter, CommitStatus, HeightmapKind, NeighborhoodReader, ProtoWriter, TerrainWriter,
+} from './api';
 
 /** Entries of a per-state table (the registry's `MAX_STATES`). */
 export const STATE_TABLE_SIZE = 4096;
@@ -89,6 +98,46 @@ export interface VoxelStore {
   /** The final set, or null unless the record holds (cx, cz) at status ≥ Decorated. */
   final(cx: number, cz: number): ColumnView | null;
   neighborhood(cx: number, cz: number): NeighborhoodReader;
+  /**
+   * `T(protoOnly)`'s writer (SP4b spec §2.4, §3.7). Throws `reopenProto: (cx, cz) is not at status ≥ 2 with a freed
+   * proto` unless the record holds (cx, cz) at status ≥ Decorated with the alive bit clear. It never touches the
+   * record's aux slots: its `aux()`/`auxB()` are worker-local scratch.
+   */
+  reopenProto(cx: number, cz: number): ProtoWriter;
+  /**
+   * `neighborhood(cx, cz).versionsInto(out)` without the reader object (the coordinator's `StreamStore`, SP4b spec
+   * §2.3, §3.10): the 18 versions of the 3 × 3 into `out[0 … 17]`, −1 for an absent column; allocation-free.
+   */
+  versionsInto(cx: number, cz: number, out: Int32Array): void;
+  /**
+   * The raw light byte at block (bx, by, bz) (integers; `by` in −64 … 319, else `RangeError`) of a Published column,
+   * −1 when the column is not Published (SP4b spec §2.4: the eye's sky light, no view).
+   */
+  lightAt(bx: number, by: number, bz: number): number;
+  /**
+   * The aux A heightmap `kind` at block column (bx, bz) of a Published column (y + 1 of the highest qualifying voxel,
+   * −64 … 320); null when the column is not Published or has no aux A (SP4b spec §2.4: a height can be −1, so no
+   * sentinel). An unknown `kind` throws `RangeError`.
+   */
+  heightAt(kind: HeightmapKind, bx: number, bz: number): number | null;
+  /**
+   * Who holds the record (cx, cz) maps to (SP4b spec §2.4, §3.5): `'free'`, `'self'` (claimed by (cx, cz), committed
+   * or not) or `'other'` (held by another column, or by a claim or free in progress).
+   */
+  holder(cx: number, cz: number): 'free' | 'self' | 'other';
+}
+
+/** The Int16 index of heightmap `kind` in an aux A slot (its byte offset / 2), or −1 for an unknown kind. */
+function heightmapWords(kind: HeightmapKind): number {
+  switch (kind) {
+    case 'worldSurfaceWG': return AUX_A_OFFSETS.worldSurfaceWG >> 1;
+    case 'oceanFloorWG': return AUX_A_OFFSETS.oceanFloorWG >> 1;
+    case 'worldSurface': return AUX_A_OFFSETS.worldSurface >> 1;
+    case 'motionBlocking': return AUX_A_OFFSETS.motionBlocking >> 1;
+    case 'oceanFloor': return AUX_A_OFFSETS.oceanFloor >> 1;
+    case 'lightBlocking': return AUX_A_OFFSETS.lightBlocking >> 1;
+    default: return -1;
+  }
 }
 
 function checkSy(sy: number): void {
@@ -97,6 +146,13 @@ function checkSy(sy: number): void {
 
 function checkLength(a: Uint16Array | Uint8Array, what: string): void {
   if (a.length !== SECTION_VOXELS) throw new RangeError(`store: ${what} has ${a.length} entries, expected ${SECTION_VOXELS}`);
+}
+
+/** The arguments of a `setProto`: a section index and two 4096-entry channels. */
+function checkProto(sy: number, blocks: Uint16Array, fluid: Uint8Array): void {
+  checkSy(sy);
+  checkLength(blocks, 'blocks');
+  checkLength(fluid, 'fluid');
 }
 
 /** Voxel index in its section of (lx, y, lz), y absolute; the section is `index >> 12`. */
@@ -190,6 +246,30 @@ export function attachStore(h: StoreHandles): VoxelStore {
     return base >= 0 && table.status(base) >= min ? base : -1;
   }
 
+  /**
+   * The stale guard of a writer of the record at `base` (SP4b spec §2.2): throws `WriterStale` unless the record still
+   * holds the claim the writer captured (generation `gen`, `claimed`, cx and cz), i.e. was neither freed nor claimed
+   * again by any column.
+   */
+  function staleGuard(base: number, cx: number, cz: number): () => void {
+    const gen = Atomics.load(ints, base + REC_GEN);
+    return () => {
+      if (
+        Atomics.load(ints, base + REC_GEN) !== gen || Atomics.load(ints, base + REC_CLAIMED) !== 1 ||
+        Atomics.load(ints, base + REC_CX) !== cx || Atomics.load(ints, base + REC_CZ) !== cz
+      ) {
+        throw new WriterStale(`store: the record no longer holds column (${cx}, ${cz})`);
+      }
+    };
+  }
+
+  /** Proto section `sy` of the record at `base`, both channels (each releases what it replaces); `checkProto` first. */
+  function writeProto(base: number, sy: number, blocks: Uint16Array, fluid: Uint8Array): void {
+    const p = protoAt(base, sy);
+    storeWords(blockPool, ints, p + PROTO_BLOCKS, blocks);
+    storeBytes(bytePool, ints, p + PROTO_FLUID, fluid);
+  }
+
   function releaseProto(base: number): void {
     for (let sy = 0; sy < SECTIONS; sy++) {
       const p = protoAt(base, sy);
@@ -206,22 +286,13 @@ export function attachStore(h: StoreHandles): VoxelStore {
    * §2.2), and its commits set the alive bit only when it was opened by a claim (SP4b spec §2.4).
    */
   function writer(base: number, cx: number, cz: number, from: 0 | 1 | 2): ColumnWriter {
-    const gen = Atomics.load(ints, base + REC_GEN);
+    const check = staleGuard(base, cx, cz);
     let auxA: AuxView | null = null;
     let auxB: AuxBView | null = null;
     let wroteBlocks = false;
     let wroteLight = false;
     /** The last status this writer committed (`from` before its first commit). */
     let last: number = from;
-    /** The record still holds this writer's claim: not freed, nor claimed again by any column (SP4b spec §2.2). */
-    const check = (): void => {
-      if (
-        Atomics.load(ints, base + REC_GEN) !== gen || Atomics.load(ints, base + REC_CLAIMED) !== 1 ||
-        Atomics.load(ints, base + REC_CX) !== cx || Atomics.load(ints, base + REC_CZ) !== cz
-      ) {
-        throw new WriterStale(`store: the record no longer holds column (${cx}, ${cz})`);
-      }
-    };
     const setMeta = (sy: number): void => {
       const f = finalAt(base, sy);
       ints[f + FINAL_META] = computeMeta(sectionWords(blockPool, ints[f + FINAL_BLOCKS]!), sectionBytes(bytePool, ints[f + FINAL_FLUID]!), pass);
@@ -236,13 +307,9 @@ export function attachStore(h: StoreHandles): VoxelStore {
       cz,
       setProto(sy, blocks, fluid) {
         check();
-        checkSy(sy);
-        checkLength(blocks, 'blocks');
-        checkLength(fluid, 'fluid');
-        const p = protoAt(base, sy);
+        checkProto(sy, blocks, fluid);
         wroteBlocks = true;
-        storeWords(blockPool, ints, p + PROTO_BLOCKS, blocks);
-        storeBytes(bytePool, ints, p + PROTO_FLUID, fluid);
+        writeProto(base, sy, blocks, fluid);
       },
       setFinal(sy, blocks, light, fluid) {
         check();
@@ -282,6 +349,16 @@ export function attachStore(h: StoreHandles): VoxelStore {
         wroteLight = true;
         storeBytes(bytePool, ints, at, light);
       },
+      resetLight() {
+        check();
+        for (let sy = 0; sy < SECTIONS; sy++) {
+          const at = finalAt(base, sy) + FINAL_LIGHT;
+          // −1 is uniform light 0 (`section.ts`): nothing to release, and no light change.
+          if (ints[at] === -1) continue;
+          wroteLight = true;
+          releaseEntry(bytePool, ints, at);
+        }
+      },
       aux() {
         check();
         if (auxA === null) auxA = auxView(bytePool, auxSlot(base + REC_AUX_A));
@@ -308,6 +385,50 @@ export function attachStore(h: StoreHandles): VoxelStore {
         table.setStatus(base, status);
       },
     };
+  }
+
+  /**
+   * The `ProtoWriter` of the record at `base`, which holds (cx, cz) at status ≥ Decorated with a freed proto (SP4b spec
+   * §2.4): proto sections only, aux into worker-local scratch made on first use, `commitProto` sets the alive bit.
+   */
+  function protoWriter(base: number, cx: number, cz: number): ProtoWriter {
+    const check = staleGuard(base, cx, cz);
+    let scratch: { readonly a: AuxView; readonly b: AuxBView } | null = null;
+    const aux = () => (scratch ??= createScratchAux());
+    return {
+      cx,
+      cz,
+      setProto(sy, blocks, fluid) {
+        check();
+        checkProto(sy, blocks, fluid);
+        writeProto(base, sy, blocks, fluid);
+      },
+      aux() {
+        check();
+        return aux().a;
+      },
+      auxB() {
+        check();
+        return aux().b;
+      },
+      commitProto() {
+        check();
+        Atomics.or(ints, base + REC_PROTO_FLAGS, PROTO_ALIVE);
+      },
+    };
+  }
+
+  /** The 3 × 3 versions around (cx, cz) into `out` (`NeighborhoodReader.versions`' layout), with no allocation. */
+  function versionsInto(cx: number, cz: number, out: Int32Array): void {
+    if (out.length < 18) throw new RangeError(`store: versionsInto needs 18 entries, got ${out.length}`);
+    for (let dz = -1; dz <= 1; dz++) {
+      for (let dx = -1; dx <= 1; dx++) {
+        const base = committed(cx + dx, cz + dz, STATUS_PROTO);
+        const k = 2 * (3 * (dz + 1) + (dx + 1));
+        out[k] = base < 0 ? -1 : table.blockVersion(base);
+        out[k + 1] = base < 0 ? -1 : table.lightVersion(base);
+      }
+    }
   }
 
   const store: VoxelStore = {
@@ -380,19 +501,48 @@ export function attachStore(h: StoreHandles): VoxelStore {
           return store.final(cx + dx, cz + dz);
         },
         versions() {
-          const out = new Int32Array(18).fill(-1);
-          for (let dz = -1; dz <= 1; dz++) {
-            for (let dx = -1; dx <= 1; dx++) {
-              const base = committed(cx + dx, cz + dz, STATUS_PROTO);
-              if (base < 0) continue;
-              const k = 2 * (3 * (dz + 1) + (dx + 1));
-              out[k] = table.blockVersion(base);
-              out[k + 1] = table.lightVersion(base);
-            }
-          }
+          const out = new Int32Array(18);
+          versionsInto(cx, cz, out);
           return out;
         },
+        versionsInto(out) {
+          versionsInto(cx, cz, out);
+        },
       };
+    },
+
+    reopenProto(cx, cz) {
+      const base = committed(cx, cz, STATUS_DECORATED);
+      if (base < 0 || (Atomics.load(ints, base + REC_PROTO_FLAGS) & PROTO_ALIVE) !== 0) {
+        throw new Error(`reopenProto: (${cx}, ${cz}) is not at status ≥ 2 with a freed proto`);
+      }
+      return protoWriter(base, cx, cz);
+    },
+
+    versionsInto,
+
+    lightAt(bx, by, bz) {
+      if ((by | 0) !== by || by < -64 || by >= 16 * SECTIONS - 64) throw new RangeError(`store: lightAt y ${by} outside −64 … ${16 * SECTIONS - 65}`);
+      const base = committed(bx >> 4, bz >> 4, STATUS_PUBLISHED);
+      if (base < 0) return -1;
+      const v = ((by + 64) << 8) | ((bz & 15) << 4) | (bx & 15);
+      return byteAt(bytePool, ints[finalAt(base, v >> 12) + FINAL_LIGHT]!, v & 4095);
+    },
+
+    heightAt(kind, bx, bz) {
+      const at = heightmapWords(kind);
+      if (at < 0) throw new RangeError(`store: heightAt of an unknown heightmap ${String(kind)}`);
+      const base = committed(bx >> 4, bz >> 4, STATUS_PUBLISHED);
+      if (base < 0) return null;
+      const slot = ints[base + REC_AUX_A]!;
+      if (slot < 0) return null;
+      // Read through the pool's length-tracking u16 view (no per-call view); `<< 16 >> 16` restores the Int16 sign.
+      return (bytePool.words[slot * (AUX_BYTES >> 1) + at + (((bz & 15) << 4) | (bx & 15))]! << 16) >> 16;
+    },
+
+    holder(cx, cz) {
+      if (table.find(cx, cz) >= 0) return 'self';
+      return Atomics.load(ints, recordBase(cx, cz) + REC_CLAIMED) === 0 ? 'free' : 'other';
     },
   };
   return store;

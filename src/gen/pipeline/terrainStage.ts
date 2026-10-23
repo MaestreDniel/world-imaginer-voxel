@@ -28,7 +28,7 @@
 import { ISLAND_RUN_MIN_BOTTOM, MIN_Y } from '../../core/constants';
 import { WATER_SOURCE } from '../../world/blocks/fluid';
 import { AIR, BEDROCK } from '../../world/blocks/index';
-import type { ColumnWriter as ColumnWriterT } from '../../world/store/api';
+import type { TerrainWriter } from '../../world/store/api';
 import { buildColumnSample, latticeIndex, newColumnSample, readLevel, type ColumnSample } from '../column/columnStage';
 import type { GenContext } from '../context';
 import { fillDensityColumn } from '../density/bounds';
@@ -138,7 +138,7 @@ export function columnWaterV0(
  * Writes column (cx, cz)'s proto sections, aux A and aux B through `w`; false (nothing more written) as soon as
  * `stop()` returns true. Never commits: the caller does (`fillColumnT`, `metrics/region.ts`).
  */
-export function terrainStage(ctx: GenContext, cx: number, cz: number, w: ColumnWriterT, stop: () => boolean): boolean {
+export function terrainStage(ctx: GenContext, cx: number, cz: number, w: TerrainWriter, stop: () => boolean): boolean {
   const sc = SURFACE_CONTEXT(ctx);
   const s = BUILD(ctx, cx, cz, SAMPLE);
   if (!FILL(sc.density.bounds, s, SOLID, null, null, stop)) return false;

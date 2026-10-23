@@ -416,19 +416,25 @@ interface CompiledDensity { cornerFn(ctx, x:number, y:number, z:number): number;
 // the cell bounds live in bounds.ts and the point evaluation in probe.ts (the SP3b spec §2; amended by SP3b).
 // From store.claimColumn(cx, cz, epoch) (amended by SP3a; SP3a spec §3.5), or from store.reopenColumn(cx, cz, from: 1 | 2)
 // for the next stage of a committed column (D at Proto, L at Decorated; clears nothing; amended by SP4a, SP4a spec §2.5, D4).
-// Each setter copies its 4096-entry arrays.
+// Each setter copies its 4096-entry arrays. (SP4b: the store also has `reopenProto`, `freeProto`, `holder`, `lightAt`,
+// `heightAt`, `enterRead`, `exitRead` and `markDead`; `VoxelStore` lives in `world/store/store.ts`.)
 interface ColumnWriter { setProto(sy:number, blocks:Uint16Array, fluid:Uint8Array): void;
   setFinal(sy:number, blocks:Uint16Array, light:Uint8Array, fluid:Uint8Array): void;
   shareFinal(sy:number, light:Uint8Array): void /* final blocks and fluid share the proto slots */;
-  setLight(sy:number, light:Uint8Array): void /* light only; refused over a dense light entry until SP4b's reclamation (SP4a) */;
+  setLight(sy:number, light:Uint8Array): void /* light only; refused over a dense entry within one job; SP5's relight replaces under the reclamation protocol (SP4a, SP4b) */;
+  resetLight(): void /* the 24 light entries to 0, released through reclamation; L's first step (SP4b) */;
   aux(): AuxView; auxB(): AuxBView;
-  commit(status: 1|2|3): void /* blockVersion += 1 when blocks or fluid were written, lightVersion += 1 when light was, then status last */ }
+  commit(status: 1|2|3): void /* blockVersion += 1 when blocks or fluid were written, lightVersion += 1 when light was, then status last;
+    a status above the one the writer opened at (SP4b) */ }
+interface ProtoWriter { setProto(…): void; aux(): AuxView; auxB(): AuxBView; commitProto(): void }
+// (SP4b: `T(protoOnly)`'s writer from `store.reopenProto`; `aux` and `auxB` are discarded scratch)
 interface ColumnView { block(lx:number, y:number, lz:number): number; fluid(lx:number, y:number, lz:number): number;
   light(lx:number, y:number, lz:number): number; sectionBlocks(sy:number): Uint16Array|number; sectionFluid(sy:number): Uint8Array|number;
   sectionLight(sy:number): Uint8Array|number /* the final light entry; 0 on a proto view (SP4a: padded.ts copies through it) */;
   aux(): AuxView | null; auxB(): AuxBView | null /* null when the column has no such slot; auxB amended by SP3b */ }
 interface NeighborhoodReader { proto(dx:number, dz:number): ColumnView | null; final(dx:number, dz:number): ColumnView | null;
-  versions(): Int32Array /* 3x3 in (dz, dx) order, blockVersion then lightVersion, -1 when absent */ }
+  versions(): Int32Array /* 3x3 in (dz, dx) order, blockVersion then lightVersion, -1 when absent */;
+  versionsInto(out: Int32Array): void /* the same 18 values into a caller's array, allocation-free (SP4b) */ }
 interface SectionMesh { secKey:number; pass:0|1|2; quads:number; position:Uint8Array /*Uint8x4*/; data:Uint32Array; index:Uint32Array;
   connectivity:number /* connectivity15, the same on each pass of a section (SP4a) */;
   bounds:[number,number,number,number] /*sphere*/; seq:number; versions:Int32Array /*3x3 block+light*/;

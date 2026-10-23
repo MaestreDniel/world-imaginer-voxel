@@ -1,5 +1,7 @@
 import { describe, expect, test } from 'vitest';
-import { allocAux, AUX_A_OFFSETS, AUX_B_OFFSETS, AUX_BYTES, auxBView, auxView, HEIGHT_NONE } from '../../src/world/store/aux';
+import {
+  allocAux, AUX_A_OFFSETS, AUX_B_OFFSETS, AUX_BYTES, auxBView, auxView, createScratchAux, HEIGHT_NONE,
+} from '../../src/world/store/aux';
 import { BLOCK_SLOT_BYTES, BYTE_SLOT_BYTES, createPool } from '../../src/world/store/pool';
 
 const MiB = 1 << 20;
@@ -14,6 +16,38 @@ test('aux A and aux B layouts (SP3a spec §3.4, master §2.3)', () => {
   expect(6 * 512 + 256 + 768).toBe(AUX_BYTES);
   expect(AUX_B_OFFSETS).toEqual({ caveBiomeQ: 0, surfaceBiomeQ: 1536 });
   expect(HEIGHT_NONE).toBe(-64);
+});
+
+test("createScratchAux (SP4b spec §2.4): AuxView and AuxBView shapes over two worker-local 4096-byte ArrayBuffers, reading 0", () => {
+  const { a, b } = createScratchAux();
+  const heightmaps = ['worldSurfaceWG', 'oceanFloorWG', 'worldSurface', 'motionBlocking', 'oceanFloor', 'lightBlocking'] as const;
+  for (const k of heightmaps) {
+    expect(a[k]).toBeInstanceOf(Int16Array);
+    expect(a[k].length).toBe(256);
+    expect(a[k].byteOffset).toBe(AUX_A_OFFSETS[k]);
+    expect(a[k].every((v) => v === 0)).toBe(true);
+  }
+  expect(a.surfaceBiome).toBeInstanceOf(Uint8Array);
+  expect([a.surfaceBiome.length, a.surfaceBiome.byteOffset]).toEqual([256, AUX_A_OFFSETS.surfaceBiome]);
+  expect(a.tintTH).toBeInstanceOf(Uint8Array);
+  expect([a.tintTH.length, a.tintTH.byteOffset]).toEqual([768, AUX_A_OFFSETS.tintTH]);
+  expect(b.caveBiomeQ).toBeInstanceOf(Uint8Array);
+  expect([b.caveBiomeQ.length, b.caveBiomeQ.byteOffset]).toEqual([1536, AUX_B_OFFSETS.caveBiomeQ]);
+  expect(b.surfaceBiomeQ).toBeInstanceOf(Uint8Array);
+  expect([b.surfaceBiomeQ.length, b.surfaceBiomeQ.byteOffset]).toEqual([16, AUX_B_OFFSETS.surfaceBiomeQ]);
+  expect([...a.surfaceBiome, ...a.tintTH, ...b.caveBiomeQ, ...b.surfaceBiomeQ].every((v) => v === 0)).toBe(true);
+  // Two buffers, worker-local (not shared), one slot's size each.
+  const bufA = a.worldSurfaceWG.buffer;
+  const bufB = b.caveBiomeQ.buffer;
+  expect(bufA).toBeInstanceOf(ArrayBuffer);
+  expect(bufB).toBeInstanceOf(ArrayBuffer);
+  expect(bufA).not.toBe(bufB);
+  expect([bufA.byteLength, bufB.byteLength]).toEqual([AUX_BYTES, AUX_BYTES]);
+  for (const k of heightmaps) expect(a[k].buffer).toBe(bufA);
+  expect(b.surfaceBiomeQ.buffer).toBe(bufB);
+  // Each call gets its own scratch.
+  const again = createScratchAux();
+  expect(again.a.worldSurfaceWG.buffer).not.toBe(bufA);
 });
 
 describe.each([true, false])('shared %s', (shared) => {

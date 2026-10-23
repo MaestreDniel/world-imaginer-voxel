@@ -403,6 +403,7 @@ function spyWriter(): { w: ColumnWriter; sections: number[]; aux: number; auxB: 
     setFinal() { throw new Error('the T stage writes no final set'); },
     shareFinal() { throw new Error('the T stage writes no final set'); },
     setLight() { throw new Error('the T stage writes no light'); },
+    resetLight() { throw new Error('the T stage writes no light'); },
     aux() { log.aux++; return auxView; },
     auxB() { log.auxB++; return auxBView; },
     commit() { log.commits++; },

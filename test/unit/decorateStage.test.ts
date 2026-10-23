@@ -66,6 +66,7 @@ function recordingWriter(): { w: ColumnWriter; calls: string[] } {
     setFinal: () => { calls.push('setFinal'); },
     shareFinal: () => { calls.push('shareFinal'); },
     setLight: () => { calls.push('setLight'); },
+    resetLight: () => { calls.push('resetLight'); },
     aux: () => { calls.push('aux'); return auxA; },
     auxB: () => { calls.push('auxB'); return null as unknown as AuxBView; },
     commit: () => { calls.push('commit'); },

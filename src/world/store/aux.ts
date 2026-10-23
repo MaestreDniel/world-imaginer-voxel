@@ -5,6 +5,7 @@
  *   `tintTH` Uint8[768] at 3328. Int16 values are little-endian (native on every target).
  * - Aux B: `caveBiomeQ` Uint8[1536] at 0 and `surfaceBiomeQ` Uint8[16] at 1536; the rest of the slot is 0.
  * An aux slot is zero-filled when allocated, a recycled slot included, so a field no stage wrote reads 0.
+ * `createScratchAux` lays the same views over two worker-local buffers (`ProtoWriter`'s discarded aux, SP4b spec §2.4).
  */
 import type { AuxBView, AuxView } from './api';
 import type { SlabPool } from './pool';
@@ -43,11 +44,8 @@ export function allocAux(pool: SlabPool): number {
   return slot;
 }
 
-/** Aux A views over `slot`. */
-export function auxView(pool: SlabPool, slot: number): AuxView {
-  checkBytePool(pool);
-  const at = pool.u8(slot).byteOffset;
-  const buf = pool.buffer;
+/** Aux A views over the 4096 bytes of `buf` from byte `at`. */
+function auxViewAt(buf: ArrayBufferLike, at: number): AuxView {
   const o = AUX_A_OFFSETS;
   return {
     worldSurfaceWG: new Int16Array(buf, at + o.worldSurfaceWG, COLUMNS),
@@ -61,12 +59,30 @@ export function auxView(pool: SlabPool, slot: number): AuxView {
   };
 }
 
+/** Aux B views over the 4096 bytes of `buf` from byte `at`. */
+function auxBViewAt(buf: ArrayBufferLike, at: number): AuxBView {
+  return {
+    caveBiomeQ: new Uint8Array(buf, at + AUX_B_OFFSETS.caveBiomeQ, 1536),
+    surfaceBiomeQ: new Uint8Array(buf, at + AUX_B_OFFSETS.surfaceBiomeQ, 16),
+  };
+}
+
+/** Aux A views over `slot`. */
+export function auxView(pool: SlabPool, slot: number): AuxView {
+  checkBytePool(pool);
+  return auxViewAt(pool.buffer, pool.u8(slot).byteOffset);
+}
+
 /** Aux B views over `slot`. */
 export function auxBView(pool: SlabPool, slot: number): AuxBView {
   checkBytePool(pool);
-  const at = pool.u8(slot).byteOffset;
-  return {
-    caveBiomeQ: new Uint8Array(pool.buffer, at + AUX_B_OFFSETS.caveBiomeQ, 1536),
-    surfaceBiomeQ: new Uint8Array(pool.buffer, at + AUX_B_OFFSETS.surfaceBiomeQ, 16),
-  };
+  return auxBViewAt(pool.buffer, pool.u8(slot).byteOffset);
+}
+
+/**
+ * Aux A and aux B views over two new worker-local `ArrayBuffer`s of 4096 bytes, zero-filled (SP4b spec §2.4): the
+ * scratch `ProtoWriter.aux()`/`auxB()` hand T's code, discarded with the writer.
+ */
+export function createScratchAux(): { readonly a: AuxView; readonly b: AuxBView } {
+  return { a: auxViewAt(new ArrayBuffer(AUX_BYTES), 0), b: auxBViewAt(new ArrayBuffer(AUX_BYTES), 0) };
 }
