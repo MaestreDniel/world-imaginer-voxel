@@ -676,3 +676,5 @@ Applied when the user approves this spec, each in the commit §11 assigns (the s
 ## Threshold log
 
 (One line per commit that changes `test/thresholds.lock.json`.)
+
+- 2026-10-24 — SP4b Task 1: startedSps gains 'SP4b' (SP4b split into SP4b and SP4c, spec §11).

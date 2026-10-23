@@ -661,7 +661,7 @@ describe('master spec amendments (SP4a §14)', () => {
     // padded.ts is named in the store entry's prose, as spec §14 words it.
     expect(layoutEntry(/^\s+store\/pool\.ts /)).toContain('padded.ts arrives in SP4a');
     expect(existsSync(`${ROOT_DIR}src/world/store/padded.ts`)).toBe(true);
-    expect(text).toContain('the standalone ?map page (mounted in-game from SP4b)');
+    expect(text).toContain('the standalone ?map page (mounted in-game from SP4c)');
   });
 
   test('the panoramas were built, so SP4a\'s cut line says it was not taken and the receivers say nothing moved', () => {
@@ -677,5 +677,20 @@ describe('master spec amendments (SP4a §14)', () => {
     const bare = text.split('\n').filter((l) => /\bSP4\b/.test(l));
     for (const l of bare) expect(kept.some((k) => l.startsWith(k)), `a bare SP4 outside the kept lines: ${l.slice(0, 120)}`).toBe(true);
     expect(text).toContain('SP4b wires them in place of SP2b\'s pool-wide cell');
+  });
+});
+
+describe('master spec amendments (SP4b §13)', () => {
+  test('the split', () => {
+    expect(text).toContain('SP4b was split on 2026-10-23 into SP4b (streaming) and SP4c (the map in the world and live editing), at the user\'s request');
+    const sp4b = spEntry('SP4b', 'SP4c');
+    expect(sp4b).toContain('Spec: `2026-10-23-sp4b-streaming-design.md`');
+    expect(sp4b.split('\n').some((l) => l.startsWith('- **Cut line:** deferred reclamation\'s primitive (→ SP5)')), 'the SP4b entry has no `- **Cut line:** deferred reclamation\'s primitive (→ SP5)` line').toBe(true);
+    expect(spEntry('SP4c', 'SP5').startsWith('**SP4c — The map in the world and live editing** (M; SP4b)')).toBe(true);
+    expect(text).toContain('SP4b deferred-reclamation primitive → SP5');
+    const scheduler = text.split('\n').find((l) => l.startsWith('- **Scheduler** ('));
+    expect(scheduler, 'no `- **Scheduler** (…` header in §6.3').toBeDefined();
+    expect(scheduler).toContain('SP4b: cancel, zero allocation, throttle; SP4c: Apply; amended by SP4a and SP4b');
+    expect(text).toContain('\n  - old meshes are kept on Apply (SP4c);\n');
   });
 });

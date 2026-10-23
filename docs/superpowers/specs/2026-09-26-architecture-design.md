@@ -164,7 +164,7 @@ world-imaginer-voxel/          (repository root)
                                 SP4a: worldJobs.ts, the T, D, L and MESH_COLUMN handlers over the attached store; spikeStore.worker.ts and
                                 spikeStoreHandler.ts, the week-1 spike's shared-store check)
     engine/                     main thread, no three
-      coordinator.ts scheduler.ts rings.ts workerPool.ts throttle.ts uploadBudget.ts session.ts invalidation.ts capabilities.ts
+      coordinator.ts scheduler.ts rings.ts workerPool.ts throttle.ts uploadBudget.ts session.ts invalidation.ts (SP4c with Apply's dirty stages; completed for every scope by SP10) capabilities.ts
       renderDistance.ts spikeStore.ts   (SP4a: the default render distance from the capability report; the spike's shared store)
     render/                     the only place three is imported (ui canvases are 2D; amended by SP0)
       renderer.ts sectionRenderer.ts (interface) regionBatch.ts regionMesh.ts (fallback) floatingOrigin.ts selection.ts
@@ -180,7 +180,7 @@ world-imaginer-voxel/          (repository root)
     sound/                      main thread, the only place WebAudio is used
       engine.ts buses.ts        AudioContext (resumed on first user gesture), master/music/sfx/ambient buses, settings
       sfx.ts footsteps.ts ambience.ts emitters.ts music.ts reverb.ts
-    ui/map/* ui/selftest/*       (SP2a) the standalone ?map page (mounted in-game from SP4b) and ?selftest=1; SP2b makes ?map the editor
+    ui/map/* ui/selftest/*       (SP2a) the standalone ?map page (mounted in-game from SP4c) and ?selftest=1; SP2b makes ?map the editor
     ui/common/* paramPanel/* splineEditor/* biomeTable/* presets/* crossSection/*   (SP2b) shared DOM helpers, notices and shortcuts;
                                 the parameter panel, spline drawer, biome table, presets tab and cross-section (pure models beside thin DOM);
                                 SP3a adds the cross-section's Voxels mode
@@ -374,7 +374,7 @@ Byte offsets (amended by SP3a): `WORLD_SURFACE_WG` 0, `OCEAN_FLOOR_WG` 512, `WOR
 ```ts
 type Seed64 = readonly [lo: number, hi: number];   // u32 words, value = hi·2^32 + lo, normalised with >>> 0 (SP1); Hash64 alike
 type RegenScope = 'live' | 'remesh' | 'decorate' | 'terrain' | 'climate';
-type SubProjectId = 'SP0'|'SP1'|'SP2a'|'SP2b'|'SP3a'|'SP3b'|'SP3c'|'SP3d'|'SP3e'|'SP4a'|'SP4b'|'SP5'|'SP6'|'SP7'|'SP8a'|'SP8b'|'SP8c'|'SP9'|'SP10'|'SP11'|'SP12';
+type SubProjectId = 'SP0'|'SP1'|'SP2a'|'SP2b'|'SP3a'|'SP3b'|'SP3c'|'SP3d'|'SP3e'|'SP4a'|'SP4b'|'SP4c'|'SP5'|'SP6'|'SP7'|'SP8a'|'SP8b'|'SP8c'|'SP9'|'SP10'|'SP11'|'SP12';
 type StageId = 'climate'|'shape'|'surfaceEst'|'biome2d'|'terrain'|'decorate'|'light'|'mesh'|'lod'|'map';
 interface ParamMeta { path: string; label: string; doc: string; unit?: string;
   kind: 'number'|'int'|'bool'|'enum'|'noise'|'spline'|'json'|'boxTable'|'featureList'|'structureSets';
@@ -667,10 +667,10 @@ final     = max( min( min(terrain + detail, max(caves, lakeRoof)), 16·noodle ),
 SP2a uses the 2D estimate `surfaceEst = offset` (after rivers and lakes). SP3b adds the 3D estimate below as `surfaceEst3` (`gen/column/surfaceEstimate.ts`), used by T5 and by later consumers (aquifers, structures, spawn, teleport). The ColumnSample's `surfaceEst`, which the map, the biome picker and the column stage read, stays the 2D `offset`, so the `surfaceEst` stage version is not bumped (amended by SP3b; the SP3b spec's Decision 2 and §5).
 
 - **surfaceEstimate(x,z)** (`surfaceEst3`): start at ⌊`offset`⌋ (the bilinear ColumnSample value, clamped to [−64, 319]) and step ±8 blocks through the probe of the `terrain` tap (interpolated, without `detail`) until the sign changes, then bisect the 8-block bracket 3 times to one block. No sign change up to 319 returns 319, none down to −64 returns −64. An 8-step scan can cross a gap and return an overhang's underside; T5 measures single-surface positions only (amended by SP3b).
-- Caching on the quart lattice comes with its first consumer (aquifers, structures, spawn, teleport: SP4b-SP9; amended by SP3b, which caches nothing).
+- Caching on the quart lattice comes with its first consumer (aquifers, structures, spawn, teleport: SP4c-SP9; amended by SP3b, which caches nothing).
 - T5 holds `|est − true top|` to median ≤ 1, p90 ≤ 2, p99 ≤ 6.
 - **surfaceWaterLevel:** 63 for ocean and river, Lw for lakes, otherwise −∞.
-- **Teleport** (SP4b; SP4a places the camera from the loaded `MOTION_BLOCKING`): go to `surfaceEst + 2`, then snap to `MOTION_BLOCKING` once the column is published. While unloaded, the player hovers.
+- **Teleport** (SP4c; SP4a places the camera from the loaded `MOTION_BLOCKING`): go to `surfaceEst + 2`, then snap to `MOTION_BLOCKING` once the column is published. While unloaded, the player hovers.
 
 ### 3.8 Carvers (stage T, after density)
 
@@ -1278,7 +1278,7 @@ Target: edit → visible ≤ 50 ms p95, measured in the HUD.
 
 **Preview.** Column-scope edits re-render the map and LOD coarse-first within about 300 ms, before Apply.
 
-**Until SP4b** (amended by SP2b): the map previews the draft and there is no Apply. The session's gestures (a drag is one gesture whose edits are not urgent; its release is urgent) and its urgent commits are the hooks SP4b's Apply and SP5's fork dialog attach to.
+**Until SP4c** (amended by SP2b): the map previews the draft and there is no Apply. The session's gestures (a drag is one gesture whose edits are not urgent; its release is urgent) and its urgent commits are the hooks SP4c's Apply and SP5's fork dialog attach to.
 
 ### 5.2 Panels (CSS grid shell)
 
@@ -1404,13 +1404,13 @@ Metric values are written to `test/metrics/.out/*.json` for trends. The harness 
 - **Packing:** round-trip, and the GLSL defines equal the TS constants.
 - **Store:** slab fuzz (4 threads × 100k alloc/free, 0 double allocations); uniform ↔ dense promotion; refcounted proto/final sharing.
 - **Compiler:** DAG validation errors carry the node path; compiled == reference bit-exactly on 100k points for every built-in preset.
-- **Scheduler** (SP4a: nearest-first, prerequisites, stale results; SP4b: cancel, zero allocation, Apply, throttle; amended by SP4a):
+- **Scheduler** (SP4a: nearest-first, prerequisites, stale results; SP4b: cancel, zero allocation, throttle; SP4c: Apply; amended by SP4a and SP4b):
   - nearest-first;
   - no D before 3×3 T, no L before 3×3 D, no mesh before 3×3 L;
   - stale epoch, version or `meshSeq` results are dropped;
   - cancel on leaving range;
   - `update()` without movement allocates 0;
-  - old meshes are kept on Apply;
+  - old meshes are kept on Apply (SP4c);
   - the throttle reacts to a simulated frame p95.
 - **Fluid rules:** diamond of radius 7; fall; infinite source; drain; reactions; the settle distance cap.
 - **Lightmap:** (0,0) ≤ 0.02 luminance; block light independent of time; phases match the sign of sun elevation.
@@ -1674,7 +1674,7 @@ High adds MSAA, a shadow cascade (about 2 ms), LOD 1 km and RD16 (dGPU target). 
 
 1. **COOP/COEP needed for the SAB.**
    - Mitigation: headers in vite.config for dev and preview; Docker runs vite; `vercel.json` sets the same headers on Vercel (D11); a startup `crossOriginIsolated` check with an error screen; packs load from local files only; no cross-origin subresources anywhere (COEP `require-corp`). Isolation also requires a **secure context**: dev, preview and Docker must be opened via `http://localhost:<port>` (or 127.0.0.1) or over HTTPS, and a reverse proxy in front of the container must terminate TLS and pass COOP/COEP through unchanged. When `isSecureContext` is false, the error screen names this cause. Every worker script response (Vite dev `?worker_file` modules, `/node_modules/.vite/deps/*`, built `assets/*.js`) must carry the headers too.
-   - Kill: if SP3a-SP4b shows an unfixable isolation or concurrency problem, switch to transferable snapshots. gen/light/mesh already run on plain ArrayBuffers in the harness, so only `store` and the transport change.
+   - Kill: if SP3a-SP5 shows an unfixable isolation or concurrency problem, switch to transferable snapshots (amended by SP4b: the split moved Apply's rewrites of Published columns to SP4c, and SP5's sim worker is deferred reclamation's first necessary consumer). gen/light/mesh already run on plain ArrayBuffers in the harness, so only `store` and the transport change.
 2. **BatchedMesh with custom GLSL3 and an integer `data` attribute.**
    - Mitigation: an SP4a week-1 spike (stress test at Medium scale: ≈ 3.5k section instances, ≈ 0.75 M quads; remesh churn; `optimize`); pin three to `~0.186.1`; `WEBGL_multi_draw` detection; RegionMesh fallback behind the `SectionRenderer` interface.
 3. **T cost of the full cave family in JS, plus DAG closures.**
@@ -1732,7 +1732,7 @@ Each sub-project runs its own cycle:
 
 Thresholds are locked (`thresholds.lock.json`) and goldens are gated (§6.2). Sizes: S ≈ 2-4 days, M ≈ 1-2 weeks, L ≈ 2-3 weeks of focused work.
 
-**Cut lines.** Every SP names a cut line: what may slip if it overruns. A slipped item moves to a named receiving SP by amending this section, and the receiving SP adds it to its exit. Default receivers: SP0 Vercel preview check → SP4a (not needed: the production deploy was verified, so nothing moved); SP2b share preview and cross-section → SP10 (both delivered in SP2b, so nothing moved); SP3b worker-split slice → SP3d (delivered in SP3b, so nothing moved); SP3d inspector pins → SP10 (delivered in SP3d, so nothing moved); SP3e islands surface branch → SP12 (delivered in SP3e, so nothing moved); SP4a loading-screen panoramas → SP4b (delivered in SP4a, so nothing moved); SP5 worlds-menu polish and palette search → SP10; SP7 vertex waves → SP11; SP8a animation frames → SP11; SP8a fence gates and trapdoors → SP12; SP8b giant trees, boulders and fossils → SP12; SP8c HRTF → SP11; SP9 jungle temple and village depth > 4 → SP12; SP11 Ultra shadows, 3D clouds and Fabulous water → SP12; SP6 underground-only carver and spaghetti-2D rarity bands → SP12; SP7 extra lava reactions → SP12; SP10 seed sweep and column-status heatmap → SP12. SP12's exit requires no open cut-line items, unless the user explicitly dropped one and the impact on its D-decision is recorded.
+**Cut lines.** Every SP names a cut line: what may slip if it overruns. A slipped item moves to a named receiving SP by amending this section, and the receiving SP adds it to its exit. Default receivers: SP0 Vercel preview check → SP4a (not needed: the production deploy was verified, so nothing moved); SP2b share preview and cross-section → SP10 (both delivered in SP2b, so nothing moved); SP3b worker-split slice → SP3d (delivered in SP3b, so nothing moved); SP3d inspector pins → SP10 (delivered in SP3d, so nothing moved); SP3e islands surface branch → SP12 (delivered in SP3e, so nothing moved); SP4a loading-screen panoramas → SP4b (delivered in SP4a, so nothing moved); SP4b deferred-reclamation primitive → SP5; SP5 worlds-menu polish and palette search → SP10; SP7 vertex waves → SP11; SP8a animation frames → SP11; SP8a fence gates and trapdoors → SP12; SP8b giant trees, boulders and fossils → SP12; SP8c HRTF → SP11; SP9 jungle temple and village depth > 4 → SP12; SP11 Ultra shadows, 3D clouds and Fabulous water → SP12; SP6 underground-only carver and spaghetti-2D rarity bands → SP12; SP7 extra lava reactions → SP12; SP10 seed sweep and column-status heatmap → SP12. SP12's exit requires no open cut-line items, unless the user explicitly dropped one and the impact on its D-decision is recorded.
 
 **SP0 — Scaffold and guardrails** (S; no dependencies)
 - Repository scaffold at the root: Vite, TS strict, three `~0.186.1`, vitest projects (unit / arch / metrics-fast / metrics-quick / metrics-full / bench; see the SP0 spec).
@@ -1818,24 +1818,33 @@ SP3d was split on 2026-10-09 into SP3d (editable density and surface rules, insp
 
 SP4 was split on 2026-10-20 into SP4a (the world in 3D, loaded once) and SP4b (streaming and life), at the user's request, so the user sees the world in 3D early (the SP4a spec's Decisions confirmed by the user, item 2).
 
+SP4b was split on 2026-10-23 into SP4b (streaming) and SP4c (the map in the world and live editing), at the user's request, so the world streams without an edge before the map and editing move into it (the SP4b spec's Decisions confirmed by the user, item 1).
+
 **SP4a — The world in 3D, loaded once** (L; SP3b). Spec: `2026-10-20-sp4a-static-world-renderer-design.md`.
 - The week-1 spike (RegionBatch, the shared store in the browser); RegionMesh as the second `SectionRenderer`, selected without `WEBGL_multi_draw` (Firefox); the one-shot load around the spawn or a chosen point (rings, the coordinator's core, T/D/L/MESH_COLUMN jobs on the shared store); the D skeleton with the final heightmaps; the exact light job (FULL_FACES-aware, water stopping the sky fall and dimming by 1 per block); the padded greedy mesher with `PACK_LAYOUT`, AO, smooth light and connectivity; the still-water mesher; materials v1 with Fast water, the flat-colour array, sky dome with sun, elevation-based day/night, fog; the spectator controller, floating origin, FPS limiter, HUD counts, `ui/help.ts` with the key map as data; a minimal start screen at `/` (the full start and worlds menu is SP5's); the loading screen with panoramas, tips and progress; the flight route.
 - **Deliverable:** fly through the RD12 world around the spawn with day/night and translucent oceans, after a start screen and a loading screen, in Chrome and Firefox.
 - **Exit:** as the SP4a spec §11.
 - **Cut line:** the panoramas (→ SP4b). It was not taken: the panorama tool and its six panoramas shipped in SP4a, so nothing moved. The RegionMesh fallback was required by the capability probe (Firefox lacks `WEBGL_multi_draw`), so it is not cuttable.
 
-**SP4b — Streaming and life** (L; SP4a)
-- The store's concurrency fixes (SP3a §10, as the SP4a spec §2.6 hands them over) and the per-scope epoch cells; the streaming coordinator (statuses, rings, heap, epochs, versions, meshSeq, cancellation, unload hysteresis, proto retention, adaptive throttle, upload budget, atomic column reveal); RegionMesh's streaming half (sub-allocated ranges, `addUpdateRange`); the M map overlay with teleport (the map-page refactor); Apply v1 live; the `?bench` route with renderer-string capture and the optional 4-worker cap.
-- **Deliverable:** fly anywhere without stutter while the world streams, and edit it live from the map.
-- **Exit:** R7; G1 at RD12 while streaming as the SP4b spec sets it (at least the SP4a static cells re-asserted and the master's streaming cells); scheduler unit tests (cancel on leaving range, `update()` allocates 0 without movement, old meshes kept on Apply, the throttle).
-- **Cut line:** set by the SP4b spec.
+**SP4b — Streaming** (L; SP4a). Spec: `2026-10-23-sp4b-streaming-design.md`.
+- The CI unit sharding (first); the store's concurrency fixes (SP3a §10 as the SP4a spec §2.6 hands them over: the claim generation, monotone versions, the alive bit, deferred reclamation, the lock owner, the race fuzz) and the per-scope epoch cells; the streaming coordinator (per-slot states, needed and retained sets around the camera, four heaps with the view term, re-centring, reader pins, cancellation, unload hysteresis, proto retention and `T(protoOnly)`, the adaptive throttle, the upload budget, the per-column atomic reveal); both section renderers' streaming halves (RegionBatch's reservations and region-local instances, RegionMesh's arena with sub-allocated ranges and `addUpdateRange`); horizontal flight; live render distance; the removal of SP4a's edge features; the `?bench=medium` route.
+- **Deliverable:** fly anywhere, as far and as fast as the user likes, without stutter while the world streams around the camera, with the render distance changed live.
+- **Exit:** as the SP4b spec §10.
+- **Cut line:** deferred reclamation's primitive (→ SP5), worded at SP4b's exit by whether it was taken.
 
-**SP5 — Editing and persistence vertical slice** (M; SP4b)
+**SP4c — The map in the world and live editing** (M; SP4b)
+- The map-page refactor; the M overlay with click-to-teleport (instant, no loading screen, nearest-first); Apply v1 live (the old world visible while the new one regenerates nearest-first, a burst keeps the last, a change that does not affect the terrain rebuilds nothing); the two editing modes, configurable (full screen with "watch live", side by side); one pool for map tiles and world jobs with the MAP cap; the renderers' swap of a revealed column, the per-column epoch and `invalidation.ts` with Apply (SP4b leaves `bumpScope`).
+- **Deliverable:** teleport from the map and edit the world live in both modes.
+- **Exit:** R7's Apply part; the scheduler test "old meshes kept on Apply"; as the SP4c spec sets it.
+- **Cut line:** set by the SP4c spec.
+
+**SP5 — Editing and persistence vertical slice** (M; SP4b, SP4c)
 - Sim worker owning Published columns; DDA raycast with outline; hotbar; break, place and pick; **creative palette (E)**; orientation rules and interactions of §4.12 (shapes render as cubes until SP8a); edit-priority remesh (−1000, §4.3).
 - Incremental removal/re-add relight with the sky heightmap re-seed.
 - Persistence: DiffStore (in memory, authoritative, read-through), diff codec (u16 states, canonical order, little-endian), IDB KV with a single-transaction flush every 2 s and on pagehide, create/load/rename/duplicate/delete worlds, genKey binding plus the fork dialog (§2.7), `stateTable` remap, `.wiworld` export/import; the full start and worlds menu at `/`, grown from SP4a's minimal start screen and designed with the user in SP5's spec (SP4a spec D21).
 - Walk controller: swept AABB, step-up, ladders, unloaded ≠ solid, unstuck.
 - **Deliverable:** break and place blocks, reload and get the same world, export and import in another browser profile — the cross-cutting formats proven end to end.
+- If SP4b's cut line moved the deferred-reclamation primitive here, SP5 builds it first, before the sim worker writes a Published column, and adds it to its exit (amended by SP4b).
 - **Exit:** L3 (including shafts); E1-E7 (including the fault-injected flush and the unload/reload race); G2 (edit part: edit → visible p95 ≤ 50 ms); relight ≤ 3 ms p95; physics and palette unit tests.
 - **Cut line:** worlds-menu polish (rename, duplicate, thumbnails) and palette search (→ SP10).
 
@@ -1880,7 +1889,7 @@ SP4 was split on 2026-10-20 into SP4a (the world in 3D, loaded once) and SP4b (s
 - **Cut line:** jungle temple; village depth > 4 (→ SP12).
 
 **SP10 — Research tooling completion** (M; SP9)
-- Full stage-hash invalidation for every scope with badges and progress; probe of all stage outputs including the surface-rule branch; slice view of every 3D field (inspector mutes and pins delivered by SP3d); metrics dashboard (shared metric definitions, compare with previous params, seed sweep for column metrics); complete map layers (structures, carvers, aquifer, status heatmap, bookmarks, teleport snap on the map, on SP4b's teleport); JSON editors with validation of placed features and structure sets/pools (the density and surface-rule editors are delivered by SP3d); full F3 overlay and performance HUD; plus received cut-line items (the generated README parameter reference is already gated since SP1).
+- Full stage-hash invalidation for every scope with badges and progress; probe of all stage outputs including the surface-rule branch; slice view of every 3D field (inspector mutes and pins delivered by SP3d); metrics dashboard (shared metric definitions, compare with previous params, seed sweep for column metrics); complete map layers (structures, carvers, aquifer, status heatmap, bookmarks, teleport snap on the map, on SP4c's teleport); JSON editors with validation of placed features and structure sets/pools (the density and surface-rule editors are delivered by SP3d); full F3 overlay and performance HUD; plus received cut-line items (the generated README parameter reference is already gated since SP1).
 - **Deliverable:** the research workbench — tweak, preview, measure and compare without leaving the app.
 - Received from SP3c (its spec's Decision 2 and §11; amended by SP3c): the 2D defects inherited from SP2a, measured on voxels in SP3c and not fixed there — the lake-rim islets (ocean-family biome on land at a lake rim; the example is a lake perched at y ≈ 100 in a sea area, x −16384 … −16177, z −10624 … at seed 42, whose rim is a sand-topped stone mesa with staircase edges) and the shoreline zoom fringe; SP3c's ungated diagnostics `lakeRimIslets`, `shorelineFringe`, `shorelineFringeSea` and `oceanBiomeLandTops` measure them.
 - Received from SP3d (its spec §13; amended by SP3d): the slice view of the other 3D fields and the 256² refinement; resizable inspector columns; a time-budgeted slice or a per-request abort cell if SP3d's deterministic work bound proves too coarse in use; packed_ice's pale blue close to the sky colour (SP3c's review point, inherited by the slice's blocks field through `VOXEL_COLORS`; with SP8a).
@@ -1902,11 +1911,11 @@ SP4 was split on 2026-10-20 into SP4a (the world in 3D, loaded once) and SP4b (s
 
 ### Critical path and parallelism
 
-Critical path: SP0 → SP1 → SP2a → SP2b → SP3a → SP3b → SP4a → SP4b → SP5 → SP6 → SP7 → SP8b → SP9 → SP10 → SP11 → SP12.
+Critical path: SP0 → SP1 → SP2a → SP2b → SP3a → SP3b → SP4a → SP4b → SP4c → SP5 → SP6 → SP7 → SP8b → SP9 → SP10 → SP11 → SP12.
 
 In parallel: SP8a's texture parts after SP4a (alongside SP4b-SP7; its shape collision/raycast parts after SP5); SP8c after SP7 (alongside SP8a/SP8b); the persistence codec and `.wiworld` format after SP3a; SP3c, SP3d and SP3e alongside SP4 (done before SP4a started); the cloud parts of SP11 after SP4a and its LOD parts after SP4b (the fill mask flips at SP4b's per-column reveal).
 
-Visible value in every SP: a map in SP2a (edited live in SP2b), voxel slices in SP3a, terrain in SP3b, flight in SP4a, streaming and live editing from the map in SP4b, editing in SP5, caves in SP6, water in SP7. The riskiest integrations sit early: the SAB store and the u16 state format in SP3a, BatchedMesh in SP4a week 1, and fluid byte → light → mesh → edit → diff → IDB → reload in SP3a-SP5.
+Visible value in every SP: a map in SP2a (edited live in SP2b), voxel slices in SP3a, terrain in SP3b, flight in SP4a, streaming in SP4b, teleport and live editing from the map in SP4c, editing in SP5, caves in SP6, water in SP7. The riskiest integrations sit early: the SAB store and the u16 state format in SP3a, BatchedMesh in SP4a week 1, and fluid byte → light → mesh → edit → diff → IDB → reload in SP3a-SP5.
 
 ## 11. Relationship with world-imaginer
 
