@@ -7,13 +7,16 @@
  *
  * Every dense entry holds one reference to its slot. Rewriting an entry releases what it held; sharing an entry
  * retains the slot; releasing an entry frees it once. The functions here act on one entry of an Int32Array (the
- * column table's records, or any other array of entries) and leave set-level bookkeeping to the store.
+ * column table's records, or any other array of entries) and leave set-level bookkeeping to the store. Every release
+ * goes through the caller's `retire` (SP4b spec §2.5): the store passes its thread's deferred reclamation
+ * (`reclaim.ts`), so a slot a reader may hold is freed only after it; the default frees at once.
  *
  * Meta word: bits 0-12 nonAir (voxels whose state is not air, state 0), bit 13 hasOpaque, 14 hasCutout,
  * 15 hasTranslucent (any voxel whose PASS is that pass), bit 16 hasFluid (any fluid type ≠ 0), bits 17-31 the
  * connectivity bits (0 until SP4).
  */
 import type { SlabPool } from './pool';
+import { FREE_NOW, type Retire } from './reclaim';
 
 /** Voxels per 16³ section, and entries per channel array. */
 export const SECTION_VOXELS = 4096;
@@ -66,8 +69,10 @@ function firstDiff(src: Uint16Array | Uint8Array): number {
   return i;
 }
 
-/** Copies `src` into a new slot, or encodes it uniform; stores the entry at `ints[at]` and releases the old one. */
-function storeChannel(pool: SlabPool, ints: Int32Array, at: number, src: Uint16Array | Uint8Array, view: Uint16Array | Uint8Array): void {
+/** Copies `src` into a new slot, or encodes it uniform; stores the entry at `ints[at]` and retires the old one. */
+function storeChannel(
+  pool: SlabPool, ints: Int32Array, at: number, src: Uint16Array | Uint8Array, view: Uint16Array | Uint8Array, retire: Retire,
+): void {
   checkChannel(pool, src);
   let code: number;
   if (firstDiff(src) === SECTION_VOXELS) {
@@ -78,33 +83,33 @@ function storeChannel(pool: SlabPool, ints: Int32Array, at: number, src: Uint16A
   }
   const old = ints[at]!;
   ints[at] = code;
-  if (old >= 0) pool.free(old);
+  if (old >= 0) retire(pool, old);
 }
 
 /** Stores a block channel (4096 u16 states, copied) at `ints[at]`, uniform or dense; `pool` is the block pool. */
-export function storeWords(pool: SlabPool, ints: Int32Array, at: number, src: Uint16Array): void {
-  storeChannel(pool, ints, at, src, pool.words);
+export function storeWords(pool: SlabPool, ints: Int32Array, at: number, src: Uint16Array, retire: Retire = FREE_NOW): void {
+  storeChannel(pool, ints, at, src, pool.words, retire);
 }
 
 /** Stores a light or fluid channel (4096 bytes, copied) at `ints[at]`, uniform or dense; `pool` is the byte pool. */
-export function storeBytes(pool: SlabPool, ints: Int32Array, at: number, src: Uint8Array): void {
-  storeChannel(pool, ints, at, src, pool.bytes);
+export function storeBytes(pool: SlabPool, ints: Int32Array, at: number, src: Uint8Array, retire: Retire = FREE_NOW): void {
+  storeChannel(pool, ints, at, src, pool.bytes, retire);
 }
 
-/** Releases the entry at `ints[at]` (frees its slot once when dense) and resets it to −1. */
-export function releaseEntry(pool: SlabPool, ints: Int32Array, at: number): void {
+/** Releases the entry at `ints[at]` (retires its slot once when dense) and resets it to −1. */
+export function releaseEntry(pool: SlabPool, ints: Int32Array, at: number, retire: Retire = FREE_NOW): void {
   const old = ints[at]!;
   ints[at] = -1;
-  if (old >= 0) pool.free(old);
+  if (old >= 0) retire(pool, old);
 }
 
-/** Makes `ints[to]` share `ints[from]`: a dense slot is retained (one more reference); the old `ints[to]` is released. */
-export function shareEntry(pool: SlabPool, ints: Int32Array, from: number, to: number): void {
+/** Makes `ints[to]` share `ints[from]`: a dense slot is retained (one more reference); the old `ints[to]` is retired. */
+export function shareEntry(pool: SlabPool, ints: Int32Array, from: number, to: number, retire: Retire = FREE_NOW): void {
   const code = ints[from]!;
   if (code >= 0) pool.retain(code);
   const old = ints[to]!;
   ints[to] = code;
-  if (old >= 0) pool.free(old);
+  if (old >= 0) retire(pool, old);
 }
 
 /** Voxel `i`'s state in a block entry. */

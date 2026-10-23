@@ -187,11 +187,11 @@ function hasWaterAt(store: VoxelStore, x: number, z: number): boolean {
   return aux.motionBlocking[p]! > aux.oceanFloor[p]!;
 }
 
-/** The store's SharedArrayBuffers (column table, epochs and both pools' buffers) in MiB. */
+/** The store's SharedArrayBuffers (column table, epochs, the reclaim buffer and both pools' buffers) in MiB. */
 function storeSabMiB(store: VoxelStore): number {
   const h = store.handles();
   const pools = [h.blocks, h.bytes].flatMap((p) => [p.data, p.ctl, p.stack, p.refs]);
-  return [h.table, h.epochs, ...pools].reduce((sum, b) => sum + b.byteLength, 0) / (1 << 20);
+  return [h.table, h.epochs, h.reclaim, ...pools].reduce((sum, b) => sum + b.byteLength, 0) / (1 << 20);
 }
 
 const nextFrame = (): Promise<number> => new Promise((resolve) => requestAnimationFrame(resolve));

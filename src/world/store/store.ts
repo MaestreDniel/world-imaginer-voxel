@@ -14,6 +14,12 @@
  *
  * The main thread's per-frame reads take no view (SP4b spec §2.4, §3.10): `lightAt` and `heightAt` read a Published
  * column directly, `versionsInto` fills the coordinator's scratch, and `holder` tells which column holds a record.
+ * A lookup validates the record's generation from before its `find` to after its status read, and a writer opened on
+ * it captures that generation, so a free and a same-column re-claim inside the lookup is never taken as current.
+ *
+ * Deferred reclamation (SP4b spec §2.5, `reclaim.ts`): each attached store is one thread's (`attachStore(h, thread)`;
+ * `createStore` is thread 0, the main thread), and every slot it releases goes through that thread's `retire`, so a
+ * slot a reader may hold is freed only once the reader has left its read section (`enterRead`/`exitRead`, `drain`).
  * `gen` imports only the types of `api.ts`, never this file.
  */
 import { PASS } from '../blocks/index';
@@ -31,6 +37,7 @@ import {
   assertBufferKind, attachPool, BLOCK_SLOT_BYTES, BYTE_SLOT_BYTES, createPool, DEFAULT_MAX_BLOCK_BYTES, DEFAULT_MAX_BYTE_BYTES,
   type PoolHandles, type SlabPool,
 } from './pool';
+import { attachReclaimer, createReclaimBuffer, MAIN_THREAD } from './reclaim';
 import {
   byteAt, computeMeta, FINAL_BLOCKS, FINAL_FLUID, FINAL_LIGHT, FINAL_META, isDense, PROTO_BLOCKS, PROTO_FLUID, releaseEntry,
   sectionBytes, sectionWords, SECTION_VOXELS, shareEntry, storeBytes, storeWords, wordAt,
@@ -68,6 +75,8 @@ export interface StoreHandles {
   readonly bytes: PoolHandles;
   readonly table: SharedArrayBuffer | ArrayBuffer;
   readonly epochs: SharedArrayBuffer | ArrayBuffer;
+  /** The reclaim buffer (SP4b spec §2.5, `reclaim.ts`): reader epochs, limbo counts, the dead-owner mask, the store id. */
+  readonly reclaim: SharedArrayBuffer | ArrayBuffer;
   readonly pass: Uint8Array;
 }
 
@@ -77,7 +86,21 @@ export interface VoxelStore {
   readonly bytePool: SlabPool;
   readonly table: ColumnTable;
   readonly epochs: EpochCells;
+  /** The thread this store was attached as (0 the main thread, workers 1 … N, SP5's sim worker 15; SP4b spec §2.5). */
+  readonly thread: number;
+  /** The id `createStore` stamped in the reclaim buffer (SP4b spec §2.8). */
+  readonly storeId: number;
   handles(): StoreHandles;
+  /** Enters a read section: no slot this thread may read from now on is freed until `exitRead` (SP4b spec §2.5). */
+  enterRead(): void;
+  /** Leaves the read section, then drains this thread's limbo. */
+  exitRead(): void;
+  /** Frees this thread's limbo entries no live reader can hold; returns the entries left. */
+  drain(): number;
+  /** The entries in thread `thread`'s limbo (the reclaim buffer's [32 + thread]). */
+  limboCount(thread: number): number;
+  /** Marks a failed thread: its bit in the dead-owner mask, then its reader epoch cleared (SP4b spec §2.6). */
+  markDead(thread: number): void;
   /** Takes the record of (cx, cz) (`SlotBusy` if held) and returns its writer. */
   claimColumn(cx: number, cz: number, epoch: number): ColumnWriter;
   /**
@@ -164,28 +187,38 @@ function voxelOf(lx: number, y: number, lz: number): number {
   return (yy << 8) | (lz << 4) | lx;
 }
 
+/**
+ * The next store id (SP4b spec §2.5, §2.8): a per-thread counter from 1, since `world/` uses no `Math.random`. A store
+ * is created on one thread and attached only to that thread's workers, so the ids of one thread are enough.
+ */
+let nextStoreId = 1;
+
 export function createStore(opts: StoreOptions): VoxelStore {
   const { shared } = opts;
   const pass = opts.pass ?? DEFAULT_PASS;
   if (pass.length !== STATE_TABLE_SIZE) throw new RangeError(`store: pass table of ${pass.length} entries, expected ${STATE_TABLE_SIZE}`);
   const blocks = createPool({ shared, slotBytes: BLOCK_SLOT_BYTES, maxBytes: opts.maxBlockBytes ?? DEFAULT_MAX_BLOCK_BYTES });
   const bytes = createPool({ shared, slotBytes: BYTE_SLOT_BYTES, maxBytes: opts.maxByteBytes ?? DEFAULT_MAX_BYTE_BYTES });
+  const storeId = nextStoreId;
+  nextStoreId = nextStoreId === 0x7fffffff ? 1 : nextStoreId + 1;
   return attachStore({
     shared,
     blocks: blocks.handles(),
     bytes: bytes.handles(),
     table: createColumnTable(shared).buffer,
     epochs: createEpochCells(shared).buffer,
+    reclaim: createReclaimBuffer(shared, storeId),
     pass: pass.slice(),
-  });
+  }, MAIN_THREAD);
 }
 
 /**
- * The store over existing handles (`store.handles()`, possibly from another thread). Throws `TypeError` when a
- * buffer is not of the kind `h.shared` names (SharedArrayBuffer or ArrayBuffer; `pass` is a private copy and exempt)
- * or a pool's `shared` differs from the store's (SP4a spec §2.5).
+ * The store over existing handles (`store.handles()`, possibly from another thread), as thread `thread` (0 … 15; SP4b
+ * spec §2.5). Throws `TypeError` when a buffer is not of the kind `h.shared` names (SharedArrayBuffer or ArrayBuffer;
+ * `pass` is a private copy and exempt) or a pool's `shared` differs from the store's (SP4a spec §2.5), `RangeError`
+ * for a thread outside 0 … 15 or a reclaim buffer of another size.
  */
-export function attachStore(h: StoreHandles): VoxelStore {
+export function attachStore(h: StoreHandles, thread = MAIN_THREAD): VoxelStore {
   for (const [what, p] of [['blocks', h.blocks], ['bytes', h.bytes]] as const) {
     if (p.shared !== h.shared) throw new TypeError(`store: the ${what} pool has shared ${String(p.shared)}, the store ${String(h.shared)}`);
   }
@@ -195,6 +228,8 @@ export function attachStore(h: StoreHandles): VoxelStore {
   const bytePool = attachPool(h.bytes);
   const table = attachColumnTable(h.table);
   const epochs = attachEpochCells(h.epochs);
+  const reclaimer = attachReclaimer(h.reclaim, thread, [blockPool, bytePool], h.shared);
+  const { retire } = reclaimer;
   const { pass } = h;
   const ints = table.ints;
 
@@ -240,19 +275,35 @@ export function attachStore(h: StoreHandles): VoxelStore {
     };
   }
 
-  /** The record base of (cx, cz) when it holds that column at status ≥ `min`, else −1. */
-  function committed(cx: number, cz: number, min: number): number {
+  /** The generation the last successful `committedIn` validated (a writer opened on its base captures it). */
+  let foundGen = 0;
+
+  /**
+   * The record base of (cx, cz) when it holds that column at a status in [`min`, `max`], else −1. The generation is
+   * loaded before `find` and must be unchanged after the status read (SP4b spec §2.2), so a free and a re-claim of the
+   * same column between the two is not taken for the column found; `foundGen` keeps it.
+   */
+  function committedIn(cx: number, cz: number, min: number, max: number): number {
+    const gen = Atomics.load(ints, recordBase(cx, cz) + REC_GEN);
     const base = table.find(cx, cz);
-    return base >= 0 && table.status(base) >= min ? base : -1;
+    if (base < 0) return -1;
+    const status = table.status(base);
+    if (status < min || status > max || Atomics.load(ints, base + REC_GEN) !== gen) return -1;
+    foundGen = gen;
+    return base;
+  }
+
+  /** The record base of (cx, cz) when it holds that column at status ≥ `min`, else −1 (`committedIn`). */
+  function committed(cx: number, cz: number, min: number): number {
+    return committedIn(cx, cz, min, STATUS_PUBLISHED);
   }
 
   /**
    * The stale guard of a writer of the record at `base` (SP4b spec §2.2): throws `WriterStale` unless the record still
    * holds the claim the writer captured (generation `gen`, `claimed`, cx and cz), i.e. was neither freed nor claimed
-   * again by any column.
+   * again by any column. A reopened writer passes the generation its lookup validated; a claim's reads it now.
    */
-  function staleGuard(base: number, cx: number, cz: number): () => void {
-    const gen = Atomics.load(ints, base + REC_GEN);
+  function staleGuard(base: number, cx: number, cz: number, gen = Atomics.load(ints, base + REC_GEN)): () => void {
     return () => {
       if (
         Atomics.load(ints, base + REC_GEN) !== gen || Atomics.load(ints, base + REC_CLAIMED) !== 1 ||
@@ -266,15 +317,16 @@ export function attachStore(h: StoreHandles): VoxelStore {
   /** Proto section `sy` of the record at `base`, both channels (each releases what it replaces); `checkProto` first. */
   function writeProto(base: number, sy: number, blocks: Uint16Array, fluid: Uint8Array): void {
     const p = protoAt(base, sy);
-    storeWords(blockPool, ints, p + PROTO_BLOCKS, blocks);
-    storeBytes(bytePool, ints, p + PROTO_FLUID, fluid);
+    storeWords(blockPool, ints, p + PROTO_BLOCKS, blocks, retire);
+    storeBytes(bytePool, ints, p + PROTO_FLUID, fluid, retire);
   }
 
+  /** Retires the proto entries of the record at `base` (SP4b spec §2.5) and resets them to −1. */
   function releaseProto(base: number): void {
     for (let sy = 0; sy < SECTIONS; sy++) {
       const p = protoAt(base, sy);
-      releaseEntry(blockPool, ints, p + PROTO_BLOCKS);
-      releaseEntry(bytePool, ints, p + PROTO_FLUID);
+      releaseEntry(blockPool, ints, p + PROTO_BLOCKS, retire);
+      releaseEntry(bytePool, ints, p + PROTO_FLUID, retire);
     }
   }
 
@@ -282,11 +334,12 @@ export function attachStore(h: StoreHandles): VoxelStore {
    * The writer of the record at `base`, which holds (cx, cz): a fresh claim's (`from` 0) or a reopened column's
    * (`from` the status it reopened at). Its aux accessors view the record's slot when it has one and allocate
    * otherwise; `wroteBlocks`/`wroteLight` record the channels written since the previous commit (SP4a spec §2.5), set
-   * before a store so a write that throws midway still counts. It captures the record's generation now (SP4b spec
-   * §2.2), and its commits set the alive bit only when it was opened by a claim (SP4b spec §2.4).
+   * before a store so a write that throws midway still counts. It captures the record's generation (`gen`, the one
+   * its lookup validated, or now for a claim; SP4b spec §2.2), and its commits set the alive bit only when it was
+   * opened by a claim (SP4b spec §2.4). Every release goes through the thread's `retire` (SP4b spec §2.5).
    */
-  function writer(base: number, cx: number, cz: number, from: 0 | 1 | 2): ColumnWriter {
-    const check = staleGuard(base, cx, cz);
+  function writer(base: number, cx: number, cz: number, from: 0 | 1 | 2, gen?: number): ColumnWriter {
+    const check = staleGuard(base, cx, cz, gen);
     let auxA: AuxView | null = null;
     let auxB: AuxBView | null = null;
     let wroteBlocks = false;
@@ -320,9 +373,9 @@ export function attachStore(h: StoreHandles): VoxelStore {
         const f = finalAt(base, sy);
         wroteBlocks = true;
         wroteLight = true;
-        storeWords(blockPool, ints, f + FINAL_BLOCKS, blocks);
-        storeBytes(bytePool, ints, f + FINAL_LIGHT, light);
-        storeBytes(bytePool, ints, f + FINAL_FLUID, fluid);
+        storeWords(blockPool, ints, f + FINAL_BLOCKS, blocks, retire);
+        storeBytes(bytePool, ints, f + FINAL_LIGHT, light, retire);
+        storeBytes(bytePool, ints, f + FINAL_FLUID, fluid, retire);
         setMeta(sy);
       },
       shareFinal(sy, light) {
@@ -334,9 +387,9 @@ export function attachStore(h: StoreHandles): VoxelStore {
         wroteBlocks = true;
         // The D skeleton's all-zero light is no light change (SP4a spec §2.5).
         if (!wroteLight && light.some((v) => v !== 0)) wroteLight = true;
-        shareEntry(blockPool, ints, p + PROTO_BLOCKS, f + FINAL_BLOCKS);
-        shareEntry(bytePool, ints, p + PROTO_FLUID, f + FINAL_FLUID);
-        storeBytes(bytePool, ints, f + FINAL_LIGHT, light);
+        shareEntry(blockPool, ints, p + PROTO_BLOCKS, f + FINAL_BLOCKS, retire);
+        shareEntry(bytePool, ints, p + PROTO_FLUID, f + FINAL_FLUID, retire);
+        storeBytes(bytePool, ints, f + FINAL_LIGHT, light, retire);
         setMeta(sy);
       },
       setLight(sy, light) {
@@ -347,7 +400,7 @@ export function attachStore(h: StoreHandles): VoxelStore {
         // The light-once invariant (SP4a spec §2.5): replacing a dense entry would free a slot a reader may hold.
         if (isDense(ints[at]!)) throw new Error('light already written');
         wroteLight = true;
-        storeBytes(bytePool, ints, at, light);
+        storeBytes(bytePool, ints, at, light, retire);
       },
       resetLight() {
         check();
@@ -356,7 +409,7 @@ export function attachStore(h: StoreHandles): VoxelStore {
           // −1 is uniform light 0 (`section.ts`): nothing to release, and no light change.
           if (ints[at] === -1) continue;
           wroteLight = true;
-          releaseEntry(bytePool, ints, at);
+          releaseEntry(bytePool, ints, at, retire);
         }
       },
       aux() {
@@ -389,10 +442,11 @@ export function attachStore(h: StoreHandles): VoxelStore {
 
   /**
    * The `ProtoWriter` of the record at `base`, which holds (cx, cz) at status ≥ Decorated with a freed proto (SP4b spec
-   * §2.4): proto sections only, aux into worker-local scratch made on first use, `commitProto` sets the alive bit.
+   * §2.4): proto sections only, aux into worker-local scratch made on first use, `commitProto` sets the alive bit. It
+   * captures `gen`, the generation its lookup validated (SP4b spec §2.2).
    */
-  function protoWriter(base: number, cx: number, cz: number): ProtoWriter {
-    const check = staleGuard(base, cx, cz);
+  function protoWriter(base: number, cx: number, cz: number, gen: number): ProtoWriter {
+    const check = staleGuard(base, cx, cz, gen);
     let scratch: { readonly a: AuxView; readonly b: AuxBView } | null = null;
     const aux = () => (scratch ??= createScratchAux());
     return {
@@ -437,7 +491,14 @@ export function attachStore(h: StoreHandles): VoxelStore {
     bytePool,
     table,
     epochs,
+    thread,
+    storeId: reclaimer.storeId,
     handles: () => h,
+    enterRead: reclaimer.enterRead,
+    exitRead: reclaimer.exitRead,
+    drain: reclaimer.drain,
+    limboCount: reclaimer.limboCount,
+    markDead: reclaimer.markDead,
 
     claimColumn(cx, cz, epoch) {
       return writer(table.claim(cx, cz, epoch), cx, cz, 0);
@@ -445,9 +506,9 @@ export function attachStore(h: StoreHandles): VoxelStore {
 
     reopenColumn(cx, cz, from) {
       if (from !== 1 && from !== 2) throw new RangeError(`store: reopenColumn from status ${String(from)}`);
-      const base = table.find(cx, cz);
-      if (base < 0 || table.status(base) !== from) throw new Error(`reopenColumn: (${cx}, ${cz}) is not at status ${from}`);
-      return writer(base, cx, cz, from);
+      const base = committedIn(cx, cz, from, from);
+      if (base < 0) throw new Error(`reopenColumn: (${cx}, ${cz}) is not at status ${from}`);
+      return writer(base, cx, cz, from, foundGen);
     },
 
     freeColumn(cx, cz) {
@@ -457,11 +518,12 @@ export function attachStore(h: StoreHandles): VoxelStore {
       releaseProto(base);
       for (let sy = 0; sy < SECTIONS; sy++) {
         const f = finalAt(base, sy);
-        releaseEntry(blockPool, ints, f + FINAL_BLOCKS);
-        releaseEntry(bytePool, ints, f + FINAL_LIGHT);
-        releaseEntry(bytePool, ints, f + FINAL_FLUID);
+        releaseEntry(blockPool, ints, f + FINAL_BLOCKS, retire);
+        releaseEntry(bytePool, ints, f + FINAL_LIGHT, retire);
+        releaseEntry(bytePool, ints, f + FINAL_FLUID, retire);
       }
-      for (const at of [base + REC_AUX_A, base + REC_AUX_B]) releaseEntry(bytePool, ints, at);
+      releaseEntry(bytePool, ints, base + REC_AUX_A, retire);
+      releaseEntry(bytePool, ints, base + REC_AUX_B, retire);
       table.clear(base);
       table.unclaim(base);
     },
@@ -516,7 +578,7 @@ export function attachStore(h: StoreHandles): VoxelStore {
       if (base < 0 || (Atomics.load(ints, base + REC_PROTO_FLAGS) & PROTO_ALIVE) !== 0) {
         throw new Error(`reopenProto: (${cx}, ${cz}) is not at status ≥ 2 with a freed proto`);
       }
-      return protoWriter(base, cx, cz);
+      return protoWriter(base, cx, cz, foundGen);
     },
 
     versionsInto,

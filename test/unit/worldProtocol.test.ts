@@ -76,6 +76,17 @@ describe('parseToWorker: attach (ruling P23)', () => {
     expect(parseToWorker(attach(null))).toBeNull();
     expect(parseToWorker({ type: 'attach' })).toBeNull();
   });
+  test('the reclaim buffer (SP4b spec §2.5): a 192-byte SharedArrayBuffer, else refused', () => {
+    const h = shared();
+    expect(h.reclaim).toBeInstanceOf(SharedArrayBuffer);
+    expect(h.reclaim.byteLength).toBe(192);
+    const { reclaim: _, ...without } = h;
+    expect(parseToWorker(attach(without))).toBeNull();
+    expect(parseToWorker(attach({ ...h, reclaim: new ArrayBuffer(192) }))).toBeNull();
+    expect(parseToWorker(attach({ ...h, reclaim: new SharedArrayBuffer(188) }))).toBeNull();
+    expect(parseToWorker(attach({ ...h, reclaim: new SharedArrayBuffer(196) }))).toBeNull();
+    expect(parseToWorker(attach({ ...h, reclaim: null }))).toBeNull();
+  });
 });
 
 describe('parseToWorker: the world jobs', () => {

@@ -31,6 +31,7 @@ import type { ColumnView } from '../world/store/api';
 import { COLUMN_TABLE_BYTES } from '../world/store/columnTable';
 import { EPOCH_CELL_COUNT } from '../world/store/epochs';
 import { BLOCK_SLOT_BYTES, BYTE_SLOT_BYTES, GROW_BYTES, type PoolHandles } from '../world/store/pool';
+import { RECLAIM_BYTES } from '../world/store/reclaim';
 import { STATE_TABLE_SIZE, type StoreHandles } from '../world/store/store';
 
 export { COLUMN_SAMPLE_COST, CORNER_SAMPLE_COST, CORNER_STEEP_COST, DRAFT_BUDGET, PART_BUDGET, REQUEST_BUDGET, SLICE_RULE_NA } from '../core/constants';
@@ -340,14 +341,15 @@ const sharedPoolOk = (p: unknown, slotBytes: number): boolean => {
   return stack.maxByteLength === stackBytes && refs.maxByteLength === stackBytes;
 };
 /**
- * The attach guard (SP4a spec §2.3, ruling P23): a shared store whose eight state buffers (table, epochs, and each pool's
- * data, ctl, stack and refs) are `SharedArrayBuffer`s of the documented sizes, and a 4096-entry `pass` table (a private
- * copy on an ArrayBuffer, exempt from the kind rule).
+ * The attach guard (SP4a spec §2.3, ruling P23): a shared store whose nine state buffers (table, epochs, the reclaim
+ * buffer of SP4b spec §2.5, and each pool's data, ctl, stack and refs) are `SharedArrayBuffer`s of the documented sizes,
+ * and a 4096-entry `pass` table (a private copy on an ArrayBuffer, exempt from the kind rule).
  */
 const storeHandlesOk = (h: unknown): boolean =>
   isObj(h) && h['shared'] === true
   && isShared(h['table']) && h['table'].byteLength === COLUMN_TABLE_BYTES
   && isShared(h['epochs']) && h['epochs'].byteLength === 4 * EPOCH_CELL_COUNT
+  && isShared(h['reclaim']) && h['reclaim'].byteLength === RECLAIM_BYTES
   && sharedPoolOk(h['blocks'], BLOCK_SLOT_BYTES) && sharedPoolOk(h['bytes'], BYTE_SLOT_BYTES)
   && h['pass'] instanceof Uint8Array && h['pass'].length === STATE_TABLE_SIZE;
 
@@ -538,7 +540,8 @@ const isSize = (v: unknown): v is number => typeof v === 'number' && Number.isFi
 /** The shape of `VoxelStore.handles()`; whether the buffers attach is `attachStore`'s check. */
 const isStoreHandles = (v: unknown): v is StoreHandles =>
   isObj(v) && typeof v['shared'] === 'boolean' && isObj(v['blocks']) && isObj(v['bytes']) && typeof v['table'] === 'object' && v['table'] !== null
-  && typeof v['epochs'] === 'object' && v['epochs'] !== null && v['pass'] instanceof Uint8Array;
+  && typeof v['epochs'] === 'object' && v['epochs'] !== null && typeof v['reclaim'] === 'object' && v['reclaim'] !== null
+  && v['pass'] instanceof Uint8Array;
 
 /** A store spike message to the worker, or null. */
 export function parseSpikeStoreToWorker(m: unknown): SpikeStoreToWorker | null {

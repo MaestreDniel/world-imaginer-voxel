@@ -704,7 +704,19 @@ describe('master spec amendments (SP4b §13)', () => {
   /** [§1 entry head, the token its entry holds, the file on disk]; Tasks 5, 10, 16 and 26 append theirs. */
   const SP4B_MODULES: Array<[head: RegExp, token: string, file: string]> = [
     [/^\s+\.github\/workflows\/ci\.yml /, '.github/scripts/unitShards.mjs', '.github/scripts/unitShards.mjs'],
+    [/^\s+store\/pool\.ts /, 'reclaim.ts (SP4b)', 'src/world/store/reclaim.ts'],
   ];
+
+  test('§2.3 has the Reclamation paragraph (SP4b spec §2.5, §13)', () => {
+    const para = text.split('\n').find((l) => l.startsWith('**Reclamation.**'));
+    expect(para, 'no `**Reclamation.**` paragraph in §2.3').toBeDefined();
+    const at = text.indexOf(para!);
+    expect(at).toBeGreaterThan(text.indexOf('### 2.3 SharedArrayBuffer store'));
+    expect(at).toBeLessThan(text.indexOf('### 2.4 '));
+    for (const phrase of ['reader epoch', 'limbo', 'freed at once', 'dead thread', 'reader pins', '(SP4b)']) {
+      expect(para, `the Reclamation paragraph does not say ${phrase}`).toContain(phrase);
+    }
+  });
 
   test('§1 names each SP4b module in its entry, which exists', () => {
     for (const [head, token, file] of SP4B_MODULES) {

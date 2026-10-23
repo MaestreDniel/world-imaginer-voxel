@@ -578,6 +578,7 @@ describe('the store spike\'s messages (SP4a spec §1.2 item 6, ruling P18)', () 
     ['a ToWorker message', { type: 'spawn', jobId: 1, epoch: 0 }],
     ['write without handles', { type: 'spikeWrite', index: 0, columnsPerWorker: 32 }],
     ['handles not a store\'s', { type: 'spikeWrite', handles: { shared: true }, index: 0, columnsPerWorker: 32 }],
+    ['handles without the reclaim buffer', { type: 'spikeWrite', handles: { ...handles, reclaim: undefined }, index: 0, columnsPerWorker: 32 }],
     ['a negative index', { type: 'spikeWrite', handles, index: -1, columnsPerWorker: 32 }],
     ['a fractional index', { type: 'spikeWrite', handles, index: 0.5, columnsPerWorker: 32 }],
     ['zero columns', { type: 'spikeWrite', handles, index: 0, columnsPerWorker: 0 }],

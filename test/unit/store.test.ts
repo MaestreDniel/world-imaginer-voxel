@@ -792,6 +792,109 @@ describe.each([true, false])('shared %s', (shared) => {
     s.freeColumn(1, 0);
     expect(t.proto(1, 0)).toBeNull();
   });
+
+  test('a free and a same-column re-claim between a lookup\'s find and its status read is caught (SP4b spec §2.2): final() is null, reopenColumn and reopenProto throw', () => {
+    const s = newStore();
+    /** Runs `between` once inside the next `table.status` call (after the lookup's find), then reads the status. */
+    const race = (between: () => void): void => {
+      const status = s.table.status;
+      s.table.status = (base) => {
+        s.table.status = status;
+        between();
+        return status(base);
+      };
+    };
+    /** Frees (1, 2) and claims it again at `status`: the same column in the same record (the ABA of spec §2.2). */
+    const reclaim = (status: 1 | 2 | 3, freeProto = false) => () => {
+      s.freeColumn(1, 2);
+      const w = s.claimColumn(1, 2, 9);
+      w.setProto(0, words(3), bytes(0));
+      w.commit(status);
+      if (freeProto) s.freeProto(1, 2);
+    };
+    const w = s.claimColumn(1, 2, 0);
+    w.setProto(0, words(1), bytes(0));
+    w.commit(2);
+    race(reclaim(2));
+    expect(s.final(1, 2)).toBeNull();
+    // A lookup that did not race finds the new holder.
+    expect(s.final(1, 2)).not.toBeNull();
+    expect(s.proto(1, 2)!.block(0, -64, 0)).toBe(3);
+    race(reclaim(1));
+    expect(() => s.reopenColumn(1, 2, 1)).toThrow(/is not at status 1/);
+    expect(s.reopenColumn(1, 2, 1).cx).toBe(1);
+    // reopenProto over a Published column with a freed proto, re-claimed and freed again under the lookup.
+    reclaim(3, true)();
+    race(reclaim(3, true));
+    expect(() => s.reopenProto(1, 2)).toThrow(/freed proto/);
+    s.reopenProto(1, 2).commitProto();
+    expect(s.proto(1, 2)).not.toBeNull();
+  });
+});
+
+describe('deferred reclamation in the store (SP4b spec §2.5)', () => {
+  test('freeColumn under an active reader leaves every slot in limbo until exitRead; the pools\' freeCount then equals the count before the claim', () => {
+    const s = createStore({ shared: true, maxBlockBytes: 4 * MiB, maxByteBytes: 4 * MiB });
+    warm(s);
+    const before = [s.blockPool.freeCount(), s.bytePool.freeCount()];
+    const w = s.claimColumn(4, 4, 0);
+    for (const sy of [0, 5, 9]) w.setProto(sy, mixedBlocks(), mixedFluid());
+    w.commit(1);
+    const d = s.reopenColumn(4, 4, 1);
+    for (const sy of [0, 5, 9]) d.shareFinal(sy, bytes(0));
+    d.setFinal(12, mixedBlocks(), mixedFluid(), mixedFluid());
+    d.aux();
+    d.auxB();
+    d.commit(2);
+    const held = [s.blockPool.freeCount(), s.bytePool.freeCount()];
+    // 3 proto blocks (shared) + 1 final; 3 proto fluid (shared) + final light and fluid + aux A and B.
+    expect(held).toEqual([before[0]! - 4, before[1]! - 7]);
+    const reader = attachStore(s.handles(), 2);
+    reader.enterRead();
+    s.freeColumn(4, 4);
+    expect(s.final(4, 4)).toBeNull();
+    expect([s.blockPool.freeCount(), s.bytePool.freeCount()]).toEqual(held);
+    // One entry per release: blocks 3 proto + 4 final; bytes 3 proto fluid + 1 light + 4 final fluid + 2 aux.
+    expect(s.limboCount(0)).toBe(7 + 10);
+    expect(s.drain()).toBe(17);
+    reader.exitRead();
+    expect(s.drain()).toBe(0);
+    expect(s.limboCount(0)).toBe(0);
+    expect([s.blockPool.freeCount(), s.bytePool.freeCount()]).toEqual(before);
+    // The freeing thread's own read section holds its releases until its exitRead, which drains them.
+    s.claimColumn(4, 4, 0).setProto(3, mixedBlocks(), bytes(0));
+    s.enterRead();
+    s.freeColumn(4, 4);
+    expect(s.limboCount(0)).toBe(1);
+    s.exitRead();
+    expect(s.limboCount(0)).toBe(0);
+    expect([s.blockPool.freeCount(), s.bytePool.freeCount()]).toEqual(before);
+  });
+
+  test('resetLight, freeProto and a ProtoWriter rewrite release through the thread\'s reclaimer', () => {
+    const s = createStore({ shared: true, maxBlockBytes: 4 * MiB, maxByteBytes: 4 * MiB });
+    warm(s);
+    const before = [s.blockPool.freeCount(), s.bytePool.freeCount()];
+    const w = s.claimColumn(0, 0, 0);
+    w.setProto(1, mixedBlocks(), mixedFluid());
+    w.setFinal(1, mixedBlocks(), mixedFluid(), bytes(0));
+    w.commit(2);
+    const reader = attachStore(s.handles(), 1);
+    reader.enterRead();
+    const l = s.reopenColumn(0, 0, 2);
+    l.resetLight(); // the dense light of section 1
+    l.setLight(1, bytes(0xf0));
+    l.commit(3);
+    s.freeProto(0, 0); // proto blocks and fluid of section 1
+    const p = s.reopenProto(0, 0);
+    p.setProto(1, mixedBlocks(), mixedFluid());
+    p.setProto(1, words(0), bytes(0)); // the rewrite releases the two slots it replaces
+    expect(s.limboCount(0)).toBe(1 + 2 + 2);
+    reader.exitRead();
+    s.freeColumn(0, 0);
+    expect(s.drain()).toBe(0);
+    expect([s.blockPool.freeCount(), s.bytePool.freeCount()]).toEqual(before);
+  });
 });
 
 describe('attachStore across two threads (shared)', () => {
