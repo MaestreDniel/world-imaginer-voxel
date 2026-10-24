@@ -1,7 +1,7 @@
 /**
  * Frame-time statistics of the spike and the flight route (SP4a spec §1.2, §9.5): the rAF delta snapped to the display
  * interval, nearest-rank percentiles, and the display interval itself (the median of idle rAF deltas; the frame step's
- * low percentile of its recent deltas, rulings R13).
+ * median of the on-time cluster of its recent deltas, rulings R13 and R16).
  */
 
 /** How far from a multiple of the interval a delta may be and still snap to it (spec §9.5). */
@@ -28,21 +28,31 @@ export function percentile(values: ArrayLike<number>, p: number): number {
   return sorted[Math.min(n, Math.max(1, rank)) - 1]!;
 }
 
+/** The on-time cluster's upper bound as a multiple of its lower one, p10 (rulings R16): a late frame is ≥ 2 intervals. */
+const ON_TIME_SPAN = 1.5;
+
 /**
- * The p-th percentile (0 < p ≤ 100) by nearest rank of the first `n` values, sorted in a preallocated scratch (at least
- * n long; the rest of it is padded with NaN, which sorts last): the same value as `percentile` over those values, and
- * nothing allocated (SP4b spec §3.10). NaN for none. The frame step takes its display interval from it (rulings R13).
+ * The display interval of the frame step (rulings R16): the median of the first `n` values that lie in [p10, 1.5·p10],
+ * p10 their nearest-rank 10th percentile (the mean of the middle two for an even count). A display never delivers rAF
+ * faster than its refresh, so p10 sits in the on-time frames while one frame in ten is on time (rulings R13); taking
+ * the cluster's median rather than p10 itself keeps the value at the true interval under jitter (p10 reads about
+ * 1.28 σ low), and frames two or more intervals late never enter the cluster. Sorted in a preallocated scratch (at
+ * least n long), so nothing is allocated (SP4b spec §3.10). NaN for none.
  */
-export function percentileInto(values: ArrayLike<number>, p: number, scratch: Float64Array, n: number): number {
+export function onTimeIntervalInto(values: ArrayLike<number>, scratch: Float64Array, n: number): number {
   if (n === 0) return Number.NaN;
   if (scratch.length < n || values.length < n) {
-    throw new RangeError(`percentileInto: n ${n} exceeds the values (${values.length}) or the scratch (${scratch.length})`);
+    throw new RangeError(`onTimeIntervalInto: n ${n} exceeds the values (${values.length}) or the scratch (${scratch.length})`);
   }
   for (let i = 0; i < n; i++) scratch[i] = values[i]!;
   scratch.fill(Number.NaN, n);
   scratch.sort();
-  const rank = Math.ceil((p / 100) * n);
-  return scratch[Math.min(n, Math.max(1, rank)) - 1]!;
+  const lo = Math.min(n, Math.max(1, Math.ceil(0.1 * n))) - 1;
+  const top = ON_TIME_SPAN * scratch[lo]!;
+  let hi = lo;
+  while (hi + 1 < n && scratch[hi + 1]! <= top) hi++;
+  const mid = lo + hi;
+  return (mid & 1) === 0 ? scratch[mid >> 1]! : (scratch[mid >> 1]! + scratch[(mid >> 1) + 1]!) / 2;
 }
 
 /** a sorts after b: numerically, NaN last (as a typed array's `sort`). */

@@ -1,5 +1,5 @@
 import { describe, expect, test } from 'vitest';
-import { medianInterval, percentile, percentileInto, snapFrameTime } from '../../src/render/frameTiming';
+import { medianInterval, onTimeIntervalInto, percentile, snapFrameTime } from '../../src/render/frameTiming';
 
 describe('frame timing (SP4a spec §1.2, §9.5)', () => {
   test('a delta within ±1 ms of k·interval snaps to k·interval', () => {
@@ -58,17 +58,18 @@ describe('frame timing (SP4a spec §1.2, §9.5)', () => {
     expect(Array.from(marked.subarray(0, 5))).toEqual(Array.from(deltas.subarray(0, 5)).sort((a, b) => a - b));
   });
 
-  test('percentileInto over the first n values equals the allocating percentile of those values (rulings R13)', () => {
-    const deltas = new Float64Array([16.9, 16.1, 33.4, 16.6, 16.7, 15.2, 16.65, 99, 16.4, 16.0, 50, 4.2]);
+  test('onTimeIntervalInto is the median of the first n values in [p10, 1.5·p10], the on-time cluster (rulings R16)', () => {
     const scratch = new Float64Array(240);
-    for (const n of [1, 2, 3, 9, 10, 11, 12]) {
-      for (const p of [10, 50, 95]) {
-        expect(percentileInto(deltas, p, scratch, n), `n ${n} p ${p}`).toBe(percentile(Array.from(deltas.subarray(0, n)), p));
-      }
-    }
-    // A NaN sorts last, as in a typed array's sort, so it never is a low percentile.
-    expect(percentileInto([Number.NaN, 7, 6, 8], 10, new Float64Array(4), 4)).toBe(6);
-    expect(Number.isNaN(percentileInto([], 10, scratch, 0))).toBe(true);
-    expect(() => percentileInto(deltas, 10, new Float64Array(4), 5)).toThrow(RangeError);
+    // Sorted: 16.0 16.5 16.6 16.7 16.8 16.9 17.0 33.3 33.4 50; p10 16.0, the cluster its first 7, median 16.7.
+    const window = [16.0, 16.5, 16.7, 16.8, 33.3, 33.4, 50, 16.6, 16.9, 17.0];
+    expect(onTimeIntervalInto(window, scratch, 10)).toBe(16.7);
+    // An even cluster takes the mean of its middle two: 16.5 16.6 16.7 16.8 (17.0 and 33.3 left out by n).
+    expect(onTimeIntervalInto([16.5, 16.8, 16.6, 16.7, 33.3], scratch, 4)).toBeCloseTo(16.65, 12);
+    // Two frames in three two intervals late: the slow ones never enter the cluster.
+    const late = Array.from({ length: 30 }, (_, i) => (i % 3 === 0 ? 16.667 : 33.333));
+    expect(onTimeIntervalInto(late, scratch, 30)).toBe(16.667);
+    expect(onTimeIntervalInto([0, 0, 0], scratch, 3)).toBe(0);
+    expect(Number.isNaN(onTimeIntervalInto([], scratch, 0))).toBe(true);
+    expect(() => onTimeIntervalInto(window, new Float64Array(4), 5)).toThrow(RangeError);
   });
 });

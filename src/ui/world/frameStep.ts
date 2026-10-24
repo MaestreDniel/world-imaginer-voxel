@@ -3,11 +3,12 @@
  * measured at rest (§3.10, D25). One `tick` per rAF:
  *
  * 0. The throttle (§3.8, D29): the raw rAF delta, snapped to the display interval, is pushed with that interval and
- *    whether T, D or L jobs were in flight in the previous tick's counts. The display interval is the nearest-rank 10th
- *    percentile of the last 240 raw deltas (rulings R13): a display never delivers rAF faster than its refresh, so it
- *    stays at the true interval while one frame in ten is on time (a median would follow sustained slow frames and
- *    switch the back-off off exactly when frames get worse), and 240 deltas follow a window moved to another monitor
- *    within a few seconds. It is fed on every tick, before the FPS limiter, so a cap of 30 on a 60 Hz display reads as
+ *    whether T, D or L jobs were in flight in the previous tick's counts. The display interval is the median of the last
+ *    240 raw deltas that lie in [p10, 1.5·p10], p10 their nearest-rank 10th percentile (the on-time cluster, rulings
+ *    R13 and R16): a display never delivers rAF faster than its refresh, so it stays at the true interval while one
+ *    frame in ten is on time (a plain median would follow sustained slow frames and switch the back-off off exactly
+ *    when frames get worse), under rAF jitter (where p10 itself reads about 1.28 σ low), and 240 deltas follow a
+ *    window moved to another monitor within a few seconds. It is fed on every tick, before the FPS limiter, so a cap of 30 on a 60 Hz display reads as
  *    16.7 ms frames, never as 33.3 ms ones that would hold `genCap` at 1 (SP4b plan, Review Focus 1). An interval that
  *    is not finite falls back to 1000/60 (rulings R5).
  * 1. The fly step over the raw delta (capped at 0.25 s), unless paused (the help is open).
@@ -30,7 +31,7 @@ import type { UploadBudget } from '../../engine/uploadBudget';
 import { advanceTime } from '../../daynight/dayNight';
 import { applyCameraRotation, stepFly, type FlyBounds, type FlyState } from '../../player/fly';
 import type { Action } from '../../player/keymap';
-import { percentileInto, snapFrameTime } from '../../render/frameTiming';
+import { onTimeIntervalInto, snapFrameTime } from '../../render/frameTiming';
 import type { WorldRenderer } from '../../render/renderer';
 import type { SectionRenderer } from '../../render/sectionRenderer';
 import type { VoxelStore } from '../../world/store/store';
@@ -38,10 +39,8 @@ import type { FrameClock } from './frameNotice';
 
 /** The longest step the fly controller takes in one tick, s: a tab back from the background does not jump. */
 export const MAX_STEP_S = 0.25;
-/** rAF deltas whose low percentile is the display interval (rulings R13): about a second at 240 Hz, 4 s at 60 Hz. */
+/** rAF deltas whose on-time cluster gives the display interval (rulings R13, R16): about 1 s at 240 Hz, 4 s at 60 Hz. */
 const DELTA_WINDOW = 240;
-/** The percentile of the window read as the display interval: on time while one frame in ten is (rulings R13). */
-const INTERVAL_PERCENTILE = 10;
 /** The interval assumed while none is measured (rulings R5). */
 const FALLBACK_INTERVAL_MS = 1000 / 60;
 /** Only the vertical range: the world streams around the camera (SP4b spec §6.1). */
@@ -106,7 +105,7 @@ export function createFrameStep(d: FrameStepDeps): { tick(now: number): void } {
       deltas[next] = raw;
       next = (next + 1) % DELTA_WINDOW;
       if (count < DELTA_WINDOW) count++;
-      const interval = displayInterval(percentileInto(deltas, INTERVAL_PERCENTILE, scratch, count));
+      const interval = displayInterval(onTimeIntervalInto(deltas, scratch, count));
       const generating = counts.T.inFlight + counts.D.inFlight + counts.L.inFlight > 0;
       throttle.push(snapFrameTime(raw, interval), generating, interval);
       const dt = clock.tick(now);

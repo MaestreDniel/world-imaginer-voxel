@@ -222,7 +222,7 @@ describe('createFrameStep (SP4b spec §7.2)', () => {
   });
 });
 
-describe('the display interval from on-time frames (rulings R13)', () => {
+describe('the display interval from on-time frames (rulings R13, R16)', () => {
   const HZ144 = 1000 / 144;
   const near = (a: number, b: number): boolean => Math.abs(a - b) < 1e-6;
 
@@ -248,6 +248,40 @@ describe('the display interval from on-time frames (rulings R13)', () => {
       expect(r.pushes.slice(30).every(([, , interval]) => near(interval, HZ60)), `${lateOf3} in 3`).toBe(true);
       expect(r.throttle.cap(), `${lateOf3} in 3`).toBe(1);
     }
+  });
+
+  /** rAF timestamps at 60 Hz, each displaced by Gaussian jitter of σ ms (an LCG and Box-Muller: the same every run). */
+  function jittered(sigma: number, seed: number): () => number {
+    let s = seed >>> 0;
+    const u = (): number => (s = (Math.imul(s, 1664525) + 1013904223) >>> 0) / 2 ** 32;
+    let i = 0;
+    return () => {
+      const g = Math.sqrt(-2 * Math.log(1 - u())) * Math.cos(2 * Math.PI * u());
+      return ++i * HZ60 + sigma * g;
+    };
+  }
+
+  test('rAF timestamp jitter of σ 0.5 ms on a 60 Hz display leaves the interval at 16.667 ms: the median of the on-time cluster, not the low tail (rulings R16)', () => {
+    const r = rig({ max: 5 });
+    r.generating = true;
+    const next = jittered(0.5, 7);
+    for (let i = 0; i < 3000; i++) r.step.tick(next());
+    // A bare 10th percentile reads about 1.28 σ of the deltas (0.71 ms) low: about 15.76 ms.
+    const intervals = r.pushes.slice(240).map(([, , interval]) => interval);
+    expect(Math.min(...intervals)).toBeGreaterThan(HZ60 - 0.25);
+    expect(Math.max(...intervals)).toBeLessThan(HZ60 + 0.25);
+  });
+
+  test('rAF timestamp jitter of σ 0.25 ms on a 60 Hz display, no slow frame, with generation in flight keeps genCap at its maximum on every tick (rulings R16)', () => {
+    const r = rig({ max: 5 });
+    r.generating = true;
+    const next = jittered(0.25, 7);
+    let lowest = 5;
+    for (let i = 0; i < 3000; i++) {
+      r.step.tick(next());
+      lowest = Math.min(lowest, r.throttle.cap());
+    }
+    expect(lowest).toBe(5);
   });
 
   test('a window moved from a 60 Hz to a 144 Hz display, and back, is followed within 240 frames', () => {
