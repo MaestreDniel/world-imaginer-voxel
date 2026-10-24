@@ -736,6 +736,27 @@ describe('master spec amendments (SP4b §13)', () => {
     expect(para).toContain('monotonically increasing `meshSeq` (SP4b: per column, since one MESH_COLUMN job covers a column\'s sections; a result of an older seq is dropped)');
   });
 
+  test('§4.1\'s lock and single-writer sentences name the reader pins and the main thread\'s frees (SP4b spec §3.5, §13)', () => {
+    const at = text.indexOf('### 4.1 Thread topology and ownership');
+    const s41 = text.slice(at, text.indexOf('### 4.2 ', at));
+    expect(s41).toContain('The only lock is the slab allocator (the coordinator\'s reader pins are main-thread counters, not locks; SP4b).');
+    expect(s41).toContain('- Mesh jobs and the main thread only read (SP4b: the main thread frees unloaded columns and protos, at zero reader pins; `T(protoOnly)` rewrites only the proto descriptors and alive bit of a Decorated or Published column, never its final set; the sim worker\'s ownership, SP5, is of the final set).');
+  });
+
+  test('§4.2\'s proto retention and unload, §4.3\'s cancellation (SP4b spec §3.5-§3.7, §13)', () => {
+    const at = text.indexOf('### 4.2 Column state machine');
+    const s42 = text.slice(at, text.indexOf('### 4.3 ', at));
+    const proto = s42.split('\n').find((l) => l.startsWith('**Proto retention.**'));
+    expect(proto, 'no `**Proto retention.**` paragraph in §4.2').toBeDefined();
+    expect(proto).toContain('(SP4b builds the rule and `T(protoOnly)`; the page keeps every proto until D places features, SP8b, because a freed proto saves nothing while the final set shares its slots)');
+    const unload = s42.split('\n').find((l) => l.startsWith('**Unload.**'));
+    expect(unload, 'no `**Unload.**` paragraph in §4.2').toBeDefined();
+    expect(unload).toContain('(SP4b: at most 16 column frees and 64 columns hidden for mesh removal per frame, their rows released under the upload budget, a column freed only when no in-flight job reads it)');
+    const at3 = text.indexOf('### 4.3 Scheduling');
+    const s43 = text.slice(at3, text.indexOf('### 4.4 ', at3));
+    expect(s43).toContain('- Queued jobs that leave the needed set are dropped (SP4b: from the coordinator\'s heaps and the pool\'s queue; in-flight jobs finish and are judged at intake).');
+  });
+
   test('§2.3 has the Reclamation paragraph (SP4b spec §2.5, §13)', () => {
     const para = text.split('\n').find((l) => l.startsWith('**Reclamation.**'));
     expect(para, 'no `**Reclamation.**` paragraph in §2.3').toBeDefined();

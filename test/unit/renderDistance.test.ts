@@ -1,8 +1,9 @@
 import { describe, expect, test } from 'vitest';
 import type { CapabilityReport } from '../../src/engine/capabilityRules';
 import {
-  clampRenderDistance, defaultRenderDistance, isSoftwareRenderer, RD_MAX, RD_MIN, reservationRdCap, resolveRenderDistance,
+  clampRenderDistance, defaultRenderDistance, isSoftwareRenderer, lowerRd, RD_MAX, RD_MIN, reservationRdCap, resolveRenderDistance,
 } from '../../src/engine/renderDistance';
+import { lowerRd as noticeLowerRd } from '../../src/ui/world/frameNotice';
 
 const MIB = 1 << 20;
 const FULL = { blockBytes: 768 * MIB, byteBytes: 512 * MIB };
@@ -104,5 +105,17 @@ describe('reservationRdCap and resolveRenderDistance (ruling P36)', () => {
     for (const r of [BASE, report({ hardwareConcurrency: 4 }), report({ renderer: 'llvmpipe' }), report({ reservation: HALF })]) {
       expect(resolveRenderDistance(r, null, null)).toBe(defaultRenderDistance(r));
     }
+  });
+});
+
+describe('lowerRd (SP4a ruling P49; moved to engine for the coordinator\'s StoreFull event, SP4b spec §3.6)', () => {
+  test('lowerRd(12) 10, lowerRd(5) 4, lowerRd(4) null', () => {
+    expect(lowerRd(12)).toBe(10);
+    expect(lowerRd(5)).toBe(4);
+    expect(lowerRd(4)).toBeNull();
+  });
+
+  test('frameNotice re-exports the same function', () => {
+    expect(noticeLowerRd).toBe(lowerRd);
   });
 });

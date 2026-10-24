@@ -951,9 +951,9 @@ Main thread: render (three), input/physics/raycast (reads SAB), Coordinator (sta
 **Single-writer ownership:**
 - A column with status < Published belongs to the one T, D or L job currently processing it; stages run strictly in sequence.
 - A Published column belongs to the sim worker.
-- Mesh jobs and the main thread only read.
+- Mesh jobs and the main thread only read (SP4b: the main thread frees unloaded columns and protos, at zero reader pins; `T(protoOnly)` rewrites only the proto descriptors and alive bit of a Decorated or Published column, never its final set; the sim worker's ownership, SP5, is of the final set).
 
-**Optimistic concurrency.** Every job records the `blockVersion` and `lightVersion` of the 3×3 it read. The coordinator discards and requeues any result whose versions changed. Every section also carries a monotonically increasing `meshSeq` (SP4b: per column, since one MESH_COLUMN job covers a column's sections; a result of an older seq is dropped), and older mesh results are dropped. The only lock is the slab allocator.
+**Optimistic concurrency.** Every job records the `blockVersion` and `lightVersion` of the 3×3 it read. The coordinator discards and requeues any result whose versions changed. Every section also carries a monotonically increasing `meshSeq` (SP4b: per column, since one MESH_COLUMN job covers a column's sections; a result of an older seq is dropped), and older mesh results are dropped. The only lock is the slab allocator (the coordinator's reader pins are main-thread counters, not locks; SP4b).
 
 ### 4.2 Column state machine, rings and proto retention
 
@@ -964,9 +964,9 @@ Main thread: render (three), input/physics/raycast (reads SAB), Coordinator (sta
 - **Atomic column reveal.** A column never becomes visible section by section. Its section meshes are uploaded hidden (`setVisibleAt(false)`) and are shown together in one frame once every non-empty section of that column is uploaded; the LOD fill-mask texel flips in the same frame. Streaming therefore grows in horizontal rings of complete columns, never bottom-up or top-down, so the underground is never revealed before the surface that covers it. After the reveal, cave culling (§4.15) keeps unreachable underground sections undrawn.
 - **Re-generation swaps atomically too.** On Apply, a column's new-epoch meshes are staged hidden while the old ones stay visible; when the new set is complete, old instances are hidden and deleted and new ones shown in the same frame. Edit and fluid remeshes of individual sections replace already visible geometry and are exempt.
 
-**Proto retention.** A proto set stays alive while the column lies in the ring RD+2..RD+3, or while any neighbour within the D radius is below Decorated. In tuning mode it stays alive for every loaded column. Otherwise it is freed by dropping refcounts on its slots. If a proto is ever missing when needed (after a big teleport, say), a `T(protoOnly)` job regenerates it; T is pure, so this is safe.
+**Proto retention.** A proto set stays alive while the column lies in the ring RD+2..RD+3, or while any neighbour within the D radius is below Decorated. In tuning mode it stays alive for every loaded column. Otherwise it is freed by dropping refcounts on its slots. If a proto is ever missing when needed (after a big teleport, say), a `T(protoOnly)` job regenerates it; T is pure, so this is safe (SP4b builds the rule and `T(protoOnly)`; the page keeps every proto until D places features, SP8b, because a freed proto saves nothing while the final set shares its slots).
 
-**Unload.** Voxels are freed beyond RD+5, meshes beyond RD+1. The column's diff stays in the sim worker's DiffStore.
+**Unload.** Voxels are freed beyond RD+5, meshes beyond RD+1 (SP4b: at most 16 column frees and 64 columns hidden for mesh removal per frame, their rows released under the upload budget, a column freed only when no in-flight job reads it). The column's diff stays in the sim worker's DiffStore.
 
 ### 4.3 Scheduling
 
@@ -984,7 +984,7 @@ Main thread: render (three), input/physics/raycast (reads SAB), Coordinator (sta
 **Adaptive throttle (`engine/throttle.ts`).** If frame p95 over 60 frames exceeds max(16.7 ms, the display interval + 0.5 ms) while generation is in flight, the generation cap (on the T, D and L jobs in flight, in [1, max(1, N − 1)] (SP4b)) drops by 1 (minimum 1). After 120 frames under max(13 ms, the display interval + 0.5 ms) it rises by 1. The thresholds follow the display, so a display below 60 Hz does not read as permanently slow and a 60 Hz display can raise the cap again after a drop; at 144-240 Hz they are 16.7 and 13 ms (the user's decision of 2026-10-24, SP4b).
 
 **Cancellation.**
-- Queued jobs that leave the needed set are dropped.
+- Queued jobs that leave the needed set are dropped (SP4b: from the coordinator's heaps and the pool's queue; in-flight jobs finish and are judged at intake).
 - In-flight jobs check their epoch cell between phases and abort. SP2b implements the epoch cell as one pool-wide `SharedArrayBuffer` cell for map, spawn and stats jobs (a stopped job replies `ABORTED`); SP4b widens it to per-scope cells (amended by SP2b).
 - Stale results are discarded.
 

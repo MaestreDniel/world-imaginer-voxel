@@ -1,6 +1,7 @@
 /**
  * The 3D page's render distance (SP4a spec §8.5, D23, ruling P36): the default from the capability report, the cap the
- * accepted store reservation sets, and the one resolution of `?rd`, the setting and the default under that cap.
+ * accepted store reservation sets, the one resolution of `?rd`, the setting and the default under that cap, and the next
+ * lower render distance (`lowerRd`, moved here from `ui/world/frameNotice.ts` so engine can name it, SP4b).
  */
 import type { CapabilityReport, StoreReservation } from './capabilityRules';
 
@@ -34,6 +35,15 @@ export function defaultRenderDistance(r: CapabilityReport): number {
   const weak = (r.hardwareConcurrency !== null && r.hardwareConcurrency <= 4) || (r.deviceMemory !== null && r.deviceMemory <= 4);
   const rule = r.renderer !== null && isSoftwareRenderer(r.renderer) ? 6 : weak ? 8 : 12;
   return Math.min(rule, reservationRdCap(r.reservation));
+}
+
+/**
+ * The next lower render distance: max(RD_MIN, rd − 2) when rd > RD_MIN, else null (SP4a ruling P49), so 12 → 10 → 8
+ * follows the default ladder. The slow-frame notice (`ui/world/frameNotice.ts`, which re-exports it) and the
+ * coordinator's StoreFull event (SP4b spec §3.6) both offer it; neither applies it on its own.
+ */
+export function lowerRd(rd: number): number | null {
+  return rd > RD_MIN ? Math.max(RD_MIN, rd - 2) : null;
 }
 
 /** An integer render distance in [RD_MIN, min(RD_MAX, cap)] (never below RD_MIN; NaN reads as RD_MIN). */

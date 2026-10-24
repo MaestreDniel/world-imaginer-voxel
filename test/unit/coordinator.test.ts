@@ -2,14 +2,16 @@ import { describe, expect, test } from 'vitest';
 import { colKey } from '../../src/core/coords';
 import { STAGE_BONUS, streamScore } from '../../src/core/streamScore';
 import {
-  createCoordinator, createCoordinatorCounts, phaseName, progressFraction, worldJobsOf,
+  FAILED_FATAL, FREES_PER_FRAME, MESH_REMOVALS_PER_FRAME, PROTO_FREES_PER_FRAME, createCoordinator, createCoordinatorCounts, phaseName,
+  progressFraction, worldJobsOf,
   type Coordinator, type CoordinatorCounts, type CoordinatorJobs, type JobOutcome, type StreamCamera, type StreamEvent,
   type StreamSink, type StreamStore,
 } from '../../src/engine/coordinator';
 import { KEEP_VOXELS_EXTRA, M_D, M_L, M_MESH, M_T, membershipTable, stageOffsets, type Stage } from '../../src/engine/rings';
 import { createThrottle, type Throttle } from '../../src/engine/throttle';
-import { JobCancelled, StoreFullError, type ColumnDone, type WorkerPool } from '../../src/engine/workerPool';
+import { JobCancelled, StoreCorruptError, StoreFullError, WorkerFailed, type ColumnDone, type WorkerPool } from '../../src/engine/workerPool';
 import type { ColumnMeshPayload } from '../../src/mesh/column';
+import { StoreCorrupt } from '../../src/world/store/pool';
 
 const RANK: Record<Stage, number> = { T: 1, D: 2, L: 3, MESH: 4 };
 const FLAG: Record<Stage, number> = { T: M_T, D: M_D, L: M_L, MESH: M_MESH };
@@ -34,26 +36,39 @@ interface FakeOptions {
   /** Jobs resolve inside `run` (as replies arriving at once). */
   readonly sync?: boolean;
   readonly throttle?: Throttle;
+  /** Whether the pending job at index i is running (`cancel` rejects only the others); the first one by default. */
+  readonly runningOf?: (j: Issued, i: number) => boolean;
 }
 
 /**
  * The world as the coordinator sees it: a store model of records (one per torus slot: the column holding it and its
- * status, 1 Proto … 3 Published; block and light versions), fake jobs that settle on a manual tick and commit into the
- * model when they resolve, and a sink. Every issue is checked against the prerequisites, the record's holder, the
- * caps (with the throttle's cap at that moment) and the columns already busy.
+ * status, 1 Proto … 3 Published; block and light versions; the proto's alive bit), fake jobs that settle on a manual
+ * tick and commit into the model when they resolve, and a sink. Every issue is checked against the prerequisites (D
+ * also against live protos), the record's holder, the caps (with the throttle's cap at that moment) and the columns
+ * already busy; every free against the pending jobs that read the column (the pins, SP4b spec §3.5); every stage
+ * against the revealed columns (D16) and every remove against the unrevealed ones.
  */
 function fakeWorld(fo: FakeOptions = {}) {
   const fake = {
     live: fo.workers ?? 4,
-    records: new Map<number, { cx: number; cz: number; status: number; block: number; light: number }>(),
+    records: new Map<number, { cx: number; cz: number; status: number; block: number; light: number; alive?: boolean }>(),
     pending: [] as Pending[],
     issued: [] as Issued[],
     violations: [] as string[],
     frees: [] as Array<readonly [number, number]>,
+    protoFrees: [] as Array<readonly [number, number]>,
+    /** The indices in `issued` of the T(protoOnly) jobs. */
+    protoOnly: [] as number[],
     cancels: 0,
     stages: [] as Array<{ readonly cx: number; readonly cz: number; readonly seq: number }>,
     removes: [] as Array<readonly [number, number]>,
+    /** The columns staged and not removed since (colKey). */
+    revealed: new Set<number>(),
     events: [] as StreamEvent[],
+    /** `issued.length` when each event arrived. */
+    eventIssued: [] as number[],
+    /** Thrown by the next `freeColumn` (once). */
+    freeThrows: null as unknown,
   };
   const throttle = fo.throttle ?? createThrottle({ max: Math.max(1, fake.live - 1) });
   const statusAt = (cx: number, cz: number): number => {
@@ -80,25 +95,46 @@ function fakeWorld(fo: FakeOptions = {}) {
       return r === undefined ? 'free' : r.cx === cx && r.cz === cz ? 'self' : 'other';
     },
     freeColumn(cx, cz) {
+      if (fake.freeThrows !== null) { const e = fake.freeThrows; fake.freeThrows = null; throw e; }
       const r = fake.records.get(slotOf(cx, cz));
       if (r === undefined || r.cx !== cx || r.cz !== cz) return;
+      const reader = fake.pending.find((p) => (p.cx === cx && p.cz === cz) || (p.stage !== 'T' && Math.abs(p.cx - cx) <= 1 && Math.abs(p.cz - cz) <= 1));
+      if (reader !== undefined) violations(`(${cx}, ${cz}) freed under ${reader.stage} at (${reader.cx}, ${reader.cz})`);
       fake.records.delete(slotOf(cx, cz));
       fake.frees.push([cx, cz]);
     },
-    freeProto() {},
+    freeProto(cx, cz) {
+      const r = fake.records.get(slotOf(cx, cz));
+      if (r === undefined || r.cx !== cx || r.cz !== cz) { violations(`freeProto of the absent (${cx}, ${cz})`); return; }
+      if (r.status < 2) violations(`freeProto of (${cx}, ${cz}) at status ${r.status}`);
+      if (r.alive === false) violations(`freeProto of (${cx}, ${cz}) twice`);
+      const reader = fake.pending.find((p) => (p.cx === cx && p.cz === cz) || (p.stage === 'D' && Math.abs(p.cx - cx) <= 1 && Math.abs(p.cz - cz) <= 1));
+      if (reader !== undefined) violations(`proto of (${cx}, ${cz}) freed under ${reader.stage} at (${reader.cx}, ${reader.cz})`);
+      r.alive = false;
+      fake.protoFrees.push([cx, cz]);
+    },
+  };
+  const aliveAt = (cx: number, cz: number): boolean => {
+    const r = fake.records.get(slotOf(cx, cz));
+    return r !== undefined && r.cx === cx && r.cz === cz && r.alive !== false;
   };
 
-  const commit = (stage: Stage, cx: number, cz: number): void => {
+  const commit = (stage: Stage, cx: number, cz: number, protoOnly: boolean): void => {
     const s = slotOf(cx, cz);
-    if (stage === 'T') fake.records.set(s, { cx, cz, status: 1, block: 1, light: 0 });
+    if (protoOnly) fake.records.get(s)!.alive = true;
+    else if (stage === 'T') fake.records.set(s, { cx, cz, status: 1, block: 1, light: 0, alive: true });
     else if (stage === 'D') { const r = fake.records.get(s)!; r.status = 2; r.block++; }
     else if (stage === 'L') { const r = fake.records.get(s)!; r.status = 3; r.light++; }
   };
 
-  const check = (stage: Stage, cx: number, cz: number): void => {
+  const check = (stage: Stage, cx: number, cz: number, protoOnly: boolean): void => {
     const what = `${stage} at (${cx}, ${cz})`;
     if (fake.pending.some((p) => p.cx === cx && p.cz === cz)) violations(`${what} issued for a busy column`);
-    if (stage === 'T') {
+    if (protoOnly) {
+      if (stage !== 'T') violations(`${what} with protoOnly`);
+      if (statusAt(cx, cz) < 2) violations(`T(protoOnly) at (${cx}, ${cz}) with its column at ${statusAt(cx, cz)}`);
+      if (aliveAt(cx, cz)) violations(`T(protoOnly) at (${cx}, ${cz}) over a live proto`);
+    } else if (stage === 'T') {
       if (store.holder(cx, cz) !== 'free') violations(`${what} issued with its record held (SlotBusy)`);
     } else {
       const need = RANK[stage] - 1;
@@ -106,14 +142,16 @@ function fakeWorld(fo: FakeOptions = {}) {
       for (let dz = -1; dz <= 1; dz++) {
         for (let dx = -1; dx <= 1; dx++) {
           if (statusAt(cx + dx, cz + dz) < need) violations(`${what} before (${cx + dx}, ${cz + dz}) reached ${need}`);
+          if (stage === 'D' && !aliveAt(cx + dx, cz + dz)) violations(`${what} with no live proto at (${cx + dx}, ${cz + dz})`);
         }
       }
-      if (stage === 'MESH' && fake.stages.some((m) => m.cx === cx && m.cz === cz)) violations(`${what} issued for a staged column`);
+      if (stage === 'MESH' && fake.revealed.has(colKey(cx, cz))) violations(`${what} issued for a staged column`);
     }
+    // Each cap is checked when a job it bounds is issued (a cap that drops, as N does, binds the next such issue).
     const N = fake.live;
-    if (inFlight.T + inFlight.D + inFlight.L > throttle.cap()) violations(`${inFlight.T + inFlight.D + inFlight.L} T + D + L in flight above genCap ${throttle.cap()}`);
-    if (inFlight.T > Math.max(1, N - 1)) violations(`${inFlight.T} T in flight`);
-    if (inFlight.MESH > N) violations(`${inFlight.MESH} MESH in flight`);
+    if (stage !== 'MESH' && inFlight.T + inFlight.D + inFlight.L > throttle.cap()) violations(`${inFlight.T + inFlight.D + inFlight.L} T + D + L in flight above genCap ${throttle.cap()}`);
+    if (stage === 'T' && inFlight.T > Math.max(1, N - 1)) violations(`${inFlight.T} T in flight`);
+    if (stage === 'MESH' && inFlight.MESH > N) violations(`${inFlight.MESH} MESH in flight`);
     if (total > N) violations(`${total} jobs in flight`);
   };
   const violations = (v: string): void => { fake.violations.push(v); };
@@ -126,11 +164,11 @@ function fakeWorld(fo: FakeOptions = {}) {
 
   const jobs: CoordinatorJobs = {
     run(stage, cx, cz, protoOnly) {
+      if (protoOnly) fake.protoOnly.push(fake.issued.length);
       fake.issued.push({ stage, cx, cz });
-      if (protoOnly) violations(`${stage} at (${cx}, ${cz}) with protoOnly`);
       inFlight[stage]++;
       total++;
-      check(stage, cx, cz);
+      check(stage, cx, cz, protoOnly);
       const versions = new Int32Array(18);
       store.versionsInto(cx, cz, versions);
       return new Promise<JobOutcome>((resolve, reject) => {
@@ -140,7 +178,7 @@ function fakeWorld(fo: FakeOptions = {}) {
           resolve: () => {
             done();
             fo.tamper?.({ stage, cx, cz }, versions);
-            commit(stage, cx, cz);
+            commit(stage, cx, cz, protoOnly);
             resolve(outcome(stage, cx, cz, versions));
           },
           reject: (e) => { done(); reject(e); },
@@ -151,10 +189,11 @@ function fakeWorld(fo: FakeOptions = {}) {
     },
     cancel(pred) {
       fake.cancels++;
-      // The first pending job is running; the others are queued and leave with JobCancelled.
+      // The running jobs (the first pending one by default) finish; the others are queued and leave with JobCancelled.
+      const running = fo.runningOf ?? ((_: Issued, i: number) => i === 0);
       const keep: Pending[] = [];
       fake.pending.forEach((p, i) => {
-        if (i > 0 && pred(p.stage, p.cx, p.cz)) p.reject(new JobCancelled());
+        if (!running(p, i) && pred(p.stage, p.cx, p.cz)) p.reject(new JobCancelled());
         else keep.push(p);
       });
       fake.pending.splice(0, fake.pending.length, ...keep);
@@ -162,8 +201,15 @@ function fakeWorld(fo: FakeOptions = {}) {
     liveWorkers: () => fake.live,
   };
   const sink: StreamSink = {
-    stage(p, seq) { fake.stages.push({ cx: p.cx, cz: p.cz, seq }); },
-    remove(cx, cz) { fake.removes.push([cx, cz]); },
+    stage(p, seq) {
+      if (fake.revealed.has(colKey(p.cx, p.cz))) violations(`(${p.cx}, ${p.cz}) staged again while revealed (D16)`);
+      fake.revealed.add(colKey(p.cx, p.cz));
+      fake.stages.push({ cx: p.cx, cz: p.cz, seq });
+    },
+    remove(cx, cz) {
+      if (!fake.revealed.delete(colKey(cx, cz))) violations(`remove of the unstaged (${cx}, ${cz})`);
+      fake.removes.push([cx, cz]);
+    },
   };
   /** Settles the pending job at index i (FIFO by default). */
   const settle = (i = 0): void => {
@@ -181,13 +227,15 @@ interface MakeOptions extends FakeOptions {
   readonly rd?: number;
   readonly rdMax?: number;
   readonly strict?: boolean;
+  readonly retainAllProtos?: boolean;
 }
 
 function make(mo: MakeOptions = {}): { w: World; c: Coordinator } {
   const w = fakeWorld(mo);
   const c = createCoordinator({
     jobs: w.jobs, store: w.store, sink: w.sink, throttle: w.throttle, rd: mo.rd ?? 4, rdMax: mo.rdMax ?? 16,
-    retainAllProtos: true, strict: mo.strict ?? false, onEvent: (e) => w.fake.events.push(e),
+    retainAllProtos: mo.retainAllProtos ?? true, strict: mo.strict ?? false,
+    onEvent: (e) => { w.fake.events.push(e); w.fake.eventIssued.push(w.fake.issued.length); },
   });
   return { w, c };
 }
@@ -466,10 +514,11 @@ describe('createCoordinator: intake (SP4b spec §3.6, D16)', () => {
   });
 
   test('a MESH of an old meshSeq is dropped: its column left keepMesh and came back while it ran', async () => {
-    const { w, c } = make({ rd: 4 });
+    const isK = (p: Issued) => p.stage === 'MESH' && p.cx === 4 && p.cz === 0;
+    // K's MESH is running, so the crossing's cancellation leaves it to finish.
+    const { w, c } = make({ rd: 4, runningOf: (j, i) => isK(j) || i === 0 });
     c.update(cam(0, 0));
     await flush();
-    const isK = (p: Issued) => p.stage === 'MESH' && p.cx === 4 && p.cz === 0;
     // Settle until K's MESH runs alone among MESH jobs (another MESH in flight could be superseded by the trip too).
     for (;;) {
       const other = w.fake.pending.findIndex((p) => p.stage === 'MESH' && !isK(p));
@@ -510,17 +559,24 @@ describe('createCoordinator: intake (SP4b spec §3.6, D16)', () => {
   test('no revealed column is ever re-staged: over a fill, a crossing back and forth and an LCG settle order, sink.stage is called at most once per (column, meshSeq)', async () => {
     const { w, c } = make({ rd: 6, workers: 5 });
     const pick = lcg(4242);
-    const path = [cam(0, 0), cam(1, 0), cam(2, 1), cam(1, 0), cam(0, 0), cam(-1, 0), cam(0, 0)];
+    await fill(w, c, cam(0, 0), 4242);
+    const path = [cam(1, 0), cam(2, 1), cam(1, 0), cam(0, 0), cam(-1, 0), cam(0, 0)];
     for (const at of path) {
       c.update(at);
       await flush();
       for (let i = 0; i < 40 && w.fake.pending.length > 0; i++) { w.settle(pick(w.fake.pending.length)); await flush(); }
     }
     await settleAll(w, 77);
+    // The fake's sink flags a stage of a column staged and not removed since (D16); (2, 1) takes (−6, 0) beyond keepMesh,
+    // so a column is staged again only after its mesh unload, under the next meshSeq.
     expect(w.fake.violations).toEqual([]);
     const seen = new Set(w.fake.stages.map((s) => `${s.cx},${s.cz},${s.seq}`));
     expect(seen.size).toBe(w.fake.stages.length);
-    expect(new Set(w.fake.stages.map((s) => colKey(s.cx, s.cz))).size).toBe(w.fake.stages.length);
+    expect(w.fake.removes.length).toBeGreaterThan(0);
+    // What is revealed at the end: the MESH set around (0, 0), and nothing beyond keepMesh (RD + 1).
+    for (const [dx, dz] of stageOffsets(6).MESH) expect(w.fake.revealed.has(colKey(dx, dz)), `(${dx}, ${dz})`).toBe(true);
+    const keep = new Set(w.fake.stages.filter((m) => m.cx * m.cx + m.cz * m.cz <= 7.5 * 7.5).map((m) => colKey(m.cx, m.cz)));
+    for (const k of w.fake.revealed) expect(keep.has(k)).toBe(true);
     expect(c.firstFill()).toBe(true);
   });
 
@@ -675,6 +731,412 @@ describe('createCoordinator: Review Focus 2-4 (SP4b plan)', () => {
     expect(w.fake.violations).toEqual([]);
     expect(w.fake.stages.length).toBe(stageOffsets(6).MESH.length);
     expect(perStage(w.fake.issued)).toEqual({ T: stageOffsets(6).T.length, D: stageOffsets(6).D.length, L: stageOffsets(6).L.length, MESH: stageOffsets(6).MESH.length });
+  });
+});
+
+/** Counts the removes, frees and proto frees since the previous call. */
+function deltas(w: World) {
+  let r = w.fake.removes.length;
+  let f = w.fake.frees.length;
+  let p = w.fake.protoFrees.length;
+  return () => {
+    const out = { removes: w.fake.removes.length - r, frees: w.fake.frees.length - f, protoFrees: w.fake.protoFrees.length - p };
+    r = w.fake.removes.length;
+    f = w.fake.frees.length;
+    p = w.fake.protoFrees.length;
+    return out;
+  };
+}
+
+const has = (list: ReadonlyArray<readonly [number, number]>, cx: number, cz: number): boolean => list.some(([x, z]) => x === cx && z === cz);
+const issuedOf = (w: World, stage: Stage, cx: number, cz: number): number => w.fake.issued.filter((j) => j.stage === stage && j.cx === cx && j.cz === cz).length;
+
+describe('createCoordinator: pins, unloads and collisions (SP4b spec §3.5, D3)', () => {
+  test('the per-frame bounds: 64 mesh removals, 16 column frees, 16 proto frees, 32 failed columns', () => {
+    expect([MESH_REMOVALS_PER_FRAME, FREES_PER_FRAME, PROTO_FREES_PER_FRAME, FAILED_FATAL]).toEqual([64, 16, 16, 32]);
+  });
+
+  test('hysteresis at RD 4 after a fill: one column east and back removes no mesh and frees nothing; two columns east removes 9 meshes and frees 8 columns in that update', async () => {
+    const { w, c } = make({ rd: 4 });
+    await fill(w, c, cam(0, 0));
+    await fill(w, c, cam(1, 0));
+    await fill(w, c, cam(0, 0));
+    c.update(cam(0, 0));
+    expect(w.fake.removes).toEqual([]);
+    expect(w.fake.frees).toEqual([]);
+    c.update(cam(2, 0));
+    expect(w.fake.removes.length).toBe(9);
+    expect(w.fake.frees.length).toBe(8);
+    for (const [x, z] of w.fake.removes) expect((x - 2) ** 2 + z * z, `remove (${x}, ${z})`).toBeGreaterThan(5.5 * 5.5);
+    for (const [x, z] of w.fake.frees) expect((x - 2) ** 2 + z * z, `free (${x}, ${z})`).toBeGreaterThan(9.5 * 9.5);
+    await settleAll(w);
+    c.update(cam(2, 0));
+    expect([w.fake.removes.length, w.fake.frees.length]).toEqual([9, 8]);
+    expect(w.fake.violations).toEqual([]);
+    expect(c.firstFill()).toBe(true);
+  });
+
+  test('pins block frees: a column outside keepVoxels with an L of its neighbour in flight is freed only in the update after that L settles', async () => {
+    const isJ = (j: Issued) => j.stage === 'L' && j.cx === -5 && j.cz === 0;
+    const { w, c } = make({ rd: 4, runningOf: (j, i) => isJ(j) || i === 0 });
+    c.update(cam(0, 0));
+    await flush();
+    // Every job but L at J = (−5, 0) settles; that L stays in flight, pinning its 3 × 3.
+    for (;;) {
+      const i = w.fake.pending.findIndex((p) => !isJ(p));
+      if (i < 0) break;
+      w.settle(i);
+      await flush();
+    }
+    expect(w.fake.pending.map((p) => [p.stage, p.cx, p.cz])).toEqual([['L', -5, 0]]);
+    // From (4, 0), K = (−6, 0) lies 10 columns away, beyond keepVoxels (RD + 5); J itself is 9 away and stays.
+    const pinned = [[-6, -1], [-6, 0], [-6, 1]] as const;
+    for (let i = 0; i < 3; i++) {
+      c.update(cam(4, 0));
+      await flush();
+      while (w.fake.pending.some((p) => !isJ(p))) { w.settle(w.fake.pending.findIndex((p) => !isJ(p))); await flush(); }
+    }
+    expect(w.fake.frees.length).toBeGreaterThan(0);
+    for (const [x, z] of pinned) expect(has(w.fake.frees, x, z), `(${x}, ${z}) freed under the L`).toBe(false);
+    w.settle(w.fake.pending.findIndex(isJ));
+    await flush();
+    for (const [x, z] of pinned) expect(has(w.fake.frees, x, z)).toBe(false);
+    c.update(cam(4, 0));
+    for (const [x, z] of pinned) expect(has(w.fake.frees, x, z), `(${x}, ${z}) freed after the L`).toBe(true);
+    expect(has(w.fake.frees, -5, 0)).toBe(false);
+    expect(w.fake.violations).toEqual([]);
+  });
+
+  test('a record collision waits for the far column\'s free: after a fill at RD 4 around (0, 0) and a jump to (64, 0), every new T collides, collisionWaits > 0, the frees take 14 updates (13 × 16 + 5) and the meshes 2 (64 + 5), the first T issued after the jump is the lowest-score one with (64, 0) among the first four, and the T jobs issued after the jump come in nondecreasing score order', async () => {
+    const { w, c } = make({ rd: 4 });
+    await fill(w, c, cam(0, 0));
+    expect(read(c).collisionWaits).toBe(0);
+    const mark = w.fake.issued.length;
+    const d = deltas(w);
+    const frees: number[] = [];
+    const removes: number[] = [];
+    for (let i = 0; i < 16; i++) {
+      c.update(cam(64, 0));
+      const n = d();
+      frees.push(n.frees);
+      removes.push(n.removes);
+      await settleAll(w);
+    }
+    expect(frees).toEqual([...Array<number>(13).fill(16), 5, 0, 0]);
+    expect(removes).toEqual([64, 5, ...Array<number>(14).fill(0)]);
+    // Every T of the new set waited on a record its old column held (the same torus slots, 64 columns west).
+    expect(read(c).collisionWaits).toBe(213);
+    const ts = w.fake.issued.slice(mark).filter((j) => j.stage === 'T');
+    expect(ts.length).toBe(213);
+    const key = (j: Issued) => streamScore(j.cx - 64, j.cz, 0, -1, STAGE_BONUS.T);
+    const lowest = [...ts].sort((a, b) => key(a) - key(b) || colKey(a.cx, a.cz) - colKey(b.cx, b.cz))[0]!;
+    expect(ts[0]).toEqual(lowest);
+    expect(ts.slice(0, 4).some((j) => j.cx === 64 && j.cz === 0)).toBe(true);
+    for (let i = 1; i < ts.length; i++) expect(key(ts[i]!), `T ${i}`).toBeGreaterThanOrEqual(key(ts[i - 1]!));
+    expect(w.fake.violations).toEqual([]);
+    expect(c.firstFill()).toBe(true);
+    expect(read(c).dropped).toBe(0);
+  });
+
+  test('cancel on leaving range: queued T jobs of columns that left the T set are cancelled through jobs.cancel; an in-flight one settles and is judged at intake (a T of a column outside keepVoxels is freed by the unload rule)', async () => {
+    const { w, c } = make({ rd: 4 });
+    c.update(cam(0, 0));
+    await flush();
+    const first = w.fake.pending.map((p) => [p.stage, p.cx, p.cz] as const);
+    expect(first.length).toBe(3);
+    expect(first.every(([st]) => st === 'T')).toBe(true);
+    const [running, ...queued] = first;
+    // (12, 0): the three columns near (0, 0) leave the T set and keepVoxels; the slots keep them (inside the window).
+    c.update(cam(12, 0));
+    expect(w.fake.cancels).toBe(1);
+    await flush();
+    expect(w.fake.pending.map((p) => [p.stage, p.cx, p.cz])[0]).toEqual(running);
+    for (const [, x, z] of queued) expect(w.fake.pending.some((p) => p.cx === x && p.cz === z)).toBe(false);
+    w.settle(0);
+    await flush();
+    expect(has(w.fake.frees, running![1], running![2])).toBe(false);
+    c.update(cam(12, 0));
+    expect(has(w.fake.frees, running![1], running![2])).toBe(true);
+    await settleAll(w);
+    for (const [, x, z] of first) expect(issuedOf(w, 'T', x, z), `T at (${x}, ${z})`).toBe(1);
+    expect(w.fake.events).toEqual([]);
+    expect(read(c).dropped).toBe(0);
+    expect(w.fake.violations).toEqual([]);
+    expect(c.firstFill()).toBe(true);
+  });
+
+  test('setRenderDistance(12) then setRenderDistance(10) before the next update: counts show MESH needed 349 (Review Focus 5)', async () => {
+    const { w, c } = make({ rd: 8 });
+    await fill(w, c, cam(0, 0));
+    const mark = w.fake.issued.length;
+    c.setRenderDistance(12);
+    c.setRenderDistance(10);
+    expect(read(c).MESH.needed).toBe(349);
+    expect(read(c).rd).toBe(10);
+    await fill(w, c, cam(0, 0));
+    expect(read(c).MESH).toEqual({ needed: 349, done: 349, inFlight: 0, queued: 0 });
+    const after = w.fake.issued.slice(mark);
+    for (const j of after) expect(inSet(j.stage, j.cx, j.cz, 0, 0, 10), `${j.stage} at (${j.cx}, ${j.cz})`).toBe(true);
+    expect(perStage(after).MESH).toBe(349 - stageOffsets(8).MESH.length);
+    expect(c.firstFill()).toBe(true);
+    expect(w.fake.violations).toEqual([]);
+  });
+
+  test('setRenderDistance after a full RD 12 fill: to 8 removes 196 meshes over 4 updates (64, 64, 64, 4) and frees 248 columns over 16 updates (15 × 16 + 8); back to 12 needs 489 MESH again; 3 and 17 throw', async () => {
+    const { w, c } = make({ rd: 12 });
+    await fill(w, c, cam(0, 0));
+    expect(() => c.setRenderDistance(3)).toThrow(RangeError);
+    expect(() => c.setRenderDistance(17)).toThrow(RangeError);
+    expect(() => c.setRenderDistance(8.5)).toThrow(RangeError);
+    expect(read(c).rd).toBe(12);
+    c.setRenderDistance(8);
+    const d = deltas(w);
+    const frees: number[] = [];
+    const removes: number[] = [];
+    for (let i = 0; i < 18; i++) {
+      c.update(cam(0, 0));
+      const n = d();
+      frees.push(n.frees);
+      removes.push(n.removes);
+      await settleAll(w);
+    }
+    expect(removes).toEqual([64, 64, 64, 4, ...Array<number>(14).fill(0)]);
+    expect(frees).toEqual([...Array<number>(15).fill(16), 8, 0, 0]);
+    for (const [x, z] of w.fake.frees) expect(x * x + z * z).toBeGreaterThan(13.5 * 13.5);
+    expect(w.fake.issued.length).toBe(825 + 705 + 593 + 489);
+    expect(read(c).MESH).toEqual({ needed: stageOffsets(8).MESH.length, done: stageOffsets(8).MESH.length, inFlight: 0, queued: 0 });
+    const mark = w.fake.issued.length;
+    c.setRenderDistance(12);
+    expect(read(c).MESH.needed).toBe(489);
+    await fill(w, c, cam(0, 0));
+    expect(read(c).MESH).toEqual({ needed: 489, done: 489, inFlight: 0, queued: 0 });
+    expect(perStage(w.fake.issued.slice(mark)).MESH).toBe(196);
+    expect(perStage(w.fake.issued.slice(mark)).T).toBe(248);
+    expect(c.firstFill()).toBe(true);
+    expect(w.fake.violations).toEqual([]);
+  });
+});
+
+describe('createCoordinator: errors after the reveal (SP4b spec §3.6, D12)', () => {
+  test('strict first, then D12: a strict coordinator emits fatal on one INTERNAL with no retry; after setStrict(false) one INTERNAL requeues', async () => {
+    const boom = new Error('INTERNAL: boom');
+    let n = 0;
+    const failOf = (j: Issued) => (j.stage === 'D' && j.cx === 0 && j.cz === 0 && n++ === 0 ? boom : null);
+    const strict = make({ rd: 4, strict: true, failOf });
+    await fill(strict.w, strict.c, cam(0, 0));
+    expect(strict.w.fake.events).toEqual([{ kind: 'fatal', message: 'D at (0, 0) failed: INTERNAL: boom', cause: boom }]);
+    expect(issuedOf(strict.w, 'D', 0, 0)).toBe(1);
+    n = 0;
+    const loose = make({ rd: 4, strict: true, failOf });
+    loose.c.setStrict(false);
+    await fill(loose.w, loose.c, cam(0, 0));
+    expect(loose.w.fake.events).toEqual([]);
+    expect(issuedOf(loose.w, 'D', 0, 0)).toBe(2);
+    expect(read(loose.c).failed).toBe(0);
+    expect(loose.c.firstFill()).toBe(true);
+  });
+
+  test('retries and the skipped column: one INTERNAL requeues, a second marks it failed and emits one skipped event; its neighbours\' dependent jobs wait; 33 failed columns emit fatal', async () => {
+    const boom = new Error('INTERNAL: boom');
+    const { w, c } = make({ rd: 4, failOf: (j) => (j.stage === 'D' && j.cx === 1 && j.cz === 1 ? boom : null) });
+    await fill(w, c, cam(0, 0));
+    expect(issuedOf(w, 'D', 1, 1)).toBe(2);
+    expect(w.fake.events).toEqual([{ kind: 'skipped', cx: 1, cz: 1 }]);
+    expect(read(c).failed).toBe(1);
+    // No L whose 3 × 3 holds (1, 1), no MESH whose 3 × 3 holds one of those: 109 − 9 L and 69 − 25 MESH.
+    expect(w.fake.issued.some((j) => j.stage === 'L' && Math.abs(j.cx - 1) <= 1 && Math.abs(j.cz - 1) <= 1)).toBe(false);
+    expect(perStage(w.fake.issued)).toEqual({ T: 213, D: 157 + 1, L: 100, MESH: 44 });
+    expect(c.firstFill()).toBe(false);
+    c.update(cam(0, 0));
+    await settleAll(w);
+    expect(issuedOf(w, 'D', 1, 1)).toBe(2);
+    expect(w.fake.violations).toEqual([]);
+    // 33 columns whose T always fails: the first emits skipped, the 33rd fatal; 32 are not fatal.
+    for (const k of [32, 33]) {
+      const bad = new Set(stageOffsets(4).T.slice(0, k).map(([x, z]) => colKey(x, z)));
+      const many = make({ rd: 4, failOf: (j) => (j.stage === 'T' && bad.has(colKey(j.cx, j.cz)) ? boom : null) });
+      await fill(many.w, many.c, cam(0, 0));
+      const kinds = many.w.fake.events.map((e) => e.kind);
+      expect(kinds, `${k} failed`).toEqual(k > FAILED_FATAL ? ['skipped', 'fatal'] : ['skipped']);
+      if (k > FAILED_FATAL) expect(many.w.fake.events[1]).toEqual({ kind: 'fatal', message: expect.stringMatching(/^33 columns failed/), cause: boom });
+      else expect(read(many.c).failed).toBe(32);
+    }
+  });
+
+  test('a failed column flown beyond keepVoxels and back is regenerated from scratch', async () => {
+    let failing = true;
+    const { w, c } = make({ rd: 4, failOf: (j) => (failing && j.stage === 'D' && j.cx === 1 && j.cz === 1 ? new Error('INTERNAL: boom') : null) });
+    await fill(w, c, cam(0, 0));
+    expect(read(c).failed).toBe(1);
+    // (20, 0): (1, 1) lies 19 columns away, beyond keepVoxels (RD + 5) and inside the window, so its slot keeps it.
+    for (let i = 0; i < 20 && !has(w.fake.frees, 1, 1); i++) await fill(w, c, cam(20, 0));
+    expect(has(w.fake.frees, 1, 1)).toBe(true);
+    expect(read(c).failed).toBe(0);
+    failing = false;
+    for (let i = 0; i < 20 && (i === 0 || !c.firstFill()); i++) await fill(w, c, cam(0, 0));
+    expect(read(c).cx).toBe(0);
+    expect(c.firstFill()).toBe(true);
+    expect(issuedOf(w, 'T', 1, 1)).toBe(2);
+    expect(issuedOf(w, 'D', 1, 1)).toBe(3);
+    expect(w.fake.events).toEqual([{ kind: 'skipped', cx: 1, cz: 1 }]);
+    expect(read(c).failed).toBe(0);
+    expect(w.fake.violations).toEqual([]);
+  });
+
+  test('StoreFull pauses T, counts 1, emits storeFull with lowerRd 10 at RD 12 and leaves the RD unchanged; the next voxel unload resumes T', async () => {
+    // X is the T issued last at yaw 0 (the largest score), so the far west columns are generated when it meets StoreFull.
+    const tKey = ([x, z]: readonly [number, number]) => streamScore(x, z, 0, -1, STAGE_BONUS.T);
+    const [xx, xz] = [...stageOffsets(12).T].sort((a, b) => tKey(b) - tKey(a) || colKey(b[0], b[1]) - colKey(a[0], a[1]))[0]!;
+    let once = true;
+    const { w, c } = make({ rd: 12, failOf: (j) => (once && j.stage === 'T' && j.cx === xx && j.cz === xz ? (once = false, new StoreFullError('STORE_FULL: blocks full')) : null) });
+    await fill(w, c, cam(0, 0));
+    expect(w.fake.events).toEqual([{ kind: 'storeFull', lowerRd: 10 }]);
+    const n = read(c);
+    expect([n.storeFull, n.rd]).toEqual([1, 12]);
+    // T jobs already in flight finish; none is issued after the StoreFull reply.
+    expect(w.fake.issued.slice(w.fake.eventIssued[0]).some((j) => j.stage === 'T')).toBe(false);
+    const tBefore = perStage(w.fake.issued).T;
+    expect(read(c).T.done).toBe(824);
+    for (let i = 0; i < 3; i++) await fill(w, c, cam(0, 0));
+    expect(perStage(w.fake.issued).T).toBe(tBefore);
+    expect(issuedOf(w, 'T', xx, xz)).toBe(1);
+    expect(w.fake.frees).toEqual([]);
+    // Three columns east the far west columns leave keepVoxels: the first free resumes T.
+    c.update(cam(3, 0));
+    expect(w.fake.frees.length).toBeGreaterThan(0);
+    await settleAll(w);
+    expect(perStage(w.fake.issued).T).toBeGreaterThan(tBefore);
+    expect(issuedOf(w, 'T', xx, xz)).toBe(2);
+    for (let i = 0; i < 20 && !c.firstFill(); i++) await fill(w, c, cam(3, 0));
+    expect(c.firstFill()).toBe(true);
+    expect(w.fake.events.length).toBe(1);
+    expect(read(c).storeFull).toBe(1);
+    expect(read(c).rd).toBe(12);
+    expect(w.fake.violations).toEqual([]);
+  });
+
+  test('caps follow liveWorkers: 4 → 3 sets genCap\'s max to 2; 2 → 1 keeps generating with genCap 1 and at most one job in flight; 0 emits fatal; the job rejected with WorkerFailed is requeued with no retry counted', async () => {
+    const a = make({ rd: 4, workers: 4 });
+    a.c.update(cam(0, 0));
+    await flush();
+    expect([a.w.throttle.max, read(a.c).genCap]).toEqual([3, 3]);
+    a.w.fake.live = 3;
+    a.w.settle();
+    await flush();
+    expect([a.w.throttle.max, read(a.c).genCap]).toEqual([2, 2]);
+    await settleAll(a.w);
+    expect(a.w.fake.violations).toEqual([]);
+    expect(a.c.firstFill()).toBe(true);
+
+    const b = make({ rd: 4, workers: 2 });
+    b.c.update(cam(0, 0));
+    await flush();
+    for (let i = 0; i < 20; i++) { b.w.settle(); await flush(); }
+    b.w.fake.live = 1;
+    b.w.settle();
+    await flush();
+    expect(read(b.c).genCap).toBe(1);
+    let most = 0;
+    while (b.w.fake.pending.length > 0) {
+      b.w.settle();
+      await flush();
+      most = Math.max(most, b.w.fake.pending.length);
+    }
+    expect(most).toBe(1);
+    expect(b.c.firstFill()).toBe(true);
+    expect(b.w.fake.violations).toEqual([]);
+    expect(b.w.fake.events).toEqual([]);
+
+    const z = make({ rd: 4, workers: 2 });
+    z.c.update(cam(0, 0));
+    await flush();
+    z.w.fake.live = 0;
+    z.w.settle();
+    await flush();
+    expect(z.w.fake.events).toEqual([{ kind: 'fatal', message: 'no live worker is left', cause: null }]);
+
+    // WorkerFailed, then INTERNAL, then success: the WorkerFailed counted no retry, so the INTERNAL still requeues.
+    let k = 0;
+    const errs = [new WorkerFailed('worker 2 failed'), new Error('INTERNAL: boom')];
+    const r = make({ rd: 4, failOf: (j) => (j.stage === 'D' && j.cx === 0 && j.cz === 0 && k < 2 ? errs[k++]! : null) });
+    await fill(r.w, r.c, cam(0, 0));
+    expect(issuedOf(r.w, 'D', 0, 0)).toBe(3);
+    expect(r.w.fake.events).toEqual([]);
+    expect(read(r.c).failed).toBe(0);
+    expect(r.c.firstFill()).toBe(true);
+  });
+
+  test('StoreCorruptError emits fatal (and StoreCorrupt from a free)', async () => {
+    const corrupt = new StoreCorruptError('STORE_CORRUPT: the lock owner failed');
+    const { w, c } = make({ rd: 4, failOf: (j) => (j.stage === 'L' && j.cx === 0 && j.cz === 0 ? corrupt : null) });
+    await fill(w, c, cam(0, 0));
+    expect(w.fake.events).toEqual([{ kind: 'fatal', message: 'L at (0, 0) failed: STORE_CORRUPT: the lock owner failed', cause: corrupt }]);
+    expect(issuedOf(w, 'L', 0, 0)).toBe(1);
+    const dead = new StoreCorrupt('the pool lock is held by thread 2, which failed');
+    const f = make({ rd: 4 });
+    await fill(f.w, f.c, cam(0, 0));
+    f.w.fake.freeThrows = dead;
+    f.c.update(cam(30, 0));
+    expect(f.w.fake.events).toEqual([{ kind: 'fatal', message: expect.stringMatching(/^unload failed: /), cause: dead }]);
+  });
+});
+
+describe('createCoordinator: proto retention (SP4b spec §3.7, D11)', () => {
+  test('proto retention on: a Decorated column outside the proto ring with no D needing it has its proto freed; a D that needs it issues T(protoOnly) first; a status-1 column outside the ring keeps its proto and is decorated when it re-enters the D set', async () => {
+    const { w, c } = make({ rd: 6, retainAllProtos: false });
+    const d = deltas(w);
+    let most = 0;
+    const settle = async (at: StreamCamera, n: number) => {
+      for (let i = 0; i < n; i++) {
+        c.update(at);
+        most = Math.max(most, d().protoFrees);
+        await settleAll(w);
+      }
+    };
+    await settle(cam(0, 0), 30);
+    expect(c.firstFill()).toBe(true);
+    // After the fill, the L set's protos go (outside the ring, every D-set neighbour decorated); the ring keeps the rest.
+    const L6 = new Set(stageOffsets(6).L.map(([x, z]) => colKey(x, z)));
+    expect(new Set(w.fake.protoFrees.map(([x, z]) => colKey(x, z)))).toEqual(L6);
+    expect(w.fake.protoFrees.length).toBe(L6.size);
+    expect(most).toBe(PROTO_FREES_PER_FRAME);
+    // RD 4: (8, 0) is Decorated, outside RD 4's ring (the T set minus the L set) with no D-set neighbour: freed.
+    // (9, 0) is at Proto (status 1): it keeps its proto though outside the ring.
+    c.setRenderDistance(4);
+    await settle(cam(0, 0), 30);
+    expect(has(w.fake.protoFrees, 8, 0)).toBe(true);
+    expect(has(w.fake.protoFrees, 9, 0)).toBe(false);
+    expect(w.fake.records.get(slotOf(9, 0))).toMatchObject({ cx: 9, cz: 0, status: 1, alive: true });
+    // RD 7: (9, 0) enters the D set; its 3 × 3 holds (8, −1), (8, 0), (8, 1) Decorated without a proto.
+    const mark = w.fake.issued.length;
+    c.setRenderDistance(7);
+    await settle(cam(0, 0), 30);
+    expect(c.firstFill()).toBe(true);
+    const at = (st: Stage, x: number, z: number) => w.fake.issued.findIndex((j, i) => i >= mark && j.stage === st && j.cx === x && j.cz === z);
+    const dAt = at('D', 9, 0);
+    expect(dAt).toBeGreaterThan(0);
+    for (const z of [-1, 0, 1]) {
+      const t = at('T', 8, z);
+      expect(t, `T(protoOnly) at (8, ${z})`).toBeGreaterThan(0);
+      expect(w.fake.protoOnly).toContain(t);
+      expect(t).toBeLessThan(dAt);
+    }
+    expect(w.fake.protoOnly.length).toBeGreaterThan(0);
+    expect(w.fake.violations).toEqual([]);
+    expect(w.fake.events).toEqual([]);
+  });
+
+  test('retainAllProtos frees no proto and runs no T(protoOnly)', async () => {
+    const { w, c } = make({ rd: 6 });
+    await fill(w, c, cam(0, 0));
+    c.setRenderDistance(4);
+    for (let i = 0; i < 20; i++) await fill(w, c, cam(0, 0));
+    c.setRenderDistance(7);
+    for (let i = 0; i < 20; i++) await fill(w, c, cam(0, 0));
+    expect(c.firstFill()).toBe(true);
+    expect(w.fake.protoFrees).toEqual([]);
+    expect(w.fake.protoOnly).toEqual([]);
+    expect(w.fake.violations).toEqual([]);
   });
 });
 

@@ -8,19 +8,17 @@
  * makes every rendered frame 33.3 ms apart, which says nothing about the GPU, while a frame too slow for the display
  * still delays the next rAF (`createFrameClock`).
  */
-import { RD_MIN } from '../../engine/renderDistance';
+import { lowerRd } from '../../engine/renderDistance';
 import type { FpsLimiter } from '../../render/fpsLimiter';
 import { medianInterval, percentile, snapFrameTime } from '../../render/frameTiming';
+
+/** The next lower RD (ruling P49); it lives in `engine/renderDistance.ts`, where the coordinator also reads it (SP4b). */
+export { lowerRd };
 
 /** The frames after the reveal that are judged (spec §8.5). */
 export const NOTICE_FRAMES = 300;
 /** The p95 above which the notice suggests a lower RD, ms (spec §8.5). */
 export const NOTICE_P95_MS = 25;
-
-/** The next lower render distance: max(RD_MIN, rd − 2) when rd > RD_MIN, else null (ruling P49). */
-export function lowerRd(rd: number): number | null {
-  return rd > RD_MIN ? Math.max(RD_MIN, rd - 2) : null;
-}
 
 /**
  * Collects the first 300 frame times pushed; at the 300th, snaps each to the display interval (the median of those
