@@ -25,6 +25,11 @@
  *   (a compare-exchange from 0: a second log is `twoHolders`). A finder reads g0 before `find` and g3 after; when
  *   `find` returns the base it waits (bounded) for every odd g in [g0, g3] to be logged and counts a stale find when
  *   none holds the queried column. A correct `find` linearises at an odd g1 = g2 inside the window;
+ * - find's window, widened: a torn read needs a whole unclaim + claim of the record between find's cx and cz loads,
+ *   which nothing preempts a finder for. So half the finds run with the worker's `Atomics.load` wrapped (`find` calls
+ *   the global at call time): on find's cz load of the record it spins (bounded, `WIDEN_SPINS`) until the record's
+ *   generation shows another claim, then makes the real load (`widenedFind`, and `reclaimedInFind` when the claim
+ *   came). Without find's g1 = g2 re-read (spec §2.2) a claim of an aliasing column there is a `staleFinds`;
  * - `versionsDecreased`: per thread and record, the largest blockVersion, lightVersion and generation seen; any lower
  *   reading counts (versions are monotone over a record's life, spec §2.3).
  *
@@ -41,7 +46,7 @@
  * dwell on lookups, then check every canary before `exitRead`: a changed one is `reusedUnderReader`.
  */
 import { Xoshiro128 } from '../../src/core/rng';
-import { protoAt, recordBase, REC_CLAIMED, REC_CX, REC_CZ, RECORD_COUNT, RECORD_INTS, SECTIONS } from '../../src/world/store/columnTable';
+import { protoAt, recordBase, REC_CLAIMED, REC_CX, REC_CZ, REC_GEN, RECORD_COUNT, RECORD_INTS, SECTIONS } from '../../src/world/store/columnTable';
 import type { SlabPool } from '../../src/world/store/pool';
 import { PROTO_BLOCKS, PROTO_FLUID, SECTION_VOXELS } from '../../src/world/store/section';
 import { attachStore, SlotBusy, WriterStale, type ColumnWriter, type StoreHandles, type VoxelStore } from '../../src/world/store/store';
@@ -52,6 +57,7 @@ export type TableFuzzPhase = 'races' | 'handoff' | 'reclaim';
 export const TABLE_FUZZ_COUNTS = [
   // races
   'claim', 'busy', 'write', 'free', 'abandon', 'takeover', 'sameColumnReclaim', 'staleProbe', 'abaProbe', 'find', 'found',
+  'widenedFind', 'reclaimedInFind',
   // handoff
   'rawSend', 'rawReceive', 'columnSend', 'columnReceive', 'freeInRead',
   // reclaim
@@ -59,7 +65,7 @@ export const TABLE_FUZZ_COUNTS = [
 ] as const;
 export type TableFuzzCount = (typeof TABLE_FUZZ_COUNTS)[number];
 /** Outcomes of a race rather than choices of the thread: asserted over all threads. */
-export const RARE_COUNTS: readonly TableFuzzCount[] = ['sameColumnReclaim', 'abaProbe'];
+export const RARE_COUNTS: readonly TableFuzzCount[] = ['sameColumnReclaim', 'abaProbe', 'reclaimedInFind'];
 
 export interface TableFuzzStats {
   ops: number;
@@ -144,6 +150,8 @@ export const STOPPED = 'table fuzz: stopped, another thread failed';
 const ROUND_OPS = 250;
 /** A bounded wait gives up after this long (ms). */
 const WAIT_MS = 5000;
+/** A widened find's spins (generation loads) at its cz load, at most, waiting for another claim of the record. */
+const WIDEN_SPINS = 100_000;
 
 /** One int for a column (never 0): the fuzz's coordinates stay within ±1024. */
 export function packColumn(cx: number, cz: number): number {
@@ -284,6 +292,29 @@ function createFuzzer(m: AttachMsg) {
   const seenGen = new Int32Array(RACE_RECORDS);
   const seenBlock = new Int32Array(RACE_RECORDS);
   const seenLight = new Int32Array(RACE_RECORDS);
+
+  // Find's window, widened (header): `Atomics.load` wrapped once per worker; it acts only on the cz load of the record
+  // `widenBase` names, which `findRace` sets around half its `find` calls (−1 otherwise: every other load passes through).
+  const atomics = Atomics as unknown as { load: (a: Int32Array, i: number) => number };
+  const realLoad = atomics.load;
+  let widenBase = -1;
+  atomics.load = (a, i) => {
+    if (widenBase >= 0 && i === widenBase + REC_CZ && a === ints) {
+      widenBase = -1;
+      st.counts.widenedFind++;
+      const gen = i - REC_CZ + REC_GEN;
+      const g = realLoad(ints, gen);
+      // Odd g: held, so wait for the next claim (g + 2); even g: an unclaim under way, so wait for its claim (g + 1).
+      const target = (g & 1) === 1 ? g + 2 : g + 1;
+      for (let k = 0; k < WIDEN_SPINS; k++) {
+        if (realLoad(ints, gen) >= target) {
+          st.counts.reclaimedInFind++;
+          break;
+        }
+      }
+    }
+    return realLoad(a, i);
+  };
 
   /** Records this thread's readings of the record's generation and versions; a lower one than before counts. */
   function observe(r: number, base: number): void {
@@ -441,7 +472,9 @@ function createFuzzer(m: AttachMsg) {
     const { cx, cz } = raceColumn(r, rng.nextInt(VARIANTS));
     const base = recordBase(cx, cz);
     const g0 = table.generation(base);
+    if (rng.nextInt(2) === 0) widenBase = base;
     const b = table.find(cx, cz);
+    widenBase = -1;
     const g3 = table.generation(base);
     if (g3 < g0) st.versionsDecreased++;
     observe(r, base);

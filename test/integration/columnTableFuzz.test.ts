@@ -17,7 +17,8 @@ import {
  * `SLAB_FUZZ_SEED`. Each phase ends with a settle (every thread frees what it holds, drains its limbo), then this
  * thread checks the whole store while every worker is idle: every record free, every slot free, no limbo, no reader.
  * - races: claim / unclaim / find on 64 shared records, takeovers of abandoned writers (`twoHolders`, `staleFinds`,
- *   `versionsDecreased`, `missedStale`, `spuriousStale`);
+ *   `versionsDecreased`, `missedStale`, `spuriousStale`); half the finds wait between their cx and cz loads for another
+ *   claim of the record (the worker's header), so a `find` without its generation re-read gives `staleFinds` > 0;
  * - handoff: slots and columns made on one thread, freed on another (`doubleAllocs`, `negativeRefcounts`);
  * - reclaim: canaries stamped in slots inside read sections while writers retire and reuse slots (`reusedUnderReader`).
  */

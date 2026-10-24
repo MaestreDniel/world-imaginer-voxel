@@ -180,6 +180,38 @@ describe.each([true, false])('shared %s', (shared) => {
     expect(t.find(3, 4)).toBe(-1);
   });
 
+  test('find re-reads the generation: a record freed and claimed by an aliasing column between its cx and cz reads is not returned (SP4b spec §2.2)', () => {
+    const t = createColumnTable(shared);
+    const base = t.claim(3, 69, 0);
+    // Warm find first, so its optimised code takes the interposed call too.
+    for (let i = 0; i < 20_000; i++) expect(t.find(3, 5)).toBe(-1);
+    // The interleaving a single thread cannot make on its own: `find` calls the global `Atomics.load` at call time, so
+    // a wrapper runs another thread's unclaim and claim of (67, 5) just before find's cz read. Each read then matches
+    // (3, 5): cx 3 from (3, 69), cz 5 from (67, 5). Only the generation's re-read (g1 1, g2 3) refuses the torn match.
+    const atomics = Atomics as unknown as { load: (a: Int32Array, i: number) => number };
+    const load = atomics.load;
+    let interposed = 0;
+    atomics.load = (a, i) => {
+      if (a === t.ints && i === base + REC_CZ && interposed === 0) {
+        interposed++;
+        t.unclaim(base);
+        expect(t.claim(67, 5, 1)).toBe(base);
+      }
+      return load(a, i);
+    };
+    let found: number;
+    try {
+      found = t.find(3, 5);
+    } finally {
+      atomics.load = load;
+    }
+    expect(interposed).toBe(1);
+    expect(t.generation(base)).toBe(3);
+    expect(found).toBe(-1);
+    expect(t.find(3, 5)).toBe(-1);
+    expect(t.find(67, 5)).toBe(base);
+  });
+
   test('versions never decrease across claims: claim (0, 0), bump block and light, unclaim, claim (64, 0) on the same record → blockVersion 1, lightVersion 1', () => {
     const t = createColumnTable(shared);
     const base = t.claim(0, 0, 0);
