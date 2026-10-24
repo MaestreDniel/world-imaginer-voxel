@@ -292,7 +292,7 @@ The single-writer-by-status rule (master §4.1) with the coordinator's pins (§3
 
 ### 3.8 The adaptive throttle (`engine/throttle.ts`, D29)
 
-`createThrottle({ max: max(1, N − 1) })` keeps `genCap` ∈ [1, max(1, N − 1)], starting at the maximum; `setMax(n)` re-clamps it, and the coordinator calls it whenever `liveWorkers()` changes (at N = 2 → 1 after a `WorkerFailed`, generation goes on with one job): fed each frame's snapped frame time, whether generation (T, D, L) is in flight and the display interval (`push(frameMs, generating, intervalMs)`); when the p95 of the last 60 frames exceeds max(16.7 ms, the display interval + 0.5 ms) while generation is in flight, `genCap` drops by 1 and the window restarts; after 120 consecutive frames under max(13 ms, the display interval + 0.5 ms) it rises by 1 (master §4.3). The thresholds follow the display (the user's decision of 2026-10-24, amended while planning): a display below 60 Hz does not read as permanently slow, a 60 Hz display can raise the cap again after a drop, and at 144-240 Hz they are 16.7 and 13 ms. The coordinator's caps: T + D + L in flight ≤ `genCap`, T ≤ max(1, N − 1), MESH ≤ N, total ≤ N, N = `liveWorkers()`. A ring buffer of 120 values and a 60-value scratch for the percentile, preallocated; the HUD and the bench JSON show `genCap`.
+`createThrottle({ max: max(1, N − 1) })` keeps `genCap` ∈ [1, max(1, N − 1)], starting at the maximum; `setMax(n)` re-clamps it, and the coordinator calls it whenever `liveWorkers()` changes (at N = 2 → 1 after a `WorkerFailed`, generation goes on with one job): fed every rAF tick's raw delta snapped to the display interval (the page's frame step feeds it before the FPS limiter, so a cap never reads as slow frames and never starves generation; amended while planning), whether generation (T, D, L) is in flight and the display interval (`push(frameMs, generating, intervalMs)`; a non-finite interval reads as 0); when the p95 of the last 60 frames exceeds max(16.7 ms, the display interval + 0.5 ms) while generation is in flight, `genCap` drops by 1 and the window restarts; after 120 consecutive frames under max(13 ms, the display interval + 0.5 ms) it rises by 1 (master §4.3). The thresholds follow the display (the user's decision of 2026-10-24, amended while planning): a display below 60 Hz does not read as permanently slow, a 60 Hz display can raise the cap again after a drop, and at 144-240 Hz they are 16.7 and 13 ms. The coordinator's caps: T + D + L in flight ≤ `genCap`, T ≤ max(1, N − 1), MESH ≤ N, total ≤ N, N = `liveWorkers()`. A ring buffer of 120 values and a 60-value scratch for the percentile, preallocated; the HUD and the bench JSON show `genCap`.
 
 ### 3.9 The upload budget and the per-column reveal (D13)
 
@@ -443,11 +443,11 @@ SP4a §8.4's steps, with the coordinator of §3.11: the start screen on a bare `
 ### 7.2 The streaming frame
 
 After the reveal, each frame, in this order, within master §7's main-thread budget (≈ 6 ms):
-1. input and `stepFly` (≈ 0.3 ms);
+1. the throttle fed this tick's raw rAF delta snapped to the display interval, with whether generation was in flight at the previous tick (§3.8; before the FPS limiter, so a cap of 30 is read neither as slow frames nor as a reason to throttle generation; amended while planning), then input and `stepFly` (≈ 0.3 ms);
 2. `coordinator.update(camera)` (≈ 0.2 ms, ≤ 1 ms on a crossing): re-centring, unloads (≤ 16 frees, ≤ 64 columns marked for mesh removal, hidden at once), issuing jobs within the caps;
 3. results are taken in as their replies arrive (the pool's message callbacks, between frames): the version and seq checks into the scratch, then `sink.stage` (O(1): the payload is kept, nothing is uploaded there);
 4. `sections.pump(budget, camera)`: releases removed rows and uploads new ones, ≤ 2 ms and ≤ 32 rows together, one structural operation at most, reveals complete columns; regions written this frame are drawn unculled (§3.9);
-5. the floating origin (`setOrigin` on a rebase, O(regions)); the store's deferred-reclamation drain (§2.5); the throttle fed the previous frame's time;
+5. the floating origin (`setOrigin` on a rebase, O(regions)); the store's deferred-reclamation drain (§2.5);
 6. the eye's sky light (`store.lightAt` in one read section), the time, the materials, `sortTranslucent`, `render`.
 The FPS limiter (SP4a §6.8) skips steps 4-6 on frames it does not render; steps 1-2 run every rAF so the motion stays smooth.
 

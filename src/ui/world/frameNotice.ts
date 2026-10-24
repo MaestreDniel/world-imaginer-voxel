@@ -49,6 +49,8 @@ export interface FrameClock {
    * the previous rendered frame when this tick renders, else null.
    */
   tick(now: number): number | null;
+  /** The last tick's timestamp (`start` before the first): the frame step's raw delta is `now − lastTick()`. */
+  lastTick(): number;
 }
 
 /**
@@ -68,5 +70,6 @@ export function createFrameClock(limiter: FpsLimiter, notice: { push(frameMs: nu
       lastRendered = now;
       return dt;
     },
+    lastTick() { return lastTick; },
   };
 }

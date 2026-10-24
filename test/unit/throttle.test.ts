@@ -117,4 +117,19 @@ describe('createThrottle (SP4b spec §3.8, D29, master §4.3)', () => {
     feed(f, 120, 12.99);
     expect(f.cap()).toBe(3);
   });
+
+  test('a non-finite interval reads as 0: the thresholds are 16.7 and 13 ms (rulings R5 (a))', () => {
+    for (const bad of [Number.NaN, Number.POSITIVE_INFINITY, Number.NEGATIVE_INFINITY]) {
+      // Slow: 60 frames of 17 ms with generation in flight drop the cap.
+      const s = createThrottle({ max: 3 });
+      feed(s, 60, 17, true, bad);
+      expect(s.cap(), `slow at interval ${bad}`).toBe(2);
+      // Fast: 120 frames of 12.99 ms raise it again, 120 of 13 ms do not.
+      const f = droppedTo2();
+      feed(f, 120, 13, true, bad);
+      expect(f.cap(), `13 ms at interval ${bad}`).toBe(2);
+      feed(f, 120, 12.99, true, bad);
+      expect(f.cap(), `12.99 ms at interval ${bad}`).toBe(3);
+    }
+  });
 });

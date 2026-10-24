@@ -158,4 +158,31 @@ describe('the world notices (SP4a spec §7.5, §8.5; Review Focus 5)', () => {
     dom.el('world-slow-link').click();
     expect(navigate).toHaveBeenCalledWith('/?at=50,2&y=70&yaw=90.0&pitch=0.0&rd=10#abc');
   });
+
+  test('notices.failed is shown once, its Reload link goes through the reloader, and Copy details is present', () => {
+    const writeText = vi.fn<(text: string) => Promise<void>>(() => Promise.resolve());
+    vi.stubGlobal('navigator', { clipboard: { writeText } });
+    const { navigate, disarm, notices } = setup();
+    notices.failed('A worker failed: worker 1 of 4 failed: out of memory', 'cause: WorkerFailed …\nseed 42', '/?at=10,-3&y=80&yaw=45.0&pitch=-10.0#abc');
+    const panel = dom.el('world-failed');
+    expect(panel.textContent).toContain('The world stopped');
+    expect(dom.el('world-failed-cause').textContent).toBe('A worker failed: worker 1 of 4 failed: out of memory');
+    const copy = dom.el('world-failed-copy');
+    expect(copy.textContent).toBe('Copy details');
+    copy.click();
+    expect(writeText).toHaveBeenCalledWith('cause: WorkerFailed …\nseed 42');
+    // Shown once: a second failure (the loop's catch after the coordinator's fatal) adds nothing.
+    notices.failed('The frame loop stopped: boom', 'x', '/?at=0,0');
+    expect(dom.body.querySelectorAll('div').filter((d: FakeElement) => d.id === 'world-failed')).toHaveLength(1);
+    expect(dom.el('world-failed-cause').textContent).toContain('A worker failed');
+    const link = dom.el('world-failed-reload');
+    expect(link.tagName).toBe('A');
+    expect(link.textContent).toBe('Reload');
+    expect(link.href).toBe('/?at=10,-3&y=80&yaw=45.0&pitch=-10.0#abc');
+    const click = new Event('click', { cancelable: true });
+    link.dispatchEvent(click);
+    expect(click.defaultPrevented).toBe(true);
+    expect(disarm).toHaveBeenCalledTimes(1);
+    expect(navigate).toHaveBeenCalledWith('/?at=10,-3&y=80&yaw=45.0&pitch=-10.0#abc');
+  });
 });

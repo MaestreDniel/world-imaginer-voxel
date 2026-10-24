@@ -818,6 +818,12 @@ describe('master spec amendments (SP4b §13)', () => {
     expect(text).not.toContain('R (load the world around you');
   });
 
+  test('§5.8\'s HUD counts gain the streaming counts (SP4b spec §7.3, §13)', () => {
+    const at = text.indexOf('### 5.8 Debug HUD and bench');
+    const s58 = text.slice(at, text.indexOf('### 5.9 ', at));
+    expect(s58).toContain('SP4b: the streaming counts');
+  });
+
   test('§1 names each SP4b module in its entry, which exists', () => {
     for (const [head, token, file] of SP4B_MODULES) {
       const entry = layoutEntry(head);

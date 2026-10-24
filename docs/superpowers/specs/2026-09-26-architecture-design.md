@@ -1363,7 +1363,7 @@ Target: edit → visible ≤ 50 ms p95, measured in the HUD.
 - column-status histogram, slab usage, SAB and heap MB;
 - sim TPS and tick ms, edit latency p95, throttle level.
 
-**HUD counts: SP4a** (F3 toggles them; SP10's overlay replaces them): the fps line, columns T/D/L/meshed, section meshes uploaded, draw calls and triangles, position and column, speed, clock and time speed, RD, workers, the section renderer in use and the renderer string (SP4a spec §6.9).
+**HUD counts: SP4a** (F3 toggles them; SP10's overlay replaces them): the fps line, columns T/D/L/meshed, section meshes uploaded, draw calls and triangles, position and column, speed, clock and time speed, RD, workers, the section renderer in use and the renderer string (SP4a spec §6.9); SP4b: the streaming counts (per stage done / needed, in flight and queued; revealed columns, `genCap`, dropped and failed columns, the target and the fog's RD, live workers, regions and the GPU estimate; SP4b spec §7.3).
 
 **Toggles:** chunk / section / region borders, wireframe per pass, freeze culling, light false colour, LOD tint.
 

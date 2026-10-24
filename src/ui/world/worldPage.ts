@@ -17,17 +17,27 @@
  *    the centre, its sink stages each payload into the section renderer, and the loop pumps the uploads under a 12 ms
  *    budget with no row or structural cap and feeds the loading screen's progress from the coordinator's counts and
  *    the columns uploaded.
- * 5. When every column is meshed (`firstFill`) and every staged column uploaded: `compile()`, the camera placed with `firstView`
- *    from the store's `MOTION_BLOCKING`, three frames rendered behind the opaque overlay (`warmUp`: every region
- *    drawn unculled, so the sections' buffers reach the GPU while still hidden), then `revealAll()` and the reveal
- *    frame, the overlay faded out over 300 ms, and "Click to fly" until the pointer locks. Nothing of the world is visible before that frame.
+ * 5. When every column is meshed (`firstFill`) and every staged column uploaded: `compile()`, the camera placed with
+ *    `firstView` from the store's `MOTION_BLOCKING` (`heightAt`), three frames rendered behind the opaque overlay
+ *    (`warmUp`: every region drawn unculled, so the sections' buffers reach the GPU while still hidden), then
+ *    `revealAll()` and the reveal frame, the overlay faded out over 300 ms, and "Click to fly" until the pointer locks.
+ *    Nothing of the world is visible before that frame.
  *
- * The frame loop: the FPS limiter, the fly controller (horizontal flight with no horizontal limit, SP4b spec §6.1), the floating origin, the clock
- * (T cycles the time speed), `FrameState` (its `eyeSky` read from the page's attached store), the HUD (F3) and the help
- * (H, F1). Load errors (the coordinator's `fatal` event, whose message and cause the panel reads, a `StoreFullError`
- * cause keeping the store-full text; `WorkerFailed`; the watchdog) show the failure panel, with a link to the next lower
- * RD when rd > 4 (P49). `WorldPage.loadStats` holds the load's figures for the flight JSON (§9.5);
- * with `opts.flight` (the `?flight=sp4a` route, `flight.ts`) the flight drives the camera and the clock after the reveal.
+ * At the reveal the coordinator leaves strict mode (D12) and the same coordinator streams. The frame loop is the
+ * frame step (`frameStep.ts`, SP4b spec §7.2): every rAF the throttle (fed the raw delta before the FPS limiter), the
+ * fly controller (horizontal flight with no horizontal limit, §6.1) and `coordinator.update`; on rendered frames the
+ * uploads under the 2 ms / 32-row budget, the floating origin, the store's reclamation drain, the eye's sky light, the
+ * clock (T cycles the time speed) and the render. The HUD (F3, the streaming counts of §7.3) and the help (H, F1).
+ * Load errors (the coordinator's `fatal` event, whose message and cause the panel reads, a `StoreFullError` cause
+ * keeping the store-full text; `WorkerFailed`; the watchdog) show the failure panel, with a link to the next lower RD
+ * when rd > 4 (P49). `WorldPage.loadStats` holds the load's figures for the flight JSON (§9.5); with `opts.flight`
+ * (the `?flight=sp4a` route, `flight.ts`) the flight drives the camera and the clock after the reveal, and nothing
+ * calls `update` (SP4a's static route).
+ *
+ * Errors after the reveal (SP4b spec §3.6, §7.4, D12) degrade: a skipped column shows a dismissible notice with "Copy
+ * details", StoreFull a notice offering "Lower to RD n" (never applied on its own); a fatal event (no live worker,
+ * `StoreCorrupt`, more than 32 failed columns), the pool's last worker failing and an exception escaping the frame
+ * step stop the loop and show the notices' failure panel with "Copy details" and a Reload link.
  *
  * After the reveal (spec §7.1, §7.5, §8.2, §8.5; rulings P49, P50): the Ctrl+W guard (`beforeunload`) is armed; every
  * navigation the page starts (the RD setting, the slow-frame link, the context-loss Reload, "Open the map here")
@@ -35,23 +45,24 @@
  * next lower RD in a dismissible notice; `webglcontextlost` stops the frame loop and offers a Reload around the camera
  * (`hereUrl`). SP4a's edge clamp, its notice and R are gone (SP4b spec §6.2, D20).
  */
-import { colKey } from '../../core/coords';
 import { MEDIUM } from '../../core/params/graphicsPresets';
-import { OPENING_T, TIME_SPEEDS, advanceTime } from '../../daynight/dayNight';
+import { OPENING_T, TIME_SPEEDS } from '../../daynight/dayNight';
 import { probeCapabilities } from '../../engine/capabilities';
 import { evaluateWorldCapabilities, type CapabilityReport } from '../../engine/capabilityRules';
-import { createCoordinator, createCoordinatorCounts, phaseName, progressFraction, worldJobsOf } from '../../engine/coordinator';
+import {
+  createCoordinator, createCoordinatorCounts, phaseName, progressFraction, worldJobsOf, type StreamEvent,
+} from '../../engine/coordinator';
 import { RD_MAX, reservationRdCap, resolveRenderDistance } from '../../engine/renderDistance';
-import { stageOffsets, type Stage } from '../../engine/rings';
+import type { Stage } from '../../engine/rings';
 import { createThrottle } from '../../engine/throttle';
 import { createUploadBudget } from '../../engine/uploadBudget';
 import { StoreFullError, WorkerFailed, createBrowserPool, poolSize, type WorkerPool } from '../../engine/workerPool';
-import { SPEED_DEFAULT, applyCameraRotation, look, stepFly, stepSpeed, type FlyBounds, type FlyState } from '../../player/fly';
+import { SPEED_DEFAULT, applyCameraRotation, look, stepSpeed, type FlyState } from '../../player/fly';
 import { attachInput, isTextEntry } from '../../player/input';
 import { DEFAULT_KEYMAP, type Action } from '../../player/keymap';
 import { createFpsLimiter, type FpsLimiter } from '../../render/fpsLimiter';
 import type { FrameState } from '../../render/frameState';
-import { createWorldRenderer, type WorldRenderer } from '../../render/renderer';
+import { createWorldRenderer, type GpuEstimate, type WorldRenderer } from '../../render/renderer';
 import { createSectionRendererCounts, selectSectionRenderer, type SectionRendererKind } from '../../render/sectionRenderer';
 import { createStore, type VoxelStore } from '../../world/store/store';
 import { renderErrorScreen } from '../capabilityReport';
@@ -67,6 +78,7 @@ import { SETTINGS_DEFAULTS, loadSettings, saveSettings, type WorldSettings } fro
 import { firstView } from './firstView';
 import type { FlightContext } from './flight';
 import { createFrameClock, createFrameNotice, lowerRd } from './frameNotice';
+import { createFrameStep, eyeSkyLight } from './frameStep';
 import { createReloader, hereUrl, installLeaveGuard, navigateTo, type Reloader } from './reload';
 import { Y_MAX, Y_MIN, type WorldQuery } from './query';
 
@@ -136,8 +148,6 @@ const WARM_UP_FRAMES = 3;
 const FIRST_FRAMES = 120;
 /** Mouse look at sensitivity ×1, in degrees per pixel of movement; the setting multiplies it (spec §7.1, §7.4). */
 const LOOK_DEG_PER_PIXEL = 0.15;
-/** The longest step the fly controller takes in one frame, s: a tab back from the background does not jump. */
-const MAX_STEP_S = 0.25;
 const STAGES: readonly Stage[] = ['T', 'D', 'L', 'MESH'];
 
 const errorText = (e: unknown): string => (e instanceof Error ? e.message : String(e));
@@ -159,40 +169,39 @@ function storageOrNull(): Storage | null {
 function causeOf(e: unknown, message: string | null = null): string {
   if (e instanceof StoreFullError) return 'The world store is full: a lower render distance needs less of it.';
   if (e instanceof WorkerFailed) return `A worker failed: ${e.message}`;
-  if (message !== null) return `A column job failed: ${message}`;
+  if (message !== null) return `Streaming stopped: ${message}`;
   return `The world could not load: ${errorText(e)}`;
 }
 
-/** The voxel's sky light 0-15 from the store's final set (spec §6.6): 15 above y 319 or outside the loaded disc. */
-function skyLightAt(store: VoxelStore, disc: ReadonlySet<number>, x: number, y: number, z: number): number {
-  const by = Math.floor(y);
-  if (by > 319) return 15;
-  if (by < -64) return 0;
-  const bx = Math.floor(x);
-  const bz = Math.floor(z);
-  const cx = bx >> 4;
-  const cz = bz >> 4;
-  if (!disc.has(colKey(cx, cz))) return 15;
-  const col = store.final(cx, cz);
-  return col === null ? 15 : col.light(bx & 15, by, bz & 15) >> 4;
+/**
+ * The eye's sky light 0-15 (spec §6.6) inside one read section of the store (SP4b spec §2.4, §2.5): 15 above y 319 and
+ * over a column that is not Published (streaming has no disc: a column outside the loaded set reads as open sky), 0
+ * below −64. The frame step reads it the same way (`eyeSkyLight`).
+ */
+function skyLightAt(store: VoxelStore, x: number, y: number, z: number): number {
+  store.enterRead();
+  try {
+    return eyeSkyLight(store, x, y, z);
+  } finally {
+    store.exitRead();
+  }
 }
 
-/** `MOTION_BLOCKING` at block (x, z) from the store's final set; +∞ for a column without one (never the lowest). */
+/**
+ * `MOTION_BLOCKING` at block (x, z) through `store.heightAt` (no view, SP4b spec §2.4); +∞ for a column that is not
+ * Published (never the lowest).
+ */
 function motionBlockingAt(store: VoxelStore, x: number, z: number): number {
-  const bx = Math.floor(x);
-  const bz = Math.floor(z);
-  const aux = store.final(bx >> 4, bz >> 4)?.aux() ?? null;
-  return aux === null ? Number.POSITIVE_INFINITY : aux.motionBlocking[((bz & 15) << 4) | (bx & 15)]!;
+  return store.heightAt('motionBlocking', Math.floor(x), Math.floor(z)) ?? Number.POSITIVE_INFINITY;
 }
 
 /** Whether block (x, z) holds water at its top: `MOTION_BLOCKING` (which counts fluid) above `OCEAN_FLOOR` (which does not). */
 function hasWaterAt(store: VoxelStore, x: number, z: number): boolean {
   const bx = Math.floor(x);
   const bz = Math.floor(z);
-  const aux = store.final(bx >> 4, bz >> 4)?.aux() ?? null;
-  if (aux === null) return false;
-  const p = ((bz & 15) << 4) | (bx & 15);
-  return aux.motionBlocking[p]! > aux.oceanFloor[p]!;
+  const top = store.heightAt('motionBlocking', bx, bz);
+  const floor = store.heightAt('oceanFloor', bx, bz);
+  return top !== null && floor !== null && top > floor;
 }
 
 /** The store's SharedArrayBuffers (column table, epochs, the reclaim buffer and both pools' buffers) in MiB. */
@@ -240,7 +249,25 @@ export function everyFrameUntil(request: (cb: () => void) => void, step: () => b
   });
 }
 
-/** The page's notices over the world (spec §8.5; Review Focus 5); SP4a's edge notice is gone (SP4b spec §6.2). */
+/**
+ * Runs every teardown step in order, each guarded (SP4b ruling R5): a step that throws (the coordinator's dispose
+ * sweep meeting a `StoreCorrupt`, a renderer whose context is gone) is reported through `onError`, and the later steps
+ * (the loading screen, the renderer, the pool, the root) still run.
+ */
+export function runTeardown(steps: ReadonlyArray<() => void>, onError: (e: unknown) => void): void {
+  for (const step of steps) {
+    try {
+      step();
+    } catch (e) {
+      onError(e);
+    }
+  }
+}
+
+/**
+ * The page's notices over the world (spec §8.5; Review Focus 5; SP4b spec §3.6, §7.4); SP4a's edge notice is gone
+ * (SP4b spec §6.2).
+ */
 export interface WorldNotices {
   /**
    * The dismissible "Frames are slow at RD <rd> — try RD <lower>" (spec §8.5): its link reloads through the reloader
@@ -249,6 +276,21 @@ export interface WorldNotices {
   slow(rd: number, lower: number, href: () => string): void;
   /** "The graphics context was lost" with a Reload link to `href` through the reloader; shown once. */
   contextLost(href: string): void;
+  /**
+   * "Some terrain could not be generated" (a column skipped after a failed retry, SP4b spec §3.6), dismissible, with
+   * "Copy details" copying `details`; shown once per page.
+   */
+  skipped(details: string): void;
+  /**
+   * The world store is full (SP4b spec §3.6, §5): a dismissible notice with a "Lower to RD n" button calling `apply`,
+   * without the button when `lower` is null (RD 4); never applied on its own. A later call replaces it.
+   */
+  storeFull(lower: number | null, apply: () => void): void;
+  /**
+   * The failure panel after the reveal (SP4b spec §7.4): the cause, "Copy details" copying `details`, and a Reload link
+   * to `reloadHref` through the reloader; shown once.
+   */
+  failed(cause: string, details: string, reloadHref: string): void;
   dispose(): void;
 }
 
@@ -264,28 +306,88 @@ function reloadLink(reloader: Reloader, id: string, text: string, href: () => st
   return a;
 }
 
+/** A "Copy details" button copying `text()`; it reads "Copied", or "Copy failed" without a clipboard. */
+function copyButton(id: string, text: () => string): HTMLButtonElement {
+  const copy = el('button', 'world-notice-dismiss', 'Copy details');
+  copy.id = id;
+  copy.type = 'button';
+  copy.addEventListener('click', () => {
+    const failed = (): void => { copy.textContent = 'Copy failed'; };
+    try {
+      const clipboard = (globalThis.navigator as Navigator | undefined)?.clipboard;
+      if (clipboard === undefined) failed();
+      else clipboard.writeText(text()).then(() => { copy.textContent = 'Copied'; }, failed);
+    } catch {
+      failed();
+    }
+  });
+  return copy;
+}
+
+/** A "Dismiss" button removing `panel` (and calling `then`). */
+function dismissButton(id: string, panel: HTMLElement, then: () => void = () => {}): HTMLButtonElement {
+  const dismiss = el('button', 'world-notice-dismiss', 'Dismiss');
+  dismiss.id = id;
+  dismiss.type = 'button';
+  dismiss.title = 'Dismiss this notice';
+  dismiss.addEventListener('click', () => {
+    panel.remove();
+    then();
+  });
+  return dismiss;
+}
+
 /** Mounts the notices' container in `host`; each notice is built when first shown. */
 export function createWorldNotices(host: HTMLElement, reloader: Reloader): WorldNotices {
   const box = el('div', 'world-notices');
   box.id = 'world-notices';
   host.append(box);
   let slow: HTMLElement | null = null;
+  let full: HTMLElement | null = null;
   let lost = false;
+  let skippedShown = false;
+  let failedShown = false;
   return {
     slow(rd, lower, href) {
       slow?.remove();
       const panel = el('div', 'world-notice', `Frames are slow at RD ${rd} — try `);
       panel.id = 'world-slow-notice';
-      const dismiss = el('button', 'world-notice-dismiss', 'Dismiss');
-      dismiss.id = 'world-slow-dismiss';
-      dismiss.type = 'button';
-      dismiss.title = 'Dismiss this notice';
-      dismiss.addEventListener('click', () => {
-        panel.remove();
-        if (slow === panel) slow = null;
-      });
+      const dismiss = dismissButton('world-slow-dismiss', panel, () => { if (slow === panel) slow = null; });
       panel.append(reloadLink(reloader, 'world-slow-link', `RD ${lower}`, href), ' ', dismiss);
       slow = panel;
+      box.append(panel);
+    },
+    skipped(details) {
+      if (skippedShown) return;
+      skippedShown = true;
+      const panel = el('div', 'world-notice', 'Some terrain could not be generated. ');
+      panel.id = 'world-skipped-notice';
+      panel.append(copyButton('world-skipped-copy', () => details), ' ', dismissButton('world-skipped-dismiss', panel));
+      box.append(panel);
+    },
+    storeFull(lower, apply) {
+      full?.remove();
+      const panel = el('div', 'world-notice', 'The world store is full: new terrain is paused. ');
+      panel.id = 'world-store-full';
+      if (lower !== null) {
+        const button = el('button', 'world-notice-dismiss', `Lower to RD ${lower}`);
+        button.id = 'world-store-full-lower';
+        button.type = 'button';
+        button.addEventListener('click', () => apply());
+        panel.append(button, ' ');
+      }
+      panel.append(dismissButton('world-store-full-dismiss', panel, () => { if (full === panel) full = null; }));
+      full = panel;
+      box.append(panel);
+    },
+    failed(cause, details, reloadHref) {
+      if (failedShown) return;
+      failedShown = true;
+      const panel = el('div', 'world-notice world-notice-error', 'The world stopped. ');
+      panel.id = 'world-failed';
+      const text = el('span', 'world-notice-cause', cause);
+      text.id = 'world-failed-cause';
+      panel.append(text, ' ', copyButton('world-failed-copy', () => details), ' ', reloadLink(reloader, 'world-failed-reload', 'Reload', () => reloadHref));
       box.append(panel);
     },
     contextLost(href) {
@@ -318,6 +420,31 @@ export function handleContextLoss(
     o.stop();
     o.notices.contextLost(o.hereHref());
   });
+}
+
+/**
+ * The page's handling of the coordinator's events after the reveal (SP4b spec §3.6, §7.4, D12): `fatal` (no live
+ * worker, `StoreCorrupt`, more than 32 failed columns) calls `fail` with the panel's cause (its message in it) and the
+ * event's cause; `skipped` shows the dismissible "Some terrain could not be generated" once, its details naming the
+ * column; `storeFull` shows the notice whose "Lower to RD n" calls `lower(n)` (never applied on its own).
+ */
+export function handleStreamEvent(
+  e: StreamEvent,
+  o: { readonly notices: WorldNotices; fail(cause: string, e: unknown): void; lower(rd: number): void },
+): void {
+  switch (e.kind) {
+    case 'fatal':
+      o.fail(causeOf(e.cause, e.message), e.cause);
+      break;
+    case 'skipped':
+      o.notices.skipped(`Column (${e.cx}, ${e.cz}) failed twice and is skipped until it unloads; a column that comes back into range is retried.`);
+      break;
+    case 'storeFull': {
+      const lower = e.lowerRd;
+      o.notices.storeFull(lower, () => { if (lower !== null) o.lower(lower); });
+      break;
+    }
+  }
 }
 
 /**
@@ -394,7 +521,8 @@ export function mountWorldPage(root: HTMLElement, q: WorldQuery, hash: string, o
     tips: tips(DEFAULT_KEYMAP),
     now: () => performance.now(),
     doc: document,
-    onWatchdog: () => fail('No progress for 30 s: the load stalled.', null),
+    // The watchdog judges the load only; after the reveal its panel is gone.
+    onWatchdog: () => { if (state === 'loading') fail('No progress for 30 s: the load stalled.', null); },
     loadManifest: () => fetch('/panoramas/manifest.json').then((r) => (r.ok ? r.json() : null)),
     rand: Math.random,
   });
@@ -415,11 +543,24 @@ export function mountWorldPage(root: HTMLElement, q: WorldQuery, hash: string, o
     `user agent ${navigator.userAgent}`,
   ].filter((l) => l !== null).join('\n');
 
+  /**
+   * After the reveal (SP4b spec §7.4): stops the frame loop and the coordinator and shows the world notices' failure
+   * panel (the loading screen's is gone by then); set by the streaming branch once its notices exist.
+   */
+  let failAfterReveal: ((cause: string, shown: string) => void) | null = null;
+
   function fail(cause: string, e: unknown, message: string | null = null): void {
-    if (state !== 'loading') return;
+    if (state === 'failed') return;
+    const revealed = state === 'revealed';
+    // The flight route has no notices: after its reveal an error has nowhere to show (SP4a's rule).
+    if (revealed && failAfterReveal === null) return;
     state = 'failed';
     // The details read the pool's size, so the panel is filled first; dispose() then finds no renderer to free twice.
     const shown = details(e, message);
+    if (revealed) {
+      failAfterReveal!(cause, shown);
+      return;
+    }
     releaseOnFailure({ longTasks, pool, renderer: wr });
     wr = null;
     loading.fail(cause, shown, { map: mapHref, lowerRd: lowerRdHref() });
@@ -428,13 +569,20 @@ export function mountWorldPage(root: HTMLElement, q: WorldQuery, hash: string, o
 
   function dispose(): void {
     if (state === 'loading') state = 'failed';
+    // A failure during the teardown (a job settling as the pool stops) has nowhere to show.
+    failAfterReveal = null;
     cancelAnimationFrame(raf);
-    longTasks?.disconnect();
-    for (const fn of teardown.splice(0).reverse()) fn();
-    loading.dispose();
-    wr?.dispose();
-    pool?.terminate();
-    root.replaceChildren();
+    // Each step guarded (SP4b ruling R5): a StoreCorrupt from the coordinator's dispose sweep must not leave the
+    // workers running or the page mounted.
+    runTeardown([
+      () => longTasks?.disconnect(),
+      ...teardown.splice(0).reverse(),
+      () => loading.dispose(),
+      () => wr?.dispose(),
+      () => pool?.terminate(),
+      () => root.replaceChildren(),
+    ], (e) => console.error('The world page\'s teardown:', e));
+    wr = null;
     settle();
   }
 
@@ -492,8 +640,12 @@ export function mountWorldPage(root: HTMLElement, q: WorldQuery, hash: string, o
     const store = createStore({ shared: true, maxBlockBytes: caps.reservation.blockBytes, maxByteBytes: caps.reservation.byteBytes });
     // The pool's per-scope epoch cells are the store's (SP4b spec §2.7); a failed worker's thread is marked dead in the
     // store, so its reader epoch no longer holds releases in limbo and its pool lock reads as StoreCorrupt (§2.6).
+    // Before the reveal any failed worker stops the load; after it only the last one does (SP4b spec §3.6, D12: the
+    // coordinator's caps follow the live workers).
     const workers = createBrowserPool(q.workers ?? poolSize(navigator.hardwareConcurrency || 4), {
-      onFailure: (e) => fail(causeOf(e), e),
+      onFailure: (e) => {
+        if (state === 'loading' || pool?.liveWorkers() === 0) fail(causeOf(e), e);
+      },
       onWorkerDead: (t) => store.markDead(t),
       epochCells: store.epochs.cells,
     });
@@ -525,19 +677,16 @@ export function mountWorldPage(root: HTMLElement, q: WorldQuery, hash: string, o
     });
     wr = world;
     // A context lost before the reveal is a load failure; after it, the page's handler takes over (Review Focus 5).
-    world.onContextLost(() => fail('The graphics context was lost.', null));
+    world.onContextLost(() => { if (state === 'loading') fail('The graphics context was lost.', null); });
     const sections = world.sections;
-    const cx0 = at.x >> 4;
-    const cz0 = at.z >> 4;
-    const meshDisc = stageOffsets(loadRd).MESH.map(([dx, dz]) => [cx0 + dx, cz0 + dz] as const);
-    const disc = new Set(meshDisc.map(([cx, cz]) => colKey(cx, cz)));
     // The first entry: complete columns wait inside the hidden root for the one reveal (SP4b spec §3.11).
     sections.holdReveals(true);
 
     const loadStart = performance.now();
+    let onStreamEvent: ((e: StreamEvent) => void) | null = null;
     // The first entry on the streaming coordinator (SP4b spec §3.11, D21): strict, so any error stops the load as in
     // SP4a (D12); every proto kept (D11); the camera held at the centre. The throttle is created here and kept for the
-    // streaming frame (SP4b Task 21); nothing feeds it before the reveal, so it stays at its maximum.
+    // streaming frame; nothing feeds it before the reveal, so it stays at its maximum.
     const throttle = createThrottle({ max: Math.max(1, workers.size - 1) });
     const coordinator = createCoordinator({
       jobs: worldJobsOf(workers),
@@ -551,8 +700,10 @@ export function mountWorldPage(root: HTMLElement, q: WorldQuery, hash: string, o
       rdMax: Math.min(RD_MAX, reservationRdCap(caps.reservation)),
       retainAllProtos: true,
       strict: true,
+      // Strict until the reveal: only `fatal` comes, and it stops the load; after it the streaming branch handles them.
       onEvent: (e) => {
-        if (e.kind === 'fatal') fail(causeOf(e.cause, e.message), e.cause, e.message);
+        if (onStreamEvent !== null) onStreamEvent(e);
+        else if (e.kind === 'fatal') fail(causeOf(e.cause, e.message), e.cause, e.message);
       },
     });
     teardown.push(() => coordinator.dispose());
@@ -588,8 +739,6 @@ export function mountWorldPage(root: HTMLElement, q: WorldQuery, hash: string, o
     const fly: FlyState = { x: at.x, y: clamp(view.y, Y_MIN, Y_MAX), z: at.z, yaw: view.yaw, pitch: view.pitch, vx: 0, vy: 0, vz: 0, speed: SPEED_DEFAULT };
     // Wraps the yaw into [0, 360) and clamps the pitch; a query's valid degrees pass unchanged (ruling P42).
     look(fly, 0, 0, 0);
-    // Only the vertical range: the world streams around the camera (SP4b spec §6.1).
-    const bounds: FlyBounds = { yMin: -64, yMax: 400 };
     const fixedT = opts.timeHours === undefined || opts.timeHours === null ? null : ((((opts.timeHours - 6) / 24) % 1) + 1) % 1;
     let t = fixedT ?? OPENING_T;
     let speedIndex = 0;
@@ -600,12 +749,12 @@ export function mountWorldPage(root: HTMLElement, q: WorldQuery, hash: string, o
       world.camera.position.set(fly.x - world.origin.x, fly.y - world.origin.y, fly.z - world.origin.z);
       applyCameraRotation(world.camera, fly);
     };
-    // One FrameState for every frame, rewritten in place (SP4b spec §3.10).
+    // One FrameState for every frame, rewritten in place (SP4b spec §3.10); the frame step writes it after the reveal.
     const frame = { t, brightness: settings.brightness, eyeSky: 15, rd: loadRd, fogBand: MEDIUM.fogBand };
     const frameState = (): FrameState => {
       frame.t = t;
       frame.brightness = settings.brightness;
-      frame.eyeSky = skyLightAt(store, disc, fly.x, fly.y, fly.z);
+      frame.eyeSky = skyLightAt(store, fly.x, fly.y, fly.z);
       return frame;
     };
 
@@ -623,6 +772,8 @@ export function mountWorldPage(root: HTMLElement, q: WorldQuery, hash: string, o
     sections.pump(budget, counts.cx, counts.cz, counts.yawDeg);
     sections.revealAll();
     sections.holdReveals(false);
+    // From here errors degrade instead of stopping the world (D12).
+    coordinator.setStrict(false);
     placeCamera();
     world.frame(frameState());
     state = 'revealed';
@@ -687,11 +838,30 @@ export function mountWorldPage(root: HTMLElement, q: WorldQuery, hash: string, o
     const notices = createWorldNotices(host, reloader);
     teardown.push(() => notices.dispose());
     let stopped = false;
+    const stop = (): void => {
+      stopped = true;
+      cancelAnimationFrame(raf);
+    };
+    // A failure after the reveal (SP4b spec §7.4): the loop and the coordinator stop, the workers and the renderer are
+    // released, and the notices' panel offers "Copy details" and a Reload around the camera.
+    let stopHud = (): void => {};
+    failAfterReveal = (cause, shown) => {
+      stop();
+      // The HUD's timer would read the disposed renderer and coordinator.
+      runTeardown([stopHud, () => coordinator.dispose()], (e) => console.error('The world page\'s failure:', e));
+      releaseOnFailure({ longTasks, pool, renderer: wr });
+      wr = null;
+      notices.failed(cause, shown, here(null));
+    };
+    // The coordinator's events after the reveal (D12). "Lower to RD n" reloads at n until the RD applies live (SP4b
+    // Task 22).
+    onStreamEvent = (e) => handleStreamEvent(e, {
+      notices,
+      fail: (cause, err) => fail(cause, err),
+      lower: (lower) => reloader.reload(here(lower)),
+    });
     handleContextLoss(world, {
-      stop: () => {
-        stopped = true;
-        cancelAnimationFrame(raf);
-      },
+      stop,
       notices,
       // The query's rd stays (a lower-RD reload keeps its rd); without one the setting applies.
       hereHref: () => here(q.rd),
@@ -721,28 +891,43 @@ export function mountWorldPage(root: HTMLElement, q: WorldQuery, hash: string, o
     // The frame loop's parts: the limiter, the stats, the HUD, the help and the input.
     const limiter: FpsLimiter = createFpsLimiter(settings.fpsCap);
     const frames = createFrameStats();
+    // The HUD reads every count from its owner (SP4b spec §7.3), on its own timer outside the frame (§3.10).
+    const gpu: GpuEstimate = { sectionsBytes: 0, skyBytes: 0, textureBytes: 0, lightmapBytes: 0, drawingBufferBytes: 0 };
     const huds = hud
       ? mountWorldHud(host, () => {
-        const done = coordinator.counts(counts);
+        const c = coordinator.counts(counts);
+        const up = sections.counts(uploads);
         const info = world.info();
+        const g = world.gpuEstimate(gpu);
         return {
           frame: frames.summary(),
-          columns: { t: done.T.done, d: done.D.done, l: done.L.done, meshed: done.MESH.done },
-          sections: sections.counts(uploads).rows,
+          stages: { T: { ...c.T }, D: { ...c.D }, L: { ...c.L }, MESH: { ...c.MESH } },
+          sections: up.rows,
+          revealed: up.columnsRevealed,
+          genCap: c.genCap,
+          dropped: c.dropped,
+          failed: c.failed,
           drawCalls: info.calls,
           triangles: info.triangles,
           position: { x: fly.x, y: fly.y, z: fly.z },
           speed: fly.speed,
-          time: t,
+          time: frame.t,
           timeSpeed: timeSpeed(),
-          rd: loadRd,
+          rdTarget: c.rd,
+          rdFog: frame.rd,
           workers: workers.size,
+          liveWorkers: workers.liveWorkers(),
+          regions: up.regions,
+          gpuMB: (g.sectionsBytes + g.skyBytes + g.textureBytes + g.lightmapBytes + g.drawingBufferBytes) / (1 << 20),
           sectionRenderer: kind,
           renderer: caps.renderer,
         };
       })
       : null;
-    if (huds !== null) teardown.push(() => huds.dispose());
+    if (huds !== null) {
+      teardown.push(() => huds.dispose());
+      stopHud = () => huds.dispose();
+    }
 
     const applySettings = (s: WorldSettings): void => {
       const rdChanged = s.rd !== settings.rd;
@@ -752,6 +937,7 @@ export function mountWorldPage(root: HTMLElement, q: WorldQuery, hash: string, o
         world.camera.updateProjectionMatrix();
       }
       settings = s;
+      frame.brightness = s.brightness;
       saveSettings(storage, s);
       // The render distance applies to a new load only: reload around the camera, without ?rd so the setting applies.
       if (rdChanged) reloader.reload(here(null));
@@ -805,33 +991,48 @@ export function mountWorldPage(root: HTMLElement, q: WorldQuery, hash: string, o
     });
     teardown.push(() => input.dispose());
 
-    // The slow-frame notice gets every raw rAF delta before the limiter, so an FPS cap of 30 is not read as slow.
+    // The streaming frame (SP4b spec §7.2): the slow-frame notice and the throttle get every raw rAF delta before the
+    // limiter, so an FPS cap of 30 is read as neither slow frames nor a reason to throttle generation.
     const clock = createFrameClock(limiter, slowFrames, revealTs);
     let n = 0;
     let firstMax = 0;
+    const step = createFrameStep({
+      fly,
+      held: () => input.held,
+      paused: () => help.isOpen,
+      clock,
+      coordinator,
+      counts,
+      throttle,
+      budget: createUploadBudget(MEDIUM.uploadBudgetMs, MEDIUM.uploadSections, () => performance.now()),
+      sections,
+      world,
+      store,
+      state: frame,
+      timeSpeed,
+      // The target RD until the fog eases (SP4b Task 22).
+      fogStep: () => loadRd,
+      onRendered: (dtMs) => {
+        frames.push(dtMs);
+        // The first 120 rendered frames' largest delta (SP4b spec §7.1; the flight JSON's key unchanged).
+        if (n < FIRST_FRAMES) {
+          firstMax = Math.max(firstMax, dtMs);
+          if (n + 1 === FIRST_FRAMES) stats.first120MaxMs = firstMax;
+        }
+        n++;
+        progressHook.frames = n;
+        opts.onFrame?.(n);
+      },
+    });
     const loop = (now: number): void => {
       if (stopped) return;
       raf = requestAnimationFrame(loop);
       try {
         // The tick may show the slow-frame notice, so it runs inside the guard.
-        const dtMs = clock.tick(now);
-        if (dtMs === null) return;
-        frames.push(dtMs);
-        if (n < FIRST_FRAMES) {
-          firstMax = Math.max(firstMax, dtMs);
-          if (n + 1 === FIRST_FRAMES) stats.first120MaxMs = firstMax;
-        }
-        if (!help.isOpen) stepFly(fly, input.held, Math.min(dtMs / 1000, MAX_STEP_S), bounds);
-        t = advanceTime(t, dtMs, timeSpeed());
-        placeCamera();
-        world.frame(frameState());
-        n++;
-        progressHook.frames = n;
-        opts.onFrame?.(n);
+        step.tick(now);
       } catch (e) {
-        // After the reveal there is no failure panel: stop the loop and report the error once, not on every frame.
-        cancelAnimationFrame(raf);
-        console.error('The frame loop stopped:', e);
+        // An exception escaping the frame shows the failure panel and stops the loop (SP4b spec §7.4).
+        fail(`The frame loop stopped: ${errorText(e)}`, e);
       }
     };
     raf = requestAnimationFrame(loop);

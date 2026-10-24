@@ -5,16 +5,29 @@ import { installDom } from './fixtures/domShim';
 
 const DATA: HudData = {
   frame: { fps: 60, p50: 16.7, p95: 17.2, count: 120 },
-  columns: { t: 825, d: 705, l: 593, meshed: 489 },
+  stages: {
+    T: { done: 825, needed: 825, inFlight: 0, queued: 0 },
+    D: { done: 705, needed: 705, inFlight: 0, queued: 0 },
+    L: { done: 593, needed: 593, inFlight: 0, queued: 0 },
+    MESH: { done: 489, needed: 489, inFlight: 0, queued: 0 },
+  },
   sections: 3512,
+  revealed: 489,
+  genCap: 5,
+  dropped: 0,
+  failed: 0,
   drawCalls: 640,
   triangles: 1_420_000,
   position: { x: 12.3, y: 80, z: -40.5 },
   speed: 12,
   time: OPENING_T,
   timeSpeed: 10,
-  rd: 12,
+  rdTarget: 12,
+  rdFog: 12,
   workers: 6,
+  liveWorkers: 6,
+  regions: 20,
+  gpuMB: 92.44,
   sectionRenderer: 'batch',
   renderer: 'ANGLE (Intel, Mesa Intel(R) Xe Graphics (TGL GT2), OpenGL 4.6)',
 };
@@ -56,9 +69,36 @@ describe('mountWorldHud (SP4a spec §6.9, D30)', () => {
     }
     expect(text).toContain('60 fps · p50 16.7 ms · p95 17.2 ms');
     expect(text).toContain('RD 12');
-    expect(text).toContain('6 workers');
+    expect(text).toContain('workers 6/6');
     expect(text).toContain('12.0 blocks/s');
     expect(text).toContain('Mesa Intel(R) Xe Graphics');
+  });
+
+  test('the streaming counts (SP4b spec §7.3): per stage done / needed, in flight and queued; revealed, genCap, dropped, failed, the RDs, workers, regions and the GPU estimate', () => {
+    mount(() => ({
+      ...DATA,
+      stages: {
+        T: { done: 700, needed: 825, inFlight: 2, queued: 120 },
+        D: { done: 600, needed: 705, inFlight: 1, queued: 90 },
+        L: { done: 500, needed: 593, inFlight: 0, queued: 80 },
+        MESH: { done: 400, needed: 489, inFlight: 3, queued: 70 },
+      },
+      revealed: 388,
+      genCap: 2,
+      dropped: 4,
+      failed: 1,
+      rdTarget: 12,
+      rdFog: 10.25,
+      liveWorkers: 5,
+      regions: 23,
+      gpuMB: 101.26,
+    }));
+    const text = dom.body.textContent;
+    for (const part of [
+      'T 700/825', 'D 600/705', 'L 500/593', 'meshed 400/489',
+      'in flight / queued T 2/120 · D 1/90 · L 0/80 · MESH 3/70',
+      'revealed 388', 'genCap 2', 'dropped 4', 'failed 1', 'RD 12 (fog 10.3)', 'workers 5/6', 'regions 23', 'GPU 101.3 MB',
+    ]) expect(text).toContain(part);
   });
 
   test('position and column; mesh, paused and an unreported renderer string', () => {

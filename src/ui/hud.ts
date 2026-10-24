@@ -21,14 +21,32 @@ export function mountHud(host: HTMLElement, stats: FrameStats): () => void {
   return () => clearInterval(id);
 }
 
-/** What the world HUD shows (SP4a spec §6.9); the page reads it from its pool, coordinator, renderer and player. */
+/** One stage's columns in the current sets (the coordinator's `StageCounts`, SP4b spec §7.3). */
+export interface HudStage {
+  readonly done: number;
+  readonly needed: number;
+  readonly inFlight: number;
+  readonly queued: number;
+}
+
+/**
+ * What the world HUD shows (SP4a spec §6.9; SP4b spec §7.3); the page reads it from its pool, coordinator, section
+ * renderer, renderer and player, each count straight from its owner (master §4.3: nothing double-counted).
+ */
 export interface HudData {
   /** The fps line's figures. */
   readonly frame: FrameSummary;
-  /** Columns that reached each stage. */
-  readonly columns: { readonly t: number; readonly d: number; readonly l: number; readonly meshed: number };
+  /** Per stage, in the current sets: done / needed, in flight and queued (the coordinator's counts). */
+  readonly stages: { readonly T: HudStage; readonly D: HudStage; readonly L: HudStage; readonly MESH: HudStage };
   /** Section meshes uploaded (`SectionRendererCounts.rows`). */
   readonly sections: number;
+  /** Columns shown (`SectionRendererCounts.columnsRevealed`). */
+  readonly revealed: number;
+  /** The throttle's generation cap (SP4b spec §3.8). */
+  readonly genCap: number;
+  /** Results dropped at intake, and columns skipped after a failed retry (SP4b spec §3.6). */
+  readonly dropped: number;
+  readonly failed: number;
   /** The last frame's `renderer.info`. */
   readonly drawCalls: number;
   readonly triangles: number;
@@ -40,8 +58,16 @@ export interface HudData {
   readonly time: number;
   /** One of `TIME_SPEEDS`: 1, 10, 60, or 0 for paused. */
   readonly timeSpeed: number;
-  readonly rd: number;
+  /** The render distance set, and the fog's (fractional while a raise eases outward, SP4b spec §5). */
+  readonly rdTarget: number;
+  readonly rdFog: number;
+  /** The pool's size and its live workers. */
   readonly workers: number;
+  readonly liveWorkers: number;
+  /** Regions holding a staged column or rows to release. */
+  readonly regions: number;
+  /** The GPU memory estimate, MiB (`WorldRenderer.gpuEstimate`'s parts summed, SP4b spec §8.4). */
+  readonly gpuMB: number;
   readonly sectionRenderer: SectionRendererKind;
   /** The renderer string as reported (Firefox masks it, spec §1.5); null when the probe got none. */
   readonly renderer: string | null;
@@ -74,22 +100,27 @@ function keyHints(): string {
 
 function hudLines(d: HudData, hints: string): string[] {
   const p = d.position;
-  const c = d.columns;
+  const { T, D, L, MESH } = d.stages;
+  const of = (s: HudStage): string => `${s.done}/${s.needed}`;
+  const jobs = (s: HudStage): string => `${s.inFlight}/${s.queued}`;
   return [
     fpsLine(d.frame),
-    `columns T ${c.t} · D ${c.d} · L ${c.l} · meshed ${c.meshed} · sections ${d.sections}`,
+    `columns T ${of(T)} · D ${of(D)} · L ${of(L)} · meshed ${of(MESH)} · revealed ${d.revealed} · sections ${d.sections}`,
+    `in flight / queued T ${jobs(T)} · D ${jobs(D)} · L ${jobs(L)} · MESH ${jobs(MESH)}`,
+    `genCap ${d.genCap} · dropped ${d.dropped} · failed ${d.failed}`,
     `draw calls ${d.drawCalls} · triangles ${compact(d.triangles)}`,
     `x ${p.x.toFixed(1)} y ${p.y.toFixed(1)} z ${p.z.toFixed(1)} · column ${chunkCoord(Math.floor(p.x))}, ${chunkCoord(Math.floor(p.z))}`,
     `speed ${d.speed.toFixed(1)} blocks/s · ${formatClock(d.time)} ${timeSpeedLabel(d.timeSpeed)}`,
-    `RD ${d.rd} · ${d.workers} workers · ${d.sectionRenderer}`,
+    `RD ${d.rdTarget} (fog ${d.rdFog.toFixed(1)}) · workers ${d.liveWorkers}/${d.workers} · ${d.sectionRenderer}`,
+    `regions ${d.regions} · GPU ${d.gpuMB.toFixed(1)} MB`,
     `GPU ${d.renderer ?? 'not reported'}`,
     hints,
   ];
 }
 
 /**
- * The world HUD (SP4a spec §6.9, D30): the fps line plus the counts, one line each, refreshed every 250 ms from
- * `read`. The page toggles it on F3 (`toggle`); while hidden it does not read. SP10 grows F3 into the full overlay.
+ * The world HUD (SP4a spec §6.9, D30; SP4b spec §7.3): the fps line plus the counts (SP4b: the streaming counts), one
+ * line each, refreshed every 250 ms from `read`. The page toggles it on F3 (`toggle`); while hidden it does not read. SP10 grows F3 into the full overlay.
  */
 export function mountWorldHud(host: HTMLElement, read: () => HudData): { toggle(): void; dispose(): void } {
   const box = document.createElement('div');

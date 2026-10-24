@@ -1,13 +1,13 @@
 /**
  * The adaptive throttle (SP4b spec §3.8, D29; master §4.3): `genCap` limits the T, D and L jobs in flight, in
  * [1, max], starting at max (the coordinator passes max(1, N − 1) and re-clamps it with `setMax` whenever
- * `liveWorkers()` changes). Fed every frame's snapped frame time, whether generation is in flight and the display
- * interval: when the nearest-rank p95 of the last 60 frames is above `max(16.7 ms, interval + 0.5 ms)` while generation
+ * `liveWorkers()` changes). Fed every rAF tick's snapped delta (the page's frame step, before the FPS limiter, so a
+ * cap never reads as slow frames), whether generation is in flight and the display interval: when the nearest-rank p95 of the last 60 frames is above `max(16.7 ms, interval + 0.5 ms)` while generation
  * is in flight, the cap drops by 1 and the window restarts; after 120 consecutive frames under
  * `max(13 ms, interval + 0.5 ms)` it rises by 1. The thresholds follow the display (the user's decision of 2026-10-24),
  * so a 50 Hz display's on-time 20 ms frames are not slow and a 60 Hz display's on-time 16.7 ms frames count as fast; at
- * 144-240 Hz they are 16.7 and 13 ms. A 120-value ring and a 60-value scratch, preallocated: a push allocates nothing
- * (§3.10).
+ * 144-240 Hz they are 16.7 and 13 ms; a non-finite interval reads as 0 (SP4b ruling R5). A 120-value ring and a
+ * 60-value scratch, preallocated: a push allocates nothing (§3.10).
  */
 
 /** Frames in the p95 window. */
@@ -26,7 +26,10 @@ const P95_INDEX = Math.ceil(0.95 * THROTTLE_WINDOW) - 1;
 const RING = 120;
 
 export interface Throttle {
-  /** One frame: its snapped time, whether T, D or L jobs are in flight, and the display interval (all ms). */
+  /**
+   * One frame: its snapped time, whether T, D or L jobs are in flight, and the display interval (all ms; a non-finite
+   * interval reads as 0).
+   */
   push(frameMs: number, generating: boolean, intervalMs: number): void;
   /** The generation cap, in [1, max]. */
   cap(): number;
@@ -56,8 +59,10 @@ export function createThrottle(o: { max: number }): Throttle {
       ring[head] = frameMs;
       head = (head + 1) % RING;
       if (sinceRestart < THROTTLE_WINDOW) sinceRestart++;
-      const slowMs = Math.max(THROTTLE_P95_MS, intervalMs + INTERVAL_MARGIN_MS);
-      const fastMs = Math.max(THROTTLE_FAST_MS, intervalMs + INTERVAL_MARGIN_MS);
+      // A non-finite interval (no display interval measured yet) reads as 0: the thresholds are 16.7 and 13 ms.
+      const margin = (Number.isFinite(intervalMs) ? intervalMs : 0) + INTERVAL_MARGIN_MS;
+      const slowMs = Math.max(THROTTLE_P95_MS, margin);
+      const fastMs = Math.max(THROTTLE_FAST_MS, margin);
       fastRun = frameMs < fastMs ? fastRun + 1 : 0;
       if (generating && sinceRestart >= THROTTLE_WINDOW && p95() > slowMs) {
         if (cap > 1) cap--;
