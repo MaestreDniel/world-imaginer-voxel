@@ -19,6 +19,12 @@
  * four world jobs run `worldJobs.ts`'s reply wrappers on it with `stopFor(type, scope)`: NOT_ATTACHED before the attach,
  * ABORTED on a stop, STORE_FULL for `StoreFull`, INTERNAL for any other throw. The light and mesh scratch are allocated
  * once per handler, on the first job that needs them; the mesh uses the Medium preset's `ao` and `smoothLight`.
+ * SP4b (spec §2.5, §2.6, §2.8, §3.7): `attach` carries the worker's reclaim thread and attaches the store as that thread;
+ * a second attach with the same store id (the reclaim buffer's [2]) and thread is answered `attached` again, anything else
+ * stays BAD_MESSAGE. Every world job runs inside a read section (`enterRead` … `exitRead`), so a slot it may read is never
+ * reused under it; its own releases (L's `resetLight`, a stopped T's frees) wait in this thread's limbo, which `drain`
+ * frees and the worker shell drains after each reply (`drainAfterReply`). A `StoreCorrupt` replies STORE_CORRUPT (fatal),
+ * not INTERNAL (retried). `terrain` with `protoOnly` is `T(protoOnly)`.
  */
 import { hex64 } from '../core/hash';
 import { MEDIUM } from '../core/params/graphicsPresets';
@@ -41,7 +47,8 @@ import { computeAnyGolden } from '../metrics/sp2aGoldens';
 import { splineStatPoints, splineStatsInto, splineStatsLength, splineStatsNode } from '../metrics/splineStats';
 import { createMeshScratch, type MeshScratch } from '../mesh/column';
 import type { MeshOptions } from '../mesh/greedy';
-import { attachStore, StoreFull, type VoxelStore } from '../world/store/store';
+import { R_STORE_ID } from '../world/store/reclaim';
+import { attachStore, StoreCorrupt, StoreFull, type VoxelStore } from '../world/store/store';
 import { runFieldProbe, runFieldSlice, sliceJobColumns, type FieldJobReply } from './fieldSliceJob';
 import { cellOf, parseToWorker, sliceRangeProblem, surfaceProbeProblem, type ErrorCode, type FromWorker, type ScopedJobType, type StatsMsg } from './protocol';
 import { createSliceJob, type SliceJob } from './sliceJob';
@@ -82,6 +89,7 @@ const FIELD_PROBE = runFieldProbe;
 const SLICE_COLUMNS = sliceJobColumns;
 const ATTACH_STORE = attachStore;
 const STORE_FULL = StoreFull;
+const STORE_CORRUPT = StoreCorrupt;
 const LIGHT_SCRATCH = createLightScratch;
 const MESH_SCRATCH = createMeshScratch;
 const TERRAIN_REPLY = terrainReply;
@@ -98,6 +106,29 @@ export interface Reply {
 
 export interface TaskHandler {
   handle(raw: unknown): Reply;
+  /** Frees this worker's limbo entries no live reader can hold (`store.drain()`, SP4b spec §2.5); the entries left, 0 without a store. */
+  drain(): number;
+}
+
+/** A worker whose limbo is not empty after a drain retries every this many ms (SP4b spec §2.5). */
+export const LIMBO_RETRY_MS = 16;
+/** The handlers with a retry timer pending, so a reply during the retries starts no second chain. */
+const retrying = new WeakSet<object>();
+
+/**
+ * The worker shell's drain after each reply (SP4b spec §2.5): drains at once, then, while entries are left, again every
+ * `LIMBO_RETRY_MS` through `setTimer`, so an idle worker never keeps slots counted as used. At most one retry timer is
+ * pending per handler. `task.worker.ts` calls it after each post; the Node harness's `node-worker.mjs` mirrors it in
+ * plain JS (`test/harness/nodeWorker.ts`).
+ */
+export function drainAfterReply(h: Pick<TaskHandler, 'drain'>, setTimer: (f: () => void, ms: number) => unknown): void {
+  if (h.drain() === 0 || retrying.has(h)) return;
+  retrying.add(h);
+  const retry = (): void => {
+    if (h.drain() > 0) setTimer(retry, LIMBO_RETRY_MS);
+    else retrying.delete(h);
+  };
+  setTimer(retry, LIMBO_RETRY_MS);
 }
 
 const err = (jobId: number | null, epoch: number | null, code: ErrorCode, message: string): Reply => ({ msg: { type: 'error', jobId, epoch, code, message }, transfer: [] });
@@ -186,8 +217,12 @@ export function createTaskHandler(slices: SliceJob = CREATE_SLICE_JOB()): TaskHa
           return { msg: { type: 'ready', epoch, stageHashes: hex, genKey: HEX(GEN_KEY(seed, h)) }, transfer: [] };
         }
         if (m.type === 'attach') {
-          if (store !== null) return err(null, null, 'BAD_MESSAGE', 'the store is already attached');
-          store = ATTACH_STORE(m.handles);
+          if (store !== null) {
+            // Idempotent per worker (SP4b spec §2.8): a posted SharedArrayBuffer arrives as a new object, so the store id decides.
+            const same = Atomics.load(new Int32Array(m.handles.reclaim), R_STORE_ID) === store.storeId && m.thread === store.thread;
+            return same ? { msg: { type: 'attached' }, transfer: [] } : err(null, null, 'BAD_MESSAGE', 'the store is already attached');
+          }
+          store = ATTACH_STORE(m.handles, m.thread);
           return { msg: { type: 'attached' }, transfer: [] };
         }
         if (m.type === 'selftest') {
@@ -202,14 +237,21 @@ export function createTaskHandler(slices: SliceJob = CREATE_SLICE_JOB()): TaskHa
         const aborted = (): Reply => err(m.jobId, m.epoch, 'ABORTED', `scope ${m.scope} of epoch ${m.epoch} was superseded`);
         /** A fieldSlice or fieldProbe job's outcome as a reply. */
         const fieldReply = (r: FieldJobReply<FromWorker>): Reply => (r === null ? aborted() : 'badArgs' in r ? err(m.jobId, m.epoch, 'BAD_ARGS', r.badArgs) : r);
-        /** A world job on the attached store: NOT_ATTACHED without one, ABORTED on a stop, STORE_FULL for `StoreFull`. */
+        /**
+         * A world job on the attached store, inside a read section (SP4b spec §2.5): NOT_ATTACHED without one, ABORTED on
+         * a stop, STORE_FULL for `StoreFull` (a `StoreCorrupt` goes to the outer catch, STORE_CORRUPT).
+         */
         const worldReply = (run: (s: VoxelStore) => WorldJobReply<FromWorker> | null): Reply => {
-          if (store === null) return err(m.jobId, m.epoch, 'NOT_ATTACHED', 'no attach yet');
+          const s = store;
+          if (s === null) return err(m.jobId, m.epoch, 'NOT_ATTACHED', 'no attach yet');
+          s.enterRead();
           try {
-            return run(store) ?? aborted();
+            return run(s) ?? aborted();
           } catch (e) {
             if (e instanceof STORE_FULL) return err(m.jobId, m.epoch, 'STORE_FULL', e.message);
             throw e;
+          } finally {
+            s.exitRead();
           }
         };
         switch (m.type) {
@@ -273,8 +315,10 @@ export function createTaskHandler(slices: SliceJob = CREATE_SLICE_JOB()): TaskHa
           }
         }
       } catch (e) {
-        return err(jobId, msgEpoch, 'INTERNAL', e instanceof Error ? e.message : String(e));
+        // SP4b spec §2.6: a pool lock held by a failed thread is fatal, never retried.
+        return err(jobId, msgEpoch, e instanceof STORE_CORRUPT ? 'STORE_CORRUPT' : 'INTERNAL', e instanceof Error ? e.message : String(e));
       }
     },
+    drain: () => (store === null ? 0 : store.drain()),
   };
 }

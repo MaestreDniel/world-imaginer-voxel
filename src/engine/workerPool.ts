@@ -23,6 +23,11 @@
  * the world page). Every job but selftest carries its configure generation (`epoch`) and its phase's cell value at issue
  * (`scope`); a reply settles as JobCancelled when the generation moved, when its cell moved, or on ABORTED. `configure`
  * stores the new generation into all four cells; `bumpScope(from)` (SP4c's Apply) moves the cells from a phase onward.
+ * SP4b §2.6, §2.8, §3.7: worker w attaches as reclaim thread w + 1, and a retried `attachStore` succeeds (the attach is
+ * idempotent per worker, and each worker's replies count for the attach they answer); `onWorkerDead(thread)` tells the page
+ * which thread failed (it marks it dead in the store); STORE_CORRUPT rejects with `StoreCorruptError`; `cancelWorld` drops
+ * queued world jobs; `liveWorkers()`; `terminate()` settles its barriers and busy jobs with `WorkerFailed('terminated')`;
+ * `terrain(cx, cz, true)` is `T(protoOnly)`.
  */
 import type { MapLevel } from '../core/constants';
 import type { ColumnPoint } from '../gen/column/columnPoint';
@@ -38,6 +43,7 @@ import {
 } from '../workers/protocol';
 import { EPOCH_CELL, EPOCH_CELL_COUNT } from '../world/store/epochs';
 import type { StoreHandles } from '../world/store/store';
+import type { Stage } from './rings';
 
 export interface WorkerLike {
   postMessage(msg: ToWorker, transfer?: Transferable[]): void;
@@ -118,6 +124,17 @@ export class StoreFullError extends Error {
 }
 
 /**
+ * A world job met a pool lock held by a failed thread (the worker's STORE_CORRUPT, `StoreCorrupt`; SP4b spec §2.6): the
+ * store can no longer be trusted, so the page shows the failure panel.
+ */
+export class StoreCorruptError extends Error {
+  constructor(message: string) {
+    super(message);
+    this.name = 'StoreCorruptError';
+  }
+}
+
+/**
  * A T, D or L job done (SP4a spec §2.3, ruling P30): its column, the worker's time in ms and, for light, the 3 × 3
  * versions it read before the job (18 values); null for terrain and decorate.
  */
@@ -160,6 +177,11 @@ export interface PoolOptions {
   readonly epochCells?: Int32Array | null;
   /** Called once per failed worker, after its work was rejected. */
   readonly onFailure?: (e: WorkerFailed) => void;
+  /**
+   * Called once per failed worker with the reclaim thread it was attached as (worker w is thread w + 1), before its work
+   * is rejected (SP4b spec §2.6): the world page passes `(t) => store.markDead(t)`.
+   */
+  readonly onWorkerDead?: (thread: number) => void;
 }
 
 export interface WorkerPool {
@@ -180,18 +202,23 @@ export interface WorkerPool {
    */
   bumpScope(from: ScopePhase): void;
   /**
-   * Hands every live worker the page's shared store (SP4a spec §2.3), once, before the world jobs; resolves when each has
-   * answered `attached`. Jobs wait behind it as behind a configure. Rejects with the first job-less error a worker sends
-   * meanwhile (`${code}: ${message}`), with WorkerFailed when a worker fails, and when another attach is pending.
+   * Hands every live worker the page's shared store (SP4a spec §2.3), before the world jobs; worker w attaches as reclaim
+   * thread w + 1 (SP4b spec §2.5). Resolves when each live worker has answered `attached`. Jobs wait behind it as behind a
+   * configure. Rejects with the first job-less error a worker sends meanwhile (`${code}: ${message}`), with WorkerFailed
+   * when a worker fails or the pool is terminated, and when another attach is pending. A retry after a failed attach
+   * succeeds (SP4b spec §2.8): a worker already attached to the same store and thread answers `attached` again, and a
+   * worker's late answer to the failed attach does not count for the retry.
    */
   attachStore(h: StoreHandles): Promise<void>;
   /**
    * The world jobs of column (cx, cz) on the attached store (SP4a spec §2.3), each one job at priority 0: T, D and L resolve
    * `ColumnDone`, MESH_COLUMN the column payload over the transferred buffers. They reject with JobCancelled (a configure,
-   * a reply of an old epoch, ABORTED), StoreFullError (STORE_FULL), WorkerFailed, or the worker's other error
-   * (NOT_ATTACHED, NOT_CONFIGURED, INTERNAL: a prerequisite missing, BAD_MESSAGE).
+   * a reply of an old epoch, ABORTED, `cancelWorld`), StoreFullError (STORE_FULL), StoreCorruptError (STORE_CORRUPT),
+   * WorkerFailed, or the worker's other error (NOT_ATTACHED, NOT_CONFIGURED, INTERNAL: a prerequisite missing,
+   * BAD_MESSAGE). `terrain` with `protoOnly` is `T(protoOnly)` (SP4b spec §3.7): it regenerates the freed proto of a
+   * Decorated or Published column.
    */
-  terrain(cx: number, cz: number): Promise<ColumnDone>;
+  terrain(cx: number, cz: number, protoOnly?: boolean): Promise<ColumnDone>;
   decorate(cx: number, cz: number): Promise<ColumnDone>;
   light(cx: number, cz: number): Promise<ColumnDone>;
   meshColumn(cx: number, cz: number): Promise<ColumnMeshPayload>;
@@ -242,6 +269,13 @@ export interface WorkerPool {
   selftest(key: string): Promise<{ actual: string | null; error: string | null }>;
   /** Rejects queued tile jobs matching `pred` with JobCancelled. */
   cancelTiles(pred: (req: TileRequest) => boolean): void;
+  /**
+   * Rejects the queued world jobs matching `pred` with JobCancelled (SP4b spec §2.8, D8): `terrain` is stage T, `decorate`
+   * D, `light` L, `meshColumn` MESH. In-flight jobs run to the end.
+   */
+  cancelWorld(pred: (stage: Stage, cx: number, cz: number) => boolean): void;
+  /** The workers that have not failed (SP4b spec §2.8; the coordinator's caps follow it); 0 once terminated. */
+  liveWorkers(): number;
   readonly queued: number;
   /** The in-flight jobs and the queue, read at once (the latency hook's pool probe, SP2b spec §2.8). */
   probe(): PoolProbe;
@@ -263,6 +297,9 @@ interface Job {
   readonly resolve: (v: FromWorker) => void;
   readonly reject: (e: Error) => void;
 }
+
+/** Each world job type's stage (`engine/rings.ts`'s names; SP4b spec §2.8's `cancelWorld`). */
+const STAGE_OF: Readonly<Partial<Record<string, Stage>>> = Object.freeze({ terrain: 'T', decorate: 'D', light: 'L', meshColumn: 'MESH' });
 
 /** Pool size: clamp(hardwareConcurrency − 2, 2, 6). */
 export const poolSize = (cores: number): number => Math.max(2, Math.min(6, cores - 2));
@@ -295,8 +332,18 @@ export function createWorkerPool(size: number, spawn: () => WorkerLike, opts: Po
   let nextId = 1;
   let nextGroup = 1;
   let pendingReady: { need: number; got: ReadyMsg[]; resolve: (r: ReadyMsg) => void; reject: (e: Error) => void } | null = null;
-  /** The attach barrier (ruling P28), separate from the configure's. */
-  let pendingAttach: { need: number; got: number; resolve: () => void; reject: (e: Error) => void } | null = null;
+  /** The attach barrier (ruling P28), separate from the configure's: the workers whose answer it still waits for. */
+  let pendingAttach: { waiting: boolean[]; left: number; resolve: () => void; reject: (e: Error) => void } | null = null;
+  /**
+   * The attach messages each worker has not answered yet (SP4b spec §2.8). A worker answers its messages in order, so an
+   * answer that leaves this above 0 is a late answer to an earlier, failed attach and does not count for the pending one.
+   */
+  const attachOwed: number[] = workers.map(() => 0);
+  /** Whether worker w's attach answer (`attached`, or a job-less error without an epoch) is the pending attach's. */
+  const attachAnswer = (w: number): boolean => {
+    if (attachOwed[w]! > 0) attachOwed[w]!--;
+    return attachOwed[w] === 0 && pendingAttach !== null && pendingAttach.waiting[w] === true;
+  };
   /** Whether a job's epoch cell moved since its issue (SP4b spec §2.7). */
   const moved = (job: Job): boolean => cells !== null && job.cell !== null && Atomics.load(cells, job.cell) !== job.scope;
 
@@ -311,16 +358,25 @@ export function createWorkerPool(size: number, spawn: () => WorkerLike, opts: Po
     }
   };
 
-  /** Removes worker w: rejects its in-flight job and a pending configure, and every queued job once no worker is left. */
-  const fail = (w: number, what: string) => {
-    if (!alive[w]) return;
-    alive[w] = false;
-    live--;
+  /** Stops listening to worker w and terminates it. */
+  const silence = (w: number) => {
     const worker = workers[w]!;
     worker.onmessage = null;
     worker.onerror = null;
     worker.onmessageerror = null;
     worker.terminate();
+  };
+
+  /**
+   * Removes worker w: tells `onWorkerDead` its thread (w + 1), then rejects its in-flight job and a pending configure or
+   * attach, and every queued job once no worker is left.
+   */
+  const fail = (w: number, what: string) => {
+    if (!alive[w]) return;
+    alive[w] = false;
+    live--;
+    silence(w);
+    opts.onWorkerDead?.(w + 1);
     const e = new WorkerFailed(`worker ${w + 1} of ${size} failed: ${what}`);
     const job = busy[w];
     busy[w] = null;
@@ -360,9 +416,11 @@ export function createWorkerPool(size: number, spawn: () => WorkerLike, opts: Po
         return;
       }
       if (msg.type === 'attached') {
-        // An attached reply with no attach pending is ignored (ruling P28).
-        const pa = pendingAttach;
-        if (pa === null || ++pa.got < pa.need) return;
+        // An attached reply with no attach pending, or answering an earlier attach, is ignored (ruling P28; SP4b spec §2.8).
+        if (!attachAnswer(w)) return;
+        const pa = pendingAttach!;
+        pa.waiting[w] = false;
+        if (--pa.left > 0) return;
         pendingAttach = null;
         pa.resolve();
         pump();
@@ -372,7 +430,7 @@ export function createWorkerPool(size: number, spawn: () => WorkerLike, opts: Po
         // A late error of a superseded configure must not reject the current one (SP2a minor 4).
         if (pendingReady !== null && msg.epoch === epoch) { const pr = pendingReady; pendingReady = null; pr.reject(new Error(`${msg.code}: ${msg.message}`)); }
         // An attach's error has no epoch (ruling P28): the attach failed, and the jobs it holds back are released.
-        else if (pendingAttach !== null && msg.epoch === null) { const pa = pendingAttach; pendingAttach = null; pa.reject(new Error(`${msg.code}: ${msg.message}`)); pump(); }
+        else if (msg.epoch === null && attachAnswer(w)) { const pa = pendingAttach!; pendingAttach = null; pa.reject(new Error(`${msg.code}: ${msg.message}`)); pump(); }
         return;
       }
       const job = busy[w];
@@ -380,6 +438,7 @@ export function createWorkerPool(size: number, spawn: () => WorkerLike, opts: Po
       if (job !== null && msg.jobId === job.id) {
         if (job.epoch !== epoch || moved(job) || (msg.type === 'error' && msg.code === 'ABORTED')) job.reject(new JobCancelled());
         else if (msg.type === 'error' && msg.code === 'STORE_FULL') job.reject(new StoreFullError(`${msg.code}: ${msg.message}`));
+        else if (msg.type === 'error' && msg.code === 'STORE_CORRUPT') job.reject(new StoreCorruptError(`${msg.code}: ${msg.message}`));
         else if (msg.type === 'error') job.reject(new Error(`${msg.code}: ${msg.message}`));
         else job.resolve(msg);
       }
@@ -415,15 +474,16 @@ export function createWorkerPool(size: number, spawn: () => WorkerLike, opts: Po
     });
 
   /** A T, D or L job of (cx, cz) at priority 0; its reply must name the same job and column. */
-  const columnJob = async (type: 'terrain' | 'decorate' | 'light', cx: number, cz: number): Promise<ColumnDone> => {
-    const r = await worldJob(type, cx, cz);
+  const columnJob = async (type: 'terrain' | 'decorate' | 'light', cx: number, cz: number, protoOnly = false): Promise<ColumnDone> => {
+    const r = await worldJob(type, cx, cz, protoOnly);
     if (r.type !== 'columnDone') throw new Error(`unexpected reply ${r.type}`);
     if (r.job !== type || r.cx !== cx || r.cz !== cz) throw new Error(`world job reply: ${r.job} of column (${r.cx}, ${r.cz}), expected ${type} (${cx}, ${cz})`);
     return { cx, cz, ms: r.ms, versions: r.versions === null ? null : new Int32Array(r.versions) };
   };
-  const worldJob = (type: WorldJobType, cx: number, cz: number): Promise<FromWorker> => {
+  /** A world job of (cx, cz) at priority 0; `protoOnly` (terrain only) goes into the message only when true. */
+  const worldJob = (type: WorldJobType, cx: number, cz: number, protoOnly = false): Promise<FromWorker> => {
     const e = epoch;
-    return enqueue(0, type, (jobId, scope) => ({ type, jobId, epoch: e, scope, cx, cz }), null);
+    return enqueue(0, type, (jobId, scope) => (protoOnly ? { type, jobId, epoch: e, scope, cx, cz, protoOnly } : { type, jobId, epoch: e, scope, cx, cz }), null);
   };
 
   return {
@@ -459,12 +519,15 @@ export function createWorkerPool(size: number, spawn: () => WorkerLike, opts: Po
       if (pendingAttach !== null) return Promise.reject(new Error('attachStore: an attach is pending'));
       if (live === 0) return Promise.reject(new WorkerFailed('every worker failed'));
       return new Promise<void>((resolve, reject) => {
-        pendingAttach = { need: live, got: 0, resolve, reject };
-        const msg: ToWorker = { type: 'attach', handles: h };
-        workers.forEach((w, i) => { if (alive[i]) w.postMessage(msg); });
+        pendingAttach = { waiting: alive.slice(), left: live, resolve, reject };
+        workers.forEach((w, i) => {
+          if (!alive[i]) return;
+          attachOwed[i]!++;
+          w.postMessage({ type: 'attach', handles: h, thread: i + 1 });
+        });
       });
     },
-    terrain: (cx, cz) => columnJob('terrain', cx, cz),
+    terrain: (cx, cz, protoOnly = false) => columnJob('terrain', cx, cz, protoOnly),
     decorate: (cx, cz) => columnJob('decorate', cx, cz),
     light: (cx, cz) => columnJob('light', cx, cz),
     async meshColumn(cx, cz) {
@@ -612,6 +675,19 @@ export function createWorkerPool(size: number, spawn: () => WorkerLike, opts: Po
         return true;
       });
     },
+    cancelWorld(pred) {
+      const dropped: Job[] = [];
+      queue = queue.filter((j) => {
+        const stage = STAGE_OF[j.msg.type];
+        if (stage === undefined) return true;
+        const m = j.msg as { readonly cx: number; readonly cz: number };
+        if (!pred(stage, m.cx, m.cz)) return true;
+        dropped.push(j);
+        return false;
+      });
+      for (const j of dropped) j.reject(new JobCancelled());
+    },
+    liveWorkers: () => live,
     probe() {
       const jobs: InFlightJob[] = [];
       busy.forEach((j, worker) => {
@@ -620,7 +696,15 @@ export function createWorkerPool(size: number, spawn: () => WorkerLike, opts: Po
       return { busy: jobs.length, queued: queue.length, configuring: pendingReady !== null, jobs };
     },
     terminate() {
-      for (const w of workers) w.terminate();
+      // SP4b spec §2.8: the barriers and the busy jobs settle (WorkerFailed('terminated')), then the queue as before.
+      const e = new WorkerFailed('terminated');
+      workers.forEach((_, w) => {
+        if (alive[w]) { alive[w] = false; silence(w); }
+      });
+      live = 0;
+      if (pendingAttach !== null) { const pa = pendingAttach; pendingAttach = null; pa.reject(e); }
+      if (pendingReady !== null) { const pr = pendingReady; pendingReady = null; pr.reject(e); }
+      busy.forEach((job, w) => { busy[w] = null; job?.reject(e); });
       for (const j of queue) j.reject(new JobCancelled());
       queue = [];
     },
@@ -630,15 +714,16 @@ export function createWorkerPool(size: number, spawn: () => WorkerLike, opts: Po
 /**
  * Browser pool of module workers running task.worker.ts (size defaults to clamp(cores − 2, 2, 6)). `epochCells` defaults
  * to a pool-owned 16-byte buffer under cross-origin isolation (where a SharedArrayBuffer posted to a worker is shared),
- * null otherwise; the world page passes its store's `epochs.cells` (SP4b spec §2.7).
+ * null otherwise; the world page passes its store's `epochs.cells` (SP4b spec §2.7). `onWorkerDead` is passed to the pool
+ * (the world page marks the failed thread dead in its store, SP4b spec §2.6).
  */
 export function createBrowserPool(
   size = poolSize(navigator.hardwareConcurrency || 4),
-  opts: { readonly onFailure?: (e: WorkerFailed) => void; readonly epochCells?: Int32Array | null } = {},
+  opts: { readonly onFailure?: (e: WorkerFailed) => void; readonly onWorkerDead?: (thread: number) => void; readonly epochCells?: Int32Array | null } = {},
 ): WorkerPool {
   const isolated = globalThis.crossOriginIsolated === true && typeof SharedArrayBuffer === 'function';
   const epochCells = opts.epochCells !== undefined ? opts.epochCells : isolated ? new Int32Array(new SharedArrayBuffer(4 * EPOCH_CELL_COUNT)) : null;
   return createWorkerPool(size, () =>
     new Worker(new URL('../workers/task.worker.ts', import.meta.url), { type: 'module' }) as unknown as WorkerLike,
-  { epochCells, onFailure: opts.onFailure });
+  { epochCells, onFailure: opts.onFailure, onWorkerDead: opts.onWorkerDead });
 }

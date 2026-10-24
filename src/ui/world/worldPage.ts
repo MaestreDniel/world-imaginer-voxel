@@ -493,9 +493,11 @@ export function mountWorldPage(root: HTMLElement, q: WorldQuery, hash: string, o
     const loadRd = resolveRenderDistance(caps, q.rd, settings.rd);
     rd = loadRd;
     const store = createStore({ shared: true, maxBlockBytes: caps.reservation.blockBytes, maxByteBytes: caps.reservation.byteBytes });
-    // The pool's per-scope epoch cells are the store's (SP4b spec §2.7).
+    // The pool's per-scope epoch cells are the store's (SP4b spec §2.7); a failed worker's thread is marked dead in the
+    // store, so its reader epoch no longer holds releases in limbo and its pool lock reads as StoreCorrupt (§2.6).
     const workers = createBrowserPool(q.workers ?? poolSize(navigator.hardwareConcurrency || 4), {
       onFailure: (e) => fail(causeOf(e), e),
+      onWorkerDead: (t) => store.markDead(t),
       epochCells: store.epochs.cells,
     });
     pool = workers;

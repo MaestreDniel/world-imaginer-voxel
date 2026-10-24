@@ -259,7 +259,7 @@ describe('worldJobsOf (ruling P30)', () => {
   const payload = { cx: 4, cz: 5, versions: Int32Array.from({ length: 18 }, (_, i) => 100 + i) } as unknown as ColumnMeshPayload;
   const calls: string[] = [];
   const pool = {
-    terrain: (cx: number, cz: number) => { calls.push(`terrain ${cx} ${cz}`); return Promise.resolve(done(cx, cz, null)); },
+    terrain: (cx: number, cz: number, protoOnly?: boolean) => { calls.push(`terrain ${cx} ${cz} ${String(protoOnly)}`); return Promise.resolve(done(cx, cz, null)); },
     decorate: (cx: number, cz: number) => { calls.push(`decorate ${cx} ${cz}`); return Promise.resolve(done(cx, cz, null)); },
     light: (cx: number, cz: number) => { calls.push(`light ${cx} ${cz}`); return Promise.resolve(done(cx, cz, lightVersions)); },
     meshColumn: (cx: number, cz: number) => { calls.push(`meshColumn ${cx} ${cz}`); return Promise.resolve(payload); },
@@ -276,7 +276,13 @@ describe('worldJobsOf (ruling P30)', () => {
     const m = await jobs.run('MESH', 4, 5);
     expect(m.payload).toBe(payload);
     expect(m.versions).toBe(payload.versions);
-    expect(calls).toEqual(['terrain 1 -2', 'decorate 1 -2', 'light 1 -2', 'meshColumn 4 5']);
+    expect(calls).toEqual(['terrain 1 -2 false', 'decorate 1 -2', 'light 1 -2', 'meshColumn 4 5']);
+  });
+
+  test('T with protoOnly runs terrain(cx, cz, true) (SP4b spec §3.7)', async () => {
+    calls.length = 0;
+    expect(await worldJobsOf(pool).run('T', 3, 4, true)).toEqual({ versions: null, payload: null });
+    expect(calls).toEqual(['terrain 3 4 true']);
   });
 
   test('rejections pass through unchanged', async () => {

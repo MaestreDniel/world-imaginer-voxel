@@ -32,22 +32,26 @@ export interface JobOutcome {
   readonly payload: ColumnMeshPayload | null;
 }
 
-/** The pool seen by the coordinator: one call per job (`worldJobsOf` adapts the pool). */
+/**
+ * The pool seen by the coordinator: one call per job (`worldJobsOf` adapts the pool). `protoOnly` (T only; SP4b spec
+ * §3.7) is `T(protoOnly)`; it defaults to false for SP4a's three-argument callers.
+ */
 export interface CoordinatorJobs {
-  run(stage: Stage, cx: number, cz: number): Promise<JobOutcome>;
+  run(stage: Stage, cx: number, cz: number, protoOnly?: boolean): Promise<JobOutcome>;
 }
 
 /**
- * The pool as the coordinator's jobs (ruling P30): T, D, L and MESH run `terrain`, `decorate`, `light` and `meshColumn`.
- * T, D and L resolve `{ versions: done.versions, payload: null }` (light's 18 versions, null for terrain and decorate),
- * MESH `{ versions: p.versions, payload: p }`. Rejections pass through unchanged; the coordinator wraps them in LoadError.
+ * The pool as the coordinator's jobs (ruling P30): T, D, L and MESH run `terrain`, `decorate`, `light` and `meshColumn`
+ * (T with `protoOnly`, SP4b spec §3.7). T, D and L resolve `{ versions: done.versions, payload: null }` (light's 18
+ * versions, null for terrain and decorate), MESH `{ versions: p.versions, payload: p }`. Rejections pass through
+ * unchanged; the coordinator wraps them in LoadError.
  */
 export function worldJobsOf(pool: Pick<WorkerPool, 'terrain' | 'decorate' | 'light' | 'meshColumn'>): CoordinatorJobs {
   const column = (d: ColumnDone): JobOutcome => ({ versions: d.versions, payload: null });
   return {
-    run(stage, cx, cz) {
+    run(stage, cx, cz, protoOnly = false) {
       switch (stage) {
-        case 'T': return pool.terrain(cx, cz).then(column);
+        case 'T': return pool.terrain(cx, cz, protoOnly).then(column);
         case 'D': return pool.decorate(cx, cz).then(column);
         case 'L': return pool.light(cx, cz).then(column);
         case 'MESH': return pool.meshColumn(cx, cz).then((p) => ({ versions: p.versions, payload: p }));

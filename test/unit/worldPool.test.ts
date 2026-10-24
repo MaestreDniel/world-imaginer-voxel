@@ -2,9 +2,15 @@
  * The pool's world methods (SP4a spec §2.3; rulings P28, P30) with scripted fake workers: `attachStore` and its own
  * barrier, `terrain`/`decorate`/`light` resolving `ColumnDone`, `meshColumn` rebuilding the payload's typed views
  * over the transferred buffers, STORE_FULL as `StoreFullError`, and a reply of an old epoch as `JobCancelled`.
+ * SP4b (spec §2.6, §2.8, §3.7): each worker attaches as thread w + 1 and a retried attach succeeds; `cancelWorld`,
+ * `liveWorkers`, `onWorkerDead`, `terminate` settling its barriers and busy jobs, STORE_CORRUPT as `StoreCorruptError`,
+ * and `terrain(cx, cz, true)`.
  */
-import { describe, expect, test } from 'vitest';
-import { createWorkerPool, JobCancelled, StoreFullError, WorkerFailed, type WorkerLike } from '../../src/engine/workerPool';
+import { afterEach, describe, expect, test, vi } from 'vitest';
+import type { Stage } from '../../src/engine/rings';
+import {
+  createBrowserPool, createWorkerPool, JobCancelled, StoreCorruptError, StoreFullError, WorkerFailed, type WorkerLike,
+} from '../../src/engine/workerPool';
 import type { ToWorker } from '../../src/workers/protocol';
 import { createStore, type StoreHandles } from '../../src/world/store/store';
 import { fakePayload } from './fixtures/payloads';
@@ -217,5 +223,155 @@ describe('the world jobs (SP4a spec §2.3, ruling P30)', () => {
     expect(await t).toBeInstanceOf(JobCancelled);
     expect(await m).toBeInstanceOf(JobCancelled);
     expect((await next).epoch).toBe(1);
+  });
+});
+
+describe('SP4b: the pool\'s own fixes (SP4b spec §2.6, §2.8, §3.7)', () => {
+  afterEach(() => { vi.unstubAllGlobals(); });
+
+  test('each worker attaches as thread w + 1', async () => {
+    const workers: ScriptedWorker[] = [];
+    const pool = createWorkerPool(3, () => { const w = scripted(done); workers.push(w); return w; });
+    await pool.attachStore(handles());
+    expect(workers.map((w) => (w.log[0] as { thread?: number }).thread)).toEqual([1, 2, 3]);
+  });
+
+  test('terrain(cx, cz, true) posts protoOnly: true; the default posts no protoOnly', async () => {
+    const workers: ScriptedWorker[] = [];
+    const pool = createWorkerPool(1, () => { const w = scripted(done); workers.push(w); return w; });
+    await pool.configure('42', {});
+    expect(await pool.terrain(1, 2, true)).toEqual({ cx: 1, cz: 2, ms: 2.5, versions: null });
+    expect(await pool.terrain(3, 4)).toEqual({ cx: 3, cz: 4, ms: 2.5, versions: null });
+    const [a, b] = workers[0]!.log.filter((m) => m.type === 'terrain');
+    expect(a).toMatchObject({ cx: 1, cz: 2, protoOnly: true });
+    expect(b).not.toHaveProperty('protoOnly');
+  });
+
+  test('cancelWorld drops matching queued world jobs only', async () => {
+    const workers: ScriptedWorker[] = [];
+    const pool = createWorkerPool(1, () => {
+      const w = scripted((msg) => (msg.type === 'point' ? { type: 'pointResult', jobId: jobOf(msg).jobId, epoch: jobOf(msg).epoch, fields: {} }
+        : msg.type === 'meshColumn' ? { type: 'error', jobId: jobOf(msg).jobId, epoch: jobOf(msg).epoch, code: 'INTERNAL', message: 'unused' }
+          : done(msg, msg.type === 'light' ? new ArrayBuffer(72) : null)), { holdJobs: true });
+      workers.push(w);
+      return w;
+    });
+    await pool.configure('42', {});
+    const running = settle(pool.terrain(1, 0));
+    const queued = [settle(pool.terrain(1, 1)), settle(pool.decorate(1, 0)), settle(pool.light(2, 0)), settle(pool.meshColumn(3, 0)), settle(pool.decorate(5, 0))];
+    const point = settle(pool.point(1, 0));
+    expect(pool.queued).toBe(6);
+    const seen: Array<[Stage, number, number]> = [];
+    pool.cancelWorld((stage, cx, cz) => { seen.push([stage, cx, cz]); return cx === 1 || stage === 'MESH'; });
+    // The predicate sees each queued world job once (not the running one, nor the point).
+    expect(seen).toEqual([['T', 1, 1], ['D', 1, 0], ['L', 2, 0], ['MESH', 3, 0], ['D', 5, 0]]);
+    expect(pool.queued).toBe(3);
+    for (const i of [0, 1, 3]) expect(await queued[i]!).toBeInstanceOf(JobCancelled);
+    for (let k = 0; k < 4; k++) { workers[0]!.release(); await tick(); }
+    expect(await running).toEqual({ cx: 1, cz: 0, ms: 2.5, versions: null });
+    expect(await point).toEqual({});
+    expect(await queued[2]!).toMatchObject({ cx: 2, cz: 0 });
+    expect(await queued[4]!).toMatchObject({ cx: 5, cz: 0 });
+  });
+
+  test('liveWorkers counts down on a failure and onWorkerDead receives thread w + 1 (also when given through createBrowserPool\'s options, which forwards it)', async () => {
+    const dead: number[] = [];
+    const order: string[] = [];
+    const workers: ScriptedWorker[] = [];
+    const pool = createWorkerPool(3, () => { const w = scripted(done, { holdJobs: true }); workers.push(w); return w; }, {
+      onWorkerDead: (t) => { dead.push(t); order.push(`dead ${t}`); },
+      onFailure: () => order.push('failure'),
+    });
+    await pool.configure('42', {});
+    const jobs = [0, 1, 2].map((cx) => settle(pool.terrain(cx, 0)).then((r) => { order.push(r instanceof Error ? `rejected ${cx}` : `done ${cx}`); return r; }));
+    expect(pool.liveWorkers()).toBe(3);
+    workers[1]!.fire({ message: 'boom' });
+    expect([pool.liveWorkers(), dead]).toEqual([2, [2]]);
+    expect(await jobs[1]!).toBeInstanceOf(WorkerFailed);
+    // Called before the failed worker's rejections settle.
+    expect(order.slice(0, 2)).toEqual(['dead 2', 'failure']);
+    workers[2]!.fire({ message: 'boom' });
+    expect([pool.liveWorkers(), dead]).toEqual([1, [2, 3]]);
+    workers[0]!.release();
+    expect(await jobs[0]!).toMatchObject({ cx: 0 });
+
+    // createBrowserPool forwards onWorkerDead to the pool.
+    const spawned: ScriptedWorker[] = [];
+    vi.stubGlobal('Worker', function FakeWorker() { const w = scripted(done); spawned.push(w); return w; });
+    const viaBrowser: number[] = [];
+    const browser = createBrowserPool(2, { epochCells: null, onWorkerDead: (t) => viaBrowser.push(t) });
+    expect(browser.liveWorkers()).toBe(2);
+    spawned[0]!.fire({ message: 'boom' });
+    expect([browser.liveWorkers(), viaBrowser]).toEqual([1, [1]]);
+    browser.terminate();
+  });
+
+  test('terminate during an attach rejects attachStore and every busy job with WorkerFailed(\'terminated\')', async () => {
+    const workers: ScriptedWorker[] = [];
+    const pool = createWorkerPool(2, () => { const w = scripted(done, { holdAttach: true, holdJobs: true }); workers.push(w); return w; });
+    await pool.configure('42', {});
+    const busy = [settle(pool.terrain(0, 0)), settle(pool.decorate(1, 0))];
+    const queued = settle(pool.light(2, 0));
+    expect(pool.probe().busy).toBe(2);
+    const attach = settle(pool.attachStore(handles()));
+    const configure = settle(pool.configure('42', {}));
+    pool.terminate();
+    for (const p of [attach, configure, ...busy]) {
+      const e = await p;
+      expect(e).toBeInstanceOf(WorkerFailed);
+      expect((e as Error).message).toBe('terminated');
+    }
+    // The queue rejects as before: the configure had already emptied it (JobCancelled).
+    expect(await queued).toBeInstanceOf(JobCancelled);
+    // Late replies of terminated workers change nothing.
+    for (const w of workers) w.release();
+    await tick();
+    expect(pool.probe().busy).toBe(0);
+  });
+
+  test('a retried attachStore after one worker answered BAD_MESSAGE resolves once each live worker answered attached', async () => {
+    const workers: ScriptedWorker[] = [];
+    let n = 0;
+    const pool = createWorkerPool(2, () => {
+      const first = n++ === 0;
+      const w = scripted(done, { holdAttach: !first });
+      if (first) {
+        // Worker 1 refuses its first attach, then accepts.
+        let attaches = 0;
+        const post = w.postMessage.bind(w);
+        w.postMessage = (msg, t) => {
+          if (msg.type !== 'attach' || attaches++ > 0) { post(msg, t); return; }
+          w.log.push(msg);
+          setTimeout(() => w.onmessage?.({ data: { type: 'error', jobId: null, epoch: null, code: 'BAD_MESSAGE', message: 'malformed message' } }), 0);
+        };
+      }
+      workers.push(w);
+      return w;
+    });
+    const h = handles();
+    const first = await settle(pool.attachStore(h));
+    expect((first as Error).message).toBe('BAD_MESSAGE: malformed message');
+    let resolved = false;
+    const retry = pool.attachStore(h).then(() => { resolved = true; });
+    await tick();
+    // Worker 1 answered the retry; worker 2's answer to the first attach arrives now and must not count for the retry.
+    workers[1]!.release((m) => m === workers[1]!.log[0]);
+    await tick();
+    expect(resolved).toBe(false);
+    workers[1]!.release();
+    await retry;
+    expect(resolved).toBe(true);
+    expect(workers.map((w) => w.log.filter((m) => m.type === 'attach').map((m) => (m as { thread: number }).thread))).toEqual([[1, 1], [2, 2]]);
+  });
+
+  test('STORE_CORRUPT rejects with StoreCorruptError', async () => {
+    const pool = createWorkerPool(1, () => scripted((msg) => {
+      const m = jobOf(msg);
+      return { type: 'error', jobId: m.jobId, epoch: m.epoch, code: 'STORE_CORRUPT', message: 'pool lock held by failed thread 2' };
+    }));
+    await pool.configure('42', {});
+    const e = await settle(pool.decorate(0, 0));
+    expect(e).toBeInstanceOf(StoreCorruptError);
+    expect([(e as Error).name, (e as Error).message]).toEqual(['StoreCorruptError', 'STORE_CORRUPT: pool lock held by failed thread 2']);
   });
 });

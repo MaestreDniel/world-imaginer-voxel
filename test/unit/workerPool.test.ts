@@ -401,6 +401,31 @@ describe('worker pool: worker errors (SP2b spec §2.3)', () => {
   });
 });
 
+describe('worker pool: terminate (SP4b spec §2.8)', () => {
+  test('terminate rejects a pending configure and the busy jobs with WorkerFailed(\'terminated\'), the queued ones with JobCancelled; afterwards no worker is live', async () => {
+    const workers = [silentWorker(), silentWorker()];
+    let n = 0;
+    const pool = createWorkerPool(2, () => workers[n++]!);
+    const busy = [settle(pool.tile(tile(0), 0)), settle(pool.point(1, 2))];
+    const queued = settle(pool.spawn());
+    expect(pool.probe()).toMatchObject({ busy: 2, queued: 1 });
+    const configure = settle(pool.configure('42', DEFAULTS));
+    const queuedAfter = settle(pool.tile(tile(1), 0));
+    pool.terminate();
+    for (const p of [configure, ...busy]) {
+      const e = await p;
+      expect(e).toBeInstanceOf(WorkerFailed);
+      expect((e as Error).message).toBe('terminated');
+    }
+    expect(await queued).toBeInstanceOf(JobCancelled);
+    expect(await queuedAfter).toBeInstanceOf(JobCancelled);
+    expect([workers.every((w) => w.terminated), pool.liveWorkers(), pool.probe().busy]).toEqual([true, 0, 0]);
+    expect(await settle(pool.point(0, 0))).toBeInstanceOf(WorkerFailed);
+    // The workers' handlers are detached: a late reply settles nothing.
+    expect(workers.map((w) => w.onmessage)).toEqual([null, null]);
+  });
+});
+
 describe('worker pool: stats jobs (SP2b spec §5.4)', () => {
   const statsOf = (log: readonly ToWorker[]) => log.flatMap((m) => (m.type === 'stats' ? [[m.kind, m.from, m.to]] : []));
   const SHARES = { len: biomeSharesLength() };

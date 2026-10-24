@@ -4,6 +4,10 @@
  * seed '42', then T on the 7 × 7 around (0, 0), D on the 5 × 5, L on the 3 × 3 and MESH_COLUMN on (0, 0). The payload is
  * valid and equals the in-process mesh of the same store, its versions are the store's, and the light of (0, 0) equals
  * `fillColumnL` run in process on a copy of the world (a second store filled to Decorated in this thread).
+ * SP4b (spec §2.5, §2.8, §3.7): a second attach of the same store succeeds; `T(protoOnly)` through a worker restores
+ * the freed proto of the Published (0, 0) (its region hash, versions and status unchanged); an L retried after a partial
+ * write releases its old light slots into the worker's limbo while this thread reads, and the wrapper's retry timer
+ * drains them once this thread leaves its read section.
  */
 import { Worker } from 'node:worker_threads';
 import { afterAll, beforeAll, expect, test } from 'vitest';
@@ -11,7 +15,7 @@ import { DEFAULTS } from '../../src/core/params/defaults';
 import { MEDIUM } from '../../src/core/params/graphicsPresets';
 import { createWorkerPool, type ColumnDone, type WorkerLike, type WorkerPool } from '../../src/engine/workerPool';
 import { createLightScratch } from '../../src/light/initial';
-import { fillColumnT } from '../../src/metrics/region';
+import { fillColumnT, regionHash } from '../../src/metrics/region';
 import { createMeshScratch, payloadProblem } from '../../src/mesh/column';
 import { STATUS_PUBLISHED } from '../../src/world/store/columnTable';
 import { createStore, type VoxelStore } from '../../src/world/store/store';
@@ -100,6 +104,41 @@ test('attach, configure, then T, D, L and MESH_COLUMN through two workers on the
     for (const [cx, cz] of square(1)) expect(fillColumnD(copy, ctx, cx, cz, NEVER)).toBe(true);
     expect(fillColumnL(copy, 0, 0, createLightScratch(), NEVER)).not.toBeNull();
     for (let sy = 0; sy < 24; sy++) expect(Buffer.from(lightOf(store, sy)).equals(Buffer.from(lightOf(copy, sy))), `sy ${sy}`).toBe(true);
+
+    // SP4b: the attach is idempotent per worker; T(protoOnly) regenerates (0, 0)'s freed proto as it was.
+    await pool.attachStore(store.handles());
+    const base = store.table.find(0, 0);
+    const record = () => [store.table.blockVersion(base), store.table.lightVersion(base), store.table.status(base)];
+    const r0 = record();
+    const hash0 = regionHash(store, 0, 0, 1, 1);
+    store.freeProto(0, 0);
+    expect(store.proto(0, 0)).toBeNull();
+    expect(await pool.terrain(0, 0, true)).toMatchObject({ cx: 0, cz: 0, versions: null });
+    expect([regionHash(store, 0, 0, 1, 1), record()]).toEqual([hash0, r0]);
+    for (const t of [1, 2]) expect(store.limboCount(t), `thread ${t}`).toBe(0);
+
+    // SP4b: (2, 0) at Decorated with its 3 × 3 decorated, then a partial L in this thread (12 setLight, then a throw).
+    for (let cz = -2; cz <= 2; cz++) expect(fillColumnT(store, ctx, 4, cz, NEVER)).toBe(true);
+    for (let cz = -1; cz <= 1; cz++) expect(fillColumnD(store, ctx, 3, cz, NEVER)).toBe(true);
+    let calls = 0;
+    const partial: VoxelStore = {
+      ...store,
+      reopenColumn(cx, cz, from) {
+        const w = store.reopenColumn(cx, cz, from);
+        return { ...w, setLight(sy, light) { if (calls++ === 12) throw new Error('injected'); w.setLight(sy, light); } };
+      },
+    };
+    expect(() => fillColumnL(partial, 2, 0, createLightScratch(), NEVER)).toThrow('injected');
+    // The worker's L resets the partial light while this thread reads: the released slots wait in its limbo...
+    const limbo = () => store.limboCount(1) + store.limboCount(2);
+    store.enterRead();
+    expect((await pool.light(2, 0)).versions).not.toBeNull();
+    expect(limbo()).toBeGreaterThan(0);
+    store.exitRead();
+    // ...until the wrapper's retry (every 16 ms) drains them.
+    const until = Date.now() + 2000;
+    while (limbo() > 0 && Date.now() < until) await new Promise((r) => setTimeout(r, 5));
+    expect(limbo()).toBe(0);
   } finally {
     pool.terminate();
   }

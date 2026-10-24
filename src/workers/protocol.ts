@@ -19,6 +19,9 @@
  * table is checked against its buffers (`payloadProblem`).
  * SP4b (spec §2.7): every job but `selftest` carries two values, `epoch` (its configure generation: STALE_EPOCH when it is not
  * the worker's) and `scope` (the value of its phase's epoch cell at issue, `cellOf`: the worker stops it once the cell moves).
+ * SP4b (spec §2.5, §2.6, §2.8, §3.7): `attach` carries the worker's reclaim `thread` (1 … 15) and is idempotent for the same
+ * store id and thread; `terrain` may carry `protoOnly` (`T(protoOnly)`); STORE_CORRUPT is a world job's `StoreCorrupt`, and an
+ * error's code must be an `ErrorCode`.
  */
 import { MAP_LEVELS, MAP_TILE_PX, PART_BUDGET, SLICE_NS, type MapLevel } from '../core/constants';
 import type { StageId } from '../core/ids';
@@ -33,7 +36,7 @@ import type { ColumnView } from '../world/store/api';
 import { COLUMN_TABLE_BYTES } from '../world/store/columnTable';
 import { EPOCH_CELL, EPOCH_CELL_COUNT } from '../world/store/epochs';
 import { BLOCK_SLOT_BYTES, BYTE_SLOT_BYTES, GROW_BYTES, type PoolHandles } from '../world/store/pool';
-import { RECLAIM_BYTES } from '../world/store/reclaim';
+import { RECLAIM_BYTES, RECLAIM_THREADS } from '../world/store/reclaim';
 import { STATE_TABLE_SIZE, type StoreHandles } from '../world/store/store';
 
 export { COLUMN_SAMPLE_COST, CORNER_SAMPLE_COST, CORNER_STEEP_COST, DRAFT_BUDGET, PART_BUDGET, REQUEST_BUDGET, SLICE_RULE_NA } from '../core/constants';
@@ -108,13 +111,20 @@ export interface FieldProbeSpec { readonly field: ProbeField; readonly path: str
 export type FieldProbeMsg = FieldProbeSpec & Scoped & { readonly type: 'fieldProbe' };
 /**
  * The page's shared store, sent once per worker before its configure (SP4a spec §2.3); answered `attached`, or a job-less
- * BAD_MESSAGE (a second attach, or handles the guard refuses).
+ * BAD_MESSAGE (handles the guard refuses, or a worker already attached to another store or as another thread). `thread`
+ * (1 … 15) is the worker's index in the store's reclaim buffer and its pool lock word (SP4b spec §2.5, §2.6): the pool's
+ * worker w attaches as w + 1. An attach repeating the worker's store id and thread is answered `attached` again (SP4b
+ * spec §2.8), so a retried `attachStore` succeeds.
  */
-export interface AttachMsg { readonly type: 'attach'; readonly handles: StoreHandles }
+export interface AttachMsg { readonly type: 'attach'; readonly handles: StoreHandles; readonly thread: number }
 /** The four world jobs (SP4a spec §2.3): T, the D skeleton, the exact light and the column mesh. */
 export type WorldJobType = 'terrain' | 'decorate' | 'light' | 'meshColumn';
-/** A world job on column (cx, cz) of the attached store; cx and cz are integers whose blocks lie in the world window. */
-export interface WorldJobMsg extends Scoped { readonly type: WorldJobType; readonly cx: number; readonly cz: number }
+/**
+ * A world job on column (cx, cz) of the attached store; cx and cz are integers whose blocks lie in the world window.
+ * `protoOnly` (terrain only, a boolean when present; SP4b spec §3.7): `T(protoOnly)`, which regenerates the freed proto of
+ * a Decorated or Published column through `reopenProto`.
+ */
+export interface WorldJobMsg extends Scoped { readonly type: WorldJobType; readonly cx: number; readonly cz: number; readonly protoOnly?: boolean }
 export type ToWorker = ConfigureMsg | MapTileMsg | PointMsg | SpawnMsg | StatsMsg | SliceMsg | SurfaceProbeMsg | SelftestMsg | FieldSliceMsg | FieldProbeMsg
   | AttachMsg | WorldJobMsg;
 /** Every job type that carries an `epoch` and a `scope` (SP4b spec §2.7): all but configure, attach and selftest. */
@@ -138,9 +148,16 @@ export interface PointResultMsg { readonly type: 'pointResult'; readonly jobId: 
 /**
  * ABORTED: the job's epoch cell moved from its scope (the pool reads it as JobCancelled). BAD_ARGS: a stats job's arguments do
  * not fit the configured params. NOT_ATTACHED: a world job before `attach`. STORE_FULL: a world job's store pool is at its
- * maximum (`StoreFull`; the pool rejects with `StoreFullError`).
+ * maximum (`StoreFull`; the pool rejects with `StoreFullError`). STORE_CORRUPT: a world job met `StoreCorrupt` (a pool lock
+ * held by a failed thread, SP4b spec §2.6; the pool rejects with `StoreCorruptError`, which is fatal).
  */
-export type ErrorCode = 'BAD_MESSAGE' | 'BAD_PARAMS' | 'NOT_CONFIGURED' | 'STALE_EPOCH' | 'INTERNAL' | 'ABORTED' | 'BAD_ARGS' | 'NOT_ATTACHED' | 'STORE_FULL';
+export type ErrorCode = 'BAD_MESSAGE' | 'BAD_PARAMS' | 'NOT_CONFIGURED' | 'STALE_EPOCH' | 'INTERNAL' | 'ABORTED' | 'BAD_ARGS' | 'NOT_ATTACHED' | 'STORE_FULL'
+  | 'STORE_CORRUPT';
+/** Every `ErrorCode` (a record, so a new code cannot be left out of the reply guard). */
+const ERROR_CODES: Readonly<Record<ErrorCode, true>> = Object.freeze({
+  BAD_MESSAGE: true, BAD_PARAMS: true, NOT_CONFIGURED: true, STALE_EPOCH: true, INTERNAL: true, ABORTED: true, BAD_ARGS: true,
+  NOT_ATTACHED: true, STORE_FULL: true, STORE_CORRUPT: true,
+});
 /** `epoch` is the epoch of the message answered (a configure's or a job's), null when it had none. */
 export interface ErrorMsg { readonly type: 'error'; readonly jobId: number | null; readonly epoch: number | null; readonly code: ErrorCode; readonly message: string }
 export interface SpawnResultMsg { readonly type: 'spawnResult'; readonly jobId: number; readonly epoch: number; readonly spawn: Spawn }
@@ -379,6 +396,12 @@ const storeHandlesOk = (h: unknown): boolean =>
   && sharedPoolOk(h['blocks'], BLOCK_SLOT_BYTES) && sharedPoolOk(h['bytes'], BYTE_SLOT_BYTES)
   && h['pass'] instanceof Uint8Array && h['pass'].length === STATE_TABLE_SIZE;
 
+/** A worker's reclaim thread (SP4b spec §2.5): 1 … 15 (0 is the main thread). */
+const isWorkerThread = (t: unknown): boolean => isInt(t) && t >= 1 && t < RECLAIM_THREADS;
+/** `protoOnly` absent, or a boolean on a terrain job (SP4b spec §3.7). */
+const protoOnlyOk = (m: Record<string, unknown>): boolean =>
+  m['protoOnly'] === undefined || (m['type'] === 'terrain' && typeof m['protoOnly'] === 'boolean');
+
 /** Validates a message sent to a worker; null when malformed. */
 export function parseToWorker(m: unknown): ToWorker | null {
   if (!isObj(m)) return null;
@@ -408,9 +431,9 @@ export function parseToWorker(m: unknown): ToWorker | null {
     case 'fieldProbe':
       return fieldProbeOk(m) ? (m as unknown as FieldProbeMsg) : null;
     case 'attach':
-      return storeHandlesOk(m['handles']) ? (m as unknown as AttachMsg) : null;
+      return storeHandlesOk(m['handles']) && isWorkerThread(m['thread']) ? (m as unknown as AttachMsg) : null;
     case 'terrain': case 'decorate': case 'light': case 'meshColumn':
-      return scopedOk(m) && isColumn(m['cx'], m['cz']) ? (m as unknown as WorldJobMsg) : null;
+      return scopedOk(m) && isColumn(m['cx'], m['cz']) && protoOnlyOk(m) ? (m as unknown as WorldJobMsg) : null;
     default:
       return null;
   }
@@ -508,7 +531,8 @@ const REPLY_CHECKS: Readonly<Record<string, ReplyCheck>> = Object.freeze({
   fieldProbeResult: (m) => all(epochProblem(m), typeof m['value'] === 'number' ? null : 'value is not a number'),
   columnDone: columnDoneCheck,
   meshColumnResult: meshColumnCheck,
-  error: (m) => (m['epoch'] === null || isInt(m['epoch'])) && typeof m['code'] === 'string' && typeof m['message'] === 'string' ? null : 'epoch, code or message is malformed',
+  error: (m) => (m['epoch'] === null || isInt(m['epoch'])) && typeof m['code'] === 'string' && Object.hasOwn(ERROR_CODES, m['code']) && typeof m['message'] === 'string'
+    ? null : 'epoch, code or message is malformed',
 });
 
 /**

@@ -5,12 +5,16 @@
  * `createTaskHandler()`, whose `handle(message)` returns `{msg, transfer}`, and never imports `node:` modules
  * (the wrapper owns `parentPort`). Each test file builds into its own directory under test/.cache/ because
  * vitest runs test files in parallel.
+ * SP4b (spec §2.5): after each reply the wrapper drains the handler's limbo and retries every `LIMBO_RETRY_MS` while
+ * entries are left, as `task.worker.ts` does through `drainAfterReply`, mirrored in plain JS (the script cannot import
+ * the helper). It calls `h.drain?.()`, so the harness entries, which have no `drain`, keep working.
  */
 import { existsSync, mkdirSync, writeFileSync } from 'node:fs';
 import { basename } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import type { Worker } from 'node:worker_threads';
 import { build } from 'vite';
+import { LIMBO_RETRY_MS } from '../../src/workers/taskHandler';
 
 /**
  * Posts one message to `w` and waits for its single reply (the one shared helper of every worker-thread test, SP3b
@@ -60,9 +64,13 @@ export async function buildNodeTaskWorker(dir: string, opts: NodeWorkerOptions =
     "import { parentPort } from 'node:worker_threads';",
     `import { createTaskHandler } from './${bundle}';`,
     'const h = createTaskHandler();',
+    // drainAfterReply (src/workers/taskHandler.ts): drain now, then every LIMBO_RETRY_MS while entries are left, one timer at a time.
+    'let retrying = false;',
+    `const retry = () => { if ((h.drain?.() ?? 0) > 0) setTimeout(retry, ${LIMBO_RETRY_MS}); else retrying = false; };`,
+    `const drainAfterReply = () => { if ((h.drain?.() ?? 0) === 0 || retrying) return; retrying = true; setTimeout(retry, ${LIMBO_RETRY_MS}); };`,
     opts.stamp === true
-      ? "parentPort.on('message', (m) => { const r = h.handle(m); const handledAt = Number(process.hrtime.bigint()) / 1e6; parentPort.postMessage({ ...r.msg, handledAt }, r.transfer); });"
-      : "parentPort.on('message', (m) => { const r = h.handle(m); parentPort.postMessage(r.msg, r.transfer); });",
+      ? "parentPort.on('message', (m) => { const r = h.handle(m); const handledAt = Number(process.hrtime.bigint()) / 1e6; parentPort.postMessage({ ...r.msg, handledAt }, r.transfer); drainAfterReply(); });"
+      : "parentPort.on('message', (m) => { const r = h.handle(m); parentPort.postMessage(r.msg, r.transfer); drainAfterReply(); });",
   ].join('\n'));
   return `${out}node-worker.mjs`;
 }
