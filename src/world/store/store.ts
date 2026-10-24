@@ -20,6 +20,8 @@
  * Deferred reclamation (SP4b spec §2.5, `reclaim.ts`): each attached store is one thread's (`attachStore(h, thread)`;
  * `createStore` is thread 0, the main thread), and every slot it releases goes through that thread's `retire`, so a
  * slot a reader may hold is freed only once the reader has left its read section (`enterRead`/`exitRead`, `drain`).
+ * A shared store's pools lock as that thread (`thread + 1` in the lock word), and a thread spinning on a lock held by
+ * a thread marked dead (`markDead`) throws `StoreCorrupt` (SP4b spec §2.6).
  * `gen` imports only the types of `api.ts`, never this file.
  */
 import { PASS } from '../blocks/index';
@@ -44,7 +46,7 @@ import {
 } from './section';
 
 export { SlotBusy, WriterStale } from './columnTable';
-export { StoreFull } from './pool';
+export { StoreCorrupt, StoreFull } from './pool';
 export type {
   AuxBView, AuxView, ColumnView, ColumnWriter, CommitStatus, HeightmapKind, NeighborhoodReader, ProtoWriter, TerrainWriter,
 } from './api';
@@ -224,8 +226,11 @@ export function attachStore(h: StoreHandles, thread = MAIN_THREAD): VoxelStore {
   }
   assertBufferKind(h.table, h.shared, 'store: table');
   assertBufferKind(h.epochs, h.shared, 'store: epochs');
-  const blockPool = attachPool(h.blocks);
-  const bytePool = attachPool(h.bytes);
+  // A shared store's pools lock as this thread and check the dead-owner mask (SP4b spec §2.6); an unshared one has a
+  // single thread, so no owner.
+  const owner = h.shared ? { thread, dead: new Int32Array(h.reclaim) } : undefined;
+  const blockPool = attachPool(h.blocks, owner);
+  const bytePool = attachPool(h.bytes, owner);
   const table = attachColumnTable(h.table);
   const epochs = attachEpochCells(h.epochs);
   const reclaimer = attachReclaimer(h.reclaim, thread, [blockPool, bytePool], h.shared);

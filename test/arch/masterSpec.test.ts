@@ -718,6 +718,13 @@ describe('master spec amendments (SP4b §13)', () => {
     }
   });
 
+  test('§2.3\'s slabs paragraph names the lock owner (SP4b spec §2.6, §13)', () => {
+    const at = text.indexOf('**Slabs.**');
+    expect(at).toBeGreaterThan(text.indexOf('### 2.3 SharedArrayBuffer store'));
+    const slabs = text.slice(at, text.indexOf('**Final section descriptor**', at));
+    expect(slabs).toContain('the lock word holds its owner\'s thread index + 1, and a thread spinning on a failed owner\'s lock throws `StoreCorrupt` (SP4b)');
+  });
+
   test('§1 names each SP4b module in its entry, which exists', () => {
     for (const [head, token, file] of SP4B_MODULES) {
       const entry = layoutEntry(head);

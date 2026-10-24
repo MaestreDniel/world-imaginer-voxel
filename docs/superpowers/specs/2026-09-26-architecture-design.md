@@ -320,7 +320,7 @@ A pure fluid voxel is AIR plus a fluid byte. Waterlogging comes free: a state wh
 ### 2.3 SharedArrayBuffer store (`world/store`)
 
 **Slabs.** Two slab pools share one allocator implementation parameterised by slot size: the **block pool** (8 KiB slots, one u16 per voxel) and the **byte pool** (4 KiB slots, for light, fluid and the two aux slots). Each pool's slots live in **one growable buffer** (amended by SP3a): a `SharedArrayBuffer` created with `maxByteLength` (default 768 MiB for blocks, 512 MiB for bytes: reserved address space, not committed memory), or, with the same code, a resizable `ArrayBuffer`. A slot id is the slot's index in its pool.
-- Allocation uses an Int32 free stack per pool in a growable buffer, guarded by a CAS spinlock whose critical section is about 10 instructions. Workers allocate and free slots themselves.
+- Allocation uses an Int32 free stack per pool in a growable buffer, guarded by a CAS spinlock whose critical section is about 10 instructions; the lock word holds its owner's thread index + 1, and a thread spinning on a failed owner's lock throws `StoreCorrupt` (SP4b). Workers allocate and free slots themselves.
 - Whichever thread finds the free stack empty grows its pool by 1 MiB (128 block or 256 byte slots) inside the same lock; length-tracking views see the growth in every thread, so there is no page broadcast (amended by SP3a). A pool at its maximum throws `StoreFull`.
 - A per-slot `Int32Array` refcount (Atomics) lets proto and final section sets share unmodified slots. Every non-negative descriptor entry and every allocated aux slot holds one reference; one free per reference.
 

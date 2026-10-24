@@ -16,7 +16,7 @@ import {
   FINAL_BLOCKS, FINAL_FLUID, FINAL_LIGHT, FINAL_META, META_CUTOUT, META_FLUID, META_OPAQUE, PROTO_BLOCKS, PROTO_FLUID,
 } from '../../src/world/store/section';
 import {
-  attachStore, createStore, DEFAULT_PASS, SlotBusy, StoreFull, type VoxelStore,
+  attachStore, createStore, DEFAULT_PASS, SlotBusy, StoreCorrupt, StoreFull, type VoxelStore,
 } from '../../src/world/store/store';
 
 const MiB = 1 << 20;
@@ -894,6 +894,32 @@ describe('deferred reclamation in the store (SP4b spec §2.5)', () => {
     s.freeColumn(0, 0);
     expect(s.drain()).toBe(0);
     expect([s.blockPool.freeCount(), s.bytePool.freeCount()]).toEqual(before);
+  });
+});
+
+describe('the pool lock owner in the store (SP4b spec §2.6)', () => {
+  test('attachStore(h, 2) allocates under owner 3; createStore under owner 1', () => {
+    const s = createStore({ shared: true, maxBlockBytes: 4 * MiB, maxByteBytes: 4 * MiB });
+    const h = s.handles();
+    const s2 = attachStore(h, 2);
+    expect(s2.blockPool.withLock(() => s2.blockPool.lockWord())).toBe(3);
+    expect(s2.bytePool.withLock(() => s2.bytePool.lockWord())).toBe(3);
+    expect(s.blockPool.withLock(() => s.blockPool.lockWord())).toBe(1);
+    expect(s2.blockPool.lockWord()).toBe(0);
+  });
+
+  test('markDead(2) on a store whose pool lock word is 3 makes the next alloc throw StoreCorrupt', () => {
+    const s = createStore({ shared: true, maxBlockBytes: 4 * MiB, maxByteBytes: 4 * MiB });
+    const h = s.handles();
+    const s1 = attachStore(h, 1);
+    warm(s);
+    new Int32Array(h.blocks.ctl)[0] = 3; // thread 2 died holding the block pool's lock
+    s.markDead(2);
+    expect(() => s.blockPool.alloc()).toThrow(StoreCorrupt); // the main thread, too
+    expect(() => s1.blockPool.alloc()).toThrow('pool lock held by failed thread 2');
+    expect(() => s1.claimColumn(0, 0, 0).setProto(0, mixedBlocks(), mixedFluid())).toThrow(StoreCorrupt);
+    // The byte pool's lock is free, so its allocations go on.
+    s1.bytePool.free(s1.bytePool.alloc());
   });
 });
 

@@ -1,8 +1,9 @@
 import { describe, expect, test } from 'vitest';
 import {
   attachPool, BLOCK_SLOT_BYTES, BYTE_SLOT_BYTES, createPool, DEFAULT_MAX_BLOCK_BYTES, DEFAULT_MAX_BYTE_BYTES,
-  GROW_BYTES, StoreFull, type SlabPool,
+  GROW_BYTES, LOCK_RECHECK_SPINS, StoreCorrupt, StoreFull, type SlabPool,
 } from '../../src/world/store/pool';
+import { RECLAIM_BYTES, R_DEAD } from '../../src/world/store/reclaim';
 import { testRng } from '../harness/stats';
 
 const MiB = 1 << 20;
@@ -229,5 +230,49 @@ describe.each([true, false])('shared %s', (shared) => {
     expect(p.freeCount()).toBe(p.slotCount());
     expect(p.lockWord()).toBe(0);
     expectConsistent(p);
+  });
+});
+
+describe.each([true, false])('the lock owner (SP4b spec §2.6), shared %s', (shared) => {
+  const handles = () => createPool({ shared, slotBytes: BYTE_SLOT_BYTES, maxBytes: 4 * MiB }).handles();
+  /** A reclaim buffer's Int32 view: `dead[R_DEAD]` is the dead-owner mask. */
+  const deadView = () => new Int32Array(shared ? new SharedArrayBuffer(RECLAIM_BYTES) : new ArrayBuffer(RECLAIM_BYTES));
+
+  test('the lock word holds thread + 1 while held, 0 afterwards; without an owner it is 1', () => {
+    expect(LOCK_RECHECK_SPINS).toBe(4096);
+    const h = handles();
+    const dead = deadView();
+    const p = attachPool(h, { thread: 4, dead });
+    expect(p.withLock(() => p.lockWord())).toBe(5);
+    expect(p.lockWord()).toBe(0);
+    const q = attachPool(h);
+    expect(q.withLock(() => q.lockWord())).toBe(1);
+    expect(q.lockWord()).toBe(0);
+    // withLock releases the lock when fn throws.
+    expect(() => p.withLock(() => { throw new Error('boom'); })).toThrow('boom');
+    expect(p.lockWord()).toBe(0);
+    p.free(p.alloc());
+    expect(p.lockWord()).toBe(0);
+  });
+
+  test('a lock left at 3 by thread 2 marked dead makes alloc() throw StoreCorrupt naming thread 2', () => {
+    const h = handles();
+    const dead = deadView();
+    const p = attachPool(h, { thread: 1, dead });
+    const id = p.alloc();
+    new Int32Array(h.ctl)[0] = 3;
+    Atomics.or(dead, R_DEAD, 1 << 2);
+    let err: unknown;
+    try {
+      p.alloc();
+    } catch (e) {
+      err = e;
+    }
+    expect(err).toBeInstanceOf(StoreCorrupt);
+    expect((err as Error).name).toBe('StoreCorrupt');
+    expect((err as Error).message).toBe('pool lock held by failed thread 2');
+    expect(() => p.free(id)).toThrow(StoreCorrupt);
+    expect(() => p.freeStack()).toThrow(StoreCorrupt);
+    expect(p.lockWord()).toBe(3);
   });
 });

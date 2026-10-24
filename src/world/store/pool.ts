@@ -5,11 +5,15 @@
  *
  * Buffers per pool:
  * - `data`: the slots, `slotBytes` each; slot id = the slot's index;
- * - `ctl`: Int32[4], fixed: the lock word, the stack top, the slot count;
+ * - `ctl`: Int32[4], fixed: the lock word (0 free, else its owner's thread index + 1), the stack top, the slot count;
  * - `stack`: the free stack, Int32 per slot; `refs`: the refcounts, Int32 per slot.
  * `data`, `stack` and `refs` start empty and grow together by `GROW_BYTES` of slots, under the lock, inside the
  * `alloc` that finds the stack empty (whichever thread that is). Every view is length-tracking, so growth made by
  * another thread is seen without rebuilding anything.
+ *
+ * The lock owner (SP4b spec §2.6, D6): a pool attached with an `owner` locks with `thread + 1` and, while it spins,
+ * checks the word's owner against the dead-owner mask, so a worker terminated inside the lock is a `StoreCorrupt`
+ * instead of a spin that never ends.
  */
 
 /** Block pool slots: a u16 state per voxel of a 16³ section. */
@@ -27,6 +31,13 @@ const TOP = 1;
 const COUNT = 2;
 const CTL_INTS = 4;
 const MAX_SPIN = 1024;
+/** Once the backoff saturates, a spinning `lock()` re-reads the owner every this many spins (SP4b spec §2.6). */
+export const LOCK_RECHECK_SPINS = 4096;
+/**
+ * The dead-owner mask's Int32 index in the reclaim buffer (bit t: thread t failed; SP4b spec §2.6); `reclaim.ts`
+ * re-exports it with the buffer's other indices.
+ */
+export const R_DEAD = 1;
 
 /** An alloc found the free stack empty and the pool at its maximum size. */
 export class StoreFull extends Error {
@@ -34,6 +45,23 @@ export class StoreFull extends Error {
     super(message);
     this.name = 'StoreFull';
   }
+}
+
+/** A thread spinning on a pool lock found its owner dead (SP4b spec §2.6): the store can no longer be trusted. */
+export class StoreCorrupt extends Error {
+  constructor(message: string) {
+    super(message);
+    this.name = 'StoreCorrupt';
+  }
+}
+
+/**
+ * The thread a pool locks as (SP4b spec §2.6): `thread` 0 … 15, and `dead` the reclaim buffer's Int32 view, whose
+ * `dead[R_DEAD]` is the dead-owner mask.
+ */
+export interface PoolOwner {
+  readonly thread: number;
+  readonly dead: Int32Array;
 }
 
 export interface PoolOptions {
@@ -76,8 +104,10 @@ export interface SlabPool {
   freeCount(): number;
   /** A copy of the free stack, bottom first (taken under the lock). */
   freeStack(): Int32Array;
-  /** The lock word (0 when free); for tests. */
+  /** The raw lock word (0 when free, else its owner's thread index + 1; SP4b spec §2.6); for tests. */
   lockWord(): number;
+  /** Runs `fn` holding the pool lock under this pool's owner, then releases it (the test seam of SP4b spec §2.6). */
+  withLock<T>(fn: () => T): T;
   /** Fixed-length views over one slot. */
   u8(id: number): Uint8Array;
   u16(id: number): Uint16Array;
@@ -124,8 +154,12 @@ export function assertBufferKind(buf: unknown, shared: boolean, what: string): v
   }
 }
 
-/** The pool over existing handles; throws `TypeError` when a buffer is not of the kind `shared` names. */
-export function attachPool(h: PoolHandles): SlabPool {
+/**
+ * The pool over existing handles; throws `TypeError` when a buffer is not of the kind `shared` names. With `owner`
+ * (a shared store's thread, SP4b spec §2.6) the lock word is `owner.thread + 1` and a lock held by a thread marked dead
+ * throws `StoreCorrupt`; without it (`createPool`, single-threaded stores) the word is 1 and no dead check runs.
+ */
+export function attachPool(h: PoolHandles, owner?: PoolOwner): SlabPool {
   for (const key of ['data', 'ctl', 'stack', 'refs'] as const) assertBufferKind(h[key], h.shared, `pool: ${key}`);
   const { shared, slotBytes, data, stack: stackBuf, refs: refsBuf } = h;
   const maxSlots = data.maxByteLength / slotBytes;
@@ -135,13 +169,26 @@ export function attachPool(h: PoolHandles): SlabPool {
   const refs = new Int32Array(refsBuf);
   const bytes = new Uint8Array(data);
   const words = new Uint16Array(data);
+  const word = owner === undefined ? 1 : owner.thread + 1;
+  const dead = owner?.dead;
 
-  /** Compare-exchange spin; the backoff re-reads the word (no `Atomics.wait`: the main thread may not block). */
+  /**
+   * Compare-exchange spin of 0 → `word`; the backoff re-reads the word (no `Atomics.wait`: the main thread may not
+   * block). Once it saturates, every `LOCK_RECHECK_SPINS` spins it checks the holder against the dead-owner mask.
+   */
   function lock(): void {
     let spins = 1;
-    while (Atomics.compareExchange(ctl, LOCK, 0, 1) !== 0) {
+    let sinceCheck = 0;
+    while (Atomics.compareExchange(ctl, LOCK, 0, word) !== 0) {
       for (let i = 0; i < spins && Atomics.load(ctl, LOCK) !== 0; i++);
       if (spins < MAX_SPIN) spins <<= 1;
+      else if (dead !== undefined && (sinceCheck += MAX_SPIN) >= LOCK_RECHECK_SPINS) {
+        sinceCheck = 0;
+        const k = Atomics.load(ctl, LOCK) - 1;
+        if (k >= 0 && k < 32 && (Atomics.load(dead, R_DEAD) & (1 << k)) !== 0) {
+          throw new StoreCorrupt(`pool lock held by failed thread ${k}`);
+        }
+      }
     }
   }
 
@@ -229,6 +276,14 @@ export function attachPool(h: PoolHandles): SlabPool {
       }
     },
     lockWord: () => Atomics.load(ctl, LOCK),
+    withLock(fn) {
+      lock();
+      try {
+        return fn();
+      } finally {
+        unlock();
+      }
+    },
     u8(id) {
       checkId(id);
       return new Uint8Array(data, id * slotBytes, slotBytes);

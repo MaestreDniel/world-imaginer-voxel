@@ -17,13 +17,14 @@
  * R[t] of the live threads: a reader that announced `e` may hold a slot released with tag ≥ `e`, never one released
  * before it announced. Every access to the buffer is an Atomics one (sequentially consistent).
  */
-import { assertBufferKind, type SlabPool } from './pool';
+import { assertBufferKind, R_DEAD, type SlabPool } from './pool';
 
 export const RECLAIM_BYTES = 192;
 export const RECLAIM_THREADS = 16;
 /** Int32 indices in the reclaim buffer. */
 export const R_EPOCH = 0;
-export const R_DEAD = 1;
+/** The dead-owner mask, declared by `pool.ts`, whose lock reads it (SP4b spec §2.6). */
+export { R_DEAD };
 export const R_STORE_ID = 2;
 export const R_READER = 16;
 export const R_LIMBO = 32;
