@@ -1,10 +1,10 @@
 import { describe, expect, test } from 'vitest';
 import { DEFAULTS } from '../../src/core/params/defaults';
-import { createWorkerPool, type WorkerLike } from '../../src/engine/workerPool';
+import { createWorkerPool } from '../../src/engine/workerPool';
 import { DEFAULT_MAP_STATE } from '../../src/ui/map/mapState';
 import { createLatencyLog, instrumentPool, PERF_CANVAS_HEIGHT, PERF_CANVAS_WIDTH, perfMapState, type PerfEdit } from '../../src/ui/map/perfHook';
 import { visibleTiles } from '../../src/ui/map/viewMath';
-import { createTaskHandler } from '../../src/workers/taskHandler';
+import { inProcessWorker } from '../harness/inProcessPool';
 
 /** Distinct params objects: the log tells drafts apart by identity, as the page's configures carry them. */
 const P = Array.from({ length: 4 }, () => ({}));
@@ -126,20 +126,9 @@ describe('latency log (SP2b spec §2.8)', () => {
   });
 });
 
-/** A worker running the real handler asynchronously. */
-function handlerWorker(): WorkerLike {
-  const h = createTaskHandler();
-  const w: WorkerLike = {
-    onmessage: null,
-    postMessage(msg) { setTimeout(() => w.onmessage?.({ data: h.handle(msg).msg }), 0); },
-    terminate() {},
-  };
-  return w;
-}
-
 describe('instrumented pool (SP2b spec §2.8)', () => {
   test('logs configure posted and ready and the preview jobs done, and otherwise behaves as the pool', async () => {
-    const raw = createWorkerPool(2, handlerWorker);
+    const raw = createWorkerPool(2, inProcessWorker);
     const log = createLatencyLog();
     let t = 0;
     const pool = instrumentPool(raw, log, () => ++t);
