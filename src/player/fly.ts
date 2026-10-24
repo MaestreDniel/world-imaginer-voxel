@@ -66,13 +66,18 @@ export function stepFly(s: FlyState, held: ReadonlySet<Action>, dtS: number, bou
   const f = axis(held, 'forward', 'back');
   const r = axis(held, 'right', 'left');
   const u = axis(held, 'up', 'down');
-  const [fx, fz] = forwardXZ(s.yaw);
-  const [rx, rz] = forwardXZ(s.yaw + 90);
+  // `forwardXZ(yaw)` and `forwardXZ(yaw + 90)` without their arrays: the frame step calls this every tick, at rest
+  // too, and allocates nothing (SP4b spec §3.10).
+  const fx = Math.sin(s.yaw * DEG);
+  const fz = -Math.cos(s.yaw * DEG);
+  const rx = Math.sin((s.yaw + 90) * DEG);
+  const rz = -Math.cos((s.yaw + 90) * DEG);
   let dx = f * fx + r * rx;
   let dz = f * fz + r * rz;
   // A horizontal diagonal never flies faster than the speed; the vertical axis is independent (SP4b spec §6.1).
-  const len = Math.hypot(dx, dz);
-  if (len > 1) {
+  // `Math.hypot` only when the pair can be longer than 1 (a builtin call boxes its arguments).
+  if (dx * dx + dz * dz > 1) {
+    const len = Math.hypot(dx, dz);
     dx /= len;
     dz /= len;
   }

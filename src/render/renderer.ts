@@ -365,6 +365,9 @@ export function createWorldRenderer(host: HTMLElement, o: WorldRendererOptions):
     timer?.end();
   };
 
+  // The GPU estimate's parts, made once: the bench reads the estimate every frame (SP4b spec §3.10, §8.4).
+  const estimateParts: GpuEstimateParts = { sections, sky: sky.geometry, textureArray: albedo, lightmap: materials.lightmap.texture, canvas };
+
   const lostListeners: Array<() => void> = [];
   const onLost = (): void => {
     for (const fn of lostListeners) fn();
@@ -390,7 +393,7 @@ export function createWorldRenderer(host: HTMLElement, o: WorldRendererOptions):
       applyRenderDistance(camera, rd);
     },
     gpuEstimate(out) {
-      return gpuEstimateOf({ sections, sky: sky.geometry, textureArray: albedo, lightmap: materials.lightmap.texture, canvas }, out);
+      return gpuEstimateOf(estimateParts, out);
     },
     info() {
       return { calls: renderer.info.render.calls, triangles: renderer.info.render.triangles };

@@ -22,8 +22,11 @@ const DELTA_WINDOW = 30;
 
 export function createFpsLimiter(cap: FpsCap): FpsLimiter {
   let current: FpsCap = cap;
-  let acc = 0;
-  let prev = Number.NaN;
+  // The accumulator and the previous timestamp, in a typed array: a closure variable holding a double would box it on
+  // every write (SP4b spec §3.10).
+  const ACC = 0;
+  const PREV = 1;
+  const f = Float64Array.of(0, Number.NaN);
   const deltas = new Float64Array(DELTA_WINDOW);
   // The median's sorted copy: preallocated, so a tick allocates nothing (SP4b spec §3.10).
   const scratch = new Float64Array(DELTA_WINDOW);
@@ -32,9 +35,9 @@ export function createFpsLimiter(cap: FpsCap): FpsLimiter {
 
   return {
     tick(now) {
-      const first = Number.isNaN(prev);
-      const delta = first ? 0 : now - prev;
-      prev = now;
+      const first = Number.isNaN(f[PREV]!);
+      const delta = first ? 0 : now - f[PREV]!;
+      f[PREV] = now;
       if (!first) {
         deltas[next] = delta;
         next = (next + 1) % DELTA_WINDOW;
@@ -45,14 +48,15 @@ export function createFpsLimiter(cap: FpsCap): FpsLimiter {
       if (first) return true;
       const target = 1000 / current;
       const h = count === 0 ? 0 : medianInterval(deltas, scratch, count) / 2;
-      acc += delta;
+      const acc = f[ACC]! + delta;
+      f[ACC] = acc;
       if (acc < target - h) return false;
-      acc = Math.min(Math.max(acc - target, -h), target);
+      f[ACC] = Math.min(Math.max(acc - target, -h), target);
       return true;
     },
     setCap(c) {
       current = c;
-      acc = 0;
+      f[ACC] = 0;
     },
   };
 }

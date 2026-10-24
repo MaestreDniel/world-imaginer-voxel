@@ -28,13 +28,15 @@ export interface UploadBudget {
 
 export function createUploadBudget(ms: number, rows: number, now: () => number): UploadBudget {
   const uncapped = rows === Number.POSITIVE_INFINITY;
-  let t0 = Number.NEGATIVE_INFINITY;
+  // The window's start, in a typed array: a closure variable holding a double would box it on every frame's write
+  // (SP4b spec §3.10).
+  const t0 = Float64Array.of(Number.NEGATIVE_INFINITY);
   let spent = 0;
   let granted = false;
-  const timeUp = (): boolean => now() - t0 >= ms;
+  const timeUp = (): boolean => now() - t0[0]! >= ms;
   return {
     start() {
-      t0 = now();
+      t0[0] = now();
       spent = 0;
       granted = false;
     },

@@ -32,14 +32,21 @@ export function createFrameNotice(onSuggest: (rd: number) => void, rd: number): 
     push(frameMs) {
       if (n >= NOTICE_FRAMES || !Number.isFinite(frameMs) || frameMs < 0) return;
       frames[n++] = frameMs;
-      if (n < NOTICE_FRAMES) return;
-      const lower = lowerRd(rd);
-      if (lower === null) return;
-      const interval = medianInterval(frames);
-      const p95 = percentile(frames.map((f) => snapFrameTime(f, interval)), 95);
-      if (p95 > NOTICE_P95_MS) onSuggest(lower);
+      if (n === NOTICE_FRAMES) judgeFrames(frames, rd, onSuggest);
     },
   };
+}
+
+/**
+ * The notice's one judgement, at the 300th frame. Kept out of `push`: a closure there capturing a local would make
+ * every call, the early returns included, allocate that local's context (SP4b spec §3.10).
+ */
+function judgeFrames(frames: Float64Array, rd: number, onSuggest: (rd: number) => void): void {
+  const lower = lowerRd(rd);
+  if (lower === null) return;
+  const interval = medianInterval(frames);
+  const p95 = percentile(frames.map((f) => snapFrameTime(f, interval)), 95);
+  if (p95 > NOTICE_P95_MS) onSuggest(lower);
 }
 
 /** The frame loop's clock: one `tick` per rAF. */
@@ -59,17 +66,20 @@ export interface FrameClock {
  * `start` is the reveal frame's timestamp.
  */
 export function createFrameClock(limiter: FpsLimiter, notice: { push(frameMs: number): void }, start: number): FrameClock {
-  let lastTick = start;
-  let lastRendered = start;
+  // The last tick's and the last rendered frame's timestamps, in a typed array: TurboFan unboxes the timestamp for the
+  // arithmetic, so a closure variable would box it again on every write (SP4b spec §3.10).
+  const T_TICK = 0;
+  const T_RENDERED = 1;
+  const t = new Float64Array(2).fill(start);
   return {
     tick(now) {
-      notice.push(Math.max(0, now - lastTick));
-      lastTick = now;
+      notice.push(Math.max(0, now - t[T_TICK]!));
+      t[T_TICK] = now;
       if (!limiter.tick(now)) return null;
-      const dt = Math.max(0, now - lastRendered);
-      lastRendered = now;
+      const dt = Math.max(0, now - t[T_RENDERED]!);
+      t[T_RENDERED] = now;
       return dt;
     },
-    lastTick() { return lastTick; },
+    lastTick() { return t[T_TICK]!; },
   };
 }

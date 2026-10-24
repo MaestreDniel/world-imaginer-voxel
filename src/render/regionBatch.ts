@@ -308,8 +308,9 @@ export function createRegionBatch(materials: MaterialSystem): SectionRenderer {
       // BatchedMesh sorts its translucent instances itself (sortObjects).
     },
     gpuBytes() {
+      // An indexed loop: the bench reads this every frame (SP4b spec §3.10).
       let n = 0;
-      for (const bp of objects) n += bytesOf(bp.mesh);
+      for (let i = 0; i < objects.length; i++) n += bytesOf(objects[i]!.mesh);
       return n;
     },
   };
