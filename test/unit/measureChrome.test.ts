@@ -3,7 +3,7 @@ import { EventEmitter } from 'node:events';
 import { describe, expect, test } from 'vitest';
 import { BENCH_SHOTS } from '../../src/ui/world/bench';
 import {
-  ASSETS, benchLine, chromeArgs, flightLine, gpuMatches, launchEnv, MEASURE_LOAD_MAX, outputName, parseMeasureArgs, PLACE_ATTEMPTS, placeWindow,
+  ASSETS, benchLine, chromeArgs, drawnByProblem, endOfRunWarnings, flightLine, gpuMatches, launchEnv, MEASURE_LOAD_MAX, outputName, parseMeasureArgs, PLACE_ATTEMPTS, placeWindow,
   pollResult, routePath, shaderCacheOf, SHOTS, viewportProblem, watchPage, windowProblem, withTimeout, type MeasureArgs, type WindowBounds,
 } from '../tools/measureChrome';
 
@@ -258,6 +258,35 @@ describe('measureChrome: the window on the panel eDP-1 (ruling P59)', () => {
     w.control.set = async (b: WindowBounds) => { w.sets.push(b); if (b.windowState === 'fullscreen') fullscreens++; };
     expect(await placeWindow(w.control)).toEqual({ bounds: FULL_EDP, attempts: 2 });
     expect(w.sets).toEqual([...SEQUENCE, ...SEQUENCE]);
+  });
+});
+
+describe('measureChrome: a shot\'s checks (final review GOV-8)', () => {
+  const FULL_EDP = { left: 0, top: 0, width: 1920, height: 1080, windowState: 'fullscreen' } as const;
+  const VIEWPORT = { innerWidth: 1920, innerHeight: 1080, devicePixelRatio: 1 } as const;
+  const clean = { loadAvg1After: 0.4, window: FULL_EDP, viewport: VIEWPORT, consoleErrors: [] } as const;
+
+  test('drawnByProblem: null only when exactly one canvas names the --renderer in data-renderer', () => {
+    expect(drawnByProblem('batch', ['batch'])).toBeNull();
+    expect(drawnByProblem('mesh', ['mesh'])).toBeNull();
+    expect(drawnByProblem('mesh', ['batch'])).toMatch(/data-renderer.*batch.*not mesh/);
+    expect(drawnByProblem('batch', [])).toMatch(/no canvas/);
+    expect(drawnByProblem('batch', ['batch', 'batch'])).toMatch(/2 canvases/);
+  });
+
+  test('endOfRunWarnings: none on a clean run; the load, the window, the viewport and the console each warn', () => {
+    expect(endOfRunWarnings(clean, 'cell')).toEqual([]);
+    expect(endOfRunWarnings({ ...clean, loadAvg1After: MEASURE_LOAD_MAX }, 'shot')).toEqual([]);
+    expect(endOfRunWarnings({ ...clean, loadAvg1After: 2.5 }, 'shot'))
+      .toEqual(['the load average rose to 2.50 during the run; rerun this shot on a quiet machine']);
+    const moved = endOfRunWarnings({ ...clean, window: { left: 1920, top: 0, width: 1920, height: 1080, windowState: 'fullscreen' } }, 'shot');
+    expect(moved).toHaveLength(1);
+    expect(moved[0]).toMatch(/^at the end of the run the window is fullscreen at 1920,0 .*; rerun this shot$/);
+    const small = endOfRunWarnings({ ...clean, viewport: { innerWidth: 1920, innerHeight: 987, devicePixelRatio: 1 } }, 'cell');
+    expect(small).toHaveLength(1);
+    expect(small[0]).toMatch(/^at the end of the run the viewport is 1920x987@1.*; rerun this cell$/);
+    expect(endOfRunWarnings({ ...clean, consoleErrors: ['exception: x', 'log: y'] }, 'cell'))
+      .toEqual(['2 console error(s):\nexception: x\nlog: y']);
   });
 });
 

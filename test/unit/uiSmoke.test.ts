@@ -35,7 +35,8 @@ import {
   RULE_SAMPLE, sameJson, selftestAllMatch, SIZE_7, SIZE_8, SKY_RGB, sliceCellPoint, sliceColumn, SMOKE_PRESETS, SMOKE_STEPS, SQUARE_RGB, squareLabels, START, stepId,
   summaryTopMax, timesText, VIEWPORT, viewportForDrawer, voxelLegendLabels, voxelReadoutOk, voxelRuleId, voxelSummaryOk, WATER_RGB, waterPixel, type MapUrlState,
   type SmokePreset, pixelDiffShare, SWIFTSHADER_ARGS, START_SEED_7_HASH, PARITY_VIEW, PARITY_WATER_VIEW, PARITY_VIEWS, WORLD_RD, worldMeshQuery, PARITY_TOL, PARITY_MAX_SHARE, leaveGuardLog,
-  expectedRenderer, hudMoved, parseHud, STREAM_HOLD_MS, STREAM_MIN_MOVE, STREAM_RD, STREAM_RD_MS, STREAM_RUNS, streamQuery,
+  expectedRenderer, HUD_POLL_MS, hudMoved, hudOnce, parseHud, STREAM_HOLD_MS, STREAM_MIN_MOVE, STREAM_RD, STREAM_RD_MS, STREAM_REVEAL_MS, STREAM_RUNS, streamQuery,
+  type HudRead,
 } from '../tools/uiSmoke';
 import { findSpawn } from '../../src/gen/column/spawn';
 import { columnPoint } from '../../src/gen/column/columnPoint';
@@ -761,6 +762,41 @@ describe('UI smoke test: the stream step and data-renderer (SP4b spec §8.6)', (
     }
     expect(STREAM_RD).toBe(6);
     expect(STREAM_RD_MS).toBe(30_000);
+  });
+
+  /** A clock whose sleep advances its time, and a HUD whose `revealed` is `at(t)` at time t (null: no HUD rows). */
+  const fakeHud = (at: (t: number) => number | null) => {
+    let t = 0;
+    const reads: number[] = [];
+    return {
+      reads,
+      clock: { now: () => t, sleep: async (ms: number) => { t += ms; } },
+      read: async (): Promise<HudRead | null> => {
+        reads.push(t);
+        const revealed = at(t);
+        return revealed === null ? null : { revealed, rd: 4, x: 0, y: 100, z: -48 };
+      },
+    };
+  };
+
+  test('hudOnce: the stream step polls for the reveal W triggered, so a reveal landing after one 600 ms reading still counts (final review GOV-9)', async () => {
+    // The reveal lands 1.6 s after W is released (a slow machine): a single reading at 600 ms sees 69, the poll sees 79.
+    const h = fakeHud((t) => (t >= 1600 ? 79 : 69));
+    const got = await hudOnce(h.read, (r) => r.revealed > 69, STREAM_REVEAL_MS, h.clock);
+    expect(got?.revealed).toBe(79);
+    expect(h.reads).toEqual([0, 250, 500, 750, 1000, 1250, 1500, 1750]);
+    expect(HUD_POLL_MS).toBe(250);
+    expect(STREAM_REVEAL_MS).toBe(5000);
+  });
+
+  test('hudOnce: a missing HUD row is read again; null when the predicate never holds within the bound', async () => {
+    const missing = fakeHud((t) => (t < 500 ? null : 70));
+    expect((await hudOnce(missing.read, (r) => r.revealed > 69, STREAM_REVEAL_MS, missing.clock))?.revealed).toBe(70);
+    expect(missing.reads).toEqual([0, 250, 500]);
+    const never = fakeHud(() => 69);
+    expect(await hudOnce(never.read, (r) => r.revealed > 69, STREAM_REVEAL_MS, never.clock)).toBeNull();
+    expect(never.reads.at(-1)).toBe(STREAM_REVEAL_MS);
+    expect(never.reads).toHaveLength(STREAM_REVEAL_MS / HUD_POLL_MS + 1);
   });
 
   test('expectedRenderer is the page\'s choice: the forced renderer, else batch with WEBGL_multi_draw and mesh without', () => {

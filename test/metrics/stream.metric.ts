@@ -49,7 +49,9 @@ import { currentTier, metricTest } from '../harness/metric';
  * column); recorded: `frames`, `revealed` and `removed` (columns revealed by the renderer, removed by the coordinator),
  * `structuralOps`, `dropped` (results the coordinator dropped at intake; expected 0 apart from the in-flight results of
  * columns that left the window on the jump, rulings R2, so recorded and not asserted) and `droppedOnJump` (those of the
- * jump leg), `collisionWaits` (asserted > 0 in each run, so the jump leg cannot silently stop testing collisions),
+ * jump leg), `collisionWaits` (over the run; the jump leg's own, counted from a snapshot taken before the jump, are
+ * asserted > 0 in each run, so the jump leg cannot silently stop testing collisions while an earlier leg keeps the
+ * run's count above 0, final review GOV-3),
  * `jumpTOutOfOrder` (the T jobs after the jump issued after one that orders behind them), `mixedColumnFrames` (0 in
  * SP4b: a revealed column is never re-staged; SP4c's Apply part gates the epoch mix, §12.1), `rowsPerPumpMax` and
  * `rowsPerPumpMean` (over the pumps after the reveal, under the flying budget). Each run also asserts that the first 16
@@ -230,6 +232,7 @@ async function fly(kind: SectionRendererKind): Promise<Run> {
     const mark = issued.length;
     coordinator.counts(counts);
     const droppedBefore = counts.dropped;
+    const collisionsBefore = counts.collisionWaits;
     cx -= JUMP_COLUMNS;
     await until(cam(cx, cz, 0), 'the jump');
     const ts = issued.slice(mark).filter((j) => j.stage === 'T' && !j.protoOnly);
@@ -242,6 +245,8 @@ async function fly(kind: SectionRendererKind): Promise<Run> {
 
     coordinator.counts(counts);
     run.droppedOnJump = counts.dropped - droppedBefore;
+    // The jump leg's own collisions (not the run's cumulative count, which an earlier leg could keep above 0).
+    expect(counts.collisionWaits - collisionsBefore, `${kind}: T jobs after the jump that waited on a record collision`).toBeGreaterThan(0);
     // The live RD change (spec §8.1, §5).
     if (RD_CHANGE < RD) {
       coordinator.setRenderDistance(RD_CHANGE);
@@ -259,7 +264,6 @@ async function fly(kind: SectionRendererKind): Promise<Run> {
     run.dropped = counts.dropped;
     run.collisionWaits = counts.collisionWaits;
     run.structuralOps = sections.counts(uploads).structuralOps;
-    expect(run.collisionWaits, `${kind}: T jobs that waited on a record collision`).toBeGreaterThan(0);
     expect([counts.failed, counts.storeFull, events.length], `${kind}: failed columns, StoreFull errors, events`).toEqual([0, 0, 0]);
     coordinator.dispose();
     return run;

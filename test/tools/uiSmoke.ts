@@ -70,9 +70,9 @@
  *     (`pixelDiffShare`); `world-mesh.png` and `world-mesh-water.png` are the RegionMesh images;
  *   - stream (SP4b spec §8.6): `/?rd=4&renderer=batch`, then `…=mesh` (`STREAM_RUNS`): `data-renderer` is the forced
  *     one; after the reveal a click on the canvas and W held for 4 s with real key input: the HUD's position moved
- *     more than 40 blocks (12 blocks/s × 4 s ≈ 47) and its `revealed` count grew, with no page error; then the help (H),
- *     whose `#setting-rd` shows the RD in force, 4, even with the batch run's 6 saved (rulings R8), and 6 chosen there:
- *     within 30 s the HUD shows `RD 6` and a larger `revealed`, with no navigation (a token set on `window` after the
+ *     more than 40 blocks (12 blocks/s × 4 s ≈ 47) and, within 5 s of releasing W, its `revealed` count grew, with no
+ *     page error; then the help (H), whose `#setting-rd` shows the RD in force, 4, even with the batch run's 6 saved
+ *     (rulings R8), and 6 chosen there: within 30 s the HUD shows `RD 6` and a larger `revealed`, with no navigation (a token set on `window` after the
  *     reveal is still there); `stream.png` and `stream-mesh.png`;
  * - console: no exception, console error or failed load, except the known favicon.ico 404 and Chrome's notice that it
  *   blocked a world page's `beforeunload` prompt when a step left it (`leaveGuardLog`); every step ran.
@@ -531,6 +531,13 @@ export const STREAM_MIN_MOVE = 40;
 /** The render distance chosen live in the help, and how long the HUD has to show it with more columns revealed. */
 export const STREAM_RD = 6;
 export const STREAM_RD_MS = 30_000;
+/**
+ * How long, after W is released, the HUD has to show a larger `revealed` (final review GOV-9): the reveals W triggered
+ * can land after a single reading on a slow or loaded machine (SwiftShader runs at about 25 fps), so the step polls.
+ */
+export const STREAM_REVEAL_MS = 5000;
+/** How often `hudOnce` reads the HUD: as often as the HUD refreshes. */
+export const HUD_POLL_MS = 250;
 
 /** The query of one `stream` load: RD 4, the section renderer forced, the HUD and the overlay as a person sees them. */
 export function streamQuery(renderer: 'batch' | 'mesh'): string {
@@ -562,6 +569,21 @@ export function parseHud(text: string): HudRead | null {
   const at = HUD_POSITION.exec(text);
   if (revealed === null || rd === null || at === null) return null;
   return { revealed: Number(revealed[1]), rd: Number(rd[1]), x: Number(at[1]), y: Number(at[2]), z: Number(at[3]) };
+}
+
+/**
+ * The HUD's reading once `pred` holds on it, read every HUD_POLL_MS from now (a missing reading is read again), or
+ * null when it has not held after `ms`. `clock` is the real one in the tool and a fake in the tests.
+ */
+export async function hudOnce(
+  read: () => Promise<HudRead | null>, pred: (h: HudRead) => boolean, ms: number,
+  clock: { now(): number; sleep(ms: number): Promise<void> } = { now: Date.now, sleep },
+): Promise<HudRead | null> {
+  for (const t0 = clock.now(); clock.now() - t0 <= ms; await clock.sleep(HUD_POLL_MS)) {
+    const h = await read();
+    if (h !== null && pred(h)) return h;
+  }
+  return null;
 }
 
 /** The horizontal distance between two HUD positions, blocks. */
@@ -1952,14 +1974,6 @@ async function runWorld(t: Smoke): Promise<void> {
     const token = `stream-${renderer}-${Date.now()}`;
     await p.eval(`(window.__wiStreamToken = ${JSON.stringify(token)}, true)`);
     const hud = async (): Promise<HudRead | null> => parseHud(await p.eval<string>(HUD_TEXT));
-    /** The HUD's reading once `pred` holds on it (read every 250 ms, as it refreshes), or null after `ms`. */
-    const hudOnce = async (pred: (h: HudRead) => boolean, ms: number): Promise<HudRead | null> => {
-      for (const t0 = Date.now(); Date.now() - t0 <= ms; await sleep(250)) {
-        const h = await hud();
-        if (h !== null && pred(h)) return h;
-      }
-      return null;
-    };
     const start = await hud();
     if (start === null) {
       t.check(false, `${what}: the HUD shows revealed, RD and the position`, await p.eval<string>(HUD_TEXT));
@@ -1972,12 +1986,14 @@ async function runWorld(t: Smoke): Promise<void> {
     await p.cdp.send('Input.dispatchKeyEvent', { type: 'keyDown', ...w, text: 'w', unmodifiedText: 'w' });
     await sleep(STREAM_HOLD_MS);
     await p.cdp.send('Input.dispatchKeyEvent', { type: 'keyUp', ...w });
-    // The HUD refreshes every 250 ms; one reading after the hold gives both the position and the revealed count.
+    // The HUD refreshes every 250 ms: one reading after the hold gives the position (the camera stopped with W). The
+    // reveals W triggered may land later on a slow machine, so the revealed count is polled (final review GOV-9).
     await sleep(600);
     const moved = await hud();
     const dist = moved === null ? 0 : hudMoved(start, moved);
     t.check(dist > STREAM_MIN_MOVE, `${what}: W for ${STREAM_HOLD_MS / 1000} s moved the camera ${dist.toFixed(1)} blocks (> ${STREAM_MIN_MOVE})`, { start, moved });
-    t.check(moved !== null && moved.revealed > start.revealed, `${what}: the HUD's revealed grew (${start.revealed} → ${moved?.revealed ?? '?'})`, { start, moved });
+    const grown = await hudOnce(hud, (h) => h.revealed > start.revealed, STREAM_REVEAL_MS);
+    t.check(grown !== null, `${what}: the HUD's revealed grew within ${STREAM_REVEAL_MS / 1000} s of releasing W (${start.revealed} → ${grown?.revealed ?? '?'})`, { start, moved, grown });
     t.check(t.errors.length === errors0, `${what}: no page error while flying`, t.errors.slice(errors0));
 
     // The help (H), then RD 6 in its settings: applied live, no reload.
@@ -1988,7 +2004,7 @@ async function runWorld(t: Smoke): Promise<void> {
     t.check(shown === String(WORLD_RD), `${what}: #setting-rd shows the RD in force, ${WORLD_RD} (rulings R8)`, shown);
     const before = (await hud()) ?? start;
     await p.choose('#setting-rd', String(STREAM_RD));
-    const six = await hudOnce((h) => h.rd === STREAM_RD && h.revealed > before.revealed, STREAM_RD_MS);
+    const six = await hudOnce(hud, (h) => h.rd === STREAM_RD && h.revealed > before.revealed, STREAM_RD_MS);
     t.check(six !== null && six.rd === STREAM_RD && six.revealed > before.revealed,
       `${what}: RD ${STREAM_RD} chosen in the help: the HUD shows RD ${six?.rd ?? '?'} and revealed ${before.revealed} → ${six?.revealed ?? '?'} within ${STREAM_RD_MS / 1000} s`, { before, six });
     const same = await p.eval<boolean>(`window.__wiStreamToken === ${JSON.stringify(token)}`);

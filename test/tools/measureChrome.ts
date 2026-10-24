@@ -24,7 +24,9 @@
  *    every CDP call is bounded, and the poll fails fast when Chrome exits or the tab crashes (`pollResult`, `watchPage`);
  * 7. it adds who measured, the load averages, the Chrome version, the window (warning when it left eDP-1), the viewport
  *    and the console errors, writes the JSON pretty-printed and prints its path and summary (ruling P9); for a shot it
- *    polls `__wiBench.shotReady` instead and writes `Page.captureScreenshot`'s PNG;
+ *    polls `__wiBench.shotReady` instead, refuses unless the canvas's `data-renderer` is the `--renderer`, and writes
+ *    `Page.captureScreenshot`'s PNG; both then warn on the same end-of-run checks (`endOfRunWarnings`: the load after,
+ *    the window, the viewport, the console; final review GOV-8);
  * 8. it stops only its own Chrome and preview, then removes the profile.
  *
  * Tools run under plain Node (type stripping), so this file imports no `src/` module.
@@ -240,6 +242,37 @@ export function windowProblem(b: WindowBounds): string | null {
   return `the window is ${b.windowState ?? 'unknown'} at ${b.left ?? '?'},${b.top ?? '?'} (${b.width ?? '?'}x${b.height ?? '?'}), not fullscreen at 0,0 on eDP-1`;
 }
 
+/**
+ * Null when exactly one canvas names `expected` in `data-renderer` (the world renderer sets it, SP4b spec §8.6),
+ * otherwise what is wrong: a shot's file names its `--renderer`, so the tool checks which section renderer drew it
+ * rather than trusting the URL (final review GOV-8).
+ */
+export function drawnByProblem(expected: 'batch' | 'mesh', drawn: readonly string[]): string | null {
+  if (drawn.length === 1 && drawn[0] === expected) return null;
+  if (drawn.length === 0) return `no canvas has a data-renderer, so the shot cannot show it was drawn by ${expected}`;
+  if (drawn.length > 1) return `${drawn.length} canvases have a data-renderer (${drawn.join(', ')}), not one`;
+  return `the canvas's data-renderer is ${drawn[0]}, not ${expected}`;
+}
+
+/**
+ * The end-of-run checks, the JSON cells' and the shots' alike (final review GOV-8): the load average after the run
+ * above MEASURE_LOAD_MAX, the window no longer fullscreen on eDP-1, the viewport no longer 1920 × 1080 @ 1, and the
+ * console's errors. Each is a warning: the output is written, and the warning says to rerun it.
+ */
+export function endOfRunWarnings(
+  o: { readonly loadAvg1After: number; readonly window: WindowBounds; readonly viewport: Viewport; readonly consoleErrors: readonly string[] },
+  what: 'cell' | 'shot',
+): string[] {
+  const out: string[] = [];
+  if (o.loadAvg1After > MEASURE_LOAD_MAX) out.push(`the load average rose to ${o.loadAvg1After.toFixed(2)} during the run; rerun this ${what} on a quiet machine`);
+  const movedAway = windowProblem(o.window);
+  if (movedAway !== null) out.push(`at the end of the run ${movedAway}; rerun this ${what}`);
+  const resized = viewportProblem(o.viewport);
+  if (resized !== null) out.push(`at the end of the run ${resized}; rerun this ${what}`);
+  if (o.consoleErrors.length > 0) out.push(`${o.consoleErrors.length} console error(s):\n${o.consoleErrors.join('\n')}`);
+  return out;
+}
+
 /** The window as `placeWindow` sees it: CDP's Browser domain in the tool, a fake in the tests. */
 export interface WindowControl {
   read(): Promise<WindowBounds>;
@@ -325,6 +358,9 @@ const READ_SHOT = `(() => {
   if (b.result !== null && b.result !== undefined && 'error' in b.result) return JSON.stringify({ error: b.result.error });
   return b.shotReady === true ? 'ready' : null;
 })()`;
+
+/** The world canvas's `data-renderer` values (one canvas expected), as the UI smoke reads them. */
+const DRAWN_BY = `[...document.querySelectorAll('canvas[data-renderer]')].map((c) => c.dataset.renderer)`;
 
 type Viewport = { innerWidth: number; innerHeight: number; devicePixelRatio: number };
 
@@ -569,11 +605,20 @@ async function main(argv: readonly string[]): Promise<number> {
         timeoutMs: RESULT_TIMEOUT_MS,
       });
       if (state !== 'ready') throw new Error(`the bench failed before the shot: ${state}`);
+      // The renderer that drew, not only the one the URL asked for (parseMeasureArgs makes --renderer non-null here).
+      const wrongRenderer = drawnByProblem(a.renderer!, await evaluate<string[]>(cdp, DRAWN_BY));
+      if (wrongRenderer !== null) {
+        console.error(`refused: ${wrongRenderer}; no shot written`);
+        return 1;
+      }
       const shot = await call(cdp, 'Page.captureScreenshot', { format: 'png' });
       mkdirSync(join(ROOT, ASSETS), { recursive: true });
       writeFileSync(file, Buffer.from(String(shot['data']), 'base64'));
       console.log(`wrote ${file}`);
-      if (consoleErrors.length > 0) console.warn(`WARNING: ${consoleErrors.length} console error(s):\n${consoleErrors.join('\n')}`);
+      const warnings = endOfRunWarnings({
+        loadAvg1After: loadavg()[0]!, window: await win.read(), viewport: await evaluate<Viewport>(cdp, READ_VIEWPORT), consoleErrors,
+      }, 'shot');
+      for (const w of warnings) console.warn(`WARNING: ${w}`);
       return 0;
     }
     const text = await pollResult({
@@ -599,10 +644,7 @@ async function main(argv: readonly string[]): Promise<number> {
     if (a.route === 'spike') console.log(`verdict: ${JSON.stringify(result['verdict'] ?? null)}`);
     else if (a.route === 'bench') console.log(benchLine(result));
     else console.log(flightLine(result));
-    if (loadAvg1After > MEASURE_LOAD_MAX) console.warn(`WARNING: the load average rose to ${loadAvg1After.toFixed(2)} during the run; rerun this cell on a quiet machine`);
-    const movedAway = windowProblem(windowBounds);
-    if (movedAway !== null) console.warn(`WARNING: at the end of the run ${movedAway}; rerun this cell`);
-    if (consoleErrors.length > 0) console.warn(`WARNING: ${consoleErrors.length} console error(s):\n${consoleErrors.join('\n')}`);
+    for (const w of endOfRunWarnings({ loadAvg1After, window: windowBounds, viewport, consoleErrors }, 'cell')) console.warn(`WARNING: ${w}`);
     return 0;
   } finally {
     process.off('SIGINT', onSignal);
