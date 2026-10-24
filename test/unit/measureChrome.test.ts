@@ -4,7 +4,7 @@ import { describe, expect, test } from 'vitest';
 import { BENCH_SHOTS } from '../../src/ui/world/bench';
 import {
   ASSETS, benchLine, chromeArgs, flightLine, gpuMatches, launchEnv, MEASURE_LOAD_MAX, outputName, parseMeasureArgs, PLACE_ATTEMPTS, placeWindow,
-  pollResult, routePath, SHOTS, viewportProblem, watchPage, windowProblem, withTimeout, type MeasureArgs, type WindowBounds,
+  pollResult, routePath, shaderCacheOf, SHOTS, viewportProblem, watchPage, windowProblem, withTimeout, type MeasureArgs, type WindowBounds,
 } from '../tools/measureChrome';
 
 const IRIS = 'ANGLE (Intel, Mesa Intel(R) Iris(R) Xe Graphics (ADL GT2), OpenGL 4.6)';
@@ -128,11 +128,27 @@ describe('measureChrome: the expected GPU', () => {
 
   test('launchEnv: the Iris Xe gets no variables; the RTX gets the offload variables unless PRIME is on nvidia (ruling P6)', () => {
     const offload = { __NV_PRIME_RENDER_OFFLOAD: '1', __GLX_VENDOR_LIBRARY_NAME: 'nvidia', __VK_LAYER_NV_optimus: 'NVIDIA_only' };
-    expect(launchEnv('iris', 'on-demand')).toEqual({});
-    expect(launchEnv('iris', null)).toEqual({});
-    expect(launchEnv('rtx', 'nvidia')).toEqual({});
-    expect(launchEnv('rtx', 'on-demand')).toEqual(offload);
-    expect(launchEnv('rtx', null)).toEqual(offload);
+    expect(launchEnv('iris', 'on-demand', 'warm')).toEqual({});
+    expect(launchEnv('iris', null, 'warm')).toEqual({});
+    expect(launchEnv('rtx', 'nvidia', 'warm')).toEqual({});
+    expect(launchEnv('rtx', 'on-demand', 'warm')).toEqual(offload);
+    expect(launchEnv('rtx', null, 'warm')).toEqual(offload);
+  });
+
+  test('launchEnv on a cold shader cache: the Iris Xe gets MESA_SHADER_CACHE_DISABLE=true, the RTX __GL_SHADER_DISK_CACHE=0 beside its offload variables (rulings R11)', () => {
+    const offload = { __NV_PRIME_RENDER_OFFLOAD: '1', __GLX_VENDOR_LIBRARY_NAME: 'nvidia', __VK_LAYER_NV_optimus: 'NVIDIA_only' };
+    expect(launchEnv('iris', 'on-demand', 'cold')).toEqual({ MESA_SHADER_CACHE_DISABLE: 'true' });
+    expect(launchEnv('iris', null, 'cold')).toEqual({ MESA_SHADER_CACHE_DISABLE: 'true' });
+    expect(launchEnv('rtx', 'nvidia', 'cold')).toEqual({ __GL_SHADER_DISK_CACHE: '0' });
+    expect(launchEnv('rtx', 'on-demand', 'cold')).toEqual({ ...offload, __GL_SHADER_DISK_CACHE: '0' });
+  });
+
+  test('shaderCacheOf: cold for the flight and the bench (its shots included), warm for the spike (rulings R11)', () => {
+    expect(shaderCacheOf(args({ route: 'flight' }))).toBe('cold');
+    expect(shaderCacheOf(args({ route: 'flight', gpu: 'rtx', workers: 4 }))).toBe('cold');
+    expect(shaderCacheOf(args({ route: 'bench' }))).toBe('cold');
+    expect(shaderCacheOf(args({ route: 'bench', shot: 'fly96', renderer: 'mesh' }))).toBe('cold');
+    expect(shaderCacheOf(args({ route: 'spike' }))).toBe('warm');
   });
 });
 

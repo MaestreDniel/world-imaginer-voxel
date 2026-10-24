@@ -13,7 +13,8 @@
  * 2. it refuses when the 1-minute load average is above MEASURE_LOAD_MAX, printing `uptime` (a quiet machine);
  * 3. it reads the PRIME profile (`prime-select query`, never with an argument) and passes the GPU choice to Chrome as
  *    environment (`launchEnv`, ruling P6): nothing spawns prime-run; the RTX also gets ANGLE's Vulkan backend
- *    (`chromeArgs`, ruling P60);
+ *    (`chromeArgs`, ruling P60); the flight and the bench run on a cold driver shader cache (`shaderCacheOf`, rulings
+ *    R11), recorded as the JSON's `shaderCache`;
  * 4. it builds (unless --skip-build), starts its own `vite preview` on a free port (never 5183) and its own headful
  *    Chrome, fullscreen at 1920 × 1080 @ 1, with a fresh temporary profile and no SwiftShader flag;
  * 5. it probes the WebGL renderer and refuses unless it names the expected GPU (`gpuMatches`); it makes sure the window is
@@ -158,13 +159,33 @@ export function gpuMatches(gpu: 'iris' | 'rtx', renderer: string): boolean {
 /** prime-run's variables: render this process on the NVIDIA GPU under PRIME render offload. */
 const NV_OFFLOAD = { __NV_PRIME_RENDER_OFFLOAD: '1', __GLX_VENDOR_LIBRARY_NAME: 'nvidia', __VK_LAYER_NV_optimus: 'NVIDIA_only' } as const;
 
+/** Whether our Chrome's driver may use its on-disk shader cache ('warm') or starts with none ('cold'). */
+export type ShaderCache = 'cold' | 'warm';
+
+/**
+ * The driver shader cache of a run (rulings R11): cold for the flight and the bench, its shots included, so a run
+ * measures what a user meets on a first visit (a program first linked mid-flight stalls that frame); warm for SP4a's
+ * spike, as it was measured.
+ */
+export function shaderCacheOf(a: MeasureArgs): ShaderCache {
+  return a.route === 'spike' ? 'warm' : 'cold';
+}
+
 /**
  * The environment Chrome gets for the GPU (ruling P6, the spec's "under prime-run" without prime-run installed): none
  * for the Iris Xe; none for the RTX under the 'nvidia' profile (everything renders there); otherwise the offload
- * variables. Whether Chrome really landed on the GPU is checked afterwards by `gpuMatches`, the only gate.
+ * variables. Whether Chrome really landed on the GPU is checked afterwards by `gpuMatches`, the only gate. On a cold
+ * shader cache (rulings R11) the driver's on-disk cache is off for our process only: Mesa's `MESA_SHADER_CACHE_DISABLE`
+ * on the Iris Xe, NVIDIA's `__GL_SHADER_DISK_CACHE=0` (its GL and Vulkan both honour it) on the RTX; no user cache is
+ * touched. Chrome's own program cache lives in the fresh profile, so it starts empty anyway.
  */
-export function launchEnv(gpu: 'iris' | 'rtx', primeProfile: string | null): Record<string, string> {
-  return gpu === 'rtx' && primeProfile !== 'nvidia' ? { ...NV_OFFLOAD } : {};
+export function launchEnv(gpu: 'iris' | 'rtx', primeProfile: string | null, shaderCache: ShaderCache): Record<string, string> {
+  const env: Record<string, string> = gpu === 'rtx' && primeProfile !== 'nvidia' ? { ...NV_OFFLOAD } : {};
+  if (shaderCache === 'cold') {
+    if (gpu === 'iris') env['MESA_SHADER_CACHE_DISABLE'] = 'true';
+    else env['__GL_SHADER_DISK_CACHE'] = '0';
+  }
+  return env;
 }
 
 /**
@@ -448,7 +469,8 @@ async function main(argv: readonly string[]): Promise<number> {
     return 2;
   }
   const prime = primeProfile();
-  const env = launchEnv(a.gpu, prime);
+  const shaderCache = shaderCacheOf(a);
+  const env = launchEnv(a.gpu, prime, shaderCache);
 
   let chrome: ChromeHandle | null = null;
   let cdp: Cdp | null = null;
@@ -479,7 +501,7 @@ async function main(argv: readonly string[]): Promise<number> {
     profile = mkdtempSync(join(tmpdir(), 'wi10-measure-chrome-'));
     chrome = await startChrome({ headless: false, profileDir: profile, args: chromeArgs(a, profile), env });
     const envText = Object.keys(env).length === 0 ? 'no extra environment' : Object.entries(env).map(([k, v]) => `${k}=${v}`).join(' ');
-    console.log(`headful Chrome (pid ${chrome.proc.pid}) with DevTools on port ${chrome.port}, profile ${profile}, PRIME ${prime ?? 'unknown'}, ${envText}`);
+    console.log(`headful Chrome (pid ${chrome.proc.pid}) with DevTools on port ${chrome.port}, profile ${profile}, PRIME ${prime ?? 'unknown'}, ${shaderCache} shader cache, ${envText}`);
     const version = await (await fetch(`http://127.0.0.1:${chrome.port}/json/version`)).json() as { Browser?: string };
     const chromeVersion = version.Browser ?? 'unknown';
     const targets = await (await fetch(`http://127.0.0.1:${chrome.port}/json/list`)).json() as Array<{ type: string; id: string; webSocketDebuggerUrl: string }>;
@@ -568,7 +590,8 @@ async function main(argv: readonly string[]): Promise<number> {
     const windowBounds = await win.read();
     const result: Record<string, unknown> = {
       ...(JSON.parse(text) as Record<string, unknown>),
-      measuredBy: 'measureChrome', loadAvg1Before, loadAvg1After, chromeVersion, window: windowBounds, viewport, consoleErrors: [...consoleErrors],
+      measuredBy: 'measureChrome', loadAvg1Before, loadAvg1After, chromeVersion, shaderCache, window: windowBounds, viewport,
+      consoleErrors: [...consoleErrors],
     };
     mkdirSync(join(ROOT, ASSETS), { recursive: true });
     writeFileSync(file, `${JSON.stringify(result, null, 2)}\n`);
