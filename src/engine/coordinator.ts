@@ -901,7 +901,7 @@ export function createCoordinator(o: CoordinatorOptions): Coordinator {
     }
     try {
       if (stopped) return;
-      if (out === null) rejected(h, s, cx, cz, err);
+      if (out === null) rejected(h, s, cx, cz, protoOnly, err);
       else intake(h, s, cx, cz, seq, protoOnly, out);
       unpinned(h, s, cx, cz);
       pump();
@@ -993,13 +993,15 @@ export function createCoordinator(o: CoordinatorOptions): Coordinator {
    * A rejected job (spec §3.6, D12). Strict, or a dead lock owner: fatal. `JobCancelled` and `WorkerFailed` requeue
    * with no retry counted (a dead worker is not the job's fault). `StoreFullError` pauses new T jobs until the next
    * voxel unload (the job itself waits too), counts and emits `storeFull` once per pause. Anything else (INTERNAL) is
-   * a failure: requeued once, then the column is marked failed.
+   * a failure: requeued once, then the column is marked failed. A T rejected otherwise than by `StoreFullError` first
+   * frees the record it may have left claimed (`releaseFailedT`).
    */
-  function rejected(h: number, s: number, cx: number, cz: number, e: unknown): void {
+  function rejected(h: number, s: number, cx: number, cz: number, protoOnly: boolean, e: unknown): void {
     if (strict || e instanceof StoreCorrupt || e instanceof StoreCorruptError) {
       fatal(`${STAGES[h]} at (${cx}, ${cz}) failed: ${errorText(e)}`, e);
       return;
     }
+    if (h === 0 && !protoOnly && !(e instanceof StoreFullError)) releaseFailedT(s, cx, cz);
     if (e instanceof JobCancelled || e instanceof WorkerFailed) {
       requeue(s);
       return;
@@ -1014,6 +1016,24 @@ export function createCoordinator(o: CoordinatorOptions): Coordinator {
       return;
     }
     failure(h, s, cx, cz, e);
+  }
+
+  /**
+   * A T of (cx, cz) settled rejected (spec §3.6, D12; rulings R14): `fillColumnT` claims the record before it writes
+   * and frees it only on a stop or a throw inside the worker, so a worker that died mid-T (`WorkerFailed`), a reply
+   * failing its guard (BAD_MESSAGE) or a reply naming another job or column can leave the record claimed by
+   * (cx, cz), uncommitted or at Proto. Unless the table holds (cx, cz) at stage ≥ 1 (no job reads it, so the free is
+   * safe), a record that still names (cx, cz) is freed, so the T can be issued again: otherwise `nextJob` meets
+   * `'self'` for ever, and once the slot follows another column every column of that torus slot collides for ever. The
+   * slot may have moved on while the T ran (the jump case, as in `intake`). A worker that died inside the pool lock
+   * is marked dead first (`fail` calls `onWorkerDead` before it rejects), so this free throws `StoreCorrupt` → fatal
+   * (D6). Accepted residual risk: a browser's `terminate()` is asynchronous, so a dead worker's in-flight store write
+   * could land after this free; its script is aborted at the next opportunity, and the page fails outright once the
+   * last worker is gone.
+   */
+  function releaseFailedT(s: number, cx: number, cz: number): void {
+    if (tracks(s, cx, cz) && stage[s] !== 0) return;
+    if (store.holder(cx, cz) === 'self') store.freeColumn(cx, cz);
   }
 
   /**

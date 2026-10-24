@@ -38,6 +38,11 @@ interface FakeOptions {
   readonly throttle?: Throttle;
   /** Whether the pending job at index i is running (`cancel` rejects only the others); the first one by default. */
   readonly runningOf?: (j: Issued, i: number) => boolean;
+  /**
+   * A T claims its record when it is issued, as `fillColumnT` does (an uncommitted record, status 0, read as absent),
+   * so a rejected T leaves its record claimed, as a T whose worker died does (rulings R14).
+   */
+  readonly claims?: boolean;
 }
 
 /**
@@ -84,7 +89,7 @@ function fakeWorld(fo: FakeOptions = {}) {
         for (let dx = -1; dx <= 1; dx++) {
           const k = 2 * (3 * (dz + 1) + (dx + 1));
           const r = fake.records.get(slotOf(cx + dx, cz + dz));
-          const held = r !== undefined && r.cx === cx + dx && r.cz === cz + dz;
+          const held = r !== undefined && r.cx === cx + dx && r.cz === cz + dz && r.status > 0;
           out[k] = held ? r.block : -1;
           out[k + 1] = held ? r.light : -1;
         }
@@ -169,6 +174,7 @@ function fakeWorld(fo: FakeOptions = {}) {
       inFlight[stage]++;
       total++;
       check(stage, cx, cz, protoOnly);
+      if (fo.claims === true && stage === 'T' && !protoOnly) fake.records.set(slotOf(cx, cz), { cx, cz, status: 0, block: 1, light: 0 });
       const versions = new Int32Array(18);
       store.versionsInto(cx, cz, versions);
       return new Promise<JobOutcome>((resolve, reject) => {
@@ -1078,6 +1084,82 @@ describe('createCoordinator: errors after the reveal (SP4b spec §3.6, D12)', ()
     f.w.fake.freeThrows = dead;
     f.c.update(cam(30, 0));
     expect(f.w.fake.events).toEqual([{ kind: 'fatal', message: expect.stringMatching(/^unload failed: /), cause: dead }]);
+  });
+
+  test('a T rejected with WorkerFailed that leaves its record claimed frees it before the requeue: the T is issued again and the fill completes (rulings R14)', async () => {
+    let once = true;
+    const { w, c } = make({ rd: 4, claims: true, failOf: (j) => (once && j.stage === 'T' && j.cx === 0 && j.cz === 0 ? (once = false, new WorkerFailed('worker 2 of 4 failed: error event')) : null) });
+    await fill(w, c, cam(0, 0));
+    expect(once).toBe(false);
+    expect(has(w.fake.frees, 0, 0)).toBe(true);
+    expect(issuedOf(w, 'T', 0, 0)).toBe(2);
+    expect(perStage(w.fake.issued)).toEqual({ T: 214, D: 157, L: 109, MESH: 69 });
+    expect(c.firstFill()).toBe(true);
+    expect(w.fake.events).toEqual([]);
+    const n = read(c);
+    expect([n.failed, n.dropped, n.collisionWaits]).toEqual([0, 0, 0]);
+    expect(w.fake.violations).toEqual([]);
+  });
+
+  test('a T rejected with BAD_MESSAGE (an INTERNAL failure) that leaves its record claimed frees it: the retry is issued and the fill completes (rulings R14)', async () => {
+    let once = true;
+    const { w, c } = make({ rd: 4, claims: true, failOf: (j) => (once && j.stage === 'T' && j.cx === 1 && j.cz === -1 ? (once = false, new Error('BAD_MESSAGE: versions is not null or an ArrayBuffer of 72 bytes')) : null) });
+    await fill(w, c, cam(0, 0));
+    expect(once).toBe(false);
+    expect(has(w.fake.frees, 1, -1)).toBe(true);
+    expect(issuedOf(w, 'T', 1, -1)).toBe(2);
+    expect(c.firstFill()).toBe(true);
+    expect(w.fake.events).toEqual([]);
+    expect([read(c).failed, read(c).collisionWaits]).toEqual([0, 0]);
+    expect(w.fake.violations).toEqual([]);
+  });
+
+  test('a T rejected with WorkerFailed after its slot moved on to a window column frees its record: the new column\'s T claims the torus record and the fill around the new centre completes (rulings R14)', async () => {
+    const isT00 = (j: Issued) => j.stage === 'T' && j.cx === 0 && j.cz === 0;
+    let failNow = false;
+    const { w, c } = make({ rd: 4, claims: true, runningOf: (j, i) => isT00(j) || i === 0, failOf: (j) => (failNow && isT00(j) ? new WorkerFailed('worker 1 of 4 failed: error event') : null) });
+    c.update(cam(0, 0));
+    await flush();
+    // Every job but T(0, 0) settles; T(0, 0) stays in flight with its record claimed.
+    for (;;) {
+      const i = w.fake.pending.findIndex((p) => !isT00(p));
+      if (i < 0) break;
+      w.settle(i);
+      await flush();
+    }
+    expect(w.fake.pending.map((p) => [p.stage, p.cx, p.cz])).toEqual([['T', 0, 0]]);
+    expect(w.store.holder(0, 0)).toBe('self');
+    // The jump: slot 0 now tracks (64, 0), whose record (0, 0) still claims; then the T's worker dies.
+    c.update(cam(64, 0));
+    await flush();
+    failNow = true;
+    w.settle(w.fake.pending.findIndex(isT00));
+    await flush();
+    expect(has(w.fake.frees, 0, 0)).toBe(true);
+    for (let i = 0; i < 20 && !c.firstFill(); i++) await fill(w, c, cam(64, 0));
+    expect(issuedOf(w, 'T', 0, 0)).toBe(1);
+    expect(issuedOf(w, 'T', 64, 0)).toBe(1);
+    expect(read(c).MESH).toEqual({ needed: 69, done: 69, inFlight: 0, queued: 0 });
+    expect(c.firstFill()).toBe(true);
+    expect(w.fake.events).toEqual([]);
+    expect(w.fake.violations).toEqual([]);
+  });
+
+  test('a StoreCorrupt from a failed T\'s free (its dead worker held the pool lock) emits fatal (rulings R14)', async () => {
+    const dead = new StoreCorrupt('the pool lock is held by thread 2, which failed');
+    let once = true;
+    const r = make({
+      rd: 4, claims: true,
+      failOf: (j) => {
+        if (!once || j.stage !== 'T' || j.cx !== 0 || j.cz !== 0) return null;
+        once = false;
+        r.w.fake.freeThrows = dead;
+        return new WorkerFailed('worker 2 of 4 failed: error event');
+      },
+    });
+    await fill(r.w, r.c, cam(0, 0));
+    expect(r.w.fake.events).toEqual([{ kind: 'fatal', message: expect.stringMatching(/^T at \(0, 0\): intake failed: /), cause: dead }]);
+    expect(issuedOf(r.w, 'T', 0, 0)).toBe(1);
   });
 });
 
