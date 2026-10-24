@@ -203,4 +203,31 @@ describe('createFogStep (the page\'s live-RD glue, SP4b spec §5; final review U
     for (let i = 0; i < 300; i++) fogRd = held.frame();
     expect(fogRd).toBe(8);
   });
+
+  /** The columns within Chebyshev distance r of (cx, cz). */
+  const square = (cx: number, cz: number, r: number): Array<[number, number]> => {
+    const out: Array<[number, number]> = [];
+    for (let dz = -r; dz <= r; dz++) for (let dx = -r; dx <= r; dx++) out.push([cx + dx, cz + dz]);
+    return out;
+  };
+
+  test('a skipped column whose neighbours, the camera column among them, stay unrevealed still lets a raise 8 → 12 reach 12: a D skipped at (1, 1) leaves its 5 × 5 unmeshed, a T skipped there its 7 × 7 (rulings R16)', () => {
+    // The coordinator's own counts (coordinator.test.ts, "retries and the skipped column"): a D skipped at (1, 1)
+    // stops L in its 3 × 3 and MESH in its 5 × 5; a T skipped stops D in its 3 × 3, L in its 5 × 5, MESH in its 7 × 7.
+    for (const reach of [1, 2, 3]) {
+      const t = rig(8, { hidden: square(1, 1, reach), skipped: [[1, 1]] });
+      t.fog.setTarget(12);
+      t.step.rescan();
+      let fogRd = 8;
+      for (let i = 0; i < 300; i++) fogRd = t.frame();
+      expect(fogRd, `reach ${reach}`).toBe(12);
+    }
+    // A column farther than 3 from every skipped one, unrevealed, still holds the fog: (5, 1) lies 4 from (1, 1).
+    const held = rig(8, { hidden: [...square(1, 1, 3), [5, 1]], skipped: [[1, 1]] });
+    held.fog.setTarget(12);
+    held.step.rescan();
+    let fogRd = 8;
+    for (let i = 0; i < 300; i++) fogRd = held.frame();
+    expect(fogRd).toBe(8);
+  });
 });

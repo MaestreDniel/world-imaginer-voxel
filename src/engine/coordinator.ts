@@ -191,8 +191,9 @@ export interface Coordinator {
   firstFill(): boolean;
   /**
    * True while (cx, cz)'s slot tracks it marked failed (skipped after two failures, spec §3.6) until its voxels
-   * unload: the page's fog scan counts such a column as filled, so a skipped column does not hold the fog (final review
-   * UI-4).
+   * unload. Only that column is marked: the neighbours it stops short of MESH (its 7 × 7 when skipped at T, 5 × 5 at
+   * D, 3 × 3 at L) are not. The page's fog scan counts as filled every column within 3 of a skipped one, so neither
+   * the skipped column nor the hole around it holds the fog (final review UI-4, rulings R16).
    */
   isSkipped(cx: number, cz: number): boolean;
   counts(out: CoordinatorCounts): CoordinatorCounts;

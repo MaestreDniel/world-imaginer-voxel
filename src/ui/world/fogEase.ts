@@ -83,17 +83,34 @@ export interface FogColumns {
 }
 
 /**
+ * How far a skipped column keeps others unrevealed (Chebyshev distance, rulings R16): each stage needs its 3 × 3 at the
+ * stage before (spec §3.3), so a column skipped at T stops D in its 3 × 3, L in its 5 × 5 and MESH in its 7 × 7; one
+ * skipped at D reaches 2, at L 1, at MESH 0. The fog cannot tell the stage, so it takes the widest.
+ */
+export const SKIP_REACH = 3;
+
+/** Whether a column within `SKIP_REACH` of (cx, cz), itself included, is skipped. */
+function nearSkipped(columns: FogColumns, cx: number, cz: number): boolean {
+  for (let dz = -SKIP_REACH; dz <= SKIP_REACH; dz++) {
+    for (let dx = -SKIP_REACH; dx <= SKIP_REACH; dx++) if (columns.isSkipped(cx + dx, cz + dz)) return true;
+  }
+  return false;
+}
+
+/**
  * The fog's RD on each rendered frame (SP4b spec §5), the page's glue: eased outward after a raise, following the
  * filled radius around the eye's column, scanned every `FILL_SCAN_FRAMES` rendered frames while the fog is below its
  * target and never once it has arrived; `rescan` asks for a scan on the next frame (a raise). The filled radius starts
- * at the load RD, whose disc the reveal filled. A skipped column counts as filled: it is never revealed until its
- * voxels unload (beyond RD + 5), so it would hold the fog after a raise while the camera stays near it, although
- * `camera.far` and streaming have moved; D12 accepts the small hole it leaves (final review UI-4).
+ * at the load RD, whose disc the reveal filled. A column counts as filled when it is revealed or lies within
+ * `SKIP_REACH` of a skipped column: a skipped column is never revealed until its voxels unload (beyond RD + 5), nor
+ * are the columns it stops short of MESH, and they are not marked skipped themselves, so they would hold the fog after
+ * a raise while the camera stays near them, although `camera.far` and streaming have moved; D12 accepts the small hole
+ * they leave (final review UI-4, rulings R16). A loading column that close to a skipped one counts as filled too.
  */
 export function createFogStep(
   fog: FogEase, eye: { readonly x: number; readonly z: number }, columns: FogColumns, rd: number,
 ): { step(dtMs: number): number; rescan(): void } {
-  const filledAt = (cx: number, cz: number): boolean => columns.isRevealed(cx, cz) || columns.isSkipped(cx, cz);
+  const filledAt = (cx: number, cz: number): boolean => columns.isRevealed(cx, cz) || nearSkipped(columns, cx, cz);
   let fogRd = rd;
   let filled = rd;
   let scanIn = 0;
