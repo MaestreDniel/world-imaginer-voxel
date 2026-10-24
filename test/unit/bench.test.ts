@@ -512,8 +512,8 @@ describe('createBenchDriver (the page\'s hook, SP4b spec §8.3)', () => {
     const out: BenchPose = { x: 0, y: 80, z: 0, yaw: 0, pitch: 0 };
     hole.driver.pose(0, out, 12);
     for (let i = 0; i < 3; i++) {
-      hole.driver.pose(67.6 + i * 0.01, out, 12);
-      expect([out.x, out.y, out.z, out.yaw, out.pitch]).toEqual([400, BENCH_Y, -2880 - 2.5 * 384, 0, BENCH_PITCH]);
+      hole.driver.pose(65.6 + i * 0.01, out, 12);
+      expect([out.x, out.y, out.z, out.yaw, out.pitch]).toEqual([400, BENCH_Y, -2880 - 0.5 * 384, 0, BENCH_PITCH]);
     }
     const run = driverOf(null);
     run.driver.bind({ rdMax: 12, heightAt: () => 64 });

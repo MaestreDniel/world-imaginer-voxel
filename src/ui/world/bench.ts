@@ -590,12 +590,14 @@ export const BENCH_SHOTS = ['fly96', 'fly384', 'rd12', 'rd8', 'rd12back', 'first
 export type BenchShot = (typeof BENCH_SHOTS)[number];
 
 /**
- * The fixed shots' script times, s (plan): mid-L3 at 96 blocks/s, mid-L4 at 384, half a second before L6's lowering
- * (RD 12), a second after it (RD 8); `first` at the start, before any pose is set (the first view after the reveal).
+ * The fixed shots' script times, s (plan): mid-L3 at 96 blocks/s; half a second into L4 at 384, while revealed terrain
+ * is still ahead of the camera (by L4 + 1 s generation trails it and every revealed column lies behind, so the frame is
+ * sky; rulings R12); half a second before L6's lowering (RD 12), a second after it (RD 8); `first` at the start, before
+ * any pose is set (the first view after the reveal).
  */
 const SHOT_AT: Readonly<Record<Exclude<BenchShot, 'rd12back'>, number>> = {
   fly96: LEG_STARTS[3]! + 15,
-  fly384: LEG_STARTS[4]! + 2.5,
+  fly384: LEG_STARTS[4]! + 0.5,
   rd12: LEG_STARTS[6]! - 0.5,
   rd8: LEG_STARTS[6]! + 1,
   first: 0,
