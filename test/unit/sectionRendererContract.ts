@@ -16,9 +16,6 @@ import { fakePayload, type FakeRow } from './fixtures/payloads';
  * the origin rebase, counts and `gpuBytes`, and the probe. It is run against both implementations, RegionBatch
  * (`regionBatch.test.ts`) and RegionMesh (`regionMesh.test.ts`). What a test sees drawn it reads from three's objects
  * under `root` (`visibleIndices`), independently of the renderer's own state.
- *
- * The cases RegionMesh cannot pass while it keeps SP4a's region merge (SP4b Task 16) are `test.todo` for 'mesh';
- * Task 17's arena enables them.
  */
 
 const ALBEDO = createFlatColorArray();
@@ -135,11 +132,6 @@ function lcg(seed: number): () => number {
 export function sectionRendererContract(kind: SectionRendererKind): void {
   const make = (): SectionRenderer =>
     createSectionRenderer(kind, createMaterialSystem({ variant: kind, ao: true, smoothLight: true }, ALBEDO));
-  /** A case RegionMesh passes only with Task 17's arena. */
-  const arena = (name: string, fn: () => void): void => {
-    if (kind === 'mesh') test.todo(name);
-    else test(name, fn);
-  };
   const probe = (r: SectionRenderer): RevealProbe => r.probe(createRevealProbe());
   const counts = (r: SectionRenderer): SectionRendererCounts => r.counts(createSectionRendererCounts());
 
@@ -187,7 +179,7 @@ export function sectionRendererContract(kind: SectionRendererKind): void {
       r.dispose();
     });
 
-    arena('structural before releases: with 40 rows pending release and a staged column in a new region, one pump under a 32-row gate creates the region\'s object and releases 32 rows; the column\'s rows upload in the following pumps and it is revealed', () => {
+    test('structural before releases: with 40 rows pending release and a staged column in a new region, one pump under a 32-row gate creates the region\'s object and releases 32 rows; the column\'s rows upload in the following pumps and it is revealed', () => {
       const r = make();
       r.stage(fakePayload(1, 1, rowsOf(24, 16)), 1);
       pumpAll(r);
@@ -227,7 +219,7 @@ export function sectionRendererContract(kind: SectionRendererKind): void {
       r.dispose();
     });
 
-    arena('lastStructural: a pump that creates a region reports \'create\' with the reservation\'s bytes (1,835,008 for batch, 2,359,296 for mesh), and the next pump reports null and 0', () => {
+    test('lastStructural: a pump that creates a region reports \'create\' with the reservation\'s bytes (1,835,008 for batch, 2,359,296 for mesh), and the next pump reports null and 0', () => {
       const r = make();
       r.stage(fakePayload(0, 0, [opaque(4)]), 1);
       r.pump(fakeGate(32), 0, 0, 0);
@@ -237,7 +229,7 @@ export function sectionRendererContract(kind: SectionRendererKind): void {
       r.dispose();
     });
 
-    arena('one structural operation per frame while flying: two new regions in one pump create one; the second waits for the next pump; under an Infinity-row gate both are created in one pump', () => {
+    test('one structural operation per frame while flying: two new regions in one pump create one; the second waits for the next pump; under an Infinity-row gate both are created in one pump', () => {
       let t = 0;
       const now = (): number => t;
       // The engine's budget satisfies the gate structurally.
@@ -336,7 +328,7 @@ export function sectionRendererContract(kind: SectionRendererKind): void {
       r.dispose();
     });
 
-    arena('an object with rows written in a pump has frustumCulled false until its attributes hold no pending update range (cleared as three\'s upload does), and true again at the next pump', () => {
+    test('an object with rows written in a pump has frustumCulled false until its attributes hold no pending update range (cleared as three\'s upload does), and true again at the next pump', () => {
       const r = make();
       r.stage(fakePayload(0, 0, [opaque(3), water(3)]), 1);
       r.stage(fakePayload(17, 0, [opaque(3)]), 1);
@@ -451,7 +443,7 @@ export function sectionRendererContract(kind: SectionRendererKind): void {
       r.dispose();
     });
 
-    arena('counts and gpuBytes: a region with one opaque row — batch 1,835,008 bytes, mesh 2,359,296', () => {
+    test('counts and gpuBytes: a region with one opaque row — batch 1,835,008 bytes, mesh 2,359,296', () => {
       const r = make();
       expect(r.gpuBytes()).toBe(0);
       const p = fakePayload(3, 3, [opaque(4, 5)]);

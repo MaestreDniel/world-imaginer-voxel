@@ -796,6 +796,12 @@ describe('master spec amendments (SP4b §13)', () => {
     expect(s45).toContain('Vertex and index capacity are reserved per preset (SP4b; SP4a sizes each region exactly at load) (Medium: opaque 131,072 vertices / 196,608 indices, translucent 16,384 / 24,576, cutout 8,192 / 12,288 on demand, 1,536 instances; when full, `optimize()` above 40 % deleted space, else ×1.5)');
   });
 
+  test('§4.5\'s Fallback paragraph names RegionMesh\'s arena (SP4b spec §4.3, §13)', () => {
+    const fallback = text.split('\n').find((l) => l.startsWith('**Fallback.** `capabilities.ts`'));
+    expect(fallback, 'no `**Fallback.**` paragraph in §4.5').toBeDefined();
+    expect(fallback).toContain('one merged buffer per region per pass with sub-allocated ranges and `addUpdateRange` (SP4b: an arena per region and pass with column ranges, first-fit, hidden by degenerate indices until the reveal frame, compaction above 40 % free space, else ×1.5), and culling per region');
+  });
+
   test('§1 names each SP4b module in its entry, which exists', () => {
     for (const [head, token, file] of SP4B_MODULES) {
       const entry = layoutEntry(head);

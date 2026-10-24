@@ -1,6 +1,6 @@
 import { Box3, Vector3, type Group, type Sphere } from 'three';
 import { STAGE_BONUS, streamScore } from '../core/streamScore';
-import { ROW_INTS, type ColumnMeshPayload } from '../mesh/column';
+import { MESH_PASS_CUTOUT, MESH_PASS_OPAQUE, MESH_PASS_TRANSLUCENT, ROW_INTS, type ColumnMeshPayload } from '../mesh/column';
 import type {
   RevealProbe, SectionRenderer, SectionRendererCounts, SectionRendererKind, StructuralKind, UploadGate,
 } from './sectionRenderer';
@@ -26,9 +26,21 @@ export function regionOrigin(rx: number, rz: number): [number, number, number] {
 }
 
 /** Geometry units per block: positions are in 1/8 blocks (SP4a spec §5.5). */
-const UNITS = 8;
-/** A section's extent in geometry units. */
-const SECTION_UNITS = 16 * UNITS;
+export const UNITS = 8;
+/** A section's (and a column's) extent in geometry units. */
+export const SECTION_UNITS = 16 * UNITS;
+
+/**
+ * Per pass: the vertex and index reservation of a region's object, RegionBatch's batch and RegionMesh's arena alike
+ * (SP4b spec §4.2, §4.3; Medium; the opaque one ≈ 1.8 MB on RegionBatch, 2.4 MB on RegionMesh).
+ */
+export const RESERVATION: Readonly<Record<number, readonly [vertices: number, indices: number]>> = {
+  [MESH_PASS_OPAQUE]: [131_072, 196_608],
+  [MESH_PASS_CUTOUT]: [8192, 12_288],
+  [MESH_PASS_TRANSLUCENT]: [16_384, 24_576],
+};
+/** Every growth of a region's object is × 1.5 (SP4b spec §4.2, §4.3). */
+export const GROWTH = 1.5;
 
 /** One row of a column payload: the payload, the row's offset in `p.rows` and its number (its sphere is at `4·r`). */
 export interface PayloadRow {
@@ -156,8 +168,6 @@ export interface RegionBackend<R> {
   rowVisible(c: StagedColumn<R>, r: number): boolean;
   /** The pump's first step: culling restored on the objects whose attributes hold no pending update range. */
   settle(): void;
-  /** The pump's last step, after the reveals. */
-  flush(): void;
   /** Frees the region's objects (no live column, no held row). */
   disposeRegion(g: StagingRegion<R>): void;
   setOrigin(x: number, y: number, z: number): void;
@@ -165,29 +175,25 @@ export interface RegionBackend<R> {
   gpuBytes(): number;
 }
 
-/** Adds main-thread ms to `structuralMs` (RegionMesh's merges, Task 16, which are not gated operations). */
-export type AddStructuralMs = (ms: number) => void;
-
 const DEG = Math.PI / 180;
 /** Structural operations one row may take in one pump before the backend is judged stuck (a bug, never a budget). */
 const MAX_OPS_PER_ROW = 8;
 
 /**
- * The streaming section renderer over `backend` (SP4b spec §4.1, §3.9). `pump`'s order **(plan)**: (1) `settle`;
- * (2) when the nearest staged column needs a structural operation, ask `gate.structural()` before any release and
- * perform it on a grant (the gate grants only while no row was spent, so asked after the releases it would starve
- * region creation behind a removal backlog); (3) release removed rows, each counted against the row cap, and dispose
- * the regions left empty; (4) upload staged rows nearest-first, a row that needs a refused (or second) structural
- * operation waiting while farther columns go on; (5) reveal each column whose last row was uploaded, all its rows in
- * one call (`onColumnRevealed`). With nothing staged or removed a pump allocates nothing (D25).
+ * The streaming section renderer over the backend `b` (SP4b spec §4.1, §3.9). `pump`'s order **(plan)**:
+ * (1) `settle`; (2) when the nearest staged column needs a structural operation, ask `gate.structural()` before any
+ * release and perform it on a grant (the gate grants only while no row was spent, so asked after the releases it
+ * would starve region creation behind a removal backlog); (3) release removed rows, each counted against the row cap,
+ * and dispose the regions left empty; (4) upload staged rows nearest-first, a row that needs a refused (or second)
+ * structural operation waiting while farther columns go on; (5) reveal each column whose last row was uploaded, all
+ * its rows in one call (`onColumnRevealed`). With nothing staged or removed a pump allocates nothing (D25).
  */
 export function createStreamingRenderer<R>(
   kind: SectionRendererKind,
   root: Group,
-  makeBackend: (addStructuralMs: AddStructuralMs) => RegionBackend<R>,
+  b: RegionBackend<R>,
 ): SectionRenderer {
   let structuralMs = 0;
-  const b = makeBackend((ms) => { structuralMs += ms; });
   const live = new Map<number, StagedColumn<R>>();
   const liveList: Array<StagedColumn<R>> = [];
   const pending: Array<StagedColumn<R>> = [];
@@ -420,7 +426,6 @@ export function createStreamingRenderer<R>(
         revealed++;
         b.reveal(c);
       }
-      b.flush();
       const hook = self.onColumnRevealed;
       if (hook !== null) for (let i = 0; i < completed.length; i++) hook(completed[i]!.cx, completed[i]!.cz);
       completed.length = 0;

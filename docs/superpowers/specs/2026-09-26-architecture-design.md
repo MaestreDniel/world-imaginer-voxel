@@ -1037,7 +1037,7 @@ In AO, smooth light and connectivity15, "opaque" means PASS opaque with `FULL_FA
 - `optimize()` runs when fragmentation exceeds 40%. It is per region, up to about 5 MB at 1500 quads/column (the < 1 ms claim is re-measured in the SP4a spike).
 - `geometry.boundingSphere` is set before `addGeometry`, so three clones it instead of scanning positions.
 
-**Fallback.** `capabilities.ts` detects `WEBGL_multi_draw` at startup. If it is missing, or the SP4a spike fails, the `SectionRenderer` interface switches to `RegionMesh`: one merged buffer per region per pass with sub-allocated ranges and `addUpdateRange`, and culling per region (built in SP4a: Firefox exposes `WEBGL_multi_draw` on no GPU, the user's capability check of 2026-10-20; SP4a writes each region's merged buffers once with Uint16 region-local positions, and the sub-allocated ranges and `addUpdateRange` serve SP4b's streaming).
+**Fallback.** `capabilities.ts` detects `WEBGL_multi_draw` at startup. If it is missing, or the SP4a spike fails, the `SectionRenderer` interface switches to `RegionMesh`: one merged buffer per region per pass with sub-allocated ranges and `addUpdateRange` (SP4b: an arena per region and pass with column ranges, first-fit, hidden by degenerate indices until the reveal frame, compaction above 40 % free space, else ×1.5), and culling per region (built in SP4a: Firefox exposes `WEBGL_multi_draw` on no GPU, the user's capability check of 2026-10-20; SP4a writes each region's merged buffers once with Uint16 region-local positions, and the sub-allocated ranges and `addUpdateRange` serve SP4b's streaming).
 
 **Pass order:**
 1. LOD tiles (own near/far), then clear depth.
