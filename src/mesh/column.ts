@@ -3,7 +3,8 @@
  * buffers with one row per non-empty (section, pass). The renderer wraps subarrays per row; each row is master §2.5's
  * `SectionMesh`. This module holds the type, its structural check and the assembly, `meshColumnPayload`: per section
  * the trivial-section rule (§5.1), else the padded copy, `meshSolid`, `fluidDepths` and `meshFluid` (ruling P24) and
- * `connectivity15` (§5.7).
+ * `connectivity15` (§5.7). The job's two levers (SP4b spec §3.13, D27): the nine views are fetched once per column, and
+ * a section `fluidDepths` finds dry skips `meshFluid`.
  */
 import { AIR, BEDROCK, FULL_FACES, PASS } from '../world/blocks/index';
 import { hasFluid } from '../world/blocks/fluid';
@@ -262,31 +263,59 @@ function appendRow(c: ColumnBuffers, sy: number, pass: MeshPass, v: MeshView): v
 const PASSES: readonly MeshPass[] = [0, 1, 2];
 
 /**
+ * A reader over `nb` whose `final(dx, dz)` returns the nine views fetched once (SP4b spec §3.13, D27; plan): the store's
+ * `final` builds a view per call, which `isTrivial`, `copyPaddedSection` and `fluidDepths` would otherwise pay up to 15
+ * times per section. An absent view is kept as null, so a reader that needs it throws as before. The views read the
+ * store live (no copy), and the mesh job runs inside a read section, so they stay valid for the whole column.
+ */
+function finalsOnce(nb: NeighborhoodReader): NeighborhoodReader {
+  const views: (ColumnView | null)[] = [];
+  for (let dz = -1; dz <= 1; dz++) {
+    for (let dx = -1; dx <= 1; dx++) views.push(nb.final(dx, dz));
+  }
+  return {
+    cx: nb.cx,
+    cz: nb.cz,
+    proto: (dx, dz) => nb.proto(dx, dz),
+    final(dx, dz) {
+      if ((dx !== -1 && dx !== 0 && dx !== 1) || (dz !== -1 && dz !== 0 && dz !== 1)) {
+        throw new RangeError(`meshColumnPayload: neighbour (${dx}, ${dz}) outside the 3 × 3`);
+      }
+      return views[3 * (dz + 1) + dx + 1] ?? null;
+    },
+    versions: () => nb.versions(),
+    versionsInto: (out) => nb.versionsInto(out),
+  };
+}
+
+/**
  * The mesh payload of the centre column of `nb` (SP4a spec §5.8), whose 3 × 3 holds final sets (the job checks they are
  * Published). `versions` is read first, before any copy. Per section: a trivial one (`isTrivial`) gets connectivity
- * 0x7FFF or 0 and no rows; any other is copied into the padded view and meshed (`meshSolid`, then `fluidDepths` and
- * `meshFluid`), with `connectivity15` and one row per non-empty pass, in (sy, pass) order. The column has one position,
- * one data and one index buffer, indices relative to each row's `vertexStart`. Every array of the payload is a fresh,
- * exact, unshared copy (ruling P27): `s` is reused by the next call, and the job transfers each buffer.
+ * 0x7FFF or 0 and no rows; any other is copied into the padded view and meshed (`meshSolid`, then `fluidDepths` and,
+ * when the section holds fluid, `meshFluid`), with `connectivity15` and one row per non-empty pass, in (sy, pass) order.
+ * The column has one position, one data and one index buffer, indices relative to each row's `vertexStart`. Every
+ * array of the payload is a fresh, exact, unshared copy (ruling P27): `s` is reused by the next call, and the job
+ * transfers each buffer. The nine views are fetched once, after `versions` (SP4b spec §3.13, D27): `nb.final` runs at
+ * most 9 times. A dry section's `meshFluid` would add nothing, so skipping it leaves the payload byte-identical.
  */
 export function meshColumnPayload(nb: NeighborhoodReader, s: MeshScratch, o: MeshOptions): ColumnMeshPayload {
   const versions = nb.versions();
+  const once = finalsOnce(nb);
   const connectivity = new Uint16Array(SECTIONS);
   const c = s.column;
   c.vertices = 0;
   c.indices = 0;
   c.rowCount = 0;
   for (let sy = 0; sy < SECTIONS; sy++) {
-    const t = isTrivial(nb, sy);
+    const t = isTrivial(once, sy);
     if (t !== 0) {
       connectivity[sy] = t === 1 ? ALL_PAIRS : NO_PAIRS;
       continue;
     }
-    COPY_PADDED(nb, sy, s.padded);
+    COPY_PADDED(once, sy, s.padded);
     s.builder.reset();
     MESH_SOLID(s.padded, o, s.builder);
-    FLUID_DEPTHS(nb, sy, s.depth);
-    MESH_FLUID(s.padded, s.depth, s.builder);
+    if (FLUID_DEPTHS(once, sy, s.depth)) MESH_FLUID(s.padded, s.depth, s.builder);
     connectivity[sy] = CONNECTIVITY(s.padded);
     for (const pass of PASSES) {
       const v = s.builder.view(pass);

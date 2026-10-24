@@ -44,18 +44,21 @@ const CZ = -2000;
 const MEDIUM: MeshOptions = { ao: true, smoothLight: true };
 const ALL_PAIRS = 0x7FFF;
 
-/** A shared store with T on the 7 × 7 around (CX, CZ), D on the 5 × 5 and L on the 3 × 3: the centre's 3 × 3 is Published. */
-function filledL(): VoxelStore {
+/**
+ * A shared store with T on the (2r + 7)² around (CX, CZ), D on the (2r + 5)² and L on the (2r + 3)²: the 3 × 3 of every
+ * column of the (2r + 1)² is Published (r 0: the centre's 3 × 3).
+ */
+function filledL(r = 0): VoxelStore {
   const s = createStore({ shared: true, maxBlockBytes: 64 * MiB, maxByteBytes: 64 * MiB });
-  for (let dz = -3; dz <= 3; dz++) {
-    for (let dx = -3; dx <= 3; dx++) expect(fillColumnT(s, ctx, CX + dx, CZ + dz, NEVER)).toBe(true);
+  for (let dz = -r - 3; dz <= r + 3; dz++) {
+    for (let dx = -r - 3; dx <= r + 3; dx++) expect(fillColumnT(s, ctx, CX + dx, CZ + dz, NEVER)).toBe(true);
   }
-  for (let dz = -2; dz <= 2; dz++) {
-    for (let dx = -2; dx <= 2; dx++) expect(fillColumnD(s, ctx, CX + dx, CZ + dz, NEVER)).toBe(true);
+  for (let dz = -r - 2; dz <= r + 2; dz++) {
+    for (let dx = -r - 2; dx <= r + 2; dx++) expect(fillColumnD(s, ctx, CX + dx, CZ + dz, NEVER)).toBe(true);
   }
   const light = createLightScratch();
-  for (let dz = -1; dz <= 1; dz++) {
-    for (let dx = -1; dx <= 1; dx++) expect(fillColumnL(s, CX + dx, CZ + dz, light, NEVER)).not.toBeNull();
+  for (let dz = -r - 1; dz <= r + 1; dz++) {
+    for (let dx = -r - 1; dx <= r + 1; dx++) expect(fillColumnL(s, CX + dx, CZ + dz, light, NEVER)).not.toBeNull();
   }
   return s;
 }
@@ -95,6 +98,112 @@ function handMesh(nb: NeighborhoodReader, sy: number, o: MeshOptions) {
   meshFluid(padded, depth, builder);
   return { builder, connectivity: connectivity15(padded) };
 }
+
+/** The smallest float32 ≥ r, as SP4a's `meshColumnPayload` rounds a sphere's radius. */
+function f32Up(r: number): number {
+  const f = new Float32Array([r]);
+  if (f[0]! < r) new Uint32Array(f.buffer)[0]! += 1;
+  return f[0]!;
+}
+
+/**
+ * SP4a's `meshColumnPayload`, kept as the reference of the mesh-job levers (SP4b spec §3.13, D27): every call reads the
+ * raw reader (`isTrivial`, `copyPaddedSection` and `fluidDepths` each fetch their views), and every non-trivial section
+ * runs `meshFluid`, dry or not. Same assembly: rows in (sy, pass) order, back to back, spheres on the vertices' AABB.
+ */
+function sp4aPayload(nb: NeighborhoodReader, o: MeshOptions): ColumnMeshPayload {
+  const versions = nb.versions();
+  const connectivity = new Uint16Array(SECTIONS);
+  const padded = createPaddedSection();
+  const builder = createMeshBuilder();
+  const depth = new Uint8Array(4096);
+  const position: number[] = [];
+  const data: number[] = [];
+  const index: number[] = [];
+  const rows: number[] = [];
+  const spheres: number[] = [];
+  for (let sy = 0; sy < SECTIONS; sy++) {
+    const t = isTrivial(nb, sy);
+    if (t !== 0) {
+      connectivity[sy] = t === 1 ? ALL_PAIRS : 0;
+      continue;
+    }
+    copyPaddedSection(nb, sy, padded);
+    builder.reset();
+    meshSolid(padded, o, builder);
+    fluidDepths(nb, sy, depth);
+    meshFluid(padded, depth, builder);
+    connectivity[sy] = connectivity15(padded);
+    for (const pass of [0, 1, 2] as const) {
+      const v = builder.view(pass);
+      if (v.indices === 0) continue;
+      let x0 = 255, y0 = 255, z0 = 255, x1 = 0, y1 = 0, z1 = 0;
+      for (let k = 0; k < v.position.length; k += 4) {
+        x0 = Math.min(x0, v.position[k]!); x1 = Math.max(x1, v.position[k]!);
+        y0 = Math.min(y0, v.position[k + 1]!); y1 = Math.max(y1, v.position[k + 1]!);
+        z0 = Math.min(z0, v.position[k + 2]!); z1 = Math.max(z1, v.position[k + 2]!);
+      }
+      rows.push(sy, pass, data.length, v.vertices, index.length, v.indices);
+      spheres.push((x0 + x1) / 16, (y0 + y1) / 16, (z0 + z1) / 16, f32Up(Math.sqrt((x1 - x0) ** 2 + (y1 - y0) ** 2 + (z1 - z0) ** 2) / 16));
+      position.push(...v.position);
+      data.push(...v.data);
+      index.push(...v.index);
+    }
+  }
+  return {
+    cx: nb.cx, cz: nb.cz, versions, connectivity, position: new Uint8Array(position), data: new Uint32Array(data),
+    index: new Uint32Array(index), rows: new Int32Array(rows), spheres: new Float32Array(spheres),
+  };
+}
+
+/** `nb` with a counter of its `final` calls. */
+function countingFinals(nb: NeighborhoodReader): { nb: NeighborhoodReader; calls: () => number } {
+  let n = 0;
+  return {
+    nb: {
+      cx: nb.cx,
+      cz: nb.cz,
+      proto: (dx, dz) => nb.proto(dx, dz),
+      final(dx, dz) {
+        n++;
+        return nb.final(dx, dz);
+      },
+      versions: () => nb.versions(),
+      versionsInto: (out) => nb.versionsInto(out),
+    },
+    calls: () => n,
+  };
+}
+
+describe('the mesh-job levers (SP4b spec §3.13, D27)', () => {
+  test('the payload with the levers equals SP4a\'s for every column of a 5 × 5 region of seed 42 lit to L (every array byte-equal)', () => {
+    const store = filledL(2);
+    const scratch = createMeshScratch();
+    let water = 0;
+    for (let dz = -2; dz <= 2; dz++) {
+      for (let dx = -2; dx <= 2; dx++) {
+        const nb = store.neighborhood(CX + dx, CZ + dz);
+        const p = meshColumnPayload(nb, scratch, MEDIUM);
+        const ref = sp4aPayload(nb, MEDIUM);
+        expect(payloadProblem(p), `(${dx}, ${dz})`).toBeNull();
+        expect([p.cx, p.cz]).toEqual([ref.cx, ref.cz]);
+        expect(snapshot(p), `(${dx}, ${dz})`).toEqual(snapshot(ref));
+        if (rowsOf(p).some((r) => r.pass === 2)) water++;
+      }
+    }
+    // Both branches of the fluid lever run: some columns hold water rows (and every column has dry sections).
+    expect(water).toBeGreaterThan(0);
+  });
+
+  test('nb.final is called at most 9 times per column', () => {
+    const counted = countingFinals(filledL().neighborhood(CX, CZ));
+    const p = meshColumnPayload(counted.nb, createMeshScratch(), MEDIUM);
+    // The column has non-trivial sections, each of which SP4a's path read 5 + 9 + 1 views for.
+    expect(p.rows.length).toBeGreaterThan(0);
+    expect(counted.calls()).toBeGreaterThan(0);
+    expect(counted.calls()).toBeLessThanOrEqual(9);
+  });
+});
 
 describe('meshColumnPayload on a Published 3 × 3 (SP4a spec §5.8)', () => {
   let store: VoxelStore;

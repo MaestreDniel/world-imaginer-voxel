@@ -166,16 +166,20 @@ const COLUMN = new Uint8Array(WINDOW);
  * column's final fluid; below y −64 and above y 319 count as non-fluid. Per (x, z) one pass over the 46 voxels from 15
  * below the section to 15 above it: a run reaching the window's edge from inside the section is at least 16 long, so
  * the clamp makes it exact. A section whose own fluid is uniform 0 fills zeros and reads nothing else.
+ *
+ * Returns whether any voxel of the section holds fluid (SP4b spec §3.13, D27): false on the uniform-dry return and
+ * when every depth is 0, so the mesh job skips `meshFluid` for a dry section.
  */
-export function fluidDepths(nb: NeighborhoodReader, sy: number, out: Uint8Array): void {
+export function fluidDepths(nb: NeighborhoodReader, sy: number, out: Uint8Array): boolean {
   if ((sy | 0) !== sy || sy < 0 || sy >= SECTIONS) throw new RangeError(`fluidDepths: section ${sy} outside 0 … ${SECTIONS - 1}`);
   const v = nb.final(0, 0);
   if (v === null) throw new Error(`fluidDepths: column (${nb.cx}, ${nb.cz}) has no final set`);
   const own = v.sectionFluid(sy);
   if (typeof own === 'number' && !isFluid(own)) {
     out.fill(0);
-    return;
+    return false;
   }
+  let wet = false;
   const below = sy > 0 ? v.sectionFluid(sy - 1) : 0;
   const above = sy < SECTIONS - 1 ? v.sectionFluid(sy + 1) : 0;
   for (let z = 0; z < 16; z++) {
@@ -196,6 +200,7 @@ export function fluidDepths(nb: NeighborhoodReader, sy: number, out: Uint8Array)
           k++;
           continue;
         }
+        wet = true;
         let a = k;
         while (a > 0 && COLUMN[a - 1] === 1) a--;
         let e = k + 1;
@@ -206,4 +211,5 @@ export function fluidDepths(nb: NeighborhoodReader, sy: number, out: Uint8Array)
       }
     }
   }
+  return wet;
 }

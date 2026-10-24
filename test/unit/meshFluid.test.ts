@@ -319,6 +319,25 @@ describe('fluidDepths (SP4a spec §5.5; ruling P24)', () => {
     expect(depthsOf(nb2, 11)[local(5, 0, 5)]).toBe(0);
   });
 
+  test('fluidDepths returns false for a dry section and true for one with water', () => {
+    // Section 0 holds no fluid (the uniform-dry return); sections SY − 1 and SY hold the runs; section SY + 1 holds
+    // none either.
+    expect(fluidDepths(nb, 0, new Uint8Array(4096))).toBe(false);
+    expect(fluidDepths(nb, SY + 1, new Uint8Array(4096))).toBe(false);
+    expect(fluidDepths(nb, SY - 1, new Uint8Array(4096))).toBe(true);
+    expect(fluidDepths(nb, SY, new Uint8Array(4096))).toBe(true);
+    // A uniform water section.
+    const wet = storeWith((_x, y) => (y >= 64 && y < 112 ? WATER_SOURCE : NO_FLUID));
+    expect(wet.final(0, 0)!.sectionFluid(9)).toBe(WATER_SOURCE);
+    expect(fluidDepths(wet, 9, new Uint8Array(4096))).toBe(true);
+    // A dense fluid array without a fluid voxel: every depth is 0, so the section is dry.
+    const dense: Partial<ColumnView> = { sectionFluid: () => new Uint8Array(4096) };
+    const fake = { cx: 0, cz: 0, final: (dx: number, dz: number) => (dx === 0 && dz === 0 ? dense : null) } as unknown as NeighborhoodReader;
+    const out = new Uint8Array(4096).fill(7);
+    expect(fluidDepths(fake, 5, out)).toBe(false);
+    expect(out.every((v) => v === 0)).toBe(true);
+  });
+
   test("a section whose own fluid is uniform 0 fills zeros and reads no other section", () => {
     const reads: number[] = [];
     const centre: Partial<ColumnView> = {
@@ -329,7 +348,7 @@ describe('fluidDepths (SP4a spec §5.5; ruling P24)', () => {
     };
     const fake = { cx: 0, cz: 0, final: (dx: number, dz: number) => (dx === 0 && dz === 0 ? centre : null) } as unknown as NeighborhoodReader;
     const out = new Uint8Array(4096).fill(7);
-    fluidDepths(fake, 5, out);
+    expect(fluidDepths(fake, 5, out)).toBe(false);
     expect(out.every((v) => v === 0)).toBe(true);
     expect(reads).toEqual([5]);
   });
