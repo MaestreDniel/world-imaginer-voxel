@@ -515,6 +515,25 @@ export function createRdControl(o: {
 }
 
 /**
+ * The RD the help's `#setting-rd` shows on load (rulings R8): the RD in force, which is the URL's (`loadRd`, clamped)
+ * on a `?rd=` load and the saved setting otherwise (null: "Default"). It never shows a saved RD that is not in force.
+ */
+export function rdShownOnLoad(queryRd: number | null, loadRd: number, savedRd: number | null): number | null {
+  return queryRd === null ? savedRd : loadRd;
+}
+
+/**
+ * A change from the help (SP4b spec §5; rulings R8). The help's settings carry the RD it shows, the RD in force
+ * (`shownRd`), not the saved one: the rd applies live only when it differs from `shownRd` (the RD control then saves
+ * it), so the RD in force is a no-op and the saved value is not; every other change is saved with the saved rd kept.
+ */
+export function helpChange(
+  saved: WorldSettings, next: WorldSettings, shownRd: number | null,
+): { readonly settings: WorldSettings; readonly applyRd: boolean } {
+  return { settings: { ...next, rd: saved.rd }, applyRd: next.rd !== shownRd };
+}
+
+/**
  * The slow-frame notice's suggestion (SP4a spec §8.5; SP4b spec §5): at render distance `rd`, offers the next lower one
  * (`lowerRd`) in the dismissible notice, whose button applies it live through `control`; nothing at RD 4.
  */
@@ -1029,22 +1048,24 @@ export function mountWorldPage(root: HTMLElement, q: WorldQuery, hash: string, o
       stopHud = () => huds.dispose();
     }
 
-    // Every setting applies live (SP4b spec §5); an rd change goes through the RD control, which saves it again.
+    // Every setting applies live (SP4b spec §5); an rd change goes through the RD control, which saves it. The help
+    // shows the RD in force, the URL's on a `?rd=` load, not the saved one (rulings R8).
+    let shownRd = rdShownOnLoad(q.rd, loadRd, settings.rd);
     const applySettings = (s: WorldSettings): void => {
-      const rdChanged = s.rd !== settings.rd;
+      const change = helpChange(settings, s, shownRd);
       if (s.fpsCap !== settings.fpsCap) limiter.setCap(s.fpsCap);
       if (s.fov !== settings.fov) {
         world.camera.fov = s.fov;
         world.camera.updateProjectionMatrix();
       }
-      settings = s;
+      settings = change.settings;
       frame.brightness = s.brightness;
-      saveSettings(storage, s);
-      if (rdChanged) rdControl.apply(s.rd);
+      saveSettings(storage, settings);
+      if (change.applyRd) rdControl.apply(s.rd);
     };
     const help: Help = mountHelp(host, {
       map: DEFAULT_KEYMAP,
-      settings,
+      settings: { ...settings, rd: shownRd },
       onSettings: applySettings,
       report: caps,
       evaluation,
@@ -1077,7 +1098,12 @@ export function mountWorldPage(root: HTMLElement, q: WorldQuery, hash: string, o
           scanIn = 0;
         },
       },
-      help,
+      help: {
+        setRd(r) {
+          shownRd = r;
+          help.setRd(r);
+        },
+      },
       save: (r) => {
         settings = { ...settings, rd: r };
         saveSettings(storage, settings);

@@ -11,7 +11,8 @@ import { StoreCorrupt } from '../../src/world/store/pool';
 import { createFogEase } from '../../src/ui/world/fogEase';
 import { createReloader } from '../../src/ui/world/reload';
 import {
-  createRdControl, createWorldNotices, everyFrameUntil, handleStreamEvent, offerLowerRd, releaseOnFailure, runTeardown, stopAfterFailure,
+  createRdControl, createWorldNotices, everyFrameUntil, handleStreamEvent, helpChange, offerLowerRd, rdShownOnLoad, releaseOnFailure,
+  runTeardown, stopAfterFailure,
 } from '../../src/ui/world/worldPage';
 import { installDom, type FakeElement } from './fixtures/domShim';
 
@@ -348,5 +349,76 @@ describe('createRdControl (SP4b spec §5, D18; Review Focus 5)', () => {
     rd.dispatchEvent(new Event('change'));
     expect(r.coordinator.setRenderDistance).toHaveBeenLastCalledWith(14);
     expect(page.rd).toBe(14);
+  });
+
+  describe('the help\'s RD select shows the RD in force (rulings R8)', () => {
+    test('on load: the URL\'s RD on a ?rd= load, else the saved setting (null: Default)', () => {
+      expect(rdShownOnLoad(4, 4, 6)).toBe(4);
+      expect(rdShownOnLoad(4, 4, null)).toBe(4);
+      expect(rdShownOnLoad(null, 6, 6)).toBe(6);
+      expect(rdShownOnLoad(null, 12, null)).toBeNull();
+    });
+
+    test('a help change keeps the saved rd unless the rd differs from the RD in force', () => {
+      const saved: WorldSettings = { ...SETTINGS_DEFAULTS, rd: 6 };
+      // A FOV change from a help showing RD 4: saved with rd 6 kept, no rd applied.
+      expect(helpChange(saved, { ...saved, rd: 4, fov: 90 }, 4)).toEqual({ settings: { ...saved, fov: 90 }, applyRd: false });
+      // The saved value, different from the RD in force, applies.
+      expect(helpChange(saved, { ...saved, rd: 6 }, 4)).toEqual({ settings: saved, applyRd: true });
+      expect(helpChange(saved, { ...saved, rd: null }, 4).applyRd).toBe(true);
+      // The RD in force is a no-op.
+      expect(helpChange(saved, { ...saved, rd: 4 }, 4)).toEqual({ settings: saved, applyRd: false });
+    });
+
+    test('?rd=4 with 6 saved: #setting-rd shows 4; a FOV change keeps 6 saved; choosing 4 is a no-op; choosing 6 applies RD 6 live and saves it', () => {
+      // The page's wiring: the help gets the RD in force, its onSettings goes through helpChange, and the RD control's
+      // help tracks what the select shows.
+      let page: WorldSettings = { ...SETTINGS_DEFAULTS, rd: 6 };
+      let shown = rdShownOnLoad(4, 4, page.rd);
+      const stored: WorldSettings[] = [];
+      let control: { apply(rd: number | null): void } | null = null;
+      const help = mountHelp(dom.body as unknown as HTMLElement, {
+        map: DEFAULT_KEYMAP,
+        settings: { ...page, rd: shown },
+        onSettings: (s) => {
+          const c = helpChange(page, s, shown);
+          page = c.settings;
+          stored.push(page);
+          if (c.applyRd) control!.apply(s.rd);
+        },
+        report: REPORT,
+        evaluation: evaluateWorldCapabilities(REPORT),
+        rdMax: 16,
+        mapHereHref: () => '?map',
+        onFullscreen: () => {},
+        onClose: () => {},
+      });
+      const r = rig(4);
+      control = createRdControl({
+        coordinator: r.coordinator, world: r.world, fog: r.fog,
+        help: { setRd: (v) => { shown = v; help.setRd(v); } },
+        save: (v) => { page = { ...page, rd: v }; stored.push(page); }, defaultRd: 12,
+      });
+      const select = dom.el('setting-rd');
+      expect(select.value).toBe('4');
+      const fov = dom.el('setting-fov');
+      fov.value = '90';
+      fov.dispatchEvent(new Event('input'));
+      expect(stored.at(-1)).toEqual({ ...SETTINGS_DEFAULTS, rd: 6, fov: 90 });
+      expect(select.value).toBe('4');
+      select.value = '4';
+      select.dispatchEvent(new Event('change'));
+      expect(r.coordinator.setRenderDistance).not.toHaveBeenCalled();
+      expect(stored.at(-1)!.rd).toBe(6);
+      select.value = '6';
+      select.dispatchEvent(new Event('change'));
+      expect(r.coordinator.setRenderDistance.mock.calls.map((c) => c[0])).toEqual([6]);
+      expect(r.world.setRenderDistance).toHaveBeenLastCalledWith(6);
+      expect(r.fog.target).toBe(6);
+      expect(stored.at(-1)).toEqual({ ...SETTINGS_DEFAULTS, rd: 6, fov: 90 });
+      expect(select.value).toBe('6');
+      expect(shown).toBe(6);
+      expect(r.assign).not.toHaveBeenCalled();
+    });
   });
 });
