@@ -1,6 +1,6 @@
 import {
-  LinearFilter, NearestFilter, PerspectiveCamera, Scene, SRGBColorSpace, WebGLRenderer, type Mesh, type Object3D,
-  type RenderItem,
+  LinearFilter, NearestFilter, PerspectiveCamera, Scene, SRGBColorSpace, WebGLRenderer, type Camera, type Mesh,
+  type Object3D, type RenderItem,
 } from 'three';
 import { MEDIUM } from '../core/params/graphicsPresets';
 import { OPENING_T } from '../daynight/dayNight';
@@ -103,7 +103,8 @@ export interface WorldRenderer {
   /**
    * Compiles every material behind the loading screen (`renderer.compileAsync`, spec §6.4, §8.4), for every built
    * section whether revealed or not: three compiles only visible objects, and a `BatchedMesh` or region mesh needs its
-   * own program variant, so the sections are counted visible for the compile's synchronous walk.
+   * own program variant, so the sections are counted visible for the compile's synchronous walk. A pass with no built
+   * section is compiled on a stand-in of the section renderer's kind (`compileScene`, rulings R11).
    */
   compile(): Promise<void>;
   /** Sorts the translucent regions from the camera, writes the frame uniforms and renders (inside the GPU timer). */
@@ -239,6 +240,28 @@ export function withSectionsShown<T>(root: Object3D, fn: () => T): T {
     return fn();
   } finally {
     for (const o of hidden) o.visible = false;
+  }
+}
+
+/**
+ * The load's compile (SP4a spec §6.4, §8.4; rulings R11): adds the section renderer's stand-ins (`addStandIns`, one
+ * hidden triangle of its own object kind per pass with no region object yet), runs `compileAsync` over the scene with
+ * every hidden object counted visible (`withSectionsShown`), waits for the programs, then removes the stand-ins, also
+ * after a throw. So every pass's program is linked behind the loading screen, built or not: the first water or glass
+ * met in flight would otherwise link its program in that frame (about 170 ms on the Iris Xe with a cold driver cache).
+ */
+export async function compileScene(
+  r: { compileAsync(scene: Object3D, camera: Camera): Promise<unknown> },
+  scene: Object3D,
+  camera: Camera,
+  sections: Pick<SectionRenderer, 'root' | 'addStandIns'>,
+): Promise<void> {
+  const dropStandIns = sections.addStandIns();
+  try {
+    // compileAsync walks the scene synchronously (`compile`), then only waits for the programs.
+    await withSectionsShown(sections.root, () => r.compileAsync(scene, camera));
+  } finally {
+    dropStandIns();
   }
 }
 
@@ -410,8 +433,7 @@ export function createWorldRenderer(host: HTMLElement, o: WorldRendererOptions):
     origin,
     sections,
     async compile() {
-      // compileAsync walks the scene synchronously (`compile`), then only waits for the programs.
-      await withSectionsShown(sections.root, () => renderer.compileAsync(scene, camera));
+      await compileScene(renderer, scene, camera, sections);
     },
     frame(state) {
       draw(state);

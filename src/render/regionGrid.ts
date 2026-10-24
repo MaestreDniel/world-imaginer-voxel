@@ -1,4 +1,4 @@
-import { Box3, Vector3, type Group, type Sphere } from 'three';
+import { Box3, Vector3, type Group, type Mesh, type Sphere } from 'three';
 import { STAGE_BONUS, streamScore } from '../core/streamScore';
 import { MESH_PASS_CUTOUT, MESH_PASS_OPAQUE, MESH_PASS_TRANSLUCENT, ROW_INTS, type ColumnMeshPayload } from '../mesh/column';
 import type {
@@ -170,6 +170,10 @@ export interface RegionBackend<R> {
   settle(): void;
   /** Frees the region's objects (no live column, no held row). */
   disposeRegion(g: StagingRegion<R>): void;
+  /** Whether a region object of `pass` exists. */
+  hasPass(pass: number): boolean;
+  /** A hidden one-triangle object of the backend's own kind over `pass`'s material, and how to free it (rulings R11). */
+  standIn(pass: number): { readonly object: Mesh; dispose(): void };
   setOrigin(x: number, y: number, z: number): void;
   sortTranslucent(camX: number, camY: number, camZ: number): void;
   gpuBytes(): number;
@@ -436,6 +440,22 @@ export function createStreamingRenderer<R>(
     },
     revealAll() {
       root.visible = true;
+    },
+    addStandIns() {
+      const made: Array<{ readonly object: Mesh; dispose(): void }> = [];
+      for (const pass of [MESH_PASS_OPAQUE, MESH_PASS_CUTOUT, MESH_PASS_TRANSLUCENT]) {
+        if (b.hasPass(pass)) continue;
+        const s = b.standIn(pass);
+        root.add(s.object);
+        made.push(s);
+      }
+      return () => {
+        for (const s of made) {
+          root.remove(s.object);
+          s.dispose();
+        }
+        made.length = 0;
+      };
     },
     isRevealed(cx, cz) {
       return root.visible && live.get(columnKey(cx, cz))?.revealed === true;

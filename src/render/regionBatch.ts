@@ -56,6 +56,12 @@ LAYOUT.setAttribute('position', new BufferAttribute(new Uint8Array(0), 4));
 LAYOUT.setAttribute('data', new BufferAttribute(new Uint32Array(0), 1));
 LAYOUT.setIndex(new BufferAttribute(new Uint32Array(0), 1));
 
+/** One hidden triangle of the batch's attribute layout: the stand-in's geometry (`standIn`, rulings R11). */
+const TRIANGLE = new BufferGeometry();
+TRIANGLE.setAttribute('position', new BufferAttribute(new Uint8Array(12), 4));
+TRIANGLE.setAttribute('data', new BufferAttribute(new Uint32Array(3), 1));
+TRIANGLE.setIndex(new BufferAttribute(new Uint32Array([0, 1, 2]), 1));
+
 /** The batch's position, data and index buffers in bytes. */
 function bytesOf(mesh: BatchedMesh): number {
   const g = mesh.geometry;
@@ -297,6 +303,18 @@ export function createRegionBatch(materials: MaterialSystem): SectionRenderer {
         if (bp.unculled) unculled.splice(unculled.indexOf(bp), 1);
       }
       g.data.passes.fill(null);
+    },
+    hasPass(pass) {
+      for (let i = 0; i < objects.length; i++) if (objects[i]!.mesh.userData['pass'] === pass) return true;
+      return false;
+    },
+    standIn(pass) {
+      // A BatchedMesh like a region's (three's batching program variant), over the pass's material.
+      const mesh = new BatchedMesh(1, 3, 3, materialOf[pass]);
+      mesh.addInstance(mesh.addGeometry(TRIANGLE));
+      mesh.name = `stand-in pass ${pass}`;
+      mesh.visible = false;
+      return { object: mesh, dispose: () => mesh.dispose() };
     },
     setOrigin(x, y, z) {
       origin[0] = x;

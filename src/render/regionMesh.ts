@@ -553,6 +553,20 @@ export function createRegionMesh(materials: MaterialSystem): SectionRenderer {
       }
       g.data.passes.fill(null);
     },
+    hasPass(pass) {
+      for (let i = 0; i < built.length; i++) if (built[i]!.mesh.userData['pass'] === pass) return true;
+      return false;
+    },
+    standIn(pass) {
+      // A Mesh over an arena geometry of one triangle, like a region's, over the pass's material.
+      const geometry = arenaGeometry(3, 3);
+      geometry.setDrawRange(0, 3);
+      const mesh = new Mesh(geometry, materialOf[pass]);
+      mesh.name = `stand-in pass ${pass}`;
+      mesh.scale.setScalar(1 / UNITS);
+      mesh.visible = false;
+      return { object: mesh, dispose: () => geometry.dispose() };
+    },
     setOrigin(x, y, z) {
       origin[0] = x;
       origin[1] = y;

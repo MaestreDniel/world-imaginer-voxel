@@ -1,4 +1,4 @@
-import { Matrix4, type BatchedMesh, type BufferAttribute, type Mesh, type Object3D } from 'three';
+import { Matrix4, type BatchedMesh, type BufferAttribute, type Material, type Mesh, type Object3D } from 'three';
 import { describe, expect, test } from 'vitest';
 import { createUploadBudget } from '../../src/engine/uploadBudget';
 import { ROW_INTS, type ColumnMeshPayload } from '../../src/mesh/column';
@@ -502,6 +502,45 @@ export function sectionRendererContract(kind: SectionRendererKind): void {
       expect(freed).toEqual(geometries);
       expect(regionObjects(r.root)).toHaveLength(0);
       expect(counts(r)).toMatchObject({ columnsStaged: 0, regions: 0, rows: 0 });
+    });
+
+    test('addStandIns: one hidden one-triangle object of the renderer\'s own kind per pass with no region object, over that pass\'s material; the call it returns removes and frees them; counts, gpuBytes and the probe unchanged (rulings R11)', () => {
+      const r = make();
+      const materialName = (m: Mesh): string => (m.material as Material).name;
+      // An empty world: a stand-in for each of the three passes.
+      const before = { counts: counts(r), bytes: r.gpuBytes(), probe: probe(r) };
+      const drop = r.addStandIns();
+      const standIns = regionObjects(r.root);
+      expect(standIns.map(materialName).sort()).toEqual(['terrainCutout', 'terrainOpaque', 'waterFast']);
+      for (const m of standIns) {
+        expect(isBatch(m), 'the renderer\'s own object kind').toBe(kind === 'batch');
+        expect(m.visible).toBe(false);
+        expect(m.parent).toBe(r.root);
+        const indices = isBatch(m) ? (m as unknown as BatchedMesh).getGeometryRangeAt(0)!.indexCount : m.geometry.getIndex()!.count;
+        expect(indices, 'one triangle').toBe(3);
+      }
+      expect({ counts: counts(r), bytes: r.gpuBytes(), probe: probe(r) }).toEqual(before);
+      const freed = new Set<unknown>();
+      for (const m of standIns) m.geometry.addEventListener('dispose', () => freed.add(m.geometry));
+      drop();
+      expect(regionObjects(r.root)).toHaveLength(0);
+      expect(freed).toEqual(new Set(standIns.map((m) => m.geometry)));
+      // A second call is a no-op.
+      drop();
+
+      // An opaque and a water row built: a stand-in for the cutout pass only, beside the built objects.
+      r.stage(fakePayload(0, 0, [opaque(1), water(2)]), 1);
+      pumpAll(r);
+      const built = regionObjects(r.root);
+      const drop2 = r.addStandIns();
+      const added = regionObjects(r.root).filter((m) => !built.includes(m));
+      expect(added.map(materialName)).toEqual(['terrainCutout']);
+      expect(isBatch(added[0]!)).toBe(kind === 'batch');
+      expect(added[0]!.visible).toBe(false);
+      drop2();
+      expect(regionObjects(r.root)).toEqual(built);
+      expect(r.isRevealed(0, 0)).toBe(true);
+      r.dispose();
     });
   });
 }

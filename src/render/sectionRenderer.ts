@@ -109,6 +109,14 @@ export interface SectionRenderer {
   revealAll(): void;
   /** Whether column (cx, cz) shows: revealed, with the root visible (the fog's filled radius, SP4b spec §5). */
   isRevealed(cx: number, cz: number): boolean;
+  /**
+   * Adds to `root` a hidden stand-in for each pass no region object draws yet: one triangle over the pass's material, on
+   * this renderer's own object kind (a `BatchedMesh` or a region mesh), so the load's compile links every pass's program
+   * even when the spawn has no geometry of that pass (`compileScene`, rulings R11; a program first linked mid-flight
+   * stalls that frame). The call it returns removes and frees them; a second call does nothing. They are no region:
+   * counts, `gpuBytes` and the probe never see them.
+   */
+  addStandIns(): () => void;
   /** Sets the floating origin (blocks): moves each region's object, O(regions). */
   setOrigin(x: number, y: number, z: number): void;
   /**

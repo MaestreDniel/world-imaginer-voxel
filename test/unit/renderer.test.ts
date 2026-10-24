@@ -1,8 +1,17 @@
-import { BoxGeometry, Group, LinearMipmapLinearFilter, Mesh, NearestFilter, PerspectiveCamera } from 'three';
-import { describe, expect, test } from 'vitest';
 import {
-  applyRenderDistance, createGpuTimer, gpuEstimateOf, withRegionsUnculled, withSectionsShown, type GpuEstimate,
+  BoxGeometry, Group, LinearMipmapLinearFilter, Mesh, NearestFilter, PerspectiveCamera, Scene, type BatchedMesh, type Material,
+  type Object3D,
+} from 'three';
+import { describe, expect, test } from 'vitest';
+import { createMaterialSystem } from '../../src/render/materials/index';
+import {
+  applyRenderDistance, compileScene, createGpuTimer, gpuEstimateOf, withRegionsUnculled, withSectionsShown, type GpuEstimate,
 } from '../../src/render/renderer';
+import { createSectionRenderer, type SectionRendererKind } from '../../src/render/sectionRenderer';
+import { createSky } from '../../src/render/sky';
+import { createFlatColorArray } from '../../src/render/textureArray';
+import { fakePayload } from './fixtures/payloads';
+import { pumpAll } from './sectionRendererContract';
 
 /** `EXT_disjoint_timer_query_webgl2`'s enums and WebGL2's query parameters (the fake reads them by value). */
 const TIME_ELAPSED_EXT = 0x88bf;
@@ -183,6 +192,71 @@ describe('withSectionsShown (SP4a spec §6.4, SP4b spec §4.5)', () => {
     expect([meshes[0]!.visible, meshes[1]!.visible, sub.visible, meshes[2]!.visible, meshes[3]!.visible])
       .toEqual([true, false, false, true, false]);
   });
+});
+
+describe('compileScene: every pass\'s program at load, built or not (SP4b spec §8.4, rulings R11)', () => {
+  /**
+   * A renderer whose `compileAsync` walks the scene as three's `compile` does and records, for each visible mesh, its
+   * object kind and material name (a hidden object would be skipped, so the walk proves the stand-ins are shown).
+   */
+  const walker = (fail = false) => {
+    const seen: string[] = [];
+    return {
+      seen,
+      compileAsync(scene: Object3D): Promise<unknown> {
+        scene.traverseVisible((o) => {
+          if ((o as Mesh).isMesh !== true) return;
+          seen.push(`${(o as BatchedMesh).isBatchedMesh === true ? 'BatchedMesh' : 'Mesh'} ${((o as Mesh).material as Material).name}`);
+        });
+        if (fail) throw new Error('compile failed');
+        return Promise.resolve(scene);
+      },
+    };
+  };
+  const world = (kind: SectionRendererKind) => {
+    const materials = createMaterialSystem({ variant: kind, ao: true, smoothLight: true }, createFlatColorArray());
+    const sections = createSectionRenderer(kind, materials);
+    // The first entry holds the reveals: the root is hidden while compile runs (SP4b spec §3.11).
+    sections.holdReveals(true);
+    const scene = new Scene();
+    scene.add(sections.root, createSky(materials));
+    return { sections, scene, camera: new PerspectiveCamera(70, 16 / 9, 0.1, 336) };
+  };
+  const object = (kind: SectionRendererKind): string => (kind === 'batch' ? 'BatchedMesh' : 'Mesh');
+
+  for (const kind of ['batch', 'mesh'] as const) {
+    test(`${kind}: on an empty world the walk sees the opaque, cutout and water materials on the ${object(kind)}, and the sky; the stand-ins are gone after it`, async () => {
+      const { sections, scene, camera } = world(kind);
+      const r = walker();
+      await compileScene(r, scene, camera, sections);
+      expect([...r.seen].sort()).toEqual([`${object(kind)} terrainCutout`, `${object(kind)} terrainOpaque`, `${object(kind)} waterFast`, 'Mesh sky'].sort());
+      expect(sections.root.children).toEqual([]);
+      expect(sections.root.visible, 'the reveals stay held').toBe(false);
+      expect(sections.gpuBytes()).toBe(0);
+      sections.dispose();
+    });
+
+    test(`${kind}: with an opaque region built, each pass material is seen on the ${object(kind)} exactly once (stand-ins for the cutout and water passes only)`, async () => {
+      const { sections, scene, camera } = world(kind);
+      sections.stage(fakePayload(0, 0, [{ sy: 4, pass: 0, quads: 2 }]), 1);
+      pumpAll(sections);
+      const built = [...sections.root.children];
+      const r = walker();
+      await compileScene(r, scene, camera, sections);
+      expect([...r.seen].sort()).toEqual([`${object(kind)} terrainCutout`, `${object(kind)} terrainOpaque`, `${object(kind)} waterFast`, 'Mesh sky'].sort());
+      expect(sections.root.children).toEqual(built);
+      expect(built.every((o) => o.visible)).toBe(true);
+      sections.dispose();
+    });
+
+    test(`${kind}: a compile that throws still removes the stand-ins and hides the root again`, async () => {
+      const { sections, scene, camera } = world(kind);
+      await expect(compileScene(walker(true), scene, camera, sections)).rejects.toThrow('compile failed');
+      expect(sections.root.children).toEqual([]);
+      expect(sections.root.visible).toBe(false);
+      sections.dispose();
+    });
+  }
 });
 
 describe('withRegionsUnculled (SP4b spec §3.9, §4.5)', () => {
