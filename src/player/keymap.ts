@@ -11,7 +11,7 @@ import type { SubProjectId } from '../core/ids';
 
 export type Action =
   | 'forward' | 'back' | 'left' | 'right' | 'up' | 'down' | 'sprint' | 'speedUp' | 'speedDown'
-  | 'timeSpeed' | 'help' | 'hud' | 'loadHere' | 'releasePointer';
+  | 'timeSpeed' | 'help' | 'hud' | 'releasePointer';
 
 export type Binding = { kind: 'code'; code: string } | { kind: 'key'; key: string } | { kind: 'wheel'; dir: 'up' | 'down' };
 
@@ -27,19 +27,21 @@ const code = (c: string): Binding => ({ kind: 'code', code: c });
 const key = (k: string): Binding => ({ kind: 'key', key: k });
 const wheel = (dir: 'up' | 'down'): Binding => ({ kind: 'wheel', dir });
 
-/** SP4a's actions, as spec §7.3 lists them. */
+/**
+ * SP4a's actions, as spec §7.3 lists them, with SP4b's flight labels (SP4b spec §6.1) and without R, which loaded the
+ * world around the camera until SP4b streamed it (SP4b spec §6.2, D20: R is unbound).
+ */
 export const DEFAULT_KEYMAP: readonly KeyEntry[] = [
-  { action: 'forward', bindings: [code('KeyW')], label: 'Forward', group: 'move', since: 'SP4a' },
+  { action: 'forward', bindings: [code('KeyW')], label: 'Forward (at your height)', group: 'move', since: 'SP4a' },
   { action: 'left', bindings: [code('KeyA')], label: 'Left', group: 'move', since: 'SP4a' },
-  { action: 'back', bindings: [code('KeyS')], label: 'Back', group: 'move', since: 'SP4a' },
+  { action: 'back', bindings: [code('KeyS')], label: 'Back (at your height)', group: 'move', since: 'SP4a' },
   { action: 'right', bindings: [code('KeyD')], label: 'Right', group: 'move', since: 'SP4a' },
-  { action: 'up', bindings: [code('Space')], label: 'Up', group: 'move', since: 'SP4a' },
-  { action: 'down', bindings: [code('ShiftLeft'), code('ShiftRight')], label: 'Down', group: 'move', since: 'SP4a' },
+  { action: 'up', bindings: [code('Space')], label: 'Rise', group: 'move', since: 'SP4a' },
+  { action: 'down', bindings: [code('ShiftLeft'), code('ShiftRight')], label: 'Descend', group: 'move', since: 'SP4a' },
   { action: 'sprint', bindings: [code('ControlLeft'), code('ControlRight')], label: 'Sprint (×4 while held)', group: 'move', since: 'SP4a' },
   { action: 'speedUp', bindings: [wheel('up'), key('+'), key('=')], label: 'Fly faster', group: 'speed', since: 'SP4a' },
   { action: 'speedDown', bindings: [wheel('down'), key('-')], label: 'Fly slower', group: 'speed', since: 'SP4a' },
   { action: 'timeSpeed', bindings: [code('KeyT')], label: 'Time speed (×1, ×10, ×60, paused)', group: 'world', since: 'SP4a' },
-  { action: 'loadHere', bindings: [code('KeyR')], label: 'Load the world around you', group: 'world', since: 'SP4a' },
   { action: 'help', bindings: [code('KeyH'), code('F1')], label: 'Help and settings', group: 'view', since: 'SP4a' },
   { action: 'hud', bindings: [code('F3')], label: 'Show or hide the counts', group: 'view', since: 'SP4a' },
   { action: 'releasePointer', bindings: [code('Escape')], label: 'Release the pointer', group: 'view', since: 'SP4a' },

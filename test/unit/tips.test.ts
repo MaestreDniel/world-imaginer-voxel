@@ -10,7 +10,7 @@ describe('loading-screen tips (SP4a spec §8.3, §7.3; ruling P45)', () => {
     const named = new Set(TIP_TEMPLATES.flatMap(placeholders));
     const missing = DEFAULT_KEYMAP.map((e) => e.action).filter((a) => !named.has(a));
     expect(missing).toEqual([]);
-    expect(DEFAULT_KEYMAP.length).toBe(14);
+    expect(DEFAULT_KEYMAP.length).toBe(13);
   });
 
   test('each filled tip contains a binding label of every action its template names', () => {
@@ -36,6 +36,16 @@ describe('loading-screen tips (SP4a spec §8.3, §7.3; ruling P45)', () => {
     expect(text).toContain('Open in 3D');
     expect(text).toMatch(/preset/i);
     expect(text).toMatch(/click/i);
+  });
+
+  test('the flight and streaming tips are present, and no tip speaks of an edge (SP4b spec §6.1, §6.2)', () => {
+    expect(TIP_TEMPLATES).toContain('{forward} {back} fly forward and back at your height, {left} {right} strafe; {up} and {down} rise and descend.');
+    expect(TIP_TEMPLATES).toContain('The world loads around you as you fly; change the render distance in Help ({help}) → Settings.');
+    const text = tips(DEFAULT_KEYMAP).join('\n');
+    expect(text).toContain('W S fly forward and back at your height, A D strafe; Space and Left Shift / Right Shift rise and descend.');
+    expect(text).toContain('The world loads around you as you fly; change the render distance in Help (H / F1) → Settings.');
+    expect(text).not.toMatch(/edge/i);
+    expect(TIP_TEMPLATES.join('\n')).not.toContain('loadHere');
   });
 
   test('a template naming an action the map lacks is left out', () => {

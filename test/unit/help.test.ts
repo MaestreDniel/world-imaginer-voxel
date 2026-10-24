@@ -54,6 +54,17 @@ describe('mountHelp (SP4a spec §7.4, D31)', () => {
     expect(dom.el('help-keys').querySelectorAll('h4').map((h) => h.textContent)).toEqual(['Move', 'Speed', 'World', 'View']);
   });
 
+  test('the Keys rows describe horizontal flight (SP4b spec §6.1)', () => {
+    mount();
+    const rows = dom.el('help-keys').querySelectorAll('tr');
+    const label = (action: string) => rows.find((r) => r.dataset.action === action)!.querySelector('td')!.textContent;
+    expect(label('forward')).toBe('Forward (at your height)');
+    expect(label('back')).toBe('Back (at your height)');
+    expect(label('up')).toBe('Rise');
+    expect(label('down')).toBe('Descend');
+    expect(rows.some((r) => r.dataset.action === 'loadHere')).toBe(false);
+  });
+
   test('#capability-json holds the report JSON', () => {
     mount();
     const json = dom.el('capability-json');

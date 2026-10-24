@@ -143,17 +143,6 @@ describe('the world notices (SP4a spec §7.5, §8.5; Review Focus 5)', () => {
     expect(navigate).toHaveBeenCalledWith('/?at=200,-3&y=80&yaw=45.0&pitch=-10.0#abc');
   });
 
-  test('the edge notice shows and hides with the edge', () => {
-    const { notices } = setup();
-    const edge = dom.el('world-edge-notice');
-    expect(edge.hidden).toBe(true);
-    notices.edge(true);
-    expect(edge.hidden).toBe(false);
-    expect(edge.textContent).toBe('Edge of the loaded world — press R to load the world around you');
-    notices.edge(false);
-    expect(edge.hidden).toBe(true);
-  });
-
   test('the slow-frame notice names the RDs, links to the reload with &rd=, and is dismissible', () => {
     const { navigate, notices } = setup();
     const camera = { x: 1, y: 70, z: 2, yaw: 90, pitch: 0 };

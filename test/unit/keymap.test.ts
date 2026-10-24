@@ -3,10 +3,10 @@ import {
   DEFAULT_KEYMAP, LISTED_ONLY, bindingLabel, resolveKey, resolveWheel, type Action, type Binding,
 } from '../../src/player/keymap';
 
-/** Every SP4a action of spec §7.3, spelled out so that a missing map entry fails here. */
+/** Every action of SP4a spec §7.3 but R (removed by SP4b spec §6.2), spelled out so that a missing map entry fails here. */
 const ACTIONS: readonly Action[] = [
   'forward', 'back', 'left', 'right', 'up', 'down', 'sprint', 'speedUp', 'speedDown',
-  'timeSpeed', 'help', 'hud', 'loadHere', 'releasePointer',
+  'timeSpeed', 'help', 'hud', 'releasePointer',
 ];
 
 const bindingKey = (b: Binding): string => (b.kind === 'code' ? `code:${b.code}` : b.kind === 'key' ? `key:${b.key}` : `wheel:${b.dir}`);
@@ -51,8 +51,13 @@ describe('the key map as data (SP4a spec §7.3, D19)', () => {
     expect(of('timeSpeed')).toEqual(['code:KeyT']);
     expect(of('help')).toEqual(['code:KeyH', 'code:F1']);
     expect(of('hud')).toEqual(['code:F3']);
-    expect(of('loadHere')).toEqual(['code:KeyR']);
     expect(of('releasePointer')).toEqual(['code:Escape']);
+  });
+
+  test('no loadHere, nothing bound to KeyR (SP4b spec §6.2, D20)', () => {
+    expect(DEFAULT_KEYMAP.map((e) => e.action as string)).not.toContain('loadHere');
+    expect(DEFAULT_KEYMAP.flatMap((e) => e.bindings.map(bindingKey))).not.toContain('code:KeyR');
+    expect(resolveKey({ code: 'KeyR', key: 'r' })).toBeNull();
   });
 
   test('resolveKey matches the physical key: KeyW with key z is forward (layout-independent)', () => {

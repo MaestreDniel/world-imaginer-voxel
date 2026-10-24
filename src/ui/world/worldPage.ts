@@ -22,7 +22,7 @@
  *    drawn unculled, so the sections' buffers reach the GPU while still hidden), then `revealAll()` and the reveal
  *    frame, the overlay faded out over 300 ms, and "Click to fly" until the pointer locks. Nothing of the world is visible before that frame.
  *
- * The frame loop: the FPS limiter, the fly controller within the loaded disc (§7.5), the floating origin, the clock
+ * The frame loop: the FPS limiter, the fly controller (horizontal flight with no horizontal limit, SP4b spec §6.1), the floating origin, the clock
  * (T cycles the time speed), `FrameState` (its `eyeSky` read from the page's attached store), the HUD (F3) and the help
  * (H, F1). Load errors (the coordinator's `fatal` event, whose message and cause the panel reads, a `StoreFullError`
  * cause keeping the store-full text; `WorkerFailed`; the watchdog) show the failure panel, with a link to the next lower
@@ -30,10 +30,10 @@
  * with `opts.flight` (the `?flight=sp4a` route, `flight.ts`) the flight drives the camera and the clock after the reveal.
  *
  * After the reveal (spec §7.1, §7.5, §8.2, §8.5; rulings P49, P50): the Ctrl+W guard (`beforeunload`) is armed; every
- * navigation the page starts (R, the RD setting, the slow-frame link, the context-loss Reload, "Open the map here")
- * goes through one reloader, which disarms the guard and navigates at most once; at the edge of the loaded disc a
- * notice offers R, which reloads around the camera (`hereUrl`) at any time; a slow first 300 frames suggest the next
- * lower RD in a dismissible notice; `webglcontextlost` stops the frame loop and offers a Reload around the camera.
+ * navigation the page starts (the RD setting, the slow-frame link, the context-loss Reload, "Open the map here")
+ * goes through one reloader, which disarms the guard and navigates at most once; a slow first 300 frames suggest the
+ * next lower RD in a dismissible notice; `webglcontextlost` stops the frame loop and offers a Reload around the camera
+ * (`hereUrl`). SP4a's edge clamp, its notice and R are gone (SP4b spec §6.2, D20).
  */
 import { colKey } from '../../core/coords';
 import { MEDIUM } from '../../core/params/graphicsPresets';
@@ -46,7 +46,7 @@ import { stageOffsets, type Stage } from '../../engine/rings';
 import { createThrottle } from '../../engine/throttle';
 import { createUploadBudget } from '../../engine/uploadBudget';
 import { StoreFullError, WorkerFailed, createBrowserPool, poolSize, type WorkerPool } from '../../engine/workerPool';
-import { SPEED_DEFAULT, applyCameraRotation, atEdge, look, stepFly, stepSpeed, type FlyBounds, type FlyState } from '../../player/fly';
+import { SPEED_DEFAULT, applyCameraRotation, look, stepFly, stepSpeed, type FlyBounds, type FlyState } from '../../player/fly';
 import { attachInput, isTextEntry } from '../../player/input';
 import { DEFAULT_KEYMAP, type Action } from '../../player/keymap';
 import { createFpsLimiter, type FpsLimiter } from '../../render/fpsLimiter';
@@ -240,10 +240,8 @@ export function everyFrameUntil(request: (cb: () => void) => void, step: () => b
   });
 }
 
-/** The page's notices over the world (spec §7.5, §8.5; Review Focus 5). */
+/** The page's notices over the world (spec §8.5; Review Focus 5); SP4a's edge notice is gone (SP4b spec §6.2). */
 export interface WorldNotices {
-  /** Shows or hides "Edge of the loaded world — press R to load the world around you" (spec §7.5). */
-  edge(show: boolean): void;
   /**
    * The dismissible "Frames are slow at RD <rd> — try RD <lower>" (spec §8.5): its link reloads through the reloader
    * at `href()`, read when shown and again on the click (the camera may have moved).
@@ -270,20 +268,10 @@ function reloadLink(reloader: Reloader, id: string, text: string, href: () => st
 export function createWorldNotices(host: HTMLElement, reloader: Reloader): WorldNotices {
   const box = el('div', 'world-notices');
   box.id = 'world-notices';
-  const edge = el('div', 'world-notice', 'Edge of the loaded world — press R to load the world around you');
-  edge.id = 'world-edge-notice';
-  edge.hidden = true;
-  box.append(edge);
   host.append(box);
-  let edgeShown = false;
   let slow: HTMLElement | null = null;
   let lost = false;
   return {
-    edge(show) {
-      if (show === edgeShown) return;
-      edgeShown = show;
-      edge.hidden = !show;
-    },
     slow(rd, lower, href) {
       slow?.remove();
       const panel = el('div', 'world-notice', `Frames are slow at RD ${rd} — try `);
@@ -600,10 +588,8 @@ export function mountWorldPage(root: HTMLElement, q: WorldQuery, hash: string, o
     const fly: FlyState = { x: at.x, y: clamp(view.y, Y_MIN, Y_MAX), z: at.z, yaw: view.yaw, pitch: view.pitch, vx: 0, vy: 0, vz: 0, speed: SPEED_DEFAULT };
     // Wraps the yaw into [0, 360) and clamps the pitch; a query's valid degrees pass unchanged (ruling P42).
     look(fly, 0, 0, 0);
-    // The disc's centre: the centre of the fly bounds (SP4a spec §7.5).
-    const discX = cx0 * 16 + 8;
-    const discZ = cz0 * 16 + 8;
-    const bounds: FlyBounds = { centreX: discX, centreZ: discZ, radius: (loadRd - 3) * 16, yMin: -64, yMax: 400 };
+    // Only the vertical range: the world streams around the camera (SP4b spec §6.1).
+    const bounds: FlyBounds = { yMin: -64, yMax: 400 };
     const fixedT = opts.timeHours === undefined || opts.timeHours === null ? null : ((((opts.timeHours - 6) / 24) % 1) + 1) % 1;
     let t = fixedT ?? OPENING_T;
     let speedIndex = 0;
@@ -806,8 +792,6 @@ export function mountWorldPage(root: HTMLElement, q: WorldQuery, hash: string, o
             help.open();
           }
           break;
-        // R reloads around the camera at any time (spec §7.5), keeping the query's rd.
-        case 'loadHere': reloader.reload(here(q.rd)); break;
         default: break; // movement and sprint are held; Esc (releasePointer) is the browser's
       }
     };
@@ -838,7 +822,6 @@ export function mountWorldPage(root: HTMLElement, q: WorldQuery, hash: string, o
           if (n + 1 === FIRST_FRAMES) stats.first120MaxMs = firstMax;
         }
         if (!help.isOpen) stepFly(fly, input.held, Math.min(dtMs / 1000, MAX_STEP_S), bounds);
-        notices.edge(atEdge(fly, bounds));
         t = advanceTime(t, dtMs, timeSpeed());
         placeCamera();
         world.frame(frameState());

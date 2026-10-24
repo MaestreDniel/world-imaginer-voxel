@@ -37,8 +37,8 @@ export function hereUrl(s: HereState, rd: number | null, hash: string): string {
 }
 
 /**
- * Calls `disarm()` and then `navigate(url)` on the first `reload`, and nothing on any later one: R pressed twice, or a
- * link clicked while a reload is under way, never stacks a second navigation (Review Focus 3; ruling P50).
+ * Calls `disarm()` and then `navigate(url)` on the first `reload`, and nothing on any later one: a link clicked twice, or
+ * another clicked while a reload is under way, never stacks a second navigation (Review Focus 3; ruling P50).
  */
 export function createReloader(navigate: (url: string) => void, disarm: () => void): Reloader {
   let done = false;
@@ -54,8 +54,8 @@ export function createReloader(navigate: (url: string) => void, disarm: () => vo
 
 /**
  * Navigates the page to `url` (the reloader's `navigate`). A URL that resolves to the current one is reloaded: with a
- * `#` hash, `location.assign` of the same URL is a fragment navigation and loads nothing, so R, the RD setting or the
- * context-loss Reload pressed before the camera moved would do nothing and spend the reloader (final review C-I1).
+ * `#` hash, `location.assign` of the same URL is a fragment navigation and loads nothing, so the RD setting or the
+ * context-loss Reload used before the camera moved would do nothing and spend the reloader (final review C-I1).
  */
 export function navigateTo(url: string, loc: Pick<Location, 'href' | 'assign' | 'reload'>): void {
   if (new URL(url, loc.href).href === loc.href) loc.reload();

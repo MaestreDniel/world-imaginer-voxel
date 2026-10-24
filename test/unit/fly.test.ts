@@ -2,7 +2,7 @@ import { PerspectiveCamera, Vector3 } from 'three';
 import { describe, expect, test } from 'vitest';
 import {
   SPEED_DEFAULT, SPEED_MAX, SPEED_MIN, SPEED_STEP, SPRINT, TAU,
-  applyCameraRotation, atEdge, forwardXZ, look, lookVector, stepFly, stepSpeed,
+  applyCameraRotation, forwardXZ, look, lookVector, stepFly, stepSpeed,
   type FlyBounds, type FlyState,
 } from '../../src/player/fly';
 import type { Action } from '../../src/player/keymap';
@@ -10,8 +10,8 @@ import type { Action } from '../../src/player/keymap';
 const state = (o: Partial<FlyState> = {}): FlyState => ({
   x: 0, y: 100, z: 0, yaw: 0, pitch: 0, vx: 0, vy: 0, vz: 0, speed: SPEED_DEFAULT, ...o,
 });
-/** RD 12: radius (12 − 3)·16 = 144. */
-const BOUNDS: FlyBounds = { centreX: 0, centreZ: 0, radius: (12 - 3) * 16, yMin: -64, yMax: 400 };
+/** Only the vertical range: SP4b streams the world, so there is no horizontal limit (SP4b spec §6.1). */
+const BOUNDS: FlyBounds = { yMin: -64, yMax: 400 };
 const held = (...a: Action[]): ReadonlySet<Action> => new Set(a);
 
 /** Runs `seconds` of input at `fps` and returns the state. */
@@ -21,8 +21,9 @@ function fly(s: FlyState, keys: ReadonlySet<Action>, fps: number, seconds: numbe
   return s;
 }
 const travelled = (s: FlyState, x0 = 0, y0 = 100, z0 = 0) => Math.hypot(s.x - x0, s.y - y0, s.z - z0);
+const horizontal = (s: FlyState, x0 = 0, z0 = 0) => Math.hypot(s.x - x0, s.z - z0);
 
-describe('spectator fly controller (SP4a spec §7.1, D18)', () => {
+describe('fly controller (SP4a spec §7.1; SP4b spec §6.1: horizontal flight)', () => {
   test('the constants are the spec\'s', () => {
     expect([SPEED_DEFAULT, SPEED_MIN, SPEED_MAX, SPEED_STEP, SPRINT, TAU]).toEqual([12, 1, 96, 1.25, 4, 0.1]);
   });
@@ -71,11 +72,50 @@ describe('spectator fly controller (SP4a spec §7.1, D18)', () => {
     expect(t.yaw).toBe(0);
   });
 
-  test('W at pitch −45° descends (spectator: full look vector)', () => {
+  test('W at pitch −45° keeps its height', () => {
     const s = fly(state({ pitch: -45 }), held('forward'), 60, 2);
-    expect(s.y).toBeLessThan(100);
-    expect(100 - s.y).toBeCloseTo(-s.z, 6);
+    expect(s.y).toBe(100);
+    expect(s.vy).toBe(0);
     expect(Math.abs(s.x)).toBeLessThan(1e-9);
+    // The full speed goes north: the pitch never tilts the motion.
+    expect(-s.z).toBeCloseTo(travelled(fly(state(), held('forward'), 60, 2)), 9);
+    const up = fly(state({ pitch: 80 }), held('back'), 60, 1);
+    expect(up.y).toBe(100);
+    expect(up.z).toBeGreaterThan(0);
+  });
+
+  test('strafe is level', () => {
+    for (const pitch of [-60, 0, 75]) {
+      const s = fly(state({ pitch }), held('right'), 60, 2);
+      expect(s.y, `pitch ${pitch}`).toBe(100);
+      expect(s.x, `pitch ${pitch}`).toBeCloseTo(12 * 1.9, 0);
+      expect(Math.abs(s.z), `pitch ${pitch}`).toBeLessThan(1e-9);
+    }
+  });
+
+  test('W with D never exceeds the speed (|v_xz| ≤ 12 after 2 s)', () => {
+    const s = state({ yaw: 30, pitch: -20 });
+    for (let k = 0; k < 120; k++) {
+      stepFly(s, held('forward', 'right'), 1 / 60, BOUNDS);
+      expect(Math.hypot(s.vx, s.vz)).toBeLessThanOrEqual(12 + 1e-9);
+    }
+    expect(Math.hypot(s.vx, s.vz)).toBeCloseTo(12, 3);
+    // Diagonal: forward (sin 30°, −cos 30°) plus right (cos 30°, sin 30°), normalised.
+    const [fx, fz] = forwardXZ(30 + 45);
+    expect(s.vx / 12).toBeCloseTo(fx, 3);
+    expect(s.vz / 12).toBeCloseTo(fz, 3);
+    expect(s.y).toBe(100);
+  });
+
+  test('W with Space keeps the full horizontal speed while climbing (the horizontal distance after 2 s equals W alone\'s)', () => {
+    const w = fly(state(), held('forward'), 60, 2);
+    const ws = fly(state(), held('forward', 'up'), 60, 2);
+    const space = fly(state(), held('up'), 60, 2);
+    expect(horizontal(ws)).toBeCloseTo(horizontal(w), 9);
+    expect(ws.y - 100).toBeCloseTo(space.y - 100, 9);
+    expect(ws.y - 100).toBeCloseTo(12 * 1.9, 0);
+    expect(Math.hypot(ws.vx, ws.vz)).toBeCloseTo(12, 3);
+    expect(ws.vy).toBeCloseTo(12, 3);
   });
 
   test('yaw convention: 0 faces −z, 90 faces +x (ruling P42)', () => {
@@ -112,37 +152,16 @@ describe('spectator fly controller (SP4a spec §7.1, D18)', () => {
     }
   });
 
-  test('the edge clamp at (rd − 3)·16 removes only the outward component; atEdge true there', () => {
-    // At the east edge, flying north-east: the east (outward) part goes, the north part stays.
-    const s = state({ x: 143.9, yaw: 45, vx: 12 * Math.SQRT1_2, vz: -12 * Math.SQRT1_2 });
-    expect(atEdge(s, BOUNDS)).toBe(false);
-    for (let k = 0; k < 6; k++) stepFly(s, held('forward'), 1 / 60, BOUNDS);
-    expect(Math.hypot(s.x, s.z)).toBeLessThanOrEqual(144 + 1e-9);
-    expect(atEdge(s, BOUNDS)).toBe(true);
-    const nx = s.x / Math.hypot(s.x, s.z);
-    const nz = s.z / Math.hypot(s.x, s.z);
-    expect(s.vx * nx + s.vz * nz).toBeLessThanOrEqual(1e-9);
-    // The tangential part survives: the camera slides along the edge.
-    expect(Math.abs(s.vx * -nz + s.vz * nx)).toBeGreaterThan(5);
-    const z0 = s.z;
-    fly(s, held('forward'), 60, 1);
-    expect(s.z).toBeLessThan(z0 - 3);
-    expect(Math.hypot(s.x, s.z)).toBeCloseTo(144, 6);
-
-    // Flying straight out stops at the radius; flying back in is free.
-    const out = fly(state({ yaw: 90 }), held('forward'), 60, 30);
-    expect(out.x).toBeCloseTo(144, 9);
-    expect(out.vx).toBeCloseTo(0, 9);
-    expect(atEdge(out, BOUNDS)).toBe(true);
-    fly(out, held('back'), 60, 1);
-    expect(out.x).toBeLessThan(140);
-    expect(atEdge(out, BOUNDS)).toBe(false);
-
-    // The bounds are around the load centre, not the origin.
-    const off: FlyBounds = { ...BOUNDS, centreX: 1000, centreZ: -2000, radius: 16 };
-    const o = fly(state({ x: 1000, z: -2000 }), held('forward'), 60, 10, off);
-    expect(o.z).toBeCloseTo(-2016, 9);
-    expect(atEdge(o, off)).toBe(true);
+  test('no horizontal limit: at x 500,000 and z −500,000, W moves on', () => {
+    const n = fly(state({ x: 500_000, z: -500_000 }), held('forward'), 60, 2);
+    expect(n.x).toBe(500_000);
+    expect(n.z).toBeCloseTo(-500_000 - 12 * 1.9, 0);
+    expect(n.vz).toBeCloseTo(-12, 3);
+    const e = fly(state({ x: 500_000, z: -500_000, yaw: 90 }), held('forward', 'sprint'), 60, 10);
+    expect(e.x).toBeCloseTo(500_000 + 48 * 9.9, 0);
+    expect(e.vx).toBeCloseTo(48, 3);
+    const w = fly(state({ x: -500_000, z: 500_000, yaw: 270 }), held('forward'), 60, 2);
+    expect(w.x).toBeCloseTo(-500_000 - 12 * 1.9, 0);
   });
 
   test('y clamped to −64 … 400', () => {

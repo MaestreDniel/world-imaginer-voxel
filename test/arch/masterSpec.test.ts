@@ -809,6 +809,15 @@ describe('master spec amendments (SP4b §13)', () => {
     expect(fog).toContain('after a live RD raise the end follows the filled radius outward');
   });
 
+  test('§4.17\'s creative-style flight, and §5.9 without R (SP4b spec §6.1, §6.2, §13)', () => {
+    const at = text.indexOf('### 4.17 Player');
+    const s417 = text.slice(at, text.indexOf('### 4.18 ', at));
+    expect(s417).toContain('creative-style flight');
+    expect(s417).toContain('creative-style flight: forward along the horizontal projection of the look direction, Space and Shift for height, the horizontal and vertical speeds independent (the user\'s decision, SP4b)');
+    expect(s417).not.toContain('spectator: forward along the look vector');
+    expect(text).not.toContain('R (load the world around you');
+  });
+
   test('§1 names each SP4b module in its entry, which exists', () => {
     for (const [head, token, file] of SP4B_MODULES) {
       const entry = layoutEntry(head);
