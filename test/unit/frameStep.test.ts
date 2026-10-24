@@ -28,7 +28,7 @@ interface Rig {
 }
 
 /** A frame step over fakes: every call it makes is logged in order; the clock, limiter and throttle are real. */
-function rig(o: { cap?: FpsCap; max?: number; y?: number; held?: Action[]; paused?: () => boolean } = {}): Rig {
+function rig(o: { cap?: FpsCap; max?: number; y?: number; held?: Action[]; paused?: () => boolean; fatalInUpdate?: () => boolean } = {}): Rig {
   const log: string[] = [];
   const counts = createCoordinatorCounts();
   const throttle = createThrottle({ max: o.max ?? 3 });
@@ -37,6 +37,8 @@ function rig(o: { cap?: FpsCap; max?: number; y?: number; held?: Action[]; pause
   const state = { t: 0.1, brightness: 0.5, eyeSky: 15, rd: 12, fogBand: MEDIUM.fogBand };
   const held: ReadonlySet<Action> = new Set(o.held ?? []);
   const origin = createFloatingOrigin(0, 0, 0);
+  // The page's `stopped` flag, set by `update` when it raises a fatal synchronously (the page's failAfterReveal).
+  let stopped = false;
   const r: Rig = {
     step: null as unknown as Rig['step'],
     log, counts, throttle, pushes, state, fly,
@@ -49,9 +51,13 @@ function rig(o: { cap?: FpsCap; max?: number; y?: number; held?: Action[]; pause
     fly,
     held: () => held,
     paused: o.paused ?? (() => false),
+    stopped: () => stopped,
     clock: createFrameClock(createFpsLimiter(o.cap ?? 0), { push() {} }, 0),
     coordinator: {
-      update: () => { log.push('update'); },
+      update: () => {
+        log.push('update');
+        if (o.fatalInUpdate?.() === true) stopped = true;
+      },
       counts: (out) => {
         out.T.inFlight = r.generating ? 1 : 0;
         out.cx = 3;
@@ -142,6 +148,24 @@ describe('createFrameStep (SP4b spec §7.2)', () => {
     r.step.tick(HZ60);
     // The pump reads the last rebuild's centre and yaw from the counts the coordinator just wrote.
     expect(r.log).toEqual(['update', 'pump 3,-4,90', 'origin', 'drain', 'enterRead', 'lightAt 8,100,8', 'exitRead', 'frame']);
+  });
+
+  test('a fatal that update raises synchronously ends the tick there: no counts, pump, origin, drain, eye light or render (Task 21 review M1)', () => {
+    let fatal = false;
+    const r = rig({ fatalInUpdate: () => fatal });
+    r.step.tick(HZ60);
+    expect(r.log).toContain('frame');
+    const counts = { cx: r.counts.cx, cz: r.counts.cz };
+    // The page's failAfterReveal has disposed the coordinator, the pool and the renderer inside update.
+    fatal = true;
+    r.log.length = 0;
+    r.counts.cx = -99;
+    r.step.tick(2 * HZ60);
+    expect(r.log).toEqual(['update']);
+    expect(r.counts.cx).toBe(-99);
+    expect(r.rendered).toHaveLength(1);
+    expect(r.frames).toHaveLength(1);
+    expect(counts).toEqual({ cx: 3, cz: -4 });
   });
 
   test('a far move rebases the origin and moves the sections, between the pump and the drain', () => {

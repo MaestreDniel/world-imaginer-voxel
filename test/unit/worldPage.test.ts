@@ -11,7 +11,7 @@ import { StoreCorrupt } from '../../src/world/store/pool';
 import { createFogEase } from '../../src/ui/world/fogEase';
 import { createReloader } from '../../src/ui/world/reload';
 import {
-  createRdControl, createWorldNotices, everyFrameUntil, handleStreamEvent, offerLowerRd, releaseOnFailure, runTeardown,
+  createRdControl, createWorldNotices, everyFrameUntil, handleStreamEvent, offerLowerRd, releaseOnFailure, runTeardown, stopAfterFailure,
 } from '../../src/ui/world/worldPage';
 import { installDom, type FakeElement } from './fixtures/domShim';
 
@@ -88,6 +88,41 @@ describe('runTeardown (the page\'s dispose, rulings R5 (b))', () => {
     expect(order).toEqual(['input', 'coordinator', 'loading.dispose', 'renderer.dispose', 'pool.terminate', 'root.replaceChildren']);
     expect(onError).toHaveBeenCalledTimes(2);
     expect(onError.mock.calls[0]![0]).toBe(corrupt);
+  });
+});
+
+describe('stopAfterFailure (a failure after the reveal, SP4b spec §7.4; Task 21 review M2)', () => {
+  test('the loop stops first, the panel shows next, then every release step runs; a release that throws hides nothing', () => {
+    const order: string[] = [];
+    const onError = vi.fn<(e: unknown) => void>();
+    const lost = new Error('the renderer\'s context is gone');
+    stopAfterFailure({
+      stop: () => { order.push('stop'); },
+      show: () => { order.push('panel'); },
+      release: [
+        () => { order.push('hud'); },
+        () => { order.push('coordinator'); throw new StoreCorrupt('the pool lock is held by dead thread 2'); },
+        () => { order.push('pool.terminate'); },
+        () => { order.push('renderer.dispose'); throw lost; },
+      ],
+      onError,
+    });
+    expect(order).toEqual(['stop', 'panel', 'hud', 'coordinator', 'pool.terminate', 'renderer.dispose']);
+    expect(onError).toHaveBeenCalledTimes(2);
+    expect(onError.mock.calls[1]![0]).toBe(lost);
+  });
+
+  test('a panel that throws still releases the workers and the renderer', () => {
+    const released: string[] = [];
+    const onError = vi.fn<(e: unknown) => void>();
+    stopAfterFailure({
+      stop: () => {},
+      show: () => { throw new Error('no host'); },
+      release: [() => { released.push('pool'); }, () => { released.push('renderer'); }],
+      onError,
+    });
+    expect(released).toEqual(['pool', 'renderer']);
+    expect(onError).toHaveBeenCalledTimes(1);
   });
 });
 

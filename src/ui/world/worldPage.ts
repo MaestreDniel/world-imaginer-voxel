@@ -272,6 +272,22 @@ export function runTeardown(steps: ReadonlyArray<() => void>, onError: (e: unkno
 }
 
 /**
+ * A failure after the reveal (SP4b spec §7.4): stops the frame loop, shows the failure panel, then runs the release
+ * steps (the HUD's timer, the coordinator, the pool, the renderer), the panel and each release guarded as the
+ * teardown's (`runTeardown`): a release that throws (a `StoreCorrupt` in the coordinator's sweep, a renderer whose
+ * context is gone) can neither hide the panel nor skip a later release (Task 21 review M2).
+ */
+export function stopAfterFailure(o: {
+  stop(): void;
+  show(): void;
+  readonly release: ReadonlyArray<() => void>;
+  onError(e: unknown): void;
+}): void {
+  o.stop();
+  runTeardown([o.show, ...o.release], o.onError);
+}
+
+/**
  * The page's notices over the world (spec §8.5; Review Focus 5; SP4b spec §3.6, §7.4); SP4a's edge notice is gone
  * (SP4b spec §6.2).
  */
@@ -909,12 +925,22 @@ export function mountWorldPage(root: HTMLElement, q: WorldQuery, hash: string, o
     // released, and the notices' panel offers "Copy details" and a Reload around the camera.
     let stopHud = (): void => {};
     failAfterReveal = (cause, shown) => {
-      stop();
-      // The HUD's timer would read the disposed renderer and coordinator.
-      runTeardown([stopHud, () => coordinator.dispose()], (e) => console.error('The world page\'s failure:', e));
-      releaseOnFailure({ longTasks, pool, renderer: wr });
+      const renderer = wr;
       wr = null;
-      notices.failed(cause, shown, here(null));
+      stopAfterFailure({
+        stop,
+        show: () => notices.failed(cause, shown, here(null)),
+        // The HUD's timer would read the disposed renderer and coordinator; then what releaseOnFailure frees, each
+        // step on its own.
+        release: [
+          () => stopHud(),
+          () => coordinator.dispose(),
+          () => longTasks?.disconnect(),
+          () => pool?.terminate(),
+          () => renderer?.dispose(),
+        ],
+        onError: (e) => console.error('The world page\'s failure:', e),
+      });
     };
     // The live render distance (SP4b spec §5): the RD in force, the fog's easing toward it and the filled radius it
     // follows. `rdControl` is created once the help it updates is mounted, before any frame or event can reach it.
@@ -1094,6 +1120,7 @@ export function mountWorldPage(root: HTMLElement, q: WorldQuery, hash: string, o
       fly,
       held: () => input.held,
       paused: () => help.isOpen,
+      stopped: () => stopped,
       clock,
       coordinator,
       counts,

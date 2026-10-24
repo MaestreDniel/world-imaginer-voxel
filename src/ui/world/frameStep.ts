@@ -7,7 +7,9 @@
  *    every tick, before the FPS limiter, so a cap of 30 on a 60 Hz display reads as 16.7 ms frames, never as 33.3 ms
  *    ones that would hold `genCap` at 1 (SP4b plan, Review Focus 1). A median that is not finite falls back to 1000/60.
  * 1. The fly step over the raw delta (capped at 0.25 s), unless paused (the help is open).
- * 2. `coordinator.update` from the camera, then its counts into the one reused object.
+ * 2. `coordinator.update` from the camera, then its counts into the one reused object. A fatal that `update` raises
+ *    synchronously (an unload meeting `StoreCorrupt`) has the page stop the loop and dispose the coordinator, the pool
+ *    and the renderer inside that call: the tick ends there (`stopped`), so nothing below runs on disposed objects.
  * (3. Results are taken in by the pool's message callbacks, between frames.)
  *
  * On the ticks the limiter renders (the rendered delta from `FrameClock`), in this order:
@@ -44,6 +46,8 @@ export interface FrameStepDeps {
   held(): ReadonlySet<Action>;
   /** True while the help is open: the camera does not move. */
   paused(): boolean;
+  /** True once the page stopped the loop (a failure after the reveal, SP4b spec §7.4): the tick ends after `update`. */
+  stopped(): boolean;
   /** `createFrameClock(limiter, notice, start)`: the rendered delta, or null on a tick the limiter skips. */
   readonly clock: FrameClock;
   readonly coordinator: Pick<Coordinator, 'update' | 'counts'>;
@@ -107,6 +111,8 @@ export function createFrameStep(d: FrameStepDeps): { tick(now: number): void } {
       cam.z = fly.z;
       cam.yawDeg = fly.yaw;
       coordinator.update(cam);
+      // A fatal raised inside update stopped the page and released what the rest of the tick would touch.
+      if (d.stopped()) return;
       coordinator.counts(counts);
       if (dt === null) return;
 

@@ -327,6 +327,7 @@ async function buildAtRest(): Promise<AtRest> {
     fly,
     held: () => none,
     paused: () => false,
+    stopped: () => false,
     clock: createFrameClock(createFpsLimiter(144), createFrameNotice(() => {}, 12), 0),
     coordinator,
     counts,
