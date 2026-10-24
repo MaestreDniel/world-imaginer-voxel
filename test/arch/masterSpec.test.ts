@@ -50,6 +50,8 @@
  * SP4b (its spec §13): the split; §1's `ci.yml` line names the unit shards (it lands with `unitShards.mjs`); §1 names each
  * SP4b module in its entry, which exists (`SP4B_MODULES`, a row added by each task that adds a module); the engine entry
  * marks `scheduler.ts` as not created; §4.3 states the four heaps and the throttle's cap and display-tied thresholds.
+ * R7's commit (SP4b §8.1-§8.2, §13): §6.4's R7 row names `partialColumnFrames` and its flight and Apply parts, which
+ * `THRESHOLDS` holds; §1's `test/` entry lists SP4b's test files in their own parentheses, which exist.
  */
 import { existsSync, readdirSync, readFileSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
@@ -828,6 +830,28 @@ describe('master spec amendments (SP4b §13)', () => {
     const at = text.indexOf('### 5.8 Debug HUD and bench');
     const s58 = text.slice(at, text.indexOf('### 5.9 ', at));
     expect(s58).toContain('SP4b: the streaming counts');
+  });
+
+  test('§6.4\'s R7 row names `partialColumnFrames` and the SP4b flight part, and THRESHOLDS holds it activeFrom SP4b', () => {
+    const r7 = text.split('\n').find((l) => l.startsWith('| R7 |'));
+    expect(r7, 'no R7 row in §6.4').toBeDefined();
+    expect(r7).toContain('atomic reveal during the bench flight (SP4b: `partialColumnFrames`, from the streaming metric\'s scripted flight in Node; the bench records the same probe) and a terrain Apply (SP4c)');
+    expect(r7).toContain('| 0 (the flight part SP4b, the Apply part SP4c) |');
+    expect(Object.keys(THRESHOLDS.R7 ?? {})).toEqual(['partialColumnFrames']);
+    expect(THRESHOLDS.R7?.partialColumnFrames).toEqual({ max: 0, activeFrom: 'SP4b' });
+  });
+
+  test('§1\'s test entry lists SP4b\'s test files in their own parentheses, which exist', () => {
+    const entry = layoutEntry(/^\s+test\/ unit\/ metrics\//);
+    const sp4b = /\(SP4b: ([^)]*)\)/.exec(entry);
+    expect(sp4b, "§1's test/ entry has no `(SP4b: …)` list").not.toBeNull();
+    const named = sp4b![1]!.split(/,\s*/).map((f) => f.trim());
+    expect(named).toEqual([
+      'metrics/stream.metric.ts', 'harness/inProcessPool.ts', 'integration/streaming.test.ts', 'integration/columnTableFuzz.test.ts',
+    ]);
+    for (const f of named) expect(existsSync(`${ROOT_DIR}test/${f}`), `test/${f} does not exist`).toBe(true);
+    // SP4a's list still reads alone.
+    expect(/\(SP4a: ([^)]*)\)/.exec(entry)![1]).not.toContain('SP4b');
   });
 
   test('§1 names each SP4b module in its entry, which exists', () => {

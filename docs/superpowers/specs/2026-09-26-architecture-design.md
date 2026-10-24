@@ -205,6 +205,7 @@ world-imaginer-voxel/          (repository root)
         (SP3e: metrics/presets.metric.ts, harness/terrainScatter.ts, harness/dt2.ts, harness/surfaceAnalysis.ts, harness/heightmaps.ts,
         harness/zMetrics.ts, unit/goldens.sp3e.test.ts)
         (SP4a: metrics/render.metric.ts, metrics/light.metric.ts, metrics/g1.metric.ts, tools/cdp.ts, tools/panoramas.ts, tools/measureChrome.ts)
+        (SP4b: metrics/stream.metric.ts, harness/inProcessPool.ts, integration/streaming.test.ts, integration/columnTableFuzz.test.ts)
         schema-shape.lock.json (SP1) stateIds.lock.json (SP3a)
         thresholds.ts thresholds.lock.json goldens.json baselines.json
 ```
@@ -1491,7 +1492,7 @@ Metric values are written to `test/metrics/.out/*.json` for trends. The harness 
 | R1 | hidden seam faces emitted / visible faces missing vs brute force | 0 / 0 |
 | R2 | greedy quads per visible face (AO on / off) | ≤ 0.85 / ≤ 0.55 (retuned from 0.6 / 0.35, which came from 09's nearly flat terrain, to SP3b's density terrain by the user's decision of 2026-10-22, §4.4; re-baselined at SP6 and SP8b; amended by SP4a) |
 | R3 | wrongly culled sections vs raycast reference / culled from an underground camera | 0 / ≥ 50% |
-| R7 | atomic reveal during the bench flight and a terrain Apply: frames in which a column shows some but not all of its non-empty sections, or mixes old- and new-epoch sections (edit/fluid remeshes excluded) | 0 (SP4b) |
+| R7 | atomic reveal during the bench flight (SP4b: `partialColumnFrames`, from the streaming metric's scripted flight in Node; the bench records the same probe) and a terrain Apply (SP4c): frames in which a column shows some but not all of its non-empty sections, or mixes old- and new-epoch sections (edit/fluid remeshes excluded) | 0 (the flight part SP4b, the Apply part SP4c) |
 | R4 | quads per column, incl. cave walls, leaves, water | median ≤ 2000, p95 ≤ 4000 (measured in SP4a; asserted with full content in SP8b; sets the GPU budget) |
 | R5 | water surface quads per face | ≤ 0.1 (recorded from SP4a; gated from SP7) |
 | R6 | fill-mask consistency during the bench flight: columns with the mask set but unmeshed non-empty sections / columns in LOD range with neither mask nor an uploaded LOD tile / LOD island top and bottom vs voxel (floating_islands) | 0 / 0 / ±8 blocks |

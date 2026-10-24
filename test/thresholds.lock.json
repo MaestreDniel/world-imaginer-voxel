@@ -1,5 +1,5 @@
 {
-  "sha256": "b0bd7212c5110dec01b1fce715588b05e366638a445b93d9e0a034f11b036b36",
+  "sha256": "69682065e4c1dbacb136c830087c352b8990d49618fcb98df9ca1835e51fb9bc",
   "canonical": {
     "startedSps": [
       "SP0",
@@ -334,6 +334,12 @@
         "waterQuadsPerFace": {
           "activeFrom": "SP7",
           "max": 0.1
+        }
+      },
+      "R7": {
+        "partialColumnFrames": {
+          "activeFrom": "SP4b",
+          "max": 0
         }
       },
       "S1": {

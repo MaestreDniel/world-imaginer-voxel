@@ -34,7 +34,7 @@ describe('shardArgs (SP4b spec §1.1)', () => {
     expect(METRIC_SHARDS).toEqual({
       terrain: ['test/metrics/terrain.metric.ts'],
       surface: ['test/metrics/surface.metric.ts'],
-      render: ['test/metrics/render.metric.ts', 'test/metrics/light.metric.ts', 'test/metrics/g1.metric.ts'],
+      render: ['test/metrics/render.metric.ts', 'test/metrics/light.metric.ts', 'test/metrics/g1.metric.ts', 'test/metrics/stream.metric.ts'],
       rest: null,
     });
   });
