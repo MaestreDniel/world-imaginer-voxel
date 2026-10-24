@@ -48,7 +48,8 @@
  * SP4a entry's cut line says it was not taken and the receivers say nothing moved; and a bare `SP4` is left only in the
  * §10 split paragraphs and the parallelism line, where spec §14's own wording keeps it.
  * SP4b (its spec §13): the split; §1's `ci.yml` line names the unit shards (it lands with `unitShards.mjs`); §1 names each
- * SP4b module in its entry, which exists (`SP4B_MODULES`, a row added by each task that adds a module).
+ * SP4b module in its entry, which exists (`SP4B_MODULES`, a row added by each task that adds a module); the engine entry
+ * marks `scheduler.ts` as not created; §4.3 states the four heaps and the throttle's cap and display-tied thresholds.
  */
 import { existsSync, readdirSync, readFileSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
@@ -705,7 +706,29 @@ describe('master spec amendments (SP4b §13)', () => {
   const SP4B_MODULES: Array<[head: RegExp, token: string, file: string]> = [
     [/^\s+\.github\/workflows\/ci\.yml /, '.github/scripts/unitShards.mjs', '.github/scripts/unitShards.mjs'],
     [/^\s+store\/pool\.ts /, 'reclaim.ts (SP4b)', 'src/world/store/reclaim.ts'],
+    [/^\s+engine\/\s/, 'throttle.ts (SP4b)', 'src/engine/throttle.ts'],
+    [/^\s+core\/\s/, 'streamScore.ts (SP4b', 'src/core/streamScore.ts'],
   ];
+
+  test('§1\'s engine entry marks scheduler.ts as not created, and the file does not exist (SP4b spec §13)', () => {
+    expect(layoutEntry(/^\s+engine\/\s/)).toContain('scheduler.ts (not created: the coordinator holds the scheduler)');
+    expect(existsSync(`${ROOT_DIR}src/engine/scheduler.ts`)).toBe(false);
+    expect(layoutEntry(/^\s+core\/\s/)).toContain('streamScore.ts (SP4b: the stage score shared by the coordinator and the section renderers\' ready queue)');
+  });
+
+  test('§4.3\'s heap and throttle sentences (SP4b spec §3.3, §3.8, §13)', () => {
+    const at = text.indexOf('### 4.3 Scheduling');
+    const s43 = text.slice(at, text.indexOf('### 4.4 ', at));
+    expect(s43).toContain('- Four heaps, one per stage, rebuilt in O(n) (n ≤ 5k) on a crossing, an RD change or a turn > 30° (SP4b).');
+    const throttle = s43.split('\n').find((l) => l.startsWith('**Adaptive throttle (`engine/throttle.ts`).**'));
+    expect(throttle, 'no `**Adaptive throttle …` paragraph in §4.3').toBeDefined();
+    for (const phrase of [
+      'exceeds max(16.7 ms, the display interval + 0.5 ms) while generation is in flight',
+      'on the T, D and L jobs in flight, in [1, max(1, N − 1)] (SP4b)',
+      'After 120 frames under max(13 ms, the display interval + 0.5 ms) it rises by 1',
+      'the user\'s decision of 2026-10-24',
+    ]) expect(throttle, `the throttle paragraph does not say ${phrase}`).toContain(phrase);
+  });
 
   test('§2.3 has the Reclamation paragraph (SP4b spec §2.5, §13)', () => {
     const para = text.split('\n').find((l) => l.startsWith('**Reclamation.**'));

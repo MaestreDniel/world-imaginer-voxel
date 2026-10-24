@@ -120,7 +120,7 @@ export interface WorldPage {
   dispose(): void;
 }
 
-/** The loading screen's per-frame upload budget (SP4a spec §6.2). */
+/** The loading screen's per-frame upload budget, with no row or structural cap (SP4b spec §3.9; SP4a spec §6.2). */
 const LOAD_UPLOAD_MS = 12;
 /** The overlay's fade at the reveal (spec §8.4). */
 const FADE_MS = 300;
@@ -551,7 +551,7 @@ export function mountWorldPage(root: HTMLElement, q: WorldQuery, hash: string, o
     });
     coordinator.load(cx0, cz0, loadRd).then(() => { meshed = true; }, (e: unknown) => fail(causeOf(e), e));
 
-    const budget = createUploadBudget(LOAD_UPLOAD_MS, () => performance.now());
+    const budget = createUploadBudget(LOAD_UPLOAD_MS, Infinity, () => performance.now());
     try {
       await everyFrameUntil((cb) => { raf = requestAnimationFrame(cb); }, () => {
         if (state !== 'loading') return true;

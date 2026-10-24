@@ -97,6 +97,7 @@ world-imaginer-voxel/          (repository root)
                                 the preset trees of the PROFILES overlays, derived from the default trees by subtree replacements at JSON
                                 paths and registered at load (SP3e)
       stage/registry.ts hash.ts StageDef, stageHash, genKey, dirty-stage computation
+      streamScore.ts (SP4b: the stage score shared by the coordinator and the section renderers' ready queue)
     world/                      L1 (core only)
       blocks/kinds.ts registry.ts defs.ts index.ts fluid.ts light.ts   (SP3a) u16 block-state ids (<= 4096 used): property kinds
                                 and codes, buildRegistry (ids, SoA per-state tables, keys, rotations, mirrors), the definitions, REGISTRY
@@ -165,7 +166,7 @@ world-imaginer-voxel/          (repository root)
                                 SP4a: worldJobs.ts, the T, D, L and MESH_COLUMN handlers over the attached store; spikeStore.worker.ts and
                                 spikeStoreHandler.ts, the week-1 spike's shared-store check)
     engine/                     main thread, no three
-      coordinator.ts scheduler.ts rings.ts workerPool.ts throttle.ts uploadBudget.ts session.ts invalidation.ts (SP4c with Apply's dirty stages; completed for every scope by SP10) capabilities.ts
+      coordinator.ts scheduler.ts (not created: the coordinator holds the scheduler) rings.ts workerPool.ts throttle.ts (SP4b) uploadBudget.ts session.ts invalidation.ts (SP4c with Apply's dirty stages; completed for every scope by SP10) capabilities.ts
       renderDistance.ts spikeStore.ts   (SP4a: the default render distance from the capability report; the spike's shared store)
     render/                     the only place three is imported (ui canvases are 2D; amended by SP0)
       renderer.ts sectionRenderer.ts (interface) regionBatch.ts regionMesh.ts (fallback) floatingOrigin.ts selection.ts
@@ -974,13 +975,13 @@ Main thread: render (three), input/physics/raycast (reads SAB), Coordinator (sta
 **Priority** (lower runs first): `score = d_h − 3·max(0, cos θ)·[d_h > 2] − stageBonus`.
 - stageBonus: MESH 1.5, L 1.0, D 0.5, T 0.
 - Edit remeshes get −1000.
-- The heap is rebuilt in O(n) (n ≤ 5k) on a crossing or a turn of more than 30°.
+- Four heaps, one per stage, rebuilt in O(n) (n ≤ 5k) on a crossing, an RD change or a turn > 30° (SP4b).
 
 **Caps:**
 - In flight per type: T ≤ N−1, MESH ≤ N.
 - LOD, MAP, SLICE, METRIC and AUDIO_SYNTH ≤ 1 while any T is pending within RD.
 
-**Adaptive throttle (`engine/throttle.ts`).** If frame p95 over 60 frames exceeds 16.7 ms while generation is in flight, the generation cap drops by 1 (minimum 1). After 120 frames under 13 ms it rises by 1.
+**Adaptive throttle (`engine/throttle.ts`).** If frame p95 over 60 frames exceeds max(16.7 ms, the display interval + 0.5 ms) while generation is in flight, the generation cap (on the T, D and L jobs in flight, in [1, max(1, N − 1)] (SP4b)) drops by 1 (minimum 1). After 120 frames under max(13 ms, the display interval + 0.5 ms) it rises by 1. The thresholds follow the display, so a display below 60 Hz does not read as permanently slow and a 60 Hz display can raise the cap again after a drop; at 144-240 Hz they are 16.7 and 13 ms (the user's decision of 2026-10-24, SP4b).
 
 **Cancellation.**
 - Queued jobs that leave the needed set are dropped.

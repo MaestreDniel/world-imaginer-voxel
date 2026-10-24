@@ -3,7 +3,8 @@
  * `dx² + dz² ≤ (rd + 0.5)²` around the centre column; L, D and T are each the previous set grown by the 3 × 3 (every
  * column plus its 8 neighbours), so every job's prerequisites lie in the previous stage's set. At rd 12 they hold
  * MESH 489, L 593, D 705 and T 825 columns. Offsets are precomputed once per radius, in spiral order (by d², then by
- * angle).
+ * angle). While streaming (SP4b spec §3.2) the retained sets add the hysteresis of master §4.2: meshes are kept within
+ * the disc of radius rd + 1 and voxels within rd + 5; `membershipTable(rd)` holds every flag per offset.
  */
 import { TORUS_SIZE, colKey } from '../core/coords';
 
@@ -83,13 +84,52 @@ export function neededSets(cx: number, cz: number, rd: number): Record<Stage, Re
   return { T: keys(offs.T), D: keys(offs.D), L: keys(offs.L), MESH: keys(offs.MESH) };
 }
 
+/** Membership flags, one byte per offset (SP4b spec §3.2): the four needed sets, then the retained ones. */
+export const M_MESH = 1;
+export const M_L = 2;
+export const M_D = 4;
+export const M_T = 8;
+/** Meshes are kept within the disc of radius rd + 1 (`dx² + dz² ≤ (rd + 1.5)²`). */
+export const M_KEEP_MESH = 16;
+/** Voxels are kept within the disc of radius rd + 5 (`≤ (rd + 5.5)²`, which contains the T set). */
+export const M_KEEP_VOXELS = 32;
+/** The proto ring: the T set minus the L set (rd + 2 … rd + 3). */
+export const M_PROTO_RING = 64;
+/** How many columns past rd the retained discs reach (master §4.2's hysteresis). */
+export const KEEP_MESH_EXTRA = 1;
+export const KEEP_VOXELS_EXTRA = 5;
+
+const tableCache = new Map<number, Uint8Array>();
+
 /**
- * Throws unless the T set at rd fits the store's torus without two columns sharing a record (SP4a spec §2.1, D3):
- * its side 2·(rd + 3) + 1 must be at most `TORUS_SIZE` (64), true for every rd ≤ 28.
+ * The membership table at rd (SP4b spec §3.2), cached per rd: one byte of `M_*` flags per offset in
+ * [−(rd + 5), rd + 5]², at index `(dz + R)·side + (dx + R)` with `R = rd + 5` and `side = 2·R + 1` (43 × 43 at rd 16).
+ * Every flag lies inside it: the T set reaches rd + 3 and keepVoxels rd + 5.
+ */
+export function membershipTable(rd: number): Uint8Array {
+  const hit = tableCache.get(rd);
+  if (hit !== undefined) return hit;
+  const R = rd + KEEP_VOXELS_EXTRA;
+  const side = 2 * R + 1;
+  const t = new Uint8Array(side * side);
+  const offs = stageOffsets(rd);
+  const flags: ReadonlyArray<readonly [Stage, number]> = [['MESH', M_MESH], ['L', M_L], ['D', M_D], ['T', M_T]];
+  for (const [st, f] of flags) for (const [dx, dz] of offs[st]) t[(dz + R) * side + (dx + R)]! |= f;
+  for (const [dx, dz] of discOffsets(rd + KEEP_MESH_EXTRA)) t[(dz + R) * side + (dx + R)]! |= M_KEEP_MESH;
+  for (const [dx, dz] of discOffsets(rd + KEEP_VOXELS_EXTRA)) t[(dz + R) * side + (dx + R)]! |= M_KEEP_VOXELS;
+  for (let i = 0; i < t.length; i++) if ((t[i]! & (M_T | M_L)) === M_T) t[i]! |= M_PROTO_RING;
+  tableCache.set(rd, t);
+  return t;
+}
+
+/**
+ * Throws unless the membership table at rd fits the store's torus without two columns sharing a record (SP4b spec
+ * §3.2, generalising SP4a spec §2.1, D3): its side 2·(rd + 5) + 1 must be at most `TORUS_SIZE` (64), true for every
+ * rd ≤ 26 (43 at rd 16).
  */
 export function assertTorusSafe(rd: number): void {
-  const side = 2 * (rd + RING_EXTRA.T) + 1;
+  const side = 2 * (rd + KEEP_VOXELS_EXTRA) + 1;
   if (side > TORUS_SIZE) {
-    throw new RangeError(`render distance ${rd}: the T set is ${side} columns across, more than the torus's ${TORUS_SIZE}`);
+    throw new RangeError(`render distance ${rd}: the retained set is ${side} columns across, more than the torus's ${TORUS_SIZE}`);
   }
 }

@@ -1,6 +1,9 @@
 import { describe, expect, test } from 'vitest';
 import { colKey, colKeyCx, colKeyCz, torusSlot } from '../../src/core/coords';
-import { RING_EXTRA, assertTorusSafe, discOffsets, neededSets, type Stage } from '../../src/engine/rings';
+import {
+  KEEP_MESH_EXTRA, KEEP_VOXELS_EXTRA, M_D, M_KEEP_MESH, M_KEEP_VOXELS, M_L, M_MESH, M_PROTO_RING, M_T, RING_EXTRA, assertTorusSafe,
+  discOffsets, membershipTable, neededSets, stageOffsets, type Stage,
+} from '../../src/engine/rings';
 
 const STAGES: readonly Stage[] = ['T', 'D', 'L', 'MESH'];
 
@@ -78,11 +81,78 @@ describe('neededSets (ruling P34)', () => {
   });
 });
 
-describe('assertTorusSafe (SP4a spec §2.1, D3)', () => {
-  test('rd 16 passes and rd 29 throws', () => {
+/** The flag counts of a membership table, and its side. */
+function tableCounts(rd: number): { side: number; counts: Record<number, number> } {
+  const t = membershipTable(rd);
+  const side = 2 * (rd + 5) + 1;
+  const counts: Record<number, number> = {};
+  for (const f of [M_MESH, M_L, M_D, M_T, M_KEEP_MESH, M_KEEP_VOXELS, M_PROTO_RING]) {
+    let n = 0;
+    for (const b of t) if ((b & f) !== 0) n++;
+    counts[f] = n;
+  }
+  return { side, counts };
+}
+
+describe('membershipTable (SP4b spec §3.2)', () => {
+  test('the flags and the retained extras', () => {
+    expect([M_MESH, M_L, M_D, M_T, M_KEEP_MESH, M_KEEP_VOXELS, M_PROTO_RING]).toEqual([1, 2, 4, 8, 16, 32, 64]);
+    expect([KEEP_MESH_EXTRA, KEEP_VOXELS_EXTRA]).toEqual([1, 5]);
+  });
+
+  test('for every rd in [4, 16] the stage counts equal stageOffsets\' and keepMesh / keepVoxels equal discOffsets(rd + 1) / (rd + 5)', () => {
+    for (let rd = 4; rd <= 16; rd++) {
+      const { side, counts } = tableCounts(rd);
+      const offs = stageOffsets(rd);
+      expect(membershipTable(rd).length).toBe(side * side);
+      expect(counts[M_MESH], `rd ${rd} MESH`).toBe(offs.MESH.length);
+      expect(counts[M_L], `rd ${rd} L`).toBe(offs.L.length);
+      expect(counts[M_D], `rd ${rd} D`).toBe(offs.D.length);
+      expect(counts[M_T], `rd ${rd} T`).toBe(offs.T.length);
+      expect(counts[M_KEEP_MESH], `rd ${rd} keepMesh`).toBe(discOffsets(rd + 1).length);
+      expect(counts[M_KEEP_VOXELS], `rd ${rd} keepVoxels`).toBe(discOffsets(rd + 5).length);
+      expect(counts[M_PROTO_RING], `rd ${rd} protoRing`).toBe(offs.T.length - offs.L.length);
+    }
+  });
+
+  test('each stage flag sits on its stage\'s offsets at (dz + R)·side + (dx + R); MESH ⊂ keepMesh, T ⊂ keepVoxels, protoRing = T and not L', () => {
+    for (let rd = 4; rd <= 16; rd++) {
+      const t = membershipTable(rd);
+      const R = rd + 5;
+      const side = 2 * R + 1;
+      const offs = stageOffsets(rd);
+      const pairs: ReadonlyArray<readonly [Stage, number]> = [['MESH', M_MESH], ['L', M_L], ['D', M_D], ['T', M_T]];
+      for (const [st, f] of pairs) for (const [dx, dz] of offs[st]) expect(t[(dz + R) * side + (dx + R)]! & f).toBe(f);
+      for (const b of t) {
+        if ((b & M_MESH) !== 0) expect(b & M_KEEP_MESH).toBe(M_KEEP_MESH);
+        if ((b & M_T) !== 0) expect(b & M_KEEP_VOXELS).toBe(M_KEEP_VOXELS);
+        expect((b & M_PROTO_RING) !== 0).toBe((b & M_T) !== 0 && (b & M_L) === 0);
+      }
+    }
+  });
+
+  test('pinned: rd 4 keepMesh 97, keepVoxels 293, protoRing 104; rd 12 keepMesh 577, keepVoxels 973, protoRing 232; rd 16 keepVoxels 1,457 and side 43', () => {
+    const r4 = tableCounts(4).counts;
+    expect([r4[M_KEEP_MESH], r4[M_KEEP_VOXELS], r4[M_PROTO_RING]]).toEqual([97, 293, 104]);
+    const r12 = tableCounts(12).counts;
+    expect([r12[M_KEEP_MESH], r12[M_KEEP_VOXELS], r12[M_PROTO_RING]]).toEqual([577, 973, 232]);
+    const r16 = tableCounts(16);
+    expect(r16.counts[M_KEEP_VOXELS]).toBe(1457);
+    expect(r16.side).toBe(43);
+    expect(membershipTable(16).length).toBe(43 * 43);
+  });
+
+  test('cached per rd', () => {
+    expect(membershipTable(12)).toBe(membershipTable(12));
+    expect(membershipTable(12)).not.toBe(membershipTable(13));
+  });
+});
+
+describe('assertTorusSafe (SP4b spec §3.2; SP4a spec §2.1, D3)', () => {
+  test('rd 26 passes and rd 27 throws (2·(rd + 5) + 1 ≤ 64)', () => {
     expect(() => assertTorusSafe(16)).not.toThrow();
-    expect(() => assertTorusSafe(28)).not.toThrow();
-    expect(() => assertTorusSafe(29)).toThrow(/torus/);
+    expect(() => assertTorusSafe(26)).not.toThrow();
+    expect(() => assertTorusSafe(27)).toThrow(/torus/);
   });
 
   test('no two colKeys of the T set at rd 16 share a torus record', () => {
