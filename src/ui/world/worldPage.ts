@@ -11,17 +11,20 @@
  *    (`createStore({shared: true})` with the accepted reservation), the pool (`?workers` or clamp(cores − 2, 2, 6)),
  *    `attachStore`, then `configure` with the session's seed text and params.
  * 4. The centre is `?at`, else the pool's `spawn`. The world renderer (the section renderer the probe selects,
- *    `?renderer` overriding it) expects the mesh disc; `coordinator.load` stages each payload into it, and a rAF loop
- *    builds regions within a 12 ms upload budget and feeds the loading screen's progress.
- * 5. When every column is meshed and every region built: `compile()`, the camera placed with `firstView` from the
- *    store's `MOTION_BLOCKING`, three frames rendered behind the opaque overlay (`warmUp`: the sections' buffers reach
- *    the GPU while still hidden), then `revealAll()` and the reveal frame, the overlay faded out over 300 ms, and
- *    "Click to fly" until the pointer locks. Nothing of the world is visible before that frame.
+ *    `?renderer` overriding it) expects the mesh disc. The first entry runs on the streaming coordinator (SP4b spec
+ *    §3.11, D21), strict (any error stops the load, D12) and keeping every proto (D11): a rAF loop calls its `update`
+ *    with the camera held at the centre, its sink stages each payload into the section renderer, and the loop builds
+ *    regions within a 12 ms upload budget and feeds the loading screen's progress from the coordinator's counts.
+ * 5. When every column is meshed (`firstFill`) and every region built: `compile()`, the camera placed with `firstView`
+ *    from the store's `MOTION_BLOCKING`, three frames rendered behind the opaque overlay (`warmUp`: the sections'
+ *    buffers reach the GPU while still hidden), then `revealAll()` and the reveal frame, the overlay faded out over
+ *    300 ms, and "Click to fly" until the pointer locks. Nothing of the world is visible before that frame.
  *
  * The frame loop: the FPS limiter, the fly controller within the loaded disc (§7.5), the floating origin, the clock
  * (T cycles the time speed), `FrameState` (its `eyeSky` read from the page's attached store), the HUD (F3) and the help
- * (H, F1). Load errors (`LoadError`, `StoreFullError`, `WorkerFailed`, the watchdog) show the failure panel, with a link
- * to the next lower RD when rd > 4 (P49). `WorldPage.loadStats` holds the load's figures for the flight JSON (§9.5);
+ * (H, F1). Load errors (the coordinator's `fatal` event, whose message and cause the panel reads, a `StoreFullError`
+ * cause keeping the store-full text; `WorkerFailed`; the watchdog) show the failure panel, with a link to the next lower
+ * RD when rd > 4 (P49). `WorldPage.loadStats` holds the load's figures for the flight JSON (§9.5);
  * with `opts.flight` (the `?flight=sp4a` route, `flight.ts`) the flight drives the camera and the clock after the reveal.
  *
  * After the reveal (spec §7.1, §7.5, §8.2, §8.5; rulings P49, P50): the Ctrl+W guard (`beforeunload`) is armed; every
@@ -35,9 +38,10 @@ import { MEDIUM } from '../../core/params/graphicsPresets';
 import { OPENING_T, TIME_SPEEDS, advanceTime } from '../../daynight/dayNight';
 import { probeCapabilities } from '../../engine/capabilities';
 import { evaluateWorldCapabilities, type CapabilityReport } from '../../engine/capabilityRules';
-import { LoadError, createCoordinator, phaseName, progressFraction, worldJobsOf, type LoadProgress } from '../../engine/coordinator';
-import { resolveRenderDistance } from '../../engine/renderDistance';
+import { createCoordinator, createCoordinatorCounts, phaseName, progressFraction, worldJobsOf } from '../../engine/coordinator';
+import { RD_MAX, reservationRdCap, resolveRenderDistance } from '../../engine/renderDistance';
 import { stageOffsets, type Stage } from '../../engine/rings';
+import { createThrottle } from '../../engine/throttle';
 import { createUploadBudget } from '../../engine/uploadBudget';
 import { StoreFullError, WorkerFailed, createBrowserPool, poolSize, type WorkerPool } from '../../engine/workerPool';
 import { SPEED_DEFAULT, applyCameraRotation, atEdge, look, stepFly, stepSpeed, type FlyBounds, type FlyState } from '../../player/fly';
@@ -103,7 +107,7 @@ declare global {
 export interface LoadStats {
   /** ms from `mountWorldPage` to the reveal frame; null before it. */
   revealMs: number | null;
-  /** ms from `coordinator.load` until each stage's last column finished; null while it runs. */
+  /** ms from the coordinator's start until each stage's last column finished (read once per frame); null while it runs. */
   stageMs: Record<Stage, number | null>;
   /** RegionMesh's merge ms (0 on RegionBatch), read at the reveal. */
   mergeMs: number;
@@ -146,12 +150,14 @@ function storageOrNull(): Storage | null {
   }
 }
 
-/** The failure panel's one-line cause for a load error. */
-function causeOf(e: unknown): string {
-  const inner = e instanceof LoadError ? e.cause : e;
-  if (inner instanceof StoreFullError) return 'The world store is full: a lower render distance needs less of it.';
-  if (inner instanceof WorkerFailed) return `A worker failed: ${inner.message}`;
-  if (e instanceof LoadError) return `A column job failed: ${e.message}`;
+/**
+ * The failure panel's one-line cause for a load error: `e` is the error, or the cause of the coordinator's `fatal` event
+ * with that event's `message` (SP4b spec §3.6).
+ */
+function causeOf(e: unknown, message: string | null = null): string {
+  if (e instanceof StoreFullError) return 'The world store is full: a lower render distance needs less of it.';
+  if (e instanceof WorkerFailed) return `A worker failed: ${e.message}`;
+  if (message !== null) return `A column job failed: ${message}`;
   return `The world could not load: ${errorText(e)}`;
 }
 
@@ -409,20 +415,21 @@ export function mountWorldPage(root: HTMLElement, q: WorldQuery, hash: string, o
     return lower === null ? null : `/?rd=${lower}${centre === null ? '' : `&at=${centre.x},${centre.z}`}${hashPart}`;
   };
 
-  const details = (e: unknown): string => [
-    e === null ? null : e instanceof Error ? (e.stack ?? `${e.name}: ${e.message}`) : String(e),
-    e instanceof LoadError && e.cause instanceof Error ? `cause: ${e.cause.stack ?? e.cause.message}` : null,
+  /** The panel's details: a fatal event's message (when given), then the error's or the event cause's stack. */
+  const details = (e: unknown, message: string | null = null): string => [
+    message,
+    e === null ? null : `${message === null ? '' : 'cause: '}${e instanceof Error ? (e.stack ?? `${e.name}: ${e.message}`) : String(e)}`,
     `seed ${seedText ?? '?'} · profile ${profile ?? '?'} · rd ${rd ?? '?'} · centre ${centre === null ? '?' : `${centre.x}, ${centre.z}`}`,
     `workers ${pool?.size ?? '?'} · renderer ${report?.renderer ?? '?'} · multiDraw ${report?.multiDraw ?? '?'}`,
     `url ${location.href}`,
     `user agent ${navigator.userAgent}`,
   ].filter((l) => l !== null).join('\n');
 
-  function fail(cause: string, e: unknown): void {
+  function fail(cause: string, e: unknown, message: string | null = null): void {
     if (state !== 'loading') return;
     state = 'failed';
     // The details read the pool's size, so the panel is filled first; dispose() then finds no renderer to free twice.
-    const shown = details(e);
+    const shown = details(e, message);
     releaseOnFailure({ longTasks, pool, renderer: wr });
     wr = null;
     loading.fail(cause, shown, { map: mapHref, lowerRd: lowerRdHref() });
@@ -536,30 +543,45 @@ export function mountWorldPage(root: HTMLElement, q: WorldQuery, hash: string, o
     const disc = new Set(meshDisc.map(([cx, cz]) => colKey(cx, cz)));
     sections.expect(meshDisc);
 
-    let progress: LoadProgress | null = null;
-    let meshed = false;
     const loadStart = performance.now();
+    // The first entry on the streaming coordinator (SP4b spec §3.11, D21): strict, so any error stops the load as in
+    // SP4a (D12); every proto kept (D11); the camera held at the centre. The throttle is created here and kept for the
+    // streaming frame (SP4b Task 21); nothing feeds it before the reveal, so it stays at its maximum.
+    const throttle = createThrottle({ max: Math.max(1, workers.size - 1) });
     const coordinator = createCoordinator({
-      workers: workers.size,
       jobs: worldJobsOf(workers),
-      versionsAt: (cx, cz) => store.neighborhood(cx, cz).versions(),
-      onMesh: (p) => sections.stage(p),
-      onProgress: (p) => {
-        progress = p;
-        for (const s of STAGES) if (stats.stageMs[s] === null && p.done[s] === p.needed[s]) stats.stageMs[s] = performance.now() - loadStart;
+      store,
+      sink: {
+        stage: (p) => sections.stage(p),
+        // Nothing unloads while the camera is held (SP4b Task 12 removes meshes; Task 16 gives the renderers `remove`).
+        remove: (cx, cz) => { throw new Error(`the section renderer cannot remove column (${cx}, ${cz})`); },
+      },
+      throttle,
+      rd: loadRd,
+      rdMax: Math.min(RD_MAX, reservationRdCap(caps.reservation)),
+      retainAllProtos: true,
+      strict: true,
+      onEvent: (e) => {
+        if (e.kind === 'fatal') fail(causeOf(e.cause, e.message), e.cause, e.message);
       },
     });
-    coordinator.load(cx0, cz0, loadRd).then(() => { meshed = true; }, (e: unknown) => fail(causeOf(e), e));
+    teardown.push(() => coordinator.dispose());
+    const counts = createCoordinatorCounts();
+    const loadCamera = { x: at.x, z: at.z, yawDeg: 0 };
+    coordinator.update(loadCamera);
 
     const budget = createUploadBudget(LOAD_UPLOAD_MS, Infinity, () => performance.now());
     try {
       await everyFrameUntil((cb) => { raf = requestAnimationFrame(cb); }, () => {
         if (state !== 'loading') return true;
+        coordinator.update(loadCamera);
+        coordinator.counts(counts);
+        for (const s of STAGES) if (stats.stageMs[s] === null && counts[s].done === counts[s].needed) stats.stageMs[s] = performance.now() - loadStart;
         budget.start();
         sections.buildNext(() => budget.exhausted());
         const c = sections.counts();
-        if (progress !== null) loading.progress(progressFraction(progress, c.builtRegions, c.regions), phaseName(progress, c.builtRegions, c.regions));
-        return meshed && c.builtRegions === c.regions;
+        loading.progress(progressFraction(counts, c.builtRegions, c.regions), phaseName(counts, c.builtRegions, c.regions));
+        return coordinator.firstFill() && c.builtRegions === c.regions;
       });
     } catch (e) {
       // A build error (a BatchedMesh `addGeometry` that does not fit, a merge error) is a load error (spec §8.3).
@@ -708,11 +730,11 @@ export function mountWorldPage(root: HTMLElement, q: WorldQuery, hash: string, o
     const frames = createFrameStats();
     const huds = hud
       ? mountWorldHud(host, () => {
-        const done = progress?.done;
+        const done = coordinator.counts(counts);
         const info = world.info();
         return {
           frame: frames.summary(),
-          columns: { t: done?.T ?? 0, d: done?.D ?? 0, l: done?.L ?? 0, meshed: done?.MESH ?? 0 },
+          columns: { t: done.T.done, d: done.D.done, l: done.L.done, meshed: done.MESH.done },
           sections: sections.counts().sections,
           drawCalls: info.calls,
           triangles: info.triangles,

@@ -730,6 +730,12 @@ describe('master spec amendments (SP4b §13)', () => {
     ]) expect(throttle, `the throttle paragraph does not say ${phrase}`).toContain(phrase);
   });
 
+  test('§4.1\'s meshSeq is per column (SP4b spec §3.6, §13)', () => {
+    const para = text.split('\n').find((l) => l.startsWith('**Optimistic concurrency.**'));
+    expect(para, 'no `**Optimistic concurrency.**` paragraph').toBeDefined();
+    expect(para).toContain('monotonically increasing `meshSeq` (SP4b: per column, since one MESH_COLUMN job covers a column\'s sections; a result of an older seq is dropped)');
+  });
+
   test('§2.3 has the Reclamation paragraph (SP4b spec §2.5, §13)', () => {
     const para = text.split('\n').find((l) => l.startsWith('**Reclamation.**'));
     expect(para, 'no `**Reclamation.**` paragraph in §2.3').toBeDefined();

@@ -953,7 +953,7 @@ Main thread: render (three), input/physics/raycast (reads SAB), Coordinator (sta
 - A Published column belongs to the sim worker.
 - Mesh jobs and the main thread only read.
 
-**Optimistic concurrency.** Every job records the `blockVersion` and `lightVersion` of the 3×3 it read. The coordinator discards and requeues any result whose versions changed. Every section also carries a monotonically increasing `meshSeq`, and older mesh results are dropped. The only lock is the slab allocator.
+**Optimistic concurrency.** Every job records the `blockVersion` and `lightVersion` of the 3×3 it read. The coordinator discards and requeues any result whose versions changed. Every section also carries a monotonically increasing `meshSeq` (SP4b: per column, since one MESH_COLUMN job covers a column's sections; a result of an older seq is dropped), and older mesh results are dropped. The only lock is the slab allocator.
 
 ### 4.2 Column state machine, rings and proto retention
 
