@@ -1,7 +1,7 @@
-import { Box3, BufferAttribute, BufferGeometry, Group, Mesh, Sphere, Vector3 } from 'three';
-import { MESH_PASS_CUTOUT, MESH_PASS_OPAQUE, MESH_PASS_TRANSLUCENT, ROW_INTS, type ColumnMeshPayload } from '../mesh/column';
+import { Box3, BufferAttribute, BufferGeometry, Group, Mesh, Sphere } from 'three';
+import { MESH_PASS_CUTOUT, MESH_PASS_OPAQUE, MESH_PASS_TRANSLUCENT } from '../mesh/column';
 import type { MaterialSystem } from './materials/index';
-import { createRegionStaging, regionOrigin, type StagedRegion } from './regionGrid';
+import { createRegionStaging, regionOrigin, rowBounds, rowsOfPass, type PayloadRow, type StagedRegion } from './regionGrid';
 import type { SectionRenderer } from './sectionRenderer';
 
 /**
@@ -32,20 +32,12 @@ interface RegionPassMesh {
   d2: number;
 }
 
-interface Row {
-  readonly p: ColumnMeshPayload;
-  /** The row's offset in `p.rows`. */
-  readonly o: number;
-  /** The row number (its sphere is at `4·r`). */
-  readonly r: number;
-}
-
 /**
  * The merged geometry of `rows` (spec §6.2): exact Uint16 × 4 positions, Uint32 data and Uint32 indices, with its
  * bounding sphere the union of the section spheres (× 8, shifted to the section) and its box the union of their cubes,
  * each clipped to its section.
  */
-function mergeRows(rows: readonly Row[], vertexSum: number, indexSum: number): BufferGeometry {
+function mergeRows(rows: readonly PayloadRow[], vertexSum: number, indexSum: number): BufferGeometry {
   const position = new Uint16Array(4 * vertexSum);
   const data = new Uint32Array(vertexSum);
   const index = new Uint32Array(indexSum);
@@ -53,8 +45,6 @@ function mergeRows(rows: readonly Row[], vertexSum: number, indexSum: number): B
   const box = new Box3();
   const s = new Sphere();
   const sectionBox = new Box3();
-  const sectionBounds = new Box3();
-  const size = new Vector3();
   let v = 0;
   let i = 0;
   for (const { p, o, r } of rows) {
@@ -78,17 +68,10 @@ function mergeRows(rows: readonly Row[], vertexSum: number, indexSum: number): B
     v += vertexCount;
     i += indexCount;
 
-    const q = 4 * r;
-    s.center.set(p.spheres[q]! * UNITS + ox, p.spheres[q + 1]! * UNITS + oy, p.spheres[q + 2]! * UNITS + oz);
-    s.radius = p.spheres[q + 3]! * UNITS;
+    // The section's sphere and its cube clipped to the section, at the section's place in the region.
+    rowBounds(p, r, ox, oy, oz, s, sectionBox);
     // `union` copies into the empty sphere (radius −1) the first time.
     sphere.union(s);
-    // The sphere's cube, clipped to the section (every position of the section lies in its 128-unit cube).
-    sectionBox.setFromCenterAndSize(s.center, size.setScalar(2 * s.radius));
-    sectionBounds.min.set(ox, oy, oz);
-    sectionBounds.max.set(ox + SECTION_UNITS, oy + SECTION_UNITS, oz + SECTION_UNITS);
-    sectionBox.intersect(sectionBounds);
-    if (sectionBox.isEmpty()) sectionBox.setFromCenterAndSize(s.center, size.setScalar(0));
     box.union(sectionBox);
   }
   const g = new BufferGeometry();
@@ -129,17 +112,8 @@ export function createRegionMesh(materials: MaterialSystem): SectionRenderer {
     const o = regionOrigin(region.rx, region.rz);
     let added = 0;
     for (const pass of PASSES) {
-      const rows: Row[] = [];
-      let vertexSum = 0;
-      let indexSum = 0;
-      for (const p of region.payloads) {
-        for (let r = 0, ro = 0; ro < p.rows.length; r++, ro += ROW_INTS) {
-          if (p.rows[ro + 1] !== pass) continue;
-          rows.push({ p, o: ro, r });
-          vertexSum += p.rows[ro + 3]!;
-          indexSum += p.rows[ro + 5]!;
-        }
-      }
+      const rows: PayloadRow[] = [];
+      const { vertices: vertexSum, indices: indexSum } = rowsOfPass(region.payloads, pass, rows);
       if (rows.length === 0 || indexSum === 0) continue;
       const mesh = new Mesh(mergeRows(rows, vertexSum, indexSum), materialOf[pass]);
       mesh.name = `region ${region.rx},${region.rz} pass ${pass}`;

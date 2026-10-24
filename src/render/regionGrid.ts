@@ -1,9 +1,11 @@
-import type { ColumnMeshPayload } from '../mesh/column';
+import { Box3, Vector3, type Sphere } from 'three';
+import { ROW_INTS, type ColumnMeshPayload } from '../mesh/column';
 
 /**
  * The region grid both section renderers share (SP4a spec §6.2, master §4.5): a region is 8 × 8 columns aligned to
  * `cx >> 3`, `cz >> 3`. `createRegionStaging` holds the expected columns and the staged payloads per region and hands
- * out the regions whose expected columns are all staged, nearest first; RegionBatch and RegionMesh only build.
+ * out the regions whose expected columns are all staged, nearest first; RegionBatch and RegionMesh only build. Both
+ * also share the row gathering (`rowsOfPass`) and the section bounds (`rowBounds`) (SP4b spec §4.1, §7.6).
  */
 
 /** The region of column (cx, cz): `[cx >> 3, cz >> 3]`. */
@@ -19,6 +21,69 @@ export function sectionOrigin(cx: number, cz: number, sy: number): [number, numb
 /** The region origin in blocks: `(rx·128, −64, rz·128)`. */
 export function regionOrigin(rx: number, rz: number): [number, number, number] {
   return [rx * 128, -64, rz * 128];
+}
+
+/** Geometry units per block: positions are in 1/8 blocks (SP4a spec §5.5). */
+const UNITS = 8;
+/** A section's extent in geometry units. */
+const SECTION_UNITS = 16 * UNITS;
+
+/** One row of a column payload: the payload, the row's offset in `p.rows` and its number (its sphere is at `4·r`). */
+export interface PayloadRow {
+  readonly p: ColumnMeshPayload;
+  readonly o: number;
+  readonly r: number;
+}
+
+/**
+ * The rows of `pass` in `payloads`, in payload order then row order, into `out` (cleared first), with their vertex and
+ * index sums (SP4b spec §4.1: the row gathering both renderers shared).
+ */
+export function rowsOfPass(
+  payloads: readonly ColumnMeshPayload[],
+  pass: number,
+  out: PayloadRow[],
+): { vertices: number; indices: number } {
+  out.length = 0;
+  let vertices = 0;
+  let indices = 0;
+  for (const p of payloads) {
+    for (let r = 0, o = 0; o < p.rows.length; r++, o += ROW_INTS) {
+      if (p.rows[o + 1] !== pass) continue;
+      out.push({ p, o, r });
+      vertices += p.rows[o + 3]!;
+      indices += p.rows[o + 5]!;
+    }
+  }
+  return { vertices, indices };
+}
+
+const scratchSize = new Vector3();
+const scratchSection = new Box3();
+
+/**
+ * The bounds of payload row `r` placed at `(ox, oy, oz)` (1/8 blocks; 0 for RegionBatch's section-local geometry, the
+ * section's place in its region for RegionMesh's) (SP4b spec §4.1): `sphere` is the payload's sphere × 8 shifted by the
+ * offset, `box` its cube clipped to the 128-unit section there (every position of the section lies in it), or a
+ * degenerate box at the sphere's centre when the two do not meet.
+ */
+export function rowBounds(
+  p: ColumnMeshPayload,
+  r: number,
+  ox: number,
+  oy: number,
+  oz: number,
+  sphere: Sphere,
+  box: Box3,
+): void {
+  const q = 4 * r;
+  sphere.center.set(p.spheres[q]! * UNITS + ox, p.spheres[q + 1]! * UNITS + oy, p.spheres[q + 2]! * UNITS + oz);
+  sphere.radius = p.spheres[q + 3]! * UNITS;
+  box.setFromCenterAndSize(sphere.center, scratchSize.setScalar(2 * sphere.radius));
+  scratchSection.min.set(ox, oy, oz);
+  scratchSection.max.set(ox + SECTION_UNITS, oy + SECTION_UNITS, oz + SECTION_UNITS);
+  box.intersect(scratchSection);
+  if (box.isEmpty()) box.setFromCenterAndSize(sphere.center, scratchSize.setScalar(0));
 }
 
 /** A region whose expected columns are all staged, with their payloads in staging order. */

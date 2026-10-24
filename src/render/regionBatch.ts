@@ -1,7 +1,7 @@
-import { BatchedMesh, Box3, BufferAttribute, BufferGeometry, Group, Matrix4, Sphere, Vector3 } from 'three';
-import { MESH_PASS_CUTOUT, MESH_PASS_OPAQUE, MESH_PASS_TRANSLUCENT, ROW_INTS, type ColumnMeshPayload } from '../mesh/column';
+import { BatchedMesh, Box3, BufferAttribute, BufferGeometry, Group, Matrix4, Sphere } from 'three';
+import { MESH_PASS_CUTOUT, MESH_PASS_OPAQUE, MESH_PASS_TRANSLUCENT, type ColumnMeshPayload } from '../mesh/column';
 import type { MaterialSystem } from './materials/index';
-import { createRegionStaging, sectionOrigin, type StagedRegion } from './regionGrid';
+import { createRegionStaging, rowBounds, rowsOfPass, sectionOrigin, type PayloadRow, type StagedRegion } from './regionGrid';
 import type { SectionRenderer } from './sectionRenderer';
 
 /**
@@ -14,8 +14,6 @@ import type { SectionRenderer } from './sectionRenderer';
 
 /** Geometry units per block: positions are in 1/8 blocks (spec §5.5). */
 const UNITS = 8;
-/** Section-local extent in geometry units. */
-const SECTION_UNITS = 16 * UNITS;
 
 interface Batch {
   readonly mesh: BatchedMesh;
@@ -25,9 +23,11 @@ interface Batch {
 
 const PASSES = [MESH_PASS_OPAQUE, MESH_PASS_CUTOUT, MESH_PASS_TRANSLUCENT] as const;
 
-/** The geometry of payload row `r`: subarrays of the payload's buffers, bounds from its sphere (× 8, in 1/8 blocks). */
-function sectionGeometry(p: ColumnMeshPayload, r: number): BufferGeometry {
-  const o = r * ROW_INTS;
+/**
+ * The geometry of payload row `r` at offset `o` in `p.rows`: subarrays of the payload's buffers, bounds from its sphere
+ * (× 8, in 1/8 blocks, section-local: `rowBounds` at offset 0).
+ */
+function sectionGeometry(p: ColumnMeshPayload, o: number, r: number): BufferGeometry {
   const vertexStart = p.rows[o + 2]!;
   const vertexCount = p.rows[o + 3]!;
   const indexStart = p.rows[o + 4]!;
@@ -36,14 +36,11 @@ function sectionGeometry(p: ColumnMeshPayload, r: number): BufferGeometry {
   g.setAttribute('position', new BufferAttribute(p.position.subarray(4 * vertexStart, 4 * (vertexStart + vertexCount)), 4));
   g.setAttribute('data', new BufferAttribute(p.data.subarray(vertexStart, vertexStart + vertexCount), 1));
   g.setIndex(new BufferAttribute(p.index.subarray(indexStart, indexStart + indexCount), 1));
-  const s = 4 * r;
-  const centre = new Vector3(p.spheres[s]! * UNITS, p.spheres[s + 1]! * UNITS, p.spheres[s + 2]! * UNITS);
-  const radius = p.spheres[s + 3]! * UNITS;
-  g.boundingSphere = new Sphere(centre, radius);
-  // The sphere's cube, clipped to the section (every position lies in 0 … 128).
-  const box = new Box3().setFromCenterAndSize(centre, new Vector3(2 * radius, 2 * radius, 2 * radius));
-  g.boundingBox = box.intersect(new Box3(new Vector3(0, 0, 0), new Vector3(SECTION_UNITS, SECTION_UNITS, SECTION_UNITS)));
-  if (g.boundingBox.isEmpty()) g.boundingBox.setFromCenterAndSize(centre, new Vector3());
+  const sphere = new Sphere();
+  const box = new Box3();
+  rowBounds(p, r, 0, 0, 0, sphere, box);
+  g.boundingSphere = sphere;
+  g.boundingBox = box;
   return g;
 }
 
@@ -76,17 +73,8 @@ export function createRegionBatch(materials: MaterialSystem): SectionRenderer {
   const buildRegion = (region: StagedRegion): number => {
     let added = 0;
     for (const pass of PASSES) {
-      const rows: Array<{ p: ColumnMeshPayload; r: number }> = [];
-      let vertexSum = 0;
-      let indexSum = 0;
-      for (const p of region.payloads) {
-        for (let r = 0, o = 0; o < p.rows.length; r++, o += ROW_INTS) {
-          if (p.rows[o + 1] !== pass) continue;
-          rows.push({ p, r });
-          vertexSum += p.rows[o + 3]!;
-          indexSum += p.rows[o + 5]!;
-        }
-      }
+      const rows: PayloadRow[] = [];
+      const { vertices: vertexSum, indices: indexSum } = rowsOfPass(region.payloads, pass, rows);
       if (rows.length === 0 || indexSum === 0) continue;
       const mesh = new BatchedMesh(rows.length, vertexSum, indexSum, materialOf[pass]);
       mesh.name = `region ${region.rx},${region.rz} pass ${pass}`;
@@ -97,10 +85,10 @@ export function createRegionBatch(materials: MaterialSystem): SectionRenderer {
       mesh.sortObjects = true;
       mesh.visible = revealed;
       const b: Batch = { mesh, origins: new Float64Array(3 * rows.length) };
-      for (const { p, r } of rows) {
-        const g = sectionGeometry(p, r);
+      for (const { p, o, r } of rows) {
+        const g = sectionGeometry(p, o, r);
         const instance = mesh.addInstance(mesh.addGeometry(g));
-        b.origins.set(sectionOrigin(p.cx, p.cz, p.rows[r * ROW_INTS]!), 3 * instance);
+        b.origins.set(sectionOrigin(p.cx, p.cz, p.rows[o]!), 3 * instance);
         place(b, instance);
       }
       batches.push(b);
