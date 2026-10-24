@@ -81,6 +81,14 @@ export interface GpuTimer {
   end(): void;
   /** The GPU ms of the newest frame whose query finished since the last poll; null when none did (or it was disjoint). */
   poll(): number | null;
+  /** The draws timed so far: `begin`'s calls, a skipped one included; the newest draw is `draws() − 1`. */
+  draws(): number;
+  /**
+   * Hands every query finished since the last poll or drain to `sink`, oldest first, with the draw it timed (`draws() − 1`
+   * at its `begin`), so a sample is attributed to its own frame and not to the later frame that read it (the bench's
+   * per-frame GPU ms, SP4b spec §8.4); a disjoint hands nothing over and drops every pending query, as `poll`.
+   */
+  drain(sink: (draw: number, ms: number) => void): void;
 }
 
 export interface WorldRenderer {
@@ -150,36 +158,57 @@ export function createGpuTimer(gl: WebGL2RenderingContext): (GpuTimer & { dispos
   const ext = gl.getExtension('EXT_disjoint_timer_query_webgl2') as TimerQueryExt | null;
   if (ext === null) return null;
   let open: WebGLQuery | null = null;
+  // The open query's draw, then each pending query's (parallel to `pending`).
+  let openDraw = 0;
+  let draws = 0;
   const pending: WebGLQuery[] = [];
+  const pendingDraws: number[] = [];
+  // The newest finished sample of a `poll` (a typed array: a closure double would be boxed on each write).
+  const latest = new Float64Array(1);
+  const keepLatest = (_draw: number, ms: number): void => { latest[0] = ms; };
+  /** Hands the finished queries to `sink` in order; false on a disjoint (every pending query dropped). */
+  const take = (sink: (draw: number, ms: number) => void): boolean => {
+    // A disjoint event (a clock change, a context switch) invalidates every query in flight, finished or not: an
+    // unfinished one kept would report a meaningless time on a later poll.
+    if (gl.getParameter(ext.GPU_DISJOINT_EXT) as boolean) {
+      for (let i = 0; i < pending.length; i++) gl.deleteQuery(pending[i]!);
+      pending.length = 0;
+      pendingDraws.length = 0;
+      return false;
+    }
+    while (pending.length > 0) {
+      const q = pending[0]!;
+      if (!(gl.getQueryParameter(q, gl.QUERY_RESULT_AVAILABLE) as boolean)) break;
+      const ms = (gl.getQueryParameter(q, gl.QUERY_RESULT) as number) / 1e6;
+      gl.deleteQuery(q);
+      pending.shift();
+      sink(pendingDraws.shift()!, ms);
+    }
+    return true;
+  };
   return {
     begin() {
+      const draw = draws++;
       if (open !== null || pending.length >= MAX_PENDING_QUERIES) return;
       open = gl.createQuery();
+      openDraw = draw;
       if (open !== null) gl.beginQuery(ext.TIME_ELAPSED_EXT, open);
     },
     end() {
       if (open === null) return;
       gl.endQuery(ext.TIME_ELAPSED_EXT);
       pending.push(open);
+      pendingDraws.push(openDraw);
       open = null;
     },
     poll() {
-      // A disjoint event (a clock change, a context switch) invalidates every query in flight, finished or not: an
-      // unfinished one kept would report a meaningless time on a later poll.
-      if (gl.getParameter(ext.GPU_DISJOINT_EXT) as boolean) {
-        for (const q of pending) gl.deleteQuery(q);
-        pending.length = 0;
-        return null;
-      }
-      let latest: number | null = null;
-      while (pending.length > 0) {
-        const q = pending[0]!;
-        if (!(gl.getQueryParameter(q, gl.QUERY_RESULT_AVAILABLE) as boolean)) break;
-        latest = (gl.getQueryParameter(q, gl.QUERY_RESULT) as number) / 1e6;
-        gl.deleteQuery(q);
-        pending.shift();
-      }
-      return latest;
+      latest[0] = Number.NaN;
+      if (!take(keepLatest)) return null;
+      return Number.isNaN(latest[0]!) ? null : latest[0]!;
+    },
+    draws: () => draws,
+    drain(sink) {
+      take(sink);
     },
     dispose() {
       if (open !== null) {
@@ -189,6 +218,7 @@ export function createGpuTimer(gl: WebGL2RenderingContext): (GpuTimer & { dispos
       }
       for (const q of pending) gl.deleteQuery(q);
       pending.length = 0;
+      pendingDraws.length = 0;
     },
   };
 }

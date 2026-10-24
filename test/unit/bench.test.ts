@@ -1,7 +1,8 @@
 import { describe, expect, test } from 'vitest';
 import {
-  BENCH_FIELDS, BENCH_FRAME_CAPACITY, BENCH_IDLE_FRAMES, BENCH_LEGS, BENCH_PITCH, BENCH_RD, BENCH_REFILL, BENCH_SEED, BENCH_SHOTS,
-  BENCH_TIME_SPEED, BENCH_Y, benchPose, createBenchDriver, createBenchRecord, createBenchRecorder, summarizeBench,
+  BENCH_FIELDS, BENCH_FRAME_CAPACITY, BENCH_IDLE_FRAMES, BENCH_LEGS, BENCH_PITCH, BENCH_RD, BENCH_REFILL, BENCH_SEED, BENCH_SHOT_ABOVE,
+  BENCH_SHOT_PITCH, BENCH_SHOTS, BENCH_TIME_SPEED, BENCH_Y, benchInterval, benchPose, createBenchDriver, createBenchRecord,
+  createBenchRecorder, summarizeBench,
   type BenchError, type BenchFixed, type BenchPose, type BenchRecord, type BenchResult, type BenchSources,
 } from '../../src/ui/world/bench';
 
@@ -146,16 +147,19 @@ const FIXED: BenchFixed = {
   load: { revealMs: 4000, stageMs: { T: 1000, D: 1500, L: 2000, MESH: 3000 }, longTasks: { count: 3, maxMs: 80 }, first120RenderedMaxMs: 8.3 },
   totals: { dropped: 2, failed: 0, storeFull: 0 },
   refillMs: 1234,
+  rdClampedTo: null,
 };
 
 describe('summarizeBench (SP4b spec §8.3)', () => {
   test('every key of spec §8.3 is present', () => {
     const r = summarizeBench(recordOf([{ leg: 0 }, { leg: 1 }, { leg: 5 }, { leg: 6 }]), FIXED);
     expect(Object.keys(r)).toEqual([
-      'route', 'seed', 'profile', 'rd', 'workers', 'sectionRenderer', 'userAgent', 'renderer', 'vendor', 'multiDraw', 'timerQuery', 'screen', 'dpr',
+      'route', 'seed', 'profile', 'rd', 'rdClampedTo', 'workers', 'sectionRenderer', 'userAgent', 'renderer', 'vendor', 'multiDraw', 'timerQuery', 'screen', 'dpr',
       'pixelRatio', 'displayIntervalMs', 'load', 'stream', 'legs', 'L5', 'L6', 'longFrames', 'structuralFrames',
     ]);
     expect(r.route).toBe('bench=medium');
+    expect(r.rdClampedTo).toBeNull();
+    expect(summarizeBench(recordOf([{ leg: 1 }]), { ...FIXED, rd: 10, rdClampedTo: 10 })).toMatchObject({ rd: 10, rdClampedTo: 10 });
     expect(Object.keys(r.load)).toEqual(['revealMs', 'stageMs', 'longTasks', 'first120RenderedMaxMs']);
     expect(r.load.first120RenderedMaxMs).toBe(8.3);
     expect(Object.keys(r.stream)).toEqual([
@@ -225,22 +229,57 @@ describe('summarizeBench (SP4b spec §8.3)', () => {
     ]), FIXED);
     expect(r.stream.structuralOps).toBe(2);
     expect(r.structuralFrames).toEqual([
-      { frame: 0, leg: 'L1', kind: 'grow', renderer: 'batch', MB: 3.5, mainMs: 4, gpuMs: 6, snappedMs: 2 * HZ240, nextSnappedMs: HZ240 },
-      { frame: 3, leg: 'L3', kind: 'compact', renderer: 'batch', MB: 12, mainMs: 2, gpuMs: null, snappedMs: HZ240, nextSnappedMs: null },
+      { frame: 0, leg: 'L1', kind: 'grow', renderer: 'batch', MB: 3.5, mainMs: 4, gpuMs: 6, snappedMs: 2 * HZ240, nextSnappedMs: HZ240, stutterMs: 2 * HZ240 },
+      { frame: 3, leg: 'L3', kind: 'compact', renderer: 'batch', MB: 12, mainMs: 2, gpuMs: null, snappedMs: HZ240, nextSnappedMs: null, stutterMs: HZ240 },
     ]);
     expect([r.stream.partialColumnFrames, r.stream.mixedColumnFrames, r.stream.genCapMin]).toEqual([2, 1, 3]);
     expect(r.stream.gpuMs).toEqual({ p50: 4, p95: 6, max: 6, samples: 2 });
     expect(summarizeBench(recordOf([{ leg: 1 }]), FIXED).stream.gpuMs).toBeNull();
   });
+
+  test('a structural frame followed by a 40 ms frame has stutterMs 40 (the operation\'s cost lands in the next delta; G1 and §8.4\'s tuning read it)', () => {
+    const r = summarizeBench(recordOf([
+      { leg: 3, structuralKind: 2, structuralMB: 6, snappedMs: HZ240 },
+      { leg: 3, snappedMs: 40 },
+      { leg: 3, structuralKind: 1, snappedMs: 36 },
+      { leg: 3, snappedMs: HZ240 },
+    ]), FIXED);
+    expect(r.structuralFrames.map((e) => [e.snappedMs, e.nextSnappedMs, e.stutterMs])).toEqual([[HZ240, 40, 40], [36, HZ240, 36]]);
+  });
 });
 
 // ---------------------------------------------------------------- the per-frame recorder
 
-function sources(over: { kind?: 'create' | 'grow' | 'instances' | 'optimize' | 'compact' | null; heap?: number } = {}): BenchSources & { heapReads: number } {
+/**
+ * A GPU timer whose draws the test makes (`draw()`, as `world.frame` would) and whose queries finish when the test says
+ * (`finish(draw, ms)`); `drain` hands the finished ones over oldest first, as `createGpuTimer` does.
+ */
+function fakeTimer() {
+  let draws = 0;
+  const finished: Array<[number, number]> = [];
+  return {
+    draw: (): void => { draws++; },
+    finish: (draw: number, ms: number): void => { finished.push([draw, ms]); },
+    timer: {
+      begin() {},
+      end() {},
+      poll: () => null,
+      draws: () => draws,
+      drain(sink: (draw: number, ms: number) => void) {
+        finished.sort((a, b) => a[0] - b[0]);
+        for (const [d, ms] of finished) sink(d, ms);
+        finished.length = 0;
+      },
+    },
+  };
+}
+
+function sources(over: { kind?: 'create' | 'grow' | 'instances' | 'optimize' | 'compact' | null; heap?: number } = {}): BenchSources & { heapReads: number; gpu: ReturnType<typeof fakeTimer> } {
   const MIB = 1 << 20;
-  let polls = 0;
+  const gpu = fakeTimer();
   const s = {
     heapReads: 0,
+    gpu,
     sections: {
       counts(out: Parameters<BenchSources['sections']['counts']>[0]) {
         out.lastStructural = over.kind ?? null;
@@ -264,7 +303,7 @@ function sources(over: { kind?: 'create' | 'grow' | 'instances' | 'optimize' | '
         out.drawingBufferBytes = 4 * MIB;
         return out;
       },
-      gpuTimer: () => ({ begin() {}, end() {}, poll: () => (polls++ % 2 === 0 ? 1.5 : null) }),
+      gpuTimer: () => gpu.timer,
     },
     heapMB() {
       s.heapReads++;
@@ -279,7 +318,10 @@ describe('createBenchRecorder: one frame\'s fields, nothing allocated per frame 
   test('writes every field at n, then n + 1; the breakdown grouped as geometry, textures, drawing buffer (plan)', () => {
     const rec = createBenchRecord(8);
     rec.leg[0] = 3;
-    const recorder = createBenchRecorder(rec, sources({ kind: 'optimize' }), HZ240);
+    const src = sources({ kind: 'optimize' });
+    const recorder = createBenchRecorder(rec, src, HZ240);
+    src.gpu.draw();
+    src.gpu.finish(0, 1.5);
     recorder.frame(8.4, 2.5, 0.3, 0.9, 12, 4);
     expect(rec.n).toBe(1);
     const row = Object.fromEntries(BENCH_FIELDS.map((f) => [f, rec[f][0]]));
@@ -288,8 +330,28 @@ describe('createBenchRecorder: one frame\'s fields, nothing allocated per frame 
       structuralMB: 3, gpuMs: 1.5, calls: 42, triangles: 123_456, geometryMB: 21, texturesMB: 10, drawingBufferMB: 4, heapMB: 100,
       sabMB: 256, partial: 1, mixed: 0, genCap: 4,
     });
+    src.gpu.draw();
     recorder.frame(HZ240, 1, 0, 0, 0, 4);
     expect([rec.n, rec.gpuMs[1], rec.structuralKind[1]]).toEqual([2, Number.NaN, 4]);
+  });
+
+  test('each GPU sample lands on the frame whose draw it timed, not on the frame that polled it (Task 26b, review M2)', () => {
+    const rec = createBenchRecord(16);
+    const src = sources();
+    const recorder = createBenchRecorder(rec, src, HZ240);
+    // Two draws before the first recorded frame (the warm-up, the reveal): their samples have no row.
+    src.gpu.draw();
+    src.gpu.draw();
+    // Frame i's own draw is draw i + 2 (`world.frame` runs before the recorder). The queries finish later: at frame 2
+    // draw 1 (no row) and draw 2 (row 0), at frame 3 draw 3 (row 1), at frame 5 draws 5 and 6 together (rows 3 and 4);
+    // draw 4 (row 2) never finishes and draw 7 (row 5) is still pending.
+    const finishAt: Record<number, Array<[number, number]>> = { 2: [[1, 99], [2, 10]], 3: [[3, 11]], 5: [[5, 13], [6, 14]] };
+    for (let i = 0; i < 6; i++) {
+      src.gpu.draw();
+      for (const [d, ms] of finishAt[i] ?? []) src.gpu.finish(d, ms);
+      recorder.frame(HZ240, 1, 0, 0, 0, 1);
+    }
+    expect(Array.from(rec.gpuMs.subarray(0, 6))).toEqual([10, 11, Number.NaN, 13, 14, Number.NaN]);
   });
 
   test('no structural operation records kind 0 and 0 MB', () => {
@@ -390,6 +452,77 @@ describe('createBenchDriver (the page\'s hook, SP4b spec §8.3)', () => {
     expect(late.ready()).toBe(1);
   });
 
+  test('a reservation cap below 12 clamps every RD the script wants to rdMax and records rdClampedTo (Task 26b, review M3)', () => {
+    const { driver } = driverOf(null);
+    expect(driver.rdClampedTo).toBeNull();
+    driver.bind({ rdMax: 10, heightAt: () => null });
+    expect(driver.rdClampedTo).toBe(10);
+    const out = pose();
+    const wants: number[] = [];
+    for (let t = 0; t < 95; t += 0.05) wants.push(driver.pose(t, { ...out, x: 0, z: 0 }, 10)!);
+    expect(Math.max(...wants)).toBe(10);
+    // L6 still lowers to 8 and raises back, to the cap.
+    expect([...new Set(wants)]).toEqual([10, 8]);
+    expect(wants[Math.round(81 / 0.05)]).toBe(8);
+    expect(wants[Math.round(90 / 0.05)]).toBe(10);
+    // A cap at 12 or above clamps nothing.
+    const free = driverOf(null);
+    free.driver.bind({ rdMax: 16, heightAt: () => null });
+    expect(free.driver.rdClampedTo).toBeNull();
+    expect(free.driver.pose(10, pose(), 12)).toBe(12);
+  });
+
+  test('under a cap rd12back waits for the fog at the cap, and `first` asks for the cap', () => {
+    const back = driverOf('rd12back');
+    back.driver.bind({ rdMax: 10, heightAt: () => null });
+    const o = pose();
+    back.driver.pose(0, { ...o, x: 0, z: 0 }, 10);
+    expect(back.driver.pose(85.5, o, 9.5)).toBe(10);
+    for (const t of [86, 86.1, 86.2]) expect(back.driver.pose(t, o, 10)).toBe(10);
+    expect(back.driver.pose(86.3, o, 10)).toBeNull();
+    expect(back.ready()).toBe(1);
+    const first = driverOf('first');
+    first.driver.bind({ rdMax: 8, heightAt: () => null });
+    expect(first.driver.pose(0, pose(), 8)).toBe(8);
+  });
+
+  test('a shot\'s three frames lower the camera to heightAt(floor x, floor z) + 32 at pitch −20, keeping x, z and yaw (rulings R9)', () => {
+    expect([BENCH_SHOT_ABOVE, BENCH_SHOT_PITCH]).toEqual([32, -20]);
+    const { driver, ready } = driverOf('fly96');
+    const asked: Array<[number, number]> = [];
+    driver.bind({ rdMax: 12, heightAt: (x, z) => { asked.push([x, z]); return 71; } });
+    const out: BenchPose = { x: 0.5, y: 80, z: -0.25, yaw: 0, pitch: 0 };
+    driver.pose(0, out, 12);
+    // Before the shot's moment the route's pose holds.
+    driver.pose(49.9, out, 12);
+    expect([out.y, out.pitch]).toEqual([BENCH_Y, BENCH_PITCH]);
+    expect(asked).toEqual([]);
+    for (let i = 0; i < 3; i++) {
+      driver.pose(50.1 + i, out, 12);
+      expect(out).toEqual({ x: 400.5, y: 71 + 32, z: -0.25 - 15 * 96, yaw: 0, pitch: -20 });
+    }
+    expect(asked).toEqual([[400, -1441]]);
+    expect(driver.pose(53.2, out, 12)).toBeNull();
+    expect(ready()).toBe(1);
+  });
+
+  test('where heightAt has no value the shot keeps the route\'s pose; a run without a shot never lowers the camera', () => {
+    const hole = driverOf('fly384');
+    hole.driver.bind({ rdMax: 12, heightAt: () => null });
+    const out: BenchPose = { x: 0, y: 80, z: 0, yaw: 0, pitch: 0 };
+    hole.driver.pose(0, out, 12);
+    for (let i = 0; i < 3; i++) {
+      hole.driver.pose(67.6 + i * 0.01, out, 12);
+      expect([out.x, out.y, out.z, out.yaw, out.pitch]).toEqual([400, BENCH_Y, -2880 - 2.5 * 384, 0, BENCH_PITCH]);
+    }
+    const run = driverOf(null);
+    run.driver.bind({ rdMax: 12, heightAt: () => 64 });
+    for (let t = 0; t < 95; t += 0.5) {
+      run.driver.pose(t, out, 12);
+      expect([out.y, out.pitch]).toEqual([BENCH_Y, BENCH_PITCH]);
+    }
+  });
+
   test('`first` keeps the first view after the reveal: the pose is not written', () => {
     const { driver, ready } = driverOf('first');
     const out: BenchPose = { x: 5, y: 90, z: 6, yaw: 33, pitch: -10 };
@@ -397,5 +530,13 @@ describe('createBenchDriver (the page\'s hook, SP4b spec §8.3)', () => {
     expect(out).toEqual({ x: 5, y: 90, z: 6, yaw: 33, pitch: -10 });
     expect(driver.pose(0.05, out, 12)).toBeNull();
     expect(ready()).toBe(1);
+  });
+});
+
+describe('benchInterval (the idle frames\' display interval, rulings R5 (a); review M5)', () => {
+  test('the median of the idle deltas, or 1000/60 when it is not finite', () => {
+    expect(benchInterval(Float64Array.of(4.1, 4.2, 4.3, 4.2, 4.2))).toBeCloseTo(4.2, 9);
+    expect(benchInterval(new Float64Array(BENCH_IDLE_FRAMES).fill(Number.NaN))).toBe(1000 / 60);
+    expect(benchInterval(new Float64Array(0))).toBe(1000 / 60);
   });
 });

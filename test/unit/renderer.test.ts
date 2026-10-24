@@ -103,6 +103,61 @@ describe('createGpuTimer (SP4b spec §4.5)', () => {
     t.dispose();
     expect(s.deleted).toHaveLength(12);
   });
+
+  test('drain hands every finished query, oldest first, with the draw it timed; draws counts begin\'s calls, a skipped one included (Task 26b)', () => {
+    const { gl, s } = fakeGl(true);
+    const t = createGpuTimer(gl)!;
+    expect(t.draws()).toBe(0);
+    for (let i = 0; i < 3; i++) {
+      t.begin();
+      t.end();
+    }
+    expect(t.draws()).toBe(3);
+    const seen: Array<[number, number]> = [];
+    const sink = (draw: number, ms: number): void => { seen.push([draw, ms]); };
+    t.drain(sink);
+    expect(seen).toEqual([]);
+    // Draws 0 and 1 finished, 2 did not: both are handed over, not only the newest.
+    s.results.set(s.created[0]!, 2_000_000);
+    s.results.set(s.created[1]!, 3_500_000);
+    s.available.add(s.created[0]!).add(s.created[1]!);
+    t.drain(sink);
+    expect(seen).toEqual([[0, 2], [1, 3.5]]);
+    // Eight pending queries make begin skip a draw; the draw still counts, so the next query is tagged after it.
+    for (let i = 0; i < 7; i++) {
+      t.begin();
+      t.end();
+    }
+    expect(s.created).toHaveLength(10);
+    t.begin();
+    t.end();
+    expect([t.draws(), s.created.length]).toEqual([11, 10]);
+    s.results.set(s.created[2]!, 1_000_000);
+    s.available.add(s.created[2]!);
+    t.drain(sink);
+    expect(seen.at(-1)).toEqual([2, 1]);
+    t.begin();
+    t.end();
+    s.results.set(s.created[10]!, 5_000_000);
+    for (const q of s.created) if (!s.results.has(q)) s.results.set(q, 0);
+    for (const q of s.created) s.available.add(q);
+    seen.length = 0;
+    t.drain(sink);
+    expect(seen.map((x) => x[0])).toEqual([3, 4, 5, 6, 7, 8, 9, 11]);
+    expect(seen.at(-1)).toEqual([11, 5]);
+    // A disjoint hands nothing over and drops every pending query.
+    t.begin();
+    t.end();
+    s.results.set(s.created[11]!, 1_000_000);
+    s.available.add(s.created[11]!);
+    s.disjoint = true;
+    seen.length = 0;
+    t.drain(sink);
+    expect(seen).toEqual([]);
+    s.disjoint = false;
+    expect(t.poll()).toBeNull();
+    t.dispose();
+  });
 });
 
 describe('withSectionsShown (SP4a spec §6.4, SP4b spec §4.5)', () => {

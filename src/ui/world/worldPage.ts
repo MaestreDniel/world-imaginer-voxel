@@ -71,7 +71,6 @@ import { attachInput, isTextEntry } from '../../player/input';
 import { DEFAULT_KEYMAP, type Action } from '../../player/keymap';
 import { createFpsLimiter, type FpsLimiter } from '../../render/fpsLimiter';
 import type { FrameState } from '../../render/frameState';
-import { medianInterval } from '../../render/frameTiming';
 import { createWorldRenderer, type GpuEstimate, type WorldRenderer } from '../../render/renderer';
 import { createSectionRendererCounts, selectSectionRenderer, type SectionRendererKind } from '../../render/sectionRenderer';
 import { createStore, type VoxelStore } from '../../world/store/store';
@@ -85,7 +84,9 @@ import { tips } from '../loading/tips';
 import { decodeMapState, encodeMapState, openMapSession } from '../map/mapState';
 import { cryptoSeed } from '../seedBox';
 import { SETTINGS_DEFAULTS, loadSettings, saveSettings, type WorldSettings } from '../settings';
-import { BENCH_IDLE_FRAMES, BENCH_REFILL, BENCH_TIME_SPEED, createBenchRecorder, jsHeapMB, type BenchDriver, type BenchPose } from './bench';
+import {
+  BENCH_IDLE_FRAMES, BENCH_REFILL, BENCH_TIME_SPEED, benchInterval, createBenchRecorder, jsHeapMB, type BenchDriver, type BenchPose,
+} from './bench';
 import { firstView } from './firstView';
 import type { FlightContext } from './flight';
 import { FILL_SCAN_FRAMES, createFogEase, filledRadius, type FogEase } from './fogEase';
@@ -999,6 +1000,11 @@ export function mountWorldPage(root: HTMLElement, q: WorldQuery, hash: string, o
       };
       world.onContextLost(() => fail('The graphics context was lost.', null));
       try {
+        // The script's RD steps never exceed the reservation's cap (Task 26b); the review shots' camera reads the ground's
+        // height under the frozen pose (rulings R9).
+        bench.bind({ rdMax, heightAt: (x, z) => store.heightAt('motionBlocking', x, z) });
+        // L5's refill is measured at the script's top RD, the cap when the reservation clamps it.
+        const refillRd = Math.min(BENCH_REFILL.rd, rdMax);
         // The live RD as the help would set it, never saved (SP4b spec §5).
         const fog = createFogEase(loadRd);
         const fogStep = createFogStep(fog, fly, isRevealed, loadRd);
@@ -1028,7 +1034,8 @@ export function mountWorldPage(root: HTMLElement, q: WorldQuery, hash: string, o
           idle[i] = now - prev;
           prev = now;
         }
-        const interval = medianInterval(idle);
+        // Through the page's finite fallback (rulings R5 (a)): a NaN interval would snap every frame time to NaN.
+        const interval = benchInterval(idle);
 
         // 2. The streaming frame, timed in its coordinator and pump; one record row per rendered frame.
         // [coordinator ms, upload ms, rows, the callback's start, the raw delta, the script time (s), its start]
@@ -1089,7 +1096,7 @@ export function mountWorldPage(root: HTMLElement, q: WorldQuery, hash: string, o
             // L5's refill (spec §8.3): the first frame whose RD 12 disc around the camera's column is revealed.
             const tS = timing[T_SCRIPT]!;
             if (refillMs === null && tS >= BENCH_REFILL.fromS && tS < BENCH_REFILL.toS
-              && filledRadius(Math.floor(fly.x) >> 4, Math.floor(fly.z) >> 4, BENCH_REFILL.rd, isRevealed) === BENCH_REFILL.rd) {
+              && filledRadius(Math.floor(fly.x) >> 4, Math.floor(fly.z) >> 4, refillRd, isRevealed) === refillRd) {
               refillMs = (tS - BENCH_REFILL.fromS) * 1000;
             }
             if (n < FIRST_FRAMES) {
@@ -1107,6 +1114,7 @@ export function mountWorldPage(root: HTMLElement, q: WorldQuery, hash: string, o
             seed: session.state.seedText,
             profile: session.state.profile,
             rd: loadRd,
+            rdClampedTo: bench.rdClampedTo,
             workers: workers.size,
             sectionRenderer: kind,
             userAgent: navigator.userAgent,

@@ -8,6 +8,7 @@ import { applyRenderDistance, cameraFar } from '../../src/render/renderer';
 import { mountHelp } from '../../src/ui/help';
 import { SETTINGS_DEFAULTS, type WorldSettings } from '../../src/ui/settings';
 import { StoreCorrupt } from '../../src/world/store/pool';
+import { createBenchDriver } from '../../src/ui/world/bench';
 import { createFogEase } from '../../src/ui/world/fogEase';
 import { createReloader } from '../../src/ui/world/reload';
 import {
@@ -275,6 +276,30 @@ describe('createRdControl (SP4b spec §5, D18; Review Focus 5)', () => {
     expect(r.fog.step(0, 12)).toBe(fogRd);
     for (let i = 0; i < 60; i++) fogRd = r.fog.step(16.667, 12);
     expect((fogRd - 1) * 16).toBe(144);
+  });
+
+  test('the bench under a reservation cap of 10: coordinator.setRenderDistance never sees an RD above 10 over the whole script (Task 26b, review M3)', () => {
+    const r = rig(10);
+    // The coordinator throws above its rdMax, as the real one does (`setRenderDistance`'s RangeError).
+    r.coordinator.setRenderDistance.mockImplementation((rd) => {
+      if (rd > 10) throw new RangeError(`rd ${rd} above rdMax 10`);
+    });
+    const driver = createBenchDriver({ shot: null, capacity: 64, publish: { result() {}, shotReady() {} } });
+    driver.bind({ rdMax: 10, heightAt: () => null });
+    // The page's loop: the script's RD applied through the control when it differs from the live one.
+    let liveRd = 10;
+    const pose = { x: 0, y: 0, z: 0, yaw: 0, pitch: 0 };
+    for (let t = 0; ; t += 1 / 60) {
+      const want = driver.pose(t, pose, liveRd);
+      if (want === null) break;
+      if (want !== liveRd) {
+        r.control.apply(want);
+        liveRd = want;
+      }
+    }
+    expect(r.coordinator.setRenderDistance.mock.calls.map((c) => c[0])).toEqual([8, 10]);
+    expect(driver.rdClampedTo).toBe(10);
+    expect(r.camera.far).toBe(cameraFar(10));
   });
 
   test('the slow notice\'s action lowers the RD live to lowerRd(rd)', () => {

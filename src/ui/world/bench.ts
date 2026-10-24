@@ -13,18 +13,20 @@
  *    cells, by hand).
  *
  * `&shot=<name>` (plan; spec §8.7, the review screenshots, taken by `measureChrome.ts --shot`): the script freezes at the
- * shot's moment, the page renders three more frames and stops, and `window.__wiBench.shotReady` turns true; nothing is
- * drawn over the world and no JSON is published.
+ * shot's moment, the camera drops to 32 blocks above the ground under it at pitch −20 (rulings R9), the page renders
+ * three more frames and stops, and `window.__wiBench.shotReady` turns true; nothing is drawn over the world and no JSON
+ * is published.
  *
  * The world page imports this module's values; this module loads the page with a dynamic `import()`, so the two do not
  * import each other statically.
  */
 import type { Stage } from '../../engine/rings';
-import { percentile, snapFrameTime } from '../../render/frameTiming';
+import { medianInterval, percentile, snapFrameTime } from '../../render/frameTiming';
 import type { GpuEstimate, WorldRenderer } from '../../render/renderer';
 import type { RevealProbe, SectionRenderer, SectionRendererCounts, SectionRendererKind, StructuralKind } from '../../render/sectionRenderer';
 import { el } from '../common/dom';
 import { DEFAULT_MAP_STATE, encodeMapState } from '../map/mapState';
+import { displayInterval } from './frameStep';
 import { parseWorldQuery, type WorldQuery } from './query';
 
 /** The route's world and camera (spec §8.3). */
@@ -134,13 +136,15 @@ export function benchPose(tS: number, start: { readonly x: number; readonly z: n
       z += d * headingZ(heading);
       yaw = heading;
     }
+    // Indexed loops: a for-of makes an iterator per call (rulings R7; the page calls this every frame).
+    const steps = l.rdSteps;
     if (t < end) {
       leg = i;
-      for (const s of l.rdSteps) if (into >= s.atS) rd = s.rd;
+      for (let k = 0; k < steps.length; k++) if (into >= steps[k]!.atS) rd = steps[k]!.rd;
       break;
     }
     // A finished leg's last RD step holds after it (only at the clamped end: L6 is the last leg).
-    for (const s of l.rdSteps) rd = s.rd;
+    if (steps.length > 0) rd = steps[steps.length - 1]!.rd;
   }
   out.x = x;
   out.y = BENCH_Y;
@@ -150,6 +154,14 @@ export function benchPose(tS: number, start: { readonly x: number; readonly z: n
   POSE_RESULT.leg = leg;
   POSE_RESULT.rd = rd;
   return POSE_RESULT;
+}
+
+/**
+ * The display interval from the idle frames' rAF deltas (spec §8.3): their median through the page's finite fallback
+ * (`displayInterval`, 1000/60 when the median is not finite; rulings R5 (a)), so no frame time snaps to NaN.
+ */
+export function benchInterval(idle: ArrayLike<number>): number {
+  return displayInterval(medianInterval(idle));
 }
 
 // ---------------------------------------------------------------- the record
@@ -164,7 +176,8 @@ export type BenchField = (typeof BENCH_FIELDS)[number];
 /**
  * The bench's frames: one `Float64Array` column per field and the count `n`, so that recording a frame allocates
  * nothing. `leg` is the leg's index; `structuralKind` 0 for none, 1-5 for create / grow / instances / optimize /
- * compact; `gpuMs` NaN without a timer sample; `heapMB` NaN where the browser does not expose it.
+ * compact; `gpuMs` the frame's own draw's GPU time, written when its query finishes (1-3 frames later), NaN without a
+ * sample; `heapMB` NaN where the browser does not expose it.
  */
 export type BenchRecord = { n: number; readonly capacity: number } & { readonly [K in BenchField]: Float64Array };
 
@@ -202,7 +215,10 @@ export interface BenchSources {
  * `pose`); a full record takes no more. `rawMs` is snapped to `intervalMs` (`snapFrameTime`). Read after the render:
  * the pump's last structural operation (`counts(out).lastStructural`, `lastStructuralBytes`), the probe, the GPU
  * estimate grouped as geometry (the sections and the sky), textures (the texture array and the lightmap) and the
- * drawing buffer (plan), the GPU timer's newest sample, the draw calls and triangles; every 30 frames the memory.
+ * drawing buffer (plan), the draw calls and triangles; every 30 frames the memory. The GPU timer's samples finish 1-3
+ * frames after their draw: each frame keeps its draw's tag (`timer.draws() − 1`, the page renders once per recorded
+ * frame) and every finished sample is written to the row of the draw it timed (Task 26b), so a structural frame's
+ * `gpuMs` is its own; a sample of a draw before the first row (the warm-up, the reveal) has no row and is dropped.
  */
 export function createBenchRecorder(rec: BenchRecord, src: BenchSources, intervalMs: number): {
   frame(rawMs: number, mainMs: number, coordinatorMs: number, uploadMs: number, rows: number, genCap: number): void;
@@ -214,6 +230,15 @@ export function createBenchRecorder(rec: BenchRecord, src: BenchSources, interva
   const probe: RevealProbe = { columns: 0, partial: 0, mixed: 0 };
   const gpu: GpuEstimate = { sectionsBytes: 0, skyBytes: 0, textureBytes: 0, lightmapBytes: 0, drawingBufferBytes: 0 };
   const timer = src.world.gpuTimer();
+  // Each row's draw (the timer's tag), increasing with the row.
+  const draws = new Float64Array(rec.capacity);
+  // The row being recorded, where the sink's search starts.
+  let row = 0;
+  const toRow = (draw: number, ms: number): void => {
+    let j = row;
+    while (j >= 0 && draws[j]! > draw) j--;
+    if (j >= 0 && draws[j] === draw) rec.gpuMs[j] = ms;
+  };
   // The last memory samples, in a typed array (a closure double would be boxed on each write).
   const memory = Float64Array.of(Number.NaN, Number.NaN);
   return {
@@ -230,8 +255,12 @@ export function createBenchRecorder(rec: BenchRecord, src: BenchSources, interva
       const kind = counts.lastStructural === null ? 0 : STRUCTURAL_KINDS.indexOf(counts.lastStructural);
       rec.structuralKind[i] = kind;
       rec.structuralMB[i] = kind === 0 ? 0 : counts.lastStructuralBytes / MIB;
-      const ms = timer === null ? null : timer.poll();
-      rec.gpuMs[i] = ms === null ? Number.NaN : ms;
+      rec.gpuMs[i] = Number.NaN;
+      if (timer !== null) {
+        draws[i] = timer.draws() - 1;
+        row = i;
+        timer.drain(toRow);
+      }
       const info = src.world.renderer.info.render;
       rec.calls[i] = info.calls;
       rec.triangles[i] = info.triangles;
@@ -267,6 +296,8 @@ export interface BenchFixed {
   readonly seed: string;
   readonly profile: string;
   readonly rd: number;
+  /** The reservation's RD cap when it is below 12: the script's RD steps were clamped to it (Task 26b); else null. */
+  readonly rdClampedTo: number | null;
   readonly workers: number;
   readonly sectionRenderer: SectionRendererKind;
   readonly userAgent: string;
@@ -345,6 +376,7 @@ export interface BenchResult {
   readonly seed: string;
   readonly profile: string;
   readonly rd: number;
+  readonly rdClampedTo: number | null;
   readonly workers: number;
   readonly sectionRenderer: SectionRendererKind;
   readonly userAgent: string;
@@ -369,11 +401,14 @@ export interface BenchResult {
   }>;
   /**
    * Every frame holding a structural operation: `snappedMs` is its own frame time (the gap ending at its rAF, as in
-   * `longFrames`), `nextSnappedMs` the next frame's, the gap this frame's work fills (null for the last frame).
+   * `longFrames`), `nextSnappedMs` the next frame's, the gap this frame's work fills (null for the last frame), and
+   * `stutterMs` the larger of the two: the stutter the operation causes, which G1's "≤ 33 ms" check and spec §8.4's
+   * tuning read (Task 26b). `gpuMs` is the frame's own draw's (the timer's samples are tagged with their draw).
    */
   readonly structuralFrames: ReadonlyArray<{
     readonly frame: number; readonly leg: string; readonly kind: StructuralKind; readonly renderer: SectionRendererKind; readonly MB: number;
     readonly mainMs: number; readonly gpuMs: number | null; readonly snappedMs: number; readonly nextSnappedMs: number | null;
+    readonly stutterMs: number;
   }>;
 }
 
@@ -507,9 +542,12 @@ export function summarizeBench(rec: BenchRecord, fixed: BenchFixed): BenchResult
     const kind = STRUCTURAL_KINDS[rec.structuralKind[i]!];
     if (kind !== null && kind !== undefined) {
       const ms = rec.gpuMs[i]!;
+      const snappedMs = rec.snappedMs[i]!;
+      const nextSnappedMs = i + 1 < rec.n ? rec.snappedMs[i + 1]! : null;
       structuralFrames.push({
         frame: i, leg, kind, renderer: fixed.sectionRenderer, MB: rec.structuralMB[i]!, mainMs: rec.mainMs[i]!,
-        gpuMs: Number.isFinite(ms) ? ms : null, snappedMs: rec.snappedMs[i]!, nextSnappedMs: i + 1 < rec.n ? rec.snappedMs[i + 1]! : null,
+        gpuMs: Number.isFinite(ms) ? ms : null, snappedMs, nextSnappedMs,
+        stutterMs: nextSnappedMs === null ? snappedMs : Math.max(snappedMs, nextSnappedMs),
       });
     }
   }
@@ -518,6 +556,7 @@ export function summarizeBench(rec: BenchRecord, fixed: BenchFixed): BenchResult
     seed: fixed.seed,
     profile: fixed.profile,
     rd: fixed.rd,
+    rdClampedTo: fixed.rdClampedTo,
     workers: fixed.workers,
     sectionRenderer: fixed.sectionRenderer,
     userAgent: fixed.userAgent,
@@ -565,6 +604,13 @@ const SHOT_AT: Readonly<Record<Exclude<BenchShot, 'rd12back'>, number>> = {
 const RD12BACK_FROM = LEG_STARTS[6]! + 5;
 /** The frames rendered at the frozen pose before the shot is ready. */
 const SHOT_FRAMES = 3;
+/**
+ * The review shots' camera (rulings R9; spec §8.7): at the frozen moment the camera drops to this many blocks above the
+ * ground under it and looks down at this pitch, so the ground the view centre meets (about 88 blocks ahead) lies inside
+ * RD 8's fog while the sky stays in the frame; the route's y 150 and pitch −15 show only sky and fog at RD 8.
+ */
+export const BENCH_SHOT_ABOVE = 32;
+export const BENCH_SHOT_PITCH = -20;
 
 /** Where the driver's output goes: `window.__wiBench` and the panel in the page, a list in a test. */
 export interface BenchPublish {
@@ -572,26 +618,41 @@ export interface BenchPublish {
   shotReady(): void;
 }
 
+/** What the page gives the driver once its world exists, before the script's first pose. */
+export interface BenchWorld {
+  /** The largest RD the store's reservation allows (`reservationRdCap`, capped at RD_MAX). */
+  readonly rdMax: number;
+  /** The ground's height at block column (x, z): the store's `motionBlocking` heightmap, null when not Published. */
+  heightAt(x: number, z: number): number | null;
+}
+
 /**
- * The world page's bench hook (`WorldPageOptions.bench`). The page calls `pose` before each frame step, with the
- * camera's current pose in `out` and the fog's RD; `pose` writes the script's pose (the first call fixes the script's
- * start where the camera is) and the frame's leg at `record.leg[record.n]`, and returns the RD the script wants, which
- * the page applies live when it changes; null ends the script, and the page then calls `done`. The page writes each
- * rendered frame into `record` (`createBenchRecorder`). `fail` ends the script with an error (a failure after the
- * reveal), once.
+ * The world page's bench hook (`WorldPageOptions.bench`). The page calls `bind` once after the reveal, then `pose`
+ * before each frame step, with the camera's current pose in `out` and the fog's RD; `pose` writes the script's pose
+ * (the first call fixes the script's start where the camera is) and the frame's leg at `record.leg[record.n]`, and
+ * returns the RD the script wants, never above `rdMax` (Task 26b: a reservation cap below 12 clamps the script's RD
+ * steps, and `rdClampedTo` records the cap), which the page applies live when it changes; null ends the script, and the
+ * page then calls `done`. The page writes each rendered frame into `record` (`createBenchRecorder`). `fail` ends the
+ * script with an error (a failure after the reveal), once.
  */
 export interface BenchDriver {
   readonly record: BenchRecord;
+  /** The RD the script's steps were clamped to (the reservation's cap below 12), or null. */
+  readonly rdClampedTo: number | null;
+  bind(world: BenchWorld): void;
   pose(tS: number, out: BenchPose, fogRd: number): number | null;
   done(fixed: BenchFixed): void;
   fail(error: string): void;
 }
 
-/** When to freeze for `shot` at script time `tS`: the time to freeze the pose at, or null to go on. */
-function freezeTime(shot: BenchShot, tS: number, fogRd: number): number | null {
+/**
+ * When to freeze for `shot` at script time `tS`: the time to freeze the pose at, or null to go on. rd12back waits for
+ * the fog back at the script's top RD (`topRd`: 12, or the reservation's cap below it).
+ */
+function freezeTime(shot: BenchShot, tS: number, fogRd: number, topRd: number): number | null {
   if (shot !== 'rd12back') return tS >= SHOT_AT[shot] ? SHOT_AT[shot] : null;
   if (tS >= BENCH_SECONDS) return BENCH_SECONDS;
-  return tS >= RD12BACK_FROM && fogRd >= BENCH_RD ? tS : null;
+  return tS >= RD12BACK_FROM && fogRd >= topRd ? tS : null;
 }
 
 export function createBenchDriver(o: { readonly shot: BenchShot | null; readonly capacity?: number; readonly publish: BenchPublish }): BenchDriver {
@@ -601,8 +662,20 @@ export function createBenchDriver(o: { readonly shot: BenchShot | null; readonly
   let ended = false;
   let frozenAt = -1;
   let frozenFrames = 0;
+  // The reservation's RD cap (none until `bind`) and the shot's lowered y (NaN: the route's pose).
+  let rdMax = Number.POSITIVE_INFINITY;
+  let heightAt: BenchWorld['heightAt'] | null = null;
+  let shotY = Number.NaN;
+  const capped = (rd: number): number => Math.min(rd, rdMax);
   return {
     record,
+    get rdClampedTo() {
+      return rdMax < BENCH_RD ? rdMax : null;
+    },
+    bind(world) {
+      rdMax = world.rdMax;
+      heightAt = (x, z) => world.heightAt(x, z);
+    },
     pose(tS, out, fogRd) {
       if (ended) return null;
       if (!started) {
@@ -611,17 +684,28 @@ export function createBenchDriver(o: { readonly shot: BenchShot | null; readonly
         start.z = out.z;
       }
       if (o.shot !== null) {
-        if (frozenAt < 0) frozenAt = freezeTime(o.shot, tS, fogRd) ?? -1;
+        if (frozenAt < 0) frozenAt = freezeTime(o.shot, tS, fogRd, capped(BENCH_RD)) ?? -1;
         if (frozenAt >= 0) {
           if (frozenFrames >= SHOT_FRAMES) {
             ended = true;
             o.publish.shotReady();
             return null;
           }
-          frozenFrames++;
           // `first` keeps the first view the page placed at the reveal.
-          if (o.shot === 'first') return BENCH_RD;
-          return benchPose(frozenAt, start, out).rd;
+          if (o.shot === 'first') {
+            frozenFrames++;
+            return capped(BENCH_RD);
+          }
+          const rd = benchPose(frozenAt, start, out).rd;
+          // The shot's camera (rulings R9): the ground's height under the frozen pose, read once at the first frozen
+          // frame and kept for the three; where it has no value (an unloaded column) the route's pose stays.
+          if (frozenFrames === 0 && heightAt !== null) shotY = heightAt(Math.floor(out.x), Math.floor(out.z)) ?? Number.NaN;
+          if (!Number.isNaN(shotY)) {
+            out.y = shotY + BENCH_SHOT_ABOVE;
+            out.pitch = BENCH_SHOT_PITCH;
+          }
+          frozenFrames++;
+          return capped(rd);
         }
       }
       if (tS >= BENCH_SECONDS) {
@@ -630,7 +714,7 @@ export function createBenchDriver(o: { readonly shot: BenchShot | null; readonly
       }
       const r = benchPose(tS, start, out);
       if (record.n < record.capacity) record.leg[record.n] = r.leg;
-      return r.rd;
+      return capped(r.rd);
     },
     done(fixed) {
       ended = true;
