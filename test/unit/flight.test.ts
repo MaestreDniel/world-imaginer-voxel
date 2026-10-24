@@ -1,5 +1,5 @@
 import { describe, expect, test } from 'vitest';
-import { cameraPitch, catmullRom, flightWaypoints, summarizeFlight, type FlightExtra } from '../../src/ui/world/flight';
+import { cameraPitch, catmullRom, flightInterval, flightWaypoints, summarizeFlight, type FlightExtra } from '../../src/ui/world/flight';
 
 /** A rolling heightmap: MOTION_BLOCKING between 44 and 84 around y 64. */
 const ground = (x: number, z: number): number => Math.floor(64 + 20 * Math.sin(x / 30) * Math.cos(z / 40));
@@ -200,5 +200,13 @@ describe('summarizeFlight (SP4a spec §9.5; ruling P9)', () => {
     expect(r['screen']).toEqual({ width: 1920, height: 1080 });
     // The JSON round trip keeps every key (no undefined values).
     expect(Object.keys(JSON.parse(JSON.stringify(r)) as object).sort()).toEqual(Object.keys(r).sort());
+  });
+});
+
+describe('flightInterval (the idle frames\' display interval, rulings R5 (a))', () => {
+  test('the median of the idle deltas, or 1000/60 when it is not finite', () => {
+    expect(flightInterval([4.1, 4.2, 4.3, 4.2, 4.2])).toBeCloseTo(4.2, 9);
+    expect(flightInterval(new Array<number>(120).fill(Number.NaN))).toBe(1000 / 60);
+    expect(flightInterval([])).toBe(1000 / 60);
   });
 });

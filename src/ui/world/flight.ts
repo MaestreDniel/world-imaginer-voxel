@@ -18,6 +18,7 @@ import type { WorldRenderer } from '../../render/renderer';
 import type { SectionRendererKind } from '../../render/sectionRenderer';
 import { el } from '../common/dom';
 import { DEFAULT_MAP_STATE, encodeMapState } from '../map/mapState';
+import { displayInterval } from './frameStep';
 import { Y_MAX, Y_MIN, parseWorldQuery, type WorldQuery } from './query';
 import { mountWorldPage, type LoadStats } from './worldPage';
 
@@ -415,6 +416,14 @@ function publishFlight(result: FlightResult | FlightError, panel: HTMLElement): 
 }
 
 /**
+ * The display interval from the idle frames' rAF deltas (spec §9.5): their median through the page's finite fallback
+ * (`displayInterval`, 1000/60 when the median is not finite; rulings R5 (a)), so no frame time snaps to NaN.
+ */
+export function flightInterval(idle: ArrayLike<number>): number {
+  return displayInterval(medianInterval(idle));
+}
+
+/**
  * The flight (spec §9.5): the idle frames, then 60 s along the spline with the day from 06:00 through one cycle, then
  * the JSON published. The camera faces along the tangent (its yaw) with `cameraPitch`, and keeps `CLEARANCE` blocks
  * above `MOTION_BLOCKING` where the spline dips between two waypoints, so the measured frames look at the world.
@@ -431,7 +440,7 @@ export async function runFlight(ctx: FlightContext): Promise<FlightResult | Flig
       prev = now;
       return idle.length >= IDLE_FRAMES;
     });
-    const interval = medianInterval(idle);
+    const interval = flightInterval(idle);
 
     // 2. The flight.
     const waypoints = flightWaypoints(ctx.centre, ctx.rd, (x, z) => ctx.motionBlockingAt(x, z), (x, z) => ctx.hasWater(x, z));
