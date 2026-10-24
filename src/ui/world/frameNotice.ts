@@ -1,8 +1,8 @@
 /**
  * The run-time slow-frame notice (SP4a spec §8.5, D23; ruling P49): if the first 300 frames after the reveal have a
- * snapped p95 above 25 ms, suggest the next lower render distance once (the page shows a dismissible notice linking to
- * the reload; never automatic). The next lower RD is rd − 2, so 12 → 10 → 8 follows the default ladder, never below
- * `RD_MIN`, and there is none at `RD_MIN`.
+ * snapped p95 above 25 ms, suggest the next lower render distance once (the page shows a dismissible notice whose
+ * "Lower to RD n" applies it live on a click, SP4b spec §5; never automatic). The next lower RD is rd − 2, so
+ * 12 → 10 → 8 follows the default ladder, never below `RD_MIN`, and there is none at `RD_MIN`.
  *
  * The notice judges raw rAF deltas (spec §9.5's frame times), taken before the FPS limiter: a user's FPS cap of 30
  * makes every rendered frame 33.3 ms apart, which says nothing about the GPU, while a frame too slow for the display

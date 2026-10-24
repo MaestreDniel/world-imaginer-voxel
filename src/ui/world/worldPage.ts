@@ -35,22 +35,28 @@
  * calls `update` (SP4a's static route).
  *
  * Errors after the reveal (SP4b spec §3.6, §7.4, D12) degrade: a skipped column shows a dismissible notice with "Copy
- * details", StoreFull a notice offering "Lower to RD n" (never applied on its own); a fatal event (no live worker,
- * `StoreCorrupt`, more than 32 failed columns), the pool's last worker failing and an exception escaping the frame
- * step stop the loop and show the notices' failure panel with "Copy details" and a Reload link.
+ * details", StoreFull a notice offering "Lower to RD n" (applied live on a click, never on its own); a fatal event (no
+ * live worker, `StoreCorrupt`, more than 32 failed columns), the pool's last worker failing and an exception escaping
+ * the frame step stop the loop and show the notices' failure panel with "Copy details" and a Reload link.
+ *
+ * The render distance is live (SP4b spec §5, D18): an integer in [4, rdMax], rdMax = min(16, the reservation's cap);
+ * the help's select, the slow-frame notice's and StoreFull's "Lower to RD n" all go through `createRdControl`, which
+ * sets it on the coordinator (the next `update` re-classifies) and the renderer (the far plane), moves the fog's target
+ * and saves the setting; "Default (n)" applies the resolved default. The fog eases outward after a raise
+ * (`fogEase.ts`), following the filled radius scanned every 30 rendered frames, and moves in at once after a lower.
  *
  * After the reveal (spec §7.1, §7.5, §8.2, §8.5; rulings P49, P50): the Ctrl+W guard (`beforeunload`) is armed; every
- * navigation the page starts (the RD setting, the slow-frame link, the context-loss Reload, "Open the map here")
- * goes through one reloader, which disarms the guard and navigates at most once; a slow first 300 frames suggest the
- * next lower RD in a dismissible notice; `webglcontextlost` stops the frame loop and offers a Reload around the camera
- * (`hereUrl`). SP4a's edge clamp, its notice and R are gone (SP4b spec §6.2, D20).
+ * navigation the page starts (the context-loss Reload, the failure panel's Reload, "Open the map here") goes through
+ * one reloader, which disarms the guard and navigates at most once; a slow first 300 frames suggest the next lower RD
+ * in a dismissible notice whose button applies it live; `webglcontextlost` stops the frame loop and offers a Reload
+ * around the camera (`hereUrl`). SP4a's edge clamp, its notice and R are gone (SP4b spec §6.2, D20).
  */
 import { MEDIUM } from '../../core/params/graphicsPresets';
 import { OPENING_T, TIME_SPEEDS } from '../../daynight/dayNight';
 import { probeCapabilities } from '../../engine/capabilities';
 import { evaluateWorldCapabilities, type CapabilityReport } from '../../engine/capabilityRules';
 import {
-  createCoordinator, createCoordinatorCounts, phaseName, progressFraction, worldJobsOf, type StreamEvent,
+  createCoordinator, createCoordinatorCounts, phaseName, progressFraction, worldJobsOf, type Coordinator, type StreamEvent,
 } from '../../engine/coordinator';
 import { RD_MAX, reservationRdCap, resolveRenderDistance } from '../../engine/renderDistance';
 import type { Stage } from '../../engine/rings';
@@ -77,6 +83,7 @@ import { cryptoSeed } from '../seedBox';
 import { SETTINGS_DEFAULTS, loadSettings, saveSettings, type WorldSettings } from '../settings';
 import { firstView } from './firstView';
 import type { FlightContext } from './flight';
+import { FILL_SCAN_FRAMES, createFogEase, filledRadius } from './fogEase';
 import { createFrameClock, createFrameNotice, lowerRd } from './frameNotice';
 import { createFrameStep, eyeSkyLight } from './frameStep';
 import { createReloader, hereUrl, installLeaveGuard, navigateTo, type Reloader } from './reload';
@@ -270,10 +277,11 @@ export function runTeardown(steps: ReadonlyArray<() => void>, onError: (e: unkno
  */
 export interface WorldNotices {
   /**
-   * The dismissible "Frames are slow at RD <rd> — try RD <lower>" (spec §8.5): its link reloads through the reloader
-   * at `href()`, read when shown and again on the click (the camera may have moved).
+   * The dismissible "Frames are slow at RD <rd>" (spec §8.5) with a "Lower to RD <lower>" button calling `apply`, which
+   * lowers the render distance live (SP4b spec §5) and closes the notice; never applied on its own. A later call
+   * replaces it.
    */
-  slow(rd: number, lower: number, href: () => string): void;
+  slow(rd: number, lower: number, apply: () => void): void;
   /** "The graphics context was lost" with a Reload link to `href` through the reloader; shown once. */
   contextLost(href: string): void;
   /**
@@ -282,8 +290,9 @@ export interface WorldNotices {
    */
   skipped(details: string): void;
   /**
-   * The world store is full (SP4b spec §3.6, §5): a dismissible notice with a "Lower to RD n" button calling `apply`,
-   * without the button when `lower` is null (RD 4); never applied on its own. A later call replaces it.
+   * The world store is full (SP4b spec §3.6, §5): a dismissible notice with a "Lower to RD n" button calling `apply`
+   * (the render distance lowered live, the notice closed), without the button when `lower` is null (RD 4); never
+   * applied on its own. A later call replaces it.
    */
   storeFull(lower: number | null, apply: () => void): void;
   /**
@@ -324,6 +333,22 @@ function copyButton(id: string, text: () => string): HTMLButtonElement {
   return copy;
 }
 
+/**
+ * A "Lower to RD <lower>" button: a click removes `panel` (and calls `then`), then calls `apply`, which lowers the render
+ * distance live (SP4b spec §5).
+ */
+function lowerButton(id: string, lower: number, panel: HTMLElement, then: () => void, apply: () => void): HTMLButtonElement {
+  const button = el('button', 'world-notice-dismiss', `Lower to RD ${lower}`);
+  button.id = id;
+  button.type = 'button';
+  button.addEventListener('click', () => {
+    panel.remove();
+    then();
+    apply();
+  });
+  return button;
+}
+
 /** A "Dismiss" button removing `panel` (and calling `then`). */
 function dismissButton(id: string, panel: HTMLElement, then: () => void = () => {}): HTMLButtonElement {
   const dismiss = el('button', 'world-notice-dismiss', 'Dismiss');
@@ -348,12 +373,15 @@ export function createWorldNotices(host: HTMLElement, reloader: Reloader): World
   let skippedShown = false;
   let failedShown = false;
   return {
-    slow(rd, lower, href) {
+    slow(rd, lower, apply) {
       slow?.remove();
-      const panel = el('div', 'world-notice', `Frames are slow at RD ${rd} — try `);
+      const panel = el('div', 'world-notice', `Frames are slow at RD ${rd}. `);
       panel.id = 'world-slow-notice';
-      const dismiss = dismissButton('world-slow-dismiss', panel, () => { if (slow === panel) slow = null; });
-      panel.append(reloadLink(reloader, 'world-slow-link', `RD ${lower}`, href), ' ', dismiss);
+      const forget = (): void => { if (slow === panel) slow = null; };
+      panel.append(
+        lowerButton('world-slow-lower', lower, panel, forget, apply), ' ',
+        dismissButton('world-slow-dismiss', panel, forget),
+      );
       slow = panel;
       box.append(panel);
     },
@@ -369,14 +397,9 @@ export function createWorldNotices(host: HTMLElement, reloader: Reloader): World
       full?.remove();
       const panel = el('div', 'world-notice', 'The world store is full: new terrain is paused. ');
       panel.id = 'world-store-full';
-      if (lower !== null) {
-        const button = el('button', 'world-notice-dismiss', `Lower to RD ${lower}`);
-        button.id = 'world-store-full-lower';
-        button.type = 'button';
-        button.addEventListener('click', () => apply());
-        panel.append(button, ' ');
-      }
-      panel.append(dismissButton('world-store-full-dismiss', panel, () => { if (full === panel) full = null; }));
+      const forget = (): void => { if (full === panel) full = null; };
+      if (lower !== null) panel.append(lowerButton('world-store-full-lower', lower, panel, forget, apply), ' ');
+      panel.append(dismissButton('world-store-full-dismiss', panel, forget));
       full = panel;
       box.append(panel);
     },
@@ -445,6 +468,44 @@ export function handleStreamEvent(
       break;
     }
   }
+}
+
+/**
+ * The live render distance (SP4b spec §5, D18): `apply(rd)` sets it on the coordinator (the next `update`
+ * re-classifies, collects the unloads and rebuilds) and the world renderer (`camera.far`), moves the fog's target
+ * (eased outward after a raise, in at once after a lower), saves the setting and shows it in the help. `null` is
+ * "Default": saved as null, `defaultRd` applied. Every change goes through it: the help's select, the slow-frame
+ * notice's and StoreFull's "Lower to RD n". The help's copy is updated each time (`setRd`), so a notice's lower RD is
+ * what a later FOV or brightness change sends back through `onSettings`, never the stale one.
+ */
+export function createRdControl(o: {
+  readonly coordinator: Pick<Coordinator, 'setRenderDistance'>;
+  readonly world: Pick<WorldRenderer, 'setRenderDistance' | 'camera'>;
+  readonly fog: { setTarget(rd: number): void };
+  readonly help: Pick<Help, 'setRd'>;
+  save(rd: number | null): void;
+  readonly defaultRd: number;
+}): { apply(rd: number | null): void } {
+  return {
+    apply(rd) {
+      const r = rd ?? o.defaultRd;
+      o.coordinator.setRenderDistance(r);
+      o.world.setRenderDistance(r);
+      o.fog.setTarget(r);
+      o.save(rd);
+      o.help.setRd(rd);
+    },
+  };
+}
+
+/**
+ * The slow-frame notice's suggestion (SP4a spec §8.5; SP4b spec §5): at render distance `rd`, offers the next lower one
+ * (`lowerRd`) in the dismissible notice, whose button applies it live through `control`; nothing at RD 4.
+ */
+export function offerLowerRd(notices: Pick<WorldNotices, 'slow'>, rd: number, control: { apply(rd: number | null): void }): void {
+  const lower = lowerRd(rd);
+  if (lower === null) return;
+  notices.slow(rd, lower, () => control.apply(lower));
 }
 
 /**
@@ -637,6 +698,8 @@ export function mountWorldPage(root: HTMLElement, q: WorldQuery, hash: string, o
     let settings: WorldSettings = opts.flight === undefined ? loadSettings(storage) : { ...SETTINGS_DEFAULTS };
     const loadRd = resolveRenderDistance(caps, q.rd, settings.rd);
     rd = loadRd;
+    // The largest RD the store's fixed maxima allow (SP4b spec §5): the coordinator's and the help's cap.
+    const rdMax = Math.min(RD_MAX, reservationRdCap(caps.reservation));
     const store = createStore({ shared: true, maxBlockBytes: caps.reservation.blockBytes, maxByteBytes: caps.reservation.byteBytes });
     // The pool's per-scope epoch cells are the store's (SP4b spec §2.7); a failed worker's thread is marked dead in the
     // store, so its reader epoch no longer holds releases in limbo and its pool lock reads as StoreCorrupt (§2.6).
@@ -697,7 +760,7 @@ export function mountWorldPage(root: HTMLElement, q: WorldQuery, hash: string, o
       },
       throttle,
       rd: loadRd,
-      rdMax: Math.min(RD_MAX, reservationRdCap(caps.reservation)),
+      rdMax,
       retainAllProtos: true,
       strict: true,
       // Strict until the reveal: only `fatal` comes, and it stops the load; after it the streaming branch handles them.
@@ -853,20 +916,31 @@ export function mountWorldPage(root: HTMLElement, q: WorldQuery, hash: string, o
       wr = null;
       notices.failed(cause, shown, here(null));
     };
-    // The coordinator's events after the reveal (D12). "Lower to RD n" reloads at n until the RD applies live (SP4b
-    // Task 22).
+    // The live render distance (SP4b spec §5): the RD in force, the fog's easing toward it and the filled radius it
+    // follows. `rdControl` is created once the help it updates is mounted, before any frame or event can reach it.
+    let liveRd = loadRd;
+    const fog = createFogEase(loadRd);
+    let fogRd = loadRd;
+    let filled = loadRd;
+    let scanIn = 0;
+    const isRevealed = (cx: number, cz: number): boolean => sections.isRevealed(cx, cz);
+    let rdControl!: { apply(rd: number | null): void };
+    // The coordinator's events after the reveal (D12). StoreFull's "Lower to RD n" applies live (SP4b spec §5).
     onStreamEvent = (e) => handleStreamEvent(e, {
       notices,
       fail: (cause, err) => fail(cause, err),
-      lower: (lower) => reloader.reload(here(lower)),
+      lower: (lower) => rdControl.apply(lower),
     });
     handleContextLoss(world, {
       stop,
       notices,
-      // The query's rd stays (a lower-RD reload keeps its rd); without one the setting applies.
-      hereHref: () => here(q.rd),
+      // Without a query rd the setting applies (it holds every live change); a query's rd is replaced by the RD in
+      // force, so a live change made since the load survives the reload.
+      hereHref: () => here(q.rd === null ? null : liveRd),
     });
-    const slowFrames = createFrameNotice((lower) => notices.slow(loadRd, lower, () => here(lower)), loadRd);
+    // The notice judges the first 300 frames after the reveal and suggests the RD below the one in force when it
+    // fires (the user may have changed it live since the load).
+    const slowFrames = createFrameNotice(() => offerLowerRd(notices, liveRd, rdControl), loadRd);
 
     const canvas = world.renderer.domElement;
     if (overlay) {
@@ -929,6 +1003,7 @@ export function mountWorldPage(root: HTMLElement, q: WorldQuery, hash: string, o
       stopHud = () => huds.dispose();
     }
 
+    // Every setting applies live (SP4b spec §5); an rd change goes through the RD control, which saves it again.
     const applySettings = (s: WorldSettings): void => {
       const rdChanged = s.rd !== settings.rd;
       if (s.fpsCap !== settings.fpsCap) limiter.setCap(s.fpsCap);
@@ -939,8 +1014,7 @@ export function mountWorldPage(root: HTMLElement, q: WorldQuery, hash: string, o
       settings = s;
       frame.brightness = s.brightness;
       saveSettings(storage, s);
-      // The render distance applies to a new load only: reload around the camera, without ?rd so the setting applies.
-      if (rdChanged) reloader.reload(here(null));
+      if (rdChanged) rdControl.apply(s.rd);
     };
     const help: Help = mountHelp(host, {
       map: DEFAULT_KEYMAP,
@@ -948,6 +1022,7 @@ export function mountWorldPage(root: HTMLElement, q: WorldQuery, hash: string, o
       onSettings: applySettings,
       report: caps,
       evaluation,
+      rdMax,
       mapHereHref: () => `?map#${encodeMapState({
         v: 1,
         seed: session.state.seedText,
@@ -964,6 +1039,25 @@ export function mountWorldPage(root: HTMLElement, q: WorldQuery, hash: string, o
     });
     // Closing removes the help's Esc listener from the document.
     teardown.push(() => help.close());
+    rdControl = createRdControl({
+      coordinator,
+      world,
+      fog: {
+        setTarget(r) {
+          liveRd = r;
+          rd = r;
+          fog.setTarget(r);
+          // A raise scans the filled radius on the next rendered frame.
+          scanIn = 0;
+        },
+      },
+      help,
+      save: (r) => {
+        settings = { ...settings, rd: r };
+        saveSettings(storage, settings);
+      },
+      defaultRd: resolveRenderDistance(caps, null, null),
+    });
 
     const onAction = (a: Action): void => {
       switch (a) {
@@ -1010,8 +1104,19 @@ export function mountWorldPage(root: HTMLElement, q: WorldQuery, hash: string, o
       store,
       state: frame,
       timeSpeed,
-      // The target RD until the fog eases (SP4b Task 22).
-      fogStep: () => loadRd,
+      // The fog eases outward after a raise, following the filled radius (SP4b spec §5): scanned around the camera's
+      // column every 30 rendered frames while the fog is below its target, never once it has arrived.
+      fogStep: (dtMs) => {
+        if (fogRd < fog.target) {
+          if (scanIn <= 0) {
+            filled = filledRadius(Math.floor(fly.x) >> 4, Math.floor(fly.z) >> 4, fog.target, isRevealed);
+            scanIn = FILL_SCAN_FRAMES;
+          }
+          scanIn--;
+        }
+        fogRd = fog.step(dtMs, filled);
+        return fogRd;
+      },
       onRendered: (dtMs) => {
         frames.push(dtMs);
         // The first 120 rendered frames' largest delta (SP4b spec §7.1; the flight JSON's key unchanged).

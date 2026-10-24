@@ -1,12 +1,12 @@
 /**
  * The help overlay (SP4a spec §7.4, D31): **Keys** generated from the key map, **Settings** (the small block SP5's
- * settings panel replaces), **System** (the capability report with "Copy as JSON" and the hidden `#capability-json`,
- * moved here from the SP0 page, D21), and the links "Open the map here" and "Fullscreen". All text goes through
- * `textContent`. The page opens it on H or F1 and releases the pointer; H, F1 or Esc closes it, and clicking the canvas
+ * settings panel replaces; the render distance applies live since SP4b, spec §5), **System** (the capability report
+ * with "Copy as JSON" and the hidden `#capability-json`, moved here from the SP0 page, D21, then the render distance's
+ * maximum), and the links "Open the map here" and "Fullscreen". All text goes through `textContent`. The page opens it on H or F1 and releases the pointer; H, F1 or Esc closes it, and clicking the canvas
  * re-locks.
  */
 import type { CapabilityReport, Evaluation } from '../engine/capabilityRules';
-import { defaultRenderDistance, RD_MIN, reservationRdCap } from '../engine/renderDistance';
+import { defaultRenderDistance, RD_MIN } from '../engine/renderDistance';
 import { bindingLabel, type KeyEntry } from '../player/keymap';
 import { renderCapabilityReport } from './capabilityReport';
 import { el } from './common/dom';
@@ -16,11 +16,16 @@ export interface HelpOptions {
   readonly map: readonly KeyEntry[];
   readonly settings: WorldSettings;
   /**
-   * Called with the whole new settings after each change. An rd change is the page's cue to save and reload (the
-   * render distance only applies to a new load); the others apply live.
+   * Called with the whole new settings after each change; every one applies live. An rd change is the page's cue to
+   * apply the render distance live and save it (SP4b spec §5); `setRd` never calls it.
    */
   onSettings(s: WorldSettings): void;
   readonly report: CapabilityReport;
+  /**
+   * The largest render distance the page offers, min(16, the accepted reservation's cap) (SP4b spec §5): the RD
+   * select's last choice, and the System section's "Render distance maximum" row.
+   */
+  readonly rdMax: number;
   readonly evaluation: Evaluation;
   /** The `?map` URL centred on the camera, read each time the overlay opens. */
   mapHereHref: () => string;
@@ -38,6 +43,12 @@ export interface Help {
   open(): void;
   close(): void;
   readonly isOpen: boolean;
+  /**
+   * Shows `rd` (null: "Default") in `#setting-rd` and the help's copy of the settings, without calling `onSettings`: a
+   * render distance applied elsewhere (a notice's "Lower to RD n") is what a later FOV or brightness change sends back
+   * (SP4b spec §5: nothing changes the saved RD except the user).
+   */
+  setRd(rd: number | null): void;
 }
 
 const GROUP_TITLES: Readonly<Record<KeyEntry['group'], string>> = { move: 'Move', speed: 'Speed', world: 'World', view: 'View' };
@@ -61,21 +72,24 @@ function keysSection(map: readonly KeyEntry[]): HTMLElement {
   return section;
 }
 
-/** The RD choices: "Default (n)", then RD_MIN … the reservation's cap; a saved rd above the cap shows as the cap. */
-function rdSelect(report: CapabilityReport, rd: number | null): HTMLSelectElement {
+/** The RD choices: "Default (n)", then RD_MIN … rdMax (SP4b spec §5). */
+function rdSelect(report: CapabilityReport, rdMax: number): HTMLSelectElement {
   const select = el('select');
   select.id = 'setting-rd';
   const def = el('option', '', `Default (${defaultRenderDistance(report)})`);
   def.value = '';
   select.append(def);
-  const cap = reservationRdCap(report.reservation);
-  for (let n = RD_MIN; n <= cap; n++) {
+  for (let n = RD_MIN; n <= rdMax; n++) {
     const opt = el('option', '', String(n));
     opt.value = String(n);
     select.append(opt);
   }
-  select.value = rd === null ? '' : String(Math.min(rd, cap));
   return select;
+}
+
+/** Selects `rd` in the RD select ('' for null, "Default"); a saved rd above `rdMax` shows as `rdMax`. */
+function showRd(select: HTMLSelectElement, rd: number | null, rdMax: number): void {
+  select.value = rd === null ? '' : String(Math.min(rd, rdMax));
 }
 
 function fpsSelect(cap: WorldSettings['fpsCap']): HTMLSelectElement {
@@ -127,13 +141,14 @@ export function mountHelp(host: HTMLElement, o: HelpOptions): Help {
   // Settings.
   const settingsSection = el('section', 'help-settings');
   settingsSection.id = 'help-settings';
-  const rd = rdSelect(o.report, settings.rd);
+  const rd = rdSelect(o.report, o.rdMax);
+  showRd(rd, settings.rd, o.rdMax);
   rd.addEventListener('change', () => change({ rd: rd.value === '' ? null : Number(rd.value) }));
   const fps = fpsSelect(settings.fpsCap);
   fps.addEventListener('change', () => change({ fpsCap: Number(fps.value) as WorldSettings['fpsCap'] }));
   settingsSection.append(
     el('h3', '', 'Settings'),
-    settingRow('Render distance (reloads)', rd),
+    settingRow('Render distance', rd),
     settingRow('FPS cap', fps),
   );
   const ranges: [string, keyof typeof SETTING_RANGES, string][] = [
@@ -156,7 +171,13 @@ export function mountHelp(host: HTMLElement, o: HelpOptions): Help {
   system.id = 'help-system';
   const report = el('div');
   renderCapabilityReport(report, o.report, o.evaluation);
-  system.append(el('h3', '', 'System'), report);
+  // The capability table is shared with the error screen and keyed by the report; the page's own figures follow it.
+  const rdMax = el('table', 'cap-table');
+  rdMax.id = 'help-rd-max';
+  const rdMaxRow = el('tr');
+  rdMaxRow.append(el('td', '', 'Render distance maximum'), el('td', '', String(o.rdMax)));
+  rdMax.append(rdMaxRow);
+  system.append(el('h3', '', 'System'), report, rdMax);
 
   // Links.
   const mapHere = el('a', 'help-link', 'Open the map here');
@@ -202,6 +223,10 @@ export function mountHelp(host: HTMLElement, o: HelpOptions): Help {
     close,
     get isOpen() {
       return isOpen;
+    },
+    setRd(value) {
+      settings = normalizeSettings({ ...settings, rd: value });
+      showRd(rd, settings.rd, o.rdMax);
     },
   };
 }

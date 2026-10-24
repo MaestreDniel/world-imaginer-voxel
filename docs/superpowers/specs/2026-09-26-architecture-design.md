@@ -1220,7 +1220,7 @@ Target: edit → visible ≤ 50 ms p95, measured in the HUD.
 | upload budget | 1.5 ms | 2 ms | 3 ms | 4 ms |
 
 - Every setting can be overridden individually: RD, LOD, FOV, brightness, fog start, resolution scale, FPS cap, anisotropy, biome blend, water tier, shadows, clouds, AO.
-- Changes are Live, except MSAA (a controlled renderer rebuild that keeps the world store) and AO or leaves (a remesh of loaded sections through mesh jobs).
+- Changes are Live (the render distance live since SP4b, within the reservation's cap), except MSAA (a controlled renderer rebuild that keeps the world store) and AO or leaves (a remesh of loaded sections through mesh jobs).
 - Settings persist in localStorage (try/catch).
 - `core/params/graphicsPresets.ts` is created by SP4a with the Medium fields it uses; SP8c adds the audio rows, SP11 the other rows.
 

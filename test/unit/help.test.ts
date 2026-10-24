@@ -1,5 +1,6 @@
 import { afterEach, beforeEach, describe, expect, test, vi } from 'vitest';
 import { evaluateWorldCapabilities, type CapabilityReport } from '../../src/engine/capabilityRules';
+import { RD_MAX, reservationRdCap } from '../../src/engine/renderDistance';
 import { bindingLabel, DEFAULT_KEYMAP } from '../../src/player/keymap';
 import { mountHelp } from '../../src/ui/help';
 import { SETTINGS_DEFAULTS, type WorldSettings } from '../../src/ui/settings';
@@ -18,13 +19,15 @@ describe('mountHelp (SP4a spec §7.4, D31)', () => {
   beforeEach(() => { dom = installDom(); });
   afterEach(() => { vi.unstubAllGlobals(); });
 
-  function mount(over: { settings?: WorldSettings; report?: CapabilityReport } = {}) {
+  function mount(over: { settings?: WorldSettings; report?: CapabilityReport; rdMax?: number } = {}) {
     const report = over.report ?? REPORT;
     const o = {
       map: DEFAULT_KEYMAP,
       settings: over.settings ?? SETTINGS_DEFAULTS,
       onSettings: vi.fn<(s: WorldSettings) => void>(),
       report,
+      // The page's rdMax (SP4b spec §5): min(16, the reservation's cap).
+      rdMax: over.rdMax ?? Math.min(RD_MAX, reservationRdCap(report.reservation)),
       evaluation: evaluateWorldCapabilities(report),
       mapHereHref: vi.fn(() => '/?map#v1.abc'),
       onFullscreen: vi.fn(),
@@ -102,6 +105,40 @@ describe('mountHelp (SP4a spec §7.4, D31)', () => {
     expect(select.value).toBe('6');
   });
 
+  test('the RD label is "Render distance" (no "(reloads)": it applies live, SP4b spec §5)', () => {
+    mount();
+    const labels = dom.el('help-settings').querySelectorAll('span').map((sp) => sp.textContent);
+    expect(labels).toContain('Render distance');
+    expect(dom.el('help-settings').textContent).not.toContain('reloads');
+  });
+
+  test('the select\'s maximum is rdMax, and the System section shows "Render distance maximum <rdMax>"', () => {
+    mount({ rdMax: 10 });
+    expect(dom.el('setting-rd').options.map((op) => op.value)).toEqual(['', '4', '5', '6', '7', '8', '9', '10']);
+    const rows = dom.el('help-system').querySelectorAll('tr').map((r) => r.querySelectorAll('td').map((c) => c.textContent));
+    expect(rows).toContainEqual(['Render distance maximum', '10']);
+    expect(dom.el('help-rd-max').textContent).toBe('Render distance maximum10');
+    dom.body.replaceChildren();
+    mount();
+    expect(dom.el('setting-rd').options.at(-1)!.value).toBe('16');
+    const full = dom.el('help-system').querySelectorAll('tr').map((r) => r.querySelectorAll('td').map((c) => c.textContent));
+    expect(full).toContainEqual(['Render distance maximum', '16']);
+  });
+
+  test('setRd(10) updates #setting-rd without calling onSettings', () => {
+    const { help, o } = mount({ settings: { ...SETTINGS_DEFAULTS, rd: 12 } });
+    expect(dom.el('setting-rd').value).toBe('12');
+    help.setRd(10);
+    expect(dom.el('setting-rd').value).toBe('10');
+    expect(o.onSettings).not.toHaveBeenCalled();
+    // The help's copy moved with it: a later FOV change sends rd 10, not the stale 12.
+    change('setting-fov', '90', 'input');
+    expect(o.onSettings).toHaveBeenLastCalledWith({ ...SETTINGS_DEFAULTS, rd: 10, fov: 90 });
+    help.setRd(null);
+    expect(dom.el('setting-rd').value).toBe('');
+    expect(o.onSettings).toHaveBeenCalledTimes(1);
+  });
+
   test('the FPS cap, FOV, sensitivity and brightness each call onSettings with the whole new settings', () => {
     const { o } = mount();
     change('setting-fps-cap', '60');
@@ -135,7 +172,7 @@ describe('mountHelp (SP4a spec §7.4, D31)', () => {
   test('with navigate (ruling P50), "Open the map here" is prevented and its fresh URL passed to navigate', () => {
     const navigate = vi.fn<(href: string) => void>();
     const o = {
-      map: DEFAULT_KEYMAP, settings: SETTINGS_DEFAULTS, onSettings: vi.fn(), report: REPORT,
+      map: DEFAULT_KEYMAP, settings: SETTINGS_DEFAULTS, onSettings: vi.fn(), report: REPORT, rdMax: 16,
       evaluation: evaluateWorldCapabilities(REPORT), mapHereHref: vi.fn(() => '/?map#v1.abc'), navigate, onFullscreen: vi.fn(), onClose: vi.fn(),
     };
     mountHelp(dom.body as unknown as HTMLElement, o).open();

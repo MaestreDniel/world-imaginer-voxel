@@ -143,20 +143,26 @@ describe('the world notices (SP4a spec §7.5, §8.5; Review Focus 5)', () => {
     expect(navigate).toHaveBeenCalledWith('/?at=200,-3&y=80&yaw=45.0&pitch=-10.0#abc');
   });
 
-  test('the slow-frame notice names the RDs, links to the reload with &rd=, and is dismissible', () => {
-    const { navigate, notices } = setup();
-    const camera = { x: 1, y: 70, z: 2, yaw: 90, pitch: 0 };
-    notices.slow(12, 10, () => hereUrl(camera, 10, '#abc'));
+  test('the slow-frame notice names the RDs, offers a "Lower to RD n" button that applies live (no navigation), and is dismissible', () => {
+    const { navigate, disarm, notices } = setup();
+    const apply = vi.fn();
+    notices.slow(12, 10, apply);
     const panel = dom.el('world-slow-notice');
-    expect(panel.textContent).toContain('Frames are slow at RD 12 — try RD 10');
-    const link = dom.el('world-slow-link');
-    expect(link.href).toBe('/?at=1,2&y=70&yaw=90.0&pitch=0.0&rd=10#abc');
+    expect(panel.textContent).toContain('Frames are slow at RD 12');
+    expect(() => dom.el('world-slow-link')).toThrow();
+    const button = dom.el('world-slow-lower');
+    expect(button.tagName).toBe('BUTTON');
+    expect(button.textContent).toBe('Lower to RD 10');
     dom.el('world-slow-dismiss').click();
     expect(() => dom.el('world-slow-notice')).toThrow();
-    notices.slow(12, 10, () => hereUrl(camera, 10, '#abc'));
-    camera.x = 50;
-    dom.el('world-slow-link').click();
-    expect(navigate).toHaveBeenCalledWith('/?at=50,2&y=70&yaw=90.0&pitch=0.0&rd=10#abc');
+    expect(apply).not.toHaveBeenCalled();
+    notices.slow(12, 10, apply);
+    dom.el('world-slow-lower').click();
+    expect(apply).toHaveBeenCalledTimes(1);
+    // Applied: the notice goes; nothing navigated and the guard stays armed (SP4b spec §5).
+    expect(() => dom.el('world-slow-notice')).toThrow();
+    expect(navigate).not.toHaveBeenCalled();
+    expect(disarm).not.toHaveBeenCalled();
   });
 
   test('notices.failed is shown once, its Reload link goes through the reloader, and Copy details is present', () => {

@@ -1,8 +1,18 @@
+import { PerspectiveCamera } from 'three';
 import { afterEach, beforeEach, describe, expect, test, vi } from 'vitest';
+import { evaluateWorldCapabilities, type CapabilityReport } from '../../src/engine/capabilityRules';
 import type { StreamEvent } from '../../src/engine/coordinator';
+import { lowerRd } from '../../src/engine/renderDistance';
+import { DEFAULT_KEYMAP } from '../../src/player/keymap';
+import { applyRenderDistance, cameraFar } from '../../src/render/renderer';
+import { mountHelp } from '../../src/ui/help';
+import { SETTINGS_DEFAULTS, type WorldSettings } from '../../src/ui/settings';
 import { StoreCorrupt } from '../../src/world/store/pool';
+import { createFogEase } from '../../src/ui/world/fogEase';
 import { createReloader } from '../../src/ui/world/reload';
-import { createWorldNotices, everyFrameUntil, handleStreamEvent, releaseOnFailure, runTeardown } from '../../src/ui/world/worldPage';
+import {
+  createRdControl, createWorldNotices, everyFrameUntil, handleStreamEvent, offerLowerRd, releaseOnFailure, runTeardown,
+} from '../../src/ui/world/worldPage';
 import { installDom, type FakeElement } from './fixtures/domShim';
 
 /** A frame scheduler that queues callbacks; `flush` runs one frame. */
@@ -153,5 +163,155 @@ describe('handleStreamEvent (SP4b spec §3.6, §7.4, D12)', () => {
     expect(dom.el('world-store-full-dismiss').textContent).toBe('Dismiss');
     dom.el('world-store-full-dismiss').click();
     expect(byId('world-store-full')).toHaveLength(0);
+  });
+});
+
+describe('createRdControl (SP4b spec §5, D18; Review Focus 5)', () => {
+  let dom: ReturnType<typeof installDom>;
+  beforeEach(() => { dom = installDom(); });
+  afterEach(() => { vi.unstubAllGlobals(); });
+
+  const MIB = 1 << 20;
+  const REPORT: CapabilityReport = {
+    secureContext: true, pageIsolated: true, workerProbe: 'ok', workerIsolated: true, sabShared: true,
+    growableSab: true, reservation: { blockBytes: 768 * MIB, byteBytes: 512 * MIB },
+    webgl2: true, multiDraw: true, timerQuery: true, maxArrayTextureLayers: 2048, maxTextureSize: 16384,
+    renderer: 'Mesa Intel(R) Graphics (ADL GT2)', vendor: 'Intel', hardwareConcurrency: 20, deviceMemory: 8,
+  };
+
+  /**
+   * The control over fakes at RD `rd`: the coordinator and the help record their calls, the world's
+   * `setRenderDistance` is Task 18's `applyRenderDistance` on a real camera, the fog is the real easing, and `save`
+   * records what the page would store. A navigation would go through `location.assign` (stubbed to record it).
+   */
+  function rig(rd = 8, help: { setRd(rd: number | null): void } = { setRd: vi.fn() }) {
+    const coordinator = { setRenderDistance: vi.fn<(rd: number) => void>() };
+    const camera = new PerspectiveCamera(70, 16 / 9, 0.1, cameraFar(rd));
+    const world = { camera, setRenderDistance: vi.fn((r: number) => applyRenderDistance(camera, r)) };
+    const fog = createFogEase(rd);
+    const saved: Array<number | null> = [];
+    const assign = vi.fn();
+    vi.stubGlobal('location', { assign, href: '/' });
+    const control = createRdControl({ coordinator, world, fog, help, save: (r) => { saved.push(r); }, defaultRd: 12 });
+    return { control, coordinator, world, camera, fog, saved, help, assign };
+  }
+
+  test('apply(10) applies live: coordinator.setRenderDistance(10), world.setRenderDistance(10), fog target 10, saved 10, no navigation, and camera.far 288', () => {
+    const r = rig(8);
+    r.control.apply(10);
+    expect(r.coordinator.setRenderDistance).toHaveBeenCalledTimes(1);
+    expect(r.coordinator.setRenderDistance).toHaveBeenLastCalledWith(10);
+    expect(r.world.setRenderDistance).toHaveBeenCalledTimes(1);
+    expect(r.world.setRenderDistance).toHaveBeenLastCalledWith(10);
+    expect(r.fog.target).toBe(10);
+    expect(r.saved).toEqual([10]);
+    expect(r.help.setRd).toHaveBeenLastCalledWith(10);
+    expect(r.assign).not.toHaveBeenCalled();
+    expect(r.camera.far).toBe(288);
+  });
+
+  test('apply(null) after RD 8 applies the default 12 and saves null', () => {
+    const r = rig(8);
+    r.control.apply(null);
+    expect(r.coordinator.setRenderDistance).toHaveBeenLastCalledWith(12);
+    expect(r.world.setRenderDistance).toHaveBeenLastCalledWith(12);
+    expect(r.fog.target).toBe(12);
+    expect(r.saved).toEqual([null]);
+    expect(r.help.setRd).toHaveBeenLastCalledWith(null);
+    expect(r.camera.far).toBe(cameraFar(12));
+  });
+
+  test('apply(12) then apply(10) before the fog settles: the last setRenderDistance on the coordinator and the world is 10, and camera.far is 288', () => {
+    const r = rig(8);
+    r.control.apply(12);
+    expect(r.camera.far).toBe(cameraFar(12));
+    // 30 frames into the easing (the fog end at 128 of 176).
+    let fogRd = 8;
+    for (let i = 0; i < 30; i++) fogRd = r.fog.step(16.667, 12);
+    expect((fogRd - 1) * 16).toBeCloseTo(128, 2);
+    r.control.apply(10);
+    expect(r.coordinator.setRenderDistance.mock.calls.map((c) => c[0])).toEqual([12, 10]);
+    expect(r.world.setRenderDistance.mock.calls.map((c) => c[0])).toEqual([12, 10]);
+    expect(r.fog.target).toBe(10);
+    expect(r.camera.far).toBe(288);
+    expect(r.saved).toEqual([12, 10]);
+    // The fog stays where it is and eases on to the new end (fogEase.test.ts pins the frames).
+    expect(r.fog.step(0, 12)).toBe(fogRd);
+    for (let i = 0; i < 60; i++) fogRd = r.fog.step(16.667, 12);
+    expect((fogRd - 1) * 16).toBe(144);
+  });
+
+  test('the slow notice\'s action lowers the RD live to lowerRd(rd)', () => {
+    const navigate = vi.fn<(url: string) => void>();
+    const disarm = vi.fn();
+    const notices = createWorldNotices(dom.body as unknown as HTMLElement, createReloader(navigate, disarm));
+    const r = rig(12);
+    offerLowerRd(notices, 12, r.control);
+    expect(dom.el('world-slow-notice').textContent).toContain('Frames are slow at RD 12');
+    const button = dom.el('world-slow-lower');
+    expect(button.textContent).toBe(`Lower to RD ${lowerRd(12)}`);
+    // Never automatic: nothing applies before the click.
+    expect(r.coordinator.setRenderDistance).not.toHaveBeenCalled();
+    button.click();
+    expect(r.coordinator.setRenderDistance).toHaveBeenCalledTimes(1);
+    expect(r.coordinator.setRenderDistance).toHaveBeenLastCalledWith(10);
+    expect(r.world.setRenderDistance).toHaveBeenLastCalledWith(10);
+    expect(r.fog.target).toBe(10);
+    expect(r.saved).toEqual([10]);
+    expect(r.camera.far).toBe(288);
+    expect(navigate).not.toHaveBeenCalled();
+    expect(disarm).not.toHaveBeenCalled();
+    // At RD 4 there is no lower RD: no notice.
+    dom.body.replaceChildren();
+    const at4 = createWorldNotices(dom.body as unknown as HTMLElement, createReloader(navigate, disarm));
+    offerLowerRd(at4, 4, r.control);
+    expect(() => dom.el('world-slow-notice')).toThrow();
+  });
+
+  test('after the slow notice lowers 12 → 10, changing the FOV in the help keeps RD 10 (no setRenderDistance(12)) and #setting-rd shows 10', () => {
+    const notices = createWorldNotices(dom.body as unknown as HTMLElement, createReloader(vi.fn(), vi.fn()));
+    // The page's settings as it keeps them: `save` writes the rd, and its onSettings applies an rd that differs.
+    let page: WorldSettings = { ...SETTINGS_DEFAULTS, rd: 12 };
+    let control: { apply(rd: number | null): void } | null = null;
+    const help = mountHelp(dom.body as unknown as HTMLElement, {
+      map: DEFAULT_KEYMAP,
+      settings: page,
+      onSettings: (s) => {
+        const rdChanged = s.rd !== page.rd;
+        page = s;
+        if (rdChanged) control!.apply(s.rd);
+      },
+      report: REPORT,
+      evaluation: evaluateWorldCapabilities(REPORT),
+      rdMax: 16,
+      mapHereHref: () => '?map',
+      onFullscreen: () => {},
+      onClose: () => {},
+    });
+    const r = rig(12, help);
+    control = createRdControl({
+      coordinator: r.coordinator, world: r.world, fog: r.fog, help,
+      save: (rd) => { page = { ...page, rd }; }, defaultRd: 12,
+    });
+    expect(dom.el('setting-rd').value).toBe('12');
+    offerLowerRd(notices, 12, control);
+    dom.el('world-slow-lower').click();
+    expect(r.coordinator.setRenderDistance.mock.calls.map((c) => c[0])).toEqual([10]);
+    expect(dom.el('setting-rd').value).toBe('10');
+    const fov = dom.el('setting-fov');
+    fov.value = '90';
+    fov.dispatchEvent(new Event('input'));
+    expect(page.fov).toBe(90);
+    expect(page.rd).toBe(10);
+    expect(r.coordinator.setRenderDistance.mock.calls.map((c) => c[0])).toEqual([10]);
+    expect(r.world.setRenderDistance.mock.calls.map((c) => c[0])).toEqual([10]);
+    expect(dom.el('setting-rd').value).toBe('10');
+    expect(r.camera.far).toBe(288);
+    // The help's select itself applies live too.
+    const rd = dom.el('setting-rd');
+    rd.value = '14';
+    rd.dispatchEvent(new Event('change'));
+    expect(r.coordinator.setRenderDistance).toHaveBeenLastCalledWith(14);
+    expect(page.rd).toBe(14);
   });
 });

@@ -818,6 +818,12 @@ describe('master spec amendments (SP4b §13)', () => {
     expect(text).not.toContain('R (load the world around you');
   });
 
+  test('§4.16\'s Live sentence names the live render distance (SP4b spec §5, §13)', () => {
+    const at = text.indexOf('### 4.16 Graphics presets');
+    const s416 = text.slice(at, text.indexOf('### 4.17 ', at));
+    expect(s416).toContain('the render distance live since SP4b, within the reservation\'s cap');
+  });
+
   test('§5.8\'s HUD counts gain the streaming counts (SP4b spec §7.3, §13)', () => {
     const at = text.indexOf('### 5.8 Debug HUD and bench');
     const s58 = text.slice(at, text.indexOf('### 5.9 ', at));

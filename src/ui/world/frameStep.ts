@@ -58,7 +58,7 @@ export interface FrameStepDeps {
   readonly state: { t: number; brightness: number; eyeSky: number; rd: number; fogBand: number };
   /** One of `TIME_SPEEDS`, or 0 when the clock is fixed. */
   timeSpeed(): number;
-  /** The fog's RD after `dtMs` (SP4b Task 22's easing; until then the target RD). */
+  /** The fog's RD after `dtMs` (the page's easing toward the target RD, `fogEase.ts`, SP4b spec §5). */
   fogStep(dtMs: number): number;
   /** After each rendered frame, with its delta (ms). */
   onRendered(dtMs: number): void;
