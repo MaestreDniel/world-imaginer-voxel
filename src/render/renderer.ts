@@ -1,7 +1,10 @@
-import { PerspectiveCamera, Scene, SRGBColorSpace, WebGLRenderer, type Object3D, type RenderItem } from 'three';
+import {
+  LinearFilter, NearestFilter, PerspectiveCamera, Scene, SRGBColorSpace, WebGLRenderer, type Mesh, type Object3D,
+  type RenderItem,
+} from 'three';
 import { MEDIUM } from '../core/params/graphicsPresets';
 import { OPENING_T } from '../daynight/dayNight';
-import { createFloatingOrigin } from './floatingOrigin';
+import { firstOrigin, type FloatingOrigin } from './floatingOrigin';
 import type { FrameState } from './frameState';
 import { createMaterialSystem, type MaterialSystem } from './materials/index';
 import { createSectionRenderer, type SectionRenderer, type SectionRendererKind } from './sectionRenderer';
@@ -13,6 +16,9 @@ import { createFlatColorArray } from './textureArray';
  * min(dpr, pixelRatioCap), output sRGB), a perspective camera (near 0.1, far (RD + 2)·16·1.5), and a scene holding the
  * section renderer's regions (§6.2) and the sky dome (§6.5). It builds the flat-colour array, the material system and
  * the section renderer itself, because the page (`ui`) may not touch `render/materials/`. It replaces SP0's sky page.
+ * SP4b (spec §4.5, §5): the far plane follows a live render distance, the warm-up draws every region unculled, the
+ * first floating origin is the snapped spawn, the GPU timer drops every query in flight on a disjoint, and the canvas
+ * names its section renderer (`data-renderer`).
  *
  * Pass order (master §4.5): opaque (front side, front to back), the sky dome, cutout (double side, alpha test), then
  * translucent (blended, back to front). The first three share three's opaque list, ordered by `opaquePassSort`; the
@@ -25,6 +31,12 @@ const NEAR = 0.1;
 /** The camera's far plane for render distance `rd`: (rd + 2)·16·1.5 blocks (spec §6.1). */
 export function cameraFar(rd: number): number {
   return (rd + 2) * 16 * 1.5;
+}
+
+/** Moves the camera's far plane to render distance `rd` (`cameraFar`) and updates its projection (SP4b spec §5). */
+export function applyRenderDistance(camera: PerspectiveCamera, rd: number): void {
+  camera.far = cameraFar(rd);
+  camera.updateProjectionMatrix();
 }
 
 /**
@@ -74,8 +86,11 @@ export interface GpuTimer {
 export interface WorldRenderer {
   readonly renderer: WebGLRenderer;
   readonly camera: PerspectiveCamera;
-  /** The floating origin (spec §6.8); the page calls `update` and, on true, `sections.setOrigin`. */
-  readonly origin: ReturnType<typeof createFloatingOrigin>;
+  /**
+   * The floating origin (spec §6.8), first at the snapped spawn (`WorldRendererOptions.originAt`, SP4b spec §3.4); the
+   * page calls `update` and, on true, `sections.setOrigin`.
+   */
+  readonly origin: FloatingOrigin;
   readonly sections: SectionRenderer;
   /**
    * Compiles every material behind the loading screen (`renderer.compileAsync`, spec §6.4, §8.4), for every built
@@ -87,9 +102,14 @@ export interface WorldRenderer {
   frame(state: FrameState): void;
   /**
    * One frame behind the opaque loading overlay (spec §8.4 step 5's three frames): as `frame`, with every built section
-   * drawn whether revealed or not, so its buffers reach the GPU before the reveal; the sections stay hidden after it.
+   * drawn whether revealed or not and every region unculled (three uploads only what passes culling, SP4b spec §4.5),
+   * so its buffers reach the GPU before the reveal; the sections stay hidden and culling is restored after it.
    */
   warmUp(state: FrameState): void;
+  /** The live render distance's far plane: `camera.far = cameraFar(rd)`, projection updated (SP4b spec §5). */
+  setRenderDistance(rd: number): void;
+  /** The GPU memory estimate's parts in bytes (SP4b spec §8.4), written into `out`. */
+  gpuEstimate(out: GpuEstimate): GpuEstimate;
   /** The last frame's draw calls and triangles. */
   info(): { calls: number; triangles: number };
   /** The GPU timer, or null without `EXT_disjoint_timer_query_webgl2`; `frame` begins and ends it itself. */
@@ -103,8 +123,10 @@ export interface WorldRendererOptions {
   readonly kind: SectionRendererKind;
   /** Vertical field of view, degrees. */
   readonly fov: number;
-  /** Render distance in columns: sets the far plane. */
+  /** Render distance in columns: sets the far plane until `setRenderDistance`. */
   readonly rd: number;
+  /** The spawn (or `?at`), in blocks: the first floating origin is it snapped (`firstOrigin`, SP4b spec §3.4). */
+  readonly originAt: { readonly x: number; readonly z: number };
   readonly pixelRatioCap: number;
   readonly ao: boolean;
   readonly smoothLight: boolean;
@@ -120,7 +142,11 @@ interface TimerQueryExt {
 /** Queries waiting for their result before `begin` skips a frame. */
 const MAX_PENDING_QUERIES = 8;
 
-function createGpuTimer(gl: WebGL2RenderingContext): (GpuTimer & { dispose(): void }) | null {
+/**
+ * GPU time per frame through `EXT_disjoint_timer_query_webgl2`, or null without it. A disjoint event invalidates every
+ * query in flight: `poll` then deletes every pending query, finished or not, and returns null (SP4b spec §4.5).
+ */
+export function createGpuTimer(gl: WebGL2RenderingContext): (GpuTimer & { dispose(): void }) | null {
   const ext = gl.getExtension('EXT_disjoint_timer_query_webgl2') as TimerQueryExt | null;
   if (ext === null) return null;
   let open: WebGLQuery | null = null;
@@ -138,17 +164,22 @@ function createGpuTimer(gl: WebGL2RenderingContext): (GpuTimer & { dispose(): vo
       open = null;
     },
     poll() {
-      // A disjoint event (a clock change, a context switch) invalidates every query in flight.
-      const disjoint = gl.getParameter(ext.GPU_DISJOINT_EXT) as boolean;
+      // A disjoint event (a clock change, a context switch) invalidates every query in flight, finished or not: an
+      // unfinished one kept would report a meaningless time on a later poll.
+      if (gl.getParameter(ext.GPU_DISJOINT_EXT) as boolean) {
+        for (const q of pending) gl.deleteQuery(q);
+        pending.length = 0;
+        return null;
+      }
       let latest: number | null = null;
       while (pending.length > 0) {
         const q = pending[0]!;
         if (!(gl.getQueryParameter(q, gl.QUERY_RESULT_AVAILABLE) as boolean)) break;
-        if (!disjoint) latest = (gl.getQueryParameter(q, gl.QUERY_RESULT) as number) / 1e6;
+        latest = (gl.getQueryParameter(q, gl.QUERY_RESULT) as number) / 1e6;
         gl.deleteQuery(q);
         pending.shift();
       }
-      return disjoint ? null : latest;
+      return latest;
     },
     dispose() {
       if (open !== null) {
@@ -160,6 +191,102 @@ function createGpuTimer(gl: WebGL2RenderingContext): (GpuTimer & { dispose(): vo
       pending.length = 0;
     },
   };
+}
+
+/**
+ * Runs `fn` with every hidden object under `root` counted visible, then hides them again, also after a throw: three
+ * compiles and draws only visible objects (`compile`, `warmUp`).
+ */
+export function withSectionsShown<T>(root: Object3D, fn: () => T): T {
+  const hidden: Object3D[] = [];
+  root.traverse((o) => {
+    if (!o.visible) {
+      hidden.push(o);
+      o.visible = true;
+    }
+  });
+  try {
+    return fn();
+  } finally {
+    for (const o of hidden) o.visible = false;
+  }
+}
+
+/**
+ * Runs `fn` with frustum culling off on every region object under `root` (each `Mesh`, a `BatchedMesh` included), then
+ * restores each object's own flag, also after a throw (SP4b spec §4.5): three uploads an object's buffers only when it
+ * passes culling (r186 `WebGLRenderer.js:1913-1915`), so the warm-up draws every region. A region the section renderer
+ * keeps unculled for its pending upload (§3.9) stays so.
+ */
+export function withRegionsUnculled<T>(root: Object3D, fn: () => T): T {
+  const culled: Object3D[] = [];
+  root.traverse((o) => {
+    if ((o as Partial<Mesh>).isMesh === true && o.frustumCulled) {
+      culled.push(o);
+      o.frustumCulled = false;
+    }
+  });
+  try {
+    return fn();
+  } finally {
+    for (const o of culled) o.frustumCulled = true;
+  }
+}
+
+/** The GPU memory estimate's parts, in bytes (SP4b spec §8.4); `gpuMB` is their sum / 2^20. */
+export interface GpuEstimate {
+  /** `SectionRenderer.gpuBytes()`. */
+  sectionsBytes: number;
+  /** The sky geometry's attribute and index arrays. */
+  skyBytes: number;
+  /** The texture array: width × height × depth × 4, with every mip level when it has them. */
+  textureBytes: number;
+  /** The lightmap's data. */
+  lightmapBytes: number;
+  /** The drawing buffer: canvas width × height × (4 colour + 4 depth-stencil). */
+  drawingBufferBytes: number;
+}
+
+interface ByteSized {
+  readonly array: { readonly byteLength: number };
+}
+
+/** The objects `gpuEstimateOf` sizes: structural views of the renderer's own (a test passes fakes). */
+export interface GpuEstimateParts {
+  readonly sections: { gpuBytes(): number };
+  readonly sky: { readonly attributes: Readonly<Record<string, ByteSized>>; readonly index: ByteSized | null };
+  readonly textureArray: {
+    readonly image: { readonly width: number; readonly height: number; readonly depth: number };
+    readonly generateMipmaps: boolean;
+    readonly minFilter: number;
+  };
+  readonly lightmap: { readonly image: { readonly data: { readonly byteLength: number } | null } };
+  readonly canvas: { readonly width: number; readonly height: number };
+}
+
+/**
+ * Each part of the GPU estimate from its object's own sizes (SP4b spec §8.4), written into `out`. three generates a
+ * texture's mips only under a mipmap minification filter (`WebGLTextures`' `textureNeedsGenerateMipmaps`).
+ */
+export function gpuEstimateOf(parts: GpuEstimateParts, out: GpuEstimate): GpuEstimate {
+  out.sectionsBytes = parts.sections.gpuBytes();
+  let sky = parts.sky.index?.array.byteLength ?? 0;
+  for (const name in parts.sky.attributes) sky += parts.sky.attributes[name]!.array.byteLength;
+  out.skyBytes = sky;
+  const t = parts.textureArray;
+  const mips = t.generateMipmaps && t.minFilter !== NearestFilter && t.minFilter !== LinearFilter;
+  let w = t.image.width;
+  let h = t.image.height;
+  let texels = w * h;
+  while (mips && (w > 1 || h > 1)) {
+    w = Math.max(1, w >> 1);
+    h = Math.max(1, h >> 1);
+    texels += w * h;
+  }
+  out.textureBytes = texels * t.image.depth * 4;
+  out.lightmapBytes = parts.lightmap.image.data?.byteLength ?? 0;
+  out.drawingBufferBytes = parts.canvas.width * parts.canvas.height * 8;
+  return out;
 }
 
 /**
@@ -188,13 +315,22 @@ export function createWorldRenderer(host: HTMLElement, o: WorldRendererOptions):
   const scene = new Scene();
   scene.add(sections.root);
   scene.add(sky);
-  // Valid uniforms for `compile` and any frame before the page's first FrameState: the opening time, no edge offset.
-  materials.setFrameUniforms({ t: OPENING_T, brightness: o.brightness, eyeSky: 15, rd: o.rd, fogBand: MEDIUM.fogBand, edgeCentre: [0, 0] });
+  // The first floating origin is the snapped spawn (SP4b spec §3.4), before anything is staged.
+  const origin = firstOrigin(o.originAt);
+  sections.setOrigin(origin.x, origin.y, origin.z);
+  // Valid uniforms for `compile` and any frame before the page's first FrameState: the opening time, the edge centred
+  // on the spawn (scene coordinates, relative to the origin).
+  materials.setFrameUniforms({
+    t: OPENING_T, brightness: o.brightness, eyeSky: 15, rd: o.rd, fogBand: MEDIUM.fogBand,
+    edgeCentre: [o.originAt.x - origin.x, o.originAt.z - origin.z],
+  });
 
   const renderer = new WebGLRenderer({ antialias: false });
   renderer.outputColorSpace = SRGBColorSpace;
   renderer.setOpaqueSort(opaquePassSort(materials));
   const canvas = renderer.domElement;
+  // Which section renderer draws (the browser smoke asserts it, SP4b spec §8.6).
+  canvas.dataset['renderer'] = o.kind;
   // The canvas fills the host in CSS pixels whatever the drawing-buffer size (`setSize` leaves the style alone), so a
   // pixel ratio under 1 scales the image up instead of shrinking the canvas.
   canvas.style.display = 'block';
@@ -203,7 +339,6 @@ export function createWorldRenderer(host: HTMLElement, o: WorldRendererOptions):
   host.appendChild(canvas);
 
   const camera = new PerspectiveCamera(o.fov, 1, NEAR, cameraFar(o.rd));
-  const origin = createFloatingOrigin(0, 0, 0);
   const timer = createGpuTimer(renderer.getContext() as WebGL2RenderingContext);
 
   const resize = (): void =>
@@ -225,21 +360,6 @@ export function createWorldRenderer(host: HTMLElement, o: WorldRendererOptions):
   watchDpr();
   resize();
 
-  /** Runs `fn` with every hidden object under the sections' root counted visible, then hides them again. */
-  const withSectionsShown = <T>(fn: () => T): T => {
-    const hidden: Object3D[] = [];
-    sections.root.traverse((o) => {
-      if (!o.visible) {
-        hidden.push(o);
-        o.visible = true;
-      }
-    });
-    try {
-      return fn();
-    } finally {
-      for (const o of hidden) o.visible = false;
-    }
-  };
   const draw = (state: FrameState): void => {
     // The camera in scene coordinates, relative to the floating origin (ruling P17).
     sections.sortTranslucent(camera.position.x, camera.position.y, camera.position.z);
@@ -262,13 +382,19 @@ export function createWorldRenderer(host: HTMLElement, o: WorldRendererOptions):
     sections,
     async compile() {
       // compileAsync walks the scene synchronously (`compile`), then only waits for the programs.
-      await withSectionsShown(() => renderer.compileAsync(scene, camera));
+      await withSectionsShown(sections.root, () => renderer.compileAsync(scene, camera));
     },
     frame(state) {
       draw(state);
     },
     warmUp(state) {
-      withSectionsShown(() => draw(state));
+      withSectionsShown(sections.root, () => withRegionsUnculled(sections.root, () => draw(state)));
+    },
+    setRenderDistance(rd) {
+      applyRenderDistance(camera, rd);
+    },
+    gpuEstimate(out) {
+      return gpuEstimateOf({ sections, sky: sky.geometry, textureArray: albedo, lightmap: materials.lightmap.texture, canvas }, out);
     },
     info() {
       return { calls: renderer.info.render.calls, triangles: renderer.info.render.triangles };

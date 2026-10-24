@@ -328,7 +328,7 @@ export function sectionRendererContract(kind: SectionRendererKind): void {
       r.dispose();
     });
 
-    test('an object with rows written in a pump has frustumCulled false until its attributes hold no pending update range (cleared as three\'s upload does), and true again at the next pump', () => {
+    test('an object with rows written in a pump has frustumCulled false until three uploads it (each attribute\'s onUploadCallback leaves no pending update range), and true again at the next pump', () => {
       const r = make();
       r.stage(fakePayload(0, 0, [opaque(3), water(3)]), 1);
       r.stage(fakePayload(17, 0, [opaque(3)]), 1);
@@ -339,10 +339,14 @@ export function sectionRendererContract(kind: SectionRendererKind): void {
       // Nothing uploaded them yet: still unculled after another pump.
       r.pump(fakeGate(32), 0, 0, 0);
       for (const m of written) expect(m.frustumCulled).toBe(false);
-      // three's upload clears each attribute's ranges; the next pump restores culling.
+      // three's upload of each attribute (its first one, a whole-array bufferData, which keeps the ranges in r186)
+      // ends in the attribute's onUploadCallback: the renderer's hook leaves no pending range (spec §4.1).
       for (const m of written) {
         const g = m.geometry;
-        for (const a of [...Object.values(g.attributes), g.getIndex()!] as BufferAttribute[]) a.clearUpdateRanges();
+        const attributes = [...Object.values(g.attributes), g.getIndex()!] as BufferAttribute[];
+        expect(attributes.some((a) => a.updateRanges.length > 0)).toBe(true);
+        for (const a of attributes) a.onUploadCallback();
+        for (const a of attributes) expect(a.updateRanges).toEqual([]);
       }
       r.pump(fakeGate(32), 0, 0, 0);
       for (const m of written) expect(m.frustumCulled).toBe(true);

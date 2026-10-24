@@ -1,4 +1,6 @@
-import { BatchedMesh, Matrix4, Quaternion, Vector3, type Box3, type BufferGeometry, type Object3D, type Sphere } from 'three';
+import {
+  BatchedMesh, Matrix4, Quaternion, Vector3, type Box3, type BufferAttribute, type BufferGeometry, type Object3D, type Sphere,
+} from 'three';
 import { afterEach, describe, expect, test, vi } from 'vitest';
 import { ROW_INTS, type ColumnMeshPayload } from '../../src/mesh/column';
 import { createMaterialSystem, type MaterialSystem, type MaterialVariant } from '../../src/render/materials/index';
@@ -170,6 +172,39 @@ describe('RegionBatch (SP4b spec §4.2, D14)', () => {
     expect(o.isRevealed(2, 0)).toBe(true);
     expect(visibleIndices(o.root)).toBe(33 * 6144);
     o.dispose();
+  });
+
+  test('three\'s upload (each attribute\'s onUploadCallback) leaves no pending update range on a new batch nor on a grown one\'s new attributes; the next pump culls the batch again (spec §4.1)', () => {
+    const attributesOf = (b: BatchedMesh): BufferAttribute[] =>
+      [b.geometry.getAttribute('position'), b.geometry.getAttribute('data'), b.geometry.getIndex()!] as BufferAttribute[];
+    /** What three's upload does after `bufferData` / `bufferSubData`, as `WebGLAttributes` calls it. */
+    const upload = (b: BatchedMesh): void => {
+      for (const a of attributesOf(b)) a.onUploadCallback();
+    };
+    const r = make();
+    r.stage(fakePayload(0, 0, big(32)), 1);
+    pumpAll(r);
+    const b = batchOf(r, 0)!;
+    expect(b.frustumCulled).toBe(false);
+    expect(attributesOf(b).some((a) => a.updateRanges.length > 0)).toBe(true);
+    upload(b);
+    for (const a of attributesOf(b)) expect(a.updateRanges).toEqual([]);
+    r.pump(fakeGate(32), 0, 0, 0);
+    expect(b.frustumCulled).toBe(true);
+
+    // A row that does not fit: the growth replaces the geometry; its new attributes carry the hook too.
+    const old = b.geometry;
+    r.stage(fakePayload(1, 0, big(1)), 1);
+    r.pump(fakeGate(32), 0, 0, 0);
+    expect(counts(r).lastStructural).toBe('grow');
+    expect(b.geometry).not.toBe(old);
+    expect(b.frustumCulled).toBe(false);
+    expect(attributesOf(b).some((a) => a.updateRanges.length > 0)).toBe(true);
+    upload(b);
+    for (const a of attributesOf(b)) expect(a.updateRanges).toEqual([]);
+    r.pump(fakeGate(32), 0, 0, 0);
+    expect(b.frustumCulled).toBe(true);
+    r.dispose();
   });
 
   test('the 1,537th instance waits for setInstanceCount(2,304)', () => {

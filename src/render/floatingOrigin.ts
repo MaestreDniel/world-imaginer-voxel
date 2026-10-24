@@ -2,7 +2,7 @@
  * The floating origin (SP4a spec §6.8, master §2.1): the scene is drawn relative to an origin snapped to 512 blocks, so
  * float32 positions stay small anywhere in the ±500,000-block world. The origin is rebased when the camera is more
  * than 1,024 blocks from it on any axis; the caller then moves the region objects (`SectionRenderer.setOrigin`).
- * The load centre sets the first origin; within SP4a's clamp a rebase does not trigger.
+ * The spawn sets the first origin (`snap`, `firstOrigin`; SP4b spec §3.4); a rebase follows the camera anywhere.
  */
 
 /** The snap step, in blocks. */
@@ -22,6 +22,11 @@ export interface FloatingOrigin {
    * on any axis: all three axes are re-snapped. Returns true when the origin moved.
    */
   update(camX: number, camY: number, camZ: number): boolean;
+}
+
+/** The first origin: the spawn (or `?at`) snapped to 512, at y 0 (SP4b spec §3.4, §7.6). */
+export function firstOrigin(at: { readonly x: number; readonly z: number }): FloatingOrigin {
+  return createFloatingOrigin(at.x, 0, at.z);
 }
 
 /** The origin at (x, y, z) snapped to 512 on each axis. */

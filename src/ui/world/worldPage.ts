@@ -11,15 +11,16 @@
  *    (`createStore({shared: true})` with the accepted reservation), the pool (`?workers` or clamp(cores − 2, 2, 6)),
  *    `attachStore`, then `configure` with the session's seed text and params.
  * 4. The centre is `?at`, else the pool's `spawn`. The world renderer (the section renderer the probe selects,
- *    `?renderer` overriding it) holds its reveals (`holdReveals(true)`). The first entry runs on the streaming
- *    coordinator (SP4b spec §3.11, D21), strict (any error stops the load, D12) and keeping every proto (D11): a rAF
- *    loop calls its `update` with the camera held at the centre, its sink stages each payload into the section
- *    renderer, and the loop pumps the uploads under a 12 ms budget with no row or structural cap and feeds the loading
- *    screen's progress from the coordinator's counts and the columns uploaded.
+ *    `?renderer` overriding it; its first floating origin the snapped centre, SP4b spec §3.4) holds its reveals
+ *    (`holdReveals(true)`). The first entry runs on the streaming coordinator (SP4b spec §3.11, D21), strict (any
+ *    error stops the load, D12) and keeping every proto (D11): a rAF loop calls its `update` with the camera held at
+ *    the centre, its sink stages each payload into the section renderer, and the loop pumps the uploads under a 12 ms
+ *    budget with no row or structural cap and feeds the loading screen's progress from the coordinator's counts and
+ *    the columns uploaded.
  * 5. When every column is meshed (`firstFill`) and every staged column uploaded: `compile()`, the camera placed with `firstView`
- *    from the store's `MOTION_BLOCKING`, three frames rendered behind the opaque overlay (`warmUp`: the sections'
- *    buffers reach the GPU while still hidden), then `revealAll()` and the reveal frame, the overlay faded out over
- *    300 ms, and "Click to fly" until the pointer locks. Nothing of the world is visible before that frame.
+ *    from the store's `MOTION_BLOCKING`, three frames rendered behind the opaque overlay (`warmUp`: every region
+ *    drawn unculled, so the sections' buffers reach the GPU while still hidden), then `revealAll()` and the reveal
+ *    frame, the overlay faded out over 300 ms, and "Click to fly" until the pointer locks. Nothing of the world is visible before that frame.
  *
  * The frame loop: the FPS limiter, the fly controller within the loaded disc (§7.5), the floating origin, the clock
  * (T cycles the time speed), `FrameState` (its `eyeSky` read from the page's attached store), the HUD (F3) and the help
@@ -531,13 +532,13 @@ export function mountWorldPage(root: HTMLElement, q: WorldQuery, hash: string, o
       ao: MEDIUM.ao,
       smoothLight: MEDIUM.smoothLight,
       brightness: settings.brightness,
+      // The first floating origin is the snapped spawn (SP4b spec §3.4), set before anything is staged.
+      originAt: at,
     });
     wr = world;
     // A context lost before the reveal is a load failure; after it, the page's handler takes over (Review Focus 5).
     world.onContextLost(() => fail('The graphics context was lost.', null));
     const sections = world.sections;
-    // The load centre sets the first floating origin (spec §6.8), before anything is staged.
-    if (world.origin.update(at.x, 0, at.z)) sections.setOrigin(world.origin.x, world.origin.y, world.origin.z);
     const cx0 = at.x >> 4;
     const cz0 = at.z >> 4;
     const meshDisc = stageOffsets(loadRd).MESH.map(([dx, dz]) => [cx0 + dx, cz0 + dz] as const);

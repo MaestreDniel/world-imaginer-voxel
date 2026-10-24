@@ -1,10 +1,18 @@
 import { describe, expect, test } from 'vitest';
-import { createFloatingOrigin } from '../../src/render/floatingOrigin';
+import { createFloatingOrigin, firstOrigin } from '../../src/render/floatingOrigin';
 
 describe('floating origin (SP4a spec §6.8, master §2.1)', () => {
   test('a start at (500,000, 70, −500,000) snaps to (499,712, 0, −499,712)', () => {
     const o = createFloatingOrigin(500_000, 70, -500_000);
     expect([o.x, o.y, o.z]).toEqual([499_712, 0, -499_712]);
+  });
+
+  test('firstOrigin of spawn (1,100, −700) is (1,024, 0, −512) (SP4b spec §3.4)', () => {
+    const o = firstOrigin({ x: 1100, z: -700 });
+    expect([o.x, o.y, o.z]).toEqual([1024, 0, -512]);
+    // It is a floating origin like any other: no rebase within 1,024 blocks of it.
+    expect(o.update(2048, 70, -1536)).toBe(false);
+    expect(o.update(2049, 70, -512)).toBe(true);
   });
 
   test('the snap rounds toward zero and never gives −0 (ruling P39)', () => {
