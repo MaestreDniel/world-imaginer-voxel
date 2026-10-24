@@ -9,9 +9,9 @@ import { evaluatedExpression, sliceCostOf } from '../../src/gen/inspect/fieldSli
 import { paramsWith } from '../harness/gen';
 import { steepTree } from './fixtures/editedTrees';
 
-const V = { type: 'fieldSlice', jobId: 1, epoch: 2, plane: 'vertical', ax: -1664, az: 8, bx: -640, bz: 8, y: 63, n: 128, field: 'density', path: '', from: 0, to: 64 };
-const H = { type: 'fieldSlice', jobId: 1, epoch: 2, plane: 'horizontal', cx: 0, cz: 0, y: 63, extent: 2048, n: 32, field: 'node', path: 'root.a', from: 3, to: 9 };
-const P = { type: 'fieldProbe', jobId: 4, epoch: 2, field: 'rule', path: 'root.rules[2]', x: 5, y: 63, z: -9 };
+const V = { type: 'fieldSlice', jobId: 1, epoch: 2, scope: 2, plane: 'vertical', ax: -1664, az: 8, bx: -640, bz: 8, y: 63, n: 128, field: 'density', path: '', from: 0, to: 64 };
+const H = { type: 'fieldSlice', jobId: 1, epoch: 2, scope: 2, plane: 'horizontal', cx: 0, cz: 0, y: 63, extent: 2048, n: 32, field: 'node', path: 'root.a', from: 3, to: 9 };
+const P = { type: 'fieldProbe', jobId: 4, epoch: 2, scope: 2, field: 'rule', path: 'root.rules[2]', x: 5, y: 63, z: -9 };
 const without = (m: Record<string, unknown>, k: string) => Object.fromEntries(Object.entries(m).filter(([key]) => key !== k));
 
 describe('fieldSlice and fieldProbe messages: parseToWorker checks the shape only (SP3d spec §5.1, §5.3)', () => {

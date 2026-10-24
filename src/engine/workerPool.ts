@@ -19,6 +19,10 @@
  * barrier (ruling P28); the four world jobs (`terrain`, `decorate`, `light`, `meshColumn`) are single jobs at priority 0
  * (the coordinator orders them), each reply checked against its request's job and column. STORE_FULL rejects with
  * `StoreFullError`.
+ * SP4b §2.7: the abort cell became the four per-scope epoch cells (terrain, decorate, light, mesh; the store's `epochs` on
+ * the world page). Every job but selftest carries its configure generation (`epoch`) and its phase's cell value at issue
+ * (`scope`); a reply settles as JobCancelled when the generation moved, when its cell moved, or on ABORTED. `configure`
+ * stores the new generation into all four cells; `bumpScope(from)` (SP4c's Apply) moves the cells from a phase onward.
  */
 import type { MapLevel } from '../core/constants';
 import type { ColumnPoint } from '../gen/column/columnPoint';
@@ -28,10 +32,11 @@ import type { LayerId } from '../gen/map/layers';
 import type { Segment } from '../metrics/crossSection';
 import type { ColumnMeshPayload } from '../mesh/column';
 import {
-  isRefusableField, parseFromWorker, payloadOfMeshResult, planFieldSlice, SLICE_POINTS, SLICE_ROWS, SLICE_SAMPLES, STATS_KINDS,
+  cellOf, isRefusableField, parseFromWorker, payloadOfMeshResult, planFieldSlice, SLICE_POINTS, SLICE_ROWS, SLICE_SAMPLES, STATS_KINDS,
   type FieldProbeSpec, type FieldSliceMsg, type FieldSliceSpec, type FromWorker, type ReadyMsg, type StatsArgs, type StatsKind, type StatsMsg, type ToWorker,
   type WorldJobType,
 } from '../workers/protocol';
+import { EPOCH_CELL, EPOCH_CELL_COUNT } from '../world/store/epochs';
 import type { StoreHandles } from '../world/store/store';
 
 export interface WorkerLike {
@@ -143,9 +148,16 @@ export interface PoolProbe {
   readonly jobs: readonly InFlightJob[];
 }
 
+/** A pipeline phase whose epoch cell `bumpScope` moves, with every later one (SP4b spec §2.7). */
+export type ScopePhase = keyof typeof EPOCH_CELL;
+
 export interface PoolOptions {
-  /** The epoch cell (SP2b spec §2.2); null or absent: jobs are not abortable. */
-  readonly abortCell?: Int32Array<SharedArrayBuffer> | null;
+  /**
+   * The four per-scope epoch cells (SP4b spec §2.7): an Int32Array of length 4 over a 16-byte SharedArrayBuffer (the store's
+   * `epochs.cells` on the world page; a TypeError otherwise). The pool writes them only in `configure` and `bumpScope`.
+   * Null or absent: jobs are not abortable.
+   */
+  readonly epochCells?: Int32Array | null;
   /** Called once per failed worker, after its work was rejected. */
   readonly onFailure?: (e: WorkerFailed) => void;
 }
@@ -153,10 +165,20 @@ export interface PoolOptions {
 export interface WorkerPool {
   readonly size: number;
   readonly epoch: number;
-  /** Whether superseded tile and spawn jobs stop early (the pool has an abort cell). */
+  /** Whether superseded jobs stop early (the pool has epoch cells). */
   readonly abortable: boolean;
-  /** Starts a new epoch on every worker; resolves with the (identical) ready message. */
+  /**
+   * Starts a new epoch on every worker; resolves with the (identical) ready message. The new generation is stored into
+   * all four epoch cells before the configure is posted, and every queued job rejects with JobCancelled.
+   */
   configure(seedText: string, params: unknown): Promise<ReadyMsg>;
+  /**
+   * Adds 1 to the epoch cells from `from` onward (terrain, decorate, light, mesh; SP4b spec §2.7, SP4c's Apply: "bumps the
+   * epoch from the dirty stage onward") and rejects the queued jobs of those phases with JobCancelled; their in-flight jobs
+   * stop (ABORTED) or settle as JobCancelled. Without cells it only rejects the queued jobs. Nothing calls it in SP4b
+   * outside its tests.
+   */
+  bumpScope(from: ScopePhase): void;
   /**
    * Hands every live worker the page's shared store (SP4a spec §2.3), once, before the world jobs; resolves when each has
    * answered `attached`. Jobs wait behind it as behind a configure. Rejects with the first job-less error a worker sends
@@ -229,6 +251,10 @@ export interface WorkerPool {
 interface Job {
   readonly id: number;
   readonly epoch: number;
+  /** The epoch cell the job reads (`cellOf`), null for selftest (no scope). */
+  readonly cell: 0 | 1 | 2 | 3 | null;
+  /** The cell's value at issue (the generation without cells), null for selftest. */
+  readonly scope: number | null;
   readonly priority: number;
   readonly msg: ToWorker;
   readonly tile: TileRequest | null;
@@ -247,11 +273,22 @@ const eventText = (event: unknown): string => {
   return typeof m === 'string' && m !== '' ? m : 'error event without a message';
 };
 
+/** The pool's epoch cells, checked: length 4 over a whole 16-byte SharedArrayBuffer (its buffer is posted to the workers). */
+function checkedCells(cells: Int32Array | null | undefined): Int32Array | null {
+  if (cells === undefined || cells === null) return null;
+  const b = cells.buffer;
+  if (!(typeof SharedArrayBuffer === 'function' && b instanceof SharedArrayBuffer) || cells.length !== EPOCH_CELL_COUNT || b.byteLength !== 4 * EPOCH_CELL_COUNT) {
+    throw new TypeError(`createWorkerPool: epochCells must be ${EPOCH_CELL_COUNT} Int32 over a ${4 * EPOCH_CELL_COUNT}-byte SharedArrayBuffer, got ${cells.length} over a ${b.byteLength}-byte ${b.constructor.name}`);
+  }
+  return cells;
+}
+
 export function createWorkerPool(size: number, spawn: () => WorkerLike, opts: PoolOptions = {}): WorkerPool {
+  // Checked before any worker is spawned.
+  const cells = checkedCells(opts.epochCells);
   const workers = Array.from({ length: size }, spawn);
   const busy: Array<Job | null> = workers.map(() => null);
   const alive: boolean[] = workers.map(() => true);
-  const cell = opts.abortCell ?? null;
   let live = size;
   let queue: Job[] = [];
   let epoch = -1;
@@ -260,7 +297,8 @@ export function createWorkerPool(size: number, spawn: () => WorkerLike, opts: Po
   let pendingReady: { need: number; got: ReadyMsg[]; resolve: (r: ReadyMsg) => void; reject: (e: Error) => void } | null = null;
   /** The attach barrier (ruling P28), separate from the configure's. */
   let pendingAttach: { need: number; got: number; resolve: () => void; reject: (e: Error) => void } | null = null;
-  if (cell !== null) Atomics.store(cell, 0, epoch);
+  /** Whether a job's epoch cell moved since its issue (SP4b spec §2.7). */
+  const moved = (job: Job): boolean => cells !== null && job.cell !== null && Atomics.load(cells, job.cell) !== job.scope;
 
   const pump = () => {
     if (pendingReady !== null || pendingAttach !== null) return;
@@ -340,7 +378,7 @@ export function createWorkerPool(size: number, spawn: () => WorkerLike, opts: Po
       const job = busy[w];
       busy[w] = null;
       if (job !== null && msg.jobId === job.id) {
-        if (job.epoch !== epoch || (msg.type === 'error' && msg.code === 'ABORTED')) job.reject(new JobCancelled());
+        if (job.epoch !== epoch || moved(job) || (msg.type === 'error' && msg.code === 'ABORTED')) job.reject(new JobCancelled());
         else if (msg.type === 'error' && msg.code === 'STORE_FULL') job.reject(new StoreFullError(`${msg.code}: ${msg.message}`));
         else if (msg.type === 'error') job.reject(new Error(`${msg.code}: ${msg.message}`));
         else job.resolve(msg);
@@ -357,14 +395,22 @@ export function createWorkerPool(size: number, spawn: () => WorkerLike, opts: Po
     for (const j of dropped) j.reject(new JobCancelled());
   };
 
-  const enqueue = (priority: number, build: (id: number) => ToWorker, tile: TileRequest | null, group = 0): Promise<FromWorker> =>
+  /**
+   * Queues a job of `type`: `build` gets its id and its scope, the value of its epoch cell now (the generation without
+   * cells; SP4b spec §2.7). A selftest has no cell and no scope (its build ignores the scope).
+   */
+  const enqueue = (
+    priority: number, type: JobType, build: (id: number, scope: number) => ToWorker, tile: TileRequest | null, group = 0,
+  ): Promise<FromWorker> =>
     new Promise((resolve, reject) => {
       if (live === 0) { reject(new WorkerFailed('every worker failed')); return; }
       const id = nextId++;
+      const cell = type === 'selftest' ? null : cellOf(type);
+      const scope = cell === null ? null : cells === null ? epoch : Atomics.load(cells, cell);
       // A failed slice rejects first (the request fails with its error), then drops its queued siblings
       // before the pool pumps the next job.
       const fail = group === 0 ? reject : (e: Error) => { reject(e); dropGroup(group); };
-      queue.push({ id, epoch, priority, msg: build(id), tile, group, resolve, reject: fail });
+      queue.push({ id, epoch, cell, scope, priority, msg: build(id, scope ?? epoch), tile, group, resolve, reject: fail });
       pump();
     });
 
@@ -377,27 +423,37 @@ export function createWorkerPool(size: number, spawn: () => WorkerLike, opts: Po
   };
   const worldJob = (type: WorldJobType, cx: number, cz: number): Promise<FromWorker> => {
     const e = epoch;
-    return enqueue(0, (jobId) => ({ type, jobId, epoch: e, cx, cz }), null);
+    return enqueue(0, type, (jobId, scope) => ({ type, jobId, epoch: e, scope, cx, cz }), null);
   };
 
   return {
     size,
-    abortable: cell !== null,
+    abortable: cells !== null,
     get epoch() { return epoch; },
     get queued() { return queue.length; },
     configure(seedText, params) {
       epoch++;
-      // Stored before posting: every in-flight tile or spawn of an older epoch stops within a row.
-      if (cell !== null) Atomics.store(cell, 0, epoch);
+      // Stored before posting, into all four cells: every in-flight job of an older epoch stops (a tile within a row).
+      if (cells !== null) for (let c = 0; c < EPOCH_CELL_COUNT; c++) Atomics.store(cells, c, epoch);
       for (const j of queue) j.reject(new JobCancelled());
       queue = [];
       if (pendingReady !== null) { const pr = pendingReady; pendingReady = null; pr.reject(new JobCancelled()); }
       if (live === 0) return Promise.reject(new WorkerFailed('every worker failed'));
       return new Promise((resolve, reject) => {
         pendingReady = { need: live, got: [], resolve, reject };
-        const msg: ToWorker = { type: 'configure', epoch, seedText, params, abort: cell === null ? null : cell.buffer };
+        const msg: ToWorker = { type: 'configure', epoch, seedText, params, epochs: cells === null ? null : (cells.buffer as SharedArrayBuffer) };
         workers.forEach((w, i) => { if (alive[i]) w.postMessage(msg); });
       });
+    },
+    bumpScope(from) {
+      if (!Object.hasOwn(EPOCH_CELL, from)) throw new RangeError(`bumpScope: no phase ${String(from)}`);
+      const first = EPOCH_CELL[from];
+      if (cells !== null) for (let c = first; c < EPOCH_CELL_COUNT; c++) Atomics.add(cells, c, 1);
+      const later = (j: Job) => j.cell !== null && j.cell >= first;
+      const dropped = queue.filter(later);
+      if (dropped.length === 0) return;
+      queue = queue.filter((j) => !later(j));
+      for (const j of dropped) j.reject(new JobCancelled());
     },
     attachStore(h) {
       if (pendingAttach !== null) return Promise.reject(new Error('attachStore: an attach is pending'));
@@ -419,19 +475,19 @@ export function createWorkerPool(size: number, spawn: () => WorkerLike, opts: Po
     },
     async tile(req, priority) {
       const e = epoch;
-      const r = await enqueue(priority, (jobId) => ({ type: 'mapTile', jobId, epoch: e, ...req }), req);
+      const r = await enqueue(priority, 'mapTile', (jobId, scope) => ({ type: 'mapTile', jobId, epoch: e, scope, ...req }), req);
       if (r.type !== 'tile') throw new Error(`unexpected reply ${r.type}`);
       return { rgba: r.rgba, ids: r.ids ?? null };
     },
     async point(x, z, priority = -1) {
       const e = epoch;
-      const r = await enqueue(priority, (jobId) => ({ type: 'point', jobId, epoch: e, x, z }), null);
+      const r = await enqueue(priority, 'point', (jobId, scope) => ({ type: 'point', jobId, epoch: e, scope, x, z }), null);
       if (r.type !== 'pointResult') throw new Error(`unexpected reply ${r.type}`);
       return r.fields;
     },
     async spawn() {
       const e = epoch;
-      const r = await enqueue(-2, (jobId) => ({ type: 'spawn', jobId, epoch: e }), null);
+      const r = await enqueue(-2, 'spawn', (jobId, scope) => ({ type: 'spawn', jobId, epoch: e, scope }), null);
       if (r.type !== 'spawnResult') throw new Error(`unexpected reply ${r.type}`);
       return r.spawn;
     },
@@ -447,7 +503,7 @@ export function createWorkerPool(size: number, spawn: () => WorkerLike, opts: Po
         const from = Math.floor((i * n) / parts);
         const to = Math.floor(((i + 1) * n) / parts);
         if (from === to) continue;
-        slices.push(enqueue(priority, (jobId) => ({ type: 'stats', jobId, epoch: e, kind, from, to, args }) as StatsMsg, null, group));
+        slices.push(enqueue(priority, 'stats', (jobId, scope) => ({ type: 'stats', jobId, epoch: e, scope, kind, from, to, args }) as StatsMsg, null, group));
       }
       const sum = new Float64Array(len);
       for (const r of await Promise.all(slices)) {
@@ -469,7 +525,7 @@ export function createWorkerPool(size: number, spawn: () => WorkerLike, opts: Po
         const to = Math.floor(((k + 1) * SLICE_POINTS) / size);
         if (from === to) continue;
         ranges.push([from, to]);
-        parts.push(enqueue(priority, (jobId) => ({ type: 'slice', jobId, epoch: e, ax, az, bx, bz, from, to }), null, group));
+        parts.push(enqueue(priority, 'slice', (jobId, scope) => ({ type: 'slice', jobId, epoch: e, scope, ax, az, bx, bz, from, to }), null, group));
       }
       const replies = await Promise.all(parts);
       const blocks = new Uint16Array(SLICE_SAMPLES);
@@ -491,7 +547,7 @@ export function createWorkerPool(size: number, spawn: () => WorkerLike, opts: Po
     },
     async surfaceProbe(x, y, z, priority = -1) {
       const e = epoch;
-      const r = await enqueue(priority, (jobId) => ({ type: 'surfaceProbe', jobId, epoch: e, x, y, z }), null);
+      const r = await enqueue(priority, 'surfaceProbe', (jobId, scope) => ({ type: 'surfaceProbe', jobId, epoch: e, scope, x, y, z }), null);
       if (r.type !== 'surfaceProbeResult') throw new Error(`unexpected reply ${r.type}`);
       return { state: r.state, path: r.path };
     },
@@ -519,8 +575,8 @@ export function createWorkerPool(size: number, spawn: () => WorkerLike, opts: Po
           : { plane: req.plane, cx: req.cx, cz: req.cz, extent: req.extent };
         let left = plan.ranges.length;
         for (const [from, to] of plan.ranges) {
-          const build = (jobId: number) => ({ type: 'fieldSlice', jobId, epoch: e, ...base, y: req.y, n, field, path: req.path, from, to }) as FieldSliceMsg;
-          enqueue(opts.priority, build, null, group).then((r) => {
+          const build = (jobId: number, scope: number) => ({ type: 'fieldSlice', jobId, epoch: e, scope, ...base, y: req.y, n, field, path: req.path, from, to }) as FieldSliceMsg;
+          enqueue(opts.priority, 'fieldSlice', build, null, group).then((r) => {
             if (done) return;
             if (r.type !== 'fieldSliceResult') throw new Error(`unexpected reply ${r.type}`);
             if (r.n !== n || r.field !== field || r.from !== from || r.to !== to) {
@@ -541,12 +597,12 @@ export function createWorkerPool(size: number, spawn: () => WorkerLike, opts: Po
     async fieldProbe(req, priority = -1) {
       const e = epoch;
       const { field, path, x, y, z } = req;
-      const r = await enqueue(priority, (jobId) => ({ type: 'fieldProbe', jobId, epoch: e, field, path, x, y, z }), null);
+      const r = await enqueue(priority, 'fieldProbe', (jobId, scope) => ({ type: 'fieldProbe', jobId, epoch: e, scope, field, path, x, y, z }), null);
       if (r.type !== 'fieldProbeResult') throw new Error(`unexpected reply ${r.type}`);
       return r.value;
     },
     async selftest(key) {
-      const r = await enqueue(0, (jobId) => ({ type: 'selftest', jobId, key }), null);
+      const r = await enqueue(0, 'selftest', (jobId) => ({ type: 'selftest', jobId, key }), null);
       if (r.type !== 'selftestResult') throw new Error(`unexpected reply ${r.type}`);
       return { actual: r.actual, error: r.error };
     },
@@ -572,12 +628,17 @@ export function createWorkerPool(size: number, spawn: () => WorkerLike, opts: Po
 }
 
 /**
- * Browser pool of module workers running task.worker.ts (size defaults to clamp(cores − 2, 2, 6)). The abort
- * cell exists only under cross-origin isolation, where a SharedArrayBuffer posted to a worker is shared.
+ * Browser pool of module workers running task.worker.ts (size defaults to clamp(cores − 2, 2, 6)). `epochCells` defaults
+ * to a pool-owned 16-byte buffer under cross-origin isolation (where a SharedArrayBuffer posted to a worker is shared),
+ * null otherwise; the world page passes its store's `epochs.cells` (SP4b spec §2.7).
  */
-export function createBrowserPool(size = poolSize(navigator.hardwareConcurrency || 4), opts: { readonly onFailure?: (e: WorkerFailed) => void } = {}): WorkerPool {
+export function createBrowserPool(
+  size = poolSize(navigator.hardwareConcurrency || 4),
+  opts: { readonly onFailure?: (e: WorkerFailed) => void; readonly epochCells?: Int32Array | null } = {},
+): WorkerPool {
   const isolated = globalThis.crossOriginIsolated === true && typeof SharedArrayBuffer === 'function';
+  const epochCells = opts.epochCells !== undefined ? opts.epochCells : isolated ? new Int32Array(new SharedArrayBuffer(4 * EPOCH_CELL_COUNT)) : null;
   return createWorkerPool(size, () =>
     new Worker(new URL('../workers/task.worker.ts', import.meta.url), { type: 'module' }) as unknown as WorkerLike,
-  { abortCell: isolated ? new Int32Array(new SharedArrayBuffer(4)) : null, onFailure: opts.onFailure });
+  { epochCells, onFailure: opts.onFailure });
 }

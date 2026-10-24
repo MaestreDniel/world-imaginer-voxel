@@ -212,6 +212,7 @@ export function instrumentPool(pool: WorkerPool, log: LatencyLog, now: () => num
       p.then(() => log.configureReady(e, now()), () => log.configureFailed(e));
       return p;
     },
+    bumpScope: (from) => pool.bumpScope(from),
     tile(req, priority) {
       const e = pool.epoch;
       const p = pool.tile(req, priority);

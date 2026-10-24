@@ -16,7 +16,7 @@ const MiB = 1 << 20;
 const shared = (): StoreHandles => createStore({ shared: true, maxBlockBytes: 4 * MiB, maxByteBytes: 4 * MiB }).handles();
 const attach = (handles: unknown) => ({ type: 'attach', handles });
 const JOBS = ['terrain', 'decorate', 'light', 'meshColumn'] as const;
-const job = (type: string, cx: unknown, cz: unknown = 0) => ({ type, jobId: 1, epoch: 0, cx, cz });
+const job = (type: string, cx: unknown, cz: unknown = 0) => ({ type, jobId: 1, epoch: 0, scope: 0, cx, cz });
 
 /** A reply the pool accepts, and one it does not (null, or `{bad, jobId, reason}`). */
 const valid = (m: unknown): boolean => {
@@ -100,6 +100,7 @@ describe('parseToWorker: the world jobs', () => {
     expect(parseToWorker(job(type, 32767, -32768))).not.toBeNull();
     expect(parseToWorker({ ...job(type, 0), jobId: 1.5 })).toBeNull();
     expect(parseToWorker({ ...job(type, 0), epoch: null })).toBeNull();
+    expect(parseToWorker({ ...job(type, 0), scope: 1.5 })).toBeNull();
   });
 });
 
@@ -151,7 +152,7 @@ describe('parseFromWorker: the world replies', () => {
 });
 
 describe('the task handler\'s world branches (SP4a spec §2.3, ruling P29)', () => {
-  const configure = { type: 'configure', epoch: 0, seedText: '42', params: DEFAULTS, abort: null };
+  const configure = { type: 'configure', epoch: 0, seedText: '42', params: DEFAULTS, epochs: null };
   const pick = (r: { msg: FromWorker }) => (r.msg.type === 'error' ? [r.msg.code, r.msg.jobId, r.msg.epoch] : [r.msg.type]);
 
   test('attach replies attached once; a second attach is BAD_MESSAGE; a malformed one too', () => {
@@ -168,17 +169,21 @@ describe('the task handler\'s world branches (SP4a spec §2.3, ruling P29)', () 
   });
   test('terrain replies columnDone; a stopped job ABORTED; a job out of order INTERNAL', () => {
     const h = createTaskHandler();
-    const cell = new Int32Array(new SharedArrayBuffer(4));
+    const cells = new Int32Array(new SharedArrayBuffer(16));
     h.handle(attach(shared()));
-    expect(h.handle({ ...configure, abort: cell.buffer }).msg.type).toBe('ready');
+    expect(h.handle({ ...configure, epochs: cells.buffer }).msg.type).toBe('ready');
     const r = h.handle(job('terrain', 5, 6));
     expect(r.msg).toMatchObject({ type: 'columnDone', jobId: 1, epoch: 0, job: 'terrain', cx: 5, cz: 6, versions: null });
     expect(r.transfer).toEqual([]);
     if (r.msg.type === 'columnDone') expect(r.msg.ms).toBeGreaterThanOrEqual(0);
     // D needs the 3 × 3 at Proto: (5, 6)'s neighbours are absent.
     expect(pick(h.handle(job('decorate', 5, 6)))).toEqual(['INTERNAL', 1, 0]);
-    Atomics.store(cell, 0, 1);
+    // The terrain cell moves: a job of the old scope stops, at the same configure epoch (no STALE_EPOCH)...
+    Atomics.store(cells, 0, 1);
     expect(pick(h.handle(job('terrain', 7, 6)))).toEqual(['ABORTED', 1, 0]);
+    // ...the other cells do not stop it, and a job carrying the moved cell's value runs.
+    Atomics.store(cells, 2, 9);
+    expect(h.handle({ ...job('terrain', 9, 6), scope: 1 }).msg).toMatchObject({ type: 'columnDone', jobId: 1, epoch: 0, job: 'terrain', cx: 9, cz: 6 });
   });
   test('StoreFull maps to STORE_FULL', () => {
     const h = createTaskHandler();

@@ -13,15 +13,15 @@ import { createSurfaceContext } from '../../src/gen/surface/context';
 import { surfaceProbe } from '../../src/gen/surface/probe';
 import { AIR, BEDROCK, DEEPSLATE, SNOW_BLOCK } from '../../src/world/blocks/index';
 import { leafOpts } from '../../src/ui/splineEditor/model';
-import { parseFromWorker, parseSpikeStoreFromWorker, parseSpikeStoreToWorker, parseToWorker, pointInWindow, SLICE_ROWS, SLICE_SAMPLES, sliceIndex, slicePartIndex, tileInWindow, type FromWorker } from '../../src/workers/protocol';
+import { cellOf, parseFromWorker, parseSpikeStoreFromWorker, parseSpikeStoreToWorker, parseToWorker, pointInWindow, SLICE_ROWS, SLICE_SAMPLES, sliceIndex, slicePartIndex, tileInWindow, type FromWorker, type ScopedJobType } from '../../src/workers/protocol';
 import { createSliceJob } from '../../src/workers/sliceJob';
 import { createTaskHandler } from '../../src/workers/taskHandler';
 import { createStore } from '../../src/world/store/store';
 import { ctxFor } from '../harness/gen';
 
-const tileMsg = { type: 'mapTile', jobId: 1, epoch: 3, layer: 'biome', level: 64, tx: 2, tz: -1 };
-const configure = (epoch: number, abort: SharedArrayBuffer | null = null, params: unknown = DEFAULTS, seedText = '42') => ({ type: 'configure', epoch, seedText, params, abort });
-const stats = (jobId: number, epoch: number, kind: string, from: number, to: number, args: unknown) => ({ type: 'stats', jobId, epoch, kind, from, to, args });
+const tileMsg = { type: 'mapTile', jobId: 1, epoch: 3, scope: 3, layer: 'biome', level: 64, tx: 2, tz: -1 };
+const configure = (epoch: number, epochs: SharedArrayBuffer | null = null, params: unknown = DEFAULTS, seedText = '42') => ({ type: 'configure', epoch, seedText, params, epochs });
+const stats = (jobId: number, epoch: number, kind: string, from: number, to: number, args: unknown) => ({ type: 'stats', jobId, epoch, scope: epoch, kind, from, to, args });
 /** A crossSection job's args: the sum's length and the segment's ends. */
 const line = (ax: number, az: number, bx: number, bz: number, len = 4096) => ({ len, ax, az, bx, bz });
 /** The length of a splineStats sum for the node at `node` of the leaf's default spline. */
@@ -39,15 +39,15 @@ const invalid = (m: unknown): boolean => !valid(m);
 describe('parseToWorker', () => {
   test('valid messages pass', () => {
     expect(parseToWorker(configure(0))).not.toBeNull();
-    expect(parseToWorker(configure(0, new SharedArrayBuffer(4)))).not.toBeNull();
+    expect(parseToWorker(configure(0, new SharedArrayBuffer(16)))).not.toBeNull();
     expect(parseToWorker(tileMsg)).not.toBeNull();
-    expect(parseToWorker({ type: 'point', jobId: 2, epoch: 3, x: 1.5, z: -7 })).not.toBeNull();
-    expect(parseToWorker({ type: 'spawn', jobId: 4, epoch: 3 })).not.toBeNull();
+    expect(parseToWorker({ type: 'point', jobId: 2, epoch: 3, scope: 3, x: 1.5, z: -7 })).not.toBeNull();
+    expect(parseToWorker({ type: 'spawn', jobId: 4, epoch: 3, scope: 3 })).not.toBeNull();
     expect(parseToWorker({ type: 'selftest', jobId: 5, key: 'sp1.params' })).not.toBeNull();
     expect(parseToWorker(stats(6, 3, 'splineStats', 0, 100, { len: 87, leaf: 'shape.offset', node: [6, 0] }))).not.toBeNull();
     expect(parseToWorker(stats(7, 3, 'biomeShares', 5, 5, { len: 31 }))).not.toBeNull();
     expect(parseToWorker(stats(8, 3, 'crossSection', 0, 512, line(5120, 3072, 6656, 3072)))).not.toBeNull();
-    expect(parseToWorker({ type: 'slice', jobId: 9, epoch: 3, ax: 5120, az: 3072, bx: 6656, bz: 3072, from: 0, to: 512 })).not.toBeNull();
+    expect(parseToWorker({ type: 'slice', jobId: 9, epoch: 3, scope: 3, ax: 5120, az: 3072, bx: 6656, bz: 3072, from: 0, to: 512 })).not.toBeNull();
   });
   test('crossSection ends are only checked to be numbers: outside the window, NaN or A = B parse, and the handler answers BAD_ARGS', () => {
     for (const args of [line(524288, 0, 0, 0), line(Number.NaN, 0, 1, 1), line(0, Infinity, 1, 1), line(7, 7, 7, 7)]) {
@@ -58,23 +58,23 @@ describe('parseToWorker', () => {
     ['not an object', 5],
     ['unknown type', { type: 'nope' }],
     ['empty seed text', configure(0, null, {}, '  ')],
-    ['configure without abort', { type: 'configure', epoch: 0, seedText: '42', params: {} }],
-    ['abort that is not shared', { ...configure(0), abort: new ArrayBuffer(4) }],
-    ['abort of the wrong size', configure(0, new SharedArrayBuffer(8))],
+    ['configure without epochs', { type: 'configure', epoch: 0, seedText: '42', params: {} }],
+    ['epochs that are not shared', { ...configure(0), epochs: new ArrayBuffer(16) }],
+    ['epochs of the wrong size', configure(0, new SharedArrayBuffer(8))],
     ['bad layer', { ...tileMsg, layer: 'caves' }],
     ['bad level', { ...tileMsg, level: 32 }],
     ['non-integer tile', { ...tileMsg, tx: 0.5 }],
     ['tile outside the window', { ...tileMsg, tx: 40 }],
     ['preview tile just past the window (SP2a minor 1)', { ...tileMsg, level: 256, tx: 8 }],
-    ['point outside the window', { type: 'point', jobId: 2, epoch: 3, x: 1e7, z: 0 }],
-    ['point on the window edge x = 2^19 (SP2a minor 1)', { type: 'point', jobId: 2, epoch: 3, x: 524288, z: 0 }],
-    ['point on the window edge z = 2^19', { type: 'point', jobId: 2, epoch: 3, x: 0, z: 524288 }],
-    ['non-finite point', { type: 'point', jobId: 2, epoch: 3, x: Number.NaN, z: 0 }],
+    ['point outside the window', { type: 'point', jobId: 2, epoch: 3, scope: 3, x: 1e7, z: 0 }],
+    ['point on the window edge x = 2^19 (SP2a minor 1)', { type: 'point', jobId: 2, epoch: 3, scope: 3, x: 524288, z: 0 }],
+    ['point on the window edge z = 2^19', { type: 'point', jobId: 2, epoch: 3, scope: 3, x: 0, z: 524288 }],
+    ['non-finite point', { type: 'point', jobId: 2, epoch: 3, scope: 3, x: Number.NaN, z: 0 }],
     ['stats of an unknown kind', stats(6, 3, 'nope', 0, 10, { len: 31 })],
     ['stats with from > to', stats(6, 3, 'biomeShares', 10, 9, { len: 31 })],
     ['stats with a negative from', stats(6, 3, 'biomeShares', -1, 9, { len: 31 })],
     ['stats with a non-integer to', stats(6, 3, 'biomeShares', 0, 9.5, { len: 31 })],
-    ['stats without args', { type: 'stats', jobId: 6, epoch: 3, kind: 'biomeShares', from: 0, to: 9 }],
+    ['stats without args', { type: 'stats', jobId: 6, epoch: 3, scope: 3, kind: 'biomeShares', from: 0, to: 9 }],
     ['stats with args.len 0', stats(6, 3, 'biomeShares', 0, 9, { len: 0 })],
     ['stats with a non-integer args.len', stats(6, 3, 'biomeShares', 0, 9, { len: 31.5 })],
     ['splineStats whose leaf is not a string', stats(6, 3, 'splineStats', 0, 9, { len: 87, leaf: 7, node: [] })],
@@ -93,7 +93,48 @@ describe('parseToWorker', () => {
       expect([level, tileInWindow(-n, level), tileInWindow(n - 1, level), tileInWindow(n, level), tileInWindow(-n - 1, level)]).toEqual([level, true, true, false, false]);
     }
     expect(parseToWorker({ ...tileMsg, level: 256, tx: -8, tz: 7 })).not.toBeNull();
-    expect(parseToWorker({ type: 'point', jobId: 2, epoch: 3, x: -524288, z: 524287.5 })).not.toBeNull();
+    expect(parseToWorker({ type: 'point', jobId: 2, epoch: 3, scope: 3, x: -524288, z: 524287.5 })).not.toBeNull();
+  });
+});
+
+describe('the per-scope epoch cells and every job\'s scope (SP4b spec §2.7)', () => {
+  /** One valid message of each of the twelve scoped job types, at epoch 3 and scope 5, and the cell it reads. */
+  const SCOPED: ReadonlyArray<[ScopedJobType, Record<string, unknown>, number]> = [
+    ['mapTile', { ...tileMsg, scope: 5 }, 0],
+    ['point', { type: 'point', jobId: 2, epoch: 3, scope: 5, x: 1.5, z: -7 }, 0],
+    ['spawn', { type: 'spawn', jobId: 4, epoch: 3, scope: 5 }, 0],
+    ['stats', { ...stats(6, 3, 'biomeShares', 0, 10, { len: 31 }), scope: 5 }, 0],
+    ['slice', { type: 'slice', jobId: 9, epoch: 3, scope: 5, ax: 5120, az: 3072, bx: 6656, bz: 3072, from: 0, to: 512 }, 0],
+    ['surfaceProbe', { type: 'surfaceProbe', jobId: 10, epoch: 3, scope: 5, x: 0, y: 70, z: 0 }, 0],
+    ['fieldSlice', { type: 'fieldSlice', jobId: 11, epoch: 3, scope: 5, plane: 'vertical', ax: -1664, az: 8, bx: -640, bz: 8, y: 63, n: 128, field: 'density', path: '', from: 0, to: 64 }, 0],
+    ['fieldProbe', { type: 'fieldProbe', jobId: 12, epoch: 3, scope: 5, field: 'rule', path: 'root.rules[2]', x: 5, y: 63, z: -9 }, 0],
+    ['terrain', { type: 'terrain', jobId: 13, epoch: 3, scope: 5, cx: 2, cz: -1 }, 0],
+    ['decorate', { type: 'decorate', jobId: 14, epoch: 3, scope: 5, cx: 2, cz: -1 }, 1],
+    ['light', { type: 'light', jobId: 15, epoch: 3, scope: 5, cx: 2, cz: -1 }, 2],
+    ['meshColumn', { type: 'meshColumn', jobId: 16, epoch: 3, scope: 5, cx: 2, cz: -1 }, 3],
+  ];
+
+  test('configure accepts epochs null or a 16-byte SharedArrayBuffer and refuses 4 bytes or an ArrayBuffer', () => {
+    expect(parseToWorker(configure(0, null))).not.toBeNull();
+    expect(parseToWorker(configure(0, new SharedArrayBuffer(16)))).not.toBeNull();
+    expect(parseToWorker(configure(0, new SharedArrayBuffer(4)))).toBeNull();
+    expect(parseToWorker({ ...configure(0), epochs: new ArrayBuffer(16) })).toBeNull();
+    expect(parseToWorker({ type: 'configure', epoch: 0, seedText: '42', params: DEFAULTS })).toBeNull();
+    expect(parseToWorker({ type: 'configure', epoch: 0, seedText: '42', params: DEFAULTS, abort: null })).toBeNull();
+  });
+  test.each(SCOPED)('%s parses with an integer scope and is refused without one', (type, m) => {
+    expect(parseToWorker(m)).toMatchObject({ type, epoch: 3, scope: 5 });
+    const { scope: _, ...unscoped } = m;
+    for (const bad of [unscoped, { ...m, scope: 1.5 }, { ...m, scope: '5' }, { ...m, scope: null }, { ...m, scope: Number.NaN }]) {
+      expect(parseToWorker(bad), `${type} with scope ${String(bad['scope'])}`).toBeNull();
+    }
+  });
+  test('selftest carries neither epoch nor scope', () => {
+    expect(parseToWorker({ type: 'selftest', jobId: 5, key: 'sp1.params' })).not.toBeNull();
+  });
+  test('cellOf: decorate 1, light 2, meshColumn 3, every other scoped type 0 (terrain, spawn, tiles, stats, slices, field slices, probes, points)', () => {
+    expect(SCOPED.map(([type]) => [type, cellOf(type)])).toEqual(SCOPED.map(([type, , cell]) => [type, cell]));
+    expect(SCOPED).toHaveLength(12);
   });
 });
 
@@ -141,9 +182,9 @@ describe('task handler', () => {
     const rgba = paintTileAbortable(ctxFor('42'), 'biome', 64, 2, -1, new Uint8ClampedArray(262144), () => false, ids)!;
     expect(sameBytes(tile.msg.rgba, rgba)).toBe(true);
     expect(sameBytes(tile.msg.ids!, ids)).toBe(true);
-    const pt = h.handle({ type: 'point', jobId: 9, epoch: 3, x: 100.5, z: -20 }).msg;
+    const pt = h.handle({ type: 'point', jobId: 9, epoch: 3, scope: 3, x: 100.5, z: -20 }).msg;
     expect(pt).toEqual({ type: 'pointResult', jobId: 9, epoch: 3, fields: columnPoint(ctxFor('42'), 100.5, -20) });
-    expect(h.handle({ type: 'spawn', jobId: 10, epoch: 3 }).msg).toEqual({ type: 'spawnResult', jobId: 10, epoch: 3, spawn: findSpawn(ctxFor('42')) });
+    expect(h.handle({ type: 'spawn', jobId: 10, epoch: 3, scope: 3 }).msg).toEqual({ type: 'spawnResult', jobId: 10, epoch: 3, spawn: findSpawn(ctxFor('42')) });
   });
   test('only biome tiles carry ids', () => {
     const h = createTaskHandler();
@@ -181,7 +222,7 @@ describe('task handler', () => {
     const rules = { kind: 'sequence', rules: [{ kind: 'block', state: 'no_such_block' }] };
     const r = h.handle(configure(7, null, { ...DEFAULTS, surface: { ...DEFAULTS.surface, rules } })).msg;
     expect(r).toEqual({ type: 'error', jobId: null, epoch: 7, code: 'BAD_PARAMS', message: 'surface.rules.root.rules[0].state: UNKNOWN_BLOCK' });
-    expect(h.handle({ type: 'point', jobId: 9, epoch: 4, x: 1.5, z: -7 }).msg.type).toBe('pointResult');
+    expect(h.handle({ type: 'point', jobId: 9, epoch: 4, scope: 4, x: 1.5, z: -7 }).msg.type).toBe('pointResult');
   });
   test('errors carry the epoch of their message, or null (SP2a minor 4)', () => {
     const h = createTaskHandler();
@@ -198,8 +239,8 @@ describe('task handler', () => {
     expect(pick(configure(5))).toEqual(['ready']);
     expect(pick(tileMsg)).toEqual(['STALE_EPOCH', 1, 3]);
   });
-  test('with an abort cell, tile and spawn jobs whose epoch the cell has left reply ABORTED; points and selftests never abort', () => {
-    const sab = new SharedArrayBuffer(4);
+  test('with epoch cells, tile and spawn jobs whose epoch the cell has left reply ABORTED; points and selftests never abort', () => {
+    const sab = new SharedArrayBuffer(16);
     const cell = new Int32Array(sab);
     const h = createTaskHandler();
     Atomics.store(cell, 0, 3);
@@ -208,12 +249,12 @@ describe('task handler', () => {
     const tile = h.handle(tileMsg);
     expect(tile.msg).toMatchObject({ type: 'error', jobId: 1, epoch: 3, code: 'ABORTED' });
     expect(tile.transfer).toEqual([]);
-    expect(h.handle({ type: 'spawn', jobId: 2, epoch: 3 }).msg).toMatchObject({ type: 'error', jobId: 2, epoch: 3, code: 'ABORTED' });
-    expect(h.handle({ type: 'point', jobId: 3, epoch: 3, x: 1, z: 2 }).msg.type).toBe('pointResult');
+    expect(h.handle({ type: 'spawn', jobId: 2, epoch: 3, scope: 3 }).msg).toMatchObject({ type: 'error', jobId: 2, epoch: 3, code: 'ABORTED' });
+    expect(h.handle({ type: 'point', jobId: 3, epoch: 3, scope: 3, x: 1, z: 2 }).msg.type).toBe('pointResult');
     expect(h.handle({ type: 'selftest', jobId: 4, key: 'sp1.params' }).msg.type).toBe('selftestResult');
     Atomics.store(cell, 0, 3);
     expect(h.handle({ ...tileMsg, level: 256 }).msg.type).toBe('tile');
-    expect(h.handle({ type: 'spawn', jobId: 5, epoch: 3 }).msg.type).toBe('spawnResult');
+    expect(h.handle({ type: 'spawn', jobId: 5, epoch: 3, scope: 3 }).msg.type).toBe('spawnResult');
   });
   test('stats jobs reply with the raw sums of the metrics functions over their point range, transferred (SP2b spec §5.4)', () => {
     const h = createTaskHandler();
@@ -287,8 +328,8 @@ describe('task handler', () => {
     // The window's own corners are inside: −2^19 is in it, 2^19 − 1 too.
     expect(reply(line(-524288, -524288, 524287, 524287))).toEqual(['statsResult']);
   });
-  test('with an abort cell, a stats job whose epoch the cell has left replies ABORTED', () => {
-    const sab = new SharedArrayBuffer(4);
+  test('with epoch cells, a stats job whose epoch the cell has left replies ABORTED', () => {
+    const sab = new SharedArrayBuffer(16);
     const cell = new Int32Array(sab);
     const h = createTaskHandler();
     Atomics.store(cell, 0, 3);
@@ -315,7 +356,7 @@ describe('task handler', () => {
 });
 
 describe('slice messages and the slice job (SP3a spec §5.1)', () => {
-  const slice = (jobId: number, epoch: number, ax: unknown, az: unknown, bx: unknown, bz: unknown, from: unknown = 0, to: unknown = 512) => ({ type: 'slice', jobId, epoch, ax, az, bx, bz, from, to });
+  const slice = (jobId: number, epoch: number, ax: unknown, az: unknown, bx: unknown, bz: unknown, from: unknown = 0, to: unknown = 512) => ({ type: 'slice', jobId, epoch, scope: epoch, ax, az, bx, bz, from, to });
   const COAST = { ax: -2030.5, az: -2007.25, bx: -1950.75, bz: -1990.5 };
   const coast = (jobId: number, epoch: number, from = 0, to = 512) => slice(jobId, epoch, COAST.ax, COAST.az, COAST.bx, COAST.bz, from, to);
   const live = (s: { blockPool: { slotCount(): number; freeCount(): number }; bytePool: { slotCount(): number; freeCount(): number } }) =>
@@ -324,11 +365,11 @@ describe('slice messages and the slice job (SP3a spec §5.1)', () => {
   test('parseToWorker: integer jobId and epoch, numeric ends and range (the window, A ≠ B and the range are the handler\'s BAD_ARGS)', () => {
     expect(parseToWorker(coast(1, 0))).not.toBeNull();
     for (const m of [slice(1, 0, 524288, 0, 0, 0), slice(1, 0, Number.NaN, 0, 1, 1), slice(1, 0, 7, 7, 7, 7), slice(1, 0, 0, 0, 1, 1, 1.5, 600), slice(1, 0, 0, 0, 1, 1, Number.NaN, -1)]) expect(parseToWorker(m)).not.toBeNull();
-    for (const m of [slice(1.5, 0, 0, 0, 1, 1), slice(1, null as unknown as number, 0, 0, 1, 1), slice(1, 0, '0', 0, 1, 1), slice(1, 0, 0, 0, 1, undefined), { type: 'slice', jobId: 1, epoch: 0, ax: 0, az: 0, bx: 1, from: 0, to: 512 }]) {
+    for (const m of [slice(1.5, 0, 0, 0, 1, 1), slice(1, null as unknown as number, 0, 0, 1, 1), slice(1, 0, '0', 0, 1, 1), slice(1, 0, 0, 0, 1, undefined), { type: 'slice', jobId: 1, epoch: 0, scope: 0, ax: 0, az: 0, bx: 1, from: 0, to: 512 }]) {
       expect(parseToWorker(m)).toBeNull();
     }
     // SP3b spec §6: the message carries from and to.
-    for (const m of [slice(1, 0, 0, 0, 1, 1, '0', 512), slice(1, 0, 0, 0, 1, 1, 0, null), { type: 'slice', jobId: 1, epoch: 0, ax: 0, az: 0, bx: 1, bz: 1 }, { type: 'slice', jobId: 1, epoch: 0, ax: 0, az: 0, bx: 1, bz: 1, from: 0 }]) {
+    for (const m of [slice(1, 0, 0, 0, 1, 1, '0', 512), slice(1, 0, 0, 0, 1, 1, 0, null), { type: 'slice', jobId: 1, epoch: 0, scope: 0, ax: 0, az: 0, bx: 1, bz: 1 }, { type: 'slice', jobId: 1, epoch: 0, scope: 0, ax: 0, az: 0, bx: 1, bz: 1, from: 0 }]) {
       expect(parseToWorker(m)).toBeNull();
     }
   });
@@ -407,8 +448,8 @@ describe('slice messages and the slice job (SP3a spec §5.1)', () => {
     // The window's own corners are inside.
     expect(reply(slice(1, 3, -524288, -524288, 524287, 524287))).toEqual(['sliceResult']);
   });
-  test('with an abort cell, a slice whose epoch the cell has left replies ABORTED and keeps no half-written column', () => {
-    const sab = new SharedArrayBuffer(4);
+  test('with epoch cells, a slice whose epoch the cell has left replies ABORTED and keeps no half-written column', () => {
+    const sab = new SharedArrayBuffer(16);
     const cell = new Int32Array(sab);
     const job = createSliceJob();
     const h = createTaskHandler(job);
@@ -448,7 +489,7 @@ describe('slice messages and the slice job (SP3a spec §5.1)', () => {
 });
 
 describe('surfaceProbe messages and the handler (SP3c spec §6)', () => {
-  const probe = (jobId: unknown, epoch: unknown, x: unknown, y: unknown, z: unknown) => ({ type: 'surfaceProbe', jobId, epoch, x, y, z });
+  const probe = (jobId: unknown, epoch: unknown, x: unknown, y: unknown, z: unknown) => ({ type: 'surfaceProbe', jobId, epoch, scope: epoch, x, y, z });
   const result = (path: unknown, state: unknown = 3, jobId: unknown = 4) => ({ type: 'surfaceProbeResult', jobId, epoch: 2, state, path });
   /** A surfaceProbe reply's state and path (throws on any other reply). */
   const probed = (m: FromWorker): { readonly state: number; readonly path: readonly string[] } => {
@@ -462,7 +503,7 @@ describe('surfaceProbe messages and the handler (SP3c spec §6)', () => {
     for (const m of [probe(1, 0, 5, 70, -9), probe(1, 0, 1.5, 70, 0), probe(1, 0, 524288, 0, 0), probe(1, 0, 0, -65, 0), probe(1, 0, Number.NaN, 0, 0), probe(1, 0, 0, 320.5, Infinity)]) {
       expect(parseToWorker(m)).not.toBeNull();
     }
-    for (const m of [probe(1.5, 0, 0, 0, 0), probe(1, null, 0, 0, 0), probe(1, 0, '0', 0, 0), probe(1, 0, 0, undefined, 0), { type: 'surfaceProbe', jobId: 1, epoch: 0, x: 0, y: 0 }]) {
+    for (const m of [probe(1.5, 0, 0, 0, 0), probe(1, null, 0, 0, 0), probe(1, 0, '0', 0, 0), probe(1, 0, 0, undefined, 0), { type: 'surfaceProbe', jobId: 1, epoch: 0, scope: 0, x: 0, y: 0 }]) {
       expect(parseToWorker(m)).toBeNull();
     }
   });
@@ -501,7 +542,7 @@ describe('surfaceProbe messages and the handler (SP3c spec §6)', () => {
   test('the probe reads the voxel the slice shows: its state is the slice\'s block at (⌊xᵢ⌋, y, ⌊zᵢ⌋) for every y', () => {
     const h = createTaskHandler();
     h.handle(configure(3));
-    const s = h.handle({ type: 'slice', jobId: 1, epoch: 3, ...COAST, from: 0, to: 512 }).msg;
+    const s = h.handle({ type: 'slice', jobId: 1, epoch: 3, scope: 3, ...COAST, from: 0, to: 512 }).msg;
     if (s.type !== 'sliceResult') throw new Error(`no slice: ${s.type}`);
     const blocks = new Uint16Array(s.blocks);
     const states = new Set<number>();
@@ -530,8 +571,8 @@ describe('surfaceProbe messages and the handler (SP3c spec §6)', () => {
     for (const [x, y, z] of [[-524288, -64, -524288], [524287, 319, 524287]] as const) expect(reply(probe(5, 3, x, y, z))).toEqual(['surfaceProbeResult']);
   });
 
-  test('before configure NOT_CONFIGURED, at another epoch STALE_EPOCH; with an abort cell it polls before its column build (SP3d spec §5.3)', () => {
-    const sab = new SharedArrayBuffer(4);
+  test('before configure NOT_CONFIGURED, at another epoch STALE_EPOCH; with epoch cells it polls before its column build (SP3d spec §5.3)', () => {
+    const sab = new SharedArrayBuffer(16);
     const cell = new Int32Array(sab);
     const h = createTaskHandler();
     const reply = (m: unknown) => {
@@ -575,7 +616,7 @@ describe('the store spike\'s messages (SP4a spec §1.2 item 6, ruling P18)', () 
   });
   test.each<[string, unknown]>([
     ['not an object', 7],
-    ['a ToWorker message', { type: 'spawn', jobId: 1, epoch: 0 }],
+    ['a ToWorker message', { type: 'spawn', jobId: 1, epoch: 0, scope: 0 }],
     ['write without handles', { type: 'spikeWrite', index: 0, columnsPerWorker: 32 }],
     ['handles not a store\'s', { type: 'spikeWrite', handles: { shared: true }, index: 0, columnsPerWorker: 32 }],
     ['handles without the reclaim buffer', { type: 'spikeWrite', handles: { ...handles, reclaim: undefined }, index: 0, columnsPerWorker: 32 }],

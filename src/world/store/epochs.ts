@@ -1,7 +1,9 @@
 /**
  * Per-scope epoch cells (SP3a spec §3.4, master §2.3, §4.3): one Int32 per pipeline phase in its own buffer (a
- * `SharedArrayBuffer` when `shared`, an `ArrayBuffer` otherwise), read and written with Atomics. Built in SP3a; SP4
- * wires them into the worker pool in place of the pool-wide abort cell.
+ * `SharedArrayBuffer` when `shared`, an `ArrayBuffer` otherwise), read and written with Atomics. Built in SP3a; wired by
+ * SP4b in place of the pool-wide abort cell (SP4b spec §2.7): every job carries its phase's cell value at issue (`scope`)
+ * and stops when the cell moves; the pool's `configure` stores its generation into all four, `bumpScope` moves the cells
+ * from a phase onward.
  */
 
 /** Cell index per pipeline phase. */

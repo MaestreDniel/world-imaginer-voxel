@@ -725,6 +725,12 @@ describe('master spec amendments (SP4b §13)', () => {
     expect(slabs).toContain('the lock word holds its owner\'s thread index + 1, and a thread spinning on a failed owner\'s lock throws `StoreCorrupt` (SP4b)');
   });
 
+  test('§2.3\'s epoch-cell sentence carries every job\'s scope (SP4b spec §2.7, §13)', () => {
+    const cell = text.split('\n').find((l) => l.startsWith('**Epoch cell.**'));
+    expect(cell, 'no `**Epoch cell.**` paragraph').toBeDefined();
+    expect(cell).toContain('SP4b wires them in place of SP2b\'s pool-wide cell (every job carries its configure generation and its phase\'s cell value at issue, `scope`, and stops when the cell moves; `configure` stores the generation into all four; Apply bumps from the dirty stage, SP4c)');
+  });
+
   test('§1 names each SP4b module in its entry, which exists', () => {
     for (const [head, token, file] of SP4B_MODULES) {
       const entry = layoutEntry(head);

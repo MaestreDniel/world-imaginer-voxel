@@ -2,10 +2,10 @@
  * Task-pool protocol (SP2a spec §5.1): plain messages, validated at both ends by hand-written guards.
  * The main thread sends configure / mapTile / point / spawn / stats / slice / surfaceProbe / selftest; the worker answers
  * ready / tile / pointResult / spawnResult / statsResult / sliceResult / surfaceProbeResult / selftestResult / error. selftest needs no configure.
- * Configure carries the pool's abort cell (SP2b spec §2.2), errors carry the epoch of the message they
- * answer (§2.3), biome tiles carry the biome id of every pixel (§5.3), and a stats job returns the raw
- * sums of one kind over a range of the kind's fixed point stream (§5.4) or, for crossSection, of the points
- * along its line (§4.5). A slice job (SP3a spec §5.1) returns the voxels of the vertical slice under a line, for a
+ * Configure carries the pool's four per-scope epoch cells (SP4b spec §2.7; SP2b spec §2.2's abort cell before it), errors
+ * carry the epoch of the message they answer (SP2b spec §2.3), biome tiles carry the biome id of every pixel (§5.3), and a
+ * stats job returns the raw sums of one kind over a range of the kind's fixed point stream (§5.4) or, for crossSection, of
+ * the points along its line (§4.5). A slice job (SP3a spec §5.1) returns the voxels of the vertical slice under a line, for a
  * range [from, to) of its 512 samples (SP3b spec §6: the pool splits a slice across its workers). A surfaceProbe job (SP3c
  * spec §6) returns one voxel's final state and its surface-rule branch path, for the Voxels mode's hover.
  * SP3d (spec §5): a fieldSlice job evaluates a range [from, to) of the sample columns of an n × n slice (density, a
@@ -17,6 +17,8 @@
  * four world jobs `terrain`, `decorate`, `light` and `meshColumn` of one column answer `columnDone` or `meshColumnResult`;
  * the attach guard checks every buffer is a `SharedArrayBuffer` of the documented size (ruling P23), and the mesh reply's
  * table is checked against its buffers (`payloadProblem`).
+ * SP4b (spec §2.7): every job but `selftest` carries two values, `epoch` (its configure generation: STALE_EPOCH when it is not
+ * the worker's) and `scope` (the value of its phase's epoch cell at issue, `cellOf`: the worker stops it once the cell moves).
  */
 import { MAP_LEVELS, MAP_TILE_PX, PART_BUDGET, SLICE_NS, type MapLevel } from '../core/constants';
 import type { StageId } from '../core/ids';
@@ -29,7 +31,7 @@ import type { SplineLeaf } from '../metrics/splineStats';
 import { payloadProblem, type ColumnMeshPayload } from '../mesh/column';
 import type { ColumnView } from '../world/store/api';
 import { COLUMN_TABLE_BYTES } from '../world/store/columnTable';
-import { EPOCH_CELL_COUNT } from '../world/store/epochs';
+import { EPOCH_CELL, EPOCH_CELL_COUNT } from '../world/store/epochs';
 import { BLOCK_SLOT_BYTES, BYTE_SLOT_BYTES, GROW_BYTES, type PoolHandles } from '../world/store/pool';
 import { RECLAIM_BYTES } from '../world/store/reclaim';
 import { STATE_TABLE_SIZE, type StoreHandles } from '../world/store/store';
@@ -39,18 +41,26 @@ export { COLUMN_SAMPLE_COST, CORNER_SAMPLE_COST, CORNER_STEEP_COST, DRAFT_BUDGET
 const LEVELS: readonly number[] = MAP_LEVELS;
 const NS: readonly number[] = SLICE_NS;
 
-/** `abort` is the pool's epoch cell (an Int32 in a 4-byte SharedArrayBuffer), or null without cross-origin isolation. */
-export interface ConfigureMsg { readonly type: 'configure'; readonly epoch: number; readonly seedText: string; readonly params: unknown; readonly abort: SharedArrayBuffer | null }
-export interface MapTileMsg { readonly type: 'mapTile'; readonly jobId: number; readonly epoch: number; readonly layer: LayerId; readonly level: MapLevel; readonly tx: number; readonly tz: number }
-export interface PointMsg { readonly type: 'point'; readonly jobId: number; readonly epoch: number; readonly x: number; readonly z: number }
-export interface SpawnMsg { readonly type: 'spawn'; readonly jobId: number; readonly epoch: number }
+/**
+ * `epochs` is the pool's four per-scope epoch cells (SP4b spec §2.7: four Int32 in a 16-byte SharedArrayBuffer, terrain,
+ * decorate, light and mesh; the store's `epochs` on the world page), or null without cross-origin isolation.
+ */
+export interface ConfigureMsg { readonly type: 'configure'; readonly epoch: number; readonly seedText: string; readonly params: unknown; readonly epochs: SharedArrayBuffer | null }
+/**
+ * What every job but `selftest` carries (SP4b spec §2.7): `epoch`, its configure generation, and `scope`, the value of its
+ * phase's epoch cell (`cellOf`) when the pool issued it.
+ */
+interface Scoped { readonly jobId: number; readonly epoch: number; readonly scope: number }
+export interface MapTileMsg extends Scoped { readonly type: 'mapTile'; readonly layer: LayerId; readonly level: MapLevel; readonly tx: number; readonly tz: number }
+export interface PointMsg extends Scoped { readonly type: 'point'; readonly x: number; readonly z: number }
+export interface SpawnMsg extends Scoped { readonly type: 'spawn' }
 export interface SelftestMsg { readonly type: 'selftest'; readonly jobId: number; readonly key: string }
 /**
  * A stats job over points [from, to) of its kind's fixed stream. `args.len` is the Float64 length of the
  * kind's sum, which the kind's module in src/metrics exports (splineStatsLength, biomeSharesLength); the
  * worker replies BAD_ARGS when it does not match the configured params.
  */
-interface StatsBase { readonly type: 'stats'; readonly jobId: number; readonly epoch: number; readonly from: number; readonly to: number }
+interface StatsBase extends Scoped { readonly type: 'stats'; readonly from: number; readonly to: number }
 /** The histogram and region shares of the node at `node` of a shape spline (spec §4.3). */
 export interface SplineStatsMsg extends StatsBase { readonly kind: 'splineStats'; readonly args: { readonly len: number; readonly leaf: SplineLeaf; readonly node: KnotPath } }
 /** Surface-biome counts, ties, outside and total (spec §5.5). */
@@ -68,8 +78,8 @@ export type StatsArgs<K extends StatsKind> = Extract<StatsMsg, { readonly kind: 
  * spec §6). The ends and the range are only checked to be numbers here; an end outside the half-open world window,
  * A = B, or a range that is not integers with 0 ≤ from < to ≤ 512 is the handler's BAD_ARGS.
  */
-export interface SliceMsg {
-  readonly type: 'slice'; readonly jobId: number; readonly epoch: number;
+export interface SliceMsg extends Scoped {
+  readonly type: 'slice';
   readonly ax: number; readonly az: number; readonly bx: number; readonly bz: number;
   readonly from: number; readonly to: number;
 }
@@ -78,7 +88,7 @@ export interface SliceMsg {
  * numbers here; non-integers, a position outside the half-open world window or a y outside −64 … 319 is the handler's
  * BAD_ARGS (`surfaceProbeProblem`).
  */
-export interface SurfaceProbeMsg { readonly type: 'surfaceProbe'; readonly jobId: number; readonly epoch: number; readonly x: number; readonly y: number; readonly z: number }
+export interface SurfaceProbeMsg extends Scoped { readonly type: 'surfaceProbe'; readonly x: number; readonly y: number; readonly z: number }
 /** What a fieldSlice job evaluates (SP3d spec §5.1): `path` is the node path inside its leaf ('' for density and blocks). */
 interface FieldSliceArgs { readonly y: number; readonly n: number; readonly field: SliceField; readonly path: string }
 /** A vertical plane along A = (ax, az) → B = (bx, bz); `y` is carried but unused. */
@@ -92,10 +102,10 @@ export type FieldSliceSpec = VerticalFieldSlice | HorizontalFieldSlice;
  * present and the other plane's absent, a known field, a path of at most FIELD_PATH_MAX characters); n, the segment or
  * the square, y, the field on its plane, the path, the range and the work bound are the handler's BAD_ARGS.
  */
-export type FieldSliceMsg = FieldSliceSpec & { readonly type: 'fieldSlice'; readonly jobId: number; readonly epoch: number; readonly from: number; readonly to: number };
+export type FieldSliceMsg = FieldSliceSpec & Scoped & { readonly type: 'fieldSlice'; readonly from: number; readonly to: number };
 /** The value of a field at voxel (x, y, z) (SP3d spec §5.3); the position, the path and the bound are the handler's BAD_ARGS. */
 export interface FieldProbeSpec { readonly field: ProbeField; readonly path: string; readonly x: number; readonly y: number; readonly z: number }
-export type FieldProbeMsg = FieldProbeSpec & { readonly type: 'fieldProbe'; readonly jobId: number; readonly epoch: number };
+export type FieldProbeMsg = FieldProbeSpec & Scoped & { readonly type: 'fieldProbe' };
 /**
  * The page's shared store, sent once per worker before its configure (SP4a spec §2.3); answered `attached`, or a job-less
  * BAD_MESSAGE (a second attach, or handles the guard refuses).
@@ -104,16 +114,29 @@ export interface AttachMsg { readonly type: 'attach'; readonly handles: StoreHan
 /** The four world jobs (SP4a spec §2.3): T, the D skeleton, the exact light and the column mesh. */
 export type WorldJobType = 'terrain' | 'decorate' | 'light' | 'meshColumn';
 /** A world job on column (cx, cz) of the attached store; cx and cz are integers whose blocks lie in the world window. */
-export interface WorldJobMsg { readonly type: WorldJobType; readonly jobId: number; readonly epoch: number; readonly cx: number; readonly cz: number }
+export interface WorldJobMsg extends Scoped { readonly type: WorldJobType; readonly cx: number; readonly cz: number }
 export type ToWorker = ConfigureMsg | MapTileMsg | PointMsg | SpawnMsg | StatsMsg | SliceMsg | SurfaceProbeMsg | SelftestMsg | FieldSliceMsg | FieldProbeMsg
   | AttachMsg | WorldJobMsg;
+/** Every job type that carries an `epoch` and a `scope` (SP4b spec §2.7): all but configure, attach and selftest. */
+export type ScopedJobType = Exclude<ToWorker['type'], 'configure' | 'attach' | 'selftest'>;
+/** Each scoped job type's epoch cell (a record, so a new job type cannot be left out). */
+const CELL_OF: Readonly<Record<ScopedJobType, 0 | 1 | 2 | 3>> = Object.freeze({
+  mapTile: EPOCH_CELL.terrain, point: EPOCH_CELL.terrain, spawn: EPOCH_CELL.terrain, stats: EPOCH_CELL.terrain, slice: EPOCH_CELL.terrain,
+  surfaceProbe: EPOCH_CELL.terrain, fieldSlice: EPOCH_CELL.terrain, fieldProbe: EPOCH_CELL.terrain, terrain: EPOCH_CELL.terrain,
+  decorate: EPOCH_CELL.decorate, light: EPOCH_CELL.light, meshColumn: EPOCH_CELL.mesh,
+});
+/**
+ * The epoch cell a job of `type` reads (SP4b spec §2.7): decorate 1, light 2, meshColumn 3, every other scoped type 0
+ * (terrain, spawn, map tiles, stats, slices, field slices, probes and points).
+ */
+export const cellOf = (type: ScopedJobType): 0 | 1 | 2 | 3 => CELL_OF[type];
 
 export interface ReadyMsg { readonly type: 'ready'; readonly epoch: number; readonly stageHashes: Readonly<Partial<Record<StageId, string>>>; readonly genKey: string }
 /** `ids` (256·256 biome ids, one per pixel) comes with layer 'biome' only. */
 export interface TileMsg { readonly type: 'tile'; readonly jobId: number; readonly epoch: number; readonly rgba: ArrayBuffer; readonly ids?: ArrayBuffer }
 export interface PointResultMsg { readonly type: 'pointResult'; readonly jobId: number; readonly epoch: number; readonly fields: ColumnPoint }
 /**
- * ABORTED: the abort cell left the job's epoch (the pool reads it as JobCancelled). BAD_ARGS: a stats job's arguments do
+ * ABORTED: the job's epoch cell moved from its scope (the pool reads it as JobCancelled). BAD_ARGS: a stats job's arguments do
  * not fit the configured params. NOT_ATTACHED: a world job before `attach`. STORE_FULL: a world job's store pool is at its
  * maximum (`StoreFull`; the pool rejects with `StoreFullError`).
  */
@@ -198,7 +221,10 @@ export const sliceRangeProblem = (from: number, to: number): string | null =>
 const isObj = (v: unknown): v is Record<string, unknown> => typeof v === 'object' && v !== null && !Array.isArray(v);
 const isInt = (v: unknown): v is number => typeof v === 'number' && Number.isInteger(v);
 const isFiniteNum = (v: unknown): v is number => typeof v === 'number' && Number.isFinite(v);
-const isAbortCell = (v: unknown): boolean => v === null || (typeof SharedArrayBuffer === 'function' && v instanceof SharedArrayBuffer && v.byteLength === 4);
+/** Null, or the four per-scope epoch cells' buffer: a SharedArrayBuffer of 16 bytes (SP4b spec §2.7). */
+const isEpochCells = (v: unknown): boolean => v === null || (typeof SharedArrayBuffer === 'function' && v instanceof SharedArrayBuffer && v.byteLength === 4 * EPOCH_CELL_COUNT);
+/** A job's integer jobId, epoch and scope (SP4b spec §2.7). */
+const scopedOk = (m: Record<string, unknown>): boolean => isInt(m['jobId']) && isInt(m['epoch']) && isInt(m['scope']);
 /**
  * Every stats kind (a record, so a new kind cannot be left out) and how the pool runs a request of it (spec
  * §5.4): 'split' into pool.size slices whose sums it adds, or 'single', one job over the whole range.
@@ -219,11 +245,11 @@ const fieldSliceOk = (m: Record<string, unknown>): boolean => {
   const plane = m['plane'];
   if (plane !== 'vertical' && plane !== 'horizontal') return false;
   const other = plane === 'vertical' ? PLANE_KEYS.horizontal : PLANE_KEYS.vertical;
-  return isInt(m['jobId']) && isInt(m['epoch']) && typeof m['field'] === 'string' && SLICE_FIELDS.includes(m['field']) && isPath(m['path'])
+  return scopedOk(m) && typeof m['field'] === 'string' && SLICE_FIELDS.includes(m['field']) && isPath(m['path'])
     && [...PLANE_KEYS[plane], ...FIELD_SLICE_KEYS].every((k) => typeof m[k] === 'number') && other.every((k) => !Object.hasOwn(m, k));
 };
 const fieldProbeOk = (m: Record<string, unknown>): boolean =>
-  isInt(m['jobId']) && isInt(m['epoch']) && typeof m['field'] === 'string' && PROBE_FIELDS.includes(m['field']) && isPath(m['path']) && VOXEL_KEYS.every((k) => typeof m[k] === 'number');
+  scopedOk(m) && typeof m['field'] === 'string' && PROBE_FIELDS.includes(m['field']) && isPath(m['path']) && VOXEL_KEYS.every((k) => typeof m[k] === 'number');
 
 /** The byte lengths of a fieldSlice reply's `values` and `fluid` (0: null) for `columns` sample columns of n samples. */
 export function fieldSliceBytes(n: number, field: SliceField, columns: number): { readonly values: number; readonly fluid: number } {
@@ -291,7 +317,7 @@ const statsOk = (m: Record<string, unknown>): boolean => {
   const from = m['from'];
   const to = m['to'];
   const args = m['args'];
-  if (!isInt(m['jobId']) || !isInt(m['epoch']) || !isStatsKind(m['kind'])) return false;
+  if (!scopedOk(m) || !isStatsKind(m['kind'])) return false;
   if (!isInt(from) || !isInt(to) || from < 0 || to < from) return false;
   if (!isObj(args) || !isInt(args['len']) || args['len'] < 1) return false;
   if (m['kind'] === 'crossSection') return SEGMENT_KEYS.every((k) => typeof args[k] === 'number');
@@ -358,23 +384,23 @@ export function parseToWorker(m: unknown): ToWorker | null {
   if (!isObj(m)) return null;
   switch (m['type']) {
     case 'configure':
-      return isInt(m['epoch']) && typeof m['seedText'] === 'string' && m['seedText'].trim() !== '' && 'params' in m && isAbortCell(m['abort']) ? (m as unknown as ConfigureMsg) : null;
+      return isInt(m['epoch']) && typeof m['seedText'] === 'string' && m['seedText'].trim() !== '' && 'params' in m && isEpochCells(m['epochs']) ? (m as unknown as ConfigureMsg) : null;
     case 'mapTile': {
       const level = m['level'];
-      if (!isInt(m['jobId']) || !isInt(m['epoch']) || !isLayerId(m['layer'])) return null;
+      if (!scopedOk(m) || !isLayerId(m['layer'])) return null;
       if (!isInt(level) || !LEVELS.includes(level) || !tileOk(m['tx'], level) || !tileOk(m['tz'], level)) return null;
       return m as unknown as MapTileMsg;
     }
     case 'point':
-      return isInt(m['jobId']) && isInt(m['epoch']) && isFiniteNum(m['x']) && isFiniteNum(m['z']) && pointInWindow(m['x'], m['z']) ? (m as unknown as PointMsg) : null;
+      return scopedOk(m) && isFiniteNum(m['x']) && isFiniteNum(m['z']) && pointInWindow(m['x'], m['z']) ? (m as unknown as PointMsg) : null;
     case 'spawn':
-      return isInt(m['jobId']) && isInt(m['epoch']) ? (m as unknown as SpawnMsg) : null;
+      return scopedOk(m) ? (m as unknown as SpawnMsg) : null;
     case 'stats':
       return statsOk(m) ? (m as unknown as StatsMsg) : null;
     case 'slice':
-      return isInt(m['jobId']) && isInt(m['epoch']) && SLICE_KEYS.every((k) => typeof m[k] === 'number') ? (m as unknown as SliceMsg) : null;
+      return scopedOk(m) && SLICE_KEYS.every((k) => typeof m[k] === 'number') ? (m as unknown as SliceMsg) : null;
     case 'surfaceProbe':
-      return isInt(m['jobId']) && isInt(m['epoch']) && VOXEL_KEYS.every((k) => typeof m[k] === 'number') ? (m as unknown as SurfaceProbeMsg) : null;
+      return scopedOk(m) && VOXEL_KEYS.every((k) => typeof m[k] === 'number') ? (m as unknown as SurfaceProbeMsg) : null;
     case 'selftest':
       return isInt(m['jobId']) && typeof m['key'] === 'string' ? (m as unknown as SelftestMsg) : null;
     case 'fieldSlice':
@@ -384,7 +410,7 @@ export function parseToWorker(m: unknown): ToWorker | null {
     case 'attach':
       return storeHandlesOk(m['handles']) ? (m as unknown as AttachMsg) : null;
     case 'terrain': case 'decorate': case 'light': case 'meshColumn':
-      return isInt(m['jobId']) && isInt(m['epoch']) && isColumn(m['cx'], m['cz']) ? (m as unknown as WorldJobMsg) : null;
+      return scopedOk(m) && isColumn(m['cx'], m['cz']) ? (m as unknown as WorldJobMsg) : null;
     default:
       return null;
   }

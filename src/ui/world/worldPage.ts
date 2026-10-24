@@ -493,8 +493,10 @@ export function mountWorldPage(root: HTMLElement, q: WorldQuery, hash: string, o
     const loadRd = resolveRenderDistance(caps, q.rd, settings.rd);
     rd = loadRd;
     const store = createStore({ shared: true, maxBlockBytes: caps.reservation.blockBytes, maxByteBytes: caps.reservation.byteBytes });
+    // The pool's per-scope epoch cells are the store's (SP4b spec §2.7).
     const workers = createBrowserPool(q.workers ?? poolSize(navigator.hardwareConcurrency || 4), {
       onFailure: (e) => fail(causeOf(e), e),
+      epochCells: store.epochs.cells,
     });
     pool = workers;
     await workers.attachStore(store.handles());

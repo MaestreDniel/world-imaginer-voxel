@@ -16,12 +16,12 @@ const MOUNTAIN: Segment = { ax: -1664, az: 8, bx: -640, bz: 8 };
 /** The coast line of the fieldSlice tests: sea, beach and land at seed '42'. */
 const COAST: Segment = { ax: -27136, az: -31992, bx: -26113, bz: -31992 };
 
-const configure = (epoch: number, abort: SharedArrayBuffer | null = null) => ({ type: 'configure', epoch, seedText: '42', params: DEFAULTS, abort });
+const configure = (epoch: number, epochs: SharedArrayBuffer | null = null) => ({ type: 'configure', epoch, seedText: '42', params: DEFAULTS, epochs });
 const vMsg = (s: Segment, field: SliceField, path: string, from: number, to: number, n = 32, extra: Record<string, unknown> = {}) =>
-  ({ type: 'fieldSlice', jobId: 9, epoch: 3, plane: 'vertical', ...s, y: 63, n, field, path, from, to, ...extra });
+  ({ type: 'fieldSlice', jobId: 9, epoch: 3, scope: 3, plane: 'vertical', ...s, y: 63, n, field, path, from, to, ...extra });
 const hMsg = (field: SliceField, path: string, from: number, to: number, extra: Record<string, unknown> = {}) =>
-  ({ type: 'fieldSlice', jobId: 9, epoch: 3, plane: 'horizontal', cx: -1152, cz: 8, y: 100, extent: 2048, n: 32, field, path, from, to, ...extra });
-const pMsg = (field: string, path: string, x: number, y: number, z: number) => ({ type: 'fieldProbe', jobId: 5, epoch: 3, field, path, x, y, z });
+  ({ type: 'fieldSlice', jobId: 9, epoch: 3, scope: 3, plane: 'horizontal', cx: -1152, cz: 8, y: 100, extent: 2048, n: 32, field, path, from, to, ...extra });
+const pMsg = (field: string, path: string, x: number, y: number, z: number) => ({ type: 'fieldProbe', jobId: 5, epoch: 3, scope: 3, field, path, x, y, z });
 
 const vGeom = (s: Segment, n = 32): SliceGeometry => ({ plane: 'vertical', n, pointAt: (i) => segmentPointAt(s, i, n) });
 const hGeom: SliceGeometry = { plane: 'horizontal', n: 32, cx: -1152, cz: 8, y: 100, extent: 2048 };
@@ -103,8 +103,8 @@ describe('the fieldSlice job (SP3d spec §5.1)', () => {
     bad(vMsg(MOUNTAIN, 'blocks', '', 0, 2), 'too heavy: 2 sample columns of cost 5006893, at most 1 per part');
     expect(h.handle(vMsg(MOUNTAIN, 'density', '', 0, 79, 128)).msg.type).toBe('fieldSliceResult');
   });
-  test('before configure NOT_CONFIGURED, at another epoch STALE_EPOCH; with an abort cell a fieldSlice whose epoch the cell has left replies ABORTED', () => {
-    const sab = new SharedArrayBuffer(4);
+  test('before configure NOT_CONFIGURED, at another epoch STALE_EPOCH; with epoch cells a fieldSlice whose epoch the cell has left replies ABORTED', () => {
+    const sab = new SharedArrayBuffer(16);
     const cell = new Int32Array(sab);
     const h = createTaskHandler();
     expect(errOf(h.handle(vMsg(MOUNTAIN, 'density', '', 0, 8)).msg).slice(0, 3)).toEqual(['NOT_CONFIGURED', 9, 3]);
@@ -145,7 +145,7 @@ describe('the fieldProbe job (SP3d spec §5.3)', () => {
     expect([...seen].sort((a, b) => a - b)).toEqual([0, 1, 255]);
   });
   test('BAD_ARGS for a position that is not integers in the window, y outside −64 … 319 or a bad path; ABORTED once the cell left its epoch', () => {
-    const sab = new SharedArrayBuffer(4);
+    const sab = new SharedArrayBuffer(16);
     const cell = new Int32Array(sab);
     Atomics.store(cell, 0, 3);
     const h = createTaskHandler();
@@ -160,7 +160,7 @@ describe('the fieldProbe job (SP3d spec §5.3)', () => {
       expect(errOf(h.handle(pMsg(field, field === 'node' ? 'root.a' : field === 'rule' ? 'root' : '', 0, 70, 0)).msg).slice(0, 3)).toEqual(['ABORTED', 5, 3]);
     }
     // SP3d spec §5.3: the surfaceProbe handler now polls stop() before its column build (it ran to the end before).
-    expect(errOf(h.handle({ type: 'surfaceProbe', jobId: 6, epoch: 3, x: 0, y: 70, z: 0 }).msg).slice(0, 3)).toEqual(['ABORTED', 6, 3]);
-    expect(h.handle({ type: 'point', jobId: 7, epoch: 3, x: 0, z: 0 }).msg.type).toBe('pointResult');
+    expect(errOf(h.handle({ type: 'surfaceProbe', jobId: 6, epoch: 3, scope: 3, x: 0, y: 70, z: 0 }).msg).slice(0, 3)).toEqual(['ABORTED', 6, 3]);
+    expect(h.handle({ type: 'point', jobId: 7, epoch: 3, scope: 3, x: 0, z: 0 }).msg.type).toBe('pointResult');
   });
 });

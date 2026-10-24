@@ -70,7 +70,7 @@ function lightOf(s: VoxelStore, sy: number): Uint8Array {
 
 test('attach, configure, then T, D, L and MESH_COLUMN through two workers on the shared store', async () => {
   const store = createStore({ shared: true, maxBlockBytes: 64 * MiB, maxByteBytes: 64 * MiB });
-  const pool: WorkerPool = createWorkerPool(2, spawnNode, { abortCell: new Int32Array(new SharedArrayBuffer(4)) });
+  const pool: WorkerPool = createWorkerPool(2, spawnNode, { epochCells: new Int32Array(new SharedArrayBuffer(16)) });
   try {
     await pool.attachStore(store.handles());
     expect((await pool.configure('42', DEFAULTS)).type).toBe('ready');

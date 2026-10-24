@@ -71,7 +71,7 @@ function slice(params: Params, spec: FieldSliceSpec, ranges: readonly (readonly 
   const ctx = createGenContext(seedFromInput('42'), params);
   let s = 0;
   for (const [from, to] of ranges) {
-    const msg: FieldSliceMsg = { ...spec, type: 'fieldSlice', jobId: 0, epoch: 0, from, to };
+    const msg: FieldSliceMsg = { ...spec, type: 'fieldSlice', jobId: 0, epoch: 0, scope: 0, from, to };
     const r = runFieldSlice(ctx, msg, NEVER, NO_T_COLUMNS);
     if (r === null || 'badArgs' in r) throw new Error(`slice part [${from}, ${to}) refused: ${r === null ? 'stopped' : r.badArgs}`);
     s += new Float64Array(r.msg.values)[0]!;
@@ -152,7 +152,7 @@ test('SP1, SP2a, SP2b, SP3a, SP3b, SP3c, SP3d, SP3e and SP4a kernels', async ({ 
   const handler = createTaskHandler();
   const posted = structuredClone(DEFAULTS);
   let epoch = 0;
-  await measure('worker.configure', 1, () => { sink += handler.handle({ type: 'configure', epoch: epoch++, seedText: '42', params: posted, abort: null }).msg.type === 'ready' ? 1 : 0; });
+  await measure('worker.configure', 1, () => { sink += handler.handle({ type: 'configure', epoch: epoch++, seedText: '42', params: posted, epochs: null }).msg.type === 'ready' ? 1 : 0; });
   const preview = [[-1, -1], [0, -1], [-1, 0], [0, 0]] as const;
   let pt = 0;
   await measure('map.tile.b256.biome', 1, () => { const [tx, tz] = preview[pt++ % 4]!; paintTile(gen, 'biome', 256, tx, tz, tile); sink += tile[0]!; }, 8);

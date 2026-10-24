@@ -10,6 +10,10 @@ import type { KnotPath } from '../../src/core/spline/types';
 import { SLICE_SAMPLES, type ToWorker } from '../../src/workers/protocol';
 import { createSliceJob } from '../../src/workers/sliceJob';
 import { createTaskHandler } from '../../src/workers/taskHandler';
+import { fillColumnD } from '../../src/workers/worldJobs';
+import { fillColumnT } from '../../src/metrics/region';
+import { createEpochCells } from '../../src/world/store/epochs';
+import { createStore } from '../../src/world/store/store';
 import { ctxFor } from '../harness/gen';
 
 /**
@@ -48,7 +52,7 @@ function silentWorker(log: ToWorker[] = []): WorkerLike & { terminated: boolean 
 
 /**
  * A worker running the real handler that holds the messages `hold` selects until flush(), which handles
- * them at once (so the handler reads the abort cell as it is then) and replies asynchronously.
+ * them at once (so the handler reads the epoch cells as they are then) and replies asynchronously.
  */
 function heldWorker(log: ToWorker[], hold: (m: ToWorker) => boolean, replies: unknown[] = []): WorkerLike & { flush(): void; holding: boolean } {
   const h = createTaskHandler();
@@ -176,9 +180,9 @@ describe('worker pool', () => {
   });
 });
 
-describe('worker pool: abort cell (SP2b spec §2.2)', () => {
-  test('the cell holds the pool epoch; configure stores the new epoch before posting and posts the shared buffer', async () => {
-    const cell = new Int32Array(new SharedArrayBuffer(4));
+describe('worker pool: abort through the epoch cells (SP2b spec §2.2; SP4b spec §2.7)', () => {
+  test('the terrain cell holds the pool epoch; configure stores the new epoch before posting and posts the shared buffer', async () => {
+    const cell = new Int32Array(new SharedArrayBuffer(16));
     const log: ToWorker[] = [];
     const seen: number[] = [];
     const pool = createWorkerPool(2, () => {
@@ -186,24 +190,24 @@ describe('worker pool: abort cell (SP2b spec §2.2)', () => {
       const post = w.postMessage.bind(w);
       w.postMessage = (m, t) => { if (m.type === 'configure') seen.push(Atomics.load(cell, 0)); post(m, t); };
       return w;
-    }, { abortCell: cell });
-    expect([pool.abortable, Atomics.load(cell, 0)]).toEqual([true, -1]);
+    }, { epochCells: cell });
+    expect([pool.abortable, Atomics.load(cell, 0)]).toEqual([true, 0]);
     await pool.configure('42', DEFAULTS);
     await pool.configure('7', DEFAULTS);
     expect(seen).toEqual([0, 0, 1, 1]);
-    expect(log.filter((m) => m.type === 'configure').every((m) => m.type === 'configure' && m.abort === cell.buffer)).toBe(true);
+    expect(log.filter((m) => m.type === 'configure').every((m) => m.type === 'configure' && m.epochs === cell.buffer)).toBe(true);
   });
-  test('without a cell the pool is not abortable and posts abort: null', async () => {
+  test('without cells the pool is not abortable and posts epochs: null', async () => {
     const log: ToWorker[] = [];
     const pool = createWorkerPool(1, () => fakeWorker(log));
     await pool.configure('42', DEFAULTS);
     expect(pool.abortable).toBe(false);
-    expect(log[0]).toMatchObject({ type: 'configure', abort: null });
+    expect(log[0]).toMatchObject({ type: 'configure', epochs: null });
   });
   test('an in-flight tile of a superseded epoch is aborted by the worker and rejects as JobCancelled', async () => {
-    const cell = new Int32Array(new SharedArrayBuffer(4));
+    const cell = new Int32Array(new SharedArrayBuffer(16));
     const replies: unknown[] = [];
-    const pool = createWorkerPool(1, () => fakeWorker([], false, replies), { abortCell: cell });
+    const pool = createWorkerPool(1, () => fakeWorker([], false, replies), { epochCells: cell });
     await pool.configure('42', DEFAULTS);
     const inFlight = settle(pool.tile({ layer: 'relief', level: 4, tx: 0, tz: 0 }, 0));
     const next = pool.configure('42', DEFAULTS);
@@ -228,6 +232,121 @@ describe('worker pool: abort cell (SP2b spec §2.2)', () => {
     });
     await pool.configure('42', DEFAULTS);
     await expect(pool.tile(tile(0), 0)).rejects.toBeInstanceOf(JobCancelled);
+  });
+});
+
+/**
+ * A worker that answers configure with ready and holds every job until `release`, which answers the held world jobs
+ * with `columnDone` (whatever the cells hold: the pool's own settle check is under test).
+ */
+function holdingWorker(log: ToWorker[] = []): WorkerLike & { release(): void } {
+  const held: ToWorker[] = [];
+  const send = (data: unknown) => setTimeout(() => w.onmessage?.({ data }), 0);
+  const w: WorkerLike & { release(): void } = {
+    onmessage: null,
+    postMessage(msg) {
+      log.push(msg);
+      if (msg.type === 'configure') send({ type: 'ready', epoch: msg.epoch, stageHashes: {}, genKey: '0000000000000000' });
+      else held.push(msg);
+    },
+    release() {
+      for (const m of held.splice(0)) {
+        if (m.type === 'terrain' || m.type === 'decorate' || m.type === 'light') {
+          send({ type: 'columnDone', jobId: m.jobId, epoch: m.epoch, job: m.type, cx: m.cx, cz: m.cz, ms: 1, versions: m.type === 'light' ? new ArrayBuffer(72) : null });
+        }
+      }
+    },
+    terminate() {},
+  };
+  return w;
+}
+
+describe('worker pool: the per-scope epoch cells (SP4b spec §2.7)', () => {
+  const cellsOf = (c: Int32Array) => Array.from({ length: 4 }, (_, i) => Atomics.load(c, i));
+
+  test('epochCells over an ArrayBuffer, or of length other than 4, is refused with TypeError', () => {
+    let spawned = 0;
+    const spawn = () => { spawned++; return silentWorker(); };
+    for (const cells of [new Int32Array(new ArrayBuffer(16)), new Int32Array(new SharedArrayBuffer(12)), new Int32Array(new SharedArrayBuffer(20)), new Int32Array(new SharedArrayBuffer(32), 4, 4)]) {
+      expect(() => createWorkerPool(1, spawn, { epochCells: cells }), `${cells.buffer.constructor.name} of ${cells.buffer.byteLength} bytes, length ${cells.length}`).toThrow(TypeError);
+    }
+    expect(spawned, 'no worker is spawned for refused cells').toBe(0);
+    expect(createWorkerPool(1, spawn, { epochCells: createEpochCells(true).cells }).abortable).toBe(true);
+  });
+  test('configure stores the new generation into all four cells (the store\'s cells start 0, the pool\'s generation −1: after the first configure all four read 0, after the second 1)', async () => {
+    const store = createStore({ shared: true, maxBlockBytes: 1 << 20, maxByteBytes: 1 << 20 });
+    const cells = store.epochs.cells;
+    const log: ToWorker[] = [];
+    const seen: number[][] = [];
+    const pool = createWorkerPool(2, () => {
+      const w = holdingWorker(log);
+      const post = w.postMessage.bind(w);
+      w.postMessage = (m, t) => { if (m.type === 'configure') seen.push(cellsOf(cells)); post(m, t); };
+      return w;
+    }, { epochCells: cells });
+    expect([pool.epoch, cellsOf(cells)], 'the pool writes nothing before its first configure').toEqual([-1, [0, 0, 0, 0]]);
+    await pool.configure('42', DEFAULTS);
+    expect(cellsOf(cells)).toEqual([0, 0, 0, 0]);
+    await pool.configure('7', DEFAULTS);
+    expect(cellsOf(cells)).toEqual([1, 1, 1, 1]);
+    // Stored before posting, and the cells' buffer is what each configure carries.
+    expect(seen).toEqual([[0, 0, 0, 0], [0, 0, 0, 0], [1, 1, 1, 1], [1, 1, 1, 1]]);
+    expect(log.filter((m) => m.type === 'configure').every((m) => m.type === 'configure' && m.epochs === cells.buffer)).toBe(true);
+  });
+  test('bumpScope(\'light\') rejects queued L and MESH jobs, keeps queued T and D, and the cells read [g, g, g + 1, g + 1]', async () => {
+    const cells = createEpochCells(true).cells;
+    const log: ToWorker[] = [];
+    const pool = createWorkerPool(1, () => holdingWorker(log), { epochCells: cells });
+    await pool.configure('42', DEFAULTS);
+    await pool.configure('42', DEFAULTS);
+    const g = pool.epoch;
+    // The first job takes the only worker; the four behind it queue.
+    const running = settle(pool.terrain(9, 9));
+    const queued = [settle(pool.terrain(1, 1)), settle(pool.decorate(1, 1)), settle(pool.light(1, 1)), settle(pool.meshColumn(1, 1))];
+    expect([pool.probe().busy, pool.queued]).toEqual([1, 4]);
+    pool.bumpScope('light');
+    expect(cellsOf(cells)).toEqual([g, g, g + 1, g + 1]);
+    expect(pool.queued).toBe(2);
+    expect(await queued[2]).toBeInstanceOf(JobCancelled);
+    expect(await queued[3]).toBeInstanceOf(JobCancelled);
+    // The T and D jobs stay queued (unsettled); only the running T was posted, with the terrain cell's value.
+    let settled = 0;
+    void Promise.all([queued[0], queued[1]]).then(() => { settled++; });
+    await new Promise((resolve) => setTimeout(resolve, 5));
+    expect([settled, pool.queued]).toEqual([0, 2]);
+    expect(log.filter((m) => m.type !== 'configure').map((m) => [m.type, 'scope' in m ? m.scope : null])).toEqual([['terrain', g]]);
+    void running;
+  });
+  test('after bumpScope(\'light\') a new L job succeeds (its scope is the new cell value; its epoch still the configure\'s, so no STALE_EPOCH)', async () => {
+    const MiB = 1 << 20;
+    const store = createStore({ shared: true, maxBlockBytes: 64 * MiB, maxByteBytes: 64 * MiB });
+    const ctx = ctxFor('42');
+    for (let cz = -2; cz <= 2; cz++) for (let cx = -2; cx <= 2; cx++) expect(fillColumnT(store, ctx, cx, cz, () => false)).toBe(true);
+    for (let cz = -1; cz <= 1; cz++) for (let cx = -1; cx <= 1; cx++) expect(fillColumnD(store, ctx, cx, cz, () => false)).toBe(true);
+    const log: ToWorker[] = [];
+    const pool = createWorkerPool(1, () => fakeWorker(log), { epochCells: store.epochs.cells });
+    await pool.attachStore(store.handles());
+    await pool.configure('42', DEFAULTS);
+    pool.bumpScope('light');
+    const done = await pool.light(0, 0);
+    expect([done.cx, done.cz, done.versions?.length]).toEqual([0, 0, 18]);
+    expect(log.at(-1)).toMatchObject({ type: 'light', epoch: 0, scope: 1 });
+    expect(store.table.status(store.table.find(0, 0))).toBe(3);
+  });
+  test('a reply whose cell moved since issue settles as JobCancelled', async () => {
+    const cells = createEpochCells(true).cells;
+    const workers = [holdingWorker(), holdingWorker()];
+    let n = 0;
+    const pool = createWorkerPool(2, () => workers[n++]!, { epochCells: cells });
+    await pool.configure('42', DEFAULTS);
+    const t = settle(pool.terrain(0, 0));
+    const l = settle(pool.light(0, 0));
+    expect(pool.probe().busy).toBe(2);
+    // Another writer moves the light cell (SP4c's Apply); the worker still answers columnDone.
+    Atomics.add(cells, 2, 1);
+    for (const w of workers) w.release();
+    expect(await l).toBeInstanceOf(JobCancelled);
+    expect(await t).toMatchObject({ cx: 0, cz: 0 });
   });
 });
 
@@ -405,12 +524,12 @@ describe('worker pool: stats jobs (SP2b spec §5.4)', () => {
   });
 
   test('aborting a stats request rejects it with JobCancelled and drops its partial sums; the next request is unaffected', async () => {
-    const cell = new Int32Array(new SharedArrayBuffer(4));
+    const cell = new Int32Array(new SharedArrayBuffer(16));
     const log: ToWorker[] = [];
     const replies: unknown[] = [];
     let n = 0;
     const slow = heldWorker(log, (m) => m.type === 'stats', replies);
-    const pool = createWorkerPool(2, () => (n++ === 0 ? fakeWorker(log, false, replies) : slow), { abortCell: cell });
+    const pool = createWorkerPool(2, () => (n++ === 0 ? fakeWorker(log, false, replies) : slow), { epochCells: cell });
     await pool.configure('42', DEFAULTS);
     const req = settle(pool.stats('biomeShares', 2000, SHARES));
     // Slice 0 completes on worker 1 (a partial sum); slice 1 is held on worker 2.
@@ -582,12 +701,12 @@ describe('worker pool: slice jobs (SP3a spec §5.1, split across workers: SP3b s
     expect(rangesOf(log)).toEqual([]);
   });
   test('in-flight parts of a superseded epoch are aborted by the workers (ABORTED) and reject as JobCancelled; the next slice runs', async () => {
-    const cell = new Int32Array(new SharedArrayBuffer(4));
+    const cell = new Int32Array(new SharedArrayBuffer(16));
     const log: ToWorker[] = [];
     const replies: unknown[] = [];
     const held = [heldWorker(log, (m) => m.type === 'slice', replies), heldWorker(log, (m) => m.type === 'slice', replies)];
     let n = 0;
-    const pool = createWorkerPool(2, () => held[n++]!, { abortCell: cell });
+    const pool = createWorkerPool(2, () => held[n++]!, { epochCells: cell });
     await pool.configure('42', DEFAULTS);
     const req = settle(pool.slice(COAST));
     expect(pool.probe().busy).toBe(2);
@@ -600,7 +719,7 @@ describe('worker pool: slice jobs (SP3a spec §5.1, split across workers: SP3b s
     const again = await pool.slice(COAST);
     expect(same(again.blocks, single(COAST).blocks)).toBe(true);
   });
-  test('a part answered after a configure without an abort cell (a stale epoch) rejects the request as JobCancelled', async () => {
+  test('a part answered after a configure without epoch cells (a stale epoch) rejects the request as JobCancelled', async () => {
     const log: ToWorker[] = [];
     const held = [heldWorker(log, (m) => m.type === 'slice'), heldWorker(log, (m) => m.type === 'slice')];
     let n = 0;

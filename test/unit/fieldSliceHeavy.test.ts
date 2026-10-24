@@ -14,9 +14,9 @@ vi.mock('../../src/gen/inspect/cost', async (importOriginal) => {
 
 afterEach(() => { HEAVY.on = false; });
 
-const configure = { type: 'configure', epoch: 3, seedText: '42', params: DEFAULTS, abort: null };
-const probe = (field: string, path: string) => ({ type: 'fieldProbe', jobId: 5, epoch: 3, field, path, x: -1200, y: 90, z: 8 });
-const slice = (field: string, path: string) => ({ type: 'fieldSlice', jobId: 9, epoch: 3, plane: 'vertical', ax: -1664, az: 8, bx: -640, bz: 8, y: 63, n: 32, field, path, from: 0, to: 1 });
+const configure = { type: 'configure', epoch: 3, seedText: '42', params: DEFAULTS, epochs: null };
+const probe = (field: string, path: string) => ({ type: 'fieldProbe', jobId: 5, epoch: 3, scope: 3, field, path, x: -1200, y: 90, z: 8 });
+const slice = (field: string, path: string) => ({ type: 'fieldSlice', jobId: 9, epoch: 3, scope: 3, plane: 'vertical', ax: -1664, az: 8, bx: -640, bz: 8, y: 63, n: 32, field, path, from: 0, to: 1 });
 
 describe('the worker refuses a probe or a part above PART_BUDGET (SP3d spec §5.2, §5.3, P3)', () => {
   test('fieldProbe of density or node: BAD_ARGS too heavy when work cost + COLUMN_SAMPLE_COST exceeds PART_BUDGET; rule is never refused', () => {

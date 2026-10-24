@@ -30,17 +30,17 @@ const start = (): Worker => {
   return w;
 };
 const sameBytes = (a: unknown, b: unknown) => Buffer.from(a as ArrayBuffer).equals(Buffer.from(b as ArrayBuffer));
-const configure = (epoch: number, abort: SharedArrayBuffer | null) => ({ type: 'configure', epoch, seedText: '42', params: DEFAULTS, abort });
+const configure = (epoch: number, epochs: SharedArrayBuffer | null) => ({ type: 'configure', epoch, seedText: '42', params: DEFAULTS, epochs });
 /** Milliseconds on the clock the worker's `handledAt` uses (test/harness/nodeWorker.ts). */
 const clock = () => Number(process.hrtime.bigint()) / 1e6;
 /** Blocks this thread for `ms` without using a CPU, as a loaded runner delays the delivery of the worker's reply here. */
 const stall = (ms: number) => { Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, ms); };
 /** The handler's stop time: from the store to `handle` returning in the worker. */
 const stopMs = (m: Record<string, unknown>, storedAt: number) => (m['handledAt'] as number) - storedAt;
-const tile = (jobId: number, epoch: number, layer: string, level: number) => ({ type: 'mapTile', jobId, epoch, layer, level, tx: 0, tz: 0 });
+const tile = (jobId: number, epoch: number, layer: string, level: number) => ({ type: 'mapTile', jobId, epoch, scope: epoch, layer, level, tx: 0, tz: 0 });
 
 test('a level-4 relief tile stops within 50 ms of Atomics.store and replies ABORTED; the next tiles equal a fresh worker\'s', { retry: 2, timeout: 120_000 }, async () => {
-  const cell = new Int32Array(new SharedArrayBuffer(4));
+  const cell = new Int32Array(new SharedArrayBuffer(16));
   const w = start();
   Atomics.store(cell, 0, 1);
   expect((await ask(w, configure(1, cell.buffer)))['type']).toBe('ready');
@@ -72,10 +72,10 @@ test('a level-4 relief tile stops within 50 ms of Atomics.store and replies ABOR
 });
 
 test('a biomeShares stats slice stops within 50 ms of Atomics.store and replies ABORTED; the next slice equals the direct sums', { retry: 2, timeout: 120_000 }, async () => {
-  const cell = new Int32Array(new SharedArrayBuffer(4));
+  const cell = new Int32Array(new SharedArrayBuffer(16));
   const w = start();
   const len = biomeSharesLength();
-  const stats = (jobId: number, epoch: number, from: number, to: number) => ({ type: 'stats', jobId, epoch, kind: 'biomeShares', from, to, args: { len } });
+  const stats = (jobId: number, epoch: number, from: number, to: number) => ({ type: 'stats', jobId, epoch, scope: epoch, kind: 'biomeShares', from, to, args: { len } });
   Atomics.store(cell, 0, 1);
   expect((await ask(w, configure(1, cell.buffer)))['type']).toBe('ready');
   // The whole stream takes ≈ 0.7 s on one thread; the handler polls the cell every 256 points.

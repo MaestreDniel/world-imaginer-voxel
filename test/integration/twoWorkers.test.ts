@@ -15,7 +15,7 @@ afterAll(async () => {
 });
 
 test('two workers produce byte-identical tiles and agree on the stage hashes', async () => {
-  const ready = await Promise.all(workers.map((w) => ask(w, { type: 'configure', epoch: 1, seedText: '42', params: DEFAULTS, abort: null })));
+  const ready = await Promise.all(workers.map((w) => ask(w, { type: 'configure', epoch: 1, seedText: '42', params: DEFAULTS, epochs: null })));
   expect(ready[0]!['type']).toBe('ready');
   expect(ready[1]).toEqual(ready[0]);
   let jobId = 0;
@@ -23,7 +23,7 @@ test('two workers produce byte-identical tiles and agree on the stage hashes', a
     for (const layer of ['biome', 'relief', 'rivers', 'C']) {
       for (const [tx, tz] of [[0, 0], [-1, 1]]) {
         jobId++;
-        const msg = { type: 'mapTile', jobId, epoch: 1, layer, level, tx, tz };
+        const msg = { type: 'mapTile', jobId, epoch: 1, scope: 1, layer, level, tx, tz };
         const [a, b] = await Promise.all(workers.map((w) => ask(w, msg)));
         expect(a!['type'], JSON.stringify(a)).toBe('tile');
         expect(Buffer.from(a!['rgba'] as ArrayBuffer).equals(Buffer.from(b!['rgba'] as ArrayBuffer))).toBe(true);

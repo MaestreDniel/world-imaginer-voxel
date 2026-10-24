@@ -1,21 +1,22 @@
 /**
  * The pure message handler of a task worker (SP2a spec §5.1): owns one GenContext per configured epoch
  * and answers each validated message. No DOM and no worker globals, so Node tests drive it directly.
- * Tile, spawn, stats and slice jobs stop as soon as the pool's abort cell leaves their epoch and reply ABORTED
- * (SP2b spec §2.2); point and selftest jobs always run to the end. Stats jobs (§5.4) run the metrics
+ * Tile, spawn, stats and slice jobs stop as soon as their epoch cell moves from their scope and reply ABORTED (SP2b spec
+ * §2.2; SP4b spec §2.7: the pool's single abort cell became four per-scope cells, and each job reads its phase's, `cellOf`);
+ * point and selftest jobs always run to the end. Stats jobs (§5.4) run the metrics
  * functions over a range of their kind's fixed point stream, or of the points along a crossSection's line
  * (§4.5), and reply with the raw sums. Slice jobs (SP3a spec §5.1) read the voxels of a range of the samples under
  * a line (SP3b spec §6) from the handler's slice job (`sliceJob.ts`: a worker-local store and LRU kept for the
  * handler's lifetime, emptied by every configure) and stop like stats jobs. A surfaceProbe job (SP3c spec §6) answers
  * `surfaceProbe` on the configured context's SurfaceContext (memoised per GenContext, with its one-column cache); it polls
- * the abort cell once, before its column build (SP3d spec §5.3). Configure runs tier 2 of the trees after `checkParams`
+ * its epoch cell once, before its column build (SP3d spec §5.3). Configure runs tier 2 of the trees after `checkParams`
  * (SP3d spec §1.8): a params document whose trees `validateParamTrees` refuses gets BAD_PARAMS with its first 5 issues,
  * so an invalid tree never reaches a job's lazy compile (the session never sends one; this guards against bugs).
  * fieldSlice and fieldProbe jobs (SP3d spec §5.1, §5.3) are `fieldSliceJob.ts`'s: BAD_ARGS for their arguments and the
- * work bound, ABORTED when the cell leaves their epoch (polled once per sample), and `blocks` reads the slice job's
+ * work bound, ABORTED when their cell moves from their scope (polled once per sample), and `blocks` reads the slice job's
  * columns. Every message type has its own branch of an exhaustive switch.
  * SP4a (spec §2.3, ruling P29): `attach` attaches the page's shared store once (a second attach is BAD_MESSAGE), and the
- * four world jobs run `worldJobs.ts`'s reply wrappers on it with `stopFor(epoch)`: NOT_ATTACHED before the attach,
+ * four world jobs run `worldJobs.ts`'s reply wrappers on it with `stopFor(type, scope)`: NOT_ATTACHED before the attach,
  * ABORTED on a stop, STORE_FULL for `StoreFull`, INTERNAL for any other throw. The light and mesh scratch are allocated
  * once per handler, on the first job that needs them; the mesh uses the Medium preset's `ao` and `smoothLight`.
  */
@@ -42,7 +43,7 @@ import { createMeshScratch, type MeshScratch } from '../mesh/column';
 import type { MeshOptions } from '../mesh/greedy';
 import { attachStore, StoreFull, type VoxelStore } from '../world/store/store';
 import { runFieldProbe, runFieldSlice, sliceJobColumns, type FieldJobReply } from './fieldSliceJob';
-import { parseToWorker, sliceRangeProblem, surfaceProbeProblem, type ErrorCode, type FromWorker, type StatsMsg } from './protocol';
+import { cellOf, parseToWorker, sliceRangeProblem, surfaceProbeProblem, type ErrorCode, type FromWorker, type ScopedJobType, type StatsMsg } from './protocol';
 import { createSliceJob, type SliceJob } from './sliceJob';
 import { decorateReply, lightReply, meshColumnReply, terrainReply, type WorldJobReply } from './worldJobs';
 
@@ -59,6 +60,7 @@ const PAINT = paintTileAbortable;
 const SPAWN = findSpawnAbortable;
 const GOLDEN = computeAnyGolden;
 const PARSE = parseToWorker;
+const CELL_OF = cellOf;
 const SHARE_POINTS = biomeSharePoints;
 const SHARES_INTO = biomeSharesInto;
 const SHARES_LEN = biomeSharesLength;
@@ -148,15 +150,18 @@ function runStats(ctx: GenContext, m: StatsMsg, stop: () => boolean): Float64Arr
 export function createTaskHandler(slices: SliceJob = CREATE_SLICE_JOB()): TaskHandler {
   let epoch = -1;
   let ctx: GenContext | null = null;
-  let cell: Int32Array | null = null;
+  /** The four per-scope epoch cells of the last configure (SP4b spec §2.7), or null: jobs never stop. */
+  let cells: Int32Array | null = null;
   /** The attached shared store (SP4a spec §2.3), and the world jobs' worker-local scratch, allocated on first use. */
   let store: VoxelStore | null = null;
   let lightScratch: LightScratch | null = null;
   let meshScratch: MeshScratch | null = null;
-  /** A job of `jobEpoch` stops once the cell holds another epoch; without a cell it never stops. */
-  const stopFor = (jobEpoch: number): (() => boolean) => {
-    const c = cell;
-    return c === null ? NEVER : () => Atomics.load(c, 0) !== jobEpoch;
+  /** A job of `type` issued at `scope` stops once its phase's cell holds another value; without cells it never stops. */
+  const stopFor = (type: ScopedJobType, scope: number): (() => boolean) => {
+    const c = cells;
+    if (c === null) return NEVER;
+    const i = CELL_OF(type);
+    return () => Atomics.load(c, i) !== scope;
   };
   return {
     handle(raw) {
@@ -174,7 +179,7 @@ export function createTaskHandler(slices: SliceJob = CREATE_SLICE_JOB()): TaskHa
           ctx = CREATE(seed, params);
           epoch = m.epoch;
           slices.reset();
-          cell = m.abort === null ? null : new Int32Array(m.abort);
+          cells = m.epochs === null ? null : new Int32Array(m.epochs);
           const h = HASHES(params);
           const hex: Record<string, string> = {};
           for (const [k, v] of Object.entries(h)) hex[k] = HEX(v);
@@ -194,7 +199,7 @@ export function createTaskHandler(slices: SliceJob = CREATE_SLICE_JOB()): TaskHa
         }
         if (ctx === null) return err(m.jobId, m.epoch, 'NOT_CONFIGURED', 'no configure yet');
         if (m.epoch !== epoch) return err(m.jobId, m.epoch, 'STALE_EPOCH', `job epoch ${m.epoch}, worker epoch ${epoch}`);
-        const aborted = (): Reply => err(m.jobId, m.epoch, 'ABORTED', `epoch ${m.epoch} was superseded`);
+        const aborted = (): Reply => err(m.jobId, m.epoch, 'ABORTED', `scope ${m.scope} of epoch ${m.epoch} was superseded`);
         /** A fieldSlice or fieldProbe job's outcome as a reply. */
         const fieldReply = (r: FieldJobReply<FromWorker>): Reply => (r === null ? aborted() : 'badArgs' in r ? err(m.jobId, m.epoch, 'BAD_ARGS', r.badArgs) : r);
         /** A world job on the attached store: NOT_ATTACHED without one, ABORTED on a stop, STORE_FULL for `StoreFull`. */
@@ -211,18 +216,18 @@ export function createTaskHandler(slices: SliceJob = CREATE_SLICE_JOB()): TaskHa
           case 'mapTile': {
             const rgba = new ArrayBuffer(256 * 256 * 4);
             const ids = m.layer === 'biome' ? new ArrayBuffer(256 * 256) : null;
-            const done = PAINT(ctx, m.layer, m.level, m.tx, m.tz, new Uint8ClampedArray(rgba), stopFor(m.epoch), ids === null ? undefined : new Uint8Array(ids));
+            const done = PAINT(ctx, m.layer, m.level, m.tx, m.tz, new Uint8ClampedArray(rgba), stopFor(m.type, m.scope), ids === null ? undefined : new Uint8Array(ids));
             if (done === null) return aborted();
             return ids === null
               ? { msg: { type: 'tile', jobId: m.jobId, epoch, rgba }, transfer: [rgba] }
               : { msg: { type: 'tile', jobId: m.jobId, epoch, rgba, ids }, transfer: [rgba, ids] };
           }
           case 'spawn': {
-            const spawn = SPAWN(ctx, stopFor(m.epoch));
+            const spawn = SPAWN(ctx, stopFor(m.type, m.scope));
             return spawn === null ? aborted() : { msg: { type: 'spawnResult', jobId: m.jobId, epoch, spawn }, transfer: [] };
           }
           case 'stats': {
-            const sum = runStats(ctx, m, stopFor(m.epoch));
+            const sum = runStats(ctx, m, stopFor(m.type, m.scope));
             if (sum === null) return aborted();
             if (typeof sum === 'string') return err(m.jobId, m.epoch, 'BAD_ARGS', sum);
             return { msg: { type: 'statsResult', jobId: m.jobId, epoch, kind: m.kind, data: sum.buffer }, transfer: [sum.buffer] };
@@ -231,7 +236,7 @@ export function createTaskHandler(slices: SliceJob = CREATE_SLICE_JOB()): TaskHa
             const segment = { ax: m.ax, az: m.az, bx: m.bx, bz: m.bz };
             const problem = SEGMENT_PROBLEM(segment) ?? RANGE_PROBLEM(m.from, m.to);
             if (problem !== null) return err(m.jobId, m.epoch, 'BAD_ARGS', problem);
-            const r = slices.run(ctx, m.epoch, segment, stopFor(m.epoch), m.from, m.to);
+            const r = slices.run(ctx, m.epoch, segment, stopFor(m.type, m.scope), m.from, m.to);
             if (r === null) return aborted();
             const msg: FromWorker = { type: 'sliceResult', jobId: m.jobId, epoch, from: m.from, to: m.to, blocks: r.blocks.buffer, fluid: r.fluid.buffer };
             return { msg, transfer: [r.blocks.buffer, r.fluid.buffer] };
@@ -240,28 +245,28 @@ export function createTaskHandler(slices: SliceJob = CREATE_SLICE_JOB()): TaskHa
             const problem = PROBE_PROBLEM(m.x, m.y, m.z);
             if (problem !== null) return err(m.jobId, m.epoch, 'BAD_ARGS', problem);
             // SP3d spec §5.3: polled before the column build (one T column, bounded by tier 2's column cost).
-            if (stopFor(m.epoch)()) return aborted();
+            if (stopFor(m.type, m.scope)()) return aborted();
             const r = SURFACE_PROBE(SURFACE_CONTEXT(ctx), m.x, m.y, m.z);
             return { msg: { type: 'surfaceProbeResult', jobId: m.jobId, epoch, state: r.state, path: [...r.path] }, transfer: [] };
           }
           case 'point':
             return { msg: { type: 'pointResult', jobId: m.jobId, epoch, fields: POINT(ctx, m.x, m.z) }, transfer: [] };
           case 'fieldSlice':
-            return fieldReply(FIELD_SLICE(ctx, m, stopFor(m.epoch), SLICE_COLUMNS(slices, ctx, m.epoch)));
+            return fieldReply(FIELD_SLICE(ctx, m, stopFor(m.type, m.scope), SLICE_COLUMNS(slices, ctx, m.epoch)));
           case 'fieldProbe':
-            return fieldReply(FIELD_PROBE(ctx, m, stopFor(m.epoch)));
+            return fieldReply(FIELD_PROBE(ctx, m, stopFor(m.type, m.scope)));
           case 'terrain': {
             const c = ctx;
-            return worldReply((s) => TERRAIN_REPLY(s, c, m, stopFor(m.epoch)));
+            return worldReply((s) => TERRAIN_REPLY(s, c, m, stopFor(m.type, m.scope)));
           }
           case 'decorate': {
             const c = ctx;
-            return worldReply((s) => DECORATE_REPLY(s, c, m, stopFor(m.epoch)));
+            return worldReply((s) => DECORATE_REPLY(s, c, m, stopFor(m.type, m.scope)));
           }
           case 'light':
-            return worldReply((s) => LIGHT_REPLY(s, m, lightScratch ??= LIGHT_SCRATCH(), stopFor(m.epoch)));
+            return worldReply((s) => LIGHT_REPLY(s, m, lightScratch ??= LIGHT_SCRATCH(), stopFor(m.type, m.scope)));
           case 'meshColumn':
-            return worldReply((s) => MESH_COLUMN_REPLY(s, m, meshScratch ??= MESH_SCRATCH(), MESH_OPTIONS, stopFor(m.epoch)));
+            return worldReply((s) => MESH_COLUMN_REPLY(s, m, meshScratch ??= MESH_SCRATCH(), MESH_OPTIONS, stopFor(m.type, m.scope)));
           default: {
             const never: never = m;
             return err(jobId, msgEpoch, 'BAD_MESSAGE', `no handler for ${(never as { type: string }).type}`);

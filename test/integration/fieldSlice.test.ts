@@ -19,7 +19,7 @@ import { heavyDetailPatch } from '../unit/fixtures/editedTrees';
  * The fieldSlice job in real worker threads (SP3d spec §5.2, §10 "Workers"):
  * - the pool's split over N `worker_threads` running `src/workers/taskHandler.ts` merges into exactly the single
  *   evaluation (every field and plane; pool sizes 1, 2, 3 and 6), the values and fluid arriving as transferred buffers;
- * - a configure (a new epoch in the abort cell) stops an in-flight part within 50 ms, with the default tree and with
+ * - a configure (a new epoch in the epoch cells) stops an in-flight part within 50 ms, with the default tree and with
  *   `slice.partWorst`'s tree at the part bound (`test/harness/sliceTrees.ts`), and a `rule` part on a heavy valid tree
  *   (`heavyDetailPatch`) whose probe column takes about 0.1 s to fill, as `abort.test.ts` times tiles: from
  *   `Atomics.store` here to `handle` returning in the worker (`handledAt`, on the clock every thread shares). The
@@ -120,7 +120,7 @@ describe('fieldSlice in real worker threads (SP3d spec §5.2, §10)', () => {
 const clock = () => Number(process.hrtime.bigint()) / 1e6;
 /** Blocks this thread for `ms` without using a CPU, as a loaded runner delays the delivery of the worker's reply here. */
 const stall = (ms: number) => { Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, ms); };
-const configure = (epoch: number, params: Params, abort: SharedArrayBuffer | null) => ({ type: 'configure', epoch, seedText: '42', params, abort });
+const configure = (epoch: number, params: Params, epochs: SharedArrayBuffer | null) => ({ type: 'configure', epoch, seedText: '42', params, epochs });
 
 describe('a configure stops an in-flight fieldSlice part within 50 ms (SP3d spec §4.5, §10)', () => {
   // A part as large as the work bound allows: the default tree's 128² vertical part of k = 79 sample columns
@@ -133,11 +133,11 @@ describe('a configure stops an in-flight fieldSlice part within 50 ms (SP3d spec
   test.each(CASES)('%s: ABORTED within 50 ms of Atomics.store; the next epoch\'s part equals the in-process evaluation', { retry: 2, timeout: 120_000 }, async (_name, params, req, to) => {
     expect(sliceCostOf(params, 'density', '', 'vertical', req.n) * to).toBeLessThanOrEqual(PART_BUDGET);
     expect(sliceCostOf(params, 'density', '', 'vertical', req.n) * to).toBeGreaterThan(PART_BUDGET * 0.99);
-    const cell = new Int32Array(new SharedArrayBuffer(4));
+    const cell = new Int32Array(new SharedArrayBuffer(16));
     const w = start(stamped);
     Atomics.store(cell, 0, 1);
     expect((await ask(w, configure(1, params, cell.buffer)))['type']).toBe('ready');
-    const part = (jobId: number, epoch: number) => ({ type: 'fieldSlice', jobId, epoch, ...req, from: 0, to });
+    const part = (jobId: number, epoch: number) => ({ type: 'fieldSlice', jobId, epoch, scope: epoch, ...req, from: 0, to });
     // The part takes ≈ 65-90 ms on one thread (the calibration's p50s); the store lands within its first samples.
     const reply = ask(w, part(1, 1));
     await new Promise((resolve) => setTimeout(resolve, 15));
@@ -163,11 +163,11 @@ describe('a configure stops an in-flight fieldSlice part within 50 ms (SP3d spec
     const plan = planFieldSlice(32, sliceCostOf(params, 'rule', req.path, 'vertical', 32), 1, null);
     if (plan.refused) throw new Error('a rule slice is never refused');
     expect(plan.k).toBe(1);
-    const cell = new Int32Array(new SharedArrayBuffer(4));
+    const cell = new Int32Array(new SharedArrayBuffer(16));
     const w = start(stamped);
     Atomics.store(cell, 0, 1);
     expect((await ask(w, configure(1, params, cell.buffer)))['type']).toBe('ready');
-    const part = (jobId: number, epoch: number) => ({ type: 'fieldSlice', jobId, epoch, ...req, from: 0, to: 1 });
+    const part = (jobId: number, epoch: number) => ({ type: 'fieldSlice', jobId, epoch, scope: epoch, ...req, from: 0, to: 1 });
     const reply = ask(w, part(1, 1));
     await new Promise((resolve) => setTimeout(resolve, 15));
     const storedAt = clock();
