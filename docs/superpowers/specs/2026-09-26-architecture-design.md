@@ -189,7 +189,8 @@ world-imaginer-voxel/          (repository root)
     ui/lab/* seedBox.ts          (SP1) the ?lab=noise research page; DOM-free seed-box logic
     ui/world/* ui/loading/* ui/spike/* settings.ts   (SP4a) the 3D page: the minimal start screen at `/`, the world page, the
                                 flight (`?flight=sp4a`) and panorama (`?pano`) routes; the loading screen with panoramas, tips and progress; the spike
-                                page (`?spike=batch`); the world's small settings block (SP5's settings panel replaces it)
+                                page (`?spike=batch`); the world's small settings block (SP5's settings panel replaces it);
+                                ui/world/bench.ts (SP4b: the `?bench=medium` route and its JSON)
     ui/inspector/*              (SP3d) the ?map Density tab. Pure: model.ts form.ts jsonText.ts editorModel.ts hoverModel.ts
                                 sliceModel.ts; DOM: jsonEditor.ts sliceView.ts densityTab.ts inspector.css (SP10's full probe and
                                 further JSON editors go here too)
@@ -1368,7 +1369,7 @@ Target: edit → visible ≤ 50 ms p95, measured in the HUD.
 
 **Toggles:** chunk / section / region borders, wireframe per pass, freeze culling, light false colour, LOD tint.
 
-**Bench route `?bench=<preset>` (SP4b; SP4a's `?flight=sp4a` measures the static world):** a fixed seed and a 60 s scripted flight (plains, mountains, ocean, cave, flood scenario). It downloads JSON (frame p50/p95/p99, max, fill time, draw calls, GPU ms, memory), which the vitest file check G1 asserts.
+**Bench route `?bench=<preset>` (SP4b; SP4a's `?flight=sp4a` measures the static world):** a fixed seed and a scripted flight (SP4b: `?bench=medium`, 95 s, plains, mountains and ocean along straight legs at 20, 96 and 384 blocks/s with turns, a hover and a live RD change; SP6 adds the cave scenario, SP7 the flood). It downloads JSON (frame p50/p95/p99, max, fill time, draw calls, GPU ms, memory), which the vitest file check G1 asserts.
 
 ### 5.9 Controls
 

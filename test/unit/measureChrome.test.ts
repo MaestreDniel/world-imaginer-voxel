@@ -1,24 +1,27 @@
 import type { ChildProcess } from 'node:child_process';
 import { EventEmitter } from 'node:events';
 import { describe, expect, test } from 'vitest';
+import { BENCH_SHOTS } from '../../src/ui/world/bench';
 import {
-  chromeArgs, flightLine, gpuMatches, launchEnv, MEASURE_LOAD_MAX, outputName, parseMeasureArgs, PLACE_ATTEMPTS, placeWindow, pollResult, routePath,
-  viewportProblem, watchPage, windowProblem, withTimeout, type MeasureArgs, type WindowBounds,
+  ASSETS, benchLine, chromeArgs, flightLine, gpuMatches, launchEnv, MEASURE_LOAD_MAX, outputName, parseMeasureArgs, PLACE_ATTEMPTS, placeWindow,
+  pollResult, routePath, SHOTS, viewportProblem, watchPage, windowProblem, withTimeout, type MeasureArgs, type WindowBounds,
 } from '../tools/measureChrome';
 
 const IRIS = 'ANGLE (Intel, Mesa Intel(R) Iris(R) Xe Graphics (ADL GT2), OpenGL 4.6)';
 const RTX = 'ANGLE (NVIDIA Corporation, NVIDIA GeForce RTX 3060 Laptop GPU/PCIe/SSE2, OpenGL 4.5)';
 const SWIFTSHADER = 'ANGLE (Google, Vulkan 1.3.0 (SwiftShader Device …))';
 
-const args = (o: Partial<MeasureArgs>): MeasureArgs => ({ route: 'spike', gpu: 'iris', workers: null, skipBuild: false, renderer: null, probeOnly: false, ...o });
+const args = (o: Partial<MeasureArgs>): MeasureArgs => ({
+  route: 'spike', gpu: 'iris', workers: null, skipBuild: false, renderer: null, probeOnly: false, shot: null, ...o,
+});
 
 describe('measureChrome: arguments (SP4a spec §9.5)', () => {
   test('the route, the GPU and 4 workers; --probe-only sets probeOnly', () => {
     expect(parseMeasureArgs(['--route', 'flight', '--gpu', 'rtx', '--workers', '4']))
-      .toEqual({ route: 'flight', gpu: 'rtx', workers: 4, skipBuild: false, renderer: null, probeOnly: false });
+      .toEqual({ route: 'flight', gpu: 'rtx', workers: 4, skipBuild: false, renderer: null, probeOnly: false, shot: null });
     expect(parseMeasureArgs(['--route', 'spike', '--gpu', 'iris', '--probe-only']).probeOnly).toBe(true);
     expect(parseMeasureArgs(['--route', 'spike', '--gpu', 'iris', '--skip-build', '--renderer', 'mesh']))
-      .toEqual({ route: 'spike', gpu: 'iris', workers: null, skipBuild: true, renderer: 'mesh', probeOnly: false });
+      .toEqual({ route: 'spike', gpu: 'iris', workers: null, skipBuild: true, renderer: 'mesh', probeOnly: false, shot: null });
   });
 
   test('--gpu defaults to the gate machine, the Iris Xe', () => {
@@ -35,12 +38,58 @@ describe('measureChrome: arguments (SP4a spec §9.5)', () => {
     expect(() => parseMeasureArgs(['--route'])).toThrow(/--route needs a value/);
   });
 
-  test('--workers 4 belongs to the flight route (the spike file has no -w4 name)', () => {
+  test('--workers 4 belongs to the flight and bench routes (the spike file has no -w4 name)', () => {
     expect(() => parseMeasureArgs(['--route', 'spike', '--workers', '4'])).toThrow(/--workers/);
   });
 
   test('the load limit is a 1-minute load average of 2', () => {
     expect(MEASURE_LOAD_MAX).toBe(2);
+  });
+});
+
+describe('measureChrome: the bench route (SP4b spec §8.3, §8.7)', () => {
+  test('parseMeasureArgs([\'--route\', \'bench\', \'--workers\', \'4\'])', () => {
+    expect(parseMeasureArgs(['--route', 'bench', '--workers', '4']))
+      .toEqual({ route: 'bench', gpu: 'iris', workers: 4, skipBuild: false, renderer: null, probeOnly: false, shot: null });
+    expect(parseMeasureArgs(['--route', 'bench', '--gpu', 'iris', '--probe-only']).probeOnly).toBe(true);
+    expect(parseMeasureArgs(['--route', 'bench', '--shot', 'fly96', '--renderer', 'mesh']))
+      .toEqual({ route: 'bench', gpu: 'iris', workers: null, skipBuild: false, renderer: 'mesh', probeOnly: false, shot: 'fly96' });
+  });
+
+  test('--shot fly96 is refused without --route bench and without --renderer; an unknown shot is refused', () => {
+    expect(() => parseMeasureArgs(['--route', 'flight', '--shot', 'fly96', '--renderer', 'batch'])).toThrow(/--shot applies to --route bench only/);
+    expect(() => parseMeasureArgs(['--route', 'bench', '--shot', 'fly96'])).toThrow(/--shot needs --renderer batch\|mesh/);
+    expect(() => parseMeasureArgs(['--route', 'bench', '--shot', 'fly200', '--renderer', 'batch'])).toThrow(/--shot must be one of/);
+    expect(() => parseMeasureArgs(['--route', 'bench', '--shot'])).toThrow(/--shot needs a value/);
+  });
+
+  test('the shot names mirror bench.ts\'s', () => {
+    expect(SHOTS).toEqual(BENCH_SHOTS);
+  });
+
+  test('outputName for the bench, w4 and shot cases', () => {
+    expect(outputName(args({ route: 'bench', gpu: 'iris' }))).toBe('bench-iris-chrome.json');
+    expect(outputName(args({ route: 'bench', gpu: 'rtx' }))).toBe('bench-rtx-chrome.json');
+    expect(outputName(args({ route: 'bench', gpu: 'iris', workers: 4 }))).toBe('bench-iris-chrome-w4.json');
+    expect(outputName(args({ route: 'bench', gpu: 'iris', renderer: 'mesh' }))).toBe('bench-iris-chrome-mesh.json');
+    expect(outputName(args({ route: 'bench', gpu: 'iris', renderer: 'batch', shot: 'fly96' }))).toBe('review-fly96-batch.png');
+    expect(outputName(args({ route: 'bench', gpu: 'iris', renderer: 'mesh', shot: 'rd12back' }))).toBe('review-rd12back-mesh.png');
+  });
+
+  test('routePath with every flag', () => {
+    expect(routePath(args({ route: 'bench' }))).toBe('/?bench=medium');
+    expect(routePath(args({ route: 'bench', workers: 4 }))).toBe('/?bench=medium&workers=4');
+    expect(routePath(args({ route: 'bench', workers: 4, renderer: 'mesh', shot: 'rd8' }))).toBe('/?bench=medium&workers=4&renderer=mesh&shot=rd8');
+  });
+
+  test('every route writes to assets/sp4b (plan); SP4a\'s files stay where they are', () => {
+    expect(ASSETS).toBe('docs/superpowers/specs/assets/sp4b');
+  });
+
+  test('the bench summary line, read defensively', () => {
+    expect(benchLine({ stream: { frames: { p95: 4.167, over33: 0 }, drawCalls: { max: 61 }, main: { p95: 2.1 }, gpuMB: 74.5, partialColumnFrames: 0 } }))
+      .toBe('stream frame p95 4.167 ms, over 33 ms 0, draw calls max 61, main p95 2.1 ms, GPU MB 74.5, partial column frames 0');
+    expect(benchLine(null)).toBe('stream frame p95 n/a, over 33 ms n/a, draw calls max n/a, main p95 n/a, GPU MB n/a, partial column frames n/a');
   });
 });
 

@@ -32,7 +32,10 @@
  * keeping the store-full text; `WorkerFailed`; the watchdog) show the failure panel, with a link to the next lower RD
  * when rd > 4 (P49). `WorldPage.loadStats` holds the load's figures for the flight JSON (§9.5); with `opts.flight`
  * (the `?flight=sp4a` route, `flight.ts`) the flight drives the camera and the clock after the reveal, and nothing
- * calls `update` (SP4a's static route).
+ * calls `update` (SP4a's static route). With `opts.bench` (the `?bench=medium` route, `bench.ts`, SP4b spec §8.3) the
+ * page's own streaming frame runs with no input, HUD, help or notices: after 120 idle frames (the display interval)
+ * the driver sets the camera's pose and the RD before each frame step, each rendered frame is recorded into its
+ * preallocated record, and a failure after the reveal ends the script with the error.
  *
  * Errors after the reveal (SP4b spec §3.6, §7.4, D12) degrade: a skipped column shows a dismissible notice with "Copy
  * details", StoreFull a notice offering "Lower to RD n" (applied live on a click, never on its own); a fatal event (no
@@ -68,6 +71,7 @@ import { attachInput, isTextEntry } from '../../player/input';
 import { DEFAULT_KEYMAP, type Action } from '../../player/keymap';
 import { createFpsLimiter, type FpsLimiter } from '../../render/fpsLimiter';
 import type { FrameState } from '../../render/frameState';
+import { medianInterval } from '../../render/frameTiming';
 import { createWorldRenderer, type GpuEstimate, type WorldRenderer } from '../../render/renderer';
 import { createSectionRendererCounts, selectSectionRenderer, type SectionRendererKind } from '../../render/sectionRenderer';
 import { createStore, type VoxelStore } from '../../world/store/store';
@@ -81,9 +85,10 @@ import { tips } from '../loading/tips';
 import { decodeMapState, encodeMapState, openMapSession } from '../map/mapState';
 import { cryptoSeed } from '../seedBox';
 import { SETTINGS_DEFAULTS, loadSettings, saveSettings, type WorldSettings } from '../settings';
+import { BENCH_IDLE_FRAMES, BENCH_REFILL, BENCH_TIME_SPEED, createBenchRecorder, jsHeapMB, type BenchDriver, type BenchPose } from './bench';
 import { firstView } from './firstView';
 import type { FlightContext } from './flight';
-import { FILL_SCAN_FRAMES, createFogEase, filledRadius } from './fogEase';
+import { FILL_SCAN_FRAMES, createFogEase, filledRadius, type FogEase } from './fogEase';
 import { createFrameClock, createFrameNotice, lowerRd } from './frameNotice';
 import { createFrameStep, eyeSkyLight } from './frameStep';
 import { createReloader, hereUrl, installLeaveGuard, navigateTo, type Reloader } from './reload';
@@ -112,6 +117,13 @@ export interface WorldPageOptions {
    * input, HUD, help, notices or leave guard).
    */
   readonly flight?: (ctx: FlightContext) => void;
+  /**
+   * The bench route's driver (SP4b spec §8.3, `bench.ts`): with it the stored settings are not read, and after the
+   * reveal the page runs its own streaming frame with no input, HUD, help, notices or leave guard, the clock from 08:00
+   * at ×60; after `BENCH_IDLE_FRAMES` idle frames it calls `pose` before each frame step, applies the RD it returns
+   * when it changes, records every rendered frame into `record`, and calls `done` when `pose` returns null.
+   */
+  readonly bench?: BenchDriver;
 }
 
 declare global {
@@ -219,6 +231,35 @@ function storeSabMiB(store: VoxelStore): number {
 }
 
 const nextFrame = (): Promise<number> => new Promise((resolve) => requestAnimationFrame(resolve));
+
+/**
+ * The fog's RD on each rendered frame (SP4b spec §5): eased outward after a raise, following the filled radius around
+ * the eye's column, scanned every `FILL_SCAN_FRAMES` rendered frames while the fog is below its target and never once
+ * it has arrived; `rescan` asks for a scan on the next frame (a raise).
+ */
+function createFogStep(
+  fog: FogEase, eye: { readonly x: number; readonly z: number }, isRevealed: (cx: number, cz: number) => boolean, rd: number,
+): { step(dtMs: number): number; rescan(): void } {
+  let fogRd = rd;
+  let filled = rd;
+  let scanIn = 0;
+  return {
+    step(dtMs) {
+      if (fogRd < fog.target) {
+        if (scanIn <= 0) {
+          filled = filledRadius(Math.floor(eye.x) >> 4, Math.floor(eye.z) >> 4, fog.target, isRevealed);
+          scanIn = FILL_SCAN_FRAMES;
+        }
+        scanIn--;
+      }
+      fogRd = fog.step(dtMs, filled);
+      return fogRd;
+    },
+    rescan() {
+      scanIn = 0;
+    },
+  };
+}
 
 /**
  * What the failure panel frees (spec §8.5): the long-task observer, the pool and the renderer with its WebGL context, so
@@ -729,8 +770,8 @@ export function mountWorldPage(root: HTMLElement, q: WorldQuery, hash: string, o
     profile = session.state.profile;
     if (session.initNotice !== null) loading.warn(session.initNotice);
     const storage = storageOrNull();
-    // The flight route measures with the defaults, never a user's stored cap or FOV (spec §9.5).
-    let settings: WorldSettings = opts.flight === undefined ? loadSettings(storage) : { ...SETTINGS_DEFAULTS };
+    // The flight and bench routes measure with the defaults, never a user's stored cap or FOV (spec §9.5; SP4b spec §8.3).
+    let settings: WorldSettings = opts.flight === undefined && opts.bench === undefined ? loadSettings(storage) : { ...SETTINGS_DEFAULTS };
     const loadRd = resolveRenderDistance(caps, q.rd, settings.rd);
     rd = loadRd;
     // The largest RD the store's fixed maxima allow (SP4b spec §5): the coordinator's and the help's cap.
@@ -928,6 +969,199 @@ export function mountWorldPage(root: HTMLElement, q: WorldQuery, hash: string, o
       return;
     }
 
+    const isRevealed = (cx: number, cz: number): boolean => sections.isRevealed(cx, cz);
+
+    // The bench route (SP4b spec §8.3): the page's own streaming frame with the pose set by the script.
+    if (opts.bench !== undefined) {
+      const bench = opts.bench;
+      loading.dispose();
+      settle();
+      let stopped = false;
+      const stop = (): void => {
+        stopped = true;
+        cancelAnimationFrame(raf);
+      };
+      // A failure after the reveal ends the script with the error, so measureChrome stops at once; the coordinator, the
+      // workers and the renderer are released as on the streaming route.
+      failAfterReveal = (cause, shown) => {
+        const renderer = wr;
+        wr = null;
+        stopAfterFailure({
+          stop,
+          show: () => bench.fail(`${cause}\n${shown}`),
+          release: [() => coordinator.dispose(), () => pool?.terminate(), () => renderer?.dispose()],
+          onError: (e) => console.error('The bench\'s failure:', e),
+        });
+      };
+      // Skipped columns and StoreFull are counted in the totals; only a fatal event stops the script.
+      onStreamEvent = (e) => {
+        if (e.kind === 'fatal') fail(causeOf(e.cause, e.message), e.cause, e.message);
+      };
+      world.onContextLost(() => fail('The graphics context was lost.', null));
+      try {
+        // The live RD as the help would set it, never saved (SP4b spec §5).
+        const fog = createFogEase(loadRd);
+        const fogStep = createFogStep(fog, fly, isRevealed, loadRd);
+        let liveRd = loadRd;
+        const rdControl = createRdControl({
+          coordinator,
+          world,
+          fog: {
+            setTarget(r) {
+              liveRd = r;
+              rd = r;
+              fog.setTarget(r);
+              fogStep.rescan();
+            },
+          },
+          help: { setRd() {} },
+          save: () => {},
+          defaultRd: loadRd,
+        });
+
+        // 1. The display interval: the median of the idle rAF deltas, the first from the reveal frame (spec §8.3).
+        const idle = new Float64Array(BENCH_IDLE_FRAMES);
+        let prev = revealTs;
+        for (let i = 0; i < idle.length; i++) {
+          const now = await new Promise<number>((resolve) => { raf = requestAnimationFrame(resolve); });
+          if (stopped || state !== 'revealed') return;
+          idle[i] = now - prev;
+          prev = now;
+        }
+        const interval = medianInterval(idle);
+
+        // 2. The streaming frame, timed in its coordinator and pump; one record row per rendered frame.
+        // [coordinator ms, upload ms, rows, the callback's start, the raw delta, the script time (s), its start]
+        const timing = Float64Array.of(0, 0, 0, 0, 0, 0, Number.NaN);
+        const T_COORD = 0;
+        const T_UPLOAD = 1;
+        const T_ROWS = 2;
+        const T_START = 3;
+        const T_RAW = 4;
+        const T_SCRIPT = 5;
+        const T_ORIGIN = 6;
+        const timedCoordinator: Pick<Coordinator, 'update' | 'counts'> = {
+          update(cam) {
+            const t0 = performance.now();
+            coordinator.update(cam);
+            timing[T_COORD] += performance.now() - t0;
+          },
+          counts: (out) => coordinator.counts(out),
+        };
+        const timedSections = {
+          pump(gate: Parameters<typeof sections.pump>[0], cx: number, cz: number, yawDeg: number): number {
+            const t0 = performance.now();
+            const rows = sections.pump(gate, cx, cz, yawDeg);
+            timing[T_UPLOAD] += performance.now() - t0;
+            timing[T_ROWS] += rows;
+            return rows;
+          },
+        };
+        const recorder = createBenchRecorder(bench.record, { sections, world, heapMB: jsHeapMB, sabMB: () => storeSabMiB(store) }, interval);
+        const noKeys: ReadonlySet<Action> = new Set();
+        let n = 0;
+        let firstMax = 0;
+        let refillMs: number | null = null;
+        fly.vx = fly.vy = fly.vz = 0;
+        const clock = createFrameClock(createFpsLimiter(settings.fpsCap), { push() {} }, prev);
+        const step = createFrameStep({
+          fly,
+          held: () => noKeys,
+          // The script sets the pose: the fly step never runs.
+          paused: () => true,
+          stopped: () => stopped,
+          clock,
+          coordinator: timedCoordinator,
+          counts,
+          throttle,
+          budget: createUploadBudget(MEDIUM.uploadBudgetMs, MEDIUM.uploadSections, () => performance.now()),
+          sections: timedSections,
+          world,
+          store,
+          state: frame,
+          timeSpeed: () => BENCH_TIME_SPEED,
+          fogStep: (dtMs) => fogStep.step(dtMs),
+          onRendered: (dtMs) => {
+            recorder.frame(timing[T_RAW]!, performance.now() - timing[T_START]!, timing[T_COORD]!, timing[T_UPLOAD]!, timing[T_ROWS]!, counts.genCap);
+            timing[T_COORD] = 0;
+            timing[T_UPLOAD] = 0;
+            timing[T_ROWS] = 0;
+            // L5's refill (spec §8.3): the first frame whose RD 12 disc around the camera's column is revealed.
+            const tS = timing[T_SCRIPT]!;
+            if (refillMs === null && tS >= BENCH_REFILL.fromS && tS < BENCH_REFILL.toS
+              && filledRadius(Math.floor(fly.x) >> 4, Math.floor(fly.z) >> 4, BENCH_REFILL.rd, isRevealed) === BENCH_REFILL.rd) {
+              refillMs = (tS - BENCH_REFILL.fromS) * 1000;
+            }
+            if (n < FIRST_FRAMES) {
+              firstMax = Math.max(firstMax, dtMs);
+              if (n + 1 === FIRST_FRAMES) stats.first120MaxMs = firstMax;
+            }
+            n++;
+            progressHook.frames = n;
+            opts.onFrame?.(n);
+          },
+        });
+        const finish = (): void => {
+          coordinator.counts(counts);
+          bench.done({
+            seed: session.state.seedText,
+            profile: session.state.profile,
+            rd: loadRd,
+            workers: workers.size,
+            sectionRenderer: kind,
+            userAgent: navigator.userAgent,
+            renderer: caps.renderer,
+            vendor: caps.vendor,
+            multiDraw: caps.multiDraw,
+            timerQuery: caps.timerQuery,
+            screen: { width: screen.width, height: screen.height },
+            dpr: devicePixelRatio,
+            pixelRatio: world.renderer.getPixelRatio(),
+            displayIntervalMs: interval,
+            load: { revealMs: stats.revealMs, stageMs: { ...stats.stageMs }, longTasks: stats.longTasks, first120RenderedMaxMs: stats.first120MaxMs },
+            totals: { dropped: counts.dropped, failed: counts.failed, storeFull: counts.storeFull },
+            refillMs,
+          });
+        };
+        const pose: BenchPose = { x: 0, y: 0, z: 0, yaw: 0, pitch: 0 };
+        const loop = (now: number): void => {
+          if (stopped) return;
+          try {
+            timing[T_START] = performance.now();
+            if (Number.isNaN(timing[T_ORIGIN]!)) timing[T_ORIGIN] = now;
+            timing[T_SCRIPT] = (now - timing[T_ORIGIN]!) / 1000;
+            pose.x = fly.x;
+            pose.y = fly.y;
+            pose.z = fly.z;
+            pose.yaw = fly.yaw;
+            pose.pitch = fly.pitch;
+            // The fog's RD of the last rendered frame (a shot waits for it, plan).
+            const want = bench.pose(timing[T_SCRIPT]!, pose, frame.rd);
+            if (want === null) {
+              stop();
+              finish();
+              return;
+            }
+            fly.x = pose.x;
+            fly.y = pose.y;
+            fly.z = pose.z;
+            fly.yaw = pose.yaw;
+            fly.pitch = pose.pitch;
+            if (want !== liveRd) rdControl.apply(want);
+            raf = requestAnimationFrame(loop);
+            timing[T_RAW] = Math.max(0, now - clock.lastTick());
+            step.tick(now);
+          } catch (e) {
+            fail(`The frame loop stopped: ${errorText(e)}`, e);
+          }
+        };
+        raf = requestAnimationFrame(loop);
+      } catch (e) {
+        fail(`The bench stopped: ${errorText(e)}`, e);
+      }
+      return;
+    }
+
     // Every navigation the page starts disarms the Ctrl+W guard first and happens once (spec §7.1; ruling P50).
     const disarm = installLeaveGuard(window);
     teardown.push(disarm);
@@ -965,10 +1199,7 @@ export function mountWorldPage(root: HTMLElement, q: WorldQuery, hash: string, o
     // follows. `rdControl` is created once the help it updates is mounted, before any frame or event can reach it.
     let liveRd = loadRd;
     const fog = createFogEase(loadRd);
-    let fogRd = loadRd;
-    let filled = loadRd;
-    let scanIn = 0;
-    const isRevealed = (cx: number, cz: number): boolean => sections.isRevealed(cx, cz);
+    const fogStep = createFogStep(fog, fly, isRevealed, loadRd);
     let rdControl!: { apply(rd: number | null): void };
     // The coordinator's events after the reveal (D12). StoreFull's "Lower to RD n" applies live (SP4b spec §5).
     onStreamEvent = (e) => handleStreamEvent(e, {
@@ -1095,7 +1326,7 @@ export function mountWorldPage(root: HTMLElement, q: WorldQuery, hash: string, o
           rd = r;
           fog.setTarget(r);
           // A raise scans the filled radius on the next rendered frame.
-          scanIn = 0;
+          fogStep.rescan();
         },
       },
       help: {
@@ -1159,17 +1390,7 @@ export function mountWorldPage(root: HTMLElement, q: WorldQuery, hash: string, o
       timeSpeed,
       // The fog eases outward after a raise, following the filled radius (SP4b spec §5): scanned around the camera's
       // column every 30 rendered frames while the fog is below its target, never once it has arrived.
-      fogStep: (dtMs) => {
-        if (fogRd < fog.target) {
-          if (scanIn <= 0) {
-            filled = filledRadius(Math.floor(fly.x) >> 4, Math.floor(fly.z) >> 4, fog.target, isRevealed);
-            scanIn = FILL_SCAN_FRAMES;
-          }
-          scanIn--;
-        }
-        fogRd = fog.step(dtMs, filled);
-        return fogRd;
-      },
+      fogStep: (dtMs) => fogStep.step(dtMs),
       onRendered: (dtMs) => {
         frames.push(dtMs);
         // The first 120 rendered frames' largest delta (SP4b spec §7.1; the flight JSON's key unchanged).

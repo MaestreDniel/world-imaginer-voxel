@@ -1,11 +1,14 @@
 /**
- * The agents' Chrome cells of SP4a's GPU measurements (SP4a spec §1.2, §9.5; not in CI): drives the spike page
- * (`?spike=batch`) or the flight route (`?flight=sp4a`) in our own headful Chrome on a hardware GPU, reads the page's
- * JSON over CDP and writes it into `docs/superpowers/specs/assets/sp4a/`. A page cannot write files, which is why this
- * tool exists; the Firefox cells are the user's, by hand.
+ * The agents' Chrome cells of the GPU measurements (SP4a spec §1.2, §9.5; SP4b spec §8.3, §8.4, §8.7; not in CI):
+ * drives the spike page (`?spike=batch`), the flight route (`?flight=sp4a`) or the streaming bench (`?bench=medium`) in
+ * our own headful Chrome on a hardware GPU, reads the page's JSON over CDP and writes it into
+ * `docs/superpowers/specs/assets/sp4b/` (every route since SP4b; SP4a's files stay in `assets/sp4a/`). With `--shot`
+ * the bench freezes at a review shot's moment and the tool saves a 1920 × 1080 PNG there instead (§8.7, amended while
+ * planning: the shots need the GPU). A page cannot write files, which is why this tool exists; the Firefox cells are
+ * the user's, by hand.
  *
- * Run it with `npm run measure:chrome -- --route spike|flight [--gpu iris|rtx] [--workers 4] [--renderer batch|mesh]
- * [--skip-build] [--probe-only]`. In order:
+ * Run it with `npm run measure:chrome -- --route spike|flight|bench [--gpu iris|rtx] [--workers 4]
+ * [--renderer batch|mesh] [--shot <name>] [--skip-build] [--probe-only]`. In order:
  * 1. it refuses without DISPLAY or WAYLAND_DISPLAY: headful only, since headless rAF is not tied to the display;
  * 2. it refuses when the 1-minute load average is above MEASURE_LOAD_MAX, printing `uptime` (a quiet machine);
  * 3. it reads the PRIME profile (`prime-select query`, never with an argument) and passes the GPU choice to Chrome as
@@ -19,7 +22,8 @@
  * 6. it records the page's console errors (ruling P8), navigates, and polls the route's result every second (15 min);
  *    every CDP call is bounded, and the poll fails fast when Chrome exits or the tab crashes (`pollResult`, `watchPage`);
  * 7. it adds who measured, the load averages, the Chrome version, the window (warning when it left eDP-1), the viewport
- *    and the console errors, writes the JSON pretty-printed and prints its path and summary (ruling P9);
+ *    and the console errors, writes the JSON pretty-printed and prints its path and summary (ruling P9); for a shot it
+ *    polls `__wiBench.shotReady` instead and writes `Page.captureScreenshot`'s PNG;
  * 8. it stops only its own Chrome and preview, then removes the profile.
  *
  * Tools run under plain Node (type stripping), so this file imports no `src/` module.
@@ -52,20 +56,28 @@ const WINDOW_POLL_MS = 250;
 const WINDOW_READS = 8;
 /** The pause between two steps of the sequence, so the window manager applies each one before the next. */
 const WINDOW_STEP_MS = 300;
-const ASSETS = 'docs/superpowers/specs/assets/sp4a';
+/** Where every route writes (plan: SP4b's assets; SP4a's files stay in `assets/sp4a/`). */
+export const ASSETS = 'docs/superpowers/specs/assets/sp4b';
+
+/** The bench's review shots (SP4b spec §8.7), mirrored from `src/ui/world/bench.ts`'s `BENCH_SHOTS` (a test pins them). */
+export const SHOTS = ['fly96', 'fly384', 'rd12', 'rd8', 'rd12back', 'first'] as const;
+export type Shot = (typeof SHOTS)[number];
 
 export interface MeasureArgs {
-  readonly route: 'spike' | 'flight';
+  readonly route: 'spike' | 'flight' | 'bench';
   readonly gpu: 'iris' | 'rtx';
   readonly workers: 4 | null;
   readonly skipBuild: boolean;
   readonly renderer: 'batch' | 'mesh' | null;
   readonly probeOnly: boolean;
+  /** A review shot of the bench (SP4b spec §8.7), or null for the JSON. */
+  readonly shot: Shot | null;
 }
 
 /**
  * The command line. `--route` is required; `--gpu` defaults to the gate machine's Iris Xe (spec §9.5 writes it as
- * optional). `--workers` takes only 4 and only on the flight route, the one cell with a `-w4` file name.
+ * optional). `--workers` takes only 4 and only on the flight and bench routes, the cells with a `-w4` file name.
+ * `--shot` belongs to the bench and needs `--renderer`, whose name the shot's file carries.
  */
 export function parseMeasureArgs(argv: readonly string[]): MeasureArgs {
   let route: MeasureArgs['route'] | null = null;
@@ -74,6 +86,7 @@ export function parseMeasureArgs(argv: readonly string[]): MeasureArgs {
   let skipBuild = false;
   let renderer: MeasureArgs['renderer'] = null;
   let probeOnly = false;
+  let shot: MeasureArgs['shot'] = null;
   for (let i = 0; i < argv.length; i++) {
     const a = argv[i]!;
     const value = (): string => {
@@ -83,7 +96,7 @@ export function parseMeasureArgs(argv: readonly string[]): MeasureArgs {
     };
     if (a === '--route') {
       const v = value();
-      if (v !== 'spike' && v !== 'flight') throw new Error(`--route must be spike or flight, not ${v}`);
+      if (v !== 'spike' && v !== 'flight' && v !== 'bench') throw new Error(`--route must be spike, flight or bench, not ${v}`);
       route = v;
     } else if (a === '--gpu') {
       const v = value();
@@ -97,30 +110,42 @@ export function parseMeasureArgs(argv: readonly string[]): MeasureArgs {
       const v = value();
       if (v !== 'batch' && v !== 'mesh') throw new Error(`--renderer must be batch or mesh, not ${v}`);
       renderer = v;
+    } else if (a === '--shot') {
+      const v = value();
+      const known = SHOTS.find((s) => s === v);
+      if (known === undefined) throw new Error(`--shot must be one of ${SHOTS.join(', ')}, not ${v}`);
+      shot = known;
     } else if (a === '--skip-build') skipBuild = true;
     else if (a === '--probe-only') probeOnly = true;
     else throw new Error(`unknown argument ${a}`);
   }
-  if (route === null) throw new Error('--route spike|flight is required');
-  if (workers !== null && route !== 'flight') throw new Error('--workers 4 applies to --route flight only');
-  return { route, gpu, workers, skipBuild, renderer, probeOnly };
+  if (route === null) throw new Error('--route spike|flight|bench is required');
+  if (workers !== null && route === 'spike') throw new Error('--workers 4 applies to --route flight or bench only');
+  if (shot !== null && route !== 'bench') throw new Error('--shot applies to --route bench only');
+  if (shot !== null && renderer === null) throw new Error('--shot needs --renderer batch|mesh (the shot\'s file names the renderer)');
+  return { route, gpu, workers, skipBuild, renderer, probeOnly, shot };
 }
 
 /**
- * The JSON's file name (spec §1.2, §9.5): `spike-chrome-<gpu>.json`, `flight-<gpu>-chrome.json`, `-w4` for the 4-worker
- * flight. A forced `--renderer` adds `-<renderer>`, so it never overwrites the cell the probe's renderer selected
- * (G1 reads `flight-iris-chrome.json`).
+ * The output's file name (SP4a spec §1.2, §9.5; SP4b spec §8.3, §8.7): `spike-chrome-<gpu>.json`,
+ * `flight-<gpu>-chrome.json`, `bench-<gpu>-chrome.json`, `-w4` for a 4-worker run. A forced `--renderer` adds
+ * `-<renderer>`, so it never overwrites the cell the probe's renderer selected (G1 reads `flight-iris-chrome.json` and
+ * `bench-iris-chrome.json`). A shot is `review-<shot>-<renderer>.png`.
  */
 export function outputName(a: MeasureArgs): string {
-  const base = a.route === 'spike' ? `spike-chrome-${a.gpu}` : `flight-${a.gpu}-chrome`;
+  if (a.shot !== null) return `review-${a.shot}-${a.renderer ?? 'auto'}.png`;
+  const base = a.route === 'spike' ? `spike-chrome-${a.gpu}` : `${a.route}-${a.gpu}-chrome`;
   return `${base}${a.workers === null ? '' : `-w${a.workers}`}${a.renderer === null ? '' : `-${a.renderer}`}.json`;
 }
 
-/** The page path: `/?spike=batch` or `/?flight=sp4a`, then `&workers=4` and `&renderer=` when given. */
+const ROUTE_QUERY: Readonly<Record<MeasureArgs['route'], string>> = { spike: 'spike=batch', flight: 'flight=sp4a', bench: 'bench=medium' };
+
+/** The page path: `/?spike=batch`, `/?flight=sp4a` or `/?bench=medium`, then `&workers=4`, `&renderer=` and `&shot=` when given. */
 export function routePath(a: MeasureArgs): string {
-  const q = [a.route === 'spike' ? 'spike=batch' : 'flight=sp4a'];
+  const q = [ROUTE_QUERY[a.route]];
   if (a.workers !== null) q.push(`workers=${a.workers}`);
   if (a.renderer !== null) q.push(`renderer=${a.renderer}`);
+  if (a.shot !== null) q.push(`shot=${a.shot}`);
   return `/?${q.join('&')}`;
 }
 
@@ -249,6 +274,14 @@ export function flightLine(r: unknown): string {
   return `frame p95 ${ms(['frames', 'p95'])}, draw calls max ${calls ?? 'n/a'}, main p95 ${ms(['main', 'p95'])}`;
 }
 
+/** The bench's one-line summary over its streaming legs (`stream`), read defensively: `n/a` where a field is missing. */
+export function benchLine(r: unknown): string {
+  const n = (p: readonly string[]) => numberAt(r, ['stream', ...p]) ?? 'n/a';
+  const ms = (p: readonly string[]) => { const v = numberAt(r, ['stream', ...p]); return v === undefined ? 'n/a' : `${v} ms`; };
+  return `stream frame p95 ${ms(['frames', 'p95'])}, over 33 ms ${n(['frames', 'over33'])}, draw calls max ${n(['drawCalls', 'max'])}, `
+    + `main p95 ${ms(['main', 'p95'])}, GPU MB ${n(['gpuMB'])}, partial column frames ${n(['partialColumnFrames'])}`;
+}
+
 // ---------------------------------------------------------------- the page side
 
 /** The unmasked WebGL renderer string of a fresh webgl2 context (spec §9.5's GPU check). */
@@ -259,9 +292,17 @@ const PROBE_RENDERER = `(() => {
   return String(gl.getParameter(ext === null ? gl.RENDERER : ext.UNMASKED_RENDERER_WEBGL));
 })()`;
 const READ_VIEWPORT = '({ innerWidth: window.innerWidth, innerHeight: window.innerHeight, devicePixelRatio: window.devicePixelRatio })';
+const RESULT_GLOBAL: Readonly<Record<MeasureArgs['route'], string>> = { spike: '__wiSpike', flight: '__wiFlight', bench: '__wiBench' };
 const readResult = (a: MeasureArgs) => `(() => {
-  const r = window.${a.route === 'spike' ? '__wiSpike' : '__wiFlight'}?.result;
+  const r = window.${RESULT_GLOBAL[a.route]}?.result;
   return r === undefined || r === null ? null : JSON.stringify(r);
+})()`;
+/** A shot's state: 'ready' once `__wiBench.shotReady`, the route's `{ error }` as JSON, or null while it runs. */
+const READ_SHOT = `(() => {
+  const b = window.__wiBench;
+  if (b === undefined) return null;
+  if (b.result !== null && b.result !== undefined && 'error' in b.result) return JSON.stringify({ error: b.result.error });
+  return b.shotReady === true ? 'ready' : null;
 })()`;
 
 type Viewport = { innerWidth: number; innerHeight: number; devicePixelRatio: number };
@@ -495,6 +536,24 @@ async function main(argv: readonly string[]): Promise<number> {
     console.log(`navigating to ${url}`);
     await call(cdp, 'Page.navigate', { url });
     const page = cdp;
+    const file = join(ROOT, ASSETS, outputName(a));
+    if (a.shot !== null) {
+      // The review shot (SP4b spec §8.7): the bench froze at the shot's moment and stopped its loop, so the canvas holds it.
+      const state = await pollResult({
+        read: () => Promise.race([evaluate<string | null>(page, READ_SHOT), watch.lost]),
+        dead: watch.dead,
+        pollMs: POLL_MS,
+        callTimeoutMs: CDP_CALL_TIMEOUT_MS,
+        timeoutMs: RESULT_TIMEOUT_MS,
+      });
+      if (state !== 'ready') throw new Error(`the bench failed before the shot: ${state}`);
+      const shot = await call(cdp, 'Page.captureScreenshot', { format: 'png' });
+      mkdirSync(join(ROOT, ASSETS), { recursive: true });
+      writeFileSync(file, Buffer.from(String(shot['data']), 'base64'));
+      console.log(`wrote ${file}`);
+      if (consoleErrors.length > 0) console.warn(`WARNING: ${consoleErrors.length} console error(s):\n${consoleErrors.join('\n')}`);
+      return 0;
+    }
     const text = await pollResult({
       read: () => Promise.race([evaluate<string | null>(page, readResult(a)), watch.lost]),
       dead: watch.dead,
@@ -511,11 +570,11 @@ async function main(argv: readonly string[]): Promise<number> {
       ...(JSON.parse(text) as Record<string, unknown>),
       measuredBy: 'measureChrome', loadAvg1Before, loadAvg1After, chromeVersion, window: windowBounds, viewport, consoleErrors: [...consoleErrors],
     };
-    const file = join(ROOT, ASSETS, outputName(a));
     mkdirSync(join(ROOT, ASSETS), { recursive: true });
     writeFileSync(file, `${JSON.stringify(result, null, 2)}\n`);
     console.log(`wrote ${file}`);
     if (a.route === 'spike') console.log(`verdict: ${JSON.stringify(result['verdict'] ?? null)}`);
+    else if (a.route === 'bench') console.log(benchLine(result));
     else console.log(flightLine(result));
     if (loadAvg1After > MEASURE_LOAD_MAX) console.warn(`WARNING: the load average rose to ${loadAvg1After.toFixed(2)} during the run; rerun this cell on a quiet machine`);
     const movedAway = windowProblem(windowBounds);

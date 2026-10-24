@@ -52,6 +52,8 @@
  * marks `scheduler.ts` as not created; §4.3 states the four heaps and the throttle's cap and display-tied thresholds.
  * R7's commit (SP4b §8.1-§8.2, §13): §6.4's R7 row names `partialColumnFrames` and its flight and Apply parts, which
  * `THRESHOLDS` holds; §1's `test/` entry lists SP4b's test files in their own parentheses, which exist.
+ * The bench route's commit (SP4b §8.3, §13): §5.8's bench route is `?bench=medium`'s 95 s script; §1's `ui/world/*`
+ * entry names `ui/world/bench.ts`.
  */
 import { existsSync, readdirSync, readFileSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
@@ -711,6 +713,7 @@ describe('master spec amendments (SP4b §13)', () => {
     [/^\s+engine\/\s/, 'throttle.ts (SP4b)', 'src/engine/throttle.ts'],
     [/^\s+core\/\s/, 'streamScore.ts (SP4b', 'src/core/streamScore.ts'],
     [/^\s+renderer\.ts sectionRenderer\.ts /, 'sectionRenderer.ts (interface; SP4b: and UploadGate)', 'src/render/sectionRenderer.ts'],
+    [/^\s+ui\/world\/\* /, 'ui/world/bench.ts', 'src/ui/world/bench.ts'],
   ];
 
   test('§1\'s engine entry marks scheduler.ts as not created, and the file does not exist (SP4b spec §13)', () => {
@@ -830,6 +833,14 @@ describe('master spec amendments (SP4b §13)', () => {
     const at = text.indexOf('### 5.8 Debug HUD and bench');
     const s58 = text.slice(at, text.indexOf('### 5.9 ', at));
     expect(s58).toContain('SP4b: the streaming counts');
+  });
+
+  test('§5.8\'s bench route is `?bench=medium`\'s 95 s script, and §1\'s ui/world entry names bench.ts (SP4b spec §8.3, §13)', () => {
+    const at = text.indexOf('### 5.8 Debug HUD and bench');
+    const s58 = text.slice(at, text.indexOf('### 5.9 ', at));
+    expect(s58).toContain('a fixed seed and a scripted flight (SP4b: `?bench=medium`, 95 s, plains, mountains and ocean along straight legs at 20, 96 and 384 blocks/s with turns, a hover and a live RD change; SP6 adds the cave scenario, SP7 the flood)');
+    expect(s58).not.toContain('60 s scripted flight');
+    expect(layoutEntry(/^\s+ui\/world\/\* /)).toContain('ui/world/bench.ts (SP4b: the `?bench=medium` route and its JSON)');
   });
 
   test('§6.4\'s R7 row names `partialColumnFrames` and the SP4b flight part, and THRESHOLDS holds it activeFrom SP4b', () => {

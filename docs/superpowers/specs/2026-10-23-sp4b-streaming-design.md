@@ -552,7 +552,7 @@ R7's Apply part (old and new epochs mixed during a terrain Apply) is SP4c's to a
 
 ### 8.7 Review screenshots (master §10's Definition of done)
 
-Committed to `docs/superpowers/specs/assets/sp4b/`, 1920 × 1080, taken as SP4a §9.6's (our own headless Chrome on our own `vite preview`, the capture mode; the flight shots from `?bench=medium` captured at a fixed time in a leg), each on RegionBatch and on RegionMesh (`?renderer=mesh`):
+Committed to `docs/superpowers/specs/assets/sp4b/` as `review-<shot>-<renderer>.png`, 1920 × 1080, taken by an agent through `measureChrome.ts --route bench --gpu iris --shot <name> --renderer batch|mesh` in its own headful Chrome on the Iris Xe, under the on-demand profile with the user's display awake (amended while planning: headless SwiftShader cannot run the 96 and 384 blocks/s legs at a real frame rate, so the streaming state at the shot times would not be the user's): `?bench=medium&shot=<name>` freezes the script at the shot's moment with nothing drawn over the world, renders three more frames and stops (`fly96` at L3 + 15 s, `fly384` at L4 + 2.5 s, `rd12` at L6 − 0.5 s, `rd8` at L6 + 1 s, `rd12back` at the first frame after L6 + 5 s at which the fog's RD is back at 12, else at L6's end, `first` after the reveal), each on RegionBatch and on RegionMesh:
 - mid-flight at 96 blocks/s, terrain filling in behind the fog ahead;
 - at 384 blocks/s, the empty areas generation leaves (the brief's "for a while"), the frame still smooth;
 - a live RD change: at RD 12, just after lowering to 8, and after raising back to 12 once the disc has refilled;
