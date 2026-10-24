@@ -1242,7 +1242,7 @@ Target: edit → visible ≤ 50 ms p95, measured in the HUD.
 
 **Split.** `audio/` is pure (no WebAudio): deterministic DSP generators that write `Float32Array` samples, plus the decision logic in `audio/model/` (ambience weights, emitter clustering and voice selection, footstep cadence, music scheduling on an injected clock). Both are unit-testable in Node and back the AU metrics. `sound/` is the main-thread WebAudio layer: it only wires `audio/model` decisions to nodes and plays buffers.
 
-**Synthesis jobs.** Generators run as `AUDIO_SYNTH` jobs on the pool. The SFX and ambience bank is synthesised once per page load, after first playable. Music is synthesised on demand as 8-16 s phrases, requested at least one phrase ahead and scheduled with `AudioBufferSourceNode.start(when)` on the context clock (pads are short loops). AUDIO_SYNTH obeys the same ≤ 1-in-flight cap as LOD/MAP while any T is pending within RD (§4.3). All buffers are synthesised at 48000 Hz, mono except the stereo reverb IRs, and wrapped in AudioBuffers of that rate (WebAudio resamples).
+**Synthesis jobs.** Generators run as `AUDIO_SYNTH` jobs on the pool. The SFX and ambience bank is synthesised once per page load, after the first reveal. Music is synthesised on demand as 8-16 s phrases, requested at least one phrase ahead and scheduled with `AudioBufferSourceNode.start(when)` on the context clock (pads are short loops). AUDIO_SYNTH obeys the same ≤ 1-in-flight cap as LOD/MAP while any T is pending within RD (§4.3). All buffers are synthesised at 48000 Hz, mono except the stereo reverb IRs, and wrapped in AudioBuffers of that rate (WebAudio resamples).
 
 **Engine (`sound/engine.ts`).** One `AudioContext`, buses master → {music, sfx, ambient}, each with a persisted volume. The context is **resumed on the first user gesture** (click / pointer lock / key); until then a muted indicator shows (09's context was never resumed). Settings persist in localStorage.
 
@@ -1514,7 +1514,7 @@ Metric values are written to `test/metrics/.out/*.json` for trends. The harness 
 | Z3 | floating_islands: 8×8 km columns with solid ground at y 190-270 / island top runs that are grass. SP3e: floating_islands: positions holding a solid run whose bottom voxel is at y ≥ 181, over uniform columns in [−4096, 4096)² / the share of those positions whose highest such run's top is grass_block; recorded on every tier from SP3e, rows activeFrom SP12 gated on the quick and full tiers (amended by SP3e) | ≥ 3% / ≥ 90% |
 | Z4 | large_biomes: mean surface-biome patch area vs default | ≥ 8× |
 | P1 | stage bench vs baselines | ≤ +30% regression; targets per section 7 |
-| G1 | bench JSON at Medium on the reference Iris Xe, and at High on the reference RTX 3060 Mobile (asserted from the committed artifacts, which record the WebGL renderer string). SP4a gates the Medium p95, draw-call and main-thread cells on the static world from the `?flight` artifact (frame times snapped to the display interval); SP4b gates them while streaming with the other cells (amended by SP4a) | Medium: p95 ≤ 16.7 ms, no frame > 33 ms while streaming, draw calls ≤ 100, RD12 fill ≤ 6 s with the 4-worker cap, first playable (RD4 meshed) ≤ 1 s, GPU estimate ≤ 150 MB, main thread ≤ 6 ms p95. High: p95 ≤ 16.7 ms, no frame > 33 ms while streaming, JS heap + SAB ≤ 450 MB (draw calls recorded, not gated) |
+| G1 | bench JSON at Medium on the reference Iris Xe, and at High on the reference RTX 3060 Mobile (asserted from the committed artifacts, which record the WebGL renderer string). SP4a gates the Medium p95, draw-call and main-thread cells on the static world from the `?flight` artifact (frame times snapped to the display interval); SP4b gates them while streaming with the other cells (amended by SP4a); SP4b gates the Medium cells while streaming from the `?bench=medium` artifacts (no frame > 33 ms as snapped frame times, frames with a structural operation included; the fill as the first entry's reveal with 4 workers; the GPU estimate as the section geometry, the texture array, the lightmap, the sky and the drawing buffer, the SP4b spec §8.4) and re-asserts SP4a's static cells on a re-measured `?flight`; on the RTX 3060 Mobile, no frame > 33 ms and p95 ≤ 16.7 ms at Medium are checked at SP4b's exit; only the High-preset parts (p95 at High, JS heap + SAB ≤ 450 MB) wait for SP11's High preset | Medium: p95 ≤ 16.7 ms, no frame > 33 ms while streaming, draw calls ≤ 100, RD12 fill ≤ 6 s with the 4-worker cap, the first entry reveals the whole RD at once behind the loading screen (the user's decision of 2026-10-23), GPU estimate ≤ 150 MB, main thread ≤ 6 ms p95. High: p95 ≤ 16.7 ms, no frame > 33 ms while streaming, JS heap + SAB ≤ 450 MB (draw calls recorded, not gated) |
 | G2 | edit → visible p95 / terrain Apply: first visible change near the player | ≤ 50 ms / ≤ 0.5 s |
 | M1 | block-state registry: used states / shape boxes on the 1/8 grid / `rotateState` 4× identity and `withProp` round-trip / `stateIds.lock.json` entries unchanged | ≤ 4096 / 100 % / exact / exact |
 | AU1 | procedural synthesis determinism: buffer hash per (seed, key, variant) over 2 runs and 2 workers; no NaN/clipping (peak ≤ 0.99) | identical / 0 |
@@ -1623,9 +1623,9 @@ Metric values are written to `test/metrics/.out/*.json` for trends. The harness 
 - **Kill criterion:** if DAG closure overhead exceeds 25% of T (measured by bench against a hand-inlined default expression), add `new Function` codegen behind a CSP probe, keeping `reference.ts` as the oracle.
 - **Fill:** RD12 needs T 755 / D 660 / L 573 / mesh 491 columns (exact sets: T 825 / D 705 / L 593 / mesh 489; amended by SP4a) ≈ 16-17 CPU-seconds.
   - Wall time ≤ 6 s on the reference laptop with the bench cap of 4 workers and the throttle; ≤ 4 s with the default 6 workers (09 took 71 s at RD16).
-  - First playable (RD4 meshed) ≤ 1 s.
+  - The first entry reveals the whole RD at once (the user's decision of 2026-10-23 replaced the first-playable target).
   - RD16 ≈ 28 CPU-s, ≤ 6 s on 6 workers.
-- **Streaming:** flight at 20 blocks/s at RD12 is about 31 new columns/s, about 0.8 of a worker.
+- **Streaming:** flight at 20 blocks/s at RD12 is about 31 new columns/s, about 0.8 of a worker. SP4b's bench also flies 96 and 384 blocks/s, where generation may lag and empty areas show, never stutter (the user's rule).
 
 **Main thread per frame (Medium):**
 
@@ -1706,7 +1706,7 @@ High adds MSAA, a shadow cascade (about 2 ms), LOD 1 km and RD16 (dGPU target). 
 14. **LOD mismatch** (overhangs, islands). T5 on LOD samples, fill mask, island terms, fog.
 15. **Scope creep.** YAGNI list plus a cut line per SP (see the decomposition). After SP7 the app is a complete explorer and editor with water.
 16. **u16 block states.** +55-60 % store memory and non-cube meshing/collision work. Mitigation: uniform-section elision, 4096-state cap, connection shapes derived rather than stored, `SHAPE_BOXES` restricted to the 11 listed models, shape quads excluded from greedy merging only.
-17. **Audio autoplay and CPU.** Browsers suspend AudioContext until a gesture: `sound/engine` resumes on the first pointer-lock/click and shows a muted indicator until then. Synthesis runs in workers after first playable (music on demand, phrase by phrase); the voice cap and emitter clustering bound runtime cost (AU2).
+17. **Audio autoplay and CPU.** Browsers suspend AudioContext until a gesture: `sound/engine` resumes on the first pointer-lock/click and shows a muted indicator until then. Synthesis runs in workers after the first reveal (music on demand, phrase by phrase); the voice cap and emitter clustering bound runtime cost (AU2).
 
 ## 9. Contradictions resolved
 

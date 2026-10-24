@@ -54,6 +54,8 @@
  * `THRESHOLDS` holds; §1's `test/` entry lists SP4b's test files in their own parentheses, which exist.
  * The bench route's commit (SP4b §8.3, §13): §5.8's bench route is `?bench=medium`'s 95 s script; §1's `ui/world/*`
  * entry names `ui/world/bench.ts`.
+ * G1's streaming commit (SP4b §8.2, §8.4, §13): §6.4's G1 row names the six streaming parts, which `THRESHOLDS` holds
+ * activeFrom SP4b, and the RTX check at the exit; no "first playable" is left in §4.18, §6.4, §7 or §8.
  */
 import { existsSync, readdirSync, readFileSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
@@ -850,6 +852,43 @@ describe('master spec amendments (SP4b §13)', () => {
     expect(r7).toContain('| 0 (the flight part SP4b, the Apply part SP4c) |');
     expect(Object.keys(THRESHOLDS.R7 ?? {})).toEqual(['partialColumnFrames']);
     expect(THRESHOLDS.R7?.partialColumnFrames).toEqual({ max: 0, activeFrom: 'SP4b' });
+  });
+
+  test('§6.4\'s G1 row names the six streaming parts THRESHOLDS holds activeFrom SP4b', () => {
+    const g1 = text.split('\n').find((l) => l.startsWith('| G1 |'));
+    expect(g1, 'no G1 row in §6.4').toBeDefined();
+    expect(g1).toContain('SP4b gates the Medium cells while streaming from the `?bench=medium` artifacts (no frame > 33 ms as snapped frame times, frames with a structural operation included; the fill as the first entry\'s reveal with 4 workers; the GPU estimate as the section geometry, the texture array, the lightmap, the sky and the drawing buffer, the SP4b spec §8.4) and re-asserts SP4a\'s static cells on a re-measured `?flight`');
+    expect(g1).toContain('on the RTX 3060 Mobile, no frame > 33 ms and p95 ≤ 16.7 ms at Medium are checked at SP4b\'s exit; only the High-preset parts (p95 at High, JS heap + SAB ≤ 450 MB) wait for SP11\'s High preset');
+    expect(g1).toContain('the first entry reveals the whole RD at once behind the loading screen (the user\'s decision of 2026-10-23)');
+    // The six streaming parts and the G1 row's targets they gate (SP4b spec §8.2).
+    const parts: Array<[part: string, max: number, target: string]> = [
+      ['mediumStreamP95', 16.7, 'p95 ≤ 16.7 ms'],
+      ['mediumStreamOver33', 0, 'no frame > 33 ms while streaming'],
+      ['mediumStreamDrawCalls', 100, 'draw calls ≤ 100'],
+      ['mediumStreamMainP95', 6, 'main thread ≤ 6 ms p95'],
+      ['mediumFill4wMs', 6000, 'RD12 fill ≤ 6 s with the 4-worker cap'],
+      ['mediumGpuMB', 150, 'GPU estimate ≤ 150 MB'],
+    ];
+    for (const [part, max, target] of parts) {
+      expect(THRESHOLDS.G1?.[part], `THRESHOLDS.G1.${part}`).toEqual({ max, activeFrom: 'SP4b' });
+      expect(g1, `the G1 row's target ${target}`).toContain(target);
+    }
+    expect(Object.keys(THRESHOLDS.G1 ?? {}).filter((p) => THRESHOLDS.G1?.[p]?.activeFrom === 'SP4b').sort()).toEqual(parts.map(([p]) => p).sort());
+  });
+
+  test('no \'first playable\' is left in §4.18, §6.4, §7 or §8', () => {
+    const section = (head: string, next: string): string => {
+      const at = text.indexOf(head);
+      expect(at, `no ${head}`).toBeGreaterThan(-1);
+      return text.slice(at, text.indexOf(next, at + head.length));
+    };
+    for (const [head, next] of [['### 4.18 ', '## 5. '], ['### 6.4 ', '## 7. '], ['## 7. ', '## 8. '], ['## 8. ', '## 9. ']] as const) {
+      expect(section(head, next), `${head.trim()} still says first playable`).not.toMatch(/first playable/i);
+    }
+    expect(section('### 4.18 ', '## 5. ')).toContain('synthesised once per page load, after the first reveal');
+    expect(section('## 7. ', '## 8. ')).toContain('The first entry reveals the whole RD at once (the user\'s decision of 2026-10-23 replaced the first-playable target)');
+    expect(section('## 7. ', '## 8. ')).toContain('SP4b\'s bench also flies 96 and 384 blocks/s, where generation may lag and empty areas show, never stutter (the user\'s rule)');
+    expect(section('## 8. ', '## 9. ')).toContain('Synthesis runs in workers after the first reveal');
   });
 
   test('§1\'s test entry lists SP4b\'s test files in their own parentheses, which exist', () => {

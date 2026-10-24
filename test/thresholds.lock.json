@@ -1,5 +1,5 @@
 {
-  "sha256": "69682065e4c1dbacb136c830087c352b8990d49618fcb98df9ca1835e51fb9bc",
+  "sha256": "b366b5ad5a69b82c399e93d26caf261fa06bc01d7bc01a20a0e81c7d65989f5c",
   "canonical": {
     "startedSps": [
       "SP0",
@@ -205,6 +205,14 @@
         }
       },
       "G1": {
+        "mediumFill4wMs": {
+          "activeFrom": "SP4b",
+          "max": 6000
+        },
+        "mediumGpuMB": {
+          "activeFrom": "SP4b",
+          "max": 150
+        },
         "mediumStaticDrawCalls": {
           "activeFrom": "SP4a",
           "max": 100
@@ -215,6 +223,22 @@
         },
         "mediumStaticP95": {
           "activeFrom": "SP4a",
+          "max": 16.7
+        },
+        "mediumStreamDrawCalls": {
+          "activeFrom": "SP4b",
+          "max": 100
+        },
+        "mediumStreamMainP95": {
+          "activeFrom": "SP4b",
+          "max": 6
+        },
+        "mediumStreamOver33": {
+          "activeFrom": "SP4b",
+          "max": 0
+        },
+        "mediumStreamP95": {
+          "activeFrom": "SP4b",
           "max": 16.7
         }
       },

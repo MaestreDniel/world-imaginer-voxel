@@ -680,3 +680,4 @@ Applied when the user approves this spec, each in the commit §11 assigns (the s
 
 - 2026-10-24 — SP4b Task 1: startedSps gains 'SP4b' (SP4b split into SP4b and SP4c, spec §11).
 - 2026-10-24 — SP4b Task 25: R7 partialColumnFrames max 0, gated from SP4b on every tier (stream.metric.ts, spec §8.1-§8.2); a new part.
+- 2026-10-24 — SP4b Task 27: G1 mediumStreamP95 max 16.7, mediumStreamOver33 max 0, mediumStreamDrawCalls max 100, mediumStreamMainP95 max 6, mediumFill4wMs max 6000 and mediumGpuMB max 150, gated from SP4b on every tier from the committed Iris Xe Chrome bench files (g1.metric.ts, G1.streaming; spec §8.2, §8.4, D23); the static cells re-asserted from assets/sp4b/flight-iris-chrome.json; all new parts (measured 8.33 / 0 / 13 / 2.28 / 4212 / 52.6 on eDP-1 at 240 Hz).

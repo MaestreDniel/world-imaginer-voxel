@@ -89,9 +89,18 @@ export const THRESHOLDS: ThresholdTable = {
   // SP4a spec §9.1: the light against the global reference BFS, and enclosed air with sky light (`light.metric.ts`).
   L1: { mismatches: { max: 0, activeFrom: 'SP4a' } },
   L2: { enclosedLit: { max: 0, activeFrom: 'SP4a' } },
-  // SP4a spec §9.1, §9.5 (D24): G1's three Medium cells on the static world, from the committed Chrome flight on the Iris
-  // Xe (`g1.metric.ts`, `flight-iris-chrome.json`); SP4b re-asserts them while streaming and adds the streaming cells.
-  G1: { mediumStaticP95: { max: 16.7, activeFrom: 'SP4a' }, mediumStaticDrawCalls: { max: 100, activeFrom: 'SP4a' }, mediumStaticMainP95: { max: 6, activeFrom: 'SP4a' } },
+  // SP4a spec §9.1, §9.5 (D24): G1's three Medium cells on the static world, from the Chrome flight on the Iris Xe
+  // (`g1.metric.ts`, `flight-iris-chrome.json`, re-measured on SP4b's code into `assets/sp4b/`). SP4b spec §8.2, §8.4
+  // (D23): the six Medium streaming cells, from the committed Iris Xe Chrome bench files (`G1.streaming`).
+  G1: {
+    mediumStaticP95: { max: 16.7, activeFrom: 'SP4a' }, mediumStaticDrawCalls: { max: 100, activeFrom: 'SP4a' }, mediumStaticMainP95: { max: 6, activeFrom: 'SP4a' },
+    mediumStreamP95: { max: 16.7, activeFrom: 'SP4b' },
+    mediumStreamOver33: { max: 0, activeFrom: 'SP4b' },
+    mediumStreamDrawCalls: { max: 100, activeFrom: 'SP4b' },
+    mediumStreamMainP95: { max: 6, activeFrom: 'SP4b' },
+    mediumFill4wMs: { max: 6000, activeFrom: 'SP4b' },
+    mediumGpuMB: { max: 150, activeFrom: 'SP4b' },
+  },
   // SP3e spec §5.3 (D16): the master's diagnostics on the drafts, recorded on every tier from SP3e (`.out/Z1-Z3.json`),
   // gated on the quick and full tiers once SP12 starts.
   Z1: {
