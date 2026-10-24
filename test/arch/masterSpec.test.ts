@@ -912,4 +912,15 @@ describe('master spec amendments (SP4b §13)', () => {
       expect(existsSync(`${ROOT_DIR}${file}`), `${file} does not exist`).toBe(true);
     }
   });
+
+  test('deferred reclamation was built, so SP4b\'s cut line says it was not taken and the receivers say nothing moved', () => {
+    // Built: the reclaim module exists and the store's releases go through it (SP4b spec §2.5, §10's cut line).
+    expect(existsSync(`${ROOT_DIR}src/world/store/reclaim.ts`)).toBe(true);
+    expect(readFileSync(`${ROOT_DIR}src/world/store/store.ts`, 'utf8')).toMatch(/\battachReclaimer\(/);
+    const cut = spEntry('SP4b', 'SP4c').split('\n').find((l) => l.startsWith('- **Cut line:**'));
+    expect(cut).toBe('- **Cut line:** deferred reclamation\'s primitive (→ SP5). It was not taken: deferred reclamation shipped in SP4b, so nothing moved.');
+    expect(text).toContain('SP4b deferred-reclamation primitive → SP5 (delivered in SP4b, so nothing moved);');
+    // SP5 no longer carries the conditional "if SP4b's cut line moved it here".
+    expect(spEntry('SP5', 'SP6')).not.toContain('If SP4b\'s cut line moved');
+  });
 });
