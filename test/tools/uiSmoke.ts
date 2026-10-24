@@ -61,12 +61,19 @@
  *     page error (`start.png`); `/#<seed 7's hash>` names seed 7; "Enter the world" on a bare `/` brings up the loading
  *     screen in the same page (the URL and the history unchanged), and the step stops there;
  *   - world: `/?rd=4` shows no start screen and reveals (`window.__wiWorld.revealed`, set by the page), with no page
- *     error (`world.png`);
+ *     error (`world.png`); the canvas's `data-renderer` is the page's choice (`expectedRenderer`: RegionBatch where the
+ *     browser has `WEBGL_multi_draw`, SP4b spec §8.6);
  *   - world-mesh: `?renderer=mesh` and `?renderer=batch` at RD 4 and two fixed cameras (`PARITY_VIEWS`: seed 42's
  *     spawn, and the ocean site over open water and a shore), in the capture mode (`&shot=1`: 08:00 paused, no HUD, no
- *     overlay), each read back after the reveal and three frames (`__wiWorld.frames`): per view, at most 1 % of the
- *     pixels may differ by more than 2/255 in a channel (`pixelDiffShare`); `world-mesh.png` and
- *     `world-mesh-water.png` are the RegionMesh images;
+ *     overlay), each read back after the reveal and three frames (`__wiWorld.frames`): the canvas's `data-renderer` is
+ *     the forced one; per view, at most 1 % of the pixels may differ by more than 2/255 in a channel
+ *     (`pixelDiffShare`); `world-mesh.png` and `world-mesh-water.png` are the RegionMesh images;
+ *   - stream (SP4b spec §8.6): `/?rd=4&renderer=batch`, then `…=mesh` (`STREAM_RUNS`): `data-renderer` is the forced
+ *     one; after the reveal a click on the canvas and W held for 4 s with real key input: the HUD's position moved
+ *     more than 40 blocks (12 blocks/s × 4 s ≈ 47) and its `revealed` count grew, with no page error; then the help (H),
+ *     whose `#setting-rd` shows the RD in force, 4, even with the batch run's 6 saved (rulings R8), and 6 chosen there:
+ *     within 30 s the HUD shows `RD 6` and a larger `revealed`, with no navigation (a token set on `window` after the
+ *     reveal is still there); `stream.png` and `stream-mesh.png`;
  * - console: no exception, console error or failed load, except the known favicon.ico 404 and Chrome's notice that it
  *   blocked a world page's `beforeunload` prompt when a step left it (`leaveGuardLog`); every step ran.
  * With --shots DIR it then writes the spec §12 screenshots into DIR, at seed 42 from a newly loaded page (the
@@ -83,8 +90,8 @@
  * line, the drawer at its tallest, the pointer on a top voxel — floating_islands' on the ground under an island), then
  * `preset-archipelago-map.png` (`biome`) and `preset-floating_islands-islandMask.png` (`islandMask`): 4096 × 4096
  * blocks centred on the window at 16 blocks/px, a 256 × 256 px clip of the map.
- * The 3D steps save `start.png`, `world.png`, `world-mesh.png` and `world-mesh-water.png` into DIR as they run, with
- * --shots only.
+ * The 3D steps save `start.png`, `world.png`, `world-mesh.png`, `world-mesh-water.png`, `stream.png` and
+ * `stream-mesh.png` into DIR as they run, with --shots only.
  * Options: --skip-build, --profile-dir DIR, --shots DIR. The exit code is 0 only when every check passes.
  */
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
@@ -436,12 +443,13 @@ export function presetProblems(text: string, expected: { readonly name: string; 
  * Density steps run after `rule` and before `console`, on the mountain page the rule step opened, so the earlier
  * history and "4 modified" checks are untouched; SP3e's `preset profiles` step (its own id: `presets` is the preset-file
  * step) follows them on pages of its own. SP4a's 3D steps `start`, `world` and `world-mesh` (spec §9.6) come next, on
- * pages of their own, inside `runSmoke`; `console` stays last, the closing step main() runs after `runSmoke` (ruling P52).
+ * pages of their own, inside `runSmoke`, then SP4b's `stream` (spec §8.6: one step for both renderers, since the runner
+ * refuses a repeated id); `console` stays last, the closing step main() runs after `runSmoke` (ruling P52).
  */
 export const SMOKE_STEPS = [
   'selftest', 'load', 'number', 'knot', 'slider', 'box', 'profile', 'presets', 'undo/redo', 'reload', 'cut line', 'voxels', 'tabs', 'rule',
   'density tab', 'density node', 'density mute', 'density json', 'density narrow', 'density horizontal', 'density drag', 'density times',
-  'preset profiles', 'start', 'world', 'world-mesh', 'console',
+  'preset profiles', 'start', 'world', 'world-mesh', 'stream', 'console',
 ] as const;
 export type SmokeStep = (typeof SMOKE_STEPS)[number];
 
@@ -502,6 +510,63 @@ export const PARITY_MAX_SHARE = 0.01;
  */
 export function worldMeshQuery(renderer: 'batch' | 'mesh', v: ParityView = PARITY_VIEW): string {
   return `?rd=${WORLD_RD}&renderer=${renderer}&at=${v.at.x},${v.at.z}&y=${v.y}&yaw=${v.yaw}&pitch=${v.pitch}&shot=1`;
+}
+
+// ---------------------------------------------------------------- the stream step (SP4b spec §8.6)
+
+/** The section renderer the page draws with (`selectSectionRenderer`, mirrored: a unit test compares them). */
+export function expectedRenderer(forced: 'batch' | 'mesh' | null, multiDraw: boolean): 'batch' | 'mesh' {
+  return forced ?? (multiDraw ? 'batch' : 'mesh');
+}
+
+/** The `stream` step's runs, in order: the forced renderer and the file its image is saved as (--shots). */
+export const STREAM_RUNS: ReadonlyArray<{ readonly renderer: 'batch' | 'mesh'; readonly file: string }> = [
+  { renderer: 'batch', file: 'stream.png' },
+  { renderer: 'mesh', file: 'stream-mesh.png' },
+];
+
+/** How long W is held (ms), and the least horizontal distance the HUD's position must move (12 blocks/s × 4 s ≈ 47). */
+export const STREAM_HOLD_MS = 4000;
+export const STREAM_MIN_MOVE = 40;
+/** The render distance chosen live in the help, and how long the HUD has to show it with more columns revealed. */
+export const STREAM_RD = 6;
+export const STREAM_RD_MS = 30_000;
+
+/** The query of one `stream` load: RD 4, the section renderer forced, the HUD and the overlay as a person sees them. */
+export function streamQuery(renderer: 'batch' | 'mesh'): string {
+  return `?rd=${WORLD_RD}&renderer=${renderer}`;
+}
+
+/** What the `stream` step reads from the world HUD (`src/ui/hud.ts`). */
+export interface HudRead {
+  readonly revealed: number;
+  /** The target RD (`RD <n> (fog …)`), not the fog's. */
+  readonly rd: number;
+  readonly x: number;
+  readonly y: number;
+  readonly z: number;
+}
+
+const NUM = '(-?\\d+(?:\\.\\d+)?)';
+const HUD_REVEALED = /(?<![\w-])revealed (\d+)\b/;
+const HUD_RD = /^RD (\d+) \(fog /m;
+const HUD_POSITION = new RegExp(`^x ${NUM} y ${NUM} z ${NUM} ·`, 'm');
+
+/**
+ * The world HUD's text, one row per line, as the page shows it: `revealed <n>` on the columns row, `RD <n> (fog …)`
+ * and `x … y … z …`; null unless all three are there.
+ */
+export function parseHud(text: string): HudRead | null {
+  const revealed = HUD_REVEALED.exec(text);
+  const rd = HUD_RD.exec(text);
+  const at = HUD_POSITION.exec(text);
+  if (revealed === null || rd === null || at === null) return null;
+  return { revealed: Number(revealed[1]), rd: Number(rd[1]), x: Number(at[1]), y: Number(at[2]), z: Number(at[3]) };
+}
+
+/** The horizontal distance between two HUD positions, blocks. */
+export function hudMoved(a: { readonly x: number; readonly z: number }, b: { readonly x: number; readonly z: number }): number {
+  return Math.hypot(b.x - a.x, b.z - a.z);
 }
 
 /**
@@ -1774,6 +1839,21 @@ interface StartRead {
   readonly canvas: boolean;
 }
 
+/** The world canvas's `data-renderer` values (one canvas expected), read in the page. */
+const DRAWN_BY = `[...document.querySelectorAll('canvas[data-renderer]')].map((c) => c.dataset.renderer)`;
+
+/** Whether the page's browser has `WEBGL_multi_draw` on a WebGL2 context, as the page's capability probe asks. */
+const MULTI_DRAW = `(() => { const g = document.createElement('canvas').getContext('webgl2'); const ok = g !== null && g.getExtension('WEBGL_multi_draw') !== null; g?.getExtension('WEBGL_lose_context')?.loseContext(); return ok; })()`;
+
+/** The world HUD's rows, one per line (`parseHud`); '' without a HUD. */
+const HUD_TEXT = `[...document.querySelectorAll('.world-hud > div')].map((d) => d.textContent).join('\\n')`;
+
+/** Checks that the one world canvas names `expected` in `data-renderer` (SP4b spec §8.6). */
+async function checkDrawnBy(t: Smoke, what: string, expected: 'batch' | 'mesh'): Promise<void> {
+  const drawn = await t.page.eval<string[]>(DRAWN_BY);
+  t.check(drawn.length === 1 && drawn[0] === expected, `${what}: the canvas's data-renderer is ${expected}`, drawn);
+}
+
 /** Waits for the world page to settle; true when it revealed, else a failed check names the cause. */
 async function worldRevealed(t: Smoke, what: string): Promise<boolean> {
   const p = t.page;
@@ -1823,6 +1903,7 @@ async function runWorld(t: Smoke): Promise<void> {
   await p.goto(`${p.base}?rd=${WORLD_RD}`, `window.__wiWorld !== undefined`);
   t.check(await p.eval<boolean>(`document.getElementById('start-screen') === null && (document.getElementById('loading-screen') !== null || window.__wiWorld.revealed)`), `/?rd=${WORLD_RD}: the loading screen, no start screen`);
   if (await worldRevealed(t, `/?rd=${WORLD_RD}`)) {
+    await checkDrawnBy(t, `/?rd=${WORLD_RD}`, expectedRenderer(null, await p.eval<boolean>(MULTI_DRAW)));
     // Past the 300 ms fade of the overlay.
     await p.until('window.__wiWorld.frames >= 3', 'three frames after the reveal', 30000);
     await sleep(500);
@@ -1839,6 +1920,7 @@ async function runWorld(t: Smoke): Promise<void> {
       await p.goto(url, `window.__wiWorld !== undefined`);
       if (!(await worldRevealed(t, `${name}, renderer=${renderer}`))) continue;
       await p.until('window.__wiWorld.frames >= 3', `three frames after the ${name} ${renderer} reveal`, 30000);
+      await checkDrawnBy(t, `${name}, renderer=${renderer}`, renderer);
       const bare3d = await p.eval<boolean>(`document.querySelector('.world-hud') === null && document.getElementById('loading-screen') === null && document.getElementById('world-click-hint') === null`);
       t.check(bare3d, `${name}, renderer=${renderer}: no HUD, no overlay, no "Click to fly"`);
       const shot = await p.capture();
@@ -1857,6 +1939,65 @@ async function runWorld(t: Smoke): Promise<void> {
     } else {
       t.check(false, `parity (${name}): both renderers revealed`);
     }
+  }
+
+  t.step(`stream: /?rd=${WORLD_RD} forced to batch, then mesh: W held ${STREAM_HOLD_MS / 1000} s with real key input (the camera moves, columns reveal), then RD ${STREAM_RD} live in the help (no reload)`);
+  for (const { renderer, file } of STREAM_RUNS) {
+    const what = `stream, renderer=${renderer}`;
+    errors0 = t.errors.length;
+    await p.goto(`${p.base}${streamQuery(renderer)}`, `window.__wiWorld !== undefined`);
+    if (!(await worldRevealed(t, what))) continue;
+    await checkDrawnBy(t, what, renderer);
+    await p.until('window.__wiWorld.frames >= 3', `three frames after the ${what} reveal`, 30000);
+    const token = `stream-${renderer}-${Date.now()}`;
+    await p.eval(`(window.__wiStreamToken = ${JSON.stringify(token)}, true)`);
+    const hud = async (): Promise<HudRead | null> => parseHud(await p.eval<string>(HUD_TEXT));
+    /** The HUD's reading once `pred` holds on it (read every 250 ms, as it refreshes), or null after `ms`. */
+    const hudOnce = async (pred: (h: HudRead) => boolean, ms: number): Promise<HudRead | null> => {
+      for (const t0 = Date.now(); Date.now() - t0 <= ms; await sleep(250)) {
+        const h = await hud();
+        if (h !== null && pred(h)) return h;
+      }
+      return null;
+    };
+    const start = await hud();
+    if (start === null) {
+      t.check(false, `${what}: the HUD shows revealed, RD and the position`, await p.eval<string>(HUD_TEXT));
+      continue;
+    }
+    // A click on the canvas (the hint lets it through) asks for the pointer, then W is held with real key input.
+    await p.clickAt(VIEWPORT.width / 2, VIEWPORT.height / 2);
+    await sleep(300);
+    const w = { key: 'w', code: 'KeyW', windowsVirtualKeyCode: 87, nativeVirtualKeyCode: 87 };
+    await p.cdp.send('Input.dispatchKeyEvent', { type: 'keyDown', ...w, text: 'w', unmodifiedText: 'w' });
+    await sleep(STREAM_HOLD_MS);
+    await p.cdp.send('Input.dispatchKeyEvent', { type: 'keyUp', ...w });
+    // The HUD refreshes every 250 ms; one reading after the hold gives both the position and the revealed count.
+    await sleep(600);
+    const moved = await hud();
+    const dist = moved === null ? 0 : hudMoved(start, moved);
+    t.check(dist > STREAM_MIN_MOVE, `${what}: W for ${STREAM_HOLD_MS / 1000} s moved the camera ${dist.toFixed(1)} blocks (> ${STREAM_MIN_MOVE})`, { start, moved });
+    t.check(moved !== null && moved.revealed > start.revealed, `${what}: the HUD's revealed grew (${start.revealed} → ${moved?.revealed ?? '?'})`, { start, moved });
+    t.check(t.errors.length === errors0, `${what}: no page error while flying`, t.errors.slice(errors0));
+
+    // The help (H), then RD 6 in its settings: applied live, no reload.
+    await p.key('h', 'KeyH', 72);
+    await p.until(`document.getElementById('world-help')?.hidden === false`, `${what}: the help`, 5000);
+    // The select shows the RD in force, not the saved one (the mesh run starts with the batch run's 6 saved).
+    const shown = await p.eval<string>(`document.getElementById('setting-rd').value`);
+    t.check(shown === String(WORLD_RD), `${what}: #setting-rd shows the RD in force, ${WORLD_RD} (rulings R8)`, shown);
+    const before = (await hud()) ?? start;
+    await p.choose('#setting-rd', String(STREAM_RD));
+    const six = await hudOnce((h) => h.rd === STREAM_RD && h.revealed > before.revealed, STREAM_RD_MS);
+    t.check(six !== null && six.rd === STREAM_RD && six.revealed > before.revealed,
+      `${what}: RD ${STREAM_RD} chosen in the help: the HUD shows RD ${six?.rd ?? '?'} and revealed ${before.revealed} → ${six?.revealed ?? '?'} within ${STREAM_RD_MS / 1000} s`, { before, six });
+    const same = await p.eval<boolean>(`window.__wiStreamToken === ${JSON.stringify(token)}`);
+    t.check(same, `${what}: no navigation (the page's token is still there)`);
+    await p.click('#help-close');
+    await p.until(`document.getElementById('world-help')?.hidden === true`, `${what}: the help closed`, 5000);
+    await sleep(500);
+    t.save(file, (await p.capture()).png);
+    t.check(t.errors.length === errors0, `${what}: no page error`, t.errors.slice(errors0));
   }
 }
 

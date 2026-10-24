@@ -1,5 +1,5 @@
 import { readFileSync } from 'node:fs';
-import { describe, expect, test } from 'vitest';
+import { afterEach, beforeEach, describe, expect, test, vi } from 'vitest';
 import { canonicalJSON } from '../../src/core/params/canonical';
 import { applyPatch } from '../../src/core/params/kit';
 import { resolveProfile } from '../../src/core/params/profiles';
@@ -35,12 +35,18 @@ import {
   RULE_SAMPLE, sameJson, selftestAllMatch, SIZE_7, SIZE_8, SKY_RGB, sliceCellPoint, sliceColumn, SMOKE_PRESETS, SMOKE_STEPS, SQUARE_RGB, squareLabels, START, stepId,
   summaryTopMax, timesText, VIEWPORT, viewportForDrawer, voxelLegendLabels, voxelReadoutOk, voxelRuleId, voxelSummaryOk, WATER_RGB, waterPixel, type MapUrlState,
   type SmokePreset, pixelDiffShare, SWIFTSHADER_ARGS, START_SEED_7_HASH, PARITY_VIEW, PARITY_WATER_VIEW, PARITY_VIEWS, WORLD_RD, worldMeshQuery, PARITY_TOL, PARITY_MAX_SHARE, leaveGuardLog,
+  expectedRenderer, hudMoved, parseHud, STREAM_HOLD_MS, STREAM_MIN_MOVE, STREAM_RD, STREAM_RD_MS, STREAM_RUNS, streamQuery,
 } from '../tools/uiSmoke';
 import { findSpawn } from '../../src/gen/column/spawn';
 import { columnPoint } from '../../src/gen/column/columnPoint';
 import { SEA_LEVEL } from '../../src/core/constants';
 import { lookVector } from '../../src/player/fly';
 import { parseWorldQuery } from '../../src/ui/world/query';
+import { OPENING_T } from '../../src/daynight/dayNight';
+import { SPEED_DEFAULT } from '../../src/player/fly';
+import { selectSectionRenderer } from '../../src/render/sectionRenderer';
+import { mountWorldHud, type HudData } from '../../src/ui/hud';
+import { installDom } from './fixtures/domShim';
 import { ctxFor } from '../harness/gen';
 
 const EDITED: MapState = {
@@ -230,19 +236,21 @@ describe('UI smoke test: pure parts (SP2b spec §8 Tools, §12)', () => {
     expect(mountainSummaryOk(flat), flat).toBe(false);
   });
 
-  test('the steps run in SMOKE_STEPS order: the Density steps after rule, then preset profiles (SP3e), then start, world and world-mesh (SP4a) before console (SP3d spec §6, SP3e spec §8, SP4a spec §9.6, ruling P52)', () => {
+  test('the steps run in SMOKE_STEPS order: the Density steps after rule, then preset profiles (SP3e), then start, world and world-mesh (SP4a), then SP4b\'s stream before console (SP3d spec §6, SP3e spec §8, SP4a spec §9.6, SP4b spec §8.6, ruling P52)', () => {
     expect(SMOKE_STEPS).toEqual([
       'selftest', 'load', 'number', 'knot', 'slider', 'box', 'profile', 'presets', 'undo/redo', 'reload', 'cut line', 'voxels', 'tabs', 'rule',
       'density tab', 'density node', 'density mute', 'density json', 'density narrow', 'density horizontal', 'density drag', 'density times',
-      'preset profiles', 'start', 'world', 'world-mesh', 'console',
+      'preset profiles', 'start', 'world', 'world-mesh', 'stream', 'console',
     ]);
     expect(SMOKE_STEPS.indexOf('density tab')).toBe(SMOKE_STEPS.indexOf('rule') + 1);
     expect(SMOKE_STEPS.indexOf('start')).toBe(SMOKE_STEPS.indexOf('preset profiles') + 1);
     expect(SMOKE_STEPS.indexOf('world')).toBe(SMOKE_STEPS.indexOf('start') + 1);
-    expect(SMOKE_STEPS.indexOf('world-mesh')).toBe(SMOKE_STEPS.indexOf('console') - 1);
+    expect(SMOKE_STEPS.indexOf('stream')).toBe(SMOKE_STEPS.indexOf('world-mesh') + 1);
+    expect(SMOKE_STEPS.indexOf('stream')).toBe(SMOKE_STEPS.indexOf('console') - 1);
     expect(SMOKE_STEPS.indexOf('console')).toBe(SMOKE_STEPS.length - 1);
     expect(stepId('world-mesh: the parity of mesh and batch')).toBe('world-mesh');
     expect(stepId('world: /?rd=4 to the reveal')).toBe('world');
+    expect(stepId('stream: /?rd=4 on both renderers, W held for 4 s, then RD 6 live')).toBe('stream');
     // Its own id: `presets` is the preset-file step.
     expect(stepId('preset profiles: each draft preset opened by URL')).toBe('preset profiles');
     expect(stepId('presets: export, apply {} in the patch box, import the exported file')).toBe('presets');
@@ -667,6 +675,98 @@ describe('UI smoke test: the water parity view (final review B-I1)', () => {
     let land = false;
     for (let dz = -24; dz <= 24 && !land; dz += 4) for (let dx = -24; dx <= 24 && !land; dx += 4) land = columnPoint(ctx, v.at.x + dx, v.at.z + dz).surfaceEst >= SEA_LEVEL;
     expect(land).toBe(true);
+  });
+});
+
+/** The world HUD's data as the page passes it, at a camera position, RD and revealed count. */
+function hudData(o: { x: number; y: number; z: number; rd: number; revealed: number; kind: 'batch' | 'mesh' }): HudData {
+  const stage = { done: 69, needed: 69, inFlight: 0, queued: 0 };
+  return {
+    frame: { fps: 9.5, p50: 104.2, p95: 130.9, count: 40 },
+    stages: { T: stage, D: stage, L: stage, MESH: stage },
+    sections: 412,
+    revealed: o.revealed,
+    genCap: 3,
+    dropped: 0,
+    failed: 0,
+    drawCalls: 33,
+    triangles: 190_000,
+    position: { x: o.x, y: o.y, z: o.z },
+    speed: SPEED_DEFAULT,
+    time: OPENING_T,
+    timeSpeed: 1,
+    rdTarget: o.rd,
+    rdFog: o.rd - 0.25,
+    workers: 4,
+    liveWorkers: 4,
+    regions: 9,
+    gpuMB: 31.4,
+    sectionRenderer: o.kind,
+    renderer: 'ANGLE (Google, Vulkan 1.3.0 (SwiftShader Device (Subzero)), SwiftShader driver)',
+  };
+}
+
+describe('UI smoke test: the stream step and data-renderer (SP4b spec §8.6)', () => {
+  let dom: ReturnType<typeof installDom>;
+  beforeEach(() => {
+    dom = installDom();
+    vi.useFakeTimers();
+  });
+  afterEach(() => {
+    vi.useRealTimers();
+    vi.unstubAllGlobals();
+  });
+
+  /** The HUD's rows as the smoke reads them in the page: each row's text, one per line. */
+  const hudText = (d: HudData): string => {
+    const h = mountWorldHud(dom.body as unknown as HTMLElement, () => d);
+    const text = dom.body.querySelectorAll('div').filter((e) => e.className !== 'world-hud').map((e) => e.textContent).join('\n');
+    h.dispose();
+    return text;
+  };
+
+  test('parseHud reads the revealed count, the target RD and the camera position from the real HUD\'s rows', () => {
+    expect(parseHud(hudText(hudData({ x: 0.5, y: 112, z: -47.25, rd: 4, revealed: 69, kind: 'batch' })))).toEqual({ revealed: 69, rd: 4, x: 0.5, y: 112, z: -47.3 });
+    expect(parseHud(hudText(hudData({ x: -31249.5, y: -12, z: 1024, rd: 6, revealed: 1234, kind: 'mesh' })))).toEqual({ revealed: 1234, rd: 6, x: -31249.5, y: -12, z: 1024 });
+  });
+
+  test('parseHud: the RD is the target\'s (not the fog\'s), and a HUD without its rows reads null', () => {
+    const text = hudText(hudData({ x: 1, y: 2, z: 3, rd: 6, revealed: 70, kind: 'batch' }));
+    // The fog's 5.8 follows on the same row; the target is 6.
+    expect(text).toContain('RD 6 (fog 5.8)');
+    expect(parseHud(text)?.rd).toBe(6);
+    expect(parseHud('')).toBeNull();
+    expect(parseHud('columns T 1/1 · D 1/1 · L 1/1 · meshed 1/1 · revealed 1 · sections 2')).toBeNull();
+    expect(parseHud('x 1.0 y 2.0 z 3.0 · column 0, 0\nRD 4 (fog 4.0) · workers 4/4 · batch')).toBeNull();
+    // `revealed` alone, not part of another word.
+    expect(parseHud('unrevealed 5\nx 1.0 y 2.0 z 3.0 · column 0, 0\nRD 4 (fog 4.0)')).toBeNull();
+  });
+
+  test('hudMoved is the horizontal distance: W at 12 blocks/s for 4 s moves about 47 blocks, more than the 40 asserted', () => {
+    expect(hudMoved({ x: 0, z: 0 }, { x: 3, z: -4 })).toBe(5);
+    expect(hudMoved({ x: 10, z: 10 }, { x: 10, z: 10 })).toBe(0);
+    expect(STREAM_HOLD_MS).toBe(4000);
+    expect(STREAM_MIN_MOVE).toBe(40);
+    expect(SPEED_DEFAULT * (STREAM_HOLD_MS / 1000)).toBeGreaterThan(STREAM_MIN_MOVE);
+  });
+
+  test('the stream runs: /?rd=4 forced to batch, then mesh, saved as stream.png and stream-mesh.png; RD 6 within 30 s', () => {
+    expect(STREAM_RUNS).toEqual([{ renderer: 'batch', file: 'stream.png' }, { renderer: 'mesh', file: 'stream-mesh.png' }]);
+    for (const { renderer } of STREAM_RUNS) {
+      expect(streamQuery(renderer)).toBe(`?rd=4&renderer=${renderer}`);
+      const q = parseWorldQuery(new URLSearchParams(streamQuery(renderer)));
+      expect(q.rd).toBe(4);
+      expect(q.renderer).toBe(renderer);
+      expect(q.shot).toBe(false);
+    }
+    expect(STREAM_RD).toBe(6);
+    expect(STREAM_RD_MS).toBe(30_000);
+  });
+
+  test('expectedRenderer is the page\'s choice: the forced renderer, else batch with WEBGL_multi_draw and mesh without', () => {
+    for (const forced of [null, 'batch', 'mesh'] as const) {
+      for (const multiDraw of [true, false]) expect(expectedRenderer(forced, multiDraw)).toBe(selectSectionRenderer({ multiDraw }, forced));
+    }
   });
 });
 
