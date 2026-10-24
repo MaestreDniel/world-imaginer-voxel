@@ -220,20 +220,53 @@ describe('createFrameStep (SP4b spec §7.2)', () => {
     for (let i = 0; i < 600; i++) t.push(2 * HZ60, true, HZ60);
     expect(t.cap()).toBe(1);
   });
+});
 
-  test('slow frames with generation in flight drop genCap (the throttle still reacts)', () => {
+describe('the display interval from on-time frames (rulings R13)', () => {
+  const HZ144 = 1000 / 144;
+  const near = (a: number, b: number): boolean => Math.abs(a - b) < 1e-6;
+
+  test('steady 33.3 ms frames after a 60 Hz history with generation in flight drop genCap to 1: the interval stays 16.667 ms', () => {
     const r = rig({ max: 5 });
     r.generating = true;
-    // 50 ms frames, uncapped: the display interval follows them, so they are on time and nothing drops.
-    for (let i = 1; i <= 120; i++) r.step.tick(i * 50);
+    let now = 0;
+    for (let i = 0; i < 240; i++) r.step.tick((now += HZ60));
     expect(r.throttle.cap()).toBe(5);
-    // A 60 Hz display with every third frame late by 2 intervals: p95 50 ms > 17.2 ms.
-    let now = 120 * 50;
-    for (let i = 0; i < 120; i++) {
-      now += i % 3 === 2 ? 3 * HZ60 : HZ60;
-      r.step.tick(now);
+    const from = r.pushes.length;
+    // Every frame two intervals long: a rolling median would follow them and read them as on time (UI-1).
+    for (let i = 0; i < 200; i++) r.step.tick((now += 2 * HZ60));
+    expect(r.pushes.slice(from).every(([ms, , interval]) => near(interval, HZ60) && near(ms, 2 * HZ60))).toBe(true);
+    expect(r.throttle.cap()).toBe(1);
+  });
+
+  test('one frame in three, or two in three, two intervals late on a 60 Hz display with generation in flight drop genCap to 1', () => {
+    for (const lateOf3 of [1, 2]) {
+      const r = rig({ max: 5 });
+      r.generating = true;
+      let now = 0;
+      for (let i = 0; i < 300; i++) r.step.tick((now += i % 3 < lateOf3 ? 3 * HZ60 : HZ60));
+      expect(r.pushes.slice(30).every(([, , interval]) => near(interval, HZ60)), `${lateOf3} in 3`).toBe(true);
+      expect(r.throttle.cap(), `${lateOf3} in 3`).toBe(1);
     }
-    expect(r.throttle.cap()).toBeLessThan(5);
+  });
+
+  test('a window moved from a 60 Hz to a 144 Hz display, and back, is followed within 240 frames', () => {
+    const r = rig();
+    let now = 0;
+    for (let i = 0; i < 300; i++) r.step.tick((now += HZ60));
+    expect(near(r.pushes.at(-1)![2], HZ60)).toBe(true);
+    const at144 = r.pushes.length;
+    for (let i = 0; i < 300; i++) r.step.tick((now += HZ144));
+    const to144 = r.pushes.slice(at144).findIndex(([, , interval]) => near(interval, HZ144));
+    expect(to144).toBeGreaterThanOrEqual(0);
+    expect(to144).toBeLessThan(240);
+    expect(r.pushes.slice(at144 + to144).every(([ms, , interval]) => near(interval, HZ144) && near(ms, HZ144))).toBe(true);
+    const at60 = r.pushes.length;
+    for (let i = 0; i < 300; i++) r.step.tick((now += HZ60));
+    const to60 = r.pushes.slice(at60).findIndex(([, , interval]) => near(interval, HZ60));
+    expect(to60).toBeGreaterThanOrEqual(0);
+    expect(to60).toBeLessThan(240);
+    expect(r.pushes.slice(at60 + to60).every(([, , interval]) => near(interval, HZ60))).toBe(true);
   });
 });
 
