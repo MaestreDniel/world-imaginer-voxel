@@ -2,16 +2,17 @@ import { Quaternion, Sphere, Vector3, type Mesh, type Object3D } from 'three';
 import { describe, expect, test } from 'vitest';
 import { MESH_PASS_CUTOUT, MESH_PASS_OPAQUE, MESH_PASS_TRANSLUCENT, ROW_INTS, type ColumnMeshPayload } from '../../src/mesh/column';
 import { createMaterialSystem, type MaterialSystem, type MaterialVariant } from '../../src/render/materials/index';
-import { createSectionRenderer, regionOf, selectSectionRenderer, type SectionRenderer } from '../../src/render/sectionRenderer';
+import {
+  createSectionRenderer, createSectionRendererCounts, regionOf, selectSectionRenderer, type SectionRenderer,
+} from '../../src/render/sectionRenderer';
 import { createFlatColorArray } from '../../src/render/textureArray';
 import { fakePayload, type FakeRow } from './fixtures/payloads';
-import { sectionRendererContract } from './sectionRendererContract';
+import { pumpAll, sectionRendererContract } from './sectionRendererContract';
 
 sectionRendererContract('mesh');
 
 const ALBEDO = createFlatColorArray();
 const system = (variant: MaterialVariant): MaterialSystem => createMaterialSystem({ variant, ao: true, smoothLight: true }, ALBEDO);
-const never = (): boolean => false;
 
 /**
  * Region (−1, 2): the four corner columns (local (0, 0), (7, 7), (0, 7), (7, 0)), with sections at sy 0 and 23 and
@@ -38,12 +39,12 @@ function cornerPayloads(): ColumnMeshPayload[] {
   });
 }
 
-/** Expects, stages (in the same order) and builds `ps`. */
+/** Stages `ps` (seq 1, in this order), uploads them all under an unbounded gate and reveals the root. */
 function built(ps: readonly ColumnMeshPayload[], materials = system('mesh')): SectionRenderer {
   const r = createSectionRenderer('mesh', materials);
-  r.expect(ps.map((p) => [p.cx, p.cz] as const));
-  for (const p of ps) r.stage(p);
-  r.buildNext(never);
+  for (const p of ps) r.stage(p, 1);
+  pumpAll(r);
+  r.revealAll();
   return r;
 }
 
@@ -166,7 +167,7 @@ describe('RegionMesh (SP4a spec §6.2, D2)', () => {
     const ms = meshes(r.root);
     for (const m of ms) expect((m as unknown as { isBatchedMesh?: boolean }).isBatchedMesh).toBeFalsy();
     expect(ms.map((m) => `${regionKey(m)}:${passOf(m)}`).sort()).toEqual(['-1,2:0', '-1,2:1', '-1,2:2', '0,0:0', '0,0:2']);
-    expect(r.counts().builtRegions).toBe(2);
+    expect(r.counts(createSectionRendererCounts()).regions).toBe(2);
     for (const m of ms) {
       expect(m.frustumCulled).toBe(true);
       expect(m.material).toBe(
@@ -178,7 +179,7 @@ describe('RegionMesh (SP4a spec §6.2, D2)', () => {
 
   test('a region whose columns have no rows is built with no mesh', () => {
     const r = built([fakePayload(0, 0, [])]);
-    expect(r.counts().builtRegions).toBe(1);
+    expect(r.counts(createSectionRendererCounts()).regions).toBe(1);
     expect(meshes(r.root)).toHaveLength(0);
     r.dispose();
   });
@@ -250,10 +251,11 @@ describe('RegionMesh (SP4a spec §6.2, D2)', () => {
     far.dispose();
   });
 
-  test('counts().mergeMs accumulates the merge time', () => {
+  test('counts(out).structuralMs is finite and ≥ 0', () => {
     const r = built(cornerPayloads());
-    expect(r.counts().mergeMs).toBeGreaterThanOrEqual(0);
-    expect(Number.isFinite(r.counts().mergeMs)).toBe(true);
+    const c = r.counts(createSectionRendererCounts());
+    expect(c.structuralMs).toBeGreaterThanOrEqual(0);
+    expect(Number.isFinite(c.structuralMs)).toBe(true);
     r.dispose();
   });
 });

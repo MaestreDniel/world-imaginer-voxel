@@ -11,11 +11,12 @@
  *    (`createStore({shared: true})` with the accepted reservation), the pool (`?workers` or clamp(cores − 2, 2, 6)),
  *    `attachStore`, then `configure` with the session's seed text and params.
  * 4. The centre is `?at`, else the pool's `spawn`. The world renderer (the section renderer the probe selects,
- *    `?renderer` overriding it) expects the mesh disc. The first entry runs on the streaming coordinator (SP4b spec
- *    §3.11, D21), strict (any error stops the load, D12) and keeping every proto (D11): a rAF loop calls its `update`
- *    with the camera held at the centre, its sink stages each payload into the section renderer, and the loop builds
- *    regions within a 12 ms upload budget and feeds the loading screen's progress from the coordinator's counts.
- * 5. When every column is meshed (`firstFill`) and every region built: `compile()`, the camera placed with `firstView`
+ *    `?renderer` overriding it) holds its reveals (`holdReveals(true)`). The first entry runs on the streaming
+ *    coordinator (SP4b spec §3.11, D21), strict (any error stops the load, D12) and keeping every proto (D11): a rAF
+ *    loop calls its `update` with the camera held at the centre, its sink stages each payload into the section
+ *    renderer, and the loop pumps the uploads under a 12 ms budget with no row or structural cap and feeds the loading
+ *    screen's progress from the coordinator's counts and the columns uploaded.
+ * 5. When every column is meshed (`firstFill`) and every staged column uploaded: `compile()`, the camera placed with `firstView`
  *    from the store's `MOTION_BLOCKING`, three frames rendered behind the opaque overlay (`warmUp`: the sections'
  *    buffers reach the GPU while still hidden), then `revealAll()` and the reveal frame, the overlay faded out over
  *    300 ms, and "Click to fly" until the pointer locks. Nothing of the world is visible before that frame.
@@ -50,7 +51,7 @@ import { DEFAULT_KEYMAP, type Action } from '../../player/keymap';
 import { createFpsLimiter, type FpsLimiter } from '../../render/fpsLimiter';
 import type { FrameState } from '../../render/frameState';
 import { createWorldRenderer, type WorldRenderer } from '../../render/renderer';
-import { selectSectionRenderer, type SectionRendererKind } from '../../render/sectionRenderer';
+import { createSectionRendererCounts, selectSectionRenderer, type SectionRendererKind } from '../../render/sectionRenderer';
 import { createStore, type VoxelStore } from '../../world/store/store';
 import { renderErrorScreen } from '../capabilityReport';
 import { el } from '../common/dom';
@@ -109,7 +110,7 @@ export interface LoadStats {
   revealMs: number | null;
   /** ms from the coordinator's start until each stage's last column finished (read once per frame); null while it runs. */
   stageMs: Record<Stage, number | null>;
-  /** RegionMesh's merge ms (0 on RegionBatch), read at the reveal. */
+  /** The section renderer's structural ms at the reveal (`counts(out).structuralMs`: RegionMesh's merges in SP4a). */
   mergeMs: number;
   /** Main-thread long tasks from the mount to the reveal; null without `PerformanceObserver('longtask')` (Firefox). */
   longTasks: { count: number; maxMs: number } | null;
@@ -541,7 +542,8 @@ export function mountWorldPage(root: HTMLElement, q: WorldQuery, hash: string, o
     const cz0 = at.z >> 4;
     const meshDisc = stageOffsets(loadRd).MESH.map(([dx, dz]) => [cx0 + dx, cz0 + dz] as const);
     const disc = new Set(meshDisc.map(([cx, cz]) => colKey(cx, cz)));
-    sections.expect(meshDisc);
+    // The first entry: complete columns wait inside the hidden root for the one reveal (SP4b spec §3.11).
+    sections.holdReveals(true);
 
     const loadStart = performance.now();
     // The first entry on the streaming coordinator (SP4b spec §3.11, D21): strict, so any error stops the load as in
@@ -552,9 +554,8 @@ export function mountWorldPage(root: HTMLElement, q: WorldQuery, hash: string, o
       jobs: worldJobsOf(workers),
       store,
       sink: {
-        stage: (p) => sections.stage(p),
-        // Nothing unloads while the camera is held (SP4b Task 12 removes meshes; Task 16 gives the renderers `remove`).
-        remove: (cx, cz) => { throw new Error(`the section renderer cannot remove column (${cx}, ${cz})`); },
+        stage: (p, seq) => sections.stage(p, seq),
+        remove: (cx, cz) => sections.remove(cx, cz),
       },
       throttle,
       rd: loadRd,
@@ -571,6 +572,7 @@ export function mountWorldPage(root: HTMLElement, q: WorldQuery, hash: string, o
     coordinator.update(loadCamera);
 
     const budget = createUploadBudget(LOAD_UPLOAD_MS, Infinity, () => performance.now());
+    const uploads = createSectionRendererCounts();
     try {
       await everyFrameUntil((cb) => { raf = requestAnimationFrame(cb); }, () => {
         if (state !== 'loading') return true;
@@ -578,13 +580,13 @@ export function mountWorldPage(root: HTMLElement, q: WorldQuery, hash: string, o
         coordinator.counts(counts);
         for (const s of STAGES) if (stats.stageMs[s] === null && counts[s].done === counts[s].needed) stats.stageMs[s] = performance.now() - loadStart;
         budget.start();
-        sections.buildNext(() => budget.exhausted());
-        const c = sections.counts();
-        loading.progress(progressFraction(counts, c.builtRegions, c.regions), phaseName(counts, c.builtRegions, c.regions));
-        return coordinator.firstFill() && c.builtRegions === c.regions;
+        sections.pump(budget, counts.cx, counts.cz, counts.yawDeg);
+        sections.counts(uploads);
+        loading.progress(progressFraction(counts, uploads.columnsComplete, counts.MESH.needed), phaseName(counts, uploads.columnsComplete, counts.MESH.needed));
+        return coordinator.firstFill() && uploads.columnsComplete === uploads.columnsStaged;
       });
     } catch (e) {
-      // A build error (a BatchedMesh `addGeometry` that does not fit, a merge error) is a load error (spec §8.3).
+      // An upload error (a BatchedMesh call that throws, a merge error) is a load error (spec §8.3).
       fail(`The view could not be built: ${errorText(e)}`, e);
       return;
     }
@@ -628,14 +630,18 @@ export function mountWorldPage(root: HTMLElement, q: WorldQuery, hash: string, o
     }
     const revealTs = await nextFrame();
     if (state !== 'loading') return;
-    // The reveal frame: every section at once (master §4.2's atomic reveal).
+    // The reveal frame: every section at once (master §4.2's atomic reveal). The warm-up uploaded every region's
+    // written ranges, so this pump (nothing left to upload) turns their frustum culling back on (SP4b spec §3.9).
+    budget.start();
+    sections.pump(budget, counts.cx, counts.cz, counts.yawDeg);
     sections.revealAll();
+    sections.holdReveals(false);
     placeCamera();
     world.frame(frameState());
     state = 'revealed';
     progressHook.revealed = true;
     stats.revealMs = performance.now() - t0;
-    stats.mergeMs = sections.counts().mergeMs;
+    stats.mergeMs = sections.counts(uploads).structuralMs;
     if (longTasks !== null) {
       const lt = stats.longTasks!;
       for (const entry of longTasks.takeRecords()) {
@@ -735,7 +741,7 @@ export function mountWorldPage(root: HTMLElement, q: WorldQuery, hash: string, o
         return {
           frame: frames.summary(),
           columns: { t: done.T.done, d: done.D.done, l: done.L.done, meshed: done.MESH.done },
-          sections: sections.counts().sections,
+          sections: sections.counts(uploads).rows,
           drawCalls: info.calls,
           triangles: info.triangles,
           position: { x: fly.x, y: fly.y, z: fly.z },

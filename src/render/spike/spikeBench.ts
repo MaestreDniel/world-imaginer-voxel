@@ -8,7 +8,7 @@ import { packFluid, packSolid, PACK_LAYOUT } from '../../mesh/packing';
 import type { FrameState } from '../frameState';
 import { medianInterval, percentile, snapFrameTime } from '../frameTiming';
 import { createMaterialSystem, type MaterialSystem } from '../materials/index';
-import { createSectionRenderer, type SectionRenderer, type SectionRendererKind } from '../sectionRenderer';
+import { createSectionRenderer, type SectionRenderer, type SectionRendererKind, type UploadGate } from '../sectionRenderer';
 import { createSky } from '../sky';
 import { createFlatColorArray } from '../textureArray';
 import { stressPayloads } from './stressScene';
@@ -61,15 +61,24 @@ export interface StaticResult {
   readonly drawCalls: number;
   readonly drawCallsMean: number;
   readonly trianglesMax: number;
-  /** Frames over 33 ms (spec §9.5's count), with the first few: measured frame index, raw rAF delta, main ms. */
-  readonly longFrames: { readonly count: number; readonly first: ReadonlyArray<{ readonly frame: number; readonly deltaMs: number; readonly mainMs: number }> };
+  /**
+   * Frames over 33 ms (spec §9.5's count), with the first few: measured frame index, its snapped delta, its own main ms
+   * and the previous frame's, which ran inside that gap (null for the first frame) (SP4b spec §7.6).
+   */
+  readonly longFrames: LongFrames;
   readonly error: string | null;
+}
+
+/** Long frames: their count and the first 16, each with its own and the previous frame's main-thread ms. */
+export interface LongFrames {
+  readonly count: number;
+  readonly first: ReadonlyArray<{ readonly frame: number; readonly deltaMs: number; readonly mainMs: number; readonly prevMainMs: number | null }>;
 }
 
 export interface UploadResult {
   readonly quads: number;
   readonly sections: number;
-  /** Main-thread ms of the whole build (`buildNext`: geometry wrapping, `addGeometry`, instances, matrices). */
+  /** Main-thread ms of the whole build (`pump`s until nothing is left: geometry wrapping, `addGeometry`, instances, matrices). */
   readonly buildMs: number;
   readonly msPer1kQuads: number;
   /** The first render after `compileAsync`: the buffer upload. */
@@ -291,7 +300,13 @@ interface Built {
   dispose(): void;
 }
 
-/** The stress scene staged, built (timed) and revealed in a section renderer of `kind`, with the sky. */
+/** No row cap and every structural operation granted: the spike builds its whole scene at once. */
+const UNBOUNDED: UploadGate = { exhausted: () => false, spend() {}, structural: () => true };
+
+/**
+ * The stress scene staged, uploaded (timed: `pump` under an unbounded gate until nothing is left) and revealed in a
+ * section renderer of `kind`, with the sky (SP4b spec §4.1: the spike on the streaming interface).
+ */
 function buildScene(kind: SectionRendererKind, albedo: DataArrayTexture, payloads: ReturnType<typeof stressPayloads>): Built {
   const materials = createMaterialSystem({ variant: kind, ao: MEDIUM.ao, smoothLight: MEDIUM.smoothLight }, albedo);
   let sections: SectionRenderer;
@@ -301,10 +316,10 @@ function buildScene(kind: SectionRendererKind, albedo: DataArrayTexture, payload
     materials.dispose();
     throw e;
   }
-  sections.expect(payloads.map((p) => [p.cx, p.cz] as const));
-  for (const p of payloads) sections.stage(p);
+  sections.holdReveals(true);
+  for (const p of payloads) sections.stage(p, 1);
   const t0 = performance.now();
-  sections.buildNext(() => false);
+  while (sections.pump(UNBOUNDED, 0, 0, 0) > 0);
   const buildMs = performance.now() - t0;
   sections.revealAll();
   const scene = new Scene();
@@ -387,14 +402,20 @@ async function runStatic(gl: Gl, b: Built, kind: SectionRendererKind, interval: 
 /** Spec §9.5's long frame: over 33 ms. */
 const LONG_FRAME_MS = 33;
 
-function longFrames(frame: Float64Array, main: Float64Array): StaticResult['longFrames'] {
-  const first: Array<{ frame: number; deltaMs: number; mainMs: number }> = [];
+/**
+ * The frames whose snapped delta is over 33 ms. The delta of frame i is the gap from frame i − 1's callback to frame
+ * i's, in which frame i − 1's work ran, so each entry carries both main times (SP4b spec §7.6: SP4a paired the gap with
+ * frame i's alone).
+ */
+export function longFrames(frame: ArrayLike<number>, main: ArrayLike<number>): LongFrames {
+  const first: Array<LongFrames['first'][number]> = [];
   let count = 0;
-  frame.forEach((ms, i) => {
-    if (ms <= LONG_FRAME_MS) return;
+  for (let i = 0; i < frame.length; i++) {
+    const ms = frame[i]!;
+    if (ms <= LONG_FRAME_MS) continue;
     count++;
-    if (first.length < 16) first.push({ frame: i, deltaMs: round3(ms), mainMs: round3(main[i]!) });
-  });
+    if (first.length < 16) first.push({ frame: i, deltaMs: round3(ms), mainMs: round3(main[i]!), prevMainMs: i > 0 ? round3(main[i - 1]!) : null });
+  }
   return { count, first };
 }
 

@@ -27,7 +27,7 @@ export interface HudData {
   readonly frame: FrameSummary;
   /** Columns that reached each stage. */
   readonly columns: { readonly t: number; readonly d: number; readonly l: number; readonly meshed: number };
-  /** Section meshes uploaded (`SectionRendererCounts.sections`). */
+  /** Section meshes uploaded (`SectionRendererCounts.rows`). */
   readonly sections: number;
   /** The last frame's `renderer.info`. */
   readonly drawCalls: number;

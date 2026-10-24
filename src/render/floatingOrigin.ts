@@ -1,7 +1,7 @@
 /**
  * The floating origin (SP4a spec §6.8, master §2.1): the scene is drawn relative to an origin snapped to 512 blocks, so
  * float32 positions stay small anywhere in the ±500,000-block world. The origin is rebased when the camera is more
- * than 1,024 blocks from it on any axis; the caller then re-sets the instance matrices (`SectionRenderer.setOrigin`).
+ * than 1,024 blocks from it on any axis; the caller then moves the region objects (`SectionRenderer.setOrigin`).
  * The load centre sets the first origin; within SP4a's clamp a rebase does not trigger.
  */
 

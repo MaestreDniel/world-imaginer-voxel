@@ -708,6 +708,7 @@ describe('master spec amendments (SP4b §13)', () => {
     [/^\s+store\/pool\.ts /, 'reclaim.ts (SP4b)', 'src/world/store/reclaim.ts'],
     [/^\s+engine\/\s/, 'throttle.ts (SP4b)', 'src/engine/throttle.ts'],
     [/^\s+core\/\s/, 'streamScore.ts (SP4b', 'src/core/streamScore.ts'],
+    [/^\s+renderer\.ts sectionRenderer\.ts /, 'sectionRenderer.ts (interface; SP4b: and UploadGate)', 'src/render/sectionRenderer.ts'],
   ];
 
   test('§1\'s engine entry marks scheduler.ts as not created, and the file does not exist (SP4b spec §13)', () => {
@@ -779,6 +780,20 @@ describe('master spec amendments (SP4b §13)', () => {
     const cell = text.split('\n').find((l) => l.startsWith('**Epoch cell.**'));
     expect(cell, 'no `**Epoch cell.**` paragraph').toBeDefined();
     expect(cell).toContain('SP4b wires them in place of SP2b\'s pool-wide cell (every job carries its configure generation and its phase\'s cell value at issue, `scope`, and stops when the cell moves; `configure` stores the generation into all four; Apply bumps from the dirty stage, SP4c)');
+  });
+
+  test('§2.1\'s floating origin, §4.3\'s uploads and §4.5\'s RegionBatch sentences (SP4b spec §3.9, §4.2, §13)', () => {
+    const precision = text.split('\n').find((l) => l.startsWith('- **Rendering precision:**'));
+    expect(precision, 'no `- **Rendering precision:**` line in §2.1').toBeDefined();
+    expect(precision).toContain('(SP4b: each region\'s mesh carries its origin, so a rebase moves regions, not instances)');
+    const uploads = text.split('\n').find((l) => l.startsWith('**Uploads** are capped'));
+    expect(uploads, 'no `**Uploads** are capped` paragraph in §4.3').toBeDefined();
+    expect(uploads).toContain('(SP4b: at most one structural operation per frame while flying: a region\'s batch or arena created, grown, optimised or compacted; a region with rows written in a frame is drawn unculled in it, so three uploads them under that frame\'s cap)');
+    const at = text.indexOf('### 4.5 Render structure');
+    const s45 = text.slice(at, text.indexOf('**Fallback.**', at));
+    expect(s45).toContain('the instance matrix places the section inside its region, and the region\'s mesh carries the region origin relative to the floating origin (SP4b)');
+    expect(s45).not.toContain('the instance matrix translates to the section origin relative to the floating origin');
+    expect(s45).toContain('Vertex and index capacity are reserved per preset (SP4b; SP4a sizes each region exactly at load) (Medium: opaque 131,072 vertices / 196,608 indices, translucent 16,384 / 24,576, cutout 8,192 / 12,288 on demand, 1,536 instances; when full, `optimize()` above 40 % deleted space, else ×1.5)');
   });
 
   test('§1 names each SP4b module in its entry, which exists', () => {

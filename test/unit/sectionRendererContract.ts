@@ -1,57 +1,85 @@
-import { Matrix4, Quaternion, Vector3, type BatchedMesh, type BufferGeometry, type Mesh, type Object3D } from 'three';
+import { Matrix4, type BatchedMesh, type BufferAttribute, type Mesh, type Object3D } from 'three';
 import { describe, expect, test } from 'vitest';
+import { createUploadBudget } from '../../src/engine/uploadBudget';
 import { ROW_INTS, type ColumnMeshPayload } from '../../src/mesh/column';
 import { createMaterialSystem } from '../../src/render/materials/index';
-import { createSectionRenderer, regionOf, type SectionRenderer, type SectionRendererKind } from '../../src/render/sectionRenderer';
+import {
+  createRevealProbe, createSectionRenderer, createSectionRendererCounts, regionOf, type RevealProbe, type SectionRenderer,
+  type SectionRendererCounts, type SectionRendererKind, type UploadGate,
+} from '../../src/render/sectionRenderer';
 import { createFlatColorArray } from '../../src/render/textureArray';
-import { fakePayload } from './fixtures/payloads';
+import { fakePayload, type FakeRow } from './fixtures/payloads';
 
 /**
- * The `SectionRenderer` contract (SP4a spec §6.2, §9.7): staging, hidden until one reveal, origin rebase, counts. It is
- * run against both implementations, RegionBatch (`regionBatch.test.ts`) and RegionMesh (`regionMesh.test.ts`). The checks read only
- * what three exposes on the renderer's `root`: meshes, and a BatchedMesh's instance matrices.
+ * The streaming `SectionRenderer` contract (SP4b spec §4.1, §3.9): nearest-first uploads under the gate's row cap and
+ * structural slot, a column shown only in the call that uploads its last row, removal, re-staging, the held reveal,
+ * the origin rebase, counts and `gpuBytes`, and the probe. It is run against both implementations, RegionBatch
+ * (`regionBatch.test.ts`) and RegionMesh (`regionMesh.test.ts`). What a test sees drawn it reads from three's objects
+ * under `root` (`visibleIndices`), independently of the renderer's own state.
+ *
+ * The cases RegionMesh cannot pass while it keeps SP4a's region merge (SP4b Task 16) are `test.todo` for 'mesh';
+ * Task 17's arena enables them.
  */
 
 const ALBEDO = createFlatColorArray();
 
-/** Region A (0, 0) holds four columns around (3.5, 3.5); region B (2, 0) one column, so A is the nearer one. */
-const A_COLUMNS = [[3, 3], [4, 4], [3, 4], [4, 3]] as const;
-const B_COLUMN = [17, 3] as const;
-
-type Rows = Parameters<typeof fakePayload>[2];
-/** Rows per column of region A: opaque everywhere, cutout and water on some (5 sections and 9 rows over the region). */
-const A_ROWS: readonly Rows[] = [
-  [{ sy: 4, pass: 0, quads: 3 }, { sy: 5, pass: 2, quads: 1 }],
-  [{ sy: 4, pass: 0, quads: 2 }],
-  [{ sy: 3, pass: 0, quads: 1 }, { sy: 4, pass: 1, quads: 2 }, { sy: 4, pass: 0, quads: 4 }],
-  [{ sy: 6, pass: 0, quads: 5 }, { sy: 6, pass: 2, quads: 2 }, { sy: 23, pass: 0, quads: 1 }],
-];
-/** Region B's column: two rows, so A's and B's section counts differ (9 and 2). */
-const B_ROWS: Rows = [{ sy: 0, pass: 0, quads: 6 }, { sy: 7, pass: 2, quads: 3 }];
-
-interface Scene {
-  readonly a: ColumnMeshPayload[];
-  readonly b: ColumnMeshPayload;
-  readonly all: ColumnMeshPayload[];
-  readonly columns: Array<readonly [number, number]>;
+/** A frame's gate: at most `rows` rows and `structurals` structural operations, the latter only before any row. */
+export interface FakeGate extends UploadGate {
+  readonly spent: number;
+  readonly granted: number;
 }
 
-/** The two-region scene, shifted by (dx, dz) columns (a shift by a multiple of 8 keeps the region layout). */
-function sceneAt(dx = 0, dz = 0): Scene {
-  const a = A_COLUMNS.map(([cx, cz], k) => fakePayload(cx + dx, cz + dz, A_ROWS[k]!));
-  const b = fakePayload(B_COLUMN[0] + dx, B_COLUMN[1] + dz, B_ROWS);
-  return { a, b, all: [...a, b], columns: [...a, b].map((p) => [p.cx, p.cz] as const) };
+/** A fake gate with `createUploadBudget`'s rules and no clock (`rows = Infinity` grants every structural call). */
+export function fakeGate(rows: number, structurals = 1): FakeGate {
+  let spent = 0;
+  let granted = 0;
+  return {
+    exhausted: () => spent >= rows,
+    spend(n) { spent += n; },
+    structural() {
+      if (rows !== Number.POSITIVE_INFINITY && (granted >= structurals || spent > 0)) return false;
+      granted++;
+      return true;
+    },
+    get spent() { return spent; },
+    get granted() { return granted; },
+  };
 }
 
-const rowCount = (ps: readonly ColumnMeshPayload[]): number => ps.reduce((n, p) => n + p.rows.length / ROW_INTS, 0);
-const rowSum = (ps: readonly ColumnMeshPayload[], field: 3 | 5): number => {
+/** No row cap, no structural cap. */
+export const UNBOUNDED: UploadGate = { exhausted: () => false, spend() {}, structural: () => true };
+
+/** Pumps under `UNBOUNDED` until a pump spends nothing (that last pump restores culling where it can). */
+export function pumpAll(r: SectionRenderer, cx = 0, cz = 0, yawDeg = 0): void {
+  for (let i = 0; i < 1000 && r.pump(UNBOUNDED, cx, cz, yawDeg) > 0; i++);
+}
+
+/** One row of `quads` quads at section sy: opaque, or water (translucent). */
+export const opaque = (sy: number, quads = 1): FakeRow => ({ sy, pass: 0, quads });
+export const water = (sy: number, quads = 1): FakeRow => ({ sy, pass: 2, quads });
+
+/** `nOpaque` opaque rows at sy 0, 1, …, then `nWater` translucent rows at sy 0, 1, … (one per section and pass). */
+export function rowsOf(nOpaque: number, nWater: number, quads = 1): FakeRow[] {
+  const out: FakeRow[] = [];
+  for (let s = 0; s < nOpaque; s++) out.push(opaque(s % 24, quads));
+  for (let s = 0; s < nWater; s++) out.push(water(s % 24, quads));
+  return out;
+}
+
+const rowsIn = (p: ColumnMeshPayload): number => p.rows.length / ROW_INTS;
+export const indexSum = (ps: readonly ColumnMeshPayload[]): number => {
   let n = 0;
-  for (const p of ps) for (let o = 0; o < p.rows.length; o += ROW_INTS) n += p.rows[o + field]!;
+  for (const p of ps) for (let o = 0; o < p.rows.length; o += ROW_INTS) n += p.rows[o + 5]!;
+  return n;
+};
+export const vertexSum = (ps: readonly ColumnMeshPayload[]): number => {
+  let n = 0;
+  for (const p of ps) for (let o = 0; o < p.rows.length; o += ROW_INTS) n += p.rows[o + 3]!;
   return n;
 };
 
-/** Every mesh under `root` (a BatchedMesh counts once). */
-function meshes(root: Object3D): Mesh[] {
+/** Every region object under `root` (a BatchedMesh counts once). */
+export function regionObjects(root: Object3D): Mesh[] {
   const out: Mesh[] = [];
   root.traverse((o) => {
     if ((o as Mesh).isMesh) out.push(o as Mesh);
@@ -59,205 +87,425 @@ function meshes(root: Object3D): Mesh[] {
   return out;
 }
 
-/** The placement of every drawn piece under `root`: each BatchedMesh instance's matrix, or each mesh's own matrix. */
-function placements(root: Object3D): Array<{ t: Vector3; s: Vector3 }> {
-  root.updateMatrixWorld(true);
-  const out: Array<{ t: Vector3; s: Vector3 }> = [];
-  const instance = new Matrix4();
-  const world = new Matrix4();
-  const push = (m: Matrix4) => {
-    const t = new Vector3();
-    const s = new Vector3();
-    m.decompose(t, new Quaternion(), s);
-    out.push({ t, s });
-  };
-  for (const mesh of meshes(root)) {
-    const batch = mesh as unknown as BatchedMesh;
-    if (batch.isBatchedMesh) {
-      for (let i = 0; i < batch.instanceCount; i++) push(world.multiplyMatrices(mesh.matrixWorld, batch.getMatrixAt(i, instance)));
-    } else {
-      push(mesh.matrixWorld.clone());
-    }
-  }
-  return out;
-}
-
-const key = (x: number, y: number, z: number): string => `${x.toFixed(3)},${y.toFixed(3)},${z.toFixed(3)}`;
+const isBatch = (m: Mesh): boolean => (m as unknown as BatchedMesh).isBatchedMesh === true;
+const shown = (o: Object3D): boolean => {
+  for (let x: Object3D | null = o; x !== null; x = x.parent) if (!x.visible) return false;
+  return true;
+};
 
 /**
- * The origins the placements must sit at, before subtracting the floating origin: one per row at the section origin
- * (cx·16, sy·16 − 64, cz·16) for RegionBatch; one per region and pass at the region origin (rx·128, −64, rz·128) for
- * RegionMesh.
+ * The indices three would draw under `root`: on a BatchedMesh, the index counts of its active visible instances; on a
+ * Mesh, three times the non-degenerate triangles of its draw range (a hidden range holds equal indices).
  */
-function expectedOrigins(kind: SectionRendererKind, ps: readonly ColumnMeshPayload[]): Array<[number, number, number]> {
-  const out: Array<[number, number, number]> = [];
-  const regionPasses = new Set<string>();
-  for (const p of ps) {
-    for (let o = 0; o < p.rows.length; o += ROW_INTS) {
-      const sy = p.rows[o]!;
-      const pass = p.rows[o + 1]!;
-      if (kind === 'batch') {
-        out.push([p.cx * 16, sy * 16 - 64, p.cz * 16]);
-      } else {
-        const [rx, rz] = regionOf(p.cx, p.cz);
-        const k = `${rx},${rz},${pass}`;
-        if (!regionPasses.has(k)) {
-          regionPasses.add(k);
-          out.push([rx * 128, -64, rz * 128]);
-        }
+export function visibleIndices(root: Object3D): number {
+  let n = 0;
+  for (const m of regionObjects(root)) {
+    if (!shown(m)) continue;
+    if (isBatch(m)) {
+      const b = m as unknown as BatchedMesh;
+      const info = (b as unknown as { _instanceInfo: Array<{ active: boolean }> })._instanceInfo;
+      for (let i = 0; i < info.length; i++) {
+        if (!info[i]!.active || !b.getVisibleAt(i)) continue;
+        n += b.getGeometryRangeAt(b.getGeometryIdAt(i))!.indexCount;
+      }
+    } else {
+      const index = m.geometry.getIndex()!.array;
+      const end = Math.min(index.length, m.geometry.drawRange.start + m.geometry.drawRange.count);
+      for (let k = m.geometry.drawRange.start; k + 2 < end; k += 3) {
+        if (index[k] !== index[k + 1] || index[k + 1] !== index[k + 2]) n += 3;
       }
     }
   }
-  return out;
+  return n;
 }
 
-function expectPlacedAt(r: SectionRenderer, kind: SectionRendererKind, ps: readonly ColumnMeshPayload[], origin: readonly [number, number, number]): void {
-  const got = placements(r.root);
-  for (const { s } of got) {
-    expect(s.x).toBeCloseTo(1 / 8, 9);
-    expect(s.y).toBeCloseTo(1 / 8, 9);
-    expect(s.z).toBeCloseTo(1 / 8, 9);
-  }
-  const want = expectedOrigins(kind, ps).map(([x, y, z]) => key(x - origin[0], y - origin[1], z - origin[2])).sort();
-  expect(got.map(({ t }) => key(t.x, t.y, t.z)).sort()).toEqual(want);
+/** The objects of region (rx, rz). */
+export const regionAt = (r: SectionRenderer, rx: number, rz: number): Mesh[] =>
+  regionObjects(r.root).filter((m) => m.userData['rx'] === rx && m.userData['rz'] === rz);
+
+/** A small seeded LCG in [0, 1) (Numerical Recipes' constants). */
+function lcg(seed: number): () => number {
+  let s = seed >>> 0;
+  return () => {
+    s = (Math.imul(s, 1664525) + 1013904223) >>> 0;
+    return s / 4294967296;
+  };
 }
 
 export function sectionRendererContract(kind: SectionRendererKind): void {
   const make = (): SectionRenderer =>
     createSectionRenderer(kind, createMaterialSystem({ variant: kind, ao: true, smoothLight: true }, ALBEDO));
-  const never = (): boolean => false;
+  /** A case RegionMesh passes only with Task 17's arena. */
+  const arena = (name: string, fn: () => void): void => {
+    if (kind === 'mesh') test.todo(name);
+    else test(name, fn);
+  };
+  const probe = (r: SectionRenderer): RevealProbe => r.probe(createRevealProbe());
+  const counts = (r: SectionRenderer): SectionRendererCounts => r.counts(createSectionRendererCounts());
 
-  describe(`SectionRenderer contract: ${kind} (SP4a spec §6.2)`, () => {
-    test('nothing is built before every expected column of a region is staged', () => {
-      const s = sceneAt();
+  describe(`SectionRenderer streaming contract: ${kind} (SP4b spec §4.1, §3.9)`, () => {
+    test('upload order is nearest-first from the camera with distinct distances: staged (5, 0), (1, 0), (3, 0) at yaw 0 upload in the order (1, 0), (3, 0), (5, 0)', () => {
       const r = make();
       expect(r.kind).toBe(kind);
-      r.expect(s.columns);
-      for (const p of s.a.slice(0, 3)) r.stage(p);
-      expect(r.buildNext(never)).toBe(0);
-      expect(r.counts().builtRegions).toBe(0);
-      expect(meshes(r.root)).toHaveLength(0);
-      r.stage(s.a[3]!);
-      expect(r.buildNext(never)).toBe(rowCount(s.a));
-      expect(r.counts().builtRegions).toBe(1);
-      // Region B's one column is still missing.
-      expect(r.buildNext(never)).toBe(0);
-      r.stage(s.b);
-      expect(r.buildNext(never)).toBe(rowCount([s.b]));
-      expect(r.counts().builtRegions).toBe(2);
+      [5, 1, 3].forEach((cx, i) => r.stage(fakePayload(cx, 0, [opaque(4), opaque(5)]), i + 1));
+      const order: number[] = [];
+      r.onColumnRevealed = (cx) => order.push(cx);
+      for (let i = 0; i < 3; i++) {
+        // Two rows a pump: one column each.
+        expect(r.pump(fakeGate(2), 0, 0, 0)).toBe(2);
+        expect(order).toHaveLength(i + 1);
+      }
+      expect(order).toEqual([1, 3, 5]);
+      for (const cx of [1, 3, 5]) expect(r.isRevealed(cx, 0)).toBe(true);
       r.dispose();
     });
 
-    test('buildNext respects exhausted() between regions and returns the sections added', () => {
-      const s = sceneAt();
+    test('the row cap: 32 rows of a 40-row column in the first pump and 8 in the second; nothing of it shows after the first, all 40 rows after the second, in one call', () => {
       const r = make();
-      r.expect(s.columns);
-      // Staged B first: the build order is still nearest first, so A (9 sections) comes before B (2).
-      for (const p of [s.b, ...s.a]) r.stage(p);
-      expect(r.buildNext(() => true)).toBe(0);
-      expect(r.counts().builtRegions).toBe(0);
-      let calls = 0;
-      expect(r.buildNext(() => calls++ > 0)).toBe(rowCount(s.a));
-      expect(calls).toBe(2);
-      expect(r.counts().builtRegions).toBe(1);
-      expect(r.buildNext(never)).toBe(rowCount([s.b]));
-      expect(r.buildNext(never)).toBe(0);
-      expect(r.counts().builtRegions).toBe(2);
+      // An earlier column with rows in both passes: the region's opaque and translucent objects exist.
+      const earlier = fakePayload(2, 2, [opaque(3), water(4)]);
+      r.stage(earlier, 1);
+      pumpAll(r);
+      expect(r.isRevealed(2, 2)).toBe(true);
+      const before = counts(r).structuralOps;
+      const big = fakePayload(3, 3, rowsOf(24, 16));
+      expect(rowsIn(big)).toBe(40);
+      r.stage(big, 1);
+      const revealed: Array<[number, number]> = [];
+      r.onColumnRevealed = (cx, cz) => revealed.push([cx, cz]);
+      expect(r.pump(fakeGate(32), 3, 3, 0)).toBe(32);
+      expect(r.isRevealed(3, 3)).toBe(false);
+      expect(visibleIndices(r.root)).toBe(indexSum([earlier]));
+      expect(probe(r)).toEqual({ columns: 2, partial: 0, mixed: 0 });
+      expect(revealed).toEqual([]);
+      expect(r.pump(fakeGate(32), 3, 3, 0)).toBe(8);
+      expect(r.isRevealed(3, 3)).toBe(true);
+      expect(revealed).toEqual([[3, 3]]);
+      expect(visibleIndices(r.root)).toBe(indexSum([earlier, big]));
+      expect(probe(r)).toEqual({ columns: 2, partial: 0, mixed: 0 });
+      expect(counts(r).structuralOps).toBe(before);
       r.dispose();
     });
 
-    test('the root stays hidden until revealAll, then every built object is visible in the same call', () => {
-      const s = sceneAt();
+    arena('structural before releases: with 40 rows pending release and a staged column in a new region, one pump under a 32-row gate creates the region\'s object and releases 32 rows; the column\'s rows upload in the following pumps and it is revealed', () => {
       const r = make();
-      r.expect(s.columns);
-      for (const p of s.all) r.stage(p);
+      r.stage(fakePayload(1, 1, rowsOf(24, 16)), 1);
+      pumpAll(r);
+      r.remove(1, 1);
+      expect(counts(r).columnsRemoving).toBe(1);
+      const fresh = fakePayload(17, 1, [opaque(4), opaque(5)]);
+      r.stage(fresh, 1);
+      expect(regionAt(r, 2, 0)).toHaveLength(0);
+      const gate = fakeGate(32);
+      expect(r.pump(gate, 17, 1, 0)).toBe(32);
+      expect(gate.granted).toBe(1);
+      expect(regionAt(r, 2, 0)).toHaveLength(1);
+      expect(counts(r)).toMatchObject({ lastStructural: 'create', columnsRemoving: 1, rows: 8 });
+      expect(r.isRevealed(17, 1)).toBe(false);
+      // The 8 releases and the column's 2 rows.
+      expect(r.pump(fakeGate(32), 17, 1, 0)).toBe(10);
+      expect(r.isRevealed(17, 1)).toBe(true);
+      expect(counts(r)).toMatchObject({ columnsRemoving: 0, rows: 2, regions: 1 });
+      expect(visibleIndices(r.root)).toBe(indexSum([fresh]));
+      r.dispose();
+    });
+
+    test('under holdReveals(true) with a 32-row gate and a column spanning two pumps, probe partial is 0 on every pump until revealAll', () => {
+      const r = make();
+      r.holdReveals(true);
+      const ps = [fakePayload(0, 0, rowsOf(24, 16)), fakePayload(1, 0, rowsOf(20, 0))];
+      for (const p of ps) r.stage(p, 1);
+      for (let i = 0; i < 4; i++) {
+        r.pump(fakeGate(32), 0, 0, 0);
+        expect(probe(r)).toMatchObject({ partial: 0, mixed: 0 });
+        expect(visibleIndices(r.root)).toBe(0);
+      }
+      expect(counts(r)).toMatchObject({ columnsStaged: 2, columnsComplete: 2 });
+      r.revealAll();
+      expect(probe(r)).toEqual({ columns: 2, partial: 0, mixed: 0 });
+      expect(visibleIndices(r.root)).toBe(indexSum(ps));
+      r.dispose();
+    });
+
+    arena('lastStructural: a pump that creates a region reports \'create\' with the reservation\'s bytes (1,835,008 for batch, 2,359,296 for mesh), and the next pump reports null and 0', () => {
+      const r = make();
+      r.stage(fakePayload(0, 0, [opaque(4)]), 1);
+      r.pump(fakeGate(32), 0, 0, 0);
+      expect(counts(r)).toMatchObject({ lastStructural: 'create', lastStructuralBytes: kind === 'batch' ? 1_835_008 : 2_359_296, structuralOps: 1 });
+      r.pump(fakeGate(32), 0, 0, 0);
+      expect(counts(r)).toMatchObject({ lastStructural: null, lastStructuralBytes: 0, structuralOps: 1 });
+      r.dispose();
+    });
+
+    arena('one structural operation per frame while flying: two new regions in one pump create one; the second waits for the next pump; under an Infinity-row gate both are created in one pump', () => {
+      let t = 0;
+      const now = (): number => t;
+      // The engine's budget satisfies the gate structurally.
+      const flying: UploadGate & { start(): void } = createUploadBudget(2, 32, now);
+      const r = make();
+      r.stage(fakePayload(0, 0, [opaque(4)]), 1);
+      r.stage(fakePayload(17, 0, [opaque(4)]), 1);
+      flying.start();
+      r.pump(flying, 0, 0, 0);
+      expect(counts(r).structuralOps).toBe(1);
+      expect(r.isRevealed(0, 0)).toBe(true);
+      expect(r.isRevealed(17, 0)).toBe(false);
+      expect(regionAt(r, 2, 0)).toHaveLength(0);
+      t += 16;
+      flying.start();
+      r.pump(flying, 0, 0, 0);
+      expect(counts(r).structuralOps).toBe(2);
+      expect(r.isRevealed(17, 0)).toBe(true);
+
+      const loading: UploadGate & { start(): void } = createUploadBudget(12, Number.POSITIVE_INFINITY, now);
+      const s = make();
+      s.stage(fakePayload(0, 0, [opaque(4)]), 1);
+      s.stage(fakePayload(17, 0, [opaque(4), water(4)]), 1);
+      loading.start();
+      s.pump(loading, 0, 0, 0);
+      expect(counts(s).structuralOps).toBe(3);
+      expect(s.isRevealed(0, 0) && s.isRevealed(17, 0)).toBe(true);
+      r.dispose();
+      s.dispose();
+    });
+
+    test('removal: hidden at once (probe partial 0 in that frame), rows released under the gate, an emptied region disposed', () => {
+      const r = make();
+      const keep = fakePayload(9, 0, [opaque(2)]);
+      const gone = fakePayload(1, 1, rowsOf(24, 16));
+      r.stage(keep, 1);
+      r.stage(gone, 1);
+      pumpAll(r);
+      expect(visibleIndices(r.root)).toBe(indexSum([keep, gone]));
+      expect(counts(r)).toMatchObject({ regions: 2, rows: 41 });
+      r.remove(1, 1);
+      // Hidden at once, before any pump.
+      expect(r.isRevealed(1, 1)).toBe(false);
+      expect(visibleIndices(r.root)).toBe(indexSum([keep]));
+      expect(probe(r)).toMatchObject({ partial: 0, mixed: 0 });
+      expect(counts(r)).toMatchObject({ columnsStaged: 1, columnsRemoving: 1, rows: 41, regions: 2 });
+      expect(r.pump(fakeGate(32), 0, 0, 0)).toBe(32);
+      expect(probe(r)).toMatchObject({ partial: 0, mixed: 0 });
+      expect(counts(r)).toMatchObject({ columnsRemoving: 1, rows: 9, regions: 2 });
+      expect(regionAt(r, 0, 0).length).toBeGreaterThan(0);
+      expect(r.pump(fakeGate(32), 0, 0, 0)).toBe(8);
+      expect(counts(r)).toMatchObject({ columnsRemoving: 0, rows: 1, regions: 1, vertices: vertexSum([keep]), indices: indexSum([keep]) });
+      // Region (0, 0) emptied: its objects are disposed and gone from the root.
+      expect(regionAt(r, 0, 0)).toHaveLength(0);
+      expect(regionAt(r, 1, 0).length).toBeGreaterThan(0);
+      expect(visibleIndices(r.root)).toBe(indexSum([keep]));
+      // Removing a column that is not staged changes nothing.
+      r.remove(40, 40);
+      expect(counts(r)).toMatchObject({ columnsStaged: 1, columnsRemoving: 0 });
+      r.dispose();
+    });
+
+    test('re-staging an unrevealed column replaces it; staging a revealed column throws', () => {
+      const r = make();
+      // One pass, so the first pump's one structural operation (the batch) lets all 32 rows through.
+      r.stage(fakePayload(2, 2, rowsOf(40, 0)), 1);
+      expect(r.pump(fakeGate(32), 2, 2, 0)).toBe(32);
+      const second = fakePayload(2, 2, [opaque(7, 3), water(8, 2)]);
+      r.stage(second, 2);
+      expect(counts(r)).toMatchObject({ columnsStaged: 1, columnsComplete: 0, columnsRevealed: 0, columnsRemoving: 1 });
+      expect(r.isRevealed(2, 2)).toBe(false);
+      expect(visibleIndices(r.root)).toBe(0);
+      pumpAll(r, 2, 2);
+      expect(r.isRevealed(2, 2)).toBe(true);
+      expect(counts(r)).toMatchObject({ columnsStaged: 1, columnsRevealed: 1, columnsRemoving: 0, rows: 2 });
+      expect(visibleIndices(r.root)).toBe(indexSum([second]));
+      expect(probe(r)).toEqual({ columns: 1, partial: 0, mixed: 0 });
+      expect(() => r.stage(fakePayload(2, 2, [opaque(1)]), 3)).toThrow(/revealed/);
+      r.dispose();
+    });
+
+    test('a column removed and re-staged at another seq shows exactly its new rows once revealed; probe mixed 0', () => {
+      const r = make();
+      r.stage(fakePayload(4, 4, rowsOf(24, 16)), 1);
+      pumpAll(r, 4, 4);
+      r.remove(4, 4);
+      const next = fakePayload(4, 4, [opaque(2, 5), opaque(3, 1)]);
+      r.stage(next, 2);
+      for (let i = 0; i < 4; i++) {
+        r.pump(fakeGate(16), 4, 4, 0);
+        expect(probe(r)).toMatchObject({ partial: 0, mixed: 0 });
+      }
+      expect(r.isRevealed(4, 4)).toBe(true);
+      expect(counts(r)).toMatchObject({ columnsStaged: 1, columnsRemoving: 0, rows: 2 });
+      expect(visibleIndices(r.root)).toBe(indexSum([next]));
+      r.dispose();
+    });
+
+    arena('an object with rows written in a pump has frustumCulled false until its attributes hold no pending update range (cleared as three\'s upload does), and true again at the next pump', () => {
+      const r = make();
+      r.stage(fakePayload(0, 0, [opaque(3), water(3)]), 1);
+      r.stage(fakePayload(17, 0, [opaque(3)]), 1);
+      pumpAll(r);
+      const written = regionObjects(r.root);
+      expect(written).toHaveLength(3);
+      for (const m of written) expect(m.frustumCulled).toBe(false);
+      // Nothing uploaded them yet: still unculled after another pump.
+      r.pump(fakeGate(32), 0, 0, 0);
+      for (const m of written) expect(m.frustumCulled).toBe(false);
+      // three's upload clears each attribute's ranges; the next pump restores culling.
+      for (const m of written) {
+        const g = m.geometry;
+        for (const a of [...Object.values(g.attributes), g.getIndex()!] as BufferAttribute[]) a.clearUpdateRanges();
+      }
+      r.pump(fakeGate(32), 0, 0, 0);
+      for (const m of written) expect(m.frustumCulled).toBe(true);
+      // A row written into region (2, 0): only its object is unculled again.
+      r.stage(fakePayload(18, 0, [opaque(5)]), 1);
+      r.pump(fakeGate(32), 0, 0, 0);
+      for (const m of written) expect(m.frustumCulled).toBe(m.userData['rx'] !== 2);
+      r.dispose();
+    });
+
+    test('holdReveals: complete columns stay hidden in the hidden root; revealAll shows the root in one call', () => {
+      const r = make();
+      r.holdReveals(true);
       expect(r.root.visible).toBe(false);
-      r.buildNext(never);
-      expect(meshes(r.root).length).toBeGreaterThan(0);
+      const ps = [fakePayload(0, 0, [opaque(4), water(5)]), fakePayload(9, 1, [opaque(1)])];
+      for (const p of ps) r.stage(p, 1);
+      pumpAll(r);
+      expect(counts(r)).toMatchObject({ columnsStaged: 2, columnsComplete: 2 });
       expect(r.root.visible).toBe(false);
-      for (const m of meshes(r.root)) expect(m.visible).toBe(false);
+      expect(r.isRevealed(0, 0)).toBe(false);
+      expect(visibleIndices(r.root)).toBe(0);
+      expect(probe(r)).toEqual({ columns: 2, partial: 0, mixed: 0 });
       r.revealAll();
       expect(r.root.visible).toBe(true);
-      for (const m of meshes(r.root)) {
-        for (let o: Object3D | null = m; o !== null; o = o.parent) expect(o.visible).toBe(true);
+      expect(r.isRevealed(0, 0) && r.isRevealed(9, 1)).toBe(true);
+      expect(visibleIndices(r.root)).toBe(indexSum(ps));
+      r.holdReveals(false);
+      expect(r.root.visible).toBe(true);
+      r.dispose();
+    });
+
+    test('the probe is 0 (partial and mixed) on every frame of a seeded random stage/remove/pump sequence of 400 frames', () => {
+      const r = make();
+      const rand = lcg(42);
+      // Twelve columns over five regions; each staging gets a fresh payload of 1-30 rows.
+      const pool: Array<[number, number]> = [[0, 0], [1, 2], [7, 7], [3, 5], [8, 0], [9, 3], [15, 7], [12, 4], [-1, 0], [-5, 2], [-8, 7], [-3, -3]];
+      const live = new Map<string, ColumnMeshPayload>();
+      let seq = 0;
+      let revealedSeen = 0;
+      for (let frame = 0; frame < 400; frame++) {
+        const ops = Math.floor(rand() * 4);
+        for (let k = 0; k < ops; k++) {
+          const [cx, cz] = pool[Math.floor(rand() * pool.length)]!;
+          const key = `${cx},${cz}`;
+          if (rand() < 0.6) {
+            if (r.isRevealed(cx, cz)) continue;
+            const n = 1 + Math.floor(rand() * 30);
+            const rows: FakeRow[] = [];
+            for (let i = 0; i < n; i++) rows.push({ sy: i % 24, pass: i % 5 === 4 ? 2 : i % 7 === 6 ? 1 : 0, quads: 1 + Math.floor(rand() * 3) });
+            const p = fakePayload(cx, cz, rows);
+            r.stage(p, ++seq);
+            live.set(key, p);
+          } else {
+            r.remove(cx, cz);
+            live.delete(key);
+          }
+        }
+        const [ccx, ccz] = pool[Math.floor(rand() * pool.length)]!;
+        r.pump(fakeGate(1 + Math.floor(rand() * 40)), ccx, ccz, rand() * 360);
+        const pr = probe(r);
+        expect(pr.partial, `frame ${frame}`).toBe(0);
+        expect(pr.mixed, `frame ${frame}`).toBe(0);
+        const shownNow = [...live.values()].filter((p) => r.isRevealed(p.cx, p.cz));
+        revealedSeen += shownNow.length;
+        expect(visibleIndices(r.root), `frame ${frame}`).toBe(indexSum(shownNow));
       }
+      // The sequence did reveal columns (it is not vacuous).
+      expect(revealedSeen).toBeGreaterThan(400);
       r.dispose();
     });
 
-    test('counts: expected, staged, built, sections, vertices and indices equal the staged payloads\' sums', () => {
-      const s = sceneAt();
+    test('origin rebase: with a revealed column in region (1, 0) and the origin at (0, 0, 0), setOrigin(512, 0, 0) moves that region\'s objects to (−384, −64, 0), leaves every row\'s instance matrix (batch) or vertex range (mesh) unchanged, and the probe stays 0', () => {
       const r = make();
-      r.expect(s.columns);
-      expect(r.counts()).toMatchObject({ expectedColumns: 5, stagedColumns: 0, regions: 2, builtRegions: 0, sections: 0, vertices: 0, indices: 0 });
-      for (const p of s.a) r.stage(p);
-      expect(r.counts().stagedColumns).toBe(4);
-      r.stage(s.b);
-      r.buildNext(never);
-      const c = r.counts();
-      expect(c).toMatchObject({
-        expectedColumns: 5,
-        stagedColumns: 5,
-        regions: 2,
-        builtRegions: 2,
-        sections: rowCount(s.all),
-        vertices: rowSum(s.all, 3),
-        indices: rowSum(s.all, 5),
+      r.stage(fakePayload(10, 3, [opaque(4, 2), water(6), opaque(9)]), 1);
+      pumpAll(r, 10, 3);
+      const objects = regionAt(r, 1, 0);
+      expect(objects.length).toBeGreaterThan(0);
+      const snapshot = (): string[] => objects.map((m) => {
+        if (isBatch(m)) {
+          const b = m as unknown as BatchedMesh;
+          const out: string[] = [];
+          const mat = new Matrix4();
+          for (let i = 0; i < b.instanceCount; i++) out.push(b.getMatrixAt(i, mat).elements.join(','));
+          return out.join(';');
+        }
+        return Array.from(m.geometry.getAttribute('position').array as Uint16Array).join(',');
       });
-      expect(c.mergeMs).toBeGreaterThanOrEqual(0);
-      if (kind === 'batch') expect(c.mergeMs).toBe(0);
+      const before = snapshot();
+      for (const m of objects) expect(m.position.toArray()).toEqual([128, -64, 0]);
+      r.setOrigin(512, 0, 0);
+      for (const m of objects) expect(m.position.toArray()).toEqual([-384, -64, 0]);
+      expect(snapshot()).toEqual(before);
+      expect(probe(r)).toEqual({ columns: 1, partial: 0, mixed: 0 });
+      // A region created after the rebase is placed relative to the origin too.
+      r.stage(fakePayload(-1, -1, [opaque(0)]), 1);
+      pumpAll(r);
+      for (const m of regionAt(r, -1, -1)) expect(m.position.toArray()).toEqual([-640, -64, -128]);
       r.dispose();
     });
 
-    test('setOrigin rebases every matrix: translation = section or region origin − origin, scale 1/8', () => {
-      // Columns near (499712, −499712) blocks: the rebased translations are small and exact.
-      const s = sceneAt(31232, -31232);
+    arena('counts and gpuBytes: a region with one opaque row — batch 1,835,008 bytes, mesh 2,359,296', () => {
       const r = make();
-      r.expect(s.columns);
-      for (const p of s.all) r.stage(p);
-      r.buildNext(never);
-      expectPlacedAt(r, kind, s.all, [0, 0, 0]);
-      r.setOrigin(499712, 0, -499712);
-      expectPlacedAt(r, kind, s.all, [499712, 0, -499712]);
-      r.setOrigin(499200, -512, -500224);
-      expectPlacedAt(r, kind, s.all, [499200, -512, -500224]);
+      expect(r.gpuBytes()).toBe(0);
+      const p = fakePayload(3, 3, [opaque(4, 5)]);
+      r.stage(p, 1);
+      pumpAll(r, 3, 3);
+      expect(r.gpuBytes()).toBe(kind === 'batch' ? 1_835_008 : 2_359_296);
+      expect(counts(r)).toMatchObject({
+        columnsStaged: 1, columnsComplete: 1, columnsRevealed: 1, columnsRemoving: 0, regions: 1, rows: 1,
+        vertices: vertexSum([p]), indices: indexSum([p]), structuralOps: 1,
+      });
+      r.dispose();
+      expect(r.gpuBytes()).toBe(0);
+    });
+
+    test('Review Focus 3: column (−31,249, −31,249) is in region (−3,907, −3,907); with the origin at (−499,712, 0, −499,712) its object position is (−384, −64, −384)', () => {
+      expect(regionOf(-31249, -31249)).toEqual([-3907, -3907]);
+      const r = make();
+      r.setOrigin(-499712, 0, -499712);
+      r.stage(fakePayload(-31249, -31249, [opaque(4), water(5)]), 1);
+      pumpAll(r, -31249, -31249);
+      const objects = regionAt(r, -3907, -3907);
+      expect(objects.length).toBeGreaterThan(0);
+      for (const m of objects) expect(m.position.toArray()).toEqual([-384, -64, -384]);
+      expect(r.isRevealed(-31249, -31249)).toBe(true);
       r.dispose();
     });
 
-    test('setOrigin before a region is built places it relative to that origin', () => {
-      const s = sceneAt(31232, -31232);
+    test('counts(out) and probe(out) write into the caller\'s object; structuralMs is finite and ≥ 0', () => {
       const r = make();
-      r.expect(s.columns);
-      r.setOrigin(499712, 0, -499712);
-      for (const p of s.all) r.stage(p);
-      r.buildNext(never);
-      expectPlacedAt(r, kind, s.all, [499712, 0, -499712]);
+      const c = createSectionRendererCounts();
+      const pr = createRevealProbe();
+      expect(r.counts(c)).toBe(c);
+      expect(r.probe(pr)).toBe(pr);
+      r.stage(fakePayload(0, 0, [opaque(1)]), 1);
+      pumpAll(r);
+      r.counts(c);
+      expect(Number.isFinite(c.structuralMs) && c.structuralMs >= 0).toBe(true);
+      expect(c.columnsRevealed).toBe(1);
       r.dispose();
     });
 
-    test('stage refuses a column that is not expected, or one staged twice', () => {
-      const s = sceneAt();
+    test('dispose frees every geometry and empties the root', () => {
       const r = make();
-      r.expect(s.columns.slice(0, 4));
-      expect(() => r.stage(s.b)).toThrow(/not expected/);
-      r.stage(s.a[0]!);
-      expect(() => r.stage(s.a[0]!)).toThrow(/already staged/);
-      expect(r.counts().stagedColumns).toBe(1);
-      r.dispose();
-    });
-
-    test('dispose frees every geometry', () => {
-      const s = sceneAt();
-      const r = make();
-      r.expect(s.columns);
-      for (const p of s.all) r.stage(p);
-      r.buildNext(never);
-      const geometries = new Set<BufferGeometry>(meshes(r.root).map((m) => m.geometry));
+      r.stage(fakePayload(0, 0, [opaque(1), water(2)]), 1);
+      r.stage(fakePayload(20, 0, [opaque(1)]), 1);
+      pumpAll(r);
+      const geometries = new Set(regionObjects(r.root).map((m) => m.geometry));
       expect(geometries.size).toBeGreaterThan(0);
-      const freed = new Set<BufferGeometry>();
+      const freed = new Set<unknown>();
       for (const g of geometries) g.addEventListener('dispose', () => freed.add(g));
       r.dispose();
       expect(freed).toEqual(geometries);
-      expect(meshes(r.root)).toHaveLength(0);
+      expect(regionObjects(r.root)).toHaveLength(0);
+      expect(counts(r)).toMatchObject({ columnsStaged: 0, regions: 0, rows: 0 });
     });
   });
 }

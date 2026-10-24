@@ -6,9 +6,9 @@ import { rowBounds, rowsOfPass, type PayloadRow } from '../../src/render/regionG
 import { createSectionRenderer, type SectionRenderer } from '../../src/render/sectionRenderer';
 import { createFlatColorArray } from '../../src/render/textureArray';
 import { fakePayload } from './fixtures/payloads';
+import { pumpAll } from './sectionRendererContract';
 
 const ALBEDO = createFlatColorArray();
-const never = (): boolean => false;
 
 /** Region (0, 0): rows of every pass, interleaved, so a pass's rows are not contiguous in a payload. */
 const payloads = (): ColumnMeshPayload[] => [
@@ -17,12 +17,14 @@ const payloads = (): ColumnMeshPayload[] => [
   fakePayload(7, 7, [{ sy: 23, pass: 2, quads: 1 }, { sy: 0, pass: 0, quads: 5 }, { sy: 9, pass: 1, quads: 2 }]),
 ];
 
-/** Builds `ps` (one region) in a renderer of `kind`. */
+/**
+ * Stages `ps` (one region) in a renderer of `kind` and uploads them all from the camera at (0, 0), yaw 0: for these
+ * payloads, nearest-first is payload order.
+ */
 function built(kind: MaterialVariant, ps: readonly ColumnMeshPayload[]): SectionRenderer {
   const r = createSectionRenderer(kind, createMaterialSystem({ variant: kind, ao: true, smoothLight: true }, ALBEDO));
-  r.expect(ps.map((p) => [p.cx, p.cz] as const));
-  for (const p of ps) r.stage(p);
-  r.buildNext(never);
+  for (const p of ps) r.stage(p, 1);
+  pumpAll(r);
   return r;
 }
 

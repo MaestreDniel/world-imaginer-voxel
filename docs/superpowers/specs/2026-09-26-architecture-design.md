@@ -169,7 +169,7 @@ world-imaginer-voxel/          (repository root)
       coordinator.ts scheduler.ts (not created: the coordinator holds the scheduler) rings.ts workerPool.ts throttle.ts (SP4b) uploadBudget.ts session.ts invalidation.ts (SP4c with Apply's dirty stages; completed for every scope by SP10) capabilities.ts
       renderDistance.ts spikeStore.ts   (SP4a: the default render distance from the capability report; the spike's shared store)
     render/                     the only place three is imported (ui canvases are 2D; amended by SP0)
-      renderer.ts sectionRenderer.ts (interface) regionBatch.ts regionMesh.ts (fallback) floatingOrigin.ts selection.ts
+      renderer.ts sectionRenderer.ts (interface; SP4b: and UploadGate) regionBatch.ts regionMesh.ts (fallback) floatingOrigin.ts selection.ts
       fpsLimiter.ts frameState.ts frameTiming.ts regionGrid.ts spike/   (SP4a: the FPS cap; the per-frame inputs of the materials;
                                 rAF-delta snapping and percentiles; the region grid both section renderers share; the week-1 spike's stress scene
                                 and bench behind `?spike=batch`)
@@ -255,7 +255,7 @@ These are rewritten against new tests. Everything else is written fresh:
 - **Loaded-column table:** a torus of W = 64 ≥ 2·(24+5)+1 = 59 (RD ≤ 24 plus the unload margin of 5, with slack for teleport prefetch; a power of two so `mod` is `& 63`). `slot = (cx & 63) + 64*(cz & 63)`, and each record stores cx and cz for validation.
 - **Directions and faces** (amended by SP3a): north = −z, south = +z, east = +x, west = −x, up = +y. A clockwise quarter turn seen from +y maps a horizontal offset (x, z) to (−z, x): north → east → south → west → north. A face index i ∈ 0..5 follows the `facing6` order: 0 north, 1 east, 2 south, 3 west, 4 up, 5 down; `FULL_FACES` bit i is face i and `FACE_TEX[state·6 + i]` is face i's texture.
 - **Terminology:** a *column* (also *chunk*) is one 16×16 block footprint over the full height; a *section* is 16³; a *render region* is 8×8 columns (§4.5); a *structure region* is a spacing cell (§3.13); a *harness region* is a rectangle of columns whose size each metric states (default 32×32).
-- **Rendering precision:** a floating render origin snaps to 512 blocks and rebases once the camera is more than 1024 blocks away.
+- **Rendering precision:** a floating render origin snaps to 512 blocks and rebases once the camera is more than 1024 blocks away (SP4b: each region's mesh carries its origin, so a rebase moves regions, not instances).
 
 ### 2.2 Block registry and voxel encoding
 
@@ -988,7 +988,7 @@ Main thread: render (three), input/physics/raycast (reads SAB), Coordinator (sta
 - In-flight jobs check their epoch cell between phases and abort. SP2b implements the epoch cell as one pool-wide `SharedArrayBuffer` cell for map, spawn and stats jobs (a stopped job replies `ABORTED`); SP4b widens it to per-scope cells (amended by SP2b).
 - Stale results are discarded.
 
-**Uploads** are capped at 2 ms and 32 section-meshes per frame (Medium). They are served from a distance-ordered ready queue of whole columns; a column's uploads may span several frames, but its reveal happens in one (§4.2).
+**Uploads** are capped at 2 ms and 32 section-meshes per frame (Medium) (SP4b: at most one structural operation per frame while flying: a region's batch or arena created, grown, optimised or compacted; a region with rows written in a frame is drawn unculled in it, so three uploads them under that frame's cap). They are served from a distance-ordered ready queue of whole columns; a column's uploads may span several frames, but its reveal happens in one (§4.2).
 
 **HUD counts** come straight from heap and in-flight maps, so nothing is double-counted.
 
@@ -1031,8 +1031,8 @@ In AO, smooth light and connectivity15, "opaque" means PASS opaque with `FULL_FA
 
 ### 4.5 Render structure
 
-**RegionBatch** covers 8×8 columns × full height. It owns 3 BatchedMesh objects (opaque, cutout, translucent), with one instance per section; the instance matrix translates to the section origin relative to the floating origin.
-- Vertex and index capacity are reserved per preset (SP4b; SP4a sizes each region exactly at load); opaque starts at a reservation sized so the sum over regions matches §7 (≈ 100k vertices for a typical region) and grows ×1.5 via `setGeometrySize`.
+**RegionBatch** covers 8×8 columns × full height. It owns 3 BatchedMesh objects (opaque, cutout, translucent), with one instance per section; the instance matrix places the section inside its region, and the region's mesh carries the region origin relative to the floating origin (SP4b).
+- Vertex and index capacity are reserved per preset (SP4b; SP4a sizes each region exactly at load) (Medium: opaque 131,072 vertices / 196,608 indices, translucent 16,384 / 24,576, cutout 8,192 / 12,288 on demand, 1,536 instances; when full, `optimize()` above 40 % deleted space, else ×1.5); opaque starts at a reservation sized so the sum over regions matches §7 (≈ 100k vertices for a typical region) and grows ×1.5 via `setGeometrySize`.
 - Remeshes go through `setGeometryAt` when they fit their power-of-two reservation; otherwise the geometry is deleted and re-added.
 - `optimize()` runs when fragmentation exceeds 40%. It is per region, up to about 5 MB at 1500 quads/column (the < 1 ms claim is re-measured in the SP4a spike).
 - `geometry.boundingSphere` is set before `addGeometry`, so three clones it instead of scanning positions.
