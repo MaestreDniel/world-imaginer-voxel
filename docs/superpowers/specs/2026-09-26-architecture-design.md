@@ -1913,6 +1913,7 @@ SP4b was split on 2026-10-23 into SP4b (streaming) and SP4c (the map in the worl
 - Presets Low to Ultra: adds the **Graphics** section to `ui/settingsPanel.ts` and the graphics rows to `core/params/graphicsPresets.ts` (AO scaled by preset); moon and stars; flat and 3D clouds; Fabulous water (colour and depth copy); custom shadow depth pass (High 1 cascade, Ultra 2); MSAA rebuild path; painters v2 with animation; resource packs with overlays and colormaps; LOD clipmap with fill mask and island terms (the islands tap is non-positive outside the corners y 192-264 and where islandMask < 0.25; SP3e spec §12); plus received cut-line items.
 - **Deliverable:** 1-2 km vistas (the LOD fill mask flips at SP4b's per-column reveal; RD up to 24, SP4a caps 16); presets that switch live; a user-supplied texture pack.
 - **Exit:** G1 in full (Medium on the reference Iris Xe with LOD 512; High on the reference RTX 3060 Mobile); R6; T5 on LOD samples; pack-parser and settings-mapping unit tests.
+- **From SP4b's user check (2026-10-25):** the night fog must hide the streaming reveal as well as the day fog does (by day the reveal is invisible in most places; by night each column's reveal shows); the fog colour and darkening at night are tuned with the night sky. May be pulled earlier as a small tuning.
 - **Cut line:** Ultra shadows, 3D clouds, Fabulous water (→ SP12).
 
 **SP12 — Extreme presets and final tuning** (M; SP11)
