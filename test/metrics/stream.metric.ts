@@ -37,9 +37,10 @@ import { currentTier, metricTest } from '../harness/metric';
  * - **The script** (RD 6 on the quick and full tiers, RD 4 on the fast tier): the first entry at seed 42's spawn
  *   (reveals held) until every MESH column is meshed and uploaded, and its reveal; 60 frames east at one column per two
  *   frames; a 90° turn (to north); 60 frames north at one column per frame (faster than the pool fills: holes and late
- *   reveals); a jump of 64 columns west (record collisions: each new T record is held by the retained column 64 columns
- *   east) until the disc refills; quick and full: RD 6 → 4 for 20 frames, then 6 until refilled; fast: RD 4 → 5 until
- *   refilled, then 4 for 20 frames. "Refilled" is the first entry's test: every MESH column meshed, every staged column
+ *   reveals); a jump of 64 columns west (record collisions: a new T waits where the retained column 64 columns east
+ *   still holds its torus record, about 10 per run, since the north leg outran the pool and left most of those records
+ *   free; final review GOV-2) until the disc refills; quick and full: RD 6 → 4 for 20 frames, then 6 until refilled;
+ *   fast: RD 4 → 5 until refilled, then 4 for 20 frames. "Refilled" is the first entry's test: every MESH column meshed, every staged column
  *   uploaded.
  * - **The probe** (`SectionRenderer.probe`): for each column the staging lists, its rows' visibility read from three's
  *   objects (RegionBatch: `getVisibleAt` of the instances; RegionMesh: non-degenerate indices, the mesh visible), the

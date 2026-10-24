@@ -20,7 +20,8 @@ export const SHARDS = {
   surface: [`${DIR}/surface.metric.ts`],
   // SP4a spec §10 (D28): the renderer's and the light's metric files (R1, R2, R4, R5; L1, L2, DT1.light, S1.light),
   // with their cold region caches, and G1's static cells (a JSON read; ruling P53). SP4b spec §8.1, §9: R7's streaming
-  // flight (`stream.metric.ts`, 20-30 s).
+  // flight (`stream.metric.ts`: planned 20-30 s; measured 38 s in CI's first sharded run, run 40077412950, and about
+  // 12 s alone on the laptop; final review GOV-1).
   render: [`${DIR}/render.metric.ts`, `${DIR}/light.metric.ts`, `${DIR}/g1.metric.ts`, `${DIR}/stream.metric.ts`],
   rest: null,
 };
