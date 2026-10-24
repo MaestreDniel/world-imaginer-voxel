@@ -189,6 +189,12 @@ export interface Coordinator {
   setStrict(on: boolean): void;
   /** Every MESH column of the current set meshed and handed to the sink. */
   firstFill(): boolean;
+  /**
+   * True while (cx, cz)'s slot tracks it marked failed (skipped after two failures, spec §3.6) until its voxels
+   * unload: the page's fog scan counts such a column as filled, so a skipped column does not hold the fog (final review
+   * UI-4).
+   */
+  isSkipped(cx: number, cz: number): boolean;
   counts(out: CoordinatorCounts): CoordinatorCounts;
   dispose(): void;
 }
@@ -1144,6 +1150,10 @@ export function createCoordinator(o: CoordinatorOptions): Coordinator {
       strict = on;
     },
 
+    isSkipped(cx, cz) {
+      const s = slotOf(cx, cz);
+      return failed[s] !== 0 && tracks(s, cx, cz);
+    },
     firstFill() {
       if (!placed || reclassify) return false;
       let m = 0;

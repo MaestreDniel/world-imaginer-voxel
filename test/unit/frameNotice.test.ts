@@ -34,6 +34,25 @@ describe('createFrameNotice (SP4a spec §8.5: p95 > 25 ms over the first 300 fra
     expect(onSuggest).not.toHaveBeenCalled();
   });
 
+  test('given the RD in force as a getter, it judges the RD at the 300th frame: loaded at 4, raised live to 10 within the window, it suggests 8 (final review UI-2)', () => {
+    const onSuggest = vi.fn<(rd: number) => void>();
+    let rd = 4;
+    const notice = createFrameNotice(onSuggest, () => rd);
+    feed(notice, 150, 40);
+    rd = 10;
+    feed(notice, 150, 40);
+    expect(onSuggest).toHaveBeenCalledTimes(1);
+    expect(onSuggest).toHaveBeenCalledWith(8);
+    // Lowered live to 4 before the judgement: nothing below RD_MIN to offer.
+    const none = vi.fn<(rd: number) => void>();
+    rd = 12;
+    const later = createFrameNotice(none, () => rd);
+    feed(later, 299, 40);
+    rd = 4;
+    later.push(40);
+    expect(none).not.toHaveBeenCalled();
+  });
+
   test('nothing is suggested before 300 frames', () => {
     const onSuggest = vi.fn<(rd: number) => void>();
     const notice = createFrameNotice(onSuggest, 12);

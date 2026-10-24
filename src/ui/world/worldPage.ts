@@ -89,7 +89,7 @@ import {
 } from './bench';
 import { firstView } from './firstView';
 import type { FlightContext } from './flight';
-import { FILL_SCAN_FRAMES, createFogEase, filledRadius, type FogEase } from './fogEase';
+import { createFogEase, createFogStep, filledRadius } from './fogEase';
 import { createFrameClock, createFrameNotice, lowerRd } from './frameNotice';
 import { createFrameStep, eyeSkyLight } from './frameStep';
 import { createReloader, hereUrl, installLeaveGuard, navigateTo, type Reloader } from './reload';
@@ -234,46 +234,32 @@ function storeSabMiB(store: VoxelStore): number {
 const nextFrame = (): Promise<number> => new Promise((resolve) => requestAnimationFrame(resolve));
 
 /**
- * The fog's RD on each rendered frame (SP4b spec §5): eased outward after a raise, following the filled radius around
- * the eye's column, scanned every `FILL_SCAN_FRAMES` rendered frames while the fog is below its target and never once
- * it has arrived; `rescan` asks for a scan on the next frame (a raise).
- */
-function createFogStep(
-  fog: FogEase, eye: { readonly x: number; readonly z: number }, isRevealed: (cx: number, cz: number) => boolean, rd: number,
-): { step(dtMs: number): number; rescan(): void } {
-  let fogRd = rd;
-  let filled = rd;
-  let scanIn = 0;
-  return {
-    step(dtMs) {
-      if (fogRd < fog.target) {
-        if (scanIn <= 0) {
-          filled = filledRadius(Math.floor(eye.x) >> 4, Math.floor(eye.z) >> 4, fog.target, isRevealed);
-          scanIn = FILL_SCAN_FRAMES;
-        }
-        scanIn--;
-      }
-      fogRd = fog.step(dtMs, filled);
-      return fogRd;
-    },
-    rescan() {
-      scanIn = 0;
-    },
-  };
-}
-
-/**
  * What the failure panel frees (spec §8.5): the long-task observer, the pool and the renderer with its WebGL context, so
  * a load that failed (StoreFull on a weak machine) holds no workers or GPU memory behind the panel (final review B-M4).
+ * Each step guarded (`runTeardown`): a release that throws skips none of the later ones (final review UI-6).
  */
 export function releaseOnFailure(o: {
   readonly longTasks: { disconnect(): void } | null;
   readonly pool: { terminate(): void } | null;
   readonly renderer: { dispose(): void } | null;
+}, onError: (e: unknown) => void): void {
+  runTeardown([() => o.longTasks?.disconnect(), () => o.pool?.terminate(), () => o.renderer?.dispose()], onError);
+}
+
+/**
+ * A failure before the reveal (SP4a spec §8.3): the loading screen's failure panel first, then what `releaseOnFailure`
+ * frees, the panel guarded as each release, then `settle`. A release that throws (a renderer whose context is gone)
+ * can neither hide the panel nor leave `mountWorldPage` unresolved, as `stopAfterFailure` after the reveal (final
+ * review UI-6).
+ */
+export function failBeforeReveal(o: {
+  show(): void;
+  readonly release: Parameters<typeof releaseOnFailure>[0];
+  settle(): void;
+  onError(e: unknown): void;
 }): void {
-  o.longTasks?.disconnect();
-  o.pool?.terminate();
-  o.renderer?.dispose();
+  runTeardown([o.show, () => releaseOnFailure(o.release, o.onError)], o.onError);
+  o.settle();
 }
 
 /**
@@ -296,6 +282,16 @@ export function everyFrameUntil(request: (cb: () => void) => void, step: () => b
     };
     request(tick);
   });
+}
+
+/**
+ * The RD a reload after the reveal carries (the failure panel's and the context loss's, SP4b spec §7.4): without a
+ * query rd none, so the setting applies (it holds every live change); a query's rd is replaced by the RD in force, so a
+ * live change made since the load survives, and an RD the loading screen's "lower RD" link set is not lost for the
+ * setting's or the default's (final review UI-3).
+ */
+export function reloadRd(queryRd: number | null, liveRd: number): number | null {
+  return queryRd === null ? null : liveRd;
 }
 
 /**
@@ -699,10 +695,14 @@ export function mountWorldPage(root: HTMLElement, q: WorldQuery, hash: string, o
       failAfterReveal!(cause, shown);
       return;
     }
-    releaseOnFailure({ longTasks, pool, renderer: wr });
+    const renderer = wr;
     wr = null;
-    loading.fail(cause, shown, { map: mapHref, lowerRd: lowerRdHref() });
-    settle();
+    failBeforeReveal({
+      show: () => loading.fail(cause, shown, { map: mapHref, lowerRd: lowerRdHref() }),
+      release: { longTasks, pool, renderer },
+      settle,
+      onError: (err) => console.error('The world page\'s release after a failure:', err),
+    });
   }
 
   function dispose(): void {
@@ -971,6 +971,8 @@ export function mountWorldPage(root: HTMLElement, q: WorldQuery, hash: string, o
     }
 
     const isRevealed = (cx: number, cz: number): boolean => sections.isRevealed(cx, cz);
+    // The fog's scan counts a column skipped after two failures as filled (final review UI-4).
+    const columns = { isRevealed, isSkipped: (cx: number, cz: number): boolean => coordinator.isSkipped(cx, cz) };
 
     // The bench route (SP4b spec §8.3): the page's own streaming frame with the pose set by the script.
     if (opts.bench !== undefined) {
@@ -1007,7 +1009,7 @@ export function mountWorldPage(root: HTMLElement, q: WorldQuery, hash: string, o
         const refillRd = Math.min(BENCH_REFILL.rd, rdMax);
         // The live RD as the help would set it, never saved (SP4b spec §5).
         const fog = createFogEase(loadRd);
-        const fogStep = createFogStep(fog, fly, isRevealed, loadRd);
+        const fogStep = createFogStep(fog, fly, columns, loadRd);
         let liveRd = loadRd;
         const rdControl = createRdControl({
           coordinator,
@@ -1182,6 +1184,12 @@ export function mountWorldPage(root: HTMLElement, q: WorldQuery, hash: string, o
       stopped = true;
       cancelAnimationFrame(raf);
     };
+    // The live render distance (SP4b spec §5): the RD in force, the fog's easing toward it and the filled radius it
+    // follows. `rdControl` is created once the help it updates is mounted, before any frame or event can reach it.
+    let liveRd = loadRd;
+    const fog = createFogEase(loadRd);
+    const fogStep = createFogStep(fog, fly, columns, loadRd);
+    let rdControl!: { apply(rd: number | null): void };
     // A failure after the reveal (SP4b spec §7.4): the loop and the coordinator stop, the workers and the renderer are
     // released, and the notices' panel offers "Copy details" and a Reload around the camera.
     let stopHud = (): void => {};
@@ -1190,7 +1198,7 @@ export function mountWorldPage(root: HTMLElement, q: WorldQuery, hash: string, o
       wr = null;
       stopAfterFailure({
         stop,
-        show: () => notices.failed(cause, shown, here(null)),
+        show: () => notices.failed(cause, shown, here(reloadRd(q.rd, liveRd))),
         // The HUD's timer would read the disposed renderer and coordinator; then what releaseOnFailure frees, each
         // step on its own.
         release: [
@@ -1203,12 +1211,6 @@ export function mountWorldPage(root: HTMLElement, q: WorldQuery, hash: string, o
         onError: (e) => console.error('The world page\'s failure:', e),
       });
     };
-    // The live render distance (SP4b spec §5): the RD in force, the fog's easing toward it and the filled radius it
-    // follows. `rdControl` is created once the help it updates is mounted, before any frame or event can reach it.
-    let liveRd = loadRd;
-    const fog = createFogEase(loadRd);
-    const fogStep = createFogStep(fog, fly, isRevealed, loadRd);
-    let rdControl!: { apply(rd: number | null): void };
     // The coordinator's events after the reveal (D12). StoreFull's "Lower to RD n" applies live (SP4b spec §5).
     onStreamEvent = (e) => handleStreamEvent(e, {
       notices,
@@ -1220,11 +1222,11 @@ export function mountWorldPage(root: HTMLElement, q: WorldQuery, hash: string, o
       notices,
       // Without a query rd the setting applies (it holds every live change); a query's rd is replaced by the RD in
       // force, so a live change made since the load survives the reload.
-      hereHref: () => here(q.rd === null ? null : liveRd),
+      hereHref: () => here(reloadRd(q.rd, liveRd)),
     });
     // The notice judges the first 300 frames after the reveal and suggests the RD below the one in force when it
     // fires (the user may have changed it live since the load).
-    const slowFrames = createFrameNotice(() => offerLowerRd(notices, liveRd, rdControl), loadRd);
+    const slowFrames = createFrameNotice(() => offerLowerRd(notices, liveRd, rdControl), () => liveRd);
 
     const canvas = world.renderer.domElement;
     if (overlay) {

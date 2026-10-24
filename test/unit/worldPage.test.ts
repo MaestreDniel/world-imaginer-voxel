@@ -12,8 +12,8 @@ import { createBenchDriver } from '../../src/ui/world/bench';
 import { createFogEase } from '../../src/ui/world/fogEase';
 import { createReloader } from '../../src/ui/world/reload';
 import {
-  createRdControl, createWorldNotices, everyFrameUntil, handleStreamEvent, helpChange, offerLowerRd, rdShownOnLoad, releaseOnFailure,
-  runTeardown, stopAfterFailure,
+  createRdControl, createWorldNotices, everyFrameUntil, failBeforeReveal, handleStreamEvent, helpChange, offerLowerRd, rdShownOnLoad,
+  releaseOnFailure, reloadRd, runTeardown, stopAfterFailure,
 } from '../../src/ui/world/worldPage';
 import { installDom, type FakeElement } from './fixtures/domShim';
 
@@ -63,14 +63,68 @@ describe('releaseOnFailure (the failure panel frees the load, final review B-M4)
     const longTasks = { disconnect: vi.fn() };
     const pool = { terminate: vi.fn() };
     const renderer = { dispose: vi.fn() };
-    releaseOnFailure({ longTasks, pool, renderer });
+    releaseOnFailure({ longTasks, pool, renderer }, (e) => { throw e; });
     expect(longTasks.disconnect).toHaveBeenCalledTimes(1);
     expect(pool.terminate).toHaveBeenCalledTimes(1);
     expect(renderer.dispose).toHaveBeenCalledTimes(1);
   });
 
   test('a failure before the pool or the renderer exists releases what there is', () => {
-    expect(() => releaseOnFailure({ longTasks: null, pool: null, renderer: null })).not.toThrow();
+    expect(() => releaseOnFailure({ longTasks: null, pool: null, renderer: null }, (e) => { throw e; })).not.toThrow();
+  });
+
+  test('each release is guarded: a pool whose terminate throws still has the renderer disposed, and the error is reported (final review UI-6)', () => {
+    const boom = new Error('terminate failed');
+    const renderer = { dispose: vi.fn() };
+    const onError = vi.fn<(e: unknown) => void>();
+    releaseOnFailure({ longTasks: { disconnect: () => { throw new Error('observer'); } }, pool: { terminate: () => { throw boom; } }, renderer }, onError);
+    expect(renderer.dispose).toHaveBeenCalledTimes(1);
+    expect(onError).toHaveBeenCalledTimes(2);
+    expect(onError.mock.calls[1]![0]).toBe(boom);
+  });
+});
+
+describe('reloadRd (the reloads after the reveal: the failure panel\'s and the context loss\'s, final review UI-3)', () => {
+  test('without a query rd the setting applies (null); a query rd is replaced by the RD in force', () => {
+    expect(reloadRd(null, 10)).toBeNull();
+    // The loading screen's "lower RD" link opened /?rd=6 after a StoreFull at 8: the Reload keeps 6, not the failed 8.
+    expect(reloadRd(6, 6)).toBe(6);
+    // Changed live to 10 since the load: the reload keeps 10.
+    expect(reloadRd(6, 10)).toBe(10);
+  });
+});
+
+describe('failBeforeReveal (a failure before the reveal, SP4a spec §8.3; final review UI-6)', () => {
+  test('the loading screen\'s panel shows first, then the releases, then the page settles; a release that throws hides nothing', () => {
+    const order: string[] = [];
+    const onError = vi.fn<(e: unknown) => void>();
+    const lost = new Error('the renderer\'s context is gone');
+    failBeforeReveal({
+      show: () => { order.push('panel'); },
+      release: {
+        longTasks: { disconnect: () => { order.push('longTasks'); } },
+        pool: { terminate: () => { order.push('pool.terminate'); } },
+        renderer: { dispose: () => { order.push('renderer.dispose'); throw lost; } },
+      },
+      settle: () => { order.push('settle'); },
+      onError,
+    });
+    expect(order).toEqual(['panel', 'longTasks', 'pool.terminate', 'renderer.dispose', 'settle']);
+    expect(onError).toHaveBeenCalledTimes(1);
+    expect(onError.mock.calls[0]![0]).toBe(lost);
+  });
+
+  test('a panel that throws still releases the load and settles', () => {
+    const order: string[] = [];
+    const onError = vi.fn<(e: unknown) => void>();
+    failBeforeReveal({
+      show: () => { throw new Error('no host'); },
+      release: { longTasks: null, pool: { terminate: () => { order.push('pool'); } }, renderer: { dispose: () => { order.push('renderer'); } } },
+      settle: () => { order.push('settle'); },
+      onError,
+    });
+    expect(order).toEqual(['pool', 'renderer', 'settle']);
+    expect(onError).toHaveBeenCalledTimes(1);
   });
 });
 

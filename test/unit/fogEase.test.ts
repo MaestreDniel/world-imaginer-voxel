@@ -1,6 +1,6 @@
 import { describe, expect, test } from 'vitest';
 import { colKey } from '../../src/core/coords';
-import { FILL_SCAN_FRAMES, FOG_EASE_BLOCKS_PER_S, createFogEase, filledRadius } from '../../src/ui/world/fogEase';
+import { FILL_SCAN_FRAMES, FOG_EASE_BLOCKS_PER_S, createFogEase, createFogStep, filledRadius } from '../../src/ui/world/fogEase';
 
 /** One 60 Hz frame, as the brief's 120 steps of 16.667 ms (0.5333 blocks each). */
 const FRAME_MS = 16.667;
@@ -125,5 +125,82 @@ describe('createFogEase (SP4b spec §5, D18; Review Focus 5)', () => {
     expect(end(fog.step(FRAME_MS, 12))).toBe(112);
     fog.setTarget(8);
     expect(fog.step(FRAME_MS, 12)).toBe(8);
+  });
+});
+
+describe('createFogStep (the page\'s live-RD glue, SP4b spec §5; final review UI-4, UI-5)', () => {
+  /** A fog step at the load RD over counted reveal lookups; `hidden` columns are unrevealed, `skipped` marked failed. */
+  function rig(loadRd: number, o: { hidden?: ReadonlyArray<readonly [number, number]>; skipped?: ReadonlyArray<readonly [number, number]> } = {}) {
+    const hidden = new Set((o.hidden ?? []).map(([x, z]) => colKey(x, z)));
+    const skipped = new Set((o.skipped ?? []).map(([x, z]) => colKey(x, z)));
+    const r = { lookups: 0, scans: 0 };
+    let inScan = false;
+    const fog = createFogEase(loadRd);
+    const step = createFogStep(fog, { x: 8, z: 8 }, {
+      isRevealed: (cx, cz) => {
+        r.lookups++;
+        if (!inScan) { inScan = true; r.scans++; }
+        return !hidden.has(colKey(cx, cz));
+      },
+      isSkipped: (cx, cz) => skipped.has(colKey(cx, cz)),
+    }, loadRd);
+    /** One rendered frame; a scan is counted once per frame that looks anything up. */
+    const frame = (): number => {
+      inScan = false;
+      return step.step(FRAME_MS);
+    };
+    return { r, fog, step, frame };
+  }
+
+  test('at the load RD (filled starts there) nothing is scanned and the fog stays put', () => {
+    const { r, frame } = rig(8);
+    for (let i = 0; i < 100; i++) expect(frame()).toBe(8);
+    expect(r.lookups).toBe(0);
+  });
+
+  test('a raise scans on the next rendered frame, then every 30 frames while the fog eases, and never once it has arrived', () => {
+    const { r, fog, step, frame } = rig(8);
+    fog.setTarget(12);
+    step.rescan();
+    frame();
+    expect(r.scans).toBe(1);
+    for (let i = 1; i < FILL_SCAN_FRAMES; i++) frame();
+    expect(r.scans).toBe(1);
+    frame();
+    expect(r.scans).toBe(2);
+    // 8 → 12 at 32 blocks/s: 2 s, 120 frames; then no scan at all.
+    let at = 0;
+    for (let i = 0; i < 200; i++) if (frame() === 12 && at === 0) at = r.scans;
+    expect(at).toBeGreaterThan(0);
+    const scans = r.scans;
+    for (let i = 0; i < 300; i++) expect(frame()).toBe(12);
+    expect(r.scans).toBe(scans);
+  });
+
+  test('rescan on a second raise mid-countdown scans on the next frame, not 30 frames later', () => {
+    const { r, fog, step, frame } = rig(8);
+    fog.setTarget(10);
+    step.rescan();
+    frame();
+    for (let i = 0; i < 4; i++) frame();
+    expect(r.scans).toBe(1);
+    fog.setTarget(12);
+    step.rescan();
+    frame();
+    expect(r.scans).toBe(2);
+  });
+
+  test('a column skipped after two failures 3 columns away counts as filled: a raise 8 → 12 reaches 12; unrevealed and not skipped, it holds the fog at 8', () => {
+    const skipped = rig(8, { hidden: [[3, 0]], skipped: [[3, 0]] });
+    skipped.fog.setTarget(12);
+    skipped.step.rescan();
+    let fogRd = 8;
+    for (let i = 0; i < 300; i++) fogRd = skipped.frame();
+    expect(fogRd).toBe(12);
+    const held = rig(8, { hidden: [[3, 0]] });
+    held.fog.setTarget(12);
+    held.step.rescan();
+    for (let i = 0; i < 300; i++) fogRd = held.frame();
+    expect(fogRd).toBe(8);
   });
 });

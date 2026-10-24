@@ -969,6 +969,18 @@ describe('createCoordinator: errors after the reveal (SP4b spec §3.6, D12)', ()
     }
   });
 
+  test('isSkipped names the column its slot tracks while marked failed: true for (1, 1), false for its neighbours and for (65, 1) on the same slot, false again once its voxels unload (final review UI-4)', async () => {
+    const { w, c } = make({ rd: 4, failOf: (j) => (j.stage === 'D' && j.cx === 1 && j.cz === 1 ? new Error('INTERNAL: boom') : null) });
+    expect(c.isSkipped(1, 1)).toBe(false);
+    await fill(w, c, cam(0, 0));
+    expect(read(c).failed).toBe(1);
+    expect(c.isSkipped(1, 1)).toBe(true);
+    expect([c.isSkipped(0, 0), c.isSkipped(1, 0), c.isSkipped(2, 2), c.isSkipped(65, 1), c.isSkipped(1, -63)]).toEqual([false, false, false, false, false]);
+    for (let i = 0; i < 20 && !has(w.fake.frees, 1, 1); i++) await fill(w, c, cam(20, 0));
+    expect(has(w.fake.frees, 1, 1)).toBe(true);
+    expect(c.isSkipped(1, 1)).toBe(false);
+  });
+
   test('a failed column flown beyond keepVoxels and back is regenerated from scratch', async () => {
     let failing = true;
     const { w, c } = make({ rd: 4, failOf: (j) => (failing && j.stage === 'D' && j.cx === 1 && j.cz === 1 ? new Error('INTERNAL: boom') : null) });

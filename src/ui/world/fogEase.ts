@@ -74,3 +74,43 @@ export function createFogEase(rd: number): FogEase {
     },
   };
 }
+
+/** What the fog's scan reads of a column: revealed (the section renderer), or skipped (the coordinator, D12). */
+export interface FogColumns {
+  isRevealed(cx: number, cz: number): boolean;
+  /** Marked failed after two failures until its voxels unload (SP4b spec §3.6): it will not be revealed while it stays. */
+  isSkipped(cx: number, cz: number): boolean;
+}
+
+/**
+ * The fog's RD on each rendered frame (SP4b spec §5), the page's glue: eased outward after a raise, following the
+ * filled radius around the eye's column, scanned every `FILL_SCAN_FRAMES` rendered frames while the fog is below its
+ * target and never once it has arrived; `rescan` asks for a scan on the next frame (a raise). The filled radius starts
+ * at the load RD, whose disc the reveal filled. A skipped column counts as filled: it is never revealed until its
+ * voxels unload (beyond RD + 5), so it would hold the fog after a raise while the camera stays near it, although
+ * `camera.far` and streaming have moved; D12 accepts the small hole it leaves (final review UI-4).
+ */
+export function createFogStep(
+  fog: FogEase, eye: { readonly x: number; readonly z: number }, columns: FogColumns, rd: number,
+): { step(dtMs: number): number; rescan(): void } {
+  const filledAt = (cx: number, cz: number): boolean => columns.isRevealed(cx, cz) || columns.isSkipped(cx, cz);
+  let fogRd = rd;
+  let filled = rd;
+  let scanIn = 0;
+  return {
+    step(dtMs) {
+      if (fogRd < fog.target) {
+        if (scanIn <= 0) {
+          filled = filledRadius(Math.floor(eye.x) >> 4, Math.floor(eye.z) >> 4, fog.target, filledAt);
+          scanIn = FILL_SCAN_FRAMES;
+        }
+        scanIn--;
+      }
+      fogRd = fog.step(dtMs, filled);
+      return fogRd;
+    },
+    rescan() {
+      scanIn = 0;
+    },
+  };
+}

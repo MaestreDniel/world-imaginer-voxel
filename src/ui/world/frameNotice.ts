@@ -23,9 +23,10 @@ export const NOTICE_P95_MS = 25;
 /**
  * Collects the first 300 frame times pushed; at the 300th, snaps each to the display interval (the median of those
  * frames, spec §9.5's snapping) and calls `onSuggest(lowerRd(rd))` when their nearest-rank p95 is above 25 ms and
- * rd > RD_MIN. Frames after the 300th are ignored, so it suggests at most once.
+ * rd > RD_MIN. Frames after the 300th are ignored, so it suggests at most once. `rd` may be a getter of the RD in
+ * force, read at the judgement: the page's live RD may change within the 300 frames (final review UI-2).
  */
-export function createFrameNotice(onSuggest: (rd: number) => void, rd: number): { push(frameMs: number): void } {
+export function createFrameNotice(onSuggest: (rd: number) => void, rd: number | (() => number)): { push(frameMs: number): void } {
   const frames = new Float64Array(NOTICE_FRAMES);
   let n = 0;
   return {
@@ -41,8 +42,8 @@ export function createFrameNotice(onSuggest: (rd: number) => void, rd: number): 
  * The notice's one judgement, at the 300th frame. Kept out of `push`: a closure there capturing a local would make
  * every call, the early returns included, allocate that local's context (SP4b spec §3.10).
  */
-function judgeFrames(frames: Float64Array, rd: number, onSuggest: (rd: number) => void): void {
-  const lower = lowerRd(rd);
+function judgeFrames(frames: Float64Array, rd: number | (() => number), onSuggest: (rd: number) => void): void {
+  const lower = lowerRd(typeof rd === 'number' ? rd : rd());
   if (lower === null) return;
   const interval = medianInterval(frames);
   const p95 = percentile(frames.map((f) => snapFrameTime(f, interval)), 95);
