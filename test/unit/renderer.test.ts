@@ -31,6 +31,8 @@ function fakeGl(withExtension: boolean) {
     results: new Map<FakeQuery, number>(),
     created: [] as FakeQuery[],
     deleted: [] as FakeQuery[],
+    /** Called on each availability read: a disjoint event may land between two of the timer's reads. */
+    onAvailableRead: null as ((q: FakeQuery) => void) | null,
   };
   const gl = {
     QUERY_RESULT,
@@ -45,7 +47,11 @@ function fakeGl(withExtension: boolean) {
     beginQuery: () => {},
     endQuery: () => {},
     getParameter: (p: number) => (p === GPU_DISJOINT_EXT ? s.disjoint : null),
-    getQueryParameter: (q: FakeQuery, p: number) => (p === QUERY_RESULT_AVAILABLE ? s.available.has(q) : s.results.get(q)),
+    getQueryParameter: (q: FakeQuery, p: number) => {
+      if (p !== QUERY_RESULT_AVAILABLE) return s.results.get(q);
+      s.onAvailableRead?.(q);
+      return s.available.has(q);
+    },
     deleteQuery: (q: FakeQuery) => {
       s.deleted.push(q);
     },
@@ -111,6 +117,34 @@ describe('createGpuTimer (SP4b spec §4.5)', () => {
     expect(t.poll()).toBe(4);
     t.dispose();
     expect(s.deleted).toHaveLength(12);
+  });
+
+  test('availability is read before the disjoint flag: a disjoint landing after the availability reads hands nothing over (final review REN-2)', () => {
+    const { gl, s } = fakeGl(true);
+    const t = createGpuTimer(gl)!;
+    for (let i = 0; i < 3; i++) {
+      t.begin();
+      t.end();
+    }
+    s.results.set(s.created[0]!, 2_000_000);
+    s.results.set(s.created[1]!, 3_000_000);
+    s.available.add(s.created[0]!).add(s.created[1]!);
+    // The event lands while the timer reads the queries' availability, before it reads the flag.
+    s.onAvailableRead = () => { s.disjoint = true; };
+    const seen: Array<[number, number]> = [];
+    t.drain((draw, ms) => { seen.push([draw, ms]); });
+    expect(seen).toEqual([]);
+    expect(s.deleted).toHaveLength(3);
+    // Without an event the next query reports its time.
+    s.onAvailableRead = null;
+    s.disjoint = false;
+    t.begin();
+    t.end();
+    s.available.add(s.created[3]!);
+    s.results.set(s.created[3]!, 1_000_000);
+    expect(t.poll()).toBe(1);
+    expect(s.deleted).toHaveLength(4);
+    t.dispose();
   });
 
   test('drain hands every finished query, oldest first, with the draw it timed; draws counts begin\'s calls, a skipped one included (Task 26b)', () => {

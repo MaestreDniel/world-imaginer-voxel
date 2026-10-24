@@ -169,6 +169,10 @@ export function createGpuTimer(gl: WebGL2RenderingContext): (GpuTimer & { dispos
   const keepLatest = (_draw: number, ms: number): void => { latest[0] = ms; };
   /** Hands the finished queries to `sink` in order; false on a disjoint (every pending query dropped). */
   const take = (sink: (draw: number, ms: number) => void): boolean => {
+    // The finished queries first, then the disjoint flag (the extension's order): an event landing between the two
+    // reads is then seen before any of those results is used (final review REN-2).
+    let ready = 0;
+    while (ready < pending.length && (gl.getQueryParameter(pending[ready]!, gl.QUERY_RESULT_AVAILABLE) as boolean)) ready++;
     // A disjoint event (a clock change, a context switch) invalidates every query in flight, finished or not: an
     // unfinished one kept would report a meaningless time on a later poll.
     if (gl.getParameter(ext.GPU_DISJOINT_EXT) as boolean) {
@@ -177,9 +181,8 @@ export function createGpuTimer(gl: WebGL2RenderingContext): (GpuTimer & { dispos
       pendingDraws.length = 0;
       return false;
     }
-    while (pending.length > 0) {
+    for (; ready > 0; ready--) {
       const q = pending[0]!;
-      if (!(gl.getQueryParameter(q, gl.QUERY_RESULT_AVAILABLE) as boolean)) break;
       const ms = (gl.getQueryParameter(q, gl.QUERY_RESULT) as number) / 1e6;
       gl.deleteQuery(q);
       pending.shift();

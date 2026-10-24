@@ -494,6 +494,42 @@ describe('RegionMesh\'s arena (SP4b spec §4.3, D15)', () => {
     r.dispose();
   });
 
+  test('compaction moving a partially uploaded column rebases its written rows and places the rest at its new range (final review REN-3)', () => {
+    const r = make();
+    // A (8 rows) at 0, C (6) at 8; W (8) takes rows 14-22 and uploads 3 of them.
+    add(r, fakePayload(0, 0, big(8)));
+    add(r, fakePayload(1, 0, big(6)));
+    const w = fakePayload(5, 0, big(8));
+    r.stage(w, 1);
+    expect(r.pump(fakeGate(3), 0, 0, 0)).toBe(3);
+    expect(r.isRevealed(5, 0)).toBe(false);
+    // A and C go (their ranges freed under the budget): 24 of 32 rows free, in ranges of 14 and 10.
+    r.remove(0, 0);
+    r.remove(1, 0);
+    expect(r.pump(fakeGate(14), 0, 0, 0)).toBe(14);
+    const m = arenaOf(r, MESH_PASS_OPAQUE)!;
+    const geometry = m.geometry;
+    // E's 16 rows fit in neither range: E, the nearer column, compacts the arena, moving W's span from row 14 to 0.
+    const e = fakePayload(4, 0, big(16));
+    r.stage(e, 1);
+    r.pump(fakeGate(32), 0, 0, 0);
+    expect(counts(r).lastStructural).toBe('compact');
+    expect(m.geometry).toBe(geometry);
+    pumpAll(r);
+    expect(r.isRevealed(5, 0)).toBe(true);
+    expect(r.isRevealed(4, 0)).toBe(true);
+    // W at rows 0-8: its 3 rows written before the move and its 5 after, positions placed and indices rebased to 0;
+    // E after it.
+    const [position, , index] = attributesOf(m);
+    const pos = position.array as Uint16Array;
+    expect(Array.from(pos.subarray(0, 4 * 8 * ROW_V))).toEqual(placed(w));
+    expect(Array.from(index.array.subarray(0, 8 * ROW_I))).toEqual(rebased(w, 0));
+    expect(Array.from(pos.subarray(4 * 8 * ROW_V, 4 * 24 * ROW_V))).toEqual(placed(e));
+    expect(Array.from(index.array.subarray(8 * ROW_I, 24 * ROW_I))).toEqual(rebased(e, 8 * ROW_V));
+    expect(visibleIndices(r.root)).toBe(indexSum([w, e]));
+    r.dispose();
+  });
+
   test('growth below 40 % builds a new geometry of 196,608 vertices and 294,912 indices, disposes the old (its dispose event fired), and gpuBytes() equals the new arena\'s 3,538,944 bytes', () => {
     const r = make();
     const a = add(r, fakePayload(0, 0, big(32)));

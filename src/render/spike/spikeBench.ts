@@ -292,7 +292,7 @@ function runDecode(renderer: WebGLRenderer, albedo: DataArrayTexture): DecodeRes
 
 // ---------------------------------------------------------------- the scene
 
-interface Built {
+export interface Built {
   readonly scene: Scene;
   readonly sections: SectionRenderer;
   readonly materials: MaterialSystem;
@@ -307,7 +307,7 @@ const UNBOUNDED: UploadGate = { exhausted: () => false, spend() {}, structural: 
  * The stress scene staged, uploaded (timed: `pump` under an unbounded gate until nothing is left) and revealed in a
  * section renderer of `kind`, with the sky (SP4b spec §4.1: the spike on the streaming interface).
  */
-function buildScene(kind: SectionRendererKind, albedo: DataArrayTexture, payloads: ReturnType<typeof stressPayloads>): Built {
+export function buildScene(kind: SectionRendererKind, albedo: DataArrayTexture, payloads: ReturnType<typeof stressPayloads>): Built {
   const materials = createMaterialSystem({ variant: kind, ao: MEDIUM.ao, smoothLight: MEDIUM.smoothLight }, albedo);
   let sections: SectionRenderer;
   try {
@@ -353,10 +353,29 @@ function aim(camera: PerspectiveCamera, yawDeg: number): void {
   camera.rotation.set(PITCH_DEG * DEG, -yawDeg * DEG, 0, 'YXZ');
 }
 
-function renderFrame(gl: Gl, b: Built, camera: PerspectiveCamera): void {
+/** What a frame needs of the context: three's `render`. */
+interface Renders {
+  readonly renderer: Pick<WebGLRenderer, 'render'>;
+}
+
+function renderFrame(gl: Renders, b: Built, camera: PerspectiveCamera): void {
   b.materials.setFrameUniforms(FRAME);
   b.sections.sortTranslucent(camera.position.x, camera.position.y, camera.position.z);
   gl.renderer.render(b.scene, camera);
+}
+
+/**
+ * The first render after `compileAsync`, timed (three uploads every range the build wrote), then one pump with nothing
+ * staged: its `settle` restores frustum culling on every region object, as the page's reveal frame does (SP4b spec
+ * §3.9). The build's pumps all ran before three uploaded anything, so without this pump the static, churn and
+ * no-multi-draw passes would draw every region unculled (final review REN-1). Returns the render's ms.
+ */
+export function uploadFrame(gl: Renders, b: Built, camera: PerspectiveCamera): number {
+  const t0 = performance.now();
+  renderFrame(gl, b, camera);
+  const ms = performance.now() - t0;
+  b.sections.pump(UNBOUNDED, 0, 0, 0);
+  return ms;
 }
 
 // ---------------------------------------------------------------- 2 and 5. static
@@ -562,9 +581,7 @@ export async function runRenderSpike(host: HTMLElement, o: { readonly kind: Sect
       built = buildScene(o.kind, albedo, payloads);
       const camera = spikeCamera();
       await gl.renderer.compileAsync(built.scene, camera);
-      const t0 = performance.now();
-      renderFrame(gl, built, camera);
-      const firstRenderMs = performance.now() - t0;
+      const firstRenderMs = uploadFrame(gl, built, camera);
       const msPer1kQuads = built.buildMs / (quads / 1000);
       upload = {
         quads, sections: rows, buildMs: built.buildMs, msPer1kQuads, firstRenderMs,
@@ -600,7 +617,9 @@ export async function runRenderSpike(host: HTMLElement, o: { readonly kind: Sect
   try {
     masked = createGl(host, o.maskMultiDraw);
     built = buildScene(o.kind, albedo, payloads);
-    await masked.renderer.compileAsync(built.scene, spikeCamera());
+    const camera = spikeCamera();
+    await masked.renderer.compileAsync(built.scene, camera);
+    uploadFrame(masked, built, camera);
     noMultiDraw = await runStatic(masked, built, o.kind, interval);
   } catch (e) {
     noMultiDraw = failedStatic(o.kind, masked?.masked ?? false, interval, text(e));
