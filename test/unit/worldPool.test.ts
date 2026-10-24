@@ -329,6 +329,28 @@ describe('SP4b: the pool\'s own fixes (SP4b spec §2.6, §2.8, §3.7)', () => {
     expect(pool.probe().busy).toBe(0);
   });
 
+  test('terminate calls onWorkerDead for every worker it silences (thread w + 1), not again for one that already failed, before its busy jobs settle (rulings R15, ENG-2)', async () => {
+    const dead: number[] = [];
+    const order: string[] = [];
+    const workers: ScriptedWorker[] = [];
+    const pool = createWorkerPool(3, () => { const w = scripted(done, { holdJobs: true }); workers.push(w); return w; }, {
+      onWorkerDead: (t) => { dead.push(t); order.push(`dead ${t}`); },
+    });
+    await pool.configure('42', {});
+    const jobs = [0, 1, 2].map((cx) => settle(pool.terrain(cx, 0)).then((r) => { order.push(r instanceof Error ? `rejected ${cx}` : `done ${cx}`); return r; }));
+    workers[1]!.fire({ message: 'boom' });
+    expect(dead).toEqual([2]);
+    await jobs[1];
+    order.length = 0;
+    pool.terminate();
+    expect(dead).toEqual([2, 1, 3]);
+    for (const p of [jobs[0]!, jobs[2]!]) expect(((await p) as Error).message).toBe('terminated');
+    // The dead marks come first: a settle's free on the main thread meets a lock a terminated worker held as dead.
+    expect(order).toEqual(['dead 1', 'dead 3', 'rejected 0', 'rejected 2']);
+    pool.terminate();
+    expect(dead).toEqual([2, 1, 3]);
+  });
+
   test('a retried attachStore after one worker answered BAD_MESSAGE resolves once each live worker answered attached', async () => {
     const workers: ScriptedWorker[] = [];
     let n = 0;

@@ -26,8 +26,8 @@
  * SP4b §2.6, §2.8, §3.7: worker w attaches as reclaim thread w + 1, and a retried `attachStore` succeeds (the attach is
  * idempotent per worker, and each worker's replies count for the attach they answer); `onWorkerDead(thread)` tells the page
  * which thread failed (it marks it dead in the store); STORE_CORRUPT rejects with `StoreCorruptError`; `cancelWorld` drops
- * queued world jobs; `liveWorkers()`; `terminate()` settles its barriers and busy jobs with `WorkerFailed('terminated')`;
- * `terrain(cx, cz, true)` is `T(protoOnly)`.
+ * queued world jobs; `liveWorkers()`; `terminate()` tells `onWorkerDead` each live worker's thread, then settles its barriers
+ * and busy jobs with `WorkerFailed('terminated')`; `terrain(cx, cz, true)` is `T(protoOnly)`.
  */
 import type { MapLevel } from '../core/constants';
 import type { ColumnPoint } from '../gen/column/columnPoint';
@@ -179,7 +179,8 @@ export interface PoolOptions {
   readonly onFailure?: (e: WorkerFailed) => void;
   /**
    * Called once per failed worker with the reclaim thread it was attached as (worker w is thread w + 1), before its work
-   * is rejected (SP4b spec §2.6): the world page passes `(t) => store.markDead(t)`.
+   * is rejected (SP4b spec §2.6), and by `terminate()` for every worker it silences (rulings R15): the world page passes
+   * `(t) => store.markDead(t)`.
    */
   readonly onWorkerDead?: (thread: number) => void;
 }
@@ -697,9 +698,11 @@ export function createWorkerPool(size: number, spawn: () => WorkerLike, opts: Po
     },
     terminate() {
       // SP4b spec §2.8: the barriers and the busy jobs settle (WorkerFailed('terminated')), then the queue as before.
+      // Each silenced worker is marked dead first, as `fail` does (§2.6; rulings R15, ENG-2): a lock a terminated worker
+      // held then throws StoreCorrupt in a settle's free instead of spinning the main thread for ever.
       const e = new WorkerFailed('terminated');
       workers.forEach((_, w) => {
-        if (alive[w]) { alive[w] = false; silence(w); }
+        if (alive[w]) { alive[w] = false; silence(w); opts.onWorkerDead?.(w + 1); }
       });
       live = 0;
       if (pendingAttach !== null) { const pa = pendingAttach; pendingAttach = null; pa.reject(e); }
