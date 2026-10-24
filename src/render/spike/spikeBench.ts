@@ -130,8 +130,8 @@ const CONTEXT_ATTRIBUTES: WebGLContextAttributes = {
   alpha: false, depth: true, stencil: false, antialias: false, premultipliedAlpha: true, preserveDrawingBuffer: false,
   powerPreference: 'default', failIfMajorPerformanceCaveat: false,
 };
-/** The frame the materials see: the opening 08:00, full eye light, RD12's fog (spec §6.6). */
-const FRAME: FrameState = { t: OPENING_T, brightness: 0.5, eyeSky: 15, rd: RD, fogBand: MEDIUM.fogBand, edgeCentre: [0, 0] };
+/** The frame the materials see: the opening 08:00, full eye light, RD12's fog (SP4b spec §6.3). */
+const FRAME: FrameState = { t: OPENING_T, brightness: 0.5, eyeSky: 15, rd: RD, fogBand: MEDIUM.fogBand };
 
 const text = (e: unknown): string => (e instanceof Error ? `${e.name}: ${e.message}` : String(e));
 const stats = (values: ArrayLike<number>): Percentiles => {

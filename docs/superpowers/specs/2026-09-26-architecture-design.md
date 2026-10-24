@@ -1067,7 +1067,7 @@ On Ultra, passes 2-4 (after the LOD depth clear) render into a `WebGLRenderTarge
 
 **No Lambert and no sun term on terrain.** Caves go dark and block light does not dim at night.
 
-**Fog** is spherical, `f = smoothstep(fogStart, fogEnd, length(viewPos))` (SP4a: end (RD − 0.5)·16, start 64 blocks before; an edge fade around the load centre until SP4b streams). Its colour comes from the sky gradient towards the fragment's horizon (`skyGradient(horizonDir)` in `common.glsl`: the sky without the sun's disc and glow, which would paint a stripe on the fogged terrain under a low sun; amended by SP4a) and is darkened by the eye's sky light. When the eye is in water, fog switches to exponential (about 48-60 blocks) with a screen tint.
+**Fog** is spherical, `f = smoothstep(fogStart, fogEnd, length(viewPos))` (SP4a: end (RD − 0.5)·16, start 64 blocks before; an edge fade around the load centre until SP4b streams. SP4b: end (RD − 1)·16, start 64 blocks before, no edge fade; after a live RD raise the end follows the filled radius outward). Its colour comes from the sky gradient towards the fragment's horizon (`skyGradient(horizonDir)` in `common.glsl`: the sky without the sun's disc and glow, which would paint a stripe on the fogged terrain under a low sun; amended by SP4a) and is darkened by the eye's sky light. When the eye is in water, fog switches to exponential (about 48-60 blocks) with a screen tint.
 
 **Colour management:** textures use `SRGBColorSpace`, output is sRGB, and tints are converted to linear on the CPU.
 

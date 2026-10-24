@@ -600,7 +600,7 @@ export function mountWorldPage(root: HTMLElement, q: WorldQuery, hash: string, o
     const fly: FlyState = { x: at.x, y: clamp(view.y, Y_MIN, Y_MAX), z: at.z, yaw: view.yaw, pitch: view.pitch, vx: 0, vy: 0, vz: 0, speed: SPEED_DEFAULT };
     // Wraps the yaw into [0, 360) and clamps the pitch; a query's valid degrees pass unchanged (ruling P42).
     look(fly, 0, 0, 0);
-    // The disc's centre: the load centre of the edge fade and of the fly bounds (spec §6.6, §7.5).
+    // The disc's centre: the centre of the fly bounds (SP4a spec §7.5).
     const discX = cx0 * 16 + 8;
     const discZ = cz0 * 16 + 8;
     const bounds: FlyBounds = { centreX: discX, centreZ: discZ, radius: (loadRd - 3) * 16, yMin: -64, yMax: 400 };
@@ -614,14 +614,14 @@ export function mountWorldPage(root: HTMLElement, q: WorldQuery, hash: string, o
       world.camera.position.set(fly.x - world.origin.x, fly.y - world.origin.y, fly.z - world.origin.z);
       applyCameraRotation(world.camera, fly);
     };
-    const frameState = (): FrameState => ({
-      t,
-      brightness: settings.brightness,
-      eyeSky: skyLightAt(store, disc, fly.x, fly.y, fly.z),
-      rd: loadRd,
-      fogBand: MEDIUM.fogBand,
-      edgeCentre: [discX - world.origin.x, discZ - world.origin.z],
-    });
+    // One FrameState for every frame, rewritten in place (SP4b spec §3.10).
+    const frame = { t, brightness: settings.brightness, eyeSky: 15, rd: loadRd, fogBand: MEDIUM.fogBand };
+    const frameState = (): FrameState => {
+      frame.t = t;
+      frame.brightness = settings.brightness;
+      frame.eyeSky = skyLightAt(store, disc, fly.x, fly.y, fly.z);
+      return frame;
+    };
 
     for (let i = 0; i < WARM_UP_FRAMES; i++) {
       await nextFrame();

@@ -2,8 +2,9 @@ import { ClampToEdgeWrapping, DataTexture, LinearFilter, NoColorSpace, RGBAForma
 
 /**
  * The lightmap (SP4a spec §6.7, master §4.8): a 16 × 16 RGBA8 texture, texel (x = block light, y = sky light), rebuilt
- * on the CPU when the time or the brightness changes. The materials look it up per fragment with the smooth light
- * interpolated per vertex, so it is filtered linearly (ruling P10) and stored linear (`NoColorSpace`, §6.4).
+ * on the CPU when the quantised time or the brightness changes (SP4b spec §3.10). The materials look it up per fragment
+ * with the smooth light interpolated per vertex, so it is filtered linearly (ruling P10) and stored linear
+ * (`NoColorSpace`, §6.4).
  */
 
 const SIZE = 16;
@@ -18,11 +19,18 @@ const NIGHT_SKY = 0.15;
 
 const mix = (a: number, b: number, f: number): number => a + (b - a) * f;
 
+/** The day factor and the dusk bump are quantised to 1/512 before a rebuild (SP4b spec §3.10). */
+const STEPS = 512;
+
 /** The light curve of level l ∈ [0, 15]: (l/15) / (3(1 − l/15) + 1); 0 at 0, 1 at 15. */
 export function lightCurve(l: number): number {
   const x = l / 15;
   return x / (3 * (1 - x) + 1);
 }
+
+/** The sky tint of the current build and the light curve of each level: preallocated, so a rebuild allocates nothing. */
+const TINT = new Float64Array(3);
+const CURVE = Float64Array.from({ length: SIZE }, (_, l) => lightCurve(l));
 
 /**
  * Fills `out` (1024 bytes) with the lightmap at day factor `day`, dusk bump `dusk` and brightness β. Each texel is the
@@ -32,8 +40,9 @@ export function lightCurve(l: number): number {
  */
 export function lightmapRgba(day: number, dusk: number, brightness: number, out: Uint8Array): void {
   const skyScale = mix(NIGHT_SKY, 1, day);
-  const tint = [0, 1, 2].map((c) => mix(mix(NIGHT_TINT[c]!, 1, day), DUSK_TINT[c]!, dusk) * skyScale);
-  const curve = Array.from({ length: SIZE }, (_, l) => lightCurve(l));
+  const tint = TINT;
+  const curve = CURVE;
+  for (let c = 0; c < 3; c++) tint[c] = mix(mix(NIGHT_TINT[c]!, 1, day), DUSK_TINT[c]!, dusk) * skyScale;
   for (let sky = 0; sky < SIZE; sky++) {
     for (let block = 0; block < SIZE; block++) {
       const o = (sky * SIZE + block) * 4;
@@ -48,11 +57,16 @@ export function lightmapRgba(day: number, dusk: number, brightness: number, out:
 }
 
 /**
- * The lightmap texture and its updater. It starts at full day with brightness 0 until the first `update`; `update`
- * rewrites the data in place and flags the texture for upload.
+ * The lightmap texture and its updater. It starts at full day with brightness 0 until the first `update`. `update`
+ * quantises the day factor and the dusk bump to steps of 1/512 and rewrites the data in place, flagging the texture for
+ * upload, only when a step or the brightness changed (SP4b spec §3.10): while time runs it rebuilds a few times a
+ * second at most, not every frame. The data is built from the quantised values, so it depends on them alone.
  */
 export function createLightmap(): { texture: DataTexture; update(day: number, dusk: number, brightness: number): void } {
   const data = new Uint8Array(BYTES);
+  let lastDay = STEPS;
+  let lastDusk = 0;
+  let lastBrightness = 0;
   lightmapRgba(1, 0, 0, data);
   const texture = new DataTexture(data, SIZE, SIZE, RGBAFormat, UnsignedByteType);
   texture.colorSpace = NoColorSpace;
@@ -65,7 +79,13 @@ export function createLightmap(): { texture: DataTexture; update(day: number, du
   return {
     texture,
     update(day, dusk, brightness) {
-      lightmapRgba(day, dusk, brightness, data);
+      const qDay = Math.round(day * STEPS);
+      const qDusk = Math.round(dusk * STEPS);
+      if (qDay === lastDay && qDusk === lastDusk && brightness === lastBrightness) return;
+      lastDay = qDay;
+      lastDusk = qDusk;
+      lastBrightness = brightness;
+      lightmapRgba(qDay / STEPS, qDusk / STEPS, brightness, data);
       texture.needsUpdate = true;
     },
   };

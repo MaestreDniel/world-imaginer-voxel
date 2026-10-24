@@ -34,4 +34,27 @@ describe('frame timing (SP4a spec §1.2, §9.5)', () => {
     expect(medianInterval([6.9, 7.0, 6.95, 30])).toBeCloseTo(6.975, 9);
     expect(Number.isNaN(medianInterval([]))).toBe(true);
   });
+
+  test('medianInterval with a scratch: the same values, sorted into the scratch, no other array', () => {
+    const deltas = [17, 16.5, 16, 16.8, 15.9];
+    const scratch = new Float64Array(5);
+    expect(medianInterval(deltas, scratch)).toBe(medianInterval(deltas));
+    expect(Array.from(scratch)).toEqual([15.9, 16, 16.5, 16.8, 17]);
+    expect(medianInterval([16.5, 16, 17], new Float64Array(3))).toBe(16.5);
+    expect(medianInterval([6.9, 7.0, 6.95, 30], new Float64Array(4))).toBeCloseTo(6.975, 9);
+    expect(Number.isNaN(medianInterval([], new Float64Array(4)))).toBe(true);
+  });
+
+  test('medianInterval over the first n values equals the allocating median of those values (odd and even n)', () => {
+    const deltas = new Float64Array([16.9, 16.1, 33.4, 16.6, 16.7, 15.2, 16.65, 99, 16.4, 16.0]);
+    const scratch = new Float64Array(30);
+    for (const n of [1, 2, 3, 4, 7, 8, 10]) {
+      expect(medianInterval(deltas, scratch, n), `n ${n}`).toBe(medianInterval(Array.from(deltas.subarray(0, n))));
+    }
+    // Only scratch[0, n) is written.
+    const marked = new Float64Array(8).fill(-1);
+    medianInterval(deltas, marked, 5);
+    expect(Array.from(marked.subarray(5))).toEqual([-1, -1, -1]);
+    expect(Array.from(marked.subarray(0, 5))).toEqual(Array.from(deltas.subarray(0, 5)).sort((a, b) => a - b));
+  });
 });

@@ -1,7 +1,7 @@
 /**
  * The GLSL the materials share (SP4a spec §6.4-§6.6, master §4.6): the GLSL3 fragment output, the lightmap lookup, the
- * sky colour, the fog with the world-edge fade, and the vertex placement of both section renderers. Each material's
- * source is these strings concatenated, so a test can read the whole shader from `material.fragmentShader`.
+ * sky colour, the fog, and the vertex placement of both section renderers. Each material's source is these strings
+ * concatenated, so a test can read the whole shader from `material.fragmentShader`.
  */
 import type { MaterialVariant } from '../index';
 
@@ -57,23 +57,18 @@ vec3 skyColor(vec3 dir) {
 `;
 
 /**
- * The fog (spec §6.6, D15): spherical, f = smoothstep(fogStart, fogEnd, |viewPos|), raised to the edge fade
- * smoothstep(edge − 24, edge, horizontal distance from the load centre); its colour is the sky gradient towards the
- * fragment's horizon, without the sun's disc and glow (they would paint a bright stripe on the fogged terrain under a
- * low sun; final review B-M1), darkened by the lightmap's sky term at the eye's sky light (block 0, ruling P15). Needs
- * SKY_GLSL and LIGHTMAP_GLSL before it; `worldPos` and `edgeCentre` are relative to the floating origin, as
- * `cameraPosition` is.
+ * The fog (SP4a spec §6.6; SP4b spec §6.3, D17): spherical, f = smoothstep(fogStart, fogEnd, |viewPos|), with no
+ * world-edge fade since the world streams around the camera (SP4b spec §6.2); its colour is the sky gradient towards
+ * the fragment's horizon, without the sun's disc and glow (they would paint a bright stripe on the fogged terrain under
+ * a low sun; final review B-M1), darkened by the lightmap's sky term at the eye's sky light (block 0, ruling P15). Needs
+ * SKY_GLSL and LIGHTMAP_GLSL before it; `worldPos` is relative to the floating origin, as `cameraPosition` is.
  */
 export const FOG_GLSL = `
 uniform float fogStart;
 uniform float fogEnd;
-uniform float edge;
-uniform float edgeFadeStart;
-uniform vec2 edgeCentre;
 uniform float eyeSky;
 vec3 applyFog(vec3 color, vec3 viewPos, vec3 worldPos) {
   float f = smoothstep(fogStart, fogEnd, length(viewPos));
-  f = max(f, smoothstep(edgeFadeStart, edge, length(worldPos.xz - edgeCentre)));
   vec3 h = vec3(worldPos.x - cameraPosition.x, 0.0, worldPos.z - cameraPosition.z);
   vec3 horizonDir = dot(h, h) > 1e-8 ? normalize(h) : vec3(0.0, 0.0, -1.0);
   vec3 fogColor = skyGradient(horizonDir) * lightmapAt(0.0, eyeSky);

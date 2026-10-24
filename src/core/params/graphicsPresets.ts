@@ -16,7 +16,7 @@ export interface GraphicsPreset {
   readonly water: 'fast';
   /** The pixel ratio is min(devicePixelRatio, pixelRatioCap). */
   readonly pixelRatioCap: number;
-  /** Blocks from the fog's start to its end, (RD − 0.5)·16 (SP4a spec §6.6). */
+  /** Blocks from the fog's start to its end, which is (RD − 1)·16 (SP4b spec §6.3). */
   readonly fogBand: number;
 }
 

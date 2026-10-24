@@ -1,8 +1,9 @@
 import { Color, DoubleSide, GLSL3, NoColorSpace, SRGBColorSpace, type ShaderMaterial } from 'three';
 import { describe, expect, test } from 'vitest';
 import { skyColors, sunDirection } from '../../src/daynight/dayNight';
+import { FOG_GLSL } from '../../src/render/materials/glsl/common.glsl';
 import { packingGlsl } from '../../src/render/materials/glsl/packing.glsl';
-import { createMaterialSystem, EDGE_FADE, fogRange, type MaterialSystem, type MaterialVariant } from '../../src/render/materials/index';
+import { createMaterialSystem, fogRange, type MaterialSystem, type MaterialVariant } from '../../src/render/materials/index';
 import type { FrameState } from '../../src/render/frameState';
 import { createFlatColorArray } from '../../src/render/textureArray';
 
@@ -18,7 +19,7 @@ const all = (m: MaterialSystem): Record<string, ShaderMaterial> => ({
 /** The terrain and water materials: the ones with a batched and a RegionMesh variant. */
 const terrainAndWater = (m: MaterialSystem): ShaderMaterial[] => [m.terrainOpaque, m.terrainCutout, m.water];
 
-const FRAME: FrameState = { t: 1 / 12, brightness: 0.3, eyeSky: 15, rd: 12, fogBand: 64, edgeCentre: [0, 0] };
+const FRAME: FrameState = { t: 1 / 12, brightness: 0.3, eyeSky: 15, rd: 12, fogBand: 64 };
 
 describe('materials v1 (SP4a spec §6.4-§6.6)', () => {
   test('every material is a GLSL3 ShaderMaterial', () => {
@@ -152,22 +153,36 @@ describe('materials v1 (SP4a spec §6.4-§6.6)', () => {
     expect(off.water.defines['SMOOTH_LIGHT']).toBeUndefined();
   });
 
-  test('fogRange: end (rd − 0.5)·16, start 64 blocks before, never below 0 (spec §6.6)', () => {
-    expect(fogRange(12, 64)).toEqual({ start: 120, end: 184 });
-    expect(fogRange(8, 64)).toEqual({ start: 56, end: 120 });
-    expect(fogRange(4, 64)).toEqual({ start: 0, end: 56 });
-    expect(EDGE_FADE).toBe(24);
+  test('fogRange: end (rd − 1)·16, start 64 blocks before, never below 0, written into out (SP4b spec §6.3, D17)', () => {
+    const out = { start: -1, end: -1 };
+    expect(fogRange(12, 64, out)).toBe(out);
+    expect(out).toEqual({ start: 112, end: 176 });
+    expect(fogRange(8, 64, out)).toEqual({ start: 48, end: 112 });
+    expect(fogRange(4, 64, out)).toEqual({ start: 0, end: 48 });
   });
 
-  test('setFrameUniforms at rd 12: the edge is 184, its fade starts at 160, the fog spans 120-184', () => {
+  test('setFrameUniforms at rd 12: the fog spans 112-176; no edge, edgeFadeStart or edgeCentre uniform on any material', () => {
     const m = system('batch');
-    m.setFrameUniforms({ ...FRAME, edgeCentre: [5, -7] });
+    m.setFrameUniforms(FRAME);
     const u = m.terrainOpaque.uniforms;
-    expect(u['edge']!.value).toBe(184);
-    expect(u['edgeFadeStart']!.value).toBe(160);
-    expect(u['fogStart']!.value).toBe(120);
-    expect(u['fogEnd']!.value).toBe(184);
-    expect(u['edgeCentre']!.value.toArray()).toEqual([5, -7]);
+    expect(u['fogStart']!.value).toBe(112);
+    expect(u['fogEnd']!.value).toBe(176);
+    for (const v of VARIANTS) {
+      for (const [name, mat] of Object.entries(all(SYSTEMS[v]))) {
+        for (const gone of ['edge', 'edgeFadeStart', 'edgeCentre']) expect(mat.uniforms[gone], `${v} ${name} ${gone}`).toBeUndefined();
+      }
+    }
+  });
+
+  test('the GLSL has no edge term (SP4b spec §6.2)', () => {
+    const at = FOG_GLSL.indexOf('vec3 applyFog(');
+    expect(at).toBeGreaterThanOrEqual(0);
+    expect(FOG_GLSL).not.toContain('edge');
+    for (const v of VARIANTS) {
+      for (const [name, mat] of Object.entries(all(SYSTEMS[v]))) {
+        expect(mat.vertexShader + mat.fragmentShader, `${v} ${name}`).not.toMatch(/edge/i);
+      }
+    }
   });
 
   test('setFrameUniforms({ …, eyeSky: 7 }) sets the eyeSky uniform to 7 (ruling P15)', () => {
@@ -179,7 +194,7 @@ describe('materials v1 (SP4a spec §6.4-§6.6)', () => {
 
   test('every material shares one uniform object per name, so one update reaches all of them', () => {
     const m = system('batch');
-    for (const name of ['lightmap', 'fogStart', 'fogEnd', 'edge', 'edgeFadeStart', 'edgeCentre', 'eyeSky', 'skyZenith', 'skyHorizon', 'sunDir']) {
+    for (const name of ['lightmap', 'fogStart', 'fogEnd', 'eyeSky', 'skyZenith', 'skyHorizon', 'sunDir']) {
       expect(m.water.uniforms[name], name).toBe(m.terrainOpaque.uniforms[name]);
       expect(m.terrainCutout.uniforms[name], name).toBe(m.terrainOpaque.uniforms[name]);
     }

@@ -95,4 +95,36 @@ describe('createLightmap (SP4a spec §6.4, §6.7)', () => {
     expect(lm.texture.version).toBeGreaterThan(before);
     expect(lm.texture.image.data as Uint8Array).toEqual(at(0.75, 0.3));
   });
+
+  test('two times whose day and dusk factors round to the same 1/512 rebuild nothing; a brightness change rebuilds (SP4b spec §3.10)', () => {
+    const lm = createLightmap();
+    // Noon and 13:00: the sun stands above 10°, so the day factor is 1 and the dusk bump 0 at both.
+    const [a, b] = [0.25, 0.25 + 1 / 24];
+    expect(Math.round(dayFactor(a) * 512)).toBe(Math.round(dayFactor(b) * 512));
+    expect(Math.round(duskFactor(a) * 512)).toBe(Math.round(duskFactor(b) * 512));
+    lm.update(dayFactor(a), duskFactor(a), 0.3);
+    const v = lm.texture.version;
+    lm.update(dayFactor(b), duskFactor(b), 0.3);
+    expect(lm.texture.version).toBe(v);
+    // Factors 1/2048 apart in the same 1/512 step: 0.5 · 512 = 256 and 256.25 round to 256, 0.25 · 512 = 128 and 128.25 to 128.
+    lm.update(0.5, 0.25, 0.3);
+    const w = lm.texture.version;
+    lm.update(0.5 + 1 / 2048, 0.25 + 1 / 2048, 0.3);
+    expect(lm.texture.version).toBe(w);
+    lm.update(0.5 + 1 / 2048, 0.25 + 1 / 2048, 0.4);
+    expect(lm.texture.version).toBeGreaterThan(w);
+    expect(lm.texture.image.data as Uint8Array).toEqual((() => {
+      const out = new Uint8Array(1024);
+      lightmapRgba(0.5, 0.25, 0.4, out);
+      return out;
+    })());
+  });
+
+  test('a day-factor step of 1/512 rebuilds', () => {
+    const lm = createLightmap();
+    lm.update(0.5, 0, 0);
+    const v = lm.texture.version;
+    lm.update(0.5 + 1 / 512, 0, 0);
+    expect(lm.texture.version).toBeGreaterThan(v);
+  });
 });

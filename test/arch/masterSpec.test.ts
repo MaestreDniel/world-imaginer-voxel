@@ -802,6 +802,13 @@ describe('master spec amendments (SP4b §13)', () => {
     expect(fallback).toContain('one merged buffer per region per pass with sub-allocated ranges and `addUpdateRange` (SP4b: an arena per region and pass with column ranges, first-fit, hidden by degenerate indices until the reveal frame, compaction above 40 % free space, else ×1.5), and culling per region');
   });
 
+  test('§4.6\'s fog sentence: SP4b\'s end, no edge fade (SP4b spec §6.3, D17, §13)', () => {
+    const fog = text.split('\n').find((l) => l.startsWith('**Fog** is spherical'));
+    expect(fog, 'no `**Fog** is spherical` paragraph in §4.6').toBeDefined();
+    expect(fog).toContain('SP4b: end (RD − 1)·16, start 64 blocks before, no edge fade');
+    expect(fog).toContain('after a live RD raise the end follows the filled radius outward');
+  });
+
   test('§1 names each SP4b module in its entry, which exists', () => {
     for (const [head, token, file] of SP4B_MODULES) {
       const entry = layoutEntry(head);

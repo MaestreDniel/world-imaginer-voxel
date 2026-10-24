@@ -27,11 +27,30 @@ export function percentile(values: ArrayLike<number>, p: number): number {
   return sorted[Math.min(n, Math.max(1, rank)) - 1]!;
 }
 
-/** The display interval: the median of the rAF deltas (the mean of the middle two for an even count); NaN for none. */
-export function medianInterval(deltas: ArrayLike<number>): number {
-  const n = deltas.length;
+/** a sorts after b: numerically, NaN last (as a typed array's `sort`). */
+const after = (a: number, b: number): boolean => a > b || (a !== a && b === b);
+
+/**
+ * The display interval: the median of the first `n` rAF deltas (the mean of the middle two for an even count); NaN for
+ * none. The values are copied into `scratch[0, n)` and insertion-sorted there (30 values per frame in the FPS limiter,
+ * a few hundred once elsewhere), so with a preallocated scratch nothing is allocated (SP4b spec §3.10); without one a
+ * scratch of n values is made.
+ */
+export function medianInterval(deltas: ArrayLike<number>, scratch?: Float64Array, n = deltas.length): number {
   if (n === 0) return Number.NaN;
-  const sorted = Float64Array.from(deltas).sort();
+  const s = scratch ?? new Float64Array(n);
+  if (s.length < n || deltas.length < n) {
+    throw new RangeError(`medianInterval: n ${n} exceeds the deltas (${deltas.length}) or the scratch (${s.length})`);
+  }
+  for (let i = 0; i < n; i++) {
+    const v = deltas[i]!;
+    let j = i;
+    while (j > 0 && after(s[j - 1]!, v)) {
+      s[j] = s[j - 1]!;
+      j--;
+    }
+    s[j] = v;
+  }
   const mid = n >> 1;
-  return n % 2 === 1 ? sorted[mid]! : (sorted[mid - 1]! + sorted[mid]!) / 2;
+  return n % 2 === 1 ? s[mid]! : (s[mid - 1]! + s[mid]!) / 2;
 }

@@ -25,6 +25,8 @@ export function createFpsLimiter(cap: FpsCap): FpsLimiter {
   let acc = 0;
   let prev = Number.NaN;
   const deltas = new Float64Array(DELTA_WINDOW);
+  // The median's sorted copy: preallocated, so a tick allocates nothing (SP4b spec §3.10).
+  const scratch = new Float64Array(DELTA_WINDOW);
   let count = 0;
   let next = 0;
 
@@ -42,7 +44,7 @@ export function createFpsLimiter(cap: FpsCap): FpsLimiter {
       // The first tick renders: there is no delta yet to pace against.
       if (first) return true;
       const target = 1000 / current;
-      const h = count === 0 ? 0 : medianInterval(deltas.subarray(0, count)) / 2;
+      const h = count === 0 ? 0 : medianInterval(deltas, scratch, count) / 2;
       acc += delta;
       if (acc < target - h) return false;
       acc = Math.min(Math.max(acc - target, -h), target);

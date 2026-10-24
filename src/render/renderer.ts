@@ -318,12 +318,8 @@ export function createWorldRenderer(host: HTMLElement, o: WorldRendererOptions):
   // The first floating origin is the snapped spawn (SP4b spec §3.4), before anything is staged.
   const origin = firstOrigin(o.originAt);
   sections.setOrigin(origin.x, origin.y, origin.z);
-  // Valid uniforms for `compile` and any frame before the page's first FrameState: the opening time, the edge centred
-  // on the spawn (scene coordinates, relative to the origin).
-  materials.setFrameUniforms({
-    t: OPENING_T, brightness: o.brightness, eyeSky: 15, rd: o.rd, fogBand: MEDIUM.fogBand,
-    edgeCentre: [o.originAt.x - origin.x, o.originAt.z - origin.z],
-  });
+  // Valid uniforms for `compile` and any frame before the page's first FrameState: the opening time and the load RD's fog.
+  materials.setFrameUniforms({ t: OPENING_T, brightness: o.brightness, eyeSky: 15, rd: o.rd, fogBand: MEDIUM.fogBand });
 
   const renderer = new WebGLRenderer({ antialias: false });
   renderer.outputColorSpace = SRGBColorSpace;

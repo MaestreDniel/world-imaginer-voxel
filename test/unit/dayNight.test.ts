@@ -8,7 +8,9 @@ import {
   OPENING_T,
   phaseOf,
   skyColors,
+  skyColorsInto,
   sunDirection,
+  sunDirectionInto,
   sunElevationDeg,
   SUN_TILT_DEG,
   TIME_SPEEDS,
@@ -151,6 +153,22 @@ describe('advanceTime (SP4a spec §6.5)', () => {
       const r = advanceTime(t, dt, s);
       expect(r).toBeGreaterThanOrEqual(0);
       expect(r).toBeLessThan(1);
+    }
+  });
+});
+
+describe('the allocation-free variants (SP4b spec §3.10)', () => {
+  test('skyColorsInto and sunDirectionInto equal skyColors and sunDirection', () => {
+    const zenith = new Float64Array(3);
+    const horizon = new Float64Array(3);
+    const sun = new Float64Array(3);
+    for (const t of [0, 1 / 12, 0.25, 0.5, 0.75]) {
+      skyColorsInto(t, zenith, horizon);
+      const c = skyColors(t);
+      expect(Array.from(zenith), `zenith t ${t}`).toEqual([...c.zenith]);
+      expect(Array.from(horizon), `horizon t ${t}`).toEqual([...c.horizon]);
+      sunDirectionInto(t, sun);
+      expect(Array.from(sun), `sun t ${t}`).toEqual(sunDirection(t));
     }
   });
 });

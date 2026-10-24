@@ -1,4 +1,4 @@
-import { Color, SRGBColorSpace, Vector2, Vector3, type DataArrayTexture, type DataTexture, type IUniform } from 'three';
+import { Color, SRGBColorSpace, Vector3, type DataArrayTexture, type DataTexture, type IUniform } from 'three';
 
 /**
  * The uniform objects the materials share (SP4a spec §6.4-§6.6): every material's `uniforms` holds the same objects, so
@@ -10,13 +10,9 @@ export interface SharedUniforms {
   readonly albedo: IUniform<DataArrayTexture>;
   /** The lightmap (`render/lightmap.ts`), linear. */
   readonly lightmap: IUniform<DataTexture>;
+  /** The fog's start and end in blocks from the eye, `fogRange` (SP4b spec §6.3). */
   readonly fogStart: IUniform<number>;
   readonly fogEnd: IUniform<number>;
-  /** The edge fade's end, (RD − 0.5)·16, and its start, edge − `EDGE_FADE` (spec §6.6). */
-  readonly edge: IUniform<number>;
-  readonly edgeFadeStart: IUniform<number>;
-  /** The load centre minus the floating origin, (x, z). */
-  readonly edgeCentre: IUniform<Vector2>;
   /** The eye's sky light, 0-15. */
   readonly eyeSky: IUniform<number>;
   readonly skyZenith: IUniform<Color>;
@@ -32,9 +28,6 @@ export function createSharedUniforms(albedo: DataArrayTexture, lightmap: DataTex
     lightmap: { value: lightmap },
     fogStart: { value: 0 },
     fogEnd: { value: 1 },
-    edge: { value: 1 },
-    edgeFadeStart: { value: 0 },
-    edgeCentre: { value: new Vector2() },
     eyeSky: { value: 15 },
     skyZenith: { value: new Color() },
     skyHorizon: { value: new Color() },
@@ -56,9 +49,6 @@ function litUniforms(u: SharedUniforms): Uniforms {
     lightmap: u.lightmap,
     fogStart: u.fogStart,
     fogEnd: u.fogEnd,
-    edge: u.edge,
-    edgeFadeStart: u.edgeFadeStart,
-    edgeCentre: u.edgeCentre,
     eyeSky: u.eyeSky,
   };
 }

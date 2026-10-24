@@ -1,5 +1,5 @@
 import { DoubleSide, FrontSide, GLSL3, NoBlending, ShaderMaterial, SRGBColorSpace, type DataArrayTexture } from 'three';
-import { dayFactor, duskFactor, skyColors, sunDirection } from '../../daynight/dayNight';
+import { dayFactor, duskFactor, skyColorsInto, sunDirectionInto } from '../../daynight/dayNight';
 import type { FrameState } from '../frameState';
 import { createLightmap } from '../lightmap';
 import { SKY_FRAGMENT, SKY_VERTEX } from './glsl/sky.glsl';
@@ -33,19 +33,25 @@ export interface MaterialSystem {
   /** Writes each vertex's `data` word as RGBA bytes (the spike's decode check, spec §1.2). */
   readonly decodeDebug: ShaderMaterial;
   readonly lightmap: ReturnType<typeof createLightmap>;
-  /** Writes the frame's fog, edge, eye light, sky and sun uniforms; rebuilds the lightmap when t or brightness moved. */
+  /**
+   * Writes the frame's fog, eye light, sky and sun uniforms and hands the lightmap the frame's day, dusk and brightness
+   * (it rebuilds only when they moved a step); allocates nothing (SP4b spec §3.10).
+   */
   setFrameUniforms(f: FrameState): void;
   /** Frees the materials and the lightmap; the albedo array stays its owner's. */
   dispose(): void;
 }
 
-/** Blocks over which the world-edge fade rises to full fog (spec §6.6, D15). */
-export const EDGE_FADE = 24;
-
-/** The fog distances (spec §6.6): end (rd − 0.5)·16, start `band` blocks before it, never below 0. */
-export function fogRange(rd: number, band: number): { start: number; end: number } {
-  const end = (rd - 0.5) * 16;
-  return { start: Math.max(0, end - band), end };
+/**
+ * The fog distances (SP4b spec §6.3, D17), written into `out` and returned: end (rd − 1)·16, where every gap at the mesh
+ * disc's rim is fully fogged, start `band` blocks before it, never below 0 (RD12 112-176). `rd` is the fog's render
+ * distance, fractional while a raise eases outward (spec §5).
+ */
+export function fogRange(rd: number, band: number, out: { start: number; end: number }): { start: number; end: number } {
+  const end = (rd - 1) * 16;
+  out.start = Math.max(0, end - band);
+  out.end = end;
+  return out;
 }
 
 type Defines = Record<string, string>;
@@ -99,8 +105,11 @@ export function createMaterialSystem(s: MaterialSettings, albedo: DataArrayTextu
   });
   const materials = [terrainOpaque, terrainCutout, water, sky, decodeDebug];
 
-  let lastT = Number.NaN;
-  let lastBrightness = Number.NaN;
+  // The frame's scratch: setFrameUniforms writes into these, so a frame allocates nothing (SP4b spec §3.10).
+  const fog = { start: 0, end: 0 };
+  const zenith = new Float64Array(3);
+  const horizon = new Float64Array(3);
+  const sun = new Float64Array(3);
   return {
     variant: s.variant,
     terrainOpaque,
@@ -110,23 +119,16 @@ export function createMaterialSystem(s: MaterialSettings, albedo: DataArrayTextu
     decodeDebug,
     lightmap,
     setFrameUniforms(f) {
-      const fog = fogRange(f.rd, f.fogBand);
+      fogRange(f.rd, f.fogBand, fog);
       u.fogStart.value = fog.start;
       u.fogEnd.value = fog.end;
-      u.edge.value = fog.end;
-      u.edgeFadeStart.value = fog.end - EDGE_FADE;
-      u.edgeCentre.value.set(f.edgeCentre[0], f.edgeCentre[1]);
       u.eyeSky.value = f.eyeSky;
-      const { zenith, horizon } = skyColors(f.t);
-      u.skyZenith.value.setRGB(zenith[0], zenith[1], zenith[2], SRGBColorSpace);
-      u.skyHorizon.value.setRGB(horizon[0], horizon[1], horizon[2], SRGBColorSpace);
-      const sun = sunDirection(f.t);
-      u.sunDir.value.set(sun[0], sun[1], sun[2]);
-      if (f.t !== lastT || f.brightness !== lastBrightness) {
-        lightmap.update(dayFactor(f.t), duskFactor(f.t), f.brightness);
-        lastT = f.t;
-        lastBrightness = f.brightness;
-      }
+      skyColorsInto(f.t, zenith, horizon);
+      u.skyZenith.value.setRGB(zenith[0]!, zenith[1]!, zenith[2]!, SRGBColorSpace);
+      u.skyHorizon.value.setRGB(horizon[0]!, horizon[1]!, horizon[2]!, SRGBColorSpace);
+      sunDirectionInto(f.t, sun);
+      u.sunDir.value.set(sun[0]!, sun[1]!, sun[2]!);
+      lightmap.update(dayFactor(f.t), duskFactor(f.t), f.brightness);
     },
     dispose() {
       for (const m of materials) m.dispose();

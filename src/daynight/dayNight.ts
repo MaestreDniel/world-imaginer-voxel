@@ -33,7 +33,6 @@ const smoothstep = (lo: number, hi: number, x: number): number => {
   return u * u * (3 - 2 * u);
 };
 const mix = (a: number, b: number, f: number): number => a + (b - a) * f;
-const mixRgb = (a: Rgb, b: Rgb, f: number): Rgb => [mix(a[0], b[0], f), mix(a[1], b[1], f), mix(a[2], b[2], f)];
 const hex = (h: number): Rgb => [(h >> 16) / 255, ((h >> 8) & 255) / 255, (h & 255) / 255];
 /** t wrapped into [0, 1). */
 const wrap01 = (t: number): number => {
@@ -50,9 +49,18 @@ const DUSK_HORIZON = hex(0xe8914d);
 
 /** The unit vector towards the sun at t: (cos 2πt, sin 2πt·cos 20°, sin 2πt·sin 20°), x east, y up, z south. */
 export function sunDirection(t: number): [number, number, number] {
+  const out = new Float64Array(3);
+  sunDirectionInto(t, out);
+  return [out[0]!, out[1]!, out[2]!];
+}
+
+/** `sunDirection(t)` written into `out[0, 3)`, allocating nothing (the per-frame uniforms, SP4b spec §3.10). */
+export function sunDirectionInto(t: number, out: Float64Array): void {
   const a = TAU * t;
   const s = Math.sin(a);
-  return [Math.cos(a), s * COS_TILT, s * SIN_TILT];
+  out[0] = Math.cos(a);
+  out[1] = s * COS_TILT;
+  out[2] = s * SIN_TILT;
 }
 
 /** The sun's elevation above the horizon in degrees: asin(sin 2πt·cos 20°), in [−70, 70]. */
@@ -85,11 +93,20 @@ export function duskFactor(t: number): number {
  * night to day by the day factor, then towards the warm dusk horizon by the dusk bump.
  */
 export function skyColors(t: number): { zenith: Rgb; horizon: Rgb } {
+  const zenith = new Float64Array(3);
+  const horizon = new Float64Array(3);
+  skyColorsInto(t, zenith, horizon);
+  return { zenith: [zenith[0]!, zenith[1]!, zenith[2]!], horizon: [horizon[0]!, horizon[1]!, horizon[2]!] };
+}
+
+/** `skyColors(t)` written into `zenith[0, 3)` and `horizon[0, 3)`, allocating nothing (SP4b spec §3.10). */
+export function skyColorsInto(t: number, zenith: Float64Array, horizon: Float64Array): void {
   const day = dayFactor(t);
-  return {
-    zenith: mixRgb(NIGHT_ZENITH, DAY_ZENITH, day),
-    horizon: mixRgb(mixRgb(NIGHT_HORIZON, DAY_HORIZON, day), DUSK_HORIZON, duskFactor(t)),
-  };
+  const dusk = duskFactor(t);
+  for (let c = 0; c < 3; c++) {
+    zenith[c] = mix(NIGHT_ZENITH[c]!, DAY_ZENITH[c]!, day);
+    horizon[c] = mix(mix(NIGHT_HORIZON[c]!, DAY_HORIZON[c]!, day), DUSK_HORIZON[c]!, dusk);
+  }
 }
 
 /** The clock in hours, [0, 24): (6 + 24t) mod 24. */
