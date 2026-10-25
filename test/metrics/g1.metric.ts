@@ -22,7 +22,7 @@ import { metricTest } from '../harness/metric';
  * (4 workers), `npm run measure:chrome -- --route bench`, re-measured on SP4c's code (SP4c spec §8.4). Each file's
  * shape is checked first: route `bench=medium`, the renderer naming the Iris Xe, RegionBatch, RD 12, the default
  * profile, a cold driver shader cache (rulings R11), 4 workers in the w4 file, the `gpuMB` breakdown fields,
- * `structuralFrames` present with every SP4b-leg entry's
+ * `structuralFrames` present, every entry's `leg` one of L0-L9, with every SP4b-leg entry's
  * (`leg` L0-L6) `stutterMs` ≤ 33 ms (the larger of its own snapped frame and the next one's, §8.4; rulings R10; SP4c's
  * live legs L7-L9 are `G1.live`'s), `partialColumnFrames` and `mixedColumnFrames` 0. The six gated parts:
  * - `mediumStreamP95`: the default run's `stream.frames.p95`, max 16.7;
@@ -37,8 +37,9 @@ import { metricTest } from '../harness/metric';
  *
  * G1's live cells (SP4c spec §8.2, §8.4, D22), every tier, a third call (`G1.live`): read from the same
  * `assets/sp4c/bench-iris-chrome.json`'s `live` block (the bench's Apply, undo and teleport legs L7-L9). The file's
- * shape is checked as the streaming call's, plus the `live` block's: frames measured, the `gpuMB` breakdown, every
- * L7-L9 structural frame's `stutterMs` ≤ 33 ms, `live.partialColumnFrames` and `live.mixedColumnFrames` 0. The three
+ * shape is checked as the streaming call's, plus the `live` block's: frames measured, the `gpuMB` breakdown, at least
+ * one L7-L9 structural frame and every one's `stutterMs` ≤ 33 ms, `live.partialColumnFrames` and
+ * `live.mixedColumnFrames` 0. The three
  * gated parts:
  * - `mediumLiveP95`: `live.frames.p95`, max 16.7;
  * - `mediumLiveOver33`: `live.frames.over33`, max 0;
@@ -181,6 +182,10 @@ function checkBench(file: string, workers: number | null): Bench {
     expect(Number.isFinite(b.stream[k]), `${file}: stream.${k} is a number`).toBe(true);
   }
   expect(Array.isArray(b.structuralFrames), `${file}: structuralFrames present`).toBe(true);
+  // Every entry names a known leg, so a relabelled leg cannot leave either stutter check reading an empty set (final
+  // review GOV-3).
+  const unknown = b.structuralFrames!.filter((e) => !SP4B_LEGS.has(e.leg) && !LIVE_LEGS.has(e.leg)).map((e) => e.leg);
+  expect(unknown, `${file}: structural frames of a leg outside L0-L9`).toEqual([]);
   // SP4b's legs only, so the re-asserted streaming cells stay as SP4b gated them; L7-L9 are `G1.live`'s (SP4c spec §8.4).
   const over = b.structuralFrames!.filter((e) => SP4B_LEGS.has(e.leg) && !(e.stutterMs <= OVER_MS));
   expect(over, `${file}: SP4b-leg structural frames whose stutterMs is over ${OVER_MS} ms`).toEqual([]);
@@ -237,6 +242,8 @@ metricTest('G1', ['mediumLiveP95', 'mediumLiveOver33', 'mediumLiveGpuMB'], () =>
     expect(Number.isFinite(live[k]), `${BENCH}: live.${k} is a number`).toBe(true);
   }
   const liveStructural = b.structuralFrames!.filter((e) => LIVE_LEGS.has(e.leg));
+  // The live legs' edit, undo and teleport always restructure: an empty set would gate nothing (GOV-3; 55 today).
+  expect(liveStructural.length, `${BENCH}: L7-L9 structural frames`).toBeGreaterThan(0);
   const over = liveStructural.filter((e) => !(e.stutterMs <= OVER_MS));
   expect(over, `${BENCH}: L7-L9 structural frames whose stutterMs is over ${OVER_MS} ms`).toEqual([]);
 
