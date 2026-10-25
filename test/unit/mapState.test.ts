@@ -1,3 +1,4 @@
+import { readFileSync } from 'node:fs';
 import { describe, expect, test } from 'vitest';
 import { utf8Bytes, type Seed64 } from '../../src/core/hash';
 import { canonicalJSON } from '../../src/core/params/canonical';
@@ -8,7 +9,7 @@ import { validateParamTrees } from '../../src/gen/trees';
 import { base64urlEncode } from '../../src/ui/common/base64url';
 import { applyMapHash, decodeMapState, DEFAULT_MAP_STATE, encodeMapState, MAP_HASH_READ_MAX, type MapState, type MapView } from '../../src/ui/map/mapState';
 import { createTileCache, tileKey } from '../../src/ui/map/tileCache';
-import { planTiles, screenToWorld, visibleTiles, worldToScreen } from '../../src/ui/map/viewMath';
+import { centredView, planTiles, screenToWorld, visibleTiles, worldToScreen } from '../../src/ui/map/viewMath';
 import { editedPatch } from './fixtures/editedTrees';
 
 const enc = (o: unknown) => `#${base64urlEncode(utf8Bytes(JSON.stringify(o)))}`;
@@ -195,6 +196,24 @@ describe('view math', () => {
     expect(p.slice(0, firstFine).every((t) => t.level === 256)).toBe(true);
     expect(p.slice(firstFine).every((t) => t.level === 64 && t.priority >= 1000)).toBe(true);
     expect(planTiles({ ...v, bpp: 200 }, 800, 600).every((t) => t.level === 256)).toBe(true);
+  });
+  test('a far-out show centres inside the hash window, as pan and zoom clamp (final review MAP-1): the view decodes', () => {
+    // The camera flies with no horizontal limit: M at x 525,000 (24k blocks past the 500k teleport bound) or further.
+    for (const [x, z] of [[525_000, -600_000], [-1e7, 3], [524_288.4, -524_288.4]] as const) {
+      const view = centredView(v, x, z);
+      expect(Math.abs(view.x)).toBeLessThanOrEqual(524288);
+      expect(Math.abs(view.z)).toBeLessThanOrEqual(524288);
+      expect({ bpp: view.bpp, layer: view.layer }).toEqual({ bpp: v.bpp, layer: v.layer });
+      expect(decodeMapState(encodeMapState({ ...DEFAULT_MAP_STATE, view })).error).toBeNull();
+    }
+    expect(centredView(v, 525_000, -600_000)).toEqual({ ...v, x: 524288, z: -524288 });
+    // Inside the window the centre is the one given.
+    expect(centredView(v, 1234.5, -99)).toEqual({ ...v, x: 1234.5, z: -99 });
+    // The tool's `show` centres through it (the real tool mounts only in the browser smoke, SP4c spec §9).
+    const src = readFileSync(new URL('../../src/ui/map/mapTool.ts', import.meta.url), 'utf8');
+    const show = src.slice(src.indexOf('    show(centre) {'), src.indexOf('    hide() {'));
+    expect(show).toContain('centredView(view, centre.x, centre.z)');
+    expect(show).not.toContain('x: centre.x');
   });
   test('the interactive plan asks only for the preview level, with the full plan\'s priorities (SP2b §2.6)', () => {
     const full = planTiles(v, 800, 600);

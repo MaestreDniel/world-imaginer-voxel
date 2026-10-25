@@ -39,6 +39,17 @@ export function planTiles(v: MapView, w: number, h: number, previewOnly = false)
   return plan;
 }
 
+/** The view centre's bound on each axis, blocks: the map hash's window (`mapState.ts`), ±524,288. */
+const CENTRE_MAX = 524288;
+/** A view centre coordinate clamped to the hash's window (pan, zoom and `centredView`), so the view always encodes and decodes. */
+export const clampCentre = (v: number): number => Math.max(-CENTRE_MAX, Math.min(CENTRE_MAX, v));
+
+/**
+ * `v` centred on (x, z) at its zoom and layer, the centre clamped to the hash's window as pan and zoom clamp it: the
+ * world's camera flies with no horizontal limit, and a map shown on it must still decode from the URL (final review MAP-1).
+ */
+export const centredView = (v: MapView, x: number, z: number): MapView => ({ ...v, x: clampCentre(x), z: clampCentre(z) });
+
 /** The player arrow's length and base width, screen px (SP4c spec §1.5). */
 const ARROW_LENGTH_PX = 14;
 const ARROW_WIDTH_PX = 10;

@@ -45,6 +45,7 @@ import { encodeMapState, type MapView } from './mapState';
 import { createMapCanvas, type MapCanvas } from './mapView';
 import { draftOf, type DriverCanvas, type PreviewDriver } from './previewDriver';
 import { createToolbar, open3dHref } from './toolbar';
+import { centredView } from './viewMath';
 
 /** The pool the tool's views run on (tiles, points, stats, slices, probes, spawn): every editor takes the pool's type. */
 export type MapPool = WorkerPool;
@@ -399,8 +400,10 @@ export function createMapTool(host: HTMLElement, deps: MapToolDeps): MapTool {
 
   return {
     show(centre) {
-      if (centre !== undefined && (centre.x !== view.x || centre.z !== view.z)) {
-        view = { ...view, x: centre.x, z: centre.z };
+      // Centred on the camera, clamped to the hash's window as pan and zoom clamp (final review MAP-1).
+      const next = centre === undefined ? view : centredView(view, centre.x, centre.z);
+      if (next.x !== view.x || next.z !== view.z) {
+        view = next;
         canvas.setView(view);
         viewChanged();
         renderStatus();

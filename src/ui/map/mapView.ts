@@ -18,7 +18,7 @@ import { highlightMask } from './highlight';
 import { MAP_MAX_BPP, MAP_MIN_BPP, type MapView } from './mapState';
 import { createTileCache } from './tileCache';
 import { createTileSource } from './tileSource';
-import { arrowDue, arrowGeometry, arrowMoved, planTiles, screenToWorld, visibleTiles, worldToScreen } from './viewMath';
+import { arrowDue, arrowGeometry, arrowMoved, clampCentre, planTiles, screenToWorld, visibleTiles, worldToScreen } from './viewMath';
 
 export interface MapViewOptions {
   onView(v: MapView): void;
@@ -80,9 +80,6 @@ export interface MapCanvas {
 
 /** A cached tile: the bitmap, and for the biome layer the biome id of every pixel (SP2b spec §5.3). */
 interface CachedTile { readonly bitmap: ImageBitmap; readonly ids: Uint8Array | null }
-
-const WINDOW = 524288;
-const clampCentre = (v: number) => Math.max(-WINDOW, Math.min(WINDOW, v));
 
 export function createMapCanvas(host: HTMLElement, pool: WorkerPool, initial: MapView, opts: MapViewOptions): MapCanvas {
   const canvas = document.createElement('canvas');
