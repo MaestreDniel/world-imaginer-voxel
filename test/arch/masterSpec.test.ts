@@ -958,6 +958,8 @@ describe('master spec amendments (SP4c §12)', () => {
     const sp4c = spEntry('SP4c', 'SP5');
     expect(sp4c.startsWith('**SP4c — The map in the world and live editing** (L; SP4b). Spec: `2026-10-25-sp4c-map-in-world-design.md`'), 'the SP4c header').toBe(true);
     expect(sp4c).toContain('- **Deliverable:** teleport from the map and edit the world live in both modes.');
+    // The entry's contents line, whole (final review GOV-6: spec §10 pins the header and the entry).
+    expect(sp4c.split('\n'), 'the SP4c entry\'s contents line').toContain('- The map tool shared by `?map` and the M overlay; teleport (instant, no loading screen, nearest-first, 24 blocks above the surface or the water); Apply v1 live (one pool, the world holding while the pool holds an unapplied draft; the per-column epoch as the interned genKey; stale columns freed and regenerated nearest-first while their old meshes stay shown; the renderers\' swap; `invalidation.ts`); undo and redo live; the two editing modes, remembered (A full screen with "Watch live", B side by side); the pool\'s two lanes with the MAP cap by visibility.');
     expect(sp4c).toContain('**Exit:** as the SP4c spec §14');
     expect(sp4c.split('\n').some((l) => l.startsWith('- **Cut line:** the climate-grid cache and the map\'s regeneration readout (→ SP10)')), 'the SP4c entry has no `- **Cut line:** the climate-grid cache and the map\'s regeneration readout (→ SP10)` line').toBe(true);
     expect(text).toContain('SP4c climate-grid cache and the map\'s regeneration readout → SP10');
