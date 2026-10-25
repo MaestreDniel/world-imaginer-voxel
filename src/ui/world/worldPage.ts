@@ -1433,14 +1433,16 @@ export function mountWorldPage(root: HTMLElement, q: WorldQuery, hash: string, o
         });
         teardown.push(() => applyControl.dispose());
         // The teleport (§3) over the bench's pool; until it arrives the camera is still at the old place, so no reveal
-        // counts for L9 (a landing that fails leaves L9 to its cap).
+        // counts for L9 (a landing that fails leaves L9 to its cap). A failed landing's cause rejects the hook's
+        // promise, so the JSON says why L9 timed out (`live.teleportError`, final review WLD-5).
         let landing = false;
+        let landingFailure: { readonly cause: unknown } | null = null;
         const teleporter = createTeleport({
           pool: workers,
           fly,
           state: frame,
           onArrive: () => { landing = false; },
-          onFail: () => {},
+          onFail: (cause) => { landingFailure = { cause }; },
         });
         benchTeleport = teleporter;
         teardown.push(() => teleporter.dispose());
@@ -1463,7 +1465,11 @@ export function mountWorldPage(root: HTMLElement, q: WorldQuery, hash: string, o
               // The click is L9's mark (D24: "within 0.5 s of the click").
               reveals.mark();
               landing = true;
-              return teleporter.go(x, z);
+              landingFailure = null;
+              return teleporter.go(x, z).then((ok) => {
+                if (!ok && landingFailure !== null) throw landingFailure.cause;
+                return ok;
+              });
             },
             settled: () => reveals.filled,
           },

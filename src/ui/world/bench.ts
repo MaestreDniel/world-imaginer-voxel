@@ -531,6 +531,12 @@ export type LiveFigures = StreamFigures & {
   readonly width: number;
   readonly height: number;
   readonly timedOut: readonly string[];
+  /**
+   * Why L9's teleport never moved the camera (final review WLD-5): the landing's failure as `name: message`, or "the
+   * teleport did not move the camera" for a teleport that resolved false with no cause; null when it arrived or never
+   * ran. A null `teleportFirstRevealMs` beside it is the landing's, not the renderer's.
+   */
+  readonly teleportError: string | null;
 };
 
 /** The bench's JSON (spec §8.3; SP4c spec §8.4's `live`). */
@@ -722,7 +728,7 @@ function legTimes(rec: BenchRecord, idx: readonly number[], fullOf: number): Leg
  * (SP4c spec §8.4), every long frame and every structural frame. `gpuMB` is the largest per-frame sum of the breakdown,
  * which is reported at that frame. The live legs' MESH set is the RD they ran at: 12, or the reservation's cap below it.
  */
-export function summarizeBench(rec: BenchRecord, fixed: BenchFixed): BenchResult {
+export function summarizeBench(rec: BenchRecord, fixed: BenchFixed, teleportError: string | null = null): BenchResult {
   const all: number[] = [];
   const byLeg: number[][] = ALL_LEGS.map(() => []);
   for (let i = 0; i < rec.n; i++) {
@@ -749,6 +755,7 @@ export function summarizeBench(rec: BenchRecord, fixed: BenchFixed): BenchResult
     width: fixed.canvas.width,
     height: fixed.canvas.height,
     timedOut,
+    teleportError,
   };
 
   const legs = Object.fromEntries(ALL_LEGS.map((l, k) => [l.name, figuresOf(rec, byLeg[k]!)])) as BenchResult['legs'];
@@ -861,7 +868,8 @@ export interface BenchWorld {
   heightAt(x: number, z: number): number | null;
   /**
    * The live legs' hooks (SP4c spec §8.4): the page's scripted session (`set` an urgent change, `undo`), its teleport
-   * (`teleport.go`; true once the camera moved), and whether a leg settled (every column of the live RD's MESH set
+   * (`teleport.go`; true once the camera moved; rejected with the landing's failure, kept as `live.teleportError`), and
+   * whether a leg settled (every column of the live RD's MESH set
    * revealed since its Apply; L9's disc filled since the arrival).
    */
   readonly live: {
@@ -930,6 +938,8 @@ export function createBenchDriver(o: { readonly shot: BenchShot | null; readonly
   let l7StartS = Number.NaN;
   let arrived = false;
   let arrivedS = Number.NaN;
+  // Why L9's teleport did not arrive (`live.teleportError`; final review WLD-5): null until it fails.
+  let teleportError: string | null = null;
   const capped = (rd: number): number => Math.min(rd, rdMax);
 
   /** The live legs' pose (SP4c spec §8.4): x, z and the yaw kept; pitch −15; y 150 until L9's arrival, then kept. */
@@ -953,7 +963,12 @@ export function createBenchDriver(o: { readonly shot: BenchShot | null; readonly
       hooks.set(BENCH_LIVE.edit.path, BENCH_LIVE.edit.to);
     } else if (leg === 8) hooks.undo();
     else {
-      hooks.teleport(out.x + BENCH_LIVE.teleportEast, out.z).then((ok) => { if (ok) arrived = true; }, () => {});
+      hooks.teleport(out.x + BENCH_LIVE.teleportEast, out.z).then((ok) => {
+        if (ok) arrived = true;
+        else teleportError = 'the teleport did not move the camera';
+      }, (e: unknown) => {
+        teleportError = e instanceof Error ? `${e.name}: ${e.message}` : String(e);
+      });
     }
   };
   /**
@@ -1056,7 +1071,7 @@ export function createBenchDriver(o: { readonly shot: BenchShot | null; readonly
       if (o.shot !== null) return;
       let result: BenchResult | BenchError;
       try {
-        result = summarizeBench(record, fixed);
+        result = summarizeBench(record, fixed, teleportError);
       } catch (e) {
         result = { route: 'bench=medium', error: e instanceof Error ? e.stack ?? e.message : String(e) };
       }

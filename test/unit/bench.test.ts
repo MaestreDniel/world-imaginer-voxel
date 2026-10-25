@@ -1,3 +1,4 @@
+import { readFileSync } from 'node:fs';
 import { describe, expect, test } from 'vitest';
 import { resolveProfile } from '../../src/core/params/profiles';
 import {
@@ -295,8 +296,9 @@ describe('summarizeBench: the live legs L7-L9 (SP4c spec §8.4, D22, D24)', () =
       'frames', 'main', 'coordinatorMs', 'uploadMs', 'rowsPerFrameMax', 'structuralOps', 'gpuMs', 'drawCalls', 'trianglesMax', 'gpuMB',
       'geometryMB', 'texturesMB', 'drawingBufferMB', 'heapMB', 'sabMB', 'partialColumnFrames', 'mixedColumnFrames', 'genCapMin', 'dropped',
       'failed', 'storeFull', 'applyFirstSwapMs', 'applyNearMs', 'applyFullMs', 'undoFirstSwapMs', 'undoNearMs', 'undoFullMs',
-      'teleportFirstRevealMs', 'teleportRefillMs', 'width', 'height', 'timedOut',
+      'teleportFirstRevealMs', 'teleportRefillMs', 'width', 'height', 'timedOut', 'teleportError',
     ]);
+    expect(r.live.teleportError).toBeNull();
     expect(Object.keys(r.live.frames)).toEqual(['count', 'p50', 'p95', 'p99', 'max', 'over33']);
     expect([r.live.width, r.live.height]).toEqual([1920, 1080]);
     // The live frames are L7-L9's; SP4b's stream block still covers L1-L6 only.
@@ -740,16 +742,20 @@ function fakeLive() {
   const calls: string[] = [];
   const settle: Record<7 | 8 | 9, boolean> = { 7: false, 8: false, 9: false };
   let arrive: ((ok: boolean) => void) | null = null;
+  let fail: ((e: unknown) => void) | null = null;
   const live: BenchWorld['live'] = {
     set: (path, v) => { calls.push(`set ${path} ${v}`); },
     undo: () => { calls.push('undo'); },
     teleport: (x, z) => {
       calls.push(`teleport ${x} ${z}`);
-      return new Promise<boolean>((resolve) => { arrive = resolve; });
+      return new Promise<boolean>((resolve, reject) => {
+        arrive = resolve;
+        fail = reject;
+      });
     },
     settled: (leg) => settle[leg],
   };
-  return { live, calls, settle, arrive: (ok = true) => arrive?.(ok) };
+  return { live, calls, settle, arrive: (ok = true) => arrive?.(ok), fail: (e: unknown) => fail?.(e) };
 }
 
 /** Lets the teleport's promise settle (its `then` runs in a microtask). */
@@ -922,6 +928,45 @@ describe('createBenchDriver: the live legs after L6 (SP4c spec §8.4, D22; plan)
     for (const t of [112, 112.01, 112.02]) expect(tp.driver.pose(t, p, 12)).toBe(12);
     expect(tp.driver.pose(112.03, p, 12)).toBeNull();
     expect(tp.ready()).toBe(1);
+  });
+});
+
+describe('createBenchDriver: a teleport that never arrives keeps its cause in the JSON (final review WLD-5)', () => {
+  /** Runs the live legs to L9's teleport, settles it with `settle`, lets L9 run to its cap and publishes the JSON. */
+  async function l9(settle: (f: ReturnType<typeof fakeLive>) => void): Promise<BenchResult> {
+    const { driver, published } = driverOf(null);
+    const f = fakeLive();
+    driver.bind({ rdMax: 16, heightAt: () => null, live: f.live });
+    const p = { x: 0, y: 80, z: 0, yaw: 0, pitch: 0 };
+    driver.pose(0, p, 12);
+    driver.pose(95, p, 12);
+    f.settle[7] = true;
+    f.settle[8] = true;
+    driver.pose(96, p, 12);
+    driver.pose(97, p, 12);
+    expect(f.calls[2]).toBe('teleport 20000 0');
+    settle(f);
+    await flush();
+    expect(driver.pose(112, p, 12)).toBeNull();
+    driver.done(FIXED);
+    expect(published).toHaveLength(1);
+    return published[0] as BenchResult;
+  }
+
+  test('the landing\'s failure (the page\'s teleport rejects with it) is `live.teleportError`, beside L9\'s time-out', async () => {
+    const r = await l9((f) => f.fail(new Error('the landing worker failed')));
+    expect(r.live.teleportError).toBe('Error: the landing worker failed');
+  });
+
+  test('a teleport that resolves false without a cause says so; one that arrived leaves it null', async () => {
+    expect((await l9((f) => f.arrive(false))).live.teleportError).toBe('the teleport did not move the camera');
+    expect((await l9((f) => f.arrive(true))).live.teleportError).toBeNull();
+  });
+
+  test('the page\'s bench teleport records the landing\'s failure and rejects with it', () => {
+    const src = readFileSync(new URL('../../src/ui/world/worldPage.ts', import.meta.url), 'utf8');
+    expect(src).toMatch(/onFail: \(cause\) => \{ landingFailure = \{ cause \}; \},/);
+    expect(src).toMatch(/if \(!ok && landingFailure !== null\) throw landingFailure\.cause;/);
   });
 });
 

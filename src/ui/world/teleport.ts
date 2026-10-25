@@ -49,8 +49,11 @@ export interface TeleportOptions {
   readonly state: { eyeSky: number };
   /** After the camera moved: its x and z (the block's centre) and the landing it arrived over. */
   onArrive(x: number, z: number, landing: TeleportLanding): void;
-  /** A landing that failed (a worker failure, or a fourth cancel): nothing moved. */
-  onFail(): void;
+  /**
+   * A landing that failed (a worker failure, or a fourth cancel): nothing moved. `cause` is the landing's rejection
+   * (the bench keeps it in its JSON, final review WLD-5).
+   */
+  onFail(cause: unknown): void;
 }
 
 export interface Teleport {
@@ -83,7 +86,7 @@ export function createTeleport(o: TeleportOptions): Teleport {
         } catch (e) {
           if (dropped(mine)) return false;
           if (e instanceof JobCancelled && attempt < LANDING_RETRIES) continue;
-          o.onFail();
+          o.onFail(e);
           return false;
         }
       }

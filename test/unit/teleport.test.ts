@@ -40,14 +40,18 @@ function rig(pool: { landing(x: number, z: number): Promise<Landing> }) {
   const state = { eyeSky: 4 };
   const arrivals: Arrival[] = [];
   let fails = 0;
+  const causes: unknown[] = [];
   const tp = createTeleport({
     pool,
     fly,
     state,
     onArrive: (x, z, landing) => { arrivals.push([x, z, { ...landing }]); },
-    onFail: () => { fails++; },
+    onFail: (cause) => {
+      fails++;
+      causes.push(cause);
+    },
   });
-  return { tp, fly, state, arrivals, fails: () => fails };
+  return { tp, fly, state, arrivals, fails: () => fails, causes };
 }
 
 /** A pool whose landings each wait for the test to settle them. */
@@ -160,6 +164,18 @@ describe('createTeleport (SP4c spec §3.2, §3.3, D12)', () => {
     expect(failed.calls).toBe(1);
     expect(c.fly).toEqual(camera());
     expect([c.state.eyeSky, c.fails(), c.arrivals.length]).toEqual([4, 1, 0]);
+  });
+
+  test('`onFail` gets the landing\'s failure: the WorkerFailed, or the fourth JobCancelled (final review WLD-5)', async () => {
+    const boom = new WorkerFailed('boom');
+    const c = rig(scriptedPool([boom]));
+    await c.tp.go(1, 2);
+    expect(c.causes).toEqual([boom]);
+    const last = new JobCancelled();
+    const b = rig(scriptedPool([new JobCancelled(), new JobCancelled(), new JobCancelled(), last]));
+    await b.tp.go(1, 2);
+    expect(b.causes).toHaveLength(1);
+    expect(b.causes[0]).toBe(last);
   });
 
   test('Review Focus 5 (second click): two `go` calls whose landings resolve in reverse order: the camera ends at the second, and the first resolves false calling neither `onArrive` nor `onFail`', async () => {
