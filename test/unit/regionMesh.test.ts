@@ -5,13 +5,13 @@ import { createMaterialSystem, type MaterialSystem, type MaterialVariant } from 
 import { RESERVATION } from '../../src/render/regionGrid';
 import { createFreeList, firstFit, giveRange, takeFirstFit } from '../../src/render/regionMesh';
 import {
-  createSectionRenderer, createSectionRendererCounts, regionOf, selectSectionRenderer, type SectionRenderer,
-  type SectionRendererCounts,
+  createRevealProbe, createSectionRenderer, createSectionRendererCounts, regionOf, selectSectionRenderer,
+  type RevealProbe, type SectionRenderer, type SectionRendererCounts,
 } from '../../src/render/sectionRenderer';
 import { createFlatColorArray } from '../../src/render/textureArray';
 import { fakePayload, type FakeRow } from './fixtures/payloads';
 import {
-  fakeGate, indexSum, opaque, pumpAll, regionObjects, sectionRendererContract, UNBOUNDED, visibleIndices,
+  fakeGate, indexSum, opaque, pumpAll, regionObjects, sectionRendererContract, UNBOUNDED, visibleIndices, water,
 } from './sectionRendererContract';
 
 sectionRendererContract('mesh');
@@ -602,6 +602,252 @@ describe('RegionMesh\'s arena (SP4b spec §4.3, D15)', () => {
     step(fakePayload(4, 0, big(12)), 'compact');
     step(fakePayload(5, 0, big(12)), 'grow');
     expect(r.isRevealed(5, 0)).toBe(true);
+    r.dispose();
+  });
+});
+
+describe('RegionMesh\'s swap (SP4c spec §5.3, D9)', () => {
+  const make = (): SectionRenderer => createSectionRenderer('mesh', system('mesh'));
+  const probe = (r: SectionRenderer): RevealProbe => r.probe(createRevealProbe());
+  /** Stages `p` (seq 1) and uploads and reveals it under an unbounded gate. */
+  const add = (r: SectionRenderer, p: ColumnMeshPayload): ColumnMeshPayload => {
+    r.stage(p, 1);
+    pumpAll(r);
+    return p;
+  };
+  /** `n` opaque rows of 1,024 quads from section `sy0` on: `big(n)`'s sizes at other places. */
+  const bigFrom = (n: number, sy0: number): FakeRow[] => big(n).map((row, k) => ({ ...row, sy: (sy0 + k) % 24 }));
+  /** Records every `addUpdateRange` on the attribute, in call order. */
+  const spyRanges = (a: BufferAttribute): Array<{ start: number; count: number }> => {
+    const log: Array<{ start: number; count: number }> = [];
+    const original = a.addUpdateRange.bind(a);
+    a.addUpdateRange = (start: number, count: number): void => {
+      log.push({ start, count });
+      original(start, count);
+    };
+    return log;
+  };
+  const byStart = (x: { start: number }, y: { start: number }): number => x.start - y.start;
+  const zeros = (n: number): number[] => new Array<number>(n).fill(0);
+  const allZero = (a: Uint32Array): boolean => a.every((x) => x === 0);
+  /** The first index where `got` differs from `want` (or their lengths differ), else −1: a cheap failure on big arrays. */
+  const firstDiff = (got: ArrayLike<number>, want: readonly number[]): number => {
+    for (let k = 0; k < want.length; k++) if (got[k] !== want[k]) return k;
+    return got.length === want.length ? -1 : want.length;
+  };
+
+  test('a swap issues exactly two index update ranges in one call: the new range\'s rebased indices and prev\'s zeroed', () => {
+    const r = make();
+    // An earlier column at vertex 0 and index 0; the old payload at vertex 4 and index 6 (12 and 18), shown.
+    const earlier = add(r, fakePayload(1, 0, [opaque(0, 1)]));
+    add(r, fakePayload(0, 0, [opaque(2, 2), opaque(3, 1)]));
+    const m = arenaOf(r, MESH_PASS_OPAQUE)!;
+    const [position, data, index] = attributesOf(m);
+    const log = spyRanges(index);
+    uploaded(m);
+    // The replacement (16 vertices, 24 indices) takes the next free ranges: vertex 16, index 24.
+    const next = fakePayload(0, 0, [opaque(2, 1), opaque(5, 3)]);
+    const swaps: number[] = [];
+    r.onColumnRevealed = () => swaps.push(log.length);
+    r.stage(next, 2);
+    expect(r.pump(fakeGate(1), 0, 0, 0)).toBe(1);
+    // Its first row: vertices only, no index range.
+    expect(index.updateRanges).toEqual([]);
+    expect(log).toEqual([]);
+    uploaded(m);
+    const version = index.version;
+    // Its last row and the swap, in one pump: the hook fires after both index ranges are written.
+    expect(r.pump(fakeGate(1), 0, 0, 0)).toBe(1);
+    expect(swaps).toEqual([2]);
+    expect(position.updateRanges).toEqual([{ start: 4 * (16 + 4), count: 4 * 12 }]);
+    expect(data.updateRanges).toEqual([{ start: 16 + 4, count: 12 }]);
+    expect([...log].sort(byStart)).toEqual([{ start: 6, count: 18 }, { start: 24, count: 24 }]);
+    expect([...index.updateRanges].sort(byStart)).toEqual([{ start: 6, count: 18 }, { start: 24, count: 24 }]);
+    expect(index.version).toBeGreaterThan(version);
+    // What the two ranges hold: prev's zeros and the new rebased indices.
+    const ix = index.array as Uint32Array;
+    expect(Array.from(ix.subarray(6, 24))).toEqual(zeros(18));
+    expect(Array.from(ix.subarray(24, 48))).toEqual(rebased(next, 16));
+    expect(visibleIndices(r.root)).toBe(indexSum([earlier, next]));
+    // prev's release frees its ranges and writes no index.
+    uploaded(m);
+    pumpAll(r);
+    expect(index.updateRanges).toEqual([]);
+    expect(log).toHaveLength(2);
+    expect(counts(r)).toMatchObject({ columnsRemoving: 0, indices: indexSum([earlier, next]) });
+
+    // Two passes: each arena gets exactly its two ranges (prev's zeroed, the new written) in the swap's pump.
+    const s = make();
+    add(s, fakePayload(0, 0, [opaque(1, 1), water(1, 1)]));
+    const arenas = [arenaOf(s, MESH_PASS_OPAQUE)!, arenaOf(s, MESH_PASS_TRANSLUCENT)!];
+    const logs = arenas.map((a) => spyRanges(attributesOf(a)[2]));
+    for (const a of arenas) uploaded(a);
+    const two = fakePayload(0, 0, [opaque(4, 2), water(4, 2)]);
+    s.stage(two, 2);
+    expect(s.pump(fakeGate(1), 0, 0, 0)).toBe(1);
+    expect(logs).toEqual([[], []]);
+    expect(s.pump(fakeGate(1), 0, 0, 0)).toBe(1);
+    // Each pass: the old span at vertex 0 and index 0 (4 and 6), the new at vertex 4 and index 6 (8 and 12).
+    for (const l of logs) expect([...l].sort(byStart)).toEqual([{ start: 0, count: 6 }, { start: 6, count: 12 }]);
+    expect(visibleIndices(s.root)).toBe(indexSum([two]));
+    r.dispose();
+    s.dispose();
+  });
+
+  test('until the swap the replacement\'s index range is all zero', () => {
+    const r = make();
+    const earlier = add(r, fakePayload(1, 0, [opaque(0, 1)]));
+    const old = add(r, fakePayload(0, 0, [opaque(2, 2), opaque(3, 1)]));
+    const m = arenaOf(r, MESH_PASS_OPAQUE)!;
+    const [position, , index] = attributesOf(m);
+    const pos = position.array as Uint16Array;
+    const ix = index.array as Uint32Array;
+    // Five rows of 1, 2, 1, 3 and 1 quads: 32 vertices from vertex 16, 48 indices from index 24.
+    const next = fakePayload(0, 0, [opaque(4, 1), opaque(5, 2), opaque(6, 1), opaque(7, 3), opaque(8, 1)]);
+    r.stage(next, 2);
+    const want = placed(next);
+    let written = 0;
+    for (let pump = 0; pump < 4; pump++) {
+      expect(r.pump(fakeGate(1), 0, 0, 0)).toBe(1);
+      written += 4 * next.rows[pump * ROW_INTS + 3]!;
+      // The rows land in the new vertex range; its index range stays zero, prev's stays rebased.
+      expect(Array.from(pos.subarray(4 * 16, 4 * 16 + written)), `pump ${pump}`).toEqual(want.slice(0, written));
+      expect(Array.from(ix.subarray(24, 72)), `pump ${pump}`).toEqual(zeros(48));
+      expect(Array.from(ix.subarray(6, 24)), `pump ${pump}`).toEqual(rebased(old, 4));
+      expect(m.geometry.drawRange.count).toBe(72);
+      expect(visibleIndices(r.root), `pump ${pump}`).toBe(indexSum([earlier, old]));
+      expect(probe(r), `pump ${pump}`).toEqual({ columns: 3, partial: 0, mixed: 0 });
+    }
+    expect(r.pump(fakeGate(1), 0, 0, 0)).toBe(1);
+    expect(Array.from(ix.subarray(24, 72))).toEqual(rebased(next, 16));
+    expect(Array.from(ix.subarray(6, 24))).toEqual(zeros(18));
+    expect(visibleIndices(r.root)).toBe(indexSum([earlier, next]));
+    r.dispose();
+  });
+
+  test('a compaction (≥ 40 % free) during a swap moves prev and keeps it visible', () => {
+    const r = make();
+    // A, B, C and D of 8, 10, 6 and 8 rows fill the opaque reservation; A and C go: 14 of 32 rows free (43.75 %), in
+    // ranges of 8 and 6.
+    add(r, fakePayload(0, 0, big(8)));
+    const b = add(r, fakePayload(1, 0, big(10)));
+    add(r, fakePayload(2, 0, big(6)));
+    const d = add(r, fakePayload(3, 0, big(8)));
+    r.remove(0, 0);
+    r.remove(2, 0);
+    pumpAll(r);
+    const m = arenaOf(r, MESH_PASS_OPAQUE)!;
+    const geometry = m.geometry;
+    // B's replacement (10 rows) fits in neither range: the swap's first pump compacts, then uploads 3 rows.
+    const next = fakePayload(1, 0, bigFrom(10, 12));
+    r.stage(next, 2);
+    expect(r.pump(fakeGate(3), 1, 0, 0)).toBe(3);
+    expect(counts(r).lastStructural).toBe('compact');
+    expect(m.geometry).toBe(geometry);
+    // prev (B) moved to row 0 with its indices rebased, D to row 10; the replacement's span at rows 18-28, zero.
+    const [position, , index] = attributesOf(m);
+    const pos = position.array as Uint16Array;
+    const ix = index.array as Uint32Array;
+    expect(firstDiff(pos.subarray(0, 4 * 10 * ROW_V), placed(b))).toBe(-1);
+    expect(firstDiff(ix.subarray(0, 10 * ROW_I), rebased(b, 0))).toBe(-1);
+    expect(firstDiff(ix.subarray(10 * ROW_I, 18 * ROW_I), rebased(d, 10 * ROW_V))).toBe(-1);
+    expect(allZero(ix.subarray(18 * ROW_I, 28 * ROW_I))).toBe(true);
+    expect(firstDiff(pos.subarray(4 * 18 * ROW_V, 4 * 21 * ROW_V), placed(next).slice(0, 4 * 3 * ROW_V))).toBe(-1);
+    expect(r.isRevealed(1, 0)).toBe(true);
+    expect(visibleIndices(r.root)).toBe(indexSum([b, d]));
+    expect(probe(r)).toEqual({ columns: 3, partial: 0, mixed: 0 });
+    // The rest uploads; the swap shows the replacement in its span, and prev's rows are released.
+    pumpAll(r, 1, 0);
+    expect(firstDiff(ix.subarray(18 * ROW_I, 28 * ROW_I), rebased(next, 18 * ROW_V))).toBe(-1);
+    expect(allZero(ix.subarray(0, 10 * ROW_I))).toBe(true);
+    expect(visibleIndices(r.root)).toBe(indexSum([next, d]));
+    expect(probe(r)).toEqual({ columns: 2, partial: 0, mixed: 0 });
+    expect(counts(r)).toMatchObject({ columnsRemoving: 0, rows: 18 });
+    r.dispose();
+  });
+
+  test('a growth (×1.5) during a swap keeps prev visible', () => {
+    const r = make();
+    // The old payload (20 rows) and D (12) fill the opaque reservation: the 16-row replacement grows the arena.
+    const old = add(r, fakePayload(0, 0, big(20)));
+    const d = add(r, fakePayload(1, 0, big(12)));
+    const m = arenaOf(r, MESH_PASS_OPAQUE)!;
+    const before = m.geometry;
+    let disposed = false;
+    before.addEventListener('dispose', () => { disposed = true; });
+    const next = fakePayload(0, 0, bigFrom(16, 3));
+    r.stage(next, 2);
+    expect(r.pump(fakeGate(2), 0, 0, 0)).toBe(2);
+    expect(counts(r)).toMatchObject({ lastStructural: 'grow', lastStructuralBytes: 3_538_944 });
+    expect(m.geometry).not.toBe(before);
+    expect(disposed).toBe(true);
+    // prev copied into the new geometry at the same place, still drawn; the replacement's span at rows 32-48, zero.
+    const ix = m.geometry.getIndex()!.array as Uint32Array;
+    expect(firstDiff(ix.subarray(0, 20 * ROW_I), rebased(old, 0))).toBe(-1);
+    expect(firstDiff(ix.subarray(20 * ROW_I, 32 * ROW_I), rebased(d, 20 * ROW_V))).toBe(-1);
+    expect(allZero(ix.subarray(32 * ROW_I, 48 * ROW_I))).toBe(true);
+    expect(m.geometry.drawRange.count).toBe(48 * ROW_I);
+    expect(r.isRevealed(0, 0)).toBe(true);
+    expect(visibleIndices(r.root)).toBe(indexSum([old, d]));
+    expect(probe(r)).toEqual({ columns: 3, partial: 0, mixed: 0 });
+    pumpAll(r);
+    expect(m.geometry.getIndex()!.array).toBe(ix);
+    expect(firstDiff(ix.subarray(32 * ROW_I, 48 * ROW_I), rebased(next, 32 * ROW_V))).toBe(-1);
+    expect(allZero(ix.subarray(0, 20 * ROW_I))).toBe(true);
+    expect(visibleIndices(r.root)).toBe(indexSum([next, d]));
+    // Growth is never undone: the arena keeps its grown size after prev's release.
+    expect(r.gpuBytes()).toBe(3_538_944);
+    expect(counts(r)).toMatchObject({ columnsRemoving: 0, rows: 28 });
+    r.dispose();
+  });
+
+  test('the culling sphere covers prev until the swap and only the new spans after the releases', () => {
+    // The old payload high in the column (sections 20-23), the replacement low (sections 0-2): disjoint bounds.
+    const oldRows = [opaque(20, 2), opaque(21, 1), opaque(22, 3), opaque(23, 1)];
+    const nextRows = [opaque(0, 1), opaque(1, 2), opaque(2, 1)];
+    type Bounds = { center: number[]; radius: number; min: number[]; max: number[] };
+    const boundsOf = (m: Mesh): Bounds => ({
+      center: m.geometry.boundingSphere!.center.toArray(), radius: m.geometry.boundingSphere!.radius,
+      min: m.geometry.boundingBox!.min.toArray(), max: m.geometry.boundingBox!.max.toArray(),
+    });
+    // The bounds of a renderer that shows only these rows at the column.
+    const alone = (rows: FakeRow[]): Bounds => {
+      const s = make();
+      add(s, fakePayload(3, 4, rows));
+      const out = boundsOf(arenaOf(s, MESH_PASS_OPAQUE)!);
+      s.dispose();
+      return out;
+    };
+    const r = make();
+    const old = add(r, fakePayload(3, 4, oldRows));
+    const m = arenaOf(r, MESH_PASS_OPAQUE)!;
+    const sphere = m.geometry.boundingSphere!;
+    const box = m.geometry.boundingBox!;
+    const covers = (p: ColumnMeshPayload): boolean => rowsOf([p], MESH_PASS_OPAQUE).every(({ o, r: row }) => {
+      const s = sectionSphere(p, o, row);
+      return sphere.center.distanceTo(s.center) + s.radius <= sphere.radius + 1e-3 && box.containsPoint(s.center);
+    });
+    const boxHolds = (p: ColumnMeshPayload): boolean =>
+      rowsOf([p], MESH_PASS_OPAQUE).some(({ o, r: row }) => box.containsPoint(sectionSphere(p, o, row).center));
+    const oldOnly = alone(oldRows);
+    expect(boundsOf(m)).toEqual(oldOnly);
+    const next = fakePayload(3, 4, nextRows);
+    r.stage(next, 2);
+    for (let pump = 0; pump < 2; pump++) {
+      expect(r.pump(fakeGate(1), 3, 4, 0)).toBe(1);
+      // The replacement's written rows are not shown, so they stay out of the bounds.
+      expect(boundsOf(m), `pump ${pump}`).toEqual(oldOnly);
+      expect(covers(old)).toBe(true);
+      expect(boxHolds(next)).toBe(false);
+    }
+    expect(r.pump(fakeGate(1), 3, 4, 0)).toBe(1);
+    expect(r.isRevealed(3, 4)).toBe(true);
+    pumpAll(r, 3, 4);
+    expect(counts(r)).toMatchObject({ columnsRemoving: 0, rows: 3 });
+    expect(m.geometry.boundingSphere).toBe(sphere);
+    expect(boundsOf(m)).toEqual(alone(nextRows));
+    expect(covers(next)).toBe(true);
+    expect(boxHolds(old)).toBe(false);
     r.dispose();
   });
 });

@@ -510,8 +510,8 @@ export function createRegionMesh(materials: MaterialSystem): SectionRenderer {
       }
     },
     swap(prev, next) {
-      // (plan) The interim swap (SP4c spec §5.3; Task 9 pins it): `prev`'s index ranges zeroed and `next`'s rebased
-      // indices written in this one call, each an update range of its own; the culling sphere follows the shown spans.
+      // The swap (SP4c spec §5.3): `prev`'s index ranges zeroed and `next`'s rebased indices written in this one
+      // call, two update ranges per pass (pinned by `regionMesh.test.ts`); the culling sphere follows the shown spans.
       backend.hide(prev);
       backend.reveal(next);
     },

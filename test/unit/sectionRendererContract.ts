@@ -566,13 +566,15 @@ export function sectionRendererContract(kind: SectionRendererKind): void {
       // Staging changes nothing drawn: the old payload is shown and counted, the replacement pending.
       expect(visibleIndices(r.root)).toBe(indexSum([old]));
       expect(counts(r)).toMatchObject({ columnsStaged: 1, columnsComplete: 0, columnsRevealed: 1, columnsRemoving: 0, rows: 8 });
-      expect(probe(r)).toMatchObject({ partial: 0, mixed: 0 });
+      // The probe counts the swap's `prev` as a record of its own: the replacement and `prev`.
+      expect(probe(r)).toEqual({ columns: 2, partial: 0, mixed: 0 });
       const spent: number[] = [];
       for (; pumps < 5; pumps++) {
         spent.push(r.pump(fakeGate(5), 2, 2, 0));
         // The visible index sum is the old payload's on every pump before the swap, the new's from that pump on.
         expect(visibleIndices(r.root), `pump ${pumps}`).toBe(indexSum([pumps < 4 ? old : next]));
-        expect(probe(r), `pump ${pumps}`).toMatchObject({ partial: 0, mixed: 0 });
+        // Two records throughout: `prev` beside the replacement, then (from the swap) `prev` releasing.
+        expect(probe(r), `pump ${pumps}`).toEqual({ columns: 2, partial: 0, mixed: 0 });
         expect(counts(r).columnsRevealed).toBe(1);
       }
       expect(spent).toEqual([5, 5, 5, 5, 4]);
@@ -645,6 +647,48 @@ export function sectionRendererContract(kind: SectionRendererKind): void {
       expect(counts(r)).toMatchObject({ columnsStaged: 1, columnsRemoving: 0, rows: 6, regions: 1 });
       expect(visibleIndices(r.root)).toBe(indexSum([old]));
       expect(revealedCalls).toEqual([]);
+      r.dispose();
+    });
+
+    test('unstage of an unrevealed first payload returns true and leaves the column unknown: remove is then a no-op and a later stage is a first stage', () => {
+      const old = fakePayload(2, 2, rowsOf(5, 1));
+      const r = showing(old);
+      const revealedCalls: Array<[number, number]> = [];
+      r.onColumnRevealed = (cx, cz) => revealedCalls.push([cx, cz]);
+      // Column (9, 9) shows nothing: its first payload is staged, part uploaded (3 of 6 rows) or not at all (0).
+      for (const uploaded of [3, 0]) {
+        const what = `${uploaded} rows uploaded`;
+        r.stage(fakePayload(9, 9, rowsOf(6, 0)), 1);
+        if (uploaded > 0) expect(r.pump(fakeGate(uploaded), 2, 2, 0)).toBe(uploaded);
+        expect(r.unstage(9, 9), what).toBe(true);
+        expect(r.isRevealed(9, 9), what).toBe(false);
+        // Nothing of it is a record any more: its uploaded rows are only queued for release.
+        expect(counts(r), what).toMatchObject({ columnsStaged: 1, columnsComplete: 1, columnsRevealed: 1, columnsRemoving: uploaded > 0 ? 1 : 0 });
+        expect(probe(r), what).toEqual({ columns: uploaded > 0 ? 2 : 1, partial: 0, mixed: 0 });
+        // remove of the unknown column is a no-op, and a second unstage returns false.
+        const before = { counts: counts(r), probe: probe(r), visible: visibleIndices(r.root), bytes: r.gpuBytes() };
+        r.remove(9, 9);
+        expect(r.unstage(9, 9), what).toBe(false);
+        expect({ counts: counts(r), probe: probe(r), visible: visibleIndices(r.root), bytes: r.gpuBytes() }, what).toEqual(before);
+        pumpAll(r, 2, 2);
+        expect(counts(r), what).toMatchObject({ columnsStaged: 1, columnsRemoving: 0, rows: 6, regions: 1 });
+        expect(probe(r), what).toEqual({ columns: 1, partial: 0, mixed: 0 });
+      }
+      // A later stage is a first stage, not a swap: the column shows nothing until its last row is uploaded.
+      const later = fakePayload(9, 9, rowsOf(4, 0, 2));
+      r.stage(later, 2);
+      expect(r.isRevealed(9, 9)).toBe(false);
+      expect(counts(r)).toMatchObject({ columnsStaged: 2, columnsComplete: 1, columnsRevealed: 1, columnsRemoving: 0 });
+      expect(probe(r)).toEqual({ columns: 2, partial: 0, mixed: 0 });
+      expect(r.pump(fakeGate(3), 2, 2, 0)).toBe(3);
+      expect(r.isRevealed(9, 9)).toBe(false);
+      expect(visibleIndices(r.root)).toBe(indexSum([old]));
+      pumpAll(r, 2, 2);
+      expect(r.isRevealed(9, 9)).toBe(true);
+      expect(revealedCalls).toEqual([[9, 9]]);
+      expect(visibleIndices(r.root)).toBe(indexSum([old, later]));
+      expect(counts(r)).toMatchObject({ columnsStaged: 2, columnsComplete: 2, columnsRevealed: 2, columnsRemoving: 0, rows: 10, regions: 2 });
+      expect(probe(r)).toEqual({ columns: 2, partial: 0, mixed: 0 });
       r.dispose();
     });
 
