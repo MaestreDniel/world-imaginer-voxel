@@ -1,10 +1,10 @@
 import { describe, expect, test } from 'vitest';
 import { resolveProfile } from '../../src/core/params/profiles';
 import type { Params } from '../../src/core/params/schema';
-import { JobCancelled, type WorkerPool } from '../../src/engine/workerPool';
+import { JobCancelled, WorkerFailed, type WorkerPool } from '../../src/engine/workerPool';
 import type { Spawn } from '../../src/gen/column/spawn';
 import {
-  createPreviewDriver, createReplayingCanvas, type Configured, type DriverCanvas, type DriverClock, type DriverDraft, type DriverPool,
+  createPreviewDriver, createReplayingCanvas, isSpawnError, type Configured, type DriverCanvas, type DriverClock, type DriverDraft, type DriverPool,
   type DriverStatus, type PreviewDriver,
 } from '../../src/ui/map/previewDriver';
 
@@ -378,6 +378,23 @@ describe('preview driver (SP2b spec §2.6, §2.7)', () => {
     expect(r.canvas.sources.map((s) => s.epoch)).toEqual([-1]);
     expect(r.driver.status).toMatchObject({ pending: false, settled: true, poolEpoch: -1 });
     expect(r.pool.spawns).toEqual([-1]);
+  });
+
+  test('a failed spawn query sets an error `isSpawnError` accepts; a configure error (WorkerFailed included) is not one (rulings R3)', async () => {
+    const r = rig();
+    r.pool.spawn = () => Promise.reject(new WorkerFailed('worker 2 died'));
+    edit(r, 0, URGENT);
+    await r.pool.ready();
+    land(r);
+    await flush();
+    expect(r.driver.status.error).toBe('spawn: worker 2 died');
+    expect(isSpawnError(r.driver.status.error!)).toBe(true);
+    edit(r, 1, URGENT);
+    r.pool.configures.at(-1)!.reject(new WorkerFailed('worker 3 died'));
+    await flush();
+    expect(r.driver.status.error).toBe('worker 3 died');
+    expect(isSpawnError(r.driver.status.error!)).toBe(false);
+    expect(isSpawnError('BAD_PARAMS: density.defs refused')).toBe(false);
   });
 
   test('a configure error sets status.error, ends the cycle and lets the slot run; JobCancelled is silent', async () => {

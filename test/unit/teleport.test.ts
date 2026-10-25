@@ -195,4 +195,40 @@ describe('createTeleport (SP4c spec §3.2, §3.3, D12)', () => {
     await expect(third).resolves.toBe(true);
     expect([r.fly.x, r.fly.z, r.arrivals.length]).toEqual([30.5, 30.5, 1]);
   });
+
+  test('Task 20b: after `dispose`, a pending landing that resolves or fails settles silently (false, no move, neither callback), and a later `go` asks nothing', async () => {
+    const pool = deferredPool();
+    const r = rig(pool);
+    const resolved = r.tp.go(10, 10);
+    const failed = r.tp.go(20, 20);
+    const cancelled = r.tp.go(30, 30);
+    r.tp.dispose();
+    pool.pending[2]!.reject(new JobCancelled());
+    await expect(cancelled).resolves.toBe(false);
+    // A cancel after dispose is not retried.
+    expect(pool.pending.length).toBe(3);
+    pool.pending[1]!.reject(new WorkerFailed('boom'));
+    await expect(failed).resolves.toBe(false);
+    pool.pending[0]!.resolve({ surface: 64, water: -Infinity });
+    await expect(resolved).resolves.toBe(false);
+    await expect(r.tp.go(40, 40)).resolves.toBe(false);
+    expect(pool.pending.length).toBe(3);
+    expect(r.fly).toEqual(camera());
+    expect([r.state.eyeSky, r.fails(), r.arrivals.length]).toEqual([4, 0, 0]);
+  });
+
+  test('Task 20b: the latest `go` pending at `dispose` (superseded by nothing) neither moves nor calls back, whether its landing resolves or fails', async () => {
+    for (const outcome of ['resolve', 'fail'] as const) {
+      const pool = deferredPool();
+      const r = rig(pool);
+      const only = r.tp.go(10, 10);
+      r.tp.dispose();
+      r.tp.dispose();
+      if (outcome === 'resolve') pool.pending[0]!.resolve({ surface: 64, water: -Infinity });
+      else pool.pending[0]!.reject(new WorkerFailed('boom'));
+      await expect(only, outcome).resolves.toBe(false);
+      expect(r.fly, outcome).toEqual(camera());
+      expect([r.state.eyeSky, r.fails(), r.arrivals.length], outcome).toEqual([4, 0, 0]);
+    }
+  });
 });

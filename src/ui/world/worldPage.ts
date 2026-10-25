@@ -108,7 +108,7 @@ import { mountWorldHud } from '../hud';
 import { mountLoadingScreen } from '../loading/loadingScreen';
 import { tips } from '../loading/tips';
 import { decodeMapState, openMapSession } from '../map/mapState';
-import { createPreviewDriver, createReplayingCanvas, draftOf, type DriverStatus, type PreviewDriver } from '../map/previewDriver';
+import { createPreviewDriver, createReplayingCanvas, draftOf, isSpawnError, type DriverStatus, type PreviewDriver } from '../map/previewDriver';
 import { cryptoSeed } from '../seedBox';
 import { SETTINGS_DEFAULTS, loadSettings, saveSettings, type WorldSettings } from '../settings';
 import {
@@ -639,11 +639,25 @@ export function handleContextLoss(
 /**
  * The page's `driver.onStatus` after the reveal (SP4c spec §4.3): the session validates every draft (tier 2 included)
  * before the driver sees it, so a refused configure is a bug and fatal: an `error` calls `fail` (the failure panel with
- * "Copy details"), with the error as the cause's detail. A status without one does nothing.
+ * "Copy details"), with the error as the cause's detail. A status without one does nothing, and so does a spawn error
+ * (rulings R3: the map's spawn-marker query holds nothing of the world; it stays on the map's marker).
  */
 export function onDriverStatus(s: DriverStatus, fail: (cause: string, e: unknown) => void): void {
-  if (s.error === null) return;
+  if (s.error === null || isSpawnError(s.error)) return;
   fail(`Live editing stopped: ${s.error}`, new Error(s.error));
+}
+
+/**
+ * Flushes the world's URL writer on `pagehide` (Task 20b, as `?map` does: `mapPage.ts`), so an F5 or a navigation within
+ * the 200 ms debounce of an Apply or a view change still keeps it. Returns the remover the page's teardown runs.
+ */
+export function flushOnPageHide(
+  win: { addEventListener(type: 'pagehide', fn: () => void): void; removeEventListener(type: 'pagehide', fn: () => void): void },
+  writer: { flush(): void },
+): () => void {
+  const onPageHide = (): void => writer.flush();
+  win.addEventListener('pagehide', onPageHide);
+  return () => win.removeEventListener('pagehide', onPageHide);
 }
 
 /**
@@ -1351,6 +1365,7 @@ export function mountWorldPage(root: HTMLElement, q: WorldQuery, hash: string, o
     // rewrites the search's place. Disposed (a pending write flushed) before the notices. No `hashchange` listener.
     const urlWriter = createUrlWriter((u) => history.replaceState(null, '', u), 200, 1000, oversizeNotice(notices));
     teardown.push(() => urlWriter.dispose());
+    teardown.push(flushOnPageHide(window, urlWriter));
     const worldUrl = createWorldUrl({
       session,
       view: () => worldMapView(mapRef?.tool ?? null, fly),
@@ -1622,6 +1637,8 @@ export function mountWorldPage(root: HTMLElement, q: WorldQuery, hash: string, o
       // "Could not teleport" (D26): in `.world-notices`, or in the tool's row while the map covers the 3D (D27).
       onFail: () => notices.show('Could not teleport', { kind: 'warn', timeoutMs: 4000 }),
     });
+    // A landing still pending at teardown settles silently: no write to the disposed page's camera, no notice.
+    teardown.push(() => teleport.dispose());
     // The map overlay (SP4c spec §1.3): M before the reveal does nothing, since nothing exists to receive it.
     const mapOverlay = createMapOverlay({
       app: root,

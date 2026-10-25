@@ -787,6 +787,26 @@ describe('modes A and B, the covered cap and Watch live (SP4c spec §2.1, §2.2,
     expect(s.save).not.toHaveBeenCalled();
   });
 
+  test('Task 20b: after R2\'s automatic switch, a click on the pressed "Full screen" saves full (the explicit choice); a second click saves nothing; the next wide open stays in full', async () => {
+    const s = setup({ mode: 'split', watchLive: true, width: 1920 });
+    const t = await openMounted(s.overlay);
+    const c = controls(t);
+    s.timers.resizeTo(999);
+    expect([s.overlay.mode, c.full.getAttribute('aria-pressed')]).toEqual(['full', 'true']);
+    expect(s.save).not.toHaveBeenCalled();
+    const log = s.world.log.length;
+    c.full.click();
+    expect(s.save.mock.calls).toEqual([[{ mapMode: 'full', watchLive: true }]]);
+    // Already in full: nothing re-entered (no resize, no frame).
+    expect([s.overlay.mode, s.world.log.length]).toEqual(['full', log]);
+    c.full.click();
+    expect(s.save).toHaveBeenCalledTimes(1);
+    s.timers.resizeTo(1920);
+    s.overlay.close();
+    s.overlay.open();
+    expect(s.overlay.mode).toBe('full');
+  });
+
   test('after `applied(\'T\')` with Watch live, the notice shows while stale > 0 and goes at 0; M during it returns to the map and hides the notice', async () => {
     expect(WATCH_LIVE_NOTICE).toBe('Regenerating… near → far · M returns to the map');
     const counts = createCoordinatorCounts();
@@ -843,6 +863,8 @@ describe('modes A and B, the covered cap and Watch live (SP4c spec §2.1, §2.2,
     const t = await openMounted(s.overlay);
     const c = controls(t);
     expect(c.regen.hidden).toBe(true);
+    // Task 20b: not a polite live region (its text changes almost every frame while the world regenerates).
+    expect([c.regen.getAttribute('aria-live'), c.regen.getAttribute('role')]).toEqual(['off', null]);
     counts.stale = 12;
     counts.MESH.needed = 349;
     s.overlay.tick(counts);

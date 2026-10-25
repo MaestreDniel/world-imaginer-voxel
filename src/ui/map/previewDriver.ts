@@ -113,6 +113,17 @@ interface Slot { readonly draft: DriverDraft; readonly urgent: boolean; readonly
 
 const messageOf = (e: unknown): string => (e instanceof Error ? e.message : String(e));
 
+/** The prefix of the error a failed spawn query reports (`requestSpawn`); configure errors never carry it. */
+const SPAWN_ERROR_PREFIX = 'spawn: ';
+
+/**
+ * Whether a `DriverStatus.error` comes from the spawn-marker query rather than a configure (rulings R3): it only feeds
+ * the map's marker, so the world page does not stop on it, while every configure error stays fatal (SP4c spec §4.3).
+ */
+export function isSpawnError(error: string): boolean {
+  return error.startsWith(SPAWN_ERROR_PREFIX);
+}
+
 /** The standalone page's spawn priority (the pool's default, ahead of the map's tiles). */
 const SPAWN_PRIORITY_DEFAULT = -2;
 
@@ -150,7 +161,7 @@ export function createPreviewDriver(pool: DriverPool, canvas: DriverCanvas, cloc
   const requestSpawn = (poolEpoch: number) => {
     pool.spawn(spawnPriority).then((s) => { if (!disposed && spawnedFor === poolEpoch) canvas.setSpawn(s); }, (e: unknown) => {
       if (disposed || e instanceof JobCancelled || spawnedFor !== poolEpoch) return;
-      error = `spawn: ${messageOf(e)}`;
+      error = `${SPAWN_ERROR_PREFIX}${messageOf(e)}`;
       emitStatus();
     });
   };

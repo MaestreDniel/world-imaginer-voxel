@@ -288,7 +288,8 @@ export function createMapOverlay(o: MapOverlayOptions): MapOverlay {
   // The regeneration readout (the cut line, SP4c spec §13, D23): the HUD's stale count while the world is stale.
   const readout = el('span', 'map-regen');
   readout.id = 'map-regen';
-  readout.setAttribute('role', 'status');
+  // Not a live region (Task 20b): its text changes almost every frame while the world regenerates.
+  readout.setAttribute('aria-live', 'off');
   readout.hidden = true;
   slot.append(modeSwitch, watchLabel, centreButton, closeButton, readout);
 
@@ -359,13 +360,16 @@ export function createMapOverlay(o: MapOverlayOptions): MapOverlay {
     syncControls();
   };
 
-  /** The mode switch (SP4c spec §2.1, §2.2): saved at once; a switch to A while locked releases the lock. */
+  /**
+   * The mode switch (SP4c spec §2.1, §2.2): saved at once; a switch to A while locked releases the lock. A click on the
+   * mode already shown saves it when the stored one differs (Task 20b: Full screen after R2's automatic switch).
+   */
   const setMode = (next: MapMode): void => {
-    if (disposed || next === mode) return;
+    if (disposed || (next === mode && next === preferred)) return;
     if (next === 'split' && !splitAvailable(o.win.innerWidth)) return;
     preferred = next;
     o.save({ mapMode: preferred, watchLive });
-    enterMode(next);
+    if (next !== mode) enterMode(next);
   };
   fullButton.addEventListener('click', () => setMode('full'));
   splitButton.addEventListener('click', () => setMode('split'));

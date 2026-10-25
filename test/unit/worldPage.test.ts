@@ -20,8 +20,8 @@ import { DEFAULT_MAP_STATE, decodeMapState, openMapSession, type MapView } from 
 import { WORLD_MAP_BPP, worldMapView } from '../../src/ui/world/mapOverlay';
 import { createReloader, createWorldUrl, worldHash, type HereState } from '../../src/ui/world/reload';
 import {
-  createRdControl, createUndoNotice, createWorldNotices, everyFrameUntil, failBeforeReveal, handleContextLoss, handleStreamEvent, helpChange, offerLowerRd,
-  onDriverStatus, rdShownOnLoad, releaseOnFailure, reloadRd, runTeardown, stopAfterFailure, UNDO_NOTICE_MS,
+  createRdControl, createUndoNotice, createWorldNotices, everyFrameUntil, failBeforeReveal, flushOnPageHide, handleContextLoss, handleStreamEvent, helpChange,
+  offerLowerRd, onDriverStatus, rdShownOnLoad, releaseOnFailure, reloadRd, runTeardown, stopAfterFailure, UNDO_NOTICE_MS,
 } from '../../src/ui/world/worldPage';
 import { installDom, type FakeElement } from './fixtures/domShim';
 
@@ -654,6 +654,17 @@ describe('onDriverStatus (the configure driver after the reveal, SP4c spec §4.3
     expect(failed[0]![1]).toBeInstanceOf(Error);
     expect((failed[0]![1] as Error).message).toBe('BAD_PARAMS: density.defs refused');
   });
+
+  test('rulings R3: a spawn error (the map\'s spawn-marker query) does not stop the world; a configure error, WorkerFailed included, still does', () => {
+    const failed: Array<[string, unknown]> = [];
+    const fail = (cause: string, e: unknown): void => { failed.push([cause, e]); };
+    onDriverStatus(status('spawn: worker 2 died'), fail);
+    onDriverStatus({ ...status('spawn: JOB_FAILED: no land'), pending: true }, fail);
+    expect(failed).toEqual([]);
+    onDriverStatus(status('worker 3 died'), fail);
+    expect(failed).toHaveLength(1);
+    expect(failed[0]![0]).toBe('Live editing stopped: worker 3 died');
+  });
 });
 
 describe('the world\'s URL (createWorldUrl, SP4c spec §1.6, D20)', () => {
@@ -820,6 +831,46 @@ describe('the world\'s URL (createWorldUrl, SP4c spec §1.6, D20)', () => {
     expect(src).toMatch(/viewChanged: \(\) => worldUrl\.viewChanged\(\)/);
     expect(src).toMatch(/onArrive: \(\) => worldUrl\.arrived\(fly\)/);
     expect(src).toMatch(/teardown\.push\(\(\) => urlWriter\.dispose\(\)\)/);
+  });
+
+  test('Task 20b: `flushOnPageHide` flushes the writer on every pagehide until its remover runs; the page wires it to the world\'s writer and its teardown', () => {
+    const listeners = new Map<string, Set<() => void>>();
+    const win = {
+      addEventListener: (type: string, fn: () => void) => { if (!listeners.has(type)) listeners.set(type, new Set()); listeners.get(type)!.add(fn); },
+      removeEventListener: (type: string, fn: () => void) => { listeners.get(type)?.delete(fn); },
+    };
+    const fire = (type: string) => { for (const fn of [...(listeners.get(type) ?? [])]) fn(); };
+    let flushes = 0;
+    const remove = flushOnPageHide(win, { flush: () => { flushes++; } });
+    expect([...listeners.keys()]).toEqual(['pagehide']);
+    fire('pagehide');
+    fire('pagehide');
+    expect(flushes).toBe(2);
+    remove();
+    expect(listeners.get('pagehide')!.size).toBe(0);
+    fire('pagehide');
+    expect(flushes).toBe(2);
+    // A debounced write pending at pagehide (F5 within 200 ms of an Apply) reaches the URL.
+    vi.useFakeTimers();
+    try {
+      const write = vi.fn<(u: string) => void>();
+      const writer = createUrlWriter(write, 200, 1000, () => {});
+      const off = flushOnPageHide(win, writer);
+      writer.set('/?rd=8#applied');
+      fire('pagehide');
+      expect(write.mock.calls).toEqual([['/?rd=8#applied']]);
+      off();
+      writer.dispose();
+    } finally {
+      vi.useRealTimers();
+    }
+    const src = readFileSync(new URL('../../src/ui/world/worldPage.ts', import.meta.url), 'utf8');
+    expect(src).toMatch(/teardown\.push\(flushOnPageHide\(window, urlWriter\)\)/);
+  });
+
+  test('Task 20b: the teleport is disposed in the page\'s teardown (a landing pending at teardown settles silently)', () => {
+    const src = readFileSync(new URL('../../src/ui/world/worldPage.ts', import.meta.url), 'utf8');
+    expect(src).toMatch(/teardown\.push\(\(\) => teleport\.dispose\(\)\)/);
   });
 });
 

@@ -16,6 +16,7 @@
  * - **The latest click wins (plan; Review Focus 5).** In mode B the map stays open and the user may click again before
  *   the first landing answered; landings run on different workers and can resolve out of order. A `go` superseded by a
  *   later one before its landing settled resolves false and calls neither `onArrive` nor `onFail`, and is not retried.
+ * - **Disposed** (Task 20b, the page's teardown): a `go` pending then, or called later, resolves false the same way.
  */
 import { JobCancelled, type WorkerPool } from '../../engine/workerPool';
 import type { FlyState } from '../../player/fly';
@@ -55,6 +56,8 @@ export interface TeleportOptions {
 export interface Teleport {
   /** Teleports to (x, z): true once the camera moved there; false when it failed or a later `go` superseded it. */
   go(x: number, z: number): Promise<boolean>;
+  /** Every pending `go` settles silently (false, nothing moved, neither callback); a later `go` asks nothing. */
+  dispose(): void;
 }
 
 const clampAt = (v: number): number => Math.min(AT_LIMIT, Math.max(-AT_LIMIT, v));
@@ -63,9 +66,13 @@ export function createTeleport(o: TeleportOptions): Teleport {
   const { pool, fly, state } = o;
   // The latest `go`'s number: a landing that settles for an older one is dropped.
   let latest = 0;
+  let disposed = false;
+  // Superseded by a later `go`, or the teleport disposed.
+  const dropped = (mine: number): boolean => disposed || mine !== latest;
 
   return {
     async go(x, z) {
+      if (disposed) return false;
       const mine = ++latest;
       const bx = Math.floor(clampAt(x));
       const bz = Math.floor(clampAt(z));
@@ -74,13 +81,13 @@ export function createTeleport(o: TeleportOptions): Teleport {
         try {
           landing = await pool.landing(bx, bz);
         } catch (e) {
-          if (mine !== latest) return false;
+          if (dropped(mine)) return false;
           if (e instanceof JobCancelled && attempt < LANDING_RETRIES) continue;
           o.onFail();
           return false;
         }
       }
-      if (mine !== latest) return false;
+      if (dropped(mine)) return false;
       const y = landingY(landing.surface, landing.water);
       fly.x = bx + 0.5;
       fly.z = bz + 0.5;
@@ -91,6 +98,9 @@ export function createTeleport(o: TeleportOptions): Teleport {
       state.eyeSky = 15;
       o.onArrive(fly.x, fly.z, { surface: landing.surface, water: landing.water, y });
       return true;
+    },
+    dispose() {
+      disposed = true;
     },
   };
 }
