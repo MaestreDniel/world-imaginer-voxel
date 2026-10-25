@@ -1,6 +1,6 @@
 import { afterEach, beforeEach, describe, expect, test, vi } from 'vitest';
 import { parseWorldQuery } from '../../src/ui/world/query';
-import { createReloader, hereUrl, installLeaveGuard, navigateTo } from '../../src/ui/world/reload';
+import { createReloader, hereUrl, installLeaveGuard, navigateTo, withArrival } from '../../src/ui/world/reload';
 import { createWorldNotices, enterFullscreen, handleContextLoss } from '../../src/ui/world/worldPage';
 import { installDom, type FakeElement } from './fixtures/domShim';
 
@@ -22,6 +22,33 @@ describe('hereUrl (SP4a spec §7.5)', () => {
     const q = parseWorldQuery(new URLSearchParams(hereUrl({ x: 1234.5, y: 99.6, z: -987.2, yaw: 271.25, pitch: 12.34 }, 8, '#h').slice(2, -2)));
     expect(q.at).toEqual({ x: 1235, z: -987 });
     expect([q.y, q.yaw, q.pitch, q.rd]).toEqual([100, 271.3, 12.3, 8]);
+  });
+});
+
+describe('withArrival (SP4c spec §1.6, D20)', () => {
+  const s = { x: 1234.5, y: 99.6, z: -987.2, yaw: 271.25, pitch: -0.04 };
+
+  test('withArrival(\'?at=1,2&rd=8&renderer=mesh\', s) sets at, y, yaw and pitch in hereUrl\'s formats and keeps rd and renderer in place', () => {
+    const search = withArrival('?at=1,2&rd=8&renderer=mesh', s);
+    expect(search).toBe('?at=1235,-987&rd=8&renderer=mesh&y=100&yaw=271.3&pitch=0.0');
+    // The same four values hereUrl writes, and parseWorldQuery reads them back.
+    const here = new URLSearchParams(hereUrl(s, null, '').slice(2));
+    const got = new URLSearchParams(search.slice(1));
+    for (const k of ['at', 'y', 'yaw', 'pitch']) expect(got.get(k), k).toBe(here.get(k));
+    const q = parseWorldQuery(got);
+    expect(q.at).toEqual({ x: 1235, z: -987 });
+    expect([q.y, q.yaw, q.pitch, q.rd, q.renderer]).toEqual([100, 271.3, 0, 8, 'mesh']);
+  });
+
+  test('an empty search gains the four', () => {
+    expect(withArrival('', s)).toBe('?at=1235,-987&y=100&yaw=271.3&pitch=0.0');
+    expect(withArrival('?', s)).toBe('?at=1235,-987&y=100&yaw=271.3&pitch=0.0');
+  });
+
+  test('a ?y= already present is replaced, not repeated', () => {
+    expect(withArrival('?y=70&workers=4', s)).toBe('?y=100&workers=4&at=1235,-987&yaw=271.3&pitch=0.0');
+    // A repeat is dropped; yaw is not y; other parameters keep their text as written.
+    expect(withArrival('?yaw=1.0&y=70&x%20y=a%2Cb&y=71&flag', s)).toBe('?yaw=271.3&y=100&x%20y=a%2Cb&flag&at=1235,-987&pitch=0.0');
   });
 });
 

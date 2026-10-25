@@ -49,10 +49,16 @@
  * (`fogEase.ts`), following the filled radius scanned every 30 rendered frames, and moves in at once after a lower.
  *
  * After the reveal (spec §7.1, §7.5, §8.2, §8.5; rulings P49, P50): the Ctrl+W guard (`beforeunload`) is armed; every
- * navigation the page starts (the context-loss Reload, the failure panel's Reload, "Open the map here") goes through
- * one reloader, which disarms the guard and navigates at most once; a slow first 300 frames suggest the next lower RD
- * in a dismissible notice whose button applies it live; `webglcontextlost` stops the frame loop and offers a Reload
- * around the camera (`hereUrl`). SP4a's edge clamp, its notice and R are gone (SP4b spec §6.2, D20).
+ * navigation the page starts (the context-loss Reload, the failure panel's Reload) goes through one reloader, which
+ * disarms the guard and navigates at most once; the help's button "Map (M)" opens the map overlay and navigates nowhere
+ * (SP4c spec §1.6, D20); a slow first 300 frames suggest the next lower RD in a dismissible notice whose button applies
+ * it live; `webglcontextlost` stops the frame loop and offers a Reload around the camera (`hereUrl`, with the live
+ * session's hash). SP4a's edge clamp, its notice and R are gone (SP4b spec §6.2, D20).
+ *
+ * The world's URL (SP4c spec §1.6, D20; `createWorldUrl`): after every Apply and every view change of the map it is
+ * `pathname + search + '#' + ` the live session's hash (the map's view, or the camera's at 4 blocks/px before the first
+ * M), through the debounced URL writer (a hash over 64 KiB dropped with the notice); each teleport's arrival rewrites
+ * the search's `at`, `y`, `yaw` and `pitch`, flight never does; there is no `hashchange` listener in the world.
  *
  * The map in the world (SP4c spec §1.3, §2.3, §2.4, §4.2): at the reveal the streaming route creates the preview driver
  * (which adopts the first configure, wants no preview until the first M, and is fed every session change by the page
@@ -91,12 +97,14 @@ import { createStore, type VoxelStore } from '../../world/store/store';
 import { renderErrorScreen } from '../capabilityReport';
 import { el } from '../common/dom';
 import { installShortcuts } from '../common/keys';
+import type { NoticeOptions } from '../common/notice';
+import { createUrlWriter, oversizeNotice } from '../common/urlWriter';
 import { createFrameStats } from '../frameStats';
 import { mountHelp, type Help } from '../help';
 import { mountWorldHud } from '../hud';
 import { mountLoadingScreen } from '../loading/loadingScreen';
 import { tips } from '../loading/tips';
-import { decodeMapState, encodeMapState, openMapSession } from '../map/mapState';
+import { decodeMapState, openMapSession } from '../map/mapState';
 import { createPreviewDriver, createReplayingCanvas, draftOf, type DriverStatus, type PreviewDriver } from '../map/previewDriver';
 import { cryptoSeed } from '../seedBox';
 import { SETTINGS_DEFAULTS, loadSettings, saveSettings, type WorldSettings } from '../settings';
@@ -109,8 +117,8 @@ import { createFogEase, createFogStep, filledRadius } from './fogEase';
 import { createFrameClock, createFrameNotice, lowerRd } from './frameNotice';
 import { coversWorld, createApplyControl, createEpochs, updateAuxPolicy } from './applyControl';
 import { createFrameStep, eyeSkyLight } from './frameStep';
-import { createMapOverlay, followSession, frameCapFor, type MapOverlay } from './mapOverlay';
-import { createReloader, hereUrl, installLeaveGuard, navigateTo, type Reloader } from './reload';
+import { createMapOverlay, followSession, frameCapFor, worldMapView, type MapOverlay } from './mapOverlay';
+import { createReloader, createWorldUrl, installLeaveGuard, navigateTo, type Reloader } from './reload';
 import { Y_MAX, Y_MIN, type WorldQuery } from './query';
 import { createTeleport } from './teleport';
 
@@ -377,6 +385,16 @@ export interface WorldNotices {
    * to `reloadHref` through the reloader; shown once.
    */
   failed(cause: string, details: string, reloadHref: string): void;
+  /**
+   * A notice shaped as `Notices.show` (`common/notice.ts`), so the page's `oversizeNotice(worldNotices)` works (SP4c
+   * spec §1.6): one per text (showing the same text again replaces it), `world-notice-error` for kind 'error', each
+   * action a button that runs it and removes the notice, a "Dismiss" button, and `timeoutMs` removing it. Nothing after
+   * `dispose`.
+   */
+  show(text: string, o?: NoticeOptions): void;
+  /** Removes the notice `show` put up with `text`, if any (a notice that stays until its condition ends). */
+  hide(text: string): void;
+  /** Removes the notices and clears their timers. */
   dispose(): void;
 }
 
@@ -449,7 +467,42 @@ export function createWorldNotices(host: HTMLElement, reloader: Reloader): World
   let lost = false;
   let skippedShown = false;
   let failedShown = false;
+  let disposed = false;
+  /** `show`'s notices by text, with their timeout. */
+  const byText = new Map<string, { readonly panel: HTMLElement; readonly timer: ReturnType<typeof setTimeout> | null }>();
+  /** Removes `text`'s notice; with `panel`, only when it is still that one (a replaced notice's late timer or click). */
+  const hide = (text: string, panel: HTMLElement | null = null): void => {
+    const entry = byText.get(text);
+    if (entry === undefined || (panel !== null && entry.panel !== panel)) return;
+    byText.delete(text);
+    if (entry.timer !== null) clearTimeout(entry.timer);
+    entry.panel.remove();
+  };
   return {
+    show(text, opts = {}) {
+      if (disposed) return;
+      hide(text);
+      const panel = el('div', opts.kind === 'error' ? 'world-notice world-notice-error' : 'world-notice', `${text} `);
+      for (const action of opts.actions ?? []) {
+        const b = el('button', 'world-notice-dismiss', action.label);
+        b.type = 'button';
+        b.addEventListener('click', () => {
+          try { action.run(); } finally { hide(text, panel); }
+        });
+        panel.append(b, ' ');
+      }
+      const dismiss = el('button', 'world-notice-dismiss', 'Dismiss');
+      dismiss.type = 'button';
+      dismiss.title = 'Dismiss this notice';
+      dismiss.addEventListener('click', () => hide(text, panel));
+      panel.append(dismiss);
+      const timer = opts.timeoutMs === undefined ? null : setTimeout(() => hide(text, panel), opts.timeoutMs);
+      byText.set(text, { panel, timer });
+      box.append(panel);
+    },
+    hide(text) {
+      hide(text);
+    },
     slow(rd, lower, apply) {
       slow?.remove();
       const panel = el('div', 'world-notice', `Frames are slow at RD ${rd}. `);
@@ -499,6 +552,8 @@ export function createWorldNotices(host: HTMLElement, reloader: Reloader): World
       box.append(panel);
     },
     dispose() {
+      disposed = true;
+      for (const text of [...byText.keys()]) hide(text);
       box.remove();
     },
   };
@@ -1227,9 +1282,26 @@ export function mountWorldPage(root: HTMLElement, q: WorldQuery, hash: string, o
     const disarm = installLeaveGuard(window);
     teardown.push(disarm);
     const reloader = createReloader((url) => navigateTo(url, location), disarm);
-    const here = (rdOf: number | null): string => hereUrl(fly, rdOf, hash);
     const notices = createWorldNotices(host, reloader);
     teardown.push(() => notices.dispose());
+    // The map overlay and the preview driver (SP4c spec §1.3, §4.2), created below; a failure or a context loss
+    // disposes the overlay (and its tool) before the panel or the notice shows (D27).
+    let mapRef: MapOverlay | null = null;
+    let driver: PreviewDriver | null = null;
+    // The world's URL (SP4c spec §1.6, D20): after every Apply and every view change of the map, the path, the search
+    // and the live session's hash, debounced 200 ms, a hash over 64 KiB dropped with the notice; a teleport's arrival
+    // rewrites the search's place. Disposed (a pending write flushed) before the notices. No `hashchange` listener.
+    const urlWriter = createUrlWriter((u) => history.replaceState(null, '', u), 200, 1000, oversizeNotice(notices));
+    teardown.push(() => urlWriter.dispose());
+    const worldUrl = createWorldUrl({
+      session,
+      view: () => worldMapView(mapRef?.tool ?? null, fly),
+      camera: fly,
+      writer: urlWriter,
+      loc: location,
+    });
+    // The Reloads read the camera, the live session and the map's view now, never the hash the page was loaded with.
+    const here = (rdOf: number | null): string => worldUrl.here(rdOf);
     let stopped = false;
     const stop = (): void => {
       stopped = true;
@@ -1244,10 +1316,6 @@ export function mountWorldPage(root: HTMLElement, q: WorldQuery, hash: string, o
     // A failure after the reveal (SP4b spec §7.4): the loop and the coordinator stop, the workers and the renderer are
     // released, and the notices' panel offers "Copy details" and a Reload around the camera.
     let stopHud = (): void => {};
-    // The map overlay and the preview driver (SP4c spec §1.3, §4.2), created below; a failure or a context loss
-    // disposes the overlay (and its tool) before the panel or the notice shows (D27).
-    let mapRef: MapOverlay | null = null;
-    let driver: PreviewDriver | null = null;
     failAfterReveal = (cause, shown) => {
       const renderer = wr;
       wr = null;
@@ -1307,7 +1375,7 @@ export function mountWorldPage(root: HTMLElement, q: WorldQuery, hash: string, o
     // is then the only caller.
     teardown.push(followSession({ session, driver: previewDriver, toolMounted: () => mapRef !== null && mapRef.tool !== null, now: () => performance.now() }));
     // When a draft is applied (SP4c spec §4.3, D4): once per frame, before the coordinator's update. Its `generation`
-    // gates the aux policy (§6.2); `onApplied` drives Watch live (§2.1).
+    // gates the aux policy (§6.2); `onApplied` drives Watch live (§2.1) and the URL (§1.6).
     const applyControl = createApplyControl({
       coordinator,
       driver: previewDriver,
@@ -1320,6 +1388,7 @@ export function mountWorldPage(root: HTMLElement, q: WorldQuery, hash: string, o
       // SP4c always proceeds; SP5's fork dialog suspends auto-apply here (master §2.7 (b)).
       beforeApply: () => true,
       onApplied: ({ from }) => {
+        worldUrl.applied();
         mapRef?.applied(from);
       },
     });
@@ -1407,14 +1476,8 @@ export function mountWorldPage(root: HTMLElement, q: WorldQuery, hash: string, o
       report: caps,
       evaluation,
       rdMax,
-      mapHereHref: () => `?map#${encodeMapState({
-        v: 1,
-        seed: session.state.seedText,
-        profile: session.state.profile,
-        patch: session.state.patch,
-        view: { ...decoded.state.view, x: Math.round(fly.x), z: Math.round(fly.z) },
-      })}`,
-      navigate: (href) => reloader.reload(href),
+      // "Map (M)" closes the help and opens the overlay (SP4c spec §1.6, D20); nothing navigates.
+      openMap: () => mapRef?.open(),
       onFullscreen: () => {
         // Keyboard Lock is Chromium's and not in the DOM typings.
         void enterFullscreen(document, navigator as Navigator & KeyboardLockNavigator);
@@ -1484,7 +1547,8 @@ export function mountWorldPage(root: HTMLElement, q: WorldQuery, hash: string, o
       pool: workers,
       fly,
       state: frame,
-      onArrive: () => {},
+      // F5 after a teleport returns to where the user jumped (SP4c spec §1.6, D20); flight never rewrites the search.
+      onArrive: () => worldUrl.arrived(fly),
       // The notice "Could not teleport" is routed over the map with Task 20's notices; until then, the console.
       onFail: () => console.warn('Could not teleport'),
     });
@@ -1517,6 +1581,8 @@ export function mountWorldPage(root: HTMLElement, q: WorldQuery, hash: string, o
       now: () => performance.now(),
       // A plain click teleports (SP4c spec §3); the overlay closes the map on arrival in full screen.
       onTeleport: (x, z) => teleport.go(x, z),
+      // Every view change of the tool writes the world's URL (SP4c spec §1.6).
+      viewChanged: () => worldUrl.viewChanged(),
     });
     mapRef = mapOverlay;
     // Disposed before the input, the driver and the page's subscribe: a gesture still open ends through the tool.

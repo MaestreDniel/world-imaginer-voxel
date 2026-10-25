@@ -9,7 +9,9 @@
  *   page's: true in full closes the map, split keeps it, false keeps it as it is), centred on the camera at
  *   `WORLD_MAP_BPP` blocks/px; the tool attaches its canvas to the driver's replaying sink, so it draws at once. Every
  *   `open` then calls `show` on the camera (keeping the zoom and layer) and `setPlayer` once, so the arrow is at the
- *   camera on opening; `close` calls `hide`, and the host is `display: none` while hidden.
+ *   camera on opening; `close` calls `hide`, and the host is `display: none` while hidden. Every view change the tool
+ *   reports (its `onView`: a pan, a zoom, a layer, a re-centring) calls the page's `viewChanged`, which writes the
+ *   world's URL (§1.6, D20); `worldMapView` is the view that URL carries.
  * - **`tick(counts)`**, called by the page on every rendered frame: while shown, the arrow follows the camera (scalars,
  *   allocation-free; the canvas redraws only when it moved, ≤ 30/s).
  * - **The modes** (§2.1, §2.2, D16): A (`'full'`) covers the window over the full-size 3D; B (`'split'`) puts the map on
@@ -48,10 +50,11 @@ import type { WorldRenderer } from '../../render/renderer';
 import { el } from '../common/dom';
 import { escapeAllowed, type ShortcutAction } from '../common/keys';
 import type { LayoutStorage } from '../map/layout';
-import { DEFAULT_MAP_STATE } from '../map/mapState';
+import { DEFAULT_MAP_STATE, type MapView } from '../map/mapState';
 import type { createMapTool, MapTool } from '../map/mapTool';
 import { draftOf, type createReplayingCanvas, type PreviewDriver } from '../map/previewDriver';
 import type { WorldSettings } from '../settings';
+import { AT_LIMIT } from './query';
 
 /** The overlay's mode (SP4c spec §2.1, §2.2): A full screen, B side by side. */
 export type MapMode = WorldSettings['mapMode'];
@@ -69,6 +72,18 @@ export const SPLIT_MIN_WIDTH = 1000;
 export const SPLIT_UNAVAILABLE = 'Side by side needs a window at least 1,000 px wide';
 /** The cap on rendered frames while mode A covers the 3D (SP4c spec §2.6). */
 const COVERED_CAP = 60;
+
+/**
+ * The map view the world's URL carries (SP4c spec §1.3, §1.6): the mounted tool's, else (before the first M mounted it)
+ * the view the first M opens, centred on the camera at `WORLD_MAP_BPP` blocks/px on the default layer. The camera
+ * flies with no horizontal limit, so its centre is clamped to ±`AT_LIMIT` (inside the hash's window, ±524,288): a
+ * reload from far out still decodes.
+ */
+export function worldMapView(tool: Pick<MapTool, 'view'> | null, fly: { readonly x: number; readonly z: number }): MapView {
+  if (tool !== null) return tool.view;
+  const clampAt = (v: number): number => Math.min(AT_LIMIT, Math.max(-AT_LIMIT, v));
+  return { x: clampAt(fly.x), z: clampAt(fly.z), bpp: WORLD_MAP_BPP, layer: DEFAULT_MAP_STATE.view.layer };
+}
 
 /** Whether a window `innerWidth` CSS px wide offers mode B (SP4c spec §2.2). */
 export function splitAvailable(innerWidth: number): boolean {
@@ -141,6 +156,8 @@ export interface MapOverlayOptions {
   now(): number;
   /** A plain click in the map (SP4c spec §3.1): resolves true once the camera moved there, false when it did not. */
   onTeleport(x: number, z: number): Promise<boolean>;
+  /** The tool's `onView`: every view change it reports; the page writes its URL (SP4c spec §1.6, D20). */
+  viewChanged(): void;
 }
 
 export interface MapOverlay {
@@ -317,10 +334,10 @@ export function createMapOverlay(o: MapOverlayOptions): MapOverlay {
       driver: o.driver,
       relay: o.relay,
       storage: o.storage,
-      initialView: { x: o.fly.x, z: o.fly.z, bpp: WORLD_MAP_BPP, layer: DEFAULT_MAP_STATE.view.layer },
+      initialView: worldMapView(null, o.fly),
       host: 'world',
       urlSink: null,
-      onView: null,
+      onView: () => { if (!disposed) o.viewChanged(); },
       onTeleport: (x, z) => {
         o.onTeleport(x, z).then((ok) => {
           if (ok && !disposed && mode === 'full') close();

@@ -29,7 +29,7 @@ describe('mountHelp (SP4a spec §7.4, D31)', () => {
       // The page's rdMax (SP4b spec §5): min(16, the reservation's cap).
       rdMax: over.rdMax ?? Math.min(RD_MAX, reservationRdCap(report.reservation)),
       evaluation: evaluateWorldCapabilities(report),
-      mapHereHref: vi.fn(() => '/?map#v1.abc'),
+      openMap: vi.fn(),
       onFullscreen: vi.fn(),
       onClose: vi.fn(),
     };
@@ -159,7 +159,7 @@ describe('mountHelp (SP4a spec §7.4, D31)', () => {
     expect(dom.el('help-settings').textContent).toContain('90°');
   });
 
-  test('open shows it with a fresh "Open the map here" link; close hides it and calls onClose once', () => {
+  test('open shows it; close hides it and calls onClose once', () => {
     const { help, o } = mount();
     const overlay = dom.el('world-help');
     expect(overlay.hidden).toBe(true);
@@ -167,34 +167,35 @@ describe('mountHelp (SP4a spec §7.4, D31)', () => {
     help.open();
     expect(overlay.hidden).toBe(false);
     expect(help.isOpen).toBe(true);
-    expect(o.mapHereHref).toHaveBeenCalledTimes(1);
-    expect(dom.el('help-map-here').href).toBe('/?map#v1.abc');
     dom.el('help-close').click();
     expect(overlay.hidden).toBe(true);
     expect(help.isOpen).toBe(false);
     expect(o.onClose).toHaveBeenCalledTimes(1);
     help.close();
     expect(o.onClose).toHaveBeenCalledTimes(1);
+    expect(o.openMap).not.toHaveBeenCalled();
   });
 
-  test('with navigate (ruling P50), "Open the map here" is prevented and its fresh URL passed to navigate', () => {
-    const navigate = vi.fn<(href: string) => void>();
-    const o = {
-      map: DEFAULT_KEYMAP, settings: SETTINGS_DEFAULTS, onSettings: vi.fn(), report: REPORT, rdMax: 16,
-      evaluation: evaluateWorldCapabilities(REPORT), mapHereHref: vi.fn(() => '/?map#v1.abc'), navigate, onFullscreen: vi.fn(), onClose: vi.fn(),
-    };
-    mountHelp(dom.body as unknown as HTMLElement, o).open();
-    const click = new Event('click', { cancelable: true });
-    dom.el('help-map-here').dispatchEvent(click);
-    expect(click.defaultPrevented).toBe(true);
-    expect(navigate).toHaveBeenCalledWith('/?map#v1.abc');
-  });
-
-  test('without navigate, "Open the map here" navigates by itself', () => {
-    mount().help.open();
-    const click = new Event('click', { cancelable: true });
-    dom.el('help-map-here').dispatchEvent(click);
-    expect(click.defaultPrevented).toBe(false);
+  test('the button reads `Map (M)`, calls `openMap` and closes the help; no `?map` link is left (SP4c spec §1.6, D20)', () => {
+    const order: string[] = [];
+    const { help, o } = mount();
+    o.openMap.mockImplementation(() => { order.push(`openMap (help open: ${help.isOpen})`); });
+    o.onClose.mockImplementation(() => { order.push('onClose'); });
+    help.open();
+    const map = dom.el('help-map');
+    expect(map.tagName).toBe('BUTTON');
+    expect(map.type).toBe('button');
+    expect(map.textContent).toBe('Map (M)');
+    map.click();
+    // The help closes first, then the overlay opens: nothing navigates.
+    expect(order).toEqual(['onClose', 'openMap (help open: false)']);
+    expect(help.isOpen).toBe(false);
+    expect(dom.el('world-help').hidden).toBe(true);
+    expect(o.openMap).toHaveBeenCalledTimes(1);
+    expect(() => dom.el('help-map-here')).toThrow();
+    const links = dom.el('world-help').querySelectorAll('a');
+    expect(links.filter((a) => String(a.href ?? '').includes('?map'))).toEqual([]);
+    expect(dom.el('world-help').textContent).not.toContain('Open the map here');
   });
 
   test('Esc closes the help while it is open (final review C-M3); Esc while closed does nothing', () => {

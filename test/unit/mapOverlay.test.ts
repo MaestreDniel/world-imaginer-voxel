@@ -178,6 +178,7 @@ function setup(o: {
   const userCap = o.userCap ?? 0;
   const limiter = fakeLimiter(userCap);
   const save = vi.fn();
+  const viewChanged = vi.fn();
   let now = 0;
   const overlay = createMapOverlay({
     app: app as unknown as HTMLElement,
@@ -200,9 +201,10 @@ function setup(o: {
     win: timers as unknown as Window,
     now: () => now,
     onTeleport: o.teleport ?? (() => Promise.resolve(false)),
+    viewChanged,
   });
   return {
-    doc, app, worldHost, canvas, session, driver, fly, input, timers, overlay, world, limiter, save,
+    doc, app, worldHost, canvas, session, driver, fly, input, timers, overlay, world, limiter, save, viewChanged,
     setNow: (t: number) => { now = t; },
     /** The overlay's host (`div.map-overlay`). */
     host: () => app.children.find((c) => c.className.split(' ').includes('map-overlay'))!,
@@ -229,6 +231,20 @@ describe('ownerOf (SP4c spec §2.3)', () => {
 });
 
 describe('the overlay host and the tool (SP4c spec §1.3, §1.5)', () => {
+  test('the tool\'s onView is the page\'s viewChanged (SP4c spec §1.6, D20): every view change it reports writes the URL', async () => {
+    const { overlay, viewChanged } = setup();
+    const t = await openMounted(overlay);
+    expect(t.deps.onView).not.toBeNull();
+    const before = viewChanged.mock.calls.length;
+    t.deps.onView!({ ...t.tool.view, bpp: 8 });
+    t.deps.onView!({ ...t.tool.view, x: 4096 });
+    expect(viewChanged).toHaveBeenCalledTimes(before + 2);
+    // After the dispose a late report writes nothing.
+    overlay.dispose();
+    t.deps.onView!(t.tool.view);
+    expect(viewChanged).toHaveBeenCalledTimes(before + 2);
+  });
+
   test('div.map-overlay is appended to #app beside #world-host, hidden until the first open', () => {
     const { app, worldHost } = setup();
     const host = app.children.find((c) => c.className === 'map-overlay');

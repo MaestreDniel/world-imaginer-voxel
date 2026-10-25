@@ -2,8 +2,9 @@
  * The help overlay (SP4a spec §7.4, D31): **Keys** generated from the key map, **Settings** (the small block SP5's
  * settings panel replaces; the render distance applies live since SP4b, spec §5), **System** (the capability report
  * with "Copy as JSON" and the hidden `#capability-json`, moved here from the SP0 page, D21, then the render distance's
- * maximum), and the links "Open the map here" and "Fullscreen". All text goes through `textContent`. The page opens it on H or F1 and releases the pointer; H, F1 or Esc closes it, and clicking the canvas
- * re-locks.
+ * maximum), and the buttons "Map (M)" (SP4c spec §1.6, D20: it closes the help and opens the map overlay; SP4a's link
+ * to `?map`, which navigated away from the world, is gone) and "Fullscreen". All text goes through `textContent`. The
+ * page opens it on H or F1 and releases the pointer; H, F1 or Esc closes it, and clicking the canvas re-locks.
  */
 import type { CapabilityReport, Evaluation } from '../engine/capabilityRules';
 import { defaultRenderDistance, RD_MIN } from '../engine/renderDistance';
@@ -27,13 +28,8 @@ export interface HelpOptions {
    */
   readonly rdMax: number;
   readonly evaluation: Evaluation;
-  /** The `?map` URL centred on the camera, read each time the overlay opens. */
-  mapHereHref: () => string;
-  /**
-   * When given, a click on "Open the map here" is prevented and its URL passed here: the page's reloader, which disarms
-   * the Ctrl+W guard first (SP4a ruling P50). Without it the link navigates by itself.
-   */
-  navigate?(href: string): void;
+  /** "Map (M)" (SP4c spec §1.6, D20): called after the help closes; the page opens the map overlay. */
+  openMap(): void;
   onFullscreen(): void;
   /** Called once each time the overlay closes. */
   onClose(): void;
@@ -191,20 +187,20 @@ export function mountHelp(host: HTMLElement, o: HelpOptions): Help {
   rdMax.append(rdMaxRow);
   system.append(el('h3', '', 'System'), report, rdMax);
 
-  // Links.
-  const mapHere = el('a', 'help-link', 'Open the map here');
-  mapHere.id = 'help-map-here';
-  mapHere.addEventListener('click', (e) => {
-    if (o.navigate === undefined) return;
-    e.preventDefault();
-    o.navigate(o.mapHereHref());
+  // Links: the map in the world (nothing navigates) and fullscreen.
+  const map = el('button', 'help-link', 'Map (M)');
+  map.id = 'help-map';
+  map.type = 'button';
+  map.addEventListener('click', () => {
+    close();
+    o.openMap();
   });
   const fullscreen = el('button', 'help-link', 'Fullscreen');
   fullscreen.id = 'help-fullscreen';
   fullscreen.type = 'button';
   fullscreen.addEventListener('click', () => o.onFullscreen());
   const links = el('nav', 'help-links');
-  links.append(mapHere, fullscreen);
+  links.append(map, fullscreen);
 
   const head = el('header', 'help-head');
   head.append(el('h2', '', 'Help'), closeButton);
@@ -227,7 +223,6 @@ export function mountHelp(host: HTMLElement, o: HelpOptions): Help {
 
   return {
     open() {
-      mapHere.href = o.mapHereHref();
       if (!isOpen) document.addEventListener('keydown', onKeyDown);
       isOpen = true;
       overlay.hidden = false;

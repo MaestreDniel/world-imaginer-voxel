@@ -12,7 +12,10 @@ import { SETTINGS_DEFAULTS, type WorldSettings } from '../../src/ui/settings';
 import { StoreCorrupt } from '../../src/world/store/pool';
 import { createBenchDriver } from '../../src/ui/world/bench';
 import { createFogEase } from '../../src/ui/world/fogEase';
-import { createReloader } from '../../src/ui/world/reload';
+import { URL_HASH_MAX, URL_OVERSIZE_NOTICE, createUrlWriter, oversizeNotice } from '../../src/ui/common/urlWriter';
+import { DEFAULT_MAP_STATE, decodeMapState, openMapSession, type MapView } from '../../src/ui/map/mapState';
+import { WORLD_MAP_BPP, worldMapView } from '../../src/ui/world/mapOverlay';
+import { createReloader, createWorldUrl, worldHash, type HereState } from '../../src/ui/world/reload';
 import {
   createRdControl, createWorldNotices, everyFrameUntil, failBeforeReveal, handleContextLoss, handleStreamEvent, helpChange, offerLowerRd,
   onDriverStatus, rdShownOnLoad, releaseOnFailure, reloadRd, runTeardown, stopAfterFailure,
@@ -499,7 +502,7 @@ describe('createRdControl (SP4b spec §5, D18; Review Focus 5)', () => {
       report: REPORT,
       evaluation: evaluateWorldCapabilities(REPORT),
       rdMax: 16,
-      mapHereHref: () => '?map',
+      openMap: () => {},
       onFullscreen: () => {},
       onClose: () => {},
     });
@@ -568,7 +571,7 @@ describe('createRdControl (SP4b spec §5, D18; Review Focus 5)', () => {
         report: REPORT,
         evaluation: evaluateWorldCapabilities(REPORT),
         rdMax: 16,
-        mapHereHref: () => '?map',
+        openMap: () => {},
         onFullscreen: () => {},
         onClose: () => {},
       });
@@ -615,7 +618,7 @@ describe('createRdControl (SP4b spec §5, D18; Review Focus 5)', () => {
         report: REPORT,
         evaluation: evaluateWorldCapabilities(REPORT),
         rdMax: 16,
-        mapHereHref: () => '?map',
+        openMap: () => {},
         onFullscreen: () => {},
         onClose: () => {},
       });
@@ -647,5 +650,172 @@ describe('onDriverStatus (the configure driver after the reveal, SP4c spec §4.3
     expect(failed[0]![0]).toContain('BAD_PARAMS: density.defs refused');
     expect(failed[0]![1]).toBeInstanceOf(Error);
     expect((failed[0]![1] as Error).message).toBe('BAD_PARAMS: density.defs refused');
+  });
+});
+
+describe('the world\'s URL (createWorldUrl, SP4c spec §1.6, D20)', () => {
+  /** The page's URL rules on fakes: a real session, the camera, a recording writer and a location. */
+  function rig(search = '?rd=8&renderer=mesh') {
+    const session = openMapSession(DEFAULT_MAP_STATE, () => [1, 2]);
+    const camera: HereState & { x: number; y: number; z: number } = { x: 100.4, y: 90, z: -40.2, yaw: 30, pitch: -10 };
+    let tool: { view: MapView } | null = null;
+    const written: string[] = [];
+    const url = createWorldUrl({
+      session,
+      // The page's view: the tool's, or camera-centred before the first M.
+      view: () => worldMapView(tool, camera),
+      camera,
+      writer: { set: (u) => { written.push(u); } },
+      loc: { pathname: '/', search },
+    });
+    const hashOf = (u: string) => decodeMapState(u.slice(u.indexOf('#')));
+    const searchOf = (u: string) => u.slice(u.indexOf('?'), u.indexOf('#'));
+    return { session, camera, written, url, hashOf, searchOf, mount: (v: MapView) => { tool = { view: v }; }, setView: (v: MapView) => { tool = { view: v }; } };
+  }
+
+  test('after an Apply of `density.detailAmpHi` 4.0, `here()` (the context-loss Reload\'s href) decodes to the edited patch', () => {
+    const r = rig();
+    // The hash the page was loaded with carries no patch.
+    expect(r.hashOf(r.url.here(null)).state.patch).toEqual({});
+    expect(r.session.set('density.detailAmpHi', 4.0).ok).toBe(true);
+    r.url.applied();
+    const href = r.url.here(null);
+    const decoded = r.hashOf(href);
+    expect(decoded.error).toBeNull();
+    expect(decoded.state.patch).toEqual({ density: { detailAmpHi: 4 } });
+    expect(decoded.state.seed).toBe('42');
+    // Around the camera now, in hereUrl's format, with the RD the Reload passes.
+    expect(href.slice(0, href.indexOf('#'))).toBe('/?at=100,-40&y=90&yaw=30.0&pitch=-10.0');
+    r.camera.x = 600;
+    expect(r.url.here(10).slice(0, r.url.here(10).indexOf('#'))).toBe('/?at=600,-40&y=90&yaw=30.0&pitch=-10.0&rd=10');
+  });
+
+  test('the URL written after the Apply is `pathname + search + \'#\' + hash`, never `?map`', () => {
+    const r = rig();
+    r.session.set('density.detailAmpHi', 4.0);
+    r.url.applied();
+    expect(r.written).toEqual([`/?rd=8&renderer=mesh#${worldHash(r.session, worldMapView(null, r.camera))}`]);
+    expect(r.written[0]).not.toContain('map#');
+    expect(new URLSearchParams(r.searchOf(r.written[0]!)).has('map')).toBe(false);
+    // No search at all (entered from the start screen): the path and the hash.
+    const bare = rig('');
+    bare.url.applied();
+    expect(bare.written[0]).toBe(`/#${worldHash(bare.session, worldMapView(null, bare.camera))}`);
+  });
+
+  test('`viewChanged` writes the new view in the hash', () => {
+    const r = rig();
+    const v: MapView = { x: 2048, z: -512, bpp: 16, layer: 'relief' };
+    r.mount(v);
+    r.url.viewChanged();
+    expect(r.hashOf(r.written.at(-1)!).state.view).toEqual(v);
+    r.setView({ ...v, x: 4096, bpp: 0.5 });
+    r.url.viewChanged();
+    expect(r.hashOf(r.written.at(-1)!).state.view).toEqual({ ...v, x: 4096, bpp: 0.5 });
+    expect(r.written).toHaveLength(2);
+  });
+
+  test('before the first M the hash\'s view is centred on the camera at 4 blocks/px', () => {
+    const r = rig();
+    r.camera.x = 300;
+    r.camera.z = -75;
+    r.url.applied();
+    expect(WORLD_MAP_BPP).toBe(4);
+    expect(r.hashOf(r.written[0]!).state.view).toEqual({ x: 300, z: -75, bpp: 4, layer: DEFAULT_MAP_STATE.view.layer });
+    // A camera past the hash's window (±524,288) is clamped to ±500,000, so the reload still decodes.
+    r.camera.x = 600_000;
+    r.camera.z = -600_000;
+    r.url.applied();
+    const far = r.hashOf(r.written[1]!);
+    expect(far.error).toBeNull();
+    expect([far.state.view.x, far.state.view.z]).toEqual([500_000, -500_000]);
+  });
+
+  test('`arrived` rewrites the search\'s `at` to the arrival, and nothing else does (a flight of 500 blocks does not)', () => {
+    const r = rig('?at=0,0&y=80&yaw=0.0&pitch=0.0&rd=8');
+    // A flight of 500 blocks, then an Apply and a view change: the search is the one the page was loaded with.
+    r.camera.x += 500;
+    r.url.applied();
+    r.url.viewChanged();
+    expect(r.written.map(r.searchOf)).toEqual(['?at=0,0&y=80&yaw=0.0&pitch=0.0&rd=8', '?at=0,0&y=80&yaw=0.0&pitch=0.0&rd=8']);
+    // A teleport arrives: the URL is written with the arrival's place, rd kept in place.
+    r.url.arrived({ x: 1000.5, y: 110, z: -2000.5, yaw: 45, pitch: -5 });
+    expect(r.searchOf(r.written.at(-1)!)).toBe('?at=1001,-2000&y=110&yaw=45.0&pitch=-5.0&rd=8');
+    // Flying on and applying again keeps the teleport's place, so F5 returns there.
+    r.camera.x += 500;
+    r.url.applied();
+    expect(r.searchOf(r.written.at(-1)!)).toBe('?at=1001,-2000&y=110&yaw=45.0&pitch=-5.0&rd=8');
+    expect(r.written).toHaveLength(4);
+  });
+
+  describe('the URL-oversize notice in the world', () => {
+    let dom: ReturnType<typeof installDom>;
+    beforeEach(() => { dom = installDom(); });
+    afterEach(() => { vi.unstubAllGlobals(); vi.useRealTimers(); });
+
+    const rows = () => dom.el('world-notices').querySelectorAll('div');
+
+    test('`oversizeNotice(worldNotices)` shows and hides its notice in `.world-notices`', () => {
+      const notices = createWorldNotices(dom.body as unknown as HTMLElement, createReloader(vi.fn(), vi.fn()));
+      expect(dom.el('world-notices').className).toBe('world-notices');
+      const onOversize = oversizeNotice(notices);
+      onOversize(true);
+      expect(rows()).toHaveLength(1);
+      expect(rows()[0]!.textContent).toContain(URL_OVERSIZE_NOTICE);
+      // Shown again with the same text: replaced, not repeated.
+      onOversize(true);
+      expect(rows()).toHaveLength(1);
+      onOversize(false);
+      expect(rows()).toHaveLength(0);
+      // Through the page's writer: a hash over 64 KiB is not written and shows the notice; one that fits hides it.
+      vi.useFakeTimers();
+      const write = vi.fn<(u: string) => void>();
+      const writer = createUrlWriter(write, 200, 1000, oversizeNotice(notices));
+      writer.set(`/#${'a'.repeat(URL_HASH_MAX + 1)}`);
+      vi.advanceTimersByTime(200);
+      expect(write).not.toHaveBeenCalled();
+      expect(rows().map((d) => d.textContent)).toEqual([expect.stringContaining(URL_OVERSIZE_NOTICE)]);
+      writer.set('/#short');
+      vi.advanceTimersByTime(200);
+      expect(write).toHaveBeenCalledWith('/#short');
+      expect(rows()).toHaveLength(0);
+    });
+
+    test('show is Notices-shaped: kind, actions, a dismiss button and a timeout; dispose clears its timers', () => {
+      vi.useFakeTimers();
+      const notices = createWorldNotices(dom.body as unknown as HTMLElement, createReloader(vi.fn(), vi.fn()));
+      const run = vi.fn();
+      notices.show('Could not teleport', { kind: 'error', actions: [{ label: 'Retry', run }] });
+      const row = rows()[0]!;
+      expect(row.className).toBe('world-notice world-notice-error');
+      const [retry, dismiss] = row.querySelectorAll('button');
+      expect(retry!.textContent).toBe('Retry');
+      retry!.click();
+      expect(run).toHaveBeenCalledTimes(1);
+      expect(rows()).toHaveLength(0);
+      notices.show('Undo', { timeoutMs: 1500 });
+      expect(rows()[0]!.className).toBe('world-notice');
+      vi.advanceTimersByTime(1499);
+      expect(rows()).toHaveLength(1);
+      vi.advanceTimersByTime(1);
+      expect(rows()).toHaveLength(0);
+      notices.show('Undo', { timeoutMs: 1500 });
+      rows()[0]!.querySelectorAll('button')[0]!.click();
+      expect(rows()).toHaveLength(0);
+      expect(dismiss!.textContent).toBe('Dismiss');
+      notices.show('Redo', { timeoutMs: 1500 });
+      notices.dispose();
+      expect(vi.getTimerCount()).toBe(0);
+    });
+  });
+
+  test('the page wires it: the overlay\'s `viewChanged`, the teleport\'s `onArrive`, the writer\'s dispose; no `hashchange` and no mount-time hash in the Reloads', () => {
+    // The page's post-reveal wiring cannot be mounted in the unit project, so its source is pinned.
+    const src = readFileSync(new URL('../../src/ui/world/worldPage.ts', import.meta.url), 'utf8');
+    expect(src).not.toMatch(/['"]hashchange['"]/);
+    expect(src).not.toMatch(/hereUrl\(fly, [^)]*, hash\)/);
+    expect(src).toMatch(/viewChanged: \(\) => worldUrl\.viewChanged\(\)/);
+    expect(src).toMatch(/onArrive: \(\) => worldUrl\.arrived\(fly\)/);
+    expect(src).toMatch(/teardown\.push\(\(\) => urlWriter\.dispose\(\)\)/);
   });
 });
