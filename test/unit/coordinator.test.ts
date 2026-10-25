@@ -1966,7 +1966,11 @@ describe('createCoordinator: apply, "old meshes kept on Apply" (SP4c spec §4.4,
     await settleDown(w, c, cam(0, 0), pick);
     expect(w.fake.events).toEqual([{ kind: 'skipped', cx: 1, cz: 1 }]);
     expect(c.isSkipped(1, 1)).toBe(true);
-    expect(read(c).stale).toBeGreaterThan(0);
+    // Stuck until the next Apply: stale, with no job in flight or queued (the overlay's signal that nothing regenerates,
+    // final review WLD-3).
+    const stuck = read(c);
+    expect(stuck.stale).toBeGreaterThan(0);
+    expect([stuck.T, stuck.D, stuck.L, stuck.MESH].map((k) => k.inFlight + k.queued)).toEqual([0, 0, 0, 0]);
     const ts = issuedOf(w, 'T', 1, 1);
     // Draft 3 generates (1, 1) fine: the Apply retries it, and the world settles at epoch 3 with nothing stale.
     failing = false;

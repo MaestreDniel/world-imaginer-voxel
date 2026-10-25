@@ -201,7 +201,7 @@ The tool keeps every handle `mountMapPage` drops today (recon-map §1.1): `sessi
 - **Notices while covered (D27):** the world's notices live in `.world-notices` inside `#world-host` (`ui/styles.css:26`, `:33`; `worldPage.ts:313-353`), under the overlay. While the overlay covers the 3D (mode A, shown), the page sends its transient notices (StoreFull, the URL-oversize notice, "Could not teleport") to the tool's notice row instead (the Undo/Redo notice shows only while the map is hidden, §2.4). A fatal error or a context loss closes the overlay and disposes the tool before the failure panel or the context-loss notice is shown (`worldPage.ts:237` releases the pool and renderer right after).
 - **Opening** (M, or "Map (M)" in the help) releases the pointer lock and gives the controls to the map. **Closing** (M or ✕) gives them back to the world; the user clicks to fly as today (WASD work unlocked, as in SP4b).
 - **A teleport** closes the map (the brief).
-- **Watch live on:** when `applyControl` applies a draft that changes the world (`regenFrom` non-null, §4.3), the map hides and the 3D shows the regeneration with the notice "Regenerating… near → far · M returns to the map" at the bottom while the HUD's stale count is above 0 (D26, from the approved mockup); M returns to the map. A drag never hides it mid-gesture (the Apply waits for the gesture's end, D18), and a change that rebuilds nothing does not hide it. **Off:** the change applies behind the map; the user returns with M or ✕.
+- **Watch live on:** when `applyControl` applies a draft that changes the world (`regenFrom` non-null, §4.3), the map hides and the 3D shows the regeneration with the notice "Regenerating… near → far · M returns to the map" at the bottom while the HUD's stale count is above 0 and the world still regenerates (a T, D, L or MESH job in flight or queued: a stale count with none left is a skipped column's neighbours, which nothing regenerates under this draft; final review WLD-3, ruling R6) (D26, from the approved mockup); M returns to the map. A drag never hides it mid-gesture (the Apply waits for the gesture's end, D18), and a change that rebuilds nothing does not hide it. **Off:** the change applies behind the map; the user returns with M or ✕.
 
 ### 2.2 Mode B, side by side (D16)
 
@@ -563,7 +563,7 @@ Applied when the user approves this spec, each in the commit §10 assigns, each 
 
 May slip, to SP10, named ahead in master §10's Default receivers and worded at the exit by whether it was taken:
 - **The climate-grid cache** (SP2b :232; §6.4): built only if the in-world preview lands later than 500 ms in mode B during an Apply, or the user finds the map slow there; if not built, SP10 builds it.
-- **The map's regeneration readout:** a line in the map's header in the world ("Regenerating n / needed") while the world is stale; the HUD's stale count (§4.5) is not cut.
+- **The map's regeneration readout:** a line in the map's header in the world ("Regenerating n / needed") while the world is stale and still regenerating (§2.1); the HUD's stale count (§4.5) is not cut.
 
 Not cuttable: the map tool and its mount, D26's other additions (the HUD's stale count, the Watch-live notice, the click hint, "Could not teleport", the undo notice), teleport, Apply with the per-column epoch, the swap on both renderers, the pump's order, the two lanes, both modes (the user's deliverable: "live editing in both modes"), undo and redo live, R7's Apply part, the scheduler test, the integration test, G1's live cells.
 

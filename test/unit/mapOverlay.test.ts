@@ -810,6 +810,8 @@ describe('modes A and B, the covered cap and Watch live (SP4c spec §2.1, §2.2,
   test('after `applied(\'T\')` with Watch live, the notice shows while stale > 0 and goes at 0; M during it returns to the map and hides the notice', async () => {
     expect(WATCH_LIVE_NOTICE).toBe('Regenerating… near → far · M returns to the map');
     const counts = createCoordinatorCounts();
+    // The world regenerates: a MESH in flight.
+    counts.MESH.inFlight = 1;
     const s = setup({ mode: 'full', watchLive: true });
     await openMounted(s.overlay);
     // Shown, before any Apply: no notice whatever the count.
@@ -867,6 +869,7 @@ describe('modes A and B, the covered cap and Watch live (SP4c spec §2.1, §2.2,
     expect([c.regen.getAttribute('aria-live'), c.regen.getAttribute('role')]).toEqual(['off', null]);
     counts.stale = 12;
     counts.MESH.needed = 349;
+    counts.T.queued = 3;
     s.overlay.tick(counts);
     expect([c.regen.hidden, c.regen.textContent]).toEqual([false, 'Regenerating 12 / 349']);
     counts.stale = 11;
@@ -875,6 +878,42 @@ describe('modes A and B, the covered cap and Watch live (SP4c spec §2.1, §2.2,
     counts.stale = 0;
     s.overlay.tick(counts);
     expect(c.regen.hidden).toBe(true);
+  });
+
+  test('stale > 0 with no T, D, L or MESH job in flight or queued (a skipped column\'s neighbours, which nothing regenerates): the readout hides and the Watch-live notice ends; jobs again show the readout, not the notice (final review WLD-3)', async () => {
+    const counts = createCoordinatorCounts();
+    const s = setup({ mode: 'full', watchLive: true });
+    const t = await openMounted(s.overlay);
+    const c = controls(t);
+    counts.MESH.needed = 349;
+    counts.stale = 48;
+    counts.T.inFlight = 2;
+    counts.MESH.queued = 5;
+    s.overlay.applied('T');
+    s.overlay.tick(counts);
+    expect(s.notices.show.mock.calls).toEqual([[WATCH_LIVE_NOTICE]]);
+    expect([c.regen.hidden, c.regen.textContent]).toEqual([false, 'Regenerating 48 / 349']);
+    // Each stage's in-flight and queued count keeps it up on its own.
+    const stages = [counts.T, counts.D, counts.L, counts.MESH];
+    for (const k of stages) { k.inFlight = 0; k.queued = 0; }
+    for (const k of stages) {
+      for (const f of ['inFlight', 'queued'] as const) {
+        k[f] = 1;
+        s.overlay.tick(counts);
+        expect(c.regen.hidden).toBe(false);
+        k[f] = 0;
+      }
+    }
+    expect(s.notices.hide).not.toHaveBeenCalled();
+    // Nothing in flight or queued: still stale, nothing regenerates.
+    s.overlay.tick(counts);
+    expect(c.regen.hidden).toBe(true);
+    expect(s.notices.hide.mock.calls).toEqual([[WATCH_LIVE_NOTICE]]);
+    // A pan queues jobs again: the readout returns, the watch stays ended.
+    counts.D.queued = 4;
+    s.overlay.tick(counts);
+    expect([c.regen.hidden, c.regen.textContent]).toEqual([false, 'Regenerating 48 / 349']);
+    expect(s.notices.show).toHaveBeenCalledTimes(1);
   });
 
   test('`route` gets the tool\'s notices on opening in full, null on close, on a switch to split and on `dispose`', async () => {

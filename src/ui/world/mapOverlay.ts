@@ -14,8 +14,10 @@
  *   world's URL (§1.6, D20); `worldMapView` is the view that URL carries.
  * - **`tick(counts)`**, called by the page on every rendered frame: while shown, the arrow follows the camera (scalars,
  *   allocation-free; the canvas redraws only when it moved, ≤ 30/s); the header's readout "Regenerating n / needed"
- *   shows while `counts.stale` is above 0 (the cut line, §13, D23; its text rebuilt only when a count changes); and the
- *   Watch-live notice follows `counts.stale` (below).
+ *   shows while `counts.stale` is above 0 and a T, D, L or MESH job is in flight or queued (the cut line, §13, D23; its
+ *   text rebuilt only when a count changes; a stale count with no job left is a skipped column's neighbours, which
+ *   nothing regenerates under this draft, final review WLD-3); and the Watch-live notice follows the same reading
+ *   (below).
  * - **The modes** (§2.1, §2.2, D16): A (`'full'`) covers the window over the full-size 3D; B (`'split'`) puts the map on
  *   the left half and moves `#world-host` to the right one (the class `split` on both hosts), offered only from
  *   `SPLIT_MIN_WIDTH` CSS px (a stored B opens as A below it; the switch shows B disabled with the reason, re-evaluated
@@ -28,8 +30,8 @@
  *   "Watch live" (A only), "Centre on me" and "✕ Close (M)"; a mode or Watch-live change is saved at once (D17).
  * - **Watch live** (§2.1, D18): `applied(from)`, called when a draft that changes the world is applied, closes the map
  *   in A with Watch live on, so the 3D shows the regeneration; a drag never reaches it mid-gesture (the Apply waits for
- *   the gesture's end). From then until `counts.stale` falls to 0, or M brings the map back, the world's notices show
- *   `WATCH_LIVE_NOTICE` at the bottom of the 3D (D26).
+ *   the gesture's end). From then until `counts.stale` falls to 0 (or no job is left, above), or M brings the map
+ *   back, the world's notices show `WATCH_LIVE_NOTICE` at the bottom of the 3D (D26).
  * - **The world's notices over the map** (§2.1, D27): while A covers the 3D (full, shown, the tool mounted) the page's
  *   transient notices go to the tool's notice row (`notices.route(tool.notices)`); closing, a switch to B and `dispose`
  *   send them back (`route(null)`).
@@ -467,7 +469,11 @@ export function createMapOverlay(o: MapOverlayOptions): MapOverlay {
     close,
     tick(counts) {
       if (shown && tool !== null) tool.setPlayer(o.fly.x, o.fly.z, o.fly.yaw);
-      const stale = counts.stale;
+      // Stale while the world regenerates: a stale count with no T, D, L or MESH job in flight or queued is a column
+      // nothing will regenerate under this draft (a skipped one's neighbours, final review WLD-3), read as 0.
+      const { T, D, L, MESH } = counts;
+      const working = T.inFlight + D.inFlight + L.inFlight + MESH.inFlight + T.queued + D.queued + L.queued + MESH.queued > 0;
+      const stale = working ? counts.stale : 0;
       // The readout (the cut line, §13): its text rebuilt only when a count changed, so nothing allocates at rest.
       if (stale !== readStale || (stale > 0 && counts.MESH.needed !== readNeeded)) {
         readStale = stale;
@@ -475,7 +481,7 @@ export function createMapOverlay(o: MapOverlayOptions): MapOverlay {
         readout.hidden = stale === 0;
         if (stale > 0) readout.textContent = `Regenerating ${stale} / ${readNeeded}`;
       }
-      // The Watch-live notice (D26): up while stale after a Watch-live Apply; the world settled ends it.
+      // The Watch-live notice (D26): up while stale after a Watch-live Apply; the world settled (or stuck) ends it.
       if (watching) {
         if (stale === 0) endWatch();
         else if (!watchNoticeUp) {
