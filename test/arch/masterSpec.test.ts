@@ -56,6 +56,9 @@
  * entry names `ui/world/bench.ts`.
  * G1's streaming commit (SP4b §8.2, §8.4, §13): §6.4's G1 row names the six streaming parts, which `THRESHOLDS` holds
  * activeFrom SP4b, and the RTX check at the exit; no "first playable" is left in §4.18, §6.4, §7 or §8.
+ * SP4c (its spec §10, §12): the first commit moves the SP4c header pin here (L, with its spec) with §10's SP4c entry,
+ * SP5's walk-mode teleport and saved places and SP10's map layers without bookmarks; §1 names each SP4c module in its
+ * entry, which exists (`SP4C_MODULES`, a row added by each task that adds a module).
  */
 import { existsSync, readdirSync, readFileSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
@@ -695,7 +698,6 @@ describe('master spec amendments (SP4b §13)', () => {
     const sp4b = spEntry('SP4b', 'SP4c');
     expect(sp4b).toContain('Spec: `2026-10-23-sp4b-streaming-design.md`');
     expect(sp4b.split('\n').some((l) => l.startsWith('- **Cut line:** deferred reclamation\'s primitive (→ SP5)')), 'the SP4b entry has no `- **Cut line:** deferred reclamation\'s primitive (→ SP5)` line').toBe(true);
-    expect(spEntry('SP4c', 'SP5').startsWith('**SP4c — The map in the world and live editing** (M; SP4b)')).toBe(true);
     expect(text).toContain('SP4b deferred-reclamation primitive → SP5');
     const scheduler = text.split('\n').find((l) => l.startsWith('- **Scheduler** ('));
     expect(scheduler, 'no `- **Scheduler** (…` header in §6.3').toBeDefined();
@@ -922,5 +924,34 @@ describe('master spec amendments (SP4b §13)', () => {
     expect(text).toContain('SP4b deferred-reclamation primitive → SP5 (delivered in SP4b, so nothing moved);');
     // SP5 no longer carries the conditional "if SP4b's cut line moved it here".
     expect(spEntry('SP5', 'SP6')).not.toContain('If SP4b\'s cut line moved');
+  });
+});
+
+describe('master spec amendments (SP4c §12)', () => {
+  /** [§1 entry head, the token its entry holds, the file on disk]; Tasks 6, 12, 15, 17 and 18 append theirs. */
+  const SP4C_MODULES: Array<[head: RegExp, token: string, file: string]> = [];
+
+  test('§10\'s SP4c entry, SP5\'s walk-mode teleport and saved places, SP10 without bookmarks', () => {
+    const sp4c = spEntry('SP4c', 'SP5');
+    expect(sp4c.startsWith('**SP4c — The map in the world and live editing** (L; SP4b). Spec: `2026-10-25-sp4c-map-in-world-design.md`'), 'the SP4c header').toBe(true);
+    expect(sp4c).toContain('- **Deliverable:** teleport from the map and edit the world live in both modes.');
+    expect(sp4c).toContain('**Exit:** as the SP4c spec §14');
+    expect(sp4c.split('\n').some((l) => l.startsWith('- **Cut line:** the climate-grid cache and the map\'s regeneration readout (→ SP10)')), 'the SP4c entry has no `- **Cut line:** the climate-grid cache and the map\'s regeneration readout (→ SP10)` line').toBe(true);
+    expect(text).toContain('SP4c climate-grid cache and the map\'s regeneration readout → SP10');
+    const sp5 = spEntry('SP5', 'SP6');
+    expect(sp5).toContain('Walk mode\'s teleport: the feet at the landing surface + 1, the look direction kept, snapped to `MOTION_BLOCKING` once published (the SP4c spec §3.5)');
+    expect(sp5).toContain('saved places as a section of each saved world\'s map');
+    const layers = /complete map layers \(([^)]*)\)/.exec(spEntry('SP10', 'SP11'));
+    expect(layers, 'SP10 has no `complete map layers (…)` list').not.toBeNull();
+    expect(layers![1]).not.toContain('bookmarks');
+  });
+
+  test('§1 names each SP4c module in its entry, which exists', () => {
+    for (const [head, token, file] of SP4C_MODULES) {
+      const entry = layoutEntry(head);
+      expect(entry, `§1 has no entry matching ${head}`).not.toBe('');
+      expect(entry, `§1's ${head} entry does not name ${token}`).toContain(token);
+      expect(existsSync(`${ROOT_DIR}${file}`), `${file} does not exist`).toBe(true);
+    }
   });
 });

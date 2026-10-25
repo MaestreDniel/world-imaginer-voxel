@@ -593,3 +593,5 @@ The exit evidence goes under `## Exit evidence`, before the Threshold log. The e
 ## Threshold log
 
 (One line per commit that changes `test/thresholds.lock.json`.)
+
+- 2026-10-25 — SP4c Task 1: startedSps gains 'SP4c' (spec §10).
