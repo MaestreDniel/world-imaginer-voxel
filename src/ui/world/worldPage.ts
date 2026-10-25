@@ -35,7 +35,10 @@
  * calls `update` (SP4a's static route). With `opts.bench` (the `?bench=medium` route, `bench.ts`, SP4b spec §8.3) the
  * page's own streaming frame runs with no input, HUD, help or notices: after 120 idle frames (the display interval)
  * the driver sets the camera's pose and the RD before each frame step, each rendered frame is recorded into its
- * preallocated record, and a failure after the reveal ends the script with the error.
+ * preallocated record, and a failure after the reveal ends the script with the error. For its live legs (SP4c spec
+ * §8.4) the bench builds the world page's live pieces without a map: the preview driver over an unattached replaying
+ * canvas with the preview not wanted, fed every session change; the apply control (its `onApplied` marks the Apply
+ * frame); the teleport over the bench's pool; the reveals since each mark, read through `sections.onColumnRevealed`.
  *
  * Errors after the reveal (SP4b spec §3.6, §7.4, D12) degrade: a skipped column shows a dismissible notice with "Copy
  * details", StoreFull a notice offering "Lower to RD n" (applied live on a click, never on its own); a fatal event (no
@@ -65,7 +68,7 @@
  * until the map tool is mounted, ruling R1) and the map overlay (`mapOverlay.ts`); M toggles it, the flight pauses and
  * the world's keys stop while the map owns the controls, the frame's `onRendered` moves the map's arrow, undo and redo
  * are installed for the page's lifetime, and a fatal error or a context loss disposes the overlay before the failure
- * panel or the notice. The bench and flight routes create neither.
+ * panel or the notice. The flight route creates neither; the bench creates the driver without the overlay.
  *
  * Live editing (SP4c spec §4.3, §6.2): the coordinator's first epoch is the first draft's genKey interned
  * (`createEpochs`); the apply control (`applyControl.ts`) ticks before every `coordinator.update` and applies the
@@ -112,7 +115,8 @@ import { createPreviewDriver, createReplayingCanvas, draftOf, isSpawnError, type
 import { cryptoSeed } from '../seedBox';
 import { SETTINGS_DEFAULTS, loadSettings, saveSettings, type WorldSettings } from '../settings';
 import {
-  BENCH_IDLE_FRAMES, BENCH_REFILL, BENCH_TIME_SPEED, benchInterval, createBenchRecorder, jsHeapMB, type BenchDriver, type BenchPose,
+  BENCH_IDLE_FRAMES, BENCH_REFILL, BENCH_TIME_SPEED, benchInterval, createBenchRecorder, createLiveReveals, jsHeapMB, type BenchDriver,
+  type BenchPose,
 } from './bench';
 import { firstView } from './firstView';
 import type { FlightContext } from './flight';
@@ -1296,15 +1300,25 @@ export function mountWorldPage(root: HTMLElement, q: WorldQuery, hash: string, o
         stopped = true;
         cancelAnimationFrame(raf);
       };
-      // A failure after the reveal ends the script with the error, so measureChrome stops at once; the coordinator, the
-      // workers and the renderer are released as on the streaming route.
+      // The live legs' teleport and preview driver (SP4c spec §8.4), created below.
+      let benchTeleport: Teleport | null = null;
+      let benchDriver: PreviewDriver | null = null;
+      // A failure after the reveal ends the script with the error, so measureChrome stops at once; the teleport (before
+      // the pool: a landing in flight settles silently, ruling R5), the driver, the coordinator, the workers and the
+      // renderer are released as on the streaming route.
       failAfterReveal = (cause, shown) => {
         const renderer = wr;
         wr = null;
         stopAfterFailure({
           stop,
           show: () => bench.fail(`${cause}\n${shown}`),
-          release: [() => coordinator.dispose(), () => pool?.terminate(), () => renderer?.dispose()],
+          release: [
+            () => benchTeleport?.dispose(),
+            () => benchDriver?.dispose(),
+            () => coordinator.dispose(),
+            () => pool?.terminate(),
+            () => renderer?.dispose(),
+          ],
           onError: (e) => console.error('The bench\'s failure:', e),
         });
       };
@@ -1314,11 +1328,75 @@ export function mountWorldPage(root: HTMLElement, q: WorldQuery, hash: string, o
       };
       world.onContextLost(() => fail('The graphics context was lost.', null));
       try {
-        // The script's RD steps never exceed the reservation's cap (Task 26b); the review shots' camera reads the ground's
-        // height under the frozen pose (rulings R9).
-        bench.bind({ rdMax, heightAt: (x, z) => store.heightAt('motionBlocking', x, z) });
-        // L5's refill is measured at the script's top RD, the cap when the reservation clamps it.
+        // L5's refill is measured at the script's top RD, the cap when the reservation clamps it; the live legs run at it.
         const refillRd = Math.min(BENCH_REFILL.rd, rdMax);
+        // The live legs' pieces (SP4c spec §8.4), the world page's without a map: the configure owner over a replaying
+        // canvas nothing attaches to, wanting no preview and fed every session change (no tool is ever mounted, ruling
+        // R1); a configure failure is fatal (§4.3).
+        const reveals = createLiveReveals(bench.record);
+        sections.onColumnRevealed = (cx, cz) => reveals.revealed(cx, cz);
+        teardown.push(() => { sections.onColumnRevealed = null; });
+        const liveDriver = createPreviewDriver(workers, createReplayingCanvas(), {
+          now: () => performance.now(),
+          setTimeout: (fn, ms) => window.setTimeout(fn, ms),
+          clearTimeout: (id) => window.clearTimeout(id),
+        }, { spawnPriority: 600 });
+        benchDriver = liveDriver;
+        teardown.push(() => liveDriver.dispose());
+        liveDriver.setPreviewWanted(false);
+        liveDriver.adopt({ poolEpoch: workers.epoch, sessionEpoch: session.state.epoch, seedKey: draftOf(session.state).seedKey, ready: firstReady });
+        teardown.push(liveDriver.onStatus((s) => onDriverStatus(s, (cause, e) => fail(cause, e))));
+        teardown.push(followSession({ session, driver: liveDriver, toolMounted: () => false, now: () => performance.now() }));
+        // The apply control (§4.3): its `onApplied` marks the Apply frame, from which L7's and L8's times run.
+        const applyControl = createApplyControl({
+          coordinator,
+          driver: liveDriver,
+          session,
+          pool: workers,
+          clock: { now: () => performance.now() },
+          epochs,
+          initial: appliedDraftOf(draftOf(session.state).seedKey, firstReady),
+          initialGeneration: workers.epoch,
+          beforeApply: () => true,
+          onApplied: () => reveals.mark(),
+        });
+        teardown.push(() => applyControl.dispose());
+        // The teleport (§3) over the bench's pool; until it arrives the camera is still at the old place, so no reveal
+        // counts for L9 (a landing that fails leaves L9 to its cap).
+        let landing = false;
+        const teleporter = createTeleport({
+          pool: workers,
+          fly,
+          state: frame,
+          onArrive: () => { landing = false; },
+          onFail: () => {},
+        });
+        benchTeleport = teleporter;
+        teardown.push(() => teleporter.dispose());
+        // The script's RD steps never exceed the reservation's cap (Task 26b); the review shots' camera reads the ground's
+        // height under the frozen pose (rulings R9); the live legs edit, undo and teleport through the pieces above.
+        bench.bind({
+          rdMax,
+          heightAt: (x, z) => store.heightAt('motionBlocking', x, z),
+          live: {
+            set(path, v) {
+              reveals.reset();
+              const r = session.set(path, v);
+              if (!r.ok) throw new Error(`the bench's edit ${path} = ${v} was refused: ${r.issues.map((i) => i.message).join('; ')}`);
+            },
+            undo() {
+              reveals.reset();
+              if (!session.undo()) throw new Error('the bench\'s undo found nothing to undo');
+            },
+            teleport(x, z) {
+              // The click is L9's mark (D24: "within 0.5 s of the click").
+              reveals.mark();
+              landing = true;
+              return teleporter.go(x, z);
+            },
+            settled: () => reveals.filled,
+          },
+        });
         // The live RD as the help would set it, never saved (SP4b spec §5).
         const fog = createFogEase(loadRd);
         const fogStep = createFogStep(fog, fly, columns, loadRd);
@@ -1402,11 +1480,14 @@ export function mountWorldPage(root: HTMLElement, q: WorldQuery, hash: string, o
           state: frame,
           timeSpeed: () => BENCH_TIME_SPEED,
           fogStep: (dtMs) => fogStep.step(dtMs),
-          // No session edits and no map on the bench until its live legs (SP4c spec §8.4): the pool keeps its default
-          // aux policy.
-          beforeUpdate: () => {},
-          afterCounts: () => {},
+          // The apply control before the coordinator's update; the aux policy from its counts, no map covering the 3D
+          // (SP4c spec §4.3, §6.2, §8.4).
+          beforeUpdate: () => applyControl.tick(),
+          afterCounts: (c) => updateAuxPolicy(workers, applyControl.generation, false, c),
           onRendered: (dtMs) => {
+            // The live legs' reveals since their mark around the camera's column, before the recorder takes the row.
+            if (landing) reveals.clear();
+            else reveals.count(Math.floor(fly.x) >> 4, Math.floor(fly.z) >> 4, refillRd);
             recorder.frame(timing[T_RAW]!, performance.now() - timing[T_START]!, timing[T_COORD]!, timing[T_UPLOAD]!, timing[T_ROWS]!, counts.genCap);
             timing[T_COORD] = 0;
             timing[T_UPLOAD] = 0;
@@ -1447,6 +1528,7 @@ export function mountWorldPage(root: HTMLElement, q: WorldQuery, hash: string, o
             load: { revealMs: stats.revealMs, stageMs: { ...stats.stageMs }, longTasks: stats.longTasks, first120RenderedMaxMs: stats.first120MaxMs },
             totals: { dropped: counts.dropped, failed: counts.failed, storeFull: counts.storeFull },
             refillMs,
+            canvas: { width: world.renderer.domElement.width, height: world.renderer.domElement.height },
           });
         };
         const pose: BenchPose = { x: 0, y: 0, z: 0, yaw: 0, pitch: 0 };

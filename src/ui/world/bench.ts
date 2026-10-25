@@ -8,6 +8,10 @@
  *    throttle) with the camera's pose set by the script before each step (`benchPose`: 95 s of legs at y 150, pitch −15,
  *    the time from 08:00 at ×60), and records each rendered frame into the preallocated `BenchRecord`
  *    (`createBenchRecorder`), so the bench measures the page and not its own garbage;
+ * 2b. then the live legs (SP4c spec §8.4, D22; `BENCH_LIVE`), through the page's own loop and its apply control with a
+ *    scripted session and no map: L7 the edit `density.detailAmpHi` 1.5 → 4.0 (one urgent change), L8 its undo, L9 a
+ *    teleport 20,000 blocks east through `teleport.ts`; each ends once settled (every column of the RD 12 MESH set
+ *    revealed since its Apply, or the teleport's disc filled; `createLiveReveals`) or at its cap (20, 20, 15 s);
  * 3. hands the driver the run's fixed figures (`done`); the driver publishes `summarizeBench`'s JSON as
  *    `window.__wiBench.result` (read by `measureChrome.ts --route bench`) and a "Download JSON" button (the Firefox
  *    cells, by hand).
@@ -20,7 +24,7 @@
  * The world page imports this module's values; this module loads the page with a dynamic `import()`, so the two do not
  * import each other statically.
  */
-import type { Stage } from '../../engine/rings';
+import { discOffsets, type Stage } from '../../engine/rings';
 import { medianInterval, percentile, snapFrameTime } from '../../render/frameTiming';
 import type { GpuEstimate, WorldRenderer } from '../../render/renderer';
 import type { RevealProbe, SectionRenderer, SectionRendererCounts, SectionRendererKind, StructuralKind } from '../../render/sectionRenderer';
@@ -39,11 +43,14 @@ export const BENCH_PITCH = -15;
 export const BENCH_TIME_SPEED = 60;
 /** The idle frames after the reveal that measure the display interval (spec §8.3). */
 export const BENCH_IDLE_FRAMES = 120;
-/** The record's frames: 95 s at 240 Hz is 22,800. */
-export const BENCH_FRAME_CAPACITY = 32768;
+/**
+ * The record's frames (SP4c spec §8.4, Spec corrections): 95 s plus the live legs at their caps (55 s) at 240 Hz is
+ * 36,000; 49,152 holds 205 s.
+ */
+export const BENCH_FRAME_CAPACITY = 49152;
 
 export interface BenchLeg {
-  readonly name: 'L0' | 'L1' | 'L2' | 'L3' | 'L4' | 'L5' | 'L6';
+  readonly name: 'L0' | 'L1' | 'L2' | 'L3' | 'L4' | 'L5' | 'L6' | 'L7' | 'L8' | 'L9';
   readonly seconds: number;
   /** Blocks per second; 0 hovers. */
   readonly speed: number;
@@ -73,7 +80,30 @@ export const BENCH_LEGS: readonly BenchLeg[] = [
   { name: 'L6', seconds: 15, speed: 0, headings: [], rdSteps: [{ atS: 0, rd: 8 }, { atS: 5, rd: 12 }] },
 ];
 
-/** Each leg's start, s, and the script's length (95 s). */
+/**
+ * The live legs after L6 (SP4c spec §8.4, D22): L7 sets `edit.path` from `from` (the default profile's) to `to` (one
+ * urgent change), L8 undoes it, L9 teleports `teleportEast` blocks east of the camera at the same z; `maxS` is each
+ * leg's cap, s. They hover at y 150 and pitch −15 (after L9's arrival, at the landing's y).
+ */
+export const BENCH_LIVE = {
+  edit: { path: 'density.detailAmpHi', from: 1.5, to: 4.0 },
+  maxS: { L7: 20, L8: 20, L9: 15 },
+  teleportEast: 20000,
+} as const;
+
+/** L7-L9 as legs (`seconds` the cap): no flight and no RD step; they end on their own, not on a timeline. */
+export const BENCH_LIVE_LEGS: readonly BenchLeg[] = [
+  { name: 'L7', seconds: BENCH_LIVE.maxS.L7, speed: 0, headings: [], rdSteps: [] },
+  { name: 'L8', seconds: BENCH_LIVE.maxS.L8, speed: 0, headings: [], rdSteps: [] },
+  { name: 'L9', seconds: BENCH_LIVE.maxS.L9, speed: 0, headings: [], rdSteps: [] },
+];
+
+/** Every leg, index = the record's `leg` (L0-L6 the timed script, L7-L9 the live legs). */
+const ALL_LEGS: readonly BenchLeg[] = [...BENCH_LEGS, ...BENCH_LIVE_LEGS];
+/** The first live leg's index. */
+const FIRST_LIVE = BENCH_LEGS.length;
+
+/** Each leg's start, s, and the timed script's length (95 s; the live legs follow it). */
 const LEG_STARTS: readonly number[] = BENCH_LEGS.map((_, i) => BENCH_LEGS.slice(0, i).reduce((s, l) => s + l.seconds, 0));
 export const BENCH_SECONDS = LEG_STARTS[LEG_STARTS.length - 1]! + BENCH_LEGS[BENCH_LEGS.length - 1]!.seconds;
 
@@ -166,10 +196,16 @@ export function benchInterval(idle: ArrayLike<number>): number {
 
 // ---------------------------------------------------------------- the record
 
-/** The per-frame fields, one preallocated column each (spec §8.3). */
+/**
+ * The per-frame fields, one preallocated column each (spec §8.3). SP4c's live legs (spec §8.4) add `tMs` (the script's
+ * time, ms, written by the driver with `leg`), `mark` (1 on a live leg's Apply frame or teleport click) and
+ * `revealed2`, `revealed4`, `revealedRd` (the columns within 2 columns of the camera's, of the RD 4 disc and of the live
+ * RD's disc revealed since that mark), written by the page (`createLiveReveals`) before the recorder.
+ */
 export const BENCH_FIELDS = [
   'leg', 'rawMs', 'snappedMs', 'mainMs', 'coordinatorMs', 'uploadMs', 'rows', 'structuralKind', 'structuralMB', 'gpuMs', 'calls',
   'triangles', 'geometryMB', 'texturesMB', 'drawingBufferMB', 'heapMB', 'sabMB', 'partial', 'mixed', 'genCap',
+  'tMs', 'mark', 'revealed2', 'revealed4', 'revealedRd',
 ] as const;
 export type BenchField = (typeof BENCH_FIELDS)[number];
 
@@ -283,6 +319,109 @@ export function createBenchRecorder(rec: BenchRecord, src: BenchSources, interva
   };
 }
 
+// ---------------------------------------------------------------- the live legs' reveals
+
+/** "Near the player" for the first swap or reveal (spec §8.4, D24): within this many columns of the camera's, on both axes. */
+export const LIVE_NEAR_COLUMNS = 2;
+/** The disc of `applyNearMs` and `undoNearMs` (D24): RD 4, 69 columns, within 64 blocks of the camera. */
+export const LIVE_NEAR_RD = 4;
+/** The stamps' window: 25 × 25 columns around the camera, RD 12's disc and the ring slots every column of it maps to. */
+const LIVE_WINDOW = 2 * BENCH_RD + 1;
+
+/**
+ * Which columns show the new epoch in a live leg (SP4c spec §8.4; plan): read through `sections.onColumnRevealed` into a
+ * preallocated per-column stamp, the record's row of the column's last reveal, over a 25 × 25 ring of slots (column
+ * (cx, cz) in slot (cx mod 25, cz mod 25), with its coordinates kept, so a column 25k columns away never counts as the
+ * camera's). Every payload revealed at or after an Apply frame is the new epoch's (`staleReveals` 0 in R7), so a column
+ * shows it once stamped at or after the leg's `mark`.
+ */
+export interface LiveReveals {
+  /** The section renderer's `onColumnRevealed`: stamps the column with the record's current row. */
+  revealed(cx: number, cz: number): void;
+  /** The leg's mark (its Apply frame, or the teleport's click): reveals from this row on count; `record.mark` gets 1. */
+  mark(): void;
+  /** A leg's start: nothing counts until its mark. */
+  reset(): void;
+  /** Writes the row's counts around column (cx, cz), at the live RD `rd` (≤ 12), and updates `filled`. */
+  count(cx: number, cz: number, rd: number): void;
+  /** Writes zeros for the row (a teleport not yet arrived: the camera is still at the old place). */
+  clear(): void;
+  /** Whether the last `count` found every column of the RD disc revealed since the mark. */
+  readonly filled: boolean;
+}
+
+export function createLiveReveals(rec: BenchRecord): LiveReveals {
+  const n = LIVE_WINDOW;
+  const half = (n - 1) / 2;
+  const slotCx = new Int32Array(n * n);
+  const slotCz = new Int32Array(n * n);
+  const slotRow = new Float64Array(n * n).fill(-1);
+  const slot = (cx: number, cz: number): number => (((cx % n) + n) % n) * n + (((cz % n) + n) % n);
+  const nearLim = (LIVE_NEAR_RD + 0.5) * (LIVE_NEAR_RD + 0.5);
+  let since = -1;
+  let filled = false;
+  const write = (n2: number, n4: number, nRd: number): void => {
+    const i = rec.n;
+    if (i >= rec.capacity) return;
+    rec.revealed2[i] = n2;
+    rec.revealed4[i] = n4;
+    rec.revealedRd[i] = nRd;
+  };
+  return {
+    revealed(cx, cz) {
+      const s = slot(cx, cz);
+      slotCx[s] = cx;
+      slotCz[s] = cz;
+      slotRow[s] = rec.n;
+    },
+    mark() {
+      since = rec.n;
+      filled = false;
+      if (rec.n < rec.capacity) rec.mark[rec.n] = 1;
+    },
+    reset() {
+      since = -1;
+      filled = false;
+    },
+    count(cx, cz, rd) {
+      if (since < 0) {
+        filled = false;
+        write(0, 0, 0);
+        return;
+      }
+      const r = Math.min(rd, half);
+      const lim = (r + 0.5) * (r + 0.5);
+      let n2 = 0;
+      let n4 = 0;
+      let nRd = 0;
+      let need = 0;
+      for (let dz = -r; dz <= r; dz++) {
+        for (let dx = -r; dx <= r; dx++) {
+          const d2 = dx * dx + dz * dz;
+          if (d2 > lim) continue;
+          need++;
+          const x = cx + dx;
+          const z = cz + dz;
+          const s = slot(x, z);
+          if (slotRow[s]! < since || slotCx[s] !== x || slotCz[s] !== z) continue;
+          nRd++;
+          if (d2 <= nearLim) n4++;
+          if (Math.abs(dx) <= LIVE_NEAR_COLUMNS && Math.abs(dz) <= LIVE_NEAR_COLUMNS) n2++;
+        }
+      }
+      filled = nRd === need;
+      write(n2, n4, nRd);
+    },
+    clear() {
+      filled = false;
+      write(0, 0, 0);
+    },
+    get filled() {
+      return filled;
+    },
+  };
+}
+
 /** `performance.memory.usedJSHeapSize` in MiB (Chrome only), else NaN. */
 export function jsHeapMB(): number {
   const memory = (performance as Performance & { readonly memory?: { readonly usedJSHeapSize?: number } }).memory;
@@ -323,6 +462,8 @@ export interface BenchFixed {
   readonly totals: { readonly dropped: number; readonly failed: number; readonly storeFull: number };
   /** From L5's start to the first frame whose RD 12 disc is revealed; null when L5 ended first. */
   readonly refillMs: number | null;
+  /** The canvas's drawing buffer, px (SP4c spec §8.4: the live block's `width` and `height`). */
+  readonly canvas: { readonly width: number; readonly height: number };
 }
 
 export interface FrameFigures {
@@ -370,7 +511,29 @@ export interface StreamFigures {
   readonly storeFull: number;
 }
 
-/** The bench's JSON (spec §8.3). */
+/**
+ * The live legs' block (SP4c spec §8.4, D22, D24): SP4b's frame fields over L7-L9 and the Apply's, the undo's and the
+ * teleport's times, ms, each from its leg's mark (L7's and L8's Apply frame, L9's click) to the first frame where:
+ * a column within 2 columns of the camera's was revealed since (`*FirstSwapMs`, `teleportFirstRevealMs`), the 69
+ * columns of the RD 4 disc were (`*NearMs`), every column of the live RD's MESH set was (`*FullMs`,
+ * `teleportRefillMs`). A time its leg's cap cut short is null, and `timedOut` names each leg whose MESH set never
+ * filled (a null D24 time fails the exit check). `width` and `height` are the canvas's.
+ */
+export type LiveFigures = StreamFigures & {
+  readonly applyFirstSwapMs: number | null;
+  readonly applyNearMs: number | null;
+  readonly applyFullMs: number | null;
+  readonly undoFirstSwapMs: number | null;
+  readonly undoNearMs: number | null;
+  readonly undoFullMs: number | null;
+  readonly teleportFirstRevealMs: number | null;
+  readonly teleportRefillMs: number | null;
+  readonly width: number;
+  readonly height: number;
+  readonly timedOut: readonly string[];
+};
+
+/** The bench's JSON (spec §8.3; SP4c spec §8.4's `live`). */
 export interface BenchResult {
   readonly route: 'bench=medium';
   readonly seed: string;
@@ -394,6 +557,8 @@ export interface BenchResult {
   readonly legs: { readonly [K in BenchLeg['name']]: FrameFigures };
   readonly L5: { readonly refillMs: number | null };
   readonly L6: { readonly frames: FrameFigures['frames'] };
+  /** L7-L9: the live legs (SP4c spec §8.4). */
+  readonly live: LiveFigures;
   /** Every frame whose snapped time is over 33 ms: its raw delta and its own and the previous frame's main ms. */
   readonly longFrames: ReadonlyArray<{
     readonly frame: number; readonly leg: string; readonly rawMs: number; readonly snappedMs: number; readonly mainMs: number;
@@ -478,36 +643,24 @@ function figuresOf(rec: BenchRecord, idx: readonly number[]): FrameFigures {
   };
 }
 
-const legName = (i: number): string => BENCH_LEGS[i]?.name ?? `L${i}`;
+const legName = (i: number): string => ALL_LEGS[i]?.name ?? `L${i}`;
 
-/**
- * The bench's JSON from its record and the fixed figures (spec §8.3): `stream` over L1-L6 (the streaming legs; L0's
- * hover only settles the first frames), the same frame figures per leg, L5's refill and L6's frames, every long frame
- * and every structural frame. `gpuMB` is the largest per-frame sum of the breakdown, which is reported at that frame.
- */
-export function summarizeBench(rec: BenchRecord, fixed: BenchFixed): BenchResult {
-  const all: number[] = [];
-  const byLeg: number[][] = BENCH_LEGS.map(() => []);
-  for (let i = 0; i < rec.n; i++) {
-    all.push(i);
-    byLeg[rec.leg[i]!]?.push(i);
-  }
-  const streamIdx = all.filter((i) => rec.leg[i]! >= 1);
-  const f = figuresOf(rec, streamIdx);
-
+/** SP4b's stream figures over the rows `idx`: the frame figures, the GPU ms, the GPU estimate's peak, the memory. */
+function streamFiguresOf(rec: BenchRecord, idx: readonly number[], fixed: BenchFixed): StreamFigures {
+  const f = figuresOf(rec, idx);
   let peak = -1;
   let peakMB = Number.NaN;
-  for (const i of streamIdx) {
+  for (const i of idx) {
     const mb = rec.geometryMB[i]! + rec.texturesMB[i]! + rec.drawingBufferMB[i]!;
     if (peak < 0 || mb > peakMB) {
       peak = i;
       peakMB = mb;
     }
   }
-  const gpu = finite(pick(rec.gpuMs, streamIdx));
-  const heap = finite(pick(rec.heapMB, streamIdx));
-  const sab = finite(pick(rec.sabMB, streamIdx));
-  const stream: StreamFigures = {
+  const gpu = finite(pick(rec.gpuMs, idx));
+  const heap = finite(pick(rec.heapMB, idx));
+  const sab = finite(pick(rec.sabMB, idx));
+  return {
     frames: f.frames,
     main: f.main,
     coordinatorMs: f.coordinatorMs,
@@ -530,8 +683,75 @@ export function summarizeBench(rec: BenchRecord, fixed: BenchFixed): BenchResult
     failed: fixed.totals.failed,
     storeFull: fixed.totals.storeFull,
   };
+}
 
-  const legs = Object.fromEntries(BENCH_LEGS.map((l, k) => [l.name, figuresOf(rec, byLeg[k]!)])) as BenchResult['legs'];
+/** A live leg's three times (ms from its mark), null where the leg ended first or had no mark. */
+interface LegTimes {
+  first: number | null;
+  near: number | null;
+  full: number | null;
+}
+
+/** The disc sizes the live times wait for: the RD 4 disc (69) and the live RD's MESH set (489 at RD 12). */
+const discSize = (rd: number): number => discOffsets(rd).length;
+
+/**
+ * A live leg's times over its rows `idx` (SP4c spec §8.4): from the first row marked 1 to the first row at or after it
+ * whose `revealed2` is at least 1, whose `revealed4` reaches the RD 4 disc, and whose `revealedRd` reaches `fullOf`.
+ */
+function legTimes(rec: BenchRecord, idx: readonly number[], fullOf: number): LegTimes {
+  const out: LegTimes = { first: null, near: null, full: null };
+  const nearOf = discSize(LIVE_NEAR_RD);
+  let m = -1;
+  for (const i of idx) {
+    if (m < 0) {
+      if (rec.mark[i] !== 1) continue;
+      m = i;
+    }
+    const dt = rec.tMs[i]! - rec.tMs[m]!;
+    if (out.first === null && rec.revealed2[i]! >= 1) out.first = dt;
+    if (out.near === null && rec.revealed4[i]! >= nearOf) out.near = dt;
+    if (out.full === null && rec.revealedRd[i]! >= fullOf) out.full = dt;
+  }
+  return out;
+}
+
+/**
+ * The bench's JSON from its record and the fixed figures (spec §8.3): `stream` over L1-L6 (the streaming legs; L0's
+ * hover only settles the first frames), the same frame figures per leg, L5's refill and L6's frames, `live` over L7-L9
+ * (SP4c spec §8.4), every long frame and every structural frame. `gpuMB` is the largest per-frame sum of the breakdown,
+ * which is reported at that frame. The live legs' MESH set is the RD they ran at: 12, or the reservation's cap below it.
+ */
+export function summarizeBench(rec: BenchRecord, fixed: BenchFixed): BenchResult {
+  const all: number[] = [];
+  const byLeg: number[][] = ALL_LEGS.map(() => []);
+  for (let i = 0; i < rec.n; i++) {
+    all.push(i);
+    byLeg[rec.leg[i]!]?.push(i);
+  }
+  const stream = streamFiguresOf(rec, all.filter((i) => rec.leg[i]! >= 1 && rec.leg[i]! < FIRST_LIVE), fixed);
+
+  const fullOf = discSize(fixed.rdClampedTo ?? BENCH_RD);
+  const times = BENCH_LIVE_LEGS.map((_, k) => legTimes(rec, byLeg[FIRST_LIVE + k]!, fullOf));
+  const [apply, undo, teleport] = times as [LegTimes, LegTimes, LegTimes];
+  // A leg that ran and never filled its MESH set ended at its cap.
+  const timedOut = BENCH_LIVE_LEGS.filter((_, k) => byLeg[FIRST_LIVE + k]!.length > 0 && times[k]!.full === null).map((l) => l.name);
+  const live: LiveFigures = {
+    ...streamFiguresOf(rec, all.filter((i) => rec.leg[i]! >= FIRST_LIVE), fixed),
+    applyFirstSwapMs: apply.first,
+    applyNearMs: apply.near,
+    applyFullMs: apply.full,
+    undoFirstSwapMs: undo.first,
+    undoNearMs: undo.near,
+    undoFullMs: undo.full,
+    teleportFirstRevealMs: teleport.first,
+    teleportRefillMs: teleport.full,
+    width: fixed.canvas.width,
+    height: fixed.canvas.height,
+    timedOut,
+  };
+
+  const legs = Object.fromEntries(ALL_LEGS.map((l, k) => [l.name, figuresOf(rec, byLeg[k]!)])) as BenchResult['legs'];
   const longFrames: Array<BenchResult['longFrames'][number]> = [];
   const structuralFrames: Array<BenchResult['structuralFrames'][number]> = [];
   for (const i of all) {
@@ -578,6 +798,7 @@ export function summarizeBench(rec: BenchRecord, fixed: BenchFixed): BenchResult
     legs,
     L5: { refillMs: fixed.refillMs },
     L6: { frames: legs.L6.frames },
+    live,
     longFrames,
     structuralFrames,
   };
@@ -585,25 +806,34 @@ export function summarizeBench(rec: BenchRecord, fixed: BenchFixed): BenchResult
 
 // ---------------------------------------------------------------- the driver
 
-/** The review shots (spec §8.7; plan), taken by `measureChrome.ts --route bench --shot <name>`. */
-export const BENCH_SHOTS = ['fly96', 'fly384', 'rd12', 'rd8', 'rd12back', 'first'] as const;
+/** The review shots (spec §8.7; plan; SP4c spec §8.7's four live ones), taken by `measureChrome.ts --route bench --shot <name>`. */
+export const BENCH_SHOTS = ['fly96', 'fly384', 'rd12', 'rd8', 'rd12back', 'first', 'apply-before', 'apply-mid', 'apply-after', 'teleport'] as const;
 export type BenchShot = (typeof BENCH_SHOTS)[number];
+
+/** The shots that freeze at a fixed script time. */
+type TimedShot = Exclude<BenchShot, 'rd12back' | 'apply-mid' | 'apply-after' | 'teleport'>;
 
 /**
  * The fixed shots' script times, s (plan): mid-L3 at 96 blocks/s; half a second into L4 at 384, while revealed terrain
  * is still ahead of the camera (by L4 + 1 s generation trails it and every revealed column lies behind, so the frame is
  * sky; rulings R12); half a second before L6's lowering (RD 12), a second after it (RD 8); `first` at the start, before
- * any pose is set (the first view after the reveal).
+ * any pose is set (the first view after the reveal); `apply-before` half a second before L7 (SP4c spec §8.7), which
+ * starts at the first frame at or after 95 s, the world still the first one.
  */
-const SHOT_AT: Readonly<Record<Exclude<BenchShot, 'rd12back'>, number>> = {
+const SHOT_AT: Readonly<Record<TimedShot, number>> = {
   fly96: LEG_STARTS[3]! + 15,
   fly384: LEG_STARTS[4]! + 0.5,
   rd12: LEG_STARTS[6]! - 0.5,
   rd8: LEG_STARTS[6]! + 1,
   first: 0,
+  'apply-before': BENCH_SECONDS - 0.5,
 };
 /** rd12back: the first frame after the RD is raised back (L6 + 5 s) at which the fog's RD is 12 again, else L6's end. */
 const RD12BACK_FROM = LEG_STARTS[6]! + 5;
+/** apply-mid: this long after L7's actual start (SP4c spec §8.7). */
+const APPLY_MID_AFTER_S = 1;
+/** teleport: this long after L9's arrival (SP4c spec §8.7). */
+const TELEPORT_SHOT_AFTER_S = 0.3;
 /** The frames rendered at the frozen pose before the shot is ready. */
 const SHOT_FRAMES = 3;
 /**
@@ -620,22 +850,39 @@ export interface BenchPublish {
   shotReady(): void;
 }
 
+/** A live leg's index in the record (SP4c spec §8.4). */
+export type LiveLeg = 7 | 8 | 9;
+
 /** What the page gives the driver once its world exists, before the script's first pose. */
 export interface BenchWorld {
   /** The largest RD the store's reservation allows (`reservationRdCap`, capped at RD_MAX). */
   readonly rdMax: number;
   /** The ground's height at block column (x, z): the store's `motionBlocking` heightmap, null when not Published. */
   heightAt(x: number, z: number): number | null;
+  /**
+   * The live legs' hooks (SP4c spec §8.4): the page's scripted session (`set` an urgent change, `undo`), its teleport
+   * (`teleport.go`; true once the camera moved), and whether a leg settled (every column of the live RD's MESH set
+   * revealed since its Apply; L9's disc filled since the arrival).
+   */
+  readonly live: {
+    set(path: string, v: number): void;
+    undo(): void;
+    teleport(x: number, z: number): Promise<boolean>;
+    settled(leg: LiveLeg): boolean;
+  };
 }
 
 /**
  * The world page's bench hook (`WorldPageOptions.bench`). The page calls `bind` once after the reveal, then `pose`
  * before each frame step, with the camera's current pose in `out` and the fog's RD; `pose` writes the script's pose
- * (the first call fixes the script's start where the camera is) and the frame's leg at `record.leg[record.n]`, and
- * returns the RD the script wants, never above `rdMax` (Task 26b: a reservation cap below 12 clamps the script's RD
- * steps, and `rdClampedTo` records the cap), which the page applies live when it changes; null ends the script, and the
- * page then calls `done`. The page writes each rendered frame into `record` (`createBenchRecorder`). `fail` ends the
- * script with an error (a failure after the reveal), once.
+ * (the first call fixes the script's start where the camera is) and the frame's leg and time at `record.leg[record.n]`
+ * and `record.tMs[record.n]` (and clears `record.mark` there), and returns the RD the script wants, never above `rdMax`
+ * (Task 26b: a reservation cap below 12 clamps the script's RD steps, and `rdClampedTo` records the cap), which the page
+ * applies live when it changes; null ends the script, and the page then calls `done`. After L6 (95 s) the live legs run
+ * (SP4c spec §8.4): L7 calls `live.set` at its start, L8 `live.undo`, L9 `live.teleport(x + 20,000, z)` from the camera's
+ * place; each ends when `live.settled(leg)` holds or at its cap, and the script ends after L9. In L7-L9 the pose keeps x,
+ * z and the yaw, sets the pitch −15 and y 150 (after L9's arrival, the teleport's y). The page writes each rendered frame
+ * into `record` (`createBenchRecorder`). `fail` ends the script with an error (a failure after the reveal), once.
  */
 export interface BenchDriver {
   readonly record: BenchRecord;
@@ -648,27 +895,104 @@ export interface BenchDriver {
 }
 
 /**
- * When to freeze for `shot` at script time `tS`: the time to freeze the pose at, or null to go on. rd12back waits for
- * the fog back at the script's top RD (`topRd`: 12, or the reservation's cap below it).
+ * When a timed shot freezes at script time `tS`: the time to freeze the pose at, or null to go on (always null for the
+ * live shots, which freeze on the live legs' events). rd12back waits for the fog back at the script's top RD (`topRd`:
+ * 12, or the reservation's cap below it).
  */
 function freezeTime(shot: BenchShot, tS: number, fogRd: number, topRd: number): number | null {
+  if (shot === 'apply-mid' || shot === 'apply-after' || shot === 'teleport') return null;
   if (shot !== 'rd12back') return tS >= SHOT_AT[shot] ? SHOT_AT[shot] : null;
   if (tS >= BENCH_SECONDS) return BENCH_SECONDS;
   return tS >= RD12BACK_FROM && fogRd >= topRd ? tS : null;
 }
+
+/** A live leg's cap, s. */
+const liveCap = (leg: LiveLeg): number => BENCH_LIVE_LEGS[leg - FIRST_LIVE]!.seconds;
 
 export function createBenchDriver(o: { readonly shot: BenchShot | null; readonly capacity?: number; readonly publish: BenchPublish }): BenchDriver {
   const record = createBenchRecord(o.capacity ?? BENCH_FRAME_CAPACITY);
   const start = { x: 0, z: 0 };
   let started = false;
   let ended = false;
+  // A timed shot's frozen script time (−1: none); a live shot frozen at the current place (SP4c spec §8.7).
   let frozenAt = -1;
+  let frozenLive = false;
   let frozenFrames = 0;
   // The reservation's RD cap (none until `bind`) and the shot's lowered y (NaN: the route's pose).
   let rdMax = Number.POSITIVE_INFINITY;
   let heightAt: BenchWorld['heightAt'] | null = null;
+  let live: BenchWorld['live'] | null = null;
   let shotY = Number.NaN;
+  // The live legs (SP4c spec §8.4): the one running (0 before L7, 10 after L9), its start and L7's, s; L9's arrival:
+  // `arrived` set by the teleport's promise, `arrivedS` the first pose after it (NaN before).
+  let liveLeg = 0;
+  let legStartS = 0;
+  let l7StartS = Number.NaN;
+  let arrived = false;
+  let arrivedS = Number.NaN;
   const capped = (rd: number): number => Math.min(rd, rdMax);
+
+  /** The live legs' pose (SP4c spec §8.4): x, z and the yaw kept; pitch −15; y 150 until L9's arrival, then kept. */
+  const livePose = (out: BenchPose): void => {
+    if (!arrived) out.y = BENCH_Y;
+    out.pitch = BENCH_PITCH;
+  };
+  /** The record's row for this frame: the leg, the script's time, no mark (the page marks an Apply or a click). */
+  const writeRow = (leg: number, tS: number): void => {
+    const n = record.n;
+    if (n >= record.capacity) return;
+    record.leg[n] = leg;
+    record.tMs[n] = tS * 1000;
+    record.mark[n] = 0;
+  };
+  /** Starts live leg `leg` at `tS` (its row already written): the edit, its undo or the teleport. */
+  const startLeg = (leg: LiveLeg, tS: number, out: BenchPose): void => {
+    const hooks = live!;
+    if (leg === 7) {
+      l7StartS = tS;
+      hooks.set(BENCH_LIVE.edit.path, BENCH_LIVE.edit.to);
+    } else if (leg === 8) hooks.undo();
+    else {
+      hooks.teleport(out.x + BENCH_LIVE.teleportEast, out.z).then((ok) => { if (ok) arrived = true; }, () => {});
+    }
+  };
+  /**
+   * One frame of the live legs at `tS`: whether a leg ends (settled or at its cap) and the next starts, or the script
+   * ends (false); a live shot freezes on its event (`frozenLive`).
+   */
+  const liveStep = (tS: number, out: BenchPose): boolean => {
+    if (live === null) return false;
+    if (arrived && Number.isNaN(arrivedS)) arrivedS = tS;
+    let next: LiveLeg | 0 = 0;
+    if (liveLeg === 0) next = 7;
+    else if (liveLeg >= 7 && liveLeg <= 9) {
+      const leg = liveLeg as LiveLeg;
+      if (live.settled(leg) || tS - legStartS >= liveCap(leg)) {
+        if (leg === 9) {
+          liveLeg = 10;
+          return false;
+        }
+        // apply-after: L7's end, before the undo.
+        if (leg === 7 && o.shot === 'apply-after') {
+          frozenLive = true;
+          return true;
+        }
+        next = (leg + 1) as LiveLeg;
+      }
+    } else return false;
+    if (o.shot === 'apply-mid' && !Number.isNaN(l7StartS) && tS - l7StartS >= APPLY_MID_AFTER_S) frozenLive = true;
+    if (o.shot === 'teleport' && !Number.isNaN(arrivedS) && tS - arrivedS >= TELEPORT_SHOT_AFTER_S) frozenLive = true;
+    if (frozenLive) return true;
+    livePose(out);
+    if (next !== 0) {
+      liveLeg = next;
+      legStartS = tS;
+    }
+    writeRow(liveLeg, tS);
+    if (next !== 0) startLeg(next, tS, out);
+    return true;
+  };
+
   return {
     record,
     get rdClampedTo() {
@@ -677,6 +1001,7 @@ export function createBenchDriver(o: { readonly shot: BenchShot | null; readonly
     bind(world) {
       rdMax = world.rdMax;
       heightAt = (x, z) => world.heightAt(x, z);
+      live = world.live;
     },
     pose(tS, out, fogRd) {
       if (ended) return null;
@@ -685,38 +1010,45 @@ export function createBenchDriver(o: { readonly shot: BenchShot | null; readonly
         start.x = out.x;
         start.z = out.z;
       }
-      if (o.shot !== null) {
-        if (frozenAt < 0) frozenAt = freezeTime(o.shot, tS, fogRd, capped(BENCH_RD)) ?? -1;
-        if (frozenAt >= 0) {
-          if (frozenFrames >= SHOT_FRAMES) {
+      if (o.shot !== null && frozenAt < 0 && !frozenLive) frozenAt = freezeTime(o.shot, tS, fogRd, capped(BENCH_RD)) ?? -1;
+      if (frozenAt < 0 && !frozenLive) {
+        if (tS < BENCH_SECONDS) {
+          const r = benchPose(tS, start, out);
+          writeRow(r.leg, tS);
+          return capped(r.rd);
+        }
+        if (liveStep(tS, out) && !frozenLive) return capped(BENCH_RD);
+        // The script ended: a live shot whose moment never came freezes here (the teleport failed, say).
+        if (!frozenLive) {
+          if (o.shot === null) {
             ended = true;
-            o.publish.shotReady();
             return null;
           }
-          // `first` keeps the first view the page placed at the reveal.
-          if (o.shot === 'first') {
-            frozenFrames++;
-            return capped(BENCH_RD);
-          }
-          const rd = benchPose(frozenAt, start, out).rd;
-          // The shot's camera (rulings R9): the ground's height under the frozen pose, read once at the first frozen
-          // frame and kept for the three; where it has no value (an unloaded column) the route's pose stays.
-          if (frozenFrames === 0 && heightAt !== null) shotY = heightAt(Math.floor(out.x), Math.floor(out.z)) ?? Number.NaN;
-          if (!Number.isNaN(shotY)) {
-            out.y = shotY + BENCH_SHOT_ABOVE;
-            out.pitch = BENCH_SHOT_PITCH;
-          }
-          frozenFrames++;
-          return capped(rd);
+          frozenLive = true;
         }
       }
-      if (tS >= BENCH_SECONDS) {
+      if (frozenFrames >= SHOT_FRAMES) {
         ended = true;
+        o.publish.shotReady();
         return null;
       }
-      const r = benchPose(tS, start, out);
-      if (record.n < record.capacity) record.leg[record.n] = r.leg;
-      return capped(r.rd);
+      // `first` keeps the first view the page placed at the reveal.
+      if (o.shot === 'first') {
+        frozenFrames++;
+        return capped(BENCH_RD);
+      }
+      let rd = BENCH_RD;
+      if (frozenLive) livePose(out);
+      else rd = benchPose(frozenAt, start, out).rd;
+      // The shot's camera (rulings R9): the ground's height under the frozen pose, read once at the first frozen frame
+      // and kept for the three; where it has no value (an unloaded column) the route's pose stays.
+      if (frozenFrames === 0 && heightAt !== null) shotY = heightAt(Math.floor(out.x), Math.floor(out.z)) ?? Number.NaN;
+      if (!Number.isNaN(shotY)) {
+        out.y = shotY + BENCH_SHOT_ABOVE;
+        out.pitch = BENCH_SHOT_PITCH;
+      }
+      frozenFrames++;
+      return capped(rd);
     },
     done(fixed) {
       ended = true;
@@ -820,7 +1152,8 @@ export async function mountBenchRoute(app: HTMLElement, query: URLSearchParams):
   }
   const driver = createBenchDriver({ shot, publish });
   const { mountWorldPage } = await import('./worldPage');
-  panel?.say(`running the ${BENCH_SECONDS} s script after the reveal (keep this tab in front)…`);
+  const liveS = BENCH_LIVE_LEGS.reduce((t, l) => t + l.seconds, 0);
+  panel?.say(`running the ${BENCH_SECONDS} s script and the live legs (up to ${liveS} s more) after the reveal (keep this tab in front)…`);
   const page = await mountWorldPage(app, benchQuery(query), benchHash(), { hud: false, overlay: false, bench: driver });
   if (page.state !== 'revealed' && !published) publish.result({ route: 'bench=medium', error: `the world did not load (page ${page.state})` });
 }

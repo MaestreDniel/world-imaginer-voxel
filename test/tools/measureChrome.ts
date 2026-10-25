@@ -1,11 +1,11 @@
 /**
- * The agents' Chrome cells of the GPU measurements (SP4a spec §1.2, §9.5; SP4b spec §8.3, §8.4, §8.7; not in CI):
- * drives the spike page (`?spike=batch`), the flight route (`?flight=sp4a`) or the streaming bench (`?bench=medium`) in
- * our own headful Chrome on a hardware GPU, reads the page's JSON over CDP and writes it into
- * `docs/superpowers/specs/assets/sp4b/` (every route since SP4b; SP4a's files stay in `assets/sp4a/`). With `--shot`
- * the bench freezes at a review shot's moment and the tool saves a 1920 × 1080 PNG there instead (§8.7, amended while
- * planning: the shots need the GPU). A page cannot write files, which is why this tool exists; the Firefox cells are
- * the user's, by hand.
+ * The agents' Chrome cells of the GPU measurements (SP4a spec §1.2, §9.5; SP4b spec §8.3, §8.4, §8.7; SP4c spec §8.4,
+ * §8.7; not in CI): drives the spike page (`?spike=batch`), the flight route (`?flight=sp4a`) or the streaming bench
+ * (`?bench=medium`, with SP4c's live legs) in our own headful Chrome on a hardware GPU, reads the page's JSON over CDP
+ * and writes it into `docs/superpowers/specs/assets/sp4c/` (every route since SP4c; SP4a's and SP4b's files stay in
+ * `assets/sp4a/` and `assets/sp4b/`). With `--shot` the bench freezes at a review shot's moment and the tool saves a
+ * 1920 × 1080 PNG there instead (§8.7, amended while planning: the shots need the GPU). A page cannot write files,
+ * which is why this tool exists; the Firefox cells are the user's, by hand.
  *
  * Run it with `npm run measure:chrome -- --route spike|flight|bench [--gpu iris|rtx] [--workers 4]
  * [--renderer batch|mesh] [--shot <name>] [--skip-build] [--probe-only]`. In order:
@@ -59,11 +59,14 @@ const WINDOW_POLL_MS = 250;
 const WINDOW_READS = 8;
 /** The pause between two steps of the sequence, so the window manager applies each one before the next. */
 const WINDOW_STEP_MS = 300;
-/** Where every route writes (plan: SP4b's assets; SP4a's files stay in `assets/sp4a/`). */
-export const ASSETS = 'docs/superpowers/specs/assets/sp4b';
+/** Where every route writes (SP4c spec §8.4: SP4c's assets; SP4a's and SP4b's files stay in `assets/sp4a/` and `assets/sp4b/`). */
+export const ASSETS = 'docs/superpowers/specs/assets/sp4c';
 
-/** The bench's review shots (SP4b spec §8.7), mirrored from `src/ui/world/bench.ts`'s `BENCH_SHOTS` (a test pins them). */
-export const SHOTS = ['fly96', 'fly384', 'rd12', 'rd8', 'rd12back', 'first'] as const;
+/**
+ * The bench's review shots (SP4b spec §8.7; SP4c spec §8.7's `apply-before`, `apply-mid`, `apply-after`, `teleport`),
+ * mirrored from `src/ui/world/bench.ts`'s `BENCH_SHOTS` (a test pins them).
+ */
+export const SHOTS = ['fly96', 'fly384', 'rd12', 'rd8', 'rd12back', 'first', 'apply-before', 'apply-mid', 'apply-after', 'teleport'] as const;
 export type Shot = (typeof SHOTS)[number];
 
 export interface MeasureArgs {

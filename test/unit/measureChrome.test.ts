@@ -63,8 +63,10 @@ describe('measureChrome: the bench route (SP4b spec §8.3, §8.7)', () => {
     expect(() => parseMeasureArgs(['--route', 'bench', '--shot'])).toThrow(/--shot needs a value/);
   });
 
-  test('the shot names mirror bench.ts\'s', () => {
+  test('the shot names mirror bench.ts\'s, SP4c\'s four live shots included (SP4c spec §8.7)', () => {
     expect(SHOTS).toEqual(BENCH_SHOTS);
+    expect(SHOTS.slice(-4)).toEqual(['apply-before', 'apply-mid', 'apply-after', 'teleport']);
+    expect(parseMeasureArgs(['--route', 'bench', '--shot', 'apply-mid', '--renderer', 'mesh']).shot).toBe('apply-mid');
   });
 
   test('outputName for the bench, w4 and shot cases', () => {
@@ -74,6 +76,8 @@ describe('measureChrome: the bench route (SP4b spec §8.3, §8.7)', () => {
     expect(outputName(args({ route: 'bench', gpu: 'iris', renderer: 'mesh' }))).toBe('bench-iris-chrome-mesh.json');
     expect(outputName(args({ route: 'bench', gpu: 'iris', renderer: 'batch', shot: 'fly96' }))).toBe('review-fly96-batch.png');
     expect(outputName(args({ route: 'bench', gpu: 'iris', renderer: 'mesh', shot: 'rd12back' }))).toBe('review-rd12back-mesh.png');
+    expect(outputName(args({ route: 'bench', gpu: 'iris', renderer: 'mesh', shot: 'apply-mid' }))).toBe('review-apply-mid-mesh.png');
+    expect(outputName(args({ route: 'bench', gpu: 'iris', renderer: 'batch', shot: 'teleport' }))).toBe('review-teleport-batch.png');
   });
 
   test('routePath with every flag', () => {
@@ -82,8 +86,9 @@ describe('measureChrome: the bench route (SP4b spec §8.3, §8.7)', () => {
     expect(routePath(args({ route: 'bench', workers: 4, renderer: 'mesh', shot: 'rd8' }))).toBe('/?bench=medium&workers=4&renderer=mesh&shot=rd8');
   });
 
-  test('every route writes to assets/sp4b (plan); SP4a\'s files stay where they are', () => {
-    expect(ASSETS).toBe('docs/superpowers/specs/assets/sp4b');
+  test('every route writes to assets/sp4c since SP4c (SP4c spec §8.4); SP4a\'s and SP4b\'s files stay where they are', () => {
+    expect(ASSETS).toBe('docs/superpowers/specs/assets/sp4c');
+    expect(ASSETS.endsWith('assets/sp4c')).toBe(true);
   });
 
   test('the bench summary line, read defensively', () => {
