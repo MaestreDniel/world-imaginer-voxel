@@ -4,6 +4,13 @@
  * limiter and the slow-frame notice, the fly step, the upload budget, the GPU estimate the bench reads every frame).
  * Each is warmed up, then measured over N more.
  *
+ * SP4c's per-tick additions are inside the same rule (SP4c spec §4.10): the frame step runs, as the world page wires it,
+ * the controls-owner check, the apply control's `tick` (at rest: its one adopt made, nothing configured since),
+ * `setAuxPolicy` on a real pool with unchanged values, and on rendered frames the map overlay's `tick`, measured with the
+ * map hidden and shown in split mode, where the arrow follows the camera through the tool's `setPlayer` (a fake
+ * `MapCanvas` over the real `arrowMoved`). The coordinator's `apply` has its own test. Those hooks are also measured on
+ * their own under the 26 B bound: the frame step's budget has room for a small object per tick.
+ *
  * This measures allocation, not retention (the plan's spec correction to §8.5): `terrainHeap.test.ts` runs `gc()`
  * twice before every reading, which collects the short-lived per-call objects D25 bans. Here, after a double `gc()`,
  * the N calls run in `CHUNKS` chunks; before each a minor gc empties the young generation, the heap is read, a
@@ -26,16 +33,21 @@
 import v8 from 'node:v8';
 import { runInNewContext } from 'node:vm';
 import { PerspectiveCamera } from 'three';
-import { describe, expect, test } from 'vitest';
+import { afterAll, describe, expect, test, vi } from 'vitest';
+import { hex64 } from '../../src/core/hash';
 import { MEDIUM } from '../../src/core/params/graphicsPresets';
+import { genKey, stageHashes } from '../../src/core/stage/hash';
 import { OPENING_T, TIME_SPEEDS } from '../../src/daynight/dayNight';
 import {
   createCoordinator, createCoordinatorCounts, type Coordinator, type CoordinatorCounts, type CoordinatorJobs,
   type StreamStore,
 } from '../../src/engine/coordinator';
+import { appliedDraftOf } from '../../src/engine/invalidation';
 import type { Stage } from '../../src/engine/rings';
+import type { SessionState } from '../../src/engine/session';
 import { createThrottle } from '../../src/engine/throttle';
 import { createUploadBudget } from '../../src/engine/uploadBudget';
+import { createWorkerPool, type WorkerLike } from '../../src/engine/workerPool';
 import type { ColumnMeshPayload } from '../../src/mesh/column';
 import { SPEED_DEFAULT, stepFly, type FlyState } from '../../src/player/fly';
 import type { Action } from '../../src/player/keymap';
@@ -47,10 +59,63 @@ import { createSectionRenderer, createSectionRendererCounts } from '../../src/re
 import { createSky } from '../../src/render/sky';
 import { createFlatColorArray } from '../../src/render/textureArray';
 import { createFrameStats } from '../../src/ui/frameStats';
+import { DEFAULT_MAP_STATE, openMapSession } from '../../src/ui/map/mapState';
+import type { MapTool, MapToolDeps } from '../../src/ui/map/mapTool';
+import type { MapCanvas } from '../../src/ui/map/mapView';
+import { createReplayingCanvas, draftOf, type Configured, type DriverStatus, type PreviewDriver } from '../../src/ui/map/previewDriver';
+import { coversWorld, createApplyControl, createEpochs, updateAuxPolicy } from '../../src/ui/world/applyControl';
 import { createFogEase } from '../../src/ui/world/fogEase';
 import { createFrameClock, createFrameNotice } from '../../src/ui/world/frameNotice';
 import { createFrameStep, type FrameStepDeps } from '../../src/ui/world/frameStep';
+import { createMapOverlay, type MapOverlay } from '../../src/ui/world/mapOverlay';
 import { createStore } from '../../src/world/store/store';
+import { installDom } from './fixtures/domShim';
+
+/**
+ * The map tool's chunk, faked (the real tool mounts only in the browser smoke, SP4c spec §1.2, §9): its `setPlayer`
+ * forwards to a fake `MapCanvas` whose `setPlayer` is the real one's body (`mapView.ts`) over the real `arrowMoved` and
+ * `arrowDue`, the arrow drawn at once where the real canvas schedules a rAF draw. Its clock is the frame's timestamp
+ * (`arrow.now`): Node's `performance.now()` allocates on each call (the upload budget's note below).
+ */
+const arrow = vi.hoisted(() => ({ now: (): number => 0, setPlayer: 0, draws: 0, mounts: 0 }));
+vi.mock('../../src/ui/map/mapTool', async () => {
+  const { arrowDue, arrowMoved } = await import('../../src/ui/map/viewMath');
+  return {
+    createMapTool(_host: HTMLElement, deps: MapToolDeps): MapTool {
+      arrow.mounts++;
+      let view = deps.initialView;
+      let drawnX = 0;
+      let drawnZ = 0;
+      let drawnYaw = 0;
+      let drawnAt = Number.NEGATIVE_INFINITY;
+      let arrowDrawn = false;
+      const draw = (x: number, z: number, yawDeg: number): void => {
+        arrow.draws++;
+        arrowDrawn = true;
+        drawnX = x;
+        drawnZ = z;
+        drawnYaw = yawDeg;
+        drawnAt = arrow.now();
+      };
+      const canvas: Pick<MapCanvas, 'setPlayer'> = {
+        setPlayer(x, z, yawDeg) {
+          arrow.setPlayer++;
+          if (!arrowDrawn || (arrowMoved(drawnX, drawnZ, drawnYaw, x, z, yawDeg, view.bpp) && arrowDue(drawnAt, arrow.now()))) draw(x, z, yawDeg);
+        },
+      };
+      return {
+        show(c) { if (c !== undefined) view = { ...view, x: c.x, z: c.z }; },
+        hide() {},
+        // As the real tool (`mapTool.ts`).
+        setPlayer: (x, z, yawDeg) => canvas.setPlayer(x, z, yawDeg),
+        get view() { return view; },
+        notices: {} as MapTool['notices'],
+        setView(v) { view = v; },
+        dispose() {},
+      };
+    },
+  };
+});
 
 v8.setFlagsFromString('--expose-gc');
 const gc = runInNewContext('gc') as (o?: { type: 'major' | 'minor' }) => void;
@@ -259,6 +324,20 @@ async function filledCoordinator(cam: { x: number; z: number; yawDeg: number }):
   return c;
 }
 
+/** The ready reply the workers send for a session state: hex stage hashes and genKey (`taskHandler.ts`). */
+function readyOf(s: SessionState): Configured['ready'] {
+  const h = stageHashes(s.params);
+  const hex: Record<string, string> = {};
+  for (const [k, v] of Object.entries(h)) hex[k] = hex64(v!);
+  return { stageHashes: hex, genKey: hex64(genKey(s.seed, h)) };
+}
+
+/** A worker that takes every message and never answers: the frame step touches only the pool's aux policy. */
+const idleWorker = (): WorkerLike => ({ postMessage() {}, onmessage: null, terminate() {} });
+
+/** The frame step's warm-up once the map is shown in split mode (the arrow's path, the tool's `setPlayer`, is new). */
+const SHOWN_WARM_UP = N;
+
 interface AtRest {
   readonly fly: FlyState;
   readonly coordinator: Coordinator;
@@ -271,6 +350,21 @@ interface AtRest {
   stats(): { ticks: number; rendered: number; lightmapBuilds: number };
   readonly t0: number;
   readonly sections: ReturnType<typeof createSectionRenderer>;
+  /** The page's map overlay (SP4c spec §1.3), hidden until `showSplit`. */
+  readonly overlay: MapOverlay;
+  /** Opens the overlay in split mode, lets it mount the (fake) tool, takes the pointer lock and warms the frame up again. */
+  showSplit(): Promise<void>;
+  /** The `from` of each Apply or adopt the apply control made (`onApplied`). */
+  readonly applied: ReadonlyArray<string | null>;
+  /** The aux policy's inputs at rest: the pool's epoch, the control's generation, the pool's size. */
+  policy(): { poolEpoch: number; generation: number; size: number };
+  /**
+   * SP4c's per-tick hooks alone, without the rest of the frame step: the owner check, the apply control's tick, the aux
+   * policy over the frame step's counts and the overlay's tick.
+   */
+  additions(): void;
+  /** The `additions` calls whose owner check found the world owning the controls. */
+  owned(): number;
 }
 
 /**
@@ -316,22 +410,101 @@ async function buildAtRest(): Promise<AtRest> {
   const state = { t: OPENING_T, brightness: 0.5, eyeSky: 15, rd: 12, fogBand: MEDIUM.fogBand };
   const none: ReadonlySet<Action> = new Set();
   // A 144 Hz display under a cap of 144: the limiter's median runs on every tick and every tick renders. Enough
-  // timestamps for the warm-up and each test's attempts.
-  const times = boxedTimes(1000 / 144, FRAME_WARM_UP);
+  // timestamps for the warm-ups and each frame-step test's attempts.
+  const times = boxedTimes(1000 / 144, FRAME_WARM_UP + SHOWN_WARM_UP + ATTEMPTS * ATTEMPTS * N);
   let ticks = 0;
   // The budget's clock is the tick's timestamp: Node's `performance.now()` allocates on each call (88 B measured),
   // the browser's does not concern this code.
   let clockNow = times[0]!;
+  arrow.now = () => clockNow;
   let rendered = 0;
   let lightmapBuilds = 0;
   const lightmap = materials.lightmap.texture;
   let lastVersion = lightmap.version;
+  const limiter = createFpsLimiter(144);
+
+  // SP4c's frame additions (spec §4.10), as the world page wires them. A real pool for the aux policy, configured once
+  // (generation 0, the coordinator's; its idle workers never answer, and the frame step touches only `setAuxPolicy`).
+  const pool = createWorkerPool(4, idleWorker);
+  const session = openMapSession(DEFAULT_MAP_STATE, () => [1, 2]);
+  void pool.configure(session.state.seedText, session.state.params);
+  // The real apply control over a fake driver that reports one configure of the applied draft: the first tick adopts it
+  // (nothing rebuilds), so every measured tick runs at rest with nothing configured since the last Apply.
+  const ready = readyOf(session.state);
+  let report: ((c: Configured) => void) | null = null;
+  const driver = {
+    onConfigured(fn: (c: Configured) => void) {
+      report = fn;
+      return () => { report = null; };
+    },
+    status: { queued: false } as DriverStatus,
+    change() {},
+    setPreviewWanted() {},
+  };
+  const epochs = createEpochs();
+  epochs.of(ready.genKey);
+  const applied: Array<string | null> = [];
+  const applyControl = createApplyControl({
+    coordinator,
+    driver,
+    session,
+    pool,
+    clock: { now: () => clockNow },
+    epochs,
+    initial: appliedDraftOf(draftOf(session.state).seedKey, ready),
+    initialGeneration: pool.epoch,
+    beforeApply: () => true,
+    onApplied: ({ from }) => { applied.push(from); },
+  });
+  report!({ poolEpoch: pool.epoch, sessionEpoch: session.state.epoch, seedKey: draftOf(session.state).seedKey, ready, gesture: false, urgent: true });
+
+  // The map overlay on the DOM shim over the fake tool's chunk; a 1,920 px window offers split mode (SP4c spec §2.2).
+  const dom = installDom();
+  const app = dom.document.createElement('div');
+  const worldHost = dom.document.createElement('div');
+  const canvas = dom.document.createElement('canvas');
+  worldHost.append(canvas);
+  app.append(worldHost);
+  dom.body.append(app);
+  const overlay = createMapOverlay({
+    app: app as unknown as HTMLElement,
+    worldHost: worldHost as unknown as HTMLElement,
+    canvas: canvas as unknown as HTMLCanvasElement,
+    session,
+    pool,
+    driver: driver as unknown as PreviewDriver,
+    relay: createReplayingCanvas(),
+    storage: null,
+    settings: { mapMode: 'split', watchLive: true },
+    save() {},
+    world: { resize() {}, frame: (s) => world.frame(s) },
+    frameState: () => state,
+    limiter,
+    userCap: () => 144,
+    fly,
+    input: { clear() {} },
+    doc: dom.document as unknown as Document,
+    // No preload timer runs: the first open imports the chunk.
+    win: { innerWidth: 1920, setTimeout: () => 0, clearTimeout() {}, addEventListener() {}, removeEventListener() {} } as unknown as Window,
+    now: () => clockNow,
+    onTeleport: () => Promise.resolve(false),
+    viewChanged() {},
+    notices: { route() {}, show() {}, hide() {} },
+  });
+
+  // SP4c's per-tick hooks, as the page's: the owner check (§2.3), the apply control before the update (§4.3), the aux
+  // policy from the counts (§6.2), and on rendered frames the overlay's tick, which moves the arrow while shown (§1.5).
+  const paused = (): boolean => overlay.owner === 'map';
+  const beforeUpdate = (): void => applyControl.tick();
+  const afterCounts = (c: CoordinatorCounts): void => updateAuxPolicy(pool, applyControl.generation, coversWorld(overlay), c);
+  let owned = 0;
+
   const step = createFrameStep({
     fly,
     held: () => none,
-    paused: () => false,
+    paused,
     stopped: () => false,
-    clock: createFrameClock(createFpsLimiter(144), createFrameNotice(() => {}, 12), 0),
+    clock: createFrameClock(limiter, createFrameNotice(() => {}, 12), 0),
     coordinator,
     counts,
     throttle: createThrottle({ max: 3 }),
@@ -342,11 +515,11 @@ async function buildAtRest(): Promise<AtRest> {
     state,
     timeSpeed: () => TIME_SPEEDS[speed60]!,
     fogStep: (dtMs) => fog.step(dtMs, 12),
-    // SP4c's apply control and aux policy hooks (spec §4.3, §6.2); Task 21 measures them at rest with real ones.
-    beforeUpdate: () => {},
-    afterCounts: () => {},
+    beforeUpdate,
+    afterCounts,
     onRendered: (dtMs) => {
       frames.push(dtMs);
+      overlay.tick(counts);
       rendered++;
       if (lightmap.version !== lastVersion) {
         lastVersion = lightmap.version;
@@ -361,14 +534,49 @@ async function buildAtRest(): Promise<AtRest> {
   };
   for (let i = 0; i < FRAME_WARM_UP; i++) tick();
   return {
-    fly, coordinator, counts, tick, state, t0, sections,
+    fly, coordinator, counts, tick, state, t0, sections, overlay, applied,
     stats: () => ({ ticks, rendered, lightmapBuilds }),
+    policy: () => ({ poolEpoch: pool.epoch, generation: applyControl.generation, size: pool.size }),
+    additions() {
+      if (!paused()) owned++;
+      beforeUpdate();
+      afterCounts(counts);
+      overlay.tick(counts);
+    },
+    owned: () => owned,
+    async showSplit() {
+      // The (mocked) chunk is loaded first, as the overlay's preload does 2 s after the reveal; the open's own import then
+      // resolves from the module cache and mounts the tool within a few macrotasks.
+      await import('../../src/ui/map/mapTool');
+      overlay.open();
+      const until = Date.now() + 10_000;
+      while (overlay.tool === null && Date.now() < until) await new Promise<void>((resolve) => { setTimeout(resolve, 1); });
+      // The user clicks the 3D half: the canvas takes the pointer lock and the world owns the controls (§2.3).
+      dom.document.setPointerLock(canvas);
+      for (let i = 0; i < SHOWN_WARM_UP; i++) tick();
+    },
   };
 }
+
+afterAll(() => { vi.unstubAllGlobals(); });
 
 let atRestOnce: Promise<AtRest> | undefined;
 /** The shared fixture, built on first use (either test may run alone). */
 const atRest = (): Promise<AtRest> => (atRestOnce ??= buildAtRest());
+
+/**
+ * SP4c's parts were at rest: the apply control made its one adopt (the same world, nothing rebuilt) and nothing since;
+ * the world is not held, the map does not cover it and no T is pending, so every tick's `setAuxPolicy` was the pool's
+ * default `('world', size)`, unchanged (SP4c spec §6.2); nothing is stale.
+ */
+function expectSp4cAtRest(f: AtRest): void {
+  expect(f.applied).toEqual([null]);
+  const p = f.policy();
+  expect([p.poolEpoch, p.generation]).toEqual([0, 0]);
+  expect(coversWorld(f.overlay)).toBe(false);
+  expect(f.counts.T.done).toBe(f.counts.T.needed);
+  expect(f.counts.stale).toBe(0);
+}
 
 describe('zero allocation at rest (SP4b spec §3.10, D25)', () => {
   test('the GC profiler reports a scavenge (the measurement can see one)', () => {
@@ -430,10 +638,13 @@ describe('zero allocation at rest (SP4b spec §3.10, D25)', () => {
     expectAtRest(g);
   }, TIMEOUT_MS);
 
-  test(`${N} frame steps at rest (a real coordinator at rest, pump with nothing staged on a real RegionBatch, setFrameUniforms with the time at ×60, the FPS limiter and frame timing) grow the heap by less than the boxing budget of 256 B per tick`, async () => {
+  test(`${N} frame steps at rest with SP4c's additions, the map hidden (a real coordinator at rest, pump with nothing staged on a real RegionBatch, setFrameUniforms with the time at ×60, the FPS limiter and frame timing; the apply control's tick, setAuxPolicy on a real pool with unchanged values, the owner check, the overlay's tick) grow the heap by less than the boxing budget of 256 B per tick (SP4c spec §4.10)`, async () => {
     const f = await atRest();
+    expect(f.overlay.shown).toBe(false);
     const g = allocationOver(f.tick, 0, FRAME_STEP_ALLOC_MAX);
     expectAtRest(g, FRAME_STEP_ALLOC_MAX);
+    expectSp4cAtRest(f);
+    expect([f.overlay.shown, f.overlay.owner, arrow.mounts, arrow.setPlayer]).toEqual([false, 'world', 0, 0]);
     // The frame really ran at rest: every tick rendered, the time ran (×60: a day per 20 s, so the lightmap rebuilt),
     // the eye read the Published column's sky light, nothing was staged or uploaded and nothing moved.
     const { ticks, rendered, lightmapBuilds } = f.stats();
@@ -445,6 +656,42 @@ describe('zero allocation at rest (SP4b spec §3.10, D25)', () => {
     expect(f.sections.counts(createSectionRendererCounts()).columnsStaged).toBe(0);
     expect([f.fly.x, f.fly.y, f.fly.z]).toEqual([8.5, 100.5, 8.5]);
     expect(f.counts.T.done).toBe(f.counts.T.needed);
+  }, TIMEOUT_MS);
+
+  test(`${N} frame steps at rest with SP4c's additions, the map shown in split mode (the arrow updated every rendered frame at a fixed camera, through the tool's setPlayer and the real arrowMoved) grow the heap by less than the boxing budget of 256 B per tick (SP4c spec §4.10)`, async () => {
+    const f = await atRest();
+    await f.showSplit();
+    // Split shown with the pointer lock: the world owns, the 3D is visible, the cap is the user's (SP4c spec §2.3, §2.6).
+    expect([f.overlay.shown, f.overlay.mode, f.overlay.owner, arrow.mounts]).toEqual([true, 'split', 'world', 1]);
+    const before = f.stats();
+    const setPlayerBefore = arrow.setPlayer;
+    const g = allocationOver(f.tick, 0, FRAME_STEP_ALLOC_MAX);
+    expectAtRest(g, FRAME_STEP_ALLOC_MAX);
+    expectSp4cAtRest(f);
+    const after = f.stats();
+    // Every tick rendered and moved the arrow through the tool; the arrow was drawn once, at the opening, and never again
+    // at a fixed camera.
+    expect(after.rendered - before.rendered).toBe(g.calls);
+    expect(arrow.setPlayer - setPlayerBefore).toBe(g.calls);
+    expect(arrow.draws).toBe(1);
+    expect([f.fly.x, f.fly.y, f.fly.z]).toEqual([8.5, 100.5, 8.5]);
+    expect(f.sections.counts(createSectionRendererCounts()).columnsStaged).toBe(0);
+    expect(f.counts.T.done).toBe(f.counts.T.needed);
+  }, TIMEOUT_MS);
+
+  test(`${N} × SP4c's per-tick hooks alone at rest, the map shown in split mode (the owner check, the apply control's tick, setAuxPolicy with unchanged values, the overlay's tick moving the arrow) grow the heap by less than 256 KB`, async () => {
+    // The frame step's budget leaves about 90 B per tick over the boxing it measures, so one small object added per tick
+    // by these hooks could hide under it; on their own they get the 26 B bound of the frame's other parts.
+    const f = await atRest();
+    if (!f.overlay.shown) await f.showSplit();
+    const setPlayerBefore = arrow.setPlayer;
+    const g = allocationOver(f.additions, WARM_UP, ZERO_ALLOC_MAX);
+    expectAtRest(g);
+    expectSp4cAtRest(f);
+    expect([f.overlay.shown, f.overlay.mode, f.overlay.owner]).toEqual([true, 'split', 'world']);
+    expect(f.owned()).toBe(g.calls);
+    expect(arrow.setPlayer - setPlayerBefore).toBe(g.calls);
+    expect(arrow.draws).toBe(1);
   }, TIMEOUT_MS);
 
   test(`${N} frame-clock ticks (a cap of 144 on a 144 Hz display, the slow-frame notice past its 300 frames) grow the heap by less than 256 KB`, () => {
