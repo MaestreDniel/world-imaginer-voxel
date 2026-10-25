@@ -266,9 +266,10 @@ describe('RegionBatch (SP4b spec §4.2, D14)', () => {
     r.dispose();
   });
 
-  test('removal releases at most 32 rows per pump', () => {
+  test('removal releases at most 32 rows per pump in a region that keeps a live column; an emptied region is disposed with 0 rows spent and no per-row deleteGeometry (SP4c spec §5.4, D10)', () => {
     const r = make();
     r.stage(fakePayload(3, 3, rowsOf(48, 22)), 1);
+    r.stage(fakePayload(4, 4, [opaque(1)]), 1);
     pumpAll(r);
     const deletes = vi.spyOn(BatchedMesh.prototype, 'deleteGeometry');
     r.remove(3, 3);
@@ -280,7 +281,20 @@ describe('RegionBatch (SP4b spec §4.2, D14)', () => {
       expect(deletes.mock.calls.length).toBe(released[i]);
     }
     expect(released).toEqual([32, 32, 6, 0]);
+    expect(batches(r.root).length).toBeGreaterThan(0);
+
+    // The region's last column: the region goes in one step, its rows never released one by one.
+    r.stage(fakePayload(5, 5, rowsOf(40, 0)), 2);
+    pumpAll(r);
+    r.remove(4, 4);
+    r.remove(5, 5);
+    deletes.mockClear();
+    const dispose = vi.spyOn(BatchedMesh.prototype, 'dispose');
+    expect(r.pump(fakeGate(32), 0, 0, 0)).toBe(0);
+    expect(deletes).not.toHaveBeenCalled();
+    expect(dispose).toHaveBeenCalledTimes(2);
     expect(batches(r.root)).toHaveLength(0);
+    expect(counts(r)).toMatchObject({ regions: 0, rows: 0, columnsRemoving: 0 });
     r.dispose();
   });
 

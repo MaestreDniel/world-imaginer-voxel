@@ -982,6 +982,19 @@ describe('master spec amendments (SP4c §12)', () => {
     expect(caps).toContain('(SP4c: while the 3D is visible; while the map covers the 3D, map jobs go first and the world streams on the workers left; points, landing and probes go first and are not capped; the pool keeps world jobs in a FIFO lane and the rest in a heap)');
   });
 
+  test('§4.2\'s Unload and §4.3\'s Uploads: emptied regions go at once, releases share the rows with uploads (SP4c spec §5.4, §12)', () => {
+    const at42 = text.indexOf('### 4.2 Column state machine');
+    const s42 = text.slice(at42, text.indexOf('### 4.3 ', at42));
+    const unload = s42.split('\n').find((l) => l.startsWith('**Unload.**'));
+    expect(unload, 'no `**Unload.**` paragraph in §4.2').toBeDefined();
+    expect(unload).toContain('(SP4c: a region left with no column is disposed at once, outside the row cap and the structural slot)');
+    const at43 = text.indexOf('### 4.3 Scheduling');
+    const s43 = text.slice(at43, text.indexOf('### 4.4 ', at43));
+    const uploads = s43.split('\n').find((l) => l.startsWith('**Uploads**'));
+    expect(uploads, 'no `**Uploads**` paragraph in §4.3').toBeDefined();
+    expect(uploads).toContain('(SP4c: at most half the row cap on releases while an upload waits)');
+  });
+
   test('§1 names each SP4c module in its entry, which exists', () => {
     for (const [head, token, file] of SP4C_MODULES) {
       const entry = layoutEntry(head);

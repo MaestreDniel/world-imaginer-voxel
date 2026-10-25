@@ -147,8 +147,10 @@ export interface StagingRegion<R> {
   readonly key: number;
   /** The region's live columns, in staging order. */
   readonly columns: Array<StagedColumn<R>>;
-  /** Removed or replaced columns of the region whose rows are not all released. */
-  holding: number;
+  /** In the pump's list of regions left with no live column (checked again when the pump reaches it). */
+  queued: boolean;
+  /** Disposed: its objects freed, out of the grid; the removals still holding its rows are purged (SP4c spec §5.4). */
+  disposed: boolean;
   /** The renderer's state for the region (its objects). */
   readonly data: R;
 }
@@ -180,7 +182,10 @@ export interface RegionBackend<R> {
   rowVisible(c: StagedColumn<R>, r: number): boolean;
   /** The pump's first step: culling restored on the objects whose attributes hold no pending update range. */
   settle(): void;
-  /** Frees the region's objects (no live column, no held row). */
+  /**
+   * Frees the region's objects (no live column). Rows of removed or swapped-out records may still be held in them: they
+   * go with the objects, never released one by one (SP4c spec §5.4).
+   */
   disposeRegion(g: StagingRegion<R>): void;
   /** Whether a region object of `pass` exists. */
   hasPass(pass: number): boolean;
@@ -194,16 +199,23 @@ export interface RegionBackend<R> {
 const DEG = Math.PI / 180;
 /** Structural operations one row may take in one pump before the backend is judged stuck (a bug, never a budget). */
 const MAX_OPS_PER_ROW = 8;
+/** Regions left with no column disposed per pump, outside the row cap and the structural slot (SP4c spec §5.4, D10). */
+export const EMPTIED_PER_PUMP = 8;
+/** Rows a pump may release while any staged column waits for an upload: half the 32-row cap (SP4c spec §5.4, D10). */
+export const RELEASE_SHARE = 16;
 
 /**
- * The streaming section renderer over the backend `b` (SP4b spec §4.1, §3.9). `pump`'s order **(plan)**:
- * (1) `settle`; (2) when the nearest staged column needs a structural operation, ask `gate.structural()` before any
- * release and perform it on a grant (the gate grants only while no row was spent, so asked after the releases it
- * would starve region creation behind a removal backlog); (3) release removed rows, each counted against the row cap,
- * and dispose the regions left empty; (4) upload staged rows nearest-first, a row that needs a refused (or second)
- * structural operation waiting while farther columns go on; (5) reveal each column whose last row was uploaded, all
- * its rows in one call, or swap it with its `prev` in one call (`onColumnRevealed` either way). With nothing staged or
- * removed a pump allocates nothing (D25).
+ * The streaming section renderer over the backend `b` (SP4b spec §4.1, §3.9; SP4c spec §5.4, D10). `pump`'s order:
+ * (0) `settle`; (1) dispose the regions left with no live column (none shown, none staged), at most
+ * `EMPTIED_PER_PUMP`, after purging from the release queue the removals that still hold rows of them (their rows
+ * dropped from the counts, never released one by one), outside the row cap and the structural slot; (2) when the
+ * nearest staged column needs a structural operation, ask `gate.structural()` before any release and perform it on a
+ * grant (the gate grants only while no row was spent, so asked after the releases it would starve region creation
+ * behind a removal backlog); (3) release removed and swapped-out rows, each counted against the row cap, at most
+ * `RELEASE_SHARE` while any staged column waits for an upload; (4) upload staged rows nearest-first with the rest, a
+ * row that needs a refused (or second) structural operation waiting while farther columns go on; (5) reveal each
+ * column whose last row was uploaded, all its rows in one call, or swap it with its `prev` in one call
+ * (`onColumnRevealed` either way). With nothing staged or removed a pump allocates nothing (D25).
  *
  * The swap (SP4c spec §5.1, D9): `stage` on a revealed column makes the shown record the new record's `prev`; the
  * column stays revealed (the counts' `revealed` does not change) and `prev`'s rows stay drawn until step (5) swaps;
@@ -240,14 +252,10 @@ export function createStreamingRenderer<R>(
     const key = columnKey(rx, rz);
     let g = regions.get(key);
     if (g === undefined) {
-      g = { rx, rz, key, columns: [], holding: 0, data: b.newRegion(rx, rz) };
+      g = { rx, rz, key, columns: [], queued: false, disposed: false, data: b.newRegion(rx, rz) };
       regions.set(key, g);
     }
     return g;
-  };
-
-  const maybeEmptied = (g: StagingRegion<R>): void => {
-    if (g.columns.length === 0 && g.holding === 0) emptied.push(g);
   };
 
   const dropPending = (c: StagedColumn<R>): void => {
@@ -271,8 +279,13 @@ export function createStreamingRenderer<R>(
     if (c.pendingAt >= 0) dropPending(c);
     else complete--;
     if (c.revealed || c.prev !== null) revealed--;
-    const cols = c.region.columns;
-    cols.splice(cols.indexOf(c), 1);
+    const g = c.region;
+    g.columns.splice(g.columns.indexOf(c), 1);
+    // Left with no live column: a candidate for the next pump's step (1), which checks it again.
+    if (g.columns.length === 0 && !g.queued) {
+      g.queued = true;
+      emptied.push(g);
+    }
   };
 
   /** Puts a record in the live set (the counts follow), into the pending list when `waits` (else it is complete). */
@@ -293,12 +306,7 @@ export function createStreamingRenderer<R>(
   /** A record out of the live set, already hidden: its held rows queued for release. */
   const queueRelease = (c: StagedColumn<R>): void => {
     c.revealed = false;
-    if (c.released < c.uploaded) {
-      removing.push(c);
-      c.region.holding++;
-    } else {
-      maybeEmptied(c.region);
-    }
+    if (c.released < c.uploaded) removing.push(c);
   };
 
   /** A detached column: hidden at once, its held rows queued for release. */
@@ -346,6 +354,40 @@ export function createStreamingRenderer<R>(
     let n = 0;
     for (let r = c.released; r < c.uploaded; r++) if (!rowIsEmpty(c.p, r) && b.rowVisible(c, r)) n++;
     return n;
+  };
+
+  /**
+   * The pump's step (1) (SP4c spec §5.4): up to `EMPTIED_PER_PUMP` regions still without a live column are disposed,
+   * the rest wait in `emptied` for the next pump; then one pass over the release queue drops the removals that hold
+   * rows of a disposed region, their rows taken out of the counts (no `release` call: the objects are gone). In place:
+   * no allocation.
+   */
+  const disposeEmptied = (): void => {
+    let disposed = 0;
+    let i = 0;
+    for (; i < emptied.length && disposed < EMPTIED_PER_PUMP; i++) {
+      const g = emptied[i]!;
+      g.queued = false;
+      if (g.columns.length > 0 || regions.get(g.key) !== g) continue;
+      regions.delete(g.key);
+      g.disposed = true;
+      b.disposeRegion(g);
+      disposed++;
+    }
+    emptied.copyWithin(0, i);
+    emptied.length -= i;
+    if (disposed === 0) return;
+    let w = removingHead;
+    for (let k = removingHead; k < removing.length; k++) {
+      const c = removing[k]!;
+      if (!c.region.disposed) {
+        removing[w++] = c;
+        continue;
+      }
+      for (let r = c.released; r < c.uploaded; r++) if (!rowIsEmpty(c.p, r)) countRow(c, r, -1);
+      c.released = c.uploaded;
+    }
+    removing.length = w;
   };
 
   const self: SectionRenderer = {
@@ -405,8 +447,10 @@ export function createStreamingRenderer<R>(
       stamp++;
       lastStructural = null;
       lastStructuralBytes = 0;
-      // (1) Culling back on the objects three has uploaded.
+      // (0) Culling back on the objects three has uploaded.
       b.settle();
+      // (1) The regions left with no live column, disposed outright, their queued removals purged.
+      if (emptied.length > 0) disposeEmptied();
       const yaw = yawDeg * DEG;
       const fx = Math.sin(yaw);
       const fz = -Math.cos(yaw);
@@ -421,13 +465,14 @@ export function createStreamingRenderer<R>(
         const k = b.columnNeed(first);
         if (k !== null && gate.structural()) perform(first, k);
       }
-      // (3) Releases, oldest removal first, each row against the cap.
+      // (3) Releases, oldest removal first, each row against the cap; half of it while an upload waits.
+      const share = pending.length > 0 ? RELEASE_SHARE : Number.POSITIVE_INFINITY;
       release: while (removingHead < removing.length) {
         const c = removing[removingHead]!;
         while (c.released < c.uploaded) {
           const r = c.released;
           if (!rowIsEmpty(c.p, r)) {
-            if (gate.exhausted()) break release;
+            if (spent >= share || gate.exhausted()) break release;
             b.release(c, r);
             countRow(c, r, -1);
             gate.spend(1);
@@ -436,8 +481,6 @@ export function createStreamingRenderer<R>(
           c.released++;
         }
         removingHead++;
-        c.region.holding--;
-        maybeEmptied(c.region);
       }
       if (removingHead === removing.length) {
         removing.length = 0;
@@ -446,14 +489,6 @@ export function createStreamingRenderer<R>(
         removing.splice(0, removingHead);
         removingHead = 0;
       }
-      for (let i = 0; i < emptied.length; i++) {
-        const g = emptied[i]!;
-        if (g.columns.length === 0 && g.holding === 0 && regions.get(g.key) === g) {
-          regions.delete(g.key);
-          b.disposeRegion(g);
-        }
-      }
-      emptied.length = 0;
       // (4) Uploads, nearest column first; a column refused a structural operation waits for a later pump.
       completed.length = 0;
       while (!gate.exhausted()) {

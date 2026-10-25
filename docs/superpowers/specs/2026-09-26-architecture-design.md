@@ -968,7 +968,7 @@ Main thread: render (three), input/physics/raycast (reads SAB), Coordinator (sta
 
 **Proto retention.** A proto set stays alive while the column lies in the ring RD+2..RD+3, or while any neighbour within the D radius is below Decorated. In tuning mode it stays alive for every loaded column. Otherwise it is freed by dropping refcounts on its slots. If a proto is ever missing when needed (after a big teleport, say), a `T(protoOnly)` job regenerates it; T is pure, so this is safe (SP4b builds the rule and `T(protoOnly)`; the page keeps every proto until D places features, SP8b, because a freed proto saves nothing while the final set shares its slots).
 
-**Unload.** Voxels are freed beyond RD+5, meshes beyond RD+1 (SP4b: at most 16 column frees and 64 columns hidden for mesh removal per frame, their rows released under the upload budget, a column freed only when no in-flight job reads it). The column's diff stays in the sim worker's DiffStore.
+**Unload.** Voxels are freed beyond RD+5, meshes beyond RD+1 (SP4b: at most 16 column frees and 64 columns hidden for mesh removal per frame, their rows released under the upload budget, a column freed only when no in-flight job reads it) (SP4c: a region left with no column is disposed at once, outside the row cap and the structural slot). The column's diff stays in the sim worker's DiffStore.
 
 ### 4.3 Scheduling
 
@@ -990,7 +990,7 @@ Main thread: render (three), input/physics/raycast (reads SAB), Coordinator (sta
 - In-flight jobs check their epoch cell between phases and abort. SP2b implements the epoch cell as one pool-wide `SharedArrayBuffer` cell for map, spawn and stats jobs (a stopped job replies `ABORTED`); SP4b widens it to per-scope cells (amended by SP2b).
 - Stale results are discarded.
 
-**Uploads** are capped at 2 ms and 32 section-meshes per frame (Medium) (SP4b: at most one structural operation per frame while flying: a region's batch or arena created, grown, optimised or compacted; a region with rows written in a frame is drawn unculled in it, so three uploads them under that frame's cap). They are served from a distance-ordered ready queue of whole columns; a column's uploads may span several frames, but its reveal happens in one (§4.2).
+**Uploads** are capped at 2 ms and 32 section-meshes per frame (Medium) (SP4b: at most one structural operation per frame while flying: a region's batch or arena created, grown, optimised or compacted; a region with rows written in a frame is drawn unculled in it, so three uploads them under that frame's cap) (SP4c: at most half the row cap on releases while an upload waits). They are served from a distance-ordered ready queue of whole columns; a column's uploads may span several frames, but its reveal happens in one (§4.2).
 
 **HUD counts** come straight from heap and in-flight maps, so nothing is double-counted.
 

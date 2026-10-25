@@ -3,7 +3,8 @@ import { describe, expect, test } from 'vitest';
 import { MESH_PASS_CUTOUT, MESH_PASS_OPAQUE, MESH_PASS_TRANSLUCENT, ROW_INTS, type ColumnMeshPayload } from '../../src/mesh/column';
 import { createMaterialSystem, type MaterialVariant } from '../../src/render/materials/index';
 import {
-  createStreamingRenderer, rowBounds, rowsOfPass, type PayloadRow, type RegionBackend, type StagedColumn,
+  createStreamingRenderer, EMPTIED_PER_PUMP, RELEASE_SHARE, rowBounds, rowsOfPass, type PayloadRow, type RegionBackend,
+  type StagedColumn,
 } from '../../src/render/regionGrid';
 import {
   createRevealProbe, createSectionRenderer, createSectionRendererCounts, type SectionRenderer,
@@ -279,6 +280,56 @@ describe('regionGrid: the staging\'s swap over the backend (SP4c spec §5.1, D9)
     expect(log).toEqual(['hide 2', 'hide 3']);
     expect(r.isRevealed(1, 1)).toBe(false);
     pumpAll(r);
-    expect(log).toEqual(['hide 2', 'hide 3', 'release 3:0', 'dispose 0,0']);
+    // The region emptied: disposed with the pending rows purged, never released one by one (SP4c spec §5.4).
+    expect(log).toEqual(['hide 2', 'hide 3', 'dispose 0,0']);
+  });
+});
+
+describe('regionGrid: the pump\'s order (SP4c spec §5.4, D10)', () => {
+  test('EMPTIED_PER_PUMP is 8 and RELEASE_SHARE 16 (half the 32-row cap)', () => {
+    expect(EMPTIED_PER_PUMP).toBe(8);
+    expect(RELEASE_SHARE).toBe(16);
+  });
+
+  test('after a far jump that removes 489 shown columns of 14 rows, the first new column\'s rows upload in the first pump that has them', () => {
+    const { backend, log } = recordingBackend();
+    // No release ever touches a disposed region.
+    const disposed = new Set<unknown>();
+    const watched: RegionBackend<null> = {
+      ...backend,
+      disposeRegion(g) {
+        disposed.add(g);
+        backend.disposeRegion(g);
+      },
+      release(c, row) {
+        expect(disposed.has(c.region), `release ${c.seq}:${row} of (${c.cx}, ${c.cz}) after its region was disposed`).toBe(false);
+        backend.release(c, row);
+      },
+    };
+    const r = createStreamingRenderer('batch', new Group(), watched);
+    const rows14 = Array.from({ length: 14 }, (_, sy) => ({ sy, pass: 0 as const, quads: 1 }));
+    // The 489 columns nearest (0, 0): RD 12's disc.
+    const disc: Array<[number, number]> = [];
+    for (let x = -13; x <= 13; x++) for (let z = -13; z <= 13; z++) disc.push([x, z]);
+    disc.sort((a, b) => a[0] ** 2 + a[1] ** 2 - (b[0] ** 2 + b[1] ** 2) || a[0] - b[0] || a[1] - b[1]);
+    disc.length = 489;
+    for (const [x, z] of disc) r.stage(fakePayload(x, z, rows14), 1);
+    pumpAll(r);
+    expect(r.counts(createSectionRendererCounts())).toMatchObject({ columnsRevealed: 489, rows: 489 * 14 });
+    for (const [x, z] of disc) r.remove(x, z);
+    log.length = 0;
+    // The new place, 640 columns east.
+    r.stage(fakePayload(640, 0, rows14), 2);
+    const gate = fakeGate(32);
+    expect(r.pump(gate, 640, 0, 90)).toBeLessThanOrEqual(32);
+    expect(r.isRevealed(640, 0)).toBe(true);
+    expect(log.filter((l) => l.startsWith('upload 2:'))).toHaveLength(14);
+    expect(log.filter((l) => l.startsWith('release ')).length).toBeLessThanOrEqual(RELEASE_SHARE);
+    expect(log.filter((l) => l.startsWith('dispose ')).length).toBe(EMPTIED_PER_PUMP);
+    // The old place goes in the following pumps: its 15 regions (x and z in −2 … 1, but for (−2, −2), whose nearest
+    // column (−9, −9) lies outside the disc) disposed.
+    pumpAll(r, 640, 0, 90);
+    expect(r.counts(createSectionRendererCounts())).toMatchObject({ columnsRemoving: 0, rows: 14, regions: 1 });
+    expect(disposed.size).toBe(15);
   });
 });

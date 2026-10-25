@@ -179,26 +179,28 @@ export function sectionRendererContract(kind: SectionRendererKind): void {
       r.dispose();
     });
 
-    test('structural before releases: with 40 rows pending release and a staged column in a new region, one pump under a 32-row gate creates the region\'s object and releases 32 rows; the column\'s rows upload in the following pumps and it is revealed', () => {
+    test('structural before releases (SP4c spec §5.4, D10): with 40 removed rows in a region that keeps a live column and a staged column in a new region, the first pump under a 32-row gate creates the region\'s object, releases at most 16 rows while the upload waits and uploads the column; the next pump releases the other 24', () => {
       const r = make();
+      const keep = fakePayload(2, 2, [opaque(3)]);
+      r.stage(keep, 1);
       r.stage(fakePayload(1, 1, rowsOf(24, 16)), 1);
       pumpAll(r);
       r.remove(1, 1);
-      expect(counts(r).columnsRemoving).toBe(1);
+      expect(counts(r)).toMatchObject({ columnsRemoving: 1, rows: 41, regions: 1 });
       const fresh = fakePayload(17, 1, [opaque(4), opaque(5)]);
       r.stage(fresh, 1);
       expect(regionAt(r, 2, 0)).toHaveLength(0);
       const gate = fakeGate(32);
-      expect(r.pump(gate, 17, 1, 0)).toBe(32);
+      // 16 releases (an upload waits), then the column's 2 rows.
+      expect(r.pump(gate, 17, 1, 0)).toBe(18);
       expect(gate.granted).toBe(1);
       expect(regionAt(r, 2, 0)).toHaveLength(1);
-      expect(counts(r)).toMatchObject({ lastStructural: 'create', columnsRemoving: 1, rows: 8 });
-      expect(r.isRevealed(17, 1)).toBe(false);
-      // The 8 releases and the column's 2 rows.
-      expect(r.pump(fakeGate(32), 17, 1, 0)).toBe(10);
+      expect(counts(r)).toMatchObject({ lastStructural: 'create', columnsRemoving: 1, rows: 41 - 16 + 2, regions: 2 });
       expect(r.isRevealed(17, 1)).toBe(true);
-      expect(counts(r)).toMatchObject({ columnsRemoving: 0, rows: 2, regions: 1 });
-      expect(visibleIndices(r.root)).toBe(indexSum([fresh]));
+      // Nothing waits: the other 24 rows go under the 32-row cap.
+      expect(r.pump(fakeGate(32), 17, 1, 0)).toBe(24);
+      expect(counts(r)).toMatchObject({ columnsRemoving: 0, rows: 3, regions: 2 });
+      expect(visibleIndices(r.root)).toBe(indexSum([keep, fresh]));
       r.dispose();
     });
 
@@ -261,7 +263,7 @@ export function sectionRendererContract(kind: SectionRendererKind): void {
       s.dispose();
     });
 
-    test('removal: hidden at once (probe partial 0 in that frame), rows released under the gate, an emptied region disposed', () => {
+    test('removal: hidden at once (probe partial 0 in that frame); the emptied region (0, 0) is disposed in the first pump with 0 rows spent, its rows purged from the counts (SP4c spec §5.4, D10)', () => {
       const r = make();
       const keep = fakePayload(9, 0, [opaque(2)]);
       const gone = fakePayload(1, 1, rowsOf(24, 16));
@@ -276,16 +278,16 @@ export function sectionRendererContract(kind: SectionRendererKind): void {
       expect(visibleIndices(r.root)).toBe(indexSum([keep]));
       expect(probe(r)).toMatchObject({ partial: 0, mixed: 0 });
       expect(counts(r)).toMatchObject({ columnsStaged: 1, columnsRemoving: 1, rows: 41, regions: 2 });
-      expect(r.pump(fakeGate(32), 0, 0, 0)).toBe(32);
+      const gate = fakeGate(32);
+      expect(r.pump(gate, 0, 0, 0)).toBe(0);
+      expect(gate.granted).toBe(0);
       expect(probe(r)).toMatchObject({ partial: 0, mixed: 0 });
-      expect(counts(r)).toMatchObject({ columnsRemoving: 1, rows: 9, regions: 2 });
-      expect(regionAt(r, 0, 0).length).toBeGreaterThan(0);
-      expect(r.pump(fakeGate(32), 0, 0, 0)).toBe(8);
       expect(counts(r)).toMatchObject({ columnsRemoving: 0, rows: 1, regions: 1, vertices: vertexSum([keep]), indices: indexSum([keep]) });
       // Region (0, 0) emptied: its objects are disposed and gone from the root.
       expect(regionAt(r, 0, 0)).toHaveLength(0);
       expect(regionAt(r, 1, 0).length).toBeGreaterThan(0);
       expect(visibleIndices(r.root)).toBe(indexSum([keep]));
+      expect(r.pump(fakeGate(32), 0, 0, 0)).toBe(0);
       // Removing a column that is not staged changes nothing.
       r.remove(40, 40);
       expect(counts(r)).toMatchObject({ columnsStaged: 1, columnsRemoving: 0 });
@@ -886,6 +888,108 @@ export function sectionRendererContract(kind: SectionRendererKind): void {
       at = 'after';
       pumpAll(r, 2, 2);
       expect(calls).toEqual(['pump 1 2,2', 'empty 2,2']);
+      r.dispose();
+    });
+  });
+
+  describe(`SectionRenderer pump order contract: ${kind} (SP4c spec §5.4, §5.5, D10)`, () => {
+    test('an emptied region is disposed in the next pump without spending a row or the structural slot, also while removals of it are still queued (they are purged, and no release afterwards touches the disposed region)', () => {
+      const r = make();
+      const keep = fakePayload(9, 0, [opaque(2)]);
+      r.stage(keep, 1);
+      r.stage(fakePayload(1, 1, rowsOf(40, 0)), 1);
+      r.stage(fakePayload(2, 1, rowsOf(40, 0)), 1);
+      pumpAll(r);
+      expect(counts(r)).toMatchObject({ regions: 2, rows: 81 });
+      // Region (0, 0) keeps (2, 1): 32 of (1, 1)'s rows go, 8 stay queued.
+      r.remove(1, 1);
+      expect(r.pump(fakeGate(32), 0, 0, 0)).toBe(32);
+      expect(counts(r)).toMatchObject({ columnsRemoving: 1, rows: 49, regions: 2 });
+      // Now emptied, with 8 + 40 rows queued, and a staged column in a new region that needs the structural slot.
+      r.remove(2, 1);
+      const fresh = fakePayload(17, 1, [opaque(4), opaque(5)]);
+      r.stage(fresh, 1);
+      const gate = fakeGate(32);
+      expect(r.pump(gate, 17, 1, 0)).toBe(2);
+      expect(gate.granted).toBe(1);
+      expect(counts(r)).toMatchObject({ lastStructural: 'create', columnsRemoving: 0, rows: 3, regions: 2 });
+      expect(regionAt(r, 0, 0)).toHaveLength(0);
+      expect(r.isRevealed(17, 1)).toBe(true);
+      expect(visibleIndices(r.root)).toBe(indexSum([keep, fresh]));
+      expect(probe(r)).toEqual({ columns: 2, partial: 0, mixed: 0 });
+      // Nothing of the disposed region is left to release.
+      expect(r.pump(fakeGate(32), 17, 1, 0)).toBe(0);
+      expect(counts(r)).toMatchObject({ columnsRemoving: 0, rows: 3, vertices: vertexSum([keep, fresh]), indices: indexSum([keep, fresh]) });
+      r.dispose();
+    });
+
+    test('with 200 rows to release and an upload waiting, a pump spends at most 16 rows on releases; with nothing waiting, releases take up to 32', () => {
+      const r = make();
+      const keep = fakePayload(7, 7, [opaque(1)]);
+      r.stage(keep, 1);
+      for (let cx = 0; cx < 5; cx++) r.stage(fakePayload(cx, 0, rowsOf(40, 0)), 1);
+      pumpAll(r);
+      expect(counts(r)).toMatchObject({ regions: 1, rows: 201 });
+      for (let cx = 0; cx < 5; cx++) r.remove(cx, 0);
+      const waiting = fakePayload(5, 5, rowsOf(4, 0));
+      r.stage(waiting, 2);
+      // 16 releases while the column waits, then its 4 rows.
+      expect(r.pump(fakeGate(32), 5, 5, 0)).toBe(20);
+      expect(counts(r)).toMatchObject({ rows: 201 - 16 + 4, columnsRemoving: 5 });
+      expect(r.isRevealed(5, 5)).toBe(true);
+      // Nothing waits: 32 rows of releases.
+      expect(r.pump(fakeGate(32), 5, 5, 0)).toBe(32);
+      expect(counts(r).rows).toBe(201 - 16 + 4 - 32);
+      // A column that keeps waiting across pumps keeps the share at 16.
+      r.stage(fakePayload(6, 6, rowsOf(40, 0)), 3);
+      expect(r.pump(fakeGate(32), 6, 6, 0)).toBe(32);
+      expect(counts(r).rows).toBe(201 - 16 + 4 - 32 - 16 + 16);
+      expect(r.isRevealed(6, 6)).toBe(false);
+      pumpAll(r, 6, 6);
+      expect(counts(r)).toMatchObject({ columnsRemoving: 0, rows: 1 + 4 + 40 });
+      expect(visibleIndices(r.root)).toBe(indexSum([keep, waiting, fakePayload(6, 6, rowsOf(40, 0))]));
+      r.dispose();
+    });
+
+    test('at most 8 regions are disposed per pump; the ninth goes in the next', () => {
+      const r = make();
+      for (let i = 0; i < 9; i++) r.stage(fakePayload(8 * i, 0, [opaque(1)]), 1);
+      pumpAll(r);
+      expect(counts(r).regions).toBe(9);
+      for (let i = 0; i < 9; i++) r.remove(8 * i, 0);
+      const gate = fakeGate(32);
+      // Eight regions disposed with their rows purged; the ninth's one row is released under the cap.
+      expect(r.pump(gate, 0, 0, 0)).toBe(1);
+      expect(gate.granted).toBe(0);
+      expect(counts(r)).toMatchObject({ regions: 1, rows: 0, columnsRemoving: 0 });
+      // Removed in order: the ninth, region (8, 0), is the one left.
+      expect(regionAt(r, 8, 0).length).toBeGreaterThan(0);
+      expect(r.pump(fakeGate(32), 0, 0, 0)).toBe(0);
+      expect(counts(r)).toMatchObject({ regions: 0, rows: 0, vertices: 0, indices: 0, columnsRemoving: 0 });
+      expect(regionObjects(r.root)).toHaveLength(0);
+      r.dispose();
+    });
+
+    test('a region holding one swapped-out prev and one live column is not disposed', () => {
+      const r = make();
+      const a1 = fakePayload(0, 0, [opaque(1), opaque(2)]);
+      r.stage(a1, 1);
+      r.stage(fakePayload(1, 0, [opaque(3)]), 1);
+      pumpAll(r);
+      // (0, 0) swaps to a2 in the next pump and (1, 0) is removed: the region keeps a2 live and a1 swapped out.
+      const a2 = fakePayload(0, 0, [opaque(4), opaque(5), opaque(6)]);
+      r.stage(a2, 2);
+      r.remove(1, 0);
+      expect(r.pump(fakeGate(32), 0, 0, 0)).toBe(1 + 3);
+      expect(counts(r)).toMatchObject({ regions: 1, columnsRemoving: 1, rows: 2 + 3 });
+      expect(regionAt(r, 0, 0).length).toBeGreaterThan(0);
+      expect(r.isRevealed(0, 0)).toBe(true);
+      expect(visibleIndices(r.root)).toBe(indexSum([a2]));
+      // a1's rows are released row by row; the region stays.
+      expect(r.pump(fakeGate(32), 0, 0, 0)).toBe(2);
+      expect(counts(r)).toMatchObject({ regions: 1, columnsRemoving: 0, rows: 3 });
+      expect(visibleIndices(r.root)).toBe(indexSum([a2]));
+      expect(probe(r)).toEqual({ columns: 1, partial: 0, mixed: 0 });
       r.dispose();
     });
   });
