@@ -870,7 +870,24 @@ describe('the world\'s URL (createWorldUrl, SP4c spec §1.6, D20)', () => {
 
   test('Task 20b: the teleport is disposed in the page\'s teardown (a landing pending at teardown settles silently)', () => {
     const src = readFileSync(new URL('../../src/ui/world/worldPage.ts', import.meta.url), 'utf8');
-    expect(src).toMatch(/teardown\.push\(\(\) => teleport\.dispose\(\)\)/);
+    expect(src).toMatch(/teardown\.push\(\(\) => teleporter\.dispose\(\)\)/);
+  });
+
+  test('ruling R5: a failure after the reveal also disposes the teleport, before the pool is terminated (no "Could not teleport" beside the failure panel)', () => {
+    // pool.terminate rejects a landing in flight with WorkerFailed, which would call onFail; a disposed teleport settles
+    // it silently (Task 20b). The page's post-reveal wiring cannot be mounted in the unit project, so its source is pinned.
+    const src = readFileSync(new URL('../../src/ui/world/worldPage.ts', import.meta.url), 'utf8');
+    // The streaming route's (the bench's own, earlier, has no map and no teleport).
+    const start = src.indexOf('\n    failAfterReveal = (cause, shown) => {');
+    expect(start).toBeGreaterThan(-1);
+    const block = src.slice(start, src.indexOf('\n    };', start + 1));
+    expect(block).toMatch(/closeMap: \(\) => mapRef\?\.dispose\(\)/);
+    const release = block.slice(block.indexOf('release: ['));
+    expect(release).toMatch(/^\s*\(\) => teleport\?\.dispose\(\),$/m);
+    expect(release.indexOf('teleport?.dispose()')).toBeLessThan(release.indexOf('pool?.terminate()'));
+    // The page's one teleport is the one the release list reaches.
+    expect(src).toMatch(/^\s*let teleport: Teleport \| null = null;$/m);
+    expect(src).toMatch(/^\s*teleport = teleporter;$/m);
   });
 });
 

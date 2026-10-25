@@ -123,7 +123,7 @@ import { createFrameStep, eyeSkyLight } from './frameStep';
 import { createMapOverlay, followSession, frameCapFor, worldMapView, type MapOverlay } from './mapOverlay';
 import { createReloader, createWorldUrl, installLeaveGuard, navigateTo, type Reloader } from './reload';
 import { Y_MAX, Y_MIN, type WorldQuery } from './query';
-import { createTeleport } from './teleport';
+import { createTeleport, type Teleport } from './teleport';
 
 /** The capture and test options (ruling P48). */
 export interface WorldPageOptions {
@@ -343,9 +343,10 @@ export function runTeardown(steps: ReadonlyArray<() => void>, onError: (e: unkno
 /**
  * A failure after the reveal (SP4b spec §7.4): stops the frame loop, closes the map overlay and disposes its tool (SP4c
  * spec §1.3, D27: the map never works on a released pool), shows the failure panel, then runs the release steps (the
- * HUD's timer, the coordinator, the pool, the renderer), the overlay, the panel and each release guarded as the
- * teardown's (`runTeardown`): a release that throws (a `StoreCorrupt` in the coordinator's sweep, a renderer whose
- * context is gone, a tool's dispose) can neither hide the panel nor skip a later release (Task 21 review M2).
+ * HUD's timer, the teleport (ruling R5), the coordinator, the pool, the renderer), the overlay, the panel and each
+ * release guarded as the teardown's (`runTeardown`): a release that throws (a `StoreCorrupt` in the coordinator's
+ * sweep, a renderer whose context is gone, a tool's dispose) can neither hide the panel nor skip a later release (Task
+ * 21 review M2).
  */
 export function stopAfterFailure(o: {
   stop(): void;
@@ -1360,6 +1361,8 @@ export function mountWorldPage(root: HTMLElement, q: WorldQuery, hash: string, o
     // disposes the overlay (and its tool) before the panel or the notice shows (D27).
     let mapRef: MapOverlay | null = null;
     let driver: PreviewDriver | null = null;
+    // The teleport, created below; a failure after the reveal disposes it before the pool is terminated (ruling R5).
+    let teleport: Teleport | null = null;
     // The world's URL (SP4c spec §1.6, D20): after every Apply and every view change of the map, the path, the search
     // and the live session's hash, debounced 200 ms, a hash over 64 KiB dropped with the notice; a teleport's arrival
     // rewrites the search's place. Disposed (a pending write flushed) before the notices. No `hashchange` listener.
@@ -1400,6 +1403,9 @@ export function mountWorldPage(root: HTMLElement, q: WorldQuery, hash: string, o
         // step on its own.
         release: [
           () => stopHud(),
+          // Before the pool: a landing in flight then settles silently, so no "Could not teleport" shows beside the
+          // panel (ruling R5; pool.terminate rejects it with WorkerFailed).
+          () => teleport?.dispose(),
           () => driver?.dispose(),
           () => coordinator.dispose(),
           () => longTasks?.disconnect(),
@@ -1628,7 +1634,7 @@ export function mountWorldPage(root: HTMLElement, q: WorldQuery, hash: string, o
 
     // The teleport (SP4c spec §3.2-§3.4): the landing on the shared pool, the camera moved in place, the eye light
     // reset to 15; the fog does not react (Point 1). The next tick's `coordinator.update` does the crossing.
-    const teleport = createTeleport({
+    const teleporter = createTeleport({
       pool: workers,
       fly,
       state: frame,
@@ -1638,7 +1644,8 @@ export function mountWorldPage(root: HTMLElement, q: WorldQuery, hash: string, o
       onFail: () => notices.show('Could not teleport', { kind: 'warn', timeoutMs: 4000 }),
     });
     // A landing still pending at teardown settles silently: no write to the disposed page's camera, no notice.
-    teardown.push(() => teleport.dispose());
+    teleport = teleporter;
+    teardown.push(() => teleporter.dispose());
     // The map overlay (SP4c spec §1.3): M before the reveal does nothing, since nothing exists to receive it.
     const mapOverlay = createMapOverlay({
       app: root,
@@ -1667,7 +1674,7 @@ export function mountWorldPage(root: HTMLElement, q: WorldQuery, hash: string, o
       win: window,
       now: () => performance.now(),
       // A plain click teleports (SP4c spec §3); the overlay closes the map on arrival in full screen.
-      onTeleport: (x, z) => teleport.go(x, z),
+      onTeleport: (x, z) => teleporter.go(x, z),
       // Every view change of the tool writes the world's URL (SP4c spec §1.6).
       viewChanged: () => worldUrl.viewChanged(),
       // The transient notices go to the tool's row while mode A covers the 3D; the Watch-live notice (D26, D27).
