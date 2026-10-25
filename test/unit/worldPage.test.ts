@@ -499,5 +499,34 @@ describe('createRdControl (SP4b spec §5, D18; Review Focus 5)', () => {
       expect(shown).toBe(6);
       expect(r.assign).not.toHaveBeenCalled();
     });
+
+    test('after the mode switch to split, a FOV change from the help keeps mapMode: \'split\' and watchLive: false (SP4c spec §2.5)', () => {
+      // The help's copy of the settings is the one it saw at mount (full, watching live); the map's header changes the
+      // saved settings afterwards, and the help has no control for either field.
+      let page: WorldSettings = { ...SETTINGS_DEFAULTS };
+      const stored: WorldSettings[] = [];
+      mountHelp(dom.body as unknown as HTMLElement, {
+        map: DEFAULT_KEYMAP,
+        settings: page,
+        onSettings: (s) => {
+          page = helpChange(page, s, null).settings;
+          stored.push(page);
+        },
+        report: REPORT,
+        evaluation: evaluateWorldCapabilities(REPORT),
+        rdMax: 16,
+        mapHereHref: () => '?map',
+        onFullscreen: () => {},
+        onClose: () => {},
+      });
+      // The mode switch and the Watch live checkbox (the overlay's header) save at once.
+      page = { ...page, mapMode: 'split', watchLive: false };
+      const fov = dom.el('setting-fov');
+      fov.value = '90';
+      fov.dispatchEvent(new Event('input'));
+      expect(stored.at(-1)).toEqual({ ...SETTINGS_DEFAULTS, fov: 90, mapMode: 'split', watchLive: false });
+      expect(helpChange(page, { ...page, mapMode: 'full', watchLive: true, fov: 80 }, null).settings)
+        .toEqual({ ...SETTINGS_DEFAULTS, fov: 80, mapMode: 'split', watchLive: false });
+    });
   });
 });

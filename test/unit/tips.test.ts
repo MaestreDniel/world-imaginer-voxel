@@ -10,7 +10,8 @@ describe('loading-screen tips (SP4a spec §8.3, §7.3; ruling P45)', () => {
     const named = new Set(TIP_TEMPLATES.flatMap(placeholders));
     const missing = DEFAULT_KEYMAP.map((e) => e.action).filter((a) => !named.has(a));
     expect(missing).toEqual([]);
-    expect(DEFAULT_KEYMAP.length).toBe(13);
+    expect(DEFAULT_KEYMAP.length).toBe(14);
+    expect(named.has('map')).toBe(true);
   });
 
   test('each filled tip contains a binding label of every action its template names', () => {
@@ -35,6 +36,9 @@ describe('loading-screen tips (SP4a spec §8.3, §7.3; ruling P45)', () => {
     expect(text).toContain('?map');
     expect(text).toContain('Open in 3D');
     expect(text).toMatch(/preset/i);
+    // SP4c spec §2.4: M opens the map over the world; the ?map tip no longer says it is the only way to shape the world.
+    expect(text).toContain('M opens the map over the world: click to go there, edit the world live.');
+    expect(TIP_TEMPLATES).not.toContain('Shape the world on the map (?map), then press "Open in 3D" to fly through it.');
     expect(text).toMatch(/click/i);
   });
 

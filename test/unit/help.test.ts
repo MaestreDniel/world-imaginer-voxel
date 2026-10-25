@@ -57,6 +57,14 @@ describe('mountHelp (SP4a spec §7.4, D31)', () => {
     expect(dom.el('help-keys').querySelectorAll('h4').map((h) => h.textContent)).toEqual(['Move', 'Speed', 'World', 'View']);
   });
 
+  test('the help names undo and redo, which no key-map entry carries (SP4c spec §2.4)', () => {
+    mount();
+    expect(dom.el('help-keys').textContent).toContain('Ctrl+Z undo · Ctrl+Y redo (Ctrl+Shift+Z also descends while flying; Ctrl+Y does not)');
+    // The M row comes from the key map, in the View group.
+    const rows = dom.el('help-keys').querySelectorAll('tr');
+    expect(rows.find((r) => r.dataset.action === 'map')!.textContent).toBe('Map: teleport and live editingM');
+  });
+
   test('the Keys rows describe horizontal flight (SP4b spec §6.1)', () => {
     mount();
     const rows = dom.el('help-keys').querySelectorAll('tr');
@@ -147,7 +155,7 @@ describe('mountHelp (SP4a spec §7.4, D31)', () => {
     expect(o.onSettings).toHaveBeenLastCalledWith({ ...SETTINGS_DEFAULTS, fpsCap: 60, fov: 90 });
     change('setting-sensitivity', '2.5', 'input');
     change('setting-brightness', '0.8', 'input');
-    expect(o.onSettings).toHaveBeenLastCalledWith({ rd: null, fpsCap: 60, fov: 90, sensitivity: 2.5, brightness: 0.8 });
+    expect(o.onSettings).toHaveBeenLastCalledWith({ ...SETTINGS_DEFAULTS, rd: null, fpsCap: 60, fov: 90, sensitivity: 2.5, brightness: 0.8 });
     expect(dom.el('help-settings').textContent).toContain('90°');
   });
 

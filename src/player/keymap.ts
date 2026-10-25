@@ -11,7 +11,7 @@ import type { SubProjectId } from '../core/ids';
 
 export type Action =
   | 'forward' | 'back' | 'left' | 'right' | 'up' | 'down' | 'sprint' | 'speedUp' | 'speedDown'
-  | 'timeSpeed' | 'help' | 'hud' | 'releasePointer';
+  | 'timeSpeed' | 'help' | 'hud' | 'releasePointer' | 'map';
 
 export type Binding = { kind: 'code'; code: string } | { kind: 'key'; key: string } | { kind: 'wheel'; dir: 'up' | 'down' };
 
@@ -29,7 +29,8 @@ const wheel = (dir: 'up' | 'down'): Binding => ({ kind: 'wheel', dir });
 
 /**
  * SP4a's actions, as spec §7.3 lists them, with SP4b's flight labels (SP4b spec §6.1) and without R, which loaded the
- * world around the camera until SP4b streamed it (SP4b spec §6.2, D20: R is unbound).
+ * world around the camera until SP4b streamed it (SP4b spec §6.2, D20: R is unbound); then SP4c's M, the map over the
+ * world (SP4c spec §2.4, D15), the one action that acts whoever owns the controls.
  */
 export const DEFAULT_KEYMAP: readonly KeyEntry[] = [
   { action: 'forward', bindings: [code('KeyW')], label: 'Forward (at your height)', group: 'move', since: 'SP4a' },
@@ -45,6 +46,7 @@ export const DEFAULT_KEYMAP: readonly KeyEntry[] = [
   { action: 'help', bindings: [code('KeyH'), code('F1')], label: 'Help and settings', group: 'view', since: 'SP4a' },
   { action: 'hud', bindings: [code('F3')], label: 'Show or hide the counts', group: 'view', since: 'SP4a' },
   { action: 'releasePointer', bindings: [code('Escape')], label: 'Release the pointer', group: 'view', since: 'SP4a' },
+  { action: 'map', bindings: [code('KeyM')], label: 'Map: teleport and live editing', group: 'view', since: 'SP4c' },
 ];
 
 /**

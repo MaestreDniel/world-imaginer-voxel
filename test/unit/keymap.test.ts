@@ -3,10 +3,13 @@ import {
   DEFAULT_KEYMAP, LISTED_ONLY, bindingLabel, resolveKey, resolveWheel, type Action, type Binding,
 } from '../../src/player/keymap';
 
-/** Every action of SP4a spec §7.3 but R (removed by SP4b spec §6.2), spelled out so that a missing map entry fails here. */
+/**
+ * Every action of SP4a spec §7.3 but R (removed by SP4b spec §6.2), and SP4c's M (SP4c spec §2.4), spelled out so that a
+ * missing map entry fails here.
+ */
 const ACTIONS: readonly Action[] = [
   'forward', 'back', 'left', 'right', 'up', 'down', 'sprint', 'speedUp', 'speedDown',
-  'timeSpeed', 'help', 'hud', 'releasePointer',
+  'timeSpeed', 'help', 'hud', 'releasePointer', 'map',
 ];
 
 const bindingKey = (b: Binding): string => (b.kind === 'code' ? `code:${b.code}` : b.kind === 'key' ? `key:${b.key}` : `wheel:${b.dir}`);
@@ -23,7 +26,17 @@ describe('the key map as data (SP4a spec §7.3, D19)', () => {
     // Esc is listed (the help names it) but the browser owns it: the input layer never resolves it.
     expect([...LISTED_ONLY]).toEqual(['releasePointer']);
     expect(resolveKey({ code: 'Escape', key: 'Escape' })).toBeNull();
-    expect(DEFAULT_KEYMAP.every((e) => e.since === 'SP4a')).toBe(true);
+    // Every entry is SP4a's except SP4c's map (SP4c spec §2.4).
+    for (const e of DEFAULT_KEYMAP) expect(e.since, e.action).toBe(e.action === 'map' ? 'SP4c' : 'SP4a');
+  });
+
+  test('M opens the map: KeyM resolves to map, in the view group (SP4c spec §2.4, D15)', () => {
+    expect(DEFAULT_KEYMAP.find((e) => e.action === 'map')).toEqual({
+      action: 'map', bindings: [{ kind: 'code', code: 'KeyM' }], label: 'Map: teleport and live editing', group: 'view', since: 'SP4c',
+    });
+    expect(resolveKey({ code: 'KeyM', key: 'm' })).toBe('map');
+    // The physical key: a layout typing something else at KeyM still opens the map.
+    expect(resolveKey({ code: 'KeyM', key: ',' })).toBe('map');
   });
 
   test('no binding is shared by two actions', () => {
@@ -52,6 +65,7 @@ describe('the key map as data (SP4a spec §7.3, D19)', () => {
     expect(of('help')).toEqual(['code:KeyH', 'code:F1']);
     expect(of('hud')).toEqual(['code:F3']);
     expect(of('releasePointer')).toEqual(['code:Escape']);
+    expect(of('map')).toEqual(['code:KeyM']);
   });
 
   test('no loadHere, nothing bound to KeyR (SP4b spec §6.2, D20)', () => {

@@ -564,11 +564,16 @@ export function rdShownOnLoad(queryRd: number | null, loadRd: number, savedRd: n
  * A change from the help (SP4b spec §5; rulings R8). The help's settings carry the RD it shows, the RD in force
  * (`shownRd`), not the saved one: the rd applies live only when it differs from `shownRd` (the RD control then saves
  * it), so the RD in force is a no-op and the saved value is not; every other change is saved with the saved rd kept.
+ * The map's mode and Watch live are kept from `saved` too (SP4c spec §2.5): the help has no control for them, and its
+ * copy is the one it saw at mount, which would undo a later mode switch.
  */
 export function helpChange(
   saved: WorldSettings, next: WorldSettings, shownRd: number | null,
 ): { readonly settings: WorldSettings; readonly applyRd: boolean } {
-  return { settings: { ...next, rd: saved.rd }, applyRd: next.rd !== shownRd };
+  return {
+    settings: { ...next, rd: saved.rd, mapMode: saved.mapMode, watchLive: saved.watchLive },
+    applyRd: next.rd !== shownRd,
+  };
 }
 
 /**
@@ -1378,6 +1383,8 @@ export function mountWorldPage(root: HTMLElement, q: WorldQuery, hash: string, o
       onLook: (dx, dy) => look(fly, dx, dy, settings.sensitivity * LOOK_DEG_PER_PIXEL),
       // Only text-entry controls (spec §7.1): a focused slider or select leaves H and F1 working (final review C-I2).
       isTextFocus: () => isTextEntry(document.activeElement as HTMLElement | null),
+      // The world owns the controls until the map overlay exists (SP4c spec §2.3; the overlay's owner, Task 15).
+      active: () => true,
       doc: document,
       win: window,
     });

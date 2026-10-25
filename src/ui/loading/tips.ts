@@ -7,8 +7,9 @@ import { bindingLabel, type KeyEntry } from '../../player/keymap';
 
 /**
  * The spec's topics, in its order: flight (SP4b spec §6.1: at your height, rise and descend), sprint, change speed,
- * time speed, help and HUD, the world loading around you (SP4b spec §6.2, in place of SP4a's R at the edge), shape the
- * world on `?map` and "Open in 3D", the presets on the map, click to look and Esc to free the mouse.
+ * time speed, help and HUD, the world loading around you (SP4b spec §6.2, in place of SP4a's R at the edge), the map
+ * over the world (SP4c spec §2.4: M, teleport and live editing), the standalone `?map` and its "Open in 3D", the presets
+ * on the map, click to look and Esc to free the mouse.
  */
 export const TIP_TEMPLATES: readonly string[] = [
   '{forward} {back} fly forward and back at your height, {left} {right} strafe; {up} and {down} rise and descend.',
@@ -17,7 +18,8 @@ export const TIP_TEMPLATES: readonly string[] = [
   '{timeSpeed} changes the speed of time: ×1, ×10, ×60, then paused.',
   '{help} opens the help, with every key and the settings; {hud} shows or hides the counts.',
   'The world loads around you as you fly; change the render distance in Help ({help}) → Settings.',
-  'Shape the world on the map (?map), then press "Open in 3D" to fly through it.',
+  '{map} opens the map over the world: click to go there, edit the world live.',
+  'The map also opens on its own page (?map); its "Open in 3D" flies you into the world you shaped there.',
   'The map\'s presets open other worlds: large biomes, an archipelago, amplified mountains, floating islands.',
   'Click the world to look around with the mouse; {releasePointer} frees the mouse.',
 ];

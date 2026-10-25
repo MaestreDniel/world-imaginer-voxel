@@ -9,6 +9,11 @@ import { DEFAULT_KEYMAP, resolveKey, resolveWheel, type Action, type KeyEntry } 
  *
  * input.ts touches only the target, doc and win it is given; it reads no globals (ruling P41): keys and
  * `pointerlockchange` arrive on the document, `blur` on the window, clicks, mouse movement and the wheel on the target.
+ *
+ * `active` is whether the world owns the controls (SP4c spec §2.3, D15: owner === 'world'). It is checked for every
+ * action but `map`: while it is false a world key is neither acted on nor default-prevented (Space presses a focused map
+ * button, `-` types), and the wheel changes no speed (it is still prevented: the world never scrolls). M acts either
+ * way. The page calls `clear()` on every change of owner, so no key stays held across the hand-over.
  */
 
 /** The actions held while their keys are down; the others fire `onAction`. */
@@ -66,11 +71,13 @@ export function attachInput(
     onAction(a: Action): void;
     onLook(dx: number, dy: number): void;
     isTextFocus(): boolean;
+    /** Whether the world owns the controls (SP4c spec §2.3); checked for every action but `map`. */
+    active(): boolean;
     map?: readonly KeyEntry[];
     doc: Pick<Document, 'addEventListener' | 'removeEventListener' | 'pointerLockElement'>;
     win: Pick<Window, 'addEventListener' | 'removeEventListener'>;
   },
-): { held: ReadonlySet<Action>; dispose(): void } {
+): { held: ReadonlySet<Action>; clear(): void; dispose(): void } {
   const map = o.map ?? DEFAULT_KEYMAP;
   const held = new Set<Action>();
   // Physical keys down → their held action, so releasing Left Shift keeps 'down' while Right Shift is still down.
@@ -89,6 +96,7 @@ export function attachInput(
     if (o.isTextFocus()) return;
     const a = resolveKey(e, map);
     if (a === null) return;
+    if (a !== 'map' && !o.active()) return;
     e.preventDefault();
     if (HELD.has(a)) {
       down.set(e.code, a);
@@ -123,7 +131,7 @@ export function attachInput(
   const onWheel = (e: WheelEvent): void => {
     // The world never scrolls, and Ctrl+wheel must change the speed, not zoom the page.
     e.preventDefault();
-    if (o.isTextFocus()) return;
+    if (o.isTextFocus() || !o.active()) return;
     const n = wheelSteps.push(e.deltaY, e.deltaMode);
     const a = resolveWheel(n, map);
     if (a === null) return;
@@ -141,6 +149,7 @@ export function attachInput(
 
   return {
     held,
+    clear,
     dispose() {
       o.doc.removeEventListener('keydown', onKeyDown);
       o.doc.removeEventListener('keyup', onKeyUp);

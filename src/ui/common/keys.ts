@@ -53,6 +53,20 @@ export function shortcutFor(e: KeyStroke, target: KeyTarget | null): ShortcutAct
   return null;
 }
 
+/**
+ * How long after the pointer lock is lost an Escape keydown is still ignored (SP4c spec §2.4): the press that releases
+ * the lock in mode B may also arrive as a keydown, before or after `pointerlockchange`, and must not close the drawer.
+ */
+export const ESC_AFTER_UNLOCK_MS = 150;
+
+/**
+ * Whether an Escape keydown at `nowMs` may act (close the drawer or the cut tool): never while the pointer is locked,
+ * nor within `ESC_AFTER_UNLOCK_MS` of the lock being lost at `unlockedAtMs` (-Infinity when it never was).
+ */
+export function escapeAllowed(nowMs: number, locked: boolean, unlockedAtMs: number): boolean {
+  return !locked && nowMs - unlockedAtMs >= ESC_AFTER_UNLOCK_MS;
+}
+
 function keyTargetOf(t: EventTarget | null): KeyTarget | null {
   return t !== null && 'tagName' in t && typeof t.tagName === 'string' ? (t as KeyTarget) : null;
 }

@@ -53,7 +53,16 @@ export interface Help {
 
 const GROUP_TITLES: Readonly<Record<KeyEntry['group'], string>> = { move: 'Move', speed: 'Speed', world: 'World', view: 'View' };
 
-/** One table per group, in the map's order; each row names the action and every binding (spec §7.3). */
+/**
+ * Undo and redo belong to the session, not the key map (SP4c spec §2.4), so the generated table does not name them.
+ * Ctrl+Shift+Z also holds Shift (descend) while flying; Ctrl+Y does not.
+ */
+export const UNDO_REDO_LINE = 'Ctrl+Z undo · Ctrl+Y redo (Ctrl+Shift+Z also descends while flying; Ctrl+Y does not)';
+
+/**
+ * One table per group, in the map's order; each row names the action and every binding (spec §7.3); then the undo and
+ * redo line.
+ */
 function keysSection(map: readonly KeyEntry[]): HTMLElement {
   const section = el('section', 'help-keys');
   section.id = 'help-keys';
@@ -69,6 +78,9 @@ function keysSection(map: readonly KeyEntry[]): HTMLElement {
     }
     section.append(el('h4', '', GROUP_TITLES[g]), table);
   }
+  const undo = el('p', 'help-undo', UNDO_REDO_LINE);
+  undo.id = 'help-undo';
+  section.append(undo);
   return section;
 }
 

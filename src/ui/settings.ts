@@ -13,12 +13,18 @@ export interface WorldSettings {
   fov: number;
   sensitivity: number;
   brightness: number;
+  /** The map's mode in the world (SP4c spec §2.2, §2.5, D16): full screen, or side by side with the 3D. */
+  mapMode: 'full' | 'split';
+  /** Mode A's "Watch live" (SP4c spec §2.1, §2.5): an Apply that rebuilds the world hides the map to show it. */
+  watchLive: boolean;
 }
 
 /** The `localStorage` key. */
 export const SETTINGS_KEY = 'wi.world.settings';
 
-export const SETTINGS_DEFAULTS: Readonly<WorldSettings> = Object.freeze({ rd: null, fpsCap: 0, fov: 70, sensitivity: 1, brightness: 0.3 });
+export const SETTINGS_DEFAULTS: Readonly<WorldSettings> = Object.freeze({
+  rd: null, fpsCap: 0, fov: 70, sensitivity: 1, brightness: 0.3, mapMode: 'full', watchLive: true,
+});
 
 /** The FPS caps offered, in order (spec §6.8). */
 export const FPS_CAPS: readonly WorldSettings['fpsCap'][] = [0, 30, 60, 120, 144];
@@ -34,8 +40,9 @@ const isNumber = (v: unknown): v is number => typeof v === 'number' && Number.is
 const clamp = (v: number, lo: number, hi: number): number => Math.min(hi, Math.max(lo, v));
 
 /**
- * Settings from any value: each field clamped to its range (rd an integer in 4-16, the cap one of `FPS_CAPS`); a field
- * that is missing, non-numeric or of the wrong type takes its default, and a non-object gives the defaults.
+ * Settings from any value: each field clamped to its range (rd an integer in 4-16, the cap one of `FPS_CAPS`, the map's
+ * mode 'full' or 'split', Watch live a boolean); a field that is missing, non-numeric or of the wrong type takes its
+ * default (so an object stored before SP4c gets the map's defaults), and a non-object gives the defaults.
  */
 export function normalizeSettings(raw: unknown): WorldSettings {
   const o = (typeof raw === 'object' && raw !== null && !Array.isArray(raw) ? raw : {}) as Record<string, unknown>;
@@ -50,6 +57,8 @@ export function normalizeSettings(raw: unknown): WorldSettings {
     fov: range('fov'),
     sensitivity: range('sensitivity'),
     brightness: range('brightness'),
+    mapMode: o.mapMode === 'split' || o.mapMode === 'full' ? o.mapMode : SETTINGS_DEFAULTS.mapMode,
+    watchLive: typeof o.watchLive === 'boolean' ? o.watchLive : SETTINGS_DEFAULTS.watchLive,
   };
 }
 

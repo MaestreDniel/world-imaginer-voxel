@@ -3,7 +3,7 @@ import { attachInput, createWheelSteps, isTextEntry } from '../../src/player/inp
 import type { Action } from '../../src/player/keymap';
 
 /** Fake target, document and window (ruling P41): plain EventTargets with the members input.ts reads. */
-function setup(textFocus = false) {
+function setup(textFocus = false, activeAtStart = true) {
   const target = Object.assign(new EventTarget(), { requestPointerLock: vi.fn(() => Promise.resolve()) });
   const doc = Object.assign(new EventTarget(), { pointerLockElement: null as unknown });
   const win = new EventTarget();
@@ -11,14 +11,20 @@ function setup(textFocus = false) {
   const actions: Action[] = [];
   const looks: Array<[number, number]> = [];
   let text = textFocus;
+  let active = activeAtStart;
   const input = attachInput(target as unknown as HTMLElement, {
     onAction: (a) => actions.push(a),
     onLook: (dx, dy) => looks.push([dx, dy]),
     isTextFocus: () => text,
+    active: () => active,
     doc: doc as unknown as Pick<Document, 'addEventListener' | 'removeEventListener' | 'pointerLockElement'>,
     win: win as unknown as Pick<Window, 'addEventListener' | 'removeEventListener'>,
   });
-  return { target, doc, win, addSpy, actions, looks, input, setText: (v: boolean) => { text = v; } };
+  return {
+    target, doc, win, addSpy, actions, looks, input,
+    setText: (v: boolean) => { text = v; },
+    setActive: (v: boolean) => { active = v; },
+  };
 }
 
 const key = (type: 'keydown' | 'keyup', code: string, k: string, mods: { ctrlKey?: boolean; repeat?: boolean } = {}) =>
@@ -145,6 +151,7 @@ describe('input (SP4a spec §7.1, master §4.17)', () => {
         onAction: (a) => actions.push(a),
         onLook: () => {},
         isTextFocus: () => isTextEntry(focused),
+        active: () => true,
         doc: doc as unknown as Pick<Document, 'addEventListener' | 'removeEventListener' | 'pointerLockElement'>,
         win: new EventTarget() as unknown as Pick<Window, 'addEventListener' | 'removeEventListener'>,
       });
@@ -234,6 +241,95 @@ describe('input (SP4a spec §7.1, master §4.17)', () => {
     process.off('unhandledRejection', unhandled);
     expect(unhandled).not.toHaveBeenCalled();
     input.dispose();
+  });
+
+  describe('the controls owner (SP4c spec §2.3, §2.4, D15)', () => {
+    test('inactive: W, A, S, D, Space, Shift, Ctrl, T, H, F1, F3, + and − do nothing and are not default-prevented (Space presses a focused map button, − types)', () => {
+      const { doc, actions, input } = setup(false, false);
+      const keys: Array<[string, string]> = [
+        ['KeyW', 'w'], ['KeyA', 'a'], ['KeyS', 's'], ['KeyD', 'd'], ['Space', ' '], ['ShiftLeft', 'Shift'], ['ShiftRight', 'Shift'],
+        ['ControlLeft', 'Control'], ['ControlRight', 'Control'], ['KeyT', 't'], ['KeyH', 'h'], ['F1', 'F1'], ['F3', 'F3'],
+        ['BracketRight', '+'], ['Equal', '='], ['Slash', '-'], ['Minus', '-'],
+      ];
+      for (const [code, k] of keys) {
+        const e = key('keydown', code, k);
+        doc.dispatchEvent(e);
+        expect(e.defaultPrevented, code).toBe(false);
+      }
+      expect(actions).toEqual([]);
+      expect(input.held.size).toBe(0);
+      input.dispose();
+    });
+
+    test('inactive: M still fires onAction(\'map\'), prevented; active too; a repeat does not fire again', () => {
+      const { doc, actions, input, setActive } = setup(false, false);
+      const m = key('keydown', 'KeyM', 'm');
+      doc.dispatchEvent(m);
+      expect(m.defaultPrevented).toBe(true);
+      expect(actions).toEqual(['map']);
+      doc.dispatchEvent(key('keydown', 'KeyM', 'm', { repeat: true }));
+      expect(actions).toEqual(['map']);
+      setActive(true);
+      const m2 = key('keydown', 'KeyM', 'm');
+      doc.dispatchEvent(m2);
+      expect(m2.defaultPrevented).toBe(true);
+      expect(actions).toEqual(['map', 'map']);
+      input.dispose();
+    });
+
+    test('M in a text field does nothing, active or not', () => {
+      for (const active of [true, false]) {
+        const { doc, actions, input } = setup(true, active);
+        const m = key('keydown', 'KeyM', 'm');
+        doc.dispatchEvent(m);
+        expect(m.defaultPrevented, `active ${active}`).toBe(false);
+        expect(actions, `active ${active}`).toEqual([]);
+        input.dispose();
+      }
+    });
+
+    test('the wheel while inactive changes no speed (still prevented: the world never scrolls)', () => {
+      const { target, actions, input, setActive } = setup(false, false);
+      const events = [wheel(-100), wheel(120), wheel(-100, true), ...Array.from({ length: 30 }, () => wheel(5))];
+      for (const e of events) target.dispatchEvent(e);
+      expect(actions).toEqual([]);
+      expect(events.every((e) => e.defaultPrevented)).toBe(true);
+      // Nothing carried over from the inactive scroll: the first active notch is one step.
+      setActive(true);
+      target.dispatchEvent(wheel(-100));
+      expect(actions).toEqual(['speedUp']);
+      input.dispose();
+    });
+
+    test('active again: the world\'s keys act once more; a key released while inactive still releases', () => {
+      const { doc, actions, input, setActive } = setup();
+      doc.dispatchEvent(key('keydown', 'KeyW', 'w'));
+      expect(input.held.has('forward')).toBe(true);
+      setActive(false);
+      doc.dispatchEvent(key('keyup', 'KeyW', 'w'));
+      expect(input.held.size).toBe(0);
+      setActive(true);
+      const t = key('keydown', 'KeyT', 't');
+      doc.dispatchEvent(t);
+      expect(t.defaultPrevented).toBe(true);
+      expect(actions).toEqual(['timeSpeed']);
+      input.dispose();
+    });
+
+    test('clear() empties held', () => {
+      const { doc, input } = setup();
+      doc.dispatchEvent(key('keydown', 'KeyW', 'w'));
+      doc.dispatchEvent(key('keydown', 'ShiftLeft', 'Shift'));
+      expect([...input.held].sort()).toEqual(['down', 'forward']);
+      input.clear();
+      expect(input.held.size).toBe(0);
+      // The keys it dropped stay dropped: their keyup is harmless, and a later press holds again.
+      doc.dispatchEvent(key('keyup', 'KeyW', 'w'));
+      expect(input.held.size).toBe(0);
+      doc.dispatchEvent(key('keydown', 'KeyD', 'd'));
+      expect([...input.held]).toEqual(['right']);
+      input.dispose();
+    });
   });
 
   test('dispose removes every listener', () => {

@@ -235,7 +235,7 @@ The tool keeps every handle `mountMapPage` drops today (recon-map §1.1): `sessi
 
 ### 2.5 The map's header in the world (D17)
 
-The toolbar's slot (§1.1) holds, in the world only: the mode switch "Full screen | Side by side", the "Watch live" checkbox (shown in mode A only), "Centre on me" and "✕ Close (M)", and the hint "Click: go here · Shift+click: pin" (D26). "Open in 3D" is hidden. `WorldSettings` (`ui/settings.ts`) gains `mapMode: 'full' | 'split'` (default `'full'`) and `watchLive: boolean` (default `true`), normalised like the other fields, so `normalizeSettings` keeps them; a change is saved at once. The flight and bench routes ignore stored settings, as today.
+The toolbar's slot (§1.1) holds, in the world only: the mode switch "Full screen | Side by side", the "Watch live" checkbox (shown in mode A only), "Centre on me" and "✕ Close (M)", and the hint "Click: go here · Shift+click: pin" (D26). "Open in 3D" is hidden. `WorldSettings` (`ui/settings.ts`) gains `mapMode: 'full' | 'split'` (default `'full'`) and `watchLive: boolean` (default `true`), normalised like the other fields, so `normalizeSettings` keeps them; a change is saved at once. A change from the help keeps both from the saved settings, as it keeps the saved render distance (`helpChange`, `ui/world/worldPage.ts:568-572`): the help has no control for them, and its copy of the settings, taken at mount, would otherwise write back the mode it saw then. The flight and bench routes ignore stored settings, as today.
 
 ### 2.6 The 3D while the map covers it (D16)
 

@@ -1,5 +1,7 @@
 import { afterEach, describe, expect, test, vi } from 'vitest';
-import { installShortcuts, isTextEntry, shortcutFor, type KeyStroke, type KeyTarget, type ShortcutAction } from '../../src/ui/common/keys';
+import {
+  ESC_AFTER_UNLOCK_MS, escapeAllowed, installShortcuts, isTextEntry, shortcutFor, type KeyStroke, type KeyTarget, type ShortcutAction,
+} from '../../src/ui/common/keys';
 
 const stroke = (key: string, mods: Partial<Omit<KeyStroke, 'key'>> = {}): KeyStroke => ({ key, ctrlKey: false, metaKey: false, shiftKey: false, altKey: false, ...mods });
 const input = (type: string): KeyTarget => ({ tagName: 'INPUT', type });
@@ -81,6 +83,25 @@ describe('shortcutFor', () => {
   });
   test('other keys are not shortcuts', () => {
     for (const k of ['a', 'Enter', ' ', 'Delete', 'y', 'Shift', 'Control']) expect(shortcutFor(stroke(k), BODY), k).toBeNull();
+  });
+});
+
+describe('escapeAllowed (SP4c spec §2.4; Review Focus 4)', () => {
+  test('ESC_AFTER_UNLOCK_MS is 150', () => {
+    expect(ESC_AFTER_UNLOCK_MS).toBe(150);
+  });
+
+  test('lost at 1,000 ms: a keydown at 1,000 (still locked) and at 1,100 does nothing, at 1,200 it closes the drawer', () => {
+    expect(escapeAllowed(1000, true, 0)).toBe(false);
+    expect(escapeAllowed(1100, false, 1000)).toBe(false);
+    expect(escapeAllowed(1200, false, 1000)).toBe(true);
+  });
+
+  test('false while locked whenever the last unlock was; the bound is 150 ms exactly; never locked, always allowed', () => {
+    expect(escapeAllowed(1_000_000, true, 0)).toBe(false);
+    expect(escapeAllowed(1149.9, false, 1000)).toBe(false);
+    expect(escapeAllowed(1150, false, 1000)).toBe(true);
+    expect(escapeAllowed(0, false, Number.NEGATIVE_INFINITY)).toBe(true);
   });
 });
 
