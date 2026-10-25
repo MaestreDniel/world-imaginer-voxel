@@ -220,7 +220,7 @@ export function instrumentPool(pool: WorkerPool, log: LatencyLog, now: () => num
       return p;
     },
     point: (x, z, priority) => pool.point(x, z, priority),
-    spawn: () => pool.spawn(),
+    spawn: (priority) => pool.spawn(priority),
     stats: (kind, n, args, priority) => pool.stats(kind, n, args, priority),
     slice: (segment, priority) => pool.slice(segment, priority),
     surfaceProbe: (x, y, z, priority) => pool.surfaceProbe(x, y, z, priority),

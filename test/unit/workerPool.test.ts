@@ -7,7 +7,7 @@ import { surfaceProbe } from '../../src/gen/surface/probe';
 import { CROSS_SECTION_POINTS, crossSectionInto, crossSectionLength } from '../../src/metrics/crossSection';
 import { SPLINE_STATS_POINTS, splineStatPoints, splineStatsInto, splineStatsLength, splineStatsNode } from '../../src/metrics/splineStats';
 import type { KnotPath } from '../../src/core/spline/types';
-import { SLICE_SAMPLES, type ToWorker } from '../../src/workers/protocol';
+import { cellOf, SLICE_SAMPLES, type ToWorker } from '../../src/workers/protocol';
 import { createSliceJob } from '../../src/workers/sliceJob';
 import { createTaskHandler } from '../../src/workers/taskHandler';
 import { fillColumnD } from '../../src/workers/worldJobs';
@@ -15,6 +15,7 @@ import { fillColumnT } from '../../src/metrics/region';
 import { createEpochCells } from '../../src/world/store/epochs';
 import { createStore } from '../../src/world/store/store';
 import { ctxFor } from '../harness/gen';
+import { fakePayload } from './fixtures/payloads';
 
 /**
  * A fake worker running the real handler asynchronously; `log` records every message it receives and
@@ -333,7 +334,7 @@ describe('worker pool: the per-scope epoch cells (SP4b spec §2.7)', () => {
     expect(log.at(-1)).toMatchObject({ type: 'light', epoch: 0, scope: 1 });
     expect(store.table.status(store.table.find(0, 0))).toBe(3);
   });
-  test('a reply whose cell moved since issue settles as JobCancelled', async () => {
+  test('a world job\'s OK reply whose cell moved since issue resolves with its generation (SP4c spec §4.6, D7: the worker committed it)', async () => {
     const cells = createEpochCells(true).cells;
     const workers = [holdingWorker(), holdingWorker()];
     let n = 0;
@@ -342,11 +343,178 @@ describe('worker pool: the per-scope epoch cells (SP4b spec §2.7)', () => {
     const t = settle(pool.terrain(0, 0));
     const l = settle(pool.light(0, 0));
     expect(pool.probe().busy).toBe(2);
-    // Another writer moves the light cell (SP4c's Apply); the worker still answers columnDone.
+    // Another writer moves the light cell; the worker still answers columnDone, so the L committed.
     Atomics.add(cells, 2, 1);
     for (const w of workers) w.release();
+    expect(await l).toMatchObject({ cx: 0, cz: 0, generation: 0 });
+    expect(await t).toMatchObject({ cx: 0, cz: 0, generation: 0 });
+  });
+});
+
+type ReplyingWorker = WorkerLike & { answer(pick?: (m: ToWorker) => boolean, code?: string): void };
+
+/**
+ * A worker that answers configure with ready at once and holds every job until `answer(pick, code)`, which replies to the
+ * held jobs `pick` selects: with `code` 'OK', the OK reply of the job's type (columnDone, meshColumnResult, tile,
+ * pointResult) whatever the cells hold; with another code, an error of that code; without one, as a real worker's phase
+ * check does: ABORTED when `cells` are given and the job's epoch cell differs from its scope, else the OK reply.
+ */
+function replyingWorker(log: ToWorker[] = [], cells: Int32Array | null = null): ReplyingWorker {
+  const held: ToWorker[] = [];
+  const send = (data: unknown) => setTimeout(() => w.onmessage?.({ data }), 0);
+  const ok = (m: ToWorker): unknown => {
+    const j = m as unknown as { jobId: number; epoch: number; cx: number; cz: number };
+    switch (m.type) {
+      case 'terrain': case 'decorate': case 'light':
+        return { type: 'columnDone', jobId: j.jobId, epoch: j.epoch, job: m.type, cx: j.cx, cz: j.cz, ms: 1, versions: m.type === 'light' ? new ArrayBuffer(72) : null };
+      case 'meshColumn': {
+        const p = fakePayload(j.cx, j.cz, [{ sy: 4, pass: 0, quads: 2 }]);
+        return {
+          type: 'meshColumnResult', jobId: j.jobId, epoch: j.epoch, cx: j.cx, cz: j.cz, ms: 1, versions: p.versions.buffer, connectivity: p.connectivity.buffer,
+          position: p.position.buffer, data: p.data.buffer, index: p.index.buffer, rows: p.rows.buffer, spheres: p.spheres.buffer,
+        };
+      }
+      case 'mapTile': return { type: 'tile', jobId: j.jobId, epoch: j.epoch, rgba: new ArrayBuffer(262144) };
+      case 'point': return { type: 'pointResult', jobId: j.jobId, epoch: j.epoch, fields: {} };
+      default: throw new Error(`replyingWorker: no OK reply for ${m.type}`);
+    }
+  };
+  const w: ReplyingWorker = {
+    onmessage: null,
+    postMessage(msg) {
+      log.push(msg);
+      if (msg.type === 'configure') send({ type: 'ready', epoch: msg.epoch, stageHashes: {}, genKey: '0000000000000000' });
+      else held.push(msg);
+    },
+    answer(pick = () => true, code) {
+      for (let i = 0; i < held.length;) {
+        const m = held[i]!;
+        if (!pick(m) || m.type === 'configure' || m.type === 'attach' || m.type === 'selftest') { i++; continue; }
+        held.splice(i, 1);
+        const stopped = cells !== null && Atomics.load(cells, cellOf(m.type)) !== m.scope;
+        const c = code ?? (stopped ? 'ABORTED' : 'OK');
+        send(c === 'OK' ? ok(m) : { type: 'error', jobId: m.jobId, epoch: m.epoch, code: c, message: c.toLowerCase() });
+      }
+    },
+    terminate() {},
+  };
+  return w;
+}
+
+describe('worker pool: world replies keep their generation; configure moves past every cell (SP4c spec §4.6, §4.9; D7, ENG-4)', () => {
+  const cellsOf = (c: Int32Array) => Array.from({ length: 4 }, (_, i) => Atomics.load(c, i));
+  /** A pool of `n` replying workers over fresh shared cells, configured `times` times. */
+  const poolOf = async (n: number, times = 1) => {
+    const cells = createEpochCells(true).cells;
+    const log: ToWorker[] = [];
+    const workers = Array.from({ length: n }, () => replyingWorker(log, cells));
+    let k = 0;
+    const pool = createWorkerPool(n, () => workers[k++]!, { epochCells: cells });
+    for (let i = 0; i < times; i++) await pool.configure('42', DEFAULTS);
+    return { cells, log, workers, pool };
+  };
+
+  test('a decorate whose OK reply arrives after a configure resolves with generation g (its issue epoch), not JobCancelled', async () => {
+    const { pool, workers } = await poolOf(1, 2);
+    const g = pool.epoch;
+    const d = settle(pool.decorate(2, 3));
+    await pool.configure('42', DEFAULTS);
+    expect(pool.epoch).toBeGreaterThan(g);
+    // An OK reply whatever the cells hold now: the worker committed the D before the configure arrived.
+    workers[0]!.answer(() => true, 'OK');
+    expect(await d).toEqual({ cx: 2, cz: 3, ms: 1, versions: null, generation: g });
+  });
+  test('the same for terrain, light and meshColumn', async () => {
+    const { pool, workers } = await poolOf(3, 2);
+    const g = pool.epoch;
+    const t = settle(pool.terrain(1, 1));
+    const l = settle(pool.light(2, 2));
+    const m = settle(pool.meshColumn(3, 3));
+    expect(pool.probe().busy).toBe(3);
+    await pool.configure('42', DEFAULTS);
+    for (const w of workers) w.answer(() => true, 'OK');
+    expect(await t).toEqual({ cx: 1, cz: 1, ms: 1, versions: null, generation: g });
+    const lr = await l;
+    expect(lr).toMatchObject({ cx: 2, cz: 2, ms: 1, generation: g });
+    expect((lr as { versions: Int32Array }).versions.length).toBe(18);
+    const mr = await m;
+    expect(mr).not.toBeInstanceOf(Error);
+    const done = mr as { payload: { cx: number; cz: number; rows: Int32Array }; generation: number };
+    expect(Object.keys(done).sort()).toEqual(['generation', 'payload']);
+    expect([done.payload.cx, done.payload.cz, done.generation]).toEqual([3, 3, g]);
+    expect(done.payload.rows.length).toBeGreaterThan(0);
+  });
+  test('an L that replied ABORTED after a configure rejects JobCancelled; a T that replied STALE_EPOCH rejects JobCancelled', async () => {
+    const { pool, workers } = await poolOf(2);
+    const l = settle(pool.light(0, 0));
+    const t = settle(pool.terrain(1, 0));
+    expect(pool.probe().busy).toBe(2);
+    await pool.configure('42', DEFAULTS);
+    workers[0]!.answer(() => true, 'ABORTED');
+    workers[1]!.answer(() => true, 'STALE_EPOCH');
     expect(await l).toBeInstanceOf(JobCancelled);
-    expect(await t).toMatchObject({ cx: 0, cz: 0 });
+    expect(await t).toBeInstanceOf(JobCancelled);
+  });
+  test('a mapTile and a point whose OK replies arrive after a configure still reject JobCancelled', async () => {
+    const { pool, workers } = await poolOf(2);
+    const tl = settle(pool.tile(tile(0), 0));
+    const pt = settle(pool.point(1, 2));
+    expect(pool.probe().busy).toBe(2);
+    await pool.configure('42', DEFAULTS);
+    for (const w of workers) w.answer(() => true, 'OK');
+    expect(await tl).toBeInstanceOf(JobCancelled);
+    expect(await pt).toBeInstanceOf(JobCancelled);
+  });
+  test('ENG-4: configure (g), bumpScope(\'light\') → cells [g, g, g + 1, g + 1]; the next configure stores g + 2 into all four and pool.epoch is g + 2; an L issued between them (scope g + 1) sees its cell differ from its scope and stops', async () => {
+    const { pool, workers, cells, log } = await poolOf(1, 2);
+    const g = pool.epoch;
+    expect(cellsOf(cells)).toEqual([g, g, g, g]);
+    pool.bumpScope('light');
+    expect(cellsOf(cells)).toEqual([g, g, g + 1, g + 1]);
+    const l = settle(pool.light(0, 0));
+    expect(log.at(-1)).toMatchObject({ type: 'light', epoch: g, scope: g + 1 });
+    await pool.configure('42', DEFAULTS);
+    expect([pool.epoch, cellsOf(cells)]).toEqual([g + 2, [g + 2, g + 2, g + 2, g + 2]]);
+    expect(log.at(-1)).toMatchObject({ type: 'configure', epoch: g + 2 });
+    // The worker's phase check: the light cell (g + 2) differs from the L's scope (g + 1), so it stops (ABORTED).
+    workers[0]!.answer();
+    expect(await l).toBeInstanceOf(JobCancelled);
+  });
+  test('without cells, configure counts epoch + 1 (the standalone map page\'s pool)', async () => {
+    const pool = createWorkerPool(1, () => replyingWorker());
+    const epochs: number[] = [];
+    for (let i = 0; i < 3; i++) epochs.push((await pool.configure('42', DEFAULTS)).epoch);
+    pool.bumpScope('light');
+    epochs.push((await pool.configure('42', DEFAULTS)).epoch);
+    expect([epochs, pool.epoch]).toEqual([[0, 1, 2, 3], 3]);
+  });
+  test('with cells, the first configure stores 0 and the next 1 (SP4b\'s :215, :333, :565 and :741 keep their epochs)', async () => {
+    const { pool, cells } = await poolOf(1, 0);
+    expect([pool.epoch, cellsOf(cells)]).toEqual([-1, [0, 0, 0, 0]]);
+    expect((await pool.configure('42', DEFAULTS)).epoch).toBe(0);
+    expect([pool.epoch, cellsOf(cells)]).toEqual([0, [0, 0, 0, 0]]);
+    expect((await pool.configure('42', DEFAULTS)).epoch).toBe(1);
+    expect([pool.epoch, cellsOf(cells)]).toEqual([1, [1, 1, 1, 1]]);
+  });
+  test('`spawn()` queues at −2 before a queued point at −1; `spawn(600)` runs after a stats part at 500', async () => {
+    const log: ToWorker[] = [];
+    const w = silentWorker(log);
+    const pool = createWorkerPool(1, () => w);
+    const ready = settle(pool.configure('42', DEFAULTS));
+    // Queued behind the configure's barrier, so the pool takes them in priority order once it resolves.
+    const jobs = [settle(pool.point(1, 2)), settle(pool.spawn(600)), settle(pool.stats('biomeShares', 4, { len: biomeSharesLength() })), settle(pool.spawn())];
+    w.onmessage?.({ data: { type: 'ready', epoch: 0, stageHashes: {}, genKey: '0000000000000000' } });
+    await ready;
+    // Each job is answered by an error, which frees the worker for the next.
+    for (let k = 0; k < 4; k++) {
+      const m = log.at(-1) as unknown as { jobId: number; epoch: number };
+      w.onmessage?.({ data: { type: 'error', jobId: m.jobId, epoch: m.epoch, code: 'INTERNAL', message: 'x' } });
+    }
+    await Promise.all(jobs);
+    expect(log.filter((m) => m.type !== 'configure').map((m) => m.type)).toEqual(['spawn', 'point', 'stats', 'spawn']);
+    // The first spawn posted is `spawn()` (queued last, at −2), the last `spawn(600)`.
+    const spawns = log.filter((m) => m.type === 'spawn').map((m) => (m as { jobId: number }).jobId);
+    expect(spawns[0]!).toBeGreaterThan(spawns[1]!);
   });
 });
 

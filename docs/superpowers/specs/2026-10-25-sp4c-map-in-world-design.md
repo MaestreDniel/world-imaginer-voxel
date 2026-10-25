@@ -333,7 +333,7 @@ The session's history (`engine/session.ts:59-66`, 101 snapshots) lives in the wo
 ### 4.9 `bumpScope`, `configure` and ENG-4 (D8)
 
 - **Apply is one `configure`**, which stores the new generation into all four epoch cells; with every SP4c leaf terrain- or climate-scope, "bump from the dirty stage onward" (master §2.3) is all four cells, so `bumpScope` adds nothing and is not called. It stays built and unit-tested for SP8b's decorate-scope Apply (§11).
-- **ENG-4 closed now:** after `bumpScope('light')` at generation g the cells read [g, g, g + 1, g + 1], and today's next `configure` stores g + 1 into all four, so an L or MESH issued in between (scope g + 1) is never stopped. `configure` now sets the generation to `max(epoch + 1, max(cells) + 1)` before storing it, so the new value differs from every value any job was issued with; a pool test covers it. Tile keys (`mapView.ts:96`) only need the generation to change, which it does.
+- **ENG-4 closed now:** after `bumpScope('light')` at generation g the cells read [g, g, g + 1, g + 1], and today's next `configure` stores g + 1 into all four, so an L or MESH issued in between (scope g + 1) is never stopped. `configure` now sets the generation to `max(epoch + 1, max(cells) + 1)` before storing it, from the pool's second configure on, so the new value differs from every value any job was issued with; the first configure stays 0 (the pool's `epoch` starts at −1 in `createWorkerPool` and the cells at 0, `world/store/epochs.ts:22-24`, a value issued to no job, so the formula would give 1 and move SP4b's pool tests' epochs); without cells it is `epoch + 1` as before; a pool test covers it. Tile keys (`mapView.ts:96`) only need the generation to change, which it does.
 
 ### 4.10 The interfaces
 

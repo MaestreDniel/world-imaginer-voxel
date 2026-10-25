@@ -785,12 +785,6 @@ describe('master spec amendments (SP4b §13)', () => {
     expect(slabs).toContain('the lock word holds its owner\'s thread index + 1, and a thread spinning on a failed owner\'s lock throws `StoreCorrupt` (SP4b)');
   });
 
-  test('§2.3\'s epoch-cell sentence carries every job\'s scope (SP4b spec §2.7, §13)', () => {
-    const cell = text.split('\n').find((l) => l.startsWith('**Epoch cell.**'));
-    expect(cell, 'no `**Epoch cell.**` paragraph').toBeDefined();
-    expect(cell).toContain('SP4b wires them in place of SP2b\'s pool-wide cell (every job carries its configure generation and its phase\'s cell value at issue, `scope`, and stops when the cell moves; `configure` stores the generation into all four; Apply bumps from the dirty stage, SP4c)');
-  });
-
   test('§2.1\'s floating origin, §4.3\'s uploads and §4.5\'s RegionBatch sentences (SP4b spec §3.9, §4.2, §13)', () => {
     const precision = text.split('\n').find((l) => l.startsWith('- **Rendering precision:**'));
     expect(precision, 'no `- **Rendering precision:**` line in §2.1').toBeDefined();
@@ -944,6 +938,13 @@ describe('master spec amendments (SP4c §12)', () => {
     const layers = /complete map layers \(([^)]*)\)/.exec(spEntry('SP10', 'SP11'));
     expect(layers, 'SP10 has no `complete map layers (…)` list').not.toBeNull();
     expect(layers![1]).not.toContain('bookmarks');
+  });
+
+  test('§2.3\'s epoch cell: Apply is one configure (SP4c)', () => {
+    const cell = text.split('\n').find((l) => l.startsWith('**Epoch cell.**'));
+    expect(cell, 'no `**Epoch cell.**` paragraph').toBeDefined();
+    expect(cell).toContain('SP4b wires them in place of SP2b\'s pool-wide cell (every job carries its configure generation and its phase\'s cell value at issue, `scope`, and stops when the cell moves; `configure` stores the generation into all four; Apply is one `configure`, which moves all four cells past every value a job was issued with; every SP4c leaf is terrain- or climate-scope, so `bumpScope` from the dirty stage waits for SP8b\'s decorate-scope Apply, SP4c)');
+    expect(cell).toContain('(amended by SP3a, SP4a, SP4b and SP4c)');
   });
 
   test('§1 names each SP4c module in its entry, which exists', () => {

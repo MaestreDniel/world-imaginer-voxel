@@ -86,7 +86,8 @@ test('attach, configure, then T, D, L and MESH_COLUMN through two workers on the
     expect(l.every((x) => x.versions !== null && x.versions.length === 18)).toBe(true);
     for (const [cx, cz] of square(1)) expect(store.table.status(store.table.find(cx, cz))).toBe(STATUS_PUBLISHED);
 
-    const p = await pool.meshColumn(0, 0);
+    const { payload: p, generation } = await pool.meshColumn(0, 0);
+    expect(generation).toBe(0);
     expect(payloadProblem(p)).toBeNull();
     expect([p.cx, p.cz]).toEqual([0, 0]);
     expect(p.rows.length).toBeGreaterThan(0);

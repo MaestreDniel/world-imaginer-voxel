@@ -1,7 +1,8 @@
 /**
  * The pool's world methods (SP4a spec §2.3; rulings P28, P30) with scripted fake workers: `attachStore` and its own
  * barrier, `terrain`/`decorate`/`light` resolving `ColumnDone`, `meshColumn` rebuilding the payload's typed views
- * over the transferred buffers, STORE_FULL as `StoreFullError`, and a reply of an old epoch as `JobCancelled`.
+ * over the transferred buffers, STORE_FULL as `StoreFullError`, and a reply of an old epoch as `JobCancelled` (SP4c, D7: an
+ * OK one resolves with its generation, the job's issue epoch).
  * SP4b (spec §2.6, §2.8, §3.7): each worker attaches as thread w + 1 and a retried attach succeeds; `cancelWorld`,
  * `liveWorkers`, `onWorkerDead`, `terminate` settling its barriers and busy jobs, STORE_CORRUPT as `StoreCorruptError`,
  * and `terrain(cx, cz, true)`.
@@ -96,7 +97,7 @@ describe('attachStore (ruling P28)', () => {
     expect(workers[0]!.log.map((m) => m.type)).toEqual(['configure', 'attach']);
     workers[0]!.release();
     await attached;
-    expect(await t).toEqual({ cx: 1, cz: 2, ms: 2.5, versions: null });
+    expect(await t).toEqual({ cx: 1, cz: 2, ms: 2.5, versions: null, generation: 0 });
     expect(workers[0]!.log.map((m) => m.type)).toEqual(['configure', 'attach', 'terrain']);
   });
   test('an attach answered by an error rejects attachStore', async () => {
@@ -123,7 +124,7 @@ describe('attachStore (ruling P28)', () => {
     workers[1]!.release();
     await tick();
     await pool.configure('42', {});
-    expect(await pool.terrain(0, 0)).toEqual({ cx: 0, cz: 0, ms: 2.5, versions: null });
+    expect(await pool.terrain(0, 0)).toEqual({ cx: 0, cz: 0, ms: 2.5, versions: null, generation: 0 });
   });
 });
 
@@ -138,10 +139,10 @@ describe('the world jobs (SP4a spec §2.3, ruling P30)', () => {
     });
     await pool.configure('42', {});
     await pool.attachStore(handles());
-    expect(await pool.terrain(3, -4)).toEqual({ cx: 3, cz: -4, ms: 2.5, versions: null });
-    expect(await pool.decorate(3, -4)).toEqual({ cx: 3, cz: -4, ms: 2.5, versions: null });
+    expect(await pool.terrain(3, -4)).toEqual({ cx: 3, cz: -4, ms: 2.5, versions: null, generation: 0 });
+    expect(await pool.decorate(3, -4)).toEqual({ cx: 3, cz: -4, ms: 2.5, versions: null, generation: 0 });
     const l = await pool.light(3, -4);
-    expect([l.cx, l.cz, l.ms]).toEqual([3, -4, 2.5]);
+    expect([l.cx, l.cz, l.ms, l.generation]).toEqual([3, -4, 2.5, 0]);
     expect(l.versions).toBeInstanceOf(Int32Array);
     expect(Array.from(l.versions!)).toEqual(Array.from(sent));
     expect(workers[0]!.log.map((m) => m.type)).toEqual(['configure', 'attach', 'terrain', 'decorate', 'light']);
@@ -179,7 +180,9 @@ describe('the world jobs (SP4a spec §2.3, ruling P30)', () => {
       return { type: 'meshColumnResult', jobId: m.jobId, epoch: m.epoch, cx: m.cx, cz: m.cz, ms: 4, versions, connectivity, position, data, index, rows, spheres };
     }));
     await pool.configure('42', {});
-    const r = await pool.meshColumn(7, 8);
+    const res = await pool.meshColumn(7, 8);
+    expect([Object.keys(res).sort(), res.generation]).toEqual([['generation', 'payload'], 0]);
+    const r = res.payload;
     expect([r.cx, r.cz]).toEqual([7, 8]);
     const views = [r.versions, r.connectivity, r.position, r.data, r.index, r.rows, r.spheres];
     const types = [Int32Array, Uint16Array, Uint8Array, Uint32Array, Uint32Array, Int32Array, Float32Array];
@@ -211,7 +214,7 @@ describe('the world jobs (SP4a spec §2.3, ruling P30)', () => {
     await pool.configure('42', {});
     await expect(pool.terrain(0, 0)).rejects.toThrow(/column \(1, 0\).*expected terrain \(0, 0\)/);
   });
-  test('a reply of an old epoch is JobCancelled', async () => {
+  test('an OK reply of an old epoch resolves with its generation (SP4c spec §4.6, D7); a job still queued at the configure is JobCancelled', async () => {
     const workers: ScriptedWorker[] = [];
     const pool = createWorkerPool(1, () => { const w = scripted(done, { holdJobs: true }); workers.push(w); return w; });
     await pool.configure('42', {});
@@ -220,7 +223,7 @@ describe('the world jobs (SP4a spec §2.3, ruling P30)', () => {
     await tick();
     const next = pool.configure('42', {});
     workers[0]!.release();
-    expect(await t).toBeInstanceOf(JobCancelled);
+    expect(await t).toEqual({ cx: 0, cz: 0, ms: 2.5, versions: null, generation: 0 });
     expect(await m).toBeInstanceOf(JobCancelled);
     expect((await next).epoch).toBe(1);
   });
@@ -240,8 +243,8 @@ describe('SP4b: the pool\'s own fixes (SP4b spec §2.6, §2.8, §3.7)', () => {
     const workers: ScriptedWorker[] = [];
     const pool = createWorkerPool(1, () => { const w = scripted(done); workers.push(w); return w; });
     await pool.configure('42', {});
-    expect(await pool.terrain(1, 2, true)).toEqual({ cx: 1, cz: 2, ms: 2.5, versions: null });
-    expect(await pool.terrain(3, 4)).toEqual({ cx: 3, cz: 4, ms: 2.5, versions: null });
+    expect(await pool.terrain(1, 2, true)).toEqual({ cx: 1, cz: 2, ms: 2.5, versions: null, generation: 0 });
+    expect(await pool.terrain(3, 4)).toEqual({ cx: 3, cz: 4, ms: 2.5, versions: null, generation: 0 });
     const [a, b] = workers[0]!.log.filter((m) => m.type === 'terrain');
     expect(a).toMatchObject({ cx: 1, cz: 2, protoOnly: true });
     expect(b).not.toHaveProperty('protoOnly');
@@ -268,7 +271,7 @@ describe('SP4b: the pool\'s own fixes (SP4b spec §2.6, §2.8, §3.7)', () => {
     expect(pool.queued).toBe(3);
     for (const i of [0, 1, 3]) expect(await queued[i]!).toBeInstanceOf(JobCancelled);
     for (let k = 0; k < 4; k++) { workers[0]!.release(); await tick(); }
-    expect(await running).toEqual({ cx: 1, cz: 0, ms: 2.5, versions: null });
+    expect(await running).toEqual({ cx: 1, cz: 0, ms: 2.5, versions: null, generation: 0 });
     expect(await point).toEqual({});
     expect(await queued[2]!).toMatchObject({ cx: 2, cz: 0 });
     expect(await queued[4]!).toMatchObject({ cx: 5, cz: 0 });

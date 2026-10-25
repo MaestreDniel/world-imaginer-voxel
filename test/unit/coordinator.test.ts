@@ -1283,7 +1283,7 @@ describe('progressFraction and phaseName (SP4a spec §8.3, over the coordinator 
 });
 
 describe('worldJobsOf (ruling P30, SP4b spec §3.13)', () => {
-  const done = (cx: number, cz: number, versions: Int32Array | null): ColumnDone => ({ cx, cz, ms: 3, versions });
+  const done = (cx: number, cz: number, versions: Int32Array | null): ColumnDone => ({ cx, cz, ms: 3, versions, generation: 0 });
   const lightVersions = Int32Array.from({ length: 18 }, (_, i) => i + 1);
   const payload = { cx: 4, cz: 5, versions: Int32Array.from({ length: 18 }, (_, i) => 100 + i) } as unknown as ColumnMeshPayload;
   const calls: string[] = [];
@@ -1292,7 +1292,7 @@ describe('worldJobsOf (ruling P30, SP4b spec §3.13)', () => {
     terrain: (cx: number, cz: number, protoOnly?: boolean) => { calls.push(`terrain ${cx} ${cz} ${String(protoOnly)}`); return Promise.resolve(done(cx, cz, null)); },
     decorate: (cx: number, cz: number) => { calls.push(`decorate ${cx} ${cz}`); return Promise.resolve(done(cx, cz, null)); },
     light: (cx: number, cz: number) => { calls.push(`light ${cx} ${cz}`); return Promise.resolve(done(cx, cz, lightVersions)); },
-    meshColumn: (cx: number, cz: number) => { calls.push(`meshColumn ${cx} ${cz}`); return Promise.resolve(payload); },
+    meshColumn: (cx: number, cz: number) => { calls.push(`meshColumn ${cx} ${cz}`); return Promise.resolve({ payload, generation: 0 }); },
     cancelWorld: (pred: (stage: Stage, cx: number, cz: number) => boolean) => { calls.push(`cancelWorld ${String(pred('T', 0, 0))}`); },
     liveWorkers: () => live,
   } as unknown as WorkerPool;

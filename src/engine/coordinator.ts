@@ -237,8 +237,9 @@ export function createCoordinatorCounts(): CoordinatorCounts {
 /**
  * The pool as the coordinator's jobs (ruling P30, spec §3.13): T, D, L and MESH run `terrain` (with `protoOnly`),
  * `decorate`, `light` and `meshColumn`. T, D and L resolve `{ versions: done.versions, payload: null }` (light's 18
- * versions, null for terrain and decorate), MESH `{ versions: p.versions, payload: p }`; rejections pass through.
- * `cancel` is `cancelWorld`, `liveWorkers` the pool's.
+ * versions, null for terrain and decorate), MESH `{ versions: p.versions, payload: p }` from the pool's `MeshColumnDone`
+ * (its `generation` reaches the outcome with SP4c's generation gate); rejections pass through. `cancel` is `cancelWorld`,
+ * `liveWorkers` the pool's.
  */
 export function worldJobsOf(pool: Pick<WorkerPool, 'terrain' | 'decorate' | 'light' | 'meshColumn' | 'cancelWorld' | 'liveWorkers'>): CoordinatorJobs {
   const column = (d: ColumnDone): JobOutcome => ({ versions: d.versions, payload: null });
@@ -248,7 +249,7 @@ export function worldJobsOf(pool: Pick<WorkerPool, 'terrain' | 'decorate' | 'lig
         case 'T': return pool.terrain(cx, cz, protoOnly).then(column);
         case 'D': return pool.decorate(cx, cz).then(column);
         case 'L': return pool.light(cx, cz).then(column);
-        case 'MESH': return pool.meshColumn(cx, cz).then((p) => ({ versions: p.versions, payload: p }));
+        case 'MESH': return pool.meshColumn(cx, cz).then(({ payload }) => ({ versions: payload.versions, payload }));
       }
     },
     cancel(pred) {

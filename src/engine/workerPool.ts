@@ -28,6 +28,11 @@
  * which thread failed (it marks it dead in the store); STORE_CORRUPT rejects with `StoreCorruptError`; `cancelWorld` drops
  * queued world jobs; `liveWorkers()`; `terminate()` tells `onWorkerDead` each live worker's thread, then settles its barriers
  * and busy jobs with `WorkerFailed('terminated')`; `terrain(cx, cz, true)` is `T(protoOnly)`.
+ * SP4c §4.6, §4.9 (D7, D8, ENG-4): a world job whose worker replied OK resolves with its `generation` (its issue epoch)
+ * whatever the pool's generation or its cells are now (the worker committed it); ABORTED and STALE_EPOCH reject with
+ * JobCancelled; every other job type keeps the rule above. From the second configure on, `configure` moves the generation
+ * past every cell (`max(epoch + 1, max(cells) + 1)`), so it differs from every value a job was issued with. `spawn` takes
+ * a priority (default −2).
  */
 import type { MapLevel } from '../core/constants';
 import type { ColumnPoint } from '../gen/column/columnPoint';
@@ -136,13 +141,21 @@ export class StoreCorruptError extends Error {
 
 /**
  * A T, D or L job done (SP4a spec §2.3, ruling P30): its column, the worker's time in ms and, for light, the 3 × 3
- * versions it read before the job (18 values); null for terrain and decorate.
+ * versions it read before the job (18 values); null for terrain and decorate. `generation` is the pool's epoch when the
+ * job was issued (SP4c spec §4.6, D7): an OK reply resolves even after a configure, and the coordinator judges it by it.
  */
 export interface ColumnDone {
   readonly cx: number;
   readonly cz: number;
   readonly ms: number;
   readonly versions: Int32Array | null;
+  readonly generation: number;
+}
+
+/** A MESH_COLUMN job done (SP4c spec §4.6, D7): the column payload and the pool's epoch when the job was issued. */
+export interface MeshColumnDone {
+  readonly payload: ColumnMeshPayload;
+  readonly generation: number;
 }
 
 /** The type of a queued job (a configure or an attach is not a job). */
@@ -192,14 +205,17 @@ export interface WorkerPool {
   readonly abortable: boolean;
   /**
    * Starts a new epoch on every worker; resolves with the (identical) ready message. The new generation is stored into
-   * all four epoch cells before the configure is posted, and every queued job rejects with JobCancelled.
+   * all four epoch cells before the configure is posted, and every queued job rejects with JobCancelled. The first
+   * configure's generation is 0; each later one is `max(epoch + 1, max(cells) + 1)` (SP4c spec §4.9, ENG-4), so after a
+   * `bumpScope` the new value differs from every value a job was issued with (without cells, `epoch + 1`). SP4c's Apply is
+   * one configure.
    */
   configure(seedText: string, params: unknown): Promise<ReadyMsg>;
   /**
-   * Adds 1 to the epoch cells from `from` onward (terrain, decorate, light, mesh; SP4b spec §2.7, SP4c's Apply: "bumps the
-   * epoch from the dirty stage onward") and rejects the queued jobs of those phases with JobCancelled; their in-flight jobs
-   * stop (ABORTED) or settle as JobCancelled. Without cells it only rejects the queued jobs. Nothing calls it in SP4b
-   * outside its tests.
+   * Adds 1 to the epoch cells from `from` onward (terrain, decorate, light, mesh; SP4b spec §2.7) and rejects the queued
+   * jobs of those phases with JobCancelled; their in-flight jobs stop (ABORTED). Without cells it only rejects the queued
+   * jobs. Nothing calls it in SP4c (Apply is one `configure`, SP4c spec §4.9); it is kept, unit-tested, for SP8b's
+   * decorate-scope Apply, which orders `configure` before `bumpScope('decorate')`.
    */
   bumpScope(from: ScopePhase): void;
   /**
@@ -213,20 +229,23 @@ export interface WorkerPool {
   attachStore(h: StoreHandles): Promise<void>;
   /**
    * The world jobs of column (cx, cz) on the attached store (SP4a spec §2.3), each one job at priority 0: T, D and L resolve
-   * `ColumnDone`, MESH_COLUMN the column payload over the transferred buffers. They reject with JobCancelled (a configure,
-   * a reply of an old epoch, ABORTED, `cancelWorld`), StoreFullError (STORE_FULL), StoreCorruptError (STORE_CORRUPT),
-   * WorkerFailed, or the worker's other error (NOT_ATTACHED, NOT_CONFIGURED, INTERNAL: a prerequisite missing,
-   * BAD_MESSAGE). `terrain` with `protoOnly` is `T(protoOnly)` (SP4b spec §3.7): it regenerates the freed proto of a
-   * Decorated or Published column.
+   * `ColumnDone`, MESH_COLUMN `MeshColumnDone` (the column payload over the transferred buffers), each with its
+   * `generation`, the pool's epoch at issue. An OK reply resolves whatever the pool's generation or its cells are now
+   * (SP4c spec §4.6, D7: the worker committed it). They reject with JobCancelled (a configure while queued, ABORTED,
+   * STALE_EPOCH, `cancelWorld`, or another error reply after the generation or the job's cell moved), StoreFullError
+   * (STORE_FULL), StoreCorruptError (STORE_CORRUPT), WorkerFailed, or the worker's other error (NOT_ATTACHED,
+   * NOT_CONFIGURED, INTERNAL: a prerequisite missing, BAD_MESSAGE). `terrain` with `protoOnly` is `T(protoOnly)` (SP4b
+   * spec §3.7): it regenerates the freed proto of a Decorated or Published column.
    */
   terrain(cx: number, cz: number, protoOnly?: boolean): Promise<ColumnDone>;
   decorate(cx: number, cz: number): Promise<ColumnDone>;
   light(cx: number, cz: number): Promise<ColumnDone>;
-  meshColumn(cx: number, cz: number): Promise<ColumnMeshPayload>;
+  meshColumn(cx: number, cz: number): Promise<MeshColumnDone>;
   /** Lower priority runs first. */
   tile(req: TileRequest, priority: number): Promise<TileResult>;
   point(x: number, z: number, priority?: number): Promise<ColumnPoint>;
-  spawn(): Promise<Spawn>;
+  /** The spawn search at `priority` (default −2: before points; the world's post-settle search runs at 600, SP4c spec §4.7). */
+  spawn(priority?: number): Promise<Spawn>;
   /**
    * The raw sums of a stats kind over points [0, n) of its fixed stream (spec §5.4): `size` slices (one for a
    * 'single' kind of STATS_KINDS: crossSection), sent as ordinary jobs at `priority` (default 500: after
@@ -437,7 +456,12 @@ export function createWorkerPool(size: number, spawn: () => WorkerLike, opts: Po
       const job = busy[w];
       busy[w] = null;
       if (job !== null && msg.jobId === job.id) {
-        if (job.epoch !== epoch || moved(job) || (msg.type === 'error' && msg.code === 'ABORTED')) job.reject(new JobCancelled());
+        // SP4c §4.6 (D7): a world job's OK reply resolves whatever the generation or its cell is now (the worker committed
+        // it; the coordinator judges it by its generation); its ABORTED or STALE_EPOCH reply committed nothing.
+        const world = STAGE_OF[job.msg.type] !== undefined;
+        if (world && msg.type !== 'error') job.resolve(msg);
+        else if (msg.type === 'error' && (msg.code === 'ABORTED' || (world && msg.code === 'STALE_EPOCH'))) job.reject(new JobCancelled());
+        else if (job.epoch !== epoch || moved(job)) job.reject(new JobCancelled());
         else if (msg.type === 'error' && msg.code === 'STORE_FULL') job.reject(new StoreFullError(`${msg.code}: ${msg.message}`));
         else if (msg.type === 'error' && msg.code === 'STORE_CORRUPT') job.reject(new StoreCorruptError(`${msg.code}: ${msg.message}`));
         else if (msg.type === 'error') job.reject(new Error(`${msg.code}: ${msg.message}`));
@@ -476,12 +500,16 @@ export function createWorkerPool(size: number, spawn: () => WorkerLike, opts: Po
 
   /** A T, D or L job of (cx, cz) at priority 0; its reply must name the same job and column. */
   const columnJob = async (type: 'terrain' | 'decorate' | 'light', cx: number, cz: number, protoOnly = false): Promise<ColumnDone> => {
+    const generation = epoch;
     const r = await worldJob(type, cx, cz, protoOnly);
     if (r.type !== 'columnDone') throw new Error(`unexpected reply ${r.type}`);
     if (r.job !== type || r.cx !== cx || r.cz !== cz) throw new Error(`world job reply: ${r.job} of column (${r.cx}, ${r.cz}), expected ${type} (${cx}, ${cz})`);
-    return { cx, cz, ms: r.ms, versions: r.versions === null ? null : new Int32Array(r.versions) };
+    return { cx, cz, ms: r.ms, versions: r.versions === null ? null : new Int32Array(r.versions), generation };
   };
-  /** A world job of (cx, cz) at priority 0; `protoOnly` (terrain only) goes into the message only when true. */
+  /**
+   * A world job of (cx, cz) at priority 0, issued under the pool's epoch now (its generation); `protoOnly` (terrain only)
+   * goes into the message only when true.
+   */
   const worldJob = (type: WorldJobType, cx: number, cz: number, protoOnly = false): Promise<FromWorker> => {
     const e = epoch;
     return enqueue(0, type, (jobId, scope) => (protoOnly ? { type, jobId, epoch: e, scope, cx, cz, protoOnly } : { type, jobId, epoch: e, scope, cx, cz }), null);
@@ -493,7 +521,12 @@ export function createWorkerPool(size: number, spawn: () => WorkerLike, opts: Po
     get epoch() { return epoch; },
     get queued() { return queue.length; },
     configure(seedText, params) {
-      epoch++;
+      // ENG-4 (SP4c spec §4.9): from the second configure on, past every cell, so the new value differs from every scope a
+      // job was issued with (a `bumpScope` may have moved a cell to epoch + 1). The first stays 0: the cells' initial 0 was
+      // issued to no job.
+      let next = epoch + 1;
+      if (cells !== null && epoch >= 0) for (let c = 0; c < EPOCH_CELL_COUNT; c++) next = Math.max(next, Atomics.load(cells, c) + 1);
+      epoch = next;
       // Stored before posting, into all four cells: every in-flight job of an older epoch stops (a tile within a row).
       if (cells !== null) for (let c = 0; c < EPOCH_CELL_COUNT; c++) Atomics.store(cells, c, epoch);
       for (const j of queue) j.reject(new JobCancelled());
@@ -532,10 +565,11 @@ export function createWorkerPool(size: number, spawn: () => WorkerLike, opts: Po
     decorate: (cx, cz) => columnJob('decorate', cx, cz),
     light: (cx, cz) => columnJob('light', cx, cz),
     async meshColumn(cx, cz) {
+      const generation = epoch;
       const r = await worldJob('meshColumn', cx, cz);
       if (r.type !== 'meshColumnResult') throw new Error(`unexpected reply ${r.type}`);
       if (r.cx !== cx || r.cz !== cz) throw new Error(`world job reply: meshColumn of column (${r.cx}, ${r.cz}), expected meshColumn (${cx}, ${cz})`);
-      return payloadOfMeshResult(r);
+      return { payload: payloadOfMeshResult(r), generation };
     },
     async tile(req, priority) {
       const e = epoch;
@@ -549,9 +583,9 @@ export function createWorkerPool(size: number, spawn: () => WorkerLike, opts: Po
       if (r.type !== 'pointResult') throw new Error(`unexpected reply ${r.type}`);
       return r.fields;
     },
-    async spawn() {
+    async spawn(priority = -2) {
       const e = epoch;
-      const r = await enqueue(-2, 'spawn', (jobId, scope) => ({ type: 'spawn', jobId, epoch: e, scope }), null);
+      const r = await enqueue(priority, 'spawn', (jobId, scope) => ({ type: 'spawn', jobId, epoch: e, scope }), null);
       if (r.type !== 'spawnResult') throw new Error(`unexpected reply ${r.type}`);
       return r.spawn;
     },

@@ -1,6 +1,6 @@
 import { describe, expect, test } from 'vitest';
 import { DEFAULTS } from '../../src/core/params/defaults';
-import { createWorkerPool } from '../../src/engine/workerPool';
+import { createWorkerPool, type WorkerPool } from '../../src/engine/workerPool';
 import { DEFAULT_MAP_STATE } from '../../src/ui/map/mapState';
 import { createLatencyLog, instrumentPool, PERF_CANVAS_HEIGHT, PERF_CANVAS_WIDTH, perfMapState, type PerfEdit } from '../../src/ui/map/perfHook';
 import { visibleTiles } from '../../src/ui/map/viewMath';
@@ -153,5 +153,13 @@ describe('instrumented pool (SP2b spec §2.8)', () => {
     expect(slice.values.length).toBe(32 * 32);
     expect(await pool.fieldProbe({ field: 'density', path: '', x: 4, y: 63, z: 4 })).toBe(slice.values[16 * 32 + 16]);
     pool.terminate();
+  });
+  test('spawn forwards its priority, and the default (SP4c spec §4.7, §6.3)', async () => {
+    const seen: Array<number | undefined> = [];
+    const raw = { spawn: (priority?: number) => { seen.push(priority); return Promise.resolve({}); } } as unknown as WorkerPool;
+    const pool = instrumentPool(raw, createLatencyLog(), () => 0);
+    await pool.spawn(600);
+    await pool.spawn();
+    expect(seen).toEqual([600, undefined]);
   });
 });
