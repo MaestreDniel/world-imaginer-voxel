@@ -29,7 +29,7 @@ interface Rig {
 }
 
 /** A frame step over fakes: every call it makes is logged in order; the clock, limiter and throttle are real. */
-function rig(o: { cap?: FpsCap; max?: number; y?: number; held?: Action[]; paused?: () => boolean; fatalInUpdate?: () => boolean } = {}): Rig {
+function rig(o: { cap?: FpsCap; max?: number; y?: number; held?: Action[]; paused?: () => boolean; fatalInUpdate?: () => boolean; hooks?: boolean } = {}): Rig {
   const log: string[] = [];
   const counts = createCoordinatorCounts();
   const throttle = createThrottle({ max: o.max ?? 3 });
@@ -60,6 +60,7 @@ function rig(o: { cap?: FpsCap; max?: number; y?: number; held?: Action[]; pause
         if (o.fatalInUpdate?.() === true) stopped = true;
       },
       counts: (out) => {
+        if (o.hooks === true) log.push(out === counts ? 'counts' : 'counts (another object)');
         out.T.inFlight = r.generating ? 1 : 0;
         out.cx = 3;
         out.cz = -4;
@@ -117,6 +118,9 @@ function rig(o: { cap?: FpsCap; max?: number; y?: number; held?: Action[]; pause
     timeSpeed: () => 1,
     fogStep: () => 12,
     onRendered: (dt) => { r.rendered.push(dt); },
+    // The page's apply control and aux policy (SP4c spec §4.3, §6.2), logged when the case asks for them.
+    beforeUpdate: () => { if (o.hooks === true) log.push('beforeUpdate'); },
+    afterCounts: (c) => { if (o.hooks === true) log.push(c === counts ? 'afterCounts' : 'afterCounts (another object)'); },
   };
   (r as { step: Rig['step'] }).step = createFrameStep(deps);
   return r;
@@ -167,6 +171,27 @@ describe('createFrameStep (SP4b spec §7.2)', () => {
     expect(r.rendered).toHaveLength(1);
     expect(r.frames).toHaveLength(1);
     expect(counts).toEqual({ cx: 3, cz: -4 });
+  });
+
+  test('beforeUpdate runs before coordinator.update and afterCounts after counts, on every tick, rendered or not (SP4c spec §4.3, §6.2)', () => {
+    const r = rig({ cap: 30, hooks: true });
+    const heads: string[][] = [];
+    const rendered: boolean[] = [];
+    for (let i = 1; i <= 4; i++) {
+      r.log.length = 0;
+      r.step.tick(i * HZ60);
+      heads.push(r.log.slice(0, 4));
+      rendered.push(r.log.includes('frame'));
+    }
+    // A 30 fps cap at 60 Hz renders every other tick; the hooks run on all four, with the page's one counts object.
+    expect(rendered).toEqual([true, false, true, false]);
+    expect(heads).toEqual(Array.from({ length: 4 }, () => ['beforeUpdate', 'update', 'counts', 'afterCounts']));
+  });
+
+  test('a fatal in update ends the tick before counts: afterCounts does not run', () => {
+    const r = rig({ hooks: true, fatalInUpdate: () => true });
+    r.step.tick(HZ60);
+    expect(r.log).toEqual(['beforeUpdate', 'update']);
   });
 
   test('a far move rebases the origin and moves the sections, between the pump and the drain', () => {

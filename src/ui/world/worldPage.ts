@@ -60,6 +60,12 @@
  * the world's keys stop while the map owns the controls, the frame's `onRendered` moves the map's arrow, undo and redo
  * are installed for the page's lifetime, and a fatal error or a context loss disposes the overlay before the failure
  * panel or the notice. The bench and flight routes create neither.
+ *
+ * Live editing (SP4c spec §4.3, §6.2): the coordinator's first epoch is the first draft's genKey interned
+ * (`createEpochs`); the apply control (`applyControl.ts`) ticks before every `coordinator.update` and applies the
+ * session's last resolved draft once it is quiet (or adopts it when the world is unchanged), its `onApplied` driving
+ * Watch live; after every `counts` the pool's aux policy is set from the world's hold, the overlay covering the 3D and
+ * the pending T; a configure failure after the reveal is fatal (`onDriverStatus`).
  */
 import { MEDIUM } from '../../core/params/graphicsPresets';
 import { OPENING_T, TIME_SPEEDS } from '../../daynight/dayNight';
@@ -68,6 +74,7 @@ import { evaluateWorldCapabilities, type CapabilityReport } from '../../engine/c
 import {
   createCoordinator, createCoordinatorCounts, phaseName, progressFraction, worldJobsOf, type Coordinator, type StreamEvent,
 } from '../../engine/coordinator';
+import { appliedDraftOf } from '../../engine/invalidation';
 import { RD_MAX, reservationRdCap, resolveRenderDistance } from '../../engine/renderDistance';
 import type { Stage } from '../../engine/rings';
 import { createThrottle } from '../../engine/throttle';
@@ -90,7 +97,7 @@ import { mountWorldHud } from '../hud';
 import { mountLoadingScreen } from '../loading/loadingScreen';
 import { tips } from '../loading/tips';
 import { decodeMapState, encodeMapState, openMapSession } from '../map/mapState';
-import { createPreviewDriver, createReplayingCanvas, draftOf, type PreviewDriver } from '../map/previewDriver';
+import { createPreviewDriver, createReplayingCanvas, draftOf, type DriverStatus, type PreviewDriver } from '../map/previewDriver';
 import { cryptoSeed } from '../seedBox';
 import { SETTINGS_DEFAULTS, loadSettings, saveSettings, type WorldSettings } from '../settings';
 import {
@@ -100,6 +107,7 @@ import { firstView } from './firstView';
 import type { FlightContext } from './flight';
 import { createFogEase, createFogStep, filledRadius } from './fogEase';
 import { createFrameClock, createFrameNotice, lowerRd } from './frameNotice';
+import { coversWorld, createApplyControl, createEpochs, updateAuxPolicy } from './applyControl';
 import { createFrameStep, eyeSkyLight } from './frameStep';
 import { createMapOverlay, followSession, frameCapFor, type MapOverlay } from './mapOverlay';
 import { createReloader, hereUrl, installLeaveGuard, navigateTo, type Reloader } from './reload';
@@ -516,6 +524,16 @@ export function handleContextLoss(
 }
 
 /**
+ * The page's `driver.onStatus` after the reveal (SP4c spec §4.3): the session validates every draft (tier 2 included)
+ * before the driver sees it, so a refused configure is a bug and fatal: an `error` calls `fail` (the failure panel with
+ * "Copy details"), with the error as the cause's detail. A status without one does nothing.
+ */
+export function onDriverStatus(s: DriverStatus, fail: (cause: string, e: unknown) => void): void {
+  if (s.error === null) return;
+  fail(`Live editing stopped: ${s.error}`, new Error(s.error));
+}
+
+/**
  * The page's handling of the coordinator's events after the reveal (SP4b spec §3.6, §7.4, D12): `fatal` (no live
  * worker, `StoreCorrupt`, more than 32 failed columns) calls `fail` with the panel's cause (its message in it) and the
  * event's cause; `skipped` shows the dismissible "Some terrain could not be generated" once, its details naming the
@@ -850,6 +868,8 @@ export function mountWorldPage(root: HTMLElement, q: WorldQuery, hash: string, o
     // SP4a (D12); every proto kept (D11); the camera held at the centre. The throttle is created here and kept for the
     // streaming frame; nothing feeds it before the reveal, so it stays at its maximum.
     const throttle = createThrottle({ max: Math.max(1, workers.size - 1) });
+    // The per-column epoch's interning (SP4c spec §4.4), session-wide: the first entry's draft is epoch 1.
+    const epochs = createEpochs();
     const coordinator = createCoordinator({
       jobs: worldJobsOf(workers),
       store,
@@ -864,9 +884,9 @@ export function mountWorldPage(root: HTMLElement, q: WorldQuery, hash: string, o
       rdMax,
       retainAllProtos: true,
       strict: true,
-      // The page's first configure (SP4c spec §4.2, §4.4): the pool's generation now, the first epoch.
+      // The page's first configure (SP4c spec §4.2, §4.4): the pool's generation now, its genKey's epoch (1).
       generation: workers.epoch,
-      epoch: 1,
+      epoch: epochs.of(firstReady.genKey),
       // Strict until the reveal: only `fatal` comes, and it stops the load; after it the streaming branch handles them.
       onEvent: (e) => {
         if (onStreamEvent !== null) onStreamEvent(e);
@@ -1117,6 +1137,10 @@ export function mountWorldPage(root: HTMLElement, q: WorldQuery, hash: string, o
           state: frame,
           timeSpeed: () => BENCH_TIME_SPEED,
           fogStep: (dtMs) => fogStep.step(dtMs),
+          // No session edits and no map on the bench until its live legs (SP4c spec §8.4): the pool keeps its default
+          // aux policy.
+          beforeUpdate: () => {},
+          afterCounts: () => {},
           onRendered: (dtMs) => {
             recorder.frame(timing[T_RAW]!, performance.now() - timing[T_START]!, timing[T_COORD]!, timing[T_UPLOAD]!, timing[T_ROWS]!, counts.genCap);
             timing[T_COORD] = 0;
@@ -1277,9 +1301,29 @@ export function mountWorldPage(root: HTMLElement, q: WorldQuery, hash: string, o
     teardown.push(() => previewDriver.dispose());
     previewDriver.setPreviewWanted(false);
     previewDriver.adopt({ poolEpoch: workers.epoch, sessionEpoch: session.state.epoch, seedKey: draftOf(session.state).seedKey, ready: firstReady });
+    // A configure failure after the reveal is fatal (SP4c spec §4.3).
+    teardown.push(previewDriver.onStatus((s) => onDriverStatus(s, (cause, e) => fail(cause, e))));
     // Ruling R1: the page feeds the driver every session change until the first M mounts the tool, whose own subscribe
-    // is then the only caller. Until the apply control (Task 18) an edit holds the world (the generation gate, D3).
+    // is then the only caller.
     teardown.push(followSession({ session, driver: previewDriver, toolMounted: () => mapRef !== null && mapRef.tool !== null, now: () => performance.now() }));
+    // When a draft is applied (SP4c spec §4.3, D4): once per frame, before the coordinator's update. Its `generation`
+    // gates the aux policy (§6.2); `onApplied` drives Watch live (§2.1).
+    const applyControl = createApplyControl({
+      coordinator,
+      driver: previewDriver,
+      session,
+      pool: workers,
+      clock: { now: () => performance.now() },
+      epochs,
+      initial: appliedDraftOf(draftOf(session.state).seedKey, firstReady),
+      initialGeneration: workers.epoch,
+      // SP4c always proceeds; SP5's fork dialog suspends auto-apply here (master §2.7 (b)).
+      beforeApply: () => true,
+      onApplied: ({ from }) => {
+        mapRef?.applied(from);
+      },
+    });
+    teardown.push(() => applyControl.dispose());
     if (overlay) {
       void loading.fadeOut(FADE_MS);
       const hint = el('div', 'world-click-hint', 'Click to fly');
@@ -1508,6 +1552,9 @@ export function mountWorldPage(root: HTMLElement, q: WorldQuery, hash: string, o
       // The fog eases outward after a raise, following the filled radius (SP4b spec §5): scanned around the camera's
       // column every 30 rendered frames while the fog is below its target, never once it has arrived.
       fogStep: (dtMs) => fogStep.step(dtMs),
+      // The apply control before the coordinator's update; the aux policy from its counts (SP4c spec §4.3, §6.2).
+      beforeUpdate: () => applyControl.tick(),
+      afterCounts: (c) => updateAuxPolicy(workers, applyControl.generation, coversWorld(mapRef), c),
       onRendered: (dtMs) => {
         frames.push(dtMs);
         // The map's arrow follows the camera while it is shown (SP4c spec §1.5).

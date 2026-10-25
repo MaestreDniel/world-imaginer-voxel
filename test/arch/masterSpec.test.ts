@@ -928,6 +928,7 @@ describe('master spec amendments (SP4c §12)', () => {
     [/^\s+ui\/map\/\* /, 'mapTool.ts', 'src/ui/map/mapTool.ts'],
     [/^\s+ui\/world\/\* /, 'mapOverlay.ts', 'src/ui/world/mapOverlay.ts'],
     [/^\s+ui\/world\/\* /, 'teleport.ts', 'src/ui/world/teleport.ts'],
+    [/^\s+ui\/world\/\* /, 'applyControl.ts', 'src/ui/world/applyControl.ts'],
   ];
 
   test('§3.7\'s Teleport and caching lines: 24 above the 3D surface or the water, no cache (SP4c spec §3.2, §12)', () => {

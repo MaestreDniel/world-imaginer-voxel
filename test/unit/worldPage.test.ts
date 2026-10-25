@@ -7,6 +7,7 @@ import { lowerRd } from '../../src/engine/renderDistance';
 import { DEFAULT_KEYMAP } from '../../src/player/keymap';
 import { applyRenderDistance, cameraFar } from '../../src/render/renderer';
 import { mountHelp } from '../../src/ui/help';
+import type { DriverStatus } from '../../src/ui/map/previewDriver';
 import { SETTINGS_DEFAULTS, type WorldSettings } from '../../src/ui/settings';
 import { StoreCorrupt } from '../../src/world/store/pool';
 import { createBenchDriver } from '../../src/ui/world/bench';
@@ -14,7 +15,7 @@ import { createFogEase } from '../../src/ui/world/fogEase';
 import { createReloader } from '../../src/ui/world/reload';
 import {
   createRdControl, createWorldNotices, everyFrameUntil, failBeforeReveal, handleContextLoss, handleStreamEvent, helpChange, offerLowerRd,
-  rdShownOnLoad, releaseOnFailure, reloadRd, runTeardown, stopAfterFailure,
+  onDriverStatus, rdShownOnLoad, releaseOnFailure, reloadRd, runTeardown, stopAfterFailure,
 } from '../../src/ui/world/worldPage';
 import { installDom, type FakeElement } from './fixtures/domShim';
 
@@ -627,5 +628,24 @@ describe('createRdControl (SP4b spec §5, D18; Review Focus 5)', () => {
       expect(helpChange(page, { ...page, mapMode: 'full', watchLive: true, fov: 80 }, null).settings)
         .toEqual({ ...SETTINGS_DEFAULTS, fov: 80, mapMode: 'split', watchLive: false });
     });
+  });
+});
+
+describe('onDriverStatus (the configure driver after the reveal, SP4c spec §4.3)', () => {
+  const status = (error: string | null): DriverStatus => ({
+    lastLatencyMs: null, pending: false, queued: false, settled: true, poolEpoch: 3, sessionEpoch: 2, error,
+  });
+
+  test('a status with an error calls fail (the failure panel with Copy details); a status without one calls nothing', () => {
+    const failed: Array<[string, unknown]> = [];
+    const fail = (cause: string, e: unknown): void => { failed.push([cause, e]); };
+    onDriverStatus(status(null), fail);
+    onDriverStatus({ ...status(null), pending: true, queued: true }, fail);
+    expect(failed).toEqual([]);
+    onDriverStatus(status('BAD_PARAMS: density.defs refused'), fail);
+    expect(failed).toHaveLength(1);
+    expect(failed[0]![0]).toContain('BAD_PARAMS: density.defs refused');
+    expect(failed[0]![1]).toBeInstanceOf(Error);
+    expect((failed[0]![1] as Error).message).toBe('BAD_PARAMS: density.defs refused');
   });
 });

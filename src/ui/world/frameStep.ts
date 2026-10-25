@@ -12,7 +12,8 @@
  *    16.7 ms frames, never as 33.3 ms ones that would hold `genCap` at 1 (SP4b plan, Review Focus 1). An interval that
  *    is not finite falls back to 1000/60 (rulings R5).
  * 1. The fly step over the raw delta (capped at 0.25 s), unless paused (the help is open, or the map owns the controls).
- * 2. `coordinator.update` from the camera, then its counts into the one reused object. A fatal that `update` raises
+ * 2. `beforeUpdate` (the page's apply control, SP4c spec §4.3), `coordinator.update` from the camera, then its counts
+ *    into the one reused object and `afterCounts` with them (the page's aux policy, §6.2). A fatal that `update` raises
  *    synchronously (an unload meeting `StoreCorrupt`) has the page stop the loop and dispose the coordinator, the pool
  *    and the renderer inside that call: the tick ends there (`stopped`), so nothing below runs on disposed objects.
  * (3. Results are taken in by the pool's message callbacks, between frames.)
@@ -75,6 +76,10 @@ export interface FrameStepDeps {
   fogStep(dtMs: number): number;
   /** After each rendered frame, with its delta (ms). */
   onRendered(dtMs: number): void;
+  /** On every tick, just before `coordinator.update`: the page's apply control (SP4c spec §4.3). */
+  beforeUpdate(): void;
+  /** On every tick, just after `coordinator.counts` wrote `counts` (passed): the page's aux policy (SP4c spec §6.2). */
+  afterCounts(c: CoordinatorCounts): void;
 }
 
 /** The display interval the throttle is given: the measured one when finite, else 1000/60 (rulings R5). */
@@ -121,10 +126,12 @@ export function createFrameStep(d: FrameStepDeps): { tick(now: number): void } {
       cam.x = fly.x;
       cam.z = fly.z;
       cam.yawDeg = fly.yaw;
+      d.beforeUpdate();
       coordinator.update(cam);
       // A fatal raised inside update stopped the page and released what the rest of the tick would touch.
       if (d.stopped()) return;
       coordinator.counts(counts);
+      d.afterCounts(counts);
       if (dt === null) return;
 
       // 4. Uploads under the frame's budget, from the last rebuild's centre and yaw.

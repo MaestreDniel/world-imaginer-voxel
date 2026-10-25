@@ -342,6 +342,9 @@ async function buildAtRest(): Promise<AtRest> {
     state,
     timeSpeed: () => TIME_SPEEDS[speed60]!,
     fogStep: (dtMs) => fog.step(dtMs, 12),
+    // SP4c's apply control and aux policy hooks (spec §4.3, §6.2); Task 21 measures them at rest with real ones.
+    beforeUpdate: () => {},
+    afterCounts: () => {},
     onRendered: (dtMs) => {
       frames.push(dtMs);
       rendered++;
