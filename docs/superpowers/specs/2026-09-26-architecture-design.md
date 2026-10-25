@@ -953,7 +953,7 @@ Main thread: render (three), input/physics/raycast (reads SAB), Coordinator (sta
 **Single-writer ownership:**
 - A column with status < Published belongs to the one T, D or L job currently processing it; stages run strictly in sequence.
 - A Published column belongs to the sim worker.
-- Mesh jobs and the main thread only read (SP4b: the main thread frees unloaded columns and protos, at zero reader pins; `T(protoOnly)` rewrites only the proto descriptors and alive bit of a Decorated or Published column, never its final set; the sim worker's ownership, SP5, is of the final set).
+- Mesh jobs and the main thread only read (SP4b: the main thread frees unloaded columns and protos, at zero reader pins; `T(protoOnly)` rewrites only the proto descriptors and alive bit of a Decorated or Published column, never its final set; the sim worker's ownership, SP5, is of the final set; SP4c's Apply frees a stale column at zero pins and regenerates it from T, rewriting no Published final set, so the sim worker (SP5) stays its first writer).
 
 **Optimistic concurrency.** Every job records the `blockVersion` and `lightVersion` of the 3×3 it read. The coordinator discards and requeues any result whose versions changed. Every section also carries a monotonically increasing `meshSeq` (SP4b: per column, since one MESH_COLUMN job covers a column's sections; a result of an older seq is dropped), and older mesh results are dropped. The only lock is the slab allocator (the coordinator's reader pins are main-thread counters, not locks; SP4b).
 
@@ -964,7 +964,7 @@ Main thread: render (three), input/physics/raycast (reads SAB), Coordinator (sta
 - L becomes eligible when all 3×3 are at ≥ Decorated.
 - A column is meshed (one `MESH_COLUMN` job covering every section that has, or borders, geometry) when its 3×3 are Published.
 - **Atomic column reveal.** A column never becomes visible section by section. Its section meshes are uploaded hidden (`setVisibleAt(false)`) and are shown together in one frame once every non-empty section of that column is uploaded; the LOD fill-mask texel flips in the same frame. Streaming therefore grows in horizontal rings of complete columns, never bottom-up or top-down, so the underground is never revealed before the surface that covers it. After the reveal, cave culling (§4.15) keeps unreachable underground sections undrawn.
-- **Re-generation swaps atomically too.** On Apply, a column's new-epoch meshes are staged hidden while the old ones stay visible; when the new set is complete, old instances are hidden and deleted and new ones shown in the same frame. Edit and fluid remeshes of individual sections replace already visible geometry and are exempt.
+- **Re-generation swaps atomically too.** On Apply, a column's new-epoch meshes are staged hidden while the old ones stay visible; when the new set is complete, old instances are hidden and deleted and new ones shown in the same frame (SP4c: the column's voxels are freed and regenerated while its old meshes stay shown; a column whose epoch, the interned genKey of its T's draft, equals the applied one is kept). Edit and fluid remeshes of individual sections replace already visible geometry and are exempt.
 
 **Proto retention.** A proto set stays alive while the column lies in the ring RD+2..RD+3, or while any neighbour within the D radius is below Decorated. In tuning mode it stays alive for every loaded column. Otherwise it is freed by dropping refcounts on its slots. If a proto is ever missing when needed (after a big teleport, say), a `T(protoOnly)` job regenerates it; T is pure, so this is safe (SP4b builds the rule and `T(protoOnly)`; the page keeps every proto until D places features, SP8b, because a freed proto saves nothing while the final set shares its slots).
 
@@ -1284,14 +1284,14 @@ Target: edit → visible ≤ 50 ms p95, measured in the HUD.
 
 ¹ The seed is WorldSession state, not a leaf; it enters genKey directly. A profile is an overlay, not a leaf: switching profile has the scope of the earliest stage it dirties (`dirtyStages`).
 
-**Apply.** An explicit button, or auto-apply with a 500 ms debounce. It bumps the epoch *from the dirty stage onward* and re-queues loaded columns nearest-first.
+**Apply.** An explicit button, or auto-apply with a 500 ms debounce (SP4c: auto-apply only: a draft is applied once its configure resolved, nothing newer waits, no gesture is open and 150 ms passed since the last change). It bumps the epoch *from the dirty stage onward* and re-queues loaded columns nearest-first.
 - **Old meshes stay visible until replaced**, column by column and atomically (§4.2). There is no teardown and no worker restart; workers get one `configure` message.
-- Meshing waits until all 3×3 columns share the epoch.
-- Each control shows a scope badge and a modified dot. A header shows "n unapplied changes" plus per-stage progress (`stale/total`).
+- Meshing waits until all 3×3 columns share the epoch (SP4c: the column's epoch is the interned genKey of its T's draft; D and L wait the same way).
+- Each control shows a scope badge and a modified dot. A header shows "n unapplied changes" plus per-stage progress (`stale/total`) (SP10; SP4c shows the stale count in the HUD).
 
 **Preview.** Column-scope edits re-render the map and LOD coarse-first within about 300 ms, before Apply.
 
-**Until SP4c** (amended by SP2b): the map previews the draft and there is no Apply. The session's gestures (a drag is one gesture whose edits are not urgent; its release is urgent) and its urgent commits are the hooks SP4c's Apply and SP5's fork dialog attach to.
+**Since SP4c** the world applies the session's drafts live (the SP4c spec §4); the map previews each draft on the same pool, and the world holds during a gesture. The session's gestures and urgent commits are the hooks Apply and SP5's fork dialog attach to.
 
 ### 5.2 Panels (CSS grid shell)
 
@@ -1687,7 +1687,7 @@ High adds MSAA, a shadow cascade (about 2 ms), LOD 1 km and RD16 (dGPU target). 
 
 1. **COOP/COEP needed for the SAB.**
    - Mitigation: headers in vite.config for dev and preview; Docker runs vite; `vercel.json` sets the same headers on Vercel (D11); a startup `crossOriginIsolated` check with an error screen; packs load from local files only; no cross-origin subresources anywhere (COEP `require-corp`). Isolation also requires a **secure context**: dev, preview and Docker must be opened via `http://localhost:<port>` (or 127.0.0.1) or over HTTPS, and a reverse proxy in front of the container must terminate TLS and pass COOP/COEP through unchanged. When `isSecureContext` is false, the error screen names this cause. Every worker script response (Vite dev `?worker_file` modules, `/node_modules/.vite/deps/*`, built `assets/*.js`) must carry the headers too.
-   - Kill: if SP3a-SP5 shows an unfixable isolation or concurrency problem, switch to transferable snapshots (amended by SP4b: the split moved Apply's rewrites of Published columns to SP4c, and SP5's sim worker is deferred reclamation's first necessary consumer). gen/light/mesh already run on plain ArrayBuffers in the harness, so only `store` and the transport change.
+   - Kill: if SP3a-SP5 shows an unfixable isolation or concurrency problem, switch to transferable snapshots (amended by SP4b: the split moved Apply's rewrites of Published columns to SP4c, and SP5's sim worker is deferred reclamation's first necessary consumer; SP4c's Apply frees and regenerates instead of rewriting). gen/light/mesh already run on plain ArrayBuffers in the harness, so only `store` and the transport change.
 2. **BatchedMesh with custom GLSL3 and an integer `data` attribute.**
    - Mitigation: an SP4a week-1 spike (stress test at Medium scale: ≈ 3.5k section instances, ≈ 0.75 M quads; remesh churn; `optimize`); pin three to `~0.186.1`; `WEBGL_multi_draw` detection; RegionMesh fallback behind the `SectionRenderer` interface.
 3. **T cost of the full cave family in JS, plus DAG closures.**

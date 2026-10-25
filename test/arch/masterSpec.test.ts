@@ -750,7 +750,7 @@ describe('master spec amendments (SP4b §13)', () => {
     const at = text.indexOf('### 4.1 Thread topology and ownership');
     const s41 = text.slice(at, text.indexOf('### 4.2 ', at));
     expect(s41).toContain('The only lock is the slab allocator (the coordinator\'s reader pins are main-thread counters, not locks; SP4b).');
-    expect(s41).toContain('- Mesh jobs and the main thread only read (SP4b: the main thread frees unloaded columns and protos, at zero reader pins; `T(protoOnly)` rewrites only the proto descriptors and alive bit of a Decorated or Published column, never its final set; the sim worker\'s ownership, SP5, is of the final set).');
+    // The single-writer line's pin moved to 'master spec amendments (SP4c §12)' (SP4c amends it).
   });
 
   test('§4.2\'s proto retention and unload, §4.3\'s cancellation (SP4b spec §3.5-§3.7, §13)', () => {
@@ -945,6 +945,31 @@ describe('master spec amendments (SP4c §12)', () => {
     expect(cell, 'no `**Epoch cell.**` paragraph').toBeDefined();
     expect(cell).toContain('SP4b wires them in place of SP2b\'s pool-wide cell (every job carries its configure generation and its phase\'s cell value at issue, `scope`, and stops when the cell moves; `configure` stores the generation into all four; Apply is one `configure`, which moves all four cells past every value a job was issued with; every SP4c leaf is terrain- or climate-scope, so `bumpScope` from the dirty stage waits for SP8b\'s decorate-scope Apply, SP4c)');
     expect(cell).toContain('(amended by SP3a, SP4a, SP4b and SP4c)');
+  });
+
+  test('§4.1, §4.2, §5.1 and risk 1 say how SP4c applies (SP4c spec §4.5, §12)', () => {
+    const at41 = text.indexOf('### 4.1 Thread topology and ownership');
+    const s41 = text.slice(at41, text.indexOf('### 4.2 ', at41));
+    expect(s41).toContain('- Mesh jobs and the main thread only read (SP4b: the main thread frees unloaded columns and protos, at zero reader pins; `T(protoOnly)` rewrites only the proto descriptors and alive bit of a Decorated or Published column, never its final set; the sim worker\'s ownership, SP5, is of the final set; SP4c\'s Apply frees a stale column at zero pins and regenerates it from T, rewriting no Published final set, so the sim worker (SP5) stays its first writer).');
+    const at42 = text.indexOf('### 4.2 Column state machine');
+    const s42 = text.slice(at42, text.indexOf('### 4.3 ', at42));
+    const swap = s42.split('\n').find((l) => l.startsWith('- **Re-generation swaps atomically too.**'));
+    expect(swap, 'no `- **Re-generation swaps atomically too.**` bullet in §4.2').toBeDefined();
+    expect(swap).toContain('(SP4c: the column\'s voxels are freed and regenerated while its old meshes stay shown; a column whose epoch, the interned genKey of its T\'s draft, equals the applied one is kept)');
+    const at51 = text.indexOf('### 5.1 Parameter model');
+    const s51 = text.slice(at51, text.indexOf('### 5.2 ', at51));
+    for (const phrase of [
+      'An explicit button, or auto-apply with a 500 ms debounce (SP4c: auto-apply only: a draft is applied once its configure resolved, nothing newer waits, no gesture is open and 150 ms passed since the last change).',
+      'Meshing waits until all 3×3 columns share the epoch (SP4c: the column\'s epoch is the interned genKey of its T\'s draft; D and L wait the same way).',
+      'per-stage progress (`stale/total`) (SP10; SP4c shows the stale count in the HUD).',
+      '**Since SP4c** the world applies the session\'s drafts live (the SP4c spec §4); the map previews each draft on the same pool, and the world holds during a gesture. The session\'s gestures and urgent commits are the hooks Apply and SP5\'s fork dialog attach to.',
+    ]) expect(s51, `§5.1 does not say ${phrase}`).toContain(phrase);
+    expect(s51).not.toContain('**Until SP4c**');
+    const at8 = text.indexOf('## 8. Risks');
+    const risk1 = text.slice(at8, text.indexOf('\n2. ', at8));
+    const kill = risk1.split('\n').find((l) => l.trimStart().startsWith('- Kill:'));
+    expect(kill, 'risk 1 has no `- Kill:` line').toBeDefined();
+    expect(kill).toContain('(amended by SP4b: the split moved Apply\'s rewrites of Published columns to SP4c, and SP5\'s sim worker is deferred reclamation\'s first necessary consumer; SP4c\'s Apply frees and regenerates instead of rewriting)');
   });
 
   test('§1 names each SP4c module in its entry, which exists', () => {

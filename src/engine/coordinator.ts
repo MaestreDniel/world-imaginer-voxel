@@ -96,6 +96,16 @@
  *   whose `busyEpoch` ≠ `wEpoch` is dropped.
  * - **Counts:** `done` counts current columns only; `stale` the MESH-set columns with (stage ≥ 1 and `colEpoch` ≠
  *   `wEpoch`) or (target ≠ 0 and ≠ `wEpoch`); `epoch` is `wEpoch`.
+ * - **`apply`** (spec §4.5, D6; "old meshes are kept on Apply", master §6.3): sets `wEpoch` and `appliedGeneration`,
+ *   then in one pass over the slots resolves every pending payload of another epoch through `sink.unstage` (dropped:
+ *   the shown payload stays, and with none shown the sink column is cleared; not dropped: it is shown), bumps the
+ *   stale columns' `meshSeq` (stage ≥ 1, `colEpoch` ≠ `wEpoch`; their `meshed` cleared) and sets a current Published
+ *   column's `meshed` to whether its target is `wEpoch`; then re-collects the unloads and rebuilds the stage heaps. A
+ *   stale column is freeable inside keepVoxels too (zero pins, not busy), queued in the free heap by `apply` and by
+ *   every settle's `unloadCheck`, ≤ 16 per update in the order of its own T score; such a free returns the slot to
+ *   Absent but keeps the shown mesh (`sinkCx`, `sinkCz`, `shownEpoch`), which the column's next payload swaps. The mesh
+ *   unload also hides a sink column outside the MESH set whose target is not `wEpoch` (no MESH replaces it), ≤ 64 per
+ *   update. No Published final set is rewritten in place: SP5's sim worker stays its first writer (master §4.1).
  */
 import { TORUS_SIZE, colKey } from '../core/coords';
 import { STAGE_BONUS, streamScore } from '../core/streamScore';
@@ -106,6 +116,7 @@ import {
   KEEP_VOXELS_EXTRA, M_D, M_KEEP_MESH, M_KEEP_VOXELS, M_L, M_MESH, M_PROTO_RING, M_T, assertTorusSafe, membershipTable,
   stageOffsets, type Stage,
 } from './rings';
+import type { WorldStage } from './invalidation';
 import type { Throttle } from './throttle';
 import { JobCancelled, StoreCorruptError, StoreFullError, WorkerFailed, type ColumnDone, type WorkerPool } from './workerPool';
 
@@ -236,6 +247,15 @@ export interface Coordinator {
    * next `update`. Allocates nothing.
    */
   adopt(generation: number): void;
+  /**
+   * The world applies a draft of another world (SP4c spec §4.5, D6): `epoch` (the interned genKey) and the pool's
+   * `generation` become the applied ones; in one pass over the slots, a pending payload of another epoch is resolved
+   * through `sink.unstage`, the stale columns' `meshSeq` is bumped (they become freeable inside keepVoxels, nearest
+   * first, keeping their shown meshes), the current columns' `meshed` follows their target, and the unload and stage
+   * heaps are rebuilt. SP4c regenerates from T whatever `from` says. Issuing resumes at the next `update`. Allocates
+   * nothing.
+   */
+  apply(a: { readonly epoch: number; readonly generation: number; readonly from: WorldStage }): void;
   /**
    * True while (cx, cz)'s slot tracks it marked failed (skipped after two failures, spec §3.6) until its voxels
    * unload. Only that column is marked: the neighbours it stops short of MESH (its 7 × 7 when skipped at T, 5 × 5 at
@@ -458,8 +478,17 @@ export function createCoordinator(o: CoordinatorOptions): Coordinator {
   };
   /** The epoch the slot's sink column will show once its uploads finish: its target (SP4c spec §4.4); 0 for none. */
   const targetOf = (s: number): number => stagedEpoch[s] || shownEpoch[s]!;
-  /** Whether the sink holds the slot's sink column outside keepMesh (the mesh unload, SP4c spec §4.5). */
-  const sinkOutside = (s: number): boolean => sinkCx[s] !== NO_COLUMN && (flagsAt(sinkCx[s]!, sinkCz[s]!) & M_KEEP_MESH) === 0;
+  /**
+   * Whether the sink's column for the slot is to be hidden (the mesh unload, SP4c spec §4.5): it lies outside keepMesh,
+   * or outside the MESH set with a target other than the applied epoch (no MESH will replace it).
+   */
+  const sinkOutside = (s: number): boolean => {
+    if (sinkCx[s] === NO_COLUMN) return false;
+    const f = flagsAt(sinkCx[s]!, sinkCz[s]!);
+    return (f & M_KEEP_MESH) === 0 || ((f & M_MESH) === 0 && targetOf(s) !== wEpoch);
+  };
+  /** Whether the slot's column is stale: generated (stage ≥ 1) under another epoch than the applied one (§4.4). */
+  const isStale = (s: number): boolean => stage[s]! >= 1 && colEpoch[s] !== wEpoch;
 
   function fatal(message: string, cause: unknown): void {
     stopped = true;
@@ -765,12 +794,16 @@ export function createCoordinator(o: CoordinatorOptions): Coordinator {
 
   // ---- unloads (spec §3.5, §3.7)
 
-  /** Queues the slot's unloads if its column lies outside its keep sets (mesh beyond keepMesh, voxels beyond keepVoxels). */
+  /**
+   * Queues the slot's unloads: its sink column's mesh (outside keepMesh, or a stale one outside the MESH set), and its
+   * voxels if it lies beyond keepVoxels or is stale (SP4c spec §4.5: a stale column is freed inside keepVoxels too, so
+   * one busy or pinned at `apply` is queued again by the settle that ends its job).
+   */
   function unloadCheck(s: number): void {
     // The mesh unload keys on the sink's column, apart from `meshed` (SP4c spec §4.5).
     if (sinkOutside(s)) pushUnload(H_MESH_OUT, s);
     if (tcx[s] === NO_COLUMN) return;
-    if (stage[s]! >= 1 && (flagsOf(s) & M_KEEP_VOXELS) === 0) pushUnload(H_FREE, s);
+    if (stage[s]! >= 1 && ((flagsOf(s) & M_KEEP_VOXELS) === 0 || colEpoch[s] !== wEpoch)) pushUnload(H_FREE, s);
   }
 
   /** Queues the slot's proto free (with the rule off) if it is Decorated or Published with a live proto. */
@@ -794,9 +827,12 @@ export function createCoordinator(o: CoordinatorOptions): Coordinator {
     heapify(H_PROTO);
   }
 
-  /** Whether the slot's column may be freed now: tracked at Proto or later, beyond keepVoxels, not busy, unpinned. */
+  /**
+   * Whether the slot's column may be freed now: tracked at Proto or later, beyond keepVoxels or stale (SP4c spec §4.5),
+   * not busy, unpinned.
+   */
   function freeable(s: number): boolean {
-    return tcx[s] !== NO_COLUMN && stage[s]! >= 1 && (flagsOf(s) & M_KEEP_VOXELS) === 0 && busy[s] === 0
+    return tcx[s] !== NO_COLUMN && (isStale(s) || (stage[s]! >= 1 && (flagsOf(s) & M_KEEP_VOXELS) === 0)) && busy[s] === 0
       && protoReaders[s] === 0 && finalReaders[s] === 0;
   }
 
@@ -852,7 +888,10 @@ export function createCoordinator(o: CoordinatorOptions): Coordinator {
         pop(H_FREE);
         continue;
       }
-      if (sinkCx[s] !== NO_COLUMN) {
+      // Beyond keepVoxels the mesh goes first; a stale column freed inside keepVoxels keeps its shown mesh until its new
+      // payload replaces it (SP4c spec §4.5): `sinkCx`, `sinkCz` and `shownEpoch` stay, and the slot follows the same
+      // column (its window column), so the swap finds them.
+      if (sinkCx[s] !== NO_COLUMN && (flagsOf(s) & M_KEEP_VOXELS) === 0) {
         if (hidden >= MESH_REMOVALS_PER_FRAME) break;
         unmesh(s);
         hidden++;
@@ -1275,6 +1314,42 @@ export function createCoordinator(o: CoordinatorOptions): Coordinator {
     adopt(generation) {
       appliedGeneration = generation;
       // Requeue (SP4c spec §4.5): the jobs a held pump left in the heaps, and any a rejection requeued, keyed afresh.
+      rebuild();
+    },
+
+    apply(a) {
+      if (stopped) return;
+      wEpoch = a.epoch;
+      appliedGeneration = a.generation;
+      // SP4c regenerates from T for any `from` (spec §4.1): every stale column is freed and claimed again by its T.
+      for (let s = 0; s < SLOTS; s++) {
+        // A pending payload of another epoch is resolved (§4.4): dropped (the shown one stays; with none shown the sink
+        // holds nothing for the column any more), or found already shown. One staged at `wEpoch` (an undo back to the
+        // epoch pending) stays.
+        const pending = stagedEpoch[s]!;
+        if (pending !== 0 && pending !== wEpoch) {
+          if (sink.unstage(sinkCx[s]!, sinkCz[s]!)) {
+            stagedEpoch[s] = 0;
+            if (shownEpoch[s] === 0) {
+              sinkCx[s] = NO_COLUMN;
+              sinkCz[s] = NO_COLUMN;
+            }
+          } else {
+            shownEpoch[s] = pending;
+            stagedEpoch[s] = 0;
+          }
+        }
+        if (isStale(s)) {
+          // A MESH in flight is dropped at intake; the column is freed by the unloads (queued below) once unpinned.
+          meshSeq[s] = meshSeq[s]! + 1;
+          meshed[s] = 0;
+        } else if (stage[s] === 3) {
+          // A current Published column: meshed when its mesh is (or is staged) at `wEpoch`, else it gets a MESH (§4.4).
+          meshed[s] = targetOf(s) === wEpoch ? 1 : 0;
+        }
+      }
+      // The unloads re-collected (the stale frees, the stale meshes outside the MESH set), then the stage heaps.
+      collectUnloads();
       rebuild();
     },
 

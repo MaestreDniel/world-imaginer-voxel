@@ -52,13 +52,18 @@ interface FakeOptions {
  * also against live protos), the record's holder, the caps (with the throttle's cap at that moment) and the columns
  * already busy; every free against the pending jobs that read the column (the pins, SP4b spec §3.5); every stage
  * against the columns the sink holds at the coordinator's epoch (staged at most once per epoch, SP4c spec §4.4) and
- * every remove against the unrevealed ones. The pool's generation (`fake.generation`) is the test's to move; each job
- * resolves with the generation it was issued under (SP4c spec §4.6).
+ * against a pending payload not resolved since (no `unstage` or remove), and every remove against the unrevealed ones.
+ * The pool's generation (`fake.generation`) is the test's to move; each job resolves with the generation it was issued
+ * under (SP4c spec §4.6). A T's record carries the coordinator's epoch at its issue, and every D, L and MESH is checked
+ * against the epochs of its 3 × 3 (all the applied one); a MESH is a violation only for a column the sink holds at the
+ * applied epoch (one showing another epoch's mesh gets its MESH: the swap). The sink keeps each held column's shown and
+ * pending epochs; `unstage` answers `fake.unstageReturns` (true: the pending payload is dropped; false: it is shown).
  */
 function fakeWorld(fo: FakeOptions = {}) {
   const fake = {
     live: fo.workers ?? 4,
-    records: new Map<number, { cx: number; cz: number; status: number; block: number; light: number; alive?: boolean }>(),
+    /** `epoch`: the coordinator's epoch when the record's T was issued (SP4c spec §4.4); absent for a test's own records. */
+    records: new Map<number, { cx: number; cz: number; status: number; block: number; light: number; alive?: boolean; epoch?: number }>(),
     pending: [] as Pending[],
     issued: [] as Issued[],
     violations: [] as string[],
@@ -71,8 +76,15 @@ function fakeWorld(fo: FakeOptions = {}) {
     removes: [] as Array<readonly [number, number]>,
     /** The columns staged and not removed since (colKey). */
     revealed: new Set<number>(),
-    /** The coordinator's epoch (`counts().epoch`) when each held column was staged (colKey → epoch). */
+    /** The epoch each held column will show once its uploads finish, its target (colKey → epoch, SP4c spec §4.4). */
     revealedEpoch: new Map<number, number>(),
+    /** The epoch of the payload the sink shows for each column and of one staged and not yet resolved (colKey → epoch). */
+    shown: new Map<number, number>(),
+    staged: new Map<number, number>(),
+    /** The coordinator's epoch at each stage (same indices as `stages`). */
+    stageEpochs: [] as number[],
+    /** What `unstage` answers (true: the pending payload was dropped; false: it is already shown), moved by the test. */
+    unstageReturns: (_cx: number, _cz: number): boolean => false,
     /** Reads the coordinator's epoch at a stage (`make` sets it once the coordinator exists). */
     epochNow: (): number => 1,
     /** The pool's generation (`jobs.generation()`), moved by the test (SP4c spec §4.2). */
@@ -137,15 +149,19 @@ function fakeWorld(fo: FakeOptions = {}) {
     return r !== undefined && r.cx === cx && r.cz === cz && r.alive !== false;
   };
 
-  const commit = (stage: Stage, cx: number, cz: number, protoOnly: boolean): void => {
+  const commit = (stage: Stage, cx: number, cz: number, protoOnly: boolean, epoch: number): void => {
     const s = slotOf(cx, cz);
     if (protoOnly) fake.records.get(s)!.alive = true;
-    else if (stage === 'T') fake.records.set(s, { cx, cz, status: 1, block: 1, light: 0, alive: true });
+    else if (stage === 'T') fake.records.set(s, { cx, cz, status: 1, block: 1, light: 0, alive: true, epoch });
     else if (stage === 'D') { const r = fake.records.get(s)!; r.status = 2; r.block++; }
     else if (stage === 'L') { const r = fake.records.get(s)!; r.status = 3; r.light++; }
   };
 
-  const check = (stage: Stage, cx: number, cz: number, protoOnly: boolean): void => {
+  const epochAt = (cx: number, cz: number): number | undefined => {
+    const r = fake.records.get(slotOf(cx, cz));
+    return r !== undefined && r.cx === cx && r.cz === cz ? r.epoch : undefined;
+  };
+  const check = (stage: Stage, cx: number, cz: number, protoOnly: boolean, epoch: number): void => {
     const what = `${stage} at (${cx}, ${cz})`;
     if (fake.pending.some((p) => p.cx === cx && p.cz === cz)) violations(`${what} issued for a busy column`);
     if (protoOnly) {
@@ -161,9 +177,13 @@ function fakeWorld(fo: FakeOptions = {}) {
         for (let dx = -1; dx <= 1; dx++) {
           if (statusAt(cx + dx, cz + dz) < need) violations(`${what} before (${cx + dx}, ${cz + dz}) reached ${need}`);
           if (stage === 'D' && !aliveAt(cx + dx, cz + dz)) violations(`${what} with no live proto at (${cx + dx}, ${cz + dz})`);
+          // Every column of the 3 × 3 generated under the applied epoch (SP4c spec §4.4).
+          const e = epochAt(cx + dx, cz + dz);
+          if (e !== undefined && e !== epoch) violations(`${what} at epoch ${epoch} with (${cx + dx}, ${cz + dz}) at epoch ${e}`);
         }
       }
-      if (stage === 'MESH' && fake.revealed.has(colKey(cx, cz))) violations(`${what} issued for a staged column`);
+      // A column the sink holds at the applied epoch needs no MESH; one showing another epoch's mesh gets one (the swap).
+      if (stage === 'MESH' && fake.revealed.has(colKey(cx, cz)) && fake.revealedEpoch.get(colKey(cx, cz)) === epoch) violations(`${what} issued for a column held at epoch ${epoch}`);
     }
     // Each cap is checked when a job it bounds is issued (a cap that drops, as N does, binds the next such issue).
     const N = fake.live;
@@ -188,7 +208,8 @@ function fakeWorld(fo: FakeOptions = {}) {
       fake.issuedGen.push(generation);
       inFlight[stage]++;
       total++;
-      check(stage, cx, cz, protoOnly);
+      const epoch = fake.epochNow();
+      check(stage, cx, cz, protoOnly, epoch);
       if (fo.claims === true && stage === 'T' && !protoOnly) fake.records.set(slotOf(cx, cz), { cx, cz, status: 0, block: 1, light: 0 });
       const versions = new Int32Array(18);
       store.versionsInto(cx, cz, versions);
@@ -199,7 +220,7 @@ function fakeWorld(fo: FakeOptions = {}) {
           resolve: () => {
             done();
             fo.tamper?.({ stage, cx, cz }, versions);
-            commit(stage, cx, cz, protoOnly);
+            commit(stage, cx, cz, protoOnly, epoch);
             resolve(outcome(stage, cx, cz, versions, generation));
           },
           reject: (e) => { done(); reject(e); },
@@ -229,18 +250,46 @@ function fakeWorld(fo: FakeOptions = {}) {
       const k = colKey(p.cx, p.cz);
       const epoch = fake.epochNow();
       if (fake.revealed.has(k) && fake.revealedEpoch.get(k) === epoch) violations(`(${p.cx}, ${p.cz}) staged again at epoch ${epoch} while held (D16)`);
+      // A payload staged and not resolved since (no unstage, no remove) is still pending: staging over it would leave
+      // the column with two pending seqs (SP4c spec §4.4: `stage` only with `stagedEpoch` 0).
+      if (fake.staged.has(k)) violations(`(${p.cx}, ${p.cz}) staged at epoch ${epoch} over a pending payload of epoch ${fake.staged.get(k)}`);
       fake.revealed.add(k);
       fake.revealedEpoch.set(k, epoch);
+      fake.staged.set(k, epoch);
       fake.stages.push({ cx: p.cx, cz: p.cz, seq });
+      fake.stageEpochs.push(epoch);
       fake.sinkOps.push(k + 1);
     },
     unstage(cx, cz) {
       fake.unstages.push([cx, cz]);
-      return false;
+      const k = colKey(cx, cz);
+      const pending = fake.staged.get(k);
+      if (!fake.revealed.has(k) || pending === undefined) {
+        violations(`unstage of (${cx}, ${cz}) with no pending payload`);
+        return false;
+      }
+      fake.staged.delete(k);
+      const dropped = fake.unstageReturns(cx, cz);
+      if (!dropped) {
+        // Already shown: the target stays.
+        fake.shown.set(k, pending);
+        return false;
+      }
+      const shown = fake.shown.get(k);
+      if (shown === undefined) {
+        // A first reveal dropped: the sink holds nothing for the column any more.
+        fake.revealed.delete(k);
+        fake.revealedEpoch.delete(k);
+      } else {
+        fake.revealedEpoch.set(k, shown);
+      }
+      return true;
     },
     remove(cx, cz) {
       if (!fake.revealed.delete(colKey(cx, cz))) violations(`remove of the unstaged (${cx}, ${cz})`);
       fake.revealedEpoch.delete(colKey(cx, cz));
+      fake.shown.delete(colKey(cx, cz));
+      fake.staged.delete(colKey(cx, cz));
       fake.removes.push([cx, cz]);
       fake.sinkOps.push(-(colKey(cx, cz) + 1));
     },
@@ -268,14 +317,24 @@ interface MakeOptions extends FakeOptions {
 
 function make(mo: MakeOptions = {}): { w: World; c: Coordinator } {
   const w = fakeWorld(mo);
-  const c = createCoordinator({
+  const inner = createCoordinator({
     jobs: w.jobs, store: w.store, sink: w.sink, throttle: w.throttle, rd: mo.rd ?? 4, rdMax: mo.rdMax ?? 16,
     retainAllProtos: mo.retainAllProtos ?? true, strict: mo.strict ?? false,
     generation: w.fake.generation, epoch: mo.epoch ?? 1,
     onEvent: (e) => { w.fake.events.push(e); w.fake.eventIssued.push(w.fake.issued.length); },
   });
+  // The fake reads the coordinator's epoch (`counts().epoch`) at every issue and stage; only `apply` moves it, so it is
+  // read once after each `apply` rather than counted over the 4,096 slots per job.
   const counts = createCoordinatorCounts();
-  w.fake.epochNow = () => c.counts(counts).epoch;
+  let epoch = inner.counts(counts).epoch;
+  w.fake.epochNow = () => epoch;
+  const c: Coordinator = {
+    ...inner,
+    apply(a) {
+      inner.apply(a);
+      epoch = inner.counts(counts).epoch;
+    },
+  };
   return { w, c };
 }
 
@@ -1418,6 +1477,481 @@ describe('createCoordinator: the generation gate, the per-column epoch and the s
     expect([k3.stale, k3.epoch]).toEqual([0, 3]);
     expect(doneOf(k3)).toEqual({ T: 213, D: 157, L: 109, MESH: 69 });
     expect(other.w.fake.violations).toEqual([]);
+  });
+});
+
+/** The map configured a draft and the world applies it (SP4c spec §4.3): the pool's generation moves, then `apply`. */
+function applyTo(w: World, c: Coordinator, epoch: number): void {
+  w.fake.generation++;
+  c.apply({ epoch, generation: w.fake.generation, from: 'T' });
+}
+
+/** `updates` × (one update at `at`, then up to `settles` jobs settled in `pick`'s order). */
+async function steps(w: World, c: Coordinator, at: StreamCamera, pick: (n: number) => number, updates: number, settles: number): Promise<void> {
+  for (let u = 0; u < updates; u++) {
+    c.update(at);
+    await flush();
+    for (let i = 0; i < settles && w.fake.pending.length > 0; i++) { w.settle(pick(w.fake.pending.length)); await flush(); }
+  }
+}
+
+/** Updates at `at`, each followed by every job settled in `pick`'s order, until an update changes nothing. */
+async function settleDown(w: World, c: Coordinator, at: StreamCamera, pick: (n: number) => number): Promise<void> {
+  const size = (): number => w.fake.issued.length + w.fake.frees.length + w.fake.removes.length + w.fake.unstages.length;
+  for (let u = 0; u < 1000; u++) {
+    const before = size();
+    c.update(at);
+    await flush();
+    while (w.fake.pending.length > 0) { w.settle(pick(w.fake.pending.length)); await flush(); }
+    if (size() === before) return;
+  }
+  throw new Error('the world did not settle in 1,000 updates');
+}
+
+/** The colKeys of `stage`'s set around (ccx, ccz). */
+const setKeys = (stage: Stage, rd: number, ccx: number, ccz: number): number[] => stageOffsets(rd)[stage].map(([dx, dz]) => colKey(ccx + dx, ccz + dz));
+
+/** The columns the sink still holds after replaying `sinkOps`, and the removes that named no held column. */
+function replaySink(w: World): { held: Set<number>; strays: number[] } {
+  const held = new Set<number>();
+  const strays: number[] = [];
+  for (const op of w.fake.sinkOps) {
+    if (op > 0) held.add(op - 1);
+    else if (!held.delete(-op - 1)) strays.push(-op - 1);
+  }
+  return { held, strays };
+}
+
+/** The T key `pushUnload` gives a stale column inside keepVoxels (its own T score from the rebuild at (ccx, ccz), yaw 0). */
+const tKey = (cx: number, cz: number, ccx: number, ccz: number, rd: number): number =>
+  hasFlag(M_T, cx, cz, ccx, ccz, rd) ? streamScore(cx - ccx, cz - ccz, 0, -1, STAGE_BONUS.T) : Infinity;
+
+/** Whether (cx, cz) sorts after (or with) (px, pz) under `key`, ties by colKey (the heaps' order). */
+const notBefore = (key: (x: number, z: number) => number, px: number, pz: number, cx: number, cz: number): boolean =>
+  key(cx, cz) > key(px, pz) || (key(cx, cz) === key(px, pz) && colKey(cx, cz) > colKey(px, pz));
+
+describe('createCoordinator: apply, "old meshes kept on Apply" (SP4c spec §4.4, §4.5, §8.5)', () => {
+  test('old meshes are kept on Apply (master §6.3): after apply, no MESH-set column is removed from the sink before its new payload is staged, and each stale column\'s next stage happens under the new epoch', async () => {
+    const rd = 6;
+    const { w, c } = make({ rd, workers: 5 });
+    await fill(w, c, cam(0, 0), 4242);
+    const mesh = setKeys('MESH', rd, 0, 0);
+    for (const k of mesh) expect(w.fake.revealedEpoch.get(k)).toBe(1);
+    const ops = w.fake.sinkOps.length;
+    const staged = w.fake.stages.length;
+    applyTo(w, c, 2);
+    const pick = lcg(4242);
+    await steps(w, c, cam(0, 0), pick, 40, 8);
+    await settleDown(w, c, cam(0, 0), pick);
+    expect(w.fake.violations).toEqual([]);
+    expect(w.fake.events).toEqual([]);
+    const inMesh = new Set(mesh);
+    expect(w.fake.sinkOps.slice(ops).filter((op) => op < 0 && inMesh.has(-op - 1))).toEqual([]);
+    const next = new Map<number, number>();
+    for (let i = staged; i < w.fake.stages.length; i++) {
+      const k = colKey(w.fake.stages[i]!.cx, w.fake.stages[i]!.cz);
+      if (!next.has(k)) next.set(k, w.fake.stageEpochs[i]!);
+    }
+    for (const k of mesh) expect(next.get(k), `the first stage of ${k} after the Apply`).toBe(2);
+    for (const k of mesh) expect(w.fake.revealedEpoch.get(k)).toBe(2);
+    const n = read(c);
+    expect([n.stale, n.epoch, n.MESH.done]).toEqual([0, 2, n.MESH.needed]);
+    expect(doneOf(n)).toEqual({ T: n.T.needed, D: n.D.needed, L: n.L.needed, MESH: n.MESH.needed });
+  });
+
+  test('stale frees go nearest first (each update\'s frees in non-decreasing T score, as pushUnload keys them), ≤ 16 per update, and only at zero pins', async () => {
+    const rd = 6;
+    const { w, c } = make({ rd, workers: 5 });
+    await fill(w, c, cam(0, 0), 4242);
+    applyTo(w, c, 2);
+    const pick = lcg(17);
+    const key = (x: number, z: number): number => tKey(x, z, 0, 0, rd);
+    const perUpdate: number[] = [];
+    for (let u = 0; u < 200 && read(c).stale > 0; u++) {
+      const f0 = w.fake.frees.length;
+      c.update(cam(0, 0));
+      const frees = w.fake.frees.slice(f0);
+      perUpdate.push(frees.length);
+      for (let i = 1; i < frees.length; i++) {
+        const [px, pz] = frees[i - 1]!;
+        const [x, z] = frees[i]!;
+        expect(notBefore(key, px, pz, x, z), `update ${u}: (${x}, ${z}) freed after (${px}, ${pz})`).toBe(true);
+      }
+      await flush();
+      // A few jobs settle per update, so jobs are in flight (pinning their 3 × 3) while the next frees run.
+      for (let i = 0; i < 6 && w.fake.pending.length > 0; i++) { w.settle(pick(w.fake.pending.length)); await flush(); }
+    }
+    expect(perUpdate[0]).toBe(FREES_PER_FRAME);
+    expect(Math.max(...perUpdate)).toBeLessThanOrEqual(FREES_PER_FRAME);
+    expect(perUpdate.filter((n) => n === FREES_PER_FRAME).length).toBeGreaterThan(5);
+    await settleDown(w, c, cam(0, 0), pick);
+    // The fake flags a free under a pending job that reads or writes the column (its pins, or busy).
+    expect(w.fake.violations).toEqual([]);
+    expect(read(c).stale).toBe(0);
+  });
+
+  test('a stale column busy at apply is freed after its job settles', async () => {
+    const rd = 6;
+    const { w, c } = make({ rd, workers: 5 });
+    c.update(cam(0, 0));
+    await flush();
+    while (!w.fake.pending.some((p) => p.stage === 'D')) { w.settle(); await flush(); }
+    const y = w.fake.pending.find((p) => p.stage === 'D')!;
+    const isY = (p: Issued): boolean => p.stage === 'D' && p.cx === y.cx && p.cz === y.cz;
+    applyTo(w, c, 2);
+    const f0 = w.fake.frees.length;
+    for (let u = 0; u < 6; u++) {
+      c.update(cam(0, 0));
+      await flush();
+      for (let i = 0; i < 30; i++) {
+        const j = w.fake.pending.findIndex((p) => !isY(p));
+        if (j < 0) break;
+        w.settle(j);
+        await flush();
+      }
+    }
+    // The frees passed Y (columns of a larger T key went), but Y, busy, stayed.
+    const key = (x: number, z: number): number => tKey(x, z, 0, 0, rd);
+    expect(w.fake.frees.slice(f0).some(([x, z]) => notBefore(key, y.cx, y.cz, x, z))).toBe(true);
+    expect(has(w.fake.frees.slice(f0), y.cx, y.cz)).toBe(false);
+    expect(w.fake.violations).toEqual([]);
+    w.settle(w.fake.pending.findIndex(isY));
+    await flush();
+    const f1 = w.fake.frees.length;
+    await settleDown(w, c, cam(0, 0), lcg(5));
+    expect(has(w.fake.frees.slice(f1), y.cx, y.cz)).toBe(true);
+    expect(w.fake.records.get(slotOf(y.cx, y.cz))).toMatchObject({ cx: y.cx, cz: y.cz, status: 3, epoch: 2 });
+    expect(w.fake.violations).toEqual([]);
+    const n = read(c);
+    expect([n.stale, n.MESH.done]).toEqual([0, n.MESH.needed]);
+  });
+
+  test('a column at the applied epoch is never freed (an undo keeps it)', async () => {
+    const rd = 6;
+    const { w, c } = make({ rd, workers: 5 });
+    await fill(w, c, cam(0, 0), 4242);
+    applyTo(w, c, 2);
+    const pick = lcg(99);
+    await steps(w, c, cam(0, 0), pick, 3, 20);
+    // The columns still at epoch 1 (never freed under 2) are current again after the undo.
+    const kept = [...w.fake.records.values()].filter((r) => r.epoch === 1).map((r) => [r.cx, r.cz] as const);
+    expect(kept.length).toBeGreaterThan(100);
+    applyTo(w, c, 1);
+    const f0 = w.fake.frees.length;
+    const mark = w.fake.issued.length;
+    await settleDown(w, c, cam(0, 0), pick);
+    expect(w.fake.violations).toEqual([]);
+    const frees = w.fake.frees.slice(f0);
+    expect(frees.length).toBeGreaterThan(0);
+    for (const [x, z] of kept) {
+      expect(has(frees, x, z), `(${x}, ${z}) freed`).toBe(false);
+      expect(w.fake.issued.slice(mark).some((j) => j.cx === x && j.cz === z && j.stage === 'T'), `(${x}, ${z}) regenerated`).toBe(false);
+    }
+    const n = read(c);
+    expect([n.stale, n.epoch]).toEqual([0, 1]);
+    expect(doneOf(n)).toEqual({ T: n.T.needed, D: n.D.needed, L: n.L.needed, MESH: n.MESH.needed });
+  });
+
+  test('no D, L or MESH is issued while its 3 × 3 is not all at the applied epoch (the fake checks every issue against its records\' epochs)', async () => {
+    const rd = 6;
+    const { w, c } = make({ rd, workers: 5 });
+    await fill(w, c, cam(0, 0), 4242);
+    const mark = w.fake.issued.length;
+    applyTo(w, c, 2);
+    const pick = lcg(3);
+    await steps(w, c, cam(0, 0), pick, 10, 12);
+    applyTo(w, c, 3);
+    await settleDown(w, c, cam(0, 0), pick);
+    expect(w.fake.violations).toEqual([]);
+    const after = perStage(w.fake.issued.slice(mark));
+    expect(after.D).toBeGreaterThan(0);
+    expect(after.L).toBeGreaterThan(0);
+    expect(after.MESH).toBeGreaterThan(0);
+    expect(read(c).stale).toBe(0);
+  });
+
+  test('a MESH in flight at apply and settling after it is not staged (dropped, as its seq is superseded)', async () => {
+    const { w, c } = make({ rd: 6, workers: 5 });
+    c.update(cam(0, 0));
+    await flush();
+    while (!w.fake.pending.some((p) => p.stage === 'MESH')) { w.settle(); await flush(); }
+    const i = w.fake.pending.findIndex((p) => p.stage === 'MESH');
+    const m = w.fake.pending[i]!;
+    applyTo(w, c, 2);
+    const staged = w.fake.stages.length;
+    const dropped = read(c).dropped;
+    w.settle(i);
+    await flush();
+    expect(w.fake.stages.slice(staged).some((s) => s.cx === m.cx && s.cz === m.cz)).toBe(false);
+    expect(read(c).dropped).toBe(dropped + 1);
+    await settleDown(w, c, cam(0, 0), lcg(8));
+    expect(w.fake.violations).toEqual([]);
+    const at = w.fake.stages.flatMap((s, k) => (s.cx === m.cx && s.cz === m.cz ? [w.fake.stageEpochs[k]] : []));
+    expect(at).toEqual([2]);
+  });
+
+  test('stale meshes outside the MESH set are removed after apply, ≤ 64 per update', async () => {
+    // A fill at RD 12, then RD 11: the meshes between the RD 11 disc and its keepMesh (RD + 1 = the RD 12 disc) stay
+    // shown outside the MESH set (SP4b's hysteresis), more than 64 of them.
+    const { w, c } = make({ rd: 12 });
+    await fill(w, c, cam(0, 0));
+    c.setRenderDistance(11);
+    await fill(w, c, cam(0, 0));
+    expect(w.fake.removes).toEqual([]);
+    const mesh = new Set(setKeys('MESH', 11, 0, 0));
+    const ring = [...w.fake.revealed].filter((k) => !mesh.has(k));
+    expect(ring.length).toBeGreaterThan(MESH_REMOVALS_PER_FRAME);
+    expect(w.fake.violations).toEqual([]);
+    applyTo(w, c, 2);
+    const d = deltas(w);
+    c.update(cam(0, 0));
+    const first = w.fake.removes.slice(-d().removes);
+    c.update(cam(0, 0));
+    expect(d().removes).toBe(ring.length - MESH_REMOVALS_PER_FRAME);
+    expect(first.length).toBe(MESH_REMOVALS_PER_FRAME);
+    for (const [x, z] of w.fake.removes) expect(mesh.has(colKey(x, z)), `(${x}, ${z}) removed`).toBe(false);
+    expect(new Set(w.fake.removes.map(([x, z]) => colKey(x, z)))).toEqual(new Set(ring));
+    await settleDown(w, c, cam(0, 0), lcg(12));
+    expect(w.fake.violations).toEqual([]);
+    expect([...w.fake.revealed].every((k) => mesh.has(k))).toBe(true);
+    expect(read(c).stale).toBe(0);
+  });
+
+  test('adopt frees and stages nothing; an Apply of the epoch already applied frees nothing', async () => {
+    for (const how of ['adopt', 'apply'] as const) {
+      const { w, c } = make({ rd: 4 });
+      await fill(w, c, cam(0, 0));
+      const side = (): number[] => [w.fake.issued.length, w.fake.frees.length, w.fake.stages.length, w.fake.unstages.length, w.fake.removes.length];
+      const before = side();
+      if (how === 'adopt') {
+        w.fake.generation++;
+        c.adopt(w.fake.generation);
+      } else {
+        applyTo(w, c, 1);
+      }
+      for (let i = 0; i < 5; i++) await fill(w, c, cam(0, 0));
+      expect(side(), how).toEqual(before);
+      const n = read(c);
+      expect([n.stale, n.epoch], how).toEqual([0, 1]);
+      expect(doneOf(n), how).toEqual({ T: 213, D: 157, L: 109, MESH: 69 });
+      expect(w.fake.violations).toEqual([]);
+    }
+  });
+
+  test('the sink column: apply, let 30 stale columns be freed with their old meshes kept, then move the camera 40 columns (and teleport 640) before they regenerate: every column the fake sink holds is tracked by its slot or was removed, and the removals name the old columns', async () => {
+    for (const to of [40, 640]) {
+      const rd = 6;
+      const { w, c } = make({ rd, workers: 5 });
+      await fill(w, c, cam(0, 0), 4242);
+      const old = [...w.fake.revealed];
+      // Applied under a generation the pool does not hold yet: the frees run (in `update`) and nothing is issued, so the
+      // freed columns keep their old meshes and do not regenerate.
+      c.apply({ epoch: 2, generation: 1, from: 'T' });
+      const f0 = w.fake.frees.length;
+      const n = w.fake.issued.length;
+      c.update(cam(0, 0));
+      c.update(cam(0, 0));
+      const freed = w.fake.frees.slice(f0);
+      expect(freed.length).toBeGreaterThanOrEqual(30);
+      expect(w.fake.issued.length).toBe(n);
+      for (const [x, z] of freed) expect(w.fake.revealed.has(colKey(x, z)), `(${x}, ${z}) kept its mesh`).toBe(true);
+      expect(w.fake.removes).toEqual([]);
+      w.fake.generation = 1;
+      // The move's classification removes each kept mesh before its slot follows another column (C1), outside the
+      // 64 mesh removals of the frame, so they are all gone after the first update there.
+      c.update(cam(to, 0));
+      for (const [x, z] of freed) expect(has(w.fake.removes, x, z), `(${x}, ${z}) removed at the move (to ${to})`).toBe(true);
+      await settleDown(w, c, cam(to, 0), lcg(4242));
+      expect(w.fake.violations, `to ${to}`).toEqual([]);
+      expect(w.fake.events).toEqual([]);
+      const { held, strays } = replaySink(w);
+      expect(strays).toEqual([]);
+      expect([...held].sort((a, b) => a - b)).toEqual([...w.fake.revealed].sort((a, b) => a - b));
+      // Tracked by its slot: every held column lies in keepMesh around the camera (inside the window, where a slot's
+      // window column is the column itself).
+      const keep = new Set(w.fake.stages.filter((s) => hasFlag(M_KEEP_MESH, s.cx, s.cz, to, 0, rd)).map((s) => colKey(s.cx, s.cz)));
+      for (const k of held) expect(keep.has(k), `${k} held outside keepMesh around (${to}, 0)`).toBe(true);
+      const removed = new Set(w.fake.removes.map(([x, z]) => colKey(x, z)));
+      for (const [x, z] of freed) expect(removed.has(colKey(x, z)), `(${x}, ${z}) removed`).toBe(true);
+      for (const k of old) expect(removed.has(k)).toBe(true);
+      for (const k of setKeys('MESH', rd, to, 0)) expect(w.fake.revealedEpoch.get(k)).toBe(2);
+    }
+  });
+
+  test('a first reveal dropped at apply (unstage true with nothing shown): the sink holds nothing for the column, so no later move removes it, and it is meshed again at the new epoch', async () => {
+    const rd = 6;
+    const { w, c } = make({ rd, workers: 5 });
+    c.update(cam(0, 0));
+    await flush();
+    const pick = lcg(23);
+    while (w.fake.stages.length < 20) { w.settle(pick(w.fake.pending.length)); await flush(); }
+    const held = w.fake.revealed.size;
+    w.fake.unstageReturns = () => true;
+    applyTo(w, c, 2);
+    expect(w.fake.unstages).toHaveLength(held);
+    expect(w.fake.revealed.size).toBe(0);
+    await settleDown(w, c, cam(40, 0), pick);
+    expect(w.fake.violations).toEqual([]);
+    expect(w.fake.events).toEqual([]);
+    expect(w.fake.removes).toEqual([]);
+    for (const k of setKeys('MESH', rd, 40, 0)) expect(w.fake.revealedEpoch.get(k)).toBe(2);
+    const n = read(c);
+    expect([n.stale, n.MESH.done]).toEqual([0, n.MESH.needed]);
+  });
+
+  test('the mesh epochs (1): right after a teleport and during the first fill counts.stale is 0 (Absent columns are needed, not stale)', async () => {
+    const { w, c } = make({ rd: 6, workers: 5 });
+    const k = createCoordinatorCounts();
+    const pick = lcg(61);
+    for (const at of [cam(0, 0), cam(640, 0)]) {
+      c.update(at);
+      await flush();
+      expect(c.counts(k).stale).toBe(0);
+      for (let u = 0; u < 60; u++) {
+        while (w.fake.pending.length > 0) {
+          w.settle(pick(w.fake.pending.length));
+          await flush();
+          expect(c.counts(k).stale).toBe(0);
+        }
+        c.update(at);
+        await flush();
+        expect(c.counts(k).stale).toBe(0);
+      }
+      expect(c.counts(k).MESH.done).toBe(k.MESH.needed);
+    }
+    expect(w.fake.violations).toEqual([]);
+  });
+
+  test('the mesh epochs (2): apply A → B, X freed with its A mesh shown, undo to A before X\'s B payload is staged: X regenerates as A, is marked meshed without a MESH, and MESH done reaches needed', async () => {
+    const rd = 6;
+    const { w, c } = make({ rd, workers: 5 });
+    await fill(w, c, cam(0, 0), 4242);
+    const mark = w.fake.issued.length;
+    const staged = w.fake.stages.length;
+    applyTo(w, c, 2);
+    const f0 = w.fake.frees.length;
+    c.update(cam(0, 0));
+    const [xx, xz] = w.fake.frees[f0]!;
+    const x = colKey(xx, xz);
+    expect(w.fake.revealedEpoch.get(x)).toBe(1);
+    expect(w.fake.shown.get(x)).toBe(1);
+    // Undo to A at once: X's B T may be in flight, its B payload is not staged.
+    applyTo(w, c, 1);
+    const undo = w.fake.issued.length;
+    await settleDown(w, c, cam(0, 0), lcg(4242));
+    expect(w.fake.violations).toEqual([]);
+    expect(w.fake.events).toEqual([]);
+    expect(w.fake.records.get(slotOf(xx, xz))).toMatchObject({ cx: xx, cz: xz, status: 3, epoch: 1 });
+    expect(w.fake.issued.slice(undo).some((j) => j.stage === 'T' && j.cx === xx && j.cz === xz)).toBe(true);
+    expect(w.fake.issued.slice(mark).some((j) => j.stage === 'MESH' && j.cx === xx && j.cz === xz)).toBe(false);
+    expect(w.fake.stages.slice(staged).some((s) => s.cx === xx && s.cz === xz)).toBe(false);
+    expect(w.fake.removes.some(([a, b]) => a === xx && b === xz)).toBe(false);
+    expect(w.fake.revealedEpoch.get(x)).toBe(1);
+    const n = read(c);
+    expect([n.stale, n.epoch, n.MESH.done]).toEqual([0, 1, n.MESH.needed]);
+  });
+
+  test('the mesh epochs (3): X\'s B payload staged, then an undo whose unstage returns true: X still shows A and no MESH is issued for it; with unstage returning false (B already shown), X\'s shown epoch becomes B and it re-meshes as A', async () => {
+    for (const drops of [true, false]) {
+      const rd = 6;
+      const { w, c } = make({ rd, workers: 5 });
+      await fill(w, c, cam(0, 0), 4242);
+      const staged = w.fake.stages.length;
+      applyTo(w, c, 2);
+      const f0 = w.fake.frees.length;
+      c.update(cam(0, 0));
+      // X: the first column freed; run until its B payload is staged.
+      const [xx, xz] = w.fake.frees[f0]!;
+      const x = colKey(xx, xz);
+      const pick = lcg(4242);
+      const stagedB = (): boolean => w.fake.stages.slice(staged).some((s) => s.cx === xx && s.cz === xz);
+      for (let u = 0; u < 200 && !stagedB(); u++) {
+        await flush();
+        for (let i = 0; i < 4 && w.fake.pending.length > 0 && !stagedB(); i++) { w.settle(pick(w.fake.pending.length)); await flush(); }
+        if (!stagedB()) c.update(cam(0, 0));
+      }
+      expect(stagedB()).toBe(true);
+      expect([w.fake.shown.get(x), w.fake.staged.get(x)]).toEqual([1, 2]);
+      w.fake.unstageReturns = (cx, cz) => drops && cx === xx && cz === xz;
+      const undo = w.fake.issued.length;
+      const s0 = w.fake.stages.length;
+      applyTo(w, c, 1);
+      expect(has(w.fake.unstages, xx, xz)).toBe(true);
+      expect(w.fake.revealedEpoch.get(x), `drops ${drops}`).toBe(drops ? 1 : 2);
+      expect(w.fake.shown.get(x)).toBe(drops ? 1 : 2);
+      await settleDown(w, c, cam(0, 0), pick);
+      expect(w.fake.violations, `drops ${drops}`).toEqual([]);
+      expect(w.fake.events).toEqual([]);
+      const meshes = w.fake.issued.slice(undo).filter((j) => j.stage === 'MESH' && j.cx === xx && j.cz === xz).length;
+      const stagesX = w.fake.stages.flatMap((s, k) => (k >= s0 && s.cx === xx && s.cz === xz ? [w.fake.stageEpochs[k]] : []));
+      if (drops) {
+        expect(meshes).toBe(0);
+        expect(stagesX).toEqual([]);
+      } else {
+        expect(meshes).toBe(1);
+        expect(stagesX).toEqual([1]);
+      }
+      expect(w.fake.records.get(slotOf(xx, xz))).toMatchObject({ cx: xx, cz: xz, status: 3, epoch: 1 });
+      expect(w.fake.revealedEpoch.get(x)).toBe(1);
+      const n = read(c);
+      expect([n.stale, n.epoch, n.MESH.done]).toEqual([0, 1, n.MESH.needed]);
+    }
+  });
+
+  test('Review Focus 1: apply A → B, 20 updates, apply C, 20 updates, apply B again, jobs settling in LCG order (seed 4242): every MESH-set column ends shown at B, stage is never called with stagedEpoch ≠ 0, the fake sink never shows two seqs for a column, counts.stale reaches 0, and no column is freed while pinned or busy', async () => {
+    const rd = 6;
+    const { w, c } = make({ rd, workers: 5 });
+    await fill(w, c, cam(0, 0), 4242);
+    const pick = lcg(4242);
+    applyTo(w, c, 2);
+    // After the first Apply some B payloads wait for their reveal at the next one (dropped) and some are shown.
+    const coin = lcg(7);
+    w.fake.unstageReturns = () => coin(2) === 0;
+    await steps(w, c, cam(0, 0), pick, 20, 10);
+    expect(read(c).stale).toBeGreaterThan(0);
+    applyTo(w, c, 3);
+    await steps(w, c, cam(0, 0), pick, 20, 10);
+    expect(read(c).stale).toBeGreaterThan(0);
+    applyTo(w, c, 2);
+    await settleDown(w, c, cam(0, 0), pick);
+    // The fake flags a free under a pin or a job, a stage over a pending payload or at an epoch already held, and a D, L
+    // or MESH whose 3 × 3 is not at the applied epoch; the coordinator's own stage assertion would be a fatal event.
+    expect(w.fake.violations).toEqual([]);
+    expect(w.fake.events).toEqual([]);
+    expect(w.fake.unstages.length).toBeGreaterThan(0);
+    // Never two seqs for a column: each (column, seq) staged once, and never over a pending payload (above).
+    expect(new Set(w.fake.stages.map((s) => `${s.cx},${s.cz},${s.seq}`)).size).toBe(w.fake.stages.length);
+    for (const k of setKeys('MESH', rd, 0, 0)) expect(w.fake.revealedEpoch.get(k), `${k}`).toBe(2);
+    const n = read(c);
+    expect([n.stale, n.epoch]).toEqual([0, 2]);
+    expect(doneOf(n)).toEqual({ T: n.T.needed, D: n.D.needed, L: n.L.needed, MESH: n.MESH.needed });
+  });
+
+  test('Review Focus 5: teleport 640 columns east at RD 6, 10 updates later apply epoch 2: no ghost, every old-place column removed, every MESH-set column ends shown at epoch 2, stage never over a pending payload, and the first 16 T after the Apply are nearest-first from the new place', async () => {
+    const rd = 6;
+    const { w, c } = make({ rd, workers: 5 });
+    await fill(w, c, cam(0, 0), 4242);
+    const old = [...w.fake.revealed];
+    const pick = lcg(4242);
+    await steps(w, c, cam(640, 0), pick, 10, 10);
+    const mark = w.fake.issued.length;
+    applyTo(w, c, 2);
+    await settleDown(w, c, cam(640, 0), pick);
+    expect(w.fake.violations).toEqual([]);
+    expect(w.fake.events).toEqual([]);
+    const { held, strays } = replaySink(w);
+    expect(strays).toEqual([]);
+    const keep = new Set(w.fake.stages.filter((s) => hasFlag(M_KEEP_MESH, s.cx, s.cz, 640, 0, rd)).map((s) => colKey(s.cx, s.cz)));
+    for (const k of held) expect(keep.has(k), `${k} held outside keepMesh around (640, 0)`).toBe(true);
+    const removed = new Set(w.fake.removes.map(([x, z]) => colKey(x, z)));
+    for (const k of old) expect(removed.has(k)).toBe(true);
+    for (const k of setKeys('MESH', rd, 640, 0)) expect(w.fake.revealedEpoch.get(k)).toBe(2);
+    const ts = w.fake.issued.slice(mark).filter((j) => j.stage === 'T').slice(0, 16);
+    expect(ts).toHaveLength(16);
+    const key = (x: number, z: number): number => streamScore(x - 640, z, 0, -1, STAGE_BONUS.T);
+    for (let i = 1; i < ts.length; i++) expect(notBefore(key, ts[i - 1]!.cx, ts[i - 1]!.cz, ts[i]!.cx, ts[i]!.cz), `T ${i}`).toBe(true);
+    const n = read(c);
+    expect([n.stale, n.epoch, n.MESH.done]).toEqual([0, 2, n.MESH.needed]);
   });
 });
 

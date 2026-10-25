@@ -93,6 +93,8 @@ const WARM_UP = 10 * N;
  */
 const FRAME_WARM_UP = N;
 const ATTEMPTS = 3;
+/** `apply` + `update` pairs measured (and warmed up) in the Apply test: each is a pass over the 4,096 slots and a rebuild. */
+const APPLY_N = 1_000;
 /**
  * The measured calls run in chunks of N / CHUNKS, each read on its own: under the full suite's load V8 shrinks the
  * young generation to 1 MB of usable space (its allocation rate per second is low), so the frame step's 1.6-1.9 MB over
@@ -146,11 +148,11 @@ function chunkGrowth(call: () => void, n: number): { bytes: number; gcs: number;
 }
 
 /**
- * Warms `call` up with `warmUp` calls, then measures the heap growth over N more with no GC inside a reading: after a
- * double `gc()`, the N calls run as `CHUNKS` chunks, each read on its own (`chunkGrowth`), and the growths are summed.
- * An attempt that read `max` or more is followed by another, up to `ATTEMPTS`.
+ * Warms `call` up with `warmUp` calls, then measures the heap growth over `n` (N by default) more with no GC inside a
+ * reading: after a double `gc()`, the calls run as `CHUNKS` chunks, each read on its own (`chunkGrowth`), and the
+ * growths are summed. An attempt that read `max` or more is followed by another, up to `ATTEMPTS`.
  */
-function allocationOver(call: () => void, warmUp: number, max: number): Growth {
+function allocationOver(call: () => void, warmUp: number, max: number, n = N): Growth {
   for (let i = 0; i < warmUp; i++) call();
   let calls = warmUp;
   const readings: number[] = [];
@@ -162,7 +164,7 @@ function allocationOver(call: () => void, warmUp: number, max: number): Growth {
     bytes = 0;
     let seen = 0;
     for (let c = 0; c < CHUNKS; c++) {
-      const g = chunkGrowth(call, N / CHUNKS);
+      const g = chunkGrowth(call, n / CHUNKS);
       bytes += g.bytes;
       seen += g.gcs;
       calls += g.calls;
@@ -397,6 +399,31 @@ describe('zero allocation at rest (SP4b spec §3.10, D25)', () => {
     }, N / 10, ZERO_ALLOC_MAX);
     expect(counts.T.inFlight + counts.D.inFlight + counts.L.inFlight + counts.MESH.inFlight).toBe(0);
     expect(counts.T.done).toBe(counts.T.needed);
+    expectAtRest(g);
+  }, TIMEOUT_MS);
+
+  test(`${APPLY_N} × (coordinator.apply alternating epochs 2 and 3 under a held generation, then one update) after a fill grow the heap by less than 256 KB (SP4c spec §4.10)`, async () => {
+    // A coordinator of its own (the shared one stays at rest for the frame step). The fake pool's generation is 0 and
+    // each Apply is under generation 1, so the world holds: no job is issued and no promise made, while every Apply
+    // resolves the pending payloads, marks the stale columns and rebuilds the heaps, and every update frees 16 of them
+    // (their old meshes kept) and hides the stale meshes outside the MESH set.
+    const fly = restingFly();
+    const cam = { x: fly.x, z: fly.z, yawDeg: fly.yaw };
+    const c = await filledCoordinator(cam);
+    const counts = createCoordinatorCounts();
+    // The arguments are made once: the call under test is `apply`, not the caller's literal.
+    const to2 = { epoch: 2, generation: 1, from: 'T' } as const;
+    const to3 = { epoch: 3, generation: 1, from: 'T' } as const;
+    let odd = false;
+    const g = allocationOver(() => {
+      c.apply(odd ? to3 : to2);
+      odd = !odd;
+      c.update(cam);
+    }, APPLY_N, ZERO_ALLOC_MAX, APPLY_N);
+    c.counts(counts);
+    expect(counts.T.inFlight + counts.D.inFlight + counts.L.inFlight + counts.MESH.inFlight).toBe(0);
+    expect(counts.epoch === 2 || counts.epoch === 3).toBe(true);
+    expect(counts.stale).toBeGreaterThan(0);
     expectAtRest(g);
   }, TIMEOUT_MS);
 
