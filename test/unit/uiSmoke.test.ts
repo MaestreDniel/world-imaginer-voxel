@@ -685,6 +685,8 @@ function hudData(o: { x: number; y: number; z: number; rd: number; revealed: num
   return {
     frame: { fps: 9.5, p50: 104.2, p95: 130.9, count: 40 },
     stages: { T: stage, D: stage, L: stage, MESH: stage },
+    stale: 0,
+    needed: 69,
     sections: 412,
     revealed: o.revealed,
     genCap: 3,

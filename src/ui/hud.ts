@@ -38,6 +38,12 @@ export interface HudData {
   readonly frame: FrameSummary;
   /** Per stage, in the current sets: done / needed, in flight and queued (the coordinator's counts). */
   readonly stages: { readonly T: HudStage; readonly D: HudStage; readonly L: HudStage; readonly MESH: HudStage };
+  /**
+   * The MESH-set columns still stale after an Apply (`CoordinatorCounts.stale`, SP4c spec §4.5) and the MESH set's size
+   * (`MESH.needed`): the line "stale <stale> / <needed>" shows while `stale` is above 0 (D26).
+   */
+  readonly stale: number;
+  readonly needed: number;
   /** Section meshes uploaded (`SectionRendererCounts.rows`). */
   readonly sections: number;
   /** Columns shown (`SectionRendererCounts.columnsRevealed`). */
@@ -103,10 +109,14 @@ function hudLines(d: HudData, hints: string): string[] {
   const { T, D, L, MESH } = d.stages;
   const of = (s: HudStage): string => `${s.done}/${s.needed}`;
   const jobs = (s: HudStage): string => `${s.inFlight}/${s.queued}`;
-  return [
+  const lines = [
     fpsLine(d.frame),
     `columns T ${of(T)} · D ${of(D)} · L ${of(L)} · meshed ${of(MESH)} · revealed ${d.revealed} · sections ${d.sections}`,
     `in flight / queued T ${jobs(T)} · D ${jobs(D)} · L ${jobs(L)} · MESH ${jobs(MESH)}`,
+  ];
+  // While the world regenerates after an Apply (SP4c spec §4.5, D26).
+  if (d.stale > 0) lines.push(`stale ${d.stale} / ${d.needed}`);
+  lines.push(
     `genCap ${d.genCap} · dropped ${d.dropped} · failed ${d.failed}`,
     `draw calls ${d.drawCalls} · triangles ${compact(d.triangles)}`,
     `x ${p.x.toFixed(1)} y ${p.y.toFixed(1)} z ${p.z.toFixed(1)} · column ${chunkCoord(Math.floor(p.x))}, ${chunkCoord(Math.floor(p.z))}`,
@@ -115,12 +125,14 @@ function hudLines(d: HudData, hints: string): string[] {
     `regions ${d.regions} · GPU ${d.gpuMB.toFixed(1)} MB`,
     `GPU ${d.renderer ?? 'not reported'}`,
     hints,
-  ];
+  );
+  return lines;
 }
 
 /**
  * The world HUD (SP4a spec §6.9, D30; SP4b spec §7.3): the fps line plus the counts (SP4b: the streaming counts), one
- * line each, refreshed every 250 ms from `read`. The page toggles it on F3 (`toggle`); while hidden it does not read. SP10 grows F3 into the full overlay.
+ * line each, refreshed every 250 ms from `read`; SP4c adds "stale n / needed" while the world regenerates (§4.5). The
+ * page toggles it on F3 (`toggle`); while hidden it does not read. SP10 grows F3 into the full overlay.
  */
 export function mountWorldHud(host: HTMLElement, read: () => HudData): { toggle(): void; dispose(): void } {
   const box = document.createElement('div');
@@ -134,6 +146,8 @@ export function mountWorldHud(host: HTMLElement, read: () => HudData): { toggle(
       box.append(row);
       rows.push(row);
     }
+    // A line that went (the stale count back at 0) takes its row with it.
+    while (rows.length > lines.length) rows.pop()!.remove();
     lines.forEach((text, i) => { rows[i]!.textContent = text; });
   };
   host.append(box);

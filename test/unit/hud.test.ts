@@ -11,6 +11,8 @@ const DATA: HudData = {
     L: { done: 593, needed: 593, inFlight: 0, queued: 0 },
     MESH: { done: 489, needed: 489, inFlight: 0, queued: 0 },
   },
+  stale: 0,
+  needed: 489,
   sections: 3512,
   revealed: 489,
   genCap: 5,
@@ -99,6 +101,21 @@ describe('mountWorldHud (SP4a spec §6.9, D30)', () => {
       'in flight / queued T 2/120 · D 1/90 · L 0/80 · MESH 3/70',
       'revealed 388', 'genCap 2', 'dropped 4', 'failed 1', 'RD 12 (fog 10.3)', 'workers 5/6', 'regions 23', 'GPU 101.3 MB',
     ]) expect(text).toContain(part);
+  });
+
+  test('stale 0: no line; stale 12 of 349: `stale 12 / 349` (SP4c spec §4.5, D26); back to 0, the line goes', () => {
+    let stale = 0;
+    mount(() => ({ ...DATA, stale, needed: 349 }));
+    expect(dom.body.textContent).not.toContain('stale');
+    stale = 12;
+    vi.advanceTimersByTime(250);
+    expect(dom.body.textContent).toContain('stale 12 / 349');
+    const lines = dom.body.children[0]!.children.map((r) => r.textContent);
+    expect(lines).toContain('stale 12 / 349');
+    stale = 0;
+    vi.advanceTimersByTime(250);
+    expect(dom.body.textContent).not.toContain('stale');
+    expect(dom.body.children[0]!.children.map((r) => r.textContent)).toHaveLength(lines.length - 1);
   });
 
   test('position and column; mesh, paused and an unreported renderer string', () => {

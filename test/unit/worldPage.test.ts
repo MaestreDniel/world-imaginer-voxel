@@ -4,6 +4,8 @@ import { afterEach, beforeEach, describe, expect, test, vi } from 'vitest';
 import { evaluateWorldCapabilities, type CapabilityReport } from '../../src/engine/capabilityRules';
 import type { StreamEvent } from '../../src/engine/coordinator';
 import { lowerRd } from '../../src/engine/renderDistance';
+import { WorldSession, type SessionListener } from '../../src/engine/session';
+import { validateParamTrees } from '../../src/gen/trees';
 import { DEFAULT_KEYMAP } from '../../src/player/keymap';
 import { applyRenderDistance, cameraFar } from '../../src/render/renderer';
 import { mountHelp } from '../../src/ui/help';
@@ -12,13 +14,14 @@ import { SETTINGS_DEFAULTS, type WorldSettings } from '../../src/ui/settings';
 import { StoreCorrupt } from '../../src/world/store/pool';
 import { createBenchDriver } from '../../src/ui/world/bench';
 import { createFogEase } from '../../src/ui/world/fogEase';
+import { createNotices } from '../../src/ui/common/notice';
 import { URL_HASH_MAX, URL_OVERSIZE_NOTICE, createUrlWriter, oversizeNotice } from '../../src/ui/common/urlWriter';
 import { DEFAULT_MAP_STATE, decodeMapState, openMapSession, type MapView } from '../../src/ui/map/mapState';
 import { WORLD_MAP_BPP, worldMapView } from '../../src/ui/world/mapOverlay';
 import { createReloader, createWorldUrl, worldHash, type HereState } from '../../src/ui/world/reload';
 import {
-  createRdControl, createWorldNotices, everyFrameUntil, failBeforeReveal, handleContextLoss, handleStreamEvent, helpChange, offerLowerRd,
-  onDriverStatus, rdShownOnLoad, releaseOnFailure, reloadRd, runTeardown, stopAfterFailure,
+  createRdControl, createUndoNotice, createWorldNotices, everyFrameUntil, failBeforeReveal, handleContextLoss, handleStreamEvent, helpChange, offerLowerRd,
+  onDriverStatus, rdShownOnLoad, releaseOnFailure, reloadRd, runTeardown, stopAfterFailure, UNDO_NOTICE_MS,
 } from '../../src/ui/world/worldPage';
 import { installDom, type FakeElement } from './fixtures/domShim';
 
@@ -817,5 +820,137 @@ describe('the world\'s URL (createWorldUrl, SP4c spec §1.6, D20)', () => {
     expect(src).toMatch(/viewChanged: \(\) => worldUrl\.viewChanged\(\)/);
     expect(src).toMatch(/onArrive: \(\) => worldUrl\.arrived\(fly\)/);
     expect(src).toMatch(/teardown\.push\(\(\) => urlWriter\.dispose\(\)\)/);
+  });
+});
+
+describe('the world\'s notices over the map (SP4c spec §2.1, D27)', () => {
+  let dom: ReturnType<typeof installDom>;
+  beforeEach(() => { dom = installDom(); });
+  afterEach(() => { vi.unstubAllGlobals(); vi.useRealTimers(); });
+
+  /** The world's notices in `.world-notices`, and a tool's notice row (`createNotices`, as the map tool's). */
+  function setup() {
+    const notices = createWorldNotices(dom.body as unknown as HTMLElement, createReloader(vi.fn(), vi.fn()));
+    const toolRow = dom.document.createElement('div');
+    dom.body.append(toolRow);
+    const tool = createNotices(toolRow as unknown as HTMLElement);
+    const world = () => dom.el('world-notices').children.map((d) => d.textContent);
+    const row = () => toolRow.children.map((d) => d.textContent);
+    return { notices, tool, world, row };
+  }
+  /** The page's three transient notices: StoreFull, the URL oversize, "Could not teleport" (as the page's `onFail`). */
+  const showAll = (notices: ReturnType<typeof createWorldNotices>, apply: () => void): void => {
+    notices.storeFull(6, apply);
+    oversizeNotice(notices)(true);
+    notices.show('Could not teleport', { kind: 'warn', timeoutMs: 4000 });
+  };
+
+  test('while routed, storeFull, the URL-oversize notice and `Could not teleport` show in the tool\'s row and not in `.world-notices`; unrouted, the reverse', () => {
+    vi.useFakeTimers();
+    const s = setup();
+    const apply = vi.fn();
+    s.notices.route(s.tool);
+    showAll(s.notices, apply);
+    expect(s.world()).toEqual([]);
+    expect(s.row()).toHaveLength(3);
+    expect(s.row()[0]).toContain('The world store is full: new terrain is paused.');
+    expect(s.row()[1]).toContain(URL_OVERSIZE_NOTICE);
+    expect(s.row()[2]).toContain('Could not teleport');
+    // StoreFull's "Lower to RD 6" works from the tool's row.
+    const lower = dom.body.querySelectorAll('button').find((b: FakeElement) => b.textContent === 'Lower to RD 6');
+    lower!.click();
+    expect(apply).toHaveBeenCalledTimes(1);
+    // "Could not teleport" goes after 4 s; the oversize notice is hidden when the hash fits again.
+    vi.advanceTimersByTime(4000);
+    oversizeNotice(s.notices)(false);
+    expect(s.row()).toEqual([]);
+
+    s.notices.route(null);
+    showAll(s.notices, apply);
+    expect(s.row()).toEqual([]);
+    expect(s.world()).toHaveLength(3);
+    expect(s.world()[0]).toContain('The world store is full: new terrain is paused.');
+    expect(s.world()[1]).toContain(URL_OVERSIZE_NOTICE);
+    expect(s.world()[2]).toContain('Could not teleport');
+  });
+
+  test('a notice shown before the route is still hidden by its condition\'s end while routed (and the reverse)', () => {
+    const s = setup();
+    oversizeNotice(s.notices)(true);
+    s.notices.route(s.tool);
+    oversizeNotice(s.notices)(false);
+    expect(s.world()).toEqual([]);
+    oversizeNotice(s.notices)(true);
+    s.notices.route(null);
+    oversizeNotice(s.notices)(false);
+    expect(s.row()).toEqual([]);
+  });
+
+  test('the failure panel and the context-loss notice never route', () => {
+    const s = setup();
+    s.notices.route(s.tool);
+    s.notices.failed('Streaming stopped: x', 'details', '/?at=0,0');
+    s.notices.contextLost('/?at=0,0');
+    expect(s.row()).toEqual([]);
+    expect(dom.el('world-failed').textContent).toContain('The world stopped.');
+    expect(dom.el('world-context-lost').textContent).toContain('The graphics context was lost');
+  });
+
+  test('the page wires them: "Could not teleport" as a 4 s warning, the overlay gets the notices, `onApplied` calls the undo notice', () => {
+    // The page's post-reveal wiring cannot be mounted in the unit project, so its source is pinned.
+    const src = readFileSync(new URL('../../src/ui/world/worldPage.ts', import.meta.url), 'utf8');
+    expect(src).toMatch(/onFail: \(\) => notices\.show\('Could not teleport', \{ kind: 'warn', timeoutMs: 4000 \}\)/);
+    const start = src.indexOf('createMapOverlay({');
+    expect(src.slice(start, src.indexOf('\n    });', start))).toMatch(/^\s*notices,$/m);
+    expect(src).toMatch(/undoNotice\.applied\(from\)/);
+    expect(src).toMatch(/stale: c\.stale,/);
+    expect(src).toMatch(/needed: c\.MESH\.needed,/);
+  });
+});
+
+describe('createUndoNotice (SP4c spec §2.4, §4.3; D15, D26)', () => {
+  /** A real session, the map's visibility and the notices' `show` as a spy. */
+  function setup(shown = false) {
+    const session = new WorldSession(() => [1, 2], { validateParams: validateParamTrees });
+    let mapShown = shown;
+    const show = vi.fn<(text: string, ms: number) => void>();
+    const notice = createUndoNotice({ subscribe: (l: SessionListener) => session.subscribe(l), mapShown: () => mapShown, show });
+    return { session, show, notice, setShown: (v: boolean) => { mapShown = v; } };
+  }
+  const edit = (session: WorldSession, v: number): void => {
+    const r = session.set('climate.scaleMul', v);
+    if (!r.ok) throw new Error(`the edit was refused: ${JSON.stringify(r.issues)}`);
+  };
+
+  test('an undo with the map hidden shows `Undo` from its Apply for 1,500 ms, a redo `Redo`; with the map shown, nothing; a typed edit\'s Apply shows nothing', () => {
+    expect(UNDO_NOTICE_MS).toBe(1500);
+    const s = setup();
+    edit(s.session, 2);
+    s.notice.applied('T');
+    expect(s.show).not.toHaveBeenCalled();
+    s.session.undo();
+    // Nothing before its Apply.
+    expect(s.show).not.toHaveBeenCalled();
+    s.notice.applied('T');
+    expect(s.show.mock.calls).toEqual([['Undo', 1500]]);
+    s.session.redo();
+    s.notice.applied('T');
+    expect(s.show.mock.calls).toEqual([['Undo', 1500], ['Redo', 1500]]);
+    // An undo that rebuilds nothing (from null) shows it too.
+    s.session.undo();
+    s.notice.applied(null);
+    expect(s.show.mock.calls.at(-1)).toEqual(['Undo', 1500]);
+    // A later Apply with no new change does not repeat it.
+    s.notice.applied(null);
+    expect(s.show).toHaveBeenCalledTimes(3);
+
+    const shown = setup(true);
+    edit(shown.session, 2);
+    shown.notice.applied('T');
+    shown.session.undo();
+    shown.notice.applied('T');
+    shown.session.redo();
+    shown.notice.applied('T');
+    expect(shown.show).not.toHaveBeenCalled();
   });
 });

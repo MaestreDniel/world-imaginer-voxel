@@ -11,14 +11,15 @@ import type { WorkerPool } from '../../src/engine/workerPool';
 import { validateParamTrees } from '../../src/gen/trees';
 import { SPEED_DEFAULT, stepFly, type FlyState } from '../../src/player/fly';
 import { attachInput, isTextEntry } from '../../src/player/input';
+import type { Notices } from '../../src/ui/common/notice';
 import type { MapView } from '../../src/ui/map/mapState';
 import type { MapTool, MapToolDeps } from '../../src/ui/map/mapTool';
 import { createReplayingCanvas, type PreviewDriver } from '../../src/ui/map/previewDriver';
 import type { FpsCap } from '../../src/render/fpsLimiter';
 import type { FrameState } from '../../src/render/frameState';
 import {
-  createMapOverlay, followSession, frameCapFor, MAP_PRELOAD_MS, ownerOf, SPLIT_MIN_WIDTH, splitAvailable, WORLD_MAP_BPP,
-  type MapMode, type MapOverlay,
+  createMapOverlay, followSession, frameCapFor, MAP_PRELOAD_MS, ownerOf, SPLIT_MIN_WIDTH, splitAvailable, WATCH_LIVE_NOTICE,
+  WORLD_MAP_BPP, type MapMode, type MapOverlay,
 } from '../../src/ui/world/mapOverlay';
 import { installDom, type FakeDocument, type FakeElement } from './fixtures/domShim';
 
@@ -179,6 +180,12 @@ function setup(o: {
   const limiter = fakeLimiter(userCap);
   const save = vi.fn();
   const viewChanged = vi.fn();
+  // The world's notices: `route` (D27) and the Watch-live notice's `show` and `hide` (D26).
+  const notices = {
+    route: vi.fn<(target: Notices | null) => void>(),
+    show: vi.fn<(text: string) => void>(),
+    hide: vi.fn<(text: string) => void>(),
+  };
   let now = 0;
   const overlay = createMapOverlay({
     app: app as unknown as HTMLElement,
@@ -202,9 +209,10 @@ function setup(o: {
     now: () => now,
     onTeleport: o.teleport ?? (() => Promise.resolve(false)),
     viewChanged,
+    notices,
   });
   return {
-    doc, app, worldHost, canvas, session, driver, fly, input, timers, overlay, world, limiter, save, viewChanged,
+    doc, app, worldHost, canvas, session, driver, fly, input, timers, overlay, world, limiter, save, viewChanged, notices,
     setNow: (t: number) => { now = t; },
     /** The overlay's host (`div.map-overlay`). */
     host: () => app.children.find((c) => c.className.split(' ').includes('map-overlay'))!,
@@ -545,6 +553,7 @@ describe('modes A and B, the covered cap and Watch live (SP4c spec §2.1, §2.2,
       watchLiveBox: get('map-watch-live').querySelector('input')!,
       centre: get('map-centre'),
       close: get('map-close'),
+      regen: get('map-regen'),
     };
   };
   const SPLIT_REASON = 'Side by side needs a window at least 1,000 px wide';
@@ -753,5 +762,122 @@ describe('modes A and B, the covered cap and Watch live (SP4c spec §2.1, §2.2,
       .toEqual(['Full screen', 'Side by side', 'Watch live', 'Centre on me', '✕ Close (M)']);
     for (const b of [c.full, c.split, c.centre, c.close]) expect(b.type).toBe('button');
     expect(c.watchLiveBox.type).toBe('checkbox');
+  });
+
+  test('ruling R2: narrowing below 1,000 px while B is shown switches to A at once (lock released, the covered cap, the route) without saving; widening does not switch back; a stored B returns on the next wide open', async () => {
+    const s = setup({ mode: 'split', width: 1920, userCap: 0 });
+    const t = await openMounted(s.overlay);
+    s.doc.setPointerLock(s.canvas);
+    expect([s.overlay.mode, s.overlay.owner, s.limiter.cap]).toEqual(['split', 'world', 0]);
+    s.timers.resizeTo(999);
+    expect([s.overlay.mode, s.overlay.shown, s.overlay.owner, s.limiter.cap]).toEqual(['full', true, 'map', 60]);
+    expect(s.doc.exitPointerLockCalls).toBe(1);
+    expect(s.worldHost.classList.contains('split')).toBe(false);
+    expect(s.host().classList.contains('split')).toBe(false);
+    expect(s.world.log).toEqual(['resize', 'frame', 'resize', 'frame']);
+    expect(s.notices.route.mock.calls.at(-1)).toEqual([t.tool.notices]);
+    expect(s.save).not.toHaveBeenCalled();
+    // Widening again does not switch back by itself.
+    s.timers.resizeTo(1200);
+    expect(s.overlay.mode).toBe('full');
+    // The stored B returns on the next open in a wide window.
+    s.overlay.close();
+    s.overlay.open();
+    expect(s.overlay.mode).toBe('split');
+    expect(s.save).not.toHaveBeenCalled();
+  });
+
+  test('after `applied(\'T\')` with Watch live, the notice shows while stale > 0 and goes at 0; M during it returns to the map and hides the notice', async () => {
+    expect(WATCH_LIVE_NOTICE).toBe('Regenerating… near → far · M returns to the map');
+    const counts = createCoordinatorCounts();
+    const s = setup({ mode: 'full', watchLive: true });
+    await openMounted(s.overlay);
+    // Shown, before any Apply: no notice whatever the count.
+    counts.stale = 30;
+    s.overlay.tick(counts);
+    expect(s.notices.show).not.toHaveBeenCalled();
+    s.overlay.applied('T');
+    expect(s.overlay.shown).toBe(false);
+    for (const stale of [30, 20, 10, 1]) {
+      counts.stale = stale;
+      s.overlay.tick(counts);
+    }
+    expect(s.notices.show.mock.calls).toEqual([[WATCH_LIVE_NOTICE]]);
+    expect(s.notices.hide).not.toHaveBeenCalled();
+    counts.stale = 0;
+    s.overlay.tick(counts);
+    expect(s.notices.hide.mock.calls).toEqual([[WATCH_LIVE_NOTICE]]);
+    // A later stale count without a new Watch-live Apply shows nothing.
+    counts.stale = 5;
+    s.overlay.tick(counts);
+    expect(s.notices.show).toHaveBeenCalledTimes(1);
+
+    // M during it: the map returns and the notice goes; later ticks with stale > 0 show nothing.
+    s.overlay.toggle();
+    s.overlay.applied('T');
+    counts.stale = 12;
+    s.overlay.tick(counts);
+    expect(s.notices.show).toHaveBeenCalledTimes(2);
+    s.overlay.toggle();
+    expect(s.overlay.shown).toBe(true);
+    expect(s.notices.hide).toHaveBeenCalledTimes(2);
+    // Hidden before the route: the notice goes from the world's row, not the tool's.
+    expect(s.notices.hide.mock.invocationCallOrder.at(-1)!).toBeLessThan(s.notices.route.mock.invocationCallOrder.at(-1)!);
+    s.overlay.tick(counts);
+    s.overlay.close();
+    s.overlay.tick(counts);
+    expect(s.notices.show).toHaveBeenCalledTimes(2);
+
+    // Watch live off: the map stays and no notice.
+    const off = setup({ mode: 'full', watchLive: false });
+    await openMounted(off.overlay);
+    off.overlay.applied('T');
+    off.overlay.close();
+    off.overlay.tick(counts);
+    expect(off.notices.show).not.toHaveBeenCalled();
+  });
+
+  test('the readout: stale 12 of 349 → `Regenerating 12 / 349` in the slot; stale 0 → none', async () => {
+    const counts = createCoordinatorCounts();
+    const s = setup();
+    const t = await openMounted(s.overlay);
+    const c = controls(t);
+    expect(c.regen.hidden).toBe(true);
+    counts.stale = 12;
+    counts.MESH.needed = 349;
+    s.overlay.tick(counts);
+    expect([c.regen.hidden, c.regen.textContent]).toEqual([false, 'Regenerating 12 / 349']);
+    counts.stale = 11;
+    s.overlay.tick(counts);
+    expect(c.regen.textContent).toBe('Regenerating 11 / 349');
+    counts.stale = 0;
+    s.overlay.tick(counts);
+    expect(c.regen.hidden).toBe(true);
+  });
+
+  test('`route` gets the tool\'s notices on opening in full, null on close, on a switch to split and on `dispose`', async () => {
+    const s = setup({ mode: 'full' });
+    // Not covering before the mount: nothing routed yet.
+    s.overlay.open();
+    expect(s.notices.route).not.toHaveBeenCalled();
+    await settle();
+    const t = tools().at(-1)!;
+    const n = t.tool.notices;
+    expect(s.notices.route.mock.calls).toEqual([[n]]);
+    s.overlay.close();
+    expect(s.notices.route.mock.calls).toEqual([[n], [null]]);
+    s.overlay.open();
+    const c = controls(t);
+    c.split.click();
+    c.full.click();
+    expect(s.notices.route.mock.calls).toEqual([[n], [null], [n], [null], [n]]);
+    s.overlay.dispose();
+    expect(s.notices.route.mock.calls).toEqual([[n], [null], [n], [null], [n], [null]]);
+
+    // Opened in split: nothing routes.
+    const split = setup({ mode: 'split' });
+    await openMounted(split.overlay);
+    split.overlay.close();
+    expect(split.notices.route).not.toHaveBeenCalled();
   });
 });

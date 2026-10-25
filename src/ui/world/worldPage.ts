@@ -70,8 +70,10 @@
  * Live editing (SP4c spec §4.3, §6.2): the coordinator's first epoch is the first draft's genKey interned
  * (`createEpochs`); the apply control (`applyControl.ts`) ticks before every `coordinator.update` and applies the
  * session's last resolved draft once it is quiet (or adopts it when the world is unchanged), its `onApplied` driving
- * Watch live; after every `counts` the pool's aux policy is set from the world's hold, the overlay covering the 3D and
- * the pending T; a configure failure after the reveal is fatal (`onDriverStatus`).
+ * Watch live and the 1.5 s "Undo"/"Redo" notice with the map hidden (`createUndoNotice`); the HUD shows "stale n /
+ * needed" while the world regenerates; while the map covers the 3D the transient notices (StoreFull, the URL oversize,
+ * "Could not teleport") go to the tool's notice row (`WorldNotices.route`, D27); after every `counts` the pool's aux
+ * policy is set from the world's hold, the overlay covering the 3D and the pending T; a configure failure after the reveal is fatal (`onDriverStatus`).
  */
 import { MEDIUM } from '../../core/params/graphicsPresets';
 import { OPENING_T, TIME_SPEEDS } from '../../daynight/dayNight';
@@ -80,9 +82,10 @@ import { evaluateWorldCapabilities, type CapabilityReport } from '../../engine/c
 import {
   createCoordinator, createCoordinatorCounts, phaseName, progressFraction, worldJobsOf, type Coordinator, type StreamEvent,
 } from '../../engine/coordinator';
-import { appliedDraftOf } from '../../engine/invalidation';
+import { appliedDraftOf, type WorldStage } from '../../engine/invalidation';
 import { RD_MAX, reservationRdCap, resolveRenderDistance } from '../../engine/renderDistance';
 import type { Stage } from '../../engine/rings';
+import type { WorldSession } from '../../engine/session';
 import { createThrottle } from '../../engine/throttle';
 import { createUploadBudget } from '../../engine/uploadBudget';
 import { StoreFullError, WorkerFailed, createBrowserPool, poolSize, type WorkerPool } from '../../engine/workerPool';
@@ -97,7 +100,7 @@ import { createStore, type VoxelStore } from '../../world/store/store';
 import { renderErrorScreen } from '../capabilityReport';
 import { el } from '../common/dom';
 import { installShortcuts } from '../common/keys';
-import type { NoticeOptions } from '../common/notice';
+import type { NoticeOptions, Notices } from '../common/notice';
 import { createUrlWriter, oversizeNotice } from '../common/urlWriter';
 import { createFrameStats } from '../frameStats';
 import { mountHelp, type Help } from '../help';
@@ -394,6 +397,13 @@ export interface WorldNotices {
   show(text: string, o?: NoticeOptions): void;
   /** Removes the notice `show` put up with `text`, if any (a notice that stays until its condition ends). */
   hide(text: string): void;
+  /**
+   * While the map covers the 3D (SP4c spec §2.1, D27): with `target` non-null, `show` and `storeFull` go to `target`
+   * (the tool's notice row) instead of `.world-notices`; `null` sends them back. `hide` removes the text here and in
+   * the last target routed to (a notice shown before or during a route still goes when its condition ends). The
+   * slow-frame, skipped, failure and context-loss notices never route (the overlay is disposed before the last two).
+   */
+  route(target: Notices | null): void;
   /** Removes the notices and clears their timers. */
   dispose(): void;
 }
@@ -457,11 +467,17 @@ function dismissButton(id: string, panel: HTMLElement, then: () => void = () => 
   return dismiss;
 }
 
+/** StoreFull's text (SP4b spec §3.6), in `.world-notices` or, routed, in the tool's notice row. */
+const STORE_FULL_TEXT = 'The world store is full: new terrain is paused.';
+
 /** Mounts the notices' container in `host`; each notice is built when first shown. */
 export function createWorldNotices(host: HTMLElement, reloader: Reloader): WorldNotices {
   const box = el('div', 'world-notices');
   box.id = 'world-notices';
   host.append(box);
+  /** Where `show`, `hide` and `storeFull` go while the map covers the 3D (D27), and the last one routed to. */
+  let target: Notices | null = null;
+  let lastTarget: Notices | null = null;
   let slow: HTMLElement | null = null;
   let full: HTMLElement | null = null;
   let lost = false;
@@ -481,6 +497,10 @@ export function createWorldNotices(host: HTMLElement, reloader: Reloader): World
   return {
     show(text, opts = {}) {
       if (disposed) return;
+      if (target !== null) {
+        target.show(text, opts);
+        return;
+      }
       hide(text);
       const panel = el('div', opts.kind === 'error' ? 'world-notice world-notice-error' : 'world-notice', `${text} `);
       for (const action of opts.actions ?? []) {
@@ -502,6 +522,11 @@ export function createWorldNotices(host: HTMLElement, reloader: Reloader): World
     },
     hide(text) {
       hide(text);
+      lastTarget?.hide(text);
+    },
+    route(next) {
+      target = next;
+      if (next !== null) lastTarget = next;
     },
     slow(rd, lower, apply) {
       slow?.remove();
@@ -524,8 +549,13 @@ export function createWorldNotices(host: HTMLElement, reloader: Reloader): World
       box.append(panel);
     },
     storeFull(lower, apply) {
+      if (target !== null) {
+        const actions = lower === null ? [] : [{ label: `Lower to RD ${lower}`, run: apply }];
+        target.show(STORE_FULL_TEXT, { kind: 'warn', actions });
+        return;
+      }
       full?.remove();
-      const panel = el('div', 'world-notice', 'The world store is full: new terrain is paused. ');
+      const panel = el('div', 'world-notice', `${STORE_FULL_TEXT} `);
       panel.id = 'world-store-full';
       const forget = (): void => { if (full === panel) full = null; };
       if (lower !== null) panel.append(lowerButton('world-store-full-lower', lower, panel, forget, apply), ' ');
@@ -556,6 +586,34 @@ export function createWorldNotices(host: HTMLElement, reloader: Reloader): World
       for (const text of [...byText.keys()]) hide(text);
       box.remove();
     },
+  };
+}
+
+/** How long the "Undo" or "Redo" notice stays at the bottom of the 3D (SP4c spec §2.4, D15). */
+export const UNDO_NOTICE_MS = 1500;
+
+/**
+ * The undo notice (SP4c spec §2.4, §4.3; D15, D26), hung on the apply control: it remembers the kind of the session's
+ * last change (`'undo'`, `'redo'` or other), and `applied(from)` (the page's `onApplied`) shows "Undo" or "Redo" for
+ * `UNDO_NOTICE_MS` when that kind is an undo or a redo and the map is hidden; an undo that rebuilds nothing (`from`
+ * null) shows it too. Each change shows it at most once: an Apply consumes the kind. `dispose` unsubscribes.
+ */
+export function createUndoNotice(o: {
+  subscribe: WorldSession['subscribe'];
+  mapShown(): boolean;
+  show(text: string, ms: number): void;
+}): { applied(from: WorldStage | null): void; dispose(): void } {
+  let last: 'Undo' | 'Redo' | null = null;
+  const unsubscribe = o.subscribe((_s, change) => {
+    last = change.kind === 'undo' ? 'Undo' : change.kind === 'redo' ? 'Redo' : null;
+  });
+  return {
+    applied() {
+      const text = last;
+      last = null;
+      if (text !== null && !o.mapShown()) o.show(text, UNDO_NOTICE_MS);
+    },
+    dispose: unsubscribe,
   };
 }
 
@@ -1375,7 +1433,14 @@ export function mountWorldPage(root: HTMLElement, q: WorldQuery, hash: string, o
     // is then the only caller.
     teardown.push(followSession({ session, driver: previewDriver, toolMounted: () => mapRef !== null && mapRef.tool !== null, now: () => performance.now() }));
     // When a draft is applied (SP4c spec §4.3, D4): once per frame, before the coordinator's update. Its `generation`
-    // gates the aux policy (§6.2); `onApplied` drives Watch live (§2.1) and the URL (§1.6).
+    // gates the aux policy (§6.2); `onApplied` drives Watch live (§2.1), the URL (§1.6) and the undo notice (§2.4).
+    // The undo notice: "Undo" or "Redo" for 1.5 s at the bottom of the 3D when the map is hidden (D15, D26).
+    const undoNotice = createUndoNotice({
+      subscribe: (l) => session.subscribe(l),
+      mapShown: () => mapRef?.shown ?? false,
+      show: (text, ms) => notices.show(text, { timeoutMs: ms }),
+    });
+    teardown.push(() => undoNotice.dispose());
     const applyControl = createApplyControl({
       coordinator,
       driver: previewDriver,
@@ -1390,6 +1455,8 @@ export function mountWorldPage(root: HTMLElement, q: WorldQuery, hash: string, o
       onApplied: ({ from }) => {
         worldUrl.applied();
         mapRef?.applied(from);
+        // After Watch live: an undo it just hid the map for shows its notice too (SP4c spec §2.4).
+        undoNotice.applied(from);
       },
     });
     teardown.push(() => applyControl.dispose());
@@ -1426,6 +1493,9 @@ export function mountWorldPage(root: HTMLElement, q: WorldQuery, hash: string, o
         return {
           frame: frames.summary(),
           stages: { T: { ...c.T }, D: { ...c.D }, L: { ...c.L }, MESH: { ...c.MESH } },
+          // "stale n / needed" while the world regenerates after an Apply (SP4c spec §4.5, D26).
+          stale: c.stale,
+          needed: c.MESH.needed,
           sections: up.rows,
           revealed: up.columnsRevealed,
           genCap: c.genCap,
@@ -1549,8 +1619,8 @@ export function mountWorldPage(root: HTMLElement, q: WorldQuery, hash: string, o
       state: frame,
       // F5 after a teleport returns to where the user jumped (SP4c spec §1.6, D20); flight never rewrites the search.
       onArrive: () => worldUrl.arrived(fly),
-      // The notice "Could not teleport" is routed over the map with Task 20's notices; until then, the console.
-      onFail: () => console.warn('Could not teleport'),
+      // "Could not teleport" (D26): in `.world-notices`, or in the tool's row while the map covers the 3D (D27).
+      onFail: () => notices.show('Could not teleport', { kind: 'warn', timeoutMs: 4000 }),
     });
     // The map overlay (SP4c spec §1.3): M before the reveal does nothing, since nothing exists to receive it.
     const mapOverlay = createMapOverlay({
@@ -1583,6 +1653,8 @@ export function mountWorldPage(root: HTMLElement, q: WorldQuery, hash: string, o
       onTeleport: (x, z) => teleport.go(x, z),
       // Every view change of the tool writes the world's URL (SP4c spec §1.6).
       viewChanged: () => worldUrl.viewChanged(),
+      // The transient notices go to the tool's row while mode A covers the 3D; the Watch-live notice (D26, D27).
+      notices,
     });
     mapRef = mapOverlay;
     // Disposed before the input, the driver and the page's subscribe: a gesture still open ends through the tool.

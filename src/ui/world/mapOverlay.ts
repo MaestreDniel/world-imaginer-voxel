@@ -13,18 +13,26 @@
  *   reports (its `onView`: a pan, a zoom, a layer, a re-centring) calls the page's `viewChanged`, which writes the
  *   world's URL (§1.6, D20); `worldMapView` is the view that URL carries.
  * - **`tick(counts)`**, called by the page on every rendered frame: while shown, the arrow follows the camera (scalars,
- *   allocation-free; the canvas redraws only when it moved, ≤ 30/s).
+ *   allocation-free; the canvas redraws only when it moved, ≤ 30/s); the header's readout "Regenerating n / needed"
+ *   shows while `counts.stale` is above 0 (the cut line, §13, D23; its text rebuilt only when a count changes); and the
+ *   Watch-live notice follows `counts.stale` (below).
  * - **The modes** (§2.1, §2.2, D16): A (`'full'`) covers the window over the full-size 3D; B (`'split'`) puts the map on
  *   the left half and moves `#world-host` to the right one (the class `split` on both hosts), offered only from
  *   `SPLIT_MIN_WIDTH` CSS px (a stored B opens as A below it; the switch shows B disabled with the reason, re-evaluated
- *   on every window resize). Every change of the 3D host's size (a switch while shown, opening or closing in B) calls
- *   the renderer's `resize()` and draws one frame, so the frame painted at the switch is not three's cleared canvas. A
- *   switch to A while locked releases the lock. While A covers the 3D, the limiter's cap is `frameCapFor`'s 60 (or the
+ *   on every window resize). Narrowing below `SPLIT_MIN_WIDTH` while B is shown switches to A at once without saving
+ *   the choice (ruling R2: halves under 500 px are unusable, D16); widening again does not switch back, and a stored B
+ *   returns on the next open in a wide window. Every change of the 3D host's size (a switch while shown, opening or
+ *   closing in B) calls the renderer's `resize()` and draws one frame, so the frame painted at the switch is not
+ *   three's cleared canvas. A switch to A while locked releases the lock. While A covers the 3D, the limiter's cap is `frameCapFor`'s 60 (or the
  *   user's lower cap, §2.6). The header's controls live in the tool's toolbar slot: "Full screen | Side by side",
  *   "Watch live" (A only), "Centre on me" and "✕ Close (M)"; a mode or Watch-live change is saved at once (D17).
  * - **Watch live** (§2.1, D18): `applied(from)`, called when a draft that changes the world is applied, closes the map
  *   in A with Watch live on, so the 3D shows the regeneration; a drag never reaches it mid-gesture (the Apply waits for
- *   the gesture's end).
+ *   the gesture's end). From then until `counts.stale` falls to 0, or M brings the map back, the world's notices show
+ *   `WATCH_LIVE_NOTICE` at the bottom of the 3D (D26).
+ * - **The world's notices over the map** (§2.1, D27): while A covers the 3D (full, shown, the tool mounted) the page's
+ *   transient notices go to the tool's notice row (`notices.route(tool.notices)`); closing, a switch to B and `dispose`
+ *   send them back (`route(null)`).
  * - **The controls owner** (`ownerOf`, §2.3): hidden → world; full shown → map; split shown → world while the canvas
  *   holds the pointer lock, else map. Opening releases the pointer lock; every owner change calls `input.clear()`, so no
  *   key stays held across the hand-over; the lock taken by the canvas blurs the focused element (a canvas click does
@@ -49,12 +57,14 @@ import type { FrameState } from '../../render/frameState';
 import type { WorldRenderer } from '../../render/renderer';
 import { el } from '../common/dom';
 import { escapeAllowed, type ShortcutAction } from '../common/keys';
+import type { Notices } from '../common/notice';
 import type { LayoutStorage } from '../map/layout';
 import { DEFAULT_MAP_STATE, type MapView } from '../map/mapState';
 import type { createMapTool, MapTool } from '../map/mapTool';
 import { draftOf, type createReplayingCanvas, type PreviewDriver } from '../map/previewDriver';
 import type { WorldSettings } from '../settings';
 import { AT_LIMIT } from './query';
+import type { WorldNotices } from './worldPage';
 
 /** The overlay's mode (SP4c spec §2.1, §2.2): A full screen, B side by side. */
 export type MapMode = WorldSettings['mapMode'];
@@ -72,6 +82,8 @@ export const SPLIT_MIN_WIDTH = 1000;
 export const SPLIT_UNAVAILABLE = 'Side by side needs a window at least 1,000 px wide';
 /** The cap on rendered frames while mode A covers the 3D (SP4c spec §2.6). */
 const COVERED_CAP = 60;
+/** At the bottom of the 3D while a Watch-live Apply hid the map and the world is stale (SP4c spec §2.1, D26). */
+export const WATCH_LIVE_NOTICE = 'Regenerating… near → far · M returns to the map';
 
 /**
  * The map view the world's URL carries (SP4c spec §1.3, §1.6): the mounted tool's, else (before the first M mounted it)
@@ -158,6 +170,11 @@ export interface MapOverlayOptions {
   onTeleport(x: number, z: number): Promise<boolean>;
   /** The tool's `onView`: every view change it reports; the page writes its URL (SP4c spec §1.6, D20). */
   viewChanged(): void;
+  /**
+   * The world's notices: routed to the tool's row while mode A covers the 3D (SP4c spec §2.1, D27); `show` and `hide`
+   * put up and take down `WATCH_LIVE_NOTICE` (D26).
+   */
+  readonly notices: Pick<WorldNotices, 'route' | 'show' | 'hide'>;
 }
 
 export interface MapOverlay {
@@ -170,11 +187,15 @@ export interface MapOverlay {
   open(): void;
   /** Hides the map; the world owns. */
   close(): void;
-  /** On every rendered frame, with the page's one counts object: the arrow follows the camera while shown. */
+  /**
+   * On every rendered frame, with the page's one counts object: the arrow follows the camera while shown; the header's
+   * readout and the Watch-live notice follow `counts.stale`. Allocates nothing while no count changes.
+   */
   tick(counts: CoordinatorCounts): void;
   /**
    * A draft was applied, `from` its first regenerated stage (null: the world is unchanged). Full, shown, Watch live on
-   * and `from` non-null: the map closes and the 3D shows the regeneration (SP4c spec §2.1, D18); otherwise nothing.
+   * and `from` non-null: the map closes and the 3D shows the regeneration with `WATCH_LIVE_NOTICE` while it is stale
+   * (SP4c spec §2.1, D18, D26); otherwise nothing.
    */
   applied(from: WorldStage | null): void;
   /** The mounted tool, or null before the first `open` mounted it and after `dispose`. */
@@ -204,6 +225,14 @@ export function createMapOverlay(o: MapOverlayOptions): MapOverlay {
   let tool: MapTool | null = null;
   let mod: ToolModule | null = null;
   let loading: Promise<ToolModule> | null = null;
+  // The notices' route (D27): the tool's row while A covers the 3D, else null.
+  let routed: Notices | null = null;
+  // A Watch-live Apply hid the map and the world has not settled since (D26), and whether its notice is up.
+  let watching = false;
+  let watchNoticeUp = false;
+  // The readout's counts as shown (0 stale: hidden).
+  let readStale = 0;
+  let readNeeded = 0;
 
   // The controls owner and the pointer lock's history (Esc after an unlock, Review Focus 4).
   const locked = (): boolean => o.doc.pointerLockElement === o.canvas;
@@ -256,7 +285,12 @@ export function createMapOverlay(o: MapOverlayOptions): MapOverlay {
   watchLabel.append(watchBox, 'Watch live');
   const centreButton = button('map-centre', 'Centre on me');
   const closeButton = button('map-close', '✕ Close (M)');
-  slot.append(modeSwitch, watchLabel, centreButton, closeButton);
+  // The regeneration readout (the cut line, SP4c spec §13, D23): the HUD's stale count while the world is stale.
+  const readout = el('span', 'map-regen');
+  readout.id = 'map-regen';
+  readout.setAttribute('role', 'status');
+  readout.hidden = true;
+  slot.append(modeSwitch, watchLabel, centreButton, closeButton, readout);
 
   /** The controls' state from the mode, Watch live and the window's width. */
   const syncControls = (): void => {
@@ -269,11 +303,34 @@ export function createMapOverlay(o: MapOverlayOptions): MapOverlay {
     watchLabel.hidden = mode !== 'full';
     watchBox.checked = watchLive;
   };
-  const onResize = (): void => syncControls();
+  /**
+   * Ruling R2: narrowing below `SPLIT_MIN_WIDTH` while B is shown switches to A at once, without saving the choice (a
+   * stored B returns on the next open in a wide window); widening again does not switch back.
+   */
+  const onResize = (): void => {
+    if (shown && mode === 'split' && !splitAvailable(o.win.innerWidth)) enterMode('full');
+    syncControls();
+  };
   o.win.addEventListener('resize', onResize);
 
   /** The covered cap (SP4c spec §2.6), set on every change of mode or visibility. */
   const syncCap = (): void => o.limiter.setCap(frameCapFor(mode, shown, o.userCap()));
+
+  /** The notices' route (D27): the tool's row while A covers the 3D (full, shown, mounted), else null; on a change only. */
+  const syncRoute = (): void => {
+    const next = !disposed && shown && mode === 'full' && tool !== null ? tool.notices : null;
+    if (next === routed) return;
+    routed = next;
+    o.notices.route(next);
+  };
+
+  /** Ends the Watch-live notice (the world settled, M brought the map back, or `dispose`). */
+  const endWatch = (): void => {
+    watching = false;
+    if (!watchNoticeUp) return;
+    watchNoticeUp = false;
+    o.notices.hide(WATCH_LIVE_NOTICE);
+  };
 
   /**
    * The hosts' classes for the mode; when #world-host changes size (mode B shown, or no longer), the renderer resizes
@@ -289,20 +346,26 @@ export function createMapOverlay(o: MapOverlayOptions): MapOverlay {
     o.world.frame(o.frameState());
   };
 
-  /** The mode switch (SP4c spec §2.1, §2.2): saved at once; a switch to A while locked releases the lock. */
-  const setMode = (next: MapMode): void => {
-    if (disposed || next === mode) return;
-    if (next === 'split' && !splitAvailable(o.win.innerWidth)) return;
-    preferred = next;
+  /** Puts `next` in force (not saved): the layout, the lock (A releases it), the owner, the cap, the route, the switch. */
+  const enterMode = (next: MapMode): void => {
     mode = next;
-    o.save({ mapMode: preferred, watchLive });
     if (shown) {
       syncLayout();
       if (mode === 'full' && o.doc.pointerLockElement !== null) o.doc.exitPointerLock();
     }
     syncOwner();
     syncCap();
+    syncRoute();
     syncControls();
+  };
+
+  /** The mode switch (SP4c spec §2.1, §2.2): saved at once; a switch to A while locked releases the lock. */
+  const setMode = (next: MapMode): void => {
+    if (disposed || next === mode) return;
+    if (next === 'split' && !splitAvailable(o.win.innerWidth)) return;
+    preferred = next;
+    o.save({ mapMode: preferred, watchLive });
+    enterMode(next);
   };
   fullButton.addEventListener('click', () => setMode('full'));
   splitButton.addEventListener('click', () => setMode('split'));
@@ -347,10 +410,13 @@ export function createMapOverlay(o: MapOverlayOptions): MapOverlay {
       shortcutsEnabled,
     });
     showOnCamera(tool);
+    syncRoute();
   };
 
   function open(): void {
     if (disposed || shown) return;
+    // M during a Watch-live regeneration: the map returns and the notice goes, before the route moves (D26).
+    endWatch();
     shown = true;
     // A stored B opens as A while the window is narrower than SPLIT_MIN_WIDTH (SP4c spec §2.2).
     mode = modeFor();
@@ -360,8 +426,10 @@ export function createMapOverlay(o: MapOverlayOptions): MapOverlay {
     syncOwner();
     syncCap();
     syncControls();
-    if (tool !== null) showOnCamera(tool);
-    else if (mod !== null) mount(mod);
+    if (tool !== null) {
+      showOnCamera(tool);
+      syncRoute();
+    } else if (mod !== null) mount(mod);
     else {
       load().then(mount, (e: unknown) => {
         // The chunk did not arrive (offline, a new deploy): the world comes back; the next M retries.
@@ -379,6 +447,7 @@ export function createMapOverlay(o: MapOverlayOptions): MapOverlay {
     syncLayout();
     syncOwner();
     syncCap();
+    syncRoute();
   }
 
   return {
@@ -392,11 +461,29 @@ export function createMapOverlay(o: MapOverlayOptions): MapOverlay {
     },
     open,
     close,
-    tick() {
+    tick(counts) {
       if (shown && tool !== null) tool.setPlayer(o.fly.x, o.fly.z, o.fly.yaw);
+      const stale = counts.stale;
+      // The readout (the cut line, §13): its text rebuilt only when a count changed, so nothing allocates at rest.
+      if (stale !== readStale || (stale > 0 && counts.MESH.needed !== readNeeded)) {
+        readStale = stale;
+        readNeeded = counts.MESH.needed;
+        readout.hidden = stale === 0;
+        if (stale > 0) readout.textContent = `Regenerating ${stale} / ${readNeeded}`;
+      }
+      // The Watch-live notice (D26): up while stale after a Watch-live Apply; the world settled ends it.
+      if (watching) {
+        if (stale === 0) endWatch();
+        else if (!watchNoticeUp) {
+          watchNoticeUp = true;
+          o.notices.show(WATCH_LIVE_NOTICE);
+        }
+      }
     },
     applied(from) {
-      if (from !== null && shown && mode === 'full' && watchLive) close();
+      if (disposed || from === null || !shown || mode !== 'full' || !watchLive) return;
+      close();
+      watching = true;
     },
     dispose() {
       if (disposed) return;
@@ -404,6 +491,9 @@ export function createMapOverlay(o: MapOverlayOptions): MapOverlay {
       o.win.clearTimeout(preload);
       o.doc.removeEventListener('pointerlockchange', onLockChange);
       o.win.removeEventListener('resize', onResize);
+      // The notices go back to the world's row before the tool (and its row) goes; the Watch-live notice goes too.
+      endWatch();
+      syncRoute();
       const t = tool;
       if (t !== null) {
         try {
