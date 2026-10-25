@@ -880,6 +880,17 @@ export function helpChange(
 }
 
 /**
+ * M (SP4c spec §2.4): toggles the map overlay; before the overlay exists it does nothing. Opening it closes the help
+ * first, as the help's "Map (M)" does (§1.6), so the opaque overlay of mode A never covers an open help that the next
+ * Esc would close together with the map's drawer (final review WLD-1). Closing the map leaves the help as it is.
+ */
+export function mapKey(help: Pick<Help, 'isOpen' | 'close'>, map: Pick<MapOverlay, 'shown' | 'toggle'> | null): void {
+  if (map === null) return;
+  if (!map.shown && help.isOpen) help.close();
+  map.toggle();
+}
+
+/**
  * The slow-frame notice's suggestion (SP4a spec §8.5; SP4b spec §5): at render distance `rd`, offers the next lower one
  * (`lowerRd`) in the dismissible notice, whose button applies it live through `control`; nothing at RD 4.
  */
@@ -1835,7 +1846,7 @@ export function mountWorldPage(root: HTMLElement, q: WorldQuery, hash: string, o
           }
           break;
         // M opens or closes the map overlay (SP4c spec §2.4); it acts whoever owns the controls.
-        case 'map': mapRef?.toggle(); break;
+        case 'map': mapKey(help, mapRef); break;
         default: break; // movement and sprint are held; Esc (releasePointer) is the browser's
       }
     };

@@ -208,9 +208,13 @@ export function mountHelp(host: HTMLElement, o: HelpOptions): Help {
   host.append(overlay);
 
   // Esc closes the open overlay, as a person expects of a panel (final review C-M3). The pointer is already free while
-  // the help is open, so the browser's own Esc (releasing the pointer) has nothing to do.
+  // the help is open, so the browser's own Esc (releasing the pointer) has nothing to do. The Esc is consumed: in mode
+  // B the map owns the controls while the help is open, and its window shortcut, which skips a default-prevented key,
+  // would otherwise also close its drawer or cut tool with the same press (final review WLD-1).
   const onKeyDown = (e: KeyboardEvent): void => {
-    if (e.code === 'Escape' || e.key === 'Escape') close();
+    if (e.code !== 'Escape' && e.key !== 'Escape') return;
+    e.preventDefault();
+    close();
   };
 
   function close(): void {

@@ -220,6 +220,22 @@ describe('mountHelp (SP4a spec §7.4, D31)', () => {
     expect(o.onClose).toHaveBeenCalledTimes(1);
   });
 
+  test('the Esc that closes the help is consumed, so the map\'s window shortcut does not also close its drawer (final review WLD-1)', () => {
+    const { help } = mount();
+    const esc = () => {
+      const e = Object.assign(new Event('keydown', { cancelable: true }), { code: 'Escape', key: 'Escape' });
+      dom.document.dispatchEvent(e);
+      return e;
+    };
+    // Closed, the help leaves Esc alone: the map's drawer, or the browser, gets it.
+    expect(esc().defaultPrevented).toBe(false);
+    help.open();
+    // `installShortcuts` (on window, after the document) ignores a default-prevented key.
+    expect(esc().defaultPrevented).toBe(true);
+    expect(help.isOpen).toBe(false);
+    expect(esc().defaultPrevented).toBe(false);
+  });
+
   test('"Fullscreen" calls onFullscreen', () => {
     const { o } = mount();
     dom.el('help-fullscreen').click();

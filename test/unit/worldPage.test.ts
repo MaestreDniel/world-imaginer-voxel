@@ -21,7 +21,7 @@ import { WORLD_MAP_BPP, worldMapView } from '../../src/ui/world/mapOverlay';
 import { createReloader, createWorldUrl, worldHash, type HereState } from '../../src/ui/world/reload';
 import {
   countPendingTimers, countTileCalls, createRdControl, createUndoNotice, createWorldNotices, everyFrameUntil, failBeforeReveal, flushOnPageHide, handleContextLoss,
-  handleStreamEvent, helpChange, installWiTest, offerLowerRd, onDriverStatus, rdShownOnLoad, releaseOnFailure, reloadRd, runTeardown, stopAfterFailure, UNDO_NOTICE_MS,
+  handleStreamEvent, helpChange, installWiTest, mapKey, offerLowerRd, onDriverStatus, rdShownOnLoad, releaseOnFailure, reloadRd, runTeardown, stopAfterFailure, UNDO_NOTICE_MS,
   type WiTest, type WiTestPage,
 } from '../../src/ui/world/worldPage';
 import { installDom, type FakeElement } from './fixtures/domShim';
@@ -1083,6 +1083,44 @@ describe('the world\'s notices over the map (SP4c spec §2.1, D27)', () => {
     expect(src).toMatch(/undoNotice\.applied\(from\)/);
     expect(src).toMatch(/stale: c\.stale,/);
     expect(src).toMatch(/needed: c\.MESH\.needed,/);
+  });
+});
+
+describe('mapKey: M with the help open (SP4c spec §1.6, §2.4; final review WLD-1)', () => {
+  /** The help and the overlay as fakes that log their calls in order. */
+  function setup(helpOpen: boolean, shown: boolean) {
+    const log: string[] = [];
+    const help = { isOpen: helpOpen, close: () => { help.isOpen = false; log.push('help.close'); } };
+    const map = { shown, toggle: () => { map.shown = !map.shown; log.push(`map.toggle (help open: ${help.isOpen})`); } };
+    return { help, map, log };
+  }
+
+  test('opening the map closes the help first, as the help\'s "Map (M)" does, so the overlay never covers an open help', () => {
+    const s = setup(true, false);
+    mapKey(s.help, s.map);
+    expect(s.log).toEqual(['help.close', 'map.toggle (help open: false)']);
+    expect(s.map.shown).toBe(true);
+  });
+
+  test('closing the map leaves the help as it is (mode B shows it on the 3D half); with the help closed M only toggles', () => {
+    const b = setup(true, true);
+    mapKey(b.help, b.map);
+    expect(b.log).toEqual(['map.toggle (help open: true)']);
+    const plain = setup(false, false);
+    mapKey(plain.help, plain.map);
+    expect(plain.log).toEqual(['map.toggle (help open: false)']);
+  });
+
+  test('before the overlay exists M does nothing, the help included', () => {
+    const s = setup(true, false);
+    mapKey(s.help, null);
+    expect(s.log).toEqual([]);
+    expect(s.help.isOpen).toBe(true);
+  });
+
+  test('the page\'s M goes through it', () => {
+    const src = readFileSync(new URL('../../src/ui/world/worldPage.ts', import.meta.url), 'utf8');
+    expect(src).toMatch(/case 'map': mapKey\(help, mapRef\); break;/);
   });
 });
 
