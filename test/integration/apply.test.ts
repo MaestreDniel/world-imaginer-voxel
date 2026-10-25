@@ -18,10 +18,10 @@
  * the first fill; a terrain Apply (`density.detailAmpHi` 4.0); its undo; an undo in the middle of a regeneration (a
  * second Apply of 4.0, undone after the first ⌈69 / 4⌉ = 18 swaps: the columns re-staged after the undo's Apply are
  * exactly those swapped to 4.0, the others keep their original mesh, D5); a climate Apply (`climate.C`'s wavelength
- * 2400 → 1200); a biome-table climate limit (`meadow`'s lower temperature bound −0.2 → 0); D7 on the real store (one
- * D's OK reply held after it committed, a configure adopted with the same genKey, then the reply delivered: the column
- * is Decorated, no D is issued for it again, and its L runs and succeeds); and after unloading everything and draining
- * the limbo, every pool slot is free.
+ * 2400 → 600, which changes the window); a biome-table climate limit (`meadow`'s lower temperature bound −0.2 → 0,
+ * which changes it too); D7 on the real store (one D's OK reply held after it committed, a configure adopted with the
+ * same genKey, then the reply delivered: the column is Decorated, no D is issued for it again, and its L runs and
+ * succeeds); and after unloading everything and draining the limbo, every pool slot is free.
  */
 import { Worker } from 'node:worker_threads';
 import { afterAll, beforeAll, describe, expect, test } from 'vitest';
@@ -429,14 +429,17 @@ describe('Apply v1 on the real store (SP4c spec §8.5)', () => {
     clean('the mid-regeneration undo');
   });
 
-  test('a climate Apply (climate.C\'s wavelength 2400 → 1200): equal on its params', async () => {
+  test('a climate Apply (climate.C\'s wavelength 2400 → 600): equal on its params, and the window changed', async () => {
     const w = W();
     expect(w.session.state.params.climate.C.wavelength).toBe(2400);
-    await applyEdit(() => { expect(w.session.set('climate.C', { wavelength: 1200 }).ok).toBe(true); }, 'the climate Apply');
-    // The window lies deep inland (C about 0.79-0.94, then 0.93-0.97), where the offset spline and the biome boxes do not
-    // tell the two apart: its voxels stay as they were, but every MESH-set column was regenerated under the new draft.
+    const before = windowHash();
+    // 600 moves C enough in this window to change its voxels (1200, 800 and 4800 do not: the window lies deep inland
+    // under them, where the offset spline and the biome boxes do not tell them apart; final review GOV-2).
+    await applyEdit(() => { expect(w.session.set('climate.C', { wavelength: 600 }).ok).toBe(true); }, 'the climate Apply');
     regenerated('the climate Apply');
-    expect(windowHash()).toBe(await expected(w.session.state.params));
+    const hash = windowHash();
+    expect(hash).toBe(await expected(w.session.state.params));
+    expect(hash, 'the climate Apply changes the window').not.toBe(before);
     clean('the climate Apply');
   });
 
