@@ -14,8 +14,11 @@ import { attachInput, isTextEntry } from '../../src/player/input';
 import type { MapView } from '../../src/ui/map/mapState';
 import type { MapTool, MapToolDeps } from '../../src/ui/map/mapTool';
 import { createReplayingCanvas, type PreviewDriver } from '../../src/ui/map/previewDriver';
+import type { FpsCap } from '../../src/render/fpsLimiter';
+import type { FrameState } from '../../src/render/frameState';
 import {
-  createMapOverlay, followSession, MAP_PRELOAD_MS, ownerOf, WORLD_MAP_BPP, type MapMode, type MapOverlay,
+  createMapOverlay, followSession, frameCapFor, MAP_PRELOAD_MS, ownerOf, SPLIT_MIN_WIDTH, splitAvailable, WORLD_MAP_BPP,
+  type MapMode, type MapOverlay,
 } from '../../src/ui/world/mapOverlay';
 import { installDom, type FakeDocument, type FakeElement } from './fixtures/domShim';
 
@@ -89,14 +92,35 @@ function fakeDriver() {
   };
 }
 
-/** A timer queue standing for the window's `setTimeout`. */
-function fakeTimers() {
+/**
+ * The overlay's window: a timer queue standing for `setTimeout`, a settable `innerWidth`, and its listeners kept in a
+ * map (so a test can count what `dispose` removed).
+ */
+function fakeTimers(width = 1920) {
   const pending = new Map<number, { fn: () => void; ms: number }>();
+  const listeners = new Map<string, Set<EventListenerOrEventListenerObject>>();
   let next = 1;
   return {
     pending,
+    listeners,
+    innerWidth: width,
     setTimeout: (fn: () => void, ms: number) => { pending.set(next, { fn, ms }); return next++; },
     clearTimeout: (id: number) => { pending.delete(id); },
+    addEventListener(type: string, fn: EventListenerOrEventListenerObject) {
+      let set = listeners.get(type);
+      if (set === undefined) listeners.set(type, set = new Set());
+      set.add(fn);
+    },
+    removeEventListener(type: string, fn: EventListenerOrEventListenerObject) { listeners.get(type)?.delete(fn); },
+    /** Sets `innerWidth` and dispatches 'resize' to the listeners. */
+    resizeTo(w: number): void {
+      this.innerWidth = w;
+      const e = new Event('resize');
+      for (const fn of [...(listeners.get('resize') ?? [])]) {
+        if (typeof fn === 'function') fn(e);
+        else fn.handleEvent(e);
+      }
+    },
     runAll(): void {
       const due = [...pending.values()];
       pending.clear();
@@ -104,6 +128,23 @@ function fakeTimers() {
     },
   };
 }
+
+/** The 3D renderer's `resize` and `frame`, logged in order, and the FPS limiter's cap. */
+function fakeWorld() {
+  const log: string[] = [];
+  return {
+    log,
+    world: {
+      resize: vi.fn(() => { log.push('resize'); }),
+      frame: vi.fn((_s: FrameState) => { log.push('frame'); }),
+    },
+  };
+}
+function fakeLimiter(cap: FpsCap) {
+  const l = { cap, setCap: vi.fn((c: FpsCap) => { l.cap = c; }) };
+  return l;
+}
+const STATE: FrameState = { t: 0.25, brightness: 0.3, eyeSky: 15, rd: 8, fogBand: 0.1 };
 
 const flyAt = (x: number, z: number, yaw = 0): FlyState => ({ x, y: 80, z, yaw, pitch: 0, vx: 0, vy: 0, vz: 0, speed: SPEED_DEFAULT });
 
@@ -117,7 +158,10 @@ beforeEach(() => {
 });
 afterEach(() => { vi.unstubAllGlobals(); });
 
-function setup(o: { mode?: MapMode; fly?: FlyState; input?: { clear(): void }; canvas?: FakeElement; teleport?: (x: number, z: number) => Promise<boolean> } = {}) {
+function setup(o: {
+  mode?: MapMode; watchLive?: boolean; width?: number; userCap?: FpsCap; fly?: FlyState; input?: { clear(): void }; canvas?: FakeElement;
+  teleport?: (x: number, z: number) => Promise<boolean>;
+} = {}) {
   const doc: FakeDocument = dom.document;
   const app = doc.createElement('div');
   const worldHost = doc.createElement('div');
@@ -129,7 +173,11 @@ function setup(o: { mode?: MapMode; fly?: FlyState; input?: { clear(): void }; c
   const driver = fakeDriver();
   const fly = o.fly ?? flyAt(100, -40, 30);
   const input = o.input ?? { clear: vi.fn() };
-  const timers = fakeTimers();
+  const timers = fakeTimers(o.width);
+  const world = fakeWorld();
+  const userCap = o.userCap ?? 0;
+  const limiter = fakeLimiter(userCap);
+  const save = vi.fn();
   let now = 0;
   const overlay = createMapOverlay({
     app: app as unknown as HTMLElement,
@@ -140,8 +188,12 @@ function setup(o: { mode?: MapMode; fly?: FlyState; input?: { clear(): void }; c
     driver: driver as unknown as PreviewDriver,
     relay: createReplayingCanvas(),
     storage: null,
-    settings: { mapMode: o.mode ?? 'full', watchLive: true },
-    save: vi.fn(),
+    settings: { mapMode: o.mode ?? 'full', watchLive: o.watchLive ?? true },
+    save,
+    world: world.world,
+    frameState: () => STATE,
+    limiter,
+    userCap: () => userCap,
     fly,
     input,
     doc: doc as unknown as Document,
@@ -149,7 +201,12 @@ function setup(o: { mode?: MapMode; fly?: FlyState; input?: { clear(): void }; c
     now: () => now,
     onTeleport: o.teleport ?? (() => Promise.resolve(false)),
   });
-  return { doc, app, worldHost, canvas, session, driver, fly, input, timers, overlay, setNow: (t: number) => { now = t; } };
+  return {
+    doc, app, worldHost, canvas, session, driver, fly, input, timers, overlay, world, limiter, save,
+    setNow: (t: number) => { now = t; },
+    /** The overlay's host (`div.map-overlay`). */
+    host: () => app.children.find((c) => c.className.split(' ').includes('map-overlay'))!,
+  };
 }
 
 /** Opens the overlay and lets the first open's import mount the tool. */
@@ -453,3 +510,232 @@ describe('ruling R1 and the dispose mid-gesture (Task 12 review, minor 2)', () =
   });
 });
 
+
+describe('modes A and B, the covered cap and Watch live (SP4c spec §2.1, §2.2, §2.6; D16, D18)', () => {
+  /** The header's controls in the tool's toolbar slot (the fake tool renders no toolbar). */
+  const controls = (t: FakeTool) => {
+    const slot = t.deps.toolbarSlot as unknown as FakeElement;
+    const get = (id: string): FakeElement => {
+      const e = slot.querySelector(`#${id}`);
+      if (e === null) throw new Error(`no #${id} in the slot`);
+      return e;
+    };
+    return {
+      slot,
+      full: get('map-mode-full'),
+      split: get('map-mode-split'),
+      reason: get('map-mode-reason'),
+      watchLive: get('map-watch-live'),
+      watchLiveBox: get('map-watch-live').querySelector('input')!,
+      centre: get('map-centre'),
+      close: get('map-close'),
+    };
+  };
+  const SPLIT_REASON = 'Side by side needs a window at least 1,000 px wide';
+
+  test('splitAvailable(999) false, (1000) true; a stored split at 999 opens full and the switch shows the reason; at 1,000 it opens split', async () => {
+    expect(SPLIT_MIN_WIDTH).toBe(1000);
+    expect(splitAvailable(999)).toBe(false);
+    expect(splitAvailable(1000)).toBe(true);
+
+    const narrow = setup({ mode: 'split', width: 999 });
+    const t = await openMounted(narrow.overlay);
+    const c = controls(t);
+    expect(narrow.overlay.mode).toBe('full');
+    expect(narrow.worldHost.classList.contains('split')).toBe(false);
+    expect(narrow.host().classList.contains('split')).toBe(false);
+    expect(c.split.disabled).toBe(true);
+    expect(c.split.title).toBe(SPLIT_REASON);
+    expect([c.reason.hidden, c.reason.textContent]).toEqual([false, SPLIT_REASON]);
+    expect(c.full.getAttribute('aria-pressed')).toBe('true');
+    expect(narrow.world.world.resize).not.toHaveBeenCalled();
+    // Opening as full saves nothing: the stored split comes back on a wider window.
+    expect(narrow.save).not.toHaveBeenCalled();
+    narrow.overlay.dispose();
+
+    const wide = setup({ mode: 'split', width: 1000 });
+    const w = await openMounted(wide.overlay);
+    const cw = controls(w);
+    expect(wide.overlay.mode).toBe('split');
+    expect(wide.worldHost.classList.contains('split')).toBe(true);
+    expect(wide.host().classList.contains('split')).toBe(true);
+    expect([cw.split.disabled, cw.reason.hidden]).toEqual([false, true]);
+    expect(cw.split.getAttribute('aria-pressed')).toBe('true');
+    // The 3D moved to the right half: resized, then one frame drawn.
+    expect(wide.world.log).toEqual(['resize', 'frame']);
+    expect(wide.world.world.frame).toHaveBeenCalledWith(STATE);
+    // Closing gives the 3D the whole window back, resized and drawn.
+    wide.overlay.close();
+    expect(wide.worldHost.classList.contains('split')).toBe(false);
+    expect(wide.world.log).toEqual(['resize', 'frame', 'resize', 'frame']);
+  });
+
+  test('frameCapFor: full shown, user 0 → 60, user 30 → 30, user 144 → 60; split shown or hidden → the user\'s', () => {
+    expect(frameCapFor('full', true, 0)).toBe(60);
+    expect(frameCapFor('full', true, 30)).toBe(30);
+    expect(frameCapFor('full', true, 60)).toBe(60);
+    expect(frameCapFor('full', true, 120)).toBe(60);
+    expect(frameCapFor('full', true, 144)).toBe(60);
+    for (const cap of [0, 30, 60, 120, 144] as const) {
+      expect(frameCapFor('split', true, cap)).toBe(cap);
+      expect(frameCapFor('split', false, cap)).toBe(cap);
+      expect(frameCapFor('full', false, cap)).toBe(cap);
+    }
+  });
+
+  test('Review Focus 3: user cap 0, A shown → B shown → B locked → A shown → hidden gives limiter caps 60, 0, 0, 60, 0; owners map, map, world, map, world; exitPointerLock on the locked B → A switch; resize() then one frame on each A ↔ B switch', async () => {
+    const s = setup({ mode: 'full', userCap: 0 });
+    const t = await openMounted(s.overlay);
+    const c = controls(t);
+    const caps: FpsCap[] = [];
+    const owners: string[] = [];
+    const record = (): void => {
+      caps.push(s.limiter.cap);
+      owners.push(s.overlay.owner);
+    };
+    // A shown.
+    record();
+    expect(s.world.log).toEqual([]);
+    // B shown: the 3D host moves to the right half, then resize and one drawn frame.
+    c.split.click();
+    record();
+    expect(s.overlay.mode).toBe('split');
+    expect(s.worldHost.classList.contains('split')).toBe(true);
+    expect(s.world.log).toEqual(['resize', 'frame']);
+    // B locked: a click on the 3D half takes the lock.
+    s.doc.setPointerLock(s.canvas);
+    record();
+    expect(s.doc.exitPointerLockCalls).toBe(0);
+    // A shown: the switch releases the lock; the 3D gets the whole window back.
+    c.full.click();
+    record();
+    expect(s.doc.exitPointerLockCalls).toBe(1);
+    expect(s.doc.pointerLockElement).toBeNull();
+    expect(s.worldHost.classList.contains('split')).toBe(false);
+    expect(s.world.log).toEqual(['resize', 'frame', 'resize', 'frame']);
+    // Hidden.
+    s.overlay.close();
+    record();
+    expect(caps).toEqual([60, 0, 0, 60, 0]);
+    expect(owners).toEqual(['map', 'map', 'world', 'map', 'world']);
+    expect(s.world.log).toEqual(['resize', 'frame', 'resize', 'frame']);
+    expect(s.world.world.frame).toHaveBeenCalledTimes(2);
+  });
+
+  test('at 999 the switch shows B disabled with the reason; a resize event at 1,000 enables it; dispose removes the listener', async () => {
+    const s = setup({ mode: 'full', width: 999 });
+    const t = await openMounted(s.overlay);
+    const c = controls(t);
+    expect([c.split.disabled, c.reason.hidden]).toEqual([true, false]);
+    // A disabled B does not switch.
+    c.split.click();
+    expect(s.overlay.mode).toBe('full');
+    s.timers.resizeTo(1000);
+    expect([c.split.disabled, c.split.title, c.reason.hidden]).toEqual([false, '', true]);
+    c.split.click();
+    expect(s.overlay.mode).toBe('split');
+    s.timers.resizeTo(999);
+    expect([c.split.disabled, c.reason.hidden]).toEqual([true, false]);
+    expect(s.timers.listeners.get('resize')?.size).toBe(1);
+    s.overlay.dispose();
+    expect(s.timers.listeners.get('resize')?.size).toBe(0);
+    expect(s.worldHost.classList.contains('split')).toBe(false);
+  });
+
+  test('applied(\'T\') with Watch live in full shown closes the map and the owner becomes world; with Watch live off, in split, or applied(null), the map stays', async () => {
+    const live = setup({ mode: 'full', watchLive: true });
+    await openMounted(live.overlay);
+    live.overlay.applied(null);
+    expect([live.overlay.shown, live.overlay.owner]).toEqual([true, 'map']);
+    live.overlay.applied('T');
+    expect([live.overlay.shown, live.overlay.owner]).toEqual([false, 'world']);
+    // Hidden: nothing to close.
+    live.overlay.applied('T');
+    expect(live.overlay.shown).toBe(false);
+
+    const off = setup({ mode: 'full', watchLive: false });
+    await openMounted(off.overlay);
+    off.overlay.applied('T');
+    expect([off.overlay.shown, off.overlay.owner]).toEqual([true, 'map']);
+
+    const split = setup({ mode: 'split', watchLive: true });
+    await openMounted(split.overlay);
+    split.overlay.applied('T');
+    expect([split.overlay.shown, split.overlay.owner]).toEqual([true, 'map']);
+
+    // Watch live turned off from the header: the next Apply leaves the map up.
+    const toggled = setup({ mode: 'full', watchLive: true });
+    const tt = await openMounted(toggled.overlay);
+    const box = controls(tt).watchLiveBox as FakeElement & { checked: boolean };
+    box.checked = false;
+    box.dispatchEvent(new Event('change'));
+    toggled.overlay.applied('T');
+    expect(toggled.overlay.shown).toBe(true);
+  });
+
+  test('the mode switch and Watch live are saved at once (save called with the new settings); Watch live shows in full only', async () => {
+    const s = setup({ mode: 'full', watchLive: true });
+    const t = await openMounted(s.overlay);
+    const c = controls(t);
+    const box = c.watchLiveBox as FakeElement & { checked: boolean };
+    expect([box.checked, c.watchLive.hidden]).toEqual([true, false]);
+    c.split.click();
+    expect(s.save.mock.calls).toEqual([[{ mapMode: 'split', watchLive: true }]]);
+    expect(c.watchLive.hidden).toBe(true);
+    expect(c.split.getAttribute('aria-pressed')).toBe('true');
+    expect(c.full.getAttribute('aria-pressed')).toBe('false');
+    // The pressed mode again changes and saves nothing.
+    c.split.click();
+    expect(s.save).toHaveBeenCalledTimes(1);
+    c.full.click();
+    expect(s.save.mock.calls.at(-1)).toEqual([{ mapMode: 'full', watchLive: true }]);
+    expect(c.watchLive.hidden).toBe(false);
+    box.checked = false;
+    box.dispatchEvent(new Event('change'));
+    expect(s.save.mock.calls.at(-1)).toEqual([{ mapMode: 'full', watchLive: false }]);
+    expect(s.save).toHaveBeenCalledTimes(3);
+  });
+
+  test('a teleport from the tool whose onTeleport resolves true closes the map in full (owner world) and keeps it open in split; false keeps it open in both', async () => {
+    for (const mode of ['full', 'split'] as const) {
+      let answer = false;
+      const s = setup({ mode, teleport: () => Promise.resolve(answer) });
+      const t = await openMounted(s.overlay);
+      // False: "Could not teleport", or superseded by a later click.
+      t.deps.onTeleport!(5, 6);
+      await settle();
+      expect([s.overlay.shown, s.overlay.owner], `${mode} false`).toEqual([true, 'map']);
+      answer = true;
+      t.deps.onTeleport!(5, 6);
+      await settle();
+      expect([s.overlay.shown, s.overlay.owner], `${mode} true`).toEqual(mode === 'full' ? [false, 'world'] : [true, 'map']);
+      s.overlay.dispose();
+    }
+  });
+
+  test('Centre on me calls the tool\'s show with the camera\'s x and z (the fake tool\'s view keeps its bpp); ✕ Close (M) hides the map', async () => {
+    const s = setup({ fly: flyAt(100, -40, 30) });
+    const t = await openMounted(s.overlay);
+    const c = controls(t);
+    t.tool.setView({ ...t.tool.view, x: 5000, z: 7000, bpp: 0.5 });
+    s.fly.x = 321;
+    s.fly.z = -654;
+    c.centre.click();
+    expect(t.calls.show.at(-1)).toEqual({ x: 321, z: -654 });
+    expect(t.tool.view).toEqual({ x: 321, z: -654, bpp: 0.5, layer: 'biome' });
+    expect(c.close.textContent).toBe('✕ Close (M)');
+    c.close.click();
+    expect([s.overlay.shown, s.overlay.owner]).toEqual([false, 'world']);
+    expect(t.calls.hide).toBe(1);
+  });
+
+  test('the header\'s controls: "Full screen | Side by side", "Watch live", "Centre on me", "✕ Close (M)" in the toolbar slot', async () => {
+    const s = setup();
+    const t = await openMounted(s.overlay);
+    const c = controls(t);
+    expect([c.full.textContent, c.split.textContent, c.watchLive.textContent, c.centre.textContent, c.close.textContent])
+      .toEqual(['Full screen', 'Side by side', 'Watch live', 'Centre on me', '✕ Close (M)']);
+    for (const b of [c.full, c.split, c.centre, c.close]) expect(b.type).toBe('button');
+    expect(c.watchLiveBox.type).toBe('checkbox');
+  });
+});

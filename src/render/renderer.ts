@@ -117,6 +117,11 @@ export interface WorldRenderer {
   warmUp(state: FrameState): void;
   /** The live render distance's far plane: `camera.far = cameraFar(rd)`, projection updated (SP4b spec §5). */
   setRenderDistance(rd: number): void;
+  /**
+   * Follows the host's size now (aspect, pixel ratio, drawing buffer; `applyViewport`), as the ResizeObserver does a
+   * frame later: the map's mode B calls it at the switch, then `frame`, so the painted frame is drawn (SP4c spec §2.2).
+   */
+  resize(): void;
   /** The GPU memory estimate's parts in bytes (SP4b spec §8.4), written into `out`. */
   gpuEstimate(out: GpuEstimate): GpuEstimate;
   /** The last frame's draw calls and triangles. */
@@ -447,6 +452,7 @@ export function createWorldRenderer(host: HTMLElement, o: WorldRendererOptions):
     setRenderDistance(rd) {
       applyRenderDistance(camera, rd);
     },
+    resize,
     gpuEstimate(out) {
       return gpuEstimateOf(estimateParts, out);
     },

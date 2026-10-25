@@ -101,7 +101,7 @@ import type { FlightContext } from './flight';
 import { createFogEase, createFogStep, filledRadius } from './fogEase';
 import { createFrameClock, createFrameNotice, lowerRd } from './frameNotice';
 import { createFrameStep, eyeSkyLight } from './frameStep';
-import { createMapOverlay, followSession, type MapOverlay } from './mapOverlay';
+import { createMapOverlay, followSession, frameCapFor, type MapOverlay } from './mapOverlay';
 import { createReloader, hereUrl, installLeaveGuard, navigateTo, type Reloader } from './reload';
 import { Y_MAX, Y_MIN, type WorldQuery } from './query';
 
@@ -1343,7 +1343,8 @@ export function mountWorldPage(root: HTMLElement, q: WorldQuery, hash: string, o
     let shownRd = rdShownOnLoad(q.rd, loadRd, settings.rd);
     const applySettings = (s: WorldSettings): void => {
       const change = helpChange(settings, s, shownRd);
-      if (s.fpsCap !== settings.fpsCap) limiter.setCap(s.fpsCap);
+      // While mode A covers the 3D the cap stays at most 60 (SP4c spec §2.6).
+      if (s.fpsCap !== settings.fpsCap) limiter.setCap(frameCapFor(mapRef?.mode ?? 'full', mapRef?.shown ?? false, s.fpsCap));
       if (s.fov !== settings.fov) {
         world.camera.fov = s.fov;
         world.camera.updateProjectionMatrix();
@@ -1446,6 +1447,11 @@ export function mountWorldPage(root: HTMLElement, q: WorldQuery, hash: string, o
         settings = { ...settings, mapMode: m.mapMode, watchLive: m.watchLive };
         saveSettings(storage, settings);
       },
+      // Mode B resizes the 3D at the switch and draws one frame (SP4c spec §2.2); mode A caps it at 60 (§2.6).
+      world,
+      frameState,
+      limiter,
+      userCap: () => settings.fpsCap,
       fly,
       input,
       doc: document,
