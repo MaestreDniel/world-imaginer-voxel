@@ -48,8 +48,9 @@ import { currentTier, metricTest } from '../harness/metric';
  *   shows the applied epoch (the counts' `stale` 0, `firstFill`, every staged column uploaded); E2 an undo, until the
  *   world is back at epoch 1 by the same test; E3 one gesture setting the leaf to 2.0, then to 1.5 (the applied value),
  *   its end, then 60 frames; E4 a teleport 640 columns east (10,240 blocks; a multiple of the torus, so every new T
- *   waits on the record of an old column) until the disc refills. **The fast tier** runs E0, E1 and E4 only, at RD 4
- *   (spec §9: `metrics-fast` does not grow).
+ *   waits on the record of an old column) until the disc refills. **The fast tier** runs E0 and E1 only, at RD 4
+ *   (spec §9's rule: the first SP4c CI run had `metrics-fast` above 158 s, so E4 runs on the quick and full tiers
+ *   alone; final review GOV-1).
  * - **Parts** (gated, max 0, over E1-E4, summed over both renderers): `applyPartialColumnFrames`, the frames whose
  *   probe saw a shown column with some but not all of a payload's non-empty rows visible (`partial`), and
  *   `mixedEpochFrames`, the frames whose probe saw a column showing rows of two seqs (`mixed`).
@@ -64,11 +65,11 @@ import { currentTier, metricTest } from '../harness/metric';
  *   queued, so `releaseRowsPerPumpMax` reads 0 on every tier and D10's share is pinned by `regionGrid.test.ts` and the
  *   contract suite, final review REN-1/GOV-4); and at the end, after disposing the coordinator and every job settled, every
  *   thread's limbo drains (bounded, 5 s) and every pool slot is free.
- * - **Recorded:** `framesE0` … `framesE4`, `swaps` (reveals of a payload staged over a shown column), `frees` (the
+ * - **Recorded:** `framesE0` … `framesE4` (the legs the tier runs), `swaps` (reveals of a payload staged over a shown column), `frees` (the
  *   coordinator's column frees over E1-E4), `applyFirstSwapFrames` (the E1 Apply's frame to the first swap within 2
  *   columns of the camera), `applyFullFrames` (the E1 Apply's frame to the settled world), the same two for the E2
  *   undo (`undoFirstSwapFrames`, `undoFullFrames`; quick and full), `teleportFirstRevealFrames` (the teleport to the
- *   first reveal within the new disc), `structuralOps`, `rowsPerPumpMax` (after the reveal), `releaseRowsPerPumpMax`
+ *   first reveal within the new disc; quick and full), `structuralOps`, `rowsPerPumpMax` (after the reveal), `releaseRowsPerPumpMax`
  *   (pumps that began with an upload waiting), `releasedRows` (every row released after the reveal), `dropped` (results the coordinator dropped at intake, as SP4b's: the
  *   MESH results of an older epoch and the teleport's in-flight ones), `applies`, `adopts` and `staleReveals`. Counts are
  *   summed over both renderers; frame latencies and per-pump maxima are the larger of the two.
@@ -78,6 +79,8 @@ const TIER = currentTier();
 const FAST = TIER === 'fast';
 /** The render distance (spec §8.1). */
 const RD = FAST ? 4 : 6;
+/** The legs each tier runs (spec §8.1, §9): the fast tier's script is E0 and E1 alone (§9's CI rule, final review GOV-1). */
+const LEGS: readonly number[] = FAST ? [0, 1] : [0, 1, 2, 3, 4];
 /** The fake clock: one row the renderer spends, one frame (ms, spec §8.1). */
 const ROW_MS = 0.05;
 const FRAME_MS = 16;
@@ -431,24 +434,27 @@ async function edit(kind: SectionRendererKind): Promise<Run> {
       expect(settledAt(1), `${kind}: E3 leaves the world settled at epoch 1`).toBe(true);
     }
 
-    // E4: the teleport, until the disc refills; the T jobs issued from the teleport's update on.
-    leg = 4;
-    const mark = issued.length;
-    cx += TELEPORT_COLUMNS;
-    teleported = true;
-    markFrame = frameIndex;
-    firstNear = -1;
-    await until(filled, 'the teleport');
-    run.teleportFirstRevealFrames = firstNear;
-    const ts = issued.slice(mark).filter((j) => j.stage === 'T' && !j.protoOnly);
-    const key = (j: Issued): number => streamScore(j.cx - cx, j.cz - cz, 0, -1, STAGE_BONUS.T);
-    const order = (a: Issued, b: Issued): number => key(a) - key(b) || colKey(a.cx, a.cz) - colKey(b.cx, b.cz);
-    const first = ts.slice(0, FIRST_T_AFTER_TELEPORT);
-    expect(first.length, `${kind}: T jobs after the teleport`).toBe(FIRST_T_AFTER_TELEPORT);
-    expect(first, `${kind}: the first T jobs after the teleport, nearest-first`).toEqual([...first].sort(order));
+    if (!FAST) {
+      // E4: the teleport, until the disc refills; the T jobs issued from the teleport's update on.
+      leg = 4;
+      const mark = issued.length;
+      cx += TELEPORT_COLUMNS;
+      teleported = true;
+      markFrame = frameIndex;
+      firstNear = -1;
+      await until(filled, 'the teleport');
+      run.teleportFirstRevealFrames = firstNear;
+      const ts = issued.slice(mark).filter((j) => j.stage === 'T' && !j.protoOnly);
+      const key = (j: Issued): number => streamScore(j.cx - cx, j.cz - cz, 0, -1, STAGE_BONUS.T);
+      const order = (a: Issued, b: Issued): number => key(a) - key(b) || colKey(a.cx, a.cz) - colKey(b.cx, b.cz);
+      const first = ts.slice(0, FIRST_T_AFTER_TELEPORT);
+      expect(first.length, `${kind}: T jobs after the teleport`).toBe(FIRST_T_AFTER_TELEPORT);
+      expect(first, `${kind}: the first T jobs after the teleport, nearest-first`).toEqual([...first].sort(order));
+    }
     coordinator.counts(counts);
 
     measuring = false;
+    expect(run.frames.flatMap((n, i) => (n > 0 ? [i] : [])), `${kind}: the legs run`).toEqual(LEGS);
     run.dropped = counts.dropped;
     run.structuralOps = sections.counts(uploads).structuralOps;
     expect(badGenerations, `${kind}: world jobs issued at a generation the world neither applied nor adopted`).toEqual([]);
@@ -487,7 +493,7 @@ metricTest('R7', ['applyPartialColumnFrames', 'mixedEpochFrames'], async () => {
   const sum = (f: (r: Run) => number): number => runs.reduce((s, r) => s + f(r), 0);
   const max = (f: (r: Run) => number): number => Math.max(...runs.map(f));
   const legs: Record<string, number> = {};
-  for (let i = 0; i < 5; i++) if (!FAST || i === 0 || i === 1 || i === 4) legs[`framesE${i}`] = sum((r) => r.frames[i]!);
+  for (const i of LEGS) legs[`framesE${i}`] = sum((r) => r.frames[i]!);
   return {
     applyPartialColumnFrames: sum((r) => r.applyPartialColumnFrames),
     mixedEpochFrames: sum((r) => r.mixedEpochFrames),
@@ -497,7 +503,7 @@ metricTest('R7', ['applyPartialColumnFrames', 'mixedEpochFrames'], async () => {
     applyFirstSwapFrames: max((r) => r.applyFirstSwapFrames),
     applyFullFrames: max((r) => r.applyFullFrames),
     ...(FAST ? {} : { undoFirstSwapFrames: max((r) => r.undoFirstSwapFrames), undoFullFrames: max((r) => r.undoFullFrames) }),
-    teleportFirstRevealFrames: max((r) => r.teleportFirstRevealFrames),
+    ...(FAST ? {} : { teleportFirstRevealFrames: max((r) => r.teleportFirstRevealFrames) }),
     structuralOps: sum((r) => r.structuralOps),
     rowsPerPumpMax: max((r) => r.rowsPerPumpMax),
     releaseRowsPerPumpMax: max((r) => r.releaseRowsPerPumpMax),
