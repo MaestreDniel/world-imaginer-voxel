@@ -20,8 +20,9 @@
  * On the ticks the limiter renders (the rendered delta from `FrameClock`), in this order:
  * 4. `pump` under the frame's upload budget, from the last rebuild's centre and yaw (§3.9);
  * 5. the floating origin (`setOrigin` on a rebase, O(regions)) and the camera; the store's reclamation drain (§2.5);
- * 6. the eye's sky light in one read section (`lightAt` >> 4; 15 for a column not Published and above y 319, 0 below
- *    −64), the time, the fog's RD (`fogStep`), `world.frame` (materials, translucent sort, render), then `onRendered`.
+ * 6. the eye's sky light in one read section (`lightAt` >> 4; its last value, `state.eyeSky`, for a column not
+ *    Published, SP4c spec §3.4; 15 above y 319, 0 below −64), the time, the fog's RD (`fogStep`), `world.frame`
+ *    (materials, translucent sort, render), then `onRendered`.
  *
  * Nothing here allocates per tick: the delta window, its scratch, the camera and the frame state are reused.
  */
@@ -63,7 +64,10 @@ export interface FrameStepDeps {
   readonly sections: Pick<SectionRenderer, 'pump'>;
   readonly world: Pick<WorldRenderer, 'origin' | 'camera' | 'frame' | 'sections'>;
   readonly store: Pick<VoxelStore, 'enterRead' | 'exitRead' | 'lightAt' | 'drain'>;
-  /** The one reused FrameState (SP4b spec §3.10): `t`, `eyeSky` and `rd` are written here, `brightness` by the page. */
+  /**
+   * The one reused FrameState (SP4b spec §3.10): `t`, `eyeSky` and `rd` are written here, `brightness` by the page; a
+   * teleport resets `eyeSky` to 15 (SP4c spec §3.4).
+   */
   readonly state: { t: number; brightness: number; eyeSky: number; rd: number; fogBand: number };
   /** One of `TIME_SPEEDS`, or 0 when the clock is fixed. */
   timeSpeed(): number;
@@ -79,15 +83,17 @@ export function displayInterval(measuredMs: number): number {
 }
 
 /**
- * The sky light 0-15 at the eye (spec §6.6): 15 above y 319 and for a column that is not Published (`lightAt`'s −1),
- * 0 below −64. Call it inside a read section.
+ * The sky light 0-15 at the eye (spec §6.6): 15 above y 319, 0 below −64, and `last` for a column that is not Published
+ * (`lightAt`'s −1: freed by an Apply, or not yet generated), so a cave keeps its darkness while its column is rebuilt
+ * (SP4c spec §3.4, D13). The frame step passes its last value (`state.eyeSky`, which a teleport resets to 15); the
+ * pre-reveal frames pass 15. Call it inside a read section.
  */
-export function eyeSkyLight(store: Pick<VoxelStore, 'lightAt'>, x: number, y: number, z: number): number {
+export function eyeSkyLight(store: Pick<VoxelStore, 'lightAt'>, x: number, y: number, z: number, last: number): number {
   const by = Math.floor(y);
   if (by > 319) return 15;
   if (by < -64) return 0;
   const v = store.lightAt(Math.floor(x), by, Math.floor(z));
-  return v < 0 ? 15 : v >> 4;
+  return v < 0 ? last : v >> 4;
 }
 
 export function createFrameStep(d: FrameStepDeps): { tick(now: number): void } {
@@ -133,7 +139,7 @@ export function createFrameStep(d: FrameStepDeps): { tick(now: number): void } {
       // 6. The eye's light in one read section, the time, the fog, the render.
       store.enterRead();
       try {
-        state.eyeSky = eyeSkyLight(store, fly.x, fly.y, fly.z);
+        state.eyeSky = eyeSkyLight(store, fly.x, fly.y, fly.z, state.eyeSky);
       } finally {
         store.exitRead();
       }

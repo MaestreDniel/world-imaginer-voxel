@@ -191,7 +191,7 @@ world-imaginer-voxel/          (repository root)
     ui/world/* ui/loading/* ui/spike/* settings.ts   (SP4a) the 3D page: the minimal start screen at `/`, the world page, the
                                 flight (`?flight=sp4a`) and panorama (`?pano`) routes; the loading screen with panoramas, tips and progress; the spike
                                 page (`?spike=batch`); the world's small settings block (SP5's settings panel replaces it);
-                                ui/world/bench.ts (SP4b: the `?bench=medium` route and its JSON); mapOverlay.ts (SP4c)
+                                ui/world/bench.ts (SP4b: the `?bench=medium` route and its JSON); mapOverlay.ts teleport.ts (SP4c)
     ui/inspector/*              (SP3d) the ?map Density tab. Pure: model.ts form.ts jsonText.ts editorModel.ts hoverModel.ts
                                 sliceModel.ts; DOM: jsonEditor.ts sliceView.ts densityTab.ts inspector.css (SP10's full probe and
                                 further JSON editors go here too)
@@ -681,10 +681,10 @@ final     = max( min( min(terrain + detail, max(caves, lakeRoof)), 16·noodle ),
 SP2a uses the 2D estimate `surfaceEst = offset` (after rivers and lakes). SP3b adds the 3D estimate below as `surfaceEst3` (`gen/column/surfaceEstimate.ts`), used by T5 and by later consumers (aquifers, structures, spawn, teleport). The ColumnSample's `surfaceEst`, which the map, the biome picker and the column stage read, stays the 2D `offset`, so the `surfaceEst` stage version is not bumped (amended by SP3b; the SP3b spec's Decision 2 and §5).
 
 - **surfaceEstimate(x,z)** (`surfaceEst3`): start at ⌊`offset`⌋ (the bilinear ColumnSample value, clamped to [−64, 319]) and step ±8 blocks through the probe of the `terrain` tap (interpolated, without `detail`) until the sign changes, then bisect the 8-block bracket 3 times to one block. No sign change up to 319 returns 319, none down to −64 returns −64. An 8-step scan can cross a gap and return an overhang's underside; T5 measures single-surface positions only (amended by SP3b).
-- Caching on the quart lattice comes with its first consumer (aquifers, structures, spawn, teleport: SP4c-SP9; amended by SP3b, which caches nothing).
+- Caching on the quart lattice comes with its first consumer (aquifers, structures: SP6-SP9; spawn and teleport query one point each and need none, SP4c) (amended by SP3b, which caches nothing, and SP4c).
 - T5 holds `|est − true top|` to median ≤ 1, p90 ≤ 2, p99 ≤ 6.
 - **surfaceWaterLevel:** 63 for ocean and river, Lw for lakes, otherwise −∞.
-- **Teleport** (SP4c; SP4a places the camera from the loaded `MOTION_BLOCKING`): go to `surfaceEst + 2`, then snap to `MOTION_BLOCKING` once the column is published. While unloaded, the player hovers.
+- **Teleport** (SP4c): in flight, the camera at max(surface, surfaceWaterLevel) + 24, at most 400, the yaw and pitch kept, where surface is max(⌊surfaceEst⌋, `surfaceEst3`) whenever the density tree has a `terrain` tap (the default tree included), else ⌊surfaceEst⌋, from one worker query before the terrain exists (the 3D estimate, so the arrival is never inside a jagged peak; the spawn keeps its own rule); in walk mode (SP5) the feet at that surface + 1, the look direction kept, snapped to `MOTION_BLOCKING` once the column is published; while unloaded, the player hovers.
 
 ### 3.8 Carvers (stage T, after density)
 

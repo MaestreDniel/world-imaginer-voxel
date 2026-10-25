@@ -104,6 +104,7 @@ import { createFrameStep, eyeSkyLight } from './frameStep';
 import { createMapOverlay, followSession, frameCapFor, type MapOverlay } from './mapOverlay';
 import { createReloader, hereUrl, installLeaveGuard, navigateTo, type Reloader } from './reload';
 import { Y_MAX, Y_MIN, type WorldQuery } from './query';
+import { createTeleport } from './teleport';
 
 /** The capture and test options (ruling P48). */
 export interface WorldPageOptions {
@@ -204,14 +205,15 @@ function causeOf(e: unknown, message: string | null = null): string {
 }
 
 /**
- * The eye's sky light 0-15 (spec §6.6) inside one read section of the store (SP4b spec §2.4, §2.5): 15 above y 319 and
- * over a column that is not Published (streaming has no disc: a column outside the loaded set reads as open sky), 0
- * below −64. The frame step reads it the same way (`eyeSkyLight`).
+ * The eye's sky light 0-15 (spec §6.6) inside one read section of the store (SP4b spec §2.4, §2.5), before the reveal:
+ * 15 above y 319 and over a column that is not Published (streaming has no disc: a column outside the loaded set reads
+ * as open sky), 0 below −64. After the reveal the frame step reads it through the same `eyeSkyLight`, keeping its last
+ * value instead of 15 over a column not Published (SP4c spec §3.4).
  */
 function skyLightAt(store: VoxelStore, x: number, y: number, z: number): number {
   store.enterRead();
   try {
-    return eyeSkyLight(store, x, y, z);
+    return eyeSkyLight(store, x, y, z, 15);
   } finally {
     store.exitRead();
   }
@@ -1432,6 +1434,16 @@ export function mountWorldPage(root: HTMLElement, q: WorldQuery, hash: string, o
     });
     teardown.push(() => input.dispose());
 
+    // The teleport (SP4c spec §3.2-§3.4): the landing on the shared pool, the camera moved in place, the eye light
+    // reset to 15; the fog does not react (Point 1). The next tick's `coordinator.update` does the crossing.
+    const teleport = createTeleport({
+      pool: workers,
+      fly,
+      state: frame,
+      onArrive: () => {},
+      // The notice "Could not teleport" is routed over the map with Task 20's notices; until then, the console.
+      onFail: () => console.warn('Could not teleport'),
+    });
     // The map overlay (SP4c spec §1.3): M before the reveal does nothing, since nothing exists to receive it.
     const mapOverlay = createMapOverlay({
       app: root,
@@ -1459,8 +1471,8 @@ export function mountWorldPage(root: HTMLElement, q: WorldQuery, hash: string, o
       doc: document,
       win: window,
       now: () => performance.now(),
-      // The teleport arrives with Task 17; until then a map click moves nothing.
-      onTeleport: () => Promise.resolve(false),
+      // A plain click teleports (SP4c spec §3); the overlay closes the map on arrival in full screen.
+      onTeleport: (x, z) => teleport.go(x, z),
     });
     mapRef = mapOverlay;
     // Disposed before the input, the driver and the page's subscribe: a gesture still open ends through the tool.

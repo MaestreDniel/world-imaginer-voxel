@@ -927,7 +927,19 @@ describe('master spec amendments (SP4c §12)', () => {
     [/^\s+coordinator\.ts /, 'jobHeap.ts (SP4c)', 'src/engine/jobHeap.ts'],
     [/^\s+ui\/map\/\* /, 'mapTool.ts', 'src/ui/map/mapTool.ts'],
     [/^\s+ui\/world\/\* /, 'mapOverlay.ts', 'src/ui/world/mapOverlay.ts'],
+    [/^\s+ui\/world\/\* /, 'teleport.ts', 'src/ui/world/teleport.ts'],
   ];
+
+  test('§3.7\'s Teleport and caching lines: 24 above the 3D surface or the water, no cache (SP4c spec §3.2, §12)', () => {
+    const at = text.indexOf('### 3.7 surfaceEstimate and surfaceWaterLevel');
+    const s37 = text.slice(at, text.indexOf('### 3.8 ', at));
+    const caching = s37.split('\n').find((l) => l.startsWith('- Caching on the quart lattice comes with its first consumer'));
+    expect(caching, 'no `- Caching on the quart lattice …` line in §3.7').toBeDefined();
+    expect(caching).toContain('(aquifers, structures: SP6-SP9; spawn and teleport query one point each and need none, SP4c)');
+    expect(caching).not.toContain('SP4c-SP9');
+    expect(s37).toContain('- **Teleport** (SP4c): in flight, the camera at max(surface, surfaceWaterLevel) + 24, at most 400, the yaw and pitch kept, where surface is max(⌊surfaceEst⌋, `surfaceEst3`) whenever the density tree has a `terrain` tap (the default tree included), else ⌊surfaceEst⌋, from one worker query before the terrain exists (the 3D estimate, so the arrival is never inside a jagged peak; the spawn keeps its own rule); in walk mode (SP5) the feet at that surface + 1, the look direction kept, snapped to `MOTION_BLOCKING` once the column is published; while unloaded, the player hovers.');
+    expect(s37).not.toContain('surfaceEst + 2');
+  });
 
   test('§5.6\'s click, saved places and streaming, and §5.9\'s M: the world\'s overlay (SP4c spec §2, §3.1, §12)', () => {
     const at56 = text.indexOf('### 5.6 Map view');

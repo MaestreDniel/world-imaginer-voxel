@@ -10,6 +10,7 @@ import { createFloatingOrigin } from '../../src/render/floatingOrigin';
 import { createFpsLimiter, type FpsCap } from '../../src/render/fpsLimiter';
 import { createFrameClock } from '../../src/ui/world/frameNotice';
 import { createFrameStep, displayInterval, eyeSkyLight, type FrameStepDeps } from '../../src/ui/world/frameStep';
+import { createTeleport } from '../../src/ui/world/teleport';
 
 const HZ60 = 1000 / 60;
 
@@ -175,13 +176,37 @@ describe('createFrameStep (SP4b spec §7.2)', () => {
     expect(r.log.slice(0, 5)).toEqual(['update', 'pump 3,-4,90', 'origin', 'setOrigin', 'drain']);
   });
 
-  test('a −1 from lightAt reads as sky 15', () => {
+  test('with `lightAt` −1 the eye light keeps its last value (6); 15 after a teleport; a Published column\'s light is read as today (SP4c spec §3.4, D13)', async () => {
     const r = rig();
-    r.light = 0x5a;
+    r.light = 0x6a;
     r.step.tick(HZ60);
+    // The camera's column freed by an Apply, or not yet generated: the last value stays.
     r.light = -1;
     r.step.tick(2 * HZ60);
-    expect(r.frames).toEqual([5, 15]);
+    r.step.tick(3 * HZ60);
+    expect(r.frames).toEqual([6, 6, 6]);
+    // A teleport resets it to 15 (open sky, 24 blocks above the surface); the new place is not Published yet.
+    const tp = createTeleport({
+      pool: { landing: () => Promise.resolve({ surface: 64, water: -Infinity }) },
+      fly: r.fly,
+      state: r.state,
+      onArrive: () => {},
+      onFail: () => {},
+    });
+    await expect(tp.go(5000, -3000)).resolves.toBe(true);
+    r.step.tick(4 * HZ60);
+    expect(r.frames.at(-1)).toBe(15);
+    expect(r.log.filter((l) => l.startsWith('lightAt')).at(-1)).toBe('lightAt 5000,88,-3000');
+    // Once Published, the column's light is read as today (>> 4).
+    r.light = 0xa0;
+    r.step.tick(5 * HZ60);
+    expect(r.frames.at(-1)).toBe(10);
+  });
+
+  test('eyeSkyLight returns `last` for a −1 and the light >> 4 otherwise', () => {
+    expect(eyeSkyLight({ lightAt: () => -1 }, 0.5, 70, 0.5, 6)).toBe(6);
+    expect(eyeSkyLight({ lightAt: () => -1 }, 0.5, 70, 0.5, 15)).toBe(15);
+    expect(eyeSkyLight({ lightAt: () => 0x3f }, 0.5, 70, 0.5, 6)).toBe(3);
   });
 
   test('above y 319 the eye reads sky 15 without a lightAt call (it would throw); below −64 it reads 0', () => {
@@ -191,9 +216,9 @@ describe('createFrameStep (SP4b spec §7.2)', () => {
     expect(above.log.some((l) => l.startsWith('lightAt'))).toBe(false);
     // The fly bounds keep the camera at y ≥ −64, so the lower branch is the helper's alone.
     const throws = { lightAt: (): number => { throw new RangeError('outside'); } };
-    expect(eyeSkyLight(throws, 0.5, -64.5, 0.5)).toBe(0);
-    expect(eyeSkyLight(throws, 0.5, 320, 0.5)).toBe(15);
-    expect(eyeSkyLight({ lightAt: (bx, by, bz) => (bx === -1 && by === -64 && bz === 3 ? 0xf3 : 0) }, -0.5, -63.5, 3.9)).toBe(15);
+    expect(eyeSkyLight(throws, 0.5, -64.5, 0.5, 7)).toBe(0);
+    expect(eyeSkyLight(throws, 0.5, 320, 0.5, 7)).toBe(15);
+    expect(eyeSkyLight({ lightAt: (bx, by, bz) => (bx === -1 && by === -64 && bz === 3 ? 0xf3 : 0) }, -0.5, -63.5, 3.9, 7)).toBe(15);
   });
 
   test('the time advances by the rendered delta and the fog RD comes from fogStep on rendered ticks', () => {
