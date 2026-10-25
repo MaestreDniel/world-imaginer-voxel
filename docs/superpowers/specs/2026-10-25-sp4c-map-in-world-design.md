@@ -596,3 +596,4 @@ The exit evidence goes under `## Exit evidence`, before the Threshold log. The e
 (One line per commit that changes `test/thresholds.lock.json`.)
 
 - 2026-10-25 — SP4c Task 1: startedSps gains 'SP4c' (spec §10).
+- 2026-10-25 — SP4c Task 22: R7 applyPartialColumnFrames max 0 and mixedEpochFrames max 0, gated from SP4c on every tier (apply.metric.ts, R7.apply; spec §8.1-§8.2); new parts.

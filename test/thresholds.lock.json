@@ -1,5 +1,5 @@
 {
-  "sha256": "56a720c00908e08660aee73879e69a28c743385ac3fd1281a5f2fa5ead2794ed",
+  "sha256": "e5de21e131ce9e31bee8597d59c61b3d9ee86680247420ce52de4ee9d00f9859",
   "canonical": {
     "startedSps": [
       "SP0",
@@ -362,6 +362,14 @@
         }
       },
       "R7": {
+        "applyPartialColumnFrames": {
+          "activeFrom": "SP4c",
+          "max": 0
+        },
+        "mixedEpochFrames": {
+          "activeFrom": "SP4c",
+          "max": 0
+        },
         "partialColumnFrames": {
           "activeFrom": "SP4b",
           "max": 0

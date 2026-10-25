@@ -84,8 +84,12 @@ export const THRESHOLDS: ThresholdTable = {
   R4: { medianQuads: { max: 2000, activeFrom: 'SP8b' }, p95Quads: { max: 4000, activeFrom: 'SP8b' } },
   R5: { waterQuadsPerFace: { max: 0.1, activeFrom: 'SP7' } },
   // SP4b spec §8.1-§8.2 (D24): the atomic reveal while streaming, from the scripted flight in Node over both section
-  // renderers (`stream.metric.ts`), every tier; the Apply part (`mixedEpochFrames`) is SP4c's (§12.1).
-  R7: { partialColumnFrames: { max: 0, activeFrom: 'SP4b' } },
+  // renderers (`stream.metric.ts`), every tier. SP4c spec §8.1-§8.2 (D21): the Apply part, from the scripted edits, undo
+  // and teleport in Node over both renderers (`apply.metric.ts`, `.out/R7.apply.json`), every tier.
+  R7: {
+    partialColumnFrames: { max: 0, activeFrom: 'SP4b' },
+    applyPartialColumnFrames: { max: 0, activeFrom: 'SP4c' }, mixedEpochFrames: { max: 0, activeFrom: 'SP4c' },
+  },
   // SP4a spec §9.1: the light against the global reference BFS, and enclosed air with sky light (`light.metric.ts`).
   L1: { mismatches: { max: 0, activeFrom: 'SP4a' } },
   L2: { enclosedLit: { max: 0, activeFrom: 'SP4a' } },

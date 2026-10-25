@@ -32,7 +32,7 @@ describe('shardArgs (SP4b spec §1.1)', () => {
   test('the metrics-quick table keeps its shards and files', () => {
     expect(Object.keys(METRIC_SHARDS)).toEqual(['terrain', 'surface', 'render', 'rest']);
     expect(METRIC_SHARDS).toEqual({
-      terrain: ['test/metrics/terrain.metric.ts'],
+      terrain: ['test/metrics/terrain.metric.ts', 'test/metrics/apply.metric.ts'],
       surface: ['test/metrics/surface.metric.ts'],
       render: ['test/metrics/render.metric.ts', 'test/metrics/light.metric.ts', 'test/metrics/g1.metric.ts', 'test/metrics/stream.metric.ts'],
       rest: null,

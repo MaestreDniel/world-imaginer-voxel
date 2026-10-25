@@ -16,7 +16,8 @@ const DIR = 'test/metrics';
  * i7-12700H): terrain 167 s (T1), surface 167 s (S1), noise 108 s, the other seven files 80 s together; noise in `rest`.
  */
 export const SHARDS = {
-  terrain: [`${DIR}/terrain.metric.ts`],
+  // SP4c spec §8.1, §9: R7's Apply part (`apply.metric.ts`, planned 25-35 s at RD 6) joins the shard with the most room.
+  terrain: [`${DIR}/terrain.metric.ts`, `${DIR}/apply.metric.ts`],
   surface: [`${DIR}/surface.metric.ts`],
   // SP4a spec §10 (D28): the renderer's and the light's metric files (R1, R2, R4, R5; L1, L2, DT1.light, S1.light),
   // with their cold region caches, and G1's static cells (a JSON read; ruling P53). SP4b spec §8.1, §9: R7's streaming

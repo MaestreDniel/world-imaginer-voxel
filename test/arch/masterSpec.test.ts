@@ -58,7 +58,9 @@
  * activeFrom SP4b, and the RTX check at the exit; no "first playable" is left in §4.18, §6.4, §7 or §8.
  * SP4c (its spec §10, §12): the first commit moves the SP4c header pin here (L, with its spec) with §10's SP4c entry,
  * SP5's walk-mode teleport and saved places and SP10's map layers without bookmarks; §1 names each SP4c module in its
- * entry, which exists (`SP4C_MODULES`, a row added by each task that adds a module).
+ * entry, which exists (`SP4C_MODULES`, a row added by each task that adds a module). R7's Apply commit (SP4c §8.1-§8.2,
+ * §12): §6.4's R7 row names `applyPartialColumnFrames` and `mixedEpochFrames`, which `THRESHOLDS` holds activeFrom SP4c
+ * beside SP4b's `partialColumnFrames` (SP4b's R7 pin moved into the SP4c block).
  */
 import { existsSync, readdirSync, readFileSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
@@ -841,15 +843,6 @@ describe('master spec amendments (SP4b §13)', () => {
     expect(layoutEntry(/^\s+ui\/world\/\* /)).toContain('ui/world/bench.ts (SP4b: the `?bench=medium` route and its JSON)');
   });
 
-  test('§6.4\'s R7 row names `partialColumnFrames` and the SP4b flight part, and THRESHOLDS holds it activeFrom SP4b', () => {
-    const r7 = text.split('\n').find((l) => l.startsWith('| R7 |'));
-    expect(r7, 'no R7 row in §6.4').toBeDefined();
-    expect(r7).toContain('atomic reveal during the bench flight (SP4b: `partialColumnFrames`, from the streaming metric\'s scripted flight in Node; the bench records the same probe) and a terrain Apply (SP4c)');
-    expect(r7).toContain('| 0 (the flight part SP4b, the Apply part SP4c) |');
-    expect(Object.keys(THRESHOLDS.R7 ?? {})).toEqual(['partialColumnFrames']);
-    expect(THRESHOLDS.R7?.partialColumnFrames).toEqual({ max: 0, activeFrom: 'SP4b' });
-  });
-
   test('§6.4\'s G1 row names the six streaming parts THRESHOLDS holds activeFrom SP4b', () => {
     const g1 = text.split('\n').find((l) => l.startsWith('| G1 |'));
     expect(g1, 'no G1 row in §6.4').toBeDefined();
@@ -1027,6 +1020,18 @@ describe('master spec amendments (SP4c §12)', () => {
     const uploads = s43.split('\n').find((l) => l.startsWith('**Uploads**'));
     expect(uploads, 'no `**Uploads**` paragraph in §4.3').toBeDefined();
     expect(uploads).toContain('(SP4c: at most half the row cap on releases while an upload waits)');
+  });
+
+  test('§6.4\'s R7 row names the Apply part and THRESHOLDS holds it (SP4c spec §8.1-§8.2, §12; SP4b\'s pin moved here)', () => {
+    const r7 = text.split('\n').find((l) => l.startsWith('| R7 |'));
+    expect(r7, 'no R7 row in §6.4').toBeDefined();
+    expect(r7).toContain('atomic reveal during the bench flight (SP4b: `partialColumnFrames`, from the streaming metric\'s scripted flight in Node; the bench records the same probe)');
+    expect(r7).toContain('and a terrain Apply (SP4c: `applyPartialColumnFrames` and `mixedEpochFrames`, from the Apply metric\'s scripted edits and teleport in Node)');
+    expect(r7).toContain('| 0 (the flight part SP4b, the Apply part SP4c) |');
+    expect(Object.keys(THRESHOLDS.R7 ?? {})).toEqual(['partialColumnFrames', 'applyPartialColumnFrames', 'mixedEpochFrames']);
+    expect(THRESHOLDS.R7?.partialColumnFrames).toEqual({ max: 0, activeFrom: 'SP4b' });
+    expect(THRESHOLDS.R7?.applyPartialColumnFrames).toEqual({ max: 0, activeFrom: 'SP4c' });
+    expect(THRESHOLDS.R7?.mixedEpochFrames).toEqual({ max: 0, activeFrom: 'SP4c' });
   });
 
   test('§1 names each SP4c module in its entry, which exists', () => {
