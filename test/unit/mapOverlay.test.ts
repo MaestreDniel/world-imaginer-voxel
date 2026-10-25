@@ -667,6 +667,27 @@ describe('modes A and B, the covered cap and Watch live (SP4c spec §2.1, §2.2,
     expect(s.worldHost.classList.contains('split')).toBe(false);
   });
 
+  test('a close with a map field focused blurs it, as a Watch-live Apply after a typed value and Enter (final review MAP-4); a focus outside the map stays', async () => {
+    const live = setup({ watchLive: true });
+    await openMounted(live.overlay);
+    const field = live.doc.createElement('input');
+    field.type = 'text';
+    live.host().append(field);
+    field.focus();
+    expect(live.doc.activeElement).toBe(field);
+    live.overlay.applied('T');
+    expect(live.overlay.shown).toBe(false);
+    // The world's keys read the focus (`isTextEntry(document.activeElement)`): the body gives them back at once.
+    expect(live.doc.activeElement).toBe(live.doc.body);
+    // A field outside the map (the world's own) keeps its focus over an M close.
+    live.overlay.open();
+    const outside = live.doc.createElement('input');
+    live.doc.body.append(outside);
+    outside.focus();
+    live.overlay.close();
+    expect(live.doc.activeElement).toBe(outside);
+  });
+
   test('applied(\'T\') with Watch live in full shown closes the map and the owner becomes world; with Watch live off, in split, or applied(null), the map stays', async () => {
     const live = setup({ mode: 'full', watchLive: true });
     await openMounted(live.overlay);

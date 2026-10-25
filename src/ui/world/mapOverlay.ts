@@ -448,6 +448,10 @@ export function createMapOverlay(o: MapOverlayOptions): MapOverlay {
   function close(): void {
     if (!shown) return;
     shown = false;
+    // A map field keeping the focus (a typed value, Enter, then a Watch-live close) would keep the world's keys dead in a
+    // browser without focus fixup on display: none: it gives the focus back first (final review MAP-4).
+    const focused = o.doc.activeElement as HTMLElement | null;
+    if (focused !== null && host.contains(focused)) focused.blur();
     host.style.display = 'none';
     tool?.hide();
     syncLayout();

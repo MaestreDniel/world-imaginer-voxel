@@ -176,6 +176,12 @@ export class FakeElement extends EventTarget {
     if (this.ownerDocument !== null) this.ownerDocument.activeElement = this;
   }
 
+  /** Whether `other` is this element or one of its descendants, as the DOM's `contains`. */
+  contains(other: FakeElement | null): boolean {
+    for (let e = other; e !== null && e !== undefined; e = e.parentElement) if (e === this) return true;
+    return false;
+  }
+
   /** Gives the focus back to the owner document's body when the element has it. */
   blur(): void {
     if (this.ownerDocument !== null && this.ownerDocument.activeElement === this) this.ownerDocument.activeElement = this.ownerDocument.body;
