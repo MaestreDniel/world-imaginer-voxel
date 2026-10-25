@@ -10,7 +10,7 @@ import {
 } from '../../src/render/sectionRenderer';
 import { createFlatColorArray } from '../../src/render/textureArray';
 import { fakePayload, fakeSphere, type FakeRow } from './fixtures/payloads';
-import { fakeGate, opaque, pumpAll, rowsOf, sectionRendererContract, visibleIndices, water } from './sectionRendererContract';
+import { fakeGate, indexSum, opaque, pumpAll, rowsOf, sectionRendererContract, visibleIndices, water } from './sectionRendererContract';
 
 sectionRendererContract('batch');
 
@@ -384,6 +384,89 @@ describe('RegionBatch (SP4b spec §4.2, D14)', () => {
   test('the materials come from a batch material system', () => {
     expect(() => createSectionRenderer('batch', system('mesh'))).toThrow(/variant/);
     expect(createSectionRenderer('batch', system('batch')).kind).toBe('batch');
+  });
+});
+
+describe('RegionBatch\'s swap (SP4c spec §5.2, D9)', () => {
+  /** The batch's active visible instances, each with its geometry id. */
+  const shownInstances = (b: BatchedMesh): Array<[instance: number, geometry: number]> => {
+    const info = (b as unknown as { _instanceInfo: Array<{ active: boolean }> })._instanceInfo;
+    const out: Array<[number, number]> = [];
+    for (let i = 0; i < info.length; i++) if (info[i]!.active && b.getVisibleAt(i)) out.push([i, b.getGeometryIdAt(i)]);
+    return out;
+  };
+
+  test('an optimize() during a swap keeps prev\'s rows visible and their ids valid', () => {
+    // 13 of 32 rows deleted (40.6 %): the replacement's 14 rows of 4,096 vertices do not fit, so the batch is optimised
+    // (13 rows then fit) and grown in the next pump for the last one, both while the shown 19 rows are prev.
+    const r = make();
+    r.stage(fakePayload(0, 0, big(13)), 1);
+    r.stage(fakePayload(1, 0, big(19)), 1);
+    pumpAll(r);
+    r.remove(0, 0);
+    expect(r.pump(fakeGate(32), 1, 0, 0)).toBe(13);
+    const b = batchOf(r, 0)!;
+    const before = shownInstances(b);
+    expect(before).toHaveLength(19);
+    const optimize = vi.spyOn(BatchedMesh.prototype, 'optimize');
+    r.stage(fakePayload(1, 0, big(14)), 2);
+    expect(r.pump(fakeGate(32), 1, 0, 0)).toBe(13);
+    expect(optimize).toHaveBeenCalledTimes(1);
+    expect(counts(r).lastStructural).toBe('optimize');
+    expect(r.isRevealed(1, 0)).toBe(true);
+    // prev's rows: the same instances, visible, over the same geometry ids, whose ranges optimize() moved consistently.
+    expect(shownInstances(b)).toEqual(before);
+    expect(visibleIndices(r.root)).toBe(19 * 6144);
+    const index = b.geometry.getIndex()!.array;
+    for (const [, id] of before) {
+      const range = b.getGeometryRangeAt(id)!;
+      expect(range.indexCount).toBe(6144);
+      expect(range.vertexCount).toBe(4096);
+      let inside = 0;
+      for (let k = range.indexStart; k < range.indexStart + range.indexCount; k++) {
+        if (index[k]! >= range.vertexStart && index[k]! < range.vertexStart + range.vertexCount) inside++;
+      }
+      expect(inside).toBe(6144);
+    }
+    // The last row waits for the growth; then the swap, and prev's rows are released by those very ids.
+    expect(r.pump(fakeGate(32), 1, 0, 0)).toBe(1);
+    expect(counts(r).lastStructural).toBe('grow');
+    expect(visibleIndices(r.root)).toBe(14 * 6144);
+    pumpAll(r, 1, 0);
+    expect(counts(r)).toMatchObject({ columnsRemoving: 0, rows: 14 });
+    expect(shownInstances(b)).toHaveLength(14);
+    expect(visibleIndices(r.root)).toBe(14 * 6144);
+    r.dispose();
+  });
+
+  test('the swap sets visibility in one pass (no frame shows neither)', () => {
+    const r = make();
+    const old = fakePayload(3, 3, rowsOf(8, 3));
+    r.stage(old, 1);
+    pumpAll(r, 3, 3);
+    const visibility = vi.spyOn(BatchedMesh.prototype, 'setVisibleAt');
+    const next = fakePayload(3, 3, rowsOf(10, 2, 2));
+    r.stage(next, 2);
+    const shownPerPump: number[] = [];
+    const callsPerPump: Array<Array<[number, boolean]>> = [];
+    for (let i = 0; i < 6; i++) {
+      visibility.mockClear();
+      r.pump(fakeGate(4), 3, 3, 0);
+      callsPerPump.push(visibility.mock.calls.map(([instance, on]) => [instance, on]));
+      shownPerPump.push(visibleIndices(r.root));
+    }
+    // 12 rows at four a pump: hidden uploads in pumps 0-2, the swap in pump 2; never a pump that shows neither payload.
+    expect(shownPerPump).toEqual([indexSum([old]), indexSum([old]), indexSum([next]), indexSum([next]), indexSum([next]), indexSum([next])]);
+    const shows = callsPerPump.map((calls) => calls.filter(([, on]) => on).length);
+    expect(shows).toEqual([0, 0, 12, 0, 0, 0]);
+    // In the swap's pump, after the last upload's hidden writes: prev's 11 rows hidden and the 12 new ones shown, one
+    // pass with no other call between them.
+    const swapCalls = callsPerPump[2]!;
+    expect(swapCalls).toHaveLength(4 + 11 + 12);
+    const tail = swapCalls.slice(4);
+    expect(tail.filter(([, on]) => !on)).toHaveLength(11);
+    expect(tail.filter(([, on]) => on)).toHaveLength(12);
+    r.dispose();
   });
 });
 

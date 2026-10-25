@@ -12,7 +12,8 @@ import type {
  * columns), the ready queue (each upload takes the staged column with the smallest MESH `streamScore` from the pump's
  * camera column and yaw: a linear scan, no allocation) and the pump's order; RegionBatch and RegionMesh supply a
  * `RegionBackend` that owns three's objects. Both also share the row gathering (`rowsOfPass`) and the section bounds
- * (`rowBounds`) (SP4b spec §7.6).
+ * (`rowBounds`) (SP4b spec §7.6). A shown column staged again swaps (SP4c spec §5.1, D9): its record keeps the shown
+ * one as `prev` until the replacement's last row is uploaded.
  */
 
 /** The region of column (cx, cz): `[cx >> 3, cz >> 3]`. */
@@ -125,6 +126,12 @@ export interface StagedColumn<R> {
   released: number;
   /** Shown in its objects (inside the hidden root while reveals are held). */
   revealed: boolean;
+  /**
+   * During a swap (SP4c spec §5.1): the shown record this one replaces, revealed, visible and holding its rows in the
+   * region's objects (so a growth, an optimisation or a compaction moves it) until this record's last row is uploaded;
+   * out of every list, reachable only from here. Null otherwise, and always null on a revealed record.
+   */
+  prev: StagedColumn<R> | null;
   /** Two renderer handles per row (RegionBatch: geometry and instance ids; RegionMesh: its index range), −1 for none. */
   readonly ids: Int32Array;
   /** The staging's bookkeeping: the score of the current pump, its slots in the lists, the pump that refused it. */
@@ -162,6 +169,11 @@ export interface RegionBackend<R> {
   reveal(c: StagedColumn<R>): void;
   /** Hides every held row of `c` at once (`c` is already out of its region's live columns). */
   hide(c: StagedColumn<R>): void;
+  /**
+   * The swap (SP4c spec §5.1): hides every held row of `prev` and shows every held row of `next`, in one call (`next`
+   * holds every row of its payload; with no non-empty row it shows nothing). `prev` then goes to the release queue.
+   */
+  swap(prev: StagedColumn<R>, next: StagedColumn<R>): void;
   /** Releases held row r. */
   release(c: StagedColumn<R>, r: number): void;
   /** Whether held row r is drawn: read from three's objects (its instance or index range, its object and the root). */
@@ -190,7 +202,13 @@ const MAX_OPS_PER_ROW = 8;
  * would starve region creation behind a removal backlog); (3) release removed rows, each counted against the row cap,
  * and dispose the regions left empty; (4) upload staged rows nearest-first, a row that needs a refused (or second)
  * structural operation waiting while farther columns go on; (5) reveal each column whose last row was uploaded, all
- * its rows in one call (`onColumnRevealed`). With nothing staged or removed a pump allocates nothing (D25).
+ * its rows in one call, or swap it with its `prev` in one call (`onColumnRevealed` either way). With nothing staged or
+ * removed a pump allocates nothing (D25).
+ *
+ * The swap (SP4c spec §5.1, D9): `stage` on a revealed column makes the shown record the new record's `prev`; the
+ * column stays revealed (the counts' `revealed` does not change) and `prev`'s rows stay drawn until step (5) swaps;
+ * `prev` then joins the release queue as a removal's rows do. A replacement with no non-empty row swaps in the `stage`
+ * call. `unstage` retires a pending record and makes its `prev`, if any, the live record again; `remove` retires both.
  */
 export function createStreamingRenderer<R>(
   kind: SectionRendererKind,
@@ -252,14 +270,28 @@ export function createStreamingRenderer<R>(
     c.liveAt = -1;
     if (c.pendingAt >= 0) dropPending(c);
     else complete--;
-    if (c.revealed) revealed--;
+    if (c.revealed || c.prev !== null) revealed--;
     const cols = c.region.columns;
     cols.splice(cols.indexOf(c), 1);
   };
 
-  /** A detached column: hidden at once, its held rows queued for release. */
-  const retire = (c: StagedColumn<R>): void => {
-    b.hide(c);
+  /** Puts a record in the live set (the counts follow), into the pending list when `waits` (else it is complete). */
+  const attach = (c: StagedColumn<R>, waits: boolean): void => {
+    live.set(c.key, c);
+    c.liveAt = liveList.length;
+    liveList.push(c);
+    c.region.columns.push(c);
+    if (waits) {
+      c.pendingAt = pending.length;
+      pending.push(c);
+    } else {
+      complete++;
+    }
+    if (c.revealed || c.prev !== null) revealed++;
+  };
+
+  /** A record out of the live set, already hidden: its held rows queued for release. */
+  const queueRelease = (c: StagedColumn<R>): void => {
     c.revealed = false;
     if (c.released < c.uploaded) {
       removing.push(c);
@@ -267,6 +299,21 @@ export function createStreamingRenderer<R>(
     } else {
       maybeEmptied(c.region);
     }
+  };
+
+  /** A detached column: hidden at once, its held rows queued for release. */
+  const retire = (c: StagedColumn<R>): void => {
+    b.hide(c);
+    queueRelease(c);
+  };
+
+  /** The swap of a live record whose every row is uploaded: `prev` hidden and `c` shown in one call, `prev` released. */
+  const swapIn = (c: StagedColumn<R>): void => {
+    const prev = c.prev!;
+    c.prev = null;
+    b.swap(prev, c);
+    c.revealed = true;
+    queueRelease(prev);
   };
 
   const nearest = (): StagedColumn<R> | null => {
@@ -308,30 +355,50 @@ export function createStreamingRenderer<R>(
     stage(p, seq) {
       const key = columnKey(p.cx, p.cz);
       const old = live.get(key);
+      // A revealed column swaps: the shown record becomes `prev`. During a swap the pending record is replaced and its
+      // `prev` kept; an unrevealed column's record is replaced (SP4c spec §5.1).
+      let prev: StagedColumn<R> | null = null;
       if (old !== undefined) {
-        if (old.revealed) {
-          throw new Error(`column (${p.cx}, ${p.cz}) is revealed: SP4b never stages a revealed column again (D16; the swap is SP4c's)`);
-        }
+        prev = old.revealed ? old : old.prev;
         detach(old);
-        retire(old);
+        old.prev = null;
+        if (prev !== old) retire(old);
       }
       const region = regionFor(p.cx, p.cz);
       const n = p.rows.length / ROW_INTS;
       let nonEmpty = 0;
       for (let r = 0; r < n; r++) if (!rowIsEmpty(p, r)) nonEmpty++;
+      // A replacement with no non-empty row has nothing to upload: it swaps in this call (an all-air column).
+      const now = prev !== null && nonEmpty === 0;
       const c: StagedColumn<R> = {
-        cx: p.cx, cz: p.cz, key, region, p, seq, rows: n, nonEmpty, uploaded: 0, released: 0, revealed: false,
-        ids: new Int32Array(2 * n).fill(-1), score: 0, liveAt: liveList.length, pendingAt: pending.length, blockedAt: -1,
+        cx: p.cx, cz: p.cz, key, region, p, seq, rows: n, nonEmpty, uploaded: now ? n : 0, released: 0, revealed: false,
+        prev, ids: new Int32Array(2 * n).fill(-1), score: 0, liveAt: -1, pendingAt: -1, blockedAt: -1,
       };
-      live.set(key, c);
-      liveList.push(c);
-      pending.push(c);
-      region.columns.push(c);
+      attach(c, !now);
+      if (now) {
+        swapIn(c);
+        const hook = self.onColumnRevealed;
+        if (hook !== null) hook(c.cx, c.cz);
+      }
+    },
+    unstage(cx, cz) {
+      const c = live.get(columnKey(cx, cz));
+      if (c === undefined || c.revealed) return false;
+      const prev = c.prev;
+      detach(c);
+      c.prev = null;
+      retire(c);
+      // What the column shows stays: `prev` is its record again.
+      if (prev !== null) attach(prev, false);
+      return true;
     },
     remove(cx, cz) {
       const c = live.get(columnKey(cx, cz));
       if (c === undefined) return;
+      const prev = c.prev;
       detach(c);
+      c.prev = null;
+      if (prev !== null) retire(prev);
       retire(c);
     },
     pump(gate: UploadGate, cx, cz, yawDeg) {
@@ -423,12 +490,17 @@ export function createStreamingRenderer<R>(
           break;
         }
       }
-      // (5) The reveals: each completed column's rows in one call.
+      // (5) The reveals: each completed column's rows in one call; a replacement swaps with its `prev` in one call (the
+      // column was already counted revealed).
       for (let i = 0; i < completed.length; i++) {
         const c = completed[i]!;
-        c.revealed = true;
-        revealed++;
-        b.reveal(c);
+        if (c.prev !== null) {
+          swapIn(c);
+        } else {
+          c.revealed = true;
+          revealed++;
+          b.reveal(c);
+        }
       }
       const hook = self.onColumnRevealed;
       if (hook !== null) for (let i = 0; i < completed.length; i++) hook(completed[i]!.cx, completed[i]!.cz);
@@ -458,7 +530,8 @@ export function createStreamingRenderer<R>(
       };
     },
     isRevealed(cx, cz) {
-      return root.visible && live.get(columnKey(cx, cz))?.revealed === true;
+      const c = live.get(columnKey(cx, cz));
+      return root.visible && c !== undefined && (c.revealed || c.prev !== null);
     },
     setOrigin(x, y, z) {
       b.setOrigin(x, y, z);
@@ -492,13 +565,20 @@ export function createStreamingRenderer<R>(
         const c = liveList[i]!;
         const v = visibleRows(c);
         if (v > 0 && v < c.nonEmpty) out.partial++;
+        const prev = c.prev;
+        if (prev === null) continue;
+        // A swap's `prev` is a shown record of its own, and the column mixes seqs when both draw rows.
+        out.columns++;
+        const w = visibleRows(prev);
+        if (w > 0 && w < prev.nonEmpty) out.partial++;
+        if (v > 0 && w > 0) out.mixed++;
       }
       for (let i = removingHead; i < removing.length; i++) {
         const c = removing[i]!;
         const v = visibleRows(c);
         if (v > 0 && v < c.nonEmpty) out.partial++;
         const now = v > 0 ? live.get(c.key) : undefined;
-        if (now !== undefined && visibleRows(now) > 0) out.mixed++;
+        if (now !== undefined && visibleRows(now) + (now.prev === null ? 0 : visibleRows(now.prev)) > 0) out.mixed++;
       }
       return out;
     },

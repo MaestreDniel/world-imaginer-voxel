@@ -17,7 +17,9 @@ import type { SectionRenderer, StructuralKind } from './sectionRenderer';
  * own sphere and box are the region's, set once (three never recomputes them).
  *
  * A removed column's rows are hidden at once and released in `pump` (`deleteGeometry`, which deletes the instance),
- * each against the row cap. A row that does not fit waits for the frame's structural operation: `optimize()` when the
+ * each against the row cap. A shown column's replacement (SP4c spec §5.2) is added hidden beside it under the same
+ * rules; its swap sets the old instances invisible and the new visible in one pass, and the old rows are then released
+ * like a removal's (`optimize` keeps geometry and instance ids, so it may run mid-swap). A row that does not fit waits for the frame's structural operation: `optimize()` when the
  * batch's deleted space is ≥ 40 % of its reservation, else `setGeometrySize` × 1.5; a full instance table
  * `setInstanceCount` × 1.5.
  */
@@ -155,6 +157,14 @@ export function createRegionBatch(materials: MaterialSystem): SectionRenderer {
     return null;
   };
   const passOf = (c: StagedColumn<BatchRegion>, r: number): number => c.p.rows[r * ROW_INTS + 1]!;
+  /** Every held row's instance of `c` shown or hidden. */
+  const setVisible = (c: StagedColumn<BatchRegion>, on: boolean): void => {
+    const passes = c.region.data.passes;
+    for (let r = c.released; r < c.uploaded; r++) {
+      const instance = c.ids[2 * r + 1]!;
+      if (instance >= 0) passes[passOf(c, r)]!.mesh.setVisibleAt(instance, on);
+    }
+  };
 
   const backend: RegionBackend<BatchRegion> = {
     newRegion: () => ({ passes: [null, null, null] }),
@@ -253,18 +263,15 @@ export function createRegionBatch(materials: MaterialSystem): SectionRenderer {
       touch(bp);
     },
     reveal(c) {
-      const passes = c.region.data.passes;
-      for (let r = c.released; r < c.uploaded; r++) {
-        const instance = c.ids[2 * r + 1]!;
-        if (instance >= 0) passes[passOf(c, r)]!.mesh.setVisibleAt(instance, true);
-      }
+      setVisible(c, true);
     },
     hide(c) {
-      const passes = c.region.data.passes;
-      for (let r = c.released; r < c.uploaded; r++) {
-        const instance = c.ids[2 * r + 1]!;
-        if (instance >= 0) passes[passOf(c, r)]!.mesh.setVisibleAt(instance, false);
-      }
+      setVisible(c, false);
+    },
+    swap(prev, next) {
+      // One pass of setVisibleAt over both (SP4c spec §5.2): the same region's batches, no structural step between.
+      setVisible(prev, false);
+      setVisible(next, true);
     },
     release(c, r) {
       const geometryId = c.ids[2 * r]!;

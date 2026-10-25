@@ -1,12 +1,16 @@
-import { Box3, Sphere, type BatchedMesh, type Mesh, type Object3D } from 'three';
+import { Box3, Group, Sphere, type BatchedMesh, type Mesh, type Object3D } from 'three';
 import { describe, expect, test } from 'vitest';
 import { MESH_PASS_CUTOUT, MESH_PASS_OPAQUE, MESH_PASS_TRANSLUCENT, ROW_INTS, type ColumnMeshPayload } from '../../src/mesh/column';
 import { createMaterialSystem, type MaterialVariant } from '../../src/render/materials/index';
-import { rowBounds, rowsOfPass, type PayloadRow } from '../../src/render/regionGrid';
-import { createSectionRenderer, type SectionRenderer } from '../../src/render/sectionRenderer';
+import {
+  createStreamingRenderer, rowBounds, rowsOfPass, type PayloadRow, type RegionBackend, type StagedColumn,
+} from '../../src/render/regionGrid';
+import {
+  createRevealProbe, createSectionRenderer, createSectionRendererCounts, type SectionRenderer,
+} from '../../src/render/sectionRenderer';
 import { createFlatColorArray } from '../../src/render/textureArray';
 import { fakePayload } from './fixtures/payloads';
-import { pumpAll } from './sectionRendererContract';
+import { fakeGate, pumpAll } from './sectionRendererContract';
 
 const ALBEDO = createFlatColorArray();
 
@@ -144,5 +148,137 @@ describe('regionGrid: the shared row gathering and section bounds (SP4b spec §4
       expect(g.boundingBox!.equals(want.box)).toBe(true);
       r.dispose();
     }
+  });
+});
+
+/**
+ * A recording `RegionBackend`: every call logged by the record's seq, the drawn rows kept as a set of `seq:row`; no
+ * structural operation is ever needed.
+ */
+function recordingBackend(): { backend: RegionBackend<null>; log: string[]; visible: Set<string> } {
+  const log: string[] = [];
+  const visible = new Set<string>();
+  const show = (c: StagedColumn<null>, on: boolean): void => {
+    for (let r = c.released; r < c.uploaded; r++) {
+      if (c.ids[2 * r]! < 0) continue;
+      if (on) visible.add(`${c.seq}:${r}`);
+      else visible.delete(`${c.seq}:${r}`);
+    }
+  };
+  const backend: RegionBackend<null> = {
+    newRegion: () => null,
+    columnNeed: () => null,
+    rowNeed: () => null,
+    structural: () => 0,
+    upload(c, r) {
+      c.ids[2 * r] = r;
+      log.push(`upload ${c.seq}:${r}`);
+    },
+    reveal(c) {
+      show(c, true);
+      log.push(`reveal ${c.seq}`);
+    },
+    hide(c) {
+      show(c, false);
+      log.push(`hide ${c.seq}`);
+    },
+    swap(prev, next) {
+      expect(prev.prev).toBeNull();
+      show(prev, false);
+      show(next, true);
+      log.push(`swap ${prev.seq}→${next.seq}`);
+    },
+    release(c, r) {
+      c.ids[2 * r] = -1;
+      log.push(`release ${c.seq}:${r}`);
+    },
+    rowVisible: (c, r) => visible.has(`${c.seq}:${r}`),
+    settle() {},
+    disposeRegion: (g) => { log.push(`dispose ${g.rx},${g.rz}`); },
+    hasPass: () => false,
+    standIn() {
+      throw new Error('no stand-in');
+    },
+    setOrigin() {},
+    sortTranslucent() {},
+    gpuBytes: () => 0,
+  };
+  return { backend, log, visible };
+}
+
+describe('regionGrid: the staging\'s swap over the backend (SP4c spec §5.1, D9)', () => {
+  const ROWS2 = [{ sy: 1, pass: 0 as const, quads: 1 }, { sy: 2, pass: 0 as const, quads: 1 }];
+  const ROWS3 = [...ROWS2, { sy: 3, pass: 2 as const, quads: 1 }];
+
+  test('stage on a revealed column keeps the shown record as the replacement\'s prev; the pump that uploads its last row calls swap(prev, next) once, never hide or reveal; prev\'s rows are then released', () => {
+    const { backend, log, visible } = recordingBackend();
+    const r = createStreamingRenderer('batch', new Group(), backend);
+    r.stage(fakePayload(1, 1, ROWS2), 1);
+    pumpAll(r);
+    expect(log).toEqual(['upload 1:0', 'upload 1:1', 'reveal 1']);
+    log.length = 0;
+    const revealed: string[] = [];
+    r.onColumnRevealed = (cx, cz) => revealed.push(`${cx},${cz}`);
+    r.stage(fakePayload(1, 1, ROWS3), 2);
+    expect(log).toEqual([]);
+    expect(r.counts(createSectionRendererCounts())).toMatchObject({ columnsStaged: 1, columnsRevealed: 1, columnsRemoving: 0 });
+    r.pump(fakeGate(2), 1, 1, 0);
+    expect(log).toEqual(['upload 2:0', 'upload 2:1']);
+    expect([...visible].sort()).toEqual(['1:0', '1:1']);
+    r.pump(fakeGate(2), 1, 1, 0);
+    expect(log.slice(2)).toEqual(['upload 2:2', 'swap 1→2']);
+    expect([...visible].sort()).toEqual(['2:0', '2:1', '2:2']);
+    expect(revealed).toEqual(['1,1']);
+    expect(r.counts(createSectionRendererCounts())).toMatchObject({ columnsStaged: 1, columnsComplete: 1, columnsRevealed: 1, columnsRemoving: 1 });
+    r.pump(fakeGate(2), 1, 1, 0);
+    expect(log.slice(4)).toEqual(['release 1:0', 'release 1:1']);
+    expect(r.counts(createSectionRendererCounts())).toMatchObject({ columnsRemoving: 0, rows: 3 });
+    expect(r.probe(createRevealProbe())).toEqual({ columns: 1, partial: 0, mixed: 0 });
+    expect(revealed).toEqual(['1,1']);
+  });
+
+  test('unstage hides and releases the pending record, calls neither swap nor reveal, and prev is the live record again; a later stage swaps from it', () => {
+    const { backend, log, visible } = recordingBackend();
+    const r = createStreamingRenderer('batch', new Group(), backend);
+    r.stage(fakePayload(1, 1, ROWS2), 1);
+    pumpAll(r);
+    r.stage(fakePayload(1, 1, ROWS3), 2);
+    r.pump(fakeGate(1), 1, 1, 0);
+    log.length = 0;
+    expect(r.unstage(1, 1)).toBe(true);
+    expect(log).toEqual(['hide 2']);
+    expect(r.unstage(1, 1)).toBe(false);
+    pumpAll(r);
+    expect(log).toEqual(['hide 2', 'release 2:0']);
+    expect([...visible].sort()).toEqual(['1:0', '1:1']);
+    expect(r.counts(createSectionRendererCounts())).toMatchObject({ columnsStaged: 1, columnsComplete: 1, columnsRevealed: 1, columnsRemoving: 0, rows: 2 });
+    log.length = 0;
+    r.stage(fakePayload(1, 1, [{ sy: 9, pass: 0, quads: 2 }]), 3);
+    pumpAll(r);
+    expect(log).toEqual(['upload 3:0', 'swap 1→3', 'release 1:0', 'release 1:1']);
+  });
+
+  test('a replacement with no non-empty row calls swap(prev, next) in the stage call; remove during a swap hides both', () => {
+    const { backend, log } = recordingBackend();
+    const r = createStreamingRenderer('batch', new Group(), backend);
+    const revealed: string[] = [];
+    r.onColumnRevealed = (cx, cz) => revealed.push(`${cx},${cz}`);
+    r.stage(fakePayload(1, 1, ROWS2), 1);
+    pumpAll(r);
+    log.length = 0;
+    r.stage(fakePayload(1, 1, []), 2);
+    expect(log).toEqual(['swap 1→2']);
+    expect(revealed).toEqual(['1,1', '1,1']);
+    pumpAll(r);
+    expect(log).toEqual(['swap 1→2', 'release 1:0', 'release 1:1']);
+
+    r.stage(fakePayload(1, 1, ROWS3), 3);
+    r.pump(fakeGate(1), 1, 1, 0);
+    log.length = 0;
+    r.remove(1, 1);
+    expect(log).toEqual(['hide 2', 'hide 3']);
+    expect(r.isRevealed(1, 1)).toBe(false);
+    pumpAll(r);
+    expect(log).toEqual(['hide 2', 'hide 3', 'release 3:0', 'dispose 0,0']);
   });
 });

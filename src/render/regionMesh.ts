@@ -24,7 +24,8 @@ import type { SectionRenderer, StructuralKind } from './sectionRenderer';
  * with the last. Every range write is `addUpdateRange(start, count)` plus `needsUpdate = true`. A span that fits
  * nowhere waits for the frame's structural operation: compaction in place when the arena's free space is ≥ 40 % and
  * would hold it, else growth × 1.5 into a new geometry (three cannot resize an attribute), the old one disposed in
- * the same call. No path re-merges a region.
+ * the same call. No path re-merges a region. A shown column's replacement (SP4c spec §5.3) takes spans of its own beside
+ * the shown ones, its indices zero until the swap, which zeroes the old spans' indices and writes the new in one call.
  */
 
 /** A region's half extent in blocks: 8 columns across, 24 sections (384 blocks) high. */
@@ -507,6 +508,12 @@ export function createRegionMesh(materials: MaterialSystem): SectionRenderer {
         bound(a);
         touch(a);
       }
+    },
+    swap(prev, next) {
+      // (plan) The interim swap (SP4c spec §5.3; Task 9 pins it): `prev`'s index ranges zeroed and `next`'s rebased
+      // indices written in this one call, each an update range of its own; the culling sphere follows the shown spans.
+      backend.hide(prev);
+      backend.reveal(next);
     },
     release(c, r) {
       if (c.ids[2 * r]! < 0) return;

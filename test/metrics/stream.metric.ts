@@ -141,8 +141,8 @@ async function fly(kind: SectionRendererKind): Promise<Run> {
       store,
       sink: {
         stage: (p, seq) => sections.stage(p, seq),
-        // Nothing applies here, so nothing is unstaged; Task 8 wires `sections.unstage`, as on the page (SP4c plan).
-        unstage: () => false,
+        // As on the page (SP4c spec §4.4, §5.1); nothing applies here, so the coordinator never calls it.
+        unstage: (cx, cz) => sections.unstage(cx, cz),
         remove(cx, cz) {
           run.removed++;
           sections.remove(cx, cz);
