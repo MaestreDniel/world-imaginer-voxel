@@ -1034,6 +1034,16 @@ describe('master spec amendments (SP4c §12)', () => {
     expect(THRESHOLDS.R7?.mixedEpochFrames).toEqual({ max: 0, activeFrom: 'SP4c' });
   });
 
+  test('§1\'s test entry lists SP4c\'s test files in their own parentheses, which exist (SP4c spec §8.5, §12)', () => {
+    const entry = layoutEntry(/^\s+test\/ unit\/ metrics\//);
+    expect(entry).toContain('(SP4c: metrics/apply.metric.ts, integration/apply.test.ts)');
+    const named = /\(SP4c: ([^)]*)\)/.exec(entry)![1]!.split(/,\s*/).map((f) => f.trim());
+    expect(named).toEqual(['metrics/apply.metric.ts', 'integration/apply.test.ts']);
+    for (const f of named) expect(existsSync(`${ROOT_DIR}test/${f}`), `test/${f} does not exist`).toBe(true);
+    // SP4b's list still reads alone.
+    expect(/\(SP4b: ([^)]*)\)/.exec(entry)![1]).not.toContain('SP4c');
+  });
+
   test('§1 names each SP4c module in its entry, which exists', () => {
     for (const [head, token, file] of SP4C_MODULES) {
       const entry = layoutEntry(head);
