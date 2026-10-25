@@ -166,7 +166,7 @@ world-imaginer-voxel/          (repository root)
                                 SP4a: worldJobs.ts, the T, D, L and MESH_COLUMN handlers over the attached store; spikeStore.worker.ts and
                                 spikeStoreHandler.ts, the week-1 spike's shared-store check)
     engine/                     main thread, no three
-      coordinator.ts scheduler.ts (not created: the coordinator holds the scheduler) rings.ts workerPool.ts throttle.ts (SP4b) uploadBudget.ts session.ts invalidation.ts (SP4c with Apply's dirty stages; completed for every scope by SP10) capabilities.ts
+      coordinator.ts scheduler.ts (not created: the coordinator holds the scheduler) rings.ts workerPool.ts jobHeap.ts (SP4c) throttle.ts (SP4b) uploadBudget.ts session.ts invalidation.ts (SP4c with Apply's dirty stages; completed for every scope by SP10) capabilities.ts
       renderDistance.ts spikeStore.ts   (SP4a: the default render distance from the capability report; the spike's shared store)
     render/                     the only place three is imported (ui canvases are 2D; amended by SP0)
       renderer.ts sectionRenderer.ts (interface; SP4b: and UploadGate) regionBatch.ts regionMesh.ts (fallback) floatingOrigin.ts selection.ts
@@ -981,7 +981,7 @@ Main thread: render (three), input/physics/raycast (reads SAB), Coordinator (sta
 
 **Caps:**
 - In flight per type: T ≤ N−1, MESH ≤ N.
-- LOD, MAP, SLICE, METRIC and AUDIO_SYNTH ≤ 1 while any T is pending within RD.
+- LOD, MAP, SLICE, METRIC and AUDIO_SYNTH ≤ 1 while any T is pending within RD (SP4c: while the 3D is visible; while the map covers the 3D, map jobs go first and the world streams on the workers left; points, landing and probes go first and are not capped; the pool keeps world jobs in a FIFO lane and the rest in a heap).
 
 **Adaptive throttle (`engine/throttle.ts`).** If frame p95 over 60 frames exceeds max(16.7 ms, the display interval + 0.5 ms) while generation is in flight, the generation cap (on the T, D and L jobs in flight, in [1, max(1, N − 1)] (SP4b)) drops by 1 (minimum 1). After 120 frames under max(13 ms, the display interval + 0.5 ms) it rises by 1. The thresholds follow the display, so a display below 60 Hz does not read as permanently slow and a 60 Hz display can raise the cap again after a drop; at 144-240 Hz they are 16.7 and 13 ms (the user's decision of 2026-10-24, SP4b).
 

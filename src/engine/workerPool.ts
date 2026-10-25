@@ -1,6 +1,6 @@
 /**
  * Task pool (master §4.1, SP2a spec §5.2): N workers, one configure per epoch (all must agree on the
- * stage hashes), a priority queue of jobs with at most one in flight per worker, cancellation, and
+ * stage hashes), a priority queue of jobs (two lanes since SP4c) with at most one in flight per worker, cancellation, and
  * stale-epoch results dropped. The worker factory is injectable so the logic is testable without a browser.
  * SP2b §2.2-2.3: an optional abort cell (one pool-wide Int32 in a SharedArrayBuffer) holds the pool's epoch,
  * so a worker stops a superseded tile, spawn or stats job within a row or 256 points; job-less errors of
@@ -33,6 +33,10 @@
  * JobCancelled; every other job type keeps the rule above. From the second configure on, `configure` moves the generation
  * past every cell (`max(epoch + 1, max(cells) + 1)`), so it differs from every value a job was issued with. `spawn` takes
  * a priority (default −2).
+ * SP4c §6.1, §6.2 (D11): two lanes replace the queue sorted on every assignment: the world lane, a FIFO of `terrain`,
+ * `decorate`, `light` and `meshColumn` jobs in issue order, and the aux lane, a heap (`jobHeap.ts`) of every other job by
+ * (priority, id). `setAuxPolicy(first, cap)` says which lane a free worker serves first and how many non-interactive aux
+ * jobs may run; interactive jobs (priority < 0: points, probes, landing, the standalone spawn) always go first, uncapped.
  */
 import type { MapLevel } from '../core/constants';
 import type { ColumnPoint } from '../gen/column/columnPoint';
@@ -48,6 +52,7 @@ import {
 } from '../workers/protocol';
 import { EPOCH_CELL, EPOCH_CELL_COUNT } from '../world/store/epochs';
 import type { StoreHandles } from '../world/store/store';
+import { createJobHeap } from './jobHeap';
 import type { Stage } from './rings';
 
 export interface WorkerLike {
@@ -178,6 +183,12 @@ export interface PoolProbe {
   readonly jobs: readonly InFlightJob[];
 }
 
+/**
+ * Which lane a free worker serves first once no interactive job waits (SP4c spec §6.2): 'world' (the 3D visible and the
+ * world issuing) or 'aux' (the map covering the 3D, the world held, or the standalone `?map`).
+ */
+export type AuxFirst = 'world' | 'aux';
+
 /** A pipeline phase whose epoch cell `bumpScope` moves, with every later one (SP4b spec §2.7). */
 export type ScopePhase = keyof typeof EPOCH_CELL;
 
@@ -218,6 +229,15 @@ export interface WorkerPool {
    * decorate-scope Apply, which orders `configure` before `bumpScope('decorate')`.
    */
   bumpScope(from: ScopePhase): void;
+  /**
+   * The aux policy (SP4c spec §6.2, D11), two scalars the page sets every frame: a free worker takes, in order, an aux job
+   * of priority < 0 (points, probes, landing, the standalone spawn; uncapped and not counted); then, with `first`
+   * 'world', the world FIFO's next job, else an aux job while fewer than `cap` non-interactive aux jobs run; with 'aux',
+   * an aux job while under `cap`, else the world FIFO's next job. The default is `('world', size)`. A changed policy pumps
+   * at once; unchanged values do nothing (and allocate nothing). Throws RangeError for another `first` or a `cap` that is
+   * not an integer ≥ 1.
+   */
+  setAuxPolicy(first: AuxFirst, cap: number): void;
   /**
    * Hands every live worker the page's shared store (SP4a spec §2.3), before the world jobs; worker w attaches as reclaim
    * thread w + 1 (SP4b spec §2.5). Resolves when each live worker has answered `attached`. Jobs wait behind it as behind a
@@ -287,15 +307,16 @@ export interface WorkerPool {
   fieldProbe(req: FieldProbeSpec, priority?: number): Promise<number>;
   /** Recomputes one golden in a worker (no configure needed). */
   selftest(key: string): Promise<{ actual: string | null; error: string | null }>;
-  /** Rejects queued tile jobs matching `pred` with JobCancelled. */
+  /** Rejects queued tile jobs matching `pred` with JobCancelled (they are in the aux lane, rebuilt in O(n)). */
   cancelTiles(pred: (req: TileRequest) => boolean): void;
   /**
    * Rejects the queued world jobs matching `pred` with JobCancelled (SP4b spec §2.8, D8): `terrain` is stage T, `decorate`
-   * D, `light` L, `meshColumn` MESH. In-flight jobs run to the end.
+   * D, `light` L, `meshColumn` MESH (the world lane, in issue order). In-flight jobs run to the end.
    */
   cancelWorld(pred: (stage: Stage, cx: number, cz: number) => boolean): void;
   /** The workers that have not failed (SP4b spec §2.8; the coordinator's caps follow it); 0 once terminated. */
   liveWorkers(): number;
+  /** The jobs queued in both lanes. */
   readonly queued: number;
   /** The in-flight jobs and the queue, read at once (the latency hook's pool probe, SP2b spec §2.8). */
   probe(): PoolProbe;
@@ -347,7 +368,13 @@ export function createWorkerPool(size: number, spawn: () => WorkerLike, opts: Po
   const busy: Array<Job | null> = workers.map(() => null);
   const alive: boolean[] = workers.map(() => true);
   let live = size;
-  let queue: Job[] = [];
+  /** The world lane (SP4c spec §6.1): T, D, L and MESH jobs in issue order (the coordinator caps how many wait). */
+  let worldLane: Job[] = [];
+  /** The aux lane: every other job, by (priority, id). */
+  const auxLane = createJobHeap<Job>();
+  /** The aux policy (SP4c spec §6.2); the default keeps the world first and the aux lane uncapped. */
+  let auxFirst: AuxFirst = 'world';
+  let auxCap = size;
   let epoch = -1;
   let nextId = 1;
   let nextGroup = 1;
@@ -367,15 +394,43 @@ export function createWorkerPool(size: number, spawn: () => WorkerLike, opts: Po
   /** Whether a job's epoch cell moved since its issue (SP4b spec §2.7). */
   const moved = (job: Job): boolean => cells !== null && job.cell !== null && Atomics.load(cells, job.cell) !== job.scope;
 
+  /** Whether a job is a world job (the world lane's). */
+  const isWorld = (job: Job): boolean => STAGE_OF[job.msg.type] !== undefined;
+  /** The non-interactive aux jobs running (priority ≥ 0; what the cap counts). */
+  const auxRunning = (): number => {
+    let n = 0;
+    for (let w = 0; w < size; w++) {
+      const j = busy[w];
+      if (j !== undefined && j !== null && j.priority >= 0 && !isWorld(j)) n++;
+    }
+    return n;
+  };
+  /** The next job a free worker takes under the aux policy (SP4c spec §6.2), removed from its lane; null for none. */
+  const nextJob = (): Job | null => {
+    const top = auxLane.peek();
+    if (top !== undefined && top.priority < 0) return auxLane.pop()!;
+    const auxOk = top !== undefined && auxRunning() < auxCap;
+    if (auxFirst === 'aux' && auxOk) return auxLane.pop()!;
+    if (worldLane.length > 0) return worldLane.shift()!;
+    if (auxOk) return auxLane.pop()!;
+    return null;
+  };
   const pump = () => {
     if (pendingReady !== null || pendingAttach !== null) return;
-    for (let w = 0; w < size && queue.length > 0; w++) {
+    for (let w = 0; w < size; w++) {
       if (!alive[w] || busy[w] !== null) continue;
-      queue.sort((a, b) => a.priority - b.priority || a.id - b.id);
-      const job = queue.shift()!;
+      // The choice does not depend on the worker: when nothing fits this one, nothing fits the others.
+      const job = nextJob();
+      if (job === null) return;
       busy[w] = job;
       workers[w]!.postMessage(job.msg);
     }
+  };
+  /** Empties both lanes; returns their jobs (the world lane's first). */
+  const takeAll = (): Job[] => {
+    const all = worldLane.concat(auxLane.clear());
+    worldLane = [];
+    return all;
   };
 
   /** Stops listening to worker w and terminates it. */
@@ -403,7 +458,7 @@ export function createWorkerPool(size: number, spawn: () => WorkerLike, opts: Po
     job?.reject(e);
     if (pendingReady !== null) { const pr = pendingReady; pendingReady = null; pr.reject(e); }
     if (pendingAttach !== null) { const pa = pendingAttach; pendingAttach = null; pa.reject(e); }
-    if (live === 0) { for (const j of queue) j.reject(e); queue = []; }
+    if (live === 0) for (const j of takeAll()) j.reject(e);
     opts.onFailure?.(e);
     pump();
   };
@@ -458,7 +513,7 @@ export function createWorkerPool(size: number, spawn: () => WorkerLike, opts: Po
       if (job !== null && msg.jobId === job.id) {
         // SP4c §4.6 (D7): a world job's OK reply resolves whatever the generation or its cell is now (the worker committed
         // it; the coordinator judges it by its generation); its ABORTED or STALE_EPOCH reply committed nothing.
-        const world = STAGE_OF[job.msg.type] !== undefined;
+        const world = isWorld(job);
         if (world && msg.type !== 'error') job.resolve(msg);
         else if (msg.type === 'error' && (msg.code === 'ABORTED' || (world && msg.code === 'STALE_EPOCH'))) job.reject(new JobCancelled());
         else if (job.epoch !== epoch || moved(job)) job.reject(new JobCancelled());
@@ -473,10 +528,8 @@ export function createWorkerPool(size: number, spawn: () => WorkerLike, opts: Po
 
   /** Removes the queued parts of a stats or slice request whose first part failed (their promises are ignored). */
   const dropGroup = (group: number) => {
-    const dropped = queue.filter((j) => j.group === group);
-    if (dropped.length === 0) return;
-    queue = queue.filter((j) => j.group !== group);
-    for (const j of dropped) j.reject(new JobCancelled());
+    // Groups (stats, slices, field slices) are aux jobs.
+    for (const j of auxLane.removeWhere((j) => j.group === group)) j.reject(new JobCancelled());
   };
 
   /**
@@ -494,7 +547,9 @@ export function createWorkerPool(size: number, spawn: () => WorkerLike, opts: Po
       // A failed slice rejects first (the request fails with its error), then drops its queued siblings
       // before the pool pumps the next job.
       const fail = group === 0 ? reject : (e: Error) => { reject(e); dropGroup(group); };
-      queue.push({ id, epoch, cell, scope, priority, msg: build(id, scope ?? epoch), tile, group, resolve, reject: fail });
+      const job: Job = { id, epoch, cell, scope, priority, msg: build(id, scope ?? epoch), tile, group, resolve, reject: fail };
+      if (isWorld(job)) worldLane.push(job);
+      else auxLane.push(job, priority, id);
       pump();
     });
 
@@ -519,7 +574,7 @@ export function createWorkerPool(size: number, spawn: () => WorkerLike, opts: Po
     size,
     abortable: cells !== null,
     get epoch() { return epoch; },
-    get queued() { return queue.length; },
+    get queued() { return worldLane.length + auxLane.size; },
     configure(seedText, params) {
       // ENG-4 (SP4c spec §4.9): from the second configure on, past every cell, so the new value differs from every scope a
       // job was issued with (a `bumpScope` may have moved a cell to epoch + 1). The first stays 0: the cells' initial 0 was
@@ -529,8 +584,7 @@ export function createWorkerPool(size: number, spawn: () => WorkerLike, opts: Po
       epoch = next;
       // Stored before posting, into all four cells: every in-flight job of an older epoch stops (a tile within a row).
       if (cells !== null) for (let c = 0; c < EPOCH_CELL_COUNT; c++) Atomics.store(cells, c, epoch);
-      for (const j of queue) j.reject(new JobCancelled());
-      queue = [];
+      for (const j of takeAll()) j.reject(new JobCancelled());
       if (pendingReady !== null) { const pr = pendingReady; pendingReady = null; pr.reject(new JobCancelled()); }
       if (live === 0) return Promise.reject(new WorkerFailed('every worker failed'));
       return new Promise((resolve, reject) => {
@@ -544,10 +598,17 @@ export function createWorkerPool(size: number, spawn: () => WorkerLike, opts: Po
       const first = EPOCH_CELL[from];
       if (cells !== null) for (let c = first; c < EPOCH_CELL_COUNT; c++) Atomics.add(cells, c, 1);
       const later = (j: Job) => j.cell !== null && j.cell >= first;
-      const dropped = queue.filter(later);
-      if (dropped.length === 0) return;
-      queue = queue.filter((j) => !later(j));
-      for (const j of dropped) j.reject(new JobCancelled());
+      const dropped = worldLane.filter(later);
+      if (dropped.length > 0) worldLane = worldLane.filter((j) => !later(j));
+      for (const j of dropped.concat(auxLane.removeWhere(later))) j.reject(new JobCancelled());
+    },
+    setAuxPolicy(first, cap) {
+      if (first === auxFirst && cap === auxCap) return;
+      if (first !== 'world' && first !== 'aux') throw new RangeError(`setAuxPolicy: first must be 'world' or 'aux', got ${String(first)}`);
+      if (!(Number.isSafeInteger(cap) && cap >= 1)) throw new RangeError(`setAuxPolicy: cap ${cap} is not an integer ≥ 1`);
+      auxFirst = first;
+      auxCap = cap;
+      pump();
     },
     attachStore(h) {
       if (pendingAttach !== null) return Promise.reject(new Error('attachStore: an attach is pending'));
@@ -705,18 +766,13 @@ export function createWorkerPool(size: number, spawn: () => WorkerLike, opts: Po
       return { actual: r.actual, error: r.error };
     },
     cancelTiles(pred) {
-      queue = queue.filter((j) => {
-        if (j.tile !== null && pred(j.tile)) { j.reject(new JobCancelled()); return false; }
-        return true;
-      });
+      for (const j of auxLane.removeWhere((j) => j.tile !== null && pred(j.tile))) j.reject(new JobCancelled());
     },
     cancelWorld(pred) {
       const dropped: Job[] = [];
-      queue = queue.filter((j) => {
-        const stage = STAGE_OF[j.msg.type];
-        if (stage === undefined) return true;
+      worldLane = worldLane.filter((j) => {
         const m = j.msg as { readonly cx: number; readonly cz: number };
-        if (!pred(stage, m.cx, m.cz)) return true;
+        if (!pred(STAGE_OF[j.msg.type]!, m.cx, m.cz)) return true;
         dropped.push(j);
         return false;
       });
@@ -728,7 +784,7 @@ export function createWorkerPool(size: number, spawn: () => WorkerLike, opts: Po
       busy.forEach((j, worker) => {
         if (j !== null && j.msg.type !== 'configure' && j.msg.type !== 'attach') jobs.push({ worker, type: j.msg.type, epoch: j.epoch, level: j.tile === null ? null : j.tile.level });
       });
-      return { busy: jobs.length, queued: queue.length, configuring: pendingReady !== null, jobs };
+      return { busy: jobs.length, queued: worldLane.length + auxLane.size, configuring: pendingReady !== null, jobs };
     },
     terminate() {
       // SP4b spec §2.8: the barriers and the busy jobs settle (WorkerFailed('terminated')), then the queue as before.
@@ -742,8 +798,7 @@ export function createWorkerPool(size: number, spawn: () => WorkerLike, opts: Po
       if (pendingAttach !== null) { const pa = pendingAttach; pendingAttach = null; pa.reject(e); }
       if (pendingReady !== null) { const pr = pendingReady; pendingReady = null; pr.reject(e); }
       busy.forEach((job, w) => { busy[w] = null; job?.reject(e); });
-      for (const j of queue) j.reject(new JobCancelled());
-      queue = [];
+      for (const j of takeAll()) j.reject(new JobCancelled());
     },
   };
 }

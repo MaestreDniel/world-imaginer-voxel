@@ -977,3 +977,290 @@ describe('worker pool: surfaceProbe jobs (SP3c spec §6)', () => {
     pool.terminate();
   });
 });
+
+describe('worker pool: the world and aux lanes and the aux policy (SP4c spec §6.1, §6.2; D11)', () => {
+  /** A 32-bit LCG in [0, 1), so every run draws the same queues. */
+  const lcg = (seed: number) => {
+    let s = seed >>> 0;
+    return () => {
+      s = (Math.imul(s, 1664525) + 1013904223) >>> 0;
+      return s / 4294967296;
+    };
+  };
+  type Posted = ToWorker & { readonly jobId: number; readonly epoch: number };
+  /**
+   * A pool of `n` silent workers (unconfigured: its jobs run at epoch −1). `finish(w)` answers worker w's job with an
+   * INTERNAL error, which frees it; `running()` counts the jobs in flight by lane; every job is settled so none is left unhandled.
+   */
+  const manualPool = (n: number) => {
+    const logs: ToWorker[][] = Array.from({ length: n }, () => []);
+    const workers = logs.map((l) => silentWorker(l));
+    let k = 0;
+    const pool = createWorkerPool(n, () => workers[k++]!);
+    const finish = (w: number) => {
+      const m = logs[w]!.at(-1) as Posted;
+      workers[w]!.onmessage?.({ data: { type: 'error', jobId: m.jobId, epoch: m.epoch, code: 'INTERNAL', message: 'x' } });
+    };
+    const WORLD = new Set(['terrain', 'decorate', 'light', 'meshColumn']);
+    const running = () => {
+      const jobs = pool.probe().jobs;
+      return { world: jobs.filter((j) => WORLD.has(j.type)).length, tiles: jobs.filter((j) => j.type === 'mapTile').length, all: jobs.length };
+    };
+    /** The worker running a job of `type`, or −1. */
+    const workerOf = (type: string) => pool.probe().jobs.find((j) => j.type === type)?.worker ?? -1;
+    return { pool, workers, logs, finish, running, workerOf };
+  };
+  /** World job `i` of a mixed run: terrain, decorate, light and meshColumn in turn, at column (i, 0). */
+  const worldJob = (pool: ReturnType<typeof manualPool>['pool'], i: number) => {
+    const kind = i % 4;
+    return settle<unknown>(kind === 0 ? pool.terrain(i, 0) : kind === 1 ? pool.decorate(i, 0) : kind === 2 ? pool.light(i, 0) : pool.meshColumn(i, 0));
+  };
+
+  test('the aux lane yields the same order as today\'s sort on 200 randomised queues of tiles, points, stats and slices', async () => {
+    const rnd = lcg(4242);
+    for (let round = 0; round < 200; round++) {
+      const { pool, logs, finish } = manualPool(1);
+      // Today's pump (SP4b): sort the queue by (priority, id) and take the first, on every assignment.
+      const queue: Array<{ priority: number; id: number; label: number }> = [];
+      let busy = false;
+      const want: number[] = [];
+      const pump = () => {
+        if (busy || queue.length === 0) return;
+        queue.sort((a, b) => a.priority - b.priority || a.id - b.id);
+        want.push(queue.shift()!.label);
+        busy = true;
+      };
+      const jobs: Array<Promise<unknown>> = [];
+      let label = 0;
+      const steps = 10 + Math.floor(rnd() * 50);
+      for (let s = 0; s < steps || busy; s++) {
+        if (s < steps && (rnd() < 0.65 || !busy)) {
+          // Each request is one job on a one-worker pool; its label rides in an argument the posted message carries.
+          const l = label++;
+          const r = rnd();
+          let priority: number;
+          if (r < 0.5) {
+            priority = (rnd() < 0.5 ? 0 : 1000) + Math.floor(rnd() * 8);
+            jobs.push(settle(pool.tile(tile(l), priority)));
+          } else if (r < 0.7) {
+            priority = -1;
+            jobs.push(settle(pool.point(l, 0)));
+          } else if (r < 0.85) {
+            priority = 500;
+            jobs.push(settle(pool.stats('biomeShares', l + 1, { len: biomeSharesLength() })));
+          } else {
+            priority = 500;
+            jobs.push(settle(pool.slice({ ax: l, az: 0, bx: l + 10, bz: 0 })));
+          }
+          queue.push({ priority, id: l, label: l });
+          pump();
+        } else {
+          finish(0);
+          busy = false;
+          pump();
+        }
+      }
+      await Promise.all(jobs);
+      const got = logs[0]!.map((m) => {
+        if (m.type === 'mapTile') return m.tx;
+        if (m.type === 'point') return m.x;
+        if (m.type === 'stats') return m.to - 1;
+        if (m.type === 'slice') return m.ax;
+        throw new Error(`unexpected ${m.type}`);
+      });
+      expect(got, `round ${round}`).toEqual(want);
+    }
+  });
+
+  test('the default policy is (\'world\', size): interactive jobs, then the world FIFO, then the rest by (priority, id)', () => {
+    const { pool, logs, finish } = manualPool(1);
+    void settle(pool.point(0, 0));
+    void settle(pool.tile(tile(1), 0));
+    void settle(pool.stats('biomeShares', 3, { len: biomeSharesLength() }));
+    void settle(pool.terrain(2, 0));
+    void settle(pool.point(3, 0));
+    for (let k = 0; k < 4; k++) finish(0);
+    expect(logs[0]!.map((m) => m.type)).toEqual(['point', 'point', 'terrain', 'mapTile', 'stats']);
+    pool.terminate();
+  });
+
+  test('interactive first and uncapped: with (\'world\', 1) and a tile running, a queued point runs on the next free worker and does not count against the cap', () => {
+    const { pool, finish, workerOf, running } = manualPool(2);
+    pool.setAuxPolicy('world', 1);
+    void settle(pool.tile(tile(0), 5));
+    void worldJob(pool, 0);
+    expect([workerOf('mapTile'), workerOf('terrain')]).toEqual([0, 1]);
+    void settle(pool.point(1, 2));
+    void settle(pool.tile(tile(1), 5));
+    void worldJob(pool, 4);
+    expect(pool.queued).toBe(3);
+    // The world job ends: the point goes before the queued world job.
+    finish(1);
+    expect([workerOf('mapTile'), workerOf('point'), running().world]).toEqual([0, 1, 0]);
+    // The tile ends: the world job goes first.
+    finish(0);
+    expect([workerOf('terrain'), workerOf('point'), running().tiles]).toEqual([0, 1, 0]);
+    // The world job ends: the point is running, yet the queued tile runs (the point does not count against the cap).
+    finish(0);
+    expect([workerOf('mapTile'), workerOf('point'), pool.queued]).toEqual([0, 1, 0]);
+    pool.terminate();
+  });
+
+  test('(\'world\', 1) on 4 workers, the pool ready, 6 tiles enqueued and then 6 world jobs: 1 tile and 3 world jobs run; with the 6 world jobs enqueued first (or all 12 released at once), 4 world jobs and no tile', async () => {
+    {
+      const { pool, running } = manualPool(4);
+      pool.setAuxPolicy('world', 1);
+      for (let i = 0; i < 6; i++) void settle(pool.tile(tile(i), i));
+      for (let i = 0; i < 6; i++) void worldJob(pool, i);
+      expect(running()).toEqual({ world: 3, tiles: 1, all: 4 });
+      expect(pool.queued).toBe(8);
+      pool.terminate();
+    }
+    {
+      const { pool, running } = manualPool(4);
+      pool.setAuxPolicy('world', 1);
+      for (let i = 0; i < 6; i++) void worldJob(pool, i);
+      for (let i = 0; i < 6; i++) void settle(pool.tile(tile(i), i));
+      expect(running()).toEqual({ world: 4, tiles: 0, all: 4 });
+      pool.terminate();
+    }
+    {
+      const { pool, workers, running } = manualPool(4);
+      pool.setAuxPolicy('world', 1);
+      // Queued behind the configure's barrier, released at once when it resolves.
+      const ready = pool.configure('42', DEFAULTS);
+      for (let i = 0; i < 6; i++) void settle(pool.tile(tile(i), i));
+      for (let i = 0; i < 6; i++) void worldJob(pool, i);
+      expect(running().all).toBe(0);
+      for (const w of workers) w.onmessage?.({ data: { type: 'ready', epoch: 0, stageHashes: {}, genKey: '0000000000000000' } });
+      await ready;
+      expect(running()).toEqual({ world: 4, tiles: 0, all: 4 });
+      pool.terminate();
+    }
+  });
+
+  test('I2: (\'aux\', 3) on 4 workers with 20 tiles queued and world jobs waiting: one world job is always running', () => {
+    const rnd = lcg(4242);
+    const { pool, finish, running } = manualPool(4);
+    pool.setAuxPolicy('aux', 3);
+    for (let i = 0; i < 20; i++) void settle(pool.tile(tile(i), i));
+    // The aux lane goes first, under the cap: the fourth worker waits for the world.
+    expect(running()).toEqual({ world: 0, tiles: 3, all: 3 });
+    for (let i = 0; i < 40; i++) void worldJob(pool, i);
+    expect(running()).toEqual({ world: 1, tiles: 3, all: 4 });
+    let tilesLeft = 20;
+    let worldLeft = 40;
+    while (tilesLeft > 0) {
+      const w = Math.floor(rnd() * 4);
+      const type = pool.probe().jobs.find((j) => j.worker === w)!.type;
+      finish(w);
+      if (type === 'mapTile') tilesLeft--;
+      else worldLeft--;
+      const r = running();
+      const at = `${tilesLeft} tiles and ${worldLeft} world jobs left`;
+      expect(r.world, at).toBeGreaterThanOrEqual(1);
+      // While three or more tiles are left, the cap holds them to 3 and the fourth worker runs the world.
+      if (tilesLeft >= 3) expect([r.world, r.tiles], at).toEqual([1, 3]);
+    }
+    pool.terminate();
+  });
+
+  test('the world held, (\'aux\', 4): all 4 workers take tiles', () => {
+    const { pool, running } = manualPool(4);
+    pool.setAuxPolicy('world', 1);
+    for (let i = 0; i < 10; i++) void settle(pool.tile(tile(i), i));
+    expect(running()).toEqual({ world: 0, tiles: 1, all: 1 });
+    // A changed policy pumps at once.
+    pool.setAuxPolicy('aux', 4);
+    expect(running()).toEqual({ world: 0, tiles: 4, all: 4 });
+    pool.terminate();
+  });
+
+  test('`setAuxPolicy` with unchanged values does nothing (no pump)', () => {
+    const { pool, logs, running } = manualPool(2);
+    pool.setAuxPolicy('world', 1);
+    for (let i = 0; i < 3; i++) void settle(pool.tile(tile(i), i));
+    const posted = () => logs.reduce((s, l) => s + l.length, 0);
+    expect([posted(), pool.queued]).toEqual([1, 2]);
+    for (let k = 0; k < 5; k++) pool.setAuxPolicy('world', 1);
+    expect([posted(), pool.queued, running().tiles]).toEqual([1, 2, 1]);
+    // Only a change pumps: one more tile under a cap of 2.
+    pool.setAuxPolicy('world', 2);
+    expect([posted(), pool.queued, running().tiles]).toEqual([2, 1, 2]);
+    expect(() => pool.setAuxPolicy('world', 0)).toThrow(RangeError);
+    expect(() => pool.setAuxPolicy('world', 1.5)).toThrow(RangeError);
+    expect(() => pool.setAuxPolicy('map' as 'aux', 1)).toThrow(RangeError);
+    pool.terminate();
+  });
+
+  test('`cancelTiles` and `cancelWorld` filter their lane; `configure` rejects both lanes; a failed slice part drops its group\'s queued parts; a dead worker\'s last failure rejects both lanes', async () => {
+    {
+      const { pool } = manualPool(1);
+      void settle(pool.point(0, 0));
+      const t1 = settle(pool.tile(tile(1), 1));
+      const t2 = settle(pool.tile(tile(2), 2));
+      const T = settle(pool.terrain(3, 0));
+      const D = settle(pool.decorate(4, 0));
+      expect(pool.queued).toBe(4);
+      pool.cancelTiles((r) => r.tx === 1);
+      expect(await t1).toBeInstanceOf(JobCancelled);
+      pool.cancelWorld((stage) => stage === 'T');
+      expect(await T).toBeInstanceOf(JobCancelled);
+      expect([pool.queued, pool.probe().queued]).toEqual([2, 2]);
+      void settle(pool.configure('42', DEFAULTS));
+      expect(await t2).toBeInstanceOf(JobCancelled);
+      expect(await D).toBeInstanceOf(JobCancelled);
+      expect(pool.queued).toBe(0);
+      pool.terminate();
+    }
+    {
+      const { pool, logs, finish, workerOf } = manualPool(2);
+      void settle(pool.point(0, 0));
+      void settle(pool.point(1, 0));
+      const sl = settle(pool.slice({ ax: 0, az: 0, bx: 10, bz: 0 }));
+      const later = settle(pool.tile(tile(9), 1000));
+      expect(pool.queued).toBe(3);
+      // Worker 0 takes the slice's first part (500 before the tile's 1000), which fails: its queued sibling is dropped,
+      // and the freed worker takes the tile.
+      finish(0);
+      expect(logs[0]!.at(-1)).toMatchObject({ type: 'slice', from: 0, to: 256 });
+      finish(0);
+      expect(await sl).toBeInstanceOf(Error);
+      expect([pool.queued, workerOf('mapTile')]).toEqual([0, 0]);
+      finish(1);
+      expect([pool.probe().busy, logs.flat().filter((m) => m.type === 'slice').length]).toEqual([1, 1]);
+      void later;
+      pool.terminate();
+    }
+    {
+      const { pool, workers } = manualPool(2);
+      void settle(pool.point(0, 0));
+      void settle(pool.point(1, 0));
+      const tl = settle(pool.tile(tile(0), 0));
+      const T = settle(pool.terrain(0, 0));
+      workers[0]!.onerror?.({});
+      expect(pool.queued).toBe(2);
+      workers[1]!.onerror?.({});
+      expect(await tl).toBeInstanceOf(WorkerFailed);
+      expect(await T).toBeInstanceOf(WorkerFailed);
+      expect(pool.queued).toBe(0);
+    }
+  });
+
+  test('the world FIFO keeps issue order', () => {
+    const { pool, logs, finish } = manualPool(1);
+    pool.setAuxPolicy('aux', 1);
+    void settle(pool.point(0, 0));
+    const order = [7, 2, 9, 0, 5, 3, 8, 1];
+    order.forEach((cx, i) => {
+      void worldJob(pool, cx);
+      if (i % 3 === 0) void settle(pool.tile(tile(cx), 1000 - cx));
+    });
+    // Each finish frees the one worker; ('aux', 1) runs the queued tiles first, then the world jobs in their issue order.
+    for (let k = 0; k < order.length + 3; k++) finish(0);
+    const world = logs[0]!.filter((m) => m.type === 'terrain' || m.type === 'decorate' || m.type === 'light' || m.type === 'meshColumn');
+    expect(world.map((m) => (m as { cx: number }).cx)).toEqual(order);
+    expect(logs[0]!.filter((m) => m.type === 'mapTile').length).toBe(3);
+    pool.terminate();
+  });
+});

@@ -923,7 +923,9 @@ describe('master spec amendments (SP4b §13)', () => {
 
 describe('master spec amendments (SP4c §12)', () => {
   /** [§1 entry head, the token its entry holds, the file on disk]; Tasks 6, 12, 15, 17 and 18 append theirs. */
-  const SP4C_MODULES: Array<[head: RegExp, token: string, file: string]> = [];
+  const SP4C_MODULES: Array<[head: RegExp, token: string, file: string]> = [
+    [/^\s+coordinator\.ts /, 'jobHeap.ts (SP4c)', 'src/engine/jobHeap.ts'],
+  ];
 
   test('§10\'s SP4c entry, SP5\'s walk-mode teleport and saved places, SP10 without bookmarks', () => {
     const sp4c = spEntry('SP4c', 'SP5');
@@ -970,6 +972,14 @@ describe('master spec amendments (SP4c §12)', () => {
     const kill = risk1.split('\n').find((l) => l.trimStart().startsWith('- Kill:'));
     expect(kill, 'risk 1 has no `- Kill:` line').toBeDefined();
     expect(kill).toContain('(amended by SP4b: the split moved Apply\'s rewrites of Published columns to SP4c, and SP5\'s sim worker is deferred reclamation\'s first necessary consumer; SP4c\'s Apply frees and regenerates instead of rewriting)');
+  });
+
+  test('§4.3\'s caps line: the MAP cap by visibility and the pool\'s two lanes (SP4c spec §6, §12)', () => {
+    const at = text.indexOf('### 4.3 Scheduling');
+    const s43 = text.slice(at, text.indexOf('### 4.4 ', at));
+    const caps = s43.split('\n').find((l) => l.startsWith('- LOD, MAP, SLICE, METRIC and AUDIO_SYNTH ≤ 1 while any T is pending within RD'));
+    expect(caps, 'no `- LOD, MAP, SLICE, METRIC and AUDIO_SYNTH ≤ 1 …` line in §4.3').toBeDefined();
+    expect(caps).toContain('(SP4c: while the 3D is visible; while the map covers the 3D, map jobs go first and the world streams on the workers left; points, landing and probes go first and are not capped; the pool keeps world jobs in a FIFO lane and the rest in a heap)');
   });
 
   test('§1 names each SP4c module in its entry, which exists', () => {
