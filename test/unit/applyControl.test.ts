@@ -471,7 +471,12 @@ describe('the aux policy (SP4c spec §6.2, D11)', () => {
   /** A pool recording every `setAuxPolicy` call. */
   const policyPool = (epoch: number) => {
     const set: Array<[AuxFirst, number]> = [];
-    return { set, pool: { epoch, size: 4, setAuxPolicy: (f: AuxFirst, c: number) => { set.push([f, c]); } } };
+    let live = 4;
+    return {
+      set,
+      kill() { live--; },
+      pool: { epoch, size: 4, liveWorkers: () => live, setAuxPolicy: (f: AuxFirst, c: number) => { set.push([f, c]); } },
+    };
   };
   const pendingT = (): CoordinatorCounts => {
     const c = createCoordinatorCounts();
@@ -488,6 +493,20 @@ describe('the aux policy (SP4c spec §6.2, D11)', () => {
     counts.T.done = 349;
     updateAuxPolicy(p.pool, 7, false, counts);
     expect(p.set).toEqual([['aux', 4], ['world', 1], ['world', 4]]);
+  });
+
+  test('n is the live workers, not the pool\'s size: a pool of 4 with one worker dead covers → (aux, 2), held → (aux, 3), visible without T pending → (world, 3); one live worker covers → (aux, 1)', () => {
+    const p = policyPool(5);
+    const counts = pendingT();
+    p.kill();
+    updateAuxPolicy(p.pool, 5, true, counts);
+    updateAuxPolicy(p.pool, 4, true, counts);
+    counts.T.done = counts.T.needed;
+    updateAuxPolicy(p.pool, 5, false, counts);
+    p.kill();
+    p.kill();
+    updateAuxPolicy(p.pool, 5, true, counts);
+    expect(p.set).toEqual([['aux', 2], ['aux', 3], ['world', 3], ['aux', 1]]);
   });
 
   test('the A shown → B shown → B locked → A shown → hidden sequence (user cap 0, 4 workers, T pending, world not held) through updateAuxPolicy gives setAuxPolicy (aux, 3), (world, 1), (world, 1), (aux, 3), (world, 1)', () => {

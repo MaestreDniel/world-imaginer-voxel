@@ -148,17 +148,18 @@ export function auxCap(held: boolean, covers: boolean, tPending: boolean, n: num
 /**
  * The page's frame-step `afterCounts` (spec §6.2): `pool.setAuxPolicy(first, cap)` with `held = pool.epoch !==
  * generation` (the apply control's), `covers` (the overlay full and shown), T pending from the counts and n the pool's
- * size. Scalars only; the pool ignores unchanged values.
+ * live workers (`liveWorkers()`, as the coordinator's caps: after a non-fatal worker death, n − 1 still leaves one live
+ * worker to the world, D11). Scalars only; the pool ignores unchanged values.
  */
 export function updateAuxPolicy(
-  pool: Pick<WorkerPool, 'epoch' | 'size' | 'setAuxPolicy'>,
+  pool: Pick<WorkerPool, 'epoch' | 'liveWorkers' | 'setAuxPolicy'>,
   generation: number,
   covers: boolean,
   counts: CoordinatorCounts,
 ): void {
   const held = pool.epoch !== generation;
   const tPending = counts.T.done < counts.T.needed;
-  pool.setAuxPolicy(auxFirst(held, covers), auxCap(held, covers, tPending, pool.size));
+  pool.setAuxPolicy(auxFirst(held, covers), auxCap(held, covers, tPending, pool.liveWorkers()));
 }
 
 /**
