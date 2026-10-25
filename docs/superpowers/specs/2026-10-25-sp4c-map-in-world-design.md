@@ -597,3 +597,4 @@ The exit evidence goes under `## Exit evidence`, before the Threshold log. The e
 
 - 2026-10-25 — SP4c Task 1: startedSps gains 'SP4c' (spec §10).
 - 2026-10-25 — SP4c Task 22: R7 applyPartialColumnFrames max 0 and mixedEpochFrames max 0, gated from SP4c on every tier (apply.metric.ts, R7.apply; spec §8.1-§8.2); new parts.
+- 2026-10-25 — SP4c Task 26: G1 mediumLiveP95 max 16.7, mediumLiveOver33 max 0 and mediumLiveGpuMB max 150, gated from SP4c on every tier from assets/sp4c/bench-iris-chrome.json (g1.metric.ts, G1.live; spec §8.2, §8.4, D22); SP4a's and SP4b's cells re-read from assets/sp4c; new parts (measured 4.165 ms / 0 / 51.7 MB on eDP-1 at 240 Hz).

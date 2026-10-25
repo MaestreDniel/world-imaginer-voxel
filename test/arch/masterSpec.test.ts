@@ -1034,6 +1034,33 @@ describe('master spec amendments (SP4c §12)', () => {
     expect(THRESHOLDS.R7?.mixedEpochFrames).toEqual({ max: 0, activeFrom: 'SP4c' });
   });
 
+  test('§6.4\'s G1 row names the live parts THRESHOLDS holds activeFrom SP4c', () => {
+    const g1 = text.split('\n').find((l) => l.startsWith('| G1 |'));
+    expect(g1, 'no G1 row in §6.4').toBeDefined();
+    expect(g1).toContain('SP4c gates the Medium live cells (p95, no frame > 33 ms, GPU estimate) over the bench\'s Apply, undo and teleport legs, and re-asserts SP4a\'s and SP4b\'s cells on SP4c\'s code');
+    // The three live parts and the G1 row's targets they gate (SP4c spec §8.2).
+    const parts: Array<[part: string, max: number, target: string]> = [
+      ['mediumLiveP95', 16.7, 'p95 ≤ 16.7 ms'],
+      ['mediumLiveOver33', 0, 'no frame > 33 ms'],
+      ['mediumLiveGpuMB', 150, 'GPU estimate ≤ 150 MB'],
+    ];
+    for (const [part, max, target] of parts) {
+      expect(THRESHOLDS.G1?.[part], `THRESHOLDS.G1.${part}`).toEqual({ max, activeFrom: 'SP4c' });
+      expect(g1, `the G1 row's target ${target}`).toContain(target);
+    }
+    expect(Object.keys(THRESHOLDS.G1 ?? {}).filter((p) => THRESHOLDS.G1?.[p]?.activeFrom === 'SP4c').sort()).toEqual(parts.map(([p]) => p).sort());
+  });
+
+  test('§6.4\'s G2 row and §7\'s terrain Apply line: SP4c records the Apply part, SP10 gates it (SP4c spec §8.2, §8.4, §12)', () => {
+    const g2 = text.split('\n').find((l) => l.startsWith('| G2 |'));
+    expect(g2, 'no G2 row in §6.4').toBeDefined();
+    expect(g2).toContain('terrain Apply: first visible change near the player (SP4c records the Apply part from the bench; SP10 gates it)');
+    const apply = text.split('\n').find((l) => l.startsWith('- terrain Apply: first visible change near the player'));
+    expect(apply, 'no terrain Apply line in §7').toBeDefined();
+    expect(apply).toContain('≤ 0.5 s (recorded from SP4c\'s bench; gated by SP10)');
+    expect((THRESHOLDS as Record<string, unknown>).G2, 'G2 has no gated part before SP10').toBeUndefined();
+  });
+
   test('§1\'s test entry lists SP4c\'s test files in their own parentheses, which exist (SP4c spec §8.5, §12)', () => {
     const entry = layoutEntry(/^\s+test\/ unit\/ metrics\//);
     expect(entry).toContain('(SP4c: metrics/apply.metric.ts, integration/apply.test.ts)');

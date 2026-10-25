@@ -1,5 +1,5 @@
 {
-  "sha256": "e5de21e131ce9e31bee8597d59c61b3d9ee86680247420ce52de4ee9d00f9859",
+  "sha256": "a2cc592823d2f27ad6a13267af7b90fdfdd3396e0eb27bb2e3cdc944e7304407",
   "canonical": {
     "startedSps": [
       "SP0",
@@ -213,6 +213,18 @@
         "mediumGpuMB": {
           "activeFrom": "SP4b",
           "max": 150
+        },
+        "mediumLiveGpuMB": {
+          "activeFrom": "SP4c",
+          "max": 150
+        },
+        "mediumLiveOver33": {
+          "activeFrom": "SP4c",
+          "max": 0
+        },
+        "mediumLiveP95": {
+          "activeFrom": "SP4c",
+          "max": 16.7
         },
         "mediumStaticDrawCalls": {
           "activeFrom": "SP4a",

@@ -94,8 +94,10 @@ export const THRESHOLDS: ThresholdTable = {
   L1: { mismatches: { max: 0, activeFrom: 'SP4a' } },
   L2: { enclosedLit: { max: 0, activeFrom: 'SP4a' } },
   // SP4a spec §9.1, §9.5 (D24): G1's three Medium cells on the static world, from the Chrome flight on the Iris Xe
-  // (`g1.metric.ts`, `flight-iris-chrome.json`, re-measured on SP4b's code into `assets/sp4b/`). SP4b spec §8.2, §8.4
-  // (D23): the six Medium streaming cells, from the committed Iris Xe Chrome bench files (`G1.streaming`).
+  // (`g1.metric.ts`, `flight-iris-chrome.json`, re-measured on SP4c's code into `assets/sp4c/`). SP4b spec §8.2, §8.4
+  // (D23): the six Medium streaming cells, from the committed Iris Xe Chrome bench files (`G1.streaming`, re-read from
+  // `assets/sp4c/`). SP4c spec §8.2, §8.4 (D22): the three Medium live cells over the bench's Apply, undo and teleport
+  // legs, from `assets/sp4c/bench-iris-chrome.json`'s `live` block (`G1.live`).
   G1: {
     mediumStaticP95: { max: 16.7, activeFrom: 'SP4a' }, mediumStaticDrawCalls: { max: 100, activeFrom: 'SP4a' }, mediumStaticMainP95: { max: 6, activeFrom: 'SP4a' },
     mediumStreamP95: { max: 16.7, activeFrom: 'SP4b' },
@@ -104,6 +106,9 @@ export const THRESHOLDS: ThresholdTable = {
     mediumStreamMainP95: { max: 6, activeFrom: 'SP4b' },
     mediumFill4wMs: { max: 6000, activeFrom: 'SP4b' },
     mediumGpuMB: { max: 150, activeFrom: 'SP4b' },
+    mediumLiveP95: { max: 16.7, activeFrom: 'SP4c' },
+    mediumLiveOver33: { max: 0, activeFrom: 'SP4c' },
+    mediumLiveGpuMB: { max: 150, activeFrom: 'SP4c' },
   },
   // SP3e spec §5.3 (D16): the master's diagnostics on the drafts, recorded on every tier from SP3e (`.out/Z1-Z3.json`),
   // gated on the quick and full tiers once SP12 starts.
