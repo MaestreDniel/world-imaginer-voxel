@@ -9,7 +9,10 @@
  * Escape shortcuts: the page passes them in, and the tool's own subscribe is the caller of `driver.change` for every
  * session change (ruling R1). Its canvas is attached to the driver's replaying sink (§4.2), so it draws at once from
  * the last configure. Every handle it takes goes into one disposer registry, which `dispose()` runs in reverse order
- * of creation (§1.2); only the session outlives it.
+ * of creation (§1.2); only the session outlives it. In the world (`host: 'world'`, §1.3, §1.5, §2.5, §3.1) a plain map
+ * click teleports (`onTeleport`) unless the cut tool is armed and Shift+click runs today's routing; the toolbar ends
+ * with the click hint and the overlay's slot instead of "Open in 3D"; `show` and `hide` toggle the canvas's hidden state
+ * and whether the driver waits for a preview; `setPlayer` moves the arrow.
  */
 import './map.css';
 import type { WorldSession } from '../../engine/session';
@@ -57,15 +60,15 @@ export interface MapToolDeps {
   /** Where the layout persists (`wi10.layout.v1`); any Storage works. */
   readonly storage: LayoutStorage | null;
   readonly initialView: MapView;
-  /** Click routing (§3.1) and the toolbar (§2.5), from Task 13 on. */
+  /** Click routing (§3.1) and the toolbar (§2.5). */
   readonly host: 'page' | 'world';
   /** The map's hash (without '#') after every session and view change; null in the world, which writes its own URL (§1.6). */
   readonly urlSink: ((hash: string) => void) | null;
   /** Called wherever the tool would call `urlSink` for a view change (pan, zoom, layer); null on the standalone page. */
   readonly onView: ((v: MapView) => void) | null;
-  /** A plain click in the world's map (Task 13); null on the standalone page. */
+  /** A plain click in the world's map (§3.1), at the clicked point; null on the standalone page. */
   readonly onTeleport: ((x: number, z: number) => void) | null;
-  /** The overlay's controls in the toolbar (Task 13); null on the standalone page. */
+  /** The overlay's controls, appended to the toolbar after the click hint in the world (§2.5); null on the standalone page. */
   readonly toolbarSlot: HTMLElement | null;
   /** Whether the tool's P (`togglePanel`) and Escape (`closeDrawer`) run now (the world's owner rule, Task 15). */
   readonly shortcutsEnabled: (a: ShortcutAction) => boolean;
@@ -74,6 +77,15 @@ export interface MapToolDeps {
 }
 
 export interface MapTool {
+  /**
+   * Shows the map (§1.3, §1.5): re-measures, centres the view on `centre` at the current zoom and layer (a reported view
+   * change), plans and draws, and tells the driver a preview is wanted (§4.2).
+   */
+  show(centre?: { readonly x: number; readonly z: number }): void;
+  /** Hides the map: no tile requests, its queued tiles cancelled, no preview wanted (§1.3, §4.2). */
+  hide(): void;
+  /** The player's arrow at (x, z) facing `yawDeg` (§1.5); redrawn only when it moved ≥ 1 px or turned ≥ 2°, ≤ 30/s. */
+  setPlayer(x: number, z: number, yawDeg: number): void;
   readonly view: MapView;
   /** The tool's notice row (Task 20 routes the world's transient notices to it while the map covers the 3D). */
   readonly notices: Notices;
@@ -83,6 +95,8 @@ export interface MapTool {
   dispose(): void;
 }
 
+/** The world's map header hint (SP4c spec §2.5, D26). */
+export const WORLD_CLICK_HINT = 'Click: go here · Shift+click: pin';
 /** A click this close to the cut line (screen px) shows its profile instead of pinning the point. */
 const LINE_HIT_PX = 6;
 const spawnText = (sp: Spawn): string => `${sp.x}, ${sp.z} (y ${sp.y}, ${biomeName(sp.biome)}${sp.fallback ? ', fallback' : ''})`;
@@ -151,14 +165,17 @@ export function createMapTool(host: HTMLElement, deps: MapToolDeps): MapTool {
       cutPointer = [x, z];
       drawCut();
     },
-    onClick: (x, z) => {
+    onClick: (x, z, shift) => {
       const action = mapClickAction({
         drawerTab: layout.drawerOpen ? layout.drawerTab : null,
         plane: slices.state?.plane ?? 'vertical',
         nearLine: section.line !== null && segmentDistance(section.line, x, z) <= LINE_HIT_PX * view.bpp,
         cutArmed: cut.mode !== 'off',
+        host: deps.host,
+        shift,
       });
       switch (action.kind) {
+        case 'teleport': deps.onTeleport?.(x, z); break;
         case 'cut': cutAt(x, z, action.openSection); break;
         case 'openSection': layout.openDrawer('section'); break;
         case 'centre': slices.setCentre(x, z); break;
@@ -202,6 +219,8 @@ export function createMapTool(host: HTMLElement, deps: MapToolDeps): MapTool {
     onGrid: (on) => canvas.setGrid(on),
     onCut: () => setCut(cut.mode === 'off' ? CUT_ARMED : CUT_OFF),
     open3dHref: () => open3dHref(pin, [view.x, view.z], `#${mapHash()}`),
+    // In the world the overlay's slot is always given (Task 15); an empty one stands in if it is not.
+    embedded: deps.host === 'world' ? { slot: deps.toolbarSlot ?? el('span'), hint: WORLD_CLICK_HINT } : null,
   });
   disposers.add(() => toolbar.dispose());
 
@@ -379,6 +398,22 @@ export function createMapTool(host: HTMLElement, deps: MapToolDeps): MapTool {
   deps.onMounted?.({ canvas, host: layout.map, view: () => view, editAt });
 
   return {
+    show(centre) {
+      if (centre !== undefined && (centre.x !== view.x || centre.z !== view.z)) {
+        view = { ...view, x: centre.x, z: centre.z };
+        canvas.setView(view);
+        viewChanged();
+        renderStatus();
+      }
+      // Shown again, the canvas re-measures its host (hidden, it was display: none), then plans its tiles and draws.
+      canvas.setHidden(false);
+      driver.setPreviewWanted(true);
+    },
+    hide() {
+      canvas.setHidden(true);
+      driver.setPreviewWanted(false);
+    },
+    setPlayer: (x, z, yawDeg) => canvas.setPlayer(x, z, yawDeg),
     get view() { return view; },
     notices,
     setView,

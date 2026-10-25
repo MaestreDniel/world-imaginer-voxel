@@ -38,3 +38,49 @@ export function planTiles(v: MapView, w: number, h: number, previewOnly = false)
   if (target !== 256 && !previewOnly) for (const t of visibleTiles(v, w, h, target)) plan.push({ level: target, tx: t.tx, tz: t.tz, priority: 1000 + t.dist });
   return plan;
 }
+
+/** The player arrow's length and base width, screen px (SP4c spec §1.5). */
+const ARROW_LENGTH_PX = 14;
+const ARROW_WIDTH_PX = 10;
+const DEG = Math.PI / 180;
+
+/**
+ * The player arrow (SP4c spec §1.5, D19): an isosceles triangle 14 px long and 10 px wide centred on the player's screen
+ * position, pointing along the screen vector (sin yaw, −cos yaw) (fly yaw 0 faces −z, up on the map). Writes the tip,
+ * then the two base corners, into `out` (6 values: x, y each) without allocating; false (and `out` untouched) when the
+ * centre is outside the w × h view.
+ */
+export function arrowGeometry(x: number, z: number, yawDeg: number, v: MapView, w: number, h: number, out: Float64Array): boolean {
+  const cx = (x - v.x) / v.bpp + w / 2;
+  const cy = (z - v.z) / v.bpp + h / 2;
+  if (!(cx >= 0 && cx <= w && cy >= 0 && cy <= h)) return false;
+  const dx = Math.sin(yawDeg * DEG);
+  const dy = -Math.cos(yawDeg * DEG);
+  const half = ARROW_LENGTH_PX / 2;
+  const side = ARROW_WIDTH_PX / 2;
+  const bx = cx - dx * half;
+  const by = cy - dy * half;
+  out[0] = cx + dx * half;
+  out[1] = cy + dy * half;
+  // The base's direction is the axis turned a quarter: (−dy, dx).
+  out[2] = bx - dy * side;
+  out[3] = by + dx * side;
+  out[4] = bx + dy * side;
+  out[5] = by - dx * side;
+  return true;
+}
+
+/** Whether the arrow moved ≥ 1 px (at `bpp` blocks/px) or turned ≥ 2° from (px, pz, pyaw) (SP4c spec §1.5). */
+export function arrowMoved(px: number, pz: number, pyaw: number, x: number, z: number, yaw: number, bpp: number): boolean {
+  const dx = x - px;
+  const dz = z - pz;
+  if (dx * dx + dz * dz >= bpp * bpp) return true;
+  const turn = Math.abs((((yaw - pyaw) % 360) + 540) % 360 - 180);
+  return turn >= 2;
+}
+
+/** The arrow redraws at most 30 times a second (SP4c spec §1.5): at least this long after its last redraw, ms. */
+export const ARROW_MIN_MS = 33;
+
+/** Whether ≥ `ARROW_MIN_MS` passed since the arrow's last redraw at `lastDrawMs` (−Infinity before the first). */
+export const arrowDue = (lastDrawMs: number, nowMs: number): boolean => nowMs - lastDrawMs >= ARROW_MIN_MS;

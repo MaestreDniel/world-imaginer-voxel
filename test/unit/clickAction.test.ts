@@ -7,6 +7,7 @@ const SECTION: MapClickAction = { kind: 'openSection' };
 const CENTRE: MapClickAction = { kind: 'centre' };
 const CUT_OPENS: MapClickAction = { kind: 'cut', openSection: true };
 const CUT_KEEPS: MapClickAction = { kind: 'cut', openSection: false };
+const TELEPORT: MapClickAction = { kind: 'teleport' };
 
 describe('mapClickAction (SP3d spec §3.7): the routing of a map click', () => {
   // Every (drawerTab, plane, nearLine, cutArmed); drawerTab null = the drawer is closed. Density is "shown" only
@@ -40,7 +41,42 @@ describe('mapClickAction (SP3d spec §3.7): the routing of a map click', () => {
   });
 
   test.each(cases)('drawer %s, plane %s, near the line %s, cut armed %s', (drawerTab, plane, nearLine, cutArmed, want) => {
-    const click: MapClick = { drawerTab, plane, nearLine, cutArmed };
+    const click: MapClick = { drawerTab, plane, nearLine, cutArmed, host: 'page', shift: false };
     expect(mapClickAction(click)).toEqual(want);
+  });
+
+  test('page: today\'s routing, with and without Shift (SP4c spec §3.1)', () => {
+    for (const [drawerTab, plane, nearLine, cutArmed, want] of cases) {
+      for (const shift of [false, true]) expect(mapClickAction({ drawerTab, plane, nearLine, cutArmed, host: 'page', shift })).toEqual(want);
+    }
+  });
+});
+
+describe('mapClickAction in the world (SP4c spec §3.1, D14; Point 3)', () => {
+  const tabs: ReadonlyArray<DrawerTabId | null> = [null, 'spline', 'section', 'density'];
+  const planes: readonly SlicePlane[] = ['vertical', 'horizontal'];
+  const world = (drawerTab: DrawerTabId | null, plane: SlicePlane, nearLine: boolean, cutArmed: boolean, shift: boolean): MapClick =>
+    ({ drawerTab, plane, nearLine, cutArmed, host: 'world', shift });
+
+  test('world, plain: teleport (Density shown or not, near the line or not)', () => {
+    for (const tab of tabs) for (const plane of planes) for (const near of [false, true]) {
+      expect(mapClickAction(world(tab, plane, near, false, false))).toEqual(TELEPORT);
+    }
+  });
+
+  test('world, armed cut, plain or Shift: cut', () => {
+    for (const tab of tabs) for (const plane of planes) for (const near of [false, true]) for (const shift of [false, true]) {
+      expect(mapClickAction(world(tab, plane, near, true, shift))).toEqual(tab === 'density' ? CUT_KEEPS : CUT_OPENS);
+    }
+  });
+
+  test('world, Shift on the Density tab\'s horizontal plane: centre; Shift on Density\'s vertical plane near the line: pin; Shift, Density tab not shown, near the line: openSection; Shift elsewhere: pin', () => {
+    for (const near of [false, true]) expect(mapClickAction(world('density', 'horizontal', near, false, true))).toEqual(CENTRE);
+    expect(mapClickAction(world('density', 'vertical', true, false, true))).toEqual(PIN);
+    expect(mapClickAction(world('density', 'vertical', false, false, true))).toEqual(PIN);
+    for (const tab of [null, 'spline', 'section'] as const) for (const plane of planes) {
+      expect(mapClickAction(world(tab, plane, true, false, true))).toEqual(SECTION);
+      expect(mapClickAction(world(tab, plane, false, false, true))).toEqual(PIN);
+    }
   });
 });

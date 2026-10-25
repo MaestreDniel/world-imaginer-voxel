@@ -3,7 +3,8 @@
  * select (ready profiles) with the inline confirmation before a switch that clears modified parameters;
  * the biome-size slider (§6.4: a pointer drag is one gesture, a keyboard step one urgent edit); undo and
  * redo; the grid toggle; the cut-line button (§4.5); the preview status (§2.6); "Open in 3D" (SP4a spec §8.2). Every
- * edit goes through the session; sync() shows its draft after each change.
+ * edit goes through the session; sync() shows its draft after each change. Embedded in the world's map (SP4c spec §2.5,
+ * D17) it has no "Open in 3D" and ends with the click hint (D26), then the overlay's slot.
  */
 import { isProfileId, isProfileReady, PROFILE_IDS, type ProfileId } from '../../core/params/profiles';
 import type { SessionResult, WorldSession } from '../../engine/session';
@@ -69,6 +70,11 @@ export interface ToolbarDeps {
   onCut(): void;
   /** "Open in 3D"'s URL, read at click time (`open3dHref` over the map's pin, view and hash). */
   open3dHref(): string;
+  /**
+   * In the world's map (SP4c spec §2.5): "Open in 3D" is left out, and the toolbar ends with `hint` (D26), then `slot`
+   * (the overlay's mode switch, Watch live, Centre on me and Close). Null on the standalone `?map`.
+   */
+  readonly embedded: { readonly slot: HTMLElement; readonly hint: string } | null;
 }
 
 export interface Toolbar {
@@ -147,10 +153,13 @@ export function createToolbar(host: HTMLElement, deps: ToolbarDeps): Toolbar {
   showCut(CUT_OFF);
   const status = el('span', 'map-status', 'last edit → preview …');
   const open3d = button('Open in 3D', 'Open this world in 3D at the pin, else at the view centre');
+  const embedded = deps.embedded;
   host.append(
     el('strong', 'map-title', 'world-imaginer-voxel · map'), layerSelect, group('seed', seedInput, sameSeed, newSeed),
-    group('profile', profileSelect), sizeGroup, group('', undoBtn, redoBtn), gridLabel, cutBtn, open3d, status,
+    group('profile', profileSelect), sizeGroup, group('', undoBtn, redoBtn), gridLabel, cutBtn,
   );
+  if (embedded === null) host.append(open3d, status);
+  else host.append(status, el('span', 'map-hint', embedded.hint), embedded.slot);
 
   const sync = () => {
     const s = session.state;

@@ -4,7 +4,8 @@
  * current source's tile lands there (fallback tiles), asks the pool for missing tiles coarse-first (only
  * preview tiles while interactive), reports preview progress to the preview driver, dims all biomes but a
  * highlighted one, pans by drag, zooms around the cursor, and draws the spawn marker, a grid, the pin, the
- * cross-section's cut line (SP2b spec §4.5) and the Density tab's horizontal-plane square (SP3d spec §3.7).
+ * cross-section's cut line (SP2b spec §4.5) and the Density tab's horizontal-plane square (SP3d spec §3.7). In the
+ * world (SP4c spec §1.3, §1.5) it draws the player's arrow on top, and while hidden it plans and draws nothing.
  */
 import { MAP_TILE_PX, type MapLevel } from '../../core/constants';
 import type { Spawn } from '../../gen/column/spawn';
@@ -17,12 +18,13 @@ import { highlightMask } from './highlight';
 import { MAP_MAX_BPP, MAP_MIN_BPP, type MapView } from './mapState';
 import { createTileCache } from './tileCache';
 import { createTileSource } from './tileSource';
-import { planTiles, screenToWorld, visibleTiles, worldToScreen } from './viewMath';
+import { arrowDue, arrowGeometry, arrowMoved, planTiles, screenToWorld, visibleTiles, worldToScreen } from './viewMath';
 
 export interface MapViewOptions {
   onView(v: MapView): void;
   onHover(x: number, z: number): void;
-  onClick(x: number, z: number): void;
+  /** A pointerup without movement since pointerdown; `shift` is the event's `shiftKey` (SP4c spec §3.1). */
+  onClick(x: number, z: number, shift: boolean): void;
   /**
    * Every draw while the source matches the pool's epoch (SP2b spec §2.5-2.6): the length of the longest
    * nearest-first prefix of the visible level-256 positions showing the source's tiles, and their count.
@@ -56,6 +58,17 @@ export interface MapCanvas {
   setSquare(square: MapSquare | null): void;
   /** A crosshair cursor while the cut-line tool waits for a click. */
   setCrosshair(on: boolean): void;
+  /**
+   * The player's arrow (SP4c spec §1.5): white with a 1.5 px `#111` outline, above the tiles and the overlays. Redraws
+   * only when the arrow moved ≥ 1 px or turned ≥ 2° since it was last drawn (`arrowMoved`) and ≥ 33 ms after its last
+   * redraw (`arrowDue`); allocates nothing.
+   */
+  setPlayer(x: number, z: number, yawDeg: number): void;
+  /**
+   * Hidden (SP4c spec §1.3): no tile requests and no draws, the tiles it queued on the pool cancelled. Shown again, it
+   * re-measures its host, plans its tiles and draws.
+   */
+  setHidden(on: boolean): void;
   /** Blank draws since the first image (SP2b spec §2.8), for the latency hook. */
   readonly blankDraws: number;
   /**
@@ -98,13 +111,25 @@ export function createMapCanvas(host: HTMLElement, pool: WorkerPool, initial: Ma
   /** The tile requests this canvas has on the pool (the pool keeps each request object as its job's `tile`). */
   const asked = new Set<TileRequest>();
   let destroyed = false;
+  let hidden = false;
+  /** The player (the last `setPlayer`), and the arrow as last drawn: position, yaw and time (ms). */
+  let player = false;
+  let playerX = 0;
+  let playerZ = 0;
+  let playerYaw = 0;
+  let drawnX = 0;
+  let drawnZ = 0;
+  let drawnYaw = 0;
+  let drawnAt = -Infinity;
+  let arrowDrawn = false;
+  const arrow = new Float64Array(6);
 
   const source = createTileSource();
   const keyOf = (layer: MapView['layer'], level: MapLevel, tx: number, tz: number) => source.keyFor(layer, level, tx, tz, pool.epoch);
   const fitCache = () => cache.setCapacity(tileCacheCapacity(view, canvas.width, canvas.height));
 
   const request = () => {
-    if (destroyed) return;
+    if (destroyed || hidden) return;
     const w = canvas.width;
     const h = canvas.height;
     const plan = planTiles(view, w, h, interactive);
@@ -235,6 +260,30 @@ export function createMapCanvas(host: HTMLElement, pool: WorkerPool, initial: Ma
     }
   };
 
+  /** The arrow at the player, when its centre is inside the view; records what was drawn and when. */
+  const drawArrow = () => {
+    if (!player) return;
+    drawnX = playerX;
+    drawnZ = playerZ;
+    drawnYaw = playerYaw;
+    drawnAt = performance.now();
+    arrowDrawn = true;
+    if (!arrowGeometry(playerX, playerZ, playerYaw, view, canvas.width, canvas.height, arrow)) return;
+    ctx2d.beginPath();
+    ctx2d.moveTo(arrow[0]!, arrow[1]!);
+    ctx2d.lineTo(arrow[2]!, arrow[3]!);
+    ctx2d.lineTo(arrow[4]!, arrow[5]!);
+    ctx2d.closePath();
+    ctx2d.fillStyle = '#ffffff';
+    ctx2d.fill();
+    ctx2d.strokeStyle = '#111';
+    ctx2d.lineWidth = 1.5;
+    ctx2d.lineJoin = 'round';
+    ctx2d.stroke();
+    ctx2d.lineWidth = 1;
+    ctx2d.lineJoin = 'miter';
+  };
+
   const draw = () => {
     raf = 0;
     const w = canvas.width;
@@ -248,15 +297,23 @@ export function createMapCanvas(host: HTMLElement, pool: WorkerPool, initial: Ma
     const frame = fallbacks.frame(view.layer, levels, (level, tx, tz) => keyOf(view.layer, level, tx, tz), (k) => cache.get(k));
     for (const d of frame.draws) drawTile(d);
     drawOverlays();
+    drawArrow();
     const epoch = source.epoch;
     if (epoch !== null && epoch === pool.epoch) opts.onPreviewProgress(epoch, frame.nearestCurrent, preview.length);
   };
-  const schedule = () => { if (raf === 0 && !destroyed) raf = requestAnimationFrame(draw); };
+  const schedule = () => { if (raf === 0 && !destroyed && !hidden) raf = requestAnimationFrame(draw); };
 
-  const resize = () => {
+  /** Re-measures the host; true when the canvas changed size (then its tiles are planned and it is redrawn). */
+  const resize = (): boolean => {
     const w = Math.max(1, Math.floor(host.clientWidth));
     const h = Math.max(1, Math.floor(host.clientHeight));
-    if (canvas.width !== w || canvas.height !== h) { canvas.width = w; canvas.height = h; fitCache(); request(); schedule(); }
+    if (canvas.width === w && canvas.height === h) return false;
+    canvas.width = w;
+    canvas.height = h;
+    fitCache();
+    request();
+    schedule();
+    return true;
   };
   const observer = new ResizeObserver(resize);
   observer.observe(host);
@@ -264,7 +321,7 @@ export function createMapCanvas(host: HTMLElement, pool: WorkerPool, initial: Ma
   let drag: { x: number; y: number; moved: boolean } | null = null;
   canvas.addEventListener('pointerdown', (e) => { drag = { x: e.offsetX, y: e.offsetY, moved: false }; canvas.setPointerCapture(e.pointerId); });
   const endDrag = (e: PointerEvent) => {
-    if (drag !== null && !drag.moved) { const [x, z] = screenToWorld(view, canvas.width, canvas.height, e.offsetX, e.offsetY); opts.onClick(x, z); }
+    if (drag !== null && !drag.moved) { const [x, z] = screenToWorld(view, canvas.width, canvas.height, e.offsetX, e.offsetY); opts.onClick(x, z, e.shiftKey); }
     drag = null;
   };
   canvas.addEventListener('pointerup', endDrag);
@@ -310,6 +367,26 @@ export function createMapCanvas(host: HTMLElement, pool: WorkerPool, initial: Ma
     setCutLine(line) { cutLine = line; schedule(); },
     setSquare(sq) { square = sq; schedule(); },
     setCrosshair(on) { canvas.classList.toggle('map-canvas-cut', on); },
+    setPlayer(x, z, yawDeg) {
+      player = true;
+      playerX = x;
+      playerZ = z;
+      playerYaw = yawDeg;
+      if (!arrowDrawn || (arrowMoved(drawnX, drawnZ, drawnYaw, x, z, yawDeg, view.bpp) && arrowDue(drawnAt, performance.now()))) schedule();
+    },
+    setHidden(on) {
+      if (destroyed) return;
+      if (on) {
+        if (hidden) return;
+        hidden = true;
+        cancelAnimationFrame(raf);
+        raf = 0;
+        pool.cancelTiles((r) => asked.has(r));
+        return;
+      }
+      hidden = false;
+      if (!resize()) { request(); schedule(); }
+    },
     get blankDraws() { return fallbacks.blankDraws; },
     destroy() {
       if (destroyed) return;

@@ -1,7 +1,10 @@
-import { describe, expect, test } from 'vitest';
+import { afterEach, describe, expect, test, vi } from 'vitest';
+import type { WorldSession } from '../../src/engine/session';
+import type { Notices } from '../../src/ui/common/notice';
 import { BIOME_SIZE_SCALE } from '../../src/ui/map/biomeSize';
 import type { DriverStatus } from '../../src/ui/map/previewDriver';
-import { biomeSizeView, previewStatusText, profileOptions, profileSwitchText } from '../../src/ui/map/toolbar';
+import { biomeSizeView, createToolbar, previewStatusText, profileOptions, profileSwitchText, type ToolbarDeps } from '../../src/ui/map/toolbar';
+import { installDom, type FakeDocument, type FakeElement } from './fixtures/domShim';
 
 const status = (s: Partial<DriverStatus>): DriverStatus => ({ lastLatencyMs: null, pending: false, queued: false, settled: false, poolEpoch: null, sessionEpoch: null, error: null, ...s });
 
@@ -36,5 +39,45 @@ describe('toolbar texts (SP2b spec §2.6, §3.1, §6.4)', () => {
       expect([b.v, b.mark]).toEqual([v, '≈']);
       expect(b.tip).toBe(`Biome size ≈ ${v} of 10: climate.scaleMul is ${scaleMul}; moving the slider writes the table value`);
     }
+  });
+});
+
+describe('the toolbar in the world (SP4c spec §2.5, D17, D26)', () => {
+  afterEach(() => { vi.unstubAllGlobals(); });
+
+  /** The members of the session and the notices `createToolbar` reads at mount. */
+  const session = {
+    state: { seedText: '42', profile: 'default', params: { climate: { scaleMul: 1 } } },
+    canUndo: false,
+    canRedo: false,
+  } as unknown as WorldSession;
+  const notices = {} as unknown as Notices;
+  const mount = (document: FakeDocument, embedded: ToolbarDeps['embedded']): FakeElement => {
+    const host = document.createElement('div');
+    createToolbar(host as unknown as HTMLElement, {
+      session, notices, layer: 'biome', edit: (_e, fn) => fn(),
+      onLayer: () => {}, onGrid: () => {}, onCut: () => {}, open3dHref: () => '/?at=0,0',
+      embedded,
+    });
+    return host;
+  };
+  const texts = (host: FakeElement): string[] => host.children.map((c) => c.textContent);
+
+  test('standalone: Open in 3D, no hint', () => {
+    const host = mount(installDom().document, null);
+    expect(texts(host)).toContain('Open in 3D');
+    expect(texts(host).some((t) => t.includes('Shift+click'))).toBe(false);
+  });
+
+  test('embedded: no Open in 3D, the hint `Click: go here · Shift+click: pin`, the slot appended after the hint', () => {
+    const { document } = installDom();
+    const slot = document.createElement('div');
+    slot.append(document.createElement('button'));
+    const host = mount(document, { slot: slot as unknown as HTMLElement, hint: 'Click: go here · Shift+click: pin' });
+    expect(host.querySelectorAll('button').some((b) => b.textContent === 'Open in 3D')).toBe(false);
+    const kids = host.children;
+    expect(kids[kids.length - 1]).toBe(slot);
+    expect(kids[kids.length - 2]!.textContent).toBe('Click: go here · Shift+click: pin');
+    expect(kids.filter((k) => k.textContent === 'Click: go here · Shift+click: pin')).toHaveLength(1);
   });
 });

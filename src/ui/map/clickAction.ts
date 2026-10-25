@@ -5,6 +5,10 @@
  * open on its tab) a finished cut line keeps Density shown (it only sets the line its vertical plane follows), a
  * click near the line does not open Cross-section, and on the horizontal plane a click that is not the cut tool's
  * sets the plane's centre instead of the pin.
+ *
+ * In the world's map (SP4c spec §3.1, D14; the user's answer to Point 3) an armed cut tool still takes the click, plain
+ * or Shift; any other plain click teleports; Shift+click runs the unarmed table above as it is (on the Density tab's
+ * vertical plane it pins even near the line). The standalone `?map` keeps the table above and ignores Shift.
  */
 import type { DrawerTabId } from './layout';
 
@@ -20,6 +24,10 @@ export interface MapClick {
   readonly nearLine: boolean;
   /** The cut-line tool waits for A or B. */
   readonly cutArmed: boolean;
+  /** The map's host: the world's M overlay, or the standalone `?map` page (SP4c spec §3.1). */
+  readonly host: 'world' | 'page';
+  /** Shift was held (only the world's map reads it). */
+  readonly shift: boolean;
 }
 
 export type MapClickAction =
@@ -30,11 +38,14 @@ export type MapClickAction =
   /** Set the horizontal plane's centre. */
   | { readonly kind: 'centre' }
   /** Set the pin. */
-  | { readonly kind: 'pin' };
+  | { readonly kind: 'pin' }
+  /** Teleport to the clicked point (the world's map only). */
+  | { readonly kind: 'teleport' };
 
 export function mapClickAction(c: MapClick): MapClickAction {
   const density = c.drawerTab === 'density';
   if (c.cutArmed) return { kind: 'cut', openSection: !density };
+  if (c.host === 'world' && !c.shift) return { kind: 'teleport' };
   if (density) return c.plane === 'horizontal' ? { kind: 'centre' } : { kind: 'pin' };
   return c.nearLine ? { kind: 'openSection' } : { kind: 'pin' };
 }

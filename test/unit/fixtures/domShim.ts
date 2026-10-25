@@ -250,13 +250,26 @@ export class FakeDocument extends EventTarget {
   }
 }
 
+/** The DOM's `new Option(text, value)` (the toolbar's selects): an 'option' element of `document`, its value `value` when given. */
+function optionClass(document: FakeDocument): new (text?: string, value?: string) => FakeElement {
+  return class FakeOption extends FakeElement {
+    constructor(text = '', value?: string) {
+      super('option');
+      this.ownerDocument = document;
+      this.textContent = text;
+      if (value !== undefined) this.value = value;
+    }
+  };
+}
+
 /**
- * Installs a fresh document as the global `document` (`vi.stubGlobal`). `el(id)` returns the element with that id under
- * `body` and throws when there is none.
+ * Installs a fresh document as the global `document` and its `Option` constructor (`vi.stubGlobal`). `el(id)` returns
+ * the element with that id under `body` and throws when there is none.
  */
 export function installDom(): { document: FakeDocument; body: FakeElement; el(id: string): FakeElement } {
   const document = new FakeDocument();
   vi.stubGlobal('document', document);
+  vi.stubGlobal('Option', optionClass(document));
   return {
     document,
     body: document.body,
