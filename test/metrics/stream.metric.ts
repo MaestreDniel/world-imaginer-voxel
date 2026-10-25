@@ -115,6 +115,7 @@ function recorded(inner: CoordinatorJobs, log: Issued[]): CoordinatorJobs {
     },
     cancel: (pred) => inner.cancel(pred),
     liveWorkers: () => inner.liveWorkers(),
+    generation: () => inner.generation(),
   };
 }
 
@@ -140,6 +141,8 @@ async function fly(kind: SectionRendererKind): Promise<Run> {
       store,
       sink: {
         stage: (p, seq) => sections.stage(p, seq),
+        // Nothing applies here, so nothing is unstaged; Task 8 wires `sections.unstage`, as on the page (SP4c plan).
+        unstage: () => false,
         remove(cx, cz) {
           run.removed++;
           sections.remove(cx, cz);
@@ -150,6 +153,8 @@ async function fly(kind: SectionRendererKind): Promise<Run> {
       rdMax: RD_MAX,
       retainAllProtos: true,
       strict: true,
+      generation: pool.epoch,
+      epoch: 1,
       onEvent: (e) => { events.push(e); },
     });
     sections.onColumnRevealed = () => { run.revealed++; };

@@ -77,6 +77,25 @@
  * Without a crossing, a turn or an arriving result, `update` allocates nothing (§3.10): the counts are written into the
  * caller's object, the heaps (four stage heaps and three unload heaps) and the version scratch are preallocated, and
  * the cancel predicate is created once.
+ *
+ * SP4c (spec §4.2, §4.4-§4.6, D3, D5, D7, the technical review's C1):
+ * - **The generation gate:** `pump` issues nothing unless `jobs.generation()` (the pool's epoch) equals
+ *   `appliedGeneration` (the options' `generation`, then `adopt`'s), so a draft the map configured and the world has
+ *   not applied holds the world; the heaps are kept. `adopt(generation)` sets it and rebuilds the heaps: no epoch
+ *   changes, nothing is freed, staged or unstaged.
+ * - **The per-column epoch:** `wEpoch` (the options' `epoch`) is the applied world; per slot `colEpoch` (the epoch its
+ *   T was issued under, set at the T's intake; 0 for Absent), `shownEpoch` and `stagedEpoch` (the epochs of the payload
+ *   the sink shows and of one staged and not yet shown) and `busyEpoch` (`wEpoch` at the job's issue). D, L and MESH
+ *   need their 3 × 3 at the stage with `colEpoch === wEpoch`; MESH also needs the target (`stagedEpoch || shownEpoch`)
+ *   ≠ `wEpoch`, and a Published current column whose target is `wEpoch` is marked `meshed` without one.
+ * - **The sink's column** (`sinkCx`, `sinkCz`; `NO_COLUMN` when the sink holds nothing): set at `stage`, which also
+ *   sets `stagedEpoch = wEpoch` (asserted 0 before: a column is staged at most once per epoch); every removal names it
+ *   (`unmesh`), the mesh unloads key on it (outside keepMesh), and `classify` removes the mesh of a sink column an
+ *   Absent slot will no longer track before the slot follows its window column.
+ * - **Intake (D7):** T, D and L results are recorded as the store stands, whatever generation they ran under; a MESH
+ *   whose `busyEpoch` ≠ `wEpoch` is dropped.
+ * - **Counts:** `done` counts current columns only; `stale` the MESH-set columns with (stage ≥ 1 and `colEpoch` ≠
+ *   `wEpoch`) or (target ≠ 0 and ≠ `wEpoch`); `epoch` is `wEpoch`.
  */
 import { TORUS_SIZE, colKey } from '../core/coords';
 import { STAGE_BONUS, streamScore } from '../core/streamScore';
@@ -97,10 +116,14 @@ export interface StreamCamera {
   readonly yawDeg: number;
 }
 
-/** What a job resolved with: T and D carry no versions; L its 3 × 3 versions (18); MESH its payload and its versions. */
+/**
+ * What a job resolved with: T and D carry no versions; L its 3 × 3 versions (18); MESH its payload and its versions.
+ * `generation` is the pool's epoch the job was issued under (SP4c spec §4.6, D7).
+ */
 export interface JobOutcome {
   readonly versions: Int32Array | null;
   readonly payload: ColumnMeshPayload | null;
+  readonly generation: number;
 }
 
 /** The pool seen by the coordinator (spec §3.13; `worldJobsOf` adapts the pool). */
@@ -111,6 +134,8 @@ export interface CoordinatorJobs {
   cancel(pred: (stage: Stage, cx: number, cz: number) => boolean): void;
   /** The workers that have not failed: the caps follow it. */
   liveWorkers(): number;
+  /** The pool's generation now (its `epoch`): world jobs are issued only while it is the applied one (SP4c §4.2). */
+  generation(): number;
 }
 
 /** The page's attached store, as the coordinator needs it (spec §3.13; `VoxelStore` satisfies it). */
@@ -125,8 +150,13 @@ export interface StreamStore {
 
 /** Where meshes go (spec §3.13): the section renderer's staging. */
 export interface StreamSink {
-  /** One column's payload, with the slot's `meshSeq` at issue. */
+  /** One column's payload, with the slot's `meshSeq` at issue (on a shown column: the swap, SP4c spec §5.1). */
   stage(p: ColumnMeshPayload, seq: number): void;
+  /**
+   * Drops the column's pending payload, if any (SP4c spec §4.4, §5.1): true when one was dropped (the shown payload
+   * stays), false when the staged payload is already shown.
+   */
+  unstage(cx: number, cz: number): boolean;
   /** Hides a meshed column and releases its rows (the mesh unload, spec §3.5). */
   remove(cx: number, cz: number): void;
 }
@@ -151,6 +181,10 @@ export interface CoordinatorOptions {
   readonly retainAllProtos: boolean;
   /** The first entry's rule (D12): any error is fatal. */
   readonly strict: boolean;
+  /** The pool's generation of the world's first configure: the applied generation (SP4c spec §4.2, §4.10). */
+  readonly generation: number;
+  /** The first configure's epoch (`epochOf` of its genKey; the page's is 1): the applied epoch, an integer ≥ 1. */
+  readonly epoch: number;
   readonly onEvent: (e: StreamEvent) => void;
 }
 
@@ -178,6 +212,13 @@ export interface CoordinatorCounts {
   cx: number;
   cz: number;
   yawDeg: number;
+  /**
+   * The MESH-set columns that are stale (SP4c spec §4.4): stage ≥ 1 with `colEpoch` ≠ the applied epoch, or a target
+   * mesh epoch that is non-zero and not the applied one. A column not yet generated is not stale.
+   */
+  stale: number;
+  /** The applied epoch (`wEpoch`). */
+  epoch: number;
 }
 
 export interface Coordinator {
@@ -189,6 +230,12 @@ export interface Coordinator {
   setStrict(on: boolean): void;
   /** Every MESH column of the current set meshed and handed to the sink. */
   firstFill(): boolean;
+  /**
+   * The world applies the pool's generation `generation` with the same genKey (SP4c spec §4.3, §4.5): sets the applied
+   * generation and rebuilds the heaps; changes no epoch, frees, stages and unstages nothing. Issuing resumes at the
+   * next `update`. Allocates nothing.
+   */
+  adopt(generation: number): void;
   /**
    * True while (cx, cz)'s slot tracks it marked failed (skipped after two failures, spec §3.6) until its voxels
    * unload. Only that column is marked: the neighbours it stops short of MESH (its 7 × 7 when skipped at T, 5 × 5 at
@@ -231,25 +278,28 @@ const errorText = (e: unknown): string => (e instanceof Error ? e.message : Stri
 /** A fresh counts object for `Coordinator.counts` (the page keeps one and reuses it every frame). */
 export function createCoordinatorCounts(): CoordinatorCounts {
   const stage = (): StageCounts => ({ needed: 0, done: 0, inFlight: 0, queued: 0 });
-  return { T: stage(), D: stage(), L: stage(), MESH: stage(), dropped: 0, failed: 0, storeFull: 0, collisionWaits: 0, genCap: 0, rd: 0, cx: 0, cz: 0, yawDeg: 0 };
+  return {
+    T: stage(), D: stage(), L: stage(), MESH: stage(), dropped: 0, failed: 0, storeFull: 0, collisionWaits: 0, genCap: 0, rd: 0, cx: 0, cz: 0,
+    yawDeg: 0, stale: 0, epoch: 0,
+  };
 }
 
 /**
  * The pool as the coordinator's jobs (ruling P30, spec §3.13): T, D, L and MESH run `terrain` (with `protoOnly`),
  * `decorate`, `light` and `meshColumn`. T, D and L resolve `{ versions: done.versions, payload: null }` (light's 18
  * versions, null for terrain and decorate), MESH `{ versions: p.versions, payload: p }` from the pool's `MeshColumnDone`
- * (its `generation` reaches the outcome with SP4c's generation gate); rejections pass through. `cancel` is `cancelWorld`,
- * `liveWorkers` the pool's.
+ * (each outcome carries the reply's `generation`, the pool's epoch at issue, SP4c spec §4.6); rejections pass through.
+ * `cancel` is `cancelWorld`, `liveWorkers` the pool's, `generation()` the pool's `epoch` now (SP4c spec §4.2).
  */
-export function worldJobsOf(pool: Pick<WorkerPool, 'terrain' | 'decorate' | 'light' | 'meshColumn' | 'cancelWorld' | 'liveWorkers'>): CoordinatorJobs {
-  const column = (d: ColumnDone): JobOutcome => ({ versions: d.versions, payload: null });
+export function worldJobsOf(pool: Pick<WorkerPool, 'epoch' | 'terrain' | 'decorate' | 'light' | 'meshColumn' | 'cancelWorld' | 'liveWorkers'>): CoordinatorJobs {
+  const column = (d: ColumnDone): JobOutcome => ({ versions: d.versions, payload: null, generation: d.generation });
   return {
     run(stage, cx, cz, protoOnly) {
       switch (stage) {
         case 'T': return pool.terrain(cx, cz, protoOnly).then(column);
         case 'D': return pool.decorate(cx, cz).then(column);
         case 'L': return pool.light(cx, cz).then(column);
-        case 'MESH': return pool.meshColumn(cx, cz).then(({ payload }) => ({ versions: payload.versions, payload }));
+        case 'MESH': return pool.meshColumn(cx, cz).then(({ payload, generation }) => ({ versions: payload.versions, payload, generation }));
       }
     },
     cancel(pred) {
@@ -257,6 +307,9 @@ export function worldJobsOf(pool: Pick<WorkerPool, 'terrain' | 'decorate' | 'lig
     },
     liveWorkers() {
       return pool.liveWorkers();
+    },
+    generation() {
+      return pool.epoch;
     },
   };
 }
@@ -303,12 +356,17 @@ export function createCoordinator(o: CoordinatorOptions): Coordinator {
   if (!Number.isInteger(o.rdMax) || o.rdMax < RD_MIN) throw new RangeError(`the render distance maximum ${o.rdMax} is not an integer ≥ ${RD_MIN}`);
   assertTorusSafe(o.rdMax);
   checkRd(o.rd, o.rdMax);
+  if (!Number.isInteger(o.epoch) || o.epoch < 1) throw new RangeError(`the first epoch ${o.epoch} is not an integer ≥ 1`);
+  if (!Number.isInteger(o.generation)) throw new RangeError(`the first generation ${o.generation} is not an integer`);
 
   const { jobs, store, sink, throttle, onEvent } = o;
   const rdMax = o.rdMax;
   const retainAllProtos = o.retainAllProtos;
   let rd = o.rd;
   let strict = o.strict;
+  /** The applied epoch (SP4c spec §4.4) and the pool generation the world applied (§4.2's gate). */
+  let wEpoch = o.epoch;
+  let appliedGeneration = o.generation;
 
   // The slot table (spec §3.1).
   const tcx = new Int32Array(SLOTS).fill(NO_COLUMN);
@@ -334,6 +392,16 @@ export function createCoordinator(o: CoordinatorOptions): Coordinator {
   const colliding = new Uint8Array(SLOTS);
   /** The slot's job met StoreFull: it waits for the pause to end (spec §3.6). */
   const waitFull = new Uint8Array(SLOTS);
+  // The per-column epoch (SP4c spec §4.4): the epoch the column's T was issued under (0 for Absent), the epochs of the
+  // payload the sink shows for the slot's sink column and of one staged and not yet shown (0 when none), and `wEpoch`
+  // at the in-flight job's issue.
+  const colEpoch = new Int32Array(SLOTS);
+  const shownEpoch = new Int32Array(SLOTS);
+  const stagedEpoch = new Int32Array(SLOTS);
+  const busyEpoch = new Int32Array(SLOTS);
+  /** The column whose rows the sink holds for the slot (shown or staged), NO_COLUMN when none (C1). */
+  const sinkCx = new Int32Array(SLOTS).fill(NO_COLUMN);
+  const sinkCz = new Int32Array(SLOTS).fill(NO_COLUMN);
 
   // The heaps (spec §3.3, §3.5, §3.7): heap h's entries at [h·SLOTS, h·SLOTS + len[h]); each entry's key and colKey tie
   // are stored per (heap, slot) when pushed, so a heap's order never depends on state that changes while it waits.
@@ -388,6 +456,10 @@ export function createCoordinator(o: CoordinatorOptions): Coordinator {
     const s = slotOf(cx, cz);
     return tracks(s, cx, cz) ? stage[s]! : 0;
   };
+  /** The epoch the slot's sink column will show once its uploads finish: its target (SP4c spec §4.4); 0 for none. */
+  const targetOf = (s: number): number => stagedEpoch[s] || shownEpoch[s]!;
+  /** Whether the sink holds the slot's sink column outside keepMesh (the mesh unload, SP4c spec §4.5). */
+  const sinkOutside = (s: number): boolean => sinkCx[s] !== NO_COLUMN && (flagsAt(sinkCx[s]!, sinkCz[s]!) & M_KEEP_MESH) === 0;
 
   function fatal(message: string, cause: unknown): void {
     stopped = true;
@@ -415,10 +487,16 @@ export function createCoordinator(o: CoordinatorOptions): Coordinator {
       if (holder === 'other') collide(s);
       return -1;
     }
+    if (st === 3 && colEpoch[s] === wEpoch && targetOf(s) === wEpoch) {
+      // A Published current column whose mesh is (or is staged) at the applied epoch needs no MESH (SP4c spec §4.4).
+      meshed[s] = 1;
+      return -1;
+    }
+    // D, L and MESH need their 3 × 3 at the stage, every column of it current (SP4c spec §4.4).
     for (let dz = -1; dz <= 1; dz++) {
       for (let dx = -1; dx <= 1; dx++) {
         const n = slotOf(cx + dx, cz + dz);
-        if (!tracks(n, cx + dx, cz + dz) || stage[n]! < st) return -1;
+        if (!tracks(n, cx + dx, cz + dz) || stage[n]! < st || colEpoch[n] !== wEpoch) return -1;
       }
     }
     if (st !== 1) return st;
@@ -650,7 +728,10 @@ export function createCoordinator(o: CoordinatorOptions): Coordinator {
       wflags[s] = dx >= -R && dx <= R && dz >= -R && dz <= R ? table[(dz + R) * side + dx + R]! : 0;
       if (stage[s] === 0) {
         if (!tracks(s, x, z)) {
-          // An Absent slot follows its window column; a T still running for the old one is dropped at intake.
+          // An Absent slot follows its window column; a T still running for the old one is dropped at intake. A mesh the
+          // sink still holds for another column (one freed with its old mesh kept, SP4c spec §4.5) goes first: the slot
+          // will no longer track it, so nothing else would remove it (no ghost geometry, C1).
+          if (sinkCx[s] !== NO_COLUMN && (sinkCx[s] !== x || sinkCz[s] !== z)) unmesh(s);
           follow(s);
         } else if ((wflags[s]! & M_KEEP_VOXELS) === 0) {
           // An Absent column's voxel unload: no record to free, only its failed mark and retries go (spec §3.1).
@@ -673,6 +754,7 @@ export function createCoordinator(o: CoordinatorOptions): Coordinator {
     tcx[s] = wcx[s]!;
     tcz[s] = wcz[s]!;
     stage[s] = 0;
+    colEpoch[s] = 0;
     meshed[s] = 0;
     protoAlive[s] = 0;
     failed[s] = 0;
@@ -685,10 +767,10 @@ export function createCoordinator(o: CoordinatorOptions): Coordinator {
 
   /** Queues the slot's unloads if its column lies outside its keep sets (mesh beyond keepMesh, voxels beyond keepVoxels). */
   function unloadCheck(s: number): void {
+    // The mesh unload keys on the sink's column, apart from `meshed` (SP4c spec §4.5).
+    if (sinkOutside(s)) pushUnload(H_MESH_OUT, s);
     if (tcx[s] === NO_COLUMN) return;
-    const f = flagsOf(s);
-    if (meshed[s] !== 0 && (f & M_KEEP_MESH) === 0) pushUnload(H_MESH_OUT, s);
-    if (stage[s]! >= 1 && (f & M_KEEP_VOXELS) === 0) pushUnload(H_FREE, s);
+    if (stage[s]! >= 1 && (flagsOf(s) & M_KEEP_VOXELS) === 0) pushUnload(H_FREE, s);
   }
 
   /** Queues the slot's proto free (with the rule off) if it is Decorated or Published with a live proto. */
@@ -735,9 +817,16 @@ export function createCoordinator(o: CoordinatorOptions): Coordinator {
     return true;
   }
 
-  /** Hides the slot's mesh: the sink releases its rows, and a MESH result of the old seq is dropped (spec §3.1). */
+  /**
+   * Hides the slot's mesh: the sink releases the rows of its sink column (SP4c spec §4.5, C1), both mesh epochs and the
+   * sink column are cleared, and a MESH result of the old seq is dropped (spec §3.1).
+   */
   function unmesh(s: number): void {
-    sink.remove(tcx[s]!, tcz[s]!);
+    sink.remove(sinkCx[s]!, sinkCz[s]!);
+    sinkCx[s] = NO_COLUMN;
+    sinkCz[s] = NO_COLUMN;
+    shownEpoch[s] = 0;
+    stagedEpoch[s] = 0;
     meshed[s] = 0;
     meshSeq[s] = meshSeq[s]! + 1;
     remove(H_MESH_OUT, s);
@@ -752,7 +841,7 @@ export function createCoordinator(o: CoordinatorOptions): Coordinator {
     let hidden = 0;
     while (hidden < MESH_REMOVALS_PER_FRAME && heapLen[H_MESH_OUT]! > 0) {
       const s = pop(H_MESH_OUT);
-      if (tcx[s] === NO_COLUMN || meshed[s] === 0 || (flagsOf(s) & M_KEEP_MESH) !== 0) continue;
+      if (!sinkOutside(s)) continue;
       unmesh(s);
       hidden++;
     }
@@ -763,7 +852,7 @@ export function createCoordinator(o: CoordinatorOptions): Coordinator {
         pop(H_FREE);
         continue;
       }
-      if (meshed[s] !== 0) {
+      if (sinkCx[s] !== NO_COLUMN) {
         if (hidden >= MESH_REMOVALS_PER_FRAME) break;
         unmesh(s);
         hidden++;
@@ -825,6 +914,8 @@ export function createCoordinator(o: CoordinatorOptions): Coordinator {
   function pump(): void {
     if (stopped) return;
     checkLive();
+    // The generation gate (SP4c spec §4.2, D3): a configure the world has not applied holds every world job.
+    if (jobs.generation() !== appliedGeneration) return;
     for (;;) {
       if (stopped) return;
       const N = live;
@@ -871,6 +962,7 @@ export function createCoordinator(o: CoordinatorOptions): Coordinator {
     const cz = tcz[s]!;
     const protoOnly = h === 0 && stage[s]! >= 2;
     busy[s] = h + 1;
+    busyEpoch[s] = wEpoch;
     inFlight[h] = inFlight[h]! + 1;
     total++;
     if (h === 0) colliding[s] = 0;
@@ -974,6 +1066,11 @@ export function createCoordinator(o: CoordinatorOptions): Coordinator {
       }
     }
     if (h === 3) {
+      if (busyEpoch[s] !== wEpoch) {
+        // Meshed under another applied epoch (SP4c spec §4.6): its seq no longer matches either.
+        drop(h, s, cx, cz, `issued at epoch ${busyEpoch[s]}, the applied epoch is ${wEpoch}`);
+        return;
+      }
       if (seq !== meshSeq[s]) {
         drop(h, s, cx, cz, `meshSeq ${seq} superseded by ${meshSeq[s]}`);
         return;
@@ -982,7 +1079,13 @@ export function createCoordinator(o: CoordinatorOptions): Coordinator {
         drop(h, s, cx, cz, 'the column left keepMesh');
         return;
       }
+      // A column is staged at most once per epoch (SP4c spec §4.4): a pending payload of another epoch was resolved by
+      // `apply` before this MESH was issued, and one at this epoch makes the target this epoch (no MESH).
+      if (stagedEpoch[s] !== 0) throw new Error(`MESH at (${cx}, ${cz}) staged over a pending payload of epoch ${stagedEpoch[s]}`);
       sink.stage(out.payload!, seq);
+      sinkCx[s] = cx;
+      sinkCz[s] = cz;
+      stagedEpoch[s] = wEpoch;
       meshed[s] = 1;
       considerAround(cx, cz);
       return;
@@ -992,7 +1095,12 @@ export function createCoordinator(o: CoordinatorOptions): Coordinator {
       protoAlive[s] = 1;
     } else {
       stage[s] = h + 1;
-      if (h === 0) protoAlive[s] = 1;
+      if (h === 0) {
+        protoAlive[s] = 1;
+        // The column's epoch is the one its T was issued under (SP4c spec §4.4); D and L leave it (D7: recorded as the
+        // store stands, whatever generation they ran under).
+        colEpoch[s] = busyEpoch[s]!;
+      }
     }
     considerAround(cx, cz);
   }
@@ -1081,33 +1189,45 @@ export function createCoordinator(o: CoordinatorOptions): Coordinator {
       tcx[s] = NO_COLUMN;
       tcz[s] = NO_COLUMN;
       stage[s] = 0;
+      colEpoch[s] = 0;
       meshed[s] = 0;
       protoAlive[s] = 0;
     }
   }
 
-  /** The done counts of the current sets and the failed columns, from one pass over the table. */
+  /**
+   * The done counts of the current sets (current columns only, SP4c spec §4.5: T, D and L at `colEpoch === wEpoch`,
+   * MESH meshed with its target at `wEpoch`), the stale MESH-set columns (§4.4) and the failed columns, in one pass.
+   */
   function countDone(out: CoordinatorCounts): void {
     let t = 0;
     let d = 0;
     let l = 0;
     let m = 0;
     let f = 0;
+    let stale = 0;
     for (let s = 0; s < SLOTS; s++) {
       if (failed[s] !== 0) f++;
       const fl = flagsOf(s);
       if (fl === 0) continue;
       const st = stage[s]!;
-      if ((fl & M_T) !== 0 && st >= 1) t++;
-      if ((fl & M_D) !== 0 && st >= 2) d++;
-      if ((fl & M_L) !== 0 && st >= 3) l++;
-      if ((fl & M_MESH) !== 0 && meshed[s] !== 0) m++;
+      const current = colEpoch[s] === wEpoch;
+      const target = targetOf(s);
+      if (current) {
+        if ((fl & M_T) !== 0 && st >= 1) t++;
+        if ((fl & M_D) !== 0 && st >= 2) d++;
+        if ((fl & M_L) !== 0 && st >= 3) l++;
+      }
+      if ((fl & M_MESH) === 0) continue;
+      if (meshed[s] !== 0 && target === wEpoch) m++;
+      if ((st >= 1 && !current) || (target !== 0 && target !== wEpoch)) stale++;
     }
     out.T.done = t;
     out.D.done = d;
     out.L.done = l;
     out.MESH.done = m;
     out.failed = f;
+    out.stale = stale;
   }
 
   return {
@@ -1152,6 +1272,12 @@ export function createCoordinator(o: CoordinatorOptions): Coordinator {
       strict = on;
     },
 
+    adopt(generation) {
+      appliedGeneration = generation;
+      // Requeue (SP4c spec §4.5): the jobs a held pump left in the heaps, and any a rejection requeued, keyed afresh.
+      rebuild();
+    },
+
     isSkipped(cx, cz) {
       const s = slotOf(cx, cz);
       return failed[s] !== 0 && tracks(s, cx, cz);
@@ -1186,6 +1312,7 @@ export function createCoordinator(o: CoordinatorOptions): Coordinator {
       out.cx = rcx;
       out.cz = rcz;
       out.yawDeg = ryaw;
+      out.epoch = wEpoch;
       return out;
     },
 

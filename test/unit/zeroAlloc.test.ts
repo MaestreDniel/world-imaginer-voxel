@@ -220,12 +220,13 @@ function fakeWorld() {
       else if (stage === 'D') { const r = held(cx, cz)!; r.status = 2; r.block++; }
       else if (stage === 'L') { const r = held(cx, cz)!; r.status = 3; r.light++; }
       const payload = stage === 'MESH' ? ({ cx, cz, versions } as unknown as ColumnMeshPayload) : null;
-      return Promise.resolve({ versions: stage === 'L' || stage === 'MESH' ? versions : null, payload });
+      return Promise.resolve({ versions: stage === 'L' || stage === 'MESH' ? versions : null, payload, generation: 0 });
     },
     cancel() {},
     liveWorkers: () => 4,
+    generation: () => 0,
   };
-  return { store, jobs, sink: { stage() { staged++; }, remove() {} }, staged: () => staged };
+  return { store, jobs, sink: { stage() { staged++; }, unstage: () => false, remove() {} }, staged: () => staged };
 }
 
 const flush = (): Promise<void> => new Promise((r) => setImmediate(r));
@@ -238,7 +239,7 @@ async function filledCoordinator(cam: { x: number; z: number; yawDeg: number }):
   const w = fakeWorld();
   const c = createCoordinator({
     jobs: w.jobs, store: w.store, sink: w.sink, throttle: createThrottle({ max: 3 }), rd: 12, rdMax: 16,
-    retainAllProtos: true, strict: true, onEvent: (e) => { throw new Error(`unexpected event ${e.kind}`); },
+    retainAllProtos: true, strict: true, generation: 0, epoch: 1, onEvent: (e) => { throw new Error(`unexpected event ${e.kind}`); },
   });
   for (let i = 0; i < 100 && !c.firstFill(); i++) {
     c.update(cam);

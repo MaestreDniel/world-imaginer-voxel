@@ -7,7 +7,7 @@ import {
   type Coordinator, type CoordinatorCounts, type CoordinatorJobs, type JobOutcome, type StreamCamera, type StreamEvent,
   type StreamSink, type StreamStore,
 } from '../../src/engine/coordinator';
-import { KEEP_VOXELS_EXTRA, M_D, M_L, M_MESH, M_T, membershipTable, stageOffsets, type Stage } from '../../src/engine/rings';
+import { KEEP_VOXELS_EXTRA, M_D, M_KEEP_MESH, M_L, M_MESH, M_T, membershipTable, stageOffsets, type Stage } from '../../src/engine/rings';
 import { createThrottle, type Throttle } from '../../src/engine/throttle';
 import { JobCancelled, StoreCorruptError, StoreFullError, WorkerFailed, type ColumnDone, type WorkerPool } from '../../src/engine/workerPool';
 import type { ColumnMeshPayload } from '../../src/mesh/column';
@@ -51,7 +51,9 @@ interface FakeOptions {
  * tick and commit into the model when they resolve, and a sink. Every issue is checked against the prerequisites (D
  * also against live protos), the record's holder, the caps (with the throttle's cap at that moment) and the columns
  * already busy; every free against the pending jobs that read the column (the pins, SP4b spec §3.5); every stage
- * against the revealed columns (D16) and every remove against the unrevealed ones.
+ * against the columns the sink holds at the coordinator's epoch (staged at most once per epoch, SP4c spec §4.4) and
+ * every remove against the unrevealed ones. The pool's generation (`fake.generation`) is the test's to move; each job
+ * resolves with the generation it was issued under (SP4c spec §4.6).
  */
 function fakeWorld(fo: FakeOptions = {}) {
   const fake = {
@@ -69,6 +71,17 @@ function fakeWorld(fo: FakeOptions = {}) {
     removes: [] as Array<readonly [number, number]>,
     /** The columns staged and not removed since (colKey). */
     revealed: new Set<number>(),
+    /** The coordinator's epoch (`counts().epoch`) when each held column was staged (colKey → epoch). */
+    revealedEpoch: new Map<number, number>(),
+    /** Reads the coordinator's epoch at a stage (`make` sets it once the coordinator exists). */
+    epochNow: (): number => 1,
+    /** The pool's generation (`jobs.generation()`), moved by the test (SP4c spec §4.2). */
+    generation: 0,
+    /** The generation each job of `issued` was issued under (same indices). */
+    issuedGen: [] as number[],
+    unstages: [] as Array<readonly [number, number]>,
+    /** Every stage and remove in order, as `+colKey` and `-colKey`. */
+    sinkOps: [] as number[],
     events: [] as StreamEvent[],
     /** `issued.length` when each event arrived. */
     eventIssued: [] as number[],
@@ -161,16 +174,18 @@ function fakeWorld(fo: FakeOptions = {}) {
   };
   const violations = (v: string): void => { fake.violations.push(v); };
 
-  const outcome = (stage: Stage, cx: number, cz: number, versions: Int32Array): JobOutcome => {
+  const outcome = (stage: Stage, cx: number, cz: number, versions: Int32Array, generation: number): JobOutcome => {
     const v = stage === 'L' || stage === 'MESH' ? versions : null;
     const payload = stage === 'MESH' ? ({ cx, cz, versions: v } as unknown as ColumnMeshPayload) : null;
-    return { versions: v, payload };
+    return { versions: v, payload, generation };
   };
 
   const jobs: CoordinatorJobs = {
     run(stage, cx, cz, protoOnly) {
       if (protoOnly) fake.protoOnly.push(fake.issued.length);
       fake.issued.push({ stage, cx, cz });
+      const generation = fake.generation;
+      fake.issuedGen.push(generation);
       inFlight[stage]++;
       total++;
       check(stage, cx, cz, protoOnly);
@@ -185,7 +200,7 @@ function fakeWorld(fo: FakeOptions = {}) {
             done();
             fo.tamper?.({ stage, cx, cz }, versions);
             commit(stage, cx, cz, protoOnly);
-            resolve(outcome(stage, cx, cz, versions));
+            resolve(outcome(stage, cx, cz, versions, generation));
           },
           reject: (e) => { done(); reject(e); },
         };
@@ -205,16 +220,29 @@ function fakeWorld(fo: FakeOptions = {}) {
       fake.pending.splice(0, fake.pending.length, ...keep);
     },
     liveWorkers: () => fake.live,
+    generation: () => fake.generation,
   };
   const sink: StreamSink = {
     stage(p, seq) {
-      if (fake.revealed.has(colKey(p.cx, p.cz))) violations(`(${p.cx}, ${p.cz}) staged again while revealed (D16)`);
-      fake.revealed.add(colKey(p.cx, p.cz));
+      // Staged at most once per epoch (SP4c spec §4.4): a stage over a column held at the same epoch, with no remove
+      // since, is a violation; over a column held at another epoch it is the swap.
+      const k = colKey(p.cx, p.cz);
+      const epoch = fake.epochNow();
+      if (fake.revealed.has(k) && fake.revealedEpoch.get(k) === epoch) violations(`(${p.cx}, ${p.cz}) staged again at epoch ${epoch} while held (D16)`);
+      fake.revealed.add(k);
+      fake.revealedEpoch.set(k, epoch);
       fake.stages.push({ cx: p.cx, cz: p.cz, seq });
+      fake.sinkOps.push(k + 1);
+    },
+    unstage(cx, cz) {
+      fake.unstages.push([cx, cz]);
+      return false;
     },
     remove(cx, cz) {
       if (!fake.revealed.delete(colKey(cx, cz))) violations(`remove of the unstaged (${cx}, ${cz})`);
+      fake.revealedEpoch.delete(colKey(cx, cz));
       fake.removes.push([cx, cz]);
+      fake.sinkOps.push(-(colKey(cx, cz) + 1));
     },
   };
   /** Settles the pending job at index i (FIFO by default). */
@@ -234,6 +262,8 @@ interface MakeOptions extends FakeOptions {
   readonly rdMax?: number;
   readonly strict?: boolean;
   readonly retainAllProtos?: boolean;
+  /** The first configure's epoch (SP4c spec §4.10; the page's is 1). */
+  readonly epoch?: number;
 }
 
 function make(mo: MakeOptions = {}): { w: World; c: Coordinator } {
@@ -241,8 +271,11 @@ function make(mo: MakeOptions = {}): { w: World; c: Coordinator } {
   const c = createCoordinator({
     jobs: w.jobs, store: w.store, sink: w.sink, throttle: w.throttle, rd: mo.rd ?? 4, rdMax: mo.rdMax ?? 16,
     retainAllProtos: mo.retainAllProtos ?? true, strict: mo.strict ?? false,
+    generation: w.fake.generation, epoch: mo.epoch ?? 1,
     onEvent: (e) => { w.fake.events.push(e); w.fake.eventIssued.push(w.fake.issued.length); },
   });
+  const counts = createCoordinatorCounts();
+  w.fake.epochNow = () => c.counts(counts).epoch;
   return { w, c };
 }
 
@@ -297,6 +330,7 @@ describe('createCoordinator: validation (SP4b spec §3.13, §7.6)', () => {
       run: () => { touched.push('run'); return Promise.reject(new Error('run')); },
       cancel: () => { touched.push('cancel'); },
       liveWorkers: () => { touched.push('liveWorkers'); return 4; },
+      generation: () => { touched.push('generation'); return 0; },
     };
     const store: StreamStore = {
       versionsInto: () => { touched.push('versionsInto'); },
@@ -304,10 +338,12 @@ describe('createCoordinator: validation (SP4b spec §3.13, §7.6)', () => {
       freeColumn: () => { touched.push('freeColumn'); },
       freeProto: () => { touched.push('freeProto'); },
     };
-    const sink: StreamSink = { stage: () => { touched.push('stage'); }, remove: () => { touched.push('remove'); } };
+    const sink: StreamSink = {
+      stage: () => { touched.push('stage'); }, unstage: () => { touched.push('unstage'); return false; }, remove: () => { touched.push('remove'); },
+    };
     const throttle = createThrottle({ max: 3 });
     const at = (rd: number, rdMax: number) => () => createCoordinator({
-      jobs, store, sink, throttle, rd, rdMax, retainAllProtos: true, strict: true, onEvent: () => { touched.push('onEvent'); },
+      jobs, store, sink, throttle, rd, rdMax, retainAllProtos: true, strict: true, generation: 0, epoch: 1, onEvent: () => { touched.push('onEvent'); },
     });
     for (const [rd, rdMax] of [[3, 16], [17, 16], [4.5, 16], [12, 27], [Number.NaN, 16], [4, 3.5]] as const) expect(at(rd, rdMax), `rd ${rd}, rdMax ${rdMax}`).toThrow(RangeError);
     expect(touched).toEqual([]);
@@ -562,7 +598,7 @@ describe('createCoordinator: intake (SP4b spec §3.6, D16)', () => {
     expect(w.fake.violations).toEqual([]);
   });
 
-  test('no revealed column is ever re-staged: over a fill, a crossing back and forth and an LCG settle order, sink.stage is called at most once per (column, meshSeq)', async () => {
+  test('a column is staged at most once per epoch: over a fill, a crossing back and forth and an LCG settle order, sink.stage is called at most once per (column, meshSeq)', async () => {
     const { w, c } = make({ rd: 6, workers: 5 });
     const pick = lcg(4242);
     await fill(w, c, cam(0, 0), 4242);
@@ -573,7 +609,7 @@ describe('createCoordinator: intake (SP4b spec §3.6, D16)', () => {
       for (let i = 0; i < 40 && w.fake.pending.length > 0; i++) { w.settle(pick(w.fake.pending.length)); await flush(); }
     }
     await settleAll(w, 77);
-    // The fake's sink flags a stage of a column staged and not removed since (D16); (2, 1) takes (−6, 0) beyond keepMesh,
+    // The fake's sink flags a stage of a column held at the same epoch and not removed since (D16, SP4c §4.4); (2, 1) takes (−6, 0) beyond keepMesh,
     // so a column is staged again only after its mesh unload, under the next meshSeq.
     expect(w.fake.violations).toEqual([]);
     const seen = new Set(w.fake.stages.map((s) => `${s.cx},${s.cz},${s.seq}`));
@@ -1234,6 +1270,157 @@ describe('createCoordinator: proto retention (SP4b spec §3.7, D11)', () => {
   });
 });
 
+/** Whether (cx, cz) carries membership flag `flag` around (ccx, ccz) at rd. */
+function hasFlag(flag: number, cx: number, cz: number, ccx: number, ccz: number, rd: number): boolean {
+  const R = rd + KEEP_VOXELS_EXTRA;
+  const dx = cx - ccx;
+  const dz = cz - ccz;
+  if (Math.abs(dx) > R || Math.abs(dz) > R) return false;
+  return (membershipTable(rd)[(dz + R) * (2 * R + 1) + dx + R]! & flag) !== 0;
+}
+
+/**
+ * SP4b's done counts for the fake's model (SP4b spec §7.3): the columns of each stage's set around (ccx, ccz) whose
+ * record (held by that column) reached the stage after it (T ≥ Proto, D ≥ Decorated, L Published), MESH those the sink
+ * holds.
+ */
+function sp4bDone(w: World, ccx: number, ccz: number, rd: number): Record<Stage, number> {
+  const R = rd + KEEP_VOXELS_EXTRA;
+  const n: Record<Stage, number> = { T: 0, D: 0, L: 0, MESH: 0 };
+  for (let cz = ccz - R; cz <= ccz + R; cz++) {
+    for (let cx = ccx - R; cx <= ccx + R; cx++) {
+      const r = w.fake.records.get(slotOf(cx, cz));
+      const status = r !== undefined && r.cx === cx && r.cz === cz ? r.status : 0;
+      if (inSet('T', cx, cz, ccx, ccz, rd) && status >= 1) n.T++;
+      if (inSet('D', cx, cz, ccx, ccz, rd) && status >= 2) n.D++;
+      if (inSet('L', cx, cz, ccx, ccz, rd) && status >= 3) n.L++;
+      if (inSet('MESH', cx, cz, ccx, ccz, rd) && w.fake.revealed.has(colKey(cx, cz))) n.MESH++;
+    }
+  }
+  return n;
+}
+
+const doneOf = (k: CoordinatorCounts): Record<Stage, number> => ({ T: k.T.done, D: k.D.done, L: k.L.done, MESH: k.MESH.done });
+
+describe('createCoordinator: the generation gate, the per-column epoch and the sink\'s column (SP4c spec §4.2, §4.4-§4.6)', () => {
+  test('the gate: with the fake pool\'s generation moved to g + 1 and not adopted, 50 updates issue no world job (the heaps kept); adopt(g + 1) resumes issuing, and frees, stages and unstages nothing', async () => {
+    const { w, c } = make({ rd: 4 });
+    c.update(cam(0, 0));
+    await flush();
+    for (let i = 0; i < 40; i++) { w.settle(); await flush(); }
+    // The map configures a draft: the pool's generation moves; the jobs already issued finish (their settles pump).
+    w.fake.generation = 1;
+    await settleAll(w);
+    const n = w.fake.issued.length;
+    const held = read(c);
+    const queued = (k: CoordinatorCounts): number => k.T.queued + k.D.queued + k.L.queued + k.MESH.queued;
+    expect(queued(held)).toBeGreaterThan(0);
+    for (let i = 0; i < 50; i++) {
+      c.update(cam(0, 0));
+      await flush();
+    }
+    expect(w.fake.issued.length).toBe(n);
+    expect(queued(read(c))).toBe(queued(held));
+    const side = (): number[] => [w.fake.frees.length, w.fake.stages.length, w.fake.unstages.length, w.fake.removes.length];
+    const before = side();
+    c.adopt(1);
+    expect(side()).toEqual(before);
+    expect(read(c).epoch).toBe(1);
+    // Issuing resumes at the next update, every job under the adopted generation.
+    c.update(cam(0, 0));
+    expect(w.fake.issued.length).toBeGreaterThan(n);
+    await settleAll(w);
+    expect(w.fake.issuedGen.slice(n).every((g) => g === 1)).toBe(true);
+    expect(w.fake.violations).toEqual([]);
+    expect(c.firstFill()).toBe(true);
+    expect(w.fake.unstages).toEqual([]);
+  });
+
+  test('D7: a D issued at g whose reply resolves (generation g) after the fake pool moved to g + 1 and adopt(g + 1) advances its column to Decorated, and its L is issued at g + 1', async () => {
+    const { w, c } = make({ rd: 4 });
+    c.update(cam(0, 0));
+    await flush();
+    const isD = (p: Issued): boolean => p.stage === 'D' && inSet('L', p.cx, p.cz, 0, 0, 4);
+    while (!w.fake.pending.some(isD)) { w.settle(); await flush(); }
+    const i = w.fake.pending.findIndex(isD);
+    const d = w.fake.pending[i]!;
+    const n = w.fake.issued.length;
+    w.fake.generation = 1;
+    const before = read(c).D.done;
+    w.settle(i);
+    await flush();
+    // Recorded as the store stands (its column at Decorated), whatever generation it ran under.
+    expect(read(c).D.done).toBe(before + 1);
+    expect(read(c).dropped).toBe(0);
+    await settleAll(w);
+    expect(w.fake.issued.length).toBe(n);
+    c.adopt(1);
+    await fill(w, c, cam(0, 0));
+    expect(w.fake.violations).toEqual([]);
+    const at = (st: Stage): number[] => w.fake.issued.flatMap((j, k) => (j.stage === st && j.cx === d.cx && j.cz === d.cz ? [k] : []));
+    expect(at('D')).toHaveLength(1);
+    expect(at('L')).toHaveLength(1);
+    expect(w.fake.issuedGen[at('L')[0]!]).toBe(1);
+    expect(read(c).dropped).toBe(0);
+    expect(c.firstFill()).toBe(true);
+  });
+
+  test('the sink\'s column: over a fill and a crossing of 10 columns, every sink.remove names a column the sink was staged with, and the held set equals the columns staged and not removed since: it holds the MESH set around the final camera and lies within keepMesh (RD + 1)', async () => {
+    const rd = 6;
+    const { w, c } = make({ rd, workers: 5 });
+    const pick = lcg(4242);
+    await fill(w, c, cam(0, 0), 4242);
+    for (let x = 1; x <= 10; x++) {
+      c.update(cam(x, 0));
+      await flush();
+      for (let i = 0; i < 30 && w.fake.pending.length > 0; i++) { w.settle(pick(w.fake.pending.length)); await flush(); }
+    }
+    for (let i = 0; i < 5; i++) await fill(w, c, cam(10, 0), 99);
+    expect(w.fake.violations).toEqual([]);
+    const held = new Set<number>();
+    const strays: number[] = [];
+    for (const op of w.fake.sinkOps) {
+      if (op > 0) held.add(op - 1);
+      else if (!held.delete(-op - 1)) strays.push(-op - 1);
+    }
+    expect(strays).toEqual([]);
+    expect(w.fake.removes.length).toBeGreaterThan(0);
+    expect([...held].sort((a, b) => a - b)).toEqual([...w.fake.revealed].sort((a, b) => a - b));
+    for (const [dx, dz] of stageOffsets(rd).MESH) expect(held.has(colKey(10 + dx, dz)), `(${10 + dx}, ${dz})`).toBe(true);
+    const outside = w.fake.stages.filter((m) => held.has(colKey(m.cx, m.cz)) && !hasFlag(M_KEEP_MESH, m.cx, m.cz, 10, 0, rd));
+    expect(outside).toEqual([]);
+    expect(c.firstFill()).toBe(true);
+  });
+
+  test('counts: through the first fill counts.stale is 0, counts.epoch is the options\' epoch (1) and every stage\'s done equals SP4b\'s for the same fill', async () => {
+    const { w, c } = make({ rd: 6 });
+    c.update(cam(0, 0));
+    await flush();
+    const k = createCoordinatorCounts();
+    const pick = lcg(31);
+    let steps = 0;
+    while (w.fake.pending.length > 0) {
+      c.counts(k);
+      expect([k.stale, k.epoch]).toEqual([0, 1]);
+      expect(doneOf(k), `after ${steps} settles`).toEqual(sp4bDone(w, 0, 0, 6));
+      w.settle(pick(w.fake.pending.length));
+      await flush();
+      steps++;
+    }
+    c.counts(k);
+    expect([k.stale, k.epoch]).toEqual([0, 1]);
+    expect(doneOf(k)).toEqual({ T: k.T.needed, D: k.D.needed, L: k.L.needed, MESH: k.MESH.needed });
+    expect(doneOf(k)).toEqual(sp4bDone(w, 0, 0, 6));
+    // Another first epoch (3): the columns are current under it, so the counts are the same.
+    const other = make({ rd: 4, epoch: 3 });
+    await fill(other.w, other.c, cam(0, 0));
+    const k3 = read(other.c);
+    expect([k3.stale, k3.epoch]).toEqual([0, 3]);
+    expect(doneOf(k3)).toEqual({ T: 213, D: 157, L: 109, MESH: 69 });
+    expect(other.w.fake.violations).toEqual([]);
+  });
+});
+
 describe('progressFraction and phaseName (SP4a spec §8.3, over the coordinator counts)', () => {
   const p = (done: Partial<Record<Stage, number>>): CoordinatorCounts => {
     const c = createCoordinatorCounts();
@@ -1284,11 +1471,15 @@ describe('progressFraction and phaseName (SP4a spec §8.3, over the coordinator 
 
 describe('worldJobsOf (ruling P30, SP4b spec §3.13)', () => {
   const done = (cx: number, cz: number, versions: Int32Array | null): ColumnDone => ({ cx, cz, ms: 3, versions, generation: 0 });
+  /** A reply issued under generation 5 (SP4c spec §4.6: the outcome carries the job's generation, not the pool's now). */
+  const done5 = (cx: number, cz: number, versions: Int32Array | null): ColumnDone => ({ cx, cz, ms: 3, versions, generation: 5 });
   const lightVersions = Int32Array.from({ length: 18 }, (_, i) => i + 1);
   const payload = { cx: 4, cz: 5, versions: Int32Array.from({ length: 18 }, (_, i) => 100 + i) } as unknown as ColumnMeshPayload;
   const calls: string[] = [];
   let live = 3;
+  let epoch = 0;
   const pool = {
+    get epoch() { return epoch; },
     terrain: (cx: number, cz: number, protoOnly?: boolean) => { calls.push(`terrain ${cx} ${cz} ${String(protoOnly)}`); return Promise.resolve(done(cx, cz, null)); },
     decorate: (cx: number, cz: number) => { calls.push(`decorate ${cx} ${cz}`); return Promise.resolve(done(cx, cz, null)); },
     light: (cx: number, cz: number) => { calls.push(`light ${cx} ${cz}`); return Promise.resolve(done(cx, cz, lightVersions)); },
@@ -1300,8 +1491,8 @@ describe('worldJobsOf (ruling P30, SP4b spec §3.13)', () => {
   test('T, D, L and MESH map to terrain, decorate, light and meshColumn', async () => {
     calls.length = 0;
     const jobs = worldJobsOf(pool);
-    expect(await jobs.run('T', 1, -2, false)).toEqual({ versions: null, payload: null });
-    expect(await jobs.run('D', 1, -2, false)).toEqual({ versions: null, payload: null });
+    expect(await jobs.run('T', 1, -2, false)).toEqual({ versions: null, payload: null, generation: 0 });
+    expect(await jobs.run('D', 1, -2, false)).toEqual({ versions: null, payload: null, generation: 0 });
     const l = await jobs.run('L', 1, -2, false);
     expect(l.versions).toBe(lightVersions);
     expect(l.payload).toBeNull();
@@ -1313,7 +1504,7 @@ describe('worldJobsOf (ruling P30, SP4b spec §3.13)', () => {
 
   test('T with protoOnly runs terrain(cx, cz, true) (SP4b spec §3.7)', async () => {
     calls.length = 0;
-    expect(await worldJobsOf(pool).run('T', 3, 4, true)).toEqual({ versions: null, payload: null });
+    expect(await worldJobsOf(pool).run('T', 3, 4, true)).toEqual({ versions: null, payload: null, generation: 0 });
     expect(calls).toEqual(['terrain 3 4 true']);
   });
 
@@ -1325,6 +1516,23 @@ describe('worldJobsOf (ruling P30, SP4b spec §3.13)', () => {
     expect(jobs.liveWorkers()).toBe(3);
     live = 1;
     expect(jobs.liveWorkers()).toBe(1);
+  });
+
+  test('generation() is the pool\'s epoch now, and each outcome carries the generation its reply was issued under (SP4c spec §4.2, §4.6)', async () => {
+    const jobs = worldJobsOf(pool);
+    expect(jobs.generation()).toBe(0);
+    epoch = 6;
+    expect(jobs.generation()).toBe(6);
+    const old = {
+      epoch: 6,
+      terrain: (cx: number, cz: number) => Promise.resolve(done5(cx, cz, null)),
+      decorate: (cx: number, cz: number) => Promise.resolve(done5(cx, cz, null)),
+      light: (cx: number, cz: number) => Promise.resolve(done5(cx, cz, lightVersions)),
+      meshColumn: () => Promise.resolve({ payload, generation: 5 }),
+    } as unknown as WorkerPool;
+    const j = worldJobsOf(old);
+    for (const st of ['T', 'D', 'L', 'MESH'] as const) expect((await j.run(st, 1, 2, false)).generation, st).toBe(5);
+    epoch = 0;
   });
 
   test('rejections pass through unchanged', async () => {

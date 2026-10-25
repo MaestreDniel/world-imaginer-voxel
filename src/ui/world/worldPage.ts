@@ -833,6 +833,9 @@ export function mountWorldPage(root: HTMLElement, q: WorldQuery, hash: string, o
       store,
       sink: {
         stage: (p, seq) => sections.stage(p, seq),
+        // Nothing applies a draft on the page before SP4c's Task 18, so no payload is ever unstaged; Task 8 wires
+        // `sections.unstage` (SP4c spec §4.4, §5.1).
+        unstage: () => false,
         remove: (cx, cz) => sections.remove(cx, cz),
       },
       throttle,
@@ -840,6 +843,9 @@ export function mountWorldPage(root: HTMLElement, q: WorldQuery, hash: string, o
       rdMax,
       retainAllProtos: true,
       strict: true,
+      // The page's first configure (SP4c spec §4.2, §4.4): the pool's generation now, the first epoch.
+      generation: workers.epoch,
+      epoch: 1,
       // Strict until the reveal: only `fatal` comes, and it stops the load; after it the streaming branch handles them.
       onEvent: (e) => {
         if (onStreamEvent !== null) onStreamEvent(e);

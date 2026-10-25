@@ -137,6 +137,7 @@ function watched(inner: CoordinatorJobs, store: VoxelStore, probe: Probe): Coord
     },
     cancel: (pred) => inner.cancel(pred),
     liveWorkers: () => inner.liveWorkers(),
+    generation: () => inner.generation(),
   };
 }
 
@@ -168,6 +169,8 @@ test('the real coordinator and pool equal genRegion after the first fill, a flig
           if (live.has(colKey(p.cx, p.cz))) problems.push(`(${p.cx}, ${p.cz}) staged twice`);
           live.set(colKey(p.cx, p.cz), seq);
         },
+        // No renderer and no Apply here: nothing is ever pending to drop (SP4c spec §4.4).
+        unstage: () => false,
         remove(cx, cz) {
           removed++;
           if (!live.delete(colKey(cx, cz))) problems.push(`(${cx}, ${cz}) removed while not live`);
@@ -179,6 +182,8 @@ test('the real coordinator and pool equal genRegion after the first fill, a flig
       rdMax: RD,
       retainAllProtos: false,
       strict: true,
+      generation: pool.epoch,
+      epoch: 1,
       onEvent: (e) => { events.push(e); },
     });
     const fatal = (): string | null => {
