@@ -1064,6 +1064,54 @@ describe('the world\'s notices over the map (SP4c spec §2.1, D27)', () => {
     expect(s.row()).toEqual([]);
   });
 
+  test('a notice that stays (StoreFull, the URL oversize) moves with every route change, both ways, shown once (final review WLD-2)', () => {
+    vi.useFakeTimers();
+    const s = setup();
+    const apply = vi.fn();
+    // Mode A covers the 3D: StoreFull and the oversize notice go to the tool's row, "Could not teleport" too (4 s).
+    s.notices.route(s.tool);
+    showAll(s.notices, apply);
+    expect(s.row()).toHaveLength(3);
+    // The map closes: the two that stay come back to `.world-notices` (StoreFull with its own ids and its Lower button)
+    // and leave the hidden row; the timed one ends where it was shown.
+    s.notices.route(null);
+    expect(s.world()).toHaveLength(2);
+    expect(s.world()[0]).toContain('The world store is full: new terrain is paused.');
+    expect(s.world()[1]).toContain(URL_OVERSIZE_NOTICE);
+    expect(s.row()).toEqual(['Could not teleport×']);
+    vi.advanceTimersByTime(4000);
+    expect(s.row()).toEqual([]);
+    // M again: both go to the row, none stays under the opaque overlay.
+    s.notices.route(s.tool);
+    expect(s.world()).toEqual([]);
+    expect(s.row()).toHaveLength(2);
+    s.notices.route(null);
+    expect(s.row()).toEqual([]);
+    expect(s.world()).toHaveLength(2);
+    dom.el('world-store-full-lower').click();
+    expect(apply).toHaveBeenCalledTimes(1);
+    // The condition's end takes the oversize notice down wherever it is; a dismissed StoreFull does not come back.
+    oversizeNotice(s.notices)(false);
+    s.notices.route(s.tool);
+    s.notices.route(null);
+    expect(s.world()).toEqual([]);
+    expect(s.row()).toEqual([]);
+  });
+
+  test('a notice shown in `.world-notices` before M moves to the tool\'s row; dismissed there, it does not come back', () => {
+    const s = setup();
+    s.notices.storeFull(6, vi.fn());
+    oversizeNotice(s.notices)(true);
+    s.notices.route(s.tool);
+    expect(s.world()).toEqual([]);
+    expect(s.row()).toHaveLength(2);
+    // The user dismisses both in the tool's row (its ×).
+    for (const b of dom.body.querySelectorAll('button').filter((x: FakeElement) => x.textContent === '×')) b.click();
+    expect(s.row()).toEqual([]);
+    s.notices.route(null);
+    expect(s.world()).toEqual([]);
+  });
+
   test('the failure panel and the context-loss notice never route', () => {
     const s = setup();
     s.notices.route(s.tool);

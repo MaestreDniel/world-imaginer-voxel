@@ -29,4 +29,31 @@ describe('createNotices (SP2b spec §1.5; SP4c spec §1.2)', () => {
     expect(host.children).toEqual([]);
     expect(vi.getTimerCount()).toBe(0);
   });
+
+  test('onDismiss runs when the user removes the notice (its × or an action), never on a timeout, hide, replacement or clear (final review WLD-2)', () => {
+    const { document } = installDom();
+    const host = document.createElement('div');
+    const notices = createNotices(host as unknown as HTMLElement);
+    const buttons = (): FakeElement[] => host.children[0]!.querySelectorAll('button');
+    const onDismiss = vi.fn();
+    const run = vi.fn();
+    notices.show('full', { actions: [{ label: 'Lower', run }], onDismiss });
+    buttons().find((b) => b.textContent === '×')!.click();
+    expect(onDismiss).toHaveBeenCalledTimes(1);
+    notices.show('full', { actions: [{ label: 'Lower', run }], onDismiss });
+    buttons().find((b) => b.textContent === 'Lower')!.click();
+    expect(run).toHaveBeenCalledTimes(1);
+    expect(onDismiss).toHaveBeenCalledTimes(2);
+    expect(host.children).toEqual([]);
+    // Taken down by the page, replaced, timed out or cleared: not a dismissal.
+    notices.show('full', { onDismiss });
+    notices.hide('full');
+    notices.show('full', { onDismiss });
+    notices.show('full', { onDismiss });
+    notices.clear();
+    notices.show('timed', { timeoutMs: 1000, onDismiss });
+    vi.advanceTimersByTime(1000);
+    expect(host.children).toEqual([]);
+    expect(onDismiss).toHaveBeenCalledTimes(2);
+  });
 });

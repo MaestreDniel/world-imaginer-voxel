@@ -409,9 +409,12 @@ export interface WorldNotices {
   hide(text: string): void;
   /**
    * While the map covers the 3D (SP4c spec §2.1, D27): with `target` non-null, `show` and `storeFull` go to `target`
-   * (the tool's notice row) instead of `.world-notices`; `null` sends them back. `hide` removes the text here and in
-   * the last target routed to (a notice shown before or during a route still goes when its condition ends). The
-   * slow-frame, skipped, failure and context-loss notices never route (the overlay is disposed before the last two).
+   * (the tool's notice row) instead of `.world-notices`; `null` sends them back. A notice that stays until its
+   * condition ends or the user dismisses it (StoreFull, a `show` with no `timeoutMs`: the URL oversize, the Watch-live
+   * notice) moves on every change of route, taken down where it was and shown in the new place, so it is never left
+   * under the opaque overlay nor in the hidden tool's row, and shows once (final review WLD-2); a timed notice ends
+   * where it was shown. `hide` removes the text here and in the last target routed to. The slow-frame, skipped,
+   * failure and context-loss notices never route (the overlay is disposed before the last two).
    */
   route(target: Notices | null): void;
   /** Removes the notices and clears their timers. */
@@ -496,6 +499,13 @@ export function createWorldNotices(host: HTMLElement, reloader: Reloader): World
   let disposed = false;
   /** `show`'s notices by text, with their timeout. */
   const byText = new Map<string, { readonly panel: HTMLElement; readonly timer: ReturnType<typeof setTimeout> | null }>();
+  /**
+   * The notices up that stay until their condition ends or the user dismisses them, by text, with what shows them
+   * again: each moves on a change of route (final review WLD-2). StoreFull's entry is `STORE_FULL_TEXT`.
+   */
+  const standing = new Map<string, NoticeOptions>();
+  /** StoreFull's arguments while it stands, for its panel in `.world-notices`. */
+  let fullArgs: { readonly lower: number | null; readonly apply: () => void } | null = null;
   /** Removes `text`'s notice; with `panel`, only when it is still that one (a replaced notice's late timer or click). */
   const hide = (text: string, panel: HTMLElement | null = null): void => {
     const entry = byText.get(text);
@@ -504,39 +514,95 @@ export function createWorldNotices(host: HTMLElement, reloader: Reloader): World
     if (entry.timer !== null) clearTimeout(entry.timer);
     entry.panel.remove();
   };
+  /** The user dismissed a standing notice (here or in the tool's row): it moves no more. */
+  const dismissed = (text: string): void => {
+    standing.delete(text);
+    if (text === STORE_FULL_TEXT) fullArgs = null;
+  };
+  /** Shows `text` in `.world-notices` (`show`'s panel). */
+  const showHere = (text: string, opts: NoticeOptions): void => {
+    hide(text);
+    const stays = opts.timeoutMs === undefined;
+    const panel = el('div', opts.kind === 'error' ? 'world-notice world-notice-error' : 'world-notice', `${text} `);
+    for (const action of opts.actions ?? []) {
+      const b = el('button', 'world-notice-dismiss', action.label);
+      b.type = 'button';
+      b.addEventListener('click', () => {
+        try { action.run(); } finally {
+          hide(text, panel);
+          if (stays) dismissed(text);
+        }
+      });
+      panel.append(b, ' ');
+    }
+    const dismiss = el('button', 'world-notice-dismiss', 'Dismiss');
+    dismiss.type = 'button';
+    dismiss.title = 'Dismiss this notice';
+    dismiss.addEventListener('click', () => {
+      hide(text, panel);
+      if (stays) dismissed(text);
+    });
+    panel.append(dismiss);
+    const timer = stays ? null : setTimeout(() => hide(text, panel), opts.timeoutMs);
+    byText.set(text, { panel, timer });
+    box.append(panel);
+  };
+  /** StoreFull's panel in `.world-notices`, with its ids and its "Lower to RD n". */
+  const fullHere = (lower: number | null, apply: () => void): void => {
+    full?.remove();
+    const panel = el('div', 'world-notice', `${STORE_FULL_TEXT} `);
+    panel.id = 'world-store-full';
+    const forget = (): void => {
+      if (full !== panel) return;
+      full = null;
+      dismissed(STORE_FULL_TEXT);
+    };
+    if (lower !== null) panel.append(lowerButton('world-store-full-lower', lower, panel, forget, apply), ' ');
+    panel.append(dismissButton('world-store-full-dismiss', panel, forget));
+    full = panel;
+    box.append(panel);
+  };
+  /** Shows the standing `text` where the route points now; a dismissal in the tool's row ends its standing. */
+  const put = (text: string, opts: NoticeOptions): void => {
+    if (target !== null) target.show(text, { ...opts, onDismiss: () => dismissed(text) });
+    else if (text === STORE_FULL_TEXT && fullArgs !== null) fullHere(fullArgs.lower, fullArgs.apply);
+    else showHere(text, opts);
+  };
+  /** Takes the standing `text` down from `from` (null: `.world-notices`). */
+  const takeDown = (text: string, from: Notices | null): void => {
+    if (from !== null) from.hide(text);
+    else if (text === STORE_FULL_TEXT) {
+      full?.remove();
+      full = null;
+    } else hide(text);
+  };
   return {
     show(text, opts = {}) {
       if (disposed) return;
+      if (opts.timeoutMs === undefined) standing.set(text, opts);
+      else standing.delete(text);
       if (target !== null) {
-        target.show(text, opts);
+        if (opts.timeoutMs === undefined) put(text, opts);
+        else target.show(text, opts);
         return;
       }
-      hide(text);
-      const panel = el('div', opts.kind === 'error' ? 'world-notice world-notice-error' : 'world-notice', `${text} `);
-      for (const action of opts.actions ?? []) {
-        const b = el('button', 'world-notice-dismiss', action.label);
-        b.type = 'button';
-        b.addEventListener('click', () => {
-          try { action.run(); } finally { hide(text, panel); }
-        });
-        panel.append(b, ' ');
-      }
-      const dismiss = el('button', 'world-notice-dismiss', 'Dismiss');
-      dismiss.type = 'button';
-      dismiss.title = 'Dismiss this notice';
-      dismiss.addEventListener('click', () => hide(text, panel));
-      panel.append(dismiss);
-      const timer = opts.timeoutMs === undefined ? null : setTimeout(() => hide(text, panel), opts.timeoutMs);
-      byText.set(text, { panel, timer });
-      box.append(panel);
+      showHere(text, opts);
     },
     hide(text) {
+      standing.delete(text);
       hide(text);
       lastTarget?.hide(text);
     },
     route(next) {
+      if (next === target) return;
+      const from = target;
       target = next;
       if (next !== null) lastTarget = next;
+      if (disposed) return;
+      for (const [text, opts] of standing) {
+        takeDown(text, from);
+        put(text, opts);
+      }
     },
     slow(rd, lower, apply) {
       slow?.remove();
@@ -559,19 +625,11 @@ export function createWorldNotices(host: HTMLElement, reloader: Reloader): World
       box.append(panel);
     },
     storeFull(lower, apply) {
-      if (target !== null) {
-        const actions = lower === null ? [] : [{ label: `Lower to RD ${lower}`, run: apply }];
-        target.show(STORE_FULL_TEXT, { kind: 'warn', actions });
-        return;
-      }
-      full?.remove();
-      const panel = el('div', 'world-notice', `${STORE_FULL_TEXT} `);
-      panel.id = 'world-store-full';
-      const forget = (): void => { if (full === panel) full = null; };
-      if (lower !== null) panel.append(lowerButton('world-store-full-lower', lower, panel, forget, apply), ' ');
-      panel.append(dismissButton('world-store-full-dismiss', panel, forget));
-      full = panel;
-      box.append(panel);
+      const actions = lower === null ? [] : [{ label: `Lower to RD ${lower}`, run: apply }];
+      standing.set(STORE_FULL_TEXT, { kind: 'warn', actions });
+      fullArgs = { lower, apply };
+      if (target !== null) put(STORE_FULL_TEXT, { kind: 'warn', actions });
+      else fullHere(lower, apply);
     },
     failed(cause, details, reloadHref) {
       if (failedShown) return;
@@ -593,6 +651,8 @@ export function createWorldNotices(host: HTMLElement, reloader: Reloader): World
     },
     dispose() {
       disposed = true;
+      standing.clear();
+      fullArgs = null;
       for (const text of [...byText.keys()]) hide(text);
       box.remove();
     },

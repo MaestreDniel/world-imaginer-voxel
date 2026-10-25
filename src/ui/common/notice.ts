@@ -17,6 +17,12 @@ export interface NoticeOptions {
   readonly actions?: readonly NoticeAction[];
   /** Removes the notice after this many ms; without it the notice stays until dismissed or cleared. */
   readonly timeoutMs?: number;
+  /**
+   * Called when the user removes the notice (its × or an action button), never when it times out, is hidden, replaced
+   * or cleared: the world's notices keep a notice that stays until its condition ends across a route change only
+   * while the user has not dismissed it (final review WLD-2).
+   */
+  readonly onDismiss?: () => void;
 }
 
 export interface Notices {
@@ -59,7 +65,10 @@ export function createNotices(host: HTMLElement): Notices {
     entry.onRemove();
   }
 
-  function add(text: string, kind: NoticeKind, buttons: readonly Button[], dismissible: boolean, timeoutMs: number | undefined, onRemove: () => void): HTMLElement {
+  function add(
+    text: string, kind: NoticeKind, buttons: readonly Button[], dismissible: boolean, timeoutMs: number | undefined, onRemove: () => void,
+    onDismiss: () => void = () => {},
+  ): HTMLElement {
     for (const [other, entry] of [...rows]) if (entry.text === text) remove(other);
     const row = el('div', `notice notice-${kind}`);
     row.setAttribute('role', kind === 'error' ? 'alert' : 'status');
@@ -68,7 +77,10 @@ export function createNotices(host: HTMLElement): Notices {
       const button = el('button', b.className, b.label);
       button.type = 'button';
       button.addEventListener('click', () => {
-        try { b.run(); } finally { remove(row); }
+        try { b.run(); } finally {
+          remove(row);
+          onDismiss();
+        }
       });
       row.append(button);
     }
@@ -77,7 +89,10 @@ export function createNotices(host: HTMLElement): Notices {
       close.type = 'button';
       close.title = 'Dismiss';
       close.setAttribute('aria-label', 'Dismiss');
-      close.addEventListener('click', () => remove(row));
+      close.addEventListener('click', () => {
+        remove(row);
+        onDismiss();
+      });
       row.append(close);
     }
     const timer = timeoutMs !== undefined && timeoutMs > 0 && Number.isFinite(timeoutMs) ? setTimeout(() => remove(row), timeoutMs) : null;
@@ -90,7 +105,7 @@ export function createNotices(host: HTMLElement): Notices {
     show(text, opts = {}) {
       if (disposed) return;
       const buttons = (opts.actions ?? []).map((a): Button => ({ label: a.label, className: 'notice-action', run: () => a.run() }));
-      add(text, opts.kind ?? 'info', buttons, true, opts.timeoutMs, () => {});
+      add(text, opts.kind ?? 'info', buttons, true, opts.timeoutMs, () => {}, opts.onDismiss);
     },
     hide(text) {
       for (const [row, entry] of [...rows]) if (entry.text === text) remove(row);
