@@ -1953,6 +1953,34 @@ describe('createCoordinator: apply, "old meshes kept on Apply" (SP4c spec §4.4,
     const n = read(c);
     expect([n.stale, n.epoch, n.MESH.done]).toEqual([0, 2, n.MESH.needed]);
   });
+
+  test('a column skipped at T under one draft is retried under the next applied one: apply clears the failed mark and retries of a stage-0 column, so the world settles with nothing stale (final review ENG-2)', async () => {
+    let failing = false;
+    const boom = new Error('INTERNAL: boom');
+    const { w, c } = make({ rd: 4, failOf: (j) => (failing && j.stage === 'T' && j.cx === 1 && j.cz === 1 ? boom : null) });
+    await fill(w, c, cam(0, 0));
+    const pick = lcg(4242);
+    // Draft 2 makes (1, 1)'s T fail twice: the column is skipped, its 3 × 3 never reaches D or MESH under epoch 2.
+    failing = true;
+    applyTo(w, c, 2);
+    await settleDown(w, c, cam(0, 0), pick);
+    expect(w.fake.events).toEqual([{ kind: 'skipped', cx: 1, cz: 1 }]);
+    expect(c.isSkipped(1, 1)).toBe(true);
+    expect(read(c).stale).toBeGreaterThan(0);
+    const ts = issuedOf(w, 'T', 1, 1);
+    // Draft 3 generates (1, 1) fine: the Apply retries it, and the world settles at epoch 3 with nothing stale.
+    failing = false;
+    applyTo(w, c, 3);
+    await settleDown(w, c, cam(0, 0), pick);
+    expect(c.isSkipped(1, 1)).toBe(false);
+    expect(issuedOf(w, 'T', 1, 1)).toBeGreaterThan(ts);
+    const n = read(c);
+    expect([n.stale, n.failed, n.epoch]).toEqual([0, 0, 3]);
+    expect(doneOf(n)).toEqual({ T: n.T.needed, D: n.D.needed, L: n.L.needed, MESH: n.MESH.needed });
+    for (const k of setKeys('MESH', 4, 0, 0)) expect(w.fake.revealedEpoch.get(k)).toBe(3);
+    expect(w.fake.violations).toEqual([]);
+    expect(w.fake.events).toEqual([{ kind: 'skipped', cx: 1, cz: 1 }]);
+  });
 });
 
 describe('progressFraction and phaseName (SP4a spec §8.3, over the coordinator counts)', () => {

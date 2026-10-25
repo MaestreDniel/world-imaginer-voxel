@@ -1343,6 +1343,11 @@ export function createCoordinator(o: CoordinatorOptions): Coordinator {
           // A MESH in flight is dropped at intake; the column is freed by the unloads (queued below) once unpinned.
           meshSeq[s] = meshSeq[s]! + 1;
           meshed[s] = 0;
+        } else if (stage[s] === 0) {
+          // A column skipped at T failed under another draft: it is retried under the applied one (a stale column's
+          // marks go with its free, `follow`). `failedTotal` still counts the session's failures.
+          failed[s] = 0;
+          retries[s] = 0;
         } else if (stage[s] === 3) {
           // A current Published column: meshed when its mesh is (or is staged) at `wEpoch`, else it gets a MESH (§4.4).
           meshed[s] = targetOf(s) === wEpoch ? 1 : 0;
