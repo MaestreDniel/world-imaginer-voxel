@@ -272,7 +272,7 @@ In walk mode (SP5) a teleport places the feet at the `landing` job's surface + 1
 ### 4.1 Scopes and `engine/invalidation.ts` (D8)
 
 - Every schema leaf is climate- or terrain-scope (`core/params/schema.ts:8-11`); the decorate, light, mesh, lod and map stages hash no parameter (`core/stage/registry.ts:15-26`); `stageHashes` ignore the seed and `genKey` covers the seed and the decorate hash, which chains climate, shape, surfaceEst, biome2d and terrain (`core/stage/hash.ts:14-34`). So "the world differs" is exactly "genKey differs", and every world-changing Apply in SP4c re-runs T and everything after it.
-- **`regenFrom(prev: AppliedDraft, next: AppliedDraft): WorldStage | null`**, `WorldStage = 'T' | 'D' | 'L' | 'MESH'`, `AppliedDraft = { seedKey, hashes: StageHashes, genKey: Hash64 }`: a different seed → 'T'; else `dirtyStages(prev.hashes, next.hashes)` (`hash.ts:37-43`) mapped to the earliest world stage (climate, shape, surfaceEst, biome2d or terrain → 'T'; decorate → 'D'; light → 'L'; mesh → 'MESH'); lod and map only, or nothing → null. A profile switch is a patch change and needs nothing of its own (master §5.1's footnote). Unit-tested on synthetic hashes for every stage. SP10 completes it for every scope.
+- **`regenFrom(prev: AppliedDraft, next: AppliedDraft): WorldStage | null`**, `WorldStage = 'T' | 'D' | 'L' | 'MESH'`, `AppliedDraft = { seedKey: string; hashes: Readonly<Partial<Record<StageId, string>>>; genKey: string }`, in hex as the workers report them (`ReadyMsg.stageHashes` and `genKey`, `workers/protocol.ts:142`; `StageHashes` holds `Hash64` tuples, `core/stage/hash.ts:8`): a different seed → 'T'; else the first stage of `STAGES` (`core/stage/registry.ts:15-26`) whose hex differs or is missing on either side, as `dirtyStages` (`hash.ts:37-43`) does for `Hash64`, mapped to the earliest world stage (climate, shape, surfaceEst, biome2d or terrain → 'T'; decorate → 'D'; light → 'L'; mesh → 'MESH'); lod and map only, or nothing → null. `appliedDraftOf(seedKey, ready)` builds one from a resolved configure; `epochOf` interns the genKey hex (§4.4). A profile switch is a patch change and needs nothing of its own (master §5.1's footnote). Unit-tested on synthetic hashes for every stage. SP10 completes it for every scope.
 - **SP4c's coordinator regenerates from T for any non-null answer** (a superset of what 'D', 'L' and 'MESH' need, correct by construction); the narrower paths are SP8b's and SP10's (§11). In SP4c only 'T' and null are reachable.
 
 ### 4.2 The configure owner and the generation gate (D3)
@@ -340,8 +340,9 @@ The session's history (`engine/session.ts:59-66`, 101 snapshots) lives in the wo
 ```ts
 // engine/invalidation.ts
 type WorldStage = 'T' | 'D' | 'L' | 'MESH';
-interface AppliedDraft { readonly seedKey: string; readonly hashes: StageHashes; readonly genKey: Hash64 }
+interface AppliedDraft { readonly seedKey: string; readonly hashes: Readonly<Partial<Record<StageId, string>>>; readonly genKey: string }   // hex, as ReadyMsg
 function regenFrom(prev: AppliedDraft, next: AppliedDraft): WorldStage | null;
+function appliedDraftOf(seedKey: string, ready: { readonly stageHashes: Readonly<Partial<Record<StageId, string>>>; readonly genKey: string }): AppliedDraft;
 // engine/coordinator.ts (SP4b §3.13, extended)
 interface CoordinatorJobs { /* … */ generation(): number }
 interface CoordinatorOptions { /* … */ readonly generation: number; readonly epoch: number }   // the first configure's
