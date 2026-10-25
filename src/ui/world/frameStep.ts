@@ -11,7 +11,7 @@
  *    window moved to another monitor within a few seconds. It is fed on every tick, before the FPS limiter, so a cap of 30 on a 60 Hz display reads as
  *    16.7 ms frames, never as 33.3 ms ones that would hold `genCap` at 1 (SP4b plan, Review Focus 1). An interval that
  *    is not finite falls back to 1000/60 (rulings R5).
- * 1. The fly step over the raw delta (capped at 0.25 s), unless paused (the help is open).
+ * 1. The fly step over the raw delta (capped at 0.25 s), unless paused (the help is open, or the map owns the controls).
  * 2. `coordinator.update` from the camera, then its counts into the one reused object. A fatal that `update` raises
  *    synchronously (an unload meeting `StoreCorrupt`) has the page stop the loop and dispose the coordinator, the pool
  *    and the renderer inside that call: the tick ends there (`stopped`), so nothing below runs on disposed objects.
@@ -49,7 +49,7 @@ const BOUNDS: FlyBounds = { yMin: -64, yMax: 400 };
 export interface FrameStepDeps {
   readonly fly: FlyState;
   held(): ReadonlySet<Action>;
-  /** True while the help is open: the camera does not move. */
+  /** True while the help is open or the map owns the controls (SP4c spec §2.3): the camera does not move. */
   paused(): boolean;
   /** True once the page stopped the loop (a failure after the reveal, SP4b spec §7.4): the tick ends after `update`. */
   stopped(): boolean;

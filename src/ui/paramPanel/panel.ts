@@ -25,7 +25,7 @@ export interface PanelDeps extends ControlDeps {
 export interface ParamPanel {
   /** Opens the sections down to a leaf's control, scrolls it into view and focuses it. */
   reveal(path: string): void;
-  /** Stops following the session (the DOM stays). */
+  /** Stops following the session and ends a slider drag still open (its window listeners, its gesture); the DOM stays. */
   dispose(): void;
 }
 
@@ -38,8 +38,11 @@ interface SectionView {
   sync(): void;
 }
 
-export function createParamPanel(host: HTMLElement, deps: PanelDeps): ParamPanel {
-  const { session } = deps;
+export function createParamPanel(host: HTMLElement, panelDeps: PanelDeps): ParamPanel {
+  const { session } = panelDeps;
+  // The open slider drags' ends: dispose ends a drag still open (its window listeners, its gesture; SP4c spec §1.2).
+  const drags = new Set<() => void>();
+  const deps: PanelDeps = { ...panelDeps, drags };
   const controls = new Map<string, PanelControl>();
   const sections: SectionView[] = [];
 
@@ -158,5 +161,11 @@ export function createParamPanel(host: HTMLElement, deps: PanelDeps): ParamPanel
   const unsubscribe = session.subscribe((s) => sync(s));
   sync(session.state);
 
-  return { reveal, dispose: unsubscribe };
+  return {
+    reveal,
+    dispose() {
+      unsubscribe();
+      for (const end of [...drags]) end();
+    },
+  };
 }

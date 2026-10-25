@@ -95,6 +95,8 @@ export function createDensityTab(host: HTMLElement, deps: DensityTabDeps): Densi
   let stale = false;
   let saved: { tree: number; form: number } | null = null;
   const listeners = new Set<(sel: Selection) => void>();
+  /** The ends of the target sliders' open drags, run by dispose (SP4c spec §1.2). */
+  const drags = new Set<() => void>();
   const editors = new Map<TreeLeaf, EditorModel>(TREE_LEAVES.map((leaf) => [leaf, createEditorModel(leaf, session, deps.clock ?? windowClock)]));
 
   // ---------------------------------------------------------------- DOM
@@ -368,7 +370,7 @@ export function createDensityTab(host: HTMLElement, deps: DensityTabDeps): Densi
     }));
     const row = fieldRow(label, choice, literal, negLabel);
     row.classList.add('it-number');
-    const target = ref === null ? null : createTargetRow({ session, edit: deps.edit }, ref.param);
+    const target = ref === null ? null : createTargetRow({ session, edit: deps.edit, drags }, ref.param);
     if (target !== null) {
       target.element.classList.add('it-target');
       row.append(target.element);
@@ -639,6 +641,8 @@ export function createDensityTab(host: HTMLElement, deps: DensityTabDeps): Densi
     },
     dispose() {
       unsubscribe();
+      // A target slider's drag still open ends (its window listeners, its gesture; SP4c spec §1.2).
+      for (const end of [...drags]) end();
       resize.disconnect();
       view.dispose();
       for (const m of editors.values()) m.dispose();

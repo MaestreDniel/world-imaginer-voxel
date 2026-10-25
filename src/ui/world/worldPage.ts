@@ -53,6 +53,13 @@
  * one reloader, which disarms the guard and navigates at most once; a slow first 300 frames suggest the next lower RD
  * in a dismissible notice whose button applies it live; `webglcontextlost` stops the frame loop and offers a Reload
  * around the camera (`hereUrl`). SP4a's edge clamp, its notice and R are gone (SP4b spec §6.2, D20).
+ *
+ * The map in the world (SP4c spec §1.3, §2.3, §2.4, §4.2): at the reveal the streaming route creates the preview driver
+ * (which adopts the first configure, wants no preview until the first M, and is fed every session change by the page
+ * until the map tool is mounted, ruling R1) and the map overlay (`mapOverlay.ts`); M toggles it, the flight pauses and
+ * the world's keys stop while the map owns the controls, the frame's `onRendered` moves the map's arrow, undo and redo
+ * are installed for the page's lifetime, and a fatal error or a context loss disposes the overlay before the failure
+ * panel or the notice. The bench and flight routes create neither.
  */
 import { MEDIUM } from '../../core/params/graphicsPresets';
 import { OPENING_T, TIME_SPEEDS } from '../../daynight/dayNight';
@@ -76,12 +83,14 @@ import { createSectionRendererCounts, selectSectionRenderer, type SectionRendere
 import { createStore, type VoxelStore } from '../../world/store/store';
 import { renderErrorScreen } from '../capabilityReport';
 import { el } from '../common/dom';
+import { installShortcuts } from '../common/keys';
 import { createFrameStats } from '../frameStats';
 import { mountHelp, type Help } from '../help';
 import { mountWorldHud } from '../hud';
 import { mountLoadingScreen } from '../loading/loadingScreen';
 import { tips } from '../loading/tips';
 import { decodeMapState, encodeMapState, openMapSession } from '../map/mapState';
+import { createPreviewDriver, createReplayingCanvas, draftOf, type PreviewDriver } from '../map/previewDriver';
 import { cryptoSeed } from '../seedBox';
 import { SETTINGS_DEFAULTS, loadSettings, saveSettings, type WorldSettings } from '../settings';
 import {
@@ -92,6 +101,7 @@ import type { FlightContext } from './flight';
 import { createFogEase, createFogStep, filledRadius } from './fogEase';
 import { createFrameClock, createFrameNotice, lowerRd } from './frameNotice';
 import { createFrameStep, eyeSkyLight } from './frameStep';
+import { createMapOverlay, followSession, type MapOverlay } from './mapOverlay';
 import { createReloader, hereUrl, installLeaveGuard, navigateTo, type Reloader } from './reload';
 import { Y_MAX, Y_MIN, type WorldQuery } from './query';
 
@@ -310,19 +320,22 @@ export function runTeardown(steps: ReadonlyArray<() => void>, onError: (e: unkno
 }
 
 /**
- * A failure after the reveal (SP4b spec §7.4): stops the frame loop, shows the failure panel, then runs the release
- * steps (the HUD's timer, the coordinator, the pool, the renderer), the panel and each release guarded as the
+ * A failure after the reveal (SP4b spec §7.4): stops the frame loop, closes the map overlay and disposes its tool (SP4c
+ * spec §1.3, D27: the map never works on a released pool), shows the failure panel, then runs the release steps (the
+ * HUD's timer, the coordinator, the pool, the renderer), the overlay, the panel and each release guarded as the
  * teardown's (`runTeardown`): a release that throws (a `StoreCorrupt` in the coordinator's sweep, a renderer whose
- * context is gone) can neither hide the panel nor skip a later release (Task 21 review M2).
+ * context is gone, a tool's dispose) can neither hide the panel nor skip a later release (Task 21 review M2).
  */
 export function stopAfterFailure(o: {
   stop(): void;
+  /** Disposes the map overlay before the panel shows (the streaming route; the bench has none). */
+  closeMap?(): void;
   show(): void;
   readonly release: ReadonlyArray<() => void>;
   onError(e: unknown): void;
 }): void {
   o.stop();
-  runTeardown([o.show, ...o.release], o.onError);
+  runTeardown([() => o.closeMap?.(), o.show, ...o.release], o.onError);
 }
 
 /**
@@ -483,19 +496,20 @@ export function createWorldNotices(host: HTMLElement, reloader: Reloader): World
 
 /**
  * The page's `webglcontextlost` handler (Review Focus 5): through `WorldRenderer.onContextLost`, it stops the frame
- * loop once and shows "The graphics context was lost" with a Reload link around the camera (`hereHref`, read at the
- * loss). Without it the page would freeze on its last frame with no explanation.
+ * loop once, closes the map overlay and disposes its tool (SP4c spec §1.3, D27; a throw reported through `onError`),
+ * and shows "The graphics context was lost" with a Reload link around the camera (`hereHref`, read at the loss).
+ * Without it the page would freeze on its last frame with no explanation.
  */
 export function handleContextLoss(
   wr: Pick<WorldRenderer, 'onContextLost'>,
-  o: { stop(): void; readonly notices: WorldNotices; hereHref(): string },
+  o: { stop(): void; closeMap(): void; readonly notices: WorldNotices; hereHref(): string; onError(e: unknown): void },
 ): void {
   let lost = false;
   wr.onContextLost(() => {
     if (lost) return;
     lost = true;
     o.stop();
-    o.notices.contextLost(o.hereHref());
+    runTeardown([o.closeMap, () => o.notices.contextLost(o.hereHref())], o.onError);
   });
 }
 
@@ -796,7 +810,8 @@ export function mountWorldPage(root: HTMLElement, q: WorldQuery, hash: string, o
     });
     pool = workers;
     await workers.attachStore(store.handles());
-    await workers.configure(session.state.seedText, session.state.params);
+    // The first configure's ReadyMsg is kept: the preview driver adopts it at the reveal (SP4c spec §4.2).
+    const firstReady = await workers.configure(session.state.seedText, session.state.params);
     if (state !== 'loading') return;
 
     // 4. The centre, the renderer and the load.
@@ -1203,16 +1218,22 @@ export function mountWorldPage(root: HTMLElement, q: WorldQuery, hash: string, o
     // A failure after the reveal (SP4b spec §7.4): the loop and the coordinator stop, the workers and the renderer are
     // released, and the notices' panel offers "Copy details" and a Reload around the camera.
     let stopHud = (): void => {};
+    // The map overlay and the preview driver (SP4c spec §1.3, §4.2), created below; a failure or a context loss
+    // disposes the overlay (and its tool) before the panel or the notice shows (D27).
+    let mapRef: MapOverlay | null = null;
+    let driver: PreviewDriver | null = null;
     failAfterReveal = (cause, shown) => {
       const renderer = wr;
       wr = null;
       stopAfterFailure({
         stop,
+        closeMap: () => mapRef?.dispose(),
         show: () => notices.failed(cause, shown, here(reloadRd(q.rd, liveRd))),
         // The HUD's timer would read the disposed renderer and coordinator; then what releaseOnFailure frees, each
         // step on its own.
         release: [
           () => stopHud(),
+          () => driver?.dispose(),
           () => coordinator.dispose(),
           () => longTasks?.disconnect(),
           () => pool?.terminate(),
@@ -1229,6 +1250,8 @@ export function mountWorldPage(root: HTMLElement, q: WorldQuery, hash: string, o
     });
     handleContextLoss(world, {
       stop,
+      closeMap: () => mapRef?.dispose(),
+      onError: (e) => console.error('The world page\'s context loss:', e),
       notices,
       // Without a query rd the setting applies (it holds every live change); a query's rd is replaced by the RD in
       // force, so a live change made since the load survives the reload.
@@ -1239,6 +1262,22 @@ export function mountWorldPage(root: HTMLElement, q: WorldQuery, hash: string, o
     const slowFrames = createFrameNotice(() => offerLowerRd(notices, liveRd, rdControl), () => liveRd);
 
     const canvas = world.renderer.domElement;
+    // The configure owner from the reveal on (SP4c spec §4.2): it adopts the page's first configure, wants no preview
+    // until the first M shows the map, and pushes into a replaying sink the map tool attaches to. The world's spawn
+    // request runs at priority 600 (§6.3).
+    const relay = createReplayingCanvas();
+    const previewDriver = createPreviewDriver(workers, relay, {
+      now: () => performance.now(),
+      setTimeout: (fn, ms) => window.setTimeout(fn, ms),
+      clearTimeout: (id) => window.clearTimeout(id),
+    }, { spawnPriority: 600 });
+    driver = previewDriver;
+    teardown.push(() => previewDriver.dispose());
+    previewDriver.setPreviewWanted(false);
+    previewDriver.adopt({ poolEpoch: workers.epoch, sessionEpoch: session.state.epoch, seedKey: draftOf(session.state).seedKey, ready: firstReady });
+    // Ruling R1: the page feeds the driver every session change until the first M mounts the tool, whose own subscribe
+    // is then the only caller. Until the apply control (Task 18) an edit holds the world (the generation gate, D3).
+    teardown.push(followSession({ session, driver: previewDriver, toolMounted: () => mapRef !== null && mapRef.tool !== null, now: () => performance.now() }));
     if (overlay) {
       void loading.fadeOut(FADE_MS);
       const hint = el('div', 'world-click-hint', 'Click to fly');
@@ -1375,6 +1414,8 @@ export function mountWorldPage(root: HTMLElement, q: WorldQuery, hash: string, o
             help.open();
           }
           break;
+        // M opens or closes the map overlay (SP4c spec §2.4); it acts whoever owns the controls.
+        case 'map': mapRef?.toggle(); break;
         default: break; // movement and sprint are held; Esc (releasePointer) is the browser's
       }
     };
@@ -1383,12 +1424,45 @@ export function mountWorldPage(root: HTMLElement, q: WorldQuery, hash: string, o
       onLook: (dx, dy) => look(fly, dx, dy, settings.sensitivity * LOOK_DEG_PER_PIXEL),
       // Only text-entry controls (spec §7.1): a focused slider or select leaves H and F1 working (final review C-I2).
       isTextFocus: () => isTextEntry(document.activeElement as HTMLElement | null),
-      // The world owns the controls until the map overlay exists (SP4c spec §2.3; the overlay's owner, Task 15).
-      active: () => true,
+      // The world's keys act only while the world owns the controls (SP4c spec §2.3): never while the map owns.
+      active: () => mapRef === null || mapRef.owner === 'world',
       doc: document,
       win: window,
     });
     teardown.push(() => input.dispose());
+
+    // The map overlay (SP4c spec §1.3): M before the reveal does nothing, since nothing exists to receive it.
+    const mapOverlay = createMapOverlay({
+      app: root,
+      worldHost: host,
+      canvas,
+      session,
+      pool: workers,
+      driver: previewDriver,
+      relay,
+      storage,
+      settings,
+      save: (m) => {
+        settings = { ...settings, mapMode: m.mapMode, watchLive: m.watchLive };
+        saveSettings(storage, settings);
+      },
+      fly,
+      input,
+      doc: document,
+      win: window,
+      now: () => performance.now(),
+      // The teleport arrives with Task 17; until then a map click moves nothing.
+      onTeleport: () => Promise.resolve(false),
+    });
+    mapRef = mapOverlay;
+    // Disposed before the input, the driver and the page's subscribe: a gesture still open ends through the tool.
+    teardown.push(() => mapOverlay.dispose());
+    // Undo and redo belong to the session (SP4c spec §2.4): live for the page's lifetime, map shown or hidden, either
+    // owner, never in text entry.
+    teardown.push(installShortcuts((a) => {
+      if (a === 'undo') session.undo();
+      else if (a === 'redo') session.redo();
+    }, (a) => a === 'undo' || a === 'redo'));
 
     // The streaming frame (SP4b spec §7.2): the slow-frame notice and the throttle get every raw rAF delta before the
     // limiter, so an FPS cap of 30 is read as neither slow frames nor a reason to throttle generation.
@@ -1398,7 +1472,8 @@ export function mountWorldPage(root: HTMLElement, q: WorldQuery, hash: string, o
     const step = createFrameStep({
       fly,
       held: () => input.held,
-      paused: () => help.isOpen,
+      // The flight pauses while the help is open or the map owns the controls (SP4c spec §2.3).
+      paused: () => help.isOpen || mapOverlay.owner === 'map',
       stopped: () => stopped,
       clock,
       coordinator,
@@ -1415,6 +1490,8 @@ export function mountWorldPage(root: HTMLElement, q: WorldQuery, hash: string, o
       fogStep: (dtMs) => fogStep.step(dtMs),
       onRendered: (dtMs) => {
         frames.push(dtMs);
+        // The map's arrow follows the camera while it is shown (SP4c spec §1.5).
+        mapOverlay.tick(counts);
         // The first 120 rendered frames' largest delta (SP4b spec §7.1; the flight JSON's key unchanged).
         if (n < FIRST_FRAMES) {
           firstMax = Math.max(firstMax, dtMs);

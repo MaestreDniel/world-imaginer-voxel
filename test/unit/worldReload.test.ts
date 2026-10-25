@@ -116,7 +116,7 @@ describe('the world notices (SP4a spec §7.5, §8.5; Review Focus 5)', () => {
     const renderer = { onContextLost: (fn: () => void) => { lost = fn; } };
     const camera = { x: 10.6, y: 80.2, z: -3.4, yaw: 45.04, pitch: -10 };
     const stop = vi.fn();
-    handleContextLoss(renderer, { stop, notices, hereHref: () => hereUrl(camera, null, '#abc') });
+    handleContextLoss(renderer, { stop, closeMap: () => {}, notices, hereHref: () => hereUrl(camera, null, '#abc'), onError: (e) => { throw e; } });
     expect(lost).not.toBeNull();
     expect(() => dom.el('world-context-lost')).toThrow();
     // The camera moved on after the handler was installed: the link carries where it is at the loss.

@@ -12,8 +12,8 @@ import { createBenchDriver } from '../../src/ui/world/bench';
 import { createFogEase } from '../../src/ui/world/fogEase';
 import { createReloader } from '../../src/ui/world/reload';
 import {
-  createRdControl, createWorldNotices, everyFrameUntil, failBeforeReveal, handleStreamEvent, helpChange, offerLowerRd, rdShownOnLoad,
-  releaseOnFailure, reloadRd, runTeardown, stopAfterFailure,
+  createRdControl, createWorldNotices, everyFrameUntil, failBeforeReveal, handleContextLoss, handleStreamEvent, helpChange, offerLowerRd,
+  rdShownOnLoad, releaseOnFailure, reloadRd, runTeardown, stopAfterFailure,
 } from '../../src/ui/world/worldPage';
 import { installDom, type FakeElement } from './fixtures/domShim';
 
@@ -178,6 +178,90 @@ describe('stopAfterFailure (a failure after the reveal, SP4b spec §7.4; Task 21
       onError,
     });
     expect(released).toEqual(['pool', 'renderer']);
+    expect(onError).toHaveBeenCalledTimes(1);
+  });
+});
+
+describe('the map overlay on a fatal error or a context loss (SP4c spec §1.3, §2.1, D27)', () => {
+  let dom: ReturnType<typeof installDom>;
+  beforeEach(() => { dom = installDom(); });
+  afterEach(() => { vi.unstubAllGlobals(); });
+
+  /** An open overlay whose dispose records whether a failure panel or the context-loss notice was already shown. */
+  const openOverlay = (order: string[]) => ({
+    shown: true,
+    dispose: vi.fn(() => {
+      order.push(`overlay.dispose (panel shown: ${dom.document.getElementById('world-failed') !== null || dom.document.getElementById('world-context-lost') !== null})`);
+    }),
+  });
+
+  test('a fatal with the overlay open disposes it before the failure panel shows', () => {
+    const order: string[] = [];
+    const notices = createWorldNotices(dom.body as unknown as HTMLElement, createReloader(vi.fn(), vi.fn()));
+    const overlay = openOverlay(order);
+    stopAfterFailure({
+      stop: () => { order.push('stop'); },
+      closeMap: () => overlay.dispose(),
+      show: () => {
+        notices.failed('Streaming stopped: x', 'details', '/?at=0,0');
+        order.push('panel');
+      },
+      release: [() => { order.push('pool.terminate'); }],
+      onError: () => {},
+    });
+    expect(order).toEqual(['stop', 'overlay.dispose (panel shown: false)', 'panel', 'pool.terminate']);
+    expect(overlay.dispose).toHaveBeenCalledTimes(1);
+  });
+
+  test('an overlay whose dispose throws still lets the failure panel show and the releases run', () => {
+    const order: string[] = [];
+    const onError = vi.fn<(e: unknown) => void>();
+    stopAfterFailure({
+      stop: () => {},
+      closeMap: () => { throw new Error('the tool\'s dispose failed'); },
+      show: () => { order.push('panel'); },
+      release: [() => { order.push('pool.terminate'); }],
+      onError,
+    });
+    expect(order).toEqual(['panel', 'pool.terminate']);
+    expect(onError).toHaveBeenCalledTimes(1);
+  });
+
+  test('the same for a context loss: the loop stops, the overlay is disposed, then the notice shows; a second loss does nothing', () => {
+    const order: string[] = [];
+    let lost: (() => void) | null = null;
+    const notices = createWorldNotices(dom.body as unknown as HTMLElement, createReloader(vi.fn(), vi.fn()));
+    const overlay = openOverlay(order);
+    const onError = vi.fn<(e: unknown) => void>();
+    handleContextLoss({ onContextLost: (fn) => { lost = fn; } }, {
+      stop: () => { order.push('stop'); },
+      closeMap: () => overlay.dispose(),
+      notices,
+      hereHref: () => { order.push('href'); return '/?at=1,2'; },
+      onError,
+    });
+    expect(order).toEqual([]);
+    lost!();
+    expect(order).toEqual(['stop', 'overlay.dispose (panel shown: false)', 'href']);
+    expect(dom.el('world-context-lost').textContent).toContain('The graphics context was lost');
+    lost!();
+    expect(overlay.dispose).toHaveBeenCalledTimes(1);
+    expect(onError).not.toHaveBeenCalled();
+  });
+
+  test('a context loss whose overlay dispose throws still shows the notice', () => {
+    let lost: (() => void) | null = null;
+    const notices = createWorldNotices(dom.body as unknown as HTMLElement, createReloader(vi.fn(), vi.fn()));
+    const onError = vi.fn<(e: unknown) => void>();
+    handleContextLoss({ onContextLost: (fn) => { lost = fn; } }, {
+      stop: () => {},
+      closeMap: () => { throw new Error('the tool\'s dispose failed'); },
+      notices,
+      hereHref: () => '/?at=1,2',
+      onError,
+    });
+    lost!();
+    expect(dom.el('world-context-lost').textContent).toContain('The graphics context was lost');
     expect(onError).toHaveBeenCalledTimes(1);
   });
 });

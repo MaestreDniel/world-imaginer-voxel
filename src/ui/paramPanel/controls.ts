@@ -24,6 +24,16 @@ import {
   octavesChange, parseFieldText, refTargetControl, refTargetWrite, scopeBadge, sliderPosition, sliderPositions, sliderToValue, type ControlSpec, type NoiseNumberField,
 } from './model';
 
+/**
+ * The ends of the open slider drags (SP4c spec §1.2): a drag adds its end on pointerdown and deletes it when it ends; the
+ * owner (the panel, the Density tab) runs every end left when it is disposed, removing the drag's window listeners and
+ * ending its gesture. A `Set<() => void>` satisfies it.
+ */
+export interface DragEnds {
+  add(end: () => void): unknown;
+  delete(end: () => void): unknown;
+}
+
 export interface ControlDeps {
   readonly session: WorldSession;
   /** Runs a session call caused by the input event `e`, so the preview latency counts from `e.timeStamp` (§2.8). */
@@ -34,6 +44,8 @@ export interface ControlDeps {
   showBiomes(): void;
   /** A json leaf's "Edit in Density" link: opens the drawer's Density tab on the leaf's tree. */
   openTree(path: string): void;
+  /** Where the open slider drags keep their ends (the owner ends them when disposed); none: nothing ends them early. */
+  readonly drags?: DragEnds;
 }
 
 export interface PanelControl {
@@ -53,7 +65,7 @@ export interface PanelControl {
 }
 
 /** What a slider row needs of the deps (the Density tab's target slider has no panel around it). */
-export type RowDeps = Pick<ControlDeps, 'session' | 'edit'>;
+export type RowDeps = Pick<ControlDeps, 'session' | 'edit' | 'drags'>;
 
 /** Runs a session call through the page's `edit`, keeping its result. */
 function run(deps: RowDeps, e: Event, fn: () => SessionResult): SessionResult {
@@ -63,16 +75,21 @@ function run(deps: RowDeps, e: Event, fn: () => SessionResult): SessionResult {
   return out.r;
 }
 
-/** A pointer drag of a range input is one gesture: it begins on pointerdown and ends on `change` or on the pointer's release anywhere. */
-function dragGesture(slider: HTMLInputElement, session: WorldSession): void {
+/**
+ * A pointer drag of a range input is one gesture: it begins on pointerdown and ends on `change` or on the pointer's
+ * release anywhere; while it is open its end is in `drags`, so the owner's dispose can end it (SP4c spec §1.2).
+ */
+function dragGesture(slider: HTMLInputElement, session: WorldSession, drags: DragEnds | undefined): void {
   slider.addEventListener('pointerdown', (e) => {
     if (e.button !== 0) return;
     session.beginGesture();
     const end = () => {
       removeEventListener('pointerup', end, true);
       removeEventListener('pointercancel', end, true);
+      drags?.delete(end);
       session.endGesture();
     };
+    drags?.add(end);
     addEventListener('pointerup', end, true);
     addEventListener('pointercancel', end, true);
   });
@@ -189,7 +206,7 @@ function numberRow(deps: RowDeps, spec: ControlSpec, base: string, labelled: boo
   const thumb = () => {
     if (value !== null) slider.value = String(sliderPosition(spec, positions, slider.valueAsNumber, value));
   };
-  dragGesture(slider, deps.session);
+  dragGesture(slider, deps.session, deps.drags);
   slider.addEventListener('input', (e) => {
     const r = run(deps, e, () => write(sliderToValue(spec, slider.valueAsNumber / positions)));
     if (r.ok) {

@@ -191,7 +191,7 @@ world-imaginer-voxel/          (repository root)
     ui/world/* ui/loading/* ui/spike/* settings.ts   (SP4a) the 3D page: the minimal start screen at `/`, the world page, the
                                 flight (`?flight=sp4a`) and panorama (`?pano`) routes; the loading screen with panoramas, tips and progress; the spike
                                 page (`?spike=batch`); the world's small settings block (SP5's settings panel replaces it);
-                                ui/world/bench.ts (SP4b: the `?bench=medium` route and its JSON)
+                                ui/world/bench.ts (SP4b: the `?bench=medium` route and its JSON); mapOverlay.ts (SP4c)
     ui/inspector/*              (SP3d) the ?map Density tab. Pure: model.ts form.ts jsonText.ts editorModel.ts hoverModel.ts
                                 sliceModel.ts; DOM: jsonEditor.ts sliceView.ts densityTab.ts inspector.css (SP10's full probe and
                                 further JSON editors go here too)
@@ -1341,9 +1341,9 @@ Target: edit → visible ≤ 50 ms p95, measured in the HUD.
   - offset, σ, jag; `islandMask`, the floating_islands cluster mask (shape stage; amended by SP3e);
   - cave slice at y (final < 0 plus aquifer fluid), cave-biome slice;
   - structure starts and pieces, carver tunnels;
-  - spawn, player with view cone, grid, column-status heatmap, bookmarks per save.
-- **Hover** uses a sampler cached per epoch. **Click** teleports (3.7).
-- The 3D view keeps streaming at reduced priority while the map is open.
+  - spawn, player with view cone, grid, column-status heatmap, saved places per saved world (SP5: a section of each saved world's map, one map per saved world).
+- **Hover** uses a sampler cached per epoch. **Click** teleports (3.7) (SP4c: in the world's map a plain click teleports, except while the cut tool is armed; Shift+click sets the pin or the slice centre; on `?map` a click sets the pin).
+- The 3D view keeps streaming at reduced priority while the map is open (SP4c: in mode A, map open; in mode B the 3D streams first and the map's jobs are capped as §4.3).
 
 ### 5.7 Metrics dashboard
 
@@ -1374,7 +1374,7 @@ Target: edit → visible ≤ 50 ms p95, measured in the HUD.
 
 ### 5.9 Controls
 
-WASD; Space (up/jump); Shift (down/sneak); Ctrl (sprint); F (walk/fly); M (map); L (slice); I (inspector); P (params); G (graphics); E (creative palette); F3 (debug); H/F1 (help); 1-9 and wheel (hotbar); LMB / RMB / MMB (break / place / pick); Esc (release pointer); T (time speed, SP4a), `+`/`-` (fly speed). Audio volumes and music frequency live in Settings.
+WASD; Space (up/jump); Shift (down/sneak); Ctrl (sprint); F (walk/fly); M (map: SP4c's overlay, full screen or side by side); L (slice); I (inspector); P (params); G (graphics); E (creative palette); F3 (debug); H/F1 (help); 1-9 and wheel (hotbar); LMB / RMB / MMB (break / place / pick); Esc (release pointer); T (time speed, SP4a), `+`/`-` (fly speed). Audio volumes and music frequency live in Settings.
 
 ## 6. Testing
 

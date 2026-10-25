@@ -121,6 +121,28 @@ export class FakeElement extends EventTarget {
     return node;
   }
 
+  /** Inserts the nodes before the first child, in order, as the DOM's `prepend`. */
+  prepend(...nodes: (Child | string)[]): void {
+    const first = this.childNodes[0] ?? null;
+    for (const n of nodes) this.insertBefore(typeof n === 'string' ? new FakeText(n) : n, first);
+  }
+
+  /** The last child node, or null. */
+  get lastChild(): Child | null {
+    return this.childNodes[this.childNodes.length - 1] ?? null;
+  }
+
+  /** Inserts `node` before `ref` (appends it when `ref` is null), as the DOM's `insertBefore`. */
+  insertBefore<T extends Child>(node: T, ref: Child | null): T {
+    if (ref === null) return this.appendChild(node);
+    node.parentElement?.detach(node);
+    const i = this.childNodes.indexOf(ref);
+    if (i < 0) throw new Error('domShim: insertBefore\'s reference is not a child');
+    node.parentElement = this;
+    this.childNodes.splice(i, 0, node);
+    return node;
+  }
+
   replaceChildren(...nodes: (Child | string)[]): void {
     this.clear();
     this.append(...nodes);
@@ -147,6 +169,25 @@ export class FakeElement extends EventTarget {
     if (name === 'id') return this.id === '' ? null : this.id;
     if (name === 'class') return this.className === '' ? null : this.className;
     return this.attrs.get(name) ?? null;
+  }
+
+  /** Makes the element the owner document's `activeElement` (SP4c: a focused seed field). */
+  focus(): void {
+    if (this.ownerDocument !== null) this.ownerDocument.activeElement = this;
+  }
+
+  /** Gives the focus back to the owner document's body when the element has it. */
+  blur(): void {
+    if (this.ownerDocument !== null && this.ownerDocument.activeElement === this) this.ownerDocument.activeElement = this.ownerDocument.body;
+  }
+
+  /**
+   * Takes the pointer lock at once: the owner document's `pointerLockElement` becomes the element and 'pointerlockchange'
+   * is dispatched on the document (a browser does both asynchronously, after the click).
+   */
+  requestPointerLock(): Promise<void> {
+    if (this.ownerDocument !== null) this.ownerDocument.setPointerLock(this);
+    return Promise.resolve();
   }
 
   /** Dispatches 'click' (then calls `onclick`) unless the element is disabled. */
@@ -227,9 +268,28 @@ function selectorMatcher(selector: string): (e: FakeElement) => boolean {
  */
 export class FakeDocument extends EventTarget {
   readonly body = new FakeElement('body');
+  /** The focused element: the body until an element's `focus()` (SP4c spec §2.2). */
+  activeElement: FakeElement = this.body;
+  /** The element holding the pointer lock, or null (SP4c spec §2.3). */
+  pointerLockElement: FakeElement | null = null;
+  /** How many times `exitPointerLock` was called. */
+  exitPointerLockCalls = 0;
   hidden = false;
   visibilityState: 'visible' | 'hidden' = 'visible';
   decodeImage: (src: string) => Promise<void> = () => Promise.resolve();
+
+  /** Releases the pointer lock at once: `pointerLockElement` null and 'pointerlockchange' dispatched when it was held. */
+  exitPointerLock(): void {
+    this.exitPointerLockCalls++;
+    this.setPointerLock(null);
+  }
+
+  /** Sets `pointerLockElement` and dispatches 'pointerlockchange' when it changed (the browser's lock taken or lost). */
+  setPointerLock(e: FakeElement | null): void {
+    if (this.pointerLockElement === e) return;
+    this.pointerLockElement = e;
+    this.dispatchEvent(new Event('pointerlockchange'));
+  }
 
   createElement(tag: string): FakeElement {
     const e = new FakeElement(tag);

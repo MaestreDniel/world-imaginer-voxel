@@ -926,7 +926,21 @@ describe('master spec amendments (SP4c §12)', () => {
   const SP4C_MODULES: Array<[head: RegExp, token: string, file: string]> = [
     [/^\s+coordinator\.ts /, 'jobHeap.ts (SP4c)', 'src/engine/jobHeap.ts'],
     [/^\s+ui\/map\/\* /, 'mapTool.ts', 'src/ui/map/mapTool.ts'],
+    [/^\s+ui\/world\/\* /, 'mapOverlay.ts', 'src/ui/world/mapOverlay.ts'],
   ];
+
+  test('§5.6\'s click, saved places and streaming, and §5.9\'s M: the world\'s overlay (SP4c spec §2, §3.1, §12)', () => {
+    const at56 = text.indexOf('### 5.6 Map view');
+    const s56 = text.slice(at56, text.indexOf('### 5.7 ', at56));
+    expect(s56).toContain('**Click** teleports (3.7) (SP4c: in the world\'s map a plain click teleports, except while the cut tool is armed; Shift+click sets the pin or the slice centre; on `?map` a click sets the pin).');
+    expect(s56).toContain('saved places per saved world (SP5: a section of each saved world\'s map, one map per saved world)');
+    expect(s56).not.toContain('bookmarks per save');
+    expect(s56).toContain('The 3D view keeps streaming at reduced priority while the map is open (SP4c: in mode A, map open; in mode B the 3D streams first and the map\'s jobs are capped as §4.3).');
+    const at59 = text.indexOf('### 5.9 Controls');
+    const s59 = text.slice(at59, text.indexOf('## 6. ', at59));
+    expect(s59).toContain('M (map: SP4c\'s overlay, full screen or side by side);');
+    expect(s59).not.toContain('M (map);');
+  });
 
   test('§1\'s ui/map/* line: the map tool both ?map and the world\'s M overlay mount (SP4c spec §1.1, §12)', () => {
     const entry = layoutEntry(/^\s+ui\/map\/\* /);
