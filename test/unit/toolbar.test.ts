@@ -3,7 +3,7 @@ import { BIOME_SIZE_SCALE } from '../../src/ui/map/biomeSize';
 import type { DriverStatus } from '../../src/ui/map/previewDriver';
 import { biomeSizeView, previewStatusText, profileOptions, profileSwitchText } from '../../src/ui/map/toolbar';
 
-const status = (s: Partial<DriverStatus>): DriverStatus => ({ lastLatencyMs: null, pending: false, settled: false, poolEpoch: null, sessionEpoch: null, error: null, ...s });
+const status = (s: Partial<DriverStatus>): DriverStatus => ({ lastLatencyMs: null, pending: false, queued: false, settled: false, poolEpoch: null, sessionEpoch: null, error: null, ...s });
 
 describe('toolbar texts (SP2b spec §2.6, §3.1, §6.4)', () => {
   test('the preview status reads "last edit → preview N ms", with the pending state and the error', () => {

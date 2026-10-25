@@ -166,7 +166,7 @@ describe('zoomed out: more preview positions than workers (SP2b spec §2.5, §2.
         pool.configures += 1;
         const e = pool.epoch;
         const h = `h${e}`;
-        return new Promise((resolve) => { resolveNext = () => resolve({ epoch: e, stageHashes: { climate: h, shape: h, surfaceEst: h, biome2d: h, map: h } }); });
+        return new Promise((resolve) => { resolveNext = () => resolve({ epoch: e, stageHashes: { climate: h, shape: h, surfaceEst: h, biome2d: h, map: h }, genKey: h }); });
       },
       spawn: () => Promise.resolve<Spawn>({ x: 0, z: 0, y: 64, biome: 1, fallback: false }),
       async ready() { const r = resolveNext; resolveNext = null; r?.(); await flush(); },

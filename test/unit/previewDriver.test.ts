@@ -4,7 +4,8 @@ import type { Params } from '../../src/core/params/schema';
 import { JobCancelled, type WorkerPool } from '../../src/engine/workerPool';
 import type { Spawn } from '../../src/gen/column/spawn';
 import {
-  createPreviewDriver, type DriverCanvas, type DriverClock, type DriverDraft, type DriverPool, type DriverStatus, type PreviewDriver,
+  createPreviewDriver, createReplayingCanvas, type Configured, type DriverCanvas, type DriverClock, type DriverDraft, type DriverPool,
+  type DriverStatus, type PreviewDriver,
 } from '../../src/ui/map/previewDriver';
 
 const PARAMS: Params = resolveProfile('default');
@@ -22,6 +23,8 @@ class FakeClock implements DriverClock {
     return id;
   }
   clearTimeout(id: number): void { this.timers.delete(id); }
+  /** The timers set and not yet fired or cleared. */
+  get pendingTimers(): number { return this.timers.size; }
   async advance(ms: number): Promise<void> {
     const end = this.t + ms;
     for (;;) {
@@ -58,26 +61,37 @@ class FakePool implements DriverPool {
   readonly configures: FakeConfigure[] = [];
   /** The pool epoch of every spawn request. */
   readonly spawns: number[] = [];
+  /** The priority of every spawn request (undefined: the pool's default). */
+  readonly spawnPriorities: Array<number | undefined> = [];
   onConfigure: ((c: FakeConfigure) => void) | null = null;
   private next = -1;
+  private last = -1;
   constructor(size: number) { this.size = size; }
-  configure(seedText: string, _params: Params): Promise<{ readonly epoch: number; readonly stageHashes: Readonly<Record<string, string>> }> {
+  /** The pool as the page left it after its first configure of `epoch` (the driver adopts it): the next configure follows it. */
+  adoptAt(epoch: number): number {
+    this.last = epoch;
+    this.next = epoch + 3;
+    return epoch;
+  }
+  configure(seedText: string, _params: Params): Promise<{ readonly epoch: number; readonly stageHashes: Readonly<Record<string, string>>; readonly genKey: string }> {
     for (const c of this.configures) c.reject(new JobCancelled());
     const epoch = this.next;
+    this.last = epoch;
     this.next += 3;
     return new Promise((resolve, reject) => {
       const c: FakeConfigure = {
         epoch, seedText, state: 'pending',
-        resolve: () => { if (c.state === 'pending') { c.state = 'resolved'; resolve({ epoch, stageHashes: { climate: `h${epoch}` } }); } },
+        resolve: () => { if (c.state === 'pending') { c.state = 'resolved'; resolve({ epoch, stageHashes: { climate: `h${epoch}` }, genKey: `g${epoch}` }); } },
         reject: (e) => { if (c.state === 'pending') { c.state = 'rejected'; reject(e); } },
       };
       this.configures.push(c);
       this.onConfigure?.(c);
     });
   }
-  spawn(): Promise<Spawn> {
-    const epoch = this.configures.at(-1)!.epoch;
+  spawn(priority?: number): Promise<Spawn> {
+    const epoch = this.last;
     this.spawns.push(epoch);
+    this.spawnPriorities.push(priority);
     return Promise.resolve(spawnOf(epoch));
   }
   /** Resolves the newest configure (if pending) and lets the driver react. */
@@ -112,11 +126,11 @@ interface Rig {
   readonly statuses: DriverStatus[];
 }
 
-const rig = (size = 6): Rig => {
+const rig = (size = 6, opts?: { readonly spawnPriority?: number }): Rig => {
   const clock = new FakeClock();
   const pool = new FakePool(size);
   const canvas = new FakeCanvas();
-  const driver = createPreviewDriver(pool, canvas, clock);
+  const driver = createPreviewDriver(pool, canvas, clock, opts);
   const settled: number[] = [];
   driver.onSettled((e) => settled.push(e));
   const statuses: DriverStatus[] = [];
@@ -434,7 +448,7 @@ describe('preview driver (SP2b spec §2.6, §2.7)', () => {
     const before = statuses.length;
     expect(driver.status).toMatchObject({ pending: true, settled: false, poolEpoch: 7, sessionEpoch: 0 });
     await pool.ready();
-    expect(statuses.slice(before)).toEqual([{ lastLatencyMs: 0, pending: true, settled: false, poolEpoch: 7, sessionEpoch: 1, error: null }]);
+    expect(statuses.slice(before)).toEqual([{ lastLatencyMs: 0, pending: true, queued: false, settled: false, poolEpoch: 7, sessionEpoch: 1, error: null }]);
     expect(statuses.at(-1)).toBe(driver.status);
   });
 
@@ -442,13 +456,13 @@ describe('preview driver (SP2b spec §2.6, §2.7)', () => {
     const r = rig();
     r.clock.t = 100;
     r.driver.change(draft(0), URGENT, 95);
-    expect(r.driver.status).toEqual({ lastLatencyMs: null, pending: true, settled: false, poolEpoch: null, sessionEpoch: null, error: null });
+    expect(r.driver.status).toEqual({ lastLatencyMs: null, pending: true, queued: false, settled: false, poolEpoch: null, sessionEpoch: null, error: null });
     await r.pool.ready();
     expect(r.driver.status.poolEpoch).toBe(-1);
     await r.clock.advance(120);
     land(r);
     land(r);
-    expect(r.driver.status).toEqual({ lastLatencyMs: 125, pending: false, settled: true, poolEpoch: -1, sessionEpoch: 0, error: null });
+    expect(r.driver.status).toEqual({ lastLatencyMs: 125, pending: false, queued: false, settled: true, poolEpoch: -1, sessionEpoch: 0, error: null });
     expect(r.statuses).toHaveLength(3);
     expect(r.statuses.at(-1)).toBe(r.driver.status);
     const heard: number[] = [];
@@ -552,5 +566,193 @@ describe('preview driver (SP2b spec §2.6, §2.7)', () => {
   test('the worker pool is a DriverPool (the page passes it as is)', () => {
     const asDriverPool = (p: WorkerPool): DriverPool => p;
     expect(typeof asDriverPool).toBe('function');
+  });
+});
+
+describe('the configure driver in the world (SP4c spec §4.2, §6.3)', () => {
+  const LOAD = { urgent: true, gesture: false, kind: 'load' } as const;
+  /** The page's first configure, as the world adopts it: pool epoch `poolEpoch`, session epoch 3. */
+  const adoptFirst = (r: Rig, poolEpoch = 0) => r.driver.adopt({
+    poolEpoch: r.pool.adoptAt(poolEpoch), sessionEpoch: 3, seedKey: '3.0', ready: { stageHashes: { climate: `h${poolEpoch}` }, genKey: `g${poolEpoch}` },
+  });
+
+  test('adopt, then a change with the same session epoch configures nothing; status.poolEpoch and sessionEpoch are the adopted ones', async () => {
+    const r = rig();
+    adoptFirst(r);
+    expect(r.canvas.sources).toEqual([{ epoch: 0, seedKey: '3.0' }]);
+    edit(r, 3, LOAD);
+    expect(configured(r)).toEqual([]);
+    expect(r.driver.status).toMatchObject({ pending: false, queued: false, settled: true, poolEpoch: 0, sessionEpoch: 3, error: null });
+    await flush();
+    expect([r.pool.spawns, r.settled, r.canvas.spawns]).toEqual([[0], [0], [spawnOf(0)]]);
+    // The next session epoch configures as today.
+    edit(r, 4, URGENT);
+    expect(configured(r)).toEqual(['s4']);
+    await r.pool.ready();
+    expect(r.driver.status).toMatchObject({ poolEpoch: 3, sessionEpoch: 4 });
+  });
+
+  test('with the preview not wanted, a cycle lands when its configure resolves (no previewProgress), and a second edit waiting in the slot starts then, not after the ≥ 1 s watchdog', async () => {
+    const r = rig();
+    r.driver.setPreviewWanted(false);
+    edit(r, 0, URGENT);
+    await r.pool.ready();
+    expect(r.driver.status).toMatchObject({ pending: false, queued: false, settled: true, poolEpoch: -1, sessionEpoch: 0, lastLatencyMs: null });
+    edit(r, 1, URGENT);
+    edit(r, 2, URGENT);
+    expect(configured(r)).toEqual(['s0', 's1']);
+    expect(r.driver.status).toMatchObject({ pending: true, queued: true });
+    await r.pool.ready();
+    expect(configured(r)).toEqual(['s0', 's1', 's2']);
+    expect(r.clock.now()).toBe(0);
+    await r.pool.ready();
+    expect(r.driver.status).toMatchObject({ pending: false, queued: false, settled: true, poolEpoch: 5, sessionEpoch: 2, lastLatencyMs: null });
+    expect(r.pool.spawns).toEqual([-1, 5]);
+    // The watchdog stays: a configure that does not resolve lands after 1000 ms and the slot starts.
+    edit(r, 3, URGENT);
+    edit(r, 4, URGENT);
+    await r.clock.advance(999);
+    expect(configured(r)).toEqual(['s0', 's1', 's2', 's3']);
+    await r.clock.advance(1);
+    expect(configured(r)).toEqual(['s0', 's1', 's2', 's3', 's4']);
+  });
+
+  test('with the preview wanted again, a cycle waits for its preview as today', async () => {
+    const r = rig();
+    r.driver.setPreviewWanted(false);
+    edit(r, 0, URGENT);
+    await r.pool.ready();
+    expect(r.driver.status.settled).toBe(true);
+    r.driver.setPreviewWanted(true);
+    edit(r, 1, URGENT);
+    await r.pool.ready();
+    expect(r.driver.status).toMatchObject({ pending: true, settled: false, poolEpoch: 2 });
+    await r.clock.advance(40);
+    land(r);
+    expect(r.driver.status).toMatchObject({ pending: false, settled: true, poolEpoch: 2, lastLatencyMs: 40 });
+    // (plan) Turning the preview off while a resolved cycle waits for its preview lands it at once, without a sample.
+    edit(r, 2, URGENT);
+    await r.pool.ready();
+    expect(r.driver.status.pending).toBe(true);
+    r.driver.setPreviewWanted(false);
+    expect(r.driver.status).toMatchObject({ pending: false, settled: true, poolEpoch: 5, lastLatencyMs: 40 });
+  });
+
+  test('onConfigured fires once per resolved configure with the change\'s gesture and urgent and the ready\'s genKey; never for a configure superseded before it resolved', async () => {
+    const r = rig();
+    const heard: Configured[] = [];
+    r.driver.onConfigured((c) => heard.push(c));
+    const ready = (e: number) => ({ stageHashes: { climate: `h${e}` }, genKey: `g${e}` });
+    edit(r, 0, URGENT);
+    await r.pool.ready();
+    land(r);
+    edit(r, 0, BEGIN);
+    edit(r, 1, DRAG);
+    await r.pool.ready();
+    edit(r, 2, DRAG);
+    edit(r, 3, DRAG);
+    land(r);   // the slot's drag starts: configure 5 of session epoch 3
+    edit(r, 4, DRAG);
+    edit(r, 4, END);   // the release aborts the gesture's cycle: configure 5 is superseded
+    expect(configured(r)).toEqual(['s0', 's1', 's3', 's4']);
+    await flush();
+    expect(r.pool.configures[2]!.state).toBe('rejected');
+    await r.pool.ready();
+    await r.pool.ready();
+    expect(heard).toEqual([
+      { poolEpoch: -1, sessionEpoch: 0, seedKey: '0.0', ready: ready(-1), gesture: false, urgent: true },
+      { poolEpoch: 2, sessionEpoch: 1, seedKey: '1.0', ready: ready(2), gesture: true, urgent: false },
+      { poolEpoch: 8, sessionEpoch: 4, seedKey: '4.0', ready: ready(8), gesture: false, urgent: true },
+    ]);
+    // The unsubscribe stops it.
+    const off = r.driver.onConfigured((c) => heard.push(c));
+    off();
+    land(r);
+    edit(r, 5, URGENT);
+    await r.pool.ready();
+    expect(heard).toHaveLength(4);
+  });
+
+  test('queued is true while the slot holds a draft, false once it starts', async () => {
+    const r = rig();
+    edit(r, 0, URGENT);
+    expect(r.driver.status).toMatchObject({ pending: true, queued: false });
+    edit(r, 1, URGENT);
+    expect(r.driver.status).toMatchObject({ pending: true, queued: true });
+    await r.pool.ready();
+    expect(r.driver.status.queued).toBe(true);
+    land(r);
+    expect(configured(r)).toEqual(['s0', 's1']);
+    expect(r.driver.status).toMatchObject({ pending: true, queued: false });
+    expect(r.statuses.map((s) => s.queued)).toEqual([false, true, true, false]);
+  });
+
+  test('dispose clears the watchdog (the fake clock has no pending timer) and a configure resolving after it calls nothing', async () => {
+    const r = rig();
+    const heard: Configured[] = [];
+    r.driver.onConfigured((c) => heard.push(c));
+    edit(r, 0, URGENT);
+    edit(r, 1, URGENT);
+    expect(r.clock.pendingTimers).toBe(1);
+    const statuses = r.statuses.length;
+    r.driver.dispose();
+    expect(r.clock.pendingTimers).toBe(0);
+    await r.pool.ready();
+    await r.clock.advance(5000);
+    expect([r.canvas.sources, heard, r.settled, r.pool.spawns, configured(r)]).toEqual([[], [], [], [], ['s0']]);
+    expect(r.statuses).toHaveLength(statuses);
+    // A spawn requested before the dispose and answered after it is ignored too.
+    const r2 = rig();
+    adoptFirst(r2);
+    expect(r2.pool.spawns).toEqual([0]);
+    r2.driver.dispose();
+    await flush();
+    expect(r2.canvas.spawns).toEqual([]);
+  });
+
+  test('the spawn after a settle uses spawnPriority (600) when given, −2 by default', async () => {
+    for (const [opts, want] of [[undefined, -2], [{ spawnPriority: 600 }, 600]] as const) {
+      const r = rig(6, opts);
+      edit(r, 0, URGENT);
+      await r.pool.ready();
+      land(r);
+      await flush();
+      expect(r.pool.spawnPriorities).toEqual([want]);
+      const a = rig(6, opts);
+      adoptFirst(a);
+      expect(a.pool.spawnPriorities).toEqual([want]);
+    }
+  });
+
+  test('the replaying canvas: after an adopt, attach(fake) receives setSource with the adopted epoch, seed key and hashes, then the interactivity and the spawn; after detach nothing is forwarded; a second attach replays again', async () => {
+    const clock = new FakeClock();
+    const pool = new FakePool(6);
+    const sink = createReplayingCanvas();
+    const driver = createPreviewDriver(pool, sink, clock);
+    driver.adopt({ poolEpoch: pool.adoptAt(0), sessionEpoch: 3, seedKey: '3.0', ready: { stageHashes: { climate: 'h0' }, genKey: 'g0' } });
+    await flush();
+    const log: string[] = [];
+    const fake: DriverCanvas = {
+      setSource: (epoch, seedKey, hashes) => log.push(`source ${epoch} ${seedKey} ${JSON.stringify(hashes)}`),
+      setInteractive: (on) => log.push(`interactive ${String(on)}`),
+      setSpawn: (s) => log.push(`spawn ${s === null ? 'null' : s.x}`),
+    };
+    sink.attach(fake);
+    expect(log).toEqual(['source 0 3.0 {"climate":"h0"}', 'interactive false', 'spawn 0']);
+    // While attached, every call is forwarded.
+    driver.change(draft(4), URGENT, 0);
+    driver.change(draft(5), URGENT, 0);
+    await pool.ready();
+    expect(log.slice(3)).toEqual(['interactive true', 'source 3 4.0 {"climate":"h3"}']);
+    sink.detach();
+    log.length = 0;
+    driver.previewProgress(3, 4, 4);
+    await pool.ready();
+    driver.previewProgress(6, 4, 4);
+    await flush();
+    expect(driver.status).toMatchObject({ settled: true, poolEpoch: 6 });
+    expect(log).toEqual([]);
+    sink.attach(fake);
+    expect(log).toEqual(['source 6 5.0 {"climate":"h6"}', 'interactive false', 'spawn 6']);
   });
 });

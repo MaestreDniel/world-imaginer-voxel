@@ -43,7 +43,7 @@ import { createHoverReadout } from './hoverPanel';
 import { browserStorage, createLayout } from './layout';
 import { createMapCanvas } from './mapView';
 import { applyMapHash, decodeMapState, encodeMapState, openMapSession, type MapView } from './mapState';
-import { createPreviewDriver, type DriverClock, type DriverDraft, type PreviewDriver } from './previewDriver';
+import { createPreviewDriver, createReplayingCanvas, type DriverClock, type DriverDraft, type PreviewDriver } from './previewDriver';
 import { createToolbar, open3dHref } from './toolbar';
 
 /** A click this close to the cut line (screen px) shows its profile instead of pinning the point. */
@@ -147,14 +147,18 @@ export async function mountMapPage(root: HTMLElement): Promise<void> {
     setTimeout: (fn, ms) => window.setTimeout(fn, ms),
     clearTimeout: (id) => window.clearTimeout(id),
   };
-  const driver: PreviewDriver = createPreviewDriver(pool, {
+  // The driver pushes into a replaying sink (SP4c spec §4.2), which the map canvas is attached to (Task 12 moves the
+  // attach into the map tool's mount, the detach into its dispose).
+  const sink = createReplayingCanvas();
+  const driver: PreviewDriver = createPreviewDriver(pool, sink, clock);
+  sink.attach({
     setSource: (epoch, seedKey, hashes) => canvas.setSource(epoch, seedKey, hashes),
     setInteractive: (on) => canvas.setInteractive(on),
     setSpawn: (sp) => {
       canvas.setSpawn(sp);
       spawnOut.textContent = sp === null ? 'spawn …' : spawnText(sp);
     },
-  }, clock);
+  });
 
   /** The biome of the table row under the pointer (§5.3): highlighted while the map shows the biome layer. */
   let hoveredBiome: number | null = null;
