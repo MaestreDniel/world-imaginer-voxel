@@ -123,7 +123,7 @@ import { createFrameStep, eyeSkyLight } from './frameStep';
 import { createMapOverlay, followSession, frameCapFor, worldMapView, type MapOverlay } from './mapOverlay';
 import { createReloader, createWorldUrl, installLeaveGuard, navigateTo, type Reloader } from './reload';
 import { Y_MAX, Y_MIN, type WorldQuery } from './query';
-import { createTeleport, type Teleport } from './teleport';
+import { createTeleport, type Teleport, type TeleportLanding } from './teleport';
 
 /** The capture and test options (ruling P48). */
 export interface WorldPageOptions {
@@ -155,6 +155,11 @@ export interface WorldPageOptions {
    * when it changes, records every rendered frame into `record`, and calls `done` when `pose` returns null.
    */
   readonly bench?: BenchDriver;
+  /**
+   * The smoke's test hook (SP4c spec §8.6), given by `main.ts` under `?wiTest=1` only: the streaming route counts the
+   * map's tile requests on the pool it hands the overlay, records each teleport's landing, and attaches its parts.
+   */
+  readonly wiTest?: WiTestInstall;
 }
 
 declare global {
@@ -659,6 +664,138 @@ export function flushOnPageHide(
   const onPageHide = (): void => writer.flush();
   win.addEventListener('pagehide', onPageHide);
   return () => win.removeEventListener('pagehide', onPageHide);
+}
+
+/**
+ * The browser smoke's test hook (SP4c spec §8.6): `window.__wiTest`, installed by `main.ts` before the world page mounts
+ * and only under `?wiTest=1` (absent otherwise). The smoke reads the leak baseline and check through it (the session's
+ * listeners, the pending timers, the map's tile requests), closes the overlay and disposes the tool, forces a fatal
+ * error, and reads the controls owner, the stale count and the last teleport's landing.
+ */
+export interface WiTest {
+  /** The session's listeners (`WorldSession.listenerCount`). */
+  listenerCount(): number;
+  /** The pending `setTimeout` and `setInterval` timers, through the counting wrappers `installWiTest` put on the window. */
+  timers(): number;
+  /** The `tile` calls on the pool the map overlay was given, since the hook was installed. */
+  tileRequests(): number;
+  /** Closes the map overlay (`MapOverlay.close`). */
+  closeOverlay(): void;
+  /** Disposes the mounted map tool, not the overlay (whose own listeners are part of the baseline); no API remounts it. */
+  disposeTool(): void;
+  /** A fatal error after the reveal, through the page's `fail` (the failure panel). */
+  forceFatal(): void;
+  /** The controls owner, 'world' or 'map' (SP4c spec §2.3). */
+  owner(): string;
+  /** The coordinator's stale count (`CoordinatorCounts.stale`, SP4c spec §4.5). */
+  stale(): number;
+  /**
+   * The last teleport's landing as `onArrive` received it, `water` null for −∞ (which CDP's `returnByValue` cannot
+   * carry); null before one.
+   */
+  lastLanding(): { readonly surface: number; readonly water: number | null; readonly y: number } | null;
+}
+
+/** The parts of the hook the world page supplies once its streaming route runs. */
+export type WiTestPage = Pick<WiTest, 'listenerCount' | 'closeOverlay' | 'disposeTool' | 'forceFatal' | 'owner' | 'stale'>;
+
+/** The hook's installation, which `main.ts` hands the page (`WorldPageOptions.wiTest`). */
+export interface WiTestInstall {
+  readonly hook: WiTest;
+  /** The page's parts; until then they throw. */
+  attach(page: WiTestPage): void;
+  /** `pool` with its `tile` calls counted into `tileRequests`. */
+  countTiles<P extends { tile(...args: never[]): unknown }>(pool: P): P;
+  /** Records a teleport's landing for `lastLanding`. */
+  landed(landing: TeleportLanding): void;
+}
+
+/** A window's four timer functions, replaced in place by `countPendingTimers`. */
+export interface TimerHost {
+  setTimeout: Window['setTimeout'];
+  clearTimeout: Window['clearTimeout'];
+  setInterval: Window['setInterval'];
+  clearInterval: Window['clearInterval'];
+}
+
+/**
+ * Wraps `win`'s timer functions so that the timers pending at any moment can be counted: a timeout until it fires or is
+ * cleared, an interval until it is cleared. The ids are the real ones. Returns the counter.
+ */
+export function countPendingTimers(win: TimerHost): () => number {
+  const pending = new Set<number>();
+  const setT = win.setTimeout.bind(win);
+  const clearT = win.clearTimeout.bind(win);
+  const setI = win.setInterval.bind(win);
+  const clearI = win.clearInterval.bind(win);
+  win.setTimeout = ((handler: TimerHandler, ms?: number, ...args: unknown[]): number => {
+    if (typeof handler !== 'function') return setT(handler, ms, ...args);
+    const fn = handler as (...a: unknown[]) => void;
+    const id = setT((...a: unknown[]) => {
+      pending.delete(id);
+      fn(...a);
+    }, ms, ...args);
+    pending.add(id);
+    return id;
+  }) as Window['setTimeout'];
+  win.clearTimeout = ((id?: number): void => {
+    if (id !== undefined) pending.delete(id);
+    clearT(id);
+  }) as Window['clearTimeout'];
+  win.setInterval = ((handler: TimerHandler, ms?: number, ...args: unknown[]): number => {
+    const id = setI(handler, ms, ...args);
+    pending.add(id);
+    return id;
+  }) as Window['setInterval'];
+  win.clearInterval = ((id?: number): void => {
+    if (id !== undefined) pending.delete(id);
+    clearI(id);
+  }) as Window['clearInterval'];
+  return () => pending.size;
+}
+
+/** `pool` with its `tile` calls counted through `onTile`; every other member (getters included) read from `pool`. */
+export function countTileCalls<P extends { tile(...args: never[]): unknown }>(pool: P, onTile: () => void): P {
+  const tile = (...args: never[]): unknown => {
+    onTile();
+    return pool.tile(...args);
+  };
+  return new Proxy(pool, {
+    get: (target, key) => (key === 'tile' ? tile : Reflect.get(target, key, target)),
+  });
+}
+
+/**
+ * Installs the smoke's test hook on `win` (`win.__wiTest`), the timer counters first; `main.ts` calls it under
+ * `?wiTest=1` only.
+ */
+export function installWiTest(win: TimerHost & { __wiTest?: WiTest }): WiTestInstall {
+  const timers = countPendingTimers(win);
+  let page: WiTestPage | null = null;
+  let tiles = 0;
+  let landing: { readonly surface: number; readonly water: number | null; readonly y: number } | null = null;
+  const attached = (): WiTestPage => {
+    if (page === null) throw new Error('__wiTest: the world page is not attached yet (it attaches after the reveal)');
+    return page;
+  };
+  const hook: WiTest = {
+    listenerCount: () => attached().listenerCount(),
+    timers,
+    tileRequests: () => tiles,
+    closeOverlay: () => attached().closeOverlay(),
+    disposeTool: () => attached().disposeTool(),
+    forceFatal: () => attached().forceFatal(),
+    owner: () => attached().owner(),
+    stale: () => attached().stale(),
+    lastLanding: () => landing,
+  };
+  win.__wiTest = hook;
+  return {
+    hook,
+    attach(p) { page = p; },
+    countTiles: (pool) => countTileCalls(pool, () => { tiles++; }),
+    landed(l) { landing = { surface: l.surface, water: Number.isFinite(l.water) ? l.water : null, y: l.y }; },
+  };
 }
 
 /**
@@ -1639,7 +1776,10 @@ export function mountWorldPage(root: HTMLElement, q: WorldQuery, hash: string, o
       fly,
       state: frame,
       // F5 after a teleport returns to where the user jumped (SP4c spec §1.6, D20); flight never rewrites the search.
-      onArrive: () => worldUrl.arrived(fly),
+      onArrive: (_x, _z, landing) => {
+        worldUrl.arrived(fly);
+        opts.wiTest?.landed(landing);
+      },
       // "Could not teleport" (D26): in `.world-notices`, or in the tool's row while the map covers the 3D (D27).
       onFail: () => notices.show('Could not teleport', { kind: 'warn', timeoutMs: 4000 }),
     });
@@ -1652,7 +1792,8 @@ export function mountWorldPage(root: HTMLElement, q: WorldQuery, hash: string, o
       worldHost: host,
       canvas,
       session,
-      pool: workers,
+      // The smoke's hook counts the map's tile requests on it (?wiTest=1 only).
+      pool: opts.wiTest?.countTiles(workers) ?? workers,
       driver: previewDriver,
       relay,
       storage,
@@ -1681,6 +1822,16 @@ export function mountWorldPage(root: HTMLElement, q: WorldQuery, hash: string, o
       notices,
     });
     mapRef = mapOverlay;
+    // The smoke's test hook (SP4c spec §8.6; ?wiTest=1 only): the leak check's session listeners, the overlay closed and
+    // its tool disposed, a forced fatal, the owner and the stale count.
+    opts.wiTest?.attach({
+      listenerCount: () => session.listenerCount(),
+      closeOverlay: () => mapOverlay.close(),
+      disposeTool: () => mapOverlay.tool?.dispose(),
+      forceFatal: () => fail('A failure forced by the test hook.', new Error('forced by the smoke (?wiTest=1)')),
+      owner: () => mapOverlay.owner,
+      stale: () => coordinator.counts(counts).stale,
+    });
     // Disposed before the input, the driver and the page's subscribe: a gesture still open ends through the tool.
     teardown.push(() => mapOverlay.dispose());
     // Undo and redo belong to the session (SP4c spec §2.4): live for the page's lifetime, map shown or hidden, either

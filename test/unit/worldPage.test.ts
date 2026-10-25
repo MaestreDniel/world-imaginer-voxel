@@ -20,8 +20,9 @@ import { DEFAULT_MAP_STATE, decodeMapState, openMapSession, type MapView } from 
 import { WORLD_MAP_BPP, worldMapView } from '../../src/ui/world/mapOverlay';
 import { createReloader, createWorldUrl, worldHash, type HereState } from '../../src/ui/world/reload';
 import {
-  createRdControl, createUndoNotice, createWorldNotices, everyFrameUntil, failBeforeReveal, flushOnPageHide, handleContextLoss, handleStreamEvent, helpChange,
-  offerLowerRd, onDriverStatus, rdShownOnLoad, releaseOnFailure, reloadRd, runTeardown, stopAfterFailure, UNDO_NOTICE_MS,
+  countPendingTimers, countTileCalls, createRdControl, createUndoNotice, createWorldNotices, everyFrameUntil, failBeforeReveal, flushOnPageHide, handleContextLoss,
+  handleStreamEvent, helpChange, installWiTest, offerLowerRd, onDriverStatus, rdShownOnLoad, releaseOnFailure, reloadRd, runTeardown, stopAfterFailure, UNDO_NOTICE_MS,
+  type WiTest, type WiTestPage,
 } from '../../src/ui/world/worldPage';
 import { installDom, type FakeElement } from './fixtures/domShim';
 
@@ -829,7 +830,7 @@ describe('the world\'s URL (createWorldUrl, SP4c spec §1.6, D20)', () => {
     expect(src).not.toMatch(/['"]hashchange['"]/);
     expect(src).not.toMatch(/hereUrl\(fly, [^)]*, hash\)/);
     expect(src).toMatch(/viewChanged: \(\) => worldUrl\.viewChanged\(\)/);
-    expect(src).toMatch(/onArrive: \(\) => worldUrl\.arrived\(fly\)/);
+    expect(src).toMatch(/onArrive: \(_x, _z, landing\) => \{\s*worldUrl\.arrived\(fly\);/);
     expect(src).toMatch(/teardown\.push\(\(\) => urlWriter\.dispose\(\)\)/);
   });
 
@@ -888,6 +889,114 @@ describe('the world\'s URL (createWorldUrl, SP4c spec §1.6, D20)', () => {
     // The page's one teleport is the one the release list reaches.
     expect(src).toMatch(/^\s*let teleport: Teleport \| null = null;$/m);
     expect(src).toMatch(/^\s*teleport = teleporter;$/m);
+  });
+});
+
+describe('the smoke\'s test hook, window.__wiTest under ?wiTest=1 (SP4c spec §8.6)', () => {
+  beforeEach(() => { vi.useFakeTimers(); });
+  afterEach(() => { vi.useRealTimers(); });
+
+  /** A window's four timer functions, over the fake clock. */
+  const timerWindow = () => ({
+    setTimeout: ((fn: () => void, ms?: number, ...args: unknown[]) => globalThis.setTimeout(fn, ms, ...args)) as unknown as Window['setTimeout'],
+    clearTimeout: ((id?: number) => globalThis.clearTimeout(id)) as Window['clearTimeout'],
+    setInterval: ((fn: () => void, ms?: number, ...args: unknown[]) => globalThis.setInterval(fn, ms, ...args)) as unknown as Window['setInterval'],
+    clearInterval: ((id?: number) => globalThis.clearInterval(id)) as Window['clearInterval'],
+  });
+
+  test('countPendingTimers counts the timeouts not yet fired or cleared and the intervals not yet cleared', () => {
+    const win = timerWindow();
+    const pending = countPendingTimers(win);
+    expect(pending()).toBe(0);
+    const fired = vi.fn();
+    const a = win.setTimeout(fired, 100, 'x', 2);
+    const b = win.setTimeout(() => {}, 300);
+    const i = win.setInterval(() => {}, 50);
+    expect(pending()).toBe(3);
+    vi.advanceTimersByTime(100);
+    // The handler runs with its arguments, and the timer is no longer pending.
+    expect(fired).toHaveBeenCalledWith('x', 2);
+    expect(pending()).toBe(2);
+    win.clearTimeout(b);
+    win.clearTimeout(a);
+    expect(pending()).toBe(1);
+    vi.advanceTimersByTime(500);
+    expect(pending()).toBe(1);
+    win.clearInterval(i);
+    expect(pending()).toBe(0);
+    // The ids are the real ones: a cleared timer never fires.
+    const never = vi.fn();
+    win.clearTimeout(win.setTimeout(never, 10));
+    vi.advanceTimersByTime(20);
+    expect(never).not.toHaveBeenCalled();
+    expect(pending()).toBe(0);
+  });
+
+  test('countTileCalls counts the pool\'s tile calls and passes everything else through, getters included', async () => {
+    let epoch = 3;
+    const pool = {
+      get epoch() { return epoch; },
+      size: 4,
+      tile: vi.fn(async (req: { tx: number }, priority: number) => ({ req, priority })),
+      point: vi.fn(async (x: number) => x * 2),
+    };
+    let n = 0;
+    const counted = countTileCalls(pool, () => { n++; });
+    expect(await counted.tile({ tx: 1 }, 5)).toEqual({ req: { tx: 1 }, priority: 5 });
+    await counted.tile({ tx: 2 }, 6);
+    expect(n).toBe(2);
+    expect(pool.tile).toHaveBeenCalledTimes(2);
+    expect(await counted.point(4)).toBe(8);
+    expect(n).toBe(2);
+    expect(counted.size).toBe(4);
+    epoch = 7;
+    expect(counted.epoch).toBe(7);
+  });
+
+  test('installWiTest puts the hook on the window: timers at once; the page\'s parts after attach (throwing before); lastLanding with null water for −∞', async () => {
+    const win: ReturnType<typeof timerWindow> & { __wiTest?: WiTest } = timerWindow();
+    const install = installWiTest(win);
+    const hook = install.hook;
+    expect(win.__wiTest).toBe(hook);
+    win.setTimeout(() => {}, 100);
+    expect(hook.timers()).toBe(1);
+    expect(() => hook.owner()).toThrow(/not attached/);
+    expect(hook.tileRequests()).toBe(0);
+    expect(hook.lastLanding()).toBeNull();
+    const page: WiTestPage = {
+      listenerCount: () => 2,
+      closeOverlay: vi.fn(),
+      disposeTool: vi.fn(),
+      forceFatal: vi.fn(),
+      owner: () => 'map',
+      stale: () => 17,
+    };
+    install.attach(page);
+    expect([hook.listenerCount(), hook.owner(), hook.stale()]).toEqual([2, 'map', 17]);
+    hook.closeOverlay();
+    hook.disposeTool();
+    hook.forceFatal();
+    expect([page.closeOverlay, page.disposeTool, page.forceFatal].map((f) => (f as ReturnType<typeof vi.fn>).mock.calls.length)).toEqual([1, 1, 1]);
+    const pool = install.countTiles({ tile: async () => 1 });
+    await pool.tile();
+    expect(hook.tileRequests()).toBe(1);
+    install.landed({ surface: 66, water: Number.NEGATIVE_INFINITY, y: 90 });
+    expect(hook.lastLanding()).toEqual({ surface: 66, water: null, y: 90 });
+    install.landed({ surface: 40, water: 63, y: 87 });
+    expect(hook.lastLanding()).toEqual({ surface: 40, water: 63, y: 87 });
+  });
+
+  test('the page wires the hook only when given one: the overlay\'s pool counted, the landing recorded, the page\'s parts attached', () => {
+    // The page's post-reveal wiring cannot be mounted in the unit project, so its source is pinned.
+    const src = readFileSync(new URL('../../src/ui/world/worldPage.ts', import.meta.url), 'utf8');
+    // The page itself never reads the window's hook: without the flag there is none, and with it main.ts hands it over.
+    expect(src.slice(src.indexOf('export function mountWorldPage('))).not.toMatch(/__wiTest/);
+    expect(src).toMatch(/pool: opts\.wiTest\?\.countTiles\(workers\) \?\? workers,/);
+    expect(src).toMatch(/opts\.wiTest\?\.landed\(landing\);/);
+    expect(src).toMatch(/opts\.wiTest\?\.attach\(\{/);
+    const main = readFileSync(new URL('../../src/main.ts', import.meta.url), 'utf8');
+    expect(main).toMatch(/query\.get\('wiTest'\) === '1'/);
+    expect(main).toMatch(/installWiTest\(window\)/);
   });
 });
 

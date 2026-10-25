@@ -12,6 +12,8 @@ import type { Seed64 } from './core/hash';
  * read by `test/tools/panoramas.ts`. `?bench=medium` is the streaming bench (SP4b spec §8.3, `ui/world/bench.ts`): the
  * world page at seed 42 and RD 12, then a 95 s scripted flight through the page's own streaming frame, honouring
  * `?workers` and `?renderer`; its JSON is read by measureChrome (`&shot=<name>` freezes it for a review shot).
+ * `?wiTest=1` (the browser smoke, SP4c spec §8.6) installs `window.__wiTest` on the world route before anything mounts:
+ * the pending-timer counters first, then the world page attaches its parts after the reveal; absent without the flag.
  */
 
 const root = document.getElementById('app');
@@ -28,6 +30,8 @@ function showBootFailure(error: unknown): void {
 const loadManifest = (): Promise<unknown> => fetch('/panoramas/manifest.json').then((r) => (r.ok ? r.json() : null));
 
 async function world(query: URLSearchParams): Promise<void> {
+  // Before the page or the start screen sets a timer, so the smoke's pending-timer count sees every one.
+  const wiTest = query.get('wiTest') === '1' ? (await import('./ui/world/worldPage')).installWiTest(window) : null;
   const [{ parseWorldQuery }, { startModeOf, mountStartScreen }, { cryptoSeed }] = await Promise.all([
     import('./ui/world/query'),
     import('./ui/world/startScreen'),
@@ -35,7 +39,8 @@ async function world(query: URLSearchParams): Promise<void> {
   ]);
   const q = parseWorldQuery(query);
   // Without `shot`, `time` is ignored (ruling P48).
-  const opts = q.shot ? { hud: false, overlay: false, timeHours: q.time ?? 8 } : {};
+  const capture = q.shot ? { hud: false, overlay: false, timeHours: q.time ?? 8 } : {};
+  const opts = wiTest === null ? capture : { ...capture, wiTest };
   const enter = async (): Promise<void> => {
     const { mountWorldPage } = await import('./ui/world/worldPage');
     await mountWorldPage(app, q, location.hash, opts);

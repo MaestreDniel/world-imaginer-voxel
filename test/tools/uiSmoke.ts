@@ -74,6 +74,22 @@
  *     page error; then the help (H), whose `#setting-rd` shows the RD in force, 4, even with the batch run's 6 saved
  *     (rulings R8), and 6 chosen there: within 30 s the HUD shows `RD 6` and a larger `revealed`, with no navigation (a token set on `window` after the
  *     reveal is still there); `stream.png` and `stream-mesh.png`;
+ *   - overlay (SP4c spec §8.6), `/?rd=4&renderer=batch&wiTest=1` at 1920 × 1080 (`OVERLAY_VIEWPORT`, put back to
+ *     `VIEWPORT` at the step's end), through the page's test hook `window.__wiTest` (`?wiTest=1` only): the leak
+ *     baseline before the first M (CDP's listeners on window and document, the session's listeners, the pending
+ *     timers); M opens the map in full screen (one `canvas[data-renderer]`, the tiles within 5 s and the arrow at the
+ *     camera with no edit, the Density tab's slice through "Edit in Density"); a click 300 px east of the arrow
+ *     teleports (the camera within 1 block of the clicked point, y = min(400, max(surface, water) + 24), the map closed,
+ *     the search's `at` rewritten, the revealed count falling then growing within 10 s); side by side (the 3D half the
+ *     window, stored; the panel beside the map at 960 px, stacked at 800 px); live edits (`density.detailAmpHi`, Ctrl+Z,
+ *     `climate.C`'s wavelength, the desert T bound; then Ctrl+Z and Ctrl+Y from the 3D with their notices), each with
+ *     the stale count above 0 then 0 within 30 s; the pointer lock on the 3D half (W moves the camera with the map open,
+ *     Esc gives the map the controls with the drawer open; skipped with the reason when refused); the leak check (the
+ *     overlay closed and the tool disposed through the hook: listeners, session listeners and timers equal the
+ *     baseline, no tile request over 1 s); a reload keeping side by side and the edits; a forced fatal with the map
+ *     open (the overlay closed, the failure panel with "Copy details", no page error);
+ *   - overlay-mesh, `…&renderer=mesh&wiTest=1`: the map in full screen, the teleport and the terrain Apply, side by side;
+ *     both overlay steps print the in-world preview's `lastLatencyMs` from the toolbar (information only, §6.4);
  * - console: no exception, console error or failed load, except the known favicon.ico 404 and Chrome's notice that it
  *   blocked a world page's `beforeunload` prompt when a step left it (`leaveGuardLog`); every step ran.
  * With --shots DIR it then writes the spec §12 screenshots into DIR, at seed 42 from a newly loaded page (the
@@ -90,8 +106,9 @@
  * line, the drawer at its tallest, the pointer on a top voxel — floating_islands' on the ground under an island), then
  * `preset-archipelago-map.png` (`biome`) and `preset-floating_islands-islandMask.png` (`islandMask`): 4096 × 4096
  * blocks centred on the window at 16 blocks/px, a 256 × 256 px clip of the map.
- * The 3D steps save `start.png`, `world.png`, `world-mesh.png`, `world-mesh-water.png`, `stream.png` and
- * `stream-mesh.png` into DIR as they run, with --shots only.
+ * The 3D steps save `start.png`, `world.png`, `world-mesh.png`, `world-mesh-water.png`, `stream.png`,
+ * `stream-mesh.png`, `review-overlay-full.png` and `review-overlay-split.png` (SP4c spec §8.7, 1920 × 1080) into DIR as
+ * they run, with --shots only.
  * Options: --skip-build, --profile-dir DIR, --shots DIR. The exit code is 0 only when every check passes.
  */
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
@@ -444,12 +461,13 @@ export function presetProblems(text: string, expected: { readonly name: string; 
  * history and "4 modified" checks are untouched; SP3e's `preset profiles` step (its own id: `presets` is the preset-file
  * step) follows them on pages of its own. SP4a's 3D steps `start`, `world` and `world-mesh` (spec §9.6) come next, on
  * pages of their own, inside `runSmoke`, then SP4b's `stream` (spec §8.6: one step for both renderers, since the runner
- * refuses a repeated id); `console` stays last, the closing step main() runs after `runSmoke` (ruling P52).
+ * refuses a repeated id), then SP4c's `overlay` and `overlay-mesh` (spec §8.6: one step per renderer, each on its own
+ * page); `console` stays last, the closing step main() runs after `runSmoke` (ruling P52).
  */
 export const SMOKE_STEPS = [
   'selftest', 'load', 'number', 'knot', 'slider', 'box', 'profile', 'presets', 'undo/redo', 'reload', 'cut line', 'voxels', 'tabs', 'rule',
   'density tab', 'density node', 'density mute', 'density json', 'density narrow', 'density horizontal', 'density drag', 'density times',
-  'preset profiles', 'start', 'world', 'world-mesh', 'stream', 'console',
+  'preset profiles', 'start', 'world', 'world-mesh', 'stream', 'overlay', 'overlay-mesh', 'console',
 ] as const;
 export type SmokeStep = (typeof SMOKE_STEPS)[number];
 
@@ -510,6 +528,124 @@ export const PARITY_MAX_SHARE = 0.01;
  */
 export function worldMeshQuery(renderer: 'batch' | 'mesh', v: ParityView = PARITY_VIEW): string {
   return `?rd=${WORLD_RD}&renderer=${renderer}&at=${v.at.x},${v.at.z}&y=${v.y}&yaw=${v.yaw}&pitch=${v.pitch}&shot=1`;
+}
+
+// ---------------------------------------------------------------- the overlay steps (SP4c spec §8.6)
+
+/** The overlay steps' runs, in order: the step id and the forced section renderer. */
+export const OVERLAY_RUNS: ReadonlyArray<{ readonly step: 'overlay' | 'overlay-mesh'; readonly renderer: 'batch' | 'mesh' }> = [
+  { step: 'overlay', renderer: 'batch' },
+  { step: 'overlay-mesh', renderer: 'mesh' },
+];
+
+/** The query of one overlay load: RD 4, the renderer forced, and the page's test hook (`window.__wiTest`). */
+export function overlayQuery(renderer: 'batch' | 'mesh'): string {
+  return `?rd=${WORLD_RD}&renderer=${renderer}&wiTest=1`;
+}
+
+/**
+ * The overlay steps' viewport (spec §8.6, 1920 × 1080: each half of mode B 960 px wide, the panel beside the map), set
+ * by `Emulation.setDeviceMetricsOverride` and put back to `VIEWPORT` at each step's end, as `density narrow` does.
+ */
+export const OVERLAY_VIEWPORT = { width: 1920, height: 1080 } as const;
+/** The narrowed window of the split check: each half 800 px, under the map's 900 px container query (the panel stacks). */
+export const OVERLAY_NARROW_WIDTH = 1600;
+/** The review screenshots (`--shots`, spec §8.7): mode A over the world, mode B with the arrow. */
+export const OVERLAY_SHOTS = { full: 'review-overlay-full.png', split: 'review-overlay-split.png' } as const;
+/** How long the map has to draw its tiles after the first M, without any edit (the replayed source, spec §4.2). */
+export const OVERLAY_TILES_MS = 5000;
+/** How long the HUD's revealed count has to grow again after a teleport. */
+export const OVERLAY_REVEAL_MS = 10_000;
+/** How long the world has to settle (the stale count back to 0) after a live edit. */
+export const OVERLAY_APPLY_MS = 30_000;
+
+/** Blocks above the surface or the water a teleport arrives at (`LANDING_ABOVE` in `src/ui/world/teleport.ts`; a unit test keeps them equal). */
+export const LANDING_ABOVE = 24;
+/** The arrival's highest y (`LANDING_MAX_Y` in `src/ui/world/teleport.ts`; a unit test keeps them equal). */
+export const LANDING_MAX_Y = 400;
+
+/** The camera's y over a landing as `__wiTest.lastLanding()` reports it (`water` null for −∞): min(400, max(surface, water) + 24). */
+export function smokeLandingY(l: { readonly surface: number; readonly water: number | null }): number {
+  return Math.min(LANDING_MAX_Y, Math.max(l.surface, l.water ?? Number.NEGATIVE_INFINITY) + LANDING_ABOVE);
+}
+
+/** The map's zoom at its first opening in the world, blocks per px (`WORLD_MAP_BPP` in `src/ui/world/mapOverlay.ts`; a unit test keeps them equal). */
+export const WORLD_MAP_BPP = 4;
+/** How far east of the arrow (the canvas centre) the teleport click lands, CSS px. */
+export const TELEPORT_EAST_PX = 300;
+
+/**
+ * The block a click at page point `click` targets on the map canvas `canvas` (its page box, DPR 1) showing a view
+ * centred on `camera` at `bpp` blocks/px (`screenToWorld`).
+ */
+export function teleportTarget(camera: { readonly x: number; readonly z: number }, canvas: Box, click: { readonly x: number; readonly y: number }, bpp: number): { readonly x: number; readonly z: number } {
+  return { x: camera.x + (click.x - canvas.x - canvas.width / 2) * bpp, z: camera.z + (click.y - canvas.y - canvas.height / 2) * bpp };
+}
+
+/** The HUD's "stale n / needed" row (SP4c spec §4.5), or null while the world is not stale. */
+export function parseHudStale(text: string): { readonly stale: number; readonly needed: number } | null {
+  const m = /^stale (\d+) \/ (\d+)$/m.exec(text);
+  return m === null ? null : { stale: Number(m[1]), needed: Number(m[2]) };
+}
+
+/** The driver's `lastLatencyMs` as the map toolbar's status prints it (`last edit → preview N ms`), or null before one. */
+export function previewMs(status: string): number | null {
+  const m = /^last edit → preview (\d+) ms(?: · |$)/.exec(status);
+  return m === null ? null : Number(m[1]);
+}
+
+/** The world settings' `localStorage` key (`SETTINGS_KEY` in `src/ui/settings.ts`; a unit test keeps them equal). */
+export const SETTINGS_KEY = 'wi.world.settings';
+
+/** The stored map mode in the world settings' JSON, or null when there is none or it is not one. */
+export function storedMapMode(json: string | null): 'full' | 'split' | null {
+  if (json === null) return null;
+  try {
+    const m = (JSON.parse(json) as { mapMode?: unknown } | null)?.mapMode;
+    return m === 'full' || m === 'split' ? m : null;
+  } catch {
+    return null;
+  }
+}
+
+/** One listener as CDP's `DOMDebugger.getEventListeners` describes it. */
+export interface CdpListener {
+  readonly type: string;
+  readonly useCapture: boolean;
+  readonly scriptId: string;
+  readonly lineNumber: number;
+  readonly columnNumber: number;
+}
+
+/** A listener's identity for the leak check: its target, type, phase and handler location. */
+export function listenerKey(target: 'window' | 'document', l: CdpListener): string {
+  return `${target} ${l.type}${l.useCapture ? ' capture' : ''} @${l.scriptId}:${l.lineNumber}:${l.columnNumber}`;
+}
+
+/** The listeners added since the baseline and those gone from it (as multisets), each sorted. */
+export function listenerDiff(baseline: readonly string[], now: readonly string[]): { readonly added: string[]; readonly gone: string[] } {
+  const left = new Map<string, number>();
+  for (const k of baseline) left.set(k, (left.get(k) ?? 0) + 1);
+  const added: string[] = [];
+  for (const k of now) {
+    const n = left.get(k) ?? 0;
+    if (n > 0) left.set(k, n - 1);
+    else added.push(k);
+  }
+  const gone: string[] = [];
+  for (const [k, n] of left) for (let i = 0; i < n; i++) gone.push(k);
+  return { added: added.sort(), gone: gone.sort() };
+}
+
+/**
+ * The leak check's verdict on the listeners: nothing added, nothing gone, except that the click hint's
+ * `pointerlockchange` listener on the document removes itself once the pointer locks (`worldPage.ts`), so it alone may
+ * be gone when the step's lock was granted.
+ */
+export function listenersLeakFree(diff: { readonly added: readonly string[]; readonly gone: readonly string[] }, lockGranted: boolean): boolean {
+  if (diff.added.length > 0) return false;
+  if (diff.gone.length === 0) return true;
+  return lockGranted && diff.gone.length === 1 && diff.gone[0]!.startsWith('document pointerlockchange @');
 }
 
 // ---------------------------------------------------------------- the stream step (SP4b spec §8.6)
@@ -1414,6 +1550,7 @@ async function runSmoke(t: Smoke): Promise<void> {
   await runDensity(t);
   await runPresetProfiles(t);
   await runWorld(t);
+  await runOverlay(t);
 }
 
 const statsOf = (s: SliceRead): SliceStatsText | null => parseSliceStats(s.stats);
@@ -2013,6 +2150,452 @@ async function runWorld(t: Smoke): Promise<void> {
     await p.until(`document.getElementById('world-help')?.hidden === true`, `${what}: the help closed`, 5000);
     await sleep(500);
     t.save(file, (await p.capture()).png);
+    t.check(t.errors.length === errors0, `${what}: no page error`, t.errors.slice(errors0));
+  }
+}
+
+// ---------------------------------------------------------------- the overlay steps (SP4c spec §8.6)
+
+/** The page expression "the map overlay is shown" (its host in `#app`, not `display: none`, with the tool's canvas). */
+const OVERLAY_SHOWN = `(() => { const o = document.getElementById('map-overlay'); return o !== null && o.style.display !== 'none' && o.querySelector('.map-canvas') !== null; })()`;
+/** The page expression "the map overlay is closed" (hidden, or removed by a dispose). */
+const OVERLAY_CLOSED = `(() => { const o = document.getElementById('map-overlay'); return o === null || o.style.display === 'none'; })()`;
+/** The page expression "mode B is shown" (`#world-host` on the right half). */
+const WORLD_SPLIT = `document.getElementById('world-host').classList.contains('split')`;
+/** The map canvas's page box (CSS px). */
+const MAP_CANVAS_BOX = `(() => { const r = document.querySelector('#map-overlay .map-canvas').getBoundingClientRect(); return { x: r.left, y: r.top, width: r.width, height: r.height }; })()`;
+/**
+ * The map canvas read in the page: the share of sampled pixels (every 6th px both ways) that are not the empty view's
+ * background `#15171b` (the tiles drawn), and the white pixels of the arrow within 10 px of the centre (the camera).
+ */
+const MAP_DRAWN = `(() => {
+  const c = document.querySelector('#map-overlay .map-canvas');
+  const d = c.getContext('2d').getImageData(0, 0, c.width, c.height).data;
+  let n = 0, drawn = 0, white = 0;
+  for (let y = 0; y < c.height; y += 6) for (let x = 0; x < c.width; x += 6) {
+    const k = 4 * (y * c.width + x);
+    n++;
+    if (d[k] !== 21 || d[k + 1] !== 23 || d[k + 2] !== 27) drawn++;
+  }
+  const cx = Math.floor(c.width / 2), cy = Math.floor(c.height / 2);
+  for (let y = cy - 10; y <= cy + 10; y++) for (let x = cx - 10; x <= cx + 10; x++) {
+    const k = 4 * (y * c.width + x);
+    if (d[k] >= 250 && d[k + 1] >= 250 && d[k + 2] >= 250) white++;
+  }
+  return { share: n === 0 ? 0 : drawn / n, white, width: c.width, height: c.height };
+})()`;
+/** The world canvas's width in CSS px. */
+const WORLD_CANVAS_WIDTH = `document.querySelector('canvas[data-renderer]').getBoundingClientRect().width`;
+/** Whether the tool's side panel sits beside its map view (true), under it (false), or is missing (null). */
+const PANEL_BESIDE = `(() => {
+  const v = document.querySelector('#map-overlay .map-view')?.getBoundingClientRect();
+  const s = document.querySelector('#map-overlay .map-side')?.getBoundingClientRect();
+  if (v === undefined || s === undefined || s.width === 0) return null;
+  if (s.left >= v.right - 1) return true;
+  if (s.top >= v.bottom - 1) return false;
+  return null;
+})()`;
+/** The density tree's "Edit in Density" link in the Parameters tab. */
+const DENSITY_LINK = '.pp-control[data-path="density.defs"] .pp-link';
+/** The world notices' texts (`.world-notices`), joined. */
+const WORLD_NOTICES = `document.getElementById('world-notices')?.textContent ?? ''`;
+/** The stored map mode, read from the page's settings. */
+const STORED_MODE = `localStorage.getItem(${JSON.stringify(SETTINGS_KEY)})`;
+
+/** Opens the closed sections of the parameter panel around the element `find` evaluates to, outermost first (a click on each toggle). */
+function revealParam(find: string): string {
+  return `(() => {
+    const e = ${find};
+    if (e === null) return false;
+    const closed = [];
+    for (let b = e.closest('.pp-section-body'); b !== null; b = b.parentElement?.closest('.pp-section-body') ?? null) if (b.hidden) closed.push(b);
+    for (const b of closed.reverse()) b.parentElement.querySelector(':scope > .pp-section-head > .pp-toggle').click();
+    return true;
+  })()`;
+}
+
+/** The listeners on `window` and `document` (CDP `DOMDebugger.getEventListeners`), as `listenerKey`s. */
+async function pageListeners(p: Page): Promise<string[]> {
+  const out: string[] = [];
+  for (const target of ['window', 'document'] as const) {
+    const r = await p.cdp.send('Runtime.evaluate', { expression: target, returnByValue: false });
+    const objectId = (r['result'] as { objectId?: string }).objectId;
+    if (objectId === undefined) throw new Error(`no remote object for ${target}`);
+    const l = await p.cdp.send('DOMDebugger.getEventListeners', { objectId });
+    out.push(...(l['listeners'] as CdpListener[]).map((x) => listenerKey(target, x)));
+    await p.cdp.send('Runtime.releaseObject', { objectId });
+  }
+  return out;
+}
+
+async function setViewport(p: Page, width: number, height: number): Promise<void> {
+  await p.cdp.send('Emulation.setDeviceMetricsOverride', { width, height, deviceScaleFactor: 1, mobile: false });
+  await sleep(300);
+}
+
+/** M with real key input, the focus moved out of every field first (the key map's `map` action, SP4c spec §2.4). */
+async function pressM(p: Page): Promise<void> {
+  await p.blur();
+  await p.key('m', 'KeyM', 77, 0, 'm');
+}
+
+/** The leak baseline (spec §8.6 step 1), read on the baseline's document. */
+interface LeakBaseline { readonly listeners: string[]; readonly sessionListeners: number; readonly timers: number }
+
+/**
+ * Waits until the page's pending timers read the same twice 500 ms apart (the reveal's fade and the map chunk's 2 s
+ * preload have fired), then returns that count.
+ */
+async function steadyTimers(p: Page): Promise<number> {
+  let last = await p.eval<number>('__wiTest.timers()');
+  for (let i = 0; i < 20; i++) {
+    await sleep(500);
+    const now = await p.eval<number>('__wiTest.timers()');
+    if (now === last) return now;
+    last = now;
+  }
+  return last;
+}
+
+/**
+ * Steps 2 and 3 of the overlay (spec §8.6), shared by both runs: M opens the map in mode A over the world (switched
+ * to it through the header when B is stored), one `canvas[data-renderer]`, the arrow at the camera, the tiles within
+ * 5 s without an edit, the Density tab's slice without an edit; then a click 300 px east of the arrow teleports.
+ */
+async function overlayOpenAndTeleport(t: Smoke, what: string, shot: string | null): Promise<void> {
+  const p = t.page;
+  const hud = async (): Promise<HudRead | null> => parseHud(await p.eval<string>(HUD_TEXT));
+  await pressM(p);
+  await p.until(OVERLAY_SHOWN, `${what}: the overlay after M`, 15_000);
+  if (await p.eval<boolean>(WORLD_SPLIT)) {
+    await p.click('#map-mode-full');
+    await p.until(`!(${WORLD_SPLIT})`, `${what}: full screen through the header`, 5000);
+    console.log('  (the stored mode was side by side: switched to full screen through the header)');
+  }
+  t.check(await p.eval<string>('__wiTest.owner()') === 'map', `${what}: M opens the map in full screen, and the map owns the controls`);
+  const drawn = await p.eval<string[]>(DRAWN_BY);
+  t.check(drawn.length === 1, `${what}: exactly one canvas[data-renderer] with the overlay open (GOV-8)`, drawn);
+  try {
+    const ms = await p.until(`(${MAP_DRAWN}).share > 0.5`, `${what}: the map's tiles`, OVERLAY_TILES_MS);
+    const m = await p.eval<{ share: number; white: number; width: number; height: number }>(MAP_DRAWN);
+    t.check(true, `${what}: tiles drawn ${Math.round(ms)} ms after the map showed, without an edit (${(m.share * 100).toFixed(0)} % of the ${m.width} × ${m.height} view)`);
+  } catch (e) {
+    t.check(false, `${what}: tiles drawn within ${OVERLAY_TILES_MS / 1000} s without an edit`, e instanceof Error ? e.message : String(e));
+  }
+  // The arrow redraws at most 30 times a second: one more frame for it.
+  await sleep(200);
+  const arrow = await p.eval<{ share: number; white: number }>(MAP_DRAWN);
+  t.check(arrow.white >= 20, `${what}: the arrow is drawn at the camera, the view's centre (${arrow.white} white px)`, arrow);
+  // The drawer has no tab bar while closed: the panel's "Edit in Density" link opens it (`openTree`, SP3d spec §1.1).
+  if (!(await p.eval<boolean>(DENSITY_SHOWN))) {
+    await p.click('#map-tab-parameters');
+    if (!(await p.eval<boolean>(revealParam(`document.querySelector(${JSON.stringify(DENSITY_LINK)})`)))) throw new Error(`no ${DENSITY_LINK}`);
+    await p.click(DENSITY_LINK);
+  }
+  t.check(await p.eval<boolean>(DENSITY_SHOWN), `${what}: "Edit in Density" opens the drawer's Density tab`);
+  try {
+    await p.until(`/^\\d+²$/.test(document.querySelector('.sv > .sv-status').textContent)`, `${what}: the Density tab's slice`, 30_000);
+    t.check(true, `${what}: the Density tab's slice draws without an edit (${(await p.slice()).status}, ${(await p.slice()).plane})`);
+  } catch (e) {
+    t.check(false, `${what}: the Density tab's slice draws without an edit`, e instanceof Error ? e.message : String(e));
+  }
+  if (shot !== null) {
+    await sleep(300);
+    t.save(shot, (await p.capture()).png);
+  }
+
+  // Step 3: the teleport.
+  const before = await hud();
+  if (before === null) {
+    t.check(false, `${what}: the HUD shows the camera before the teleport`, await p.eval<string>(HUD_TEXT));
+    return;
+  }
+  const box = await p.eval<Box>(MAP_CANVAS_BOX);
+  const click = { x: Math.round(box.x + box.width / 2 + TELEPORT_EAST_PX), y: Math.round(box.y + box.height / 2) };
+  const target = teleportTarget(before, box, click, WORLD_MAP_BPP);
+  const search0 = await p.eval<string>('location.search');
+  await p.clickAt(click.x, click.y);
+  try {
+    await p.until(`__wiTest.lastLanding() !== null && (${OVERLAY_CLOSED})`, `${what}: the arrival with the map closed`, 10_000);
+  } catch (e) {
+    t.check(false, `${what}: the click 300 px east of the arrow teleports and closes the map (full screen)`, e instanceof Error ? e.message : String(e));
+    return;
+  }
+  t.check(true, `${what}: the click 300 px east of the arrow teleports and the map closes (full screen)`);
+  // The HUD refreshes every 250 ms.
+  await sleep(600);
+  const after = await hud();
+  const landing = await p.eval<{ surface: number; water: number | null; y: number } | null>('__wiTest.lastLanding()');
+  const near = after !== null && Math.abs(after.x - target.x) <= 1 && Math.abs(after.z - target.z) <= 1;
+  t.check(near, `${what}: the camera at (${after?.x ?? '?'}, ${after?.z ?? '?'}), within 1 block of the clicked point (${target.x.toFixed(1)}, ${target.z.toFixed(1)})`, { before, after, target });
+  const want = landing === null ? null : smokeLandingY(landing);
+  t.check(landing !== null && landing.y === want, `${what}: the landing y ${landing?.y ?? '?'} = min(${LANDING_MAX_Y}, max(surface ${landing?.surface ?? '?'}, water ${landing?.water ?? '−∞'}) + ${LANDING_ABOVE})`, landing);
+  t.check(after !== null && landing !== null && Math.abs(after.y - landing.y) <= 0.05 + 1e-9, `${what}: the HUD's y ${after?.y ?? '?'} is the landing's ${landing?.y ?? '?'}`, { after, landing });
+  if (after !== null) {
+    const at = `${Math.round(after.x)},${Math.round(after.z)}`;
+    try {
+      await p.until(`new URLSearchParams(location.search).get('at') === ${JSON.stringify(at)}`, `${what}: the search's at`, 3000);
+      t.check(true, `${what}: the search's at is rewritten to the arrival (${search0} → ${await p.eval<string>('location.search')})`);
+    } catch {
+      t.check(false, `${what}: the search's at is rewritten to ${at}`, await p.eval<string>('location.search'));
+    }
+  }
+  // The old place is removed (the revealed count falls), then the new place fills (it grows above its lowest reading).
+  let low = before.revealed;
+  let grown: number | null = null;
+  for (const t0 = Date.now(); Date.now() - t0 <= OVERLAY_REVEAL_MS; await sleep(HUD_POLL_MS)) {
+    const h = await hud();
+    if (h === null) continue;
+    if (h.revealed < low) low = h.revealed;
+    else if (low < before.revealed && h.revealed > low) {
+      grown = h.revealed;
+      break;
+    }
+  }
+  t.check(low < before.revealed && grown !== null, `${what}: the revealed count falls (${before.revealed} → ${low}: the old place removed), then grows (→ ${grown ?? '?'}) within ${OVERLAY_REVEAL_MS / 1000} s`, { before: before.revealed, low, grown });
+}
+
+/**
+ * One live edit (spec §8.6 step 5): `act` changes the session, then the world's stale count rises above 0 (with
+ * `notice` in `.world-notices` within 1.5 s, when given) and falls back to 0 within 30 s, with no page error.
+ */
+async function liveEdit(t: Smoke, what: string, act: () => Promise<void>, notice: string | null = null): Promise<void> {
+  const p = t.page;
+  const errors0 = t.errors.length;
+  await act();
+  let rose = false;
+  try {
+    await p.until('__wiTest.stale() > 0', `${what}: the stale count above 0`, 15_000);
+    rose = true;
+    // The HUD's "stale n / needed" row (D26), refreshed every 250 ms, while the world regenerates.
+    await p.until(`/^stale \\d+ \\/ \\d+$/m.test(${HUD_TEXT}) || __wiTest.stale() === 0`, `${what}: the HUD's stale row`, OVERLAY_APPLY_MS);
+    const row = parseHudStale(await p.eval<string>(HUD_TEXT));
+    t.check(row !== null && row.stale > 0 && row.stale <= row.needed, `${what}: the HUD shows "stale ${row?.stale ?? '?'} / ${row?.needed ?? '?'}"`, row);
+    if (notice !== null) {
+      await p.until(`(${WORLD_NOTICES}).includes(${JSON.stringify(notice)})`, `${what}: "${notice}" in .world-notices`, 1500);
+      t.check(true, `${what}: "${notice}" shows in .world-notices`);
+    }
+    const ms = await p.until('__wiTest.stale() === 0', `${what}: the world settled`, OVERLAY_APPLY_MS);
+    t.check(true, `${what}: applies live (the stale count above 0, then 0 after ${(ms / 1000).toFixed(1)} s)`);
+  } catch (e) {
+    t.check(false, `${what}: the stale count ${rose ? 'back to 0 within 30 s' : 'above 0'}`, e instanceof Error ? e.message : String(e));
+  }
+  t.check(t.errors.length === errors0, `${what}: no page error`, t.errors.slice(errors0));
+}
+
+/** Types `value` into the parameter field `#id` (its sections opened) and commits it with Enter. */
+async function typeParam(p: Page, id: string, value: string): Promise<void> {
+  await p.click('#map-tab-parameters');
+  if (!(await p.eval<boolean>(revealParam(`document.getElementById(${JSON.stringify(id)})`)))) throw new Error(`no parameter field #${id}`);
+  await p.typeInto(`#${id}`, value);
+  await p.enter();
+  await p.blur();
+}
+
+/** Prints the driver's lastLatencyMs from the tool's toolbar once the preview landed (information only, spec §6.4). */
+async function printPreviewMs(p: Page, what: string): Promise<void> {
+  try {
+    await p.until('__wiSmoke.settled()', `${what}: the preview`, 30_000);
+  } catch { /* printed as unknown below */ }
+  const status = await p.eval<string>('__wiSmoke.status()');
+  console.log(`  info ${what}: the in-world preview's lastLatencyMs ${previewMs(status) ?? '?'} ms ("${status}"; SwiftShader, information only: it does not decide the cut line, §6.4)`);
+}
+
+async function overlayBatch(t: Smoke, what: string): Promise<void> {
+  const p = t.page;
+  const hud = async (): Promise<HudRead | null> => parseHud(await p.eval<string>(HUD_TEXT));
+
+  // 1. The leak baseline, after the reveal and before the first M (the map chunk's 2 s preload fired).
+  await sleep(2500);
+  const baseline: LeakBaseline = {
+    timers: await steadyTimers(p),
+    listeners: await pageListeners(p),
+    sessionListeners: await p.eval<number>('__wiTest.listenerCount()'),
+  };
+  console.log(`  leak baseline: ${baseline.listeners.length} listeners on window and document, ${baseline.sessionListeners} session listeners, ${baseline.timers} pending timers`);
+
+  // 2 and 3.
+  await overlayOpenAndTeleport(t, what, OVERLAY_SHOTS.full);
+
+  // 4. Mode B: half the window, stored; the panel beside the map at 960 px, under it at 800 px (the container query).
+  await pressM(p);
+  await p.until(OVERLAY_SHOWN, `${what}: the overlay after M`, 10_000);
+  await p.click('#map-mode-split');
+  await p.until(WORLD_SPLIT, `${what}: side by side`, 5000);
+  await sleep(500);
+  const half = await p.eval<number>(WORLD_CANVAS_WIDTH);
+  t.check(Math.abs(half - OVERLAY_VIEWPORT.width / 2) <= 2, `${what}: side by side, the 3D canvas is ${half} px wide (half of ${OVERLAY_VIEWPORT.width} ± 2)`, half);
+  t.check(storedMapMode(await p.eval<string | null>(STORED_MODE)) === 'split', `${what}: side by side is stored`, await p.eval<string | null>(STORED_MODE));
+  t.check(await p.eval<boolean | null>(PANEL_BESIDE) === true, `${what}: at the ${OVERLAY_VIEWPORT.width / 2} px half the panel sits beside the map`, await p.eval<boolean | null>(PANEL_BESIDE));
+  t.save(OVERLAY_SHOTS.split, (await p.capture()).png);
+  await setViewport(p, OVERLAY_NARROW_WIDTH, OVERLAY_VIEWPORT.height);
+  await sleep(500);
+  const narrow = await p.eval<number>(WORLD_CANVAS_WIDTH);
+  t.check(Math.abs(narrow - OVERLAY_NARROW_WIDTH / 2) <= 2, `${what}: at a ${OVERLAY_NARROW_WIDTH} px window the half is ${narrow} px (± 2)`, narrow);
+  t.check(await p.eval<boolean | null>(PANEL_BESIDE) === false, `${what}: at the ${OVERLAY_NARROW_WIDTH / 2} px half the panel stacks under the map (the container query)`, await p.eval<boolean | null>(PANEL_BESIDE));
+  await setViewport(p, OVERLAY_VIEWPORT.width, OVERLAY_VIEWPORT.height);
+  await p.until(`Math.abs(${WORLD_CANVAS_WIDTH} - ${OVERLAY_VIEWPORT.width / 2}) <= 2`, `${what}: back at ${OVERLAY_VIEWPORT.width} px`, 5000);
+
+  // 5. Live edits in mode B: terrain, its undo, climate, the biome table; then undo and redo from the 3D.
+  await liveEdit(t, `${what}: density.detailAmpHi 1.5 → 4 typed`, () => typeParam(p, 'pp-density.detailAmpHi', '4'));
+  await printPreviewMs(p, `${what}: the terrain edit in side by side`);
+  await liveEdit(t, `${what}: Ctrl+Z`, async () => {
+    await p.blur();
+    await p.undoKey();
+  });
+  const wavelength = await p.eval<string>(`document.getElementById('pp-climate.C.wavelength')?.value ?? ''`);
+  await liveEdit(t, `${what}: climate.C's wavelength ${wavelength} → 1800 typed`, () => typeParam(p, 'pp-climate.C.wavelength', '1800'));
+  await p.click('#map-tab-biomes');
+  const was = await p.eval<string>(`document.getElementById('bt-desert-T').value`);
+  const [lo, hi] = was.split(',').map((v) => Number(v.trim())) as [number, number];
+  const mid = Math.round(((lo + hi) / 2) * 100) / 100;
+  await liveEdit(t, `${what}: the biome table's desert T ${was} → ${lo}, ${mid} typed`, async () => {
+    await p.typeInto('#bt-desert-T', `${lo}, ${mid}`);
+    await p.enter();
+    await p.blur();
+  });
+  // Undo and redo from the 3D (spec §2.4): M closes the map; Ctrl+Z undoes the biome bound and Ctrl+Y redoes it, live,
+  // each with its notice; M reopens the map.
+  await pressM(p);
+  await p.until(OVERLAY_CLOSED, `${what}: M closes the map`, 5000);
+  t.check(await p.eval<string>('__wiTest.owner()') === 'world', `${what}: M closes the map, and the world owns the controls`);
+  await liveEdit(t, `${what}: Ctrl+Z from the 3D`, () => p.undoKey(), 'Undo');
+  await liveEdit(t, `${what}: Ctrl+Y from the 3D`, () => p.redoKeyY(), 'Redo');
+  await pressM(p);
+  await p.until(`${OVERLAY_SHOWN} && ${WORLD_SPLIT}`, `${what}: M reopens the map side by side`, 5000);
+  t.check(await p.eval<string>(`document.getElementById('bt-desert-T').value`) === `${lo}, ${mid}`, `${what}: the redone desert T shows in the reopened map`, await p.eval<string>(`document.getElementById('bt-desert-T').value`));
+
+  // 6. The pointer lock in mode B: a click on the 3D half.
+  const hint = await p.eval<boolean>(`document.getElementById('world-click-hint') !== null`);
+  await p.clickAt(OVERLAY_VIEWPORT.width * 0.75, OVERLAY_VIEWPORT.height / 2);
+  await sleep(500);
+  const granted = await p.eval<boolean>(`document.pointerLockElement !== null && document.pointerLockElement === document.querySelector('canvas[data-renderer]')`);
+  if (!granted) {
+    console.log(`  skipped ${what}: the pointer lock: headless Chrome refused it (pointerLockElement ${await p.eval<string>('String(document.pointerLockElement)')}); the headful production check covers W and Esc in mode B (§14)`);
+  } else {
+    t.check(await p.eval<string>('__wiTest.owner()') === 'world', `${what}: the lock gives the world the controls, the map open`);
+    const start = await hud();
+    const w = { key: 'w', code: 'KeyW', windowsVirtualKeyCode: 87, nativeVirtualKeyCode: 87 };
+    await p.cdp.send('Input.dispatchKeyEvent', { type: 'keyDown', ...w, text: 'w', unmodifiedText: 'w' });
+    await sleep(1500);
+    await p.cdp.send('Input.dispatchKeyEvent', { type: 'keyUp', ...w });
+    await sleep(600);
+    const moved = await hud();
+    const dist = start === null || moved === null ? 0 : hudMoved(start, moved);
+    t.check(dist > 5 && await p.eval<boolean>(OVERLAY_SHOWN), `${what}: W moves the camera ${dist.toFixed(1)} blocks with the map open`, { start, moved });
+    await p.key('Escape', 'Escape', 27);
+    let released = true;
+    try {
+      await p.until('document.pointerLockElement === null', `${what}: Esc releases the lock`, 1000);
+    } catch {
+      released = false;
+      console.log(`  info ${what}: CDP's Esc did not release the lock in headless Chrome (the browser's own Esc does that); released through document.exitPointerLock() (§14 records the headful case)`);
+      await p.eval('(document.exitPointerLock(), true)');
+      await p.until('document.pointerLockElement === null', `${what}: the lock released`, 2000);
+    }
+    await sleep(300);
+    const how = released ? 'Esc' : 'the release';
+    t.check(await p.eval<string>('__wiTest.owner()') === 'map', `${what}: ${how} gives the controls back to the map`);
+    t.check(await p.eval<boolean>(OVERLAY_SHOWN) && await p.eval<boolean>(DENSITY_SHOWN), `${what}: after ${how} the map is open with the drawer still open`);
+  }
+
+  // 7. The leak check, on the baseline's document: the overlay closed, then the tool disposed through the hook.
+  await p.eval('(__wiTest.closeOverlay(), true)');
+  await p.until(OVERLAY_CLOSED, `${what}: the overlay closed through the hook`, 5000);
+  const tilesHidden = await p.eval<number>('__wiTest.tileRequests()');
+  await sleep(1000);
+  const tilesHidden1 = await p.eval<number>('__wiTest.tileRequests()');
+  t.check(tilesHidden1 === tilesHidden, `${what}: no tile request over 1 s after hide (${tilesHidden} → ${tilesHidden1})`);
+  await p.eval('(__wiTest.disposeTool(), true)');
+  const tilesGone = await p.eval<number>('__wiTest.tileRequests()');
+  await sleep(1000);
+  const tilesGone1 = await p.eval<number>('__wiTest.tileRequests()');
+  t.check(tilesGone1 === tilesGone, `${what}: no tile request over 1 s after dispose (${tilesGone} → ${tilesGone1})`);
+  // Transient timers (a notice's timeout, the URL writer's debounce) end within a few seconds; a leaked one does not.
+  let listeners = await pageListeners(p);
+  let sessionListeners = await p.eval<number>('__wiTest.listenerCount()');
+  let timers = await p.eval<number>('__wiTest.timers()');
+  for (let i = 0; i < 20 && (timers !== baseline.timers || sessionListeners !== baseline.sessionListeners || !listenersLeakFree(listenerDiff(baseline.listeners, listeners), granted && hint)); i++) {
+    await sleep(500);
+    listeners = await pageListeners(p);
+    sessionListeners = await p.eval<number>('__wiTest.listenerCount()');
+    timers = await p.eval<number>('__wiTest.timers()');
+  }
+  const diff = listenerDiff(baseline.listeners, listeners);
+  t.check(listenersLeakFree(diff, granted && hint), `${what}: the listeners on window and document equal the baseline (${listeners.length} vs ${baseline.listeners.length}${diff.gone.length > 0 ? `; the click hint's own pointerlockchange removed at the lock` : ''})`, diff);
+  t.check(sessionListeners === baseline.sessionListeners, `${what}: session.listenerCount() equals the baseline (${sessionListeners} vs ${baseline.sessionListeners})`);
+  t.check(timers === baseline.timers, `${what}: the pending timers equal the baseline (${timers} vs ${baseline.timers})`);
+
+  // 8. The reload keeps side by side and the edited values (the URL follows the session).
+  const kept = await p.state();
+  const patch = (kept?.patch ?? {}) as { climate?: { C?: { wavelength?: unknown } }; biomes?: { table?: Record<string, { T?: unknown }> } };
+  t.check(patch.climate?.C?.wavelength === 1800 && sameJson(patch.biomes?.table?.['desert']?.T, [lo, mid]), `${what}: the URL carries the edits (climate.C wavelength 1800, desert T ${lo}, ${mid})`, kept?.patch);
+  await p.reload('window.__wiWorld !== undefined');
+  if (!(await worldRevealed(t, `${what}: the reload`))) return;
+  await p.until('window.__wiWorld.frames >= 3', `${what}: three frames after the reload`, 30_000);
+  const reloaded = await p.state();
+  t.check(reloaded !== null && kept !== null && sameJson(reloaded.patch, kept.patch) && reloaded.seed === kept.seed && reloaded.profile === kept.profile, `${what}: the reload keeps the edited values`, { kept, reloaded });
+  t.check(storedMapMode(await p.eval<string | null>(STORED_MODE)) === 'split', `${what}: side by side is still stored after the reload`);
+
+  // 9. A failure with the map open, on the reloaded page (a fresh tool): M opens side by side, Full screen, the fatal.
+  await pressM(p);
+  await p.until(OVERLAY_SHOWN, `${what}: the overlay after M on the reloaded page`, 15_000);
+  t.check(await p.eval<boolean>(WORLD_SPLIT), `${what}: M opens side by side, the stored mode`);
+  t.check(await p.eval<string>(`document.getElementById('pp-climate.C.wavelength')?.value ?? ''`) === '1800', `${what}: the reloaded tool shows the edited wavelength`, await p.eval<string>(`document.getElementById('pp-climate.C.wavelength')?.value ?? ''`));
+  await p.click('#map-mode-full');
+  await p.until(`!(${WORLD_SPLIT})`, `${what}: full screen through the header`, 5000);
+  t.check(storedMapMode(await p.eval<string | null>(STORED_MODE)) === 'full', `${what}: the header's Full screen is stored`);
+  const errors0 = t.errors.length;
+  await p.eval('(__wiTest.forceFatal(), true)');
+  try {
+    await p.until(`document.getElementById('world-failed') !== null`, `${what}: the failure panel`, 5000);
+  } catch { /* checked below */ }
+  await sleep(1000);
+  const panel = await p.eval<{ shown: boolean; copy: string | null; overlay: boolean }>(`({
+    shown: document.getElementById('world-failed') !== null && document.getElementById('world-failed').offsetParent !== null,
+    copy: document.getElementById('world-failed-copy')?.textContent ?? null,
+    overlay: document.getElementById('map-overlay') !== null,
+  })`);
+  t.check(!panel.overlay && panel.shown && panel.copy === 'Copy details', `${what}: a forced fatal with the map open: the overlay closed, the failure panel visible with "Copy details"`, panel);
+  t.check(t.errors.length === errors0, `${what}: no page error after the fatal`, t.errors.slice(errors0));
+}
+
+async function overlayMesh(t: Smoke, what: string): Promise<void> {
+  const p = t.page;
+  // 2 and 3, the map closed on arrival (full screen; the step switches to it when B is stored).
+  await overlayOpenAndTeleport(t, what, null);
+  // The terrain Apply of 5, side by side, with the preview's latency printed.
+  await pressM(p);
+  await p.until(OVERLAY_SHOWN, `${what}: the overlay after M`, 10_000);
+  await p.click('#map-mode-split');
+  await p.until(WORLD_SPLIT, `${what}: side by side`, 5000);
+  await liveEdit(t, `${what}: density.detailAmpHi 1.5 → 4 typed`, () => typeParam(p, 'pp-density.detailAmpHi', '4'));
+  await printPreviewMs(p, `${what}: the terrain edit in side by side`);
+}
+
+async function runOverlay(t: Smoke): Promise<void> {
+  const p = t.page;
+  for (const { step, renderer } of OVERLAY_RUNS) {
+    const what = `${step}, renderer=${renderer}`;
+    t.step(step === 'overlay'
+      ? `overlay: ${overlayQuery('batch')} at ${OVERLAY_VIEWPORT.width} × ${OVERLAY_VIEWPORT.height}: the leak baseline, M (tiles and the arrow, no edit), a teleport, side by side, live edits with undo and redo, the pointer lock, the leak check, a reload, a fatal with the map open`
+      : `overlay-mesh: ${overlayQuery('mesh')} at ${OVERLAY_VIEWPORT.width} × ${OVERLAY_VIEWPORT.height}: M, a teleport, a terrain Apply side by side`);
+    const errors0 = t.errors.length;
+    await setViewport(p, OVERLAY_VIEWPORT.width, OVERLAY_VIEWPORT.height);
+    try {
+      await p.goto(`${p.base}${overlayQuery(renderer)}`, `window.__wiWorld !== undefined`);
+      if (!(await worldRevealed(t, what))) continue;
+      await checkDrawnBy(t, what, renderer);
+      await p.until('window.__wiWorld.frames >= 3', `three frames after the ${what} reveal`, 30_000);
+      t.check(await p.eval<boolean>(`typeof window.__wiTest === 'object' && typeof window.__wiTest.forceFatal === 'function'`), `${what}: the test hook is installed (?wiTest=1)`);
+      if (step === 'overlay') await overlayBatch(t, what);
+      else await overlayMesh(t, what);
+    } catch (e) {
+      t.check(false, `${what}: the step stopped: ${e instanceof Error ? e.message : String(e)}`);
+    } finally {
+      await setViewport(p, VIEWPORT.width, VIEWPORT.height);
+    }
+    // The forced fatal is the batch run's last act; any other page error fails the step.
     t.check(t.errors.length === errors0, `${what}: no page error`, t.errors.slice(errors0));
   }
 }

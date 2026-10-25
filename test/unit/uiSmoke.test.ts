@@ -37,7 +37,14 @@ import {
   type SmokePreset, pixelDiffShare, SWIFTSHADER_ARGS, START_SEED_7_HASH, PARITY_VIEW, PARITY_WATER_VIEW, PARITY_VIEWS, WORLD_RD, worldMeshQuery, PARITY_TOL, PARITY_MAX_SHARE, leaveGuardLog,
   expectedRenderer, HUD_POLL_MS, hudMoved, hudOnce, parseHud, STREAM_HOLD_MS, STREAM_MIN_MOVE, STREAM_RD, STREAM_RD_MS, STREAM_REVEAL_MS, STREAM_RUNS, streamQuery,
   type HudRead,
+  LANDING_ABOVE as SMOKE_LANDING_ABOVE, LANDING_MAX_Y as SMOKE_LANDING_MAX_Y, listenerDiff, listenerKey, listenersLeakFree, OVERLAY_APPLY_MS, OVERLAY_NARROW_WIDTH,
+  OVERLAY_REVEAL_MS, OVERLAY_RUNS, OVERLAY_SHOTS, OVERLAY_TILES_MS, OVERLAY_VIEWPORT, overlayQuery, parseHudStale, previewMs, smokeLandingY, SETTINGS_KEY as SMOKE_SETTINGS_KEY,
+  storedMapMode, TELEPORT_EAST_PX, teleportTarget, WORLD_MAP_BPP as SMOKE_WORLD_MAP_BPP,
 } from '../tools/uiSmoke';
+import { LANDING_ABOVE, LANDING_MAX_Y, landingY } from '../../src/ui/world/teleport';
+import { WORLD_MAP_BPP } from '../../src/ui/world/mapOverlay';
+import { SETTINGS_KEY, SETTINGS_DEFAULTS } from '../../src/ui/settings';
+import { previewStatusText } from '../../src/ui/map/toolbar';
 import { findSpawn } from '../../src/gen/column/spawn';
 import { columnPoint } from '../../src/gen/column/columnPoint';
 import { SEA_LEVEL } from '../../src/core/constants';
@@ -237,21 +244,24 @@ describe('UI smoke test: pure parts (SP2b spec §8 Tools, §12)', () => {
     expect(mountainSummaryOk(flat), flat).toBe(false);
   });
 
-  test('the steps run in SMOKE_STEPS order: the Density steps after rule, then preset profiles (SP3e), then start, world and world-mesh (SP4a), then SP4b\'s stream before console (SP3d spec §6, SP3e spec §8, SP4a spec §9.6, SP4b spec §8.6, ruling P52)', () => {
+  test('the steps run in SMOKE_STEPS order: the Density steps after rule, then preset profiles (SP3e), then start, world and world-mesh (SP4a), then SP4b\'s stream, then SP4c\'s overlay and overlay-mesh before console (SP3d spec §6, SP3e spec §8, SP4a spec §9.6, SP4b spec §8.6, SP4c spec §8.6, ruling P52)', () => {
     expect(SMOKE_STEPS).toEqual([
       'selftest', 'load', 'number', 'knot', 'slider', 'box', 'profile', 'presets', 'undo/redo', 'reload', 'cut line', 'voxels', 'tabs', 'rule',
       'density tab', 'density node', 'density mute', 'density json', 'density narrow', 'density horizontal', 'density drag', 'density times',
-      'preset profiles', 'start', 'world', 'world-mesh', 'stream', 'console',
+      'preset profiles', 'start', 'world', 'world-mesh', 'stream', 'overlay', 'overlay-mesh', 'console',
     ]);
     expect(SMOKE_STEPS.indexOf('density tab')).toBe(SMOKE_STEPS.indexOf('rule') + 1);
     expect(SMOKE_STEPS.indexOf('start')).toBe(SMOKE_STEPS.indexOf('preset profiles') + 1);
     expect(SMOKE_STEPS.indexOf('world')).toBe(SMOKE_STEPS.indexOf('start') + 1);
     expect(SMOKE_STEPS.indexOf('stream')).toBe(SMOKE_STEPS.indexOf('world-mesh') + 1);
-    expect(SMOKE_STEPS.indexOf('stream')).toBe(SMOKE_STEPS.indexOf('console') - 1);
+    expect(SMOKE_STEPS.indexOf('overlay')).toBe(SMOKE_STEPS.indexOf('stream') + 1);
+    expect(SMOKE_STEPS.indexOf('overlay-mesh')).toBe(SMOKE_STEPS.indexOf('console') - 1);
     expect(SMOKE_STEPS.indexOf('console')).toBe(SMOKE_STEPS.length - 1);
     expect(stepId('world-mesh: the parity of mesh and batch')).toBe('world-mesh');
     expect(stepId('world: /?rd=4 to the reveal')).toBe('world');
     expect(stepId('stream: /?rd=4 on both renderers, W held for 4 s, then RD 6 live')).toBe('stream');
+    expect(stepId('overlay: /?rd=4&renderer=batch&wiTest=1, M, teleport, split, live edits, leak checks')).toBe('overlay');
+    expect(stepId('overlay-mesh: /?rd=4&renderer=mesh&wiTest=1, M, teleport, a terrain Apply')).toBe('overlay-mesh');
     // Its own id: `presets` is the preset-file step.
     expect(stepId('preset profiles: each draft preset opened by URL')).toBe('preset profiles');
     expect(stepId('presets: export, apply {} in the patch box, import the exported file')).toBe('presets');
@@ -805,6 +815,112 @@ describe('UI smoke test: the stream step and data-renderer (SP4b spec §8.6)', (
     for (const forced of [null, 'batch', 'mesh'] as const) {
       for (const multiDraw of [true, false]) expect(expectedRenderer(forced, multiDraw)).toBe(selectSectionRenderer({ multiDraw }, forced));
     }
+  });
+});
+
+describe('UI smoke test: the overlay steps (SP4c spec §8.6)', () => {
+  let dom: ReturnType<typeof installDom>;
+  beforeEach(() => {
+    dom = installDom();
+    vi.useFakeTimers();
+  });
+  afterEach(() => {
+    vi.useRealTimers();
+    vi.unstubAllGlobals();
+  });
+
+  test('the overlay runs: overlay on batch, overlay-mesh on mesh, at RD 4 with the test hook; 1920 × 1080, narrowed to 1,600 px for the stacked panel', () => {
+    expect(OVERLAY_RUNS).toEqual([{ step: 'overlay', renderer: 'batch' }, { step: 'overlay-mesh', renderer: 'mesh' }]);
+    for (const { step, renderer } of OVERLAY_RUNS) {
+      expect(SMOKE_STEPS).toContain(step);
+      expect(overlayQuery(renderer)).toBe(`?rd=4&renderer=${renderer}&wiTest=1`);
+      const q = parseWorldQuery(new URLSearchParams(overlayQuery(renderer)));
+      expect(q.rd).toBe(WORLD_RD);
+    }
+    expect(OVERLAY_VIEWPORT).toEqual({ width: 1920, height: 1080 });
+    // Each half of the 1,920 px window is 960 px (the panel beside the map); at 1,600 px it is 800, under the
+    // container query's 900 (the panel stacks), and B stays available (≥ 1,000 px).
+    expect(OVERLAY_VIEWPORT.width / 2).toBeGreaterThanOrEqual(900);
+    expect(OVERLAY_NARROW_WIDTH / 2).toBeLessThan(900);
+    expect(OVERLAY_NARROW_WIDTH).toBeGreaterThanOrEqual(1000);
+    // The smoke's own viewport is unchanged.
+    expect(VIEWPORT).toEqual({ width: 1400, height: 900 });
+    expect(OVERLAY_SHOTS).toEqual({ full: 'review-overlay-full.png', split: 'review-overlay-split.png' });
+    expect([OVERLAY_TILES_MS, OVERLAY_REVEAL_MS, OVERLAY_APPLY_MS]).toEqual([5000, 10_000, 30_000]);
+  });
+
+  test('the landing literals are teleport.ts\'s (24 above the surface or the water, at most 400); smokeLandingY is landingY with null water for −∞', () => {
+    expect(SMOKE_LANDING_ABOVE).toBe(LANDING_ABOVE);
+    expect(SMOKE_LANDING_MAX_Y).toBe(LANDING_MAX_Y);
+    expect([SMOKE_LANDING_ABOVE, SMOKE_LANDING_MAX_Y]).toEqual([24, 400]);
+    for (const [surface, water] of [[66, null], [40, 63], [70, 63], [300, null], [390, null], [-20, 63]] as const) {
+      expect(smokeLandingY({ surface, water })).toBe(landingY(surface, water ?? Number.NEGATIVE_INFINITY));
+    }
+    expect(smokeLandingY({ surface: 40, water: 63 })).toBe(87);
+    expect(smokeLandingY({ surface: 390, water: null })).toBe(400);
+  });
+
+  test('the map opens at WORLD_MAP_BPP blocks/px centred on the camera: a click 300 px east of the arrow targets the block screenToWorld gives', () => {
+    expect(SMOKE_WORLD_MAP_BPP).toBe(WORLD_MAP_BPP);
+    expect(TELEPORT_EAST_PX).toBe(300);
+    const canvas = { x: 0, y: 48, width: 1579, height: 700 };
+    const camera = { x: 12.3, z: -40.7 };
+    const click = { x: Math.round(canvas.x + canvas.width / 2 + TELEPORT_EAST_PX), y: Math.round(canvas.y + canvas.height / 2) };
+    const got = teleportTarget(camera, canvas, click, SMOKE_WORLD_MAP_BPP);
+    const [x, z] = screenToWorld({ x: camera.x, z: camera.z, bpp: WORLD_MAP_BPP, layer: 'biome' }, canvas.width, canvas.height, click.x - canvas.x, click.y - canvas.y);
+    expect(got.x).toBeCloseTo(x, 9);
+    expect(got.z).toBeCloseTo(z, 9);
+    // About 1,200 blocks east: the old RD 4 disc is left behind.
+    expect(got.x - camera.x).toBeGreaterThan(1190);
+  });
+
+  test('parseHudStale reads the real HUD\'s "stale n / needed" row; null while the world is not stale', () => {
+    const hudText = (stale: number): string => {
+      const h = mountWorldHud(dom.body as unknown as HTMLElement, () => ({ ...hudData({ x: 1, y: 90, z: 2, rd: 4, revealed: 81, kind: 'batch' }), stale, needed: 81 }));
+      const text = dom.body.querySelectorAll('div').filter((e) => e.className !== 'world-hud').map((e) => e.textContent).join('\n');
+      h.dispose();
+      return text;
+    };
+    expect(parseHudStale(hudText(17))).toEqual({ stale: 17, needed: 81 });
+    expect(parseHudStale(hudText(0))).toBeNull();
+    expect(parseHud(hudText(17))?.revealed).toBe(81);
+    expect(parseHudStale('unstale 3 / 4')).toBeNull();
+  });
+
+  test('previewMs reads the driver\'s lastLatencyMs from the toolbar status text (previewStatusText)', () => {
+    const base = { lastLatencyMs: 212.4, pending: false, error: null } as const;
+    expect(previewMs(previewStatusText(base as Parameters<typeof previewStatusText>[0]))).toBe(212);
+    expect(previewMs(previewStatusText({ ...base, pending: true } as Parameters<typeof previewStatusText>[0]))).toBe(212);
+    expect(previewMs(previewStatusText({ ...base, lastLatencyMs: null } as Parameters<typeof previewStatusText>[0]))).toBeNull();
+    expect(previewMs('')).toBeNull();
+  });
+
+  test('storedMapMode reads mapMode from the settings the page saves under SETTINGS_KEY', () => {
+    expect(SMOKE_SETTINGS_KEY).toBe(SETTINGS_KEY);
+    expect(storedMapMode(JSON.stringify({ ...SETTINGS_DEFAULTS, mapMode: 'split' }))).toBe('split');
+    expect(storedMapMode(JSON.stringify(SETTINGS_DEFAULTS))).toBe('full');
+    expect(storedMapMode(null)).toBeNull();
+    expect(storedMapMode('{nope')).toBeNull();
+    expect(storedMapMode('{"mapMode":"wide"}')).toBeNull();
+  });
+
+  test('the leak check compares the listeners on window and document by target, type, phase and handler location', () => {
+    const l = (type: string, line: number, useCapture = false) => ({ type, useCapture, scriptId: '7', lineNumber: line, columnNumber: 3 });
+    expect(listenerKey('document', l('keydown', 10, true))).toBe('document keydown capture @7:10:3');
+    const base = [listenerKey('window', l('resize', 1)), listenerKey('document', l('pointerlockchange', 2)), listenerKey('document', l('pointerlockchange', 9))];
+    expect(listenerDiff(base, [...base].reverse())).toEqual({ added: [], gone: [] });
+    // A listener the tool left behind, and a second copy of one already there, are both added.
+    const leaked = [...base, listenerKey('window', l('keydown', 40)), listenerKey('window', l('resize', 1))];
+    expect(listenerDiff(base, leaked)).toEqual({ added: ['window keydown @7:40:3', 'window resize @7:1:3'], gone: [] });
+    expect(listenersLeakFree(listenerDiff(base, leaked), false)).toBe(false);
+    // The click hint removes its own pointerlockchange listener once the pointer locks (worldPage.ts): allowed only
+    // when the step's lock was granted, and only that one.
+    const hintGone = listenerDiff(base, base.slice(0, 2));
+    expect(hintGone).toEqual({ added: [], gone: ['document pointerlockchange @7:9:3'] });
+    expect(listenersLeakFree(hintGone, true)).toBe(true);
+    expect(listenersLeakFree(hintGone, false)).toBe(false);
+    expect(listenersLeakFree(listenerDiff(base, base.slice(1)), true)).toBe(false);
+    expect(listenersLeakFree(listenerDiff(base, base), false)).toBe(true);
   });
 });
 
