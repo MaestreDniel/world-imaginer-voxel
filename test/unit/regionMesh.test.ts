@@ -782,7 +782,14 @@ describe('RegionMesh\'s swap (SP4c spec §5.3, D9)', () => {
     expect(m.geometry).not.toBe(before);
     expect(disposed).toBe(true);
     // prev copied into the new geometry at the same place, still drawn; the replacement's span at rows 32-48, zero.
+    // Its positions and data too (final review REN-2: the index arrays alone cannot see a lost position copy).
     const ix = m.geometry.getIndex()!.array as Uint32Array;
+    const pos = m.geometry.getAttribute('position').array as Uint16Array;
+    const data = m.geometry.getAttribute('data').array as Uint32Array;
+    expect(firstDiff(pos.subarray(0, 4 * 20 * ROW_V), placed(old))).toBe(-1);
+    expect(firstDiff(pos.subarray(4 * 20 * ROW_V, 4 * 32 * ROW_V), placed(d))).toBe(-1);
+    expect(firstDiff(data.subarray(0, 20 * ROW_V), Array.from(old.data))).toBe(-1);
+    expect(firstDiff(data.subarray(20 * ROW_V, 32 * ROW_V), Array.from(d.data))).toBe(-1);
     expect(firstDiff(ix.subarray(0, 20 * ROW_I), rebased(old, 0))).toBe(-1);
     expect(firstDiff(ix.subarray(20 * ROW_I, 32 * ROW_I), rebased(d, 20 * ROW_V))).toBe(-1);
     expect(allZero(ix.subarray(32 * ROW_I, 48 * ROW_I))).toBe(true);
