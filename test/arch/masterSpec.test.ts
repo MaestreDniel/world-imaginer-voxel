@@ -925,7 +925,14 @@ describe('master spec amendments (SP4c §12)', () => {
   /** [§1 entry head, the token its entry holds, the file on disk]; Tasks 6, 12, 15, 17 and 18 append theirs. */
   const SP4C_MODULES: Array<[head: RegExp, token: string, file: string]> = [
     [/^\s+coordinator\.ts /, 'jobHeap.ts (SP4c)', 'src/engine/jobHeap.ts'],
+    [/^\s+ui\/map\/\* /, 'mapTool.ts', 'src/ui/map/mapTool.ts'],
   ];
+
+  test('§1\'s ui/map/* line: the map tool both ?map and the world\'s M overlay mount (SP4c spec §1.1, §12)', () => {
+    const entry = layoutEntry(/^\s+ui\/map\/\* /);
+    expect(entry).toContain('(SP4c: `mapTool.ts`, the tool both `?map` and the world\'s M overlay mount)');
+    expect(entry).toContain('the standalone ?map page (mounted in-game from SP4c)');
+  });
 
   test('§10\'s SP4c entry, SP5\'s walk-mode teleport and saved places, SP10 without bookmarks', () => {
     const sp4c = spEntry('SP4c', 'SP5');

@@ -147,7 +147,7 @@ interface MapToolDeps {
   readonly pool: MapPool;                    // tile, point, stats, slice, probes, spawn
   readonly driver: PreviewDriver;            // the only configure owner (§4.2)
   readonly storage: Storage | null;          // wi10.layout.v1
-  readonly initialView: MapViewState;
+  readonly initialView: MapView;             // ui/map/mapState.ts
   readonly host: 'page' | 'world';           // click routing (§3.1), toolbar (§2.5)
   readonly urlSink: ((hash: string) => void) | null;   // null in the world: the page writes its own URL (§1.6)
   readonly onTeleport: ((x: number, z: number) => void) | null;
@@ -157,7 +157,7 @@ interface MapTool {
   show(centre?: { x: number; z: number }): void;   // re-measures, redraws, wants the preview (§4.2)
   hide(): void;                                    // no tile requests; queued tiles cancelled
   setPlayer(x: number, z: number, yawDeg: number): void;
-  readonly view: MapViewState;
+  readonly view: MapView;
   dispose(): void;
 }
 ```

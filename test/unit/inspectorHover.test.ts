@@ -203,4 +203,16 @@ describe('the probe stream (one in flight, the latest wins)', () => {
     expect(await shownFor(2, Infinity)).toBe('+∞');
     expect(await shownFor(3, -Infinity)).toBe('−∞');
   });
+
+  test('dispose: a probe that answers later shows nothing and runs nothing; later hovers probe nothing (SP4c spec §1.2)', async () => {
+    const { model, probes, shown } = harness();
+    model.hover(v(1, 2, 3), NODE);
+    model.hover(v(4, 5, 6), NODE);
+    model.dispose();
+    probes[0]!.resolve(1);
+    await flush();
+    expect(model.hover(v(7, 8, 9), NODE)).toBe('');
+    expect(model.refresh()).toBe('');
+    expect([probes.length, shown]).toEqual([1, []]);
+  });
 });

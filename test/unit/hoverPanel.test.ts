@@ -110,4 +110,19 @@ describe('hover readout (SP2b spec §6.3, §2.5)', () => {
     expect(shown).toEqual(['Error: BAD_MESSAGE: point']);
     expect(pool.jobs).toHaveLength(1);
   });
+
+  test('dispose: a job that resolves or is cancelled later shows nothing and sends nothing; later moves send nothing (SP4c spec §1.2)', async () => {
+    const { pool, shown, hover } = setup();
+    hover.move(1, 2);
+    hover.move(3, 4);
+    hover.dispose();
+    pool.jobs[0]!.reject(new JobCancelled());
+    await flush();
+    hover.move(5, 6);
+    hover.refresh();
+    expect(pool.jobs).toHaveLength(1);
+    pool.jobs[0]!.resolve(pointAt(1, 2));
+    await flush();
+    expect(shown).toEqual([]);
+  });
 });

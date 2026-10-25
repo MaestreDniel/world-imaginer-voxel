@@ -60,6 +60,19 @@ export class FakeElement extends EventTarget {
     this.tagName = tag.toUpperCase();
   }
 
+  /** The DOM's `classList`: add, remove, toggle and contains over the space-separated `className`. */
+  readonly classList = {
+    add: (...tokens: string[]): void => { this.setClasses([...new Set([...this.classes(), ...tokens])]); },
+    remove: (...tokens: string[]): void => { this.setClasses(this.classes().filter((c) => !tokens.includes(c))); },
+    toggle: (token: string, force?: boolean): boolean => {
+      const on = force ?? !this.classes().includes(token);
+      if (on) this.classList.add(token);
+      else this.classList.remove(token);
+      return on;
+    },
+    contains: (token: string): boolean => this.classes().includes(token),
+  };
+
   /** The element children (text nodes excluded), as the DOM's `children`. */
   get children(): FakeElement[] {
     return this.childNodes.filter((c): c is FakeElement => c instanceof FakeElement);
@@ -173,6 +186,14 @@ export class FakeElement extends EventTarget {
     const i = this.childNodes.indexOf(child);
     if (i >= 0) this.childNodes.splice(i, 1);
     child.parentElement = null;
+  }
+
+  private classes(): string[] {
+    return this.className.split(/\s+/).filter((c) => c !== '');
+  }
+
+  private setClasses(list: string[]): void {
+    this.className = list.join(' ');
   }
 
   private adopt(node: Child): void {

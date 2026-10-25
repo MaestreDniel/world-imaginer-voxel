@@ -38,6 +38,8 @@ export interface HoverReadout {
   move(x: number, z: number): void;
   /** Re-reads the last position inside the window (call it when the canvas shows a new source). */
   refresh(): void;
+  /** A job that settles later shows nothing and sends nothing; later calls do nothing (SP4c spec §1.2). */
+  dispose(): void;
 }
 
 export function createHoverReadout(pool: HoverPool, show: (text: string) => void): HoverReadout {
@@ -46,17 +48,19 @@ export function createHoverReadout(pool: HoverPool, show: (text: string) => void
   let next: readonly [number, number] | null = null;
   /** The pointer's last position inside the window; null once it left the window. */
   let last: readonly [number, number] | null = null;
+  let disposed = false;
 
   const run = (x: number, z: number) => {
     busy = true;
     pool.point(x, z).then((p) => {
-      if (last !== null) show(formatPoint(p));
+      if (!disposed && last !== null) show(formatPoint(p));
     }, (e: unknown) => {
+      if (disposed) return;
       if (!(e instanceof JobCancelled)) show(String(e));
       else if (next === null) next = last;
     }).finally(() => {
       busy = false;
-      if (next === null) return;
+      if (disposed || next === null) return;
       const [a, b] = next;
       next = null;
       run(a, b);
@@ -64,6 +68,7 @@ export function createHoverReadout(pool: HoverPool, show: (text: string) => void
   };
 
   const move = (x: number, z: number) => {
+    if (disposed) return;
     if (!pointInWindow(x, z)) {
       last = null;
       next = null;
@@ -78,5 +83,10 @@ export function createHoverReadout(pool: HoverPool, show: (text: string) => void
   return {
     move,
     refresh() { if (last !== null) move(last[0], last[1]); },
+    dispose() {
+      disposed = true;
+      last = null;
+      next = null;
+    },
   };
 }

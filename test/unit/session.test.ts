@@ -353,6 +353,19 @@ describe('gestures and notifications', () => {
     w.set('rivers.widthMin', 5);
     expect([states.length, log.length]).toEqual([8, 9]);
   });
+  test('listenerCount counts each subscribe and its remover (SP4c spec §1.2)', () => {
+    const w = session();
+    expect(w.listenerCount()).toBe(0);
+    const offA = w.subscribe(() => {});
+    const offB = w.subscribe(() => {});
+    expect(w.listenerCount()).toBe(2);
+    offA();
+    expect(w.listenerCount()).toBe(1);
+    offA();
+    expect(w.listenerCount()).toBe(1);
+    offB();
+    expect(w.listenerCount()).toBe(0);
+  });
   test('a gesture is one step; its edits are non-urgent; gestureEnd is urgent', () => {
     const w = session();
     const log = changes(w);

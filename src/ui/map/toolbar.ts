@@ -78,12 +78,18 @@ export interface Toolbar {
   setStatus(s: DriverStatus): void;
   /** Shows the cut-line tool's state on its button. */
   setCut(tool: CutTool): void;
+  /**
+   * Ends a slider drag still open (its window listeners removed, the gesture ended) and ignores a profile confirmation
+   * that resolves later (SP4c spec §1.2); its elements go with the layout.
+   */
+  dispose(): void;
 }
 
 const SCALE_PATH = 'climate.scaleMul';
 
 export function createToolbar(host: HTMLElement, deps: ToolbarDeps): Toolbar {
   const { session, notices, edit } = deps;
+  let disposed = false;
   /** The controls only write valid values, but a refusal is shown rather than dropped. */
   const report = (r: SessionResult): boolean => {
     if (!r.ok) notices.show(r.issues.map((i) => `${i.path}: ${i.code} — ${i.message}`).join('\n'), { kind: 'error' });
@@ -182,7 +188,7 @@ export function createToolbar(host: HTMLElement, deps: ToolbarDeps): Toolbar {
       return;
     }
     void notices.confirm(profileSwitchText(id, n), 'Switch').then((ok) => {
-      if (!ok || !report(session.setProfile(id))) return;
+      if (disposed || !ok || !report(session.setProfile(id))) return;
       const switched = session.state;
       notices.show('profile switched', { timeoutMs: 5000, actions: [{ label: 'Undo', run: () => { if (session.state === switched) session.undo(); } }] });
     });
@@ -190,14 +196,18 @@ export function createToolbar(host: HTMLElement, deps: ToolbarDeps): Toolbar {
 
   // A pointer drag is one gesture: it begins on pointerdown and ends on change, or on the pointer's release
   // anywhere (a press that leaves the value unchanged fires no change). Keyboard steps are urgent edits.
+  /** The ends of the open drags, whose window listeners are still installed. */
+  const dragEnds = new Set<() => void>();
   slider.addEventListener('pointerdown', (e) => {
     if (e.button !== 0) return;
     session.beginGesture();
     const end = () => {
       removeEventListener('pointerup', end, true);
       removeEventListener('pointercancel', end, true);
+      dragEnds.delete(end);
       session.endGesture();
     };
+    dragEnds.add(end);
     addEventListener('pointerup', end, true);
     addEventListener('pointercancel', end, true);
   });
@@ -223,5 +233,10 @@ export function createToolbar(host: HTMLElement, deps: ToolbarDeps): Toolbar {
       status.classList.toggle('map-status-error', s.error !== null);
     },
     setCut: showCut,
+    dispose() {
+      if (disposed) return;
+      disposed = true;
+      for (const end of [...dragEnds]) end();
+    },
   };
 }

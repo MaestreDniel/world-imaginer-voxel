@@ -58,15 +58,17 @@ function keyTargetOf(t: EventTarget | null): KeyTarget | null {
 }
 
 /**
- * Listens for keydown on window and runs `on` for each shortcut, preventing the key's default. Keys a control
- * already handled (default prevented), IME compositions and key-less events (Chrome's autofill) are ignored.
- * Returns a function that removes the listener.
+ * Listens for keydown on window and runs `on` for each shortcut `enabled` accepts, preventing the key's default; a
+ * disabled action is neither run nor prevented, so another listener (or the browser) still gets it (SP4c spec §2.4:
+ * the standalone ?map installs undo and redo in its shell and P and Escape in the map tool). Keys a control already
+ * handled (default prevented), IME compositions and key-less events (Chrome's autofill) are ignored. Returns a
+ * function that removes the listener.
  */
-export function installShortcuts(on: (a: ShortcutAction) => void): () => void {
+export function installShortcuts(on: (a: ShortcutAction) => void, enabled: (a: ShortcutAction) => boolean = () => true): () => void {
   const handler = (e: KeyboardEvent): void => {
     if (e.defaultPrevented || e.isComposing || typeof e.key !== 'string') return;
     const action = shortcutFor(e, keyTargetOf(e.target));
-    if (action === null) return;
+    if (action === null || !enabled(action)) return;
     e.preventDefault();
     on(action);
   };

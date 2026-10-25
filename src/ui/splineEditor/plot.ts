@@ -81,6 +81,8 @@ export interface SplinePlot {
   render(input: PlotInput): void;
   /** The transform of the last draw, or null before the first. */
   readonly plot: Plot | null;
+  /** Disconnects its ResizeObserver (SP4c spec §1.2). */
+  dispose(): void;
 }
 
 interface Drag {
@@ -284,12 +286,13 @@ export function createSplinePlot(host: HTMLElement, ev: PlotEvents): SplinePlot 
     ev.menu(e, k);
   });
 
-  new ResizeObserver(() => {
+  const resize = new ResizeObserver(() => {
     const r = host.getBoundingClientRect();
     w = Math.floor(r.width);
     h = Math.floor(r.height);
     draw();
-  }).observe(host);
+  });
+  resize.observe(host);
 
   return {
     element: root,
@@ -298,5 +301,6 @@ export function createSplinePlot(host: HTMLElement, ev: PlotEvents): SplinePlot 
       draw();
     },
     get plot() { return plot; },
+    dispose() { resize.disconnect(); },
   };
 }

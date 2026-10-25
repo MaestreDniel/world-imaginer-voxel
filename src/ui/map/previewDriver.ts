@@ -13,10 +13,14 @@
  * priority 600 (§6.3), the standalone page's at −2.
  */
 import type { Params } from '../../core/params/schema';
+import type { SessionState } from '../../engine/session';
 import { JobCancelled } from '../../engine/workerPool';
 import type { Spawn } from '../../gen/column/spawn';
 
 export interface DriverDraft { readonly sessionEpoch: number; readonly seedText: string; readonly seedKey: string; readonly params: Params }
+
+/** The draft a session state hands the driver (the standalone shell, the map tool, the world page and its apply control). */
+export const draftOf = (s: SessionState): DriverDraft => ({ sessionEpoch: s.epoch, seedText: s.seedText, seedKey: `${s.seed[0]}.${s.seed[1]}`, params: s.params });
 
 export interface DriverPool {
   readonly size: number;

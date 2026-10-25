@@ -467,12 +467,13 @@ export function createCrossSection(host: HTMLElement, deps: SectionDeps): CrossS
     hint();
   });
 
-  new ResizeObserver(() => {
+  const resize = new ResizeObserver(() => {
     const r = plotHost.getBoundingClientRect();
     w = Math.floor(r.width);
     h = Math.floor(r.height);
     render();
-  }).observe(plotHost);
+  });
+  resize.observe(plotHost);
 
   const lineFns = new Set<(line: Segment | null) => void>();
   const offSession = session.subscribe(() => render());
@@ -502,6 +503,8 @@ export function createCrossSection(host: HTMLElement, deps: SectionDeps): CrossS
     dispose() {
       offSession();
       offSettled();
+      resize.disconnect();
+      rules.dispose();
     },
   };
 }

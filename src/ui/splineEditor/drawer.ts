@@ -598,6 +598,7 @@ export function createSplineDrawer(host: HTMLElement, deps: DrawerDeps): SplineD
       offSettled();
       removeEventListener('pointerdown', outside, true);
       if (lintFrame !== null) cancelAnimationFrame(lintFrame);
+      plot.dispose();
     },
   };
 }

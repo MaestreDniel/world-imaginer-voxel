@@ -196,6 +196,11 @@ export class WorldSession {
     return () => { this.listeners.delete(l); };
   }
 
+  /** The listeners subscribed now (SP4c spec §1.2: a map tool's dispose leaves none of its own behind). */
+  listenerCount(): number {
+    return this.listeners.size;
+  }
+
   /** Starts a drag: edits until endGesture() are non-urgent and form one history step. No-op inside a gesture. */
   beginGesture(): void {
     if (this.gesture) return;

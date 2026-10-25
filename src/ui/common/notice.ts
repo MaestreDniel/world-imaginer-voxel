@@ -31,6 +31,11 @@ export interface Notices {
    * on `clear()` and when a newer confirmation replaces it (one is pending at most).
    */
   confirm(text: string, confirmLabel: string): Promise<boolean>;
+  /**
+   * Removes every row and clears its timer (a pending confirmation resolves false); later calls show nothing (SP4c
+   * spec §1.2).
+   */
+  dispose(): void;
 }
 
 interface Button {
@@ -44,6 +49,7 @@ export function createNotices(host: HTMLElement): Notices {
   /** Each shown row and what removing it does (clear its timer, settle its confirmation). */
   const rows = new Map<HTMLElement, { readonly text: string; readonly onRemove: () => void }>();
   let pendingConfirm: HTMLElement | null = null;
+  let disposed = false;
 
   function remove(row: HTMLElement): void {
     const entry = rows.get(row);
@@ -82,6 +88,7 @@ export function createNotices(host: HTMLElement): Notices {
 
   return {
     show(text, opts = {}) {
+      if (disposed) return;
       const buttons = (opts.actions ?? []).map((a): Button => ({ label: a.label, className: 'notice-action', run: () => a.run() }));
       add(text, opts.kind ?? 'info', buttons, true, opts.timeoutMs, () => {});
     },
@@ -92,6 +99,7 @@ export function createNotices(host: HTMLElement): Notices {
       for (const row of [...rows.keys()]) remove(row);
     },
     confirm(text, confirmLabel) {
+      if (disposed) return Promise.resolve(false);
       if (pendingConfirm !== null) remove(pendingConfirm);
       return new Promise<boolean>((resolve) => {
         const row = add(text, 'warn', [
@@ -103,6 +111,11 @@ export function createNotices(host: HTMLElement): Notices {
         });
         pendingConfirm = row;
       });
+    },
+    dispose() {
+      if (disposed) return;
+      disposed = true;
+      for (const row of [...rows.keys()]) remove(row);
     },
   };
 }

@@ -6,6 +6,10 @@
  * active tab and open sections persist in localStorage under `wi10.layout.v1`: the parsing and clamping are
  * pure, and every storage access is behind try/catch, so a missing, invalid or unreachable value gives the
  * defaults. The map canvas follows its host through mapView's ResizeObserver.
+ *
+ * The grid mounts into a child `.map` of its host (SP4c spec §1.1), so the world's `#app` is never wiped; the host is
+ * the `map` size container (`.map-host`), whose width the narrow layout's container query reads (§2.2: the map half of
+ * mode B is narrower than the window). `dispose` removes the grid and the class and drops the listeners.
  */
 import { el } from '../common/dom';
 
@@ -167,10 +171,15 @@ export interface PageLayout {
   onDrawerChange(fn: () => void): () => void;
   sectionOpen(path: string): boolean;
   setSectionOpen(path: string, open: boolean): void;
+  /** Removes the grid (its splitters' and tabs' listeners go with it) and the host's class; drops the change listeners. */
+  dispose(): void;
 }
 
-/** Builds the page grid in `root` from the stored layout and keeps the stored layout up to date. */
-export function createLayout(root: HTMLElement, storage: LayoutStorage | null): PageLayout {
+/** The class that makes a layout's host the `map` size container (map.css). */
+export const MAP_HOST_CLASS = 'map-host';
+
+/** Builds the page grid in a child of `host` from the stored layout and keeps the stored layout up to date. */
+export function createLayout(host: HTMLElement, storage: LayoutStorage | null): PageLayout {
   let layout = loadLayout(storage);
   const commit = (l: Layout) => { layout = l; saveLayout(storage, l); };
 
@@ -248,7 +257,8 @@ export function createLayout(root: HTMLElement, storage: LayoutStorage | null): 
   tabKeys(tabBar, TAB_IDS, buttons, (id) => showTab(id));
   tabKeys(drawerBar, DRAWER_TAB_IDS, drawerButtons, (id) => setDrawer(true, id));
   page.append(toolbar, notices, map, vsplit, side, hsplit, drawer);
-  root.replaceChildren(page);
+  host.classList.add(MAP_HOST_CLASS);
+  host.append(page);
 
   const applySizes = () => {
     page.style.setProperty('--panel-w', `${layout.panelWidth}px`);
@@ -337,6 +347,12 @@ export function createLayout(root: HTMLElement, storage: LayoutStorage | null): 
     sectionOpen(path) { return layout.openSections.includes(path); },
     setSectionOpen(path, open) {
       if (layout.openSections.includes(path) !== open) commit(withSection(layout, path, open));
+    },
+    dispose() {
+      panelFns.clear();
+      drawerFns.clear();
+      page.remove();
+      host.classList.remove(MAP_HOST_CLASS);
     },
   };
 }

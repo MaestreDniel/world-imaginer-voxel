@@ -121,6 +121,51 @@ describe('installShortcuts', () => {
     dispose();
   });
 
+  test('undo and redo installed alone: Ctrl+Z undoes, Ctrl+Y and Ctrl+Shift+Z redo, P and Escape pass through unprevented (SP4c spec §2.4)', () => {
+    const win = new EventTarget();
+    vi.stubGlobal('window', win);
+    const got: ShortcutAction[] = [];
+    const dispose = installShortcuts((a) => got.push(a), (a) => a === 'undo' || a === 'redo');
+    const keys = [
+      keydown('z', { ctrlKey: true }), keydown('y', { ctrlKey: true }), keydown('Z', { ctrlKey: true, shiftKey: true }),
+      keydown('p'), keydown('Escape'),
+    ];
+    for (const k of keys) win.dispatchEvent(k);
+    expect(got).toEqual(['undo', 'redo', 'redo']);
+    expect(keys.map((k) => k.defaultPrevented)).toEqual([true, true, true, false, false]);
+    dispose();
+  });
+
+  test('P and Escape installed with `enabled` false: nothing runs, nothing prevented; with true: as today (SP4c spec §2.4)', () => {
+    const win = new EventTarget();
+    vi.stubGlobal('window', win);
+    const got: ShortcutAction[] = [];
+    let on = false;
+    const dispose = installShortcuts((a) => got.push(a), (a) => (a === 'togglePanel' || a === 'closeDrawer') && on);
+    const off = [keydown('p'), keydown('Escape'), keydown('z', { ctrlKey: true })];
+    for (const k of off) win.dispatchEvent(k);
+    expect(got).toEqual([]);
+    expect(off.map((k) => k.defaultPrevented)).toEqual([false, false, false]);
+    on = true;
+    const enabled = [keydown('p'), keydown('Escape'), keydown('z', { ctrlKey: true })];
+    for (const k of enabled) win.dispatchEvent(k);
+    expect(got).toEqual(['togglePanel', 'closeDrawer']);
+    expect(enabled.map((k) => k.defaultPrevented)).toEqual([true, true, false]);
+    dispose();
+  });
+
+  test('the shell and the tool together: each key runs one action once (SP4c spec §1.4)', () => {
+    const win = new EventTarget();
+    vi.stubGlobal('window', win);
+    const got: string[] = [];
+    const offShell = installShortcuts((a) => got.push(`shell ${a}`), (a) => a === 'undo' || a === 'redo');
+    const offTool = installShortcuts((a) => got.push(`tool ${a}`), (a) => a === 'togglePanel' || a === 'closeDrawer');
+    for (const k of [keydown('z', { ctrlKey: true }), keydown('y', { ctrlKey: true }), keydown('p'), keydown('Escape')]) win.dispatchEvent(k);
+    expect(got).toEqual(['shell undo', 'shell redo', 'tool togglePanel', 'tool closeDrawer']);
+    offShell();
+    offTool();
+  });
+
   test('the event target decides: Ctrl+Z dispatched at a text input is left to the browser', () => {
     const field = Object.assign(new EventTarget(), { tagName: 'INPUT', type: 'text' });
     vi.stubGlobal('window', field);

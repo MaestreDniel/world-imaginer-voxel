@@ -33,6 +33,26 @@ test('flush writes the pending value immediately; a newer set wins over a retry'
   expect(writes).toEqual(['#x']);
 });
 
+test('dispose flushes a pending write and clears its timer (SP4c spec §1.2)', () => {
+  const writes: string[] = [];
+  const w = createUrlWriter((u) => writes.push(u), 200);
+  w.set('#a');
+  expect(vi.getTimerCount()).toBe(1);
+  w.dispose();
+  expect(writes).toEqual(['#a']);
+  expect(vi.getTimerCount()).toBe(0);
+  w.set('#b');
+  w.flush();
+  vi.advanceTimersByTime(5000);
+  expect(writes).toEqual(['#a']);
+  expect(vi.getTimerCount()).toBe(0);
+  // A write that throws at dispose leaves no retry timer behind.
+  const failing = createUrlWriter(() => { throw new Error('SecurityError'); }, 200, 1000);
+  failing.set('#c');
+  failing.dispose();
+  expect(vi.getTimerCount()).toBe(0);
+});
+
 describe('the 64 KiB hash cap (SP3d spec §1.12)', () => {
   const url = (hashChars: number) => `?map#${'A'.repeat(hashChars)}`;
 

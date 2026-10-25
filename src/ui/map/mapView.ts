@@ -10,7 +10,7 @@ import { MAP_TILE_PX, type MapLevel } from '../../core/constants';
 import type { Spawn } from '../../gen/column/spawn';
 import { levelFor } from '../../gen/map/tile';
 import type { CutOverlay } from '../crossSection/model';
-import { JobCancelled, WorkerFailed, type WorkerPool } from '../../engine/workerPool';
+import { JobCancelled, WorkerFailed, type TileRequest, type WorkerPool } from '../../engine/workerPool';
 import { tileCacheCapacity, TILE_CACHE_MIN } from './capacity';
 import { createFallbacks, type LevelTiles, type TileDraw } from './fallback';
 import { highlightMask } from './highlight';
@@ -58,6 +58,10 @@ export interface MapCanvas {
   setCrosshair(on: boolean): void;
   /** Blank draws since the first image (SP2b spec §2.8), for the latency hook. */
   readonly blankDraws: number;
+  /**
+   * Removes the canvas, cancels the tiles it queued on the pool and ignores the ones that resolve later (SP4c spec §1.2);
+   * every later call does nothing.
+   */
   destroy(): void;
 }
 
@@ -91,12 +95,16 @@ export function createMapCanvas(host: HTMLElement, pool: WorkerPool, initial: Ma
     fallbacks.evicted(key);
   });
   const pending = new Set<string>();
+  /** The tile requests this canvas has on the pool (the pool keeps each request object as its job's `tile`). */
+  const asked = new Set<TileRequest>();
+  let destroyed = false;
 
   const source = createTileSource();
   const keyOf = (layer: MapView['layer'], level: MapLevel, tx: number, tz: number) => source.keyFor(layer, level, tx, tz, pool.epoch);
   const fitCache = () => cache.setCapacity(tileCacheCapacity(view, canvas.width, canvas.height));
 
   const request = () => {
+    if (destroyed) return;
     const w = canvas.width;
     const h = canvas.height;
     const plan = planTiles(view, w, h, interactive);
@@ -107,16 +115,19 @@ export function createMapCanvas(host: HTMLElement, pool: WorkerPool, initial: Ma
       if (key === null) return;
       if (pending.has(key) || cache.get(key) !== undefined) continue;
       pending.add(key);
-      const layer = view.layer;
-      pool.tile({ layer, level: t.level, tx: t.tx, tz: t.tz }, t.priority)
+      const req: TileRequest = { layer: view.layer, level: t.level, tx: t.tx, tz: t.tz };
+      asked.add(req);
+      pool.tile(req, t.priority)
         .then(async (r) => {
+          if (destroyed) return;
           const bitmap = await createImageBitmap(new ImageData(new Uint8ClampedArray(r.rgba), MAP_TILE_PX, MAP_TILE_PX));
+          if (destroyed) { bitmap.close(); return; }
           cache.set(key, { bitmap, ids: r.ids === null ? null : new Uint8Array(r.ids) });
           schedule();
         })
         // A failed worker is reported once by the page's notice (SP2b spec §2.3), not per tile.
-        .catch((e: unknown) => { if (!(e instanceof JobCancelled) && !(e instanceof WorkerFailed)) console.error(e); })
-        .finally(() => pending.delete(key));
+        .catch((e: unknown) => { if (!destroyed && !(e instanceof JobCancelled) && !(e instanceof WorkerFailed)) console.error(e); })
+        .finally(() => { pending.delete(key); asked.delete(req); });
     }
   };
 
@@ -240,7 +251,7 @@ export function createMapCanvas(host: HTMLElement, pool: WorkerPool, initial: Ma
     const epoch = source.epoch;
     if (epoch !== null && epoch === pool.epoch) opts.onPreviewProgress(epoch, frame.nearestCurrent, preview.length);
   };
-  const schedule = () => { if (raf === 0) raf = requestAnimationFrame(draw); };
+  const schedule = () => { if (raf === 0 && !destroyed) raf = requestAnimationFrame(draw); };
 
   const resize = () => {
     const w = Math.max(1, Math.floor(host.clientWidth));
@@ -300,6 +311,17 @@ export function createMapCanvas(host: HTMLElement, pool: WorkerPool, initial: Ma
     setSquare(sq) { square = sq; schedule(); },
     setCrosshair(on) { canvas.classList.toggle('map-canvas-cut', on); },
     get blankDraws() { return fallbacks.blankDraws; },
-    destroy() { cancelAnimationFrame(raf); observer.disconnect(); cache.clear(); masks.clear(); canvas.remove(); },
+    destroy() {
+      if (destroyed) return;
+      destroyed = true;
+      cancelAnimationFrame(raf);
+      raf = 0;
+      observer.disconnect();
+      pool.cancelTiles((r) => asked.has(r));
+      asked.clear();
+      cache.clear();
+      masks.clear();
+      canvas.remove();
+    },
   };
 }

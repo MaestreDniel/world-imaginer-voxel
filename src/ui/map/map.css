@@ -1,4 +1,6 @@
 /* The ?map editor (SP2b spec §3.1): toolbar, notices, map | splitter | side panel, then the drawer row under both. */
+/* The layout's host is the `map` size container (SP4c spec §1.2, §2.2): the narrow layout follows its width, not the window's. */
+.map-host { container: map / inline-size; }
 .map {
   --panel-w: 340px;
   --drawer-h: 300px;
@@ -40,8 +42,8 @@
 .map-readout { font-family: ui-monospace, monospace; white-space: pre; }
 .map.panel-hidden { grid-template-columns: minmax(0, 1fr) 0 0; }
 .map.panel-hidden .map-side, .map.panel-hidden .map-split-v { display: none; }
-/* Below 900 px the side panel stacks under the map and the page scrolls. */
-@media (max-width: 899px) {
+/* Below 900 px of host width the side panel stacks under the map and the page scrolls. */
+@container map (max-width: 899px) {
   .map, .map.panel-hidden {
     overflow-y: auto;
     grid-template-columns: minmax(0, 1fr);

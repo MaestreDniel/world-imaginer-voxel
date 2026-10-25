@@ -63,6 +63,8 @@ export interface HoverModel {
   hover(voxel: HoverVoxel | null, target: HoverTarget | null): string;
   /** The epoch may have moved: the last hover again, at the current epoch (the same return as `hover`). */
   refresh(): string;
+  /** A probe that settles later shows nothing and runs nothing; later hovers return '' and probe nothing (SP4c spec §1.2). */
+  dispose(): void;
 }
 
 /**
@@ -76,7 +78,8 @@ export function createHoverModel(pool: Pick<WorkerPool, 'fieldProbe'>, epoch: ()
   let current: HoverKey | null = null;
   let answered: { readonly key: HoverKey; readonly text: string } | null = null;
   let last: { readonly voxel: HoverVoxel | null; readonly target: HoverTarget | null } = { voxel: null, target: null };
-  const live = (key: HoverKey): boolean => current !== null && sameHoverKey(current, key) && key.epoch === epoch();
+  let disposed = false;
+  const live = (key: HoverKey): boolean => !disposed && current !== null && sameHoverKey(current, key) && key.epoch === epoch();
 
   const answer = (key: HoverKey, text: string) => {
     answered = { key, text };
@@ -86,10 +89,10 @@ export function createHoverModel(pool: Pick<WorkerPool, 'fieldProbe'>, epoch: ()
   const run = (key: HoverKey) => {
     busy = key;
     pool.fieldProbe({ field: key.field, path: key.path, x: key.x, y: key.y, z: key.z }).then((v) => {
-      if (key.epoch !== epoch()) return;
+      if (disposed || key.epoch !== epoch()) return;
       answer(key, hoverValueText(key.field, v));
     }, (e: unknown) => {
-      if (key.epoch !== epoch()) return;
+      if (disposed || key.epoch !== epoch()) return;
       if (e instanceof JobCancelled) {
         if (live(key)) next ??= key;
         return;
@@ -107,7 +110,7 @@ export function createHoverModel(pool: Pick<WorkerPool, 'fieldProbe'>, epoch: ()
   const hover = (voxel: HoverVoxel | null, target: HoverTarget | null): string => {
     last = { voxel, target };
     const e = epoch();
-    if (voxel === null || target === null || e === null) {
+    if (disposed || voxel === null || target === null || e === null) {
       current = null;
       next = null;
       return '';
@@ -126,5 +129,10 @@ export function createHoverModel(pool: Pick<WorkerPool, 'fieldProbe'>, epoch: ()
   return {
     hover,
     refresh: () => hover(last.voxel, last.target),
+    dispose() {
+      disposed = true;
+      current = null;
+      next = null;
+    },
   };
 }

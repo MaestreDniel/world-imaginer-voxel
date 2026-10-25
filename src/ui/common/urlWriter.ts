@@ -37,10 +37,11 @@ export function createUrlWriter(
   delayMs = 200,
   retryMs = 1000,
   onOversize: (oversize: boolean) => void = () => {},
-): { set(url: string): void; flush(): void } {
+): { set(url: string): void; flush(): void; dispose(): void } {
   let pending: string | null = null;
   let timer: ReturnType<typeof setTimeout> | null = null;
   let oversize = false;
+  let disposed = false;
   const schedule = (ms: number) => {
     if (timer !== null) clearTimeout(timer);
     timer = setTimeout(flush, ms);
@@ -63,7 +64,19 @@ export function createUrlWriter(
     }
   }
   return {
-    set(url) { pending = url; schedule(delayMs); },
+    set(url) {
+      if (disposed) return;
+      pending = url;
+      schedule(delayMs);
+    },
     flush,
+    /** Writes a pending URL now, then drops any retry and ignores later calls (SP4c spec §1.2). */
+    dispose() {
+      if (disposed) return;
+      flush();
+      disposed = true;
+      pending = null;
+      if (timer !== null) { clearTimeout(timer); timer = null; }
+    },
   };
 }

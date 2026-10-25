@@ -478,4 +478,14 @@ describe('the Voxels hover rule id (SP3c spec §6: a surfaceProbe job, the map h
     expect(h.rules.hover(cell(1, 1, 1, 8))).toBe(RULE_WAITING);
     expect(h.probes.map(at)).toEqual([[5, 6, 7], [1, 1, 1], [2, 2, 2], [1, 1, 1]]);
   });
+  test('dispose: a probe that answers later shows nothing and runs nothing; later hovers probe nothing (SP4c spec §1.2)', async () => {
+    const { rules, probes, shown } = harness();
+    rules.hover(cell(1, 2, 3));
+    rules.hover(cell(4, 5, 6));
+    rules.dispose();
+    probes[0]!.reject(new JobCancelled());
+    await flush();
+    expect(rules.hover(cell(7, 8, 9))).toBe('');
+    expect([probes.length, shown]).toEqual([1, []]);
+  });
 });

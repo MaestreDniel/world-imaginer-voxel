@@ -225,6 +225,8 @@ export interface RuleReadout {
    * of a slice that is not the current session epoch's (a stale slice: no probe, the pool runs another draft).
    */
   hover(cell: RuleCell | null): string;
+  /** A probe that settles later shows nothing and runs nothing; later hovers return '' and probe nothing (SP4c spec §1.2). */
+  dispose(): void;
 }
 
 /**
@@ -240,17 +242,18 @@ export function createRuleReadout(pool: { surfaceProbe(x: number, y: number, z: 
   let next: RuleCell | null = null;
   let current: RuleCell | null = null;
   let answered: { readonly cell: RuleCell; readonly suffix: string } | null = null;
-  const live = (cell: RuleCell): boolean => current !== null && sameRuleCell(current, cell) && cell.epoch === epoch();
+  let disposed = false;
+  const live = (cell: RuleCell): boolean => !disposed && current !== null && sameRuleCell(current, cell) && cell.epoch === epoch();
 
   const run = (cell: RuleCell) => {
     busy = cell;
     pool.surfaceProbe(cell.x, cell.y, cell.z).then((r) => {
-      if (cell.epoch !== epoch()) return;
+      if (disposed || cell.epoch !== epoch()) return;
       const suffix = ruleSuffix(r.path);
       answered = { cell, suffix };
       if (live(cell)) show(cell, suffix);
     }, (e: unknown) => {
-      if (cell.epoch !== epoch()) return;
+      if (disposed || cell.epoch !== epoch()) return;
       if (e instanceof JobCancelled) {
         if (live(cell)) next ??= cell;
         return;
@@ -269,7 +272,7 @@ export function createRuleReadout(pool: { surfaceProbe(x: number, y: number, z: 
 
   return {
     hover(cell) {
-      if (cell === null || cell.epoch !== epoch()) {
+      if (disposed || cell === null || cell.epoch !== epoch()) {
         current = null;
         next = null;
         return '';
@@ -282,6 +285,11 @@ export function createRuleReadout(pool: { surfaceProbe(x: number, y: number, z: 
       if (busy === null) run(cell);
       else next = sameRuleCell(busy, cell) ? null : cell;
       return RULE_WAITING;
+    },
+    dispose() {
+      disposed = true;
+      current = null;
+      next = null;
     },
   };
 }
