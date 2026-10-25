@@ -1,3 +1,4 @@
+import { readFileSync } from 'node:fs';
 import { Box3, Group, Sphere, type BatchedMesh, type Mesh, type Object3D } from 'three';
 import { describe, expect, test } from 'vitest';
 import { MESH_PASS_CUTOUT, MESH_PASS_OPAQUE, MESH_PASS_TRANSLUCENT, ROW_INTS, type ColumnMeshPayload } from '../../src/mesh/column';
@@ -289,6 +290,14 @@ describe('regionGrid: the pump\'s order (SP4c spec §5.4, D10)', () => {
   test('EMPTIED_PER_PUMP is 8 and RELEASE_SHARE 16 (half the 32-row cap)', () => {
     expect(EMPTIED_PER_PUMP).toBe(8);
     expect(RELEASE_SHARE).toBe(16);
+  });
+
+  test('R7\'s Apply metric bounds a pump\'s releases by RELEASE_SHARE itself, imported, not a copy of its value (final review REN-1)', () => {
+    const src = readFileSync(new URL('../metrics/apply.metric.ts', import.meta.url), 'utf8');
+    const line = src.split('\n').find((l) => l.startsWith('import ') && l.includes('/src/render/regionGrid'));
+    expect(line).toMatch(/\{ RELEASE_SHARE \}/);
+    expect(src).toContain('.toBeLessThanOrEqual(RELEASE_SHARE)');
+    expect(src).not.toMatch(/RELEASE_ROWS_MAX/);
   });
 
   test('after a far jump that removes 489 shown columns of 14 rows, the first new column\'s rows upload in the first pump that has them', () => {

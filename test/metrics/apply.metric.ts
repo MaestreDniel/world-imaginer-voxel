@@ -12,6 +12,7 @@ import { createThrottle } from '../../src/engine/throttle';
 import { createUploadBudget } from '../../src/engine/uploadBudget';
 import { createWorkerPool } from '../../src/engine/workerPool';
 import { createMaterialSystem } from '../../src/render/materials/index';
+import { RELEASE_SHARE } from '../../src/render/regionGrid';
 import {
   createRevealProbe, createSectionRenderer, createSectionRendererCounts, type SectionRendererKind, type UploadGate,
 } from '../../src/render/sectionRenderer';
@@ -59,7 +60,9 @@ import { currentTier, metricTest } from '../harness/metric';
  *   each apply once, at epochs 2 and 1, and E3 adopts once and frees and stages nothing; the first 16 T jobs after the
  *   teleport are nearest-first in the (score, colKey) order from the new camera (SP4b's rule); no fatal, skipped or
  *   StoreFull event and no failed column; the release rows of every pump that began with an upload waiting ≤ 16
- *   (`RELEASE_SHARE`, SP4c spec §5.4); and at the end, after disposing the coordinator and every job settled, every
+ *   (`RELEASE_SHARE`, imported, SP4c spec §5.4; no pump of this script begins with an upload waiting and releases
+ *   queued, so `releaseRowsPerPumpMax` reads 0 on every tier and D10's share is pinned by `regionGrid.test.ts` and the
+ *   contract suite, final review REN-1/GOV-4); and at the end, after disposing the coordinator and every job settled, every
  *   thread's limbo drains (bounded, 5 s) and every pool slot is free.
  * - **Recorded:** `framesE0` … `framesE4`, `swaps` (reveals of a payload staged over a shown column), `frees` (the
  *   coordinator's column frees over E1-E4), `applyFirstSwapFrames` (the E1 Apply's frame to the first swap within 2
@@ -92,8 +95,6 @@ const TELEPORT_COLUMNS = 640;
 const SETTLE_FRAMES_MAX = 20_000;
 /** The T jobs after the teleport whose order is asserted (SP4b's rule, §3.5: 16 frees per frame). */
 const FIRST_T_AFTER_TELEPORT = 16;
-/** The rows a pump may release while an upload waits (`regionGrid.ts`'s `RELEASE_SHARE`, SP4c spec §5.4). */
-const RELEASE_ROWS_MAX = 16;
 /** "Near the player" for the first swap (spec §8.1): within this many columns of the camera's, on both axes. */
 const NEAR_COLUMNS = 2;
 
@@ -296,7 +297,7 @@ async function edit(kind: SectionRendererKind): Promise<Run> {
         run.releasedRows += releasedThisPump;
         if (waiting && releasedThisPump > run.releaseRowsPerPumpMax) run.releaseRowsPerPumpMax = releasedThisPump;
       }
-      if (waiting) expect(releasedThisPump, `${kind}: rows released by a pump while an upload waits`).toBeLessThanOrEqual(RELEASE_ROWS_MAX);
+      if (waiting) expect(releasedThisPump, `${kind}: rows released by a pump while an upload waits`).toBeLessThanOrEqual(RELEASE_SHARE);
     };
     const filled = (): boolean => coordinator.firstFill() && sections.counts(uploads).columnsComplete === uploads.columnsStaged;
     const cam = (): StreamCamera => ({ x: cx * 16 + 8, z: cz * 16 + 8, yawDeg: 0 });
