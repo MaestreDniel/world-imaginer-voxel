@@ -144,6 +144,17 @@ export function saveLayout(storage: LayoutStorage | null, l: Layout): boolean {
   }
 }
 
+/**
+ * Whether the side panel's tab `id` is on screen: the map shown (the world's overlay hides the tool, SP4c spec §1.3), the
+ * panel visible and `id` selected. A tab off screen requests nothing (SP2b spec §5.5; final review MAP-2).
+ */
+export const tabOnScreen = (shown: boolean, l: Pick<PageLayout, 'panelVisible' | 'tab'>, id: TabId): boolean =>
+  shown && l.panelVisible && l.tab === id;
+
+/** Whether the drawer's tab `id` is on screen: the map shown, the drawer open and `id` selected (as `tabOnScreen`). */
+export const drawerTabOnScreen = (shown: boolean, l: Pick<PageLayout, 'drawerOpen' | 'drawerTab'>, id: DrawerTabId): boolean =>
+  shown && l.drawerOpen && l.drawerTab === id;
+
 /** The page's regions and the layout actions (the P and Escape shortcuts, the editors' drawer and sections). */
 export interface PageLayout {
   readonly toolbar: HTMLElement;

@@ -40,7 +40,7 @@ import { createSplineDrawer } from '../splineEditor/drawer';
 import { isSplineLeaf } from '../splineEditor/model';
 import { mapClickAction } from './clickAction';
 import { createHoverReadout } from './hoverPanel';
-import { createLayout, type LayoutStorage } from './layout';
+import { createLayout, drawerTabOnScreen, tabOnScreen, type LayoutStorage } from './layout';
 import { encodeMapState, type MapView } from './mapState';
 import { createMapCanvas, type MapCanvas } from './mapView';
 import { draftOf, type DriverCanvas, type PreviewDriver } from './previewDriver';
@@ -155,7 +155,12 @@ export function createMapTool(host: HTMLElement, deps: MapToolDeps): MapTool {
   let cutPointer: CutPoint | null = null;
   /** The map's pin (the Density tab's first horizontal centre when set, SP3d spec §3.7). */
   let pin: CutPoint | null = null;
-  const densityShown = (): boolean => layout.drawerOpen && layout.drawerTab === 'density';
+  /**
+   * Whether the map is shown: always on the standalone page; in the world, between `show` and `hide`. Hidden, no tab or
+   * drawer tab is on screen, so the shares, spline, cross-section and Density views request nothing (final review MAP-2).
+   */
+  let shown = true;
+  const densityShown = (): boolean => drawerTabOnScreen(shown, layout, 'density');
   const canvas = createMapCanvas(layout.map, pool, view, {
     onView: (v) => { view = v; canvas.setView(v); viewChanged(); renderStatus(); },
     onHover: (x, z) => {
@@ -274,7 +279,7 @@ export function createMapTool(host: HTMLElement, deps: MapToolDeps): MapTool {
   // The drawer's Spline tab (§4.2-4.4): it requests its statistics when the driver settles (§4.3).
   const splines = createSplineDrawer(layout.drawerTabs.spline, {
     session, notices, pool, driver, edit,
-    visible: () => layout.drawerOpen && layout.drawerTab === 'spline',
+    visible: () => drawerTabOnScreen(shown, layout, 'spline'),
     close: () => layout.closeDrawer(),
   });
   disposers.add(() => splines.dispose());
@@ -283,7 +288,7 @@ export function createMapTool(host: HTMLElement, deps: MapToolDeps): MapTool {
   // while the tab is on screen, when it comes on screen and when a line is drawn.
   const section = createCrossSection(layout.drawerTabs.section, {
     session, notices, pool, driver,
-    visible: () => layout.drawerOpen && layout.drawerTab === 'section',
+    visible: () => drawerTabOnScreen(shown, layout, 'section'),
     arm: () => setCut(CUT_ARMED),
     clear: () => {
       section.setLine(null);
@@ -359,7 +364,7 @@ export function createMapTool(host: HTMLElement, deps: MapToolDeps): MapTool {
   // A tab that comes on screen catches up: the spline drawer renders and requests its statistics, the
   // cross-section requests its profile, the Density tab restores its scroll and requests its slice.
   disposers.add(layout.onDrawerChange(() => {
-    if (layout.drawerOpen && layout.drawerTab === 'spline' && splines.leaf !== null) splines.open(splines.leaf);
+    if (drawerTabOnScreen(shown, layout, 'spline') && splines.leaf !== null) splines.open(splines.leaf);
     section.shown();
     densityChanged();
   }));
@@ -372,7 +377,7 @@ export function createMapTool(host: HTMLElement, deps: MapToolDeps): MapTool {
   layout.tabs.biomes.append(sharesHost, tableHost);
   const shares = createBiomeShares(sharesHost, {
     session, notices, pool, driver,
-    tabVisible: () => layout.panelVisible && layout.tab === 'biomes',
+    tabVisible: () => tabOnScreen(shown, layout, 'biomes'),
   });
   disposers.add(() => shares.dispose());
   disposers.add(layout.onPanelChange(() => shares.shown()));
@@ -398,6 +403,14 @@ export function createMapTool(host: HTMLElement, deps: MapToolDeps): MapTool {
   renderStatus();
   deps.onMounted?.({ canvas, host: layout.map, view: () => view, editAt });
 
+  /** Shown again, every view on screen catches up as when it comes on screen (the drawer's and the panel's changes). */
+  const caughtUp = (): void => {
+    if (drawerTabOnScreen(shown, layout, 'spline') && splines.leaf !== null) splines.open(splines.leaf);
+    section.shown();
+    densityChanged();
+    shares.shown();
+  };
+
   return {
     show(centre) {
       // Centred on the camera, clamped to the hash's window as pan and zoom clamp (final review MAP-1).
@@ -411,8 +424,17 @@ export function createMapTool(host: HTMLElement, deps: MapToolDeps): MapTool {
       // Shown again, the canvas re-measures its host (hidden, it was display: none), then plans its tiles and draws.
       canvas.setHidden(false);
       driver.setPreviewWanted(true);
+      if (!shown) {
+        shown = true;
+        caughtUp();
+      }
     },
     hide() {
+      // Hidden, nothing requests (MAP-2); the slice viewer stops at once. The Density tab keeps its saved scroll: the host
+      // is already display: none, so it is not hidden through `densityChanged`.
+      shown = false;
+      slices.setShown(false);
+      hoverAt(null);
       canvas.setHidden(true);
       driver.setPreviewWanted(false);
     },

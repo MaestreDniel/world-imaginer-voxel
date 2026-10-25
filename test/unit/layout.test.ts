@@ -1,6 +1,7 @@
+import { readFileSync } from 'node:fs';
 import { describe, expect, test } from 'vitest';
 import {
-  clampDrawerHeight, clampPanelWidth, DEFAULT_LAYOUT, DRAWER_TAB_IDS, DRAWER_TAB_LABELS, LAYOUT_KEY, loadLayout, parseLayout, saveLayout, serializeLayout, TAB_IDS, tabKeyTarget, withSection,
+  clampDrawerHeight, clampPanelWidth, DEFAULT_LAYOUT, drawerTabOnScreen, DRAWER_TAB_IDS, DRAWER_TAB_LABELS, LAYOUT_KEY, loadLayout, parseLayout, saveLayout, serializeLayout, TAB_IDS, tabKeyTarget, tabOnScreen, withSection,
   type Layout, type LayoutStorage,
 } from '../../src/ui/map/layout';
 
@@ -133,5 +134,43 @@ describe('tab keys (SP2b spec §3.1): the tab bars are reachable from the keyboa
     expect(tabKeyTarget(k('ArrowLeft', { metaKey: true }), 1, 4)).toBeNull();
     expect(tabKeyTarget(k('End', { shiftKey: true }), 1, 4)).toBeNull();
     expect(tabKeyTarget(k('ArrowRight'), -1, 4)).toBeNull();
+  });
+});
+
+describe('a hidden map requests nothing (SP2b spec §5.5; final review MAP-2)', () => {
+  test('a tab or drawer tab is on screen only while the map is shown, its panel or drawer open and it selected', () => {
+    const panel = { panelVisible: true, tab: 'biomes' as const };
+    expect(tabOnScreen(true, panel, 'biomes')).toBe(true);
+    expect(tabOnScreen(false, panel, 'biomes')).toBe(false);
+    expect(tabOnScreen(true, { ...panel, panelVisible: false }, 'biomes')).toBe(false);
+    expect(tabOnScreen(true, panel, 'world')).toBe(false);
+    for (const id of DRAWER_TAB_IDS) {
+      const drawer = { drawerOpen: true, drawerTab: id };
+      expect(drawerTabOnScreen(true, drawer, id)).toBe(true);
+      expect(drawerTabOnScreen(false, drawer, id)).toBe(false);
+      expect(drawerTabOnScreen(true, { ...drawer, drawerOpen: false }, id)).toBe(false);
+      expect(drawerTabOnScreen(true, drawer, DRAWER_TAB_IDS.find((t) => t !== id)!)).toBe(false);
+    }
+  });
+
+  // The real tool mounts only in the browser smoke (SP4c spec §9): its wiring is pinned on the source.
+  test('the map tool gates the shares, the spline drawer, the cross-section and Density on whether it is shown', () => {
+    const src = readFileSync(new URL('../../src/ui/map/mapTool.ts', import.meta.url), 'utf8');
+    expect(src).toContain("const densityShown = (): boolean => drawerTabOnScreen(shown, layout, 'density');");
+    expect(src).toContain("visible: () => drawerTabOnScreen(shown, layout, 'spline'),");
+    expect(src).toContain("visible: () => drawerTabOnScreen(shown, layout, 'section'),");
+    expect(src).toContain("tabVisible: () => tabOnScreen(shown, layout, 'biomes'),");
+    // The standalone page never hides the tool: shown from the mount, so ?map behaves as before.
+    expect(src).toContain('let shown = true;');
+    const show = src.slice(src.indexOf('    show(centre) {'), src.indexOf('    hide() {'));
+    const hide = src.slice(src.indexOf('    hide() {'), src.indexOf('    setPlayer:'));
+    // Shown again, every view on screen catches up once (as when it comes on screen); hidden, the slice viewer stops.
+    expect(show).toContain('if (!shown) {');
+    expect(show).toContain('shown = true;');
+    expect(show).toContain('caughtUp();');
+    expect(hide).toContain('shown = false;');
+    expect(hide).toContain('slices.setShown(false);');
+    const caughtUp = src.slice(src.indexOf('const caughtUp = (): void => {'));
+    for (const call of ['splines.open(splines.leaf)', 'section.shown();', 'densityChanged();', 'shares.shown();']) expect(caughtUp.slice(0, caughtUp.indexOf('\n  };'))).toContain(call);
   });
 });
