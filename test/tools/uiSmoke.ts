@@ -2356,13 +2356,32 @@ async function overlayOpenAndTeleport(t: Smoke, what: string, shot: string | nul
 }
 
 /**
- * One live edit (spec §8.6 step 5): `act` changes the session, then the world's stale count rises above 0 (with
- * `notice` in `.world-notices` within 1.5 s, when given) and falls back to 0 within 30 s, with no page error.
+ * liveEdit's HUD check (spec §8.6 step 5, D26): the row "stale n / needed" with 0 < n ≤ needed; no row passes only when
+ * the world already settled (`stale()` read 0) before the HUD's 250 ms refresh could show it (final review GOV-5).
+ */
+export function hudStaleRowOk(row: { readonly stale: number; readonly needed: number } | null, settled: boolean): boolean {
+  return row === null ? settled : row.stale > 0 && row.stale <= row.needed;
+}
+
+/**
+ * One live edit (spec §8.6 step 5): `act` changes the session; `notice`, when given, shows in `.world-notices` (it
+ * lives 1.5 s from the Apply, so it is waited for right after `act`, before the waits that could outlast it; final
+ * review GOV-5); the world's stale count rises above 0, the HUD shows its row (unless the world settled before the
+ * HUD's refresh), and the count falls back to 0 within 30 s, with no page error.
  */
 async function liveEdit(t: Smoke, what: string, act: () => Promise<void>, notice: string | null = null): Promise<void> {
   const p = t.page;
   const errors0 = t.errors.length;
   await act();
+  if (notice !== null) {
+    // Bounded as the stale count's rise: the notice shows at the Apply and is only there for its 1.5 s.
+    try {
+      await p.until(`(${WORLD_NOTICES}).includes(${JSON.stringify(notice)})`, `${what}: "${notice}" in .world-notices`, 15_000);
+      t.check(true, `${what}: "${notice}" shows in .world-notices`);
+    } catch (e) {
+      t.check(false, `${what}: "${notice}" shows in .world-notices`, e instanceof Error ? e.message : String(e));
+    }
+  }
   let rose = false;
   try {
     await p.until('__wiTest.stale() > 0', `${what}: the stale count above 0`, 15_000);
@@ -2370,11 +2389,14 @@ async function liveEdit(t: Smoke, what: string, act: () => Promise<void>, notice
     // The HUD's "stale n / needed" row (D26), refreshed every 250 ms, while the world regenerates.
     await p.until(`/^stale \\d+ \\/ \\d+$/m.test(${HUD_TEXT}) || __wiTest.stale() === 0`, `${what}: the HUD's stale row`, OVERLAY_APPLY_MS);
     const row = parseHudStale(await p.eval<string>(HUD_TEXT));
-    t.check(row !== null && row.stale > 0 && row.stale <= row.needed, `${what}: the HUD shows "stale ${row?.stale ?? '?'} / ${row?.needed ?? '?'}"`, row);
-    if (notice !== null) {
-      await p.until(`(${WORLD_NOTICES}).includes(${JSON.stringify(notice)})`, `${what}: "${notice}" in .world-notices`, 1500);
-      t.check(true, `${what}: "${notice}" shows in .world-notices`);
-    }
+    const settled = row === null && (await p.eval<number>('__wiTest.stale()')) === 0;
+    t.check(
+      hudStaleRowOk(row, settled),
+      row === null && settled
+        ? `${what}: the HUD's stale row not read: the world settled before the HUD's 250 ms refresh`
+        : `${what}: the HUD shows "stale ${row?.stale ?? '?'} / ${row?.needed ?? '?'}"`,
+      row,
+    );
     const ms = await p.until('__wiTest.stale() === 0', `${what}: the world settled`, OVERLAY_APPLY_MS);
     t.check(true, `${what}: applies live (the stale count above 0, then 0 after ${(ms / 1000).toFixed(1)} s)`);
   } catch (e) {

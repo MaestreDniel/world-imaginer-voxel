@@ -38,7 +38,7 @@ import {
   expectedRenderer, HUD_POLL_MS, hudMoved, hudOnce, parseHud, STREAM_HOLD_MS, STREAM_MIN_MOVE, STREAM_RD, STREAM_RD_MS, STREAM_REVEAL_MS, STREAM_RUNS, streamQuery,
   type HudRead,
   LANDING_ABOVE as SMOKE_LANDING_ABOVE, LANDING_MAX_Y as SMOKE_LANDING_MAX_Y, listenerDiff, listenerKey, listenersLeakFree, OVERLAY_APPLY_MS, OVERLAY_NARROW_WIDTH,
-  OVERLAY_REVEAL_MS, OVERLAY_RUNS, OVERLAY_SHOTS, OVERLAY_TILES_MS, OVERLAY_VIEWPORT, overlayQuery, parseHudStale, previewMs, smokeLandingY, SETTINGS_KEY as SMOKE_SETTINGS_KEY,
+  OVERLAY_REVEAL_MS, OVERLAY_RUNS, OVERLAY_SHOTS, OVERLAY_TILES_MS, OVERLAY_VIEWPORT, overlayQuery, parseHudStale, hudStaleRowOk, previewMs, smokeLandingY, SETTINGS_KEY as SMOKE_SETTINGS_KEY,
   storedMapMode, TELEPORT_EAST_PX, teleportTarget, WORLD_MAP_BPP as SMOKE_WORLD_MAP_BPP,
 } from '../tools/uiSmoke';
 import { LANDING_ABOVE, LANDING_MAX_Y, landingY } from '../../src/ui/world/teleport';
@@ -885,6 +885,32 @@ describe('UI smoke test: the overlay steps (SP4c spec §8.6)', () => {
     expect(parseHudStale(hudText(0))).toBeNull();
     expect(parseHud(hudText(17))?.revealed).toBe(81);
     expect(parseHudStale('unstale 3 / 4')).toBeNull();
+  });
+
+  test('hudStaleRowOk: the row with 0 < stale ≤ needed, or no row when the world already settled before the HUD\'s refresh (final review GOV-5)', () => {
+    expect(hudStaleRowOk({ stale: 17, needed: 81 }, false)).toBe(true);
+    expect(hudStaleRowOk({ stale: 81, needed: 81 }, false)).toBe(true);
+    expect(hudStaleRowOk({ stale: 0, needed: 81 }, false)).toBe(false);
+    expect(hudStaleRowOk({ stale: 82, needed: 81 }, false)).toBe(false);
+    // No row: a pass only when stale() already read 0 (an undo that settled inside 250 ms), never while still stale.
+    expect(hudStaleRowOk(null, true)).toBe(true);
+    expect(hudStaleRowOk(null, false)).toBe(false);
+  });
+
+  test('liveEdit waits for the Undo/Redo notice (1.5 s) right after the act, before the stale and HUD waits (final review GOV-5)', () => {
+    const src = readFileSync(new URL('../tools/uiSmoke.ts', import.meta.url), 'utf8');
+    const start = src.indexOf('async function liveEdit(');
+    expect(start).toBeGreaterThan(-1);
+    const body = src.slice(start, src.indexOf('\n}\n', start));
+    const act = body.indexOf('await act();');
+    const noticeWait = body.indexOf('(${WORLD_NOTICES}).includes(');
+    const staleWait = body.indexOf("'__wiTest.stale() > 0'");
+    const hudWait = body.indexOf('the HUD\'s stale row');
+    expect([act, noticeWait, staleWait, hudWait].every((i) => i > -1)).toBe(true);
+    expect(act).toBeLessThan(noticeWait);
+    expect(noticeWait).toBeLessThan(staleWait);
+    expect(staleWait).toBeLessThan(hudWait);
+    expect(body).toMatch(/hudStaleRowOk\(row, /);
   });
 
   test('previewMs reads the driver\'s lastLatencyMs from the toolbar status text (previewStatusText)', () => {
