@@ -1449,7 +1449,9 @@ export function mountWorldPage(root: HTMLElement, q: WorldQuery, hash: string, o
       },
       // Mode B resizes the 3D at the switch and draws one frame (SP4c spec §2.2); mode A caps it at 60 (§2.6).
       world,
-      frameState,
+      // The frame step's live state, already current: never the warm-up helper `frameState()`, which would rewind
+      // `t` to the opening time and write the raw sky light over D13's eye light at every layout change.
+      frameState: () => frame,
       limiter,
       userCap: () => settings.fpsCap,
       fly,

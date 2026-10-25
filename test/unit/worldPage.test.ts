@@ -1,3 +1,4 @@
+import { readFileSync } from 'node:fs';
 import { PerspectiveCamera } from 'three';
 import { afterEach, beforeEach, describe, expect, test, vi } from 'vitest';
 import { evaluateWorldCapabilities, type CapabilityReport } from '../../src/engine/capabilityRules';
@@ -179,6 +180,20 @@ describe('stopAfterFailure (a failure after the reveal, SP4b spec §7.4; Task 21
     });
     expect(released).toEqual(['pool', 'renderer']);
     expect(onError).toHaveBeenCalledTimes(1);
+  });
+});
+
+describe('the map overlay draws with the frame step\'s live state (SP4c spec §2.2; Task 16 review I1)', () => {
+  // The page's post-reveal wiring cannot be mounted in the unit project, so its source is pinned: the warm-up helper
+  // `frameState()` rewrites `frame.t` with the opening time and `eyeSky` with the raw sky light, so passing it to the
+  // overlay would rewind the day/night clock at every mode-B layout change and bypass D13's eye light.
+  test('createMapOverlay gets `frameState: () => frame`, not the pre-reveal helper', () => {
+    const src = readFileSync(new URL('../../src/ui/world/worldPage.ts', import.meta.url), 'utf8');
+    const start = src.indexOf('createMapOverlay({');
+    expect(start).toBeGreaterThan(-1);
+    const args = src.slice(start, src.indexOf('\n    });', start));
+    expect(args).toMatch(/^\s*frameState: \(\) => frame,$/m);
+    expect(args).not.toMatch(/^\s*frameState,$/m);
   });
 });
 
