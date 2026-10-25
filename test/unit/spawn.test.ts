@@ -1,7 +1,7 @@
 import { describe, expect, test } from 'vitest';
 import { biomeFamily } from '../../src/gen/biomes/registry';
 import { columnPoint } from '../../src/gen/column/columnPoint';
-import { findSpawn, findSpawnAbortable, ringOffsets } from '../../src/gen/column/spawn';
+import { findSpawn, findSpawnAbortable, landingSurface, ringOffsets } from '../../src/gen/column/spawn';
 import { DEFAULT_DENSITY_TREE } from '../../src/core/params/defaultTrees';
 import type { JsonValue } from '../../src/core/params/json';
 import { AMPLIFIED_DENSITY_TREE, deriveTree } from '../../src/core/params/presetTrees';
@@ -9,9 +9,12 @@ import { isProfileReady, PROFILE_IDS, resolveProfile } from '../../src/core/para
 import type { Params } from '../../src/core/params/schema';
 import { seedFromInput } from '../../src/core/seed';
 import { surfaceEst3 } from '../../src/gen/column/surfaceEstimate';
-import { createGenContext } from '../../src/gen/context';
-import { createDensityContext } from '../../src/gen/density/context';
+import { createGenContext, type GenContext } from '../../src/gen/context';
+import { createDensityContext, type DensityContext } from '../../src/gen/density/context';
+import { readFileSync } from 'node:fs';
+import { computeSp2aGolden } from '../../src/metrics/sp2aGoldens';
 import { ctxFor } from '../harness/gen';
+import { GOLDENS_PATH, type GoldensFile } from '../harness/goldens';
 
 const OCEAN = { shape: { offset: { coord: 'C' as const, points: [{ x: 0, y: 20, d: 0 }] } } };
 /** A stop callback that counts its calls and fires on call `fireAt` (never when omitted). */
@@ -126,4 +129,87 @@ describe('the spawn y under another density tree (SP3e spec §1.2, Review Focus)
       expect(sp.y).toBe(Math.floor(columnPoint(ctx, sp.x, sp.z).surfaceEst) + 1);
     }
   });
+});
+
+describe('landingSurface (SP4c spec §3.2, D12)', () => {
+  const at = (seed: string, params: Params) => createGenContext(seedFromInput(seed), params);
+  /** ⌊surfaceEst⌋ and surfaceEst3 at (x, z) of `ctx`, computed directly. */
+  const parts = (ctx: GenContext, dc: DensityContext, x: number, z: number) =>
+    ({ flat: Math.floor(columnPoint(ctx, x, z).surfaceEst), est3: surfaceEst3(dc, x, z) });
+  /** The no-`terrain` variant of the amplified tree (its tap renamed), as the spawn tests build it. */
+  const noTerrainTree = (): JsonValue => {
+    const tap = ((AMPLIFIED_DENSITY_TREE as Record<string, JsonValue>)['root'] as { a: { a: Record<string, JsonValue> } }).a.a;
+    return deriveTree(AMPLIFIED_DENSITY_TREE, 'density.defs', 'density', [
+      { path: 'root.a.a', was: { op: 'tap', name: 'terrain' }, by: { ...tap, name: 'ground' } },
+    ]);
+  };
+  /**
+   * Seed 42's first default-profile column, in ring order over the 64-block lattice within ±2,048 blocks, where
+   * surfaceEst3 exceeds ⌊surfaceEst⌋ by ≥ 20 (a jagged peak the 2D estimate puts the camera inside). Pinned after the
+   * first run; Task 17's teleport test reuses it.
+   */
+  const JAGGED = { x: -320, z: 128 } as const;
+
+  test('landingSurface under the default tree is max(⌊surfaceEst⌋, surfaceEst3) at 64 lattice points', () => {
+    const ctx = ctxFor('42');
+    const dc = createDensityContext(ctx);
+    let above = 0;
+    for (let i = 0; i < 8; i++) {
+      for (let j = 0; j < 8; j++) {
+        const x = (i - 4) * 512;
+        const z = (j - 4) * 512;
+        const { flat, est3 } = parts(ctx, dc, x, z);
+        expect([x, z, landingSurface(ctx, x, z)]).toEqual([x, z, Math.max(flat, est3)]);
+        if (est3 > flat) above++;
+      }
+    }
+    // The 3D surface rises above the 2D estimate somewhere among them (jaggedness, overhang, detail).
+    expect(above).toBeGreaterThan(0);
+  });
+
+  test('a default-profile jagged column: seed 42\'s first lattice column within ±2,048 blocks where surfaceEst3 exceeds ⌊surfaceEst⌋ by ≥ 20; there landingSurface equals surfaceEst3', () => {
+    const ctx = ctxFor('42');
+    const dc = createDensityContext(ctx);
+    let found: { x: number; z: number } | null = null;
+    for (let r = 0; r <= 32 && found === null; r++) {
+      for (const [dx, dz] of ringOffsets(r)) {
+        const { flat, est3 } = parts(ctx, dc, dx * 64, dz * 64);
+        if (est3 - flat >= 20) { found = { x: dx * 64, z: dz * 64 }; break; }
+      }
+    }
+    expect(found).toEqual(JAGGED);
+    const { flat, est3 } = parts(ctx, dc, JAGGED.x, JAGGED.z);
+    expect(est3 - flat).toBeGreaterThanOrEqual(20);
+    expect(landingSurface(ctx, JAGGED.x, JAGGED.z)).toBe(est3);
+  }, 60_000);
+
+  test('under amplified, at seeds 1-8\'s spawn points, landingSurface equals surfaceEst3 and exceeds ⌊surfaceEst⌋ by > 20 at at least one', () => {
+    let deep = 0;
+    for (let s = 1; s <= 8; s++) {
+      const ctx = at(String(s), resolveProfile('amplified'));
+      const sp = findSpawn(ctx);
+      const { flat, est3 } = parts(ctx, createDensityContext(ctx), sp.x, sp.z);
+      const got = landingSurface(ctx, sp.x, sp.z);
+      expect([s, got]).toEqual([s, est3]);
+      if (got - flat > 20) deep++;
+    }
+    expect(deep).toBeGreaterThan(0);
+  });
+
+  test('under a tree with no reachable `terrain` tap it is ⌊surfaceEst⌋', () => {
+    const ctx = ctxFor('7', { density: { defs: noTerrainTree() } });
+    for (const [x, z] of [[0, 0], [640, -1280], [-2048, 1984], [5, -9]] as const) {
+      expect([x, z, landingSurface(ctx, x, z)]).toEqual([x, z, Math.floor(columnPoint(ctx, x, z).surfaceEst)]);
+    }
+  });
+
+  test('it refuses a position that is not an integer in the world window (RangeError, as surfaceEst3)', () => {
+    const ctx = ctxFor('42');
+    for (const [x, z] of [[0.5, 0], [0, Number.NaN], [524288, 0], [0, -524289]] as const) expect(() => landingSurface(ctx, x, z)).toThrow(RangeError);
+  });
+
+  test('findSpawn and `spawnY` are unchanged (the spawn goldens pass)', () => {
+    const file = JSON.parse(readFileSync(GOLDENS_PATH, 'utf8')) as GoldensFile;
+    expect(computeSp2aGolden('sp2a.spawn')).toBe(file.entries['sp2a.spawn']);
+  }, 60_000);
 });

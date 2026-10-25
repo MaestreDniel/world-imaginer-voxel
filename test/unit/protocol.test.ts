@@ -3,7 +3,7 @@ import { DEFAULTS } from '../../src/core/params/defaults';
 import { flattenKnot } from '../../src/core/spline/edit';
 import type { KnotPath } from '../../src/core/spline/types';
 import { columnPoint } from '../../src/gen/column/columnPoint';
-import { findSpawn } from '../../src/gen/column/spawn';
+import { findSpawn, landingSurface, ringOffsets } from '../../src/gen/column/spawn';
 import { BIOME_SHARES_POINTS, biomeSharePoints, biomeSharesInto, biomeSharesLength } from '../../src/metrics/biomeShares';
 import { CROSS_SECTION_POINTS, crossSectionInto, crossSectionLength, segmentPointAt } from '../../src/metrics/crossSection';
 import { computeAnyGolden } from '../../src/metrics/sp2aGoldens';
@@ -98,7 +98,7 @@ describe('parseToWorker', () => {
 });
 
 describe('the per-scope epoch cells and every job\'s scope (SP4b spec §2.7)', () => {
-  /** One valid message of each of the twelve scoped job types, at epoch 3 and scope 5, and the cell it reads. */
+  /** One valid message of each of the thirteen scoped job types, at epoch 3 and scope 5, and the cell it reads. */
   const SCOPED: ReadonlyArray<[ScopedJobType, Record<string, unknown>, number]> = [
     ['mapTile', { ...tileMsg, scope: 5 }, 0],
     ['point', { type: 'point', jobId: 2, epoch: 3, scope: 5, x: 1.5, z: -7 }, 0],
@@ -112,6 +112,7 @@ describe('the per-scope epoch cells and every job\'s scope (SP4b spec §2.7)', (
     ['decorate', { type: 'decorate', jobId: 14, epoch: 3, scope: 5, cx: 2, cz: -1 }, 1],
     ['light', { type: 'light', jobId: 15, epoch: 3, scope: 5, cx: 2, cz: -1 }, 2],
     ['meshColumn', { type: 'meshColumn', jobId: 16, epoch: 3, scope: 5, cx: 2, cz: -1 }, 3],
+    ['landing', { type: 'landing', jobId: 17, epoch: 3, scope: 5, x: -320, z: 128 }, 0],
   ];
 
   test('configure accepts epochs null or a 16-byte SharedArrayBuffer and refuses 4 bytes or an ArrayBuffer', () => {
@@ -132,9 +133,9 @@ describe('the per-scope epoch cells and every job\'s scope (SP4b spec §2.7)', (
   test('selftest carries neither epoch nor scope', () => {
     expect(parseToWorker({ type: 'selftest', jobId: 5, key: 'sp1.params' })).not.toBeNull();
   });
-  test('cellOf: decorate 1, light 2, meshColumn 3, every other scoped type 0 (terrain, spawn, tiles, stats, slices, field slices, probes, points)', () => {
+  test('cellOf: decorate 1, light 2, meshColumn 3, every other scoped type 0 (terrain, spawn, tiles, stats, slices, field slices, probes, points, landing)', () => {
     expect(SCOPED.map(([type]) => [type, cellOf(type)])).toEqual(SCOPED.map(([type, , cell]) => [type, cell]));
-    expect(SCOPED).toHaveLength(12);
+    expect(SCOPED).toHaveLength(13);
   });
 });
 
@@ -604,6 +605,55 @@ describe('surfaceProbe messages and the handler (SP3c spec §6)', () => {
     const warm = probed(h.handle(probe(2, 4, x, top, z)).msg);
     expect(warm.state).not.toBe(SNOW_BLOCK);
     expect(warm.path.at(-1)).toMatch(/^root\.rules\[1\]\.then\.rules\[3\]\.then\./);
+  });
+});
+
+describe('landing messages and the handler (SP4c spec §3.2, D12)', () => {
+  const landing = (jobId: unknown, epoch: unknown, x: unknown, z: unknown) => ({ type: 'landing', jobId, epoch, scope: epoch, x, z });
+  const result = (surface: unknown, water: unknown, jobId: unknown = 4) => ({ type: 'landingResult', jobId, epoch: 2, surface, water });
+  /** A handler's reply: the error's code, jobId and epoch, or the landing's surface and water. */
+  const reply = (h: ReturnType<typeof createTaskHandler>, m: unknown) => {
+    const r = h.handle(m).msg;
+    if (r.type === 'error') return [r.code, r.jobId, r.epoch];
+    if (r.type !== 'landingResult') throw new Error(`not a landingResult: ${JSON.stringify(r)}`);
+    return [r.type, r.jobId, r.epoch, r.surface, r.water];
+  };
+
+  test('the guards accept a landing message and a result with `water` −∞; they refuse a non-integer `x`, a missing `z` and a result without `surface`', () => {
+    for (const m of [landing(1, 0, -320, 128), landing(1, 0, 524288, 0), landing(1, 0, -524289, 7)]) expect(parseToWorker(m)).toMatchObject({ type: 'landing' });
+    const { z: _, ...noZ } = landing(1, 0, 0, 0);
+    for (const m of [landing(1, 0, 0.5, 0), landing(1, 0, 0, -7.25), landing(1, 0, Number.NaN, 0), landing(1, 0, Infinity, 0), landing(1, 0, '3', 0), noZ, landing(1.5, 0, 0, 0)]) {
+      expect(parseToWorker(m), JSON.stringify(m)).toBeNull();
+    }
+    for (const m of [result(169, -Infinity), result(64, 63), result(-64, 62.5), result(319, 63, 0)]) expect(valid(m), JSON.stringify(m)).toBe(true);
+    const { surface: _s, ...noSurface } = result(64, 63);
+    for (const m of [noSurface, result(64.5, 63), result('64', 63), result(64, Number.NaN), result(64, Infinity), result(64, null), { ...result(64, 63), epoch: null }]) {
+      expect(invalid(m), JSON.stringify(m)).toBe(true);
+    }
+  });
+
+  test('a landing replies with landingSurface and the column\'s surfaceWaterLevel at the job\'s epoch, over land and over the sea', () => {
+    const h = createTaskHandler();
+    h.handle(configure(3));
+    const ctx = ctxFor('42');
+    // The first lattice column over water (63 over ocean and river, the lake's level elsewhere).
+    let wet: readonly [number, number] | null = null;
+    for (let r = 0; r <= 32 && wet === null; r++) {
+      for (const [dx, dz] of ringOffsets(r)) if (columnPoint(ctx, dx * 64, dz * 64).surfaceWaterLevel !== -Infinity) { wet = [dx * 64, dz * 64]; break; }
+    }
+    expect(wet).not.toBeNull();
+    for (const [x, z] of [[-320, 128], [0, 0], wet!, [-524288, 524287]] as const) {
+      expect(reply(h, landing(5, 3, x, z)), `${x}, ${z}`).toEqual(['landingResult', 5, 3, landingSurface(ctx, x, z), columnPoint(ctx, x, z).surfaceWaterLevel]);
+    }
+    expect(reply(h, landing(6, 3, wet![0], wet![1]))[4]).toBeGreaterThan(-Infinity);
+  });
+
+  test('a position outside the world window is BAD_ARGS with the job\'s epoch; before configure NOT_CONFIGURED, at another epoch STALE_EPOCH', () => {
+    const h = createTaskHandler();
+    expect(reply(h, landing(1, 3, 0, 0))).toEqual(['NOT_CONFIGURED', 1, 3]);
+    h.handle(configure(3));
+    for (const [x, z] of [[524288, 0], [0, -524289]] as const) expect(reply(h, landing(5, 3, x, z)), `${x}, ${z}`).toEqual(['BAD_ARGS', 5, 3]);
+    expect(reply(h, landing(2, 2, 0, 0))).toEqual(['STALE_EPOCH', 2, 2]);
   });
 });
 

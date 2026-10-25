@@ -37,6 +37,7 @@
  * `decorate`, `light` and `meshColumn` jobs in issue order, and the aux lane, a heap (`jobHeap.ts`) of every other job by
  * (priority, id). `setAuxPolicy(first, cap)` says which lane a free worker serves first and how many non-interactive aux
  * jobs may run; interactive jobs (priority < 0: points, probes, landing, the standalone spawn) always go first, uncapped.
+ * SP4c §3.2 (D12): `landing(x, z)`, the teleport's surface and water at a block, is one aux job at −2.
  */
 import type { MapLevel } from '../core/constants';
 import type { ColumnPoint } from '../gen/column/columnPoint';
@@ -266,6 +267,13 @@ export interface WorkerPool {
   point(x: number, z: number, priority?: number): Promise<ColumnPoint>;
   /** The spawn search at `priority` (default −2: before points; the world's post-settle search runs at 600, SP4c spec §4.7). */
   spawn(priority?: number): Promise<Spawn>;
+  /**
+   * The teleport's landing at block (x, z) (SP4c spec §3.2, D12): one aux job at priority −2 (interactive: first,
+   * uncapped), resolving with `landingSurface` and the column's `surfaceWaterLevel` (−∞ off the water). x and z are
+   * integers (the caller asks at the clicked block); rejects with the worker's BAD_ARGS for a position outside the world
+   * window, BAD_MESSAGE for non-integers, and JobCancelled when a configure supersedes it.
+   */
+  landing(x: number, z: number): Promise<{ readonly surface: number; readonly water: number }>;
   /**
    * The raw sums of a stats kind over points [0, n) of its fixed stream (spec §5.4): `size` slices (one for a
    * 'single' kind of STATS_KINDS: crossSection), sent as ordinary jobs at `priority` (default 500: after
@@ -649,6 +657,12 @@ export function createWorkerPool(size: number, spawn: () => WorkerLike, opts: Po
       const r = await enqueue(priority, 'spawn', (jobId, scope) => ({ type: 'spawn', jobId, epoch: e, scope }), null);
       if (r.type !== 'spawnResult') throw new Error(`unexpected reply ${r.type}`);
       return r.spawn;
+    },
+    async landing(x, z) {
+      const e = epoch;
+      const r = await enqueue(-2, 'landing', (jobId, scope) => ({ type: 'landing', jobId, epoch: e, scope, x, z }), null);
+      if (r.type !== 'landingResult') throw new Error(`unexpected reply ${r.type}`);
+      return { surface: r.surface, water: r.water };
     },
     async stats(kind, n, args, priority = 500) {
       if (!(Number.isSafeInteger(n) && n >= 0)) throw new RangeError(`stats: n = ${n} is not a non-negative integer`);

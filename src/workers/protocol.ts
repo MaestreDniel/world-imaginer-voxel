@@ -22,6 +22,9 @@
  * SP4b (spec §2.5, §2.6, §2.8, §3.7): `attach` carries the worker's reclaim `thread` (1 … 15) and is idempotent for the same
  * store id and thread; `terrain` may carry `protoOnly` (`T(protoOnly)`); STORE_CORRUPT is a world job's `StoreCorrupt`, and an
  * error's code must be an `ErrorCode`.
+ * SP4c (spec §3.2, D12): a `landing` job reads the terrain cell and answers `landingResult`, the teleport's surface
+ * (`landingSurface`) and the column's `surfaceWaterLevel` (−∞ allowed) at an integer block position (x, z); a position
+ * outside the world window is the handler's BAD_ARGS.
  */
 import { MAP_LEVELS, MAP_TILE_PX, PART_BUDGET, SLICE_NS, type MapLevel } from '../core/constants';
 import type { StageId } from '../core/ids';
@@ -125,19 +128,24 @@ export type WorldJobType = 'terrain' | 'decorate' | 'light' | 'meshColumn';
  * a Decorated or Published column through `reopenProto`.
  */
 export interface WorldJobMsg extends Scoped { readonly type: WorldJobType; readonly cx: number; readonly cz: number; readonly protoOnly?: boolean }
+/**
+ * The teleport's landing at block (x, z) (SP4c spec §3.2, D12): integers here (the guard refuses anything else; the
+ * caller asks at the clicked block ⌊x⌋, ⌊z⌋); a position outside the half-open world window is the handler's BAD_ARGS.
+ */
+export type LandingMsg = Scoped & { readonly type: 'landing'; readonly x: number; readonly z: number };
 export type ToWorker = ConfigureMsg | MapTileMsg | PointMsg | SpawnMsg | StatsMsg | SliceMsg | SurfaceProbeMsg | SelftestMsg | FieldSliceMsg | FieldProbeMsg
-  | AttachMsg | WorldJobMsg;
+  | AttachMsg | WorldJobMsg | LandingMsg;
 /** Every job type that carries an `epoch` and a `scope` (SP4b spec §2.7): all but configure, attach and selftest. */
 export type ScopedJobType = Exclude<ToWorker['type'], 'configure' | 'attach' | 'selftest'>;
 /** Each scoped job type's epoch cell (a record, so a new job type cannot be left out). */
 const CELL_OF: Readonly<Record<ScopedJobType, 0 | 1 | 2 | 3>> = Object.freeze({
   mapTile: EPOCH_CELL.terrain, point: EPOCH_CELL.terrain, spawn: EPOCH_CELL.terrain, stats: EPOCH_CELL.terrain, slice: EPOCH_CELL.terrain,
   surfaceProbe: EPOCH_CELL.terrain, fieldSlice: EPOCH_CELL.terrain, fieldProbe: EPOCH_CELL.terrain, terrain: EPOCH_CELL.terrain,
-  decorate: EPOCH_CELL.decorate, light: EPOCH_CELL.light, meshColumn: EPOCH_CELL.mesh,
+  decorate: EPOCH_CELL.decorate, light: EPOCH_CELL.light, meshColumn: EPOCH_CELL.mesh, landing: EPOCH_CELL.terrain,
 });
 /**
  * The epoch cell a job of `type` reads (SP4b spec §2.7): decorate 1, light 2, meshColumn 3, every other scoped type 0
- * (terrain, spawn, map tiles, stats, slices, field slices, probes and points).
+ * (terrain, spawn, map tiles, stats, slices, field slices, probes, points and landing).
  */
 export const cellOf = (type: ScopedJobType): 0 | 1 | 2 | 3 => CELL_OF[type];
 
@@ -211,8 +219,13 @@ export interface MeshColumnResultMsg {
   readonly versions: ArrayBuffer; readonly connectivity: ArrayBuffer; readonly position: ArrayBuffer; readonly data: ArrayBuffer;
   readonly index: ArrayBuffer; readonly rows: ArrayBuffer; readonly spheres: ArrayBuffer;
 }
+/**
+ * A landing's answer (SP4c spec §3.2): `surface`, `landingSurface` at the job's (x, z) (an integer); `water`, the column's
+ * `surfaceWaterLevel` (63 over ocean and river, the lake's level, −∞ elsewhere).
+ */
+export interface LandingResultMsg { readonly type: 'landingResult'; readonly jobId: number; readonly epoch: number; readonly surface: number; readonly water: number }
 export type FromWorker = ReadyMsg | TileMsg | PointResultMsg | SpawnResultMsg | StatsResultMsg | SliceResultMsg | SurfaceProbeResultMsg | SelftestResultMsg | FieldSliceResultMsg | FieldProbeResultMsg | ErrorMsg
-  | AttachedMsg | ColumnDoneMsg | MeshColumnResultMsg;
+  | AttachedMsg | ColumnDoneMsg | MeshColumnResultMsg | LandingResultMsg;
 /** A job's reply whose envelope (type, jobId) reads but whose body fails its guard (SP3d spec §5.1): the pool rejects job `jobId` with BAD_MESSAGE. */
 export interface BadReply { readonly bad: true; readonly jobId: number; readonly reason: string }
 
@@ -347,6 +360,9 @@ const statsOk = (m: Record<string, unknown>): boolean => {
 const WINDOW = 524288;
 /** Whether block position (x, z) lies in the world window [−2^19, 2^19); false for NaN. */
 export const pointInWindow = (x: number, z: number): boolean => x >= -WINDOW && x < WINDOW && z >= -WINDOW && z < WINDOW;
+/** Why (x, z) is not a position a landing can read (integers in the half-open world window), or null when it is. */
+export const landingProblem = (x: number, z: number): string | null =>
+  Number.isInteger(x) && Number.isInteger(z) && pointInWindow(x, z) ? null : `(x, z) = (${x}, ${z}) is not an integer position in the world window`;
 /**
  * Why (x, y, z) is not a voxel a surfaceProbe can read (integers, (x, z) in the half-open world window, y in −64 … 319),
  * or null when it is.
@@ -434,6 +450,8 @@ export function parseToWorker(m: unknown): ToWorker | null {
       return storeHandlesOk(m['handles']) && isWorkerThread(m['thread']) ? (m as unknown as AttachMsg) : null;
     case 'terrain': case 'decorate': case 'light': case 'meshColumn':
       return scopedOk(m) && isColumn(m['cx'], m['cz']) && protoOnlyOk(m) ? (m as unknown as WorldJobMsg) : null;
+    case 'landing':
+      return scopedOk(m) && isInt(m['x']) && isInt(m['z']) ? (m as unknown as LandingMsg) : null;
     default:
       return null;
   }
@@ -531,6 +549,11 @@ const REPLY_CHECKS: Readonly<Record<string, ReplyCheck>> = Object.freeze({
   fieldProbeResult: (m) => all(epochProblem(m), typeof m['value'] === 'number' ? null : 'value is not a number'),
   columnDone: columnDoneCheck,
   meshColumnResult: meshColumnCheck,
+  landingResult: (m) => {
+    const water = m['water'];
+    return all(epochProblem(m), isInt(m['surface']) ? null : 'surface is not an integer',
+      water === -Infinity || isFiniteNum(water) ? null : 'water is not a finite number or −∞');
+  },
   error: (m) => (m['epoch'] === null || isInt(m['epoch'])) && typeof m['code'] === 'string' && Object.hasOwn(ERROR_CODES, m['code']) && typeof m['message'] === 'string'
     ? null : 'epoch, code or message is malformed',
 });

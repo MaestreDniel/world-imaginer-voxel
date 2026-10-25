@@ -2,6 +2,8 @@ import { describe, expect, test } from 'vitest';
 import { DEFAULTS } from '../../src/core/params/defaults';
 import { createWorkerPool, JobCancelled, poolSize, WorkerFailed, type WorkerLike } from '../../src/engine/workerPool';
 import { BIOME_SHARES_POINTS, biomeSharePoints, biomeSharesInto, biomeSharesLength } from '../../src/metrics/biomeShares';
+import { columnPoint } from '../../src/gen/column/columnPoint';
+import { landingSurface } from '../../src/gen/column/spawn';
 import { createSurfaceContext } from '../../src/gen/surface/context';
 import { surfaceProbe } from '../../src/gen/surface/probe';
 import { CROSS_SECTION_POINTS, crossSectionInto, crossSectionLength } from '../../src/metrics/crossSection';
@@ -974,6 +976,73 @@ describe('worker pool: surfaceProbe jobs (SP3c spec §6)', () => {
     expect(await req).toBeInstanceOf(JobCancelled);
     expect((await next).epoch).toBe(2);
     expect(probesOf(log).map((m) => m[1])).toEqual([0, 0, 0]);
+    pool.terminate();
+  });
+});
+
+describe('worker pool: landing jobs (SP4c spec §3.2, §6.2; D12)', () => {
+  const landingsOf = (log: readonly ToWorker[]) => log.flatMap((m) => (m.type === 'landing' ? [[m.epoch, m.x, m.z]] : []));
+
+  test('one job per landing, resolving with landingSurface and the column\'s surfaceWaterLevel; probe shows it with level null', async () => {
+    const log: ToWorker[] = [];
+    const pool = createWorkerPool(2, () => fakeWorker(log));
+    await pool.configure('42', DEFAULTS);
+    const ctx = ctxFor('42');
+    for (const [x, z] of [[-320, 128], [0, 0], [5, -9]] as const) {
+      expect(await pool.landing(x, z)).toEqual({ surface: landingSurface(ctx, x, z), water: columnPoint(ctx, x, z).surfaceWaterLevel });
+    }
+    expect(landingsOf(log)).toEqual([[0, -320, 128], [0, 0, 0], [0, 5, -9]]);
+    pool.terminate();
+    const idle = createWorkerPool(2, () => silentWorker());
+    void settle(idle.landing(0, 0));
+    expect(idle.probe().jobs).toEqual([{ worker: 0, type: 'landing', epoch: -1, level: null }]);
+    idle.terminate();
+  });
+
+  test('landing runs before 20 queued tiles under (\'world\', 1) and before a queued point', () => {
+    const log: ToWorker[] = [];
+    const w = silentWorker(log);
+    const pool = createWorkerPool(1, () => w);
+    pool.setAuxPolicy('world', 1);
+    const jobs: Array<Promise<unknown>> = [settle(pool.tile(tile(0), 0))];
+    for (let i = 1; i <= 20; i++) jobs.push(settle(pool.tile(tile(i), i)));
+    jobs.push(settle(pool.point(1, 2)), settle(pool.landing(-320, 128)));
+    expect(pool.queued).toBe(22);
+    const finish = () => {
+      const m = log.at(-1) as unknown as { jobId: number; epoch: number };
+      w.onmessage?.({ data: { type: 'error', jobId: m.jobId, epoch: m.epoch, code: 'INTERNAL', message: 'x' } });
+    };
+    // The running tile ends: the landing (−2) goes first, then the point (−1), then the tiles.
+    finish();
+    expect(log.at(-1)).toMatchObject({ type: 'landing', x: -320, z: 128 });
+    finish();
+    expect(log.at(-1)).toMatchObject({ type: 'point' });
+    finish();
+    expect(log.at(-1)).toMatchObject({ type: 'mapTile', tx: 1 });
+    pool.terminate();
+    return Promise.all(jobs);
+  });
+
+  test('a configure rejects a queued landing with JobCancelled', async () => {
+    const log: ToWorker[] = [];
+    const pool = createWorkerPool(2, () => fakeWorker(log));
+    await pool.configure('42', DEFAULTS);
+    const queued = pool.configure('42', DEFAULTS);
+    const req = settle(pool.landing(0, 0));
+    const next = pool.configure('7', DEFAULTS);
+    expect(await settle(queued)).toBeInstanceOf(JobCancelled);
+    expect(await req).toBeInstanceOf(JobCancelled);
+    expect((await next).epoch).toBe(2);
+    expect(landingsOf(log)).toEqual([]);
+    pool.terminate();
+  });
+
+  test('a landing at a position outside the window rejects with the worker\'s BAD_ARGS', async () => {
+    const pool = createWorkerPool(2, () => fakeWorker([]));
+    await pool.configure('42', DEFAULTS);
+    await expect(pool.landing(524288, 0)).rejects.toThrow(/^BAD_ARGS: /);
+    await expect(pool.landing(0, -524289)).rejects.toThrow(/^BAD_ARGS: /);
+    expect((await pool.landing(-524288, 524287)).surface).toBeTypeOf('number');
     pool.terminate();
   });
 });

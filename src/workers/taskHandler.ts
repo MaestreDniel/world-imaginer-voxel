@@ -25,6 +25,8 @@
  * reused under it; its own releases (L's `resetLight`, a stopped T's frees) wait in this thread's limbo, which `drain`
  * frees and the worker shell drains after each reply (`drainAfterReply`). A `StoreCorrupt` replies STORE_CORRUPT (fatal),
  * not INTERNAL (retried). `terrain` with `protoOnly` is `T(protoOnly)`.
+ * SP4c (spec §3.2, D12): a `landing` job answers `landingSurface` and the column's `surfaceWaterLevel` at (x, z): BAD_ARGS
+ * outside the world window; it runs to the end, as a point (a few milliseconds: the 2D estimate and about 10 probes).
  */
 import { hex64 } from '../core/hash';
 import { MEDIUM } from '../core/params/graphicsPresets';
@@ -34,7 +36,7 @@ import { seedFromInput } from '../core/seed';
 import { genKey, stageHashes } from '../core/stage/hash';
 import { createGenContext, type GenContext } from '../gen/context';
 import { columnPoint } from '../gen/column/columnPoint';
-import { findSpawnAbortable } from '../gen/column/spawn';
+import { findSpawnAbortable, landingSurface } from '../gen/column/spawn';
 import { paintTileAbortable } from '../gen/map/tile';
 import { surfaceContextOf } from '../gen/surface/context';
 import { surfaceProbe } from '../gen/surface/probe';
@@ -50,7 +52,7 @@ import type { MeshOptions } from '../mesh/greedy';
 import { R_STORE_ID } from '../world/store/reclaim';
 import { attachStore, StoreCorrupt, StoreFull, type VoxelStore } from '../world/store/store';
 import { runFieldProbe, runFieldSlice, sliceJobColumns, type FieldJobReply } from './fieldSliceJob';
-import { cellOf, parseToWorker, sliceRangeProblem, surfaceProbeProblem, type ErrorCode, type FromWorker, type ScopedJobType, type StatsMsg } from './protocol';
+import { cellOf, landingProblem, parseToWorker, sliceRangeProblem, surfaceProbeProblem, type ErrorCode, type FromWorker, type ScopedJobType, type StatsMsg } from './protocol';
 import { createSliceJob, type SliceJob } from './sliceJob';
 import { decorateReply, lightReply, meshColumnReply, terrainReply, type WorldJobReply } from './worldJobs';
 
@@ -65,6 +67,8 @@ const CREATE = createGenContext;
 const POINT = columnPoint;
 const PAINT = paintTileAbortable;
 const SPAWN = findSpawnAbortable;
+const LANDING = landingSurface;
+const LANDING_PROBLEM = landingProblem;
 const GOLDEN = computeAnyGolden;
 const PARSE = parseToWorker;
 const CELL_OF = cellOf;
@@ -293,6 +297,12 @@ export function createTaskHandler(slices: SliceJob = CREATE_SLICE_JOB()): TaskHa
           }
           case 'point':
             return { msg: { type: 'pointResult', jobId: m.jobId, epoch, fields: POINT(ctx, m.x, m.z) }, transfer: [] };
+          case 'landing': {
+            const problem = LANDING_PROBLEM(m.x, m.z);
+            if (problem !== null) return err(m.jobId, m.epoch, 'BAD_ARGS', problem);
+            const surface = LANDING(ctx, m.x, m.z);
+            return { msg: { type: 'landingResult', jobId: m.jobId, epoch, surface, water: POINT(ctx, m.x, m.z).surfaceWaterLevel }, transfer: [] };
+          }
           case 'fieldSlice':
             return fieldReply(FIELD_SLICE(ctx, m, stopFor(m.type, m.scope), SLICE_COLUMNS(slices, ctx, m.epoch)));
           case 'fieldProbe':

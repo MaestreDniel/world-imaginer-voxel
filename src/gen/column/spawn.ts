@@ -4,7 +4,11 @@
  * wins; otherwise the least-bad point by (wet, steep). The search reads the 2D column (`columnPoint`); the spawn's y is
  * ⌊surfaceEst⌋ + 1 under the default density tree and surfaceEst3 + 1 under any other (SP3e spec §1.2), so a tree that
  * moves the surface (amplified) does not report a y inside its ground.
+ * `landingSurface` (SP4c spec §3.2, D12) is the teleport's surface, built from the same parts: max(⌊surfaceEst⌋,
+ * surfaceEst3) under every tree with a reachable `terrain` tap, the default included, else ⌊surfaceEst⌋. `spawnY` keeps
+ * its own rule, so the spawn goldens do not move.
  */
+import { inWindow } from '../../core/coords';
 import { canonicalJSON } from '../../core/params/canonical';
 import { DEFAULT_DENSITY_TREE } from '../../core/params/defaultTrees';
 import { biomeFamily } from '../biomes/registry';
@@ -21,6 +25,7 @@ const DEFAULT_TREE = DEFAULT_DENSITY_TREE;
 const CREATE_DC = createDensityContext;
 const FIND_TAP = findTap;
 const SURFACE_EST3 = surfaceEst3;
+const IN_WINDOW = inWindow;
 
 export interface Spawn { readonly x: number; readonly z: number; readonly y: number; readonly biome: number; readonly fallback: boolean }
 
@@ -47,6 +52,21 @@ function spawnY(ctx: GenContext, x: number, z: number, y2d: number): number {
   if (defs === DEFAULT_TREE || CANONICAL(defs) === CANONICAL(DEFAULT_TREE)) return y2d;
   const dc = CREATE_DC(ctx);
   return FIND_TAP(dc.expr, 'terrain') === undefined ? y2d : SURFACE_EST3(dc, x, z) + 1;
+}
+
+/**
+ * The teleport's landing surface at (x, z) (SP4c spec §3.2, D12; integers in the world window, RangeError otherwise):
+ * ⌊surfaceEst⌋ from `columnPoint`, raised to `surfaceEst3` (the `terrain` tap's surface) whenever the density tree has a
+ * reachable `terrain` tap, the default tree included: the 2D estimate ignores the jaggedness, overhang and detail the 3D
+ * terrain adds above it. The max keeps the 2D value where the 8-step scan returns the ground under an overhang.
+ */
+export function landingSurface(ctx: GenContext, x: number, z: number): number {
+  if (!Number.isInteger(x) || !Number.isInteger(z) || !IN_WINDOW(x, z)) throw new RangeError(`landingSurface (x, z) = (${x}, ${z}) is not an integer position in the world window`);
+  const flat = Math.floor(POINT(ctx, x, z).surfaceEst);
+  const dc = CREATE_DC(ctx);
+  if (FIND_TAP(dc.expr, 'terrain') === undefined) return flat;
+  const est3 = SURFACE_EST3(dc, x, z);
+  return est3 > flat ? est3 : flat;
 }
 
 /**
