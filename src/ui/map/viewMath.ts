@@ -95,3 +95,15 @@ export const ARROW_MIN_MS = 33;
 
 /** Whether ≥ `ARROW_MIN_MS` passed since the arrow's last redraw at `lastDrawMs` (−Infinity before the first). */
 export const arrowDue = (lastDrawMs: number, nowMs: number): boolean => nowMs - lastDrawMs >= ARROW_MIN_MS;
+
+/**
+ * Whether the map canvas's `setPlayer` schedules a redraw (SP4c spec §1.5): always before the arrow's first draw, then
+ * only when it moved or turned from its last drawn (x, z, yaw) (`arrowMoved`) and is due (`arrowDue`). `now` is read only
+ * when the arrow moved; allocates nothing. The real canvas and the frame step's zero-allocation fake both run it (MAP-3).
+ */
+export function arrowRedrawWanted(
+  drawn: boolean, drawnX: number, drawnZ: number, drawnYaw: number, x: number, z: number, yawDeg: number, bpp: number,
+  drawnAt: number, now: () => number,
+): boolean {
+  return !drawn || (arrowMoved(drawnX, drawnZ, drawnYaw, x, z, yawDeg, bpp) && arrowDue(drawnAt, now()));
+}

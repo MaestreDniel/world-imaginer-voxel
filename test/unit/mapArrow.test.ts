@@ -1,6 +1,7 @@
+import { readFileSync } from 'node:fs';
 import { describe, expect, test } from 'vitest';
 import type { MapView } from '../../src/ui/map/mapState';
-import { ARROW_MIN_MS, arrowDue, arrowGeometry, arrowMoved } from '../../src/ui/map/viewMath';
+import { ARROW_MIN_MS, arrowDue, arrowGeometry, arrowMoved, arrowRedrawWanted } from '../../src/ui/map/viewMath';
 
 const W = 800;
 const H = 600;
@@ -74,5 +75,39 @@ describe('the player arrow (SP4c spec §1.5, D19)', () => {
     expect(arrowDue(1000, 1032.9)).toBe(false);
     expect(arrowDue(1000, 1033)).toBe(true);
     expect(arrowDue(-Infinity, 0)).toBe(true);
+  });
+});
+
+describe('the arrow\'s redraw decision (SP4c spec §1.5; final review MAP-3)', () => {
+  /** A clock that counts its reads: the decision reads it only when the arrow moved or turned. */
+  const clock = (t: number) => {
+    const c = { reads: 0, now: () => { c.reads++; return t; } };
+    return c;
+  };
+
+  test('the first call draws; then only a move of ≥ 1 px or a turn of ≥ 2°, ≥ 33 ms after the last draw', () => {
+    // Never drawn: wanted, whatever the clock.
+    const first = clock(0);
+    expect(arrowRedrawWanted(false, 0, 0, 0, 0, 0, 0, 4, -Infinity, first.now)).toBe(true);
+    expect(first.reads).toBe(0);
+    // Drawn at (10, 20, 30) at 1,000 ms, 4 blocks/px.
+    const still = clock(5000);
+    expect(arrowRedrawWanted(true, 10, 20, 30, 13.6, 20, 31.9, 4, 1000, still.now)).toBe(false);
+    expect(still.reads).toBe(0);
+    const soon = clock(1020);
+    expect(arrowRedrawWanted(true, 10, 20, 30, 14, 20, 30, 4, 1000, soon.now)).toBe(false);
+    expect(soon.reads).toBe(1);
+    expect(arrowRedrawWanted(true, 10, 20, 30, 14, 20, 30, 4, 1000, clock(1033).now)).toBe(true);
+    expect(arrowRedrawWanted(true, 10, 20, 30, 10, 20, 32, 4, 1000, clock(1033).now)).toBe(true);
+    expect(arrowRedrawWanted(true, 10, 20, 30, 10, 20, 32, 4, 1000, clock(1032.9).now)).toBe(false);
+  });
+
+  test('the real canvas and the frame step\'s zero-allocation fake both run it', () => {
+    const view = readFileSync(new URL('../../src/ui/map/mapView.ts', import.meta.url), 'utf8');
+    const setPlayer = view.slice(view.indexOf('    setPlayer(x, z, yawDeg) {'), view.indexOf('    setHidden(on) {'));
+    expect(setPlayer).toContain('if (arrowRedrawWanted(arrowDrawn, drawnX, drawnZ, drawnYaw, x, z, yawDeg, view.bpp, drawnAt, now)) schedule();');
+    expect(setPlayer).not.toContain('arrowMoved(');
+    const fake = readFileSync(new URL('./zeroAlloc.test.ts', import.meta.url), 'utf8');
+    expect(fake).toContain('if (arrowRedrawWanted(arrowDrawn, drawnX, drawnZ, drawnYaw, x, z, yawDeg, view.bpp, drawnAt, arrow.now)) draw(x, z, yawDeg);');
   });
 });

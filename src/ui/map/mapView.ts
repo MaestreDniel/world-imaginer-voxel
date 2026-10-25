@@ -18,7 +18,7 @@ import { highlightMask } from './highlight';
 import { MAP_MAX_BPP, MAP_MIN_BPP, type MapView } from './mapState';
 import { createTileCache } from './tileCache';
 import { createTileSource } from './tileSource';
-import { arrowDue, arrowGeometry, arrowMoved, clampCentre, planTiles, screenToWorld, visibleTiles, worldToScreen } from './viewMath';
+import { arrowGeometry, arrowRedrawWanted, clampCentre, planTiles, screenToWorld, visibleTiles, worldToScreen } from './viewMath';
 
 export interface MapViewOptions {
   onView(v: MapView): void;
@@ -80,6 +80,9 @@ export interface MapCanvas {
 
 /** A cached tile: the bitmap, and for the biome layer the biome id of every pixel (SP2b spec §5.3). */
 interface CachedTile { readonly bitmap: ImageBitmap; readonly ids: Uint8Array | null }
+
+/** The arrow's redraw clock (`arrowRedrawWanted` reads it only when the arrow moved). */
+const now = (): number => performance.now();
 
 export function createMapCanvas(host: HTMLElement, pool: WorkerPool, initial: MapView, opts: MapViewOptions): MapCanvas {
   const canvas = document.createElement('canvas');
@@ -369,7 +372,7 @@ export function createMapCanvas(host: HTMLElement, pool: WorkerPool, initial: Ma
       playerX = x;
       playerZ = z;
       playerYaw = yawDeg;
-      if (!arrowDrawn || (arrowMoved(drawnX, drawnZ, drawnYaw, x, z, yawDeg, view.bpp) && arrowDue(drawnAt, performance.now()))) schedule();
+      if (arrowRedrawWanted(arrowDrawn, drawnX, drawnZ, drawnYaw, x, z, yawDeg, view.bpp, drawnAt, now)) schedule();
     },
     setHidden(on) {
       if (destroyed) return;

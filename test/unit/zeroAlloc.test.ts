@@ -8,7 +8,7 @@
  * the controls-owner check, the apply control's `tick` (at rest: its one adopt made, nothing configured since),
  * `setAuxPolicy` on a real pool with unchanged values, and on rendered frames the map overlay's `tick`, measured with the
  * map hidden and shown in split mode, where the arrow follows the camera through the tool's `setPlayer` (a fake
- * `MapCanvas` over the real `arrowMoved`). The coordinator's `apply` has its own test. Those hooks are also measured on
+ * `MapCanvas` over the real `arrowRedrawWanted`). The coordinator's `apply` has its own test. Those hooks are also measured on
  * their own under the 26 B bound: the frame step's budget has room for a small object per tick.
  *
  * This measures allocation, not retention (the plan's spec correction to §8.5): `terrainHeap.test.ts` runs `gc()`
@@ -73,13 +73,13 @@ import { installDom } from './fixtures/domShim';
 
 /**
  * The map tool's chunk, faked (the real tool mounts only in the browser smoke, SP4c spec §1.2, §9): its `setPlayer`
- * forwards to a fake `MapCanvas` whose `setPlayer` is the real one's body (`mapView.ts`) over the real `arrowMoved` and
- * `arrowDue`, the arrow drawn at once where the real canvas schedules a rAF draw. Its clock is the frame's timestamp
+ * forwards to a fake `MapCanvas` whose `setPlayer` is the real one's body (`mapView.ts`): the real `arrowRedrawWanted`
+ * decides, the arrow drawn at once where the real canvas schedules a rAF draw. Its clock is the frame's timestamp
  * (`arrow.now`): Node's `performance.now()` allocates on each call (the upload budget's note below).
  */
 const arrow = vi.hoisted(() => ({ now: (): number => 0, setPlayer: 0, draws: 0, mounts: 0 }));
 vi.mock('../../src/ui/map/mapTool', async () => {
-  const { arrowDue, arrowMoved } = await import('../../src/ui/map/viewMath');
+  const { arrowRedrawWanted } = await import('../../src/ui/map/viewMath');
   return {
     createMapTool(_host: HTMLElement, deps: MapToolDeps): MapTool {
       arrow.mounts++;
@@ -100,7 +100,7 @@ vi.mock('../../src/ui/map/mapTool', async () => {
       const canvas: Pick<MapCanvas, 'setPlayer'> = {
         setPlayer(x, z, yawDeg) {
           arrow.setPlayer++;
-          if (!arrowDrawn || (arrowMoved(drawnX, drawnZ, drawnYaw, x, z, yawDeg, view.bpp) && arrowDue(drawnAt, arrow.now()))) draw(x, z, yawDeg);
+          if (arrowRedrawWanted(arrowDrawn, drawnX, drawnZ, drawnYaw, x, z, yawDeg, view.bpp, drawnAt, arrow.now)) draw(x, z, yawDeg);
         },
       };
       return {
@@ -658,7 +658,7 @@ describe('zero allocation at rest (SP4b spec §3.10, D25)', () => {
     expect(f.counts.T.done).toBe(f.counts.T.needed);
   }, TIMEOUT_MS);
 
-  test(`${N} frame steps at rest with SP4c's additions, the map shown in split mode (the arrow updated every rendered frame at a fixed camera, through the tool's setPlayer and the real arrowMoved) grow the heap by less than the boxing budget of 256 B per tick (SP4c spec §4.10)`, async () => {
+  test(`${N} frame steps at rest with SP4c's additions, the map shown in split mode (the arrow updated every rendered frame at a fixed camera, through the tool's setPlayer and the real arrowRedrawWanted) grow the heap by less than the boxing budget of 256 B per tick (SP4c spec §4.10)`, async () => {
     const f = await atRest();
     await f.showSplit();
     // Split shown with the pointer lock: the world owns, the 3D is visible, the cap is the user's (SP4c spec §2.3, §2.6).
