@@ -50,7 +50,7 @@ describe('shardArgs (SP4b spec §1.1)', () => {
     expect(shardArgs(FAST_SHARDS, 'rest')).toEqual(['--exclude', 'test/metrics/terrain.metric.ts', '--exclude', 'test/metrics/surface.metric.ts']);
   });
 
-  test('the metrics-fast table covers the project\'s files on disk exactly once (check\'s rules, without vitest list)', () => {
+  test('the metrics-fast table against the .metric.ts files on disk: one catch-all, each named file on disk and in one shard, rest gets the others (a listing simulated from the table, not vitest list)', () => {
     const onDisk = readdirSync(`${ROOT}test/metrics`).filter((f) => f.endsWith('.metric.ts')).map((f) => `test/metrics/${f}`).sort();
     const named = Object.values(FAST_SHARDS).filter((f) => f !== null).flat();
     const listed = Object.fromEntries(Object.entries(FAST_SHARDS).map(([name, files]) =>

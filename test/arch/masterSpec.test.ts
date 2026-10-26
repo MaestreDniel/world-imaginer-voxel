@@ -61,6 +61,10 @@
  * entry, which exists (`SP4C_MODULES`, a row added by each task that adds a module). R7's Apply commit (SP4c §8.1-§8.2,
  * §12): §6.4's R7 row names `applyPartialColumnFrames` and `mixedEpochFrames`, which `THRESHOLDS` holds activeFrom SP4c
  * beside SP4b's `partialColumnFrames` (SP4b's R7 pin moved into the SP4c block).
+ * The SP4c-complete commit (the commit after SP4c's exit commit; SP4c §13, §14): the cut-line texts are worded by
+ * the decision taken at the exit: the map's regeneration readout was built (`mapOverlay.ts` writes "Regenerating n /
+ * needed"), so it did not move; the climate-grid cache was not built (no module under `src/` names a climate grid) and moved to SP10, which receives it
+ * in a "Received from SP4c" line and its exit; §1's `ci.yml` line names the metrics-fast shards (`fastShards.mjs`).
  */
 import { existsSync, readdirSync, readFileSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
@@ -962,7 +966,6 @@ describe('master spec amendments (SP4c §12)', () => {
     expect(sp4c.split('\n'), 'the SP4c entry\'s contents line').toContain('- The map tool shared by `?map` and the M overlay; teleport (instant, no loading screen, nearest-first, 24 blocks above the surface or the water); Apply v1 live (one pool, the world holding while the pool holds an unapplied draft; the per-column epoch as the interned genKey; stale columns freed and regenerated nearest-first while their old meshes stay shown; the renderers\' swap; `invalidation.ts`); undo and redo live; the two editing modes, remembered (A full screen with "Watch live", B side by side); the pool\'s two lanes with the MAP cap by visibility.');
     expect(sp4c).toContain('**Exit:** as the SP4c spec §14');
     expect(sp4c.split('\n').some((l) => l.startsWith('- **Cut line:** the climate-grid cache and the map\'s regeneration readout (→ SP10)')), 'the SP4c entry has no `- **Cut line:** the climate-grid cache and the map\'s regeneration readout (→ SP10)` line').toBe(true);
-    expect(text).toContain('SP4c climate-grid cache and the map\'s regeneration readout → SP10');
     const sp5 = spEntry('SP5', 'SP6');
     expect(sp5).toContain('Walk mode\'s teleport: the feet at the landing surface + 1, the look direction kept, snapped to `MOTION_BLOCKING` once published (the SP4c spec §3.5)');
     expect(sp5).toContain('saved places as a section of each saved world\'s map');
@@ -1080,5 +1083,29 @@ describe('master spec amendments (SP4c §12)', () => {
       expect(entry, `§1's ${head} entry does not name ${token}`).toContain(token);
       expect(existsSync(`${ROOT_DIR}${file}`), `${file} does not exist`).toBe(true);
     }
+  });
+
+  test('the readout was built and the cache was not, so SP4c\'s cut line moves the cache to SP10 alone (SP4c spec §6.4, §13)', () => {
+    // Built: the overlay's header writes the readout (SP4c spec §2.1, §13).
+    expect(readFileSync(`${ROOT_DIR}src/ui/world/mapOverlay.ts`, 'utf8')).toContain('readout.textContent = `Regenerating ${stale} / ${readNeeded}`');
+    // Not built: no module under src/ names a climate grid (SP2b spec §2.9's per-worker cache).
+    const src = readdirSync(`${ROOT_DIR}src`, { recursive: true, encoding: 'utf8' }).filter((f) => f.endsWith('.ts'));
+    for (const f of src) expect(readFileSync(`${ROOT_DIR}src/${f}`, 'utf8'), `src/${f} names a climate grid`).not.toMatch(/climate.?grid/i);
+    const cut = spEntry('SP4c', 'SP5').split('\n').find((l) => l.startsWith('- **Cut line:**'));
+    expect(cut).toBe('- **Cut line:** the climate-grid cache and the map\'s regeneration readout (→ SP10). The readout was not cut: it shipped in SP4c. The climate-grid cache moved to SP10: in the production check the in-world preview landed within 160 ms of each edit in mode B, against the SP4c spec §6.4\'s 500 ms, and the user found the map in mode B acceptable.');
+    expect(text).toContain('SP4c climate-grid cache → SP10 (moved: the in-world preview\'s `lastLatencyMs` stayed within the SP4c spec §6.4\'s 500 ms and the user found the map in mode B acceptable); SP4c map\'s regeneration readout → SP10 (delivered in SP4c, so nothing moved);');
+    const sp10 = spEntry('SP10', 'SP11').split('\n');
+    const received = sp10.find((l) => l.startsWith('- Received from SP4c (its spec §6.4, §13; amended by SP4c):'));
+    expect(received, 'SP10 has no "Received from SP4c" line').toBeDefined();
+    expect(received).toContain('SP2b\'s climate-grid cache (a per-worker cache of the climate grid, the SP2b spec §2.9) for the map\'s preview while the world regenerates');
+    expect(received).not.toContain('readout');
+    expect(sp10.find((l) => l.startsWith('- **Exit:**'))).toContain('the climate-grid cache received from SP4c');
+  });
+
+  test('§1\'s ci.yml line names the metrics-fast shards beside the unit shards (SP4c spec §9\'s CI note)', () => {
+    const entry = layoutEntry(/^\s+\.github\/workflows\/ci\.yml /);
+    expect(entry).toContain('the two unit shards (`.github/scripts/unitShards.mjs`), the metrics-fast shards (`.github/scripts/fastShards.mjs`) and the metrics-quick shards (cached)');
+    expect(entry).toContain('(amended 2026-10-20: parallel CI jobs; SP4b: the unit shards; SP4c: the metrics-fast shards)');
+    expect(existsSync(`${ROOT_DIR}.github/scripts/fastShards.mjs`)).toBe(true);
   });
 });

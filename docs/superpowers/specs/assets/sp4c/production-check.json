@@ -1167,7 +1167,14 @@
     "keydownReached": false,
     "drawerStayedOpen": true,
     "fallbackUsed": false,
-    "browser": "Chrome, CDP-injected key (a real keyboard Esc in Chrome was not checked)"
+    "browser": "Chrome, CDP-injected key (the scripted check did not press a real keyboard Esc; the user's real-keyboard Esc in Chrome is under chromeRealKeyboard)",
+    "chromeRealKeyboard": {
+      "by": "the user, by hand, 2026-10-26",
+      "how": "a real keyboard Esc in mode B with the pointer locked, in the user's Chrome, with the same console snippet as in Firefox",
+      "result": "as expected, as in Firefox: the lock released and the map stayed open",
+      "lockReleased": true,
+      "mapStayedOpen": true
+    }
   },
   "selftest": "59/59",
   "consoleErrors": [],

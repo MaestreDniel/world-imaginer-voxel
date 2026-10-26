@@ -13,7 +13,8 @@ concurrency:
 
 # Jobs: `changes` decides the docs-only fast path, the unit shards and the metrics-fast and metrics-quick shards;
 # `check` (build, arch, integration), the `unit` shards, the `metrics-fast` shards and the `metrics-quick` shards run in
-# parallel after it; `ci-ok` is the one status to require. Every vitest job writes a JSON report and lists its slowest files in the job summary.
+# parallel after it; `ci-ok` is the one status to require. Every vitest job writes a JSON report and lists its slowest
+# files in the job summary.
 jobs:
   changes:
     runs-on: ubuntu-latest
