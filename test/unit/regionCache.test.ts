@@ -420,12 +420,13 @@ describe('the CI region cache steps (SP3b spec §7; one per metrics job since th
     steps: text.includes('steps:') ? text.slice(text.indexOf('steps:')).split(/\n\s{6}- /).slice(1) : [],
   }));
   const isCache = (s: string): boolean => /^uses: actions\/cache@/.test(s);
-  const runsMetrics = (s: string): boolean => /--project metrics-|metricShards\.mjs run/.test(s) && /^(run|name):/.test(s);
+  const runsMetrics = (s: string): boolean => /--project metrics-|(metric|fast)Shards\.mjs run/.test(s) && /^(run|name):/.test(s);
   const metricJobs = jobs.filter((j) => j.steps.some(runsMetrics));
 
-  test('every metrics tier runs in a job (metrics-fast, every metrics-quick shard) and only those jobs cache', () => {
+  test('every metrics tier runs in a job (every metrics-fast shard, every metrics-quick shard) and only those jobs cache', () => {
     expect(metricJobs.map((j) => j.name).sort()).toEqual(['metrics-fast', 'metrics-quick']);
     expect(metricJobs.find((j) => j.name === 'metrics-quick')!.steps.some((s) => /metricShards\.mjs run "\$SHARD"/.test(s))).toBe(true);
+    expect(metricJobs.find((j) => j.name === 'metrics-fast')!.steps.some((s) => /fastShards\.mjs run "\$SHARD"/.test(s))).toBe(true);
     for (const j of jobs) if (!metricJobs.includes(j)) expect(j.steps.filter(isCache), j.name).toEqual([]);
   });
 
@@ -443,7 +444,7 @@ describe('the CI region cache steps (SP3b spec §7; one per metrics job since th
     }
     expect(fileURLToPath(new URL('../.cache/regions/', import.meta.url))).toBe(REGION_CACHE_DIR);
     // Each job (and each shard of the matrix) restores and saves its own dumps.
-    expect(keys.find((k) => k.includes('-metrics-fast-'))).toBeDefined();
+    expect(keys.find((k) => k.includes('-metrics-fast-${{ matrix.shard }}-'))).toBeDefined();
     expect(keys.find((k) => k.includes('-metrics-quick-${{ matrix.shard }}-'))).toBeDefined();
   });
 

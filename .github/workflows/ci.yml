@@ -11,15 +11,16 @@ concurrency:
   group: ci-${{ github.ref }}
   cancel-in-progress: true
 
-# Jobs: `changes` decides the docs-only fast path, the unit shards and the metrics-quick shards; `check` (build, arch,
-# integration), the `unit` shards, `metrics-fast` and the `metrics-quick` shards run in parallel after it; `ci-ok` is
-# the one status to require. Every vitest job writes a JSON report and lists its slowest files in the job summary.
+# Jobs: `changes` decides the docs-only fast path, the unit shards and the metrics-fast and metrics-quick shards;
+# `check` (build, arch, integration), the `unit` shards, the `metrics-fast` shards and the `metrics-quick` shards run in
+# parallel after it; `ci-ok` is the one status to require. Every vitest job writes a JSON report and lists its slowest files in the job summary.
 jobs:
   changes:
     runs-on: ubuntu-latest
     outputs:
       docs_only: ${{ steps.changes.outputs.docs_only }}
       shards: ${{ steps.shards.outputs.shards }}
+      fast_shards: ${{ steps.fast_shards.outputs.fast_shards }}
       unit_shards: ${{ steps.unit_shards.outputs.unit_shards }}
     steps:
       - uses: actions/checkout@v7
@@ -36,6 +37,8 @@ jobs:
           PR_BASE: ${{ github.event.pull_request.base.sha }}
       - id: shards
         run: echo "shards=$(node .github/scripts/metricShards.mjs matrix)" >> "$GITHUB_OUTPUT"
+      - id: fast_shards
+        run: echo "fast_shards=$(node .github/scripts/fastShards.mjs matrix)" >> "$GITHUB_OUTPUT"
       - id: unit_shards
         run: echo "unit_shards=$(node .github/scripts/unitShards.mjs matrix)" >> "$GITHUB_OUTPUT"
 
@@ -94,10 +97,18 @@ jobs:
         env:
           SHARD: ${{ matrix.shard }}
 
+  # metrics-fast split by .github/scripts/fastShards.mjs (SP4b spec §9's lever, taken after SP4c's merge run): `terrain`
+  # and `surface` each in a shard of its own plus the catch-all `rest`, so a new metric file always runs; its `check`
+  # fails the job unless the shards cover the project's files exactly once.
   metrics-fast:
     needs: changes
     if: needs.changes.outputs.docs_only != 'true'
+    name: metrics-fast (${{ matrix.shard }})
     runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        shard: ${{ fromJSON(needs.changes.outputs.fast_shards) }}
     steps:
       - uses: actions/checkout@v7
       - uses: actions/setup-node@v7
@@ -105,17 +116,22 @@ jobs:
           node-version-file: .nvmrc
           cache: npm
       - run: npm ci
+      - run: node .github/scripts/fastShards.mjs check
       # The region cache (SP3b spec §7): dumps only, never the bundled workers (test/.cache/taskHandler* etc.). The key
       # covers everything a dump's srcKey hashes; no restore-keys, so a code change starts cold instead of restoring
-      # dumps that can never hit. Each metrics job (metrics-fast, every metrics-quick shard) has its own key suffix, so
-      # each restores and saves only the dumps of its own tier and files.
+      # dumps that can never hit. Each metrics job (every metrics-fast shard, every metrics-quick shard) has its own key
+      # suffix, so each restores and saves only the dumps of its own tier and files.
       - uses: actions/cache@v6
         with:
           path: test/.cache/regions
-          key: regions-${{ runner.os }}-metrics-fast-${{ hashFiles('src/**', 'test/harness/**', 'package-lock.json') }}
-      - run: npx vitest run --project metrics-fast --reporter=default --reporter=json --outputFile.json="$RUNNER_TEMP/vitest.json"
+          key: regions-${{ runner.os }}-metrics-fast-${{ matrix.shard }}-${{ hashFiles('src/**', 'test/harness/**', 'package-lock.json') }}
+      - run: node .github/scripts/fastShards.mjs run "$SHARD" "$RUNNER_TEMP/vitest.json"
+        env:
+          SHARD: ${{ matrix.shard }}
       - if: ${{ !cancelled() }}
-        run: node .github/scripts/slowest.mjs --title "Slowest test files (metrics-fast)" "$RUNNER_TEMP/vitest.json"
+        run: node .github/scripts/slowest.mjs --title "Slowest test files (metrics-fast $SHARD)" "$RUNNER_TEMP/vitest.json"
+        env:
+          SHARD: ${{ matrix.shard }}
 
   # metrics-quick split by .github/scripts/metricShards.mjs: named heavy files in their own shards plus a catch-all
   # shard that excludes them, so a new metric file always runs; its `check` fails the job unless the shards cover the
@@ -150,7 +166,8 @@ jobs:
         env:
           SHARD: ${{ matrix.shard }}
 
-  # The status to require: every job green, except that the docs-only path skips the metrics jobs.
+  # The status to require: every job green, except that the docs-only path skips the metrics jobs. A matrix job's result
+  # is its shards' aggregate: success only when every shard succeeded.
   ci-ok:
     needs: [changes, check, unit, metrics-fast, metrics-quick]
     if: always()

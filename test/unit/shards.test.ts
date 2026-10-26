@@ -1,11 +1,13 @@
 /**
  * The CI shard tables (SP4b spec §1.1, D1): `shardArgs` selects a named shard's files or excludes every named file for
  * the catch-all, and `coverageProblems` holds every rule a table's `check` enforces, on synthetic file lists (no
- * `vitest list`). The unit table is the spec's ten heavy files plus `rest`; the metrics-quick table keeps its shards.
+ * `vitest list`). The unit table is the spec's ten heavy files plus `rest`; the metrics-quick table keeps its shards; the
+ * metrics-fast table (SP4b spec §9's lever, taken after SP4c's merge run) is `terrain` and `surface` alone plus `rest`.
  */
-import { existsSync } from 'node:fs';
+import { existsSync, readdirSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
 import { describe, expect, test } from 'vitest';
+import { SHARDS as FAST_SHARDS } from '../../.github/scripts/fastShards.mjs';
 import { SHARDS as METRIC_SHARDS } from '../../.github/scripts/metricShards.mjs';
 import { coverageProblems, shardArgs } from '../../.github/scripts/shardLib.mjs';
 import { SHARDS } from '../../.github/scripts/unitShards.mjs';
@@ -37,6 +39,24 @@ describe('shardArgs (SP4b spec §1.1)', () => {
       render: ['test/metrics/render.metric.ts', 'test/metrics/light.metric.ts', 'test/metrics/g1.metric.ts', 'test/metrics/stream.metric.ts'],
       rest: null,
     });
+  });
+
+  test('the metrics-fast table: terrain and surface each alone, rest excludes both', () => {
+    expect(FAST_SHARDS).toEqual({
+      terrain: ['test/metrics/terrain.metric.ts'],
+      surface: ['test/metrics/surface.metric.ts'],
+      rest: null,
+    });
+    expect(shardArgs(FAST_SHARDS, 'rest')).toEqual(['--exclude', 'test/metrics/terrain.metric.ts', '--exclude', 'test/metrics/surface.metric.ts']);
+  });
+
+  test('the metrics-fast table covers the project\'s files on disk exactly once (check\'s rules, without vitest list)', () => {
+    const onDisk = readdirSync(`${ROOT}test/metrics`).filter((f) => f.endsWith('.metric.ts')).map((f) => `test/metrics/${f}`).sort();
+    const named = Object.values(FAST_SHARDS).filter((f) => f !== null).flat();
+    const listed = Object.fromEntries(Object.entries(FAST_SHARDS).map(([name, files]) =>
+      [name, files ?? onDisk.filter((f) => !named.includes(f))]));
+    expect(coverageProblems({ project: 'metrics-fast', shards: FAST_SHARDS, all: onDisk, onDisk, listed })).toEqual([]);
+    expect(listed.rest!.length).toBe(onDisk.length - 2);
   });
 });
 
