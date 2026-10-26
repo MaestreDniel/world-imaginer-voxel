@@ -1,0 +1,1854 @@
+{
+  "date": "2026-10-26T20:50:15.873Z",
+  "url": "https://world-imaginer-voxel.vercel.app/",
+  "gitHead": "7cdd1df7d98a53938aa4a546993daae6eabddb78",
+  "servedBundle": "index-D5DBubp7.js",
+  "localBundle": "index-D5DBubp7.js",
+  "sameBuild": true,
+  "userAgent": "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/155.0.0.0 Safari/537.36",
+  "glRenderer": "ANGLE (Intel, Mesa Intel(R) Iris(R) Xe Graphics (ADL GT2), OpenGL 4.6)",
+  "glVendor": "Google Inc. (Intel)",
+  "window": {
+    "left": 0,
+    "top": 35,
+    "width": 1920,
+    "height": 1045,
+    "windowState": "maximized"
+  },
+  "viewport": {
+    "innerWidth": 1920,
+    "innerHeight": 958,
+    "devicePixelRatio": 1,
+    "hasFocus": true
+  },
+  "wiTestHonoured": true,
+  "loadBefore": {
+    "uptime": "21:50:15 up  1:24,  1 user,  load average: 0,59, 1,14, 0,94",
+    "loadavg": [
+      0.59,
+      1.14,
+      0.94
+    ]
+  },
+  "loadAfter": {
+    "uptime": "21:52:07 up  1:25,  1 user,  load average: 3,31, 2,25, 1,39",
+    "loadavg": [
+      3.31,
+      2.25,
+      1.39
+    ]
+  },
+  "steps": [
+    {
+      "step": 1,
+      "name": "world reveals (batch)",
+      "notes": [],
+      "query": "?rd=8&renderer=batch&wiTest=1",
+      "revealed": true,
+      "revealMs": 1945,
+      "loadWallMs": 2532,
+      "dataRenderer": [
+        "batch"
+      ],
+      "gl": {
+        "renderer": "ANGLE (Intel, Mesa Intel(R) Iris(R) Xe Graphics (ADL GT2), OpenGL 4.6)",
+        "vendor": "Google Inc. (Intel)"
+      },
+      "wiTest": true,
+      "pass": true
+    },
+    {
+      "step": 2,
+      "name": "M opens the overlay, mode A (batch)",
+      "notes": [],
+      "overlayShownMs": 154.785000000149,
+      "overlayShown": true,
+      "modeA": true,
+      "owner": "map",
+      "tilesDrawnMs": 84,
+      "tilesShare": 1,
+      "mapCanvas": "1575x897",
+      "arrowWhitePx": 31,
+      "densityDrawerOpen": true,
+      "sliceMs": 525,
+      "screenshot": "batch-2-mode-a.png",
+      "pass": true
+    },
+    {
+      "step": 3,
+      "name": "click teleport (batch)",
+      "notes": [],
+      "cameraBefore": {
+        "revealed": 225,
+        "x": 0,
+        "y": 97,
+        "z": 0
+      },
+      "searchBefore": "?rd=8&renderer=batch&wiTest=1",
+      "click": {
+        "x": 1088,
+        "y": 357,
+        "targetBlock": {
+          "x": 1202,
+          "z": 0
+        }
+      },
+      "landingMs": 32,
+      "mapClosedOnArrival": true,
+      "revealedSeries": [
+        [
+          41,
+          225
+        ],
+        [
+          295,
+          0
+        ],
+        [
+          548,
+          28
+        ],
+        [
+          802,
+          90
+        ],
+        [
+          1055,
+          165
+        ],
+        [
+          1308,
+          225
+        ],
+        [
+          1561,
+          225
+        ],
+        [
+          1814,
+          225
+        ],
+        [
+          2067,
+          225
+        ],
+        [
+          2319,
+          225
+        ],
+        [
+          2571,
+          225
+        ],
+        [
+          2824,
+          225
+        ],
+        [
+          3077,
+          225
+        ],
+        [
+          3509,
+          225
+        ],
+        [
+          3762,
+          225
+        ],
+        [
+          4014,
+          225
+        ],
+        [
+          4266,
+          225
+        ],
+        [
+          4518,
+          225
+        ],
+        [
+          4771,
+          225
+        ],
+        [
+          5023,
+          225
+        ],
+        [
+          5276,
+          225
+        ],
+        [
+          5528,
+          225
+        ],
+        [
+          5781,
+          225
+        ],
+        [
+          6034,
+          225
+        ],
+        [
+          6287,
+          225
+        ],
+        [
+          6540,
+          225
+        ],
+        [
+          6792,
+          225
+        ],
+        [
+          7043,
+          225
+        ],
+        [
+          7296,
+          225
+        ],
+        [
+          7549,
+          225
+        ],
+        [
+          7801,
+          225
+        ],
+        [
+          8053,
+          225
+        ],
+        [
+          8306,
+          225
+        ],
+        [
+          8558,
+          225
+        ],
+        [
+          8811,
+          225
+        ],
+        [
+          9064,
+          225
+        ],
+        [
+          9316,
+          225
+        ],
+        [
+          9569,
+          225
+        ],
+        [
+          9821,
+          225
+        ],
+        [
+          10075,
+          225
+        ],
+        [
+          10327,
+          225
+        ],
+        [
+          10580,
+          225
+        ],
+        [
+          10832,
+          225
+        ],
+        [
+          11086,
+          225
+        ],
+        [
+          11339,
+          225
+        ],
+        [
+          11591,
+          225
+        ],
+        [
+          11844,
+          225
+        ],
+        [
+          12097,
+          225
+        ],
+        [
+          12351,
+          225
+        ],
+        [
+          12604,
+          225
+        ],
+        [
+          12857,
+          225
+        ],
+        [
+          13110,
+          225
+        ],
+        [
+          13363,
+          225
+        ],
+        [
+          13617,
+          225
+        ],
+        [
+          13869,
+          225
+        ],
+        [
+          14122,
+          225
+        ],
+        [
+          14375,
+          225
+        ],
+        [
+          14627,
+          225
+        ],
+        [
+          14880,
+          225
+        ]
+      ],
+      "landing": {
+        "surface": 90,
+        "water": null,
+        "y": 114
+      },
+      "cameraAfter": {
+        "revealed": 90,
+        "x": 1202.5,
+        "y": 114,
+        "z": 0.5
+      },
+      "expectedY": 114,
+      "near": true,
+      "yOk": true,
+      "searchAfter": "?rd=8&renderer=batch&wiTest=1&at=1203,1&y=114&yaw=315.0&pitch=-10.0",
+      "urlAt": "1203,1",
+      "urlY": "114",
+      "urlOk": true,
+      "revealedBefore": 225,
+      "revealedLow": 0,
+      "firstGrowthMsFromClick": 548,
+      "revealedAt15s": 225,
+      "lowAtMsFromClick": 295,
+      "halfOfFinalMsFromClick": 1055,
+      "screenshot": "batch-3-after-teleport-15s.png",
+      "pass": true
+    },
+    {
+      "step": 4,
+      "name": "mode B and live edits (batch)",
+      "notes": [],
+      "edits": [
+        {
+          "label": "density.detailAmpHi 1.5 → 4",
+          "notes": [],
+          "staleRose": true,
+          "hudStaleRows": [
+            [
+              371,
+              "225/225"
+            ],
+            [
+              588,
+              "210/225"
+            ],
+            [
+              910,
+              "169/225"
+            ],
+            [
+              1123,
+              "114/225"
+            ],
+            [
+              1335,
+              "60/225"
+            ]
+          ],
+          "hudStaleMax": {
+            "stale": 225,
+            "needed": 225
+          },
+          "hudRowZeroAfter": true,
+          "settleMs": 1651,
+          "statusBefore": "last edit → preview …",
+          "statusLog": [
+            [
+              35,
+              "last edit → preview … · pending"
+            ],
+            [
+              40,
+              "last edit → preview … · pending"
+            ],
+            [
+              43,
+              "last edit → preview 19 ms"
+            ]
+          ],
+          "statusAfter": "last edit → preview 19 ms",
+          "lastLatencyMs": 19,
+          "previewLandedMsFromCommit": 43,
+          "pass": true
+        },
+        {
+          "label": "climate.C.wavelength 2400 → 1800",
+          "notes": [],
+          "staleRose": true,
+          "hudStaleRows": [
+            [
+              270,
+              "225/225"
+            ],
+            [
+              1025,
+              "210/225"
+            ],
+            [
+              1345,
+              "169/225"
+            ],
+            [
+              1561,
+              "128/225"
+            ],
+            [
+              1772,
+              "81/225"
+            ],
+            [
+              2092,
+              "32/225"
+            ],
+            [
+              2304,
+              "1/225"
+            ]
+          ],
+          "hudStaleMax": {
+            "stale": 225,
+            "needed": 225
+          },
+          "hudRowZeroAfter": true,
+          "settleMs": 2304,
+          "statusBefore": "last edit → preview 19 ms",
+          "statusLog": [
+            [
+              45,
+              "last edit → preview 19 ms · pending"
+            ],
+            [
+              50,
+              "last edit → preview 19 ms · pending"
+            ],
+            [
+              194,
+              "last edit → preview 160 ms"
+            ]
+          ],
+          "statusAfter": "last edit → preview 160 ms",
+          "lastLatencyMs": 160,
+          "previewLandedMsFromCommit": 194,
+          "pass": true
+        },
+        {
+          "label": "climate.C.wavelength 1800 → 3000",
+          "notes": [],
+          "staleRose": true,
+          "hudStaleRows": [
+            [
+              289,
+              "225/225"
+            ],
+            [
+              1031,
+              "197/225"
+            ],
+            [
+              1247,
+              "151/225"
+            ],
+            [
+              1572,
+              "107/225"
+            ],
+            [
+              1789,
+              "55/225"
+            ]
+          ],
+          "hudStaleMax": {
+            "stale": 225,
+            "needed": 225
+          },
+          "hudRowZeroAfter": true,
+          "settleMs": 2006,
+          "statusBefore": "last edit → preview 160 ms",
+          "statusLog": [
+            [
+              64,
+              "last edit → preview 160 ms · pending"
+            ],
+            [
+              70,
+              "last edit → preview 160 ms · pending"
+            ],
+            [
+              191,
+              "last edit → preview 136 ms"
+            ]
+          ],
+          "statusAfter": "last edit → preview 136 ms",
+          "lastLatencyMs": 136,
+          "previewLandedMsFromCommit": 191,
+          "pass": true
+        },
+        {
+          "label": "density.detailAmpHi 4 → 2.5",
+          "notes": [],
+          "staleRose": true,
+          "hudStaleRows": [
+            [
+              293,
+              "225/225"
+            ],
+            [
+              1043,
+              "198/225"
+            ],
+            [
+              1259,
+              "154/225"
+            ],
+            [
+              1473,
+              "107/225"
+            ],
+            [
+              1798,
+              "54/225"
+            ]
+          ],
+          "hudStaleMax": {
+            "stale": 225,
+            "needed": 225
+          },
+          "hudRowZeroAfter": true,
+          "settleMs": 2013,
+          "statusBefore": "last edit → preview 136 ms",
+          "statusLog": [
+            [
+              58,
+              "last edit → preview 136 ms · pending"
+            ],
+            [
+              63,
+              "last edit → preview 136 ms · pending"
+            ],
+            [
+              71,
+              "last edit → preview 26 ms"
+            ]
+          ],
+          "statusAfter": "last edit → preview 26 ms",
+          "lastLatencyMs": 26,
+          "previewLandedMsFromCommit": 71,
+          "pass": true
+        },
+        {
+          "label": "Ctrl+Z (map owns, mode B)",
+          "notes": [],
+          "staleRose": true,
+          "hudStaleRows": [
+            [
+              238,
+              "225/225"
+            ],
+            [
+              668,
+              "221/225"
+            ],
+            [
+              987,
+              "187/225"
+            ],
+            [
+              1204,
+              "147/225"
+            ],
+            [
+              1432,
+              "104/225"
+            ],
+            [
+              1755,
+              "42/225"
+            ]
+          ],
+          "hudStaleMax": {
+            "stale": 225,
+            "needed": 225
+          },
+          "hudRowZeroAfter": true,
+          "settleMs": 1858,
+          "statusBefore": "last edit → preview 26 ms",
+          "statusLog": [
+            [
+              15,
+              "last edit → preview 26 ms · pending"
+            ],
+            [
+              19,
+              "last edit → preview 26 ms · pending"
+            ],
+            [
+              20,
+              "last edit → preview 14 ms"
+            ]
+          ],
+          "statusAfter": "last edit → preview 14 ms",
+          "lastLatencyMs": 14,
+          "previewLandedMsFromCommit": 20,
+          "pass": true
+        },
+        {
+          "label": "Ctrl+Y (map owns, mode B)",
+          "notes": [],
+          "staleRose": true,
+          "hudStaleRows": [
+            [
+              346,
+              "225/225"
+            ],
+            [
+              560,
+              "196/225"
+            ],
+            [
+              776,
+              "142/225"
+            ],
+            [
+              1100,
+              "81/225"
+            ],
+            [
+              1312,
+              "11/225"
+            ]
+          ],
+          "hudStaleMax": {
+            "stale": 225,
+            "needed": 225
+          },
+          "hudRowZeroAfter": true,
+          "settleMs": 1312,
+          "statusBefore": "last edit → preview 14 ms",
+          "statusLog": [
+            [
+              10,
+              "last edit → preview 14 ms · pending"
+            ],
+            [
+              14,
+              "last edit → preview 14 ms · pending"
+            ],
+            [
+              19,
+              "last edit → preview 16 ms"
+            ]
+          ],
+          "statusAfter": "last edit → preview 16 ms",
+          "lastLatencyMs": 16,
+          "previewLandedMsFromCommit": 19,
+          "pass": true
+        }
+      ],
+      "overlayShown": true,
+      "split": true,
+      "world3dWidth": 960,
+      "mapHostWidth": 960,
+      "panelBeside": true,
+      "owner": "map",
+      "densityDrawerOpen": true,
+      "screenshotSplit": "batch-4-mode-b.png",
+      "screenshotAfterEdit1": "batch-4-mode-b-after-edit1.png",
+      "valueAfterRedo": "2.5",
+      "screenshotEnd": "batch-4-mode-b-end.png",
+      "pass": true
+    },
+    {
+      "step": 5,
+      "name": "mode B pointer lock and Esc (batch)",
+      "notes": [],
+      "hasFocusBefore": true,
+      "lockMs": 1.0499999998137355,
+      "lockTaken": true,
+      "lockLogAfterClick": [
+        {
+          "t": 32102.950000000186,
+          "locked": true
+        }
+      ],
+      "ownerLocked": "world",
+      "screenshotLocked": "batch-5-locked.png",
+      "wMovedBlocks": 18,
+      "stillLockedBeforeEsc": true,
+      "escKeyEvents": [],
+      "allKeyEvents": [
+        "keydown w locked=true",
+        "keyup w locked=true"
+      ],
+      "lockLogAfterEsc": [
+        {
+          "t": 34671.729999999516,
+          "locked": false
+        }
+      ],
+      "ownerAfter": "map",
+      "overlayShownAfter": true,
+      "splitAfter": true,
+      "mapTookControlsBack": true,
+      "screenshotAfterEsc": "batch-5-after-esc.png",
+      "pass": true
+    },
+    {
+      "step": 9,
+      "name": "map pans at rest and during an Apply in mode B, the cap-1 regime (batch; run between steps 5 and 6)",
+      "notes": [],
+      "query": "?rd=8&renderer=batch&wiTest=1",
+      "revealed": true,
+      "revealMs": 1895,
+      "loadWallMs": 2473,
+      "dataRenderer": [
+        "batch"
+      ],
+      "gl": {
+        "renderer": "ANGLE (Intel, Mesa Intel(R) Iris(R) Xe Graphics (ADL GT2), OpenGL 4.6)",
+        "vendor": "Google Inc. (Intel)"
+      },
+      "wiTest": true,
+      "jobLog": true,
+      "overlayShown": true,
+      "split": true,
+      "owner": "map",
+      "densityDrawerOpen": false,
+      "mapLayer": "biome",
+      "pass": true
+    },
+    {
+      "step": 6,
+      "name": "RegionMesh: overlay, teleport, one edit",
+      "notes": [],
+      "query": "?rd=8&renderer=mesh&wiTest=1",
+      "revealed": true,
+      "revealMs": 2085,
+      "loadWallMs": 2743,
+      "dataRenderer": [
+        "mesh"
+      ],
+      "gl": {
+        "renderer": "ANGLE (Intel, Mesa Intel(R) Iris(R) Xe Graphics (ADL GT2), OpenGL 4.6)",
+        "vendor": "Google Inc. (Intel)"
+      },
+      "wiTest": true,
+      "overlay": {
+        "notes": [
+          "stored mode was side by side: switched to Full screen through the header"
+        ],
+        "overlayShownMs": 154.8549999995157,
+        "overlayShown": true,
+        "modeA": true,
+        "owner": "map",
+        "tilesDrawnMs": 23,
+        "tilesShare": 1,
+        "mapCanvas": "1575x897",
+        "arrowWhitePx": 31,
+        "densityDrawerOpen": true,
+        "sliceMs": 577,
+        "screenshot": "mesh-2-mode-a.png",
+        "pass": true
+      },
+      "teleport": {
+        "notes": [],
+        "cameraBefore": {
+          "revealed": 225,
+          "x": 0,
+          "y": 97,
+          "z": 0
+        },
+        "searchBefore": "?rd=8&renderer=mesh&wiTest=1",
+        "click": {
+          "x": 1088,
+          "y": 357,
+          "targetBlock": {
+            "x": 1202,
+            "z": 0
+          }
+        },
+        "landingMs": 22,
+        "mapClosedOnArrival": true,
+        "revealedSeries": [
+          [
+            31,
+            225
+          ],
+          [
+            284,
+            0
+          ],
+          [
+            538,
+            0
+          ],
+          [
+            791,
+            7
+          ],
+          [
+            1044,
+            41
+          ],
+          [
+            1298,
+            89
+          ],
+          [
+            1551,
+            147
+          ],
+          [
+            1804,
+            205
+          ],
+          [
+            2057,
+            225
+          ],
+          [
+            2309,
+            225
+          ],
+          [
+            2561,
+            225
+          ],
+          [
+            2813,
+            225
+          ],
+          [
+            3066,
+            225
+          ],
+          [
+            3500,
+            225
+          ],
+          [
+            3753,
+            225
+          ],
+          [
+            4006,
+            225
+          ],
+          [
+            4259,
+            225
+          ],
+          [
+            4511,
+            225
+          ],
+          [
+            4763,
+            225
+          ],
+          [
+            5017,
+            225
+          ],
+          [
+            5269,
+            225
+          ],
+          [
+            5522,
+            225
+          ],
+          [
+            5775,
+            225
+          ],
+          [
+            6027,
+            225
+          ],
+          [
+            6280,
+            225
+          ],
+          [
+            6532,
+            225
+          ],
+          [
+            6784,
+            225
+          ],
+          [
+            7037,
+            225
+          ],
+          [
+            7289,
+            225
+          ],
+          [
+            7541,
+            225
+          ],
+          [
+            7794,
+            225
+          ],
+          [
+            8046,
+            225
+          ],
+          [
+            8299,
+            225
+          ],
+          [
+            8552,
+            225
+          ],
+          [
+            8804,
+            225
+          ],
+          [
+            9057,
+            225
+          ],
+          [
+            9310,
+            225
+          ],
+          [
+            9562,
+            225
+          ],
+          [
+            9815,
+            225
+          ],
+          [
+            10067,
+            225
+          ],
+          [
+            10320,
+            225
+          ],
+          [
+            10572,
+            225
+          ],
+          [
+            10825,
+            225
+          ],
+          [
+            11077,
+            225
+          ],
+          [
+            11330,
+            225
+          ],
+          [
+            11583,
+            225
+          ],
+          [
+            11836,
+            225
+          ],
+          [
+            12089,
+            225
+          ],
+          [
+            12342,
+            225
+          ],
+          [
+            12595,
+            225
+          ],
+          [
+            12848,
+            225
+          ],
+          [
+            13100,
+            225
+          ],
+          [
+            13353,
+            225
+          ],
+          [
+            13605,
+            225
+          ],
+          [
+            13858,
+            225
+          ],
+          [
+            14110,
+            225
+          ],
+          [
+            14363,
+            225
+          ],
+          [
+            14615,
+            225
+          ],
+          [
+            14868,
+            225
+          ]
+        ],
+        "landing": {
+          "surface": 90,
+          "water": null,
+          "y": 114
+        },
+        "cameraAfter": {
+          "revealed": 7,
+          "x": 1202.5,
+          "y": 114,
+          "z": 0.5
+        },
+        "expectedY": 114,
+        "near": true,
+        "yOk": true,
+        "searchAfter": "?rd=8&renderer=mesh&wiTest=1&at=1203,1&y=114&yaw=315.0&pitch=-10.0",
+        "urlAt": "1203,1",
+        "urlY": "114",
+        "urlOk": true,
+        "revealedBefore": 225,
+        "revealedLow": 0,
+        "firstGrowthMsFromClick": 791,
+        "revealedAt15s": 225,
+        "lowAtMsFromClick": 284,
+        "halfOfFinalMsFromClick": 1551,
+        "screenshot": "mesh-3-after-teleport-15s.png",
+        "pass": true
+      },
+      "split": true,
+      "edit": {
+        "label": "mesh: density.detailAmpHi 1.5 → 4",
+        "notes": [],
+        "staleRose": true,
+        "hudStaleRows": [
+          [
+            492,
+            "225/225"
+          ],
+          [
+            700,
+            "196/225"
+          ],
+          [
+            1018,
+            "145/225"
+          ],
+          [
+            1234,
+            "88/225"
+          ],
+          [
+            1452,
+            "32/225"
+          ]
+        ],
+        "hudStaleMax": {
+          "stale": 225,
+          "needed": 225
+        },
+        "hudRowZeroAfter": true,
+        "settleMs": 1557,
+        "statusBefore": "last edit → preview …",
+        "statusLog": [
+          [
+            45,
+            "last edit → preview … · pending"
+          ],
+          [
+            50,
+            "last edit → preview … · pending"
+          ],
+          [
+            52,
+            "last edit → preview 22 ms"
+          ]
+        ],
+        "statusAfter": "last edit → preview 22 ms",
+        "lastLatencyMs": 22,
+        "previewLandedMsFromCommit": 52,
+        "pass": true
+      },
+      "screenshot": "mesh-6-mode-b-after-edit.png",
+      "pass": true
+    },
+    {
+      "step": 7,
+      "name": "?selftest=1",
+      "notes": [],
+      "summary": "✓ all 59 goldens match (7.6 s)",
+      "wallMs": 8025,
+      "pass": true
+    },
+    {
+      "step": 8,
+      "name": "page and console errors",
+      "pageErrors": 0,
+      "consoleErrors": 0,
+      "ignored": 1,
+      "pass": true
+    }
+  ],
+  "lastLatencyMsSamples": [
+    19,
+    160,
+    136,
+    26,
+    14,
+    16
+  ],
+  "lastLatencyMsMax": 160,
+  "cutLineCache": "SP10",
+  "esc": {
+    "lockReleasedByCdpEsc": true,
+    "keydownReached": false,
+    "drawerStayedOpen": true,
+    "fallbackUsed": false,
+    "browser": "Chrome, CDP-injected key (a real keyboard Esc in Chrome was not checked)"
+  },
+  "selftest": "59/59",
+  "consoleErrors": [],
+  "pageErrors": [],
+  "ignoredLogs": [
+    {
+      "step": "1-reveal-batch",
+      "text": "Failed to load resource: the server responded with a status of 404 ()",
+      "url": "https://world-imaginer-voxel.vercel.app/favicon.ico"
+    }
+  ],
+  "dialogs": [
+    {
+      "step": "9-cap-regime",
+      "type": "beforeunload",
+      "message": ""
+    },
+    {
+      "step": "6-mesh",
+      "type": "beforeunload",
+      "message": ""
+    },
+    {
+      "step": "7-selftest",
+      "type": "beforeunload",
+      "message": ""
+    }
+  ],
+  "notes": [
+    "Git HEAD 7cdd1df7d98a53938aa4a546993daae6eabddb78. Served build = local build of main: production index-D5DBubp7.js equals a fresh local npm run build (dist/assets/index-D5DBubp7.js, index-M-cio8KZ.css).",
+    "Production honours ?wiTest=1 (main.ts installs window.__wiTest on the world route whenever the flag is present; not gated on DEV), so the check read owner(), stale() and lastLanding() through it.",
+    "The window manager placed the 1920x1080 window maximized at (0,35), 1920x1045; the viewport was 1920x958 @1 (not fullscreen, so a real Esc would not also leave fullscreen). Mode B needs >= 1000 px of width: each half was 960 px.",
+    "Mode A (step 2 batch / step 6 mesh): the overlay showed 155 / 155 ms after M; the map's tiles covered more than half of the 1575x897 view 84 / 23 ms after the overlay showed (tilesDrawnMs); the Density drawer's slice showed its size 525 / 577 ms after the drawer was opened (sliceMs).",
+    "RD 8 (225 columns revealed at the spawn and after each refill). Teleport: landingMs, the time from the click until the landing callback fired and the overlay closed, was 32 ms (batch) / 22 ms (mesh). In the HUD's revealed count, sampled every 250 ms from the click: the old place was gone (0 revealed) by 295 / 284 ms, the new place grew from 548 / 791 ms, reached half of its final count at 1055 / 1551 ms and was at 225 / 225 at 15 s.",
+    "lastLatencyMs (step 4): in mode B, edit → preview, from the input event. Samples 19, 160, 136, 26, 14, 16 ms, max 160 ms: the climate.C wavelength edits 160, 136 ms; the density edits and their undo/redo 14-26 ms, since they do not change the biome layer's tiles. The previews land within about the 150 ms quiet window (the session change → the Apply, measured at 154-159 ms in step 9), so they run mostly while the world is held (the aux lane may use all 6 workers); the 160 ms sample likely ended at or just after the Apply, its tail under the capped rule. None measures a level-256 preview running the whole way under cap 1. The mesh edit (step 6) read 22 ms (information only). By the spec §6.4/§13 rule as written (lastLatencyMs > 500 ms builds the cache) cutLineCache reads SP10. capRegime (step 9) measures a related case, a map pan of level-4 tiles right after an Apply.",
+    "Esc (spec 2.4) in headful Chrome, with a CDP-injected Esc: the lock was released and the keydown did not reach the page (no Escape keydown or keyup reached a capture-phase window listener installed before it, while the W keydown/keyup during the same lock did); the map then owned the controls with the overlay and the Density drawer still open. A real Esc is the user's check; Firefox is the user's run.",
+    "Selftest 59/59 (✓ all 59 goldens match (7.6 s)). Beforeunload dialogs (leaving an edited world for the next load and for ?selftest=1) were accepted through CDP Page.handleJavaScriptDialog: 9-cap-regime, 6-mesh, 7-selftest; ignored log: the favicon.ico 404. Page errors 0, other console errors 0.",
+    "capRegime (step 9: a fresh batch load in mode B, run between steps 5 and 6, with a worker job log and a map draw log installed in our page for that load only): 12 level-4 map tiles in the 615x870 map view at 4 blocks/px (tilesInView per pan 12, 16, 12, 15, 16, 12); each pan dragged the view by more than its width plus one tile, to ground with no cached tile (cachedBefore 0, 0, 0, 0, 0, 0). Pointer-up → the first draw showing every view tile: at rest 1460, 2210, 1672 ms; right after the Apply was issued (density.detailAmpHi, T pending) 3476, 3382, 2847 ms. T (the last terrain reply) finished 1516, 1521, 1393 ms after pointer-up; view tiles that landed while T was still pending: 1, 2, 2; most map-tile jobs running at once while T was pending 1, 1, 1, after T 6, 6, 6, at rest 6, 6, 6; the world still regenerating (a world job unanswered) when the pan's last tile was drawn: false, false, false. These during-Apply pan times mix two regimes: T stayed pending for only 1516, 1521, 1393 ms after pointer-up, and only 1, 2, 2 of the view's tiles landed under cap 1; the rest (about 51-56 % of each pan's time) ran after T with 6 tiles at once. The cap-1 rate seen is one level-4 tile at a time at about 700 ms each; at RD 8, T lasts about 1.5 s, so a pan right after an Apply waits about that long longer than at rest. tilesInView differs per pan (12, 16, 12 at rest; 15, 16, 12 during), so compare the per-tile figures; the baselines always ran first, while the load rose.",
+    "Per tile (a level-4 tile's worker run, post → reply): median 673.4 ms at rest (n 43), 700.8 ms during the Apply (n 44); pan time per view tile 121.7, 138.1, 139.3 ms at rest, 231.7, 211.4, 237.3 ms during the Apply.",
+    "Straddle: climate.C.wavelength 2400 → 2000, then → 2800, the second commit 204 ms after the first; the stale count first rose (an Apply issued) 155 ms after the first commit; two configures posted, 1 ms and 207 ms after it (the second to the 6 workers across a millisecond boundary); lastLatencyMs of the second 112 ms."
+  ],
+  "capRegime": {
+    "baselinePanMs": [
+      1460,
+      2210,
+      1672
+    ],
+    "duringApplyPanMs": [
+      3476,
+      3382,
+      2847
+    ],
+    "tilesInView": [
+      12,
+      16,
+      12,
+      15,
+      16,
+      12
+    ],
+    "worldStillRegenerating": [
+      false,
+      false,
+      false
+    ],
+    "auxPolicyObserved": {
+      "source": "inferred: __wiTest does not expose the pool policy; the worker job log (Worker.prototype.postMessage wrapped in our page) gives each map-tile job's run interval, and applyControl.ts:142-146 gives the policy for the observed state (not held after the Apply, mode B so not covering, T pending)",
+      "expectedWhileTPending": "first world, cap 1 (auxCap(held=false, covers=false, tPending=true))",
+      "expectedAtRest": "first world, cap 6 (no T pending)",
+      "baselineMaxConcurrentMapTiles": [
+        6,
+        6,
+        6
+      ],
+      "duringApplyMaxConcurrentMapTilesWhileTPending": [
+        1,
+        1,
+        1
+      ],
+      "duringApplyMaxConcurrentAuxWhileTPending": [
+        2,
+        2,
+        2
+      ],
+      "duringApplyMaxConcurrentMapTilesAfterTDone": [
+        6,
+        6,
+        6
+      ],
+      "duringApplyTilesRepliedWhileTPending": [
+        1,
+        2,
+        2
+      ]
+    },
+    "perTileEstimate": {
+      "what": "one level-4 map tile (the view's level at 4 blocks per px), the worker's run: post → reply of its mapTile job",
+      "baselineMedianMs": 673.4,
+      "baselineMeanMs": 654.4,
+      "baselineN": 43,
+      "duringApplyMedianMs": 700.8,
+      "duringApplyMeanMs": 702.3,
+      "duringApplyN": 44,
+      "baselinePanMsPerTile": [
+        121.7,
+        138.1,
+        139.3
+      ],
+      "duringApplyPanMsPerTile": [
+        231.7,
+        211.4,
+        237.3
+      ]
+    },
+    "straddle": {
+      "edits": "climate.C.wavelength 2400 → 2000, then → 2800",
+      "secondCommitMsAfterFirst": 204,
+      "firstStaleRiseMsAfterFirstCommit": 155,
+      "staleLogMsAfterFirstCommit": [
+        [
+          155,
+          225
+        ],
+        [
+          937,
+          224
+        ],
+        [
+          977,
+          222
+        ],
+        [
+          986,
+          221
+        ],
+        [
+          999,
+          220
+        ],
+        [
+          1024,
+          219
+        ]
+      ],
+      "configurePostsMsAfterFirstCommit": [
+        1,
+        207,
+        208
+      ],
+      "firstTerrainPostMsAfterFirstCommitByEpoch": {
+        "5": 777
+      },
+      "terrainJobsByEpoch": {
+        "5": 465
+      },
+      "statusLogMsAfterFirstCommit": [
+        [
+          6,
+          "last edit → preview 12 ms · pending"
+        ],
+        [
+          12,
+          "last edit → preview 12 ms · pending"
+        ],
+        [
+          116,
+          "last edit → preview 116 ms"
+        ],
+        [
+          212,
+          "last edit → preview 116 ms · pending"
+        ],
+        [
+          219,
+          "last edit → preview 116 ms · pending"
+        ],
+        [
+          316,
+          "last edit → preview 112 ms"
+        ]
+      ],
+      "statusAfter": "last edit → preview 112 ms",
+      "lastLatencyMsOfSecond": 112
+    },
+    "pans": [
+      {
+        "label": "baseline 1 (at rest)",
+        "dragPx": [
+          915,
+          0
+        ],
+        "viewBefore": {
+          "bpp": 4,
+          "layer": "biome",
+          "x": 0,
+          "z": 0
+        },
+        "viewBeforeDerived": true,
+        "viewAfter": {
+          "bpp": 4,
+          "layer": "biome",
+          "x": -3660,
+          "z": 0
+        },
+        "panBlocks": [
+          -3660,
+          0
+        ],
+        "targetLevel": 4,
+        "tilesInView": 12,
+        "previewTilesInView": 2,
+        "cachedBefore": 0,
+        "dragMs": 26.2,
+        "panMs": 1460,
+        "lastTileReplyMs": 1458,
+        "firstTileReplyMs": 532,
+        "mapTileJobs": {
+          "posted": 12,
+          "byLevel": {
+            "4": 12
+          },
+          "replied": 12,
+          "otherReplies": []
+        },
+        "tileJobMs": [
+          551.2,
+          626.1,
+          646.7,
+          603.3,
+          591.9,
+          603.9,
+          732.2,
+          703.1,
+          740.5,
+          740.2,
+          729.8,
+          830.5
+        ],
+        "auxJobsDuringPan": {
+          "point": 6,
+          "mapTile": 12
+        },
+        "maxConcurrentMapTiles": 6,
+        "maxConcurrentAux": 6,
+        "staleAtPointerUp": 0,
+        "hudStaleRowAfterPan": null,
+        "staleAtSettle": 0
+      },
+      {
+        "label": "baseline 2 (at rest)",
+        "dragPx": [
+          915,
+          300
+        ],
+        "viewBefore": {
+          "bpp": 4,
+          "layer": "biome",
+          "x": -3660,
+          "z": 0
+        },
+        "viewBeforeDerived": false,
+        "viewAfter": {
+          "bpp": 4,
+          "layer": "biome",
+          "x": -7320,
+          "z": -1200
+        },
+        "panBlocks": [
+          -3660,
+          -1200
+        ],
+        "targetLevel": 4,
+        "tilesInView": 16,
+        "previewTilesInView": 2,
+        "cachedBefore": 0,
+        "dragMs": 25.8,
+        "panMs": 2210,
+        "lastTileReplyMs": 2208,
+        "firstTileReplyMs": 508,
+        "mapTileJobs": {
+          "posted": 18,
+          "byLevel": {
+            "4": 18
+          },
+          "replied": 18,
+          "otherReplies": []
+        },
+        "tileJobMs": [
+          531.4,
+          555.2,
+          562.5,
+          543.1,
+          635.5,
+          563.2,
+          673.4,
+          693.5,
+          685.6,
+          719,
+          700.3,
+          914.8,
+          751.6,
+          734.2,
+          722.2,
+          750.6,
+          712.3,
+          676.1
+        ],
+        "auxJobsDuringPan": {
+          "point": 4,
+          "mapTile": 18
+        },
+        "maxConcurrentMapTiles": 6,
+        "maxConcurrentAux": 6,
+        "staleAtPointerUp": 0,
+        "hudStaleRowAfterPan": null,
+        "staleAtSettle": 0
+      },
+      {
+        "label": "baseline 3 (at rest)",
+        "dragPx": [
+          915,
+          -300
+        ],
+        "viewBefore": {
+          "bpp": 4,
+          "layer": "biome",
+          "x": -7320,
+          "z": -1200
+        },
+        "viewBeforeDerived": false,
+        "viewAfter": {
+          "bpp": 4,
+          "layer": "biome",
+          "x": -10980,
+          "z": 0
+        },
+        "panBlocks": [
+          -3660,
+          1200
+        ],
+        "targetLevel": 4,
+        "tilesInView": 12,
+        "previewTilesInView": 2,
+        "cachedBefore": 0,
+        "dragMs": 27.5,
+        "panMs": 1672,
+        "lastTileReplyMs": 1669,
+        "firstTileReplyMs": 517,
+        "mapTileJobs": {
+          "posted": 13,
+          "byLevel": {
+            "4": 13
+          },
+          "replied": 13,
+          "otherReplies": []
+        },
+        "tileJobMs": [
+          546,
+          537.8,
+          549,
+          603.2,
+          597.5,
+          536.1,
+          675.3,
+          670.2,
+          680.9,
+          658.1,
+          679.2,
+          700.2,
+          482.6
+        ],
+        "auxJobsDuringPan": {
+          "point": 5,
+          "mapTile": 13
+        },
+        "maxConcurrentMapTiles": 6,
+        "maxConcurrentAux": 6,
+        "staleAtPointerUp": 0,
+        "hudStaleRowAfterPan": null,
+        "staleAtSettle": 0
+      },
+      {
+        "label": "during apply 1: density.detailAmpHi 1.5 → 4",
+        "dragPx": [
+          915,
+          150
+        ],
+        "viewBefore": {
+          "bpp": 4,
+          "layer": "biome",
+          "x": -10980,
+          "z": 0
+        },
+        "viewBeforeDerived": false,
+        "viewAfter": {
+          "bpp": 4,
+          "layer": "biome",
+          "x": -14640,
+          "z": -600
+        },
+        "panBlocks": [
+          -3660,
+          -600
+        ],
+        "targetLevel": 4,
+        "tilesInView": 15,
+        "previewTilesInView": 2,
+        "cachedBefore": 0,
+        "dragMs": 41.1,
+        "panMs": 3476,
+        "lastTileReplyMs": 3476,
+        "firstTileReplyMs": 1168,
+        "mapTileJobs": {
+          "posted": 16,
+          "byLevel": {
+            "4": 16
+          },
+          "replied": 16,
+          "otherReplies": []
+        },
+        "tileJobMs": [
+          578.3,
+          622,
+          681.3,
+          735.8,
+          810,
+          707.8,
+          858,
+          705.1,
+          709.4,
+          719.8,
+          675.3,
+          736,
+          849.8,
+          708.7,
+          681.9,
+          560.4
+        ],
+        "auxJobsDuringPan": {
+          "point": 6,
+          "mapTile": 16
+        },
+        "maxConcurrentMapTiles": 6,
+        "maxConcurrentAux": 6,
+        "staleAtPointerUp": 225,
+        "hudStaleRowAfterPan": "225/225",
+        "staleAtSettle": 0,
+        "commitToApplyMs": 159,
+        "commitToConfigureMs": 3,
+        "statusAtPan": "last edit → preview 22 ms",
+        "terrainJobsAfterDown": 460,
+        "terrainDoneMsFromUp": 1516,
+        "worldDoneMsFromUp": 1535,
+        "pointerUpMsFromApply": 54,
+        "terrainStillPendingWhenDrawn": false,
+        "worldStillRegeneratingWhenDrawn": false,
+        "maxConcurrentMapTilesWhileTPending": 1,
+        "maxConcurrentAuxWhileTPending": 2,
+        "maxConcurrentMapTilesAfterTDone": 6,
+        "tilesRepliedWhileTPending": 1
+      },
+      {
+        "label": "during apply 2: density.detailAmpHi 4 → 2.5",
+        "dragPx": [
+          915,
+          -150
+        ],
+        "viewBefore": {
+          "bpp": 4,
+          "layer": "biome",
+          "x": -14640,
+          "z": -600
+        },
+        "viewBeforeDerived": false,
+        "viewAfter": {
+          "bpp": 4,
+          "layer": "biome",
+          "x": -18300,
+          "z": 0
+        },
+        "panBlocks": [
+          -3660,
+          600
+        ],
+        "targetLevel": 4,
+        "tilesInView": 16,
+        "previewTilesInView": 2,
+        "cachedBefore": 0,
+        "dragMs": 24.7,
+        "panMs": 3382,
+        "lastTileReplyMs": 3379,
+        "firstTileReplyMs": 462,
+        "mapTileJobs": {
+          "posted": 16,
+          "byLevel": {
+            "4": 16
+          },
+          "replied": 16,
+          "otherReplies": []
+        },
+        "tileJobMs": [
+          483,
+          632.4,
+          637,
+          696.4,
+          688,
+          683.8,
+          979.7,
+          719.3,
+          727,
+          643.7,
+          713.9,
+          725.6,
+          725.6,
+          675.4,
+          734.9,
+          529.6
+        ],
+        "auxJobsDuringPan": {
+          "point": 6,
+          "mapTile": 16
+        },
+        "maxConcurrentMapTiles": 6,
+        "maxConcurrentAux": 6,
+        "staleAtPointerUp": 225,
+        "hudStaleRowAfterPan": "225/225",
+        "staleAtSettle": 0,
+        "commitToApplyMs": 158,
+        "commitToConfigureMs": 4,
+        "statusAtPan": "last edit → preview 19 ms",
+        "terrainJobsAfterDown": 457,
+        "terrainDoneMsFromUp": 1521,
+        "worldDoneMsFromUp": 1543,
+        "pointerUpMsFromApply": 34,
+        "terrainStillPendingWhenDrawn": false,
+        "worldStillRegeneratingWhenDrawn": false,
+        "maxConcurrentMapTilesWhileTPending": 1,
+        "maxConcurrentAuxWhileTPending": 2,
+        "maxConcurrentMapTilesAfterTDone": 6,
+        "tilesRepliedWhileTPending": 2
+      },
+      {
+        "label": "during apply 3: density.detailAmpHi 2.5 → 3.5",
+        "dragPx": [
+          915,
+          450
+        ],
+        "viewBefore": {
+          "bpp": 4,
+          "layer": "biome",
+          "x": -18300,
+          "z": 0
+        },
+        "viewBeforeDerived": false,
+        "viewAfter": {
+          "bpp": 4,
+          "layer": "biome",
+          "x": -21960,
+          "z": -1800
+        },
+        "panBlocks": [
+          -3660,
+          -1800
+        ],
+        "targetLevel": 4,
+        "tilesInView": 12,
+        "previewTilesInView": 1,
+        "cachedBefore": 0,
+        "dragMs": 28.6,
+        "panMs": 2847,
+        "lastTileReplyMs": 2847,
+        "firstTileReplyMs": 505,
+        "mapTileJobs": {
+          "posted": 12,
+          "byLevel": {
+            "4": 12
+          },
+          "replied": 12,
+          "otherReplies": []
+        },
+        "tileJobMs": [
+          521.5,
+          578.7,
+          662.2,
+          764.9,
+          672.7,
+          951.5,
+          817,
+          880.5,
+          741.1,
+          683,
+          673.9,
+          620.2
+        ],
+        "auxJobsDuringPan": {
+          "point": 6,
+          "mapTile": 12
+        },
+        "maxConcurrentMapTiles": 6,
+        "maxConcurrentAux": 6,
+        "staleAtPointerUp": 225,
+        "hudStaleRowAfterPan": "218/225",
+        "staleAtSettle": 0,
+        "commitToApplyMs": 154,
+        "commitToConfigureMs": 2,
+        "statusAtPan": "last edit → preview 12 ms",
+        "terrainJobsAfterDown": 456,
+        "terrainDoneMsFromUp": 1393,
+        "worldDoneMsFromUp": 1418,
+        "pointerUpMsFromApply": 39,
+        "terrainStillPendingWhenDrawn": false,
+        "worldStillRegeneratingWhenDrawn": false,
+        "maxConcurrentMapTilesWhileTPending": 1,
+        "maxConcurrentAuxWhileTPending": 2,
+        "maxConcurrentMapTilesAfterTDone": 6,
+        "tilesRepliedWhileTPending": 2
+      }
+    ],
+    "mapCanvas": {
+      "x": 0,
+      "y": 88,
+      "width": 615,
+      "height": 870,
+      "cw": 615,
+      "ch": 870
+    },
+    "viewBefore": {
+      "bpp": 4,
+      "layer": "biome",
+      "x": 0,
+      "z": 0
+    },
+    "poolWorkers": 6,
+    "notes": [
+      "Every map-tile job the pans posted was level 4 (mapTileJobs.byLevel): the view's own level at 4 blocks/px (planTiles priority 1000 + dist). The 2, 2, 2, 2, 2, 1 level-256 preview tiles under each view were already cached, so no pan posted a level-256 job; spec 6.4's \"about 54 ms\" is a level-256 tile, these are level-4 tiles (median worker run 673.4 ms at rest, 700.8 ms during the Apply).",
+      "Apply issued: the pan's drag began once __wiTest.stale() rose above 0 (commitToApplyMs 159, 158, 154 ms after the Enter); pointer-up came 54, 34, 39 ms after that; stale() at pointer-up 225, 225, 225, the HUD row read just after the pan 225/225, 225/225, 218/225. T pending is read from the job log (terrain jobs still unanswered), not from the page.",
+      "Aux policy: not exposed by the page; observed as concurrency in the job log. While T was pending at most 1, 1, 1 map-tile job ran at once (all aux jobs: 2, 2, 2, the extra one an interactive hover point job, priority < 0, outside the cap); after T, 6, 6, 6; at rest 6, 6, 6 of 6 pool workers. The page has 7 Worker objects; jobs went to 6.",
+      "The Density drawer was closed for step 9 (a fresh load opens it closed; the drawer state is not persisted), so no slice job competed with the tiles.",
+      "Straddle: the stale count rose (an Apply issued) 155 ms after the first commit, before the second commit at 204 ms; configures were posted 1, 207, 208 ms after the first commit; every terrain job posted afterwards carried one epoch (5: 465 jobs, first posted 777 ms after the first commit). The second edit's preview (lastLatencyMs 112 ms) followed its own configure, so the pool's epoch again differed from the applied generation while it ran (the held rule, cap = n).",
+      "The job log closes a job at its reply or, when the pool posts the next job to the same worker first (its onmessage runs before our listener), at that post; the draw log counts drawImage calls of the target tile size per full-canvas redraw. Both add a few function calls per message or draw in our page only."
+    ],
+    "pageWorkers": 7,
+    "tilesInViewPerPan": [
+      12,
+      16,
+      12,
+      15,
+      16,
+      12
+    ]
+  },
+  "windowEnd": {
+    "left": 0,
+    "top": 35,
+    "width": 1920,
+    "height": 1045,
+    "windowState": "maximized"
+  },
+  "script": ".superpowers/sp4c/prodcheck.mjs with .superpowers/sp4c/capregime.mjs (untracked, never committed), node from the repo root, then .superpowers/sp4c/prodcheck-notes.mjs; screenshots in .superpowers/sp4c/prodcheck-shots/ (untracked, never committed)",
+  "chrome": "Google Chrome 155.0.8059.39, headful, fresh mktemp profile, DevTools on a free port, no GPU flags or offload variables (PRIME on-demand: ANGLE on OpenGL on the Iris Xe); MESA_SHADER_CACHE_DISABLE=true for this process only, so no user shader cache was read or written",
+  "firefox": {
+    "by": "the user, by hand, 2026-10-26",
+    "userAgent": "Mozilla/5.0 (X11; Ubuntu; Linux x86_64; rv:158.0) Gecko/20100101 Firefox/158.0",
+    "url": "https://world-imaginer-voxel.vercel.app/?rd=8&renderer=mesh",
+    "glRenderer": "Intel(R) HD Graphics, or similar (Firefox's masked renderer string, from the HUD)",
+    "selftest": "59/59 on https://world-imaginer-voxel.vercel.app/?selftest=1, assets/sp4c/selftest-firefox.json",
+    "overlayOpensWithM": true,
+    "clickTeleports": true,
+    "liveEditInModeB": true,
+    "esc": {
+      "how": "a real keyboard Esc in mode B with the pointer locked, after addEventListener('keydown', e => console.log('keydown', e.key), true) in the console",
+      "lockReleased": true,
+      "keydownReached": false,
+      "drawerStayedOpen": true
+    },
+    "consoleWarnings": [
+      "WebGL context was lost. (the capability probe's own canvas, released on purpose with WEBGL_lose_context in src/engine/capabilities.ts; the world kept rendering)",
+      "WEBGL_debug_renderer_info is deprecated in Firefox and will be removed. (the same probe)",
+      "THREE.WebGLRenderer: KHR_parallel_shader_compile extension not supported.",
+      "Layout was forced before the page was fully loaded. (Firefox's FOUC notice)"
+    ],
+    "consoleErrors": []
+  }
+}
