@@ -8,8 +8,8 @@
  * the controls-owner check, the apply control's `tick` (at rest: its one adopt made, nothing configured since),
  * `setAuxPolicy` on a real pool with unchanged values, and on rendered frames the map overlay's `tick`, measured with the
  * map hidden and shown in split mode, where the arrow follows the camera through the tool's `setPlayer` (a fake
- * `MapCanvas` over the real `arrowRedrawWanted`). The coordinator's `apply` has its own test. Those hooks are also measured on
- * their own under the 26 B bound: the frame step's budget has room for a small object per tick.
+ * `MapCanvas` over the real `arrowRedrawWanted`). The coordinator's `apply` has its own test. Those hooks are also measured
+ * each on its own under the 26 B bound: the frame step's budget has room for a small object per tick.
  *
  * This measures allocation, not retention (the plan's spec correction to §8.5): `terrainHeap.test.ts` runs `gc()`
  * twice before every reading, which collects the short-lived per-call objects D25 bans. Here, after a double `gc()`,
@@ -359,11 +359,11 @@ interface AtRest {
   /** The aux policy's inputs at rest: the pool's epoch, the control's generation, the pool's size. */
   policy(): { poolEpoch: number; generation: number; size: number };
   /**
-   * SP4c's per-tick hooks alone, without the rest of the frame step: the owner check, the apply control's tick, the aux
-   * policy over the frame step's counts and the overlay's tick.
+   * SP4c's per-tick hooks alone, without the rest of the frame step, one call each: the owner check, the apply control's
+   * tick, the aux policy over the frame step's counts and the overlay's tick.
    */
-  additions(): void;
-  /** The `additions` calls whose owner check found the world owning the controls. */
+  readonly hooks: Readonly<Record<'ownerCheck' | 'applyTick' | 'auxPolicy' | 'overlayTick', () => void>>;
+  /** The `hooks.ownerCheck` calls that found the world owning the controls. */
   owned(): number;
 }
 
@@ -537,11 +537,11 @@ async function buildAtRest(): Promise<AtRest> {
     fly, coordinator, counts, tick, state, t0, sections, overlay, applied,
     stats: () => ({ ticks, rendered, lightmapBuilds }),
     policy: () => ({ poolEpoch: pool.epoch, generation: applyControl.generation, size: pool.size }),
-    additions() {
-      if (!paused()) owned++;
-      beforeUpdate();
-      afterCounts(counts);
-      overlay.tick(counts);
+    hooks: {
+      ownerCheck: () => { if (!paused()) owned++; },
+      applyTick: beforeUpdate,
+      auxPolicy: () => afterCounts(counts),
+      overlayTick: () => overlay.tick(counts),
     },
     owned: () => owned,
     async showSplit() {
@@ -679,18 +679,32 @@ describe('zero allocation at rest (SP4b spec §3.10, D25)', () => {
     expect(f.counts.T.done).toBe(f.counts.T.needed);
   }, TIMEOUT_MS);
 
-  test(`${N} × SP4c's per-tick hooks alone at rest, the map shown in split mode (the owner check, the apply control's tick, setAuxPolicy with unchanged values, the overlay's tick moving the arrow) grow the heap by less than 256 KB`, async () => {
+  test(`${N} × each of SP4c's per-tick hooks alone at rest, the map shown in split mode (the owner check, the apply control's tick, setAuxPolicy with unchanged values, the overlay's tick moving the arrow) grow the heap by less than 256 KB`, async () => {
     // The frame step's budget leaves about 90 B per tick over the boxing it measures, so one small object added per tick
-    // by these hooks could hide under it; on their own they get the 26 B bound of the frame's other parts.
+    // by these hooks could hide under it; on their own they get the 26 B bound of the frame's other parts, each measured
+    // on its own as those parts are. Not one closure calling all four: TurboFan inlines such a closure's callees up to a
+    // cumulative bytecode budget (920 on Node 24), and the four hooks' trees do not fit. Which callee stays out of line
+    // depends on the feedback and the optimized code the earlier tests left (and, under load, on the concurrent
+    // compiler's timing); with the overlay's tick and the apply control's tick inlined first, the fake canvas's call to
+    // `arrowRedrawWanted` stayed out of line and boxed the camera's mutable `x` and `z` (2 × 16 B HeapNumbers per call:
+    // 345,480 B over N, the same on every attempt, whenever the file ran whole). That boxing is the harness closure's
+    // calling convention, which the page does not have (it calls each hook from its own frame-step site, measured under
+    // the boxing budget above), not an object the hooks create; one hook per closure fits the budget.
     const f = await atRest();
     if (!f.overlay.shown) await f.showSplit();
     const setPlayerBefore = arrow.setPlayer;
-    const g = allocationOver(f.additions, WARM_UP, ZERO_ALLOC_MAX);
-    expectAtRest(g);
+    let calls = 0;
+    for (const [name, hook] of Object.entries(f.hooks)) {
+      const g = allocationOver(hook, WARM_UP, ZERO_ALLOC_MAX);
+      expect(g.bytes, `${name}: a chunk saw a GC on every try (GCs per attempt: ${g.gcs.join(', ')})`).not.toBeNaN();
+      expect(g.bytes, `${name}: heap growth ${g.bytes} bytes over ${N} calls (attempts: ${g.readings.join(', ')})`)
+        .toBeLessThan(ZERO_ALLOC_MAX);
+      if (name === 'ownerCheck') expect(f.owned()).toBe(g.calls);
+      if (name === 'overlayTick') calls = g.calls;
+    }
     expectSp4cAtRest(f);
     expect([f.overlay.shown, f.overlay.mode, f.overlay.owner]).toEqual([true, 'split', 'world']);
-    expect(f.owned()).toBe(g.calls);
-    expect(arrow.setPlayer - setPlayerBefore).toBe(g.calls);
+    expect(arrow.setPlayer - setPlayerBefore).toBe(calls);
     expect(arrow.draws).toBe(1);
   }, TIMEOUT_MS);
 
