@@ -197,23 +197,25 @@ describe('lightRegion (SP4a spec §4.1, §4.2)', () => {
   });
 
   test('without an emitting state lava alone seeds the block BFS: in every byte lane of a word and with any level, falling, unsettled or bit 7; water and type 3 seed nothing', () => {
-    // The registry's tables emit nothing, so lightRegion seeds the block BFS only when its lava check finds lava (Task P1).
-    expect(DEFAULT_LIGHT_TABLES.emit.every((e) => e === 0)).toBe(true);
+    // Tables that emit nothing, so lightRegion seeds the block BFS only when its lava check finds lava (Task P1). The
+    // registry's own tables emit since SP5a's torches (SP5a spec §1.2), so the test injects the registry's without EMIT.
+    const t: LightTables = { ...DEFAULT_LIGHT_TABLES, emit: new Uint8Array(DEFAULT_LIGHT_TABLES.emit.length) };
+    expect(t.emit.every((e) => e === 0)).toBe(true);
     const scene: At = (_x, y) => (y <= 100 && (y < 10 || y > 40) ? STONE : AIR);
     const lavaBytes = [LAVA, packFluid(FLUID_LAVA, 3, true, true), LAVA | 0x80, packFluid(FLUID_LAVA, 7)];
     const lanes = new Set<number>();
     for (let k = 0; k < 4; k++) {
       const x = -4 + k;
       lanes.add(lightIndex(x, 20, 0) % 4);
-      fill(s, scene, (xx, yy, zz) => (xx === x && yy === 20 && zz === 0 ? lavaBytes[k]! : NO_FLUID));
-      lightRegion(s);
+      fill(s, scene, (xx, yy, zz) => (xx === x && yy === 20 && zz === 0 ? lavaBytes[k]! : NO_FLUID), t);
+      lightRegion(s, t);
       expect(blockAt(s, x, 20, 0), `lava byte ${lavaBytes[k]} at region index ${lightIndex(x, 20, 0)}`).toBe(15);
       expect(blockAt(s, x + 3, 20, 0)).toBe(12);
     }
     expect(lanes.size, 'the four voxels cover the four byte lanes of a 32-bit word').toBe(4);
     for (const byte of [WATER_SOURCE, 0x30, WATER_SOURCE | 0x80]) {
-      fill(s, scene, (xx, yy, zz) => (xx === 0 && yy === 20 && zz === 0 ? byte : NO_FLUID));
-      lightRegion(s);
+      fill(s, scene, (xx, yy, zz) => (xx === 0 && yy === 20 && zz === 0 ? byte : NO_FLUID), t);
+      lightRegion(s, t);
       expect(s.region.light.some((l) => (l & 15) !== 0), `fluid byte ${byte} emits nothing`).toBe(false);
     }
   });

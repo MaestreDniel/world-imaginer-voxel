@@ -5,7 +5,7 @@ import {
   KIND_VALUES, PASS_CUTOUT, PASS_NONE, PASS_OPAQUE, PASS_TRANSLUCENT, PASS_VALUES, PROPERTY_KINDS, SHAPE_BOX, SHAPE_CROSS,
   SHAPE_CUBE, SHAPE_FLUID, SHAPE_NONE, SHAPE_POINTED, SHAPE_VALUES, SOUND_ABYSS, SOUND_DIRT, SOUND_GLASS, SOUND_GRASS,
   SOUND_GRAVEL, SOUND_LEAVES, SOUND_METAL, SOUND_NONE, SOUND_SAND, SOUND_SNOW, SOUND_STONE, SOUND_VALUES, SOUND_WOOD,
-  TINT_FIXED, TINT_FOLIAGE, TINT_GRASS, TINT_NONE, TINT_VALUES, TINT_WATER,
+  SOUND_WOOL, TINT_FIXED, TINT_FOLIAGE, TINT_GRASS, TINT_NONE, TINT_VALUES, TINT_WATER,
 } from '../../src/world/blocks/kinds';
 import { buildRegistry, MAX_STATES, type BlockDef, type BlockRegistry, type PropertyDef } from '../../src/world/blocks/registry';
 import { AIR_TABLES, FIXTURE_BASE, FIXTURE_DEFS, FIXTURE_STATE_COUNT, SOLID_TABLES } from '../harness/blockFixtures';
@@ -42,9 +42,10 @@ describe('kinds and codes (SP3a spec §2.1, §2.2)', () => {
     expect([FLUID_MODE_BLOCK, FLUID_MODE_HOLD, FLUID_MODE_DISPLACE]).toEqual([0, 1, 2]);
     expect(TINT_VALUES).toEqual(['none', 'grass', 'foliage', 'water', 'fixed']);
     expect([TINT_NONE, TINT_GRASS, TINT_FOLIAGE, TINT_WATER, TINT_FIXED]).toEqual([0, 1, 2, 3, 4]);
-    expect(SOUND_VALUES).toEqual(['none', 'stone', 'dirt', 'grass', 'sand', 'gravel', 'wood', 'snow', 'glass', 'leaves', 'metal', 'abyss']);
+    // SP5a appends 'wool' (SP5a spec §1.1): a value list only appends, and every earlier code keeps its value.
+    expect(SOUND_VALUES).toEqual(['none', 'stone', 'dirt', 'grass', 'sand', 'gravel', 'wood', 'snow', 'glass', 'leaves', 'metal', 'abyss', 'wool']);
     expect([SOUND_NONE, SOUND_STONE, SOUND_DIRT, SOUND_GRASS, SOUND_SAND, SOUND_GRAVEL, SOUND_WOOD, SOUND_SNOW, SOUND_GLASS,
-      SOUND_LEAVES, SOUND_METAL, SOUND_ABYSS]).toEqual([0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11]);
+      SOUND_LEAVES, SOUND_METAL, SOUND_ABYSS, SOUND_WOOL]).toEqual([0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12]);
   });
 
   test('faces follow the facing6 order; FULL_FACES bit i is face i', () => {

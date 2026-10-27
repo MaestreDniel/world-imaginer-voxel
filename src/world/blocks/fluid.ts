@@ -11,6 +11,8 @@ export const FLUID_LAVA = 2;
 export const NO_FLUID = 0;
 /** A still water source: type water, level 0, not falling, settled. */
 export const WATER_SOURCE = 16;
+/** A still lava source: type lava, level 0, not falling, settled (SP5a's lava bucket). */
+export const LAVA_SOURCE = 32;
 
 /** Packs the fields; each is masked to its width (type 2 bits, level 3 bits). */
 export const packFluid = (type: number, level: number, falling = false, unsettled = false): number =>

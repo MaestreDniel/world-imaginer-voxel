@@ -1,8 +1,9 @@
 /**
  * The Voxels mode's pure parts (SP3a spec §5.2), unit-tested:
  * - the palette, shared with the harness PNG slices (`test/harness/png.ts` re-exports it): air in a sky colour,
- *   stone grey, bedrock near black, one flat colour per SP3c terrain block (SP3c spec §6), water blue darkening with
- *   depth below its surface; the legend's block keys (every registry state in state order);
+ *   stone grey, bedrock near black, one flat colour per SP3c terrain block (SP3c spec §6) and per SP5a type (SP5a spec
+ *   §1.3), water blue darkening with depth below its surface, lava's colour; the legend's block keys (every registry
+ *   state in state order);
  * - the slice image: one RGBA pixel per sample of a `pool.slice` result (512 × 384, row 0 at y 319);
  * - the plot: sample cells over the drawer, a distance axis whose point i sits at the centre of pixel column i,
  *   and the hover mapping from a pixel to the sample (i, y) under it;
@@ -14,7 +15,7 @@ import { MIN_Y, SEA_LEVEL } from '../../core/constants';
 import { MAX_Y } from '../../core/coords';
 import { JobCancelled, type SliceResult, type SurfaceProbeResult } from '../../engine/workerPool';
 import { segmentLength, segmentPointAt, type Segment } from '../../metrics/crossSection';
-import { FLAT_COLORS } from '../../textures/flatColors';
+import { FLAT_COLORS, LAVA_COLOR } from '../../textures/flatColors';
 import { FLUID_LAVA, FLUID_WATER, fluidFalling, fluidLevel, fluidType } from '../../world/blocks/fluid';
 import { AIR, REGISTRY } from '../../world/blocks/index';
 import { SLICE_POINTS, SLICE_ROWS, SLICE_SAMPLES } from '../../workers/protocol';
@@ -30,10 +31,11 @@ function flat(name: string): Rgb {
 }
 
 /**
- * The Voxels palette. `sky` is air's colour, `seaLevel` the sea-level line, `water` a water surface; every other block
- * type's colour sits under its type name (each state of a type takes it), read from the flat-colour table
- * (`textures/flatColors.ts`, SP4a spec §6.3, D14). `unknown` marks a state id outside the registry (every registered
- * state has a colour, pairwise ≥ 24 apart in summed |ΔRGB|, SP3c spec §8).
+ * The Voxels palette. `sky` is air's colour, `seaLevel` the sea-level line, `water` a water surface, `lava` still lava
+ * (`LAVA_COLOR`, SP5a spec §1.3); every other block type's colour sits under its type name (each state of a type takes
+ * it), read from the flat-colour table (`textures/flatColors.ts`, SP4a spec §6.3, D14). `unknown` marks a state id
+ * outside the registry (every registered type has a colour, pairwise ≥ 24 apart in summed |ΔRGB|, SP3c spec §8, SP5a
+ * spec §1.3).
  */
 export const VOXEL_COLORS = {
   sky: [168, 204, 255],
@@ -41,6 +43,7 @@ export const VOXEL_COLORS = {
   stone: flat('stone'),
   bedrock: flat('bedrock'),
   water: [40, 92, 222],
+  lava: LAVA_COLOR,
   unknown: [255, 0, 255],
   // The SP3c terrain palette (SP3c spec §2.1, §6), in state order.
   grass_block: flat('grass_block'),
@@ -65,6 +68,32 @@ export const VOXEL_COLORS = {
   brown_terracotta: flat('brown_terracotta'),
   red_terracotta: flat('red_terracotta'),
   light_gray_terracotta: flat('light_gray_terracotta'),
+  // SP5a's building and terrain types (SP5a spec §1.1, §1.3), in state order.
+  oak_planks: flat('oak_planks'),
+  oak_log: flat('oak_log'),
+  cobblestone: flat('cobblestone'),
+  bricks: flat('bricks'),
+  glass: flat('glass'),
+  torch: flat('torch'),
+  wall_torch: flat('wall_torch'),
+  ladder: flat('ladder'),
+  ice: flat('ice'),
+  white_wool: flat('white_wool'),
+  orange_wool: flat('orange_wool'),
+  magenta_wool: flat('magenta_wool'),
+  light_blue_wool: flat('light_blue_wool'),
+  yellow_wool: flat('yellow_wool'),
+  lime_wool: flat('lime_wool'),
+  pink_wool: flat('pink_wool'),
+  gray_wool: flat('gray_wool'),
+  light_gray_wool: flat('light_gray_wool'),
+  cyan_wool: flat('cyan_wool'),
+  purple_wool: flat('purple_wool'),
+  blue_wool: flat('blue_wool'),
+  brown_wool: flat('brown_wool'),
+  green_wool: flat('green_wool'),
+  red_wool: flat('red_wool'),
+  black_wool: flat('black_wool'),
 } as const satisfies Record<string, Rgb>;
 
 const COLOR_OF_TYPE: Readonly<Record<string, Rgb | undefined>> = VOXEL_COLORS;

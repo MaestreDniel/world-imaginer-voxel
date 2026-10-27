@@ -1,7 +1,7 @@
 import { NearestFilter, SRGBColorSpace } from 'three';
 import { describe, expect, test } from 'vitest';
 import { createFlatColorArray, flatColorLayers } from '../../src/render/textureArray';
-import { FLAT_COLORS } from '../../src/textures/flatColors';
+import { FLAT_COLORS, LAVA_COLOR } from '../../src/textures/flatColors';
 import { VOXEL_COLORS } from '../../src/ui/crossSection/voxels';
 import { AIR, PACKED_ICE, REGISTRY } from '../../src/world/blocks/index';
 
@@ -29,15 +29,18 @@ describe('the flat-colour table (SP4a spec §6.3, D14)', () => {
   });
 
   test('every registry block type except air has an entry, and nothing else does', () => {
-    expect(BLOCK_NAMES).toHaveLength(24);
+    expect(BLOCK_NAMES).toHaveLength(49);
     expect([...FLAT_COLORS.keys()].sort()).toEqual([...BLOCK_NAMES].sort());
     expect(FLAT_COLORS.has('air')).toBe(false);
+    // Lava is no type (air plus a fluid byte): its colour lives outside the table (SP5a spec §1.3).
+    expect(FLAT_COLORS.has('lava')).toBe(false);
   });
 
   test('the Voxels palette reads every block colour from FLAT_COLORS', () => {
     const voxel = VOXEL_COLORS as Readonly<Record<string, Rgb | undefined>>;
     for (const name of BLOCK_NAMES) expect(voxel[name], name).toBe(FLAT_COLORS.get(name));
     expect('air' in VOXEL_COLORS).toBe(false);
+    expect(VOXEL_COLORS.lava).toBe(LAVA_COLOR);
   });
 });
 

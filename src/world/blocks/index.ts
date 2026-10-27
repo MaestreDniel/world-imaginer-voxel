@@ -1,7 +1,7 @@
 /**
  * The block registry of the game (SP3a spec §2.2): `REGISTRY = buildRegistry(BLOCK_DEFS)`, its per-state tables as
- * plain exports (hot code aliases them: `const OPAQ = OPACITY;`) and the state ids of the SP3a types. The tables are
- * never written after the build.
+ * plain exports (hot code aliases them: `const OPAQ = OPACITY;`) and the state ids of the SP3a, SP3c and SP5a types.
+ * The tables are never written after the build.
  */
 import { BLOCK_DEFS } from './defs';
 import { buildRegistry, type BlockRegistry } from './registry';
@@ -55,3 +55,33 @@ export const YELLOW_TERRACOTTA: number = REGISTRY.parseStateKey('yellow_terracot
 export const BROWN_TERRACOTTA: number = REGISTRY.parseStateKey('brown_terracotta');
 export const RED_TERRACOTTA: number = REGISTRY.parseStateKey('red_terracotta');
 export const LIGHT_GRAY_TERRACOTTA: number = REGISTRY.parseStateKey('light_gray_terracotta');
+
+/**
+ * Default state ids of SP5a's appended types (SP5a spec §1.1), 25 … 57 in `BLOCK_DEFS` order: `oak_log` is axis y
+ * (its other axes at 27 and 28), `wall_torch` and `ladder` face north (east, south and west follow).
+ */
+export const OAK_PLANKS: number = REGISTRY.parseStateKey('oak_planks');
+export const OAK_LOG: number = REGISTRY.parseStateKey('oak_log[axis=y]');
+export const COBBLESTONE: number = REGISTRY.parseStateKey('cobblestone');
+export const BRICKS: number = REGISTRY.parseStateKey('bricks');
+export const GLASS: number = REGISTRY.parseStateKey('glass');
+export const TORCH: number = REGISTRY.parseStateKey('torch');
+export const WALL_TORCH: number = REGISTRY.parseStateKey('wall_torch[facing=north]');
+export const LADDER: number = REGISTRY.parseStateKey('ladder[facing=north]');
+export const ICE: number = REGISTRY.parseStateKey('ice');
+export const WHITE_WOOL: number = REGISTRY.parseStateKey('white_wool');
+export const ORANGE_WOOL: number = REGISTRY.parseStateKey('orange_wool');
+export const MAGENTA_WOOL: number = REGISTRY.parseStateKey('magenta_wool');
+export const LIGHT_BLUE_WOOL: number = REGISTRY.parseStateKey('light_blue_wool');
+export const YELLOW_WOOL: number = REGISTRY.parseStateKey('yellow_wool');
+export const LIME_WOOL: number = REGISTRY.parseStateKey('lime_wool');
+export const PINK_WOOL: number = REGISTRY.parseStateKey('pink_wool');
+export const GRAY_WOOL: number = REGISTRY.parseStateKey('gray_wool');
+export const LIGHT_GRAY_WOOL: number = REGISTRY.parseStateKey('light_gray_wool');
+export const CYAN_WOOL: number = REGISTRY.parseStateKey('cyan_wool');
+export const PURPLE_WOOL: number = REGISTRY.parseStateKey('purple_wool');
+export const BLUE_WOOL: number = REGISTRY.parseStateKey('blue_wool');
+export const BROWN_WOOL: number = REGISTRY.parseStateKey('brown_wool');
+export const GREEN_WOOL: number = REGISTRY.parseStateKey('green_wool');
+export const RED_WOOL: number = REGISTRY.parseStateKey('red_wool');
+export const BLACK_WOOL: number = REGISTRY.parseStateKey('black_wool');

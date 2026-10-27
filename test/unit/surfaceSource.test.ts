@@ -165,7 +165,8 @@ describe('validateRulesSource: the default tree and the ref form (SP3d spec §1.
       expect(check(block(key)), key).toEqual(want);
       if (want.length === 0) solid++;
     }
-    expect(solid).toBe(REGISTRY.stateCount - 1);
+    // Air, torch, the 4 wall_torch and the 4 ladder states have COLLIDE none (SP5a spec §1.1).
+    expect(solid).toBe(REGISTRY.stateCount - 10);
   });
 
   test('the sp3c.surface.ops fixture\'s block states all collide (its tree passes tier 2)', () => {

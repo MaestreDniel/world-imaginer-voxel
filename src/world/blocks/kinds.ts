@@ -1,6 +1,7 @@
 /**
  * Property kinds, enum codes and the face order of the block registry (SP3a spec §2.1, §2.2). Frozen from SP3a: a
- * code is the 0-based index of its value in the lists below, and no list ever changes (new kinds or tables append).
+ * code is the 0-based index of its value in the lists below, and no code ever changes: a list only appends (SP5a
+ * appends `wool` to `SOUND_VALUES`), and new kinds or tables append.
  */
 
 /** The property kinds, in kind order. */
@@ -75,7 +76,7 @@ export const TINT_WATER = 3;
 export const TINT_FIXED = 4;
 
 /** Step and break sound (`SOUND`); `none` is air's and never played (SP3a spec §11 amends the master). */
-export const SOUND_VALUES = Object.freeze(['none', 'stone', 'dirt', 'grass', 'sand', 'gravel', 'wood', 'snow', 'glass', 'leaves', 'metal', 'abyss'] as const);
+export const SOUND_VALUES = Object.freeze(['none', 'stone', 'dirt', 'grass', 'sand', 'gravel', 'wood', 'snow', 'glass', 'leaves', 'metal', 'abyss', 'wool'] as const);
 export type Sound = (typeof SOUND_VALUES)[number];
 export const SOUND_NONE = 0;
 export const SOUND_STONE = 1;
@@ -89,3 +90,5 @@ export const SOUND_GLASS = 8;
 export const SOUND_LEAVES = 9;
 export const SOUND_METAL = 10;
 export const SOUND_ABYSS = 11;
+/** Appended by SP5a (SP5a spec §1.1). */
+export const SOUND_WOOL = 12;

@@ -1115,7 +1115,9 @@ describe('master spec amendments (SP4c §12)', () => {
 
 describe('master spec amendments (SP5a §9)', () => {
   /** [§1 entry head, the token its entry holds, the file on disk]; Tasks 2, 7-10, 20, 22, 23, 26-28 and 31 append theirs. */
-  const SP5A_MODULES: Array<[head: RegExp, token: string, file: string]> = [];
+  const SP5A_MODULES: Array<[head: RegExp, token: string, file: string]> = [
+    [/^\s+blocks\/kinds\.ts /, 'tags.ts (SP5a)', 'src/world/blocks/tags.ts'],
+  ];
 
   test('the split', () => {
     expect(text).toContain('SP5 was split on 2026-10-27 into SP5a (build and walk), SP5b (saved worlds) and SP5c (the selection tool), proposed in brainstorming because it grew past M and accepted by the user ("Vamos con esta partición")');
@@ -1183,6 +1185,16 @@ describe('master spec amendments (SP5a §9)', () => {
     expect(s412).toContain('schedules fluid ticks for the 6 neighbours (SP7)');
     expect(s412).toContain('RMB on a door, trapdoor or fence gate toggles `open` (both door halves) instead of placing (SP8a)');
     expect(s412).toContain('(two entries for doors and double plants, applied atomically; SP8a)');
+  });
+
+  test('§2.2\'s box-model, tags, ice and enum-code lines name SP5a (SP5a spec §9)', () => {
+    const at = text.indexOf('### 2.2 ');
+    const s22 = text.slice(at, text.indexOf('### 2.3 ', at));
+    expect(s22).toContain('(SP5a: torch, wall torch and ladder use SHAPE box with provisional boxes and FULL_FACES 0, so a torch\'s light leaves its voxel)');
+    expect(s22).toContain('in SP5a, in `tags.ts`, with `SLIPPERY` and `CLIMBABLE`');
+    expect(s22).not.toContain('`category` in SP5,');
+    expect(s22).toContain('(SP5a appends `ice`)');
+    expect(s22).toContain(', wool 12 (SP5a; a value list only appends, and no code changes)');
   });
 
   test('§1 names each SP5a module in its entry, which exists', () => {

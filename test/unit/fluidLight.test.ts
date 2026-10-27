@@ -1,7 +1,7 @@
 import { describe, expect, test } from 'vitest';
 import {
   FLUID_LAVA, FLUID_NONE, FLUID_WATER, fluidFalling, fluidLevel, fluidType, fluidUnsettled, hasFluid, NO_FLUID, packFluid,
-  WATER_SOURCE,
+  LAVA_SOURCE, WATER_SOURCE,
 } from '../../src/world/blocks/fluid';
 import { blockLight, MAX_LIGHT, packLight, skyLight } from '../../src/world/blocks/light';
 
@@ -18,6 +18,8 @@ describe('fluid byte (SP3a spec §2.1)', () => {
     expect(packFluid(FLUID_LAVA, 5, true, true)).toBe(0b0110_1101);
     expect(WATER_SOURCE).toBe(packFluid(FLUID_WATER, 0));
     expect(WATER_SOURCE).toBe(16);
+    expect(LAVA_SOURCE).toBe(packFluid(FLUID_LAVA, 0));
+    expect(LAVA_SOURCE).toBe(32);
   });
 
   test('pack and unpack round-trip over every byte with bit 7 clear', () => {

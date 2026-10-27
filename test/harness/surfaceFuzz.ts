@@ -28,7 +28,8 @@ import { SURFACE_BIOMES, type SurfaceBiome } from '../../src/gen/biomes/registry
 import { ruleLeaves, type Condition, type Rule, type SurfaceNoise, type SurfaceNoiseSource } from '../../src/gen/surface/rules';
 import { surfaceScanSettings, type SurfaceScanParams, type SurfaceScanSettings } from '../../src/gen/surface/scan';
 import { SCHEMA } from '../../src/core/params/schema';
-import { REGISTRY } from '../../src/world/blocks/index';
+import { COLLIDE, REGISTRY } from '../../src/world/blocks/index';
+import { COLLIDE_NONE } from '../../src/world/blocks/kinds';
 import { testFloat } from './stats';
 
 export interface SurfaceFuzzNoiseSpec { readonly id: string; readonly def: NoiseDef }
@@ -193,6 +194,9 @@ export interface SurfaceRulesOptions {
 /** y values where rules and columns meet: the bedrock, the dither bands, sea level and the world top. */
 const Y_POINTS: readonly number[] = [-64, -63, -60, -59, 0, 1, 7, 8, 63, 64, 80, 319, 320];
 const THRESHOLDS: readonly number[] = [-8, -3, -2, -0.55, 0, 0.55, 1.5, 2, 3, 8];
+/** The keys of every registered state that collides (not air, torches or ladders), in state order. */
+const SOLID_KEYS: readonly string[] = Array.from({ length: REGISTRY.stateCount }, (_, s) => s)
+  .filter((s) => COLLIDE[s] !== COLLIDE_NONE).map((s) => REGISTRY.stateKey(s));
 /** +0 for a zero (a product or a difference can give −0, which validateRules rejects). */
 const plus0 = (v: number): number => (v === 0 ? 0 : v);
 
@@ -208,9 +212,9 @@ export function randomSurfaceRules(next: () => number, opts: SurfaceRulesOptions
   const yValue = (): number => (bool() ? pick(Y_POINTS) + (next() % 3) - 1 : -64 + (next() % 385));
   const threshold = (): number => (next() % 3 === 0 ? pick(THRESHOLDS) : plus0(Math.round((testFloat(next) - 0.5) * 700) / 100));
 
-  /** A leaf: a `bandlands` one time in 8, else a block of any registered state but air. */
+  /** A leaf: a `bandlands` one time in 8, else a block of any colliding state (a block leaf must collide, tier 2). */
   const block = (): Rule =>
-    next() % 8 === 0 ? { kind: 'bandlands' } : { kind: 'block', state: REGISTRY.stateKey(1 + (next() % (REGISTRY.stateCount - 1))) };
+    next() % 8 === 0 ? { kind: 'bandlands' } : { kind: 'block', state: pick(SOLID_KEYS) };
 
   const gradient = (): Condition => {
     const lo = bool() ? pick(Y_POINTS) - (next() % 3) : -66 + (next() % 380);

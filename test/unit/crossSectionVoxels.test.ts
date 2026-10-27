@@ -59,18 +59,26 @@ describe('the Voxels palette (SP3a spec §5.2)', () => {
     expect(r === g && g === b).toBe(true);
     expect(Math.max(...VOXEL_COLORS.bedrock)).toBeLessThan(40);
   });
-  test('every registry state has its own colour, keyed by its type name; the non-air colours are ≥ 24 apart (SP3c spec §6, §8)', () => {
+  test('every registry state takes its type\'s colour; the non-air types are ≥ 24 apart from each other, sky, water, lava and unknown (SP3c spec §8, SP5a spec §1.3)', () => {
     const dist = (a: Rgb, b: Rgb): number => Math.abs(a[0] - b[0]) + Math.abs(a[1] - b[1]) + Math.abs(a[2] - b[2]);
     const colors = VOXEL_COLORS as Readonly<Record<string, Rgb>>;
-    expect(REGISTRY.stateCount).toBe(25);
-    const named: [string, Rgb][] = [['sky (air)', VOXEL_COLORS.sky], ['water', VOXEL_COLORS.water], ['unknown', VOXEL_COLORS.unknown]];
+    expect(REGISTRY.stateCount).toBe(58);
+    expect(REGISTRY.typeCount).toBe(50);
+    const named: [string, Rgb][] = [
+      ['sky (air)', VOXEL_COLORS.sky], ['water', VOXEL_COLORS.water], ['lava', VOXEL_COLORS.lava], ['unknown', VOXEL_COLORS.unknown],
+    ];
     for (let s = 0; s < REGISTRY.stateCount; s++) {
       const c = voxelRgb(s, 0, 0);
       expect(c, REGISTRY.stateKey(s)).not.toEqual(VOXEL_COLORS.unknown);
       if (s === AIR) continue;
+      // Per type, not per state: a log's three states, a wall torch's and a ladder's four share one colour.
       expect(c, REGISTRY.stateKey(s)).toBe(colors[REGISTRY.typeName(REGISTRY.STATE_TYPE[s]!)]);
-      named.push([REGISTRY.stateKey(s), c]);
     }
+    for (let t = 0; t < REGISTRY.typeCount; t++) {
+      const name = REGISTRY.typeName(t);
+      if (name !== 'air') named.push([name, colors[name]!]);
+    }
+    expect(named).toHaveLength(4 + 49);
     const close: string[] = [];
     for (let i = 0; i < named.length; i++) {
       for (let j = i + 1; j < named.length; j++) {
@@ -100,7 +108,14 @@ describe('the Voxels palette (SP3a spec §5.2)', () => {
       'air', 'stone', 'bedrock', 'grass_block', 'dirt', 'coarse_dirt', 'podzol', 'mud', 'sand', 'red_sand', 'sandstone',
       'red_sandstone', 'gravel', 'clay', 'calcite', 'snow_block', 'packed_ice', 'deepslate', 'terracotta', 'white_terracotta',
       'orange_terracotta', 'yellow_terracotta', 'brown_terracotta', 'red_terracotta', 'light_gray_terracotta',
+      // SP5a's appended types (SP5a spec §1.1): 33 states at 25 … 57.
+      'oak_planks', 'oak_log[axis=y]', 'oak_log[axis=x]', 'oak_log[axis=z]', 'cobblestone', 'bricks', 'glass', 'torch',
+      'wall_torch[facing=north]', 'wall_torch[facing=east]', 'wall_torch[facing=south]', 'wall_torch[facing=west]',
+      'ladder[facing=north]', 'ladder[facing=east]', 'ladder[facing=south]', 'ladder[facing=west]', 'ice',
+      'white_wool', 'orange_wool', 'magenta_wool', 'light_blue_wool', 'yellow_wool', 'lime_wool', 'pink_wool', 'gray_wool',
+      'light_gray_wool', 'cyan_wool', 'purple_wool', 'blue_wool', 'brown_wool', 'green_wool', 'red_wool', 'black_wool',
     ]);
+    expect(legend).toHaveLength(58);
     for (const k of legend) expect(k.rgb).toEqual(voxelRgb(k.state, 0, 0));
     expect(legend[0]!.rgb).toEqual(VOXEL_COLORS.sky);
   });
