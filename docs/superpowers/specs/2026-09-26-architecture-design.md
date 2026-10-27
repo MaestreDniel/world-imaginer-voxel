@@ -57,7 +57,7 @@ D1-D20 are decisions. Metric IDs (N*, T*, B*, C*, A*, S*, O*, V*, X*, DT*, R*, L
    - a visual node-graph editor, and `new Function` codegen unless its kill criterion fires;
    - a downhill highland river network / mountain streams (D13);
    - sculk and other MC-signature deep-dark content (D14);
-   - region editing tools (sphere fill, copy/paste);
+   - region editing tools beyond SP5c's selection tool (sphere fill, brushes);
    - WebGPU/TSL (the materials module is the seam for it), multiplayer, and the C418 music.
 
 ## 1. Module layout
@@ -190,7 +190,7 @@ world-imaginer-voxel/          (repository root)
     ui/lab/* seedBox.ts          (SP1) the ?lab=noise research page; DOM-free seed-box logic
     ui/world/* ui/loading/* ui/spike/* settings.ts   (SP4a) the 3D page: the minimal start screen at `/`, the world page, the
                                 flight (`?flight=sp4a`) and panorama (`?pano`) routes; the loading screen with panoramas, tips and progress; the spike
-                                page (`?spike=batch`); the world's small settings block (SP5's settings panel replaces it);
+                                page (`?spike=batch`); the world's small settings block (SP5b's graphics settings screen replaces it);
                                 ui/world/bench.ts (SP4b: the `?bench=medium` route and its JSON); mapOverlay.ts applyControl.ts teleport.ts (SP4c)
     ui/inspector/*              (SP3d) the ?map Density tab. Pure: model.ts form.ts jsonText.ts editorModel.ts hoverModel.ts
                                 sliceModel.ts; DOM: jsonEditor.ts sliceView.ts densityTab.ts inspector.css (SP10's full probe and
@@ -366,7 +366,7 @@ Byte offsets (amended by SP3a): `WORLD_SURFACE_WG` 0, `OCEAN_FLOOR_WG` 512, `WOR
 
 **Aux slot B:** `caveBiomeQ` Uint8[4·96·4 = 1536] at 0 and `surfaceBiomeQ` Uint8[16] at 1536 (offsets amended by SP3a). The index orders are `surfaceBiomeQ[qz·4 + qx]` (the quart's 2D biome before the zoom) and `caveBiomeQ[(qy·4 + qz)·4 + qx]` with `qy = (y + 64) >> 2`; SP3b's T writes `surfaceBiomeQ` and leaves `caveBiomeQ` 0 until SP6 (amended by SP3b; the SP3b spec §4). Both aux slots are zero-filled when allocated (a recycled slot included), so a field no stage has written reads 0.
 
-**Reclamation.** Every slot release (a descriptor rewritten, shared over or released, an aux slot, a column or proto freed) goes through the post-commit reclamation protocol (`reclaim.ts`; the SP4b spec §2.5) (SP4b). A 192-byte buffer beside the table holds a global epoch, one reader epoch per thread (0 the main thread, the pool's workers 1 … N, SP5's sim worker 15), the dead-owner mask, the store id and each thread's limbo count. A thread reads the store inside a read section (`enterRead` announces the global epoch, `exitRead` clears it); a release tags itself with the global epoch and is freed at once when no reader is inside a read section (or the store is unshared), otherwise it waits in the releasing thread's limbo list until every reader that could hold it has finished (a drain at `exitRead`, after a worker's reply, and once per frame on the main thread). A dead thread's epoch is cleared (`markDead`), so a failed worker never holds later releases. The pools count limbo slots as used. In SP4b the coordinator's reader pins order the writes it issues, so the protocol is defence in depth; SP5's sim worker is its first necessary consumer.
+**Reclamation.** Every slot release (a descriptor rewritten, shared over or released, an aux slot, a column or proto freed) goes through the post-commit reclamation protocol (`reclaim.ts`; the SP4b spec §2.5) (SP4b). A 192-byte buffer beside the table holds a global epoch, one reader epoch per thread (0 the main thread, the pool's workers 1 … N, SP5a's sim worker 15), the dead-owner mask, the store id and each thread's limbo count. A thread reads the store inside a read section (`enterRead` announces the global epoch, `exitRead` clears it); a release tags itself with the global epoch and is freed at once when no reader is inside a read section (or the store is unshared), otherwise it waits in the releasing thread's limbo list until every reader that could hold it has finished (a drain at `exitRead`, after a worker's reply, and once per frame on the main thread). A dead thread's epoch is cleared (`markDead`), so a failed worker never holds later releases. The pools count limbo slots as used. In SP4b the coordinator's reader pins order the writes it issues, so the protocol is defence in depth; SP5a's sim worker is its first necessary consumer.
 
 **Epoch cell.** A SAB `Int32Array` epoch cell per scope is checked by workers between phases, so a job can abort mid-run. SP3a builds the per-scope cells (terrain 0, decorate 1, light 2, mesh 3); SP4b wires them in place of SP2b's pool-wide cell (every job carries its configure generation and its phase's cell value at issue, `scope`, and stops when the cell moves; `configure` stores the generation into all four; Apply is one `configure`, which moves all four cells past every value a job was issued with; every SP4c leaf is terrain- or climate-scope, so `bumpScope` from the dirty stage waits for SP8b's decorate-scope Apply, SP4c) (amended by SP3a, SP4a, SP4b and SP4c).
 
@@ -383,7 +383,7 @@ Byte offsets (amended by SP3a): `WORLD_SURFACE_WG` 0, `OCEAN_FLOOR_WG` 512, `WOR
 ```ts
 type Seed64 = readonly [lo: number, hi: number];   // u32 words, value = hi·2^32 + lo, normalised with >>> 0 (SP1); Hash64 alike
 type RegenScope = 'live' | 'remesh' | 'decorate' | 'terrain' | 'climate';
-type SubProjectId = 'SP0'|'SP1'|'SP2a'|'SP2b'|'SP3a'|'SP3b'|'SP3c'|'SP3d'|'SP3e'|'SP4a'|'SP4b'|'SP4c'|'SP5'|'SP6'|'SP7'|'SP8a'|'SP8b'|'SP8c'|'SP9'|'SP10'|'SP11'|'SP12';
+type SubProjectId = 'SP0'|'SP1'|'SP2a'|'SP2b'|'SP3a'|'SP3b'|'SP3c'|'SP3d'|'SP3e'|'SP4a'|'SP4b'|'SP4c'|'SP5a'|'SP5b'|'SP5c'|'SP6'|'SP7'|'SP8a'|'SP8b'|'SP8c'|'SP9'|'SP10'|'SP11'|'SP12';
 type StageId = 'climate'|'shape'|'surfaceEst'|'biome2d'|'terrain'|'decorate'|'light'|'mesh'|'lod'|'map';
 interface ParamMeta { path: string; label: string; doc: string; unit?: string;
   kind: 'number'|'int'|'bool'|'enum'|'noise'|'spline'|'json'|'boxTable'|'featureList'|'structureSets';
@@ -429,7 +429,7 @@ interface CompiledDensity { cornerFn(ctx, x:number, y:number, z:number): number;
 interface ColumnWriter { setProto(sy:number, blocks:Uint16Array, fluid:Uint8Array): void;
   setFinal(sy:number, blocks:Uint16Array, light:Uint8Array, fluid:Uint8Array): void;
   shareFinal(sy:number, light:Uint8Array): void /* final blocks and fluid share the proto slots */;
-  setLight(sy:number, light:Uint8Array): void /* light only; refused over a dense entry within one job; SP5's relight replaces under the reclamation protocol (SP4a, SP4b) */;
+  setLight(sy:number, light:Uint8Array): void /* light only; refused over a dense entry within one job; SP5a's relight replaces under the reclamation protocol (SP4a, SP4b) */;
   resetLight(): void /* the 24 light entries to 0, released through reclamation; L's first step (SP4b) */;
   aux(): AuxView; auxB(): AuxBView;
   commit(status: 1|2|3): void /* blockVersion += 1 when blocks or fluid were written, lightVersion += 1 when light was, then status last;
@@ -685,7 +685,7 @@ SP2a uses the 2D estimate `surfaceEst = offset` (after rivers and lakes). SP3b a
 - Caching on the quart lattice comes with its first consumer (aquifers, structures: SP6-SP9; spawn and teleport query one point each and need none, SP4c) (amended by SP3b, which caches nothing, and SP4c).
 - T5 holds `|est − true top|` to median ≤ 1, p90 ≤ 2, p99 ≤ 6.
 - **surfaceWaterLevel:** 63 for ocean and river, Lw for lakes, otherwise −∞.
-- **Teleport** (SP4c): in flight, the camera at max(surface, surfaceWaterLevel) + 24, at most 400, the yaw and pitch kept, where surface is max(⌊surfaceEst⌋, `surfaceEst3`) whenever the density tree has a `terrain` tap (the default tree included), else ⌊surfaceEst⌋, from one worker query before the terrain exists (the 3D estimate, so the arrival is never inside a jagged peak; the spawn keeps its own rule); in walk mode (SP5) the feet at that surface + 1, the look direction kept, snapped to `MOTION_BLOCKING` once the column is published; while unloaded, the player hovers.
+- **Teleport** (SP4c): in flight, the camera at max(surface, surfaceWaterLevel) + 24, at most 400, the yaw and pitch kept, where surface is max(⌊surfaceEst⌋, `surfaceEst3`) whenever the density tree has a `terrain` tap (the default tree included), else ⌊surfaceEst⌋, from one worker query before the terrain exists (the 3D estimate, so the arrival is never inside a jagged peak; the spawn keeps its own rule); in walk mode (SP5a) the feet at that surface + 1, the look direction kept, snapped to `MOTION_BLOCKING` once the column is published; while unloaded, the player hovers.
 
 ### 3.8 Carvers (stage T, after density)
 
@@ -955,7 +955,7 @@ Main thread: render (three), input/physics/raycast (reads SAB), Coordinator (sta
 **Single-writer ownership:**
 - A column with status < Published belongs to the one T, D or L job currently processing it; stages run strictly in sequence.
 - A Published column belongs to the sim worker.
-- Mesh jobs and the main thread only read (SP4b: the main thread frees unloaded columns and protos, at zero reader pins; `T(protoOnly)` rewrites only the proto descriptors and alive bit of a Decorated or Published column, never its final set; the sim worker's ownership, SP5, is of the final set; SP4c's Apply frees a stale column at zero pins and regenerates it from T, rewriting no Published final set, so the sim worker (SP5) stays its first writer).
+- Mesh jobs and the main thread only read (SP4b: the main thread frees unloaded columns and protos, at zero reader pins; `T(protoOnly)` rewrites only the proto descriptors and alive bit of a Decorated or Published column, never its final set; the sim worker's ownership, SP5a, is of the final set; SP4c's Apply frees a stale column at zero pins and regenerates it from T, rewriting no Published final set, so the sim worker (SP5a) stays its first writer).
 
 **Optimistic concurrency.** Every job records the `blockVersion` and `lightVersion` of the 3×3 it read. The coordinator discards and requeues any result whose versions changed. Every section also carries a monotonically increasing `meshSeq` (SP4b: per column, since one MESH_COLUMN job covers a column's sections; a result of an older seq is dropped), and older mesh results are dropped. The only lock is the slab allocator (the coordinator's reader pins are main-thread counters, not locks; SP4b).
 
@@ -1166,15 +1166,15 @@ MeshPhysicalMaterial transmission and Reflector are never used.
 
 **Actions.** LMB breaks, RMB places, MMB picks (the type and its non-orientation props). Hotbar 1-9 (defaults: stone, dirt, grass, planks, glass, log, torch, water bucket, lava bucket) or the scroll wheel. Placement is refused when the new state's collision boxes intersect the player AABB.
 
-**Interactions.** RMB on a door, trapdoor or fence gate toggles `open` (both door halves) instead of placing; Shift+RMB always places. A torch item places `torch` on a top face and `wall_torch` with `facing` on a side face, and is refused on a bottom face. Two-voxel states (door, double plant) are placed and broken as one atomic `{edits:[…]}` message, recorded as two diff entries. There are no support checks: blocks whose support is removed stay in place.
+**Interactions.** RMB on a door, trapdoor or fence gate toggles `open` (both door halves) instead of placing (SP8a); Shift+RMB always places. A torch item places `torch` on a top face and `wall_torch` with `facing` on a side face, and is refused on a bottom face. Two-voxel states (door, double plant) are placed and broken as one atomic `{edits:[…]}` message, recorded as two diff entries (SP8a). There are no support checks: blocks whose support is removed stay in place.
 
-**Orientation on place:** logs take the axis of the clicked face; stairs, doors, trapdoors, wall torches and ladders take `facing` from the player's yaw (and the clicked face); stairs and trapdoors take `half`, and slabs take `slabType`: bottom when clicking a top face, top when clicking a bottom face, and on a side face top iff the hit point's y within the clicked block is ≥ 0.5; placing a slab into the empty half of a same-type slab turns it into `slabType=double`; doors take `hinge` from the neighbouring door or the hit point, and place both halves.
+**Orientation on place:** logs take the axis of the clicked face; stairs, doors, trapdoors (SP8a), wall torches and ladders take `facing` from the player's yaw (and the clicked face); stairs and trapdoors take `half` (SP8a), and slabs take `slabType` (SP8a): bottom when clicking a top face, top when clicking a bottom face, and on a side face top iff the hit point's y within the clicked block is ≥ 0.5; placing a slab into the empty half of a same-type slab turns it into `slabType=double` (SP8a); doors take `hinge` from the neighbouring door or the hit point, and place both halves (SP8a).
 
 **Creative palette (E, D15):** a searchable grid of every block type flagged `PLACEABLE`, grouped by `category`; clicking assigns the selection to the active hotbar slot. A hotbar slot is `{type, pinned: Partial<props>} | {fluid:'water'|'lava'} | {tool:'emptyBucket'}`. Placement computes the orientation props (axis, facing, half, hinge) by the rules above and uses `pinned` only for non-orientation props (e.g. slabType); a small variant picker sets `pinned`. MMB pick stores the type and its non-orientation props. The empty bucket's ray stops at the first fluid voxel and removes that fluid. Hotbar slots persist per world by type name, never by state id.
 
 **Pipeline:**
-1. The main thread posts `{edits:[…]}` to the sim worker (two entries for doors and double plants, applied atomically).
-2. The sim worker, immediately and not on a tick: validates, writes block and fluid, bumps `blockVersion`, updates heightmaps, relights incrementally, schedules fluid ticks for the 6 neighbours, and records the diff.
+1. The main thread posts `{edits:[…]}` to the sim worker (two entries for doors and double plants, applied atomically; SP8a).
+2. The sim worker, immediately and not on a tick: validates, writes block and fluid, bumps `blockVersion`, updates heightmaps, relights incrementally, schedules fluid ticks for the 6 neighbours (SP7), and records the diff.
 3. It posts `{dirty: secKeys}`.
 4. The coordinator queues priority −1000 mesh jobs with a new `meshSeq`.
 5. Upload happens next frame.
@@ -1293,7 +1293,7 @@ Target: edit → visible ≤ 50 ms p95, measured in the HUD.
 
 **Preview.** Column-scope edits re-render the map and LOD coarse-first within about 300 ms, before Apply.
 
-**Since SP4c** the world applies the session's drafts live (the SP4c spec §4); the map previews each draft on the same pool, and the world holds during a gesture. The session's gestures and urgent commits are the hooks Apply and SP5's fork dialog attach to.
+**Since SP4c** the world applies the session's drafts live (the SP4c spec §4); the map previews each draft on the same pool, and the world holds during a gesture. The session's gestures and urgent commits are the hooks Apply and SP5b's world-modification mode attach to (the fork dialog is replaced, the SP5a spec's split).
 
 ### 5.2 Panels (CSS grid shell)
 
@@ -1342,7 +1342,7 @@ Target: edit → visible ≤ 50 ms p95, measured in the HUD.
   - offset, σ, jag; `islandMask`, the floating_islands cluster mask (shape stage; amended by SP3e);
   - cave slice at y (final < 0 plus aquifer fluid), cave-biome slice;
   - structure starts and pieces, carver tunnels;
-  - spawn, player with view cone, grid, column-status heatmap, saved places per saved world (SP5: a section of each saved world's map, one map per saved world).
+  - spawn, player with view cone, grid, column-status heatmap, saved places per saved world (SP5b: a section of each saved world's map, one map per saved world).
 - **Hover** uses a sampler cached per epoch. **Click** teleports (3.7) (SP4c: in the world's map a plain click teleports, except while the cut tool is armed; Shift+click sets the pin or the slice centre; on `?map` a click sets the pin).
 - The 3D view keeps streaming at reduced priority while the map is open (SP4c: in mode A, map open; in mode B the 3D streams first and the map's jobs are capped as §4.3).
 
@@ -1689,7 +1689,7 @@ High adds MSAA, a shadow cascade (about 2 ms), LOD 1 km and RD16 (dGPU target). 
 
 1. **COOP/COEP needed for the SAB.**
    - Mitigation: headers in vite.config for dev and preview; Docker runs vite; `vercel.json` sets the same headers on Vercel (D11); a startup `crossOriginIsolated` check with an error screen; packs load from local files only; no cross-origin subresources anywhere (COEP `require-corp`). Isolation also requires a **secure context**: dev, preview and Docker must be opened via `http://localhost:<port>` (or 127.0.0.1) or over HTTPS, and a reverse proxy in front of the container must terminate TLS and pass COOP/COEP through unchanged. When `isSecureContext` is false, the error screen names this cause. Every worker script response (Vite dev `?worker_file` modules, `/node_modules/.vite/deps/*`, built `assets/*.js`) must carry the headers too.
-   - Kill: if SP3a-SP5 shows an unfixable isolation or concurrency problem, switch to transferable snapshots (amended by SP4b: the split moved Apply's rewrites of Published columns to SP4c, and SP5's sim worker is deferred reclamation's first necessary consumer; SP4c's Apply frees and regenerates instead of rewriting). gen/light/mesh already run on plain ArrayBuffers in the harness, so only `store` and the transport change.
+   - Kill: if SP3a-SP5b shows an unfixable isolation or concurrency problem, switch to transferable snapshots (amended by SP4b: the split moved Apply's rewrites of Published columns to SP4c, and SP5a's sim worker is deferred reclamation's first necessary consumer; SP4c's Apply frees and regenerates instead of rewriting). gen/light/mesh already run on plain ArrayBuffers in the harness, so only `store` and the transport change.
 2. **BatchedMesh with custom GLSL3 and an integer `data` attribute.**
    - Mitigation: an SP4a week-1 spike (stress test at Medium scale: ≈ 3.5k section instances, ≈ 0.75 M quads; remesh churn; `optimize`); pin three to `~0.186.1`; `WEBGL_multi_draw` detection; RegionMesh fallback behind the `SectionRenderer` interface.
 3. **T cost of the full cave family in JS, plus DAG closures.**
@@ -1747,7 +1747,7 @@ Each sub-project runs its own cycle:
 
 Thresholds are locked (`thresholds.lock.json`) and goldens are gated (§6.2). Sizes: S ≈ 2-4 days, M ≈ 1-2 weeks, L ≈ 2-3 weeks of focused work.
 
-**Cut lines.** Every SP names a cut line: what may slip if it overruns. A slipped item moves to a named receiving SP by amending this section, and the receiving SP adds it to its exit. Default receivers: SP0 Vercel preview check → SP4a (not needed: the production deploy was verified, so nothing moved); SP2b share preview and cross-section → SP10 (both delivered in SP2b, so nothing moved); SP3b worker-split slice → SP3d (delivered in SP3b, so nothing moved); SP3d inspector pins → SP10 (delivered in SP3d, so nothing moved); SP3e islands surface branch → SP12 (delivered in SP3e, so nothing moved); SP4a loading-screen panoramas → SP4b (delivered in SP4a, so nothing moved); SP4b deferred-reclamation primitive → SP5 (delivered in SP4b, so nothing moved); SP4c climate-grid cache → SP10 (moved: the in-world preview's `lastLatencyMs` stayed within the SP4c spec §6.4's 500 ms and the user found the map in mode B acceptable); SP4c map's regeneration readout → SP10 (delivered in SP4c, so nothing moved); SP5 worlds-menu polish and palette search → SP10; SP7 vertex waves → SP11; SP8a animation frames → SP11; SP8a fence gates and trapdoors → SP12; SP8b giant trees, boulders and fossils → SP12; SP8c HRTF → SP11; SP9 jungle temple and village depth > 4 → SP12; SP11 Ultra shadows, 3D clouds and Fabulous water → SP12; SP6 underground-only carver and spaghetti-2D rarity bands → SP12; SP7 extra lava reactions → SP12; SP10 seed sweep and column-status heatmap → SP12. SP12's exit requires no open cut-line items, unless the user explicitly dropped one and the impact on its D-decision is recorded.
+**Cut lines.** Every SP names a cut line: what may slip if it overruns. A slipped item moves to a named receiving SP by amending this section, and the receiving SP adds it to its exit. Default receivers: SP0 Vercel preview check → SP4a (not needed: the production deploy was verified, so nothing moved); SP2b share preview and cross-section → SP10 (both delivered in SP2b, so nothing moved); SP3b worker-split slice → SP3d (delivered in SP3b, so nothing moved); SP3d inspector pins → SP10 (delivered in SP3d, so nothing moved); SP3e islands surface branch → SP12 (delivered in SP3e, so nothing moved); SP4a loading-screen panoramas → SP4b (delivered in SP4a, so nothing moved); SP4b deferred-reclamation primitive → SP5 (delivered in SP4b, so nothing moved); SP4c climate-grid cache → SP10 (moved: the in-world preview's `lastLatencyMs` stayed within the SP4c spec §6.4's 500 ms and the user found the map in mode B acceptable); SP4c map's regeneration readout → SP10 (delivered in SP4c, so nothing moved); SP5a palette search → SP10; SP5b worlds-menu polish → SP10 (worded by the SP5b spec); SP7 vertex waves → SP11; SP8a animation frames → SP11; SP8a fence gates and trapdoors → SP12; SP8b giant trees, boulders and fossils → SP12; SP8c HRTF → SP11; SP9 jungle temple and village depth > 4 → SP12; SP11 Ultra shadows, 3D clouds and Fabulous water → SP12; SP6 underground-only carver and spaghetti-2D rarity bands → SP12; SP7 extra lava reactions → SP12; SP10 seed sweep and column-status heatmap → SP12. SP12's exit requires no open cut-line items, unless the user explicitly dropped one and the impact on its D-decision is recorded.
 
 **SP0 — Scaffold and guardrails** (S; no dependencies)
 - Repository scaffold at the root: Vite, TS strict, three `~0.186.1`, vitest projects (unit / arch / metrics-fast / metrics-quick / metrics-full / bench; see the SP0 spec).
@@ -1835,8 +1835,10 @@ SP4 was split on 2026-10-20 into SP4a (the world in 3D, loaded once) and SP4b (s
 
 SP4b was split on 2026-10-23 into SP4b (streaming) and SP4c (the map in the world and live editing), at the user's request, so the world streams without an edge before the map and editing move into it (the SP4b spec's Decisions confirmed by the user, item 1).
 
+SP5 was split on 2026-10-27 into SP5a (build and walk), SP5b (saved worlds) and SP5c (the selection tool), proposed in brainstorming because it grew past M and accepted by the user ("Vamos con esta partición"); each is testable on its own (the SP5a spec's Decisions confirmed by the user, item 1).
+
 **SP4a — The world in 3D, loaded once** (L; SP3b). Spec: `2026-10-20-sp4a-static-world-renderer-design.md`.
-- The week-1 spike (RegionBatch, the shared store in the browser); RegionMesh as the second `SectionRenderer`, selected without `WEBGL_multi_draw` (Firefox); the one-shot load around the spawn or a chosen point (rings, the coordinator's core, T/D/L/MESH_COLUMN jobs on the shared store); the D skeleton with the final heightmaps; the exact light job (FULL_FACES-aware, water stopping the sky fall and dimming by 1 per block); the padded greedy mesher with `PACK_LAYOUT`, AO, smooth light and connectivity; the still-water mesher; materials v1 with Fast water, the flat-colour array, sky dome with sun, elevation-based day/night, fog; the spectator controller, floating origin, FPS limiter, HUD counts, `ui/help.ts` with the key map as data; a minimal start screen at `/` (the full start and worlds menu is SP5's); the loading screen with panoramas, tips and progress; the flight route.
+- The week-1 spike (RegionBatch, the shared store in the browser); RegionMesh as the second `SectionRenderer`, selected without `WEBGL_multi_draw` (Firefox); the one-shot load around the spawn or a chosen point (rings, the coordinator's core, T/D/L/MESH_COLUMN jobs on the shared store); the D skeleton with the final heightmaps; the exact light job (FULL_FACES-aware, water stopping the sky fall and dimming by 1 per block); the padded greedy mesher with `PACK_LAYOUT`, AO, smooth light and connectivity; the still-water mesher; materials v1 with Fast water, the flat-colour array, sky dome with sun, elevation-based day/night, fog; the spectator controller, floating origin, FPS limiter, HUD counts, `ui/help.ts` with the key map as data; a minimal start screen at `/` (the full start and worlds menu is SP5b's); the loading screen with panoramas, tips and progress; the flight route.
 - **Deliverable:** fly through the RD12 world around the spawn with day/night and translucent oceans, after a start screen and a loading screen, in Chrome and Firefox.
 - **Exit:** as the SP4a spec §11.
 - **Cut line:** the panoramas (→ SP4b). It was not taken: the panorama tool and its six panoramas shipped in SP4a, so nothing moved. The RegionMesh fallback was required by the capability probe (Firefox lacks `WEBGL_multi_draw`), so it is not cuttable.
@@ -1853,34 +1855,41 @@ SP4b was split on 2026-10-23 into SP4b (streaming) and SP4c (the map in the worl
 - **Exit:** as the SP4c spec §14 (R7's Apply part; the scheduler test "old meshes kept on Apply"; G1's live cells).
 - **Cut line:** the climate-grid cache and the map's regeneration readout (→ SP10). The readout was not cut: it shipped in SP4c. The climate-grid cache moved to SP10: in the production check the in-world preview landed within 160 ms of each edit in mode B, against the SP4c spec §6.4's 500 ms, and the user found the map in mode B acceptable.
 
-**SP5 — Editing and persistence vertical slice** (M; SP4b, SP4c)
-- Sim worker owning Published columns; DDA raycast with outline; hotbar; break, place and pick; **creative palette (E)**; orientation rules and interactions of §4.12 (shapes render as cubes until SP8a); edit-priority remesh (−1000, §4.3).
-- Incremental removal/re-add relight with the sky heightmap re-seed.
-- Persistence: DiffStore (in memory, authoritative, read-through), diff codec (u16 states, canonical order, little-endian), IDB KV with a single-transaction flush every 2 s and on pagehide, create/load/rename/duplicate/delete worlds, genKey binding plus the fork dialog (§2.7), `stateTable` remap, `.wiworld` export/import; the full start and worlds menu at `/`, grown from SP4a's minimal start screen and designed with the user in SP5's spec (SP4a spec D21).
-- Walk controller: swept AABB, step-up, ladders, unloaded ≠ solid, unstuck.
-- Walk mode's teleport: the feet at the landing surface + 1, the look direction kept, snapped to `MOTION_BLOCKING` once published (the SP4c spec §3.5); saved places as a section of each saved world's map.
-- **Deliverable:** break and place blocks, reload and get the same world, export and import in another browser profile — the cross-cutting formats proven end to end.
-- The deferred-reclamation primitive its sim worker retires slots through shipped in SP4b (`world/store/reclaim.ts`; SP4b's cut line was not taken, so nothing moved here).
-- **Exit:** L3 (including shafts); E1-E7 (including the fault-injected flush and the unload/reload race); G2 (edit part: edit → visible p95 ≤ 50 ms); relight ≤ 3 ms p95; physics and palette unit tests.
-- **Cut line:** worlds-menu polish (rename, duplicate, thumbnails) and palette search (→ SP10).
+**SP5a — Build and walk** (L; SP4b, SP4c). Spec: `2026-10-27-sp5a-build-and-walk-design.md`.
+- The sim worker owning Published final sets (thread 15); DDA raycast with outline; hotbar; break, place and pick; the creative palette (E) with search; orientation for logs, torches, wall torches and ladders; 25 building and terrain types with provisional torch, wall-torch and ladder boxes; still lava from the bucket; edit-priority remesh (−1000); incremental relight with the sky re-seed; the in-memory DiffStore with read-through; walk controller (swept AABB, step-up, ladders, swimming in water and lava, ice, unloaded ≠ solid, unstuck); walk mode's teleport (the SP4c spec §3.5); block undo and redo by the controls owner.
+- **Deliverable:** build and walk in the world; edits kept for the session.
+- **Exit:** as the SP5a spec §12 (L3; E5's session part; G2's edit part; relight ≤ 3 ms p95; physics and palette unit tests).
+- **Cut line:** palette search (→ SP10).
 
-**SP6 — Caves, carvers and cave biomes** (L; SP3c, SP5 for in-game review)
+**SP5b — Saved worlds** (M; SP5a)
+- The start and worlds menus at `/`; graphics settings screen (G); IndexedDB persistence (diff codec, single-transaction flush every 2 s and on pagehide, `stateTable` remap); `.wiworld` export and import; the world-modification mode and the automatic backup copy in place of the fork dialog; saved places as a section of each saved world's map.
+- **Deliverable:** reload and get the same world, export and import in another browser profile.
+- **Exit:** E1-E4, E5's flush part, E6 (redefined by the SP5b spec), E7.
+- **Cut line:** set by the SP5b spec.
+
+**SP5c — The selection tool** (M; SP5b)
+- Select a 3D volume; copy, cut, paste and move with a ghost preview and 90° rotation; the clipboard survives reloads.
+- **Deliverable:** select, copy, cut, paste and move a volume.
+- **Exit** and **Cut line:** set by the SP5c spec.
+
+**SP6 — Caves, carvers and cave biomes** (L; SP3c, SP5c; walking for in-game review from SP5a)
 - Cave family terms in the default DAG (cheese / layer / pillars, spaghetti 2D and 3D with rarity, noodle, entrances, roughness, cheese roof term, lake roof); worm and canyon carvers (detMath, LRU); 3D quart cave-biome picker (lush, dripstone, **abyss**) with cave floor and ceiling surface rules; the abyss surface-palette blocks (decided in this SP's spec); debug cave-type tag channel, cave-type tint in the slice viewer, map cave slice and cave-biome layers; `cave_heavy` preset; cave culling.
 - **Deliverable:** explorable caves with visible surface entrances and ravines.
 - Received from SP3e (its spec §12): exclude cave-detached runs above y 180 from the floating_islands island branch, water v0's island rule and the surface scan's sky-open run under islands when caves reach y ≥ 181.
 - **Exit:** C1-C6, B3, R3; re-asserted with caves: L2, S1 (grass at sky 0: master's part, restored in place of SP3c's `grassNoSky` once SP4a's light exists; amended by SP3c), DT1, DT2 (probe == bulk); P1: T ≤ 10 ms p50; DAG closure overhead vs a hand-inlined default expression measured and recorded (codegen kill criterion, §7).
 - **Cut line:** the extra underground-only carver; spaghetti-2D rarity bands.
 
-**SP7 — Water and fluids** (L; SP6, SP5)
-- MC-style aquifers (water, lava, barriers, abyss exclusion, fast path); wet rivers and lakes via surfaceWaterLevel; exact 3×3 settle with the distance cap, `FLUID_MODE` and the unsettled flag; flowing-water mesher (levels, corner heights, sides) and lava rendering; water tiers Fast and Fancy; underwater fog and tint; swimming; runtime fluid sim (edit-triggered, 20 TPS, rules, reactions, caps, sim distance, diffs); water and lava buckets and the empty bucket.
+**SP7 — Water and fluids** (L; SP6, SP5a)
+- MC-style aquifers (water, lava, barriers, abyss exclusion, fast path); wet rivers and lakes via surfaceWaterLevel; exact 3×3 settle with the distance cap, `FLUID_MODE` and the unsettled flag; flowing-water mesher (levels, corner heights, sides) and lava flow rendering (still lava renders since SP5a); water tiers Fast and Fancy; underwater fog and tint; runtime fluid sim (edit-triggered, 20 TPS, rules, reactions, caps, sim distance, diffs).
 - **Deliverable:** translucent oceans, rivers and elevated lakes; dry caves below sea level; deep lava; waterfalls at aquifer borders; break a lake rim and watch it drain.
 - **Exit:** A1-A4, B2 (voxel), B5, F1, F2, F3, R5; DT1 with settle; P1: T still ≤ 10 ms.
 - **Cut line:** vertex waves (→ SP11); lava reactions beyond obsidian and cobblestone.
 - **MVP line:** after SP7 the app is a complete explorer and editor with caves, entrances and real water.
 
-**SP8a — Textures, cutout content and block shapes** (L; SP4a for textures and shape meshing, SP5 for collision/raycast/orientation against boxes; the texture parts can run in parallel with SP5-SP7)
+**SP8a — Textures, cutout content and block shapes** (L; SP4a for textures and shape meshing, SP5a for collision/raycast/orientation against boxes; the texture parts can run in parallel with SP5a-SP7)
 - Procedural painters v1 (variants, hash rotation, macro tint, tint-mask alpha); colormaps and the tint texture; cutout content for leaves, glass and plants (the pass exists since SP4a); anisotropy.
 - **Block shapes (D12):** `SHAPE_BOXES` for the 11 models on the 1/8 grid, the shape mesher with neighbour-derived connections, `FULL_FACES` culling and light blocking, `COLLIDE` boxes, raycast against boxes.
+- From SP5a (its spec §9, §10): the doors', trapdoors', fence gates', stairs' and slabs' interactions and orientation, the variant picker, and the replacement of SP5a's provisional boxes, glass frame and log-end layer, and ice's translucent look.
 - **Deliverable:** a textured, biome-tinted world where stairs, slabs, doors, fences, panes, torches, lanterns and ladders render, collide and orient correctly.
 - **Exit:** painter determinism and quality unit tests; texture array ≤ 2 MB; glass meshed in the cutout pass; M1 (shape parts); block-state unit tests; R1 with shapes (same-model culling rule); visual checklist.
 - **Cut line:** animation frames (→ SP11); fence gates and trapdoors (→ SP12).
@@ -1888,10 +1897,11 @@ SP4b was split on 2026-10-23 into SP4b (streaming) and SP4c (the map in the worl
 **SP8b — Decorate content: features, ores, vegetation, cave decoration** (L; SP7, SP8a)
 - Placed-feature data, modifiers and pull-model priority writes; trees (9 species families) and plant patches; cave decoration (glow lichen, cave vines with berries, moss, dripstone, and the **abyss** decoration set: dark crystals, dead roots, fossils, the exclusive mineral — concrete list in this SP's spec); ores; freeze_top_layer; springs, lava lakes and island-edge springs feeding settle (island-edge springs on SP3e's islands term, `islandMask` and island runs; SP3e spec §12); tuning mode (keep every proto) and the decorate-scope Apply path.
 - **Deliverable:** forests with groves and clearings; decorated lush, dripstone and abyss caves; ores everywhere.
+- Received from SP5a (its spec §10, D20, D23): once D places features, a voxel's generated value is D's output before the diff overlay, not the proto, and that output must stay readable while edits exist; generated emitters (glow lichen, glow berries, lava lakes) set `REC_DIFF_FLAG`'s scan gate or replace it.
 - **Exit:** O1, O2, V1-V6, S3 (all parts); R4 asserted with caves, water and leaves (if it fails, §2.6 and §7 memory budgets are re-derived by amendment); DT1 with features; U1 (a decorate edit re-runs only D, L and mesh in tuning mode); P1: D ≤ 3 ms p50; AU4 re-run over the SP8b block states if SP8c is already done.
 - **Cut line:** jungle and dark-oak giant trees, boulders, fossils (→ SP12).
 
-**SP8c — Audio** (M; SP7, SP5; can run in parallel with SP8a/SP8b)
+**SP8c — Audio** (M; SP7, SP5a; can run in parallel with SP8a/SP8b)
 - `audio/synth` DSP generators and `AUDIO_SYNTH` jobs; `audio/model` pure decision logic; `sound/engine` with buses, gesture resume and persisted volumes; block SFX by `SOUND` group and footsteps; splash/swim/lava; ambience estimator, beds (wind, surf, cave, abyss) and grains (drips, birds, crickets, abyss rumbles) with the three fixed reverbs; positional emitters from mesh jobs with clustering and voice caps; generative music with the frequency setting (Always / Frequent / Standard / Never); sound packs (`wi10-sounds`) in IndexedDB.
 - Creates `ui/settingsPanel.ts` with the **Audio** section (master/music/sfx/ambient volumes, music frequency, sound pack) and `core/params/graphicsPresets.ts` as pure data with the audio rows, applying the Medium audio row until SP11 adds the graphics rows.
 - **Deliverable:** an immersive soundscape that follows biome, depth, time and water, with spaced generative music.
@@ -1910,6 +1920,7 @@ SP4b was split on 2026-10-23 into SP4b (streaming) and SP4c (the map in the worl
 - Received from SP3c (its spec's Decision 2 and §11; amended by SP3c): the 2D defects inherited from SP2a, measured on voxels in SP3c and not fixed there — the lake-rim islets (ocean-family biome on land at a lake rim; the example is a lake perched at y ≈ 100 in a sea area, x −16384 … −16177, z −10624 … at seed 42, whose rim is a sand-topped stone mesa with staircase edges) and the shoreline zoom fringe; SP3c's ungated diagnostics `lakeRimIslets`, `shorelineFringe`, `shorelineFringeSea` and `oceanBiomeLandTops` measure them.
 - Received from SP3d (its spec §13; amended by SP3d): the slice view of the other 3D fields and the 256² refinement; resizable inspector columns; a time-budgeted slice or a per-request abort cell if SP3d's deterministic work bound proves too coarse in use; packed_ice's pale blue close to the sky colour (SP3c's review point, inherited by the slice's blocks field through `VOXEL_COLORS`; with SP8a).
 - Received from SP4c (its spec §6.4, §13; amended by SP4c): SP2b's climate-grid cache (a per-worker cache of the climate grid, the SP2b spec §2.9) for the map's preview while the world regenerates: with the 3D visible and T pending the preview runs one tile at a time, a level-256 preview tile about 54 ms, about 6 ms with the cache. SP4c's production check read the in-world preview at 160 ms at most in mode B, and a map pan right after an Apply at RD 8 about 1.5 s slower than at rest while T was pending (cap 1); the user found it acceptable and left the cache to SP10.
+- Received from SP5a (its spec §10; amended by SP5a): sneaking (the slow walk and the edge guard of §5.9's Shift); key remapping, with the HUD's key labels read from the merged key map instead of `DEFAULT_KEYMAP` (`src/ui/hud.ts:103`); palette search if SP5a's cut line is taken.
 - **Exit:** U1-U4 (U4 active in full since SP1); G2 (Apply part: first visible change near the player ≤ 0.5 s); dashboard metric == vitest metric (same function, same value); decorate-scope Apply at RD12 ≤ 3 s; inspector slice 256² refinement (128² ≤ 300 ms delivered by SP3d); the climate-grid cache received from SP4c (a level-256 preview tile ≈ 6 ms with it, against ≈ 54 ms without; the SP2b spec §2.9).
 - **Cut line:** seed sweep; the column-status heatmap (→ SP12).
 
@@ -1929,11 +1940,11 @@ SP4b was split on 2026-10-23 into SP4b (streaming) and SP4c (the map in the worl
 
 ### Critical path and parallelism
 
-Critical path: SP0 → SP1 → SP2a → SP2b → SP3a → SP3b → SP4a → SP4b → SP4c → SP5 → SP6 → SP7 → SP8b → SP9 → SP10 → SP11 → SP12.
+Critical path: SP0 → SP1 → SP2a → SP2b → SP3a → SP3b → SP4a → SP4b → SP4c → SP5a → SP5b → SP5c → SP6 → SP7 → SP8b → SP9 → SP10 → SP11 → SP12.
 
-In parallel: SP8a's texture parts after SP4a (alongside SP4b-SP7; its shape collision/raycast parts after SP5); SP8c after SP7 (alongside SP8a/SP8b); the persistence codec and `.wiworld` format after SP3a; SP3c, SP3d and SP3e alongside SP4 (done before SP4a started); the cloud parts of SP11 after SP4a and its LOD parts after SP4b (the fill mask flips at SP4b's per-column reveal).
+In parallel: SP8a's texture parts after SP4a (alongside SP4b-SP7; its shape collision/raycast parts after SP5a); SP8c after SP7 (alongside SP8a/SP8b); the persistence codec and `.wiworld` format after SP3a; SP3c, SP3d and SP3e alongside SP4 (done before SP4a started); the cloud parts of SP11 after SP4a and its LOD parts after SP4b (the fill mask flips at SP4b's per-column reveal).
 
-Visible value in every SP: a map in SP2a (edited live in SP2b), voxel slices in SP3a, terrain in SP3b, flight in SP4a, streaming in SP4b, teleport and live editing from the map in SP4c, editing in SP5, caves in SP6, water in SP7. The riskiest integrations sit early: the SAB store and the u16 state format in SP3a, BatchedMesh in SP4a week 1, and fluid byte → light → mesh → edit → diff → IDB → reload in SP3a-SP5.
+Visible value in every SP: a map in SP2a (edited live in SP2b), voxel slices in SP3a, terrain in SP3b, flight in SP4a, streaming in SP4b, teleport and live editing from the map in SP4c, building and walking in SP5a, saved worlds in SP5b, the selection tool in SP5c, caves in SP6, water in SP7. The riskiest integrations sit early: the SAB store and the u16 state format in SP3a, BatchedMesh in SP4a week 1, and fluid byte → light → mesh → edit → diff → IDB → reload in SP3a-SP5b.
 
 ## 11. Relationship with world-imaginer
 

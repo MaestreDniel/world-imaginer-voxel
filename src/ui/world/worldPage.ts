@@ -1767,7 +1767,7 @@ export function mountWorldPage(root: HTMLElement, q: WorldQuery, hash: string, o
       epochs,
       initial: appliedDraftOf(draftOf(session.state).seedKey, firstReady),
       initialGeneration: workers.epoch,
-      // SP4c always proceeds; SP5's fork dialog suspends auto-apply here (master §2.7 (b)).
+      // SP4c always proceeds; SP5b's world-modification mode suspends auto-apply here (master §2.7 (b)).
       beforeApply: () => true,
       onApplied: ({ from }) => {
         worldUrl.applied();

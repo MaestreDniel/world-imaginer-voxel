@@ -57,7 +57,7 @@ export interface ColumnWriter {
   /**
    * The light channel of final section `sy` only (uniform or dense; the meta word does not depend on light). Throws
    * `light already written` when the entry already holds a slot: the light-once invariant inside one job, so a light
-   * slot is never freed under a reader (SP4a spec §2.4, §2.5). The refusal stays in SP4b; SP5's relight lifts it
+   * slot is never freed under a reader (SP4a spec §2.4, §2.5). The refusal stays in SP4b; SP5a's relight lifts it
    * under the reclamation protocol (SP4b spec §2.4).
    */
   setLight(sy: number, light: Uint8Array): void;

@@ -1,6 +1,6 @@
 /**
- * The help overlay (SP4a spec §7.4, D31): **Keys** generated from the key map, **Settings** (the small block SP5's
- * settings panel replaces; the render distance applies live since SP4b, spec §5), **System** (the capability report
+ * The help overlay (SP4a spec §7.4, D31): **Keys** generated from the key map, **Settings** (the small block SP5b's
+ * graphics settings screen replaces; the render distance applies live since SP4b, spec §5), **System** (the capability report
  * with "Copy as JSON" and the hidden `#capability-json`, moved here from the SP0 page, D21, then the render distance's
  * maximum), and the buttons "Map (M)" (SP4c spec §1.6, D20: it closes the help and opens the map overlay; SP4a's link
  * to `?map`, which navigated away from the world, is gone) and "Fullscreen". All text goes through `textContent`. The

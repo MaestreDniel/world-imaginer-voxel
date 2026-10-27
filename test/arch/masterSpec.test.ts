@@ -65,6 +65,12 @@
  * the decision taken at the exit: the map's regeneration readout was built (`mapOverlay.ts` writes "Regenerating n /
  * needed"), so it did not move; the climate-grid cache was not built (no module under `src/` names a climate grid) and moved to SP10, which receives it
  * in a "Received from SP4c" line and its exit; §1's `ci.yml` line names the metrics-fast shards (`fastShards.mjs`).
+ * SP5a (its spec §8, §9): the first commit lands the split (the §10 paragraph and the SP5a, SP5b and SP5c entries in
+ * place of SP5's) with its other §9 amendments (SP6, SP7, SP8a and SP8c, the receivers, the critical path, SP10's and
+ * SP8b's "Received from SP5a", §0.7, §2.5's `setLight`, §3.7), and moves the pins that read the SP5 entry here (SP5a's
+ * walk-mode teleport, SP5b's saved places, the SP4b cut line's conditional); the pins of §3.7, §4.1, §5.1, §5.6 and
+ * risk 1 take §9's rewordings in place. §1 names each SP5a module in its entry, which exists (`SP5A_MODULES`, a row
+ * added by each task that adds a module).
  */
 import { existsSync, readdirSync, readFileSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
@@ -913,8 +919,7 @@ describe('master spec amendments (SP4b §13)', () => {
     const cut = spEntry('SP4b', 'SP4c').split('\n').find((l) => l.startsWith('- **Cut line:**'));
     expect(cut).toBe('- **Cut line:** deferred reclamation\'s primitive (→ SP5). It was not taken: deferred reclamation shipped in SP4b, so nothing moved.');
     expect(text).toContain('SP4b deferred-reclamation primitive → SP5 (delivered in SP4b, so nothing moved);');
-    // SP5 no longer carries the conditional "if SP4b's cut line moved it here".
-    expect(spEntry('SP5', 'SP6')).not.toContain('If SP4b\'s cut line moved');
+    // The pin that SP5 no longer carries the conditional moved to 'master spec amendments (SP5a §9)' (the split).
   });
 });
 
@@ -935,7 +940,7 @@ describe('master spec amendments (SP4c §12)', () => {
     expect(caching, 'no `- Caching on the quart lattice …` line in §3.7').toBeDefined();
     expect(caching).toContain('(aquifers, structures: SP6-SP9; spawn and teleport query one point each and need none, SP4c)');
     expect(caching).not.toContain('SP4c-SP9');
-    expect(s37).toContain('- **Teleport** (SP4c): in flight, the camera at max(surface, surfaceWaterLevel) + 24, at most 400, the yaw and pitch kept, where surface is max(⌊surfaceEst⌋, `surfaceEst3`) whenever the density tree has a `terrain` tap (the default tree included), else ⌊surfaceEst⌋, from one worker query before the terrain exists (the 3D estimate, so the arrival is never inside a jagged peak; the spawn keeps its own rule); in walk mode (SP5) the feet at that surface + 1, the look direction kept, snapped to `MOTION_BLOCKING` once the column is published; while unloaded, the player hovers.');
+    expect(s37).toContain('- **Teleport** (SP4c): in flight, the camera at max(surface, surfaceWaterLevel) + 24, at most 400, the yaw and pitch kept, where surface is max(⌊surfaceEst⌋, `surfaceEst3`) whenever the density tree has a `terrain` tap (the default tree included), else ⌊surfaceEst⌋, from one worker query before the terrain exists (the 3D estimate, so the arrival is never inside a jagged peak; the spawn keeps its own rule); in walk mode (SP5a) the feet at that surface + 1, the look direction kept, snapped to `MOTION_BLOCKING` once the column is published; while unloaded, the player hovers.');
     expect(s37).not.toContain('surfaceEst + 2');
   });
 
@@ -943,7 +948,7 @@ describe('master spec amendments (SP4c §12)', () => {
     const at56 = text.indexOf('### 5.6 Map view');
     const s56 = text.slice(at56, text.indexOf('### 5.7 ', at56));
     expect(s56).toContain('**Click** teleports (3.7) (SP4c: in the world\'s map a plain click teleports, except while the cut tool is armed; Shift+click sets the pin or the slice centre; on `?map` a click sets the pin).');
-    expect(s56).toContain('saved places per saved world (SP5: a section of each saved world\'s map, one map per saved world)');
+    expect(s56).toContain('saved places per saved world (SP5b: a section of each saved world\'s map, one map per saved world)');
     expect(s56).not.toContain('bookmarks per save');
     expect(s56).toContain('The 3D view keeps streaming at reduced priority while the map is open (SP4c: in mode A, map open; in mode B the 3D streams first and the map\'s jobs are capped as §4.3).');
     const at59 = text.indexOf('### 5.9 Controls');
@@ -958,17 +963,15 @@ describe('master spec amendments (SP4c §12)', () => {
     expect(entry).toContain('the standalone ?map page (mounted in-game from SP4c)');
   });
 
-  test('§10\'s SP4c entry, SP5\'s walk-mode teleport and saved places, SP10 without bookmarks', () => {
-    const sp4c = spEntry('SP4c', 'SP5');
+  test('§10\'s SP4c entry, SP10 without bookmarks', () => {
+    const sp4c = spEntry('SP4c', 'SP5a');
     expect(sp4c.startsWith('**SP4c — The map in the world and live editing** (L; SP4b). Spec: `2026-10-25-sp4c-map-in-world-design.md`'), 'the SP4c header').toBe(true);
     expect(sp4c).toContain('- **Deliverable:** teleport from the map and edit the world live in both modes.');
     // The entry's contents line, whole (final review GOV-6: spec §10 pins the header and the entry).
     expect(sp4c.split('\n'), 'the SP4c entry\'s contents line').toContain('- The map tool shared by `?map` and the M overlay; teleport (instant, no loading screen, nearest-first, 24 blocks above the surface or the water); Apply v1 live (one pool, the world holding while the pool holds an unapplied draft; the per-column epoch as the interned genKey; stale columns freed and regenerated nearest-first while their old meshes stay shown; the renderers\' swap; `invalidation.ts`); undo and redo live; the two editing modes, remembered (A full screen with "Watch live", B side by side); the pool\'s two lanes with the MAP cap by visibility.');
     expect(sp4c).toContain('**Exit:** as the SP4c spec §14');
     expect(sp4c.split('\n').some((l) => l.startsWith('- **Cut line:** the climate-grid cache and the map\'s regeneration readout (→ SP10)')), 'the SP4c entry has no `- **Cut line:** the climate-grid cache and the map\'s regeneration readout (→ SP10)` line').toBe(true);
-    const sp5 = spEntry('SP5', 'SP6');
-    expect(sp5).toContain('Walk mode\'s teleport: the feet at the landing surface + 1, the look direction kept, snapped to `MOTION_BLOCKING` once published (the SP4c spec §3.5)');
-    expect(sp5).toContain('saved places as a section of each saved world\'s map');
+    // SP5's walk-mode teleport and saved places moved to 'master spec amendments (SP5a §9)' (SP5a and SP5b since the split).
     const layers = /complete map layers \(([^)]*)\)/.exec(spEntry('SP10', 'SP11'));
     expect(layers, 'SP10 has no `complete map layers (…)` list').not.toBeNull();
     expect(layers![1]).not.toContain('bookmarks');
@@ -984,7 +987,7 @@ describe('master spec amendments (SP4c §12)', () => {
   test('§4.1, §4.2, §5.1 and risk 1 say how SP4c applies (SP4c spec §4.5, §12)', () => {
     const at41 = text.indexOf('### 4.1 Thread topology and ownership');
     const s41 = text.slice(at41, text.indexOf('### 4.2 ', at41));
-    expect(s41).toContain('- Mesh jobs and the main thread only read (SP4b: the main thread frees unloaded columns and protos, at zero reader pins; `T(protoOnly)` rewrites only the proto descriptors and alive bit of a Decorated or Published column, never its final set; the sim worker\'s ownership, SP5, is of the final set; SP4c\'s Apply frees a stale column at zero pins and regenerates it from T, rewriting no Published final set, so the sim worker (SP5) stays its first writer).');
+    expect(s41).toContain('- Mesh jobs and the main thread only read (SP4b: the main thread frees unloaded columns and protos, at zero reader pins; `T(protoOnly)` rewrites only the proto descriptors and alive bit of a Decorated or Published column, never its final set; the sim worker\'s ownership, SP5a, is of the final set; SP4c\'s Apply frees a stale column at zero pins and regenerates it from T, rewriting no Published final set, so the sim worker (SP5a) stays its first writer).');
     const at42 = text.indexOf('### 4.2 Column state machine');
     const s42 = text.slice(at42, text.indexOf('### 4.3 ', at42));
     const swap = s42.split('\n').find((l) => l.startsWith('- **Re-generation swaps atomically too.**'));
@@ -996,14 +999,14 @@ describe('master spec amendments (SP4c §12)', () => {
       'An explicit button, or auto-apply with a 500 ms debounce (SP4c: auto-apply only: a draft is applied once its configure resolved, nothing newer waits, no gesture is open and 150 ms passed since the last change).',
       'Meshing waits until all 3×3 columns share the epoch (SP4c: the column\'s epoch is the interned genKey of its T\'s draft; D and L wait the same way).',
       'per-stage progress (`stale/total`) (SP10; SP4c shows the stale count in the HUD).',
-      '**Since SP4c** the world applies the session\'s drafts live (the SP4c spec §4); the map previews each draft on the same pool, and the world holds during a gesture. The session\'s gestures and urgent commits are the hooks Apply and SP5\'s fork dialog attach to.',
+      '**Since SP4c** the world applies the session\'s drafts live (the SP4c spec §4); the map previews each draft on the same pool, and the world holds during a gesture. The session\'s gestures and urgent commits are the hooks Apply and SP5b\'s world-modification mode attach to (the fork dialog is replaced, the SP5a spec\'s split).',
     ]) expect(s51, `§5.1 does not say ${phrase}`).toContain(phrase);
     expect(s51).not.toContain('**Until SP4c**');
     const at8 = text.indexOf('## 8. Risks');
     const risk1 = text.slice(at8, text.indexOf('\n2. ', at8));
     const kill = risk1.split('\n').find((l) => l.trimStart().startsWith('- Kill:'));
     expect(kill, 'risk 1 has no `- Kill:` line').toBeDefined();
-    expect(kill).toContain('(amended by SP4b: the split moved Apply\'s rewrites of Published columns to SP4c, and SP5\'s sim worker is deferred reclamation\'s first necessary consumer; SP4c\'s Apply frees and regenerates instead of rewriting)');
+    expect(kill).toContain('(amended by SP4b: the split moved Apply\'s rewrites of Published columns to SP4c, and SP5a\'s sim worker is deferred reclamation\'s first necessary consumer; SP4c\'s Apply frees and regenerates instead of rewriting)');
   });
 
   test('§4.3\'s caps line: the MAP cap by visibility and the pool\'s two lanes (SP4c spec §6, §12)', () => {
@@ -1091,7 +1094,7 @@ describe('master spec amendments (SP4c §12)', () => {
     // Not built: no module under src/ names a climate grid (SP2b spec §2.9's per-worker cache).
     const src = readdirSync(`${ROOT_DIR}src`, { recursive: true, encoding: 'utf8' }).filter((f) => f.endsWith('.ts'));
     for (const f of src) expect(readFileSync(`${ROOT_DIR}src/${f}`, 'utf8'), `src/${f} names a climate grid`).not.toMatch(/climate.?grid/i);
-    const cut = spEntry('SP4c', 'SP5').split('\n').find((l) => l.startsWith('- **Cut line:**'));
+    const cut = spEntry('SP4c', 'SP5a').split('\n').find((l) => l.startsWith('- **Cut line:**'));
     expect(cut).toBe('- **Cut line:** the climate-grid cache and the map\'s regeneration readout (→ SP10). The readout was not cut: it shipped in SP4c. The climate-grid cache moved to SP10: in the production check the in-world preview landed within 160 ms of each edit in mode B, against the SP4c spec §6.4\'s 500 ms, and the user found the map in mode B acceptable.');
     expect(text).toContain('SP4c climate-grid cache → SP10 (moved: the in-world preview\'s `lastLatencyMs` stayed within the SP4c spec §6.4\'s 500 ms and the user found the map in mode B acceptable); SP4c map\'s regeneration readout → SP10 (delivered in SP4c, so nothing moved);');
     const sp10 = spEntry('SP10', 'SP11').split('\n');
@@ -1107,5 +1110,87 @@ describe('master spec amendments (SP4c §12)', () => {
     expect(entry).toContain('the two unit shards (`.github/scripts/unitShards.mjs`), the metrics-fast shards (`.github/scripts/fastShards.mjs`) and the metrics-quick shards (cached)');
     expect(entry).toContain('(amended 2026-10-20: parallel CI jobs; SP4b: the unit shards; SP4c: the metrics-fast shards)');
     expect(existsSync(`${ROOT_DIR}.github/scripts/fastShards.mjs`)).toBe(true);
+  });
+});
+
+describe('master spec amendments (SP5a §9)', () => {
+  /** [§1 entry head, the token its entry holds, the file on disk]; Tasks 2, 7-10, 20, 22, 23, 26-28 and 31 append theirs. */
+  const SP5A_MODULES: Array<[head: RegExp, token: string, file: string]> = [];
+
+  test('the split', () => {
+    expect(text).toContain('SP5 was split on 2026-10-27 into SP5a (build and walk), SP5b (saved worlds) and SP5c (the selection tool), proposed in brainstorming because it grew past M and accepted by the user ("Vamos con esta partición")');
+    const sp5a = spEntry('SP5a', 'SP5b');
+    expect(sp5a.startsWith('**SP5a — Build and walk** (L; SP4b, SP4c). Spec: `2026-10-27-sp5a-build-and-walk-design.md`'), 'the SP5a header').toBe(true);
+    expect(sp5a).toContain('**Deliverable:** build and walk in the world; edits kept for the session.');
+    expect(sp5a).toContain('**Exit:** as the SP5a spec §12');
+    expect(sp5a).toContain('walk mode\'s teleport (the SP4c spec §3.5)');
+    expect(sp5a.split('\n').some((l) => l.startsWith('- **Cut line:** palette search (→ SP10)')), 'the SP5a entry has no `- **Cut line:** palette search (→ SP10)` line').toBe(true);
+    // Moved from the SP4b block: SP5a does not carry the old SP5 entry's conditional either.
+    expect(sp5a).not.toContain('If SP4b\'s cut line moved');
+    const sp5b = spEntry('SP5b', 'SP5c');
+    expect(sp5b.startsWith('**SP5b — Saved worlds** (M; SP5a)'), 'the SP5b header').toBe(true);
+    expect(sp5b).toContain('saved places as a section of each saved world\'s map');
+    expect(spEntry('SP5c', 'SP6').startsWith('**SP5c — The selection tool** (M; SP5b)'), 'the SP5c header').toBe(true);
+    expect(text).toContain('SP5a palette search → SP10; SP5b worlds-menu polish → SP10');
+    expect(text).toContain('SP4b deferred-reclamation primitive → SP5 (delivered in SP4b, so nothing moved);');
+    const critical = text.split('\n').find((l) => l.startsWith('Critical path: '));
+    expect(critical).toContain('SP4c → SP5a → SP5b → SP5c → SP6');
+  });
+
+  test('SP7 hands swimming and the buckets to SP5a; SP10 and SP8b receive from SP5a', () => {
+    const sp7 = spEntry('SP7', 'SP8a');
+    expect(sp7).not.toContain('swimming');
+    expect(sp7).not.toContain('the empty bucket');
+    expect(spEntry('SP10', 'SP11').split('\n').some((l) => l.startsWith('- Received from SP5a (its spec §10; amended by SP5a): sneaking')), 'SP10 has no "Received from SP5a" line').toBe(true);
+    expect(spEntry('SP8b', 'SP8c').split('\n').some((l) => l.startsWith('- Received from SP5a (its spec §10, D20, D23):')), 'SP8b has no "Received from SP5a" line').toBe(true);
+  });
+
+  test('§0.7, §2.5\'s setLight and §3.7 name SP5a and SP5c', () => {
+    expect(text).toContain('region editing tools beyond SP5c\'s selection tool (sphere fill, brushes)');
+    const setLight = text.split('\n').find((l) => l.trimStart().startsWith('setLight(sy:number'));
+    expect(setLight, 'no `setLight(sy:number …` line in §2.5').toBeDefined();
+    expect(setLight).toContain('SP5a\'s relight');
+    const at = text.indexOf('### 3.7 surfaceEstimate and surfaceWaterLevel');
+    expect(text.slice(at, text.indexOf('### 3.8 ', at))).toContain('in walk mode (SP5a)');
+  });
+
+  test('the SP8a header runs in parallel with SP5a-SP7 and needs SP5a for boxes', () => {
+    const sp8a = spEntry('SP8a', 'SP8b');
+    expect(sp8a).toContain('in parallel with SP5a-SP7');
+    expect(sp8a).toContain('SP5a for collision/raycast/orientation against boxes');
+  });
+
+  test('the split\'s other §10 lines, §1\'s settings block, §2.3, risk 1 and §4.12\'s deferred parts (SP5a spec §9)', () => {
+    expect(spEntry('SP6', 'SP7').startsWith('**SP6 — Caves, carvers and cave biomes** (L; SP3c, SP5c; walking for in-game review from SP5a)'), 'the SP6 header').toBe(true);
+    expect(spEntry('SP7', 'SP8a').startsWith('**SP7 — Water and fluids** (L; SP6, SP5a)'), 'the SP7 header').toBe(true);
+    expect(spEntry('SP8c', 'SP9').startsWith('**SP8c — Audio** (M; SP7, SP5a;'), 'the SP8c header').toBe(true);
+    expect(spEntry('SP8a', 'SP8b')).toContain('the replacement of SP5a\'s provisional boxes, glass frame and log-end layer');
+    expect(spEntry('SP4a', 'SP4b')).toContain('(the full start and worlds menu is SP5b\'s)');
+    const parallel = text.split('\n').find((l) => l.startsWith('In parallel: '));
+    expect(parallel).toContain('its shape collision/raycast parts after SP5a');
+    const visible = text.split('\n').find((l) => l.startsWith('Visible value in every SP: '));
+    expect(visible).toContain('building and walking in SP5a, saved worlds in SP5b, the selection tool in SP5c');
+    expect(visible).toContain('→ IDB → reload in SP3a-SP5b');
+    expect(layoutEntry(/^\s+ui\/world\/\* /)).toContain('(SP5b\'s graphics settings screen replaces it)');
+    const reclamation = text.split('\n').find((l) => l.startsWith('**Reclamation.**'));
+    expect(reclamation).toContain('SP5a\'s sim worker 15');
+    expect(reclamation).not.toMatch(/\bSP5's/);
+    const at8 = text.indexOf('## 8. Risks');
+    const kill = text.slice(at8, text.indexOf('\n2. ', at8)).split('\n').find((l) => l.trimStart().startsWith('- Kill:'));
+    expect(kill).toContain('if SP3a-SP5b shows an unfixable isolation or concurrency problem');
+    const at412 = text.indexOf('### 4.12 ');
+    const s412 = text.slice(at412, text.indexOf('### 4.13 ', at412));
+    expect(s412).toContain('schedules fluid ticks for the 6 neighbours (SP7)');
+    expect(s412).toContain('RMB on a door, trapdoor or fence gate toggles `open` (both door halves) instead of placing (SP8a)');
+    expect(s412).toContain('(two entries for doors and double plants, applied atomically; SP8a)');
+  });
+
+  test('§1 names each SP5a module in its entry, which exists', () => {
+    for (const [head, token, file] of SP5A_MODULES) {
+      const entry = layoutEntry(head);
+      expect(entry, `§1 has no entry matching ${head}`).not.toBe('');
+      expect(entry, `§1's ${head} entry does not name ${token}`).toContain(token);
+      expect(existsSync(`${ROOT_DIR}${file}`), `${file} does not exist`).toBe(true);
+    }
   });
 });

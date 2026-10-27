@@ -5,7 +5,7 @@ import type { SubProjectId } from '../core/ids';
  * where they are on any layout (the user's Spanish one included), except `+`, `=` and `-`, matched by
  * `KeyboardEvent.key` because a Spanish keyboard types them unshifted at other positions. The input layer resolves
  * events through this list and never names a key elsewhere; the help, the tips and the HUD's hints are generated from
- * it. SP5's remapping panel would merge a second list over it, and every later SP that adds keys extends it
+ * it. SP10's remapping panel would merge a second list over it, and every later SP that adds keys extends it
  * (master §10 SP4).
  */
 

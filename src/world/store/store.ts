@@ -88,7 +88,7 @@ export interface VoxelStore {
   readonly bytePool: SlabPool;
   readonly table: ColumnTable;
   readonly epochs: EpochCells;
-  /** The thread this store was attached as (0 the main thread, workers 1 … N, SP5's sim worker 15; SP4b spec §2.5). */
+  /** The thread this store was attached as (0 the main thread, workers 1 … N, SP5a's sim worker 15; SP4b spec §2.5). */
   readonly thread: number;
   /** The id `createStore` stamped in the reclaim buffer (SP4b spec §2.8). */
   readonly storeId: number;

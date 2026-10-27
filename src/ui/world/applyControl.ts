@@ -8,7 +8,7 @@
  *   `poolEpoch` is the pool's `epoch` (no newer configure was issued), `driver.status.queued` is false (no newer draft
  *   waits in the driver's slot), the session is not inside a gesture, its `sessionEpoch` is the session's epoch, and
  *   `quietMs` (150) passed since the session's last change.
- * - Applying: `from = regenFrom(applied, next)`; `beforeApply(from)` (true in SP4c: SP5's fork dialog suspends
+ * - Applying: `from = regenFrom(applied, next)`; `beforeApply(from)` (true in SP4c: SP5b's world-modification mode suspends
  *   auto-apply there, master §2.7 (b)); `from === null` → `coordinator.adopt(poolEpoch)` (the same world: nothing
  *   rebuilds), else `coordinator.apply({ epoch: epochs.of(genKey), generation: poolEpoch, from })`; then `applied` and
  *   `generation` move to it, `onApplied({ from })` runs (Watch live, the URL, the undo notice) and the kept `Configured`
@@ -62,7 +62,7 @@ export interface ApplyControlOptions {
   readonly initialGeneration: number;
   /** Default `APPLY_QUIET_MS`. */
   readonly quietMs?: number;
-  /** Called before each Apply or adopt with its `from`; false holds it (SP5's fork dialog). SP4c: always true. */
+  /** Called before each Apply or adopt with its `from`; false holds it (SP5b's world-modification mode). SP4c: always true. */
   beforeApply(from: WorldStage | null): boolean;
   /** Called once per Apply or adopt, after the coordinator heard of it. */
   onApplied(a: { readonly from: WorldStage | null }): void;

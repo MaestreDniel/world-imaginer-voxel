@@ -8,7 +8,7 @@
  *   all-zero light is uniform and stores no slot (no light change, SP4a spec §2.5).
  * - Then the final heightmaps of aux A (`finalHeightmaps.ts`, §3.2), over the final blocks and fluid, which with zero
  *   features are the proto's. `tintTH` stays 0 (SP8a writes it) and no proto is freed.
- * Settle (SP7), freeze_top_layer (SP8b) and the diff overlay (SP5) are its later steps. Never commits: the caller
+ * Settle (SP7), freeze_top_layer (SP8b) and the diff overlay (SP5a) are its later steps. Never commits: the caller
  * does (`fillColumnD`, `workers/worldJobs.ts`). Follows the gen determinism rules.
  */
 import type { ColumnView as ColumnViewT, ColumnWriter as ColumnWriterT, NeighborhoodReader as NeighborhoodReaderT } from '../../world/store/api';

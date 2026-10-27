@@ -4,7 +4,7 @@
  * Nothing is probed, generated or allocated while it shows: the session is only built, through `openMapSession` (tier 2
  * of the trees included), so the screen names exactly the world that loads. A decode error shows the message and only
  * "Open the map"; a tier-2 refusal shows the session's notice as a warning and keeps both buttons (the default profile,
- * shown, is then the one that loads). The full start and worlds menu is SP5's (§13.2).
+ * shown, is then the one that loads). The full start and worlds menu is SP5b's (§13.2).
  */
 import type { Seed64 } from '../../core/hash';
 import { el } from '../common/dom';

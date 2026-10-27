@@ -1,6 +1,6 @@
 /**
  * The world's small settings block (SP4a spec §7.4, D31): render distance, FPS cap, field of view, mouse sensitivity
- * and brightness, persisted in `localStorage` behind try/catch (master §4.16). SP5's settings panel replaces it.
+ * and brightness, persisted in `localStorage` behind try/catch (master §4.16). SP5b's graphics settings screen replaces it.
  */
 import { RD_MAX, RD_MIN } from '../engine/renderDistance';
 

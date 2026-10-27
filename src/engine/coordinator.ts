@@ -105,7 +105,7 @@
  *   every settle's `unloadCheck`, ≤ 16 per update in the order of its own T score; such a free returns the slot to
  *   Absent but keeps the shown mesh (`sinkCx`, `sinkCz`, `shownEpoch`), which the column's next payload swaps. The mesh
  *   unload also hides a sink column outside the MESH set whose target is not `wEpoch` (no MESH replaces it), ≤ 64 per
- *   update. No Published final set is rewritten in place: SP5's sim worker stays its first writer (master §4.1).
+ *   update. No Published final set is rewritten in place: SP5a's sim worker stays its first writer (master §4.1).
  */
 import { TORUS_SIZE, colKey } from '../core/coords';
 import { STAGE_BONUS, streamScore } from '../core/streamScore';

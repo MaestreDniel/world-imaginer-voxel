@@ -7,7 +7,7 @@
  * - [1] the dead-owner mask, bit t for a failed thread t (SP4b spec §2.6);
  * - [2] the store id, a non-zero Int32 stamped at creation (SP4b spec §2.8: the worker's idempotent attach compares it);
  * - [16 + t] thread t's reader epoch, 0 while it is outside a read section; [32 + t] the entries in thread t's limbo.
- * Threads: the main thread 0, the pool's workers 1 … N in attach order, SP5's sim worker 15.
+ * Threads: the main thread 0, the pool's workers 1 … N in attach order, SP5a's sim worker 15.
  *
  * A reader announces `e = load(G)` in R[t] and re-checks G until it is stable, so a reader that loaded G before a
  * release and published after the releaser's scan retries with a G that postdates the release. A release is freed at
