@@ -432,6 +432,8 @@ interface ColumnWriter { setProto(sy:number, blocks:Uint16Array, fluid:Uint8Arra
   setLight(sy:number, light:Uint8Array): void /* light only; refused over a dense entry within one job; SP5a's relight replaces under the reclamation protocol (SP4a, SP4b) */;
   resetLight(): void /* the 24 light entries to 0, released through reclamation; L's first step (SP4b) */;
   aux(): AuxView; auxB(): AuxBView;
+  replaceBlocks(sy:number, blocks:Uint16Array, fluid:Uint8Array): void /* copy-on-write, blocks and fluid only (SP5a) */;
+  setDiffFlag(): void /* REC_DIFF_FLAG (SP5a) */;
   commit(status: 1|2|3): void /* blockVersion += 1 when blocks or fluid were written, lightVersion += 1 when light was, then status last;
     a status above the one the writer opened at (SP4b) */ }
 interface ProtoWriter { setProto(…): void; aux(): AuxView; auxB(): AuxBView; commitProto(): void }

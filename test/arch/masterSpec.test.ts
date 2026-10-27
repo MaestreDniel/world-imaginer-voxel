@@ -1197,6 +1197,14 @@ describe('master spec amendments (SP5a §9)', () => {
     expect(s22).toContain(', wool 12 (SP5a; a value list only appends, and no code changes)');
   });
 
+  test('§2.5\'s interface ColumnWriter names replaceBlocks and setDiffFlag (SP5a spec §2.2, §2.5, §9)', () => {
+    const at = text.indexOf('interface ColumnWriter {');
+    expect(at, 'no `interface ColumnWriter {` in §2.5').toBeGreaterThanOrEqual(0);
+    const writer = text.slice(at, text.indexOf('interface ProtoWriter', at));
+    expect(writer).toContain('replaceBlocks(sy:number, blocks:Uint16Array, fluid:Uint8Array): void /* copy-on-write, blocks and fluid only (SP5a) */');
+    expect(writer).toContain('setDiffFlag(): void /* REC_DIFF_FLAG (SP5a) */');
+  });
+
   test('§1 names each SP5a module in its entry, which exists', () => {
     for (const [head, token, file] of SP5A_MODULES) {
       const entry = layoutEntry(head);

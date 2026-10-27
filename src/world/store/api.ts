@@ -57,8 +57,9 @@ export interface ColumnWriter {
   /**
    * The light channel of final section `sy` only (uniform or dense; the meta word does not depend on light). Throws
    * `light already written` when the entry already holds a slot: the light-once invariant inside one job, so a light
-   * slot is never freed under a reader (SP4a spec §2.4, §2.5). The refusal stays in SP4b; SP5a's relight lifts it
-   * under the reclamation protocol (SP4b spec §2.4).
+   * slot is never freed under a reader (SP4a spec §2.4, §2.5). The refusal stays on this writer; SP5a's relight
+   * replaces light through the edit writer's `replaceLight` (`EditWriter`), under the reclamation protocol (SP4b spec
+   * §2.4).
    */
   setLight(sy: number, light: Uint8Array): void;
   /**
@@ -75,14 +76,53 @@ export interface ColumnWriter {
   /** Aux B, likewise. */
   auxB(): AuxBView;
   /**
+   * The final blocks and fluid of section `sy` only (SP5a spec §2.2, §2.5): each channel copy-on-write (the entry
+   * moves to a new slot or a uniform code, the old one released, so a slot shared with the proto stays the proto's),
+   * and the meta word recomputed. Counts as a block write, never a light one (unlike `setFinal`). D's diff overlay.
+   */
+  replaceBlocks(sy: number, blocks: Uint16Array, fluid: Uint8Array): void;
+  /** Sets the record's diff flag (`REC_DIFF_FLAG`, an `Atomics.store` of 1; SP5a spec §1.2, D23). */
+  setDiffFlag(): void;
+  /**
    * `blockVersion` + 1 when this writer wrote blocks or fluid since its previous commit (`setProto`, `setFinal`,
-   * `shareFinal`), `lightVersion` + 1 when it wrote light (`setFinal`, `setLight`, or `shareFinal` with a non-zero
+   * `shareFinal`, `replaceBlocks`), `lightVersion` + 1 when it wrote light (`setFinal`, `setLight`, or `shareFinal` with a non-zero
    * light byte; the D skeleton's all-zero light is no light change), then `status` (stored last, so a reader never
    * sees a partial column). A commit with no write bumps no version (SP4a spec §2.5). `status` is a status above the
    * one the writer opened at, never below its last commit (SP4b): anything else throws `RangeError` before any version
    * bump. Every commit of a writer from `claimColumn` sets the proto alive bit first (SP4b spec §2.4).
    */
   commit(status: CommitStatus): void;
+}
+
+/**
+ * Edits a Published column (SP5a spec §2.2, D18); obtained from `store.reopenPublished`, used by the sim worker. Every
+ * write is copy-on-write: no path writes a dense block, fluid or light slot in place, and the entry it replaces is
+ * kept by the writer (its reference moves from the entry to the writer) until `publish` retires it or `rollback`
+ * re-points the entry to it. The heightmaps in `aux()` are the caller's (`patchHeightmaps`), as is re-running them
+ * after a `rollback`. The stale guard of `ColumnWriter` (`WriterStale`) runs on every call.
+ */
+export interface EditWriter {
+  readonly cx: number;
+  readonly cz: number;
+  /** As `ColumnWriter.replaceBlocks`, keeping the replaced codes. */
+  replaceBlocks(sy: number, blocks: Uint16Array, fluid: Uint8Array): void;
+  /** The light channel of final section `sy`, copy-on-write over any entry (no light-once refusal), keeping the replaced code. */
+  replaceLight(sy: number, light: Uint8Array): void;
+  /** As `ColumnWriter.setDiffFlag`. */
+  setDiffFlag(): void;
+  /** The record's aux A slot (allocated, zero-filled, only when the record has none). */
+  aux(): AuxView;
+  /**
+   * `blockVersion` + 1 when blocks or fluid were written and `lightVersion` + 1 when light was, since the last
+   * `publish`; the status is never touched. Then retires the kept codes through the thread's deferred reclamation.
+   */
+  publish(): void;
+  /**
+   * Undoes every write since the last `publish` (a `StoreFull` mid-batch, SP5a spec §2.2): re-points each replaced
+   * entry to its kept code (no `pool.alloc`), recomputes those sections' meta words, retires the new slots and clears
+   * the pending version bumps. The diff flag and aux A stay as they are.
+   */
+  rollback(): void;
 }
 
 /**

@@ -9,7 +9,8 @@
  * `proto`/`final` read it once its status allows (`proto` also needs the alive bit, which a claim writer's commit
  * sets and `freeProto` clears, SP4b spec §2.4); `freeProto` releases the proto set; `reopenProto` returns a
  * `ProtoWriter` that rewrites a freed proto of a Decorated or Published column (`T(protoOnly)`, SP4b spec §2.4, §3.7);
- * `freeColumn` releases every reference the record holds and frees the record. A writer captures the record's claim
+ * `freeColumn` releases every reference the record holds and frees the record; `reopenPublished` returns the sim's
+ * copy-on-write `EditWriter` for a Published column (SP5a spec §2.2, D18). A writer captures the record's claim
  * generation and throws `WriterStale` once the record was freed or claimed again (SP4b spec §2.2).
  *
  * The main thread's per-frame reads take no view (SP4b spec §2.4, §3.10): `lightAt` and `heightAt` read a Published
@@ -27,7 +28,7 @@
  */
 import { AIR, BEDROCK, PASS } from '../blocks/index';
 import type {
-  AuxBView, AuxView, ColumnView, ColumnWriter, CommitStatus, HeightmapKind, NeighborhoodReader, ProtoWriter,
+  AuxBView, AuxView, ColumnView, ColumnWriter, CommitStatus, EditWriter, HeightmapKind, NeighborhoodReader, ProtoWriter,
 } from './api';
 import { allocAux, AUX_A_OFFSETS, AUX_BYTES, auxBView, auxView, createScratchAux } from './aux';
 import {
@@ -40,7 +41,7 @@ import {
   assertBufferKind, attachPool, BLOCK_SLOT_BYTES, BYTE_SLOT_BYTES, createPool, DEFAULT_MAX_BLOCK_BYTES, DEFAULT_MAX_BYTE_BYTES,
   type PoolHandles, type SlabPool,
 } from './pool';
-import { attachReclaimer, createReclaimBuffer, MAIN_THREAD } from './reclaim';
+import { attachReclaimer, createReclaimBuffer, MAIN_THREAD, type Retire } from './reclaim';
 import {
   byteAt, computeMeta, FINAL_BLOCKS, FINAL_FLUID, FINAL_LIGHT, FINAL_META, isDense, PROTO_BLOCKS, PROTO_FLUID, releaseEntry,
   sectionBytes, sectionWords, SECTION_VOXELS, shareEntry, storeBytes, storeWords, wordAt,
@@ -49,7 +50,8 @@ import {
 export { SlotBusy, WriterStale } from './columnTable';
 export { StoreCorrupt, StoreFull } from './pool';
 export type {
-  AuxBView, AuxView, ColumnView, ColumnWriter, CommitStatus, HeightmapKind, NeighborhoodReader, ProtoWriter, TerrainWriter,
+  AuxBView, AuxView, ColumnView, ColumnWriter, CommitStatus, EditWriter, HeightmapKind, NeighborhoodReader, ProtoWriter,
+  TerrainWriter,
 } from './api';
 
 /** The states `blockAt` reads outside y −64 … 319, as the padded copy's border (top-level copies of the registry's). */
@@ -116,6 +118,11 @@ export interface VoxelStore {
    * clears nothing, and its `aux()`/`auxB()` return the record's existing slots, allocating only when there are none.
    */
   reopenColumn(cx: number, cz: number, from: 1 | 2): ColumnWriter;
+  /**
+   * The edit writer of the Published column (cx, cz) (SP5a spec §2.2, D18). Throws `reopenPublished: (cx, cz) is not
+   * Published` unless the record holds (cx, cz) at status 3; its `aux()` views the record's slot.
+   */
+  reopenPublished(cx: number, cz: number): EditWriter;
   /** Releases every reference the record holds and frees it; nothing unless the record holds (cx, cz). */
   freeColumn(cx: number, cz: number): void;
   /**
@@ -349,6 +356,18 @@ export function attachStore(h: StoreHandles, thread = MAIN_THREAD): VoxelStore {
     storeBytes(bytePool, ints, p + PROTO_FLUID, fluid, retire);
   }
 
+  /** Recomputes the meta word of final section `sy` of the record at `base` from its blocks and fluid. */
+  function setMeta(base: number, sy: number): void {
+    const f = finalAt(base, sy);
+    ints[f + FINAL_META] = computeMeta(sectionWords(blockPool, ints[f + FINAL_BLOCKS]!), sectionBytes(bytePool, ints[f + FINAL_FLUID]!), pass);
+  }
+
+  /** The slot at `ints[at]`, allocated (zero-filled) and recorded when the record has none. */
+  function auxSlot(at: number): number {
+    if (ints[at]! < 0) ints[at] = allocAux(bytePool);
+    return ints[at]!;
+  }
+
   /** Retires the proto entries of the record at `base` (SP4b spec §2.5) and resets them to −1. */
   function releaseProto(base: number): void {
     for (let sy = 0; sy < SECTIONS; sy++) {
@@ -374,15 +393,6 @@ export function attachStore(h: StoreHandles, thread = MAIN_THREAD): VoxelStore {
     let wroteLight = false;
     /** The last status this writer committed (`from` before its first commit). */
     let last: number = from;
-    const setMeta = (sy: number): void => {
-      const f = finalAt(base, sy);
-      ints[f + FINAL_META] = computeMeta(sectionWords(blockPool, ints[f + FINAL_BLOCKS]!), sectionBytes(bytePool, ints[f + FINAL_FLUID]!), pass);
-    };
-    /** The slot at `ints[at]`, allocated (zero-filled) and recorded when the record has none. */
-    const auxSlot = (at: number): number => {
-      if (ints[at]! < 0) ints[at] = allocAux(bytePool);
-      return ints[at]!;
-    };
     return {
       cx,
       cz,
@@ -404,7 +414,7 @@ export function attachStore(h: StoreHandles, thread = MAIN_THREAD): VoxelStore {
         storeWords(blockPool, ints, f + FINAL_BLOCKS, blocks, retire);
         storeBytes(bytePool, ints, f + FINAL_LIGHT, light, retire);
         storeBytes(bytePool, ints, f + FINAL_FLUID, fluid, retire);
-        setMeta(sy);
+        setMeta(base, sy);
       },
       shareFinal(sy, light) {
         check();
@@ -418,7 +428,7 @@ export function attachStore(h: StoreHandles, thread = MAIN_THREAD): VoxelStore {
         shareEntry(blockPool, ints, p + PROTO_BLOCKS, f + FINAL_BLOCKS, retire);
         shareEntry(bytePool, ints, p + PROTO_FLUID, f + FINAL_FLUID, retire);
         storeBytes(bytePool, ints, f + FINAL_LIGHT, light, retire);
-        setMeta(sy);
+        setMeta(base, sy);
       },
       setLight(sy, light) {
         check();
@@ -449,6 +459,20 @@ export function attachStore(h: StoreHandles, thread = MAIN_THREAD): VoxelStore {
         check();
         if (auxB === null) auxB = auxBView(bytePool, auxSlot(base + REC_AUX_B));
         return auxB;
+      },
+      replaceBlocks(sy, blocks, fluid) {
+        check();
+        checkProto(sy, blocks, fluid);
+        const f = finalAt(base, sy);
+        // Blocks only: the light entry is untouched, so no lightVersion bump (SP5a spec §2.2).
+        wroteBlocks = true;
+        storeWords(blockPool, ints, f + FINAL_BLOCKS, blocks, retire);
+        storeBytes(bytePool, ints, f + FINAL_FLUID, fluid, retire);
+        setMeta(base, sy);
+      },
+      setDiffFlag() {
+        check();
+        Atomics.store(ints, base + REC_DIFF_FLAG, 1);
       },
       commit(status: CommitStatus) {
         check();
@@ -500,6 +524,102 @@ export function attachStore(h: StoreHandles, thread = MAIN_THREAD): VoxelStore {
     };
   }
 
+  /** A `Retire` that keeps the slot: the reference moves from the entry to the edit writer's kept codes. */
+  const KEEP: Retire = () => {};
+
+  /**
+   * The `EditWriter` of the record at `base`, which holds (cx, cz) at status 3 (SP5a spec §2.2, D18), with the
+   * generation its lookup validated. Each entry's first replacement since the last `publish` keeps its previous code
+   * (`kept`: entry index, pool, code, and the section for a block or fluid entry, else −1; `storeChannel` gets `KEEP`
+   * instead of `retire`, so no `pool.retain`), and a later replacement of the same entry retires the writer's own
+   * intermediate slot at once. A kept code is recorded only after its store returned, so a `StoreFull` in
+   * `pool.alloc` (before the entry changes) leaves nothing to undo for that entry.
+   */
+  function editWriter(base: number, cx: number, cz: number, gen: number): EditWriter {
+    const check = staleGuard(base, cx, cz, gen);
+    let auxA: AuxView | null = null;
+    let wroteBlocks = false;
+    let wroteLight = false;
+    const keptAt: number[] = [];
+    const keptPool: SlabPool[] = [];
+    const keptCode: number[] = [];
+    const keptMeta: number[] = [];
+    /**
+     * Replaces the entry at `ints[at]` with `src` (copy-on-write), keeping its code when this is its first replacement;
+     * `sy` is the section whose meta word depends on the entry, or −1 for a light entry.
+     */
+    const replace = (pool: SlabPool, at: number, src: Uint16Array | Uint8Array, sy: number): void => {
+      const first = !keptAt.includes(at);
+      const old = ints[at]!;
+      if (pool === blockPool) storeWords(pool, ints, at, src as Uint16Array, first ? KEEP : retire);
+      else storeBytes(pool, ints, at, src as Uint8Array, first ? KEEP : retire);
+      if (first) {
+        keptAt.push(at);
+        keptPool.push(pool);
+        keptCode.push(old);
+        keptMeta.push(sy);
+      }
+    };
+    const clearKept = (): void => {
+      keptAt.length = 0;
+      keptPool.length = 0;
+      keptCode.length = 0;
+      keptMeta.length = 0;
+    };
+    return {
+      cx,
+      cz,
+      replaceBlocks(sy, blocks, fluid) {
+        check();
+        checkProto(sy, blocks, fluid);
+        const f = finalAt(base, sy);
+        wroteBlocks = true;
+        replace(blockPool, f + FINAL_BLOCKS, blocks, sy);
+        replace(bytePool, f + FINAL_FLUID, fluid, sy);
+        setMeta(base, sy);
+      },
+      replaceLight(sy, light) {
+        check();
+        checkSy(sy);
+        checkLength(light, 'light');
+        wroteLight = true;
+        replace(bytePool, finalAt(base, sy) + FINAL_LIGHT, light, -1);
+      },
+      setDiffFlag() {
+        check();
+        Atomics.store(ints, base + REC_DIFF_FLAG, 1);
+      },
+      aux() {
+        check();
+        if (auxA === null) auxA = auxView(bytePool, auxSlot(base + REC_AUX_A));
+        return auxA;
+      },
+      publish() {
+        check();
+        if (wroteBlocks) table.bumpBlockVersion(base);
+        if (wroteLight) table.bumpLightVersion(base);
+        wroteBlocks = false;
+        wroteLight = false;
+        for (let i = 0; i < keptAt.length; i++) if (keptCode[i]! >= 0) retire(keptPool[i]!, keptCode[i]!);
+        clearKept();
+      },
+      rollback() {
+        check();
+        for (let i = keptAt.length - 1; i >= 0; i--) {
+          const at = keptAt[i]!;
+          const now = ints[at]!;
+          ints[at] = keptCode[i]!;
+          if (now >= 0 && now !== keptCode[i]) retire(keptPool[i]!, now);
+        }
+        // The meta word of every final section whose blocks or fluid were re-pointed (light leaves it alone).
+        for (let i = 0; i < keptAt.length; i++) if (keptMeta[i]! >= 0) setMeta(base, keptMeta[i]!);
+        wroteBlocks = false;
+        wroteLight = false;
+        clearKept();
+      },
+    };
+  }
+
   /** The 3 × 3 versions around (cx, cz) into `out` (`NeighborhoodReader.versions`' layout), with no allocation. */
   function versionsInto(cx: number, cz: number, out: Int32Array): void {
     if (out.length < 18) throw new RangeError(`store: versionsInto needs 18 entries, got ${out.length}`);
@@ -537,6 +657,12 @@ export function attachStore(h: StoreHandles, thread = MAIN_THREAD): VoxelStore {
       const base = committedIn(cx, cz, from, from);
       if (base < 0) throw new Error(`reopenColumn: (${cx}, ${cz}) is not at status ${from}`);
       return writer(base, cx, cz, from, foundGen);
+    },
+
+    reopenPublished(cx, cz) {
+      const base = committedIn(cx, cz, STATUS_PUBLISHED, STATUS_PUBLISHED);
+      if (base < 0) throw new Error(`reopenPublished: (${cx}, ${cz}) is not Published`);
+      return editWriter(base, cx, cz, foundGen);
     },
 
     freeColumn(cx, cz) {

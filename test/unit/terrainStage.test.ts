@@ -406,6 +406,8 @@ function spyWriter(): { w: ColumnWriter; sections: number[]; aux: number; auxB: 
     resetLight() { throw new Error('the T stage writes no light'); },
     aux() { log.aux++; return auxView; },
     auxB() { log.auxB++; return auxBView; },
+    replaceBlocks() { throw new Error('the T stage writes no final set'); },
+    setDiffFlag() { throw new Error('the T stage sets no diff flag'); },
     commit() { log.commits++; },
   };
   return {

@@ -69,6 +69,8 @@ function recordingWriter(): { w: ColumnWriter; calls: string[] } {
     resetLight: () => { calls.push('resetLight'); },
     aux: () => { calls.push('aux'); return auxA; },
     auxB: () => { calls.push('auxB'); return null as unknown as AuxBView; },
+    replaceBlocks: () => { calls.push('replaceBlocks'); },
+    setDiffFlag: () => { calls.push('setDiffFlag'); },
     commit: () => { calls.push('commit'); },
   };
   return { w, calls };
