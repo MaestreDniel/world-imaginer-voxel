@@ -3,19 +3,22 @@
  * reader that could hold it is still inside a read section.
  *
  * The buffer (`StoreHandles.reclaim`, `RECLAIM_BYTES`, a `SharedArrayBuffer` when the store is shared), Int32:
- * - [0] the global epoch G, starting at 1; every release takes `tag = Atomics.add(G, 1)` (the old G);
+ * - [0] the global epoch G, starting at 1; every release takes `tag = Atomics.add(G, 1)` (the old G), wrapping at 2³¹;
  * - [1] the dead-owner mask, bit t for a failed thread t (SP4b spec §2.6);
  * - [2] the store id, a non-zero Int32 stamped at creation (SP4b spec §2.8: the worker's idempotent attach compares it);
  * - [16 + t] thread t's reader epoch, 0 while it is outside a read section; [32 + t] the entries in thread t's limbo.
  * Threads: the main thread 0, the pool's workers 1 … N in attach order, SP5a's sim worker 15.
  *
  * A reader announces `e = load(G)` in R[t] and re-checks G until it is stable, so a reader that loaded G before a
- * release and published after the releaser's scan retries with a G that postdates the release. A release is freed at
- * once when the store is unshared or every R[t] reads 0 (the fast path, which keeps single-threaded stores and every
- * free made outside a read section immediate); otherwise (pool, slot, tag) goes on the calling thread's limbo, a
- * thread-local ring grown only on overflow. A drain frees every limbo entry whose tag is below the smallest non-zero
- * R[t] of the live threads: a reader that announced `e` may hold a slot released with tag ≥ `e`, never one released
- * before it announced. Every access to the buffer is an Atomics one (sequentially consistent).
+ * release and published after the releaser's scan retries with a G that postdates the release; a G of 0 (which reads as
+ * idle) is moved to 1 first, so a reader never announces 0. A release is freed at once when the store is unshared or
+ * every R[t] reads 0 (the fast path, which keeps single-threaded stores and every free made outside a read section
+ * immediate); otherwise (pool, slot, tag) goes on the calling thread's limbo, a thread-local ring grown only on
+ * overflow. A drain frees every limbo entry tagged before the oldest live reader's epoch `m`: a reader that announced
+ * `e` may hold a slot released with tag ≥ `e`, never one released before it announced. Epochs and tags wrap (SP5a spec
+ * D24, STORE-3), so they are compared relative to G: `m` is the live R[t] with the largest `(G − e) | 0`, and an entry
+ * is freed while `((tag − m) | 0) < 0`; with no live reader every entry is freed. Every access to the buffer is an
+ * Atomics one (sequentially consistent).
  */
 import { assertBufferKind, R_DEAD, type SlabPool } from './pool';
 
@@ -122,21 +125,38 @@ export function attachReclaimer(
     return true;
   }
 
+  /** G, moved from 0 to 1 first: R[t] = 0 marks an idle reader, so a reader never announces 0. */
+  function loadEpoch(): number {
+    let g: number;
+    while ((g = Atomics.load(r, R_EPOCH)) === 0) Atomics.compareExchange(r, R_EPOCH, 0, 1);
+    return g;
+  }
+
   function drain(): number {
     if (count === 0) return 0;
     const dead = Atomics.load(r, R_DEAD);
-    let m = Infinity;
+    const g = Atomics.load(r, R_EPOCH);
+    // The oldest live reader relative to G (wrap-aware): the largest (G − e) | 0.
+    let live = false;
+    let m = 0;
+    let oldest = 0;
     for (let t = 0; t < RECLAIM_THREADS; t++) {
       if ((dead & (1 << t)) !== 0) continue;
       const e = Atomics.load(r, R_READER + t);
-      if (e !== 0 && e < m) m = e;
+      if (e === 0) continue;
+      const age = (g - e) | 0;
+      if (!live || age > oldest) {
+        live = true;
+        m = e;
+        oldest = age;
+      }
     }
-    // Tags grow in release order, so the freeable entries are a prefix of the ring.
+    // Tags grow in release order (modulo 2³²), so the freeable entries are a prefix of the ring.
     const cap = ring.length / 3;
     let freed = 0;
     while (count > 0) {
       const at = 3 * head;
-      if (ring[at + 2]! >= m) break;
+      if (live && ((ring[at + 2]! - m) | 0) >= 0) break;
       pools[ring[at]!]!.free(ring[at + 1]!);
       head = (head + 1) % cap;
       count--;
@@ -153,9 +173,9 @@ export function attachReclaimer(
       if (depth++ > 0) return;
       let e: number;
       do {
-        e = Atomics.load(r, R_EPOCH);
+        e = loadEpoch();
         Atomics.store(r, reader, e);
-      } while (Atomics.load(r, R_EPOCH) !== e);
+      } while (loadEpoch() !== e);
     },
     exitRead() {
       if (depth === 0) throw new Error(`reclaim: thread ${thread} is not inside a read section`);

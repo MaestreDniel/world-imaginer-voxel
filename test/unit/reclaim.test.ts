@@ -220,3 +220,146 @@ describe('the reclaim buffer (SP4b spec §2.5)', () => {
     expect(s.drain()).toBe(0);
   });
 });
+
+describe('wrap-aware epochs (SP5a spec D24, STORE-3)', () => {
+  const MAX = 2 ** 31 - 1;
+  const MIN = -(2 ** 31);
+
+  test('G at 2³¹ − 3: reader A enters (2³¹ − 3); four releases take tags 2³¹ − 3 … −2³¹ (wrapping); reader B enters at −2³¹ + 1; drain frees nothing; A exits: drain frees the four releases tagged before B\'s epoch and keeps none older than B', () => {
+    const { ints, blocks, r, reader } = setup(true);
+    Atomics.store(ints, R_EPOCH, MAX - 2);
+    const a = reader(2);
+    a.enterRead();
+    expect(ints[R_READER + 2]).toBe(MAX - 2);
+    const four = [blocks.alloc(), blocks.alloc(), blocks.alloc(), blocks.alloc()];
+    const tags: number[] = [];
+    for (const s of four) {
+      tags.push(ints[R_EPOCH]!);
+      r.retire(blocks, s);
+    }
+    expect(tags).toEqual([MAX - 2, MAX - 1, MAX, MIN]);
+    expect(ints[R_EPOCH]).toBe(MIN + 1);
+    const b = reader(3);
+    b.enterRead();
+    expect(ints[R_READER + 3]).toBe(MIN + 1);
+    // A fifth release, tagged B's own epoch, which B may hold.
+    const fifth = blocks.alloc();
+    r.retire(blocks, fifth);
+    expect(r.drain()).toBe(5);
+    for (const s of [...four, fifth]) expect(blocks.refcount(s)).toBe(1);
+    a.exitRead();
+    expect(r.drain()).toBe(1);
+    for (const s of four) expect(isFree(blocks, s)).toBe(true);
+    expect(blocks.refcount(fifth)).toBe(1);
+    b.exitRead();
+    expect(r.drain()).toBe(0);
+    expect(isFree(blocks, fifth)).toBe(true);
+  });
+
+  test('two readers either side of the wrap (A at 2³¹ − 1, B at −2³¹ + 2): `m` is A\'s; a release tagged −2³¹ + 1 stays until A exits', () => {
+    const { ints, bytes, r, reader } = setup(true);
+    Atomics.store(ints, R_EPOCH, MAX);
+    const a = reader(2);
+    a.enterRead();
+    expect(ints[R_READER + 2]).toBe(MAX);
+    // Two releases on thread 4's limbo carry G across the wrap, so thread 0's limbo holds the one release alone.
+    const t4 = reader(4);
+    const early = [bytes.alloc(), bytes.alloc()];
+    for (const e of early) t4.retire(bytes, e); // tags 2³¹ − 1, −2³¹
+    const s = bytes.alloc();
+    expect(ints[R_EPOCH]).toBe(MIN + 1);
+    r.retire(bytes, s); // tag −2³¹ + 1
+    const b = reader(3);
+    b.enterRead();
+    expect(ints[R_READER + 3]).toBe(MIN + 2);
+    // A numeric minimum would pick B (−2³¹ + 2) and free the release tagged −2³¹ + 1 under A.
+    expect(r.drain()).toBe(1);
+    expect(t4.drain()).toBe(2);
+    expect(bytes.refcount(s)).toBe(1);
+    expect(bytes.freeStack().includes(s)).toBe(false);
+    a.exitRead();
+    expect(r.drain()).toBe(0);
+    expect(t4.drain()).toBe(0);
+    for (const e of [...early, s]) expect(isFree(bytes, e)).toBe(true);
+    b.exitRead();
+  });
+
+  test('no live reader: a drain after the wrap frees every entry', () => {
+    const { ints, blocks, bytes, r, reader } = setup(true);
+    Atomics.store(ints, R_EPOCH, MAX - 1);
+    const a = reader(2);
+    a.enterRead();
+    const slots: Array<[SlabPool, number]> = [];
+    for (let i = 0; i < 6; i++) {
+      const p = i % 2 === 0 ? blocks : bytes;
+      const s = p.alloc();
+      slots.push([p, s]);
+      r.retire(p, s); // tags 2³¹ − 2 … −2³¹ + 3
+    }
+    expect(ints[R_EPOCH]).toBe(MIN + 4);
+    expect(r.drain()).toBe(6);
+    a.exitRead();
+    expect(r.drain()).toBe(0);
+    for (const [p, s] of slots) expect(isFree(p, s)).toBe(true);
+    expect(ints[R_LIMBO + MAIN_THREAD]).toBe(0);
+  });
+
+  test('a dead reader is ignored on either side of the wrap', () => {
+    // The dead reader is the older one (before the wrap): the live B after it decides alone.
+    {
+      const { ints, blocks, r, reader } = setup(true);
+      Atomics.store(ints, R_EPOCH, MAX - 1);
+      reader(2).enterRead(); // A at 2³¹ − 2
+      const before = [blocks.alloc(), blocks.alloc()];
+      for (const s of before) r.retire(blocks, s); // tags 2³¹ − 2, 2³¹ − 1
+      const b = reader(3);
+      b.enterRead();
+      expect(ints[R_READER + 3]).toBe(MIN);
+      const held = blocks.alloc();
+      r.retire(blocks, held); // tag −2³¹, B's epoch
+      r.markDead(2);
+      Atomics.store(ints, R_READER + 2, MAX - 1); // a dead thread's late store is ignored
+      expect(r.drain()).toBe(1);
+      for (const s of before) expect(isFree(blocks, s)).toBe(true);
+      expect(blocks.refcount(held)).toBe(1);
+      b.exitRead();
+      expect(r.drain()).toBe(0);
+      expect(isFree(blocks, held)).toBe(true);
+    }
+    // The dead reader is the newer one (after the wrap): the live A before it decides alone.
+    {
+      const { ints, bytes, r, reader } = setup(true);
+      Atomics.store(ints, R_EPOCH, MAX - 1);
+      const a = reader(2);
+      a.enterRead(); // A at 2³¹ − 2
+      const slots = [bytes.alloc(), bytes.alloc()];
+      for (const s of slots) r.retire(bytes, s); // tags 2³¹ − 2, 2³¹ − 1
+      reader(3).enterRead(); // B at −2³¹
+      const after = bytes.alloc();
+      r.retire(bytes, after); // tag −2³¹
+      r.markDead(3);
+      Atomics.store(ints, R_READER + 3, MIN); // a dead thread's late store is ignored
+      expect(r.drain()).toBe(3); // A holds every release, the one tagged after the wrap too
+      expect(bytes.refcount(after)).toBe(1);
+      a.exitRead();
+      expect(r.drain()).toBe(0);
+      for (const s of [...slots, after]) expect(isFree(bytes, s)).toBe(true);
+    }
+  });
+
+  test('with G stored as 0, `enterRead` announces 1 and G reads 1', () => {
+    const { ints, r, reader } = setup(true);
+    Atomics.store(ints, R_EPOCH, 0);
+    const t5 = reader(5);
+    t5.enterRead();
+    expect(ints[R_READER + 5]).toBe(1);
+    expect(ints[R_EPOCH]).toBe(1);
+    t5.exitRead();
+    // The main thread's reclaimer, through the same buffer.
+    Atomics.store(ints, R_EPOCH, 0);
+    r.enterRead();
+    expect(ints[R_READER + MAIN_THREAD]).toBe(1);
+    expect(ints[R_EPOCH]).toBe(1);
+    r.exitRead();
+  });
+});
