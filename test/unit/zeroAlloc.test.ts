@@ -735,6 +735,34 @@ describe('zero allocation at rest (SP4b spec §3.10, D25)', () => {
     expect([fly.x, fly.y, fly.z, fly.vx, fly.vy, fly.vz]).toEqual([8.5, 100.5, 8.5, 0, 0, 0]);
   }, TIMEOUT_MS);
 
+  test(`${N} blockAt, fluidAt and publishedAt calls (SP5a's walk-step reads, D25) grow the heap by less than 256 KB`, () => {
+    // One Published column of dense sections at (2, −1), beside the absent (1, −1); the reads cycle through its
+    // voxels, the heights outside −64 … 319 and the absent column.
+    const s = createStore({ shared: true, maxBlockBytes: 8 << 20, maxByteBytes: 8 << 20 });
+    const w = s.claimColumn(2, -1, 0);
+    const blocks = new Uint16Array(4096);
+    const fluid = new Uint8Array(4096);
+    for (let i = 0; i < 4096; i++) {
+      blocks[i] = i % 3;
+      fluid[i] = i % 5 === 0 ? 0x10 : 0;
+    }
+    for (let sy = 0; sy < 24; sy++) w.setFinal(sy, blocks, new Uint8Array(4096), fluid);
+    w.commit(3);
+    let k = 0;
+    let sum = 0;
+    s.enterRead();
+    const g = allocationOver(() => {
+      const i = k++;
+      const x = 32 + (i & 15) - (i & 64 ? 16 : 0);
+      const y = (i % 400) - 72;
+      const z = -16 + ((i >> 4) & 15);
+      sum += s.blockAt(x, y, z) + s.fluidAt(x, y, z) + (s.publishedAt(x, z) ? 1 : 0);
+    }, WARM_UP, ZERO_ALLOC_MAX);
+    s.exitRead();
+    expectAtRest(g);
+    expect(sum).toBeGreaterThan(0);
+  }, TIMEOUT_MS);
+
   test(`${N} upload-budget frames (start, exhausted, structural) grow the heap by less than 256 KB`, () => {
     const times = boxedTimes(1000 / 144);
     let clockNow = times[0]!;

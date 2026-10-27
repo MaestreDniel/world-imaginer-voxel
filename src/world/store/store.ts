@@ -13,7 +13,8 @@
  * generation and throws `WriterStale` once the record was freed or claimed again (SP4b spec §2.2).
  *
  * The main thread's per-frame reads take no view (SP4b spec §2.4, §3.10): `lightAt` and `heightAt` read a Published
- * column directly, `versionsInto` fills the coordinator's scratch, and `holder` tells which column holds a record.
+ * column directly, as SP5a's walk-step reads `blockAt`, `fluidAt` and `publishedAt` do (D25), `versionsInto` fills the
+ * coordinator's scratch, and `holder` tells which column holds a record; `diffFlag` reads a record's diff flag (D23).
  * A lookup validates the record's generation from before its `find` to after its status read, and a writer opened on
  * it captures that generation, so a free and a same-column re-claim inside the lookup is never taken as current.
  *
@@ -24,15 +25,15 @@
  * a thread marked dead (`markDead`) throws `StoreCorrupt` (SP4b spec §2.6).
  * `gen` imports only the types of `api.ts`, never this file.
  */
-import { PASS } from '../blocks/index';
+import { AIR, BEDROCK, PASS } from '../blocks/index';
 import type {
   AuxBView, AuxView, ColumnView, ColumnWriter, CommitStatus, HeightmapKind, NeighborhoodReader, ProtoWriter,
 } from './api';
 import { allocAux, AUX_A_OFFSETS, AUX_BYTES, auxBView, auxView, createScratchAux } from './aux';
 import {
   attachColumnTable, createColumnTable, finalAt, PROTO_ALIVE, protoAt, recordBase, REC_AUX_A, REC_AUX_B, REC_CLAIMED,
-  REC_CX, REC_CZ, REC_GEN, REC_PROTO_FLAGS, SECTIONS, STATUS_ABSENT, STATUS_DECORATED, STATUS_PROTO, STATUS_PUBLISHED,
-  WriterStale, type ColumnTable,
+  REC_CX, REC_CZ, REC_DIFF_FLAG, REC_GEN, REC_PROTO_FLAGS, SECTIONS, STATUS_ABSENT, STATUS_DECORATED, STATUS_PROTO,
+  STATUS_PUBLISHED, WriterStale, type ColumnTable,
 } from './columnTable';
 import { attachEpochCells, createEpochCells, type EpochCells } from './epochs';
 import {
@@ -50,6 +51,10 @@ export { StoreCorrupt, StoreFull } from './pool';
 export type {
   AuxBView, AuxView, ColumnView, ColumnWriter, CommitStatus, HeightmapKind, NeighborhoodReader, ProtoWriter, TerrainWriter,
 } from './api';
+
+/** The states `blockAt` reads outside y −64 … 319, as the padded copy's border (top-level copies of the registry's). */
+const AIR_STATE = AIR;
+const BEDROCK_STATE = BEDROCK;
 
 /** Entries of a per-state table (the registry's `MAX_STATES`). */
 export const STATE_TABLE_SIZE = 4096;
@@ -145,6 +150,24 @@ export interface VoxelStore {
    * sentinel). An unknown `kind` throws `RangeError`.
    */
   heightAt(kind: HeightmapKind, bx: number, bz: number): number | null;
+  /**
+   * The state at block (bx, by, bz) (integers) of a Published column, −1 when the column is not Published (SP5a spec
+   * D25, §3.2: the walk step's reads, no view). Outside y −64 … 319 it reads as the padded copy's border
+   * (`padded.ts`): `BEDROCK` below, `AIR` above; never a `RangeError`.
+   */
+  blockAt(bx: number, by: number, bz: number): number;
+  /**
+   * The fluid byte at block (bx, by, bz) of a Published column; 0 when the column is not Published or y is outside
+   * −64 … 319 (SP5a spec D25).
+   */
+  fluidAt(bx: number, by: number, bz: number): number;
+  /** Whether the column of block (bx, bz) is Published (block coordinates, as `blockAt`). */
+  publishedAt(bx: number, bz: number): boolean;
+  /**
+   * The record's diff flag (`REC_DIFF_FLAG`, an `Atomics.load`; SP5a spec §1.2, D23) when it holds (cx, cz), at any
+   * status; false when no record holds it. Set by D's overlay and the sim, cleared only by a new claim.
+   */
+  diffFlag(cx: number, cz: number): boolean;
   /**
    * Who holds the record (cx, cz) maps to (SP4b spec §2.4, §3.5): `'free'`, `'self'` (claimed by (cx, cz), committed
    * or not) or `'other'` (held by another column, or by a claim or free in progress).
@@ -594,6 +617,32 @@ export function attachStore(h: StoreHandles, thread = MAIN_THREAD): VoxelStore {
       if (base < 0) return -1;
       const v = ((by + 64) << 8) | ((bz & 15) << 4) | (bx & 15);
       return byteAt(bytePool, ints[finalAt(base, v >> 12) + FINAL_LIGHT]!, v & 4095);
+    },
+
+    blockAt(bx, by, bz) {
+      const base = committed(bx >> 4, bz >> 4, STATUS_PUBLISHED);
+      if (base < 0) return -1;
+      if (by < -64) return BEDROCK_STATE;
+      if (by >= 16 * SECTIONS - 64) return AIR_STATE;
+      const v = ((by + 64) << 8) | ((bz & 15) << 4) | (bx & 15);
+      return wordAt(blockPool, ints[finalAt(base, v >> 12) + FINAL_BLOCKS]!, v & 4095);
+    },
+
+    fluidAt(bx, by, bz) {
+      if (by < -64 || by >= 16 * SECTIONS - 64) return 0;
+      const base = committed(bx >> 4, bz >> 4, STATUS_PUBLISHED);
+      if (base < 0) return 0;
+      const v = ((by + 64) << 8) | ((bz & 15) << 4) | (bx & 15);
+      return byteAt(bytePool, ints[finalAt(base, v >> 12) + FINAL_FLUID]!, v & 4095);
+    },
+
+    publishedAt(bx, bz) {
+      return committed(bx >> 4, bz >> 4, STATUS_PUBLISHED) >= 0;
+    },
+
+    diffFlag(cx, cz) {
+      const base = table.find(cx, cz);
+      return base >= 0 && Atomics.load(ints, base + REC_DIFF_FLAG) !== 0;
     },
 
     heightAt(kind, bx, bz) {

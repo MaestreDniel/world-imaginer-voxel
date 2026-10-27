@@ -3,12 +3,13 @@ import { fileURLToPath, pathToFileURL } from 'node:url';
 import { mkdirSync } from 'node:fs';
 import { build } from 'vite';
 import { afterAll, describe, expect, test } from 'vitest';
-import { PASS } from '../../src/world/blocks/index';
+import { Xoshiro128 } from '../../src/core/rng';
+import { AIR, BEDROCK, PASS } from '../../src/world/blocks/index';
 import { AUX_A_OFFSETS, AUX_B_OFFSETS } from '../../src/world/store/aux';
 import {
   finalAt, NO_COLUMN, protoAt, RECORD_COUNT, RECORD_INTS, REC_AUX_A, REC_AUX_B, REC_BLOCK_VERSION, REC_CLAIMED,
-  REC_CX, REC_CZ, REC_EPOCH, REC_LIGHT_VERSION, REC_PROTO_FLAGS, REC_STATUS, SECTIONS, STATUS_ABSENT, PROTO_ALIVE,
-  WriterStale,
+  REC_CX, REC_CZ, REC_DIFF_FLAG, REC_EPOCH, REC_LIGHT_VERSION, REC_PROTO_FLAGS, REC_STATUS, SECTIONS, STATUS_ABSENT,
+  PROTO_ALIVE, WriterStale,
 } from '../../src/world/store/columnTable';
 import { EPOCH_CELL } from '../../src/world/store/epochs';
 import { DEFAULT_MAX_BLOCK_BYTES, DEFAULT_MAX_BYTE_BYTES, type SlabPool } from '../../src/world/store/pool';
@@ -18,6 +19,8 @@ import {
 import {
   attachStore, createStore, DEFAULT_PASS, SlotBusy, StoreCorrupt, StoreFull, type VoxelStore,
 } from '../../src/world/store/store';
+import { paramsWith } from '../harness/gen';
+import { genRegion } from '../harness/region';
 
 const MiB = 1 << 20;
 const words = (v: number) => new Uint16Array(4096).fill(v);
@@ -744,6 +747,27 @@ describe.each([true, false])('shared %s', (shared) => {
     expect(s.heightAt('motionBlocking', bx(3), bz(2))).toBeNull();
   });
 
+  test('diffFlag (SP5a spec §1.2, D23): false after a claim; true after an Atomics.store of REC_DIFF_FLAG; false again after freeColumn and a new claim; false when no record holds the column', () => {
+    const s = newStore();
+    const ints = s.table.ints;
+    expect(s.diffFlag(4, -7)).toBe(false);
+    s.claimColumn(4, -7, 0);
+    const base = s.table.find(4, -7);
+    expect(s.diffFlag(4, -7)).toBe(false);
+    Atomics.store(ints, base + REC_DIFF_FLAG, 1);
+    expect(s.diffFlag(4, -7)).toBe(true);
+    // The record's other columns read false: it does not hold them.
+    expect(s.diffFlag(4 + 64, -7)).toBe(false);
+    s.freeColumn(4, -7);
+    expect(s.diffFlag(4, -7)).toBe(false);
+    const w = s.claimColumn(4, -7, 1);
+    expect(s.diffFlag(4, -7)).toBe(false);
+    // A commit keeps the flag: only a new claim clears it.
+    Atomics.store(ints, base + REC_DIFF_FLAG, 1);
+    w.commit(3);
+    expect(s.diffFlag(4, -7)).toBe(true);
+  });
+
   test('holder: free, self (claimed, uncommitted included), other (the record held by (cx + 64, cz))', () => {
     const s = newStore();
     expect(s.holder(3, 4)).toBe('free');
@@ -830,6 +854,62 @@ describe.each([true, false])('shared %s', (shared) => {
     s.reopenProto(1, 2).commitProto();
     expect(s.proto(1, 2)).not.toBeNull();
   });
+});
+
+describe('view-free reads of a generated column (SP5a spec D25, §3.2)', () => {
+  // One Published column at (CX, CZ) in a shared store (4 region threads): L on it, D on its ring (Decorated), T on
+  // the next ring (Proto); nothing beyond. Seed 42's column (−14, 4) holds a lake's edge.
+  const [CX, CZ] = [-14, 4];
+  let region: Promise<VoxelStore> | null = null;
+  const generated = (): Promise<VoxelStore> => (region ??= genRegion({
+    seed: '42', params: paramsWith(), cx0: CX, cz0: CZ, w: 1, h: 1, upTo: 'L', order: 'spiral', threads: 4,
+    workerDir: 'storeRegionWorker',
+  }).then((r) => r.view.store));
+
+  test('blockAt and fluidAt equal final(cx, cz).block and .fluid at 2,000 random voxels; publishedAt is true over the column', async () => {
+    const s = await generated();
+    expect(s.shared).toBe(true);
+    const f = s.final(CX, CZ)!;
+    const rng = new Xoshiro128(5);
+    let fluids = 0;
+    for (let i = 0; i < 2000; i++) {
+      const [lx, lz, y] = [rng.nextInt(16), rng.nextInt(16), rng.nextInt(384) - 64];
+      const [x, z] = [CX * 16 + lx, CZ * 16 + lz];
+      expect(s.blockAt(x, y, z), `block (${x}, ${y}, ${z})`).toBe(f.block(lx, y, lz));
+      expect(s.fluidAt(x, y, z), `fluid (${x}, ${y}, ${z})`).toBe(f.fluid(lx, y, lz));
+      if (f.fluid(lx, y, lz) !== 0) fluids++;
+      expect(s.publishedAt(x, z)).toBe(true);
+    }
+    // Some samples hit water.
+    expect(fluids).toBeGreaterThan(0);
+  }, 120_000);
+
+  test('outside −64 … 319 a Published column reads as the padded copy\'s border: y −65 → BEDROCK, y 320 → AIR, fluid 0 there; never a RangeError', async () => {
+    const s = await generated();
+    for (let p = 0; p < 256; p++) {
+      const [x, z] = [CX * 16 + (p & 15), CZ * 16 + (p >> 4)];
+      for (const y of [-65, -1000]) expect([s.blockAt(x, y, z), s.fluidAt(x, y, z)], `(${x}, ${y}, ${z})`).toEqual([BEDROCK, 0]);
+      for (const y of [320, 5000]) expect([s.blockAt(x, y, z), s.fluidAt(x, y, z)], `(${x}, ${y}, ${z})`).toEqual([AIR, 0]);
+    }
+  }, 120_000);
+
+  test('a Decorated or absent column → −1, 0, false (inside the height range and outside it)', async () => {
+    const s = await generated();
+    const decorated = s.table.find(CX + 1, CZ);
+    expect(decorated).toBeGreaterThanOrEqual(0);
+    expect(s.table.status(decorated)).toBe(2);
+    expect(s.final(CX + 1, CZ)).not.toBeNull();
+    expect(s.table.find(CX + 3, CZ)).toBe(-1);
+    for (const [cx, cz] of [[CX + 1, CZ], [CX - 1, CZ + 1], [CX + 3, CZ], [CX, CZ + 64]] as const) {
+      for (const [lx, lz] of [[0, 0], [15, 15], [7, 4]] as const) {
+        const [x, z] = [cx * 16 + lx, cz * 16 + lz];
+        for (const y of [-65, -64, 64, 319, 320]) {
+          expect([s.blockAt(x, y, z), s.fluidAt(x, y, z)], `(${x}, ${y}, ${z})`).toEqual([-1, 0]);
+        }
+        expect(s.publishedAt(x, z)).toBe(false);
+      }
+    }
+  }, 120_000);
 });
 
 describe('deferred reclamation in the store (SP4b spec §2.5)', () => {
