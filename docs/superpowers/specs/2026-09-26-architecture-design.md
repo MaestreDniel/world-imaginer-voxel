@@ -102,7 +102,9 @@ world-imaginer-voxel/          (repository root)
       blocks/kinds.ts registry.ts defs.ts index.ts fluid.ts light.ts   (SP3a) u16 block-state ids (<= 4096 used): property kinds
                                 and codes, buildRegistry (ids, SoA per-state tables, keys, rotations, mirrors), the definitions, REGISTRY
                                 and its table aliases, fluid and light bytes; states.ts, shapes.ts (shape boxes), tags.ts (SP5a) and fluidRules.ts
-                                (rules shared by settle + sim) arrive with the SPs that need them (amended by SP3a)
+                                (rules shared by settle + sim) arrive with the SPs that need them (amended by SP3a);
+                                provisionalBoxes.ts (SP5a, provisional until SP8a): the torch, wall-torch and ladder boxes
+                                that mesh/boxes.ts and the raycast share, until SP8a's SHAPE_BOXES
       store/pool.ts columnTable.ts section.ts aux.ts epochs.ts store.ts api.ts   (SP3a) SAB store: slab pools over growable buffers
                                 (pool.ts replaces slab.ts), the torus table (it holds the versions; no versions.ts), section descriptors,
                                 aux slots, per-scope epoch cells; ColumnWriter/ColumnView/NeighborhoodReader; padded.ts arrives in SP4a
@@ -143,10 +145,11 @@ world-imaginer-voxel/          (repository root)
     textures/painters/*.ts palette.ts layers.ts resourcePack.ts flatColors.ts   pure RGBA byte painters + manifest parsing;
                                 flatColors.ts (SP4a): the flat block colours of SP4a's 1 × 1 texture array and the Voxels palette
     light/initial.ts relight.ts (SP5a) queue.ts    L2
-    mesh/greedy.ts cross.ts fluid.ts shapes.ts packing.ts connectivity.ts lodTile.ts column.ts builder.ts faces.ts   L2 (packing exports PACK_LAYOUT; render/materials turns it into #defines;
+    mesh/greedy.ts cross.ts fluid.ts shapes.ts packing.ts connectivity.ts lodTile.ts column.ts builder.ts faces.ts boxes.ts (SP5a, provisional until SP8a)   L2 (packing exports PACK_LAYOUT; render/materials turns it into #defines;
                                 shapes.ts meshes non-cube states, deriving fence/pane/stair connections from neighbours; SP4a: column.ts, one column's
                                 sections → the column payload; builder.ts, the growable per-pass buffers; faces.ts, the face geometry, per-vertex light
-                                and greedy merge shared by greedy.ts and fluid.ts)
+                                and greedy merge shared by greedy.ts and fluid.ts; SP5a: boxes.ts, the faces of the torch, wall-torch and ladder
+                                boxes until SP8a's SHAPE_BOXES)
     audio/synth/*.ts                                L2 pure DSP → Float32Array (no WebAudio; node-testable, runs in workers)
     audio/soundPack.ts                              pure manifest parsing (wi10-sounds)
     audio/model/ambienceModel.ts emitterCluster.ts footstepCadence.ts musicScheduler.ts   pure decision logic used by sound/

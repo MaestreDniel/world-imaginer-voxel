@@ -5,7 +5,10 @@
  *   face is drawn against a non-occluder, a cutout face against a non-occluder that is a different block, except that
  *   leaves also draw their faces against the same leaves (master §4.4). Opaque faces go to pass 0, cutout to pass 1;
  *   PASS none and translucent states are not meshed here (water is `mesh/fluid.ts`'s, and SP4a has no translucent
- *   state);
+ *   state), nor are `SHAPE` box states (`mesh/boxes.ts`'s; SP5a spec §1.3);
+ * - **cutout against water, lava and ice** (SP5a spec §1.3, D12): a cutout face (glass, ice) is not drawn against a
+ *   voxel holding water or lava, whose own face is drawn there (both materials are double-sided, so two coplanar faces
+ *   would flicker); a glass face is not drawn against ice, while ice's face against glass is;
  * - **AO** per vertex from the two edge voxels s1, s2 and the corner c on the face's air side, "opaque" meaning PASS
  *   opaque with `fullFaces` 63: `ao2 = (s1 ∧ s2) ? 3 : s1 + s2 + c`, its factor `AO_FACTORS[ao2]`;
  * - **smooth light** per vertex and channel: `⌊(2·sum + n) / (2n)⌋` over the face voxel F and the non-opaque edge
@@ -19,8 +22,9 @@
  * `tint` is `TINT[state]` and `flags` 0 (SP4a spec §5.5). The face tables, the corner light, the merge loop and the
  * corner positions are `mesh/faces.ts`'s, shared with `mesh/fluid.ts`.
  */
-import { FULL_FACES, PASS, TINT } from '../world/blocks/index';
-import { ALL_FACES, PASS_CUTOUT, PASS_OPAQUE } from '../world/blocks/kinds';
+import { FULL_FACES, GLASS, ICE, PASS, SHAPE, TINT } from '../world/blocks/index';
+import { FLUID_LAVA, FLUID_WATER, fluidType } from '../world/blocks/fluid';
+import { ALL_FACES, PASS_CUTOUT, PASS_OPAQUE, SHAPE_BOX } from '../world/blocks/kinds';
 import type { PaddedSection } from '../world/store/padded';
 import type { MeshBuilder, MeshPass } from './builder';
 import { AXIS_N, AXIS_U, AXIS_V, OPPOSITE, ORIGIN, SIGN, STRIDE, cornerLight, mergeSlice, quadCorners, type QuadSink } from './faces';
@@ -31,6 +35,13 @@ import { PACK_LAYOUT } from './packing';
 const PASS_OF = PASS;
 const FULL_FACES_OF = FULL_FACES;
 const TINT_OF = TINT;
+const SHAPE_OF = SHAPE;
+const BOX = SHAPE_BOX;
+const GLASS_STATE = GLASS;
+const ICE_STATE = ICE;
+const WATER = FLUID_WATER;
+const LAVA = FLUID_LAVA;
+const typeOf = fluidType;
 const ALL = ALL_FACES;
 const OPAQUE = PASS_OPAQUE;
 const CUTOUT = PASS_CUTOUT;
@@ -106,11 +117,11 @@ const CORNERS = new Uint8Array(12);
 const WORDS = new Uint32Array(4);
 
 /**
- * Meshes the opaque and cutout faces of the padded section `p` into `b` (passes 0 and 1), adding to what `b` holds
- * (SP4a spec §5.2-§5.5).
+ * Meshes the opaque and cutout cube faces of the padded section `p` into `b` (passes 0 and 1), adding to what `b` holds
+ * (SP4a spec §5.2-§5.5; SP5a spec §1.3: box states are `meshBoxes`').
  */
 export function meshSolid(p: PaddedSection, o: MeshOptions, b: MeshBuilder, t: MeshTables = DEFAULT_MESH_TABLES): void {
-  const { blocks, light } = p;
+  const { blocks, light, fluid } = p;
   const pass = t.pass;
   const full = t.fullFaces;
   const tint = t.tint;
@@ -134,11 +145,15 @@ export function meshSolid(p: PaddedSection, o: MeshOptions, b: MeshBuilder, t: M
           const v = ORIGIN_AT + d * sa + i * su + j * sv;
           const s = blocks[v]!;
           const ps = pass[s];
-          if (ps !== OPAQUE && ps !== CUTOUT) continue;
+          if ((ps !== OPAQUE && ps !== CUTOUT) || SHAPE_OF[s] === BOX) continue;
           const q = v + normal;
           const ns = blocks[q]!;
           if (pass[ns] === OPAQUE && (full[ns]! & oppBit) !== 0) continue;
-          if (ps === CUTOUT && ns === s && (leaves === undefined || leaves[s] === 0)) continue;
+          if (ps === CUTOUT) {
+            if (ns === s && (leaves === undefined || leaves[s] === 0)) continue;
+            const ft = typeOf(fluid[q]!);
+            if (ft === WATER || ft === LAVA || (s === GLASS_STATE && ns === ICE_STATE)) continue;
+          }
           MASK_B[m] = CORNER_LIGHT(light, blocks, solid, o, q, su, sv, VERTS);
           MASK_A[m] = (KA_PRESENT | s | tint[s]! << KA_TINT | faceBits | (VERTS[0]! & 3) << KA_AO
             | (VERTS[1]! & 3) << (KA_AO + 2) | (VERTS[2]! & 3) << (KA_AO + 4) | (VERTS[3]! & 3) << (KA_AO + 6)) >>> 0;

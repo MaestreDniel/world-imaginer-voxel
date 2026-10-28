@@ -8,7 +8,7 @@ import { createMeshBuilder, type MeshBuilder } from '../../src/mesh/builder';
 import { fluidDepths, meshFluid } from '../../src/mesh/fluid';
 import type { MeshTables } from '../../src/mesh/greedy';
 import { unpackFluid, type FluidFields } from '../../src/mesh/packing';
-import { AIR, STONE } from '../../src/world/blocks/index';
+import { AIR, GLASS, ICE, LADDER, STONE, TORCH } from '../../src/world/blocks/index';
 import { NO_FLUID, WATER_SOURCE } from '../../src/world/blocks/fluid';
 import { PASS_NONE, PASS_OPAQUE } from '../../src/world/blocks/kinds';
 import { SECTIONS } from '../../src/world/store/columnTable';
@@ -126,6 +126,15 @@ describe('meshFluid (SP4a spec §5.6)', () => {
     // No bottom faces (stone below), and the east side at y 5 is one merged quad along z.
     expect(faces.filter((k) => k.endsWith(',5'))).toHaveLength(0);
     expect(passes[2].filter((q) => faceOf(q) === 1)).toHaveLength(1);
+  });
+
+  test('water against glass, ice and the box states: its face stays (SP5a spec §1.3; the cutout and box faces are the ones culled)', () => {
+    // One water voxel at (8, 8, 8) and a neighbour of each kind on four sides; air above and below.
+    const at = new Map([[padIndex(9, 8, 8), GLASS], [padIndex(7, 8, 8), ICE], [padIndex(8, 8, 9), LADDER], [padIndex(8, 8, 7), TORCH]]);
+    const p = paddedFrom((x, y, z) => at.get(padIndex(x, y, z)) ?? AIR, () => 0xF0, (x, y, z) => (x === 8 && y === 8 && z === 8 ? WATER_SOURCE : NO_FLUID));
+    const { passes } = mesh(p, depthFrom((x, y, z) => (x === 8 && y === 8 && z === 8 ? 1 : 0)));
+    expect(allUnitFaces(passes[2])).toEqual(['8,8,8,0', '8,8,8,1', '8,8,8,2', '8,8,8,3', '8,8,8,4', '8,8,8,5']);
+    expect(allUnitFaces(passes[2])).toEqual(bruteWaterFaces(p));
   });
 
   test('pass 2 only', () => {

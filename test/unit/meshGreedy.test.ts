@@ -1,14 +1,18 @@
 /**
  * The padded greedy mesher (SP4a spec §5.2-§5.5; master §4.4): face visibility and passes, AO with 09's flip rule,
  * smooth light's integer rounding, the two-key greedy merge, the real padding below and above the world, and the
- * builder's growable buffers. Sections are hand-built with `fixtures/padded.ts`; one test copies them from a store.
+ * builder's growable buffers. SP5a (spec §1.3): box states are left to `meshBoxes`, and cutout cubes are culled
+ * against water and lava and glass against ice. Sections are hand-built with `fixtures/padded.ts`; one test copies
+ * them from a store.
  */
 import { describe, expect, test } from 'vitest';
 import { createMeshBuilder, type MeshBuilder } from '../../src/mesh/builder';
+import { meshFluid } from '../../src/mesh/fluid';
 import { AO_FACTORS, DEFAULT_MESH_TABLES, flipDiagonal, meshSolid, type MeshOptions, type MeshTables } from '../../src/mesh/greedy';
-import { unpackSolid, type SolidFields } from '../../src/mesh/packing';
-import { AIR, DIRT, GRASS_BLOCK, SAND, STONE } from '../../src/world/blocks/index';
-import { PASS_CUTOUT, PASS_OPAQUE } from '../../src/world/blocks/kinds';
+import { unpackFluid, unpackSolid, type SolidFields } from '../../src/mesh/packing';
+import { AIR, DIRT, GLASS, GRASS_BLOCK, ICE, LADDER, REGISTRY, SAND, SHAPE, STONE, TORCH, WALL_TORCH } from '../../src/world/blocks/index';
+import { LAVA_SOURCE, WATER_SOURCE } from '../../src/world/blocks/fluid';
+import { PASS_CUTOUT, PASS_OPAQUE, SHAPE_BOX } from '../../src/world/blocks/kinds';
 import { SECTIONS } from '../../src/world/store/columnTable';
 import { copyPaddedSection, createPaddedSection, padIndex, type PaddedSection } from '../../src/world/store/padded';
 import { createStore } from '../../src/world/store/store';
@@ -349,6 +353,74 @@ describe('meshSolid', () => {
     expect(allUnitFaces(sl.passes[0])).toContain('8,8,8,1');
     expect(allUnitFaces(sl.passes[1])).not.toContain('9,8,8,3');
     expect(allUnitFaces(sl.passes[1])).toHaveLength(5);
+  });
+
+  test('a torch state emits nothing from meshSolid (every SHAPE box state is meshBoxes\')', () => {
+    const boxes = [TORCH, ...[0, 1, 2, 3].flatMap((q) => [REGISTRY.rotateState(WALL_TORCH, q), REGISTRY.rotateState(LADDER, q)])];
+    expect(new Set(boxes).size).toBe(9);
+    for (const s of boxes) {
+      expect(SHAPE[s], REGISTRY.stateKey(s)).toBe(SHAPE_BOX);
+      const m = mesh(paddedFromMap('@ 8 8 8\nB', { B: s }));
+      expect(m.passes.map((q) => q.length), REGISTRY.stateKey(s)).toEqual([0, 0, 0]);
+    }
+  });
+
+  /** Glass or ice at (8, 8, 8) and, east of it at (9, 8, 8), the state `east` holding the fluid byte `fluid`. */
+  const pair = (s: number, east: number, fluid = 0): PaddedSection =>
+    paddedFrom((x, y, z) => (y === 8 && z === 8 && x === 8 ? s : y === 8 && z === 8 && x === 9 ? east : AIR), () => 0xF0,
+      (x, y, z) => (y === 8 && z === 8 && x === 9 ? fluid : 0));
+
+  test('glass beside water: no glass face on that side; the water mesher\'s face there stays (meshFluid)', () => {
+    const p = pair(GLASS, AIR, WATER_SOURCE);
+    const faces = allUnitFaces(mesh(p).passes[1]);
+    expect(faces).toHaveLength(5);
+    expect(faces).not.toContain('8,8,8,1');
+    // The water voxel's west face toward the glass is drawn by the water mesher, in the translucent pass.
+    const b = createMeshBuilder();
+    const depth = new Uint8Array(4096);
+    depth[(8 << 8) | (8 << 4) | 9] = 1;
+    meshFluid(p, depth, b);
+    const water = quadsOf(b.view(2));
+    expect(water.map((q) => unpackFluid(q.words[0]!).face).sort()).toEqual([0, 1, 2, 3, 4, 5]);
+    const west = water.find((q) => unpackFluid(q.words[0]!).face === 3)!;
+    expect(west.corners.every((c) => c[0] === 72)).toBe(true);
+  });
+
+  test('glass beside bucket lava: no glass face on that side', () => {
+    const faces = allUnitFaces(mesh(pair(GLASS, AIR, LAVA_SOURCE)).passes[1]);
+    expect(faces).toHaveLength(5);
+    expect(faces).not.toContain('8,8,8,1');
+  });
+
+  test('ice beside lava: the same (and beside water)', () => {
+    for (const fluid of [LAVA_SOURCE, WATER_SOURCE]) {
+      const quads = mesh(pair(ICE, AIR, fluid)).passes[1];
+      const faces = allUnitFaces(quads);
+      expect(faces).toHaveLength(5);
+      expect(faces).not.toContain('8,8,8,1');
+      for (const q of quads) expect(fieldsOf(q.words[0]!).layer).toBe(ICE);
+    }
+  });
+
+  test('glass beside ice: the ice face drawn, the glass face not', () => {
+    const faces = allUnitFaces(mesh(pair(GLASS, ICE)).passes[1]);
+    expect(faces).not.toContain('8,8,8,1');
+    expect(faces).toContain('9,8,8,3');
+    expect(faces).toHaveLength(11);
+    // The same pair the other way round: ice west of glass keeps its east face, the glass loses its west one.
+    const flipped = allUnitFaces(mesh(pair(ICE, GLASS)).passes[1]);
+    expect(flipped).toContain('8,8,8,1');
+    expect(flipped).not.toContain('9,8,8,3');
+    expect(flipped).toHaveLength(11);
+  });
+
+  test('glass beside glass: none', () => {
+    const faces = allUnitFaces(mesh(pair(GLASS, GLASS)).passes[1]);
+    expect(faces).not.toContain('8,8,8,1');
+    expect(faces).not.toContain('9,8,8,3');
+    expect(faces).toHaveLength(10);
+    // Glass beside a ladder (a box state) keeps its face: the ladder's own boundary face is the one culled (meshBoxes).
+    expect(allUnitFaces(mesh(pair(GLASS, LADDER)).passes[1])).toContain('8,8,8,1');
   });
 
   test('every emitted word unpacks to in-range fields', () => {

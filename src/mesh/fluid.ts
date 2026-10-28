@@ -2,7 +2,9 @@
  * The still-water mesher (SP4a spec §5.2, §5.5, §5.6; master §4.4; rulings P24, P25), over one section's 18³ padded
  * view, into the translucent pass (2):
  * - **visibility:** a water voxel (fluid type water; in SP4a always air plus a still source) draws a face against a
- *   neighbour that does not occlude it (PASS opaque with the facing bit in `fullFaces`) and is not water;
+ *   neighbour that does not occlude it (PASS opaque with the facing bit in `fullFaces`) and is not water, so also
+ *   against glass, ice and the box states, whose own faces toward the water are the ones culled (`greedy.ts`,
+ *   `boxes.ts`; SP5a spec §1.3);
  * - **height:** positions stay at the voxel's full height, `8·(ly + 1)` at the top (positions are whole 1/8 units);
  *   the water shader lowers each corner by its `cornerDrop` ninths. A surface voxel (no water above) has
  *   `cornerDrop` 1 on its top face's four corners and on its side faces' two top corners; every other corner has 0;
