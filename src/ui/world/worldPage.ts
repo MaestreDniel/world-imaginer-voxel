@@ -105,7 +105,8 @@ import { createUploadBudget } from '../../engine/uploadBudget';
 import { StoreFullError, WorkerFailed, createBrowserPool, poolSize, type WorkerPool } from '../../engine/workerPool';
 import { SPEED_DEFAULT, applyCameraRotation, look, lookVectorInto, stepSpeed, type FlyState } from '../../player/fly';
 import { attachInput, isTextEntry } from '../../player/input';
-import { breakAt } from '../../player/interaction';
+import { createHotbar, type Hotbar } from '../../player/hotbar';
+import { bodyOf, breakAt, emptyBucketAt, pickAt, placeAt, type BodyBox } from '../../player/interaction';
 import { DEFAULT_KEYMAP, type Action } from '../../player/keymap';
 import { REACH_FLY, castRay, createRayHit, type RayHit } from '../../player/raycast';
 import { createFpsLimiter, type FpsLimiter } from '../../render/fpsLimiter';
@@ -140,6 +141,7 @@ import { createFogEase, createFogStep, filledRadius } from './fogEase';
 import { createFrameClock, createFrameNotice, lowerRd } from './frameNotice';
 import { coversWorld, createApplyControl, createEpochs, updateAuxPolicy } from './applyControl';
 import { createEditLatency } from './editLatency';
+import { mountBuildHud } from './buildHud';
 import { createEditPath } from './editPath';
 import { createFrameStep, eyeSkyLight } from './frameStep';
 import { createMapOverlay, followSession, frameCapFor, worldMapView, type MapOverlay } from './mapOverlay';
@@ -1038,8 +1040,10 @@ const CLICK_QUEUE_CAP = 16;
 /**
  * The mouse buttons pressed since the last rendered frame (SP5a spec §4.1, D6): `onButton` only queues, and the page's
  * aim runs the queue in the frame's second read section against the target aimed then, so a click never reads the store
- * outside a read section. LMB breaks (`breakAt`), its edit posted through the edit path; RMB and MMB are dropped until
- * the hotbar gives them a slot (Task 26). A refused or missed click does nothing.
+ * outside a read section. LMB breaks (`breakAt`); RMB places the hotbar's active slot (`placeAt`: a block or a bucket's
+ * source, against the flying body and the look's yaw), or with the empty bucket drains the first fluid on a `'fluid'`
+ * ray from the eye (`emptyBucketAt`); each edit posted through the edit path. MMB picks the aimed type into the hotbar
+ * (`pickAt` → `hotbar.pick`). A refused or missed click does nothing.
  */
 export interface ClickQueue {
   push(b: 0 | 1 | 2): void;
@@ -1049,17 +1053,41 @@ export interface ClickQueue {
   clear(): void;
 }
 
-export function createClickQueue(o: { post(edit: Edit): void }): ClickQueue {
+export function createClickQueue(o: {
+  post(edit: Edit): void;
+  /** RMB places its active slot; MMB picks into it. */
+  readonly hotbar: Pick<Hotbar, 'slots' | 'active' | 'pick'>;
+  /** The eye and the look: the body a place must not enter, a ladder's facing, the empty bucket's ray. */
+  readonly fly: Pick<FlyState, 'x' | 'y' | 'z' | 'yaw' | 'pitch'>;
+  /** A place's column gate (the page: `editState === 0`). */
+  editable(cx: number, cz: number): boolean;
+}): ClickQueue {
+  const { fly } = o;
   const buttons = new Uint8Array(CLICK_QUEUE_CAP);
   let n = 0;
+  const body: BodyBox = { minX: 0, minY: 0, minZ: 0, maxX: 0, maxY: 0, maxZ: 0 };
+  const fluidHit = createRayHit();
+  const dir = new Float64Array(3);
+  const place = (hit: RayHit, read: Pick<VoxelStore, 'blockAt' | 'fluidAt'>): Edit | null => {
+    const slot = o.hotbar.slots[o.hotbar.active]!;
+    if (!('tool' in slot)) return placeAt(hit, slot, fly.yaw, bodyOf('fly', fly.x, fly.y, fly.z, body), read, o.editable);
+    lookVectorInto(dir, fly.yaw, fly.pitch);
+    castRay(read, fly.x, fly.y, fly.z, dir[0]!, dir[1]!, dir[2]!, REACH_FLY, 'fluid', fluidHit);
+    return emptyBucketAt(fluidHit, read);
+  };
   return {
     push(b) {
       if (n < CLICK_QUEUE_CAP) buttons[n++] = b;
     },
     run(hit, read) {
       for (let i = 0; i < n; i++) {
-        if (buttons[i] !== 0) continue;
-        const edit = breakAt(hit, read);
+        const b = buttons[i];
+        if (b === 1) {
+          const type = pickAt(hit);
+          if (type !== null) o.hotbar.pick(type);
+          continue;
+        }
+        const edit = b === 0 ? breakAt(hit, read) : place(hit, read);
         if (edit !== null) o.post(edit);
       }
       n = 0;
@@ -2081,6 +2109,10 @@ export function mountWorldPage(root: HTMLElement, q: WorldQuery, hash: string, o
       teardown.push(() => huds.dispose());
       stopHud = () => huds.dispose();
     }
+    // The hotbar, remembered in this browser (SP5a spec §4.3), and its HUD: the crosshair, the bar and the slot's name.
+    const hotbar = createHotbar(storage);
+    const buildHud = mountBuildHud(host, { hotbar, hud, locked: () => document.pointerLockElement === canvas });
+    teardown.push(() => buildHud.dispose());
 
     // Every setting applies live (SP4b spec §5); an rd change goes through the RD control, which saves it. The help
     // shows the RD in force, the URL's on a `?rd=` load, not the saved one (rulings R8).
@@ -2155,11 +2187,23 @@ export function mountWorldPage(root: HTMLElement, q: WorldQuery, hash: string, o
           break;
         // M opens or closes the map overlay (SP4c spec §2.4); it acts whoever owns the controls.
         case 'map': mapKey(help, mapRef); break;
+        // 1-9 and the plain wheel change the slot (SP5a spec §4.1, D9).
+        case 'slot1': case 'slot2': case 'slot3': case 'slot4': case 'slot5': case 'slot6': case 'slot7': case 'slot8':
+        case 'slot9':
+          hotbar.select(Number(a.slice(4)) - 1);
+          break;
+        case 'slotNext': hotbar.step(1); break;
+        case 'slotPrev': hotbar.step(-1); break;
         default: break; // movement and sprint are held; Esc (releasePointer) is the browser's
       }
     };
     // A mouse button only queues its action; the frame's aim runs it (SP5a spec §4.1). A refusal does nothing.
-    const clicks = createClickQueue({ post: (edit) => { void editPath.post([edit]); } });
+    const clicks = createClickQueue({
+      post: (edit) => { void editPath.post([edit]); },
+      hotbar,
+      fly,
+      editable: (cx, cz) => coordinator.editState(cx, cz) === 0,
+    });
     const input = attachInput(canvas, {
       onAction,
       onLook: (dx, dy) => look(fly, dx, dy, settings.sensitivity * LOOK_DEG_PER_PIXEL),
@@ -2284,6 +2328,8 @@ export function mountWorldPage(root: HTMLElement, q: WorldQuery, hash: string, o
         frames.push(dtMs);
         // The map's arrow follows the camera while it is shown (SP4c spec §1.5).
         mapOverlay.tick(counts);
+        // The crosshair follows the pointer lock (SP5a spec §4.3); nothing changes at rest.
+        buildHud.refresh();
         // The first 120 rendered frames' largest delta (SP4b spec §7.1; the flight JSON's key unchanged).
         if (n < FIRST_FRAMES) {
           firstMax = Math.max(firstMax, dtMs);

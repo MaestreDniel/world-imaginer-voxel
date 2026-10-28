@@ -51,6 +51,7 @@ import { createUploadBudget } from '../../src/engine/uploadBudget';
 import { createWorkerPool, type WorkerLike } from '../../src/engine/workerPool';
 import type { ColumnMeshPayload } from '../../src/mesh/column';
 import { SPEED_DEFAULT, stepFly, type FlyState } from '../../src/player/fly';
+import { createHotbar } from '../../src/player/hotbar';
 import type { Action } from '../../src/player/keymap';
 import { firstOrigin } from '../../src/render/floatingOrigin';
 import { createFpsLimiter } from '../../src/render/fpsLimiter';
@@ -65,6 +66,7 @@ import type { MapTool, MapToolDeps } from '../../src/ui/map/mapTool';
 import type { MapCanvas } from '../../src/ui/map/mapView';
 import { createReplayingCanvas, draftOf, type Configured, type DriverStatus, type PreviewDriver } from '../../src/ui/map/previewDriver';
 import { coversWorld, createApplyControl, createEpochs, updateAuxPolicy } from '../../src/ui/world/applyControl';
+import { mountBuildHud } from '../../src/ui/world/buildHud';
 import { createFogEase } from '../../src/ui/world/fogEase';
 import { createFrameClock, createFrameNotice } from '../../src/ui/world/frameNotice';
 import { createFrameStep, type FrameStepDeps } from '../../src/ui/world/frameStep';
@@ -769,6 +771,24 @@ describe('zero allocation at rest (SP4b spec §3.10, D25)', () => {
     const g = allocationOver(() => { stepFly(fly, none, dts[k++]!, bounds); }, WARM_UP, ZERO_ALLOC_MAX);
     expectAtRest(g);
     expect([fly.x, fly.y, fly.z, fly.vx, fly.vy, fly.vz]).toEqual([8.5, 100.5, 8.5, 0, 0, 0]);
+  }, TIMEOUT_MS);
+
+  test(`${N} build-HUD refreshes at rest (the pointer lock held, the hotbar unchanged; the page calls one per rendered frame) grow the heap by less than 256 KB (SP5a spec §4.3, rulings R20)`, () => {
+    // Mounted on a DOM shim of its own; the shared fixture's document is put back after, for the map overlay's elements.
+    const before: unknown = Reflect.get(globalThis, 'document');
+    const dom = installDom();
+    const hotbar = createHotbar(null);
+    const host = dom.document.createElement('div');
+    const hud = mountBuildHud(host as unknown as HTMLElement, { hotbar, hud: true, locked: () => true });
+    if (before !== undefined) vi.stubGlobal('document', before);
+    let changes = 0;
+    hotbar.subscribe(() => { changes++; });
+    const g = allocationOver(() => { hud.refresh(); }, WARM_UP, ZERO_ALLOC_MAX);
+    expectAtRest(g);
+    // The first refresh showed the crosshair; every later one found nothing to change.
+    expect(host.querySelector('#world-crosshair')!.hidden).toBe(false);
+    expect([changes, hotbar.active]).toEqual([0, 0]);
+    hud.dispose();
   }, TIMEOUT_MS);
 
   test(`${N} blockAt, fluidAt and publishedAt calls (SP5a's walk-step reads, D25) grow the heap by less than 256 KB`, () => {

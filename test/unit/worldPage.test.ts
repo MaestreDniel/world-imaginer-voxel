@@ -18,7 +18,9 @@ import { createNotices } from '../../src/ui/common/notice';
 import { URL_HASH_MAX, URL_OVERSIZE_NOTICE, createUrlWriter, oversizeNotice } from '../../src/ui/common/urlWriter';
 import { DEFAULT_MAP_STATE, decodeMapState, openMapSession, type MapView } from '../../src/ui/map/mapState';
 import { WORLD_MAP_BPP, worldMapView } from '../../src/ui/world/mapOverlay';
-import { AIR, STONE } from '../../src/world/blocks/index';
+import { AIR, REGISTRY, STONE } from '../../src/world/blocks/index';
+import { WATER_SOURCE } from '../../src/world/blocks/fluid';
+import { createHotbar } from '../../src/player/hotbar';
 import { createReloader, createWorldUrl, worldHash, type HereState } from '../../src/ui/world/reload';
 import {
   countPendingTimers, countTileCalls, createAim, createClickQueue, createRdControl, createUndoNotice, createWorldNotices, everyFrameUntil, failBeforeReveal, flushOnPageHide, handleContextLoss,
@@ -1314,21 +1316,33 @@ describe('createAim: the DDA and the outline (SP5a spec §3.5, §6.2; Task 23 re
 });
 
 describe('createClickQueue: the queued clicks run in the aim (SP5a spec §4.1, §4.2)', () => {
-  /** The rig of the aim above: stone at (0, 68, 0) under an eye looking straight down; `setStone(false)` removes it. */
+  /**
+   * The rig of the aim above: stone at (0, 68, 0) under an eye looking straight down from 4.5 blocks up (the body's feet
+   * 1.12 above the voxel a place targets); `setStone(false)` removes it, `setWater(true)` puts water at (0, 69, 0).
+   */
   function rig() {
     let stone = true;
+    let water = false;
+    let editable = true;
     const posted: unknown[] = [];
     const world = { origin: { x: 0, y: 0, z: 0 }, setOutline: () => {}, hideOutline: () => {} };
-    const fly = { x: 0.5, y: 70.5, z: 0.5, yaw: 0, pitch: -90 };
+    const fly = { x: 0.5, y: 72.5, z: 0.5, yaw: 0, pitch: -90 };
     const read = {
       blockAt: (x: number, y: number, z: number) => (stone && x === 0 && y === 68 && z === 0 ? STONE : AIR),
-      fluidAt: () => 0,
+      fluidAt: (x: number, y: number, z: number) => (water && x === 0 && y === 69 && z === 0 ? WATER_SOURCE : 0),
     };
-    const clicks = createClickQueue({ post: (e) => { posted.push(e); } });
+    const hotbar = createHotbar(null);
+    const clicks = createClickQueue({ post: (e) => { posted.push(e); }, hotbar, fly, editable: () => editable });
     const aim = createAim({ fly, world: world as never, locked: () => true, hud: true, clicks });
-    return { aim, clicks, read, posted, setStone: (on: boolean) => { stone = on; } };
+    return {
+      aim, clicks, read, posted, hotbar,
+      setStone: (on: boolean) => { stone = on; },
+      setWater: (on: boolean) => { water = on; },
+      setEditable: (on: boolean) => { editable = on; },
+    };
   }
   const BREAK = { x: 0, y: 68, z: 0, op: 'set', value: AIR << 8, expect: STONE << 8 };
+  const OAK_PLANKS = REGISTRY.stateOf(REGISTRY.typeId('oak_planks'));
 
   test('an LMB press posts one break of the voxel aimed at the next frame, `expect` read then; later frames post nothing', () => {
     const r = rig();
@@ -1348,21 +1362,63 @@ describe('createClickQueue: the queued clicks run in the aim (SP5a spec §4.1, �
     expect(r.posted).toEqual([BREAK, BREAK]);
   });
 
-  test('a paused frame drops the queue unrun; a miss empties it; RMB and MMB post nothing yet', () => {
+  test('a paused frame drops the queue unrun; a miss empties it', () => {
     const r = rig();
     r.clicks.push(0);
-    r.aim.aim(r.read, true);
-    r.aim.aim(r.read, false);
-    r.clicks.push(1);
     r.clicks.push(2);
+    r.aim.aim(r.read, true);
     r.aim.aim(r.read, false);
     expect(r.posted).toEqual([]);
     r.setStone(false);
     r.clicks.push(0);
+    r.clicks.push(2);
     r.aim.aim(r.read, false);
     expect(r.aim.hit.hit).toBe(false);
     r.setStone(true);
     r.aim.aim(r.read, false);
+    expect(r.posted).toEqual([]);
+  });
+
+  test('RMB places the hotbar\'s active slot across the hit face; a column that is not editable refuses it', () => {
+    const r = rig();
+    r.clicks.push(2);
+    r.aim.aim(r.read, false);
+    expect(r.posted).toEqual([{ x: 0, y: 69, z: 0, op: 'set', value: STONE << 8, expect: AIR << 8 }]);
+    r.hotbar.select(3);
+    r.setEditable(false);
+    r.clicks.push(2);
+    r.aim.aim(r.read, false);
+    expect(r.posted).toHaveLength(1);
+    r.setEditable(true);
+    r.clicks.push(2);
+    r.aim.aim(r.read, false);
+    expect(r.posted[1]).toEqual({ x: 0, y: 69, z: 0, op: 'set', value: OAK_PLANKS << 8, expect: AIR << 8 });
+  });
+
+  test('RMB with a bucket: the water slot places a still source; the empty bucket drains the first fluid on the ray', () => {
+    const r = rig();
+    r.hotbar.select(7);
+    r.clicks.push(2);
+    r.aim.aim(r.read, false);
+    expect(r.posted).toEqual([{ x: 0, y: 69, z: 0, op: 'set', value: (AIR << 8) | WATER_SOURCE, expect: AIR << 8 }]);
+    r.setWater(true);
+    r.hotbar.assign({ tool: 'emptyBucket' });
+    r.clicks.push(2);
+    r.aim.aim(r.read, false);
+    expect(r.posted[1]).toEqual({ x: 0, y: 69, z: 0, op: 'set', value: AIR << 8, expect: (AIR << 8) | WATER_SOURCE });
+  });
+
+  test('MMB picks the aimed type: the slot holding it becomes active, else the active slot takes it; nothing is posted', () => {
+    const r = rig();
+    r.hotbar.select(4);
+    r.clicks.push(1);
+    r.aim.aim(r.read, false);
+    expect(r.hotbar.active).toBe(0);
+    r.hotbar.assign({ type: 'dirt', pinned: {} });
+    r.hotbar.select(5);
+    r.clicks.push(1);
+    r.aim.aim(r.read, false);
+    expect([r.hotbar.active, r.hotbar.slots[5]]).toEqual([5, { type: 'stone', pinned: {} }]);
     expect(r.posted).toEqual([]);
   });
 });
