@@ -51,6 +51,7 @@ import {
   type FieldProbeSpec, type FieldSliceMsg, type FieldSliceSpec, type FromWorker, type ReadyMsg, type StatsArgs, type StatsKind, type StatsMsg, type ToWorker,
   type WorldJobType,
 } from '../workers/protocol';
+import type { ColumnDiff } from '../world/store/api';
 import { EPOCH_CELL, EPOCH_CELL_COUNT } from '../world/store/epochs';
 import type { StoreHandles } from '../world/store/store';
 import { createJobHeap } from './jobHeap';
@@ -259,7 +260,8 @@ export interface WorkerPool {
    * spec §3.7): it regenerates the freed proto of a Decorated or Published column.
    */
   terrain(cx: number, cz: number, protoOnly?: boolean): Promise<ColumnDone>;
-  decorate(cx: number, cz: number): Promise<ColumnDone>;
+  /** D; with `diff` (SP5a spec §2.5), the column's edit entries, which the message carries (cloned, never transferred). */
+  decorate(cx: number, cz: number, diff?: ColumnDiff): Promise<ColumnDone>;
   light(cx: number, cz: number): Promise<ColumnDone>;
   meshColumn(cx: number, cz: number): Promise<MeshColumnDone>;
   /** Lower priority runs first. */
@@ -562,20 +564,22 @@ export function createWorkerPool(size: number, spawn: () => WorkerLike, opts: Po
     });
 
   /** A T, D or L job of (cx, cz) at priority 0; its reply must name the same job and column. */
-  const columnJob = async (type: 'terrain' | 'decorate' | 'light', cx: number, cz: number, protoOnly = false): Promise<ColumnDone> => {
+  const columnJob = async (type: 'terrain' | 'decorate' | 'light', cx: number, cz: number, protoOnly = false, diff?: ColumnDiff): Promise<ColumnDone> => {
     const generation = epoch;
-    const r = await worldJob(type, cx, cz, protoOnly);
+    const r = await worldJob(type, cx, cz, protoOnly, diff);
     if (r.type !== 'columnDone') throw new Error(`unexpected reply ${r.type}`);
     if (r.job !== type || r.cx !== cx || r.cz !== cz) throw new Error(`world job reply: ${r.job} of column (${r.cx}, ${r.cz}), expected ${type} (${cx}, ${cz})`);
     return { cx, cz, ms: r.ms, versions: r.versions === null ? null : new Int32Array(r.versions), generation };
   };
   /**
    * A world job of (cx, cz) at priority 0, issued under the pool's epoch now (its generation); `protoOnly` (terrain only)
-   * goes into the message only when true.
+   * goes into the message only when true, `diff` (decorate only, SP5a) only when given. Jobs are posted without a
+   * transfer list, so the diff is cloned.
    */
-  const worldJob = (type: WorldJobType, cx: number, cz: number, protoOnly = false): Promise<FromWorker> => {
+  const worldJob = (type: WorldJobType, cx: number, cz: number, protoOnly = false, diff?: ColumnDiff): Promise<FromWorker> => {
     const e = epoch;
-    return enqueue(0, type, (jobId, scope) => (protoOnly ? { type, jobId, epoch: e, scope, cx, cz, protoOnly } : { type, jobId, epoch: e, scope, cx, cz }), null);
+    return enqueue(0, type, (jobId, scope) => (protoOnly ? { type, jobId, epoch: e, scope, cx, cz, protoOnly }
+      : diff !== undefined ? { type, jobId, epoch: e, scope, cx, cz, diff } : { type, jobId, epoch: e, scope, cx, cz }), null);
   };
 
   return {
@@ -631,7 +635,7 @@ export function createWorkerPool(size: number, spawn: () => WorkerLike, opts: Po
       });
     },
     terrain: (cx, cz, protoOnly = false) => columnJob('terrain', cx, cz, protoOnly),
-    decorate: (cx, cz) => columnJob('decorate', cx, cz),
+    decorate: (cx, cz, diff) => columnJob('decorate', cx, cz, false, diff),
     light: (cx, cz) => columnJob('light', cx, cz),
     async meshColumn(cx, cz) {
       const generation = epoch;

@@ -10,6 +10,8 @@
  * drains them once this thread leaves its read section.
  * SP5a (spec §1.2, D23): L's block-light scan runs only when a column of its 3 × 3 has the diff flag (or the region
  * holds lava), shown in process with a torch written into a neighbour's final set as D's overlay writes it.
+ * SP5a (spec §2.5, D21): a D whose message carries a diff overlays it through the worker; the L that follows lights the
+ * overlaid finals, its light equal to `lightRegion` run here over the same finals.
  */
 import { Worker } from 'node:worker_threads';
 import { afterAll, beforeAll, expect, test } from 'vitest';
@@ -17,12 +19,14 @@ import { DEFAULTS } from '../../src/core/params/defaults';
 import { MEDIUM } from '../../src/core/params/graphicsPresets';
 import { createWorkerPool, type ColumnDone, type WorkerLike, type WorkerPool } from '../../src/engine/workerPool';
 import { decorateStage } from '../../src/gen/pipeline/decorateStage';
-import { createLightScratch } from '../../src/light/initial';
+import { centreSection, createLightScratch, DEFAULT_LIGHT_TABLES, lightRegion } from '../../src/light/initial';
 import { fillColumnT, regionHash } from '../../src/metrics/region';
 import { createMeshScratch, payloadProblem } from '../../src/mesh/column';
 import { NO_FLUID } from '../../src/world/blocks/fluid';
-import { AIR, TORCH } from '../../src/world/blocks/index';
-import { STATUS_PUBLISHED } from '../../src/world/store/columnTable';
+import { AIR, GLASS, STONE, TORCH } from '../../src/world/blocks/index';
+import type { ColumnDiff } from '../../src/world/store/api';
+import { STATUS_DECORATED, STATUS_PUBLISHED } from '../../src/world/store/columnTable';
+import { copyLightRegion } from '../../src/world/store/padded';
 import { createStore, type VoxelStore } from '../../src/world/store/store';
 import { fillColumnD, fillColumnL, meshColumnJob } from '../../src/workers/worldJobs';
 import { ctxFor } from '../harness/gen';
@@ -199,3 +203,40 @@ test('an L whose 3 × 3 has no flag skips the scan (a torch written into a neigh
     else expect(lit, 'block light in (0, 0) without a flag').toBe(0);
   }
 });
+
+test('a D with a diff, then L: the column\'s light equals `lightRegion` over the overlaid finals', async () => {
+  const store = createStore({ shared: true, maxBlockBytes: 64 * MiB, maxByteBytes: 64 * MiB });
+  const pool: WorkerPool = createWorkerPool(2, spawnNode, { epochCells: new Int32Array(new SharedArrayBuffer(16)) });
+  try {
+    await pool.attachStore(store.handles());
+    expect((await pool.configure('42', DEFAULTS)).type).toBe('ready');
+    await stage(2, (cx, cz) => pool.terrain(cx, cz));
+    // (0, 0)'s top at (8, 8): the torch goes into the air above it, glass beside it, and the top voxel is dug out to air.
+    const proto = store.proto(0, 0)!;
+    let top = 319;
+    while (proto.block(8, top, 8) === AIR && proto.fluid(8, top, 8) === NO_FLUID) top--;
+    const voxel = (lx: number, y: number, lz: number, value: number): [number, number, number] =>
+      [(y + 64) >> 4, (((y + 64) & 15) << 8) | (lz << 4) | lx, value];
+    const entries = [voxel(8, top, 8, AIR << 8), voxel(8, top + 1, 8, TORCH << 8), voxel(9, top + 1, 8, GLASS << 8), voxel(8, top + 3, 9, STONE << 8)]
+      .sort((a, b) => a[0] - b[0] || a[1] - b[1]);
+    const diff: ColumnDiff = {
+      sy: Uint8Array.from(entries.map((e) => e[0])), idx: Uint16Array.from(entries.map((e) => e[1])), value: Uint32Array.from(entries.map((e) => e[2])),
+    };
+    await stage(1, (cx, cz) => (cx === 0 && cz === 0 ? pool.decorate(0, 0, diff) : pool.decorate(cx, cz)));
+    expect(store.table.status(store.table.find(0, 0))).toBe(STATUS_DECORATED);
+    expect(store.diffFlag(0, 0)).toBe(true);
+    const f = store.final(0, 0)!;
+    expect([f.block(8, top, 8), f.block(8, top + 1, 8), f.block(9, top + 1, 8), f.block(8, top + 3, 9)]).toEqual([AIR, TORCH, GLASS, STONE]);
+    expect(store.proto(0, 0)!.block(8, top + 1, 8), 'the proto stays generated').toBe(AIR);
+
+    expect((await pool.light(0, 0)).versions).not.toBeNull();
+    expect(store.table.status(store.table.find(0, 0))).toBe(STATUS_PUBLISHED);
+    const s = createLightScratch();
+    copyLightRegion(store.neighborhood(0, 0), s.region);
+    lightRegion(s, DEFAULT_LIGHT_TABLES, true);
+    for (let sy = 0; sy < 24; sy++) expect(Buffer.from(lightOf(store, sy)).equals(Buffer.from(centreSection(s, sy))), `sy ${sy}`).toBe(true);
+    expect(store.final(0, 0)!.light(8, top + 1, 8) & 15, 'the torch\'s block light').toBe(14);
+  } finally {
+    pool.terminate();
+  }
+}, 120_000);

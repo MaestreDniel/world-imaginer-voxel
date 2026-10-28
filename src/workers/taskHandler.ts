@@ -27,6 +27,8 @@
  * not INTERNAL (retried). `terrain` with `protoOnly` is `T(protoOnly)`.
  * SP4c (spec §3.2, D12): a `landing` job answers `landingSurface` and the column's `surfaceWaterLevel` at (x, z): BAD_ARGS
  * outside the world window; it runs to the end, as a point (a few milliseconds: the 2D estimate and about 10 probes).
+ * SP5a (spec §2.5, D21): a `decorate` carrying `diff` (checked by `parseToWorker`) passes it to `decorateReply`, which
+ * overlays the column's edit entries on its final set.
  */
 import { hex64 } from '../core/hash';
 import { MEDIUM } from '../core/params/graphicsPresets';

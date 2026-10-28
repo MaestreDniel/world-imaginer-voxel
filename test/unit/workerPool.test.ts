@@ -980,6 +980,33 @@ describe('worker pool: surfaceProbe jobs (SP3c spec §6)', () => {
   });
 });
 
+describe('worker pool: the decorate message\'s diff (SP5a spec §2.5)', () => {
+  test('the decorate message carries `diff` only when given, posted without a transfer list (cloned, not transferred)', async () => {
+    const posted: Array<[ToWorker, unknown]> = [];
+    let worker: ReturnType<typeof holdingWorker> | null = null;
+    const pool = createWorkerPool(1, () => {
+      const w = holdingWorker();
+      const post = w.postMessage.bind(w);
+      w.postMessage = (m, t) => { posted.push([m, t]); post(m, t); };
+      worker = w;
+      return w;
+    });
+    await pool.configure('42', DEFAULTS);
+    const diff = { sy: new Uint8Array([8]), idx: new Uint16Array([4085]), value: new Uint32Array([1 << 8]) };
+    const run = async (job: Promise<unknown>) => {
+      worker!.release();
+      expect(await job).toMatchObject({ versions: null });
+    };
+    await run(pool.decorate(1, 2));
+    await run(pool.decorate(3, 4, diff));
+    const jobs = posted.filter(([m]) => m.type !== 'configure');
+    expect(jobs.map(([m]) => [m.type, 'cx' in m ? m.cx : null, 'diff' in m])).toEqual([['decorate', 1, false], ['decorate', 3, true]]);
+    expect((jobs[1]![0] as { diff?: unknown }).diff).toBe(diff);
+    for (const [, transfer] of jobs) expect(transfer).toBeUndefined();
+    pool.terminate();
+  });
+});
+
 describe('worker pool: landing jobs (SP4c spec §3.2, §6.2; D12)', () => {
   const landingsOf = (log: readonly ToWorker[]) => log.flatMap((m) => (m.type === 'landing' ? [[m.epoch, m.x, m.z]] : []));
 

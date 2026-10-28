@@ -14,6 +14,7 @@ import { centreSection, DEFAULT_LIGHT_TABLES, lightRegion, type LightScratch } f
 import { fillColumnT } from '../metrics/region';
 import { meshColumnPayload, type ColumnMeshPayload, type MeshScratch } from '../mesh/column';
 import type { MeshOptions } from '../mesh/greedy';
+import type { ColumnDiff } from '../world/store/api';
 import { SECTIONS, STATUS_PUBLISHED } from '../world/store/columnTable';
 import { copyLightRegion } from '../world/store/padded';
 import type { VoxelStore } from '../world/store/store';
@@ -35,10 +36,11 @@ const TERRAIN = terrainStage;
  * (§3), then `commit(2)`. True when the column was committed at Decorated. A stop (false) or a throw leaves the
  * column at Proto with its versions unchanged: the skeleton writes nothing before its shares, and nothing is committed.
  * Throws when the column is not at Proto (`reopenColumn`) or a source column of its 3 × 3 is missing.
+ * SP5a (spec §2.5, D21): `diff`, the column's edit entries from the sim, is overlaid by `decorateStage` (null: none).
  */
-export function fillColumnD(store: VoxelStore, ctx: GenContext, cx: number, cz: number, stop: () => boolean): boolean {
+export function fillColumnD(store: VoxelStore, ctx: GenContext, cx: number, cz: number, stop: () => boolean, diff: ColumnDiff | null = null): boolean {
   const w = store.reopenColumn(cx, cz, 1);
-  if (!DECORATE(ctx, store.neighborhood(cx, cz), w, stop)) return false;
+  if (!DECORATE(ctx, store.neighborhood(cx, cz), w, stop, diff)) return false;
   w.commit(2);
   return true;
 }
@@ -144,10 +146,10 @@ export function terrainReply(store: VoxelStore, ctx: GenContext, m: WorldJobMsg,
   return done(m, 'terrain', performance.now() - t0, null);
 }
 
-/** The D job's reply (SP4a spec §2.3): `fillColumnD`. */
+/** The D job's reply (SP4a spec §2.3): `fillColumnD`, with the message's `diff` when it carries one (SP5a spec §2.5). */
 export function decorateReply(store: VoxelStore, ctx: GenContext, m: WorldJobMsg, stop: () => boolean): WorldJobReply<ColumnDoneMsg> | null {
   const t0 = performance.now();
-  if (!fillColumnD(store, ctx, m.cx, m.cz, stop)) return null;
+  if (!fillColumnD(store, ctx, m.cx, m.cz, stop, m.diff ?? null)) return null;
   return done(m, 'decorate', performance.now() - t0, null);
 }
 

@@ -27,7 +27,8 @@
  * outside the world window is the handler's BAD_ARGS.
  * SP5a (spec §2.1, D17): the sim worker's messages, apart from the pool's: `ToSim` (an `attach` as thread 15, a batch of
  * `edits`, a `diff` request with an `id`) and `FromSim` (`attached`, `edited`, `diff`, `error`), checked by `parseToSim`
- * and `parseFromSim`; the edit types come from `sim/edits.ts`, re-exported for the main thread's layers.
+ * and `parseFromSim`; the edit types come from `sim/edits.ts`, re-exported for the main thread's layers. A `decorate` may
+ * carry `diff`, the column's edit entries for D's overlay (§2.5), checked by `parseToWorker`.
  */
 import { MAP_LEVELS, MAP_TILE_PX, PART_BUDGET, SLICE_NS, type MapLevel } from '../core/constants';
 import type { StageId } from '../core/ids';
@@ -39,7 +40,8 @@ import { isLayerId, type LayerId } from '../gen/map/layers';
 import type { SplineLeaf } from '../metrics/splineStats';
 import type { Edit, EditRefusal } from '../sim/edits';
 import { payloadProblem, type ColumnMeshPayload } from '../mesh/column';
-import type { ColumnView } from '../world/store/api';
+import { REGISTRY } from '../world/blocks/index';
+import type { ColumnDiff, ColumnView } from '../world/store/api';
 import { COLUMN_TABLE_BYTES } from '../world/store/columnTable';
 import { EPOCH_CELL, EPOCH_CELL_COUNT } from '../world/store/epochs';
 import { BLOCK_SLOT_BYTES, BYTE_SLOT_BYTES, GROW_BYTES, type PoolHandles } from '../world/store/pool';
@@ -129,9 +131,13 @@ export type WorldJobType = 'terrain' | 'decorate' | 'light' | 'meshColumn';
 /**
  * A world job on column (cx, cz) of the attached store; cx and cz are integers whose blocks lie in the world window.
  * `protoOnly` (terrain only, a boolean when present; SP4b spec §3.7): `T(protoOnly)`, which regenerates the freed proto of
- * a Decorated or Published column through `reopenProto`.
+ * a Decorated or Published column through `reopenProto`. `diff` (decorate only; SP5a spec §2.5): the column's edit
+ * entries, which D overlays; equal lengths, `sy` < 24, `idx` < 4096 and every value's state (`value >>> 8`) a registry
+ * state. The pool posts it without a transfer list, so it is cloned (a few KB).
  */
-export interface WorldJobMsg extends Scoped { readonly type: WorldJobType; readonly cx: number; readonly cz: number; readonly protoOnly?: boolean }
+export interface WorldJobMsg extends Scoped {
+  readonly type: WorldJobType; readonly cx: number; readonly cz: number; readonly protoOnly?: boolean; readonly diff?: ColumnDiff;
+}
 /**
  * The teleport's landing at block (x, z) (SP4c spec §3.2, D12): integers here (the guard refuses anything else; the
  * caller asks at the clicked block ⌊x⌋, ⌊z⌋); a position outside the half-open world window is the handler's BAD_ARGS.
@@ -421,6 +427,24 @@ const isWorkerThread = (t: unknown): boolean => isInt(t) && t >= 1 && t < RECLAI
 /** `protoOnly` absent, or a boolean on a terrain job (SP4b spec §3.7). */
 const protoOnlyOk = (m: Record<string, unknown>): boolean =>
   m['protoOnly'] === undefined || (m['type'] === 'terrain' && typeof m['protoOnly'] === 'boolean');
+/** Every value's state (`value >>> 8`) below the registry's `stateCount`. */
+const diffStatesOk = (value: Uint32Array): boolean => {
+  const n = REGISTRY.stateCount;
+  for (let k = 0; k < value.length; k++) if (value[k]! >>> 8 >= n) return false;
+  return true;
+};
+/**
+ * `diff` absent, or on a decorate job (SP5a spec §2.5): a `Uint8Array` `sy`, `Uint16Array` `idx` and `Uint32Array`
+ * `value` of one length, each `sy` < 24, `idx` < 4096 and state a registry state.
+ */
+const diffOk = (m: Record<string, unknown>): boolean => {
+  const d = m['diff'];
+  if (d === undefined) return true;
+  if (m['type'] !== 'decorate' || !isObj(d)) return false;
+  const { sy, idx, value } = d;
+  return sy instanceof Uint8Array && idx instanceof Uint16Array && value instanceof Uint32Array
+    && idx.length === sy.length && value.length === sy.length && diffEntriesOk(sy, idx) && diffStatesOk(value);
+};
 
 /** Validates a message sent to a worker; null when malformed. */
 export function parseToWorker(m: unknown): ToWorker | null {
@@ -453,7 +477,7 @@ export function parseToWorker(m: unknown): ToWorker | null {
     case 'attach':
       return storeHandlesOk(m['handles']) && isWorkerThread(m['thread']) ? (m as unknown as AttachMsg) : null;
     case 'terrain': case 'decorate': case 'light': case 'meshColumn':
-      return scopedOk(m) && isColumn(m['cx'], m['cz']) && protoOnlyOk(m) ? (m as unknown as WorldJobMsg) : null;
+      return scopedOk(m) && isColumn(m['cx'], m['cz']) && protoOnlyOk(m) && diffOk(m) ? (m as unknown as WorldJobMsg) : null;
     case 'landing':
       return scopedOk(m) && isInt(m['x']) && isInt(m['z']) ? (m as unknown as LandingMsg) : null;
     default:

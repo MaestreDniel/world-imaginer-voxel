@@ -12,7 +12,7 @@ import { SPLINE_STATS_POINTS, splineStatPoints, splineStatsInto, splineStatsLeng
 import { paintTile, paintTileAbortable } from '../../src/gen/map/tile';
 import { createSurfaceContext } from '../../src/gen/surface/context';
 import { surfaceProbe } from '../../src/gen/surface/probe';
-import { AIR, BEDROCK, DEEPSLATE, SNOW_BLOCK } from '../../src/world/blocks/index';
+import { AIR, BEDROCK, DEEPSLATE, REGISTRY, SNOW_BLOCK } from '../../src/world/blocks/index';
 import { leafOpts } from '../../src/ui/splineEditor/model';
 import { cellOf, parseFromSim, parseFromWorker, parseSpikeStoreFromWorker, parseSpikeStoreToWorker, parseToSim, parseToWorker, pointInWindow, SLICE_ROWS, SLICE_SAMPLES, sliceIndex, slicePartIndex, tileInWindow, type FromWorker, type ScopedJobType } from '../../src/workers/protocol';
 import { createSliceJob } from '../../src/workers/sliceJob';
@@ -694,6 +694,37 @@ describe('the store spike\'s messages (SP4a spec §1.2 item 6, ruling P18)', () 
     ['checked with ok above total', { type: 'spikeCrossChecked', ok: 33, total: 32, errors: [] }],
   ])('a bad reply is null: %s', (_, m) => {
     expect(parseSpikeStoreFromWorker(m)).toBeNull();
+  });
+});
+
+describe('the decorate message\'s diff (SP5a spec §2.5)', () => {
+  const job = (type: string, o: Record<string, unknown> = {}) => ({ type, jobId: 3, epoch: 2, scope: 2, cx: 1, cz: -2, ...o });
+  const diff = (o: Record<string, unknown> = {}) => ({
+    sy: new Uint8Array([0, 8, 23]), idx: new Uint16Array([0, 4085, 4095]), value: new Uint32Array([1 << 8, (2 << 8) | 16, (REGISTRY.stateCount - 1) << 8]), ...o,
+  });
+
+  test('a decorate with a diff, an empty diff or none is accepted', () => {
+    const d = diff();
+    expect(parseToWorker(job('decorate', { diff: d }))).toEqual(job('decorate', { diff: d }));
+    expect(parseToWorker(job('decorate', { diff: diff({ sy: new Uint8Array(0), idx: new Uint16Array(0), value: new Uint32Array(0) }) }))).not.toBeNull();
+    expect(parseToWorker(job('decorate'))).not.toBeNull();
+  });
+  test.each<[string, unknown]>([
+    ['a diff on light', job('light', { diff: diff() })],
+    ['a diff on terrain', job('terrain', { diff: diff() })],
+    ['a diff on meshColumn', job('meshColumn', { diff: diff() })],
+    ['a diff that is not an object', job('decorate', { diff: 7 })],
+    ['a null diff', job('decorate', { diff: null })],
+    ['mismatched lengths (idx)', job('decorate', { diff: diff({ idx: new Uint16Array(2) }) })],
+    ['mismatched lengths (value)', job('decorate', { diff: diff({ value: new Uint32Array(4) }) })],
+    ['sy 24', job('decorate', { diff: diff({ sy: new Uint8Array([0, 8, 24]) }) })],
+    ['idx 4096', job('decorate', { diff: diff({ idx: new Uint16Array([0, 4085, 4096]) }) })],
+    ['idx not a Uint16Array', job('decorate', { diff: diff({ idx: new Uint32Array([0, 4085, 4095]) }) })],
+    ['a state past the registry', job('decorate', { diff: diff({ value: new Uint32Array([1 << 8, 2 << 8, REGISTRY.stateCount << 8]) }) })],
+    ['sy not a Uint8Array', job('decorate', { diff: diff({ sy: [0, 8, 23] }) })],
+    ['value not a Uint32Array', job('decorate', { diff: diff({ value: new Int32Array(3) }) })],
+  ])('refused: %s', (_n, m) => {
+    expect(parseToWorker(m)).toBeNull();
   });
 });
 
