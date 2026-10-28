@@ -241,10 +241,20 @@ describe('placeAt: buckets (SP5a spec §4.2)', () => {
   });
 
   test('water into a ladder → ladder + 16; lava into a ladder → null', () => {
+    // The target is the voxel across the hit face: the stone floor is hit, the ladder stands on it.
+    const ladder = facing(LADDER, 'north');
+    const r = canned().set(0, 68, 0, STONE).set(0, 69, 0, ladder);
+    expect(placeAt(hitOf(r, 0, 68, 0, FACE_UP), WATER, 0, FAR, r, always)).toEqual(
+      { x: 0, y: 69, z: 0, op: 'set', value: value(ladder, WATER_SOURCE), expect: value(ladder) });
+    expect(placeAt(hitOf(r, 0, 68, 0, FACE_UP), LAVA, 0, FAR, r, always)).toBeNull();
+  });
+
+  test('a bucket aimed at a ladder fills the voxel in front of the hit face, not the ladder', () => {
     const r = canned().set(0, 68, 0, LADDER);
     expect(placeAt(hitOf(r, 0, 68, 0, FACE_NORTH), WATER, 0, FAR, r, always)).toEqual(
-      { x: 0, y: 68, z: 0, op: 'set', value: value(LADDER, WATER_SOURCE), expect: value(LADDER) });
-    expect(placeAt(hitOf(r, 0, 68, 0, FACE_NORTH), LAVA, 0, FAR, r, always)).toBeNull();
+      { x: 0, y: 68, z: -1, op: 'set', value: value(AIR, WATER_SOURCE), expect: value(AIR) });
+    expect(placeAt(hitOf(r, 0, 68, 0, FACE_NORTH), LAVA, 0, FAR, r, always)).toEqual(
+      { x: 0, y: 68, z: -1, op: 'set', value: value(AIR, LAVA_SOURCE), expect: value(AIR) });
   });
 
   test('a bucket into a block is refused, and so is one into a column that is not editable or past y 319', () => {

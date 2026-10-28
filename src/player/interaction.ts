@@ -11,9 +11,9 @@
  *   a bottom face refused; a ladder on a side face faces the normal, on a top or bottom face the horizontal direction
  *   nearest the opposite of the look; every other type its default state (with its pinned props). No support checks.
  * - **Buckets** (a fluid slot): a still source (`WATER_SOURCE`, `LAVA_SOURCE`) into the voxel across the hit face when
- *   it is air (any fluid replaced); water also into the hit voxel itself when its state is `hold` (a ladder takes the
- *   water and stays); lava is refused there, and anything else is refused. **Empty bucket:** the first voxel with fluid
- *   on the ray (the raycast's `'fluid'` mode) loses it.
+ *   it is air (any fluid replaced); water also into that voxel when its state is `hold` (a ladder takes the water and
+ *   stays); anything else is refused. A bucket aimed at a ladder fills the voxel in front of the face, as any other.
+ *   **Empty bucket:** the first voxel with fluid on the ray (the raycast's `'fluid'` mode) loses it.
  * - **Pick:** the hit state's type name, `wall_torch` as `torch`.
  */
 import { HEIGHT, MIN_Y } from '../core/constants';
@@ -144,13 +144,10 @@ export function placeAt(hit: RayHit, slot: Slot, lookYawDeg: number, body: BodyB
   editable: (cx: number, cz: number) => boolean): Edit | null {
   if (!hit.hit || 'tool' in slot) return null;
   if ('fluid' in slot) {
-    // Water into a `hold` state waterlogs the hit voxel itself; lava is refused there.
-    if (FLUID_MODE[hit.state] === FLUID_MODE_HOLD) {
-      if (slot.fluid !== 'water') return null;
-      return target(hit.x, hit.y, hit.z, read, editable, (s) => (FLUID_MODE[s] === FLUID_MODE_HOLD ? s : -1), WATER_SOURCE);
-    }
+    // The voxel across the hit face: water into air or a `hold` state (kept), lava into air only.
     const [x, y, z] = across(hit);
-    return target(x, y, z, read, editable, (s) => (s === AIR ? AIR : -1), slot.fluid === 'water' ? WATER_SOURCE : LAVA_SOURCE);
+    if (slot.fluid === 'lava') return target(x, y, z, read, editable, (s) => (s === AIR ? AIR : -1), LAVA_SOURCE);
+    return target(x, y, z, read, editable, (s) => (s === AIR || FLUID_MODE[s] === FLUID_MODE_HOLD ? s : -1), WATER_SOURCE);
   }
   const state = placedState(slot, hit.face, lookYawDeg);
   if (state < 0) return null;
