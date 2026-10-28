@@ -8,11 +8,13 @@
  * - `'fluid'` (the empty bucket, §4.2) stops at the first voxel with fluid before any block (a waterlogged ladder
  *   included, the whole cell) and misses at the first other non-air state, a box state where the ray meets its box.
  *
- * In both modes a −1 read (an unpublished column) ends the ray with no hit. A hit reports the voxel, the face the ray
- * entered by (`FACE_*`: a ray moving +x enters by the west face), the point and the state. An eye inside a hit (a
- * full cell or a box holding the eye) hits at the eye, by the face the look's main axis enters (the face looking back
- * along it). Allocates nothing: the result goes into the caller's one reused `RayHit`.
+ * In both modes a −1 read (an unpublished column) ends the ray with no hit, and so does a cell below the world's floor
+ * (y −64): the store reads `BEDROCK` there (its padded border), which is no voxel an edit can reach. A hit reports
+ * the voxel, the face the ray entered by (`FACE_*`: a ray moving +x enters by the west face), the point and the state.
+ * An eye inside a hit (a full cell or a box holding the eye) hits at the eye, by the face the look's main axis enters
+ * (the face looking back along it). Allocates nothing: the result goes into the caller's one reused `RayHit`.
  */
+import { MIN_Y } from '../core/constants';
 import { hasFluid } from '../world/blocks/fluid';
 import { AIR, SHAPE } from '../world/blocks/index';
 import { FACE_DOWN, FACE_EAST, FACE_NORTH, FACE_SOUTH, FACE_UP, FACE_WEST, SHAPE_BOX } from '../world/blocks/kinds';
@@ -50,6 +52,7 @@ const SHAPE_ = SHAPE;
 const BOX_ = SHAPE_BOX;
 const BOX_OF = boxOf;
 const HAS_FLUID = hasFluid;
+const FLOOR = MIN_Y;
 /** The box of the current box state, in eighths (`boxOf`'s output). */
 const box = new Uint8Array(6);
 /** The face `boxEntry` found, beside its returned distance. */
@@ -148,6 +151,8 @@ export function castRay(
   let t = 0;
   let face = startFace;
   while (t <= reach) {
+    // Below the world's floor the store's padded bedrock is no voxel: an edit there is out of the world.
+    if (y < FLOOR) return out;
     const s = read.blockAt(x, y, z);
     if (s < 0) return out;
     if (fluidMode && HAS_FLUID(read.fluidAt(x, y, z))) return setHit(out, x, y, z, face, t, ox, oy, oz, dx, dy, dz, s);

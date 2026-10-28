@@ -9,7 +9,7 @@ import { runInNewContext } from 'node:vm';
 import { describe, expect, test } from 'vitest';
 import { lookVectorInto } from '../../src/player/fly';
 import { REACH_FLY, REACH_WALK, castRay, createRayHit, type RayHit } from '../../src/player/raycast';
-import { AIR, LADDER, REGISTRY, STONE, TORCH } from '../../src/world/blocks/index';
+import { AIR, BEDROCK, LADDER, REGISTRY, STONE, TORCH } from '../../src/world/blocks/index';
 import { WATER_SOURCE } from '../../src/world/blocks/fluid';
 import { FACE_DOWN, FACE_EAST, FACE_NORTH, FACE_SOUTH, FACE_UP, FACE_WEST } from '../../src/world/blocks/kinds';
 
@@ -137,6 +137,22 @@ describe('castRay (SP5a spec §3.5)', () => {
     expect(cast(r, [14.5, 70.5, 0.5], [1, 0, 0], REACH_FLY, 'fluid').hit).toBe(false);
     // A block before the border is still hit.
     expect(hitOf(cast(r.set(15, 70, 0, STONE), [12.5, 70.5, 0.5], [1, 0, 0], REACH_FLY))).toEqual([15, 70, 0, FACE_WEST, 15, 70.5, 0.5, STONE]);
+  });
+
+  test('a ray down past y −64 reports no hit (the store\'s padded bedrock below the world is not a voxel)', () => {
+    // The store reads `BEDROCK` below y −64 (store.ts `blockAt`, the padded copy's border); here the floor's bedrock
+    // at y −64 is broken, so the ray goes on into the padding: no hit in either mode, at either reach.
+    const below = (r: Canned): Canned => ({ ...r, blockAt: (x, y, z) => (y < -64 ? BEDROCK : r.blockAt(x, y, z)) });
+    const r = below(canned());
+    for (const reach of [REACH_WALK, REACH_FLY]) {
+      expect(cast(r, [0.5, -62.5, 0.5], [0, -1, 0], reach).hit).toBe(false);
+      expect(cast(r, [0.5, -62.5, 0.5], [0, -1, 0], reach, 'fluid').hit).toBe(false);
+      const d = 1 / Math.hypot(0.4, 1, 0.3);
+      expect(cast(r, [0.5, -63.5, 0.5], [0.4 * d, -d, 0.3 * d], reach).hit).toBe(false);
+    }
+    // The floor's own bedrock at y −64 is still hit, by its top face.
+    const floor = below(canned().set(0, -64, 0, BEDROCK));
+    expect(hitOf(cast(floor, [0.5, -62.5, 0.5], [0, -1, 0], REACH_WALK))).toEqual([0, -64, 0, FACE_UP, 0.5, -63, 0.5, BEDROCK]);
   });
 
   test('an eye inside a block hits it at the eye, by the face the look\'s main axis enters', () => {
