@@ -266,11 +266,11 @@ beforeAll(async () => {
   const firstReady = await pool.configure(session.state.seedText, session.state.params);
   const inner = worldJobsOf(pool);
   const jobs: CoordinatorJobs = {
-    run(stage, cx, cz, protoOnly) {
+    run(stage, cx, cz, protoOnly, edit) {
       const rec: Issued = { stage, cx, cz, settled: null, generation: -1 };
       issued.push(rec);
       inFlight++;
-      const job = inner.run(stage, cx, cz, protoOnly);
+      const job = inner.run(stage, cx, cz, protoOnly, edit);
       job.then((out) => { rec.settled = 'ok'; rec.generation = out.generation; inFlight--; }, () => { rec.settled = 'rejected'; inFlight--; });
       return job;
     },

@@ -109,9 +109,9 @@ interface Run {
 /** The coordinator's jobs, recorded at issue. */
 function recorded(inner: CoordinatorJobs, log: Issued[]): CoordinatorJobs {
   return {
-    run(stage, cx, cz, protoOnly) {
+    run(stage, cx, cz, protoOnly, edit) {
       log.push({ stage, cx, cz, protoOnly });
-      return inner.run(stage, cx, cz, protoOnly);
+      return inner.run(stage, cx, cz, protoOnly, edit);
     },
     cancel: (pred) => inner.cancel(pred),
     liveWorkers: () => inner.liveWorkers(),

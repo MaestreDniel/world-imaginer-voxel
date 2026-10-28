@@ -187,12 +187,12 @@ async function edit(kind: SectionRendererKind): Promise<Run> {
     let inFlight = 0;
     const inner = worldJobsOf(pool);
     const jobs: CoordinatorJobs = {
-      run(stage, cx, cz, protoOnly) {
+      run(stage, cx, cz, protoOnly, edit) {
         const g = inner.generation();
         if (!generations.has(g)) badGenerations.push(g);
         issued.push({ stage, cx, cz, protoOnly });
         inFlight++;
-        const job = inner.run(stage, cx, cz, protoOnly);
+        const job = inner.run(stage, cx, cz, protoOnly, edit);
         job.then(() => { inFlight--; }, () => { inFlight--; });
         return job;
       },

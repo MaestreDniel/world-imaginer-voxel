@@ -114,7 +114,7 @@ function protoVersusFinal(store: VoxelStore, cx: number, cz: number): string | n
  */
 function watched(inner: CoordinatorJobs, store: VoxelStore, probe: Probe): CoordinatorJobs {
   return {
-    run(stage, cx, cz, protoOnly) {
+    run(stage, cx, cz, protoOnly, edit) {
       if (stage === 'D') {
         probe.d++;
         for (let dz = -1; dz <= 1; dz++) {
@@ -124,7 +124,7 @@ function watched(inner: CoordinatorJobs, store: VoxelStore, probe: Probe): Coord
         }
       }
       probe.inFlight++;
-      const job = inner.run(stage, cx, cz, protoOnly).then((out) => {
+      const job = inner.run(stage, cx, cz, protoOnly, edit).then((out) => {
         if (stage === 'T' && protoOnly) {
           probe.protoOnly++;
           const diff = protoVersusFinal(store, cx, cz);

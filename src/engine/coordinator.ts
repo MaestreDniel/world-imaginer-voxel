@@ -114,8 +114,21 @@
  * - **The sim's pins:** `simPin` adds 1 to `simPins` of the 3 × 3 until the reply's `simUnpin`; `freeable` also needs
  *   `simPins` 0. A sim reply is no job, so a slot whose count reaches 0 queues its unloads again itself, and a stale
  *   column pinned at `apply` is freed with no crossing. `simUnpinAll` is the sim failure path.
+ * - **Edit remeshes** (§2.6, D22): `markEdited(colKeys)`, called at the reply, bumps each tracked slot's `editSeq` and
+ *   `meshSeq` and puts it on the edit ring (a preallocated FIFO, a slot at most once), then pumps. `pump` drains the ring
+ *   before the generation gate and the caps (a MESH reads only final sets): a slot that is not busy, Published, current
+ *   and not failed, whose 3 × 3 is Published and current, inside keepMesh and in the MESH set or shown, gets its MESH
+ *   (`edit` true: the pool's aux lane at −1000), counted in `inFlight[3]` and `total`, so the stream jobs yield; a busy
+ *   slot stays on the ring until its settle; any other leaves it (the stream heap meshes it once it is eligible). A
+ *   slot whose `editSeq` is newer than `stagedEditSeq` (the editSeq of the payload last staged) is exempt from the two
+ *   "already meshed" rules and may be staged again at the same epoch (the renderers replace a pending payload and keep
+ *   the shown one), so D16's one stage per epoch holds for every column without an edit. At intake, before the
+ *   versions, a MESH whose slot's `editSeq` moved since its issue, or whose slot is pinned by the sim (published, not yet
+ *   answered), is an edit drop: counted in `editDropped`, never fatal, requeued unless the slot is on the ring (which
+ *   issues it again). `onEditStaged(cx, cz)` is called when a payload issued at or after the slot's latest
+ *   `markEdited` is staged: the first reveal of that column after it is the edit's.
  */
-import { TORUS_SIZE, colKey } from '../core/coords';
+import { TORUS_SIZE, colKey, colKeyCx, colKeyCz } from '../core/coords';
 import { STAGE_BONUS, streamScore } from '../core/streamScore';
 import type { ColumnMeshPayload } from '../mesh/column';
 import { StoreCorrupt } from '../world/store/pool';
@@ -147,8 +160,11 @@ export interface JobOutcome {
 
 /** The pool seen by the coordinator (spec §3.13; `worldJobsOf` adapts the pool). */
 export interface CoordinatorJobs {
-  /** One job; `protoOnly` (T only) is `T(protoOnly)` (spec §3.7). */
-  run(stage: Stage, cx: number, cz: number, protoOnly: boolean): Promise<JobOutcome>;
+  /**
+   * One job; `protoOnly` (T only) is `T(protoOnly)` (spec §3.7); `edit` (MESH only) is an edit's remesh, which the pool
+   * runs first (SP5a spec §2.6, D22).
+   */
+  run(stage: Stage, cx: number, cz: number, protoOnly: boolean, edit: boolean): Promise<JobOutcome>;
   /** Rejects the queued world jobs matching `pred` with JobCancelled; jobs already running finish. */
   cancel(pred: (stage: Stage, cx: number, cz: number) => boolean): void;
   /** The workers that have not failed: the caps follow it. */
@@ -205,6 +221,11 @@ export interface CoordinatorOptions {
   /** The first configure's epoch (`epochOf` of its genKey; the page's is 1): the applied epoch, an integer ≥ 1. */
   readonly epoch: number;
   readonly onEvent: (e: StreamEvent) => void;
+  /**
+   * Called when a payload issued at or after the slot's latest `markEdited` is staged (SP5a spec §4.6, §6.2): the first
+   * reveal of (cx, cz) after it shows the edit.
+   */
+  readonly onEditStaged?: (cx: number, cz: number) => void;
 }
 
 /** One stage's columns in the current set: needed, done, in flight and queued (in its heap). */
@@ -222,6 +243,8 @@ export interface CoordinatorCounts {
   L: StageCounts;
   MESH: StageCounts;
   dropped: number;
+  /** MESH results dropped by an edit (SP5a spec §2.6): the slot's `editSeq` moved, or the sim pinned it; not in `dropped`. */
+  editDropped: number;
   failed: number;
   storeFull: number;
   collisionWaits: number;
@@ -293,6 +316,12 @@ export interface Coordinator {
   simUnpin(cx: number, cz: number): void;
   /** The sim failed (SP5a spec §2.1): every `simPins` count to 0, each such slot then as `simUnpin`. */
   simUnpinAll(): void;
+  /**
+   * The sim's `edited` reply's dirty columns (SP5a spec §2.6, D22; colKeys): each tracked one's `editSeq` and `meshSeq`
+   * bumped (a MESH of it in flight drops at intake) and the slot queued on the edit ring, then issued at once past the
+   * caps and the generation gate (a busy slot at its settle).
+   */
+  markEdited(keys: ArrayLike<number>): void;
   counts(out: CoordinatorCounts): CoordinatorCounts;
   dispose(): void;
 }
@@ -324,32 +353,38 @@ const H_PROTO = 6;
 const HEAPS = 7;
 
 const errorText = (e: unknown): string => (e instanceof Error ? e.message : String(e));
+/** The pool's option of an edit's remesh (SP5a spec §2.6), made once. */
+const EDIT_MESH = Object.freeze({ edit: true });
 
 /** A fresh counts object for `Coordinator.counts` (the page keeps one and reuses it every frame). */
 export function createCoordinatorCounts(): CoordinatorCounts {
   const stage = (): StageCounts => ({ needed: 0, done: 0, inFlight: 0, queued: 0 });
   return {
-    T: stage(), D: stage(), L: stage(), MESH: stage(), dropped: 0, failed: 0, storeFull: 0, collisionWaits: 0, genCap: 0, rd: 0, cx: 0, cz: 0,
-    yawDeg: 0, stale: 0, epoch: 0,
+    T: stage(), D: stage(), L: stage(), MESH: stage(), dropped: 0, editDropped: 0, failed: 0, storeFull: 0, collisionWaits: 0, genCap: 0, rd: 0,
+    cx: 0, cz: 0, yawDeg: 0, stale: 0, epoch: 0,
   };
 }
 
 /**
  * The pool as the coordinator's jobs (ruling P30, spec §3.13): T, D, L and MESH run `terrain` (with `protoOnly`),
- * `decorate`, `light` and `meshColumn`. T, D and L resolve `{ versions: done.versions, payload: null }` (light's 18
- * versions, null for terrain and decorate), MESH `{ versions: p.versions, payload: p }` from the pool's `MeshColumnDone`
+ * `decorate`, `light` and `meshColumn` (an edit's with `{ edit: true }`, SP5a spec §2.6). T, D and L resolve
+ * `{ versions: done.versions, payload: null }` (light's 18 versions, null for terrain and decorate), MESH
+ * `{ versions: p.versions, payload: p }` from the pool's `MeshColumnDone`
  * (each outcome carries the reply's `generation`, the pool's epoch at issue, SP4c spec §4.6); rejections pass through.
  * `cancel` is `cancelWorld`, `liveWorkers` the pool's, `generation()` the pool's `epoch` now (SP4c spec §4.2).
  */
 export function worldJobsOf(pool: Pick<WorkerPool, 'epoch' | 'terrain' | 'decorate' | 'light' | 'meshColumn' | 'cancelWorld' | 'liveWorkers'>): CoordinatorJobs {
   const column = (d: ColumnDone): JobOutcome => ({ versions: d.versions, payload: null, generation: d.generation });
+  const mesh = ({ payload, generation }: { readonly payload: ColumnMeshPayload; readonly generation: number }): JobOutcome => (
+    { versions: payload.versions, payload, generation }
+  );
   return {
-    run(stage, cx, cz, protoOnly) {
+    run(stage, cx, cz, protoOnly, edit) {
       switch (stage) {
         case 'T': return pool.terrain(cx, cz, protoOnly).then(column);
         case 'D': return pool.decorate(cx, cz).then(column);
         case 'L': return pool.light(cx, cz).then(column);
-        case 'MESH': return pool.meshColumn(cx, cz).then(({ payload, generation }) => ({ versions: payload.versions, payload, generation }));
+        case 'MESH': return (edit ? pool.meshColumn(cx, cz, EDIT_MESH) : pool.meshColumn(cx, cz)).then(mesh);
       }
     },
     cancel(pred) {
@@ -454,6 +489,16 @@ export function createCoordinator(o: CoordinatorOptions): Coordinator {
   const sinkCz = new Int32Array(SLOTS).fill(NO_COLUMN);
   /** The sim's edits in flight whose 3 × 3 holds the slot's column (SP5a spec §2.1, §2.7): it is not freed while > 0. */
   const simPins = new Uint16Array(SLOTS);
+  // Edit remeshes (SP5a spec §2.6, D22): per slot the `markEdited` count, its value when the slot's MESH was issued and
+  // when its last payload was staged (an edit is pending while `editSeq` is newer); the edit ring, a FIFO of slots.
+  const editSeq = new Uint32Array(SLOTS);
+  const issuedEditSeq = new Uint32Array(SLOTS);
+  const stagedEditSeq = new Uint32Array(SLOTS);
+  const editRing = new Int32Array(SLOTS);
+  const onRing = new Uint8Array(SLOTS);
+  let ringHead = 0;
+  let ringLen = 0;
+  const onEditStaged = o.onEditStaged ?? null;
 
   // The heaps (spec §3.3, §3.5, §3.7): heap h's entries at [h·SLOTS, h·SLOTS + len[h]); each entry's key and colKey tie
   // are stored per (heap, slot) when pushed, so a heap's order never depends on state that changes while it waits.
@@ -482,6 +527,7 @@ export function createCoordinator(o: CoordinatorOptions): Coordinator {
   let fz = -1;
 
   let dropped = 0;
+  let editDropped = 0;
   let collisionWaits = 0;
   let storeFull = 0;
   /** New T jobs wait for the next voxel unload (StoreFull, spec §3.6). */
@@ -521,6 +567,8 @@ export function createCoordinator(o: CoordinatorOptions): Coordinator {
   };
   /** Whether the slot's column is stale: generated (stage ≥ 1) under another epoch than the applied one (§4.4). */
   const isStale = (s: number): boolean => stage[s]! >= 1 && colEpoch[s] !== wEpoch;
+  /** Whether the slot has an edit not yet in a staged payload (SP5a spec §2.6): `editSeq` newer than the staged one. */
+  const editPending = (s: number): boolean => editSeq[s]! > stagedEditSeq[s]!;
 
   function fatal(message: string, cause: unknown): void {
     stopped = true;
@@ -537,7 +585,9 @@ export function createCoordinator(o: CoordinatorOptions): Coordinator {
     const f = flagsOf(s);
     if (f === 0) return -1;
     const st = stage[s]!;
-    if (st === 3 && meshed[s] !== 0) return -1;
+    // An edited column is meshed again whatever its mesh (SP5a spec §2.6): neither "already meshed" rule applies.
+    const edited = editPending(s);
+    if (st === 3 && meshed[s] !== 0 && !edited) return -1;
     if ((f & SET_FLAG[st]!) === 0) return -1;
     if (paused && (st === 0 || waitFull[s] !== 0)) return -1;
     const cx = tcx[s]!;
@@ -548,7 +598,7 @@ export function createCoordinator(o: CoordinatorOptions): Coordinator {
       if (holder === 'other') collide(s);
       return -1;
     }
-    if (st === 3 && colEpoch[s] === wEpoch && targetOf(s) === wEpoch) {
+    if (st === 3 && !edited && colEpoch[s] === wEpoch && targetOf(s) === wEpoch) {
       // A Published current column whose mesh is (or is staged) at the applied epoch needs no MESH (SP4c spec §4.4).
       meshed[s] = 1;
       return -1;
@@ -822,6 +872,8 @@ export function createCoordinator(o: CoordinatorOptions): Coordinator {
     retries[s] = 0;
     colliding[s] = 0;
     waitFull[s] = 0;
+    // A new (or regenerated) column has no edit pending: its first MESH reads its edits (D's overlay, SP5a spec §2.5).
+    stagedEditSeq[s] = editSeq[s]!;
   }
 
   // ---- unloads (spec §3.5, §3.7)
@@ -988,10 +1040,55 @@ export function createCoordinator(o: CoordinatorOptions): Coordinator {
     throttle.setMax(Math.max(1, n - 1));
   }
 
+  /** Slot s onto the back of the edit ring, unless it is on it. */
+  function ringPush(s: number): void {
+    if (onRing[s] !== 0) return;
+    onRing[s] = 1;
+    editRing[(ringHead + ringLen) & (SLOTS - 1)] = s;
+    ringLen++;
+  }
+
+  /**
+   * Whether the slot's edit MESH may be issued now (SP5a spec §2.6): Published, current and not failed, its 3 × 3
+   * Published and current, inside keepMesh, and in the MESH set or shown (a mesh kept by the hysteresis is redone too).
+   */
+  function editReady(s: number): boolean {
+    if (tcx[s] === NO_COLUMN || stage[s] !== 3 || colEpoch[s] !== wEpoch || failed[s] !== 0) return false;
+    const f = flagsOf(s);
+    const cx = tcx[s]!;
+    const cz = tcz[s]!;
+    if ((f & M_KEEP_MESH) === 0 || ((f & M_MESH) === 0 && (sinkCx[s] !== cx || sinkCz[s] !== cz))) return false;
+    for (let dz = -1; dz <= 1; dz++) {
+      for (let dx = -1; dx <= 1; dx++) {
+        const n = slotOf(cx + dx, cz + dz);
+        if (!tracks(n, cx + dx, cz + dz) || stage[n] !== 3 || colEpoch[n] !== wEpoch) return false;
+      }
+    }
+    return true;
+  }
+
+  /**
+   * Drains the edit ring once round (SP5a spec §2.6, D22), past the caps and the generation gate: a busy slot goes to
+   * the back until its settle; one whose edit is pending and ready gets its MESH; any other leaves the ring.
+   */
+  function drainEdits(): void {
+    for (let n = ringLen; n > 0 && !stopped; n--) {
+      const s = editRing[ringHead]!;
+      ringHead = (ringHead + 1) & (SLOTS - 1);
+      ringLen--;
+      onRing[s] = 0;
+      if (!editPending(s)) continue;
+      if (busy[s] !== 0) ringPush(s);
+      else if (editReady(s)) issue(3, s, true);
+    }
+  }
+
   /** Issues ready jobs, the smallest score first among the stages whose cap allows one more (spec §3.3, §3.8). */
   function pump(): void {
     if (stopped) return;
     checkLive();
+    // Edit remeshes first, past the gate and the caps (SP5a spec §2.6): they count in `inFlight[3]` and `total`.
+    if (ringLen > 0) drainEdits();
     // The generation gate (SP4c spec §4.2, D3): a configure the world has not applied holds every world job.
     if (jobs.generation() !== appliedGeneration) return;
     for (;;) {
@@ -1019,7 +1116,7 @@ export function createCoordinator(o: CoordinatorOptions): Coordinator {
       const s = pop(best);
       // Eligibility is checked again at the pop: a job whose column left its set (or whose state moved) leaves here.
       if (!ready(best, s)) continue;
-      issue(best, s);
+      issue(best, s, false);
     }
   }
 
@@ -1035,7 +1132,8 @@ export function createCoordinator(o: CoordinatorOptions): Coordinator {
     }
   }
 
-  function issue(h: number, s: number): void {
+  /** Issues stage h's job for slot s; `edit` (MESH only): an edit's remesh (SP5a spec §2.6). */
+  function issue(h: number, s: number, edit: boolean): void {
     const cx = tcx[s]!;
     const cz = tcz[s]!;
     const protoOnly = h === 0 && stage[s]! >= 2;
@@ -1044,12 +1142,15 @@ export function createCoordinator(o: CoordinatorOptions): Coordinator {
     inFlight[h] = inFlight[h]! + 1;
     total++;
     if (h === 0) colliding[s] = 0;
-    if (h === 3) issuedSeq[s] = meshSeq[s]!;
+    if (h === 3) {
+      issuedSeq[s] = meshSeq[s]!;
+      issuedEditSeq[s] = editSeq[s]!;
+    }
     const seq = issuedSeq[s]!;
     pin(h, cx, cz, 1);
     let job: Promise<JobOutcome>;
     try {
-      job = jobs.run(STAGES[h]!, cx, cz, protoOnly);
+      job = jobs.run(STAGES[h]!, cx, cz, protoOnly, edit);
     } catch (e) {
       job = Promise.reject(e);
     }
@@ -1130,6 +1231,13 @@ export function createCoordinator(o: CoordinatorOptions): Coordinator {
       else failure(h, s, cx, cz, new Error(`MESH at (${cx}, ${cz}) returned no payload`));
       return;
     }
+    if (h === 3 && (editSeq[s] !== issuedEditSeq[s] || simPins[s] !== 0)) {
+      // An edit drop (SP5a spec §2.6), before the versions an edit's publish moves: the slot was marked edited since
+      // the issue, or an edit is published and not yet answered. Never fatal; the ring issues a slot it holds again.
+      editDropped++;
+      if (onRing[s] === 0) requeue(s);
+      return;
+    }
     if (h >= 2) {
       // L on the nine blockVersions (even indices), MESH on all 18 (SP4a's intake rule).
       const v = out.versions;
@@ -1158,13 +1266,19 @@ export function createCoordinator(o: CoordinatorOptions): Coordinator {
         return;
       }
       // A column is staged at most once per epoch (SP4c spec §4.4): a pending payload of another epoch was resolved by
-      // `apply` before this MESH was issued, and one at this epoch makes the target this epoch (no MESH).
-      if (stagedEpoch[s] !== 0) throw new Error(`MESH at (${cx}, ${cz}) staged over a pending payload of epoch ${stagedEpoch[s]}`);
+      // `apply` before this MESH was issued, and one at this epoch makes the target this epoch (no MESH); an edit's
+      // payload (issued with a newer `editSeq` than the staged one) is staged again at the same epoch (SP5a spec §2.6).
+      const edited = issuedEditSeq[s]! > stagedEditSeq[s]!;
+      if (stagedEpoch[s] !== 0 && !(edited && stagedEpoch[s] === wEpoch)) {
+        throw new Error(`MESH at (${cx}, ${cz}) staged over a pending payload of epoch ${stagedEpoch[s]}`);
+      }
       sink.stage(out.payload!, seq);
       sinkCx[s] = cx;
       sinkCz[s] = cz;
       stagedEpoch[s] = wEpoch;
+      stagedEditSeq[s] = issuedEditSeq[s]!;
       meshed[s] = 1;
+      if (edited && onEditStaged !== null) onEditStaged(cx, cz);
       considerAround(cx, cz);
       return;
     }
@@ -1369,6 +1483,9 @@ export function createCoordinator(o: CoordinatorOptions): Coordinator {
         if (pending !== 0 && pending !== wEpoch) {
           if (sink.unstage(sinkCx[s]!, sinkCz[s]!)) {
             stagedEpoch[s] = 0;
+            // The dropped payload may have carried an edit the shown one lacks: an edited column meshes again once
+            // current (SP5a spec §2.6; a regenerated one reads its edits anyway, `follow`).
+            stagedEditSeq[s] = 0;
             if (shownEpoch[s] === 0) {
               sinkCx[s] = NO_COLUMN;
               sinkCz[s] = NO_COLUMN;
@@ -1443,6 +1560,20 @@ export function createCoordinator(o: CoordinatorOptions): Coordinator {
       }
     },
 
+    markEdited(keys) {
+      for (let i = 0; i < keys.length; i++) {
+        const k = keys[i]!;
+        const cx = colKeyCx(k);
+        const cz = colKeyCz(k);
+        const s = slotOf(cx, cz);
+        if (!tracks(s, cx, cz)) continue;
+        editSeq[s] = editSeq[s]! + 1;
+        meshSeq[s] = meshSeq[s]! + 1;
+        ringPush(s);
+      }
+      pump();
+    },
+
     firstFill() {
       if (!placed || reclassify) return false;
       let m = 0;
@@ -1466,6 +1597,7 @@ export function createCoordinator(o: CoordinatorOptions): Coordinator {
       out.L.queued = heapLen[2]!;
       out.MESH.queued = heapLen[3]!;
       out.dropped = dropped;
+      out.editDropped = editDropped;
       out.storeFull = storeFull;
       out.collisionWaits = collisionWaits;
       out.genCap = throttle.cap();

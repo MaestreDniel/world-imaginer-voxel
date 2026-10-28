@@ -34,6 +34,7 @@ import v8 from 'node:v8';
 import { runInNewContext } from 'node:vm';
 import { PerspectiveCamera } from 'three';
 import { afterAll, describe, expect, test, vi } from 'vitest';
+import { colKey } from '../../src/core/coords';
 import { hex64 } from '../../src/core/hash';
 import { MEDIUM } from '../../src/core/params/graphicsPresets';
 import { genKey, stageHashes } from '../../src/core/stage/hash';
@@ -610,6 +611,39 @@ describe('zero allocation at rest (SP4b spec §3.10, D25)', () => {
     }, N / 10, ZERO_ALLOC_MAX);
     expect(counts.T.inFlight + counts.D.inFlight + counts.L.inFlight + counts.MESH.inFlight).toBe(0);
     expect(counts.T.done).toBe(counts.T.needed);
+    expectAtRest(g);
+  }, TIMEOUT_MS);
+
+  test(`${N} coordinator.update calls at rest with an empty edit ring, after two edit remeshes (SP5a spec §2.6, D22), grow the heap by less than 256 KB`, async () => {
+    // A coordinator of its own (the shared one stays at rest for the frame step), filled as `filledCoordinator` does.
+    const fly = restingFly();
+    const cam = { x: fly.x, z: fly.z, yawDeg: fly.yaw };
+    const w = fakeWorld();
+    const edited: string[] = [];
+    const c = createCoordinator({
+      jobs: w.jobs, store: w.store, sink: w.sink, throttle: createThrottle({ max: 3 }), rd: 12, rdMax: 16,
+      retainAllProtos: true, strict: false, generation: 0, epoch: 1, onEvent: (e) => { throw new Error(`unexpected event ${e.kind}`); },
+      onEditStaged: (cx, cz) => { edited.push(`${cx},${cz}`); },
+    });
+    for (let i = 0; i < 100 && !c.firstFill(); i++) {
+      c.update(cam);
+      await flush();
+    }
+    const counts = createCoordinatorCounts();
+    const staged = w.staged();
+    expect(staged).toBe(c.counts(counts).MESH.needed);
+    // Two edits' remeshes, issued at once and settled: the ring drains empty.
+    c.markEdited(Float64Array.of(colKey(0, 0), colKey(1, 0)));
+    await flush();
+    expect(w.staged()).toBe(staged + 2);
+    expect(edited).toEqual(['0,0', '1,0']);
+    const g = allocationOver(() => {
+      c.update(cam);
+      c.counts(counts);
+    }, N / 10, ZERO_ALLOC_MAX);
+    expect(counts.T.inFlight + counts.D.inFlight + counts.L.inFlight + counts.MESH.inFlight).toBe(0);
+    expect([counts.dropped, counts.editDropped]).toEqual([0, 0]);
+    expect(w.staged()).toBe(staged + 2);
     expectAtRest(g);
   }, TIMEOUT_MS);
 

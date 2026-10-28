@@ -1,7 +1,8 @@
 import v8 from 'node:v8';
 import { runInNewContext } from 'node:vm';
 import { describe, expect, test } from 'vitest';
-import { colKey } from '../../src/core/coords';
+import { colKey, colKeyCx, colKeyCz } from '../../src/core/coords';
+import { MEDIUM } from '../../src/core/params/graphicsPresets';
 import { STAGE_BONUS, streamScore } from '../../src/core/streamScore';
 import {
   FAILED_FATAL, FREES_PER_FRAME, MESH_REMOVALS_PER_FRAME, PROTO_FREES_PER_FRAME, createCoordinator, createCoordinatorCounts, phaseName,
@@ -12,8 +13,17 @@ import {
 import { KEEP_VOXELS_EXTRA, M_D, M_KEEP_MESH, M_KEEP_VOXELS, M_L, M_MESH, M_T, membershipTable, stageOffsets, type Stage } from '../../src/engine/rings';
 import { createThrottle, type Throttle } from '../../src/engine/throttle';
 import { JobCancelled, StoreCorruptError, StoreFullError, WorkerFailed, type ColumnDone, type WorkerPool } from '../../src/engine/workerPool';
-import type { ColumnMeshPayload } from '../../src/mesh/column';
+import { writeFinalHeightmaps } from '../../src/gen/pipeline/finalHeightmaps';
+import { centreSection, createLightScratch, DEFAULT_LIGHT_TABLES, lightRegion } from '../../src/light/initial';
+import { createMeshScratch, meshColumnPayload, type ColumnMeshPayload } from '../../src/mesh/column';
+import { createDiffStore } from '../../src/sim/diffStore';
+import { applyEdits, createEditScratch } from '../../src/sim/edits';
+import { WATER_SOURCE } from '../../src/world/blocks/fluid';
+import { AIR, GLASS, ICE, STONE, TORCH } from '../../src/world/blocks/index';
+import { SECTIONS } from '../../src/world/store/columnTable';
+import { lightIndex } from '../../src/world/store/padded';
 import { StoreCorrupt } from '../../src/world/store/pool';
+import { createStore, type VoxelStore } from '../../src/world/store/store';
 
 const RANK: Record<Stage, number> = { T: 1, D: 2, L: 3, MESH: 4 };
 const FLAG: Record<Stage, number> = { T: M_T, D: M_D, L: M_L, MESH: M_MESH };
@@ -45,6 +55,8 @@ interface FakeOptions {
    * so a rejected T leaves its record claimed, as a T whose worker died does (rulings R14).
    */
   readonly claims?: boolean;
+  /** A MESH's payload, read when it is issued (as a worker reads the store when the job runs); null: the fake's own. */
+  readonly payloadOf?: (cx: number, cz: number) => ColumnMeshPayload | null;
 }
 
 /**
@@ -60,6 +72,8 @@ interface FakeOptions {
  * against the epochs of its 3 × 3 (all the applied one); a MESH is a violation only for a column the sink holds at the
  * applied epoch (one showing another epoch's mesh gets its MESH: the swap). The sink keeps each held column's shown and
  * pending epochs; `unstage` answers `fake.unstageReturns` (true: the pending payload is dropped; false: it is shown).
+ * An edit remesh (SP5a spec §2.6, D22) is issued past the caps, so the caps are checked on the other jobs only; a column
+ * passed to `markEdited` (`fake.edited`, set by `make`) may be meshed and staged again at the same epoch, once.
  */
 function fakeWorld(fo: FakeOptions = {}) {
   const fake = {
@@ -68,6 +82,8 @@ function fakeWorld(fo: FakeOptions = {}) {
     records: new Map<number, { cx: number; cz: number; status: number; block: number; light: number; alive?: boolean; epoch?: number }>(),
     pending: [] as Pending[],
     issued: [] as Issued[],
+    /** Whether each job of `issued` was issued as an edit remesh (same indices). */
+    issuedEdit: [] as boolean[],
     violations: [] as string[],
     frees: [] as Array<readonly [number, number]>,
     protoFrees: [] as Array<readonly [number, number]>,
@@ -101,6 +117,12 @@ function fakeWorld(fo: FakeOptions = {}) {
     eventIssued: [] as number[],
     /** Thrown by the next `freeColumn` (once). */
     freeThrows: null as unknown,
+    /** The columns passed to `markEdited` and not staged since (colKey): each may be meshed and staged again, once. */
+    edited: new Set<number>(),
+    /** The payload each column was last staged with (colKey). */
+    lastPayload: new Map<number, ColumnMeshPayload>(),
+    /** The `onEditStaged` calls, in order. */
+    editStaged: [] as Array<readonly [number, number]>,
   };
   const throttle = fo.throttle ?? createThrottle({ max: Math.max(1, fake.live - 1) });
   const statusAt = (cx: number, cz: number): number => {
@@ -163,7 +185,7 @@ function fakeWorld(fo: FakeOptions = {}) {
     const r = fake.records.get(slotOf(cx, cz));
     return r !== undefined && r.cx === cx && r.cz === cz ? r.epoch : undefined;
   };
-  const check = (stage: Stage, cx: number, cz: number, protoOnly: boolean, epoch: number): void => {
+  const check = (stage: Stage, cx: number, cz: number, protoOnly: boolean, epoch: number, edit: boolean): void => {
     const what = `${stage} at (${cx}, ${cz})`;
     if (fake.pending.some((p) => p.cx === cx && p.cz === cz)) violations(`${what} issued for a busy column`);
     if (protoOnly) {
@@ -185,8 +207,13 @@ function fakeWorld(fo: FakeOptions = {}) {
         }
       }
       // A column the sink holds at the applied epoch needs no MESH; one showing another epoch's mesh gets one (the swap).
-      if (stage === 'MESH' && fake.revealed.has(colKey(cx, cz)) && fake.revealedEpoch.get(colKey(cx, cz)) === epoch) violations(`${what} issued for a column held at epoch ${epoch}`);
+      // An edited column is meshed again at the same epoch (SP5a spec §2.6).
+      const k = colKey(cx, cz);
+      if (stage === 'MESH' && fake.revealed.has(k) && fake.revealedEpoch.get(k) === epoch && !fake.edited.has(k)) violations(`${what} issued for a column held at epoch ${epoch}`);
     }
+    if (edit && stage !== 'MESH') violations(`${what} issued as an edit`);
+    // An edit remesh is issued past the caps (SP5a spec §2.6), counted in them, so the other jobs still yield to it.
+    if (edit) return;
     // Each cap is checked when a job it bounds is issued (a cap that drops, as N does, binds the next such issue).
     const N = fake.live;
     if (stage !== 'MESH' && inFlight.T + inFlight.D + inFlight.L > throttle.cap()) violations(`${inFlight.T + inFlight.D + inFlight.L} T + D + L in flight above genCap ${throttle.cap()}`);
@@ -196,25 +223,27 @@ function fakeWorld(fo: FakeOptions = {}) {
   };
   const violations = (v: string): void => { fake.violations.push(v); };
 
-  const outcome = (stage: Stage, cx: number, cz: number, versions: Int32Array, generation: number): JobOutcome => {
+  const outcome = (stage: Stage, cx: number, cz: number, versions: Int32Array, generation: number, read: ColumnMeshPayload | null): JobOutcome => {
     const v = stage === 'L' || stage === 'MESH' ? versions : null;
-    const payload = stage === 'MESH' ? ({ cx, cz, versions: v } as unknown as ColumnMeshPayload) : null;
+    const payload = stage === 'MESH' ? (read ?? ({ cx, cz, versions: v } as unknown as ColumnMeshPayload)) : null;
     return { versions: v, payload, generation };
   };
 
   const jobs: CoordinatorJobs = {
-    run(stage, cx, cz, protoOnly) {
+    run(stage, cx, cz, protoOnly, edit) {
       if (protoOnly) fake.protoOnly.push(fake.issued.length);
       fake.issued.push({ stage, cx, cz });
+      fake.issuedEdit.push(edit);
       const generation = fake.generation;
       fake.issuedGen.push(generation);
       inFlight[stage]++;
       total++;
       const epoch = fake.epochNow();
-      check(stage, cx, cz, protoOnly, epoch);
+      check(stage, cx, cz, protoOnly, epoch, edit);
       if (fo.claims === true && stage === 'T' && !protoOnly) fake.records.set(slotOf(cx, cz), { cx, cz, status: 0, block: 1, light: 0 });
       const versions = new Int32Array(18);
       store.versionsInto(cx, cz, versions);
+      const read = stage === 'MESH' ? fo.payloadOf?.(cx, cz) ?? null : null;
       return new Promise<JobOutcome>((resolve, reject) => {
         const done = () => { inFlight[stage]--; total--; };
         const p: Pending = {
@@ -223,7 +252,7 @@ function fakeWorld(fo: FakeOptions = {}) {
             done();
             fo.tamper?.({ stage, cx, cz }, versions);
             commit(stage, cx, cz, protoOnly, epoch);
-            resolve(outcome(stage, cx, cz, versions, generation));
+            resolve(outcome(stage, cx, cz, versions, generation, read));
           },
           reject: (e) => { done(); reject(e); },
         };
@@ -251,10 +280,13 @@ function fakeWorld(fo: FakeOptions = {}) {
       // since, is a violation; over a column held at another epoch it is the swap.
       const k = colKey(p.cx, p.cz);
       const epoch = fake.epochNow();
-      if (fake.revealed.has(k) && fake.revealedEpoch.get(k) === epoch) violations(`(${p.cx}, ${p.cz}) staged again at epoch ${epoch} while held (D16)`);
+      // An edited column is restaged once at the same epoch (SP5a spec §2.6): the renderers replace a pending payload.
+      const edited = fake.edited.delete(k);
+      if (!edited && fake.revealed.has(k) && fake.revealedEpoch.get(k) === epoch) violations(`(${p.cx}, ${p.cz}) staged again at epoch ${epoch} while held (D16)`);
       // A payload staged and not resolved since (no unstage, no remove) is still pending: staging over it would leave
       // the column with two pending seqs (SP4c spec §4.4: `stage` only with `stagedEpoch` 0).
-      if (fake.staged.has(k)) violations(`(${p.cx}, ${p.cz}) staged at epoch ${epoch} over a pending payload of epoch ${fake.staged.get(k)}`);
+      if (!edited && fake.staged.has(k)) violations(`(${p.cx}, ${p.cz}) staged at epoch ${epoch} over a pending payload of epoch ${fake.staged.get(k)}`);
+      fake.lastPayload.set(k, p);
       fake.revealed.add(k);
       fake.revealedEpoch.set(k, epoch);
       fake.staged.set(k, epoch);
@@ -324,6 +356,7 @@ function make(mo: MakeOptions = {}): { w: World; c: Coordinator } {
     retainAllProtos: mo.retainAllProtos ?? true, strict: mo.strict ?? false,
     generation: w.fake.generation, epoch: mo.epoch ?? 1,
     onEvent: (e) => { w.fake.events.push(e); w.fake.eventIssued.push(w.fake.issued.length); },
+    onEditStaged: (cx, cz) => { w.fake.editStaged.push([cx, cz]); },
   });
   // The fake reads the coordinator's epoch (`counts().epoch`) at every issue and stage; only `apply` moves it, so it is
   // read once after each `apply` rather than counted over the 4,096 slots per job.
@@ -335,6 +368,10 @@ function make(mo: MakeOptions = {}): { w: World; c: Coordinator } {
     apply(a) {
       inner.apply(a);
       epoch = inner.counts(counts).epoch;
+    },
+    markEdited(keys) {
+      for (let i = 0; i < keys.length; i++) w.fake.edited.add(keys[i]!);
+      inner.markEdited(keys);
     },
   };
   return { w, c };
@@ -2310,6 +2347,349 @@ describe('createCoordinator: the edit gate and the sim\'s pins (SP5a spec §2.1,
   });
 });
 
+/** Stone at and below y 69, air above (the canned store of `simEdits.test.ts`). */
+const CANNED_TOP = 69;
+
+/**
+ * A canned 7 × 7 store (columns −3 … 3), as `simEdits.test.ts`'s 5 × 5: every column claimed, its proto written and
+ * shared into the final set with the light of one `lightRegion` over the same flat world, the final heightmaps written,
+ * then committed Published, protos kept. Edits in column (0, 0) dirty at most its 5 × 5, whose 3 × 3s it holds.
+ */
+function cannedStore7(): VoxelStore {
+  const s = createStore({ shared: false, maxBlockBytes: 32 * 1024 * 1024, maxByteBytes: 32 * 1024 * 1024 });
+  const scratch = createLightScratch();
+  const r = scratch.region;
+  r.blocks.fill(AIR);
+  r.blocks.fill(STONE, lightIndex(-15, -64, -15), lightIndex(-15, CANNED_TOP + 1, -15));
+  r.fluid.fill(0);
+  r.lightBlocking.fill(CANNED_TOP + 1);
+  lightRegion(scratch, DEFAULT_LIGHT_TABLES, true);
+  const light = Array.from({ length: SECTIONS }, (_, sy) => centreSection(scratch, sy).slice());
+  const blocks = Array.from({ length: SECTIONS }, (_, sy) => {
+    const b = new Uint16Array(4096);
+    for (let ly = 0; ly < 16; ly++) b.fill(sy * 16 - 64 + ly <= CANNED_TOP ? STONE : AIR, ly << 8, (ly + 1) << 8);
+    return b;
+  });
+  const fluid = new Uint8Array(4096);
+  for (let cz = -3; cz <= 3; cz++) {
+    for (let cx = -3; cx <= 3; cx++) {
+      const w = s.claimColumn(cx, cz, 0);
+      for (let sy = 0; sy < SECTIONS; sy++) {
+        w.setProto(sy, blocks[sy]!, fluid);
+        w.shareFinal(sy, light[sy]!);
+      }
+      writeFinalHeightmaps((_lx, y) => (y <= CANNED_TOP ? STONE : AIR), () => 0, w.aux());
+      w.commit(3);
+    }
+  }
+  return s;
+}
+
+/** The first difference between two column payloads' meshes, or null when they are byte-identical. */
+function payloadDiff(a: ColumnMeshPayload, b: ColumnMeshPayload): string | null {
+  if (a.cx !== b.cx || a.cz !== b.cz) return `column (${a.cx}, ${a.cz}) against (${b.cx}, ${b.cz})`;
+  const bytes = (v: ArrayBufferView): Buffer => Buffer.from(v.buffer, v.byteOffset, v.byteLength);
+  // The content, not `versions`: a neighbour's edit moves the versions of a column whose mesh it leaves unchanged.
+  for (const k of ['connectivity', 'position', 'data', 'index', 'rows', 'spheres'] as const) {
+    if (!bytes(a[k]).equals(bytes(b[k]))) return k;
+  }
+  return null;
+}
+
+/** The pending job of `w` at (cx, cz) of `stage`, and its index. */
+const pendingAt = (w: World, stage: Stage, cx: number, cz: number): number => w.fake.pending.findIndex((p) => p.stage === stage && p.cx === cx && p.cz === cz);
+
+/** The stages of (cx, cz) the sink received, in order. */
+const stagesOf = (w: World, cx: number, cz: number) => w.fake.stages.filter((s) => s.cx === cx && s.cz === cz);
+
+describe('createCoordinator: edit remeshes, the edit queue and restaging (SP5a spec §2.6, D22)', () => {
+  test('markEdited of a meshed column with total at N, inFlight[3] at N and the fake pool\'s generation moved: its MESH is issued in the same call with edit true', async () => {
+    const { w, c } = make({ rd: 4, workers: 4 });
+    c.update(cam(0, 0));
+    await flush();
+    // FIFO until some columns are staged, then the generation jobs first, so the MESHes fill their cap and `total`.
+    let X: readonly [number, number] | null = null;
+    for (let i = 0; i < 10_000 && X === null && w.fake.pending.length > 0; i++) {
+      const n = read(c);
+      if (n.MESH.inFlight === 4 && n.T.inFlight + n.D.inFlight + n.L.inFlight === 0) {
+        const s = w.fake.stages.find((st) => pendingAt(w, 'MESH', st.cx, st.cz) < 0 && c.editState(st.cx, st.cz) === 0);
+        if (s !== undefined) X = [s.cx, s.cz];
+      }
+      if (X !== null) break;
+      const gen = w.fake.pending.findIndex((p) => p.stage !== 'MESH');
+      w.settle(w.fake.stages.length < 10 || gen < 0 ? 0 : gen);
+      await flush();
+    }
+    expect(X).not.toBeNull();
+    const [x, z] = X!;
+    expect(read(c).MESH.inFlight).toBe(4);
+    w.fake.generation++;
+    const before = w.fake.issued.length;
+    c.markEdited([colKey(x, z)]);
+    expect(w.fake.issued.slice(before)).toEqual([{ stage: 'MESH', cx: x, cz: z }]);
+    expect(w.fake.issuedEdit[before]).toBe(true);
+    const n = read(c);
+    expect([n.MESH.inFlight, n.T.inFlight + n.D.inFlight + n.L.inFlight]).toEqual([5, 0]);
+    // The other MESHes settle; the gate holds the stream until the world adopts the generation.
+    await settleAll(w);
+    expect(stagesOf(w, x, z).length).toBe(2);
+    expect(w.fake.editStaged).toEqual([[x, z]]);
+    c.adopt(w.fake.generation);
+    await settleDown(w, c, cam(0, 0), lcg(7));
+    const done = read(c);
+    expect(doneOf(done)).toEqual({ T: done.T.needed, D: done.D.needed, L: done.L.needed, MESH: done.MESH.needed });
+    expect([done.dropped, done.editDropped]).toEqual([0, 0]);
+    expect(w.fake.violations).toEqual([]);
+    expect(w.fake.events).toEqual([]);
+  });
+
+  test('a busy slot is issued at its settle', async () => {
+    const { w, c } = make({ rd: 4 });
+    await fill(w, c, cam(0, 0));
+    const before = w.fake.issued.length;
+    c.markEdited([colKey(1, 2)]);
+    expect(w.fake.issued.length).toBe(before + 1);
+    c.markEdited([colKey(1, 2)]);
+    // Busy: it waits on the edit queue, nothing more is issued.
+    expect(w.fake.issued.length).toBe(before + 1);
+    w.settle();
+    await flush();
+    // The first result is dropped (its editSeq moved) and the queue issues the slot again at that settle.
+    expect(read(c).editDropped).toBe(1);
+    expect(w.fake.issued.slice(before)).toEqual([{ stage: 'MESH', cx: 1, cz: 2 }, { stage: 'MESH', cx: 1, cz: 2 }]);
+    expect(w.fake.issuedEdit.slice(before)).toEqual([true, true]);
+    await settleAll(w);
+    expect(stagesOf(w, 1, 2).length).toBe(2);
+    expect(w.fake.editStaged).toEqual([[1, 2]]);
+    expect(read(c).dropped).toBe(0);
+    expect(w.fake.violations).toEqual([]);
+  });
+
+  test('a MESH in flight when markEdited runs is dropped at intake (editDropped 1, dropped unchanged) and the slot meshes again', async () => {
+    const { w, c } = make({ rd: 4 });
+    c.update(cam(0, 0));
+    await flush();
+    let i = -1;
+    while (w.fake.pending.length > 0 && (i = w.fake.pending.findIndex((p) => p.stage === 'MESH')) < 0) { w.settle(); await flush(); }
+    expect(i).toBeGreaterThanOrEqual(0);
+    const { cx, cz } = w.fake.pending[i]!;
+    const before = w.fake.issued.length;
+    c.markEdited([colKey(cx, cz)]);
+    expect(w.fake.issued.length).toBe(before);
+    w.settle(i);
+    await flush();
+    const n = read(c);
+    expect([n.editDropped, n.dropped]).toEqual([1, 0]);
+    expect(stagesOf(w, cx, cz)).toEqual([]);
+    const again = w.fake.issued.findIndex((j, k) => k >= before && j.stage === 'MESH' && j.cx === cx && j.cz === cz);
+    expect(again).toBeGreaterThanOrEqual(0);
+    expect(w.fake.issuedEdit[again]).toBe(true);
+    await settleDown(w, c, cam(0, 0), lcg(3));
+    expect(stagesOf(w, cx, cz).length).toBe(1);
+    expect(w.fake.editStaged).toEqual([[cx, cz]]);
+    const done = read(c);
+    expect(doneOf(done)).toEqual({ T: done.T.needed, D: done.D.needed, L: done.L.needed, MESH: done.MESH.needed });
+    expect([done.editDropped, done.dropped]).toEqual([1, 0]);
+    expect(w.fake.violations).toEqual([]);
+    expect(w.fake.events).toEqual([]);
+  });
+
+  test('a MESH settling after the sim\'s publish but before its reply (the slot\'s simPins > 0, its versions moved) counts in editDropped, not dropped, and is not fatal while strict', async () => {
+    const { w, c } = make({ rd: 4, strict: true });
+    c.update(cam(0, 0));
+    await flush();
+    let i = -1;
+    const open = (): number => w.fake.pending.findIndex((p) => p.stage === 'MESH' && c.editState(p.cx, p.cz) === 0);
+    while (w.fake.pending.length > 0 && (i = open()) < 0) { w.settle(); await flush(); }
+    expect(i).toBeGreaterThanOrEqual(0);
+    const { cx, cz } = w.fake.pending[i]!;
+    // The edit is posted (its 3 × 3 pinned) and published: the edited column's block version moves. Every MESH that
+    // read it is in the pinned 3 × 3, and no L reads it (the gate: its 3 × 3 is Published).
+    c.simPin(cx, cz);
+    recordOf(w, cx, cz)!.block++;
+    const raced = w.fake.pending.filter((p) => Math.abs(p.cx - cx) <= 1 && Math.abs(p.cz - cz) <= 1);
+    expect(raced.every((p) => p.stage === 'MESH')).toBe(true);
+    w.settle(i);
+    await flush();
+    let n = read(c);
+    expect([n.editDropped, n.dropped]).toEqual([1, 0]);
+    expect(w.fake.events).toEqual([]);
+    // The other raced MESHes settle while it is pinned: edit drops too.
+    for (const p of raced.slice(1)) {
+      const k = w.fake.pending.indexOf(p);
+      if (k >= 0) { w.settle(k); await flush(); }
+    }
+    n = read(c);
+    expect([n.editDropped, n.dropped]).toEqual([raced.length, 0]);
+    // The reply: unpinned, and the dirty column marked.
+    c.simUnpin(cx, cz);
+    c.markEdited([colKey(cx, cz)]);
+    await settleDown(w, c, cam(0, 0), lcg(5));
+    n = read(c);
+    expect(doneOf(n)).toEqual({ T: n.T.needed, D: n.D.needed, L: n.L.needed, MESH: n.MESH.needed });
+    expect(n.dropped).toBe(0);
+    expect(stagesOf(w, cx, cz).length).toBe(1);
+    expect(w.fake.editStaged).toEqual([[cx, cz]]);
+    expect(w.fake.events).toEqual([]);
+    expect(w.fake.violations).toEqual([]);
+  });
+
+  test('Review Focus 1: 10 markEdited of one column 20 ms apart, each MESH settling 30 ms after issue: never two MESHes of the slot in flight, every raced result in editDropped, no `staged over a pending payload` throw, the column ends staged with the 10th editSeq, onEditStaged called for it', async () => {
+    const { w, c } = make({ rd: 4 });
+    await fill(w, c, cam(0, 0));
+    const [first] = stagesOf(w, 0, 0);
+    expect(stagesOf(w, 0, 0).length).toBe(1);
+    const stages0 = w.fake.stages.length;
+    const issued0 = w.fake.issued.length;
+    /** The time each pending job settles: 30 ms after its issue. */
+    const due = new Map<Pending, number>();
+    let t = 0;
+    const stamp = (): void => { for (const p of w.fake.pending) if (!due.has(p)) due.set(p, t + 30); };
+    let marks = 0;
+    for (;;) {
+      const nextMark = marks < 10 ? 20 * marks : Infinity;
+      let next: Pending | null = null;
+      for (const p of w.fake.pending) if (next === null || due.get(p)! < due.get(next)!) next = p;
+      const nextSettle = next === null ? Infinity : due.get(next)!;
+      if (nextMark === Infinity && nextSettle === Infinity) break;
+      if (nextMark <= nextSettle) {
+        t = nextMark;
+        // Each edit as the sim publishes it, then its reply's markEdited.
+        editRecords(w, 0, 0);
+        c.markEdited([colKey(0, 0)]);
+        marks++;
+      } else {
+        t = nextSettle;
+        w.settle(w.fake.pending.indexOf(next!));
+        await flush();
+      }
+      stamp();
+      expect(w.fake.pending.filter((p) => p.cx === 0 && p.cz === 0).length, `MESHes of (0, 0) in flight at ${t} ms`).toBeLessThanOrEqual(1);
+    }
+    const issued = w.fake.issued.slice(issued0);
+    expect(issued.every((j) => j.stage === 'MESH' && j.cx === 0 && j.cz === 0)).toBe(true);
+    expect(w.fake.issuedEdit.slice(issued0).every((e) => e)).toBe(true);
+    expect(issued.length).toBeGreaterThan(1);
+    const n = read(c);
+    // Every result but the last raced a later markEdited.
+    expect([n.editDropped, n.dropped]).toEqual([issued.length - 1, 0]);
+    expect(w.fake.stages.slice(stages0)).toEqual([{ cx: 0, cz: 0, seq: first!.seq + 10 }]);
+    expect(w.fake.editStaged).toEqual([[0, 0]]);
+    expect(w.fake.events).toEqual([]);
+    expect(w.fake.violations).toEqual([]);
+  });
+
+  test('Review Focus 4: after each of 200 random edits through a real store and applyEdits (border and corner ones included), every column of the edited column\'s 3 × 3 (and every column of dirty) re-meshed from scratch equals the payload the fake sink was last staged with', async () => {
+    const real = cannedStore7();
+    const meshScratch = createMeshScratch();
+    const inside = (cx: number, cz: number): boolean => Math.abs(cx) <= 2 && Math.abs(cz) <= 2;
+    // The columns within 2 of (0, 0) are meshed from the real store when issued (a worker reads the store as it runs).
+    const { w, c } = make({ rd: 4, payloadOf: (cx, cz) => (inside(cx, cz) ? meshColumnPayload(real.neighborhood(cx, cz), meshScratch, MEDIUM) : null) });
+    await fill(w, c, cam(0, 0));
+    const diffs = createDiffStore();
+    const editScratch = createEditScratch();
+    const rnd = lcg(5151);
+    const local = (): number => { const r = rnd(10); return r < 3 ? 0 : r < 6 ? 15 : rnd(16); };
+    const valueAt = (x: number, y: number, z: number): number => (real.blockAt(x, y, z) << 8) | real.fluidAt(x, y, z);
+    const realVersions = (): number[] => {
+      const out: number[] = [];
+      for (let cz = -3; cz <= 3; cz++) {
+        for (let cx = -3; cx <= 3; cx++) {
+          const base = real.table.find(cx, cz);
+          out.push(real.table.blockVersion(base), real.table.lightVersion(base));
+        }
+      }
+      return out;
+    };
+    const placed = [STONE << 8, GLASS << 8, TORCH << 8, ICE << 8, (AIR << 8) | WATER_SOURCE];
+    const otherScratch = createMeshScratch();
+    let borders = 0;
+    let corners = 0;
+    for (let e = 0; e < 200; e++) {
+      const lx = local();
+      const lz = local();
+      const edge = (v: number): boolean => v === 0 || v === 15;
+      if (edge(lx) && edge(lz)) corners++;
+      else if (edge(lx) || edge(lz)) borders++;
+      const y = CANNED_TOP - 3 + rnd(8);
+      const now = valueAt(lx, y, lz);
+      const value = now === AIR << 8 ? placed[rnd(placed.length)]! : AIR << 8;
+      // The page's edit path: pin, the sim's batch, the versions it published, the reply's unpin and markEdited.
+      c.simPin(0, 0);
+      const v0 = realVersions();
+      const r = applyEdits(real, diffs, editScratch, [{ x: lx, y, z: lz, op: 'set', value, expect: now }], () => 0);
+      expect(r.refused, `edit ${e}`).toBeNull();
+      const v1 = realVersions();
+      for (let k = 0; k < 49; k++) {
+        const rec = recordOf(w, (k % 7) - 3, Math.floor(k / 7) - 3)!;
+        rec.block += v1[2 * k]! - v0[2 * k]!;
+        rec.light += v1[2 * k + 1]! - v0[2 * k + 1]!;
+      }
+      c.simUnpin(0, 0);
+      c.markEdited(r.dirty);
+      await settleAll(w, 6000 + e);
+      const check = new Set<number>(around(0, 0).map(([x, z]) => colKey(x, z)));
+      for (const k of r.dirty) check.add(k);
+      for (const k of check) {
+        const [x, z] = [colKeyCx(k), colKeyCz(k)];
+        expect(inside(x, z), `edit ${e}: dirty (${x}, ${z})`).toBe(true);
+        const fresh = meshColumnPayload(real.neighborhood(x, z), otherScratch, MEDIUM);
+        expect(payloadDiff(fresh, w.fake.lastPayload.get(k)!), `edit ${e} at (${lx}, ${y}, ${lz}): (${x}, ${z})`).toBeNull();
+      }
+    }
+    expect([borders > 20, corners > 20]).toEqual([true, true]);
+    const n = read(c);
+    expect([n.dropped, n.editDropped]).toEqual([0, 0]);
+    expect(w.fake.violations).toEqual([]);
+    expect(w.fake.events).toEqual([]);
+  }, 120_000);
+
+  test('an edit MESH for a column that left keepMesh before issue is not issued', async () => {
+    const { w, c } = make({ rd: 4 });
+    await fill(w, c, cam(0, 0));
+    const meshes = issuedOf(w, 'MESH', 0, 0);
+    c.markEdited([colKey(0, 0)]);
+    c.markEdited([colKey(0, 0)]);
+    // In flight, the second waits on the edit queue; the camera moves 7 columns east: (0, 0) leaves keepMesh (RD + 1),
+    // still inside keepVoxels (RD + 5).
+    expect(issuedOf(w, 'MESH', 0, 0)).toBe(meshes + 1);
+    c.update(cam(7, 0));
+    w.settle(pendingAt(w, 'MESH', 0, 0));
+    await flush();
+    await settleDown(w, c, cam(7, 0), lcg(11));
+    expect(issuedOf(w, 'MESH', 0, 0)).toBe(meshes + 1);
+    expect(stagesOf(w, 0, 0).length).toBe(1);
+    expect(w.fake.removes.some(([x, z]) => x === 0 && z === 0)).toBe(true);
+    expect(read(c).editDropped).toBe(1);
+    expect(w.fake.violations).toEqual([]);
+  });
+
+  test('the generation gate still holds every stream job while the edit ring drains', async () => {
+    const { w, c } = make({ rd: 4 });
+    await fill(w, c, cam(0, 0));
+    // A draft configured and not applied, then a crossing that needs new T, D, L and MESH jobs.
+    w.fake.generation++;
+    const before = w.fake.issued.length;
+    c.update(cam(1, 0));
+    expect(w.fake.issued.length).toBe(before);
+    const cols = [[0, 0], [1, 0], [0, 1]] as const;
+    c.markEdited(cols.map(([x, z]) => colKey(x, z)));
+    expect(w.fake.issued.slice(before)).toEqual(cols.map(([x, z]) => ({ stage: 'MESH', cx: x, cz: z })));
+    for (let u = 0; u < 20; u++) {
+      while (w.fake.pending.length > 0) { w.settle(); await flush(); }
+      c.update(cam(1, 0));
+      await flush();
+    }
+    expect(w.fake.issued.length).toBe(before + 3);
+    expect(w.fake.issuedEdit.slice(before)).toEqual([true, true, true]);
+    expect(w.fake.editStaged).toEqual(cols);
+    c.adopt(w.fake.generation);
+    c.update(cam(1, 0));
+    expect(w.fake.issued.length).toBeGreaterThan(before + 3);
+    expect(w.fake.violations).toEqual([]);
+  });
+});
+
 describe('progressFraction and phaseName (SP4a spec §8.3, over the coordinator counts)', () => {
   const p = (done: Partial<Record<Stage, number>>): CoordinatorCounts => {
     const c = createCoordinatorCounts();
@@ -2372,7 +2752,10 @@ describe('worldJobsOf (ruling P30, SP4b spec §3.13)', () => {
     terrain: (cx: number, cz: number, protoOnly?: boolean) => { calls.push(`terrain ${cx} ${cz} ${String(protoOnly)}`); return Promise.resolve(done(cx, cz, null)); },
     decorate: (cx: number, cz: number) => { calls.push(`decorate ${cx} ${cz}`); return Promise.resolve(done(cx, cz, null)); },
     light: (cx: number, cz: number) => { calls.push(`light ${cx} ${cz}`); return Promise.resolve(done(cx, cz, lightVersions)); },
-    meshColumn: (cx: number, cz: number) => { calls.push(`meshColumn ${cx} ${cz}`); return Promise.resolve({ payload, generation: 0 }); },
+    meshColumn: (cx: number, cz: number, o?: { readonly edit: boolean }) => {
+      calls.push(o === undefined ? `meshColumn ${cx} ${cz}` : `meshColumn ${cx} ${cz} ${JSON.stringify(o)}`);
+      return Promise.resolve({ payload, generation: 0 });
+    },
     cancelWorld: (pred: (stage: Stage, cx: number, cz: number) => boolean) => { calls.push(`cancelWorld ${String(pred('T', 0, 0))}`); },
     liveWorkers: () => live,
   } as unknown as WorkerPool;
@@ -2380,12 +2763,12 @@ describe('worldJobsOf (ruling P30, SP4b spec §3.13)', () => {
   test('T, D, L and MESH map to terrain, decorate, light and meshColumn', async () => {
     calls.length = 0;
     const jobs = worldJobsOf(pool);
-    expect(await jobs.run('T', 1, -2, false)).toEqual({ versions: null, payload: null, generation: 0 });
-    expect(await jobs.run('D', 1, -2, false)).toEqual({ versions: null, payload: null, generation: 0 });
-    const l = await jobs.run('L', 1, -2, false);
+    expect(await jobs.run('T', 1, -2, false, false)).toEqual({ versions: null, payload: null, generation: 0 });
+    expect(await jobs.run('D', 1, -2, false, false)).toEqual({ versions: null, payload: null, generation: 0 });
+    const l = await jobs.run('L', 1, -2, false, false);
     expect(l.versions).toBe(lightVersions);
     expect(l.payload).toBeNull();
-    const m = await jobs.run('MESH', 4, 5, false);
+    const m = await jobs.run('MESH', 4, 5, false, false);
     expect(m.payload).toBe(payload);
     expect(m.versions).toBe(payload.versions);
     expect(calls).toEqual(['terrain 1 -2 false', 'decorate 1 -2', 'light 1 -2', 'meshColumn 4 5']);
@@ -2393,8 +2776,15 @@ describe('worldJobsOf (ruling P30, SP4b spec §3.13)', () => {
 
   test('T with protoOnly runs terrain(cx, cz, true) (SP4b spec §3.7)', async () => {
     calls.length = 0;
-    expect(await worldJobsOf(pool).run('T', 3, 4, true)).toEqual({ versions: null, payload: null, generation: 0 });
+    expect(await worldJobsOf(pool).run('T', 3, 4, true, false)).toEqual({ versions: null, payload: null, generation: 0 });
     expect(calls).toEqual(['terrain 3 4 true']);
+  });
+
+  test('an edit MESH runs meshColumn(cx, cz, { edit: true }) (SP5a spec §2.6, D22)', async () => {
+    calls.length = 0;
+    const m = await worldJobsOf(pool).run('MESH', 4, 5, false, true);
+    expect(m.payload).toBe(payload);
+    expect(calls).toEqual(['meshColumn 4 5 {"edit":true}']);
   });
 
   test('cancel is cancelWorld and liveWorkers the pool\'s', () => {
@@ -2420,7 +2810,7 @@ describe('worldJobsOf (ruling P30, SP4b spec §3.13)', () => {
       meshColumn: () => Promise.resolve({ payload, generation: 5 }),
     } as unknown as WorkerPool;
     const j = worldJobsOf(old);
-    for (const st of ['T', 'D', 'L', 'MESH'] as const) expect((await j.run(st, 1, 2, false)).generation, st).toBe(5);
+    for (const st of ['T', 'D', 'L', 'MESH'] as const) expect((await j.run(st, 1, 2, false, false)).generation, st).toBe(5);
     epoch = 0;
   });
 
@@ -2434,9 +2824,9 @@ describe('worldJobsOf (ruling P30, SP4b spec §3.13)', () => {
       meshColumn: () => Promise.reject(cancelled),
     } as unknown as WorkerPool;
     const jobs = worldJobsOf(failing);
-    await expect(jobs.run('T', 0, 0, false)).rejects.toBe(full);
-    await expect(jobs.run('D', 0, 0, false)).rejects.toBe(cancelled);
-    await expect(jobs.run('L', 0, 0, false)).rejects.toBe(full);
-    await expect(jobs.run('MESH', 0, 0, false)).rejects.toBe(cancelled);
+    await expect(jobs.run('T', 0, 0, false, false)).rejects.toBe(full);
+    await expect(jobs.run('D', 0, 0, false, false)).rejects.toBe(cancelled);
+    await expect(jobs.run('L', 0, 0, false, false)).rejects.toBe(full);
+    await expect(jobs.run('MESH', 0, 0, false, false)).rejects.toBe(cancelled);
   });
 });
