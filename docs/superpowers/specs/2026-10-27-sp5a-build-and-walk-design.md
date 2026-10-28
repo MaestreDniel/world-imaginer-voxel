@@ -349,7 +349,7 @@ Against SP4c's last full run on `main`, 40389787923 (7cdd1df, 3 min 13 s wall: `
 - metrics-fast `rest` ≈ 75-85 s (+15-25 s: `edit.metric.ts`'s fast script, 100 L3 edits at about 30 ms each for the relight and nine `lightRegion` checks, 2 `referenceLight` boxes, and E5 at RD 4).
 - metrics-quick `render` ≈ 100-115 s (+35-50 s: 500 L3 edits at about 30 ms each, 10 `referenceLight` boxes of 5 × 5 columns, and E5 at RD 6; the shard with the most room). These L3 figures are estimates from the per-call costs (`light.column` p50 2.15 ms today); the plan measures a prototype of `edit.metric.ts` before it fixes the shard. Measured on the prototype (Task 36, alone on the laptop): 21 s on the fast tier (planned ≤ 25 s); on quick 59 s with E5 at RD 6 and 53 s at RD 4 (planned ≤ 50 s): L3 alone takes 42 s, 33 s of it the 5,760 fresh `copyLightRegion` + `lightRegion` comparisons (about 5.4 ms each, the emitter scan included, against the estimate's 2-4 ms) and 8 s the 10 `referenceLight` boxes. So E5 runs at RD 4 on quick too, and `edit.metric.ts` runs in a metrics-quick shard of its own, `edit` (the named lever, taken now); `render` keeps SP4c's four files.
 - G2's read of the committed JSON: negligible. Nothing GPU-based runs in CI.
-- **Expected wall:** ≈ 3.2-3.3 min (+0-10 s), metrics-quick `terrain` still the long pole. **Exit criterion:** the exit run's wall recorded against this; above 3 min 30 s, `edit.metric.ts` moves into a quick shard of its own (the named lever) before the exit.
+- **Expected wall:** ≈ 3.2-3.3 min (+0-10 s), metrics-quick `terrain` still the long pole. **Exit criterion:** the exit run's wall recorded against this, at most 3 min 30 s. The named lever, `edit.metric.ts` in a metrics-quick shard of its own, was taken in Task 36 (the prototype's timing above).
 
 ## 8. Governance
 
@@ -415,7 +415,7 @@ Not cuttable: everything else in the brief's SP5a list (break, place, pick, hotb
 | the world unchanged: `GENERATOR_VERSION` 5, `test/goldens.json` untouched, `?selftest=1` 59/59 in Chrome and Firefox, Bun 59/59 | `git diff main -- test/goldens.json`, browsers, `npx --yes bun@1 test/tools/goldensJsc.ts` |
 | the smoke's `build` and `walk` steps and the changed `overlay` step green | `node test/tools/uiSmoke.ts` |
 | build, tests and full metrics green with SP5a's rows active | `npm run build && npm test && npm run test:metrics:full` |
-| CI green, its wall recorded against §7's ≈ 3.2-3.3 min (above 3 min 30 s, the lever first) | GitHub Actions |
+| CI green, its wall recorded against §7's ≈ 3.2-3.3 min and at most 3 min 30 s (§7's named lever taken in Task 36) | GitHub Actions |
 | production, headful, Chrome (RegionBatch) and Firefox (RegionMesh): place, break, palette, walk, swim, a torch at night; the Firefox selftest 59/59 | the controller's check, `assets/sp5a/production-check.json` |
 | the review screenshots committed and described | the controller's check |
 | the master amendments pinned in 'master spec amendments (SP5a §9)', the bare-SP5 rule, the cut-line wording | `npm test` (arch) |
@@ -439,6 +439,28 @@ Measured by an agent on 2026-10-28 on 1fca6d9 (L10 landed, no D30 lever), throug
 Over L10 in both runs: frame p50, p95 and p99 4.165 ms (one display interval), 17 structural operations, draw calls max 11, GPU estimate 66.4 MB, main-thread p95 1.24 and 1.28 ms, `partialColumnFrames` and `mixedColumnFrames` 0, `dropped`, `failed` and `storeFull` 0; the stream (L1-L6) and live (L7-L9) blocks p95 4.165 ms with `over33` 0. `mainP95Ms` reads 0 in both: the frame's input, walk step, DDA and outline are not timed until Task 35. Run 1's one long frame (L10 frame 3,435 of 7,406, about 14 s in, during the hover's edits) took 149.94 ms with 0.81 ms of main-thread work and no structural operation on or near it (the main thread's frame work, uploads included, was not where the time went; not traced further); run 2 had none. L10's `over33` 0 is an exit check, read again on Task 41's committed file.
 
 **Decision:** `editVisibleP95` is 9.17 and 9.05 ms, at most 50 in both runs, with every step of the budget inside its bound: Task 19 (D30's levers) is skipped.
+
+### The first SP5a CI run (Task 36)
+
+GitHub Actions run 40665272687 on `sp5a/build-and-walk` at b1a35e1 (`test(metrics): L3 and E5's session part`), green, created 2026-10-28T09:34:18Z and completed 09:37:03Z: **wall 2 min 45 s**, within the 3 min 30 s budget and below §7's expected ≈ 3.2-3.3 min (SP4c's last run: 3 min 13 s). The critical path is metrics-quick `surface` (145 s, then `ci-ok`), not `terrain` as §7 expected: both `surface` shards grew and metrics-quick `terrain` shrank against SP4c's run, every metrics job with a cold region cache (its key hashes `src/**`, which SP5a changes); the shift was not traced further. Job times (start → end) from `gh run view --json jobs`, each including its setup (checkout, `npm ci` and the build or the shard check: about 10-16 s in the jobs read); "SP4c" stands for run 40389787923's time where §7 plans no change.
+
+| job | duration | §7 expectation | within |
+|---|---|---|---|
+| `changes` | 8 s | (not in §7) | — |
+| `check` | 114 s | ≈ 95-105 s | no, +9 s |
+| `unit (heavy)` | 69 s | ≈ 90-95 s | yes |
+| `unit (rest)` | 102 s | ≈ 150-165 s | yes |
+| metrics-fast `rest` | 71 s | ≈ 75-85 s | yes |
+| metrics-fast `surface` | 87 s | 50 s (SP4c) | no, +37 s |
+| metrics-fast `terrain` | 90 s | 90 s (SP4c) | yes |
+| metrics-quick `render` | 82 s | 67 s (SP4c's four files; `edit.metric.ts` moved to `edit`) | no, +15 s |
+| metrics-quick `terrain` | 99 s | 173 s (SP4c, the long pole) | yes |
+| metrics-quick `surface` | 145 s | 83 s (SP4c) | no, +62 s (the critical path) |
+| metrics-quick `edit` (new) | 87 s | 53 s for the file alone on the laptop (the prototype) | no, +34 s (its run step 73 s) |
+| metrics-quick `rest` | 106 s | 122 s (SP4c) | yes |
+| `ci-ok` | 3 s | (not in §7) | — |
+
+`unit (rest)` at 102 s is below 173 s, so `relight.test.ts` and `coordinator.test.ts` stay in `rest` (no move to `heavy`). `test/unit/walk.test.ts`'s scan-allocation test, flaky once locally under load, passed.
 
 ## Threshold log
 
