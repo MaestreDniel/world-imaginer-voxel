@@ -99,7 +99,10 @@ export interface ColumnWriter {
  * write is copy-on-write: no path writes a dense block, fluid or light slot in place, and the entry it replaces is
  * kept by the writer (its reference moves from the entry to the writer) until `publish` retires it or `rollback`
  * re-points the entry to it. The heightmaps in `aux()` are the caller's (`patchHeightmaps`), as is re-running them
- * after a `rollback`. The stale guard of `ColumnWriter` (`WriterStale`) runs on every call.
+ * after a `rollback`. The stale guard of `ColumnWriter` (`WriterStale`) runs on every call. A thread has one writer
+ * per record claim (`reopenPublished` returns the same object until the record is freed or claimed again), so a
+ * column reopened by several edits of a batch has one set of kept codes, and a `rollback` or `publish` per open, in
+ * any order, undoes or publishes the batch once.
  */
 export interface EditWriter {
   readonly cx: number;

@@ -230,6 +230,45 @@ describe('the edit writer (SP5a spec §2.2, D18)', () => {
     expect(entries()).toEqual(was);
   });
 
+  test('reopenPublished returns the thread\'s one writer of the record: two opens of a column in a batch, each replacing section 0, roll back in open order or in reverse to the previous entry (code, refcount, voxel), and publish on both bumps blockVersion once', () => {
+    for (const order of ['open', 'reverse'] as const) {
+      const s = newStore();
+      publish(s);
+      const r = record(s);
+      const k0 = r.finalBlocks(0);
+      const kf = r.finalFluid(0);
+      const meta = r.meta(0);
+      expect([s.blockPool.refcount(k0), s.bytePool.refcount(kf)]).toEqual([2, 2]);
+      expect(s.final(CX, CZ)!.block(0, -64 + 15, 0)).toBe(0);
+      const a = s.reopenPublished(CX, CZ);
+      a.replaceBlocks(0, words(5), bytes(0));
+      const b = s.reopenPublished(CX, CZ);
+      expect(b).toBe(a);
+      b.replaceBlocks(0, words(6), bytes(0));
+      expect(s.final(CX, CZ)!.block(0, -64 + 15, 0)).toBe(6);
+      for (const w of order === 'open' ? [a, b] : [b, a]) w.rollback();
+      expect([r.finalBlocks(0), r.finalFluid(0), r.meta(0)]).toEqual([k0, kf, meta]);
+      expect([s.blockPool.refcount(k0), s.bytePool.refcount(kf)]).toEqual([2, 2]);
+      expect(s.final(CX, CZ)!.block(0, -64 + 15, 0)).toBe(0);
+    }
+    const s = newStore();
+    publish(s);
+    const r = record(s);
+    const before = r.versions();
+    const a = s.reopenPublished(CX, CZ);
+    a.replaceBlocks(0, words(5), bytes(0));
+    const b = s.reopenPublished(CX, CZ);
+    b.replaceBlocks(0, words(6), bytes(0));
+    a.publish();
+    b.publish();
+    expect(r.versions()).toEqual([before[0]! + 1, before[1], 3]);
+    expect(s.final(CX, CZ)!.block(0, -64 + 15, 0)).toBe(6);
+    // A freed and re-published record gets a new writer.
+    s.freeColumn(CX, CZ);
+    publish(s);
+    expect(s.reopenPublished(CX, CZ)).not.toBe(a);
+  });
+
   test('after a publish, the retained previous codes are released (the old slot\'s refcount back to its value without the writer)', () => {
     const s = newStore();
     publish(s);

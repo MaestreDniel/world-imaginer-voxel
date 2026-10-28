@@ -120,7 +120,11 @@ export interface VoxelStore {
   reopenColumn(cx: number, cz: number, from: 1 | 2): ColumnWriter;
   /**
    * The edit writer of the Published column (cx, cz) (SP5a spec §2.2, D18). Throws `reopenPublished: (cx, cz) is not
-   * Published` unless the record holds (cx, cz) at status 3; its `aux()` views the record's slot.
+   * Published` unless the record holds (cx, cz) at status 3; its `aux()` views the record's slot. One writer per record
+   * claim on each thread: every call returns the same object until the record is freed or claimed again, so a batch
+   * that reopens a column per edit keeps one set of kept codes for it, and its `publish` or `rollback` (called once per
+   * open, in any order) acts once, the repeats finding nothing pending. Only the sim edits, so no two threads hold
+   * writers of one record.
    */
   reopenPublished(cx: number, cz: number): EditWriter;
   /** Releases every reference the record holds and frees it; nothing unless the record holds (cx, cz). */
@@ -528,6 +532,12 @@ export function attachStore(h: StoreHandles, thread = MAIN_THREAD): VoxelStore {
   const KEEP: Retire = () => {};
 
   /**
+   * This thread's edit writer of each record base, with the generation it captured: `reopenPublished` returns it while
+   * the record holds the same claim, so a column has one set of kept codes however often a batch reopens it.
+   */
+  const editWriters = new Map<number, { gen: number; writer: EditWriter }>();
+
+  /**
    * The `EditWriter` of the record at `base`, which holds (cx, cz) at status 3 (SP5a spec §2.2, D18), with the
    * generation its lookup validated. Each entry's first replacement since the last `publish` keeps its previous code
    * (`kept`: entry index, pool, code, and the section for a block or fluid entry, else −1; `storeChannel` gets `KEEP`
@@ -662,7 +672,12 @@ export function attachStore(h: StoreHandles, thread = MAIN_THREAD): VoxelStore {
     reopenPublished(cx, cz) {
       const base = committedIn(cx, cz, STATUS_PUBLISHED, STATUS_PUBLISHED);
       if (base < 0) throw new Error(`reopenPublished: (${cx}, ${cz}) is not Published`);
-      return editWriter(base, cx, cz, foundGen);
+      const gen = foundGen;
+      const open = editWriters.get(base);
+      if (open !== undefined && open.gen === gen && open.writer.cx === cx && open.writer.cz === cz) return open.writer;
+      const writer = editWriter(base, cx, cz, gen);
+      editWriters.set(base, { gen, writer });
+      return writer;
     },
 
     freeColumn(cx, cz) {
