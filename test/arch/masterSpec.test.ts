@@ -1127,6 +1127,8 @@ describe('master spec amendments (SP5a §9)', () => {
     [/^\s+player\/fly\.ts /, 'walk.ts physics.ts raycast.ts interaction.ts hotbar.ts (SP5a)', 'src/player/raycast.ts'],
     [/^\s+player\/fly\.ts /, 'walk.ts physics.ts raycast.ts interaction.ts hotbar.ts (SP5a)', 'src/player/interaction.ts'],
     [/^\s+player\/fly\.ts /, 'walk.ts physics.ts raycast.ts interaction.ts hotbar.ts (SP5a)', 'src/player/hotbar.ts'],
+    [/^\s+player\/fly\.ts /, 'walk.ts physics.ts raycast.ts interaction.ts hotbar.ts (SP5a)', 'src/player/walk.ts'],
+    [/^\s+player\/fly\.ts /, 'walk.ts physics.ts raycast.ts interaction.ts hotbar.ts (SP5a)', 'src/player/physics.ts'],
     [/^\s+ui\/world\/\* /, 'buildHud.ts blockHistory.ts (SP5a)', 'src/ui/world/buildHud.ts'],
     [/^\s+ui\/world\/\* /, 'buildHud.ts blockHistory.ts (SP5a)', 'src/ui/world/blockHistory.ts'],
     [/^\s+renderer\.ts /, 'selection.ts (SP5a)', 'src/render/selection.ts'],
@@ -1258,6 +1260,21 @@ describe('master spec amendments (SP5a §9)', () => {
     const actions = s412.split('\n').find((l) => l.startsWith('**Actions.**'));
     expect(actions, 'no `**Actions.**` line in §4.12').toBeDefined();
     expect(actions).toContain('(SP5a: the player\'s body counts in flight too; one action per click, or, with the \'Hold mouse button to repeat\' setting, repeated while held: break every 0.3 s, place every 0.2 s)');
+  });
+
+  test('§4.17\'s Walk lines name the in-water gravity, lava, the unstuck rule, the 20 Hz values and SLIPPERY (SP5a spec §3.2, D2-D5, D29, §9)', () => {
+    const at417 = text.indexOf('### 4.17 Player');
+    const s417 = text.slice(at417, text.indexOf('### 4.18 ', at417)).split('\n');
+    const walk = s417.findIndex((l) => l.startsWith('- **Walk:**'));
+    expect(walk, 'no `- **Walk:**` line in §4.17').toBeGreaterThanOrEqual(0);
+    const lines: string[] = [];
+    for (let i = walk + 1; i < s417.length && s417[i]!.startsWith('  - '); i++) lines.push(s417[i]!);
+    const swim = lines.find((l) => l.startsWith('  - swimming:'));
+    expect(swim).toBe('  - swimming: fluids never collide, in-water gravity 0.005 per tick and drag 0.8 (SP5a, its Point 5; the alternative: a 0.005 lift while the eye is under water); lava: gravity 0.02, drag 0.5;');
+    expect(lines.join('\n')).not.toContain('buoyancy');
+    expect(lines).toContain('  - unstuck scan upward at F, after a teleport and on any tick the body intersects a colliding block (SP5a); near plane 0.05;');
+    expect(lines.join('\n')).not.toContain('unstuck scan upward at spawn');
+    expect(lines[lines.length - 1]).toBe('  - the SP5a spec §3.2\'s per-tick values at a fixed 20 Hz; `SLIPPERY` blocks (ice, packed ice) slip 0.98.');
   });
 
   test('§1 names each SP5a module in its entry, which exists', () => {

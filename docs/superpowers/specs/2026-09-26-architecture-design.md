@@ -1241,9 +1241,10 @@ Target: edit → visible ≤ 50 ms p95, measured in the HUD.
 - **Ladders:** while the player AABB overlaps a ladder, vertical speed is clamped to ±2.35 blocks/s and Space climbs.
 - **Walk:**
   - 0.6×1.8 swept AABB with per-axis substeps ≤ 0.35 blocks, terminal velocity 78, step-up 0.6;
-  - swimming: fluids never collide, buoyancy 0.02, drag 0.8;
+  - swimming: fluids never collide, in-water gravity 0.005 per tick and drag 0.8 (SP5a, its Point 5; the alternative: a 0.005 lift while the eye is under water); lava: gravity 0.02, drag 0.5;
   - an unloaded column freezes vertical motion instead of counting as solid;
-  - unstuck scan upward at spawn; near plane 0.05.
+  - unstuck scan upward at F, after a teleport and on any tick the body intersects a colliding block (SP5a); near plane 0.05;
+  - the SP5a spec §3.2's per-tick values at a fixed 20 Hz; `SLIPPERY` blocks (ice, packed ice) slip 0.98.
 - **FPS limiter:** an accumulator with a ½-frame tolerance, so a cap of 60 on a 60 Hz display renders 60.
 - **Keys:** cleared on blur, and ignored while focus is in a text input.
 
