@@ -286,6 +286,29 @@ describe('still lava (SP5a spec §1.3)', () => {
     expect(allUnitFaces(passes[0])).toEqual(['8,8,8,0', '8,8,8,1', '8,8,8,2', '8,8,8,3', '8,8,8,4', '8,8,8,5']);
     expect(passes[2]).toHaveLength(0);
   });
+
+  test('water beside lava: the water face culled, the lava face drawn', () => {
+    // Water at (8, 8, 8); lava east of it (9, 8, 8), below it (8, 7, 8) and above it (8, 9, 8); air elsewhere.
+    const fluidAt = new Map([
+      [padIndex(8, 8, 8), WATER_SOURCE], [padIndex(9, 8, 8), LAVA_SOURCE], [padIndex(8, 7, 8), LAVA_SOURCE], [padIndex(8, 9, 8), LAVA_SOURCE],
+    ]);
+    const p = paddedFrom(() => AIR, () => 0xF0, (x, y, z) => fluidAt.get(padIndex(x, y, z)) ?? NO_FLUID);
+    const { passes } = mesh(p, depthFrom((x, y, z) => (x === 8 && y >= 7 && y <= 9 && z === 8 ? 3 : x === 9 && y === 8 && z === 8 ? 1 : 0)));
+    const water = allUnitFaces(passes[2]);
+    const lava = allUnitFaces(passes[0]);
+    // The planes the two share: the lava's full-height opaque face alone covers each one.
+    expect(water).not.toContain('8,8,8,1');
+    expect(lava).toContain('9,8,8,3');
+    expect(water).not.toContain('8,8,8,5');
+    expect(lava).toContain('8,7,8,4');
+    // The water's surface under the lava sits a ninth below it (cornerDrop 1), on no shared plane: both are drawn.
+    expect(water).toContain('8,8,8,4');
+    const top = passes[2].find((q) => faceOf(q) === 4)!;
+    for (const w of top.words) expect(fieldsOf(w).cornerDrop).toBe(1);
+    expect(lava).toContain('8,9,8,5');
+    // Its faces against air stay.
+    expect(water).toEqual(['8,8,8,0', '8,8,8,2', '8,8,8,3', '8,8,8,4']);
+  });
 });
 
 /** A store holding only the centre column (0, 0), Published, its fluid from `fluid(x, y, z)` (y absolute). */

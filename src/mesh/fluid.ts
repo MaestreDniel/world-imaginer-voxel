@@ -4,7 +4,8 @@
  * - **visibility:** a water voxel (fluid type water; in SP4a always air plus a still source) draws a face against a
  *   neighbour that does not occlude it (PASS opaque with the facing bit in `fullFaces`) and is not water, so also
  *   against glass, ice and the box states, whose own faces toward the water are the ones culled (`greedy.ts`,
- *   `boxes.ts`; SP5a spec §1.3);
+ *   `boxes.ts`; SP5a spec §1.3); against lava only its up face (its surface, a ninth below the lava), since lava's
+ *   opaque full-height face covers every plane the two share;
  * - **height:** positions stay at the voxel's full height, `8·(ly + 1)` at the top (positions are whole 1/8 units);
  *   the water shader lowers each corner by its `cornerDrop` ninths. A surface voxel (no water above) has
  *   `cornerDrop` 1 on its top face's four corners and on its side faces' two top corners; every other corner has 0;
@@ -141,7 +142,8 @@ export function meshFluid(p: PaddedSection, depth: Uint8Array, b: MeshBuilder, t
           const q = v + normal;
           const ns = blocks[q]!;
           if (pass[ns] === OPAQUE && (full[ns]! & oppBit) !== 0) continue;
-          if (typeOf(fluid[q]!) === ft) continue;
+          const nt = typeOf(fluid[q]!);
+          if (nt === ft) continue;
           if (ft === LAVA) {
             MASK_A[m] = (KA_PRESENT | KA_LAVA | f) >>> 0;
             MASK_B[m] = CORNER_LIGHT(light, blocks, solid, SMOOTH, q, su, sv, VERTS);
@@ -149,6 +151,9 @@ export function meshFluid(p: PaddedSection, depth: Uint8Array, b: MeshBuilder, t
             any = true;
             continue;
           }
+          // Lava's opaque full-height face covers the plane the two share; water's surface under lava sits a ninth
+          // below it, on no shared plane, and stays.
+          if (nt === LAVA && f !== FACE_UP) continue;
           const dep = depth[d * la + i * lu + j * lv]!;
           const top = typeOf(fluid[v + UP]!) === WATER ? 0 : topMask;
           // cornerDrop is 1 on the top corners of a surface voxel (spec §5.5: a still source sits at 8/9).
