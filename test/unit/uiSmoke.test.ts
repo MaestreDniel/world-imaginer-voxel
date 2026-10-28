@@ -40,7 +40,13 @@ import {
   LANDING_ABOVE as SMOKE_LANDING_ABOVE, LANDING_MAX_Y as SMOKE_LANDING_MAX_Y, listenerDiff, listenerKey, listenersLeakFree, OVERLAY_APPLY_MS, OVERLAY_NARROW_WIDTH,
   OVERLAY_REVEAL_MS, OVERLAY_RUNS, OVERLAY_SHOTS, OVERLAY_TILES_MS, OVERLAY_VIEWPORT, overlayQuery, parseHudStale, hudStaleRowOk, previewMs, smokeLandingY, SETTINGS_KEY as SMOKE_SETTINGS_KEY,
   storedMapMode, TELEPORT_EAST_PX, teleportTarget, WORLD_MAP_BPP as SMOKE_WORLD_MAP_BPP,
+  acrossFace, BUILD_QUERY, JUMP_MIN_RISE, PALETTE_SWATCHES, parseHudEdits, SMOKE_FACE, SMOKE_STATE, SMOKE_WATER_SOURCE, TORCH_MIN_LIGHT, WALK_GROUND_MS,
+  WALK_HOLD_MS, WALK_MIN_MOVE, WALK_PATH_BLOCKS, WALK_QUERY, walkCorridor, walkSnapOk,
 } from '../tools/uiSmoke';
+import { FACE_DOWN, FACE_EAST, FACE_NORTH, FACE_SOUTH, FACE_UP, FACE_WEST } from '../../src/world/blocks/kinds';
+import { REGISTRY } from '../../src/world/blocks/index';
+import { PLACEABLE } from '../../src/world/blocks/tags';
+import { paletteGroups } from '../../src/ui/palette';
 import { LANDING_ABOVE, LANDING_MAX_Y, landingY } from '../../src/ui/world/teleport';
 import { WORLD_MAP_BPP } from '../../src/ui/world/mapOverlay';
 import { SETTINGS_KEY, SETTINGS_DEFAULTS } from '../../src/ui/settings';
@@ -246,24 +252,27 @@ describe('UI smoke test: pure parts (SP2b spec §8 Tools, §12)', () => {
     expect(mountainSummaryOk(flat), flat).toBe(false);
   });
 
-  test('the steps run in SMOKE_STEPS order: the Density steps after rule, then preset profiles (SP3e), then start, world and world-mesh (SP4a), then SP4b\'s stream, then SP4c\'s overlay and overlay-mesh before console (SP3d spec §6, SP3e spec §8, SP4a spec §9.6, SP4b spec §8.6, SP4c spec §8.6, ruling P52)', () => {
+  test('the steps run in SMOKE_STEPS order: the Density steps after rule, then preset profiles (SP3e), then start, world and world-mesh (SP4a), then SP4b\'s stream, then SP4c\'s overlay and overlay-mesh, then SP5a\'s build and walk before console (SP3d spec §6, SP3e spec §8, SP4a spec §9.6, SP4b spec §8.6, SP4c spec §8.6, SP5a spec §6.4, ruling P52)', () => {
     expect(SMOKE_STEPS).toEqual([
       'selftest', 'load', 'number', 'knot', 'slider', 'box', 'profile', 'presets', 'undo/redo', 'reload', 'cut line', 'voxels', 'tabs', 'rule',
       'density tab', 'density node', 'density mute', 'density json', 'density narrow', 'density horizontal', 'density drag', 'density times',
-      'preset profiles', 'start', 'world', 'world-mesh', 'stream', 'overlay', 'overlay-mesh', 'console',
+      'preset profiles', 'start', 'world', 'world-mesh', 'stream', 'overlay', 'overlay-mesh', 'build', 'walk', 'console',
     ]);
     expect(SMOKE_STEPS.indexOf('density tab')).toBe(SMOKE_STEPS.indexOf('rule') + 1);
     expect(SMOKE_STEPS.indexOf('start')).toBe(SMOKE_STEPS.indexOf('preset profiles') + 1);
     expect(SMOKE_STEPS.indexOf('world')).toBe(SMOKE_STEPS.indexOf('start') + 1);
     expect(SMOKE_STEPS.indexOf('stream')).toBe(SMOKE_STEPS.indexOf('world-mesh') + 1);
     expect(SMOKE_STEPS.indexOf('overlay')).toBe(SMOKE_STEPS.indexOf('stream') + 1);
-    expect(SMOKE_STEPS.indexOf('overlay-mesh')).toBe(SMOKE_STEPS.indexOf('console') - 1);
+    expect(SMOKE_STEPS.indexOf('build')).toBe(SMOKE_STEPS.indexOf('overlay-mesh') + 1);
+    expect(SMOKE_STEPS.indexOf('walk')).toBe(SMOKE_STEPS.indexOf('console') - 1);
     expect(SMOKE_STEPS.indexOf('console')).toBe(SMOKE_STEPS.length - 1);
     expect(stepId('world-mesh: the parity of mesh and batch')).toBe('world-mesh');
     expect(stepId('world: /?rd=4 to the reveal')).toBe('world');
     expect(stepId('stream: /?rd=4 on both renderers, W held for 4 s, then RD 6 live')).toBe('stream');
     expect(stepId('overlay: /?rd=4&renderer=batch&wiTest=1, M, teleport, split, live edits, leak checks')).toBe('overlay');
     expect(stepId('overlay-mesh: /?rd=4&renderer=mesh&wiTest=1, M, teleport, a terrain Apply')).toBe('overlay-mesh');
+    expect(stepId('build: /?rd=4&renderer=batch&wiTest=1&pitch=-60, place, break, undo, the palette')).toBe('build');
+    expect(stepId('walk: /?rd=4&renderer=batch&wiTest=1&yaw=0, F, W, Space, a walking teleport')).toBe('walk');
     // Its own id: `presets` is the preset-file step.
     expect(stepId('preset profiles: each draft preset opened by URL')).toBe('preset profiles');
     expect(stepId('presets: export, apply {} in the patch box, import the exported file')).toBe('presets');
@@ -963,6 +972,112 @@ describe('UI smoke test: the overlay steps (SP4c spec §8.6)', () => {
     expect(listenersLeakFree(hintGone, false)).toBe(false);
     expect(listenersLeakFree(listenerDiff(base, base.slice(1)), true)).toBe(false);
     expect(listenersLeakFree(listenerDiff(base, base), false)).toBe(true);
+  });
+});
+
+describe('UI smoke test: the build and walk steps (SP5a spec §6.4)', () => {
+  let dom: ReturnType<typeof installDom>;
+  beforeEach(() => {
+    dom = installDom();
+    vi.useFakeTimers();
+  });
+  afterEach(() => {
+    vi.useRealTimers();
+    vi.unstubAllGlobals();
+  });
+
+  test('the build page looks 60° down (the ground about 2.3 blocks away, within reach), the walk page faces −z (yaw 0); both at RD 4 on batch with the test hook', () => {
+    expect(BUILD_QUERY).toBe('?rd=4&renderer=batch&wiTest=1&pitch=-60');
+    expect(WALK_QUERY).toBe('?rd=4&renderer=batch&wiTest=1&yaw=0');
+    const build = parseWorldQuery(new URLSearchParams(BUILD_QUERY));
+    expect([build.rd, build.renderer, build.pitch]).toEqual([WORLD_RD, 'batch', -60]);
+    const walk = parseWorldQuery(new URLSearchParams(WALK_QUERY));
+    expect([walk.rd, walk.renderer, walk.yaw]).toEqual([WORLD_RD, 'batch', 0]);
+    // Yaw 0 faces −z (ruling P42): W walks along the corridor.
+    const [x, , z] = lookVector(0, 0);
+    expect(x).toBeCloseTo(0, 12);
+    expect(z).toBeCloseTo(-1, 12);
+  });
+
+  test('the palette lists 51 swatches: PLACEABLE\'s 48 types and the 3 buckets', () => {
+    const placeable = PLACEABLE.reduce((n, v) => n + v, 0);
+    expect(placeable).toBe(48);
+    expect(PALETTE_SWATCHES).toBe(placeable + 3);
+    expect(PALETTE_SWATCHES).toBe(51);
+    expect(paletteGroups('').reduce((n, g) => n + g.items.length, 0)).toBe(PALETTE_SWATCHES);
+  });
+
+  test('the state and fluid literals are the registry\'s (air, stone, torch, a water source)', () => {
+    expect(SMOKE_STATE).toEqual({ air: AIR, stone: STONE, torch: REGISTRY.stateOf(REGISTRY.typeId('torch')) });
+    expect(SMOKE_STATE).toEqual({ air: 0, stone: 1, torch: 32 });
+    expect(SMOKE_WATER_SOURCE).toBe(WATER_SOURCE);
+    // A torch emits 14; the voxel beside it reads 13 (one step of falloff).
+    expect(TORCH_MIN_LIGHT).toBe(13);
+  });
+
+  test('acrossFace: the voxel across the hit face, the face literals FACE_*', () => {
+    expect(SMOKE_FACE).toEqual({ north: FACE_NORTH, east: FACE_EAST, south: FACE_SOUTH, west: FACE_WEST, up: FACE_UP, down: FACE_DOWN });
+    const at = (face: number) => acrossFace({ x: 5, y: 70, z: -3, face });
+    expect(at(FACE_NORTH)).toEqual({ x: 5, y: 70, z: -4 });
+    expect(at(FACE_SOUTH)).toEqual({ x: 5, y: 70, z: -2 });
+    expect(at(FACE_EAST)).toEqual({ x: 6, y: 70, z: -3 });
+    expect(at(FACE_WEST)).toEqual({ x: 4, y: 70, z: -3 });
+    expect(at(FACE_UP)).toEqual({ x: 5, y: 71, z: -3 });
+    expect(at(FACE_DOWN)).toEqual({ x: 5, y: 69, z: -3 });
+  });
+
+  test('parseHudEdits reads the edit count of the real HUD\'s "edit p95 n ms (k)" row; null before the first edit', () => {
+    const hudText = (edit: HudData['edit']): string => {
+      const h = mountWorldHud(dom.body as unknown as HTMLElement, () => ({ ...hudData({ x: 1, y: 90, z: 2, rd: 4, revealed: 81, kind: 'batch' }), edit }));
+      const text = dom.body.querySelectorAll('div').filter((e) => e.className !== 'world-hud').map((e) => e.textContent).join('\n');
+      h.dispose();
+      return text;
+    };
+    expect(parseHudEdits(hudText({ p95: 41.7, count: 3 }))).toBe(3);
+    expect(parseHudEdits(hudText({ p95: 120, count: 12 }))).toBe(12);
+    expect(parseHudEdits(hudText(null))).toBeNull();
+    expect(parseHudEdits('edit p95 ms (3)')).toBeNull();
+  });
+
+  test('walkCorridor: 3 voxels wide centred on the feet\'s column, along −z from the feet\'s row for 16 blocks: stone under the feet\'s level, air in the 2 layers above (ruling R30)', () => {
+    expect(WALK_PATH_BLOCKS).toBe(16);
+    const edits = walkCorridor({ x: -10.3, y: 70, z: 5.8 }, WALK_PATH_BLOCKS);
+    // 17 rows (the feet's and 16 ahead) × 3 columns × 3 layers.
+    expect(edits).toHaveLength(17 * 3 * 3);
+    const at = (x: number, y: number, z: number) => edits.filter((e) => e.x === x && e.y === y && e.z === z).map((e) => e.state);
+    for (let k = 0; k <= 16; k++) {
+      for (const x of [-12, -11, -10]) {
+        expect(at(x, 69, 5 - k)).toEqual([SMOKE_STATE.stone]);
+        expect(at(x, 70, 5 - k)).toEqual([SMOKE_STATE.air]);
+        expect(at(x, 71, 5 - k)).toEqual([SMOKE_STATE.air]);
+      }
+    }
+    expect(edits.every((e) => e.x >= -12 && e.x <= -10 && e.z <= 5 && e.z >= -11 && e.y >= 69 && e.y <= 71)).toBe(true);
+    // Feet a hair off the block top (the swept clip) still name its level.
+    expect(walkCorridor({ x: 0.5, y: 64.0000001, z: 0.5 }, 1)[0]).toEqual({ x: -1, y: 63, z: 0, state: SMOKE_STATE.stone });
+    expect(walkCorridor({ x: 0.5, y: 63.9999999, z: 0.5 }, 1)[0]).toEqual({ x: -1, y: 63, z: 0, state: SMOKE_STATE.stone });
+  });
+
+  test('the walk\'s pins: the ground within 3 s, W for 4 s moves more than 12 blocks, a jump rises more than 1', () => {
+    expect([WALK_GROUND_MS, WALK_HOLD_MS, WALK_MIN_MOVE, JUMP_MIN_RISE]).toEqual([3000, 4000, 12, 1]);
+  });
+
+  test('walkSnapOk: once the snap clears, its y is heightAt; on land the feet also rest on the ground within 1e-3 (ruling R29)', () => {
+    const feet = (o: Partial<{ y: number; onGround: boolean; snapPending: boolean; snapY: number | null }>) => ({
+      x: 3.5, y: 71, z: -2.5, onGround: true, snapPending: false, snapY: 71, ...o,
+    });
+    expect(walkSnapOk(feet({}), 71, null)).toBe(true);
+    expect(walkSnapOk(feet({ y: 71.0000001 }), 71, null)).toBe(true);
+    expect(walkSnapOk(feet({ snapPending: true }), 71, null)).toBe(false);
+    expect(walkSnapOk(feet({ snapY: null }), 71, null)).toBe(false);
+    expect(walkSnapOk(feet({ snapY: 70 }), 71, null)).toBe(false);
+    expect(walkSnapOk(feet({}), null, null)).toBe(false);
+    // On land: still falling, or off the ground by more than 1e-3.
+    expect(walkSnapOk(feet({ onGround: false }), 71, null)).toBe(false);
+    expect(walkSnapOk(feet({ y: 71.01 }), 71, null)).toBe(false);
+    // Over water (motionBlocking counts the fluid) the snapped body sinks: only the snap's y is checked.
+    expect(walkSnapOk(feet({ y: 62.4, onGround: false }), 71, 63)).toBe(true);
+    expect(walkSnapOk(null, 71, null)).toBe(false);
   });
 });
 

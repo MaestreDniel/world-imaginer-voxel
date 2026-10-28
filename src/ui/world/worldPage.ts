@@ -110,7 +110,7 @@ import { createUploadBudget } from '../../engine/uploadBudget';
 import { StoreFullError, WorkerFailed, createBrowserPool, poolSize, type WorkerPool } from '../../engine/workerPool';
 import { SPEED_DEFAULT, applyCameraRotation, look, lookVectorInto, stepSpeed, toggleMode, type FlyState } from '../../player/fly';
 import { attachInput, isTextEntry } from '../../player/input';
-import { createHotbar, type Hotbar } from '../../player/hotbar';
+import { createHotbar, slotName, type Hotbar } from '../../player/hotbar';
 import { bodyOf, breakAt, emptyBucketAt, pickAt, placeAt, type BodyBox } from '../../player/interaction';
 import { DEFAULT_KEYMAP, type Action } from '../../player/keymap';
 import { REACH_FLY, REACH_WALK, castRay, castRayFrom, createRayHit, type RayHit } from '../../player/raycast';
@@ -300,6 +300,26 @@ function blockRead(store: VoxelStore, x: number, y: number, z: number): number {
   store.enterRead();
   try {
     return store.blockAt(x, y, z);
+  } finally {
+    store.exitRead();
+  }
+}
+
+/** The raw light byte at block (x, y, z) read inside a read section (`VoxelStore.lightAt`). */
+function lightRead(store: VoxelStore, x: number, y: number, z: number): number {
+  store.enterRead();
+  try {
+    return store.lightAt(x, y, z);
+  } finally {
+    store.exitRead();
+  }
+}
+
+/** `heightAt('motionBlocking')` at block column (⌊x⌋, ⌊z⌋) read inside a read section. */
+function heightRead(store: VoxelStore, x: number, z: number): number | null {
+  store.enterRead();
+  try {
+    return store.heightAt('motionBlocking', Math.floor(x), Math.floor(z));
   } finally {
     store.exitRead();
   }
@@ -840,10 +860,33 @@ export interface WiTest {
   edit(x: number, y: number, z: number, state: number, fluid: number): Promise<string>;
   /** The state at block (x, y, z), read inside a read section (`VoxelStore.blockAt`: −1 when its column is not Published). */
   blockAt(x: number, y: number, z: number): number;
+  /** Flying or walking (`FlyState.mode`, SP5a spec §3.1). */
+  mode(): 'fly' | 'walk';
+  /**
+   * The last rendered frame's aim (SP5a spec §3.5): the DDA's hit, whether or not the pointer is locked (`hit` false: no
+   * target), its voxel and `FACE_*`; `outline` whether the outline object is visible (only while locked, unpaused, with
+   * the HUD).
+   */
+  aim(): { hit: boolean; x: number; y: number; z: number; face: number; outline: boolean };
+  /** The hotbar (SP5a spec §4.3): the active slot and each slot's name as the HUD and the palette show it (`slotName`). */
+  hotbar(): { active: number; slots: string[] };
+  /** The block history's steps (SP5a spec §4.5): those that can be undone and those that can be redone. */
+  blockHistory(): { size: number; redo: number };
+  /** The raw light byte at block (x, y, z) (sky << 4 | block), read inside a read section; −1 when its column is not Published. */
+  lightAt(x: number, y: number, z: number): number;
+  /**
+   * The walk's current feet (x, z the body's centre, y its bottom), `onGround`, `snapPending` and `snapY` (the feet y the
+   * last snap set, null before any snap, which CDP's `returnByValue` cannot carry as NaN); null while flying.
+   */
+  feet(): { x: number; y: number; z: number; onGround: boolean; snapPending: boolean; snapY: number | null } | null;
+  /** `heightAt('motionBlocking')` at block column (⌊x⌋, ⌊z⌋), read inside a read section; null when it is not Published. */
+  heightAt(x: number, z: number): number | null;
 }
 
 /** The parts of the hook the world page supplies once its streaming route runs. */
-export type WiTestPage = Pick<WiTest, 'listenerCount' | 'closeOverlay' | 'disposeTool' | 'forceFatal' | 'owner' | 'stale' | 'edit' | 'blockAt'>;
+export type WiTestPage = Pick<WiTest,
+  'listenerCount' | 'closeOverlay' | 'disposeTool' | 'forceFatal' | 'owner' | 'stale' | 'edit' | 'blockAt' | 'mode' | 'aim' | 'hotbar' | 'blockHistory'
+  | 'lightAt' | 'feet' | 'heightAt'>;
 
 /** The hook's installation, which `main.ts` hands the page (`WorldPageOptions.wiTest`). */
 export interface WiTestInstall {
@@ -951,6 +994,13 @@ export function installWiTest(win: TimerHost & { __wiTest?: WiTest }): WiTestIns
     lastLanding: () => landing,
     edit: (x, y, z, state, fluid) => attached().edit(x, y, z, state, fluid),
     blockAt: (x, y, z) => attached().blockAt(x, y, z),
+    mode: () => attached().mode(),
+    aim: () => attached().aim(),
+    hotbar: () => attached().hotbar(),
+    blockHistory: () => attached().blockHistory(),
+    lightAt: (x, y, z) => attached().lightAt(x, y, z),
+    feet: () => attached().feet(),
+    heightAt: (x, z) => attached().heightAt(x, z),
   };
   win.__wiTest = hook;
   return {
@@ -1171,6 +1221,8 @@ export interface Aim {
    * the outline shows or not, so the bench's `mainP95Ms` measures the update without drawing it.
    */
   readonly box: Float64Array;
+  /** Whether the last `aim` showed the outline (`setOutline`) rather than hiding it. */
+  readonly outlined: boolean;
   aim(read: Pick<VoxelStore, 'blockAt' | 'fluidAt'>, paused: boolean): void;
 }
 
@@ -1202,9 +1254,13 @@ export function createAim(o: {
   const ray = new Float64Array(6);
   const dir = ray.subarray(3);
   const box = new Float64Array(6);
+  let outlined = false;
   return {
     hit,
     box,
+    get outlined() {
+      return outlined;
+    },
     aim(read, paused) {
       ray[0] = fly.x;
       ray[1] = fly.y;
@@ -1220,6 +1276,7 @@ export function createAim(o: {
       }
       if (!hit.hit) {
         world.hideOutline();
+        outlined = false;
         return;
       }
       outlineBounds(hit.state, hit.x, hit.y, hit.z, box);
@@ -1230,7 +1287,8 @@ export function createAim(o: {
       box[3] = box[3]! - origin.x;
       box[4] = box[4]! - origin.y;
       box[5] = box[5]! - origin.z;
-      if (paused || !o.hud || !o.locked()) world.hideOutline();
+      outlined = !paused && o.hud && o.locked();
+      if (!outlined) world.hideOutline();
       else world.setOutline(box[0], box[1], box[2], box[3], box[4], box[5]);
     },
   };
@@ -2469,6 +2527,19 @@ export function mountWorldPage(root: HTMLElement, q: WorldQuery, hash: string, o
       stale: () => coordinator.counts(counts).stale,
       edit: createHookEdit(actionPost, (x, y, z) => voxelValue(store, x, y, z)),
       blockAt: (x, y, z) => blockRead(store, x, y, z),
+      // The build and walk steps' reads (SP5a spec §6.4); the aim is created below, before the first frame.
+      mode: () => fly.mode,
+      aim: () => {
+        const h = pageAim.hit;
+        return { hit: h.hit, x: h.x, y: h.y, z: h.z, face: h.face, outline: pageAim.outlined };
+      },
+      hotbar: () => ({ active: hotbar.active, slots: hotbar.slots.map(slotName) }),
+      blockHistory: () => ({ size: blockHistory.size, redo: blockHistory.redoSize }),
+      lightAt: (x, y, z) => lightRead(store, x, y, z),
+      feet: () => (fly.mode === 'walk'
+        ? { x: walk.x, y: walk.y, z: walk.z, onGround: walk.onGround, snapPending: walk.snapPending, snapY: Number.isNaN(walk.snapY) ? null : walk.snapY }
+        : null),
+      heightAt: (x, z) => heightRead(store, x, z),
     });
     // Disposed before the input, the driver and the page's subscribe: a gesture still open ends through the tool.
     teardown.push(() => mapOverlay.dispose());

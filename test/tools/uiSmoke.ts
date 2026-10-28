@@ -462,12 +462,13 @@ export function presetProblems(text: string, expected: { readonly name: string; 
  * step) follows them on pages of its own. SP4a's 3D steps `start`, `world` and `world-mesh` (spec §9.6) come next, on
  * pages of their own, inside `runSmoke`, then SP4b's `stream` (spec §8.6: one step for both renderers, since the runner
  * refuses a repeated id), then SP4c's `overlay` and `overlay-mesh` (spec §8.6: one step per renderer, each on its own
- * page); `console` stays last, the closing step main() runs after `runSmoke` (ruling P52).
+ * page), then SP5a's `build` and `walk` (SP5a spec §6.4, each on its own page); `console` stays last, the closing step
+ * main() runs after `runSmoke` (ruling P52).
  */
 export const SMOKE_STEPS = [
   'selftest', 'load', 'number', 'knot', 'slider', 'box', 'profile', 'presets', 'undo/redo', 'reload', 'cut line', 'voxels', 'tabs', 'rule',
   'density tab', 'density node', 'density mute', 'density json', 'density narrow', 'density horizontal', 'density drag', 'density times',
-  'preset profiles', 'start', 'world', 'world-mesh', 'stream', 'overlay', 'overlay-mesh', 'console',
+  'preset profiles', 'start', 'world', 'world-mesh', 'stream', 'overlay', 'overlay-mesh', 'build', 'walk', 'console',
 ] as const;
 export type SmokeStep = (typeof SMOKE_STEPS)[number];
 
@@ -646,6 +647,92 @@ export function listenersLeakFree(diff: { readonly added: readonly string[]; rea
   if (diff.added.length > 0) return false;
   if (diff.gone.length === 0) return true;
   return lockGranted && diff.gone.length === 1 && diff.gone[0]!.startsWith('document pointerlockchange @');
+}
+
+// ---------------------------------------------------------------- the build and walk steps (SP5a spec §6.4)
+
+/**
+ * The `build` page: RD 4 on batch with the test hook, pitched 60° down: the opening −10° from 2 blocks up meets the
+ * ground about 11.5 blocks away, past reach 10 (`firstView.ts`); at −60° about 2.3 blocks away.
+ */
+export const BUILD_QUERY = `?rd=${WORLD_RD}&renderer=batch&wiTest=1&pitch=-60`;
+/** The `walk` page: RD 4 on batch with the test hook, facing −z (yaw 0, ruling R30), so W walks the corridor. */
+export const WALK_QUERY = `?rd=${WORLD_RD}&renderer=batch&wiTest=1&yaw=0`;
+/** The states the steps edit with (`test/stateIds.lock.json`; a unit test keeps them the registry's). */
+export const SMOKE_STATE = { air: 0, stone: 1, torch: 32 } as const;
+/** A still water source's fluid byte (`WATER_SOURCE` in `src/world/blocks/fluid.ts`; a unit test keeps them equal). */
+export const SMOKE_WATER_SOURCE = 16;
+/** The hit faces (`FACE_*` in `src/world/blocks/kinds.ts`; a unit test keeps them equal). */
+export const SMOKE_FACE = { north: 0, east: 1, south: 2, west: 3, up: 4, down: 5 } as const;
+/** The palette's swatches: every `PLACEABLE` type (48) and the 3 buckets (a unit test counts them). */
+export const PALETTE_SWATCHES = 51;
+/** The least block light beside a torch: it emits 14, and the voxel beside it reads one step less. */
+export const TORCH_MIN_LIGHT = 13;
+/** The walk's corridor length along −z, past the feet's own row. */
+export const WALK_PATH_BLOCKS = 16;
+/** How long F has for the feet to reach the ground, how long W is held, the least it moves the feet, and a jump's least rise. */
+export const WALK_GROUND_MS = 3000;
+export const WALK_HOLD_MS = 4000;
+export const WALK_MIN_MOVE = 12;
+export const JUMP_MIN_RISE = 1;
+
+/** The voxel across a hit's face: the face's normal added to the hit voxel (as `interaction.ts` places). */
+export function acrossFace(hit: { readonly x: number; readonly y: number; readonly z: number; readonly face: number }): { readonly x: number; readonly y: number; readonly z: number } {
+  const f = hit.face;
+  return {
+    x: hit.x + (f === SMOKE_FACE.east ? 1 : f === SMOKE_FACE.west ? -1 : 0),
+    y: hit.y + (f === SMOKE_FACE.up ? 1 : f === SMOKE_FACE.down ? -1 : 0),
+    z: hit.z + (f === SMOKE_FACE.south ? 1 : f === SMOKE_FACE.north ? -1 : 0),
+  };
+}
+
+/** The edit count of the HUD's `edit p95 n ms (k)` row (SP5a spec §4.6), or null before the first edit. */
+export function parseHudEdits(text: string): number | null {
+  const m = /^edit p95 \d+ ms \((\d+)\)$/m.exec(text);
+  return m === null ? null : Number(m[1]);
+}
+
+/** One voxel the smoke sets through the hook, with no fluid. */
+export interface SmokeEdit { readonly x: number; readonly y: number; readonly z: number; readonly state: number }
+
+/**
+ * The walk's corridor (ruling R30): 3 voxels wide centred on the feet's block column, from the feet's own row along −z
+ * for `length` more rows; in each cell stone at the feet's level − 1 and air in the 2 layers above it. The feet's
+ * level is their y rounded (the swept clip can leave them a hair off the block top).
+ */
+export function walkCorridor(feet: { readonly x: number; readonly y: number; readonly z: number }, length: number): SmokeEdit[] {
+  const bx = Math.floor(feet.x);
+  const bz = Math.floor(feet.z);
+  const gy = Math.round(feet.y);
+  const out: SmokeEdit[] = [];
+  for (let k = 0; k <= length; k++) {
+    for (let dx = -1; dx <= 1; dx++) {
+      out.push({ x: bx + dx, y: gy - 1, z: bz - k, state: SMOKE_STATE.stone });
+      out.push({ x: bx + dx, y: gy, z: bz - k, state: SMOKE_STATE.air });
+      out.push({ x: bx + dx, y: gy + 1, z: bz - k, state: SMOKE_STATE.air });
+    }
+  }
+  return out;
+}
+
+/** The walk's feet as `__wiTest.feet()` returns them (null while flying). */
+export interface FeetRead {
+  readonly x: number;
+  readonly y: number;
+  readonly z: number;
+  readonly onGround: boolean;
+  readonly snapPending: boolean;
+  readonly snapY: number | null;
+}
+
+/**
+ * A walking teleport's landing (SP5a spec §3.4, ruling R29): the snap has cleared and set the feet to `height`
+ * (`heightAt('motionBlocking')` at the feet's column); over land (`water` null, the landing's) the feet also rest on
+ * the ground within 1e-3. Over water `motionBlocking` counts the fluid, so the snapped body sinks: only the snap's y.
+ */
+export function walkSnapOk(feet: FeetRead | null, height: number | null, water: number | null): boolean {
+  if (feet === null || feet.snapPending || height === null || feet.snapY !== height) return false;
+  return water !== null || (feet.onGround && Math.abs(feet.y - height) <= 1e-3);
 }
 
 // ---------------------------------------------------------------- the stream step (SP4b spec §8.6)
@@ -1552,6 +1639,8 @@ async function runSmoke(t: Smoke): Promise<void> {
   await runPresetProfiles(t);
   await runWorld(t);
   await runOverlay(t);
+  await runBuild(t);
+  await runWalk(t);
 }
 
 const statsOf = (s: SliceRead): SliceStatsText | null => parseSliceStats(s.stats);
@@ -2477,13 +2566,22 @@ async function overlayBatch(t: Smoke, what: string): Promise<void> {
     await p.enter();
     await p.blur();
   });
-  // Undo and redo from the 3D (spec §2.4): M closes the map; Ctrl+Z undoes the biome bound and Ctrl+Y redoes it, live,
-  // each with its notice; M reopens the map.
+  // Undo and redo by who has the controls (SP5a spec §4.5, D13; SP4c spec §2.4): with the map owning, Ctrl+Z undoes
+  // the biome bound and Ctrl+Y redoes it, live (no notice while the map shows); M closes the map, and from the 3D Ctrl+Z
+  // and Ctrl+Y undo and redo a block placed through the hook; M reopens the map.
+  t.check(await p.eval<string>('__wiTest.owner()') === 'map', `${what}: the map owns the controls side by side`);
+  await liveEdit(t, `${what}: Ctrl+Z with the map owning`, async () => {
+    await p.blur();
+    await p.undoKey();
+  });
+  await liveEdit(t, `${what}: Ctrl+Y with the map owning`, async () => {
+    await p.blur();
+    await p.redoKeyY();
+  });
   await pressM(p);
   await p.until(OVERLAY_CLOSED, `${what}: M closes the map`, 5000);
   t.check(await p.eval<string>('__wiTest.owner()') === 'world', `${what}: M closes the map, and the world owns the controls`);
-  await liveEdit(t, `${what}: Ctrl+Z from the 3D`, () => p.undoKey(), 'Undo');
-  await liveEdit(t, `${what}: Ctrl+Y from the 3D`, () => p.redoKeyY(), 'Redo');
+  await blockUndoFrom3d(t, what);
   await pressM(p);
   await p.until(`${OVERLAY_SHOWN} && ${WORLD_SPLIT}`, `${what}: M reopens the map side by side`, 5000);
   t.check(await p.eval<string>(`document.getElementById('bt-desert-T').value`) === `${lo}, ${mid}`, `${what}: the redone desert T shows in the reopened map`, await p.eval<string>(`document.getElementById('bt-desert-T').value`));
@@ -2621,6 +2719,324 @@ async function runOverlay(t: Smoke): Promise<void> {
     // The forced fatal is the batch run's last act; any other page error fails the step.
     t.check(t.errors.length === errors0, `${what}: no page error`, t.errors.slice(errors0));
   }
+}
+
+// ---------------------------------------------------------------- the build and walk steps (SP5a spec §6.4)
+
+/** The hook's aim (`WiTest.aim`). */
+interface AimRead { readonly hit: boolean; readonly x: number; readonly y: number; readonly z: number; readonly face: number; readonly outline: boolean }
+type Voxel = { readonly x: number; readonly y: number; readonly z: number };
+
+const xyz = (v: Voxel): string => `${v.x}, ${v.y}, ${v.z}`;
+const sameVoxel = (a: Voxel, b: Voxel): boolean => a.x === b.x && a.y === b.y && a.z === b.z;
+/** Sets voxel `v` to `state` with fluid byte `fluid` through the hook: 'ok' or the refusal. */
+const hookEdit = (p: Page, v: Voxel, state: number, fluid = 0): Promise<string> => p.eval<string>(`__wiTest.edit(${xyz(v)}, ${state}, ${fluid})`);
+const hookBlock = (p: Page, v: Voxel): Promise<number> => p.eval<number>(`__wiTest.blockAt(${xyz(v)})`);
+const hookAim = (p: Page): Promise<AimRead> => p.eval<AimRead>('__wiTest.aim()');
+const hookHistory = (p: Page): Promise<{ size: number; redo: number }> => p.eval('__wiTest.blockHistory()');
+const hookFeet = (p: Page): Promise<FeetRead | null> => p.eval<FeetRead | null>('__wiTest.feet()');
+/** The page expression "voxel `v` holds `state`". */
+const blockIs = (v: Voxel, state: number): string => `__wiTest.blockAt(${xyz(v)}) === ${state}`;
+/**
+ * The page expression "the block history holds `size` steps to undo and `redo` to redo": an undo's or redo's voxel reads
+ * back from the store before the reply moves its step, so a check waits for both.
+ */
+const historyIs = (size: number, redo: number): string => `(() => { const h = __wiTest.blockHistory(); return h.size === ${size} && h.redo === ${redo}; })()`;
+/** Whether the world canvas holds the pointer lock. */
+const LOCKED = `document.pointerLockElement !== null && document.pointerLockElement === document.querySelector('canvas[data-renderer]')`;
+
+/** Waits for `n` more rendered frames (`__wiWorld.frames`). */
+async function frames(p: Page, n: number, what: string): Promise<void> {
+  const f0 = await p.eval<number>('window.__wiWorld.frames');
+  await p.until(`window.__wiWorld.frames >= ${f0 + n}`, what, 10_000);
+}
+
+/** A mouse button pressed and released at the viewport's centre with no move (the locked pointer's look is untouched). */
+async function pressButton(p: Page, button: 'left' | 'right'): Promise<void> {
+  const at = { x: VIEWPORT.width / 2, y: VIEWPORT.height / 2 };
+  await p.cdp.send('Input.dispatchMouseEvent', { type: 'mousePressed', ...at, button, buttons: button === 'left' ? 1 : 2, clickCount: 1 });
+  await p.cdp.send('Input.dispatchMouseEvent', { type: 'mouseReleased', ...at, button, buttons: 0, clickCount: 1 });
+}
+
+/** A click on the canvas centre asks for the pointer lock; true when headless Chrome granted it. */
+async function takeLock(p: Page): Promise<boolean> {
+  await p.clickAt(VIEWPORT.width / 2, VIEWPORT.height / 2);
+  await sleep(500);
+  return p.eval<boolean>(LOCKED);
+}
+
+/** The HUD's edit count once it is above `n`, polled every HUD_POLL_MS for `ms`; null when it has not grown. */
+async function hudEditsAbove(p: Page, n: number, ms: number): Promise<number | null> {
+  for (const t0 = Date.now(); Date.now() - t0 <= ms; await sleep(HUD_POLL_MS)) {
+    const k = parseHudEdits(await p.eval<string>(HUD_TEXT));
+    if (k !== null && k > n) return k;
+  }
+  return null;
+}
+
+/** Waits for the page expression `pred` within `ms`; true when it held, else a failed check `what` with `detail()`. */
+async function holds(t: Smoke, pred: string, what: string, ms: number, detail: () => Promise<unknown>): Promise<boolean> {
+  try {
+    const waited = await t.page.until(pred, what, ms);
+    t.check(true, `${what} (${Math.round(waited)} ms)`);
+    return true;
+  } catch {
+    t.check(false, `${what} within ${ms / 1000} s`, await detail());
+    return false;
+  }
+}
+
+/**
+ * `overlay`'s block undo from the 3D (SP5a spec §4.5, §6.4): stone through the hook on the camera's column, at the
+ * first voxel above its `motionBlocking` top; Ctrl+Z restores the voxel and Ctrl+Y puts the stone back, both one
+ * block-history step.
+ */
+async function blockUndoFrom3d(t: Smoke, what: string): Promise<void> {
+  const p = t.page;
+  const cam = parseHud(await p.eval<string>(HUD_TEXT));
+  const x = Math.floor(cam?.x ?? 0);
+  const z = Math.floor(cam?.z ?? 0);
+  const top = cam === null ? null : await p.eval<number | null>(`__wiTest.heightAt(${x}, ${z})`);
+  if (top === null) {
+    t.check(false, `${what}: the camera's column (${x}, ${z}) is Published for the block undo`, cam);
+    return;
+  }
+  const v = { x, y: top, z };
+  const was = await hookBlock(p, v);
+  const h0 = await hookHistory(p);
+  const r = await hookEdit(p, v, SMOKE_STATE.stone);
+  t.check(r === 'ok' && await hookBlock(p, v) === SMOKE_STATE.stone, `${what}: stone through the hook at (${xyz(v)}) (was ${was}): ${r}`);
+  const history = () => hookHistory(p);
+  await p.blur();
+  await p.undoKey();
+  await holds(t, `${blockIs(v, was)} && ${historyIs(h0.size, 1)}`, `${what}: Ctrl+Z from the 3D undoes the block (stone → ${was}), its step on the redo side`, 5000, history);
+  await p.redoKeyY();
+  await holds(t, `${blockIs(v, SMOKE_STATE.stone)} && ${historyIs(h0.size + 1, 0)}`, `${what}: Ctrl+Y from the 3D redoes it (→ stone), one block-history step again`, 5000, history);
+}
+
+/** The `build` step's checks on the revealed page (spec §6.4). */
+async function buildChecks(t: Smoke): Promise<void> {
+  const p = t.page;
+  // 1. At −60° the aim meets the ground within reach; the voxel across its face is where the hook places.
+  await holds(t, '__wiTest.aim().hit', 'build: at pitch −60 the aim hits a block within reach', 10_000, () => hookAim(p));
+  const b = await hookAim(p);
+  if (!b.hit) return;
+  const at = acrossFace(b);
+  const was = await hookBlock(p, at);
+  console.log(`  aimed (${xyz(b)}) face ${b.face}; the hook edits (${xyz(at)}), which holds ${was}`);
+  t.check(await p.eval<string>('__wiTest.owner()') === 'world', 'build: the world owns the controls');
+
+  // 2. Place and break through the hook; the store reads each back, and the HUD's edit count grows.
+  const edits0 = parseHudEdits(await p.eval<string>(HUD_TEXT)) ?? 0;
+  const placed = await hookEdit(p, at, SMOKE_STATE.stone);
+  const stone = await hookBlock(p, at);
+  t.check(placed === 'ok' && stone === SMOKE_STATE.stone, `build: stone placed through the hook: ${placed}, blockAt reads ${stone}`);
+  const edits1 = await hudEditsAbove(p, edits0, 10_000);
+  t.check(edits1 !== null, `build: the HUD's edit count grows (${edits0} → ${edits1 ?? '?'})`, await p.eval<string>(HUD_TEXT));
+  const broken = await hookEdit(p, at, SMOKE_STATE.air);
+  const air = await hookBlock(p, at);
+  t.check(broken === 'ok' && air === SMOKE_STATE.air, `build: broken through the hook: ${broken}, blockAt reads ${air}`);
+  const h0 = await hookHistory(p);
+  t.check(h0.size === 2 && h0.redo === 0, `build: the hook's place and break are 2 block-history steps (${h0.size}, redo ${h0.redo})`, h0);
+
+  // 3. Ctrl+Z restores the stone, Ctrl+Y breaks it again: the hook's edits are block-history steps.
+  await p.blur();
+  await p.undoKey();
+  await holds(t, `${blockIs(at, SMOKE_STATE.stone)} && ${historyIs(1, 1)}`, 'build: Ctrl+Z restores the stone (1 step to undo, 1 to redo)', 5000, () => hookHistory(p));
+  await p.redoKeyY();
+  await holds(t, `${blockIs(at, SMOKE_STATE.air)} && ${historyIs(2, 0)}`, 'build: Ctrl+Y breaks it again (2 steps to undo, none to redo)', 5000, () => hookHistory(p));
+
+  // 4. With the mouse when headless Chrome grants the lock: LMB breaks the aimed block, RMB places the slot's stone.
+  const granted = await takeLock(p);
+  if (!granted) {
+    console.log(`  skipped build: the mouse's break and place: headless Chrome refused the pointer lock (pointerLockElement ${await p.eval<string>('String(document.pointerLockElement)')}); the hook's edits stand for them, and the headful production check covers the mouse`);
+  } else {
+    await p.key('1', 'Digit1', 49, 0, '1');
+    const bar = await p.eval<{ active: number; slots: string[] }>('__wiTest.hotbar()');
+    t.check(bar.active === 0 && bar.slots[0] === 'Stone', `build: 1 selects slot 1, ${bar.slots[bar.active] ?? '?'}`, bar);
+    const target = await hookAim(p);
+    if (!target.hit) t.check(false, 'build: a block aimed for the mouse', target);
+    else await pressButton(p, 'left');
+    if (target.hit && await holds(t, blockIs(target, SMOKE_STATE.air), `build: LMB breaks the aimed block (${xyz(target)})`, 5000, () => hookAim(p))) {
+      await p.until(`(() => { const a = __wiTest.aim(); return !a.hit || a.x !== ${target.x} || a.y !== ${target.y} || a.z !== ${target.z}; })()`, 'build: the aim past the broken block', 5000);
+      const next = await hookAim(p);
+      const dest = acrossFace(next);
+      await pressButton(p, 'right');
+      if (next.hit) await holds(t, blockIs(dest, SMOKE_STATE.stone), `build: RMB places stone across the aimed face (${xyz(dest)})`, 5000, () => hookAim(p));
+      else t.check(false, 'build: a block to place against after the break', next);
+    }
+  }
+
+  // 5. E opens the palette with every placeable type and the buckets; a swatch click sets the active slot; Esc closes.
+  await p.key('e', 'KeyE', 69, 0, 'e');
+  if (await holds(t, `document.getElementById('world-palette')?.hidden === false`, 'build: E opens the palette', 5000, () => p.eval<string>('String(document.getElementById(\'world-palette\')?.hidden)'))) {
+    const n = await p.eval<number>(`document.querySelectorAll('#world-palette .palette-swatch').length`);
+    t.check(n === PALETTE_SWATCHES, `build: the palette lists ${n} swatches (every placeable type and 3 buckets: ${PALETTE_SWATCHES})`, n);
+    const before = await p.eval<{ active: number; slots: string[] }>('__wiTest.hotbar()');
+    const label = await p.eval<string>(`document.getElementById('palette-slot-bricks').getAttribute('aria-label')`);
+    await p.click('#palette-slot-bricks');
+    const after = await p.eval<{ active: number; slots: string[] }>('__wiTest.hotbar()');
+    t.check(after.active === before.active && after.slots[after.active] === label && after.slots.every((s, i) => i === after.active || s === before.slots[i]),
+      `build: the ${label} swatch sets the active slot ${after.active + 1} (${before.slots[before.active] ?? '?'} → ${after.slots[after.active] ?? '?'})`, { before, after });
+    await p.key('Escape', 'Escape', 27);
+    await holds(t, `document.getElementById('world-palette')?.hidden === true`, 'build: Esc closes the palette', 5000, async () => null);
+  }
+
+  // 6. A torch through the hook raises the block light beside it (block light does not depend on the time of day).
+  const around = [[1, 0, 0], [-1, 0, 0], [0, 1, 0], [0, -1, 0], [0, 0, 1], [0, 0, -1]].map(([dx, dy, dz]) => [at.x + dx!, at.y + dy!, at.z + dz!]);
+  const LIT = `Math.max(...${JSON.stringify(around)}.map(([x, y, z]) => { const l = __wiTest.lightAt(x, y, z); return __wiTest.blockAt(x, y, z) === ${SMOKE_STATE.air} && l >= 0 ? l & 15 : -1; }))`;
+  const dark = await p.eval<number>(LIT);
+  const torch = await hookEdit(p, at, SMOKE_STATE.torch);
+  t.check(torch === 'ok', `build: a torch through the hook at (${xyz(at)}): ${torch}`);
+  if (await holds(t, `(${LIT}) >= ${TORCH_MIN_LIGHT}`, `build: the torch raises the block light beside it to ≥ ${TORCH_MIN_LIGHT}`, 5000, () => p.eval<number>(LIT))) {
+    console.log(`  the block light beside the torch: ${dark} → ${await p.eval<number>(LIT)}`);
+  }
+  const unlit = await hookEdit(p, at, SMOKE_STATE.air);
+  t.check(unlit === 'ok', `build: the torch broken through the hook: ${unlit}`);
+
+  // 7. A block under water stays aimed: water through the hook across the aimed face, and the aim still reports it.
+  await frames(p, 3, 'build: three frames after the torch');
+  const u = await hookAim(p);
+  if (!u.hit) {
+    t.check(false, 'build: a block aimed for the water check', u);
+    return;
+  }
+  const w = acrossFace(u);
+  const water = await hookEdit(p, w, SMOKE_STATE.air, SMOKE_WATER_SOURCE);
+  t.check(water === 'ok', `build: water through the hook at (${xyz(w)}) over the aimed (${xyz(u)}): ${water}`);
+  await frames(p, 3, 'build: three frames after the water');
+  const under = await hookAim(p);
+  t.check(under.hit && sameVoxel(under, u), `build: the block under water is still aimed (${under.hit ? xyz(under) : 'no hit'})`, { before: u, after: under });
+  if (!granted || !(await takeLock(p))) {
+    console.log(`  skipped build: the outline of the block under water: ${granted ? 'the lock was not granted again' : 'headless Chrome refused the pointer lock'} (the outline shows only while locked); the headful production check covers it`);
+  } else {
+    await frames(p, 3, 'build: three frames after the lock');
+    const shown = await hookAim(p);
+    t.check(shown.hit && sameVoxel(shown, u) && shown.outline, `build: the outline object is visible around the block under water`, shown);
+    await p.eval('(document.exitPointerLock(), true)');
+  }
+}
+
+async function runBuild(t: Smoke): Promise<void> {
+  const p = t.page;
+  t.step(`build: ${BUILD_QUERY}: place and break through the hook (and the mouse when the lock is granted), the HUD's edit count, Ctrl+Z and Ctrl+Y, the palette (E, a swatch, Esc), a torch's block light, a block under water still aimed`);
+  const errors0 = t.errors.length;
+  try {
+    await p.goto(`${p.base}${BUILD_QUERY}`, `window.__wiWorld !== undefined`);
+    if (await worldRevealed(t, 'build')) {
+      await p.until('window.__wiWorld.frames >= 3', 'three frames after the build reveal', 30_000);
+      await buildChecks(t);
+    }
+  } catch (e) {
+    t.check(false, `build: the step stopped: ${e instanceof Error ? e.message : String(e)}`);
+  }
+  t.check(t.errors.length === errors0, 'build: no page error', t.errors.slice(errors0));
+}
+
+/** The `walk` step's checks on the revealed page (spec §6.4). */
+async function walkChecks(t: Smoke): Promise<void> {
+  const p = t.page;
+  // 1. F: walking, the feet on the ground within 3 s, their y stable.
+  await p.blur();
+  await p.key('f', 'KeyF', 70, 0, 'f');
+  const grounded = `__wiTest.mode() === 'walk' && __wiTest.feet()?.onGround === true`;
+  if (!(await holds(t, grounded, 'walk: F walks, and the feet reach the ground', WALK_GROUND_MS, async () => ({ mode: await p.eval<string>('__wiTest.mode()'), feet: await hookFeet(p) })))) return;
+  const f0 = await hookFeet(p);
+  await sleep(300);
+  const f1 = await hookFeet(p);
+  t.check(f0 !== null && f1 !== null && f1.onGround && f1.y === f0.y, `walk: the feet stay on the ground at y ${f1?.y ?? '?'}`, { f0, f1 });
+  if (f1 === null) return;
+
+  // 2. The corridor (ruling R30), then W for 4 s along it with real key input.
+  const corridor = walkCorridor(f1, WALK_PATH_BLOCKS);
+  const refused = await p.eval<string[]>(`(async () => {
+    const out = [];
+    for (const [x, y, z, s] of ${JSON.stringify(corridor.map((e) => [e.x, e.y, e.z, e.state]))}) {
+      const r = await __wiTest.edit(x, y, z, s, 0);
+      if (r !== 'ok') out.push(x + ', ' + y + ', ' + z + ': ' + r);
+    }
+    return out;
+  })()`);
+  t.check(refused.length === 0, `walk: the ${WALK_PATH_BLOCKS}-block stone corridor along −z through the hook (${corridor.length} edits)`, refused);
+  const start = (await hookFeet(p)) ?? f1;
+  const w = { key: 'w', code: 'KeyW', windowsVirtualKeyCode: 87, nativeVirtualKeyCode: 87 };
+  await p.cdp.send('Input.dispatchKeyEvent', { type: 'keyDown', ...w, text: 'w', unmodifiedText: 'w' });
+  await sleep(WALK_HOLD_MS);
+  await p.cdp.send('Input.dispatchKeyEvent', { type: 'keyUp', ...w });
+  await sleep(300);
+  const end = await hookFeet(p);
+  const moved = end === null ? 0 : hudMoved(start, end);
+  if (moved > WALK_MIN_MOVE) {
+    t.check(true, `walk: W for ${WALK_HOLD_MS / 1000} s moves the feet ${moved.toFixed(1)} blocks (> ${WALK_MIN_MOVE})`);
+  } else {
+    const gy = Math.round(start.y);
+    const ahead = end === null ? null : await p.eval<number[][]>(`[1, 2, 3].map((k) => [${gy - 1}, ${gy}, ${gy + 1}].map((y) => __wiTest.blockAt(${Math.floor(end.x)}, y, ${Math.floor(end.z)} - k)))`);
+    t.check(false, `walk: W for ${WALK_HOLD_MS / 1000} s moves the feet ${moved.toFixed(1)} blocks (> ${WALK_MIN_MOVE})`, { yaw: 0, start, end, ahead });
+  }
+
+  // 3. Space jumps: a page-side tracker of the feet's highest y (the HUD's 250 ms refresh would miss the 270 ms rise).
+  if (!(await holds(t, grounded, 'walk: the feet on the ground before the jump', WALK_GROUND_MS, () => hookFeet(p)))) return;
+  const y0 = (await hookFeet(p))?.y ?? Number.NaN;
+  await p.eval(`(() => {
+    const s = { max: -Infinity, run: true };
+    window.__wiJump = s;
+    const track = () => {
+      const f = __wiTest.feet();
+      if (f !== null && f.y > s.max) s.max = f.y;
+      if (s.run) requestAnimationFrame(track);
+    };
+    requestAnimationFrame(track);
+    return true;
+  })()`);
+  const space = { key: ' ', code: 'Space', windowsVirtualKeyCode: 32, nativeVirtualKeyCode: 32 };
+  await p.cdp.send('Input.dispatchKeyEvent', { type: 'keyDown', ...space, text: ' ', unmodifiedText: ' ' });
+  await sleep(150);
+  await p.cdp.send('Input.dispatchKeyEvent', { type: 'keyUp', ...space });
+  await sleep(1000);
+  const top = await p.eval<number>('(window.__wiJump.run = false, window.__wiJump.max)');
+  t.check(top - y0 > JUMP_MIN_RISE, `walk: Space jumps: the feet rise ${(top - y0).toFixed(2)} (> ${JUMP_MIN_RISE}) above y ${y0}`, { y0, top });
+
+  // 4. A walking teleport: M, full screen, a click 300 px east of the arrow; once the snap clears, the feet stand on
+  // heightAt('motionBlocking') (ruling R29).
+  await pressM(p);
+  await p.until(OVERLAY_SHOWN, 'walk: the overlay after M', 15_000);
+  if (await p.eval<boolean>(WORLD_SPLIT)) {
+    await p.click('#map-mode-full');
+    await p.until(`!(${WORLD_SPLIT})`, 'walk: full screen through the header', 5000);
+  }
+  const box = await p.eval<Box>(MAP_CANVAS_BOX);
+  await p.clickAt(Math.round(box.x + box.width / 2 + TELEPORT_EAST_PX), Math.round(box.y + box.height / 2));
+  if (!(await holds(t, `__wiTest.lastLanding() !== null && (${OVERLAY_CLOSED})`, 'walk: a click on the map teleports and the map closes', 10_000, () => p.eval('__wiTest.lastLanding()')))) return;
+  t.check(await p.eval<string>('__wiTest.mode()') === 'walk', 'walk: still walking after the teleport');
+  if (!(await holds(t, `(() => { const f = __wiTest.feet(); return f !== null && !f.snapPending; })()`, 'walk: the snap clears once the column is Published', 30_000, () => hookFeet(p)))) return;
+  const landing = await p.eval<{ surface: number; water: number | null; y: number }>('__wiTest.lastLanding()');
+  // On land the next tick's sweep finds the ground.
+  if (landing.water === null) {
+    try {
+      await p.until('__wiTest.feet()?.onGround === true', 'walk: on the ground after the snap', 2000);
+    } catch { /* checked below */ }
+  }
+  const feet = await hookFeet(p);
+  const height = feet === null ? null : await p.eval<number | null>(`__wiTest.heightAt(${feet.x}, ${feet.z})`);
+  t.check(walkSnapOk(feet, height, landing.water),
+    `walk: the walking teleport lands on heightAt('motionBlocking') ${height ?? '?'}: the snap's y ${feet?.snapY ?? '?'}${landing.water === null ? `, the feet at y ${feet?.y ?? '?'} on the ground` : ` (over water at ${landing.water}: the body sinks)`}`,
+    { feet, height, landing });
+}
+
+async function runWalk(t: Smoke): Promise<void> {
+  const p = t.page;
+  t.step(`walk: ${WALK_QUERY}: F, the feet on the ground within 3 s, W for 4 s along a ${WALK_PATH_BLOCKS}-block stone corridor, Space jumps, a walking teleport lands on heightAt('motionBlocking')`);
+  const errors0 = t.errors.length;
+  try {
+    await p.goto(`${p.base}${WALK_QUERY}`, `window.__wiWorld !== undefined`);
+    if (await worldRevealed(t, 'walk')) {
+      await p.until('window.__wiWorld.frames >= 3', 'three frames after the walk reveal', 30_000);
+      await walkChecks(t);
+    }
+  } catch (e) {
+    t.check(false, `walk: the step stopped: ${e instanceof Error ? e.message : String(e)}`);
+  }
+  t.check(t.errors.length === errors0, 'walk: no page error', t.errors.slice(errors0));
 }
 
 // ---------------------------------------------------------------- screenshots (spec §12)

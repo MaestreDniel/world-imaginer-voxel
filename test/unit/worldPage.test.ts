@@ -976,7 +976,7 @@ describe('the smoke\'s test hook, window.__wiTest under ?wiTest=1 (SP4c spec §8
     expect(counted.epoch).toBe(7);
   });
 
-  test('installWiTest puts the hook on the window: timers at once; the page\'s parts after attach (throwing before, edit and blockAt included); lastLanding with null water for −∞', async () => {
+  test('installWiTest puts the hook on the window: timers at once; the page\'s parts after attach (throwing before, edit and blockAt included, and the build and walk steps\' reads); lastLanding with null water for −∞', async () => {
     const win: ReturnType<typeof timerWindow> & { __wiTest?: WiTest } = timerWindow();
     const install = installWiTest(win);
     const hook = install.hook;
@@ -985,6 +985,7 @@ describe('the smoke\'s test hook, window.__wiTest under ?wiTest=1 (SP4c spec §8
     expect(hook.timers()).toBe(1);
     expect(() => hook.owner()).toThrow(/not attached/);
     expect(() => hook.blockAt(0, 0, 0)).toThrow(/not attached/);
+    expect(() => hook.feet()).toThrow(/not attached/);
     expect(hook.tileRequests()).toBe(0);
     expect(hook.lastLanding()).toBeNull();
     const page: WiTestPage = {
@@ -996,12 +997,27 @@ describe('the smoke\'s test hook, window.__wiTest under ?wiTest=1 (SP4c spec §8
       stale: () => 17,
       edit: vi.fn(async (x: number, y: number, z: number, state: number, fluid: number) => `${x} ${y} ${z} ${state} ${fluid}`),
       blockAt: (x, y, z) => x + y + z,
+      mode: () => 'walk',
+      aim: () => ({ hit: true, x: 4, y: 69, z: -2, face: 4, outline: false }),
+      hotbar: () => ({ active: 2, slots: ['Stone', 'Dirt', 'Bricks'] }),
+      blockHistory: () => ({ size: 3, redo: 1 }),
+      lightAt: (x, y, z) => x * 100 + y + z,
+      feet: () => ({ x: 0.5, y: 70, z: -3.5, onGround: true, snapPending: false, snapY: null }),
+      heightAt: (x, z) => (x === 0 ? null : x + z),
     };
     install.attach(page);
     expect([hook.listenerCount(), hook.owner(), hook.stale()]).toEqual([2, 'map', 17]);
     // The SP5a parts (spec §6.4): the edit and the read-back pass through to the page.
     expect(await hook.edit(1, 70, -3, 25, 0)).toBe('1 70 -3 25 0');
     expect(hook.blockAt(1, 2, 3)).toBe(6);
+    // The build and walk steps' reads (spec §6.4) pass through to the page too.
+    expect(hook.mode()).toBe('walk');
+    expect(hook.aim()).toEqual({ hit: true, x: 4, y: 69, z: -2, face: 4, outline: false });
+    expect(hook.hotbar()).toEqual({ active: 2, slots: ['Stone', 'Dirt', 'Bricks'] });
+    expect(hook.blockHistory()).toEqual({ size: 3, redo: 1 });
+    expect(hook.lightAt(1, 2, 3)).toBe(105);
+    expect(hook.feet()).toEqual({ x: 0.5, y: 70, z: -3.5, onGround: true, snapPending: false, snapY: null });
+    expect([hook.heightAt(0, 5), hook.heightAt(2, 5)]).toEqual([null, 7]);
     hook.closeOverlay();
     hook.disposeTool();
     hook.forceFatal();
@@ -1347,6 +1363,8 @@ describe('createAim: the DDA and the outline (SP5a spec §3.5, §6.2; Task 23 re
     expect([r.aim.hit.hit, r.aim.hit.x, r.aim.hit.y, r.aim.hit.z]).toEqual([true, 0, 68, 0]);
     expect(r.calls).toEqual([`set ${BOX.join(',')}`]);
     expect([...r.aim.box]).toEqual(BOX);
+    // The smoke's `aim().outline` (spec §6.4).
+    expect(r.aim.outlined).toBe(true);
   });
 
   test('paused, the pointer free, no target, or no HUD: the outline hidden', () => {
@@ -1354,6 +1372,7 @@ describe('createAim: the DDA and the outline (SP5a spec §3.5, §6.2; Task 23 re
     cases[0]!.aim.aim(cases[0]!.read, true);
     for (const r of cases.slice(1)) r.aim.aim(r.read, false);
     expect(cases.map((r) => r.calls)).toEqual([['hide'], ['hide'], ['hide'], ['hide']]);
+    expect(cases.map((r) => r.aim.outlined)).toEqual([false, false, false, false]);
     expect(cases[2]!.aim.hit.hit).toBe(false);
   });
 
@@ -1363,6 +1382,7 @@ describe('createAim: the DDA and the outline (SP5a spec §3.5, §6.2; Task 23 re
     expect(r.aim.hit.hit).toBe(true);
     expect([...r.aim.box]).toEqual(BOX);
     expect(r.calls).toEqual(['hide']);
+    expect(r.aim.outlined).toBe(false);
   });
 });
 
