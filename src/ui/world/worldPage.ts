@@ -124,6 +124,7 @@ import type { NoticeOptions, Notices } from '../common/notice';
 import { createUrlWriter, oversizeNotice } from '../common/urlWriter';
 import { createFrameStats } from '../frameStats';
 import { mountHelp, type Help } from '../help';
+import { mountPalette, type Palette } from '../palette';
 import { mountWorldHud } from '../hud';
 import { mountLoadingScreen } from '../loading/loadingScreen';
 import { tips } from '../loading/tips';
@@ -1022,6 +1023,15 @@ export function mapKey(help: Pick<Help, 'isOpen' | 'close'>, map: Pick<MapOverla
   if (map === null) return;
   if (!map.shown && help.isOpen) help.close();
   map.toggle();
+}
+
+/**
+ * M and H with the palette open (SP5a spec §4.4, D10): the palette closes first, without requesting the lock, then the
+ * key does what it does with the palette closed (`then`), so the palette never stays open under the map or the help.
+ */
+export function paletteFirst(palette: Pick<Palette, 'isOpen' | 'close'>, then: () => void): void {
+  if (palette.isOpen) palette.close();
+  then();
 }
 
 /**
@@ -2147,6 +2157,21 @@ export function mountWorldPage(root: HTMLElement, q: WorldQuery, hash: string, o
     });
     // Closing removes the help's Esc listener from the document.
     teardown.push(() => help.close());
+    // The creative palette (SP5a spec §4.4, D10): E opens it; its own E requests the lock back, a canvas click too.
+    const palette: Palette = mountPalette(host, {
+      hotbar,
+      requestLock: () => {
+        try {
+          // Chromium returns a promise that rejects when the lock is refused; others return nothing.
+          const r: unknown = canvas.requestPointerLock();
+          if (r instanceof Promise) r.catch(() => {});
+        } catch {
+          // A refused lock leaves the pointer free; a click on the canvas takes it.
+        }
+      },
+      onClose: () => {},
+    });
+    teardown.push(() => palette.dispose());
     rdControl = createRdControl({
       coordinator,
       world,
@@ -2178,15 +2203,25 @@ export function mountWorldPage(root: HTMLElement, q: WorldQuery, hash: string, o
         case 'speedDown': stepSpeed(fly, -1); break;
         case 'timeSpeed': if (fixedT === null) speedIndex = (speedIndex + 1) % TIME_SPEEDS.length; break;
         case 'hud': huds?.toggle(); break;
+        // H and M close the palette first (SP5a spec §4.4).
         case 'help':
-          if (help.isOpen) help.close();
-          else {
-            document.exitPointerLock();
-            help.open();
-          }
+          paletteFirst(palette, () => {
+            if (help.isOpen) help.close();
+            else {
+              document.exitPointerLock();
+              help.open();
+            }
+          });
           break;
         // M opens or closes the map overlay (SP4c spec §2.4); it acts whoever owns the controls.
-        case 'map': mapKey(help, mapRef); break;
+        case 'map': paletteFirst(palette, () => mapKey(help, mapRef)); break;
+        // E opens the palette, never over the help; while it is open its own E listener closes it (SP5a spec §4.4).
+        case 'palette':
+          if (!palette.isOpen) {
+            if (help.isOpen) help.close();
+            palette.open();
+          }
+          break;
         // 1-9 and the plain wheel change the slot (SP5a spec §4.1, D9).
         case 'slot1': case 'slot2': case 'slot3': case 'slot4': case 'slot5': case 'slot6': case 'slot7': case 'slot8':
         case 'slot9':
@@ -2304,8 +2339,8 @@ export function mountWorldPage(root: HTMLElement, q: WorldQuery, hash: string, o
     const step = createFrameStep({
       fly,
       held: () => input.held,
-      // The flight pauses while the help is open or the map owns the controls (SP4c spec §2.3).
-      paused: () => help.isOpen || mapOverlay.owner === 'map',
+      // The flight pauses while the help or the palette is open or the map owns the controls (SP4c spec §2.3; SP5a §4.4).
+      paused: () => help.isOpen || palette.isOpen || mapOverlay.owner === 'map',
       stopped: () => stopped,
       clock,
       coordinator,

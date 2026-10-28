@@ -1129,6 +1129,7 @@ describe('master spec amendments (SP5a §9)', () => {
     [/^\s+player\/fly\.ts /, 'walk.ts physics.ts raycast.ts interaction.ts hotbar.ts (SP5a)', 'src/player/hotbar.ts'],
     [/^\s+ui\/world\/\* /, 'buildHud.ts (SP5a)', 'src/ui/world/buildHud.ts'],
     [/^\s+renderer\.ts /, 'selection.ts (SP5a)', 'src/render/selection.ts'],
+    [/^\s+ui\/shell\.ts /, 'palette.ts (SP5a)', 'src/ui/palette.ts'],
   ];
 
   test('the split', () => {

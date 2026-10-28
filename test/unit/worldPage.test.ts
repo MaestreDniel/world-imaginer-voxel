@@ -24,7 +24,7 @@ import { createHotbar } from '../../src/player/hotbar';
 import { createReloader, createWorldUrl, worldHash, type HereState } from '../../src/ui/world/reload';
 import {
   countPendingTimers, countTileCalls, createAim, createClickQueue, createRdControl, createUndoNotice, createWorldNotices, everyFrameUntil, failBeforeReveal, flushOnPageHide, handleContextLoss,
-  handleStreamEvent, helpChange, installWiTest, mapKey, offerLowerRd, onDriverStatus, onSimFailure, rdShownOnLoad, releaseOnFailure, reloadRd, runTeardown, stopAfterFailure,
+  handleStreamEvent, helpChange, installWiTest, mapKey, offerLowerRd, paletteFirst, onDriverStatus, onSimFailure, rdShownOnLoad, releaseOnFailure, reloadRd, runTeardown, stopAfterFailure,
   UNDO_NOTICE_MS, type WiTest, type WiTestPage,
 } from '../../src/ui/world/worldPage';
 import { createEditLatency } from '../../src/ui/world/editLatency';
@@ -1187,7 +1187,49 @@ describe('mapKey: M with the help open (SP4c spec §1.6, §2.4; final review WLD
 
   test('the page\'s M goes through it', () => {
     const src = readFileSync(new URL('../../src/ui/world/worldPage.ts', import.meta.url), 'utf8');
-    expect(src).toMatch(/case 'map': mapKey\(help, mapRef\); break;/);
+    // Through the palette's close first since SP5a (spec §4.4).
+    expect(src).toMatch(/case 'map': paletteFirst\(palette, \(\) => mapKey\(help, mapRef\)\); break;/);
+  });
+});
+
+describe('paletteFirst: M and H with the palette open (SP5a spec §4.4, D10)', () => {
+  /** The palette, the help and the map overlay as fakes that log their calls in order. */
+  function setup(paletteOpen: boolean) {
+    const log: string[] = [];
+    const palette = { isOpen: paletteOpen, close: () => { palette.isOpen = false; log.push('palette.close'); } };
+    const help = { isOpen: false, close: () => { help.isOpen = false; log.push('help.close'); } };
+    const map = { shown: false, toggle: () => { map.shown = !map.shown; log.push(`map.toggle (palette open: ${palette.isOpen})`); } };
+    return { palette, help, map, log };
+  }
+
+  test('M with the palette open closes it, then toggles the map', () => {
+    const s = setup(true);
+    paletteFirst(s.palette, () => mapKey(s.help, s.map));
+    expect(s.log).toEqual(['palette.close', 'map.toggle (palette open: false)']);
+    expect(s.map.shown).toBe(true);
+    // With the palette closed M only toggles.
+    const plain = setup(false);
+    paletteFirst(plain.palette, () => mapKey(plain.help, plain.map));
+    expect(plain.log).toEqual(['map.toggle (palette open: false)']);
+  });
+
+  test('H with the palette open closes it, then opens the help', () => {
+    const s = setup(true);
+    paletteFirst(s.palette, () => {
+      s.help.isOpen = true;
+      s.log.push(`help.open (palette open: ${s.palette.isOpen})`);
+    });
+    expect(s.log).toEqual(['palette.close', 'help.open (palette open: false)']);
+    expect(s.help.isOpen).toBe(true);
+  });
+
+  test('the page\'s M and H go through it, E closes the help before opening the palette, and the frame step\'s `paused` includes `palette.isOpen`', () => {
+    // The page's post-reveal wiring cannot be mounted in the unit project, so its source is pinned.
+    const src = readFileSync(new URL('../../src/ui/world/worldPage.ts', import.meta.url), 'utf8');
+    expect(src).toMatch(/case 'map': paletteFirst\(palette, \(\) => mapKey\(help, mapRef\)\); break;/);
+    expect(src).toMatch(/case 'help':\s+paletteFirst\(palette, \(\) => \{/);
+    expect(src).toMatch(/case 'palette':\s+if \(!palette\.isOpen\) \{\s+if \(help\.isOpen\) help\.close\(\);\s+palette\.open\(\);/);
+    expect(src).toMatch(/paused: \(\) => help\.isOpen \|\| palette\.isOpen \|\| mapOverlay\.owner === 'map',/);
   });
 });
 

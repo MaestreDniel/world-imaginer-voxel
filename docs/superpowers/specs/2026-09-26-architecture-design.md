@@ -199,7 +199,7 @@ world-imaginer-voxel/          (repository root)
                                 sliceModel.ts; DOM: jsonEditor.ts sliceView.ts densityTab.ts inspector.css (SP10's full probe and
                                 further JSON editors go here too)
     ui/shell.ts styles.css mapView/*   (paramPanel, splineEditor and biomeTable became directories in SP2b)
-       metricsDashboard.ts worldsMenu.ts settingsPanel.ts palette.ts hud.ts debugOverlay.ts help.ts
+       metricsDashboard.ts worldsMenu.ts settingsPanel.ts palette.ts (SP5a) hud.ts debugOverlay.ts help.ts
     main.ts
   tools/detmath-oracle.py       (SP1) CPython port of detMath, a manual oracle for the detMath goldens
   test/ unit/ metrics/ bench/ arch/ harness/{region,refs,cache,stats,flood}.ts fixtures/ tools/ (SP2b: tools/mapLatency.ts, tools/uiSmoke.ts)
