@@ -513,6 +513,8 @@ async function buildAtRest(): Promise<AtRest> {
     sections,
     world,
     store,
+    // The page's aim is not part of SP4c's frame at rest (SP5a's DDA and outline are pinned in their own tests).
+    aim: () => {},
     state,
     timeSpeed: () => TIME_SPEEDS[speed60]!,
     fogStep: (dtMs) => fog.step(dtMs, 12),

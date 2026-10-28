@@ -21,9 +21,10 @@
  * On the ticks the limiter renders (the rendered delta from `FrameClock`), in this order:
  * 4. `pump` under the frame's upload budget, from the last rebuild's centre and yaw (§3.9);
  * 5. the floating origin (`setOrigin` on a rebase, O(regions)) and the camera; the store's reclamation drain (§2.5);
- * 6. the eye's sky light in one read section (`lightAt` >> 4; its last value, `state.eyeSky`, for a column not
- *    Published, SP4c spec §3.4; 15 above y 319, 0 below −64), the time, the fog's RD (`fogStep`), `world.frame`
- *    (materials, translucent sort, render), then `onRendered`.
+ * 6. the frame's second read section (SP5a spec §3.5): `aim` (the page's DDA, queued clicks and outline), then the
+ *    eye's sky light (`lightAt` >> 4; its last value, `state.eyeSky`, for a column not Published, SP4c spec §3.4; 15
+ *    above y 319, 0 below −64); then the time, the fog's RD (`fogStep`), `world.frame` (materials, translucent sort,
+ *    render), then `onRendered`. A skipped tick never aims.
  *
  * Nothing here allocates per tick: the delta window, its scratch, the camera and the frame state are reused.
  */
@@ -64,7 +65,14 @@ export interface FrameStepDeps {
   readonly budget: UploadBudget;
   readonly sections: Pick<SectionRenderer, 'pump'>;
   readonly world: Pick<WorldRenderer, 'origin' | 'camera' | 'frame' | 'sections'>;
-  readonly store: Pick<VoxelStore, 'enterRead' | 'exitRead' | 'lightAt' | 'drain'>;
+  readonly store: Pick<VoxelStore, 'enterRead' | 'exitRead' | 'lightAt' | 'drain' | 'blockAt' | 'fluidAt'>;
+  /**
+   * On every rendered tick, inside the frame's second read section, before the eye light and `world.frame` (SP5a spec
+   * §3.5): the page's DDA, its queued clicks and the outline, reading through `read` (the store). `paused` is this
+   * tick's `paused()`: the page then hides the outline and runs no queued clicks (the frame keeps rendering behind the
+   * help, the palette and the map's mode B).
+   */
+  aim(read: Pick<VoxelStore, 'blockAt' | 'fluidAt'>, paused: boolean): void;
   /**
    * The one reused FrameState (SP4b spec §3.10): `t`, `eyeSky` and `rd` are written here, `brightness` by the page; a
    * teleport resets `eyeSky` to 15 (SP4c spec §3.4).
@@ -122,7 +130,8 @@ export function createFrameStep(d: FrameStepDeps): { tick(now: number): void } {
       const dt = clock.tick(now);
 
       // 1-2. Motion and the coordinator on every tick, so the motion stays smooth under a cap.
-      if (!d.paused()) stepFly(fly, d.held(), Math.min(raw / 1000, MAX_STEP_S), BOUNDS);
+      const paused = d.paused();
+      if (!paused) stepFly(fly, d.held(), Math.min(raw / 1000, MAX_STEP_S), BOUNDS);
       cam.x = fly.x;
       cam.z = fly.z;
       cam.yawDeg = fly.yaw;
@@ -143,9 +152,11 @@ export function createFrameStep(d: FrameStepDeps): { tick(now: number): void } {
       world.camera.position.set(fly.x - origin.x, fly.y - origin.y, fly.z - origin.z);
       applyCameraRotation(world.camera, fly);
       store.drain();
-      // 6. The eye's light in one read section, the time, the fog, the render.
+      // 6. The second read section: the aim (DDA, queued clicks, outline), then the eye's light; the time, the fog, the
+      // render.
       store.enterRead();
       try {
+        d.aim(store, paused);
         state.eyeSky = eyeSkyLight(store, fly.x, fly.y, fly.z, state.eyeSky);
       } finally {
         store.exitRead();

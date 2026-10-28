@@ -8,13 +8,15 @@ import { firstOrigin, type FloatingOrigin } from './floatingOrigin';
 import type { FrameState } from './frameState';
 import { createMaterialSystem, type MaterialSystem } from './materials/index';
 import { createSectionRenderer, type SectionRenderer, type SectionRendererKind } from './sectionRenderer';
+import { createSelection } from './selection';
 import { createSky } from './sky';
 import { createFlatColorArray } from './textureArray';
 
 /**
  * The world renderer (SP4a spec §6.1): a `WebGLRenderer` with SP0's defaults (antialias off, pixel ratio
  * min(dpr, pixelRatioCap), output sRGB), a perspective camera (near 0.1, far (RD + 2)·16·1.5), and a scene holding the
- * section renderer's regions (§6.2) and the sky dome (§6.5). It builds the flat-colour array, the material system and
+ * section renderer's regions (§6.2) and the sky dome (§6.5). SP5a (spec §3.5): the block outline (`selection.ts`) and
+ * the near plane per mode (0.05 walking, 0.1 flying). It builds the flat-colour array, the material system and
  * the section renderer itself, because the page (`ui`) may not touch `render/materials/`. It replaces SP0's sky page.
  * SP4b (spec §4.5, §5): the far plane follows a live render distance, the warm-up draws every region unculled, the
  * first floating origin is the snapped spawn, the GPU timer drops every query in flight on a disjoint, and the canvas
@@ -25,8 +27,9 @@ import { createFlatColorArray } from './textureArray';
  * water is in three's transparent list, which draws after it.
  */
 
-/** The camera's near plane, in blocks (spec §6.1). */
-const NEAR = 0.1;
+/** The camera's near plane walking and flying, in blocks (SP5a spec §3.5; flying as SP4a spec §6.1). */
+export const NEAR_WALK = 0.05;
+export const NEAR_FLY = 0.1;
 
 /** The camera's far plane for render distance `rd`: (rd + 2)·16·1.5 blocks (spec §6.1). */
 export function cameraFar(rd: number): number {
@@ -36,6 +39,12 @@ export function cameraFar(rd: number): number {
 /** Moves the camera's far plane to render distance `rd` (`cameraFar`) and updates its projection (SP4b spec §5). */
 export function applyRenderDistance(camera: PerspectiveCamera, rd: number): void {
   camera.far = cameraFar(rd);
+  camera.updateProjectionMatrix();
+}
+
+/** Moves the camera's near plane to `near` blocks and updates its projection (SP5a spec §3.5). */
+export function applyNear(camera: PerspectiveCamera, near: number): void {
+  camera.near = near;
   camera.updateProjectionMatrix();
 }
 
@@ -60,13 +69,16 @@ export function applyViewport(
   setSize(width, height);
 }
 
-/** Where the cutout pass sits in the opaque list: after the opaque sections (0) and the sky (`SKY_RENDER_ORDER`). */
+/**
+ * Where the cutout pass sits in the opaque list: after the opaque sections (0) and the sky (`SKY_RENDER_ORDER`), before
+ * the block outline (`OUTLINE_ORDER` 3, SP5a spec §3.5).
+ */
 const CUTOUT_ORDER = 2;
 
 /**
  * The opaque list's order (spec §6.1): by three's group order, then by pass (the cutout material at `CUTOUT_ORDER`,
- * everything else at its `renderOrder`: the opaque sections 0, the sky 1), then front to back. three's default sorts by
- * material before depth, which would draw cutout before the sky.
+ * everything else at its `renderOrder`: the opaque sections 0, the sky 1, the block outline 3), then front to back.
+ * three's default sorts by material before depth, which would draw cutout before the sky.
  */
 export function opaquePassSort(m: Pick<MaterialSystem, 'terrainCutout'>): (a: RenderItem, b: RenderItem) => number {
   const order = (i: RenderItem): number => (i.material === m.terrainCutout ? CUTOUT_ORDER : i.renderOrder);
@@ -117,6 +129,15 @@ export interface WorldRenderer {
   warmUp(state: FrameState): void;
   /** The live render distance's far plane: `camera.far = cameraFar(rd)`, projection updated (SP4b spec §5). */
   setRenderDistance(rd: number): void;
+  /**
+   * Shows the block outline around x0 … x1, y0 … y1, z0 … z1, relative to the floating origin (scene coordinates),
+   * enlarged by 0.002 (SP5a spec §3.5).
+   */
+  setOutline(x0: number, y0: number, z0: number, x1: number, y1: number, z1: number): void;
+  /** Hides the block outline: no target, the pointer free, paused, or no HUD. */
+  hideOutline(): void;
+  /** The near plane: `NEAR_WALK` walking, `NEAR_FLY` flying (`applyNear`, SP5a spec §3.5). */
+  setNear(near: number): void;
   /**
    * Follows the host's size now (aspect, pixel ratio, drawing buffer; `applyViewport`), as the ResizeObserver does a
    * frame later: the map's mode B calls it at the switch, then `frame`, so the painted frame is drawn (SP4c spec §2.2).
@@ -373,9 +394,11 @@ export function createWorldRenderer(host: HTMLElement, o: WorldRendererOptions):
     throw e;
   }
   const sky = createSky(materials);
+  const selection = createSelection();
   const scene = new Scene();
   scene.add(sections.root);
   scene.add(sky);
+  scene.add(selection.object);
   // The first floating origin is the snapped spawn (SP4b spec §3.4), before anything is staged.
   const origin = firstOrigin(o.originAt);
   sections.setOrigin(origin.x, origin.y, origin.z);
@@ -395,7 +418,7 @@ export function createWorldRenderer(host: HTMLElement, o: WorldRendererOptions):
   canvas.style.height = '100%';
   host.appendChild(canvas);
 
-  const camera = new PerspectiveCamera(o.fov, 1, NEAR, cameraFar(o.rd));
+  const camera = new PerspectiveCamera(o.fov, 1, NEAR_FLY, cameraFar(o.rd));
   const timer = createGpuTimer(renderer.getContext() as WebGL2RenderingContext);
 
   const resize = (): void =>
@@ -441,7 +464,9 @@ export function createWorldRenderer(host: HTMLElement, o: WorldRendererOptions):
     origin,
     sections,
     async compile() {
-      await compileScene(renderer, scene, camera, sections);
+      // The hidden outline counted visible for the compile's synchronous walk, so its program links behind the loading
+      // screen too, not on the first aimed frame.
+      await withSectionsShown(selection.object, () => compileScene(renderer, scene, camera, sections));
     },
     frame(state) {
       draw(state);
@@ -451,6 +476,15 @@ export function createWorldRenderer(host: HTMLElement, o: WorldRendererOptions):
     },
     setRenderDistance(rd) {
       applyRenderDistance(camera, rd);
+    },
+    setOutline(x0, y0, z0, x1, y1, z1) {
+      selection.set(x0, y0, z0, x1, y1, z1);
+    },
+    hideOutline() {
+      selection.hide();
+    },
+    setNear(near) {
+      applyNear(camera, near);
     },
     resize,
     gpuEstimate(out) {
@@ -474,6 +508,7 @@ export function createWorldRenderer(host: HTMLElement, o: WorldRendererOptions):
       timer?.dispose();
       sections.dispose();
       scene.clear();
+      selection.dispose();
       sky.geometry.dispose();
       materials.dispose();
       albedo.dispose();

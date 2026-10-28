@@ -1,12 +1,15 @@
 import {
-  BoxGeometry, Group, LinearMipmapLinearFilter, Mesh, NearestFilter, PerspectiveCamera, Scene, type BatchedMesh, type Material,
-  type Object3D,
+  BoxGeometry, Group, LinearMipmapLinearFilter, Mesh, MeshBasicMaterial, NearestFilter, PerspectiveCamera, Scene,
+  ShaderMaterial, type BatchedMesh, type Material, type Object3D, type RenderItem,
 } from 'three';
 import { describe, expect, test } from 'vitest';
 import { createMaterialSystem } from '../../src/render/materials/index';
 import {
-  applyRenderDistance, compileScene, createGpuTimer, gpuEstimateOf, withRegionsUnculled, withSectionsShown, type GpuEstimate,
+  NEAR_FLY, NEAR_WALK, applyNear, applyRenderDistance, compileScene, createGpuTimer, gpuEstimateOf, opaquePassSort,
+  withRegionsUnculled, withSectionsShown, type GpuEstimate,
 } from '../../src/render/renderer';
+import { createSelection } from '../../src/render/selection';
+import { SKY_RENDER_ORDER } from '../../src/render/sky';
 import { createSectionRenderer, type SectionRendererKind } from '../../src/render/sectionRenderer';
 import { createSky } from '../../src/render/sky';
 import { createFlatColorArray } from '../../src/render/textureArray';
@@ -321,6 +324,39 @@ describe('applyRenderDistance (SP4b spec §5)', () => {
     expect(camera.far).toBe(288);
     const expected = new PerspectiveCamera(70, 16 / 9, 0.1, 288);
     expect(camera.projectionMatrix.elements).toEqual(expected.projectionMatrix.elements);
+  });
+});
+
+describe('the opaque list\'s order (spec §6.1; SP5a spec §3.5)', () => {
+  test('`opaquePassSort` orders the outline after the cutout pass', () => {
+    const terrainOpaque = new MeshBasicMaterial();
+    const terrainCutout = new ShaderMaterial();
+    const sky = new MeshBasicMaterial();
+    const outline = createSelection().object;
+    const item = (id: number, material: Material, renderOrder: number, z: number): RenderItem =>
+      ({ id, groupOrder: 0, material, renderOrder, z }) as unknown as RenderItem;
+    // The outline nearest the camera, the cutout farthest: the pass order wins over depth.
+    const items = [
+      item(1, outline.material as Material, outline.renderOrder, 1),
+      item(2, terrainCutout, 0, 90),
+      item(3, sky, SKY_RENDER_ORDER, 50),
+      item(4, terrainOpaque, 0, 40),
+    ];
+    items.sort(opaquePassSort({ terrainCutout }));
+    expect(items.map((i) => i.id)).toEqual([4, 3, 2, 1]);
+  });
+});
+
+describe('applyNear (SP5a spec §3.5)', () => {
+  test('`applyNear(camera, 0.05)` sets `near` 0.05 and updates `projectionMatrix`', () => {
+    expect([NEAR_WALK, NEAR_FLY]).toEqual([0.05, 0.1]);
+    const camera = new PerspectiveCamera(70, 16 / 9, NEAR_FLY, 336);
+    applyNear(camera, 0.05);
+    expect(camera.near).toBe(0.05);
+    const expected = new PerspectiveCamera(70, 16 / 9, 0.05, 336);
+    expect(camera.projectionMatrix.elements).toEqual(expected.projectionMatrix.elements);
+    applyNear(camera, NEAR_FLY);
+    expect(camera.projectionMatrix.elements).toEqual(new PerspectiveCamera(70, 16 / 9, 0.1, 336).projectionMatrix.elements);
   });
 });
 

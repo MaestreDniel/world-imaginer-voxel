@@ -172,7 +172,7 @@ world-imaginer-voxel/          (repository root)
       coordinator.ts scheduler.ts (not created: the coordinator holds the scheduler) rings.ts workerPool.ts jobHeap.ts (SP4c) throttle.ts (SP4b) uploadBudget.ts session.ts invalidation.ts (SP4c with Apply's dirty stages; completed for every scope by SP10) capabilities.ts simClient.ts (SP5a)
       renderDistance.ts spikeStore.ts   (SP4a: the default render distance from the capability report; the spike's shared store)
     render/                     the only place three is imported (ui canvases are 2D; amended by SP0)
-      renderer.ts sectionRenderer.ts (interface; SP4b: and UploadGate) regionBatch.ts regionMesh.ts (fallback) floatingOrigin.ts selection.ts
+      renderer.ts sectionRenderer.ts (interface; SP4b: and UploadGate) regionBatch.ts regionMesh.ts (fallback) floatingOrigin.ts selection.ts (SP5a)
       fpsLimiter.ts frameState.ts frameTiming.ts regionGrid.ts spike/   (SP4a: the FPS cap; the per-frame inputs of the materials;
                                 rAF-delta snapping and percentiles; the region grid both section renderers share; the week-1 spike's stress scene
                                 and bench behind `?spike=batch`)

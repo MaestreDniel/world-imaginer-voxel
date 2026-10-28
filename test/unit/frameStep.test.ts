@@ -26,6 +26,11 @@ interface Rig {
   readonly frames: number[];
   readonly rendered: number[];
   generating: boolean;
+  /** The store the frame step was given, and each reader `aim` received. */
+  readonly store: FrameStepDeps['store'];
+  readonly aimReads: unknown[];
+  /** `fly.z` when `coordinator.update` ran: the motion step came first. */
+  readonly zAtUpdate: number[];
 }
 
 /** A frame step over fakes: every call it makes is logged in order; the clock, limiter and throttle are real. */
@@ -47,7 +52,25 @@ function rig(o: { cap?: FpsCap; max?: number; y?: number; held?: Action[]; pause
     frames: [],
     rendered: [],
     generating: false,
+    store: null as unknown as FrameStepDeps['store'],
+    aimReads: [],
+    zAtUpdate: [],
   };
+  const store: FrameStepDeps['store'] = {
+    enterRead: () => { log.push('enterRead'); },
+    exitRead: () => { log.push('exitRead'); },
+    lightAt: (bx, by, bz) => {
+      log.push(`lightAt ${bx},${by},${bz}`);
+      return r.light;
+    },
+    drain: () => {
+      log.push('drain');
+      return 0;
+    },
+    blockAt: () => 0,
+    fluidAt: () => 0,
+  };
+  (r as { store: FrameStepDeps['store'] }).store = store;
   const deps: FrameStepDeps = {
     fly,
     held: () => held,
@@ -57,6 +80,7 @@ function rig(o: { cap?: FpsCap; max?: number; y?: number; held?: Action[]; pause
     coordinator: {
       update: () => {
         log.push('update');
+        r.zAtUpdate.push(fly.z);
         if (o.fatalInUpdate?.() === true) stopped = true;
       },
       counts: (out) => {
@@ -102,17 +126,11 @@ function rig(o: { cap?: FpsCap; max?: number; y?: number; held?: Action[]; pause
       },
       sections: { setOrigin: () => { log.push('setOrigin'); } },
     } as unknown as FrameStepDeps['world'],
-    store: {
-      enterRead: () => { log.push('enterRead'); },
-      exitRead: () => { log.push('exitRead'); },
-      lightAt: (bx, by, bz) => {
-        log.push(`lightAt ${bx},${by},${bz}`);
-        return r.light;
-      },
-      drain: () => {
-        log.push('drain');
-        return 0;
-      },
+    store,
+    // The page's aim (SP5a spec §3.5): the DDA, the queued clicks and the outline, inside the second read section.
+    aim: (read, paused) => {
+      log.push(paused ? 'aim paused' : 'aim');
+      r.aimReads.push(read);
     },
     state,
     timeSpeed: () => 1,
@@ -148,11 +166,40 @@ describe('createFrameStep (SP4b spec §7.2)', () => {
     expect(r.rendered.slice(1).every((dt) => Math.abs(dt - 2 * HZ60) < 1e-6)).toBe(true);
   });
 
-  test('the order on a rendered tick: update, pump, origin, drain, eye light inside one read section, render', () => {
+  test('the order on a rendered tick: update, pump, origin, drain, aim and eye light inside one read section, render', () => {
     const r = rig();
     r.step.tick(HZ60);
     // The pump reads the last rebuild's centre and yaw from the counts the coordinator just wrote.
-    expect(r.log).toEqual(['update', 'pump 3,-4,90', 'origin', 'drain', 'enterRead', 'lightAt 8,100,8', 'exitRead', 'frame']);
+    expect(r.log).toEqual(['update', 'pump 3,-4,90', 'origin', 'drain', 'enterRead', 'aim', 'lightAt 8,100,8', 'exitRead', 'frame']);
+  });
+
+  test('the tick order: motion, update, counts, uploads, origin, drain, then one read section holding `aim` and the eye light, then `world.frame` (SP5a spec §3.5)', () => {
+    const r = rig({ held: ['forward'], hooks: true });
+    r.step.tick(HZ60);
+    // Yaw 0 faces −z: the fly step moved the camera before the coordinator's update.
+    expect(r.zAtUpdate).toHaveLength(1);
+    expect(r.zAtUpdate[0]!).toBeLessThan(8);
+    expect(r.log).toEqual([
+      'beforeUpdate', 'update', 'counts', 'afterCounts', 'pump 3,-4,90', 'origin', 'drain',
+      'enterRead', 'aim', `lightAt 8,100,${Math.floor(r.fly.z)}`, 'exitRead', 'frame',
+    ]);
+    // aim reads through the frame's store, inside its read section.
+    expect(r.aimReads).toEqual([r.store]);
+  });
+
+  test('paused: `aim` called with `paused` true (the page hides the outline); a skipped tick: `aim` not called (SP5a spec §3.5)', () => {
+    let paused = false;
+    const r = rig({ cap: 30, paused: () => paused });
+    const perTick: string[][] = [];
+    for (let i = 1; i <= 4; i++) {
+      if (i === 3) paused = true;
+      r.log.length = 0;
+      r.step.tick(i * HZ60);
+      perTick.push(r.log.filter((l) => l.startsWith('aim')));
+    }
+    // A 30 fps cap at 60 Hz renders ticks 1 and 3: the frame keeps rendering behind the help, with aim told it is paused.
+    expect(perTick).toEqual([['aim'], [], ['aim paused'], []]);
+    expect(r.rendered).toHaveLength(2);
   });
 
   test('a fatal that update raises synchronously ends the tick there: no counts, pump, origin, drain, eye light or render (Task 21 review M1)', () => {

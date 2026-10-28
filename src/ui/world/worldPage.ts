@@ -103,13 +103,15 @@ import { SimFailed, createBrowserSim, type SimClient } from '../../engine/simCli
 import { createThrottle } from '../../engine/throttle';
 import { createUploadBudget } from '../../engine/uploadBudget';
 import { StoreFullError, WorkerFailed, createBrowserPool, poolSize, type WorkerPool } from '../../engine/workerPool';
-import { SPEED_DEFAULT, applyCameraRotation, look, stepSpeed, type FlyState } from '../../player/fly';
+import { SPEED_DEFAULT, applyCameraRotation, look, lookVectorInto, stepSpeed, type FlyState } from '../../player/fly';
 import { attachInput, isTextEntry } from '../../player/input';
 import { DEFAULT_KEYMAP, type Action } from '../../player/keymap';
+import { REACH_FLY, castRay, createRayHit, type RayHit } from '../../player/raycast';
 import { createFpsLimiter, type FpsLimiter } from '../../render/fpsLimiter';
 import type { FrameState } from '../../render/frameState';
 import { createWorldRenderer, type GpuEstimate, type WorldRenderer } from '../../render/renderer';
 import { createSectionRendererCounts, selectSectionRenderer, type SectionRendererKind } from '../../render/sectionRenderer';
+import { outlineBounds } from '../../render/selection';
 import { SIM_THREAD } from '../../world/store/reclaim';
 import { createStore, type VoxelStore } from '../../world/store/store';
 import { renderErrorScreen } from '../capabilityReport';
@@ -1028,6 +1030,49 @@ export function offerLowerRd(notices: Pick<WorldNotices, 'slow'>, rd: number, co
   notices.slow(rd, lower, () => control.apply(lower));
 }
 
+/** The page's aim: the frame's DDA hit, and the step the frame step runs inside its second read section. */
+export interface Aim {
+  /** The last rendered frame's hit (`hit` false: no target). */
+  readonly hit: RayHit;
+  aim(read: Pick<VoxelStore, 'blockAt' | 'fluidAt'>, paused: boolean): void;
+}
+
+/**
+ * The page's aim (SP5a spec §3.5, D8), which the frame step runs on every rendered tick inside its second read section:
+ * the DDA from the eye along the look (`lookVectorInto`; reach `REACH_FLY` until the walk mode), then the outline around
+ * the hit (`outlineBounds`: the cell, or a box state's box), relative to the floating origin, or hidden: while paused,
+ * while the pointer is free, with no target, and without the HUD (captures, panoramas). The queued clicks run between
+ * the two (Task 25). Allocates nothing.
+ */
+export function createAim(o: {
+  readonly fly: Pick<FlyState, 'x' | 'y' | 'z' | 'yaw' | 'pitch'>;
+  readonly world: Pick<WorldRenderer, 'origin' | 'setOutline' | 'hideOutline'>;
+  /** True while the canvas holds the pointer lock. */
+  locked(): boolean;
+  /** The page's HUD option (`WorldPageOptions.hud`). */
+  readonly hud: boolean;
+}): Aim {
+  const { fly, world } = o;
+  const hit = createRayHit();
+  const dir = new Float64Array(3);
+  const bounds = new Float64Array(6);
+  return {
+    hit,
+    aim(read, paused) {
+      lookVectorInto(dir, fly.yaw, fly.pitch);
+      castRay(read, fly.x, fly.y, fly.z, dir[0]!, dir[1]!, dir[2]!, REACH_FLY, 'block', hit);
+      if (paused || !o.hud || !hit.hit || !o.locked()) {
+        world.hideOutline();
+        return;
+      }
+      outlineBounds(hit.state, hit.x, hit.y, hit.z, bounds);
+      const origin = world.origin;
+      world.setOutline(bounds[0]! - origin.x, bounds[1]! - origin.y, bounds[2]! - origin.z,
+        bounds[3]! - origin.x, bounds[4]! - origin.y, bounds[5]! - origin.z);
+    },
+  };
+}
+
 /**
  * The keys Keyboard Lock captures in fullscreen: W, T and N, so that Ctrl+W, Ctrl+T and Ctrl+N reach the page. Esc is
  * not locked, so a short Esc still frees the mouse and leaves fullscreen (spec §7.1; final review C-M13).
@@ -1656,6 +1701,9 @@ export function mountWorldPage(root: HTMLElement, q: WorldQuery, hash: string, o
         let refillMs: number | null = null;
         fly.vx = fly.vy = fly.vz = 0;
         const clock = createFrameClock(createFpsLimiter(settings.fpsCap), { push() {} }, prev);
+        // The bench's aim runs the DDA and the outline from the scripted pose although its step is always paused, so
+        // L10's main-thread time (`mainP95Ms`) includes them (SP5a spec §6.2); no pointer lock is taken.
+        const benchAim = createAim({ fly, world, locked: () => true, hud });
         const step = createFrameStep({
           fly,
           held: () => noKeys,
@@ -1670,6 +1718,7 @@ export function mountWorldPage(root: HTMLElement, q: WorldQuery, hash: string, o
           sections: timedSections,
           world,
           store,
+          aim: (read) => benchAim.aim(read, false),
           state: frame,
           timeSpeed: () => BENCH_TIME_SPEED,
           fogStep: (dtMs) => fogStep.step(dtMs),
@@ -2144,6 +2193,8 @@ export function mountWorldPage(root: HTMLElement, q: WorldQuery, hash: string, o
     const clock = createFrameClock(limiter, slowFrames, revealTs);
     let n = 0;
     let firstMax = 0;
+    // The DDA and the outline (SP5a spec §3.5); the queued clicks join in Task 25.
+    const pageAim = createAim({ fly, world, locked: () => document.pointerLockElement === canvas, hud });
     const step = createFrameStep({
       fly,
       held: () => input.held,
@@ -2158,6 +2209,7 @@ export function mountWorldPage(root: HTMLElement, q: WorldQuery, hash: string, o
       sections,
       world,
       store,
+      aim: (read, paused) => pageAim.aim(read, paused),
       state: frame,
       timeSpeed,
       // The fog eases outward after a raise, following the filled radius (SP4b spec §5): scanned around the camera's
