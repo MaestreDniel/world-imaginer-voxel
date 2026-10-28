@@ -1127,7 +1127,8 @@ describe('master spec amendments (SP5a §9)', () => {
     [/^\s+player\/fly\.ts /, 'walk.ts physics.ts raycast.ts interaction.ts hotbar.ts (SP5a)', 'src/player/raycast.ts'],
     [/^\s+player\/fly\.ts /, 'walk.ts physics.ts raycast.ts interaction.ts hotbar.ts (SP5a)', 'src/player/interaction.ts'],
     [/^\s+player\/fly\.ts /, 'walk.ts physics.ts raycast.ts interaction.ts hotbar.ts (SP5a)', 'src/player/hotbar.ts'],
-    [/^\s+ui\/world\/\* /, 'buildHud.ts (SP5a)', 'src/ui/world/buildHud.ts'],
+    [/^\s+ui\/world\/\* /, 'buildHud.ts blockHistory.ts (SP5a)', 'src/ui/world/buildHud.ts'],
+    [/^\s+ui\/world\/\* /, 'buildHud.ts blockHistory.ts (SP5a)', 'src/ui/world/blockHistory.ts'],
     [/^\s+renderer\.ts /, 'selection.ts (SP5a)', 'src/render/selection.ts'],
     [/^\s+ui\/shell\.ts /, 'palette.ts (SP5a)', 'src/ui/palette.ts'],
   ];
@@ -1243,6 +1244,12 @@ describe('master spec amendments (SP5a §9)', () => {
     expect(s59).toContain('Ctrl+Z / Ctrl+Y (blocks while the world owns the controls, the map\'s settings while the map does; SP5a)');
     expect(s59).toContain('1-9 and wheel (hotbar), Ctrl+wheel and `+`/`-` (fly speed)');
     expect(s59.match(/\(fly speed\)/g), '§5.9 names the fly speed once').toHaveLength(1);
+  });
+
+  test('§4.12 gains the block-undo paragraph (SP5a spec §4.5, §9)', () => {
+    const at412 = text.indexOf('### 4.12 ');
+    const s412 = text.slice(at412, text.indexOf('### 4.13 ', at412));
+    expect(s412.split('\n')).toContain('**Block undo** (SP5a): Ctrl+Z / Ctrl+Y undo and redo block edits while the world owns the controls, 100 steps per session, separate from the map\'s history.');
   });
 
   test('§1 names each SP5a module in its entry, which exists', () => {

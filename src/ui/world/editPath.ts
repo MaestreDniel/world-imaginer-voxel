@@ -14,7 +14,10 @@
  *   disabled, every pin released by `simUnpinAll`), then rejects each pending batch with `SimFailed`, which resolves
  *   `failed` here without a `simUnpin`.
  *
- * An empty batch resolves `{ ok: true }` with an empty `prev` and posts nothing.
+ * An accepted batch resolves `{ ok: true, prev, next }`: each edit's DiffStore entry before and after it (`NO_ENTRY`
+ * for none), which the block history records (§4.5). An empty batch resolves `{ ok: true }` with empty `prev` and
+ * `next` and posts nothing. `settled` lets the block history hold a Ctrl+Z or Ctrl+Y until every pending reply has
+ * been recorded (§4.5).
  */
 import { colKey, colKeyCx, colKeyCz } from '../../core/coords';
 import type { Coordinator } from '../../engine/coordinator';
@@ -23,7 +26,7 @@ import type { Edit } from '../../workers/protocol';
 import type { EditLatency } from './editLatency';
 
 export type EditOutcome =
-  | { readonly ok: true; readonly prev: Uint32Array }
+  | { readonly ok: true; readonly prev: Uint32Array; readonly next: Uint32Array }
   | { readonly ok: false; readonly why: 'unloaded' | 'regenerating' | 'changed' | 'noProto' | 'full' | 'failed' };
 
 export interface EditPath {
@@ -31,6 +34,11 @@ export interface EditPath {
   post(edits: readonly Edit[]): Promise<EditOutcome>;
   /** Whether a posted batch is still waiting for its reply. */
   pending(): boolean;
+  /**
+   * Resolves once no batch is pending and after the continuations each pending post's promise had when `settled` was
+   * called (the page's `record`) have run; at once (in a promise job) when nothing is pending.
+   */
+  settled(): Promise<void>;
   /** Closes the path: every later `post` resolves `failed` with nothing posted. */
   disable(): void;
   /** False once disabled or once the sim failed. */
@@ -54,12 +62,17 @@ export function createEditPath(o: {
 }): EditPath {
   let disabled = false;
   let inFlight = 0;
+  /** The promises `post` returned that have not settled yet. */
+  const live = new Set<Promise<EditOutcome>>();
   const closed = (): boolean => disabled || o.sim.failed;
+  // Waited after the continuations already on each pending promise (registered before this, so they run first), and
+  // again while a post made meanwhile is pending.
+  const settled = (): Promise<void> => Promise.allSettled([...live]).then(() => (inFlight > 0 ? settled() : undefined));
 
   return {
     post(edits) {
       if (closed()) return Promise.resolve(FAILED);
-      if (edits.length === 0) return Promise.resolve({ ok: true, prev: new Uint32Array(0) });
+      if (edits.length === 0) return Promise.resolve({ ok: true, prev: new Uint32Array(0), next: new Uint32Array(0) });
       // The distinct edited columns, the first edit's first; any closed 3 × 3 refuses the batch.
       const cols: number[] = [];
       let regenerating = false;
@@ -77,13 +90,13 @@ export function createEditPath(o: {
       const tPost = o.now();
       for (const k of cols) o.coordinator.simPin(colKeyCx(k), colKeyCz(k));
       inFlight++;
-      return o.sim.edits(edits).then((reply): EditOutcome => {
+      const p = o.sim.edits(edits).then((reply): EditOutcome => {
         inFlight--;
         for (const k of cols) o.coordinator.simUnpin(colKeyCx(k), colKeyCz(k));
         o.coordinator.markEdited(reply.dirty);
         if (reply.refused === null) {
           o.latency.posted(tPost, o.now(), cols[0]!, reply.dirty, reply.relightMs, reply.editMs);
-          return { ok: true, prev: reply.prev };
+          return { ok: true, prev: reply.prev, next: reply.next };
         }
         if (reply.refused === 'full') o.notices.show(EDIT_FULL_NOTICE, EDIT_FULL_MS);
         return { ok: false, why: reply.refused };
@@ -93,8 +106,13 @@ export function createEditPath(o: {
         if (e instanceof SimFailed) return FAILED;
         throw e;
       });
+      live.add(p);
+      const done = (): void => { live.delete(p); };
+      void p.then(done, done);
+      return p;
     },
     pending: () => inFlight > 0,
+    settled,
     disable() {
       disabled = true;
     },

@@ -52,10 +52,11 @@ const GROUP_TITLES: Readonly<Record<KeyEntry['group'], string>> = {
 };
 
 /**
- * Undo and redo belong to the session, not the key map (SP4c spec §2.4), so the generated table does not name them.
- * Ctrl+Shift+Z also holds Shift (descend) while flying; Ctrl+Y does not.
+ * Undo and redo are not in the key map (SP4c spec §2.4), so the generated table does not name them; they act on the
+ * blocks while the world owns the controls and on the map's settings while the map does (SP5a spec §4.5). Ctrl+Shift+Z
+ * also holds Shift (descend) while flying; Ctrl+Y does not.
  */
-export const UNDO_REDO_LINE = 'Ctrl+Z undo · Ctrl+Y redo (Ctrl+Shift+Z also descends while flying; Ctrl+Y does not)';
+export const UNDO_REDO_LINE = 'Ctrl+Z undo · Ctrl+Y redo: blocks while you play, the map\'s settings while the map has the controls (Ctrl+Shift+Z also descends while flying; Ctrl+Y does not)';
 
 /**
  * One table per group, in the map's order; each row names the action and every binding (spec §7.3); then the undo and

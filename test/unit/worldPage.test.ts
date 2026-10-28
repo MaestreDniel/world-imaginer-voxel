@@ -23,12 +23,15 @@ import { WATER_SOURCE } from '../../src/world/blocks/fluid';
 import { createHotbar } from '../../src/player/hotbar';
 import { createReloader, createWorldUrl, worldHash, type HereState } from '../../src/ui/world/reload';
 import {
-  countPendingTimers, countTileCalls, createAim, createClickQueue, createRdControl, createUndoNotice, createWorldNotices, everyFrameUntil, failBeforeReveal, flushOnPageHide, handleContextLoss,
-  handleStreamEvent, helpChange, installWiTest, mapKey, offerLowerRd, paletteFirst, onDriverStatus, onSimFailure, rdShownOnLoad, releaseOnFailure, reloadRd, runTeardown, stopAfterFailure,
+  countPendingTimers, countTileCalls, createAim, createClickQueue, createHookEdit, createRdControl, createUndoNotice, createWorldNotices, everyFrameUntil, failBeforeReveal, flushOnPageHide, handleContextLoss,
+  handleStreamEvent, helpChange, installUndoKeys, installWiTest, mapKey, offerLowerRd, paletteFirst, onDriverStatus, onSimFailure, rdShownOnLoad, releaseOnFailure, reloadRd, runTeardown, stopAfterFailure,
   UNDO_NOTICE_MS, type WiTest, type WiTestPage,
 } from '../../src/ui/world/worldPage';
 import { createEditLatency } from '../../src/ui/world/editLatency';
-import { createEditPath } from '../../src/ui/world/editPath';
+import { createEditPath, type EditOutcome } from '../../src/ui/world/editPath';
+import { createActionPost, createBlockHistory } from '../../src/ui/world/blockHistory';
+import { NO_ENTRY } from '../../src/sim/diffStore';
+import type { Edit } from '../../src/workers/protocol';
 import { installDom, type FakeElement } from './fixtures/domShim';
 
 /** A frame scheduler that queues callbacks; `flush` runs one frame. */
@@ -459,7 +462,7 @@ describe('createRdControl (SP4b spec §5, D18; Review Focus 5)', () => {
       rdMax: 10,
       heightAt: () => null,
       live: { set() {}, undo() {}, teleport: () => Promise.resolve(true), settled: () => true },
-      edit: { post: () => Promise.resolve({ ok: true, prev: new Uint32Array(0) }), editState: () => 0 },
+      edit: { post: () => Promise.resolve({ ok: true, prev: new Uint32Array(0), next: new Uint32Array(0) }), editState: () => 0 },
     });
     // The page's loop: the script's RD applied through the control when it differs from the live one.
     let liveRd = 10;
@@ -1464,3 +1467,109 @@ describe('createClickQueue: the queued clicks run in the aim (SP5a spec §4.1, �
     expect(r.posted).toEqual([]);
   });
 });
+
+describe('block undo and redo by who has the controls (SP5a spec §4.5, D13)', () => {
+  afterEach(() => { vi.unstubAllGlobals(); });
+  const keydown = (key: string, mods: Record<string, boolean> = {}) =>
+    Object.assign(new Event('keydown', { cancelable: true }), { key, ctrlKey: false, metaKey: false, shiftKey: false, altKey: false, ...mods });
+  const src = (): string => readFileSync(new URL('../../src/ui/world/worldPage.ts', import.meta.url), 'utf8');
+
+  /**
+   * A fake edit path that accepts every batch (a set leaves its value as the entry, a revert none), the real block
+   * history and the page's recording post in front of it, and the undo keys on a stubbed window with the world owning.
+   */
+  function rig() {
+    const posted: Edit[][] = [];
+    const post = (edits: readonly Edit[]): Promise<EditOutcome> => {
+      posted.push([...edits]);
+      const next = Uint32Array.from(edits, (e) => (e.op === 'revert' ? NO_ENTRY : e.value));
+      return Promise.resolve({ ok: true, prev: new Uint32Array(edits.length).fill(NO_ENTRY), next });
+    };
+    const history = createBlockHistory({
+      post, read: () => AIR << 8, pending: () => false, settled: () => Promise.resolve(), notices: { show() {} },
+    });
+    const actions = createActionPost({ post, record: history.record });
+    const win = new EventTarget();
+    vi.stubGlobal('window', win);
+    const session = { undo: vi.fn(() => true), redo: vi.fn(() => true) };
+    const dispose = installUndoKeys({ owner: () => 'world', blocks: history, session });
+    return { posted, history, actions, win, session, dispose };
+  }
+
+  test('the page: owner \'world\' → the block history, \'map\' → `session.undo()`', () => {
+    const win = new EventTarget();
+    vi.stubGlobal('window', win);
+    let owner: 'world' | 'map' = 'world';
+    const log: string[] = [];
+    const dispose = installUndoKeys({
+      owner: () => owner,
+      blocks: { undo: () => { log.push('blocks.undo'); }, redo: () => { log.push('blocks.redo'); } },
+      session: { undo: () => { log.push('session.undo'); return true; }, redo: () => { log.push('session.redo'); return true; } },
+    });
+    const press = () => {
+      for (const k of [keydown('z', { ctrlKey: true }), keydown('y', { ctrlKey: true }), keydown('Z', { ctrlKey: true, shiftKey: true })]) {
+        win.dispatchEvent(k);
+        expect(k.defaultPrevented).toBe(true);
+      }
+    };
+    press();
+    owner = 'map';
+    press();
+    expect(log).toEqual(['blocks.undo', 'blocks.redo', 'blocks.redo', 'session.undo', 'session.redo', 'session.redo']);
+    dispose();
+    win.dispatchEvent(keydown('z', { ctrlKey: true }));
+    expect(log).toHaveLength(6);
+    // The page installs it with the overlay's owner, its block history and the session.
+    expect(src()).toMatch(/installUndoKeys\(\{ owner: \(\) => mapOverlay\.owner, blocks: blockHistory, session \}\)/);
+  });
+
+  test('a place, then Ctrl+Z with the world owning, posts its `revert`', async () => {
+    const r = rig();
+    // The click queue's place (stone under the eye, the hotbar's stone placed above it), posted through the recording post.
+    const world = { origin: { x: 0, y: 0, z: 0 }, setOutline: () => {}, hideOutline: () => {} };
+    const fly = { x: 0.5, y: 72.5, z: 0.5, yaw: 0, pitch: -90 };
+    const read = {
+      blockAt: (x: number, y: number, z: number) => (x === 0 && y === 68 && z === 0 ? STONE : AIR),
+      fluidAt: () => 0,
+    };
+    const clicks = createClickQueue({ post: (edit) => { void r.actions([edit]); }, hotbar: createHotbar(null), fly, editable: () => true });
+    const aim = createAim({ fly, world: world as never, locked: () => true, hud: true, clicks });
+    clicks.push(2);
+    aim.aim(read, false);
+    await flushMicrotasks();
+    expect(r.history.size).toBe(1);
+    r.win.dispatchEvent(keydown('z', { ctrlKey: true }));
+    await flushMicrotasks();
+    expect(r.posted).toEqual([
+      [{ x: 0, y: 69, z: 0, op: 'set', value: STONE << 8, expect: AIR << 8 }],
+      [{ x: 0, y: 69, z: 0, op: 'revert', value: 0, expect: STONE << 8 }],
+    ]);
+    expect([r.history.size, r.history.redoSize]).toEqual([0, 1]);
+    expect(r.session.undo).not.toHaveBeenCalled();
+    r.dispose();
+    // The page's clicks post through it.
+    expect(src()).toMatch(/post: \(edit\) => \{ void actionPost\(\[edit\]\); \},/);
+  });
+
+  test('a hook edit (`WiTest.edit`) then Ctrl+Z posts the revert', async () => {
+    const r = rig();
+    const edit = createHookEdit(r.actions, () => AIR << 8);
+    expect(await edit(3, 70, 4, STONE, 0)).toBe('ok');
+    expect(r.history.size).toBe(1);
+    r.win.dispatchEvent(keydown('z', { ctrlKey: true }));
+    await flushMicrotasks();
+    expect(r.posted).toEqual([
+      [{ x: 3, y: 70, z: 4, op: 'set', value: STONE << 8, expect: AIR << 8 }],
+      [{ x: 3, y: 70, z: 4, op: 'revert', value: 0, expect: STONE << 8 }],
+    ]);
+    r.dispose();
+    // The page's hook edits through the recording post, and the history reads the voxel's value now.
+    expect(src()).toMatch(/edit: createHookEdit\(actionPost, \(x, y, z\) => voxelValue\(store, x, y, z\)\),/);
+    expect(src()).toMatch(/read: \(x, y, z\) => voxelValue\(store, x, y, z\),/);
+  });
+});
+
+/** Lets every pending promise job run (a macrotask comes after them all). */
+function flushMicrotasks(): Promise<void> {
+  return new Promise((r) => setTimeout(r, 0));
+}

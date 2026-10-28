@@ -194,7 +194,7 @@ world-imaginer-voxel/          (repository root)
     ui/world/* ui/loading/* ui/spike/* settings.ts   (SP4a) the 3D page: the minimal start screen at `/`, the world page, the
                                 flight (`?flight=sp4a`) and panorama (`?pano`) routes; the loading screen with panoramas, tips and progress; the spike
                                 page (`?spike=batch`); the world's small settings block (SP5b's graphics settings screen replaces it);
-                                ui/world/bench.ts (SP4b: the `?bench=medium` route and its JSON); mapOverlay.ts applyControl.ts teleport.ts (SP4c) buildHud.ts (SP5a)
+                                ui/world/bench.ts (SP4b: the `?bench=medium` route and its JSON); mapOverlay.ts applyControl.ts teleport.ts (SP4c) buildHud.ts blockHistory.ts (SP5a)
     ui/inspector/*              (SP3d) the ?map Density tab. Pure: model.ts form.ts jsonText.ts editorModel.ts hoverModel.ts
                                 sliceModel.ts; DOM: jsonEditor.ts sliceView.ts densityTab.ts inspector.css (SP10's full probe and
                                 further JSON editors go here too)
@@ -1176,6 +1176,8 @@ MeshPhysicalMaterial transmission and Reflector are never used.
 **Orientation on place:** logs take the axis of the clicked face; stairs, doors, trapdoors (SP8a), wall torches and ladders take `facing` from the player's yaw (and the clicked face); stairs and trapdoors take `half` (SP8a), and slabs take `slabType` (SP8a): bottom when clicking a top face, top when clicking a bottom face, and on a side face top iff the hit point's y within the clicked block is ≥ 0.5; placing a slab into the empty half of a same-type slab turns it into `slabType=double` (SP8a); doors take `hinge` from the neighbouring door or the hit point, and place both halves (SP8a).
 
 **Creative palette (E, D15):** a searchable grid of every block type flagged `PLACEABLE`, grouped by `category`; clicking assigns the selection to the active hotbar slot. A hotbar slot is `{type, pinned: Partial<props>} | {fluid:'water'|'lava'} | {tool:'emptyBucket'}`. Placement computes the orientation props (axis, facing, half, hinge) by the rules above and uses `pinned` only for non-orientation props (e.g. slabType); a small variant picker sets `pinned`. MMB pick stores the type and its non-orientation props. The empty bucket's ray stops at the first fluid voxel and removes that fluid. Hotbar slots persist per world by type name, never by state id.
+
+**Block undo** (SP5a): Ctrl+Z / Ctrl+Y undo and redo block edits while the world owns the controls, 100 steps per session, separate from the map's history.
 
 **Pipeline:**
 1. The main thread posts `{edits:[…]}` to the sim worker (two entries for doors and double plants, applied atomically; SP8a).

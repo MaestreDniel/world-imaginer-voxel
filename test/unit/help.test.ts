@@ -74,9 +74,9 @@ describe('mountHelp (SP4a spec §7.4, D31)', () => {
     expect(rows.find((r) => r.dataset.action === 'speedDown')!.querySelectorAll('td')[1]!.textContent).toBe('Ctrl+Wheel down / -');
   });
 
-  test('the help names undo and redo, which no key-map entry carries (SP4c spec §2.4)', () => {
+  test('the help names undo and redo by who has the controls, which no key-map entry carries (SP4c spec §2.4; SP5a spec §4.5)', () => {
     mount();
-    expect(dom.el('help-keys').textContent).toContain('Ctrl+Z undo · Ctrl+Y redo (Ctrl+Shift+Z also descends while flying; Ctrl+Y does not)');
+    expect(dom.el('help-keys').textContent).toContain('Ctrl+Z undo · Ctrl+Y redo: blocks while you play, the map\'s settings while the map has the controls (Ctrl+Shift+Z also descends while flying; Ctrl+Y does not)');
     // The M row comes from the key map, in the View group.
     const rows = dom.el('help-keys').querySelectorAll('tr');
     expect(rows.find((r) => r.dataset.action === 'map')!.textContent).toBe('Map: teleport and live editingM');

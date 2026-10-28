@@ -65,7 +65,7 @@ describe('createEditPath (SP5a spec §2.1, §2.6, §2.7)', () => {
     setTimeout(() => { macrotask = [...f.log]; }, 0);
     const out = await p;
     expect(macrotask).toBeNull();
-    expect(out).toEqual({ ok: true, prev: r.prev });
+    expect(out).toEqual({ ok: true, prev: r.prev, next: r.next });
     expect(f.log).toEqual(['pin 0,0', 'pin 1,0', 'edits 3', 'unpin 0,0', 'unpin 1,0', 'markEdited 2']);
     expect(f.coordinator.markEdited).toHaveBeenCalledWith(r.dirty);
     expect(f.path.pending()).toBe(false);
@@ -127,6 +127,39 @@ describe('createEditPath (SP5a spec §2.1, §2.6, §2.7)', () => {
     g.answers[0]!.resolve(reply(1, { refused: 'changed', dirty: new Float64Array(0) }));
     expect(await q).toEqual({ ok: false, why: 'changed' });
     expect(g.notices.show).not.toHaveBeenCalled();
+  });
+
+  test('`settled` resolves after the pending replies and their continuations', async () => {
+    const f = fakes();
+    const log: string[] = [];
+    // Nothing pending: at once.
+    await f.path.settled();
+    const p1 = f.path.post([at(3, 4)]);
+    void p1.then(() => { log.push('continuation 1'); });
+    const p2 = f.path.post([at(5, 6)]);
+    void p2.then(() => { log.push('continuation 2'); });
+    void f.path.settled().then(() => { log.push(`settled (pending: ${f.path.pending()})`); });
+    f.answers[0]!.resolve(reply(1));
+    await p1;
+    await Promise.resolve();
+    expect(log).toEqual(['continuation 1']);
+    f.answers[1]!.resolve(reply(1));
+    await p2;
+    await new Promise((r) => setTimeout(r, 0));
+    expect(log).toEqual(['continuation 1', 'continuation 2', 'settled (pending: false)']);
+    // A post made while waiting is waited for too.
+    const p3 = f.path.post([at(3, 4)]);
+    void p3.then(() => { log.push('continuation 3'); });
+    const waited = f.path.settled().then(() => { log.push('settled again'); });
+    const p4 = f.path.post([at(5, 6)]);
+    void p4.then(() => { log.push('continuation 4'); });
+    f.answers[2]!.resolve(reply(1));
+    await p3;
+    await new Promise((r) => setTimeout(r, 0));
+    expect(log.slice(3)).toEqual(['continuation 3']);
+    f.answers[3]!.resolve(reply(1));
+    await waited;
+    expect(log.slice(3)).toEqual(['continuation 3', 'continuation 4', 'settled again']);
   });
 
   test('the reply\'s `relightMs` and `editMs` reach `latency.posted`', async () => {

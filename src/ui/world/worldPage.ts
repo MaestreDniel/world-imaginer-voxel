@@ -69,8 +69,8 @@
  * (which adopts the first configure, wants no preview until the first M, and is fed every session change by the page
  * until the map tool is mounted, ruling R1) and the map overlay (`mapOverlay.ts`); M toggles it, the flight pauses and
  * the world's keys stop while the map owns the controls, the frame's `onRendered` moves the map's arrow, undo and redo
- * are installed for the page's lifetime, and a fatal error or a context loss disposes the overlay before the failure
- * panel or the notice. The flight route creates neither; the bench creates the driver without the overlay.
+ * are installed for the page's lifetime (routed by owner since SP5a: `installUndoKeys`), and a fatal error or a context
+ * loss disposes the overlay before the failure panel or the notice. The flight route creates neither; the bench creates the driver without the overlay.
  *
  * Live editing (SP4c spec §4.3, §6.2): the coordinator's first epoch is the first draft's genKey interned
  * (`createEpochs`); the apply control (`applyControl.ts`) ticks before every `coordinator.update` and applies the
@@ -86,7 +86,9 @@
  * `markEdited`), timed (`editLatency.ts`: staged through the coordinator's `onEditStaged`, revealed through
  * `sections.onColumnRevealed`); on the sim's failure the streaming route runs `onSimFailure` (thread 15 dead, editing
  * off, every sim pin released, the notice) and the bench releases the same and ends its script with the error. The
- * teardown and the failure releases dispose the sim.
+ * teardown and the failure releases dispose the sim. The streaming route's actions (the clicks, the smoke's hook) post
+ * through `createActionPost`, which records each accepted one in the block history (`blockHistory.ts`, §4.5), and
+ * Ctrl+Z / Ctrl+Y undo and redo blocks while the world owns the controls, the map's settings while the map does.
  */
 import { MEDIUM } from '../../core/params/graphicsPresets';
 import { OPENING_T, TIME_SPEEDS } from '../../daynight/dayNight';
@@ -143,9 +145,10 @@ import { createFrameClock, createFrameNotice, lowerRd } from './frameNotice';
 import { coversWorld, createApplyControl, createEpochs, updateAuxPolicy } from './applyControl';
 import { createEditLatency } from './editLatency';
 import { mountBuildHud } from './buildHud';
-import { createEditPath } from './editPath';
+import { createActionPost, createBlockHistory, type BlockHistory } from './blockHistory';
+import { createEditPath, type EditOutcome } from './editPath';
 import { createFrameStep, eyeSkyLight } from './frameStep';
-import { createMapOverlay, followSession, frameCapFor, worldMapView, type MapOverlay } from './mapOverlay';
+import { createMapOverlay, followSession, frameCapFor, worldMapView, type ControlsOwner, type MapOverlay } from './mapOverlay';
 import { createReloader, createWorldUrl, installLeaveGuard, navigateTo, type Reloader } from './reload';
 import { Y_MAX, Y_MIN, type WorldQuery } from './query';
 import { createTeleport, type Teleport, type TeleportLanding } from './teleport';
@@ -732,6 +735,28 @@ export function createUndoNotice(o: {
 }
 
 /**
+ * Ctrl+Z and Ctrl+Y (or Ctrl+Shift+Z) by who has the controls (SP5a spec §4.5, D13; SP4c spec §2.4): while the world
+ * owns them (`owner`, the overlay's `ownerOf`) the block history, while the map does the session's params; through
+ * `installShortcuts`, so never in text entry and each handled key's default prevented. Returns the remover.
+ */
+export function installUndoKeys(o: {
+  owner(): ControlsOwner;
+  blocks: Pick<BlockHistory, 'undo' | 'redo'>;
+  session: Pick<WorldSession, 'undo' | 'redo'>;
+}): () => void {
+  return installShortcuts((a) => {
+    const world = o.owner() === 'world';
+    if (a === 'undo') {
+      if (world) o.blocks.undo();
+      else o.session.undo();
+    } else if (a === 'redo') {
+      if (world) o.blocks.redo();
+      else o.session.redo();
+    }
+  }, (a) => a === 'undo' || a === 'redo');
+}
+
+/**
  * The page's `webglcontextlost` handler (Review Focus 5): through `WorldRenderer.onContextLost`, it stops the frame
  * loop once, closes the map overlay and disposes its tool (SP4c spec §1.3, D27; a throw reported through `onError`),
  * and shows "The graphics context was lost" with a Reload link around the camera (`hereHref`, read at the loss).
@@ -805,7 +830,7 @@ export interface WiTest {
   lastLanding(): { readonly surface: number; readonly water: number | null; readonly y: number } | null;
   /**
    * Sets block (x, y, z) to `state` with fluid byte `fluid` through the page's edit path (SP5a spec §6.4), its `expect`
-   * the voxel's value now: 'ok', or the refusal (`EditOutcome`'s `why`).
+   * the voxel's value now: 'ok', or the refusal (`EditOutcome`'s `why`); an accepted edit is a block-history step.
    */
   edit(x: number, y: number, z: number, state: number, fluid: number): Promise<string>;
   /** The state at block (x, y, z), read inside a read section (`VoxelStore.blockAt`: −1 when its column is not Published). */
@@ -879,6 +904,21 @@ export function countTileCalls<P extends { tile(...args: never[]): unknown }>(po
   return new Proxy(pool, {
     get: (target, key) => (key === 'tile' ? tile : Reflect.get(target, key, target)),
   });
+}
+
+/**
+ * The hook's `edit` (SP5a spec §6.4): sets block (x, y, z) to `state` with fluid byte `fluid` through the page's action
+ * post (`createActionPost`, so an accepted edit is a block-history step like a click), its `expect` the voxel's value
+ * now (`read`); 'ok', or the refusal's `why`.
+ */
+export function createHookEdit(
+  post: (edits: readonly Edit[]) => Promise<EditOutcome>,
+  read: (x: number, y: number, z: number) => number,
+): WiTest['edit'] {
+  return async (x, y, z, state, fluid) => {
+    const r = await post([{ x, y, z, op: 'set', value: ((state << 8) | fluid) >>> 0, expect: read(x, y, z) }]);
+    return r.ok ? 'ok' : r.why;
+  };
 }
 
 /**
@@ -1927,6 +1967,16 @@ export function mountWorldPage(root: HTMLElement, q: WorldQuery, hash: string, o
       notices: { show: (text, ms) => notices.show(text, { kind: 'warn', timeoutMs: ms }) },
     });
     simFailure = () => onSimFailure({ store, coordinator, editPath, notices });
+    // The block history (SP5a spec §4.5, D13): every action posts through `actionPost`, which records an accepted one;
+    // a side with no entry takes the voxel's value read now as its `expect`.
+    const blockHistory = createBlockHistory({
+      post: editPath.post,
+      read: (x, y, z) => voxelValue(store, x, y, z),
+      pending: editPath.pending,
+      settled: editPath.settled,
+      notices: { show: (text, ms) => notices.show(text, { timeoutMs: ms }) },
+    });
+    const actionPost = createActionPost({ post: editPath.post, record: blockHistory.record });
     // A sim that failed during the load shows its notice now that the notices exist.
     if (simClient!.failed) simFailure();
     // The edit latency's reveals (§6.2); the bench's own hook feeds them on its route (L10).
@@ -2232,9 +2282,10 @@ export function mountWorldPage(root: HTMLElement, q: WorldQuery, hash: string, o
         default: break; // movement and sprint are held; Esc (releasePointer) is the browser's
       }
     };
-    // A mouse button only queues its action; the frame's aim runs it (SP5a spec §4.1). A refusal does nothing.
+    // A mouse button only queues its action; the frame's aim runs it (SP5a spec §4.1). A refusal does nothing; an
+    // accepted click is one block-history step (§4.5).
     const clicks = createClickQueue({
-      post: (edit) => { void editPath.post([edit]); },
+      post: (edit) => { void actionPost([edit]); },
       hotbar,
       fly,
       editable: (cx, cz) => coordinator.editState(cx, cz) === 0,
@@ -2314,20 +2365,14 @@ export function mountWorldPage(root: HTMLElement, q: WorldQuery, hash: string, o
       forceFatal: () => fail('A failure forced by the test hook.', new Error('forced by the smoke (?wiTest=1)')),
       owner: () => mapOverlay.owner,
       stale: () => coordinator.counts(counts).stale,
-      edit: async (x, y, z, stateId, fluid) => {
-        const r = await editPath.post([{ x, y, z, op: 'set', value: ((stateId << 8) | fluid) >>> 0, expect: voxelValue(store, x, y, z) }]);
-        return r.ok ? 'ok' : r.why;
-      },
+      edit: createHookEdit(actionPost, (x, y, z) => voxelValue(store, x, y, z)),
       blockAt: (x, y, z) => blockRead(store, x, y, z),
     });
     // Disposed before the input, the driver and the page's subscribe: a gesture still open ends through the tool.
     teardown.push(() => mapOverlay.dispose());
-    // Undo and redo belong to the session (SP4c spec §2.4): live for the page's lifetime, map shown or hidden, either
-    // owner, never in text entry.
-    teardown.push(installShortcuts((a) => {
-      if (a === 'undo') session.undo();
-      else if (a === 'redo') session.redo();
-    }, (a) => a === 'undo' || a === 'redo'));
+    // Undo and redo (SP4c spec §2.4; SP5a spec §4.5): live for the page's lifetime, map shown or hidden, never in text
+    // entry; blocks while the world owns the controls, the session's params while the map does.
+    teardown.push(installUndoKeys({ owner: () => mapOverlay.owner, blocks: blockHistory, session }));
 
     // The streaming frame (SP4b spec §7.2): the slow-frame notice and the throttle get every raw rAF delta before the
     // limiter, so an FPS cap of 30 is read as neither slow frames nor a reason to throttle generation.

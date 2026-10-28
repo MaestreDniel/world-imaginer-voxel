@@ -830,7 +830,7 @@ function fakeEdit(o: { state?: (cx: number, cz: number) => 0 | 1 | 2; outcome?: 
   const edit: BenchWorld['edit'] = {
     post: (edits) => {
       posts.push({ edits });
-      return Promise.resolve(o.outcome?.() ?? { ok: true, prev: new Uint32Array(edits.length) });
+      return Promise.resolve(o.outcome?.() ?? { ok: true, prev: new Uint32Array(edits.length), next: new Uint32Array(edits.length) });
     },
     editState: (cx, cz) => {
       const s = o.state?.(cx, cz) ?? 0;
