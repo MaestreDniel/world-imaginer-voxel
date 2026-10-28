@@ -450,8 +450,14 @@ describe('createRdControl (SP4b spec §5, D18; Review Focus 5)', () => {
       if (rd > 10) throw new RangeError(`rd ${rd} above rdMax 10`);
     });
     const driver = createBenchDriver({ shot: null, capacity: 64, publish: { result() {}, shotReady() {} } });
-    // The live legs settle at once (L7-L9 run one frame each), at the cap like the timed script.
-    driver.bind({ rdMax: 10, heightAt: () => null, live: { set() {}, undo() {}, teleport: () => Promise.resolve(true), settled: () => true } });
+    // The live legs settle at once (L7-L9 run one frame each), at the cap like the timed script; L10 finds no surface
+    // (heightAt null), so it posts nothing and flies on.
+    driver.bind({
+      rdMax: 10,
+      heightAt: () => null,
+      live: { set() {}, undo() {}, teleport: () => Promise.resolve(true), settled: () => true },
+      edit: { post: () => Promise.resolve({ ok: true, prev: new Uint32Array(0) }), editState: () => 0 },
+    });
     // The page's loop: the script's RD applied through the control when it differs from the live one.
     let liveRd = 10;
     const pose = { x: 0, y: 0, z: 0, yaw: 0, pitch: 0 };

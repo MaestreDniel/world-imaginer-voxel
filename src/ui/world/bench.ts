@@ -12,6 +12,9 @@
  *    scripted session and no map: L7 the edit `density.detailAmpHi` 1.5 → 4.0 (one urgent change), L8 its undo, L9 a
  *    teleport 20,000 blocks east through `teleport.ts`; each ends once settled (every column of the RD 12 MESH set
  *    revealed since its Apply, or the teleport's disc filled; `createLiveReveals`) or at its cap (20, 20, 15 s);
+ * 2c. then the edit leg L10 (SP5a spec §6.2, D26; `BENCH_EDIT`) at L9's destination: a hover until the RD 12 disc is
+ *    filled (at most 60 s), 100 block edits through the page's edit path one every 250 ms, and a closing 6 s flight
+ *    east while the pool streams, with 20 more edits; their latency is the page's `editLatency.ts`;
  * 3. hands the driver the run's fixed figures (`done`); the driver publishes `summarizeBench`'s JSON as
  *    `window.__wiBench.result` (read by `measureChrome.ts --route bench`) and a "Download JSON" button (the Firefox
  *    cells, by hand).
@@ -29,7 +32,12 @@ import { medianInterval, percentile, snapFrameTime } from '../../render/frameTim
 import type { GpuEstimate, WorldRenderer } from '../../render/renderer';
 import type { RevealProbe, SectionRenderer, SectionRendererCounts, SectionRendererKind, StructuralKind } from '../../render/sectionRenderer';
 import { el } from '../common/dom';
+import { MAX_Y } from '../../core/coords';
+import type { Edit } from '../../workers/protocol';
+import { STONE, TORCH } from '../../world/blocks';
 import { DEFAULT_MAP_STATE, encodeMapState } from '../map/mapState';
+import type { EditLatencySamples } from './editLatency';
+import type { EditOutcome } from './editPath';
 import { displayInterval } from './frameStep';
 import { parseWorldQuery, type WorldQuery } from './query';
 
@@ -44,13 +52,13 @@ export const BENCH_TIME_SPEED = 60;
 /** The idle frames after the reveal that measure the display interval (spec §8.3). */
 export const BENCH_IDLE_FRAMES = 120;
 /**
- * The record's frames (SP4c spec §8.4, Spec corrections): 95 s plus the live legs at their caps (55 s) at 240 Hz is
- * 36,000; 49,152 holds 205 s.
+ * The record's frames (SP5a spec §6.2): 95 s, the live legs at their caps (55 s) and L10 at its caps (91 s: the 60 s
+ * hover, 25 s of edits and the 6 s flight) at 240 Hz is 241 s, 57,840 frames; 58,368 holds 243 s.
  */
-export const BENCH_FRAME_CAPACITY = 49152;
+export const BENCH_FRAME_CAPACITY = 58368;
 
 export interface BenchLeg {
-  readonly name: 'L0' | 'L1' | 'L2' | 'L3' | 'L4' | 'L5' | 'L6' | 'L7' | 'L8' | 'L9';
+  readonly name: 'L0' | 'L1' | 'L2' | 'L3' | 'L4' | 'L5' | 'L6' | 'L7' | 'L8' | 'L9' | 'L10';
   readonly seconds: number;
   /** Blocks per second; 0 hovers. */
   readonly speed: number;
@@ -98,10 +106,34 @@ export const BENCH_LIVE_LEGS: readonly BenchLeg[] = [
   { name: 'L9', seconds: BENCH_LIVE.maxS.L9, speed: 0, headings: [], rdSteps: [] },
 ];
 
-/** Every leg, index = the record's `leg` (L0-L6 the timed script, L7-L9 the live legs). */
-const ALL_LEGS: readonly BenchLeg[] = [...BENCH_LEGS, ...BENCH_LIVE_LEGS];
+/**
+ * The edit leg L10 (SP5a spec §6.2, D26), after L9 at its destination: a hover until the RD 12 disc is filled (L9's
+ * `live.settled`), at most `hoverMaxS` s (a timeout ends the leg and is recorded); then `count` edits through the
+ * page's edit path, one every `everyMs`, within `radius` blocks of the camera's block column on the surface, alternately
+ * a stone placed and broken, every tenth a torch; then (plan) the streaming sample: a closing flight east at
+ * `streamingSpeed` blocks/s for `streamingFlightS` s while the pool streams (L9 is a teleport that hovers), posting
+ * `streamingCount` edits one every `everyMs` from its first second, each on a column within `radius` blocks whose
+ * `editState` is 0.
+ */
+export const BENCH_EDIT = {
+  count: 100, everyMs: 250, radius: 8, hoverMaxS: 60, streamingCount: 20, streamingFlightS: 6, streamingSpeed: 20,
+} as const;
+
+/** L10 as a leg (`seconds` its caps: the hover's, the edits' and the flight's); it ends on its own, not on a timeline. */
+export const BENCH_EDIT_LEG: BenchLeg = {
+  name: 'L10',
+  seconds: BENCH_EDIT.hoverMaxS + (BENCH_EDIT.count * BENCH_EDIT.everyMs) / 1000 + BENCH_EDIT.streamingFlightS,
+  speed: 0,
+  headings: [],
+  rdSteps: [],
+};
+
+/** Every leg, index = the record's `leg` (L0-L6 the timed script, L7-L9 the live legs, L10 the edit leg). */
+const ALL_LEGS: readonly BenchLeg[] = [...BENCH_LEGS, ...BENCH_LIVE_LEGS, BENCH_EDIT_LEG];
 /** The first live leg's index. */
 const FIRST_LIVE = BENCH_LEGS.length;
+/** L10's index. */
+const EDIT_LEG = FIRST_LIVE + BENCH_LIVE_LEGS.length;
 
 /** Each leg's start, s, and the timed script's length (95 s; the live legs follow it). */
 const LEG_STARTS: readonly number[] = BENCH_LEGS.map((_, i) => BENCH_LEGS.slice(0, i).reduce((s, l) => s + l.seconds, 0));
@@ -458,12 +490,17 @@ export interface BenchFixed {
     /** The page's `stats.first120MaxMs`: the largest delta of the first 120 rendered frames. */
     readonly first120RenderedMaxMs: number | null;
   };
-  /** The coordinator's totals at the end of the script. */
-  readonly totals: { readonly dropped: number; readonly failed: number; readonly storeFull: number };
+  /** The coordinator's totals at the end of the script (`editDropped`: its edit MESHes dropped, SP5a spec §4.6). */
+  readonly totals: { readonly dropped: number; readonly failed: number; readonly storeFull: number; readonly editDropped: number };
   /** From L5's start to the first frame whose RD 12 disc is revealed; null when L5 ended first. */
   readonly refillMs: number | null;
   /** The canvas's drawing buffer, px (SP4c spec §8.4: the live block's `width` and `height`). */
   readonly canvas: { readonly width: number; readonly height: number };
+  /**
+   * The page's edit latency at the end of the script (SP5a spec §6.2; `editLatency.ts`): its rings, oldest first, and
+   * the `visible` samples recorded (more than the ring holds once it wrapped).
+   */
+  readonly edit: EditLatencySamples & { readonly count: number };
 }
 
 export interface FrameFigures {
@@ -539,7 +576,50 @@ export type LiveFigures = StreamFigures & {
   readonly teleportError: string | null;
 };
 
-/** The bench's JSON (spec §8.3; SP4c spec §8.4's `live`). */
+/**
+ * L10's block (SP5a spec §6.2, D26), ms: over the hover's edits, `editVisible*` from the post to the frame the edited
+ * column's new mesh is shown (its first reveal after its edit's payload was staged), `editAllVisibleP95` to the last
+ * dirty column's, the sim's `relightP95Ms` and `editP95Ms`, and the step budget (plan): `replyP95Ms` (post → the sim's
+ * reply), `issueToStagedP95Ms` (reply → staged: the MESH job and its delivery), `stagedToShownP95Ms`; `editDropped` the
+ * coordinator's edit MESHes dropped; `mainP95Ms` the frame's input, walk step, DDA and outline time (0: not timed yet);
+ * `editVisibleStreamingP95` over the closing flight's edits and `streamingRefused` its refusals (not gated); `timedOut`
+ * ['L10'] when the hover's disc never filled; `frames` SP4b's frame fields over L10. A figure with no sample is null.
+ */
+export interface EditFigures {
+  readonly editVisibleP50: number | null;
+  readonly editVisibleP95: number | null;
+  readonly editVisibleMax: number | null;
+  readonly editAllVisibleP95: number | null;
+  readonly relightP95Ms: number | null;
+  readonly editP95Ms: number | null;
+  readonly replyP95Ms: number | null;
+  readonly issueToStagedP95Ms: number | null;
+  readonly stagedToShownP95Ms: number | null;
+  readonly editDropped: number;
+  readonly mainP95Ms: number;
+  readonly editVisibleStreamingP95: number | null;
+  readonly streamingRefused: number;
+  readonly timedOut: readonly string[];
+  readonly frames: StreamFigures;
+}
+
+/** What the driver knows of L10 (SP5a spec §6.2) and hands `summarizeBench`. */
+export interface BenchEditRun {
+  /**
+   * The hover's edits the sim accepted: each opened one latency sample, all before the flight's (its last post is
+   * 1.25 s before the flight's first), so they are the first `hoverAccepted` values of each ring (plan).
+   */
+  readonly hoverAccepted: number;
+  /** The flight's edits refused, and its ticks that found no open column within 8 blocks. */
+  readonly streamingRefused: number;
+  /** ['L10'] when the hover's disc never filled within 60 s. */
+  readonly timedOut: readonly string[];
+}
+
+/** No L10 (a run that ended before it). */
+const NO_EDIT_RUN: BenchEditRun = { hoverAccepted: 0, streamingRefused: 0, timedOut: [] };
+
+/** The bench's JSON (spec §8.3; SP4c spec §8.4's `live`; SP5a spec §6.2's `edit`). */
 export interface BenchResult {
   readonly route: 'bench=medium';
   readonly seed: string;
@@ -565,6 +645,8 @@ export interface BenchResult {
   readonly L6: { readonly frames: FrameFigures['frames'] };
   /** L7-L9: the live legs (SP4c spec §8.4). */
   readonly live: LiveFigures;
+  /** L10: the edit leg (SP5a spec §6.2). */
+  readonly edit: EditFigures;
   /** Every frame whose snapped time is over 33 ms: its raw delta and its own and the previous frame's main ms. */
   readonly longFrames: ReadonlyArray<{
     readonly frame: number; readonly leg: string; readonly rawMs: number; readonly snappedMs: number; readonly mainMs: number;
@@ -722,13 +804,52 @@ function legTimes(rec: BenchRecord, idx: readonly number[], fullOf: number): Leg
   return out;
 }
 
+/** The nearest-rank percentile `p` of `values`, null with none (JSON has no NaN). */
+const percentileOrNull = (values: ArrayLike<number>, p: number): number | null => (values.length === 0 ? null : percentile(values, p));
+
+/**
+ * L10's block (SP5a spec §6.2) over its rows `idx`: the hover's figures from the first `run.hoverAccepted` values of
+ * each latency ring, the streaming p95 from the `visible` values after them (BenchEditRun). A ring that wrapped (more
+ * samples than it holds) has lost the hover's first ones, so it is refused.
+ */
+function editFiguresOf(rec: BenchRecord, idx: readonly number[], fixed: BenchFixed, run: BenchEditRun): EditFigures {
+  const s = fixed.edit;
+  if (s.count > s.visible.length) throw new Error(`summarizeBench: the edit latency's ring wrapped (${s.count} samples, ${s.visible.length} kept)`);
+  const hover = (ring: Float64Array): Float64Array => ring.subarray(0, Math.min(run.hoverAccepted, ring.length));
+  const visible = hover(s.visible);
+  return {
+    editVisibleP50: percentileOrNull(visible, 50),
+    editVisibleP95: percentileOrNull(visible, 95),
+    editVisibleMax: visible.length === 0 ? null : maxOf(visible),
+    editAllVisibleP95: percentileOrNull(hover(s.allVisible), 95),
+    relightP95Ms: percentileOrNull(hover(s.relight), 95),
+    editP95Ms: percentileOrNull(hover(s.edit), 95),
+    replyP95Ms: percentileOrNull(hover(s.reply), 95),
+    issueToStagedP95Ms: percentileOrNull(hover(s.issueToStaged), 95),
+    stagedToShownP95Ms: percentileOrNull(hover(s.stagedToShown), 95),
+    editDropped: fixed.totals.editDropped,
+    // The frame's input, walk step, DDA and outline are not timed yet.
+    mainP95Ms: 0,
+    editVisibleStreamingP95: percentileOrNull(s.visible.subarray(visible.length), 95),
+    streamingRefused: run.streamingRefused,
+    timedOut: [...run.timedOut],
+    frames: streamFiguresOf(rec, idx, fixed),
+  };
+}
+
 /**
  * The bench's JSON from its record and the fixed figures (spec §8.3): `stream` over L1-L6 (the streaming legs; L0's
  * hover only settles the first frames), the same frame figures per leg, L5's refill and L6's frames, `live` over L7-L9
- * (SP4c spec §8.4), every long frame and every structural frame. `gpuMB` is the largest per-frame sum of the breakdown,
- * which is reported at that frame. The live legs' MESH set is the RD they ran at: 12, or the reservation's cap below it.
+ * (SP4c spec §8.4), `edit` over L10 with the driver's `editRun` (SP5a spec §6.2), every long frame and every structural
+ * frame. `gpuMB` is the largest per-frame sum of the breakdown, which is reported at that frame. The live legs' MESH set
+ * is the RD they ran at: 12, or the reservation's cap below it.
  */
-export function summarizeBench(rec: BenchRecord, fixed: BenchFixed, teleportError: string | null = null): BenchResult {
+export function summarizeBench(
+  rec: BenchRecord,
+  fixed: BenchFixed,
+  teleportError: string | null = null,
+  editRun: BenchEditRun = NO_EDIT_RUN,
+): BenchResult {
   const all: number[] = [];
   const byLeg: number[][] = ALL_LEGS.map(() => []);
   for (let i = 0; i < rec.n; i++) {
@@ -743,7 +864,7 @@ export function summarizeBench(rec: BenchRecord, fixed: BenchFixed, teleportErro
   // A leg that ran and never filled its MESH set ended at its cap.
   const timedOut = BENCH_LIVE_LEGS.filter((_, k) => byLeg[FIRST_LIVE + k]!.length > 0 && times[k]!.full === null).map((l) => l.name);
   const live: LiveFigures = {
-    ...streamFiguresOf(rec, all.filter((i) => rec.leg[i]! >= FIRST_LIVE), fixed),
+    ...streamFiguresOf(rec, all.filter((i) => rec.leg[i]! >= FIRST_LIVE && rec.leg[i]! < EDIT_LEG), fixed),
     applyFirstSwapMs: apply.first,
     applyNearMs: apply.near,
     applyFullMs: apply.full,
@@ -806,6 +927,7 @@ export function summarizeBench(rec: BenchRecord, fixed: BenchFixed, teleportErro
     L5: { refillMs: fixed.refillMs },
     L6: { frames: legs.L6.frames },
     live,
+    edit: editFiguresOf(rec, byLeg[EDIT_LEG]!, fixed, editRun),
     longFrames,
     structuralFrames,
   };
@@ -878,6 +1000,14 @@ export interface BenchWorld {
     teleport(x: number, z: number): Promise<boolean>;
     settled(leg: LiveLeg): boolean;
   };
+  /**
+   * L10's hooks (SP5a spec §6.2): the page's edit path (`editPath.ts`: its gate, the sim, the remesh and the latency)
+   * and the coordinator's edit gate of a column (0 open, 1 not loaded, 2 regenerating).
+   */
+  readonly edit: {
+    post(edits: readonly Edit[]): Promise<EditOutcome>;
+    editState(cx: number, cz: number): 0 | 1 | 2;
+  };
 }
 
 /**
@@ -888,9 +1018,11 @@ export interface BenchWorld {
  * (Task 26b: a reservation cap below 12 clamps the script's RD steps, and `rdClampedTo` records the cap), which the page
  * applies live when it changes; null ends the script, and the page then calls `done`. After L6 (95 s) the live legs run
  * (SP4c spec §8.4): L7 calls `live.set` at its start, L8 `live.undo`, L9 `live.teleport(x + 20,000, z)` from the camera's
- * place; each ends when `live.settled(leg)` holds or at its cap, and the script ends after L9. In L7-L9 the pose keeps x,
- * z and the yaw, sets the pitch −15 and y 150 (after L9's arrival, the teleport's y). The page writes each rendered frame
- * into `record` (`createBenchRecorder`). `fail` ends the script with an error (a failure after the reveal), once.
+ * place; each ends when `live.settled(leg)` holds or at its cap. Then L10 (SP5a spec §6.2, `BENCH_EDIT`) posts its edits
+ * through `edit.post` and flies east, and the script ends after it. In L7-L10 the pose keeps x, z and the yaw, sets the
+ * pitch −15 and y 150 (after L9's arrival, the teleport's y); L10's flight sets x and the yaw 90. The page writes each
+ * rendered frame into `record` (`createBenchRecorder`). `fail` ends the script with an error (a failure after the
+ * reveal), once.
  */
 export interface BenchDriver {
   readonly record: BenchRecord;
@@ -917,6 +1049,27 @@ function freezeTime(shot: BenchShot, tS: number, fogRd: number, topRd: number): 
 /** A live leg's cap, s. */
 const liveCap = (leg: LiveLeg): number => BENCH_LIVE_LEGS[leg - FIRST_LIVE]!.seconds;
 
+/**
+ * L10's columns around the camera's block column (plan): the (dx, dz) of the disc of radius `BENCH_EDIT.radius`,
+ * nearest first; the edits take them in turn, so each place and each torch has a column of its own.
+ */
+const EDIT_OFFSETS: readonly (readonly [number, number])[] = (() => {
+  const r = BENCH_EDIT.radius;
+  const out: Array<[number, number]> = [];
+  for (let dz = -r; dz <= r; dz++) for (let dx = -r; dx <= r; dx++) if (dx * dx + dz * dz <= r * r) out.push([dx, dz]);
+  return out.sort((a, b) => a[0] * a[0] + a[1] * a[1] - (b[0] * b[0] + b[1] * b[1]));
+})();
+/** The voxel values L10 writes (SP5a spec §2.1: `state << 8 | fluid`). */
+const STONE_VALUE = (STONE << 8) >>> 0;
+const TORCH_VALUE = (TORCH << 8) >>> 0;
+/** L10's interval between edits and its edits' span before the flight, s. */
+const EDIT_EVERY_S = BENCH_EDIT.everyMs / 1000;
+const EDITS_S = BENCH_EDIT.count * EDIT_EVERY_S;
+/** L10's phases: the hover for the disc, the edits, the closing flight. */
+const L10_HOVER = 0;
+const L10_EDITS = 1;
+const L10_FLIGHT = 2;
+
 export function createBenchDriver(o: { readonly shot: BenchShot | null; readonly capacity?: number; readonly publish: BenchPublish }): BenchDriver {
   const record = createBenchRecord(o.capacity ?? BENCH_FRAME_CAPACITY);
   const start = { x: 0, z: 0 };
@@ -931,8 +1084,8 @@ export function createBenchDriver(o: { readonly shot: BenchShot | null; readonly
   let heightAt: BenchWorld['heightAt'] | null = null;
   let live: BenchWorld['live'] | null = null;
   let shotY = Number.NaN;
-  // The live legs (SP4c spec §8.4): the one running (0 before L7, 10 after L9), its start and L7's, s; L9's arrival:
-  // `arrived` set by the teleport's promise, `arrivedS` the first pose after it (NaN before).
+  // The live legs (SP4c spec §8.4) and L10: the one running (0 before L7, 11 after L10), its start and L7's, s; L9's
+  // arrival: `arrived` set by the teleport's promise, `arrivedS` the first pose after it (NaN before).
   let liveLeg = 0;
   let legStartS = 0;
   let l7StartS = Number.NaN;
@@ -940,6 +1093,20 @@ export function createBenchDriver(o: { readonly shot: BenchShot | null; readonly
   let arrivedS = Number.NaN;
   // Why L9's teleport did not arrive (`live.teleportError`; final review WLD-5): null until it fails.
   let teleportError: string | null = null;
+  // L10 (SP5a spec §6.2): its hooks (null until `bind`), its phase and the phase's start (s), the edits posted in the
+  // phase, the next of EDIT_OFFSETS, the stone placed and not yet broken (x, y, z; y NaN for none), the flight's start
+  // x, and what `summarizeBench` reads (BenchEditRun).
+  let edit: BenchWorld['edit'] | null = null;
+  let editPhase = L10_HOVER;
+  let phaseS = 0;
+  let editsPosted = 0;
+  let nextOffset = 0;
+  const placed = Float64Array.of(0, Number.NaN, 0);
+  const at = new Float64Array(3);
+  let flightX = 0;
+  let hoverAccepted = 0;
+  let streamingRefused = 0;
+  let editTimedOut = false;
   const capped = (rd: number): number => Math.min(rd, rdMax);
 
   /** The live legs' pose (SP4c spec §8.4): x, z and the yaw kept; pitch −15; y 150 until L9's arrival, then kept. */
@@ -972,6 +1139,88 @@ export function createBenchDriver(o: { readonly shot: BenchShot | null; readonly
     }
   };
   /**
+   * L10's next column around block (bx, bz) whose surface voxel (`heightAt`, the first free y) lies in the world and,
+   * with `open`, whose column's `editState` is 0, written into `at` (x, y, z); false when no column of the disc is.
+   */
+  const nextColumn = (bx: number, bz: number, open: boolean): boolean => {
+    for (let tries = 0; tries < EDIT_OFFSETS.length; tries++) {
+      const off = EDIT_OFFSETS[nextOffset % EDIT_OFFSETS.length]!;
+      nextOffset++;
+      const x = bx + off[0];
+      const z = bz + off[1];
+      if (open && edit!.editState(x >> 4, z >> 4) !== 0) continue;
+      const y = heightAt!(x, z);
+      if (y === null || y > MAX_Y) continue;
+      at[0] = x;
+      at[1] = y;
+      at[2] = z;
+      return true;
+    }
+    return false;
+  };
+  /** Posts one voxel edit at (x, y, z); `onOutcome` sees whether the sim accepted it (a post that rejects did not). */
+  const postEdit = (x: number, y: number, z: number, value: number, expect: number, onOutcome: (ok: boolean) => void): void => {
+    edit!.post([{ x, y, z, op: 'set', value, expect }]).then((r) => onOutcome(r.ok), () => onOutcome(false));
+  };
+  /** The outcomes of the hover's edits and of the flight's. */
+  const accepted = (ok: boolean): void => { if (ok) hoverAccepted++; };
+  const streamed = (ok: boolean): void => { if (!ok) streamingRefused++; };
+  /**
+   * The hover's edit k around the camera's block column (bx, bz): every tenth a torch on a new column; otherwise the
+   * stone placed by the last stone edit broken back to air, or a stone placed on a new column (air expected: above
+   * the surface no generated state but air collides or holds fluid).
+   */
+  const hoverEdit = (k: number, bx: number, bz: number): void => {
+    if (k % 10 === 9) {
+      if (nextColumn(bx, bz, false)) postEdit(at[0]!, at[1]!, at[2]!, TORCH_VALUE, 0, accepted);
+    } else if (!Number.isNaN(placed[1]!)) {
+      postEdit(placed[0]!, placed[1]!, placed[2]!, 0, STONE_VALUE, accepted);
+      placed[1] = Number.NaN;
+    } else if (nextColumn(bx, bz, false)) {
+      placed.set(at);
+      postEdit(at[0]!, at[1]!, at[2]!, STONE_VALUE, 0, accepted);
+    }
+  };
+  /**
+   * One frame of L10 at `tS` (SP5a spec §6.2), after `livePose`: the hover until L9's disc is filled (at most 60 s), the
+   * edits one every 250 ms, then the closing flight east with its edits; false once it ends (timed out or flown).
+   */
+  const editStep = (tS: number, out: BenchPose): boolean => {
+    if (editPhase === L10_HOVER) {
+      if (!live!.settled(9)) {
+        if (tS - legStartS < BENCH_EDIT.hoverMaxS) return true;
+        editTimedOut = true;
+        return false;
+      }
+      editPhase = L10_EDITS;
+      phaseS = tS;
+      editsPosted = 0;
+    }
+    if (editPhase === L10_EDITS) {
+      if (editsPosted < BENCH_EDIT.count) {
+        if (tS - phaseS >= editsPosted * EDIT_EVERY_S) hoverEdit(editsPosted++, Math.floor(out.x), Math.floor(out.z));
+        return true;
+      }
+      if (tS - phaseS < EDITS_S) return true;
+      editPhase = L10_FLIGHT;
+      phaseS = tS;
+      editsPosted = 0;
+      flightX = out.x;
+    }
+    const into = tS - phaseS;
+    if (into >= BENCH_EDIT.streamingFlightS) return false;
+    out.x = flightX + BENCH_EDIT.streamingSpeed * into;
+    out.yaw = 90;
+    // The streaming sample: from the flight's first second, each on a column whose 3 × 3 is open.
+    if (editsPosted < BENCH_EDIT.streamingCount && into >= 1 + editsPosted * EDIT_EVERY_S) {
+      editsPosted++;
+      if (nextColumn(Math.floor(out.x), Math.floor(out.z), true)) {
+        postEdit(at[0]!, at[1]!, at[2]!, STONE_VALUE, 0, streamed);
+      } else streamingRefused++;
+    }
+    return true;
+  };
+  /**
    * One frame of the live legs at `tS`: whether a leg ends (settled or at its cap) and the next starts, or the script
    * ends (false); a live shot freezes on its event (`frozenLive`).
    */
@@ -979,29 +1228,32 @@ export function createBenchDriver(o: { readonly shot: BenchShot | null; readonly
     if (live === null) return false;
     if (arrived && Number.isNaN(arrivedS)) arrivedS = tS;
     let next: LiveLeg | 0 = 0;
+    // L9 ended: L10 starts.
+    let toEdit = false;
     if (liveLeg === 0) next = 7;
     else if (liveLeg >= 7 && liveLeg <= 9) {
       const leg = liveLeg as LiveLeg;
       if (live.settled(leg) || tS - legStartS >= liveCap(leg)) {
-        if (leg === 9) {
-          liveLeg = 10;
-          return false;
-        }
         // apply-after: L7's end, before the undo.
         if (leg === 7 && o.shot === 'apply-after') {
           frozenLive = true;
           return true;
         }
-        next = (leg + 1) as LiveLeg;
+        if (leg === 9) toEdit = true;
+        else next = (leg + 1) as LiveLeg;
       }
-    } else return false;
+    } else if (liveLeg !== EDIT_LEG) return false;
     if (o.shot === 'apply-mid' && !Number.isNaN(l7StartS) && tS - l7StartS >= APPLY_MID_AFTER_S) frozenLive = true;
     if (o.shot === 'teleport' && !Number.isNaN(arrivedS) && tS - arrivedS >= TELEPORT_SHOT_AFTER_S) frozenLive = true;
     if (frozenLive) return true;
     livePose(out);
-    if (next !== 0) {
-      liveLeg = next;
+    if (next !== 0 || toEdit) {
+      liveLeg = toEdit ? EDIT_LEG : next;
       legStartS = tS;
+    }
+    if (liveLeg === EDIT_LEG && !editStep(tS, out)) {
+      liveLeg = EDIT_LEG + 1;
+      return false;
     }
     writeRow(liveLeg, tS);
     if (next !== 0) startLeg(next, tS, out);
@@ -1017,6 +1269,7 @@ export function createBenchDriver(o: { readonly shot: BenchShot | null; readonly
       rdMax = world.rdMax;
       heightAt = (x, z) => world.heightAt(x, z);
       live = world.live;
+      edit = world.edit;
     },
     pose(tS, out, fogRd) {
       if (ended) return null;
@@ -1071,7 +1324,7 @@ export function createBenchDriver(o: { readonly shot: BenchShot | null; readonly
       if (o.shot !== null) return;
       let result: BenchResult | BenchError;
       try {
-        result = summarizeBench(record, fixed, teleportError);
+        result = summarizeBench(record, fixed, teleportError, { hoverAccepted, streamingRefused, timedOut: editTimedOut ? ['L10'] : [] });
       } catch (e) {
         result = { route: 'bench=medium', error: e instanceof Error ? e.stack ?? e.message : String(e) };
       }
@@ -1167,8 +1420,8 @@ export async function mountBenchRoute(app: HTMLElement, query: URLSearchParams):
   }
   const driver = createBenchDriver({ shot, publish });
   const { mountWorldPage } = await import('./worldPage');
-  const liveS = BENCH_LIVE_LEGS.reduce((t, l) => t + l.seconds, 0);
-  panel?.say(`running the ${BENCH_SECONDS} s script and the live legs (up to ${liveS} s more) after the reveal (keep this tab in front)…`);
+  const liveS = BENCH_LIVE_LEGS.reduce((t, l) => t + l.seconds, 0) + BENCH_EDIT_LEG.seconds;
+  panel?.say(`running the ${BENCH_SECONDS} s script, the live legs and the edit leg (up to ${liveS} s more) after the reveal (keep this tab in front)…`);
   const page = await mountWorldPage(app, benchQuery(query), benchHash(), { hud: false, overlay: false, bench: driver });
   if (page.state !== 'revealed' && !published) publish.result({ route: 'bench=medium', error: `the world did not load (page ${page.state})` });
 }

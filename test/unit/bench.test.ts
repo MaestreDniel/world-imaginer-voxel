@@ -1,12 +1,15 @@
 import { readFileSync } from 'node:fs';
 import { describe, expect, test } from 'vitest';
 import { resolveProfile } from '../../src/core/params/profiles';
+import { STONE, TORCH } from '../../src/world/blocks';
+import type { Edit } from '../../src/workers/protocol';
 import {
-  BENCH_FIELDS, BENCH_FRAME_CAPACITY, BENCH_IDLE_FRAMES, BENCH_LEGS, BENCH_LIVE, BENCH_LIVE_LEGS, BENCH_PITCH, BENCH_RD, BENCH_REFILL, BENCH_SEED,
-  BENCH_SHOT_ABOVE, BENCH_SHOT_PITCH, BENCH_SHOTS, BENCH_TIME_SPEED, BENCH_Y, benchInterval, benchPose, createBenchDriver, createBenchRecord,
-  createBenchRecorder, createLiveReveals, summarizeBench,
+  BENCH_EDIT, BENCH_FIELDS, BENCH_FRAME_CAPACITY, BENCH_IDLE_FRAMES, BENCH_LEGS, BENCH_LIVE, BENCH_LIVE_LEGS, BENCH_PITCH, BENCH_RD, BENCH_REFILL,
+  BENCH_SEED, BENCH_SHOT_ABOVE, BENCH_SHOT_PITCH, BENCH_SHOTS, BENCH_TIME_SPEED, BENCH_Y, benchInterval, benchPose, createBenchDriver,
+  createBenchRecord, createBenchRecorder, createLiveReveals, summarizeBench,
   type BenchError, type BenchFixed, type BenchPose, type BenchRecord, type BenchResult, type BenchSources, type BenchWorld,
 } from '../../src/ui/world/bench';
+import type { EditOutcome } from '../../src/ui/world/editPath';
 
 const START = { x: 1000, z: -2000 };
 const HZ240 = 1000 / 240;
@@ -25,8 +28,19 @@ function at(tS: number): BenchPose & { leg: number; rd: number } {
 describe('the bench script (SP4b spec §8.3, D22)', () => {
   test('the route\'s constants', () => {
     expect([BENCH_SEED, BENCH_RD, BENCH_Y, BENCH_PITCH, BENCH_TIME_SPEED, BENCH_IDLE_FRAMES]).toEqual(['42', 12, 150, -15, 60, 120]);
-    expect(BENCH_FRAME_CAPACITY).toBe(49152);
+    expect(BENCH_FRAME_CAPACITY).toBe(58368);
     expect(BENCH_FRAME_CAPACITY).toBeGreaterThan(95 * 240);
+  });
+
+  test('the capacity holds 241 s at 240 Hz (57,840 frames: SP4c\'s 150 s, L10\'s 60 s hover cap, its 25 s of edits and its 6 s flight)', () => {
+    expect(BENCH_EDIT).toEqual({ count: 100, everyMs: 250, radius: 8, hoverMaxS: 60, streamingCount: 20, streamingFlightS: 6, streamingSpeed: 20 });
+    const liveS = BENCH_LIVE_LEGS.reduce((s, l) => s + l.seconds, 0);
+    const l10S = BENCH_EDIT.hoverMaxS + (BENCH_EDIT.count * BENCH_EDIT.everyMs) / 1000 + BENCH_EDIT.streamingFlightS;
+    expect([95 + liveS, l10S]).toEqual([150, 91]);
+    expect((95 + liveS + l10S) * 240).toBe(57_840);
+    expect(BENCH_FRAME_CAPACITY).toBeGreaterThanOrEqual(57_840);
+    // 243 s at 240 Hz.
+    expect(Math.floor(BENCH_FRAME_CAPACITY / 240)).toBe(243);
   });
 
   test('the capacity holds 150 s at 240 Hz (36,000 frames): the 95 s script and the live legs at their caps (SP4c spec §8.4)', () => {
@@ -178,10 +192,14 @@ const FIXED: BenchFixed = {
   seed: '42', profile: 'default', rd: 12, workers: 6, sectionRenderer: 'batch', userAgent: 'test', renderer: 'Iris', vendor: 'Intel',
   multiDraw: true, timerQuery: true, screen: { width: 1920, height: 1080 }, dpr: 1, pixelRatio: 1, displayIntervalMs: HZ240,
   load: { revealMs: 4000, stageMs: { T: 1000, D: 1500, L: 2000, MESH: 3000 }, longTasks: { count: 3, maxMs: 80 }, first120RenderedMaxMs: 8.3 },
-  totals: { dropped: 2, failed: 0, storeFull: 0 },
+  totals: { dropped: 2, failed: 0, storeFull: 0, editDropped: 0 },
   refillMs: 1234,
   rdClampedTo: null,
   canvas: { width: 1920, height: 1080 },
+  edit: {
+    visible: new Float64Array(0), allVisible: new Float64Array(0), reply: new Float64Array(0), issueToStaged: new Float64Array(0),
+    stagedToShown: new Float64Array(0), relight: new Float64Array(0), edit: new Float64Array(0), count: 0,
+  },
 };
 
 describe('summarizeBench (SP4b spec §8.3)', () => {
@@ -189,7 +207,7 @@ describe('summarizeBench (SP4b spec §8.3)', () => {
     const r = summarizeBench(recordOf([{ leg: 0 }, { leg: 1 }, { leg: 5 }, { leg: 6 }]), FIXED);
     expect(Object.keys(r)).toEqual([
       'route', 'seed', 'profile', 'rd', 'rdClampedTo', 'workers', 'sectionRenderer', 'userAgent', 'renderer', 'vendor', 'multiDraw', 'timerQuery', 'screen', 'dpr',
-      'pixelRatio', 'displayIntervalMs', 'load', 'stream', 'legs', 'L5', 'L6', 'live', 'longFrames', 'structuralFrames',
+      'pixelRatio', 'displayIntervalMs', 'load', 'stream', 'legs', 'L5', 'L6', 'live', 'edit', 'longFrames', 'structuralFrames',
     ]);
     expect(r.route).toBe('bench=medium');
     expect(r.rdClampedTo).toBeNull();
@@ -206,7 +224,7 @@ describe('summarizeBench (SP4b spec §8.3)', () => {
     expect(Object.keys(r.stream.coordinatorMs)).toEqual(['p95', 'max']);
     expect(Object.keys(r.stream.uploadMs)).toEqual(['p95', 'max']);
     expect(Object.keys(r.stream.drawCalls)).toEqual(['max', 'mean']);
-    expect(Object.keys(r.legs)).toEqual(['L0', 'L1', 'L2', 'L3', 'L4', 'L5', 'L6', 'L7', 'L8', 'L9']);
+    expect(Object.keys(r.legs)).toEqual(['L0', 'L1', 'L2', 'L3', 'L4', 'L5', 'L6', 'L7', 'L8', 'L9', 'L10']);
     expect(Object.keys(r.legs.L1.frames)).toEqual(['count', 'p50', 'p95', 'p99', 'max', 'over33']);
     expect(r.L5).toEqual({ refillMs: 1234 });
     expect(Object.keys(r.L6)).toEqual(['frames']);
@@ -388,6 +406,50 @@ describe('summarizeBench: the live legs L7-L9 (SP4c spec §8.4, D22, D24)', () =
     expect(r.live.frames.max).toBeCloseTo(33.333, 3);
     expect(r.stream.frames.over33).toBe(1);
     expect(r.longFrames.map((f) => f.leg)).toEqual(['L6', 'L7']);
+  });
+});
+
+describe('summarizeBench: the edit leg L10 (SP5a spec §6.2, D26)', () => {
+  /** The page's latency rings: the hover's 4 accepted edits, then 2 of the flight's. */
+  const EDIT: BenchFixed['edit'] = {
+    visible: Float64Array.of(20, 30, 40, 50, 90, 70),
+    allVisible: Float64Array.of(25, 35, 45, 55, 95, 75),
+    reply: Float64Array.of(2, 3, 4, 5, 9, 9),
+    issueToStaged: Float64Array.of(6, 7, 8, 11, 30, 30),
+    stagedToShown: Float64Array.of(4, 5, 6, 8, 20, 20),
+    relight: Float64Array.of(0.5, 1, 1.5, 2.5, 7, 7),
+    edit: Float64Array.of(0.8, 1.2, 1.9, 3.1, 8, 8),
+    count: 6,
+  };
+
+  test('over a synthetic record with an L10 `edit` has every key; SP4c\'s `live` block still covers L7-L9 only', () => {
+    const r = summarizeBench(recordOf([
+      { leg: 1 }, { leg: 7 }, { leg: 8 }, { leg: 9 },
+      { leg: 10, snappedMs: 50 * HZ240, calls: 700 }, { leg: 10 }, { leg: 10 },
+    ]), { ...FIXED, totals: { ...FIXED.totals, editDropped: 3 }, edit: EDIT }, null, { hoverAccepted: 4, streamingRefused: 1, timedOut: [] });
+    expect(Object.keys(r.edit)).toEqual([
+      'editVisibleP50', 'editVisibleP95', 'editVisibleMax', 'editAllVisibleP95', 'relightP95Ms', 'editP95Ms', 'replyP95Ms', 'issueToStagedP95Ms',
+      'stagedToShownP95Ms', 'editDropped', 'mainP95Ms', 'editVisibleStreamingP95', 'streamingRefused', 'timedOut', 'frames',
+    ]);
+    // The hover's figures read its 4 samples (nearest rank), the streaming p95 the flight's 2.
+    expect([r.edit.editVisibleP50, r.edit.editVisibleP95, r.edit.editVisibleMax, r.edit.editAllVisibleP95]).toEqual([30, 50, 50, 55]);
+    expect([r.edit.relightP95Ms, r.edit.editP95Ms, r.edit.replyP95Ms, r.edit.issueToStagedP95Ms, r.edit.stagedToShownP95Ms]).toEqual([2.5, 3.1, 5, 11, 8]);
+    expect([r.edit.editDropped, r.edit.mainP95Ms, r.edit.editVisibleStreamingP95, r.edit.streamingRefused]).toEqual([3, 0, 90, 1]);
+    expect(r.edit.timedOut).toEqual([]);
+    // SP4b's frame fields over L10's frames.
+    expect(Object.keys(r.edit.frames)).toEqual(Object.keys(r.stream));
+    expect([r.edit.frames.frames.count, r.edit.frames.frames.over33, r.edit.frames.drawCalls.max]).toEqual([3, 1, 700]);
+    expect(r.legs.L10.frames.over33).toBe(1);
+    // SP4c's live block still covers L7-L9 only, and the stream block L1-L6.
+    expect(r.live.frames.count).toBe(3);
+    expect([r.live.frames.over33, r.live.drawCalls.max]).toEqual([0, 40]);
+    expect(r.stream.frames.count).toBe(1);
+    expect(r.longFrames.map((f) => f.leg)).toEqual(['L10']);
+    expect(Object.keys(JSON.parse(JSON.stringify(r)) as object)).toEqual(Object.keys(r));
+    // No sample: the figures are null (JSON has no NaN); no L10 run: nothing timed out.
+    const none = summarizeBench(recordOf([{ leg: 1 }]), FIXED);
+    expect([none.edit.editVisibleP95, none.edit.editVisibleStreamingP95, none.edit.relightP95Ms]).toEqual([null, null, null]);
+    expect([none.edit.streamingRefused, none.edit.timedOut]).toEqual([0, []]);
   });
 });
 
@@ -600,7 +662,7 @@ describe('createBenchDriver (the page\'s hook, SP4b spec §8.3)', () => {
   test('a reservation cap below 12 clamps every RD the script wants to rdMax and records rdClampedTo (Task 26b, review M3)', () => {
     const { driver } = driverOf(null);
     expect(driver.rdClampedTo).toBeNull();
-    driver.bind({ rdMax: 10, heightAt: () => null, live: fakeLive().live });
+    driver.bind({ rdMax: 10, heightAt: () => null, live: fakeLive().live, edit: fakeEdit().edit });
     expect(driver.rdClampedTo).toBe(10);
     const out = pose();
     const wants: number[] = [];
@@ -612,14 +674,14 @@ describe('createBenchDriver (the page\'s hook, SP4b spec §8.3)', () => {
     expect(wants[Math.round(90 / 0.05)]).toBe(10);
     // A cap at 12 or above clamps nothing.
     const free = driverOf(null);
-    free.driver.bind({ rdMax: 16, heightAt: () => null, live: fakeLive().live });
+    free.driver.bind({ rdMax: 16, heightAt: () => null, live: fakeLive().live, edit: fakeEdit().edit });
     expect(free.driver.rdClampedTo).toBeNull();
     expect(free.driver.pose(10, pose(), 12)).toBe(12);
   });
 
   test('under a cap rd12back waits for the fog at the cap, and `first` asks for the cap', () => {
     const back = driverOf('rd12back');
-    back.driver.bind({ rdMax: 10, heightAt: () => null, live: fakeLive().live });
+    back.driver.bind({ rdMax: 10, heightAt: () => null, live: fakeLive().live, edit: fakeEdit().edit });
     const o = pose();
     back.driver.pose(0, { ...o, x: 0, z: 0 }, 10);
     expect(back.driver.pose(85.5, o, 9.5)).toBe(10);
@@ -627,7 +689,7 @@ describe('createBenchDriver (the page\'s hook, SP4b spec §8.3)', () => {
     expect(back.driver.pose(86.3, o, 10)).toBeNull();
     expect(back.ready()).toBe(1);
     const first = driverOf('first');
-    first.driver.bind({ rdMax: 8, heightAt: () => null, live: fakeLive().live });
+    first.driver.bind({ rdMax: 8, heightAt: () => null, live: fakeLive().live, edit: fakeEdit().edit });
     expect(first.driver.pose(0, pose(), 8)).toBe(8);
   });
 
@@ -635,7 +697,7 @@ describe('createBenchDriver (the page\'s hook, SP4b spec §8.3)', () => {
     expect([BENCH_SHOT_ABOVE, BENCH_SHOT_PITCH]).toEqual([32, -20]);
     const { driver, ready } = driverOf('fly96');
     const asked: Array<[number, number]> = [];
-    driver.bind({ rdMax: 12, heightAt: (x, z) => { asked.push([x, z]); return 71; }, live: fakeLive().live });
+    driver.bind({ rdMax: 12, heightAt: (x, z) => { asked.push([x, z]); return 71; }, live: fakeLive().live, edit: fakeEdit().edit });
     const out: BenchPose = { x: 0.5, y: 80, z: -0.25, yaw: 0, pitch: 0 };
     driver.pose(0, out, 12);
     // Before the shot's moment the route's pose holds.
@@ -653,7 +715,7 @@ describe('createBenchDriver (the page\'s hook, SP4b spec §8.3)', () => {
 
   test('where heightAt has no value the shot keeps the route\'s pose; a run without a shot never lowers the camera', () => {
     const hole = driverOf('fly384');
-    hole.driver.bind({ rdMax: 12, heightAt: () => null, live: fakeLive().live });
+    hole.driver.bind({ rdMax: 12, heightAt: () => null, live: fakeLive().live, edit: fakeEdit().edit });
     const out: BenchPose = { x: 0, y: 80, z: 0, yaw: 0, pitch: 0 };
     hole.driver.pose(0, out, 12);
     for (let i = 0; i < 3; i++) {
@@ -661,7 +723,7 @@ describe('createBenchDriver (the page\'s hook, SP4b spec §8.3)', () => {
       expect([out.x, out.y, out.z, out.yaw, out.pitch]).toEqual([400, BENCH_Y, -2880 - 0.5 * 384, 0, BENCH_PITCH]);
     }
     const run = driverOf(null);
-    run.driver.bind({ rdMax: 12, heightAt: () => 64, live: fakeLive().live });
+    run.driver.bind({ rdMax: 12, heightAt: () => 64, live: fakeLive().live, edit: fakeEdit().edit });
     for (let t = 0; t < 95; t += 0.5) {
       run.driver.pose(t, out, 12);
       expect([out.y, out.pitch]).toEqual([BENCH_Y, BENCH_PITCH]);
@@ -758,6 +820,27 @@ function fakeLive() {
   return { live, calls, settle, arrive: (ok = true) => arrive?.(ok), fail: (e: unknown) => fail?.(e) };
 }
 
+/**
+ * A fake of the page's edit hooks (SP5a spec §6.2): every batch posted with the camera's block column at that moment
+ * (`at`, set by the test), its outcome (`outcome`, accepted by default) and each `editState` asked.
+ */
+function fakeEdit(o: { state?: (cx: number, cz: number) => 0 | 1 | 2; outcome?: () => EditOutcome | undefined } = {}) {
+  const posts: Array<{ readonly edits: readonly Edit[] }> = [];
+  const asked: Array<[number, number, number]> = [];
+  const edit: BenchWorld['edit'] = {
+    post: (edits) => {
+      posts.push({ edits });
+      return Promise.resolve(o.outcome?.() ?? { ok: true, prev: new Uint32Array(edits.length) });
+    },
+    editState: (cx, cz) => {
+      const s = o.state?.(cx, cz) ?? 0;
+      asked.push([cx, cz, s]);
+      return s;
+    },
+  };
+  return { edit, posts, asked };
+}
+
 /** Lets the teleport's promise settle (its `then` runs in a microtask). */
 const flush = (): Promise<void> => new Promise((r) => setTimeout(r, 0));
 
@@ -765,7 +848,7 @@ describe('createBenchDriver: the live legs after L6 (SP4c spec §8.4, D22; plan)
   test('L7 sets the leaf to 4.0 at its start, L8 undoes, L9 asks the teleport for x + 20,000 at the same z; each ends when settled', async () => {
     const { driver } = driverOf(null);
     const f = fakeLive();
-    driver.bind({ rdMax: 16, heightAt: () => null, live: f.live });
+    driver.bind({ rdMax: 16, heightAt: () => null, live: f.live, edit: fakeEdit().edit });
     const out: BenchPose = { x: 7, y: 80, z: -3, yaw: 12, pitch: 0 };
     driver.pose(0, out, 12);
     driver.pose(94.99, out, 12);
@@ -799,17 +882,19 @@ describe('createBenchDriver: the live legs after L6 (SP4c spec §8.4, D22; plan)
     await flush();
     driver.pose(98.5, out, 12);
     expect(out).toEqual({ x: 20407.5, y: 112, z: -4802.5, yaw: 33, pitch: -15 });
-    // L9 settles: the script ends after it.
+    // L9 settles: L10 (SP5a spec §6.2) follows it at the same place, and the live hooks are not called again.
     f.settle[9] = true;
-    expect(driver.pose(99, out, 12)).toBeNull();
-    expect(driver.pose(99.1, out, 12)).toBeNull();
+    driver.record.n = 8;
+    expect(driver.pose(99, out, 12)).toBe(12);
+    expect(driver.record.leg[8]).toBe(10);
+    expect(out).toEqual({ x: 20407.5, y: 112, z: -4802.5, yaw: 33, pitch: -15 });
     expect(f.calls).toHaveLength(3);
   });
 
   test('a leg that never settles ends at its cap: L7 and L8 after 20 s, L9 after 15 s; before L9\'s arrival y stays 150', () => {
     const { driver } = driverOf(null);
     const f = fakeLive();
-    driver.bind({ rdMax: 16, heightAt: () => null, live: f.live });
+    driver.bind({ rdMax: 16, heightAt: () => null, live: f.live, edit: fakeEdit().edit });
     const out = { x: 0, y: 80, z: 0, yaw: 0, pitch: 0 };
     driver.pose(0, out, 12);
     driver.pose(94.9, out, 12);
@@ -824,12 +909,15 @@ describe('createBenchDriver: the live legs after L6 (SP4c spec §8.4, D22; plan)
     out.y = 300;
     driver.pose(149.99, out, 12);
     expect(out.y).toBe(150);
-    expect(driver.pose(150, out, 12)).toBeNull();
+    // L9's cap: L10 hovers for the disc (never filled here) up to its 60 s cap, and the script ends.
+    expect(driver.pose(150, out, 12)).toBe(12);
+    expect(driver.pose(209.99, out, 12)).toBe(12);
+    expect(driver.pose(210, out, 12)).toBeNull();
   });
 
   test('under a reservation cap the live legs ask for the cap', () => {
     const { driver } = driverOf(null);
-    driver.bind({ rdMax: 10, heightAt: () => null, live: fakeLive().live });
+    driver.bind({ rdMax: 10, heightAt: () => null, live: fakeLive().live, edit: fakeEdit().edit });
     const out = pose();
     driver.pose(0, { ...out, x: 0, z: 0 }, 10);
     expect(driver.pose(96, out, 10)).toBe(10);
@@ -838,7 +926,7 @@ describe('createBenchDriver: the live legs after L6 (SP4c spec §8.4, D22; plan)
   test('apply-before freezes at L7 − 0.5 s (94.5 s), before the edit; apply-mid at L7\'s start + 1 s', () => {
     const before = driverOf('apply-before');
     const fb = fakeLive();
-    before.driver.bind({ rdMax: 16, heightAt: () => null, live: fb.live });
+    before.driver.bind({ rdMax: 16, heightAt: () => null, live: fb.live, edit: fakeEdit().edit });
     const o: BenchPose = { x: 0, y: 80, z: 0, yaw: 0, pitch: 0 };
     before.driver.pose(0, o, 12);
     before.driver.pose(94.4, o, 12);
@@ -849,7 +937,7 @@ describe('createBenchDriver: the live legs after L6 (SP4c spec §8.4, D22; plan)
 
     const mid = driverOf('apply-mid');
     const fm = fakeLive();
-    mid.driver.bind({ rdMax: 16, heightAt: () => null, live: fm.live });
+    mid.driver.bind({ rdMax: 16, heightAt: () => null, live: fm.live, edit: fakeEdit().edit });
     mid.driver.pose(0, o, 12);
     // L7's actual start is the first frame at or after 95 s.
     mid.driver.pose(95.02, o, 12);
@@ -864,7 +952,7 @@ describe('createBenchDriver: the live legs after L6 (SP4c spec §8.4, D22; plan)
   test('apply-after freezes at L7\'s end, before the undo; teleport 0.3 s after L9\'s arrival, the camera lowered over the new place', async () => {
     const after = driverOf('apply-after');
     const fa = fakeLive();
-    after.driver.bind({ rdMax: 16, heightAt: () => 70, live: fa.live });
+    after.driver.bind({ rdMax: 16, heightAt: () => 70, live: fa.live, edit: fakeEdit().edit });
     const o: BenchPose = { x: 0.5, y: 80, z: 0.5, yaw: 0, pitch: 0 };
     after.driver.pose(0, o, 12);
     after.driver.pose(95, o, 12);
@@ -880,7 +968,7 @@ describe('createBenchDriver: the live legs after L6 (SP4c spec §8.4, D22; plan)
     const tp = driverOf('teleport');
     const ft = fakeLive();
     const asked: Array<[number, number]> = [];
-    tp.driver.bind({ rdMax: 16, heightAt: (x, z) => { asked.push([x, z]); return 64; }, live: ft.live });
+    tp.driver.bind({ rdMax: 16, heightAt: (x, z) => { asked.push([x, z]); return 64; }, live: ft.live, edit: fakeEdit().edit });
     const p: BenchPose = { x: 0.5, y: 80, z: 0.5, yaw: 0, pitch: 0 };
     tp.driver.pose(0, p, 12);
     // L6's last frame: the camera hovers where L4 stopped, facing north.
@@ -913,7 +1001,7 @@ describe('createBenchDriver: the live legs after L6 (SP4c spec §8.4, D22; plan)
   test('a live shot whose moment never comes freezes when the live legs end (the teleport failed: L9\'s cap)', async () => {
     const tp = driverOf('teleport');
     const f = fakeLive();
-    tp.driver.bind({ rdMax: 16, heightAt: () => null, live: f.live });
+    tp.driver.bind({ rdMax: 16, heightAt: () => null, live: f.live, edit: fakeEdit().edit });
     const p = { x: 0, y: 80, z: 0, yaw: 0, pitch: 0 };
     tp.driver.pose(0, p, 12);
     tp.driver.pose(95, p, 12);
@@ -923,20 +1011,123 @@ describe('createBenchDriver: the live legs after L6 (SP4c spec §8.4, D22; plan)
     tp.driver.pose(97, p, 12);
     f.arrive(false);
     await flush();
-    tp.driver.pose(111.99, p, 12);
+    // L9's cap at 112 s, then L10's hover cap (the disc never fills) at 172 s.
+    tp.driver.pose(112, p, 12);
+    tp.driver.pose(171.99, p, 12);
     expect(tp.ready()).toBe(0);
-    for (const t of [112, 112.01, 112.02]) expect(tp.driver.pose(t, p, 12)).toBe(12);
-    expect(tp.driver.pose(112.03, p, 12)).toBeNull();
+    for (const t of [172, 172.01, 172.02]) expect(tp.driver.pose(t, p, 12)).toBe(12);
+    expect(tp.driver.pose(172.03, p, 12)).toBeNull();
     expect(tp.ready()).toBe(1);
   });
 });
 
+describe('createBenchDriver: the edit leg L10 (SP5a spec §6.2, D26; plan)', () => {
+  /** Runs the live legs (L7 and L8 settle at once) to L9's arrival at (20,000.5, 90, 0.5); L9 settles with `settled9`. */
+  async function toL10(e: ReturnType<typeof fakeEdit>, settled9: boolean) {
+    const run = driverOf(null);
+    const f = fakeLive();
+    f.settle[7] = true;
+    f.settle[8] = true;
+    f.settle[9] = settled9;
+    run.driver.bind({ rdMax: 16, heightAt: () => 70, live: f.live, edit: e.edit });
+    const p: BenchPose = { x: 0.5, y: 80, z: 0.5, yaw: 0, pitch: 0 };
+    run.driver.pose(0, p, 12);
+    run.driver.pose(95, p, 12);
+    run.driver.pose(96, p, 12);
+    run.driver.pose(97, p, 12);
+    expect(f.calls[2]).toBe('teleport 20000.5 0.5');
+    p.x = 20000.5;
+    p.y = 90;
+    f.arrive();
+    await flush();
+    return { ...run, p };
+  }
+
+  test('L10\'s script posts 100 edits 250 ms apart within 8 blocks, every tenth a torch, then 20 during its 6 s flight east, skipping a column whose `editState` is not 0', async () => {
+    // Columns with an odd cx are not open (a 3 × 3 stale or not loaded); the last 3 posts are refused.
+    let n = 0;
+    const e = fakeEdit({ state: (cx) => ((cx & 1) === 0 ? 0 : 2), outcome: () => (++n > 117 ? { ok: false, why: 'regenerating' } : undefined) });
+    const { driver, published, p } = await toL10(e, true);
+    const stone = (STONE << 8) >>> 0;
+    const torch = (TORCH << 8) >>> 0;
+    // The hover: L9 settled, so the disc is filled and the edits start at L10's first frame, 98 s; one per 250 ms.
+    for (let k = 0; k < 100; k++) {
+      expect(driver.pose(98 + k * 0.25, p, 12)).toBe(12);
+      expect(e.posts).toHaveLength(k + 1);
+      driver.pose(98 + k * 0.25 + 0.2, p, 12);
+      expect(e.posts).toHaveLength(k + 1);
+    }
+    // Hovering where L9 arrived, at its y.
+    expect([p.x, p.y, p.z, p.pitch]).toEqual([20000.5, 90, 0.5, -15]);
+    const hover = e.posts.map((b) => {
+      expect(b.edits).toHaveLength(1);
+      return b.edits[0]!;
+    });
+    // Alternately a stone placed on the surface (heightAt, air expected) and broken back to air; every tenth a torch.
+    let placed: Edit | null = null;
+    for (let k = 0; k < 100; k++) {
+      const ed = hover[k]!;
+      expect(ed.op).toBe('set');
+      expect((ed.x - 20000) ** 2 + (ed.z - 0) ** 2).toBeLessThanOrEqual(64);
+      if (k % 10 === 9) expect([ed.value, ed.expect, ed.y]).toEqual([torch, 0, 70]);
+      else if (placed === null) {
+        expect([ed.value, ed.expect, ed.y]).toEqual([stone, 0, 70]);
+        placed = ed;
+      } else {
+        expect([ed.x, ed.y, ed.z, ed.value, ed.expect]).toEqual([placed.x, placed.y, placed.z, 0, stone]);
+        placed = null;
+      }
+    }
+    expect([torch, stone, 0].map((v) => hover.filter((ed) => ed.value === v).length)).toEqual([10, 45, 45]);
+    // Each place and each torch on a column of its own; the hover asks no editState (its disc is filled).
+    expect(new Set(hover.filter((ed) => ed.value !== 0).map((ed) => `${ed.x},${ed.z}`)).size).toBe(55);
+    expect(e.asked).toEqual([]);
+    // The closing flight: from 123 s (the edits' 25 s) east at 20 blocks/s; its edits from its first second.
+    driver.pose(123, p, 12);
+    expect([p.x, p.yaw, p.z]).toEqual([20000.5, 90, 0.5]);
+    driver.pose(123.5, p, 12);
+    expect(e.posts).toHaveLength(100);
+    for (let j = 0; j < 20; j++) {
+      const t = 124 + j * 0.25;
+      expect(driver.pose(t, p, 12)).toBe(12);
+      expect(p.x).toBe(20000.5 + 20 * (t - 123));
+      expect(e.posts).toHaveLength(101 + j);
+      const ed = e.posts[100 + j]!.edits[0]!;
+      expect([ed.op, ed.value, ed.expect, ed.y]).toEqual(['set', stone, 0, 70]);
+      expect((ed.x - Math.floor(p.x)) ** 2 + (ed.z - Math.floor(p.z)) ** 2).toBeLessThanOrEqual(64);
+      expect((ed.x >> 4) & 1).toBe(0);
+    }
+    // Columns not open were asked and skipped.
+    expect(e.asked.some(([, , s]) => s !== 0)).toBe(true);
+    // The flight ends at 6 s, and with it the script.
+    expect(driver.pose(128.99, p, 12)).toBe(12);
+    expect(e.posts).toHaveLength(120);
+    expect(driver.pose(129, p, 12)).toBeNull();
+    await flush();
+    driver.done(FIXED);
+    const r = published[0] as BenchResult;
+    expect([r.edit.timedOut, r.edit.streamingRefused]).toEqual([[], 3]);
+  });
+
+  test('a hover past 60 s records `edit.timedOut` [\'L10\'] and ends the leg with no edit', async () => {
+    const e = fakeEdit();
+    const { driver, published, p } = await toL10(e, false);
+    // L9 never settles: its cap (15 s from 97 s) starts L10 at 112 s, whose hover waits for the disc up to 60 s.
+    expect(driver.pose(112, p, 12)).toBe(12);
+    expect(driver.pose(171.99, p, 12)).toBe(12);
+    expect(driver.pose(172, p, 12)).toBeNull();
+    expect(e.posts).toEqual([]);
+    driver.done(FIXED);
+    expect((published[0] as BenchResult).edit.timedOut).toEqual(['L10']);
+  });
+});
+
 describe('createBenchDriver: a teleport that never arrives keeps its cause in the JSON (final review WLD-5)', () => {
-  /** Runs the live legs to L9's teleport, settles it with `settle`, lets L9 run to its cap and publishes the JSON. */
+  /** Runs the live legs to L9's teleport, settles it with `settle`, lets L9 and L10's hover run to their caps and publishes the JSON. */
   async function l9(settle: (f: ReturnType<typeof fakeLive>) => void): Promise<BenchResult> {
     const { driver, published } = driverOf(null);
     const f = fakeLive();
-    driver.bind({ rdMax: 16, heightAt: () => null, live: f.live });
+    driver.bind({ rdMax: 16, heightAt: () => null, live: f.live, edit: fakeEdit().edit });
     const p = { x: 0, y: 80, z: 0, yaw: 0, pitch: 0 };
     driver.pose(0, p, 12);
     driver.pose(95, p, 12);
@@ -947,7 +1138,8 @@ describe('createBenchDriver: a teleport that never arrives keeps its cause in th
     expect(f.calls[2]).toBe('teleport 20000 0');
     settle(f);
     await flush();
-    expect(driver.pose(112, p, 12)).toBeNull();
+    expect(driver.pose(112, p, 12)).toBe(12);
+    expect(driver.pose(172, p, 12)).toBeNull();
     driver.done(FIXED);
     expect(published).toHaveLength(1);
     return published[0] as BenchResult;

@@ -39,6 +39,8 @@
  * §8.4) the bench builds the world page's live pieces without a map: the preview driver over an unattached replaying
  * canvas with the preview not wanted, fed every session change; the apply control (its `onApplied` marks the Apply
  * frame); the teleport over the bench's pool; the reveals since each mark, read through `sections.onColumnRevealed`.
+ * For its edit leg L10 (SP5a spec §6.2) it builds its own edit path over the sim, with the same latency fed by the same
+ * hook, and hands the driver the latency's samples and the coordinator's `editDropped` at the end.
  *
  * Errors after the reveal (SP4b spec §3.6, §7.4, D12) degrade: a skipped column shows a dismissible notice with "Copy
  * details", StoreFull a notice offering "Lower to RD n" (applied live on a click, never on its own); a fatal event (no
@@ -80,9 +82,10 @@
  *
  * Editing (SP5a spec §2.1, §2.5, §6.2): after the pool, every route but the flight's spawns the sim worker
  * (`createBrowserSim`) and attaches it as thread 15; D reads its entries through (`worldJobsOf(workers, sim)`). The
- * streaming route posts every edit through the edit path (`editPath.ts`: the gate, the sim pins, `markEdited`), times
- * it (`editLatency.ts`: staged through the coordinator's `onEditStaged`, revealed through `sections.onColumnRevealed`),
- * and on the sim's failure runs `onSimFailure` (thread 15 dead, editing off, every sim pin released, the notice). The
+ * streaming route and the bench post every edit through the edit path (`editPath.ts`: the gate, the sim pins,
+ * `markEdited`), timed (`editLatency.ts`: staged through the coordinator's `onEditStaged`, revealed through
+ * `sections.onColumnRevealed`); on the sim's failure the streaming route runs `onSimFailure` (thread 15 dead, editing
+ * off, every sim pin released, the notice) and the bench releases the same and ends its script with the error. The
  * teardown and the failure releases dispose the sim.
  */
 import { MEDIUM } from '../../core/params/graphicsPresets';
@@ -1493,7 +1496,28 @@ export function mountWorldPage(root: HTMLElement, q: WorldQuery, hash: string, o
         // canvas nothing attaches to, wanting no preview and fed every session change (no tool is ever mounted, ruling
         // R1); a configure failure is fatal (§4.3).
         const reveals = createLiveReveals(bench.record);
-        sections.onColumnRevealed = (cx, cz) => reveals.revealed(cx, cz);
+        // L10's edit path (SP5a spec §6.2): the streaming route's, with no notice to show; the latency's reveals come
+        // through the same hook as the live legs' (`onColumnRevealed` holds one).
+        const editLatency = latency!;
+        const benchEdits = createEditPath({
+          sim: simClient!,
+          coordinator,
+          latency: editLatency,
+          now: () => performance.now(),
+          notices: { show() {} },
+        });
+        // The sim's failure: thread 15 dead, the path disabled, every sim pin released, and the script ends with it.
+        simFailure = () => {
+          store.markDead(SIM_THREAD);
+          benchEdits.disable();
+          coordinator.simUnpinAll();
+          fail('The edit worker failed.', null);
+        };
+        if (simClient!.failed) simFailure();
+        sections.onColumnRevealed = (cx, cz) => {
+          reveals.revealed(cx, cz);
+          editLatency.revealed(cx, cz, performance.now());
+        };
         teardown.push(() => { sections.onColumnRevealed = null; });
         const liveDriver = createPreviewDriver(workers, createReplayingCanvas(), {
           now: () => performance.now(),
@@ -1560,6 +1584,10 @@ export function mountWorldPage(root: HTMLElement, q: WorldQuery, hash: string, o
               });
             },
             settled: () => reveals.filled,
+          },
+          edit: {
+            post: (edits) => benchEdits.post(edits),
+            editState: (cx, cz) => coordinator.editState(cx, cz),
           },
         });
         // The live RD as the help would set it, never saved (SP4b spec §5).
@@ -1691,9 +1719,10 @@ export function mountWorldPage(root: HTMLElement, q: WorldQuery, hash: string, o
             pixelRatio: world.renderer.getPixelRatio(),
             displayIntervalMs: interval,
             load: { revealMs: stats.revealMs, stageMs: { ...stats.stageMs }, longTasks: stats.longTasks, first120RenderedMaxMs: stats.first120MaxMs },
-            totals: { dropped: counts.dropped, failed: counts.failed, storeFull: counts.storeFull },
+            totals: { dropped: counts.dropped, failed: counts.failed, storeFull: counts.storeFull, editDropped: counts.editDropped },
             refillMs,
             canvas: { width: world.renderer.domElement.width, height: world.renderer.domElement.height },
+            edit: { ...editLatency.samples(), count: editLatency.count },
           });
         };
         const pose: BenchPose = { x: 0, y: 0, z: 0, yaw: 0, pitch: 0 };
@@ -1754,7 +1783,7 @@ export function mountWorldPage(root: HTMLElement, q: WorldQuery, hash: string, o
     simFailure = () => onSimFailure({ store, coordinator, editPath, notices });
     // A sim that failed during the load shows its notice now that the notices exist.
     if (simClient!.failed) simFailure();
-    // The edit latency's reveals (§6.2); the bench's own hook feeds them on its route (Task 17's L10).
+    // The edit latency's reveals (§6.2); the bench's own hook feeds them on its route (L10).
     sections.onColumnRevealed = (cx, cz) => editLatency.revealed(cx, cz, performance.now());
     teardown.push(() => { sections.onColumnRevealed = null; });
     // The map overlay and the preview driver (SP4c spec §1.3, §4.2), created below; a failure or a context loss

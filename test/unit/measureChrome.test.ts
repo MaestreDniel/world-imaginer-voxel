@@ -86,9 +86,9 @@ describe('measureChrome: the bench route (SP4b spec §8.3, §8.7)', () => {
     expect(routePath(args({ route: 'bench', workers: 4, renderer: 'mesh', shot: 'rd8' }))).toBe('/?bench=medium&workers=4&renderer=mesh&shot=rd8');
   });
 
-  test('every route writes to assets/sp4c since SP4c (SP4c spec §8.4); SP4a\'s and SP4b\'s files stay where they are', () => {
-    expect(ASSETS).toBe('docs/superpowers/specs/assets/sp4c');
-    expect(ASSETS.endsWith('assets/sp4c')).toBe(true);
+  test('every route writes to assets/sp5a since SP5a (SP5a spec §6.2); SP4a\'s, SP4b\'s and SP4c\'s files stay where they are', () => {
+    expect(ASSETS).toBe('docs/superpowers/specs/assets/sp5a');
+    expect(ASSETS.endsWith('assets/sp5a')).toBe(true);
   });
 
   test('the bench summary line, read defensively', () => {
