@@ -1034,15 +1034,20 @@ export function offerLowerRd(notices: Pick<WorldNotices, 'slow'>, rd: number, co
 export interface Aim {
   /** The last rendered frame's hit (`hit` false: no target). */
   readonly hit: RayHit;
+  /**
+   * The last hit's outline box relative to the floating origin (x0, y0, z0, x1, y1, z1), computed on every hit whether
+   * the outline shows or not, so the bench's `mainP95Ms` measures the update without drawing it.
+   */
+  readonly box: Float64Array;
   aim(read: Pick<VoxelStore, 'blockAt' | 'fluidAt'>, paused: boolean): void;
 }
 
 /**
  * The page's aim (SP5a spec §3.5, D8), which the frame step runs on every rendered tick inside its second read section:
  * the DDA from the eye along the look (`lookVectorInto`; reach `REACH_FLY` until the walk mode), then the outline around
- * the hit (`outlineBounds`: the cell, or a box state's box), relative to the floating origin, or hidden: while paused,
- * while the pointer is free, with no target, and without the HUD (captures, panoramas). The queued clicks run between
- * the two (Task 25). Allocates nothing.
+ * the hit (`outlineBounds`: the cell, or a box state's box), relative to the floating origin, computed on every hit;
+ * then the outline set to that box, or hidden: while paused, while the pointer is free, with no target, and without the
+ * HUD (captures, panoramas, the bench). The queued clicks run between the two (Task 25). Allocates nothing.
  */
 export function createAim(o: {
   readonly fly: Pick<FlyState, 'x' | 'y' | 'z' | 'yaw' | 'pitch'>;
@@ -1055,20 +1060,27 @@ export function createAim(o: {
   const { fly, world } = o;
   const hit = createRayHit();
   const dir = new Float64Array(3);
-  const bounds = new Float64Array(6);
+  const box = new Float64Array(6);
   return {
     hit,
+    box,
     aim(read, paused) {
       lookVectorInto(dir, fly.yaw, fly.pitch);
       castRay(read, fly.x, fly.y, fly.z, dir[0]!, dir[1]!, dir[2]!, REACH_FLY, 'block', hit);
-      if (paused || !o.hud || !hit.hit || !o.locked()) {
+      if (!hit.hit) {
         world.hideOutline();
         return;
       }
-      outlineBounds(hit.state, hit.x, hit.y, hit.z, bounds);
+      outlineBounds(hit.state, hit.x, hit.y, hit.z, box);
       const origin = world.origin;
-      world.setOutline(bounds[0]! - origin.x, bounds[1]! - origin.y, bounds[2]! - origin.z,
-        bounds[3]! - origin.x, bounds[4]! - origin.y, bounds[5]! - origin.z);
+      box[0] = box[0]! - origin.x;
+      box[1] = box[1]! - origin.y;
+      box[2] = box[2]! - origin.z;
+      box[3] = box[3]! - origin.x;
+      box[4] = box[4]! - origin.y;
+      box[5] = box[5]! - origin.z;
+      if (paused || !o.hud || !o.locked()) world.hideOutline();
+      else world.setOutline(box[0], box[1], box[2], box[3], box[4], box[5]);
     },
   };
 }
@@ -1701,8 +1713,10 @@ export function mountWorldPage(root: HTMLElement, q: WorldQuery, hash: string, o
         let refillMs: number | null = null;
         fly.vx = fly.vy = fly.vz = 0;
         const clock = createFrameClock(createFpsLimiter(settings.fpsCap), { push() {} }, prev);
-        // The bench's aim runs the DDA and the outline from the scripted pose although its step is always paused, so
-        // L10's main-thread time (`mainP95Ms`) includes them (SP5a spec §6.2); no pointer lock is taken.
+        // The bench's aim runs the DDA and the outline update (the box around the hit, relative to the floating origin)
+        // from the scripted pose although its step is always paused, so L10's main-thread time (`mainP95Ms`) includes
+        // them (SP5a spec §6.2). The bench mounts without the HUD, so the outline is computed but never drawn: the review
+        // shots and the draw counts are unchanged. No pointer lock is taken.
         const benchAim = createAim({ fly, world, locked: () => true, hud });
         const step = createFrameStep({
           fly,

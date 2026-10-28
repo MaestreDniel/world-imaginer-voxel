@@ -18,9 +18,10 @@ import { createNotices } from '../../src/ui/common/notice';
 import { URL_HASH_MAX, URL_OVERSIZE_NOTICE, createUrlWriter, oversizeNotice } from '../../src/ui/common/urlWriter';
 import { DEFAULT_MAP_STATE, decodeMapState, openMapSession, type MapView } from '../../src/ui/map/mapState';
 import { WORLD_MAP_BPP, worldMapView } from '../../src/ui/world/mapOverlay';
+import { AIR, STONE } from '../../src/world/blocks/index';
 import { createReloader, createWorldUrl, worldHash, type HereState } from '../../src/ui/world/reload';
 import {
-  countPendingTimers, countTileCalls, createRdControl, createUndoNotice, createWorldNotices, everyFrameUntil, failBeforeReveal, flushOnPageHide, handleContextLoss,
+  countPendingTimers, countTileCalls, createAim, createRdControl, createUndoNotice, createWorldNotices, everyFrameUntil, failBeforeReveal, flushOnPageHide, handleContextLoss,
   handleStreamEvent, helpChange, installWiTest, mapKey, offerLowerRd, onDriverStatus, onSimFailure, rdShownOnLoad, releaseOnFailure, reloadRd, runTeardown, stopAfterFailure,
   UNDO_NOTICE_MS, type WiTest, type WiTestPage,
 } from '../../src/ui/world/worldPage';
@@ -1264,5 +1265,50 @@ describe('onSimFailure (the sim\'s failure, SP5a spec §2.1)', () => {
     expect(await editPath.post([{ x: 3, y: 70, z: 4, op: 'set', value: 1 << 8, expect: 0 }])).toEqual({ ok: false, why: 'failed' });
     expect(sim.edits).not.toHaveBeenCalled();
     expect(coordinator.simPin).not.toHaveBeenCalled();
+  });
+});
+
+describe('createAim: the DDA and the outline (SP5a spec §3.5, §6.2; Task 23 review I1)', () => {
+  /** Stone at (0, 68, 0) under an eye at (0.5, 70.5, 0.5) looking straight down; the floating origin at (16, 0, −32). */
+  function rig(o: { hud: boolean; locked?: boolean; stone?: boolean }) {
+    const calls: string[] = [];
+    const world = {
+      origin: { x: 16, y: 0, z: -32 },
+      setOutline: (...b: number[]) => { calls.push(`set ${b.join(',')}`); },
+      hideOutline: () => { calls.push('hide'); },
+    };
+    const fly = { x: 0.5, y: 70.5, z: 0.5, yaw: 0, pitch: -90 };
+    const read = {
+      blockAt: (x: number, y: number, z: number) => (o.stone !== false && x === 0 && y === 68 && z === 0 ? STONE : AIR),
+      fluidAt: () => 0,
+    };
+    const aim = createAim({ fly, world: world as never, locked: () => o.locked ?? true, hud: o.hud });
+    return { aim, calls, read };
+  }
+  /** The stone's cell relative to the origin. */
+  const BOX = [-16, 68, 32, -15, 69, 33];
+
+  test('with the HUD, the lock and a hit: the outline set to the hit\'s cell relative to the floating origin', () => {
+    const r = rig({ hud: true });
+    r.aim.aim(r.read, false);
+    expect([r.aim.hit.hit, r.aim.hit.x, r.aim.hit.y, r.aim.hit.z]).toEqual([true, 0, 68, 0]);
+    expect(r.calls).toEqual([`set ${BOX.join(',')}`]);
+    expect([...r.aim.box]).toEqual(BOX);
+  });
+
+  test('paused, the pointer free, no target, or no HUD: the outline hidden', () => {
+    const cases = [rig({ hud: true }), rig({ hud: true, locked: false }), rig({ hud: true, stone: false }), rig({ hud: false })];
+    cases[0]!.aim.aim(cases[0]!.read, true);
+    for (const r of cases.slice(1)) r.aim.aim(r.read, false);
+    expect(cases.map((r) => r.calls)).toEqual([['hide'], ['hide'], ['hide'], ['hide']]);
+    expect(cases[2]!.aim.hit.hit).toBe(false);
+  });
+
+  test('without the HUD (the bench) a hit still runs the outline update: the box is computed but not drawn', () => {
+    const r = rig({ hud: false });
+    r.aim.aim(r.read, false);
+    expect(r.aim.hit.hit).toBe(true);
+    expect([...r.aim.box]).toEqual(BOX);
+    expect(r.calls).toEqual(['hide']);
   });
 });
