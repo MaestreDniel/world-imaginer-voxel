@@ -12,6 +12,7 @@ import { mountHelp } from '../../src/ui/help';
 import type { DriverStatus } from '../../src/ui/map/previewDriver';
 import { SETTINGS_DEFAULTS, type WorldSettings } from '../../src/ui/settings';
 import { StoreCorrupt } from '../../src/world/store/pool';
+import { SIM_THREAD } from '../../src/world/store/reclaim';
 import { createBenchDriver } from '../../src/ui/world/bench';
 import { createFogEase } from '../../src/ui/world/fogEase';
 import { createNotices } from '../../src/ui/common/notice';
@@ -176,29 +177,34 @@ describe('runTeardown (the page\'s dispose, rulings R5 (b))', () => {
     const order: string[] = [];
     const sim = { dispose: () => { order.push('sim.dispose'); } };
     const coordinator = { dispose: () => { order.push('coordinator.dispose'); } };
+    // Thread 15 marked dead once the sim is stopped: a pool lock its terminated worker left held is a StoreCorrupt in
+    // the coordinator's sweep (which its dispose swallows), not a spin that never ends (task 40b review I1).
+    const store = { markDead: (t: number) => { order.push(`markDead(${t})`); } };
     // As the page: the sim's own step when it is created, others between, then the coordinator's.
     const teardown: Array<() => void> = [() => sim.dispose(), () => { order.push('between'); }];
-    pushCoordinatorTeardown(teardown, coordinator, sim);
+    pushCoordinatorTeardown(teardown, coordinator, sim, store);
     teardown.push(() => { order.push('later'); });
     runTeardown(teardown.splice(0).reverse(), (e) => { throw e; });
-    expect(order).toEqual(['later', 'sim.dispose', 'coordinator.dispose', 'between', 'sim.dispose']);
-    // Each its own guarded step: a sim whose dispose throws still has the coordinator disposed.
+    expect(order).toEqual(['later', 'sim.dispose', `markDead(${SIM_THREAD})`, 'coordinator.dispose', 'between', 'sim.dispose']);
+    expect(SIM_THREAD).toBe(15);
+    // Each its own guarded step: a sim whose dispose throws is still marked dead, and the coordinator still disposed.
     const failing: Array<() => void> = [];
     const onError = vi.fn<(e: unknown) => void>();
     order.length = 0;
-    pushCoordinatorTeardown(failing, coordinator, { dispose: () => { throw new Error('sim'); } });
+    pushCoordinatorTeardown(failing, coordinator, { dispose: () => { throw new Error('sim'); } }, store);
     runTeardown(failing.splice(0).reverse(), onError);
-    expect(order).toEqual(['coordinator.dispose']);
+    expect(order).toEqual([`markDead(${SIM_THREAD})`, 'coordinator.dispose']);
     expect(onError).toHaveBeenCalledTimes(1);
-    // The flight route has no sim.
+    // The flight route has no sim: only the coordinator's step, and no thread marked dead.
     order.length = 0;
-    pushCoordinatorTeardown(failing, coordinator, null);
+    pushCoordinatorTeardown(failing, coordinator, null, store);
     runTeardown(failing.splice(0).reverse(), (e) => { throw e; });
     expect(order).toEqual(['coordinator.dispose']);
-    // The page's dispose runs its teardown reversed, and the coordinator's step is pushed through the helper.
+    // The page's dispose runs its teardown reversed, and the coordinator's step is pushed through the helper, with the
+    // page's store.
     const src = readFileSync(new URL('../../src/ui/world/worldPage.ts', import.meta.url), 'utf8');
     expect(src).toMatch(/^\s*\.\.\.teardown\.splice\(0\)\.reverse\(\),$/m);
-    expect(src).toMatch(/^\s*pushCoordinatorTeardown\(teardown, coordinator, simClient\);$/m);
+    expect(src).toMatch(/^\s*pushCoordinatorTeardown\(teardown, coordinator, simClient, store\);$/m);
     expect(src.slice(src.indexOf('async function run(')).match(/coordinator\.dispose\(\)\)/g)).toBeNull();
   });
 });

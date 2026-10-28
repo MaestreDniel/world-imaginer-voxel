@@ -424,13 +424,28 @@ export function runTeardown(steps: ReadonlyArray<() => void>, onError: (e: unkno
 /**
  * Pushes the coordinator's dispose onto the page's teardown, which runs reversed, with the sim's stop after it: the sim
  * is stopped first (no batch posted, no reply applied), since the coordinator's dispose sweep ignores the sim's pins
- * (SP5a spec §2.1) and would free a record an edit in flight still writes. Two steps, each guarded by `runTeardown`;
- * the sim's own step, pushed when it was created, disposes it again (a no-op) and still stops it on a load torn down
- * before the coordinator exists.
+ * (SP5a spec §2.1) and would free a record an edit in flight still writes. The stop then marks thread 15 dead, even when
+ * the dispose throws: a worker terminated inside a pool lock leaves it held, and the sweep's `pool.free` meets it as a
+ * `StoreCorrupt` (which the coordinator's dispose swallows) instead of a spin that never ends (SP4b spec §2.6). Two
+ * steps, each guarded by `runTeardown`; the sim's own step, pushed when it was created, disposes it again (a no-op) and
+ * still stops it on a load torn down before the coordinator exists.
  */
-export function pushCoordinatorTeardown(teardown: Array<() => void>, coordinator: { dispose(): void }, sim: { dispose(): void } | null): void {
+export function pushCoordinatorTeardown(
+  teardown: Array<() => void>,
+  coordinator: { dispose(): void },
+  sim: { dispose(): void } | null,
+  store: Pick<VoxelStore, 'markDead'>,
+): void {
   teardown.push(() => coordinator.dispose());
-  if (sim !== null) teardown.push(() => sim.dispose());
+  if (sim !== null) {
+    teardown.push(() => {
+      try {
+        sim.dispose();
+      } finally {
+        store.markDead(SIM_THREAD);
+      }
+    });
+  }
 }
 
 /**
@@ -1657,7 +1672,7 @@ export function mountWorldPage(root: HTMLElement, q: WorldQuery, hash: string, o
       // An edit's payload staged (SP5a spec §4.6, §6.2): the first reveal of the column after it shows the edit.
       onEditStaged: (cx, cz) => latency?.staged(cx, cz, performance.now()),
     });
-    pushCoordinatorTeardown(teardown, coordinator, simClient);
+    pushCoordinatorTeardown(teardown, coordinator, simClient, store);
     simFailure = () => {
       store.markDead(SIM_THREAD);
       coordinator.simUnpinAll();
