@@ -9,16 +9,17 @@ import v8 from 'node:v8';
 import { runInNewContext } from 'node:vm';
 import { describe, expect, test } from 'vitest';
 import {
-  AIR_DRAG, EYE, MAX_TICKS, TICK_S, createWalkState, setFeet, walkStep, walkTick, type WalkState,
+  AIR_DRAG, EYE, MAX_TICKS, TICK_S, arriveFeet, createWalkState, setFeet, walkStep, walkTick, type WalkReader, type WalkState,
 } from '../../src/player/walk';
-import type { VoxelReader } from '../../src/player/physics';
 import type { Action } from '../../src/player/keymap';
 import { AIR, ICE, LADDER, PACKED_ICE, STONE } from '../../src/world/blocks/index';
 import { LAVA_SOURCE, WATER_SOURCE } from '../../src/world/blocks/fluid';
 
-interface Canned extends VoxelReader {
+interface Canned extends WalkReader {
   /** Sets one voxel (block and fluid byte); the rest follows the floor and the fluid layer. */
   set(x: number, y: number, z: number, state: number, fluid?: number): Canned;
+  /** Moves the unpublished edge: columns at block x ≥ `x` are not Published from now on. */
+  unpublishFromX(x: number): Canned;
 }
 
 interface World {
@@ -31,23 +32,33 @@ interface World {
   unpublishedFromX?: number;
 }
 
-/** A Smi key for |x|, |y − 64|, |z| < 128 (no allocation on a `Map` read). */
+/** A Smi key for |x|, |y − 64|, |z| < 128 (no allocation on a `Map` read): y in −64 … 191. */
 const key = (x: number, y: number, z: number): number => ((x + 128) * 256 + (y - 64 + 128)) * 256 + (z + 128);
 
 function canned(w: World = {}): Canned {
   const floorTop = w.floorTop ?? 70;
   const floor = w.floor ?? ((): number => STONE);
   const fluid = w.fluid ?? ((): number => 0);
-  const unpub = w.unpublishedFromX ?? Infinity;
+  let unpub = w.unpublishedFromX ?? Infinity;
   const blocks = new Map<number, number>();
   const fluids = new Map<number, number>();
   const r: Canned = {
     blockAt: (x, y, z) => (x >= unpub ? -1 : (blocks.get(key(x, y, z)) ?? (y < floorTop ? floor(x, z) : AIR))),
     fluidAt: (x, y, z) => (x >= unpub ? 0 : (fluids.get(key(x, y, z)) ?? fluid(x, y, z))),
     publishedAt: (x) => x < unpub,
+    // `MOTION_BLOCKING` as the store keeps it: y + 1 of the highest voxel holding a block or a fluid, null unpublished.
+    heightAt: (_kind, x, z) => {
+      if (x >= unpub) return null;
+      for (let y = 191; y >= -64; y--) if (r.blockAt(x, y, z) !== AIR || r.fluidAt(x, y, z) !== 0) return y + 1;
+      return -64;
+    },
     set(x, y, z, state, f = 0) {
       blocks.set(key(x, y, z), state);
       fluids.set(key(x, y, z), f);
+      return r;
+    },
+    unpublishFromX(x) {
+      unpub = x;
       return r;
     },
   };
@@ -65,7 +76,7 @@ function bodyAt(x: number, y: number, z: number, onGround = true): WalkState {
 interface Keys { wishX?: number; wishZ?: number; jump?: boolean; down?: boolean; sprint?: boolean }
 
 /** Runs `n` ticks; returns the last tick's displacement (dx, dy, dz). */
-function run(w: WalkState, r: VoxelReader, n: number, k: Keys = {}): [number, number, number] {
+function run(w: WalkState, r: WalkReader, n: number, k: Keys = {}): [number, number, number] {
   let d: [number, number, number] = [0, 0, 0];
   for (let i = 0; i < n; i++) {
     const x = w.x;
@@ -78,13 +89,13 @@ function run(w: WalkState, r: VoxelReader, n: number, k: Keys = {}): [number, nu
 }
 
 /** The displacement of the 201st tick, after 200 ticks of warm-up under the same keys. */
-const steady = (w: WalkState, r: VoxelReader, k: Keys): [number, number, number] => {
+const steady = (w: WalkState, r: WalkReader, k: Keys): [number, number, number] => {
   run(w, r, 200, k);
   return run(w, r, 1, k);
 };
 
 /** The distance slid along x after letting go (until the body stops). */
-function slide(w: WalkState, r: VoxelReader): number {
+function slide(w: WalkState, r: WalkReader): number {
   const x0 = w.x;
   run(w, r, 400);
   return w.x - x0;
@@ -279,6 +290,45 @@ describe('walkTick over unloaded columns (SP5a spec §3.2; Review Focus 3)', () 
   });
 });
 
+describe('the walking teleport\'s snap (SP5a spec §3.4, D15)', () => {
+  test('hover while unpublished (y unchanged over 20 ticks), then on publish the feet at `heightAt(\'motionBlocking\')` (65) and `snapPending` false', () => {
+    // Stone below y 65 (`heightAt` 65), nothing Published yet.
+    const r = canned({ floorTop: 65, unpublishedFromX: -Infinity });
+    const w = createWalkState();
+    expect(w.snapY).toBeNaN();
+    arriveFeet(w, 0.5, 90, 0.5);
+    expect([w.x, w.y, w.z, w.snapPending]).toEqual([0.5, 90, 0.5, true]);
+    for (let i = 0; i < 20; i++) {
+      walkTick(w, r, 0, 0, false, false, false);
+      expect(w.y, `tick ${i}`).toBe(90);
+      expect(w.vy).toBe(0);
+      expect(w.snapPending).toBe(true);
+    }
+    expect(w.snapY).toBeNaN();
+    r.unpublishFromX(Infinity);
+    expect(r.heightAt('motionBlocking', 0, 0)).toBe(65);
+    walkTick(w, r, 0, 0, false, false, false);
+    // Both feet on the ground: no interpolation from the hover down to it.
+    expect([w.py, w.y, w.snapY, w.snapPending]).toEqual([65, 65, 65, false]);
+    // Then the body stands there.
+    run(w, r, 20);
+    expect(w.y).toBeCloseTo(65, 6);
+    expect(w.onGround).toBe(true);
+    expect(w.snapY).toBe(65);
+  });
+
+  test('over water the snap is the water\'s top (fluid counts in `motionBlocking`), and the body then sinks slowly', () => {
+    // Stone below y 40, water sources up to y 62: `heightAt` 63.
+    const r = canned({ floorTop: 40, fluid: (_x, y) => (y >= 40 && y < 63 ? WATER_SOURCE : 0) });
+    const w = createWalkState();
+    arriveFeet(w, 4.5, 63, 4.5);
+    walkTick(w, r, 0, 0, false, false, false);
+    expect([w.y, w.snapY, w.snapPending]).toEqual([63, 63, false]);
+    run(w, r, 40);
+    expect(w.y).toBeLessThan(63);
+  });
+});
+
 describe('walkStep: the accumulator and the drawn eye (SP5a spec §3.1, §3.2)', () => {
   const held = (...a: Action[]): ReadonlySet<Action> => new Set<Action>(a);
 
@@ -333,6 +383,11 @@ describe('walkStep: the accumulator and the drawn eye (SP5a spec §3.1, §3.2)',
     expect([w.vx, w.vy, w.vz, w.acc]).toEqual([0, 0, 0, 0]);
     // No stale ground: F in mid-air after an earlier walk cannot jump on its first tick.
     expect(w.onGround).toBe(false);
+    // No stale snap either; the last snap's y stays (NaN: none yet).
+    arriveFeet(w, 100.5, 80, -20.5);
+    setFeet(w, 100.5, 80, -20.5);
+    expect(w.snapPending).toBe(false);
+    expect(w.snapY).toBeNaN();
     walkStep(w, r, held(), 90, 0.01, eye);
     expect(eye).toEqual({ x: 100.5, y: 80 + EYE, z: -20.5 });
     expect(EYE).toBe(1.62);
@@ -340,10 +395,11 @@ describe('walkStep: the accumulator and the drawn eye (SP5a spec §3.1, §3.2)',
 
   test('`walkStep` allocates nothing over 10,000 calls', () => {
     // A flat floor of stone and ice, a wall to bump into, water and a ladder on the way, an unpublished strip.
-    const r: VoxelReader = {
+    const r: WalkReader = {
       blockAt: (x, y, z) => (x >= 40 ? -1 : y < 70 ? (z > 0 ? ICE : STONE) : x === 20 && y < 72 ? STONE : x === 10 && z === 0 ? LADDER : AIR),
       fluidAt: (x, y) => (x >= 30 && x < 40 && y < 72 ? WATER_SOURCE : 0),
       publishedAt: (x) => x < 40,
+      heightAt: (_kind, x) => (x >= 40 ? null : 70),
     };
     const w = bodyAt(0.5, 70, 0.5);
     const eye = { x: 0, y: 0, z: 0 };

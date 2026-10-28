@@ -6,8 +6,7 @@ import {
   type FlyBounds, type FlyState,
 } from '../../src/player/fly';
 import type { Action } from '../../src/player/keymap';
-import type { VoxelReader } from '../../src/player/physics';
-import { EYE, createWalkState, walkStep } from '../../src/player/walk';
+import { EYE, createWalkState, walkStep, type WalkReader } from '../../src/player/walk';
 import { AIR } from '../../src/world/blocks/index';
 
 const state = (o: Partial<FlyState> = {}): FlyState => ({
@@ -193,7 +192,7 @@ describe('fly controller (SP4a spec §7.1; SP4b spec §6.1: horizontal flight)',
 
 describe('modes: F switches flight and walking (SP5a spec §3.1, D1)', () => {
   /** Air everywhere, every column Published: a walking body falls. */
-  const air: VoxelReader = { blockAt: () => AIR, fluidAt: () => 0, publishedAt: () => true };
+  const air: WalkReader = { blockAt: () => AIR, fluidAt: () => 0, publishedAt: () => true, heightAt: () => -64 };
 
   test('F flies → walks: the feet at eye − 1.62, the drawn eye unchanged on that frame, then falling', () => {
     const s = state({ x: 3.25, y: 100.3, z: -7.5, yaw: 40, vx: 5, vy: -3, vz: 2 });

@@ -18,7 +18,11 @@
  * - unloaded: when a column under the body's footprint is not Published, vy is 0 and nothing moves vertically; the
  *   horizontal move goes on, the column's voxels (−1) never collide, and `onGround` keeps its value (no vertical sweep
  *   runs to update it), so a body walking off the loaded disc keeps the ground row (its block under the centre reads
- *   −1, not `SLIPPERY`) and one in the air keeps the air row.
+ *   −1, not `SLIPPERY`) and one in the air keeps the air row;
+ * - a walking teleport's snap (SP5a spec §3.4, D15), before all of the above: while `snapPending`, the body hovers by
+ *   the unloaded rule until the column under its centre is Published (`heightAt` not null); on that tick both feet go to
+ *   its `heightAt('motionBlocking')` (already y + 1 of the highest voxel, fluid included), `snapY` records it and
+ *   `snapPending` clears.
  *
  * Allocates nothing: the reads are view-free (`VoxelReader`), the wish's forward vector goes into one module-level array
  * and the move's result into one reused object.
@@ -75,15 +79,28 @@ export interface WalkState {
   acc: number;
   /** A walking teleport's snap waits for the column to be Published (SP5a spec §3.4). */
   snapPending: boolean;
+  /** The feet y the last snap set (`heightAt('motionBlocking')`); NaN before any snap. `setFeet` leaves it. */
+  snapY: number;
+}
+
+/**
+ * The walk's reads: the view-free voxel reads and the store's heightmap (`VoxelStore.heightAt`, null where the column is
+ * not Published), which the teleport's snap reads.
+ */
+export interface WalkReader extends VoxelReader {
+  heightAt(kind: 'motionBlocking', bx: number, bz: number): number | null;
 }
 
 export function createWalkState(): WalkState {
-  return { px: 0, py: 0, pz: 0, x: 0, y: 0, z: 0, vx: 0, vy: 0, vz: 0, onGround: false, acc: 0, snapPending: false };
+  return {
+    px: 0, py: 0, pz: 0, x: 0, y: 0, z: 0, vx: 0, vy: 0, vz: 0, onGround: false, acc: 0, snapPending: false, snapY: Number.NaN,
+  };
 }
 
 /**
  * Sets both the previous and the current feet (no interpolation across F or a teleport), zeroes the velocity and the
- * accumulator, and clears `onGround` (the next tick's sweep finds the ground again).
+ * accumulator, and clears `onGround` (the next tick's sweep finds the ground again) and `snapPending` (F after a flight
+ * does not inherit an older teleport's snap).
  */
 export function setFeet(w: WalkState, x: number, y: number, z: number): void {
   w.px = w.x = x;
@@ -94,6 +111,16 @@ export function setFeet(w: WalkState, x: number, y: number, z: number): void {
   w.vz = 0;
   w.acc = 0;
   w.onGround = false;
+  w.snapPending = false;
+}
+
+/**
+ * A walking teleport's arrival (SP5a spec §3.4, D15): both feet at (x, y, z) as `setFeet` sets them, and `snapPending`,
+ * so the first tick over a Published column sets the feet on its ground.
+ */
+export function arriveFeet(w: WalkState, x: number, y: number, z: number): void {
+  setFeet(w, x, y, z);
+  w.snapPending = true;
 }
 
 const TYPE = STATE_TYPE;
@@ -134,8 +161,17 @@ function bodyFree(r: VoxelReader, x: number, y: number, z: number): boolean {
  * `down` Shift, `sprint` Ctrl.
  */
 export function walkTick(
-  w: WalkState, r: VoxelReader, wishX: number, wishZ: number, jump: boolean, down: boolean, sprint: boolean,
+  w: WalkState, r: WalkReader, wishX: number, wishZ: number, jump: boolean, down: boolean, sprint: boolean,
 ): void {
+  if (w.snapPending) {
+    const top = r.heightAt('motionBlocking', Math.floor(w.x), Math.floor(w.z));
+    if (top !== null) {
+      w.py = w.y = top;
+      w.vy = 0;
+      w.snapY = top;
+      w.snapPending = false;
+    }
+  }
   const x = w.x;
   const y = w.y;
   const z = w.z;
@@ -234,7 +270,7 @@ export function walkTick(
  * previous and the current feet interpolated by `acc / TICK_S`, plus `EYE`) into `eye`.
  */
 export function walkStep(
-  w: WalkState, r: VoxelReader, held: ReadonlySet<Action>, yawDeg: number, dtS: number,
+  w: WalkState, r: WalkReader, held: ReadonlySet<Action>, yawDeg: number, dtS: number,
   eye: { x: number; y: number; z: number },
 ): void {
   if (dtS > 0) w.acc += dtS;

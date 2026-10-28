@@ -8,6 +8,7 @@ import { surfaceEst3 } from '../../src/gen/column/surfaceEstimate';
 import { createGenContext, type GenContext } from '../../src/gen/context';
 import { createDensityContext } from '../../src/gen/density/context';
 import { SPEED_DEFAULT, type FlyState } from '../../src/player/fly';
+import { EYE, arriveFeet, createWalkState } from '../../src/player/walk';
 import { createTeleport, LANDING_ABOVE, LANDING_MAX_Y, LANDING_RETRIES, landingY } from '../../src/ui/world/teleport';
 import { ctxFor } from '../harness/gen';
 
@@ -246,5 +247,65 @@ describe('createTeleport (SP4c spec §3.2, §3.3, D12)', () => {
       expect(r.fly, outcome).toEqual(camera());
       expect([r.state.eyeSky, r.fails(), r.arrivals.length], outcome).toEqual([4, 0, 0]);
     }
+  });
+});
+
+describe('the walking teleport (SP5a spec §3.4, D15)', () => {
+  /** A teleport over `pool` with the camera walking (or flying) and a walk body in motion, wired as the page wires it. */
+  function walkRig(pool: { landing(x: number, z: number): Promise<Landing> }, mode: 'walk' | 'fly' = 'walk') {
+    const fly: FlyState = { ...camera(), mode };
+    const walk = createWalkState();
+    walk.px = walk.x = 3.5;
+    walk.py = walk.y = 80;
+    walk.pz = walk.z = -2.5;
+    walk.vx = 0.2;
+    walk.vy = -0.3;
+    walk.vz = 0.1;
+    walk.acc = 0.02;
+    walk.onGround = true;
+    const state = { eyeSky: 4 };
+    const arrivals: Arrival[] = [];
+    const tp = createTeleport({
+      pool,
+      fly,
+      state,
+      walk: { active: () => fly.mode === 'walk', arrive: (x, feetY, z) => arriveFeet(walk, x, feetY, z) },
+      onArrive: (x, z, landing) => { arrivals.push([x, z, { ...landing }]); },
+      onFail: () => { throw new Error('no landing fails here'); },
+    });
+    return { tp, fly, walk, state, arrivals };
+  }
+
+  test('walking teleport over land (surface 70, water −∞): feet 71, look kept, `snapPending`', async () => {
+    const r = walkRig(scriptedPool([{ surface: 70, water: -Infinity }]));
+    await expect(r.tp.go(100.25, 200.75)).resolves.toBe(true);
+    // Both feet set at the block's centre, no interpolation, the velocity and the accumulator zeroed.
+    expect([r.walk.px, r.walk.py, r.walk.pz, r.walk.x, r.walk.y, r.walk.z]).toEqual([100.5, 71, 200.5, 100.5, 71, 200.5]);
+    expect([r.walk.vx, r.walk.vy, r.walk.vz, r.walk.acc, r.walk.onGround]).toEqual([0, 0, 0, 0, false]);
+    expect(r.walk.snapPending).toBe(true);
+    // The look and the speed kept; the camera's y is the eye above the feet.
+    expect([r.fly.yaw, r.fly.pitch, r.fly.speed, r.fly.mode]).toEqual([123, -31, SPEED_DEFAULT * 2, 'walk']);
+    expect([r.fly.x, r.fly.y, r.fly.z, r.fly.vx, r.fly.vy, r.fly.vz]).toEqual([100.5, 71 + EYE, 200.5, 0, 0, 0]);
+    expect(r.state.eyeSky).toBe(15);
+    expect(r.arrivals).toEqual([[100.5, 200.5, { surface: 70, water: -Infinity, y: 71 + EYE }]]);
+  });
+
+  test('over the sea (surface 40, water 62): feet 63', async () => {
+    const r = walkRig(scriptedPool([{ surface: 40, water: 62 }]));
+    await expect(r.tp.go(-7, 9)).resolves.toBe(true);
+    expect([r.walk.x, r.walk.y, r.walk.z, r.walk.snapPending]).toEqual([-6.5, 63, 9.5, true]);
+    expect(r.fly.y).toBe(63 + EYE);
+  });
+
+  test('flying with the walk wired: flight\'s landing unchanged (`landingY`) and the walk body untouched', async () => {
+    const r = walkRig(scriptedPool([{ surface: 70, water: -Infinity }, { surface: 40, water: 62 }]), 'fly');
+    const before = { ...r.walk };
+    await expect(r.tp.go(100.25, 200.75)).resolves.toBe(true);
+    expect([r.fly.x, r.fly.y, r.fly.z]).toEqual([100.5, landingY(70, -Infinity), 200.5]);
+    await expect(r.tp.go(-7, 9)).resolves.toBe(true);
+    expect(r.fly.y).toBe(landingY(40, 62));
+    expect(r.fly.y).toBe(86);
+    expect(r.walk).toEqual(before);
+    expect(r.arrivals.map((a) => a[2].y)).toEqual([94, 86]);
   });
 });

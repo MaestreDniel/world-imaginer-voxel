@@ -114,7 +114,7 @@ import { createHotbar, type Hotbar } from '../../player/hotbar';
 import { bodyOf, breakAt, emptyBucketAt, pickAt, placeAt, type BodyBox } from '../../player/interaction';
 import { DEFAULT_KEYMAP, type Action } from '../../player/keymap';
 import { REACH_FLY, REACH_WALK, castRay, createRayHit, type RayHit } from '../../player/raycast';
-import { EYE, createWalkState, type WalkState } from '../../player/walk';
+import { EYE, arriveFeet, createWalkState, type WalkState } from '../../player/walk';
 import { createFpsLimiter, type FpsLimiter } from '../../render/fpsLimiter';
 import type { FrameState } from '../../render/frameState';
 import { NEAR_FLY, NEAR_WALK, createWorldRenderer, type GpuEstimate, type WorldRenderer } from '../../render/renderer';
@@ -2388,11 +2388,13 @@ export function mountWorldPage(root: HTMLElement, q: WorldQuery, hash: string, o
     teardown.push(() => input.dispose());
 
     // The teleport (SP4c spec §3.2-§3.4): the landing on the shared pool, the camera moved in place, the eye light
-    // reset to 15; the fog does not react (Point 1). The next tick's `coordinator.update` does the crossing.
+    // reset to 15; the fog does not react (Point 1). The next tick's `coordinator.update` does the crossing. Walking,
+    // the feet arrive above the ground and the walk tick snaps them onto it once the column is Published (SP5a §3.4).
     const teleporter = createTeleport({
       pool: workers,
       fly,
       state: frame,
+      walk: { active: () => fly.mode === 'walk', arrive: (x, feetY, z) => arriveFeet(walk, x, feetY, z) },
       // F5 after a teleport returns to where the user jumped (SP4c spec §1.6, D20); flight never rewrites the search.
       onArrive: (_x, _z, landing) => {
         worldUrl.arrived(fly);

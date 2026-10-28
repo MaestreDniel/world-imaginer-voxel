@@ -13,6 +13,10 @@
  * - **The move** (§3.3): x, z and y set, the velocity zeroed, yaw, pitch and speed kept, the eye light reset to 15
  *   (§3.4, open sky above the surface), then `onArrive`. The next tick's `coordinator.update` does the long crossing
  *   (SP4b §3.4); nothing else is told.
+ * - **Walking** (SP5a spec §3.4, D15): while `walk.active()`, the feet arrive at max(surface, water) + 1 instead
+ *   (`walkFeetY`) and the camera's y is that plus `EYE`: `walk.arrive` sets both feet with the velocity zeroed and the
+ *   snap pending, which the walk tick completes on the column's ground once it is Published. Flight's rule is
+ *   unchanged.
  * - **The latest click wins (plan; Review Focus 5).** In mode B the map stays open and the user may click again before
  *   the first landing answered; landings run on different workers and can resolve out of order. A `go` superseded by a
  *   later one before its landing settled resolves false and calls neither `onArrive` nor `onFail`, and is not retried.
@@ -20,6 +24,7 @@
  */
 import { JobCancelled, type WorkerPool } from '../../engine/workerPool';
 import type { FlyState } from '../../player/fly';
+import { EYE } from '../../player/walk';
 import { AT_LIMIT } from './query';
 
 /** Blocks above the surface or the water the camera arrives at (SP4c spec §3.2, D12). */
@@ -34,10 +39,15 @@ export function landingY(surface: number, water: number): number {
   return Math.min(LANDING_MAX_Y, Math.max(surface, water) + LANDING_ABOVE);
 }
 
+/** A walking teleport's feet y over a landing (SP5a spec §3.4): max(surface, water) + 1. */
+export function walkFeetY(surface: number, water: number): number {
+  return Math.max(surface, water) + 1;
+}
+
 export interface TeleportLanding {
   readonly surface: number;
   readonly water: number;
-  /** The camera's y: `landingY(surface, water)`. */
+  /** The camera's y: `landingY(surface, water)` flying; `walkFeetY(surface, water) + EYE` walking. */
   readonly y: number;
 }
 
@@ -47,6 +57,11 @@ export interface TeleportOptions {
   readonly fly: FlyState;
   /** The frame step's state: `eyeSky` is reset to 15 on arrival (SP4c spec §3.4). */
   readonly state: { eyeSky: number };
+  /**
+   * The walk (SP5a spec §3.4): while `active()`, the arrival calls `arrive` with the feet (the block's centre,
+   * `walkFeetY`), which sets both feet with the snap pending (`arriveFeet`). Absent (the bench), every teleport flies.
+   */
+  readonly walk?: { active(): boolean; arrive(x: number, feetY: number, z: number): void };
   /** After the camera moved: its x and z (the block's centre) and the landing it arrived over. */
   onArrive(x: number, z: number, landing: TeleportLanding): void;
   /**
@@ -91,13 +106,16 @@ export function createTeleport(o: TeleportOptions): Teleport {
         }
       }
       if (dropped(mine)) return false;
-      const y = landingY(landing.surface, landing.water);
+      const walk = o.walk !== undefined && o.walk.active() ? o.walk : null;
+      const feetY = walkFeetY(landing.surface, landing.water);
+      const y = walk !== null ? feetY + EYE : landingY(landing.surface, landing.water);
       fly.x = bx + 0.5;
       fly.z = bz + 0.5;
       fly.y = y;
       fly.vx = 0;
       fly.vy = 0;
       fly.vz = 0;
+      if (walk !== null) walk.arrive(fly.x, feetY, fly.z);
       state.eyeSky = 15;
       o.onArrive(fly.x, fly.z, { surface: landing.surface, water: landing.water, y });
       return true;
