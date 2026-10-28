@@ -28,13 +28,21 @@ const FACE_SHADE: readonly number[] = (() => {
 /** The AO factor by `ao2` (SP4a spec §5.3, 09's table). */
 const AO_FACTOR = [1, 0.8, 0.6, 0.45] as const;
 
-/** The terrain vertex shader: decodes the solid `data` word; layer and face flat, sky, block and AO interpolated. */
+/** Glass's frame (SP5a spec §1.3): a framed fragment whose two in-face coordinates both lie in [1/16, 15/16] is clear. */
+const FRAME_LO = glslFloat(1 / 16);
+const FRAME_HI = glslFloat(15 / 16);
+
+/**
+ * The terrain vertex shader: decodes the solid `data` word; layer, face and frame flat, sky, block and AO
+ * interpolated.
+ */
 export function terrainVertex(variant: MaterialVariant): string {
   return `${vertexHead(variant)}${LIGHT_INTERP_GLSL}
 ${packingGlsl()}
 in uint data;
 flat out uint vLayer;
 flat out uint vFace;
+flat out uint vFrame;
 LIGHT_INTERP out float vSky;
 LIGHT_INTERP out float vBlock;
 out float vAo;
@@ -44,6 +52,7 @@ ${floatArray('AO_FACTOR', AO_FACTOR)}
 void main() {
   vLayer = pkS_layer(data);
   vFace = pkS_face(data);
+  vFrame = pkS_frame(data);
   vSky = float(pkS_sky(data));
   vBlock = float(pkS_block(data));
 #ifdef TERRAIN_AO
@@ -57,12 +66,19 @@ ${vertexPlace(variant, 'position')}  vViewPos = mvPos4.xyz;
 `;
 }
 
-/** The terrain fragment shader, shared by both variants; `CUTOUT` discards texels with alpha below 0.5. */
+/**
+ * The terrain fragment shader, shared by both variants; `CUTOUT` discards texels with alpha below 0.5 and, on a framed
+ * face (glass, SP5a spec §1.3), the inside of the frame: the face's two in-face coordinates of `fract(vWorldPos)` (y
+ * and z across an east or west face, x and z across up or down, x and y across north or south) both in [1/16, 15/16].
+ * The floating origin is a multiple of 512 blocks (`render/floatingOrigin.ts`), so `fract` is block-aligned, also on
+ * merged quads.
+ */
 export const TERRAIN_FRAGMENT = `${FRAGMENT_OUTPUT}${LIGHT_INTERP_GLSL}
 uniform sampler2DArray albedo;
 ${LIGHTMAP_GLSL}${SKY_GLSL}${FOG_GLSL}
 flat in uint vLayer;
 flat in uint vFace;
+flat in uint vFrame;
 LIGHT_INTERP in float vSky;
 LIGHT_INTERP in float vBlock;
 in float vAo;
@@ -73,6 +89,11 @@ void main() {
   vec4 base = texture(albedo, vec3(0.5, 0.5, float(vLayer)));
 #ifdef CUTOUT
   if (base.a < 0.5) discard;
+  if (vFrame != 0u) {
+    vec3 cell = fract(vWorldPos);
+    vec2 inFace = vFace == ${FACE_UP}u || vFace == ${FACE_DOWN}u ? cell.xz : vFace == ${FACE_EAST}u || vFace == ${FACE_WEST}u ? cell.zy : cell.xy;
+    if (all(greaterThanEqual(inFace, vec2(${FRAME_LO}))) && all(lessThanEqual(inFace, vec2(${FRAME_HI})))) discard;
+  }
 #endif
   vec3 color = base.rgb * FACE_SHADE[min(vFace, 5u)] * vAo * lightmapAt(vBlock, vSky);
   gl_FragColor = vec4(applyFog(color, vViewPos, vWorldPos), 1.0);

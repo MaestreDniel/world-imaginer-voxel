@@ -16,7 +16,7 @@ type Variant = 'solid' | 'fluid';
 type Fields = Record<string, number>;
 
 const VARIANTS = {
-  solid: { pack: (f: Fields) => packSolid(f as unknown as SolidFields), unpack: (w: number): Fields => ({ ...unpackSolid(w) }), top: 29 },
+  solid: { pack: (f: Fields) => packSolid(f as unknown as SolidFields), unpack: (w: number): Fields => ({ ...unpackSolid(w) }), top: 30 },
   fluid: { pack: (f: Fields) => packFluid(f as unknown as FluidFields), unpack: (w: number): Fields => ({ ...unpackFluid(w) }), top: 31 },
 } as const;
 
@@ -26,11 +26,11 @@ const max = (bits: number): number => 2 ** bits - 1;
 /** The define name of a field: camelCase to UPPER_SNAKE (cornerDrop → CORNER_DROP). */
 const defineName = (name: string): string => name.replace(/[A-Z]/g, (c) => `_${c}`).toUpperCase();
 
-test('PACK_LAYOUT is the spec §5.5 bit order (SP4a spec §5.5, D11)', () => {
+test('PACK_LAYOUT is the spec §5.5 bit order (SP4a spec §5.5, D11), with the glass frame at bit 30 (SP5a spec §1.3)', () => {
   expect(PACK_LAYOUT).toEqual({
     solid: {
       layer: { offset: 0, bits: 10 }, face: { offset: 10, bits: 3 }, ao: { offset: 13, bits: 2 }, sky: { offset: 15, bits: 4 },
-      block: { offset: 19, bits: 4 }, tint: { offset: 23, bits: 3 }, flags: { offset: 26, bits: 4 },
+      block: { offset: 19, bits: 4 }, tint: { offset: 23, bits: 3 }, flags: { offset: 26, bits: 4 }, frame: { offset: 30, bits: 1 },
     },
     fluid: {
       layer: { offset: 0, bits: 10 }, face: { offset: 10, bits: 3 }, sky: { offset: 13, bits: 4 }, block: { offset: 17, bits: 4 },
@@ -94,8 +94,8 @@ describe('packingGlsl', () => {
   const defines = new Map<string, number>();
   for (const m of glsl.matchAll(/^#define (PK_[SF]_\w+_(?:OFFSET|MASK)) (\d+)u$/gm)) defines.set(m[1]!, Number(m[2]));
 
-  test('the #defines equal PACK_LAYOUT (14 fields × 2 defines)', () => {
-    expect(defines.size).toBe(28);
+  test('the #defines equal PACK_LAYOUT (15 fields × 2 defines)', () => {
+    expect(defines.size).toBe(30);
     for (const v of ['solid', 'fluid'] as const) {
       const V = v === 'solid' ? 'S' : 'F';
       for (const [name, f] of fieldsOf(v)) {
@@ -113,7 +113,7 @@ describe('packingGlsl', () => {
         expect(glsl).toContain(`uint pk${V}_${name}(uint d) { return (d >> ${N}_OFFSET) & ${N}_MASK; }`);
       }
     }
-    expect(glsl.match(/^uint pk[SF]_\w+\(uint d\)/gm)).toHaveLength(14);
+    expect(glsl.match(/^uint pk[SF]_\w+\(uint d\)/gm)).toHaveLength(15);
   });
 
   test('the JS port of each define equals unpackSolid and unpackFluid on 1,000 words', () => {

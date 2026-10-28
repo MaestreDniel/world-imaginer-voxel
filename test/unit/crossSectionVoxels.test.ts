@@ -9,7 +9,8 @@ import {
   voxelPosition, voxelReadout, voxelRgb, type Rgb, type RuleCell,
 } from '../../src/ui/crossSection/voxels';
 import { toPx } from '../../src/ui/splineEditor/model';
-import { FLUID_LAVA, FLUID_WATER, packFluid, WATER_SOURCE } from '../../src/world/blocks/fluid';
+import { FLUID_LAVA, FLUID_WATER, LAVA_SOURCE, packFluid, WATER_SOURCE } from '../../src/world/blocks/fluid';
+import { LAVA_COLOR } from '../../src/textures/flatColors';
 import {
   AIR, BEDROCK, DEEPSLATE, GRASS_BLOCK, GRAVEL, PACKED_ICE, REGISTRY, SNOW_BLOCK, STONE, TERRACOTTA, CALCITE,
 } from '../../src/world/blocks/index';
@@ -127,6 +128,22 @@ describe('the Voxels palette (SP3a spec §5.2)', () => {
     expect(voxelRgb(AIR, WATER_SOURCE, 24)).toEqual([r, g, b].map((v) => Math.round(v * 0.5)));
     expect(voxelRgb(AIR, WATER_SOURCE, 34)).toEqual([r, g, b].map((v) => Math.round(v * 0.3)));
     expect(voxelRgb(AIR, WATER_SOURCE, 300)).toEqual([r, g, b].map((v) => Math.round(v * 0.3)));
+  });
+});
+
+describe('still lava in the Voxels palette (SP5a spec §1.3)', () => {
+  test('the Voxels palette shows lava as LAVA_COLOR', () => {
+    expect(VOXEL_COLORS.lava).toBe(LAVA_COLOR);
+    // Lava is never darkened by depth, and a level that is not a source draws the same.
+    for (const depth of [0, 5, 40]) expect(voxelRgb(AIR, LAVA_SOURCE, depth)).toEqual(LAVA_COLOR);
+    expect(voxelRgb(AIR, packFluid(FLUID_LAVA, 3), 0)).toEqual(LAVA_COLOR);
+    // A slice: lava 50 … 52 over water 40 … 49 over stone; the water's depth counts from its own surface at 49.
+    const rgba = sliceRgba(slice({
+      3: (y) => (y >= 50 && y <= 52 ? [AIR, LAVA_SOURCE] : y >= 40 && y <= 49 ? [AIR, WATER_SOURCE] : y < 40 ? [STONE, 0] : [AIR, 0]),
+    }));
+    for (const y of [50, 51, 52]) expect(pixel(rgba, 3, y)).toEqual(opaque(LAVA_COLOR));
+    expect(pixel(rgba, 3, 49)).toEqual(opaque(voxelRgb(AIR, WATER_SOURCE, 0)));
+    expect(pixel(rgba, 3, 40)).toEqual(opaque(voxelRgb(AIR, WATER_SOURCE, 9)));
   });
 });
 

@@ -19,10 +19,12 @@
  *   `AO_FACTORS[ao2 v1] + AO_FACTORS[ao2 v3] > AO_FACTORS[ao2 v0] + AO_FACTORS[ao2 v2]`, else along v0-v2.
  *
  * With `ao` off every `ao2` is 0; with `smoothLight` off every vertex carries F's light. `layer` is the state id,
- * `tint` is `TINT[state]` and `flags` 0 (SP4a spec §5.5). The face tables, the corner light, the merge loop and the
- * corner positions are `mesh/faces.ts`'s, shared with `mesh/fluid.ts`.
+ * `tint` is `TINT[state]` and `flags` 0 (SP4a spec §5.5); SP5a (spec §1.3, provisional until SP8a's `FACE_TEX`): the
+ * two faces of an `oak_log` state along its axis take `LOG_END_LAYER`, `frame` is 1 for `glass`, and the mesh pass is
+ * the state's (key A keeps the state, so logs of different axes never merge). The face tables, the corner light, the
+ * merge loop and the corner positions are `mesh/faces.ts`'s, shared with `mesh/fluid.ts`.
  */
-import { FULL_FACES, GLASS, ICE, PASS, SHAPE, TINT } from '../world/blocks/index';
+import { FULL_FACES, GLASS, ICE, PASS, REGISTRY, SHAPE, TINT } from '../world/blocks/index';
 import { FLUID_LAVA, FLUID_WATER, fluidType } from '../world/blocks/fluid';
 import { ALL_FACES, PASS_CUTOUT, PASS_OPAQUE, SHAPE_BOX } from '../world/blocks/kinds';
 import type { PaddedSection } from '../world/store/padded';
@@ -32,6 +34,7 @@ import { PACK_LAYOUT } from './packing';
 
 // Imported values are read through top-level aliases: vitest's bench mode turns every read of an import binding into
 // a tracked getter, which the per-face loops below would pay thousands of times per section (SP4a Task P1).
+const REG = REGISTRY;
 const PASS_OF = PASS;
 const FULL_FACES_OF = FULL_FACES;
 const TINT_OF = TINT;
@@ -56,6 +59,23 @@ const CORNER_LIGHT = cornerLight;
 const MERGE_SLICE = mergeSlice;
 const QUAD_CORNERS = quadCorners;
 const LAYOUT = PACK_LAYOUT;
+
+/**
+ * The texture layers after the states' (SP5a spec §1.3): layers 0 … `stateCount` − 1 are one per state, then the log
+ * end and still lava. Computed from the registry, so a state appended later never shares a layer with them (58 and 59
+ * in SP5a).
+ */
+export const LOG_END_LAYER: number = REG.stateCount;
+export const LAVA_LAYER: number = REG.stateCount + 1;
+
+/** Per state, the axis (0 x, 1 y, 2 z, as `AXIS_N`) whose two faces take `LOG_END_LAYER`; 3 for every other state. */
+const LOG_AXIS = ((): Uint8Array => {
+  const out = new Uint8Array(REG.stateCount).fill(3);
+  ['x', 'y', 'z'].forEach((axis, a) => {
+    out[REG.parseStateKey(`oak_log[axis=${axis}]`)] = a;
+  });
+  return out;
+})();
 
 /** The per-state tables the mesher reads (the registry's `PASS`, `FULL_FACES` and `TINT`, or injected ones). */
 export interface MeshTables {
@@ -96,6 +116,8 @@ const AO_SHIFT = SOLID.ao.offset;
 const SKY_SHIFT = SOLID.sky.offset;
 const BLOCK_SHIFT = SOLID.block.offset;
 const TINT_SHIFT = SOLID.tint.offset;
+const FRAME_BIT = 1 << SOLID.frame.offset;
+const LOG_END = LOG_END_LAYER;
 const FULL = ALL;
 
 /** Key A's bits: layer 0-9, tint 10-12, flags 13-16, face 17-19, ao2 of v0 … v3 20-27, and bit 31 "a face here". */
@@ -165,11 +187,15 @@ export function meshSolid(p: PaddedSection, o: MeshOptions, b: MeshBuilder, t: M
   }
 }
 
-/** Writes one merged quad: corners in 1/8 units, the four data words from the keys, and its diagonal. */
+/**
+ * Writes one merged quad: corners in 1/8 units, the four data words from the keys, and its diagonal. Key A holds the
+ * state: its face along a log's axis takes the log-end layer, glass sets `frame`, and the pass is the state's.
+ */
 function emit(f: number, d: number, i: number, j: number, w: number, h: number, ka: number, kb: number, b: MeshBuilder, pass: Uint8Array): void {
   QUAD_CORNERS(f, d, i, j, w, h, CORNERS);
-  const layer = ka & LAYER_MASK;
-  const base = layer | f << FACE_SHIFT | (ka >>> KA_TINT & 7) << TINT_SHIFT;
+  const s = ka & LAYER_MASK;
+  const layer = LOG_AXIS[s] === AX_N[f] ? LOG_END : s;
+  const base = (layer | f << FACE_SHIFT | (ka >>> KA_TINT & 7) << TINT_SHIFT | (s === GLASS_STATE ? FRAME_BIT : 0)) >>> 0;
   const a0 = ka >>> KA_AO & 3;
   const a1 = ka >>> (KA_AO + 2) & 3;
   const a2 = ka >>> (KA_AO + 4) & 3;
@@ -178,6 +204,6 @@ function emit(f: number, d: number, i: number, j: number, w: number, h: number, 
   WORDS[1] = base | a1 << AO_SHIFT | (kb >>> 4 & 15) << SKY_SHIFT | (kb >>> 20 & 15) << BLOCK_SHIFT;
   WORDS[2] = base | a2 << AO_SHIFT | (kb >>> 8 & 15) << SKY_SHIFT | (kb >>> 24 & 15) << BLOCK_SHIFT;
   WORDS[3] = base | a3 << AO_SHIFT | (kb >>> 12 & 15) << SKY_SHIFT | (kb >>> 28 & 15) << BLOCK_SHIFT;
-  const mp: MeshPass = pass[layer] === CUTOUT ? 1 : 0;
+  const mp: MeshPass = pass[s] === CUTOUT ? 1 : 0;
   b.quad(mp, CORNERS, WORDS, flipDiagonal(a0, a1, a2, a3));
 }

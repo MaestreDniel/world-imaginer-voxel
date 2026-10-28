@@ -214,7 +214,7 @@ function createGl(host: HTMLElement, mask: boolean): Gl {
 export function decodeWords(): Uint32Array {
   const words = new Uint32Array(DECODE_SIDE * DECODE_SIDE);
   const known: number[] = [0, 0xffffffff];
-  const zeroSolid = { layer: 0, face: 0, ao: 0, sky: 0, block: 0, tint: 0, flags: 0 };
+  const zeroSolid = { layer: 0, face: 0, ao: 0, sky: 0, block: 0, tint: 0, flags: 0, frame: 0 };
   const zeroFluid = { layer: 0, face: 0, sky: 0, block: 0, depth: 0, tint: 0, cornerDrop: 0 };
   for (const [k, f] of Object.entries(PACK_LAYOUT.solid)) known.push(packSolid({ ...zeroSolid, [k]: 2 ** f.bits - 1 }));
   for (const [k, f] of Object.entries(PACK_LAYOUT.fluid)) known.push(packFluid({ ...zeroFluid, [k]: 2 ** f.bits - 1 }));

@@ -1,6 +1,6 @@
 /**
- * The still-water mesher (SP4a spec §5.2, §5.5, §5.6; master §4.4; rulings P24, P25), over one section's 18³ padded
- * view, into the translucent pass (2):
+ * The still-water and still-lava mesher (SP4a spec §5.2, §5.5, §5.6; master §4.4; rulings P24, P25; SP5a spec §1.3),
+ * over one section's 18³ padded view, water into the translucent pass (2):
  * - **visibility:** a water voxel (fluid type water; in SP4a always air plus a still source) draws a face against a
  *   neighbour that does not occlude it (PASS opaque with the facing bit in `fullFaces`) and is not water, so also
  *   against glass, ice and the box states, whose own faces toward the water are the ones culled (`greedy.ts`,
@@ -15,21 +15,26 @@
  *   `(layer, tint)` (spec §5.6; the third key is constant in SP4a's world, where a water voxel's state is air, and
  *   keeps a merged quad's words exact if a waterlogged state ever meshes here). Water quads split along v0-v2.
  *
- * The face tables, the corner light, the merge loop and the corner positions are `mesh/faces.ts`'s, shared with
- * `mesh/greedy.ts`. Flowing levels, falling water and lava are SP7's: lava is not meshed here.
+ * Still lava (SP5a spec §1.3): a lava voxel draws a face against a neighbour that does not occlude it and is not lava
+ * (so also against glass, ice and the box states, whose faces toward it are culled), into the opaque pass (0) with the
+ * solid word: `LAVA_LAYER`, water's smooth light, and AO, tint, flags and frame 0, at the voxel's full height. Its
+ * block light 15 makes it bright through the lightmap. The face tables, the corner light, the merge loop and the
+ * corner positions are `mesh/faces.ts`'s, shared with `mesh/greedy.ts`. Flowing levels, falling water and flowing lava
+ * are SP7's.
  */
-import { FLUID_WATER, fluidType, hasFluid } from '../world/blocks/fluid';
+import { FLUID_LAVA, FLUID_WATER, fluidType, hasFluid } from '../world/blocks/fluid';
 import { ALL_FACES, PASS_OPAQUE } from '../world/blocks/kinds';
 import type { NeighborhoodReader } from '../world/store/api';
 import { PAD, type PaddedSection } from '../world/store/padded';
 import type { MeshBuilder } from './builder';
 import { AXIS_N, AXIS_U, AXIS_V, OPPOSITE, ORIGIN, SIGN, STRIDE, cornerLight, mergeSlice, quadCorners, type QuadSink } from './faces';
-import { DEFAULT_MESH_TABLES, type MeshOptions, type MeshTables } from './greedy';
+import { DEFAULT_MESH_TABLES, LAVA_LAYER, type MeshOptions, type MeshTables } from './greedy';
 import { PACK_LAYOUT } from './packing';
 
 // Imported values are read through top-level aliases: vitest's bench mode turns every read of an import binding into
 // a tracked getter, which the per-face loops below would pay thousands of times per section (SP4a Task P1).
 const WATER = FLUID_WATER;
+const LAVA = FLUID_LAVA;
 const typeOf = fluidType;
 const isFluid = hasFluid;
 const OPAQUE = PASS_OPAQUE;
@@ -56,11 +61,19 @@ const DEPTH_SHIFT = FLUID.depth.offset;
 const TINT_SHIFT = FLUID.tint.offset;
 const DROP_SHIFT = FLUID.cornerDrop.offset;
 
+/** Still lava's words (the solid layout, SP5a spec §1.3): the lava layer, the face and the light. */
+const SOLID = LAYOUT.solid;
+const LAVA_BASE = LAVA_LAYER;
+const S_FACE_SHIFT = SOLID.face.offset;
+const S_SKY_SHIFT = SOLID.sky.offset;
+const S_BLOCK_SHIFT = SOLID.block.offset;
+
 /** Water's light per vertex: §5.3's smooth light, AO off. */
 const SMOOTH: MeshOptions = Object.freeze({ ao: false, smoothLight: true });
 
-/** The translucent pass (`MESH_PASS_TRANSLUCENT`). */
+/** The translucent pass (`MESH_PASS_TRANSLUCENT`) and the opaque one (`MESH_PASS_OPAQUE`), lava's. */
 const PASS_WATER = 2;
+const PASS_LAVA = 0;
 
 /** The section-local (`depth`) strides per axis (0 x, 1 y, 2 z), and the padded stride of +y. */
 const LOCAL = [1, 256, 16] as const;
@@ -70,9 +83,13 @@ const UP = SIDE * SIDE;
 const FACE_UP = 4;
 const FACE_DOWN = 5;
 
-/** Key A's bits: face 0-2, depth 3-6, cornerDrop of v0 … v3 7-22 (four bits each), and bit 31 "a face here". */
+/**
+ * Key A's bits: face 0-2, depth 3-6, cornerDrop of v0 … v3 7-22 (four bits each), bit 23 "a lava face" (depth and
+ * cornerDrop 0), and bit 31 "a face here".
+ */
 const KA_DEPTH = 3;
 const KA_DROP = 7;
+const KA_LAVA = 1 << 23;
 const KA_PRESENT = 0x80000000;
 
 /** The slice masks (index v·16 + u), reused by every call (the mesher runs one section at a time). */
@@ -84,9 +101,10 @@ const CORNERS = new Uint8Array(12);
 const WORDS = new Uint32Array(4);
 
 /**
- * Meshes the still water of the padded section `p` into `b`'s translucent pass (pass 2), adding to what `b` holds
- * (SP4a spec §5.6). `depth` holds 4096 values, section-local `y·256 + z·16 + x` (`fluidDepths`); the padded view is
- * used for face visibility and light only.
+ * Meshes the still water of the padded section `p` into `b`'s translucent pass (pass 2) and its still lava into the
+ * opaque pass (pass 0), adding to what `b` holds (SP4a spec §5.6; SP5a spec §1.3). `depth` holds 4096 values,
+ * section-local `y·256 + z·16 + x` (`fluidDepths`; water's only); the padded view is used for face visibility and
+ * light only.
  */
 export function meshFluid(p: PaddedSection, depth: Uint8Array, b: MeshBuilder, t: MeshTables = TABLES): void {
   const { blocks, light, fluid } = p;
@@ -118,11 +136,19 @@ export function meshFluid(p: PaddedSection, depth: Uint8Array, b: MeshBuilder, t
           const m = j * 16 + i;
           MASK_A[m] = 0;
           const v = ORIGIN_AT + d * sa + i * su + j * sv;
-          if (typeOf(fluid[v]!) !== WATER) continue;
+          const ft = typeOf(fluid[v]!);
+          if (ft !== WATER && ft !== LAVA) continue;
           const q = v + normal;
           const ns = blocks[q]!;
           if (pass[ns] === OPAQUE && (full[ns]! & oppBit) !== 0) continue;
-          if (typeOf(fluid[q]!) === WATER) continue;
+          if (typeOf(fluid[q]!) === ft) continue;
+          if (ft === LAVA) {
+            MASK_A[m] = (KA_PRESENT | KA_LAVA | f) >>> 0;
+            MASK_B[m] = CORNER_LIGHT(light, blocks, solid, SMOOTH, q, su, sv, VERTS);
+            MASK_C[m] = 0;
+            any = true;
+            continue;
+          }
           const dep = depth[d * la + i * lu + j * lv]!;
           const top = typeOf(fluid[v + UP]!) === WATER ? 0 : topMask;
           // cornerDrop is 1 on the top corners of a surface voxel (spec §5.5: a still source sits at 8/9).
@@ -140,9 +166,18 @@ export function meshFluid(p: PaddedSection, depth: Uint8Array, b: MeshBuilder, t
   }
 }
 
-/** Writes one merged water quad: full-height corners in 1/8 units and the four fluid data words from the keys. */
+/**
+ * Writes one merged quad at full height (corners in 1/8 units): a water quad's four fluid data words from the keys,
+ * or a lava quad's four solid words (`LAVA_LAYER`, the face, the light) into the opaque pass.
+ */
 function emit(f: number, d: number, i: number, j: number, w: number, h: number, ka: number, kb: number, kc: number, b: MeshBuilder): void {
   QUAD_CORNERS(f, d, i, j, w, h, CORNERS);
+  if ((ka & KA_LAVA) !== 0) {
+    const lava = LAVA_BASE | f << S_FACE_SHIFT;
+    for (let k = 0; k < 4; k++) WORDS[k] = lava | (kb >>> (4 * k) & 15) << S_SKY_SHIFT | (kb >>> (16 + 4 * k) & 15) << S_BLOCK_SHIFT;
+    b.quad(PASS_LAVA, CORNERS, WORDS, false);
+    return;
+  }
   const base = (kc & 0x3FF) | f << FACE_SHIFT | (ka >>> KA_DEPTH & 15) << DEPTH_SHIFT | (kc >>> 10 & 7) << TINT_SHIFT;
   for (let k = 0; k < 4; k++) {
     const sky = kb >>> (4 * k) & 15;

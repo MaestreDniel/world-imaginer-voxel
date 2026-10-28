@@ -127,7 +127,7 @@ describe('meshBoxes', () => {
       const n = [e1[1] * e2[2] - e1[2] * e2[1], e1[2] * e2[0] - e1[0] * e2[2], e1[0] * e2[1] - e1[1] * e2[0]];
       expect(n.map((c) => Math.sign(c) + 0), `face ${f} winding`).toEqual(NORMAL[f]);
       for (const w of q.words) {
-        expect(unpackSolid(w)).toEqual({ layer: TORCH, face: f, ao: 0, sky: 9, block: 14, tint: DEFAULT_MESH_TABLES.tint[TORCH], flags: 0 });
+        expect(unpackSolid(w)).toEqual({ layer: TORCH, face: f, ao: 0, sky: 9, block: 14, tint: DEFAULT_MESH_TABLES.tint[TORCH], flags: 0, frame: 0 });
       }
     }
   });

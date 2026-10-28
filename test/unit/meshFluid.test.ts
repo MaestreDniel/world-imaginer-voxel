@@ -6,10 +6,10 @@
 import { describe, expect, test } from 'vitest';
 import { createMeshBuilder, type MeshBuilder } from '../../src/mesh/builder';
 import { fluidDepths, meshFluid } from '../../src/mesh/fluid';
-import type { MeshTables } from '../../src/mesh/greedy';
-import { unpackFluid, type FluidFields } from '../../src/mesh/packing';
-import { AIR, GLASS, ICE, LADDER, STONE, TORCH } from '../../src/world/blocks/index';
-import { NO_FLUID, WATER_SOURCE } from '../../src/world/blocks/fluid';
+import { LAVA_LAYER, type MeshTables } from '../../src/mesh/greedy';
+import { unpackFluid, unpackSolid, type FluidFields } from '../../src/mesh/packing';
+import { AIR, GLASS, ICE, LADDER, REGISTRY, STONE, TORCH } from '../../src/world/blocks/index';
+import { LAVA_SOURCE, NO_FLUID, WATER_SOURCE } from '../../src/world/blocks/fluid';
 import { PASS_NONE, PASS_OPAQUE } from '../../src/world/blocks/kinds';
 import { SECTIONS } from '../../src/world/store/columnTable';
 import { padIndex, type PaddedSection } from '../../src/world/store/padded';
@@ -239,6 +239,52 @@ describe('meshFluid (SP4a spec §5.6)', () => {
     );
     const faces = allUnitFaces(mesh(p, depthFrom(() => 1), t).passes[2]);
     expect(faces).toContain('8,4,8,3');
+  });
+});
+
+describe('still lava (SP5a spec §1.3)', () => {
+  /** Lava sources at the voxels `at` holds (padded indices), the blocks from `block` (air by default). */
+  const lavaAt = (at: ReadonlySet<number>, block: VoxelFn = () => AIR): PaddedSection =>
+    paddedFrom(block, () => 0xF0, (x, y, z) => (at.has(padIndex(x, y, z)) ? LAVA_SOURCE : NO_FLUID));
+  const one = new Set([padIndex(8, 8, 8)]);
+  const lavaDepth = depthFrom((x, y, z) => (x === 8 && y === 8 && z === 8 ? 1 : 0));
+
+  test('a lava source beside air: 6 faces in pass 0 at layer 59, full height; lava beside lava: none', () => {
+    expect(LAVA_LAYER).toBe(REGISTRY.stateCount + 1);
+    expect(LAVA_LAYER).toBe(59);
+    const { passes } = mesh(lavaAt(one), lavaDepth);
+    expect(passes[1]).toHaveLength(0);
+    expect(passes[2]).toHaveLength(0);
+    expect(passes[0]).toHaveLength(6);
+    expect(allUnitFaces(passes[0])).toEqual(['8,8,8,0', '8,8,8,1', '8,8,8,2', '8,8,8,3', '8,8,8,4', '8,8,8,5']);
+    for (const q of passes[0]) {
+      const f = unpackSolid(q.words[0]!).face;
+      // Full height: the voxel spans 64 … 72 in 1/8 units on every axis, the top at 8·(ly + 1).
+      for (const c of q.corners) for (const v of c) expect([64, 72]).toContain(v);
+      if (f === 4) expect(ys(q)).toEqual([72, 72, 72, 72]);
+      // The solid word layout: the lava layer, its face, no AO, tint or flags, no frame; the open sky's light.
+      for (const w of q.words) expect(unpackSolid(w)).toEqual({ layer: LAVA_LAYER, face: f, ao: 0, sky: 15, block: 0, tint: 0, flags: 0, frame: 0 });
+    }
+    // Two lava voxels side by side: no faces between them, ten in all.
+    const pair = mesh(lavaAt(new Set([padIndex(8, 8, 8), padIndex(9, 8, 8)])), depthFrom(() => 1)).passes[0];
+    const faces = allUnitFaces(pair);
+    expect(faces).toHaveLength(10);
+    expect(faces).not.toContain('8,8,8,1');
+    expect(faces).not.toContain('9,8,8,3');
+    // A section of lava, its padding included: nothing.
+    const sea = paddedFrom(() => AIR, () => 0xF0, () => LAVA_SOURCE);
+    expect(mesh(sea, depthFrom(() => 15)).passes.map((p) => p.length)).toEqual([0, 0, 0]);
+    // Against stone (an opaque full face) its face is culled, as water's is.
+    const floor = mesh(lavaAt(one, (_x, y) => (y <= 7 ? STONE : AIR)), lavaDepth).passes[0];
+    expect(allUnitFaces(floor)).not.toContain('8,8,8,5');
+    expect(floor).toHaveLength(5);
+  });
+
+  test('the lava face against a cutout cube (glass, ice) or a box state stays drawn', () => {
+    const at = new Map([[padIndex(9, 8, 8), GLASS], [padIndex(7, 8, 8), ICE], [padIndex(8, 8, 9), LADDER], [padIndex(8, 8, 7), TORCH]]);
+    const { passes } = mesh(lavaAt(one, (x, y, z) => at.get(padIndex(x, y, z)) ?? AIR), lavaDepth);
+    expect(allUnitFaces(passes[0])).toEqual(['8,8,8,0', '8,8,8,1', '8,8,8,2', '8,8,8,3', '8,8,8,4', '8,8,8,5']);
+    expect(passes[2]).toHaveLength(0);
   });
 });
 

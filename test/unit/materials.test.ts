@@ -246,6 +246,27 @@ describe('materials v1 (SP4a spec §6.4-§6.6)', () => {
     expect(SYSTEMS.batch.terrainOpaque.vertexShader).toContain('const float AO_FACTOR[4] = float[4](1.0, 0.8, 0.6, 0.45);');
   });
 
+  test('the terrain shaders unpack frame (the generated unpack names it) and the fragment GLSL contains the frame discard on vFrame under CUTOUT', () => {
+    expect(packingGlsl()).toContain('uint pkS_frame(uint d) { return (d >> PK_S_FRAME_OFFSET) & PK_S_FRAME_MASK; }');
+    for (const v of VARIANTS) {
+      for (const m of [SYSTEMS[v].terrainOpaque, SYSTEMS[v].terrainCutout]) {
+        expect(m.vertexShader).toContain('flat out uint vFrame;');
+        expect(m.vertexShader).toContain('vFrame = pkS_frame(data);');
+        const src = m.fragmentShader;
+        expect(src).toContain('flat in uint vFrame;');
+        const start = src.indexOf('#ifdef CUTOUT');
+        const cutout = src.slice(start, src.indexOf('#endif', start));
+        expect(cutout).toContain('if (base.a < 0.5) discard;');
+        expect(cutout).toContain('if (vFrame != 0u) {');
+        // The two in-face coordinates of the block-aligned world position (the floating origin is a multiple of 512).
+        expect(cutout).toContain('vec3 cell = fract(vWorldPos);');
+        expect(cutout).toContain('vec2 inFace = vFace == 4u || vFace == 5u ? cell.xz : vFace == 1u || vFace == 3u ? cell.zy : cell.xy;');
+        expect(cutout).toContain('if (all(greaterThanEqual(inFace, vec2(0.0625))) && all(lessThanEqual(inFace, vec2(0.9375)))) discard;');
+        expect(src.indexOf('vFrame != 0u')).toBe(src.lastIndexOf('vFrame != 0u'));
+      }
+    }
+  });
+
   test('dispose frees every material and the lightmap, not the albedo it was given', () => {
     const m = system('mesh');
     const disposed: string[] = [];

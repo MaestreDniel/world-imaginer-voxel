@@ -108,10 +108,11 @@ const WATER_FADE = 1 / 48;
 const WATER_FLOOR = 0.3;
 
 /**
- * The colour of a voxel: its block state's, or water's when the fluid byte holds a fluid on air, darkened with
- * `depth` (blocks below the water surface, 0 at the surface).
+ * The colour of a voxel: its block state's; on air, lava's (`LAVA_COLOR`, SP5a spec §1.3) when the fluid byte holds
+ * lava, or water's when it holds water, darkened with `depth` (blocks below the water surface, 0 at the surface).
  */
 export function voxelRgb(state: number, fluid: number, depth: number): Rgb {
+  if (state === AIR && fluidType(fluid) === FLUID_LAVA) return VOXEL_COLORS.lava;
   if (state === AIR && fluidType(fluid) !== 0) {
     const f = Math.max(WATER_FLOOR, 1 - Math.max(0, depth) * WATER_FADE);
     const [r, g, b] = VOXEL_COLORS.water;
@@ -132,7 +133,7 @@ export function voxelLegend(): readonly VoxelLegendKey[] {
   return STATE_RGB.map((rgb, state) => ({ state, label: REGISTRY.stateKey(state), rgb }));
 }
 
-const isWater = (state: number, fluid: number): boolean => state === AIR && fluidType(fluid) !== 0;
+const isWater = (state: number, fluid: number): boolean => state === AIR && fluidType(fluid) === FLUID_WATER;
 
 /**
  * The slice as an RGBA image, 512 × 384, pixel (i, row) at `sliceIndex(i, y)` (row 0 is y 319). A water voxel's depth

@@ -1,6 +1,7 @@
 import { NearestFilter, SRGBColorSpace } from 'three';
 import { describe, expect, test } from 'vitest';
-import { createFlatColorArray, flatColorLayers } from '../../src/render/textureArray';
+import { LAVA_LAYER, LOG_END_LAYER } from '../../src/mesh/greedy';
+import { createFlatColorArray, flatColorLayers, LOG_END_COLOR } from '../../src/render/textureArray';
 import { FLAT_COLORS, LAVA_COLOR } from '../../src/textures/flatColors';
 import { VOXEL_COLORS } from '../../src/ui/crossSection/voxels';
 import { AIR, PACKED_ICE, REGISTRY } from '../../src/world/blocks/index';
@@ -56,11 +57,11 @@ describe('the flat-colour texture array (SP4a spec §6.3, D14)', () => {
     expect(layer(flatColorLayers(['stone', 'no_such_block']), 1)).toEqual([255, 0, 255, 255]);
   });
 
-  test('createFlatColorArray: 1 × 1 × stateCount, sRGB, nearest, no mipmaps; air (never meshed) is magenta', () => {
+  test('createFlatColorArray: 1 × 1 × (stateCount + 2), sRGB, nearest, no mipmaps; air (never meshed) is magenta', () => {
     const t = createFlatColorArray();
     expect(t.image.width).toBe(1);
     expect(t.image.height).toBe(1);
-    expect(t.image.depth).toBe(REGISTRY.stateCount);
+    expect(t.image.depth).toBe(REGISTRY.stateCount + 2);
     expect(t.colorSpace).toBe(SRGBColorSpace);
     expect(t.magFilter).toBe(NearestFilter);
     expect(t.minFilter).toBe(NearestFilter);
@@ -68,5 +69,26 @@ describe('the flat-colour texture array (SP4a spec §6.3, D14)', () => {
     const data = t.image.data as Uint8Array;
     expect(layer(data, PACKED_ICE)).toEqual([100, 146, 226, 255]);
     expect(layer(data, AIR)).toEqual([255, 0, 255, 255]);
+    // Layers 0 … stateCount − 1 stay one per state (layer = state).
+    expect(Array.from(data.subarray(0, 4 * REGISTRY.stateCount))).toEqual(Array.from(flatColorLayers(NAME_OF_STATE)));
+  });
+
+  test('the array has 60 layers; layer 58\'s colour is the log end\'s, layer 59 lava\'s (SP5a spec §1.3)', () => {
+    const t = createFlatColorArray();
+    expect(t.image.depth).toBe(60);
+    expect([LOG_END_LAYER, LAVA_LAYER]).toEqual([58, 59]);
+    const data = t.image.data as Uint8Array;
+    expect(data.length).toBe(4 * 60);
+    expect(layer(data, LOG_END_LAYER)).toEqual([...LOG_END_COLOR, 255]);
+    expect(layer(data, LAVA_LAYER)).toEqual([...LAVA_COLOR, 255]);
+  });
+
+  test('the log end is lighter than oak_log on every channel and ≥ 24 from every type, the sky, water, lava and unknown', () => {
+    const log = FLAT_COLORS.get('oak_log')!;
+    for (let k = 0; k < 3; k++) expect(LOG_END_COLOR[k]).toBeGreaterThan(log[k]!);
+    const others: [string, Rgb][] = [
+      ...FLAT_COLORS, ['sky', VOXEL_COLORS.sky], ['water', VOXEL_COLORS.water], ['lava', LAVA_COLOR], ['unknown', VOXEL_COLORS.unknown],
+    ];
+    for (const [name, c] of others) expect(dist(LOG_END_COLOR, c), name).toBeGreaterThanOrEqual(24);
   });
 });

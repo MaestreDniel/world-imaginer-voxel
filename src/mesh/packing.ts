@@ -4,7 +4,8 @@
  * `PACK_LAYOUT`, so the mesher and the shaders cannot drift apart.
  *
  * - solid (opaque and cutout): `layer` 0-9, `face` 10-12, `ao` 13-14, `sky` 15-18, `block` 19-22, `tint` 23-25,
- *   `flags` 26-29 (emissive, waving, randomRotate, upper), spare 30-31;
+ *   `flags` 26-29 (emissive, waving, randomRotate, upper), `frame` 30 (glass's thin frame, discarded inside by the
+ *   cutout shader; SP5a spec §1.3, provisional until SP8a), spare 31;
  * - fluid: `layer` 0-9, `face` 10-12, `sky` 13-16, `block` 17-20, `depth` 21-24, `tint` 25-27, `cornerDrop` 28-31
  *   (ninths of a block below the voxel's top).
  */
@@ -23,6 +24,7 @@ export interface SolidFields {
   block: number;
   tint: number;
   flags: number;
+  frame: number;
 }
 
 export interface FluidFields {
@@ -45,6 +47,7 @@ const SOLID: Readonly<Record<keyof SolidFields, PackField>> = Object.freeze({
   block: field(19, 4),
   tint: field(23, 3),
   flags: field(26, 4),
+  frame: field(30, 1),
 });
 
 const FLUID: Readonly<Record<keyof FluidFields, PackField>> = Object.freeze({

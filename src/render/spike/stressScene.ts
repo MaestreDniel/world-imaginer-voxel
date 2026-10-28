@@ -198,7 +198,7 @@ function column(seed: number, cx: number, cz: number): ColumnMeshPayload {
         for (let k = 0; k < 4; k++) {
           data[vq + k] = packSolid({
             layer, face, ao: Math.floor(r() * 4), sky: Math.min(15, Math.max(0, sky + Math.floor(r() * 5) - 2)),
-            block: Math.floor(r() * 16), tint, flags,
+            block: Math.floor(r() * 16), tint, flags, frame: 0,
           });
         }
       }

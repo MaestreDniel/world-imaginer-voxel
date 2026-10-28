@@ -8,7 +8,7 @@
 import { describe, expect, test } from 'vitest';
 import { createMeshBuilder, type MeshBuilder } from '../../src/mesh/builder';
 import { meshFluid } from '../../src/mesh/fluid';
-import { AO_FACTORS, DEFAULT_MESH_TABLES, flipDiagonal, meshSolid, type MeshOptions, type MeshTables } from '../../src/mesh/greedy';
+import { AO_FACTORS, DEFAULT_MESH_TABLES, flipDiagonal, LOG_END_LAYER, meshSolid, type MeshOptions, type MeshTables } from '../../src/mesh/greedy';
 import { unpackFluid, unpackSolid, type SolidFields } from '../../src/mesh/packing';
 import { AIR, DIRT, GLASS, GRASS_BLOCK, ICE, LADDER, REGISTRY, SAND, SHAPE, STONE, TORCH, WALL_TORCH } from '../../src/world/blocks/index';
 import { LAVA_SOURCE, WATER_SOURCE } from '../../src/world/blocks/fluid';
@@ -140,7 +140,7 @@ describe('meshSolid', () => {
       const l = light(8 + nx, 8 + ny, 8 + nz);
       for (const w of q.words) {
         const v = fieldsOf(w);
-        expect(v).toEqual({ layer: STONE, face: f, ao: 0, sky: l >> 4, block: l & 15, tint: DEFAULT_MESH_TABLES.tint[STONE], flags: 0 });
+        expect(v).toEqual({ layer: STONE, face: f, ao: 0, sky: l >> 4, block: l & 15, tint: DEFAULT_MESH_TABLES.tint[STONE], flags: 0, frame: 0 });
       }
       // The unit face on its plane, counter-clockwise seen from outside: (v1 − v0) × (v2 − v0) points along the normal.
       expect(unitFaces(q)).toEqual([`8,8,8,${f}`]);
@@ -423,6 +423,64 @@ describe('meshSolid', () => {
     expect(allUnitFaces(mesh(pair(GLASS, LADDER)).passes[1])).toContain('8,8,8,1');
   });
 
+  test('an axis-x log\'s ±x faces carry layer 58, its other faces its state; two logs of different axes never merge', () => {
+    expect(LOG_END_LAYER).toBe(REGISTRY.stateCount);
+    expect(LOG_END_LAYER).toBe(58);
+    // Each axis: the two faces along it (east/west for x, up/down for y, north/south for z) take the log-end layer.
+    const ends: Record<string, readonly number[]> = { x: [1, 3], y: [4, 5], z: [0, 2] };
+    for (const axis of ['x', 'y', 'z'] as const) {
+      const log = REGISTRY.parseStateKey(`oak_log[axis=${axis}]`);
+      const quads = mesh(paddedFromMap('@ 8 8 8\nL', { L: log })).passes[0];
+      expect(quads, axis).toHaveLength(6);
+      for (const q of quads) {
+        const f = faceOf(q);
+        const want = ends[axis]!.includes(f) ? LOG_END_LAYER : log;
+        for (const w of q.words) expect(fieldsOf(w).layer, `axis ${axis} face ${f}`).toBe(want);
+      }
+    }
+    // Two axis-x logs side by side merge their tops into one quad; an axis-x and an axis-z log do not (key A keeps the
+    // state), though both tops carry their own state's layer.
+    const lx = REGISTRY.parseStateKey('oak_log[axis=x]');
+    const lz = REGISTRY.parseStateKey('oak_log[axis=z]');
+    const tops = (map: string): ReadQuad[] => mesh(paddedFromMap(`@ 8 8 8\n${map}`, { X: lx, Z: lz })).passes[0].filter((q) => faceOf(q) === 4);
+    expect(tops('XX')).toHaveLength(1);
+    const mixed = tops('XZ');
+    expect(mixed).toHaveLength(2);
+    expect(mixed.map((q) => fieldsOf(q.words[0]!).layer).sort((a, b) => a - b)).toEqual([lx, lz].sort((a, b) => a - b));
+    // Their north faces: the x log's bark, the z log's end; two quads.
+    const north = mesh(paddedFromMap('@ 8 8 8\nXZ', { X: lx, Z: lz })).passes[0].filter((q) => faceOf(q) === 0);
+    expect(north).toHaveLength(2);
+    expect(north.map((q) => fieldsOf(q.words[0]!).layer).sort((a, b) => a - b)).toEqual([lx, LOG_END_LAYER]);
+  });
+
+  test('the mesh pass follows the state, not the emitted layer: a cutout log (injected) puts its end faces in pass 1', () => {
+    const lx = REGISTRY.parseStateKey('oak_log[axis=x]');
+    const pass = new Uint8Array(DEFAULT_MESH_TABLES.pass);
+    pass[lx] = PASS_CUTOUT;
+    const m = mesh(paddedFromMap('@ 8 8 8\nL', { L: lx }), ON, { ...DEFAULT_MESH_TABLES, pass });
+    expect(m.passes[0]).toHaveLength(0);
+    expect(m.passes[1]).toHaveLength(6);
+    expect(m.passes[1].filter((q) => fieldsOf(q.words[0]!).layer === LOG_END_LAYER).map(faceOf).sort()).toEqual([1, 3]);
+  });
+
+  test('glass\'s words carry bit 30 (frame), stone\'s do not', () => {
+    const glass = mesh(paddedFromMap('@ 8 8 8\nG', { G: GLASS })).passes[1];
+    expect(glass).toHaveLength(6);
+    for (const q of glass) {
+      for (const w of q.words) {
+        expect(fieldsOf(w).frame).toBe(1);
+        expect((w >>> 30) & 1).toBe(1);
+        expect(fieldsOf(w).layer).toBe(GLASS);
+      }
+    }
+    for (const s of [STONE, ICE]) {
+      const m = mesh(paddedFromMap('@ 8 8 8\nB', { B: s }));
+      const quads = [...m.passes[0], ...m.passes[1]];
+      expect(quads, REGISTRY.stateKey(s)).toHaveLength(6);
+      for (const q of quads) for (const w of q.words) expect((w >>> 30) & 1, REGISTRY.stateKey(s)).toBe(0);
+    }
+  });
+
   test('every emitted word unpacks to in-range fields', () => {
     // A seeded random section of stone, dirt, grass and air with random light, its border included.
     let seed = 12345;
@@ -462,7 +520,7 @@ describe('meshSolid', () => {
         for (const w of q.words) {
           const f = fieldsOf(w);
           const ok = [STONE, DIRT, GRASS_BLOCK].includes(f.layer) && f.face < 6 && f.ao < 4 && f.sky < 16 && f.block < 16
-            && f.tint === DEFAULT_MESH_TABLES.tint[f.layer] && f.flags === 0 && (o.ao || f.ao === 0);
+            && f.tint === DEFAULT_MESH_TABLES.tint[f.layer] && f.flags === 0 && f.frame === 0 && (o.ao || f.ao === 0);
           if (!ok) bad.push(JSON.stringify(f));
         }
       }
