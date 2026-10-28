@@ -47,7 +47,9 @@ export interface Help {
   setRd(rd: number | null): void;
 }
 
-const GROUP_TITLES: Readonly<Record<KeyEntry['group'], string>> = { move: 'Move', speed: 'Speed', world: 'World', view: 'View' };
+const GROUP_TITLES: Readonly<Record<KeyEntry['group'], string>> = {
+  move: 'Move', speed: 'Speed', world: 'World', view: 'View', build: 'Build',
+};
 
 /**
  * Undo and redo belong to the session, not the key map (SP4c spec §2.4), so the generated table does not name them.

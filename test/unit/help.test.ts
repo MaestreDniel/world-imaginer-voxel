@@ -54,7 +54,24 @@ describe('mountHelp (SP4a spec §7.4, D31)', () => {
     }
     expect(rows.length).toBe(DEFAULT_KEYMAP.length);
     // Grouped: one heading per group, in the map's order.
-    expect(dom.el('help-keys').querySelectorAll('h4').map((h) => h.textContent)).toEqual(['Move', 'Speed', 'World', 'View']);
+    expect(dom.el('help-keys').querySelectorAll('h4').map((h) => h.textContent)).toEqual(['Move', 'Speed', 'World', 'View', 'Build']);
+  });
+
+  test('a Build table lists F, E, 1-9 and the wheel; the Speed rows name Ctrl+wheel (SP5a spec §4.1, D9)', () => {
+    mount();
+    const section = dom.el('help-keys');
+    const headings = section.querySelectorAll('h4');
+    const tables = section.querySelectorAll('table');
+    const build = tables[headings.findIndex((h) => h.textContent === 'Build')]!;
+    const cells = build.querySelectorAll('tr').map((r) => [r.dataset.action, r.querySelectorAll('td')[1]!.textContent]);
+    expect(cells).toEqual([
+      ['toggleWalk', 'F'], ['palette', 'E'],
+      ...[1, 2, 3, 4, 5, 6, 7, 8, 9].map((i) => [`slot${i}`, String(i)]),
+      ['slotNext', 'Wheel down'], ['slotPrev', 'Wheel up'],
+    ]);
+    const rows = section.querySelectorAll('tr');
+    expect(rows.find((r) => r.dataset.action === 'speedUp')!.querySelectorAll('td')[1]!.textContent).toBe('Ctrl+Wheel up / + / =');
+    expect(rows.find((r) => r.dataset.action === 'speedDown')!.querySelectorAll('td')[1]!.textContent).toBe('Ctrl+Wheel down / -');
   });
 
   test('the help names undo and redo, which no key-map entry carries (SP4c spec §2.4)', () => {

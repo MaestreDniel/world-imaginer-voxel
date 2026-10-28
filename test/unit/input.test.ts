@@ -10,20 +10,26 @@ function setup(textFocus = false, activeAtStart = true) {
   const addSpy = vi.spyOn(target, 'addEventListener');
   const actions: Action[] = [];
   const looks: Array<[number, number]> = [];
+  const buttons: Array<[0 | 1 | 2, boolean]> = [];
   let text = textFocus;
   let active = activeAtStart;
+  let ctrlAsSlot = false;
   const input = attachInput(target as unknown as HTMLElement, {
     onAction: (a) => actions.push(a),
     onLook: (dx, dy) => looks.push([dx, dy]),
+    onButton: (b, down) => buttons.push([b, down]),
+    wheelCtrlAsSlot: () => ctrlAsSlot,
     isTextFocus: () => text,
     active: () => active,
     doc: doc as unknown as Pick<Document, 'addEventListener' | 'removeEventListener' | 'pointerLockElement'>,
     win: win as unknown as Pick<Window, 'addEventListener' | 'removeEventListener'>,
   });
   return {
-    target, doc, win, addSpy, actions, looks, input,
+    target, doc, win, addSpy, actions, looks, buttons, input,
     setText: (v: boolean) => { text = v; },
     setActive: (v: boolean) => { active = v; },
+    setCtrlAsSlot: (v: boolean) => { ctrlAsSlot = v; },
+    lock: () => { doc.pointerLockElement = target; },
   };
 }
 
@@ -31,6 +37,7 @@ const key = (type: 'keydown' | 'keyup', code: string, k: string, mods: { ctrlKey
   Object.assign(new Event(type, { cancelable: true }), { code, key: k, ctrlKey: false, shiftKey: false, altKey: false, metaKey: false, repeat: false, ...mods });
 const wheel = (deltaY: number, ctrlKey = false, deltaMode = 0) => Object.assign(new Event('wheel', { cancelable: true }), { deltaY, deltaX: 0, deltaMode, ctrlKey });
 const mouse = (dx: number, dy: number) => Object.assign(new Event('mousemove'), { movementX: dx, movementY: dy });
+const button = (type: 'mousedown' | 'mouseup', b: number) => Object.assign(new Event(type, { cancelable: true }), { button: b });
 
 describe('input (SP4a spec §7.1, master §4.17)', () => {
   test('keydown of a bound action while the world has focus calls preventDefault, Ctrl held included (Ctrl+D, Ctrl+S, Ctrl+A)', () => {
@@ -59,7 +66,7 @@ describe('input (SP4a spec §7.1, master §4.17)', () => {
     input.dispose();
   });
 
-  test('wheel with Ctrl held changes the speed and calls preventDefault (listener registered with passive: false)', () => {
+  test('Ctrl+wheel steps the speed and the plain wheel steps the slot, both prevented (listener registered with passive: false; SP5a spec §4.1)', () => {
     const { target, addSpy, actions, input } = setup();
     const call = addSpy.mock.calls.find((c) => c[0] === 'wheel');
     expect(call, 'no wheel listener on the target').toBeDefined();
@@ -73,7 +80,39 @@ describe('input (SP4a spec §7.1, master §4.17)', () => {
     const plain = wheel(-100);
     target.dispatchEvent(plain);
     expect(plain.defaultPrevented).toBe(true);
-    expect(actions).toEqual(['speedUp', 'speedDown', 'speedUp']);
+    const plainDown = wheel(100);
+    target.dispatchEvent(plainDown);
+    expect(plainDown.defaultPrevented).toBe(true);
+    expect(actions).toEqual(['speedUp', 'speedDown', 'slotPrev', 'slotNext']);
+    input.dispose();
+  });
+
+  test('with wheelCtrlAsSlot true, Ctrl+wheel up → slotPrev, and + still → speedUp (walking, SP5a spec §4.1, D9)', () => {
+    const { target, doc, actions, input, setCtrlAsSlot } = setup();
+    setCtrlAsSlot(true);
+    target.dispatchEvent(wheel(-100, true));
+    target.dispatchEvent(wheel(100, true));
+    target.dispatchEvent(wheel(-100));
+    doc.dispatchEvent(key('keydown', 'BracketRight', '+'));
+    expect(actions).toEqual(['slotPrev', 'slotNext', 'slotPrev', 'speedUp']);
+    // Read on every event: back in flight, Ctrl+wheel steps the speed again.
+    setCtrlAsSlot(false);
+    target.dispatchEvent(wheel(-100, true));
+    expect(actions.at(-1)).toBe('speedUp');
+    input.dispose();
+  });
+
+  test('F, E and the digits fire their build actions once per press, prevented', () => {
+    const { doc, actions, input } = setup();
+    const f = key('keydown', 'KeyF', 'f');
+    doc.dispatchEvent(f);
+    expect(f.defaultPrevented).toBe(true);
+    doc.dispatchEvent(key('keydown', 'KeyF', 'f', { repeat: true }));
+    doc.dispatchEvent(key('keydown', 'KeyE', 'e'));
+    doc.dispatchEvent(key('keydown', 'Digit1', '!'));
+    doc.dispatchEvent(key('keydown', 'Digit9', '9'));
+    expect(actions).toEqual(['toggleWalk', 'palette', 'slot1', 'slot9']);
+    expect(input.held.size).toBe(0);
     input.dispose();
   });
 
@@ -171,12 +210,12 @@ describe('input (SP4a spec §7.1, master §4.17)', () => {
     // One notch of a mouse wheel (Chrome: 100-120 px) is one step.
     target.dispatchEvent(wheel(-100));
     target.dispatchEvent(wheel(120));
-    expect(actions).toEqual(['speedUp', 'speedDown']);
+    expect(actions).toEqual(['slotPrev', 'slotNext']);
     actions.length = 0;
     // A touchpad swipe: twenty events of 5 px are one step, not twenty; every event is still prevented.
     const events = Array.from({ length: 20 }, () => wheel(5));
     for (const e of events) target.dispatchEvent(e);
-    expect(actions).toEqual(['speedDown']);
+    expect(actions).toEqual(['slotNext']);
     expect(events.every((e) => e.defaultPrevented)).toBe(true);
     input.dispose();
   });
@@ -205,7 +244,7 @@ describe('input (SP4a spec §7.1, master §4.17)', () => {
 
   test('an unbound key is not prevented', () => {
     const { doc, actions, input } = setup();
-    for (const [code, k, ctrl] of [['KeyF', 'f', true], ['KeyF', 'f', false], ['KeyQ', 'q', false], ['Tab', 'Tab', false]] as const) {
+    for (const [code, k, ctrl] of [['KeyG', 'g', true], ['KeyG', 'g', false], ['KeyQ', 'q', false], ['Tab', 'Tab', false]] as const) {
       const e = key('keydown', code, k, { ctrlKey: ctrl });
       doc.dispatchEvent(e);
       expect(e.defaultPrevented, `${ctrl ? 'Ctrl+' : ''}${k}`).toBe(false);
@@ -231,6 +270,56 @@ describe('input (SP4a spec §7.1, master §4.17)', () => {
     input.dispose();
   });
 
+  test('the first click while unlocked only requests the lock (no onButton); a click while locked requests nothing', () => {
+    const { target, buttons, input, lock } = setup();
+    target.dispatchEvent(button('mousedown', 0));
+    target.dispatchEvent(button('mouseup', 0));
+    target.dispatchEvent(new Event('click'));
+    expect(target.requestPointerLock).toHaveBeenCalledTimes(1);
+    expect(buttons).toEqual([]);
+    lock();
+    target.dispatchEvent(button('mousedown', 0));
+    target.dispatchEvent(button('mouseup', 0));
+    target.dispatchEvent(new Event('click'));
+    expect(target.requestPointerLock).toHaveBeenCalledTimes(1);
+    expect(buttons).toEqual([[0, true], [0, false]]);
+    input.dispose();
+  });
+
+  test('locked: LMB, MMB, RMB down/up reach onButton, MMB\'s down prevented (no autoscroll); not active(): nothing', () => {
+    const { target, buttons, input, lock, setActive } = setup();
+    lock();
+    const mmb = button('mousedown', 1);
+    for (const e of [button('mousedown', 0), button('mouseup', 0), mmb, button('mouseup', 1), button('mousedown', 2), button('mouseup', 2)]) target.dispatchEvent(e);
+    expect(buttons).toEqual([[0, true], [0, false], [1, true], [1, false], [2, true], [2, false]]);
+    expect(mmb.defaultPrevented).toBe(true);
+    // The back and forward buttons (3, 4) are not the world's.
+    target.dispatchEvent(button('mousedown', 3));
+    target.dispatchEvent(button('mouseup', 4));
+    expect(buttons).toHaveLength(6);
+    buttons.length = 0;
+    setActive(false);
+    const mmb2 = button('mousedown', 1);
+    for (const e of [button('mousedown', 0), button('mouseup', 0), mmb2, button('mousedown', 2), button('mouseup', 2)]) target.dispatchEvent(e);
+    expect(buttons).toEqual([]);
+    expect(mmb2.defaultPrevented).toBe(false);
+    input.dispose();
+  });
+
+  test('contextmenu and auxclick are default-prevented on the canvas, locked or not', () => {
+    const { target, input, lock } = setup();
+    for (const locked of [false, true]) {
+      if (locked) lock();
+      const menu = new Event('contextmenu', { cancelable: true });
+      const aux = new Event('auxclick', { cancelable: true });
+      target.dispatchEvent(menu);
+      target.dispatchEvent(aux);
+      expect(menu.defaultPrevented, `contextmenu, locked ${locked}`).toBe(true);
+      expect(aux.defaultPrevented, `auxclick, locked ${locked}`).toBe(true);
+    }
+    input.dispose();
+  });
+
   test('a rejected pointer-lock request is swallowed', async () => {
     const { target, input } = setup();
     target.requestPointerLock.mockImplementationOnce(() => Promise.reject(new Error('SecurityError')));
@@ -250,6 +339,7 @@ describe('input (SP4a spec §7.1, master §4.17)', () => {
         ['KeyW', 'w'], ['KeyA', 'a'], ['KeyS', 's'], ['KeyD', 'd'], ['Space', ' '], ['ShiftLeft', 'Shift'], ['ShiftRight', 'Shift'],
         ['ControlLeft', 'Control'], ['ControlRight', 'Control'], ['KeyT', 't'], ['KeyH', 'h'], ['F1', 'F1'], ['F3', 'F3'],
         ['BracketRight', '+'], ['Equal', '='], ['Slash', '-'], ['Minus', '-'],
+        ['KeyF', 'f'], ['KeyE', 'e'], ['Digit1', '1'], ['Digit9', '9'],
       ];
       for (const [code, k] of keys) {
         const e = key('keydown', code, k);
@@ -288,7 +378,7 @@ describe('input (SP4a spec §7.1, master §4.17)', () => {
       }
     });
 
-    test('the wheel while inactive changes no speed (still prevented: the world never scrolls)', () => {
+    test('the wheel while inactive changes no speed and no slot (still prevented: the world never scrolls)', () => {
       const { target, actions, input, setActive } = setup(false, false);
       const events = [wheel(-100), wheel(120), wheel(-100, true), ...Array.from({ length: 30 }, () => wheel(5))];
       for (const e of events) target.dispatchEvent(e);
@@ -296,7 +386,7 @@ describe('input (SP4a spec §7.1, master §4.17)', () => {
       expect(events.every((e) => e.defaultPrevented)).toBe(true);
       // Nothing carried over from the inactive scroll: the first active notch is one step.
       setActive(true);
-      target.dispatchEvent(wheel(-100));
+      target.dispatchEvent(wheel(-100, true));
       expect(actions).toEqual(['speedUp']);
       input.dispose();
     });
@@ -333,7 +423,7 @@ describe('input (SP4a spec §7.1, master §4.17)', () => {
   });
 
   test('dispose removes every listener', () => {
-    const { target, doc, win, actions, looks, input } = setup();
+    const { target, doc, win, actions, looks, buttons, input } = setup();
     doc.dispatchEvent(key('keydown', 'KeyW', 'w'));
     input.dispose();
     doc.pointerLockElement = target;
@@ -350,6 +440,15 @@ describe('input (SP4a spec §7.1, master §4.17)', () => {
     expect(looks).toEqual([]);
     expect(w.defaultPrevented).toBe(false);
     expect(target.requestPointerLock).not.toHaveBeenCalled();
+    target.dispatchEvent(button('mousedown', 0));
+    target.dispatchEvent(button('mouseup', 0));
+    expect(buttons).toEqual([]);
+    const menu = new Event('contextmenu', { cancelable: true });
+    const aux = new Event('auxclick', { cancelable: true });
+    target.dispatchEvent(menu);
+    target.dispatchEvent(aux);
+    expect(menu.defaultPrevented).toBe(false);
+    expect(aux.defaultPrevented).toBe(false);
     // Neither blur nor a keyup reaches it after dispose: held stays as it was.
     win.dispatchEvent(new Event('blur'));
     doc.dispatchEvent(key('keyup', 'KeyW', 'w'));

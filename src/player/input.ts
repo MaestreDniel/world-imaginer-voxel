@@ -5,7 +5,13 @@ import { DEFAULT_KEYMAP, resolveKey, resolveWheel, type Action, type KeyEntry } 
  * the key map only. Movement and sprint are held while their keys are down; every other action fires once per press.
  * A bound key's default is prevented with Ctrl held too, so sprint-strafing never opens the browser's dialogs
  * (Ctrl+D, Ctrl+S, Ctrl+A), while unbound keys and Ctrl combinations pass (Review Focus 1, ruling P40). The wheel
- * listener is not passive, so Ctrl+wheel changes the speed instead of zooming the page.
+ * listener is not passive, so Ctrl+wheel changes the speed instead of zooming the page; the plain wheel changes the
+ * hotbar slot (SP5a spec §4.1, D9), and Ctrl+wheel does too while `wheelCtrlAsSlot()` (walking: Ctrl is sprint).
+ *
+ * Mouse buttons (SP5a spec §4.1, D6): the first click on the canvas only takes the pointer lock; while the lock is held
+ * and the world is active, `mousedown`/`mouseup` of LMB, MMB and RMB (0, 1, 2) reach `onButton` (MMB's down is
+ * prevented, so no autoscroll), which only queues the edit for the frame step. The right-click menu and `auxclick`
+ * never act on the canvas.
  *
  * input.ts touches only the target, doc and win it is given; it reads no globals (ruling P41): keys and
  * `pointerlockchange` arrive on the document, `blur` on the window, clicks, mouse movement and the wheel on the target.
@@ -70,6 +76,10 @@ export function attachInput(
   o: {
     onAction(a: Action): void;
     onLook(dx: number, dy: number): void;
+    /** LMB (0), MMB (1) or RMB (2) down or up on the canvas while it holds the lock and `active()` (SP5a spec §4.1). */
+    onButton?(b: 0 | 1 | 2, down: boolean): void;
+    /** While true the wheel resolves as if Ctrl were up, so Ctrl+wheel steps the slot (walking, SP5a spec D9). */
+    wheelCtrlAsSlot?(): boolean;
     isTextFocus(): boolean;
     /** Whether the world owns the controls (SP4c spec §2.3); checked for every action but `map`. */
     active(): boolean;
@@ -114,7 +124,10 @@ export function attachInput(
     if (o.doc.pointerLockElement !== target) clear();
   };
   const onBlur = (): void => clear();
+  const locked = (): boolean => o.doc.pointerLockElement === target;
+  // Only while unlocked: a click while locked is an edit button's (onButton), so the first click never edits.
   const onClick = (): void => {
+    if (locked()) return;
     try {
       // Chromium returns a promise that rejects when the lock is refused (e.g. right after Esc); others return nothing.
       const r: unknown = target.requestPointerLock();
@@ -124,16 +137,26 @@ export function attachInput(
     }
   };
   const onMouseMove = (e: MouseEvent): void => {
-    if (o.doc.pointerLockElement !== target) return;
+    if (!locked()) return;
     o.onLook(e.movementX, e.movementY);
   };
+  const onMouseButton = (e: MouseEvent, isDown: boolean): void => {
+    if (!locked() || !o.active()) return;
+    const b = e.button;
+    if (b !== 0 && b !== 1 && b !== 2) return; // the back and forward buttons are not the world's
+    if (b === 1 && isDown) e.preventDefault(); // no autoscroll
+    o.onButton?.(b, isDown);
+  };
+  const onMouseDown = (e: MouseEvent): void => onMouseButton(e, true);
+  const onMouseUp = (e: MouseEvent): void => onMouseButton(e, false);
+  const preventDefault = (e: Event): void => e.preventDefault();
   const wheelSteps = createWheelSteps();
   const onWheel = (e: WheelEvent): void => {
     // The world never scrolls, and Ctrl+wheel must change the speed, not zoom the page.
     e.preventDefault();
     if (o.isTextFocus() || !o.active()) return;
     const n = wheelSteps.push(e.deltaY, e.deltaMode);
-    const a = resolveWheel(n, map);
+    const a = resolveWheel(n, e.ctrlKey && o.wheelCtrlAsSlot?.() !== true, map);
     if (a === null) return;
     for (let i = Math.abs(n); i > 0; i--) o.onAction(a);
   };
@@ -145,6 +168,10 @@ export function attachInput(
   o.win.addEventListener('blur', onBlur);
   target.addEventListener('click', onClick);
   target.addEventListener('mousemove', onMouseMove);
+  target.addEventListener('mousedown', onMouseDown);
+  target.addEventListener('mouseup', onMouseUp);
+  target.addEventListener('contextmenu', preventDefault);
+  target.addEventListener('auxclick', preventDefault);
   target.addEventListener('wheel', onWheel, wheelOpts);
 
   return {
@@ -157,6 +184,10 @@ export function attachInput(
       o.win.removeEventListener('blur', onBlur);
       target.removeEventListener('click', onClick);
       target.removeEventListener('mousemove', onMouseMove);
+      target.removeEventListener('mousedown', onMouseDown);
+      target.removeEventListener('mouseup', onMouseUp);
+      target.removeEventListener('contextmenu', preventDefault);
+      target.removeEventListener('auxclick', preventDefault);
       target.removeEventListener('wheel', onWheel, wheelOpts);
     },
   };

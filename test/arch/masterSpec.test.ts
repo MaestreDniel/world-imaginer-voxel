@@ -1228,6 +1228,19 @@ describe('master spec amendments (SP5a §9)', () => {
     expect(risk7).not.toContain('edits-during-light fuzz');
   });
 
+  test('§4.17\'s Fly line and §5.9 name SP5a\'s wheel, Ctrl+wheel and Ctrl+Z / Ctrl+Y (SP5a spec §4.1, §4.5, §9)', () => {
+    const at417 = text.indexOf('### 4.17 Player');
+    const fly = text.slice(at417, text.indexOf('### 4.18 ', at417)).split('\n').find((l) => l.startsWith('- **Fly:**'));
+    expect(fly, 'no `- **Fly:**` line in §4.17').toBeDefined();
+    expect(fly).toContain('until SP5a\'s hotbar took the wheel; Ctrl+wheel and `+`/`-` since SP5a');
+    expect(fly).not.toContain('SP5 choosing its modifier');
+    const at59 = text.indexOf('### 5.9 Controls');
+    const s59 = text.slice(at59, text.indexOf('## 6. ', at59));
+    expect(s59).toContain('Ctrl+Z / Ctrl+Y (blocks while the world owns the controls, the map\'s settings while the map does; SP5a)');
+    expect(s59).toContain('1-9 and wheel (hotbar), Ctrl+wheel and `+`/`-` (fly speed)');
+    expect(s59.match(/\(fly speed\)/g), '§5.9 names the fly speed once').toHaveLength(1);
+  });
+
   test('§1 names each SP5a module in its entry, which exists', () => {
     for (const [head, token, file] of SP5A_MODULES) {
       const entry = layoutEntry(head);

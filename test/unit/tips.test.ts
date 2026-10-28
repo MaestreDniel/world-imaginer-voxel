@@ -10,8 +10,20 @@ describe('loading-screen tips (SP4a spec §8.3, §7.3; ruling P45)', () => {
     const named = new Set(TIP_TEMPLATES.flatMap(placeholders));
     const missing = DEFAULT_KEYMAP.map((e) => e.action).filter((a) => !named.has(a));
     expect(missing).toEqual([]);
-    expect(DEFAULT_KEYMAP.length).toBe(14);
+    expect(DEFAULT_KEYMAP.length).toBe(27);
     expect(named.has('map')).toBe(true);
+    // SP5a's build group (SP5a spec §4.1, §4.6): F, E, 1-9 and the wheel.
+    for (const a of ['toggleWalk', 'palette', 'slot1', 'slot5', 'slot9', 'slotNext', 'slotPrev']) expect(named.has(a), a).toBe(true);
+  });
+
+  test('the speed tip names Ctrl+wheel, and a build tip names F, E, 1-9 and the wheel (SP5a spec §4.1, §4.6)', () => {
+    const text = tips(DEFAULT_KEYMAP).join('\n');
+    expect(text).toContain('Ctrl+Wheel up / + / =');
+    expect(text).toContain('Ctrl+Wheel down / -');
+    expect(text).toContain('1 2 3 4 5 6 7 8 9');
+    expect(text).toContain('Wheel up');
+    expect(text).toMatch(/\bF switches between flying and walking/);
+    expect(text).toMatch(/\bE opens the block palette/);
   });
 
   test('each filled tip contains a binding label of every action its template names', () => {
