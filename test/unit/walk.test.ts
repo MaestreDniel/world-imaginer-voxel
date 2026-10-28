@@ -9,8 +9,11 @@ import v8 from 'node:v8';
 import { runInNewContext } from 'node:vm';
 import { describe, expect, test } from 'vitest';
 import {
-  AIR_DRAG, EYE, MAX_TICKS, TICK_S, arriveFeet, createWalkState, setFeet, walkStep, walkTick, type WalkReader, type WalkState,
+  AIR_DRAG, EYE, GRAVITY, MAX_TICKS, TICK_S, UNSTUCK_MAX_Y, VDRAG, arriveFeet, createWalkState, setFeet, walkStep, walkTick,
+  type WalkReader, type WalkState,
 } from '../../src/player/walk';
+import { toggleMode, type FlyState } from '../../src/player/fly';
+import { bodyIntersects } from '../../src/player/physics';
 import type { Action } from '../../src/player/keymap';
 import { AIR, ICE, LADDER, PACKED_ICE, STONE } from '../../src/world/blocks/index';
 import { LAVA_SOURCE, WATER_SOURCE } from '../../src/world/blocks/fluid';
@@ -93,6 +96,38 @@ const steady = (w: WalkState, r: WalkReader, k: Keys): [number, number, number] 
   run(w, r, 200, k);
   return run(w, r, 1, k);
 };
+
+/**
+ * Warms `call` up over 100,000 calls, then expects the heap to grow by less than 256 KB over 10,000 more (the
+ * zeroAlloc.test.ts pattern: up to three attempts, an attempt that saw a GC not counted).
+ */
+function expectNoAllocation(call: () => void): void {
+  for (let i = 0; i < 100_000; i++) call();
+  v8.setFlagsFromString('--expose-gc');
+  const gc = runInNewContext('gc') as () => void;
+  const JIT_SPACE = /^(code|trusted|shared_trusted)_/;
+  const heapUsed = (): number => {
+    let b = 0;
+    for (const s of v8.getHeapSpaceStatistics()) if (!JIT_SPACE.test(s.space_name)) b += s.space_used_size;
+    return b;
+  };
+  const readings: number[] = [];
+  for (let t = 0; t < 3; t++) {
+    gc();
+    gc();
+    const before = heapUsed();
+    const profiler = new v8.GCProfiler();
+    profiler.start();
+    for (let i = 0; i < 10_000; i++) call();
+    const after = heapUsed();
+    const gcs = profiler.stop()?.statistics.length ?? 0;
+    if (gcs > 0) continue;
+    readings.push(after - before);
+    if (after - before < 256 * 1024) break;
+  }
+  expect(readings.length, 'every attempt saw a GC').toBeGreaterThan(0);
+  expect(readings[readings.length - 1]!, `heap growth over 10,000 calls (attempts: ${readings.join(', ')})`).toBeLessThan(256 * 1024);
+}
 
 /** The distance slid along x after letting go (until the body stops). */
 function slide(w: WalkState, r: WalkReader): number {
@@ -329,6 +364,159 @@ describe('the walking teleport\'s snap (SP5a spec §3.4, D15)', () => {
   });
 });
 
+describe('the unstuck scan (SP5a spec §3.1, §3.2, D29; Review Focus 3)', () => {
+  test('`bodyIntersects` reads the body\'s voxels: a voxel collides over [by, by + top); a −1 read and `none` never', () => {
+    const r = canned();
+    // Standing on the floor's top (70) or 1e-7 above it, as a sweep leaves it: free; any lower, inside.
+    expect(bodyIntersects(r, 0.5, 70, 0.5)).toBe(false);
+    expect(bodyIntersects(r, 0.5, 70 + 1e-7, 0.5)).toBe(false);
+    expect(bodyIntersects(r, 0.5, 69.999, 0.5)).toBe(true);
+    // A stone at head height, and one beside the footprint's edge (0.3 from the centre).
+    r.set(0, 71, 0, STONE).set(2, 70, 0, STONE);
+    expect(bodyIntersects(r, 0.5, 70, 0.5)).toBe(true);
+    expect(bodyIntersects(r, 1.5, 72, 0.5)).toBe(false);
+    expect(bodyIntersects(r, 1.69, 70, 0.5)).toBe(false);
+    expect(bodyIntersects(r, 1.71, 70, 0.5)).toBe(true);
+    // A ceiling stone at y 73: the head 1e-7 under its underside, as a sweep leaves it, is free; 0.01 into it, not.
+    r.set(4, 73, 0, STONE);
+    expect(bodyIntersects(r, 4.5, 73 - 1e-7 - 1.8, 0.5)).toBe(false);
+    expect(bodyIntersects(r, 4.5, 71.21, 0.5)).toBe(true);
+    // A ladder (`none`) and an unpublished column's −1 do not collide.
+    r.set(5, 70, 0, LADDER);
+    expect(bodyIntersects(r, 5.5, 70, 0.5)).toBe(false);
+    r.unpublishFromX(10);
+    expect(bodyIntersects(r, 10.5, 60, 0.5)).toBe(false);
+    // A 0.5 ledge collides over [70, 70.5) only.
+    const ledge: WalkReader = { ...canned(), blockAt: (_x, y) => (y < 70 ? STONE : y === 70 ? ICE : AIR), collideTop: (st) => (st === ICE ? 0.5 : 1) };
+    expect(bodyIntersects(ledge, 0.5, 70.4, 0.5)).toBe(true);
+    expect(bodyIntersects(ledge, 0.5, 70.5, 0.5)).toBe(false);
+  });
+
+  test('F with the eye 1 block under the ground\'s top T: on the first tick the feet are at T + 0.38 (whole-block lifts keep the fraction), and after falling the body stands on T (feet T, `onGround`)', () => {
+    const T = 70;
+    const r = canned({ floorTop: T });
+    const fly: FlyState = { x: 0.5, y: T - 1, z: 0.5, yaw: 0, pitch: 0, vx: 0, vy: 0, vz: 0, speed: 12, mode: 'fly' };
+    const w = createWalkState();
+    toggleMode(fly, w);
+    const feet = T - 1 - EYE;
+    expect(w.y).toBe(feet);
+    walkTick(w, r, 0, 0, false, false, false);
+    expect(w.y).toBe(feet + 1 + 1 + 1);
+    expect(w.y).toBeCloseTo(T + 0.38, 12);
+    // No interpolation from inside the ground: the previous feet are the lifted ones too.
+    expect(w.py).toBe(w.y);
+    expect(w.vy).toBeCloseTo(-GRAVITY * VDRAG, 12);
+    run(w, r, 20);
+    expect(w.y).toBeCloseTo(T, 6);
+    expect(w.y).toBeGreaterThanOrEqual(T);
+    expect(w.onGround).toBe(true);
+  });
+
+  test('after the snap onto a column published with other terrain: the footprint reaches a neighbour 2 blocks higher than `heightAt` under the centre, so the body is lifted onto it on the same tick', () => {
+    // Stone below y 65; at block x 1 stone up to y 66 (its top 67). The centre at x 0.9 is over x 0 (`heightAt` 65),
+    // the footprint (0.6 … 1.2) over x 1 too.
+    const r = canned({ floorTop: 65, unpublishedFromX: -Infinity });
+    for (let z = -2; z <= 2; z++) r.set(1, 65, z, STONE).set(1, 66, z, STONE);
+    const w = createWalkState();
+    arriveFeet(w, 0.9, 90, 0.5);
+    run(w, r, 5);
+    expect(w.y).toBe(90);
+    r.unpublishFromX(Infinity);
+    expect(r.heightAt('motionBlocking', 0, 0)).toBe(65);
+    walkTick(w, r, 0, 0, false, false, false);
+    expect([w.snapY, w.snapPending]).toEqual([65, false]);
+    expect([w.py, w.y, w.vy]).toEqual([67, 67, -GRAVITY * VDRAG]);
+    run(w, r, 20);
+    expect(w.y).toBeCloseTo(67, 6);
+    expect(w.onGround).toBe(true);
+  });
+
+  test('Review Focus 3: the column under the feet (feet at a whole y) re-published with ground 3 blocks above the feet: on the next tick the feet are at the ground\'s top, then the body falls normally', () => {
+    // Standing on the old ground (top 70).
+    const before = canned({ floorTop: 70 });
+    const w = bodyAt(0.5, 70, 0.5);
+    run(w, before, 5);
+    expect(w.y).toBeCloseTo(70, 6);
+    const y0 = w.y;
+    // An Apply frees the column (the body hovers, as the unloaded rule says), then re-publishes it with its top at 73.
+    const after = canned({ floorTop: 73, unpublishedFromX: -Infinity });
+    run(w, after, 10);
+    expect(w.y).toBe(y0);
+    after.unpublishFromX(Infinity);
+    walkTick(w, after, 0, 0, false, false, false);
+    // Lifted by whole blocks from 70: the first free y is the ground's top.
+    expect(y0).toBe(70);
+    expect(w.y).toBe(73);
+    expect(w.py).toBe(w.y);
+    // Then gravity as on any tick: vy (0 − 0.08) · 0.98, and the body stays on the new ground.
+    expect(w.vy).toBeCloseTo(-GRAVITY * VDRAG, 12);
+    run(w, after, 1);
+    expect(w.y).toBeCloseTo(73, 6);
+    expect(w.y).toBeGreaterThanOrEqual(73);
+    expect(w.onGround).toBe(true);
+    expect(w.vy).toBeCloseTo(-GRAVITY * VDRAG, 12);
+  });
+
+  test('a stone placed into the body (an edit landing): lifted on the next tick', () => {
+    const r = canned();
+    const w = bodyAt(0.5, 70, 0.5);
+    run(w, r, 5);
+    const y0 = w.y;
+    // A stone at the chest (y 71): the first free y is above it, standing on it.
+    r.set(0, 71, 0, STONE);
+    walkTick(w, r, 0, 0, false, false, false);
+    expect(w.y).toBe(y0 + 2);
+    expect(w.y).toBeCloseTo(72, 6);
+    run(w, r, 20);
+    expect(w.y).toBeCloseTo(72, 6);
+    expect(w.onGround).toBe(true);
+  });
+
+  test('feet 1 block inside the stone floor of a 2-block air pocket under 10 blocks of stone: lifted into the pocket (the first free y), not above the stone', () => {
+    // Stone below y 92; a 3 × 3 pocket of air at y 80 and 81; 10 blocks of stone (82 … 91) above it.
+    const r = canned({ floorTop: 92 });
+    for (let x = -1; x <= 1; x++) for (let z = -1; z <= 1; z++) r.set(x, 80, z, AIR).set(x, 81, z, AIR);
+    const w = bodyAt(0.5, 79, 0.5, false);
+    walkTick(w, r, 0, 0, false, false, false);
+    expect(w.y).toBe(80);
+    run(w, r, 20);
+    expect(w.y).toBeCloseTo(80, 6);
+    expect(w.onGround).toBe(true);
+  });
+
+  test('a canned reader solid from −64 to 450: the scan stops with the feet at 400 (`UNSTUCK_MAX_Y`)', () => {
+    const r: WalkReader = {
+      blockAt: (_x, y) => (y >= -64 && y < 450 ? STONE : AIR),
+      fluidAt: () => 0,
+      publishedAt: () => true,
+      heightAt: () => 450,
+    };
+    expect(UNSTUCK_MAX_Y).toBe(400);
+    const w = bodyAt(0.5, 70, 0.5, false);
+    walkTick(w, r, 0, 0, false, false, false);
+    expect(w.y).toBe(400);
+    // The tick started from rest there (vy 0), then gravity.
+    expect(w.vy).toBeCloseTo(-GRAVITY * VDRAG, 12);
+    // A fraction left by a lift does not take it past 400 either.
+    const f = bodyAt(0.5, 70.25, 0.5, false);
+    walkTick(f, r, 0, 0, false, false, false);
+    expect(f.y).toBe(400);
+  });
+
+  test('the scan allocates nothing over 10,000 ticks that lift the body', () => {
+    // Stone below y 70, a stone at the chest at x 0: every tick starts inside it and is lifted.
+    const r = canned().set(0, 71, 0, STONE);
+    const w = createWalkState();
+    const call = (): void => {
+      setFeet(w, 0.5, 69.5, 0.5);
+      walkTick(w, r, 0, 0, false, false, false);
+    };
+    call();
+    expect(w.y).toBe(72.5);
+    expectNoAllocation(call);
+  });
+});
+
 describe('walkStep: the accumulator and the drawn eye (SP5a spec §3.1, §3.2)', () => {
   const held = (...a: Action[]): ReadonlySet<Action> => new Set<Action>(a);
 
@@ -416,30 +604,6 @@ describe('walkStep: the accumulator and the drawn eye (SP5a spec §3.1, §3.2)',
       if ((k & 1023) === 1023) setFeet(w, 0.5, 70, 0.5);
       k++;
     };
-    for (let i = 0; i < 100_000; i++) call();
-    v8.setFlagsFromString('--expose-gc');
-    const gc = runInNewContext('gc') as () => void;
-    const JIT_SPACE = /^(code|trusted|shared_trusted)_/;
-    const heapUsed = (): number => {
-      let b = 0;
-      for (const s of v8.getHeapSpaceStatistics()) if (!JIT_SPACE.test(s.space_name)) b += s.space_used_size;
-      return b;
-    };
-    const readings: number[] = [];
-    for (let t = 0; t < 3; t++) {
-      gc();
-      gc();
-      const before = heapUsed();
-      const profiler = new v8.GCProfiler();
-      profiler.start();
-      for (let i = 0; i < 10_000; i++) call();
-      const after = heapUsed();
-      const gcs = profiler.stop()?.statistics.length ?? 0;
-      if (gcs > 0) continue;
-      readings.push(after - before);
-      if (after - before < 256 * 1024) break;
-    }
-    expect(readings.length, 'every attempt saw a GC').toBeGreaterThan(0);
-    expect(readings[readings.length - 1]!, `heap growth over 10,000 calls (attempts: ${readings.join(', ')})`).toBeLessThan(256 * 1024);
+    expectNoAllocation(call);
   });
 });

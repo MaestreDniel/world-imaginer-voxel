@@ -87,6 +87,26 @@ export function solidAt(r: VoxelReader, bx: number, by: number, bz: number): boo
 }
 
 /**
+ * Whether the body standing at feet (x, y, z) overlaps a colliding voxel (the unstuck scan's test, SP5a spec §3.2,
+ * D29): its at most 2 × 3 × 2 voxels, each colliding over [by, by + top) as in the sweeps, so a body a sweep left `EPS`
+ * from a face is free. A −1 read (an unpublished column) and `none` never intersect. Allocates nothing.
+ */
+export function bodyIntersects(r: VoxelReader, x: number, y: number, z: number): boolean {
+  const x1 = Math.ceil(x + HALF) - 1;
+  const y1 = Math.ceil(y + H) - 1;
+  const z1 = Math.ceil(z + HALF) - 1;
+  for (let bx = Math.floor(x - HALF); bx <= x1; bx++) {
+    for (let by = Math.floor(y); by <= y1; by++) {
+      for (let bz = Math.floor(z - HALF); bz <= z1; bz++) {
+        const s = r.blockAt(bx, by, bz);
+        if (collides(s) && by + topOf(r, s) > y) return true;
+      }
+    }
+  }
+  return false;
+}
+
+/**
  * Moves `pos` by `span[0]` along y, in ⌈|d| / SUBSTEP⌉ equal substeps whose ends are taken from the start (no drift);
  * true when a voxel cut the move short.
  */

@@ -22,16 +22,18 @@
  * - a walking teleport's snap (SP5a spec §3.4, D15), before all of the above: while `snapPending`, the body hovers by
  *   the unloaded rule until the column under its centre is Published (`heightAt` not null); on that tick both feet go to
  *   its `heightAt('motionBlocking')` (already y + 1 of the highest voxel, fluid included), `snapY` records it and
- *   `snapPending` clears.
+ *   `snapPending` clears;
+ * - unstuck (D29), after the snap and before the rest: when the body intersects a colliding voxel (after F, after the
+ *   snap, after a column under it is Published with other terrain, after an edit lands in it), the feet go up one block
+ *   at a time to the first free y, at most `UNSTUCK_MAX_Y`, and `vy` is 0.
  *
  * Allocates nothing: the reads are view-free (`VoxelReader`), the wish's forward vector goes into one module-level array
  * and the move's result into one reused object.
  */
 import { lookVectorInto } from './fly';
 import type { Action } from './keymap';
-import { BODY_H, BODY_W, moveBody, type MoveOut, type VoxelReader } from './physics';
-import { COLLIDE, STATE_TYPE } from '../world/blocks/index';
-import { COLLIDE_NONE } from '../world/blocks/kinds';
+import { BODY_H, BODY_W, bodyIntersects, moveBody, type MoveOut, type VoxelReader } from './physics';
+import { STATE_TYPE } from '../world/blocks/index';
 import { CLIMBABLE, SLIPPERY } from '../world/blocks/tags';
 import { FLUID_LAVA, FLUID_WATER } from '../world/blocks/fluid';
 
@@ -68,6 +70,8 @@ export const FLUID_MOVE = 0.02;
 export const BANK_HOP_VY = 0.3;
 /** The ladder's vertical clamp and climbing speed (2.35 blocks/s). */
 export const LADDER_V = 0.1175;
+/** The highest feet the unstuck scan lifts to: the top of the flight's range (`frameStep.ts`'s `BOUNDS.yMax`). */
+export const UNSTUCK_MAX_Y = 400;
 
 /** The feet (x, z the body's centre, y its bottom) at the previous and the current tick, the velocity and the clock. */
 export interface WalkState {
@@ -124,8 +128,6 @@ export function arriveFeet(w: WalkState, x: number, y: number, z: number): void 
 }
 
 const TYPE = STATE_TYPE;
-const COLL = COLLIDE;
-const NONE = COLLIDE_NONE;
 const CLIMB = CLIMBABLE;
 const SLIPS = SLIPPERY;
 const WATER = FLUID_WATER;
@@ -139,21 +141,23 @@ const out: MoveOut = { x: 0, y: 0, z: 0, hitX: false, hitY: false, hitZ: false, 
 /** The yaw's horizontal forward vector (x, y, z), pitch 0. */
 const fwd = new Float64Array(3);
 
-/** Whether the body standing at (x, y, z) overlaps no colliding voxel (a voxel collides over [by, by + top)). */
-function bodyFree(r: VoxelReader, x: number, y: number, z: number): boolean {
-  const x1 = Math.ceil(x + HALF) - 1;
-  const y1 = Math.ceil(y + H) - 1;
-  const z1 = Math.ceil(z + HALF) - 1;
-  for (let bx = Math.floor(x - HALF); bx <= x1; bx++) {
-    for (let by = Math.floor(y); by <= y1; by++) {
-      for (let bz = Math.floor(z - HALF); bz <= z1; bz++) {
-        const s = r.blockAt(bx, by, bz);
-        if (s < 0 || COLL[s] === NONE) continue;
-        if (by + (r.collideTop !== undefined ? r.collideTop(s) : 1) > y) return false;
-      }
-    }
+/**
+ * The unstuck scan (SP5a spec §3.2, D29): while the body intersects a colliding voxel, the feet go up one block at a
+ * time (keeping their fraction) to the first free y, at most `UNSTUCK_MAX_Y`, with `vy` zeroed. The tick then starts
+ * from there, so the previous feet are the lifted ones too (no interpolation from inside the blocks).
+ */
+function unstuck(w: WalkState, r: VoxelReader): void {
+  const x = w.x;
+  const z = w.z;
+  let y = w.y;
+  let lifted = false;
+  while (y < UNSTUCK_MAX_Y && bodyIntersects(r, x, y, z)) {
+    y = y + 1 < UNSTUCK_MAX_Y ? y + 1 : UNSTUCK_MAX_Y;
+    lifted = true;
   }
-  return true;
+  if (!lifted) return;
+  w.y = y;
+  w.vy = 0;
 }
 
 /**
@@ -172,6 +176,7 @@ export function walkTick(
       w.snapPending = false;
     }
   }
+  unstuck(w, r);
   const x = w.x;
   const y = w.y;
   const z = w.z;
@@ -253,7 +258,7 @@ export function walkTick(
     vy *= drag;
     vz *= drag;
     vy -= water ? WATER_GRAVITY : LAVA_GRAVITY;
-    if (blocked && bodyFree(r, hopX, out.y + HOP_ROOM, hopZ)) vy = BANK_HOP_VY;
+    if (blocked && !bodyIntersects(r, hopX, out.y + HOP_ROOM, hopZ)) vy = BANK_HOP_VY;
   } else {
     vx *= drag;
     vz *= drag;
