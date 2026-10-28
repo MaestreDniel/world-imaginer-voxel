@@ -147,7 +147,7 @@ function fakeLimiter(cap: FpsCap) {
 }
 const STATE: FrameState = { t: 0.25, brightness: 0.3, eyeSky: 15, rd: 8, fogBand: 0.1 };
 
-const flyAt = (x: number, z: number, yaw = 0): FlyState => ({ x, y: 80, z, yaw, pitch: 0, vx: 0, vy: 0, vz: 0, speed: SPEED_DEFAULT });
+const flyAt = (x: number, z: number, yaw = 0): FlyState => ({ x, y: 80, z, yaw, pitch: 0, vx: 0, vy: 0, vz: 0, speed: SPEED_DEFAULT, mode: 'fly' });
 
 let dom: ReturnType<typeof installDom>;
 let keysWin: EventTarget;

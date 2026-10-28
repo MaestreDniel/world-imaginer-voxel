@@ -53,6 +53,7 @@ import type { ColumnMeshPayload } from '../../src/mesh/column';
 import { SPEED_DEFAULT, stepFly, type FlyState } from '../../src/player/fly';
 import { createHotbar } from '../../src/player/hotbar';
 import type { Action } from '../../src/player/keymap';
+import { createWalkState } from '../../src/player/walk';
 import { firstOrigin } from '../../src/render/floatingOrigin';
 import { createFpsLimiter } from '../../src/render/fpsLimiter';
 import { createMaterialSystem } from '../../src/render/materials/index';
@@ -303,7 +304,7 @@ function fakeWorld() {
 const flush = (): Promise<void> => new Promise((r) => setImmediate(r));
 
 /** The camera at rest: fractional values, as at run time (whole numbers would be Smis, never boxed). */
-const restingFly = (): FlyState => ({ x: 8.5, y: 100.5, z: 8.5, yaw: 37.5, pitch: -10.5, vx: 0, vy: 0, vz: 0, speed: SPEED_DEFAULT });
+const restingFly = (): FlyState => ({ x: 8.5, y: 100.5, z: 8.5, yaw: 37.5, pitch: -10.5, vx: 0, vy: 0, vz: 0, speed: SPEED_DEFAULT, mode: 'fly' });
 
 /** A coordinator at RD 12 (the page's default) filled around the camera, with every set done and nothing in flight. */
 async function filledCoordinator(cam: { x: number; z: number; yawDeg: number }): Promise<Coordinator> {
@@ -505,6 +506,8 @@ async function buildAtRest(): Promise<AtRest> {
 
   const step = createFrameStep({
     fly,
+    // Flying: the walk state is only held (rulings R22).
+    walk: createWalkState(),
     held: () => none,
     paused,
     stopped: () => false,

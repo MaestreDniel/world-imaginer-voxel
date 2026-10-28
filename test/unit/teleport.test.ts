@@ -31,7 +31,7 @@ function fakePool(ctx: GenContext) {
 }
 
 function camera(): FlyState {
-  return { x: 10.25, y: 120, z: -7.75, yaw: 123, pitch: -31, vx: 3, vy: -2, vz: 1.5, speed: SPEED_DEFAULT * 2 };
+  return { x: 10.25, y: 120, z: -7.75, yaw: 123, pitch: -31, vx: 3, vy: -2, vz: 1.5, speed: SPEED_DEFAULT * 2, mode: 'fly' };
 }
 
 /** A teleport over `pool` with a fresh camera and eye light 4; its arrivals and failures recorded. */

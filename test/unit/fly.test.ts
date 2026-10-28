@@ -2,13 +2,16 @@ import { PerspectiveCamera, Vector3 } from 'three';
 import { describe, expect, test } from 'vitest';
 import {
   SPEED_DEFAULT, SPEED_MAX, SPEED_MIN, SPEED_STEP, SPRINT, TAU,
-  applyCameraRotation, forwardXZ, look, lookVector, lookVectorInto, stepFly, stepSpeed,
+  applyCameraRotation, forwardXZ, look, lookVector, lookVectorInto, stepFly, stepSpeed, toggleMode,
   type FlyBounds, type FlyState,
 } from '../../src/player/fly';
 import type { Action } from '../../src/player/keymap';
+import type { VoxelReader } from '../../src/player/physics';
+import { EYE, createWalkState, walkStep } from '../../src/player/walk';
+import { AIR } from '../../src/world/blocks/index';
 
 const state = (o: Partial<FlyState> = {}): FlyState => ({
-  x: 0, y: 100, z: 0, yaw: 0, pitch: 0, vx: 0, vy: 0, vz: 0, speed: SPEED_DEFAULT, ...o,
+  x: 0, y: 100, z: 0, yaw: 0, pitch: 0, vx: 0, vy: 0, vz: 0, speed: SPEED_DEFAULT, mode: 'fly', ...o,
 });
 /** Only the vertical range: SP4b streams the world, so there is no horizontal limit (SP4b spec §6.1). */
 const BOUNDS: FlyBounds = { yMin: -64, yMax: 400 };
@@ -185,5 +188,46 @@ describe('fly controller (SP4a spec §7.1; SP4b spec §6.1: horizontal flight)',
     const s = fly(state(), held('forward'), 60, 1);
     fly(s, held(), 60, 2);
     expect(Math.hypot(s.vx, s.vy, s.vz)).toBeLessThan(1e-6);
+  });
+});
+
+describe('modes: F switches flight and walking (SP5a spec §3.1, D1)', () => {
+  /** Air everywhere, every column Published: a walking body falls. */
+  const air: VoxelReader = { blockAt: () => AIR, fluidAt: () => 0, publishedAt: () => true };
+
+  test('F flies → walks: the feet at eye − 1.62, the drawn eye unchanged on that frame, then falling', () => {
+    const s = state({ x: 3.25, y: 100.3, z: -7.5, yaw: 40, vx: 5, vy: -3, vz: 2 });
+    const w = createWalkState();
+    w.vy = 0.5;
+    w.acc = 0.03;
+    toggleMode(s, w);
+    expect(s.mode).toBe('walk');
+    expect([w.px, w.py, w.pz, w.x, w.y, w.z]).toEqual([3.25, 100.3 - EYE, -7.5, 3.25, 100.3 - EYE, -7.5]);
+    expect([w.vx, w.vy, w.vz, w.acc]).toEqual([0, 0, 0, 0]);
+    // The frame of the switch runs no tick (1/60 s owed): the eye drawn is where the flight left it.
+    walkStep(w, air, held(), s.yaw, 1 / 60, s);
+    expect(s.x).toBe(3.25);
+    expect(s.y).toBeCloseTo(100.3, 12);
+    expect(s.z).toBe(-7.5);
+    // Then the body falls, frame after frame.
+    let y = s.y;
+    for (let k = 0; k < 30; k++) {
+      walkStep(w, air, held(), s.yaw, 1 / 60, s);
+      expect(s.y).toBeLessThanOrEqual(y);
+      y = s.y;
+    }
+    expect(s.y).toBeLessThan(100.3 - 0.5);
+  });
+
+  test('walks → flies: eye kept, velocity 0', () => {
+    const s = state({ x: 1.5, y: 80.62, z: 2.5, vx: 0.2, vy: -0.4, vz: 0.1, mode: 'walk' });
+    const w = createWalkState();
+    toggleMode(s, w);
+    expect(s.mode).toBe('fly');
+    expect([s.x, s.y, s.z]).toEqual([1.5, 80.62, 2.5]);
+    expect([s.vx, s.vy, s.vz]).toEqual([0, 0, 0]);
+    // Back in flight, Space rises from the kept eye.
+    stepFly(s, held('up'), 0.1, BOUNDS);
+    expect(s.y).toBeGreaterThan(80.62);
   });
 });

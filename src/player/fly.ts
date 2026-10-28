@@ -1,4 +1,5 @@
 import type { Action } from './keymap';
+import { EYE, setFeet, type WalkState } from './walk';
 
 /**
  * The fly controller (SP4a spec §7.1-§7.2; SP4b spec §6.1, D19: horizontal flight; master §4.17). No collisions:
@@ -14,7 +15,14 @@ import type { Action } from './keymap';
  * clockwise seen from +y and stays in [0, 360); pitch is positive upward, within ±PITCH_LIMIT.
  */
 
-export interface FlyState { x: number; y: number; z: number; yaw: number; pitch: number; vx: number; vy: number; vz: number; speed: number }
+/**
+ * The camera, flying or walking (SP5a spec §3.1, D1): `y` is the eye in both modes; walking, the walk step writes the
+ * drawn eye into `x`, `y` and `z`. `mode` is `'fly'` at the reveal and after every load (it is not remembered).
+ */
+export interface FlyState {
+  x: number; y: number; z: number; yaw: number; pitch: number; vx: number; vy: number; vz: number; speed: number;
+  mode: 'fly' | 'walk';
+}
 
 /** Where the camera may fly: y −64 … 400, with no horizontal limit (SP4b spec §6.1). */
 export interface FlyBounds { yMin: -64; yMax: 400 }
@@ -120,6 +128,23 @@ export function stepFly(s: FlyState, held: ReadonlySet<Action>, dtS: number, bou
 export function look(s: FlyState, dx: number, dy: number, sensitivity: number): void {
   s.yaw = wrapYaw(s.yaw + dx * sensitivity);
   s.pitch = Math.min(PITCH_LIMIT, Math.max(-PITCH_LIMIT, s.pitch - dy * sensitivity));
+}
+
+/**
+ * F (SP5a spec §3.1, D1). Fly → walk: both the previous and the current feet at the eye − `EYE` (no interpolation
+ * across the switch) with the walk's velocity zeroed (`setFeet`); the walk's next tick runs the unstuck scan.
+ * Walk → fly: the drawn eye kept. Either way the flight's velocity is zeroed.
+ */
+export function toggleMode(fly: FlyState, w: WalkState): void {
+  if (fly.mode === 'fly') {
+    setFeet(w, fly.x, fly.y - EYE, fly.z);
+    fly.mode = 'walk';
+  } else {
+    fly.mode = 'fly';
+  }
+  fly.vx = 0;
+  fly.vy = 0;
+  fly.vz = 0;
 }
 
 /** One speed step: ×SPEED_STEP up or ÷SPEED_STEP down, clamped to [SPEED_MIN, SPEED_MAX] (spec §7.2). */

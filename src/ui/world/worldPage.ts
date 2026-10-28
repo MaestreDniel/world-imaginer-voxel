@@ -108,15 +108,16 @@ import { SimFailed, createBrowserSim, type SimClient } from '../../engine/simCli
 import { createThrottle } from '../../engine/throttle';
 import { createUploadBudget } from '../../engine/uploadBudget';
 import { StoreFullError, WorkerFailed, createBrowserPool, poolSize, type WorkerPool } from '../../engine/workerPool';
-import { SPEED_DEFAULT, applyCameraRotation, look, lookVectorInto, stepSpeed, type FlyState } from '../../player/fly';
+import { SPEED_DEFAULT, applyCameraRotation, look, lookVectorInto, stepSpeed, toggleMode, type FlyState } from '../../player/fly';
 import { attachInput, isTextEntry } from '../../player/input';
 import { createHotbar, type Hotbar } from '../../player/hotbar';
 import { bodyOf, breakAt, emptyBucketAt, pickAt, placeAt, type BodyBox } from '../../player/interaction';
 import { DEFAULT_KEYMAP, type Action } from '../../player/keymap';
-import { REACH_FLY, castRay, createRayHit, type RayHit } from '../../player/raycast';
+import { REACH_FLY, REACH_WALK, castRay, createRayHit, type RayHit } from '../../player/raycast';
+import { EYE, createWalkState, type WalkState } from '../../player/walk';
 import { createFpsLimiter, type FpsLimiter } from '../../render/fpsLimiter';
 import type { FrameState } from '../../render/frameState';
-import { createWorldRenderer, type GpuEstimate, type WorldRenderer } from '../../render/renderer';
+import { NEAR_FLY, NEAR_WALK, createWorldRenderer, type GpuEstimate, type WorldRenderer } from '../../render/renderer';
 import { createSectionRendererCounts, selectSectionRenderer, type SectionRendererKind } from '../../render/sectionRenderer';
 import { outlineBounds } from '../../render/selection';
 import type { Edit } from '../../workers/protocol';
@@ -1096,9 +1097,10 @@ const CLICK_QUEUE_CAP = 16;
  * hold repeat, `holdRepeat.ts`, which also queues a held button's repeats), and the page's aim runs the queue in the
  * frame's second read section against the target aimed then, so a click never reads the store outside a read section.
  * LMB breaks (`breakAt`); RMB places the hotbar's active slot (`placeAt`: a block or a bucket's source, against the
- * flying body and the look's yaw), or with the empty bucket drains the first fluid on a `'fluid'` ray from the eye
- * (`emptyBucketAt`); each edit posted through the edit path. MMB picks the aimed type into the hotbar (`pickAt` →
- * `hotbar.pick`). A refused or missed click does nothing.
+ * body and the look's yaw: flying the eye's, walking the walk state's current tick, rulings R23), or with the empty
+ * bucket drains the first fluid on a `'fluid'` ray from the eye within the mode's reach (`emptyBucketAt`); each edit
+ * posted through the edit path. MMB picks the aimed type into the hotbar (`pickAt` → `hotbar.pick`). A refused or
+ * missed click does nothing.
  */
 export interface ClickQueue {
   push(b: 0 | 1 | 2): void;
@@ -1112,12 +1114,14 @@ export function createClickQueue(o: {
   post(edit: Edit): void;
   /** RMB places its active slot; MMB picks into it. */
   readonly hotbar: Pick<Hotbar, 'slots' | 'active' | 'pick'>;
-  /** The eye and the look: the body a place must not enter, a ladder's facing, the empty bucket's ray. */
-  readonly fly: Pick<FlyState, 'x' | 'y' | 'z' | 'yaw' | 'pitch'>;
+  /** The eye, the look and the mode: the body a place must not enter, a ladder's facing, the empty bucket's ray. */
+  readonly fly: Pick<FlyState, 'x' | 'y' | 'z' | 'yaw' | 'pitch' | 'mode'>;
+  /** Walking, the body is the walk state's current feet (not the eye drawn between two ticks). */
+  readonly walk: Pick<WalkState, 'x' | 'y' | 'z'>;
   /** A place's column gate (the page: `editState === 0`). */
   editable(cx: number, cz: number): boolean;
 }): ClickQueue {
-  const { fly } = o;
+  const { fly, walk } = o;
   const buttons = new Uint8Array(CLICK_QUEUE_CAP);
   let n = 0;
   const body: BodyBox = { minX: 0, minY: 0, minZ: 0, maxX: 0, maxY: 0, maxZ: 0 };
@@ -1125,9 +1129,14 @@ export function createClickQueue(o: {
   const dir = new Float64Array(3);
   const place = (hit: RayHit, read: Pick<VoxelStore, 'blockAt' | 'fluidAt'>): Edit | null => {
     const slot = o.hotbar.slots[o.hotbar.active]!;
-    if (!('tool' in slot)) return placeAt(hit, slot, fly.yaw, bodyOf('fly', fly.x, fly.y, fly.z, body), read, o.editable);
+    if (!('tool' in slot)) {
+      const b = fly.mode === 'walk'
+        ? bodyOf('walk', walk.x, walk.y + EYE, walk.z, body)
+        : bodyOf('fly', fly.x, fly.y, fly.z, body);
+      return placeAt(hit, slot, fly.yaw, b, read, o.editable);
+    }
     lookVectorInto(dir, fly.yaw, fly.pitch);
-    castRay(read, fly.x, fly.y, fly.z, dir[0]!, dir[1]!, dir[2]!, REACH_FLY, 'fluid', fluidHit);
+    castRay(read, fly.x, fly.y, fly.z, dir[0]!, dir[1]!, dir[2]!, fly.mode === 'walk' ? REACH_WALK : REACH_FLY, 'fluid', fluidHit);
     return emptyBucketAt(fluidHit, read);
   };
   return {
@@ -1167,16 +1176,16 @@ export interface Aim {
 
 /**
  * The page's aim (SP5a spec §3.5, D8), which the frame step runs on every rendered tick inside its second read section:
- * the DDA from the eye along the look (`lookVectorInto`; reach `REACH_FLY` until the walk mode), then the outline around
- * the hit (`outlineBounds`: the cell, or a box state's box), relative to the floating origin, computed on every hit;
- * then the outline set to that box, or hidden: while paused, while the pointer is free, with no target, and without the
- * HUD (captures, panoramas, the bench). The queued clicks (`clicks`) run between the two against the hit, a miss
- * included (it empties the queue); a paused frame drops them unrun. Before they run the held button's repeat (`repeat`,
- * §4.1, D6) is ticked at the frame's time, so a repeat is aimed by this frame's DDA; a paused frame (the palette, the map
- * owning the controls, the help) stops it instead. Allocates nothing.
+ * the DDA from the eye along the look (`lookVectorInto`; reach `REACH_WALK` walking, `REACH_FLY` flying), then the
+ * outline around the hit (`outlineBounds`: the cell, or a box state's box), relative to the floating origin, computed
+ * on every hit; then the outline set to that box, or hidden: while paused, while the pointer is free, with no target,
+ * and without the HUD (captures, panoramas, the bench). The queued clicks (`clicks`) run between the two against the
+ * hit, a miss included (it empties the queue); a paused frame drops them unrun. Before they run the held button's
+ * repeat (`repeat`, §4.1, D6) is ticked at the frame's time, so a repeat is aimed by this frame's DDA; a paused frame
+ * (the palette, the map owning the controls, the help) stops it instead. Allocates nothing.
  */
 export function createAim(o: {
-  readonly fly: Pick<FlyState, 'x' | 'y' | 'z' | 'yaw' | 'pitch'>;
+  readonly fly: Pick<FlyState, 'x' | 'y' | 'z' | 'yaw' | 'pitch' | 'mode'>;
   readonly world: Pick<WorldRenderer, 'origin' | 'setOutline' | 'hideOutline'>;
   /** True while the canvas holds the pointer lock. */
   locked(): boolean;
@@ -1196,7 +1205,7 @@ export function createAim(o: {
     box,
     aim(read, paused) {
       lookVectorInto(dir, fly.yaw, fly.pitch);
-      castRay(read, fly.x, fly.y, fly.z, dir[0]!, dir[1]!, dir[2]!, REACH_FLY, 'block', hit);
+      castRay(read, fly.x, fly.y, fly.z, dir[0]!, dir[1]!, dir[2]!, fly.mode === 'walk' ? REACH_WALK : REACH_FLY, 'block', hit);
       if (paused) {
         o.repeat?.hold.stop();
         o.clicks?.clear();
@@ -1220,6 +1229,26 @@ export function createAim(o: {
       else world.setOutline(box[0], box[1], box[2], box[3], box[4], box[5]);
     },
   };
+}
+
+/**
+ * F (SP5a spec §3.1, D1): switches flight and walking (`toggleMode`), sets the camera's near plane for the new mode
+ * (`NEAR_WALK` walking, `NEAR_FLY` flying) and ends a held button's repeat (§4.1).
+ */
+export function switchMode(o: {
+  readonly fly: FlyState;
+  readonly walk: WalkState;
+  readonly world: Pick<WorldRenderer, 'setNear'>;
+  readonly repeat: Pick<HoldRepeat, 'stop'>;
+}): void {
+  toggleMode(o.fly, o.walk);
+  o.world.setNear(o.fly.mode === 'walk' ? NEAR_WALK : NEAR_FLY);
+  o.repeat.stop();
+}
+
+/** `+` and `-` (and Ctrl+wheel in flight) step the flight speed; walking they do nothing (SP5a spec §3.3). */
+export function speedKey(fly: FlyState, dir: 1 | -1): void {
+  if (fly.mode === 'fly') stepSpeed(fly, dir);
 }
 
 /**
@@ -1565,7 +1594,9 @@ export function mountWorldPage(root: HTMLElement, q: WorldQuery, hash: string, o
     await world.compile();
     if (state !== 'loading') return;
     const view = firstView((x, z) => motionBlockingAt(store, x, z), at.x, at.z, { y: q.y, yaw: q.yaw, pitch: q.pitch }, eyeAbove);
-    const fly: FlyState = { x: at.x, y: clamp(view.y, Y_MIN, Y_MAX), z: at.z, yaw: view.yaw, pitch: view.pitch, vx: 0, vy: 0, vz: 0, speed: SPEED_DEFAULT };
+    // Every load opens in flight (SP5a spec D1); F switches.
+    const fly: FlyState = { x: at.x, y: clamp(view.y, Y_MIN, Y_MAX), z: at.z, yaw: view.yaw, pitch: view.pitch, vx: 0, vy: 0, vz: 0, speed: SPEED_DEFAULT, mode: 'fly' };
+    const walk = createWalkState();
     // Wraps the yaw into [0, 360) and clamps the pitch; a query's valid degrees pass unchanged (ruling P42).
     look(fly, 0, 0, 0);
     const fixedT = opts.timeHours === undefined || opts.timeHours === null ? null : ((((opts.timeHours - 6) / 24) % 1) + 1) % 1;
@@ -1875,6 +1906,7 @@ export function mountWorldPage(root: HTMLElement, q: WorldQuery, hash: string, o
         const benchAim = createAim({ fly, world, locked: () => true, hud });
         const step = createFrameStep({
           fly,
+          walk,
           held: () => noKeys,
           // The script sets the pose: the fly step never runs.
           paused: () => true,
@@ -2281,8 +2313,9 @@ export function mountWorldPage(root: HTMLElement, q: WorldQuery, hash: string, o
 
     const onAction = (a: Action): void => {
       switch (a) {
-        case 'speedUp': stepSpeed(fly, 1); break;
-        case 'speedDown': stepSpeed(fly, -1); break;
+        // Walking, + and - do nothing (SP5a spec §3.3).
+        case 'speedUp': speedKey(fly, 1); break;
+        case 'speedDown': speedKey(fly, -1); break;
         case 'timeSpeed': if (fixedT === null) speedIndex = (speedIndex + 1) % TIME_SPEEDS.length; break;
         case 'hud': huds?.toggle(); break;
         // H and M close the palette first (SP5a spec §4.4).
@@ -2311,8 +2344,9 @@ export function mountWorldPage(root: HTMLElement, q: WorldQuery, hash: string, o
           break;
         case 'slotNext': hotbar.step(1); break;
         case 'slotPrev': hotbar.step(-1); break;
-        // A mode switch ends a held button's repeat (SP5a spec §4.1).
-        case 'toggleWalk': holdRepeat.stop(); break;
+        // F switches flight and walking and the near plane; a mode switch ends a held button's repeat (SP5a spec §3.1,
+        // §4.1).
+        case 'toggleWalk': switchMode({ fly, walk, world, repeat: holdRepeat }); break;
         default: break; // movement and sprint are held; Esc (releasePointer) is the browser's
       }
     };
@@ -2322,6 +2356,7 @@ export function mountWorldPage(root: HTMLElement, q: WorldQuery, hash: string, o
       post: (edit) => { void actionPost([edit]); },
       hotbar,
       fly,
+      walk,
       editable: (cx, cz) => coordinator.editState(cx, cz) === 0,
     });
     // Hold to repeat (SP5a spec §4.1, D6): a press queues once; with the setting on, a held LMB or RMB is queued again
@@ -2341,6 +2376,8 @@ export function mountWorldPage(root: HTMLElement, q: WorldQuery, hash: string, o
         if (down) holdRepeat.down(b, nowS());
         else holdRepeat.up(b);
       },
+      // Walking, Ctrl is sprint, so Ctrl+wheel steps the slot as the plain wheel does (SP5a spec §4.1, D9).
+      wheelCtrlAsSlot: () => fly.mode === 'walk',
       // Only text-entry controls (spec §7.1): a focused slider or select leaves H and F1 working (final review C-I2).
       isTextFocus: () => isTextEntry(document.activeElement as HTMLElement | null),
       // The world's keys act only while the world owns the controls (SP4c spec §2.3): never while the map owns.
@@ -2432,6 +2469,7 @@ export function mountWorldPage(root: HTMLElement, q: WorldQuery, hash: string, o
     });
     const step = createFrameStep({
       fly,
+      walk,
       held: () => input.held,
       // The flight pauses while the help or the palette is open or the map owns the controls (SP4c spec §2.3; SP5a §4.4).
       paused: () => help.isOpen || palette.isOpen || mapOverlay.owner === 'map',

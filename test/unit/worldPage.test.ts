@@ -21,10 +21,14 @@ import { WORLD_MAP_BPP, worldMapView } from '../../src/ui/world/mapOverlay';
 import { AIR, REGISTRY, STONE } from '../../src/world/blocks/index';
 import { WATER_SOURCE } from '../../src/world/blocks/fluid';
 import { createHotbar } from '../../src/player/hotbar';
+import { SPEED_DEFAULT, type FlyState } from '../../src/player/fly';
+import { attachInput } from '../../src/player/input';
+import { EYE, createWalkState } from '../../src/player/walk';
+import { NEAR_FLY, NEAR_WALK } from '../../src/render/renderer';
 import { createReloader, createWorldUrl, worldHash, type HereState } from '../../src/ui/world/reload';
 import {
   countPendingTimers, countTileCalls, createAim, createClickQueue, createHookEdit, createRdControl, createUndoNotice, createWorldNotices, everyFrameUntil, failBeforeReveal, flushOnPageHide, handleContextLoss,
-  handleStreamEvent, helpChange, installRepeatStop, installUndoKeys, installWiTest, mapKey, offerLowerRd, paletteFirst, onDriverStatus, onSimFailure, rdShownOnLoad, releaseOnFailure, reloadRd, runTeardown, stopAfterFailure,
+  handleStreamEvent, helpChange, installRepeatStop, installUndoKeys, installWiTest, mapKey, offerLowerRd, paletteFirst, onDriverStatus, onSimFailure, rdShownOnLoad, releaseOnFailure, reloadRd, runTeardown, speedKey, stopAfterFailure, switchMode,
   UNDO_NOTICE_MS, type WiTest, type WiTestPage,
 } from '../../src/ui/world/worldPage';
 import { createEditLatency } from '../../src/ui/world/editLatency';
@@ -1326,7 +1330,7 @@ describe('createAim: the DDA and the outline (SP5a spec §3.5, §6.2; Task 23 re
       setOutline: (...b: number[]) => { calls.push(`set ${b.join(',')}`); },
       hideOutline: () => { calls.push('hide'); },
     };
-    const fly = { x: 0.5, y: 70.5, z: 0.5, yaw: 0, pitch: -90 };
+    const fly = { x: 0.5, y: 70.5, z: 0.5, yaw: 0, pitch: -90, mode: 'fly' as const };
     const read = {
       blockAt: (x: number, y: number, z: number) => (o.stone !== false && x === 0 && y === 68 && z === 0 ? STONE : AIR),
       fluidAt: () => 0,
@@ -1373,13 +1377,13 @@ describe('createClickQueue: the queued clicks run in the aim (SP5a spec §4.1, �
     let editable = true;
     const posted: unknown[] = [];
     const world = { origin: { x: 0, y: 0, z: 0 }, setOutline: () => {}, hideOutline: () => {} };
-    const fly = { x: 0.5, y: 72.5, z: 0.5, yaw: 0, pitch: -90 };
+    const fly = { x: 0.5, y: 72.5, z: 0.5, yaw: 0, pitch: -90, mode: 'fly' as const };
     const read = {
       blockAt: (x: number, y: number, z: number) => (stone && x === 0 && y === 68 && z === 0 ? STONE : AIR),
       fluidAt: (x: number, y: number, z: number) => (water && x === 0 && y === 69 && z === 0 ? WATER_SOURCE : 0),
     };
     const hotbar = createHotbar(null);
-    const clicks = createClickQueue({ post: (e) => { posted.push(e); }, hotbar, fly, editable: () => editable });
+    const clicks = createClickQueue({ post: (e) => { posted.push(e); }, hotbar, fly, walk: createWalkState(), editable: () => editable });
     const aim = createAim({ fly, world: world as never, locked: () => true, hud: true, clicks });
     return {
       aim, clicks, read, posted, hotbar,
@@ -1529,12 +1533,12 @@ describe('block undo and redo by who has the controls (SP5a spec §4.5, D13)', (
     const r = rig();
     // The click queue's place (stone under the eye, the hotbar's stone placed above it), posted through the recording post.
     const world = { origin: { x: 0, y: 0, z: 0 }, setOutline: () => {}, hideOutline: () => {} };
-    const fly = { x: 0.5, y: 72.5, z: 0.5, yaw: 0, pitch: -90 };
+    const fly = { x: 0.5, y: 72.5, z: 0.5, yaw: 0, pitch: -90, mode: 'fly' as const };
     const read = {
       blockAt: (x: number, y: number, z: number) => (x === 0 && y === 68 && z === 0 ? STONE : AIR),
       fluidAt: () => 0,
     };
-    const clicks = createClickQueue({ post: (edit) => { void r.actions([edit]); }, hotbar: createHotbar(null), fly, editable: () => true });
+    const clicks = createClickQueue({ post: (edit) => { void r.actions([edit]); }, hotbar: createHotbar(null), fly, walk: createWalkState(), editable: () => true });
     const aim = createAim({ fly, world: world as never, locked: () => true, hud: true, clicks });
     clicks.push(2);
     aim.aim(read, false);
@@ -1617,11 +1621,12 @@ describe('hold to repeat in the page (SP5a spec §4.1, D6; Review Focus 1, rulin
     const clicks = createClickQueue({
       post: (edit) => { void actionPost([edit]).then((out) => { outcomes.push(out); }); },
       hotbar: createHotbar(null),
-      fly: { x: 0, y: 0, z: 0, yaw: 0, pitch: -90 },
+      fly: { x: 0, y: 0, z: 0, yaw: 0, pitch: -90, mode: 'fly' },
+      walk: createWalkState(),
       editable: () => true,
     });
     const hold = createHoldRepeat({ enabled: () => o.enabled, pending: () => replies.length > 0, queue: (b) => clicks.push(b) });
-    const fly = { x: 0.5, y: 72.5, z: 0.5, yaw: 0, pitch: -90 };
+    const fly = { x: 0.5, y: 72.5, z: 0.5, yaw: 0, pitch: -90, mode: 'fly' as const };
     const world = { origin: { x: 0, y: 0, z: 0 }, setOutline: () => {}, hideOutline: () => {} };
     const state = { paletteOpen: false, owner: 'world' as 'world' | 'map' };
     const aim = createAim({ fly, world: world as never, locked: () => true, hud: true, clicks, repeat: { hold, now: () => t } });
@@ -1732,8 +1737,109 @@ describe('hold to repeat in the page (SP5a spec §4.1, D6; Review Focus 1, rulin
     expect(r.posts.map((p) => p.t)).toEqual([0, 0.3]);
     // The page installs it on the canvas, and F (a mode switch) stops it too.
     expect(src()).toMatch(/teardown\.push\(installRepeatStop\(\{ doc: document, canvas, repeat: holdRepeat \}\)\);/);
-    expect(src()).toMatch(/case 'toggleWalk': holdRepeat\.stop\(\); break;/);
+    expect(src()).toMatch(/case 'toggleWalk': switchMode\(\{ fly, walk, world, repeat: holdRepeat \}\); break;/);
     expect(src()).toMatch(/createAim\(\{\s+fly, world, locked: \(\) => document\.pointerLockElement === canvas, hud, clicks, repeat: \{ hold: holdRepeat, now: nowS \},\s+\}\)/);
+  });
+});
+
+describe('modes in the page: F, the near plane, the reach, the wheel and + / − (SP5a spec §3.1, §3.3, §3.5, D1)', () => {
+  const src = (): string => readFileSync(new URL('../../src/ui/world/worldPage.ts', import.meta.url), 'utf8');
+  const flyAt = (o: Partial<FlyState> = {}): FlyState => ({
+    x: 0.5, y: 80, z: 0.5, yaw: 0, pitch: -90, vx: 0, vy: 0, vz: 0, speed: SPEED_DEFAULT, mode: 'fly', ...o,
+  });
+
+  test('the near plane follows the mode: F sets 0.05 walking and 0.1 flying, and stops the held button\'s repeat', () => {
+    const fly = flyAt({ y: 100 });
+    const walk = createWalkState();
+    const near: number[] = [];
+    const repeat = { stop: vi.fn() };
+    switchMode({ fly, walk, world: { setNear: (n) => { near.push(n); } }, repeat });
+    expect([fly.mode, walk.y]).toEqual(['walk', 100 - EYE]);
+    switchMode({ fly, walk, world: { setNear: (n) => { near.push(n); } }, repeat });
+    expect(fly.mode).toBe('fly');
+    expect(near).toEqual([NEAR_WALK, NEAR_FLY]);
+    expect([NEAR_WALK, NEAR_FLY]).toEqual([0.05, 0.1]);
+    expect(repeat.stop).toHaveBeenCalledTimes(2);
+  });
+
+  test('a load opens in flight: the page\'s camera starts with `mode: \'fly\'` and a fresh walk state (D1: the mode is not remembered)', () => {
+    expect(src()).toMatch(/const fly: FlyState = \{ x: at\.x, y: clamp\(view\.y, Y_MIN, Y_MAX\), z: at\.z, yaw: view\.yaw, pitch: view\.pitch, vx: 0, vy: 0, vz: 0, speed: SPEED_DEFAULT, mode: 'fly' \};\s+const walk = createWalkState\(\);/);
+    // Both frame steps (the streaming route's and the bench's) get the page's walk state.
+    expect(src().match(/createFrameStep\(\{\s+fly,\s+walk,/g)).toHaveLength(2);
+  });
+
+  test('reach 6 walking, 10 flying', () => {
+    // Stone straight below the eye at y 80.5, its top face 4.5 or 6.5 blocks down.
+    const world = { origin: { x: 0, y: 0, z: 0 }, setOutline: () => {}, hideOutline: () => {} };
+    const hits = (mode: FlyState['mode'], stoneY: number): boolean => {
+      const fly = flyAt({ y: 80.5, mode });
+      const read = { blockAt: (x: number, y: number, z: number) => (x === 0 && y === stoneY && z === 0 ? STONE : AIR), fluidAt: () => 0 };
+      const aim = createAim({ fly, world: world as never, locked: () => true, hud: true });
+      aim.aim(read, false);
+      return aim.hit.hit;
+    };
+    expect([hits('walk', 75), hits('fly', 75)]).toEqual([true, true]);
+    expect([hits('walk', 73), hits('fly', 73)]).toEqual([false, true]);
+    // A place's body walking is the walk state's current tick (rulings R23): feet in the target voxel refuse it.
+    const posted: unknown[] = [];
+    const fly = flyAt({ y: 72.5, mode: 'walk' });
+    const walk = createWalkState();
+    walk.x = 0.5;
+    walk.y = 69;
+    walk.z = 0.5;
+    const read = { blockAt: (x: number, y: number, z: number) => (x === 0 && y === 68 && z === 0 ? STONE : AIR), fluidAt: () => 0 };
+    const clicks = createClickQueue({ post: (e) => { posted.push(e); }, hotbar: createHotbar(null), fly, walk, editable: () => true });
+    const aim = createAim({ fly, world: world as never, locked: () => true, hud: true, clicks });
+    clicks.push(2);
+    aim.aim(read, false);
+    expect(posted).toEqual([]);
+    walk.y = 70.5;
+    clicks.push(2);
+    aim.aim(read, false);
+    expect(posted).toEqual([{ x: 0, y: 69, z: 0, op: 'set', value: STONE << 8, expect: AIR << 8 }]);
+  });
+
+  test('Ctrl+wheel steps the slot while walking (Ctrl is sprint), the speed while flying', () => {
+    const fly = flyAt();
+    const walk = createWalkState();
+    const hotbar = createHotbar(null);
+    const target = Object.assign(new EventTarget(), { requestPointerLock: () => Promise.resolve() });
+    const doc = Object.assign(new EventTarget(), { pointerLockElement: null as unknown });
+    const input = attachInput(target as unknown as HTMLElement, {
+      onAction: (a) => {
+        if (a === 'speedUp') speedKey(fly, 1);
+        else if (a === 'slotPrev') hotbar.step(-1);
+      },
+      onLook: () => {},
+      // The page's predicate.
+      wheelCtrlAsSlot: () => fly.mode === 'walk',
+      isTextFocus: () => false,
+      active: () => true,
+      doc: doc as unknown as Pick<Document, 'addEventListener' | 'removeEventListener' | 'pointerLockElement'>,
+      win: new EventTarget() as unknown as Pick<Window, 'addEventListener' | 'removeEventListener'>,
+    });
+    const ctrlWheelUp = () => Object.assign(new Event('wheel', { cancelable: true }), { deltaY: -100, deltaX: 0, deltaMode: 0, ctrlKey: true });
+    target.dispatchEvent(ctrlWheelUp());
+    expect([fly.speed, hotbar.active]).toEqual([SPEED_DEFAULT * 1.25, 0]);
+    switchMode({ fly, walk, world: { setNear: () => {} }, repeat: { stop: () => {} } });
+    target.dispatchEvent(ctrlWheelUp());
+    expect([fly.speed, hotbar.active]).toEqual([SPEED_DEFAULT * 1.25, 8]);
+    input.dispose();
+    expect(src()).toMatch(/wheelCtrlAsSlot: \(\) => fly\.mode === 'walk',/);
+  });
+
+  test('`+` does nothing while walking; flying it steps the speed', () => {
+    const fly = flyAt({ mode: 'walk' });
+    speedKey(fly, 1);
+    speedKey(fly, -1);
+    speedKey(fly, -1);
+    expect(fly.speed).toBe(SPEED_DEFAULT);
+    fly.mode = 'fly';
+    speedKey(fly, 1);
+    expect(fly.speed).toBe(SPEED_DEFAULT * 1.25);
+    speedKey(fly, -1);
+    expect(fly.speed).toBe(SPEED_DEFAULT);
+    expect(src()).toMatch(/case 'speedUp': speedKey\(fly, 1\); break;\s+case 'speedDown': speedKey\(fly, -1\); break;/);
   });
 });
 

@@ -11,7 +11,9 @@
  *    window moved to another monitor within a few seconds. It is fed on every tick, before the FPS limiter, so a cap of 30 on a 60 Hz display reads as
  *    16.7 ms frames, never as 33.3 ms ones that would hold `genCap` at 1 (SP4b plan, Review Focus 1). An interval that
  *    is not finite falls back to 1000/60 (rulings R5).
- * 1. The fly step over the raw delta (capped at 0.25 s), unless paused (the help is open, or the map owns the controls).
+ * 1. The motion over the raw delta (capped at 0.25 s), unless paused (the help or the palette is open, or the map owns
+ *    the controls), by `fly.mode` (SP5a spec §3.1-§3.2): flying, the fly step; walking, the walk step inside its own
+ *    read section (its view-free reads, D25), which writes the drawn eye into `fly`.
  * 2. `beforeUpdate` (the page's apply control, SP4c spec §4.3), `coordinator.update` from the camera, then its counts
  *    into the one reused object and `afterCounts` with them (the page's aux policy, §6.2). A fatal that `update` raises
  *    synchronously (an unload meeting `StoreCorrupt`) has the page stop the loop and dispose the coordinator, the pool
@@ -34,13 +36,14 @@ import type { UploadBudget } from '../../engine/uploadBudget';
 import { advanceTime } from '../../daynight/dayNight';
 import { applyCameraRotation, stepFly, type FlyBounds, type FlyState } from '../../player/fly';
 import type { Action } from '../../player/keymap';
+import { walkStep, type WalkState } from '../../player/walk';
 import { onTimeIntervalInto, snapFrameTime } from '../../render/frameTiming';
 import type { WorldRenderer } from '../../render/renderer';
 import type { SectionRenderer } from '../../render/sectionRenderer';
 import type { VoxelStore } from '../../world/store/store';
 import type { FrameClock } from './frameNotice';
 
-/** The longest step the fly controller takes in one tick, s: a tab back from the background does not jump. */
+/** The longest step the fly or walk controller takes in one tick, s: a tab back from the background does not jump. */
 export const MAX_STEP_S = 0.25;
 /** rAF deltas whose on-time cluster gives the display interval (rulings R13, R16): about 1 s at 240 Hz, 4 s at 60 Hz. */
 const DELTA_WINDOW = 240;
@@ -51,6 +54,8 @@ const BOUNDS: FlyBounds = { yMin: -64, yMax: 400 };
 
 export interface FrameStepDeps {
   readonly fly: FlyState;
+  /** The walk controller's state, stepped instead of the flight while `fly.mode` is `'walk'` (SP5a spec §3.1). */
+  readonly walk: WalkState;
   held(): ReadonlySet<Action>;
   /** True while the help is open or the map owns the controls (SP4c spec §2.3): the camera does not move. */
   paused(): boolean;
@@ -65,7 +70,7 @@ export interface FrameStepDeps {
   readonly budget: UploadBudget;
   readonly sections: Pick<SectionRenderer, 'pump'>;
   readonly world: Pick<WorldRenderer, 'origin' | 'camera' | 'frame' | 'sections'>;
-  readonly store: Pick<VoxelStore, 'enterRead' | 'exitRead' | 'lightAt' | 'drain' | 'blockAt' | 'fluidAt'>;
+  readonly store: Pick<VoxelStore, 'enterRead' | 'exitRead' | 'lightAt' | 'drain' | 'blockAt' | 'fluidAt' | 'publishedAt' | 'heightAt'>;
   /**
    * On every rendered tick, inside the frame's second read section, before the eye light and `world.frame` (SP5a spec
    * §3.5): the page's DDA, its queued clicks and the outline, reading through `read` (the store). `paused` is this
@@ -129,9 +134,22 @@ export function createFrameStep(d: FrameStepDeps): { tick(now: number): void } {
       throttle.push(snapFrameTime(raw, interval), generating, interval);
       const dt = clock.tick(now);
 
-      // 1-2. Motion and the coordinator on every tick, so the motion stays smooth under a cap.
+      // 1-2. Motion and the coordinator on every tick, so the motion stays smooth under a cap; walking, the walk step's
+      // reads go through their own read section.
       const paused = d.paused();
-      if (!paused) stepFly(fly, d.held(), Math.min(raw / 1000, MAX_STEP_S), BOUNDS);
+      if (!paused) {
+        const dtS = Math.min(raw / 1000, MAX_STEP_S);
+        if (fly.mode === 'walk') {
+          store.enterRead();
+          try {
+            walkStep(d.walk, store, d.held(), fly.yaw, dtS, fly);
+          } finally {
+            store.exitRead();
+          }
+        } else {
+          stepFly(fly, d.held(), dtS, BOUNDS);
+        }
+      }
       cam.x = fly.x;
       cam.z = fly.z;
       cam.yawDeg = fly.yaw;

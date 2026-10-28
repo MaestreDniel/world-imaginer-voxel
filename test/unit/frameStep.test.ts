@@ -11,6 +11,8 @@ import { createFpsLimiter, type FpsCap } from '../../src/render/fpsLimiter';
 import { createFrameClock } from '../../src/ui/world/frameNotice';
 import { createFrameStep, displayInterval, eyeSkyLight, type FrameStepDeps } from '../../src/ui/world/frameStep';
 import { createTeleport } from '../../src/ui/world/teleport';
+import { EYE, createWalkState, type WalkState } from '../../src/player/walk';
+import { AIR } from '../../src/world/blocks/index';
 
 const HZ60 = 1000 / 60;
 
@@ -22,6 +24,7 @@ interface Rig {
   readonly pushes: Array<[frameMs: number, generating: boolean, intervalMs: number]>;
   readonly state: FrameStepDeps['state'];
   readonly fly: FlyState;
+  readonly walk: WalkState;
   light: number;
   readonly frames: number[];
   readonly rendered: number[];
@@ -34,12 +37,13 @@ interface Rig {
 }
 
 /** A frame step over fakes: every call it makes is logged in order; the clock, limiter and throttle are real. */
-function rig(o: { cap?: FpsCap; max?: number; y?: number; held?: Action[]; paused?: () => boolean; fatalInUpdate?: () => boolean; hooks?: boolean } = {}): Rig {
+function rig(o: { cap?: FpsCap; max?: number; y?: number; held?: Action[]; paused?: () => boolean; fatalInUpdate?: () => boolean; hooks?: boolean; mode?: FlyState['mode'] } = {}): Rig {
   const log: string[] = [];
   const counts = createCoordinatorCounts();
   const throttle = createThrottle({ max: o.max ?? 3 });
   const pushes: Rig['pushes'] = [];
-  const fly: FlyState = { x: 8, y: o.y ?? 100, z: 8, yaw: 0, pitch: 0, vx: 0, vy: 0, vz: 0, speed: SPEED_DEFAULT };
+  const fly: FlyState = { x: 8, y: o.y ?? 100, z: 8, yaw: 0, pitch: 0, vx: 0, vy: 0, vz: 0, speed: SPEED_DEFAULT, mode: o.mode ?? 'fly' };
+  const walk = createWalkState();
   const state = { t: 0.1, brightness: 0.5, eyeSky: 15, rd: 12, fogBand: MEDIUM.fogBand };
   const held: ReadonlySet<Action> = new Set(o.held ?? []);
   const origin = createFloatingOrigin(0, 0, 0);
@@ -47,7 +51,7 @@ function rig(o: { cap?: FpsCap; max?: number; y?: number; held?: Action[]; pause
   let stopped = false;
   const r: Rig = {
     step: null as unknown as Rig['step'],
-    log, counts, throttle, pushes, state, fly,
+    log, counts, throttle, pushes, state, fly, walk,
     light: 0xa0,
     frames: [],
     rendered: [],
@@ -67,12 +71,19 @@ function rig(o: { cap?: FpsCap; max?: number; y?: number; held?: Action[]; pause
       log.push('drain');
       return 0;
     },
-    blockAt: () => 0,
-    fluidAt: () => 0,
+    // Air everywhere, every column Published (the walk step's view-free reads, logged once per run of reads).
+    blockAt: () => { readLog(); return AIR; },
+    fluidAt: () => { readLog(); return 0; },
+    publishedAt: () => { readLog(); return true; },
+    heightAt: () => null,
   };
+  function readLog(): void {
+    if (log.at(-1) !== 'read') log.push('read');
+  }
   (r as { store: FrameStepDeps['store'] }).store = store;
   const deps: FrameStepDeps = {
     fly,
+    walk,
     held: () => held,
     paused: o.paused ?? (() => false),
     stopped: () => stopped,
@@ -431,5 +442,41 @@ describe('the frame step\'s motion and callbacks', () => {
     const at = r.fly.z;
     for (let i = 5; i <= 8; i++) r.step.tick(i * HZ60);
     expect(r.fly.z).toBe(at);
+  });
+});
+
+describe('the frame step\'s dispatch by mode (SP5a spec §3.1, §3.2)', () => {
+  test('the frame step in walk mode calls the walk step inside one read section and never `stepFly`', () => {
+    const r = rig({ mode: 'walk', held: ['up', 'forward'], hooks: true });
+    // F's feet: the eye 100 − 1.62, both ticks' feet set.
+    r.walk.px = r.walk.x = 8;
+    r.walk.py = r.walk.y = 100 - EYE;
+    r.walk.pz = r.walk.z = 8;
+    // 0.16 s: three 20 Hz ticks before the coordinator's update, 0.01 s left owed.
+    r.step.tick(160);
+    expect(r.log).toEqual([
+      'enterRead', 'read', 'exitRead', 'beforeUpdate', 'update', 'counts', 'afterCounts', 'pump 3,-4,90', 'origin', 'drain',
+      'enterRead', 'aim', `lightAt 8,${Math.floor(r.fly.y)},${Math.floor(r.fly.z)}`, 'exitRead', 'frame',
+    ]);
+    expect(r.walk.acc).toBeCloseTo(0.01, 12);
+    // Space in the air does nothing walking (flight would rise 12 blocks/s): the body falls, and the drawn eye is the
+    // feet interpolated between the last two ticks (a fifth of the way) plus 1.62.
+    expect(r.walk.y).toBeLessThan(r.walk.py);
+    expect(r.walk.py).toBeLessThan(100 - EYE);
+    expect(r.fly.y).toBeCloseTo(r.walk.py + (r.walk.y - r.walk.py) * 0.2 + EYE, 12);
+    // W walks along −z in the air at 0.02 per tick of wish, far below flight's 12 blocks/s.
+    expect(r.fly.z).toBeLessThan(8);
+    expect(r.fly.z).toBeGreaterThan(8 - 0.1);
+    expect([r.fly.vx, r.fly.vy, r.fly.vz]).toEqual([0, 0, 0]);
+  });
+
+  test('walking and paused (the help open): no walk step, no read before the update, the body does not move', () => {
+    const r = rig({ mode: 'walk', held: ['forward'], paused: () => true });
+    r.walk.py = r.walk.y = 100 - EYE;
+    r.step.tick(100);
+    expect(r.log.slice(0, 2)).toEqual(['update', 'pump 3,-4,90']);
+    expect(r.log).not.toContain('read');
+    expect([r.walk.x, r.walk.y, r.walk.z, r.walk.acc]).toEqual([0, 100 - EYE, 0, 0]);
+    expect([r.fly.x, r.fly.y, r.fly.z]).toEqual([8, 100, 8]);
   });
 });
