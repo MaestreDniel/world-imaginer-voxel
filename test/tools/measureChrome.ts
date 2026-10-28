@@ -66,10 +66,14 @@ const WINDOW_STEP_MS = 300;
 export const ASSETS = 'docs/superpowers/specs/assets/sp5a';
 
 /**
- * The bench's review shots (SP4b spec §8.7; SP4c spec §8.7's `apply-before`, `apply-mid`, `apply-after`, `teleport`),
- * mirrored from `src/ui/world/bench.ts`'s `BENCH_SHOTS` (a test pins them).
+ * The bench's review shots (SP4b spec §8.7; SP4c spec §8.7's `apply-before`, `apply-mid`, `apply-after`, `teleport`;
+ * SP5a spec §6.5's review scenes `build-day`, `build-night`, `walk-water`, `glass-water`), mirrored from
+ * `src/ui/world/bench.ts`'s `BENCH_SHOTS` (a test pins them).
  */
-export const SHOTS = ['fly96', 'fly384', 'rd12', 'rd8', 'rd12back', 'first', 'apply-before', 'apply-mid', 'apply-after', 'teleport'] as const;
+export const SHOTS = [
+  'fly96', 'fly384', 'rd12', 'rd8', 'rd12back', 'first', 'apply-before', 'apply-mid', 'apply-after', 'teleport',
+  'build-day', 'build-night', 'walk-water', 'glass-water',
+] as const;
 export type Shot = (typeof SHOTS)[number];
 
 export interface MeasureArgs {

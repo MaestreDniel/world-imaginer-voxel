@@ -1,13 +1,15 @@
 import { readFileSync } from 'node:fs';
 import { describe, expect, test } from 'vitest';
 import { resolveProfile } from '../../src/core/params/profiles';
-import { STONE, TORCH } from '../../src/world/blocks';
+import { GLASS, ICE, REGISTRY, STONE, TORCH } from '../../src/world/blocks';
+import { LAVA_SOURCE, WATER_SOURCE } from '../../src/world/blocks/fluid';
 import type { Edit } from '../../src/workers/protocol';
 import {
   BENCH_EDIT, BENCH_FIELDS, BENCH_FRAME_CAPACITY, BENCH_IDLE_FRAMES, BENCH_LEGS, BENCH_LIVE, BENCH_LIVE_LEGS, BENCH_PITCH, BENCH_RD, BENCH_REFILL,
   BENCH_SEED, BENCH_SHOT_ABOVE, BENCH_SHOT_PITCH, BENCH_SHOTS, BENCH_TIME_SPEED, BENCH_Y, benchInterval, benchPose, createBenchDriver,
-  createBenchRecord, createBenchRecorder, createLiveReveals, summarizeBench,
-  type BenchError, type BenchFixed, type BenchPose, type BenchRecord, type BenchResult, type BenchSources, type BenchWorld,
+  createBenchRecord, createBenchRecorder, createLiveReveals, REVIEW_HOUSE, REVIEW_POOL, REVIEW_SCENE_BATCH, REVIEW_SCENES, REVIEW_SETTLE_S,
+  REVIEW_SHOTS, summarizeBench, type BenchError, type BenchFixed, type BenchPose, type BenchRecord, type BenchResult, type BenchSources, type BenchWorld,
+  type ReviewShot, type SceneVoxel,
 } from '../../src/ui/world/bench';
 import type { EditOutcome } from '../../src/ui/world/editPath';
 
@@ -677,7 +679,7 @@ describe('createBenchDriver (the page\'s hook, SP4b spec §8.3)', () => {
   test('a reservation cap below 12 clamps every RD the script wants to rdMax and records rdClampedTo (Task 26b, review M3)', () => {
     const { driver } = driverOf(null);
     expect(driver.rdClampedTo).toBeNull();
-    driver.bind({ rdMax: 10, heightAt: () => null, live: fakeLive().live, edit: fakeEdit().edit });
+    driver.bind({ rdMax: 10, heightAt: () => null, live: fakeLive().live, edit: fakeEdit().edit, ...NO_SCENE });
     expect(driver.rdClampedTo).toBe(10);
     const out = pose();
     const wants: number[] = [];
@@ -689,14 +691,14 @@ describe('createBenchDriver (the page\'s hook, SP4b spec §8.3)', () => {
     expect(wants[Math.round(90 / 0.05)]).toBe(10);
     // A cap at 12 or above clamps nothing.
     const free = driverOf(null);
-    free.driver.bind({ rdMax: 16, heightAt: () => null, live: fakeLive().live, edit: fakeEdit().edit });
+    free.driver.bind({ rdMax: 16, heightAt: () => null, live: fakeLive().live, edit: fakeEdit().edit, ...NO_SCENE });
     expect(free.driver.rdClampedTo).toBeNull();
     expect(free.driver.pose(10, pose(), 12)).toBe(12);
   });
 
   test('under a cap rd12back waits for the fog at the cap, and `first` asks for the cap', () => {
     const back = driverOf('rd12back');
-    back.driver.bind({ rdMax: 10, heightAt: () => null, live: fakeLive().live, edit: fakeEdit().edit });
+    back.driver.bind({ rdMax: 10, heightAt: () => null, live: fakeLive().live, edit: fakeEdit().edit, ...NO_SCENE });
     const o = pose();
     back.driver.pose(0, { ...o, x: 0, z: 0 }, 10);
     expect(back.driver.pose(85.5, o, 9.5)).toBe(10);
@@ -704,7 +706,7 @@ describe('createBenchDriver (the page\'s hook, SP4b spec §8.3)', () => {
     expect(back.driver.pose(86.3, o, 10)).toBeNull();
     expect(back.ready()).toBe(1);
     const first = driverOf('first');
-    first.driver.bind({ rdMax: 8, heightAt: () => null, live: fakeLive().live, edit: fakeEdit().edit });
+    first.driver.bind({ rdMax: 8, heightAt: () => null, live: fakeLive().live, edit: fakeEdit().edit, ...NO_SCENE });
     expect(first.driver.pose(0, pose(), 8)).toBe(8);
   });
 
@@ -712,7 +714,7 @@ describe('createBenchDriver (the page\'s hook, SP4b spec §8.3)', () => {
     expect([BENCH_SHOT_ABOVE, BENCH_SHOT_PITCH]).toEqual([32, -20]);
     const { driver, ready } = driverOf('fly96');
     const asked: Array<[number, number]> = [];
-    driver.bind({ rdMax: 12, heightAt: (x, z) => { asked.push([x, z]); return 71; }, live: fakeLive().live, edit: fakeEdit().edit });
+    driver.bind({ rdMax: 12, heightAt: (x, z) => { asked.push([x, z]); return 71; }, live: fakeLive().live, edit: fakeEdit().edit, ...NO_SCENE });
     const out: BenchPose = { x: 0.5, y: 80, z: -0.25, yaw: 0, pitch: 0 };
     driver.pose(0, out, 12);
     // Before the shot's moment the route's pose holds.
@@ -730,7 +732,7 @@ describe('createBenchDriver (the page\'s hook, SP4b spec §8.3)', () => {
 
   test('where heightAt has no value the shot keeps the route\'s pose; a run without a shot never lowers the camera', () => {
     const hole = driverOf('fly384');
-    hole.driver.bind({ rdMax: 12, heightAt: () => null, live: fakeLive().live, edit: fakeEdit().edit });
+    hole.driver.bind({ rdMax: 12, heightAt: () => null, live: fakeLive().live, edit: fakeEdit().edit, ...NO_SCENE });
     const out: BenchPose = { x: 0, y: 80, z: 0, yaw: 0, pitch: 0 };
     hole.driver.pose(0, out, 12);
     for (let i = 0; i < 3; i++) {
@@ -738,7 +740,7 @@ describe('createBenchDriver (the page\'s hook, SP4b spec §8.3)', () => {
       expect([out.x, out.y, out.z, out.yaw, out.pitch]).toEqual([400, BENCH_Y, -2880 - 0.5 * 384, 0, BENCH_PITCH]);
     }
     const run = driverOf(null);
-    run.driver.bind({ rdMax: 12, heightAt: () => 64, live: fakeLive().live, edit: fakeEdit().edit });
+    run.driver.bind({ rdMax: 12, heightAt: () => 64, live: fakeLive().live, edit: fakeEdit().edit, ...NO_SCENE });
     for (let t = 0; t < 95; t += 0.5) {
       run.driver.pose(t, out, 12);
       expect([out.y, out.pitch]).toEqual([BENCH_Y, BENCH_PITCH]);
@@ -839,7 +841,11 @@ function fakeLive() {
  * A fake of the page's edit hooks (SP5a spec §6.2): every batch posted with the camera's block column at that moment
  * (`at`, set by the test), its outcome (`outcome`, accepted by default) and each `editState` asked.
  */
-function fakeEdit(o: { state?: (cx: number, cz: number) => 0 | 1 | 2; outcome?: () => EditOutcome | undefined } = {}) {
+function fakeEdit(o: {
+  state?: (cx: number, cz: number) => 0 | 1 | 2;
+  outcome?: () => EditOutcome | undefined;
+  read?: (x: number, y: number, z: number) => number;
+} = {}) {
   const posts: Array<{ readonly edits: readonly Edit[] }> = [];
   const asked: Array<[number, number, number]> = [];
   const edit: BenchWorld['edit'] = {
@@ -852,9 +858,13 @@ function fakeEdit(o: { state?: (cx: number, cz: number) => 0 | 1 | 2; outcome?: 
       asked.push([cx, cz, s]);
       return s;
     },
+    read: (x, y, z) => o.read?.(x, y, z) ?? 0,
   };
   return { edit, posts, asked };
 }
+
+/** The review scenes' hooks of a run that takes no review shot (SP5a spec §6.5). */
+const NO_SCENE: Pick<BenchWorld, 'setTime' | 'walk'> = { setTime() {}, walk() {} };
 
 /** Lets the teleport's promise settle (its `then` runs in a microtask). */
 const flush = (): Promise<void> => new Promise((r) => setTimeout(r, 0));
@@ -863,7 +873,7 @@ describe('createBenchDriver: the live legs after L6 (SP4c spec §8.4, D22; plan)
   test('L7 sets the leaf to 4.0 at its start, L8 undoes, L9 asks the teleport for x + 20,000 at the same z; each ends when settled', async () => {
     const { driver } = driverOf(null);
     const f = fakeLive();
-    driver.bind({ rdMax: 16, heightAt: () => null, live: f.live, edit: fakeEdit().edit });
+    driver.bind({ rdMax: 16, heightAt: () => null, live: f.live, edit: fakeEdit().edit, ...NO_SCENE });
     const out: BenchPose = { x: 7, y: 80, z: -3, yaw: 12, pitch: 0 };
     driver.pose(0, out, 12);
     driver.pose(94.99, out, 12);
@@ -909,7 +919,7 @@ describe('createBenchDriver: the live legs after L6 (SP4c spec §8.4, D22; plan)
   test('a leg that never settles ends at its cap: L7 and L8 after 20 s, L9 after 15 s; before L9\'s arrival y stays 150', () => {
     const { driver } = driverOf(null);
     const f = fakeLive();
-    driver.bind({ rdMax: 16, heightAt: () => null, live: f.live, edit: fakeEdit().edit });
+    driver.bind({ rdMax: 16, heightAt: () => null, live: f.live, edit: fakeEdit().edit, ...NO_SCENE });
     const out = { x: 0, y: 80, z: 0, yaw: 0, pitch: 0 };
     driver.pose(0, out, 12);
     driver.pose(94.9, out, 12);
@@ -932,7 +942,7 @@ describe('createBenchDriver: the live legs after L6 (SP4c spec §8.4, D22; plan)
 
   test('under a reservation cap the live legs ask for the cap', () => {
     const { driver } = driverOf(null);
-    driver.bind({ rdMax: 10, heightAt: () => null, live: fakeLive().live, edit: fakeEdit().edit });
+    driver.bind({ rdMax: 10, heightAt: () => null, live: fakeLive().live, edit: fakeEdit().edit, ...NO_SCENE });
     const out = pose();
     driver.pose(0, { ...out, x: 0, z: 0 }, 10);
     expect(driver.pose(96, out, 10)).toBe(10);
@@ -941,7 +951,7 @@ describe('createBenchDriver: the live legs after L6 (SP4c spec §8.4, D22; plan)
   test('apply-before freezes at L7 − 0.5 s (94.5 s), before the edit; apply-mid at L7\'s start + 1 s', () => {
     const before = driverOf('apply-before');
     const fb = fakeLive();
-    before.driver.bind({ rdMax: 16, heightAt: () => null, live: fb.live, edit: fakeEdit().edit });
+    before.driver.bind({ rdMax: 16, heightAt: () => null, live: fb.live, edit: fakeEdit().edit, ...NO_SCENE });
     const o: BenchPose = { x: 0, y: 80, z: 0, yaw: 0, pitch: 0 };
     before.driver.pose(0, o, 12);
     before.driver.pose(94.4, o, 12);
@@ -952,7 +962,7 @@ describe('createBenchDriver: the live legs after L6 (SP4c spec §8.4, D22; plan)
 
     const mid = driverOf('apply-mid');
     const fm = fakeLive();
-    mid.driver.bind({ rdMax: 16, heightAt: () => null, live: fm.live, edit: fakeEdit().edit });
+    mid.driver.bind({ rdMax: 16, heightAt: () => null, live: fm.live, edit: fakeEdit().edit, ...NO_SCENE });
     mid.driver.pose(0, o, 12);
     // L7's actual start is the first frame at or after 95 s.
     mid.driver.pose(95.02, o, 12);
@@ -967,7 +977,7 @@ describe('createBenchDriver: the live legs after L6 (SP4c spec §8.4, D22; plan)
   test('apply-after freezes at L7\'s end, before the undo; teleport 0.3 s after L9\'s arrival, the camera lowered over the new place', async () => {
     const after = driverOf('apply-after');
     const fa = fakeLive();
-    after.driver.bind({ rdMax: 16, heightAt: () => 70, live: fa.live, edit: fakeEdit().edit });
+    after.driver.bind({ rdMax: 16, heightAt: () => 70, live: fa.live, edit: fakeEdit().edit, ...NO_SCENE });
     const o: BenchPose = { x: 0.5, y: 80, z: 0.5, yaw: 0, pitch: 0 };
     after.driver.pose(0, o, 12);
     after.driver.pose(95, o, 12);
@@ -983,7 +993,7 @@ describe('createBenchDriver: the live legs after L6 (SP4c spec §8.4, D22; plan)
     const tp = driverOf('teleport');
     const ft = fakeLive();
     const asked: Array<[number, number]> = [];
-    tp.driver.bind({ rdMax: 16, heightAt: (x, z) => { asked.push([x, z]); return 64; }, live: ft.live, edit: fakeEdit().edit });
+    tp.driver.bind({ rdMax: 16, heightAt: (x, z) => { asked.push([x, z]); return 64; }, live: ft.live, edit: fakeEdit().edit, ...NO_SCENE });
     const p: BenchPose = { x: 0.5, y: 80, z: 0.5, yaw: 0, pitch: 0 };
     tp.driver.pose(0, p, 12);
     // L6's last frame: the camera hovers where L4 stopped, facing north.
@@ -1016,7 +1026,7 @@ describe('createBenchDriver: the live legs after L6 (SP4c spec §8.4, D22; plan)
   test('a live shot whose moment never comes freezes when the live legs end (the teleport failed: L9\'s cap)', async () => {
     const tp = driverOf('teleport');
     const f = fakeLive();
-    tp.driver.bind({ rdMax: 16, heightAt: () => null, live: f.live, edit: fakeEdit().edit });
+    tp.driver.bind({ rdMax: 16, heightAt: () => null, live: f.live, edit: fakeEdit().edit, ...NO_SCENE });
     const p = { x: 0, y: 80, z: 0, yaw: 0, pitch: 0 };
     tp.driver.pose(0, p, 12);
     tp.driver.pose(95, p, 12);
@@ -1044,7 +1054,7 @@ describe('createBenchDriver: the edit leg L10 (SP5a spec §6.2, D26; plan)', () 
     f.settle[7] = true;
     f.settle[8] = true;
     f.settle[9] = settled9;
-    run.driver.bind({ rdMax: 16, heightAt: () => 70, live: f.live, edit: e.edit });
+    run.driver.bind({ rdMax: 16, heightAt: () => 70, live: f.live, edit: e.edit, ...NO_SCENE });
     const p: BenchPose = { x: 0.5, y: 80, z: 0.5, yaw: 0, pitch: 0 };
     run.driver.pose(0, p, 12);
     run.driver.pose(95, p, 12);
@@ -1137,12 +1147,196 @@ describe('createBenchDriver: the edit leg L10 (SP5a spec §6.2, D26; plan)', () 
   });
 });
 
+describe('the review scenes (SP5a spec §6.5; plan)', () => {
+  const typeOf = (v: number): string => REGISTRY.TYPE_NAMES[REGISTRY.STATE_TYPE[v >>> 8]!]!;
+  const valueOf = (key: string): number => (REGISTRY.parseStateKey(key) << 8) >>> 0;
+  const keyOf = (b: SceneVoxel): string => `${b[0]},${b[1]},${b[2]}`;
+
+  test('`REVIEW_HOUSE` holds oak logs on three axes, a ladder, torches, glass and wool', () => {
+    const values = new Set(REVIEW_HOUSE.map((b) => b[3]));
+    for (const axis of ['x', 'y', 'z']) expect(values.has(valueOf(`oak_log[axis=${axis}]`))).toBe(true);
+    const types = new Set([...values].filter((v) => v !== 0).map(typeOf));
+    for (const t of ['ladder', 'wall_torch', 'glass', 'oak_planks', 'bricks', 'cobblestone']) expect(types.has(t)).toBe(true);
+    expect([...types].filter((t) => t.endsWith('_wool')).length).toBeGreaterThanOrEqual(2);
+    // A 7 × 5 × 7 house (dx 2 … 8, dy 0 … 4, dz −3 … 3), every voxel of it listed once, and its torches on the walls
+    // outside it; no voxel twice.
+    const keys = REVIEW_HOUSE.map(keyOf);
+    expect(new Set(keys).size).toBe(keys.length);
+    for (let dy = 0; dy <= 4; dy++) for (let dz = -3; dz <= 3; dz++) for (let dx = 2; dx <= 8; dx++) expect(keys).toContain(`${dx},${dy},${dz}`);
+    const outside = REVIEW_HOUSE.filter((b) => b[0] < 2 || b[0] > 8 || b[2] < -3 || b[2] > 3 || b[1] < 0 || b[1] > 4);
+    expect(outside.length).toBeGreaterThan(0);
+    for (const b of outside) expect(typeOf(b[3])).toBe('wall_torch');
+  });
+
+  test('`REVIEW_POOL`: a 9 × 9 × 4 pit of water sources, a glass wall on one side, ice at its rim, a 3 × 3 lava pool; apart from the house', () => {
+    const at = new Map(REVIEW_POOL.map((b) => [keyOf(b), b[3]]));
+    expect(at.size).toBe(REVIEW_POOL.length);
+    const water = REVIEW_POOL.filter((b) => b[3] === WATER_SOURCE);
+    expect(water).toHaveLength(9 * 9 * 4);
+    expect(new Set(water.map((b) => b[1]))).toEqual(new Set([-4, -3, -2, -1]));
+    const isWater = (dx: number, dy: number, dz: number): boolean => at.get(`${dx},${dy},${dz}`) === WATER_SOURCE;
+    const glass = REVIEW_POOL.filter((b) => b[3] === (GLASS << 8) >>> 0);
+    expect(glass).toHaveLength(9 * 4);
+    // One side: every glass voxel faces water on the same side (−z), and air (the trench) on the other.
+    for (const [dx, dy, dz] of glass) {
+      expect(isWater(dx, dy, dz - 1)).toBe(true);
+      expect(at.get(`${dx},${dy},${dz + 1}`)).toBe(0);
+    }
+    const ice = REVIEW_POOL.filter((b) => b[3] === (ICE << 8) >>> 0);
+    expect(ice).toHaveLength(1);
+    const [ix, iy, iz] = ice[0]!;
+    expect(iy).toBe(-1);
+    expect([isWater(ix - 1, iy, iz), isWater(ix + 1, iy, iz), isWater(ix, iy, iz - 1), isWater(ix, iy, iz + 1)]).toContain(true);
+    const lava = REVIEW_POOL.filter((b) => b[3] === LAVA_SOURCE);
+    expect(lava).toHaveLength(9);
+    expect(new Set(lava.map((b) => b[1]))).toEqual(new Set([-1]));
+    const house = new Set(REVIEW_HOUSE.map(keyOf));
+    for (const b of REVIEW_POOL) expect(house.has(keyOf(b))).toBe(false);
+  });
+
+  test('the poses: the house from 12 blocks; swimming at the pool\'s surface; the glass wall and the ice in view from the trench\'s side', () => {
+    const day = REVIEW_SCENES['build-day'].pose;
+    expect(REVIEW_SCENES['build-night'].pose).toEqual(day);
+    expect(Math.hypot(day.x - 5.5, day.y - 2.5, day.z - 0.5)).toBeCloseTo(12, 9);
+    const swim = REVIEW_SCENES['walk-water'].pose;
+    // The eye just above the water's top (dy −1's top face, y 0), over the pool.
+    expect(swim.y).toBeGreaterThan(0);
+    expect(swim.y).toBeLessThan(0.5);
+    expect(REVIEW_POOL.some((b) => b[3] === WATER_SOURCE && b[0] === Math.floor(swim.x) && b[2] === Math.floor(swim.z) && b[1] === -1)).toBe(true);
+    const glass = REVIEW_SCENES['glass-water'].pose;
+    expect(glass.pitch).toBeLessThan(0);
+    expect(glass.y).toBeGreaterThan(0);
+  });
+
+  /**
+   * A review shot's run (SP5a spec §6.5): the live legs settle at once, L9 arrives at (20,000.5, 90, 0.5), L10's 100
+   * edits run from 98 s; the scene hooks' calls are kept in `calls`.
+   */
+  async function sceneRun(shot: ReviewShot, o: { read?: (x: number, y: number, z: number) => number; outcome?: () => EditOutcome | undefined } = {}) {
+    const run = driverOf(shot);
+    const f = fakeLive();
+    f.settle[7] = true;
+    f.settle[8] = true;
+    f.settle[9] = true;
+    const e = fakeEdit(o);
+    const calls: string[] = [];
+    run.driver.bind({
+      rdMax: 16, heightAt: () => 70, live: f.live, edit: e.edit,
+      setTime: (h) => { calls.push(`setTime ${h}`); }, walk: (on) => { calls.push(`walk ${on}`); },
+    });
+    const p: BenchPose = { x: 0.5, y: 80, z: 0.5, yaw: 0, pitch: 0 };
+    // A review shot freezes at no timed moment: the timed script and the live legs run.
+    for (const t of [0, 95, 96, 97]) expect(run.driver.pose(t, p, 12)).toBe(12);
+    expect(f.calls[2]).toBe('teleport 20000.5 0.5');
+    p.x = 20000.5;
+    p.y = 90;
+    f.arrive();
+    await flush();
+    for (let k = 0; k < 100; k++) expect(run.driver.pose(98 + k * 0.25, p, 12)).toBe(12);
+    await flush();
+    expect(e.posts).toHaveLength(100);
+    return { ...run, e, calls, p };
+  }
+
+  /** Poses every 1/16 s from `t` (exact in binary), letting each post settle, until the driver ends (null) or 50 s pass. */
+  async function runOut(driver: ReturnType<typeof driverOf>['driver'], p: BenchPose, t: number, each?: () => void): Promise<Array<number | null>> {
+    const results: Array<number | null> = [];
+    for (let i = 0; i < 800; i++) {
+      const r = driver.pose(t + i / 16, p, 12);
+      results.push(r);
+      each?.();
+      await flush();
+      if (r === null) break;
+    }
+    return results;
+  }
+
+  test('`build-day` calls `setTime(12)`, `build-night` `setTime(0)`, `walk-water` `walk(true)` (and `setTime(12)`), `glass-water` `setTime(12)`', async () => {
+    const want: Record<ReviewShot, string[]> = {
+      'build-day': ['setTime 12'],
+      'build-night': ['setTime 0'],
+      'walk-water': ['setTime 12', 'walk true'],
+      'glass-water': ['setTime 12'],
+    };
+    for (const shot of REVIEW_SHOTS) {
+      const { driver, calls, p, ready } = await sceneRun(shot);
+      expect(calls).toEqual([]);
+      await runOut(driver, p, 123);
+      expect([shot, calls]).toEqual([shot, want[shot]]);
+      expect(ready()).toBe(1);
+    }
+  });
+
+  test('after L10 the scene is built at its hover point through the edit path, in batches with the read values as `expect`, posed and frozen; no flight', async () => {
+    // Stone up to y 69 and air above: the surface's first free y is 70.
+    const read = (_x: number, y: number): number => (y < 70 ? (STONE << 8) >>> 0 : 0);
+    const { driver, e, calls, p, ready, published } = await sceneRun('glass-water', { read });
+    const want = new Map<string, number>();
+    for (const [dx, dy, dz, v] of [...REVIEW_POOL, ...REVIEW_HOUSE]) {
+      const y = 70 + dy;
+      if (v !== read(20000 + dx, y)) want.set(`${20000 + dx},${y},${dz}`, v);
+    }
+    // L10's edits settled at 123 s (its 25 s): the scene's batches follow one at a time, each after the last's reply.
+    const poses: BenchPose[] = [];
+    const results = await runOut(driver, p, 123, () => { poses.push({ ...p }); });
+    const scene = e.posts.slice(100);
+    expect(scene.length).toBe(Math.ceil(want.size / REVIEW_SCENE_BATCH));
+    const got = new Map<string, number>();
+    for (const b of scene) {
+      expect(b.edits.length).toBeLessThanOrEqual(REVIEW_SCENE_BATCH);
+      for (const ed of b.edits) {
+        expect([ed.op, ed.expect]).toEqual(['set', read(ed.x, ed.y)]);
+        got.set(`${ed.x},${ed.y},${ed.z}`, ed.value);
+      }
+    }
+    expect(got).toEqual(want);
+    // One batch per frame at most, none while the camera is posed; then the pose for REVIEW_SETTLE_S and three frozen
+    // frames at it, the shot ready and the script ended. The camera never flew east.
+    const scenePose = REVIEW_SCENES['glass-water'].pose;
+    const posed = { x: 20000 + scenePose.x, y: 70 + scenePose.y, z: scenePose.z, yaw: scenePose.yaw, pitch: scenePose.pitch };
+    expect(poses.at(-2)).toEqual(posed);
+    const first = poses.findIndex((q) => q.x === posed.x && q.y === posed.y);
+    expect(first).toBe(scene.length);
+    expect(poses.length - 1 - first).toBe(REVIEW_SETTLE_S * 16 + 3);
+    expect(results.at(-1)).toBeNull();
+    expect(ready()).toBe(1);
+    expect(calls).toEqual(['setTime 12']);
+    driver.done(FIXED);
+    expect(published).toEqual([]);
+  });
+
+  test('a refused scene batch publishes the error and takes no shot; a hover that never fills does too', async () => {
+    let n = 0;
+    const refused = await sceneRun('build-day', { outcome: () => (++n > 101 ? { ok: false, why: 'changed' } : undefined) });
+    const results = await runOut(refused.driver, refused.p, 123);
+    expect(results.at(-1)).toBeNull();
+    expect(refused.e.posts).toHaveLength(102);
+    expect(refused.published).toEqual([{ route: 'bench=medium', error: expect.stringMatching(/review scene.*refused: changed/) }]);
+    expect([refused.ready(), refused.calls]).toEqual([0, []]);
+
+    const run = driverOf('build-night');
+    const f = fakeLive();
+    f.settle[7] = true;
+    f.settle[8] = true;
+    run.driver.bind({ rdMax: 16, heightAt: () => 70, live: f.live, edit: fakeEdit().edit, ...NO_SCENE });
+    const p: BenchPose = { x: 0.5, y: 80, z: 0.5, yaw: 0, pitch: 0 };
+    for (const t of [0, 95, 96, 97]) run.driver.pose(t, p, 12);
+    f.arrive();
+    await flush();
+    // L9's cap at 112 s, L10's hover cap at 172 s.
+    expect(run.driver.pose(112, p, 12)).toBe(12);
+    expect(run.driver.pose(172, p, 12)).toBeNull();
+    expect(run.published).toEqual([{ route: 'bench=medium', error: expect.stringMatching(/review scene.*not built/) }]);
+    expect(run.ready()).toBe(0);
+  });
+});
+
 describe('createBenchDriver: a teleport that never arrives keeps its cause in the JSON (final review WLD-5)', () => {
   /** Runs the live legs to L9's teleport, settles it with `settle`, lets L9 and L10's hover run to their caps and publishes the JSON. */
   async function l9(settle: (f: ReturnType<typeof fakeLive>) => void): Promise<BenchResult> {
     const { driver, published } = driverOf(null);
     const f = fakeLive();
-    driver.bind({ rdMax: 16, heightAt: () => null, live: f.live, edit: fakeEdit().edit });
+    driver.bind({ rdMax: 16, heightAt: () => null, live: f.live, edit: fakeEdit().edit, ...NO_SCENE });
     const p = { x: 0, y: 80, z: 0, yaw: 0, pitch: 0 };
     driver.pose(0, p, 12);
     driver.pose(95, p, 12);

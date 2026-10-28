@@ -22,7 +22,9 @@
  * `&shot=<name>` (plan; spec §8.7, the review screenshots, taken by `measureChrome.ts --shot`): the script freezes at the
  * shot's moment, the camera drops to 32 blocks above the ground under it at pitch −20 (rulings R9), the page renders
  * three more frames and stops, and `window.__wiBench.shotReady` turns true; nothing is drawn over the world and no JSON
- * is published.
+ * is published. SP5a's four review scenes (SP5a spec §6.5, `REVIEW_SHOTS`) run L10's hover edits, skip its flight,
+ * build a fixed scene at its hover point through the page's edit path (`REVIEW_SITE`, `REVIEW_POOL`, `REVIEW_HOUSE`),
+ * fix the clock (and walk) and hold the scene's pose; a scene the edit path refuses publishes `{ route, error }`.
  *
  * The world page imports this module's values; this module loads the page with a dynamic `import()`, so the two do not
  * import each other statically.
@@ -32,9 +34,14 @@ import { medianInterval, percentile, snapFrameTime } from '../../render/frameTim
 import type { GpuEstimate, WorldRenderer } from '../../render/renderer';
 import type { RevealProbe, SectionRenderer, SectionRendererCounts, SectionRendererKind, StructuralKind } from '../../render/sectionRenderer';
 import { el } from '../common/dom';
+import { MIN_Y } from '../../core/constants';
 import { MAX_Y } from '../../core/coords';
+import { lookVector } from '../../player/fly';
 import type { Edit } from '../../workers/protocol';
-import { STONE, TORCH } from '../../world/blocks';
+import {
+  BRICKS, COBBLESTONE, GLASS, ICE, OAK_PLANKS, REGISTRY, RED_WOOL, STONE, TORCH, WHITE_WOOL,
+} from '../../world/blocks';
+import { LAVA_SOURCE, WATER_SOURCE } from '../../world/blocks/fluid';
 import { DEFAULT_MAP_STATE, encodeMapState } from '../map/mapState';
 import type { EditLatencySamples } from './editLatency';
 import type { EditOutcome } from './editPath';
@@ -937,12 +944,23 @@ export function summarizeBench(
 
 // ---------------------------------------------------------------- the driver
 
-/** The review shots (spec §8.7; plan; SP4c spec §8.7's four live ones), taken by `measureChrome.ts --route bench --shot <name>`. */
-export const BENCH_SHOTS = ['fly96', 'fly384', 'rd12', 'rd8', 'rd12back', 'first', 'apply-before', 'apply-mid', 'apply-after', 'teleport'] as const;
+/** SP5a's review scenes (SP5a spec §6.5), built after L10 at its hover point. */
+export const REVIEW_SHOTS = ['build-day', 'build-night', 'walk-water', 'glass-water'] as const;
+export type ReviewShot = (typeof REVIEW_SHOTS)[number];
+
+/**
+ * The review shots (spec §8.7; plan; SP4c spec §8.7's four live ones; SP5a spec §6.5's four scenes), taken by
+ * `measureChrome.ts --route bench --shot <name> --renderer <renderer>`.
+ */
+export const BENCH_SHOTS = [
+  'fly96', 'fly384', 'rd12', 'rd8', 'rd12back', 'first', 'apply-before', 'apply-mid', 'apply-after', 'teleport', ...REVIEW_SHOTS,
+] as const;
 export type BenchShot = (typeof BENCH_SHOTS)[number];
 
 /** The shots that freeze at a fixed script time. */
-type TimedShot = Exclude<BenchShot, 'rd12back' | 'apply-mid' | 'apply-after' | 'teleport'>;
+type TimedShot = Exclude<BenchShot, 'rd12back' | 'apply-mid' | 'apply-after' | 'teleport' | ReviewShot>;
+
+const isReviewShot = (shot: BenchShot | null): shot is ReviewShot => shot !== null && (REVIEW_SHOTS as readonly string[]).includes(shot);
 
 /**
  * The fixed shots' script times, s (plan): mid-L3 at 96 blocks/s; half a second into L4 at 384, while revealed terrain
@@ -974,6 +992,142 @@ const SHOT_FRAMES = 3;
  */
 export const BENCH_SHOT_ABOVE = 32;
 export const BENCH_SHOT_PITCH = -20;
+
+// ---------------------------------------------------------------- the review scenes (SP5a spec §6.5)
+
+/**
+ * A review scene's voxel: its offset from the scene's anchor (L10's hover point: the camera's block column, at its
+ * surface's first free y, `heightAt`) and its value (`state << 8 | fluid`). x grows east, z south; dy 0 is the first
+ * layer above the ground.
+ */
+export type SceneVoxel = readonly [dx: number, dy: number, dz: number, value: number];
+
+/** A voxel value of a state key (no fluid). */
+const valueOf = (key: string): number => (REGISTRY.parseStateKey(key) << 8) >>> 0;
+const blockValue = (state: number): number => (state << 8) >>> 0;
+
+/**
+ * The site (plan): the box cleared to air first, above the ground (dy 0 … 10), so the scene and the poses' eyes are
+ * not buried in a hillside; the pool and the house are written over it.
+ */
+export const REVIEW_SITE = { dx0: -12, dx1: 10, dy0: 0, dy1: 10, dz0: -6, dz1: 11 } as const;
+
+/**
+ * The house (plan): 7 × 5 × 7 at dx 2 … 8, dy 0 … 4, dz −3 … 3. Its bottom layer a cobblestone base around a brick
+ * floor; oak logs upright at the corners (axis y), along the roof's north and south edges (axis x) and its east and
+ * west edges (axis z); oak-plank walls with a stripe of red and white wool at dy 2, a glass window in the south wall
+ * (dx 4 … 6) and in the west wall facing the pool (dz −1 … 1); a plank roof; a ladder up the north wall inside; wall
+ * torches inside on the east wall and outside on the south and west walls.
+ */
+export const REVIEW_HOUSE: readonly SceneVoxel[] = (() => {
+  const planks = blockValue(OAK_PLANKS);
+  const glass = blockValue(GLASS);
+  const stripe = [blockValue(RED_WOOL), blockValue(WHITE_WOOL)];
+  const out: SceneVoxel[] = [];
+  for (let dy = 0; dy <= 4; dy++) {
+    for (let dz = -3; dz <= 3; dz++) {
+      for (let dx = 2; dx <= 8; dx++) {
+        const edgeX = dx === 2 || dx === 8;
+        const edgeZ = dz === -3 || dz === 3;
+        let v: number;
+        if (dy === 0) v = edgeX || edgeZ ? blockValue(COBBLESTONE) : blockValue(BRICKS);
+        else if (edgeX && edgeZ) v = valueOf('oak_log[axis=y]');
+        else if (dy === 4) v = edgeZ ? valueOf('oak_log[axis=x]') : edgeX ? valueOf('oak_log[axis=z]') : planks;
+        else if (!edgeX && !edgeZ) {
+          // Inside: the ladder against the north wall, a torch on the east wall, air.
+          if (dx === 5 && dz === -2) v = valueOf('ladder[facing=south]');
+          else if (dx === 7 && dz === 0 && dy === 2) v = valueOf('wall_torch[facing=west]');
+          else v = 0;
+        } else if (dy === 2 && ((dz === 3 && dx >= 4 && dx <= 6) || (dx === 2 && dz >= -1 && dz <= 1))) v = glass;
+        else if (dy === 2) v = stripe[(dx + dz) & 1]!;
+        else v = planks;
+        out.push([dx, dy, dz, v]);
+      }
+    }
+  }
+  // The outside torches, each against its wall.
+  out.push([3, 3, 4, valueOf('wall_torch[facing=south]')], [7, 3, 4, valueOf('wall_torch[facing=south]')]);
+  out.push([1, 3, -2, valueOf('wall_torch[facing=west]')], [1, 3, 2, valueOf('wall_torch[facing=west]')]);
+  return out;
+})();
+
+/**
+ * The pool and the lava (plan): a 9 × 9 × 4 pit west of the house (dx −10 … −2, dy −4 … −1, dz −4 … 4) of bucket water
+ * (still sources); its south side a glass wall (dz 5) with a trench of air dug beyond it (dz 6 … 9), so the glass shows
+ * against the water from the trench's side (the aquarium); an ice block in the east rim (dx −1, dy −1, dz 0); and a
+ * 3 × 3 pool of bucket lava in the ground south of the house (dx 4 … 6, dy −1, dz 6 … 8), which lights it at night.
+ */
+export const REVIEW_POOL: readonly SceneVoxel[] = (() => {
+  const out: SceneVoxel[] = [];
+  for (let dy = -4; dy <= -1; dy++) {
+    for (let dx = -10; dx <= -2; dx++) {
+      for (let dz = -4; dz <= 4; dz++) out.push([dx, dy, dz, WATER_SOURCE]);
+      out.push([dx, dy, 5, blockValue(GLASS)]);
+      for (let dz = 6; dz <= 9; dz++) out.push([dx, dy, dz, 0]);
+    }
+  }
+  out.push([-1, -1, 0, blockValue(ICE)]);
+  for (let dz = 6; dz <= 8; dz++) for (let dx = 4; dx <= 6; dx++) out.push([dx, -1, dz, LAVA_SOURCE]);
+  return out;
+})();
+
+/** The house's centre, which the build shots look at. */
+const HOUSE_CENTRE = [5.5, 2.5, 0.5] as const;
+/** The build shots' view of the house: from the south-west, facing north-east, 12 blocks from its centre. */
+const BUILD_YAW = 45;
+const BUILD_PITCH = -20;
+const BUILD_DISTANCE = 12;
+
+/** The build shots' pose, relative to the anchor: `BUILD_DISTANCE` back from the house's centre along the look. */
+const buildPose = (): BenchPose => {
+  const [lx, ly, lz] = lookVector(BUILD_YAW, BUILD_PITCH);
+  return {
+    x: HOUSE_CENTRE[0] - BUILD_DISTANCE * lx, y: HOUSE_CENTRE[1] - BUILD_DISTANCE * ly, z: HOUSE_CENTRE[2] - BUILD_DISTANCE * lz,
+    yaw: BUILD_YAW, pitch: BUILD_PITCH,
+  };
+};
+
+/**
+ * Each review scene's clock (hours, fixed and paused), mode and camera pose relative to the anchor (plan):
+ * `build-day` the house from 12 blocks at noon; `build-night` the same at midnight, lit by its torches and the lava;
+ * `walk-water` walking, the eye 0.25 above the pool's water at its west end, looking east across it to the house;
+ * `glass-water` beyond the trench, looking down at the glass wall against the water, the ice in the rim beside it.
+ */
+export const REVIEW_SCENES: Readonly<Record<ReviewShot, { readonly hours: number; readonly walk: boolean; readonly pose: Readonly<BenchPose> }>> = {
+  'build-day': { hours: 12, walk: false, pose: buildPose() },
+  'build-night': { hours: 0, walk: false, pose: buildPose() },
+  'walk-water': { hours: 12, walk: true, pose: { x: -8.5, y: 0.25, z: 0.5, yaw: 90, pitch: -8 } },
+  'glass-water': { hours: 12, walk: false, pose: { x: -5.5, y: 1.5, z: 10.5, yaw: 0, pitch: -35 } },
+};
+
+/** The scene's edits per batch (plan): small batches, so each reply drains the sim's retired slots before the next. */
+export const REVIEW_SCENE_BATCH = 64;
+/** How long the posed scene renders before its three frozen frames (plan): its remesh and reveals land well within it. */
+export const REVIEW_SETTLE_S = 2;
+
+/**
+ * The scene's edits at anchor (ax, ay, az) (plan): the site cleared, then the pool, then the house (a later voxel
+ * replaces an earlier one), each a `set` whose `expect` is the voxel's value now (`read`), voxels already at their value
+ * and voxels outside the world's height left out.
+ */
+export function reviewSceneEdits(ax: number, ay: number, az: number, read: (x: number, y: number, z: number) => number): Edit[] {
+  const want = new Map<string, SceneVoxel>();
+  const put = (b: SceneVoxel): void => { want.set(`${b[0]},${b[1]},${b[2]}`, b); };
+  const s = REVIEW_SITE;
+  for (let dy = s.dy0; dy <= s.dy1; dy++) for (let dz = s.dz0; dz <= s.dz1; dz++) for (let dx = s.dx0; dx <= s.dx1; dx++) put([dx, dy, dz, 0]);
+  for (const b of REVIEW_POOL) put(b);
+  for (const b of REVIEW_HOUSE) put(b);
+  const edits: Edit[] = [];
+  for (const [dx, dy, dz, value] of want.values()) {
+    const x = ax + dx;
+    const y = ay + dy;
+    const z = az + dz;
+    if (y < MIN_Y || y > MAX_Y) continue;
+    const expect = read(x, y, z);
+    if (expect !== value) edits.push({ x, y, z, op: 'set', value, expect });
+  }
+  return edits;
+}
 
 /** Where the driver's output goes: `window.__wiBench` and the panel in the page, a list in a test. */
 export interface BenchPublish {
@@ -1009,7 +1163,13 @@ export interface BenchWorld {
   readonly edit: {
     post(edits: readonly Edit[]): Promise<EditOutcome>;
     editState(cx: number, cz: number): 0 | 1 | 2;
+    /** The voxel's value now (`state << 8 | fluid`, 0 where not Published): a review scene's `expect` (SP5a spec §6.5). */
+    read(x: number, y: number, z: number): number;
   };
+  /** The review scenes' clock (SP5a spec §6.5): fixed at `hours` (0 … 24) and paused. */
+  setTime(hours: number): void;
+  /** The review scenes' mode (SP5a spec §6.5): F's path (`toggleMode`, the near plane) when the mode differs. */
+  walk(on: boolean): void;
 }
 
 /**
@@ -1021,7 +1181,10 @@ export interface BenchWorld {
  * applies live when it changes; null ends the script, and the page then calls `done`. After L6 (95 s) the live legs run
  * (SP4c spec §8.4): L7 calls `live.set` at its start, L8 `live.undo`, L9 `live.teleport(x + 20,000, z)` from the camera's
  * place; each ends when `live.settled(leg)` holds or at its cap. Then L10 (SP5a spec §6.2, `BENCH_EDIT`) posts its edits
- * through `edit.post` and flies east, and the script ends after it. In L7-L10 the pose keeps x, z and the yaw, sets the
+ * through `edit.post` and flies east, and the script ends after it; a review scene's shot (SP5a spec §6.5) skips the
+ * flight: once L10's posts have replied it posts the scene (`reviewSceneEdits` at the hover point) in batches of
+ * `REVIEW_SCENE_BATCH`, each after the last's reply, then calls `setTime` (and `walk`), holds the scene's pose for
+ * `REVIEW_SETTLE_S` and freezes there. In L7-L10 the pose keeps x, z and the yaw, sets the
  * pitch −15 and y 150 (after L9's arrival, the teleport's y); L10's flight sets x and the yaw 90. The page writes each
  * rendered frame into `record` (`createBenchRecorder`). `fail` ends the script with an error (a failure after the
  * reveal), once.
@@ -1038,11 +1201,11 @@ export interface BenchDriver {
 
 /**
  * When a timed shot freezes at script time `tS`: the time to freeze the pose at, or null to go on (always null for the
- * live shots, which freeze on the live legs' events). rd12back waits for the fog back at the script's top RD (`topRd`:
+ * live shots, which freeze on the live legs' events, and the review scenes, which freeze once built). rd12back waits for the fog back at the script's top RD (`topRd`:
  * 12, or the reservation's cap below it).
  */
 function freezeTime(shot: BenchShot, tS: number, fogRd: number, topRd: number): number | null {
-  if (shot === 'apply-mid' || shot === 'apply-after' || shot === 'teleport') return null;
+  if (shot === 'apply-mid' || shot === 'apply-after' || shot === 'teleport' || isReviewShot(shot)) return null;
   if (shot !== 'rd12back') return tS >= SHOT_AT[shot] ? SHOT_AT[shot] : null;
   if (tS >= BENCH_SECONDS) return BENCH_SECONDS;
   return tS >= RD12BACK_FROM && fogRd >= topRd ? tS : null;
@@ -1071,6 +1234,8 @@ const EDITS_S = BENCH_EDIT.count * EDIT_EVERY_S;
 const L10_HOVER = 0;
 const L10_EDITS = 1;
 const L10_FLIGHT = 2;
+/** A review shot's phase after the edits, in place of the flight (SP5a spec §6.5). */
+const L10_SCENE = 3;
 
 export function createBenchDriver(o: { readonly shot: BenchShot | null; readonly capacity?: number; readonly publish: BenchPublish }): BenchDriver {
   const record = createBenchRecord(o.capacity ?? BENCH_FRAME_CAPACITY);
@@ -1109,6 +1274,18 @@ export function createBenchDriver(o: { readonly shot: BenchShot | null; readonly
   let hoverAccepted = 0;
   let streamingRefused = 0;
   let editTimedOut = false;
+  // A review scene (SP5a spec §6.5): the shot, the page's clock and mode hooks, L10's posts not yet replied, the scene's
+  // edits (null until built) and the next to post, its anchor, the time it was posed (NaN before), whether it froze,
+  // and why it failed (null while it has not).
+  const review = isReviewShot(o.shot) ? o.shot : null;
+  let sceneHooks: Pick<BenchWorld, 'setTime' | 'walk'> | null = null;
+  let pendingPosts = 0;
+  let scene: Edit[] | null = null;
+  let sceneNext = 0;
+  const anchor = new Float64Array(3);
+  let posedS = Number.NaN;
+  let sceneFrozen = false;
+  let sceneError: string | null = null;
   const capped = (rd: number): number => Math.min(rd, rdMax);
 
   /** The live legs' pose (SP4c spec §8.4): x, z and the yaw kept; pitch −15; y 150 until L9's arrival, then kept. */
@@ -1162,7 +1339,14 @@ export function createBenchDriver(o: { readonly shot: BenchShot | null; readonly
   };
   /** Posts one voxel edit at (x, y, z); `onOutcome` sees whether the sim accepted it (a post that rejects did not). */
   const postEdit = (x: number, y: number, z: number, value: number, expect: number, onOutcome: (ok: boolean) => void): void => {
-    edit!.post([{ x, y, z, op: 'set', value, expect }]).then((r) => onOutcome(r.ok), () => onOutcome(false));
+    pendingPosts++;
+    edit!.post([{ x, y, z, op: 'set', value, expect }]).then((r) => {
+      pendingPosts--;
+      onOutcome(r.ok);
+    }, () => {
+      pendingPosts--;
+      onOutcome(false);
+    });
   };
   /** The outcomes of the hover's edits and of the flight's. */
   const accepted = (ok: boolean): void => { if (ok) hoverAccepted++; };
@@ -1192,6 +1376,7 @@ export function createBenchDriver(o: { readonly shot: BenchShot | null; readonly
       if (!live!.settled(9)) {
         if (tS - legStartS < BENCH_EDIT.hoverMaxS) return true;
         editTimedOut = true;
+        if (review !== null) sceneError = `the review scene was not built: L10's disc never filled within ${BENCH_EDIT.hoverMaxS} s`;
         return false;
       }
       editPhase = L10_EDITS;
@@ -1204,11 +1389,12 @@ export function createBenchDriver(o: { readonly shot: BenchShot | null; readonly
         return true;
       }
       if (tS - phaseS < EDITS_S) return true;
-      editPhase = L10_FLIGHT;
+      editPhase = review === null ? L10_FLIGHT : L10_SCENE;
       phaseS = tS;
       editsPosted = 0;
       flightX = out.x;
     }
+    if (editPhase === L10_SCENE) return sceneStep(tS, out);
     const into = tS - phaseS;
     if (into >= BENCH_EDIT.streamingFlightS) return false;
     out.x = flightX + BENCH_EDIT.streamingSpeed * into;
@@ -1220,6 +1406,60 @@ export function createBenchDriver(o: { readonly shot: BenchShot | null; readonly
         postEdit(at[0]!, at[1]!, at[2]!, STONE_VALUE, 0, streamed);
       } else streamingRefused++;
     }
+    return true;
+  };
+  /** Writes the review scene's pose (relative to its anchor) into `out`. */
+  const scenePose = (out: BenchPose): void => {
+    const p = REVIEW_SCENES[review!].pose;
+    out.x = anchor[0]! + p.x;
+    out.y = anchor[1]! + p.y;
+    out.z = anchor[2]! + p.z;
+    out.yaw = p.yaw;
+    out.pitch = p.pitch;
+  };
+  /**
+   * One frame of a review scene at `tS` (SP5a spec §6.5), in place of L10's flight: once every post has replied, the
+   * scene built at the camera's block column on its surface and posted batch by batch, each after the last's reply;
+   * then the clock fixed (and the walk), the scene's pose held for `REVIEW_SETTLE_S`, and the shot frozen there
+   * (`frozenLive`). False on a failure (`sceneError`): no surface, a refused or failed batch.
+   */
+  const sceneStep = (tS: number, out: BenchPose): boolean => {
+    if (sceneError !== null) return false;
+    if (pendingPosts > 0) return true;
+    if (scene === null) {
+      const bx = Math.floor(out.x);
+      const bz = Math.floor(out.z);
+      const y = heightAt!(bx, bz);
+      if (y === null) {
+        sceneError = `the review scene was not built: no surface at (${bx}, ${bz})`;
+        return false;
+      }
+      anchor[0] = bx;
+      anchor[1] = y;
+      anchor[2] = bz;
+      scene = reviewSceneEdits(bx, y, bz, (x, vy, z) => edit!.read(x, vy, z));
+    }
+    if (sceneNext < scene.length) {
+      const batch = scene.slice(sceneNext, sceneNext + REVIEW_SCENE_BATCH);
+      pendingPosts++;
+      edit!.post(batch).then((r) => {
+        pendingPosts--;
+        if (r.ok) sceneNext += batch.length;
+        else sceneError = `the review scene's edits were refused: ${r.why}`;
+      }, (e: unknown) => {
+        pendingPosts--;
+        sceneError = `the review scene's edits failed: ${e instanceof Error ? `${e.name}: ${e.message}` : String(e)}`;
+      });
+      return true;
+    }
+    if (Number.isNaN(posedS)) {
+      posedS = tS;
+      const s = REVIEW_SCENES[review!];
+      sceneHooks!.setTime(s.hours);
+      if (s.walk) sceneHooks!.walk(true);
+    }
+    scenePose(out);
+    if (tS - posedS >= REVIEW_SETTLE_S) frozenLive = sceneFrozen = true;
     return true;
   };
   /**
@@ -1272,6 +1512,7 @@ export function createBenchDriver(o: { readonly shot: BenchShot | null; readonly
       heightAt = (x, z) => world.heightAt(x, z);
       live = world.live;
       edit = world.edit;
+      sceneHooks = { setTime: (h) => world.setTime(h), walk: (on) => world.walk(on) };
     },
     pose(tS, out, fogRd) {
       if (ended) return null;
@@ -1288,10 +1529,16 @@ export function createBenchDriver(o: { readonly shot: BenchShot | null; readonly
           return capped(r.rd);
         }
         if (liveStep(tS, out) && !frozenLive) return capped(BENCH_RD);
-        // The script ended: a live shot whose moment never came freezes here (the teleport failed, say).
+        // The script ended: a live shot whose moment never came freezes here (the teleport failed, say); a review
+        // scene that was not built publishes why instead of a shot of something else.
         if (!frozenLive) {
           if (o.shot === null) {
             ended = true;
+            return null;
+          }
+          if (review !== null) {
+            ended = true;
+            o.publish.result({ route: 'bench=medium', error: sceneError ?? 'the review scene was not built' });
             return null;
           }
           frozenLive = true;
@@ -1308,14 +1555,18 @@ export function createBenchDriver(o: { readonly shot: BenchShot | null; readonly
         return capped(BENCH_RD);
       }
       let rd = BENCH_RD;
-      if (frozenLive) livePose(out);
-      else rd = benchPose(frozenAt, start, out).rd;
-      // The shot's camera (rulings R9): the ground's height under the frozen pose, read once at the first frozen frame
-      // and kept for the three; where it has no value (an unloaded column) the route's pose stays.
-      if (frozenFrames === 0 && heightAt !== null) shotY = heightAt(Math.floor(out.x), Math.floor(out.z)) ?? Number.NaN;
-      if (!Number.isNaN(shotY)) {
-        out.y = shotY + BENCH_SHOT_ABOVE;
-        out.pitch = BENCH_SHOT_PITCH;
+      // A review scene keeps its own pose.
+      if (sceneFrozen) scenePose(out);
+      else {
+        if (frozenLive) livePose(out);
+        else rd = benchPose(frozenAt, start, out).rd;
+        // The shot's camera (rulings R9): the ground's height under the frozen pose, read once at the first frozen
+        // frame and kept for the three; where it has no value (an unloaded column) the route's pose stays.
+        if (frozenFrames === 0 && heightAt !== null) shotY = heightAt(Math.floor(out.x), Math.floor(out.z)) ?? Number.NaN;
+        if (!Number.isNaN(shotY)) {
+          out.y = shotY + BENCH_SHOT_ABOVE;
+          out.pitch = BENCH_SHOT_PITCH;
+        }
       }
       frozenFrames++;
       return capped(rd);

@@ -23,12 +23,13 @@ import { WATER_SOURCE } from '../../src/world/blocks/fluid';
 import { createHotbar } from '../../src/player/hotbar';
 import { SPEED_DEFAULT, type FlyState } from '../../src/player/fly';
 import { attachInput } from '../../src/player/input';
+import { advanceTime, clockHours } from '../../src/daynight/dayNight';
 import { EYE, createWalkState } from '../../src/player/walk';
 import { NEAR_FLY, NEAR_WALK } from '../../src/render/renderer';
 import { createReloader, createWorldUrl, worldHash, type HereState } from '../../src/ui/world/reload';
 import {
   countPendingTimers, countTileCalls, createAim, createClickQueue, createHookEdit, createRdControl, createUndoNotice, createWorldNotices, everyFrameUntil, failBeforeReveal, flushOnPageHide, handleContextLoss,
-  handleStreamEvent, helpChange, installRepeatStop, installUndoKeys, installWiTest, mapKey, offerLowerRd, paletteFirst, onDriverStatus, onSimFailure, rdShownOnLoad, releaseOnFailure, reloadRd, runTeardown, speedKey, stopAfterFailure, switchMode,
+  benchSetTime, benchWalk, handleStreamEvent, helpChange, installRepeatStop, installUndoKeys, installWiTest, mapKey, offerLowerRd, paletteFirst, onDriverStatus, onSimFailure, rdShownOnLoad, releaseOnFailure, reloadRd, runTeardown, speedKey, stopAfterFailure, switchMode,
   UNDO_NOTICE_MS, type WiTest, type WiTestPage,
 } from '../../src/ui/world/worldPage';
 import { createEditLatency } from '../../src/ui/world/editLatency';
@@ -468,7 +469,9 @@ describe('createRdControl (SP4b spec §5, D18; Review Focus 5)', () => {
       rdMax: 10,
       heightAt: () => null,
       live: { set() {}, undo() {}, teleport: () => Promise.resolve(true), settled: () => true },
-      edit: { post: () => Promise.resolve({ ok: true, prev: new Uint32Array(0), next: new Uint32Array(0) }), editState: () => 0 },
+      edit: { post: () => Promise.resolve({ ok: true, prev: new Uint32Array(0), next: new Uint32Array(0) }), editState: () => 0, read: () => 0 },
+      setTime() {},
+      walk() {},
     });
     // The page's loop: the script's RD applied through the control when it differs from the live one.
     let liveRd = 10;
@@ -1780,6 +1783,36 @@ describe('modes in the page: F, the near plane, the reach, the wheel and + / −
     expect(near).toEqual([NEAR_WALK, NEAR_FLY]);
     expect([NEAR_WALK, NEAR_FLY]).toEqual([0.05, 0.1]);
     expect(repeat.stop).toHaveBeenCalledTimes(2);
+  });
+
+  test('the bench\'s review scenes (SP5a spec §6.5): `benchSetTime` fixes the clock at the hour and pauses it; `benchWalk` takes F\'s path once', () => {
+    const state = { t: 0.3 };
+    const clock = { speed: 60 };
+    benchSetTime(state, clock, 12);
+    expect([state.t, clock.speed]).toEqual([0.25, 0]);
+    expect(clockHours(state.t)).toBe(12);
+    benchSetTime(state, clock, 0);
+    expect([state.t, clockHours(state.t)]).toEqual([0.75, 0]);
+    // A paused clock keeps the hour.
+    expect(advanceTime(state.t, 1000, clock.speed)).toBe(0.75);
+
+    const fly = flyAt({ y: 100 });
+    const walk = createWalkState();
+    const near: number[] = [];
+    const repeat = { stop: vi.fn() };
+    const o = { fly, walk, world: { setNear: (n: number) => { near.push(n); } }, repeat };
+    benchWalk(o, true);
+    expect([fly.mode, walk.y, near]).toEqual(['walk', 100 - EYE, [NEAR_WALK]]);
+    // Already walking: nothing switches back.
+    benchWalk(o, true);
+    expect([fly.mode, near]).toEqual(['walk', [NEAR_WALK]]);
+    benchWalk(o, false);
+    expect([fly.mode, near]).toEqual(['fly', [NEAR_WALK, NEAR_FLY]]);
+    expect(repeat.stop).toHaveBeenCalledTimes(2);
+    // The bench's world hooks: the clock it steps the frame with, its walk through the page's mode switch.
+    expect(src()).toMatch(/timeSpeed: \(\) => benchClock\.speed,/);
+    expect(src()).toMatch(/setTime: \(hours\) => benchSetTime\(frame, benchClock, hours\),/);
+    expect(src()).toMatch(/walk: \(on\) => benchWalk\(\{ fly, walk, world, repeat: NO_REPEAT \}, on\),/);
   });
 
   test('a load opens in flight: the page\'s camera starts with `mode: \'fly\'` and a fresh walk state (D1: the mode is not remembered)', () => {

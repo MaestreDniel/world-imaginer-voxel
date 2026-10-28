@@ -1309,6 +1309,28 @@ export function switchMode(o: {
   o.repeat.stop();
 }
 
+/** The clock's position t of hour `hours` (0 … 24): `clockHours`'s inverse, 0 at 06:00 (`?time=`, a capture's fixed hour). */
+export function timeOfHours(hours: number): number {
+  return ((((hours - 6) / 24) % 1) + 1) % 1;
+}
+
+/**
+ * The bench's `setTime` (SP5a spec §6.5, a review scene): the frame state's clock at `hours` and the bench's day speed
+ * 0, so the frame step keeps it there.
+ */
+export function benchSetTime(state: { t: number }, clock: { speed: number }, hours: number): void {
+  state.t = timeOfHours(hours);
+  clock.speed = 0;
+}
+
+/** The bench's hold repeat for `switchMode`: none (the bench takes no input). */
+const NO_REPEAT: Pick<HoldRepeat, 'stop'> = { stop() {} };
+
+/** The bench's `walk` (SP5a spec §6.5, a review scene): F's path (`switchMode`) when the mode is not the one asked. */
+export function benchWalk(o: Parameters<typeof switchMode>[0], on: boolean): void {
+  if ((o.fly.mode === 'walk') !== on) switchMode(o);
+}
+
 /** `+` and `-` (and Ctrl+wheel in flight) step the flight speed; walking they do nothing (SP5a spec §3.3). */
 export function speedKey(fly: FlyState, dir: 1 | -1): void {
   if (fly.mode === 'fly') stepSpeed(fly, dir);
@@ -1662,7 +1684,7 @@ export function mountWorldPage(root: HTMLElement, q: WorldQuery, hash: string, o
     const walk = createWalkState();
     // Wraps the yaw into [0, 360) and clamps the pitch; a query's valid degrees pass unchanged (ruling P42).
     look(fly, 0, 0, 0);
-    const fixedT = opts.timeHours === undefined || opts.timeHours === null ? null : ((((opts.timeHours - 6) / 24) % 1) + 1) % 1;
+    const fixedT = opts.timeHours === undefined || opts.timeHours === null ? null : timeOfHours(opts.timeHours);
     let t = fixedT ?? OPENING_T;
     let speedIndex = 0;
     const timeSpeed = (): number => (fixedT === null ? TIME_SPEEDS[speedIndex]! : 0);
@@ -1864,8 +1886,11 @@ export function mountWorldPage(root: HTMLElement, q: WorldQuery, hash: string, o
         });
         benchTeleport = teleporter;
         teardown.push(() => teleporter.dispose());
+        // The bench's day speed, which a review scene sets to 0 with its fixed hour (SP5a spec §6.5).
+        const benchClock = { speed: BENCH_TIME_SPEED };
         // The script's RD steps never exceed the reservation's cap (Task 26b); the review shots' camera reads the ground's
-        // height under the frozen pose (rulings R9); the live legs edit, undo and teleport through the pieces above.
+        // height under the frozen pose (rulings R9); the live legs edit, undo and teleport through the pieces above; the
+        // review scenes build through the edit path, fix the clock and walk through F's path (no hold repeat here).
         bench.bind({
           rdMax,
           heightAt: (x, z) => store.heightAt('motionBlocking', x, z),
@@ -1894,7 +1919,10 @@ export function mountWorldPage(root: HTMLElement, q: WorldQuery, hash: string, o
           edit: {
             post: (edits) => benchEdits.post(edits),
             editState: (cx, cz) => coordinator.editState(cx, cz),
+            read: (x, y, z) => voxelValue(store, x, y, z),
           },
+          setTime: (hours) => benchSetTime(frame, benchClock, hours),
+          walk: (on) => benchWalk({ fly, walk, world, repeat: NO_REPEAT }, on),
         });
         // The live RD as the help would set it, never saved (SP4b spec §5).
         const fog = createFogEase(loadRd);
@@ -1984,7 +2012,7 @@ export function mountWorldPage(root: HTMLElement, q: WorldQuery, hash: string, o
           store,
           aim: (read) => benchAim.aim(read, false),
           state: frame,
-          timeSpeed: () => BENCH_TIME_SPEED,
+          timeSpeed: () => benchClock.speed,
           fogStep: (dtMs) => fogStep.step(dtMs),
           // The apply control before the coordinator's update; the aux policy from its counts, no map covering the 3D
           // (SP4c spec §4.3, §6.2, §8.4).

@@ -63,10 +63,12 @@ describe('measureChrome: the bench route (SP4b spec §8.3, §8.7)', () => {
     expect(() => parseMeasureArgs(['--route', 'bench', '--shot'])).toThrow(/--shot needs a value/);
   });
 
-  test('the shot names mirror bench.ts\'s, SP4c\'s four live shots included (SP4c spec §8.7)', () => {
+  test('the shot names mirror bench.ts\'s, SP4c\'s four live shots and SP5a\'s four review scenes included (SP4c spec §8.7, SP5a spec §6.5)', () => {
     expect(SHOTS).toEqual(BENCH_SHOTS);
-    expect(SHOTS.slice(-4)).toEqual(['apply-before', 'apply-mid', 'apply-after', 'teleport']);
+    expect(SHOTS.slice(-8, -4)).toEqual(['apply-before', 'apply-mid', 'apply-after', 'teleport']);
+    expect(SHOTS.slice(-4)).toEqual(['build-day', 'build-night', 'walk-water', 'glass-water']);
     expect(parseMeasureArgs(['--route', 'bench', '--shot', 'apply-mid', '--renderer', 'mesh']).shot).toBe('apply-mid');
+    expect(parseMeasureArgs(['--route', 'bench', '--shot', 'build-night', '--renderer', 'batch']).shot).toBe('build-night');
   });
 
   test('outputName for the bench, w4 and shot cases', () => {
@@ -78,6 +80,9 @@ describe('measureChrome: the bench route (SP4b spec §8.3, §8.7)', () => {
     expect(outputName(args({ route: 'bench', gpu: 'iris', renderer: 'mesh', shot: 'rd12back' }))).toBe('review-rd12back-mesh.png');
     expect(outputName(args({ route: 'bench', gpu: 'iris', renderer: 'mesh', shot: 'apply-mid' }))).toBe('review-apply-mid-mesh.png');
     expect(outputName(args({ route: 'bench', gpu: 'iris', renderer: 'batch', shot: 'teleport' }))).toBe('review-teleport-batch.png');
+    // SP5a's review scenes (spec §6.5): the renderer in the name, as every shot's.
+    expect(outputName(args({ route: 'bench', gpu: 'iris', renderer: 'batch', shot: 'glass-water' }))).toBe('review-glass-water-batch.png');
+    expect(outputName(args({ route: 'bench', gpu: 'iris', renderer: 'batch', shot: 'build-day' }))).toBe('review-build-day-batch.png');
   });
 
   test('routePath with every flag', () => {
