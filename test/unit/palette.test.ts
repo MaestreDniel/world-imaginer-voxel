@@ -41,7 +41,7 @@ describe('paletteGroups: the creative palette\'s content (SP5a spec §4.4, D10; 
     expect(groups[3]!.items).toEqual(BUCKETS);
   });
 
-  test.skip('`\'wool\'` keeps only the Wool group; `\'oak\'` keeps Oak planks and Oak log; `\'zzz\'` nothing', () => {
+  test('`\'wool\'` keeps only the Wool group; `\'oak\'` keeps Oak planks and Oak log; `\'zzz\'` nothing', () => {
     const wool = paletteGroups('wool');
     expect(wool.map((g) => g.group)).toEqual(['wool']);
     expect(wool[0]!.items).toHaveLength(16);
@@ -153,7 +153,7 @@ describe('mountPalette: the overlay (SP5a spec §4.4, D10)', () => {
     expect(onClose).toHaveBeenCalledTimes(2);
   });
 
-  test.skip('E with the search focused types (no close); the search box is not focused at opening', () => {
+  test('E with the search focused types (no close); the search box is not focused at opening', () => {
     const { palette, requestLock } = mount();
     palette.open();
     expect(dom.document.activeElement).toBe(dom.body);
@@ -169,7 +169,7 @@ describe('mountPalette: the overlay (SP5a spec §4.4, D10)', () => {
     expect(dom.document.activeElement).toBe(dom.body);
   });
 
-  test.skip('the search box filters the swatches by display name; groups with no match hide', () => {
+  test('the search box filters the swatches by display name; groups with no match hide', () => {
     const { palette } = mount();
     palette.open();
     const search = dom.el('palette-search');

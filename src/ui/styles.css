@@ -59,9 +59,11 @@ body { background: #0f1629; color: var(--text); font: 13px/1.4 system-ui, sans-s
 .world-slot-name { position: absolute; left: 50%; bottom: 58px; z-index: 2; transform: translateX(-50%); padding: .1rem .5rem; border-radius: 4px; background: rgb(0 0 0 / .45); color: #f4f7ff; white-space: nowrap; pointer-events: none; }
 .world-crosshair[hidden], .world-slot-name[hidden] { display: none; }
 /* The creative palette (SP5a spec §4.4, D10): a panel like the help's over the paused world, ending above the hotbar
-   so the active slot shows each click; 40 × 40 px swatches as the hotbar's, the hovered one's name under the grid. */
+   so the active slot shows each click; the search box, 40 × 40 px swatches as the hotbar's, the hovered one's name
+   under the grid. */
 .world-palette { position: absolute; top: 1.5rem; bottom: 64px; left: 50%; z-index: 3; display: flex; flex-direction: column; gap: .6rem; width: min(46rem, calc(100% - 2rem)); padding: 1rem 1.25rem; overflow: auto; transform: translateX(-50%); border-radius: 6px; background: rgb(15 22 41 / .92); }
 .world-palette[hidden] { display: none; }
+.palette-search { align-self: start; width: min(18rem, 100%); padding: .3rem .5rem; }
 .palette-groups { display: grid; gap: .6rem; }
 .palette-group h3 { margin-bottom: .3rem; }
 .palette-grid { display: flex; flex-wrap: wrap; gap: 4px; }
