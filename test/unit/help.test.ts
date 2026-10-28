@@ -3,8 +3,8 @@ import { evaluateWorldCapabilities, type CapabilityReport } from '../../src/engi
 import { RD_MAX, reservationRdCap } from '../../src/engine/renderDistance';
 import { bindingLabel, DEFAULT_KEYMAP } from '../../src/player/keymap';
 import { mountHelp } from '../../src/ui/help';
-import { SETTINGS_DEFAULTS, type WorldSettings } from '../../src/ui/settings';
-import { installDom } from './fixtures/domShim';
+import { SETTINGS_DEFAULTS, SETTINGS_KEY, loadSettings, saveSettings, type WorldSettings } from '../../src/ui/settings';
+import { installDom, type FakeElement } from './fixtures/domShim';
 
 const MIB = 1 << 20;
 const REPORT: CapabilityReport = {
@@ -174,6 +174,31 @@ describe('mountHelp (SP4a spec §7.4, D31)', () => {
     change('setting-brightness', '0.8', 'input');
     expect(o.onSettings).toHaveBeenLastCalledWith({ ...SETTINGS_DEFAULTS, rd: null, fpsCap: 60, fov: 90, sensitivity: 2.5, brightness: 0.8 });
     expect(dom.el('help-settings').textContent).toContain('90°');
+  });
+
+  test('"Hold mouse button to repeat": a checkbox, off by default; the checkbox round-trips through `wi.world.settings` (SP5a spec §4.1, D6)', () => {
+    const items = new Map<string, string>();
+    const storage = { getItem: (k: string) => items.get(k) ?? null, setItem: (k: string, v: string) => { items.set(k, v); } };
+    const { o } = mount({ settings: loadSettings(storage) });
+    // The page saves every change it is sent (`applySettings` → `saveSettings`).
+    o.onSettings.mockImplementation((s) => saveSettings(storage, s));
+    const box = dom.el('setting-hold-repeat') as FakeElement & { checked: boolean };
+    expect([box.tagName, box.type, box.checked]).toEqual(['INPUT', 'checkbox', false]);
+    const labels = dom.el('help-settings').querySelectorAll('span').map((sp) => sp.textContent);
+    expect(labels).toContain('Hold mouse button to repeat');
+    box.checked = true;
+    box.dispatchEvent(new Event('change'));
+    expect(o.onSettings).toHaveBeenLastCalledWith({ ...SETTINGS_DEFAULTS, holdRepeat: true });
+    expect(JSON.parse(items.get(SETTINGS_KEY)!)).toMatchObject({ holdRepeat: true });
+    // A new page reads it back checked; unchecking it saves false.
+    dom.body.replaceChildren();
+    const again = mount({ settings: loadSettings(storage) });
+    again.o.onSettings.mockImplementation((s) => saveSettings(storage, s));
+    const box2 = dom.el('setting-hold-repeat') as FakeElement & { checked: boolean };
+    expect(box2.checked).toBe(true);
+    box2.checked = false;
+    box2.dispatchEvent(new Event('change'));
+    expect(loadSettings(storage)).toEqual(SETTINGS_DEFAULTS);
   });
 
   test('open shows it; close hides it and calls onClose once', () => {

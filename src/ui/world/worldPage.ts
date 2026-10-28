@@ -88,7 +88,10 @@
  * off, every sim pin released, the notice) and the bench releases the same and ends its script with the error. The
  * teardown and the failure releases dispose the sim. The streaming route's actions (the clicks, the smoke's hook) post
  * through `createActionPost`, which records each accepted one in the block history (`blockHistory.ts`, §4.5), and
- * Ctrl+Z / Ctrl+Y undo and redo blocks while the world owns the controls, the map's settings while the map does.
+ * Ctrl+Z / Ctrl+Y undo and redo blocks while the world owns the controls, the map's settings while the map does. A
+ * mouse button goes through the hold repeat (`holdRepeat.ts`, §4.1, D6): a press queues once, and with the setting on
+ * a held LMB or RMB is queued again by the frame's aim, until its release, the lock's release, a paused frame (the
+ * palette, the map, the help) or F.
  */
 import { MEDIUM } from '../../core/params/graphicsPresets';
 import { OPENING_T, TIME_SPEEDS } from '../../daynight/dayNight';
@@ -148,6 +151,7 @@ import { mountBuildHud } from './buildHud';
 import { createActionPost, createBlockHistory, type BlockHistory } from './blockHistory';
 import { createEditPath, type EditOutcome } from './editPath';
 import { createFrameStep, eyeSkyLight } from './frameStep';
+import { createHoldRepeat, type HoldRepeat } from './holdRepeat';
 import { createMapOverlay, followSession, frameCapFor, worldMapView, type ControlsOwner, type MapOverlay } from './mapOverlay';
 import { createReloader, createWorldUrl, installLeaveGuard, navigateTo, type Reloader } from './reload';
 import { Y_MAX, Y_MIN, type WorldQuery } from './query';
@@ -1088,12 +1092,13 @@ export function offerLowerRd(notices: Pick<WorldNotices, 'slow'>, rd: number, co
 const CLICK_QUEUE_CAP = 16;
 
 /**
- * The mouse buttons pressed since the last rendered frame (SP5a spec §4.1, D6): `onButton` only queues, and the page's
- * aim runs the queue in the frame's second read section against the target aimed then, so a click never reads the store
- * outside a read section. LMB breaks (`breakAt`); RMB places the hotbar's active slot (`placeAt`: a block or a bucket's
- * source, against the flying body and the look's yaw), or with the empty bucket drains the first fluid on a `'fluid'`
- * ray from the eye (`emptyBucketAt`); each edit posted through the edit path. MMB picks the aimed type into the hotbar
- * (`pickAt` → `hotbar.pick`). A refused or missed click does nothing.
+ * The mouse buttons pressed since the last rendered frame (SP5a spec §4.1, D6): `onButton` only queues (through the
+ * hold repeat, `holdRepeat.ts`, which also queues a held button's repeats), and the page's aim runs the queue in the
+ * frame's second read section against the target aimed then, so a click never reads the store outside a read section.
+ * LMB breaks (`breakAt`); RMB places the hotbar's active slot (`placeAt`: a block or a bucket's source, against the
+ * flying body and the look's yaw), or with the empty bucket drains the first fluid on a `'fluid'` ray from the eye
+ * (`emptyBucketAt`); each edit posted through the edit path. MMB picks the aimed type into the hotbar (`pickAt` →
+ * `hotbar.pick`). A refused or missed click does nothing.
  */
 export interface ClickQueue {
   push(b: 0 | 1 | 2): void;
@@ -1166,7 +1171,9 @@ export interface Aim {
  * the hit (`outlineBounds`: the cell, or a box state's box), relative to the floating origin, computed on every hit;
  * then the outline set to that box, or hidden: while paused, while the pointer is free, with no target, and without the
  * HUD (captures, panoramas, the bench). The queued clicks (`clicks`) run between the two against the hit, a miss
- * included (it empties the queue); a paused frame drops them unrun. Allocates nothing.
+ * included (it empties the queue); a paused frame drops them unrun. Before they run the held button's repeat (`repeat`,
+ * §4.1, D6) is ticked at the frame's time, so a repeat is aimed by this frame's DDA; a paused frame (the palette, the map
+ * owning the controls, the help) stops it instead. Allocates nothing.
  */
 export function createAim(o: {
   readonly fly: Pick<FlyState, 'x' | 'y' | 'z' | 'yaw' | 'pitch'>;
@@ -1177,6 +1184,8 @@ export function createAim(o: {
   readonly hud: boolean;
   /** The queued mouse buttons (the streaming route's; the bench has none). */
   readonly clicks?: Pick<ClickQueue, 'run' | 'clear'>;
+  /** The held button's repeat and the frame clock it runs on, in seconds (the streaming route's; the bench has none). */
+  readonly repeat?: { readonly hold: Pick<HoldRepeat, 'tick' | 'stop'>; now(): number };
 }): Aim {
   const { fly, world } = o;
   const hit = createRayHit();
@@ -1188,8 +1197,13 @@ export function createAim(o: {
     aim(read, paused) {
       lookVectorInto(dir, fly.yaw, fly.pitch);
       castRay(read, fly.x, fly.y, fly.z, dir[0]!, dir[1]!, dir[2]!, REACH_FLY, 'block', hit);
-      if (paused) o.clicks?.clear();
-      else o.clicks?.run(hit, read);
+      if (paused) {
+        o.repeat?.hold.stop();
+        o.clicks?.clear();
+      } else {
+        o.repeat?.hold.tick(o.repeat.now());
+        o.clicks?.run(hit, read);
+      }
       if (!hit.hit) {
         world.hideOutline();
         return;
@@ -1206,6 +1220,24 @@ export function createAim(o: {
       else world.setOutline(box[0], box[1], box[2], box[3], box[4], box[5]);
     },
   };
+}
+
+/**
+ * The lock's release ends a held button's repeat (SP5a spec §4.1, D6): a `pointerlockchange` that leaves the canvas
+ * without the lock calls `stop`, since the button's `mouseup` no longer reaches the world (`attachInput` passes buttons
+ * only while locked), so a press held across an Esc never repeats after the next click takes the lock. Returns the
+ * remover.
+ */
+export function installRepeatStop(o: {
+  readonly doc: Pick<Document, 'addEventListener' | 'removeEventListener' | 'pointerLockElement'>;
+  readonly canvas: unknown;
+  readonly repeat: Pick<HoldRepeat, 'stop'>;
+}): () => void {
+  const onLockChange = (): void => {
+    if (o.doc.pointerLockElement !== o.canvas) o.repeat.stop();
+  };
+  o.doc.addEventListener('pointerlockchange', onLockChange);
+  return () => o.doc.removeEventListener('pointerlockchange', onLockChange);
 }
 
 /**
@@ -2279,6 +2311,8 @@ export function mountWorldPage(root: HTMLElement, q: WorldQuery, hash: string, o
           break;
         case 'slotNext': hotbar.step(1); break;
         case 'slotPrev': hotbar.step(-1); break;
+        // A mode switch ends a held button's repeat (SP5a spec §4.1).
+        case 'toggleWalk': holdRepeat.stop(); break;
         default: break; // movement and sprint are held; Esc (releasePointer) is the browser's
       }
     };
@@ -2290,10 +2324,23 @@ export function mountWorldPage(root: HTMLElement, q: WorldQuery, hash: string, o
       fly,
       editable: (cx, cz) => coordinator.editState(cx, cz) === 0,
     });
+    // Hold to repeat (SP5a spec §4.1, D6): a press queues once; with the setting on, a held LMB or RMB is queued again
+    // by the frame's aim once its rate has passed and the previous edit's reply has arrived. Its clock is the one the
+    // frame's rAF timestamps run on, in seconds.
+    const nowS = (): number => performance.now() / 1000;
+    const holdRepeat = createHoldRepeat({
+      enabled: () => settings.holdRepeat,
+      pending: editPath.pending,
+      queue: (b) => clicks.push(b),
+    });
+    teardown.push(installRepeatStop({ doc: document, canvas, repeat: holdRepeat }));
     const input = attachInput(canvas, {
       onAction,
       onLook: (dx, dy) => look(fly, dx, dy, settings.sensitivity * LOOK_DEG_PER_PIXEL),
-      onButton: (b, down) => { if (down) clicks.push(b); },
+      onButton: (b, down) => {
+        if (down) holdRepeat.down(b, nowS());
+        else holdRepeat.up(b);
+      },
       // Only text-entry controls (spec §7.1): a focused slider or select leaves H and F1 working (final review C-I2).
       isTextFocus: () => isTextEntry(document.activeElement as HTMLElement | null),
       // The world's keys act only while the world owns the controls (SP4c spec §2.3): never while the map owns.
@@ -2379,8 +2426,10 @@ export function mountWorldPage(root: HTMLElement, q: WorldQuery, hash: string, o
     const clock = createFrameClock(limiter, slowFrames, revealTs);
     let n = 0;
     let firstMax = 0;
-    // The DDA, the queued clicks and the outline (SP5a spec §3.5, §4.1).
-    const pageAim = createAim({ fly, world, locked: () => document.pointerLockElement === canvas, hud, clicks });
+    // The DDA, the held button's repeat, the queued clicks and the outline (SP5a spec §3.5, §4.1).
+    const pageAim = createAim({
+      fly, world, locked: () => document.pointerLockElement === canvas, hud, clicks, repeat: { hold: holdRepeat, now: nowS },
+    });
     const step = createFrameStep({
       fly,
       held: () => input.held,

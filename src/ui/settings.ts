@@ -17,13 +17,15 @@ export interface WorldSettings {
   mapMode: 'full' | 'split';
   /** Mode A's "Watch live" (SP4c spec §2.1, §2.5): an Apply that rebuilds the world hides the map to show it. */
   watchLive: boolean;
+  /** "Hold mouse button to repeat" (SP5a spec §4.1, D6): a held LMB or RMB repeats its action; off, one per click. */
+  holdRepeat: boolean;
 }
 
 /** The `localStorage` key. */
 export const SETTINGS_KEY = 'wi.world.settings';
 
 export const SETTINGS_DEFAULTS: Readonly<WorldSettings> = Object.freeze({
-  rd: null, fpsCap: 0, fov: 70, sensitivity: 1, brightness: 0.3, mapMode: 'full', watchLive: true,
+  rd: null, fpsCap: 0, fov: 70, sensitivity: 1, brightness: 0.3, mapMode: 'full', watchLive: true, holdRepeat: false,
 });
 
 /** The FPS caps offered, in order (spec §6.8). */
@@ -41,8 +43,9 @@ const clamp = (v: number, lo: number, hi: number): number => Math.min(hi, Math.m
 
 /**
  * Settings from any value: each field clamped to its range (rd an integer in 4-16, the cap one of `FPS_CAPS`, the map's
- * mode 'full' or 'split', Watch live a boolean); a field that is missing, non-numeric or of the wrong type takes its
- * default (so an object stored before SP4c gets the map's defaults), and a non-object gives the defaults.
+ * mode 'full' or 'split', Watch live and hold to repeat booleans); a field that is missing, non-numeric or of the wrong
+ * type takes its default (so an object stored before SP4c gets the map's defaults, and one stored before SP5a hold to
+ * repeat off), and a non-object gives the defaults.
  */
 export function normalizeSettings(raw: unknown): WorldSettings {
   const o = (typeof raw === 'object' && raw !== null && !Array.isArray(raw) ? raw : {}) as Record<string, unknown>;
@@ -59,6 +62,7 @@ export function normalizeSettings(raw: unknown): WorldSettings {
     brightness: range('brightness'),
     mapMode: o.mapMode === 'split' || o.mapMode === 'full' ? o.mapMode : SETTINGS_DEFAULTS.mapMode,
     watchLive: typeof o.watchLive === 'boolean' ? o.watchLive : SETTINGS_DEFAULTS.watchLive,
+    holdRepeat: typeof o.holdRepeat === 'boolean' ? o.holdRepeat : SETTINGS_DEFAULTS.holdRepeat,
   };
 }
 

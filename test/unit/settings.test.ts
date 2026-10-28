@@ -12,7 +12,7 @@ function memoryStorage(): Pick<Storage, 'getItem' | 'setItem'> & { readonly item
 describe('loadSettings (SP4a spec §7.4, D31)', () => {
   test('the key and the defaults', () => {
     expect(SETTINGS_KEY).toBe('wi.world.settings');
-    expect(SETTINGS_DEFAULTS).toEqual({ rd: null, fpsCap: 0, fov: 70, sensitivity: 1, brightness: 0.3, mapMode: 'full', watchLive: true });
+    expect(SETTINGS_DEFAULTS).toEqual({ rd: null, fpsCap: 0, fov: 70, sensitivity: 1, brightness: 0.3, mapMode: 'full', watchLive: true, holdRepeat: false });
   });
 
   test('defaults with a null storage, with a throwing storage and with bad JSON', () => {
@@ -49,14 +49,24 @@ describe('loadSettings (SP4a spec §7.4, D31)', () => {
     }
     // SP4b's stored object (no mapMode, no watchLive): its fields kept, the two new ones at their defaults.
     const old = { rd: 8, fpsCap: 60, fov: 85, sensitivity: 1.7, brightness: 0.55 };
-    expect(loadSettings(holding(JSON.stringify(old)))).toEqual({ ...old, mapMode: 'full', watchLive: true });
+    expect(loadSettings(holding(JSON.stringify(old)))).toEqual({ ...old, mapMode: 'full', watchLive: true, holdRepeat: false });
+  });
+
+  test('`holdRepeat` false for a missing or non-boolean value; a boolean kept (SP5a spec §4.1, D6)', () => {
+    expect(normalizeSettings({}).holdRepeat).toBe(false);
+    for (const bad of [undefined, null, 1, 'true', {}]) expect(normalizeSettings({ holdRepeat: bad }).holdRepeat, String(bad)).toBe(false);
+    expect(normalizeSettings({ ...SETTINGS_DEFAULTS, holdRepeat: true })).toEqual({ ...SETTINGS_DEFAULTS, holdRepeat: true });
+    expect(normalizeSettings({ holdRepeat: false }).holdRepeat).toBe(false);
+    // SP4c's stored object (no holdRepeat): its fields kept, the setting off.
+    const sp4c = { rd: 8, fpsCap: 60, fov: 85, sensitivity: 1.7, brightness: 0.55, mapMode: 'split', watchLive: false };
+    expect(loadSettings(holding(JSON.stringify(sp4c)))).toEqual({ ...sp4c, holdRepeat: false });
   });
 });
 
 describe('saveSettings', () => {
   test('a round-trip', () => {
     const storage = memoryStorage();
-    const s: WorldSettings = { rd: 10, fpsCap: 60, fov: 85, sensitivity: 1.7, brightness: 0.55, mapMode: 'split', watchLive: false };
+    const s: WorldSettings = { rd: 10, fpsCap: 60, fov: 85, sensitivity: 1.7, brightness: 0.55, mapMode: 'split', watchLive: false, holdRepeat: true };
     saveSettings(storage, s);
     expect([...storage.items.keys()]).toEqual(['wi.world.settings']);
     expect(loadSettings(storage)).toEqual(s);

@@ -70,6 +70,7 @@ import { mountBuildHud } from '../../src/ui/world/buildHud';
 import { createFogEase } from '../../src/ui/world/fogEase';
 import { createFrameClock, createFrameNotice } from '../../src/ui/world/frameNotice';
 import { createFrameStep, type FrameStepDeps } from '../../src/ui/world/frameStep';
+import { createHoldRepeat } from '../../src/ui/world/holdRepeat';
 import { createMapOverlay, type MapOverlay } from '../../src/ui/world/mapOverlay';
 import { createStore } from '../../src/world/store/store';
 import { installDom } from './fixtures/domShim';
@@ -789,6 +790,22 @@ describe('zero allocation at rest (SP4b spec §3.10, D25)', () => {
     expect(host.querySelector('#world-crosshair')!.hidden).toBe(false);
     expect([changes, hotbar.active]).toEqual([0, 0]);
     hud.dispose();
+  }, TIMEOUT_MS);
+
+  test(`${N} hold-repeat ticks, idle and with LMB held while its reply is pending, grow the heap by less than 256 KB (SP5a spec §4.1, D6, rulings R20)`, () => {
+    // The page's aim ticks it on every rendered frame; at rest nothing is held, and a held button waits for its reply.
+    // The boxed frame times are passed as they are (their unit does not matter here: every repeat is due).
+    const times = boxedTimes(1000 / 144);
+    let queued = 0;
+    const idle = createHoldRepeat({ enabled: () => true, pending: () => false, queue: () => { queued++; } });
+    let k = 0;
+    expectAtRest(allocationOver(() => { idle.tick(times[k++]!); }, WARM_UP, ZERO_ALLOC_MAX));
+    const held = createHoldRepeat({ enabled: () => true, pending: () => true, queue: () => { queued++; } });
+    held.down(0, 0);
+    k = 0;
+    expectAtRest(allocationOver(() => { held.tick(times[k++]!); }, WARM_UP, ZERO_ALLOC_MAX));
+    // Only the press's own queue: the held button never repeated while its reply was pending.
+    expect(queued).toBe(1);
   }, TIMEOUT_MS);
 
   test(`${N} blockAt, fluidAt and publishedAt calls (SP5a's walk-step reads, D25) grow the heap by less than 256 KB`, () => {

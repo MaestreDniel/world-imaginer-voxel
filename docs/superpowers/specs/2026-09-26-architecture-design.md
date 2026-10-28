@@ -1169,7 +1169,7 @@ MeshPhysicalMaterial transmission and Reflector are never used.
 
 **Raycast.** Amanatides-Woo DDA against the SAB: reach 6 in walk mode, 10 in fly mode. It passes through fluids and hits cross sprites via their AABB.
 
-**Actions.** LMB breaks, RMB places, MMB picks (the type and its non-orientation props). Hotbar 1-9 (defaults: stone, dirt, grass, planks, glass, log, torch, water bucket, lava bucket) or the scroll wheel. Placement is refused when the new state's collision boxes intersect the player AABB.
+**Actions.** LMB breaks, RMB places, MMB picks (the type and its non-orientation props). Hotbar 1-9 (defaults: stone, dirt, grass, planks, glass, log, torch, water bucket, lava bucket) or the scroll wheel. Placement is refused when the new state's collision boxes intersect the player AABB (SP5a: the player's body counts in flight too; one action per click, or, with the 'Hold mouse button to repeat' setting, repeated while held: break every 0.3 s, place every 0.2 s).
 
 **Interactions.** RMB on a door, trapdoor or fence gate toggles `open` (both door halves) instead of placing (SP8a); Shift+RMB always places. A torch item places `torch` on a top face and `wall_torch` with `facing` on a side face, and is refused on a bottom face. Two-voxel states (door, double plant) are placed and broken as one atomic `{edits:[…]}` message, recorded as two diff entries (SP8a). There are no support checks: blocks whose support is removed stay in place.
 

@@ -1252,6 +1252,14 @@ describe('master spec amendments (SP5a §9)', () => {
     expect(s412.split('\n')).toContain('**Block undo** (SP5a): Ctrl+Z / Ctrl+Y undo and redo block edits while the world owns the controls, 100 steps per session, separate from the map\'s history.');
   });
 
+  test('§4.12\'s Actions name the body in flight and hold to repeat (SP5a spec §4.1, §4.2, D6, §9)', () => {
+    const at412 = text.indexOf('### 4.12 ');
+    const s412 = text.slice(at412, text.indexOf('### 4.13 ', at412));
+    const actions = s412.split('\n').find((l) => l.startsWith('**Actions.**'));
+    expect(actions, 'no `**Actions.**` line in §4.12').toBeDefined();
+    expect(actions).toContain('(SP5a: the player\'s body counts in flight too; one action per click, or, with the \'Hold mouse button to repeat\' setting, repeated while held: break every 0.3 s, place every 0.2 s)');
+  });
+
   test('§1 names each SP5a module in its entry, which exists', () => {
     for (const [head, token, file] of SP5A_MODULES) {
       const entry = layoutEntry(head);

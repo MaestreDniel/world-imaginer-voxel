@@ -1,10 +1,11 @@
 /**
  * The help overlay (SP4a spec §7.4, D31): **Keys** generated from the key map, **Settings** (the small block SP5b's
- * graphics settings screen replaces; the render distance applies live since SP4b, spec §5), **System** (the capability report
- * with "Copy as JSON" and the hidden `#capability-json`, moved here from the SP0 page, D21, then the render distance's
- * maximum), and the buttons "Map (M)" (SP4c spec §1.6, D20: it closes the help and opens the map overlay; SP4a's link
- * to `?map`, which navigated away from the world, is gone) and "Fullscreen". All text goes through `textContent`. The
- * page opens it on H or F1 and releases the pointer; H, F1 or Esc closes it, and clicking the canvas re-locks.
+ * graphics settings screen replaces; the render distance applies live since SP4b, spec §5; "Hold mouse button to
+ * repeat" since SP5a, §4.1), **System** (the capability report with "Copy as JSON" and the hidden `#capability-json`,
+ * moved here from the SP0 page, D21, then the render distance's maximum), and the buttons "Map (M)" (SP4c spec §1.6,
+ * D20: it closes the help and opens the map overlay; SP4a's link to `?map`, which navigated away from the world, is
+ * gone) and "Fullscreen". All text goes through `textContent`. The page opens it on H or F1 and releases the pointer;
+ * H, F1 or Esc closes it, and clicking the canvas re-locks.
  */
 import type { CapabilityReport, Evaluation } from '../engine/capabilityRules';
 import { defaultRenderDistance, RD_MIN } from '../engine/renderDistance';
@@ -176,6 +177,13 @@ export function mountHelp(host: HTMLElement, o: HelpOptions): Help {
     });
     settingsSection.append(settingRow(label, input, shown));
   }
+  // Hold to repeat (SP5a spec §4.1, D6): off by default, remembered with the other settings.
+  const holdRepeat = el('input');
+  holdRepeat.id = 'setting-hold-repeat';
+  holdRepeat.type = 'checkbox';
+  holdRepeat.checked = settings.holdRepeat;
+  holdRepeat.addEventListener('change', () => change({ holdRepeat: holdRepeat.checked }));
+  settingsSection.append(settingRow('Hold mouse button to repeat', holdRepeat));
 
   // System.
   const system = el('section', 'help-system');

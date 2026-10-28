@@ -24,12 +24,14 @@ import { createHotbar } from '../../src/player/hotbar';
 import { createReloader, createWorldUrl, worldHash, type HereState } from '../../src/ui/world/reload';
 import {
   countPendingTimers, countTileCalls, createAim, createClickQueue, createHookEdit, createRdControl, createUndoNotice, createWorldNotices, everyFrameUntil, failBeforeReveal, flushOnPageHide, handleContextLoss,
-  handleStreamEvent, helpChange, installUndoKeys, installWiTest, mapKey, offerLowerRd, paletteFirst, onDriverStatus, onSimFailure, rdShownOnLoad, releaseOnFailure, reloadRd, runTeardown, stopAfterFailure,
+  handleStreamEvent, helpChange, installRepeatStop, installUndoKeys, installWiTest, mapKey, offerLowerRd, paletteFirst, onDriverStatus, onSimFailure, rdShownOnLoad, releaseOnFailure, reloadRd, runTeardown, stopAfterFailure,
   UNDO_NOTICE_MS, type WiTest, type WiTestPage,
 } from '../../src/ui/world/worldPage';
 import { createEditLatency } from '../../src/ui/world/editLatency';
 import { createEditPath, type EditOutcome } from '../../src/ui/world/editPath';
-import { createActionPost, createBlockHistory } from '../../src/ui/world/blockHistory';
+import { createActionPost, createBlockHistory, type BlockStep } from '../../src/ui/world/blockHistory';
+import { createHoldRepeat } from '../../src/ui/world/holdRepeat';
+import { mountPalette } from '../../src/ui/palette';
 import { NO_ENTRY } from '../../src/sim/diffStore';
 import type { Edit } from '../../src/workers/protocol';
 import { installDom, type FakeElement } from './fixtures/domShim';
@@ -1566,6 +1568,172 @@ describe('block undo and redo by who has the controls (SP5a spec §4.5, D13)', (
     // The page's hook edits through the recording post, and the history reads the voxel's value now.
     expect(src()).toMatch(/edit: createHookEdit\(actionPost, \(x, y, z\) => voxelValue\(store, x, y, z\)\),/);
     expect(src()).toMatch(/read: \(x, y, z\) => voxelValue\(store, x, y, z\),/);
+  });
+});
+
+describe('hold to repeat in the page (SP5a spec §4.1, D6; Review Focus 1, rulings R18)', () => {
+  afterEach(() => { vi.unstubAllGlobals(); });
+  const src = (): string => readFileSync(new URL('../../src/ui/world/worldPage.ts', import.meta.url), 'utf8');
+  const key = (x: number, y: number, z: number): string => `${x},${y},${z}`;
+
+  /**
+   * The page's aim over a stone floor at y 68 (air above) under an eye 4.5 blocks up looking straight down, which moves
+   * east 0.05 blocks a frame, so the aimed voxel moves each frame; frames every 10 ms. A fake edit path answers each
+   * post `replyS` later, checking every `expect` against the voxels then as the sim does (a mismatch is `changed`) and
+   * applying an accepted set; `pending()` is true until the reply. The page's recording post in front of it, with a
+   * fake block history (`record`); the hold repeat queues into the real click queue, and the aim ticks it at the frame's
+   * time before the queued clicks run. `paused` is the page's (the palette open, the map owning the controls).
+   */
+  function rig(o: { enabled: boolean; replyS?: number }) {
+    const replyS = o.replyS ?? 0.05;
+    let t = 0;
+    const set = new Map<string, number>();
+    const valueAt = (x: number, y: number, z: number): number => set.get(key(x, y, z)) ?? (y === 68 ? STONE << 8 : AIR << 8);
+    const read = {
+      blockAt: (x: number, y: number, z: number) => valueAt(x, y, z) >>> 8,
+      fluidAt: (x: number, y: number, z: number) => valueAt(x, y, z) & 0xff,
+    };
+    const replies: { due: number; edits: readonly Edit[]; resolve(out: EditOutcome): void }[] = [];
+    const posts: { t: number; edit: Edit }[] = [];
+    const post = (edits: readonly Edit[]): Promise<EditOutcome> => {
+      for (const edit of edits) posts.push({ t, edit });
+      return new Promise((resolve) => { replies.push({ due: t + replyS, edits, resolve }); });
+    };
+    const deliver = (): void => {
+      while (replies.length > 0 && replies[0]!.due <= t + 1e-9) {
+        const r = replies.shift()!;
+        if (r.edits.some((e) => valueAt(e.x, e.y, e.z) !== e.expect)) {
+          r.resolve({ ok: false, why: 'changed' });
+          continue;
+        }
+        const prev = Uint32Array.from(r.edits, () => NO_ENTRY);
+        for (const e of r.edits) set.set(key(e.x, e.y, e.z), e.value);
+        r.resolve({ ok: true, prev, next: Uint32Array.from(r.edits, (e) => e.value) });
+      }
+    };
+    const record = vi.fn<(step: BlockStep) => void>();
+    const actionPost = createActionPost({ post, record });
+    const outcomes: EditOutcome[] = [];
+    const clicks = createClickQueue({
+      post: (edit) => { void actionPost([edit]).then((out) => { outcomes.push(out); }); },
+      hotbar: createHotbar(null),
+      fly: { x: 0, y: 0, z: 0, yaw: 0, pitch: -90 },
+      editable: () => true,
+    });
+    const hold = createHoldRepeat({ enabled: () => o.enabled, pending: () => replies.length > 0, queue: (b) => clicks.push(b) });
+    const fly = { x: 0.5, y: 72.5, z: 0.5, yaw: 0, pitch: -90 };
+    const world = { origin: { x: 0, y: 0, z: 0 }, setOutline: () => {}, hideOutline: () => {} };
+    const state = { paletteOpen: false, owner: 'world' as 'world' | 'map' };
+    const aim = createAim({ fly, world: world as never, locked: () => true, hud: true, clicks, repeat: { hold, now: () => t } });
+    /** Runs the frames from `fromMs` to `toMs` (10 ms apart): the replies due, their continuations, then the aim. */
+    const frames = async (fromMs: number, toMs: number): Promise<void> => {
+      for (let ms = fromMs; ms <= toMs; ms += 10) {
+        t = ms / 1000;
+        deliver();
+        await flushMicrotasks();
+        fly.x = 0.5 + ms * 0.005;
+        aim.aim(read, state.paletteOpen || state.owner === 'map');
+      }
+    };
+    const at = (ms: number): void => { t = ms / 1000; };
+    return { hold, frames, at, posts, record, outcomes, state, now: () => t };
+  }
+
+  test('Review Focus 1: on, held LMB for 1.0 s with each reply 50 ms after its post: 4 breaks posted at 0, 0.3, 0.6 and 0.9 s, each after the previous reply, to 4 distinct voxels aimed that frame; 4 history steps; no `changed` refusal', async () => {
+    const r = rig({ enabled: true });
+    r.at(0);
+    r.hold.down(0, 0);
+    await r.frames(0, 1000);
+    r.hold.up(0);
+    await r.frames(1010, 1500);
+    expect(r.posts.map((p) => p.t)).toEqual([0, 0.3, 0.6, 0.9]);
+    // Each the voxel under the eye at its frame: x = floor(0.5 + 5 t), so the target moved between them.
+    expect(r.posts.map((p) => [p.edit.x, p.edit.y, p.edit.z])).toEqual([[0, 68, 0], [2, 68, 0], [3, 68, 0], [5, 68, 0]]);
+    expect(r.posts.every((p) => p.edit.op === 'set' && p.edit.value === AIR << 8 && p.edit.expect === STONE << 8)).toBe(true);
+    expect(r.record).toHaveBeenCalledTimes(4);
+    expect(r.record.mock.calls.map(([step]) => step.edits.map((e) => e.x))).toEqual([[0], [2], [3], [5]]);
+    expect(r.outcomes.map((out) => out.ok)).toEqual([true, true, true, true]);
+  });
+
+  test('a slow reply holds the repeat: with each reply 350 ms after its post, the breaks go at 0, 0.35 and 0.7 s and none is refused', async () => {
+    const r = rig({ enabled: true, replyS: 0.35 });
+    r.at(0);
+    r.hold.down(0, 0);
+    await r.frames(0, 1000);
+    r.hold.up(0);
+    await r.frames(1010, 1500);
+    expect(r.posts.map((p) => p.t)).toEqual([0, 0.35, 0.7]);
+    expect(r.outcomes.map((out) => out.ok)).toEqual([true, true, true]);
+    expect(r.record).toHaveBeenCalledTimes(3);
+  });
+
+  test('with the setting off, one LMB press posts one break', async () => {
+    const r = rig({ enabled: false });
+    r.at(0);
+    r.hold.down(0, 0);
+    await r.frames(0, 1000);
+    r.hold.up(0);
+    await r.frames(1010, 1500);
+    expect(r.posts).toHaveLength(1);
+    expect(r.record).toHaveBeenCalledTimes(1);
+    // The page's mouse buttons go through the hold repeat: a press queues once, a release ends the hold.
+    expect(src()).toMatch(/onButton: \(b, down\) => \{\s+if \(down\) holdRepeat\.down\(b, nowS\(\)\);\s+else holdRepeat\.up\(b\);\s+\},/);
+    expect(src()).toMatch(/enabled: \(\) => settings\.holdRepeat,\s+pending: editPath\.pending,\s+queue: \(b\) => clicks\.push\(b\),/);
+  });
+
+  test('with the setting on and LMB held, opening the palette, releasing the lock (a `pointerlockchange` to none) and opening the map each call `stop`: no break is queued after them', async () => {
+    const dom = installDom();
+    const canvas = dom.document.createElement('canvas');
+    const palette = mountPalette(dom.body as unknown as HTMLElement, { hotbar: createHotbar(null), requestLock: () => {}, onClose: () => {} });
+    const cases: Record<string, (r: ReturnType<typeof rig>) => Promise<void>> = {
+      // The palette releases the lock and pauses the frame; closed, a click on the canvas takes the lock back.
+      palette: async (r) => {
+        palette.open();
+        r.state.paletteOpen = palette.isOpen;
+        await r.frames(160, 200);
+        palette.close();
+        r.state.paletteOpen = palette.isOpen;
+        void canvas.requestPointerLock();
+      },
+      // The lock released and taken back between two frames: only the `pointerlockchange` saw it.
+      lock: async () => {
+        dom.document.exitPointerLock();
+        void canvas.requestPointerLock();
+      },
+      // The map owning the controls pauses the frame (here without touching the lock, as a paused frame alone).
+      map: async (r) => {
+        r.state.owner = 'map';
+        await r.frames(160, 200);
+        r.state.owner = 'world';
+      },
+    };
+    for (const [name, open] of Object.entries(cases)) {
+      const r = rig({ enabled: true });
+      void canvas.requestPointerLock();
+      const remove = installRepeatStop({ doc: dom.document as unknown as Document, canvas, repeat: r.hold });
+      r.at(0);
+      r.hold.down(0, 0);
+      await r.frames(0, 150);
+      await open(r);
+      expect(dom.document.pointerLockElement, name).toBe(canvas);
+      await r.frames(210, 2000);
+      // Only the press's own break: the button is still physically held, but nothing repeats after the stop.
+      expect(r.posts.map((p) => p.t), name).toEqual([0]);
+      remove();
+    }
+    // Removed, a lock release no longer stops it.
+    const r = rig({ enabled: true });
+    const remove = installRepeatStop({ doc: dom.document as unknown as Document, canvas, repeat: r.hold });
+    remove();
+    r.at(0);
+    r.hold.down(0, 0);
+    dom.document.exitPointerLock();
+    await r.frames(0, 300);
+    expect(r.posts.map((p) => p.t)).toEqual([0, 0.3]);
+    // The page installs it on the canvas, and F (a mode switch) stops it too.
+    expect(src()).toMatch(/teardown\.push\(installRepeatStop\(\{ doc: document, canvas, repeat: holdRepeat \}\)\);/);
+    expect(src()).toMatch(/case 'toggleWalk': holdRepeat\.stop\(\); break;/);
+    expect(src()).toMatch(/createAim\(\{\s+fly, world, locked: \(\) => document\.pointerLockElement === canvas, hud, clicks, repeat: \{ hold: holdRepeat, now: nowS \},\s+\}\)/);
   });
 });
 
