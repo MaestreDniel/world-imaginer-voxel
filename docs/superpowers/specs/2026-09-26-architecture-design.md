@@ -151,7 +151,7 @@ world-imaginer-voxel/          (repository root)
     audio/soundPack.ts                              pure manifest parsing (wi10-sounds)
     audio/model/ambienceModel.ts emitterCluster.ts footstepCadence.ts musicScheduler.ts   pure decision logic used by sound/
                                 and by metrics AU2-AU4 (injected clock, NeighborhoodReader-like voxel/light view)
-    sim/fluidSim.ts edits.ts diffStore.ts          L2
+    sim/fluidSim.ts edits.ts diffStore.ts (SP5a)   L2
     persist/kv.ts idb.ts memory.ts diffCodec.ts wiworld.ts saves.ts   L2 (IStorage adapter; MemoryKV for tests)
     metrics/*.ts                                    pure metric definitions shared by vitest and the in-app dashboard (SP1: noiseStats.ts,
                                 sp1Fixtures.ts, sp1Goldens.ts; SP2a: columnStats.ts, sp2aGoldens.ts; SP2b: biomeShares.ts,
@@ -471,7 +471,7 @@ interface MetricDef { id: MetricId; run(region: RegionView): Record<string, numb
 
 ### 2.7 Edits, saves, export, presets, session
 
-**Diffs.** Diffs hold **absolute final states** per voxel (block state u16, fluid u8), never deltas. The sim worker's `DiffStore` is authoritative: `Map<colKey, Map<sy, Map<voxelIdx, u32 = state<<8 | fluid>>>>`. On a voxel's first edit its generated value is remembered, so reverting removes the entry.
+**Diffs.** Diffs hold **absolute final states** per voxel (block state u16, fluid u8), never deltas. The sim worker's `DiffStore` is authoritative: `Map<colKey, Map<sy, Map<voxelIdx, u32 = state<<8 | fluid>>>>`. On a voxel's first edit its generated value is remembered, so reverting removes the entry (SP5a: an edit equal to the column's current generated value, read from its retained proto, removes the entry).
 
 `ColumnDiffV1` codec, per column:
 - header `{v:1, genKey:u32x2, sections:u8}`;

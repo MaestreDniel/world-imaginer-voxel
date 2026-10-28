@@ -28,6 +28,17 @@ export interface AuxBView {
 export type HeightmapKind = 'worldSurfaceWG' | 'oceanFloorWG' | 'worldSurface' | 'motionBlocking' | 'oceanFloor' | 'lightBlocking';
 
 /**
+ * One column's edit entries (SP5a spec §2.4, D20; master §2.7): parallel arrays in canonical order (`sy` ascending, then
+ * `idx` 0 … 4095), each `value` the voxel's absolute final value `state << 8 | fluid`. Built by the sim's DiffStore
+ * (`columnDiff`), transferred to the main thread and handed to D's overlay (§2.5).
+ */
+export interface ColumnDiff {
+  readonly sy: Uint8Array;
+  readonly idx: Uint16Array;
+  readonly value: Uint32Array;
+}
+
+/**
  * A `commit` status: 1 Proto, 2 Decorated, 3 Published (SP3a spec §3.2). A writer commits only a status above the one
  * it opened at (0 for a claim) and never below its own last commit (SP4b spec §2.4).
  */

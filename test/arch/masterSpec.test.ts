@@ -1118,6 +1118,7 @@ describe('master spec amendments (SP5a §9)', () => {
   const SP5A_MODULES: Array<[head: RegExp, token: string, file: string]> = [
     [/^\s+blocks\/kinds\.ts /, 'tags.ts (SP5a)', 'src/world/blocks/tags.ts'],
     [/^\s+light\/initial\.ts /, 'relight.ts (SP5a)', 'src/light/relight.ts'],
+    [/^\s+sim\/fluidSim\.ts /, 'edits.ts diffStore.ts (SP5a)', 'src/sim/diffStore.ts'],
   ];
 
   test('the split', () => {
@@ -1204,6 +1205,12 @@ describe('master spec amendments (SP5a §9)', () => {
     const writer = text.slice(at, text.indexOf('interface ProtoWriter', at));
     expect(writer).toContain('replaceBlocks(sy:number, blocks:Uint16Array, fluid:Uint8Array): void /* copy-on-write, blocks and fluid only (SP5a) */');
     expect(writer).toContain('setDiffFlag(): void /* REC_DIFF_FLAG (SP5a) */');
+  });
+
+  test('§2.7\'s generated value is read from the retained proto (SP5a spec §2.4, D20, §9)', () => {
+    const at = text.indexOf('### 2.7 ');
+    const s27 = text.slice(at, text.indexOf('## 3. Generation', at));
+    expect(s27).toContain('so reverting removes the entry (SP5a: an edit equal to the column\'s current generated value, read from its retained proto, removes the entry)');
   });
 
   test('§1 names each SP5a module in its entry, which exists', () => {
