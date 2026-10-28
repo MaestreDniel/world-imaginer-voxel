@@ -23,11 +23,15 @@ import { columnPoint } from '../../src/gen/column/columnPoint';
 import { buildColumnSample, newColumnSample } from '../../src/gen/column/columnStage';
 import { paintTile } from '../../src/gen/map/tile';
 import { fillColumnT } from '../../src/metrics/region';
-import { createStore } from '../../src/world/store/store';
+import { createStore, type VoxelStore } from '../../src/world/store/store';
+import { createDiffStore } from '../../src/sim/diffStore';
+import { applyEdits, createEditScratch, type Edit } from '../../src/sim/edits';
+import { NO_FLUID } from '../../src/world/blocks/fluid';
+import { AIR, OPACITY, STONE, TORCH } from '../../src/world/blocks/index';
 import { createTaskHandler } from '../../src/workers/taskHandler';
 import { fillColumnD, fillColumnL } from '../../src/workers/worldJobs';
 import { MEDIUM } from '../../src/core/params/graphicsPresets';
-import { centreSection, createLightScratch, lightRegion } from '../../src/light/initial';
+import { centreSection, createLightScratch, DEFAULT_LIGHT_TABLES, lightRegion } from '../../src/light/initial';
 import { createMeshScratch, isTrivial } from '../../src/mesh/column';
 import { connectivity15 } from '../../src/mesh/connectivity';
 import { fluidDepths, meshFluid } from '../../src/mesh/fluid';
@@ -43,7 +47,8 @@ import { DEFAULT_MAP_STATE, openMapSession, type MapState } from '../../src/ui/m
 import { capDensityTree, capSurfaceRules } from '../harness/capTrees';
 import { PART_WORST_LEAVES, partWorstParams } from '../harness/sliceTrees';
 import {
-  absoluteGateFailures, BENCH_ROWS, gateFailures, ISLANDS_COLUMNS, ISLANDS_RUN, LIGHT_RUN, MESH_RUN, parseBenchExempt, type Baselines, type BenchKernel,
+  absoluteGateFailures, BENCH_ROWS, gateFailures, ISLANDS_COLUMNS, ISLANDS_RUN, LIGHT_RUN, MESH_RUN, parseBenchExempt, RELIGHT_RUN, type Baselines,
+  type BenchKernel,
 } from './gates';
 import { buildPerm, perm3 } from './perm512';
 
@@ -85,13 +90,20 @@ function poolOfOne(params: Params, spec: FieldSliceSpec): readonly (readonly [nu
   return plan.ranges;
 }
 
-test('SP1, SP2a, SP2b, SP3a, SP3b, SP3c, SP3d, SP3e and SP4a kernels', async ({ bench }) => {
+/** A voxel's value (`state << 8 | fluid`) and a one-voxel `set` edit, as the sim takes them (SP5a §2.1). */
+const val = (state: number, fluid = NO_FLUID): number => (state << 8) | fluid;
+const valueAt = (s: VoxelStore, x: number, y: number, z: number): number => val(s.blockAt(x, y, z), s.fluidAt(x, y, z));
+const setEdit = (x: number, y: number, z: number, value: number, expectV: number): Edit => ({ x, y, z, op: 'set', value, expect: expectV });
+/** Opaque (opacity 15) and dry. */
+const solidAt = (s: VoxelStore, x: number, y: number, z: number): boolean => OPACITY[s.blockAt(x, y, z)]! === 15 && s.fluidAt(x, y, z) === NO_FLUID;
+
+test('SP1, SP2a, SP2b, SP3a, SP3b, SP3c, SP3d, SP3e, SP4a and SP5a kernels', async ({ bench }) => {
   // SP3c §7: BENCH_EXEMPT names rows whose ratio gate is skipped (an unknown name fails here, before measuring);
   // bench:record never reads it.
   const exempt = process.env.BENCH_RECORD === '1' ? [] : parseBenchExempt(process.env.BENCH_EXEMPT);
   const ns: Record<string, number> = {};
   /** A row's p50 per evaluation; `run`: a fixed iteration count (`time: 0`, one warm-up iteration) or explicit options. */
-  const measure = async (name: string, evals: number, fn: () => void, run?: number | typeof ISLANDS_RUN | typeof LIGHT_RUN | typeof MESH_RUN) => {
+  const measure = async (name: string, evals: number, fn: () => unknown, run?: number | typeof ISLANDS_RUN | typeof LIGHT_RUN | typeof MESH_RUN) => {
     const r = await bench(name, fn).run(run === undefined ? undefined : typeof run === 'number' ? { iterations: run, time: 0, warmupIterations: 1 } : { ...run });
     ns[name] = (r.latency.p50 * 1e6) / evals;
     return r;
@@ -271,14 +283,16 @@ test('SP1, SP2a, SP2b, SP3a, SP3b, SP3c, SP3d, SP3e and SP4a kernels', async ({ 
   // light.column: spec §4.2's job without the store's commit — the neighbourhood, the region copy (`copyLightRegion`),
   // the sky fall, seeds and BFS (`lightRegion`) and the 24 centre sections written to the output arrays — on the next of
   // the 256 interior columns (LIGHT_RUN: cyclic, each column timed once). It writes nothing to the store, so the probe
-  // and warm-up columns can run again.
+  // and warm-up columns can run again. SP5a §6.2 (D23's scan gate): `mayEmit` false, as `fillColumnL` passes it when no
+  // column of the 3 × 3 has the diff flag, so the row measures the gate's closed side, the job of every column no edit
+  // touched (the block-light scan runs only when the region holds lava; generated terrain holds no emitter).
   const lightScratch = createLightScratch();
   const lightOut = new Uint8Array(24 * 4096);
   let lc = 0;
   const lightRun = await measure('light.column', 1, () => {
     const [lx, lz] = litCols[lc++ % litCols.length]!;
     copyLightRegion(worldStore.neighborhood(lx, lz), lightScratch.region);
-    lightRegion(lightScratch);
+    lightRegion(lightScratch, DEFAULT_LIGHT_TABLES, false);
     for (let sy = 0; sy < 24; sy++) lightOut.set(centreSection(lightScratch, sy), sy * 4096);
     sink += lightOut[24 * 4096 - 1]!;
   }, LIGHT_RUN);
@@ -315,6 +329,88 @@ test('SP1, SP2a, SP2b, SP3a, SP3b, SP3c, SP3d, SP3e and SP4a kernels', async ({ 
   expect(mc, 'mesh.section: one probe, one warm-up and 1024 timed calls, each section timed once').toBe(1 + MESH_RUN.warmupIterations + MESH_RUN.iterations);
   expect(quads, 'mesh.section meshes quads').toBeGreaterThan(0);
 
+  // SP5a §6.2: relight.edit — one edit's relight on the lit region, each call a one-edit `applyEdits` (the sim's own
+  // pipeline, on a DiffStore of its own) on the next of a 6-edit cycle: a torch placed on the surface and broken, a
+  // stone placed on the surface and broken, a shaft opened and closed. The shaft: a closed 5 × 4 × 5 air room carved
+  // before the run (one untimed batch) with a 1 × 1 shaft up from it to just under the surface voxel, so breaking that
+  // cap opens a shaft 12 blocks deep (the room's sky light 0 → 15) and placing it back closes it. Each place is the first
+  // one found in the inner 14 × 14 columns (their 3 × 3 is Published), scanned in (cz, cx) order. Only the relight is
+  // timed (`overriddenDuration`: the call's `relightMs`); the write, the heightmap patch and the section copies are not.
+  // Each break writes the generated value back, so 6 calls leave the region as they found it and every `expect` of
+  // the cycle stays current: the 258 calls (RELIGHT_RUN) are 43 whole turns.
+  const relightDiffs = createDiffStore();
+  const editScratch = createEditScratch();
+  const perfNow = (): number => performance.now();
+  const innerCols: (readonly [number, number])[] = [];
+  for (let z = rz0 + 2; z < rz0 + 16; z++) for (let x = rx0 + 2; x < rx0 + 16; x++) innerCols.push([x, z]);
+  const surfaceY = (x: number, z: number): number => worldStore.heightAt('worldSurface', x, z)!;
+  /** Dry air on opaque ground at the surface of block column (x, z), below y 319, else null. */
+  const onGround = (x: number, z: number): number | null => {
+    const y = surfaceY(x, z);
+    return y <= 318 && valueAt(worldStore, x, y, z) === val(AIR) && solidAt(worldStore, x, y - 1, z) ? y : null;
+  };
+  /** The first column (from `from`) whose centre block column has dry ground: [x, y, z] of the air voxel on it. */
+  const groundFrom = (from: number): readonly [number, number, number, number] => {
+    for (let i = from; i < innerCols.length; i++) {
+      const x = 16 * innerCols[i]![0] + 8;
+      const z = 16 * innerCols[i]![1] + 8;
+      const y = onGround(x, z);
+      if (y !== null) return [x, y, z, i];
+    }
+    throw new Error('relight.edit: no dry ground in the inner columns');
+  };
+  const [tx, ty, tz, ti] = groundFrom(0);
+  const [sx, sy, sz] = groundFrom(ti + 1);
+  /** The shaft: the cap at the surface, the room's top 12 below it, the room grown by one and the shaft opaque and dry. */
+  let shaftAt: readonly [number, number, number, number] | null = null;
+  for (let i = 0; i < innerCols.length && shaftAt === null; i++) {
+    for (let oz = 2; oz < 14 && shaftAt === null; oz++) {
+      for (let ox = 2; ox < 14 && shaftAt === null; ox++) {
+        const x = 16 * innerCols[i]![0] + ox;
+        const z = 16 * innerCols[i]![1] + oz;
+        const cap = surfaceY(x, z) - 1;
+        const roomTop = cap - 12;
+        if (roomTop - 4 < -63) continue;
+        let ok = solidAt(worldStore, x, cap, z);
+        for (let y = roomTop + 1; ok && y < cap; y++) ok = solidAt(worldStore, x, y, z);
+        for (let dz = -3; ok && dz <= 3; dz++) for (let dx = -3; ok && dx <= 3; dx++) for (let y = roomTop - 4; ok && y <= roomTop + 1; y++) ok = solidAt(worldStore, x + dx, y, z + dz);
+        if (ok) shaftAt = [x, cap, z, roomTop];
+      }
+    }
+  }
+  if (shaftAt === null) throw new Error('relight.edit: no enclosed place for the shaft in the inner columns');
+  const [hx, hy, hz, roomTop] = shaftAt;
+  const carve: Edit[] = [];
+  for (let y = roomTop - 3; y <= roomTop; y++) {
+    for (let dz = -2; dz <= 2; dz++) for (let dx = -2; dx <= 2; dx++) carve.push(setEdit(hx + dx, y, hz + dz, val(AIR), valueAt(worldStore, hx + dx, y, hz + dz)));
+  }
+  for (let y = roomTop + 1; y < hy; y++) carve.push(setEdit(hx, y, hz, val(AIR), valueAt(worldStore, hx, y, hz)));
+  const edit = (edits: readonly Edit[]): number => {
+    const r = applyEdits(worldStore, relightDiffs, editScratch, edits, perfNow);
+    if (r.refused !== null) throw new Error(`relight.edit: an edit at (${edits[0]!.x}, ${edits[0]!.y}, ${edits[0]!.z}) was refused '${r.refused}'`);
+    return r.relightMs;
+  };
+  edit(carve);
+  const tv = valueAt(worldStore, tx, ty, tz);
+  const sv = valueAt(worldStore, sx, sy, sz);
+  const hv = valueAt(worldStore, hx, hy, hz);
+  const cycle: readonly (readonly Edit[])[] = [
+    [setEdit(tx, ty, tz, val(TORCH), tv)], [setEdit(tx, ty, tz, tv, val(TORCH))],
+    [setEdit(sx, sy, sz, val(STONE), sv)], [setEdit(sx, sy, sz, sv, val(STONE))],
+    [setEdit(hx, hy, hz, val(AIR), hv)], [setEdit(hx, hy, hz, hv, val(AIR))],
+  ];
+  // The one known case: the closed room is dark, the open shaft lights its floor at sky 15 (an untimed check, undone).
+  const floorSky = (): number => worldStore.lightAt(hx, roomTop - 3, hz) >> 4;
+  expect(floorSky(), 'relight.edit: the closed room is dark').toBe(0);
+  edit(cycle[4]!);
+  expect(floorSky(), 'relight.edit: the open shaft lights the room\'s floor').toBe(15);
+  edit(cycle[5]!);
+  expect(floorSky(), 'relight.edit: closed again').toBe(0);
+  let rc = 0;
+  const relightRun = await measure('relight.edit', 1, () => ({ overriddenDuration: edit(cycle[rc++ % cycle.length]!) }), RELIGHT_RUN);
+  expect(rc, 'relight.edit: one probe, one warm-up and 256 timed calls, 43 turns of the cycle').toBe(1 + RELIGHT_RUN.warmupIterations + RELIGHT_RUN.iterations);
+  expect([valueAt(worldStore, tx, ty, tz), valueAt(worldStore, sx, sy, sz), valueAt(worldStore, hx, hy, hz), floorSky()], 'relight.edit: the cycle ends as it began').toEqual([tv, sv, hv, 0]);
+
   let solidVoxels = 0;
   for (let i = 256; i < 98304; i++) solidVoxels += sCol.solid[i]!;
   expect(evaluated, 'surface.column evaluates part of the column (the fast path takes the rest)').toBeGreaterThan(0);
@@ -341,12 +437,14 @@ test('SP1, SP2a, SP2b, SP3a, SP3b, SP3c, SP3d, SP3e and SP4a kernels', async ({ 
   console.log(`session.commitMaxTree ${ms(commitRun)} (${commits} commits; trees of ${canonicalJSON(cappedDefs).length} and ${canonicalJSON(session.state.params.surface.rules).length} characters)`);
   console.log(`light.column ${ms(lightRun)} (${litCols.length} interior columns of the 18 × 18 region at (${rx0}, ${rz0}); ${lc} calls)`);
   console.log(`mesh.section ${ms(meshRun)} (${meshSections.length} of the ${nonTrivial.length} non-trivial sections of its 14 × 14 inner columns; ${mc} calls, ${quads} quads)`);
+  console.log(`relight.edit ${ms(relightRun)} (torch at (${tx}, ${ty}, ${tz}), stone at (${sx}, ${sy}, ${sz}), shaft cap at (${hx}, ${hy}, ${hz}) over a room topped at y ${roomTop}; ${rc} calls)`);
   // Before the record: bench:record refuses to write when an absolute gate fails.
   expect(absoluteGateFailures({
     columnP50: columnRun.latency.p50, columnP95, terrainP50: terrainRun.latency.p50,
     sliceV128P50: vRun.latency.p50, slicePartP50: wRun.latency.p50, sessionCommitP50: commitRun.latency.p50,
     islandsP50: islandsRun.latency.p50,
     lightP50: lightRun.latency.p50, lightP99: lightRun.latency.p99, meshP50: meshRun.latency.p50, meshP99: meshRun.latency.p99,
+    relightP95: relightRun.latency.p99,
   }), 'absolute gates').toEqual([]);
   expect(Number.isFinite(sink)).toBe(true);
   if (process.env.BENCH_RECORD === '1') {

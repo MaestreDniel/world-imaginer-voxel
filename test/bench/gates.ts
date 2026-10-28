@@ -26,6 +26,11 @@ export const LIGHT_P50_MAX_MS = 4;
 export const LIGHT_P99_MAX_MS = 8;
 export const MESH_P50_MAX_MS = 1.0;
 export const MESH_P99_MAX_MS = 2.5;
+/**
+ * SP5a §6.2: one edit's relight (`relight.edit`: the sim's `relightMs` of a one-edit `applyEdits`), p95 in ms, gated
+ * through p99 (the upper bound of p95, the `column.sample` precedent), so stricter than the spec's p95.
+ */
+export const RELIGHT_P95_MAX_MS = 3;
 
 /**
  * `terrain.islands`' run (SP3e §7): 256 timed iterations after exactly one warm-up call, each call on the next of its
@@ -43,6 +48,11 @@ export const ISLANDS_COLUMNS = 512;
  */
 export const LIGHT_RUN = Object.freeze({ iterations: 256, time: 0, warmupIterations: 1, warmupTime: 0 });
 export const MESH_RUN = Object.freeze({ iterations: 1024, time: 0, warmupIterations: 1, warmupTime: 0 });
+/**
+ * `relight.edit`'s run (SP5a §6.2), on the same pattern: one probe, one warm-up, 256 timed calls, each the next edit of
+ * its 6-edit cycle, so the 258 calls are 43 whole turns and the region ends as it began.
+ */
+export const RELIGHT_RUN = Object.freeze({ iterations: 256, time: 0, warmupIterations: 1, warmupTime: 0 });
 
 /**
  * Every gated bench row, in measurement order: `noise.bench.ts` measures exactly these, and `test/baselines.json`
@@ -51,7 +61,8 @@ export const MESH_RUN = Object.freeze({ iterations: 1024, time: 0, warmupIterati
  * `terrain.provisional` by `terrain.real`; SP3c §7 appends `surface.column` (the surface pass alone); SP3d §9 appends
  * the slice rows `slice.vertical128`, `slice.horizontal128`, `slice.partWorst` and the session row `session.commitMaxTree`;
  * SP3e §7 appends `terrain.islands` (fillColumnT on floating_islands at cluster columns); SP4a §9.3 appends
- * `light.column` (one column's light job) and `mesh.section` (one non-trivial section's padded copy and mesh).
+ * `light.column` (one column's light job) and `mesh.section` (one non-trivial section's padded copy and mesh); SP5a §6.2
+ * appends `relight.edit` (one edit's relight).
  */
 export const BENCH_ROWS = [
   'calibration.fmix32', 'lattice3.slice', 'perm512.slice', 'lattice3.random', 'perm512.random', 'normal.z2.climateC',
@@ -59,7 +70,7 @@ export const BENCH_ROWS = [
   'map.tile.b64.biome', 'map.tile.b16.relief', 'worker.configure', 'map.tile.b256.biome', 'map.tile.b256.relief',
   'store.alloc', 'density.corner', 'terrain.real', 'surface.column',
   'slice.vertical128', 'slice.horizontal128', 'slice.partWorst', 'session.commitMaxTree', 'terrain.islands',
-  'light.column', 'mesh.section',
+  'light.column', 'mesh.section', 'relight.edit',
 ] as const;
 
 export interface BenchKernel {
@@ -136,11 +147,13 @@ export interface AbsoluteLatencies {
   readonly lightP99: number;
   readonly meshP50: number;
   readonly meshP99: number;
+  /** SP5a §6.2: `relight.edit` p99 (the upper bound of p95), gated at RELIGHT_P95_MAX_MS. */
+  readonly relightP95: number;
 }
 
 /**
  * The absolute gates (P1 column budget, SP2a; the real T budget, SP3b; the slice and session commit budgets, SP3d; the
- * light and mesh budgets, SP4a): checked by `npm run bench` and before
+ * light and mesh budgets, SP4a; the relight budget, SP5a): checked by `npm run bench` and before
  * `npm run bench:record` writes, so a record refuses to write when one fails.
  */
 export function absoluteGateFailures(l: AbsoluteLatencies): string[] {
@@ -156,5 +169,6 @@ export function absoluteGateFailures(l: AbsoluteLatencies): string[] {
   if (l.lightP99 > LIGHT_P99_MAX_MS) out.push(`light.column p99 ${l.lightP99.toFixed(3)} ms > ${LIGHT_P99_MAX_MS} ms`);
   if (l.meshP50 > MESH_P50_MAX_MS) out.push(`mesh.section p50 ${l.meshP50.toFixed(3)} ms > ${MESH_P50_MAX_MS} ms`);
   if (l.meshP99 > MESH_P99_MAX_MS) out.push(`mesh.section p99 ${l.meshP99.toFixed(3)} ms > ${MESH_P99_MAX_MS} ms`);
+  if (l.relightP95 > RELIGHT_P95_MAX_MS) out.push(`relight.edit p99 ${l.relightP95.toFixed(3)} ms > ${RELIGHT_P95_MAX_MS} ms`);
   return out;
 }

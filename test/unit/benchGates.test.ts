@@ -4,7 +4,7 @@ import { expect, test } from 'vitest';
 import {
   absoluteGateFailures, BENCH_ROWS, COLUMN_P50_MAX_MS, COLUMN_P95_MAX_MS, gateFailures, ISLANDS_COLUMNS, ISLANDS_RUN, KILL_RATIO_MAX,
   LIGHT_P50_MAX_MS, LIGHT_P99_MAX_MS, LIGHT_RUN, MESH_P50_MAX_MS, MESH_P99_MAX_MS, MESH_RUN, P1_MAX_REGRESSION, parseBenchExempt,
-  SESSION_COMMIT_P50_MAX_MS, SLICE_PART_P50_MAX_MS, SLICE_V128_P50_MAX_MS, TERRAIN_P50_MAX_MS, type Baselines,
+  RELIGHT_P95_MAX_MS, RELIGHT_RUN, SESSION_COMMIT_P50_MAX_MS, SLICE_PART_P50_MAX_MS, SLICE_V128_P50_MAX_MS, TERRAIN_P50_MAX_MS, type Baselines,
 } from '../bench/gates';
 
 const base: Baselines = { machine: 'm', node: 'v24', date: '2026-09-27', killRatio: 1.2, kernels: { a: { nsPerEval: 10, ratio: 2 }, b: { nsPerEval: 5, ratio: 1 } } };
@@ -16,12 +16,14 @@ test('constants', () => {
   expect([SLICE_V128_P50_MAX_MS, SLICE_PART_P50_MAX_MS, SESSION_COMMIT_P50_MAX_MS]).toEqual([300, 250, 4]);
   // SP4a §9.3 (master §7's L and Mesh rows): one light job per column, one non-trivial section's copy and mesh.
   expect([LIGHT_P50_MAX_MS, LIGHT_P99_MAX_MS, MESH_P50_MAX_MS, MESH_P99_MAX_MS]).toEqual([4, 8, 1.0, 2.5]);
+  // SP5a §6.2: one edit's relight, p95 ≤ 3 ms (gated through p99).
+  expect(RELIGHT_P95_MAX_MS).toBe(3);
 });
 
 /** Latencies within every absolute gate, at their bounds. */
 const AT_GATES = {
   columnP50: 0.7, columnP95: 1.2, terrainP50: 4, sliceV128P50: 300, slicePartP50: 250, sessionCommitP50: 4, islandsP50: 4,
-  lightP50: 4, lightP99: 8, meshP50: 1.0, meshP99: 2.5,
+  lightP50: 4, lightP99: 8, meshP50: 1.0, meshP99: 2.5, relightP95: 3,
 };
 
 test('absolute gates: column p50 / p95 (P1, SP2a) and the real T column p50 (SP3b §10), inclusive', () => {
@@ -76,6 +78,12 @@ test('absolute gates (SP4a §9.3): light.column p50 ≤ 4 ms, p99 ≤ 8 ms; mesh
   ]);
 });
 
+test('absolute gate (SP5a §6.2): relight.edit p99 (relightP95, the upper bound of p95) ≤ 3 ms, inclusive, after the earlier rows', () => {
+  expect(absoluteGateFailures({ ...AT_GATES, relightP95: 3.1 })).toEqual(['relight.edit p99 3.100 ms > 3 ms']);
+  expect(absoluteGateFailures({ ...AT_GATES, relightP95: 2.9 })).toEqual([]);
+  expect(absoluteGateFailures({ ...AT_GATES, meshP99: 3, relightP95: 3.1 })).toEqual(['mesh.section p99 3.000 ms > 2.5 ms', 'relight.edit p99 3.100 ms > 3 ms']);
+});
+
 test('no baseline: only the kill criterion gates', () => {
   expect(gateFailures(null, { a: { nsPerEval: 99, ratio: 9 } }, 1.5, [])).toEqual([]);
   expect(gateFailures(null, {}, 1.61, [])).toEqual(['kill criterion: lattice3/perm512 = 1.610 > 1.6']);
@@ -123,15 +131,16 @@ test('parseBenchExempt: a comma-separated list of BENCH_ROWS names, empty when u
   expect(parseBenchExempt([...BENCH_ROWS].reverse().join(','))).toEqual([...BENCH_ROWS].reverse());
 });
 
-test('the bench rows: SP1 to SP2b, the SP3a store row, the SP3b density corner and real T rows, SP3c surface.column, SP3d\'s slice and session rows, SP3e\'s terrain.islands, then SP4a\'s light.column and mesh.section', () => {
+test('the bench rows: SP1 to SP2b, the SP3a store row, the SP3b density corner and real T rows, SP3c surface.column, SP3d\'s slice and session rows, SP3e\'s terrain.islands, SP4a\'s light.column and mesh.section, then SP5a\'s relight.edit', () => {
   expect(BENCH_ROWS).toEqual([
     'calibration.fmix32', 'lattice3.slice', 'perm512.slice', 'lattice3.random', 'perm512.random', 'normal.z2.climateC',
     'normal.z3.density3d', 'spline.offset', 'spline.mix3', 'detErf', 'stageHashes.genKey', 'column.point', 'column.sample',
     'map.tile.b64.biome', 'map.tile.b16.relief', 'worker.configure', 'map.tile.b256.biome', 'map.tile.b256.relief',
     'store.alloc', 'density.corner', 'terrain.real', 'surface.column',
     'slice.vertical128', 'slice.horizontal128', 'slice.partWorst', 'session.commitMaxTree', 'terrain.islands',
-    'light.column', 'mesh.section',
+    'light.column', 'mesh.section', 'relight.edit',
   ]);
+  expect(BENCH_ROWS.slice(-3)).toEqual(['light.column', 'mesh.section', 'relight.edit']);
   expect(BENCH_ROWS).not.toContain('terrain.provisional');
   expect(new Set(BENCH_ROWS).size).toBe(BENCH_ROWS.length);
 });
@@ -179,4 +188,12 @@ test('light.column and mesh.section run options (SP4a §9.3): one probe, one war
   // last two timed calls then take again, so each is timed exactly once.
   expect(await benchCalls(LIGHT_RUN)).toBe(1 + 1 + 256);
   expect(await benchCalls(MESH_RUN)).toBe(1 + 1 + 1024);
+}, 30_000);
+
+test('relight.edit run options (SP5a §6.2): one probe, one warm-up and 256 timed calls, 43 turns of its 6-edit cycle', async () => {
+  expect(RELIGHT_RUN).toEqual({ iterations: 256, time: 0, warmupIterations: 1, warmupTime: 0 });
+  const calls = await benchCalls(RELIGHT_RUN);
+  expect(calls).toBe(1 + 1 + 256);
+  // The cycle (torch place, torch break, stone place, stone break, shaft open, shaft close) ends where it began.
+  expect(calls % 6).toBe(0);
 }, 30_000);
