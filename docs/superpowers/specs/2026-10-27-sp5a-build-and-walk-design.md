@@ -426,6 +426,19 @@ The exit commit says in `CLAUDE.md:9` and `README.md:9` that SP5a is implemented
 
 (Filled at the exit: CI runs job by job against §7, the bench files, L3 and E5 readings, G2 and relight values, the smoke, production checks, screenshots, the cut line as taken, the user's check.)
 
+### The early G2 measurement (Task 18)
+
+Measured by an agent on 2026-10-28 on 1fca6d9 (L10 landed, no D30 lever), through `npm run measure:chrome -- --route bench --gpu iris`: the probe first (ANGLE on Mesa Intel Iris Xe Graphics (ADL GT2), OpenGL 4.6; fullscreen 1920 × 1080 @ 1 on eDP-1 at 240 Hz), then two runs, PRIME on-demand, Chrome 155.0.8059.39, RegionBatch, RD 12, 6 workers, a cold driver shader cache, no console error, `timedOut` [] in both. The files are not committed (Task 41 commits the exit's); the 1-minute load rose during each run from the bench's own workers (0.31 → 2.66 and 0.12 → 2.03; SP4c's committed file read 0.56 → 2.89), so the tool's end-of-run load warning fired on both. Times in ms; the step budget of §6.2 at 240 Hz: reply ≤ 5, issue → staged ≤ 14.17 (10 + one frame), staged → shown ≤ 8.33 (two frames).
+
+| run | `editVisibleP50` | `editVisibleP95` | `editVisibleMax` | `editAllVisibleP95` | `replyP95Ms` | `issueToStagedP95Ms` | `stagedToShownP95Ms` | `relightP95Ms` | `editP95Ms` | `editDropped` | `editVisibleStreamingP95` | `streamingRefused` | L10 `over33` | L10 frame max |
+|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|
+| 1 | 7.88 | **9.17** | 28.48 | 9.21 | 2.06 | 4.82 | 4.20 | 0.49 | 0.66 | 0 | 9.09 | 0 | **1** | 149.94 |
+| 2 | 7.70 | **9.05** | 25.18 | 9.21 | 1.76 | 4.75 | 3.90 | 0.36 | 0.56 | 0 | 8.87 | 0 | **0** | 8.33 |
+
+Over L10 in both runs: frame p50, p95 and p99 4.165 ms (one display interval), 17 structural operations, draw calls max 11, GPU estimate 66.4 MB, main-thread p95 1.24 and 1.28 ms, `partialColumnFrames` and `mixedColumnFrames` 0, `dropped`, `failed` and `storeFull` 0; the stream (L1-L6) and live (L7-L9) blocks p95 4.165 ms with `over33` 0. `mainP95Ms` reads 0 in both: the frame's input, walk step, DDA and outline are not timed until Task 35. Run 1's one long frame (L10 frame 3,435 of 7,406, about 14 s in, during the hover's edits) took 149.94 ms with 0.81 ms of main-thread work and no structural operation on or near it (the main thread's frame work, uploads included, was not where the time went; not traced further); run 2 had none. L10's `over33` 0 is an exit check, read again on Task 41's committed file.
+
+**Decision:** `editVisibleP95` is 9.17 and 9.05 ms, at most 50 in both runs, with every step of the budget inside its bound: Task 19 (D30's levers) is skipped.
+
 ## Threshold log
 
 (One line per commit that changes `test/thresholds.lock.json`.)
