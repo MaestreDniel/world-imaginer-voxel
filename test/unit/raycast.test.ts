@@ -50,6 +50,39 @@ const hitOf = (h: RayHit): number[] | null => (h.hit ? [h.x, h.y, h.z, h.face, h
 
 const facing = (type: number, f: string): number => REGISTRY.withProp(type, 'facing', f);
 
+/** The heap in use, less V8's code spaces (compiled code is not an allocation of the code under test). */
+const JIT_SPACE = /^(code|trusted|shared_trusted)_/;
+const heapUsed = (): number => {
+  let b = 0;
+  for (const s of v8.getHeapSpaceStatistics()) if (!JIT_SPACE.test(s.space_name)) b += s.space_used_size;
+  return b;
+};
+
+/**
+ * Expects 10,000 calls of `call` (already warmed up) to grow the heap by less than 256 KB: up to 3 attempts, each after
+ * two full GCs, an attempt that saw a GC discarded; the last attempt kept is the one judged. `what` names the calls.
+ */
+function heapGrowthOver(call: () => void, what: string): void {
+  v8.setFlagsFromString('--expose-gc');
+  const gc = runInNewContext('gc') as () => void;
+  const readings: number[] = [];
+  for (let t = 0; t < 3; t++) {
+    gc();
+    gc();
+    const before = heapUsed();
+    const profiler = new v8.GCProfiler();
+    profiler.start();
+    for (let i = 0; i < 10_000; i++) call();
+    const after = heapUsed();
+    const gcs = profiler.stop()?.statistics.length ?? 0;
+    if (gcs > 0) continue;
+    readings.push(after - before);
+    if (after - before < 256 * 1024) break;
+  }
+  expect(readings.length, `10,000 ${what}: every attempt saw a GC`).toBeGreaterThan(0);
+  expect(readings[readings.length - 1]!, `heap growth over 10,000 ${what} (attempts: ${readings.join(', ')})`).toBeLessThan(256 * 1024);
+}
+
 describe('castRay (SP5a spec §3.5)', () => {
   test('the reaches are 6 walking and 10 flying', () => {
     expect([REACH_WALK, REACH_FLY]).toEqual([6, 10]);
@@ -195,31 +228,8 @@ describe('castRay (SP5a spec §3.5)', () => {
       k++;
     };
     for (let i = 0; i < 100_000; i++) call();
-    v8.setFlagsFromString('--expose-gc');
-    const gc = runInNewContext('gc') as () => void;
-    const JIT_SPACE = /^(code|trusted|shared_trusted)_/;
-    const heapUsed = (): number => {
-      let b = 0;
-      for (const s of v8.getHeapSpaceStatistics()) if (!JIT_SPACE.test(s.space_name)) b += s.space_used_size;
-      return b;
-    };
-    const readings: number[] = [];
-    for (let t = 0; t < 3; t++) {
-      gc();
-      gc();
-      const before = heapUsed();
-      const profiler = new v8.GCProfiler();
-      profiler.start();
-      for (let i = 0; i < 10_000; i++) call();
-      const after = heapUsed();
-      const gcs = profiler.stop()?.statistics.length ?? 0;
-      if (gcs > 0) continue;
-      readings.push(after - before);
-      if (after - before < 256 * 1024) break;
-    }
+    heapGrowthOver(call, 'rays');
     expect(hits).toBeGreaterThan(0);
-    expect(readings.length, 'every attempt saw a GC').toBeGreaterThan(0);
-    expect(readings[readings.length - 1]!, `heap growth over 10,000 rays (attempts: ${readings.join(', ')})`).toBeLessThan(256 * 1024);
   });
 
   test('castRay along one fixed look allocates nothing, whatever its signs: each of the 8 sign patterns on a fresh module, whose DDA has seen no other (SP5a spec §3.5, D25; Task 35)', async () => {
@@ -228,14 +238,6 @@ describe('castRay (SP5a spec §3.5)', () => {
     // instance (fresh closures, no type feedback) is cast for each pattern. Floor stone up to y 66, a ceiling from y 75:
     // a look down or up hits within 10 blocks, after several steps.
     const r = { blockAt: (_x: number, y: number, _z: number): number => (y <= 66 || y >= 75 ? STONE : AIR), fluidAt: (): number => 0 };
-    v8.setFlagsFromString('--expose-gc');
-    const gc = runInNewContext('gc') as () => void;
-    const JIT_SPACE = /^(code|trusted|shared_trusted)_/;
-    const heapUsed = (): number => {
-      let b = 0;
-      for (const s of v8.getHeapSpaceStatistics()) if (!JIT_SPACE.test(s.space_name)) b += s.space_used_size;
-      return b;
-    };
     // The look's components as tagged (boxed) values, as the page passes them: the harness itself allocates nothing.
     const look: number[] = [{} as never, 0, 0];
     for (let pattern = 0; pattern < 8; pattern++) {
@@ -250,23 +252,8 @@ describe('castRay (SP5a spec §3.5)', () => {
         if (fresh.castRay(r, 0.5, 70.5, 0.5, look[0]!, look[1]!, look[2]!, REACH_FLY, 'block', out).hit) hits++;
       };
       for (let i = 0; i < 100_000; i++) call();
-      const readings: number[] = [];
-      for (let t = 0; t < 3; t++) {
-        gc();
-        gc();
-        const before = heapUsed();
-        const profiler = new v8.GCProfiler();
-        profiler.start();
-        for (let i = 0; i < 10_000; i++) call();
-        const after = heapUsed();
-        const gcs = profiler.stop()?.statistics.length ?? 0;
-        if (gcs > 0) continue;
-        readings.push(after - before);
-        if (after - before < 256 * 1024) break;
-      }
+      heapGrowthOver(call, `rays, pattern ${pattern}`);
       expect([hits > 0, out.y], `pattern ${pattern}`).toEqual([true, pattern & 2 ? 66 : 75]);
-      expect(readings.length, `pattern ${pattern}: every attempt saw a GC`).toBeGreaterThan(0);
-      expect(readings[readings.length - 1]!, `pattern ${pattern}: heap growth over 10,000 rays (attempts: ${readings.join(', ')})`).toBeLessThan(256 * 1024);
     }
   });
 
@@ -301,31 +288,8 @@ describe('castRay (SP5a spec §3.5)', () => {
       if (castRayFrom(floor, ray, REACH_FLY, 'block', out).hit) hits++;
     };
     for (let i = 0; i < 100_000; i++) call();
-    v8.setFlagsFromString('--expose-gc');
-    const gc = runInNewContext('gc') as () => void;
-    const JIT_SPACE = /^(code|trusted|shared_trusted)_/;
-    const heapUsed = (): number => {
-      let b = 0;
-      for (const s of v8.getHeapSpaceStatistics()) if (!JIT_SPACE.test(s.space_name)) b += s.space_used_size;
-      return b;
-    };
-    const readings: number[] = [];
-    for (let t = 0; t < 3; t++) {
-      gc();
-      gc();
-      const before = heapUsed();
-      const profiler = new v8.GCProfiler();
-      profiler.start();
-      for (let i = 0; i < 10_000; i++) call();
-      const after = heapUsed();
-      const gcs = profiler.stop()?.statistics.length ?? 0;
-      if (gcs > 0) continue;
-      readings.push(after - before);
-      if (after - before < 256 * 1024) break;
-    }
+    heapGrowthOver(call, 'casts');
     // Every cast hit the floor.
     expect([hits, out.hit, out.y]).toEqual([calls, true, 66]);
-    expect(readings.length, 'every attempt saw a GC').toBeGreaterThan(0);
-    expect(readings[readings.length - 1]!, `heap growth over 10,000 casts (attempts: ${readings.join(', ')})`).toBeLessThan(256 * 1024);
   });
 });
