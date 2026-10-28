@@ -25,6 +25,9 @@
  * SP4c (spec §3.2, D12): a `landing` job reads the terrain cell and answers `landingResult`, the teleport's surface
  * (`landingSurface`) and the column's `surfaceWaterLevel` (−∞ allowed) at an integer block position (x, z); a position
  * outside the world window is the handler's BAD_ARGS.
+ * SP5a (spec §2.1, D17): the sim worker's messages, apart from the pool's: `ToSim` (an `attach` as thread 15, a batch of
+ * `edits`, a `diff` request with an `id`) and `FromSim` (`attached`, `edited`, `diff`, `error`), checked by `parseToSim`
+ * and `parseFromSim`; the edit types come from `sim/edits.ts`, re-exported for the main thread's layers.
  */
 import { MAP_LEVELS, MAP_TILE_PX, PART_BUDGET, SLICE_NS, type MapLevel } from '../core/constants';
 import type { StageId } from '../core/ids';
@@ -34,12 +37,13 @@ import type { Spawn } from '../gen/column/spawn';
 import type { ProbeField, SliceField } from '../gen/inspect/fieldSlice';
 import { isLayerId, type LayerId } from '../gen/map/layers';
 import type { SplineLeaf } from '../metrics/splineStats';
+import type { Edit, EditRefusal } from '../sim/edits';
 import { payloadProblem, type ColumnMeshPayload } from '../mesh/column';
 import type { ColumnView } from '../world/store/api';
 import { COLUMN_TABLE_BYTES } from '../world/store/columnTable';
 import { EPOCH_CELL, EPOCH_CELL_COUNT } from '../world/store/epochs';
 import { BLOCK_SLOT_BYTES, BYTE_SLOT_BYTES, GROW_BYTES, type PoolHandles } from '../world/store/pool';
-import { RECLAIM_BYTES, RECLAIM_THREADS } from '../world/store/reclaim';
+import { RECLAIM_BYTES, RECLAIM_THREADS, SIM_THREAD } from '../world/store/reclaim';
 import { STATE_TABLE_SIZE, type StoreHandles } from '../world/store/store';
 
 export { COLUMN_SAMPLE_COST, CORNER_SAMPLE_COST, CORNER_STEEP_COST, DRAFT_BUDGET, PART_BUDGET, REQUEST_BUDGET, SLICE_RULE_NA } from '../core/constants';
@@ -586,6 +590,97 @@ export function payloadOfMeshResult(m: MeshColumnResultMsg): ColumnMeshPayload {
     versions: new Int32Array(m.versions), connectivity: new Uint16Array(m.connectivity), position: new Uint8Array(m.position),
     data: new Uint32Array(m.data), index: new Uint32Array(m.index), rows: new Int32Array(m.rows), spheres: new Float32Array(m.spheres),
   };
+}
+
+// ---------------------------------------------------------------- the sim worker (SP5a spec §2.1, D17)
+
+export type { Edit, EditRefusal } from '../sim/edits';
+
+/**
+ * A batch of voxel edits (§2.1), all or nothing: each at an integer (x, z) of the world window and y −64 … 319, `op`
+ * 'set' or 'revert', `value` and `expect` u32 (`state << 8 | fluid`). `id` matches the `edited` reply to it.
+ */
+export interface EditsMsg { readonly type: 'edits'; readonly id: number; readonly edits: readonly Edit[] }
+/** A request for column (cx, cz)'s DiffStore entries (§2.5); `id` matches the `diff` reply to it. */
+export interface DiffRequestMsg { readonly type: 'diff'; readonly id: number; readonly cx: number; readonly cz: number }
+/** What the main thread sends the sim: its store once, as thread 15 (an `AttachMsg` with `thread` 15 only), then edits and diff requests. */
+export type ToSim = AttachMsg | EditsMsg | DiffRequestMsg;
+/**
+ * A batch's outcome (§2.1; `sim/edits.ts`'s `EditResult`): `prev[k]` and `next[k]` edit k's entry before and after it
+ * (0xFFFFFFFF for none), `dirty` the colKeys to remesh (§2.6), `entryCols` the colKeys holding entries; each array
+ * transferred.
+ */
+export interface EditedMsg {
+  readonly type: 'edited'; readonly id: number; readonly prev: Uint32Array; readonly next: Uint32Array; readonly dirty: Float64Array;
+  readonly entryCols: Float64Array; readonly refused: EditRefusal | null; readonly relightMs: number; readonly editMs: number;
+}
+/**
+ * Column (cx, cz)'s entries in canonical order (§2.4, §2.5): section `sy` (0 … 23), voxel `idx` (0 … 4095) and its
+ * value, transferred; zero-length arrays when the column holds none (ruling R9).
+ */
+export interface DiffMsg {
+  readonly type: 'diff'; readonly id: number; readonly cx: number; readonly cz: number;
+  readonly sy: Uint8Array; readonly idx: Uint16Array; readonly value: Uint32Array;
+}
+/** What the sim answers; an `error`'s `jobId` is the id of the message it answers (null when unreadable), its `epoch` null. */
+export type FromSim = AttachedMsg | EditedMsg | DiffMsg | ErrorMsg;
+
+/** Every `EditRefusal` (a record, so a new refusal cannot be left out of the reply guard). */
+const EDIT_REFUSALS: Readonly<Record<EditRefusal, true>> = Object.freeze({ unloaded: true, changed: true, noProto: true, full: true });
+const isU32 = (v: unknown): v is number => isInt(v) && v >= 0 && v <= 0xFFFFFFFF;
+/** One edit of a batch: integer coordinates inside the world, a known op, u32 value and expect. */
+const editOk = (e: unknown): boolean =>
+  isObj(e) && isInt(e['x']) && isInt(e['z']) && pointInWindow(e['x'], e['z']) && isInt(e['y']) && e['y'] >= -64 && e['y'] <= 319
+  && (e['op'] === 'set' || e['op'] === 'revert') && isU32(e['value']) && isU32(e['expect']);
+
+/** Validates a message sent to the sim; null when malformed. */
+export function parseToSim(m: unknown): ToSim | null {
+  if (!isObj(m)) return null;
+  switch (m['type']) {
+    case 'attach':
+      return storeHandlesOk(m['handles']) && m['thread'] === SIM_THREAD ? (m as unknown as AttachMsg) : null;
+    case 'edits': {
+      const edits = m['edits'];
+      return isInt(m['id']) && Array.isArray(edits) && edits.every(editOk) ? (m as unknown as EditsMsg) : null;
+    }
+    case 'diff':
+      return isInt(m['id']) && isColumn(m['cx'], m['cz']) ? (m as unknown as DiffRequestMsg) : null;
+    default:
+      return null;
+  }
+}
+
+/** Every `sy` below 24 and every `idx` below 4096. */
+const diffEntriesOk = (sy: Uint8Array, idx: Uint16Array): boolean => {
+  for (let k = 0; k < sy.length; k++) if (sy[k]! >= 24 || idx[k]! >= 4096) return false;
+  return true;
+};
+
+/** Validates a reply of the sim; null when malformed (the page treats it as the sim's failure, §2.1). */
+export function parseFromSim(m: unknown): FromSim | null {
+  if (!isObj(m)) return null;
+  switch (m['type']) {
+    case 'attached':
+      return m as unknown as AttachedMsg;
+    case 'edited': {
+      const { prev, next, refused } = m;
+      return isInt(m['id']) && prev instanceof Uint32Array && next instanceof Uint32Array && next.length === prev.length
+        && m['dirty'] instanceof Float64Array && m['entryCols'] instanceof Float64Array
+        && (refused === null || (typeof refused === 'string' && Object.hasOwn(EDIT_REFUSALS, refused)))
+        && isFiniteNum(m['relightMs']) && isFiniteNum(m['editMs'])
+        ? (m as unknown as EditedMsg) : null;
+    }
+    case 'diff': {
+      const { sy, idx, value } = m;
+      return isInt(m['id']) && isColumn(m['cx'], m['cz']) && sy instanceof Uint8Array && idx instanceof Uint16Array
+        && value instanceof Uint32Array && idx.length === sy.length && value.length === sy.length && diffEntriesOk(sy, idx)
+        ? (m as unknown as DiffMsg) : null;
+    }
+    case 'error':
+      return (m['jobId'] === null || isInt(m['jobId'])) && REPLY_CHECKS['error']!(m) === null ? (m as unknown as ErrorMsg) : null;
+    default:
+      return null;
+  }
 }
 
 // ---------------------------------------------------------------- the spike's shared store (SP4a spec §1.2 item 6)

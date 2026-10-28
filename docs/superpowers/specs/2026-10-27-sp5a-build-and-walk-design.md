@@ -101,10 +101,11 @@ src/world/blocks/tags.ts              PLACEABLE, CATEGORY, SLIPPERY, CLIMBABLE, 
 src/world/store/store.ts api.ts       reopenPublished and replaceBlocks (the edit writer), blockAt/fluidAt/publishedAt, diffFlag (§2.2, §3.2, §1.2)
 src/world/store/reclaim.ts            wrap-aware epochs (STORE-3, D24)
 src/light/relight.ts                  incremental relight (§2.3); initial.ts: the scan gate (D23)
-src/sim/edits.ts diffStore.ts         the edit pipeline and the in-memory DiffStore (§2.1, §2.4)
-src/workers/sim.worker.ts             the sim worker (§2.1); protocol.ts: edits, edited, diff; decorate's diff
+src/sim/edits.ts diffStore.ts         the edit pipeline (applyEdits, readDiff) and the in-memory DiffStore (§2.1, §2.4)
+src/workers/sim.worker.ts simHandler.ts  the sim worker, its message guard and dispatch (§2.1); protocol.ts: edits, edited, diff; decorate's diff
 src/gen/pipeline/decorateStage.ts     the diff overlay, heightmaps from the final, REC_DIFF_FLAG (§2.5)
 src/gen/pipeline/finalHeightmaps.ts   patchHeightmaps for one block column (§2.2)
+src/engine/simClient.ts               spawns the sim worker; the entry set and the diff waits (§2.1, §2.5)
 src/engine/coordinator.ts             editable, simPin/simUnpin, markEdited/editSeq, the edit queue (§2.1, §2.6, §2.7)
 src/engine/workerPool.ts              meshColumn(…, {edit: true}) on the aux lane; cancelWorld over both lanes (§2.6)
 src/mesh/boxes.ts                     provisional boxes for torch, wall_torch, ladder (§1.3)
@@ -162,7 +163,7 @@ Common: `CARVABLE` false (never generated), `REPLACEABLE` false, `TINT` none, `F
 
 ### 2.1 The sim worker (D17, D24)
 
-- `workers/sim.worker.ts` with a pure handler `sim/edits.ts` (as `taskHandler.ts` is). The world page spawns it after the pool (`worldPage.ts:1159-1172`) and attaches it as thread 15 to `store.handles()` (`AttachMsg`, `src/workers/protocol.ts:122`).
+- `workers/sim.worker.ts` wires the handler `workers/simHandler.ts` (`createSimHandler`: the message guard and the dispatch, as `task.worker.ts` wires `taskHandler.ts`) over the pure core `sim/edits.ts` (`applyEdits`, `readDiff`); the guard lives in `workers/`, since `sim/` value-imports only the L2 core layers, not `workers/protocol.ts`. Only `engine/` spawns workers, so `engine/simClient.ts` (`createBrowserSim`, `createSimClient`) spawns the sim and owns the entry set and the `diff` waits; the world page calls it after the pool (`worldPage.ts:1159-1172`) and attaches the sim as thread 15 to `store.handles()` (`AttachMsg`, `src/workers/protocol.ts:122`).
 - **On a sim failure** (an error event, or a reply the page's guard refuses): the page marks thread 15 dead (`reclaim.ts:186-190`), disables editing and shows "Editing stopped: the edit worker failed; this session's edits are lost". The DiffStore lived in the sim (§2.4), so the page resolves every pending and later `diff` wait of §2.5 with "no diff" and empties its entry set (D then runs without an overlay, and a column regenerated later shows the generated terrain), and releases every `simPins` count through `simUnpin` (§2.7). A sim that dies inside a pool's allocation lock turns that lock into `StoreCorrupt` (SP4b's dead-owner rule, `src/world/store/pool.ts:15`), which is fatal as for any worker (`src/engine/coordinator.ts:1155-1157`); otherwise the world keeps streaming.
 - It wraps its store reads and writes in its own read sections (SP4b §12.2), and drains its limbo after each batch and every 100 ms while the limbo is not empty (it has no reply loop like the pool's, `task.worker.ts:12`).
 - **Messages:** main → sim `{type: 'edits', id, edits: [{x, y, z, op: 'set' | 'revert', value, expect}]}` (`value` = state << 8 | fluid; `revert` removes the entry and writes the generated value; `expect` is the voxel's value the main thread saw when it decided, §4.1); sim → main `{type: 'edited', id, prev: Uint32Array (the entry before each edit, or 0xFFFFFFFF for none), dirty: column keys to remesh (§2.6), entryCols: column keys holding entries, refused: null | 'unloaded' | 'changed' | 'noProto' | 'full', relightMs, editMs}`; main → sim `{type: 'diff', cx, cz}` → `{type: 'diff', cx, cz, sy: Uint8Array, idx: Uint16Array, value: Uint32Array}` (transferred). The sim handles messages in order. A batch is all or nothing: every voxel is validated (its column at status 3, its value still `expect`, a proto to read) before the first write, and any refusal refuses the whole batch; `full` rolls back the partial writes (§2.2).

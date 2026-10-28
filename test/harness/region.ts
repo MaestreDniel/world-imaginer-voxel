@@ -51,6 +51,11 @@ export interface GenRegionOptions {
   readonly upTo: RegionUpTo;
   readonly order: RegionOrder;
   readonly threads: 1 | 4;
+  /**
+   * The store over growable `SharedArrayBuffer`s (default `threads === 4`): `threads: 1, shared: true` gives a store a
+   * worker can attach (the attach guard needs shared buffers), such as the sim handler's tests (SP5a).
+   */
+  readonly shared?: boolean;
   /** Read the dump on a hit, write it on a miss (default false: never touch a dump). */
   readonly cache?: boolean;
   /** Seed of the `shuffled` permutation (default 1). */
@@ -436,7 +441,7 @@ export async function genRegion(o: GenRegionOptions): Promise<RegionResult> {
   const shuffleSeed = o.shuffleSeed ?? 1;
   const regionOrder = regionColumns(o.order, region.cx0, region.cz0, region.w, region.h, shuffleSeed);
   const t0 = performance.now();
-  const store = createStore({ shared: o.threads === 4 });
+  const store = createStore({ shared: o.shared ?? o.threads === 4 });
   const header: RegionCacheHeader | null = o.cache === true
     ? {
         genKey: genKey(seedFromInput(o.seed), stageHashes(o.params)), srcKey: o.srcKey ?? srcKey(),

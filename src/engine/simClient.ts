@@ -1,0 +1,172 @@
+/**
+ * The main thread's side of the sim worker (SP5a spec §2.1, §2.5, D17). Only `engine/` spawns workers, so this module
+ * spawns `sim.worker.ts` (`createBrowserSim`) and the page calls it. It attaches the store as thread 15, posts `edits`
+ * batches and `diff` requests with ids and matches each reply to its request (the sim answers in order), and keeps the
+ * set of columns holding entries from each `edited` reply's `entryCols` (`hasEntries`, the read-through's test, §2.5).
+ *
+ * **The sim's failure** (§2.1): an `error` event, an `error` reply of any code, or a reply the guard refuses
+ * (`parseFromSim`, or one that does not answer a pending request of its kind, its batch's length or its column). In
+ * this order: `failed` turns true, the entry set empties, `onFailure` runs once and synchronously (the page marks
+ * thread 15 dead, releases every sim pin and shows the notice), then every pending `edits` rejects with `SimFailed` and
+ * every pending `diff` resolves null, so a rejected post finds its pins already released. Later `edits` reject and
+ * later `diff`s resolve null at once, with nothing posted. `dispose` terminates the worker and settles its requests the
+ * same way, without `onFailure`.
+ */
+import { colKey } from '../core/coords';
+import { parseFromSim, type DiffMsg, type Edit, type EditedMsg, type ToSim } from '../workers/protocol';
+import type { ColumnDiff } from '../world/store/api';
+import { SIM_THREAD } from '../world/store/reclaim';
+import type { StoreHandles } from '../world/store/store';
+
+/** The surface of a browser `Worker` the client uses (a Node `worker_threads` wrapper or a fake in tests), as `WorkerLike`. */
+export interface SimWorkerLike {
+  postMessage(m: unknown, transfer?: Transferable[]): void;
+  onmessage: ((e: { data: unknown }) => void) | null;
+  onerror: ((e: unknown) => void) | null;
+  terminate(): void;
+}
+
+/** The sim failed (or the client was disposed): a pending or later `edits` rejects with this. */
+export class SimFailed extends Error {
+  constructor(message: string) {
+    super(message);
+    this.name = 'SimFailed';
+  }
+}
+
+export interface SimClient {
+  /** Attaches the page's shared store as thread 15; resolves on `attached`. */
+  attach(h: StoreHandles): Promise<void>;
+  /** Posts a batch; resolves with the sim's `edited` reply (a refusal included), rejects `SimFailed` on the sim's failure. */
+  edits(e: readonly Edit[]): Promise<EditedMsg>;
+  /** Column (cx, cz)'s entries, or null when it holds none or the sim failed (§2.5). */
+  diff(cx: number, cz: number): Promise<ColumnDiff | null>;
+  /** Whether the last reply's `entryCols` named the column (false once the sim failed). */
+  hasEntries(cx: number, cz: number): boolean;
+  readonly failed: boolean;
+  dispose(): void;
+}
+
+type Pending =
+  | { readonly kind: 'edits'; readonly n: number; resolve(m: EditedMsg): void; reject(e: Error): void }
+  | { readonly kind: 'diff'; readonly cx: number; readonly cz: number; resolve(d: ColumnDiff | null): void };
+interface AttachWait { resolve(): void; reject(e: Error): void }
+
+const text = (e: unknown): string => (e instanceof Error ? `${e.name}: ${e.message}` : typeof e === 'object' && e !== null && 'message' in e ? String(e.message) : String(e));
+
+export function createSimClient(spawn: () => SimWorkerLike, o: { onFailure(e: Error): void }): SimClient {
+  const worker = spawn();
+  const pending = new Map<number, Pending>();
+  /** The attaches not answered yet, oldest first (`attached` carries no id). */
+  const attaches: AttachWait[] = [];
+  const entries = new Set<number>();
+  let nextId = 1;
+  let failed = false;
+  /** Failed or disposed: requests settle at once and replies are ignored. */
+  let closed = false;
+
+  /** Settles every request still waiting: an attach or a batch rejects with `e`, a diff resolves null. */
+  const settleAll = (e: SimFailed): void => {
+    const waits = [...pending.values()];
+    pending.clear();
+    const atts = attaches.splice(0);
+    for (const a of atts) a.reject(e);
+    for (const p of waits) {
+      if (p.kind === 'edits') p.reject(e);
+      else p.resolve(null);
+    }
+  };
+
+  const fail = (why: string): void => {
+    if (closed) return;
+    closed = true;
+    failed = true;
+    entries.clear();
+    const e = new SimFailed(`the sim failed: ${why}`);
+    try {
+      o.onFailure(e);
+    } finally {
+      settleAll(e);
+    }
+  };
+
+  const onReply = (data: unknown): void => {
+    if (closed) return;
+    const m = parseFromSim(data);
+    if (m === null) return fail('a reply its guard refuses');
+    if (m.type === 'error') return fail(`${m.code}: ${m.message}`);
+    if (m.type === 'attached') {
+      const a = attaches.shift();
+      if (a === undefined) return fail('an `attached` with no attach pending');
+      a.resolve();
+      return;
+    }
+    const p = pending.get(m.id);
+    if (p === undefined || (p.kind === 'edits') !== (m.type === 'edited')) return fail(`an \`${m.type}\` reply to no pending request ${m.id} of its kind`);
+    if (p.kind === 'edits') {
+      const r = m as EditedMsg;
+      if (r.prev.length !== p.n) return fail(`an \`edited\` reply of ${r.prev.length} edits to a batch of ${p.n}`);
+      pending.delete(m.id);
+      entries.clear();
+      for (const k of r.entryCols) entries.add(k);
+      p.resolve(r);
+      return;
+    }
+    const d = m as DiffMsg;
+    if (d.cx !== p.cx || d.cz !== p.cz) return fail(`a \`diff\` reply for (${d.cx}, ${d.cz}) to a request for (${p.cx}, ${p.cz})`);
+    pending.delete(m.id);
+    p.resolve(d.sy.length === 0 ? null : { sy: d.sy, idx: d.idx, value: d.value });
+  };
+
+  worker.onmessage = (e) => onReply(e.data);
+  worker.onerror = (e) => fail(`an error event (${text(e)})`);
+
+  const post = (m: ToSim): void => worker.postMessage(m);
+
+  return {
+    attach(h) {
+      if (closed) return Promise.reject(new SimFailed('the sim failed or was disposed'));
+      return new Promise<void>((resolve, reject) => {
+        post({ type: 'attach', handles: h, thread: SIM_THREAD });
+        attaches.push({ resolve, reject });
+      });
+    },
+    edits(e) {
+      if (closed) return Promise.reject(new SimFailed('the sim failed or was disposed'));
+      const id = nextId++;
+      return new Promise<EditedMsg>((resolve, reject) => {
+        post({ type: 'edits', id, edits: e });
+        pending.set(id, { kind: 'edits', n: e.length, resolve, reject });
+      });
+    },
+    diff(cx, cz) {
+      if (closed) return Promise.resolve(null);
+      const id = nextId++;
+      return new Promise<ColumnDiff | null>((resolve) => {
+        post({ type: 'diff', id, cx, cz });
+        pending.set(id, { kind: 'diff', cx, cz, resolve });
+      });
+    },
+    hasEntries: (cx, cz) => entries.has(colKey(cx, cz)),
+    get failed() {
+      return failed;
+    },
+    dispose() {
+      if (closed) {
+        worker.terminate();
+        return;
+      }
+      closed = true;
+      entries.clear();
+      worker.onmessage = null;
+      worker.onerror = null;
+      worker.terminate();
+      settleAll(new SimFailed('the sim was disposed'));
+    },
+  };
+}
+
+/** The browser's sim: a module worker running `sim.worker.ts`, whose MessageEvent carries `data`. */
+export function createBrowserSim(o: { onFailure(e: Error): void }): SimClient {
+  return createSimClient(() => new Worker(new URL('../workers/sim.worker.ts', import.meta.url), { type: 'module' }) as unknown as SimWorkerLike, o);
+}

@@ -1,4 +1,5 @@
 import { describe, expect, test } from 'vitest';
+import { colKey } from '../../src/core/coords';
 import { DEFAULTS } from '../../src/core/params/defaults';
 import { flattenKnot } from '../../src/core/spline/edit';
 import type { KnotPath } from '../../src/core/spline/types';
@@ -13,7 +14,7 @@ import { createSurfaceContext } from '../../src/gen/surface/context';
 import { surfaceProbe } from '../../src/gen/surface/probe';
 import { AIR, BEDROCK, DEEPSLATE, SNOW_BLOCK } from '../../src/world/blocks/index';
 import { leafOpts } from '../../src/ui/splineEditor/model';
-import { cellOf, parseFromWorker, parseSpikeStoreFromWorker, parseSpikeStoreToWorker, parseToWorker, pointInWindow, SLICE_ROWS, SLICE_SAMPLES, sliceIndex, slicePartIndex, tileInWindow, type FromWorker, type ScopedJobType } from '../../src/workers/protocol';
+import { cellOf, parseFromSim, parseFromWorker, parseSpikeStoreFromWorker, parseSpikeStoreToWorker, parseToSim, parseToWorker, pointInWindow, SLICE_ROWS, SLICE_SAMPLES, sliceIndex, slicePartIndex, tileInWindow, type FromWorker, type ScopedJobType } from '../../src/workers/protocol';
 import { createSliceJob } from '../../src/workers/sliceJob';
 import { createTaskHandler } from '../../src/workers/taskHandler';
 import { createStore } from '../../src/world/store/store';
@@ -693,5 +694,88 @@ describe('the store spike\'s messages (SP4a spec §1.2 item 6, ruling P18)', () 
     ['checked with ok above total', { type: 'spikeCrossChecked', ok: 33, total: 32, errors: [] }],
   ])('a bad reply is null: %s', (_, m) => {
     expect(parseSpikeStoreFromWorker(m)).toBeNull();
+  });
+});
+
+describe('the sim worker\'s messages (SP5a spec §2.1)', () => {
+  const handles = createStore({ shared: true, maxBlockBytes: 1 << 20, maxByteBytes: 1 << 20 }).handles();
+  const edit = (o: Record<string, unknown> = {}) => ({ x: 5, y: 70, z: -3, op: 'set', value: 1 << 8, expect: 0, ...o });
+  const edits = (...es: unknown[]) => ({ type: 'edits', id: 4, edits: es });
+  const edited = (o: Record<string, unknown> = {}) => ({
+    type: 'edited', id: 4, prev: new Uint32Array(2), next: new Uint32Array(2), dirty: new Float64Array([colKey(0, -1)]),
+    entryCols: new Float64Array([colKey(0, -1)]), refused: null, relightMs: 0.4, editMs: 1.2, ...o,
+  });
+  const diff = (o: Record<string, unknown> = {}) => ({
+    type: 'diff', id: 5, cx: 0, cz: -1, sy: new Uint8Array([8]), idx: new Uint16Array([4085]), value: new Uint32Array([1 << 8]), ...o,
+  });
+
+  test('each message to the sim is accepted', () => {
+    expect(parseToSim({ type: 'attach', handles, thread: 15 })).not.toBeNull();
+    expect(parseToSim(edits(edit(), edit({ op: 'revert', value: 0, expect: 1 << 8 })))).not.toBeNull();
+    expect(parseToSim(edits(edit({ x: -524288, y: -64, z: 524287, value: 0xFFFFFFFF, expect: 0xFFFFFFFF })))).not.toBeNull();
+    expect(parseToSim(edits(edit({ y: 319 })))).not.toBeNull();
+    expect(parseToSim({ type: 'diff', id: 6, cx: -3, cz: 4 })).not.toBeNull();
+  });
+  test.each<[string, unknown]>([
+    ['not an object', 3],
+    ['an unknown type', { type: 'nope', id: 1 }],
+    ['a task worker\'s job', { type: 'spawn', jobId: 1, epoch: 0, scope: 0 }],
+    ['an attach as thread 14', { type: 'attach', handles, thread: 14 }],
+    ['an attach as thread 1', { type: 'attach', handles, thread: 1 }],
+    ['an attach without handles', { type: 'attach', thread: 15 }],
+    ['edits with a non-integer id', { ...edits(edit()), id: 0.5 }],
+    ['edits that are not an array', { type: 'edits', id: 4, edits: edit() }],
+    ['an edit that is not an object', edits(7)],
+    ['a non-integer x', edits(edit({ x: 1.5 }))],
+    ['a non-integer y', edits(edit({ y: 70.5 }))],
+    ['a non-integer z', edits(edit({ z: Number.NaN }))],
+    ['y below −64', edits(edit({ y: -65 }))],
+    ['y above 319', edits(edit({ y: 320 }))],
+    ['x outside the world window', edits(edit({ x: 524288 }))],
+    ['an unknown op', edits(edit({ op: 'fill' }))],
+    ['a value above 2³² − 1', edits(edit({ value: 2 ** 32 }))],
+    ['a negative value', edits(edit({ value: -1 }))],
+    ['a non-integer value', edits(edit({ value: 256.5 }))],
+    ['an expect above 2³² − 1', edits(edit({ expect: 2 ** 32 }))],
+    ['a diff request with a non-integer cx', { type: 'diff', id: 6, cx: 0.5, cz: 4 }],
+    ['a diff request outside the world window', { type: 'diff', id: 6, cx: 32768, cz: 4 }],
+    ['a diff request without an id', { type: 'diff', cx: 0, cz: 4 }],
+  ])('a message to the sim is refused: %s', (_n, m) => {
+    expect(parseToSim(m)).toBeNull();
+  });
+
+  test('each reply of the sim is accepted', () => {
+    expect(parseFromSim({ type: 'attached' })).not.toBeNull();
+    expect(parseFromSim(edited())).not.toBeNull();
+    expect(parseFromSim(edited({ refused: 'changed', dirty: new Float64Array(0) }))).not.toBeNull();
+    for (const refused of ['unloaded', 'noProto', 'full']) expect(parseFromSim(edited({ refused })), refused).not.toBeNull();
+    expect(parseFromSim(diff())).not.toBeNull();
+    expect(parseFromSim(diff({ sy: new Uint8Array(0), idx: new Uint16Array(0), value: new Uint32Array(0) }))).not.toBeNull();
+    expect(parseFromSim({ type: 'error', jobId: 4, epoch: null, code: 'INTERNAL', message: 'x' })).not.toBeNull();
+    expect(parseFromSim({ type: 'error', jobId: null, epoch: null, code: 'BAD_MESSAGE', message: 'x' })).not.toBeNull();
+  });
+  test.each<[string, unknown]>([
+    ['not an object', null],
+    ['an unknown type', { type: 'nope', id: 4 }],
+    ['a task worker\'s reply', { type: 'columnDone', jobId: 1, epoch: 0, job: 'terrain', cx: 0, cz: 0, ms: 1, versions: null }],
+    ['edited with a non-integer id', edited({ id: 'a' })],
+    ['edited whose prev is not a Uint32Array', edited({ prev: [0, 0] })],
+    ['edited whose next is not a Uint32Array', edited({ next: new Int32Array(2) })],
+    ['edited whose next is not prev\'s length', edited({ next: new Uint32Array(3) })],
+    ['edited whose dirty is not a Float64Array', edited({ dirty: new Uint32Array(1) })],
+    ['edited whose entryCols is not a Float64Array', edited({ entryCols: [colKey(0, -1)] })],
+    ['edited with an unknown refusal', edited({ refused: 'busy' })],
+    ['edited with a NaN relightMs', edited({ relightMs: Number.NaN })],
+    ['edited without editMs', edited({ editMs: undefined })],
+    ['a diff whose arrays differ in length', diff({ idx: new Uint16Array(2) })],
+    ['a diff whose sy is not a Uint8Array', diff({ sy: new Uint16Array([8]) })],
+    ['a diff whose value is not a Uint32Array', diff({ value: [256] })],
+    ['a diff whose section is past 23', diff({ sy: new Uint8Array([24]) })],
+    ['a diff whose voxel is past 4095', diff({ idx: new Uint16Array([4096]) })],
+    ['a diff with a non-integer cx', diff({ cx: 0.5 })],
+    ['an error with an unknown code', { type: 'error', jobId: 4, epoch: null, code: 'NOPE', message: 'x' }],
+    ['an error with a non-integer jobId', { type: 'error', jobId: 0.5, epoch: null, code: 'INTERNAL', message: 'x' }],
+  ])('a reply of the sim is refused: %s', (_n, m) => {
+    expect(parseFromSim(m)).toBeNull();
   });
 });

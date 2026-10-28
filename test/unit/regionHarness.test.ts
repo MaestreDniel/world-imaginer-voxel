@@ -206,6 +206,16 @@ describe('genRegion with 1 thread (§6.1)', () => {
     }
   });
 
+  test('threads 1, shared true: a SharedArrayBuffer store, the same hash', async () => {
+    const plain = await genRegion(base);
+    const shared = await genRegion({ ...base, shared: true });
+    expect(plain.view.store.shared).toBe(false);
+    expect(shared.view.store.shared).toBe(true);
+    expect(shared.view.store.handles().table).toBeInstanceOf(SharedArrayBuffer);
+    expect(shared.columnsPerThread).toEqual([16]);
+    expect(shared.view.hash()).toBe(plain.view.hash());
+  });
+
   test('the profile params reach the stage', async () => {
     const a = await genRegion(base);
     const b = await genRegion({ ...base, params: paramsWith({ climate: { scaleMul: 4 } }) });

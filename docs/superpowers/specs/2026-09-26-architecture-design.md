@@ -159,14 +159,14 @@ world-imaginer-voxel/          (repository root)
                                 (fillColumnT, genRegionInProcess, regionHash) and sp3aGoldens.ts; SP3b: sp3bGoldens.ts; SP3c: sp3cGoldens.ts;
                                 SP3e: sp3eGoldens.ts, the preset window search and the sp3e.* goldens, and pointDigest.ts, the
                                 column-point digest shared with sp2aGoldens.ts (SP3e spec §6))
-    workers/protocol.ts taskHandler.ts task.worker.ts sim.worker.ts worldJobs.ts spikeStore.worker.ts spikeStoreHandler.ts   (taskHandler: pure message handler, SP2a; SP3a: sliceJob.ts,
+    workers/protocol.ts taskHandler.ts task.worker.ts sim.worker.ts simHandler.ts (SP5a) worldJobs.ts spikeStore.worker.ts spikeStoreHandler.ts   (taskHandler: pure message handler, SP2a; SP3a: sliceJob.ts,
                                 the slice job with its worker-local store and LRU; SP3b splits a slice across the workers; SP3d:
                                 fieldSliceJob.ts, the fieldSlice and fieldProbe jobs' message handling, the evaluation being
                                 gen/inspect/fieldSlice.ts, and protocol.ts's planFieldSlice, the work bound's split and refusals;
                                 SP4a: worldJobs.ts, the T, D, L and MESH_COLUMN handlers over the attached store; spikeStore.worker.ts and
                                 spikeStoreHandler.ts, the week-1 spike's shared-store check)
     engine/                     main thread, no three
-      coordinator.ts scheduler.ts (not created: the coordinator holds the scheduler) rings.ts workerPool.ts jobHeap.ts (SP4c) throttle.ts (SP4b) uploadBudget.ts session.ts invalidation.ts (SP4c with Apply's dirty stages; completed for every scope by SP10) capabilities.ts
+      coordinator.ts scheduler.ts (not created: the coordinator holds the scheduler) rings.ts workerPool.ts jobHeap.ts (SP4c) throttle.ts (SP4b) uploadBudget.ts session.ts invalidation.ts (SP4c with Apply's dirty stages; completed for every scope by SP10) capabilities.ts simClient.ts (SP5a)
       renderDistance.ts spikeStore.ts   (SP4a: the default render distance from the capability report; the spike's shared store)
     render/                     the only place three is imported (ui canvases are 2D; amended by SP0)
       renderer.ts sectionRenderer.ts (interface; SP4b: and UploadGate) regionBatch.ts regionMesh.ts (fallback) floatingOrigin.ts selection.ts

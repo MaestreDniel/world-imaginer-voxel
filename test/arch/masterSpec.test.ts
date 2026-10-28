@@ -1120,6 +1120,8 @@ describe('master spec amendments (SP5a §9)', () => {
     [/^\s+light\/initial\.ts /, 'relight.ts (SP5a)', 'src/light/relight.ts'],
     [/^\s+sim\/fluidSim\.ts /, 'edits.ts diffStore.ts (SP5a)', 'src/sim/diffStore.ts'],
     [/^\s+sim\/fluidSim\.ts /, 'edits.ts diffStore.ts (SP5a)', 'src/sim/edits.ts'],
+    [/^\s+workers\/protocol\.ts /, 'sim.worker.ts simHandler.ts (SP5a)', 'src/workers/sim.worker.ts'],
+    [/^\s+coordinator\.ts /, 'simClient.ts (SP5a)', 'src/engine/simClient.ts'],
   ];
 
   test('the split', () => {
