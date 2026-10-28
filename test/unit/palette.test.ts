@@ -1,3 +1,4 @@
+import { readFileSync } from 'node:fs';
 import { afterEach, beforeEach, describe, expect, test, vi } from 'vitest';
 import { createHotbar } from '../../src/player/hotbar';
 import type { Slot } from '../../src/player/interaction';
@@ -121,8 +122,8 @@ describe('mountPalette: the overlay (SP5a spec §4.4, D10)', () => {
     expect(name.textContent).toBe('Water bucket');
     dom.el('palette-slot-water_bucket').dispatchEvent(new Event('mouseleave'));
     expect(name.textContent).toBe('');
-    // The name line comes after the grid.
-    const children = dom.el('world-palette').children;
+    // The name line comes after the grid, in the panel.
+    const children = dom.el('palette-panel').children;
     expect(children.indexOf(name)).toBeGreaterThan(children.indexOf(dom.el('palette-groups')));
   });
 
@@ -185,6 +186,56 @@ describe('mountPalette: the overlay (SP5a spec §4.4, D10)', () => {
     expect(swatches()).toEqual([]);
     type('');
     expect(swatches()).toHaveLength(PLACEABLE_NAMES.length + 3);
+  });
+
+  /** A mouse event dispatched on `on` as the browser delivers one bubbling up from `target`. */
+  const mouse = (on: FakeElement, type: 'mousedown' | 'click', target: FakeElement): Event => {
+    const e = new Event(type, { cancelable: true });
+    Object.defineProperty(e, 'target', { value: target });
+    on.dispatchEvent(e);
+    return e;
+  };
+
+  test('the overlay covers the world around its panel: a click on the backdrop closes it and requests the lock, a click in the panel does not', () => {
+    const { palette, requestLock, onClose } = mount();
+    const backdrop = dom.el('world-palette');
+    const panel = dom.el('palette-panel');
+    expect(panel.parentElement).toBe(backdrop);
+    expect(backdrop.children).toEqual([panel]);
+    palette.open();
+    // A press and a click inside the panel (a swatch, the search box, the panel's padding) bubble to the backdrop and leave it open.
+    for (const t of [dom.el('palette-slot-bricks'), dom.el('palette-search'), panel]) {
+      mouse(backdrop, 'mousedown', t);
+      mouse(backdrop, 'click', t);
+    }
+    expect(palette.isOpen).toBe(true);
+    // A drag from the search box released over the backdrop (its click goes to the common ancestor) leaves it open too.
+    mouse(backdrop, 'mousedown', dom.el('palette-search'));
+    mouse(backdrop, 'click', backdrop);
+    expect(palette.isOpen).toBe(true);
+    expect(requestLock).not.toHaveBeenCalled();
+    // A click on the backdrop itself: closed, the lock requested (the click is a user activation), onClose once.
+    mouse(backdrop, 'mousedown', backdrop);
+    mouse(backdrop, 'click', backdrop);
+    expect(palette.isOpen).toBe(false);
+    expect(backdrop.hidden).toBe(true);
+    expect(requestLock).toHaveBeenCalledTimes(1);
+    expect(onClose).toHaveBeenCalledTimes(1);
+    // Closed (hidden, so no click reaches it in a browser), a stray click does nothing.
+    mouse(backdrop, 'mousedown', backdrop);
+    mouse(backdrop, 'click', backdrop);
+    expect(requestLock).toHaveBeenCalledTimes(1);
+    expect(onClose).toHaveBeenCalledTimes(1);
+  });
+
+  test('the backdrop is a transparent full-viewport layer and the panel the help\'s dark card (styles.css)', () => {
+    const css = readFileSync(new URL('../../src/ui/styles.css', import.meta.url), 'utf8');
+    const rule = (sel: string): string => css.match(new RegExp(`^${sel.replace('.', '\\.')} \\{([^}]*)\\}`, 'm'))?.[1] ?? '';
+    // The backdrop: the help's layer (inset 0, z-index 3), with nothing drawn, so the hotbar shows through around the panel.
+    expect(rule('.world-palette')).toMatch(/position: absolute; inset: 0; z-index: 3;/);
+    expect(rule('.world-palette')).not.toMatch(/background/);
+    // The panel: the help's background.
+    expect(rule('.palette-panel')).toMatch(/background: rgb\(15 22 41 \/ \.92\)/);
   });
 
   test('close() closes without the lock; dispose removes the overlay and its key listener', () => {

@@ -2157,7 +2157,7 @@ export function mountWorldPage(root: HTMLElement, q: WorldQuery, hash: string, o
     });
     // Closing removes the help's Esc listener from the document.
     teardown.push(() => help.close());
-    // The creative palette (SP5a spec §4.4, D10): E opens it; its own E requests the lock back, a canvas click too.
+    // The creative palette (SP5a spec §4.4, D10): E opens it; its own E requests the lock back, a click around its panel too.
     const palette: Palette = mountPalette(host, {
       hotbar,
       requestLock: () => {

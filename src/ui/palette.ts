@@ -6,7 +6,7 @@
  * case, and hides the groups left empty. Text only through `textContent`; no `confirm` or `alert`.
  *
  * The page opens it on E and closes it first on M and H (`paletteFirst`). Opening releases the pointer lock. While it
- * is open, E closes it and requests the lock back (E's keydown is a user activation) unless the search box has the
+ * is open, a click on the backdrop around its panel closes it and requests the lock back, and E closes it and requests the lock back (E's keydown is a user activation) unless the search box has the
  * focus, where E types (`isTextEntry`; the world's input ignores keys there too), and Esc closes it and is
  * consumed, as the help's Esc is (the map's window shortcut skips a default-prevented key). A held E's key repeat does
  * not close what its first press opened.
@@ -74,9 +74,13 @@ function slotKey(slot: Slot): string {
 
 export function mountPalette(host: HTMLElement, o: { hotbar: Hotbar; requestLock(): void; onClose(): void }): Palette {
   let isOpen = false;
+  // The overlay covers the world as the help does, so no click reaches the canvas (whose click takes the lock); it
+  // draws nothing itself, so the hotbar shows through around the panel, which holds the content.
   const overlay = el('div', 'world-palette');
   overlay.id = 'world-palette';
   overlay.hidden = true;
+  const panel = el('div', 'palette-panel');
+  panel.id = 'palette-panel';
   const search = el('input', 'palette-search');
   search.id = 'palette-search';
   search.type = 'search';
@@ -128,8 +132,21 @@ export function mountPalette(host: HTMLElement, o: { hotbar: Hotbar; requestLock
   };
   search.addEventListener('input', render);
   render();
-  overlay.append(search, groups, name);
+  panel.append(search, groups, name);
+  overlay.append(panel);
   host.append(overlay);
+  // A click on the backdrop around the panel returns to the world: it closes and requests the lock (the click is a user
+  // activation). Only a press that started there: a drag from the search box released outside the panel sends its click
+  // to the overlay too.
+  let pressedBackdrop = false;
+  overlay.addEventListener('mousedown', (e) => {
+    pressedBackdrop = e.target === overlay;
+  });
+  overlay.addEventListener('click', (e) => {
+    if (!isOpen || e.target !== overlay || !pressedBackdrop) return;
+    close();
+    o.requestLock();
+  });
 
   const onKeyDown = (e: KeyboardEvent): void => {
     if (e.code === 'Escape' || e.key === 'Escape') {
