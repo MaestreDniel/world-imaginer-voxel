@@ -7,10 +7,11 @@ import { STAGE_BONUS, streamScore } from '../../src/core/streamScore';
 import {
   FAILED_FATAL, FREES_PER_FRAME, MESH_REMOVALS_PER_FRAME, PROTO_FREES_PER_FRAME, createCoordinator, createCoordinatorCounts, phaseName,
   progressFraction, worldJobsOf,
-  type Coordinator, type CoordinatorCounts, type CoordinatorJobs, type JobOutcome, type StreamCamera, type StreamEvent,
-  type StreamSink, type StreamStore,
+  type Coordinator, type CoordinatorCounts, type CoordinatorJobs, type JobOutcome, type ReadThrough, type StreamCamera,
+  type StreamEvent, type StreamSink, type StreamStore,
 } from '../../src/engine/coordinator';
 import { KEEP_VOXELS_EXTRA, M_D, M_KEEP_MESH, M_KEEP_VOXELS, M_L, M_MESH, M_T, membershipTable, stageOffsets, type Stage } from '../../src/engine/rings';
+import { createSimClient, SimFailed, type SimWorkerLike } from '../../src/engine/simClient';
 import { createThrottle, type Throttle } from '../../src/engine/throttle';
 import { JobCancelled, StoreCorruptError, StoreFullError, WorkerFailed, type ColumnDone, type WorkerPool } from '../../src/engine/workerPool';
 import { writeFinalHeightmaps } from '../../src/gen/pipeline/finalHeightmaps';
@@ -20,6 +21,7 @@ import { createDiffStore } from '../../src/sim/diffStore';
 import { applyEdits, createEditScratch } from '../../src/sim/edits';
 import { WATER_SOURCE } from '../../src/world/blocks/fluid';
 import { AIR, GLASS, ICE, STONE, TORCH } from '../../src/world/blocks/index';
+import type { ColumnDiff } from '../../src/world/store/api';
 import { SECTIONS } from '../../src/world/store/columnTable';
 import { lightIndex } from '../../src/world/store/padded';
 import { StoreCorrupt } from '../../src/world/store/pool';
@@ -347,12 +349,14 @@ interface MakeOptions extends FakeOptions {
   readonly retainAllProtos?: boolean;
   /** The first configure's epoch (SP4c spec §4.10; the page's is 1). */
   readonly epoch?: number;
+  /** The coordinator's jobs over the fake world's (an adapter between them); the fake's own by default. */
+  readonly jobsOf?: (inner: CoordinatorJobs) => CoordinatorJobs;
 }
 
 function make(mo: MakeOptions = {}): { w: World; c: Coordinator } {
   const w = fakeWorld(mo);
   const inner = createCoordinator({
-    jobs: w.jobs, store: w.store, sink: w.sink, throttle: w.throttle, rd: mo.rd ?? 4, rdMax: mo.rdMax ?? 16,
+    jobs: mo.jobsOf?.(w.jobs) ?? w.jobs, store: w.store, sink: w.sink, throttle: w.throttle, rd: mo.rd ?? 4, rdMax: mo.rdMax ?? 16,
     retainAllProtos: mo.retainAllProtos ?? true, strict: mo.strict ?? false,
     generation: w.fake.generation, epoch: mo.epoch ?? 1,
     onEvent: (e) => { w.fake.events.push(e); w.fake.eventIssued.push(w.fake.issued.length); },
@@ -2828,5 +2832,167 @@ describe('worldJobsOf (ruling P30, SP4b spec §3.13)', () => {
     await expect(jobs.run('D', 0, 0, false, false)).rejects.toBe(cancelled);
     await expect(jobs.run('L', 0, 0, false, false)).rejects.toBe(full);
     await expect(jobs.run('MESH', 0, 0, false, false)).rejects.toBe(cancelled);
+  });
+
+  /** One edit entry: stone at section 4, voxel 17. */
+  const DIFF: ColumnDiff = { sy: Uint8Array.of(4), idx: Uint16Array.of(17), value: Uint32Array.of(STONE << 8) };
+  /** A pool whose `decorate` records its `diff` argument; the other jobs answer as `pool`'s. */
+  const diffPool = () => {
+    const decorates: Array<{ readonly cx: number; readonly cz: number; readonly diff: ColumnDiff | undefined }> = [];
+    const p = {
+      epoch: 0,
+      terrain: (cx: number, cz: number) => Promise.resolve(done(cx, cz, null)),
+      decorate: (cx: number, cz: number, diff?: ColumnDiff) => { decorates.push({ cx, cz, diff }); return Promise.resolve(done(cx, cz, null)); },
+      light: (cx: number, cz: number) => Promise.resolve(done(cx, cz, lightVersions)),
+      meshColumn: () => Promise.resolve({ payload, generation: 0 }),
+      cancelWorld: () => {},
+      liveWorkers: () => 3,
+    } as unknown as WorkerPool;
+    return { p, decorates };
+  };
+  /** A read-through whose entry set is `keys`, recording each `diff` request; `answer` settles it. */
+  const readThrough = (keys: ReadonlyArray<readonly [number, number]>, answer: (cx: number, cz: number) => Promise<ColumnDiff | null>) => {
+    const asked: Array<readonly [number, number]> = [];
+    const rt: ReadThrough = {
+      hasEntries: (cx, cz) => has(keys, cx, cz),
+      diff: (cx, cz) => { asked.push([cx, cz]); return answer(cx, cz); },
+    };
+    return { rt, asked };
+  };
+
+  test('a D on a column with entries awaits the diff and passes it; a D on another column passes none and does not call `diff` (SP5a spec §2.5, D21)', async () => {
+    let answer: ((d: ColumnDiff | null) => void) | null = null;
+    const { rt, asked } = readThrough([[1, -2]], () => new Promise<ColumnDiff | null>((resolve) => { answer = resolve; }));
+    const { p, decorates } = diffPool();
+    const jobs = worldJobsOf(p, rt);
+    const d = jobs.run('D', 1, -2, false, false);
+    await flush();
+    // Asked once, and the D waits for the answer.
+    expect(asked).toEqual([[1, -2]]);
+    expect(decorates).toEqual([]);
+    answer!(DIFF);
+    expect(await d).toEqual({ versions: null, payload: null, generation: 0 });
+    expect(decorates).toHaveLength(1);
+    expect(decorates[0]!.diff).toBe(DIFF);
+    // Another column: today's path, decorate called inside run (no wait) with no diff.
+    const other = jobs.run('D', 2, -2, false, false);
+    expect(decorates[1]).toEqual({ cx: 2, cz: -2, diff: undefined });
+    await other;
+    // T, L and MESH of the column with entries do not ask either.
+    await jobs.run('T', 1, -2, false, false);
+    await jobs.run('L', 1, -2, false, false);
+    await jobs.run('MESH', 1, -2, false, false);
+    expect(asked).toEqual([[1, -2]]);
+    expect(decorates).toHaveLength(2);
+  });
+
+  test('a read-through whose `diff` resolves null (the sim failed) runs D without an overlay (SP5a spec §2.1, §2.5)', async () => {
+    const { rt, asked } = readThrough([[1, -2]], () => Promise.resolve(null));
+    const { p, decorates } = diffPool();
+    expect(await worldJobsOf(p, rt).run('D', 1, -2, false, false)).toEqual({ versions: null, payload: null, generation: 0 });
+    expect(asked).toEqual([[1, -2]]);
+    expect(decorates).toEqual([{ cx: 1, cz: -2, diff: undefined }]);
+  });
+});
+
+/**
+ * The fake world's jobs as the pool `worldJobsOf` adapts (`ColumnDone` and `MeshColumnDone`), recording each
+ * decorate's `diff` argument: the coordinator then runs over the page's adapter and its read-through.
+ */
+function poolOver(inner: CoordinatorJobs, decorates: Array<{ readonly cx: number; readonly cz: number; readonly diff: ColumnDiff | undefined }>) {
+  const column = (cx: number, cz: number) => (o: JobOutcome): ColumnDone => ({ cx, cz, ms: 1, versions: o.versions, generation: o.generation });
+  return {
+    get epoch() { return inner.generation(); },
+    terrain: (cx: number, cz: number, protoOnly = false) => inner.run('T', cx, cz, protoOnly, false).then(column(cx, cz)),
+    decorate: (cx: number, cz: number, diff?: ColumnDiff) => {
+      decorates.push({ cx, cz, diff });
+      return inner.run('D', cx, cz, false, false).then(column(cx, cz));
+    },
+    light: (cx: number, cz: number) => inner.run('L', cx, cz, false, false).then(column(cx, cz)),
+    meshColumn: (cx: number, cz: number, o?: { readonly edit: boolean }) => (
+      inner.run('MESH', cx, cz, false, o?.edit === true).then((r) => ({ payload: r.payload!, generation: r.generation }))
+    ),
+    cancelWorld: (pred: (stage: Stage, cx: number, cz: number) => boolean) => inner.cancel(pred),
+    liveWorkers: () => inner.liveWorkers(),
+  } satisfies Pick<WorkerPool, 'epoch' | 'terrain' | 'decorate' | 'light' | 'meshColumn' | 'cancelWorld' | 'liveWorkers'>;
+}
+
+describe('worldJobsOf over the sim client: the sim failure path (SP5a spec §2.1, §2.5, §6.3)', () => {
+  test('sim failure: with a fake sim that never answers, simClient\'s failure resolves every pending wait null, so each held D runs and settles; simUnpinAll then lets the frees follow (a pinned column beyond keepVoxels freed in the next update)', async () => {
+    const rd = 4;
+    const posted: Array<Record<string, unknown>> = [];
+    const worker: SimWorkerLike = {
+      onmessage: null,
+      onerror: null,
+      postMessage: (m) => { posted.push(m as Record<string, unknown>); },
+      terminate: () => {},
+    };
+    let c: Coordinator | null = null;
+    // The page's failure handler (§2.1): every sim pin released, synchronously, before the waits settle.
+    const sim = createSimClient(() => worker, { onFailure: () => c!.simUnpinAll() });
+    const decorates: Array<{ readonly cx: number; readonly cz: number; readonly diff: ColumnDiff | undefined }> = [];
+    const made = make({ rd, workers: 5, jobsOf: (inner) => worldJobsOf(poolOver(inner, decorates), sim) });
+    const w = made.w;
+    c = made.c;
+    await fill(w, c, cam(0, 0));
+    // No entries yet: every D ran with no diff and no diff was asked.
+    expect(decorates.length).toBeGreaterThan(0);
+    expect(decorates.every((d) => d.diff === undefined)).toBe(true);
+    expect(posted).toEqual([]);
+    // Three columns the camera reaches from (6, 0), not tracked yet, hold entries: the sim's one answered batch (a
+    // reply delivered by hand) names them; it answers nothing after it.
+    const entries: Array<readonly [number, number]> = [];
+    for (let x = 7; x <= 14 && entries.length < 3; x++) if (inSet('D', x, 0, 6, 0, rd) && recordOf(w, x, 0) === undefined) entries.push([x, 0]);
+    expect(entries.length).toBe(3);
+    const edit = { x: 8, y: 70, z: 8, op: 'set', value: STONE << 8, expect: 0 } as const;
+    expect(c.editState(0, 0)).toBe(0);
+    c.simPin(0, 0);
+    const first = sim.edits([edit]);
+    worker.onmessage!({ data: {
+      type: 'edited', id: posted.at(-1)!['id'], prev: new Uint32Array(1).fill(0xFFFFFFFF), next: new Uint32Array(1).fill(STONE << 8),
+      dirty: new Float64Array([colKey(0, 0)]), entryCols: new Float64Array(entries.map(([x, z]) => colKey(x, z))),
+      refused: null, relightMs: 0.5, editMs: 1,
+    } });
+    expect((await first).refused).toBeNull();
+    c.simUnpin(0, 0);
+    // A second edit at (-4, 0) is never answered: its 3 × 3 stays pinned.
+    expect(c.editState(-4, 0)).toBe(0);
+    c.simPin(-4, 0);
+    const lost = sim.edits([{ ...edit, x: -56 }]).then(() => null, (e: unknown) => e);
+    const beyond = around(-4, 0).filter(([x, z]) => !hasFlag(M_KEEP_VOXELS, x, z, 6, 0, rd));
+    expect(beyond.length).toBe(6);
+    for (let u = 0; u < 50; u++) await fill(w, c, cam(6, 0));
+    // Each D on a column with entries asked once and is held: in flight for the coordinator, never run.
+    const asked = posted.filter((m) => m['type'] === 'diff').map((m) => [m['cx'] as number, m['cz'] as number] as const);
+    expect(asked.length).toBe(3);
+    for (const [x, z] of entries) {
+      expect(has(asked, x, z), `(${x}, ${z}) asked`).toBe(true);
+      expect(w.fake.issued.some((j) => j.stage === 'D' && j.cx === x && j.cz === z), `D at (${x}, ${z}) run`).toBe(false);
+      expect(recordOf(w, x, z)?.status, `(${x}, ${z})`).toBe(1);
+    }
+    expect(read(c).D.inFlight).toBe(3);
+    for (const [x, z] of beyond) expect(has(w.fake.frees, x, z), `(${x}, ${z}) freed while pinned`).toBe(false);
+    const f0 = w.fake.frees.length;
+    const d0 = decorates.length;
+    worker.onerror!(new Error('the sim died'));
+    expect(sim.failed).toBe(true);
+    expect(await lost).toBeInstanceOf(SimFailed);
+    // Every wait resolved null: each held D ran with no overlay.
+    const ran = decorates.slice(d0);
+    expect(ran.length).toBe(3);
+    for (const [x, z] of entries) expect(ran.filter((d) => d.cx === x && d.cz === z), `(${x}, ${z})`).toEqual([{ cx: x, cz: z, diff: undefined }]);
+    // The pins are released: the next update frees the pinned columns beyond keepVoxels.
+    c.update(cam(6, 0));
+    const frees = w.fake.frees.slice(f0);
+    for (const [x, z] of beyond) expect(has(frees, x, z), `(${x}, ${z}) freed after the failure`).toBe(true);
+    // Each held D settles and the world fills.
+    await settleAll(w);
+    for (let u = 0; u < 5; u++) await fill(w, c, cam(6, 0));
+    for (const [x, z] of entries) expect(recordOf(w, x, z)?.status, `(${x}, ${z}) Published`).toBe(3);
+    const n = read(c);
+    expect([n.D.inFlight, n.D.done, n.MESH.done]).toEqual([0, n.D.needed, n.MESH.needed]);
+    // Later Ds ask nothing: the entry set emptied.
+    expect(posted.filter((m) => m['type'] === 'diff').length).toBe(3);
+    expect(w.fake.violations).toEqual([]);
   });
 });

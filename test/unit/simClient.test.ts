@@ -7,8 +7,11 @@
  */
 import { describe, expect, test } from 'vitest';
 import { colKey } from '../../src/core/coords';
+import { worldJobsOf, type ReadThrough } from '../../src/engine/coordinator';
 import { createSimClient, SimFailed, type SimClient, type SimWorkerLike } from '../../src/engine/simClient';
+import type { ColumnDone, WorkerPool } from '../../src/engine/workerPool';
 import type { Edit } from '../../src/workers/protocol';
+import type { ColumnDiff } from '../../src/world/store/api';
 import { createStore } from '../../src/world/store/store';
 
 interface FakeSim extends SimWorkerLike {
@@ -171,5 +174,36 @@ describe('the sim client (SP5a spec §2.1, §2.5)', () => {
     await expect(d).resolves.toBeNull();
     await expect(sim.diff(0, 0)).resolves.toBeNull();
     expect(failures).toBe(0);
+  });
+
+  test('the client is D\'s read-through: over a sim that never answers a diff, each D on a column with entries waits; the sim\'s failure resolves every wait null and each D runs with no overlay (SP5a spec §2.1, §2.5)', async () => {
+    const w = fakeSim();
+    const sim = createSimClient(() => w, { onFailure: () => {} });
+    const rt: ReadThrough = sim;
+    const decorates: Array<readonly [number, number, ColumnDiff | undefined]> = [];
+    const done = (cx: number, cz: number): ColumnDone => ({ cx, cz, ms: 1, versions: null, generation: 0 });
+    const pool = {
+      epoch: 0,
+      decorate: (cx: number, cz: number, diff?: ColumnDiff) => { decorates.push([cx, cz, diff]); return Promise.resolve(done(cx, cz)); },
+    } as unknown as WorkerPool;
+    const jobs = worldJobsOf(pool, rt);
+    const first = sim.edits([STONE_AT]);
+    w.reply(editedReply(lastId(w), [[0, -2], [5, 7]]));
+    await first;
+    const held = [jobs.run('D', 0, -2, false, false), jobs.run('D', 5, 7, false, false)];
+    const free = jobs.run('D', 1, 1, false, false);
+    await flush();
+    // The two columns with entries asked for their diff, which never comes; the other ran at once.
+    expect(w.posted.filter((m) => m['type'] === 'diff').map((m) => [m['cx'], m['cz']])).toEqual([[0, -2], [5, 7]]);
+    expect(decorates).toEqual([[1, 1, undefined]]);
+    await free;
+    w.onerror!(new Error('the sim died'));
+    for (const d of held) await expect(d).resolves.toEqual({ versions: null, payload: null, generation: 0 });
+    expect(decorates).toEqual([[1, 1, undefined], [0, -2, undefined], [5, 7, undefined]]);
+    // Later Ds ask nothing: the entry set is empty.
+    const posted = w.posted.length;
+    await jobs.run('D', 0, -2, false, false);
+    expect(w.posted.length).toBe(posted);
+    expect(decorates.at(-1)).toEqual([0, -2, undefined]);
   });
 });

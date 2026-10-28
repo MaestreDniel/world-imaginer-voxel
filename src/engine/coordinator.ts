@@ -131,6 +131,7 @@
 import { TORUS_SIZE, colKey, colKeyCx, colKeyCz } from '../core/coords';
 import { STAGE_BONUS, streamScore } from '../core/streamScore';
 import type { ColumnMeshPayload } from '../mesh/column';
+import type { ColumnDiff } from '../world/store/api';
 import { StoreCorrupt } from '../world/store/pool';
 import { RD_MIN, lowerRd } from './renderDistance';
 import {
@@ -366,14 +367,30 @@ export function createCoordinatorCounts(): CoordinatorCounts {
 }
 
 /**
+ * D's read-through (SP5a spec §2.5, D21): whether column (cx, cz) holds edit entries, and its entries, null when it
+ * holds none or the sim failed (§2.1). `SimClient` satisfies it.
+ */
+export interface ReadThrough {
+  hasEntries(cx: number, cz: number): boolean;
+  diff(cx: number, cz: number): Promise<ColumnDiff | null>;
+}
+
+/**
  * The pool as the coordinator's jobs (ruling P30, spec §3.13): T, D, L and MESH run `terrain` (with `protoOnly`),
  * `decorate`, `light` and `meshColumn` (an edit's with `{ edit: true }`, SP5a spec §2.6). T, D and L resolve
  * `{ versions: done.versions, payload: null }` (light's 18 versions, null for terrain and decorate), MESH
  * `{ versions: p.versions, payload: p }` from the pool's `MeshColumnDone`
  * (each outcome carries the reply's `generation`, the pool's epoch at issue, SP4c spec §4.6); rejections pass through.
  * `cancel` is `cancelWorld`, `liveWorkers` the pool's, `generation()` the pool's `epoch` now (SP4c spec §4.2).
+ *
+ * With a `readThrough` (SP5a spec §2.5, D21), a D on a column for which `hasEntries` is true first awaits its `diff`
+ * and passes it on the decorate (none when it resolves null: the sim failed, and D runs without an overlay); every
+ * other job runs as without one, with no wait. The coordinator sees the wait as the D's own time in flight.
  */
-export function worldJobsOf(pool: Pick<WorkerPool, 'epoch' | 'terrain' | 'decorate' | 'light' | 'meshColumn' | 'cancelWorld' | 'liveWorkers'>): CoordinatorJobs {
+export function worldJobsOf(
+  pool: Pick<WorkerPool, 'epoch' | 'terrain' | 'decorate' | 'light' | 'meshColumn' | 'cancelWorld' | 'liveWorkers'>,
+  readThrough: ReadThrough | null = null,
+): CoordinatorJobs {
   const column = (d: ColumnDone): JobOutcome => ({ versions: d.versions, payload: null, generation: d.generation });
   const mesh = ({ payload, generation }: { readonly payload: ColumnMeshPayload; readonly generation: number }): JobOutcome => (
     { versions: payload.versions, payload, generation }
@@ -382,7 +399,9 @@ export function worldJobsOf(pool: Pick<WorkerPool, 'epoch' | 'terrain' | 'decora
     run(stage, cx, cz, protoOnly, edit) {
       switch (stage) {
         case 'T': return pool.terrain(cx, cz, protoOnly).then(column);
-        case 'D': return pool.decorate(cx, cz).then(column);
+        case 'D': return (readThrough !== null && readThrough.hasEntries(cx, cz)
+          ? readThrough.diff(cx, cz).then((diff) => pool.decorate(cx, cz, diff ?? undefined))
+          : pool.decorate(cx, cz)).then(column);
         case 'L': return pool.light(cx, cz).then(column);
         case 'MESH': return (edit ? pool.meshColumn(cx, cz, EDIT_MESH) : pool.meshColumn(cx, cz)).then(mesh);
       }
