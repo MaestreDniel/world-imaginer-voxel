@@ -93,6 +93,12 @@ export const THRESHOLDS: ThresholdTable = {
   // SP4a spec §9.1: the light against the global reference BFS, and enclosed air with sky light (`light.metric.ts`).
   L1: { mismatches: { max: 0, activeFrom: 'SP4a' } },
   L2: { enclosedLit: { max: 0, activeFrom: 'SP4a' } },
+  // SP5a spec §6.1 (D26): the incremental relight against a fresh `lightRegion` and `referenceLight` after random edits
+  // (`edit.metric.ts`).
+  L3: { mismatches: { max: 0, activeFrom: 'SP5a' } },
+  // SP5a spec §6.1 (D26): E5's session part, the edits back at their latest value and light after an unload, a race and a
+  // regenerated neighbour (`edit.metric.ts`, `.out/E5.session.json`); SP5b adds the flush part (`E5.flush`).
+  E5: { sessionStale: { max: 0, activeFrom: 'SP5a' }, sessionLightMismatches: { max: 0, activeFrom: 'SP5a' } },
   // SP4a spec §9.1, §9.5 (D24): G1's three Medium cells on the static world, from the Chrome flight on the Iris Xe
   // (`g1.metric.ts`, `flight-iris-chrome.json`, re-measured on SP4c's code into `assets/sp4c/`). SP4b spec §8.2, §8.4
   // (D23): the six Medium streaming cells, from the committed Iris Xe Chrome bench files (`G1.streaming`, re-read from

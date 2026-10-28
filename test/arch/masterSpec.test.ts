@@ -70,7 +70,8 @@
  * SP8b's "Received from SP5a", §0.7, §2.5's `setLight`, §3.7), and moves the pins that read the SP5 entry here (SP5a's
  * walk-mode teleport, SP5b's saved places, the SP4b cut line's conditional); the pins of §3.7, §4.1, §5.1, §5.6 and
  * risk 1 take §9's rewordings in place. §1 names each SP5a module in its entry, which exists (`SP5A_MODULES`, a row
- * added by each task that adds a module).
+ * added by each task that adds a module); §6.4's E1-E6 row gives edit→unload→reload's session part to SP5a and its
+ * flush part to SP5b (the L3 and E5 commit).
  */
 import { existsSync, readdirSync, readFileSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
@@ -1114,7 +1115,7 @@ describe('master spec amendments (SP4c §12)', () => {
 });
 
 describe('master spec amendments (SP5a §9)', () => {
-  /** [§1 entry head, the token its entry holds, the file on disk]; Tasks 2, 7-10, 20, 22, 23, 26-28 and 31 append theirs. */
+  /** [§1 entry head, the token its entry holds, the file on disk]; Tasks 2, 7-10, 20, 22, 23, 26-28, 31 and 36 append theirs. */
   const SP5A_MODULES: Array<[head: RegExp, token: string, file: string]> = [
     [/^\s+blocks\/kinds\.ts /, 'tags.ts (SP5a)', 'src/world/blocks/tags.ts'],
     [/^\s+light\/initial\.ts /, 'relight.ts (SP5a)', 'src/light/relight.ts'],
@@ -1133,6 +1134,7 @@ describe('master spec amendments (SP5a §9)', () => {
     [/^\s+ui\/world\/\* /, 'buildHud.ts blockHistory.ts (SP5a)', 'src/ui/world/blockHistory.ts'],
     [/^\s+renderer\.ts /, 'selection.ts (SP5a)', 'src/render/selection.ts'],
     [/^\s+ui\/shell\.ts /, 'palette.ts (SP5a)', 'src/ui/palette.ts'],
+    [/^\s+test\/ unit\/ metrics\//, '(SP5a: metrics/edit.metric.ts', 'test/metrics/edit.metric.ts'],
   ];
 
   test('the split', () => {
@@ -1275,6 +1277,12 @@ describe('master spec amendments (SP5a §9)', () => {
     expect(lines).toContain('  - unstuck scan upward at F, after a teleport and on any tick the body intersects a colliding block (SP5a); near plane 0.05;');
     expect(lines.join('\n')).not.toContain('unstuck scan upward at spawn');
     expect(lines[lines.length - 1]).toBe('  - the SP5a spec §3.2\'s per-tick values at a fixed 20 Hz; `SLIPPERY` blocks (ice, packed ice) slip 0.98.');
+  });
+
+  test('§6.4\'s E1-E6 row splits edit→unload→reload between SP5a and SP5b (SP5a spec §6.1, §9)', () => {
+    const e = text.split('\n').find((l) => l.startsWith('| E1-E6 |'));
+    expect(e, 'no E1-E6 row in §6.4').toBeDefined();
+    expect(e).toContain('edit→unload→reload returns the latest diff (the session part SP5a, the flush part SP5b)');
   });
 
   test('§1 names each SP5a module in its entry, which exists', () => {

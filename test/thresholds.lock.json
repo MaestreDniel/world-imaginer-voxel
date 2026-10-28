@@ -1,5 +1,5 @@
 {
-  "sha256": "58ccf25d18b0527cbba22581ba87320842b19574fafcefbafdf4312b3afa8e21",
+  "sha256": "a1fd94750707811e5338ff251494f4d6cb1b86d876d05ce4e64af4caa44efb0d",
   "canonical": {
     "startedSps": [
       "SP0",
@@ -206,6 +206,16 @@
           "max": 0
         }
       },
+      "E5": {
+        "sessionLightMismatches": {
+          "activeFrom": "SP5a",
+          "max": 0
+        },
+        "sessionStale": {
+          "activeFrom": "SP5a",
+          "max": 0
+        }
+      },
       "G1": {
         "mediumFill4wMs": {
           "activeFrom": "SP4b",
@@ -265,6 +275,12 @@
       "L2": {
         "enclosedLit": {
           "activeFrom": "SP4a",
+          "max": 0
+        }
+      },
+      "L3": {
+        "mismatches": {
+          "activeFrom": "SP5a",
           "max": 0
         }
       },

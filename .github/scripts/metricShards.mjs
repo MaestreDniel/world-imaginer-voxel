@@ -24,6 +24,10 @@ export const SHARDS = {
   // flight (`stream.metric.ts`: planned 20-30 s; measured 38 s in CI's first sharded run, run 40077412950, and about
   // 12 s alone on the laptop; final review GOV-1).
   render: [`${DIR}/render.metric.ts`, `${DIR}/light.metric.ts`, `${DIR}/g1.metric.ts`, `${DIR}/stream.metric.ts`],
+  // SP5a spec §6.1, §7: L3 and E5's session part (`edit.metric.ts`), planned for `render`; its prototype measured 53 s
+  // on quick (59 s before E5 dropped to RD 4 there) against the plan's 50 s, so it runs in a shard of its own (the
+  // spec's named lever).
+  edit: [`${DIR}/edit.metric.ts`],
   rest: null,
 };
 
