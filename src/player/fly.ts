@@ -50,6 +50,17 @@ export function lookVector(yawDeg: number, pitchDeg: number): [number, number, n
   return [cp * Math.sin(yawDeg * DEG), Math.sin(pitchDeg * DEG), -cp * Math.cos(yawDeg * DEG)];
 }
 
+/**
+ * `lookVector` written into `out` (x, y, z) with no tuple: the frame's DDA and the walk step reuse one array (SP5a spec
+ * §3.5: zero allocation).
+ */
+export function lookVectorInto(out: Float64Array, yawDeg: number, pitchDeg: number): void {
+  const cp = Math.cos(pitchDeg * DEG);
+  out[0] = cp * Math.sin(yawDeg * DEG);
+  out[1] = Math.sin(pitchDeg * DEG);
+  out[2] = -cp * Math.cos(yawDeg * DEG);
+}
+
 /** Turns a camera to the state's view; structural so that player/ needs no three (it is render's). */
 export function applyCameraRotation(
   camera: { rotation: { set(x: number, y: number, z: number, order: 'YXZ'): unknown } },

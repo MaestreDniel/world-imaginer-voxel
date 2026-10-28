@@ -1124,6 +1124,7 @@ describe('master spec amendments (SP5a §9)', () => {
     [/^\s+coordinator\.ts /, 'simClient.ts (SP5a)', 'src/engine/simClient.ts'],
     [/^\s+mesh\/greedy\.ts /, 'boxes.ts (SP5a, provisional until SP8a)', 'src/mesh/boxes.ts'],
     [/^\s+blocks\/kinds\.ts /, 'provisionalBoxes.ts (SP5a, provisional until SP8a)', 'src/world/blocks/provisionalBoxes.ts'],
+    [/^\s+player\/fly\.ts /, 'walk.ts physics.ts raycast.ts interaction.ts hotbar.ts (SP5a)', 'src/player/raycast.ts'],
   ];
 
   test('the split', () => {

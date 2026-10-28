@@ -2,7 +2,7 @@ import { PerspectiveCamera, Vector3 } from 'three';
 import { describe, expect, test } from 'vitest';
 import {
   SPEED_DEFAULT, SPEED_MAX, SPEED_MIN, SPEED_STEP, SPRINT, TAU,
-  applyCameraRotation, forwardXZ, look, lookVector, stepFly, stepSpeed,
+  applyCameraRotation, forwardXZ, look, lookVector, lookVectorInto, stepFly, stepSpeed,
   type FlyBounds, type FlyState,
 } from '../../src/player/fly';
 import type { Action } from '../../src/player/keymap';
@@ -149,6 +149,14 @@ describe('fly controller (SP4a spec §7.1; SP4b spec §6.1: horizontal flight)',
       expect(dir.x, `${yaw},${pitch}`).toBeCloseTo(v[0], 9);
       expect(dir.y, `${yaw},${pitch}`).toBeCloseTo(v[1], 9);
       expect(dir.z, `${yaw},${pitch}`).toBeCloseTo(v[2], 9);
+    }
+  });
+
+  test('lookVectorInto writes lookVector\'s components into the given array (the DDA\'s, SP5a spec §3.5)', () => {
+    const out = new Float64Array(3);
+    for (const [yaw, pitch] of [[135, -10], [90, 0], [0, 0], [300, 45], [0, 89.9], [217.5, -89.9]] as const) {
+      lookVectorInto(out, yaw, pitch);
+      expect(Array.from(out), `${yaw},${pitch}`).toEqual(lookVector(yaw, pitch));
     }
   });
 
