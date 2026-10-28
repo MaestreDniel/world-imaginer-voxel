@@ -180,8 +180,12 @@ function anyLava(fluid: Uint8Array): boolean {
 /**
  * Writes `s.region.light` (sky << 4 | block) from the region's blocks, fluid and `lightBlocking` (SP4a spec §4.2
  * steps 2-3): the sky fall and its boundary seeds, the sky BFS, then the block BFS from every `effEmit > 0` voxel.
+ * The block BFS runs when `mayEmit` and some state of `t` emits, or the region holds lava (SP5a spec §1.2, D23: L
+ * passes `mayEmit` only when a column of its 3 × 3 holds or held an edit); otherwise no voxel can be a source and the
+ * block light stays 0. Its seeds go in by descending level, the 15s (lava) first, then every other emitter, so with
+ * unit steps the FIFO BFS is monotone and each voxel is pushed at most once (the queue bound above).
  */
-export function lightRegion(s: LightScratch, t: LightTables = TABLES): void {
+export function lightRegion(s: LightScratch, t: LightTables = TABLES, mayEmit = true): void {
   const r = s.region;
   const { blocks, fluid, light, lightBlocking } = r;
   const q = s.queue;
@@ -233,13 +237,28 @@ export function lightRegion(s: LightScratch, t: LightTables = TABLES): void {
   propagate(r, q, t, 4);
 
   // Block light: every emitter is a source at its effective emission. `effEmit > 0` needs an emitting state of `t` or
-  // lava, so without either the scan would find no source and the block light stays 0 (SP4a's world has neither).
-  if (!tableEmits(t.emit) && !anyLava(fluid)) return;
+  // lava, so without either the scan would find no source; generated terrain holds no emitter (SP5a spec §1.2), so
+  // without `mayEmit` only lava opens the scan.
+  if (!(mayEmit && tableEmits(t.emit)) && !anyLava(fluid)) return;
+  // The 15s first; the other emitters (the registry's are 14) in a second pass, only when the first one saw any.
+  let lower = false;
   for (let i = 0; i < VOXELS; i++) {
     const e = EFF_EMIT(blocks[i]!, fluid[i]!, t);
     if (e === 0) continue;
-    light[i] = (light[i]! & 0xF0) | e;
+    if (e !== 15) {
+      lower = true;
+      continue;
+    }
+    light[i] = (light[i]! & 0xF0) | 15;
     q.push(i);
+  }
+  if (lower) {
+    for (let i = 0; i < VOXELS; i++) {
+      const e = EFF_EMIT(blocks[i]!, fluid[i]!, t);
+      if (e === 0 || e === 15) continue;
+      light[i] = (light[i]! & 0xF0) | e;
+      q.push(i);
+    }
   }
   propagate(r, q, t, 0);
 }

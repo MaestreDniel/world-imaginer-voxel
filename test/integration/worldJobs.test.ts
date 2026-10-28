@@ -8,15 +8,20 @@
  * the freed proto of the Published (0, 0) (its region hash, versions and status unchanged); an L retried after a partial
  * write releases its old light slots into the worker's limbo while this thread reads, and the wrapper's retry timer
  * drains them once this thread leaves its read section.
+ * SP5a (spec §1.2, D23): L's block-light scan runs only when a column of its 3 × 3 has the diff flag (or the region
+ * holds lava), shown in process with a torch written into a neighbour's final set as D's overlay writes it.
  */
 import { Worker } from 'node:worker_threads';
 import { afterAll, beforeAll, expect, test } from 'vitest';
 import { DEFAULTS } from '../../src/core/params/defaults';
 import { MEDIUM } from '../../src/core/params/graphicsPresets';
 import { createWorkerPool, type ColumnDone, type WorkerLike, type WorkerPool } from '../../src/engine/workerPool';
+import { decorateStage } from '../../src/gen/pipeline/decorateStage';
 import { createLightScratch } from '../../src/light/initial';
 import { fillColumnT, regionHash } from '../../src/metrics/region';
 import { createMeshScratch, payloadProblem } from '../../src/mesh/column';
+import { NO_FLUID } from '../../src/world/blocks/fluid';
+import { AIR, TORCH } from '../../src/world/blocks/index';
 import { STATUS_PUBLISHED } from '../../src/world/store/columnTable';
 import { createStore, type VoxelStore } from '../../src/world/store/store';
 import { fillColumnD, fillColumnL, meshColumnJob } from '../../src/workers/worldJobs';
@@ -144,3 +149,53 @@ test('attach, configure, then T, D, L and MESH_COLUMN through two workers on the
     pool.terminate();
   }
 }, 120_000);
+
+/**
+ * A store with the 3 × 3 around (0, 0) at Decorated (seed '42', T on the 5 × 5), (1, 0)'s D followed by a torch written
+ * into its final set at (lx 0, the first voxel above its motion-blocking top, lz 8) through `replaceBlocks`, as D's
+ * diff overlay writes it, and its diff flag set when `flag`. Returns the store and the torch's y.
+ */
+function decoratedWithTorch(flag: boolean): { store: VoxelStore; y: number } {
+  const store = createStore({ shared: true, maxBlockBytes: 64 * MiB, maxByteBytes: 64 * MiB });
+  const ctx = ctxFor('42');
+  for (const [cx, cz] of square(2)) expect(fillColumnT(store, ctx, cx, cz, NEVER)).toBe(true);
+  let y = 0;
+  for (const [cx, cz] of square(1)) {
+    if (cx !== 1 || cz !== 0) {
+      expect(fillColumnD(store, ctx, cx, cz, NEVER)).toBe(true);
+      continue;
+    }
+    const w = store.reopenColumn(1, 0, 1);
+    expect(decorateStage(ctx, store.neighborhood(1, 0), w, NEVER)).toBe(true);
+    y = w.aux().motionBlocking[8 * 16]!;
+    const sy = (y + 64) >> 4;
+    const proto = store.proto(1, 0)!;
+    const b = proto.sectionBlocks(sy);
+    const f = proto.sectionFluid(sy);
+    const blocks = typeof b === 'number' ? new Uint16Array(4096).fill(b) : b.slice();
+    const fluid = typeof f === 'number' ? new Uint8Array(4096).fill(f) : f.slice();
+    const i = (((y + 64) & 15) << 8) | (8 << 4);
+    expect([blocks[i], fluid[i]], 'the torch goes into air').toEqual([AIR, NO_FLUID]);
+    blocks[i] = TORCH;
+    w.replaceBlocks(sy, blocks, fluid);
+    if (flag) w.setDiffFlag();
+    w.commit(2);
+  }
+  return { store, y };
+}
+
+test('an L whose 3 × 3 has no flag skips the scan (a torch written into a neighbour\'s final set stays unlit); with the neighbour\'s REC_DIFF_FLAG set, the torch\'s light enters the L\'s column', () => {
+  for (const flag of [false, true]) {
+    const { store, y } = decoratedWithTorch(flag);
+    expect(store.final(1, 0)!.block(0, y, 8)).toBe(TORCH);
+    for (const [cx, cz] of square(1)) expect(store.diffFlag(cx, cz), `flag of (${cx}, ${cz})`).toBe(flag && cx === 1 && cz === 0);
+    expect(fillColumnL(store, 0, 0, createLightScratch(), NEVER)).not.toBeNull();
+    const v = store.final(0, 0)!;
+    // (0, 0)'s lx 15 is the torch's west neighbour: 13 with the scan, 0 without; two west, 12.
+    expect([v.light(15, y, 8) & 15, v.light(14, y, 8) & 15], `flag ${flag}`).toEqual(flag ? [13, 12] : [0, 0]);
+    let lit = 0;
+    for (let yy = -64; yy <= 319; yy++) for (let lz = 0; lz < 16; lz++) for (let lx = 0; lx < 16; lx++) if ((v.light(lx, yy, lz) & 15) !== 0) lit++;
+    if (flag) expect(lit).toBeGreaterThan(0);
+    else expect(lit, 'block light in (0, 0) without a flag').toBe(0);
+  }
+});

@@ -10,7 +10,7 @@
 import type { GenContext } from '../gen/context';
 import { decorateStage } from '../gen/pipeline/decorateStage';
 import { terrainStage } from '../gen/pipeline/terrainStage';
-import { centreSection, lightRegion, type LightScratch } from '../light/initial';
+import { centreSection, DEFAULT_LIGHT_TABLES, lightRegion, type LightScratch } from '../light/initial';
 import { fillColumnT } from '../metrics/region';
 import { meshColumnPayload, type ColumnMeshPayload, type MeshScratch } from '../mesh/column';
 import type { MeshOptions } from '../mesh/greedy';
@@ -22,6 +22,7 @@ import type { ColumnDoneMsg, MeshColumnResultMsg, WorldJobMsg } from './protocol
 const DECORATE = decorateStage;
 const COPY_LIGHT_REGION = copyLightRegion;
 const LIGHT_REGION = lightRegion;
+const LIGHT_TABLES = DEFAULT_LIGHT_TABLES;
 const CENTRE_SECTION = centreSection;
 const SECTION_COUNT = SECTIONS;
 const MESH_COLUMN = meshColumnPayload;
@@ -51,6 +52,8 @@ export function fillColumnD(store: VoxelStore, ctx: GenContext, cx: number, cz: 
  * intake compares their blockVersions), or null when `stop` fires; it polls after the copy and after the BFS, and a
  * stop writes nothing, so the column stays at Decorated with its versions. Throws when the column is not at
  * Decorated (`reopenColumn`) or a column of its 3 × 3 has no final set (`copyLightRegion`).
+ * SP5a (spec §1.2, D23): the block-light scan runs only when a column of the 3 × 3 has its diff flag (`diffFlag`, set
+ * by D's overlay and by the sim) or the region holds lava (`lightRegion`'s own check).
  */
 export function fillColumnL(store: VoxelStore, cx: number, cz: number, s: LightScratch, stop: () => boolean): Int32Array | null {
   const nb = store.neighborhood(cx, cz);
@@ -58,7 +61,9 @@ export function fillColumnL(store: VoxelStore, cx: number, cz: number, s: LightS
   const w = store.reopenColumn(cx, cz, 2);
   COPY_LIGHT_REGION(nb, s.region);
   if (stop()) return null;
-  LIGHT_REGION(s);
+  let mayEmit = false;
+  for (let dz = -1; dz <= 1 && !mayEmit; dz++) for (let dx = -1; dx <= 1 && !mayEmit; dx++) mayEmit = store.diffFlag(cx + dx, cz + dz);
+  LIGHT_REGION(s, LIGHT_TABLES, mayEmit);
   if (stop()) return null;
   w.resetLight();
   for (let sy = 0; sy < SECTION_COUNT; sy++) w.setLight(sy, CENTRE_SECTION(s, sy));

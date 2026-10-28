@@ -2,20 +2,27 @@
  * The exact initial light job (SP4a spec §4.1, §4.2): `lightRegion` on hand-filled light regions (open sky, water,
  * a sealed cavity, a shaft, partial faces and emitters through injected tables), the centre of a 3 × 3 synthetic
  * store against the global `referenceLight`, the uniform section outputs, and `fillColumnL`'s commit and versions.
+ * SP5a (spec §1.2, D23): the scan gate (`mayEmit`) and the block BFS seeded by descending level.
  */
 import { beforeAll, describe, expect, test } from 'vitest';
+import { resolveProfile } from '../../src/core/params/profiles';
+import { seedFromInput } from '../../src/core/seed';
+import { findSpawn } from '../../src/gen/column/spawn';
+import { createGenContext } from '../../src/gen/context';
 import { writeFinalHeightmaps } from '../../src/gen/pipeline/finalHeightmaps';
 import { centreSection, createLightScratch, DEFAULT_LIGHT_TABLES, lightRegion, type LightScratch, type LightTables } from '../../src/light/initial';
+import type { LightQueue } from '../../src/light/queue';
 import { FLUID_LAVA, NO_FLUID, packFluid, WATER_SOURCE } from '../../src/world/blocks/fluid';
-import { AIR, DIRT, STONE } from '../../src/world/blocks/index';
+import { AIR, DIRT, STONE, TORCH } from '../../src/world/blocks/index';
 import { FACE_DOWN, FACE_UP } from '../../src/world/blocks/kinds';
 import { fallBlocked } from '../../src/world/blocks/light';
 import { finalAt, SECTIONS, STATUS_DECORATED, STATUS_PUBLISHED } from '../../src/world/store/columnTable';
-import { LIGHT_H, LIGHT_LO, LIGHT_W, lightIndex } from '../../src/world/store/padded';
+import { copyLightRegion, LIGHT_H, LIGHT_LO, LIGHT_W, lightIndex } from '../../src/world/store/padded';
 import { FINAL_LIGHT, uniformCode } from '../../src/world/store/section';
 import { createStore, type VoxelStore } from '../../src/world/store/store';
 import { fillColumnL } from '../../src/workers/worldJobs';
 import { referenceLight } from '../harness/refs';
+import { genRegion } from '../harness/region';
 
 const MiB = 1 << 20;
 const NEVER = () => false;
@@ -371,5 +378,123 @@ describe('fillColumnL on a synthetic 3 × 3 store (SP4a spec §2.3, §4.2)', () 
       expect(statusOf(st2)).toBe(STATUS_DECORATED);
       expect([...st2.neighborhood(CX, CZ).versions()]).toEqual(v0);
     }
+  });
+});
+
+/** A queue that forwards to `inner` and counts: its high-water mark and the pushes of each region voxel. */
+function countingQueue(inner: LightQueue): LightQueue & { readonly highWater: () => number; readonly pushes: Uint8Array } {
+  const pushes = new Uint8Array(LIGHT_W * LIGHT_H * LIGHT_W);
+  let high = 0;
+  return {
+    push(i) {
+      inner.push(i);
+      if (pushes[i]! < 255) pushes[i]!++;
+      if (inner.length > high) high = inner.length;
+    },
+    pop: () => inner.pop(),
+    get length() {
+      return inner.length;
+    },
+    clear() {
+      inner.clear();
+      pushes.fill(0);
+      high = 0;
+    },
+    highWater: () => high,
+    pushes,
+  };
+}
+
+describe('the scan gate and descending seeds (SP5a spec §1.2, D23)', () => {
+  let s: LightScratch;
+  beforeAll(() => {
+    s = createLightScratch();
+  });
+
+  const T = DEFAULT_LIGHT_TABLES;
+  /** A sealed cave y 10 … 40 over the whole region (no sky reaches it), with `extra` placed in it. */
+  const cave = (extra: (x: number, y: number, z: number) => number | null): At => (x, y, z) =>
+    extra(x, y, z) ?? (y <= 100 && (y < 10 || y > 40) ? STONE : AIR);
+  const torchAt = (tx: number, ty: number, tz: number): At => cave((x, y, z) => (x === tx && y === ty && z === tz ? TORCH : null));
+  const lavaAt = (lx: number, ly: number, lz: number): At => (x, y, z) => (x === lx && y === ly && z === lz ? LAVA : NO_FLUID);
+
+  test('a torch voxel and no lava: mayEmit false leaves every block light 0; mayEmit true lights the torch at 14 falling by 1 per step', () => {
+    expect(T.emit[TORCH]).toBe(14);
+    fill(s, torchAt(7, 25, 3));
+    lightRegion(s, T, false);
+    expect(s.region.light.some((l) => (l & 15) !== 0), 'block light with mayEmit false').toBe(false);
+    lightRegion(s, T, true);
+    for (let d = 0; d <= 15; d++) {
+      expect(blockAt(s, 7 - d, 25, 3), `torch −x ${d}`).toBe(Math.max(0, 14 - d));
+      expect(blockAt(s, 7, 25 - d, 3), `torch −y ${d}`).toBe(Math.max(0, 14 - d));
+      expect(blockAt(s, 7, 25, 3 + d), `torch +z ${d}`).toBe(Math.max(0, 14 - d));
+    }
+  });
+
+  test('lava anywhere scans with mayEmit false', () => {
+    // The torch at (7, 25, 3) and a lava source 25 blocks away at (20, 30, 15): the lava opens the scan, which seeds
+    // every emitter, the torch included.
+    fill(s, torchAt(7, 25, 3), lavaAt(20, 30, 15));
+    lightRegion(s, T, false);
+    for (let d = 0; d <= 15; d++) {
+      expect(blockAt(s, 20 - d, 30, 15), `lava −x ${d}`).toBe(Math.max(0, 15 - d));
+      expect(blockAt(s, 7, 25 - d, 3), `torch −y ${d}`).toBe(Math.max(0, 14 - d));
+    }
+  });
+
+  test('a torch beside a lava voxel: the queue\'s high-water mark (a counting wrapper) stays ≤ the region\'s voxel count and the result equals referenceLight', () => {
+    // Lava at (6, 20, 0); a torch beside it at (5, 20, 0) and one two below at (6, 18, 0), both before the lava in
+    // region order, so an index-order seeding would reach (6, 19, 0) at 13 from the lower torch before the lava's 14.
+    const blocks = cave((x, y, z) => (z === 0 && ((x === 5 && y === 20) || (x === 6 && y === 18)) ? TORCH : null));
+    const fluid = lavaAt(6, 20, 0);
+    fill(s, blocks, fluid);
+    expect(lightIndex(6, 18, 0)).toBeLessThan(lightIndex(6, 20, 0));
+    expect(lightIndex(5, 20, 0)).toBeLessThan(lightIndex(6, 20, 0));
+    const q = countingQueue(s.queue);
+    lightRegion({ region: s.region, queue: q, out: s.out }, T, false);
+    const voxels = LIGHT_W * LIGHT_H * LIGHT_W;
+    expect(q.highWater()).toBeGreaterThan(0);
+    expect(q.highWater()).toBeLessThanOrEqual(voxels);
+    // No sky reaches the cave, so its voxels are pushed by the block BFS alone: at most once each.
+    let twice = 0;
+    for (let i = 0; i < voxels; i++) if (s.region.light[i]! >> 4 === 0 && q.pushes[i]! > 1) twice++;
+    expect(twice, 'cave voxels pushed more than once by the block BFS').toBe(0);
+    expect(blockAt(s, 6, 19, 0)).toBe(14);
+    expect(blockAt(s, 5, 20, 0)).toBe(14);
+    const ref = referenceLight({ x0: LO, z0: LO, w: LIGHT_W, h: LIGHT_W }, blocks, fluid);
+    let mismatches = 0;
+    for (let i = 0; i < voxels; i++) if (s.region.light[i] !== ref[i]) mismatches++;
+    expect(mismatches).toBe(0);
+  });
+
+  test('the default call equals today\'s output on L1\'s regions', async () => {
+    // The 2 × 2 at the spawn of L1's fast-tier region (seed '42', profile default), generated to L in process: its
+    // light is fillColumnL's, whose 3 × 3 holds no diff flag (the scan closed unless lava). The default call (the scan
+    // open, the registry's tables emit) gives the same bytes, and the explicit `true` call equals the default.
+    const params = resolveProfile('default');
+    const sp = findSpawn(createGenContext(seedFromInput('42'), params));
+    const cx0 = (sp.x >> 4) - 1;
+    const cz0 = (sp.z >> 4) - 1;
+    const { view } = await genRegion({ seed: '42', params, cx0, cz0, w: 2, h: 2, upTo: 'L', order: 'spiral', threads: 1 });
+    const st = view.store;
+    let compared = 0;
+    for (let cz = cz0; cz < cz0 + 2; cz++) {
+      for (let cx = cx0; cx < cx0 + 2; cx++) {
+        for (let dz = -1; dz <= 1; dz++) for (let dx = -1; dx <= 1; dx++) expect(st.diffFlag(cx + dx, cz + dz)).toBe(false);
+        copyLightRegion(st.neighborhood(cx, cz), s.region);
+        lightRegion(s);
+        const byDefault = Array.from({ length: SECTIONS }, (_, sy) => centreSection(s, sy).slice());
+        lightRegion(s, T, true);
+        const f = st.final(cx, cz)!;
+        for (let sy = 0; sy < SECTIONS; sy++) {
+          const stored = f.sectionLight(sy);
+          const want = typeof stored === 'number' ? new Uint8Array(4096).fill(stored) : stored;
+          expect(Buffer.from(byDefault[sy]!).equals(Buffer.from(want)), `(${cx}, ${cz}) sy ${sy}: default ≠ stored`).toBe(true);
+          expect(Buffer.from(centreSection(s, sy)).equals(byDefault[sy]!), `(${cx}, ${cz}) sy ${sy}: true ≠ default`).toBe(true);
+          compared++;
+        }
+      }
+    }
+    expect(compared).toBe(4 * SECTIONS);
   });
 });
