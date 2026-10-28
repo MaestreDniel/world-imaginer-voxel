@@ -82,6 +82,15 @@ describe('mountHelp (SP4a spec §7.4, D31)', () => {
     expect(rows.find((r) => r.dataset.action === 'map')!.textContent).toBe('Map: teleport and live editingM');
   });
 
+  test('the help says to let go of Ctrl before a digit, after the undo line (SP5a spec §4.6, D9)', () => {
+    mount();
+    const note = dom.el('help-ctrl-digit');
+    expect(note.textContent).toBe('Let go of Ctrl before a digit: Ctrl+1 … Ctrl+8 switch the browser\'s tabs');
+    const section = dom.el('help-keys');
+    expect(section.children.at(-1)).toBe(note);
+    expect(section.children.at(-2)).toBe(dom.el('help-undo'));
+  });
+
   test('the Keys rows describe horizontal flight (SP4b spec §6.1)', () => {
     mount();
     const rows = dom.el('help-keys').querySelectorAll('tr');

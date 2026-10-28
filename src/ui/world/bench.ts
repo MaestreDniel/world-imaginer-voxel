@@ -232,12 +232,14 @@ export function benchInterval(idle: ArrayLike<number>): number {
  * The per-frame fields, one preallocated column each (spec §8.3). SP4c's live legs (spec §8.4) add `tMs` (the script's
  * time, ms, written by the driver with `leg`), `mark` (1 on a live leg's Apply frame or teleport click) and
  * `revealed2`, `revealed4`, `revealedRd` (the columns within 2 columns of the camera's, of the RD 4 disc and of the live
- * RD's disc revealed since that mark), written by the page (`createLiveReveals`) before the recorder.
+ * RD's disc revealed since that mark), written by the page (`createLiveReveals`) before the recorder. SP5a (spec §6.2)
+ * adds `playerMs`: the frame step's input, walk step and aim (the DDA, the queued clicks, the outline) on the bench's
+ * clock, written by the page from the frame step's `timing` before the recorder; L10's `mainP95Ms` is its p95.
  */
 export const BENCH_FIELDS = [
   'leg', 'rawMs', 'snappedMs', 'mainMs', 'coordinatorMs', 'uploadMs', 'rows', 'structuralKind', 'structuralMB', 'gpuMs', 'calls',
   'triangles', 'geometryMB', 'texturesMB', 'drawingBufferMB', 'heapMB', 'sabMB', 'partial', 'mixed', 'genCap',
-  'tMs', 'mark', 'revealed2', 'revealed4', 'revealedRd',
+  'tMs', 'mark', 'revealed2', 'revealed4', 'revealedRd', 'playerMs',
 ] as const;
 export type BenchField = (typeof BENCH_FIELDS)[number];
 
@@ -581,9 +583,10 @@ export type LiveFigures = StreamFigures & {
  * column's new mesh is shown (its first reveal after its edit's payload was staged), `editAllVisibleP95` to the last
  * dirty column's, the sim's `relightP95Ms` and `editP95Ms`, and the step budget (plan): `replyP95Ms` (post → the sim's
  * reply), `issueToStagedP95Ms` (reply → staged: the MESH job and its delivery), `stagedToShownP95Ms`; `editDropped` the
- * coordinator's edit MESHes dropped; `mainP95Ms` the frame's input, walk step, DDA and outline time (0: not timed yet);
- * `editVisibleStreamingP95` over the closing flight's edits and `streamingRefused` its refusals (not gated); `timedOut`
- * ['L10'] when the hover's disc never filled; `frames` SP4b's frame fields over L10. A figure with no sample is null.
+ * coordinator's edit MESHes dropped; `mainP95Ms` the p95 over L10's frames of their input, walk step, DDA, queued
+ * clicks and outline time (`playerMs`; master §7's 0.3 ms); `editVisibleStreamingP95` over the closing flight's edits
+ * and `streamingRefused` its refusals (not gated); `timedOut` ['L10'] when the hover's disc never filled; `frames`
+ * SP4b's frame fields over L10. A figure with no sample is null.
  */
 export interface EditFigures {
   readonly editVisibleP50: number | null;
@@ -596,7 +599,7 @@ export interface EditFigures {
   readonly issueToStagedP95Ms: number | null;
   readonly stagedToShownP95Ms: number | null;
   readonly editDropped: number;
-  readonly mainP95Ms: number;
+  readonly mainP95Ms: number | null;
   readonly editVisibleStreamingP95: number | null;
   readonly streamingRefused: number;
   readonly timedOut: readonly string[];
@@ -828,8 +831,7 @@ function editFiguresOf(rec: BenchRecord, idx: readonly number[], fixed: BenchFix
     issueToStagedP95Ms: percentileOrNull(hover(s.issueToStaged), 95),
     stagedToShownP95Ms: percentileOrNull(hover(s.stagedToShown), 95),
     editDropped: fixed.totals.editDropped,
-    // The frame's input, walk step, DDA and outline are not timed yet.
-    mainP95Ms: 0,
+    mainP95Ms: percentileOrNull(pick(rec.playerMs, idx), 95),
     editVisibleStreamingP95: percentileOrNull(s.visible.subarray(visible.length), 95),
     streamingRefused: run.streamingRefused,
     timedOut: [...run.timedOut],

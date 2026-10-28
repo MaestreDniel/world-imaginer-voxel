@@ -11,6 +11,11 @@
  * `MapCanvas` over the real `arrowRedrawWanted`). The coordinator's `apply` has its own test. Those hooks are also measured
  * each on its own under the 26 B bound: the frame step's budget has room for a small object per tick.
  *
+ * SP5a's per-frame additions (SP5a spec §3.5, §4.1, §4.3, D25) are pinned per module below (the build HUD's refresh,
+ * the hold repeat's tick, the walk step's reads) and together in the frame step, as the world page wires them: the
+ * page's aim (the DDA, the hold repeat's tick, the queued clicks, the outline through the real `Selection` at a fixed
+ * target) and the build HUD's refresh over the hotbar, flying and walking on a Published stone floor (the walk step).
+ *
  * This measures allocation, not retention (the plan's spec correction to §8.5): `terrainHeap.test.ts` runs `gc()`
  * twice before every reading, which collects the short-lived per-call objects D25 bans. Here, after a double `gc()`,
  * the N calls run in `CHUNKS` chunks; before each a minor gc empties the young generation, the heap is read, a
@@ -50,15 +55,16 @@ import { createThrottle } from '../../src/engine/throttle';
 import { createUploadBudget } from '../../src/engine/uploadBudget';
 import { createWorkerPool, type WorkerLike } from '../../src/engine/workerPool';
 import type { ColumnMeshPayload } from '../../src/mesh/column';
-import { SPEED_DEFAULT, stepFly, type FlyState } from '../../src/player/fly';
+import { SPEED_DEFAULT, stepFly, toggleMode, type FlyState } from '../../src/player/fly';
 import { createHotbar } from '../../src/player/hotbar';
 import type { Action } from '../../src/player/keymap';
-import { createWalkState } from '../../src/player/walk';
+import { EYE, createWalkState, type WalkState } from '../../src/player/walk';
 import { firstOrigin } from '../../src/render/floatingOrigin';
 import { createFpsLimiter } from '../../src/render/fpsLimiter';
 import { createMaterialSystem } from '../../src/render/materials/index';
-import { gpuEstimateOf, type GpuEstimate } from '../../src/render/renderer';
+import { gpuEstimateOf, type GpuEstimate, type WorldRenderer } from '../../src/render/renderer';
 import { createSectionRenderer, createSectionRendererCounts } from '../../src/render/sectionRenderer';
+import { createSelection, type Selection } from '../../src/render/selection';
 import { createSky } from '../../src/render/sky';
 import { createFlatColorArray } from '../../src/render/textureArray';
 import { createFrameStats } from '../../src/ui/frameStats';
@@ -73,6 +79,8 @@ import { createFrameClock, createFrameNotice } from '../../src/ui/world/frameNot
 import { createFrameStep, type FrameStepDeps } from '../../src/ui/world/frameStep';
 import { createHoldRepeat } from '../../src/ui/world/holdRepeat';
 import { createMapOverlay, type MapOverlay } from '../../src/ui/world/mapOverlay';
+import { createAim, createClickQueue, type Aim } from '../../src/ui/world/worldPage';
+import { STONE } from '../../src/world/blocks/index';
 import { createStore } from '../../src/world/store/store';
 import { installDom } from './fixtures/domShim';
 
@@ -146,6 +154,8 @@ const N = 10_000;
  * on Node 24 once the code settles; the budget is 1.6 times that. These are V8's calling convention, not objects our
  * code creates: those fail the 26 B bounds of the parts below (the clock, the fly step, the budget, the GPU estimate,
  * `update`), and any one added per tick on top of the boxing (16-40 B and more) shows here as a rise of the reading.
+ * SP5a's frame (the aim, the build HUD's refresh, the walk step) read 171 B per tick flying and 178 B walking (Node 24),
+ * once the aim passes its ray to the DDA in an array (`castRayFrom`: six doubles boxed at a `castRay` call read 265 B).
  */
 const FRAME_STEP_ALLOC_MAX = 256 * N;
 /**
@@ -370,16 +380,29 @@ interface AtRest {
   readonly hooks: Readonly<Record<'ownerCheck' | 'applyTick' | 'auxPolicy' | 'overlayTick', () => void>>;
   /** The `hooks.ownerCheck` calls that found the world owning the controls. */
   owned(): number;
+  /**
+   * Switches SP5a's frame additions on (off until then, so the SP4c tests measure SP4c's frame), in `mode` (walking:
+   * F's switch from the eye, and the look 30.5° down so the DDA reaches the floor), and warms the frame up again.
+   */
+  sp5a(mode: FlyState['mode']): void;
+  readonly walk: WalkState;
+  /** The page's aim (its last hit and outline box) and the outline it sets. */
+  readonly aim: Aim;
+  readonly selection: Selection;
+  readonly hotbar: ReturnType<typeof createHotbar>;
+  /** Edits the click queue posted (none at rest). */
+  posts(): number;
 }
 
 /**
  * The page's frame at rest, built and warmed up once for the file (rulings R7): a real coordinator filled at RD 12, the
  * real `createFrameStep` over it with `pump` on a real RegionBatch with nothing staged, a real batch `MaterialSystem`
  * (`setFrameUniforms`, the time at ×60), the floating origin and the camera, a real store with the camera's column
- * Published (the eye light is a real `lightAt` read), the FPS limiter at 144 on 144 Hz ticks, the slow-frame notice,
- * frame stats, the fog easing, the throttle and the upload budget. `frame` is `WorldRenderer.frame` minus
- * `renderer.render` (no GL context in Node): the translucent sort and the frame uniforms. Warmed up with
- * `FRAME_WARM_UP` ticks, which also warms the coordinator's `update` and `counts`.
+ * Published (the eye light is a real `lightAt` read) over a stone floor at y 99, the FPS limiter at 144 on 144 Hz
+ * ticks, the slow-frame notice, frame stats, the fog easing, the throttle and the upload budget; SP5a's additions
+ * (`sp5a`) once a test switches them on. `frame` is `WorldRenderer.frame` minus `renderer.render` (no GL context in
+ * Node): the translucent sort and the frame uniforms. Warmed up with `FRAME_WARM_UP` ticks, which also warms the
+ * coordinator's `update` and `counts`.
  */
 async function buildAtRest(): Promise<AtRest> {
   const fly = restingFly();
@@ -402,10 +425,11 @@ async function buildAtRest(): Promise<AtRest> {
     },
   };
 
-  // A real store with the camera's column Published, so the eye's light is a real read (spec §2.4).
+  // A real store with the camera's column Published, so the eye's light is a real read (spec §2.4), with a stone floor
+  // at y 99 (section 10's layer 3), its top half a block below the eye: what SP5a's walk stands on and its DDA aims at.
   const store = createStore({ shared: false, maxBlockBytes: 1 << 20, maxByteBytes: 1 << 20 });
   const w = store.claimColumn(0, 0, 0);
-  w.setFinal(10, new Uint16Array(4096), new Uint8Array(4096).fill(0xc0), new Uint8Array(4096));
+  w.setFinal(10, new Uint16Array(4096).fill(STONE, 3 * 256, 4 * 256), new Uint8Array(4096).fill(0xc0), new Uint8Array(4096));
   w.commit(3);
 
   const speed60 = TIME_SPEEDS.indexOf(60);
@@ -416,7 +440,8 @@ async function buildAtRest(): Promise<AtRest> {
   const none: ReadonlySet<Action> = new Set();
   // A 144 Hz display under a cap of 144: the limiter's median runs on every tick and every tick renders. Enough
   // timestamps for the warm-ups and each frame-step test's attempts.
-  const times = boxedTimes(1000 / 144, FRAME_WARM_UP + SHOWN_WARM_UP + ATTEMPTS * ATTEMPTS * N);
+  // SP5a's two tests warm up again and measure on their own (`sp5a`).
+  const times = boxedTimes(1000 / 144, FRAME_WARM_UP + SHOWN_WARM_UP + 2 * FRAME_WARM_UP + 3 * ATTEMPTS * ATTEMPTS * N);
   let ticks = 0;
   // The budget's clock is the tick's timestamp: Node's `performance.now()` allocates on each call (88 B measured),
   // the browser's does not concern this code.
@@ -504,10 +529,31 @@ async function buildAtRest(): Promise<AtRest> {
   const afterCounts = (c: CoordinatorCounts): void => updateAuxPolicy(pool, applyControl.generation, coversWorld(overlay), c);
   let owned = 0;
 
+  // SP5a's frame additions (SP5a spec §3.5, §4.1, §4.3), as the world page wires them: the page's aim with the click
+  // queue and the hold repeat (on, never pending; nothing is pressed at rest), the outline through the real `Selection`
+  // (three's LineSegments needs no GL context), the pointer locked with the HUD, its clock in seconds from the tick's
+  // timestamp; and on rendered frames the build HUD's refresh over the hotbar. Off until `sp5a`.
+  const walk = createWalkState();
+  const selection = createSelection();
+  const hotbar = createHotbar(null);
+  let posts = 0;
+  const clicks = createClickQueue({ post: () => { posts++; }, hotbar, fly, walk, editable: () => true });
+  const holdRepeat = createHoldRepeat({ enabled: () => true, pending: () => false, queue: (b) => clicks.push(b) });
+  const outlined: Pick<WorldRenderer, 'origin' | 'setOutline' | 'hideOutline'> = {
+    origin,
+    setOutline: (x0, y0, z0, x1, y1, z1) => selection.set(x0, y0, z0, x1, y1, z1),
+    hideOutline: () => selection.hide(),
+  };
+  const pageAim = createAim({
+    fly, world: outlined, locked: () => true, hud: true, clicks, repeat: { hold: holdRepeat, now: () => clockNow / 1000 },
+  });
+  const buildHud = mountBuildHud(app as unknown as HTMLElement, { hotbar, hud: true, locked: () => true });
+  let sp5aOn = false;
+
   const step = createFrameStep({
     fly,
-    // Flying: the walk state is only held (rulings R22).
-    walk: createWalkState(),
+    // Flying, the walk state is only held (rulings R22); SP5a's walk test steps it.
+    walk,
     held: () => none,
     paused,
     stopped: () => false,
@@ -519,8 +565,8 @@ async function buildAtRest(): Promise<AtRest> {
     sections,
     world,
     store,
-    // The page's aim is not part of SP4c's frame at rest (SP5a's DDA and outline are pinned in their own tests).
-    aim: () => {},
+    // The page's aim once SP5a's tests switch it on; SP4c's frame at rest has none.
+    aim: (read, paused) => { if (sp5aOn) pageAim.aim(read, paused); },
     state,
     timeSpeed: () => TIME_SPEEDS[speed60]!,
     fogStep: (dtMs) => fog.step(dtMs, 12),
@@ -529,6 +575,7 @@ async function buildAtRest(): Promise<AtRest> {
     onRendered: (dtMs) => {
       frames.push(dtMs);
       overlay.tick(counts);
+      if (sp5aOn) buildHud.refresh();
       rendered++;
       if (lightmap.version !== lastVersion) {
         lastVersion = lightmap.version;
@@ -553,6 +600,17 @@ async function buildAtRest(): Promise<AtRest> {
       overlayTick: () => overlay.tick(counts),
     },
     owned: () => owned,
+    walk,
+    aim: pageAim,
+    selection,
+    hotbar,
+    posts: () => posts,
+    sp5a(mode) {
+      sp5aOn = true;
+      if (fly.mode !== mode) toggleMode(fly, walk);
+      if (mode === 'walk') fly.pitch = -30.5;
+      for (let i = 0; i < FRAME_WARM_UP; i++) tick();
+    },
     async showSplit() {
       // The (mocked) chunk is loaded first, as the overlay's preload does 2 s after the reveal; the open's own import then
       // resolves from the module cache and mounts the tool within a few macrotasks.
@@ -585,6 +643,31 @@ function expectSp4cAtRest(f: AtRest): void {
   expect(coversWorld(f.overlay)).toBe(false);
   expect(f.counts.T.done).toBe(f.counts.T.needed);
   expect(f.counts.stale).toBe(0);
+}
+
+/**
+ * SP5a's frame at rest (`AtRest.sp5a` on): the frame step measured under the boxing budget, with `still` checked before
+ * and after; every tick rendered, the DDA on the floor (a stone voxel at y 99) at the same target every frame, the
+ * outline shown at a fixed box, no edit posted, the hotbar unchanged and the eye light the Published column's.
+ */
+function expectSp5aAtRest(f: AtRest, still: () => void): void {
+  still();
+  expect([f.aim.hit.hit, f.aim.hit.y, f.aim.hit.state]).toEqual([true, 99, STONE]);
+  const target = [f.aim.hit.x, f.aim.hit.z];
+  const box = [...f.aim.box];
+  const before = f.stats();
+  const g = allocationOver(f.tick, 0, FRAME_STEP_ALLOC_MAX);
+  expectAtRest(g, FRAME_STEP_ALLOC_MAX);
+  still();
+  const after = f.stats();
+  expect(after.rendered - before.rendered).toBe(g.calls);
+  expect([f.aim.hit.hit, f.aim.hit.x, f.aim.hit.y, f.aim.hit.z]).toEqual([true, target[0], 99, target[1]]);
+  expect([...f.aim.box]).toEqual(box);
+  expect(f.selection.object.visible).toBe(true);
+  expect(f.posts()).toBe(0);
+  expect(f.hotbar.active).toBe(0);
+  expect(f.state.eyeSky).toBe(0xc);
+  expect(f.counts.T.done).toBe(f.counts.T.needed);
 }
 
 describe('zero allocation at rest (SP4b spec §3.10, D25)', () => {
@@ -748,6 +831,29 @@ describe('zero allocation at rest (SP4b spec §3.10, D25)', () => {
     expect([f.overlay.shown, f.overlay.mode, f.overlay.owner]).toEqual([true, 'split', 'world']);
     expect(arrow.setPlayer - setPlayerBefore).toBe(calls);
     expect(arrow.draws).toBe(1);
+  }, TIMEOUT_MS);
+
+  test(`${N} frame steps at rest flying on a Published floor with SP5a's additions (the DDA, the outline with a fixed target, the hotbar and the hold-repeat tick) grow the heap by less than the boxing budget of 256 B per tick (SP5a spec §3.5, D25)`, async () => {
+    const f = await atRest();
+    f.sp5a('fly');
+    expectSp5aAtRest(f, () => {
+      // The eye where SP4c's tests left it, the DDA on the floor's top 2.7 blocks ahead (pitch −10.5°, reach 10).
+      expect([f.fly.mode, f.fly.x, f.fly.y, f.fly.z]).toEqual(['fly', 8.5, 100.5, 8.5]);
+    });
+  }, TIMEOUT_MS);
+
+  test(`${N} frame steps at rest in walk mode on a Published floor (the walk step, the DDA, the outline with a fixed target, the hotbar and the hold-repeat tick) grow the heap by less than the boxing budget of 256 B per tick (SP5a spec §3.1, §3.5, D25)`, async () => {
+    const f = await atRest();
+    f.sp5a('walk');
+    expectSp5aAtRest(f, () => {
+      // F's feet at the eye − 1.62 met the floor and were lifted onto its top (D29); standing there, on the ground.
+      // The sweep stops the feet a hair above the top (its 1e-7 clip, `physics.ts` EPS).
+      expect([f.fly.mode, f.walk.x, f.walk.z, f.walk.onGround]).toEqual(['walk', 8.5, 8.5, true]);
+      expect(f.walk.y).toBeCloseTo(100, 6);
+      expect([f.walk.vx, f.walk.vz]).toEqual([0, 0]);
+      expect([f.fly.x, f.fly.z]).toEqual([8.5, 8.5]);
+      expect(f.fly.y).toBeCloseTo(f.walk.y + EYE, 12);
+    });
   }, TIMEOUT_MS);
 
   test(`${N} frame-clock ticks (a cap of 144 on a 144 Hz display, the slow-frame notice past its 300 frames) grow the heap by less than 256 KB`, () => {

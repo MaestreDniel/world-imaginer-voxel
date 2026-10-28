@@ -60,8 +60,14 @@ const GROUP_TITLES: Readonly<Record<KeyEntry['group'], string>> = {
 export const UNDO_REDO_LINE = 'Ctrl+Z undo · Ctrl+Y redo: blocks while you play, the map\'s settings while the map has the controls (Ctrl+Shift+Z also descends while flying; Ctrl+Y does not)';
 
 /**
+ * Ctrl is sprint while walking, and Ctrl+1 … Ctrl+8 switch the browser's tabs, which a page cannot stop (SP5a spec D9,
+ * §4.6): the digits pick a hotbar slot only without Ctrl.
+ */
+export const CTRL_DIGIT_NOTE = 'Let go of Ctrl before a digit: Ctrl+1 … Ctrl+8 switch the browser\'s tabs';
+
+/**
  * One table per group, in the map's order; each row names the action and every binding (spec §7.3); then the undo and
- * redo line.
+ * redo line and the note on Ctrl before a digit.
  */
 function keysSection(map: readonly KeyEntry[]): HTMLElement {
   const section = el('section', 'help-keys');
@@ -80,7 +86,9 @@ function keysSection(map: readonly KeyEntry[]): HTMLElement {
   }
   const undo = el('p', 'help-undo', UNDO_REDO_LINE);
   undo.id = 'help-undo';
-  section.append(undo);
+  const ctrlDigit = el('p', 'help-ctrl-digit', CTRL_DIGIT_NOTE);
+  ctrlDigit.id = 'help-ctrl-digit';
+  section.append(undo, ctrlDigit);
   return section;
 }
 

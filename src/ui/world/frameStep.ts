@@ -28,6 +28,10 @@
  *    above y 319, 0 below −64); then the time, the fog's RD (`fogStep`), `world.frame` (materials, translucent sort,
  *    render), then `onRendered`. A skipped tick never aims.
  *
+ * With `timing` (the bench, SP5a spec §6.2) the frame's input and motion step (1) and its `aim` (6) are timed on the
+ * bench's clock, and their sum since the last rendered frame is recorded once per rendered frame, before `onRendered`:
+ * L10's `mainP95Ms` (master §7's "input, physics, raycast").
+ *
  * Nothing here allocates per tick: the delta window, its scratch, the camera and the frame state are reused.
  */
 import type { Coordinator, CoordinatorCounts } from '../../engine/coordinator';
@@ -93,6 +97,12 @@ export interface FrameStepDeps {
   beforeUpdate(): void;
   /** On every tick, just after `coordinator.counts` wrote `counts` (passed): the page's aux policy (SP4c spec §6.2). */
   afterCounts(c: CoordinatorCounts): void;
+  /**
+   * The bench's main-thread timing (SP5a spec §6.2, `mainP95Ms`; rulings R19): `now` its clock (ms), `record` called on
+   * each rendered tick, before `onRendered`, with the time of the input and motion step (the walk step walking) of every
+   * tick since the last rendered one plus this one's `aim`. Absent on the streaming route: nothing is timed.
+   */
+  readonly timing?: { now(): number; record(ms: number): void };
 }
 
 /** The display interval the throttle is given: the measured one when finite, else 1000/60 (rulings R5). */
@@ -121,6 +131,9 @@ export function createFrameStep(d: FrameStepDeps): { tick(now: number): void } {
   let count = 0;
   let next = 0;
   const cam = { x: fly.x, z: fly.z, yawDeg: fly.yaw };
+  const timing = d.timing;
+  // [the timed span since the last rendered frame, ms; the current part's start] (a closure double would be boxed).
+  const spans = new Float64Array(2);
 
   return {
     tick(now) {
@@ -136,6 +149,7 @@ export function createFrameStep(d: FrameStepDeps): { tick(now: number): void } {
 
       // 1-2. Motion and the coordinator on every tick, so the motion stays smooth under a cap; walking, the walk step's
       // reads go through their own read section.
+      if (timing !== undefined) spans[1] = timing.now();
       const paused = d.paused();
       if (!paused) {
         const dtS = Math.min(raw / 1000, MAX_STEP_S);
@@ -150,6 +164,7 @@ export function createFrameStep(d: FrameStepDeps): { tick(now: number): void } {
           stepFly(fly, d.held(), dtS, BOUNDS);
         }
       }
+      if (timing !== undefined) spans[0] = spans[0]! + timing.now() - spans[1]!;
       cam.x = fly.x;
       cam.z = fly.z;
       cam.yawDeg = fly.yaw;
@@ -174,7 +189,9 @@ export function createFrameStep(d: FrameStepDeps): { tick(now: number): void } {
       // render.
       store.enterRead();
       try {
+        if (timing !== undefined) spans[1] = timing.now();
         d.aim(store, paused);
+        if (timing !== undefined) spans[0] = spans[0]! + timing.now() - spans[1]!;
         state.eyeSky = eyeSkyLight(store, fly.x, fly.y, fly.z, state.eyeSky);
       } finally {
         store.exitRead();
@@ -182,6 +199,10 @@ export function createFrameStep(d: FrameStepDeps): { tick(now: number): void } {
       state.t = advanceTime(state.t, dt, d.timeSpeed());
       state.rd = d.fogStep(dt);
       world.frame(state);
+      if (timing !== undefined) {
+        timing.record(spans[0]!);
+        spans[0] = 0;
+      }
       d.onRendered(dt);
     },
   };

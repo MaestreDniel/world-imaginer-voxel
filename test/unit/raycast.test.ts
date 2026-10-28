@@ -6,9 +6,9 @@
  */
 import v8 from 'node:v8';
 import { runInNewContext } from 'node:vm';
-import { describe, expect, test } from 'vitest';
+import { describe, expect, test, vi } from 'vitest';
 import { lookVectorInto } from '../../src/player/fly';
-import { REACH_FLY, REACH_WALK, castRay, createRayHit, type RayHit } from '../../src/player/raycast';
+import { REACH_FLY, REACH_WALK, castRay, castRayFrom, createRayHit, type RayHit } from '../../src/player/raycast';
 import { AIR, BEDROCK, LADDER, REGISTRY, STONE, TORCH } from '../../src/world/blocks/index';
 import { WATER_SOURCE } from '../../src/world/blocks/fluid';
 import { FACE_DOWN, FACE_EAST, FACE_NORTH, FACE_SOUTH, FACE_UP, FACE_WEST } from '../../src/world/blocks/kinds';
@@ -220,5 +220,112 @@ describe('castRay (SP5a spec §3.5)', () => {
     expect(hits).toBeGreaterThan(0);
     expect(readings.length, 'every attempt saw a GC').toBeGreaterThan(0);
     expect(readings[readings.length - 1]!, `heap growth over 10,000 rays (attempts: ${readings.join(', ')})`).toBeLessThan(256 * 1024);
+  });
+
+  test('castRay along one fixed look allocates nothing, whatever its signs: each of the 8 sign patterns on a fresh module, whose DDA has seen no other (SP5a spec §3.5, D25; Task 35)', async () => {
+    // The frame's aim casts the same look every frame at rest (the zero-allocation frame step, zeroAlloc.test.ts), so
+    // its DDA may be optimized having seen one sign per axis; the earlier tests here cast every sign, so a fresh module
+    // instance (fresh closures, no type feedback) is cast for each pattern. Floor stone up to y 66, a ceiling from y 75:
+    // a look down or up hits within 10 blocks, after several steps.
+    const r = { blockAt: (_x: number, y: number, _z: number): number => (y <= 66 || y >= 75 ? STONE : AIR), fluidAt: (): number => 0 };
+    v8.setFlagsFromString('--expose-gc');
+    const gc = runInNewContext('gc') as () => void;
+    const JIT_SPACE = /^(code|trusted|shared_trusted)_/;
+    const heapUsed = (): number => {
+      let b = 0;
+      for (const s of v8.getHeapSpaceStatistics()) if (!JIT_SPACE.test(s.space_name)) b += s.space_used_size;
+      return b;
+    };
+    // The look's components as tagged (boxed) values, as the page passes them: the harness itself allocates nothing.
+    const look: number[] = [{} as never, 0, 0];
+    for (let pattern = 0; pattern < 8; pattern++) {
+      vi.resetModules();
+      const fresh = await import('../../src/player/raycast');
+      look[0] = pattern & 1 ? -0.6 : 0.6;
+      look[1] = pattern & 2 ? -0.48 : 0.48;
+      look[2] = pattern & 4 ? -0.64 : 0.64;
+      const out = fresh.createRayHit();
+      let hits = 0;
+      const call = (): void => {
+        if (fresh.castRay(r, 0.5, 70.5, 0.5, look[0]!, look[1]!, look[2]!, REACH_FLY, 'block', out).hit) hits++;
+      };
+      for (let i = 0; i < 100_000; i++) call();
+      const readings: number[] = [];
+      for (let t = 0; t < 3; t++) {
+        gc();
+        gc();
+        const before = heapUsed();
+        const profiler = new v8.GCProfiler();
+        profiler.start();
+        for (let i = 0; i < 10_000; i++) call();
+        const after = heapUsed();
+        const gcs = profiler.stop()?.statistics.length ?? 0;
+        if (gcs > 0) continue;
+        readings.push(after - before);
+        if (after - before < 256 * 1024) break;
+      }
+      expect([hits > 0, out.y], `pattern ${pattern}`).toEqual([true, pattern & 2 ? 66 : 75]);
+      expect(readings.length, `pattern ${pattern}: every attempt saw a GC`).toBeGreaterThan(0);
+      expect(readings[readings.length - 1]!, `pattern ${pattern}: heap growth over 10,000 rays (attempts: ${readings.join(', ')})`).toBeLessThan(256 * 1024);
+    }
+  });
+
+  test('castRayFrom reads the ray from an array: castRay\'s results; the frame\'s pattern (the eye and the look written into it, then the cast) allocates nothing over 10,000 casts (Task 35)', () => {
+    const r = canned(8)
+      .set(3, 70, 0, STONE).set(0, 66, 0, STONE).set(-2, 70, 0, TORCH).set(0, 70, 2, LADDER, WATER_SOURCE);
+    const ray = new Float64Array(6);
+    const rays: Array<[number, number, number, number, number, number]> = [
+      [0.5, 70.5, 0.5, 1, 0, 0], [0.5, 70.5, 0.5, 0, -1, 0], [0.5, 70.5, 0.125, -1, 0, 0], [0.5, 70.5, 0.5, 0, 0, 1],
+      [0.5, 70.5, 0.5, 0.6, -0.48, 0.64], [5.5, 75.5, 0.5, 1, 0, 0],
+    ];
+    for (const [ox, oy, oz, dx, dy, dz] of rays) {
+      for (const mode of ['block', 'fluid'] as const) {
+        ray.set([ox, oy, oz, dx, dy, dz]);
+        const a = hitOf(castRay(r, ox, oy, oz, dx, dy, dz, REACH_FLY, mode, createRayHit()));
+        expect(hitOf(castRayFrom(r, ray, REACH_FLY, mode, createRayHit())), `${[ox, oy, oz, dx, dy, dz].join(',')} ${mode}`).toEqual(a);
+      }
+    }
+    // The page's aim: the camera's doubles and its look written into one array each frame (no double passed to a call).
+    const floor = { blockAt: (_x: number, y: number, _z: number): number => (y <= 66 ? STONE : AIR), fluidAt: (): number => 0 };
+    const eye = { x: 0.5, y: 70.5, z: 0.5, yaw: 37.5, pitch: -30.5 };
+    const dir = ray.subarray(3);
+    const out = createRayHit();
+    let hits = 0;
+    let calls = 0;
+    const call = (): void => {
+      calls++;
+      ray[0] = eye.x;
+      ray[1] = eye.y;
+      ray[2] = eye.z;
+      lookVectorInto(dir, eye.yaw, eye.pitch);
+      if (castRayFrom(floor, ray, REACH_FLY, 'block', out).hit) hits++;
+    };
+    for (let i = 0; i < 100_000; i++) call();
+    v8.setFlagsFromString('--expose-gc');
+    const gc = runInNewContext('gc') as () => void;
+    const JIT_SPACE = /^(code|trusted|shared_trusted)_/;
+    const heapUsed = (): number => {
+      let b = 0;
+      for (const s of v8.getHeapSpaceStatistics()) if (!JIT_SPACE.test(s.space_name)) b += s.space_used_size;
+      return b;
+    };
+    const readings: number[] = [];
+    for (let t = 0; t < 3; t++) {
+      gc();
+      gc();
+      const before = heapUsed();
+      const profiler = new v8.GCProfiler();
+      profiler.start();
+      for (let i = 0; i < 10_000; i++) call();
+      const after = heapUsed();
+      const gcs = profiler.stop()?.statistics.length ?? 0;
+      if (gcs > 0) continue;
+      readings.push(after - before);
+      if (after - before < 256 * 1024) break;
+    }
+    // Every cast hit the floor.
+    expect([hits, out.hit, out.y]).toEqual([calls, true, 66]);
+    expect(readings.length, 'every attempt saw a GC').toBeGreaterThan(0);
+    expect(readings[readings.length - 1]!, `heap growth over 10,000 casts (attempts: ${readings.join(', ')})`).toBeLessThan(256 * 1024);
   });
 });

@@ -21,6 +21,7 @@ const DATA: HudData = {
   drawCalls: 640,
   triangles: 1_420_000,
   position: { x: 12.3, y: 80, z: -40.5 },
+  mode: 'fly',
   speed: 12,
   time: OPENING_T,
   timeSpeed: 10,
@@ -32,6 +33,7 @@ const DATA: HudData = {
   gpuMB: 92.44,
   sectionRenderer: 'batch',
   renderer: 'ANGLE (Intel, Mesa Intel(R) Xe Graphics (TGL GT2), OpenGL 4.6)',
+  edit: null,
 };
 
 describe('formatClock and timeSpeedLabel (SP4a spec §6.5, §6.9)', () => {
@@ -126,6 +128,31 @@ describe('mountWorldHud (SP4a spec §6.9, D30)', () => {
     expect(text).toContain('mesh');
     expect(text).toContain('paused');
     expect(text).toContain('not reported');
+  });
+
+  test('flying: `Fly · x …` and the speed in blocks/s; walk mode: `Walk · x …` and `speed walking` (SP5a spec §4.6, D16)', () => {
+    const rows = (i: number): string[] => dom.body.children[i]!.children.map((r) => r.textContent);
+    mount(() => DATA);
+    expect(rows(0)).toContain('Fly · x 12.3 y 80.0 z -40.5 · column 0, -3');
+    expect(rows(0)).toContain('speed 12.0 blocks/s · 08:00 ×10');
+    mount(() => ({ ...DATA, mode: 'walk' }));
+    expect(rows(1)).toContain('Walk · x 12.3 y 80.0 z -40.5 · column 0, -3');
+    expect(rows(1)).toContain('speed walking · 08:00 ×10');
+    expect(rows(1).join('\n')).not.toContain('blocks/s');
+  });
+
+  test('no edits: no edit line; 12 edits p95 31.4: `edit p95 31 ms (12)` (SP5a spec §4.6, master §4.12)', () => {
+    let edit: HudData['edit'] = null;
+    mount(() => ({ ...DATA, edit }));
+    expect(dom.body.textContent).not.toContain('edit');
+    const before = dom.body.children[0]!.children.length;
+    edit = { p95: 31.4, count: 12 };
+    vi.advanceTimersByTime(250);
+    const lines = dom.body.children[0]!.children.map((r) => r.textContent);
+    expect(lines).toContain('edit p95 31 ms (12)');
+    expect(lines).toHaveLength(before + 1);
+    // Below the speed line, which it follows.
+    expect(lines[lines.indexOf('edit p95 31 ms (12)') - 1]).toMatch(/^speed /);
   });
 
   test('the key hints come from the key map', () => {

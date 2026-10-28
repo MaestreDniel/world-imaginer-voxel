@@ -12,7 +12,8 @@
  * (y −64): the store reads `BEDROCK` there (its padded border), which is no voxel an edit can reach. A hit reports
  * the voxel, the face the ray entered by (`FACE_*`: a ray moving +x enters by the west face), the point and the state.
  * An eye inside a hit (a full cell or a box holding the eye) hits at the eye, by the face the look's main axis enters
- * (the face looking back along it). Allocates nothing: the result goes into the caller's one reused `RayHit`.
+ * (the face looking back along it). Allocates nothing: the result goes into the caller's one reused `RayHit`; the frame
+ * passes its ray in an array (`castRayFrom`).
  */
 import { MIN_Y } from '../core/constants';
 import { hasFluid } from '../world/blocks/fluid';
@@ -116,6 +117,9 @@ function setHit(out: RayHit, x: number, y: number, z: number, face: number, t: n
   return out;
 }
 
+/** `castRay`'s scalars, written into one array for `castRayFrom`. */
+const RAY = new Float64Array(6);
+
 /**
  * Casts the ray from (ox, oy, oz) along the unit vector (dx, dy, dz) up to `reach` blocks and writes the result into
  * `out` (returned). `read` is a Published-only reader: `blockAt` −1 for a column that is not Published.
@@ -125,6 +129,29 @@ export function castRay(
   ox: number, oy: number, oz: number, dx: number, dy: number, dz: number,
   reach: number, mode: 'block' | 'fluid', out: RayHit,
 ): RayHit {
+  RAY[0] = ox;
+  RAY[1] = oy;
+  RAY[2] = oz;
+  RAY[3] = dx;
+  RAY[4] = dy;
+  RAY[5] = dz;
+  return castRayFrom(read, RAY, reach, mode, out);
+}
+
+/**
+ * `castRay` with the ray read from `ray` (ox, oy, oz, dx, dy, dz): the frame's aim writes the eye and the look into
+ * one reused array, since six doubles passed to a call TurboFan does not inline are boxed at the call (16 B each, about
+ * 96 B a frame: over a third of the frame step's boxing budget, `zeroAlloc.test.ts`).
+ */
+export function castRayFrom(
+  read: Pick<VoxelStore, 'blockAt' | 'fluidAt'>, ray: Float64Array, reach: number, mode: 'block' | 'fluid', out: RayHit,
+): RayHit {
+  const ox = ray[0]!;
+  const oy = ray[1]!;
+  const oz = ray[2]!;
+  const dx = ray[3]!;
+  const dy = ray[4]!;
+  const dz = ray[5]!;
   out.hit = false;
   const fluidMode = mode === 'fluid';
   const ax = Math.abs(dx);
@@ -140,13 +167,16 @@ export function castRay(
   const sx = dx > 0 ? 1 : dx < 0 ? -1 : 0;
   const sy = dy > 0 ? 1 : dy < 0 ? -1 : 0;
   const sz = dz > 0 ? 1 : dz < 0 ? -1 : 0;
-  const ddx = sx !== 0 ? 1 / ax : Infinity;
-  const ddy = sy !== 0 ? 1 / ay : Infinity;
-  const ddz = sz !== 0 ? 1 / az : Infinity;
-  // The distance along the ray to the next x, y and z boundary.
-  let tx = sx > 0 ? (x + 1 - ox) * ddx : sx < 0 ? (ox - x) * ddx : Infinity;
-  let ty = sy > 0 ? (y + 1 - oy) * ddy : sy < 0 ? (oy - y) * ddy : Infinity;
-  let tz = sz > 0 ? (z + 1 - oz) * ddz : sz < 0 ? (oz - z) * ddz : Infinity;
+  // The distance along the ray between two x, y or z boundaries, and to the next one: Infinity on an axis the ray does
+  // not move along (1 / 0, and (1 − 0) · Infinity). Computed with no arithmetic inside a branch on the sign: a branch
+  // the look's signs never took has no type feedback, and TurboFan then keeps the distance tagged, boxing each step's
+  // sum (16 B a step, a fixed downward look's DDA about 200 B a frame).
+  const ddx = 1 / ax;
+  const ddy = 1 / ay;
+  const ddz = 1 / az;
+  let tx = ((dx >= 0 ? 1 : 0) - sx * (ox - x)) * ddx;
+  let ty = ((dy >= 0 ? 1 : 0) - sy * (oy - y)) * ddy;
+  let tz = ((dz >= 0 ? 1 : 0) - sz * (oz - z)) * ddz;
   // Where the ray enters the current cell, and by which face.
   let t = 0;
   let face = startFace;

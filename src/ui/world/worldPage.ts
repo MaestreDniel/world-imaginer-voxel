@@ -113,7 +113,7 @@ import { attachInput, isTextEntry } from '../../player/input';
 import { createHotbar, type Hotbar } from '../../player/hotbar';
 import { bodyOf, breakAt, emptyBucketAt, pickAt, placeAt, type BodyBox } from '../../player/interaction';
 import { DEFAULT_KEYMAP, type Action } from '../../player/keymap';
-import { REACH_FLY, REACH_WALK, castRay, createRayHit, type RayHit } from '../../player/raycast';
+import { REACH_FLY, REACH_WALK, castRay, castRayFrom, createRayHit, type RayHit } from '../../player/raycast';
 import { EYE, arriveFeet, createWalkState, type WalkState } from '../../player/walk';
 import { createFpsLimiter, type FpsLimiter } from '../../render/fpsLimiter';
 import type { FrameState } from '../../render/frameState';
@@ -1176,13 +1176,13 @@ export interface Aim {
 
 /**
  * The page's aim (SP5a spec §3.5, D8), which the frame step runs on every rendered tick inside its second read section:
- * the DDA from the eye along the look (`lookVectorInto`; reach `REACH_WALK` walking, `REACH_FLY` flying), then the
- * outline around the hit (`outlineBounds`: the cell, or a box state's box), relative to the floating origin, computed
- * on every hit; then the outline set to that box, or hidden: while paused, while the pointer is free, with no target,
- * and without the HUD (captures, panoramas, the bench). The queued clicks (`clicks`) run between the two against the
- * hit, a miss included (it empties the queue); a paused frame drops them unrun. Before they run the held button's
- * repeat (`repeat`, §4.1, D6) is ticked at the frame's time, so a repeat is aimed by this frame's DDA; a paused frame
- * (the palette, the map owning the controls, the help) stops it instead. Allocates nothing.
+ * the DDA from the eye along the look (`lookVectorInto`, `castRayFrom`; reach `REACH_WALK` walking, `REACH_FLY`
+ * flying), then the outline around the hit (`outlineBounds`: the cell, or a box state's box), relative to the floating
+ * origin, computed on every hit; then the outline set to that box, or hidden: while paused, while the pointer is free,
+ * with no target, and without the HUD (captures, panoramas, the bench). The queued clicks (`clicks`) run between the
+ * two against the hit, a miss included (it empties the queue); a paused frame drops them unrun. Before they run the
+ * held button's repeat (`repeat`, §4.1, D6) is ticked at the frame's time, so a repeat is aimed by this frame's DDA; a
+ * paused frame (the palette, the map owning the controls, the help) stops it instead. Allocates nothing.
  */
 export function createAim(o: {
   readonly fly: Pick<FlyState, 'x' | 'y' | 'z' | 'yaw' | 'pitch' | 'mode'>;
@@ -1198,14 +1198,19 @@ export function createAim(o: {
 }): Aim {
   const { fly, world } = o;
   const hit = createRayHit();
-  const dir = new Float64Array(3);
+  // The eye and the look, the DDA's ray (`castRayFrom`: no double boxed at the call); `dir` views its last three.
+  const ray = new Float64Array(6);
+  const dir = ray.subarray(3);
   const box = new Float64Array(6);
   return {
     hit,
     box,
     aim(read, paused) {
+      ray[0] = fly.x;
+      ray[1] = fly.y;
+      ray[2] = fly.z;
       lookVectorInto(dir, fly.yaw, fly.pitch);
-      castRay(read, fly.x, fly.y, fly.z, dir[0]!, dir[1]!, dir[2]!, fly.mode === 'walk' ? REACH_WALK : REACH_FLY, 'block', hit);
+      castRayFrom(read, ray, fly.mode === 'walk' ? REACH_WALK : REACH_FLY, 'block', hit);
       if (paused) {
         o.repeat?.hold.stop();
         o.clicks?.clear();
@@ -1927,6 +1932,14 @@ export function mountWorldPage(root: HTMLElement, q: WorldQuery, hash: string, o
           // (SP4c spec §4.3, §6.2, §8.4).
           beforeUpdate: () => applyControl.tick(),
           afterCounts: (c) => updateAuxPolicy(workers, applyControl.generation, false, c),
+          // The frame's input, walk step and aim on the bench's clock, into the row the recorder takes next (`playerMs`:
+          // L10's `mainP95Ms`, SP5a spec §6.2).
+          timing: {
+            now: () => performance.now(),
+            record: (ms) => {
+              if (bench.record.n < bench.record.capacity) bench.record.playerMs[bench.record.n] = ms;
+            },
+          },
           onRendered: (dtMs) => {
             // The live legs' reveals since their mark around the camera's column, before the recorder takes the row.
             if (landing) reveals.clear();
@@ -2215,6 +2228,7 @@ export function mountWorldPage(root: HTMLElement, q: WorldQuery, hash: string, o
           drawCalls: info.calls,
           triangles: info.triangles,
           position: { x: fly.x, y: fly.y, z: fly.z },
+          mode: fly.mode,
           speed: fly.speed,
           time: frame.t,
           timeSpeed: timeSpeed(),
@@ -2226,6 +2240,8 @@ export function mountWorldPage(root: HTMLElement, q: WorldQuery, hash: string, o
           gpuMB: (g.sectionsBytes + g.skyBytes + g.textureBytes + g.lightmapBytes + g.drawingBufferBytes) / (1 << 20),
           sectionRenderer: kind,
           renderer: caps.renderer,
+          // G2's live reading once there is an edit (SP5a spec §4.6): click to the frame the new mesh is shown.
+          edit: editLatency.count > 0 ? { p95: editLatency.visibleP95(), count: editLatency.count } : null,
         };
       })
       : null;

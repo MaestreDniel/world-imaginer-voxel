@@ -692,7 +692,7 @@ describe('UI smoke test: the water parity view (final review B-I1)', () => {
 });
 
 /** The world HUD's data as the page passes it, at a camera position, RD and revealed count. */
-function hudData(o: { x: number; y: number; z: number; rd: number; revealed: number; kind: 'batch' | 'mesh' }): HudData {
+function hudData(o: { x: number; y: number; z: number; rd: number; revealed: number; kind: 'batch' | 'mesh'; mode?: HudData['mode'] }): HudData {
   const stage = { done: 69, needed: 69, inFlight: 0, queued: 0 };
   return {
     frame: { fps: 9.5, p50: 104.2, p95: 130.9, count: 40 },
@@ -707,6 +707,7 @@ function hudData(o: { x: number; y: number; z: number; rd: number; revealed: num
     drawCalls: 33,
     triangles: 190_000,
     position: { x: o.x, y: o.y, z: o.z },
+    mode: o.mode ?? 'fly',
     speed: SPEED_DEFAULT,
     time: OPENING_T,
     timeSpeed: 1,
@@ -718,6 +719,7 @@ function hudData(o: { x: number; y: number; z: number; rd: number; revealed: num
     gpuMB: 31.4,
     sectionRenderer: o.kind,
     renderer: 'ANGLE (Google, Vulkan 1.3.0 (SwiftShader Device (Subzero)), SwiftShader driver)',
+    edit: null,
   };
 }
 
@@ -743,6 +745,18 @@ describe('UI smoke test: the stream step and data-renderer (SP4b spec §8.6)', (
   test('parseHud reads the revealed count, the target RD and the camera position from the real HUD\'s rows', () => {
     expect(parseHud(hudText(hudData({ x: 0.5, y: 112, z: -47.25, rd: 4, revealed: 69, kind: 'batch' })))).toEqual({ revealed: 69, rd: 4, x: 0.5, y: 112, z: -47.3 });
     expect(parseHud(hudText(hudData({ x: -31249.5, y: -12, z: 1024, rd: 6, revealed: 1234, kind: 'mesh' })))).toEqual({ revealed: 1234, rd: 6, x: -31249.5, y: -12, z: 1024 });
+  });
+
+  test('parseHud reads the position from a `Fly · x …` and a `Walk · x …` row of `mountWorldHud` (SP5a spec §4.6)', () => {
+    const fly = hudText(hudData({ x: 0.5, y: 112, z: -47.25, rd: 4, revealed: 69, kind: 'batch', mode: 'fly' }));
+    expect(fly).toMatch(/^Fly · x 0\.5 y 112\.0 z -47\.3 · /m);
+    expect(parseHud(fly)).toEqual({ revealed: 69, rd: 4, x: 0.5, y: 112, z: -47.3 });
+    const walk = hudText(hudData({ x: -31249.5, y: 65.62, z: 1024, rd: 4, revealed: 69, kind: 'batch', mode: 'walk' }));
+    expect(walk).toMatch(/^Walk · x -31249\.5 y 65\.6 z 1024\.0 · /m);
+    expect(parseHud(walk)).toEqual({ revealed: 69, rd: 4, x: -31249.5, y: 65.6, z: 1024 });
+    // The bare row (SP4b's) still reads; another prefix does not.
+    expect(parseHud('revealed 1\nx 1.0 y 2.0 z 3.0 · column 0, 0\nRD 4 (fog 4.0)')).toEqual({ revealed: 1, rd: 4, x: 1, y: 2, z: 3 });
+    expect(parseHud('revealed 1\nSwim · x 1.0 y 2.0 z 3.0 · column 0, 0\nRD 4 (fog 4.0)')).toBeNull();
   });
 
   test('parseHud: the RD is the target\'s (not the fog\'s), and a HUD without its rows reads null', () => {

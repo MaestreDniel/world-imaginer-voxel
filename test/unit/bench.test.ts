@@ -143,6 +143,7 @@ interface Frame {
   snappedMs?: number;
   rawMs?: number;
   mainMs?: number;
+  playerMs?: number;
   structuralKind?: number;
   structuralMB?: number;
   gpuMs?: number;
@@ -184,6 +185,7 @@ function recordOf(frames: readonly Frame[]): BenchRecord {
     rec.revealed2[i] = f.revealed2 ?? 0;
     rec.revealed4[i] = f.revealed4 ?? 0;
     rec.revealedRd[i] = f.revealedRd ?? 0;
+    rec.playerMs[i] = f.playerMs ?? 0;
   }
   return rec;
 }
@@ -450,6 +452,17 @@ describe('summarizeBench: the edit leg L10 (SP5a spec §6.2, D26)', () => {
     const none = summarizeBench(recordOf([{ leg: 1 }]), FIXED);
     expect([none.edit.editVisibleP95, none.edit.editVisibleStreamingP95, none.edit.relightP95Ms]).toEqual([null, null, null]);
     expect([none.edit.streamingRefused, none.edit.timedOut]).toEqual([0, []]);
+    expect(none.edit.mainP95Ms).toBeNull();
+  });
+
+  test('a synthetic L10 whose frames carry main-thread timings reports their p95 as `edit.mainP95Ms`', () => {
+    // 20 L10 frames timed 0.20 … 0.01 ms (nearest rank: the 19th smallest, 0.19); L9's slower frames are not L10's.
+    const l10 = Array.from({ length: 20 }, (_, k) => ({ leg: 10, playerMs: (20 - k) / 100 }));
+    const r = summarizeBench(recordOf([{ leg: 9, playerMs: 5 }, { leg: 9, playerMs: 7 }, ...l10]), { ...FIXED, edit: EDIT }, null, {
+      hoverAccepted: 4, streamingRefused: 0, timedOut: [],
+    });
+    expect(r.edit.mainP95Ms).toBe(0.19);
+    expect(r.edit.frames.frames.count).toBe(20);
   });
 });
 
@@ -536,6 +549,8 @@ describe('createBenchRecorder: one frame\'s fields, nothing allocated per frame 
       sabMB: 256, partial: 1, mixed: 0, genCap: 4,
       // The script's time and the live legs' counts are the driver's and the page's, written before the recorder.
       tMs: 0, mark: 0, revealed2: 0, revealed4: 0, revealedRd: 0,
+      // The frame step's input, walk step and aim, written by the page's timing before the recorder (SP5a spec §6.2).
+      playerMs: 0,
     });
     src.gpu.draw();
     recorder.frame(HZ240, 1, 0, 0, 0, 4);

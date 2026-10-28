@@ -34,10 +34,18 @@ interface Rig {
   readonly aimReads: unknown[];
   /** `fly.z` when `coordinator.update` ran: the motion step came first. */
   readonly zAtUpdate: number[];
+  /**
+   * The bench's clock (`timing.now`), ms, advanced by the fakes: `held` 2, each walk-step read 1, `aim` 3; `update` 100,
+   * `pump` 50, `drain` 10, `lightAt` 7 and `frame` 25 (outside the timed span). `timed` the spans `timing.record` got.
+   */
+  ms: number;
+  readonly timed: number[];
+  /** The walk step's reads (`blockAt`, `fluidAt`, `publishedAt`). */
+  reads: number;
 }
 
 /** A frame step over fakes: every call it makes is logged in order; the clock, limiter and throttle are real. */
-function rig(o: { cap?: FpsCap; max?: number; y?: number; held?: Action[]; paused?: () => boolean; fatalInUpdate?: () => boolean; hooks?: boolean; mode?: FlyState['mode'] } = {}): Rig {
+function rig(o: { cap?: FpsCap; max?: number; y?: number; held?: Action[]; paused?: () => boolean; fatalInUpdate?: () => boolean; hooks?: boolean; mode?: FlyState['mode']; timing?: boolean } = {}): Rig {
   const log: string[] = [];
   const counts = createCoordinatorCounts();
   const throttle = createThrottle({ max: o.max ?? 3 });
@@ -59,16 +67,21 @@ function rig(o: { cap?: FpsCap; max?: number; y?: number; held?: Action[]; pause
     store: null as unknown as FrameStepDeps['store'],
     aimReads: [],
     zAtUpdate: [],
+    ms: 0,
+    timed: [],
+    reads: 0,
   };
   const store: FrameStepDeps['store'] = {
     enterRead: () => { log.push('enterRead'); },
     exitRead: () => { log.push('exitRead'); },
     lightAt: (bx, by, bz) => {
       log.push(`lightAt ${bx},${by},${bz}`);
+      r.ms += 7;
       return r.light;
     },
     drain: () => {
       log.push('drain');
+      r.ms += 10;
       return 0;
     },
     // Air everywhere, every column Published (the walk step's view-free reads, logged once per run of reads).
@@ -78,19 +91,25 @@ function rig(o: { cap?: FpsCap; max?: number; y?: number; held?: Action[]; pause
     heightAt: () => null,
   };
   function readLog(): void {
+    r.reads++;
+    r.ms += 1;
     if (log.at(-1) !== 'read') log.push('read');
   }
   (r as { store: FrameStepDeps['store'] }).store = store;
   const deps: FrameStepDeps = {
     fly,
     walk,
-    held: () => held,
+    held: () => {
+      r.ms += 2;
+      return held;
+    },
     paused: o.paused ?? (() => false),
     stopped: () => stopped,
     clock: createFrameClock(createFpsLimiter(o.cap ?? 0), { push() {} }, 0),
     coordinator: {
       update: () => {
         log.push('update');
+        r.ms += 100;
         r.zAtUpdate.push(fly.z);
         if (o.fatalInUpdate?.() === true) stopped = true;
       },
@@ -117,6 +136,7 @@ function rig(o: { cap?: FpsCap; max?: number; y?: number; held?: Action[]; pause
     sections: {
       pump: (_gate, cx, cz, yawDeg) => {
         log.push(`pump ${cx},${cz},${yawDeg}`);
+        r.ms += 50;
         return 0;
       },
     },
@@ -133,6 +153,7 @@ function rig(o: { cap?: FpsCap; max?: number; y?: number; held?: Action[]; pause
       camera: new PerspectiveCamera(),
       frame: (s: FrameStepDeps['state']) => {
         log.push('frame');
+        r.ms += 25;
         r.frames.push(s.eyeSky);
       },
       sections: { setOrigin: () => { log.push('setOrigin'); } },
@@ -142,6 +163,7 @@ function rig(o: { cap?: FpsCap; max?: number; y?: number; held?: Action[]; pause
     aim: (read, paused) => {
       log.push(paused ? 'aim paused' : 'aim');
       r.aimReads.push(read);
+      r.ms += 3;
     },
     state,
     timeSpeed: () => 1,
@@ -150,6 +172,8 @@ function rig(o: { cap?: FpsCap; max?: number; y?: number; held?: Action[]; pause
     // The page's apply control and aux policy (SP4c spec §4.3, §6.2), logged when the case asks for them.
     beforeUpdate: () => { if (o.hooks === true) log.push('beforeUpdate'); },
     afterCounts: (c) => { if (o.hooks === true) log.push(c === counts ? 'afterCounts' : 'afterCounts (another object)'); },
+    // The bench's main-thread timing (SP5a spec §6.2, `mainP95Ms`), when the case asks for it.
+    ...(o.timing === true ? { timing: { now: () => r.ms, record: (ms: number) => { r.timed.push(ms); } } } : {}),
   };
   (r as { step: Rig['step'] }).step = createFrameStep(deps);
   return r;
@@ -478,5 +502,37 @@ describe('the frame step\'s dispatch by mode (SP5a spec §3.1, §3.2)', () => {
     expect(r.log).not.toContain('read');
     expect([r.walk.x, r.walk.y, r.walk.z, r.walk.acc]).toEqual([0, 100 - EYE, 0, 0]);
     expect([r.fly.x, r.fly.y, r.fly.z]).toEqual([8, 100, 8]);
+  });
+});
+
+describe('the frame step\'s main-thread timing (SP5a spec §6.2, `mainP95Ms`; rulings R19)', () => {
+  test('walking, the recorded span covers the input, the walk step and `aim`, not the update, the uploads, the drain, the eye light or the render', () => {
+    const r = rig({ mode: 'walk', held: ['forward'], timing: true });
+    r.walk.px = r.walk.x = 8;
+    r.walk.py = r.walk.y = 100 - EYE;
+    r.walk.pz = r.walk.z = 8;
+    r.step.tick(160);
+    // `held` 2, the walk step's reads 1 each, `aim` 3: one span for the one rendered frame, recorded before onRendered.
+    expect(r.reads).toBeGreaterThan(0);
+    expect(r.timed).toEqual([2 + r.reads + 3]);
+    expect(r.rendered).toHaveLength(1);
+  });
+
+  test('flying under a 30 fps cap at 60 Hz, a skipped tick\'s motion counts in the next rendered frame\'s span; paused (the bench), the span is `aim` alone', () => {
+    const r = rig({ cap: 30, held: ['forward'], timing: true });
+    for (let i = 1; i <= 4; i++) r.step.tick(i * HZ60);
+    // Ticks 1 and 3 render: 2 + 3, then tick 2's 2 and tick 3's 2 + 3; tick 4's 2 waits for the next rendered frame.
+    expect(r.timed).toEqual([5, 7]);
+    const p = rig({ paused: () => true, timing: true });
+    p.step.tick(HZ60);
+    p.step.tick(2 * HZ60);
+    expect(p.timed).toEqual([3, 3]);
+  });
+
+  test('without the field nothing is timed: the tick runs as before', () => {
+    const r = rig();
+    r.step.tick(HZ60);
+    expect(r.timed).toEqual([]);
+    expect(r.log).toEqual(['update', 'pump 3,-4,90', 'origin', 'drain', 'enterRead', 'aim', 'lightAt 8,100,8', 'exitRead', 'frame']);
   });
 });

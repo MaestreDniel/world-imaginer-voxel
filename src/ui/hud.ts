@@ -1,5 +1,6 @@
 import { chunkCoord } from '../core/coords';
 import { clockHours } from '../daynight/dayNight';
+import type { FlyState } from '../player/fly';
 import { bindingLabel, DEFAULT_KEYMAP, type Action } from '../player/keymap';
 import type { SectionRendererKind } from '../render/sectionRenderer';
 import type { FrameStats, FrameSummary } from './frameStats';
@@ -58,7 +59,9 @@ export interface HudData {
   readonly triangles: number;
   /** The camera's absolute block position (the floating origin added back). */
   readonly position: { readonly x: number; readonly y: number; readonly z: number };
-  /** Fly speed, blocks/s. */
+  /** Flying or walking (SP5a spec §3.1): the position line starts "Fly · " or "Walk · ". */
+  readonly mode: FlyState['mode'];
+  /** Fly speed, blocks/s; walking, the speed line reads "walking" (SP5a spec §4.6). */
   readonly speed: number;
   /** Time of day t ∈ [0, 1) (t 0 at sunrise, spec §6.5). */
   readonly time: number;
@@ -77,6 +80,11 @@ export interface HudData {
   readonly sectionRenderer: SectionRendererKind;
   /** The renderer string as reported (Firefox masks it, spec §1.5); null when the probe got none. */
   readonly renderer: string | null;
+  /**
+   * The edit latency (SP5a spec §4.6, master §4.12): the p95 of the `visible` samples (click to the frame the edited
+   * column's new mesh is shown, `editLatency.visibleP95()`) and their count; null before the first, and no line.
+   */
+  readonly edit: { readonly p95: number; readonly count: number } | null;
 }
 
 /** The clock as HH:MM from t (t 0 is 06:00, the opening t is 08:00). */
@@ -116,11 +124,16 @@ function hudLines(d: HudData, hints: string): string[] {
   ];
   // While the world regenerates after an Apply (SP4c spec §4.5, D26).
   if (d.stale > 0) lines.push(`stale ${d.stale} / ${d.needed}`);
+  const walking = d.mode === 'walk';
   lines.push(
     `genCap ${d.genCap} · dropped ${d.dropped} · failed ${d.failed}`,
     `draw calls ${d.drawCalls} · triangles ${compact(d.triangles)}`,
-    `x ${p.x.toFixed(1)} y ${p.y.toFixed(1)} z ${p.z.toFixed(1)} · column ${chunkCoord(Math.floor(p.x))}, ${chunkCoord(Math.floor(p.z))}`,
-    `speed ${d.speed.toFixed(1)} blocks/s · ${formatClock(d.time)} ${timeSpeedLabel(d.timeSpeed)}`,
+    `${walking ? 'Walk' : 'Fly'} · x ${p.x.toFixed(1)} y ${p.y.toFixed(1)} z ${p.z.toFixed(1)} · column ${chunkCoord(Math.floor(p.x))}, ${chunkCoord(Math.floor(p.z))}`,
+    `speed ${walking ? 'walking' : `${d.speed.toFixed(1)} blocks/s`} · ${formatClock(d.time)} ${timeSpeedLabel(d.timeSpeed)}`,
+  );
+  // Once there is an edit (SP5a spec §4.6): G2's live reading.
+  if (d.edit !== null) lines.push(`edit p95 ${d.edit.p95.toFixed(0)} ms (${d.edit.count})`);
+  lines.push(
     `RD ${d.rdTarget} (fog ${d.rdFog.toFixed(1)}) · workers ${d.liveWorkers}/${d.workers} · ${d.sectionRenderer}`,
     `regions ${d.regions} · GPU ${d.gpuMB.toFixed(1)} MB`,
     `GPU ${d.renderer ?? 'not reported'}`,
@@ -131,8 +144,9 @@ function hudLines(d: HudData, hints: string): string[] {
 
 /**
  * The world HUD (SP4a spec §6.9, D30; SP4b spec §7.3): the fps line plus the counts (SP4b: the streaming counts), one
- * line each, refreshed every 250 ms from `read`; SP4c adds "stale n / needed" while the world regenerates (§4.5). The
- * page toggles it on F3 (`toggle`); while hidden it does not read. SP10 grows F3 into the full overlay.
+ * line each, refreshed every 250 ms from `read`; SP4c adds "stale n / needed" while the world regenerates (§4.5); SP5a
+ * starts the position line with the mode and adds "edit p95 n ms (k)" once there is an edit (SP5a spec §4.6). The page
+ * toggles it on F3 (`toggle`); while hidden it does not read. SP10 grows F3 into the full overlay.
  */
 export function mountWorldHud(host: HTMLElement, read: () => HudData): { toggle(): void; dispose(): void } {
   const box = document.createElement('div');

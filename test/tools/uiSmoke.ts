@@ -693,11 +693,12 @@ export interface HudRead {
 const NUM = '(-?\\d+(?:\\.\\d+)?)';
 const HUD_REVEALED = /(?<![\w-])revealed (\d+)\b/;
 const HUD_RD = /^RD (\d+) \(fog /m;
-const HUD_POSITION = new RegExp(`^x ${NUM} y ${NUM} z ${NUM} ·`, 'm');
+const HUD_POSITION = new RegExp(`^(?:(?:Walk|Fly) · )?x ${NUM} y ${NUM} z ${NUM} ·`, 'm');
 
 /**
  * The world HUD's text, one row per line, as the page shows it: `revealed <n>` on the columns row, `RD <n> (fog …)`
- * and `x … y … z …`; null unless all three are there.
+ * and `x … y … z …`, after the mode's `Fly · ` or `Walk · ` since SP5a (SP5a spec §4.6); null unless all three are
+ * there.
  */
 export function parseHud(text: string): HudRead | null {
   const revealed = HUD_REVEALED.exec(text);
