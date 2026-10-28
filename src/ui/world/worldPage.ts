@@ -422,6 +422,18 @@ export function runTeardown(steps: ReadonlyArray<() => void>, onError: (e: unkno
 }
 
 /**
+ * Pushes the coordinator's dispose onto the page's teardown, which runs reversed, with the sim's stop after it: the sim
+ * is stopped first (no batch posted, no reply applied), since the coordinator's dispose sweep ignores the sim's pins
+ * (SP5a spec §2.1) and would free a record an edit in flight still writes. Two steps, each guarded by `runTeardown`;
+ * the sim's own step, pushed when it was created, disposes it again (a no-op) and still stops it on a load torn down
+ * before the coordinator exists.
+ */
+export function pushCoordinatorTeardown(teardown: Array<() => void>, coordinator: { dispose(): void }, sim: { dispose(): void } | null): void {
+  teardown.push(() => coordinator.dispose());
+  if (sim !== null) teardown.push(() => sim.dispose());
+}
+
+/**
  * A failure after the reveal (SP4b spec §7.4): stops the frame loop, closes the map overlay and disposes its tool (SP4c
  * spec §1.3, D27: the map never works on a released pool), shows the failure panel, then runs the release steps (the
  * HUD's timer, the teleport (ruling R5), the coordinator, the pool, the renderer), the overlay, the panel and each
@@ -1645,7 +1657,7 @@ export function mountWorldPage(root: HTMLElement, q: WorldQuery, hash: string, o
       // An edit's payload staged (SP5a spec §4.6, §6.2): the first reveal of the column after it shows the edit.
       onEditStaged: (cx, cz) => latency?.staged(cx, cz, performance.now()),
     });
-    teardown.push(() => coordinator.dispose());
+    pushCoordinatorTeardown(teardown, coordinator, simClient);
     simFailure = () => {
       store.markDead(SIM_THREAD);
       coordinator.simUnpinAll();

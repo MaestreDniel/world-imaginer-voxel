@@ -29,7 +29,7 @@ import { NEAR_FLY, NEAR_WALK } from '../../src/render/renderer';
 import { createReloader, createWorldUrl, worldHash, type HereState } from '../../src/ui/world/reload';
 import {
   countPendingTimers, countTileCalls, createAim, createClickQueue, createHookEdit, createRdControl, createUndoNotice, createWorldNotices, everyFrameUntil, failBeforeReveal, flushOnPageHide, handleContextLoss,
-  benchSetTime, benchWalk, handleStreamEvent, helpChange, installRepeatStop, installUndoKeys, installWiTest, mapKey, offerLowerRd, paletteFirst, onDriverStatus, onSimFailure, rdShownOnLoad, releaseOnFailure, reloadRd, runTeardown, speedKey, stopAfterFailure, switchMode,
+  benchSetTime, benchWalk, handleStreamEvent, helpChange, installRepeatStop, installUndoKeys, installWiTest, mapKey, offerLowerRd, paletteFirst, onDriverStatus, onSimFailure, pushCoordinatorTeardown, rdShownOnLoad, releaseOnFailure, reloadRd, runTeardown, speedKey, stopAfterFailure, switchMode,
   UNDO_NOTICE_MS, type WiTest, type WiTestPage,
 } from '../../src/ui/world/worldPage';
 import { createEditLatency } from '../../src/ui/world/editLatency';
@@ -170,6 +170,36 @@ describe('runTeardown (the page\'s dispose, rulings R5 (b))', () => {
     expect(order).toEqual(['input', 'coordinator', 'loading.dispose', 'renderer.dispose', 'pool.terminate', 'root.replaceChildren']);
     expect(onError).toHaveBeenCalledTimes(2);
     expect(onError.mock.calls[0]![0]).toBe(corrupt);
+  });
+
+  test('the page\'s teardown stops the sim before the coordinator\'s dispose, whose sweep ignores the sim\'s pins (rulings R42)', () => {
+    const order: string[] = [];
+    const sim = { dispose: () => { order.push('sim.dispose'); } };
+    const coordinator = { dispose: () => { order.push('coordinator.dispose'); } };
+    // As the page: the sim's own step when it is created, others between, then the coordinator's.
+    const teardown: Array<() => void> = [() => sim.dispose(), () => { order.push('between'); }];
+    pushCoordinatorTeardown(teardown, coordinator, sim);
+    teardown.push(() => { order.push('later'); });
+    runTeardown(teardown.splice(0).reverse(), (e) => { throw e; });
+    expect(order).toEqual(['later', 'sim.dispose', 'coordinator.dispose', 'between', 'sim.dispose']);
+    // Each its own guarded step: a sim whose dispose throws still has the coordinator disposed.
+    const failing: Array<() => void> = [];
+    const onError = vi.fn<(e: unknown) => void>();
+    order.length = 0;
+    pushCoordinatorTeardown(failing, coordinator, { dispose: () => { throw new Error('sim'); } });
+    runTeardown(failing.splice(0).reverse(), onError);
+    expect(order).toEqual(['coordinator.dispose']);
+    expect(onError).toHaveBeenCalledTimes(1);
+    // The flight route has no sim.
+    order.length = 0;
+    pushCoordinatorTeardown(failing, coordinator, null);
+    runTeardown(failing.splice(0).reverse(), (e) => { throw e; });
+    expect(order).toEqual(['coordinator.dispose']);
+    // The page's dispose runs its teardown reversed, and the coordinator's step is pushed through the helper.
+    const src = readFileSync(new URL('../../src/ui/world/worldPage.ts', import.meta.url), 'utf8');
+    expect(src).toMatch(/^\s*\.\.\.teardown\.splice\(0\)\.reverse\(\),$/m);
+    expect(src).toMatch(/^\s*pushCoordinatorTeardown\(teardown, coordinator, simClient\);$/m);
+    expect(src.slice(src.indexOf('async function run(')).match(/coordinator\.dispose\(\)\)/g)).toBeNull();
   });
 });
 
