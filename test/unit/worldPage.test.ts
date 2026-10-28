@@ -21,9 +21,11 @@ import { WORLD_MAP_BPP, worldMapView } from '../../src/ui/world/mapOverlay';
 import { createReloader, createWorldUrl, worldHash, type HereState } from '../../src/ui/world/reload';
 import {
   countPendingTimers, countTileCalls, createRdControl, createUndoNotice, createWorldNotices, everyFrameUntil, failBeforeReveal, flushOnPageHide, handleContextLoss,
-  handleStreamEvent, helpChange, installWiTest, mapKey, offerLowerRd, onDriverStatus, rdShownOnLoad, releaseOnFailure, reloadRd, runTeardown, stopAfterFailure, UNDO_NOTICE_MS,
-  type WiTest, type WiTestPage,
+  handleStreamEvent, helpChange, installWiTest, mapKey, offerLowerRd, onDriverStatus, onSimFailure, rdShownOnLoad, releaseOnFailure, reloadRd, runTeardown, stopAfterFailure,
+  UNDO_NOTICE_MS, type WiTest, type WiTestPage,
 } from '../../src/ui/world/worldPage';
+import { createEditLatency } from '../../src/ui/world/editLatency';
+import { createEditPath } from '../../src/ui/world/editPath';
 import { installDom, type FakeElement } from './fixtures/domShim';
 
 /** A frame scheduler that queues callbacks; `flush` runs one frame. */
@@ -68,12 +70,14 @@ describe('everyFrameUntil (the load build loop, SP4a spec §8.3)', () => {
 });
 
 describe('releaseOnFailure (the failure panel frees the load, final review B-M4)', () => {
-  test('disconnects the long-task observer, terminates the pool and disposes the renderer, each once', () => {
+  test('disconnects the long-task observer, disposes the sim, terminates the pool and disposes the renderer, each once', () => {
     const longTasks = { disconnect: vi.fn() };
+    const sim = { dispose: vi.fn() };
     const pool = { terminate: vi.fn() };
     const renderer = { dispose: vi.fn() };
-    releaseOnFailure({ longTasks, pool, renderer }, (e) => { throw e; });
+    releaseOnFailure({ longTasks, sim, pool, renderer }, (e) => { throw e; });
     expect(longTasks.disconnect).toHaveBeenCalledTimes(1);
+    expect(sim.dispose).toHaveBeenCalledTimes(1);
     expect(pool.terminate).toHaveBeenCalledTimes(1);
     expect(renderer.dispose).toHaveBeenCalledTimes(1);
   });
@@ -954,7 +958,7 @@ describe('the smoke\'s test hook, window.__wiTest under ?wiTest=1 (SP4c spec §8
     expect(counted.epoch).toBe(7);
   });
 
-  test('installWiTest puts the hook on the window: timers at once; the page\'s parts after attach (throwing before); lastLanding with null water for −∞', async () => {
+  test('installWiTest puts the hook on the window: timers at once; the page\'s parts after attach (throwing before, edit and blockAt included); lastLanding with null water for −∞', async () => {
     const win: ReturnType<typeof timerWindow> & { __wiTest?: WiTest } = timerWindow();
     const install = installWiTest(win);
     const hook = install.hook;
@@ -962,6 +966,7 @@ describe('the smoke\'s test hook, window.__wiTest under ?wiTest=1 (SP4c spec §8
     win.setTimeout(() => {}, 100);
     expect(hook.timers()).toBe(1);
     expect(() => hook.owner()).toThrow(/not attached/);
+    expect(() => hook.blockAt(0, 0, 0)).toThrow(/not attached/);
     expect(hook.tileRequests()).toBe(0);
     expect(hook.lastLanding()).toBeNull();
     const page: WiTestPage = {
@@ -971,9 +976,14 @@ describe('the smoke\'s test hook, window.__wiTest under ?wiTest=1 (SP4c spec §8
       forceFatal: vi.fn(),
       owner: () => 'map',
       stale: () => 17,
+      edit: vi.fn(async (x: number, y: number, z: number, state: number, fluid: number) => `${x} ${y} ${z} ${state} ${fluid}`),
+      blockAt: (x, y, z) => x + y + z,
     };
     install.attach(page);
     expect([hook.listenerCount(), hook.owner(), hook.stale()]).toEqual([2, 'map', 17]);
+    // The SP5a parts (spec §6.4): the edit and the read-back pass through to the page.
+    expect(await hook.edit(1, 70, -3, 25, 0)).toBe('1 70 -3 25 0');
+    expect(hook.blockAt(1, 2, 3)).toBe(6);
     hook.closeOverlay();
     hook.disposeTool();
     hook.forceFatal();
@@ -1216,5 +1226,37 @@ describe('createUndoNotice (SP4c spec §2.4, §4.3; D15, D26)', () => {
     shown.session.redo();
     shown.notice.applied('T');
     expect(shown.show).not.toHaveBeenCalled();
+  });
+});
+
+describe('onSimFailure (the sim\'s failure, SP5a spec §2.1)', () => {
+  let dom: ReturnType<typeof installDom>;
+  beforeEach(() => { dom = installDom(); });
+  afterEach(() => { vi.unstubAllGlobals(); vi.useRealTimers(); });
+
+  test('`onSimFailure` marks 15 dead, unpins all, shows the notice with no timeout, and a later `post` resolves `failed`', async () => {
+    vi.useFakeTimers();
+    const notices = createWorldNotices(dom.body as unknown as HTMLElement, createReloader(vi.fn(), vi.fn()));
+    const store = { markDead: vi.fn<(t: number) => void>() };
+    const coordinator = {
+      editState: () => 0 as const,
+      simPin: vi.fn(),
+      simUnpin: vi.fn(),
+      markEdited: vi.fn(),
+      simUnpinAll: vi.fn(),
+    };
+    const sim = { failed: false, edits: vi.fn(() => new Promise<never>(() => {})) };
+    const editPath = createEditPath({ sim, coordinator, latency: createEditLatency(), now: () => 0, notices: { show: vi.fn() } });
+    onSimFailure({ store, coordinator, editPath, notices });
+    expect(store.markDead.mock.calls).toEqual([[15]]);
+    expect(coordinator.simUnpinAll).toHaveBeenCalledTimes(1);
+    const text = () => dom.el('world-notices').children.map((d: FakeElement) => d.textContent).join('\n');
+    expect(text()).toContain('Editing stopped: the edit worker failed; this session\'s edits are lost');
+    // No timeout: still shown a minute later.
+    vi.advanceTimersByTime(60_000);
+    expect(text()).toContain('Editing stopped: the edit worker failed; this session\'s edits are lost');
+    expect(await editPath.post([{ x: 3, y: 70, z: 4, op: 'set', value: 1 << 8, expect: 0 }])).toEqual({ ok: false, why: 'failed' });
+    expect(sim.edits).not.toHaveBeenCalled();
+    expect(coordinator.simPin).not.toHaveBeenCalled();
   });
 });

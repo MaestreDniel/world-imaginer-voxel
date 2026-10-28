@@ -77,6 +77,13 @@
  * needed" while the world regenerates; while the map covers the 3D the transient notices (StoreFull, the URL oversize,
  * "Could not teleport") go to the tool's notice row (`WorldNotices.route`, D27); after every `counts` the pool's aux
  * policy is set from the world's hold, the overlay covering the 3D and the pending T; a configure failure after the reveal is fatal (`onDriverStatus`).
+ *
+ * Editing (SP5a spec §2.1, §2.5, §6.2): after the pool, every route but the flight's spawns the sim worker
+ * (`createBrowserSim`) and attaches it as thread 15; D reads its entries through (`worldJobsOf(workers, sim)`). The
+ * streaming route posts every edit through the edit path (`editPath.ts`: the gate, the sim pins, `markEdited`), times
+ * it (`editLatency.ts`: staged through the coordinator's `onEditStaged`, revealed through `sections.onColumnRevealed`),
+ * and on the sim's failure runs `onSimFailure` (thread 15 dead, editing off, every sim pin released, the notice). The
+ * teardown and the failure releases dispose the sim.
  */
 import { MEDIUM } from '../../core/params/graphicsPresets';
 import { OPENING_T, TIME_SPEEDS } from '../../daynight/dayNight';
@@ -89,6 +96,7 @@ import { appliedDraftOf, type WorldStage } from '../../engine/invalidation';
 import { RD_MAX, reservationRdCap, resolveRenderDistance } from '../../engine/renderDistance';
 import type { Stage } from '../../engine/rings';
 import type { WorldSession } from '../../engine/session';
+import { SimFailed, createBrowserSim, type SimClient } from '../../engine/simClient';
 import { createThrottle } from '../../engine/throttle';
 import { createUploadBudget } from '../../engine/uploadBudget';
 import { StoreFullError, WorkerFailed, createBrowserPool, poolSize, type WorkerPool } from '../../engine/workerPool';
@@ -99,6 +107,7 @@ import { createFpsLimiter, type FpsLimiter } from '../../render/fpsLimiter';
 import type { FrameState } from '../../render/frameState';
 import { createWorldRenderer, type GpuEstimate, type WorldRenderer } from '../../render/renderer';
 import { createSectionRendererCounts, selectSectionRenderer, type SectionRendererKind } from '../../render/sectionRenderer';
+import { SIM_THREAD } from '../../world/store/reclaim';
 import { createStore, type VoxelStore } from '../../world/store/store';
 import { renderErrorScreen } from '../capabilityReport';
 import { el } from '../common/dom';
@@ -123,6 +132,8 @@ import type { FlightContext } from './flight';
 import { createFogEase, createFogStep, filledRadius } from './fogEase';
 import { createFrameClock, createFrameNotice, lowerRd } from './frameNotice';
 import { coversWorld, createApplyControl, createEpochs, updateAuxPolicy } from './applyControl';
+import { createEditLatency } from './editLatency';
+import { createEditPath } from './editPath';
 import { createFrameStep, eyeSkyLight } from './frameStep';
 import { createMapOverlay, followSession, frameCapFor, worldMapView, type MapOverlay } from './mapOverlay';
 import { createReloader, createWorldUrl, installLeaveGuard, navigateTo, type Reloader } from './reload';
@@ -255,6 +266,27 @@ function motionBlockingAt(store: VoxelStore, x: number, z: number): number {
   return store.heightAt('motionBlocking', Math.floor(x), Math.floor(z)) ?? Number.POSITIVE_INFINITY;
 }
 
+/** Block (x, y, z)'s value (`state << 8 | fluid`, SP5a spec §2.1) read inside a read section; 0 when its column is not Published. */
+function voxelValue(store: VoxelStore, x: number, y: number, z: number): number {
+  store.enterRead();
+  try {
+    const b = store.blockAt(x, y, z);
+    return b < 0 ? 0 : ((b << 8) | store.fluidAt(x, y, z)) >>> 0;
+  } finally {
+    store.exitRead();
+  }
+}
+
+/** The state at block (x, y, z) read inside a read section (`VoxelStore.blockAt`). */
+function blockRead(store: VoxelStore, x: number, y: number, z: number): number {
+  store.enterRead();
+  try {
+    return store.blockAt(x, y, z);
+  } finally {
+    store.exitRead();
+  }
+}
+
 /** Whether block (x, z) holds water at its top: `MOTION_BLOCKING` (which counts fluid) above `OCEAN_FLOOR` (which does not). */
 function hasWaterAt(store: VoxelStore, x: number, z: number): boolean {
   const bx = Math.floor(x);
@@ -274,16 +306,18 @@ function storeSabMiB(store: VoxelStore): number {
 const nextFrame = (): Promise<number> => new Promise((resolve) => requestAnimationFrame(resolve));
 
 /**
- * What the failure panel frees (spec §8.5): the long-task observer, the pool and the renderer with its WebGL context, so
- * a load that failed (StoreFull on a weak machine) holds no workers or GPU memory behind the panel (final review B-M4).
- * Each step guarded (`runTeardown`): a release that throws skips none of the later ones (final review UI-6).
+ * What the failure panel frees (spec §8.5): the long-task observer, the sim worker (SP5a spec §2.1), the pool and the
+ * renderer with its WebGL context, so a load that failed (StoreFull on a weak machine) holds no workers or GPU memory
+ * behind the panel (final review B-M4). Each step guarded (`runTeardown`): a release that throws skips none of the later
+ * ones (final review UI-6).
  */
 export function releaseOnFailure(o: {
   readonly longTasks: { disconnect(): void } | null;
+  readonly sim?: { dispose(): void } | null;
   readonly pool: { terminate(): void } | null;
   readonly renderer: { dispose(): void } | null;
 }, onError: (e: unknown) => void): void {
-  runTeardown([() => o.longTasks?.disconnect(), () => o.pool?.terminate(), () => o.renderer?.dispose()], onError);
+  runTeardown([() => o.longTasks?.disconnect(), () => o.sim?.dispose(), () => o.pool?.terminate(), () => o.renderer?.dispose()], onError);
 }
 
 /**
@@ -734,7 +768,8 @@ export function flushOnPageHide(
  * The browser smoke's test hook (SP4c spec §8.6): `window.__wiTest`, installed by `main.ts` before the world page mounts
  * and only under `?wiTest=1` (absent otherwise). The smoke reads the leak baseline and check through it (the session's
  * listeners, the pending timers, the map's tile requests), closes the overlay and disposes the tool, forces a fatal
- * error, and reads the controls owner, the stale count and the last teleport's landing.
+ * error, and reads the controls owner, the stale count and the last teleport's landing; it edits a block through the
+ * page's edit path and reads one back (SP5a spec §6.4).
  */
 export interface WiTest {
   /** The session's listeners (`WorldSession.listenerCount`). */
@@ -758,10 +793,17 @@ export interface WiTest {
    * carry); null before one.
    */
   lastLanding(): { readonly surface: number; readonly water: number | null; readonly y: number } | null;
+  /**
+   * Sets block (x, y, z) to `state` with fluid byte `fluid` through the page's edit path (SP5a spec §6.4), its `expect`
+   * the voxel's value now: 'ok', or the refusal (`EditOutcome`'s `why`).
+   */
+  edit(x: number, y: number, z: number, state: number, fluid: number): Promise<string>;
+  /** The state at block (x, y, z), read inside a read section (`VoxelStore.blockAt`: −1 when its column is not Published). */
+  blockAt(x: number, y: number, z: number): number;
 }
 
 /** The parts of the hook the world page supplies once its streaming route runs. */
-export type WiTestPage = Pick<WiTest, 'listenerCount' | 'closeOverlay' | 'disposeTool' | 'forceFatal' | 'owner' | 'stale'>;
+export type WiTestPage = Pick<WiTest, 'listenerCount' | 'closeOverlay' | 'disposeTool' | 'forceFatal' | 'owner' | 'stale' | 'edit' | 'blockAt'>;
 
 /** The hook's installation, which `main.ts` hands the page (`WorldPageOptions.wiTest`). */
 export interface WiTestInstall {
@@ -852,6 +894,8 @@ export function installWiTest(win: TimerHost & { __wiTest?: WiTest }): WiTestIns
     owner: () => attached().owner(),
     stale: () => attached().stale(),
     lastLanding: () => landing,
+    edit: (x, y, z, state, fluid) => attached().edit(x, y, z, state, fluid),
+    blockAt: (x, y, z) => attached().blockAt(x, y, z),
   };
   win.__wiTest = hook;
   return {
@@ -860,6 +904,27 @@ export function installWiTest(win: TimerHost & { __wiTest?: WiTest }): WiTestIns
     countTiles: (pool) => countTileCalls(pool, () => { tiles++; }),
     landed(l) { landing = { surface: l.surface, water: Number.isFinite(l.water) ? l.water : null, y: l.y }; },
   };
+}
+
+/** The notice of the sim's failure (SP5a spec §2.1); it stays until dismissed. */
+export const EDIT_FAILED_NOTICE = 'Editing stopped: the edit worker failed; this session\'s edits are lost';
+
+/**
+ * The sim's failure (SP5a spec §2.1), which the route calls from the sim client's `onFailure`, before the client rejects
+ * the pending batches: thread 15 marked dead (its reader epoch no longer holds releases in limbo), the edit path
+ * disabled, every sim pin released (`simUnpinAll`, so a pending post's rejection needs no `simUnpin`) and the notice
+ * shown with no timeout. The world keeps streaming.
+ */
+export function onSimFailure(o: {
+  store: Pick<VoxelStore, 'markDead'>;
+  coordinator: Pick<Coordinator, 'simUnpinAll'>;
+  editPath: { disable(): void };
+  notices: Pick<WorldNotices, 'show'>;
+}): void {
+  o.store.markDead(SIM_THREAD);
+  o.editPath.disable();
+  o.coordinator.simUnpinAll();
+  o.notices.show(EDIT_FAILED_NOTICE, { kind: 'error' });
 }
 
 /**
@@ -1016,6 +1081,7 @@ export function mountWorldPage(root: HTMLElement, q: WorldQuery, hash: string, o
   let rd: number | null = null;
   let centre: { x: number; z: number } | null = q.at;
   let pool: WorkerPool | null = null;
+  let sim: SimClient | null = null;
   let wr: WorldRenderer | null = null;
   let seedText: string | null = null;
   let profile: string | null = null;
@@ -1078,7 +1144,7 @@ export function mountWorldPage(root: HTMLElement, q: WorldQuery, hash: string, o
     wr = null;
     failBeforeReveal({
       show: () => loading.fail(cause, shown, { map: mapHref, lowerRd: lowerRdHref() }),
-      release: { longTasks, pool, renderer },
+      release: { longTasks, sim, pool, renderer },
       settle,
       onError: (err) => console.error('The world page\'s release after a failure:', err),
     });
@@ -1170,8 +1236,22 @@ export function mountWorldPage(root: HTMLElement, q: WorldQuery, hash: string, o
     });
     pool = workers;
     await workers.attachStore(store.handles());
+    // The sim worker (SP5a spec §2.1, D17), thread 15 of the store, on every route but the flight's (which edits
+    // nothing; its D has no read-through). Its failure handler is the route's: until the streaming route's notices and
+    // edit path exist, thread 15 is marked dead (and, once the coordinator exists, every sim pin released). A sim that
+    // fails while attaching leaves editing off and the load going on (the world keeps streaming, §2.1).
+    let simFailure = (): void => store.markDead(SIM_THREAD);
+    const simClient = opts.flight === undefined ? createBrowserSim({ onFailure: () => simFailure() }) : null;
+    sim = simClient;
+    if (simClient !== null) teardown.push(() => simClient.dispose());
+    const simAttached = simClient?.attach(store.handles()).catch((e: unknown) => {
+      if (!(e instanceof SimFailed)) throw e;
+    });
+    // G2's edit latency (§6.2): staged through the coordinator's `onEditStaged`, revealed through the route's hook.
+    const latency = simClient === null ? null : createEditLatency();
     // The first configure's ReadyMsg is kept: the preview driver adopts it at the reveal (SP4c spec §4.2).
     const firstReady = await workers.configure(session.state.seedText, session.state.params);
+    await simAttached;
     if (state !== 'loading') return;
 
     // 4. The centre, the renderer and the load.
@@ -1211,7 +1291,8 @@ export function mountWorldPage(root: HTMLElement, q: WorldQuery, hash: string, o
     // The per-column epoch's interning (SP4c spec §4.4), session-wide: the first entry's draft is epoch 1.
     const epochs = createEpochs();
     const coordinator = createCoordinator({
-      jobs: worldJobsOf(workers),
+      // D reads the sim's entries through (SP5a spec §2.5); null on the flight route.
+      jobs: worldJobsOf(workers, simClient),
       store,
       sink: {
         stage: (p, seq) => sections.stage(p, seq),
@@ -1232,8 +1313,14 @@ export function mountWorldPage(root: HTMLElement, q: WorldQuery, hash: string, o
         if (onStreamEvent !== null) onStreamEvent(e);
         else if (e.kind === 'fatal') fail(causeOf(e.cause, e.message), e.cause, e.message);
       },
+      // An edit's payload staged (SP5a spec §4.6, §6.2): the first reveal of the column after it shows the edit.
+      onEditStaged: (cx, cz) => latency?.staged(cx, cz, performance.now()),
     });
     teardown.push(() => coordinator.dispose());
+    simFailure = () => {
+      store.markDead(SIM_THREAD);
+      coordinator.simUnpinAll();
+    };
     const counts = createCoordinatorCounts();
     const loadCamera = { x: at.x, z: at.z, yawDeg: 0 };
     coordinator.update(loadCamera);
@@ -1387,6 +1474,7 @@ export function mountWorldPage(root: HTMLElement, q: WorldQuery, hash: string, o
             () => benchTeleport?.dispose(),
             () => benchDriver?.dispose(),
             () => coordinator.dispose(),
+            () => simClient?.dispose(),
             () => pool?.terminate(),
             () => renderer?.dispose(),
           ],
@@ -1653,6 +1741,22 @@ export function mountWorldPage(root: HTMLElement, q: WorldQuery, hash: string, o
     const reloader = createReloader((url) => navigateTo(url, location), disarm);
     const notices = createWorldNotices(host, reloader);
     teardown.push(() => notices.dispose());
+    // The edit path (SP5a spec §2.1, §2.6, §2.7): every edit of the page goes through it, and the sim's failure
+    // disables it. The streaming route always has the sim (only the flight's has none, and it returned above).
+    const editLatency = latency!;
+    const editPath = createEditPath({
+      sim: simClient!,
+      coordinator,
+      latency: editLatency,
+      now: () => performance.now(),
+      notices: { show: (text, ms) => notices.show(text, { kind: 'warn', timeoutMs: ms }) },
+    });
+    simFailure = () => onSimFailure({ store, coordinator, editPath, notices });
+    // A sim that failed during the load shows its notice now that the notices exist.
+    if (simClient!.failed) simFailure();
+    // The edit latency's reveals (§6.2); the bench's own hook feeds them on its route (Task 17's L10).
+    sections.onColumnRevealed = (cx, cz) => editLatency.revealed(cx, cz, performance.now());
+    teardown.push(() => { sections.onColumnRevealed = null; });
     // The map overlay and the preview driver (SP4c spec §1.3, §4.2), created below; a failure or a context loss
     // disposes the overlay (and its tool) before the panel or the notice shows (D27).
     let mapRef: MapOverlay | null = null;
@@ -1705,6 +1809,7 @@ export function mountWorldPage(root: HTMLElement, q: WorldQuery, hash: string, o
           () => driver?.dispose(),
           () => coordinator.dispose(),
           () => longTasks?.disconnect(),
+          () => simClient?.dispose(),
           () => pool?.terminate(),
           () => renderer?.dispose(),
         ],
@@ -1990,6 +2095,11 @@ export function mountWorldPage(root: HTMLElement, q: WorldQuery, hash: string, o
       forceFatal: () => fail('A failure forced by the test hook.', new Error('forced by the smoke (?wiTest=1)')),
       owner: () => mapOverlay.owner,
       stale: () => coordinator.counts(counts).stale,
+      edit: async (x, y, z, stateId, fluid) => {
+        const r = await editPath.post([{ x, y, z, op: 'set', value: ((stateId << 8) | fluid) >>> 0, expect: voxelValue(store, x, y, z) }]);
+        return r.ok ? 'ok' : r.why;
+      },
+      blockAt: (x, y, z) => blockRead(store, x, y, z),
     });
     // Disposed before the input, the driver and the page's subscribe: a gesture still open ends through the tool.
     teardown.push(() => mapOverlay.dispose());

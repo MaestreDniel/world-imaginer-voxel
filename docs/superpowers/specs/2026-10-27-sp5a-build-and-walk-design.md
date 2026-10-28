@@ -119,6 +119,7 @@ src/player/keymap.ts input.ts         F, E, 1-9, the wheel's Ctrl, mouse buttons
 src/ui/palette.ts                     the creative palette (§4.4)
 src/ui/world/buildHud.ts              crosshair, hotbar, slot name (§4.3)
 src/ui/world/blockHistory.ts          the 100-step block history (§4.5)
+src/ui/world/editPath.ts editLatency.ts  the page's edit path (the gate, the sim pins, markEdited) and G2's edit latency (§2.1, §6.2)
 src/ui/world/teleport.ts frameStep.ts worldPage.ts bench.ts  walk teleport, the motion dispatch, wiring, L10
 src/ui/hud.ts help.ts loading/tips.ts styles.css crossSection/voxels.ts  (§4.6, §1.3)
 src/ui/settings.ts                    holdRepeat, the hold-to-repeat setting (§4.1, D6)
