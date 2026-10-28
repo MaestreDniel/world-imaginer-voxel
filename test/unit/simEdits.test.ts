@@ -311,7 +311,7 @@ describe('applyEdits on a canned store: the dirty set and StoreFull (SP5a spec ย
     expect(cols(r.dirty)).toEqual(names([-1, -1], [-1, 0], [0, -1], [0, 0]));
   });
 
-  test('`StoreFull` on the 2nd edit (a store whose `maxBlockBytes` leaves room for one slot): `refused` `\'full\'`; the first edit\'s voxel, light, heightmaps (aux A equal to before) and entry restored, and every version unchanged', () => {
+  test('`StoreFull` on the 2nd edit (a store whose `maxBlockBytes` leaves room for one slot): `refused` `\'full\'`; the first edit\'s voxel, light, heightmaps (aux A equal to before) and entry restored; the versions of the touched columns + 1 and `dirty` those columns, every other version unchanged', () => {
     const s = cannedStore(MiB);
     // 25 dense block slots (section 8 of each column) of the pool's 128; hold all but one.
     while (s.blockPool.freeCount() > 1) s.blockPool.alloc();
@@ -327,7 +327,9 @@ describe('applyEdits on a canned store: the dirty set and StoreFull (SP5a spec ย
     expect(light).toBe(0xF0);
     const r = applyEdits(s, d, scratch, [set(5, 70, 5, val(STONE), val(AIR)), set(21, 70, 5, val(STONE), val(AIR))], now);
     expect(r.refused).toBe('full');
-    expect(r.dirty.length).toBe(0);
+    // Edit 1 wrote (0, 0)'s blocks and light; edit 2's block write in (1, 0) began. A MESH that read their slots
+    // mid-batch is dropped by the bumped versions (ยง2.1), and the columns are remeshed.
+    expect(cols(r.dirty)).toEqual(names([0, 0], [1, 0]));
     expect(valueAt(s, 5, 70, 5)).toBe(val(AIR));
     expect(s.lightAt(5, 70, 5)).toBe(light);
     expect(s.heightAt('worldSurface', 5, 5)).toBe(TOP + 1);
@@ -335,7 +337,12 @@ describe('applyEdits on a canned store: the dirty set and StoreFull (SP5a spec ย
     expect(entry(d, 5, 70, 5)).toBe(NO_ENTRY);
     expect(d.size).toBe(0);
     expect(cols(r.entryCols)).toEqual([]);
-    expect(versions(s, -2, -2, 5)).toEqual(vs);
+    const want = vs.slice();
+    const at = (cx: number, cz: number): number => 3 * (5 * (cz + 2) + (cx + 2));
+    want[at(0, 0)]! += 1;
+    want[at(0, 0) + 1]! += 1;
+    want[at(1, 0)]! += 1;
+    expect(versions(s, -2, -2, 5)).toEqual(want);
     // The light of the whole store still equals a fresh lightRegion over the edited 3 ร— 3.
     expectLightFresh(s, 0, 0);
   });

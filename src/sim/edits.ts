@@ -12,7 +12,11 @@
  *    proto's value, removes it; D20).
  * 3. `publish()` once per written column at the end.
  * A `StoreFull` refuses the batch (`'full'`): every writer the batch opened rolls back (no allocation), each edited
- * block column's heightmaps are rescanned, and the DiffStore is restored from `prev`.
+ * block column's heightmaps are rescanned, and the DiffStore is restored from `prev`. The content is back to what
+ * it was, but a MESH in flight may have read the replaced slots meanwhile (§2.1 lets it run beside an edit, "dropped by
+ * its versions"): the `blockVersion` of each column whose block write began and the `lightVersion` of each column whose
+ * light write began are bumped after the restore, and `dirty` keeps the columns gathered so far, so such a MESH is
+ * dropped and the columns are remeshed.
  *
  * The dirty set (§2.6) is every column whose padded view holds a changed voxel: the edited column, its neighbours whose
  * one-voxel ring holds the edited voxel, and from the relight report each column with a changed section plus the
@@ -46,8 +50,9 @@ export type EditRefusal = 'unloaded' | 'changed' | 'noProto' | 'full';
 
 /**
  * A batch's outcome (§2.1). `prev[k]` is edit k's DiffStore entry before it and `next[k]` the entry it left (`NO_ENTRY`
- * for none; a refused batch leaves both at the entries it found); `dirty` the colKeys to remesh (§2.6), `entryCols`
- * the colKeys holding entries after the batch. Every array is fresh (transferable).
+ * for none; a refused batch leaves both at the entries it found); `dirty` the colKeys to remesh (§2.6; empty on a
+ * refusal before any write, the columns whose views held a rolled-back write on `'full'`), `entryCols` the colKeys
+ * holding entries after the batch. Every array is fresh (transferable).
  */
 export interface EditResult {
   readonly prev: Uint32Array;
@@ -302,6 +307,9 @@ export function applyEdits(store: VoxelStore, diffs: DiffStore, s: EditScratch, 
       /** Edits whose writes began (heightmaps to rescan on a rollback), and edits whose entry was recorded. */
       let written = 0;
       let recorded = 0;
+      /** The writers whose block or light writes began: their versions are bumped on a rollback. */
+      const wroteBlocks: EditWriter[] = [];
+      const wroteLight: EditWriter[] = [];
       try {
         for (let k = 0; k < n; k++) {
           const e = edits[k]!;
@@ -332,7 +340,11 @@ export function applyEdits(store: VoxelStore, diffs: DiffStore, s: EditScratch, 
           const at = (lz << 4) | lx;
           const oldLb = aux.lightBlocking[at]!;
           const fromY = Math.min(319, Math.max(e.y, aux.worldSurface[at]! - 1, aux.oceanFloor[at]! - 1, aux.motionBlocking[at]! - 1, oldLb - 1));
+          // The dirty set gains each write's columns before the write, so a rollback remeshes what a MESH may have read.
+          // The edited column and the neighbours whose ring holds the voxel.
+          addWithEdges(dirty, cx, cz, edgesOf(lx, lz));
           written = k + 1;
+          if (!wroteBlocks.includes(w)) wroteBlocks.push(w);
           w.replaceBlocks(sy, s.blocks, s.fluid);
           w.setDiffFlag();
           patchHeightmaps(f.block, f.fluid, aux, lx, lz, fromY);
@@ -342,20 +354,20 @@ export function applyEdits(store: VoxelStore, diffs: DiffStore, s: EditScratch, 
           const cache = s.cache;
           cache.open(store, cx, cz);
           const report = relight(cache, s.relight, ((e.y + ROW0) * W + 16 + lz) * W + 16 + lx, { state: oldState, fluid: oldFluid, lightBlocking: oldLb + ROW0 });
+          // The relight's columns: each with a changed section, and the neighbours its border and corner bits face.
+          for (let c = 0; c < COLUMNS; c++) {
+            if (report.sections[c] !== 0 || report.edges[c] !== 0) addWithEdges(dirty, cx + (c % 3) - 1, cz + ((c / 3) | 0) - 1, report.edges[c]!);
+          }
           for (let m = 0; m < cache.copiedCount(); m++) {
             const key = cache.copiedAt(m);
             const c = (key / SECTIONS) | 0;
             const ly = key - c * SECTIONS;
             if (((report.sections[c]! >>> ly) & 1) === 0) continue;
-            open(cx + (c % 3) - 1, cz + ((c / 3) | 0) - 1).replaceLight(ly, cache.copy(key));
+            const lw = open(cx + (c % 3) - 1, cz + ((c / 3) | 0) - 1);
+            if (!wroteLight.includes(lw)) wroteLight.push(lw);
+            lw.replaceLight(ly, cache.copy(key));
           }
           relightMs += now() - r0;
-
-          // The dirty set: the edited column, the neighbours whose ring holds the voxel, the relight's columns.
-          addWithEdges(dirty, cx, cz, edgesOf(lx, lz));
-          for (let c = 0; c < COLUMNS; c++) {
-            if (report.sections[c] !== 0 || report.edges[c] !== 0) addWithEdges(dirty, cx + (c % 3) - 1, cz + ((c / 3) | 0) - 1, report.edges[c]!);
-          }
 
           // The DiffStore (D20): a revert, or a set equal to the generated value, removes the entry.
           prev[k] = diffs.get(cx, cz, sy, idx);
@@ -384,7 +396,10 @@ export function applyEdits(store: VoxelStore, diffs: DiffStore, s: EditScratch, 
           if (prev[k] === NO_ENTRY) diffs.remove(cx, cz, sy, idx);
           else diffs.set(cx, cz, sy, idx, prev[k]!);
         }
-        dirty.clear();
+        // After the restore, so a MESH that read the batch's slots holds the old versions and is dropped (§2.1).
+        const table = store.table;
+        for (const w of wroteBlocks) table.bumpBlockVersion(table.find(w.cx, w.cz));
+        for (const w of wroteLight) table.bumpLightVersion(table.find(w.cx, w.cz));
         refused = 'full';
       }
     }
