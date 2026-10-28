@@ -142,7 +142,7 @@ world-imaginer-voxel/          (repository root)
                                 finalHeightmaps.ts writes a final column's WORLD_SURFACE, MOTION_BLOCKING, OCEAN_FLOOR and LIGHT_BLOCKING)
     textures/painters/*.ts palette.ts layers.ts resourcePack.ts flatColors.ts   pure RGBA byte painters + manifest parsing;
                                 flatColors.ts (SP4a): the flat block colours of SP4a's 1 × 1 texture array and the Voxels palette
-    light/initial.ts relight.ts queue.ts           L2
+    light/initial.ts relight.ts (SP5a) queue.ts    L2
     mesh/greedy.ts cross.ts fluid.ts shapes.ts packing.ts connectivity.ts lodTile.ts column.ts builder.ts faces.ts   L2 (packing exports PACK_LAYOUT; render/materials turns it into #defines;
                                 shapes.ts meshes non-cube states, deriving fence/pane/stair connections from neighbours; SP4a: column.ts, one column's
                                 sections → the column payload; builder.ts, the growable per-pass buffers; faces.ts, the face geometry, per-vertex light

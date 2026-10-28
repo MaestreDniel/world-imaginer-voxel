@@ -1117,6 +1117,7 @@ describe('master spec amendments (SP5a §9)', () => {
   /** [§1 entry head, the token its entry holds, the file on disk]; Tasks 2, 7-10, 20, 22, 23, 26-28 and 31 append theirs. */
   const SP5A_MODULES: Array<[head: RegExp, token: string, file: string]> = [
     [/^\s+blocks\/kinds\.ts /, 'tags.ts (SP5a)', 'src/world/blocks/tags.ts'],
+    [/^\s+light\/initial\.ts /, 'relight.ts (SP5a)', 'src/light/relight.ts'],
   ];
 
   test('the split', () => {
