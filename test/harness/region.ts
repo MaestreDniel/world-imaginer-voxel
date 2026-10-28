@@ -7,9 +7,12 @@
  * (`cache.ts`). The stages run one after the other, each over its own set, which honours the coordinator's
  * prerequisite rules (D needs its 3 × 3 at Proto, L its 3 × 3 at Decorated, MESH its 3 × 3 Published). The result is
  * read through a `RegionView`, which reads the store per column and never stitches the region into one array.
+ * SP5a (spec §6.3): `diff` hands each column's edit entries to its D (`fillColumnD`'s overlay, spec §2.5), on 1 thread
+ * and without the cache only.
  */
 import { performance } from 'node:perf_hooks';
 import { Worker } from 'node:worker_threads';
+import { colKey } from '../../src/core/coords';
 import { createFnv64, hex64, type Fnv64 } from '../../src/core/hash';
 import { MEDIUM } from '../../src/core/params/graphicsPresets';
 import type { Params } from '../../src/core/params/schema';
@@ -21,6 +24,7 @@ import { createLightScratch, type LightScratch } from '../../src/light/initial';
 import { fillColumnT, regionHash } from '../../src/metrics/region';
 import { createMeshScratch, type ColumnMeshPayload } from '../../src/mesh/column';
 import type { MeshOptions } from '../../src/mesh/greedy';
+import type { ColumnDiff } from '../../src/world/store/api';
 import { protoAt, STATUS_PUBLISHED } from '../../src/world/store/columnTable';
 import { createStore, type AuxView, type ColumnView, type VoxelStore } from '../../src/world/store/store';
 import { fillColumnD, fillColumnL, meshColumnJob } from '../../src/workers/worldJobs';
@@ -68,6 +72,12 @@ export interface GenRegionOptions {
   readonly workerDir?: string;
   /** The mesher's options for 'MESH' (default the Medium preset's AO and smooth light, as the page's jobs). */
   readonly meshOptions?: MeshOptions;
+  /**
+   * Each column's edit entries by `colKey` (SP5a spec §6.3), overlaid by its D (`fillColumnD`, spec §2.5); a column
+   * absent from the map runs D without a diff. Needs `threads: 1` and no `cache`: the 4-thread D runs in
+   * `regionWorker.ts` with no diff, and the dump's key ignores it.
+   */
+  readonly diff?: ReadonlyMap<number, ColumnDiff>;
 }
 
 /**
@@ -408,11 +418,13 @@ async function drainThreaded(
 
 const NEVER = (): boolean => false;
 
-/** The in-process stage functions over one thread's scratch. */
-function runInProcess(store: VoxelStore, ctx: GenContext, stage: Stage, cx: number, cz: number, light: () => LightScratch): void {
+/** The in-process stage functions over one thread's scratch; D overlays the column's entries of `diff`, if any. */
+function runInProcess(
+  store: VoxelStore, ctx: GenContext, stage: Stage, cx: number, cz: number, light: () => LightScratch, diff: ReadonlyMap<number, ColumnDiff> | undefined,
+): void {
   if (stage === 'T') fillColumnT(store, ctx, cx, cz, NEVER);
   else if (stage === 'D') {
-    if (!fillColumnD(store, ctx, cx, cz, NEVER)) throw new Error(`genRegion: D of (${cx}, ${cz}) stopped`);
+    if (!fillColumnD(store, ctx, cx, cz, NEVER, diff?.get(colKey(cx, cz)) ?? null)) throw new Error(`genRegion: D of (${cx}, ${cz}) stopped`);
   } else if (fillColumnL(store, cx, cz, light(), NEVER) === null) throw new Error(`genRegion: L of (${cx}, ${cz}) stopped`);
 }
 
@@ -426,6 +438,7 @@ const STAGE_MSG: Readonly<Record<Stage, RegionColumnMsg['type']>> = Object.freez
  */
 export async function genRegion(o: GenRegionOptions): Promise<RegionResult> {
   if (o.threads !== 1 && o.threads !== 4) throw new Error(`genRegion: threads ${String(o.threads)} (1 or 4)`);
+  if (o.diff !== undefined && (o.threads !== 1 || o.cache === true)) throw new Error('genRegion: diff needs threads 1 and no cache');
   if (!UP_TO.includes(o.upTo)) throw new Error(`genRegion: upTo '${String(o.upTo)}' (T, D, L or MESH)`);
   checkSize('genRegion', o.w, o.h);
   const region: Rect = { cx0: o.cx0, cz0: o.cz0, w: o.w, h: o.h };
@@ -477,7 +490,7 @@ export async function genRegion(o: GenRegionOptions): Promise<RegionResult> {
         } else {
           for (const [cx, cz] of cols) {
             const c0 = performance.now();
-            runInProcess(store, ctx!, stage, cx, cz, light);
+            runInProcess(store, ctx!, stage, cx, cz, light, o.diff);
             stageMs[(cz - r.cz0) * r.w + (cx - r.cx0)] = performance.now() - c0;
           }
           perThread[0]! += cols.length;

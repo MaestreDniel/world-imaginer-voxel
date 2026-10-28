@@ -71,7 +71,8 @@
  * walk-mode teleport, SP5b's saved places, the SP4b cut line's conditional); the pins of §3.7, §4.1, §5.1, §5.6 and
  * risk 1 take §9's rewordings in place. §1 names each SP5a module in its entry, which exists (`SP5A_MODULES`, a row
  * added by each task that adds a module); §6.4's E1-E6 row gives edit→unload→reload's session part to SP5a and its
- * flush part to SP5b (the L3 and E5 commit).
+ * flush part to SP5b (the L3 and E5 commit); §1's test entry names `metrics/edit.metric.ts` and
+ * `integration/edit.test.ts`.
  */
 import { existsSync, readdirSync, readFileSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
@@ -1115,7 +1116,7 @@ describe('master spec amendments (SP4c §12)', () => {
 });
 
 describe('master spec amendments (SP5a §9)', () => {
-  /** [§1 entry head, the token its entry holds, the file on disk]; Tasks 2, 7-10, 20, 22, 23, 26-28, 31 and 36 append theirs. */
+  /** [§1 entry head, the token its entry holds, the file on disk]; Tasks 2, 7-10, 20, 22, 23, 26-28, 31, 36 and 38 append theirs. */
   const SP5A_MODULES: Array<[head: RegExp, token: string, file: string]> = [
     [/^\s+blocks\/kinds\.ts /, 'tags.ts (SP5a)', 'src/world/blocks/tags.ts'],
     [/^\s+light\/initial\.ts /, 'relight.ts (SP5a)', 'src/light/relight.ts'],
@@ -1134,7 +1135,8 @@ describe('master spec amendments (SP5a §9)', () => {
     [/^\s+ui\/world\/\* /, 'buildHud.ts blockHistory.ts (SP5a)', 'src/ui/world/blockHistory.ts'],
     [/^\s+renderer\.ts /, 'selection.ts (SP5a)', 'src/render/selection.ts'],
     [/^\s+ui\/shell\.ts /, 'palette.ts (SP5a)', 'src/ui/palette.ts'],
-    [/^\s+test\/ unit\/ metrics\//, '(SP5a: metrics/edit.metric.ts', 'test/metrics/edit.metric.ts'],
+    [/^\s+test\/ unit\/ metrics\//, '(SP5a: metrics/edit.metric.ts, integration/edit.test.ts)', 'test/metrics/edit.metric.ts'],
+    [/^\s+test\/ unit\/ metrics\//, '(SP5a: metrics/edit.metric.ts, integration/edit.test.ts)', 'test/integration/edit.test.ts'],
   ];
 
   test('the split', () => {

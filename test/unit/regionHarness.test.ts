@@ -1,17 +1,20 @@
 import { readdirSync, rmSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
 import { afterAll, describe, expect, test } from 'vitest';
+import { colKey } from '../../src/core/coords';
 import { hex64 } from '../../src/core/hash';
 import { seedFromInput } from '../../src/core/seed';
 import { genKey, stageHashes } from '../../src/core/stage/hash';
-import { genRegionInProcess, regionHash } from '../../src/metrics/region';
+import { fillColumnT, genRegionInProcess, regionHash } from '../../src/metrics/region';
 import { createMeshScratch, meshColumnPayload, payloadProblem } from '../../src/mesh/column';
-import { AIR, DEEPSLATE, DIRT, STONE } from '../../src/world/blocks/index';
-import { WATER_SOURCE } from '../../src/world/blocks/fluid';
+import { AIR, DEEPSLATE, DIRT, STONE, TORCH } from '../../src/world/blocks/index';
+import { NO_FLUID, WATER_SOURCE } from '../../src/world/blocks/fluid';
 import { FACE_DOWN, FACE_EAST, FACE_UP } from '../../src/world/blocks/kinds';
+import type { ColumnDiff } from '../../src/world/store/api';
 import { allocAux } from '../../src/world/store/aux';
 import { finalAt, protoAt, REC_AUX_A, REC_AUX_B } from '../../src/world/store/columnTable';
 import { createStore, type VoxelStore } from '../../src/world/store/store';
+import { fillColumnD } from '../../src/workers/worldJobs';
 import { regionCachePath, srcKey, type RegionCacheHeader } from '../harness/cache';
 import { ctxFor, paramsWith } from '../harness/gen';
 import { bruteFaces, meshFaceCounts } from '../harness/refs';
@@ -362,6 +365,55 @@ describe('genRegion up to D, L and MESH (SP4a spec §9.2, ruling P31)', () => {
     a.tintTH[9] = a.tintTH[9]! ^ 1;
     expect(l.view.litHash()).not.toBe(lit0);
     a.tintTH[9] = a.tintTH[9]! ^ 1;
+  });
+});
+
+describe('genRegion with a diff (SP5a spec §6.3)', () => {
+  const base: GenRegionOptions = { seed: '42', params: paramsWith(), cx0: 5, cz0: -3, w: 1, h: 1, upTo: 'D', order: 'spiral', threads: 1 };
+  const val = (state: number, fluid = NO_FLUID): number => (state << 8) | fluid;
+  /** Voxels of column (5, −3) (x 80 … 95, z −48 … −33) and their final values, in canonical order (sy, then idx). */
+  const ENTRIES: ReadonlyArray<readonly [x: number, y: number, z: number, value: number]> = [
+    [83, 0, -41, val(AIR)], [81, 86, -47, val(AIR, WATER_SOURCE)], [84, 100, -44, val(STONE)], [81, 200, -47, val(TORCH)],
+  ];
+  const DIFF: ColumnDiff = {
+    sy: Uint8Array.from(ENTRIES, ([, y]) => (y + 64) >> 4),
+    idx: Uint16Array.from(ENTRIES, ([x, y, z]) => (((y + 64) & 15) << 8) | ((z & 15) << 4) | (x & 15)),
+    value: Uint32Array.from(ENTRIES, (e) => e[3]),
+  };
+  const NEVER = (): boolean => false;
+
+  test('genRegion with a diff equals the overlay of D', async () => {
+    const r = await genRegion({ ...base, diff: new Map([[colKey(5, -3), DIFF]]) });
+    const plain = await genRegion(base);
+    // The overlay by hand: T over the 3 × 3, then the centre's D with the diff.
+    const ref = createStore({ shared: false, maxBlockBytes: 16 * MiB, maxByteBytes: 16 * MiB });
+    const ctx = ctxFor('42');
+    for (let dz = -1; dz <= 1; dz++) for (let dx = -1; dx <= 1; dx++) fillColumnT(ref, ctx, 5 + dx, -3 + dz, NEVER);
+    expect(fillColumnD(ref, ctx, 5, -3, NEVER, DIFF)).toBe(true);
+    const got = litRegionHash(r.view.store, 5, -3, 1, 1);
+    expect(got).toBe(litRegionHash(ref, 5, -3, 1, 1));
+    expect(got, 'the entries change the final').not.toBe(litRegionHash(plain.view.store, 5, -3, 1, 1));
+    // Each entry reads back from the final, while the proto keeps the generated value (D places nothing yet).
+    const proto = r.view.store.proto(5, -3)!;
+    for (const [x, y, z, value] of ENTRIES) {
+      expect(val(r.view.block(x, y, z), r.view.fluid(x, y, z)), `(${x}, ${y}, ${z})`).toBe(value);
+      expect(val(proto.block(x & 15, y, z & 15), proto.fluid(x & 15, y, z & 15)), `(${x}, ${y}, ${z})'s proto`).toBe(val(plain.view.block(x, y, z), plain.view.fluid(x, y, z)));
+    }
+    // The overlay sets the column's diff flag.
+    expect([r.view.store.diffFlag(5, -3), plain.view.store.diffFlag(5, -3)]).toEqual([true, false]);
+    // Up to L, the diff's torch lights its voxel (the flag opens L's block-light scan).
+    const lit = await genRegion({ ...base, upTo: 'L', diff: new Map([[colKey(5, -3), DIFF]]) });
+    const dark = await genRegion({ ...base, upTo: 'L' });
+    expect(lit.view.light(81, 200, -47) & 15).toBeGreaterThan(0);
+    expect(dark.view.light(81, 200, -47) & 15).toBe(0);
+  });
+
+  test('a diff with threads: 4, or with cache: true, throws', async () => {
+    const diff = new Map([[colKey(5, -3), DIFF]]);
+    await expect(genRegion({ ...base, threads: 4, diff })).rejects.toThrow('genRegion: diff needs threads 1 and no cache');
+    await expect(genRegion({ ...base, cache: true, diff })).rejects.toThrow('genRegion: diff needs threads 1 and no cache');
+    // The same options without the diff run.
+    expect((await genRegion({ ...base, cache: false })).view.store.diffFlag(5, -3)).toBe(false);
   });
 });
 
