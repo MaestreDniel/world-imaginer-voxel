@@ -1068,7 +1068,8 @@ describe('master spec amendments (SP4c §12)', () => {
     const apply = text.split('\n').find((l) => l.startsWith('- terrain Apply: first visible change near the player'));
     expect(apply, 'no terrain Apply line in §7').toBeDefined();
     expect(apply).toContain('≤ 0.5 s (recorded from SP4c\'s bench; gated by SP10)');
-    expect((THRESHOLDS as Record<string, unknown>).G2, 'G2 has no gated part before SP10').toBeUndefined();
+    // SP5a gates G2's edit part only (SP5a spec §6.2); the Apply part has no gated part before SP10.
+    expect(Object.keys(THRESHOLDS.G2 ?? {}), 'G2 has no gated Apply part before SP10').toEqual(['editVisibleP95']);
   });
 
   test('§1\'s test entry lists SP4c\'s test files in their own parentheses, which exist (SP4c spec §8.5, §12)', () => {
@@ -1285,6 +1286,19 @@ describe('master spec amendments (SP5a §9)', () => {
     const e = text.split('\n').find((l) => l.startsWith('| E1-E6 |'));
     expect(e, 'no E1-E6 row in §6.4').toBeDefined();
     expect(e).toContain('edit→unload→reload returns the latest diff (the session part SP5a, the flush part SP5b)');
+  });
+
+  test('§6.4\'s G2 row and §4.12\'s Target: the edit part gated from SP5a\'s bench leg L10 (SP5a spec §6.2, D26, §9)', () => {
+    const g2 = text.split('\n').find((l) => l.startsWith('| G2 |'));
+    expect(g2, 'no G2 row in §6.4').toBeDefined();
+    expect(g2).toContain('edit → visible p95 (the edit part gated from SP5a\'s bench leg L10)');
+    expect(g2, 'the G2 row\'s edit target').toContain('≤ 50 ms');
+    const at412 = text.indexOf('### 4.12 ');
+    const s412 = text.slice(at412, text.indexOf('### 4.13 ', at412));
+    const target = s412.split('\n').find((l) => l.startsWith('Target:'));
+    expect(target, 'no `Target:` line in §4.12').toBeDefined();
+    expect(target).toContain('(SP5a: gated from the bench\'s L10)');
+    expect(THRESHOLDS.G2?.editVisibleP95, 'THRESHOLDS.G2.editVisibleP95').toEqual({ max: 50, activeFrom: 'SP5a' });
   });
 
   test('§1 names each SP5a module in its entry, which exists', () => {

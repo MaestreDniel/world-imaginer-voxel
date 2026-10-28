@@ -1,5 +1,5 @@
 {
-  "sha256": "a1fd94750707811e5338ff251494f4d6cb1b86d876d05ce4e64af4caa44efb0d",
+  "sha256": "244c9307e9115e18aed58b75e5e8e1b65555705cd7f559463ca1332c54b9779c",
   "canonical": {
     "startedSps": [
       "SP0",
@@ -264,6 +264,12 @@
         "mediumStreamP95": {
           "activeFrom": "SP4b",
           "max": 16.7
+        }
+      },
+      "G2": {
+        "editVisibleP95": {
+          "activeFrom": "SP5a",
+          "max": 50
         }
       },
       "L1": {

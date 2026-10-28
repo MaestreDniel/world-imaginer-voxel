@@ -100,10 +100,10 @@ export const THRESHOLDS: ThresholdTable = {
   // regenerated neighbour (`edit.metric.ts`, `.out/E5.session.json`); SP5b adds the flush part (`E5.flush`).
   E5: { sessionStale: { max: 0, activeFrom: 'SP5a' }, sessionLightMismatches: { max: 0, activeFrom: 'SP5a' } },
   // SP4a spec §9.1, §9.5 (D24): G1's three Medium cells on the static world, from the Chrome flight on the Iris Xe
-  // (`g1.metric.ts`, `flight-iris-chrome.json`, re-measured on SP4c's code into `assets/sp4c/`). SP4b spec §8.2, §8.4
+  // (`g1.metric.ts`, `flight-iris-chrome.json`, re-measured on SP5a's code into `assets/sp5a/`). SP4b spec §8.2, §8.4
   // (D23): the six Medium streaming cells, from the committed Iris Xe Chrome bench files (`G1.streaming`, re-read from
-  // `assets/sp4c/`). SP4c spec §8.2, §8.4 (D22): the three Medium live cells over the bench's Apply, undo and teleport
-  // legs, from `assets/sp4c/bench-iris-chrome.json`'s `live` block (`G1.live`).
+  // `assets/sp5a/`). SP4c spec §8.2, §8.4 (D22): the three Medium live cells over the bench's Apply, undo and teleport
+  // legs, from `assets/sp5a/bench-iris-chrome.json`'s `live` block (`G1.live`).
   G1: {
     mediumStaticP95: { max: 16.7, activeFrom: 'SP4a' }, mediumStaticDrawCalls: { max: 100, activeFrom: 'SP4a' }, mediumStaticMainP95: { max: 6, activeFrom: 'SP4a' },
     mediumStreamP95: { max: 16.7, activeFrom: 'SP4b' },
@@ -116,6 +116,10 @@ export const THRESHOLDS: ThresholdTable = {
     mediumLiveOver33: { max: 0, activeFrom: 'SP4c' },
     mediumLiveGpuMB: { max: 150, activeFrom: 'SP4c' },
   },
+  // SP5a spec §6.2 (D26): G2's edit part, the post → the frame the edited column's new mesh is shown, over the bench's
+  // edit leg L10, from `assets/sp5a/bench-iris-chrome.json`'s `edit` block (`g1.metric.ts`, `G2.edit`). G2's Apply part
+  // stays SP10's.
+  G2: { editVisibleP95: { max: 50, activeFrom: 'SP5a' } },
   // SP3e spec §5.3 (D16): the master's diagnostics on the drafts, recorded on every tier from SP3e (`.out/Z1-Z3.json`),
   // gated on the quick and full tiers once SP12 starts.
   Z1: {

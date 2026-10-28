@@ -1187,7 +1187,7 @@ MeshPhysicalMaterial transmission and Reflector are never used.
 4. The coordinator queues priority −1000 mesh jobs with a new `meshSeq`.
 5. Upload happens next frame.
 
-Target: edit → visible ≤ 50 ms p95, measured in the HUD.
+Target: edit → visible ≤ 50 ms p95, measured in the HUD (SP5a: gated from the bench's L10).
 
 ### 4.13 Persistence flow
 
@@ -1526,7 +1526,7 @@ Metric values are written to `test/metrics/.out/*.json` for trends. The harness 
 | Z4 | large_biomes: mean surface-biome patch area vs default | ≥ 8× |
 | P1 | stage bench vs baselines | ≤ +30% regression; targets per section 7 |
 | G1 | bench JSON at Medium on the reference Iris Xe, and at High on the reference RTX 3060 Mobile (asserted from the committed artifacts, which record the WebGL renderer string). SP4a gates the Medium p95, draw-call and main-thread cells on the static world from the `?flight` artifact (frame times snapped to the display interval); SP4b gates them while streaming with the other cells (amended by SP4a); SP4b gates the Medium cells while streaming from the `?bench=medium` artifacts (no frame > 33 ms as snapped frame times, frames with a structural operation included; the fill as the first entry's reveal with 4 workers; the GPU estimate as the section geometry, the texture array, the lightmap, the sky and the drawing buffer, the SP4b spec §8.4) and re-asserts SP4a's static cells on a re-measured `?flight`; SP4c gates the Medium live cells (p95, no frame > 33 ms, GPU estimate) over the bench's Apply, undo and teleport legs, and re-asserts SP4a's and SP4b's cells on SP4c's code; on the RTX 3060 Mobile, no frame > 33 ms and p95 ≤ 16.7 ms at Medium are checked at SP4b's exit; only the High-preset parts (p95 at High, JS heap + SAB ≤ 450 MB) wait for SP11's High preset | Medium: p95 ≤ 16.7 ms, no frame > 33 ms while streaming, draw calls ≤ 100, RD12 fill ≤ 6 s with the 4-worker cap, the first entry reveals the whole RD at once behind the loading screen (the user's decision of 2026-10-23), GPU estimate ≤ 150 MB, main thread ≤ 6 ms p95. High: p95 ≤ 16.7 ms, no frame > 33 ms while streaming, JS heap + SAB ≤ 450 MB (draw calls recorded, not gated) |
-| G2 | edit → visible p95 / terrain Apply: first visible change near the player (SP4c records the Apply part from the bench; SP10 gates it) | ≤ 50 ms / ≤ 0.5 s |
+| G2 | edit → visible p95 (the edit part gated from SP5a's bench leg L10) / terrain Apply: first visible change near the player (SP4c records the Apply part from the bench; SP10 gates it) | ≤ 50 ms / ≤ 0.5 s |
 | M1 | block-state registry: used states / shape boxes on the 1/8 grid / `rotateState` 4× identity and `withProp` round-trip / `stateIds.lock.json` entries unchanged | ≤ 4096 / 100 % / exact / exact |
 | AU1 | procedural synthesis determinism: buffer hash per (seed, key, variant) over 2 runs and 2 workers; no NaN/clipping (peak ≤ 0.99) | identical / 0 |
 | AU2 | voices under the worst-case scene (waterfall field + river + lava lake + footsteps) | voices playing ≤ preset cap (the cap counts positional emitters and one-shot SFX; music and ambience beds are exempt); clustering yields exactly 1 candidate per 8-block cluster per kind, and the nearest candidates up to the cap play |
