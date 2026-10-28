@@ -21,7 +21,7 @@ import { WORLD_MAP_BPP, worldMapView } from '../../src/ui/world/mapOverlay';
 import { AIR, STONE } from '../../src/world/blocks/index';
 import { createReloader, createWorldUrl, worldHash, type HereState } from '../../src/ui/world/reload';
 import {
-  countPendingTimers, countTileCalls, createAim, createRdControl, createUndoNotice, createWorldNotices, everyFrameUntil, failBeforeReveal, flushOnPageHide, handleContextLoss,
+  countPendingTimers, countTileCalls, createAim, createClickQueue, createRdControl, createUndoNotice, createWorldNotices, everyFrameUntil, failBeforeReveal, flushOnPageHide, handleContextLoss,
   handleStreamEvent, helpChange, installWiTest, mapKey, offerLowerRd, onDriverStatus, onSimFailure, rdShownOnLoad, releaseOnFailure, reloadRd, runTeardown, stopAfterFailure,
   UNDO_NOTICE_MS, type WiTest, type WiTestPage,
 } from '../../src/ui/world/worldPage';
@@ -1310,5 +1310,59 @@ describe('createAim: the DDA and the outline (SP5a spec §3.5, §6.2; Task 23 re
     expect(r.aim.hit.hit).toBe(true);
     expect([...r.aim.box]).toEqual(BOX);
     expect(r.calls).toEqual(['hide']);
+  });
+});
+
+describe('createClickQueue: the queued clicks run in the aim (SP5a spec §4.1, §4.2)', () => {
+  /** The rig of the aim above: stone at (0, 68, 0) under an eye looking straight down; `setStone(false)` removes it. */
+  function rig() {
+    let stone = true;
+    const posted: unknown[] = [];
+    const world = { origin: { x: 0, y: 0, z: 0 }, setOutline: () => {}, hideOutline: () => {} };
+    const fly = { x: 0.5, y: 70.5, z: 0.5, yaw: 0, pitch: -90 };
+    const read = {
+      blockAt: (x: number, y: number, z: number) => (stone && x === 0 && y === 68 && z === 0 ? STONE : AIR),
+      fluidAt: () => 0,
+    };
+    const clicks = createClickQueue({ post: (e) => { posted.push(e); } });
+    const aim = createAim({ fly, world: world as never, locked: () => true, hud: true, clicks });
+    return { aim, clicks, read, posted, setStone: (on: boolean) => { stone = on; } };
+  }
+  const BREAK = { x: 0, y: 68, z: 0, op: 'set', value: AIR << 8, expect: STONE << 8 };
+
+  test('an LMB press posts one break of the voxel aimed at the next frame, `expect` read then; later frames post nothing', () => {
+    const r = rig();
+    r.clicks.push(0);
+    expect(r.posted).toEqual([]);
+    r.aim.aim(r.read, false);
+    expect(r.posted).toEqual([BREAK]);
+    r.aim.aim(r.read, false);
+    expect(r.posted).toHaveLength(1);
+  });
+
+  test('two presses in one frame post two breaks with the same `expect` (the sim refuses the second as changed)', () => {
+    const r = rig();
+    r.clicks.push(0);
+    r.clicks.push(0);
+    r.aim.aim(r.read, false);
+    expect(r.posted).toEqual([BREAK, BREAK]);
+  });
+
+  test('a paused frame drops the queue unrun; a miss empties it; RMB and MMB post nothing yet', () => {
+    const r = rig();
+    r.clicks.push(0);
+    r.aim.aim(r.read, true);
+    r.aim.aim(r.read, false);
+    r.clicks.push(1);
+    r.clicks.push(2);
+    r.aim.aim(r.read, false);
+    expect(r.posted).toEqual([]);
+    r.setStone(false);
+    r.clicks.push(0);
+    r.aim.aim(r.read, false);
+    expect(r.aim.hit.hit).toBe(false);
+    r.setStone(true);
+    r.aim.aim(r.read, false);
+    expect(r.posted).toEqual([]);
   });
 });

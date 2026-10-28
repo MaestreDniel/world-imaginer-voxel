@@ -105,6 +105,7 @@ import { createUploadBudget } from '../../engine/uploadBudget';
 import { StoreFullError, WorkerFailed, createBrowserPool, poolSize, type WorkerPool } from '../../engine/workerPool';
 import { SPEED_DEFAULT, applyCameraRotation, look, lookVectorInto, stepSpeed, type FlyState } from '../../player/fly';
 import { attachInput, isTextEntry } from '../../player/input';
+import { breakAt } from '../../player/interaction';
 import { DEFAULT_KEYMAP, type Action } from '../../player/keymap';
 import { REACH_FLY, castRay, createRayHit, type RayHit } from '../../player/raycast';
 import { createFpsLimiter, type FpsLimiter } from '../../render/fpsLimiter';
@@ -112,6 +113,7 @@ import type { FrameState } from '../../render/frameState';
 import { createWorldRenderer, type GpuEstimate, type WorldRenderer } from '../../render/renderer';
 import { createSectionRendererCounts, selectSectionRenderer, type SectionRendererKind } from '../../render/sectionRenderer';
 import { outlineBounds } from '../../render/selection';
+import type { Edit } from '../../workers/protocol';
 import { SIM_THREAD } from '../../world/store/reclaim';
 import { createStore, type VoxelStore } from '../../world/store/store';
 import { renderErrorScreen } from '../capabilityReport';
@@ -1030,6 +1032,44 @@ export function offerLowerRd(notices: Pick<WorldNotices, 'slow'>, rd: number, co
   notices.slow(rd, lower, () => control.apply(lower));
 }
 
+/** The most mouse buttons queued between two rendered frames; a press past them is dropped. */
+const CLICK_QUEUE_CAP = 16;
+
+/**
+ * The mouse buttons pressed since the last rendered frame (SP5a spec §4.1, D6): `onButton` only queues, and the page's
+ * aim runs the queue in the frame's second read section against the target aimed then, so a click never reads the store
+ * outside a read section. LMB breaks (`breakAt`), its edit posted through the edit path; RMB and MMB are dropped until
+ * the hotbar gives them a slot (Task 26). A refused or missed click does nothing.
+ */
+export interface ClickQueue {
+  push(b: 0 | 1 | 2): void;
+  /** Runs every queued button against `hit` and empties the queue. Allocates nothing while it is empty. */
+  run(hit: RayHit, read: Pick<VoxelStore, 'blockAt' | 'fluidAt'>): void;
+  /** Empties the queue unrun (a paused frame: the help, the palette, map mode B). */
+  clear(): void;
+}
+
+export function createClickQueue(o: { post(edit: Edit): void }): ClickQueue {
+  const buttons = new Uint8Array(CLICK_QUEUE_CAP);
+  let n = 0;
+  return {
+    push(b) {
+      if (n < CLICK_QUEUE_CAP) buttons[n++] = b;
+    },
+    run(hit, read) {
+      for (let i = 0; i < n; i++) {
+        if (buttons[i] !== 0) continue;
+        const edit = breakAt(hit, read);
+        if (edit !== null) o.post(edit);
+      }
+      n = 0;
+    },
+    clear() {
+      n = 0;
+    },
+  };
+}
+
 /** The page's aim: the frame's DDA hit, and the step the frame step runs inside its second read section. */
 export interface Aim {
   /** The last rendered frame's hit (`hit` false: no target). */
@@ -1047,7 +1087,8 @@ export interface Aim {
  * the DDA from the eye along the look (`lookVectorInto`; reach `REACH_FLY` until the walk mode), then the outline around
  * the hit (`outlineBounds`: the cell, or a box state's box), relative to the floating origin, computed on every hit;
  * then the outline set to that box, or hidden: while paused, while the pointer is free, with no target, and without the
- * HUD (captures, panoramas, the bench). The queued clicks run between the two (Task 25). Allocates nothing.
+ * HUD (captures, panoramas, the bench). The queued clicks (`clicks`) run between the two against the hit, a miss
+ * included (it empties the queue); a paused frame drops them unrun. Allocates nothing.
  */
 export function createAim(o: {
   readonly fly: Pick<FlyState, 'x' | 'y' | 'z' | 'yaw' | 'pitch'>;
@@ -1056,6 +1097,8 @@ export function createAim(o: {
   locked(): boolean;
   /** The page's HUD option (`WorldPageOptions.hud`). */
   readonly hud: boolean;
+  /** The queued mouse buttons (the streaming route's; the bench has none). */
+  readonly clicks?: Pick<ClickQueue, 'run' | 'clear'>;
 }): Aim {
   const { fly, world } = o;
   const hit = createRayHit();
@@ -1067,6 +1110,8 @@ export function createAim(o: {
     aim(read, paused) {
       lookVectorInto(dir, fly.yaw, fly.pitch);
       castRay(read, fly.x, fly.y, fly.z, dir[0]!, dir[1]!, dir[2]!, REACH_FLY, 'block', hit);
+      if (paused) o.clicks?.clear();
+      else o.clicks?.run(hit, read);
       if (!hit.hit) {
         world.hideOutline();
         return;
@@ -2113,9 +2158,12 @@ export function mountWorldPage(root: HTMLElement, q: WorldQuery, hash: string, o
         default: break; // movement and sprint are held; Esc (releasePointer) is the browser's
       }
     };
+    // A mouse button only queues its action; the frame's aim runs it (SP5a spec §4.1). A refusal does nothing.
+    const clicks = createClickQueue({ post: (edit) => { void editPath.post([edit]); } });
     const input = attachInput(canvas, {
       onAction,
       onLook: (dx, dy) => look(fly, dx, dy, settings.sensitivity * LOOK_DEG_PER_PIXEL),
+      onButton: (b, down) => { if (down) clicks.push(b); },
       // Only text-entry controls (spec §7.1): a focused slider or select leaves H and F1 working (final review C-I2).
       isTextFocus: () => isTextEntry(document.activeElement as HTMLElement | null),
       // The world's keys act only while the world owns the controls (SP4c spec §2.3): never while the map owns.
@@ -2207,8 +2255,8 @@ export function mountWorldPage(root: HTMLElement, q: WorldQuery, hash: string, o
     const clock = createFrameClock(limiter, slowFrames, revealTs);
     let n = 0;
     let firstMax = 0;
-    // The DDA and the outline (SP5a spec §3.5); the queued clicks join in Task 25.
-    const pageAim = createAim({ fly, world, locked: () => document.pointerLockElement === canvas, hud });
+    // The DDA, the queued clicks and the outline (SP5a spec §3.5, §4.1).
+    const pageAim = createAim({ fly, world, locked: () => document.pointerLockElement === canvas, hud, clicks });
     const step = createFrameStep({
       fly,
       held: () => input.held,
