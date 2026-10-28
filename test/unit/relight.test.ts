@@ -419,44 +419,50 @@ describe('relight: the report (SP5a spec §2.3, §2.6)', () => {
 });
 
 describe('relight: random edits (SP5a spec §2.3)', () => {
-  test('500 random edits in the centre column of a canned 5 × 5 (seeded, stone, glass, ice, torch, wall torch, water, lava, at y 0 … 383): equals after each', () => {
-    // Rolling ground near row 310, a cave (x, z 18 … 29, rows 280 … 291) with a torch and lava, a tunnel from it to
-    // the west column, a pond in the SE column, and a stone over the centre column at row 383. The ground is high so
-    // that the 4,500 reference `lightRegion` calls fill fewer sky voxels.
-    const ground = (x: number, z: number) => 310 + (((x + 16) * 5 + (z + 16) * 3) & 7);
-    const cave = (x: number, r: number, z: number) => x >= 18 && x <= 29 && z >= 18 && z <= 29 && r >= 280 && r <= 291;
-    const tunnelW = (x: number, r: number, z: number) => x >= -10 && x < 18 && z === 24 && (r === 284 || r === 285);
-    const pond = (x: number, r: number, z: number) => x >= 34 && x <= 40 && z >= 34 && z <= 40 && r >= 306;
-    const w = world(
-      (x, r, z) => {
-        if (x === 20 && r === 383 && z === 20) return STONE;
-        if (x === 20 && r === 281 && z === 20) return TORCH;
-        if (cave(x, r, z) || tunnelW(x, r, z)) return AIR;
-        if (pond(x, r, z)) return AIR;
-        return r <= ground(x, z) ? STONE : AIR;
-      },
-      (x, r, z) => (x === 28 && r === 280 && z === 28 ? LAVA_SOURCE : pond(x, r, z) && r <= 310 ? WATER_SOURCE : NO_FLUID),
-    );
-    const kinds: Array<[state: number, fluid: number]> = [
-      [AIR, NO_FLUID], [AIR, NO_FLUID], [STONE, NO_FLUID], [GLASS, NO_FLUID], [ICE, NO_FLUID], [TORCH, NO_FLUID],
-      [WALL_TORCH, NO_FLUID], [LADDER, WATER_SOURCE], [AIR, WATER_SOURCE], [AIR, LAVA_SOURCE],
-    ];
-    const next = testRng(0x5A5A);
-    const rows = new Set<number>();
-    for (let n = 0; n < 500; n++) {
-      const x = 16 + (next() % 16);
-      const z = 16 + (next() % 16);
-      const pick = next() % 20;
-      const r = pick < 5 ? next() % H : pick < 7 ? 383 - (next() % 2) : 275 + (next() % 60);
-      rows.add(r);
-      const [state, fluid] = kinds[next() % kinds.length]!;
-      const before = w.light.slice();
-      const rep = edit(w, x, r, z, state, fluid);
-      expectEqualsReference(w, `edit ${n}: (${x}, ${r}, ${z}) state ${state} fluid ${fluid}`);
-      const want = expectedReport(before, w.light);
-      expect({ sections: [...rep.sections], edges: [...rep.edges] }, `edit ${n}'s report`).toEqual(want);
-      for (let c = 0; c < 9; c++) expect(rep.sections[c]! & ~w.dirty[c]!, `edit ${n}: a reported section setLight never wrote`).toBe(0);
-    }
-    expect(rows.has(383)).toBe(true);
-  }, 120_000);
+  // 500 seeded random edits in five parts of 100, each on its own world with its own rng (seed 0x5A5A + k − 1, so part
+  // 1 is the first 100 edits of the one 500-edit run it replaces), each under its own timeout: the reference's nine
+  // `lightRegion` calls per edit took the one run past 120 s under the parallel `npm test` (rulings R43). Each part
+  // reaches row 383 (5 to 11 times with these seeds).
+  for (let k = 1; k <= 5; k++) {
+    test(`random edits ${k}/5: 100 random edits in the centre column of a canned 5 × 5 (seeded, stone, glass, ice, torch, wall torch, water, lava, at y 0 … 383): equals after each`, () => {
+      // Rolling ground near row 310, a cave (x, z 18 … 29, rows 280 … 291) with a torch and lava, a tunnel from it to
+      // the west column, a pond in the SE column, and a stone over the centre column at row 383. The ground is high so
+      // that the 900 reference `lightRegion` calls fill fewer sky voxels.
+      const ground = (x: number, z: number) => 310 + (((x + 16) * 5 + (z + 16) * 3) & 7);
+      const cave = (x: number, r: number, z: number) => x >= 18 && x <= 29 && z >= 18 && z <= 29 && r >= 280 && r <= 291;
+      const tunnelW = (x: number, r: number, z: number) => x >= -10 && x < 18 && z === 24 && (r === 284 || r === 285);
+      const pond = (x: number, r: number, z: number) => x >= 34 && x <= 40 && z >= 34 && z <= 40 && r >= 306;
+      const w = world(
+        (x, r, z) => {
+          if (x === 20 && r === 383 && z === 20) return STONE;
+          if (x === 20 && r === 281 && z === 20) return TORCH;
+          if (cave(x, r, z) || tunnelW(x, r, z)) return AIR;
+          if (pond(x, r, z)) return AIR;
+          return r <= ground(x, z) ? STONE : AIR;
+        },
+        (x, r, z) => (x === 28 && r === 280 && z === 28 ? LAVA_SOURCE : pond(x, r, z) && r <= 310 ? WATER_SOURCE : NO_FLUID),
+      );
+      const kinds: Array<[state: number, fluid: number]> = [
+        [AIR, NO_FLUID], [AIR, NO_FLUID], [STONE, NO_FLUID], [GLASS, NO_FLUID], [ICE, NO_FLUID], [TORCH, NO_FLUID],
+        [WALL_TORCH, NO_FLUID], [LADDER, WATER_SOURCE], [AIR, WATER_SOURCE], [AIR, LAVA_SOURCE],
+      ];
+      const next = testRng(0x5A5A + k - 1);
+      const rows = new Set<number>();
+      for (let n = 0; n < 100; n++) {
+        const x = 16 + (next() % 16);
+        const z = 16 + (next() % 16);
+        const pick = next() % 20;
+        const r = pick < 5 ? next() % H : pick < 7 ? 383 - (next() % 2) : 275 + (next() % 60);
+        rows.add(r);
+        const [state, fluid] = kinds[next() % kinds.length]!;
+        const before = w.light.slice();
+        const rep = edit(w, x, r, z, state, fluid);
+        expectEqualsReference(w, `part ${k}, edit ${n}: (${x}, ${r}, ${z}) state ${state} fluid ${fluid}`);
+        const want = expectedReport(before, w.light);
+        expect({ sections: [...rep.sections], edges: [...rep.edges] }, `part ${k}, edit ${n}'s report`).toEqual(want);
+        for (let c = 0; c < 9; c++) expect(rep.sections[c]! & ~w.dirty[c]!, `part ${k}, edit ${n}: a reported section setLight never wrote`).toBe(0);
+      }
+      expect(rows.has(383)).toBe(true);
+    }, 60_000);
+  }
 });
