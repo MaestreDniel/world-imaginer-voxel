@@ -1,6 +1,6 @@
 import { describe, expect, test } from 'vitest';
 import { DEFAULTS } from '../../src/core/params/defaults';
-import { createWorkerPool, JobCancelled, poolSize, WorkerFailed, type WorkerLike } from '../../src/engine/workerPool';
+import { createWorkerPool, EDIT_MESH_PRIORITY, JobCancelled, poolSize, WorkerFailed, type WorkerLike } from '../../src/engine/workerPool';
 import { BIOME_SHARES_POINTS, biomeSharePoints, biomeSharesInto, biomeSharesLength } from '../../src/metrics/biomeShares';
 import { columnPoint } from '../../src/gen/column/columnPoint';
 import { landingSurface } from '../../src/gen/column/spawn';
@@ -1358,5 +1358,124 @@ describe('worker pool: the world and aux lanes and the aux policy (SP4c spec §6
     expect(world.map((m) => (m as { cx: number }).cx)).toEqual(order);
     expect(logs[0]!.filter((m) => m.type === 'mapTile').length).toBe(3);
     pool.terminate();
+  });
+
+  describe('the edit lane (SP5a spec §2.6, D22)', () => {
+    /** The column of a posted world job. */
+    const colOf = (m: ToWorker | undefined) => [m?.type, (m as { cx?: number } | undefined)?.cx];
+
+    test('an edit `meshColumn` issued after 6 queued world jobs and 3 queued map tiles runs first on the next free worker', () => {
+      expect(EDIT_MESH_PRIORITY).toBe(-1000);
+      const { pool, logs, finish, workerOf } = manualPool(2);
+      // Two world jobs take both workers; six more and three tiles queue behind them.
+      for (let i = 0; i < 8; i++) void worldJob(pool, i);
+      for (let i = 0; i < 3; i++) void settle(pool.tile(tile(i), i));
+      const edit = settle(pool.meshColumn(50, 0, { edit: true }));
+      expect([pool.probe().busy, pool.queued]).toEqual([2, 10]);
+      finish(1);
+      expect(colOf(logs[1]!.at(-1))).toEqual(['meshColumn', 50]);
+      expect([workerOf('meshColumn'), pool.queued]).toEqual([1, 9]);
+      // Then the world FIFO resumes where it was: world job 2 on the next free worker.
+      finish(0);
+      expect(colOf(logs[0]!.at(-1))).toEqual(['light', 2]);
+      void edit;
+      pool.terminate();
+    });
+
+    test('two edit MESHes run in issue order', async () => {
+      const log: ToWorker[] = [];
+      const w = replyingWorker(log);
+      const pool = createWorkerPool(1, () => w);
+      await pool.configure('42', DEFAULTS);
+      const g = pool.epoch;
+      const T = settle(pool.terrain(0, 0));
+      const T2 = settle(pool.terrain(9, 0));
+      const first = settle(pool.meshColumn(1, 0, { edit: true }));
+      const second = settle(pool.meshColumn(2, 0, { edit: true }));
+      expect(pool.queued).toBe(3);
+      // Each answer replies to the one running job; the reply frees the worker, which takes the next.
+      for (let k = 0; k < 4; k++) {
+        w.answer();
+        await new Promise((resolve) => setTimeout(resolve, 0));
+      }
+      for (const p of [T, first, second, T2]) expect(await p).not.toBeInstanceOf(Error);
+      expect(log.filter((m) => m.type !== 'configure').map(colOf)).toEqual([['terrain', 0], ['meshColumn', 1], ['meshColumn', 2], ['terrain', 9]]);
+      // An edit MESH settles as a world job: its payload and its generation.
+      const done = (await first) as { payload: { cx: number; cz: number }; generation: number };
+      expect([done.payload.cx, done.payload.cz, done.generation]).toEqual([1, 0, g]);
+      pool.terminate();
+    });
+
+    test('with `setAuxPolicy(\'aux\', 1)` and one aux job running, an edit MESH still runs on the next free worker', () => {
+      const { pool, logs, finish, workerOf, running } = manualPool(2);
+      pool.setAuxPolicy('aux', 1);
+      void settle(pool.tile(tile(0), 0));
+      void worldJob(pool, 0);
+      for (let i = 1; i <= 3; i++) void settle(pool.tile(tile(i), i));
+      for (let i = 1; i <= 3; i++) void worldJob(pool, i);
+      expect([workerOf('mapTile'), workerOf('terrain'), pool.queued]).toEqual([0, 1, 6]);
+      const edit = settle(pool.meshColumn(50, 0, { edit: true }));
+      // The world job ends: the edit MESH goes before the world FIFO, past the cap the running tile fills.
+      finish(1);
+      expect(colOf(logs[1]!.at(-1))).toEqual(['meshColumn', 50]);
+      expect([workerOf('mapTile'), workerOf('meshColumn'), running().world]).toEqual([0, 1, 1]);
+      // The tile ends: the edit MESH does not count against the cap, so the next tile runs.
+      finish(0);
+      expect([workerOf('mapTile'), logs[0]!.at(-1)]).toEqual([0, expect.objectContaining({ type: 'mapTile', tx: 1 })]);
+      void edit;
+      pool.terminate();
+    });
+
+    test('`cancelWorld` matching its column rejects a queued edit MESH with `JobCancelled`; a non-matching one stays', async () => {
+      const { pool, logs, finish } = manualPool(1);
+      void settle(pool.tile(tile(0), 0));
+      const hit = settle(pool.meshColumn(3, 0, { edit: true }));
+      const keep = settle(pool.meshColumn(4, 0, { edit: true }));
+      const plain = settle(pool.meshColumn(3, 0));
+      const queuedTile = settle(pool.tile(tile(1), 1));
+      expect(pool.queued).toBe(4);
+      const seen: Array<[string, number, number]> = [];
+      pool.cancelWorld((stage, cx, cz) => {
+        seen.push([stage, cx, cz]);
+        return stage === 'MESH' && cx === 3;
+      });
+      expect(await hit).toBeInstanceOf(JobCancelled);
+      expect(await plain).toBeInstanceOf(JobCancelled);
+      // The predicate sees the world-type jobs of both lanes only, never the queued tile.
+      expect(seen.sort()).toEqual([['MESH', 3, 0], ['MESH', 3, 0], ['MESH', 4, 0]]);
+      expect(pool.queued).toBe(2);
+      finish(0);
+      expect(colOf(logs[0]!.at(-1))).toEqual(['meshColumn', 4]);
+      finish(0);
+      expect(logs[0]!.at(-1)).toMatchObject({ type: 'mapTile', tx: 1 });
+      expect(await keep).toBeInstanceOf(Error);
+      expect(await keep).not.toBeInstanceOf(JobCancelled);
+      void queuedTile;
+      pool.terminate();
+    });
+
+    test('a plain `meshColumn` still goes to the world lane', () => {
+      const { pool, logs, finish } = manualPool(1);
+      void settle(pool.terrain(0, 0));
+      // A tile at priority 0 issued before it: in the aux lane at 0 the tile (the lower id) would run first.
+      void settle(pool.tile(tile(1), 0));
+      void settle(pool.meshColumn(5, 0));
+      finish(0);
+      expect(colOf(logs[0]!.at(-1))).toEqual(['meshColumn', 5]);
+      finish(0);
+      expect(logs[0]!.at(-1)).toMatchObject({ type: 'mapTile', tx: 1 });
+      // And under ('aux', 1) a plain MESH waits behind a queued tile, as the world FIFO does.
+      const b = manualPool(1);
+      b.pool.setAuxPolicy('aux', 1);
+      void settle(b.pool.terrain(0, 0));
+      void settle(b.pool.meshColumn(5, 0));
+      void settle(b.pool.tile(tile(2), 1000));
+      b.finish(0);
+      expect(b.logs[0]!.at(-1)).toMatchObject({ type: 'mapTile', tx: 2 });
+      b.finish(0);
+      expect(colOf(b.logs[0]!.at(-1))).toEqual(['meshColumn', 5]);
+      b.pool.terminate();
+      pool.terminate();
+    });
   });
 });

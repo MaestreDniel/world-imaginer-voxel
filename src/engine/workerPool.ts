@@ -38,6 +38,8 @@
  * (priority, id). `setAuxPolicy(first, cap)` says which lane a free worker serves first and how many non-interactive aux
  * jobs may run; interactive jobs (priority < 0: points, probes, landing, the standalone spawn) always go first, uncapped.
  * SP4c §3.2 (D12): `landing(x, z)`, the teleport's surface and water at a block, is one aux job at −2.
+ * SP5a §2.6 (D22): `meshColumn(cx, cz, {edit: true})`, an edit's remesh, is a world job on the aux lane at
+ * EDIT_MESH_PRIORITY, so a free worker takes it first and `auxCap` never counts it; `cancelWorld` searches both lanes.
  */
 import type { MapLevel } from '../core/constants';
 import type { ColumnPoint } from '../gen/column/columnPoint';
@@ -263,7 +265,12 @@ export interface WorkerPool {
   /** D; with `diff` (SP5a spec §2.5), the column's edit entries, which the message carries (cloned, never transferred). */
   decorate(cx: number, cz: number, diff?: ColumnDiff): Promise<ColumnDone>;
   light(cx: number, cz: number): Promise<ColumnDone>;
-  meshColumn(cx: number, cz: number): Promise<MeshColumnDone>;
+  /**
+   * MESH; with `edit` true (SP5a spec §2.6, D22), an edit's remesh: queued on the aux lane at EDIT_MESH_PRIORITY instead of
+   * the world FIFO, so a free worker takes it before every other job, uncapped by `auxCap`. Its reply settles as any
+   * world job's.
+   */
+  meshColumn(cx: number, cz: number, o?: { readonly edit: boolean }): Promise<MeshColumnDone>;
   /** Lower priority runs first. */
   tile(req: TileRequest, priority: number): Promise<TileResult>;
   point(x: number, z: number, priority?: number): Promise<ColumnPoint>;
@@ -321,7 +328,8 @@ export interface WorkerPool {
   cancelTiles(pred: (req: TileRequest) => boolean): void;
   /**
    * Rejects the queued world jobs matching `pred` with JobCancelled (SP4b spec §2.8, D8): `terrain` is stage T, `decorate`
-   * D, `light` L, `meshColumn` MESH (the world lane, in issue order). In-flight jobs run to the end.
+   * D, `light` L, `meshColumn` MESH (the world lane in issue order, then the edit MESHes of the aux lane, SP5a spec §2.6).
+   * In-flight jobs run to the end.
    */
   cancelWorld(pred: (stage: Stage, cx: number, cz: number) => boolean): void;
   /** The workers that have not failed (SP4b spec §2.8; the coordinator's caps follow it); 0 once terminated. */
@@ -351,6 +359,9 @@ interface Job {
 
 /** Each world job type's stage (`engine/rings.ts`'s names; SP4b spec §2.8's `cancelWorld`). */
 const STAGE_OF: Readonly<Partial<Record<string, Stage>>> = Object.freeze({ terrain: 'T', decorate: 'D', light: 'L', meshColumn: 'MESH' });
+
+/** The aux-lane priority of an edit MESH (SP5a spec §2.6, D22): below every other job's, so a free worker takes it first. */
+export const EDIT_MESH_PRIORITY = -1000;
 
 /** Pool size: clamp(hardwareConcurrency − 2, 2, 6). */
 export const poolSize = (cores: number): number => Math.max(2, Math.min(6, cores - 2));
@@ -404,7 +415,7 @@ export function createWorkerPool(size: number, spawn: () => WorkerLike, opts: Po
   /** Whether a job's epoch cell moved since its issue (SP4b spec §2.7). */
   const moved = (job: Job): boolean => cells !== null && job.cell !== null && Atomics.load(cells, job.cell) !== job.scope;
 
-  /** Whether a job is a world job (the world lane's). */
+  /** Whether a job is a world job (the world lane's, or an edit MESH on the aux lane, SP5a spec §2.6). */
   const isWorld = (job: Job): boolean => STAGE_OF[job.msg.type] !== undefined;
   /** The non-interactive aux jobs running (priority ≥ 0; what the cap counts). */
   const auxRunning = (): number => {
@@ -544,10 +555,11 @@ export function createWorkerPool(size: number, spawn: () => WorkerLike, opts: Po
 
   /**
    * Queues a job of `type`: `build` gets its id and its scope, the value of its epoch cell now (the generation without
-   * cells; SP4b spec §2.7). A selftest has no cell and no scope (its build ignores the scope).
+   * cells; SP4b spec §2.7). A selftest has no cell and no scope (its build ignores the scope). A world job goes to the
+   * world lane unless `toAux` (an edit MESH, SP5a spec §2.6).
    */
   const enqueue = (
-    priority: number, type: JobType, build: (id: number, scope: number) => ToWorker, tile: TileRequest | null, group = 0,
+    priority: number, type: JobType, build: (id: number, scope: number) => ToWorker, tile: TileRequest | null, group = 0, toAux = false,
   ): Promise<FromWorker> =>
     new Promise((resolve, reject) => {
       if (live === 0) { reject(new WorkerFailed('every worker failed')); return; }
@@ -558,7 +570,7 @@ export function createWorkerPool(size: number, spawn: () => WorkerLike, opts: Po
       // before the pool pumps the next job.
       const fail = group === 0 ? reject : (e: Error) => { reject(e); dropGroup(group); };
       const job: Job = { id, epoch, cell, scope, priority, msg: build(id, scope ?? epoch), tile, group, resolve, reject: fail };
-      if (isWorld(job)) worldLane.push(job);
+      if (isWorld(job) && !toAux) worldLane.push(job);
       else auxLane.push(job, priority, id);
       pump();
     });
@@ -574,12 +586,13 @@ export function createWorkerPool(size: number, spawn: () => WorkerLike, opts: Po
   /**
    * A world job of (cx, cz) at priority 0, issued under the pool's epoch now (its generation); `protoOnly` (terrain only)
    * goes into the message only when true, `diff` (decorate only, SP5a) only when given. Jobs are posted without a
-   * transfer list, so the diff is cloned.
+   * transfer list, so the diff is cloned. `edit` (meshColumn only, SP5a spec §2.6) queues it on the aux lane at
+   * EDIT_MESH_PRIORITY.
    */
-  const worldJob = (type: WorldJobType, cx: number, cz: number, protoOnly = false, diff?: ColumnDiff): Promise<FromWorker> => {
+  const worldJob = (type: WorldJobType, cx: number, cz: number, protoOnly = false, diff?: ColumnDiff, edit = false): Promise<FromWorker> => {
     const e = epoch;
-    return enqueue(0, type, (jobId, scope) => (protoOnly ? { type, jobId, epoch: e, scope, cx, cz, protoOnly }
-      : diff !== undefined ? { type, jobId, epoch: e, scope, cx, cz, diff } : { type, jobId, epoch: e, scope, cx, cz }), null);
+    return enqueue(edit ? EDIT_MESH_PRIORITY : 0, type, (jobId, scope) => (protoOnly ? { type, jobId, epoch: e, scope, cx, cz, protoOnly }
+      : diff !== undefined ? { type, jobId, epoch: e, scope, cx, cz, diff } : { type, jobId, epoch: e, scope, cx, cz }), null, 0, edit);
   };
 
   return {
@@ -637,9 +650,9 @@ export function createWorkerPool(size: number, spawn: () => WorkerLike, opts: Po
     terrain: (cx, cz, protoOnly = false) => columnJob('terrain', cx, cz, protoOnly),
     decorate: (cx, cz, diff) => columnJob('decorate', cx, cz, false, diff),
     light: (cx, cz) => columnJob('light', cx, cz),
-    async meshColumn(cx, cz) {
+    async meshColumn(cx, cz, o) {
       const generation = epoch;
-      const r = await worldJob('meshColumn', cx, cz);
+      const r = await worldJob('meshColumn', cx, cz, false, undefined, o?.edit === true);
       if (r.type !== 'meshColumnResult') throw new Error(`unexpected reply ${r.type}`);
       if (r.cx !== cx || r.cz !== cz) throw new Error(`world job reply: meshColumn of column (${r.cx}, ${r.cz}), expected meshColumn (${cx}, ${cz})`);
       return { payload: payloadOfMeshResult(r), generation };
@@ -787,14 +800,18 @@ export function createWorkerPool(size: number, spawn: () => WorkerLike, opts: Po
       for (const j of auxLane.removeWhere((j) => j.tile !== null && pred(j.tile))) j.reject(new JobCancelled());
     },
     cancelWorld(pred) {
+      const matches = (j: Job): boolean => {
+        const m = j.msg as { readonly cx: number; readonly cz: number };
+        return pred(STAGE_OF[j.msg.type]!, m.cx, m.cz);
+      };
       const dropped: Job[] = [];
       worldLane = worldLane.filter((j) => {
-        const m = j.msg as { readonly cx: number; readonly cz: number };
-        if (!pred(STAGE_OF[j.msg.type]!, m.cx, m.cz)) return true;
+        if (!matches(j)) return true;
         dropped.push(j);
         return false;
       });
-      for (const j of dropped) j.reject(new JobCancelled());
+      // The aux lane's world-type jobs are the edit MESHes (SP5a spec §2.6).
+      for (const j of dropped.concat(auxLane.removeWhere((j) => isWorld(j) && matches(j)))) j.reject(new JobCancelled());
     },
     liveWorkers: () => live,
     probe() {
