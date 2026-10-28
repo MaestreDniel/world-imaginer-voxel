@@ -1,3 +1,5 @@
+import v8 from 'node:v8';
+import { runInNewContext } from 'node:vm';
 import { describe, expect, test } from 'vitest';
 import { colKey } from '../../src/core/coords';
 import { STAGE_BONUS, streamScore } from '../../src/core/streamScore';
@@ -7,7 +9,7 @@ import {
   type Coordinator, type CoordinatorCounts, type CoordinatorJobs, type JobOutcome, type StreamCamera, type StreamEvent,
   type StreamSink, type StreamStore,
 } from '../../src/engine/coordinator';
-import { KEEP_VOXELS_EXTRA, M_D, M_KEEP_MESH, M_L, M_MESH, M_T, membershipTable, stageOffsets, type Stage } from '../../src/engine/rings';
+import { KEEP_VOXELS_EXTRA, M_D, M_KEEP_MESH, M_KEEP_VOXELS, M_L, M_MESH, M_T, membershipTable, stageOffsets, type Stage } from '../../src/engine/rings';
 import { createThrottle, type Throttle } from '../../src/engine/throttle';
 import { JobCancelled, StoreCorruptError, StoreFullError, WorkerFailed, type ColumnDone, type WorkerPool } from '../../src/engine/workerPool';
 import type { ColumnMeshPayload } from '../../src/mesh/column';
@@ -1984,6 +1986,327 @@ describe('createCoordinator: apply, "old meshes kept on Apply" (SP4c spec §4.4,
     for (const k of setKeys('MESH', 4, 0, 0)) expect(w.fake.revealedEpoch.get(k)).toBe(3);
     expect(w.fake.violations).toEqual([]);
     expect(w.fake.events).toEqual([{ kind: 'skipped', cx: 1, cz: 1 }]);
+  });
+});
+
+/** The 3 × 3 around (cx, cz). */
+const around = (cx: number, cz: number): Array<readonly [number, number]> => {
+  const out: Array<readonly [number, number]> = [];
+  for (let dz = -1; dz <= 1; dz++) for (let dx = -1; dx <= 1; dx++) out.push([cx + dx, cz + dz]);
+  return out;
+};
+
+/** The fake's record of (cx, cz), when that column holds it. */
+const recordOf = (w: World, cx: number, cz: number) => {
+  const r = w.fake.records.get(slotOf(cx, cz));
+  return r !== undefined && r.cx === cx && r.cz === cz ? r : undefined;
+};
+
+/**
+ * An edit as the sim writes it (SP5a spec §2.2, §2.3): the edited column's block version and its 3 × 3's light versions
+ * move, so a job that read them before is dropped at intake.
+ */
+function editRecords(w: World, cx: number, cz: number): void {
+  recordOf(w, cx, cz)!.block++;
+  for (const [x, z] of around(cx, cz)) {
+    const r = recordOf(w, x, z);
+    if (r !== undefined) r.light++;
+  }
+}
+
+describe('createCoordinator: the edit gate and the sim\'s pins (SP5a spec §2.1, §2.7)', () => {
+  test('after the fill, editState of a column 2 inside the MESH set is 0; of a MESH-edge column whose neighbours are Published and unmeshed, 0; of an L-ring column (its 3 × 3 holds Decorated D-ring columns) or a column with an absent neighbour, 1 (rulings R13)', async () => {
+    const rd = 6;
+    const { w, c } = make({ rd });
+    await fill(w, c, cam(0, 0));
+    expect(c.editState(0, 0)).toBe(0);
+    const R = rd + KEEP_VOXELS_EXTRA + 1;
+    let edges = 0;
+    let rings = 0;
+    let absents = 0;
+    for (let cz = -R; cz <= R; cz++) {
+      for (let cx = -R; cx <= R; cx++) {
+        const nine = around(cx, cz);
+        const statuses = nine.map(([x, z]) => recordOf(w, x, z)?.status ?? 0);
+        // The gate from the fake's records: all nine Published (every record is at the applied epoch, 1).
+        const want = statuses.every((s) => s === 3) ? 0 : 1;
+        expect(c.editState(cx, cz), `(${cx}, ${cz})`).toBe(want);
+        if (inSet('MESH', cx, cz, 0, 0, rd)) {
+          expect(want, `(${cx}, ${cz}) in the MESH set`).toBe(0);
+          if (nine.some(([x, z]) => !inSet('MESH', x, z, 0, 0, rd))) {
+            edges++;
+            // Its neighbours outside the MESH set are Published and unmeshed (the L ring).
+            for (const [x, z] of nine.filter(([x, z]) => !inSet('MESH', x, z, 0, 0, rd))) expect(w.fake.revealed.has(colKey(x, z))).toBe(false);
+          }
+        } else if (inSet('L', cx, cz, 0, 0, rd)) {
+          expect(statuses).toContain(2);
+          expect(want, `(${cx}, ${cz}) in the L ring`).toBe(1);
+          rings++;
+        } else if (statuses.includes(0)) {
+          expect(want).toBe(1);
+          absents++;
+        }
+      }
+    }
+    expect([edges > 0, rings > 0, absents > 0]).toEqual([true, true, true]);
+    expect(c.editState(100, 100)).toBe(1);
+    expect(w.fake.violations).toEqual([]);
+  });
+
+  test('a MESH in flight on a column leaves its editState 0', async () => {
+    const { w, c } = make({ rd: 4 });
+    c.update(cam(0, 0));
+    await flush();
+    let seen = 0;
+    while (w.fake.pending.length > 0) {
+      for (const p of w.fake.pending) {
+        if (p.stage !== 'MESH') continue;
+        expect(c.editState(p.cx, p.cz), `MESH in flight at (${p.cx}, ${p.cz})`).toBe(0);
+        seen++;
+      }
+      w.settle();
+      await flush();
+    }
+    expect(seen).toBeGreaterThan(0);
+    expect(w.fake.violations).toEqual([]);
+  });
+
+  test('after apply, a stale column\'s editState is 2 until a column of its 3 × 3 is freed, then 1 while any of them is regenerated, then 0 once all nine are Published at the new epoch (rulings R13)', async () => {
+    const rd = 6;
+    const { w, c } = make({ rd, workers: 5 });
+    await fill(w, c, cam(0, 0), 4242);
+    const [X, Z] = [2, 1];
+    const nine = around(X, Z);
+    expect(c.editState(X, Z)).toBe(0);
+    applyTo(w, c, 2);
+    const f0 = w.fake.frees.length;
+    const seen: number[] = [];
+    const check = (when: string): void => {
+      const freed = nine.some(([x, z]) => has(w.fake.frees.slice(f0), x, z));
+      const regenerated = nine.every(([x, z]) => recordOf(w, x, z)?.status === 3 && recordOf(w, x, z)?.epoch === 2);
+      const want = regenerated ? 0 : freed ? 1 : 2;
+      const got = c.editState(X, Z);
+      expect(got, when).toBe(want);
+      if (seen[seen.length - 1] !== got) seen.push(got);
+    };
+    check('at apply');
+    const pick = lcg(31);
+    for (let u = 0; u < 400 && seen[seen.length - 1] !== 0; u++) {
+      c.update(cam(0, 0));
+      check(`update ${u}`);
+      await flush();
+      for (let i = 0; i < 6 && w.fake.pending.length > 0; i++) {
+        w.settle(pick(w.fake.pending.length));
+        await flush();
+        check(`update ${u}, settle ${i}`);
+      }
+    }
+    expect(seen).toEqual([2, 1, 0]);
+    expect(w.fake.violations).toEqual([]);
+  });
+
+  test('a pinned column beyond keepVoxels is not freed over 50 updates; after simUnpin it is freed in the next update', async () => {
+    const rd = 4;
+    const { w, c } = make({ rd });
+    await fill(w, c, cam(0, 0));
+    expect(c.editState(-4, 0)).toBe(0);
+    c.simPin(-4, 0);
+    // From (6, 0) the columns 10 or more to the west lie beyond keepVoxels (RD + 5).
+    const beyond = around(-4, 0).filter(([x, z]) => !hasFlag(M_KEEP_VOXELS, x, z, 6, 0, rd));
+    expect(beyond.length).toBe(6);
+    for (let u = 0; u < 50; u++) await fill(w, c, cam(6, 0));
+    expect(w.fake.frees.length).toBeGreaterThan(0);
+    for (const [x, z] of beyond) expect(has(w.fake.frees, x, z), `(${x}, ${z}) freed while pinned`).toBe(false);
+    c.simUnpin(-4, 0);
+    const f0 = w.fake.frees.length;
+    c.update(cam(6, 0));
+    const frees = w.fake.frees.slice(f0);
+    for (const [x, z] of beyond) expect(has(frees, x, z), `(${x}, ${z}) freed after simUnpin`).toBe(true);
+    expect(frees.length).toBe(beyond.length);
+    expect(w.fake.violations).toEqual([]);
+  });
+
+  test('Review Focus 5: a stale column pinned at apply is freed after simUnpin with no camera move, then regenerated', async () => {
+    const rd = 6;
+    const { w, c } = make({ rd, workers: 5 });
+    await fill(w, c, cam(0, 0), 4242);
+    expect(c.editState(0, 0)).toBe(0);
+    c.simPin(0, 0);
+    applyTo(w, c, 2);
+    const f0 = w.fake.frees.length;
+    const pick = lcg(7);
+    await settleDown(w, c, cam(0, 0), pick);
+    // Every other stale column was freed; the pinned nine were not, and stay stale.
+    expect(w.fake.frees.length - f0).toBeGreaterThan(100);
+    const nine = around(0, 0);
+    for (const [x, z] of nine) {
+      expect(has(w.fake.frees.slice(f0), x, z), `(${x}, ${z}) freed while pinned`).toBe(false);
+      expect(recordOf(w, x, z)).toMatchObject({ status: 3, epoch: 1 });
+    }
+    expect(c.editState(0, 0)).toBe(2);
+    expect(read(c).stale).toBeGreaterThanOrEqual(9);
+    c.simUnpin(0, 0);
+    const f1 = w.fake.frees.length;
+    c.update(cam(0, 0));
+    const frees = w.fake.frees.slice(f1);
+    for (const [x, z] of nine) expect(has(frees, x, z), `(${x}, ${z}) freed after simUnpin`).toBe(true);
+    await settleDown(w, c, cam(0, 0), pick);
+    for (const [x, z] of nine) expect(recordOf(w, x, z), `(${x}, ${z}) regenerated`).toMatchObject({ status: 3, epoch: 2 });
+    expect(c.editState(0, 0)).toBe(0);
+    const n = read(c);
+    expect([n.stale, n.MESH.done]).toEqual([0, n.MESH.needed]);
+    expect(w.fake.violations).toEqual([]);
+  });
+
+  test('simUnpinAll releases 3 overlapping pins and the frees follow', async () => {
+    const rd = 4;
+    const { w, c } = make({ rd });
+    await fill(w, c, cam(0, 0));
+    const pins = [[-4, 0], [-4, 1], [-3, 0]] as const;
+    for (const [x, z] of pins) {
+      expect(c.editState(x, z), `(${x}, ${z})`).toBe(0);
+      c.simPin(x, z);
+    }
+    const beyond = new Map<number, readonly [number, number]>();
+    for (const [px, pz] of pins) {
+      for (const [x, z] of around(px, pz)) if (!hasFlag(M_KEEP_VOXELS, x, z, 6, 0, rd)) beyond.set(colKey(x, z), [x, z]);
+    }
+    expect(beyond.size).toBe(8);
+    for (let u = 0; u < 50; u++) await fill(w, c, cam(6, 0));
+    for (const [x, z] of beyond.values()) expect(has(w.fake.frees, x, z), `(${x}, ${z}) freed while pinned`).toBe(false);
+    c.simUnpinAll();
+    const f0 = w.fake.frees.length;
+    c.update(cam(6, 0));
+    const frees = w.fake.frees.slice(f0);
+    for (const [x, z] of beyond.values()) expect(has(frees, x, z), `(${x}, ${z}) freed after simUnpinAll`).toBe(true);
+    expect(frees.length).toBe(beyond.size);
+    expect(w.fake.violations).toEqual([]);
+  });
+
+  test('simUnpinAll then simUnpin of the same 3 × 3 leaves every count 0 and the column freeable in the next update', async () => {
+    const rd = 4;
+    const { w, c } = make({ rd });
+    await fill(w, c, cam(0, 0));
+    c.simPin(-4, 0);
+    const beyond = around(-4, 0).filter(([x, z]) => !hasFlag(M_KEEP_VOXELS, x, z, 6, 0, rd));
+    for (let u = 0; u < 50; u++) await fill(w, c, cam(6, 0));
+    for (const [x, z] of beyond) expect(has(w.fake.frees, x, z)).toBe(false);
+    c.simUnpinAll();
+    // The late reply's simUnpin: a count at 0 stays 0 (a wrap to 65535 would pin the columns for ever).
+    c.simUnpin(-4, 0);
+    const f0 = w.fake.frees.length;
+    c.update(cam(6, 0));
+    const frees = w.fake.frees.slice(f0);
+    for (const [x, z] of beyond) expect(has(frees, x, z), `(${x}, ${z}) freed`).toBe(true);
+    expect(frees.length).toBe(beyond.length);
+    expect(w.fake.violations).toEqual([]);
+  });
+
+  test('no L is issued for a column whose 3 × 3 includes a Published edited column while editState is 0 (an L needs a Decorated column, which the gate excludes): 200 random pinned edits during a fill drop no L, and each column\'s L is issued exactly once', async () => {
+    const rd = 6;
+    const { w, c } = make({ rd, workers: 5 });
+    const pick = lcg(2027);
+    // The step's action from its own generator, modulo a prime: the low bits of one LCG drawn twice per step alternate.
+    const action = lcg(4243);
+    const candidates = stageOffsets(rd).T;
+    const inFlightEdits: Array<readonly [number, number]> = [];
+    const near = (a: Issued, x: number, z: number): boolean => Math.abs(a.cx - x) <= 1 && Math.abs(a.cz - z) <= 1;
+    let posted = 0;
+    let duringFill = 0;
+    let checked = 0;
+    /** Every L issued since the last check: none reads a column with an edit in flight. */
+    const checkIssued = (): void => {
+      for (; checked < w.fake.issued.length; checked++) {
+        const j = w.fake.issued[checked]!;
+        if (j.stage !== 'L') continue;
+        for (const [x, z] of inFlightEdits) expect(near(j, x, z), `L at (${j.cx}, ${j.cz}) issued beside the edit at (${x}, ${z})`).toBe(false);
+      }
+    };
+    c.update(cam(0, 0));
+    await flush();
+    for (let step = 0; step < 100_000; step++) {
+      checkIssued();
+      if (posted === 200 && inFlightEdits.length === 0 && w.fake.pending.length === 0) break;
+      const r = action(1009);
+      if (r < 252 && posted < 200) {
+        const open = candidates.filter(([dx, dz]) => c.editState(dx, dz) === 0);
+        if (open.length === 0) continue;
+        const [x, z] = open[pick(open.length)]!;
+        // The edit's 3 × 3 is Published, so no L in flight reads the edited column.
+        for (const p of w.fake.pending) if (p.stage === 'L') expect(near(p, x, z), `edit at (${x}, ${z}) beside the L at (${p.cx}, ${p.cz})`).toBe(false);
+        c.simPin(x, z);
+        editRecords(w, x, z);
+        inFlightEdits.push([x, z]);
+        posted++;
+        if (!c.firstFill()) duringFill++;
+      } else if (r < 504 && inFlightEdits.length > 0) {
+        const [x, z] = inFlightEdits.splice(pick(inFlightEdits.length), 1)[0]!;
+        c.simUnpin(x, z);
+      } else if (w.fake.pending.length > 0) {
+        w.settle(pick(w.fake.pending.length));
+        await flush();
+      } else {
+        c.update(cam(0, 0));
+        await flush();
+      }
+    }
+    expect(posted).toBe(200);
+    expect(duringFill).toBeGreaterThan(100);
+    await settleDown(w, c, cam(0, 0), pick);
+    checkIssued();
+    for (const [dx, dz] of stageOffsets(rd).L) expect(issuedOf(w, 'L', dx, dz), `L issues at (${dx}, ${dz})`).toBe(1);
+    expect(w.fake.issued.filter((j) => j.stage === 'L').length).toBe(stageOffsets(rd).L.length);
+    const n = read(c);
+    expect(doneOf(n)).toEqual({ T: n.T.needed, D: n.D.needed, L: n.L.needed, MESH: n.MESH.needed });
+    expect(w.fake.violations).toEqual([]);
+    expect(w.fake.events).toEqual([]);
+  });
+
+  test('editState allocates nothing (the zeroAlloc.test.ts pattern: under 256 KB over 10,000 calls)', async () => {
+    // Two filled coordinators, the second applied to epoch 2 with no update since (every column stale, none freed): a 0,
+    // a 1 and a 2 (the scan's every exit).
+    const a = make({ rd: 4 });
+    await fill(a.w, a.c, cam(0, 0));
+    const b = make({ rd: 4 });
+    await fill(b.w, b.c, cam(0, 0));
+    applyTo(b.w, b.c, 2);
+    const cs = [a.c, a.c, b.c, b.c] as const;
+    const xs = Int32Array.of(0, 100, 0, 9);
+    const zs = Int32Array.of(0, 100, 0, 0);
+    expect(Array.from(xs, (x, i) => cs[i]!.editState(x, zs[i]!))).toEqual([0, 1, 2, 1]);
+    v8.setFlagsFromString('--expose-gc');
+    const gc = runInNewContext('gc') as (o?: { type: 'major' | 'minor' }) => void;
+    const JIT_SPACE = /^(code|trusted|shared_trusted)_/;
+    const heapUsed = (): number => {
+      let b = 0;
+      for (const s of v8.getHeapSpaceStatistics()) if (!JIT_SPACE.test(s.space_name)) b += s.space_used_size;
+      return b;
+    };
+    let acc = 0;
+    let k = 0;
+    const call = (): void => {
+      const j = k & 3;
+      k++;
+      acc += cs[j]!.editState(xs[j]!, zs[j]!);
+    };
+    for (let i = 0; i < 100_000; i++) call();
+    const readings: number[] = [];
+    for (let t = 0; t < 3; t++) {
+      gc();
+      gc();
+      const before = heapUsed();
+      const profiler = new v8.GCProfiler();
+      profiler.start();
+      for (let i = 0; i < 10_000; i++) call();
+      const after = heapUsed();
+      const gcs = profiler.stop()?.statistics.length ?? 0;
+      if (gcs > 0) continue;
+      readings.push(after - before);
+      if (after - before < 256 * 1024) break;
+    }
+    expect(acc).toBeGreaterThan(0);
+    expect(readings.length, 'every attempt saw a GC').toBeGreaterThan(0);
+    expect(readings[readings.length - 1]!, `heap growth over 10,000 calls (attempts: ${readings.join(', ')})`).toBeLessThan(256 * 1024);
   });
 });
 

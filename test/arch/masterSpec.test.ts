@@ -1216,6 +1216,14 @@ describe('master spec amendments (SP5a §9)', () => {
     expect(s27).toContain('so reverting removes the entry (SP5a: an edit equal to the column\'s current generated value, read from its retained proto, removes the entry)');
   });
 
+  test('risk 7 names SP5a\'s edit gate in place of the edits-during-light fuzz (SP5a spec §2.1, §9)', () => {
+    const at8 = text.indexOf('## 8. Risks');
+    const risk7 = text.slice(at8).split('\n').find((l) => l.startsWith('7. '));
+    expect(risk7, 'no risk 7 in §8').toBeDefined();
+    expect(risk7).toContain('edits never run beside a light job that reads them (SP5a\'s edit gate), and L3 checks incremental against full light after random edits');
+    expect(risk7).not.toContain('edits-during-light fuzz');
+  });
+
   test('§1 names each SP5a module in its entry, which exists', () => {
     for (const [head, token, file] of SP5A_MODULES) {
       const entry = layoutEntry(head);

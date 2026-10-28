@@ -106,6 +106,14 @@
  *   Absent but keeps the shown mesh (`sinkCx`, `sinkCz`, `shownEpoch`), which the column's next payload swaps. The mesh
  *   unload also hides a sink column outside the MESH set whose target is not `wEpoch` (no MESH replaces it), ≤ 64 per
  *   update. No Published final set is rewritten in place: SP5a's sim worker stays its first writer (master §4.1).
+ *
+ * SP5a (spec §2.1, §2.7):
+ * - **The edit gate:** `editState(cx, cz)` is 0 when the 3 × 3 is tracked, Published, current and not failed; 2 when
+ *   one of an otherwise loaded 3 × 3 is stale ("regenerating"); 1 otherwise ("not loaded"). The page posts an edit only
+ *   at 0, so no L in flight reads the edited column (an L needs a Decorated column, which the gate excludes).
+ * - **The sim's pins:** `simPin` adds 1 to `simPins` of the 3 × 3 until the reply's `simUnpin`; `freeable` also needs
+ *   `simPins` 0. A sim reply is no job, so a slot whose count reaches 0 queues its unloads again itself, and a stale
+ *   column pinned at `apply` is freed with no crossing. `simUnpinAll` is the sim failure path.
  */
 import { TORUS_SIZE, colKey } from '../core/coords';
 import { STAGE_BONUS, streamScore } from '../core/streamScore';
@@ -263,6 +271,28 @@ export interface Coordinator {
    * the skipped column nor the hole around it holds the fog (final review UI-4, rulings R16).
    */
   isSkipped(cx: number, cz: number): boolean;
+  /**
+   * The edit gate (SP5a spec §2.1, D13): 0 when every column of (cx, cz)'s 3 × 3 is tracked, Published, at the applied
+   * epoch (`colEpoch === wEpoch`) and not failed (an edit may be posted); 2 when every column is tracked, not failed
+   * and Published or stale, and one is stale ("regenerating": generated under another epoch, after an Apply); 1
+   * otherwise ("not loaded"). An in-flight MESH does not close it: the writer is copy-on-write and the MESH's result is
+   * dropped by its versions. Allocates nothing.
+   */
+  editState(cx: number, cz: number): 0 | 1 | 2;
+  /**
+   * An edit posted to the sim (SP5a spec §2.1, §2.7): adds 1 to `simPins` of (cx, cz)'s 3 × 3, so none of them is freed
+   * (`freeable` requires `simPins` 0) until its reply's `simUnpin`.
+   */
+  simPin(cx: number, cz: number): void;
+  /**
+   * The sim's reply (SP5a spec §2.7): subtracts 1 from `simPins` of (cx, cz)'s 3 × 3; a slot whose count reaches 0 runs
+   * `unloadCheck` and `considerAround`, as a settle does (a sim reply is no job, so nothing else queues its free again).
+   * A count already at 0 stays 0 and runs nothing (a backstop: the `Uint16Array` would wrap to 65535 and pin the column
+   * for ever).
+   */
+  simUnpin(cx: number, cz: number): void;
+  /** The sim failed (SP5a spec §2.1): every `simPins` count to 0, each such slot then as `simUnpin`. */
+  simUnpinAll(): void;
   counts(out: CoordinatorCounts): CoordinatorCounts;
   dispose(): void;
 }
@@ -422,6 +452,8 @@ export function createCoordinator(o: CoordinatorOptions): Coordinator {
   /** The column whose rows the sink holds for the slot (shown or staged), NO_COLUMN when none (C1). */
   const sinkCx = new Int32Array(SLOTS).fill(NO_COLUMN);
   const sinkCz = new Int32Array(SLOTS).fill(NO_COLUMN);
+  /** The sim's edits in flight whose 3 × 3 holds the slot's column (SP5a spec §2.1, §2.7): it is not freed while > 0. */
+  const simPins = new Uint16Array(SLOTS);
 
   // The heaps (spec §3.3, §3.5, §3.7): heap h's entries at [h·SLOTS, h·SLOTS + len[h]); each entry's key and colKey tie
   // are stored per (heap, slot) when pushed, so a heap's order never depends on state that changes while it waits.
@@ -829,11 +861,18 @@ export function createCoordinator(o: CoordinatorOptions): Coordinator {
 
   /**
    * Whether the slot's column may be freed now: tracked at Proto or later, beyond keepVoxels or stale (SP4c spec §4.5),
-   * not busy, unpinned.
+   * not busy, unpinned by jobs and by the sim's edits (SP5a spec §2.1).
    */
   function freeable(s: number): boolean {
     return tcx[s] !== NO_COLUMN && (isStale(s) || (stage[s]! >= 1 && (flagsOf(s) & M_KEEP_VOXELS) === 0)) && busy[s] === 0
-      && protoReaders[s] === 0 && finalReaders[s] === 0;
+      && protoReaders[s] === 0 && finalReaders[s] === 0 && simPins[s] === 0;
+  }
+
+  /** A slot whose `simPins` reached 0 (SP5a spec §2.7): its unloads queued again and its 3 × 3 considered, as a settle. */
+  function simReleased(s: number): void {
+    if (disposed) return;
+    unloadCheck(s);
+    if (tcx[s] !== NO_COLUMN) considerAround(tcx[s]!, tcz[s]!);
   }
 
   /**
@@ -1362,6 +1401,48 @@ export function createCoordinator(o: CoordinatorOptions): Coordinator {
       const s = slotOf(cx, cz);
       return failed[s] !== 0 && tracks(s, cx, cz);
     },
+
+    editState(cx, cz) {
+      let stale = false;
+      for (let dz = -1; dz <= 1; dz++) {
+        for (let dx = -1; dx <= 1; dx++) {
+          const n = slotOf(cx + dx, cz + dz);
+          if (!tracks(n, cx + dx, cz + dz) || failed[n] !== 0) return 1;
+          if (isStale(n)) stale = true;
+          else if (stage[n] !== 3) return 1;
+        }
+      }
+      return stale ? 2 : 0;
+    },
+
+    simPin(cx, cz) {
+      for (let dz = -1; dz <= 1; dz++) {
+        for (let dx = -1; dx <= 1; dx++) {
+          const n = slotOf(cx + dx, cz + dz);
+          simPins[n] = simPins[n]! + 1;
+        }
+      }
+    },
+
+    simUnpin(cx, cz) {
+      for (let dz = -1; dz <= 1; dz++) {
+        for (let dx = -1; dx <= 1; dx++) {
+          const n = slotOf(cx + dx, cz + dz);
+          if (simPins[n] === 0) continue;
+          simPins[n] = simPins[n]! - 1;
+          if (simPins[n] === 0) simReleased(n);
+        }
+      }
+    },
+
+    simUnpinAll() {
+      for (let s = 0; s < SLOTS; s++) {
+        if (simPins[s] === 0) continue;
+        simPins[s] = 0;
+        simReleased(s);
+      }
+    },
+
     firstFill() {
       if (!placed || reclassify) return false;
       let m = 0;

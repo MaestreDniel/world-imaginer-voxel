@@ -1700,7 +1700,7 @@ High adds MSAA, a shadow cascade (about 2 ms), LOD 1 km and RD16 (dGPU target). 
 4. **Hashed-lattice noise cost.** Kill criterion in 3.1 (measured at 1.06-1.27× the permutation variant in the SP1 spike).
 5. **Thread oversubscription on 4-core laptops.** Adaptive throttle, pool ≤ 6, map/LOD/metric jobs ≤ 1 while generating.
 6. **Cross-browser determinism.** detMath, IEEE-only arithmetic, arch bans, golden checks in the browser (the SP1 `?lab=noise` determinism panel, then `?selftest=1` from SP2a), a Bun (JavaScriptCore) golden check at every SP exit (D20), and absolute-state diffs.
-7. **Concurrency bugs in the shared store.** Single writer by status, version and meshSeq discard, slab fuzz, edits-during-light fuzz in the harness (L3).
+7. **Concurrency bugs in the shared store.** Single writer by status, version and meshSeq discard, slab fuzz, edits never run beside a light job that reads them (SP5a's edit gate), and L3 checks incremental against full light after random edits.
 8. **Memory at High and Ultra.** Uniform elision, proto retention limited to the outer rings, unload hysteresis, HUD slab usage, Ultra documented as desktop-only.
 9. **Fluid runaway** (breaking an ocean wall into a cave net). Caps, sim distance, remesh throttle, dense diff format, F2.
 10. **Truncated settle fronts that look like walls.** A2 counts them; tune the cap and barriers. Fallback (policy B, only if A2 cannot be met): natural ticks inside sim distance with a lineage bit so only edit-caused flows persist (D18).
