@@ -1708,7 +1708,7 @@ describe('hold to repeat in the page (SP5a spec §4.1, D6; Review Focus 1, rulin
     r.at(0);
     r.hold.down(0, 0);
     await r.frames(0, 1000);
-    r.hold.up(0);
+    r.hold.up(0, r.now());
     await r.frames(1010, 1500);
     expect(r.posts.map((p) => p.t)).toEqual([0, 0.3, 0.6, 0.9]);
     // Each the voxel under the eye at its frame: x = floor(0.5 + 5 t), so the target moved between them.
@@ -1724,7 +1724,7 @@ describe('hold to repeat in the page (SP5a spec §4.1, D6; Review Focus 1, rulin
     r.at(0);
     r.hold.down(0, 0);
     await r.frames(0, 1000);
-    r.hold.up(0);
+    r.hold.up(0, r.now());
     await r.frames(1010, 1500);
     expect(r.posts.map((p) => p.t)).toEqual([0, 0.35, 0.7]);
     expect(r.outcomes.map((out) => out.ok)).toEqual([true, true, true]);
@@ -1736,12 +1736,12 @@ describe('hold to repeat in the page (SP5a spec §4.1, D6; Review Focus 1, rulin
     r.at(0);
     r.hold.down(0, 0);
     await r.frames(0, 1000);
-    r.hold.up(0);
+    r.hold.up(0, r.now());
     await r.frames(1010, 1500);
     expect(r.posts).toHaveLength(1);
     expect(r.record).toHaveBeenCalledTimes(1);
     // The page's mouse buttons go through the hold repeat: a press queues once, a release ends the hold.
-    expect(src()).toMatch(/onButton: \(b, down\) => \{\s+if \(down\) holdRepeat\.down\(b, nowS\(\)\);\s+else holdRepeat\.up\(b\);\s+\},/);
+    expect(src()).toMatch(/onButton: \(b, down\) => \{\s+if \(down\) holdRepeat\.down\(b, nowS\(\)\);\s+else holdRepeat\.up\(b, nowS\(\)\);\s+\},/);
     expect(src()).toMatch(/enabled: \(\) => settings\.holdRepeat,\s+pending: editPath\.pending,\s+queue: \(b\) => clicks\.push\(b\),/);
   });
 

@@ -8,9 +8,11 @@
  *   `expect` (no `changed` refusals from repeats, §2.1).
  * - The page's aim ticks it after the frame's DDA and before the queued clicks run, so each repeat is aimed by that
  *   frame's DDA and is one history step like a click.
- * - `up` of the held button ends it; `stop` ends it too: the page calls it at the lock's release, the palette, the map
- *   and a mode switch, after which only a new press acts. MMB (1) never repeats, and pressing it leaves a held button
- *   repeating; pressing LMB or RMB makes it the held one.
+ * - It keeps which of LMB and RMB are down. Pressing LMB or RMB makes it the held one; `up` of the held button falls
+ *   back to the other one when it is still down (repeating "until mouseup", §4.1), its rate counted from the release,
+ *   and otherwise ends it. `stop` ends it and forgets both buttons: the page calls it at the lock's release, the
+ *   palette, the map and a mode switch, after which only a new press acts. MMB (1) never repeats, and pressing it
+ *   leaves a held button repeating.
  *
  * `tick` allocates nothing while idle or waiting for a reply.
  */
@@ -29,9 +31,12 @@ const DUE_EPS_S = 1e-6;
 export interface HoldRepeat {
   /** A press at `t` (seconds, the frame clock): queues the button's action once; LMB and RMB become the held button. */
   down(b: 0 | 1 | 2, t: number): void;
-  /** A release: ends the repeat when `b` is the held button. */
-  up(b: 0 | 1 | 2): void;
-  /** Ends the repeat (the lock's release, the palette, the map, a mode switch). */
+  /**
+   * A release at `t`: when `b` is the held button, the other of LMB and RMB becomes the held one if it is still down
+   * (last queued at `t`), else the repeat ends.
+   */
+  up(b: 0 | 1 | 2, t: number): void;
+  /** Ends the repeat and forgets both buttons (the lock's release, the palette, the map, a mode switch). */
   stop(): void;
   /** The frame's check at `t`: queues the held button again when the setting is on, it is due and no reply is pending. */
   tick(t: number): void;
@@ -47,20 +52,31 @@ export function createHoldRepeat(o: {
 }): HoldRepeat {
   /** The held button, or −1. */
   let held: -1 | 0 | 2 = -1;
+  /** Which of LMB (bit 0) and RMB (bit 2) are down since their press, until their release or `stop`. */
+  let down = 0;
   /** When the held button was last queued. */
   let last = 0;
   return {
     down(b, t) {
       o.queue(b);
       if (b === 1) return;
+      down |= 1 << b;
       held = b;
       last = t;
     },
-    up(b) {
-      if (b === held) held = -1;
+    up(b, t) {
+      if (b === 1) return;
+      down &= ~(1 << b);
+      if (b !== held) return;
+      const other = b === 0 ? 2 : 0;
+      if ((down & (1 << other)) !== 0) {
+        held = other;
+        last = t;
+      } else held = -1;
     },
     stop() {
       held = -1;
+      down = 0;
     },
     tick(t) {
       if (held === -1 || !o.enabled() || o.pending()) return;

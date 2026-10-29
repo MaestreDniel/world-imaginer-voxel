@@ -1,8 +1,9 @@
 /**
  * Hold to repeat (SP5a spec §4.1, D6; Review Focus 1): `down` queues once for every button; with the setting on, a held
  * LMB or RMB queues again on the frame's `tick` once 0.3 s (break) or 0.2 s (place) have passed since the previous one
- * and the previous reply has arrived; `up` and `stop` end it, and MMB never repeats. The retargeting, the history steps
- * and the `changed` refusals are the page's aim (`worldPage.test.ts`, rulings R18); this file pins the timing.
+ * and the previous reply has arrived; `up` of the held button falls back to the other one while it is still down, else
+ * ends it; `stop` ends it, and MMB never repeats. The retargeting, the history steps and the `changed` refusals are
+ * the page's aim (`worldPage.test.ts`, rulings R18); this file pins the timing.
  */
 import { describe, expect, test } from 'vitest';
 import { REPEAT_BREAK_S, REPEAT_PLACE_S, createHoldRepeat } from '../../src/ui/world/holdRepeat';
@@ -49,7 +50,7 @@ describe('createHoldRepeat (SP5a spec §4.1, D6)', () => {
       r.at(0);
       r.repeat.down(b, 0);
       r.run(0, 3000);
-      r.repeat.up(b);
+      r.repeat.up(b, 3);
       r.run(3001, 4000);
       expect(r.queued, `button ${b}`).toEqual([[b, 0]]);
     }
@@ -60,7 +61,7 @@ describe('createHoldRepeat (SP5a spec §4.1, D6)', () => {
     r.at(0);
     r.repeat.down(0, 0);
     r.run(0, 1000);
-    r.repeat.up(0);
+    r.repeat.up(0, 1);
     r.run(1001, 2000);
     expect(r.queued).toEqual([[0, 0], [0, 0.3], [0, 0.6], [0, 0.9]]);
   });
@@ -70,7 +71,7 @@ describe('createHoldRepeat (SP5a spec §4.1, D6)', () => {
     r.at(0);
     r.repeat.down(2, 0);
     r.run(0, 1000);
-    r.repeat.up(2);
+    r.repeat.up(2, 1);
     r.run(1001, 2000);
     expect(r.queued).toEqual([[2, 0], [2, 0.2], [2, 0.4], [2, 0.6], [2, 0.8], [2, 1]]);
   });
@@ -93,7 +94,7 @@ describe('createHoldRepeat (SP5a spec §4.1, D6)', () => {
     up.at(0);
     up.repeat.down(0, 0);
     up.run(0, 500);
-    up.repeat.up(0);
+    up.repeat.up(0, 0.5);
     up.run(501, 2000);
     expect(up.queued).toEqual([[0, 0], [0, 0.3]]);
 
@@ -105,7 +106,7 @@ describe('createHoldRepeat (SP5a spec §4.1, D6)', () => {
     stop.run(301, 2000);
     expect(stop.queued).toEqual([[2, 0], [2, 0.2]]);
     // The button's later release changes nothing; a new press starts again.
-    stop.repeat.up(2);
+    stop.repeat.up(2, 2);
     stop.at(2100);
     stop.repeat.down(2, 2.1);
     stop.run(2100, 2300);
@@ -124,9 +125,47 @@ describe('createHoldRepeat (SP5a spec §4.1, D6)', () => {
     r.repeat.down(0, 0);
     r.run(0, 100);
     r.repeat.down(1, 0.1);
-    r.repeat.up(1);
-    r.repeat.up(2);
+    r.repeat.up(1, 0.1);
+    r.repeat.up(2, 0.1);
     r.run(101, 700);
     expect(r.queued).toEqual([[0, 0], [1, 0.1], [0, 0.3], [0, 0.6]]);
+  });
+
+  test('LMB held, RMB pressed takes over, and RMB\'s release falls back to the still-held LMB, its rate counted from the release', () => {
+    const r = rig({ enabled: true, replyS: 0.05 });
+    r.at(0);
+    r.repeat.down(0, 0);
+    r.run(0, 400);
+    r.at(400);
+    r.repeat.down(2, 0.4);
+    r.run(400, 700);
+    r.repeat.up(2, 0.7);
+    r.run(700, 1400);
+    r.repeat.up(0, 1.4);
+    r.run(1401, 3000);
+    expect(r.queued).toEqual([[0, 0], [0, 0.3], [2, 0.4], [2, 0.6], [0, 1], [0, 1.3]]);
+  });
+
+  test('releasing the held button after the other was released ends it; `stop` forgets both buttons', () => {
+    const both = rig({ enabled: true, replyS: 0.05 });
+    both.at(0);
+    both.repeat.down(0, 0);
+    both.at(100);
+    both.repeat.down(2, 0.1);
+    both.repeat.up(0, 0.1);
+    both.run(100, 350);
+    both.repeat.up(2, 0.35);
+    both.run(351, 2000);
+    expect(both.queued).toEqual([[0, 0], [2, 0.1], [2, 0.3]]);
+
+    const stop = rig({ enabled: true, replyS: 0.05 });
+    stop.at(0);
+    stop.repeat.down(0, 0);
+    stop.at(100);
+    stop.repeat.down(2, 0.1);
+    stop.repeat.stop();
+    stop.repeat.up(2, 0.15);
+    stop.run(100, 2000);
+    expect(stop.queued).toEqual([[0, 0], [2, 0.1]]);
   });
 });

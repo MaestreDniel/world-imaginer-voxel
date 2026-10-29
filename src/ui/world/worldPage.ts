@@ -2503,7 +2503,7 @@ export function mountWorldPage(root: HTMLElement, q: WorldQuery, hash: string, o
       onLook: (dx, dy) => look(fly, dx, dy, settings.sensitivity * LOOK_DEG_PER_PIXEL),
       onButton: (b, down) => {
         if (down) holdRepeat.down(b, nowS());
-        else holdRepeat.up(b);
+        else holdRepeat.up(b, nowS());
       },
       // Walking, Ctrl is sprint, so Ctrl+wheel steps the slot as the plain wheel does (SP5a spec §4.1, D9).
       wheelCtrlAsSlot: () => fly.mode === 'walk',
