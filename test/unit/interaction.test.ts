@@ -240,6 +240,19 @@ describe('placeAt: buckets (SP5a spec §4.2)', () => {
       { x: 1, y: 68, z: 0, op: 'set', value: value(AIR, LAVA_SOURCE), expect: value(AIR, packFluid(1, 5)) });
   });
 
+  test('a bucket into the same still source is a no-op → null; into the other fluid\'s source it replaces it', () => {
+    // A lake bed's top face under water: the block ray passes the water and the target holds air + WATER_SOURCE.
+    const r = canned().set(0, 10, 0, STONE).set(0, 11, 0, AIR, WATER_SOURCE).set(1, 10, 0, STONE).set(1, 11, 0, AIR, LAVA_SOURCE)
+      .set(2, 10, 0, STONE).set(2, 11, 0, facing(LADDER, 'north'), WATER_SOURCE);
+    expect(placeAt(hitOf(r, 0, 10, 0, FACE_UP), WATER, 0, FAR, r, always)).toBeNull();
+    expect(placeAt(hitOf(r, 1, 10, 0, FACE_UP), LAVA, 0, FAR, r, always)).toBeNull();
+    expect(placeAt(hitOf(r, 2, 10, 0, FACE_UP), WATER, 0, FAR, r, always)).toBeNull();
+    expect(placeAt(hitOf(r, 0, 10, 0, FACE_UP), LAVA, 0, FAR, r, always)).toEqual(
+      { x: 0, y: 11, z: 0, op: 'set', value: value(AIR, LAVA_SOURCE), expect: value(AIR, WATER_SOURCE) });
+    expect(placeAt(hitOf(r, 1, 10, 0, FACE_UP), WATER, 0, FAR, r, always)).toEqual(
+      { x: 1, y: 11, z: 0, op: 'set', value: value(AIR, WATER_SOURCE), expect: value(AIR, LAVA_SOURCE) });
+  });
+
   test('water into a ladder → ladder + 16; lava into a ladder → null', () => {
     // The target is the voxel across the hit face: the stone floor is hit, the ladder stands on it.
     const ladder = facing(LADDER, 'north');

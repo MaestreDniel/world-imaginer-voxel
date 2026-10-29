@@ -160,7 +160,9 @@ export function placeAt(hit: RayHit, slot: Slot, lookYawDeg: number, body: BodyB
 
 /**
  * The edit of voxel (x, y, z) inside the world's rows and an editable column: `state(s)` maps its current state to the
- * new one, `fluid` is the new fluid byte (or a map of the current one); either gives −1 to refuse.
+ * new one, `fluid` is the new fluid byte (or a map of the current one); either gives −1 to refuse. An edit that would
+ * leave the voxel's value as it is (a bucket into the same still source) is null too: it would post a no-op and record
+ * an empty history step.
  */
 function target(x: number, y: number, z: number, read: Read, editable: (cx: number, cz: number) => boolean,
   state: (s: number) => number, fluid: number | ((f: number) => number)): Edit | null {
@@ -170,7 +172,7 @@ function target(x: number, y: number, z: number, read: Read, editable: (cx: numb
   const s = state(expect >>> 8);
   if (s < 0) return null;
   const f = typeof fluid === 'number' ? fluid : fluid(expect & 255);
-  if (f < 0) return null;
+  if (f < 0 || ((s << 8) | f) >>> 0 === expect) return null;
   return setEdit(x, y, z, s, f, expect);
 }
 
