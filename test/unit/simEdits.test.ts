@@ -346,4 +346,45 @@ describe('applyEdits on a canned store: the dirty set and StoreFull (SP5a spec �
     // The light of the whole store still equals a fresh lightRegion over the edited 3 × 3.
     expectLightFresh(s, 0, 0);
   });
+
+  test('another throw after the first write (an injected bug in the 2nd edit\'s `replaceLight`) runs the same recovery, then propagates: the voxels, light, heightmaps (aux A) and DiffStore as before the batch, the touched columns\' versions + 1, and a later batch writes (SIM-2)', () => {
+    const s = cannedStore();
+    const d = createDiffStore();
+    const auxOf = (cx: number, cz: number) => {
+      const a = s.final(cx, cz)!.aux()!;
+      return Buffer.from(a.worldSurfaceWG.buffer, a.worldSurfaceWG.byteOffset, 4096).toString('hex');
+    };
+    const aux = [auxOf(0, 0), auxOf(1, 0)];
+    const vs = versions(s, -2, -2, 5);
+    const light = [s.lightAt(5, 70, 5), s.lightAt(21, 70, 5)];
+    // The edit writer of (1, 0) is the one the batch reopens (one per record claim): its light write throws.
+    const w = s.reopenPublished(1, 0);
+    const replaceLight = w.replaceLight;
+    w.replaceLight = () => {
+      throw new TypeError('injected bug');
+    };
+    const batch = [set(5, 70, 5, val(STONE), val(AIR)), set(21, 70, 5, val(STONE), val(AIR))];
+    try {
+      expect(() => applyEdits(s, d, scratch, batch, now)).toThrow('injected bug');
+    } finally {
+      w.replaceLight = replaceLight;
+    }
+    expect([valueAt(s, 5, 70, 5), valueAt(s, 21, 70, 5)]).toEqual([val(AIR), val(AIR)]);
+    expect([s.lightAt(5, 70, 5), s.lightAt(21, 70, 5)]).toEqual(light);
+    expect([s.heightAt('worldSurface', 5, 5), s.heightAt('worldSurface', 21, 5)]).toEqual([TOP + 1, TOP + 1]);
+    expect([auxOf(0, 0), auxOf(1, 0)]).toEqual(aux);
+    expect(d.size).toBe(0);
+    // Edit 1 wrote (0, 0)'s blocks and light, edit 2 (1, 0)'s blocks and began its light: a MESH that read them is dropped.
+    const want = vs.slice();
+    const at = (cx: number, cz: number): number => 3 * (5 * (cz + 2) + (cx + 2));
+    for (const k of [at(0, 0), at(0, 0) + 1, at(1, 0), at(1, 0) + 1]) want[k]! += 1;
+    expect(versions(s, -2, -2, 5)).toEqual(want);
+    // The 3 × 3 around (0, 0) holds (1, 0) too.
+    expectLightFresh(s, 0, 0);
+    // The writers hold no kept code: the same batch now writes and publishes.
+    const r = applyEdits(s, d, scratch, batch, now);
+    expect(r.refused).toBeNull();
+    expect([valueAt(s, 5, 70, 5), valueAt(s, 21, 70, 5)]).toEqual([val(STONE), val(STONE)]);
+    expectLightFresh(s, 0, 0);
+  });
 });

@@ -16,7 +16,8 @@
  * it was, but a MESH in flight may have read the replaced slots meanwhile (§2.1 lets it run beside an edit, "dropped by
  * its versions"): the `blockVersion` of each column whose block write began and the `lightVersion` of each column whose
  * light write began are bumped after the restore, and `dirty` keeps the columns gathered so far, so such a MESH is
- * dropped and the columns are remeshed.
+ * dropped and the columns are remeshed. Any other throw after validation (a bug, a relight overflow, a `WriterStale`)
+ * runs the same recovery and is then rethrown, so no batch is left half-written with its kept codes unreleased.
  *
  * The dirty set (§2.6) is every column whose padded view holds a changed voxel: the edited column, its neighbours whose
  * one-voxel ring holds the edited voxel, and from the relight report each column with a changed section plus the
@@ -378,7 +379,7 @@ export function applyEdits(store: VoxelStore, diffs: DiffStore, s: EditScratch, 
         }
         for (const w of opened) w.publish();
       } catch (err) {
-        if (!(err instanceof StoreFull)) throw err;
+        // Any throw after validation runs the same recovery (SIM-2); only a StoreFull is a refusal, any other is rethrown.
         for (const w of opened) w.rollback();
         // The heightmaps of each restored block column, rescanned whole.
         for (let k = 0; k < written; k++) {
@@ -400,6 +401,7 @@ export function applyEdits(store: VoxelStore, diffs: DiffStore, s: EditScratch, 
         const table = store.table;
         for (const w of wroteBlocks) table.bumpBlockVersion(table.find(w.cx, w.cz));
         for (const w of wroteLight) table.bumpLightVersion(table.find(w.cx, w.cz));
+        if (!(err instanceof StoreFull)) throw err;
         refused = 'full';
       }
     }
