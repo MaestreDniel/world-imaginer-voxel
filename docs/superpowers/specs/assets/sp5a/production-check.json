@@ -1,0 +1,917 @@
+{
+  "date": "2026-10-29T17:44:00.695Z",
+  "url": "https://world-imaginer-voxel.vercel.app/",
+  "gitHead": "c6170ae8de42c73f7121f9c0570ff4b24ed136c0",
+  "servedBundle": "index-DD3BMwWp.js",
+  "localBundle": "index-DD3BMwWp.js",
+  "sameBuild": true,
+  "userAgent": "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/155.0.0.0 Safari/537.36",
+  "glRenderer": "ANGLE (Intel, Mesa Intel(R) Iris(R) Xe Graphics (ADL GT2), OpenGL 4.6)",
+  "glVendor": "Google Inc. (Intel)",
+  "window": {
+    "left": 0,
+    "top": 32,
+    "width": 1756,
+    "height": 956,
+    "windowState": "maximized"
+  },
+  "viewport": {
+    "innerWidth": 1756,
+    "innerHeight": 869,
+    "devicePixelRatio": 1.09375,
+    "hasFocus": true
+  },
+  "wiTestHonoured": true,
+  "loadBefore": {
+    "uptime": "18:44:00 up 50 min,  1 user,  load average: 0.98, 1.33, 1.32",
+    "loadavg": [
+      0.98,
+      1.33,
+      1.32
+    ]
+  },
+  "loadAfter": {
+    "uptime": "18:45:02 up 51 min,  1 user,  load average: 1.49, 1.42, 1.35",
+    "loadavg": [
+      1.49,
+      1.42,
+      1.35
+    ]
+  },
+  "steps": [
+    {
+      "step": 1,
+      "name": "break and place (the mouse with the pointer lock, RegionBatch)",
+      "notes": [
+        "Aimed (-1, 94, -1) state 3: LMB → 0 in 4 ms; then aimed (-2, 93, -2) face 4, RMB placed slot 1 (Stone; it already held Stone and was active before the 1 key, so the key's effect is not shown) at (-2, 94, -2): 0 → 1 in 3 ms; block history 0 → 2; HUD edits null → 2."
+      ],
+      "query": "?rd=8&renderer=batch&wiTest=1&pitch=-60",
+      "load": {
+        "url": "https://world-imaginer-voxel.vercel.app/?rd=8&renderer=batch&wiTest=1&pitch=-60",
+        "revealWallMs": 3153,
+        "dataRenderer": [
+          "batch"
+        ],
+        "wiTest": true
+      },
+      "ownerBefore": "world",
+      "hudEditsBefore": null,
+      "historyBefore": {
+        "size": 0,
+        "redo": 0
+      },
+      "lockGranted": true,
+      "how": "the mouse: CDP mouse presses on the canvas centre with the pointer lock granted",
+      "hotbarAfter1": {
+        "active": 0,
+        "slots": [
+          "Stone",
+          "Dirt",
+          "Grass block",
+          "Oak planks",
+          "Glass",
+          "Oak log",
+          "Torch",
+          "Water bucket",
+          "Lava bucket"
+        ]
+      },
+      "aimBefore": {
+        "hit": true,
+        "x": -1,
+        "y": 94,
+        "z": -1,
+        "face": 4,
+        "outline": true
+      },
+      "targetStateBefore": 3,
+      "breakMs": 4,
+      "targetStateAfter": 0,
+      "aimAfterBreak": {
+        "hit": true,
+        "x": -2,
+        "y": 93,
+        "z": -2,
+        "face": 4,
+        "outline": true
+      },
+      "placeAt": {
+        "x": -2,
+        "y": 94,
+        "z": -2
+      },
+      "placeStateBefore": 0,
+      "placeMs": 3,
+      "placeStateAfter": 1,
+      "aimAfterPlace": {
+        "hit": true,
+        "x": -2,
+        "y": 94,
+        "z": -2,
+        "face": 1,
+        "outline": true
+      },
+      "historyAfter": {
+        "size": 2,
+        "redo": 0
+      },
+      "hudEditsAfter": 2,
+      "hudEditRow": "edit p95 16 ms (2)",
+      "stillLocked": true,
+      "screenshot": "shots/1-after-place.png",
+      "pass": true,
+      "pageErrorsDuring": 0,
+      "consoleErrorsDuring": 0
+    },
+    {
+      "step": 2,
+      "name": "the palette (E opens it, a swatch sets the active slot, Esc closes it)",
+      "notes": [
+        "E opened #world-palette in 2 ms with 51 swatches (pointer lock true → false); a CDP click on #palette-slot-bricks set the active slot 1 from Stone to Bricks; a CDP-injected Esc closed it in 1 ms. A real keyboard Esc is the user's check."
+      ],
+      "lockedBeforeE": true,
+      "openMs": 2,
+      "lockedAfterE": false,
+      "swatches": 51,
+      "hotbarBefore": {
+        "active": 0,
+        "slots": [
+          "Stone",
+          "Dirt",
+          "Grass block",
+          "Oak planks",
+          "Glass",
+          "Oak log",
+          "Torch",
+          "Water bucket",
+          "Lava bucket"
+        ]
+      },
+      "swatchLabel": "Bricks",
+      "screenshotOpen": "shots/2-palette-open.png",
+      "hotbarAfter": {
+        "active": 0,
+        "slots": [
+          "Bricks",
+          "Dirt",
+          "Grass block",
+          "Oak planks",
+          "Glass",
+          "Oak log",
+          "Torch",
+          "Water bucket",
+          "Lava bucket"
+        ]
+      },
+      "paletteOpenAfterSwatch": true,
+      "closeMs": 1,
+      "ownerAfter": "world",
+      "pass": true,
+      "pageErrorsDuring": 0,
+      "consoleErrorsDuring": 0
+    },
+    {
+      "step": 3,
+      "name": "the context Ctrl+Z (a block undo with the world owning; a map setting undone with the map open side by side)",
+      "notes": [
+        "World owning: Ctrl+Z turned the RMB stone at (-2, 94, -2) back to 0 in 4 ms (block history {\"size\":2,\"redo\":0} → {\"size\":1,\"redo\":1}). Map open side by side (owner map): desert T 0.6, 1 → 0.6, 0.8 (stale rose 196 ms after the Enter); Ctrl+Z put it back to 0.6, 1 in 2 ms (stale rose again 161 ms after), and the block history stayed {\"size\":1,\"redo\":1}, so the key went to the map's settings, not to the blocks."
+      ],
+      "ownerWorld": "world",
+      "historyBefore": {
+        "size": 2,
+        "redo": 0
+      },
+      "placedAt": {
+        "x": -2,
+        "y": 94,
+        "z": -2
+      },
+      "placedStateBefore": 1,
+      "blockUndoMs": 4,
+      "placedStateAfterUndo": 0,
+      "historyAfterBlockUndo": {
+        "size": 1,
+        "redo": 1
+      },
+      "split": true,
+      "ownerMap": "map",
+      "setting": {
+        "field": "biome table: desert T (#bt-desert-T)",
+        "was": "0.6, 1",
+        "typed": "0.6, 0.8"
+      },
+      "staleRoseMs": 196,
+      "valueAfterEdit": "0.6, 0.8",
+      "hashAfterEdit": "",
+      "historyBeforeMapUndo": {
+        "size": 1,
+        "redo": 1
+      },
+      "screenshotSplit": "shots/3-split-after-edit.png",
+      "ownerAtMapUndo": "map",
+      "mapUndoMs": 2,
+      "valueAfterUndo": "0.6, 1",
+      "staleRoseAfterUndoMs": 161,
+      "historyAfterMapUndo": {
+        "size": 1,
+        "redo": 1
+      },
+      "placedStateAfterMapUndo": 0,
+      "screenshotAfterUndo": "shots/3-split-after-undo.png",
+      "mapClosed": true,
+      "ownerEnd": "world",
+      "pass": true,
+      "pageErrorsDuring": 0,
+      "consoleErrorsDuring": 0
+    },
+    {
+      "step": 4,
+      "name": "F to walking and walking (the feet reach the ground, W moves the body)",
+      "notes": [
+        "F: fly → walk, the feet on the ground in 215 ms at y 95.0000001 (steady over 300 ms); HUD \"Walk · x 0.0 y 96.6 z 0.0 · column 0, 0\". On the smoke's 16-block stone corridor along −z (153 edits through the hook, 0 refused), W held 4 s (CDP key) moved the feet 17.81 blocks (dx 0, dz -17.81), past the corridor's end (16 blocks ahead of the feet): the body fell off it, and 0.3 s after the release the feet were at y 90.94, off the ground; Space on the ground lifted them 1.25 blocks, measured after the body had landed on the ground below, not on the corridor. No Ctrl (sprint) was pressed: Ctrl+W closes the browser (the user's finding)."
+      ],
+      "load": {
+        "url": "https://world-imaginer-voxel.vercel.app/?rd=8&renderer=batch&wiTest=1&yaw=0",
+        "revealWallMs": 3779,
+        "dataRenderer": [
+          "batch"
+        ],
+        "wiTest": true
+      },
+      "query": "?rd=8&renderer=batch&wiTest=1&yaw=0",
+      "modeBefore": "fly",
+      "groundMs": 215,
+      "modeAfter": "walk",
+      "feetOnGround": [
+        {
+          "x": 0,
+          "y": 95.0000001,
+          "z": 0,
+          "onGround": true,
+          "snapPending": false,
+          "snapY": null
+        },
+        {
+          "x": 0,
+          "y": 95.0000001,
+          "z": 0,
+          "onGround": true,
+          "snapPending": false,
+          "snapY": null
+        }
+      ],
+      "hudModeLine": "Walk · x 0.0 y 96.6 z 0.0 · column 0, 0",
+      "corridorRefused": [],
+      "corridorEdits": 153,
+      "walkStart": {
+        "x": 0,
+        "y": 95.0000001,
+        "z": 0,
+        "onGround": true,
+        "snapPending": false,
+        "snapY": null
+      },
+      "walkEnd": {
+        "x": 0,
+        "y": 90.93665535304001,
+        "z": -17.81213078719237,
+        "onGround": false,
+        "snapPending": false,
+        "snapY": null
+      },
+      "wMovedBlocks": 17.81,
+      "wDirection": {
+        "dx": 0,
+        "dz": -17.81
+      },
+      "jumpRise": 1.25,
+      "screenshot": "shots/4-walk-after-W.png",
+      "pass": true,
+      "pageErrorsDuring": 0,
+      "consoleErrorsDuring": 0
+    },
+    {
+      "step": 5,
+      "name": "swimming (a water pool through the hook: the body sinks, Space lifts it)",
+      "notes": [
+        "Pool under the feet (surface at y 88, water y 83..87, 134 edits, 0 refused). The body went in and sank (the evidence is this y-trace; the water was set through the hook, the water bucket's own edit, not with a bucket click): y 88 when the last edit returned, 84.995 4.5 s later, at 0.5 blocks/s over the last 2 s (the water's terminal sink, WATER_GRAVITY 0.005 / (1 − WATER_DRAG 0.8) per tick, is 0.5 blocks/s; out of fluid the body would have reached the floor at y 83 in well under a second). Space held 1.5 s lifted the feet 3.243 blocks (to y 88.238)."
+      ],
+      "pool": {
+        "centre": {
+          "x": 0,
+          "z": -19
+        },
+        "surfaceY": 88,
+        "waterFromY": 83,
+        "waterToY": 87,
+        "floorY": 82,
+        "walls": "stone ring 5 × 5",
+        "waterVoxels": 45,
+        "fluidByte": 16,
+        "state": 0,
+        "edits": 134
+      },
+      "how": "water set through the hook as the water bucket places it (state air, fluid byte 16, a still source), in a 3 × 3 × 5 pit dug under the feet with a stone floor and walls",
+      "refused": [],
+      "screenshotUnder": "shots/5-swim-sinking.png",
+      "sinkRateLast2s": 0.5,
+      "sinkYAtEditsDone": 88,
+      "sinkYAtSpace": 84.995,
+      "sinkMinY": 84.995,
+      "onGroundDuringSink": true,
+      "spaceHoldMs": 1500,
+      "upMaxY": 88.238,
+      "riseWithSpace": 3.243,
+      "samplesEvery250ms": [
+        [
+          -52,
+          88,
+          true
+        ],
+        [
+          198,
+          87.529,
+          false
+        ],
+        [
+          448,
+          87.18,
+          false
+        ],
+        [
+          698,
+          86.981,
+          false
+        ],
+        [
+          947,
+          86.832,
+          false
+        ],
+        [
+          1198,
+          86.699,
+          false
+        ],
+        [
+          1449,
+          86.572,
+          false
+        ],
+        [
+          1698,
+          86.446,
+          false
+        ],
+        [
+          1947,
+          86.321,
+          false
+        ],
+        [
+          2198,
+          86.195,
+          false
+        ],
+        [
+          2447,
+          86.07,
+          false
+        ],
+        [
+          2698,
+          85.945,
+          false
+        ],
+        [
+          2948,
+          85.82,
+          false
+        ],
+        [
+          3198,
+          85.695,
+          false
+        ],
+        [
+          3448,
+          85.57,
+          false
+        ],
+        [
+          3697,
+          85.445,
+          false
+        ],
+        [
+          3948,
+          85.32,
+          false
+        ],
+        [
+          4198,
+          85.195,
+          false
+        ],
+        [
+          4448,
+          85.07,
+          false
+        ],
+        [
+          4698,
+          85.057,
+          false
+        ],
+        [
+          4948,
+          85.588,
+          false
+        ],
+        [
+          5198,
+          86.35,
+          false
+        ],
+        [
+          5448,
+          87.188,
+          false
+        ],
+        [
+          5698,
+          88.051,
+          false
+        ],
+        [
+          5948,
+          87.926,
+          false
+        ],
+        [
+          6198,
+          87.375,
+          false
+        ],
+        [
+          6449,
+          87.164,
+          false
+        ],
+        [
+          6698,
+          87.011,
+          false
+        ],
+        [
+          6948,
+          86.877,
+          false
+        ],
+        [
+          7198,
+          86.749,
+          false
+        ]
+      ],
+      "timesMs": {
+        "editsDone": 0,
+        "spaceDown": 4596,
+        "spaceUp": 6104
+      },
+      "feetEnd": {
+        "x": 0,
+        "y": 86.67314433801583,
+        "z": -18.304905938835265,
+        "onGround": false,
+        "snapPending": false,
+        "snapY": null
+      },
+      "pass": true,
+      "pageErrorsDuring": 0,
+      "consoleErrorsDuring": 0
+    },
+    {
+      "step": 6,
+      "name": "a torch at night (T to ×60 until midnight, T to pause; the torch placed with the mouse; block light ≥ 13 beside it)",
+      "notes": [
+        "Clock at load \"speed 12.0 blocks/s · 08:00 ×1\"; T twice → \"speed 12.0 blocks/s · 08:13 ×60\"; at midnight T again → \"speed 12.0 blocks/s · 23:33 paused\" (still \"speed 12.0 blocks/s · 23:33 paused\" 1 s later): sun elevation -68.9°, night. Torch (Torch, slot 1) placed at (-1, 95, -1) on face 4 of (-1, 94, -1): state 0 → 32; the block light of the air beside it 0 → 13 (3 ms)."
+      ],
+      "load": {
+        "url": "https://world-imaginer-voxel.vercel.app/?rd=8&renderer=batch&wiTest=1&pitch=-60",
+        "revealWallMs": 2757,
+        "dataRenderer": [
+          "batch"
+        ],
+        "wiTest": true
+      },
+      "query": "?rd=8&renderer=batch&wiTest=1&pitch=-60",
+      "clockAtLoad": "speed 12.0 blocks/s · 08:00 ×1",
+      "clockAt60": "speed 12.0 blocks/s · 08:13 ×60",
+      "clockPaused": "speed 12.0 blocks/s · 23:33 paused",
+      "clockPausedLater": "speed 12.0 blocks/s · 23:33 paused",
+      "sunElevationDeg": -68.9,
+      "phase": "night",
+      "torchSwatch": "Torch",
+      "hotbar": {
+        "active": 0,
+        "slots": [
+          "Torch",
+          "Dirt",
+          "Grass block",
+          "Oak planks",
+          "Glass",
+          "Oak log",
+          "Torch",
+          "Water bucket",
+          "Lava bucket"
+        ]
+      },
+      "lockGranted": true,
+      "aim": {
+        "hit": true,
+        "x": -1,
+        "y": 94,
+        "z": -1,
+        "face": 4,
+        "outline": true
+      },
+      "torchAt": {
+        "x": -1,
+        "y": 95,
+        "z": -1
+      },
+      "lightBefore": [
+        {
+          "at": [
+            0,
+            95,
+            -1
+          ],
+          "block": 0,
+          "light": 240,
+          "blockLight": 0,
+          "skyLight": 15
+        },
+        {
+          "at": [
+            -2,
+            95,
+            -1
+          ],
+          "block": 0,
+          "light": 240,
+          "blockLight": 0,
+          "skyLight": 15
+        },
+        {
+          "at": [
+            -1,
+            96,
+            -1
+          ],
+          "block": 0,
+          "light": 240,
+          "blockLight": 0,
+          "skyLight": 15
+        },
+        {
+          "at": [
+            -1,
+            94,
+            -1
+          ],
+          "block": 3,
+          "light": 0,
+          "blockLight": 0,
+          "skyLight": 0
+        },
+        {
+          "at": [
+            -1,
+            95,
+            0
+          ],
+          "block": 0,
+          "light": 240,
+          "blockLight": 0,
+          "skyLight": 15
+        },
+        {
+          "at": [
+            -1,
+            95,
+            -2
+          ],
+          "block": 0,
+          "light": 240,
+          "blockLight": 0,
+          "skyLight": 15
+        }
+      ],
+      "stateBefore": 0,
+      "maxBlockLightBefore": 0,
+      "how": "the mouse: RMB (CDP) with the torch in the active slot and the pointer lock granted",
+      "placeMs": 54,
+      "stateAfter": 32,
+      "litMs": 3,
+      "lightAfter": [
+        {
+          "at": [
+            0,
+            95,
+            -1
+          ],
+          "block": 0,
+          "light": 253,
+          "blockLight": 13,
+          "skyLight": 15
+        },
+        {
+          "at": [
+            -2,
+            95,
+            -1
+          ],
+          "block": 0,
+          "light": 253,
+          "blockLight": 13,
+          "skyLight": 15
+        },
+        {
+          "at": [
+            -1,
+            96,
+            -1
+          ],
+          "block": 0,
+          "light": 253,
+          "blockLight": 13,
+          "skyLight": 15
+        },
+        {
+          "at": [
+            -1,
+            94,
+            -1
+          ],
+          "block": 3,
+          "light": 0,
+          "blockLight": 0,
+          "skyLight": 0
+        },
+        {
+          "at": [
+            -1,
+            95,
+            0
+          ],
+          "block": 0,
+          "light": 253,
+          "blockLight": 13,
+          "skyLight": 15
+        },
+        {
+          "at": [
+            -1,
+            95,
+            -2
+          ],
+          "block": 0,
+          "light": 253,
+          "blockLight": 13,
+          "skyLight": 15
+        }
+      ],
+      "maxBlockLightAfter": 13,
+      "screenshot": "shots/6-torch-at-night.png",
+      "pass": true,
+      "pageErrorsDuring": 0,
+      "consoleErrorsDuring": 0
+    },
+    {
+      "step": 7,
+      "name": "?selftest=1",
+      "notes": [],
+      "wallMs": 9659,
+      "summary": "✓ all 59 goldens match (9.3 s)",
+      "keyCount": 59,
+      "repoGoldenCount": 59,
+      "equalCount": 59,
+      "matchesRepoGoldens": 59,
+      "byGroup": {
+        "sp1": 27,
+        "sp2a": 20,
+        "sp3a": 3,
+        "sp3b": 2,
+        "sp3c": 2,
+        "sp3e": 5
+      },
+      "mismatches": [],
+      "results": {
+        "sp1.detMath.detSin": "c0068832078fcc5f == c0068832078fcc5f: true",
+        "sp1.detMath.detCos": "feb91af46e2d5fa8 == feb91af46e2d5fa8: true",
+        "sp1.detMath.detExp": "c53d7ddf72bd3cec == c53d7ddf72bd3cec: true",
+        "sp1.detMath.detExp2": "169843df6c4b480a == 169843df6c4b480a: true",
+        "sp1.detMath.detErf": "2e75e35244a19c1a == 2e75e35244a19c1a: true",
+        "sp1.detMath.detSmoothstep": "e8ecc239194f0001 == e8ecc239194f0001: true",
+        "sp1.noise.climate.warp.shift.noise.x": "ab58facf37a59f64 == ab58facf37a59f64: true",
+        "sp1.noise.climate.warp.shift.noise.z": "ce2a355bb0a4b957 == ce2a355bb0a4b957: true",
+        "sp1.noise.climate.warp.C.noise.x": "73777f2e5850f398 == 73777f2e5850f398: true",
+        "sp1.noise.climate.warp.C.noise.z": "2eeae0c123b03ad4 == 2eeae0c123b03ad4: true",
+        "sp1.noise.climate.warp.R.noise.x": "3b557c06de0599df == 3b557c06de0599df: true",
+        "sp1.noise.climate.warp.R.noise.z": "cd46ececce41f6e0 == cd46ececce41f6e0: true",
+        "sp1.noise.climate.C": "680c01ba6642f1a7 == 680c01ba6642f1a7: true",
+        "sp1.noise.climate.E": "58586d7808dfe2d1 == 58586d7808dfe2d1: true",
+        "sp1.noise.climate.W": "a0f5467da1603401 == a0f5467da1603401: true",
+        "sp1.noise.climate.T": "98a56062d2803095 == 98a56062d2803095: true",
+        "sp1.noise.climate.H": "bbeef615830d715b == bbeef615830d715b: true",
+        "sp1.noise.climate.R": "7f29f6fd6882fcf0 == 7f29f6fd6882fcf0: true",
+        "sp1.noise.test.density3d": "127615bde2c54f3e == 127615bde2c54f3e: true",
+        "sp1.noise.test.adv2d16": "12594d7f09c393c9 == 12594d7f09c393c9: true",
+        "sp1.noise.test.adv3d8": "439e4ef6ce852dd6 == 439e4ef6ce852dd6: true",
+        "sp1.noise.test.adv3d32": "a456079e4b571a2c == a456079e4b571a2c: true",
+        "sp1.spline.OFFSET": "9d5ae62fbb06366d == 9d5ae62fbb06366d: true",
+        "sp1.spline.SIGMA": "7163452d6496dba1 == 7163452d6496dba1: true",
+        "sp1.spline.JAG": "445a1955b3113d35 == 445a1955b3113d35: true",
+        "sp1.spline.TANGENT_FIXTURE": "48c1ad609fc51ac9 == 48c1ad609fc51ac9: true",
+        "sp1.params": "0ef3ba26bfc92a94 == 0ef3ba26bfc92a94: true",
+        "sp2a.column.point.default": "f6eea0b28a0d0b5d == f6eea0b28a0d0b5d: true",
+        "sp2a.column.point.large_biomes": "e817c6995df09a87 == e817c6995df09a87: true",
+        "sp2a.column.sample": "2d0575772b66c48b == 2d0575772b66c48b: true",
+        "sp2a.tile.biome.256": "6d4706bd9dbe40c5 == 6d4706bd9dbe40c5: true",
+        "sp2a.tile.biome.64": "a83c59568366276e == a83c59568366276e: true",
+        "sp2a.tile.biome.16": "e31830aa8db805be == e31830aa8db805be: true",
+        "sp2a.tile.biome.4": "85c6cc65316619ce == 85c6cc65316619ce: true",
+        "sp2a.tile.relief.256": "5379c0cff8523945 == 5379c0cff8523945: true",
+        "sp2a.tile.relief.64": "524e0a9ee3fd9925 == 524e0a9ee3fd9925: true",
+        "sp2a.tile.relief.16": "80b633886df6d2fa == 80b633886df6d2fa: true",
+        "sp2a.tile.relief.4": "d9fecde4976f44bb == d9fecde4976f44bb: true",
+        "sp2a.tile.rivers.256": "d075bd749fbcc025 == d075bd749fbcc025: true",
+        "sp2a.tile.rivers.64": "9dc9184c9d07926c == 9dc9184c9d07926c: true",
+        "sp2a.tile.rivers.16": "7b1a03e31269d80b == 7b1a03e31269d80b: true",
+        "sp2a.tile.rivers.4": "de3776fe6877fcd5 == de3776fe6877fcd5: true",
+        "sp2a.tile.C.256": "df02f1596684e5cd == df02f1596684e5cd: true",
+        "sp2a.tile.C.64": "d0d22bdc15560fc4 == d0d22bdc15560fc4: true",
+        "sp2a.tile.C.16": "3cbad99308c9a597 == 3cbad99308c9a597: true",
+        "sp2a.tile.C.4": "154b3bda8afb6efd == 154b3bda8afb6efd: true",
+        "sp2a.spawn": "ebf9cfffc8f8b0c7 == ebf9cfffc8f8b0c7: true",
+        "sp3a.registry": "5e1febd88b449b63 == 5e1febd88b449b63: true",
+        "sp3a.region.T.default": "454c4d8287c4b075 == 454c4d8287c4b075: true",
+        "sp3a.region.T.large_biomes": "67936d16e11d5725 == 67936d16e11d5725: true",
+        "sp3b.density.ops": "adad71e21efc60cb == adad71e21efc60cb: true",
+        "sp3b.density.default": "020212de61dc83da == 020212de61dc83da: true",
+        "sp3c.registry": "2ade4ab7c488e7c2 == 2ade4ab7c488e7c2: true",
+        "sp3c.surface.ops": "df53f0d1115b0d39 == df53f0d1115b0d39: true",
+        "sp3e.region.T.amplified": "4154a9618fba00c5 == 4154a9618fba00c5: true",
+        "sp3e.region.T.archipelago": "acf38af4e7775370 == acf38af4e7775370: true",
+        "sp3e.region.T.floating_islands": "e8e632117b08d820 == e8e632117b08d820: true",
+        "sp3e.column.point.archipelago": "576dcc24bc474a96 == 576dcc24bc474a96: true",
+        "sp3e.column.point.floating_islands": "38ad6e018c200781 == 38ad6e018c200781: true"
+      },
+      "file": "selftest-chrome.json (the page's copy-as-JSON output, captured in our page)",
+      "pass": true,
+      "pageErrorsDuring": 0,
+      "consoleErrorsDuring": 0
+    },
+    {
+      "step": 8,
+      "name": "page and console errors",
+      "notes": [],
+      "pageErrors": 0,
+      "consoleErrors": 0,
+      "ignored": 1,
+      "pass": true,
+      "pageErrorsDuring": 0,
+      "consoleErrorsDuring": 0
+    }
+  ],
+  "selftest": "59/59",
+  "consoleErrors": [],
+  "pageErrors": [],
+  "ignoredLogs": [
+    {
+      "step": "1-break and place (the mouse with the pointer lock, RegionBatch)",
+      "text": "Failed to load resource: the server responded with a status of 404 ()",
+      "url": "https://world-imaginer-voxel.vercel.app/favicon.ico",
+      "why": "index.html declares no icon, so Chrome asks for /favicon.ico and the host answers 404 (the same ignore as test/tools/cdp.ts ignoredLog)"
+    }
+  ],
+  "consoleWarnings": [],
+  "dialogs": [
+    {
+      "step": "4-F to walking and walking (the feet reach the ground, W moves the body)",
+      "type": "beforeunload",
+      "message": ""
+    },
+    {
+      "step": "6-a torch at night (T to ×60 until midnight, T to pause; the torch placed with the mouse; block light ≥ 13 beside it)",
+      "type": "beforeunload",
+      "message": ""
+    },
+    {
+      "step": "7-selftest",
+      "type": "beforeunload",
+      "message": ""
+    }
+  ],
+  "lockAttempts": [
+    {
+      "step": "1-break and place (the mouse with the pointer lock, RegionBatch)",
+      "attempt": 1,
+      "elementAtCentre": "img.screen-panorama",
+      "granted": false
+    },
+    {
+      "step": "1-break and place (the mouse with the pointer lock, RegionBatch)",
+      "attempt": 2,
+      "elementAtCentre": "canvas",
+      "granted": true
+    },
+    {
+      "step": "6-a torch at night (T to ×60 until midnight, T to pause; the torch placed with the mouse; block light ≥ 13 beside it)",
+      "attempt": 1,
+      "elementAtCentre": "canvas",
+      "granted": true
+    }
+  ],
+  "notes": [
+    "Git HEAD c6170ae8de42c73f7121f9c0570ff4b24ed136c0 (main, SP5a merged). Served build = local build of main: production's / references assets/index-DD3BMwWp.js and index-BYmyb2UL.css, and a fresh local npm run build at c6170ae produced dist/assets/index-DD3BMwWp.js (and index-BYmyb2UL.css); the served index-DD3BMwWp.js and the local one are byte-identical (sha256 8d0f1198fcefbc1453e88e0819b3c599d7af0634b88176a2e5f42fda9ced6eb4 both).",
+    "Production honours ?wiTest=1 (main.ts installs window.__wiTest on the world route whenever the flag is present), so every step read the store (blockAt, lightAt), the aim, the hotbar, the block history, the mode, the feet, the owner and the stale count through it.",
+    "The window manager placed the window maximized at (0, 32), 1756 × 956; the viewport was 1756 × 869 at devicePixelRatio 1.09375 (1921 × 951 device px in the screenshots). SP4c's run read 1920 × 1045 at DPR 1: the desktop's scale for a fresh Chrome profile differs from that day's; not changed by the check (no display setting touched). Mode B (side by side) needs a viewport ≥ 1000 CSS px wide: at 1756 each half was 878 px, and the split showed (split true; screenshot shots/3-split-after-edit.png).",
+    "Step 1 (RegionBatch, ?rd=8&renderer=batch&wiTest=1&pitch=-60): the pointer lock was granted on the second click (the first click, at img.screen-panorama still fading over the canvas just after the reveal, was refused; the second hit the canvas), so the break and the place were real CDP mouse presses: LMB on the aimed grass/dirt voxel (-1, 94, -1) (state 3 → 0, read back from the store), then RMB with slot 1 holding Stone (the 1 key was pressed, but slot 1 already held Stone and was the active slot before it, `hotbarAfter1.active` 0, so the record does not show the key's effect) across the aimed face of (-2, 93, -2): (-2, 94, -2) 0 → 1; block history 0 → 2 steps; the HUD's edit row \"edit p95 16 ms (2)\".",
+    "Step 2: E opened #world-palette (51 swatches: the 48 placeable types and 3 buckets) and released the pointer lock (locked true → false); a CDP click on the Bricks swatch set the active slot 1 from Stone to Bricks, the other 8 slots unchanged; a CDP-injected Esc closed it. A real keyboard Esc (and the real pointer lock's own Esc handling) is the user's check: CDP cannot show what a physical key does to the browser's lock.",
+    "Step 3, the context Ctrl+Z: with the world owning (map closed), Ctrl+Z (CDP key, Ctrl modifier) turned the RMB stone at (-2, 94, -2) back to air, the block history {size 2, redo 0} → {size 1, redo 1}. Then M opened the map, the header's side-by-side button put it in mode B (owner 'map'), and the biome table's desert T was typed 0.6, 1 → 0.6, 0.8 + Enter (an Apply: the stale count rose 196 ms later); with the map owning, Ctrl+Z put the field back to 0.6, 1 (2 ms; the stale count rose again 161 ms later, the world regenerating to the undone setting) while the block history stayed {size 1, redo 1}: the key went to the map's settings, not to the blocks. The unchanged block history is the evidence; `placedStateAfterMapUndo` (0) reads (-2, 94, -2), already air after the block undo, so it shows nothing, and the remaining block step, the break at (-1, 94, -1), was not read. M then closed the map and the world owned the controls again. Ctrl+Y was not exercised here (the smoke covers it).",
+    "Step 4 (?rd=8&renderer=batch&wiTest=1&yaw=0): F switched fly → walk and the feet reached the ground in 215 ms (y 95.0000001, steady for 300 ms; the HUD's line \"Walk · x 0.0 y 96.6 z 0.0 · column 0, 0\", whose y is the eye). On the smoke's corridor (ruling R30: 3 wide along −z, 17 rows, 153 edits through the hook, none refused), W held 4 s with a CDP key moved the feet 17.81 blocks along −z (dx 0), past the corridor's end: its stone runs 16 blocks ahead of the feet (z 0 to −16), so the body walked off it and fell; 0.3 s after the release (`walkEnd`) the feet were at y 90.94, 4.06 below the corridor, off the ground and still falling. The script then waited for the feet to be on the ground, so Space lifted them 1.25 blocks from the ground below the corridor, not from the corridor; shots/4-walk-after-W.png, taken after the jump, reads the eye at y 89.6 (the feet at about 88) at z −18.3. The walk never pressed Ctrl: Ctrl is the sprint key, and Ctrl+W closes the browser (the user's finding, see firefox.noted); a CDP-injected Ctrl+W was deliberately not sent.",
+    "Step 5, swimming: a pit dug under the walking feet (centre column (0, -19), surface y 88): stone floor at y 82, a stone ring 5 × 5 from y 83 to 87, and 3 × 3 × 5 water from y 83 to 87 set through the hook as the water bucket places it (state air, fluid byte 16, a still source); 134 edits, none refused. The body fell in and sank at a steady 0.5 blocks/s (88 → 84.995 in 4.5 s; every sample listed in `samplesEvery250ms` from 198 ms on reads onGround false; walk.ts's water terminal sink is 0.5 blocks/s, while out of a fluid it would have reached the floor at y 83 in well under a second); Space held 1.5 s lifted the feet 3.243 blocks to y 88.238 (about 2.7 blocks/s, SWIM_ACCEL's terminal rate), and after the release the body sank again (87.43 → 86.77 over the next second). The evidence for swimming is that y-trace alone, with the water placed through the hook as the bucket places it: the eye (HUD y 86.7) was under the water's surface during the screenshot shots/5-swim-sinking.png, which shows only the pit's grey stone wall and the \"Click to fly\" hint (src has no underwater tint, so none was expected). `onGroundDuringSink` reads true: it is any sample on the ground from the moment the last edit returned to the Space press, and the body stood on the pit's top until the last edits (the water under the feet) landed; the first sample listed (t −52 ms, y 88, onGround true) predates the pool's completion. The HUD's `dropped` (the coordinator's drop count) read 2 in step 4's screenshot and 4 in this one: it rose between the two screenshots, across the pool's hook edits, observed in the screenshots and not recorded as a field. The walk page shows its \"Click to fly\" hint until the first pointer lock, in walk mode too (visible in that screenshot; noted for the user, not a failure here).",
+    "Step 6, a torch at night: the page offers no ?time= outside &shot=1 (main.ts, ruling P48), so the check used the page's own control: T twice (×1 → ×10 → ×60), then T again once the HUD clock read 23:33 → \"23:33 paused\" (unchanged 1 s later); sun elevation −68.9° (asin(sin 2πt · cos 20°), t from the clock), night (≤ −6°). E, the Torch swatch into slot 1, Esc; the pointer lock taken (first click), and with the aim read after the lock, RMB placed the torch on top of (-1, 94, -1): (-1, 95, -1) 0 → 32 (the torch state); the block light of the six neighbours' air 0 → 13 (13 = the torch's 14 − 1; ≥ 13 required), sky light 15 there (day/night darkening is applied when drawing, not stored). The screenshot shots/6-torch-at-night.png shows it: the ground away from the torch reads (31, 63, 21) against (95, 159, 53) at 08:00 in step 1's screenshot, and the ground lit by the torch (81, 131, 38) near the centre.",
+    "Step 7: ?selftest=1 read \"✓ all 59 goldens match (9.3 s)\"; 59 keys (sp1 27, sp2a 20, sp3a 3, sp3b 2, sp3c 2, sp3e 5), expected == actual for 59 of 59, and every actual equal to test/goldens.json at c6170ae (59/59); the full results are in steps[7].results and in selftest-chrome.json (the page's \"copy as JSON\" output, captured by replacing navigator.clipboard.writeText inside our page only, so the system clipboard was never written).",
+    "Errors: page errors 0, console errors 0 (console.error and Log entries at level error), no console warnings recorded. Ignored: 1 log, the favicon.ico 404 (index.html declares no icon), as SP4c and test/tools/cdp.ts ignore it. Dialogs: three beforeunload prompts (leaving an edited world for the next load: before the walk load, before the night load, before ?selftest=1), accepted through CDP Page.handleJavaScriptDialog.",
+    "A real Esc and the real pointer lock are the user's check: CDP mouse presses are trusted input, so Chrome granted the lock to them, but what a physical Esc does to the lock (and that a held real key is not lost) cannot be shown through CDP.",
+    "This record is the third run of the script. Run 1 (17:40 UTC): every step passed but step 6, where the script read the aim before taking the lock, the lock click moved the aim one voxel, and the torch (placed with the mouse) landed at (-1, 95, 0); the script then read the light beside the voxel it had expected (12, two steps from the torch; 14 at the torch). Run 2 (17:42 UTC): all 8 steps passed, but step 1's single lock click fell on the loading panorama still fading over the canvas, so its break and place went through the hook. Both were script faults, fixed (the aim read after the lock; up to 3 lock clicks 1.2 s apart); their raw records are in /tmp/claude-1000/-home-maestre-Proyectos-world-imaginer/b6a0c47e-9011-4bbb-ae89-81990a76a570/scratchpad/sp5a-prod/out-run1 and /tmp/claude-1000/-home-maestre-Proyectos-world-imaginer/b6a0c47e-9011-4bbb-ae89-81990a76a570/scratchpad/sp5a-prod/out-run2. Each run was a fresh Chrome and profile on the same production build.",
+    "The 1-minute load: 0.98 at the start (below the 1.5 gate; the GPU measurement before this check had finished), 1.49 at the end."
+  ],
+  "windowEnd": {
+    "left": 0,
+    "top": 32,
+    "width": 1756,
+    "height": 956,
+    "windowState": "maximized"
+  },
+  "script": "/tmp/claude-1000/-home-maestre-Proyectos-world-imaginer/b6a0c47e-9011-4bbb-ae89-81990a76a570/scratchpad/sp5a-prod/prodcheck/prodcheck.mjs (Node v24.21.0, no npm dependency, run as: node prodcheck.mjs <out> /home/maestre/Proyectos/world-imaginer-voxel), then /tmp/claude-1000/-home-maestre-Proyectos-world-imaginer/b6a0c47e-9011-4bbb-ae89-81990a76a570/scratchpad/sp5a-prod/prodcheck/assemble.mjs for this file; raw output /tmp/claude-1000/-home-maestre-Proyectos-world-imaginer/b6a0c47e-9011-4bbb-ae89-81990a76a570/scratchpad/sp5a-prod/out/raw-run.json, log /tmp/claude-1000/-home-maestre-Proyectos-world-imaginer/b6a0c47e-9011-4bbb-ae89-81990a76a570/scratchpad/sp5a-prod/out/run.log, screenshots /tmp/claude-1000/-home-maestre-Proyectos-world-imaginer/b6a0c47e-9011-4bbb-ae89-81990a76a570/scratchpad/sp5a-prod/out/shots/ (not committed)",
+  "chrome": "Google Chrome 155.0.8059.39, headful, fresh mktemp -d profile (removed at the end), DevTools on a free port (--remote-debugging-port=0), no GPU flags or offload variables (PRIME on-demand, confirmed by the user and by prime-select query: ANGLE on OpenGL on the Iris Xe); MESA_SHADER_CACHE_DISABLE=true for this process only, so no user shader cache was read or written; stopped by CDP Browser.close",
+  "firefox": {
+    "by": "the user, by hand, in their own Firefox, on production",
+    "userAgent": "Mozilla/5.0 (X11; Ubuntu; Linux x86_64; rv:158.0) Gecko/20100101 Firefox/158.0",
+    "date": "2026-10-29",
+    "selftest": "59/59 (assets/sp5a/selftest-firefox.json, pasted by the user from production on 2026-10-29; the file carries no URL, build or date, and its content is byte-identical to assets/sp4c/selftest-firefox.json, as the goldens did not change)",
+    "steps": "the user, after break and place, the palette, F and walking, swimming, a torch at night, and Ctrl+Z in the world and with the map on production: \"Y no he notado errores, las pruebas me funcionan\"",
+    "noted": "the user, later: \"Ctrl + W cierra el navegador antes que correr en el modo 'andar'\" (Ctrl+W, the sprint key with forward while walking, closes the browser instead of sprinting; the browser is not named, and the user tested on Firefox); handled as a finding after the production check (Task 45b)"
+  },
+  "observations": [
+    "The walk page shows its \"Click to fly\" hint in walk mode too, until the first pointer lock (shots/4-walk-after-W.png and shots/5-swim-sinking.png, both taken walking, in a load where the pointer lock was never taken); noted for the user, not a failure.",
+    "The HUD's `dropped` (the coordinator's drop count) read 2 in shots/4-walk-after-W.png and 4 in shots/5-swim-sinking.png, after the pool's 134 hook edits; not recorded as a field by the script."
+  ],
+  "corrections": [
+    {
+      "by": "the verifier, 2026-10-29",
+      "what": "step 5: \"never on the ground\" removed from the notes",
+      "why": "`onGroundDuringSink` is true; it counts samples from the moment the last edit returned, when the body still stood on the pit's top; the first sample listed (t −52 ms, y 88, onGround true) predates the pool's completion, and every listed sample from 198 ms on reads onGround false"
+    },
+    {
+      "by": "the verifier, 2026-10-29",
+      "what": "step 5: the swimming evidence named as the y-trace with the water placed through the hook (the bucket's edit), and the HUD's `dropped` 2 → 4 recorded as observed",
+      "why": "no bucket click was made, the screenshot shows only the pit's wall and the \"Click to fly\" hint, and the drop count rose during the hook edits with no field recording it"
+    },
+    {
+      "by": "the verifier, 2026-10-29",
+      "what": "step 1: \"selected with the 1 key\" replaced by the key's effect not being shown",
+      "why": "slot 1 already held Stone and was active (`hotbarAfter1.active` 0) before the key was pressed"
+    },
+    {
+      "by": "the verifier, 2026-10-29",
+      "what": "step 3: \"the voxel stayed air\" dropped; the unchanged block history named as the evidence",
+      "why": "`placedStateAfterMapUndo` reads (-2, 94, -2), already air after the block undo; a Ctrl+Z wrongly sent to the blocks would have changed the remaining break at (-1, 94, -1), which was not read"
+    },
+    {
+      "by": "the verifier, 2026-10-29",
+      "what": "step 4: the corridor overrun (17.81 blocks against the corridor's 16), the fall to y 90.94 and the jump measured after landing below recorded in the notes",
+      "why": "`walkEnd` reads y 90.94 with onGround false; the script waits for the ground before the jump, so the 1.25-block jump was from the ground below, not from the corridor"
+    },
+    {
+      "by": "the verifier, 2026-10-29",
+      "what": "the firefox block: the user's words quoted verbatim (\"Y no he notado errores, las pruebas me funcionan\"; \"Ctrl + W cierra el navegador antes que correr en el modo 'andar'\"), \"closes the tab\" (the firefox block) and the close-tab wording of step 4's notes (\"Chrome's close-tab shortcut\", \"the browser's close-tab key\") replaced by closing the browser, which the user did not name",
+      "why": "the block paraphrased the user's report and said \"the tab\"; the user tested on Firefox but did not name the browser in the Ctrl+W finding"
+    },
+    {
+      "by": "the verifier, 2026-10-29",
+      "what": "the firefox block: selftest-firefox.json described as pasted by the user from production on 2026-10-29",
+      "why": "the file has no URL, build or date, so it cannot itself show that it ran on production c6170ae; its 59 results match test/goldens.json"
+    },
+    {
+      "by": "the controller, 2026-10-29",
+      "what": "the \"Click to fly\" hint shown in walk mode until the first pointer lock recorded under observations",
+      "why": "step 5's note named it only in passing"
+    }
+  ]
+}
