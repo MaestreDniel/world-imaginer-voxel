@@ -743,7 +743,9 @@ describe('the sim worker\'s messages (SP5a spec §2.1)', () => {
   test('each message to the sim is accepted', () => {
     expect(parseToSim({ type: 'attach', handles, thread: 15 })).not.toBeNull();
     expect(parseToSim(edits(edit(), edit({ op: 'revert', value: 0, expect: 1 << 8 })))).not.toBeNull();
-    expect(parseToSim(edits(edit({ x: -524288, y: -64, z: 524287, value: 0xFFFFFFFF, expect: 0xFFFFFFFF })))).not.toBeNull();
+    // The last registry state with fluid 255, value and expect (SIM-3: D's guard takes every state the sim accepts).
+    const top = (((REGISTRY.stateCount - 1) << 8) | 0xFF) >>> 0;
+    expect(parseToSim(edits(edit({ x: -524288, y: -64, z: 524287, value: top, expect: top })))).not.toBeNull();
     expect(parseToSim(edits(edit({ y: 319 })))).not.toBeNull();
     expect(parseToSim({ type: 'diff', id: 6, cx: -3, cz: 4 })).not.toBeNull();
   });
@@ -768,6 +770,9 @@ describe('the sim worker\'s messages (SP5a spec §2.1)', () => {
     ['a negative value', edits(edit({ value: -1 }))],
     ['a non-integer value', edits(edit({ value: 256.5 }))],
     ['an expect above 2³² − 1', edits(edit({ expect: 2 ** 32 }))],
+    ['an edits batch with a value state >= stateCount (SIM-3)', edits(edit(), edit({ value: REGISTRY.stateCount << 8 }))],
+    ['an edits batch with an expect state >= stateCount (SIM-3)', edits(edit({ expect: (REGISTRY.stateCount << 8) | 3 }))],
+    ['an edits batch with a value of 2³² − 1 (state 2²⁴ − 1, SIM-3)', edits(edit({ value: 0xFFFFFFFF }))],
     ['a diff request with a non-integer cx', { type: 'diff', id: 6, cx: 0.5, cz: 4 }],
     ['a diff request outside the world window', { type: 'diff', id: 6, cx: 32768, cz: 4 }],
     ['a diff request without an id', { type: 'diff', cx: 0, cz: 4 }],

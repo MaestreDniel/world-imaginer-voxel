@@ -622,7 +622,8 @@ export type { Edit, EditRefusal } from '../sim/edits';
 
 /**
  * A batch of voxel edits (§2.1), all or nothing: each at an integer (x, z) of the world window and y −64 … 319, `op`
- * 'set' or 'revert', `value` and `expect` u32 (`state << 8 | fluid`). `id` matches the `edited` reply to it.
+ * 'set' or 'revert', `value` and `expect` u32 (`state << 8 | fluid`, the state below `REGISTRY.stateCount`). `id` matches
+ * the `edited` reply to it.
  */
 export interface EditsMsg { readonly type: 'edits'; readonly id: number; readonly edits: readonly Edit[] }
 /** A request for column (cx, cz)'s DiffStore entries (§2.5); `id` matches the `diff` reply to it. */
@@ -652,10 +653,15 @@ export type FromSim = AttachedMsg | EditedMsg | DiffMsg | ErrorMsg;
 /** Every `EditRefusal` (a record, so a new refusal cannot be left out of the reply guard). */
 const EDIT_REFUSALS: Readonly<Record<EditRefusal, true>> = Object.freeze({ unloaded: true, changed: true, noProto: true, full: true });
 const isU32 = (v: unknown): v is number => isInt(v) && v >= 0 && v <= 0xFFFFFFFF;
-/** One edit of a batch: integer coordinates inside the world, a known op, u32 value and expect. */
+/**
+ * A u32 voxel value whose state (`v >>> 8`) is a registry state: D's guard (`diffStatesOk`) refuses any other, so an
+ * entry the sim recorded from one would fail every later D of its column (SIM-3).
+ */
+const isVoxelValue = (v: unknown): v is number => isU32(v) && v >>> 8 < REGISTRY.stateCount;
+/** One edit of a batch: integer coordinates inside the world, a known op, value and expect u32 with a registry state. */
 const editOk = (e: unknown): boolean =>
   isObj(e) && isInt(e['x']) && isInt(e['z']) && pointInWindow(e['x'], e['z']) && isInt(e['y']) && e['y'] >= -64 && e['y'] <= 319
-  && (e['op'] === 'set' || e['op'] === 'revert') && isU32(e['value']) && isU32(e['expect']);
+  && (e['op'] === 'set' || e['op'] === 'revert') && isVoxelValue(e['value']) && isVoxelValue(e['expect']);
 
 /** Validates a message sent to the sim; null when malformed. */
 export function parseToSim(m: unknown): ToSim | null {
