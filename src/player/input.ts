@@ -9,8 +9,9 @@ import { createSprintTap } from './sprintTap';
  * the held keys. A bound key's default is prevented with Ctrl held too, so moving with Ctrl down never opens the
  * browser's dialogs (Ctrl+D, Ctrl+S, Ctrl+A), while unbound keys and Ctrl combinations pass (Review Focus 1, ruling
  * P40); the exception is Ctrl+R and Cmd+R (Shift too), which reload as in any page and are not sprint (ruling R61: an
- * edited world asks first through the page's beforeunload prompt). The wheel listener is not passive, so Ctrl+wheel changes the speed instead of zooming the page; the plain wheel
- * changes the hotbar slot (SP5a spec §4.1, D9), and Ctrl+wheel does too while `wheelCtrlAsSlot()` (walking).
+ * edited world asks first through the page's beforeunload prompt). The wheel listener is not passive, so Ctrl+wheel
+ * changes the speed instead of zooming the page; the plain wheel changes the hotbar slot (SP5a spec §4.1, D9), and
+ * Ctrl+wheel does too while `wheelCtrlAsSlot()` (walking).
  *
  * Mouse buttons (SP5a spec §4.1, D6): the first click on the canvas only takes the pointer lock; while the lock is held
  * and the world is active, `mousedown`/`mouseup` of LMB, MMB and RMB (0, 1, 2) reach `onButton` (MMB's down is
