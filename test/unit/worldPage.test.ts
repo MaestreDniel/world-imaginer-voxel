@@ -1498,10 +1498,11 @@ describe('createClickQueue: the queued clicks run in the aim (SP5a spec §4.1, �
       fluidAt: (x: number, y: number, z: number) => (water && x === 0 && y === 69 && z === 0 ? WATER_SOURCE : 0),
     };
     const hotbar = createHotbar(null);
-    const clicks = createClickQueue({ post: (e) => { posted.push(e); }, hotbar, fly, walk: createWalkState(), editable: () => editable });
+    const times: Array<number | undefined> = [];
+    const clicks = createClickQueue({ post: (e, t) => { posted.push(e); times.push(t); }, hotbar, fly, walk: createWalkState(), editable: () => editable });
     const aim = createAim({ fly, world: world as never, locked: () => true, hud: true, clicks });
     return {
-      aim, clicks, read, posted, hotbar,
+      aim, clicks, read, posted, hotbar, times,
       setStone: (on: boolean) => { stone = on; },
       setWater: (on: boolean) => { water = on; },
       setEditable: (on: boolean) => { editable = on; },
@@ -1518,6 +1519,19 @@ describe('createClickQueue: the queued clicks run in the aim (SP5a spec §4.1, �
     expect(r.posted).toEqual([BREAK]);
     r.aim.aim(r.read, false);
     expect(r.posted).toHaveLength(1);
+  });
+
+  test('each queued press posts with its own press time (the HUD\'s edit latency starts at the click, spec §4.6; final review UI-3)', () => {
+    const r = rig();
+    r.clicks.push(0, 1000.25);
+    r.clicks.push(0);
+    r.aim.aim(r.read, false);
+    expect(r.posted).toEqual([BREAK, BREAK]);
+    expect(r.times).toEqual([1000.25, undefined]);
+    // The page stamps each queued press (a mousedown, a hold repeat) on the edit path's clock and passes it through.
+    const src = readFileSync(new URL('../../src/ui/world/worldPage.ts', import.meta.url), 'utf8');
+    expect(src).toMatch(/^\s*post: \(edit, t\) => \{ void actionPost\(\[edit\], t\); \},$/m);
+    expect(src).toMatch(/^\s*queue: \(b\) => clicks\.push\(b, performance\.now\(\)\),$/m);
   });
 
   test('two presses in one frame post two breaks with the same `expect` (the sim refuses the second as changed)', () => {
@@ -1669,7 +1683,7 @@ describe('block undo and redo by who has the controls (SP5a spec §4.5, D13)', (
     expect(r.session.undo).not.toHaveBeenCalled();
     r.dispose();
     // The page's clicks post through it.
-    expect(src()).toMatch(/post: \(edit\) => \{ void actionPost\(\[edit\]\); \},/);
+    expect(src()).toMatch(/post: \(edit, t\) => \{ void actionPost\(\[edit\], t\); \},/);
   });
 
   test('a hook edit (`WiTest.edit`) then Ctrl+Z posts the revert', async () => {
@@ -1798,7 +1812,7 @@ describe('hold to repeat in the page (SP5a spec §4.1, D6; Review Focus 1, rulin
     expect(r.record).toHaveBeenCalledTimes(1);
     // The page's mouse buttons go through the hold repeat: a press queues once, a release ends the hold.
     expect(src()).toMatch(/onButton: \(b, down\) => \{\s+if \(down\) holdRepeat\.down\(b, nowS\(\)\);\s+else holdRepeat\.up\(b, nowS\(\)\);\s+\},/);
-    expect(src()).toMatch(/enabled: \(\) => settings\.holdRepeat,\s+pending: editPath\.pending,\s+queue: \(b\) => clicks\.push\(b\),/);
+    expect(src()).toMatch(/enabled: \(\) => settings\.holdRepeat,\s+pending: editPath\.pending,\s+queue: \(b\) => clicks\.push\(b, performance\.now\(\)\),/);
   });
 
   test('with the setting on and LMB held, opening the palette, releasing the lock (a `pointerlockchange` to none) and opening the map each call `stop`: no break is queued after them', async () => {

@@ -285,4 +285,15 @@ describe('createActionPost (the page\'s recording post, SP5a spec §4.5; rulings
       edits: [{ x: 1, y: Y, z: 0, before: NO_ENTRY, after: STONE_V }, { x: 2, y: Y, z: 0, before: STONE_V, after: NO_ENTRY }],
     }]);
   });
+
+  test('a click\'s time reaches the edit path\'s post (its latency sample starts there, spec §4.6; final review UI-3)', async () => {
+    const starts: Array<number | undefined> = [];
+    const post = createActionPost({
+      post: (_e, tClick) => { starts.push(tClick); return Promise.resolve({ ok: false as const, why: 'changed' as const }); },
+      record: () => {},
+    });
+    await post([set(1, STONE_V, AIR_V)], 42.5);
+    await post([set(1, STONE_V, AIR_V)]);
+    expect(starts).toEqual([42.5, undefined]);
+  });
 });

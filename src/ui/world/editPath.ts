@@ -8,7 +8,8 @@
  *   sent to the sim. In the reply's task: each pin released (`simUnpin`), the reply's dirty columns remeshed
  *   (`markEdited`, a refusal's too: a `full` rollback moved its columns' versions, §2.2), and an accepted batch's
  *   latency sample opened (`latency.posted`, its edited column the first edit's: every SP5a action is one voxel, and a
- *   multi-voxel undo step is timed by its first). A refusal resolves `{ ok: false, why }`; `full` shows "Could not
+ *   multi-voxel undo step is timed by its first; from the click's time when the page passes one, §4.6, else from the
+ *   post). A refusal resolves `{ ok: false, why }`; `full` shows "Could not
  *   edit: memory full" for 4 s.
  * - **The sim's failure:** the client runs the page's failure handler first (`onSimFailure`: thread 15 dead, the path
  *   disabled, every pin released by `simUnpinAll`), then rejects each pending batch with `SimFailed`, which resolves
@@ -30,8 +31,12 @@ export type EditOutcome =
   | { readonly ok: false; readonly why: 'unloaded' | 'regenerating' | 'changed' | 'noProto' | 'full' | 'failed' };
 
 export interface EditPath {
-  /** Posts a batch through the gate; resolves with the sim's outcome or the refusal (never rejects on the sim's failure). */
-  post(edits: readonly Edit[]): Promise<EditOutcome>;
+  /**
+   * Posts a batch through the gate; resolves with the sim's outcome or the refusal (never rejects on the sim's failure).
+   * `tClick` (on `now`'s clock), a click's time, starts the accepted batch's latency sample (spec §4.6 "from the
+   * click"); without it the sample starts at the post (G2's, §6.2).
+   */
+  post(edits: readonly Edit[], tClick?: number): Promise<EditOutcome>;
   /** Whether a posted batch is still waiting for its reply. */
   pending(): boolean;
   /**
@@ -70,7 +75,7 @@ export function createEditPath(o: {
   const settled = (): Promise<void> => Promise.allSettled([...live]).then(() => (inFlight > 0 ? settled() : undefined));
 
   return {
-    post(edits) {
+    post(edits, tClick) {
       if (closed()) return Promise.resolve(FAILED);
       if (edits.length === 0) return Promise.resolve({ ok: true, prev: new Uint32Array(0), next: new Uint32Array(0) });
       // The distinct edited columns, the first edit's first; any closed 3 × 3 refuses the batch.
@@ -95,7 +100,7 @@ export function createEditPath(o: {
         for (const k of cols) o.coordinator.simUnpin(colKeyCx(k), colKeyCz(k));
         o.coordinator.markEdited(reply.dirty);
         if (reply.refused === null) {
-          o.latency.posted(tPost, o.now(), cols[0]!, reply.dirty, reply.relightMs, reply.editMs);
+          o.latency.posted(tPost, o.now(), cols[0]!, reply.dirty, reply.relightMs, reply.editMs, tClick ?? tPost);
           return { ok: true, prev: reply.prev, next: reply.next };
         }
         if (reply.refused === 'full') o.notices.show(EDIT_FULL_NOTICE, EDIT_FULL_MS);

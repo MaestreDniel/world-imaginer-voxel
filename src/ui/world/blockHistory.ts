@@ -142,10 +142,10 @@ export function createBlockHistory(o: {
  * the reply's own continuation (so the edit path's `settled` waits for it). A refused batch records nothing.
  */
 export function createActionPost(o: {
-  post(edits: readonly Edit[]): Promise<EditOutcome>;
+  post(edits: readonly Edit[], tClick?: number): Promise<EditOutcome>;
   record(step: BlockStep): void;
-}): (edits: readonly Edit[]) => Promise<EditOutcome> {
-  return (edits) => o.post(edits).then((out) => {
+}): (edits: readonly Edit[], tClick?: number) => Promise<EditOutcome> {
+  return (edits, tClick) => o.post(edits, tClick).then((out) => {
     if (out.ok && edits.length > 0) {
       o.record({ edits: edits.map((e, k) => ({ x: e.x, y: e.y, z: e.z, before: out.prev[k]!, after: out.next[k]! })) });
     }

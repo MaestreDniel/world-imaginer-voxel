@@ -1,12 +1,16 @@
 /**
- * G2's edit latency (SP5a spec §4.6, §6.2, D26): from an edit's post to the frame its column's new mesh is shown.
+ * G2's edit latency (SP5a spec §4.6, §6.2, D26): from an edit's post (the HUD's: from its click) to the frame its
+ * column's new mesh is shown.
  *
  * `posted` opens a sample at the sim's reply: the post time, the reply time, the edited column (the first edit's, a
- * colKey), the reply's dirty columns and the sim's relight and edit figures. A column's reveal counts for a sample only
+ * colKey), the reply's dirty columns, the sim's relight and edit figures, and the sample's start: the click's time
+ * for a click of the streaming route (§4.6 "from the click", final review UI-3), else the post time (G2's bench, L10,
+ * §6.2; a block undo; the smoke's hook). A column's reveal counts for a sample only
  * after its own `staged` (the coordinator's `onEditStaged`: a payload issued at or after the latest `markEdited`), since
  * `onColumnRevealed` carries no seq and a payload staged before the edit can still reveal after it (ruling R14). The
- * edited column's first counted reveal records `visible` (from the post), `issueToStaged` (its staged time minus the
- * reply's) and `stagedToShown` (its reveal minus its staged time); the last dirty column's records `allVisible`.
+ * edited column's first counted reveal records `visible` (from the start), `issueToStaged` (its staged time minus the
+ * reply's) and `stagedToShown` (its reveal minus its staged time); the last dirty column's records `allVisible` (from
+ * the start).
  * `reply` (reply − post), `relight` and `edit` are recorded at `posted`. Each figure goes into its own preallocated
  * ring of `capacity` values (the oldest overwritten), so the arrays `samples` returns may differ in length: a dirty
  * column that is never meshed again (one the coordinator does not keep meshed) leaves its sample without `allVisible`.
@@ -34,8 +38,11 @@ export interface EditLatencySamples {
 }
 
 export interface EditLatency {
-  /** A sample opened at the sim's reply (ms on the page's clock); `edited` and `dirty` are colKeys. */
-  posted(tPost: number, tReply: number, edited: number, dirty: ArrayLike<number>, relightMs: number, editMs: number): void;
+  /**
+   * A sample opened at the sim's reply (ms on the page's clock); `edited` and `dirty` are colKeys. `visible` and
+   * `allVisible` run from `tStart` (a click's time; the post's by default), `reply` from the post.
+   */
+  posted(tPost: number, tReply: number, edited: number, dirty: ArrayLike<number>, relightMs: number, editMs: number, tStart?: number): void;
   /** The coordinator staged a payload of (cx, cz) issued at or after its latest `markEdited`. */
   staged(cx: number, cz: number, t: number): void;
   /** The renderer revealed (cx, cz) (`onColumnRevealed`). */
@@ -93,7 +100,7 @@ export function createEditLatency(capacity = 2048): EditLatency {
   const edit = ring(capacity);
 
   // The pending samples, slot i's columns at [i·MAX_TRACKED, i·MAX_TRACKED + tracked[i]); column 0 is the edited one.
-  const tPost = new Float64Array(PENDING);
+  const tStart = new Float64Array(PENDING);
   const tReply = new Float64Array(PENDING);
   const tracked = new Int32Array(PENDING);
   /** Columns of the slot not revealed yet; 0 for a free slot. */
@@ -112,7 +119,7 @@ export function createEditLatency(capacity = 2048): EditLatency {
   };
 
   return {
-    posted(post, replied, edited, dirty, relightMs, editMs) {
+    posted(post, replied, edited, dirty, relightMs, editMs, start = post) {
       reply.push(replied - post);
       relight.push(relightMs);
       edit.push(editMs);
@@ -121,7 +128,7 @@ export function createEditLatency(capacity = 2048): EditLatency {
       // A sample still pending in the slot is dropped.
       if (left[i] === 0) active++;
       const base = i * MAX_TRACKED;
-      tPost[i] = post;
+      tStart[i] = start;
       tReply[i] = replied;
       track(base, 0, edited);
       let m = 1;
@@ -153,13 +160,13 @@ export function createEditLatency(capacity = 2048): EditLatency {
           if (keys[base + j] !== key || shown[base + j] !== 0 || Number.isNaN(stagedAt[base + j])) continue;
           shown[base + j] = 1;
           if (j === 0) {
-            visible.push(t - tPost[i]!);
+            visible.push(t - tStart[i]!);
             issueToStaged.push(stagedAt[base]! - tReply[i]!);
             stagedToShown.push(t - stagedAt[base]!);
           }
           left[i] = left[i]! - 1;
           if (left[i] === 0) {
-            allVisible.push(t - tPost[i]!);
+            allVisible.push(t - tStart[i]!);
             active--;
           }
         }

@@ -172,7 +172,21 @@ describe('createEditPath (SP5a spec §2.1, §2.6, §2.7)', () => {
     await p;
     // The edited column is the first edit's.
     expect(f.posted).toHaveBeenCalledTimes(1);
-    expect(f.posted).toHaveBeenCalledWith(100, 104, colKey(1, 0), r.dirty, 2.25, 3.5);
+    expect(f.posted).toHaveBeenCalledWith(100, 104, colKey(1, 0), r.dirty, 2.25, 3.5, 100);
+  });
+
+  test('a click\'s time starts its latency sample: a click at 100, its frame\'s post at 120, the reply at 125, the reveal at 150 give visible 50 (spec §4.6; final review UI-3)', async () => {
+    const f = fakes();
+    f.setNow(120);
+    const p = f.path.post([at(3, 4)], 100);
+    f.setNow(125);
+    f.answers[0]!.resolve(reply(1, { dirty: new Float64Array([colKey(0, 0)]) }));
+    await p;
+    expect(f.posted).toHaveBeenCalledWith(120, 125, colKey(0, 0), expect.anything(), 0.75, 1.5, 100);
+    f.latency.staged(0, 0, 130);
+    f.latency.revealed(0, 0, 150);
+    expect(f.latency.visibleP95()).toBe(50);
+    expect(Array.from(f.latency.samples().reply)).toEqual([5]);
   });
 });
 

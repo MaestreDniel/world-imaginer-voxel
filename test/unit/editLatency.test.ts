@@ -29,6 +29,24 @@ describe('createEditLatency (G2\'s edit latency, SP5a spec §4.6, §6.2)', () =>
     expect(Array.from(s.edit)).toEqual([2.5]);
   });
 
+  test('a click at 100 posted at 120 (its frame), the reply at 125, staged at 130 and revealed at 150: visible and all-visible 50 from the click, reply 5 from the post (spec §4.6; final review UI-3)', () => {
+    const lat = createEditLatency();
+    lat.posted(120, 125, colKey(0, 0), [colKey(0, 0)], 0.5, 1, 100);
+    lat.staged(0, 0, 130);
+    lat.revealed(0, 0, 150);
+    expect(lat.visibleP95()).toBe(50);
+    expect(lat.allVisibleP95()).toBe(50);
+    const s = lat.samples();
+    expect(Array.from(s.reply)).toEqual([5]);
+    expect(Array.from(s.issueToStaged)).toEqual([5]);
+    expect(Array.from(s.stagedToShown)).toEqual([20]);
+    // Without a click time (the bench's L10, an undo, the smoke's hook) the sample starts at the post, as G2's.
+    lat.posted(200, 205, colKey(1, 0), [colKey(1, 0)], 0.5, 1);
+    lat.staged(1, 0, 210);
+    lat.revealed(1, 0, 230);
+    expect(Array.from(lat.samples().visible)).toEqual([50, 30]);
+  });
+
   test('a reveal before staged does not count', () => {
     const lat = createEditLatency();
     lat.posted(100, 104, colKey(2, -3), [colKey(2, -3), colKey(3, -3)], 1, 1);

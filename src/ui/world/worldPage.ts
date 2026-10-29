@@ -1197,7 +1197,11 @@ const CLICK_QUEUE_CAP = 16;
  * missed click does nothing.
  */
 export interface ClickQueue {
-  push(b: 0 | 1 | 2): void;
+  /**
+   * Queues a press at `t` (the edit path's clock), which its post carries so the HUD's edit latency runs from the click
+   * (§4.6; final review UI-3); without `t` the post's own time starts it.
+   */
+  push(b: 0 | 1 | 2, t?: number): void;
   /** Runs every queued button against `hit` and empties the queue. Allocates nothing while it is empty. */
   run(hit: RayHit, read: Pick<VoxelStore, 'blockAt' | 'fluidAt'>): void;
   /** Empties the queue unrun (a paused frame: the help, the palette, map mode B). */
@@ -1205,7 +1209,7 @@ export interface ClickQueue {
 }
 
 export function createClickQueue(o: {
-  post(edit: Edit): void;
+  post(edit: Edit, tClick: number | undefined): void;
   /** RMB places its active slot; MMB picks into it. */
   readonly hotbar: Pick<Hotbar, 'slots' | 'active' | 'pick'>;
   /** The eye, the look and the mode: the body a place must not enter, a ladder's facing, the empty bucket's ray. */
@@ -1217,6 +1221,8 @@ export function createClickQueue(o: {
 }): ClickQueue {
   const { fly, walk } = o;
   const buttons = new Uint8Array(CLICK_QUEUE_CAP);
+  /** Each queued press's time, NaN for none. */
+  const times = new Float64Array(CLICK_QUEUE_CAP);
   let n = 0;
   const body: BodyBox = { minX: 0, minY: 0, minZ: 0, maxX: 0, maxY: 0, maxZ: 0 };
   const fluidHit = createRayHit();
@@ -1234,8 +1240,10 @@ export function createClickQueue(o: {
     return emptyBucketAt(fluidHit, read);
   };
   return {
-    push(b) {
-      if (n < CLICK_QUEUE_CAP) buttons[n++] = b;
+    push(b, t) {
+      if (n === CLICK_QUEUE_CAP) return;
+      times[n] = t ?? Number.NaN;
+      buttons[n++] = b;
     },
     run(hit, read) {
       for (let i = 0; i < n; i++) {
@@ -1246,7 +1254,9 @@ export function createClickQueue(o: {
           continue;
         }
         const edit = b === 0 ? breakAt(hit, read) : place(hit, read);
-        if (edit !== null) o.post(edit);
+        if (edit === null) continue;
+        const t = times[i]!;
+        o.post(edit, Number.isNaN(t) ? undefined : t);
       }
       n = 0;
     },
@@ -2502,7 +2512,7 @@ export function mountWorldPage(root: HTMLElement, q: WorldQuery, hash: string, o
     // A mouse button only queues its action; the frame's aim runs it (SP5a spec §4.1). A refusal does nothing; an
     // accepted click is one block-history step (§4.5).
     const clicks = createClickQueue({
-      post: (edit) => { void actionPost([edit]); },
+      post: (edit, t) => { void actionPost([edit], t); },
       hotbar,
       fly,
       walk,
@@ -2515,7 +2525,7 @@ export function mountWorldPage(root: HTMLElement, q: WorldQuery, hash: string, o
     const holdRepeat = createHoldRepeat({
       enabled: () => settings.holdRepeat,
       pending: editPath.pending,
-      queue: (b) => clicks.push(b),
+      queue: (b) => clicks.push(b, performance.now()),
     });
     teardown.push(installRepeatStop({ doc: document, canvas, repeat: holdRepeat }));
     const input = attachInput(canvas, {
