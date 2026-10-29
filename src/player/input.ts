@@ -1,12 +1,15 @@
 import { DEFAULT_KEYMAP, resolveKey, resolveWheel, type Action, type KeyEntry } from './keymap';
+import { createSprintTap } from './sprintTap';
 
 /**
  * Keyboard, wheel and mouse input for the world (SP4a spec §7.1-§7.3, master §4.17). Events resolve to actions through
  * the key map only. Movement and sprint are held while their keys are down; every other action fires once per press.
- * A bound key's default is prevented with Ctrl held too, so sprint-strafing never opens the browser's dialogs
- * (Ctrl+D, Ctrl+S, Ctrl+A), while unbound keys and Ctrl combinations pass (Review Focus 1, ruling P40). The wheel
- * listener is not passive, so Ctrl+wheel changes the speed instead of zooming the page; the plain wheel changes the
- * hotbar slot (SP5a spec §4.1, D9), and Ctrl+wheel does too while `wheelCtrlAsSlot()` (walking: Ctrl is sprint).
+ * Sprint is R held or a double-tapped W (Task 45b: Ctrl was sprint until then, and Ctrl+W closes the tab): a W keydown
+ * within 0.35 s of the previous one latches sprint until W's keyup (`sprintTap.ts`), and `clear()` ends the latch with
+ * the held keys. A bound key's default is prevented with Ctrl held too, so moving with Ctrl down never opens the
+ * browser's dialogs (Ctrl+D, Ctrl+S, Ctrl+A), while unbound keys and Ctrl combinations pass (Review Focus 1, ruling
+ * P40). The wheel listener is not passive, so Ctrl+wheel changes the speed instead of zooming the page; the plain wheel
+ * changes the hotbar slot (SP5a spec §4.1, D9), and Ctrl+wheel does too while `wheelCtrlAsSlot()` (walking).
  *
  * Mouse buttons (SP5a spec §4.1, D6): the first click on the canvas only takes the pointer lock; while the lock is held
  * and the world is active, `mousedown`/`mouseup` of LMB, MMB and RMB (0, 1, 2) reach `onButton` (MMB's down is
@@ -92,14 +95,19 @@ export function attachInput(
   const held = new Set<Action>();
   // Physical keys down → their held action, so releasing Left Shift keeps 'down' while Right Shift is still down.
   const down = new Map<string, Action>();
+  // The double-tapped forward key's sprint, added to `held` while forward is held.
+  const tap = createSprintTap();
 
   const refresh = (): void => {
     held.clear();
     for (const a of down.values()) held.add(a);
+    if (!held.has('forward')) tap.release();
+    else if (tap.latched) held.add('sprint');
   };
   const clear = (): void => {
     down.clear();
     held.clear();
+    tap.clear();
   };
 
   const onKeyDown = (e: KeyboardEvent): void => {
@@ -109,6 +117,7 @@ export function attachInput(
     if (a !== 'map' && !o.active()) return;
     e.preventDefault();
     if (HELD.has(a)) {
+      if (a === 'forward') tap.press(e.timeStamp / 1000, e.repeat);
       down.set(e.code, a);
       refresh();
     } else if (!e.repeat) {

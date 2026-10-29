@@ -1257,6 +1257,18 @@ describe('master spec amendments (SP5a §9)', () => {
     expect(s59.match(/\(fly speed\)/g), '§5.9 names the fly speed once').toHaveLength(1);
   });
 
+  test('§4.17\'s Fly line and §5.9 name the sprint on R or a double-tapped W, not Ctrl (Task 45b: Ctrl+W closes the tab; SP5a spec §9)', () => {
+    const at417 = text.indexOf('### 4.17 Player');
+    const fly = text.slice(at417, text.indexOf('### 4.18 ', at417)).split('\n').find((l) => l.startsWith('- **Fly:**'));
+    expect(fly, 'no `- **Fly:**` line in §4.17').toBeDefined();
+    expect(fly).toContain('sprint ×4 on R or a double-tapped W (SP5a; Ctrl until then)');
+    expect(fly).not.toContain('Ctrl sprint');
+    const at59 = text.indexOf('### 5.9 Controls');
+    const s59 = text.slice(at59, text.indexOf('## 6. ', at59));
+    expect(s59).toContain('R or double-tap W (sprint; SP5a, Ctrl+W closes the tab)');
+    expect(s59).not.toContain('Ctrl (sprint)');
+  });
+
   test('§4.12 gains the block-undo paragraph (SP5a spec §4.5, §9)', () => {
     const at412 = text.indexOf('### 4.12 ');
     const s412 = text.slice(at412, text.indexOf('### 4.13 ', at412));

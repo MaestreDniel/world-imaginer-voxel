@@ -9,7 +9,7 @@ const BUILD: readonly Action[] = [
 ];
 
 /**
- * Every action of SP4a spec §7.3 but R (removed by SP4b spec §6.2), SP4c's M (SP4c spec §2.4) and SP5a's build group
+ * Every action of SP4a spec §7.3 but R's loadHere (removed by SP4b spec §6.2), SP4c's M (SP4c spec §2.4) and SP5a's build group
  * (SP5a spec §4.1), spelled out so that a missing map entry fails here.
  */
 const ACTIONS: readonly Action[] = [
@@ -66,7 +66,9 @@ describe('the key map as data (SP4a spec §7.3, D19)', () => {
     expect(of('right')).toEqual(['code:KeyD']);
     expect(of('up')).toEqual(['code:Space']);
     expect(of('down')).toEqual(['code:ShiftLeft', 'code:ShiftRight']);
-    expect(of('sprint')).toEqual(['code:ControlLeft', 'code:ControlRight']);
+    // R since Task 45b (Ctrl+W closes the tab, the user's finding at SP5a's production check); the double-tapped W is
+    // the input's (input.ts, sprintTap.ts), not a binding.
+    expect(of('sprint')).toEqual(['code:KeyR']);
     expect(of('speedUp')).toEqual(['wheel:up+ctrl', 'key:+', 'key:=']);
     expect(of('speedDown')).toEqual(['wheel:down+ctrl', 'key:-']);
     expect(of('timeSpeed')).toEqual(['code:KeyT']);
@@ -93,16 +95,24 @@ describe('the key map as data (SP4a spec §7.3, D19)', () => {
     expect(resolveKey({ code: 'Digit1', key: '&' })).toBe('slot1');
   });
 
-  test('no loadHere, nothing bound to KeyR (SP4b spec §6.2, D20)', () => {
+  test('no loadHere (SP4b spec §6.2, D20); KeyR is sprint since Task 45b, Ctrl nothing', () => {
     expect(DEFAULT_KEYMAP.map((e) => e.action as string)).not.toContain('loadHere');
-    expect(DEFAULT_KEYMAP.flatMap((e) => e.bindings.map(bindingKey))).not.toContain('code:KeyR');
-    expect(resolveKey({ code: 'KeyR', key: 'r' })).toBeNull();
+    expect(DEFAULT_KEYMAP.flatMap((e) => e.bindings.map(bindingKey)).filter((k) => k === 'code:KeyR')).toHaveLength(1);
+    expect(resolveKey({ code: 'KeyR', key: 'r' })).toBe('sprint');
+    expect(resolveKey({ code: 'ControlLeft', key: 'Control' })).toBeNull();
+    expect(resolveKey({ code: 'ControlRight', key: 'Control' })).toBeNull();
+  });
+
+  test('the sprint entry names R and the double tap, still SP4a\'s (Task 45b)', () => {
+    expect(DEFAULT_KEYMAP.find((e) => e.action === 'sprint')).toEqual({
+      action: 'sprint', bindings: [{ kind: 'code', code: 'KeyR' }], label: 'Sprint (hold R, or double-tap W)', group: 'move', since: 'SP4a',
+    });
   });
 
   test('resolveKey matches the physical key: KeyW with key z is forward (layout-independent)', () => {
     expect(resolveKey({ code: 'KeyW', key: 'z' })).toBe('forward');
     expect(resolveKey({ code: 'KeyD', key: 'd' })).toBe('right');
-    expect(resolveKey({ code: 'ControlLeft', key: 'Control' })).toBe('sprint');
+    expect(resolveKey({ code: 'KeyR', key: 'p' })).toBe('sprint');
     expect(resolveKey({ code: 'F1', key: 'F1' })).toBe('help');
     expect(resolveKey({ code: 'KeyF', key: 'f' })).toBe('toggleWalk');
     expect(resolveKey({ code: 'KeyG', key: 'g' })).toBeNull();

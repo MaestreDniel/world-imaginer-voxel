@@ -162,7 +162,7 @@ function unstuck(w: WalkState, r: VoxelReader): void {
 
 /**
  * One 20 Hz tick (see the module comment). `wishX`, `wishZ` is the horizontal wish (length at most 1), `jump` Space,
- * `down` Shift, `sprint` Ctrl.
+ * `down` Shift, `sprint` R or a double-tapped W.
  */
 export function walkTick(
   w: WalkState, r: WalkReader, wishX: number, wishZ: number, jump: boolean, down: boolean, sprint: boolean,

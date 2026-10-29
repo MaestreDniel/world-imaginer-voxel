@@ -33,7 +33,7 @@ export const SPEED_MIN = 1;
 export const SPEED_MAX = 96;
 /** One speed step multiplies or divides by this. */
 export const SPEED_STEP = 1.25;
-/** The sprint factor while Ctrl is held. */
+/** The sprint factor while sprint is held (R, or a double-tapped W). */
 export const SPRINT = 4;
 /** The velocity's time constant, seconds. */
 export const TAU = 0.1;

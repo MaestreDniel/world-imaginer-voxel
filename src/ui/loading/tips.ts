@@ -14,7 +14,7 @@ import { bindingLabel, type KeyEntry } from '../../player/keymap';
  */
 export const TIP_TEMPLATES: readonly string[] = [
   '{forward} {back} fly forward and back at your height, {left} {right} strafe; {up} and {down} rise and descend.',
-  'Hold {sprint} to fly four times faster.',
+  'Hold {sprint}, or double-tap {forward}, to sprint: four times faster in flight.',
   'Change your flying speed with {speedUp} and {speedDown} while flying; the HUD shows it.',
   '{timeSpeed} changes the speed of time: ×1, ×10, ×60, then paused.',
   '{help} opens the help, with every key and the settings; {hud} shows or hides the counts.',

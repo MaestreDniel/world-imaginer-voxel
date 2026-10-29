@@ -60,8 +60,8 @@ const GROUP_TITLES: Readonly<Record<KeyEntry['group'], string>> = {
 export const UNDO_REDO_LINE = 'Ctrl+Z undo · Ctrl+Y redo: blocks while you play, the map\'s settings while the map has the controls (Ctrl+Shift+Z also descends while flying; Ctrl+Y does not)';
 
 /**
- * Ctrl is sprint while walking, and Ctrl+1 … Ctrl+8 switch the browser's tabs, which a page cannot stop (SP5a spec D9,
- * §4.6): the digits pick a hotbar slot only without Ctrl.
+ * Ctrl+1 … Ctrl+8 switch the browser's tabs, which a page cannot stop (SP5a spec D9, §4.6): the digits pick a hotbar
+ * slot only without Ctrl, which a player may still hold for Ctrl+wheel or the undo keys (Ctrl was sprint until Task 45b).
  */
 export const CTRL_DIGIT_NOTE = 'Let go of Ctrl before a digit: Ctrl+1 … Ctrl+8 switch the browser\'s tabs';
 

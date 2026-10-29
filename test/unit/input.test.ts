@@ -42,9 +42,11 @@ const button = (type: 'mousedown' | 'mouseup', b: number) => Object.assign(new E
 describe('input (SP4a spec §7.1, master §4.17)', () => {
   test('keydown of a bound action while the world has focus calls preventDefault, Ctrl held included (Ctrl+D, Ctrl+S, Ctrl+A)', () => {
     const { doc, input, actions } = setup();
+    // Ctrl alone is unbound since Task 45b (Ctrl+W closes the tab): no sprint, nothing prevented.
     const ctrl = key('keydown', 'ControlLeft', 'Control', { ctrlKey: true });
     doc.dispatchEvent(ctrl);
-    expect(ctrl.defaultPrevented).toBe(true);
+    expect(ctrl.defaultPrevented).toBe(false);
+    expect(input.held.size).toBe(0);
     const cases: Array<[string, string, Action]> = [['KeyD', 'd', 'right'], ['KeyS', 's', 'back'], ['KeyA', 'a', 'left']];
     for (const [code, k, a] of cases) {
       const e = key('keydown', code, k, { ctrlKey: true });
@@ -52,7 +54,7 @@ describe('input (SP4a spec §7.1, master §4.17)', () => {
       expect(e.defaultPrevented, `Ctrl+${k}`).toBe(true);
       expect(input.held.has(a), a).toBe(true);
     }
-    expect(input.held.has('sprint')).toBe(true);
+    expect(input.held.has('sprint')).toBe(false);
     // Non-movement actions fire once per press, also prevented (H, F1 open the help: spec §7.4).
     const f1 = key('keydown', 'F1', 'F1');
     doc.dispatchEvent(f1);
@@ -62,7 +64,7 @@ describe('input (SP4a spec §7.1, master §4.17)', () => {
     expect(actions).toEqual(['help', 'timeSpeed']);
     // Releasing one key leaves the others held.
     doc.dispatchEvent(key('keyup', 'KeyD', 'd'));
-    expect([...input.held].sort()).toEqual(['back', 'left', 'sprint']);
+    expect([...input.held].sort()).toEqual(['back', 'left']);
     input.dispose();
   });
 
@@ -333,11 +335,11 @@ describe('input (SP4a spec §7.1, master §4.17)', () => {
   });
 
   describe('the controls owner (SP4c spec §2.3, §2.4, D15)', () => {
-    test('inactive: W, A, S, D, Space, Shift, Ctrl, T, H, F1, F3, + and − do nothing and are not default-prevented (Space presses a focused map button, − types)', () => {
+    test('inactive: W, A, S, D, Space, Shift, Ctrl, R, T, H, F1, F3, + and − do nothing and are not default-prevented (Space presses a focused map button, − types)', () => {
       const { doc, actions, input } = setup(false, false);
       const keys: Array<[string, string]> = [
         ['KeyW', 'w'], ['KeyA', 'a'], ['KeyS', 's'], ['KeyD', 'd'], ['Space', ' '], ['ShiftLeft', 'Shift'], ['ShiftRight', 'Shift'],
-        ['ControlLeft', 'Control'], ['ControlRight', 'Control'], ['KeyT', 't'], ['KeyH', 'h'], ['F1', 'F1'], ['F3', 'F3'],
+        ['ControlLeft', 'Control'], ['ControlRight', 'Control'], ['KeyR', 'r'], ['KeyT', 't'], ['KeyH', 'h'], ['F1', 'F1'], ['F3', 'F3'],
         ['BracketRight', '+'], ['Equal', '='], ['Slash', '-'], ['Minus', '-'],
         ['KeyF', 'f'], ['KeyE', 'e'], ['Digit1', '1'], ['Digit9', '9'],
       ];
@@ -453,5 +455,105 @@ describe('input (SP4a spec §7.1, master §4.17)', () => {
     win.dispatchEvent(new Event('blur'));
     doc.dispatchEvent(key('keyup', 'KeyW', 'w'));
     expect([...input.held]).toEqual(['forward']);
+  });
+});
+
+/** A W keydown or keyup at `ms` (the event's `timeStamp`, a read-only accessor on `Event`, so defined on the instance). */
+const w = (type: 'keydown' | 'keyup', ms: number, repeat = false) =>
+  Object.defineProperty(key(type, 'KeyW', 'w', { repeat }), 'timeStamp', { value: ms });
+
+describe('sprint: R held or a double-tapped W (Task 45b: Ctrl+W closes the tab)', () => {
+  test('a double tap within 0.35 s sprints while W is held; W\'s keyup ends it', () => {
+    const { doc, input } = setup();
+    doc.dispatchEvent(w('keydown', 1000));
+    expect([...input.held]).toEqual(['forward']);
+    doc.dispatchEvent(w('keyup', 1080));
+    doc.dispatchEvent(w('keydown', 1200));
+    expect([...input.held].sort()).toEqual(['forward', 'sprint']);
+    // Other keys come and go; the latch stays while W is held.
+    doc.dispatchEvent(key('keydown', 'KeyA', 'a'));
+    doc.dispatchEvent(key('keyup', 'KeyA', 'a'));
+    doc.dispatchEvent(w('keydown', 1700, true));
+    expect([...input.held].sort()).toEqual(['forward', 'sprint']);
+    doc.dispatchEvent(w('keyup', 2500));
+    expect(input.held.size).toBe(0);
+    input.dispose();
+  });
+
+  test('the second tap after 0.35 s does not sprint', () => {
+    const { doc, input } = setup();
+    doc.dispatchEvent(w('keydown', 1000));
+    doc.dispatchEvent(w('keyup', 1100));
+    doc.dispatchEvent(w('keydown', 1400));
+    expect([...input.held]).toEqual(['forward']);
+    input.dispose();
+  });
+
+  test('a held W\'s auto-repeat keydowns never latch', () => {
+    const { doc, input } = setup();
+    doc.dispatchEvent(w('keydown', 1000));
+    for (let ms = 1500; ms <= 3000; ms += 33) doc.dispatchEvent(w('keydown', ms, true));
+    expect([...input.held]).toEqual(['forward']);
+    input.dispose();
+  });
+
+  test('R held sprints, with or without W; its keyup ends it', () => {
+    const { doc, input } = setup();
+    const r = key('keydown', 'KeyR', 'r');
+    doc.dispatchEvent(r);
+    expect(r.defaultPrevented).toBe(true);
+    expect([...input.held]).toEqual(['sprint']);
+    doc.dispatchEvent(w('keydown', 1000));
+    expect([...input.held].sort()).toEqual(['forward', 'sprint']);
+    doc.dispatchEvent(w('keyup', 1100));
+    expect([...input.held]).toEqual(['sprint']);
+    doc.dispatchEvent(key('keyup', 'KeyR', 'r'));
+    expect(input.held.size).toBe(0);
+    input.dispose();
+  });
+
+  test('Ctrl alone, or Ctrl with W, does not sprint', () => {
+    const { doc, input } = setup();
+    doc.dispatchEvent(key('keydown', 'ControlLeft', 'Control', { ctrlKey: true }));
+    doc.dispatchEvent(key('keydown', 'ControlRight', 'Control', { ctrlKey: true }));
+    expect(input.held.size).toBe(0);
+    doc.dispatchEvent(Object.defineProperty(key('keydown', 'KeyW', 'w', { ctrlKey: true }), 'timeStamp', { value: 1000 }));
+    expect([...input.held]).toEqual(['forward']);
+    input.dispose();
+  });
+
+  test('the latch clears with the held keys: blur, the lock\'s release and clear()', () => {
+    const { target, doc, win, input } = setup();
+    const latch = (from: number): void => {
+      doc.dispatchEvent(w('keydown', from));
+      doc.dispatchEvent(w('keyup', from + 50));
+      doc.dispatchEvent(w('keydown', from + 100));
+      expect([...input.held].sort(), `latched at ${from}`).toEqual(['forward', 'sprint']);
+    };
+    latch(1000);
+    win.dispatchEvent(new Event('blur'));
+    expect(input.held.size).toBe(0);
+    // The tap before the clear is forgotten: one tap 0.1 s later holds W without sprint.
+    doc.dispatchEvent(w('keydown', 1200));
+    expect([...input.held]).toEqual(['forward']);
+    doc.dispatchEvent(w('keyup', 1250));
+
+    latch(5000);
+    doc.pointerLockElement = target;
+    doc.dispatchEvent(new Event('pointerlockchange'));
+    expect([...input.held].sort()).toEqual(['forward', 'sprint']);
+    doc.pointerLockElement = null;
+    doc.dispatchEvent(new Event('pointerlockchange'));
+    expect(input.held.size).toBe(0);
+    doc.dispatchEvent(w('keydown', 5200));
+    expect([...input.held]).toEqual(['forward']);
+    doc.dispatchEvent(w('keyup', 5250));
+
+    latch(9000);
+    input.clear();
+    expect(input.held.size).toBe(0);
+    doc.dispatchEvent(w('keydown', 9200));
+    expect([...input.held]).toEqual(['forward']);
+    input.dispose();
   });
 });

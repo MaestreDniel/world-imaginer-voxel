@@ -1958,7 +1958,7 @@ describe('modes in the page: F, the near plane, the reach, the wheel and + / −
     expect(posted).toEqual([{ x: 0, y: 69, z: 0, op: 'set', value: STONE << 8, expect: AIR << 8 }]);
   });
 
-  test('Ctrl+wheel steps the slot while walking (Ctrl is sprint), the speed while flying', () => {
+  test('Ctrl+wheel steps the slot while walking, the speed while flying', () => {
     const fly = flyAt();
     const walk = createWalkState();
     const hotbar = createHotbar(null);

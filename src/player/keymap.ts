@@ -35,11 +35,12 @@ const wheel = (dir: 'up' | 'down', ctrl: boolean): Binding => ({ kind: 'wheel', 
 
 /**
  * SP4a's actions, as spec §7.3 lists them, with SP4b's flight labels (SP4b spec §6.1) and without R, which loaded the
- * world around the camera until SP4b streamed it (SP4b spec §6.2, D20: R is unbound); then SP4c's M, the map over the
- * world (SP4c spec §2.4, D15), the one action that acts whoever owns the controls; then SP5a's build group (SP5a spec
- * §4.1, D9): F, E, the digits by code (a shifted or AZERTY digit still selects its slot) and the plain wheel, which
- * took the wheel from the flying speed, now on Ctrl+wheel. While walking the page ignores `+`/`-` and resolves Ctrl+wheel
- * as the plain wheel (input.ts `wheelCtrlAsSlot`).
+ * world around the camera until SP4b streamed it (SP4b spec §6.2, D20: R is unbound until SP5a's sprint); then SP4c's M,
+ * the map over the world (SP4c spec §2.4, D15), the one action that acts whoever owns the controls; then SP5a's build
+ * group (SP5a spec §4.1, D9): F, E, the digits by code (a shifted or AZERTY digit still selects its slot) and the plain
+ * wheel, which took the wheel from the flying speed, now on Ctrl+wheel. While walking the page ignores `+`/`-` and
+ * resolves Ctrl+wheel as the plain wheel (input.ts `wheelCtrlAsSlot`). Sprint is R since Task 45b (Ctrl+W closes the
+ * tab, the user's finding at SP5a's production check); its double-tapped W is the input's (input.ts, `sprintTap.ts`).
  */
 export const DEFAULT_KEYMAP: readonly KeyEntry[] = [
   { action: 'forward', bindings: [code('KeyW')], label: 'Forward (at your height)', group: 'move', since: 'SP4a' },
@@ -48,7 +49,7 @@ export const DEFAULT_KEYMAP: readonly KeyEntry[] = [
   { action: 'right', bindings: [code('KeyD')], label: 'Right', group: 'move', since: 'SP4a' },
   { action: 'up', bindings: [code('Space')], label: 'Rise', group: 'move', since: 'SP4a' },
   { action: 'down', bindings: [code('ShiftLeft'), code('ShiftRight')], label: 'Descend', group: 'move', since: 'SP4a' },
-  { action: 'sprint', bindings: [code('ControlLeft'), code('ControlRight')], label: 'Sprint (×4 while held)', group: 'move', since: 'SP4a' },
+  { action: 'sprint', bindings: [code('KeyR')], label: 'Sprint (hold R, or double-tap W)', group: 'move', since: 'SP4a' },
   { action: 'speedUp', bindings: [wheel('up', true), key('+'), key('=')], label: 'Fly faster', group: 'speed', since: 'SP4a' },
   { action: 'speedDown', bindings: [wheel('down', true), key('-')], label: 'Fly slower', group: 'speed', since: 'SP4a' },
   { action: 'timeSpeed', bindings: [code('KeyT')], label: 'Time speed (×1, ×10, ×60, paused)', group: 'world', since: 'SP4a' },

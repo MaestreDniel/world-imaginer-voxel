@@ -16,6 +16,12 @@ describe('loading-screen tips (SP4a spec §8.3, §7.3; ruling P45)', () => {
     for (const a of ['toggleWalk', 'palette', 'slot1', 'slot5', 'slot9', 'slotNext', 'slotPrev']) expect(named.has(a), a).toBe(true);
   });
 
+  test('the sprint tip names R and the double-tapped W, not Ctrl (Task 45b: Ctrl+W closes the tab)', () => {
+    const text = tips(DEFAULT_KEYMAP).join('\n');
+    expect(text).toContain('Hold R, or double-tap W, to sprint: four times faster in flight.');
+    expect(text).not.toMatch(/\bCtrl\b(?!\+Wheel)/);
+  });
+
   test('the speed tip names Ctrl+wheel, and a build tip names F, E, 1-9 and the wheel (SP5a spec §4.1, §4.6)', () => {
     const text = tips(DEFAULT_KEYMAP).join('\n');
     expect(text).toContain('Ctrl+Wheel up / + / =');

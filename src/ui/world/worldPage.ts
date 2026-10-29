@@ -2535,7 +2535,8 @@ export function mountWorldPage(root: HTMLElement, q: WorldQuery, hash: string, o
         if (down) holdRepeat.down(b, nowS());
         else holdRepeat.up(b, nowS());
       },
-      // Walking, Ctrl is sprint, so Ctrl+wheel steps the slot as the plain wheel does (SP5a spec §4.1, D9).
+      // Walking, Ctrl+wheel steps the slot as the plain wheel does (SP5a spec §4.1, D9), so it never zooms the page and
+      // never means two things while walking (kept when sprint left Ctrl for R and a double-tapped W, Task 45b).
       wheelCtrlAsSlot: () => fly.mode === 'walk',
       // Only text-entry controls (spec §7.1): a focused slider or select leaves H and F1 working (final review C-I2).
       isTextFocus: () => isTextEntry(document.activeElement as HTMLElement | null),
