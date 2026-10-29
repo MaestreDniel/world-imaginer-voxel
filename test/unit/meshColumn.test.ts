@@ -3,15 +3,19 @@
  * neighbourhood, a 3 × 3 of seed '42' filled to Published (T on the 7 × 7, D on the 5 × 5, L on the 3 × 3), and
  * `meshColumnJob`'s Published check. The payload is checked against `meshSolid`/`meshFluid` run per section by hand,
  * its trivial sections against the descriptors, its spheres against their vertices, its east seam against the east
- * neighbour's voxels, and its buffers for ownership.
+ * neighbour's voxels, and its buffers for ownership; and the bench's aquarium (SP5a spec §1.3, §6.5) on a canned store.
  */
 import { beforeAll, describe, expect, test } from 'vitest';
+import { MIN_Y } from '../../src/core/constants';
 import { createLightScratch } from '../../src/light/initial';
 import { fillColumnT } from '../../src/metrics/region';
 import { createMeshBuilder } from '../../src/mesh/builder';
 import {
   createMeshScratch,
   isTrivial,
+  MESH_PASS_CUTOUT,
+  MESH_PASS_OPAQUE,
+  MESH_PASS_TRANSLUCENT,
   meshColumnPayload,
   payloadProblem,
   ROW_INTS,
@@ -22,9 +26,10 @@ import { connectivity15 } from '../../src/mesh/connectivity';
 import { fluidDepths, meshFluid } from '../../src/mesh/fluid';
 import { meshSolid, type MeshOptions } from '../../src/mesh/greedy';
 import { unpackFluid, unpackSolid } from '../../src/mesh/packing';
+import { REVIEW_HOUSE, REVIEW_POOL, REVIEW_SITE } from '../../src/ui/world/bench';
 import { FLUID_WATER, fluidType } from '../../src/world/blocks/fluid';
-import { AIR, FULL_FACES, PASS } from '../../src/world/blocks/index';
-import { FACE_EAST, FACE_WEST, PASS_OPAQUE } from '../../src/world/blocks/kinds';
+import { AIR, FULL_FACES, PASS, STONE } from '../../src/world/blocks/index';
+import { FACE_EAST, FACE_NORTH, FACE_SOUTH, FACE_UP, FACE_WEST, PASS_OPAQUE } from '../../src/world/blocks/kinds';
 import type { NeighborhoodReader } from '../../src/world/store/api';
 import { SECTIONS, STATUS_DECORATED } from '../../src/world/store/columnTable';
 import { copyPaddedSection, createPaddedSection } from '../../src/world/store/padded';
@@ -480,5 +485,119 @@ describe('meshColumnJob (SP4a spec §2.3)', () => {
     expect(() => meshColumnJob(store, CX + 1, CZ, createMeshScratch(), MEDIUM)).toThrow(/Published/);
     // A missing column (outside the filled 7 × 7) likewise.
     expect(() => meshColumnJob(store, CX + 4, CZ, createMeshScratch(), MEDIUM)).toThrow(/Published/);
+  });
+});
+
+describe('the bench\'s aquarium (SP5a spec §1.3, §6.5)', () => {
+  /** A quad of a payload in world coordinates (its AABB, the fluid corner drops applied) and its vertices' drops. */
+  interface Quad { pass: number; face: number; lo: number[]; hi: number[]; drops: number[]; tops: boolean[] }
+
+  /**
+   * The review scene written as `reviewSceneEdits` writes it at anchor (ax, ay, az) on a canned store (stone below the
+   * anchor's y, air from it up; `REVIEW_SITE` cleared, then `REVIEW_POOL`, then `REVIEW_HOUSE`), every column holding
+   * the glass wall's blocks (dx −10 … −2, dz 5) and their stone neighbours meshed with `meshColumnPayload`.
+   */
+  function aquariumQuads(ax: number, ay: number, az: number): Quad[] {
+    const want = new Map<string, number>();
+    const s = REVIEW_SITE;
+    for (let dy = s.dy0; dy <= s.dy1; dy++) for (let dz = s.dz0; dz <= s.dz1; dz++) for (let dx = s.dx0; dx <= s.dx1; dx++) want.set(`${dx},${dy},${dz}`, 0);
+    for (const [dx, dy, dz, v] of [...REVIEW_POOL, ...REVIEW_HOUSE]) want.set(`${dx},${dy},${dz}`, v);
+    const value = (x: number, y: number, z: number): number =>
+      want.get(`${x - ax},${y - ay},${z - az}`) ?? (y < ay ? (STONE << 8) >>> 0 : (AIR << 8) >>> 0);
+    const cx0 = Math.floor((ax - 11) / 16), cx1 = Math.floor(ax / 16);
+    const cz0 = Math.floor((az + 4) / 16), cz1 = Math.floor((az + 6) / 16);
+    const store = createStore({ shared: false, maxBlockBytes: 64 * MiB, maxByteBytes: 64 * MiB });
+    for (let cz = cz0 - 1; cz <= cz1 + 1; cz++) {
+      for (let cx = cx0 - 1; cx <= cx1 + 1; cx++) {
+        const w = store.claimColumn(cx, cz, 0);
+        for (let sy = 0; sy < SECTIONS; sy++) {
+          const y0 = MIN_Y + sy * 16;
+          const blocks = new Uint16Array(4096);
+          const fluid = new Uint8Array(4096);
+          // Only the sections the scene reaches (dy −4 … 10) read it; the rest are stone or air.
+          if (y0 + 15 < ay + s.dy0 - 5 || y0 > ay + s.dy1) blocks.fill(y0 < ay ? STONE : AIR);
+          else {
+            for (let ly = 0; ly < 16; ly++) for (let lz = 0; lz < 16; lz++) for (let lx = 0; lx < 16; lx++) {
+              const v = value(cx * 16 + lx, y0 + ly, cz * 16 + lz);
+              const i = ly * 256 + lz * 16 + lx;
+              blocks[i] = v >>> 8;
+              fluid[i] = v & 255;
+            }
+          }
+          w.setFinal(sy, blocks, new Uint8Array(4096).fill(0xF0), fluid);
+        }
+        w.commit(3);
+      }
+    }
+    const quads: Quad[] = [];
+    const scratch = createMeshScratch();
+    for (let cz = cz0; cz <= cz1; cz++) {
+      for (let cx = cx0; cx <= cx1; cx++) {
+        const p = meshColumnPayload(store.neighborhood(cx, cz), scratch, MEDIUM);
+        for (const row of rowsOf(p)) {
+          for (let q = 0; q < row.vertexCount; q += 4) {
+            const lo = [Infinity, Infinity, Infinity];
+            const hi = [-Infinity, -Infinity, -Infinity];
+            const drops: number[] = [];
+            const tops: boolean[] = [];
+            let face = 0;
+            for (let k = 0; k < 4; k++) {
+              const v = row.vertexStart + q + k;
+              const word = p.data[v]!;
+              let drop = 0;
+              if (row.pass === MESH_PASS_TRANSLUCENT) ({ face, cornerDrop: drop } = unpackFluid(word));
+              else ({ face } = unpackSolid(word));
+              const y = MIN_Y + row.sy * 16 + p.position[4 * v + 1]! / 8;
+              const at = [cx * 16 + p.position[4 * v]! / 8, y - drop / 9, cz * 16 + p.position[4 * v + 2]! / 8];
+              drops.push(drop);
+              tops.push(y === ay);
+              for (let a = 0; a < 3; a++) {
+                lo[a] = Math.min(lo[a]!, at[a]!);
+                hi[a] = Math.max(hi[a]!, at[a]!);
+              }
+            }
+            quads.push({ pass: row.pass, face, lo, hi, drops, tops });
+          }
+        }
+      }
+    }
+    return quads;
+  }
+
+  /** Every point of a 1/8-spaced grid inside [u0, u1] × [v0, v1] (axes a, b) lies in one of the quads. */
+  function covers(quads: Quad[], a: number, b: number, u0: number, u1: number, v0: number, v1: number): boolean {
+    for (let u = u0 + 1 / 16; u < u1; u += 1 / 8) {
+      for (let v = v0 + 1 / 16; v < v1; v += 1 / 8) {
+        if (!quads.some((q) => q.lo[a]! <= u && u <= q.hi[a]! && q.lo[b]! <= v && v <= q.hi[b]!)) return false;
+      }
+    }
+    return true;
+  }
+
+  // L9's arrival (x 20,000, z 0), and an anchor whose glass plane lies on a column boundary (az + 5 = 16).
+  test.each([[20000, 72, 0], [20005, 70, 11]])('anchor (%i, %i, %i): the water face on the glass\'s inner plane is meshed whole, no glass face is there, and stone bounds the glass', (ax, ay, az) => {
+    const quads = aquariumQuads(ax, ay, az);
+    const onPlane = (q: Quad, z: number): boolean => q.lo[2] === z && q.hi[2] === z;
+    // The water's south faces on z = az + 5: exactly x ax − 10 … ax − 1 × y ay − 4 … ay − 1/9 (the still source's 8/9
+    // top), without overlap, the corner drop 1 on the top corners only.
+    const water = quads.filter((q) => q.pass === MESH_PASS_TRANSLUCENT && q.face === FACE_SOUTH && onPlane(q, az + 5));
+    expect(water.length).toBeGreaterThan(0);
+    for (const q of water) {
+      expect([q.lo[0]! >= ax - 10, q.hi[0]! <= ax - 1, q.lo[1]! >= ay - 4, q.hi[1]! <= ay - 1 / 9 + 1e-9]).toEqual([true, true, true, true]);
+      expect(q.drops).toEqual(q.tops.map((t) => (t ? 1 : 0)));
+    }
+    expect(covers(water, 0, 1, ax - 10, ax - 1, ay - 4, ay - 1 / 9)).toBe(true);
+    const area = water.reduce((sum, q) => sum + (q.hi[0]! - q.lo[0]!) * (q.hi[1]! - q.lo[1]!), 0);
+    expect(area).toBeCloseTo(9 * (4 - 1 / 9), 9);
+    // No glass face on that plane (the cutout face toward water is culled, §1.3).
+    expect(quads.filter((q) => q.pass === MESH_PASS_CUTOUT && (q.face === FACE_NORTH || q.face === FACE_SOUTH) && onPlane(q, az + 5))).toEqual([]);
+    // The stone bounding the glass blocks (z az + 5 … az + 6): the floor's top under them, the pit's side walls at
+    // x ax − 10 (facing east) and ax − 1 (facing west).
+    const opaque = quads.filter((q) => q.pass === MESH_PASS_OPAQUE);
+    const floor = opaque.filter((q) => q.face === FACE_UP && q.lo[1] === ay - 4 && q.hi[1] === ay - 4);
+    expect(covers(floor, 0, 2, ax - 10, ax - 1, az + 5, az + 6)).toBe(true);
+    const side = (face: number, x: number) => opaque.filter((q) => q.face === face && q.lo[0] === x && q.hi[0] === x);
+    expect(covers(side(FACE_EAST, ax - 10), 1, 2, ay - 4, ay, az + 5, az + 6)).toBe(true);
+    expect(covers(side(FACE_WEST, ax - 1), 1, 2, ay - 4, ay, az + 5, az + 6)).toBe(true);
   });
 });

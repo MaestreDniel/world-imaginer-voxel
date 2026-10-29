@@ -1014,10 +1014,15 @@ export const REVIEW_SITE = { dx0: -12, dx1: 10, dy0: 0, dy1: 10, dz0: -6, dz1: 1
 
 /**
  * The house (plan): 7 × 5 × 7 at dx 2 … 8, dy 0 … 4, dz −3 … 3. Its bottom layer a cobblestone base around a brick
- * floor; oak logs upright at the corners (axis y), along the roof's north and south edges (axis x) and its east and
- * west edges (axis z); oak-plank walls with a stripe of red and white wool at dy 2, a glass window in the south wall
- * (dx 4 … 6) and in the west wall facing the pool (dz −1 … 1); a plank roof; a ladder up the north wall inside; wall
- * torches inside on the east wall and outside on the south and west walls.
+ * floor; oak logs upright at the corners (axis y, dy 1 … 3), and at dy 4 the roof's edge beams along its north and
+ * south edges (axis x) and its east and west edges (axis z), each running into one corner (a pinwheel: the south-west
+ * and north-east corners axis x, the south-east and north-west axis z), so the build pose, from the south-west, sees an
+ * axis-x beam's end face on the west wall's top and an axis-z beam's on the south wall's; oak-plank walls with a stripe
+ * of red and white wool at dy 2, a glass window in the south wall (dx 4 … 6) and in the west wall facing the pool
+ * (dz −1 … 1); a plank roof; a ladder up the north wall inside; wall torches inside on the east wall and outside on the
+ * south and west walls. Outside: a ladder up the south wall at its east corner (dx 8, dy 0 … 2) and an upright log
+ * stump beside it (dx 9, dz 4), whose top is the axis-y end face the build pose sees (the posts' tops are under the
+ * beams).
  */
 export const REVIEW_HOUSE: readonly SceneVoxel[] = (() => {
   const planks = blockValue(OAK_PLANKS);
@@ -1031,8 +1036,10 @@ export const REVIEW_HOUSE: readonly SceneVoxel[] = (() => {
         const edgeZ = dz === -3 || dz === 3;
         let v: number;
         if (dy === 0) v = edgeX || edgeZ ? blockValue(COBBLESTONE) : blockValue(BRICKS);
-        else if (edgeX && edgeZ) v = valueOf('oak_log[axis=y]');
-        else if (dy === 4) v = edgeZ ? valueOf('oak_log[axis=x]') : edgeX ? valueOf('oak_log[axis=z]') : planks;
+        else if (dy === 4) {
+          const alongX = edgeX && edgeZ ? (dx === 2) === (dz === 3) : edgeZ;
+          v = alongX ? valueOf('oak_log[axis=x]') : edgeX ? valueOf('oak_log[axis=z]') : planks;
+        } else if (edgeX && edgeZ) v = valueOf('oak_log[axis=y]');
         else if (!edgeX && !edgeZ) {
           // Inside: the ladder against the north wall, a torch on the east wall, air.
           if (dx === 5 && dz === -2) v = valueOf('ladder[facing=south]');
@@ -1048,6 +1055,9 @@ export const REVIEW_HOUSE: readonly SceneVoxel[] = (() => {
   // The outside torches, each against its wall.
   out.push([3, 3, 4, valueOf('wall_torch[facing=south]')], [7, 3, 4, valueOf('wall_torch[facing=south]')]);
   out.push([1, 3, -2, valueOf('wall_torch[facing=west]')], [1, 3, 2, valueOf('wall_torch[facing=west]')]);
+  // The outside ladder up the south wall's east corner, and the log stump beside it.
+  for (let dy = 0; dy <= 2; dy++) out.push([8, dy, 4, valueOf('ladder[facing=south]')]);
+  out.push([9, 0, 4, valueOf('oak_log[axis=y]')]);
   return out;
 })();
 

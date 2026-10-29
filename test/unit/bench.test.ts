@@ -7,7 +7,7 @@ import type { Edit } from '../../src/workers/protocol';
 import {
   BENCH_EDIT, BENCH_FIELDS, BENCH_FRAME_CAPACITY, BENCH_IDLE_FRAMES, BENCH_LEGS, BENCH_LIVE, BENCH_LIVE_LEGS, BENCH_PITCH, BENCH_RD, BENCH_REFILL,
   BENCH_SEED, BENCH_SHOT_ABOVE, BENCH_SHOT_PITCH, BENCH_SHOTS, BENCH_TIME_SPEED, BENCH_Y, benchInterval, benchPose, createBenchDriver,
-  createBenchRecord, createBenchRecorder, createLiveReveals, REVIEW_HOUSE, REVIEW_POOL, REVIEW_SCENE_BATCH, REVIEW_SCENES, REVIEW_SETTLE_S,
+  createBenchRecord, createBenchRecorder, createLiveReveals, REVIEW_HOUSE, REVIEW_POOL, REVIEW_SCENE_BATCH, REVIEW_SCENES, REVIEW_SETTLE_S, REVIEW_SITE,
   REVIEW_SHOTS, summarizeBench, type BenchError, type BenchFixed, type BenchPose, type BenchRecord, type BenchResult, type BenchSources, type BenchWorld,
   type ReviewShot, type SceneVoxel,
 } from '../../src/ui/world/bench';
@@ -1158,14 +1158,51 @@ describe('the review scenes (SP5a spec §6.5; plan)', () => {
     const types = new Set([...values].filter((v) => v !== 0).map(typeOf));
     for (const t of ['ladder', 'wall_torch', 'glass', 'oak_planks', 'bricks', 'cobblestone']) expect(types.has(t)).toBe(true);
     expect([...types].filter((t) => t.endsWith('_wool')).length).toBeGreaterThanOrEqual(2);
-    // A 7 × 5 × 7 house (dx 2 … 8, dy 0 … 4, dz −3 … 3), every voxel of it listed once, and its torches on the walls
-    // outside it; no voxel twice.
+    // A 7 × 5 × 7 house (dx 2 … 8, dy 0 … 4, dz −3 … 3), every voxel of it listed once, and outside it its torches
+    // on the walls, the ladder up the south wall and the log stump beside it; no voxel twice.
     const keys = REVIEW_HOUSE.map(keyOf);
     expect(new Set(keys).size).toBe(keys.length);
     for (let dy = 0; dy <= 4; dy++) for (let dz = -3; dz <= 3; dz++) for (let dx = 2; dx <= 8; dx++) expect(keys).toContain(`${dx},${dy},${dz}`);
     const outside = REVIEW_HOUSE.filter((b) => b[0] < 2 || b[0] > 8 || b[2] < -3 || b[2] > 3 || b[1] < 0 || b[1] > 4);
     expect(outside.length).toBeGreaterThan(0);
-    for (const b of outside) expect(typeOf(b[3])).toBe('wall_torch');
+    for (const b of outside) expect(['wall_torch', 'ladder', 'oak_log']).toContain(typeOf(b[3]));
+  });
+
+  test('the build pose sees an end face of an oak log on each axis (x, y and z), and a ladder outside the walls\' footprint', () => {
+    const pose = REVIEW_SCENES['build-day'].pose;
+    const at = new Map([...REVIEW_POOL, ...REVIEW_HOUSE].map((b) => [keyOf(b), b[3]]));
+    const s = REVIEW_SITE;
+    // Open: air inside the cleared site (nothing of the scene written there).
+    const open = (dx: number, dy: number, dz: number): boolean =>
+      dx >= s.dx0 && dx <= s.dx1 && dy >= s.dy0 && dy <= s.dy1 && dz >= s.dz0 && dz <= s.dz1 && (at.get(`${dx},${dy},${dz}`) ?? 0) === 0;
+    // An end face in view: a log of that axis whose face along the axis has open air beyond it, with the pose beyond
+    // that face's plane.
+    const eye = [pose.x, pose.y, pose.z] as const;
+    const endFaceSeen = (axis: 0 | 1 | 2): boolean => REVIEW_HOUSE.some((b) => {
+      if (b[3] !== valueOf(`oak_log[axis=${'xyz'[axis]}]`)) return false;
+      return [-1, 1].some((sign) => {
+        const n = [b[0], b[1], b[2]];
+        n[axis]! += sign;
+        const beyond = sign < 0 ? eye[axis] < b[axis] : eye[axis] > b[axis] + 1;
+        return beyond && open(n[0]!, n[1]!, n[2]!);
+      });
+    });
+    expect([endFaceSeen(0), endFaceSeen(1), endFaceSeen(2)]).toEqual([true, true, true]);
+    // The ladder: outside the footprint (dx 2 … 8, dz −3 … 3), up the south wall, which the pose sees; one column of
+    // at least two voxels against wall that is neither glass nor air, and no torch above it.
+    const ladders = REVIEW_HOUSE.filter((b) => typeOf(b[3]) === 'ladder' && (b[0] < 2 || b[0] > 8 || b[2] < -3 || b[2] > 3));
+    expect(ladders.length).toBeGreaterThanOrEqual(2);
+    expect(new Set(ladders.map((b) => `${b[0]},${b[2]}`)).size).toBe(1);
+    expect(pose.z).toBeGreaterThan(5);
+    for (const [dx, dy, dz, v] of ladders) {
+      expect([dz, v]).toEqual([4, valueOf('ladder[facing=south]')]);
+      const wall = at.get(`${dx},${dy},${dz - 1}`) ?? 0;
+      expect(wall).not.toBe(0);
+      expect(typeOf(wall)).not.toBe('glass');
+      for (const [tx, ty, tz, tv] of REVIEW_HOUSE) {
+        if (tx === dx && tz === dz && ty > dy) expect(typeOf(tv)).not.toMatch(/torch/);
+      }
+    }
   });
 
   test('`REVIEW_POOL`: a 9 × 9 × 4 pit of water sources, a glass wall on one side, ice at its rim, a 3 × 3 lava pool; apart from the house', () => {
