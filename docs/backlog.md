@@ -18,3 +18,7 @@ Improvements noted for later. They belong to no SP spec; pick them up when conve
 ## Code
 
 - **Remove the dead `ui/shell.ts` and `ui/hud.ts`'s `mountHud`** (with their `.shell`, `.toolbar`, `.hud` and `.side-panel` CSS): the 3D page replaced SP0's boot shell in SP4a, so nothing mounts them. Removing them also updates master §1's `ui/shell.ts` entry and its pin in `test/arch/masterSpec.test.ts`.
+
+## Performance
+
+- **Stutter under heavy editing on the Iris Xe (SP5a).** The user (2026-10-29) noticed some stutter when interacting a lot with the world on the Iris Xe, and may repeat the check on the RTX 3060. SP5a's G2 gates one edit's visible latency (p95 ≤ 50 ms), not a burst of edits. To trace before a fix: the frame times during a burst of breaks and places, the edit remesh on the aux lane, the incremental relight's cost per batch, the mesh uploads on the iGPU, and the main thread's work per `edited` reply; then decide whether it belongs to SP11's performance pass or a fix of its own.
