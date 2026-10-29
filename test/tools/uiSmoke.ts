@@ -666,7 +666,10 @@ export const SMOKE_WATER_SOURCE = 16;
 export const SMOKE_FACE = { north: 0, east: 1, south: 2, west: 3, up: 4, down: 5 } as const;
 /** The palette's swatches: every `PLACEABLE` type (48) and the 3 buckets (a unit test counts them). */
 export const PALETTE_SWATCHES = 51;
-/** The least block light beside a torch: it emits 14, and the voxel beside it reads one step less. */
+/**
+ * The least block light beside a torch: it emits 14, and the voxel beside it reads one step less (a unit test keeps it
+ * the registry's emission − 1). The spot reads below it before the torch.
+ */
 export const TORCH_MIN_LIGHT = 13;
 /** The walk's corridor length along −z, past the feet's own row. */
 export const WALK_PATH_BLOCKS = 16;
@@ -2882,10 +2885,12 @@ async function buildChecks(t: Smoke): Promise<void> {
     await holds(t, `document.getElementById('world-palette')?.hidden === true`, 'build: Esc closes the palette', 5000, async () => null);
   }
 
-  // 6. A torch through the hook raises the block light beside it (block light does not depend on the time of day).
+  // 6. A torch through the hook raises the block light beside it (block light does not depend on the time of day); the
+  // spot must read below the torch's light first, or the check would pass without the torch (final review GOV-7).
   const around = [[1, 0, 0], [-1, 0, 0], [0, 1, 0], [0, -1, 0], [0, 0, 1], [0, 0, -1]].map(([dx, dy, dz]) => [at.x + dx!, at.y + dy!, at.z + dz!]);
   const LIT = `Math.max(...${JSON.stringify(around)}.map(([x, y, z]) => { const l = __wiTest.lightAt(x, y, z); return __wiTest.blockAt(x, y, z) === ${SMOKE_STATE.air} && l >= 0 ? l & 15 : -1; }))`;
   const dark = await p.eval<number>(LIT);
+  t.check(dark < TORCH_MIN_LIGHT, `build: the block light beside (${xyz(at)}) before the torch is below ${TORCH_MIN_LIGHT}: ${dark}`, dark);
   const torch = await hookEdit(p, at, SMOKE_STATE.torch);
   t.check(torch === 'ok', `build: a torch through the hook at (${xyz(at)}): ${torch}`);
   if (await holds(t, `(${LIT}) >= ${TORCH_MIN_LIGHT}`, `build: the torch raises the block light beside it to ≥ ${TORCH_MIN_LIGHT}`, 5000, () => p.eval<number>(LIT))) {

@@ -44,7 +44,7 @@ import {
   WALK_HOLD_MS, WALK_MIN_MOVE, WALK_PATH_BLOCKS, WALK_QUERY, walkCorridor, walkSnapOk,
 } from '../tools/uiSmoke';
 import { FACE_DOWN, FACE_EAST, FACE_NORTH, FACE_SOUTH, FACE_UP, FACE_WEST } from '../../src/world/blocks/kinds';
-import { REGISTRY } from '../../src/world/blocks/index';
+import { EMIT, REGISTRY } from '../../src/world/blocks/index';
 import { PLACEABLE } from '../../src/world/blocks/tags';
 import { paletteGroups } from '../../src/ui/palette';
 import { LANDING_ABOVE, LANDING_MAX_Y, landingY } from '../../src/ui/world/teleport';
@@ -1011,8 +1011,19 @@ describe('UI smoke test: the build and walk steps (SP5a spec §6.4)', () => {
     expect(SMOKE_STATE).toEqual({ air: AIR, stone: STONE, torch: REGISTRY.stateOf(REGISTRY.typeId('torch')) });
     expect(SMOKE_STATE).toEqual({ air: 0, stone: 1, torch: 32 });
     expect(SMOKE_WATER_SOURCE).toBe(WATER_SOURCE);
-    // A torch emits 14; the voxel beside it reads 13 (one step of falloff).
+    // The voxel beside a torch reads one step of falloff below its emission (14 → 13; final review GOV-7).
+    expect(TORCH_MIN_LIGHT).toBe(EMIT[REGISTRY.stateOf(REGISTRY.typeId('torch'))]! - 1);
     expect(TORCH_MIN_LIGHT).toBe(13);
+  });
+
+  test('the torch check needs the spot dark before the torch: `dark < TORCH_MIN_LIGHT` is checked before the torch is posted (final review GOV-7)', () => {
+    const src = readFileSync(new URL('../tools/uiSmoke.ts', import.meta.url), 'utf8');
+    const read = src.indexOf('const dark = await p.eval<number>(LIT);');
+    const dark = src.indexOf('t.check(dark < TORCH_MIN_LIGHT, ');
+    const torch = src.indexOf('const torch = await hookEdit(p, at, SMOKE_STATE.torch);');
+    expect([read, dark, torch].every((i) => i > -1)).toBe(true);
+    expect(read).toBeLessThan(dark);
+    expect(dark).toBeLessThan(torch);
   });
 
   test('acrossFace: the voxel across the hit face, the face literals FACE_*', () => {
