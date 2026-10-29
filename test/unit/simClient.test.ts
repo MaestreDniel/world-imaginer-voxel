@@ -152,6 +152,18 @@ describe('the sim client (SP5a spec §2.1, §2.5)', () => {
     expect(sim.failed).toBe(true);
   });
 
+  test.each(triggers)('after %s the worker is terminated, before `onFailure` releases its pins (it writes nothing more)', (_n, trigger) => {
+    const w = fakeSim();
+    const log: string[] = [];
+    const sim = createSimClient(() => w, { onFailure: () => log.push(`onFailure terminated=${String(w.terminated)}`) });
+    void sim.edits([STONE_AT]).catch(() => {});
+    void sim.diff(4, 4);
+    expect(w.terminated).toBe(false);
+    trigger(w);
+    expect(w.terminated).toBe(true);
+    expect(log).toEqual(['onFailure terminated=true']);
+  });
+
   test('a throwing `onFailure` still settles every pending request', async () => {
     const w = fakeSim();
     const sim = createSimClient(() => w, { onFailure: () => { throw new Error('page bug'); } });

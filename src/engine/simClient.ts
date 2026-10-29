@@ -6,11 +6,12 @@
  *
  * **The sim's failure** (§2.1): an `error` event, an `error` reply of any code, or a reply the guard refuses
  * (`parseFromSim`, or one that does not answer a pending request of its kind, its batch's length or its column). In
- * this order: `failed` turns true, the entry set empties, `onFailure` runs once and synchronously (the page marks
- * thread 15 dead, releases every sim pin and shows the notice), then every pending `edits` rejects with `SimFailed` and
- * every pending `diff` resolves null, so a rejected post finds its pins already released. Later `edits` reject and
- * later `diff`s resolve null at once, with nothing posted. `dispose` terminates the worker and settles its requests the
- * same way, without `onFailure`.
+ * this order: `failed` turns true, the entry set empties, the worker is terminated (so no batch already queued in its
+ * port writes after its pins are released; the sim's handler also refuses every batch after an `error` reply),
+ * `onFailure` runs once and synchronously (the page marks thread 15 dead, releases every sim pin and shows the
+ * notice), then every pending `edits` rejects with `SimFailed` and every pending `diff` resolves null, so a rejected
+ * post finds its pins already released. Later `edits` reject and later `diff`s resolve null at once, with nothing
+ * posted. `dispose` terminates the worker and settles its requests the same way, without `onFailure`.
  */
 import { colKey } from '../core/coords';
 import { parseFromSim, type DiffMsg, type Edit, type EditedMsg, type ToSim } from '../workers/protocol';
@@ -84,6 +85,7 @@ export function createSimClient(spawn: () => SimWorkerLike, o: { onFailure(e: Er
     entries.clear();
     const e = new SimFailed(`the sim failed: ${why}`);
     try {
+      worker.terminate();
       o.onFailure(e);
     } finally {
       settleAll(e);

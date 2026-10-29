@@ -9,9 +9,11 @@
  * - `diff`: the DiffStore's entries of the column (`readDiff`), transferred; zero-length arrays when it holds none.
  * A message the guard refuses is BAD_MESSAGE, with nothing written. Any throw out of the pipeline is an `error` reply
  * carrying the message's id: STORE_CORRUPT for `StoreCorrupt` (a pool lock held by a failed thread), INTERNAL otherwise;
- * the page treats either as the sim's failure (§2.1). `applyEdits` runs inside its own read section, and the writes it
- * retires wait in this thread's limbo, which `drain` frees; the shell drains after each message and every
- * `SIM_DRAIN_MS` while entries are left.
+ * the page treats either as the sim's failure (§2.1). Any `error` reply latches the handler: the page has then released
+ * every sim pin and marked thread 15 dead, so each later `edits` (one already queued before the page terminated the
+ * worker) is answered INTERNAL with nothing written; `attach` and `diff` answer as before, since neither writes the
+ * store. `applyEdits` runs inside its own read section, and the writes it retires wait in this thread's limbo, which
+ * `drain` frees; the shell drains after each message and every `SIM_DRAIN_MS` while entries are left.
  */
 import { createDiffStore } from '../sim/diffStore';
 import { applyEdits, createEditScratch, readDiff, type EditScratch } from '../sim/edits';
@@ -46,47 +48,55 @@ export function createSimHandler(): SimHandler {
   const diffs = createDiffStore();
   /** The relight rings and the 3 × 3 cache (≈ 9 MB), allocated on the first batch. */
   let scratch: EditScratch | null = null;
+  /** The first `error` reply's code and message, once one was sent: later batches write nothing. */
+  let failed: string | null = null;
+  const reply = (raw: unknown): SimReply => {
+    const m = parseToSim(raw);
+    const id = idOf(raw);
+    if (m === null) return err(id, 'BAD_MESSAGE', 'malformed message');
+    try {
+      switch (m.type) {
+        case 'attach': {
+          if (store !== null) {
+            // A posted SharedArrayBuffer arrives as a new object, so the store id decides (SP4b spec §2.8).
+            const same = Atomics.load(new Int32Array(m.handles.reclaim), R_STORE_ID) === store.storeId;
+            return same ? { msg: { type: 'attached' }, transfer: [] } : err(null, 'BAD_MESSAGE', 'the store is already attached');
+          }
+          store = attachStore(m.handles, SIM_THREAD);
+          return { msg: { type: 'attached' }, transfer: [] };
+        }
+        case 'edits': {
+          if (failed !== null) return err(m.id, 'INTERNAL', `the sim failed earlier (${failed}): nothing written`);
+          if (store === null) return err(m.id, 'NOT_ATTACHED', 'no attach yet');
+          const r = applyEdits(store, diffs, scratch ??= createEditScratch(), m.edits, now);
+          const msg: FromSim = {
+            type: 'edited', id: m.id, prev: r.prev, next: r.next, dirty: r.dirty, entryCols: r.entryCols, refused: r.refused,
+            relightMs: r.relightMs, editMs: r.editMs,
+          };
+          return { msg, transfer: [r.prev.buffer, r.next.buffer, r.dirty.buffer, r.entryCols.buffer] as ArrayBuffer[] };
+        }
+        case 'diff': {
+          const d = readDiff(diffs, m.cx, m.cz);
+          if (d === null) {
+            return { msg: { type: 'diff', id: m.id, cx: m.cx, cz: m.cz, sy: new Uint8Array(0), idx: new Uint16Array(0), value: new Uint32Array(0) }, transfer: [] };
+          }
+          return { msg: { type: 'diff', id: m.id, cx: m.cx, cz: m.cz, sy: d.sy, idx: d.idx, value: d.value }, transfer: [d.sy.buffer, d.idx.buffer, d.value.buffer] as ArrayBuffer[] };
+        }
+        default: {
+          const never: never = m;
+          return err(id, 'BAD_MESSAGE', `no handler for ${(never as { type: string }).type}`);
+        }
+      }
+    } catch (e) {
+      // SP4b spec §2.6: a pool lock held by a failed thread is fatal, never retried.
+      return err(id, e instanceof StoreCorrupt ? 'STORE_CORRUPT' : 'INTERNAL', e instanceof Error ? e.message : String(e));
+    }
+  };
   return {
     handle(raw) {
-      const m = parseToSim(raw);
-      const id = idOf(raw);
-      if (m === null) return err(id, 'BAD_MESSAGE', 'malformed message');
-      try {
-        switch (m.type) {
-          case 'attach': {
-            if (store !== null) {
-              // A posted SharedArrayBuffer arrives as a new object, so the store id decides (SP4b spec §2.8).
-              const same = Atomics.load(new Int32Array(m.handles.reclaim), R_STORE_ID) === store.storeId;
-              return same ? { msg: { type: 'attached' }, transfer: [] } : err(null, 'BAD_MESSAGE', 'the store is already attached');
-            }
-            store = attachStore(m.handles, SIM_THREAD);
-            return { msg: { type: 'attached' }, transfer: [] };
-          }
-          case 'edits': {
-            if (store === null) return err(m.id, 'NOT_ATTACHED', 'no attach yet');
-            const r = applyEdits(store, diffs, scratch ??= createEditScratch(), m.edits, now);
-            const msg: FromSim = {
-              type: 'edited', id: m.id, prev: r.prev, next: r.next, dirty: r.dirty, entryCols: r.entryCols, refused: r.refused,
-              relightMs: r.relightMs, editMs: r.editMs,
-            };
-            return { msg, transfer: [r.prev.buffer, r.next.buffer, r.dirty.buffer, r.entryCols.buffer] as ArrayBuffer[] };
-          }
-          case 'diff': {
-            const d = readDiff(diffs, m.cx, m.cz);
-            if (d === null) {
-              return { msg: { type: 'diff', id: m.id, cx: m.cx, cz: m.cz, sy: new Uint8Array(0), idx: new Uint16Array(0), value: new Uint32Array(0) }, transfer: [] };
-            }
-            return { msg: { type: 'diff', id: m.id, cx: m.cx, cz: m.cz, sy: d.sy, idx: d.idx, value: d.value }, transfer: [d.sy.buffer, d.idx.buffer, d.value.buffer] as ArrayBuffer[] };
-          }
-          default: {
-            const never: never = m;
-            return err(id, 'BAD_MESSAGE', `no handler for ${(never as { type: string }).type}`);
-          }
-        }
-      } catch (e) {
-        // SP4b spec §2.6: a pool lock held by a failed thread is fatal, never retried.
-        return err(id, e instanceof StoreCorrupt ? 'STORE_CORRUPT' : 'INTERNAL', e instanceof Error ? e.message : String(e));
-      }
+      const r = reply(raw);
+      if (r.msg.type === 'error' && failed === null) failed = `${r.msg.code}: ${r.msg.message}`;
+      return r;
     },
     drain: () => (store === null ? 0 : store.drain()),
   };

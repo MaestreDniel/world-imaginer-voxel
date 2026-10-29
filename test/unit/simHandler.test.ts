@@ -48,6 +48,12 @@ describe('the sim handler on a shared seed-42 region (SP5a spec §2.1)', () => {
     return r.msg as EditedMsg;
   };
   const surface = (x: number, z: number): number => store.heightAt('worldSurface', x, z)!;
+  /** Another handler attached to the same store as thread 15 (the page's sim after a reload), for the cases that latch it. */
+  const attachedHandler = () => {
+    const h = createSimHandler();
+    expect(h.handle({ type: 'attach', handles: store.handles(), thread: 15 }).msg).toEqual({ type: 'attached' });
+    return h;
+  };
 
   beforeAll(async () => {
     const params = resolveProfile('default');
@@ -154,8 +160,10 @@ describe('the sim handler on a shared seed-42 region (SP5a spec §2.1)', () => {
     const y = surface(x, z);
     const before = valueAt(store, x, y, z);
     const versions = [blockVersion(store, C[0], C[1]), store.table.lightVersion(store.table.find(C[0], C[1]))];
+    // A handler of its own: an error reply latches it (SIM-1).
+    const h = attachedHandler();
     const bad = (m: unknown): ErrorMsg => {
-      const r = handler.handle(m);
+      const r = h.handle(m);
       expect(r.msg.type).toBe('error');
       expect(r.transfer).toEqual([]);
       return r.msg as ErrorMsg;
@@ -170,11 +178,38 @@ describe('the sim handler on a shared seed-42 region (SP5a spec §2.1)', () => {
     expect(bad({ type: 'attach', handles: store.handles(), thread: 14 }).code).toBe('BAD_MESSAGE');
     expect(valueAt(store, x, y, z)).toBe(before);
     expect([blockVersion(store, C[0], C[1]), store.table.lightVersion(store.table.find(C[0], C[1]))]).toEqual(versions);
-    expect((handler.handle({ type: 'diff', id: 33, cx: C[0], cz: C[1] }).msg as DiffMsg).sy.length).toBe(0);
+    expect((h.handle({ type: 'diff', id: 33, cx: C[0], cz: C[1] }).msg as DiffMsg).sy.length).toBe(0);
   });
 
   test('a repeated attach to the same store as 15 is answered `attached` again', () => {
     expect(handler.handle({ type: 'attach', handles: store.handles(), thread: 15 }).msg).toEqual({ type: 'attached' });
+  });
+
+  test('after an error reply (an INTERNAL, a BAD_MESSAGE) a later `edits` batch writes nothing: an INTERNAL `error` with its id, `applyEdits` not called; a `diff` still answers (SIM-1)', () => {
+    const x = 16 * C[0] + 12;
+    const z = 16 * C[1] + 7;
+    const y = surface(x, z);
+    const before = valueAt(store, x, y, z);
+    const versions = [blockVersion(store, C[0], C[1]), store.table.lightVersion(store.table.find(C[0], C[1]))];
+    const internal = attachedHandler();
+    vi.mocked(applyEdits).mockImplementationOnce(() => {
+      throw new TypeError('injected bug');
+    });
+    expect((internal.handle({ type: 'edits', id: 50, edits: [set(x, y, z, val(STONE), before)] }).msg as ErrorMsg).code).toBe('INTERNAL');
+    const malformed = attachedHandler();
+    expect((malformed.handle({ type: 'edits', id: 51, edits: [set(x, y + 0.5, z, val(STONE), before)] }).msg as ErrorMsg).code).toBe('BAD_MESSAGE');
+    const calls = vi.mocked(applyEdits).mock.calls.length;
+    for (const [h, id] of [[internal, 52], [malformed, 53]] as const) {
+      const r = h.handle({ type: 'edits', id, edits: [set(x, y, z, val(STONE), before)] });
+      const m = r.msg as ErrorMsg;
+      expect([m.type, m.jobId, m.epoch, m.code]).toEqual(['error', id, null, 'INTERNAL']);
+      expect(m.message).toContain('nothing written');
+      expect(r.transfer).toEqual([]);
+      expect((h.handle({ type: 'diff', id: id + 10, cx: C[0], cz: C[1] }).msg as DiffMsg).type).toBe('diff');
+    }
+    expect(vi.mocked(applyEdits).mock.calls.length).toBe(calls);
+    expect(valueAt(store, x, y, z)).toBe(before);
+    expect([blockVersion(store, C[0], C[1]), store.table.lightVersion(store.table.find(C[0], C[1]))]).toEqual(versions);
   });
 
   test('a throw inside `applyEdits` other than `StoreFull` (an injected bug, a `StoreCorrupt`) → an `error` reply with that `jobId` and `INTERNAL`/`STORE_CORRUPT`', () => {
@@ -189,10 +224,11 @@ describe('the sim handler on a shared seed-42 region (SP5a spec §2.1)', () => {
     const internal = handler.handle({ type: 'edits', id: 40, edits: [set(x, y, z, val(STONE), before)] }).msg as ErrorMsg;
     expect([internal.type, internal.jobId, internal.epoch, internal.code, internal.message]).toEqual(['error', 40, null, 'INTERNAL', 'injected bug']);
     // A real StoreCorrupt (SP4b spec §2.6): thread 2 died holding the block pool's lock, so the sim's copy-on-write
-    // allocation finds a dead owner. The store is left corrupt: this case runs last.
+    // allocation finds a dead owner (on a handler of its own: the INTERNAL reply latched this one). The store is left
+    // corrupt: this case runs last.
     new Int32Array(store.handles().blocks.ctl)[0] = 3;
     store.markDead(2);
-    const corrupt = handler.handle({ type: 'edits', id: 41, edits: [set(x, y, z, val(STONE), before)] }).msg as ErrorMsg;
+    const corrupt = attachedHandler().handle({ type: 'edits', id: 41, edits: [set(x, y, z, val(STONE), before)] }).msg as ErrorMsg;
     expect([corrupt.type, corrupt.jobId, corrupt.epoch, corrupt.code]).toEqual(['error', 41, null, 'STORE_CORRUPT']);
     expect(corrupt.message).toContain('failed thread 2');
     // Nothing was written, and the handler left its read section: thread 15 announces no epoch.
