@@ -809,6 +809,23 @@ export function installUndoKeys(o: {
 }
 
 /**
+ * The overlays a failure or a context loss closes before the panel or the notice shows (SP4c spec §1.3, D27; final
+ * review UI-2): the palette, closed without requesting the lock (its overlay, z-index 3, covers the notices, z-index 2),
+ * then the map overlay, disposed with its tool. A palette whose close throws still lets the map close; the throw then
+ * reaches the caller's `onError`.
+ */
+export function closeOverlays(
+  palette: Pick<Palette, 'isOpen' | 'close'> | null,
+  map: Pick<MapOverlay, 'dispose'> | null,
+): void {
+  try {
+    if (palette?.isOpen) palette.close();
+  } finally {
+    map?.dispose();
+  }
+}
+
+/**
  * The page's `webglcontextlost` handler (Review Focus 5): through `WorldRenderer.onContextLost`, it stops the frame
  * loop once, closes the map overlay and disposes its tool (SP4c spec §1.3, D27; a throw reported through `onError`),
  * and shows "The graphics context was lost" with a Reload link around the camera (`hereHref`, read at the loss).
@@ -2173,8 +2190,10 @@ export function mountWorldPage(root: HTMLElement, q: WorldQuery, hash: string, o
     sections.onColumnRevealed = (cx, cz) => editLatency.revealed(cx, cz, performance.now());
     teardown.push(() => { sections.onColumnRevealed = null; });
     // The map overlay and the preview driver (SP4c spec §1.3, §4.2), created below; a failure or a context loss
-    // disposes the overlay (and its tool) before the panel or the notice shows (D27).
+    // disposes the overlay (and its tool) before the panel or the notice shows (D27), and closes the palette, mounted
+    // below, which would cover them (final review UI-2).
     let mapRef: MapOverlay | null = null;
+    let paletteRef: Palette | null = null;
     let driver: PreviewDriver | null = null;
     // The teleport, created below; a failure after the reveal disposes it before the pool is terminated (ruling R5).
     let teleport: Teleport | null = null;
@@ -2212,7 +2231,7 @@ export function mountWorldPage(root: HTMLElement, q: WorldQuery, hash: string, o
       wr = null;
       stopAfterFailure({
         stop,
-        closeMap: () => mapRef?.dispose(),
+        closeMap: () => closeOverlays(paletteRef, mapRef),
         show: () => notices.failed(cause, shown, here(reloadRd(q.rd, liveRd))),
         // The HUD's timer would read the disposed renderer and coordinator; then what releaseOnFailure frees, each
         // step on its own.
@@ -2239,7 +2258,7 @@ export function mountWorldPage(root: HTMLElement, q: WorldQuery, hash: string, o
     });
     handleContextLoss(world, {
       stop,
-      closeMap: () => mapRef?.dispose(),
+      closeMap: () => closeOverlays(paletteRef, mapRef),
       onError: (e) => console.error('The world page\'s context loss:', e),
       notices,
       // Without a query rd the setting applies (it holds every live change); a query's rd is replaced by the RD in
@@ -2414,6 +2433,7 @@ export function mountWorldPage(root: HTMLElement, q: WorldQuery, hash: string, o
       },
       onClose: () => {},
     });
+    paletteRef = palette;
     teardown.push(() => palette.dispose());
     rdControl = createRdControl({
       coordinator,

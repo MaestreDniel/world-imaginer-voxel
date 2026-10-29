@@ -29,7 +29,7 @@ import { EYE, createWalkState } from '../../src/player/walk';
 import { NEAR_FLY, NEAR_WALK } from '../../src/render/renderer';
 import { createReloader, createWorldUrl, worldHash, type HereState } from '../../src/ui/world/reload';
 import {
-  countPendingTimers, countTileCalls, createAim, createClickQueue, createHookEdit, createRdControl, createUndoNotice, createWorldNotices, everyFrameUntil, failBeforeReveal, flushOnPageHide, handleContextLoss,
+  closeOverlays, countPendingTimers, countTileCalls, createAim, createClickQueue, createHookEdit, createRdControl, createUndoNotice, createWorldNotices, everyFrameUntil, failBeforeReveal, flushOnPageHide, handleContextLoss,
   benchSetTime, benchWalk, handleStreamEvent, helpChange, installRepeatStop, installUndoKeys, installWiTest, mapKey, offerLowerRd, paletteFirst, onDriverStatus, onSimFailure, pushCoordinatorTeardown, rdShownOnLoad, releaseOnFailure, reloadRd, runTeardown, speedKey, stopAfterFailure, switchMode,
   UNDO_NOTICE_MS, type WiTest, type WiTestPage,
 } from '../../src/ui/world/worldPage';
@@ -339,6 +339,62 @@ describe('the map overlay on a fatal error or a context loss (SP4c spec §1.3, �
     lost!();
     expect(dom.el('world-context-lost').textContent).toContain('The graphics context was lost');
     expect(onError).toHaveBeenCalledTimes(1);
+  });
+
+  // Final review UI-2: the palette (inset 0, z-index 3) covers the notices (z-index 2), so a fatal or a context loss
+  // with it open would leave the failure panel or the context-loss Reload under it.
+  test('a fatal with the palette open closes it (without the lock) before the failure panel shows, then disposes the map overlay', () => {
+    const order: string[] = [];
+    const requestLock = vi.fn();
+    const palette = mountPalette(dom.body as unknown as HTMLElement, { hotbar: createHotbar(null), requestLock, onClose: () => {} });
+    palette.open();
+    const notices = createWorldNotices(dom.body as unknown as HTMLElement, createReloader(vi.fn(), vi.fn()));
+    const overlay = openOverlay(order);
+    stopAfterFailure({
+      stop: () => {},
+      closeMap: () => closeOverlays(palette, overlay),
+      show: () => {
+        order.push(`panel (palette open: ${palette.isOpen})`);
+        notices.failed('Streaming stopped: x', 'details', '/?at=0,0');
+      },
+      release: [],
+      onError: (e) => { throw e; },
+    });
+    expect(order).toEqual(['overlay.dispose (panel shown: false)', 'panel (palette open: false)']);
+    expect(requestLock).not.toHaveBeenCalled();
+    palette.dispose();
+  });
+
+  test('a context loss with the palette open closes it before the notice shows; a palette whose close throws still lets the map close', () => {
+    let lost: (() => void) | null = null;
+    const palette = mountPalette(dom.body as unknown as HTMLElement, { hotbar: createHotbar(null), requestLock: () => {}, onClose: () => {} });
+    palette.open();
+    const notices = createWorldNotices(dom.body as unknown as HTMLElement, createReloader(vi.fn(), vi.fn()));
+    const order: string[] = [];
+    handleContextLoss({ onContextLost: (fn) => { lost = fn; } }, {
+      stop: () => {},
+      closeMap: () => closeOverlays(palette, null),
+      notices,
+      hereHref: () => { order.push(`href (palette open: ${palette.isOpen})`); return '/?at=1,2'; },
+      onError: (e) => { throw e; },
+    });
+    lost!();
+    expect(order).toEqual(['href (palette open: false)']);
+    expect(dom.el('world-context-lost').textContent).toContain('The graphics context was lost');
+    palette.dispose();
+    const overlay = openOverlay(order);
+    expect(() => closeOverlays({ isOpen: true, close: () => { throw new Error('no host'); } }, overlay)).toThrow('no host');
+    expect(overlay.dispose).toHaveBeenCalledTimes(1);
+    // A closed palette and no overlay (the map never opened): nothing to do.
+    expect(() => closeOverlays({ isOpen: false, close: () => { throw new Error('closed twice'); } }, null)).not.toThrow();
+  });
+
+  test('both of the streaming route\'s paths close the palette and the map through closeOverlays', () => {
+    const src = readFileSync(new URL('../../src/ui/world/worldPage.ts', import.meta.url), 'utf8');
+    expect(src.match(/^\s*closeMap: \(\) => closeOverlays\(paletteRef, mapRef\),$/gm)).toHaveLength(2);
+    expect(src).not.toMatch(/closeMap: \(\) => mapRef\?\.dispose\(\)/);
+    expect(src).toMatch(/^\s*let paletteRef: Palette \| null = null;$/m);
+    expect(src).toMatch(/^\s*paletteRef = palette;$/m);
   });
 });
 
@@ -944,7 +1000,7 @@ describe('the world\'s URL (createWorldUrl, SP4c spec §1.6, D20)', () => {
     const start = src.indexOf('\n    failAfterReveal = (cause, shown) => {');
     expect(start).toBeGreaterThan(-1);
     const block = src.slice(start, src.indexOf('\n    };', start + 1));
-    expect(block).toMatch(/closeMap: \(\) => mapRef\?\.dispose\(\)/);
+    expect(block).toMatch(/closeMap: \(\) => closeOverlays\(paletteRef, mapRef\)/);
     const release = block.slice(block.indexOf('release: ['));
     expect(release).toMatch(/^\s*\(\) => teleport\?\.dispose\(\),$/m);
     expect(release.indexOf('teleport?.dispose()')).toBeLessThan(release.indexOf('pool?.terminate()'));
