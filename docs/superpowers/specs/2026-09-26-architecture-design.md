@@ -179,8 +179,9 @@ world-imaginer-voxel/          (repository root)
       materials/index.ts uniforms.ts glsl/*.glsl.ts   THE ONLY module that creates ShaderMaterial/GLSL (TSL port seam)
       lightmap.ts sky.ts clouds.ts shadows.ts textureArray.ts tintTexture.ts colormap.ts
       lod/rings.ts fillMask.ts  culling/frustum.ts caveCulling.ts
-    player/fly.ts keymap.ts input.ts walk.ts physics.ts raycast.ts interaction.ts hotbar.ts (SP5a)   (SP4a: fly.ts, the spectator
-                                controller; keymap.ts, the key map as data; input.ts, the DOM input)
+    player/fly.ts keymap.ts input.ts walk.ts physics.ts raycast.ts interaction.ts hotbar.ts sprintTap.ts (SP5a)   (SP4a: fly.ts, the
+                                spectator controller; keymap.ts, the key map as data; input.ts, the DOM input; SP5a: sprintTap.ts,
+                                the double-tapped W's sprint, since Ctrl+W closes the tab)
     daynight/dayNight.ts
     sound/                      main thread, the only place WebAudio is used
       engine.ts buses.ts        AudioContext (resumed on first user gesture), master/music/sfx/ambient buses, settings

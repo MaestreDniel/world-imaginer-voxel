@@ -1121,7 +1121,7 @@ describe('master spec amendments (SP4c §12)', () => {
 });
 
 describe('master spec amendments (SP5a §9)', () => {
-  /** [§1 entry head, the token its entry holds, the file on disk]; Tasks 2, 7-10, 20, 22, 23, 26-28, 31, 36 and 38 append theirs. */
+  /** [§1 entry head, the token its entry holds, the file on disk]; Tasks 2, 7-10, 20, 22, 23, 26-28, 31, 36, 38 and 45b append theirs. */
   const SP5A_MODULES: Array<[head: RegExp, token: string, file: string]> = [
     [/^\s+blocks\/kinds\.ts /, 'tags.ts (SP5a)', 'src/world/blocks/tags.ts'],
     [/^\s+light\/initial\.ts /, 'relight.ts (SP5a)', 'src/light/relight.ts'],
@@ -1131,11 +1131,12 @@ describe('master spec amendments (SP5a §9)', () => {
     [/^\s+coordinator\.ts /, 'simClient.ts (SP5a)', 'src/engine/simClient.ts'],
     [/^\s+mesh\/greedy\.ts /, 'boxes.ts (SP5a, provisional until SP8a)', 'src/mesh/boxes.ts'],
     [/^\s+blocks\/kinds\.ts /, 'provisionalBoxes.ts (SP5a, provisional until SP8a)', 'src/world/blocks/provisionalBoxes.ts'],
-    [/^\s+player\/fly\.ts /, 'walk.ts physics.ts raycast.ts interaction.ts hotbar.ts (SP5a)', 'src/player/raycast.ts'],
-    [/^\s+player\/fly\.ts /, 'walk.ts physics.ts raycast.ts interaction.ts hotbar.ts (SP5a)', 'src/player/interaction.ts'],
-    [/^\s+player\/fly\.ts /, 'walk.ts physics.ts raycast.ts interaction.ts hotbar.ts (SP5a)', 'src/player/hotbar.ts'],
-    [/^\s+player\/fly\.ts /, 'walk.ts physics.ts raycast.ts interaction.ts hotbar.ts (SP5a)', 'src/player/walk.ts'],
-    [/^\s+player\/fly\.ts /, 'walk.ts physics.ts raycast.ts interaction.ts hotbar.ts (SP5a)', 'src/player/physics.ts'],
+    [/^\s+player\/fly\.ts /, 'walk.ts physics.ts raycast.ts interaction.ts hotbar.ts sprintTap.ts (SP5a)', 'src/player/raycast.ts'],
+    [/^\s+player\/fly\.ts /, 'walk.ts physics.ts raycast.ts interaction.ts hotbar.ts sprintTap.ts (SP5a)', 'src/player/interaction.ts'],
+    [/^\s+player\/fly\.ts /, 'walk.ts physics.ts raycast.ts interaction.ts hotbar.ts sprintTap.ts (SP5a)', 'src/player/hotbar.ts'],
+    [/^\s+player\/fly\.ts /, 'walk.ts physics.ts raycast.ts interaction.ts hotbar.ts sprintTap.ts (SP5a)', 'src/player/walk.ts'],
+    [/^\s+player\/fly\.ts /, 'walk.ts physics.ts raycast.ts interaction.ts hotbar.ts sprintTap.ts (SP5a)', 'src/player/physics.ts'],
+    [/^\s+player\/fly\.ts /, 'walk.ts physics.ts raycast.ts interaction.ts hotbar.ts sprintTap.ts (SP5a)', 'src/player/sprintTap.ts'],
     [/^\s+ui\/world\/\* /, 'buildHud.ts blockHistory.ts (SP5a)', 'src/ui/world/buildHud.ts'],
     [/^\s+ui\/world\/\* /, 'buildHud.ts blockHistory.ts (SP5a)', 'src/ui/world/blockHistory.ts'],
     [/^\s+renderer\.ts /, 'selection.ts (SP5a)', 'src/render/selection.ts'],
