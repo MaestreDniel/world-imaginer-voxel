@@ -75,8 +75,40 @@ export const BENCH_ROWS = [
 
 export interface BenchKernel {
   readonly nsPerEval: number;
-  /** nsPerEval ÷ the calibration kernel's nsPerEval, measured in the same run. */
+  /**
+   * nsPerEval ÷ the calibration kernel's nsPerEval measured immediately before this row, in the same run (SP5a Task
+   * 43b: `CALIBRATION_BESIDE_RUN`), so both share one clock state; `calibration.fmix32` is its own divisor (ratio 1).
+   */
   readonly ratio: number;
+}
+
+/**
+ * SP5a Task 43b: the calibration run beside each row, tinybench options for the `calibration.fmix32` kernel measured
+ * immediately before every other row (20 ms of warm-up, then at least 100 ms timed). On the i7-12700H the busy P-core
+ * leaves its turbo window (4.7 GHz) after about 30-40 s of the run and drops to 3.0-3.9 GHz (Task 40c); one calibration
+ * taken first, at turbo, divided the late rows measured throttled. Windows of 25 to 400 ms read the same p50 (0.635-0.638
+ * ns at turbo, 12 runs each between bursts of other work), so 100 ms is stable with margin and adds about 3.5 s per run.
+ */
+export const CALIBRATION_BESIDE_RUN = Object.freeze({ time: 100, warmupTime: 20 });
+
+/** A row's ratio: its ns per evaluation ÷ the calibration's measured beside it (SP5a Task 43b), to 3 decimals. */
+export function ratioOf(rowNs: number, calibNs: number): number {
+  return Math.round((rowNs / calibNs) * 1000) / 1000;
+}
+
+/**
+ * The run's kernels from each row's p50 ns per evaluation (`ns`) and the calibration's measured immediately before that
+ * row (`beside`, `calibration.fmix32` beside itself): nsPerEval to 3 decimals and `ratioOf` the two. A row with no
+ * calibration beside it throws.
+ */
+export function benchKernels(ns: Readonly<Record<string, number>>, beside: Readonly<Record<string, number>>): Record<string, BenchKernel> {
+  const out: Record<string, BenchKernel> = {};
+  for (const [name, v] of Object.entries(ns)) {
+    const calib = beside[name];
+    if (calib === undefined) throw new Error(`benchKernels: no calibration beside row '${name}'`);
+    out[name] = { nsPerEval: Math.round(v * 1000) / 1000, ratio: ratioOf(v, calib) };
+  }
+  return out;
 }
 
 export interface Baselines {

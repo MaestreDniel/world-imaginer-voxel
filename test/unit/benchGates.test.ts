@@ -2,9 +2,9 @@ import { readFileSync } from 'node:fs';
 import { Bench } from 'tinybench';
 import { expect, test } from 'vitest';
 import {
-  absoluteGateFailures, BENCH_ROWS, COLUMN_P50_MAX_MS, COLUMN_P95_MAX_MS, gateFailures, ISLANDS_COLUMNS, ISLANDS_RUN, KILL_RATIO_MAX,
+  absoluteGateFailures, BENCH_ROWS, benchKernels, CALIBRATION_BESIDE_RUN, COLUMN_P50_MAX_MS, COLUMN_P95_MAX_MS, gateFailures, ISLANDS_COLUMNS, ISLANDS_RUN, KILL_RATIO_MAX,
   LIGHT_P50_MAX_MS, LIGHT_P99_MAX_MS, LIGHT_RUN, MESH_P50_MAX_MS, MESH_P99_MAX_MS, MESH_RUN, P1_MAX_REGRESSION, parseBenchExempt,
-  RELIGHT_P95_MAX_MS, RELIGHT_RUN, SESSION_COMMIT_P50_MAX_MS, SLICE_PART_P50_MAX_MS, SLICE_V128_P50_MAX_MS, TERRAIN_P50_MAX_MS, type Baselines,
+  ratioOf, RELIGHT_P95_MAX_MS, RELIGHT_RUN, SESSION_COMMIT_P50_MAX_MS, SLICE_PART_P50_MAX_MS, SLICE_V128_P50_MAX_MS, TERRAIN_P50_MAX_MS, type Baselines,
 } from '../bench/gates';
 
 const base: Baselines = { machine: 'm', node: 'v24', date: '2026-09-27', killRatio: 1.2, kernels: { a: { nsPerEval: 10, ratio: 2 }, b: { nsPerEval: 5, ratio: 1 } } };
@@ -82,6 +82,37 @@ test('absolute gate (SP5a §6.2): relight.edit p99 (relightP95, the upper bound 
   expect(absoluteGateFailures({ ...AT_GATES, relightP95: 3.1 })).toEqual(['relight.edit p99 3.100 ms > 3 ms']);
   expect(absoluteGateFailures({ ...AT_GATES, relightP95: 2.9 })).toEqual([]);
   expect(absoluteGateFailures({ ...AT_GATES, meshP99: 3, relightP95: 3.1 })).toEqual(['mesh.section p99 3.000 ms > 2.5 ms', 'relight.edit p99 3.100 ms > 3 ms']);
+});
+
+test('ratioOf (SP5a Task 43b): a row\'s ns per evaluation ÷ the calibration measured beside it, to 3 decimals', () => {
+  expect(ratioOf(22.314, 0.636)).toBe(35.085);
+  expect(ratioOf(0.636, 0.636)).toBe(1);
+  // The same row read throttled beside a throttled calibration keeps its ratio.
+  expect(ratioOf(22.314 * 1.25, 0.636 * 1.25)).toBe(35.085);
+});
+
+test('benchKernels (SP5a Task 43b): each row\'s ratio uses the calibration taken beside it, not the first row\'s', () => {
+  // The first row is the calibration itself (its own divisor, ratio 1); row a was measured at turbo, row b after the
+  // clock dropped by 1.25 ×, each beside its own calibration.
+  const ns = { 'calibration.fmix32': 0.64, a: 64, b: 100 };
+  const beside = { 'calibration.fmix32': 0.64, a: 0.64, b: 0.8 };
+  expect(benchKernels(ns, beside)).toEqual({
+    'calibration.fmix32': { nsPerEval: 0.64, ratio: 1 },
+    a: { nsPerEval: 64, ratio: 100 },
+    b: { nsPerEval: 100, ratio: 125 },
+  });
+  // Divided by the first row's calibration instead, b would read 156.25 and fail a 1.3 × gate on a baseline of 100.
+  expect(gateFailures({ ...base, kernels: { b: { nsPerEval: 64, ratio: 100 } } }, benchKernels(ns, beside), 1.2, [])).toEqual([]);
+  expect(gateFailures({ ...base, kernels: { b: { nsPerEval: 64, ratio: 100 } } }, benchKernels(ns, { ...beside, b: 0.64 }), 1.2, [])).toEqual([
+    'b: ratio 156.250 > 1.3 × baseline 100.000',
+  ]);
+  // nsPerEval is rounded to 3 decimals, as before; a row without a calibration beside it throws.
+  expect(benchKernels({ a: 1.23456 }, { a: 0.5 })).toEqual({ a: { nsPerEval: 1.235, ratio: 2.469 } });
+  expect(() => benchKernels({ a: 1, c: 2 }, { a: 1 })).toThrow(/no calibration beside row 'c'/);
+});
+
+test('CALIBRATION_BESIDE_RUN (SP5a Task 43b): about 120 ms of fmix32 before each row (20 ms warm-up, 100 ms timed)', () => {
+  expect(CALIBRATION_BESIDE_RUN).toEqual({ time: 100, warmupTime: 20 });
 });
 
 test('no baseline: only the kill criterion gates', () => {

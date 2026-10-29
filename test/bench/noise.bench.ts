@@ -1,6 +1,7 @@
 import { existsSync, readFileSync, writeFileSync } from 'node:fs';
 import { cpus } from 'node:os';
 import { fileURLToPath } from 'node:url';
+import { Bench } from 'tinybench';
 import { expect, test } from 'vitest';
 import { detErf } from '../../src/core/detMath';
 import { fmix32 } from '../../src/core/hash';
@@ -47,8 +48,8 @@ import { DEFAULT_MAP_STATE, openMapSession, type MapState } from '../../src/ui/m
 import { capDensityTree, capSurfaceRules } from '../harness/capTrees';
 import { PART_WORST_LEAVES, partWorstParams } from '../harness/sliceTrees';
 import {
-  absoluteGateFailures, BENCH_ROWS, gateFailures, ISLANDS_COLUMNS, ISLANDS_RUN, LIGHT_RUN, MESH_RUN, parseBenchExempt, RELIGHT_RUN, type Baselines,
-  type BenchKernel,
+  absoluteGateFailures, BENCH_ROWS, benchKernels, CALIBRATION_BESIDE_RUN, gateFailures, ISLANDS_COLUMNS, ISLANDS_RUN, LIGHT_RUN, MESH_RUN,
+  parseBenchExempt, RELIGHT_RUN, type Baselines,
 } from './gates';
 import { buildPerm, perm3 } from './perm512';
 
@@ -102,8 +103,26 @@ test('SP1, SP2a, SP2b, SP3a, SP3b, SP3c, SP3d, SP3e, SP4a and SP5a kernels', asy
   // bench:record never reads it.
   const exempt = process.env.BENCH_RECORD === '1' ? [] : parseBenchExempt(process.env.BENCH_EXEMPT);
   const ns: Record<string, number> = {};
-  /** A row's p50 per evaluation; `run`: a fixed iteration count (`time: 0`, one warm-up iteration) or explicit options. */
+  /**
+   * SP5a Task 43b: each row's divisor, the calibration kernel's p50 per evaluation measured immediately before the row
+   * (`CALIBRATION_BESIDE_RUN`, through tinybench as vitest's bench provider runs it, so it is not a reported row), in the
+   * same clock state: the CPU leaves its turbo window part-way through the run (Task 40c). `calibration.fmix32` is its own.
+   */
+  const beside: Record<string, number> = {};
+  const calibrateBeside = async (name: string): Promise<void> => {
+    const b = new Bench({ ...CALIBRATION_BESIDE_RUN, now: performance.now.bind(performance) });
+    b.add(`calibration beside ${name}`, calibrate);
+    await b.run();
+    const r = b.tasks[0]!.result;
+    if (r.state !== 'completed') throw new Error(`the calibration beside ${name} did not complete: ${r.state}`);
+    beside[name] = (r.latency.p50 * 1e6) / N;
+  };
+  /**
+   * A row's p50 per evaluation, after its calibration beside it; `run`: a fixed iteration count (`time: 0`, one warm-up
+   * iteration) or explicit options.
+   */
   const measure = async (name: string, evals: number, fn: () => unknown, run?: number | typeof ISLANDS_RUN | typeof LIGHT_RUN | typeof MESH_RUN) => {
+    await calibrateBeside(name);
     const r = await bench(name, fn).run(run === undefined ? undefined : typeof run === 'number' ? { iterations: run, time: 0, warmupIterations: 1 } : { ...run });
     ns[name] = (r.latency.p50 * 1e6) / evals;
     return r;
@@ -127,7 +146,11 @@ test('SP1, SP2a, SP2b, SP3a, SP3b, SP3c, SP3d, SP3e, SP4a and SP5a kernels', asy
   const jag = compileSpline(JAG);
   const c6 = new Float64Array(6);
 
-  await measure('calibration.fmix32', N, () => { let s = 0; for (let i = 0; i < N; i++) s ^= FMIX(ints[i]!); sink ^= s; });
+  // The calibration kernel, one function for its own row and every calibration beside a later row.
+  const calibrate = (): void => { let s = 0; for (let i = 0; i < N; i++) s ^= FMIX(ints[i]!); sink ^= s; };
+  const calibRun = await bench('calibration.fmix32', calibrate).run();
+  ns['calibration.fmix32'] = (calibRun.latency.p50 * 1e6) / N;
+  beside['calibration.fmix32'] = ns['calibration.fmix32'];
   await measure('lattice3.slice', N, () => { let s = 0; for (let j = 0; j < 64; j++) for (let i = 0; i < 64; i++) s += LAT(12345, 1000.3 + i / 64, 1234.37, 777.1 + j / 64); sink += s; });
   await measure('perm512.slice', N, () => { let s = 0; for (let j = 0; j < 64; j++) for (let i = 0; i < 64; i++) s += PERM(P, 1000.3 + i / 64, 1234.37, 777.1 + j / 64); sink += s; });
   await measure('lattice3.random', N, () => { let s = 0; for (let i = 0; i < N; i++) s += LAT(12345, rx[i]!, ry[i]!, rz[i]!); sink += s; });
@@ -151,6 +174,7 @@ test('SP1, SP2a, SP2b, SP3a, SP3b, SP3c, SP3d, SP3e, SP4a and SP5a kernels', asy
   await measure('column.point', 64, () => { for (let i = 0; i < 64; i++) sink += columnPoint(gen, wx[(col + i) & (N - 1)]!, wz[(col + i) & (N - 1)]!).offset; col += 64; });
   const sample = newColumnSample();
   let cs = 0;
+  await calibrateBeside('column.sample');
   const columnRun = await bench('column.sample', () => { cs++; buildColumnSample(gen, (cs * 7919) % 60000 - 30000, (cs * 104729) % 60000 - 30000, sample); sink += sample.f.offset[24]!; }).run();
   ns['column.sample'] = columnRun.latency.p50 * 1e6;
   // tinybench keeps no samples by default; p99 bounds p95 from above, so gating p99 is the stricter check.
@@ -420,11 +444,10 @@ test('SP1, SP2a, SP2b, SP3a, SP3b, SP3c, SP3d, SP3e, SP4a and SP5a kernels', asy
   expect(store.blockPool.slotCount() - store.blockPool.freeCount(), 'store rows leak no slot').toBe(0);
 
   expect(Object.keys(ns), 'the measured rows are BENCH_ROWS').toEqual([...BENCH_ROWS]);
-  const calib = ns['calibration.fmix32']!;
-  const kernels: Record<string, BenchKernel> = {};
-  for (const [name, v] of Object.entries(ns)) kernels[name] = { nsPerEval: Math.round(v * 1000) / 1000, ratio: Math.round((v / calib) * 1000) / 1000 };
+  // Each row's ratio against the calibration beside it (SP5a Task 43b); the table also prints that calibration.
+  const kernels = benchKernels(ns, beside);
   const killRatio = Math.round(Math.max(ns['lattice3.slice']! / ns['perm512.slice']!, ns['lattice3.random']! / ns['perm512.random']!) * 1000) / 1000;
-  console.table(kernels);
+  console.table(Object.fromEntries(Object.entries(kernels).map(([name, k]) => [name, { ...k, calibrationBeside: Math.round(beside[name]! * 1000) / 1000 }])));
   console.log(`killRatio ${killRatio}`);
   console.log(`column.sample p50 ${columnRun.latency.p50.toFixed(3)} ms, p99 (≥ p95) ${columnP95.toFixed(3)} ms`);
   console.log(`terrain.real p50 ${terrainRun.latency.p50.toFixed(3)} ms, p99 ${terrainRun.latency.p99.toFixed(3)} ms`);
