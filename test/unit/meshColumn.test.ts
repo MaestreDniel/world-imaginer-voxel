@@ -3,7 +3,8 @@
  * neighbourhood, a 3 × 3 of seed '42' filled to Published (T on the 7 × 7, D on the 5 × 5, L on the 3 × 3), and
  * `meshColumnJob`'s Published check. The payload is checked against `meshSolid`/`meshFluid` run per section by hand,
  * its trivial sections against the descriptors, its spheres against their vertices, its east seam against the east
- * neighbour's voxels, and its buffers for ownership; and the bench's aquarium (SP5a spec §1.3, §6.5) on a canned store.
+ * neighbour's voxels, and its buffers for ownership; and, on canned stores, the bench's aquarium (SP5a spec §1.3, §6.5)
+ * and a torch's box faces (`meshBoxes` reaches the payload).
  */
 import { beforeAll, describe, expect, test } from 'vitest';
 import { MIN_Y } from '../../src/core/constants';
@@ -28,7 +29,7 @@ import { meshSolid, type MeshOptions } from '../../src/mesh/greedy';
 import { unpackFluid, unpackSolid } from '../../src/mesh/packing';
 import { REVIEW_HOUSE, REVIEW_POOL, REVIEW_SITE } from '../../src/ui/world/bench';
 import { FLUID_WATER, fluidType } from '../../src/world/blocks/fluid';
-import { AIR, FULL_FACES, PASS, STONE } from '../../src/world/blocks/index';
+import { AIR, FULL_FACES, PASS, STONE, TORCH } from '../../src/world/blocks/index';
 import { FACE_EAST, FACE_NORTH, FACE_SOUTH, FACE_UP, FACE_WEST, PASS_OPAQUE } from '../../src/world/blocks/kinds';
 import type { NeighborhoodReader } from '../../src/world/store/api';
 import { SECTIONS, STATUS_DECORATED } from '../../src/world/store/columnTable';
@@ -599,5 +600,44 @@ describe('the bench\'s aquarium (SP5a spec §1.3, §6.5)', () => {
     const side = (face: number, x: number) => opaque.filter((q) => q.face === face && q.lo[0] === x && q.hi[0] === x);
     expect(covers(side(FACE_EAST, ax - 10), 1, 2, ay - 4, ay, az + 5, az + 6)).toBe(true);
     expect(covers(side(FACE_WEST, ax - 1), 1, 2, ay - 4, ay, az + 5, az + 6)).toBe(true);
+  });
+});
+
+describe('meshColumnPayload meshes box states (SP5a spec §1.3)', () => {
+  test('a torch on a stone floor: one cutout row in its section, its 5 faces (the bottom culled) spanning exactly the torch box x 3-5, y 0-5, z 3-5 eighths', () => {
+    // A canned 3 × 3: stone below sy 10, stone in sy 10's ly 0-3, air above; one torch at (5, 4, 7) of (0, 0)'s sy 10.
+    const SY = 10, LX = 5, LY = 4, LZ = 7;
+    const s = createStore({ shared: false, maxBlockBytes: 4 * MiB, maxByteBytes: 4 * MiB });
+    for (let dz = -1; dz <= 1; dz++) {
+      for (let dx = -1; dx <= 1; dx++) {
+        const w = s.claimColumn(dx, dz, 0);
+        for (let sy = 0; sy < SECTIONS; sy++) {
+          const blocks = new Uint16Array(4096).fill(sy < SY ? STONE : AIR);
+          if (sy === SY) {
+            blocks.fill(STONE, 0, LY * 256);
+            if (dx === 0 && dz === 0) blocks[LY * 256 + LZ * 16 + LX] = TORCH;
+          }
+          w.setFinal(sy, blocks, new Uint8Array(4096).fill(0xF0), new Uint8Array(4096));
+        }
+        w.commit(3);
+      }
+    }
+    const p = meshColumnPayload(s.neighborhood(0, 0), createMeshScratch(), MEDIUM);
+    expect(payloadProblem(p)).toBeNull();
+    const cutout = rowsOf(p).filter((r) => r.pass === MESH_PASS_CUTOUT);
+    expect(cutout.map((r) => [r.sy, r.vertexCount, r.indexCount])).toEqual([[SY, 20, 30]]);
+    const row = cutout[0]!;
+    const faces: number[] = [];
+    const lo = [Infinity, Infinity, Infinity];
+    const hi = [-Infinity, -Infinity, -Infinity];
+    for (let v = row.vertexStart; v < row.vertexStart + row.vertexCount; v++) {
+      if ((v - row.vertexStart) % 4 === 0) faces.push(unpackSolid(p.data[v]!).face);
+      for (let a = 0; a < 3; a++) {
+        lo[a] = Math.min(lo[a]!, p.position[4 * v + a]!);
+        hi[a] = Math.max(hi[a]!, p.position[4 * v + a]!);
+      }
+    }
+    expect(faces.sort()).toEqual([FACE_NORTH, FACE_EAST, FACE_SOUTH, FACE_WEST, FACE_UP].sort());
+    expect([...lo, ...hi]).toEqual([LX * 8 + 3, LY * 8, LZ * 8 + 3, LX * 8 + 5, LY * 8 + 5, LZ * 8 + 5]);
   });
 });
