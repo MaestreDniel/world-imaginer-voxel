@@ -469,7 +469,7 @@ test('SP1, SP2a, SP2b, SP3a, SP3b, SP3c, SP3d, SP3e, SP4a and SP5a kernels', asy
   console.log(`slice.partWorst ${ms(wRun)} (${PART_WORST_LEAVES} leaves, one 32-sample column of ${wCost} work units)`);
   console.log(`terrain.islands ${ms(islandsRun)} (${islandCols.length} cluster columns accepted of ${islandTried} candidates: ${((100 * islandCols.length) / islandTried).toFixed(1)} %; ${ic} columns used)`);
   console.log(`session.commitMaxTree ${ms(commitRun)} (${commits} commits; trees of ${canonicalJSON(cappedDefs).length} and ${canonicalJSON(session.state.params.surface.rules).length} characters)`);
-  console.log(`light.column ${ms(lightRun)} (${litCols.length} interior columns of the 18 × 18 region at (${rx0}, ${rz0}); ${lc} calls)`);
+  console.log(`light.column ${ms(lightRun)} (mayEmit false (scan gate closed); ${litCols.length} interior columns of the 18 × 18 region at (${rx0}, ${rz0}); ${lc} calls)`);
   console.log(`mesh.section ${ms(meshRun)} (${meshSections.length} of the ${nonTrivial.length} non-trivial sections of its 14 × 14 inner columns; ${mc} calls, ${quads} quads)`);
   console.log(`relight.edit ${ms(relightRun)} (torch at (${tx}, ${ty}, ${tz}), stone at (${sx}, ${sy}, ${sz}), shaft cap at (${hx}, ${hy}, ${hz}) over a room topped at y ${roomTop}; ${rc} calls)`);
   // Before the record: bench:record refuses to write when an absolute gate fails.
