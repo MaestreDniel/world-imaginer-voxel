@@ -77,6 +77,11 @@
  * read-through passes the D job's diff cloned with the decorate message; and the cut-line texts are worded by the
  * decision taken: palette search was built (`palette.ts` filters its groups by the search box), so SP5a's cut line was
  * not taken and nothing moved to SP10.
+ * SP5b (its spec §8, §9, §11): the first commit lands §10's SP5b entry (its size L and spec, the Settings screen, the
+ * exit and the cut line), the default receivers' worlds-menu polish, SP10's "Received from SP5b", SP8c's Audio tab,
+ * SP11's Graphics tab and SP5c's clipboard storage, and moves the SP5a block's pins that read the SP5b entry and the
+ * receivers here; the other §9 amendments land with what they describe, each moving the earlier pin it rewords.
+ * §1 names each SP5b module in its entry, which exists (`SP5B_MODULES`, a row added by each task that adds a module).
  */
 import { existsSync, readdirSync, readFileSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
@@ -1155,11 +1160,7 @@ describe('master spec amendments (SP5a §9)', () => {
     expect(sp5a.split('\n').some((l) => l.startsWith('- **Cut line:** palette search (→ SP10)')), 'the SP5a entry has no `- **Cut line:** palette search (→ SP10)` line').toBe(true);
     // Moved from the SP4b block: SP5a does not carry the old SP5 entry's conditional either.
     expect(sp5a).not.toContain('If SP4b\'s cut line moved');
-    const sp5b = spEntry('SP5b', 'SP5c');
-    expect(sp5b.startsWith('**SP5b — Saved worlds** (M; SP5a)'), 'the SP5b header').toBe(true);
-    expect(sp5b).toContain('saved places as a section of each saved world\'s map');
     expect(spEntry('SP5c', 'SP6').startsWith('**SP5c — The selection tool** (M; SP5b)'), 'the SP5c header').toBe(true);
-    expect(text).toContain('SP5a palette search → SP10 (delivered in SP5a, so nothing moved); SP5b worlds-menu polish → SP10');
     expect(text).toContain('SP4b deferred-reclamation primitive → SP5 (delivered in SP4b, so nothing moved);');
     const critical = text.split('\n').find((l) => l.startsWith('Critical path: '));
     expect(critical).toContain('SP4c → SP5a → SP5b → SP5c → SP6');
@@ -1360,5 +1361,27 @@ describe('master spec amendments (SP5a §9)', () => {
     }
     for (const k of kept) expect(bare.some((l) => l.startsWith(k)), `no line starts with ${k}`).toBe(true);
     for (const h of historical) expect(bare.some((l) => l.includes(h)), `no line holds ${h}`).toBe(true);
+  });
+});
+
+describe('master spec amendments (SP5b §9)', () => {
+  /** [§1 entry head, the token its entry holds, the file on disk]; Tasks 2, 3, 4, 6, 10, 12, 19, 20, 22, 24, 26, 27 and 28 append theirs. */
+  const SP5B_MODULES: Array<[head: RegExp, token: string, file: string]> = [];
+
+  test('§10\'s SP5b entry and its receivers (SP5b spec §9, §11)', () => {
+    const sp5b = spEntry('SP5b', 'SP5c');
+    expect(sp5b.startsWith('**SP5b — Saved worlds** (L; SP5a). Spec: `2026-10-29-sp5b-saved-worlds-design.md`'), 'the SP5b header').toBe(true);
+    expect(sp5b).toContain('saved places as a section of each saved world\'s map');
+    expect(sp5b).toContain('the Settings screen (G; Graphics and Controls)');
+    expect(sp5b).toContain('**Exit:** as the SP5b spec §12 (E1-E4, E5\'s flush part, E6 as redefined there, E7; the failure criteria\'s gates `G2.flush` and `G1.enter`, with the SP5b spec\'s thresholds; the user\'s check)');
+    expect(sp5b.split('\n').some((l) => l.startsWith('- **Cut line:** the Load list\'s place count ("· n places" on Load world\'s rows) (→ SP10)')), 'the SP5b entry has no `- **Cut line:** the Load list\'s place count` line').toBe(true);
+    expect(text).toContain('SP5a palette search → SP10 (delivered in SP5a, so nothing moved); SP5b worlds-menu polish (the Load list\'s place count) → SP10');
+    expect(spEntry('SP10', 'SP11').split('\n').some((l) => l.startsWith('- Received from SP5b (its spec §10; amended by SP5b): the preset library (master §2.7\'s `presets` store); touchpad sensitivity in Settings\' Controls tab (the SP4a spec :729)')), 'SP10 has no "Received from SP5b" line').toBe(true);
+    const sp8c = spEntry('SP8c', 'SP9');
+    expect(sp8c).toContain('Adds the **Audio** tab to SP5b\'s `ui/settingsPanel.ts`');
+    expect(sp8c).toContain('(the `packs` store, by a `wi10` version bump)');
+    expect(sp8c).not.toContain('Creates `ui/settingsPanel.ts`');
+    expect(spEntry('SP11', 'SP12')).toContain('fills SP5b\'s Graphics tab: the quality preset and the greyed rows (fog distance, clouds, shadows)');
+    expect(spEntry('SP5c', 'SP6')).toContain('(stored in IndexedDB `wi10`, its `meta` store or a store of its own by a version bump; a paste is one block-history step, which SP5b persists)');
   });
 });

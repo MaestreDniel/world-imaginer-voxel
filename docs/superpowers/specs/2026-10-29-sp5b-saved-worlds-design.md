@@ -310,7 +310,7 @@ Against SP5a's exit run 40821727832 (2 min 42 s wall; metrics-quick `terrain` 14
 
 ## 8. Governance
 
-- **First commit:** `CURRENT_SP` 'SP5b' (`src/core/ids.ts:25` and its comment `:20-24`; it moves no profile: `cave_heavy` is SP6's); `STARTED_SPS` appends 'SP5b' (`test/harness/sp.ts:37`); `npm run test:accept-thresholds` with a Threshold-log line; `CLAUDE.md` and `README.md` status lines; the master's §10 SP5b header gains "Spec: `2026-10-29-sp5b-saved-worlds-design.md`" and its size L (§9), which moves the pin `test/arch/masterSpec.test.ts:1159-1160` into a new block 'master spec amendments (SP5b §9)' with an `SP5B_MODULES` table (`SP5A_MODULES`' pattern, `:1125-1146`, checked at `:1320-1327`).
+- **First commit:** `CURRENT_SP` 'SP5b' (`src/core/ids.ts:25` and its comment `:20-24`; it moves no profile: `cave_heavy` is SP6's); `STARTED_SPS` appends 'SP5b' (`test/harness/sp.ts:37`); `npm run test:accept-thresholds` with a Threshold-log line; `CLAUDE.md` and `README.md` status lines; the master's §10 SP5b header gains "Spec: `2026-10-29-sp5b-saved-worlds-design.md`" and its size L (§9), which moves the pins `test/arch/masterSpec.test.ts:1159-1160` and `:1162` (the receivers, which §11's wording changes) into a new block 'master spec amendments (SP5b §9)' with an `SP5B_MODULES` table (`SP5A_MODULES`' pattern, `:1125-1146`, checked at `:1320-1327`). §9's other rewordings move four more earlier pins into that block, each with the amendment it pins: `:1202` (§1's settings block, "(SP5b's graphics settings screen replaces it)"), `:1276` (§4.12's Block undo line), `:957` (§5.6's saved-places phrase) and `:1208` (risk 1's Kill line, worded at the exit; the SP4b-era pin of its "(amended by SP4b: …)" parenthesis, `:1013-1015`, stays, its text kept verbatim in the new line).
 - **Thresholds lock:** changes with the E rows' commit (E1-E7, `E5.flush`) and the browser gates' commit (`G2.flush`, `G1.enter`), each with a Threshold-log line and this spec in the same push (`test/harness/governance.ts:54-56`). All parts are new; no gate is loosened.
 - **No other lock changes:** goldens, `GENERATOR_VERSION`, the schema-shape and state-id locks. `test/baselines.json` (not a lock) is re-recorded with the `persist.flush` row (`npm run bench:record`, a quiet machine).
 - **Code comments naming SP5b** reworded as built: `help.ts:2-3`, `applyControl.ts:11`, `:65`, `worldPage.ts:2319`, `settings.ts:3`, `startScreen.ts:7`, `hotbar.ts:6`, `fly.ts:19-20`, `worldPage.ts:1736`; also `kit.ts:426` ("saves, .wiworld" on `checkParams`, D33) and `blockHistory.ts:15-18` (D32).
@@ -378,3 +378,5 @@ The exit commit says in `CLAUDE.md` and `README.md` that SP5b is implemented and
 ## Threshold log
 
 (One line per commit that changes `test/thresholds.lock.json`.)
+
+- 2026-10-30 — SP5b Task 1: startedSps gains 'SP5b' (spec §8).

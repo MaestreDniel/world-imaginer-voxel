@@ -20,9 +20,9 @@ export const SUB_PROJECTS: readonly SubProjectId[] = [
  * The sub-project this build belongs to; hides profiles whose readyFrom comes later (SP2a spec §4.4).
  * It is the last SP of the longest prefix of SUB_PROJECTS whose members have all started (SP3a spec §9),
  * so an SP running alongside an earlier unstarted one (SP4a before SP3c, SP3d or SP3e) does not advance it.
- * SP5a (build and walk) started on 2026-10-27 and is the current SP (SP5a spec §8).
+ * SP5b (saved worlds) started on 2026-10-29 and is the current SP (SP5b spec §8).
  */
-export const CURRENT_SP: SubProjectId = 'SP5a';
+export const CURRENT_SP: SubProjectId = 'SP5b';
 
 /** Every metric id of master spec §6.4 (E1-E7 expanded). */
 export type MetricId =
