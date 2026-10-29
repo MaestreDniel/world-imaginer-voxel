@@ -76,30 +76,79 @@ export const BENCH_ROWS = [
 export interface BenchKernel {
   readonly nsPerEval: number;
   /**
-   * nsPerEval ÷ the calibration kernel's nsPerEval measured immediately before this row, in the same run (SP5a Task
-   * 43b: `CALIBRATION_BESIDE_RUN`), so both share one clock state; `calibration.fmix32` is its own divisor (ratio 1).
+   * nsPerEval ÷ the mean of the calibration kernel's nsPerEval measured immediately before and immediately after this
+   * row, in the same run (SP5a Task 43b: `CALIBRATION_BESIDE_RUN`, `measureBracketed`), so both share one clock state;
+   * `calibration.fmix32` is its own divisor (ratio 1).
    */
   readonly ratio: number;
 }
 
 /**
  * SP5a Task 43b: the calibration run beside each row, tinybench options for the `calibration.fmix32` kernel measured
- * immediately before every other row (20 ms of warm-up, then at least 100 ms timed). On the i7-12700H the busy P-core
- * leaves its turbo window (4.7 GHz) after about 30-40 s of the run and drops to 3.0-3.9 GHz (Task 40c); one calibration
- * taken first, at turbo, divided the late rows measured throttled. Windows of 25 to 400 ms read the same p50 (0.635-0.638
- * ns at turbo, 12 runs each between bursts of other work), so 100 ms is stable with margin and adds about 3.5 s per run.
+ * immediately before and immediately after every other row (20 ms of warm-up, then at least 100 ms timed). On the
+ * i7-12700H the busy P-core leaves its turbo window (4.7 GHz) after about 30-40 s of the run and drops to 3.0-3.9 GHz
+ * (Task 40c); one calibration taken first, at turbo, divided the late rows measured throttled. In Task 43b's probe
+ * (2026-10-29, the task report) windows of 25 to 400 ms read the same p50 (0.635-0.638 ns at turbo, 12 runs each between
+ * bursts of other work), so 100 ms is stable with margin.
  */
 export const CALIBRATION_BESIDE_RUN = Object.freeze({ time: 100, warmupTime: 20 });
 
-/** A row's ratio: its ns per evaluation ÷ the calibration's measured beside it (SP5a Task 43b), to 3 decimals. */
+/**
+ * SP5a Task 43b (review I2): the calibrations before and after a row agree when the larger is within 5 % of the smaller
+ * (`calibrationSpread`). A row that straddles the turbo drop (or a transient) sees them differ, by 15-50 % between 4.7 GHz
+ * and 3.0-3.9 GHz, and runs again, up to `ROW_ATTEMPTS_MAX` runs in all (`measureBracketed`).
+ */
+export const CALIBRATION_SPREAD_MAX = 0.05;
+export const ROW_ATTEMPTS_MAX = 3;
+
+/** How far apart two calibrations are: the larger ÷ the smaller, minus 1 (0 when equal). */
+export function calibrationSpread(before: number, after: number): number {
+  return Math.max(before, after) / Math.min(before, after) - 1;
+}
+
+/** One bracketed row: the row's run kept, the calibrations before and after it, its divisor and how often it ran. */
+export interface BracketedRun<R> {
+  readonly result: R;
+  readonly before: number;
+  readonly after: number;
+  /** The row's divisor (`benchKernels`' `beside`): the mean of `before` and `after`. */
+  readonly divisor: number;
+  /** How many times the row ran (1 when its first calibrations agreed). */
+  readonly runs: number;
+}
+
+/**
+ * SP5a Task 43b (review I2): a row between a calibration immediately before it and one immediately after it, so its
+ * divisor (their mean) shares the row's clock even when the CPU leaves its turbo window during the row. When the two
+ * differ by more than `CALIBRATION_SPREAD_MAX` the clock moved under the row: `rerun` resets the row's state and the
+ * row runs again between two fresh calibrations, up to `ROW_ATTEMPTS_MAX` runs; the first run whose calibrations agree
+ * is kept, else the run with the smallest spread.
+ */
+export async function measureBracketed<R>(
+  calibrate: () => Promise<number>, row: () => Promise<R>, rerun: () => void = () => {},
+): Promise<BracketedRun<R>> {
+  let kept: BracketedRun<R> | null = null;
+  for (let runs = 1; runs <= ROW_ATTEMPTS_MAX; runs++) {
+    if (runs > 1) rerun();
+    const before = await calibrate();
+    const result = await row();
+    const after = await calibrate();
+    const spread = calibrationSpread(before, after);
+    if (kept === null || spread < calibrationSpread(kept.before, kept.after)) kept = { result, before, after, divisor: (before + after) / 2, runs };
+    if (spread <= CALIBRATION_SPREAD_MAX) return kept;
+  }
+  return { ...kept!, runs: ROW_ATTEMPTS_MAX };
+}
+
+/** A row's ratio: its ns per evaluation ÷ its divisor, the calibration measured beside it (SP5a Task 43b), to 3 decimals. */
 export function ratioOf(rowNs: number, calibNs: number): number {
   return Math.round((rowNs / calibNs) * 1000) / 1000;
 }
 
 /**
- * The run's kernels from each row's p50 ns per evaluation (`ns`) and the calibration's measured immediately before that
- * row (`beside`, `calibration.fmix32` beside itself): nsPerEval to 3 decimals and `ratioOf` the two. A row with no
- * calibration beside it throws.
+ * The run's kernels from each row's p50 ns per evaluation (`ns`) and its divisor (`beside`: `measureBracketed`'s mean of
+ * the calibrations immediately before and after the row, `calibration.fmix32` beside itself): nsPerEval to 3 decimals
+ * and `ratioOf` the two. A row with no calibration beside it throws.
  */
 export function benchKernels(ns: Readonly<Record<string, number>>, beside: Readonly<Record<string, number>>): Record<string, BenchKernel> {
   const out: Record<string, BenchKernel> = {};

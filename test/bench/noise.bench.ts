@@ -49,7 +49,7 @@ import { capDensityTree, capSurfaceRules } from '../harness/capTrees';
 import { PART_WORST_LEAVES, partWorstParams } from '../harness/sliceTrees';
 import {
   absoluteGateFailures, BENCH_ROWS, benchKernels, CALIBRATION_BESIDE_RUN, gateFailures, ISLANDS_COLUMNS, ISLANDS_RUN, LIGHT_RUN, MESH_RUN,
-  parseBenchExempt, RELIGHT_RUN, type Baselines,
+  measureBracketed, parseBenchExempt, RELIGHT_RUN, type Baselines,
 } from './gates';
 import { buildPerm, perm3 } from './perm512';
 
@@ -104,28 +104,35 @@ test('SP1, SP2a, SP2b, SP3a, SP3b, SP3c, SP3d, SP3e, SP4a and SP5a kernels', asy
   const exempt = process.env.BENCH_RECORD === '1' ? [] : parseBenchExempt(process.env.BENCH_EXEMPT);
   const ns: Record<string, number> = {};
   /**
-   * SP5a Task 43b: each row's divisor, the calibration kernel's p50 per evaluation measured immediately before the row
-   * (`CALIBRATION_BESIDE_RUN`, through tinybench as vitest's bench provider runs it, so it is not a reported row), in the
-   * same clock state: the CPU leaves its turbo window part-way through the run (Task 40c). `calibration.fmix32` is its own.
+   * SP5a Task 43b: each row's divisor, the mean of the calibration kernel's p50 per evaluation measured immediately
+   * before and immediately after the row (`CALIBRATION_BESIDE_RUN`, through tinybench as vitest's bench provider runs it,
+   * so it is not a reported row), in the row's clock state: the CPU leaves its turbo window part-way through the run (Task
+   * 40c). When the two differ by more than 5 % the row straddled the drop and runs again (`measureBracketed`, review I2).
+   * `calibration.fmix32` is its own divisor.
    */
   const beside: Record<string, number> = {};
-  const calibrateBeside = async (name: string): Promise<void> => {
+  const bracket: Record<string, { readonly before: number; readonly after: number; readonly runs: number }> = {};
+  const calibrateBeside = async (name: string): Promise<number> => {
     const b = new Bench({ ...CALIBRATION_BESIDE_RUN, now: performance.now.bind(performance) });
     b.add(`calibration beside ${name}`, calibrate);
     await b.run();
     const r = b.tasks[0]!.result;
     if (r.state !== 'completed') throw new Error(`the calibration beside ${name} did not complete: ${r.state}`);
-    beside[name] = (r.latency.p50 * 1e6) / N;
+    return (r.latency.p50 * 1e6) / N;
   };
   /**
-   * A row's p50 per evaluation, after its calibration beside it; `run`: a fixed iteration count (`time: 0`, one warm-up
-   * iteration) or explicit options.
+   * A row's p50 per evaluation, between its calibrations before and after it; `run`: a fixed iteration count (`time: 0`,
+   * one warm-up iteration) or explicit options; `rerun`: resets the row's state before it runs again.
    */
-  const measure = async (name: string, evals: number, fn: () => unknown, run?: number | typeof ISLANDS_RUN | typeof LIGHT_RUN | typeof MESH_RUN) => {
-    await calibrateBeside(name);
-    const r = await bench(name, fn).run(run === undefined ? undefined : typeof run === 'number' ? { iterations: run, time: 0, warmupIterations: 1 } : { ...run });
-    ns[name] = (r.latency.p50 * 1e6) / evals;
-    return r;
+  const measure = async (
+    name: string, evals: number, fn: () => unknown, run?: number | typeof ISLANDS_RUN | typeof LIGHT_RUN | typeof MESH_RUN, rerun?: () => void,
+  ) => {
+    const options = run === undefined ? undefined : typeof run === 'number' ? { iterations: run, time: 0, warmupIterations: 1 } : { ...run };
+    const m = await measureBracketed(() => calibrateBeside(name), () => bench(name, fn).run(options), rerun);
+    ns[name] = (m.result.latency.p50 * 1e6) / evals;
+    beside[name] = m.divisor;
+    bracket[name] = m;
+    return m.result;
   };
   const rng = new Xoshiro128(7);
   const ints = Uint32Array.from({ length: N }, () => rng.nextU32());
@@ -151,6 +158,7 @@ test('SP1, SP2a, SP2b, SP3a, SP3b, SP3c, SP3d, SP3e, SP4a and SP5a kernels', asy
   const calibRun = await bench('calibration.fmix32', calibrate).run();
   ns['calibration.fmix32'] = (calibRun.latency.p50 * 1e6) / N;
   beside['calibration.fmix32'] = ns['calibration.fmix32'];
+  bracket['calibration.fmix32'] = { before: ns['calibration.fmix32'], after: ns['calibration.fmix32'], runs: 1 };
   await measure('lattice3.slice', N, () => { let s = 0; for (let j = 0; j < 64; j++) for (let i = 0; i < 64; i++) s += LAT(12345, 1000.3 + i / 64, 1234.37, 777.1 + j / 64); sink += s; });
   await measure('perm512.slice', N, () => { let s = 0; for (let j = 0; j < 64; j++) for (let i = 0; i < 64; i++) s += PERM(P, 1000.3 + i / 64, 1234.37, 777.1 + j / 64); sink += s; });
   await measure('lattice3.random', N, () => { let s = 0; for (let i = 0; i < N; i++) s += LAT(12345, rx[i]!, ry[i]!, rz[i]!); sink += s; });
@@ -174,9 +182,7 @@ test('SP1, SP2a, SP2b, SP3a, SP3b, SP3c, SP3d, SP3e, SP4a and SP5a kernels', asy
   await measure('column.point', 64, () => { for (let i = 0; i < 64; i++) sink += columnPoint(gen, wx[(col + i) & (N - 1)]!, wz[(col + i) & (N - 1)]!).offset; col += 64; });
   const sample = newColumnSample();
   let cs = 0;
-  await calibrateBeside('column.sample');
-  const columnRun = await bench('column.sample', () => { cs++; buildColumnSample(gen, (cs * 7919) % 60000 - 30000, (cs * 104729) % 60000 - 30000, sample); sink += sample.f.offset[24]!; }).run();
-  ns['column.sample'] = columnRun.latency.p50 * 1e6;
+  const columnRun = await measure('column.sample', 1, () => { cs++; buildColumnSample(gen, (cs * 7919) % 60000 - 30000, (cs * 104729) % 60000 - 30000, sample); sink += sample.f.offset[24]!; });
   // tinybench keeps no samples by default; p99 bounds p95 from above, so gating p99 is the stricter check.
   const columnP95 = columnRun.latency.p99;
   const tile = new Uint8ClampedArray(262144);
@@ -268,9 +274,10 @@ test('SP1, SP2a, SP2b, SP3a, SP3b, SP3c, SP3d, SP3e, SP4a and SP5a kernels', asy
   // candidate sequence kept where columnPoint (on a separate GenContext, so the timed context's column cache stays cold)
   // gives islandMask ≥ 0.5 at the column's centre block, until 512 are accepted; 256 timed iterations after one
   // warm-up (ISLANDS_RUN: warmupTime 0, so the warm-up is one call), each on the next precomputed column, freed after
-  // (no column twice, so the column cache never hits).
+  // (no column twice, so the column cache never hits). A re-run (SP5a Task 43b: its calibrations disagreed) takes a fresh
+  // GenContext and the same columns from the first, so its cache is as cold as the first run's.
   const islandsParams = resolveProfile('floating_islands');
-  const islandsGen = createGenContext(seedFromInput('42'), islandsParams);
+  let islandsGen = createGenContext(seedFromInput('42'), islandsParams);
   const islandsProbe = createGenContext(seedFromInput('42'), islandsParams);
   const islandsStore = createStore({ shared: true, maxBlockBytes: 32 << 20, maxByteBytes: 16 << 20 });
   const islandCols: (readonly [number, number])[] = [];
@@ -286,7 +293,7 @@ test('SP1, SP2a, SP2b, SP3a, SP3b, SP3c, SP3d, SP3e, SP4a and SP5a kernels', asy
     const [icx, icz] = islandCols[ic++]!;
     sink += fillColumnT(islandsStore, islandsGen, icx, icz, never) ? 1 : 0;
     islandsStore.freeColumn(icx, icz);
-  }, ISLANDS_RUN);
+  }, ISLANDS_RUN, () => { islandsGen = createGenContext(seedFromInput('42'), islandsParams); ic = 0; });
   // tinybench calls the function once when it is added (to see whether it returns a promise), then the one warm-up
   // call and the 256 timed ones: 258 of the 512 columns.
   expect(ic, 'terrain.islands: one probe, one warm-up and 256 timed calls, each on its own precomputed column').toBe(1 + ISLANDS_RUN.warmupIterations + ISLANDS_RUN.iterations);
@@ -319,7 +326,7 @@ test('SP1, SP2a, SP2b, SP3a, SP3b, SP3c, SP3d, SP3e, SP4a and SP5a kernels', asy
     lightRegion(lightScratch, DEFAULT_LIGHT_TABLES, false);
     for (let sy = 0; sy < 24; sy++) lightOut.set(centreSection(lightScratch, sy), sy * 4096);
     sink += lightOut[24 * 4096 - 1]!;
-  }, LIGHT_RUN);
+  }, LIGHT_RUN, () => { lc = 0; });
   expect(lc, 'light.column: one probe, one warm-up and 256 timed calls, each column timed once').toBe(1 + LIGHT_RUN.warmupIterations + LIGHT_RUN.iterations);
   // The 256 columns lit to L for real (fillColumnL commits them Published), then the non-trivial sections (`isTrivial`)
   // of the 14 × 14 columns whose 3 × 3 is Published, in (cz, cx, sy) order; 1024 of them evenly spread over the list.
@@ -349,7 +356,7 @@ test('SP1, SP2a, SP2b, SP3a, SP3b, SP3c, SP3d, SP3e, SP4a and SP5a kernels', asy
     meshFluid(meshScratch.padded, meshScratch.depth, meshScratch.builder);
     sink += connectivity15(meshScratch.padded);
     for (let pass = 0 as 0 | 1 | 2; pass <= 2; pass++) quads += meshScratch.builder.view(pass).indices / 6;
-  }, MESH_RUN);
+  }, MESH_RUN, () => { mc = 0; quads = 0; });
   expect(mc, 'mesh.section: one probe, one warm-up and 1024 timed calls, each section timed once').toBe(1 + MESH_RUN.warmupIterations + MESH_RUN.iterations);
   expect(quads, 'mesh.section meshes quads').toBeGreaterThan(0);
 
@@ -431,7 +438,7 @@ test('SP1, SP2a, SP2b, SP3a, SP3b, SP3c, SP3d, SP3e, SP4a and SP5a kernels', asy
   edit(cycle[5]!);
   expect(floorSky(), 'relight.edit: closed again').toBe(0);
   let rc = 0;
-  const relightRun = await measure('relight.edit', 1, () => ({ overriddenDuration: edit(cycle[rc++ % cycle.length]!) }), RELIGHT_RUN);
+  const relightRun = await measure('relight.edit', 1, () => ({ overriddenDuration: edit(cycle[rc++ % cycle.length]!) }), RELIGHT_RUN, () => { rc = 0; });
   expect(rc, 'relight.edit: one probe, one warm-up and 256 timed calls, 43 turns of the cycle').toBe(1 + RELIGHT_RUN.warmupIterations + RELIGHT_RUN.iterations);
   expect([valueAt(worldStore, tx, ty, tz), valueAt(worldStore, sx, sy, sz), valueAt(worldStore, hx, hy, hz), floorSky()], 'relight.edit: the cycle ends as it began').toEqual([tv, sv, hv, 0]);
 
@@ -444,10 +451,14 @@ test('SP1, SP2a, SP2b, SP3a, SP3b, SP3c, SP3d, SP3e, SP4a and SP5a kernels', asy
   expect(store.blockPool.slotCount() - store.blockPool.freeCount(), 'store rows leak no slot').toBe(0);
 
   expect(Object.keys(ns), 'the measured rows are BENCH_ROWS').toEqual([...BENCH_ROWS]);
-  // Each row's ratio against the calibration beside it (SP5a Task 43b); the table also prints that calibration.
+  // Each row's ratio against the calibrations beside it (SP5a Task 43b); the table also prints them and the row's runs.
   const kernels = benchKernels(ns, beside);
   const killRatio = Math.round(Math.max(ns['lattice3.slice']! / ns['perm512.slice']!, ns['lattice3.random']! / ns['perm512.random']!) * 1000) / 1000;
-  console.table(Object.fromEntries(Object.entries(kernels).map(([name, k]) => [name, { ...k, calibrationBeside: Math.round(beside[name]! * 1000) / 1000 }])));
+  const r3 = (v: number): number => Math.round(v * 1000) / 1000;
+  console.table(Object.fromEntries(Object.entries(kernels).map(([name, k]) => {
+    const b = bracket[name]!;
+    return [name, { ...k, calibBefore: r3(b.before), calibAfter: r3(b.after), runs: b.runs }];
+  })));
   console.log(`killRatio ${killRatio}`);
   console.log(`column.sample p50 ${columnRun.latency.p50.toFixed(3)} ms, p99 (≥ p95) ${columnP95.toFixed(3)} ms`);
   console.log(`terrain.real p50 ${terrainRun.latency.p50.toFixed(3)} ms, p99 ${terrainRun.latency.p99.toFixed(3)} ms`);

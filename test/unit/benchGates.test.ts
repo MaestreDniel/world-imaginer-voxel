@@ -2,9 +2,9 @@ import { readFileSync } from 'node:fs';
 import { Bench } from 'tinybench';
 import { expect, test } from 'vitest';
 import {
-  absoluteGateFailures, BENCH_ROWS, benchKernels, CALIBRATION_BESIDE_RUN, COLUMN_P50_MAX_MS, COLUMN_P95_MAX_MS, gateFailures, ISLANDS_COLUMNS, ISLANDS_RUN, KILL_RATIO_MAX,
-  LIGHT_P50_MAX_MS, LIGHT_P99_MAX_MS, LIGHT_RUN, MESH_P50_MAX_MS, MESH_P99_MAX_MS, MESH_RUN, P1_MAX_REGRESSION, parseBenchExempt,
-  ratioOf, RELIGHT_P95_MAX_MS, RELIGHT_RUN, SESSION_COMMIT_P50_MAX_MS, SLICE_PART_P50_MAX_MS, SLICE_V128_P50_MAX_MS, TERRAIN_P50_MAX_MS, type Baselines,
+  absoluteGateFailures, BENCH_ROWS, benchKernels, CALIBRATION_BESIDE_RUN, CALIBRATION_SPREAD_MAX, calibrationSpread, COLUMN_P50_MAX_MS, COLUMN_P95_MAX_MS, gateFailures, ISLANDS_COLUMNS, ISLANDS_RUN, KILL_RATIO_MAX,
+  LIGHT_P50_MAX_MS, LIGHT_P99_MAX_MS, LIGHT_RUN, MESH_P50_MAX_MS, MESH_P99_MAX_MS, MESH_RUN, measureBracketed, P1_MAX_REGRESSION, parseBenchExempt,
+  ratioOf, RELIGHT_P95_MAX_MS, RELIGHT_RUN, ROW_ATTEMPTS_MAX, SESSION_COMMIT_P50_MAX_MS, SLICE_PART_P50_MAX_MS, SLICE_V128_P50_MAX_MS, TERRAIN_P50_MAX_MS, type Baselines,
 } from '../bench/gates';
 
 const base: Baselines = { machine: 'm', node: 'v24', date: '2026-09-27', killRatio: 1.2, kernels: { a: { nsPerEval: 10, ratio: 2 }, b: { nsPerEval: 5, ratio: 1 } } };
@@ -113,6 +113,63 @@ test('benchKernels (SP5a Task 43b): each row\'s ratio uses the calibration taken
 
 test('CALIBRATION_BESIDE_RUN (SP5a Task 43b): about 120 ms of fmix32 before each row (20 ms warm-up, 100 ms timed)', () => {
   expect(CALIBRATION_BESIDE_RUN).toEqual({ time: 100, warmupTime: 20 });
+});
+
+test('calibrationSpread and the bracket constants (SP5a Task 43b review I2): the larger calibration over the smaller, minus 1', () => {
+  expect([CALIBRATION_SPREAD_MAX, ROW_ATTEMPTS_MAX]).toEqual([0.05, 3]);
+  expect(calibrationSpread(0.8, 0.8)).toBe(0);
+  expect(calibrationSpread(0.8, 0.84)).toBeCloseTo(0.05, 12);
+  expect(calibrationSpread(0.84, 0.8)).toBeCloseTo(0.05, 12);
+  // Task 43b's v1 slice.horizontal128: turbo before the row, throttled after it.
+  expect(calibrationSpread(0.637, 0.796)).toBeGreaterThan(CALIBRATION_SPREAD_MAX);
+});
+
+/** A fake bracket: each calibrate() returns the next calibration; each row() logs its run and returns the next result. */
+function fakeBracket(calibs: readonly number[], results: readonly number[]) {
+  const log: string[] = [];
+  let c = 0;
+  let r = 0;
+  return {
+    log,
+    calibrate: async (): Promise<number> => { log.push('calibrate'); return calibs[c++]!; },
+    row: async (): Promise<number> => { log.push('row'); return results[r++]!; },
+    rerun: (): void => { log.push('rerun'); },
+  };
+}
+
+test('measureBracketed (SP5a Task 43b review I2): a calibration before and after the row; agreeing within 5 %, the row runs once and divides by their mean', async () => {
+  const f = fakeBracket([0.636, 0.64], [100]);
+  expect(await measureBracketed(f.calibrate, f.row, f.rerun)).toEqual({ result: 100, before: 0.636, after: 0.64, divisor: expect.closeTo(0.638, 12), runs: 1 });
+  expect(f.log).toEqual(['calibrate', 'row', 'calibrate']);
+  // Without a rerun hook it runs the same way.
+  const g = fakeBracket([0.636, 0.64], [100]);
+  expect((await measureBracketed(g.calibrate, g.row)).runs).toBe(1);
+});
+
+test('measureBracketed (SP5a Task 43b review I2): a row that straddles the turbo drop runs again, after its rerun hook, and keeps the agreeing run', async () => {
+  // Task 43b's v1 slice.horizontal128: p50 631 ms, throttled, between a turbo 0.637 and a throttled 0.796. Read again at
+  // the steady throttled clock (624 ms between 0.786 and 0.79), its ratio is the record's (624 ms beside 0.786).
+  const f = fakeBracket([0.637, 0.796, 0.786, 0.79], [631, 624]);
+  const m = await measureBracketed(f.calibrate, f.row, f.rerun);
+  expect(m).toEqual({ result: 624, before: 0.786, after: 0.79, divisor: expect.closeTo(0.788, 12), runs: 2 });
+  expect(f.log).toEqual(['calibrate', 'row', 'calibrate', 'rerun', 'calibrate', 'row', 'calibrate']);
+  const baselineRatio = ratioOf(624, 0.786);
+  const kernels = benchKernels({ h: m.result }, { h: m.divisor });
+  expect(kernels['h']!.ratio / baselineRatio).toBeCloseTo(0.997, 3);
+  expect(gateFailures({ ...base, kernels: { h: { nsPerEval: 624, ratio: baselineRatio } } }, kernels, 1.2, [])).toEqual([]);
+  // Divided by the calibration before it alone, the straddling run read 1.248 × that baseline.
+  expect(ratioOf(631, 0.637) / baselineRatio).toBeCloseTo(1.248, 3);
+  // A transient slow calibration (Task 43b's v1 session.commitMaxTree: 0.959 before a throttled row, which read 0.810 ×)
+  // runs the row again too, rather than hiding a regression behind a large divisor.
+  const t = fakeBracket([0.959, 0.78, 0.782, 0.78], [3.4, 3.42]);
+  expect(await measureBracketed(t.calibrate, t.row, t.rerun)).toEqual({ result: 3.42, before: 0.782, after: 0.78, divisor: expect.closeTo(0.781, 12), runs: 2 });
+});
+
+test('measureBracketed (SP5a Task 43b review I2): after ROW_ATTEMPTS_MAX runs that never agree, the run with the smallest spread', async () => {
+  const f = fakeBracket([0.6, 0.8, 0.7, 0.77, 0.65, 0.8], [1, 2, 3]);
+  expect(await measureBracketed(f.calibrate, f.row, f.rerun)).toEqual({ result: 2, before: 0.7, after: 0.77, divisor: expect.closeTo(0.735, 12), runs: 3 });
+  expect(f.log.filter((s) => s === 'row')).toHaveLength(ROW_ATTEMPTS_MAX);
+  expect(f.log.filter((s) => s === 'rerun')).toHaveLength(ROW_ATTEMPTS_MAX - 1);
 });
 
 test('no baseline: only the kill criterion gates', () => {
