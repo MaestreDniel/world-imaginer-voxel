@@ -587,8 +587,9 @@ export type LiveFigures = StreamFigures & {
 
 /**
  * L10's block (SP5a spec §6.2, D26), ms: over the hover's edits, `editVisible*` from the post to the frame the edited
- * column's new mesh is shown (its first reveal after its edit's payload was staged), `editAllVisibleP95` to the last
- * dirty column's, the sim's `relightP95Ms` and `editP95Ms`, and the step budget (plan): `replyP95Ms` (post → the sim's
+ * column's new mesh is shown (its first reveal after its edit's payload was staged), G2's sample size beside them
+ * (`hoverAccepted` the hover's edits the sim accepted, `editSamples` the samples the `editVisible*` figures read: fewer
+ * when an accepted edit never revealed; final review UI-6), `editAllVisibleP95` to the last dirty column's, the sim's `relightP95Ms` and `editP95Ms`, and the step budget (plan): `replyP95Ms` (post → the sim's
  * reply), `issueToStagedP95Ms` (reply → staged: the MESH job and its delivery), `stagedToShownP95Ms`; `editDropped` the
  * coordinator's edit MESHes dropped; `mainP95Ms` the p95 over L10's frames of their input, walk step, DDA, queued
  * clicks and outline time (`playerMs`; master §7's 0.3 ms); `editVisibleStreamingP95` over the closing flight's edits
@@ -599,6 +600,8 @@ export interface EditFigures {
   readonly editVisibleP50: number | null;
   readonly editVisibleP95: number | null;
   readonly editVisibleMax: number | null;
+  readonly hoverAccepted: number;
+  readonly editSamples: number;
   readonly editAllVisibleP95: number | null;
   readonly relightP95Ms: number | null;
   readonly editP95Ms: number | null;
@@ -831,6 +834,8 @@ function editFiguresOf(rec: BenchRecord, idx: readonly number[], fixed: BenchFix
     editVisibleP50: percentileOrNull(visible, 50),
     editVisibleP95: percentileOrNull(visible, 95),
     editVisibleMax: visible.length === 0 ? null : maxOf(visible),
+    hoverAccepted: run.hoverAccepted,
+    editSamples: visible.length,
     editAllVisibleP95: percentileOrNull(hover(s.allVisible), 95),
     relightP95Ms: percentileOrNull(hover(s.relight), 95),
     editP95Ms: percentileOrNull(hover(s.edit), 95),

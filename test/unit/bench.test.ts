@@ -432,11 +432,14 @@ describe('summarizeBench: the edit leg L10 (SP5a spec §6.2, D26)', () => {
       { leg: 10, snappedMs: 50 * HZ240, calls: 700 }, { leg: 10 }, { leg: 10 },
     ]), { ...FIXED, totals: { ...FIXED.totals, editDropped: 3 }, edit: EDIT }, null, { hoverAccepted: 4, streamingRefused: 1, timedOut: [] });
     expect(Object.keys(r.edit)).toEqual([
-      'editVisibleP50', 'editVisibleP95', 'editVisibleMax', 'editAllVisibleP95', 'relightP95Ms', 'editP95Ms', 'replyP95Ms', 'issueToStagedP95Ms',
-      'stagedToShownP95Ms', 'editDropped', 'mainP95Ms', 'editVisibleStreamingP95', 'streamingRefused', 'timedOut', 'frames',
+      'editVisibleP50', 'editVisibleP95', 'editVisibleMax', 'hoverAccepted', 'editSamples', 'editAllVisibleP95', 'relightP95Ms', 'editP95Ms',
+      'replyP95Ms', 'issueToStagedP95Ms', 'stagedToShownP95Ms', 'editDropped', 'mainP95Ms', 'editVisibleStreamingP95', 'streamingRefused',
+      'timedOut', 'frames',
     ]);
     // The hover's figures read its 4 samples (nearest rank), the streaming p95 the flight's 2.
     expect([r.edit.editVisibleP50, r.edit.editVisibleP95, r.edit.editVisibleMax, r.edit.editAllVisibleP95]).toEqual([30, 50, 50, 55]);
+    // G2's sample size is published (final review UI-6): the hover's accepted edits and the samples its p95 read.
+    expect([r.edit.hoverAccepted, r.edit.editSamples]).toEqual([4, 4]);
     expect([r.edit.relightP95Ms, r.edit.editP95Ms, r.edit.replyP95Ms, r.edit.issueToStagedP95Ms, r.edit.stagedToShownP95Ms]).toEqual([2.5, 3.1, 5, 11, 8]);
     expect([r.edit.editDropped, r.edit.mainP95Ms, r.edit.editVisibleStreamingP95, r.edit.streamingRefused]).toEqual([3, 0, 90, 1]);
     expect(r.edit.timedOut).toEqual([]);
@@ -454,7 +457,21 @@ describe('summarizeBench: the edit leg L10 (SP5a spec §6.2, D26)', () => {
     const none = summarizeBench(recordOf([{ leg: 1 }]), FIXED);
     expect([none.edit.editVisibleP95, none.edit.editVisibleStreamingP95, none.edit.relightP95Ms]).toEqual([null, null, null]);
     expect([none.edit.streamingRefused, none.edit.timedOut]).toEqual([0, []]);
+    expect([none.edit.hoverAccepted, none.edit.editSamples]).toEqual([0, 0]);
     expect(none.edit.mainP95Ms).toBeNull();
+  });
+
+  test('G2\'s sample size is published: 5 hover edits accepted but only 3 revealed before the flight\'s give `editSamples` 3, read by `editVisibleP95` (final review UI-6)', () => {
+    // The hover's 3 revealed samples, no flight sample: a 3-sample p95 must not read like a 100-sample one.
+    const short: BenchFixed['edit'] = {
+      visible: Float64Array.of(20, 30, 40), allVisible: Float64Array.of(25, 35, 45), reply: Float64Array.of(2, 3, 4),
+      issueToStaged: Float64Array.of(6, 7, 8), stagedToShown: Float64Array.of(4, 5, 6), relight: Float64Array.of(1, 1, 1),
+      edit: Float64Array.of(1, 1, 1), count: 3,
+    };
+    const r = summarizeBench(recordOf([{ leg: 10 }]), { ...FIXED, edit: short }, null, { hoverAccepted: 5, streamingRefused: 0, timedOut: [] });
+    expect([r.edit.hoverAccepted, r.edit.editSamples, r.edit.editVisibleP95]).toEqual([5, 3, 40]);
+    const json = JSON.parse(JSON.stringify(r)) as { edit: { hoverAccepted: number; editSamples: number } };
+    expect([json.edit.hoverAccepted, json.edit.editSamples]).toEqual([5, 3]);
   });
 
   test('a synthetic L10 whose frames carry main-thread timings reports their p95 as `edit.mainP95Ms`', () => {
