@@ -541,6 +541,23 @@ describe('sprint: R held or a double-tapped W (Task 45b: Ctrl+W closes the tab)'
     input.dispose();
   });
 
+  test('R held, then Ctrl: R\'s auto-repeat keeps being prevented, so it never reloads (Task 45c review m1)', () => {
+    const { doc, input } = setup();
+    doc.dispatchEvent(key('keydown', 'KeyR', 'r'));
+    doc.dispatchEvent(key('keydown', 'ControlLeft', 'Control', { ctrlKey: true }));
+    const rep = key('keydown', 'KeyR', 'r', { ctrlKey: true, repeat: true });
+    doc.dispatchEvent(rep);
+    expect(rep.defaultPrevented).toBe(true);
+    expect([...input.held]).toEqual(['sprint']);
+    doc.dispatchEvent(key('keyup', 'KeyR', 'r', { ctrlKey: true }));
+    expect(input.held.size).toBe(0);
+    // R released: a fresh Ctrl+R reloads again.
+    const fresh = key('keydown', 'KeyR', 'r', { ctrlKey: true });
+    doc.dispatchEvent(fresh);
+    expect(fresh.defaultPrevented).toBe(false);
+    input.dispose();
+  });
+
   test('Ctrl alone, or Ctrl with W, does not sprint', () => {
     const { doc, input } = setup();
     doc.dispatchEvent(key('keydown', 'ControlLeft', 'Control', { ctrlKey: true }));

@@ -116,7 +116,8 @@ export function attachInput(
   };
 
   const onKeyDown = (e: KeyboardEvent): void => {
-    if (o.isTextFocus() || isReload(e)) return;
+    // R already held as sprint: its auto-repeat under a later Ctrl stays the world's, so it never reloads.
+    if (o.isTextFocus() || (isReload(e) && !down.has(e.code))) return;
     const a = resolveKey(e, map);
     if (a === null) return;
     if (a !== 'map' && !o.active()) return;
