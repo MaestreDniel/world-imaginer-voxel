@@ -8,7 +8,7 @@ import {
   BENCH_EDIT, BENCH_FIELDS, BENCH_FRAME_CAPACITY, BENCH_IDLE_FRAMES, BENCH_LEGS, BENCH_LIVE, BENCH_LIVE_LEGS, BENCH_PITCH, BENCH_RD, BENCH_REFILL,
   BENCH_SEED, BENCH_SHOT_ABOVE, BENCH_SHOT_PITCH, BENCH_SHOTS, BENCH_TIME_SPEED, BENCH_Y, benchInterval, benchPose, createBenchDriver,
   createBenchRecord, createBenchRecorder, createLiveReveals, REVIEW_HOUSE, REVIEW_POOL, REVIEW_SCENE_BATCH, REVIEW_SCENES, REVIEW_SETTLE_S, REVIEW_SITE,
-  REVIEW_SHOTS, summarizeBench, type BenchError, type BenchFixed, type BenchPose, type BenchRecord, type BenchResult, type BenchSources, type BenchWorld,
+  REVIEW_SHOTS, reviewSceneEdits, summarizeBench, type BenchError, type BenchFixed, type BenchPose, type BenchRecord, type BenchResult, type BenchSources, type BenchWorld,
   type ReviewShot, type SceneVoxel,
 } from '../../src/ui/world/bench';
 import type { EditOutcome } from '../../src/ui/world/editPath';
@@ -1176,13 +1176,33 @@ describe('the review scenes (SP5a spec §6.5; plan)', () => {
     for (const t of ['ladder', 'wall_torch', 'glass', 'oak_planks', 'bricks', 'cobblestone']) expect(types.has(t)).toBe(true);
     expect([...types].filter((t) => t.endsWith('_wool')).length).toBeGreaterThanOrEqual(2);
     // A 7 × 5 × 7 house (dx 2 … 8, dy 0 … 4, dz −3 … 3), every voxel of it listed once, and outside it its torches
-    // on the walls, the ladder up the south wall and the log stump beside it; no voxel twice.
+    // on the walls, the ladder up the south wall, the log stump beside it and their cobblestone footing; no voxel twice.
     const keys = REVIEW_HOUSE.map(keyOf);
     expect(new Set(keys).size).toBe(keys.length);
     for (let dy = 0; dy <= 4; dy++) for (let dz = -3; dz <= 3; dz++) for (let dx = 2; dx <= 8; dx++) expect(keys).toContain(`${dx},${dy},${dz}`);
     const outside = REVIEW_HOUSE.filter((b) => b[0] < 2 || b[0] > 8 || b[2] < -3 || b[2] > 3 || b[1] < 0 || b[1] > 4);
     expect(outside.length).toBeGreaterThan(0);
-    for (const b of outside) expect(['wall_torch', 'ladder', 'oak_log']).toContain(typeOf(b[3]));
+    for (const b of outside) expect(['wall_torch', 'ladder', 'oak_log', 'cobblestone']).toContain(typeOf(b[3]));
+  });
+
+  test('on a hillside lower than the site (ground 2 below the anchor) the outside ladder and the stump stand on a cobblestone footing, no sky under them (rulings R55; final review UI-5)', () => {
+    const STONE_V = (STONE << 8) >>> 0;
+    const COBBLE_V = valueOf('cobblestone');
+    // Anchor (0, 70, 0); the terrain is stone up to y 68 (dy −2), so dy −1 is air wherever the scene writes nothing.
+    const read = (_x: number, y: number): number => (y <= 68 ? STONE_V : 0);
+    const world = new Map<string, number>();
+    for (const ed of reviewSceneEdits(0, 70, 0, read)) world.set(`${ed.x},${ed.y},${ed.z}`, ed.value);
+    const after = (dx: number, dy: number, dz: number): number => world.get(`${dx},${70 + dy},${dz}`) ?? read(dx, 70 + dy);
+    const standing = REVIEW_HOUSE.filter((b) => b[1] === 0 && (typeOf(b[3]) === 'ladder' || typeOf(b[3]) === 'oak_log') && (b[0] > 8 || b[2] > 3));
+    expect(standing.map(keyOf)).toEqual(['8,0,4', '9,0,4']);
+    for (const [dx, , dz] of standing) {
+      expect([dx, dz, after(dx, -1, dz)]).toEqual([dx, dz, COBBLE_V]);
+      expect(after(dx, -2, dz)).toBe(STONE_V);
+    }
+    // On flat ground at the anchor's level (stone up to y 69) the footing replaces the ground voxel under them.
+    const flat = (_x: number, y: number): number => (y <= 69 ? STONE_V : 0);
+    const footing = reviewSceneEdits(0, 70, 0, flat).filter((ed) => ed.y === 69 && ed.z === 4 && (ed.x === 8 || ed.x === 9));
+    expect(footing).toEqual([8, 9].map((x) => ({ x, y: 69, z: 4, op: 'set', value: COBBLE_V, expect: STONE_V })));
   });
 
   test('the build pose sees an end face of an oak log on each axis (x, y and z), and a ladder outside the walls\' footprint', () => {

@@ -1027,7 +1027,8 @@ export const REVIEW_SITE = { dx0: -12, dx1: 10, dy0: 0, dy1: 10, dz0: -6, dz1: 1
  * (dz −1 … 1); a plank roof; a ladder up the north wall inside; wall torches inside on the east wall and outside on the
  * south and west walls. Outside: a ladder up the south wall at its east corner (dx 8, dy 0 … 2) and an upright log
  * stump beside it (dx 9, dz 4), whose top is the axis-y end face the build pose sees (the posts' tops are under the
- * beams).
+ * beams), both on a cobblestone footing at dy −1 (rulings R55): the site clears only dy ≥ 0, so where the terrain is
+ * lower than the anchor the sky would show under them.
  */
 export const REVIEW_HOUSE: readonly SceneVoxel[] = (() => {
   const planks = blockValue(OAK_PLANKS);
@@ -1063,6 +1064,8 @@ export const REVIEW_HOUSE: readonly SceneVoxel[] = (() => {
   // The outside ladder up the south wall's east corner, and the log stump beside it.
   for (let dy = 0; dy <= 2; dy++) out.push([8, dy, 4, valueOf('ladder[facing=south]')]);
   out.push([9, 0, 4, valueOf('oak_log[axis=y]')]);
+  // Their footing (rulings R55).
+  out.push([8, -1, 4, blockValue(COBBLESTONE)], [9, -1, 4, blockValue(COBBLESTONE)]);
   return out;
 })();
 
