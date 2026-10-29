@@ -33,7 +33,7 @@ function setup(textFocus = false, activeAtStart = true) {
   };
 }
 
-const key = (type: 'keydown' | 'keyup', code: string, k: string, mods: { ctrlKey?: boolean; repeat?: boolean } = {}) =>
+const key = (type: 'keydown' | 'keyup', code: string, k: string, mods: { ctrlKey?: boolean; metaKey?: boolean; shiftKey?: boolean; repeat?: boolean } = {}) =>
   Object.assign(new Event(type, { cancelable: true }), { code, key: k, ctrlKey: false, shiftKey: false, altKey: false, metaKey: false, repeat: false, ...mods });
 const wheel = (deltaY: number, ctrlKey = false, deltaMode = 0) => Object.assign(new Event('wheel', { cancelable: true }), { deltaY, deltaX: 0, deltaMode, ctrlKey });
 const mouse = (dx: number, dy: number) => Object.assign(new Event('mousemove'), { movementX: dx, movementY: dy });
@@ -509,6 +509,35 @@ describe('sprint: R held or a double-tapped W (Task 45b: Ctrl+W closes the tab)'
     expect([...input.held]).toEqual(['sprint']);
     doc.dispatchEvent(key('keyup', 'KeyR', 'r'));
     expect(input.held.size).toBe(0);
+    input.dispose();
+  });
+
+  test('Ctrl+R and Cmd+R reload: not prevented and no sprint, keyup harmless (ruling R61); Shift+R sprints', () => {
+    const { doc, input, actions } = setup();
+    for (const mods of [{ ctrlKey: true }, { metaKey: true }, { ctrlKey: true, shiftKey: true }]) {
+      const e = key('keydown', 'KeyR', 'r', mods);
+      doc.dispatchEvent(e);
+      expect(e.defaultPrevented, JSON.stringify(mods)).toBe(false);
+      expect(input.held.size, JSON.stringify(mods)).toBe(0);
+      const up = key('keyup', 'KeyR', 'r', mods);
+      doc.dispatchEvent(up);
+      expect(up.defaultPrevented).toBe(false);
+      expect(input.held.size).toBe(0);
+    }
+    expect(actions).toEqual([]);
+    // Plain R still sprints and is prevented.
+    const r = key('keydown', 'KeyR', 'r');
+    doc.dispatchEvent(r);
+    expect(r.defaultPrevented).toBe(true);
+    expect([...input.held]).toEqual(['sprint']);
+    doc.dispatchEvent(key('keyup', 'KeyR', 'r'));
+    expect(input.held.size).toBe(0);
+    // Shift is descend, and holding both is legitimate: Shift+R sprints.
+    doc.dispatchEvent(key('keydown', 'ShiftLeft', 'Shift', { shiftKey: true }));
+    const sr = key('keydown', 'KeyR', 'R', { shiftKey: true });
+    doc.dispatchEvent(sr);
+    expect(sr.defaultPrevented).toBe(true);
+    expect([...input.held].sort()).toEqual(['down', 'sprint']);
     input.dispose();
   });
 

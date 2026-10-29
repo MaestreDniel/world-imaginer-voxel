@@ -8,7 +8,8 @@ import { createSprintTap } from './sprintTap';
  * within 0.35 s of the previous one latches sprint until W's keyup (`sprintTap.ts`), and `clear()` ends the latch with
  * the held keys. A bound key's default is prevented with Ctrl held too, so moving with Ctrl down never opens the
  * browser's dialogs (Ctrl+D, Ctrl+S, Ctrl+A), while unbound keys and Ctrl combinations pass (Review Focus 1, ruling
- * P40). The wheel listener is not passive, so Ctrl+wheel changes the speed instead of zooming the page; the plain wheel
+ * P40); the exception is Ctrl+R and Cmd+R (Shift too), which reload as in any page and are not sprint (ruling R61: an
+ * edited world asks first through the page's beforeunload prompt). The wheel listener is not passive, so Ctrl+wheel changes the speed instead of zooming the page; the plain wheel
  * changes the hotbar slot (SP5a spec §4.1, D9), and Ctrl+wheel does too while `wheelCtrlAsSlot()` (walking).
  *
  * Mouse buttons (SP5a spec §4.1, D6): the first click on the canvas only takes the pointer lock; while the lock is held
@@ -27,6 +28,9 @@ import { createSprintTap } from './sprintTap';
 
 /** The actions held while their keys are down; the others fire `onAction`. */
 const HELD: ReadonlySet<Action> = new Set<Action>(['forward', 'back', 'left', 'right', 'up', 'down', 'sprint']);
+
+/** Ctrl+R or Cmd+R (Shift too): the browser's reload, never prevented nor resolved as sprint (ruling R61). */
+const isReload = (e: KeyboardEvent): boolean => e.code === 'KeyR' && (e.ctrlKey || e.metaKey);
 
 /** The `<input>` types a person types text into; a range, checkbox, radio, button or colour input is not one. */
 const TEXT_INPUT_TYPES: ReadonlySet<string> = new Set(['', 'text', 'search', 'email', 'url', 'tel', 'password', 'number']);
@@ -111,7 +115,7 @@ export function attachInput(
   };
 
   const onKeyDown = (e: KeyboardEvent): void => {
-    if (o.isTextFocus()) return;
+    if (o.isTextFocus() || isReload(e)) return;
     const a = resolveKey(e, map);
     if (a === null) return;
     if (a !== 'map' && !o.active()) return;
