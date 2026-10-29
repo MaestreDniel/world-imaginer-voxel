@@ -1,3 +1,4 @@
+import { readFileSync } from 'node:fs';
 import { afterEach, beforeEach, describe, expect, test, vi } from 'vitest';
 import { createHotbar } from '../../src/player/hotbar';
 import { mountBuildHud, SLOT_NAME_MS } from '../../src/ui/world/buildHud';
@@ -84,5 +85,24 @@ describe('mountBuildHud: the crosshair, the hotbar and the slot name (SP5a spec 
     expect(dom.body.children).toHaveLength(0);
     expect(vi.getTimerCount()).toBe(0);
     hud.dispose();
+  });
+
+  test('the slot name clears the notices and the palette panel (styles.css; Task 42b, the user\'s decision after UI-4)', () => {
+    const css = readFileSync(new URL('../../src/ui/styles.css', import.meta.url), 'utf8');
+    const rule = (sel: string): string => css.match(new RegExp(`^${sel.replace('.', '\\.')} \\{([^}]*)\\}`, 'm'))?.[1] ?? '';
+    // A rule's `bottom` in px (1rem = 16 px).
+    const bottom = (sel: string): number => {
+      const m = rule(sel).match(/(?:^|;)\s*bottom: ([\d.]+)(px|rem);/);
+      if (!m) throw new Error(`no bottom in ${sel}`);
+      return Number(m[1]) * (m[2] === 'rem' ? 16 : 1);
+    };
+    expect(bottom('.world-slot-name')).toBe(58);
+    expect(bottom('.world-notices')).toBe(84);
+    expect(bottom('.palette-panel')).toBe(84);
+    // The slot name is about 21.4 px tall (the final review's UI-4): its top, with a 22 px bound, sits at or below
+    // the notices' bottom and the palette panel's bottom, so neither overlaps or hides it.
+    const slotNameTop = bottom('.world-slot-name') + 22;
+    expect(slotNameTop).toBeLessThanOrEqual(bottom('.world-notices'));
+    expect(slotNameTop).toBeLessThanOrEqual(bottom('.palette-panel'));
   });
 });
