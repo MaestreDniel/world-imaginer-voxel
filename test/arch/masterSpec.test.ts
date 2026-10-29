@@ -72,7 +72,8 @@
  * risk 1 take §9's rewordings in place. §1 names each SP5a module in its entry, which exists (`SP5A_MODULES`, a row
  * added by each task that adds a module); §6.4's E1-E6 row gives edit→unload→reload's session part to SP5a and its
  * flush part to SP5b (the L3 and E5 commit); §1's test entry names `metrics/edit.metric.ts` and
- * `integration/edit.test.ts`.
+ * `integration/edit.test.ts`. At the exit (SP5a §8), a bare `SP5` is left only in the §10 split paragraph and the
+ * pinned historical receivers (the default receivers' deferred-reclamation primitive and SP4b's cut line).
  */
 import { existsSync, readdirSync, readFileSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
@@ -1308,5 +1309,18 @@ describe('master spec amendments (SP5a §9)', () => {
       expect(entry, `§1's ${head} entry does not name ${token}`).toContain(token);
       expect(existsSync(`${ROOT_DIR}${file}`), `${file} does not exist`).toBe(true);
     }
+  });
+
+  test('a bare SP5 is left only in the §10 split paragraph and the pinned historical receivers (SP5a spec §8)', () => {
+    const kept = ['SP5 was split on '];
+    const historical = ['SP4b deferred-reclamation primitive → SP5', '- **Cut line:** deferred reclamation\'s primitive (→ SP5)'];
+    const bare = text.split('\n').filter((l) => /\bSP5\b/.test(l));
+    for (const l of bare) {
+      if (kept.some((k) => l.startsWith(k))) continue;
+      const rest = historical.reduce((s, h) => s.split(h).join(''), l);
+      expect(rest, `a bare SP5 outside the split and the historical receivers: ${l.slice(0, 120)}`).not.toMatch(/\bSP5\b/);
+    }
+    for (const k of kept) expect(bare.some((l) => l.startsWith(k)), `no line starts with ${k}`).toBe(true);
+    for (const h of historical) expect(bare.some((l) => l.includes(h)), `no line holds ${h}`).toBe(true);
   });
 });
