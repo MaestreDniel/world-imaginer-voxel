@@ -385,23 +385,33 @@ export interface ReadThrough {
  *
  * With a `readThrough` (SP5a spec §2.5, D21), a D on a column for which `hasEntries` is true first awaits its `diff`
  * and passes it on the decorate (none when it resolves null: the sim failed, and D runs without an overlay); every
- * other job runs as without one, with no wait. The coordinator sees the wait as the D's own time in flight.
+ * other job runs as without one, with no wait. The coordinator sees the wait as the D's own time in flight. The pool
+ * stamps a job's generation and scope when it is issued, so such a D captures the pool's `epoch` and decorate scope
+ * (`scopeOf`) before the wait: if either moved when the diff resolves (a configure or a `bumpScope` meanwhile), it
+ * rejects with JobCancelled, as a queued D would, and decorates nothing; the coordinator requeues it behind its
+ * generation gate (SIM-4).
  */
 export function worldJobsOf(
-  pool: Pick<WorkerPool, 'epoch' | 'terrain' | 'decorate' | 'light' | 'meshColumn' | 'cancelWorld' | 'liveWorkers'>,
+  pool: Pick<WorkerPool, 'epoch' | 'scopeOf' | 'terrain' | 'decorate' | 'light' | 'meshColumn' | 'cancelWorld' | 'liveWorkers'>,
   readThrough: ReadThrough | null = null,
 ): CoordinatorJobs {
   const column = (d: ColumnDone): JobOutcome => ({ versions: d.versions, payload: null, generation: d.generation });
   const mesh = ({ payload, generation }: { readonly payload: ColumnMeshPayload; readonly generation: number }): JobOutcome => (
     { versions: payload.versions, payload, generation }
   );
+  /** D through the read-through: the diff, then the decorate, unless the generation or the decorate scope moved meanwhile. */
+  const readDecorate = (rt: ReadThrough, cx: number, cz: number): Promise<ColumnDone> => {
+    const epoch = pool.epoch;
+    const scope = pool.scopeOf('decorate');
+    return rt.diff(cx, cz).then((diff) => (
+      pool.epoch !== epoch || pool.scopeOf('decorate') !== scope ? Promise.reject(new JobCancelled()) : pool.decorate(cx, cz, diff ?? undefined)
+    ));
+  };
   return {
     run(stage, cx, cz, protoOnly, edit) {
       switch (stage) {
         case 'T': return pool.terrain(cx, cz, protoOnly).then(column);
-        case 'D': return (readThrough !== null && readThrough.hasEntries(cx, cz)
-          ? readThrough.diff(cx, cz).then((diff) => pool.decorate(cx, cz, diff ?? undefined))
-          : pool.decorate(cx, cz)).then(column);
+        case 'D': return (readThrough !== null && readThrough.hasEntries(cx, cz) ? readDecorate(readThrough, cx, cz) : pool.decorate(cx, cz)).then(column);
         case 'L': return pool.light(cx, cz).then(column);
         case 'MESH': return (edit ? pool.meshColumn(cx, cz, EDIT_MESH) : pool.meshColumn(cx, cz)).then(mesh);
       }

@@ -320,6 +320,22 @@ describe('worker pool: the per-scope epoch cells (SP4b spec §2.7)', () => {
     expect(log.filter((m) => m.type !== 'configure').map((m) => [m.type, 'scope' in m ? m.scope : null])).toEqual([['terrain', g]]);
     void running;
   });
+  test('scopeOf(phase) is the scope a job of that phase issued now would carry: its cell, or the generation without cells (SIM-4)', async () => {
+    const cells = createEpochCells(true).cells;
+    const pool = createWorkerPool(1, () => holdingWorker(), { epochCells: cells });
+    await pool.configure('42', DEFAULTS);
+    await pool.configure('42', DEFAULTS);
+    const g = pool.epoch;
+    const phases = ['terrain', 'decorate', 'light', 'mesh'] as const;
+    expect(phases.map((ph) => pool.scopeOf(ph))).toEqual([g, g, g, g]);
+    pool.bumpScope('decorate');
+    expect(phases.map((ph) => pool.scopeOf(ph))).toEqual([g, g + 1, g + 1, g + 1]);
+    expect(() => pool.scopeOf('nope' as never)).toThrow(RangeError);
+    const bare = createWorkerPool(1, () => holdingWorker());
+    await bare.configure('42', DEFAULTS);
+    await bare.configure('42', DEFAULTS);
+    expect([bare.epoch, bare.scopeOf('decorate')]).toEqual([1, 1]);
+  });
   test('after bumpScope(\'light\') a new L job succeeds (its scope is the new cell value; its epoch still the configure\'s, so no STALE_EPOCH)', async () => {
     const MiB = 1 << 20;
     const store = createStore({ shared: true, maxBlockBytes: 64 * MiB, maxByteBytes: 64 * MiB });

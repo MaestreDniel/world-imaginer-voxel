@@ -213,6 +213,7 @@ export function instrumentPool(pool: WorkerPool, log: LatencyLog, now: () => num
       return p;
     },
     bumpScope: (from) => pool.bumpScope(from),
+    scopeOf: (phase) => pool.scopeOf(phase),
     setAuxPolicy: (first, cap) => pool.setAuxPolicy(first, cap),
     tile(req, priority) {
       const e = pool.epoch;

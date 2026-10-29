@@ -234,6 +234,11 @@ export interface WorkerPool {
    */
   bumpScope(from: ScopePhase): void;
   /**
+   * The scope a job of `phase` issued now would carry: its epoch cell's value (the generation without cells; SP4b spec
+   * §2.7). D's read-through captures it with `epoch` before its wait (SIM-4). Throws RangeError for another phase.
+   */
+  scopeOf(phase: ScopePhase): number;
+  /**
    * The aux policy (SP4c spec §6.2, D11), two scalars the page sets every frame: a free worker takes, in order, an aux job
    * of priority < 0 (points, probes, landing, the standalone spawn; uncapped and not counted); then, with `first`
    * 'world', the world FIFO's next job, else an aux job while fewer than `cap` non-interactive aux jobs run; with 'aux',
@@ -626,6 +631,10 @@ export function createWorkerPool(size: number, spawn: () => WorkerLike, opts: Po
       const dropped = worldLane.filter(later);
       if (dropped.length > 0) worldLane = worldLane.filter((j) => !later(j));
       for (const j of dropped.concat(auxLane.removeWhere(later))) j.reject(new JobCancelled());
+    },
+    scopeOf(phase) {
+      if (!Object.hasOwn(EPOCH_CELL, phase)) throw new RangeError(`scopeOf: no phase ${String(phase)}`);
+      return cells === null ? epoch : Atomics.load(cells, EPOCH_CELL[phase]);
     },
     setAuxPolicy(first, cap) {
       if (first === auxFirst && cap === auxCap) return;

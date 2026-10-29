@@ -196,6 +196,7 @@ describe('the sim client (SP5a spec §2.1, §2.5)', () => {
     const done = (cx: number, cz: number): ColumnDone => ({ cx, cz, ms: 1, versions: null, generation: 0 });
     const pool = {
       epoch: 0,
+      scopeOf: () => 0,
       decorate: (cx: number, cz: number, diff?: ColumnDiff) => { decorates.push([cx, cz, diff]); return Promise.resolve(done(cx, cz)); },
     } as unknown as WorkerPool;
     const jobs = worldJobsOf(pool, rt);

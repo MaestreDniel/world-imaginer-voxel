@@ -2841,6 +2841,7 @@ describe('worldJobsOf (ruling P30, SP4b spec §3.13)', () => {
     const decorates: Array<{ readonly cx: number; readonly cz: number; readonly diff: ColumnDiff | undefined }> = [];
     const p = {
       epoch: 0,
+      scopeOf: () => 0,
       terrain: (cx: number, cz: number) => Promise.resolve(done(cx, cz, null)),
       decorate: (cx: number, cz: number, diff?: ColumnDiff) => { decorates.push({ cx, cz, diff }); return Promise.resolve(done(cx, cz, null)); },
       light: (cx: number, cz: number) => Promise.resolve(done(cx, cz, lightVersions)),
@@ -2886,6 +2887,36 @@ describe('worldJobsOf (ruling P30, SP4b spec §3.13)', () => {
     expect(decorates).toHaveLength(2);
   });
 
+  test.each<[string, (p: { epoch: number; decorateScope: number }) => void]>([
+    ['pool epoch (a configure)', (p) => { p.epoch++; p.decorateScope++; }],
+    ['decorate scope (a bumpScope)', (p) => { p.decorateScope++; }],
+  ])('a D whose %s moves while its diff is pending rejects JobCancelled and decorate is not called; an unmoved one decorates (SIM-4)', async (_n, move) => {
+    const decorates: Array<readonly [number, number]> = [];
+    const state = { epoch: 3, decorateScope: 3 };
+    const p = {
+      get epoch() { return state.epoch; },
+      scopeOf: (phase: string) => { expect(phase).toBe('decorate'); return state.decorateScope; },
+      decorate: (cx: number, cz: number) => { decorates.push([cx, cz]); return Promise.resolve(done(cx, cz, null)); },
+    } as unknown as WorkerPool;
+    const answers: Array<(d: ColumnDiff | null) => void> = [];
+    const { rt } = readThrough([[1, -2]], () => new Promise<ColumnDiff | null>((resolve) => { answers.push(resolve); }));
+    const jobs = worldJobsOf(p, rt);
+    for (const diff of [DIFF, null]) {
+      const d = jobs.run('D', 1, -2, false, false);
+      await flush();
+      move(state);
+      answers.shift()!(diff);
+      await expect(d).rejects.toBeInstanceOf(JobCancelled);
+    }
+    expect(decorates).toEqual([]);
+    // Unmoved since the run: the D decorates.
+    const d = jobs.run('D', 1, -2, false, false);
+    await flush();
+    answers.shift()!(DIFF);
+    await d;
+    expect(decorates).toEqual([[1, -2]]);
+  });
+
   test('a read-through whose `diff` resolves null (the sim failed) runs D without an overlay (SP5a spec §2.1, §2.5)', async () => {
     const { rt, asked } = readThrough([[1, -2]], () => Promise.resolve(null));
     const { p, decorates } = diffPool();
@@ -2903,6 +2934,8 @@ function poolOver(inner: CoordinatorJobs, decorates: Array<{ readonly cx: number
   const column = (cx: number, cz: number) => (o: JobOutcome): ColumnDone => ({ cx, cz, ms: 1, versions: o.versions, generation: o.generation });
   return {
     get epoch() { return inner.generation(); },
+    // No epoch cells: a phase's scope is the generation.
+    scopeOf: () => inner.generation(),
     terrain: (cx: number, cz: number, protoOnly = false) => inner.run('T', cx, cz, protoOnly, false).then(column(cx, cz)),
     decorate: (cx: number, cz: number, diff?: ColumnDiff) => {
       decorates.push({ cx, cz, diff });
@@ -2914,7 +2947,7 @@ function poolOver(inner: CoordinatorJobs, decorates: Array<{ readonly cx: number
     ),
     cancelWorld: (pred: (stage: Stage, cx: number, cz: number) => boolean) => inner.cancel(pred),
     liveWorkers: () => inner.liveWorkers(),
-  } satisfies Pick<WorkerPool, 'epoch' | 'terrain' | 'decorate' | 'light' | 'meshColumn' | 'cancelWorld' | 'liveWorkers'>;
+  } satisfies Pick<WorkerPool, 'epoch' | 'scopeOf' | 'terrain' | 'decorate' | 'light' | 'meshColumn' | 'cancelWorld' | 'liveWorkers'>;
 }
 
 describe('worldJobsOf over the sim client: the sim failure path (SP5a spec §2.1, §2.5, §6.3)', () => {
