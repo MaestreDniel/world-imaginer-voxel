@@ -73,7 +73,10 @@
  * added by each task that adds a module); §6.4's E1-E6 row gives edit→unload→reload's session part to SP5a and its
  * flush part to SP5b (the L3 and E5 commit); §1's test entry names `metrics/edit.metric.ts` and
  * `integration/edit.test.ts`. At the exit (SP5a §8), a bare `SP5` is left only in the §10 split paragraph and the
- * pinned historical receivers (the default receivers' deferred-reclamation primitive and SP4b's cut line).
+ * pinned historical receivers (the default receivers' deferred-reclamation primitive and SP4b's cut line); §4.13's
+ * read-through passes the D job's diff cloned with the decorate message; and the cut-line texts are worded by the
+ * decision taken: palette search was built (`palette.ts` filters its groups by the search box), so SP5a's cut line was
+ * not taken and nothing moved to SP10.
  */
 import { existsSync, readdirSync, readFileSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
@@ -1155,7 +1158,7 @@ describe('master spec amendments (SP5a §9)', () => {
     expect(sp5b.startsWith('**SP5b — Saved worlds** (M; SP5a)'), 'the SP5b header').toBe(true);
     expect(sp5b).toContain('saved places as a section of each saved world\'s map');
     expect(spEntry('SP5c', 'SP6').startsWith('**SP5c — The selection tool** (M; SP5b)'), 'the SP5c header').toBe(true);
-    expect(text).toContain('SP5a palette search → SP10; SP5b worlds-menu polish → SP10');
+    expect(text).toContain('SP5a palette search → SP10 (delivered in SP5a, so nothing moved); SP5b worlds-menu polish → SP10');
     expect(text).toContain('SP4b deferred-reclamation primitive → SP5 (delivered in SP4b, so nothing moved);');
     const critical = text.split('\n').find((l) => l.startsWith('Critical path: '));
     expect(critical).toContain('SP4c → SP5a → SP5b → SP5c → SP6');
@@ -1309,6 +1312,28 @@ describe('master spec amendments (SP5a §9)', () => {
       expect(entry, `§1's ${head} entry does not name ${token}`).toContain(token);
       expect(existsSync(`${ROOT_DIR}${file}`), `${file} does not exist`).toBe(true);
     }
+  });
+
+  test('§4.13\'s read-through passes the D job\'s diff, cloned with the decorate message (SP5a spec §2.5, §9)', () => {
+    const at = text.indexOf('### 4.13 ');
+    const readThrough = text.slice(at, text.indexOf('### 4.14 ', at)).split('\n').find((l) => l.startsWith('- **Read-through:**'));
+    expect(readThrough, 'no `- **Read-through:**` line in §4.13').toBeDefined();
+    expect(readThrough).toContain('passes it in the job (SP5a: cloned with the decorate message; only the sim\'s diff reply is transferred)');
+    expect(readThrough).not.toContain('transfers it in the job');
+  });
+
+  test('palette search was built, so SP5a\'s cut line was not taken and nothing moved to SP10 (SP5a spec §11)', () => {
+    // Built: the palette's search box filters its groups by the typed text (SP5a spec §4.4).
+    const palette = readFileSync(`${ROOT_DIR}src/ui/palette.ts`, 'utf8');
+    expect(palette).toContain('search.type = \'search\';');
+    expect(palette).toContain('paletteGroups(search.value)');
+    const cut = spEntry('SP5a', 'SP5b').split('\n').find((l) => l.startsWith('- **Cut line:**'));
+    expect(cut).toBe('- **Cut line:** palette search (→ SP10). It was not taken: palette search shipped in SP5a, so nothing moved.');
+    expect(text).toContain('SP5a palette search → SP10 (delivered in SP5a, so nothing moved);');
+    const received = spEntry('SP10', 'SP11').split('\n').find((l) => l.startsWith('- Received from SP5a (its spec §10; amended by SP5a):'));
+    expect(received, 'SP10 has no "Received from SP5a" line').toBeDefined();
+    expect(received).not.toContain('palette search if');
+    expect(received).toContain('Palette search, SP5a\'s cut line, was delivered in SP5a, so nothing moved here.');
   });
 
   test('a bare SP5 is left only in the §10 split paragraph and the pinned historical receivers (SP5a spec §8)', () => {
