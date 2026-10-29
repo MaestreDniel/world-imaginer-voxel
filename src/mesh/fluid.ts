@@ -9,8 +9,8 @@
  * - **height:** positions stay at the voxel's full height, `8·(ly + 1)` at the top (positions are whole 1/8 units);
  *   the water shader lowers each corner by its `cornerDrop` ninths. A surface voxel (no water above) has
  *   `cornerDrop` 1 on its top face's four corners and on its side faces' two top corners; every other corner has 0;
- * - **depth:** every face of voxel i carries `depth[i]` (`fluidDepths`: the column's vertical run, clamped to 15) in
- *   its data word and its key;
+ * - **depth:** every face of voxel i carries `depth[i]` (`fluidDepths`: the column's vertical water run, clamped to
+ *   15) in its data word and its key;
  * - **light:** §5.3's smooth light per vertex, AO off;
  * - **merge:** per axis and slice, the greedy keys `(face, depth, cornerDrop×4)`, `(sky×4, block×4)` and
  *   `(layer, tint)` (spec §5.6; the third key is constant in SP4a's world, where a water voxel's state is air, and
@@ -203,14 +203,17 @@ const COLUMN = new Uint8Array(WINDOW);
 
 /**
  * Writes into `out` (4096, section-local `y·256 + z·16 + x`) the water depth of every voxel of section `sy` of the
- * centre column (SP4a spec §5.5; ruling P24): the length of the vertical fluid run that holds the voxel, from the
- * run's surface down to the first non-fluid voxel, clamped to 15; 0 for a voxel without fluid. It reads the centre
- * column's final fluid; below y −64 and above y 319 count as non-fluid. Per (x, z) one pass over the 46 voxels from 15
- * below the section to 15 above it: a run reaching the window's edge from inside the section is at least 16 long, so
- * the clamp makes it exact. A section whose own fluid is uniform 0 fills zeros and reads nothing else.
+ * centre column (SP4a spec §5.5; ruling P24): the length of the vertical water run that holds the voxel, from the
+ * run's surface down to the first voxel without water, clamped to 15; 0 for a voxel without water. Only water counts
+ * (fluid type water): lava above or below ends a water run, and a lava voxel's depth is 0, which its opaque face does
+ * not read. It reads the centre column's final fluid; below y −64 and above y 319 count as dry. Per (x, z) one pass
+ * over the 46 voxels from 15 below the section to 15 above it: a run reaching the window's edge from inside the
+ * section is at least 16 long, so the clamp makes it exact. A section whose own fluid is uniform 0 fills zeros and
+ * reads nothing else.
  *
- * Returns whether any voxel of the section holds fluid (SP4b spec §3.13, D27): false on the uniform-dry return and
- * when every depth is 0, so the mesh job skips `meshFluid` for a dry section.
+ * Returns whether any voxel of the section holds fluid, water or lava (SP4b spec §3.13, D27): false on the uniform-dry
+ * return and when no voxel of the section holds fluid, so the mesh job skips `meshFluid` for a dry section and still
+ * meshes a section that holds only lava.
  */
 export function fluidDepths(nb: NeighborhoodReader, sy: number, out: Uint8Array): boolean {
   if ((sy | 0) !== sy || sy < 0 || sy >= SECTIONS) throw new RangeError(`fluidDepths: section ${sy} outside 0 … ${SECTIONS - 1}`);
@@ -232,7 +235,8 @@ export function fluidDepths(nb: NeighborhoodReader, sy: number, out: Uint8Array)
         const ly = k - REACH;
         const src = ly < 0 ? below : ly < 16 ? own : above;
         const byte = typeof src === 'number' ? src : src[((ly & 15) << 8) | col]!;
-        COLUMN[k] = isFluid(byte) ? 1 : 0;
+        COLUMN[k] = typeOf(byte) === WATER ? 1 : 0;
+        if (ly >= 0 && ly < 16 && isFluid(byte)) wet = true;
       }
       // Each run [a, e) of fluid voxels gets min(e − a, 15); only the section's voxels are written.
       for (let k = REACH; k < REACH + 16;) {
@@ -242,7 +246,6 @@ export function fluidDepths(nb: NeighborhoodReader, sy: number, out: Uint8Array)
           k++;
           continue;
         }
-        wet = true;
         let a = k;
         while (a > 0 && COLUMN[a - 1] === 1) a--;
         let e = k + 1;

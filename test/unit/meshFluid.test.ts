@@ -416,6 +416,32 @@ describe('fluidDepths (SP4a spec §5.5; ruling P24)', () => {
     expect(out.every((v) => v === 0)).toBe(true);
   });
 
+  test('water under or over lava keeps its own depth, lava gets 0, and a lava-only section is still wet', () => {
+    // At (3, 0): a 1-deep pond at y 100 with lava on it (y 101). At (4, 0): water at y 100 on a lava pool (y 97 … 99).
+    // At (5, 0): a 2-deep water run (y 98, 99) under 3 lava (y 100 … 102). Section 11 (y 112 … 127): lava at (6, 115).
+    const lava = storeWith((x, y, z) => {
+      if (z !== 0) return NO_FLUID;
+      if (x === 3) return y === 100 ? WATER_SOURCE : y === 101 ? LAVA_SOURCE : NO_FLUID;
+      if (x === 4) return y === 100 ? WATER_SOURCE : y >= 97 && y <= 99 ? LAVA_SOURCE : NO_FLUID;
+      if (x === 5) return y === 98 || y === 99 ? WATER_SOURCE : y >= 100 && y <= 102 ? LAVA_SOURCE : NO_FLUID;
+      if (x === 6) return y === 115 ? LAVA_SOURCE : NO_FLUID;
+      return NO_FLUID;
+    });
+    const d = depthsOf(lava, SY);
+    expect([d[local(3, 4, 0)], d[local(3, 5, 0)]]).toEqual([1, 0]);
+    expect([d[local(4, 1, 0)], d[local(4, 2, 0)], d[local(4, 3, 0)], d[local(4, 4, 0)]]).toEqual([0, 0, 0, 1]);
+    expect([d[local(5, 2, 0)], d[local(5, 3, 0)], d[local(5, 4, 0)], d[local(5, 6, 0)]]).toEqual([2, 2, 0, 0]);
+    // The lava-only section returns true, so the mesh job still runs meshFluid for its lava; every depth is 0.
+    const out = new Uint8Array(4096).fill(7);
+    expect(fluidDepths(lava, SY + 1, out)).toBe(true);
+    expect(out.every((v) => v === 0)).toBe(true);
+    // A uniform lava section likewise.
+    const sea = storeWith((_x, y) => (y >= 112 && y < 128 ? LAVA_SOURCE : NO_FLUID));
+    expect(sea.final(0, 0)!.sectionFluid(SY + 1)).toBe(LAVA_SOURCE);
+    expect(fluidDepths(sea, SY + 1, out.fill(7))).toBe(true);
+    expect(out.every((v) => v === 0)).toBe(true);
+  });
+
   test("a section whose own fluid is uniform 0 fills zeros and reads no other section", () => {
     const reads: number[] = [];
     const centre: Partial<ColumnView> = {
