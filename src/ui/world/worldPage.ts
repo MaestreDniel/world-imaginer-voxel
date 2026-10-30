@@ -94,6 +94,9 @@
  * the world's keys stop while the map owns the controls, the frame's `onRendered` moves the map's arrow, undo and redo
  * are installed for the page's lifetime (routed by owner since SP5a: `installUndoKeys`), and a fatal error or a context
  * loss disposes the overlay before the failure panel or the notice. The flight route creates neither; the bench creates the driver without the overlay.
+ * In a saved world the overlay's header holds the world-modification switch (`modifyMode.ts`, SP5b spec §3.6, D10, D25):
+ * the session is not writable from the open (`openSavedWorld`) until "Modify terrain" is switched on; an unsaved world
+ * edits live with no switch.
  *
  * Live editing (SP4c spec §4.3, §6.2): the coordinator's first epoch is the first draft's genKey interned
  * (`createEpochs`); the apply control (`applyControl.ts`) ticks before every `coordinator.update` and applies the
@@ -189,6 +192,7 @@ import { createEditPath, type EditOutcome, type EditPath } from './editPath';
 import { createFrameStep, eyeSkyLight } from './frameStep';
 import { createHoldRepeat, type HoldRepeat } from './holdRepeat';
 import { createMapOverlay, followSession, frameCapFor, worldMapView, type ControlsOwner, type MapOverlay } from './mapOverlay';
+import { createModifyMode, createModifySwitch } from './modifyMode';
 import { createReloader, createWorldUrl, installLeaveGuard, navigateTo, savedWorldUrl, type Reloader, type WorldUrl } from './reload';
 import { Y_MAX, Y_MIN, type WorldQuery } from './query';
 import { STATE_BOUNDS } from './stateBounds';
@@ -1722,7 +1726,8 @@ function navigatorLocks(): LockManagerLike | null {
  * (`openSavedSession`). A refusal after the lock (`readSavedWorld`'s, or the session's `initNotice`: tier 2 refused the
  * saved params and the session opened `default` with `{}`) is `unreadable` with that reason; it writes nothing, closes
  * the connection, releases the lock and carries no `load`, so no `record` with another world's genKey can follow and
- * the sim is never loaded without the lock. The page hands a refusal to `refuseOpen`.
+ * the sim is never loaded without the lock. The page hands a refusal to `refuseOpen`. An opened world's session is not
+ * writable: the world-modification mode is off whenever a world opens (§3.6, D10, D25).
  */
 export async function openSavedWorld(o: {
   readonly locks: LockManagerLike | null;
@@ -1755,6 +1760,8 @@ export async function openSavedWorld(o: {
     lock.release();
     return refuse(session.initNotice);
   }
+  // The modification mode is off at every open (§3.6): no terrain change until the user switches it on.
+  session.setWritable(false);
   const { load, kept } = openRequest(o.db, read.world, read.state, read.history);
   return { ok: true, opened: { kv, session, state: read.state, history: read.history, notices: read.notices, load, kept, lock } };
 }
@@ -3390,6 +3397,12 @@ export function mountWorldPage(root: HTMLElement, q: WorldQuery, hash: string, o
     // A landing still pending at teardown settles silently: no write to the disposed page's camera, no notice.
     teleport = teleporter;
     teardown.push(() => teleporter.dispose());
+    // The world-modification mode (SP5b spec §3.6, D10, D25): a saved world's map changes its terrain only while "Modify
+    // terrain" is on, off at every open; an unsaved world has no switch and edits live. The mode reaches the tool once
+    // the overlay mounts it (`tool` is read only after the overlay exists).
+    const modifySwitch = saved !== null ? createModifySwitch() : null;
+    const modifyMode = modifySwitch === null ? null : createModifyMode({ session, tool: () => mapOverlay.tool, checkbox: modifySwitch.checkbox });
+    if (modifyMode !== null) teardown.push(() => modifyMode.dispose());
     // The map overlay (SP4c spec §1.3): M before the reveal does nothing, since nothing exists to receive it.
     const mapOverlay = createMapOverlay({
       app: root,
@@ -3424,6 +3437,7 @@ export function mountWorldPage(root: HTMLElement, q: WorldQuery, hash: string, o
       viewChanged: () => worldUrl.viewChanged(),
       // The transient notices go to the tool's row while mode A covers the 3D; the Watch-live notice (D26, D27).
       notices,
+      modify: modifySwitch === null || modifyMode === null ? null : { element: modifySwitch.element, on: () => modifyMode.on },
     });
     mapRef = mapOverlay;
     // The smoke's test hook (SP4c spec §8.6; ?wiTest=1 only): the leak check's session listeners, the overlay closed and

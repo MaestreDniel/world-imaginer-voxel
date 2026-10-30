@@ -1373,6 +1373,8 @@ describe('master spec amendments (SP5b §9)', () => {
     [/^\s+ui\/shell\.ts /, 'worldsMenu.ts settingsPanel.ts (SP5b)', 'src/ui/worldsMenu.ts'],
     [/^\s+persist\/kv\.ts /, 'kvContract.ts diffCodec.ts wiworld.ts saves.ts (SP5b)', 'src/persist/wiworld.ts'],
     [/^\s+ui\/common\/\* /, 'files.ts (SP5b: downloadBlob, readBinaryFile)', 'src/ui/common/files.ts'],
+    [/^\s+ui\/world\/\* /, 'stateBounds.ts autosave.ts worldLock.ts modifyMode.ts places.ts placeDialog.ts (SP5b)', 'src/ui/world/modifyMode.ts'],
+    [/^\s+engine\/\s/, '(SP5b: session.ts\'s setWritable)', 'src/engine/session.ts'],
   ];
 
   test('§10\'s SP5b entry and its receivers (SP5b spec §9, §11)', () => {
@@ -1494,6 +1496,15 @@ describe('master spec amendments (SP5b §9)', () => {
     const at9 = text.indexOf('## 9. ');
     const lines9 = text.slice(at9, text.indexOf('## 10. ', at9)).split('\n');
     expect(lines9).toContain('| save binding | (generatorVersion, seed, stageHash(\'decorate\'), i.e. generation-scope params only) (SP5b: a mismatch opens with today\'s terrain and a notice) | (seed, paramsHash) only (silent misalignment after generator changes) |');
+  });
+
+  test('§2.7\'s fork dialog is replaced by the world-modification mode and its backup (SP5b spec D10, D11, §9)', () => {
+    const at = text.indexOf('### 2.7 ');
+    const s27 = text.slice(at, text.indexOf('## 3. Generation', at));
+    expect(s27.split('\n')).toContain('**World-modification mode and backup (SP5b).** Terrain changes from a saved world\'s map need the world-modification mode, off whenever a world opens; the first terrain change made while the mode is on in a world with edits first copies the world, as it was before the change, to a new world named \'<name> (before the change)\'; the world keeps its id.');
+    expect(s27).not.toContain('**Fork dialog.**');
+    expect(s27).not.toContain('**Rebase:**');
+    expect(text).not.toContain('During development this dialog is expected often');
   });
 
   test('§1 names each SP5b module in its entry, which exists', () => {

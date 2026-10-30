@@ -11,6 +11,8 @@
  * - bool (SP3e spec §2.1): a checkbox that commits on change; a refusal shows the draft's value again.
  * The Density tab's node form shows the number row of a ref's target (`createTargetRow`, SP3d spec §3.3).
  * Every control has a scope badge, a modified dot, a reset button and a tooltip (doc, range, unit, path).
+ * `setEditable(false)` (a saved world's modification mode off, SP5b spec D10) disables its value inputs and its reset,
+ * keeping each one's own reason: a field a rule fixes, a reset with nothing to reset, stay disabled when it is on again.
  * A slider drag is one gesture (§1.3); a numeric field commits on Enter or blur (urgent) and Escape restores
  * the draft value; a refused value keeps its text with a red border and the issue text under its row, and is
  * not applied.
@@ -62,6 +64,8 @@ export interface PanelControl {
   setLint(text: string | null): void;
   /** Focuses the control's first input. */
   focus(): void;
+  /** False disables the value inputs and the reset (SP5b spec D10); true gives each its own state back. */
+  setEditable(on: boolean): void;
 }
 
 /** What a slider row needs of the deps (the Density tab's target slider has no panel around it). */
@@ -173,9 +177,14 @@ function valueField(deps: RowDeps, id: string, issues: IssueBox, at: string, bas
   };
 }
 
-/** Disables an input with the reason in the tooltips of its row and label, or enables it. */
-function lockInput(line: HTMLElement, label: HTMLElement, tip: string, inputs: readonly (HTMLInputElement | HTMLSelectElement)[], reason: string | null): void {
-  for (const i of inputs) i.disabled = reason !== null;
+/**
+ * Disables an input with the reason in the tooltips of its row and label, or enables it; not `editable` (the modification
+ * mode off, SP5b spec D10) disables it too, with no reason shown.
+ */
+function lockInput(
+  line: HTMLElement, label: HTMLElement, tip: string, inputs: readonly (HTMLInputElement | HTMLSelectElement)[], reason: string | null, editable: boolean,
+): void {
+  for (const i of inputs) i.disabled = reason !== null || !editable;
   line.setAttribute('aria-disabled', String(reason !== null));
   line.title = reason === null ? '' : `fixed: ${reason}`;
   label.title = reason === null ? tip : `${tip}\nFixed: ${reason}`;
@@ -188,6 +197,7 @@ interface NumberRow {
   show(v: number): void;
   restore(): void;
   lock(reason: string | null): void;
+  setEditable(on: boolean): void;
 }
 
 function numberRow(deps: RowDeps, spec: ControlSpec, base: string, labelled: boolean, write: (value: unknown) => SessionResult): NumberRow {
@@ -203,6 +213,8 @@ function numberRow(deps: RowDeps, spec: ControlSpec, base: string, labelled: boo
   slider.step = '1';
   slider.setAttribute('aria-label', `${spec.label} slider`);
   let value: number | null = null;
+  let reason: string | null = null;
+  let editable = true;
   const thumb = () => {
     if (value !== null) slider.value = String(sliderPosition(spec, positions, slider.valueAsNumber, value));
   };
@@ -237,8 +249,13 @@ function numberRow(deps: RowDeps, spec: ControlSpec, base: string, labelled: boo
       field.restore();
       thumb();
     },
-    lock(reason) {
-      lockInput(line, label, tip, [slider, field.input], reason);
+    lock(r) {
+      reason = r;
+      lockInput(line, label, tip, [slider, field.input], reason, editable);
+    },
+    setEditable(on) {
+      editable = on;
+      lockInput(line, label, tip, [slider, field.input], reason, editable);
     },
   };
 }
@@ -249,6 +266,8 @@ interface Frame {
   readonly label: HTMLLabelElement;
   setModified(on: boolean): void;
   setLint(text: string | null): void;
+  /** False disables the reset (SP5b spec D10); true enables it again while the leaf is modified. */
+  setEditable(on: boolean): void;
 }
 
 function frame(deps: ControlDeps, c: ControlSpec, onReset: () => void, extra: readonly HTMLElement[] = []): Frame {
@@ -272,6 +291,8 @@ function frame(deps: ControlDeps, c: ControlSpec, onReset: () => void, extra: re
   });
   const lint = el('div', 'pp-lint');
   lint.hidden = true;
+  let resetOff = false;
+  let editable = true;
   head.append(label, ...extra, badge, dot, reset);
   element.append(head, lint);
   return {
@@ -280,12 +301,17 @@ function frame(deps: ControlDeps, c: ControlSpec, onReset: () => void, extra: re
     setModified(on) {
       const m = modifiedMarks(on);
       dot.classList.toggle('on', m.dot);
-      reset.disabled = m.resetDisabled;
+      resetOff = m.resetDisabled;
+      reset.disabled = resetOff || !editable;
     },
     setLint(text) {
       lint.textContent = text ?? '';
       lint.hidden = text === null;
       element.classList.toggle('pp-linted', text !== null);
+    },
+    setEditable(on) {
+      editable = on;
+      reset.disabled = resetOff || !editable;
     },
   };
 }
@@ -305,6 +331,10 @@ function numberControl(deps: ControlDeps, c: ControlSpec): PanelControl {
     restore: () => row.restore(),
     setLint: (t) => f.setLint(t),
     focus: () => row.field.input.focus(),
+    setEditable(on) {
+      row.setEditable(on);
+      f.setEditable(on);
+    },
   };
 }
 
@@ -314,6 +344,8 @@ export interface TargetRow {
   /** Shows the draft's value of the target. */
   sync(s: SessionState): void;
   restore(): void;
+  /** False disables the slider and the field (SP5b spec D10). */
+  setEditable(on: boolean): void;
 }
 
 /**
@@ -327,6 +359,7 @@ export function createTargetRow(deps: RowDeps, path: string): TargetRow {
     element: row.element,
     sync(s) { row.show(getPath(s.params, path) as number); },
     restore: () => row.restore(),
+    setEditable: (on) => row.setEditable(on),
   };
 }
 
@@ -335,6 +368,7 @@ interface AmplitudesRow {
   readonly element: HTMLElement;
   sync(d: NoiseDef): void;
   restore(): void;
+  setEditable(on: boolean): void;
 }
 
 function amplitudesRow(deps: ControlDeps, leaf: string, def: () => NoiseDef): AmplitudesRow {
@@ -354,6 +388,7 @@ function amplitudesRow(deps: ControlDeps, leaf: string, def: () => NoiseDef): Am
   const issues = issueBox();
   element.append(line, items, issues.element);
   const fields: ValueField[] = [];
+  let editable = true;
   toggle.addEventListener('change', (e) => {
     const r = run(deps, e, () => deps.session.set(leaf, amplitudesToggle(def(), toggle.checked)));
     if (r.ok) {
@@ -378,6 +413,7 @@ function amplitudesRow(deps: ControlDeps, leaf: string, def: () => NoiseDef): Am
         const f = valueField(deps, `pp-${at}[${i}]`, issues, at, leaf, (v) => deps.session.set(leaf, amplitudeItemChange(def(), i, v)));
         f.input.title = `octave ${i}`;
         f.input.setAttribute('aria-label', `amplitude of octave ${i}`);
+        f.input.disabled = !editable;
         fields.push(f);
         items.append(f.input);
       }
@@ -387,6 +423,11 @@ function amplitudesRow(deps: ControlDeps, leaf: string, def: () => NoiseDef): Am
     restore() {
       issues.clear();
       for (const f of fields) f.restore();
+    },
+    setEditable(on) {
+      editable = on;
+      toggle.disabled = !on;
+      for (const f of fields) f.input.disabled = !on;
     },
   };
 }
@@ -415,6 +456,8 @@ function noiseControl(deps: ControlDeps, c: ControlSpec): PanelControl {
     label.htmlFor = input.id;
     label.title = tip;
     const issues = issueBox();
+    let reason: string | null = null;
+    let editable = true;
     line.append(label, input);
     element.append(line, issues.element);
     input.addEventListener('change', (e) => {
@@ -426,7 +469,18 @@ function noiseControl(deps: ControlDeps, c: ControlSpec): PanelControl {
       issues.show(input, r.issues, `${leaf}.${field}`, leaf);
       syncChoices(def());
     });
-    return { element, lock: (reason: string | null) => lockInput(line, label, tip, [input], reason), clear: () => issues.clear() };
+    return {
+      element,
+      lock(r: string | null) {
+        reason = r;
+        lockInput(line, label, tip, [input], reason, editable);
+      },
+      setEditable(on: boolean) {
+        editable = on;
+        lockInput(line, label, tip, [input], reason, editable);
+      },
+      clear: () => issues.clear(),
+    };
   };
   const dbl = el('input');
   dbl.type = 'checkbox';
@@ -475,6 +529,14 @@ function noiseControl(deps: ControlDeps, c: ControlSpec): PanelControl {
     restore,
     setLint: (t) => f.setLint(t),
     focus: () => wavelength.field.input.focus(),
+    setEditable(on) {
+      wavelength.setEditable(on);
+      for (const field of NOISE_NUMBER_FIELDS) rows[field].setEditable(on);
+      amps.setEditable(on);
+      dblRow.setEditable(on);
+      remapRow.setEditable(on);
+      f.setEditable(on);
+    },
   };
 }
 
@@ -491,6 +553,8 @@ function splineControl(deps: ControlDeps, c: ControlSpec): PanelControl {
     restore() {},
     setLint: (t) => f.setLint(t),
     focus: () => open.focus(),
+    // "Edit" opens the drawer, which disables its own controls.
+    setEditable: (on) => f.setEditable(on),
   };
 }
 
@@ -507,6 +571,7 @@ function tableControl(deps: ControlDeps, c: ControlSpec): PanelControl {
     restore() {},
     setLint: (t) => f.setLint(t),
     focus: () => link.focus(),
+    setEditable: (on) => f.setEditable(on),
   };
 }
 
@@ -524,6 +589,7 @@ function treeControl(deps: ControlDeps, c: ControlSpec): PanelControl {
     restore() {},
     setLint: (t) => f.setLint(t),
     focus: () => link.focus(),
+    setEditable: (on) => f.setEditable(on),
   };
 }
 
@@ -560,6 +626,10 @@ function boolControl(deps: ControlDeps, c: ControlSpec): PanelControl {
     restore,
     setLint: (t) => f.setLint(t),
     focus: () => box.focus(),
+    setEditable(on) {
+      box.disabled = !on;
+      f.setEditable(on);
+    },
   };
 }
 

@@ -80,4 +80,47 @@ describe('the toolbar in the world (SP4c spec §2.5, D17, D26)', () => {
     expect(kids[kids.length - 2]!.textContent).toBe('Click: go here · Shift+click: pin');
     expect(kids.filter((k) => k.textContent === 'Click: go here · Shift+click: pin')).toHaveLength(1);
   });
+
+  test('`setEditable(false)` disables the seed, Same seed, New seed, the preset, the biome size, Undo and Redo; the layer, grid and cut-line controls stay enabled (SP5b spec D10)', () => {
+    const { document } = installDom();
+    const host = document.createElement('div');
+    // A session with a step to undo and one to redo: its Undo and Redo are enabled for that reason.
+    const withSteps = { ...session, canUndo: true, canRedo: true } as unknown as WorldSession;
+    const toolbar = createToolbar(host as unknown as HTMLElement, {
+      session: withSteps, notices, layer: 'biome', edit: (_e, fn) => fn(),
+      onLayer: () => {}, onGrid: () => {}, onCut: () => {}, open3dHref: () => '/?at=0,0',
+      embedded: { slot: document.createElement('span') as unknown as HTMLElement, hint: 'Click: go here · Shift+click: pin' },
+    });
+    const inputs = host.querySelectorAll('input');
+    const selects = host.querySelectorAll('select');
+    const buttons = host.querySelectorAll('button');
+    const byText = (t: string) => buttons.find((b) => b.textContent === t)!;
+    const terrain = [
+      inputs.find((i) => i.type === 'text')!, byText('Same seed'), byText('New seed'), selects.find((s) => s.title === 'Profile')!,
+      inputs.find((i) => i.type === 'range')!, byText('Undo'), byText('Redo'),
+    ];
+    const looking = [selects.find((s) => s.title === 'Map layer')!, inputs.find((i) => i.type === 'checkbox')!, buttons.find((b) => b.className === 'map-cut')!];
+    expect([...terrain, ...looking].every((c) => c !== undefined && !c.disabled)).toBe(true);
+    toolbar.setEditable(false);
+    expect(terrain.map((c) => c.disabled)).toEqual([true, true, true, true, true, true, true]);
+    expect(looking.map((c) => c.disabled)).toEqual([false, false, false]);
+    // A sync (every session change) keeps Undo and Redo disabled while not editable.
+    toolbar.sync();
+    expect([byText('Undo').disabled, byText('Redo').disabled]).toEqual([true, true]);
+    toolbar.setEditable(true);
+    expect(terrain.map((c) => c.disabled)).toEqual([false, false, false, false, false, false, false]);
+  });
+
+  test('a control disabled for its own reason stays disabled after `setEditable(true)`: Undo and Redo with no step', () => {
+    const { document } = installDom();
+    const host = document.createElement('div');
+    const toolbar = createToolbar(host as unknown as HTMLElement, {
+      session, notices, layer: 'biome', edit: (_e, fn) => fn(),
+      onLayer: () => {}, onGrid: () => {}, onCut: () => {}, open3dHref: () => '/?at=0,0', embedded: null,
+    });
+    const buttons = host.querySelectorAll('button');
+    toolbar.setEditable(false);
+    toolbar.setEditable(true);
+    expect(['Undo', 'Redo', 'New seed'].map((t) => buttons.find((b) => b.textContent === t)!.disabled)).toEqual([true, true, false]);
+  });
 });

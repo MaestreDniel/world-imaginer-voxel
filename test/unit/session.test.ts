@@ -443,3 +443,80 @@ describe('gestures and notifications', () => {
     }
   });
 });
+
+describe('setWritable: the world-modification mode\'s gate (SP5b spec D25)', () => {
+  /** Every value mutator, each called once with a value that would change the draft. */
+  const mutate = (w: WorldSession): unknown[] => [
+    w.setSeedText('77'),
+    w.newSeed(),
+    w.setProfile('large_biomes'),
+    w.set('rivers.widthMin', 6),
+    w.reset('rivers'),
+    w.undo(),
+    w.redo(),
+    w.load({ seedText: '5', profile: 'default', patch: { lakes: { p: 0.3 } } }),
+  ];
+
+  test('`setWritable(false)` refuses every mutator: state, epoch and history unchanged, no listener called', () => {
+    const w = session();
+    w.set('rivers.widthMin', 5);
+    w.set('rivers.widthMin', 7);
+    w.undo();
+    expect(w.writable).toBe(true);
+    w.setWritable(false);
+    expect(w.writable).toBe(false);
+    const log = changes(w);
+    const before = w.state;
+    const answers = mutate(w);
+    expect(w.state).toBe(before);
+    expect([w.state.params.rivers.widthMin, w.state.seedText]).toEqual([5, '1']);
+    expect(log).toEqual([]);
+    // An unchanged success: the current state, `{ ok: true, state }`, undo and redo false (no caller shows an error).
+    expect(answers).toEqual([before, before, { ok: true, state: before }, { ok: true, state: before }, { ok: true, state: before }, false, false, { ok: true, state: before }]);
+    // The history is as it was: one step to undo, one to redo.
+    expect([w.canUndo, w.canRedo]).toEqual([true, true]);
+    w.setWritable(true);
+    expect(w.redo() && w.state.params.rivers.widthMin).toBe(7);
+    expect(w.undo() && w.undo() && [w.state.params.rivers.widthMin, w.canUndo]).toEqual([8, false]);
+  });
+
+  test('it ends an open gesture first (`inGesture` false, one `gestureEnd`)', () => {
+    const w = session();
+    const log = changes(w);
+    w.beginGesture();
+    w.set('climate.scaleMul', 2);
+    w.setWritable(false);
+    expect(w.inGesture).toBe(false);
+    expect(log).toEqual(['gestureBegin lazy gesture', 'set lazy gesture', 'gestureEnd urgent']);
+    // The drag's edit was recorded as its step before the gate closed.
+    w.setWritable(true);
+    expect(w.undo() && w.state.params.climate.scaleMul).toBe(1);
+    // Off, gestures still begin and end; a second `setWritable(false)` outside a gesture notifies nothing.
+    w.setWritable(false);
+    const after = changes(w);
+    w.beginGesture();
+    w.endGesture();
+    w.setWritable(false);
+    expect(after).toEqual(['gestureBegin lazy gesture', 'gestureEnd urgent']);
+  });
+
+  test('`load(…, {force: true})` passes while off', () => {
+    const w = session();
+    w.setWritable(false);
+    const log = changes(w);
+    const r = w.load({ profile: 'default', patch: { rivers: { widthMin: 6 } } }, { record: false, force: true });
+    expect(r.ok && [r.state.params.rivers.widthMin, r.state.epoch]).toEqual([6, 1]);
+    expect(log).toEqual(['load urgent']);
+    expect(w.writable).toBe(false);
+  });
+
+  test('on again, every mutator works', () => {
+    const w = session();
+    w.setWritable(false);
+    w.setWritable(true);
+    const log = changes(w);
+    mutate(w);
+    expect(log).toEqual(['seed urgent', 'seed urgent', 'profile urgent', 'set urgent', 'reset urgent', 'undo urgent', 'redo urgent', 'load urgent']);
+    expect([w.state.seedText, w.state.profile, w.state.params.lakes.p]).toEqual(['5', 'default', 0.3]);
+  });
+});

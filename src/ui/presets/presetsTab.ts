@@ -1,8 +1,9 @@
 /**
  * The Presets tab (SP2b spec §3.4): export the draft to a `.wi10-preset.json` file under a name checked inline,
  * import such a file (its issues listed with their paths; one undo step; the seed is kept) and, under Advanced,
- * the JSON patch box showing the draft's minimal patch, whose Apply replaces the patch. DOM only: the rules are in
- * presetFile.ts.
+ * the JSON patch box showing the draft's minimal patch, whose Apply replaces the patch. In a saved world whose
+ * modification mode is off (SP5b spec D10, `setEditable`) the import and the patch box are disabled; Export stays. DOM
+ * only: the rules are in presetFile.ts.
  */
 import './presets.css';
 import type { SessionState, WorldSession } from '../../engine/session';
@@ -20,6 +21,11 @@ export interface PresetsDeps {
 
 export interface PresetsTab {
   readonly element: HTMLElement;
+  /**
+   * The world-modification mode (SP5b spec D10): false disables Import and the JSON patch box with its Apply; true
+   * enables them again (Apply keeps its own reason, the draft's patch shown). Export stays.
+   */
+  setEditable(on: boolean): void;
   dispose(): void;
 }
 
@@ -31,6 +37,8 @@ const messageOf = (e: unknown): string => (e instanceof Error ? e.message : Stri
 export function createPresetsTab(host: HTMLElement, deps: PresetsDeps): PresetsTab {
   const { session, notices } = deps;
   const root = el('div', 'pt');
+  /** False while the world-modification mode is off (SP5b spec D10). */
+  let editable = true;
   const button = (id: string, text: string, tip: string): HTMLButtonElement => {
     const b = el('button', '', text);
     b.type = 'button';
@@ -122,7 +130,7 @@ export function createPresetsTab(host: HTMLElement, deps: PresetsDeps): PresetsT
   // The input is cleared once the read is over, so that choosing the same file again fires `change`.
   fileInput.addEventListener('change', () => {
     const file = fileInput.files?.[0];
-    if (file === undefined) return;
+    if (file === undefined || !editable) return;
     setMessage(importMsg, `reading ${file.name} …`, 'info');
     setIssues(importIssues, []);
     void readTextFile(file).then((text) => {
@@ -166,7 +174,7 @@ export function createPresetsTab(host: HTMLElement, deps: PresetsDeps): PresetsT
   let shown: string | null = null;
   const renderPatchButtons = () => {
     const edited = patchBox.value !== shown;
-    applyBtn.disabled = !edited;
+    applyBtn.disabled = !editable || !edited;
     revertBtn.disabled = !edited && !patchBox.classList.contains('pt-invalid');
   };
   const showDraftPatch = (text: string) => {
@@ -178,6 +186,7 @@ export function createPresetsTab(host: HTMLElement, deps: PresetsDeps): PresetsT
     renderPatchButtons();
   };
   const applyPatch = (e: Event) => {
+    if (!editable) return;
     let r!: PatchApply;
     deps.edit(e, () => { r = applyPatchText(session, patchBox.value); });
     if (r.ok) {
@@ -215,6 +224,11 @@ export function createPresetsTab(host: HTMLElement, deps: PresetsDeps): PresetsT
   host.append(root);
   return {
     element: root,
+    setEditable(on) {
+      editable = on;
+      for (const c of [importBtn, fileInput, patchBox]) c.disabled = !on;
+      renderPatchButtons();
+    },
     dispose() {
       unsubscribe();
       root.remove();

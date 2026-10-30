@@ -19,6 +19,9 @@
  *   holding it only while the buffer is clean or parses and the path is in the session's tree (`caretTarget`), else it
  *   moves only the editor's highlight.
  * - The slice viewer's cell is `sliceHost`; mounting the viewer and the tab on the page is the page's (`mapPage.ts`).
+ * - In a saved world whose modification mode is off (SP5b spec D10, `setEditable`) the node form's controls, the tree's
+ *   mute toggles and the JSON editor's text, Apply and Reset are disabled; the tree, the selection, the sub-tabs and the
+ *   slice viewer work as ever.
  * Hidden drawer tabs keep their DOM, so selection, expansion and the buffers survive a switch; the scroll offsets of the
  * tree, the form and the text are saved when the tab is hidden and restored when it is shown (`setShown`). Every
  * selection follows the session (`followNode`) after undo, redo, reset or a renumbering edit. Text only through
@@ -63,6 +66,11 @@ export interface DensityTab {
   onSelect(fn: (sel: Selection) => void): () => void;
   /** The node form's "value at the hover" line (§3.6), or null to hide it. */
   setHoverValue(text: string | null): void;
+  /**
+   * The world-modification mode (SP5b spec D10): false disables every control of the node form (rebuilt forms too), the
+   * tree's mute toggles and the JSON editor's edits; true enables them again (Apply keeps its own reason, a clean buffer).
+   */
+  setEditable(on: boolean): void;
   /** The drawer shows or hides the tab: scroll offsets are saved on hide and restored on show; a hidden tab skips renders. */
   setShown(shown: boolean): void;
   dispose(): void;
@@ -93,6 +101,8 @@ export function createDensityTab(host: HTMLElement, deps: DensityTabDeps): Densi
   let subTab: DensitySubTab = DEFAULT_SUB_TAB;
   let shown = true;
   let stale = false;
+  /** False while the world-modification mode is off (SP5b spec D10). */
+  let editable = true;
   let saved: { tree: number; form: number } | null = null;
   const listeners = new Set<(sel: Selection) => void>();
   /** The ends of the target sliders' open drags, run by dispose (SP4c spec §1.2). */
@@ -228,6 +238,7 @@ export function createDensityTab(host: HTMLElement, deps: DensityTabDeps): Densi
       v.mute = mute;
     }
     v.mute.checked = r.muted;
+    v.mute.disabled = !editable;
     v.mute.title = r.muted ? 'Unmute this tap' : "Mute this tap: the neutral value of its parent replaces its subtree";
     v.mute.setAttribute('aria-label', `mute ${r.title}`);
   };
@@ -283,6 +294,15 @@ export function createDensityTab(host: HTMLElement, deps: DensityTabDeps): Densi
   /** The keys of the form's head (path and op select) and of its action buttons, each rebuilt only when it changes. */
   let headKey = '';
   let actionsKey = '';
+  /**
+   * Every control of the form disabled while not `editable` (SP5b spec D10), else enabled: none of them is disabled for a
+   * reason of its own (an op that cannot validate is a disabled option, not a disabled select).
+   */
+  const applyFormEditable = (): void => {
+    for (const tag of ['input', 'select', 'button', 'textarea']) {
+      for (const c of formPane.querySelectorAll<HTMLInputElement>(tag)) c.disabled = !editable;
+    }
+  };
   /** What each control refreshes on a session change that keeps the form's structure (ref labels, target sliders). */
   let syncs: ((s: SessionState) => void)[] = [];
   let lintKey: readonly unknown[] = [];
@@ -513,6 +533,7 @@ export function createDensityTab(host: HTMLElement, deps: DensityTabDeps): Densi
       formActionsBox.replaceChildren(...acts);
     }
     formFieldsBox.replaceChildren(...fields.map(controlOf));
+    applyFormEditable();
   }
 
   function renderForm(s: SessionState): void {
@@ -619,6 +640,12 @@ export function createDensityTab(host: HTMLElement, deps: DensityTabDeps): Densi
     onSelect(fn) {
       listeners.add(fn);
       return () => { listeners.delete(fn); };
+    },
+    setEditable(on) {
+      editable = on;
+      applyFormEditable();
+      for (const v of rowViews.values()) if (v.mute !== null) v.mute.disabled = !on;
+      view.setEditable(on);
     },
     setHoverValue(text) {
       hoverLine.textContent = text === null ? '' : `value at the hover: ${text}`;

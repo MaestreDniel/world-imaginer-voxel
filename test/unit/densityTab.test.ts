@@ -6,12 +6,13 @@
  * highlight split and its keys (Ctrl/Cmd+Enter applies, Escape reverts); and the target slider of a ref field (the
  * parameter panel's row of the target, written on its leaf, a noise's clampSigma as a partial noise).
  */
-import { describe, expect, test } from 'vitest';
+import { afterEach, describe, expect, test, vi } from 'vitest';
 import { getPath } from '../../src/core/params/kit';
 import { DEFAULTS } from '../../src/core/params/defaults';
 import { WorldSession } from '../../src/engine/session';
 import { ALLOWED_REF_TARGETS } from '../../src/gen/density/source';
 import { validateParamTrees } from '../../src/gen/trees';
+import { createDensityTab } from '../../src/ui/inspector/densityTab';
 import {
   anchorOfScroll, createScrollKeeper, EDITOR_LINE_PX, editorKeyAction, highlightParts, lineIndexAt, lineStart, scrollOfAnchor,
   scrollTarget, scrollTopForLine,
@@ -21,6 +22,7 @@ import {
   DEFAULT_SUB_TAB, DENSITY_STACK_PX, DENSITY_SUB_TAB_LABELS, DENSITY_SUB_TABS, DENSITY_WIDE_PX, densityLayout, shownPanes,
 } from '../../src/ui/inspector/model';
 import { refTargetControl, refTargetWrite, sliderToValue } from '../../src/ui/paramPanel/model';
+import { installDom, type FakeElement } from './fixtures/domShim';
 
 describe('layout mode by drawer width (§3.1)', () => {
   test('the four columns from 1,200 px, the Slice/JSON sub-tabs below, stacked below 900 px', () => {
@@ -206,5 +208,61 @@ describe('the target slider of a ref field (§3.3)', () => {
     for (const p of ['density.defs', 'climate.T.wavelength', 'density.noises.jag.octaves.x', 'nope', 'density.noises.jag.remap']) {
       expect(() => refTargetControl(p), p).toThrow(RangeError);
     }
+  });
+});
+
+describe('the Density tab in a saved world\'s modification mode (SP5b spec D10)', () => {
+  afterEach(() => { vi.unstubAllGlobals(); });
+
+  /** Every descendant of `e`. */
+  const all = (e: FakeElement): FakeElement[] => e.children.flatMap((c) => [c, ...all(c)]);
+
+  test('`setEditable(false)`: the form\'s inputs disabled, the tree, the selection and the slices still work', () => {
+    const dom = installDom();
+    vi.stubGlobal('ResizeObserver', class { observe(): void {} disconnect(): void {} });
+    const session = new WorldSession(() => [1, 2], { validateParams: validateParamTrees });
+    const host = dom.document.createElement('div');
+    const tab = createDensityTab(host as unknown as HTMLElement, { session, edit: (_e, fn) => fn(), clock: { setTimeout: () => 0, clearTimeout: () => {} } });
+    const of = (cls: string): FakeElement[] => all(host).filter((e) => e.className.split(' ').includes(cls));
+    const form = of('it-form')[0]!;
+    const formControls = (): FakeElement[] => ['input', 'select', 'button', 'textarea'].flatMap((t) => form.querySelectorAll(t));
+    const json = of('je-bar')[0]!;
+    const jsonButton = (t: string): FakeElement => json.children.find((b) => b.textContent === t)!;
+    expect(formControls().length).toBeGreaterThan(0);
+    expect(formControls().filter((c) => c.disabled)).toEqual([]);
+
+    tab.setEditable(false);
+    expect(formControls().filter((c) => !c.disabled)).toEqual([]);
+    // The JSON editor: its text read-only, Apply and Reset disabled.
+    expect((of('je-text')[0] as unknown as { readOnly: boolean }).readOnly).toBe(true);
+    expect([jsonButton('Apply').disabled, jsonButton('Reset').disabled]).toEqual([true, true]);
+    // The tree: a row's button selects its node and the selection's listeners (the slice viewer) hear it; the form shown
+    // for it is disabled too.
+    const heard: string[] = [];
+    tab.onSelect((sel) => heard.push(`${sel.leaf}.${sel.path}`));
+    const was = tab.selection;
+    const other = of('it-node').find((b) => b.getAttribute('aria-current') !== 'true')!;
+    other.click();
+    expect(tab.selection).not.toEqual(was);
+    expect(heard).toEqual([`${tab.selection.leaf}.${tab.selection.path}`]);
+    expect(formControls().length).toBeGreaterThan(0);
+    expect(formControls().filter((c) => !c.disabled)).toEqual([]);
+    // Looking stays: the tree's buttons, Expand to selection, the Slice and JSON sub-tabs, the slice cell.
+    expect(of('it-node').every((b) => !b.disabled)).toBe(true);
+    expect(of('it-toggle').filter((t) => t.textContent !== '').every((t) => !t.disabled)).toBe(true);
+    expect(all(of('it-tree-head')[0]!).every((b) => !b.disabled)).toBe(true);
+    expect(of('it-subtabs')[0]!.children.every((b) => !b.disabled)).toBe(true);
+    expect(tab.sliceHost.hidden).toBe(false);
+    // A tap's mute in the tree is an edit: disabled.
+    expect(of('it-mute').length).toBeGreaterThan(0);
+    expect(of('it-mute').every((m) => m.disabled)).toBe(true);
+
+    tab.setEditable(true);
+    expect(formControls().filter((c) => c.disabled)).toEqual([]);
+    expect((of('je-text')[0] as unknown as { readOnly: boolean }).readOnly).toBe(false);
+    expect(jsonButton('Reset').disabled).toBe(false);
+    // Apply keeps its own reason: the buffer is the current tree.
+    expect(jsonButton('Apply').disabled).toBe(true);
+    expect(of('it-mute').every((m) => !m.disabled)).toBe(true);
   });
 });

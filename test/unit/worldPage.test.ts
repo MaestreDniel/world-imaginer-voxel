@@ -2295,6 +2295,24 @@ describe('opening a saved world (SP5b spec §3.4 steps 2-3, D14, D22)', () => {
     expect(free.held()).toBe(0);
   });
 
+  test('a saved world\'s session is not writable after the open; an unsaved world\'s is (SP5b spec §3.6, D10, D25; ruling P29)', async () => {
+    const { kv } = await created();
+    const r = await openSavedWorld({ locks: free.locks, open: () => Promise.resolve(kv), db: 'wi10', id: ID, bounds: STATE_BOUNDS, random });
+    expect(r.ok).toBe(true);
+    if (!r.ok) return;
+    const s = r.opened.session;
+    const opened = s.state;
+    expect(s.writable).toBe(false);
+    // The modification mode is off at the open: a terrain change changes nothing.
+    s.setSeedText('77');
+    expect(s.state).toBe(opened);
+    r.opened.lock.release();
+    // An unsaved world's session (run()'s `openMapSession`) edits live.
+    const unsaved = openMapSession(DEFAULT_MAP_STATE, random);
+    expect(unsaved.writable).toBe(true);
+    expect(unsaved.setSeedText('77').seedText).toBe('77');
+  });
+
   test('after a permuted-table open, the kept record\'s `stateTable` equals `todayStateTable()`', async () => {
     const { kv } = await created({ stateTable: permuted() });
     const history: HistoryRecord = { worldId: ID, done: [{ edits: [{ x: 0, y: 64, z: 0, before: NO_VALUE, after: 1 << 8 }] }], undone: [] };

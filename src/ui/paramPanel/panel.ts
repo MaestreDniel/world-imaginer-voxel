@@ -3,7 +3,8 @@
  * section (collapsed by default; the open sections are stored with the page layout) whose header shows the
  * label, "n modified" and a section reset; every leaf is a control (controls.ts). The cross-field lints
  * (lints.ts) are warnings: listed at the top of the panel (a click reveals the first leaf they name) and shown
- * under the controls they name. The panel follows the session: it shows the draft after every change.
+ * under the controls they name. The panel follows the session: it shows the draft after every change. In a saved world
+ * whose modification mode is off (SP5b spec D10) its value inputs and resets are disabled (`setEditable`).
  */
 import './panel.css';
 import type { SessionResult, SessionState } from '../../engine/session';
@@ -25,6 +26,12 @@ export interface PanelDeps extends ControlDeps {
 export interface ParamPanel {
   /** Opens the sections down to a leaf's control, scrolls it into view and focuses it. */
   reveal(path: string): void;
+  /**
+   * The world-modification mode (SP5b spec D10): false disables every value input, every control's reset and every
+   * section's Reset; true gives each its own state back (a field a rule fixes, a Reset with nothing modified stay
+   * disabled). The section toggles and the links to the drawer and the Biomes tab stay.
+   */
+  setEditable(on: boolean): void;
   /** Stops following the session and ends a slider drag still open (its window listeners, its gesture); the DOM stays. */
   dispose(): void;
 }
@@ -45,6 +52,7 @@ export function createParamPanel(host: HTMLElement, panelDeps: PanelDeps): Param
   const deps: PanelDeps = { ...panelDeps, drags };
   const controls = new Map<string, PanelControl>();
   const sections: SectionView[] = [];
+  let editable = true;
 
   const run = (e: Event, fn: () => SessionResult) => deps.edit(e, () => { fn(); });
 
@@ -98,7 +106,7 @@ export function createParamPanel(host: HTMLElement, panelDeps: PanelDeps): Param
       sync() {
         const n = session.modifiedCount(spec.path);
         count.textContent = modifiedText(n);
-        reset.disabled = n === 0;
+        reset.disabled = n === 0 || !editable;
       },
     };
     sections.push(view);
@@ -163,6 +171,11 @@ export function createParamPanel(host: HTMLElement, panelDeps: PanelDeps): Param
 
   return {
     reveal,
+    setEditable(on) {
+      editable = on;
+      for (const ctl of controls.values()) ctl.setEditable(on);
+      for (const v of sections) v.sync();
+    },
     dispose() {
       unsubscribe();
       for (const end of [...drags]) end();

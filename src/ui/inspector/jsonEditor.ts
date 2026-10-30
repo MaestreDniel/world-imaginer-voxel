@@ -7,7 +7,9 @@
  * (a click selects the issue's node and scrolls the text to it). Escape reverts the buffer; the shortcut layer leaves
  * Escape and Ctrl+Z to text entry, so the drawer stays open and Ctrl+Z is the browser's text undo. The buffer, the
  * dirty rule, the debounce and Apply / Reset / Escape are `editorModel.ts`'s, the line arithmetic too; this file only
- * binds a model (one per tree leaf; the tab binds the selected root's) to the DOM. Text only through `textContent`.
+ * binds a model (one per tree leaf; the tab binds the selected root's) to the DOM. Text only through `textContent`. In a
+ * saved world whose modification mode is off (SP5b spec D10, `setEditable`) the text is read-only and Apply (with its
+ * Ctrl+Enter) and Reset are disabled.
  */
 import { el } from '../common/dom';
 import {
@@ -44,6 +46,8 @@ export interface JsonEditorView {
    * while it was hidden (written then, a hidden textarea ignores it), else the offsets kept when it was hidden.
    */
   restoreScroll(): void;
+  /** The world-modification mode (SP5b spec D10): false makes the text read-only and disables Apply and Reset. */
+  setEditable(on: boolean): void;
   dispose(): void;
 }
 
@@ -65,6 +69,8 @@ export function createJsonEditor(deps: JsonEditorDeps): JsonEditorView {
   let issuesKey = '';
   /** A caret event happened; reported once the buffer's ranges are known. */
   let caretMoved = false;
+  /** False while the world-modification mode is off (SP5b spec D10). */
+  let editable = true;
   /** The scroll owed to the text while it is not displayed (`editorModel.ts`'s keeper). */
   const keeper = createScrollKeeper();
 
@@ -185,7 +191,7 @@ export function createJsonEditor(deps: JsonEditorDeps): JsonEditorView {
     paintMirror(s);
     status.textContent = STATUS_TEXT[s.status];
     status.dataset['status'] = s.status;
-    apply.disabled = s.clean;
+    apply.disabled = !editable || s.clean;
     stale.hidden = !s.stale;
     text.classList.toggle('je-dirty', !s.clean);
     renderIssues(s);
@@ -221,8 +227,8 @@ export function createJsonEditor(deps: JsonEditorDeps): JsonEditorView {
     const action = editorKeyAction(e);
     if (action === null || model === null) return;
     e.preventDefault();
-    if (action === 'apply') deps.edit(e, () => { model!.apply(); });
-    else model.revert();
+    if (action !== 'apply') model.revert();
+    else if (editable) deps.edit(e, () => { model!.apply(); });
   });
 
   return {
@@ -249,6 +255,12 @@ export function createJsonEditor(deps: JsonEditorDeps): JsonEditorView {
     },
     restoreScroll() {
       write(keeper.shown(text.value, viewOf()));
+    },
+    setEditable(on) {
+      editable = on;
+      text.readOnly = !on;
+      reset.disabled = !on;
+      apply.disabled = !on || (model?.state.clean ?? true);
     },
     dispose() {
       resizeObserver?.disconnect();

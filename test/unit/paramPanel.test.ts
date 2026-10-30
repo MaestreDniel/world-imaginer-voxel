@@ -1,7 +1,8 @@
 /**
  * The parameter panel's disposal (SP4c spec §1.2; Task 12 review, minor 1): a slider drag begun on pointerdown installs
  * window pointerup/pointercancel listeners and opens a session gesture; disposing the panel mid-drag (the world's map
- * tool disposed on a fatal error or a context loss) removes both listeners and ends the gesture.
+ * tool disposed on a fatal error or a context loss) removes both listeners and ends the gesture. And the world-modification
+ * mode's cue (SP5b spec D10): `setEditable(false)` disables the panel's value inputs and resets, keeping a rule's reason.
  */
 import { afterEach, describe, expect, test, vi } from 'vitest';
 import { WorldSession, type ChangeKind } from '../../src/engine/session';
@@ -90,5 +91,47 @@ describe('the parameter panel disposed mid-drag (Task 12 review, minor 1)', () =
     expect(drags.size).toBe(0);
     expect(session.inGesture).toBe(false);
     expect([win.listeners('pointerup'), win.listeners('pointercancel')]).toEqual([0, 0]);
+  });
+});
+
+describe('the parameter panel in a saved world\'s modification mode (SP5b spec D10, D25)', () => {
+  afterEach(() => { vi.unstubAllGlobals(); });
+
+  test('`setEditable(false)` disables every value input and section Reset; a control a rule disables stays disabled after `setEditable(true)`', () => {
+    const dom = installDom();
+    const session = new WorldSession(() => [1, 2], { validateParams: validateParamTrees });
+    // A modified leaf: its own reset and its section's Reset are enabled.
+    session.set('rivers.widthMin', 6);
+    const host = dom.document.createElement('div');
+    const panel = createParamPanel(host as unknown as HTMLElement, {
+      session, edit: (_e, fn) => fn(), openSpline: () => {}, showBiomes: () => {}, openTree: () => {},
+      sections: { sectionOpen: () => false, setSectionOpen: () => {} },
+    });
+    const values = (): FakeElement[] => [...host.querySelectorAll('input'), ...host.querySelectorAll('select')];
+    const buttons = (cls: string) => host.querySelectorAll('button').filter((b) => b.className.split(' ').includes(cls));
+    // Disabled by a rule at the mount: a 2D noise's yScale, a density noise's remap.
+    const ruled = values().filter((c) => c.disabled);
+    expect(ruled.some((c) => c.id.endsWith('.yScale'))).toBe(true);
+    expect(ruled.some((c) => c.id.endsWith('.remap'))).toBe(true);
+    const enabledResets = [...buttons('pp-section-reset'), ...buttons('pp-reset')].filter((b) => !b.disabled);
+    expect(enabledResets.length).toBeGreaterThanOrEqual(2);
+    expect(values().length).toBeGreaterThan(ruled.length);
+
+    panel.setEditable(false);
+    expect(values().filter((c) => !c.disabled)).toEqual([]);
+    expect([...buttons('pp-section-reset'), ...buttons('pp-reset')].filter((b) => !b.disabled)).toEqual([]);
+    // Looking stays: the section toggles, a spline's Edit, the Biomes and Density links.
+    for (const cls of ['pp-toggle', 'pp-edit', 'pp-link']) {
+      expect(buttons(cls).length, cls).toBeGreaterThan(0);
+      expect(buttons(cls).every((b) => !b.disabled), cls).toBe(true);
+    }
+    // A session change while not editable (the panel follows it) keeps every value input and reset disabled.
+    session.set('rivers.widthMin', 7);
+    expect(values().filter((c) => !c.disabled)).toEqual([]);
+    expect([...buttons('pp-section-reset'), ...buttons('pp-reset')].filter((b) => !b.disabled)).toEqual([]);
+
+    panel.setEditable(true);
+    expect(values().filter((c) => c.disabled)).toEqual(ruled);
+    expect([...buttons('pp-section-reset'), ...buttons('pp-reset')].filter((b) => !b.disabled)).toEqual(enabledResets);
   });
 });

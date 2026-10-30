@@ -2,7 +2,8 @@
  * WorldSession (SP2b spec §1): the single owner of the draft — seed text, profile, a minimal canonical
  * patch over the profile, the resolved params and an epoch that bumps only when the seed or the params
  * change. Every editor, the biome-size slider, the URL and preset loads go through it; gestures, a
- * global undo/redo history and change notifications sit on top (§1.3).
+ * global undo/redo history and change notifications sit on top (§1.3). In a saved world the world-modification mode
+ * gates the value mutators (`setWritable`, SP5b spec D25): one choke point for every editor and every direct call.
  */
 import { fnv1a64, hex64, type Seed64 } from '../core/hash';
 import { canonicalJSON } from '../core/params/canonical';
@@ -138,6 +139,8 @@ export class WorldSession {
   private readonly history: HistoryEntry[];
   private cursor = 0;
   private gesture = false;
+  /** False while a saved world's modification mode is off (SP5b spec D25): the value mutators change nothing. */
+  private canWrite = true;
   private readonly listeners = new Set<SessionListener>();
 
   constructor(random: () => Seed64, init: SessionInit = {}) {
@@ -180,6 +183,24 @@ export class WorldSession {
     return this.gesture;
   }
 
+  /** Whether the value mutators change the draft (SP5b spec D25): `setWritable`'s last value, true until it is called. */
+  get writable(): boolean {
+    return this.canWrite;
+  }
+
+  /**
+   * The world-modification mode's gate (SP5b spec D25). Off, `setSeedText`, `newSeed`, `setProfile`, `set`, `reset`,
+   * `undo`, `redo` and `load` change nothing and notify nothing, answering as an unchanged success (the current state;
+   * `{ ok: true, state }`; `undo`/`redo` false), so no caller shows an error; `load(…, {force: true})` still applies (the
+   * backup's revert); `beginGesture`, `endGesture` and `subscribe` work as before. Switching off first ends an open
+   * gesture, so a drag cut short records its step and never leaves `inGesture` true (the apply control would wait for
+   * its end forever).
+   */
+  setWritable(on: boolean): void {
+    if (!on) this.endGesture();
+    this.canWrite = on;
+  }
+
   /** Whether undo() would change the cursor (inside a changed gesture it first records the gesture). */
   get canUndo(): boolean {
     return this.cursor > 0 || this.draftKey !== this.history[this.cursor]!.key;
@@ -217,6 +238,7 @@ export class WorldSession {
   }
 
   undo(): boolean {
+    if (!this.canWrite) return false;
     this.endGesture();
     if (this.cursor === 0) return false;
     this.cursor--;
@@ -225,6 +247,7 @@ export class WorldSession {
   }
 
   redo(): boolean {
+    if (!this.canWrite) return false;
     this.endGesture();
     if (this.cursor === this.history.length - 1) return false;
     this.cursor++;
@@ -234,6 +257,7 @@ export class WorldSession {
 
   /** SP1 seed rule: trimmed text, or a random seed written back for empty text. */
   setSeedText(text: string): SessionState {
+    if (!this.canWrite) return this.s;
     this.endGesture();
     const r = resolveSeedText(text, this.random);
     return this.commit('seed', r.text, r.seed, this.s.profile, resolveProfile(this.s.profile), this.s.params);
@@ -249,6 +273,7 @@ export class WorldSession {
    * refused and nothing changes. The page asks for confirmation, never the session.
    */
   setProfile(id: ProfileId): SessionResult {
+    if (!this.canWrite) return { ok: true, state: this.s };
     this.endGesture();
     const bad = profileIssue(id);
     if (bad !== null) return { ok: false, issues: [bad] };
@@ -264,6 +289,7 @@ export class WorldSession {
    */
   set(path: string, value: unknown): SessionResult {
     const node = nodeAt(path);
+    if (!this.canWrite) return { ok: true, state: this.s };
     if (value === undefined) return { ok: false, issues: undefinedIssues(node, path) };
     return this.commitPatch('set', mergeInto(SCHEMA.root, this.s.patch, path === '' ? value : patchAt(path, value)));
   }
@@ -271,6 +297,7 @@ export class WorldSession {
   /** Returns a group or a leaf (a noise leaf as a whole) to the profile's value. */
   reset(path: string): SessionResult {
     nodeAt(path);
+    if (!this.canWrite) return { ok: true, state: this.s };
     return this.commitPatch('reset', path === '' ? {} : withoutPath(this.s.patch, path.split('.')));
   }
 
@@ -278,9 +305,11 @@ export class WorldSession {
    * Atomic load: resolves `seedText` when given (otherwise keeps the seed), validates the patch over a
    * ready profile and the validator, then replaces seed, profile and patch in one commit (one notification,
    * at most one epoch bump). Records one history step unless `record` is false; then the change replaces the
-   * step at the cursor instead. On failure nothing changes.
+   * step at the cursor instead. On failure nothing changes. `force` applies it while the session is not writable (the
+   * backup's revert, SP5b spec §3.6); without it a load then changes nothing (`setWritable`).
    */
-  load(s: { readonly seedText?: string; readonly profile: ProfileId; readonly patch: unknown }, opts: { readonly record?: boolean } = {}): SessionResult {
+  load(s: { readonly seedText?: string; readonly profile: ProfileId; readonly patch: unknown }, opts: { readonly record?: boolean; readonly force?: boolean } = {}): SessionResult {
+    if (!this.canWrite && opts.force !== true) return { ok: true, state: this.s };
     this.endGesture();
     const bad = profileIssue(s.profile);
     if (bad !== null) return { ok: false, issues: [bad] };

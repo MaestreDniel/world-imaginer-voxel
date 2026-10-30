@@ -27,7 +27,10 @@
  *   closing in B) calls the renderer's `resize()` and draws one frame, so the frame painted at the switch is not
  *   three's cleared canvas. A switch to A while locked releases the lock. While A covers the 3D, the limiter's cap is `frameCapFor`'s 60 (or the
  *   user's lower cap, §2.6). The header's controls live in the tool's toolbar slot: "Full screen | Side by side",
- *   "Watch live" (A only), "Centre on me" and "✕ Close (M)"; a mode or Watch-live change is saved at once (D17).
+ *   "Watch live" (A only), "Centre on me" and "✕ Close (M)"; a mode or Watch-live change is saved at once (D17). In a
+ *   saved world the world-modification switch "Modify terrain" (`modify`, SP5b spec §3.6, D10) stands before "Watch
+ *   live", and the tool is told the mode (`setEditable`) right after it is mounted; an unsaved world has no switch and its
+ *   tool is never told.
  * - **Watch live** (§2.1, D18): `applied(from)`, called when a draft that changes the world is applied, closes the map
  *   in A with Watch live on, so the 3D shows the regeneration; a drag never reaches it mid-gesture (the Apply waits for
  *   the gesture's end). From then until `counts.stale` falls to 0 (or no job is left, above), or M brings the map
@@ -177,6 +180,11 @@ export interface MapOverlayOptions {
    * put up and take down `WATCH_LIVE_NOTICE` (D26).
    */
   readonly notices: Pick<WorldNotices, 'route' | 'show' | 'hide'>;
+  /**
+   * A saved world's modification switch (SP5b spec §3.6, D10; `modifyMode.ts`): `element` goes into the header slot
+   * before "Watch live", and a tool mounted gets `setEditable(on())` at once. Null in an unsaved world.
+   */
+  readonly modify: { readonly element: HTMLElement; on(): boolean } | null;
 }
 
 export interface MapOverlay {
@@ -293,7 +301,9 @@ export function createMapOverlay(o: MapOverlayOptions): MapOverlay {
   // Not a live region (Task 20b): its text changes almost every frame while the world regenerates.
   readout.setAttribute('aria-live', 'off');
   readout.hidden = true;
-  slot.append(modeSwitch, watchLabel, centreButton, closeButton, readout);
+  slot.append(modeSwitch);
+  if (o.modify !== null) slot.append(o.modify.element);
+  slot.append(watchLabel, centreButton, closeButton, readout);
 
   /** The controls' state from the mode, Watch live and the window's width. */
   const syncControls = (): void => {
@@ -415,6 +425,8 @@ export function createMapOverlay(o: MapOverlayOptions): MapOverlay {
       toolbarSlot: slot,
       shortcutsEnabled,
     });
+    // A saved world's tool shows the modification mode in force from its mount (D10); the mode tells it of later switches.
+    if (o.modify !== null) tool.setEditable(o.modify.on());
     showOnCamera(tool);
     syncRoute();
   };

@@ -169,7 +169,7 @@ world-imaginer-voxel/          (repository root)
                                 SP4a: worldJobs.ts, the T, D, L and MESH_COLUMN handlers over the attached store; spikeStore.worker.ts and
                                 spikeStoreHandler.ts, the week-1 spike's shared-store check)
     engine/                     main thread, no three
-      coordinator.ts scheduler.ts (not created: the coordinator holds the scheduler) rings.ts workerPool.ts jobHeap.ts (SP4c) throttle.ts (SP4b) uploadBudget.ts session.ts invalidation.ts (SP4c with Apply's dirty stages; completed for every scope by SP10) capabilities.ts simClient.ts (SP5a)
+      coordinator.ts scheduler.ts (not created: the coordinator holds the scheduler) rings.ts workerPool.ts jobHeap.ts (SP4c) throttle.ts (SP4b) uploadBudget.ts session.ts (SP5b: session.ts's setWritable) invalidation.ts (SP4c with Apply's dirty stages; completed for every scope by SP10) capabilities.ts simClient.ts (SP5a)
       renderDistance.ts spikeStore.ts   (SP4a: the default render distance from the capability report; the spike's shared store)
     render/                     the only place three is imported (ui canvases are 2D; amended by SP0)
       renderer.ts sectionRenderer.ts (interface; SP4b: and UploadGate) regionBatch.ts regionMesh.ts (fallback) floatingOrigin.ts selection.ts (SP5a)
@@ -499,13 +499,7 @@ Sparse entries are sorted by idx, sections by sy, and trailer ticks by packedPos
 
 `genKey = fnv1a64(utf8(`${GENERATOR_VERSION}|${seed[0]}|${seed[1]}|${hex64(stageHash('decorate'))}`))` (seed words as decimal u32, lo first; `hex64` = 16 lower-case hex digits, hi first), where the decorate stageHash covers exactly the decorate-, terrain- and climate-scope params (§5.1). Live and Remesh params never affect genKey. A world whose stored genKey differs from today's opens with today's terrain, its edits at their coordinates, with a notice and an 'older generator' badge in the list (SP5b).
 
-**Fork dialog.** It appears (a) on opening a world whose stored genKey differs from the one recomputed with the current GENERATOR_VERSION, and (b) on the first Apply of a decorate-, terrain- or climate-scope change in a world that has diffs. Auto-apply is suspended until the user answers, and the choice holds for the rest of the session. Options:
-1. **Fork:** a new world id with the new genKey and no diffs; the original save is untouched.
-2. **Rebase:** a new world id with the new genKey and a copy of the diffs (absolute states, remapped through `stateTable`); entries equal to the newly generated value are dropped at the next D.
-3. **Read-only:** the original save rendered with the current generator and its diffs, never flushed, with export offered.
-4. **Cancel:** reverts the pending param change (case b) or returns to the worlds menu (case a).
-
-During development this dialog is expected often, since every SP changes the generator.
+**World-modification mode and backup (SP5b).** Terrain changes from a saved world's map need the world-modification mode, off whenever a world opens; the first terrain change made while the mode is on in a world with edits first copies the world, as it was before the change, to a new world named '<name> (before the change)'; the world keeps its id.
 
 **Export `.wiworld`.** A gzip `CompressionStream` over:
 - `"WI10"`, `u32 version` = 1, `u32 headerLen`;

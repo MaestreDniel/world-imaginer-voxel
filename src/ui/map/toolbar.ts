@@ -4,7 +4,8 @@
  * the biome-size slider (§6.4: a pointer drag is one gesture, a keyboard step one urgent edit); undo and
  * redo; the grid toggle; the cut-line button (§4.5); the preview status (§2.6); "Open in 3D" (SP4a spec §8.2). Every
  * edit goes through the session; sync() shows its draft after each change. Embedded in the world's map (SP4c spec §2.5,
- * D17) it has no "Open in 3D" and ends with the click hint (D26), then the overlay's slot.
+ * D17) it has no "Open in 3D" and ends with the click hint (D26), then the overlay's slot. In a saved world whose
+ * modification mode is off (SP5b spec D10) its terrain controls are disabled (`setEditable`).
  */
 import { isProfileId, isProfileReady, PROFILE_IDS, type ProfileId } from '../../core/params/profiles';
 import type { SessionResult, WorldSession } from '../../engine/session';
@@ -85,6 +86,11 @@ export interface Toolbar {
   /** Shows the cut-line tool's state on its button. */
   setCut(tool: CutTool): void;
   /**
+   * The world-modification mode (SP5b spec D10): false disables the seed, Same seed, New seed, the profile, the biome
+   * size, Undo and Redo; the layer, the grid and the cut line stay. Undo and Redo keep their own reason (no step).
+   */
+  setEditable(on: boolean): void;
+  /**
    * Ends a slider drag still open (its window listeners removed, the gesture ended) and ignores a profile confirmation
    * that resolves later (SP4c spec §1.2); its elements go with the layout.
    */
@@ -96,6 +102,8 @@ const SCALE_PATH = 'climate.scaleMul';
 export function createToolbar(host: HTMLElement, deps: ToolbarDeps): Toolbar {
   const { session, notices, edit } = deps;
   let disposed = false;
+  /** False while the world-modification mode is off (SP5b spec D10). */
+  let editable = true;
   /** The controls only write valid values, but a refusal is shown rather than dropped. */
   const report = (r: SessionResult): boolean => {
     if (!r.ok) notices.show(r.issues.map((i) => `${i.path}: ${i.code} — ${i.message}`).join('\n'), { kind: 'error' });
@@ -169,8 +177,8 @@ export function createToolbar(host: HTMLElement, deps: ToolbarDeps): Toolbar {
     slider.value = String(b.v);
     approx.textContent = b.mark;
     sizeGroup.title = b.tip;
-    undoBtn.disabled = !session.canUndo;
-    redoBtn.disabled = !session.canRedo;
+    undoBtn.disabled = !editable || !session.canUndo;
+    redoBtn.disabled = !editable || !session.canRedo;
   };
 
   layerSelect.addEventListener('change', () => { if (isLayerId(layerSelect.value)) deps.onLayer(layerSelect.value); });
@@ -208,7 +216,7 @@ export function createToolbar(host: HTMLElement, deps: ToolbarDeps): Toolbar {
   /** The ends of the open drags, whose window listeners are still installed. */
   const dragEnds = new Set<() => void>();
   slider.addEventListener('pointerdown', (e) => {
-    if (e.button !== 0) return;
+    if (e.button !== 0 || !editable) return;
     session.beginGesture();
     const end = () => {
       removeEventListener('pointerup', end, true);
@@ -242,6 +250,11 @@ export function createToolbar(host: HTMLElement, deps: ToolbarDeps): Toolbar {
       status.classList.toggle('map-status-error', s.error !== null);
     },
     setCut: showCut,
+    setEditable(on) {
+      editable = on;
+      for (const c of [seedInput, sameSeed, newSeed, profileSelect, slider]) c.disabled = !on;
+      sync();
+    },
     dispose() {
       if (disposed) return;
       disposed = true;

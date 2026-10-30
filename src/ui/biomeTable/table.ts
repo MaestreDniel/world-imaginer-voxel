@@ -7,7 +7,8 @@
  * value the model or the validator refuses keeps its text with a red border and the issue under its row, and
  * is not applied; Escape, a reset or a change of that cell in the draft restores it. Hovering a row reports its
  * biome to the page, which highlights it on the map's biome layer or shows a notice on the other layers.
- * The table follows the session: it shows the draft after every change.
+ * The table follows the session: it shows the draft after every change. In a saved world whose modification mode is
+ * off (SP5b spec D10) its fields, selects and resets are disabled and a bar's press begins no drag (`setEditable`).
  */
 import './table.css';
 import type { BoxBiome } from '../../core/params/biomeDefaults';
@@ -36,6 +37,12 @@ export interface TableDeps {
 
 export interface BiomeTable {
   readonly element: HTMLElement;
+  /**
+   * The world-modification mode (SP5b spec D10): false disables every field, sign select and row reset and Reset table,
+   * and a bar's press begins no drag; true gives each its own state back (a reset with nothing to reset stays disabled).
+   * The sort and the family filter stay.
+   */
+  setEditable(on: boolean): void;
   /** Stops following the session and ends the hover (the DOM stays). */
   dispose(): void;
 }
@@ -114,8 +121,8 @@ interface Bar {
   show(iv: Interval): void;
 }
 
-/** The bar of one interval cell: the box over [−1, 1] and two draggable ends. */
-function bar(deps: TableDeps, name: BoxBiome, axis: BoxAxis): Bar {
+/** The bar of one interval cell: the box over [−1, 1] and two draggable ends, dragged only while `editable()`. */
+function bar(deps: TableDeps, name: BoxBiome, axis: BoxAxis, editable: () => boolean): Bar {
   const { session } = deps;
   const element = el('div', 'bt-bar');
   element.setAttribute('aria-hidden', 'true');
@@ -129,7 +136,7 @@ function bar(deps: TableDeps, name: BoxBiome, axis: BoxAxis): Bar {
   const local = (e: PointerEvent) => e.clientX - element.getBoundingClientRect().left - element.clientLeft;
   let drag: { readonly pointerId: number; readonly end: 'lo' | 'hi'; readonly x0: number; readonly grab: number; started: boolean } | null = null;
   element.addEventListener('pointerdown', (e) => {
-    if (e.button !== 0 || drag !== null) return;
+    if (e.button !== 0 || drag !== null || !editable()) return;
     const px = local(e);
     const iv = tableOf(session.state)[name][axis];
     const end = hitBarEnd(iv, px, element.clientWidth, BAR_SLACK_PX);
@@ -186,12 +193,16 @@ interface Row {
   sync(row: BoxRow, from: BoxRow): void;
   /** Shows the draft's value in every cell again and drops every refusal. */
   restore(): void;
+  setEditable(on: boolean): void;
 }
 
 function createRow(deps: TableDeps, name: BoxBiome, biome: number, family: BiomeFamily): Row {
   const { session } = deps;
   const element = el('div', 'bt-row');
   element.dataset['biome'] = name;
+  let editable = true;
+  /** The row equals the profile's: its reset has nothing to do. */
+  let unchanged = true;
 
   /** The issue lines under the row, by cell ('reset' for a refused row reset), in the order they were refused. */
   const issues = new Map<string, string>();
@@ -308,7 +319,7 @@ function createRow(deps: TableDeps, name: BoxBiome, biome: number, family: Biome
     l.htmlFor = c.input.id;
     l.title = tip;
     cells[axis] = c;
-    bars[axis] = bar(deps, name, axis);
+    bars[axis] = bar(deps, name, axis, () => editable);
     axes.append(l, c.input, bars[axis].element);
   }
   const prio = el('span', 'bt-prio');
@@ -353,19 +364,27 @@ function createRow(deps: TableDeps, name: BoxBiome, biome: number, family: Biome
       syncSign(row);
       sign.classList.toggle('bt-changed', changed.has('wSign'));
       dot.classList.toggle('on', changed.size > 0);
-      reset.disabled = changed.size === 0;
+      unchanged = changed.size === 0;
+      reset.disabled = unchanged || !editable;
       if (against.size > 0) {
         const now = canonicalJSON(row);
         for (const [key, was] of [...against]) if (was !== now) dropRow(key);
       }
     },
     restore,
+    setEditable(on) {
+      editable = on;
+      for (const c of Object.values(cells)) c.input.disabled = !on;
+      sign.disabled = !on;
+      reset.disabled = unchanged || !on;
+    },
   };
 }
 
 export function createBiomeTable(host: HTMLElement, deps: TableDeps): BiomeTable {
   const { session } = deps;
   const element = el('div', 'bt');
+  let editable = true;
 
   // The header: sort, family filter, the modified count and the table reset.
   const head = el('div', 'bt-head');
@@ -426,7 +445,7 @@ export function createBiomeTable(host: HTMLElement, deps: TableDeps): BiomeTable
     const from = profileTable(s.profile);
     for (const r of rows.values()) r.sync(t[r.name], from[r.name]);
     count.textContent = modifiedText(modifiedRows(t, from).length);
-    resetAll.disabled = !session.modified(BIOME_TABLE_PATH);
+    resetAll.disabled = !editable || !session.modified(BIOME_TABLE_PATH);
     order(t);
   };
   const unsubscribe = session.subscribe((s) => sync(s));
@@ -435,6 +454,11 @@ export function createBiomeTable(host: HTMLElement, deps: TableDeps): BiomeTable
 
   return {
     element,
+    setEditable(on) {
+      editable = on;
+      for (const r of rows.values()) r.setEditable(on);
+      resetAll.disabled = !on || !session.modified(BIOME_TABLE_PATH);
+    },
     dispose() {
       unsubscribe();
       deps.hover(null);

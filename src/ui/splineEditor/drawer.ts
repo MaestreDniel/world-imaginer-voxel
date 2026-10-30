@@ -16,6 +16,10 @@
  *   silently; any other failure also shows a notice.
  * - Lints are recomputed at most once per animation frame, after urgent changes and probe moves, never per
  *   pointer move of a drag (a pass over the default offset costs ≈ 18 ms).
+ * - In a saved world whose modification mode is off (SP5b spec D10, `setEditable`) every edit is disabled: the auto
+ *   tangents, Reset spline, Import shape, the knot's Delete and fields, the menu's nest, flatten and delete, a knot or
+ *   tangent drag, a double-click insert and the Delete key; looking (the tree, the breadcrumbs, Open, the probes,
+ *   Export shape, Close) stays.
  */
 import './drawer.css';
 import { autoTangentsAt, deleteKnot, flattenKnot, insertKnot, knotAt, nestKnot, nodeAt, setKnot, type SplineEdit } from '../../core/spline/edit';
@@ -58,6 +62,11 @@ export interface SplineDrawer {
   /** Shows the leaf: at its root when another leaf was open, else where the drawer was. The caller shows the drawer row first. */
   open(leaf: SplineLeaf): void;
   readonly leaf: SplineLeaf | null;
+  /**
+   * The world-modification mode (SP5b spec D10): false disables every edit (an open knot menu closes); true gives each
+   * control its own state back (Reset spline with nothing modified, a nested knot's y, stay disabled).
+   */
+  setEditable(on: boolean): void;
   /** Stops following the session and the driver (the DOM stays). */
   dispose(): void;
 }
@@ -97,6 +106,8 @@ export function createSplineDrawer(host: HTMLElement, deps: DrawerDeps): SplineD
   let lintFrame: number | null = null;
   let shown: { readonly target: StatsTarget; readonly summary: SplineStatsSummary } | null = null;
   let pending: StatsTarget | null = null;
+  /** False while the world-modification mode is off (SP5b spec D10). */
+  let editable = true;
 
   // ---------------------------------------------------------------- DOM
   const root = el('div', 'sd');
@@ -224,12 +235,12 @@ export function createSplineDrawer(host: HTMLElement, deps: DrawerDeps): SplineD
       clearMessage();
       render();
     },
-    dragStart() { session.beginGesture(); },
+    dragStart() { if (editable) session.beginGesture(); },
     dragEnd() { session.endGesture(); },
     moveKnot(e, k, x, y) {
       const c = current();
       const p = c?.node.points[k];
-      if (c === null || p === undefined) return;
+      if (c === null || p === undefined || !editable) return;
       if (!session.inGesture) session.beginGesture();
       const v = leafView(c.leaf);
       const to = clampKnotDrag(c.node, k, x, y, v.yMin, v.yMax);
@@ -238,7 +249,7 @@ export function createSplineDrawer(host: HTMLElement, deps: DrawerDeps): SplineD
     },
     moveTangent(e, k, d) {
       const c = current();
-      if (c === null || c.node.points[k] === undefined) return;
+      if (c === null || c.node.points[k] === undefined || !editable) return;
       if (!session.inGesture) session.beginGesture();
       const r = setKnot(c.spline, [...nodePath, k], { d }, leafOpts(c.leaf));
       if (r.ok) deps.edit(e, () => { session.set(c.leaf, r.value); });
@@ -249,7 +260,7 @@ export function createSplineDrawer(host: HTMLElement, deps: DrawerDeps): SplineD
         return;
       }
       const c = current();
-      if (c === null) return;
+      if (c === null || !editable) return;
       const v = leafView(c.leaf);
       const at = pointOnCurve(c.node, probeVector(probeValues), x, v.yMin, v.yMax);
       const r = insertKnot(c.spline, nodePath, at.x, at.y, leafOpts(c.leaf));
@@ -337,7 +348,7 @@ export function createSplineDrawer(host: HTMLElement, deps: DrawerDeps): SplineD
 
   function deleteSelected(e: Event): void {
     const c = current();
-    if (c === null || selected === null) return;
+    if (c === null || selected === null || !editable) return;
     commitEdit(e, deleteKnot(c.spline, [...nodePath, selected], leafOpts(c.leaf)), null);
   }
 
@@ -456,7 +467,7 @@ export function createSplineDrawer(host: HTMLElement, deps: DrawerDeps): SplineD
     fields.x.show(String(p.x), force);
     fields.d.show(String(p.d), force);
     const nested = typeof p.y !== 'number';
-    fields.y.input.disabled = nested;
+    fields.y.input.disabled = nested || !editable;
     fields.y.show(typeof p.y === 'number' ? String(p.y) : `${p.y.coord} spline (${p.y.points.length} knots)`, force);
     openBtn.hidden = !nested;
   }
@@ -490,15 +501,17 @@ export function createSplineDrawer(host: HTMLElement, deps: DrawerDeps): SplineD
       b.disabled = disabled;
       items.push(b);
     };
+    /** An item that edits the spline: disabled while the mode is off (SP5b spec D10). */
+    const editItem = (label: string, run: (ev: MouseEvent) => void) => item(label, run, !editable);
     if (!nested) {
       const coords = nestCoords(c.leaf, c.spline, path);
-      for (const coord of coords) item(`Nest by ${coord}`, (ev) => onKnot(ev, (now) => nestKnot(now.spline, path, coord, leafOpts(now.leaf)), k));
+      for (const coord of coords) editItem(`Nest by ${coord}`, (ev) => onKnot(ev, (now) => nestKnot(now.spline, path, coord, leafOpts(now.leaf)), k));
       if (coords.length === 0) item('Nest: every coord of the leaf is used on this path', () => {}, true);
     } else {
       item('Open', () => openNode(path, null));
-      item('Flatten at the probe', (ev) => onKnot(ev, (now) => flattenKnot(now.spline, path, probeVector(probeValues), leafOpts(now.leaf)), k));
+      editItem('Flatten at the probe', (ev) => onKnot(ev, (now) => flattenKnot(now.spline, path, probeVector(probeValues), leafOpts(now.leaf)), k));
     }
-    item('Delete knot', (ev) => onKnot(ev, (now) => deleteKnot(now.spline, path, leafOpts(now.leaf)), null));
+    editItem('Delete knot', (ev) => onKnot(ev, (now) => deleteKnot(now.spline, path, leafOpts(now.leaf)), null));
     menu.replaceChildren(...items);
     menu.hidden = false;
     const r = menu.getBoundingClientRect();
@@ -527,7 +540,7 @@ export function createSplineDrawer(host: HTMLElement, deps: DrawerDeps): SplineD
   fileInput.addEventListener('change', () => {
     const file = fileInput.files?.[0];
     const into = leaf;
-    if (file === undefined || into === null) return;
+    if (file === undefined || into === null || !editable) return;
     void readTextFile(file).then((text) => {
       if (leaf !== into) return;
       const r = readShapeText(text, into, leafOpts(into));
@@ -554,7 +567,7 @@ export function createSplineDrawer(host: HTMLElement, deps: DrawerDeps): SplineD
       return i === 0 ? [b] : [el('span', 'sd-crumb-sep', '›'), b];
     }));
     renderProbes(probeCoords(c.node), c.node.coord);
-    resetBtn.disabled = !session.modified(c.leaf);
+    resetBtn.disabled = !editable || !session.modified(c.leaf);
     tree.render(splineTree(c.leaf, c.spline), nodePath, new Set(lints.map((l) => nodeKey(l.nodePath))));
     const state = overlayNow(c);
     plot.render({
@@ -593,6 +606,14 @@ export function createSplineDrawer(host: HTMLElement, deps: DrawerDeps): SplineD
       requestStats(deps.driver.status.settled);
     },
     get leaf() { return leaf; },
+    setEditable(on) {
+      editable = on;
+      for (const b of [autoNode, autoAll, resetBtn, importBtn, deleteBtn, fields.x.input, fields.y.input, fields.d.input]) b.disabled = !on;
+      fileInput.disabled = !on;
+      closeMenu();
+      // Reset spline (nothing modified) and a selected nested knot's y keep their own reasons (render; nothing with no leaf).
+      render();
+    },
     dispose() {
       offSession();
       offSettled();

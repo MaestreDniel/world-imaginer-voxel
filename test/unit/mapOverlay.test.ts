@@ -21,13 +21,17 @@ import {
   createMapOverlay, followSession, frameCapFor, MAP_PRELOAD_MS, ownerOf, SPLIT_MIN_WIDTH, splitAvailable, WATCH_LIVE_NOTICE,
   WORLD_MAP_BPP, type MapMode, type MapOverlay,
 } from '../../src/ui/world/mapOverlay';
+import { createModifySwitch } from '../../src/ui/world/modifyMode';
 import { installDom, type FakeDocument, type FakeElement } from './fixtures/domShim';
 
 interface FakeTool {
   readonly tool: MapTool;
   readonly deps: MapToolDeps;
   readonly host: HTMLElement;
-  readonly calls: { show: Array<{ x: number; z: number } | undefined>; hide: number; setPlayer: Array<[number, number, number]>; panel: number; drawer: number; disposed: number };
+  readonly calls: {
+    show: Array<{ x: number; z: number } | undefined>; hide: number; setPlayer: Array<[number, number, number]>; panel: number; drawer: number; disposed: number;
+    editable: boolean[];
+  };
 }
 
 const fake = vi.hoisted(() => ({ tools: [] as unknown[] }));
@@ -36,7 +40,7 @@ vi.mock('../../src/ui/map/mapTool', async () => {
   const { draftOf } = await import('../../src/ui/map/previewDriver');
   return {
     createMapTool(host: HTMLElement, deps: MapToolDeps): MapTool {
-      const calls: FakeTool['calls'] = { show: [], hide: 0, setPlayer: [], panel: 0, drawer: 0, disposed: 0 };
+      const calls: FakeTool['calls'] = { show: [], hide: 0, setPlayer: [], panel: 0, drawer: 0, disposed: 0, editable: [] };
       let view: MapView = deps.initialView;
       const unsubscribe = deps.session.subscribe((s, c) => deps.driver.change(draftOf(s), c, 0));
       const removeKeys = installShortcuts((a) => {
@@ -57,6 +61,7 @@ vi.mock('../../src/ui/map/mapTool', async () => {
         get view() { return view; },
         notices: {} as MapTool['notices'],
         setView(v) { view = v; },
+        setEditable(on) { calls.editable.push(on); },
         dispose() {
           calls.disposed++;
           // The real tool's disposers run in reverse order: its subscribe goes before its toolbar ends an open drag.
@@ -162,6 +167,8 @@ afterEach(() => { vi.unstubAllGlobals(); });
 function setup(o: {
   mode?: MapMode; watchLive?: boolean; width?: number; userCap?: FpsCap; fly?: FlyState; input?: { clear(): void }; canvas?: FakeElement;
   teleport?: (x: number, z: number) => Promise<boolean>;
+  /** A saved world's modification switch (SP5b spec §3.6); none: an unsaved world. */
+  modify?: { readonly element: HTMLElement; on(): boolean };
 } = {}) {
   const doc: FakeDocument = dom.document;
   const app = doc.createElement('div');
@@ -210,6 +217,7 @@ function setup(o: {
     onTeleport: o.teleport ?? (() => Promise.resolve(false)),
     viewChanged,
     notices,
+    modify: o.modify ?? null,
   });
   return {
     doc, app, worldHost, canvas, session, driver, fly, input, timers, overlay, world, limiter, save, viewChanged, notices,
@@ -961,5 +969,48 @@ describe('modes A and B, the covered cap and Watch live (SP4c spec §2.1, §2.2,
     await openMounted(split.overlay);
     split.overlay.close();
     expect(split.notices.route).not.toHaveBeenCalled();
+  });
+});
+
+describe('the world-modification switch in the header (SP5b spec §3.6, D10)', () => {
+  /** A saved world's switch (the page's, `createModifySwitch`) and the mode's state. */
+  const savedSwitch = (on: { value: boolean }) => ({ element: createModifySwitch().element, on: () => on.value });
+  const slotOf = (t: FakeTool): FakeElement => t.deps.toolbarSlot as unknown as FakeElement;
+
+  test('the header slot holds `#map-modify` before Watch live in a saved world, none in an unsaved one', async () => {
+    const saved = setup({ modify: savedSwitch({ value: false }) });
+    const t = await openMounted(saved.overlay);
+    const slot = slotOf(t);
+    const box = slot.querySelector('#map-modify')!;
+    expect([box.type, slot.querySelectorAll('input').filter((i) => i.id === 'map-modify').length]).toEqual(['checkbox', 1]);
+    // Its label "Modify terrain" stands right before Watch live's.
+    const kids = slot.children;
+    expect(kids.indexOf(box.parentElement!)).toBe(kids.indexOf(slot.querySelector('#map-watch-live')!) - 1);
+    expect(box.parentElement!.textContent).toBe('Modify terrain');
+    saved.overlay.dispose();
+    const unsaved = setup();
+    const u = await openMounted(unsaved.overlay);
+    expect(slotOf(u).querySelector('#map-modify')).toBeNull();
+  });
+
+  test('a tool mounted while the mode is off gets `setEditable(false)`; in an unsaved world `setEditable` is never called', async () => {
+    const off = setup({ modify: savedSwitch({ value: false }) });
+    const t = await openMounted(off.overlay);
+    expect(t.calls.editable).toEqual([false]);
+    // Close and open again: no remount, nothing told again (the mode tells the mounted tool itself).
+    off.overlay.close();
+    off.overlay.open();
+    await settle();
+    expect(t.calls.editable).toEqual([false]);
+    off.overlay.dispose();
+    // A mode switched on before the first M: the tool is mounted editable.
+    const on = setup({ modify: savedSwitch({ value: true }) });
+    expect((await openMounted(on.overlay)).calls.editable).toEqual([true]);
+    on.overlay.dispose();
+    const unsaved = setup();
+    const u = await openMounted(unsaved.overlay);
+    unsaved.overlay.close();
+    unsaved.overlay.open();
+    expect(u.calls.editable).toEqual([]);
   });
 });

@@ -125,6 +125,7 @@ vi.mock('../../src/ui/map/mapTool', async () => {
         get view() { return view; },
         notices: {} as MapTool['notices'],
         setView(v) { view = v; },
+        setEditable() {},
         dispose() {},
       };
     },
@@ -521,6 +522,8 @@ async function buildAtRest(): Promise<AtRest> {
     onTeleport: () => Promise.resolve(false),
     viewChanged() {},
     notices: { route() {}, show() {}, hide() {} },
+    // An unsaved world's overlay: no modification switch (SP5b spec §3.6).
+    modify: null,
   });
 
   // SP4c's per-tick hooks, as the page's: the owner check (§2.3), the apply control before the update (§4.3), the aux

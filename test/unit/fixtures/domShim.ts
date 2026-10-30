@@ -51,6 +51,8 @@ export class FakeElement extends EventTarget {
   parentElement: FakeElement | null = null;
   /** The document that created the element (null for one built with `new`). */
   ownerDocument: FakeDocument | null = null;
+  /** What `getBoundingClientRect()` reports (SP5b: a spline plot's size and a press's position); a test sets it. */
+  rect = { left: 0, top: 0, width: 0, height: 0 };
   readonly childNodes: Child[] = [];
   private readonly attrs = new Map<string, string>();
   private ownValue: string | null = null;
@@ -182,6 +184,19 @@ export class FakeElement extends EventTarget {
     return false;
   }
 
+  /** The element's `rect`, with `right`, `bottom`, `x` and `y` as the DOM's `DOMRect` has them. */
+  getBoundingClientRect(): { left: number; top: number; width: number; height: number; right: number; bottom: number; x: number; y: number } {
+    const r = this.rect;
+    return { ...r, right: r.left + r.width, bottom: r.top + r.height, x: r.left, y: r.top };
+  }
+
+  /** The pointer ids captured by `setPointerCapture` (a bar's or a plot's drag, SP5b). */
+  readonly captured = new Set<number>();
+
+  setPointerCapture(pointerId: number): void {
+    this.captured.add(pointerId);
+  }
+
   /** Gives the focus back to the owner document's body when the element has it. */
   blur(): void {
     if (this.ownerDocument !== null && this.ownerDocument.activeElement === this) this.ownerDocument.activeElement = this.ownerDocument.body;
@@ -301,6 +316,11 @@ export class FakeDocument extends EventTarget {
     const e = new FakeElement(tag);
     e.ownerDocument = this;
     return e;
+  }
+
+  /** An element in a namespace (the spline plot's SVG): a plain element of that tag here. */
+  createElementNS(_ns: string, tag: string): FakeElement {
+    return this.createElement(tag);
   }
 
   createTextNode(text: string): FakeText {

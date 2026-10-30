@@ -12,7 +12,9 @@
  * of creation (§1.2); only the session outlives it. In the world (`host: 'world'`, §1.3, §1.5, §2.5, §3.1) a plain map
  * click teleports (`onTeleport`) unless the cut tool is armed and Shift+click runs today's routing; the toolbar ends
  * with the click hint and the overlay's slot instead of "Open in 3D"; `show` and `hide` toggle the canvas's hidden state
- * and whether the driver waits for a preview; `setPlayer` moves the arrow.
+ * and whether the driver waits for a preview; `setPlayer` moves the arrow. In a saved world the overlay's modification
+ * mode (SP5b spec §3.6, D10) calls `setEditable`, which disables every editor's terrain controls; the session's own gate
+ * (`setWritable`, D25) refuses what slips past them.
  */
 import './map.css';
 import type { WorldSession } from '../../engine/session';
@@ -92,6 +94,13 @@ export interface MapTool {
   readonly notices: Notices;
   /** Shows `v` (the standalone page's `hashchange`); not a view change the tool reports. */
   setView(v: MapView): void;
+  /**
+   * The world-modification mode (SP5b spec §3.6, D10): each editor's `setEditable(on)` (the toolbar, the Parameters,
+   * Biomes and Presets tabs, the Spline and Density drawers). Off, every terrain control is shown disabled, each keeping
+   * its own reasons for when it is on again; looking, layers, the grid, the cut line, the Density tab's tree and slices,
+   * Presets export, teleport and the pin work.
+   */
+  setEditable(on: boolean): void;
   /** Runs every disposer once, in reverse order of creation; later calls do nothing. */
   dispose(): void;
 }
@@ -442,6 +451,14 @@ export function createMapTool(host: HTMLElement, deps: MapToolDeps): MapTool {
     get view() { return view; },
     notices,
     setView,
+    setEditable(on) {
+      toolbar.setEditable(on);
+      panel.setEditable(on);
+      splines.setEditable(on);
+      densityTab.setEditable(on);
+      table.setEditable(on);
+      presets.setEditable(on);
+    },
     dispose: () => disposers.dispose(),
   };
 }
