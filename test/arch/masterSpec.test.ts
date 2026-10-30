@@ -1366,7 +1366,11 @@ describe('master spec amendments (SP5a §9)', () => {
 
 describe('master spec amendments (SP5b §9)', () => {
   /** [§1 entry head, the token its entry holds, the file on disk]; Tasks 2, 3, 4, 6, 10, 12, 19, 20, 22, 24, 26, 27 and 28 append theirs. */
-  const SP5B_MODULES: Array<[head: RegExp, token: string, file: string]> = [];
+  const SP5B_MODULES: Array<[head: RegExp, token: string, file: string]> = [
+    [/^\s+persist\/kv\.ts /, 'kvContract.ts diffCodec.ts wiworld.ts saves.ts (SP5b)', 'src/persist/kv.ts'],
+    [/^\s+persist\/kv\.ts /, 'kvContract.ts diffCodec.ts wiworld.ts saves.ts (SP5b)', 'src/persist/memory.ts'],
+    [/^\s+persist\/kv\.ts /, 'kvContract.ts diffCodec.ts wiworld.ts saves.ts (SP5b)', 'src/persist/kvContract.ts'],
+  ];
 
   test('§10\'s SP5b entry and its receivers (SP5b spec §9, §11)', () => {
     const sp5b = spEntry('SP5b', 'SP5c');
@@ -1383,5 +1387,15 @@ describe('master spec amendments (SP5b §9)', () => {
     expect(sp8c).not.toContain('Creates `ui/settingsPanel.ts`');
     expect(spEntry('SP11', 'SP12')).toContain('fills SP5b\'s Graphics tab: the quality preset and the greyed rows (fog distance, clouds, shadows)');
     expect(spEntry('SP5c', 'SP6')).toContain('(stored in IndexedDB `wi10`, its `meta` store or a store of its own by a version bump; a paste is one block-history step, which SP5b persists)');
+  });
+
+  test('§1 names each SP5b module in its entry, which exists', () => {
+    expect(SP5B_MODULES.length, 'SP5B_MODULES has no rows').toBeGreaterThan(0);
+    for (const [head, token, file] of SP5B_MODULES) {
+      const entry = layoutEntry(head);
+      expect(entry, `§1 has no entry matching ${head}`).not.toBe('');
+      expect(entry, `§1's ${head} entry does not name ${token}`).toContain(token);
+      expect(existsSync(`${ROOT_DIR}${file}`), `${file} does not exist`).toBe(true);
+    }
   });
 });

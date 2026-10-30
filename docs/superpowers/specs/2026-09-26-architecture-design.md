@@ -155,7 +155,7 @@ world-imaginer-voxel/          (repository root)
     audio/model/ambienceModel.ts emitterCluster.ts footstepCadence.ts musicScheduler.ts   pure decision logic used by sound/
                                 and by metrics AU2-AU4 (injected clock, NeighborhoodReader-like voxel/light view)
     sim/fluidSim.ts edits.ts diffStore.ts (SP5a)   L2
-    persist/kv.ts idb.ts memory.ts diffCodec.ts wiworld.ts saves.ts   L2 (IStorage adapter; MemoryKV for tests)
+    persist/kv.ts idb.ts memory.ts kvContract.ts diffCodec.ts wiworld.ts saves.ts (SP5b)   L2 (IStorage adapter; MemoryKV for tests; kvContract.ts, the contract suite both adapters pass)
     metrics/*.ts                                    pure metric definitions shared by vitest and the in-app dashboard (SP1: noiseStats.ts,
                                 sp1Fixtures.ts, sp1Goldens.ts; SP2a: columnStats.ts, sp2aGoldens.ts; SP2b: biomeShares.ts,
                                 splineStats.ts, liveness.ts, crossSection.ts, also run by the workers' stats job; SP3a: region.ts
