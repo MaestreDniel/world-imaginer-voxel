@@ -3,7 +3,7 @@ import { PerspectiveCamera } from 'three';
 import { afterEach, beforeAll, beforeEach, describe, expect, test, vi } from 'vitest';
 import { evaluateWorldCapabilities, type CapabilityReport } from '../../src/engine/capabilityRules';
 import type { StreamEvent } from '../../src/engine/coordinator';
-import { lowerRd } from '../../src/engine/renderDistance';
+import { defaultRenderDistance, lowerRd } from '../../src/engine/renderDistance';
 import { WorldSession, type SessionListener } from '../../src/engine/session';
 import { validateParamTrees } from '../../src/gen/trees';
 import { DEFAULT_KEYMAP } from '../../src/player/keymap';
@@ -11,6 +11,7 @@ import { applyRenderDistance, cameraFar } from '../../src/render/renderer';
 import { mountHelp } from '../../src/ui/help';
 import type { DriverStatus } from '../../src/ui/map/previewDriver';
 import { SETTINGS_DEFAULTS, type WorldSettings } from '../../src/ui/settings';
+import { mountSettingsPanel } from '../../src/ui/settingsPanel';
 import { StoreCorrupt } from '../../src/world/store/pool';
 import { JobCancelled, WorkerFailed } from '../../src/engine/workerPool';
 import { SIM_THREAD } from '../../src/world/store/reclaim';
@@ -31,7 +32,7 @@ import { NEAR_FLY, NEAR_WALK } from '../../src/render/renderer';
 import { createReloader, createWorldUrl, savedWorldUrl, worldHash, type HereState } from '../../src/ui/world/reload';
 import {
   closeOverlays, countPendingTimers, countTileCalls, createAim, createClickQueue, createHookEdit, createRdControl, createUndoNotice, createWorldNotices, everyFrameUntil, failBeforeReveal, flushOnPageHide, handleContextLoss,
-  benchSetTime, benchWalk, handleStreamEvent, helpChange, installRepeatStop, installUndoKeys, installWiTest, mapKey, offerLowerRd, paletteFirst, onDriverStatus, onSimFailure, pushCoordinatorTeardown, rdShownOnLoad, releaseOnFailure, reloadRd, runTeardown, speedKey, stopAfterFailure, switchMode,
+  benchSetTime, benchWalk, handleStreamEvent, settingsChange, installRepeatStop, installUndoKeys, installWiTest, mapKey, offerLowerRd, paletteFirst, onDriverStatus, onSimFailure, pushCoordinatorTeardown, rdShownOnLoad, releaseOnFailure, reloadRd, runTeardown, speedKey, stopAfterFailure, switchMode,
   UNDO_NOTICE_MS, type WiTest, type WiTestPage,
 } from '../../src/ui/world/worldPage';
 import { createEditLatency } from '../../src/ui/world/editLatency';
@@ -56,7 +57,8 @@ import {
 import {
   EDIT_FAILED_NOTICE, HISTORY_RESET_NOTICE, SAVED_EDIT_FAILED_NOTICE, STATE_RESET_NOTICE, countAccepted, createPageAutosave, hotbarStorage, lastFlush, leaveAfterSave,
   installWorldLock, lowerRdHref, OLDER_GENERATOR_NOTICE, OLDER_GENERATOR_NOTICE_MS, olderGeneratorRecord, openOlderGenerator, openRequest, openSavedWorld,
-  readSavedWorld, refuseOpen, restoreMode, restoredStart, revealOlderGenerator, savePlaceKey, savedWorldUrlRules, timeOfHours, addPlaceAt,
+  readSavedWorld, refuseOpen, restoreMode, restoredStart, revealOlderGenerator, savePlaceKey, savedWorldUrlRules, settingsKey, timeOfHours, addPlaceAt,
+  worldIgnoresKeys,
   UNSAVED_NOTICE, unsavedNoticeOf, type WorldPageOptions,
 } from '../../src/ui/world/worldPage';
 import { noticeOfQuery, REFUSAL_REASON_KEY, type OpenRefusal, type StorageLike } from '../../src/ui/worldsMenu';
@@ -74,6 +76,15 @@ import { parseWorldQuery } from '../../src/ui/world/query';
 import { STATE_BOUNDS } from '../../src/ui/world/stateBounds';
 import { installDom, type FakeElement } from './fixtures/domShim';
 import { densityTree } from './fixtures/editedTrees';
+
+const MIB = 1 << 20;
+/** A capability report of the dev laptop: the RD control's and the help's (rdMax 16, "Default (12)"). */
+const REPORT: CapabilityReport = {
+  secureContext: true, pageIsolated: true, workerProbe: 'ok', workerIsolated: true, sabShared: true,
+  growableSab: true, reservation: { blockBytes: 768 * MIB, byteBytes: 512 * MIB },
+  webgl2: true, multiDraw: true, timerQuery: true, maxArrayTextureLayers: 2048, maxTextureSize: 16384,
+  renderer: 'Mesa Intel(R) Graphics (ADL GT2)', vendor: 'Intel', hardwareConcurrency: 20, deviceMemory: 8,
+};
 
 /** A frame scheduler that queues callbacks; `flush` runs one frame. */
 function frames() {
@@ -422,14 +433,35 @@ describe('the map overlay on a fatal error or a context loss (SP4c spec §1.3, �
     expect(() => closeOverlays({ isOpen: false, close: () => { throw new Error('closed twice'); } }, null)).not.toThrow();
   });
 
-  test('both of the streaming route\'s paths close the palette, B\'s dialog and the map through closeOverlays', () => {
+  test('both of the streaming route\'s paths close the palette, B\'s dialog, the Settings screen and the map through closeOverlays', () => {
     const src = readFileSync(new URL('../../src/ui/world/worldPage.ts', import.meta.url), 'utf8');
-    expect(src.match(/^\s*closeMap: \(\) => closeOverlays\(paletteRef, mapRef, placeDialogRef\),$/gm)).toHaveLength(2);
+    expect(src.match(/^\s*closeMap: \(\) => closeOverlays\(paletteRef, mapRef, placeDialogRef, settingsRef\),$/gm)).toHaveLength(2);
     expect(src).not.toMatch(/closeMap: \(\) => mapRef\?\.dispose\(\)/);
     expect(src).toMatch(/^\s*let paletteRef: Palette \| null = null;$/m);
     expect(src).toMatch(/^\s*paletteRef = palette;$/m);
     expect(src).toMatch(/^\s*let placeDialogRef: PlaceDialog \| null = null;$/m);
     expect(src).toMatch(/^\s*placeDialogRef = placeDialog;$/m);
+    expect(src).toMatch(/^\s*let settingsRef: SettingsPanel \| null = null;$/m);
+    expect(src).toMatch(/^\s*settingsRef = settingsPanel;$/m);
+  });
+
+  test('the open Settings screen closes with the overlays, after B\'s dialog and before the map; a palette whose close throws still closes it (SP5b spec §1.4)', () => {
+    const order: string[] = [];
+    const panel = mountSettingsPanel(dom.body as unknown as HTMLElement, {
+      settings: SETTINGS_DEFAULTS, onSettings: () => {}, rdMax: 16, defaultRd: 12, onClose: () => { order.push('settings.close'); },
+    });
+    panel.open();
+    const dialog = { isOpen: true, close: () => { dialog.isOpen = false; order.push('dialog.close'); } };
+    const overlay = openOverlay(order);
+    closeOverlays({ isOpen: true, close: () => { order.push('palette.close'); } }, overlay, dialog, panel);
+    expect(order).toEqual(['palette.close', 'dialog.close', 'settings.close', 'overlay.dispose (panel shown: false)']);
+    expect(panel.isOpen).toBe(false);
+    const second = openOverlay(order);
+    panel.open();
+    expect(() => closeOverlays({ isOpen: true, close: () => { throw new Error('no host'); } }, second, null, panel)).toThrow('no host');
+    expect(panel.isOpen).toBe(false);
+    expect(second.dispose).toHaveBeenCalledTimes(1);
+    panel.dispose();
   });
 
   test('B\'s open dialog closes with the palette, without requesting the lock, and before the map (SP5b spec §3.7, D12)', () => {
@@ -535,20 +567,12 @@ describe('createRdControl (SP4b spec §5, D18; Review Focus 5)', () => {
   beforeEach(() => { dom = installDom(); });
   afterEach(() => { vi.unstubAllGlobals(); });
 
-  const MIB = 1 << 20;
-  const REPORT: CapabilityReport = {
-    secureContext: true, pageIsolated: true, workerProbe: 'ok', workerIsolated: true, sabShared: true,
-    growableSab: true, reservation: { blockBytes: 768 * MIB, byteBytes: 512 * MIB },
-    webgl2: true, multiDraw: true, timerQuery: true, maxArrayTextureLayers: 2048, maxTextureSize: 16384,
-    renderer: 'Mesa Intel(R) Graphics (ADL GT2)', vendor: 'Intel', hardwareConcurrency: 20, deviceMemory: 8,
-  };
-
   /**
-   * The control over fakes at RD `rd`: the coordinator and the help record their calls, the world's
+   * The control over fakes at RD `rd`: the coordinator and the Settings screen record their calls, the world's
    * `setRenderDistance` is Task 18's `applyRenderDistance` on a real camera, the fog is the real easing, and `save`
    * records what the page would store. A navigation would go through `location.assign` (stubbed to record it).
    */
-  function rig(rd = 8, help: { setRd(rd: number | null): void } = { setRd: vi.fn() }) {
+  function rig(rd = 8, panel: { setRd(rd: number | null): void } = { setRd: vi.fn() }) {
     const coordinator = { setRenderDistance: vi.fn<(rd: number) => void>() };
     const camera = new PerspectiveCamera(70, 16 / 9, 0.1, cameraFar(rd));
     const world = { camera, setRenderDistance: vi.fn((r: number) => applyRenderDistance(camera, r)) };
@@ -556,8 +580,8 @@ describe('createRdControl (SP4b spec §5, D18; Review Focus 5)', () => {
     const saved: Array<number | null> = [];
     const assign = vi.fn();
     vi.stubGlobal('location', { assign, href: '/' });
-    const control = createRdControl({ coordinator, world, fog, help, save: (r) => { saved.push(r); }, defaultRd: 12 });
-    return { control, coordinator, world, camera, fog, saved, help, assign };
+    const control = createRdControl({ coordinator, world, fog, panel, save: (r) => { saved.push(r); }, defaultRd: 12 });
+    return { control, coordinator, world, camera, fog, saved, panel, assign };
   }
 
   test('apply(10) applies live: coordinator.setRenderDistance(10), world.setRenderDistance(10), fog target 10, saved 10, no navigation, and camera.far 288', () => {
@@ -569,7 +593,7 @@ describe('createRdControl (SP4b spec §5, D18; Review Focus 5)', () => {
     expect(r.world.setRenderDistance).toHaveBeenLastCalledWith(10);
     expect(r.fog.target).toBe(10);
     expect(r.saved).toEqual([10]);
-    expect(r.help.setRd).toHaveBeenLastCalledWith(10);
+    expect(r.panel.setRd).toHaveBeenLastCalledWith(10);
     expect(r.assign).not.toHaveBeenCalled();
     expect(r.camera.far).toBe(288);
   });
@@ -581,7 +605,7 @@ describe('createRdControl (SP4b spec §5, D18; Review Focus 5)', () => {
     expect(r.world.setRenderDistance).toHaveBeenLastCalledWith(12);
     expect(r.fog.target).toBe(12);
     expect(r.saved).toEqual([null]);
-    expect(r.help.setRd).toHaveBeenLastCalledWith(null);
+    expect(r.panel.setRd).toHaveBeenLastCalledWith(null);
     expect(r.camera.far).toBe(cameraFar(12));
   });
 
@@ -665,29 +689,25 @@ describe('createRdControl (SP4b spec §5, D18; Review Focus 5)', () => {
     expect(() => dom.el('world-slow-notice')).toThrow();
   });
 
-  test('after the slow notice lowers 12 → 10, changing the FOV in the help keeps RD 10 (no setRenderDistance(12)) and #setting-rd shows 10', () => {
+  test('after the slow notice lowers 12 → 10, changing the FOV in the Settings screen keeps RD 10 (no setRenderDistance(12)) and #setting-rd shows 10', () => {
     const notices = createWorldNotices(dom.body as unknown as HTMLElement, createReloader(vi.fn(), vi.fn()));
     // The page's settings as it keeps them: `save` writes the rd, and its onSettings applies an rd that differs.
     let page: WorldSettings = { ...SETTINGS_DEFAULTS, rd: 12 };
     let control: { apply(rd: number | null): void } | null = null;
-    const help = mountHelp(dom.body as unknown as HTMLElement, {
-      map: DEFAULT_KEYMAP,
+    const panel = mountSettingsPanel(dom.body as unknown as HTMLElement, {
       settings: page,
       onSettings: (s) => {
         const rdChanged = s.rd !== page.rd;
         page = s;
         if (rdChanged) control!.apply(s.rd);
       },
-      report: REPORT,
-      evaluation: evaluateWorldCapabilities(REPORT),
       rdMax: 16,
-      openMap: () => {},
-      onFullscreen: () => {},
+      defaultRd: defaultRenderDistance(REPORT),
       onClose: () => {},
     });
-    const r = rig(12, help);
+    const r = rig(12, panel);
     control = createRdControl({
-      coordinator: r.coordinator, world: r.world, fog: r.fog, help,
+      coordinator: r.coordinator, world: r.world, fog: r.fog, panel,
       save: (rd) => { page = { ...page, rd }; }, defaultRd: 12,
     });
     expect(dom.el('setting-rd').value).toBe('12');
@@ -704,7 +724,7 @@ describe('createRdControl (SP4b spec §5, D18; Review Focus 5)', () => {
     expect(r.world.setRenderDistance.mock.calls.map((c) => c[0])).toEqual([10]);
     expect(dom.el('setting-rd').value).toBe('10');
     expect(r.camera.far).toBe(288);
-    // The help's select itself applies live too.
+    // The screen's select itself applies live too.
     const rd = dom.el('setting-rd');
     rd.value = '14';
     rd.dispatchEvent(new Event('change'));
@@ -712,7 +732,7 @@ describe('createRdControl (SP4b spec §5, D18; Review Focus 5)', () => {
     expect(page.rd).toBe(14);
   });
 
-  describe('the help\'s RD select shows the RD in force (rulings R8)', () => {
+  describe('the Settings screen\'s RD select shows the RD in force (rulings R8)', () => {
     test('on load: the URL\'s RD on a ?rd= load, else the saved setting (null: Default)', () => {
       expect(rdShownOnLoad(4, 4, 6)).toBe(4);
       expect(rdShownOnLoad(4, 4, null)).toBe(4);
@@ -720,44 +740,40 @@ describe('createRdControl (SP4b spec §5, D18; Review Focus 5)', () => {
       expect(rdShownOnLoad(null, 12, null)).toBeNull();
     });
 
-    test('a help change keeps the saved rd unless the rd differs from the RD in force', () => {
+    test('a change from the screen keeps the saved rd unless the rd differs from the RD in force', () => {
       const saved: WorldSettings = { ...SETTINGS_DEFAULTS, rd: 6 };
-      // A FOV change from a help showing RD 4: saved with rd 6 kept, no rd applied.
-      expect(helpChange(saved, { ...saved, rd: 4, fov: 90 }, 4)).toEqual({ settings: { ...saved, fov: 90 }, applyRd: false });
+      // A FOV change from a screen showing RD 4: saved with rd 6 kept, no rd applied.
+      expect(settingsChange(saved, { ...saved, rd: 4, fov: 90 }, 4)).toEqual({ settings: { ...saved, fov: 90 }, applyRd: false });
       // The saved value, different from the RD in force, applies.
-      expect(helpChange(saved, { ...saved, rd: 6 }, 4)).toEqual({ settings: saved, applyRd: true });
-      expect(helpChange(saved, { ...saved, rd: null }, 4).applyRd).toBe(true);
+      expect(settingsChange(saved, { ...saved, rd: 6 }, 4)).toEqual({ settings: saved, applyRd: true });
+      expect(settingsChange(saved, { ...saved, rd: null }, 4).applyRd).toBe(true);
       // The RD in force is a no-op.
-      expect(helpChange(saved, { ...saved, rd: 4 }, 4)).toEqual({ settings: saved, applyRd: false });
+      expect(settingsChange(saved, { ...saved, rd: 4 }, 4)).toEqual({ settings: saved, applyRd: false });
     });
 
     test('?rd=4 with 6 saved: #setting-rd shows 4; a FOV change keeps 6 saved; choosing 4 is a no-op; choosing 6 applies RD 6 live and saves it', () => {
-      // The page's wiring: the help gets the RD in force, its onSettings goes through helpChange, and the RD control's
-      // help tracks what the select shows.
+      // The page's wiring: the screen gets the RD in force, its onSettings goes through settingsChange, and the RD
+      // control's panel tracks what the select shows.
       let page: WorldSettings = { ...SETTINGS_DEFAULTS, rd: 6 };
       let shown = rdShownOnLoad(4, 4, page.rd);
       const stored: WorldSettings[] = [];
       let control: { apply(rd: number | null): void } | null = null;
-      const help = mountHelp(dom.body as unknown as HTMLElement, {
-        map: DEFAULT_KEYMAP,
+      const panel = mountSettingsPanel(dom.body as unknown as HTMLElement, {
         settings: { ...page, rd: shown },
         onSettings: (s) => {
-          const c = helpChange(page, s, shown);
+          const c = settingsChange(page, s, shown);
           page = c.settings;
           stored.push(page);
           if (c.applyRd) control!.apply(s.rd);
         },
-        report: REPORT,
-        evaluation: evaluateWorldCapabilities(REPORT),
         rdMax: 16,
-        openMap: () => {},
-        onFullscreen: () => {},
+        defaultRd: defaultRenderDistance(REPORT),
         onClose: () => {},
       });
       const r = rig(4);
       control = createRdControl({
         coordinator: r.coordinator, world: r.world, fog: r.fog,
-        help: { setRd: (v) => { shown = v; help.setRd(v); } },
+        panel: { setRd: (v) => { shown = v; panel.setRd(v); } },
         save: (v) => { page = { ...page, rd: v }; stored.push(page); }, defaultRd: 12,
       });
       const select = dom.el('setting-rd');
@@ -782,23 +798,19 @@ describe('createRdControl (SP4b spec §5, D18; Review Focus 5)', () => {
       expect(r.assign).not.toHaveBeenCalled();
     });
 
-    test('after the mode switch to split, a FOV change from the help keeps mapMode: \'split\' and watchLive: false (SP4c spec §2.5)', () => {
-      // The help's copy of the settings is the one it saw at mount (full, watching live); the map's header changes the
-      // saved settings afterwards, and the help has no control for either field.
+    test('after the mode switch to split, a FOV change from the Settings screen keeps mapMode: \'split\' and watchLive: false (SP4c spec §2.5)', () => {
+      // The screen's copy of the settings is the one it saw at mount (full, watching live); the map's header changes the
+      // saved settings afterwards, and the screen has no control for either field.
       let page: WorldSettings = { ...SETTINGS_DEFAULTS };
       const stored: WorldSettings[] = [];
-      mountHelp(dom.body as unknown as HTMLElement, {
-        map: DEFAULT_KEYMAP,
+      mountSettingsPanel(dom.body as unknown as HTMLElement, {
         settings: page,
         onSettings: (s) => {
-          page = helpChange(page, s, null).settings;
+          page = settingsChange(page, s, null).settings;
           stored.push(page);
         },
-        report: REPORT,
-        evaluation: evaluateWorldCapabilities(REPORT),
         rdMax: 16,
-        openMap: () => {},
-        onFullscreen: () => {},
+        defaultRd: defaultRenderDistance(REPORT),
         onClose: () => {},
       });
       // The mode switch and the Watch live checkbox (the overlay's header) save at once.
@@ -807,7 +819,7 @@ describe('createRdControl (SP4b spec §5, D18; Review Focus 5)', () => {
       fov.value = '90';
       fov.dispatchEvent(new Event('input'));
       expect(stored.at(-1)).toEqual({ ...SETTINGS_DEFAULTS, fov: 90, mapMode: 'split', watchLive: false });
-      expect(helpChange(page, { ...page, mapMode: 'full', watchLive: true, fov: 80 }, null).settings)
+      expect(settingsChange(page, { ...page, mapMode: 'full', watchLive: true, fov: 80 }, null).settings)
         .toEqual({ ...SETTINGS_DEFAULTS, fov: 80, mapMode: 'split', watchLive: false });
     });
   });
@@ -1057,7 +1069,7 @@ describe('the world\'s URL (createWorldUrl, SP4c spec §1.6, D20)', () => {
     const start = src.indexOf('\n    failAfterReveal = (cause, shown) => {');
     expect(start).toBeGreaterThan(-1);
     const block = src.slice(start, src.indexOf('\n    };', start + 1));
-    expect(block).toMatch(/closeMap: \(\) => closeOverlays\(paletteRef, mapRef, placeDialogRef\)/);
+    expect(block).toMatch(/closeMap: \(\) => closeOverlays\(paletteRef, mapRef, placeDialogRef, settingsRef\)/);
     const release = block.slice(block.indexOf('release: ['));
     expect(release).toMatch(/^\s*\(\) => teleport\?\.dispose\(\),$/m);
     expect(release.indexOf('teleport?.dispose()')).toBeLessThan(release.indexOf('pool?.terminate()'));
@@ -1366,8 +1378,10 @@ describe('mapKey: M with the help open (SP4c spec §1.6, §2.4; final review WLD
 
   test('the page\'s M goes through it', () => {
     const src = readFileSync(new URL('../../src/ui/world/worldPage.ts', import.meta.url), 'utf8');
-    // Through the palette's close first since SP5a (spec §4.4).
-    expect(src).toMatch(/case 'map': paletteFirst\(palette, \(\) => mapKey\(help, mapRef\)\); break;/);
+    // Through the palette's close first since SP5a (spec §4.4); the help and the Settings screen as one panel (SP5b
+    // spec §1.4), so the map opens over neither.
+    expect(src).toMatch(/get isOpen\(\): boolean \{\s+return help\.isOpen \|\| settingsPanel\.isOpen;\s+\},\s+close\(\): void \{\s+help\.close\(\);\s+settingsPanel\.close\(\);/);
+    expect(src).toMatch(/case 'map': paletteFirst\(palette, \(\) => mapKey\(panels, mapRef\)\); break;/);
   });
 });
 
@@ -1405,10 +1419,10 @@ describe('paletteFirst: M and H with the palette open (SP5a spec §4.4, D10)', (
   test('the page\'s M and H go through it, E closes the help before opening the palette, and the frame step\'s `paused` includes `palette.isOpen`', () => {
     // The page's post-reveal wiring cannot be mounted in the unit project, so its source is pinned.
     const src = readFileSync(new URL('../../src/ui/world/worldPage.ts', import.meta.url), 'utf8');
-    expect(src).toMatch(/case 'map': paletteFirst\(palette, \(\) => mapKey\(help, mapRef\)\); break;/);
+    expect(src).toMatch(/case 'map': paletteFirst\(palette, \(\) => mapKey\(panels, mapRef\)\); break;/);
     expect(src).toMatch(/case 'help':\s+paletteFirst\(palette, \(\) => \{/);
-    expect(src).toMatch(/case 'palette':\s+if \(!palette\.isOpen\) \{\s+if \(help\.isOpen\) help\.close\(\);\s+palette\.open\(\);/);
-    expect(src).toMatch(/paused: \(\) => help\.isOpen \|\| palette\.isOpen \|\| placeDialog\.isOpen \|\| mapOverlay\.owner === 'map',/);
+    expect(src).toMatch(/case 'palette':\s+if \(!palette\.isOpen\) \{\s+if \(help\.isOpen\) help\.close\(\);\s+settingsPanel\.close\(\);\s+palette\.open\(\);/);
+    expect(src).toMatch(/paused: \(\) => help\.isOpen \|\| palette\.isOpen \|\| placeDialog\.isOpen \|\| settingsPanel\.isOpen \|\| mapOverlay\.owner === 'map',/);
   });
 });
 
@@ -1421,20 +1435,24 @@ describe('B saves a place in a saved world (SP5b spec §3.7, D12; rulings P33, R
   /** `n` places at (i, 70, 0). */
   const placesOf = (n: number): Place[] => Array.from({ length: n }, (_, i) => ({ id: `q${i}`, name: `Q${i}`, colour: 0, x: i, y: 70, z: 0, yaw: 0, pitch: 0 }));
 
-  /** B as the page wires it: the palette and the help as fakes, the real dialog, the places model and the notices' log. */
-  function setup(o: { paletteOpen?: boolean; helpOpen?: boolean; initial?: Place[]; saved?: boolean } = {}) {
+  /**
+   * B as the page wires it: the palette, the help and the Settings screen as fakes, the real dialog, the places model
+   * and the notices' log.
+   */
+  function setup(o: { paletteOpen?: boolean; helpOpen?: boolean; settingsOpen?: boolean; initial?: Place[]; saved?: boolean } = {}) {
     const log: string[] = [];
     const palette = { isOpen: o.paletteOpen ?? false, close: () => { palette.isOpen = false; log.push('palette.close'); } };
     const help = { isOpen: o.helpOpen ?? false };
+    const settings = { isOpen: o.settingsOpen ?? false };
     const requestLock = vi.fn();
     const dialog = mountPlaceDialog(dom.body as unknown as HTMLElement, { requestLock, onClose: () => {} });
     let n = 0;
     const places = createPlaces(o.initial ?? [], () => `p${++n}`);
     const shown: Array<[string, number]> = [];
     const press = (): void => savePlaceKey({
-      palette, help, dialog, places: o.saved === false ? null : places, camera, notices: { show: (text, ms) => { shown.push([text, ms]); } },
+      palette, help, settings, dialog, places: o.saved === false ? null : places, camera, notices: { show: (text, ms) => { shown.push([text, ms]); } },
     });
-    return { log, palette, help, dialog, places, shown, press, requestLock };
+    return { log, palette, help, settings, dialog, places, shown, press, requestLock };
   }
   const enter = (): void => { dom.document.dispatchEvent(Object.assign(new Event('keydown', { cancelable: true }), { code: 'Enter', key: 'Enter', repeat: false })); };
 
@@ -1463,7 +1481,7 @@ describe('B saves a place in a saved world (SP5b spec §3.7, D12; rulings P33, R
     expect(dom.el('place-name').value).toBe('Place 1 (312, 88, -1541)');
     // The frame step's `paused` includes the dialog (pinned below): the world pauses behind it.
     const src = readFileSync(new URL('../../src/ui/world/worldPage.ts', import.meta.url), 'utf8');
-    expect(src).toMatch(/paused: \(\) => help\.isOpen \|\| palette\.isOpen \|\| placeDialog\.isOpen \|\| mapOverlay\.owner === 'map',/);
+    expect(src).toMatch(/paused: \(\) => help\.isOpen \|\| palette\.isOpen \|\| placeDialog\.isOpen \|\| settingsPanel\.isOpen \|\| mapOverlay\.owner === 'map',/);
     // B again while it is open does nothing (the proposal stays as typed).
     dom.el('place-name').value = 'Lookout';
     p.press();
@@ -1482,6 +1500,19 @@ describe('B saves a place in a saved world (SP5b spec §3.7, D12; rulings P33, R
     expect(u.dialog.isOpen).toBe(false);
     expect(u.shown).toEqual([]);
     u.dialog.dispose();
+  });
+
+  test('with the Settings open, B does nothing (ruling P33)', () => {
+    const s = setup({ settingsOpen: true });
+    s.press();
+    expect(s.dialog.isOpen).toBe(false);
+    expect(s.settings.isOpen).toBe(true);
+    expect(s.shown).toEqual([]);
+    expect(s.places.list).toEqual([]);
+    s.dialog.dispose();
+    // The page passes its Settings screen to B's guard.
+    const src = readFileSync(new URL('../../src/ui/world/worldPage.ts', import.meta.url), 'utf8');
+    expect(src).toMatch(/savePlaceKey\(\{\s+palette, help, settings: settingsPanel, dialog: placeDialog, places, camera: fly,/);
   });
 
   test('B with 256 places shows `A world holds at most 256 places` and no dialog', () => {
@@ -1554,6 +1585,116 @@ describe('B saves a place in a saved world (SP5b spec §3.7, D12; rulings P33, R
     expect(src).toMatch(/places: \(\) => worldPlaces\.list,/);
     expect(src).toMatch(/teardown\.push\(worldPlaces\.subscribe\(\(\) => a\.markChanged\(\)\)\);/);
     expect(src).toMatch(/case 'savePlace':\s+savePlaceKey\(\{/);
+  });
+});
+
+describe('G and the Settings screen in the world (SP5b spec §1.4, D9; ruling P33)', () => {
+  let dom: ReturnType<typeof installDom>;
+  beforeEach(() => { dom = installDom(); });
+  afterEach(() => { vi.unstubAllGlobals(); });
+
+  const SRC = (): string => readFileSync(new URL('../../src/ui/world/worldPage.ts', import.meta.url), 'utf8');
+  const keydown = (code: string, key: string) => Object.assign(new Event('keydown', { cancelable: true }), { code, key, repeat: false });
+
+  test('G opens the panel and pauses the world; a slider focused in it gets the arrow keys (the world handles none)', () => {
+    const log: string[] = [];
+    const panel = mountSettingsPanel(dom.body as unknown as HTMLElement, {
+      settings: SETTINGS_DEFAULTS, onSettings: () => {}, rdMax: 16, defaultRd: 12, onClose: () => { log.push('panel.close'); },
+    });
+    // G with the palette and the help open: the palette closes first, then the help, then the screen opens, the mouse
+    // released.
+    const palette = { isOpen: true, close: () => { palette.isOpen = false; log.push('palette.close'); } };
+    const help = { isOpen: true, close: () => { help.isOpen = false; log.push('help.close'); } };
+    const dialog = { isOpen: false };
+    const canvas = dom.document.createElement('canvas');
+    dom.document.setPointerLock(canvas);
+    const g = (): void => settingsKey({ palette, help, dialog, panel, releasePointer: () => dom.document.exitPointerLock() });
+    g();
+    expect(log).toEqual(['palette.close', 'help.close']);
+    expect(panel.isOpen).toBe(true);
+    expect(dom.el('settings-panel').hidden).toBe(false);
+    expect(dom.document.pointerLockElement).toBe(null);
+    // The frame step's `paused` includes the screen: the world pauses behind it.
+    expect(SRC()).toMatch(/paused: \(\) => help\.isOpen \|\| palette\.isOpen \|\| placeDialog\.isOpen \|\| settingsPanel\.isOpen \|\| mapOverlay\.owner === 'map',/);
+    // The world's input as the page attaches it: a slider focused in the screen keeps every key; the world handles none
+    // (no action, nothing held, nothing default-prevented, so the browser moves the slider and presses the button).
+    const actions: string[] = [];
+    const input = attachInput(canvas as unknown as HTMLElement, {
+      onAction: (a) => actions.push(a),
+      onLook: () => {},
+      isTextFocus: () => worldIgnoresKeys(dom.document.activeElement, panel.isOpen),
+      active: () => true,
+      doc: dom.document as unknown as Pick<Document, 'addEventListener' | 'removeEventListener' | 'pointerLockElement'>,
+      win: new EventTarget() as unknown as Pick<Window, 'addEventListener' | 'removeEventListener'>,
+    });
+    dom.el('setting-fov').focus();
+    for (const [code, key] of [['ArrowLeft', 'ArrowLeft'], ['ArrowRight', 'ArrowRight'], ['ArrowUp', 'ArrowUp'], ['ArrowDown', 'ArrowDown'], ['Space', ' '], ['KeyW', 'w'], ['KeyG', 'g'], ['KeyH', 'h'], ['KeyE', 'e']] as const) {
+      const e = keydown(code, key);
+      dom.document.dispatchEvent(e);
+      expect(e.defaultPrevented, code).toBe(false);
+    }
+    expect(actions).toEqual([]);
+    expect(input.held.size).toBe(0);
+    expect(panel.isOpen).toBe(true);
+    // A focused select and a focused button (Space presses it) too.
+    for (const id of ['setting-rd', 'settings-close']) {
+      dom.el(id).focus();
+      const space = keydown('Space', ' ');
+      dom.document.dispatchEvent(space);
+      expect(space.defaultPrevented, id).toBe(false);
+    }
+    expect(actions).toEqual([]);
+    // With the focus back on the page, G reaches the world again and closes the screen.
+    dom.el('settings-close').blur();
+    const gKey = keydown('KeyG', 'g');
+    dom.document.dispatchEvent(gKey);
+    expect(gKey.defaultPrevented).toBe(true);
+    expect(actions).toEqual(['settings']);
+    g();
+    expect(panel.isOpen).toBe(false);
+    expect(log).toEqual(['palette.close', 'help.close', 'panel.close']);
+    // Closed, a focused slider is no longer the screen's: H and F1 work there as before (final review C-I2).
+    dom.el('setting-fov').focus();
+    const h = keydown('KeyH', 'h');
+    dom.document.dispatchEvent(h);
+    expect(h.defaultPrevented).toBe(true);
+    expect(actions).toEqual(['settings', 'help']);
+    input.dispose();
+    panel.dispose();
+  });
+
+  test('`worldIgnoresKeys`: a text-entry control always; a select, a slider, a checkbox or a button only while a panel is open', () => {
+    for (const t of [{ tagName: 'INPUT', type: 'text' }, { tagName: 'TEXTAREA' }, { tagName: 'DIV', isContentEditable: true }]) {
+      expect(worldIgnoresKeys(t, false), JSON.stringify(t)).toBe(true);
+      expect(worldIgnoresKeys(t, true), JSON.stringify(t)).toBe(true);
+    }
+    for (const t of [{ tagName: 'INPUT', type: 'range' }, { tagName: 'INPUT', type: 'checkbox' }, { tagName: 'SELECT' }, { tagName: 'BUTTON' }]) {
+      expect(worldIgnoresKeys(t, false), JSON.stringify(t)).toBe(false);
+      expect(worldIgnoresKeys(t, true), JSON.stringify(t)).toBe(true);
+    }
+    for (const t of [{ tagName: 'BODY' }, { tagName: 'CANVAS' }, null]) {
+      expect(worldIgnoresKeys(t, true), JSON.stringify(t)).toBe(false);
+    }
+    // The page's input: any panel counts (the Settings screen, the help, the palette, B's dialog).
+    expect(SRC()).toMatch(/isTextFocus: \(\) => worldIgnoresKeys\(\s+document\.activeElement as HTMLElement \| null,\s+help\.isOpen \|\| settingsPanel\.isOpen \|\| palette\.isOpen \|\| placeDialog\.isOpen,\s+\),/);
+  });
+
+  test('G with the screen open closes it; with B\'s dialog open G does nothing; the page\'s G, the help\'s "Settings (G)" and the RD control go to the screen', () => {
+    const order: string[] = [];
+    const panel = { isOpen: true, open: () => { panel.isOpen = true; order.push('open'); }, close: () => { panel.isOpen = false; order.push('close'); } };
+    const palette = { isOpen: false, close: () => {} };
+    const help = { isOpen: false, close: () => { order.push('help.close'); } };
+    settingsKey({ palette, help, dialog: { isOpen: false }, panel, releasePointer: () => { order.push('release'); } });
+    expect(order).toEqual(['close']);
+    settingsKey({ palette, help, dialog: { isOpen: true }, panel, releasePointer: () => { order.push('release'); } });
+    expect(order).toEqual(['close']);
+    expect(panel.isOpen).toBe(false);
+    const src = SRC();
+    expect(src).toMatch(/case 'settings':\s+settingsKey\(\{ palette, help, dialog: placeDialog, panel: settingsPanel, releasePointer: \(\) => document\.exitPointerLock\(\) \}\);/);
+    expect(src).toMatch(/openSettings: \(\) => settingsPanel\.open\(\),/);
+    expect(src).toMatch(/panel: \{\s+setRd\(r\) \{\s+shownRd = r;\s+settingsPanel\.setRd\(r\);/);
+    expect(src).toMatch(/const settingsPanel: SettingsPanel = mountSettingsPanel\(host, \{\s+settings: \{ \.\.\.settings, rd: shownRd \},\s+onSettings: applySettings,\s+rdMax,\s+defaultRd: defaultRenderDistance\(caps\),/);
+    expect(src).toMatch(/teardown\.push\(\(\) => settingsPanel\.dispose\(\)\);/);
   });
 });
 
@@ -2981,6 +3122,52 @@ describe('autosave in the saved world: Reloads reopen /?world, navigations and f
     expect(now.mock.calls).toEqual([['/?at=1,2']]);
     // The page's reloader goes through it, with the page's autosave.
     expect(SRC()).toMatch(/const reloader = createReloader\(leaveAfterSave\(\(\) => autosave, \(url\) => navigateTo\(url, location\)\), disarm\);/);
+  });
+
+  test('Worlds menu saves, then navigates to `/`, after `flushed` or 1,000 ms (SP5b spec D31)', async () => {
+    // The help as the page mounts it: "Worlds menu" leaves through the page's reloader (`leaveAfterSave`).
+    const helpWith = (reloader: ReturnType<typeof createReloader>) => mountHelp(dom.body as unknown as HTMLElement, {
+      map: DEFAULT_KEYMAP, report: REPORT, evaluation: evaluateWorldCapabilities(REPORT), rdMax: 16,
+      openMap: () => {}, openSettings: () => {}, worldsMenu: () => reloader.reload('/'), onFullscreen: () => {}, onClose: () => {},
+    });
+    const s = saving();
+    const navigate = vi.fn<(url: string) => void>();
+    const disarm = vi.fn();
+    const help = helpWith(createReloader(leaveAfterSave(() => s.autosave, navigate), disarm));
+    help.open();
+    dom.el('help-worlds-menu').click();
+    // The guard is disarmed and a flush posted at once; `/` waits for its `flushed`.
+    expect(disarm).toHaveBeenCalledTimes(1);
+    expect(s.flushes).toHaveLength(1);
+    await vi.advanceTimersByTimeAsync(400);
+    expect(navigate).not.toHaveBeenCalled();
+    s.flushes[0]!.resolve(OK(1));
+    await jobs();
+    expect(navigate.mock.calls).toEqual([['/']]);
+    // A second click navigates no second time (the reloader leaves once).
+    dom.el('help-worlds-menu').click();
+    await jobs();
+    expect(navigate).toHaveBeenCalledTimes(1);
+    help.close();
+    dom.body.replaceChildren();
+    // A flush that is never answered: `/` at 1,000 ms.
+    const t = saving();
+    const later = vi.fn<(url: string) => void>();
+    helpWith(createReloader(leaveAfterSave(() => t.autosave, later), () => {}));
+    dom.el('help-worlds-menu').click();
+    expect(t.flushes).toHaveLength(1);
+    await vi.advanceTimersByTimeAsync(999);
+    expect(later).not.toHaveBeenCalled();
+    await vi.advanceTimersByTimeAsync(1);
+    expect(later.mock.calls).toEqual([['/']]);
+    dom.body.replaceChildren();
+    // An unsaved world (no autosave): `/` at once.
+    const now = vi.fn<(url: string) => void>();
+    helpWith(createReloader(leaveAfterSave(() => null, now), () => {}));
+    dom.el('help-worlds-menu').click();
+    expect(now.mock.calls).toEqual([['/']]);
+    // The page's help leaves through the page's reloader.
+    expect(SRC()).toMatch(/worldsMenu: \(\) => reloader\.reload\('\/'\),/);
   });
 
   test('a failure after the reveal posts one flush and releases the sim only after `flushed` (or 1,000 ms); a failure of the sim itself posts none', async () => {

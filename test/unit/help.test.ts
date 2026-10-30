@@ -3,8 +3,7 @@ import { evaluateWorldCapabilities, type CapabilityReport } from '../../src/engi
 import { RD_MAX, reservationRdCap } from '../../src/engine/renderDistance';
 import { bindingLabel, DEFAULT_KEYMAP } from '../../src/player/keymap';
 import { mountHelp } from '../../src/ui/help';
-import { SETTINGS_DEFAULTS, SETTINGS_KEY, loadSettings, saveSettings, type WorldSettings } from '../../src/ui/settings';
-import { installDom, type FakeElement } from './fixtures/domShim';
+import { installDom } from './fixtures/domShim';
 
 const MIB = 1 << 20;
 const REPORT: CapabilityReport = {
@@ -19,29 +18,23 @@ describe('mountHelp (SP4a spec §7.4, D31)', () => {
   beforeEach(() => { dom = installDom(); });
   afterEach(() => { vi.unstubAllGlobals(); });
 
-  function mount(over: { settings?: WorldSettings; report?: CapabilityReport; rdMax?: number } = {}) {
+  function mount(over: { report?: CapabilityReport; rdMax?: number } = {}) {
     const report = over.report ?? REPORT;
     const o = {
       map: DEFAULT_KEYMAP,
-      settings: over.settings ?? SETTINGS_DEFAULTS,
-      onSettings: vi.fn<(s: WorldSettings) => void>(),
       report,
       // The page's rdMax (SP4b spec §5): min(16, the reservation's cap).
       rdMax: over.rdMax ?? Math.min(RD_MAX, reservationRdCap(report.reservation)),
       evaluation: evaluateWorldCapabilities(report),
       openMap: vi.fn(),
+      openSettings: vi.fn(),
+      worldsMenu: vi.fn(),
       onFullscreen: vi.fn(),
       onClose: vi.fn(),
     };
     const help = mountHelp(dom.body as unknown as HTMLElement, o);
     return { help, o };
   }
-
-  const change = (id: string, value: string, type = 'change') => {
-    const input = dom.el(id);
-    input.value = value;
-    input.dispatchEvent(new Event(type));
-  };
 
   test('every key-map action appears in Keys with its binding labels', () => {
     mount();
@@ -127,92 +120,15 @@ describe('mountHelp (SP4a spec §7.4, D31)', () => {
     expect(none).toContainEqual(['Store reservation (blocks/bytes)', '—']);
   });
 
-  test('changing RD calls onSettings with the new rd', () => {
-    const { o } = mount();
-    change('setting-rd', '8');
-    expect(o.onSettings).toHaveBeenCalledTimes(1);
-    expect(o.onSettings).toHaveBeenLastCalledWith({ ...SETTINGS_DEFAULTS, rd: 8 });
-    change('setting-rd', '');
-    expect(o.onSettings).toHaveBeenLastCalledWith({ ...SETTINGS_DEFAULTS, rd: null });
-  });
-
-  test('the RD choices run from 4 to the reservation\'s cap, after "Default"; the saved rd is selected', () => {
-    mount({ settings: { ...SETTINGS_DEFAULTS, rd: 6 }, report: { ...REPORT, reservation: { blockBytes: 384 * MIB, byteBytes: 256 * MIB } } });
-    const select = dom.el('setting-rd');
-    expect(select.options.map((op) => op.value)).toEqual(['', '4', '5', '6', '7', '8']);
-    expect(select.options[0]!.textContent).toBe('Default (8)');
-    expect(select.value).toBe('6');
-  });
-
-  test('the RD label is "Render distance" (no "(reloads)": it applies live, SP4b spec §5)', () => {
-    mount();
-    const labels = dom.el('help-settings').querySelectorAll('span').map((sp) => sp.textContent);
-    expect(labels).toContain('Render distance');
-    expect(dom.el('help-settings').textContent).not.toContain('reloads');
-  });
-
-  test('the select\'s maximum is rdMax, and the System section shows "Render distance maximum <rdMax>"', () => {
+  test('the System section shows "Render distance maximum <rdMax>"', () => {
     mount({ rdMax: 10 });
-    expect(dom.el('setting-rd').options.map((op) => op.value)).toEqual(['', '4', '5', '6', '7', '8', '9', '10']);
     const rows = dom.el('help-system').querySelectorAll('tr').map((r) => r.querySelectorAll('td').map((c) => c.textContent));
     expect(rows).toContainEqual(['Render distance maximum', '10']);
     expect(dom.el('help-rd-max').textContent).toBe('Render distance maximum10');
     dom.body.replaceChildren();
     mount();
-    expect(dom.el('setting-rd').options.at(-1)!.value).toBe('16');
     const full = dom.el('help-system').querySelectorAll('tr').map((r) => r.querySelectorAll('td').map((c) => c.textContent));
     expect(full).toContainEqual(['Render distance maximum', '16']);
-  });
-
-  test('setRd(10) updates #setting-rd without calling onSettings', () => {
-    const { help, o } = mount({ settings: { ...SETTINGS_DEFAULTS, rd: 12 } });
-    expect(dom.el('setting-rd').value).toBe('12');
-    help.setRd(10);
-    expect(dom.el('setting-rd').value).toBe('10');
-    expect(o.onSettings).not.toHaveBeenCalled();
-    // The help's copy moved with it: a later FOV change sends rd 10, not the stale 12.
-    change('setting-fov', '90', 'input');
-    expect(o.onSettings).toHaveBeenLastCalledWith({ ...SETTINGS_DEFAULTS, rd: 10, fov: 90 });
-    help.setRd(null);
-    expect(dom.el('setting-rd').value).toBe('');
-    expect(o.onSettings).toHaveBeenCalledTimes(1);
-  });
-
-  test('the FPS cap, FOV, sensitivity and brightness each call onSettings with the whole new settings', () => {
-    const { o } = mount();
-    change('setting-fps-cap', '60');
-    expect(o.onSettings).toHaveBeenLastCalledWith({ ...SETTINGS_DEFAULTS, fpsCap: 60 });
-    change('setting-fov', '90', 'input');
-    expect(o.onSettings).toHaveBeenLastCalledWith({ ...SETTINGS_DEFAULTS, fpsCap: 60, fov: 90 });
-    change('setting-sensitivity', '2.5', 'input');
-    change('setting-brightness', '0.8', 'input');
-    expect(o.onSettings).toHaveBeenLastCalledWith({ ...SETTINGS_DEFAULTS, rd: null, fpsCap: 60, fov: 90, sensitivity: 2.5, brightness: 0.8 });
-    expect(dom.el('help-settings').textContent).toContain('90°');
-  });
-
-  test('"Hold mouse button to repeat": a checkbox, off by default; the checkbox round-trips through `wi.world.settings` (SP5a spec §4.1, D6)', () => {
-    const items = new Map<string, string>();
-    const storage = { getItem: (k: string) => items.get(k) ?? null, setItem: (k: string, v: string) => { items.set(k, v); } };
-    const { o } = mount({ settings: loadSettings(storage) });
-    // The page saves every change it is sent (`applySettings` → `saveSettings`).
-    o.onSettings.mockImplementation((s) => saveSettings(storage, s));
-    const box = dom.el('setting-hold-repeat') as FakeElement & { checked: boolean };
-    expect([box.tagName, box.type, box.checked]).toEqual(['INPUT', 'checkbox', false]);
-    const labels = dom.el('help-settings').querySelectorAll('span').map((sp) => sp.textContent);
-    expect(labels).toContain('Hold mouse button to repeat');
-    box.checked = true;
-    box.dispatchEvent(new Event('change'));
-    expect(o.onSettings).toHaveBeenLastCalledWith({ ...SETTINGS_DEFAULTS, holdRepeat: true });
-    expect(JSON.parse(items.get(SETTINGS_KEY)!)).toMatchObject({ holdRepeat: true });
-    // A new page reads it back checked; unchecking it saves false.
-    dom.body.replaceChildren();
-    const again = mount({ settings: loadSettings(storage) });
-    again.o.onSettings.mockImplementation((s) => saveSettings(storage, s));
-    const box2 = dom.el('setting-hold-repeat') as FakeElement & { checked: boolean };
-    expect(box2.checked).toBe(true);
-    box2.checked = false;
-    box2.dispatchEvent(new Event('change'));
-    expect(loadSettings(storage)).toEqual(SETTINGS_DEFAULTS);
   });
 
   test('open shows it; close hides it and calls onClose once', () => {
@@ -229,6 +145,34 @@ describe('mountHelp (SP4a spec §7.4, D31)', () => {
     expect(o.onClose).toHaveBeenCalledTimes(1);
     help.close();
     expect(o.onClose).toHaveBeenCalledTimes(1);
+    expect(o.openMap).not.toHaveBeenCalled();
+    expect(o.openSettings).not.toHaveBeenCalled();
+    expect(o.worldsMenu).not.toHaveBeenCalled();
+  });
+
+  test('no Settings section; the buttons read `Map (M)`, `Settings (G)`, `Worlds menu`, `Fullscreen` (SP5b spec §1.4, D9, D31)', () => {
+    const order: string[] = [];
+    const { help, o } = mount();
+    // The settings moved to the Settings screen (settingsPanel.ts): no section, no setting row, no "Settings" heading.
+    expect(dom.body.querySelector('#help-settings')).toBeNull();
+    expect(dom.el('world-help').querySelectorAll('h3').map((h) => h.textContent)).toEqual(['Keys', 'System']);
+    for (const id of ['setting-rd', 'setting-fps-cap', 'setting-fov', 'setting-brightness', 'setting-sensitivity', 'setting-hold-repeat']) {
+      expect(dom.body.querySelector(`#${id}`), id).toBeNull();
+    }
+    const links = dom.el('world-help').querySelector('nav')!.querySelectorAll('button');
+    expect(links.map((b) => b.textContent)).toEqual(['Map (M)', 'Settings (G)', 'Worlds menu', 'Fullscreen']);
+    expect(links.map((b) => b.id)).toEqual(['help-map', 'help-open-settings', 'help-worlds-menu', 'help-fullscreen']);
+    expect(links.map((b) => b.type)).toEqual(['button', 'button', 'button', 'button']);
+    // "Settings (G)" closes the help first, then the page opens the screen.
+    o.openSettings.mockImplementation(() => { order.push(`openSettings (help open: ${help.isOpen})`); });
+    o.onClose.mockImplementation(() => { order.push('onClose'); });
+    help.open();
+    dom.el('help-open-settings').click();
+    expect(order).toEqual(['onClose', 'openSettings (help open: false)']);
+    expect(o.openSettings).toHaveBeenCalledTimes(1);
+    // "Worlds menu" hands the leave to the page (which saves, then navigates).
+    dom.el('help-worlds-menu').click();
+    expect(o.worldsMenu).toHaveBeenCalledTimes(1);
     expect(o.openMap).not.toHaveBeenCalled();
   });
 

@@ -11,6 +11,7 @@ import {
 } from '../../src/persist/saves';
 import { readWiworld, wiworldHash, writeWiworld } from '../../src/persist/wiworld';
 import { DEFAULT_MAP_STATE, encodeMapState } from '../../src/ui/map/mapState';
+import { SETTINGS_DEFAULTS, SETTINGS_KEY } from '../../src/ui/settings';
 import { profileOptions } from '../../src/ui/map/toolbar';
 import { parseWorldQuery } from '../../src/ui/world/query';
 import { STATE_BOUNDS } from '../../src/ui/world/stateBounds';
@@ -186,6 +187,41 @@ describe('mountWorldsMenu: the start screen and New world (SP5b spec §1.1, §1.
     expect(dom.el('start-screen-backdrop').style.background).toContain('#3D78D6');
     await flush();
     expect(loadManifest).toHaveBeenCalledTimes(1);
+  });
+
+  test('`#start-settings` opens the panel over the start screen (SP5b spec §1.4, D9; ruling P23)', async () => {
+    // The settings this browser keeps (`wi.world.settings`), read at mount as the world page reads them.
+    local.setItem(SETTINGS_KEY, JSON.stringify({ ...SETTINGS_DEFAULTS, fov: 85, mapMode: 'split' }));
+    mount();
+    const panel = dom.el('settings-panel');
+    expect(panel.hidden).toBe(true);
+    dom.el('start-settings').click();
+    expect(panel.hidden).toBe(false);
+    // Over the start screen: inside it, after its cards, the start card still there beneath.
+    const screen = dom.el('start-screen');
+    expect(panel.parentElement).toBe(screen);
+    expect(screen.children.at(-1)).toBe(panel);
+    expect(shown('start-new')).toBe(true);
+    // No capability probe runs here: "Default" with no number, then 4 … 16.
+    const rd = dom.el('setting-rd');
+    expect(rd.options.map((op) => op.textContent)).toEqual(['Default', ...Array.from({ length: 13 }, (_, i) => String(4 + i))]);
+    expect(dom.el('setting-fov').value).toBe('85');
+    // A change is kept at once, the map's mode with it.
+    rd.value = '10';
+    rd.dispatchEvent(new Event('change'));
+    expect(JSON.parse(local.map.get(SETTINGS_KEY)!)).toEqual({ ...SETTINGS_DEFAULTS, fov: 85, mapMode: 'split', rd: 10 });
+    dom.el('settings-tab-controls').click();
+    const hold = dom.el('setting-hold-repeat') as FakeElement & { checked: boolean };
+    hold.checked = true;
+    hold.dispatchEvent(new Event('change'));
+    expect(JSON.parse(local.map.get(SETTINGS_KEY)!)).toMatchObject({ rd: 10, holdRepeat: true });
+    // Esc closes it, and the start screen is as it was.
+    const esc = Object.assign(new Event('keydown', { cancelable: true }), { code: 'Escape', key: 'Escape' });
+    dom.document.dispatchEvent(esc);
+    expect(esc.defaultPrevented).toBe(true);
+    expect(panel.hidden).toBe(true);
+    expect(shown('start-new')).toBe(true);
+    await flush();
   });
 
   test('a refusal\'s notice appears in `#start-notice`', async () => {

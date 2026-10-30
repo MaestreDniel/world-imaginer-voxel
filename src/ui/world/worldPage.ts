@@ -37,7 +37,8 @@
  * frame step (`frameStep.ts`, SP4b spec §7.2): every rAF the throttle (fed the raw delta before the FPS limiter), the
  * fly controller (horizontal flight with no horizontal limit, §6.1) and `coordinator.update`; on rendered frames the
  * uploads under the 2 ms / 32-row budget, the floating origin, the store's reclamation drain, the eye's sky light, the
- * clock (T cycles the time speed) and the render. The HUD (F3, the streaming counts of §7.3) and the help (H, F1).
+ * clock (T cycles the time speed) and the render. The HUD (F3, the streaming counts of §7.3), the help (H, F1) and the
+ * Settings screen (G, `settingsPanel.ts`, SP5b spec §1.4, D9).
  * Load errors (the coordinator's `fatal` event, whose message and cause the panel reads, a `StoreFullError` cause
  * keeping the store-full text; `WorkerFailed`; the watchdog) show the failure panel, with a link to the next lower RD
  * when rd > 4 (P49). `WorldPage.loadStats` holds the load's figures for the flight JSON (§9.5); with `opts.flight`
@@ -62,15 +63,16 @@
  * the frame step stop the loop and show the notices' failure panel with "Copy details" and a Reload link.
  *
  * The render distance is live (SP4b spec §5, D18): an integer in [4, rdMax], rdMax = min(16, the reservation's cap);
- * the help's select, the slow-frame notice's and StoreFull's "Lower to RD n" all go through `createRdControl`, which
- * sets it on the coordinator (the next `update` re-classifies) and the renderer (the far plane), moves the fog's target
- * and saves the setting; "Default (n)" applies the resolved default. The fog eases outward after a raise
+ * the Settings screen's select, the slow-frame notice's and StoreFull's "Lower to RD n" all go through
+ * `createRdControl`, which sets it on the coordinator (the next `update` re-classifies) and the renderer (the far
+ * plane), moves the fog's target and saves the setting; "Default (n)" applies the resolved default. The fog eases outward after a raise
  * (`fogEase.ts`), following the filled radius scanned every 30 rendered frames, and moves in at once after a lower.
  *
  * After the reveal (spec §7.1, §7.5, §8.2, §8.5; rulings P49, P50): the Ctrl+W guard (`beforeunload`) is armed; every
- * navigation the page starts (the context-loss Reload, the failure panel's Reload) goes through one reloader, which
- * disarms the guard and navigates at most once; the help's button "Map (M)" opens the map overlay and navigates nowhere
- * (SP4c spec §1.6, D20); a slow first 300 frames suggest the next lower RD in a dismissible notice whose button applies
+ * navigation the page starts (the context-loss Reload, the failure panel's Reload, the help's "Worlds menu", SP5b spec
+ * D31) goes through one reloader, which disarms the guard and navigates at most once; the help's buttons "Map (M)" and
+ * "Settings (G)" open the map overlay and the Settings screen and navigate nowhere (SP4c spec §1.6, D20; SP5b spec
+ * §1.4); a slow first 300 frames suggest the next lower RD in a dismissible notice whose button applies
  * it live; `webglcontextlost` stops the frame loop and offers a Reload around the camera (`hereUrl`, with the live
  * session's hash). SP4a's edge clamp, its notice and R are gone (SP4b spec §6.2, D20).
  *
@@ -119,7 +121,11 @@
  * Ctrl+Z / Ctrl+Y undo and redo blocks while the world owns the controls, the map's settings while the map does. A
  * mouse button goes through the hold repeat (`holdRepeat.ts`, §4.1, D6): a press queues once, and with the setting on
  * a held LMB or RMB is queued again by the frame's aim, until its release, the lock's release, a paused frame (the
- * palette, the map, the help) or F.
+ * palette, the map, the help, the Settings screen) or F.
+ *
+ * Keys with a panel open (SP5b spec §1.4; SP4a spec :731's hand-over): while the Settings screen, the help, the palette
+ * or B's dialog is open, a focused control in it (a select, a slider, a checkbox, a button) keeps its own keys and the
+ * world handles none of them (`worldIgnoresKeys`); otherwise H, G, M, B and E go through `paletteFirst`.
  */
 import { GENERATOR_VERSION } from '../../core/constants';
 import { hex64, type Seed64 } from '../../core/hash';
@@ -134,7 +140,7 @@ import {
   createCoordinator, createCoordinatorCounts, phaseName, progressFraction, worldJobsOf, type Coordinator, type StreamEvent,
 } from '../../engine/coordinator';
 import { appliedDraftOf, type WorldStage } from '../../engine/invalidation';
-import { RD_MAX, reservationRdCap, resolveRenderDistance } from '../../engine/renderDistance';
+import { RD_MAX, defaultRenderDistance, reservationRdCap, resolveRenderDistance } from '../../engine/renderDistance';
 import type { Stage } from '../../engine/rings';
 import type { SessionState, WorldSession } from '../../engine/session';
 import { SimFailed, createBrowserSim, type SimClient } from '../../engine/simClient';
@@ -177,6 +183,7 @@ import { decodeMapState, openMapSession, openSavedSession, type MapState } from 
 import { createPreviewDriver, createReplayingCanvas, draftOf, isSpawnError, type DriverStatus, type PreviewDriver } from '../map/previewDriver';
 import { cryptoSeed } from '../seedBox';
 import { SETTINGS_DEFAULTS, loadSettings, saveSettings, type WorldSettings } from '../settings';
+import { mountSettingsPanel, type SettingsPanel } from '../settingsPanel';
 import {
   BENCH_DB, BENCH_IDLE_FRAMES, BENCH_REFILL, BENCH_TIME_SPEED, benchInterval, createBenchRecorder, createLiveReveals, jsHeapMB, type BenchDriver,
   type BenchFlush, type BenchPose, type BenchWorld, type EnterResult,
@@ -902,20 +909,25 @@ export function installUndoKeys(o: {
 /**
  * The overlays a failure or a context loss closes before the panel or the notice shows (SP4c spec §1.3, D27; final
  * review UI-2): the palette, closed without requesting the lock (its overlay, z-index 3, covers the notices, z-index 2),
- * then B's place dialog, the same way and on the palette's layer (SP5b spec §3.7), then the map overlay, disposed with
- * its tool. A palette whose close throws still lets the dialog and the map close; the throw then reaches the caller's
- * `onError`.
+ * then B's place dialog, the same way and on the palette's layer (SP5b spec §3.7), then the Settings screen, on the
+ * help's layer (SP5b spec §1.4), then the map overlay, disposed with its tool. A palette whose close throws still lets
+ * the dialog, the Settings screen and the map close; the throw then reaches the caller's `onError`.
  */
 export function closeOverlays(
   palette: Pick<Palette, 'isOpen' | 'close'> | null,
   map: Pick<MapOverlay, 'dispose'> | null,
   placeDialog: Pick<PlaceDialog, 'isOpen' | 'close'> | null = null,
+  settingsPanel: Pick<SettingsPanel, 'isOpen' | 'close'> | null = null,
 ): void {
   try {
     try {
       if (palette?.isOpen) palette.close();
     } finally {
-      if (placeDialog?.isOpen) placeDialog.close();
+      try {
+        if (placeDialog?.isOpen) placeDialog.close();
+      } finally {
+        if (settingsPanel?.isOpen) settingsPanel.close();
+      }
     }
   } finally {
     map?.dispose();
@@ -1277,16 +1289,17 @@ export function handleStreamEvent(
 /**
  * The live render distance (SP4b spec §5, D18): `apply(rd)` sets it on the coordinator (the next `update`
  * re-classifies, collects the unloads and rebuilds) and the world renderer (`camera.far`), moves the fog's target
- * (eased outward after a raise, in at once after a lower), saves the setting and shows it in the help. `null` is
- * "Default": saved as null, `defaultRd` applied. Every change goes through it: the help's select, the slow-frame
- * notice's and StoreFull's "Lower to RD n". The help's copy is updated each time (`setRd`), so a notice's lower RD is
- * what a later FOV or brightness change sends back through `onSettings`, never the stale one.
+ * (eased outward after a raise, in at once after a lower), saves the setting and shows it in the Settings screen (SP5b
+ * spec §1.4). `null` is "Default": saved as null, `defaultRd` applied. Every change goes through it: the Settings
+ * screen's select, the slow-frame notice's and StoreFull's "Lower to RD n". The screen's copy is updated each time
+ * (`setRd`, without a change event), so a notice's lower RD is what a later FOV or brightness change sends back through
+ * `onSettings`, never the stale one.
  */
 export function createRdControl(o: {
   readonly coordinator: Pick<Coordinator, 'setRenderDistance'>;
   readonly world: Pick<WorldRenderer, 'setRenderDistance' | 'camera'>;
   readonly fog: { setTarget(rd: number): void };
-  readonly help: Pick<Help, 'setRd'>;
+  readonly panel: Pick<SettingsPanel, 'setRd'>;
   save(rd: number | null): void;
   readonly defaultRd: number;
 }): { apply(rd: number | null): void } {
@@ -1297,27 +1310,28 @@ export function createRdControl(o: {
       o.world.setRenderDistance(r);
       o.fog.setTarget(r);
       o.save(rd);
-      o.help.setRd(rd);
+      o.panel.setRd(rd);
     },
   };
 }
 
 /**
- * The RD the help's `#setting-rd` shows on load (rulings R8): the RD in force, which is the URL's (`loadRd`, clamped)
- * on a `?rd=` load and the saved setting otherwise (null: "Default"). It never shows a saved RD that is not in force.
+ * The RD the Settings screen's `#setting-rd` shows on load (rulings R8): the RD in force, which is the URL's (`loadRd`,
+ * clamped) on a `?rd=` load and the saved setting otherwise (null: "Default"). It never shows a saved RD that is not
+ * in force.
  */
 export function rdShownOnLoad(queryRd: number | null, loadRd: number, savedRd: number | null): number | null {
   return queryRd === null ? savedRd : loadRd;
 }
 
 /**
- * A change from the help (SP4b spec §5; rulings R8). The help's settings carry the RD it shows, the RD in force
- * (`shownRd`), not the saved one: the rd applies live only when it differs from `shownRd` (the RD control then saves
- * it), so the RD in force is a no-op and the saved value is not; every other change is saved with the saved rd kept.
- * The map's mode and Watch live are kept from `saved` too (SP4c spec §2.5): the help has no control for them, and its
- * copy is the one it saw at mount, which would undo a later mode switch.
+ * A change from the Settings screen (SP4b spec §5; rulings R8; SP5b spec §1.4). The screen's settings carry the RD it
+ * shows, the RD in force (`shownRd`), not the saved one: the rd applies live only when it differs from `shownRd` (the
+ * RD control then saves it), so the RD in force is a no-op and the saved value is not; every other change is saved with
+ * the saved rd kept. The map's mode and Watch live are kept from `saved` too (SP4c spec §2.5): the screen has no
+ * control for them, and its copy is the one it saw at mount, which would undo a later mode switch.
  */
-export function helpChange(
+export function settingsChange(
   saved: WorldSettings, next: WorldSettings, shownRd: number | null,
 ): { readonly settings: WorldSettings; readonly applyRd: boolean } {
   return {
@@ -1329,7 +1343,8 @@ export function helpChange(
 /**
  * M (SP4c spec §2.4): toggles the map overlay; before the overlay exists it does nothing. Opening it closes the help
  * first, as the help's "Map (M)" does (§1.6), so the opaque overlay of mode A never covers an open help that the next
- * Esc would close together with the map's drawer (final review WLD-1). Closing the map leaves the help as it is.
+ * Esc would close together with the map's drawer (final review WLD-1). Closing the map leaves the help as it is. The
+ * page passes the help and the Settings screen as one (`panels`), so the same holds for the screen (SP5b spec §1.4).
  */
 export function mapKey(help: Pick<Help, 'isOpen' | 'close'>, map: Pick<MapOverlay, 'shown' | 'toggle'> | null): void {
   if (map === null) return;
@@ -1338,8 +1353,9 @@ export function mapKey(help: Pick<Help, 'isOpen' | 'close'>, map: Pick<MapOverla
 }
 
 /**
- * M and H with the palette open (SP5a spec §4.4, D10): the palette closes first, without requesting the lock, then the
- * key does what it does with the palette closed (`then`), so the palette never stays open under the map or the help.
+ * M and H with the palette open (SP5a spec §4.4, D10), and G and B since SP5b (spec §1.4, §3.7): the palette closes
+ * first, without requesting the lock, then the key does what it does with the palette closed (`then`), so the palette
+ * never stays open under the map, the help, the Settings screen or B's dialog.
  */
 export function paletteFirst(palette: Pick<Palette, 'isOpen' | 'close'>, then: () => void): void {
   if (palette.isOpen) palette.close();
@@ -1347,14 +1363,57 @@ export function paletteFirst(palette: Pick<Palette, 'isOpen' | 'close'>, then: (
 }
 
 /**
+ * G (SP5b spec §1.4, D9), through `paletteFirst` as M and H: with the Settings screen open it closes it; else, unless
+ * B's dialog is open, it closes the help (one panel at a time, as M's `mapKey`), releases the pointer and opens the
+ * screen, which pauses the world (the frame step's `paused`).
+ */
+export function settingsKey(o: {
+  readonly palette: Pick<Palette, 'isOpen' | 'close'>;
+  readonly help: Pick<Help, 'isOpen' | 'close'>;
+  readonly dialog: Pick<PlaceDialog, 'isOpen'>;
+  readonly panel: Pick<SettingsPanel, 'isOpen' | 'open' | 'close'>;
+  releasePointer(): void;
+}): void {
+  paletteFirst(o.palette, () => {
+    if (o.panel.isOpen) {
+      o.panel.close();
+      return;
+    }
+    if (o.dialog.isOpen) return;
+    if (o.help.isOpen) o.help.close();
+    o.releasePointer();
+    o.panel.open();
+  });
+}
+
+/** The controls that keep their own keys while a panel is open: a select, any `<input>`, a button, a text area. */
+const PANEL_CONTROL_TAGS: ReadonlySet<string> = new Set(['SELECT', 'INPUT', 'BUTTON', 'TEXTAREA']);
+
+/**
+ * The world's `isTextFocus` (SP5b spec §1.4; closes SP4a spec :731's `isTextEntry` hand-over): the world ignores a key
+ * in a text-entry control (`isTextEntry`), and, while the Settings screen, the help, the palette or B's dialog is open
+ * (`panelOpen`), in any focused control as well, so a select, a slider, a checkbox or a button keeps its own keys (the
+ * arrows move a slider, Space presses a button) and the world handles none of them. With the focus elsewhere the keys
+ * still reach the world, so H, G, M, B and E act through `paletteFirst`.
+ */
+export function worldIgnoresKeys(
+  focused: { readonly tagName: string; readonly type?: string; readonly isContentEditable?: boolean } | null,
+  panelOpen: boolean,
+): boolean {
+  if (isTextEntry(focused)) return true;
+  return panelOpen && focused !== null && PANEL_CONTROL_TAGS.has(focused.tagName.toUpperCase());
+}
+
+/**
  * B (SP5b spec §3.7, D12), through `paletteFirst` as M and H: in a saved world (`places` non-null; an unsaved world
- * stays SP5a's, D29), with neither the help nor the dialog open, the dialog opens with the camera's exact pose as the
- * place and its position rounded down in the proposed name; its Save keeps the place and shows "Place saved" (1.5 s).
- * With `MAX_PLACES` places, "A world holds at most 256 places" (4 s) and no dialog.
+ * stays SP5a's, D29), with neither the help, the Settings screen nor the dialog open, the dialog opens with the
+ * camera's exact pose as the place and its position rounded down in the proposed name; its Save keeps the place and
+ * shows "Place saved" (1.5 s). With `MAX_PLACES` places, "A world holds at most 256 places" (4 s) and no dialog.
  */
 export function savePlaceKey(o: {
   readonly palette: Pick<Palette, 'isOpen' | 'close'>;
   readonly help: Pick<Help, 'isOpen'>;
+  readonly settings: Pick<SettingsPanel, 'isOpen'>;
   readonly dialog: Pick<PlaceDialog, 'isOpen' | 'open'>;
   readonly places: Pick<Places, 'list' | 'add'> | null;
   readonly camera: Pick<FlyState, 'x' | 'y' | 'z' | 'yaw' | 'pitch'>;
@@ -1362,7 +1421,7 @@ export function savePlaceKey(o: {
 }): void {
   paletteFirst(o.palette, () => {
     const { places } = o;
-    if (places === null || o.help.isOpen || o.dialog.isOpen) return;
+    if (places === null || o.help.isOpen || o.settings.isOpen || o.dialog.isOpen) return;
     if (places.list.length >= MAX_PLACES) {
       o.notices.show(PLACES_FULL_NOTICE, PLACES_FULL_MS);
       return;
@@ -2436,7 +2495,8 @@ export function mountWorldPage(root: HTMLElement, q: WorldQuery, hash: string, o
     let settings: WorldSettings = opts.flight === undefined && opts.bench === undefined ? loadSettings(storage) : { ...SETTINGS_DEFAULTS };
     const loadRd = resolveRenderDistance(caps, q.rd, settings.rd);
     rd = loadRd;
-    // The largest RD the store's fixed maxima allow (SP4b spec §5): the coordinator's and the help's cap.
+    // The largest RD the store's fixed maxima allow (SP4b spec §5): the coordinator's and the Settings screen's cap,
+    // and the help's System row.
     const rdMax = Math.min(RD_MAX, reservationRdCap(caps.reservation));
     const store = createStore({ shared: true, maxBlockBytes: caps.reservation.blockBytes, maxByteBytes: caps.reservation.byteBytes });
     // The pool's per-scope epoch cells are the store's (SP4b spec §2.7); a failed worker's thread is marked dead in the
@@ -2884,7 +2944,7 @@ export function mountWorldPage(root: HTMLElement, q: WorldQuery, hash: string, o
           setTime: (hours) => benchSetTime(frame, benchClock, hours),
           walk: (on) => benchWalk({ fly, walk, world, repeat: NO_REPEAT }, on),
         });
-        // The live RD as the help would set it, never saved (SP4b spec §5).
+        // The live RD as the Settings screen would set it, never saved (SP4b spec §5).
         const fog = createFogEase(loadRd);
         const fogStep = createFogStep(fog, fly, columns, loadRd);
         let liveRd = loadRd;
@@ -2899,7 +2959,7 @@ export function mountWorldPage(root: HTMLElement, q: WorldQuery, hash: string, o
               fogStep.rescan();
             },
           },
-          help: { setRd() {} },
+          panel: { setRd() {} },
           save: () => {},
           defaultRd: loadRd,
         });
@@ -3121,11 +3181,13 @@ export function mountWorldPage(root: HTMLElement, q: WorldQuery, hash: string, o
     sections.onColumnRevealed = (cx, cz) => editLatency.revealed(cx, cz, performance.now());
     teardown.push(() => { sections.onColumnRevealed = null; });
     // The map overlay and the preview driver (SP4c spec §1.3, §4.2), created below; a failure or a context loss
-    // disposes the overlay (and its tool) before the panel or the notice shows (D27), and closes the palette and B's
-    // place dialog, mounted below, which would cover them (final review UI-2; SP5b spec §3.7).
+    // disposes the overlay (and its tool) before the panel or the notice shows (D27), and closes the palette, B's
+    // place dialog and the Settings screen, mounted below, which would cover them (final review UI-2; SP5b spec §3.7,
+    // §1.4).
     let mapRef: MapOverlay | null = null;
     let paletteRef: Palette | null = null;
     let placeDialogRef: PlaceDialog | null = null;
+    let settingsRef: SettingsPanel | null = null;
     let driver: PreviewDriver | null = null;
     // The teleport, created below; a failure after the reveal disposes it before the pool is terminated (ruling R5).
     let teleport: Teleport | null = null;
@@ -3172,7 +3234,7 @@ export function mountWorldPage(root: HTMLElement, q: WorldQuery, hash: string, o
       const saving = autosave;
       stopAfterFailure({
         stop,
-        closeMap: () => closeOverlays(paletteRef, mapRef, placeDialogRef),
+        closeMap: () => closeOverlays(paletteRef, mapRef, placeDialogRef, settingsRef),
         save: saving === null ? undefined : () => lastFlush(saving, simClient!, window),
         show: () => notices.failed(cause, shown, here(reloadRd(q.rd, liveRd))),
         // The HUD's timer would read the disposed renderer and coordinator; then what releaseOnFailure frees, each
@@ -3202,7 +3264,7 @@ export function mountWorldPage(root: HTMLElement, q: WorldQuery, hash: string, o
     });
     handleContextLoss(world, {
       stop,
-      closeMap: () => closeOverlays(paletteRef, mapRef, placeDialogRef),
+      closeMap: () => closeOverlays(paletteRef, mapRef, placeDialogRef, settingsRef),
       onError: (e) => console.error('The world page\'s context loss:', e),
       notices,
       // Without a query rd the setting applies (it holds every live change); a query's rd is replaced by the RD in
@@ -3346,11 +3408,11 @@ export function mountWorldPage(root: HTMLElement, q: WorldQuery, hash: string, o
     const buildHud = mountBuildHud(host, { hotbar, hud, locked: () => document.pointerLockElement === canvas });
     teardown.push(() => buildHud.dispose());
 
-    // Every setting applies live (SP4b spec §5); an rd change goes through the RD control, which saves it. The help
-    // shows the RD in force, the URL's on a `?rd=` load, not the saved one (rulings R8).
+    // Every setting applies live (SP4b spec §5); an rd change goes through the RD control, which saves it. The Settings
+    // screen shows the RD in force, the URL's on a `?rd=` load, not the saved one (rulings R8).
     let shownRd = rdShownOnLoad(q.rd, loadRd, settings.rd);
     const applySettings = (s: WorldSettings): void => {
-      const change = helpChange(settings, s, shownRd);
+      const change = settingsChange(settings, s, shownRd);
       // While mode A covers the 3D the cap stays at most 60 (SP4c spec §2.6).
       if (s.fpsCap !== settings.fpsCap) limiter.setCap(frameCapFor(mapRef?.mode ?? 'full', mapRef?.shown ?? false, s.fpsCap));
       if (s.fov !== settings.fov) {
@@ -3362,15 +3424,27 @@ export function mountWorldPage(root: HTMLElement, q: WorldQuery, hash: string, o
       saveSettings(storage, settings);
       if (change.applyRd) rdControl.apply(s.rd);
     };
-    const help: Help = mountHelp(host, {
-      map: DEFAULT_KEYMAP,
+    // The Settings screen (SP5b spec §1.4, D9): G or the help's "Settings (G)" opens it; it pauses the world.
+    const settingsPanel: SettingsPanel = mountSettingsPanel(host, {
       settings: { ...settings, rd: shownRd },
       onSettings: applySettings,
+      rdMax,
+      defaultRd: defaultRenderDistance(caps),
+      onClose: () => {},
+    });
+    settingsRef = settingsPanel;
+    teardown.push(() => settingsPanel.dispose());
+    const help: Help = mountHelp(host, {
+      map: DEFAULT_KEYMAP,
       report: caps,
       evaluation,
       rdMax,
       // "Map (M)" closes the help and opens the overlay (SP4c spec §1.6, D20); nothing navigates.
       openMap: () => mapRef?.open(),
+      // "Settings (G)" closes the help and opens the Settings screen (SP5b spec §1.4).
+      openSettings: () => settingsPanel.open(),
+      // "Worlds menu" (SP5b spec D31): a saved world saves first (`beforeLeave`, at most 1 s), then `/` opens.
+      worldsMenu: () => reloader.reload('/'),
       onFullscreen: () => {
         // Keyboard Lock is Chromium's and not in the DOM typings.
         void enterFullscreen(document, navigator as Navigator & KeyboardLockNavigator);
@@ -3410,10 +3484,10 @@ export function mountWorldPage(root: HTMLElement, q: WorldQuery, hash: string, o
           fogStep.rescan();
         },
       },
-      help: {
+      panel: {
         setRd(r) {
           shownRd = r;
-          help.setRd(r);
+          settingsPanel.setRd(r);
         },
       },
       save: (r) => {
@@ -3423,6 +3497,16 @@ export function mountWorldPage(root: HTMLElement, q: WorldQuery, hash: string, o
       defaultRd: resolveRenderDistance(caps, null, null),
     });
 
+    // The help and the Settings screen as one panel for M (`mapKey`): the map never opens over either.
+    const panels = {
+      get isOpen(): boolean {
+        return help.isOpen || settingsPanel.isOpen;
+      },
+      close(): void {
+        help.close();
+        settingsPanel.close();
+      },
+    };
     const onAction = (a: Action): void => {
       switch (a) {
         // Walking, + and - do nothing (SP5a spec §3.3).
@@ -3430,30 +3514,37 @@ export function mountWorldPage(root: HTMLElement, q: WorldQuery, hash: string, o
         case 'speedDown': speedKey(fly, -1); break;
         case 'timeSpeed': if (fixedT === null) speedIndex = (speedIndex + 1) % TIME_SPEEDS.length; break;
         case 'hud': huds?.toggle(); break;
-        // H and M close the palette first (SP5a spec §4.4).
+        // H and M close the palette first (SP5a spec §4.4); the help and the Settings screen are never open together.
         case 'help':
           paletteFirst(palette, () => {
             if (help.isOpen) help.close();
             else {
+              settingsPanel.close();
               document.exitPointerLock();
               help.open();
             }
           });
           break;
         // M opens or closes the map overlay (SP4c spec §2.4); it acts whoever owns the controls.
-        case 'map': paletteFirst(palette, () => mapKey(help, mapRef)); break;
-        // B saves a place, through the palette's close; never over the help or its own dialog (SP5b spec §3.7, D12).
+        case 'map': paletteFirst(palette, () => mapKey(panels, mapRef)); break;
+        // B saves a place, through the palette's close; never over the help, the Settings screen or its own dialog
+        // (SP5b spec §3.7, D12).
         case 'savePlace':
           savePlaceKey({
-            palette, help, dialog: placeDialog, places, camera: fly, notices: { show: (text, ms) => notices.show(text, { timeoutMs: ms }) },
+            palette, help, settings: settingsPanel, dialog: placeDialog, places, camera: fly,
+            notices: { show: (text, ms) => notices.show(text, { timeoutMs: ms }) },
           });
           break;
-        // G does nothing until the Settings screen exists (SP5b spec §1.4).
-        case 'settings': break;
-        // E opens the palette, never over the help; while it is open its own E listener closes it (SP5a spec §4.4).
+        // G opens or closes the Settings screen, through the palette's close (SP5b spec §1.4, D9).
+        case 'settings':
+          settingsKey({ palette, help, dialog: placeDialog, panel: settingsPanel, releasePointer: () => document.exitPointerLock() });
+          break;
+        // E opens the palette, never over the help or the Settings screen; while it is open its own E listener closes
+        // it (SP5a spec §4.4).
         case 'palette':
           if (!palette.isOpen) {
             if (help.isOpen) help.close();
+            settingsPanel.close();
             palette.open();
           }
           break;
@@ -3502,8 +3593,12 @@ export function mountWorldPage(root: HTMLElement, q: WorldQuery, hash: string, o
       // Walking, Ctrl+wheel steps the slot as the plain wheel does (SP5a spec §4.1, D9), so it never zooms the page and
       // never means two things while walking (kept when sprint left Ctrl for R and a double-tapped W, Task 45b).
       wheelCtrlAsSlot: () => fly.mode === 'walk',
-      // Only text-entry controls (spec §7.1): a focused slider or select leaves H and F1 working (final review C-I2).
-      isTextFocus: () => isTextEntry(document.activeElement as HTMLElement | null),
+      // Text-entry controls (spec §7.1), and any focused control while a panel is open (SP5b spec §1.4): with no panel
+      // open a focused slider or select leaves H and F1 working (final review C-I2).
+      isTextFocus: () => worldIgnoresKeys(
+        document.activeElement as HTMLElement | null,
+        help.isOpen || settingsPanel.isOpen || palette.isOpen || placeDialog.isOpen,
+      ),
       // The world's keys act only while the world owns the controls (SP4c spec §2.3): never while the map owns.
       active: () => mapRef === null || mapRef.owner === 'world',
       doc: document,
@@ -3697,9 +3792,9 @@ export function mountWorldPage(root: HTMLElement, q: WorldQuery, hash: string, o
       fly,
       walk,
       held: () => input.held,
-      // The flight pauses while the help, the palette or B's dialog is open or the map owns the controls (SP4c spec §2.3;
-      // SP5a §4.4; SP5b §3.7).
-      paused: () => help.isOpen || palette.isOpen || placeDialog.isOpen || mapOverlay.owner === 'map',
+      // The flight pauses while the help, the palette, B's dialog or the Settings screen is open or the map owns the
+      // controls (SP4c spec §2.3; SP5a §4.4; SP5b §3.7, §1.4).
+      paused: () => help.isOpen || palette.isOpen || placeDialog.isOpen || settingsPanel.isOpen || mapOverlay.owner === 'map',
       stopped: () => stopped,
       clock,
       coordinator,

@@ -1189,7 +1189,7 @@ describe('master spec amendments (SP5a §9)', () => {
     expect(sp8a).toContain('SP5a for collision/raycast/orientation against boxes');
   });
 
-  test('the split\'s other §10 lines, §1\'s settings block, §2.3, risk 1 and §4.12\'s deferred parts (SP5a spec §9)', () => {
+  test('the split\'s other §10 lines, §2.3, risk 1 and §4.12\'s deferred parts (SP5a spec §9)', () => {
     expect(spEntry('SP6', 'SP7').startsWith('**SP6 — Caves, carvers and cave biomes** (L; SP3c, SP5c; walking for in-game review from SP5a)'), 'the SP6 header').toBe(true);
     expect(spEntry('SP7', 'SP8a').startsWith('**SP7 — Water and fluids** (L; SP6, SP5a)'), 'the SP7 header').toBe(true);
     expect(spEntry('SP8c', 'SP9').startsWith('**SP8c — Audio** (M; SP7, SP5a;'), 'the SP8c header').toBe(true);
@@ -1200,7 +1200,6 @@ describe('master spec amendments (SP5a §9)', () => {
     const visible = text.split('\n').find((l) => l.startsWith('Visible value in every SP: '));
     expect(visible).toContain('building and walking in SP5a, saved worlds in SP5b, the selection tool in SP5c');
     expect(visible).toContain('→ IDB → reload in SP3a-SP5b');
-    expect(layoutEntry(/^\s+ui\/world\/\* /)).toContain('(SP5b\'s graphics settings screen replaces it)');
     const reclamation = text.split('\n').find((l) => l.startsWith('**Reclamation.**'));
     expect(reclamation).toContain('SP5a\'s sim worker 15');
     expect(reclamation).not.toMatch(/\bSP5's/);
@@ -1378,6 +1377,7 @@ describe('master spec amendments (SP5b §9)', () => {
     [/^\s+ui\/world\/\* /, 'stateBounds.ts autosave.ts worldLock.ts modifyMode.ts places.ts placeDialog.ts (SP5b)', 'src/ui/world/places.ts'],
     [/^\s+ui\/world\/\* /, 'stateBounds.ts autosave.ts worldLock.ts modifyMode.ts places.ts placeDialog.ts (SP5b)', 'src/ui/world/placeDialog.ts'],
     [/^\s+ui\/map\/\* /, 'placesTab.ts (SP5b)', 'src/ui/map/placesTab.ts'],
+    [/^\s+ui\/shell\.ts /, 'worldsMenu.ts settingsPanel.ts (SP5b)', 'src/ui/settingsPanel.ts'],
   ];
 
   test('§10\'s SP5b entry and its receivers (SP5b spec §9, §11)', () => {
@@ -1521,6 +1521,19 @@ describe('master spec amendments (SP5b §9)', () => {
     const at56 = text.indexOf('### 5.6 Map view');
     const s56 = text.slice(at56, text.indexOf('### 5.7 ', at56));
     expect(s56.split('\n')).toContain('  - spawn, player with view cone, grid, column-status heatmap, saved places per saved world (SP5b: a section of each saved world\'s map, one map per saved world; coloured dots; a Places tab; B in the world and \'+ Add at the pin\' on the map).');
+  });
+
+  test('§1\'s settings block is replaced by the Settings screen; §4.16 and §5.2 name its Graphics and Controls (SP5b spec §1.4, D9, §9)', () => {
+    // Moved from the SP5a describe (SP5b spec §8), with the amendment it pins.
+    const entry = layoutEntry(/^\s+ui\/world\/\* /);
+    expect(entry).toContain('the world\'s small settings block (replaced by SP5b\'s Settings screen, `ui/settingsPanel.ts`);');
+    expect(entry).not.toContain('(SP5b\'s graphics settings screen replaces it)');
+    const at416 = text.indexOf('### 4.16 ');
+    const lines416 = text.slice(at416, text.indexOf('### 4.17 ', at416)).split('\n');
+    expect(lines416.some((l) => l.startsWith('- Every setting can be overridden individually (SP5b: the Settings screen, G: Graphics with RD, FPS cap, FOV and brightness, the rest greyed until SP11; Controls with mouse sensitivity and hold to repeat): RD, LOD,')), 'no amended "Every setting can be overridden" line in §4.16').toBe(true);
+    const at52 = text.indexOf('### 5.2 ');
+    const lines52 = text.slice(at52, text.indexOf('### 5.3 ', at52)).split('\n');
+    expect(lines52).toContain('- **Settings:** Graphics and Controls (SP5b), Audio (SP8c) (master, music, sfx and ambient volumes; music frequency Always / Frequent / Standard / Never; sound pack).');
   });
 
   test('§1 names each SP5b module in its entry, which exists', () => {

@@ -11,14 +11,15 @@ import { bindingLabel, type KeyEntry } from '../../player/keymap';
  * over the world (SP4c spec §2.4: M, teleport and live editing), the standalone `?map` and its "Open in 3D", the presets
  * on the map, click to look and Esc to free the mouse; then SP5a's build keys (SP5a spec §4.1, §4.6): F, E, 1-9 and the
  * wheel, the flying speed having moved to Ctrl+wheel; then SP5b's B, which saves a place (SP5b spec §3.7). The render
- * distance's tip names G, the Settings screen, since SP5b.
+ * distance's tip names G, the Settings screen, since SP5b, and the help's tip names only its keys (the settings left
+ * the help for that screen, SP5b spec §1.4).
  */
 export const TIP_TEMPLATES: readonly string[] = [
   '{forward} {back} fly forward and back at your height, {left} {right} strafe; {up} and {down} rise and descend.',
   'Hold {sprint}, or double-tap {forward}, to sprint: four times faster in flight.',
   'Change your flying speed with {speedUp} and {speedDown} while flying; the HUD shows it.',
   '{timeSpeed} changes the speed of time: ×1, ×10, ×60, then paused.',
-  '{help} opens the help, with every key and the settings; {hud} shows or hides the counts.',
+  '{help} opens the help, with every key; {hud} shows or hides the counts.',
   'The world loads around you as you fly; change the render distance in Settings ({settings}).',
   '{map} opens the map over the world: click to go there, edit the world live.',
   'The map also opens on its own page (?map); its "Open in 3D" flies you into the world you shaped there.',

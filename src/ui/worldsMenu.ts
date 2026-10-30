@@ -3,8 +3,9 @@
  * on the loading screen's background (`mountBackdrop`).
  * - Start (D1): the title, New world, Load world and Settings, then the small links Map (`?map`) and Selftest
  *   (`?selftest=1`), and the screen's notice row (`#start-notice`), which shows the world page's refusal carried here
- *   as `?notice=<code>` (`noticeOfQuery`). A `#` hash is ignored. Settings is Task 28's: until then its button does
- *   nothing.
+ *   as `?notice=<code>` (`noticeOfQuery`). A `#` hash is ignored. Settings opens the Settings screen over the start
+ *   screen (§1.4, D9; `mountSettingsPanel`), its render distance "Default" naming no number and its choices 4 … 16 (no
+ *   capability probe runs here), every change kept in `wi.world.settings` as the world page keeps it.
  * - New world (D2): Name (proposed "New world N", which a cleared name takes at Create; at most `MAX_NAME` characters),
  *   Preset (the ready profiles in code order, as the map's select), Seed (a random 64-bit decimal; the dice puts another;
  *   any text, `resolveSeedText`), Create and Back. Create writes the `worlds` record and a new `state` in one write
@@ -46,6 +47,8 @@ import { createNotices } from './common/notice';
 import { mountBackdrop } from './loading/panoramas';
 import { profileOptions } from './map/toolbar';
 import { resolveSeedText } from './seedBox';
+import { loadSettings, saveSettings } from './settings';
+import { mountSettingsPanel } from './settingsPanel';
 import { STATE_BOUNDS } from './world/stateBounds';
 import { LOCKED_NOTICE, withWorldIfFree, type LockManagerLike } from './world/worldLock';
 import type { WorldQuery } from './world/query';
@@ -301,6 +304,17 @@ export function mountWorldsMenu(root: HTMLElement, o: WorldsMenuOptions): { disp
   const loadNotices = createNotices(loadNoticeRow);
 
   screen.append(start, create, load);
+
+  // Settings (D9): over the start screen, kept in this browser as the world page keeps them.
+  const settingsStorage = localStorageOrNull();
+  const settingsPanel = mountSettingsPanel(screen, {
+    settings: loadSettings(settingsStorage),
+    onSettings: (s) => saveSettings(settingsStorage, s),
+    rdMax: null,
+    defaultRd: null,
+    onClose: () => {},
+  });
+  settingsButton.addEventListener('click', () => settingsPanel.open());
 
   /** The name a cleared field takes at Create: "New world N", N the smallest no saved world uses. */
   let proposal = newWorldName([]);
@@ -589,6 +603,7 @@ export function mountWorldsMenu(root: HTMLElement, o: WorldsMenuOptions): { disp
       startNotices.dispose();
       newNotices.dispose();
       loadNotices.dispose();
+      settingsPanel.dispose();
       backdrop.dispose();
       screen.remove();
     },

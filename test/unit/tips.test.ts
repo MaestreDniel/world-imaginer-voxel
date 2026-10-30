@@ -81,6 +81,12 @@ describe('loading-screen tips (SP4a spec §8.3, §7.3; ruling P45)', () => {
     expect(text).not.toContain('Help (H / F1) → Settings');
   });
 
+  test('the help\'s tip names its keys only: the settings moved to the Settings screen (SP5b spec §1.4; ruling P32)', () => {
+    expect(TIP_TEMPLATES).toContain('{help} opens the help, with every key; {hud} shows or hides the counts.');
+    expect(tips(DEFAULT_KEYMAP)).toContain('H / F1 opens the help, with every key; F3 shows or hides the counts.');
+    expect(TIP_TEMPLATES.join('\n')).not.toContain('with every key and the settings');
+  });
+
   test('a template naming an action the map lacks is left out', () => {
     const map = DEFAULT_KEYMAP.filter((e) => e.action !== 'timeSpeed');
     const filled = tips(map);

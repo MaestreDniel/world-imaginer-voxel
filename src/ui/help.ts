@@ -1,36 +1,32 @@
 /**
- * The help overlay (SP4a spec §7.4, D31): **Keys** generated from the key map, **Settings** (the small block SP5b's
- * graphics settings screen replaces; the render distance applies live since SP4b, spec §5; "Hold mouse button to
- * repeat" since SP5a, §4.1), **System** (the capability report with "Copy as JSON" and the hidden `#capability-json`,
- * moved here from the SP0 page, D21, then the render distance's maximum), and the buttons "Map (M)" (SP4c spec §1.6,
- * D20: it closes the help and opens the map overlay; SP4a's link to `?map`, which navigated away from the world, is
- * gone) and "Fullscreen". All text goes through `textContent`. The page opens it on H or F1 and releases the pointer;
- * H, F1 or Esc closes it, and clicking the canvas re-locks.
+ * The help overlay (SP4a spec §7.4, D31): **Keys** generated from the key map, **System** (the capability report with
+ * "Copy as JSON" and the hidden `#capability-json`, moved here from the SP0 page, D21, then the render distance's
+ * maximum), and the buttons "Map (M)" (SP4c spec §1.6, D20: it closes the help and opens the map overlay; SP4a's link
+ * to `?map`, which navigated away from the world, is gone), "Settings (G)" (it closes the help and opens the Settings
+ * screen, `settingsPanel.ts`, which took the help's settings block in SP5b, spec §1.4, D9), "Worlds menu" (SP5b spec
+ * D31: the page saves, then opens `/`) and "Fullscreen". All text goes through `textContent`. The page opens it on H or
+ * F1 and releases the pointer; H, F1 or Esc closes it, and clicking the canvas re-locks.
  */
 import type { CapabilityReport, Evaluation } from '../engine/capabilityRules';
-import { defaultRenderDistance, RD_MIN } from '../engine/renderDistance';
 import { bindingLabel, type KeyEntry } from '../player/keymap';
 import { renderCapabilityReport } from './capabilityReport';
 import { el } from './common/dom';
-import { FPS_CAPS, normalizeSettings, SETTING_RANGES, type WorldSettings } from './settings';
 
 export interface HelpOptions {
   readonly map: readonly KeyEntry[];
-  readonly settings: WorldSettings;
-  /**
-   * Called with the whole new settings after each change; every one applies live. An rd change is the page's cue to
-   * apply the render distance live and save it (SP4b spec §5); `setRd` never calls it.
-   */
-  onSettings(s: WorldSettings): void;
   readonly report: CapabilityReport;
   /**
-   * The largest render distance the page offers, min(16, the accepted reservation's cap) (SP4b spec §5): the RD
-   * select's last choice, and the System section's "Render distance maximum" row.
+   * The largest render distance the page offers, min(16, the accepted reservation's cap) (SP4b spec §5): the System
+   * section's "Render distance maximum" row.
    */
   readonly rdMax: number;
   readonly evaluation: Evaluation;
   /** "Map (M)" (SP4c spec §1.6, D20): called after the help closes; the page opens the map overlay. */
   openMap(): void;
+  /** "Settings (G)" (SP5b spec §1.4, D9): called after the help closes; the page opens the Settings screen. */
+  openSettings(): void;
+  /** "Worlds menu" (SP5b spec D31): the page saves a saved world (at most 1 s), then navigates to `/`. */
+  worldsMenu(): void;
   onFullscreen(): void;
   /** Called once each time the overlay closes. */
   onClose(): void;
@@ -40,12 +36,6 @@ export interface Help {
   open(): void;
   close(): void;
   readonly isOpen: boolean;
-  /**
-   * Shows `rd` (null: "Default") in `#setting-rd` and the help's copy of the settings, without calling `onSettings`: a
-   * render distance applied elsewhere (a notice's "Lower to RD n") is what a later FOV or brightness change sends back
-   * (SP4b spec §5: nothing changes the saved RD except the user).
-   */
-  setRd(rd: number | null): void;
 }
 
 const GROUP_TITLES: Readonly<Record<KeyEntry['group'], string>> = {
@@ -92,63 +82,8 @@ function keysSection(map: readonly KeyEntry[]): HTMLElement {
   return section;
 }
 
-/** The RD choices: "Default (n)", then RD_MIN … rdMax (SP4b spec §5). */
-function rdSelect(report: CapabilityReport, rdMax: number): HTMLSelectElement {
-  const select = el('select');
-  select.id = 'setting-rd';
-  const def = el('option', '', `Default (${defaultRenderDistance(report)})`);
-  def.value = '';
-  select.append(def);
-  for (let n = RD_MIN; n <= rdMax; n++) {
-    const opt = el('option', '', String(n));
-    opt.value = String(n);
-    select.append(opt);
-  }
-  return select;
-}
-
-/** Selects `rd` in the RD select ('' for null, "Default"); a saved rd above `rdMax` shows as `rdMax`. */
-function showRd(select: HTMLSelectElement, rd: number | null, rdMax: number): void {
-  select.value = rd === null ? '' : String(Math.min(rd, rdMax));
-}
-
-function fpsSelect(cap: WorldSettings['fpsCap']): HTMLSelectElement {
-  const select = el('select');
-  select.id = 'setting-fps-cap';
-  for (const c of FPS_CAPS) {
-    const opt = el('option', '', c === 0 ? 'Off (the display\'s rate)' : `${c} fps`);
-    opt.value = String(c);
-    select.append(opt);
-  }
-  select.value = String(cap);
-  return select;
-}
-
-function rangeInput(id: string, key: keyof typeof SETTING_RANGES, value: number): HTMLInputElement {
-  const input = el('input');
-  input.id = id;
-  input.type = 'range';
-  const r = SETTING_RANGES[key];
-  input.setAttribute('min', String(r.min));
-  input.setAttribute('max', String(r.max));
-  input.setAttribute('step', String(r.step));
-  input.value = String(value);
-  return input;
-}
-
-const showValue: Readonly<Record<keyof typeof SETTING_RANGES, (v: number) => string>> = {
-  fov: (v) => `${v}°`,
-  sensitivity: (v) => `×${v.toFixed(1)}`,
-  brightness: (v) => `${Math.round(v * 100)} %`,
-};
-
 export function mountHelp(host: HTMLElement, o: HelpOptions): Help {
-  let settings = normalizeSettings(o.settings);
   let isOpen = false;
-  const change = (patch: Partial<WorldSettings>): void => {
-    settings = normalizeSettings({ ...settings, ...patch });
-    o.onSettings({ ...settings });
-  };
 
   const overlay = el('div', 'world-help');
   overlay.id = 'world-help';
@@ -157,41 +92,6 @@ export function mountHelp(host: HTMLElement, o: HelpOptions): Help {
   closeButton.id = 'help-close';
   closeButton.type = 'button';
   closeButton.addEventListener('click', () => close());
-
-  // Settings.
-  const settingsSection = el('section', 'help-settings');
-  settingsSection.id = 'help-settings';
-  const rd = rdSelect(o.report, o.rdMax);
-  showRd(rd, settings.rd, o.rdMax);
-  rd.addEventListener('change', () => change({ rd: rd.value === '' ? null : Number(rd.value) }));
-  const fps = fpsSelect(settings.fpsCap);
-  fps.addEventListener('change', () => change({ fpsCap: Number(fps.value) as WorldSettings['fpsCap'] }));
-  settingsSection.append(
-    el('h3', '', 'Settings'),
-    settingRow('Render distance', rd),
-    settingRow('FPS cap', fps),
-  );
-  const ranges: [string, keyof typeof SETTING_RANGES, string][] = [
-    ['setting-fov', 'fov', 'Field of view'],
-    ['setting-sensitivity', 'sensitivity', 'Mouse sensitivity'],
-    ['setting-brightness', 'brightness', 'Brightness'],
-  ];
-  for (const [id, key, label] of ranges) {
-    const input = rangeInput(id, key, settings[key]);
-    const shown = el('span', 'help-setting-value', showValue[key](settings[key]));
-    input.addEventListener('input', () => {
-      change({ [key]: Number(input.value) });
-      shown.textContent = showValue[key](settings[key]);
-    });
-    settingsSection.append(settingRow(label, input, shown));
-  }
-  // Hold to repeat (SP5a spec §4.1, D6): off by default, remembered with the other settings.
-  const holdRepeat = el('input');
-  holdRepeat.id = 'setting-hold-repeat';
-  holdRepeat.type = 'checkbox';
-  holdRepeat.checked = settings.holdRepeat;
-  holdRepeat.addEventListener('change', () => change({ holdRepeat: holdRepeat.checked }));
-  settingsSection.append(settingRow('Hold mouse button to repeat', holdRepeat));
 
   // System.
   const system = el('section', 'help-system');
@@ -206,24 +106,31 @@ export function mountHelp(host: HTMLElement, o: HelpOptions): Help {
   rdMax.append(rdMaxRow);
   system.append(el('h3', '', 'System'), report, rdMax);
 
-  // Links: the map in the world (nothing navigates) and fullscreen.
-  const map = el('button', 'help-link', 'Map (M)');
-  map.id = 'help-map';
-  map.type = 'button';
-  map.addEventListener('click', () => {
-    close();
-    o.openMap();
-  });
-  const fullscreen = el('button', 'help-link', 'Fullscreen');
-  fullscreen.id = 'help-fullscreen';
-  fullscreen.type = 'button';
-  fullscreen.addEventListener('click', () => o.onFullscreen());
+  // Links: the map and the Settings screen in the world (nothing navigates), the worlds menu and fullscreen.
+  const link = (id: string, text: string, onClick: () => void): HTMLButtonElement => {
+    const b = el('button', 'help-link', text);
+    b.id = id;
+    b.type = 'button';
+    b.addEventListener('click', onClick);
+    return b;
+  };
   const links = el('nav', 'help-links');
-  links.append(map, fullscreen);
+  links.append(
+    link('help-map', 'Map (M)', () => {
+      close();
+      o.openMap();
+    }),
+    link('help-open-settings', 'Settings (G)', () => {
+      close();
+      o.openSettings();
+    }),
+    link('help-worlds-menu', 'Worlds menu', () => o.worldsMenu()),
+    link('help-fullscreen', 'Fullscreen', () => o.onFullscreen()),
+  );
 
   const head = el('header', 'help-head');
   head.append(el('h2', '', 'Help'), closeButton);
-  overlay.append(head, keysSection(o.map), settingsSection, system, links);
+  overlay.append(head, keysSection(o.map), system, links);
   host.append(overlay);
 
   // Esc closes the open overlay, as a person expects of a panel (final review C-M3). The pointer is already free while
@@ -254,16 +161,5 @@ export function mountHelp(host: HTMLElement, o: HelpOptions): Help {
     get isOpen() {
       return isOpen;
     },
-    setRd(value) {
-      settings = normalizeSettings({ ...settings, rd: value });
-      showRd(rd, settings.rd, o.rdMax);
-    },
   };
-}
-
-function settingRow(label: string, control: HTMLElement, value?: HTMLElement): HTMLElement {
-  const row = el('label', 'help-setting');
-  row.append(el('span', 'help-setting-label', label), control);
-  if (value !== undefined) row.append(value);
-  return row;
 }

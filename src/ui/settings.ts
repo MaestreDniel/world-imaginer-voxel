@@ -1,6 +1,7 @@
 /**
- * The world's small settings block (SP4a spec §7.4, D31): render distance, FPS cap, field of view, mouse sensitivity
- * and brightness, persisted in `localStorage` behind try/catch (master §4.16). SP5b's graphics settings screen replaces it.
+ * The settings schema (SP4a spec §7.4, D31; SP5b spec §1.4): render distance, FPS cap, field of view, mouse sensitivity
+ * and brightness, persisted in `localStorage` behind try/catch (master §4.16), shared by every world of this browser.
+ * SP5b's Settings screen (`settingsPanel.ts`) shows and changes them; the map's mode and Watch live stay in the map.
  */
 import { RD_MAX, RD_MIN } from '../engine/renderDistance';
 

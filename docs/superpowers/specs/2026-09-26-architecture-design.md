@@ -194,7 +194,7 @@ world-imaginer-voxel/          (repository root)
     ui/lab/* seedBox.ts          (SP1) the ?lab=noise research page; DOM-free seed-box logic
     ui/world/* ui/loading/* ui/spike/* settings.ts   (SP4a) the 3D page: the start and worlds menus at `/` (SP5b: `ui/worldsMenu.ts`), the world page, the
                                 flight (`?flight=sp4a`) and panorama (`?pano`) routes; the loading screen with panoramas, tips and progress; the spike
-                                page (`?spike=batch`); the world's small settings block (SP5b's graphics settings screen replaces it);
+                                page (`?spike=batch`); the world's small settings block (replaced by SP5b's Settings screen, `ui/settingsPanel.ts`);
                                 ui/world/bench.ts (SP4b: the `?bench=medium` route and its JSON); mapOverlay.ts applyControl.ts teleport.ts (SP4c) buildHud.ts blockHistory.ts (SP5a)
                                 stateBounds.ts autosave.ts worldLock.ts modifyMode.ts places.ts placeDialog.ts (SP5b)
     ui/inspector/*              (SP3d) the ?map Density tab. Pure: model.ts form.ts jsonText.ts editorModel.ts hoverModel.ts
@@ -1228,7 +1228,7 @@ Target: edit → visible ≤ 50 ms p95, measured in the HUD (SP5a: gated from th
 | audio: emitter+SFX voice cap / spatialisation / reverb | 16 / equal-power / off | 24 / equal-power / on | 32 / HRTF / on | 48 / HRTF / on |
 | upload budget | 1.5 ms | 2 ms | 3 ms | 4 ms |
 
-- Every setting can be overridden individually: RD, LOD, FOV, brightness, fog start, resolution scale, FPS cap, anisotropy, biome blend, water tier, shadows, clouds, AO.
+- Every setting can be overridden individually (SP5b: the Settings screen, G: Graphics with RD, FPS cap, FOV and brightness, the rest greyed until SP11; Controls with mouse sensitivity and hold to repeat): RD, LOD, FOV, brightness, fog start, resolution scale, FPS cap, anisotropy, biome blend, water tier, shadows, clouds, AO.
 - Changes are Live (the render distance live since SP4b, within the reservation's cap), except MSAA (a controlled renderer rebuild that keeps the world store) and AO or leaves (a remesh of loaded sections through mesh jobs).
 - Settings persist in localStorage (try/catch).
 - `core/params/graphicsPresets.ts` is created by SP4a with the Medium fields it uses; SP8c adds the audio rows, SP11 the other rows.
@@ -1306,7 +1306,7 @@ Target: edit → visible ≤ 50 ms p95, measured in the HUD (SP5a: gated from th
 
 - **World:** seed (typed seed is authoritative; separate "Regenerate same seed" and "New seed" buttons), profile, presets, worlds (the start screen's menus, SP5b).
 - **Parameters:** sections collapsed by default, slider plus numeric input, reset per parameter and per section, tooltips. Inline dialogs replace `prompt()` and `alert()`.
-- **Settings:** graphics and audio (master, music, sfx and ambient volumes; music frequency Always / Frequent / Standard / Never; sound pack).
+- **Settings:** Graphics and Controls (SP5b), Audio (SP8c) (master, music, sfx and ambient volumes; music frequency Always / Frequent / Standard / Never; sound pack).
 - **Help:** key map (H / F1).
 
 ### 5.3 Spline editor (nested Hermite)
