@@ -10,7 +10,11 @@
  * the helper). It calls `h.drain?.()`, so the harness entries, which have no `drain`, keep working.
  * SP5a (spec §6.3): `factory` names the entry's handler factory (default `createTaskHandler`) and `retryMs` the retry
  * interval (default `LIMBO_RETRY_MS`), so the sim's own entry runs as `sim.worker.ts` wires it:
- * `{ entry: 'src/workers/simHandler.ts', factory: 'createSimHandler', retryMs: SIM_DRAIN_MS }`.
+ * `{ entry: 'src/workers/simHandler.ts', factory: 'createMemorySimHandler', retryMs: SIM_DRAIN_MS }`.
+ * SP5b (spec §3.3, D18): every reply goes through the wrapper's `post`, which posts it (with `handledAt` under `stamp`)
+ * and then drains. The wrapper runs `const r = h.handle(m, post); if (r !== undefined) post(r);`, so a task handler,
+ * whose synchronous `handle` returns its reply and ignores `post`, works unchanged, and the sim's handler, which returns
+ * nothing, posts each reply through `post`, at once or when its transaction settles.
  */
 import { existsSync, mkdirSync, writeFileSync } from 'node:fs';
 import { basename } from 'node:path';
@@ -53,9 +57,9 @@ export interface NodeWorkerOptions {
 
 /**
  * Builds into test/.cache/<dir>/ and returns the path of the worker script. With `stamp`, each reply also carries
- * `handledAt`: the time `handle` returned, in ms on `process.hrtime` (the monotonic clock every thread of the
- * process shares, so the main thread compares it with its own reading). A test can then time the handler itself,
- * without the delivery of the reply to its own event loop.
+ * `handledAt`: the time the reply was posted (for a synchronous handler, the time `handle` returned), in ms on
+ * `process.hrtime` (the monotonic clock every thread of the process shares, so the main thread compares it with its own
+ * reading). A test can then time the handler itself, without the delivery of the reply to its own event loop.
  */
 export async function buildNodeTaskWorker(dir: string, opts: NodeWorkerOptions = {}): Promise<string> {
   const out = fileURLToPath(new URL(`../.cache/${dir}/`, import.meta.url));
@@ -80,8 +84,10 @@ export async function buildNodeTaskWorker(dir: string, opts: NodeWorkerOptions =
     `const retry = () => { if ((h.drain?.() ?? 0) > 0) setTimeout(retry, ${retryMs}); else retrying = false; };`,
     `const drainAfterReply = () => { if ((h.drain?.() ?? 0) === 0 || retrying) return; retrying = true; setTimeout(retry, ${retryMs}); };`,
     opts.stamp === true
-      ? "parentPort.on('message', (m) => { const r = h.handle(m); const handledAt = Number(process.hrtime.bigint()) / 1e6; parentPort.postMessage({ ...r.msg, handledAt }, r.transfer); drainAfterReply(); });"
-      : "parentPort.on('message', (m) => { const r = h.handle(m); parentPort.postMessage(r.msg, r.transfer); drainAfterReply(); });",
+      ? 'const post = (r) => { const handledAt = Number(process.hrtime.bigint()) / 1e6; parentPort.postMessage({ ...r.msg, handledAt }, r.transfer); drainAfterReply(); };'
+      : 'const post = (r) => { parentPort.postMessage(r.msg, r.transfer); drainAfterReply(); };',
+    // A synchronous handler returns its reply; the sim's handler returns nothing and posts through `post` (SP5b D18).
+    "parentPort.on('message', (m) => { const r = h.handle(m, post); if (r !== undefined) post(r); });",
   ].join('\n'));
   return `${out}node-worker.mjs`;
 }

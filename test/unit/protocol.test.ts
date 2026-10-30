@@ -740,6 +740,52 @@ describe('the sim worker\'s messages (SP5a spec §2.1)', () => {
     type: 'diff', id: 5, cx: 0, cz: -1, sy: new Uint8Array([8]), idx: new Uint16Array([4085]), value: new Uint32Array([1 << 8]), ...o,
   });
 
+  const world = { id: 'w1', name: 'My world', stateTable: ['air'] };
+  const load = (o: Record<string, unknown> = {}) => ({
+    type: 'load', id: 7, db: 'wi10', worldId: 'w1', flushSeq: 3, genKey: '0123456789abcdef', updated: 1_700_000_000_000,
+    stateTable: ['air', 'stone'], rewrite: null, ...o,
+  });
+  const loaded = (o: Record<string, unknown> = {}) => ({
+    type: 'loaded', id: 7, entryCols: new Float64Array([colKey(0, -1), colKey(3, 2)]), entries: 12, unknownStates: 0, skippedColumns: 1, decodeMs: 0.8, ...o,
+  });
+
+  test('`load` and `loaded` are accepted (SP5b spec §3.3)', () => {
+    expect(parseToSim(load())).not.toBeNull();
+    expect(parseToSim(load({ flushSeq: 0, updated: 0, stateTable: [] }))).not.toBeNull();
+    expect(parseToSim(load({ rewrite: { world, history: null } }))).not.toBeNull();
+    expect(parseToSim(load({ rewrite: { world, history: { worldId: 'w1', done: [], undone: [] } } }))).not.toBeNull();
+    expect(parseFromSim(loaded())).not.toBeNull();
+    expect(parseFromSim(loaded({ entryCols: new Float64Array(0), entries: 0, skippedColumns: 0, unknownStates: 3, decodeMs: 0 }))).not.toBeNull();
+  });
+  test.each<[string, unknown]>([
+    ['a load with a non-integer id', load({ id: 1.5 })],
+    ['a load without a db', load({ db: undefined })],
+    ['a load with a non-string worldId', load({ worldId: 4 })],
+    ['a load with a negative flushSeq', load({ flushSeq: -1 })],
+    ['a load with a non-integer flushSeq', load({ flushSeq: 0.5 })],
+    ['a load with a genKey of 15 digits', load({ genKey: '0123456789abcde' })],
+    ['a load with an upper-case hex genKey', load({ genKey: '0123456789ABCDEF' })],
+    ['a load with a NaN updated', load({ updated: Number.NaN })],
+    ['a load whose stateTable is not an array', load({ stateTable: 'air' })],
+    ['a load with a non-string stateTable entry', load({ stateTable: ['air', 1] })],
+    ['a load whose rewrite is not an object', load({ rewrite: 'yes' })],
+    ['a load whose rewrite has no world', load({ rewrite: { history: null } })],
+    ['a load whose rewrite world has no string id', load({ rewrite: { world: { ...world, id: 3 }, history: null } })],
+    ['a load whose rewrite history is neither null nor an object', load({ rewrite: { world, history: 'none' } })],
+  ])('a load is refused: %s', (_n, m) => {
+    expect(parseToSim(m)).toBeNull();
+  });
+  test.each<[string, unknown]>([
+    ['loaded whose entryCols is not a Float64Array', loaded({ entryCols: [colKey(0, -1)] })],
+    ['loaded with a negative entries', loaded({ entries: -1 })],
+    ['loaded without unknownStates', loaded({ unknownStates: undefined })],
+    ['loaded with a non-integer skippedColumns', loaded({ skippedColumns: 0.5 })],
+    ['loaded with a NaN decodeMs', loaded({ decodeMs: Number.NaN })],
+    ['loaded with a non-integer id', loaded({ id: 'a' })],
+  ])('a loaded reply is refused: %s', (_n, m) => {
+    expect(parseFromSim(m)).toBeNull();
+  });
+
   test('each message to the sim is accepted', () => {
     expect(parseToSim({ type: 'attach', handles, thread: 15 })).not.toBeNull();
     expect(parseToSim(edits(edit(), edit({ op: 'revert', value: 0, expect: 1 << 8 })))).not.toBeNull();

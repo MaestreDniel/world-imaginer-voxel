@@ -1,6 +1,6 @@
 import { describe, expect, test } from 'vitest';
 import {
-  deriveSeed, fmix32, fnv1a32, fnv1a64, fnv1a64Bytes, hash2, hash3, hash4, hashF64, hex64, utf8Bytes,
+  deriveSeed, fmix32, fnv1a32, fnv1a64, fnv1a64Bytes, hash2, hash3, hash4, hashF64, hex64, parseHex64, utf8Bytes,
 } from '../../src/core/hash';
 import { testRng } from '../harness/stats';
 
@@ -34,6 +34,21 @@ test('fnv1a64 halves match a BigInt reference on 2000 random byte strings', () =
     for (let k = 0; k < bytes.length; k++) bytes[k] = next() & 255;
     expect(hex64(fnv1a64Bytes(bytes))).toBe(bigFnv64(bytes));
   }
+});
+
+test('parseHex64 is the inverse of hex64 (SP5b: a world\'s genKey kept as a Hash64), on 2000 seeded strings and hashes', () => {
+  const next = testRng(14);
+  const hexDigit = (): string => (next() % 16).toString(16);
+  for (let i = 0; i < 2000; i++) {
+    let s = '';
+    for (let k = 0; k < 16; k++) s += hexDigit();
+    expect(hex64(parseHex64(s))).toBe(s);
+    const h: [number, number] = [next(), next()];
+    expect(parseHex64(hex64(h))).toEqual(h);
+  }
+  expect(parseHex64('cbf29ce484222325')).toEqual([0x84222325, 0xcbf29ce4]);
+  expect(parseHex64('ffffffffffffffff')).toEqual([0xFFFFFFFF, 0xFFFFFFFF]);
+  expect(parseHex64('0000000000000000')).toEqual([0, 0]);
 });
 
 test('utf8Bytes equals TextEncoder on 20k random strings with lone surrogates', () => {

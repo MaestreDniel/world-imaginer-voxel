@@ -111,6 +111,68 @@ describe('the sim client (SP5a spec §2.1, §2.5)', () => {
     expect(sim.failed).toBe(false);
   });
 
+  const loadArgs = { db: 'wi10', worldId: 'w1', flushSeq: 2, genKey: '0123456789abcdef', updated: 1_700_000_000_000, stateTable: ['air'], rewrite: null } as const;
+  const loadedReply = (id: number, cols: Array<[number, number]>) => ({
+    type: 'loaded', id, entryCols: keysOf(cols), entries: 3 * cols.length, unknownStates: 1, skippedColumns: 0, decodeMs: 0.5,
+  });
+
+  test('`load` resolves after `hasEntries` holds the loaded set (SP5b spec §3.3, §3.4 step 3)', async () => {
+    const w = fakeSim();
+    const sim = createSimClient(() => w, { onFailure: () => { throw new Error('no failure expected'); } });
+    // An edit answered before the load: the loaded set (the DiffStore's columns after the load) replaces the set.
+    const first = sim.edits([STONE_AT]);
+    w.reply(editedReply(lastId(w), [[9, 9]]));
+    await first;
+    const seen: boolean[][] = [];
+    const p = sim.load(loadArgs).then((m) => {
+      seen.push([sim.hasEntries(0, -2), sim.hasEntries(5, 7), sim.hasEntries(9, 9)]);
+      return m;
+    });
+    expect(w.posted.at(-1)).toEqual({ type: 'load', id: lastId(w), ...loadArgs });
+    expect(sim.hasEntries(0, -2)).toBe(false);
+    w.reply(loadedReply(lastId(w), [[0, -2], [5, 7]]));
+    const m = await p;
+    expect(seen).toEqual([[true, true, false]]);
+    expect([m.type, m.entries, m.unknownStates, m.skippedColumns]).toEqual(['loaded', 6, 1, 0]);
+    expect(sim.failed).toBe(false);
+  });
+
+  test('a pending `load` rejects `SimFailed` when the sim fails, and a `load` on a disposed client rejects at once', async () => {
+    const w = fakeSim();
+    let failures = 0;
+    const sim = createSimClient(() => w, { onFailure: () => { failures++; } });
+    const p = sim.load(loadArgs);
+    w.reply({ type: 'error', jobId: lastId(w), epoch: null, code: 'INTERNAL', message: 'the KV could not be opened' });
+    await expect(p).rejects.toBeInstanceOf(SimFailed);
+    expect(failures).toBe(1);
+    await expect(sim.load(loadArgs)).rejects.toBeInstanceOf(SimFailed);
+    const w2 = fakeSim();
+    const disposed = createSimClient(() => w2, { onFailure: () => { failures++; } });
+    const pending = disposed.load(loadArgs);
+    disposed.dispose();
+    await expect(pending).rejects.toBeInstanceOf(SimFailed);
+    const posted = w2.posted.length;
+    await expect(disposed.load(loadArgs)).rejects.toBeInstanceOf(SimFailed);
+    expect(w2.posted.length).toBe(posted);
+    expect(failures).toBe(1);
+  });
+
+  test('a `loaded` reply to a pending `edits` fails the sim, and so does an `edited` reply to a pending `load`', async () => {
+    const w = fakeSim();
+    let failures = 0;
+    const sim = createSimClient(() => w, { onFailure: () => { failures++; } });
+    const e = sim.edits([STONE_AT]);
+    w.reply(loadedReply(lastId(w), [[0, -2]]));
+    await expect(e).rejects.toBeInstanceOf(SimFailed);
+    expect([sim.failed, failures, sim.hasEntries(0, -2)]).toEqual([true, 1, false]);
+    const w2 = fakeSim();
+    const sim2 = createSimClient(() => w2, { onFailure: () => { failures++; } });
+    const l = sim2.load(loadArgs);
+    w2.reply(editedReply(lastId(w2), [[0, -2]]));
+    await expect(l).rejects.toBeInstanceOf(SimFailed);
+    expect([sim2.failed, failures]).toEqual([true, 2]);
+  });
+
   const triggers: Array<[string, (w: FakeSim) => void]> = [
     ['an `error` event', (w) => w.onerror!(new Error('the worker threw'))],
     ['an `error` reply', (w) => w.reply({ type: 'error', jobId: null, epoch: null, code: 'STORE_CORRUPT', message: 'pool lock held by failed thread 2' })],

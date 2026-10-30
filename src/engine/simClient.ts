@@ -3,19 +3,21 @@
  * spawns `sim.worker.ts` (`createBrowserSim`) and the page calls it. It attaches the store as thread 15, posts `edits`
  * batches and `diff` requests with ids and matches each reply to its request (the sim answers in order), and keeps the
  * set of columns holding entries (`hasEntries`, the read-through's test, §2.5) from each `edited` reply's changes,
- * `entryAdded` and `entryRemoved` (SP5b D20).
+ * `entryAdded` and `entryRemoved` (SP5b D20). A saved world's `load` (SP5b spec §3.3, §3.4 step 3) resolves once its
+ * `loaded` reply's `entryCols` became the whole entry set, so the read-through sees every saved edit from the first D.
  *
  * **The sim's failure** (§2.1): an `error` event, an `error` reply of any code, or a reply the guard refuses
  * (`parseFromSim`, or one that does not answer a pending request of its kind, its batch's length or its column). In
  * this order: `failed` turns true, the entry set empties, the worker is terminated (so no batch already queued in its
  * port writes after its pins are released; the sim's handler also refuses every batch after an `error` reply),
  * `onFailure` runs once and synchronously (the page marks thread 15 dead, releases every sim pin and shows the
- * notice), then every pending `edits` rejects with `SimFailed` and every pending `diff` resolves null, so a rejected
- * post finds its pins already released. Later `edits` reject and later `diff`s resolve null at once, with nothing
- * posted. `dispose` terminates the worker and settles its requests the same way, without `onFailure`.
+ * notice), then every pending `edits` and `load` rejects with `SimFailed` and every pending `diff` resolves null, so a
+ * rejected post finds its pins already released. Later `edits` and `load`s reject and later `diff`s resolve null at
+ * once, with nothing posted. `dispose` terminates the worker and settles its requests the same way, without
+ * `onFailure`. The page opens a world whose `load` failed without editing (SP5b spec §3.3).
  */
 import { colKey } from '../core/coords';
-import { parseFromSim, type DiffMsg, type Edit, type EditedMsg, type ToSim } from '../workers/protocol';
+import { parseFromSim, type DiffMsg, type Edit, type EditedMsg, type LoadedMsg, type LoadMsg, type ToSim } from '../workers/protocol';
 import type { ColumnDiff } from '../world/store/api';
 import { SIM_THREAD } from '../world/store/reclaim';
 import type { StoreHandles } from '../world/store/store';
@@ -39,19 +41,27 @@ export class SimFailed extends Error {
 export interface SimClient {
   /** Attaches the page's shared store as thread 15; resolves on `attached`. */
   attach(h: StoreHandles): Promise<void>;
+  /**
+   * Loads a saved world's diffs into the sim (SP5b spec §3.3); resolves with `loaded` once the entry set is its
+   * `entryCols`, rejects `SimFailed` on the sim's failure (a KV failure included).
+   */
+  load(m: Omit<LoadMsg, 'type' | 'id'>): Promise<LoadedMsg>;
   /** Posts a batch; resolves with the sim's `edited` reply (a refusal included), rejects `SimFailed` on the sim's failure. */
   edits(e: readonly Edit[]): Promise<EditedMsg>;
   /** Column (cx, cz)'s entries, or null when it holds none or the sim failed (§2.5). */
   diff(cx: number, cz: number): Promise<ColumnDiff | null>;
-  /** Whether the column holds entries, as the `edited` replies' changes tell (false once the sim failed). */
+  /** Whether the column holds entries, as the `loaded` set and the `edited` replies' changes tell (false once the sim failed). */
   hasEntries(cx: number, cz: number): boolean;
   readonly failed: boolean;
   dispose(): void;
 }
 
 type Pending =
+  | { readonly kind: 'load'; resolve(m: LoadedMsg): void; reject(e: Error): void }
   | { readonly kind: 'edits'; readonly n: number; resolve(m: EditedMsg): void; reject(e: Error): void }
   | { readonly kind: 'diff'; readonly cx: number; readonly cz: number; resolve(d: ColumnDiff | null): void };
+/** The request kind each id-carrying reply answers. */
+const REQUEST_OF: Readonly<Record<'loaded' | 'edited' | 'diff', Pending['kind']>> = { loaded: 'load', edited: 'edits', diff: 'diff' };
 interface AttachWait { resolve(): void; reject(e: Error): void }
 
 const text = (e: unknown): string => (e instanceof Error ? `${e.name}: ${e.message}` : typeof e === 'object' && e !== null && 'message' in e ? String(e.message) : String(e));
@@ -67,15 +77,15 @@ export function createSimClient(spawn: () => SimWorkerLike, o: { onFailure(e: Er
   /** Failed or disposed: requests settle at once and replies are ignored. */
   let closed = false;
 
-  /** Settles every request still waiting: an attach or a batch rejects with `e`, a diff resolves null. */
+  /** Settles every request still waiting: an attach, a load or a batch rejects with `e`, a diff resolves null. */
   const settleAll = (e: SimFailed): void => {
     const waits = [...pending.values()];
     pending.clear();
     const atts = attaches.splice(0);
     for (const a of atts) a.reject(e);
     for (const p of waits) {
-      if (p.kind === 'edits') p.reject(e);
-      else p.resolve(null);
+      if (p.kind === 'diff') p.resolve(null);
+      else p.reject(e);
     }
   };
 
@@ -105,7 +115,16 @@ export function createSimClient(spawn: () => SimWorkerLike, o: { onFailure(e: Er
       return;
     }
     const p = pending.get(m.id);
-    if (p === undefined || (p.kind === 'edits') !== (m.type === 'edited')) return fail(`an \`${m.type}\` reply to no pending request ${m.id} of its kind`);
+    if (p === undefined || p.kind !== REQUEST_OF[m.type]) return fail(`an \`${m.type}\` reply to no pending request ${m.id} of its kind`);
+    if (p.kind === 'load') {
+      const r = m as LoadedMsg;
+      pending.delete(m.id);
+      // The DiffStore's columns after the load: the whole set (D20).
+      entries.clear();
+      for (const k of r.entryCols) entries.add(k);
+      p.resolve(r);
+      return;
+    }
     if (p.kind === 'edits') {
       const r = m as EditedMsg;
       if (r.prev.length !== p.n) return fail(`an \`edited\` reply of ${r.prev.length} edits to a batch of ${p.n}`);
@@ -132,6 +151,14 @@ export function createSimClient(spawn: () => SimWorkerLike, o: { onFailure(e: Er
       return new Promise<void>((resolve, reject) => {
         post({ type: 'attach', handles: h, thread: SIM_THREAD });
         attaches.push({ resolve, reject });
+      });
+    },
+    load(m) {
+      if (closed) return Promise.reject(new SimFailed('the sim failed or was disposed'));
+      const id = nextId++;
+      return new Promise<LoadedMsg>((resolve, reject) => {
+        post({ type: 'load', id, ...m });
+        pending.set(id, { kind: 'load', resolve, reject });
       });
     },
     edits(e) {

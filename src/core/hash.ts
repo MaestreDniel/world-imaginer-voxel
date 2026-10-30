@@ -237,6 +237,11 @@ export function hex64(h: Hash64): string {
   return h[1].toString(16).padStart(8, '0') + h[0].toString(16).padStart(8, '0');
 }
 
+/** The inverse of `hex64`: 16 hex digits, the high word first, back to `[lo, hi]` (SP5b: a world's stored genKey). */
+export function parseHex64(s: string): Hash64 {
+  return [parseInt(s.slice(8), 16), parseInt(s.slice(0, 8), 16)];
+}
+
 /** fnv1a64 over the little-endian bytes of each value; every NaN is written as 0x7FF8000000000000. */
 export function hashF64(values: Float64Array): Hash64 {
   const bytes = new Uint8Array(values.length * 8);

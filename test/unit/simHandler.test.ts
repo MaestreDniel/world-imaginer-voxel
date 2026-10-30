@@ -8,16 +8,22 @@
  */
 import { beforeAll, describe, expect, test, vi } from 'vitest';
 import { colKey } from '../../src/core/coords';
+import { hex64, type Hash64 } from '../../src/core/hash';
 import { resolveProfile } from '../../src/core/params/profiles';
 import { seedFromInput } from '../../src/core/seed';
 import { findSpawn } from '../../src/gen/column/spawn';
 import { createGenContext } from '../../src/gen/context';
+import { decodeColumnDiff, encodeColumnDiff } from '../../src/persist/diffCodec';
+import type { KV } from '../../src/persist/kv';
+import { createMemoryKV, type MemoryKV } from '../../src/persist/memory';
+import { flushOps, todayStateTable, type HistoryRecord, type StateRecord, type WorldRecord } from '../../src/persist/saves';
 import { NO_ENTRY } from '../../src/sim/diffStore';
 import { applyEdits } from '../../src/sim/edits';
 import { DIRT, GLASS, STONE } from '../../src/world/blocks/index';
-import type { DiffMsg, EditedMsg, ErrorMsg, FromSim } from '../../src/workers/protocol';
-import { createSimHandler, SIM_DRAIN_MS } from '../../src/workers/simHandler';
+import type { DiffMsg, EditedMsg, ErrorMsg, FromSim, LoadedMsg } from '../../src/workers/protocol';
+import { createMemorySimHandler, createSimHandler, SIM_DRAIN_MS, type SimHandler, type SimReply } from '../../src/workers/simHandler';
 import { R_READER, SIM_THREAD } from '../../src/world/store/reclaim';
+import type { ColumnDiff } from '../../src/world/store/api';
 import type { VoxelStore } from '../../src/world/store/store';
 import { genRegion } from '../harness/region';
 
@@ -33,25 +39,83 @@ const valueAt = (s: VoxelStore, x: number, y: number, z: number): number => val(
 const sectionOf = (y: number): number => (y + 64) >> 4;
 const idxOf = (x: number, y: number, z: number): number => (((y + 64) & 15) << 8) | ((z & 15) << 4) | (x & 15);
 const blockVersion = (s: VoxelStore, cx: number, cz: number): number => s.table.blockVersion(s.table.find(cx, cz));
+/** Handles `m` and returns its one reply, posted at once (`attach`, `edits` and `diff` with no `load` pending). */
+const call = (h: SimHandler, m: unknown): SimReply => {
+  const out: SimReply[] = [];
+  h.handle(m, (r) => out.push(r));
+  expect(out, `one reply posted at once to ${JSON.stringify(m)?.slice(0, 80)}`).toHaveLength(1);
+  return out[0]!;
+};
+
+// ---------------------------------------------------------------- a saved world in a MemoryKV (SP5b spec §2.1-§2.3)
+
+/** Two header genKeys: the world's (`load`'s) and an older one some columns were written under. */
+const GEN: Hash64 = [0x01234567, 0x89abcdef];
+const GEN_OLD: Hash64 = [0x0badf00d, 0x00c0ffee];
+const UPDATED = 1_700_000_000_000;
+/** A column's entries in canonical order (by `sy`, then `idx`). */
+const diffOf = (entries: ReadonlyArray<readonly [sy: number, idx: number, value: number]>): ColumnDiff => {
+  const e = [...entries].sort((a, b) => a[0] - b[0] || a[1] - b[1]);
+  return { sy: Uint8Array.from(e.map((x) => x[0])), idx: Uint16Array.from(e.map((x) => x[1])), value: Uint32Array.from(e.map((x) => x[2])) };
+};
+const entriesOf = (d: { sy: Uint8Array; idx: Uint16Array; value: Uint32Array }): number[][] => [...d.sy].map((sy, k) => [sy, d.idx[k]!, d.value[k]!]);
+const stateOf = (worldId: string): StateRecord => ({
+  worldId, flushSeq: 4, updated: UPDATED, player: null, time: { t: 0.25, speedIndex: 0 }, hotbar: { v: 1, active: 0, slots: [] }, places: [],
+});
+const recordOf = (id: string): WorldRecord => ({
+  id, name: 'My world', seedText: '42', seed: [42, 0], profile: 'default', params: {}, schemaVersion: 1, paramsHash: '0'.repeat(16),
+  generatorVersion: 5, genKey: hex64(GEN), stateTable: todayStateTable(), created: 1, backupOf: null,
+});
+const historyOf = (worldId: string): HistoryRecord => ({ worldId, done: [{ edits: [{ x: 1, y: 70, z: 2, before: NO_ENTRY, after: val(STONE) }] }], undone: [] });
+/** Writes `cols` (encoded under `genKey`) and the world's state through the sim's own flush batch. */
+async function seed(kv: KV, worldId: string, cols: ReadonlyArray<readonly [cx: number, cz: number, d: ColumnDiff]>, genKey: Hash64 = GEN): Promise<void> {
+  const w = await kv.write(flushOps(worldId, cols.map(([cx, cz, d]) => ({ key: colKey(cx, cz), bytes: encodeColumnDiff(d, genKey) })), stateOf(worldId), null, null));
+  expect(w.status).toBe('complete');
+}
+/** A column's bytes that `decodeColumnDiff` refuses (version 9). */
+async function seedCorrupt(kv: KV, worldId: string, cx: number, cz: number): Promise<void> {
+  expect((await kv.write([{ op: 'put', store: 'diffs', key: [worldId, colKey(cx, cz)], value: Uint8Array.of(9, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0) }])).status).toBe('complete');
+}
+const loadMsg = (id: number, worldId: string, o: Record<string, unknown> = {}) => ({
+  type: 'load', id, db: 'wi10-test', worldId, flushSeq: 4, genKey: hex64(GEN), updated: UPDATED, stateTable: todayStateTable(), rewrite: null, ...o,
+});
+/** A handler over `kv` and the replies it posts, in order; `until(n)` waits for the n-th. */
+function over(kv: KV | (() => Promise<KV>), h?: SimHandler) {
+  const handler = h ?? createSimHandler({ openKV: typeof kv === 'function' ? kv : async () => kv });
+  const got: SimReply[] = [];
+  return {
+    handler,
+    got,
+    send: (m: unknown, onPost?: (r: SimReply) => void): void => handler.handle(m, (r) => { onPost?.(r); got.push(r); }),
+    until: (n: number) => vi.waitFor(() => expect(got).toHaveLength(n), { timeout: 2000 }),
+  };
+}
+const loadedOf = (r: SimReply): LoadedMsg => {
+  expect(r.msg.type, JSON.stringify(r.msg)).toBe('loaded');
+  return r.msg as LoadedMsg;
+};
+const sortedKeys = (a: Iterable<number>): number[] => [...a].sort((x, y) => x - y);
+/** Today's table reversed, plus a key that no longer parses: stored id i is today's N − 1 − i, and N is unknown. */
+const permuted = (): string[] => [...todayStateTable()].reverse().concat(['nope[x=1]']);
+const storedId = (s: number): number => todayStateTable().length - 1 - s;
 
 describe('the sim handler on a shared seed-42 region (SP5a spec §2.1)', () => {
   let store: VoxelStore;
   /** The centre column of the 5 × 5 (its 3 × 3 is Published). */
   let C: [number, number] = [0, 0];
-  const handler = createSimHandler();
+  const handler = createMemorySimHandler();
   let id = 100;
   const set = (x: number, y: number, z: number, value: number, expectV: number) => ({ x, y, z, op: 'set', value, expect: expectV });
   const revert = (x: number, y: number, z: number, expectV: number) => ({ x, y, z, op: 'revert', value: 0, expect: expectV });
-  const post = (edits: unknown[]) => handler.handle({ type: 'edits', id: ++id, edits });
+  const post = (edits: unknown[]) => call(handler, { type: 'edits', id: ++id, edits });
   const edited = (r: { msg: FromSim }): EditedMsg => {
     expect(r.msg.type, JSON.stringify(r.msg)).toBe('edited');
     return r.msg as EditedMsg;
   };
   const surface = (x: number, z: number): number => store.heightAt('worldSurface', x, z)!;
   /** Another handler attached to the same store as thread 15 (the page's sim after a reload), for the cases that latch it. */
-  const attachedHandler = () => {
-    const h = createSimHandler();
-    expect(h.handle({ type: 'attach', handles: store.handles(), thread: 15 }).msg).toEqual({ type: 'attached' });
+  const attachedHandler = (h: SimHandler = createMemorySimHandler()) => {
+    expect(call(h, { type: 'attach', handles: store.handles(), thread: 15 }).msg).toEqual({ type: 'attached' });
     return h;
   };
 
@@ -61,7 +125,7 @@ describe('the sim handler on a shared seed-42 region (SP5a spec §2.1)', () => {
     C = [sp.x >> 4, sp.z >> 4];
     store = (await genRegion({ seed: '42', params, cx0: C[0] - 2, cz0: C[1] - 2, w: 5, h: 5, upTo: 'L', order: 'spiral', threads: 1, shared: true })).view.store;
     expect(store.shared).toBe(true);
-    expect(handler.handle({ type: 'attach', handles: store.handles(), thread: 15 }).msg).toEqual({ type: 'attached' });
+    expect(call(handler, { type: 'attach', handles: store.handles(), thread: 15 }).msg).toEqual({ type: 'attached' });
   }, 120_000);
 
   test('SIM_DRAIN_MS is 100 (§2.1)', () => {
@@ -117,7 +181,7 @@ describe('the sim handler on a shared seed-42 region (SP5a spec §2.1)', () => {
     const vLo = valueAt(store, lo[0]!, lo[1]!, lo[2]!);
     expect(edited(post([set(hi[0]!, hi[1]!, hi[2]!, val(GLASS), vHi)])).refused).toBeNull();
     expect(edited(post([set(lo[0]!, lo[1]!, lo[2]!, val(STONE), vLo)])).refused).toBeNull();
-    const r = handler.handle({ type: 'diff', id: 7, cx: C[0], cz: C[1] });
+    const r = call(handler, { type: 'diff', id: 7, cx: C[0], cz: C[1] });
     expect(r.msg.type).toBe('diff');
     const d = r.msg as DiffMsg;
     expect([d.id, d.cx, d.cz]).toEqual([7, C[0], C[1]]);
@@ -134,10 +198,10 @@ describe('the sim handler on a shared seed-42 region (SP5a spec §2.1)', () => {
     expect(r.transfer).toEqual([d.sy.buffer, d.idx.buffer, d.value.buffer]);
     for (const a of [d.sy, d.idx, d.value]) expect(a.byteLength).toBe(a.buffer.byteLength);
     // A column with no entries answers zero-length arrays (ruling R9).
-    const none = handler.handle({ type: 'diff', id: 8, cx: C[0] + 1, cz: C[1] }).msg as DiffMsg;
+    const none = call(handler, { type: 'diff', id: 8, cx: C[0] + 1, cz: C[1] }).msg as DiffMsg;
     expect([none.type, none.id, none.sy.length, none.idx.length, none.value.length]).toEqual(['diff', 8, 0, 0, 0]);
     expect(edited(post([revert(hi[0]!, hi[1]!, hi[2]!, val(GLASS)), revert(lo[0]!, lo[1]!, lo[2]!, val(STONE))])).refused).toBeNull();
-    expect((handler.handle({ type: 'diff', id: 9, cx: C[0], cz: C[1] }).msg as DiffMsg).sy.length).toBe(0);
+    expect((call(handler, { type: 'diff', id: 9, cx: C[0], cz: C[1] }).msg as DiffMsg).sy.length).toBe(0);
   });
 
   test('messages are handled in order: an `edits` then a `diff` of the same column returns the new entry', () => {
@@ -147,15 +211,40 @@ describe('the sim handler on a shared seed-42 region (SP5a spec §2.1)', () => {
     const y = surface(x, z);
     const before = valueAt(store, x, y, z);
     const replies = [
-      handler.handle({ type: 'edits', id: 20, edits: [set(x, y, z, val(GLASS), before)] }),
-      handler.handle({ type: 'diff', id: 21, cx, cz }),
-      handler.handle({ type: 'edits', id: 22, edits: [set(x, y, z, val(DIRT), val(GLASS))] }),
-      handler.handle({ type: 'diff', id: 23, cx, cz }),
+      call(handler, { type: 'edits', id: 20, edits: [set(x, y, z, val(GLASS), before)] }),
+      call(handler, { type: 'diff', id: 21, cx, cz }),
+      call(handler, { type: 'edits', id: 22, edits: [set(x, y, z, val(DIRT), val(GLASS))] }),
+      call(handler, { type: 'diff', id: 23, cx, cz }),
     ].map((r) => r.msg);
     expect(replies.map((m) => [m.type, (m as { id: number }).id])).toEqual([['edited', 20], ['diff', 21], ['edited', 22], ['diff', 23]]);
     expect([...(replies[1] as DiffMsg).value]).toEqual([val(GLASS)]);
     expect([...(replies[3] as DiffMsg).value]).toEqual([val(DIRT)]);
     expect(edited(post([revert(x, y, z, val(DIRT))])).refused).toBeNull();
+  });
+
+  test('an `edits` posted during the load runs after it, in order (SP5b D18)', async () => {
+    const [cx, cz] = [C[0] - 1, C[1] + 1];
+    const x = 16 * cx + 4;
+    const z = 16 * cz + 13;
+    const y = surface(x, z);
+    const before = valueAt(store, x, y, z);
+    // The saved world holds an entry at the voxel (not the store's value: nothing loaded reaches the store) and one more.
+    const kv = createMemoryKV({ readDelayMs: 50 });
+    await seed(kv, 'w-edit', [[cx, cz, diffOf([[sectionOf(y), idxOf(x, y, z), val(DIRT)], [0, 0, val(STONE)]])]]);
+    const o = over(kv, attachedHandler(createSimHandler({ openKV: async () => kv })));
+    o.send(loadMsg(60, 'w-edit'));
+    o.send({ type: 'edits', id: 61, edits: [set(x, y, z, val(GLASS), before)] });
+    o.send({ type: 'diff', id: 62, cx, cz });
+    expect(o.got).toEqual([]);
+    await o.until(3);
+    expect(o.got.map((r) => [r.msg.type, (r.msg as { id: number }).id])).toEqual([['loaded', 60], ['edited', 61], ['diff', 62]]);
+    // The edit saw the loaded entry, and its column already held entries.
+    const e = edited(o.got[1]!);
+    expect([e.refused, [...e.prev], [...e.next], [...e.entryAdded]]).toEqual([null, [val(DIRT)], [val(GLASS)], []]);
+    expect(entriesOf(o.got[2]!.msg as DiffMsg)).toEqual([[0, 0, val(STONE)], [sectionOf(y), idxOf(x, y, z), val(GLASS)]]);
+    // Undone, so the later cases start from the generated terrain.
+    expect(edited(call(o.handler, { type: 'edits', id: 63, edits: [revert(x, y, z, val(GLASS))] })).refused).toBeNull();
+    expect(valueAt(store, x, y, z)).toBe(before);
   });
 
   test('a malformed message → `BAD_MESSAGE` and nothing written', () => {
@@ -167,7 +256,7 @@ describe('the sim handler on a shared seed-42 region (SP5a spec §2.1)', () => {
     // A handler of its own: an error reply latches it (SIM-1).
     const h = attachedHandler();
     const bad = (m: unknown): ErrorMsg => {
-      const r = h.handle(m);
+      const r = call(h, m);
       expect(r.msg.type).toBe('error');
       expect(r.transfer).toEqual([]);
       return r.msg as ErrorMsg;
@@ -182,11 +271,11 @@ describe('the sim handler on a shared seed-42 region (SP5a spec §2.1)', () => {
     expect(bad({ type: 'attach', handles: store.handles(), thread: 14 }).code).toBe('BAD_MESSAGE');
     expect(valueAt(store, x, y, z)).toBe(before);
     expect([blockVersion(store, C[0], C[1]), store.table.lightVersion(store.table.find(C[0], C[1]))]).toEqual(versions);
-    expect((h.handle({ type: 'diff', id: 33, cx: C[0], cz: C[1] }).msg as DiffMsg).sy.length).toBe(0);
+    expect((call(h, { type: 'diff', id: 33, cx: C[0], cz: C[1] }).msg as DiffMsg).sy.length).toBe(0);
   });
 
   test('a repeated attach to the same store as 15 is answered `attached` again', () => {
-    expect(handler.handle({ type: 'attach', handles: store.handles(), thread: 15 }).msg).toEqual({ type: 'attached' });
+    expect(call(handler, { type: 'attach', handles: store.handles(), thread: 15 }).msg).toEqual({ type: 'attached' });
   });
 
   test('after an error reply (an INTERNAL, a BAD_MESSAGE) a later `edits` batch writes nothing: an INTERNAL `error` with its id, `applyEdits` not called; a `diff` still answers (SIM-1)', () => {
@@ -199,17 +288,17 @@ describe('the sim handler on a shared seed-42 region (SP5a spec §2.1)', () => {
     vi.mocked(applyEdits).mockImplementationOnce(() => {
       throw new TypeError('injected bug');
     });
-    expect((internal.handle({ type: 'edits', id: 50, edits: [set(x, y, z, val(STONE), before)] }).msg as ErrorMsg).code).toBe('INTERNAL');
+    expect((call(internal, { type: 'edits', id: 50, edits: [set(x, y, z, val(STONE), before)] }).msg as ErrorMsg).code).toBe('INTERNAL');
     const malformed = attachedHandler();
-    expect((malformed.handle({ type: 'edits', id: 51, edits: [set(x, y + 0.5, z, val(STONE), before)] }).msg as ErrorMsg).code).toBe('BAD_MESSAGE');
+    expect((call(malformed, { type: 'edits', id: 51, edits: [set(x, y + 0.5, z, val(STONE), before)] }).msg as ErrorMsg).code).toBe('BAD_MESSAGE');
     const calls = vi.mocked(applyEdits).mock.calls.length;
     for (const [h, id] of [[internal, 52], [malformed, 53]] as const) {
-      const r = h.handle({ type: 'edits', id, edits: [set(x, y, z, val(STONE), before)] });
+      const r = call(h, { type: 'edits', id, edits: [set(x, y, z, val(STONE), before)] });
       const m = r.msg as ErrorMsg;
       expect([m.type, m.jobId, m.epoch, m.code]).toEqual(['error', id, null, 'INTERNAL']);
       expect(m.message).toContain('nothing written');
       expect(r.transfer).toEqual([]);
-      expect((h.handle({ type: 'diff', id: id + 10, cx: C[0], cz: C[1] }).msg as DiffMsg).type).toBe('diff');
+      expect((call(h, { type: 'diff', id: id + 10, cx: C[0], cz: C[1] }).msg as DiffMsg).type).toBe('diff');
     }
     expect(vi.mocked(applyEdits).mock.calls.length).toBe(calls);
     expect(valueAt(store, x, y, z)).toBe(before);
@@ -225,14 +314,14 @@ describe('the sim handler on a shared seed-42 region (SP5a spec §2.1)', () => {
     vi.mocked(applyEdits).mockImplementationOnce(() => {
       throw new TypeError('injected bug');
     });
-    const internal = handler.handle({ type: 'edits', id: 40, edits: [set(x, y, z, val(STONE), before)] }).msg as ErrorMsg;
+    const internal = call(handler, { type: 'edits', id: 40, edits: [set(x, y, z, val(STONE), before)] }).msg as ErrorMsg;
     expect([internal.type, internal.jobId, internal.epoch, internal.code, internal.message]).toEqual(['error', 40, null, 'INTERNAL', 'injected bug']);
     // A real StoreCorrupt (SP4b spec §2.6): thread 2 died holding the block pool's lock, so the sim's copy-on-write
     // allocation finds a dead owner (on a handler of its own: the INTERNAL reply latched this one). The store is left
     // corrupt: this case runs last.
     new Int32Array(store.handles().blocks.ctl)[0] = 3;
     store.markDead(2);
-    const corrupt = attachedHandler().handle({ type: 'edits', id: 41, edits: [set(x, y, z, val(STONE), before)] }).msg as ErrorMsg;
+    const corrupt = call(attachedHandler(), { type: 'edits', id: 41, edits: [set(x, y, z, val(STONE), before)] }).msg as ErrorMsg;
     expect([corrupt.type, corrupt.jobId, corrupt.epoch, corrupt.code]).toEqual(['error', 41, null, 'STORE_CORRUPT']);
     expect(corrupt.message).toContain('failed thread 2');
     // Nothing was written, and the handler left its read section: thread 15 announces no epoch.
@@ -243,11 +332,185 @@ describe('the sim handler on a shared seed-42 region (SP5a spec §2.1)', () => {
 
 describe('the sim handler before an attach', () => {
   test('`edits` before the attach is NOT_ATTACHED with its id; a `diff` reads the (empty) DiffStore', () => {
-    const h = createSimHandler();
-    const m = h.handle({ type: 'edits', id: 3, edits: [{ x: 0, y: 70, z: 0, op: 'set', value: val(STONE), expect: 0 }] }).msg as ErrorMsg;
+    const h = createMemorySimHandler();
+    const m = call(h, { type: 'edits', id: 3, edits: [{ x: 0, y: 70, z: 0, op: 'set', value: val(STONE), expect: 0 }] }).msg as ErrorMsg;
     expect([m.type, m.jobId, m.code]).toEqual(['error', 3, 'NOT_ATTACHED']);
-    const d = h.handle({ type: 'diff', id: 4, cx: 0, cz: 0 }).msg as DiffMsg;
+    const d = call(h, { type: 'diff', id: 4, cx: 0, cz: 0 }).msg as DiffMsg;
     expect([d.type, d.id, d.sy.length]).toEqual(['diff', 4, 0]);
     expect(h.drain()).toBe(0);
+  });
+});
+
+describe('`load` (SP5b spec §2.3, §3.3, D18, D19, D22)', () => {
+  const A = diffOf([[4, 10, val(STONE)], [4, 11, val(DIRT, 5)], [20, 4095, val(GLASS)]]);
+  const B = diffOf([[0, 0, val(DIRT)]]);
+  /** One dense section (fmt 1). */
+  const D = diffOf(Array.from({ length: 2600 }, (_, k) => [3, k, val(STONE)] as const));
+
+  test('`load` fills the DiffStore and answers the set, the entry count and 0 skipped', async () => {
+    const kv = createMemoryKV();
+    await seed(kv, 'w1', [[0, 0, A], [-7, 12, B], [300, -40, D]]);
+    // Other worlds' columns, on both sides of w1's key range, stay out.
+    await seed(kv, 'w0', [[1, 1, B]]);
+    await seed(kv, 'w2', [[0, 0, B], [2, 2, A]]);
+    const o = over(kv);
+    o.send(loadMsg(1, 'w1'));
+    await o.until(1);
+    const m = loadedOf(o.got[0]!);
+    expect(sortedKeys(m.entryCols)).toEqual(sortedKeys([colKey(0, 0), colKey(-7, 12), colKey(300, -40)]));
+    expect([m.id, m.entries, m.unknownStates, m.skippedColumns]).toEqual([1, 3 + 1 + 2600, 0, 0]);
+    expect(Number.isFinite(m.decodeMs) && m.decodeMs >= 0, `decodeMs ${m.decodeMs}`).toBe(true);
+    expect(o.got[0]!.transfer).toEqual([m.entryCols.buffer]);
+    for (const [cx, cz, d] of [[0, 0, A], [-7, 12, B], [300, -40, D], [1, 1, null], [2, 2, null]] as const) {
+      const r = call(o.handler, { type: 'diff', id: 9, cx, cz }).msg as DiffMsg;
+      expect(entriesOf(r), `(${cx}, ${cz})`).toEqual(d === null ? [] : entriesOf(d));
+    }
+    // A second `load` is refused, at once.
+    const again = call(o.handler, loadMsg(2, 'w2')).msg as ErrorMsg;
+    expect([again.type, again.jobId, again.code]).toEqual(['error', 2, 'BAD_MESSAGE']);
+  });
+
+  test('a corrupt record is skipped and counted, the others load', async () => {
+    const kv = createMemoryKV();
+    await seed(kv, 'w1', [[0, 0, A], [5, -5, B]]);
+    await seedCorrupt(kv, 'w1', 1, 1);
+    const o = over(kv);
+    o.send(loadMsg(1, 'w1'));
+    await o.until(1);
+    const m = loadedOf(o.got[0]!);
+    expect([m.entries, m.unknownStates, m.skippedColumns]).toEqual([4, 0, 1]);
+    expect(sortedKeys(m.entryCols)).toEqual(sortedKeys([colKey(0, 0), colKey(5, -5)]));
+    expect(entriesOf(call(o.handler, { type: 'diff', id: 3, cx: 1, cz: 1 }).msg as DiffMsg)).toEqual([]);
+    expect(entriesOf(call(o.handler, { type: 'diff', id: 4, cx: 5, cz: -5 }).msg as DiffMsg)).toEqual(entriesOf(B));
+    // Without a rewrite nothing is written: the corrupt record stays.
+    expect(kv.dump('diffs')).toHaveLength(3);
+  });
+
+  test('a `diff` posted right after `load` waits and returns the loaded entries (with a 50 ms read delay)', async () => {
+    const kv = createMemoryKV({ readDelayMs: 50 });
+    await seed(kv, 'w1', [[0, 0, A]]);
+    const o = over(kv);
+    const t0 = performance.now();
+    o.send(loadMsg(1, 'w1'));
+    o.send({ type: 'diff', id: 2, cx: 0, cz: 0 });
+    expect(o.got).toEqual([]);
+    await o.until(2);
+    expect(performance.now() - t0).toBeGreaterThanOrEqual(45);
+    expect(o.got.map((r) => r.msg.type)).toEqual(['loaded', 'diff']);
+    expect(entriesOf(o.got[1]!.msg as DiffMsg)).toEqual(entriesOf(A));
+  });
+
+  test('a permuted stored table: the entries load under today\'s ids, `unknownStates` counts the unknown key\'s voxels', async () => {
+    const N = todayStateTable().length;
+    const kv = createMemoryKV();
+    // Stored ids: STONE and DIRT through the reversed table, and three voxels of the unknown key (id N), one with fluid.
+    const stored = diffOf([[4, 10, val(storedId(STONE))], [4, 11, val(storedId(DIRT), 5)], [5, 0, val(N)], [5, 1, val(N, 3)], [5, 2, val(N)]]);
+    await seed(kv, 'w1', [[0, 0, stored], [5, -5, diffOf([[0, 0, val(storedId(GLASS))]])]]);
+    const before = kv.dump('diffs');
+    const o = over(kv);
+    o.send(loadMsg(1, 'w1', { stateTable: permuted() }));
+    await o.until(1);
+    const m = loadedOf(o.got[0]!);
+    expect([m.entries, m.unknownStates, m.skippedColumns]).toEqual([6, 3, 0]);
+    // Unknown → air (state 0, fluid 0); a known state keeps its fluid byte.
+    expect(entriesOf(call(o.handler, { type: 'diff', id: 2, cx: 0, cz: 0 }).msg as DiffMsg))
+      .toEqual([[4, 10, val(STONE)], [4, 11, val(DIRT, 5)], [5, 0, 0], [5, 1, 0], [5, 2, 0]]);
+    expect(entriesOf(call(o.handler, { type: 'diff', id: 3, cx: 5, cz: -5 }).msg as DiffMsg)).toEqual([[0, 0, val(GLASS)]]);
+    // No `rewrite`: nothing written.
+    expect(kv.dump('diffs')).toEqual(before);
+  });
+
+  test('`rewrite` with a prefix table writes `worlds` only; with a non-prefix one writes every column re-encoded and the history, in one write, before `loaded`', async () => {
+    const today = todayStateTable();
+    // A prefix: today's table less its last state (ids are append-only).
+    expect(Math.max(STONE, DIRT, GLASS)).toBeLessThan(today.length - 1);
+    const kv = createMemoryKV();
+    await seed(kv, 'w1', [[0, 0, A], [5, -5, B]], GEN_OLD);
+    const diffsBefore = kv.dump('diffs');
+    const write = vi.spyOn(kv, 'write');
+    const atReply: Record<string, unknown> = {};
+    const snapshot = (k: MemoryKV) => () => {
+      for (const s of ['worlds', 'diffs', 'history'] as const) atReply[s] = k.dump(s);
+    };
+    const prefix = over(kv);
+    prefix.send(loadMsg(1, 'w1', { stateTable: today.slice(0, -1), rewrite: { world: recordOf('w1'), history: historyOf('w1') } }), snapshot(kv));
+    await prefix.until(1);
+    expect(loadedOf(prefix.got[0]!).entries).toBe(4);
+    expect(write).toHaveBeenCalledTimes(1);
+    expect(write.mock.calls[0]![0]).toEqual([{ op: 'put', store: 'worlds', key: 'w1', value: recordOf('w1') }]);
+    expect(atReply).toEqual({ worlds: [['w1', recordOf('w1')]], diffs: diffsBefore, history: [] });
+
+    // A non-prefix table: every column under today's ids, each keeping its header genKey, and the history, in one write.
+    const N = today.length;
+    const kv2 = createMemoryKV();
+    const s0 = diffOf([[4, 10, val(storedId(STONE))], [5, 0, val(N)]]);
+    const s1 = diffOf([[0, 0, val(storedId(DIRT), 5)]]);
+    await seed(kv2, 'w1', [[0, 0, s0], [5, -5, s1]], GEN_OLD);
+    const write2 = vi.spyOn(kv2, 'write');
+    const other = over(kv2);
+    other.send(loadMsg(1, 'w1', { stateTable: permuted(), rewrite: { world: recordOf('w1'), history: historyOf('w1') } }), snapshot(kv2));
+    await other.until(1);
+    expect(loadedOf(other.got[0]!).unknownStates).toBe(1);
+    expect(write2).toHaveBeenCalledTimes(1);
+    const ops = write2.mock.calls[0]![0];
+    expect(ops.map((op) => [op.op, op.store])).toEqual([['put', 'worlds'], ['put', 'diffs'], ['put', 'diffs'], ['put', 'history']]);
+    expect(atReply['worlds']).toEqual([['w1', recordOf('w1')]]);
+    expect(atReply['history']).toEqual([['w1', historyOf('w1')]]);
+    const diffsAt = atReply['diffs'] as Array<[readonly [string, number], Uint8Array]>;
+    expect(diffsAt.map(([k]) => k)).toEqual([['w1', colKey(0, 0)], ['w1', colKey(5, -5)]]);
+    const decoded = diffsAt.map(([, b]) => decodeColumnDiff(b, N));
+    expect(decoded.map((d) => entriesOf(d.diff))).toEqual([[[4, 10, val(STONE)], [5, 0, 0]], [[0, 0, val(DIRT, 5)]]]);
+    expect(decoded.map((d) => d.genKey)).toEqual([GEN_OLD, GEN_OLD]);
+  });
+
+  test('a permuted table with one undecodable column: after `load`, that key is gone and the others are re-encoded', async () => {
+    const N = todayStateTable().length;
+    const kv = createMemoryKV();
+    await seed(kv, 'w1', [[0, 0, diffOf([[4, 10, val(storedId(STONE))]])], [5, -5, diffOf([[0, 0, val(storedId(GLASS))]])]]);
+    await seedCorrupt(kv, 'w1', 1, 1);
+    const o = over(kv);
+    o.send(loadMsg(1, 'w1', { stateTable: permuted(), rewrite: { world: recordOf('w1'), history: null } }));
+    await o.until(1);
+    expect(loadedOf(o.got[0]!).skippedColumns).toBe(1);
+    const diffs = kv.dump('diffs') as Array<[readonly [string, number], Uint8Array]>;
+    expect(diffs.map(([k]) => k)).toEqual([['w1', colKey(0, 0)], ['w1', colKey(5, -5)]]);
+    expect(diffs.map(([, b]) => entriesOf(decodeColumnDiff(b, N).diff))).toEqual([[[4, 10, val(STONE)]], [[0, 0, val(GLASS)]]]);
+    // A null history writes none.
+    expect(kv.dump('history')).toEqual([]);
+  });
+
+  test('a permuted-table rewrite whose write is failAt(0)-aborted answers error, and every key in the KV is as it was (ruling P3)', async () => {
+    const kv = createMemoryKV();
+    await seed(kv, 'w1', [[0, 0, diffOf([[4, 10, val(storedId(STONE))]])]]);
+    const dumps = () => (['worlds', 'state', 'history', 'diffs', 'meta'] as const).map((s) => kv.dump(s));
+    const before = dumps();
+    kv.failAt(0);
+    const o = over(kv);
+    o.send(loadMsg(1, 'w1', { stateTable: permuted(), rewrite: { world: recordOf('w1'), history: historyOf('w1') } }));
+    await o.until(1);
+    const e = o.got[0]!.msg as ErrorMsg;
+    expect([e.type, e.jobId, e.code]).toEqual(['error', 1, 'INTERNAL']);
+    expect(e.message).toContain('abort');
+    expect(e.message).toContain('AbortError');
+    expect(dumps()).toEqual(before);
+    // Nothing reached the DiffStore either.
+    expect(entriesOf(call(o.handler, { type: 'diff', id: 2, cx: 0, cz: 0 }).msg as DiffMsg)).toEqual([]);
+  });
+
+  test('a KV open failure → an `error` reply', async () => {
+    const o = over(() => Promise.reject(new Error('IndexedDB is not available')));
+    o.send(loadMsg(1, 'w1'));
+    o.send({ type: 'diff', id: 2, cx: 0, cz: 0 });
+    await o.until(2);
+    const e = o.got[0]!.msg as ErrorMsg;
+    expect([e.type, e.jobId, e.code, e.message]).toEqual(['error', 1, 'INTERNAL', 'IndexedDB is not available']);
+    expect(o.got[1]!.msg.type).toBe('diff');
+    // A read failure too: a closed connection's read rejects.
+    const kv = createMemoryKV();
+    kv.closeNow();
+    const r = over(kv);
+    r.send(loadMsg(3, 'w1'));
+    await r.until(1);
+    expect([(r.got[0]!.msg as ErrorMsg).jobId, (r.got[0]!.msg as ErrorMsg).code]).toEqual([3, 'INTERNAL']);
   });
 });

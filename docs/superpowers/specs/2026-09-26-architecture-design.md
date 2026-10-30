@@ -1194,8 +1194,7 @@ Target: edit → visible ≤ 50 ms p95, measured in the HUD (SP5a: gated from th
 
 ### 4.13 Persistence flow
 
-- **World open:** the sim worker loads the `diffs` key index with `getAllKeys`.
-- **Prefetch:** as columns enter the T ring, the sim worker prefetches their diffs into its in-memory DiffStore.
+- **World open:** the sim worker loads all of the world's diffs in one key-range read (SP5b; no prefetch).
 - **Read-through:** the coordinator obtains the diff for a D job from the sim worker and passes it in the job (SP5a: cloned with the decorate message; only the sim's diff reply is transferred). Edits followed by unload and reload within the flush window can therefore never regenerate from a stale IDB diff (E5).
 - **Flush:** every 2 s, and on `visibilitychange` / `pagehide`, the sim worker writes all dirty diffs plus the `worlds` record (player, time, `flushSeq`) in **one readwrite transaction**. Commit is confirmed by `oncomplete`, so at most 2 s of edits can be lost. `navigator.storage.persist()` is requested once.
 - **Durable backup:** `.wiworld` export.

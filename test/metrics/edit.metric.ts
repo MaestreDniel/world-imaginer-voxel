@@ -16,7 +16,7 @@ import { createDiffStore } from '../../src/sim/diffStore';
 import { applyEdits, createEditScratch, type Edit } from '../../src/sim/edits';
 import { createEditLatency } from '../../src/ui/world/editLatency';
 import { createEditPath } from '../../src/ui/world/editPath';
-import { createSimHandler } from '../../src/workers/simHandler';
+import { createMemorySimHandler } from '../../src/workers/simHandler';
 import { LAVA_SOURCE, NO_FLUID, WATER_SOURCE } from '../../src/world/blocks/fluid';
 import { AIR, GLASS, ICE, OPACITY, REGISTRY, STONE, TORCH } from '../../src/world/blocks/index';
 import { SECTIONS } from '../../src/world/store/columnTable';
@@ -368,7 +368,7 @@ async function measureE5(): Promise<E5Result> {
   let forced: number | null = null;
   const delay = (): number => forced ?? delays() % (E5_DELAY_MAX + 1);
   let simFailure: Error | null = null;
-  const sim = createSimClient(() => inProcessSimWorker(createSimHandler(), delay), { onFailure(e) { simFailure = e; } });
+  const sim = createSimClient(() => inProcessSimWorker(createMemorySimHandler(), delay), { onFailure(e) { simFailure = e; } });
   const problems: string[] = [];
   const events: StreamEvent[] = [];
   let frames = 0;

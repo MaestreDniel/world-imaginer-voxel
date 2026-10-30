@@ -1,11 +1,12 @@
 /**
  * Edits on the real pipeline against `genRegion` with the same entries (SP5a spec §6.3; Review Focus 2 and 5): the
  * real coordinator and pool on two Node workers (`buildNodeTaskWorker('edit')`) and the sim's own handler in a third
- * (`buildNodeTaskWorker('edit-sim', …)`: `createSimHandler` with its 100 ms drain, so the sim's message guard,
- * transfers and limbo retries run on a real thread), wrapped as a `SimWorkerLike` for `createSimClient` and attached as
- * thread 15; one shared store, seed '42', the default profile, RD 4 around seed 42's spawn column (0, 0), as
- * `integration/apply.test.ts`. The page's edit wiring: D reads the sim's entries through (`worldJobsOf(pool, sim)`),
- * every edit goes through the edit path (`createEditPath`: its gate, pins and `markEdited`) and the action post that
+ * (`buildNodeTaskWorker('edit-sim', …)`: `createMemorySimHandler` with its 100 ms drain, posting through the wrapper's
+ * `post` as `sim.worker.ts` does, SP5b D18, so the sim's message guard, transfers and limbo retries run on a real
+ * thread), wrapped as a `SimWorkerLike` for `createSimClient` and attached as thread 15; one shared store, seed '42',
+ * the default profile, RD 4 around seed 42's spawn column (0, 0), as `integration/apply.test.ts`. The page's edit
+ * wiring: D reads the sim's entries through (`worldJobsOf(pool, sim)`), every edit goes through the edit path
+ * (`createEditPath`: its gate, pins and `markEdited`) and the action post that
  * records each accepted one in the block history (`createActionPost`, `createBlockHistory`), and the world's Apply path
  * (the real configure driver with no preview wanted, the apply control and `createEpochs`), on the real clock. Every
  * proto is kept; strict until the first fill, `setStrict(false)` after it. A frame is the page's: the apply control's
@@ -267,7 +268,7 @@ function clean(what: string): void {
 beforeAll(async () => {
   [poolScript, simScript] = await Promise.all([
     buildNodeTaskWorker('edit'),
-    buildNodeTaskWorker('edit-sim', { entry: 'src/workers/simHandler.ts', factory: 'createSimHandler', retryMs: SIM_DRAIN_MS }),
+    buildNodeTaskWorker('edit-sim', { entry: 'src/workers/simHandler.ts', factory: 'createMemorySimHandler', retryMs: SIM_DRAIN_MS }),
   ]);
   const store = createStore({ shared: true, maxBlockBytes: 256 * MiB, maxByteBytes: 256 * MiB });
   const pool = createWorkerPool(2, () => spawnNode(poolScript), { epochCells: store.epochs.cells, onWorkerDead: (t) => store.markDead(t) });

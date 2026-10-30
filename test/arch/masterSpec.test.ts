@@ -1422,6 +1422,14 @@ describe('master spec amendments (SP5b §9)', () => {
     expect(lines).toContain('- **Pure layers:** none of the layers above imports three, `document`, `window` or `indexedDB`. The exception is `persist/idb.ts`, which runs in the sim worker and, for the worlds menu, on the main thread (SP5b).');
   });
 
+  test('§4.13\'s World open loads all of the world\'s diffs in one key-range read, and the Prefetch line is gone (SP5b spec D19, §9)', () => {
+    const at = text.indexOf('### 4.13 ');
+    const lines = text.slice(at, text.indexOf('### 4.14 ', at)).split('\n');
+    expect(lines).toContain('- **World open:** the sim worker loads all of the world\'s diffs in one key-range read (SP5b; no prefetch).');
+    expect(lines.some((l) => l.startsWith('- **Prefetch:**')), 'a `- **Prefetch:**` line is left in §4.13').toBe(false);
+    expect(text).not.toContain('`getAllKeys`');
+  });
+
   test('§1 names each SP5b module in its entry, which exists', () => {
     expect(SP5B_MODULES.length, 'SP5B_MODULES has no rows').toBeGreaterThan(0);
     for (const [head, token, file] of SP5B_MODULES) {

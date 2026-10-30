@@ -40,6 +40,7 @@ import { isLayerId, type LayerId } from '../gen/map/layers';
 import type { SplineLeaf } from '../metrics/splineStats';
 import type { Edit, EditRefusal } from '../sim/edits';
 import { payloadProblem, type ColumnMeshPayload } from '../mesh/column';
+import type { HistoryRecord, WorldRecord } from '../persist/saves';
 import { REGISTRY } from '../world/blocks/index';
 import type { ColumnDiff, ColumnView } from '../world/store/api';
 import { COLUMN_TABLE_BYTES } from '../world/store/columnTable';
@@ -628,8 +629,24 @@ export type { Edit, EditRefusal } from '../sim/edits';
 export interface EditsMsg { readonly type: 'edits'; readonly id: number; readonly edits: readonly Edit[] }
 /** A request for column (cx, cz)'s DiffStore entries (§2.5); `id` matches the `diff` reply to it. */
 export interface DiffRequestMsg { readonly type: 'diff'; readonly id: number; readonly cx: number; readonly cz: number }
-/** What the main thread sends the sim: its store once, as thread 15 (an `AttachMsg` with `thread` 15 only), then edits and diff requests. */
-export type ToSim = AttachMsg | EditsMsg | DiffRequestMsg;
+/**
+ * The saved world's open (SP5b spec §2.3, §3.3, §3.4 step 3; D19, D22): the sim reads every `diffs` record of `worldId`
+ * in database `db`, decodes it against `stateTable` (the stored table), remaps it to today's ids and fills its DiffStore,
+ * then answers `loaded`. `flushSeq` and `updated` are the stored state's, `genKey` the world record's 16 hex digits (the
+ * header genKey of the columns the sim flushes until a `record` replaces it). With `rewrite` (a stored table that differs
+ * from today's) the sim writes `worlds` ← `rewrite.world` and, when the stored table is not a prefix of today's, every
+ * column re-encoded under today's ids and `history` ← `rewrite.history`, in one transaction before answering.
+ */
+export interface LoadMsg {
+  readonly type: 'load'; readonly id: number; readonly db: string; readonly worldId: string; readonly flushSeq: number;
+  readonly genKey: string; readonly updated: number; readonly stateTable: readonly string[];
+  readonly rewrite: { readonly world: WorldRecord; readonly history: HistoryRecord | null } | null;
+}
+/**
+ * What the main thread sends the sim: its store once, as thread 15 (an `AttachMsg` with `thread` 15 only), a saved
+ * world's `load` (SP5b), then edits and diff requests.
+ */
+export type ToSim = AttachMsg | LoadMsg | EditsMsg | DiffRequestMsg;
 /**
  * A batch's outcome (§2.1; `sim/edits.ts`'s `EditResult`): `prev[k]` and `next[k]` edit k's entry before and after it
  * (0xFFFFFFFF for none), `dirty` the colKeys to remesh (§2.6), `entryAdded` and `entryRemoved` the colKeys that
@@ -648,8 +665,18 @@ export interface DiffMsg {
   readonly type: 'diff'; readonly id: number; readonly cx: number; readonly cz: number;
   readonly sy: Uint8Array; readonly idx: Uint16Array; readonly value: Uint32Array;
 }
+/**
+ * A `load`'s answer (SP5b spec §3.3, D20): `entryCols` the colKeys of the columns holding entries after the load (the
+ * client's whole entry set, transferred), `entries` the entries over them, `unknownStates` the entries whose stored
+ * state no longer exists (now air), `skippedColumns` the records that failed to decode, `decodeMs` the decode, remap and
+ * DiffStore fill (ruling P12).
+ */
+export interface LoadedMsg {
+  readonly type: 'loaded'; readonly id: number; readonly entryCols: Float64Array; readonly entries: number;
+  readonly unknownStates: number; readonly skippedColumns: number; readonly decodeMs: number;
+}
 /** What the sim answers; an `error`'s `jobId` is the id of the message it answers (null when unreadable), its `epoch` null. */
-export type FromSim = AttachedMsg | EditedMsg | DiffMsg | ErrorMsg;
+export type FromSim = AttachedMsg | LoadedMsg | EditedMsg | DiffMsg | ErrorMsg;
 
 /** Every `EditRefusal` (a record, so a new refusal cannot be left out of the reply guard). */
 const EDIT_REFUSALS: Readonly<Record<EditRefusal, true>> = Object.freeze({ unloaded: true, changed: true, noProto: true, full: true });
@@ -664,12 +691,26 @@ const editOk = (e: unknown): boolean =>
   isObj(e) && isInt(e['x']) && isInt(e['z']) && pointInWindow(e['x'], e['z']) && isInt(e['y']) && e['y'] >= -64 && e['y'] <= 319
   && (e['op'] === 'set' || e['op'] === 'revert') && isVoxelValue(e['value']) && isVoxelValue(e['expect']);
 
+const isGenKeyHex = (v: unknown): v is string => typeof v === 'string' && /^[0-9a-f]{16}$/.test(v);
+/**
+ * A `load`'s scalars, its stored table an array of strings, and `rewrite` null or `{world, history}` with a string
+ * `world.id` and a null or object `history` (the records were normalised on the main thread).
+ */
+const loadOk = (m: Record<string, unknown>): boolean => {
+  const rw = m['rewrite'];
+  return isInt(m['id']) && typeof m['db'] === 'string' && typeof m['worldId'] === 'string' && isInt(m['flushSeq']) && m['flushSeq'] >= 0
+    && isGenKeyHex(m['genKey']) && isFiniteNum(m['updated']) && isStrings(m['stateTable'])
+    && (rw === null || (isObj(rw) && isObj(rw['world']) && typeof rw['world']['id'] === 'string' && (rw['history'] === null || isObj(rw['history']))));
+};
+
 /** Validates a message sent to the sim; null when malformed. */
 export function parseToSim(m: unknown): ToSim | null {
   if (!isObj(m)) return null;
   switch (m['type']) {
     case 'attach':
       return storeHandlesOk(m['handles']) && m['thread'] === SIM_THREAD ? (m as unknown as AttachMsg) : null;
+    case 'load':
+      return loadOk(m) ? (m as unknown as LoadMsg) : null;
     case 'edits': {
       const edits = m['edits'];
       return isInt(m['id']) && Array.isArray(edits) && edits.every(editOk) ? (m as unknown as EditsMsg) : null;
@@ -693,6 +734,12 @@ export function parseFromSim(m: unknown): FromSim | null {
   switch (m['type']) {
     case 'attached':
       return m as unknown as AttachedMsg;
+    case 'loaded': {
+      const count = (v: unknown): boolean => isInt(v) && v >= 0;
+      return isInt(m['id']) && m['entryCols'] instanceof Float64Array && count(m['entries']) && count(m['unknownStates'])
+        && count(m['skippedColumns']) && isFiniteNum(m['decodeMs'])
+        ? (m as unknown as LoadedMsg) : null;
+    }
     case 'edited': {
       const { prev, next, refused } = m;
       return isInt(m['id']) && prev instanceof Uint32Array && next instanceof Uint32Array && next.length === prev.length
