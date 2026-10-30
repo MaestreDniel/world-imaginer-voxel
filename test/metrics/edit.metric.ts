@@ -11,7 +11,6 @@ import { createThrottle } from '../../src/engine/throttle';
 import { createWorkerPool } from '../../src/engine/workerPool';
 import { findSpawn } from '../../src/gen/column/spawn';
 import { createGenContext } from '../../src/gen/context';
-import { centreSection, createLightScratch, DEFAULT_LIGHT_TABLES, lightRegion } from '../../src/light/initial';
 import { createDiffStore } from '../../src/sim/diffStore';
 import { applyEdits, createEditScratch, type Edit } from '../../src/sim/edits';
 import { createEditLatency } from '../../src/ui/world/editLatency';
@@ -19,11 +18,10 @@ import { createEditPath } from '../../src/ui/world/editPath';
 import { createMemorySimHandler } from '../../src/workers/simHandler';
 import { LAVA_SOURCE, NO_FLUID, WATER_SOURCE } from '../../src/world/blocks/fluid';
 import { AIR, GLASS, ICE, OPACITY, REGISTRY, STONE, TORCH } from '../../src/world/blocks/index';
-import { SECTIONS } from '../../src/world/store/columnTable';
-import { copyLightRegion } from '../../src/world/store/padded';
 import { createStore, type VoxelStore } from '../../src/world/store/store';
 import { inProcessWorker } from '../harness/inProcessPool';
 import { inProcessSimWorker } from '../harness/inProcessSim';
+import { freshLightMismatches } from '../harness/lightCheck';
 import { currentTier, metricTest } from '../harness/metric';
 import { referenceLight } from '../harness/refs';
 import { genRegion } from '../harness/region';
@@ -104,59 +102,6 @@ function percentile(xs: readonly number[], p: number): number {
   return s[Math.min(s.length - 1, Math.ceil(p * s.length) - 1)]!;
 }
 
-const freshScratch = createLightScratch();
-const bytesOf = (a: Uint8Array): Buffer => Buffer.from(a.buffer, a.byteOffset, a.byteLength);
-const uniform = (a: Uint8Array, v: number): boolean => {
-  for (let i = 0; i < a.length; i++) if (a[i] !== v) return false;
-  return true;
-};
-
-/**
- * Compares every column of the 3 × 3 around each of `cols` (colKeys) with a fresh `lightRegion` of it (`mayEmit` true):
- * the number of voxels whose stored light differs, the first ones described in `problems`.
- */
-function freshLightMismatches(store: VoxelStore, cols: Iterable<number>, problems: string[], what: string): number {
-  const scratch = freshScratch;
-  const seen = new Set<number>();
-  let n = 0;
-  for (const k of cols) {
-    for (let dz = -1; dz <= 1; dz++) {
-      for (let dx = -1; dx <= 1; dx++) {
-        const cx = colKeyCx(k) + dx;
-        const cz = colKeyCz(k) + dz;
-        const key = colKey(cx, cz);
-        if (seen.has(key)) continue;
-        seen.add(key);
-        const f = store.final(cx, cz);
-        if (f === null) {
-          n += 4096 * SECTIONS;
-          if (problems.length < PROBLEMS) problems.push(`${what}: column (${cx}, ${cz}) has no final set`);
-          continue;
-        }
-        copyLightRegion(store.neighborhood(cx, cz), scratch.region);
-        lightRegion(scratch, DEFAULT_LIGHT_TABLES, true);
-        for (let sy = 0; sy < SECTIONS; sy++) {
-          const want = centreSection(scratch, sy);
-          const stored = f.sectionLight(sy);
-          if (typeof stored === 'number' ? uniform(want, stored) : bytesOf(stored).equals(bytesOf(want))) continue;
-          for (let i = 0; i < 4096; i++) {
-            const got = typeof stored === 'number' ? stored : stored[i]!;
-            if (got === want[i]) continue;
-            n++;
-            if (problems.length < PROBLEMS) {
-              const x = 16 * cx + (i & 15);
-              const z = 16 * cz + ((i >> 4) & 15);
-              const y = 16 * sy - 64 + (i >> 8);
-              problems.push(`${what}: (${x}, ${y}, ${z}) light ${got >> 4}/${got & 15} ≠ lightRegion ${want[i]! >> 4}/${want[i]! & 15} (sky/block)`);
-            }
-          }
-        }
-      }
-    }
-  }
-  return n;
-}
-
 interface L3Result {
   readonly values: Record<string, number>;
   readonly problems: string[];
@@ -174,6 +119,9 @@ async function measureL3(): Promise<L3Result> {
   const diffs = createDiffStore();
   const scratch = createEditScratch();
   const problems: string[] = [];
+  const report = (s: string): void => {
+    if (problems.length < PROBLEMS) problems.push(s);
+  };
   const next = testRng(0x1a3e);
   const pickInt = (n: number): number => next() % n;
   /** The columns an edit may hit: at least 2 from the region's edge. */
@@ -209,7 +157,7 @@ async function measureL3(): Promise<L3Result> {
     if (batch.length === 1) relightMs.push(r.relightMs);
     const t = now();
     const cols = new Set(batch.map((e) => colKey(e.x >> 4, e.z >> 4)));
-    mismatches += freshLightMismatches(store, cols, problems, what);
+    mismatches += freshLightMismatches(store, cols, report, what);
     compareMs += now() - t;
   };
 
@@ -370,6 +318,9 @@ async function measureE5(): Promise<E5Result> {
   let simFailure: Error | null = null;
   const sim = createSimClient(() => inProcessSimWorker(createMemorySimHandler(), delay), { onFailure(e) { simFailure = e; } });
   const problems: string[] = [];
+  const report = (s: string): void => {
+    if (problems.length < PROBLEMS) problems.push(s);
+  };
   const events: StreamEvent[] = [];
   let frames = 0;
   let checks = 0;
@@ -448,7 +399,7 @@ async function measureE5(): Promise<E5Result> {
         if (problems.length < PROBLEMS) problems.push(`${what}: (${x}, ${y}, ${z}) reads ${got >> 8}/${got & 255} ≠ its latest ${v >> 8}/${v & 255} (state/fluid)`);
       }
       const t = now();
-      sessionLightMismatches += freshLightMismatches(store, edited, problems, what);
+      sessionLightMismatches += freshLightMismatches(store, edited, report, what);
       compareMs += now() - t;
     };
     /** The edited columns' 3 × 3s all left the store (their records freed or taken by the columns 640 east). */

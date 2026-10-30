@@ -2,7 +2,7 @@ import { mkdirSync, readFileSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { expect, test } from 'vitest';
-import { colKey, colKeyCx, colKeyCz } from '../../src/core/coords';
+import { colKey, colKeyCx, colKeyCz, WINDOW_HALF } from '../../src/core/coords';
 import { parseHex64, type Hash64 } from '../../src/core/hash';
 import { canonicalJSON } from '../../src/core/params/canonical';
 import { applyPatch } from '../../src/core/params/kit';
@@ -11,7 +11,6 @@ import { SCHEMA } from '../../src/core/params/schema';
 import { seedFromInput } from '../../src/core/seed';
 import { findSpawn } from '../../src/gen/column/spawn';
 import { createGenContext } from '../../src/gen/context';
-import { centreSection, createLightScratch, DEFAULT_LIGHT_TABLES, lightRegion } from '../../src/light/initial';
 import { decodeColumnDiff, DiffDecodeError, encodeColumnDiff, encodedSize, type FluidTick } from '../../src/persist/diffCodec';
 import { STORES, type WriteOp } from '../../src/persist/kv';
 import { createMemoryKV, type MemoryKV } from '../../src/persist/memory';
@@ -29,9 +28,8 @@ import { createSimHandler, type SimHandler } from '../../src/workers/simHandler'
 import { LAVA_SOURCE, NO_FLUID, WATER_SOURCE } from '../../src/world/blocks/fluid';
 import { AIR, GLASS, ICE, REGISTRY, STONE, TORCH } from '../../src/world/blocks/index';
 import type { ColumnDiff } from '../../src/world/store/api';
-import { SECTIONS } from '../../src/world/store/columnTable';
-import { copyLightRegion } from '../../src/world/store/padded';
 import type { VoxelStore } from '../../src/world/store/store';
+import { freshLightMismatches } from '../harness/lightCheck';
 import { currentTier, metricTest } from '../harness/metric';
 import { openPersistWorld, type PersistWorld } from '../harness/persistWorld';
 import { genRegion } from '../harness/region';
@@ -63,14 +61,17 @@ import { testRng } from '../harness/stats';
  *   different; a file with an undecodable column not imported with it skipped and counted; a D15 reject (not gzip, a bad
  *   magic, another `format`, version 2, a record past the end) not refused with its reason, or writing anything; and
  *   each `state` and `history` field §2.1's normaliser handles (an out-of-range speed, a bad mode, `t`, `speedIndex`, a
- *   place's colour, a long name, 300 places, a step outside the world, one with an unknown state, 120 steps) not read as
- *   its rule says. `regionHashMismatches`: `genRegion`'s upTo 'L' 7 × 7 window around the world's centre with the
+ *   pose at x −`WINDOW_HALF`, past `?at`'s bound (kept), a pose with x or z outside the world window or y outside the
+ *   camera's range (no player), the hotbar through `normalizeHotbar` (an unknown type, a malformed and a missing slot,
+ *   an active slot past 8), a place's colour and position, a long name, 300 places, a step outside the world, one with
+ *   an unknown state, 120 steps on each side) not read as its rule says. `regionHashMismatches`: `genRegion`'s upTo 'L' 7 × 7 window around the world's centre with the
  *   imported columns as its `diff` (`litRegionHash`) against the source world's window.
- * - **E3** (reload): a world opened with a walking player at `t` 0.3, its hotbar's slot 3 active and two places; 50
+ * - **E3** (reload): a world opened with a walking player at `t` 0.3, its own hotbar (no slot a default, slot 3 active)
+ *   and two places; 50
  *   edits of `test/integration/edit.test.ts`'s mix (stone, glass, ice, torch, wall torch, ladder, waterlogged ladder,
  *   water, lava, breaks; every 4th on a column border); `flushNow`; disposed (coordinator, pool and sim); reopened from
  *   the same KV. `reloadHashMismatches`: the 7 × 7 window's `litRegionHash` against before, and each edited voxel against
- *   its latest value. `reloadStateMismatches`: the opened world not at its stored pose, time, slot and places; the pose,
+ *   its latest value. `reloadStateMismatches`: the opened world not at its stored pose, time, hotbar, slot and places; the pose,
  *   mode, speed, time, hotbar, slot, history and places after the reload against before. Then the second case: the last
  *   step's voxel edited again with its reply delayed 40 ms past a flush posted at once (the hide trigger's), the world
  *   reopened, and every step undone: exactly one "the blocks changed" refusal (the stale step dropped, D32) and 49
@@ -102,7 +103,8 @@ import { testRng } from '../harness/stats';
  *   stored genKey is made an older one and a column holding an entry equal to today's generated value is added under it:
  *   the open is flagged older with D8's notice once, today's terrain with every edit at its coordinates and that entry
  *   read and kept, no copy, and the next flush writes today's genKey, so the flag no longer holds (`olderGeneratorWrong`).
- * - **E7**: two worlds with the same genKey, each with its own pose, time, hotbar and places and its own edits.
+ * - **E7**: two worlds with the same genKey, each with its own pose, time, hotbar (distinct slots, none a default) and
+ *   places and its own edits.
  *   `crossWorldLeaks`: an edit of one read in the other (live, after a reopen) or stored in the other's `diffs` range,
  *   or a world's own edit not read back. `perWorldStateWrong`: the pose, time, hotbar, history or places of a world not
  *   as it saved them (the other's restored instead). `deleteLeftovers`: a key of the deleted world in any store, or a
@@ -165,6 +167,8 @@ interface WorldInit {
   readonly player?: PlayerRecord | null;
   readonly time?: { t: number; speedIndex: number };
   readonly active?: number;
+  /** The hotbar's nine slots (`slots(…)`); the defaults when absent. */
+  readonly slots?: readonly unknown[];
   readonly places?: Place[];
 }
 
@@ -177,14 +181,18 @@ async function createWorld(kv: MemoryKV, id: string, init: WorldInit = {}): Prom
     ...base,
     player: init.player ?? null,
     time: init.time ?? base.time,
-    hotbar: { ...base.hotbar, active: init.active ?? base.hotbar.active },
+    hotbar: { ...base.hotbar, active: init.active ?? base.hotbar.active, slots: init.slots ?? base.hotbar.slots },
     places: init.places ?? [],
   };
+  if (!sameJson(STATE_BOUNDS.normalizeHotbar(state.hotbar), state.hotbar)) throw new Error(`createWorld ${id}: a slot normalizeHotbar would replace`);
   const w = await createSaves(kv).create(world, state);
   if (w.status !== 'complete') throw new Error(`createWorld ${id}: ${w.status}`);
   return { world, state };
 }
 
+/** Nine hotbar slots, each a block type by name, `water` or `lava` (a bucket) or `empty` (the empty bucket). */
+const slots = (...names: string[]): unknown[] =>
+  names.map((n) => (n === 'water' || n === 'lava' ? { fluid: n } : n === 'empty' ? { tool: 'emptyBucket' } : { type: n, pinned: {} }));
 /** A pose in seed 42's spawn column (0, 0), so a world's window is the same at every open. */
 const player = (mode: 'walk' | 'fly', yaw: number, speed: number): PlayerRecord => ({ x: 8.5, y: 120.25, z: 7.5, yaw, pitch: -12.5, mode, speed });
 const place = (id: string, name: string, colour: number, x: number): Place => ({ id, name, colour, x, y: 90, z: -40.5, yaw: 90, pitch: 0 });
@@ -276,53 +284,8 @@ function staleVoxels(store: VoxelStore, edited: Iterable<Edited>, problems: Prob
   return n;
 }
 
-const freshScratch = createLightScratch();
 const bytesOf = (a: Uint8Array): Buffer => Buffer.from(a.buffer, a.byteOffset, a.byteLength);
 const hexOf = (a: Uint8Array): string => bytesOf(a).toString('hex');
-const uniform = (a: Uint8Array, v: number): boolean => {
-  for (let i = 0; i < a.length; i++) if (a[i] !== v) return false;
-  return true;
-};
-
-/** The voxels of the 3 × 3 around each of `cols` (colKeys) whose stored light differs from a fresh `lightRegion`. */
-function lightMismatches(store: VoxelStore, cols: Iterable<number>, problems: Problems, what: string): number {
-  const seen = new Set<number>();
-  let n = 0;
-  store.enterRead();
-  try {
-    for (const k of cols) {
-      for (let dz = -1; dz <= 1; dz++) {
-        for (let dx = -1; dx <= 1; dx++) {
-          const cx = colKeyCx(k) + dx;
-          const cz = colKeyCz(k) + dz;
-          if (seen.has(colKey(cx, cz))) continue;
-          seen.add(colKey(cx, cz));
-          const f = store.final(cx, cz);
-          if (f === null) {
-            n += 4096 * SECTIONS;
-            problems.add(`${what}: column (${cx}, ${cz}) has no final set`);
-            continue;
-          }
-          copyLightRegion(store.neighborhood(cx, cz), freshScratch.region);
-          lightRegion(freshScratch, DEFAULT_LIGHT_TABLES, true);
-          for (let sy = 0; sy < SECTIONS; sy++) {
-            const want = centreSection(freshScratch, sy);
-            const stored = f.sectionLight(sy);
-            if (typeof stored === 'number' ? uniform(want, stored) : bytesOf(stored).equals(bytesOf(want))) continue;
-            for (let i = 0; i < 4096; i++) {
-              if ((typeof stored === 'number' ? stored : stored[i]!) === want[i]) continue;
-              n++;
-              problems.add(`${what}: (${16 * cx + (i & 15)}, ${16 * sy - 64 + (i >> 8)}, ${16 * cz + ((i >> 4) & 15)}) light ≠ lightRegion`);
-            }
-          }
-        }
-      }
-    }
-  } finally {
-    store.exitRead();
-  }
-  return n;
-}
 
 const colsOf = (edited: Iterable<Edited>): Set<number> => new Set([...edited].map((e) => colKey(e.x >> 4, e.z >> 4)));
 
@@ -813,26 +776,47 @@ async function measureE2(): Promise<{ values: Record<string, number>; problems: 
     ...source,
     state: {
       ...source.state,
-      player: { ...source.state.player!, mode: 'swim' as 'walk', speed: 500 },
+      // At the window's edge, past `?at`'s 500,000: flight has no horizontal limit, so the pose is kept.
+      player: { ...source.state.player!, x: -WINDOW_HALF, mode: 'swim' as 'walk', speed: 500 },
       time: { t: 1.5, speedIndex: 99 },
-      places: Array.from({ length: 300 }, (_, i) => place(`n${i}`, i === 1 ? 'x'.repeat(100) : `P${i}`, i === 0 ? 9 : i % 8, i)),
+      // An unknown type name, a placeable one and a malformed slot; the rest missing; an active slot past 8.
+      hotbar: { v: 1, active: 99, slots: [{ type: 'nope', pinned: {} }, { type: 'glass', pinned: {} }, 42] },
+      places: Array.from({ length: 300 }, (_, i) => {
+        const at = place(`n${i}`, i === 1 ? 'x'.repeat(100) : `P${i}`, i === 0 ? 9 : i % 8, i);
+        return i === 2 ? { ...at, z: WINDOW_HALF } : i === 3 ? { ...at, y: STATE_BOUNDS.yMax + 1 } : at;
+      }),
     },
     history: {
       worldId: 'e2',
       done: [step(400, val(STONE)), step(70, val(REGISTRY.stateCount + 3)), ...Array.from({ length: 120 }, (_, i) => step(i - 60, val(STONE)))],
-      undone: [],
+      undone: [step(-70, val(GLASS)), ...Array.from({ length: 120 }, (_, i) => step(i - 50, val(GLASS)))],
     },
   };
   const r = await importInto(createMemoryKV(), await writeWiworld(odd), 'e2-odd');
+  const defaults = STATE_BOUNDS.normalizeHotbar(null).slots;
+  const hotbar = { v: 1, active: 0, slots: defaults.map((d, i) => (i === 1 ? { type: 'glass', pinned: {} } : d)) };
   const checks: Array<[string, boolean]> = r.ok ? [
+    ['a pose at x −WINDOW_HALF is kept', r.dump.state.player?.x === -WINDOW_HALF],
     ['a speed outside 1-96 takes 12', r.dump.state.player?.speed === DEFAULT_SPEED],
     ['a mode other than walk or fly is fly', r.dump.state.player?.mode === 'fly'],
     ['a t outside [0, 1) takes 08:00', r.dump.state.time.t === DEFAULT_T],
     ['a speedIndex not a time speed\'s index is 0', r.dump.state.time.speedIndex === 0],
-    ['a colour outside 0-7 drops its place, and 256 are kept', r.dump.state.places.length === MAX_PLACES && r.dump.state.places[0]!.id === 'n1'],
+    ['the hotbar through normalizeHotbar (an unknown, malformed or missing slot its default, an active past 8 is 0)', sameJson(r.dump.state.hotbar, hotbar)],
+    ['a colour outside 0-7 or a position outside the bounds drops its place, and 256 are kept', r.dump.state.places.length === MAX_PLACES
+      && sameJson(r.dump.state.places.slice(0, 3).map((q) => q.id), ['n1', 'n4', 'n5'])],
     ['a long name is cut to 64 characters', [...r.dump.state.places[0]!.name].length === MAX_NAME],
     ['a step outside the world or with an unknown state is dropped, the newest 100 kept', r.dump.history?.done.length === HISTORY_STEPS && r.dump.history.done[0]!.edits[0]!.y === -40],
+    ['an undone step outside the world is dropped, the newest 100 kept', r.dump.history?.undone.length === HISTORY_STEPS && r.dump.history.undone[0]!.edits[0]!.y === -30],
   ] : [['the file imports', false]];
+  // A pose outside the bounds (x, z in the world window, y in the camera's range) is no player: the spawn.
+  const poses: Array<[string, Partial<PlayerRecord>]> = [
+    ['x at WINDOW_HALF', { x: WINDOW_HALF }], ['z below −WINDOW_HALF', { z: -WINDOW_HALF - 1 }],
+    ['y above the camera\'s range', { y: STATE_BOUNDS.yMax + 0.5 }], ['y below it', { y: STATE_BOUNDS.yMin - 0.5 }],
+  ];
+  for (const [what, at] of poses) {
+    const q = await importInto(createMemoryKV(), await writeWiworld({ ...source, state: { ...source.state, player: { ...source.state.player!, ...at } } }), 'e2-pose');
+    checks.push([`a pose with ${what} is no player`, q.ok && q.dump.state.player === null]);
+  }
   for (const [what, ok] of checks) {
     if (ok) continue;
     roundTripMismatches++;
@@ -852,8 +836,9 @@ async function measureE3(): Promise<{ values: Record<string, number>; problems: 
   /** The sim's reply delay while set (the second case's late reply). */
   let forced: number | null = null;
   const delayMs = (): number => forced ?? 0;
-  await createWorld(kv, 'e3', {
+  const e3 = await createWorld(kv, 'e3', {
     player: player('walk', 123.5, 18), time: { t: 0.3, speedIndex: 1 }, active: 3,
+    slots: slots('glass', 'ice', 'torch', 'stone', 'lava', 'dirt', 'empty', 'oak_log', 'oak_planks'),
     places: [place('p1', 'Home', 2, 12.5), place('p2', 'Mine', 6, -30)],
   });
   const edited = new Map<string, Edited>();
@@ -861,9 +846,10 @@ async function measureE3(): Promise<{ values: Record<string, number>; problems: 
   let before: { hash: string; saved: { state: StateRecord; history: HistoryRecord } };
   try {
     const opened = p.state();
-    if (opened.player?.mode !== 'walk' || opened.player.yaw !== 123.5 || opened.time.t !== 0.3 || opened.hotbar.active !== 3 || opened.places.length !== 2) {
+    if (opened.player?.mode !== 'walk' || opened.player.yaw !== 123.5 || opened.time.t !== 0.3 || opened.hotbar.active !== 3
+      || !sameJson(opened.hotbar.slots, e3.state.hotbar.slots) || opened.places.length !== 2) {
       reloadStateMismatches++;
-      problems.add('E3: the world did not open at its stored pose, mode, time, slot and places');
+      problems.add('E3: the world did not open at its stored pose, mode, time, hotbar, slot and places');
     }
     await editMix(p, 50, testRng(0xe3), edited, problems, 'E3 seed 0xe3');
     if (edited.size !== 50 || p.history.size !== 50) problems.add(`E3: ${edited.size} edits accepted, ${p.history.size} steps (50 expected)`);
@@ -1168,7 +1154,7 @@ async function measureE5Flush(): Promise<{ values: Record<string, number>; probl
       if (holds === atInflight) inflightCommitted++;
       p = await openPersistWorld({ kv, worldId: 'e5', rd: RD });
       flushStale += staleVoxels(p.store, edited.values(), problems, `${what} after the reopen`, (e) => holds?.get(vkey(e.x, e.y, e.z)) ?? e.before);
-      flushLightMismatches += lightMismatches(p.store, colsOf(edited.values()), problems, `${what} after the reopen`);
+      flushLightMismatches += freshLightMismatches(p.store, colsOf(edited.values()), problems.add, `${what} after the reopen`);
       // The reopened world is the truth from here.
       for (const e of edited.values()) e.value = valueAt(p.store, e.x, e.y, e.z);
     }
@@ -1387,8 +1373,14 @@ async function measureE7(): Promise<{ values: Record<string, number>; problems: 
   let perWorldStateWrong = 0;
   let remapMismatches = 0;
   const kv = createMemoryKV();
-  const a = await createWorld(kv, 'e7a', { player: player('walk', 10, 20), time: { t: 0.4, speedIndex: 1 }, active: 2, places: [place('a1', 'A', 1, 5)] });
-  const b = await createWorld(kv, 'e7b', { player: player('fly', 200, 40), time: { t: 0.8, speedIndex: 3 }, active: 7, places: [place('b1', 'B', 5, -9), place('b2', 'B2', 3, 100)] });
+  const a = await createWorld(kv, 'e7a', {
+    player: player('walk', 10, 20), time: { t: 0.4, speedIndex: 1 }, active: 2,
+    slots: slots('torch', 'glass', 'stone', 'ice', 'oak_planks', 'water', 'dirt', 'oak_log', 'empty'), places: [place('a1', 'A', 1, 5)],
+  });
+  const b = await createWorld(kv, 'e7b', {
+    player: player('fly', 200, 40), time: { t: 0.8, speedIndex: 3 }, active: 7,
+    slots: slots('ice', 'lava', 'oak_log', 'glass', 'torch', 'stone', 'empty', 'grass_block', 'dirt'), places: [place('b1', 'B', 5, -9), place('b2', 'B2', 3, 100)],
+  });
   if (a.world.genKey !== b.world.genKey) problems.add('E7: the two worlds\' genKeys differ');
   const editsA = new Map<string, Edited>();
   const editsB = new Map<string, Edited>();
