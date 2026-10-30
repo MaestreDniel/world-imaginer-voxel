@@ -959,7 +959,7 @@ describe('master spec amendments (SP4c §12)', () => {
     const at56 = text.indexOf('### 5.6 Map view');
     const s56 = text.slice(at56, text.indexOf('### 5.7 ', at56));
     expect(s56).toContain('**Click** teleports (3.7) (SP4c: in the world\'s map a plain click teleports, except while the cut tool is armed; Shift+click sets the pin or the slice centre; on `?map` a click sets the pin).');
-    expect(s56).toContain('saved places per saved world (SP5b: a section of each saved world\'s map, one map per saved world)');
+    // The saved-places phrase moved to 'master spec amendments (SP5b §9)', which extends it.
     expect(s56).not.toContain('bookmarks per save');
     expect(s56).toContain('The 3D view keeps streaming at reduced priority while the map is open (SP4c: in mode A, map open; in mode B the 3D streams first and the map\'s jobs are capped as §4.3).');
     const at59 = text.indexOf('### 5.9 Controls');
@@ -1377,6 +1377,7 @@ describe('master spec amendments (SP5b §9)', () => {
     [/^\s+engine\/\s/, '(SP5b: session.ts\'s setWritable)', 'src/engine/session.ts'],
     [/^\s+ui\/world\/\* /, 'stateBounds.ts autosave.ts worldLock.ts modifyMode.ts places.ts placeDialog.ts (SP5b)', 'src/ui/world/places.ts'],
     [/^\s+ui\/world\/\* /, 'stateBounds.ts autosave.ts worldLock.ts modifyMode.ts places.ts placeDialog.ts (SP5b)', 'src/ui/world/placeDialog.ts'],
+    [/^\s+ui\/map\/\* /, 'placesTab.ts (SP5b)', 'src/ui/map/placesTab.ts'],
   ];
 
   test('§10\'s SP5b entry and its receivers (SP5b spec §9, §11)', () => {
@@ -1514,6 +1515,12 @@ describe('master spec amendments (SP5b §9)', () => {
     const s59 = text.slice(at59, text.indexOf('## 6. ', at59));
     expect(s59).toContain('P (params); G (settings; SP5b); B (save a place; SP5b); E (creative palette);');
     expect(s59).not.toContain('G (graphics)');
+  });
+
+  test('§5.6\'s saved places: coloured dots, a Places tab, B in the world and \'+ Add at the pin\' on the map (SP5b spec §3.7, D12, D13, §9)', () => {
+    const at56 = text.indexOf('### 5.6 Map view');
+    const s56 = text.slice(at56, text.indexOf('### 5.7 ', at56));
+    expect(s56.split('\n')).toContain('  - spawn, player with view cone, grid, column-status heatmap, saved places per saved world (SP5b: a section of each saved world\'s map, one map per saved world; coloured dots; a Places tab; B in the world and \'+ Add at the pin\' on the map).');
   });
 
   test('§1 names each SP5b module in its entry, which exists', () => {

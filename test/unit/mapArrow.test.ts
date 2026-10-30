@@ -1,7 +1,8 @@
 import { readFileSync } from 'node:fs';
 import { describe, expect, test } from 'vitest';
 import type { MapView } from '../../src/ui/map/mapState';
-import { ARROW_MIN_MS, arrowDue, arrowGeometry, arrowMoved, arrowRedrawWanted } from '../../src/ui/map/viewMath';
+import { ARROW_MIN_MS, arrowDue, arrowGeometry, arrowMoved, arrowRedrawWanted, drawPlaceDots, PLACE_DOT_PX } from '../../src/ui/map/viewMath';
+import { PLACE_COLOURS } from '../../src/ui/world/places';
 
 const W = 800;
 const H = 600;
@@ -109,5 +110,57 @@ describe('the arrow\'s redraw decision (SP4c spec §1.5; final review MAP-3)', (
     expect(setPlayer).not.toContain('arrowMoved(');
     const fake = readFileSync(new URL('./zeroAlloc.test.ts', import.meta.url), 'utf8');
     expect(fake).toContain('if (arrowRedrawWanted(arrowDrawn, drawnX, drawnZ, drawnYaw, x, z, yawDeg, view.bpp, drawnAt, arrow.now)) draw(x, z, yawDeg);');
+  });
+});
+
+describe('the place dots (SP5b spec §3.7, D13)', () => {
+  /** A 2D context that records each path call with the style in force when it ran. */
+  function recorder() {
+    const calls: Array<readonly (string | number)[]> = [];
+    const ctx = {
+      fillStyle: '' as string | CanvasGradient | CanvasPattern,
+      strokeStyle: '' as string | CanvasGradient | CanvasPattern,
+      lineWidth: 1,
+      beginPath() { calls.push(['beginPath']); },
+      arc(x: number, y: number, r: number, a0: number, a1: number) { calls.push(['arc', x, y, r, a0, a1]); },
+      fill() { calls.push(['fill', String(ctx.fillStyle)]); },
+      stroke() { calls.push(['stroke', String(ctx.strokeStyle), ctx.lineWidth]); },
+    };
+    return { ctx, calls };
+  }
+
+  test('`drawPlaceDots` draws one filled arc in `PLACE_COLOURS[c]` and one white stroke per place in view, and skips a place off the view', () => {
+    const { ctx, calls } = recorder();
+    const list = [
+      // At the view's centre (400, 300), blue.
+      { x: VIEW.x, z: VIEW.z, colour: 4 },
+      // Off the view: 2,000 px east.
+      { x: VIEW.x + 8000, z: VIEW.z, colour: 1 },
+      // 40 blocks east and 80 north at 4 blocks/px: 10 px right, 20 px up; red.
+      { x: VIEW.x + 40, z: VIEW.z - 80, colour: 0 },
+      // Just off the bottom edge, its rim outside too.
+      { x: VIEW.x, z: VIEW.z + (300 + PLACE_DOT_PX + 2) * 4, colour: 6 },
+    ];
+    drawPlaceDots(ctx, VIEW, W, H, list, PLACE_COLOURS);
+    expect(PLACE_DOT_PX).toBe(5);
+    expect(calls).toEqual([
+      ['beginPath'], ['arc', 400, 300, PLACE_DOT_PX, 0, 2 * Math.PI], ['fill', PLACE_COLOURS[4]], ['stroke', '#ffffff', 2],
+      ['beginPath'], ['arc', 410, 280, PLACE_DOT_PX, 0, 2 * Math.PI], ['fill', PLACE_COLOURS[0]], ['stroke', '#ffffff', 2],
+    ]);
+    // The line width is put back for the overlays drawn after it.
+    expect(ctx.lineWidth).toBe(1);
+    // No places: nothing drawn.
+    const empty = recorder();
+    drawPlaceDots(empty.ctx, VIEW, W, H, [], PLACE_COLOURS);
+    expect(empty.calls).toEqual([]);
+  });
+
+  test('the canvas draws the dots in its overlays, under the arrow, and redraws them only when scheduled', () => {
+    const view = readFileSync(new URL('../../src/ui/map/mapView.ts', import.meta.url), 'utf8');
+    const overlays = view.slice(view.indexOf('  const drawOverlays = () => {'), view.indexOf('  const drawArrow = () => {'));
+    expect(overlays).toContain('drawPlaceDots(ctx2d, view, w, h, places, placeColours);');
+    const draw = view.slice(view.indexOf('  const draw = () => {'));
+    expect(draw.indexOf('drawOverlays();')).toBeLessThan(draw.indexOf('drawArrow();'));
+    expect(view).toContain('setPlaces(list, colours) { places = list; placeColours = colours; schedule(); },');
   });
 });

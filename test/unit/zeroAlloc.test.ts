@@ -80,6 +80,7 @@ import { createFrameStep, type FrameStepDeps } from '../../src/ui/world/frameSte
 import { createHoldRepeat } from '../../src/ui/world/holdRepeat';
 import { createMapOverlay, type MapOverlay } from '../../src/ui/world/mapOverlay';
 import { createModifyMode, createModifySwitch } from '../../src/ui/world/modifyMode';
+import { createPlaces, PLACE_COLOURS } from '../../src/ui/world/places';
 import { AUTOSAVE_MS } from '../../src/ui/world/autosave';
 import { createAim, createClickQueue, createPageAutosave, newWorldRecord, type Aim } from '../../src/ui/world/worldPage';
 import { STONE } from '../../src/world/blocks/index';
@@ -92,12 +93,19 @@ import { installDom } from './fixtures/domShim';
  * decides, the arrow drawn at once where the real canvas schedules a rAF draw. Its clock is the frame's timestamp
  * (`arrow.now`): Node's `performance.now()` allocates on each call (the upload budget's note below).
  */
-const arrow = vi.hoisted(() => ({ now: (): number => 0, setPlayer: 0, draws: 0, mounts: 0 }));
+const arrow = vi.hoisted(() => ({ now: (): number => 0, setPlayer: 0, draws: 0, mounts: 0, places: -1, dotDraws: 0 }));
 vi.mock('../../src/ui/map/mapTool', async () => {
   const { arrowRedrawWanted } = await import('../../src/ui/map/viewMath');
   return {
     createMapTool(_host: HTMLElement, deps: MapToolDeps): MapTool {
       arrow.mounts++;
+      // As the real tool: the dots drawn at the mount and redrawn only at a change of the places (`setPlaces` schedules).
+      const mapPlaces = deps.places ?? null;
+      arrow.places = mapPlaces === null ? -1 : mapPlaces.places.list.length;
+      if (mapPlaces !== null) {
+        arrow.dotDraws++;
+        mapPlaces.places.subscribe(() => { arrow.dotDraws++; });
+      }
       let view = deps.initialView;
       let drawnX = 0;
       let drawnZ = 0;
@@ -127,6 +135,8 @@ vi.mock('../../src/ui/map/mapTool', async () => {
         notices: {} as MapTool['notices'],
         setView(v) { view = v; },
         setEditable() {},
+        pin: () => null,
+        onPin: () => () => {},
         dispose() {},
       };
     },
@@ -528,8 +538,18 @@ async function buildAtRest(): Promise<AtRest> {
     onTeleport: () => Promise.resolve(false),
     viewChanged() {},
     notices: { route() {}, show() {}, hide() {} },
-    // An unsaved world's overlay: no modification switch (SP5b spec §3.6).
+    // No modification switch (SP5b spec §3.6), but a saved world's three places on the map (§3.7; ruling P18).
     modify: null,
+    places: {
+      places: createPlaces([
+        { id: 'a', name: 'A', colour: 0, x: 8.5, y: 101, z: 30, yaw: 0, pitch: 0 },
+        { id: 'b', name: 'B', colour: 4, x: -20, y: 90, z: 8.5, yaw: 90, pitch: 0 },
+        { id: 'c', name: 'C', colour: 7, x: 40, y: 80, z: -12, yaw: 180, pitch: 0 },
+      ], () => 'n'),
+      colours: PLACE_COLOURS,
+      toPlace() {},
+      addAt: () => Promise.resolve(false),
+    },
   });
 
   // SP4c's per-tick hooks, as the page's: the owner check (§2.3), the apply control before the update (§4.3), the aux
@@ -843,6 +863,19 @@ describe('zero allocation at rest (SP4b spec §3.10, D25)', () => {
     expect([f.overlay.shown, f.overlay.mode, f.overlay.owner]).toEqual([true, 'split', 'world']);
     expect(arrow.setPlayer - setPlayerBefore).toBe(calls);
     expect(arrow.draws).toBe(1);
+  }, TIMEOUT_MS);
+
+  test(`${N} frame steps at rest with places on the map shown in split mode grow the heap by less than the boxing budget of 256 B per tick, the arrow and the dots drawn only at the opening (SP5b spec §3.7, D13; ruling P18)`, async () => {
+    const f = await atRest();
+    if (!f.overlay.shown) await f.showSplit();
+    expect([f.overlay.shown, f.overlay.mode, f.overlay.owner, arrow.mounts, arrow.places]).toEqual([true, 'split', 'world', 1, 3]);
+    // The dots were drawn once, at the mount; nothing in the frame step schedules them again.
+    expect(arrow.dotDraws).toBe(1);
+    const draws = arrow.draws;
+    const g = allocationOver(f.tick, 0, FRAME_STEP_ALLOC_MAX);
+    expectAtRest(g, FRAME_STEP_ALLOC_MAX);
+    expectSp4cAtRest(f);
+    expect([arrow.dotDraws, arrow.draws]).toEqual([1, draws]);
   }, TIMEOUT_MS);
 
   test(`${N} frame steps at rest flying on a Published floor with SP5a's additions (the DDA, the outline with a fixed target, the hotbar and the hold-repeat tick) grow the heap by less than the boxing budget of 256 B per tick (SP5a spec §3.5, D25)`, async () => {

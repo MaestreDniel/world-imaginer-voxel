@@ -107,3 +107,36 @@ export function arrowRedrawWanted(
 ): boolean {
   return !drawn || (arrowMoved(drawnX, drawnZ, drawnYaw, x, z, yawDeg, bpp) && arrowDue(drawnAt, now()));
 }
+
+/** A place dot's radius, screen px; its white rim is a 2 px stroke centred on the edge (SP5b spec §3.7, D13). */
+export const PLACE_DOT_PX = 5;
+const PLACE_RIM_PX = 2;
+/** How far outside the view a dot's centre may be while its rim still shows. */
+const PLACE_DOT_MARGIN = PLACE_DOT_PX + PLACE_RIM_PX / 2;
+
+/**
+ * The saved places on the map (SP5b spec §3.7, D13): per place in view, one filled arc in `colours[place.colour]` (the
+ * page passes `PLACE_COLOURS`, so `ui/map/` holds no colour of its own) and one white rim; a place whose dot cannot reach
+ * the w × h view is skipped. The canvas calls it only on a scheduled draw; the line width is put back to 1.
+ */
+export function drawPlaceDots(
+  ctx: Pick<CanvasRenderingContext2D, 'beginPath' | 'arc' | 'fill' | 'stroke' | 'fillStyle' | 'strokeStyle' | 'lineWidth'>,
+  view: MapView, w: number, h: number, list: readonly { x: number; z: number; colour: number }[], colours: readonly string[],
+): void {
+  if (list.length === 0) return;
+  for (let i = 0; i < list.length; i++) {
+    const p = list[i]!;
+    const sx = (p.x - view.x) / view.bpp + w / 2;
+    const sy = (p.z - view.z) / view.bpp + h / 2;
+    const m = PLACE_DOT_MARGIN;
+    if (!(sx >= -m && sx <= w + m && sy >= -m && sy <= h + m)) continue;
+    ctx.beginPath();
+    ctx.arc(sx, sy, PLACE_DOT_PX, 0, 2 * Math.PI);
+    ctx.fillStyle = colours[p.colour] ?? colours[0] ?? '#ffffff';
+    ctx.fill();
+    ctx.strokeStyle = '#ffffff';
+    ctx.lineWidth = PLACE_RIM_PX;
+    ctx.stroke();
+  }
+  ctx.lineWidth = 1;
+}

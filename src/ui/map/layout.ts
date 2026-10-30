@@ -1,11 +1,11 @@
 /**
  * The editor page layout (SP2b spec §3.1): a CSS grid with the toolbar row, a notice strip, the main row
- * (the map, a splitter and the side panel with the tabs World, Parameters, Biomes and Presets) and the
- * drawer row under both, with its own splitter and the tabs Spline (§4.2), Cross-section (§4.5) and Density
- * (SP3d spec §3.1). The drawer is closed until an editor opens it on its tab. Panel width, drawer height,
- * active tab and open sections persist in localStorage under `wi10.layout.v1`: the parsing and clamping are
- * pure, and every storage access is behind try/catch, so a missing, invalid or unreachable value gives the
- * defaults. The map canvas follows its host through mapView's ResizeObserver.
+ * (the map, a splitter and the side panel with the tabs World, Parameters, Biomes and Presets, and in a saved world's
+ * map a fifth, Places, SP5b spec §3.7) and the drawer row under both, with its own splitter and the tabs Spline
+ * (§4.2), Cross-section (§4.5) and Density (SP3d spec §3.1). The drawer is closed until an editor opens it on its tab.
+ * Panel width, drawer height, active tab and open sections persist in localStorage under `wi10.layout.v1`: the
+ * parsing and clamping are pure, and every storage access is behind try/catch, so a missing, invalid or unreachable
+ * value gives the defaults. The map canvas follows its host through mapView's ResizeObserver.
  *
  * The grid mounts into a child `.map` of its host (SP4c spec §1.1), so the world's `#app` is never wiped; the host is
  * the `map` size container (`.map-host`), whose width the narrow layout's container query reads (§2.2: the map half of
@@ -13,9 +13,15 @@
  */
 import { el } from '../common/dom';
 
-export type TabId = 'world' | 'parameters' | 'biomes' | 'presets';
+export type TabId = 'world' | 'parameters' | 'biomes' | 'presets' | 'places';
+/** The side panel's tabs on `?map` and in an unsaved world's map. */
 export const TAB_IDS: readonly TabId[] = Object.freeze(['world', 'parameters', 'biomes', 'presets']);
-const TAB_LABELS: Readonly<Record<TabId, string>> = { world: 'World', parameters: 'Parameters', biomes: 'Biomes', presets: 'Presets' };
+export const TAB_LABELS: Readonly<Record<TabId, string>> = Object.freeze({
+  world: 'World', parameters: 'Parameters', biomes: 'Biomes', presets: 'Presets', places: 'Places',
+});
+const TABS_WITH_PLACES: readonly TabId[] = Object.freeze([...TAB_IDS, 'places']);
+/** The tabs a map shows: `TAB_IDS`, and Places after Presets in a saved world's map (SP5b spec §3.7, D13). */
+export const layoutTabs = (places: boolean): readonly TabId[] => (places ? TABS_WITH_PLACES : TAB_IDS);
 /** The drawer tabs in key order; Density (SP3d spec §3.1) is appended last, so the tab keys keep their order. */
 export type DrawerTabId = 'spline' | 'section' | 'density';
 export const DRAWER_TAB_IDS: readonly DrawerTabId[] = Object.freeze(['spline', 'section', 'density']);
@@ -40,7 +46,7 @@ export const DRAWER_MAX_FRACTION = 0.6;
 export const DEFAULT_LAYOUT: Layout = Object.freeze({ panelWidth: 340, drawerHeight: 300, tab: 'world', openSections: Object.freeze([]) });
 
 const isFiniteNumber = (v: unknown): v is number => typeof v === 'number' && Number.isFinite(v);
-const isTabId = (v: unknown): v is TabId => typeof v === 'string' && (TAB_IDS as readonly string[]).includes(v);
+const isTabId = (v: unknown, shown: readonly TabId[]): v is TabId => typeof v === 'string' && (shown as readonly string[]).includes(v);
 const isRecord = (v: unknown): v is Record<string, unknown> => typeof v === 'object' && v !== null && !Array.isArray(v);
 
 /** Rounds into 280-520 px; a non-finite width gives the default. */
@@ -79,8 +85,12 @@ export function tabKeyTarget(e: TabKey, index: number, count: number): number | 
   return null;
 }
 
-/** The stored text, field by field: a missing or invalid field gives its default; text that is not a JSON object gives the defaults. */
-export function parseLayout(text: string | null): Layout {
+/**
+ * The stored text, field by field: a missing or invalid field gives its default; text that is not a JSON object gives the
+ * defaults. The key is shared by every map, so a stored tab the layout does not show (Places on `?map`) gives the default
+ * tab.
+ */
+export function parseLayout(text: string | null, shown: readonly TabId[] = TAB_IDS): Layout {
   if (text === null) return DEFAULT_LAYOUT;
   let j: unknown;
   try {
@@ -94,7 +104,7 @@ export function parseLayout(text: string | null): Layout {
   return {
     panelWidth: isFiniteNumber(j['panelWidth']) ? clampPanelWidth(j['panelWidth']) : DEFAULT_LAYOUT.panelWidth,
     drawerHeight: isFiniteNumber(drawer) ? Math.round(Math.max(DRAWER_MIN_PX, drawer)) : DEFAULT_LAYOUT.drawerHeight,
-    tab: isTabId(j['tab']) ? j['tab'] : DEFAULT_LAYOUT.tab,
+    tab: isTabId(j['tab'], shown) ? j['tab'] : DEFAULT_LAYOUT.tab,
     openSections: Array.isArray(sections) && sections.every((s) => typeof s === 'string') ? [...new Set(sections as string[])] : [],
   };
 }
@@ -124,10 +134,10 @@ export function browserStorage(): LayoutStorage | null {
   }
 }
 
-export function loadLayout(storage: LayoutStorage | null): Layout {
+export function loadLayout(storage: LayoutStorage | null, shown: readonly TabId[] = TAB_IDS): Layout {
   if (storage === null) return DEFAULT_LAYOUT;
   try {
-    return parseLayout(storage.getItem(LAYOUT_KEY));
+    return parseLayout(storage.getItem(LAYOUT_KEY), shown);
   } catch {
     return DEFAULT_LAYOUT;
   }
@@ -162,11 +172,12 @@ export interface PageLayout {
   readonly notices: HTMLElement;
   /** The map canvas host. */
   readonly map: HTMLElement;
-  /** The host of each tab's content. */
+  /** The host of each tab's content; a tab the layout does not show has a host that is never attached. */
   readonly tabs: Readonly<Record<TabId, HTMLElement>>;
   /** The host of each drawer tab: the spline editor (§4.2), the cross-section (§4.5) and Density (SP3d spec §3.1). */
   readonly drawerTabs: Readonly<Record<DrawerTabId, HTMLElement>>;
   readonly tab: TabId;
+  /** Shows tab `id`; a tab the layout does not show is ignored. */
   showTab(id: TabId): void;
   readonly panelVisible: boolean;
   togglePanel(): void;
@@ -189,9 +200,13 @@ export interface PageLayout {
 /** The class that makes a layout's host the `map` size container (map.css). */
 export const MAP_HOST_CLASS = 'map-host';
 
-/** Builds the page grid in a child of `host` from the stored layout and keeps the stored layout up to date. */
-export function createLayout(host: HTMLElement, storage: LayoutStorage | null): PageLayout {
-  let layout = loadLayout(storage);
+/**
+ * Builds the page grid in a child of `host` from the stored layout and keeps the stored layout up to date. `tabs` are the
+ * side panel's tabs in order (`layoutTabs`).
+ */
+export function createLayout(host: HTMLElement, storage: LayoutStorage | null, o: { readonly tabs: readonly TabId[] }): PageLayout {
+  const shownTabs = o.tabs;
+  let layout = loadLayout(storage, shownTabs);
   const commit = (l: Layout) => { layout = l; saveLayout(storage, l); };
 
   const page = el('div', 'map');
@@ -218,7 +233,7 @@ export function createLayout(host: HTMLElement, storage: LayoutStorage | null): 
 
   const buttons = {} as Record<TabId, HTMLButtonElement>;
   const tabs = {} as Record<TabId, HTMLElement>;
-  for (const id of TAB_IDS) {
+  for (const id of TABS_WITH_PLACES) {
     const b = el('button', '', TAB_LABELS[id]);
     b.type = 'button';
     b.id = `map-tab-${id}`;
@@ -232,9 +247,9 @@ export function createLayout(host: HTMLElement, storage: LayoutStorage | null): 
     host.setAttribute('aria-labelledby', b.id);
     buttons[id] = b;
     tabs[id] = host;
-    tabBar.append(b);
   }
-  side.append(tabBar, ...TAB_IDS.map((id) => tabs[id]));
+  tabBar.append(...shownTabs.map((id) => buttons[id]));
+  side.append(tabBar, ...shownTabs.map((id) => tabs[id]));
   const drawerButtons = {} as Record<DrawerTabId, HTMLButtonElement>;
   const drawerTabs = {} as Record<DrawerTabId, HTMLElement>;
   for (const id of DRAWER_TAB_IDS) {
@@ -265,7 +280,7 @@ export function createLayout(host: HTMLElement, storage: LayoutStorage | null): 
       tabButtons[id].focus();
     });
   };
-  tabKeys(tabBar, TAB_IDS, buttons, (id) => showTab(id));
+  tabKeys(tabBar, shownTabs, buttons, (id) => showTab(id));
   tabKeys(drawerBar, DRAWER_TAB_IDS, drawerButtons, (id) => setDrawer(true, id));
   page.append(toolbar, notices, map, vsplit, side, hsplit, drawer);
   host.classList.add(MAP_HOST_CLASS);
@@ -278,7 +293,8 @@ export function createLayout(host: HTMLElement, storage: LayoutStorage | null): 
   const panelFns = new Set<() => void>();
   const panelChanged = () => { for (const fn of [...panelFns]) fn(); };
   function showTab(id: TabId): void {
-    for (const t of TAB_IDS) {
+    if (!shownTabs.includes(id)) return;
+    for (const t of shownTabs) {
       buttons[t].setAttribute('aria-selected', String(t === id));
       buttons[t].tabIndex = t === id ? 0 : -1;
       tabs[t].hidden = t !== id;

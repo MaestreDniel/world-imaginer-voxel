@@ -20,8 +20,8 @@ export interface PlaceDialog {
   dispose(): void;
 }
 
-/** The swatches' names, for people who do not see the colour. */
-const COLOUR_NAMES: Readonly<Record<(typeof PLACE_COLOURS)[number], string>> = {
+/** The swatches' names, for people who do not see the colour (also the map's Places tab's, SP5b spec §3.7). */
+export const COLOUR_NAMES: Readonly<Record<(typeof PLACE_COLOURS)[number], string>> = {
   '#e5534b': 'Red', '#e0a030': 'Orange', '#e8d44d': 'Yellow', '#57ab5a': 'Green',
   '#4aa3df': 'Blue', '#986ee2': 'Purple', '#e275ad': 'Pink', '#dddddd': 'Light grey',
 };

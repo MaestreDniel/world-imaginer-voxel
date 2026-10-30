@@ -187,7 +187,7 @@ world-imaginer-voxel/          (repository root)
       engine.ts buses.ts        AudioContext (resumed on first user gesture), master/music/sfx/ambient buses, settings
       sfx.ts footsteps.ts ambience.ts emitters.ts music.ts reverb.ts
     ui/map/* ui/selftest/*       (SP2a) the standalone ?map page (mounted in-game from SP4c) and ?selftest=1; SP2b makes ?map the editor
-                                (SP4c: `mapTool.ts`, the tool both `?map` and the world's M overlay mount)
+                                (SP4c: `mapTool.ts`, the tool both `?map` and the world's M overlay mount); placesTab.ts (SP5b)
     ui/common/* paramPanel/* splineEditor/* biomeTable/* presets/* crossSection/*   (SP2b) shared DOM helpers, notices and shortcuts;
                                 the parameter panel, spline drawer, biome table, presets tab and cross-section (pure models beside thin DOM);
                                 SP3a adds the cross-section's Voxels mode; files.ts (SP5b: downloadBlob, readBinaryFile)
@@ -1349,7 +1349,7 @@ Target: edit → visible ≤ 50 ms p95, measured in the HUD (SP5a: gated from th
   - offset, σ, jag; `islandMask`, the floating_islands cluster mask (shape stage; amended by SP3e);
   - cave slice at y (final < 0 plus aquifer fluid), cave-biome slice;
   - structure starts and pieces, carver tunnels;
-  - spawn, player with view cone, grid, column-status heatmap, saved places per saved world (SP5b: a section of each saved world's map, one map per saved world).
+  - spawn, player with view cone, grid, column-status heatmap, saved places per saved world (SP5b: a section of each saved world's map, one map per saved world; coloured dots; a Places tab; B in the world and '+ Add at the pin' on the map).
 - **Hover** uses a sampler cached per epoch. **Click** teleports (3.7) (SP4c: in the world's map a plain click teleports, except while the cut tool is armed; Shift+click sets the pin or the slice centre; on `?map` a click sets the pin).
 - The 3D view keeps streaming at reduced priority while the map is open (SP4c: in mode A, map open; in mode B the 3D streams first and the map's jobs are capped as §4.3).
 

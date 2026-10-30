@@ -5,7 +5,8 @@
  * preview tiles while interactive), reports preview progress to the preview driver, dims all biomes but a
  * highlighted one, pans by drag, zooms around the cursor, and draws the spawn marker, a grid, the pin, the
  * cross-section's cut line (SP2b spec §4.5) and the Density tab's horizontal-plane square (SP3d spec §3.7). In the
- * world (SP4c spec §1.3, §1.5) it draws the player's arrow on top, and while hidden it plans and draws nothing.
+ * world (SP4c spec §1.3, §1.5) it draws the player's arrow on top, and while hidden it plans and draws nothing; in a
+ * saved world, the places as coloured dots under the spawn, the pin and the arrow (SP5b spec §3.7, D13).
  */
 import { MAP_TILE_PX, type MapLevel } from '../../core/constants';
 import type { Spawn } from '../../gen/column/spawn';
@@ -18,7 +19,7 @@ import { highlightMask } from './highlight';
 import { MAP_MAX_BPP, MAP_MIN_BPP, type MapView } from './mapState';
 import { createTileCache } from './tileCache';
 import { createTileSource } from './tileSource';
-import { arrowGeometry, arrowRedrawWanted, clampCentre, planTiles, screenToWorld, visibleTiles, worldToScreen } from './viewMath';
+import { arrowGeometry, arrowRedrawWanted, clampCentre, drawPlaceDots, planTiles, screenToWorld, visibleTiles, worldToScreen } from './viewMath';
 
 export interface MapViewOptions {
   onView(v: MapView): void;
@@ -49,6 +50,11 @@ export interface MapCanvas {
   setInteractive(on: boolean): void;
   setSpawn(s: Spawn | null): void;
   setPin(p: [number, number] | null): void;
+  /**
+   * The saved places, each a dot in `colours[colour]` with a white rim (SP5b spec §3.7, D13; `drawPlaceDots`), drawn on
+   * the next scheduled draw and on every draw after it; an empty list draws none.
+   */
+  setPlaces(list: readonly { x: number; z: number; colour: number }[], colours: readonly string[]): void;
   setGrid(on: boolean): void;
   /** Dims every biome but `id` on the biome layer's tiles (SP2b spec §5.3); null ends the highlight. */
   highlightBiome(id: number | null): void;
@@ -99,6 +105,8 @@ export function createMapCanvas(host: HTMLElement, pool: WorkerPool, initial: Ma
   let highlight: number | null = null;
   let cutLine: CutOverlay | null = null;
   let square: MapSquare | null = null;
+  let places: readonly { x: number; z: number; colour: number }[] = [];
+  let placeColours: readonly string[] = [];
   const fallbacks = createFallbacks();
   /** Highlight masks of the highlighted biome only, by tile key. */
   const masks = new Map<string, OffscreenCanvas>();
@@ -226,6 +234,8 @@ export function createMapCanvas(host: HTMLElement, pool: WorkerPool, initial: Ma
       ctx2d.stroke();
       ctx2d.lineWidth = 1;
     }
+    // Under the markers, so a pin set on a place still shows its ring.
+    drawPlaceDots(ctx2d, view, w, h, places, placeColours);
     if (spawn !== null) marker(spawn.x, spawn.z, '#ff3b30');
     if (pin !== null) marker(pin[0], pin[1], '#ffd60a');
     if (cutLine !== null) {
@@ -357,6 +367,7 @@ export function createMapCanvas(host: HTMLElement, pool: WorkerPool, initial: Ma
     },
     setSpawn(s) { spawn = s; schedule(); },
     setPin(p) { pin = p; schedule(); },
+    setPlaces(list, colours) { places = list; placeColours = colours; schedule(); },
     setGrid(on) { grid = on; schedule(); },
     highlightBiome(id) {
       if (id === highlight) return;

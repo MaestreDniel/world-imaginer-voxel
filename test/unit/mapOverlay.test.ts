@@ -19,8 +19,10 @@ import type { FpsCap } from '../../src/render/fpsLimiter';
 import type { FrameState } from '../../src/render/frameState';
 import {
   createMapOverlay, followSession, frameCapFor, MAP_PRELOAD_MS, ownerOf, SPLIT_MIN_WIDTH, splitAvailable, WATCH_LIVE_NOTICE,
-  WORLD_MAP_BPP, type MapMode, type MapOverlay,
+  WORLD_MAP_BPP, type MapMode, type MapOverlay, type MapOverlayOptions,
 } from '../../src/ui/world/mapOverlay';
+import { createPlaces, PLACE_COLOURS } from '../../src/ui/world/places';
+import type { Place } from '../../src/persist/saves';
 import { createModifySwitch } from '../../src/ui/world/modifyMode';
 import { installDom, type FakeDocument, type FakeElement } from './fixtures/domShim';
 
@@ -62,6 +64,8 @@ vi.mock('../../src/ui/map/mapTool', async () => {
         notices: {} as MapTool['notices'],
         setView(v) { view = v; },
         setEditable(on) { calls.editable.push(on); },
+        pin: () => null,
+        onPin: () => () => {},
         dispose() {
           calls.disposed++;
           // The real tool's disposers run in reverse order: its subscribe goes before its toolbar ends an open drag.
@@ -169,6 +173,8 @@ function setup(o: {
   teleport?: (x: number, z: number) => Promise<boolean>;
   /** A saved world's modification switch (SP5b spec §3.6); none: an unsaved world. */
   modify?: { readonly element: HTMLElement; on(): boolean };
+  /** A saved world's places (SP5b spec §3.7); none: an unsaved world. */
+  places?: MapOverlayOptions['places'];
 } = {}) {
   const doc: FakeDocument = dom.document;
   const app = doc.createElement('div');
@@ -218,6 +224,7 @@ function setup(o: {
     viewChanged,
     notices,
     modify: o.modify ?? null,
+    places: o.places ?? null,
   });
   return {
     doc, app, worldHost, canvas, session, driver, fly, input, timers, overlay, world, limiter, save, viewChanged, notices,
@@ -1012,5 +1019,52 @@ describe('the world-modification switch in the header (SP5b spec §3.6, D10)', (
     unsaved.overlay.close();
     unsaved.overlay.open();
     expect(u.calls.editable).toEqual([]);
+  });
+});
+
+describe('a saved world\'s places on its map (SP5b spec §3.7, D13)', () => {
+  const home: Place = { id: 'h', name: 'Home', colour: 2, x: 10.5, y: 70.62, z: -3.25, yaw: 90, pitch: -5 };
+  /** The page's places as the overlay takes them: the model, the colours, the place teleport and `addAt`'s answer. */
+  function savedPlaces(addAnswer: { value: boolean }) {
+    const toPlace = vi.fn<(p: Place) => void>();
+    const addAt = vi.fn<(x: number, z: number) => Promise<boolean>>(() => Promise.resolve(addAnswer.value));
+    const places = createPlaces([home], () => 'n');
+    return { places, colours: PLACE_COLOURS, toPlace, addAt };
+  }
+
+  test('the tool gets the places only in a saved world; ↗ moves the camera and closes a full-screen map, split keeps it', async () => {
+    const unsaved = setup();
+    const u = await openMounted(unsaved.overlay);
+    expect(u.deps.places).toBeNull();
+    unsaved.overlay.dispose();
+    for (const mode of ['full', 'split'] as const) {
+      const p = savedPlaces({ value: true });
+      const s = setup({ mode, places: p });
+      const t = await openMounted(s.overlay);
+      expect(t.deps.places!.places).toBe(p.places);
+      expect(t.deps.places!.colours).toBe(PLACE_COLOURS);
+      t.deps.places!.teleport(home);
+      expect(p.toPlace.mock.calls).toEqual([[home]]);
+      expect([s.overlay.shown, s.overlay.owner], mode).toEqual(mode === 'full' ? [false, 'world'] : [true, 'map']);
+      s.overlay.dispose();
+    }
+  });
+
+  test('"+ Add at the pin" closes a full-screen map once the dialog opened (it would cover it); a failed landing keeps the map', async () => {
+    for (const mode of ['full', 'split'] as const) {
+      const answer = { value: false };
+      const p = savedPlaces(answer);
+      const s = setup({ mode, places: p });
+      const t = await openMounted(s.overlay);
+      t.deps.places!.addAt(7.5, -2.25);
+      await settle();
+      expect(p.addAt.mock.calls).toEqual([[7.5, -2.25]]);
+      expect([s.overlay.shown, s.overlay.owner], `${mode} false`).toEqual([true, 'map']);
+      answer.value = true;
+      t.deps.places!.addAt(7.5, -2.25);
+      await settle();
+      expect([s.overlay.shown, s.overlay.owner], `${mode} true`).toEqual(mode === 'full' ? [false, 'world'] : [true, 'map']);
+      s.overlay.dispose();
+    }
   });
 });

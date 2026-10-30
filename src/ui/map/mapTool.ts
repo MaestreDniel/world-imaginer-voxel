@@ -14,13 +14,16 @@
  * with the click hint and the overlay's slot instead of "Open in 3D"; `show` and `hide` toggle the canvas's hidden state
  * and whether the driver waits for a preview; `setPlayer` moves the arrow. In a saved world the overlay's modification
  * mode (SP5b spec §3.6, D10) calls `setEditable`, which disables every editor's terrain controls; the session's own gate
- * (`setWritable`, D25) refuses what slips past them.
+ * (`setWritable`, D25) refuses what slips past them. A saved world's tool is mounted with its `places` (SP5b spec §3.7,
+ * D13): the canvas draws them as dots (`setPlaces`, redrawn at every change of the places) and a fifth side-panel tab,
+ * Places, lists them (`placesTab.ts`); the pin is exposed (`pin`, `onPin`) for its "+ Add at the pin".
  */
 import './map.css';
 import type { WorldSession } from '../../engine/session';
 import type { WorkerPool } from '../../engine/workerPool';
 import { biomeName } from '../../gen/biomes/registry';
 import type { Spawn } from '../../gen/column/spawn';
+import type { Place } from '../../persist/saves';
 import { HIGHLIGHT_NOTICE, rowHover } from '../biomeTable/model';
 import { createBiomeShares } from '../biomeTable/shares';
 import { createBiomeTable } from '../biomeTable/table';
@@ -42,15 +45,28 @@ import { createSplineDrawer } from '../splineEditor/drawer';
 import { isSplineLeaf } from '../splineEditor/model';
 import { mapClickAction } from './clickAction';
 import { createHoverReadout } from './hoverPanel';
-import { createLayout, drawerTabOnScreen, tabOnScreen, type LayoutStorage } from './layout';
+import { createLayout, drawerTabOnScreen, layoutTabs, tabOnScreen, type LayoutStorage } from './layout';
 import { encodeMapState, type MapView } from './mapState';
 import { createMapCanvas, type MapCanvas } from './mapView';
+import { mountPlacesTab } from './placesTab';
 import { draftOf, type DriverCanvas, type PreviewDriver } from './previewDriver';
 import { createToolbar, open3dHref } from './toolbar';
 import { centredView } from './viewMath';
+import type { Places } from '../world/places';
 
 /** The pool the tool's views run on (tiles, points, stats, slices, probes, spawn): every editor takes the pool's type. */
 export type MapPool = WorkerPool;
+
+/** A saved world's places on its map (SP5b spec §3.7, D13), from the page through the overlay. */
+export interface MapPlaces {
+  readonly places: Places;
+  /** The colour of each `colour` index (the page's `PLACE_COLOURS`). */
+  readonly colours: readonly string[];
+  /** The Places tab's ↗: the camera to the place's pose (the overlay closes a full-screen map). */
+  teleport(p: Place): void;
+  /** The Places tab's "+ Add at the pin", at the pin's x and z. */
+  addAt(x: number, z: number): void;
+}
 
 export interface MapToolDeps {
   /** The page's session; its history survives the tool. */
@@ -75,6 +91,8 @@ export interface MapToolDeps {
   readonly toolbarSlot: HTMLElement | null;
   /** Whether the tool's P (`togglePanel`) and Escape (`closeDrawer`) run now (the world's owner rule, Task 15). */
   readonly shortcutsEnabled: (a: ShortcutAction) => boolean;
+  /** A saved world's places: the dots and the Places tab (SP5b spec §3.7, D13); absent or null on `?map` and unsaved. */
+  readonly places?: MapPlaces | null;
   /** Called once, at the end of the mount, with the parts the standalone page's `?perf=edit` hook reads. */
   readonly onMounted?: (parts: { canvas: MapCanvas; host: HTMLElement; view(): MapView; editAt<T>(at: number, fn: () => T): T }) => void;
 }
@@ -101,6 +119,10 @@ export interface MapTool {
    * Presets export, teleport and the pin work.
    */
   setEditable(on: boolean): void;
+  /** The map's pin (a Shift+click in the world, a click on `?map`), or null before the first. */
+  pin(): readonly [number, number] | null;
+  /** `f` after every new pin; returns the unsubscribe. */
+  onPin(f: (p: readonly [number, number] | null) => void): () => void;
   /** Runs every disposer once, in reverse order of creation; later calls do nothing. */
   dispose(): void;
 }
@@ -116,7 +138,8 @@ export function createMapTool(host: HTMLElement, deps: MapToolDeps): MapTool {
   const disposers = createDisposers();
   let view: MapView = deps.initialView;
 
-  const layout = createLayout(host, deps.storage);
+  const mapPlaces = deps.places ?? null;
+  const layout = createLayout(host, deps.storage, { tabs: layoutTabs(mapPlaces !== null) });
   disposers.add(() => layout.dispose());
   const notices = createNotices(layout.notices);
   disposers.add(() => notices.dispose());
@@ -164,6 +187,13 @@ export function createMapTool(host: HTMLElement, deps: MapToolDeps): MapTool {
   let cutPointer: CutPoint | null = null;
   /** The map's pin (the Density tab's first horizontal centre when set, SP3d spec §3.7). */
   let pin: CutPoint | null = null;
+  /** Told of every new pin (the Places tab's "+ Add at the pin", SP5b spec §3.7). */
+  const pinFns = new Set<(p: readonly [number, number] | null) => void>();
+  disposers.add(() => pinFns.clear());
+  const onPin = (f: (p: readonly [number, number] | null) => void): (() => void) => {
+    pinFns.add(f);
+    return () => { pinFns.delete(f); };
+  };
   /**
    * Whether the map is shown: always on the standalone page; in the world, between `show` and `hide`. Hidden, no tab or
    * drawer tab is on screen, so the shares, spline, cross-section and Density views request nothing (final review MAP-2).
@@ -194,7 +224,11 @@ export function createMapTool(host: HTMLElement, deps: MapToolDeps): MapTool {
         case 'cut': cutAt(x, z, action.openSection); break;
         case 'openSection': layout.openDrawer('section'); break;
         case 'centre': slices.setCentre(x, z); break;
-        case 'pin': pin = [x, z]; canvas.setPin([x, z]); break;
+        case 'pin':
+          pin = [x, z];
+          canvas.setPin([x, z]);
+          for (const f of [...pinFns]) f(pin);
+          break;
       }
     },
     onPreviewProgress: (epoch, drawn, visible) => driver.previewProgress(epoch, drawn, visible),
@@ -397,6 +431,22 @@ export function createMapTool(host: HTMLElement, deps: MapToolDeps): MapTool {
   const presets = createPresetsTab(layout.tabs.presets, { session, notices, edit });
   disposers.add(() => presets.dispose());
 
+  // A saved world's places (SP5b spec §3.7, D13): the dots on the canvas, redrawn at every change of the places, and the
+  // Places tab, whose "+ Add at the pin" follows the pin.
+  if (mapPlaces !== null) {
+    const dots = (): void => canvas.setPlaces(mapPlaces.places.list, mapPlaces.colours);
+    dots();
+    disposers.add(mapPlaces.places.subscribe(dots));
+    const placesTab = mountPlacesTab(layout.tabs.places, {
+      places: mapPlaces.places,
+      teleport: (p) => mapPlaces.teleport(p),
+      pin: { get: () => pin, subscribe: onPin },
+      addAt: (x, z) => mapPlaces.addAt(x, z),
+      notices,
+    });
+    disposers.add(() => placesTab.dispose());
+  }
+
   // P and Escape (§3.5); undo and redo are the page's (the standalone shell, or the world page).
   disposers.add(installShortcuts((a) => {
     if (a === 'togglePanel') layout.togglePanel();
@@ -459,6 +509,8 @@ export function createMapTool(host: HTMLElement, deps: MapToolDeps): MapTool {
       table.setEditable(on);
       presets.setEditable(on);
     },
+    pin: () => pin,
+    onPin,
     dispose: () => disposers.dispose(),
   };
 }

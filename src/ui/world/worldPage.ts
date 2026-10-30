@@ -153,7 +153,7 @@ import { HOTBAR_KEY, createHotbar, slotName, type Hotbar } from '../../player/ho
 import { bodyOf, breakAt, emptyBucketAt, pickAt, placeAt, type BodyBox } from '../../player/interaction';
 import { DEFAULT_KEYMAP, type Action } from '../../player/keymap';
 import { REACH_FLY, REACH_WALK, castRay, castRayFrom, createRayHit, type RayHit } from '../../player/raycast';
-import { EYE, arriveFeet, createWalkState, type WalkState } from '../../player/walk';
+import { EYE, arriveFeet, createWalkState, setFeet, type WalkState } from '../../player/walk';
 import { createFpsLimiter, type FpsLimiter } from '../../render/fpsLimiter';
 import type { FrameState } from '../../render/frameState';
 import { NEAR_FLY, NEAR_WALK, createWorldRenderer, type GpuEstimate, type WorldRenderer } from '../../render/renderer';
@@ -196,11 +196,15 @@ import { createHoldRepeat, type HoldRepeat } from './holdRepeat';
 import { createMapOverlay, followSession, frameCapFor, worldMapView, type ControlsOwner, type MapOverlay } from './mapOverlay';
 import { createModifyMode, createModifySwitch, type ModifyMode } from './modifyMode';
 import { mountPlaceDialog, type PlaceDialog } from './placeDialog';
-import { PLACE_SAVED_MS, PLACE_SAVED_NOTICE, PLACES_FULL_MS, PLACES_FULL_NOTICE, createPlaces, proposedPlaceName, type Places } from './places';
+import {
+  PLACE_COLOURS, PLACE_SAVED_MS, PLACE_SAVED_NOTICE, PLACES_FULL_MS, PLACES_FULL_NOTICE, createPlaces, proposedPlaceName, type Places,
+} from './places';
 import { createReloader, createWorldUrl, installLeaveGuard, navigateTo, savedWorldUrl, type Reloader, type WorldUrl } from './reload';
 import { Y_MAX, Y_MIN, type WorldQuery } from './query';
 import { STATE_BOUNDS } from './stateBounds';
-import { createTeleport, type Teleport, type TeleportLanding } from './teleport';
+import {
+  TELEPORT_FAILED_MS, TELEPORT_FAILED_NOTICE, createTeleport, landAt, walkFeetY, type PointLanding, type Teleport, type TeleportLanding,
+} from './teleport';
 import { holdWorld, type LockManagerLike, type WorldHold } from './worldLock';
 import { invalidParamsReason, refusalText, refusalUrl, sessionStorageOrNull, type OpenRefusal, type StorageLike } from '../worldsMenu';
 
@@ -1368,6 +1372,45 @@ export function savePlaceKey(o: {
       if (places.add({ name, colour, x, y, z, yaw, pitch }) !== 'full') o.notices.show(PLACE_SAVED_NOTICE, PLACE_SAVED_MS);
     });
   });
+}
+
+/**
+ * "+ Add at the pin" (SP5b spec §3.7, D13): B's dialog for the pin's column, standing on its ground (the walking
+ * teleport's feet, max(surface, water) + 1, from the pool's `landing` at the pin's block, `landAt`), the eye `EYE` above
+ * them, at the block's centre, looking where the camera looks; its Save keeps the place and shows "Place saved" (1.5 s).
+ * Resolves true once the dialog opened. With `MAX_PLACES` places, "A world holds at most 256 places" (4 s), no landing
+ * and no dialog; with the dialog already open, nothing. A landing that fails (as the teleport's `onFail`) opens no
+ * dialog and shows "Could not teleport".
+ */
+export async function addPlaceAt(o: {
+  readonly pool: Pick<WorkerPool, 'landing'>;
+  readonly dialog: Pick<PlaceDialog, 'isOpen' | 'open'>;
+  readonly places: Pick<Places, 'list' | 'add'>;
+  readonly camera: Pick<FlyState, 'yaw' | 'pitch'>;
+  readonly notices: Pick<WorldNotices, 'show'>;
+}, x: number, z: number): Promise<boolean> {
+  const { places, dialog, notices } = o;
+  if (dialog.isOpen) return false;
+  if (places.list.length >= MAX_PLACES) {
+    notices.show(PLACES_FULL_NOTICE, { timeoutMs: PLACES_FULL_MS });
+    return false;
+  }
+  let at: PointLanding;
+  try {
+    at = await landAt(o.pool, x, z);
+  } catch {
+    notices.show(TELEPORT_FAILED_NOTICE, { kind: 'warn', timeoutMs: TELEPORT_FAILED_MS });
+    return false;
+  }
+  // B, or a second click, may have opened the dialog while the landing was asked.
+  if (dialog.isOpen) return false;
+  const y = walkFeetY(at.surface, at.water) + EYE;
+  const { yaw, pitch } = o.camera;
+  dialog.open(proposedPlaceName(places.list.length, at.x, y, at.z), (name, colour) => {
+    const kept = places.add({ name, colour, x: at.x, y, z: at.z, yaw, pitch });
+    if (kept !== 'full') notices.show(PLACE_SAVED_NOTICE, { timeoutMs: PLACE_SAVED_MS });
+  });
+  return true;
 }
 
 /**
@@ -3475,14 +3518,19 @@ export function mountWorldPage(root: HTMLElement, q: WorldQuery, hash: string, o
       pool: workers,
       fly,
       state: frame,
-      walk: { active: () => fly.mode === 'walk', arrive: (x, feetY, z) => arriveFeet(walk, x, feetY, z) },
+      // A saved place sets both feet with no snap (SP5b spec §3.7, D13): the snap would lift them onto a roof.
+      walk: {
+        active: () => fly.mode === 'walk',
+        arrive: (x, feetY, z) => arriveFeet(walk, x, feetY, z),
+        setFeet: (x, feetY, z) => setFeet(walk, x, feetY, z),
+      },
       // F5 after a teleport returns to where the user jumped (SP4c spec §1.6, D20); flight never rewrites the search.
       onArrive: (_x, _z, landing) => {
         worldUrl.arrived(fly);
         opts.wiTest?.landed(landing);
       },
       // "Could not teleport" (D26): in `.world-notices`, or in the tool's row while the map covers the 3D (D27).
-      onFail: () => notices.show('Could not teleport', { kind: 'warn', timeoutMs: 4000 }),
+      onFail: () => notices.show(TELEPORT_FAILED_NOTICE, { kind: 'warn', timeoutMs: TELEPORT_FAILED_MS }),
     });
     // A landing still pending at teardown settles silently: no write to the disposed page's camera, no notice.
     teleport = teleporter;
@@ -3545,6 +3593,16 @@ export function mountWorldPage(root: HTMLElement, q: WorldQuery, hash: string, o
       // The transient notices go to the tool's row while mode A covers the 3D; the Watch-live notice (D26, D27).
       notices,
       modify: modifySwitch === null || modifyMode === null ? null : { element: modifySwitch.element, on: () => modifyMode.on },
+      // A saved world's places on its map (SP5b spec §3.7, D13): the dots and the Places tab, whose ↗ is the place teleport
+      // and whose "+ Add at the pin" opens B's dialog on the pin's ground. An unsaved world has none.
+      places: places === null ? null : {
+        places,
+        colours: PLACE_COLOURS,
+        toPlace: (p) => teleporter.toPlace(p),
+        addAt: (x, z) => addPlaceAt({
+          pool: workers, dialog: placeDialog, places, camera: fly, notices,
+        }, x, z),
+      },
     });
     mapRef = mapOverlay;
     // The smoke's test hook (SP4c spec §8.6; ?wiTest=1 only): the leak check's session listeners, the overlay closed and

@@ -12,6 +12,7 @@ import { mountHelp } from '../../src/ui/help';
 import type { DriverStatus } from '../../src/ui/map/previewDriver';
 import { SETTINGS_DEFAULTS, type WorldSettings } from '../../src/ui/settings';
 import { StoreCorrupt } from '../../src/world/store/pool';
+import { JobCancelled, WorkerFailed } from '../../src/engine/workerPool';
 import { SIM_THREAD } from '../../src/world/store/reclaim';
 import { createBenchDriver } from '../../src/ui/world/bench';
 import { createFogEase } from '../../src/ui/world/fogEase';
@@ -40,6 +41,7 @@ import { createHoldRepeat } from '../../src/ui/world/holdRepeat';
 import { mountPalette } from '../../src/ui/palette';
 import { PLACE_SAVED_NOTICE, PLACES_FULL_NOTICE, createPlaces } from '../../src/ui/world/places';
 import { mountPlaceDialog } from '../../src/ui/world/placeDialog';
+import { TELEPORT_FAILED_MS, TELEPORT_FAILED_NOTICE } from '../../src/ui/world/teleport';
 import { NO_ENTRY } from '../../src/sim/diffStore';
 import type { Edit, FlushedMsg } from '../../src/workers/protocol';
 import { hex64 } from '../../src/core/hash';
@@ -54,7 +56,7 @@ import {
 import {
   EDIT_FAILED_NOTICE, HISTORY_RESET_NOTICE, SAVED_EDIT_FAILED_NOTICE, STATE_RESET_NOTICE, countAccepted, createPageAutosave, hotbarStorage, lastFlush, leaveAfterSave,
   installWorldLock, lowerRdHref, OLDER_GENERATOR_NOTICE, OLDER_GENERATOR_NOTICE_MS, olderGeneratorRecord, openOlderGenerator, openRequest, openSavedWorld,
-  readSavedWorld, refuseOpen, restoreMode, restoredStart, revealOlderGenerator, savePlaceKey, savedWorldUrlRules, timeOfHours,
+  readSavedWorld, refuseOpen, restoreMode, restoredStart, revealOlderGenerator, savePlaceKey, savedWorldUrlRules, timeOfHours, addPlaceAt,
   UNSAVED_NOTICE, unsavedNoticeOf, type WorldPageOptions,
 } from '../../src/ui/world/worldPage';
 import { noticeOfQuery, REFUSAL_REASON_KEY, type OpenRefusal, type StorageLike } from '../../src/ui/worldsMenu';
@@ -1319,7 +1321,9 @@ describe('the world\'s notices over the map (SP4c spec §2.1, D27)', () => {
   test('the page wires them: "Could not teleport" as a 4 s warning, the overlay gets the notices, `onApplied` calls the undo notice', () => {
     // The page's post-reveal wiring cannot be mounted in the unit project, so its source is pinned.
     const src = readFileSync(new URL('../../src/ui/world/worldPage.ts', import.meta.url), 'utf8');
-    expect(src).toMatch(/onFail: \(\) => notices\.show\('Could not teleport', \{ kind: 'warn', timeoutMs: 4000 \}\)/);
+    expect(src).toMatch(/onFail: \(\) => notices\.show\(TELEPORT_FAILED_NOTICE, \{ kind: 'warn', timeoutMs: TELEPORT_FAILED_MS \}\)/);
+    // "Could not teleport" for 4 s, shared with "+ Add at the pin"'s failed landing (SP5b spec §3.7).
+    expect([TELEPORT_FAILED_NOTICE, TELEPORT_FAILED_MS]).toEqual(['Could not teleport', 4000]);
     const start = src.indexOf('createMapOverlay({');
     expect(src.slice(start, src.indexOf('\n    });', start))).toMatch(/^\s*notices,$/m);
     expect(src).toMatch(/undoNotice\.applied\(from\)/);
@@ -1550,6 +1554,85 @@ describe('B saves a place in a saved world (SP5b spec §3.7, D12; rulings P33, R
     expect(src).toMatch(/places: \(\) => worldPlaces\.list,/);
     expect(src).toMatch(/teardown\.push\(worldPlaces\.subscribe\(\(\) => a\.markChanged\(\)\)\);/);
     expect(src).toMatch(/case 'savePlace':\s+savePlaceKey\(\{/);
+  });
+});
+
+describe('"+ Add at the pin" opens B\'s dialog on the pin\'s ground (SP5b spec §3.7, D13; ruling P34)', () => {
+  let dom: ReturnType<typeof installDom>;
+  beforeEach(() => { dom = installDom(); });
+  afterEach(() => { vi.unstubAllGlobals(); });
+
+  const camera = { yaw: 140.5, pitch: -22.25 };
+  /** The page's `addAt` over the real dialog and places model, a scripted landing and the notices' log. */
+  function setup(o: { landing: () => Promise<{ surface: number; water: number }>; initial?: Place[] }) {
+    const requestLock = vi.fn();
+    const dialog = mountPlaceDialog(dom.body as unknown as HTMLElement, { requestLock, onClose: () => {} });
+    let n = 0;
+    const places = createPlaces(o.initial ?? [], () => `p${++n}`);
+    const asked: Array<[number, number]> = [];
+    const shown: Array<[string, unknown]> = [];
+    const addAt = (x: number, z: number): Promise<boolean> => addPlaceAt({
+      pool: { landing: (bx, bz) => { asked.push([bx, bz]); return o.landing(); } },
+      dialog, places, camera, notices: { show: (text, opts) => { shown.push([text, opts]); } },
+    }, x, z);
+    return { dialog, places, asked, shown, addAt };
+  }
+  const enter = (): void => { dom.document.dispatchEvent(Object.assign(new Event('keydown', { cancelable: true }), { code: 'Enter', key: 'Enter', repeat: false })); };
+
+  test('the dialog for the pin\'s column standing on its ground, looking where the camera looks; Save keeps it', async () => {
+    const s = setup({ landing: () => Promise.resolve({ surface: 70, water: -Infinity }) });
+    await expect(s.addAt(100.3, -20.7)).resolves.toBe(true);
+    // The landing at the pin's block, as the teleport asks it; the feet on its ground, the eye EYE above.
+    expect(s.asked).toEqual([[100, -21]]);
+    expect(s.dialog.isOpen).toBe(true);
+    expect(dom.el('place-name').value).toBe('Place 1 (100, 72, -21)');
+    enter();
+    expect(s.places.list).toEqual([{ id: 'p1', name: 'Place 1 (100, 72, -21)', colour: 0, x: 100.5, y: 71 + EYE, z: -20.5, yaw: 140.5, pitch: -22.25 }]);
+    expect(s.shown).toEqual([[PLACE_SAVED_NOTICE, { timeoutMs: 1500 }]]);
+    s.dialog.dispose();
+    // Over the sea, standing on the water as a walking teleport arrives (feet max(surface, water) + 1).
+    const sea = setup({ landing: () => Promise.resolve({ surface: 40, water: 62 }) });
+    await sea.addAt(-7, 9);
+    enter();
+    expect(sea.places.list[0]!.y).toBe(63 + EYE);
+    sea.dialog.dispose();
+  });
+
+  test('the page\'s addAt with a rejecting `pool.landing` opens no dialog and shows the teleport\'s failure notice', async () => {
+    const s = setup({ landing: () => Promise.reject(new WorkerFailed('boom')) });
+    await expect(s.addAt(5, 6)).resolves.toBe(false);
+    expect(s.dialog.isOpen).toBe(false);
+    expect(s.places.list).toEqual([]);
+    expect(s.shown).toEqual([['Could not teleport', { kind: 'warn', timeoutMs: 4000 }]]);
+    s.dialog.dispose();
+    // A cancel is asked again as the teleport asks it; a fourth fails the same way.
+    let calls = 0;
+    const c = setup({ landing: () => { calls++; return Promise.reject(new JobCancelled()); } });
+    await expect(c.addAt(5, 6)).resolves.toBe(false);
+    expect(calls).toBe(4);
+    expect(c.dialog.isOpen).toBe(false);
+    expect(c.shown).toEqual([['Could not teleport', { kind: 'warn', timeoutMs: 4000 }]]);
+    c.dialog.dispose();
+  });
+
+  test('with 256 places, `A world holds at most 256 places` and no landing or dialog; with the dialog already open, nothing', async () => {
+    const full = setup({ landing: () => Promise.resolve({ surface: 70, water: -Infinity }), initial: Array.from({ length: 256 }, (_, i) => ({ id: `q${i}`, name: `Q${i}`, colour: 0, x: i, y: 70, z: 0, yaw: 0, pitch: 0 })) });
+    await expect(full.addAt(1, 2)).resolves.toBe(false);
+    expect([full.asked, full.dialog.isOpen]).toEqual([[], false]);
+    expect(full.shown).toEqual([[PLACES_FULL_NOTICE, { timeoutMs: 4000 }]]);
+    full.dialog.dispose();
+    const open = setup({ landing: () => Promise.resolve({ surface: 70, water: -Infinity }) });
+    open.dialog.open('B\'s own', () => {});
+    await expect(open.addAt(1, 2)).resolves.toBe(false);
+    expect(dom.el('place-name').value).toBe('B\'s own');
+    open.dialog.dispose();
+  });
+
+  test('the page hands the overlay its places: the model, the colours, the place teleport and `addAt`', () => {
+    const src = readFileSync(new URL('../../src/ui/world/worldPage.ts', import.meta.url), 'utf8');
+    const overlay = src.slice(src.indexOf('    const mapOverlay = createMapOverlay({'));
+    expect(overlay.slice(0, overlay.indexOf('    });'))).toMatch(/places: places === null \? null : \{\s+places,\s+colours: PLACE_COLOURS,\s+toPlace: \(p\) => teleporter\.toPlace\(p\),\s+addAt: \(x, z\) => addPlaceAt\(\{/);
+    expect(src).toContain('setFeet: (x, feetY, z) => setFeet(walk, x, feetY, z),');
   });
 });
 

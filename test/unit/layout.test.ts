@@ -1,7 +1,7 @@
 import { readFileSync } from 'node:fs';
 import { describe, expect, test } from 'vitest';
 import {
-  clampDrawerHeight, clampPanelWidth, DEFAULT_LAYOUT, drawerTabOnScreen, DRAWER_TAB_IDS, DRAWER_TAB_LABELS, LAYOUT_KEY, loadLayout, parseLayout, saveLayout, serializeLayout, TAB_IDS, tabKeyTarget, tabOnScreen, withSection,
+  clampDrawerHeight, clampPanelWidth, DEFAULT_LAYOUT, drawerTabOnScreen, DRAWER_TAB_IDS, DRAWER_TAB_LABELS, LAYOUT_KEY, layoutTabs, loadLayout, parseLayout, saveLayout, serializeLayout, TAB_IDS, TAB_LABELS, tabKeyTarget, tabOnScreen, withSection,
   type Layout, type LayoutStorage,
 } from '../../src/ui/map/layout';
 
@@ -108,6 +108,31 @@ describe('layout state (SP2b spec §3.1)', () => {
     expect(saveLayout(s, DEFAULT_LAYOUT)).toBe(false);
     expect(loadLayout(s)).toEqual(l);
     expect(saveLayout(null, l)).toBe(false);
+  });
+});
+
+describe('the Places tab, only in a saved world\'s map (SP5b spec §3.7, D13)', () => {
+  test('`TAB_IDS` keeps the four (`?map`); a world layout with places shows five; `parseLayout` of a stored `\'places\'` on `?map` gives the World tab', () => {
+    expect(TAB_IDS).toEqual(['world', 'parameters', 'biomes', 'presets']);
+    expect(layoutTabs(false)).toEqual(TAB_IDS);
+    // A saved world's map: Places is the fifth tab, after Presets.
+    expect(layoutTabs(true)).toEqual(['world', 'parameters', 'biomes', 'presets', 'places']);
+    expect(layoutTabs(true).map((id) => TAB_LABELS[id])).toEqual(['World', 'Parameters', 'Biomes', 'Presets', 'Places']);
+    expect(Object.isFrozen(layoutTabs(true))).toBe(true);
+    // The layout key is shared by `?map` and every world's map: a stored Places opens the World tab where it is not shown
+    // (`?map`, an unsaved world), and Places where it is.
+    const stored = JSON.stringify({ panelWidth: 400, tab: 'places' });
+    expect(parseLayout(stored, layoutTabs(false))).toEqual({ ...DEFAULT_LAYOUT, panelWidth: 400, tab: 'world' });
+    expect(parseLayout(stored)).toEqual({ ...DEFAULT_LAYOUT, panelWidth: 400, tab: 'world' });
+    expect(parseLayout(stored, layoutTabs(true))).toEqual({ ...DEFAULT_LAYOUT, panelWidth: 400, tab: 'places' });
+    expect(parseLayout(JSON.stringify({ tab: 'presets' }), layoutTabs(true)).tab).toBe('presets');
+    const s = new FakeStorage();
+    s.items.set(LAYOUT_KEY, stored);
+    expect(loadLayout(s).tab).toBe('world');
+    expect(loadLayout(s, layoutTabs(true)).tab).toBe('places');
+    // The tool builds its layout with the tabs its map shows.
+    const src = readFileSync(new URL('../../src/ui/map/mapTool.ts', import.meta.url), 'utf8');
+    expect(src).toContain('const mapPlaces = deps.places ?? null;\n  const layout = createLayout(host, deps.storage, { tabs: layoutTabs(mapPlaces !== null) });');
   });
 });
 

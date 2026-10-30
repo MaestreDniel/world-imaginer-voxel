@@ -6,7 +6,9 @@
  * - **Preload:** `MAP_PRELOAD_MS` after the reveal, `import('../map/mapTool')` loads the chunk and its CSS without
  *   mounting; an M after it mounts at once.
  * - **The first `open`** mounts the tool (`host: 'world'`, no URL sink, the toolbar slot, its `onTeleport` wrapping the
- *   page's: true in full closes the map, split keeps it, false keeps it as it is), centred on the camera at
+ *   page's: true in full closes the map, split keeps it, false keeps it as it is; in a saved world its `places`, whose
+ *   ↗ moves the camera to the place and closes a full-screen map the same way, as does "+ Add at the pin" once B's
+ *   dialog opened for the pin, which the map would cover, SP5b spec §3.7, D13), centred on the camera at
  *   `WORLD_MAP_BPP` blocks/px; the tool attaches its canvas to the driver's replaying sink, so it draws at once. Every
  *   `open` then calls `show` on the camera (keeping the zoom and layer) and `setPlayer` once, so the arrow is at the
  *   camera on opening; `close` calls `hide`, and the host is `display: none` while hidden. Every view change the tool
@@ -56,6 +58,7 @@ import type { CoordinatorCounts } from '../../engine/coordinator';
 import type { WorldStage } from '../../engine/invalidation';
 import type { WorldSession } from '../../engine/session';
 import type { WorkerPool } from '../../engine/workerPool';
+import type { Place } from '../../persist/saves';
 import type { FlyState } from '../../player/fly';
 import type { FpsCap, FpsLimiter } from '../../render/fpsLimiter';
 import type { FrameState } from '../../render/frameState';
@@ -69,6 +72,7 @@ import type { createMapTool, MapTool } from '../map/mapTool';
 import { draftOf, type createReplayingCanvas, type PreviewDriver } from '../map/previewDriver';
 import type { WorldSettings } from '../settings';
 import { AT_LIMIT } from './query';
+import type { Places } from './places';
 import type { WorldNotices } from './worldPage';
 
 /** The overlay's mode (SP4c spec §2.1, §2.2): A full screen, B side by side. */
@@ -185,6 +189,17 @@ export interface MapOverlayOptions {
    * before "Watch live", and a tool mounted gets `setEditable(on())` at once. Null in an unsaved world.
    */
   readonly modify: { readonly element: HTMLElement; on(): boolean } | null;
+  /**
+   * A saved world's places (SP5b spec §3.7, D13), handed to the tool: the model and its colours; `toPlace` moves the camera
+   * to a place's pose (`Teleport.toPlace`); `addAt` resolves true once B's dialog opened for the pin's column. Null in an
+   * unsaved world (no dots, no Places tab).
+   */
+  readonly places: {
+    readonly places: Places;
+    readonly colours: readonly string[];
+    toPlace(p: Place): void;
+    addAt(x: number, z: number): Promise<boolean>;
+  } | null;
 }
 
 export interface MapOverlay {
@@ -404,6 +419,12 @@ export function createMapOverlay(o: MapOverlayOptions): MapOverlay {
     t.setPlayer(o.fly.x, o.fly.z, o.fly.yaw);
   };
 
+  /** Closes the map in full screen (a teleport arrived, or a dialog opened over the world); split keeps it shown. */
+  const closeIfFull = (): void => {
+    if (!disposed && mode === 'full') close();
+  };
+  const places = o.places;
+
   const mount = (m: ToolModule): void => {
     // Closed or disposed while the chunk loaded: the next open mounts.
     if (disposed || tool !== null || !shown) return;
@@ -419,11 +440,24 @@ export function createMapOverlay(o: MapOverlayOptions): MapOverlay {
       onView: () => { if (!disposed) o.viewChanged(); },
       onTeleport: (x, z) => {
         o.onTeleport(x, z).then((ok) => {
-          if (ok && !disposed && mode === 'full') close();
+          if (ok) closeIfFull();
         }, (e: unknown) => console.error('The teleport failed:', e));
       },
       toolbarSlot: slot,
       shortcutsEnabled,
+      places: places === null ? null : {
+        places: places.places,
+        colours: places.colours,
+        teleport: (p) => {
+          places.toPlace(p);
+          closeIfFull();
+        },
+        addAt: (x, z) => {
+          places.addAt(x, z).then((ok) => {
+            if (ok) closeIfFull();
+          }, (e: unknown) => console.error('The place could not be added:', e));
+        },
+      },
     });
     // A saved world's tool shows the modification mode in force from its mount (D10); the mode tells it of later switches.
     if (o.modify !== null) tool.setEditable(o.modify.on());
