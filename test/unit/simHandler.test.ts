@@ -20,7 +20,7 @@ import { flushOps, todayStateTable, type HistoryRecord, type StateRecord, type W
 import { createDiffStore, NO_ENTRY } from '../../src/sim/diffStore';
 import { applyEdits } from '../../src/sim/edits';
 import { DIRT, GLASS, STONE } from '../../src/world/blocks/index';
-import type { DiffMsg, EditedMsg, ErrorMsg, FlushedMsg, FromSim, LoadedMsg } from '../../src/workers/protocol';
+import type { DiffMsg, EditedMsg, ErrorMsg, FlushedMsg, FromSim, HistoryChange, LoadedMsg } from '../../src/workers/protocol';
 import { createMemorySimHandler, createSimHandler, flushSyncPart, SIM_DRAIN_MS, type SimHandler, type SimReply } from '../../src/workers/simHandler';
 import { R_READER, SIM_THREAD } from '../../src/world/store/reclaim';
 import type { ColumnDiff } from '../../src/world/store/api';
@@ -468,6 +468,30 @@ describe('the sim handler on a shared seed-42 region (SP5a spec §2.1)', () => {
       expect(f3!.id).toBe(12);
       undo(s.handler, b);
       undo(s.handler, a);
+    });
+
+    test('a history posted as a change against the previous flush\'s is written as the whole record, key for key; a change with no previous history is BAD_MESSAGE (D28\'s third lever)', async () => {
+      const kv = createMemoryKV();
+      const s = await opened(kv, 'wh', { flushSeq: 0 });
+      const step = (x: number) => ({ edits: [{ x, y: 70, z: 2, before: NO_ENTRY, after: val(STONE) }] });
+      const H1: HistoryRecord = { worldId: 'wh', done: [step(1), step(2), step(3)], undone: [] };
+      s.send(flushOf(10, 'wh', H1));
+      await s.until(2);
+      okOf(s.got[1]!);
+      // Ctrl+Z, then a step recorded: the change keeps done[1, 2) and adds two steps, and keeps nothing of the redo side.
+      const H2: HistoryRecord = { worldId: 'wh', done: [H1.done[1]!, step(4), step(5)], undone: [] };
+      const change: HistoryChange = { worldId: 'wh', done: { from: 1, keep: 1, add: [H2.done[1]!, H2.done[2]!] }, undone: { from: 0, keep: 0, add: [] } };
+      s.send(flushOf(11, 'wh', null));
+      s.send({ ...flushOf(12, 'wh'), history: change });
+      await s.until(4);
+      okOf(s.got[3]!);
+      const written = kv.dump('history') as Array<[string, HistoryRecord]>;
+      expect(written).toEqual([['wh', H2]]);
+      expect(JSON.stringify(written[0]![1])).toBe(JSON.stringify(H2));
+      // A fresh handler's first flush has no history to change.
+      const t = await opened(createMemoryKV(), 'wh2', { flushSeq: 0 });
+      const e = call(t.handler, { ...flushOf(20, 'wh2'), history: { ...change, worldId: 'wh2' } }).msg as ErrorMsg;
+      expect([e.type, e.jobId, e.code]).toEqual(['error', 20, 'BAD_MESSAGE']);
     });
 
     test('Review Focus 1: edits A posted, `flush` posted, edits B posted before A\'s reply; the flush\'s write `crashNext()`ed: a fresh handler\'s `load` on the same KV gives exactly the previous committed flush\'s columns, and `kv.read([{ op: \'get\', store: \'state\', key: worldId }])` gives its `flushSeq`; with the write completing instead, A\'s column is in it and B\'s column is dirty again and in the next flush with `flushSeq` + 1', async () => {

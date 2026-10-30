@@ -644,9 +644,60 @@ export interface LoadMsg {
 }
 /**
  * A save of the open world (SP5b spec §3.2, D18): the sim writes its dirty columns, `state` (its `flushSeq` the sim's:
- * the last committed + 1), `history` when given and a pending `record`, in one transaction, and answers `flushed`.
+ * the last committed + 1), `history` when given and a pending `record`, in one transaction, and answers `flushed`. The
+ * history comes whole or as its change against the base (`HistoryChange`), which the sim resolves on arrival.
  */
-export interface FlushMsg { readonly type: 'flush'; readonly id: number; readonly state: StateRecord; readonly history: HistoryRecord | null }
+export interface FlushMsg {
+  readonly type: 'flush'; readonly id: number; readonly state: StateRecord; readonly history: HistoryRecord | HistoryChange | null;
+}
+/** One step of a `history` record's side. */
+type HistoryStep = HistoryRecord['done'][number];
+/** One side of a `HistoryChange`: the base side's steps `from` … `from + keep − 1`, then `add`. */
+export interface HistorySideChange { readonly from: number; readonly keep: number; readonly add: readonly HistoryStep[] }
+/**
+ * A `flush`'s history as its change against the base (SP5b spec §3.3, D28's third lever): the history the last `flush`
+ * that carried one resolved to, which the client and the sim both keep (the sim's messages arrive in order). An autosave
+ * tick then posts the steps recorded since, not the whole history.
+ */
+export interface HistoryChange { readonly worldId: string; readonly done: HistorySideChange; readonly undone: HistorySideChange }
+
+/** Whether a flush's history is a change (its sides are runs, not arrays of steps). */
+export const isHistoryChange = (h: HistoryRecord | HistoryChange): h is HistoryChange => isObj(h.done);
+
+/** `next`'s side against `base`'s: the longest run of `base`'s steps (by identity) that `next` starts with, then the rest. */
+function sideChange(base: readonly HistoryStep[], next: readonly HistoryStep[]): HistorySideChange {
+  const from = next.length === 0 ? -1 : base.indexOf(next[0]!);
+  if (from < 0) return { from: 0, keep: 0, add: next.slice() };
+  let keep = 1;
+  while (keep < next.length && from + keep < base.length && base[from + keep] === next[keep]) keep++;
+  return { from, keep, add: next.slice(keep) };
+}
+
+/**
+ * `next` to post against `base` (the client's side of D28's third lever): the change keeping each side's longest run of
+ * `base`'s steps, matched by identity (the page's history records keep one object per step), or `next` itself when there
+ * is no base or neither side keeps a step.
+ */
+export function historyChange(base: HistoryRecord | null, next: HistoryRecord): HistoryRecord | HistoryChange {
+  if (base === null) return next;
+  const done = sideChange(base.done, next.done);
+  const undone = sideChange(base.undone, next.undone);
+  return done.keep + undone.keep === 0 ? next : { worldId: next.worldId, done, undone };
+}
+
+/**
+ * The record a flush's history resolves to over `base` (the sim's side): a whole record as it is; a change, each side's
+ * kept run of `base`'s steps then its added ones, or null when it does not fit `base` (none, or a run past a side's end).
+ */
+export function resolveHistory(base: HistoryRecord | null, h: HistoryRecord | HistoryChange): HistoryRecord | null {
+  if (!isHistoryChange(h)) return h;
+  if (base === null) return null;
+  const side = (b: readonly HistoryStep[], c: HistorySideChange): HistoryStep[] | null =>
+    c.from + c.keep > b.length ? null : [...b.slice(c.from, c.from + c.keep), ...c.add];
+  const done = side(base.done, h.done);
+  const undone = side(base.undone, h.undone);
+  return done === null || undone === null ? null : { worldId: h.worldId, done, undone };
+}
 /**
  * The open world's changed record (SP5b spec §3.1, §3.6): after an Apply or the older-generator open. No reply: the next
  * flush writes it, and its genKey heads every column flushed from now on (D21).
@@ -725,14 +776,20 @@ const loadOk = (m: Record<string, unknown>): boolean => {
     && (rw === null || (isObj(rw) && isObj(rw['world']) && typeof rw['world']['id'] === 'string' && (rw['history'] === null || isObj(rw['history']))));
 };
 
+/** A `HistorySideChange`: `from` and `keep` non-negative integers, `add` an array of objects. */
+const sideChangeOk = (c: unknown): boolean =>
+  isObj(c) && isInt(c['from']) && c['from'] >= 0 && isInt(c['keep']) && c['keep'] >= 0 && Array.isArray(c['add']) && c['add'].every(isObj);
+
 /**
- * A `flush`'s id, its state an object with a string `worldId` and a finite `updated`, and its history null or an object
- * (the records were built and normalised on the main thread).
+ * A `flush`'s id, its state an object with a string `worldId` and a finite `updated`, and its history null, an object
+ * (the records were built and normalised on the main thread) or, when its `done` is an object, a `HistoryChange` with a
+ * string `worldId` and both sides well formed.
  */
 const flushOk = (m: Record<string, unknown>): boolean => {
   const st = m['state'];
   const h = m['history'];
-  return isInt(m['id']) && isObj(st) && typeof st['worldId'] === 'string' && isFiniteNum(st['updated']) && (h === null || isObj(h));
+  return isInt(m['id']) && isObj(st) && typeof st['worldId'] === 'string' && isFiniteNum(st['updated'])
+    && (h === null || (isObj(h) && (!isObj(h['done']) || (typeof h['worldId'] === 'string' && sideChangeOk(h['done']) && sideChangeOk(h['undone'])))));
 };
 
 /** Validates a message sent to the sim; null when malformed. */

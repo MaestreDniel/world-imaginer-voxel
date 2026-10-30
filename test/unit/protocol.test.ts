@@ -12,9 +12,10 @@ import { SPLINE_STATS_POINTS, splineStatPoints, splineStatsInto, splineStatsLeng
 import { paintTile, paintTileAbortable } from '../../src/gen/map/tile';
 import { createSurfaceContext } from '../../src/gen/surface/context';
 import { surfaceProbe } from '../../src/gen/surface/probe';
+import type { HistoryRecord } from '../../src/persist/saves';
 import { AIR, BEDROCK, DEEPSLATE, REGISTRY, SNOW_BLOCK } from '../../src/world/blocks/index';
 import { leafOpts } from '../../src/ui/splineEditor/model';
-import { cellOf, parseFromSim, parseFromWorker, parseSpikeStoreFromWorker, parseSpikeStoreToWorker, parseToSim, parseToWorker, pointInWindow, SLICE_ROWS, SLICE_SAMPLES, sliceIndex, slicePartIndex, tileInWindow, type FromWorker, type ScopedJobType } from '../../src/workers/protocol';
+import { cellOf, historyChange, parseFromSim, parseFromWorker, parseSpikeStoreFromWorker, parseSpikeStoreToWorker, parseToSim, parseToWorker, pointInWindow, resolveHistory, SLICE_ROWS, SLICE_SAMPLES, sliceIndex, slicePartIndex, tileInWindow, type FromWorker, type HistoryChange, type ScopedJobType } from '../../src/workers/protocol';
 import { createSliceJob } from '../../src/workers/sliceJob';
 import { createTaskHandler } from '../../src/workers/taskHandler';
 import { createStore } from '../../src/world/store/store';
@@ -792,9 +793,13 @@ describe('the sim worker\'s messages (SP5a spec §2.1)', () => {
   const flushedOk = (o: Record<string, unknown> = {}) => ({ type: 'flushed', id: 8, ok: true, flushSeq: 4, columns: 2, bytes: 120, syncMs: 0.3, commitMs: 4.5, ...o });
   const flushedFail = (o: Record<string, unknown> = {}) => ({ type: 'flushed', id: 8, ok: false, status: 'abort', errorName: 'QuotaExceededError', ...o });
 
+  /** A history posted as its change against the previous flush's (D28's third lever). */
+  const historyChangeMsg = { worldId: 'w1', done: { from: 2, keep: 3, add: [{ edits: [] }] }, undone: { from: 0, keep: 0, add: [] } };
+
   test('`flush`, `record` and `flushed` are accepted (SP5b spec §3.2, §3.3)', () => {
     expect(parseToSim(flushMsg())).not.toBeNull();
     expect(parseToSim(flushMsg({ history: { worldId: 'w1', done: [], undone: [] } }))).not.toBeNull();
+    expect(parseToSim(flushMsg({ history: historyChangeMsg }))).not.toBeNull();
     expect(parseToSim(record())).not.toBeNull();
     expect(parseFromSim(flushedOk())).not.toBeNull();
     expect(parseFromSim(flushedOk({ columns: 0, bytes: 0, syncMs: 0, commitMs: 0 }))).not.toBeNull();
@@ -809,6 +814,12 @@ describe('the sim worker\'s messages (SP5a spec §2.1)', () => {
     ['a flush whose state has a NaN updated', flushMsg({ state: { ...state, updated: Number.NaN } })],
     ['a flush whose history is neither null nor an object', flushMsg({ history: 'none' })],
     ['a flush without a history', flushMsg({ history: undefined })],
+    ['a flush whose history change has a negative from', flushMsg({ history: { ...historyChangeMsg, done: { from: -1, keep: 0, add: [] } } })],
+    ['a flush whose history change has a non-integer keep', flushMsg({ history: { ...historyChangeMsg, done: { from: 0, keep: 0.5, add: [] } } })],
+    ['a flush whose history change adds no array', flushMsg({ history: { ...historyChangeMsg, undone: { from: 0, keep: 0, add: {} } } })],
+    ['a flush whose history change adds a step that is not an object', flushMsg({ history: { ...historyChangeMsg, undone: { from: 0, keep: 0, add: [3] } } })],
+    ['a flush whose history change has one side only', flushMsg({ history: { worldId: 'w1', done: { from: 0, keep: 0, add: [] } } })],
+    ['a flush whose history change has no string worldId', flushMsg({ history: { ...historyChangeMsg, worldId: 7 } })],
     ['a record without a world', record({ world: undefined })],
     ['a record whose world has no string id', record({ world: { ...world, id: 3, genKey: 'fedcba9876543210' } })],
     ['a record whose world has a genKey of 15 digits', record({ world: { ...world, genKey: 'fedcba987654321' } })],
@@ -908,5 +919,55 @@ describe('the sim worker\'s messages (SP5a spec §2.1)', () => {
     ['an error with a non-integer jobId', { type: 'error', jobId: 0.5, epoch: null, code: 'INTERNAL', message: 'x' }],
   ])('a reply of the sim is refused: %s', (_n, m) => {
     expect(parseFromSim(m)).toBeNull();
+  });
+});
+
+describe('a flush\'s history as a change against the previous flush\'s (SP5b spec §3.3, D28\'s third lever)', () => {
+  type Step = HistoryRecord['done'][number];
+  const step = (x: number): Step => ({ edits: [{ x, y: 64, z: -2, before: 0xFFFFFFFF, after: (x % 50) << 8 }] });
+  const steps = (from: number, to: number): Step[] => Array.from({ length: to - from }, (_, i) => step(from + i));
+  /** The base: 100 steps done, 3 undone. */
+  const done = steps(0, 100);
+  const undone = steps(500, 503);
+  const base: HistoryRecord = { worldId: 'w1', done, undone };
+  /** `h` resolved over `base` is `next`, key for key. */
+  const resolvesTo = (h: HistoryRecord | HistoryChange, next: HistoryRecord): void => {
+    const r = resolveHistory(base, h);
+    expect(r).toEqual(next);
+    expect(JSON.stringify(r)).toBe(JSON.stringify(next));
+  };
+
+  test('ten steps recorded (the oldest ten dropped past 100, the redo side cleared): the done side keeps 90 from 10 and adds the ten', () => {
+    const fresh = steps(100, 110);
+    const next: HistoryRecord = { worldId: 'w1', done: [...done.slice(10), ...fresh], undone: [] };
+    const c = historyChange(base, next);
+    expect(c).toEqual({ worldId: 'w1', done: { from: 10, keep: 90, add: fresh }, undone: { from: 0, keep: 0, add: [] } });
+    resolvesTo(c, next);
+  });
+
+  test('an undo (the newest done step moved to the redo side) and a dropped step in the middle', () => {
+    const undo: HistoryRecord = { worldId: 'w1', done: done.slice(0, 99), undone: [...undone, done[99]!] };
+    const c = historyChange(base, undo);
+    expect(c).toEqual({ worldId: 'w1', done: { from: 0, keep: 99, add: [] }, undone: { from: 0, keep: 3, add: [done[99]] } });
+    resolvesTo(c, undo);
+    const dropped: HistoryRecord = { worldId: 'w1', done: [...done.slice(0, 40), ...done.slice(41)], undone };
+    const d = historyChange(base, dropped) as HistoryChange;
+    expect([d.done.from, d.done.keep, d.done.add.length]).toEqual([0, 40, 59]);
+    resolvesTo(d, dropped);
+  });
+
+  test('steps are matched by identity: equal copies, a restore or no base give the record itself', () => {
+    const copies: HistoryRecord = { worldId: 'w1', done: done.map((s) => ({ edits: [...s.edits] })), undone: [] };
+    expect(historyChange(base, copies)).toBe(copies);
+    expect(historyChange(null, base)).toBe(base);
+    expect(resolveHistory(null, base)).toBe(base);
+    expect(resolveHistory(base, copies)).toBe(copies);
+  });
+
+  test('a change that does not fit its base resolves to null: no base, or a run past the base\'s side', () => {
+    const c: HistoryChange = { worldId: 'w1', done: { from: 10, keep: 90, add: [] }, undone: { from: 0, keep: 0, add: [] } };
+    expect(resolveHistory(null, c)).toBeNull();
+    expect(resolveHistory(base, { ...c, done: { from: 11, keep: 90, add: [] } })).toBeNull();
+    expect(resolveHistory(base, { ...c, undone: { from: 0, keep: 4, add: [] } })).toBeNull();
   });
 });

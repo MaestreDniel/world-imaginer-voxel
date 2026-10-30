@@ -187,6 +187,25 @@ describe('the sim client (SP5a spec §2.1, §2.5)', () => {
     expect([sim.failed, failures]).toEqual([true, 1]);
   });
 
+  test('a flush\'s history that shares steps with the last one posted posts as its change; a null history keeps that base (D28\'s third lever)', async () => {
+    const w = fakeSim();
+    const sim = createSimClient(() => w, { onFailure: () => { throw new Error('no failure expected'); } });
+    const step = (x: number): HistoryRecord['done'][number] => ({ edits: [{ x, y: 70, z: 0, before: 0xFFFFFFFF, after: 1 << 8 }] });
+    const [a, b, c, d] = [step(1), step(2), step(3), step(4)];
+    const h1: HistoryRecord = { worldId: 'w1', done: [a, b, c], undone: [] };
+    void sim.flush(state, h1);
+    expect(w.posted.at(-1)).toEqual({ type: 'flush', id: lastId(w), state, history: h1 });
+    w.reply(flushedReply(lastId(w), true));
+    void sim.flush(state, null);
+    expect(w.posted.at(-1)!['history']).toBeNull();
+    w.reply(flushedReply(lastId(w), true));
+    void sim.flush(state, { worldId: 'w1', done: [b, c, d], undone: [] });
+    expect(w.posted.at(-1)!['history']).toEqual({ worldId: 'w1', done: { from: 1, keep: 2, add: [d] }, undone: { from: 0, keep: 0, add: [] } });
+    w.reply(flushedReply(lastId(w), false));
+    await flush();
+    expect(sim.failed).toBe(false);
+  });
+
   test('a pending `flush` rejects `SimFailed` when the sim fails; a `flush` on a disposed client rejects at once', async () => {
     const w = fakeSim();
     let failures = 0;

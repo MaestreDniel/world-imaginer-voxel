@@ -28,7 +28,9 @@
  *
  * `flush` (spec §3.2, D18): with none in flight its synchronous part (`flushSyncPart`) runs at once: the dirty-column
  * set is taken, each column encoded under the header genKey when it holds entries (else its key deleted), and `state`
- * with `flushSeq` = the last committed + 1, the history when given and a pending `record` go in one `write`. One flush
+ * with `flushSeq` = the last committed + 1, the history when given and a pending `record` go in one `write`. A history
+ * posted as a change is resolved on arrival against the last flushed one (`resolveHistory`; one that does not fit is
+ * BAD_MESSAGE), so everything below sees whole records. One flush
  * is in flight at a time: a later one waits, and a newer one replaces it (its state is newer; the waiting history is
  * kept unless the newer one carries one), answering every replaced id with its outcome (ruling P4). On `complete` the
  * flush's `flushSeq` and `updated` become the last committed; on `abort` or `closed` the taken columns are marked dirty
@@ -48,7 +50,7 @@ import { applyEdits, createEditScratch, readDiff, type EditScratch } from '../si
 import type { ColumnDiff } from '../world/store/api';
 import { R_STORE_ID, SIM_THREAD } from '../world/store/reclaim';
 import { attachStore, StoreCorrupt, type VoxelStore } from '../world/store/store';
-import { parseToSim, type ErrorCode, type FlushedMsg, type FlushMsg, type FromSim, type LoadMsg, type RecordMsg, type ToSim } from './protocol';
+import { parseToSim, resolveHistory, type ErrorCode, type FlushedMsg, type FlushMsg, type FromSim, type LoadMsg, type RecordMsg, type ToSim } from './protocol';
 
 /** The sim's limbo retry interval while entries are left (§2.1: it has no reply loop like the pool's). */
 export const SIM_DRAIN_MS = 100;
@@ -208,6 +210,8 @@ export function createSimHandler(o: SimHandlerOptions): SimHandler {
   /** What the next flush writes besides its own: an aborted flush's history, and the latest `record` not yet committed. */
   let pendingHistory: HistoryRecord | null = null;
   let pendingRecord: WorldRecord | null = null;
+  /** The history the last `flush` that carried one resolved to: the base of the next one's change (D28's third lever). */
+  let historyBase: HistoryRecord | null = null;
   /** Posts `r`, latching the handler on its first `error` reply. */
   const send = (r: SimReply, post: (r: SimReply) => void): void => {
     if (r.msg.type === 'error' && failed === null) failed = `${r.msg.code}: ${r.msg.message}`;
@@ -284,11 +288,16 @@ export function createSimHandler(o: SimHandlerOptions): SimHandler {
     if (m.state.worldId !== world.worldId || (m.history !== null && m.history.worldId !== world.worldId)) {
       return send(err(m.id, 'BAD_MESSAGE', `a flush of another world than ${world.worldId}`), post);
     }
-    if (!flushing) return runFlush(world, m.state, m.history, [{ id: m.id, post }]);
-    if (queued === null) queued = { state: m.state, history: m.history, waiters: [{ id: m.id, post }] };
+    const history = m.history === null ? null : resolveHistory(historyBase, m.history);
+    if (m.history !== null && history === null) {
+      return send(err(m.id, 'BAD_MESSAGE', 'a history change that does not fit the last flushed history'), post);
+    }
+    if (history !== null) historyBase = history;
+    if (!flushing) return runFlush(world, m.state, history, [{ id: m.id, post }]);
+    if (queued === null) queued = { state: m.state, history, waiters: [{ id: m.id, post }] };
     else {
       queued.state = m.state;
-      if (m.history !== null) queued.history = m.history;
+      if (history !== null) queued.history = history;
       queued.waiters.push({ id: m.id, post });
     }
   };

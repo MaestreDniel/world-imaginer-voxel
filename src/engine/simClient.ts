@@ -6,7 +6,9 @@
  * `entryAdded` and `entryRemoved` (SP5b D20). A saved world's `load` (SP5b spec §3.3, §3.4 step 3) resolves once its
  * `loaded` reply's `entryCols` became the whole entry set, so the read-through sees every saved edit from the first D.
  * `flush` (SP5b spec §3.2) posts the state and history and resolves with the sim's `flushed`, committed or not (a KV
- * failure is a result, not the sim's); `record` posts the world's changed record, which has no reply.
+ * failure is a result, not the sim's); a history that keeps steps of the last one posted goes as its change against it
+ * (`historyChange`, D28's third lever), which the sim resolves to the same record. `record` posts the world's changed
+ * record, which has no reply.
  *
  * **The sim's failure** (§2.1): an `error` event, an `error` reply of any code, or a reply the guard refuses
  * (`parseFromSim`, or one that does not answer a pending request of its kind, its batch's length or its column). In
@@ -21,7 +23,7 @@
  */
 import { colKey } from '../core/coords';
 import type { HistoryRecord, StateRecord, WorldRecord } from '../persist/saves';
-import { parseFromSim, type DiffMsg, type Edit, type EditedMsg, type FlushedMsg, type LoadedMsg, type LoadMsg, type ToSim } from '../workers/protocol';
+import { historyChange, parseFromSim, type DiffMsg, type Edit, type EditedMsg, type FlushedMsg, type LoadedMsg, type LoadMsg, type ToSim } from '../workers/protocol';
 import type { ColumnDiff } from '../world/store/api';
 import { SIM_THREAD } from '../world/store/reclaim';
 import type { StoreHandles } from '../world/store/store';
@@ -85,6 +87,8 @@ export function createSimClient(spawn: () => SimWorkerLike, o: { onFailure(e: Er
   const attaches: AttachWait[] = [];
   const entries = new Set<number>();
   let nextId = 1;
+  /** The history the last `flush` that carried one posted: the next one posts its change against it (D28's third lever). */
+  let historyBase: HistoryRecord | null = null;
   let failed = false;
   /** Failed or disposed: requests settle at once and replies are ignored. */
   let closed = false;
@@ -197,8 +201,10 @@ export function createSimClient(spawn: () => SimWorkerLike, o: { onFailure(e: Er
     flush(state, history) {
       if (closed) return Promise.reject(new SimFailed('the sim failed or was disposed'));
       const id = nextId++;
+      const posted = history === null ? null : historyChange(historyBase, history);
+      if (history !== null) historyBase = history;
       return new Promise<FlushedMsg>((resolve, reject) => {
-        post({ type: 'flush', id, state, history });
+        post({ type: 'flush', id, state, history: posted });
         pending.set(id, { kind: 'flush', resolve, reject });
       });
     },
