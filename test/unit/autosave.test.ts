@@ -1,16 +1,20 @@
 /**
  * The autosave (SP5b spec §3.2, D5, D18): its triggers (the 2,000 ms timer, the hide and close events, `flushNow`,
  * `beforeLeave`), what counts as changed since the last committed flush, the history posted only when its version
- * moved, and the state snapshot through the §2.1 normaliser. On a fake clock whose timers run in time order, fake page
- * events and a fake `flush` whose replies the test settles by hand.
+ * moved, and the state snapshot through the §2.1 normaliser; the state's parts and their versions, built only for a
+ * post, and the page's history records, one object per step (D28's third lever). On a fake clock whose timers run in
+ * time order, fake page events and a fake `flush` whose replies the test settles by hand.
  */
 import { describe, expect, test } from 'vitest';
 import { canonicalJSON } from '../../src/core/params/canonical';
 import { SimFailed } from '../../src/engine/simClient';
-import type { HistoryRecord, HotbarRecord, StateRecord } from '../../src/persist/saves';
-import { AUTOSAVE_MS, createAutosave, LEAVE_WAIT_MS, SETTLE_WAIT_MS, snapshotState, type Autosave } from '../../src/ui/world/autosave';
+import type { HistoryRecord, HotbarRecord, Place, StateRecord } from '../../src/persist/saves';
+import type { FlyState } from '../../src/player/fly';
+import { AUTOSAVE_MS, createAutosave, createStateParts, LEAVE_WAIT_MS, SETTLE_WAIT_MS, snapshotState, type Autosave } from '../../src/ui/world/autosave';
+import type { BlockStep } from '../../src/ui/world/blockHistory';
 import { STATE_BOUNDS } from '../../src/ui/world/stateBounds';
-import type { FlushedMsg } from '../../src/workers/protocol';
+import { createPageAutosave } from '../../src/ui/world/worldPage';
+import { historyChange, type FlushedMsg } from '../../src/workers/protocol';
 
 /** Lets every pending promise continuation run. */
 const drain = (): Promise<void> => new Promise<void>((r) => setImmediate(r));
@@ -62,6 +66,9 @@ interface Post {
 
 const HOTBAR: HotbarRecord = STATE_BOUNDS.normalizeHotbar(null);
 
+/** No places (the parts compare the places by identity). */
+const NO_PLACES: readonly Place[] = [];
+
 /** A saved world's page as the autosave sees it: a pose, an edit count, a block history and its version. */
 function rig() {
   const clock = fakeClock();
@@ -82,6 +89,13 @@ function rig() {
     done: Array.from({ length: page.steps }, (_, i) => ({ edits: [{ x: i, y: 64, z: 0, before: 0xFFFFFFFF, after: 1 << 8 }] })),
     undone: [],
   });
+  const parts = createStateParts({
+    worldId: 'w1',
+    fly: { get x() { return page.x; }, y: 80, z: -3, yaw: 90, pitch: 10, mode: 'fly', speed: 12 },
+    t: () => 0.25, speedIndex: () => 0, hotbar: () => HOTBAR, places: () => NO_PLACES, now: () => 1_000_000 + clock.now(),
+  });
+  /** The state records and the history records the autosave asked for. */
+  const built = { states: 0, histories: 0 };
   const autosave: Autosave = createAutosave({
     clock,
     events: {
@@ -96,21 +110,25 @@ function rig() {
     flush: (state, h) => new Promise<FlushedMsg>((resolve, reject) => {
       posts.push({ at: clock.now(), state, history: h, resolve, reject });
     }),
-    build: () => ({
-      state: snapshotState({
-        worldId: 'w1', fly: { x: page.x, y: 80, z: -3, yaw: 90, pitch: 10, mode: 'fly', speed: 12 },
-        time: { t: 0.25, speedIndex: 0 }, hotbar: HOTBAR, places: [], updated: 1_000_000 + clock.now(),
-      }),
-      history: history(),
-      historyVersion: page.historyVersion,
-    }),
+    state: {
+      version: () => parts.version(),
+      record() {
+        built.states++;
+        return parts.record();
+      },
+    },
+    historyVersion: () => page.historyVersion,
+    history() {
+      built.histories++;
+      return history();
+    },
     settled: () => page.settled(),
     editsSince: () => page.edits,
     onResult: (r) => results.push(r),
   });
   let flushSeq = 0;
   return {
-    clock, posts, results, page, autosave,
+    clock, posts, results, page, autosave, built,
     /** Fires a page event. */
     fire(type: 'visibilitychange' | 'pagehide' | 'beforeunload'): void {
       for (const f of handlers.get(type) ?? []) f();
@@ -135,6 +153,22 @@ describe('autosave (SP5b spec §3.2)', () => {
     const r = rig();
     await r.clock.runTo(6000);
     expect(r.posts).toHaveLength(0);
+    r.autosave.dispose();
+  });
+
+  test('an unchanged tick builds nothing', async () => {
+    const r = rig();
+    await r.clock.runTo(6000);
+    expect([r.posts.length, r.built.states, r.built.histories]).toEqual([0, 0, 0]);
+    // An edit reply alone: the tick builds the state (its parts unmoved: the last record, `updated` now), no history.
+    r.page.edits = 1;
+    await r.clock.runTo(8000);
+    expect([r.posts.length, r.built.states, r.built.histories]).toEqual([1, 1, 0]);
+    expect(r.posts[0]!.state.updated).toBe(1_008_000);
+    expect(r.posts[0]!.history).toBeNull();
+    r.ok(0);
+    await r.clock.runTo(12000);
+    expect([r.posts.length, r.built.states, r.built.histories]).toEqual([1, 1, 0]);
     r.autosave.dispose();
   });
 
@@ -395,5 +429,98 @@ describe('snapshotState (SP5b spec §2.1)', () => {
     const s = snapshotState({ ...base, hotbar });
     expect(s.hotbar).toEqual(hotbar);
     expect(canonicalJSON(s.hotbar)).toBe(canonicalJSON(hotbar));
+  });
+});
+
+describe('createStateParts (SP5b spec §3.2, D28\'s third lever)', () => {
+  /** Mutable sources and the parts over them. */
+  const over = () => {
+    const s = {
+      fly: { x: 10.5, y: 80, z: -3, yaw: 90, pitch: 10, mode: 'walk' as FlyState['mode'], speed: 12 },
+      t: 0.25, speedIndex: 2, hotbar: HOTBAR, places: NO_PLACES, now: 1_700_000_000_000,
+    };
+    const parts = createStateParts({
+      worldId: 'w1', fly: s.fly, t: () => s.t, speedIndex: () => s.speedIndex, hotbar: () => s.hotbar, places: () => s.places, now: () => s.now,
+    });
+    const snapshot = (): StateRecord => snapshotState({
+      worldId: 'w1', fly: s.fly, time: { t: s.t, speedIndex: s.speedIndex }, hotbar: s.hotbar, places: s.places, updated: s.now,
+    });
+    return { s, parts, snapshot };
+  };
+
+  test('the version moves with each part (the pose\'s seven fields, the time\'s two, the hotbar and the places by identity), and with nothing else', () => {
+    const { s, parts } = over();
+    let v = parts.version();
+    const moves = (change: () => void): void => {
+      change();
+      const next = parts.version();
+      expect(next).toBeGreaterThan(v);
+      expect(parts.version()).toBe(next);
+      v = next;
+    };
+    for (const k of ['x', 'y', 'z', 'yaw', 'pitch', 'speed'] as const) moves(() => { s.fly[k] += 1; });
+    moves(() => { s.fly.mode = 'fly'; });
+    moves(() => { s.t = 0.5; });
+    moves(() => { s.speedIndex = 3; });
+    moves(() => { s.hotbar = STATE_BOUNDS.normalizeHotbar(null); });
+    moves(() => { s.places = [{ id: 'p', name: 'Home', colour: 0, x: 1, y: 70, z: 2, yaw: 0, pitch: 0 }]; });
+    moves(() => { s.fly.x = Number.NaN; });
+    // A NaN that stays NaN, and the wall clock, move nothing.
+    s.now += 2000;
+    expect(parts.version()).toBe(v);
+  });
+
+  test('`record()` is `snapshotState` of the sources, rebuilt only when the version moved; else the last record with `updated` now', () => {
+    const { s, parts, snapshot } = over();
+    s.fly.pitch = -0;
+    const a = parts.record();
+    expect(a).toEqual(snapshot());
+    expect(Object.is(a.player?.pitch, 0)).toBe(true);
+    s.now += 2000;
+    const b = parts.record();
+    expect(b).toEqual(snapshot());
+    expect(canonicalJSON(b)).toBe(canonicalJSON(snapshot()));
+    expect([b.player, b.time, b.hotbar, b.places]).toEqual([a.player, a.time, a.hotbar, a.places]);
+    expect(b.player).toBe(a.player);
+    expect(b.updated).toBe(a.updated + 2000);
+    s.t = 0.5;
+    const c = parts.record();
+    expect(c).toEqual(snapshot());
+    expect(c.player).not.toBe(b.player);
+    expect(c.time.t).toBe(0.5);
+  });
+});
+
+describe('the page\'s autosave (`createPageAutosave`; D28\'s third lever)', () => {
+  test('two posts\' history records share the objects of the steps both hold, so the sim client posts their change', async () => {
+    const step = (x: number): BlockStep => ({ edits: [{ x, y: 64, z: 0, before: 0xFFFFFFFF, after: 1 << 8 }] });
+    const done: BlockStep[] = [step(1), step(2)];
+    let version = 1;
+    const posted: Array<HistoryRecord | null> = [];
+    const a = createPageAutosave({
+      worldId: 'w1', fly: { x: 1, y: 80, z: 2, yaw: 0, pitch: 0, mode: 'fly', speed: 12 }, frame: { t: 0.25 }, speedIndex: () => 0,
+      storedTime: null, hotbar: () => HOTBAR,
+      blockHistory: { snapshot: () => ({ done: done.slice(), undone: [] }), get version() { return version; } },
+      sim: {
+        flush(_state, h) {
+          posted.push(h);
+          return Promise.resolve({ type: 'flushed', id: posted.length, ok: true, flushSeq: posted.length, columns: 0, bytes: 0, syncMs: 0, commitMs: 0 });
+        },
+      },
+      settled: () => Promise.resolve(), editsSince: () => 0, now: () => 1_700_000_000_000, clock: fakeClock(),
+      events: { on: () => () => {}, hidden: () => false }, onResult() {},
+    });
+    version = 2;
+    await a.flushNow();
+    done.push(step(3));
+    version = 3;
+    await a.flushNow();
+    const [h1, h2] = posted as [HistoryRecord, HistoryRecord];
+    expect(h2).toEqual({ worldId: 'w1', done: done.map((s) => ({ edits: [...s.edits] })), undone: [] });
+    expect([h2.done[0], h2.done[1]]).toEqual([h1.done[0], h1.done[1]]);
+    expect(h2.done[0]).toBe(h1.done[0]);
+    expect(h2.done[1]).toBe(h1.done[1]);
+    expect(historyChange(h1, h2)).toEqual({ worldId: 'w1', done: { from: 0, keep: 2, add: [h2.done[2]] }, undone: { from: 0, keep: 0, add: [] } });
+    a.dispose();
   });
 });

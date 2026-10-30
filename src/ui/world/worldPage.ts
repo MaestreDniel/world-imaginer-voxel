@@ -174,7 +174,7 @@ import type { FlightContext } from './flight';
 import { createFogEase, createFogStep, filledRadius } from './fogEase';
 import { createFrameClock, createFrameNotice, lowerRd } from './frameNotice';
 import { coversWorld, createApplyControl, createEpochs, updateAuxPolicy } from './applyControl';
-import { LEAVE_WAIT_MS, createAutosave, snapshotState, type Autosave, type AutosaveDeps } from './autosave';
+import { LEAVE_WAIT_MS, createAutosave, createStateParts, type Autosave, type AutosaveDeps } from './autosave';
 import { createEditLatency } from './editLatency';
 import { mountBuildHud } from './buildHud';
 import { createActionPost, createBlockHistory, type BlockHistory, type BlockStep } from './blockHistory';
@@ -1752,12 +1752,13 @@ const stepRecord = (step: BlockStep): HistoryRecord['done'][number] => ({ edits:
 
 /**
  * A saved world's autosave as the page creates it after the reveal (SP5b spec §3.2, D5): `flush` the sim client's;
- * `build` the state through `snapshotState` from the pose (`fly`), the clock (`frame.t`, which the frame step writes,
- * and the day speed's index; `storedTime` unchanged while a `?shot=1&time=` capture fixes the clock, which is then not
- * saved), the world's hotbar record (`hotbarStorage`'s), the places and the wall clock (`now`), with the block
- * history's sides and version (§3.4 step 6); `settled` the edit path's; `editsSince` the accepted replies
- * (`countAccepted`); `onResult` every `flushed`; `onBuild`, when given, as each build starts (the bench's clock of a
- * flush's main-thread work, SP5b spec §6.2).
+ * the state's parts (`createStateParts`) over the pose (`fly`), the clock (`frame.t`, which the frame step writes, and
+ * the day speed's index; `storedTime` unchanged while a `?shot=1&time=` capture fixes the clock, which is then not
+ * saved), the world's hotbar record (`hotbarStorage`'s), the places and the wall clock (`now`); the block history's
+ * version and its sides as a record (§3.4 step 6), one record object per step for as long as the step lives, so the
+ * sim client posts only what changed since the last history (D28's third lever); `settled` the edit path's;
+ * `editsSince` the accepted replies (`countAccepted`); `onResult` every `flushed`; `onBuild`, when given, as each
+ * post's work starts (the bench's clock of a flush's main-thread work, SP5b spec §6.2).
  */
 export function createPageAutosave(o: {
   readonly worldId: string;
@@ -1779,29 +1780,35 @@ export function createPageAutosave(o: {
   onResult(r: FlushedMsg): void;
   onBuild?(): void;
 }): Autosave {
+  const records = new WeakMap<BlockStep, HistoryRecord['done'][number]>();
+  const recordOf = (step: BlockStep): HistoryRecord['done'][number] => {
+    let r = records.get(step);
+    if (r === undefined) records.set(step, (r = stepRecord(step)));
+    return r;
+  };
+  const { storedTime } = o;
   return createAutosave({
     clock: o.clock,
     events: o.events,
     flush: (state, h) => o.sim.flush(state, h),
-    build: () => {
-      o.onBuild?.();
+    state: createStateParts({
+      worldId: o.worldId,
+      fly: o.fly,
+      t: () => (storedTime !== null ? storedTime.t : o.frame.t),
+      speedIndex: () => (storedTime !== null ? storedTime.speedIndex : o.speedIndex()),
+      hotbar: () => o.hotbar(),
+      places: () => NO_PLACES,
+      now: () => o.now(),
+    }),
+    historyVersion: () => o.blockHistory.version,
+    history: () => {
       const steps = o.blockHistory.snapshot();
-      return {
-        state: snapshotState({
-          worldId: o.worldId,
-          fly: o.fly,
-          time: o.storedTime ?? { t: o.frame.t, speedIndex: o.speedIndex() },
-          hotbar: o.hotbar(),
-          places: NO_PLACES,
-          updated: o.now(),
-        }),
-        history: { worldId: o.worldId, done: steps.done.map(stepRecord), undone: steps.undone.map(stepRecord) },
-        historyVersion: o.blockHistory.version,
-      };
+      return { worldId: o.worldId, done: steps.done.map(recordOf), undone: steps.undone.map(recordOf) };
     },
     settled: () => o.settled(),
     editsSince: () => o.editsSince(),
     onResult: (r) => o.onResult(r),
+    onBuild: o.onBuild,
   });
 }
 

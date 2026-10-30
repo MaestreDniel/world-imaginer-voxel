@@ -5,21 +5,22 @@
  *   hidden, `pagehide` and `beforeunload`; `flushNow` (a failure after the reveal, the bench, the test hook); and
  *   `beforeLeave` before every navigation the page starts, which posts and waits for `flushed` at most 1,000 ms.
  * - **Changed** since the last committed flush: an edit reply (`editsSince()` above the count that flush captured), the
- *   state (its canonical JSON without `updated` and `flushSeq`), the history's version, a `markChanged()` (a pending
- *   `record`, a place) or a failed flush. A post captures the four; its `flushed` ok commits only what it captured, so
- *   what arrives while it is in flight still counts for the next tick. A failed flush keeps "changed", so every later
- *   tick and trigger posts again.
+ *   state's parts (`createStateParts`' version: the pose, the time, the hotbar, the places), the history's version, a
+ *   `markChanged()` (a pending `record`, a place) or a failed flush. A post captures the four; its `flushed` ok commits
+ *   only what it captured, so what arrives while it is in flight still counts for the next tick. A failed flush keeps
+ *   "changed", so every later tick and trigger posts again. The check reads versions and counts only (D28's third
+ *   lever): an unchanged tick builds nothing.
  * - The timer's tick posts only when something changed; it first waits for the edit path to settle (`settled()`), at
  *   most 1,000 ms, then builds the state and the history in the same task, so a flushed edit's step is in the same
  *   flush. The hide and close triggers post at once when something changed; `flushNow` and `beforeLeave` always post.
- *   The history is posted only when its version differs from the last committed one, else null.
+ *   The state is rebuilt only when a part moved (else the last record with `updated` now); the history is built and
+ *   posted only when its version differs from the last committed one, else null.
  * - `pause(true)` stops the timer's posts (the bench's L1-L10 and L11's "off" parts), never `flushNow`'s. A `closed`
  *   result (the browser closed the connection, D14) stops the timer and the hide and close triggers; a `flush` that
  *   rejects `SimFailed` (the sim is gone) counts as not saved, reaches no notice, and stops every post.
  *
  * The state is built at a post, never per frame (SP4b D25: the frame step allocates nothing at rest).
  */
-import { canonicalJSON } from '../../core/params/canonical';
 import { SimFailed } from '../../engine/simClient';
 import { normalizeState, type HistoryRecord, type HotbarRecord, type Place, type StateRecord } from '../../persist/saves';
 import type { FlyState } from '../../player/fly';
@@ -54,6 +55,83 @@ export function snapshotState(o: {
   return normalizeState(raw, o.worldId, STATE_BOUNDS).state;
 }
 
+/** The state's sources as the page holds them, read field by field, so a version check allocates nothing. */
+export interface StateSources {
+  readonly worldId: string;
+  readonly fly: Pick<FlyState, 'x' | 'y' | 'z' | 'yaw' | 'pitch' | 'mode' | 'speed'>;
+  /** The time of day and the day speed's index, as saved. */
+  t(): number;
+  speedIndex(): number;
+  /** The hotbar's record and the places: each replaced when it changes, never changed in place (compared by identity). */
+  hotbar(): HotbarRecord;
+  places(): readonly Place[];
+  /** The wall clock (`Date.now()`), the state's `updated`. */
+  now(): number;
+}
+
+/** The state's parts (D28's third lever): their version, and the record rebuilt only when it moved. */
+export interface StateParts {
+  /**
+   * Moved by a change of a part since the last call: the pose (x, y, z, yaw, pitch, mode, speed), the time (t, the day
+   * speed's index), the hotbar or the places; never by `updated`. A NaN that stays NaN moves nothing.
+   */
+  version(): number;
+  /** `snapshotState` of the sources, rebuilt only when `version()` moved since the last build; else that one, `updated` now. */
+  record(): StateRecord;
+}
+
+/** The state's parts over `src`, each with its own version (pose, time, hotbar, places). */
+export function createStateParts(src: StateSources): StateParts {
+  /** The numbers last read: the pose's x, y, z, yaw, pitch and speed, then the time's t and day speed's index. */
+  const seen = new Float64Array(8);
+  let mode: string | null = null;
+  let hotbar: HotbarRecord | null = null;
+  let places: readonly Place[] | null = null;
+  let pose = 0;
+  let time = 0;
+  let hotbars = 0;
+  let placeLists = 0;
+  let first = true;
+  let built: StateRecord | null = null;
+  let builtVersion = 0;
+  /** 1 when `v` differs from the seen number `i` (which it becomes), else 0. */
+  const moved = (i: number, v: number): number => {
+    if (Object.is(seen[i], v)) return 0;
+    seen[i] = v;
+    return 1;
+  };
+  const version = (): number => {
+    const f = src.fly;
+    const p = moved(0, f.x) + moved(1, f.y) + moved(2, f.z) + moved(3, f.yaw) + moved(4, f.pitch) + moved(5, f.speed) + (f.mode !== mode ? 1 : 0);
+    mode = f.mode;
+    const t = moved(6, src.t()) + moved(7, src.speedIndex());
+    const h = src.hotbar();
+    const pl = src.places();
+    if (!first) {
+      if (p > 0) pose++;
+      if (t > 0) time++;
+      if (h !== hotbar) hotbars++;
+      if (pl !== places) placeLists++;
+    }
+    first = false;
+    hotbar = h;
+    places = pl;
+    return pose + time + hotbars + placeLists;
+  };
+  return {
+    version,
+    record() {
+      const v = version();
+      const updated = src.now();
+      if (built !== null && v === builtVersion && Number.isFinite(updated) && updated > 0) return (built = { ...built, updated });
+      const { worldId, fly } = src;
+      built = snapshotState({ worldId, fly, time: { t: src.t(), speedIndex: src.speedIndex() }, hotbar: src.hotbar(), places: src.places(), updated });
+      builtVersion = v;
+      return built;
+    },
+  };
+}
+
 export interface AutosaveDeps {
   clock: {
     now(): number;
@@ -66,14 +144,23 @@ export interface AutosaveDeps {
   events: { on(type: 'visibilitychange' | 'pagehide' | 'beforeunload', f: () => void): () => void; hidden(): boolean };
   /** The sim client's `flush`: resolves with `flushed`, ok or not; rejects `SimFailed` when the sim is gone. */
   flush(state: StateRecord, history: HistoryRecord | null): Promise<FlushedMsg>;
-  /** The state (`snapshotState`), the block history's record and its version (moved by every recorded step, undo, redo). */
-  build(): { state: StateRecord; history: HistoryRecord; historyVersion: number };
+  /** The state's parts (`createStateParts`): read at every check, the record built only for a post. */
+  readonly state: StateParts;
+  /** The block history's version (moved by every recorded step, undo, redo). */
+  historyVersion(): number;
+  /** The block history's record: built only for a post whose history version differs from the last committed one. */
+  history(): HistoryRecord;
   /** The edit path's wait for every pending reply to be recorded. */
   settled(): Promise<void>;
   /** The edit replies counted since the page opened (a running count, never reset: the autosave keeps its baseline). */
   editsSince(): number;
   /** Every `flushed` (the storage notices, Task 29); never called for a `SimFailed`. */
   onResult(r: FlushedMsg): void;
+  /**
+   * When given, as the work for a post starts: a tick's or a trigger's change check, or `flushNow`'s and `beforeLeave`'s
+   * build (the bench's clock of a flush's main-thread work, SP5b spec §6.2).
+   */
+  onBuild?(): void;
 }
 
 export interface Autosave {
@@ -97,13 +184,8 @@ interface Capture {
   readonly edits: number;
   readonly marks: number;
   readonly historyVersion: number;
-  readonly stateKey: string;
+  readonly stateVersion: number;
 }
-
-type Built = ReturnType<AutosaveDeps['build']>;
-
-/** The state's canonical JSON without what every build changes (`updated`) or the sim sets (`flushSeq`). */
-const stateKeyOf = (s: StateRecord): string => canonicalJSON({ ...s, updated: 0, flushSeq: 0 });
 
 export function createAutosave(o: AutosaveDeps): Autosave {
   let marks = 0;
@@ -117,9 +199,8 @@ export function createAutosave(o: AutosaveDeps): Autosave {
   let failedSeq = 0;
   let ticking: Promise<void> | null = null;
 
-  const opened = o.build();
   /** What the last committed flush captured; at the open, the world as opened. */
-  let committed: Capture = { seq: 0, edits: o.editsSince(), marks: 0, historyVersion: opened.historyVersion, stateKey: stateKeyOf(opened.state) };
+  let committed: Capture = { seq: 0, edits: o.editsSince(), marks: 0, historyVersion: o.historyVersion(), stateVersion: o.state.version() };
 
   const timer = o.clock.setInterval(() => { void tick(); }, AUTOSAVE_MS);
   let timerOn = true;
@@ -128,14 +209,16 @@ export function createAutosave(o: AutosaveDeps): Autosave {
     timerOn = false;
   };
 
-  const changed = (b: Built): boolean =>
+  const changed = (): boolean =>
     failedSeq > committed.seq || o.editsSince() !== committed.edits || marks !== committed.marks
-    || b.historyVersion !== committed.historyVersion || stateKeyOf(b.state) !== committed.stateKey;
+    || o.historyVersion() !== committed.historyVersion || o.state.version() !== committed.stateVersion;
 
-  const post = (b: Built = o.build()): Promise<FlushedMsg | null> => {
-    const cap: Capture = { seq: ++seq, edits: o.editsSince(), marks, historyVersion: b.historyVersion, stateKey: stateKeyOf(b.state) };
-    const history = b.historyVersion !== committed.historyVersion ? b.history : null;
-    return o.flush(b.state, history).then((r) => {
+  /** Builds the state, and the history when its version moved since the last committed flush, and posts them. */
+  const post = (): Promise<FlushedMsg | null> => {
+    const cap: Capture = { seq: ++seq, edits: o.editsSince(), marks, historyVersion: o.historyVersion(), stateVersion: o.state.version() };
+    const state = o.state.record();
+    const history = cap.historyVersion !== committed.historyVersion ? o.history() : null;
+    return o.flush(state, history).then((r) => {
       if (r.ok) {
         if (cap.seq > committed.seq) committed = cap;
       } else {
@@ -158,8 +241,8 @@ export function createAutosave(o: AutosaveDeps): Autosave {
   /** Posts at once when something changed (the hide and close triggers). */
   const postIfChanged = (): void => {
     if (gone || stopped) return;
-    const b = o.build();
-    if (changed(b)) void post(b);
+    o.onBuild?.();
+    if (changed()) void post();
   };
 
   /** Resolves when `settled()` does or after `SETTLE_WAIT_MS`, whichever comes first. */
@@ -177,8 +260,8 @@ export function createAutosave(o: AutosaveDeps): Autosave {
     ticking ??= settledOrWait().then(() => {
       ticking = null;
       if (paused || gone || stopped) return;
-      const b = o.build();
-      if (changed(b)) void post(b);
+      o.onBuild?.();
+      if (changed()) void post();
     });
     return ticking;
   };
@@ -191,11 +274,16 @@ export function createAutosave(o: AutosaveDeps): Autosave {
 
   return {
     tick,
-    flushNow: () => (gone ? Promise.resolve(null) : post()),
+    flushNow() {
+      if (gone) return Promise.resolve(null);
+      o.onBuild?.();
+      return post();
+    },
     beforeLeave(ms = LEAVE_WAIT_MS) {
       if (gone) return Promise.resolve();
       return new Promise<void>((resolve) => {
         const id = o.clock.setTimeout(resolve, ms);
+        o.onBuild?.();
         void post().finally(() => {
           o.clock.clearTimeout(id);
           resolve();
