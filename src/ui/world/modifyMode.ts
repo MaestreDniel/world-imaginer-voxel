@@ -14,8 +14,9 @@
  *   made meanwhile supersedes the held draft (the control keeps only the latest configure), and the draft held when the
  *   copy commits applies with that one copy;
  * - a terrain change with the mode on, the latch clear and the world holding any placed or removed block
- *   (`sim.hasAnyEntries()`) posts `backup` (the page's kept record as the copy, named by `backupName` among every world's
- *   names, the state and whole history built now, a new id), sets the latch and is held until `backedUp`;
+ *   (`sim.hasAnyEntries()`) sets the latch, reads every world's name and then posts `backup` (the page's kept record as
+ *   the copy, named by `backupName` among those names, the state and whole history built at the post, a new id), and is
+ *   held until `backedUp`;
  * - anything else applies (`from` null, 'L' or 'MESH', the mode off, the latch set, no entries: a change with no entries
  *   leaves the latch clear).
  * On `ok` the held change applies at the next tick and "Backup saved as '<name>'" shows for 6 s; a revert to the applied
@@ -112,11 +113,12 @@ export function createModifyMode(o: {
   o.session.setWritable(false);
   const b = o.backup;
 
-  /** Posts the copy of the world as it is now (the kept record, the state and history built now) and holds the change. */
+  /**
+   * Holds the change, reads every world's name, then posts the copy of the world as it is then (D26): the kept record, the
+   * state and history built, the new id and the post in one synchronous continuation, so an autosave flush posted while
+   * the names were read reaches the sim first and the copy (with the original's pending flush) is never older than it.
+   */
   const startBackup = (): void => {
-    const kept = b.kept();
-    const { state, history } = b.build();
-    const newId = b.newId();
     writing = true;
     holding = true;
     latchedIn = sessionCount;
@@ -136,11 +138,14 @@ export function createModifyMode(o: {
       b.notices.show(`Could not save a backup copy (${failure}): the terrain change was cancelled`, { kind: 'warn' });
     };
     b.names().catch((): readonly string[] => []).then((names) => {
+      const kept = b.kept();
+      const { state, history } = b.build();
+      const newId = b.newId();
       name = backupName(kept.name, names);
       return b.sim.backup({ newWorld: { ...kept, id: newId, name, backupOf: kept.id }, newId, state, history });
     }).then(
       (r) => settle(r.ok ? null : backupFailureReason(r.error ?? 'AbortError')),
-      // The sim failed: its own notice shows; nothing was copied, so the change does not happen.
+      // The sim failed (its own notice shows) or the copy could not be built: nothing was copied, so the change does not happen.
       () => settle('the world stopped saving'),
     );
   };

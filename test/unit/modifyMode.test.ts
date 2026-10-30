@@ -182,7 +182,10 @@ const SECOND = 'My world (before the change 2)';
  * the names the KV holds. The page's kept record and applied snapshot follow `onApplied` (`appliedRecord`), as the
  * page's do. `start` is the clock's first time.
  */
-function backupRig(o: { entries?: boolean; writeMs?: number; fail?: string | null; start?: number; kept?: (s: SessionState) => WorldRecord } = {}) {
+function backupRig(o: {
+  entries?: boolean; writeMs?: number; fail?: string | null; start?: number; kept?: (s: SessionState) => WorldRecord;
+  names?: BackupDeps['names']; build?: BackupDeps['build'];
+} = {}) {
   installDom();
   const session = new WorldSession(() => [1, 2], { seedText: '42', validateParams: validateParamTrees });
   const sw = createModifySwitch();
@@ -209,9 +212,9 @@ function backupRig(o: { entries?: boolean; writeMs?: number; fail?: string | nul
     },
     kept: () => kept,
     applied: () => applied,
-    build: () => ({ state: STATE, history: HISTORY }),
+    build: o.build ?? (() => ({ state: STATE, history: HISTORY })),
     newId: () => `copy-${++ids}`,
-    names: () => Promise.resolve([...names]),
+    names: o.names ?? (() => Promise.resolve([...names])),
     notices: { show: (text, opts) => { shown.push({ text, kind: opts?.kind, timeoutMs: opts?.timeoutMs }); } },
   };
   const mode = createModifyMode({ session, tool: () => null, checkbox: sw.checkbox, backup: deps });
@@ -281,6 +284,34 @@ describe('the automatic backup: `beforeApply` (SP5b spec §3.6, D11, D26)', () =
     expect(r.calls).toEqual(['T']);
     expect(r.shown).toEqual([{ text: `Backup saved as '${FIRST}'`, kind: 'info', timeoutMs: 6000 }]);
     expect([r.copies.length, r.kept.params]).toEqual([1, r.session.state.params]);
+  });
+
+  test('the copy\'s state and history are built when it is posted, after the names are read: an autosave flush posted meanwhile reaches the sim first and holds nothing newer than the copy (D26)', async () => {
+    let release: ((names: readonly string[]) => void) | null = null;
+    // The autosave's state and history now: a placed block adds a step and moves `updated`.
+    let live = { state: STATE, history: HISTORY };
+    const r = backupRig({
+      writeMs: 300,
+      names: () => new Promise((resolve) => { release = resolve; }),
+      build: () => live,
+    });
+    r.mode.set(true);
+    r.session.set('climate.scaleMul', 2);
+    r.emit();
+    await r.to(200);
+    // The change is held while every world's name is read; nothing is posted yet.
+    expect([r.calls, r.copies, release === null]).toEqual([[], [], false]);
+    // Meanwhile the player places a block and the autosave's tick posts a flush with it: it reaches the sim first.
+    const step = { edits: [{ x: 3, y: 71, z: 4, before: 0xFFFFFFFF, after: 2 << 8 }] };
+    live = { state: { ...STATE, updated: STATE.updated + 1 }, history: { ...HISTORY, done: [...HISTORY.done, step] } };
+    const flushed = live;
+    expect(r.copies).toEqual([]);
+    release!(['My world']);
+    await r.to(210);
+    // The copy, posted after that flush, carries its state and history: the original's pending flush does not go back.
+    expect(r.copies).toEqual([{ newWorld: { ...r.kept, id: 'copy-1', name: FIRST, backupOf: 'w1' }, newId: 'copy-1', ...flushed }]);
+    await r.to(600);
+    expect([r.calls, texts(r)]).toEqual([['T'], [`Backup saved as '${FIRST}'`]]);
   });
 
   test('after an older-generator open, the backup\'s `newWorld` carries today\'s genKey (the kept record); the open itself posts no backup', async () => {
