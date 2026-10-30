@@ -1437,6 +1437,14 @@ describe('master spec amendments (SP5b §9)', () => {
     expect(lines).toContain('- **Flush:** every 2 s, and on `visibilitychange` / `pagehide`, the sim worker writes all dirty diffs plus the `state` record (player, time, hotbar, places, `flushSeq`) and, when changed, the `history` record, in **one readwrite transaction**. Commit is confirmed by `oncomplete`, so at most 2 s of edits can be lost. `navigator.storage.persist()` is requested once.');
   });
 
+  test('§4.17 restores the player\'s mode, position, yaw, pitch and flying speed per saved world, after Keys (SP5b spec D4, §3.4 step 5, §9)', () => {
+    const at = text.indexOf('### 4.17 Player');
+    const lines = text.slice(at, text.indexOf('### 4.18 ', at)).split('\n');
+    const restored = lines.indexOf('- **Restored per saved world** (SP5b): the player\'s mode, position, yaw, pitch and flying speed.');
+    expect(restored, 'no "Restored per saved world" bullet in §4.17').toBeGreaterThan(-1);
+    expect(lines[restored - 1]).toBe('- **Keys:** cleared on blur, and ignored while focus is in a text input.');
+  });
+
   test('§1 names each SP5b module in its entry, which exists', () => {
     expect(SP5B_MODULES.length, 'SP5B_MODULES has no rows').toBeGreaterThan(0);
     for (const [head, token, file] of SP5B_MODULES) {

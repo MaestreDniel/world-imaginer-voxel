@@ -46,11 +46,12 @@ import { genKey, stageHashes } from '../../src/core/stage/hash';
 import type { KV } from '../../src/persist/kv';
 import { createMemoryKV, type MemoryKV } from '../../src/persist/memory';
 import {
-  createSaves, loadParams, newState, NO_VALUE, parseWorldRecord, todayStateTable, type HistoryRecord, type WorldRecord,
+  createSaves, loadParams, newState, NO_VALUE, parseWorldRecord, todayStateTable, type HistoryRecord, type StateRecord, type WorldRecord,
 } from '../../src/persist/saves';
 import {
-  HISTORY_RESET_NOTICE, STATE_RESET_NOTICE, openRequest, openSavedWorld, readSavedWorld,
+  HISTORY_RESET_NOTICE, STATE_RESET_NOTICE, openRequest, openSavedWorld, readSavedWorld, restoreMode, restoredStart, timeOfHours,
 } from '../../src/ui/world/worldPage';
+import { parseWorldQuery } from '../../src/ui/world/query';
 import { STATE_BOUNDS } from '../../src/ui/world/stateBounds';
 import { installDom, type FakeElement } from './fixtures/domShim';
 import { densityTree } from './fixtures/editedTrees';
@@ -1934,8 +1935,8 @@ describe('modes in the page: F, the near plane, the reach, the wheel and + / −
     expect(src()).toMatch(/walk: \(on\) => benchWalk\(\{ fly, walk, world, repeat: NO_REPEAT \}, on\),/);
   });
 
-  test('a load opens in flight: the page\'s camera starts with `mode: \'fly\'` and a fresh walk state (D1: the mode is not remembered)', () => {
-    expect(src()).toMatch(/const fly: FlyState = \{ x: at\.x, y: clamp\(view\.y, Y_MIN, Y_MAX\), z: at\.z, yaw: view\.yaw, pitch: view\.pitch, vx: 0, vy: 0, vz: 0, speed: SPEED_DEFAULT, mode: 'fly' \};\s+const walk = createWalkState\(\);/);
+  test('a load opens in flight: the page\'s camera starts with `mode: \'fly\'` and a fresh walk state (D1: an unsaved world\'s mode is not remembered; a saved world\'s speed is, its walk applied after the reveal, SP5b spec §3.4 step 5)', () => {
+    expect(src()).toMatch(/const fly: FlyState = \{ x: at\.x, y: clamp\(view\.y, Y_MIN, Y_MAX\), z: at\.z, yaw: view\.yaw, pitch: view\.pitch, vx: 0, vy: 0, vz: 0, speed: restored\?\.speed \?\? SPEED_DEFAULT, mode: 'fly' \};\s+const walk = createWalkState\(\);/);
     // Both frame steps (the streaming route's and the bench's) get the page's walk state.
     expect(src().match(/createFrameStep\(\{\s+fly,\s+walk,/g)).toHaveLength(2);
   });
@@ -2191,6 +2192,73 @@ describe('opening a saved world (SP5b spec §3.4 steps 2-3, D14, D22)', () => {
     const other = openRequest('db', record({ stateTable: permuted() }), state, history);
     expect(other.load.rewrite).toEqual({ world: record(), history });
     expect(other.load).toMatchObject({ db: 'db', worldId: ID, flushSeq: 2, updated: 5, genKey: key, stateTable: permuted() });
+  });
+});
+
+describe('restoring the player in a saved world: pose, mode, flying speed, time (SP5b spec §3.4 step 5, D4)', () => {
+  const ID = 'w1';
+  const query = (s: string) => parseWorldQuery(new URLSearchParams(s));
+  const player = { x: 100.5, y: 80.25, z: -40.75, yaw: 90, pitch: -20, mode: 'walk' as const, speed: 30 };
+  const withPlayer = (): StateRecord => ({ ...newState(ID, STATE_BOUNDS), player: { ...player } });
+
+  test('player `{x: 100.5, y: 80.25, z: -40.75, yaw: 90, pitch: -20, mode: \'walk\', speed: 30}` → centre (100.5, −40.75), view `{y: 80.25, yaw: 90, pitch: -20}`, speed 30, walk true', () => {
+    const s = restoredStart(withPlayer(), query(`world=${ID}`), null);
+    expect(s.centre).toEqual({ x: 100.5, z: -40.75 });
+    expect(s.view).toEqual({ y: 80.25, yaw: 90, pitch: -20 });
+    expect([s.speed, s.walk]).toEqual([30, true]);
+    // Flying when left flying.
+    expect(restoredStart({ ...withPlayer(), player: { ...player, mode: 'fly' } }, query(`world=${ID}`), null).walk).toBe(false);
+  });
+
+  test('`?at=1,2&y=5&yaw=10&pitch=3` beside `?world` is ignored', () => {
+    const q = query(`world=${ID}&at=1,2&y=5&yaw=10&pitch=3`);
+    expect([q.at, q.y, q.yaw, q.pitch]).toEqual([{ x: 1, z: 2 }, 5, 10, 3]);
+    expect(restoredStart(withPlayer(), q, null)).toEqual(restoredStart(withPlayer(), query(`world=${ID}`), null));
+    // With no saved pose: the spawn search and `firstView`'s own choices, not the query's.
+    const fresh = restoredStart(newState(ID, STATE_BOUNDS), q, null);
+    expect(fresh.centre).toBeNull();
+    expect(fresh.view).toEqual({ y: null, yaw: null, pitch: null });
+  });
+
+  test('`player: null` → centre null, speed 12, flying, `t` 1/12, `speedIndex` 0', () => {
+    const s = restoredStart(newState(ID, STATE_BOUNDS), query(`world=${ID}`), null);
+    expect(s).toEqual({ centre: null, view: { y: null, yaw: null, pitch: null }, speed: 12, t: 1 / 12, speedIndex: 0, walk: false, saveClock: true });
+    expect(s.speed).toBe(SPEED_DEFAULT);
+  });
+
+  test('`time {t: 0.5, speedIndex: 2}` → 0.5 and 2', () => {
+    const s = restoredStart({ ...withPlayer(), time: { t: 0.5, speedIndex: 2 } }, query(`world=${ID}`), null);
+    expect([s.t, s.speedIndex, s.saveClock]).toEqual([0.5, 2, true]);
+  });
+
+  test('a `?shot=1&time=12` capture (`fixedT` 0.25): `t` 0.25, `saveClock` false', () => {
+    const q = query(`world=${ID}&shot=1&time=12`);
+    expect([q.shot, q.time]).toEqual([true, 12]);
+    const fixedT = timeOfHours(q.time!);
+    expect(fixedT).toBe(0.25);
+    const s = restoredStart({ ...withPlayer(), time: { t: 0.5, speedIndex: 2 } }, q, fixedT);
+    expect([s.t, s.saveClock]).toEqual([0.25, false]);
+    // The stored speed index is still restored; under `fixedT` the clock does not run (`timeSpeed` is 0).
+    expect(s.speedIndex).toBe(2);
+  });
+
+  test('the page\'s helper that applies `walk` after the reveal calls `switchMode` exactly once', () => {
+    const fake = vi.fn();
+    restoreMode(restoredStart(withPlayer(), query(`world=${ID}`), null), fake);
+    expect(fake).toHaveBeenCalledTimes(1);
+    const flying = vi.fn();
+    restoreMode(restoredStart(newState(ID, STATE_BOUNDS), query(`world=${ID}`), null), flying);
+    expect(flying).not.toHaveBeenCalled();
+    // Through F's path: the feet at the saved eye − EYE, with no snap (the pose exactly as left).
+    const fly: FlyState = { x: player.x, y: player.y, z: player.z, yaw: player.yaw, pitch: player.pitch, vx: 0, vy: 0, vz: 0, speed: player.speed, mode: 'fly' };
+    const walk = createWalkState();
+    const near: number[] = [];
+    restoreMode({ walk: true }, () => switchMode({ fly, walk, world: { setNear: (n) => { near.push(n); } }, repeat: { stop() {} } }));
+    expect([fly.mode, walk.x, walk.y, walk.z, walk.snapPending, near]).toEqual(['walk', 100.5, 80.25 - EYE, -40.75, false, [NEAR_WALK]]);
+    // The page applies it once, in the streaming route, after the hold repeat exists.
+    const src = readFileSync(new URL('../../src/ui/world/worldPage.ts', import.meta.url), 'utf8');
+    expect(src.match(/restoreMode\(/g)).toHaveLength(2);
+    expect(src).toMatch(/if \(restored !== null\) restoreMode\(restored, \(\) => switchMode\(\{ fly, walk, world, repeat: holdRepeat \}\)\);/);
   });
 });
 

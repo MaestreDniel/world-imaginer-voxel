@@ -17,7 +17,8 @@ import { EYE, setFeet, type WalkState } from './walk';
 
 /**
  * The camera, flying or walking (SP5a spec §3.1, D1): `y` is the eye in both modes; walking, the walk step writes the
- * drawn eye into `x`, `y` and `z`. `mode` is `'fly'` at the reveal and after every load (it is not remembered).
+ * drawn eye into `x`, `y` and `z`. `mode` is `'fly'` at the reveal. An unsaved world opens in flight after every load
+ * (its mode is not remembered); a saved world restores its mode, F's path once after the reveal (SP5b spec §3.4 step 5).
  */
 export interface FlyState {
   x: number; y: number; z: number; yaw: number; pitch: number; vx: number; vy: number; vz: number; speed: number;

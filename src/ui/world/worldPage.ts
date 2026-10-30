@@ -13,15 +13,16 @@
  *    goes on), the settings, and the one render distance (`resolveRenderDistance`, P36). The store
  *    (`createStore({shared: true})` with the accepted reservation), the pool (`?workers` or clamp(cores − 2, 2, 6)),
  *    `attachStore`, then `configure` with the session's seed text and params.
- * 4. The centre is `?at`, else the pool's `spawn`. The world renderer (the section renderer the probe selects,
- *    `?renderer` overriding it; its first floating origin the snapped centre, SP4b spec §3.4) holds its reveals
- *    (`holdReveals(true)`). The first entry runs on the streaming coordinator (SP4b spec §3.11, D21), strict (any
- *    error stops the load, D12) and keeping every proto (D11): a rAF loop calls its `update` with the camera held at
- *    the centre, its sink stages each payload into the section renderer, and the loop pumps the uploads under a 12 ms
- *    budget with no row or structural cap and feeds the loading screen's progress from the coordinator's counts and
- *    the columns uploaded.
+ * 4. The centre is `?at` (in a saved world its saved x, z, `?at` ignored: `restoredStart`), else the pool's `spawn`.
+ *    The world renderer (the section renderer the probe selects, `?renderer` overriding it; its first floating origin
+ *    the snapped centre, SP4b spec §3.4) holds its reveals (`holdReveals(true)`). The first entry runs on the streaming
+ *    coordinator (SP4b spec §3.11, D21), strict (any error stops the load, D12) and keeping every proto (D11): a rAF
+ *    loop calls its `update` with the camera held at the centre, its sink stages each payload into the section
+ *    renderer, and the loop pumps the uploads under a 12 ms budget with no row or structural cap and feeds the loading
+ *    screen's progress from the coordinator's counts and the columns uploaded.
  * 5. When every column is meshed (`firstFill`) and every staged column uploaded: `compile()`, the camera placed with
- *    `firstView` from the store's `MOTION_BLOCKING` (`heightAt`), three frames rendered behind the opaque overlay
+ *    `firstView` from the store's `MOTION_BLOCKING` (`heightAt`; a saved world's y, yaw and pitch, flying speed and
+ *    time restored, its walk after the reveal: SP5b spec §3.4 step 5), three frames rendered behind the opaque overlay
  *    (`warmUp`: every region drawn unculled, so the sections' buffers reach the GPU while still hidden), then
  *    `revealAll()` and the reveal frame, the overlay faded out over 300 ms, and "Click to fly" until the pointer locks.
  *    Nothing of the world is visible before that frame.
@@ -1563,6 +1564,48 @@ export async function openSavedWorld(o: {
   return { ok: true, opened: { kv, session, state: read.state, history: read.history, notices: read.notices, load, kept } };
 }
 
+/** Where and how a saved world opens (SP5b spec §3.4 step 5): the page's start, from the world's `state` record. */
+export interface RestoredStart {
+  /** The load's centre, or null for the pool's spawn search. */
+  centre: { x: number; z: number } | null;
+  /** `firstView`'s query slot: the saved eye y, yaw and pitch, or nulls for its own choices. */
+  view: { y: number | null; yaw: number | null; pitch: number | null };
+  /** The FlyState's speed. */
+  speed: number;
+  /** The clock's t and day speed index. */
+  t: number;
+  speedIndex: number;
+  /** True when the player was left walking: `switchMode` once after the reveal (`restoreMode`). */
+  walk: boolean;
+  /** False while a `?shot=1&time=` capture fixes the clock: the stored time is kept, not overwritten. */
+  saveClock: boolean;
+}
+
+/**
+ * A saved world's start (SP5b spec §3.4 step 5, D4): with `state.player`, its x, z the centre (no spawn search), its y,
+ * yaw and pitch `firstView`'s query slot, its speed and mode; with `player: null` (a new world's first Play), the
+ * spawn search, `firstView`'s own choices, `SPEED_DEFAULT` and flight. The clock is `state.time` unless `fixedT` (a
+ * `?shot=1&time=` capture's) is not null, which wins and leaves the stored time unsaved. `q`'s `at`, `y`, `yaw` and
+ * `pitch` are ignored beside `?world`: the saved pose wins.
+ */
+export function restoredStart(state: StateRecord, q: WorldQuery, fixedT: number | null): RestoredStart {
+  const p = state.player;
+  return {
+    centre: p === null ? null : { x: p.x, z: p.z },
+    view: p === null ? { y: null, yaw: null, pitch: null } : { y: p.y, yaw: p.yaw, pitch: p.pitch },
+    speed: p === null ? SPEED_DEFAULT : p.speed,
+    t: fixedT ?? state.time.t,
+    speedIndex: state.time.speedIndex,
+    walk: p !== null && p.mode === 'walk',
+    saveClock: fixedT === null,
+  };
+}
+
+/** After a saved world's reveal (SP5b spec §3.4 step 5): a player left walking walks again, through F's `switchMode`. */
+export function restoreMode(start: Pick<RestoredStart, 'walk'>, switchMode: () => void): void {
+  if (start.walk) switchMode();
+}
+
 /**
  * Mounts the world page in `root` (replacing what it holds) and resolves once it settles: revealed, or failed with the
  * failure panel or the error screen showing. It never rejects for a load error; the page shows it.
@@ -1692,6 +1735,10 @@ export function mountWorldPage(root: HTMLElement, q: WorldQuery, hash: string, o
     // loads nothing (ruling P5).
     let saved: SavedOpen | null = null;
     let decoded: MapState | null = null;
+    // A `?shot=1&time=` capture's fixed clock (ruling P48), in a saved world too, where the clock is then not saved.
+    const fixedT = opts.timeHours === undefined || opts.timeHours === null ? null : timeOfHours(opts.timeHours);
+    // A saved world's pose, mode, flying speed and time (SP5b spec §3.4 step 5, D4); null for an unsaved world.
+    let restored: RestoredStart | null = null;
     if (q.world !== null) {
       const r = await openSavedWorld({ open: () => openIdbKV(SAVES_DB), db: SAVES_DB, id: q.world, bounds: STATE_BOUNDS, random: cryptoSeed });
       if (state !== 'loading') {
@@ -1705,6 +1752,9 @@ export function mountWorldPage(root: HTMLElement, q: WorldQuery, hash: string, o
       saved = r.opened;
       const kv = saved.kv;
       teardown.push(() => kv.close());
+      // The saved pose replaces `?at` (D4): its x, z the centre, or the spawn search for a new world's first Play.
+      restored = restoredStart(saved.state, q, fixedT);
+      centre = restored.centre;
     } else {
       const d = decodeMapState(hash);
       if (d.error !== null) {
@@ -1888,15 +1938,17 @@ export function mountWorldPage(root: HTMLElement, q: WorldQuery, hash: string, o
     // 5. Compile, place the camera, warm up behind the overlay, reveal.
     await world.compile();
     if (state !== 'loading') return;
-    const view = firstView((x, z) => motionBlockingAt(store, x, z), at.x, at.z, { y: q.y, yaw: q.yaw, pitch: q.pitch }, eyeAbove);
-    // Every load opens in flight (SP5a spec D1); F switches.
-    const fly: FlyState = { x: at.x, y: clamp(view.y, Y_MIN, Y_MAX), z: at.z, yaw: view.yaw, pitch: view.pitch, vx: 0, vy: 0, vz: 0, speed: SPEED_DEFAULT, mode: 'fly' };
+    // A saved world's pose enters the query slot in place of `?y`, `?yaw` and `?pitch` (SP5b spec §3.4 step 5, D4).
+    const given = restored === null ? { y: q.y, yaw: q.yaw, pitch: q.pitch } : restored.view;
+    const view = firstView((x, z) => motionBlockingAt(store, x, z), at.x, at.z, given, eyeAbove);
+    // An unsaved world opens in flight (SP5a spec D1; F switches); a saved one at its flying speed, walking again after
+    // the reveal when it was left walking (`restoreMode`, SP5b spec §3.4 step 5).
+    const fly: FlyState = { x: at.x, y: clamp(view.y, Y_MIN, Y_MAX), z: at.z, yaw: view.yaw, pitch: view.pitch, vx: 0, vy: 0, vz: 0, speed: restored?.speed ?? SPEED_DEFAULT, mode: 'fly' };
     const walk = createWalkState();
     // Wraps the yaw into [0, 360) and clamps the pitch; a query's valid degrees pass unchanged (ruling P42).
     look(fly, 0, 0, 0);
-    const fixedT = opts.timeHours === undefined || opts.timeHours === null ? null : timeOfHours(opts.timeHours);
-    let t = fixedT ?? OPENING_T;
-    let speedIndex = 0;
+    let t = restored === null ? fixedT ?? OPENING_T : restored.t;
+    let speedIndex = restored === null ? 0 : restored.speedIndex;
     const timeSpeed = (): number => (fixedT === null ? TIME_SPEEDS[speedIndex]! : 0);
 
     const placeCamera = (): void => {
@@ -2686,6 +2738,9 @@ export function mountWorldPage(root: HTMLElement, q: WorldQuery, hash: string, o
       queue: (b) => clicks.push(b, performance.now()),
     });
     teardown.push(installRepeatStop({ doc: document, canvas, repeat: holdRepeat }));
+    // A saved world left walking walks again (SP5b spec §3.4 step 5, D4): F's path once, the feet at the saved eye −
+    // `EYE` with no snap, before the first frame step.
+    if (restored !== null) restoreMode(restored, () => switchMode({ fly, walk, world, repeat: holdRepeat }));
     const input = attachInput(canvas, {
       onAction,
       onLook: (dx, dy) => look(fly, dx, dy, settings.sensitivity * LOOK_DEG_PER_PIXEL),

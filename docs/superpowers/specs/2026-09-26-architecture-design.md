@@ -1251,6 +1251,7 @@ Target: edit → visible ≤ 50 ms p95, measured in the HUD (SP5a: gated from th
   - the SP5a spec §3.2's per-tick values at a fixed 20 Hz; `SLIPPERY` blocks (ice, packed ice) slip 0.98.
 - **FPS limiter:** an accumulator with a ½-frame tolerance, so a cap of 60 on a 60 Hz display renders 60.
 - **Keys:** cleared on blur, and ignored while focus is in a text input.
+- **Restored per saved world** (SP5b): the player's mode, position, yaw, pitch and flying speed.
 
 ### 4.18 Audio (D10)
 
