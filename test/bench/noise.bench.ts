@@ -4,7 +4,7 @@ import { fileURLToPath } from 'node:url';
 import { Bench } from 'tinybench';
 import { expect, test } from 'vitest';
 import { detErf } from '../../src/core/detMath';
-import { fmix32 } from '../../src/core/hash';
+import { fmix32, type Hash64 } from '../../src/core/hash';
 import { lattice3 } from '../../src/core/noise/lattice3';
 import { NormalNoise } from '../../src/core/noise/normal';
 import { DEFAULTS } from '../../src/core/params/defaults';
@@ -26,6 +26,8 @@ import { paintTile } from '../../src/gen/map/tile';
 import { fillColumnT } from '../../src/metrics/region';
 import { createStore, type VoxelStore } from '../../src/world/store/store';
 import { createDiffStore } from '../../src/sim/diffStore';
+import type { StateRecord } from '../../src/persist/saves';
+import { flushSyncPart } from '../../src/workers/simHandler';
 import { applyEdits, createEditScratch, type Edit } from '../../src/sim/edits';
 import { NO_FLUID } from '../../src/world/blocks/fluid';
 import { AIR, OPACITY, STONE, TORCH } from '../../src/world/blocks/index';
@@ -46,10 +48,11 @@ import { runFieldSlice } from '../../src/workers/fieldSliceJob';
 import { planFieldSlice, type FieldSliceMsg, type FieldSliceSpec } from '../../src/workers/protocol';
 import { DEFAULT_MAP_STATE, openMapSession, type MapState } from '../../src/ui/map/mapState';
 import { capDensityTree, capSurfaceRules } from '../harness/capTrees';
+import { persistFlushFixture } from '../harness/persistFixture';
 import { PART_WORST_LEAVES, partWorstParams } from '../harness/sliceTrees';
 import {
   absoluteGateFailures, BENCH_ROWS, benchKernels, CALIBRATION_BESIDE_RUN, gateFailures, ISLANDS_COLUMNS, ISLANDS_RUN, LIGHT_RUN, MESH_RUN,
-  measureBracketed, parseBenchExempt, RELIGHT_RUN, type Baselines,
+  measureBracketed, parseBenchExempt, PERSIST_RUN, RELIGHT_RUN, type Baselines,
 } from './gates';
 import { buildPerm, perm3 } from './perm512';
 
@@ -98,7 +101,7 @@ const setEdit = (x: number, y: number, z: number, value: number, expectV: number
 /** Opaque (opacity 15) and dry. */
 const solidAt = (s: VoxelStore, x: number, y: number, z: number): boolean => OPACITY[s.blockAt(x, y, z)]! === 15 && s.fluidAt(x, y, z) === NO_FLUID;
 
-test('SP1, SP2a, SP2b, SP3a, SP3b, SP3c, SP3d, SP3e, SP4a and SP5a kernels', async ({ bench }) => {
+test('SP1, SP2a, SP2b, SP3a, SP3b, SP3c, SP3d, SP3e, SP4a, SP5a and SP5b kernels', async ({ bench }) => {
   // SP3c §7: BENCH_EXEMPT names rows whose ratio gate is skipped (an unknown name fails here, before measuring);
   // bench:record never reads it.
   const exempt = process.env.BENCH_RECORD === '1' ? [] : parseBenchExempt(process.env.BENCH_EXEMPT);
@@ -442,6 +445,35 @@ test('SP1, SP2a, SP2b, SP3a, SP3b, SP3c, SP3d, SP3e, SP4a and SP5a kernels', asy
   expect(rc, 'relight.edit: one probe, one warm-up and 256 timed calls, 43 turns of the cycle').toBe(1 + RELIGHT_RUN.warmupIterations + RELIGHT_RUN.iterations);
   expect([valueAt(worldStore, tx, ty, tz), valueAt(worldStore, sx, sy, sz), valueAt(worldStore, hx, hy, hz), floorSky()], 'relight.edit: the cycle ends as it began').toEqual([tv, sv, hv, 0]);
 
+  // SP5b §6.2: persist.flush — one flush's synchronous part, the sim's own `flushSyncPart` (the dirty walk, each column
+  // encoded under the world's genKey, the batch), on a DiffStore of 64 dirty columns (8 × 8, `persistFlushFixture`): 4
+  // holding one full dense section (4096 entries, fmt 1), the other 60 holding 200-600 sparse entries at distinct voxels
+  // of random sections (seeded), each a random state. Each call first marks the 64 keys dirty again (`takeDirty` cleared
+  // them); only the part itself is timed (`overriddenDuration`). The write is not: its commit is the browser's, which L11
+  // measures.
+  const { diffs: persistDiffs, keys: persistKeys, denseAt: persistDenseAt, entries: persistEntries } = persistFlushFixture();
+  const persistGenKey: Hash64 = [0x01234567, 0x89abcdef];
+  const persistState: StateRecord = {
+    worldId: 'bench', flushSeq: 1, updated: 1, player: null, time: { t: 0.25, speedIndex: 0 }, hotbar: { v: 1, active: 0, slots: [] }, places: [],
+  };
+  let pc = 0;
+  let persistOps = 0;
+  let persistBytes = 0;
+  const persistRun = await measure('persist.flush', 1, () => {
+    persistDiffs.markDirty(persistKeys);
+    const t0 = performance.now();
+    const r = flushSyncPart(persistDiffs, 'bench', persistGenKey, persistState, null, null);
+    const ms = performance.now() - t0;
+    pc++;
+    persistOps = r.ops.length;
+    persistBytes = r.bytes;
+    sink += r.taken.length;
+    return { overriddenDuration: ms };
+  }, PERSIST_RUN, () => { pc = 0; });
+  expect(pc, 'persist.flush: one probe, one warm-up and 256 timed calls').toBe(1 + PERSIST_RUN.warmupIterations + PERSIST_RUN.iterations);
+  expect(persistOps, 'persist.flush: 64 column puts and the state').toBe(65);
+  expect(persistDiffs.takeDirty().length, 'persist.flush: the dirty set taken').toBe(0);
+
   let solidVoxels = 0;
   for (let i = 256; i < 98304; i++) solidVoxels += sCol.solid[i]!;
   expect(evaluated, 'surface.column evaluates part of the column (the fast path takes the rest)').toBeGreaterThan(0);
@@ -472,13 +504,14 @@ test('SP1, SP2a, SP2b, SP3a, SP3b, SP3c, SP3d, SP3e, SP4a and SP5a kernels', asy
   console.log(`light.column ${ms(lightRun)} (mayEmit false (scan gate closed); ${litCols.length} interior columns of the 18 × 18 region at (${rx0}, ${rz0}); ${lc} calls)`);
   console.log(`mesh.section ${ms(meshRun)} (${meshSections.length} of the ${nonTrivial.length} non-trivial sections of its 14 × 14 inner columns; ${mc} calls, ${quads} quads)`);
   console.log(`relight.edit ${ms(relightRun)} (torch at (${tx}, ${ty}, ${tz}), stone at (${sx}, ${sy}, ${sz}), shaft cap at (${hx}, ${hy}, ${hz}) over a room topped at y ${roomTop}; ${rc} calls)`);
+  console.log(`persist.flush ${ms(persistRun)} (64 columns, ${persistDenseAt.length} dense, ${persistEntries} entries, ${persistBytes} bytes encoded; ${pc} calls)`);
   // Before the record: bench:record refuses to write when an absolute gate fails.
   expect(absoluteGateFailures({
     columnP50: columnRun.latency.p50, columnP95, terrainP50: terrainRun.latency.p50,
     sliceV128P50: vRun.latency.p50, slicePartP50: wRun.latency.p50, sessionCommitP50: commitRun.latency.p50,
     islandsP50: islandsRun.latency.p50,
     lightP50: lightRun.latency.p50, lightP99: lightRun.latency.p99, meshP50: meshRun.latency.p50, meshP99: meshRun.latency.p99,
-    relightP95: relightRun.latency.p99,
+    relightP95: relightRun.latency.p99, persistFlushP99: persistRun.latency.p99,
   }), 'absolute gates').toEqual([]);
   expect(Number.isFinite(sink)).toBe(true);
   if (process.env.BENCH_RECORD === '1') {

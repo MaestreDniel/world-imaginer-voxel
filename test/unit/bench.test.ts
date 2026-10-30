@@ -1,17 +1,24 @@
 import { readFileSync } from 'node:fs';
 import { describe, expect, test } from 'vitest';
+import { hex64 } from '../../src/core/hash';
 import { resolveProfile } from '../../src/core/params/profiles';
+import { genKey, stageHashes } from '../../src/core/stage/hash';
+import type { KV } from '../../src/persist/kv';
+import { createMemoryKV } from '../../src/persist/memory';
+import { loadParams, olderGenerator, parseWorldRecord, todayStateTable, type HistoryRecord } from '../../src/persist/saves';
 import { GLASS, ICE, REGISTRY, STONE, TORCH } from '../../src/world/blocks';
 import { LAVA_SOURCE, WATER_SOURCE } from '../../src/world/blocks/fluid';
 import type { Edit } from '../../src/workers/protocol';
 import {
   BENCH_EDIT, BENCH_FIELDS, BENCH_FRAME_CAPACITY, BENCH_IDLE_FRAMES, BENCH_LEGS, BENCH_LIVE, BENCH_LIVE_LEGS, BENCH_PITCH, BENCH_RD, BENCH_REFILL,
-  BENCH_SEED, BENCH_SHOT_ABOVE, BENCH_SHOT_PITCH, BENCH_SHOTS, BENCH_TIME_SPEED, BENCH_Y, benchInterval, benchPose, createBenchDriver,
+  BENCH_SAVE, BENCH_SAVE_LEG, BENCH_SAVE_PARTS, BENCH_SEED, BENCH_SHOT_ABOVE, BENCH_SHOT_PITCH, BENCH_SHOTS, BENCH_TIME_SPEED, BENCH_Y, benchInterval, benchPose, createBenchDriver,
   createBenchRecord, createBenchRecorder, createLiveReveals, REVIEW_HOUSE, REVIEW_POOL, REVIEW_SCENE_BATCH, REVIEW_SCENES, REVIEW_SETTLE_S, REVIEW_SITE,
-  REVIEW_SHOTS, reviewSceneEdits, summarizeBench, type BenchError, type BenchFixed, type BenchPose, type BenchRecord, type BenchResult, type BenchSources, type BenchWorld,
-  type ReviewShot, type SceneVoxel,
+  REVIEW_SHOTS, reviewSceneEdits, summarizeBench, type BenchError, type BenchFixed, type BenchFlush, type BenchPose, type BenchRecord, type BenchResult,
+  type BenchSaveRun, type BenchSources, type BenchWorld, type ReviewShot, type SceneVoxel,
 } from '../../src/ui/world/bench';
 import type { EditOutcome } from '../../src/ui/world/editPath';
+import { DEFAULT_MAP_STATE, openMapSession } from '../../src/ui/map/mapState';
+import { BENCH_DB, closeBenchSave, createBenchSave, openBenchSave } from '../../src/ui/world/worldPage';
 
 const START = { x: 1000, z: -2000 };
 const HZ240 = 1000 / 240;
@@ -30,19 +37,24 @@ function at(tS: number): BenchPose & { leg: number; rd: number } {
 describe('the bench script (SP4b spec §8.3, D22)', () => {
   test('the route\'s constants', () => {
     expect([BENCH_SEED, BENCH_RD, BENCH_Y, BENCH_PITCH, BENCH_TIME_SPEED, BENCH_IDLE_FRAMES]).toEqual(['42', 12, 150, -15, 60, 120]);
-    expect(BENCH_FRAME_CAPACITY).toBe(58368);
     expect(BENCH_FRAME_CAPACITY).toBeGreaterThan(95 * 240);
   });
 
-  test('the capacity holds 241 s at 240 Hz (57,840 frames: SP4c\'s 150 s, L10\'s 60 s hover cap, its 25 s of edits and its 6 s flight)', () => {
+  test('`BENCH_FRAME_CAPACITY` is 87168 (SP5b spec §6.2: SP5a\'s 58,368 and L11\'s 120 s at 240 Hz)', () => {
+    expect(BENCH_FRAME_CAPACITY).toBe(87168);
+    expect(58_368 + 120 * 240).toBe(87_168);
+  });
+
+  test('the capacity holds 361 s at 240 Hz (86,640 frames: SP4c\'s 150 s, L10\'s 60 s hover cap, its 25 s of edits and its 6 s flight, L11\'s four 30 s parts)', () => {
     expect(BENCH_EDIT).toEqual({ count: 100, everyMs: 250, radius: 8, hoverMaxS: 60, streamingCount: 20, streamingFlightS: 6, streamingSpeed: 20 });
     const liveS = BENCH_LIVE_LEGS.reduce((s, l) => s + l.seconds, 0);
     const l10S = BENCH_EDIT.hoverMaxS + (BENCH_EDIT.count * BENCH_EDIT.everyMs) / 1000 + BENCH_EDIT.streamingFlightS;
-    expect([95 + liveS, l10S]).toEqual([150, 91]);
-    expect((95 + liveS + l10S) * 240).toBe(57_840);
-    expect(BENCH_FRAME_CAPACITY).toBeGreaterThanOrEqual(57_840);
-    // 243 s at 240 Hz.
-    expect(Math.floor(BENCH_FRAME_CAPACITY / 240)).toBe(243);
+    const l11S = BENCH_SAVE_PARTS.length * BENCH_SAVE.partS;
+    expect([95 + liveS, l10S, l11S]).toEqual([150, 91, 120]);
+    expect((95 + liveS + l10S + l11S) * 240).toBe(86_640);
+    expect(BENCH_FRAME_CAPACITY).toBeGreaterThanOrEqual(86_640);
+    // 363 s at 240 Hz.
+    expect(Math.floor(BENCH_FRAME_CAPACITY / 240)).toBe(363);
   });
 
   test('the capacity holds 150 s at 240 Hz (36,000 frames): the 95 s script and the live legs at their caps (SP4c spec §8.4)', () => {
@@ -211,7 +223,7 @@ describe('summarizeBench (SP4b spec §8.3)', () => {
     const r = summarizeBench(recordOf([{ leg: 0 }, { leg: 1 }, { leg: 5 }, { leg: 6 }]), FIXED);
     expect(Object.keys(r)).toEqual([
       'route', 'seed', 'profile', 'rd', 'rdClampedTo', 'workers', 'sectionRenderer', 'userAgent', 'renderer', 'vendor', 'multiDraw', 'timerQuery', 'screen', 'dpr',
-      'pixelRatio', 'displayIntervalMs', 'load', 'stream', 'legs', 'L5', 'L6', 'live', 'edit', 'longFrames', 'structuralFrames',
+      'pixelRatio', 'displayIntervalMs', 'load', 'stream', 'legs', 'L5', 'L6', 'live', 'edit', 'persist', 'longFrames', 'structuralFrames',
     ]);
     expect(r.route).toBe('bench=medium');
     expect(r.rdClampedTo).toBeNull();
@@ -228,7 +240,7 @@ describe('summarizeBench (SP4b spec §8.3)', () => {
     expect(Object.keys(r.stream.coordinatorMs)).toEqual(['p95', 'max']);
     expect(Object.keys(r.stream.uploadMs)).toEqual(['p95', 'max']);
     expect(Object.keys(r.stream.drawCalls)).toEqual(['max', 'mean']);
-    expect(Object.keys(r.legs)).toEqual(['L0', 'L1', 'L2', 'L3', 'L4', 'L5', 'L6', 'L7', 'L8', 'L9', 'L10']);
+    expect(Object.keys(r.legs)).toEqual(['L0', 'L1', 'L2', 'L3', 'L4', 'L5', 'L6', 'L7', 'L8', 'L9', 'L10', 'L11']);
     expect(Object.keys(r.legs.L1.frames)).toEqual(['count', 'p50', 'p95', 'p99', 'max', 'over33']);
     expect(r.L5).toEqual({ refillMs: 1234 });
     expect(Object.keys(r.L6)).toEqual(['frames']);
@@ -482,6 +494,82 @@ describe('summarizeBench: the edit leg L10 (SP5a spec §6.2, D26)', () => {
     });
     expect(r.edit.mainP95Ms).toBe(0.19);
     expect(r.edit.frames.frames.count).toBe(20);
+  });
+});
+
+describe('summarizeBench: the save leg L11 (SP5b spec §6.2, D28)', () => {
+  /** The parts' windows: script seconds [30i, 30i + 30), the page's clock 1,000 ms later; their latency samples [3i, 3i + 3). */
+  const parts = [0, 1, 2, 3].map((i) => ({ tS0: 30 * i, tS1: 30 * i + 30, t0: 1000 + 30_000 * i, t1: 31_000 + 30_000 * i, samples0: 3 * i, samples1: 3 * i + 3 }));
+  /** Twelve visible samples, three per part: p95 (nearest rank of 3: the largest) 40, 60, 40, 80. */
+  const visible = Float64Array.of(20, 30, 40, 40, 50, 60, 20, 30, 40, 40, 60, 80);
+  const EDIT: BenchFixed['edit'] = {
+    visible, allVisible: visible, reply: visible, issueToStaged: visible, stagedToShown: visible, relight: visible, edit: visible, count: 12,
+  };
+  const long = 8 * HZ240;
+  /** 20 frames of leg 11 in part i (script ms 30,000 i + 100 k), `longs` of them snapped over 33 ms. */
+  const partFrames = (i: number, longs: number): Frame[] =>
+    Array.from({ length: 20 }, (_, k) => ({ leg: 11, tMs: 30_000 * i + 100 * k, snappedMs: k < longs ? long : HZ240 }));
+  const run = (o: Partial<BenchSaveRun> = {}): BenchSaveRun => ({ samplesFrom: 0, parts, edits: [], flushes: [], timedOut: [], ...o });
+  const rec = (): BenchRecord => recordOf([...partFrames(0, 1), ...partFrames(1, 3), ...partFrames(2, 1), ...partFrames(3, 1)]);
+
+  test('`over33Added`, `p95AddedMs` and `editVisibleAddedMs` from fixed parts (on 3 and 1 frames over 33 ms, off 1 and 1 → 2)', () => {
+    const r = summarizeBench(rec(), { ...FIXED, edit: EDIT }, null, undefined, run());
+    expect(Object.keys(r.persist)).toEqual([
+      'L11a', 'L11b', 'L11c', 'L11d', 'flushSyncP95Ms', 'flushSyncMaxMs', 'flushCommitP95Ms', 'replyDuringFlushP95Ms', 'flushMainP95Ms', 'flushes',
+      'over33Added', 'p95AddedMs', 'editVisibleAddedMs', 'timedOut',
+    ]);
+    expect(Object.keys(r.persist.L11a)).toEqual(['p95', 'p99', 'over33', 'editVisibleP95']);
+    expect([r.persist.L11a.over33, r.persist.L11b.over33, r.persist.L11c.over33, r.persist.L11d.over33]).toEqual([1, 3, 1, 1]);
+    // (3 + 1) − (1 + 1).
+    expect(r.persist.over33Added).toBe(2);
+    // Nearest rank of 20: the 19th smallest. L11b's 3 long frames reach it, the others' one does not.
+    expect([r.persist.L11a.p95, r.persist.L11b.p95, r.persist.L11c.p95, r.persist.L11d.p95]).toEqual([HZ240, long, HZ240, HZ240]);
+    expect([r.persist.L11a.p99, r.persist.L11b.p99]).toEqual([long, long]);
+    expect(r.persist.p95AddedMs).toBeCloseTo((long + HZ240) / 2 - HZ240, 9);
+    expect([r.persist.L11a.editVisibleP95, r.persist.L11b.editVisibleP95, r.persist.L11c.editVisibleP95, r.persist.L11d.editVisibleP95]).toEqual([40, 60, 40, 80]);
+    // (60 + 80) / 2 − (40 + 40) / 2.
+    expect(r.persist.editVisibleAddedMs).toBe(30);
+    // No flush: the flush figures are null, and the count 0.
+    expect([r.persist.flushSyncP95Ms, r.persist.flushCommitP95Ms, r.persist.replyDuringFlushP95Ms, r.persist.flushMainP95Ms, r.persist.flushes]).toEqual([null, null, null, null, 0]);
+    expect(r.persist.timedOut).toEqual([]);
+    // The leg's own frame figures, and the JSON round trip.
+    expect(r.legs.L11.frames.count).toBe(80);
+    expect(Object.keys(JSON.parse(JSON.stringify(r)) as object)).toEqual(Object.keys(r));
+    // A part with no sample: its `editVisibleP95` is null, and so is the difference.
+    const none = summarizeBench(rec(), { ...FIXED, edit: EDIT }, null, undefined, run({ parts: parts.map((p, i) => (i === 3 ? { ...p, samples1: p.samples0 } : p)) }));
+    expect([none.persist.L11d.editVisibleP95, none.persist.editVisibleAddedMs]).toEqual([null, null]);
+  });
+
+  test('the "on" parts\' flush figures: sync, commit and main-thread p95 over L11b\'s and L11d\'s flushes, and the replies of edits whose post → reply overlaps a flush', () => {
+    const at = (part: number, ms: number): number => parts[part]!.t0 + ms;
+    const flush = (tPost: number, o: Partial<BenchFlush> = {}): BenchFlush => ({ tPost, tDone: tPost + 10, ok: true, syncMs: 1, commitMs: 5, mainMs: 0.1, ...o });
+    const flushes = [
+      // The unmeasured flushNow before L11a, and one in an off part: neither counts.
+      flush(500, { syncMs: 9, mainMs: 9 }), flush(at(2, 5000), { syncMs: 9, mainMs: 9 }),
+      flush(at(1, 2000), { syncMs: 0.5, commitMs: 4, mainMs: 0.1 }),
+      flush(at(1, 4000), { ok: false, syncMs: Number.NaN, commitMs: Number.NaN, mainMs: 0.2 }),
+      flush(at(3, 2000), { syncMs: 1.5, commitMs: 6, mainMs: 0.25 }),
+    ];
+    const edits = [
+      // In L11b, inside the first flush's window (2,000-2,010 ms): 3 ms; after it: not counted.
+      { tPost: at(1, 2005), tReply: at(1, 2008) }, { tPost: at(1, 2500), tReply: at(1, 2501) },
+      // In L11d, posted 2 ms before its flush, answered 2 ms into it: 4 ms.
+      { tPost: at(3, 1998), tReply: at(3, 2002) },
+      // In L11c (off), overlapping its flush: not counted.
+      { tPost: at(2, 5001), tReply: at(2, 5009) },
+    ];
+    const r = summarizeBench(rec(), { ...FIXED, edit: EDIT }, null, undefined, run({ flushes, edits }));
+    expect(r.persist.flushes).toBe(3);
+    // Over the committed ones (0.5 and 1.5; nearest rank).
+    expect([r.persist.flushSyncP95Ms, r.persist.flushSyncMaxMs, r.persist.flushCommitP95Ms]).toEqual([1.5, 1.5, 6]);
+    expect(r.persist.flushMainP95Ms).toBe(0.25);
+    expect(r.persist.replyDuringFlushP95Ms).toBe(4);
+  });
+
+  test('L10\'s streaming p95 reads the samples before L11\'s (`samplesFrom`), not L11\'s', () => {
+    const r = summarizeBench(recordOf([{ leg: 10 }]), { ...FIXED, edit: EDIT }, null, { hoverAccepted: 2, streamingRefused: 0, timedOut: [] }, run({ samplesFrom: 4 }));
+    // L10's hover read 20 and 30, its flight 40 and 40; L11's 50 … 80 are not L10's.
+    expect([r.edit.editVisibleP95, r.edit.editVisibleStreamingP95]).toEqual([30, 40]);
   });
 });
 
@@ -1161,6 +1249,270 @@ describe('createBenchDriver: the edit leg L10 (SP5a spec §6.2, D26; plan)', () 
     expect(e.posts).toEqual([]);
     driver.done(FIXED);
     expect((published[0] as BenchResult).edit.timedOut).toEqual(['L10']);
+  });
+});
+
+/**
+ * A fake of the page's L11 hooks (SP5b spec §6.2): every batch posted with the script time `clock.t` the test sets, its
+ * outcome accepted; each `pause`; each `flushNow` (settled at once); the page's clock and the latency count.
+ */
+function fakeSave(o: { filled?: () => boolean } = {}) {
+  const posts: Array<{ readonly t: number; readonly edits: readonly Edit[] }> = [];
+  const pauses: boolean[] = [];
+  let flushNows = 0;
+  const clock = { t: 0, ms: 0, samples: 0 };
+  const save: NonNullable<BenchWorld['save']> = {
+    post: (edits) => {
+      posts.push({ t: clock.t, edits });
+      return Promise.resolve({ ok: true, prev: Uint32Array.from(edits, (e) => e.expect), next: Uint32Array.from(edits, (e) => e.value) });
+    },
+    pause: (on) => { pauses.push(on); },
+    flushNow: () => {
+      flushNows++;
+      return Promise.resolve(null);
+    },
+    filled: () => o.filled?.() ?? true,
+    now: () => clock.ms,
+    samples: () => clock.samples,
+  };
+  return { save, posts, pauses, clock, flushNows: () => flushNows };
+}
+
+/**
+ * Runs the live legs (each settling at once) and L10 (its 100 edits, its 6 s flight east from L9's arrival at
+ * (20,000.5, 90, 0.5)) with `save` bound, to L11's first frame at 129 s.
+ */
+async function toL11(save: NonNullable<BenchWorld['save']>) {
+  const run = driverOf(null);
+  const f = fakeLive();
+  f.settle[7] = true;
+  f.settle[8] = true;
+  f.settle[9] = true;
+  run.driver.bind({ rdMax: 16, heightAt: () => 70, live: f.live, edit: fakeEdit().edit, save, ...NO_SCENE });
+  const p: BenchPose = { x: 0.5, y: 80, z: 0.5, yaw: 0, pitch: 0 };
+  run.driver.pose(0, p, 12);
+  run.driver.pose(95, p, 12);
+  run.driver.pose(96, p, 12);
+  run.driver.pose(97, p, 12);
+  p.x = 20000.5;
+  p.y = 90;
+  f.arrive();
+  await flush();
+  for (let k = 0; k < 124; k++) expect(run.driver.pose(98 + k * 0.25, p, 12)).toBe(12);
+  expect(p.x).toBeGreaterThan(20000.5 + 100);
+  // L10's flight ends at 129 s: with the save hooks bound, L11 starts there, the camera back at L10's hover point.
+  expect(run.driver.pose(129, p, 12)).toBe(12);
+  expect([p.x, p.y, p.z, p.pitch]).toEqual([20000.5, 90, 0.5, -15]);
+  return { ...run, p };
+}
+
+describe('createBenchDriver: the save leg L11 (SP5b spec §6.2, D28; plan)', () => {
+  test('the leg: its constants and its parts', () => {
+    expect(BENCH_SAVE).toEqual({ hoverMaxS: 60, partS: 30, editsPerPart: 150, everyMs: 200, area: 4, torchEvery: 10 });
+    expect(BENCH_SAVE_PARTS).toEqual([{ name: 'L11a', autosave: false }, { name: 'L11b', autosave: true }, { name: 'L11c', autosave: false }, { name: 'L11d', autosave: true }]);
+    expect(BENCH_SAVE_LEG).toEqual({ name: 'L11', seconds: 180, speed: 0, headings: [], rdSteps: [] });
+    // Hold-repeat's place rate (master §4.12: every 0.2 s): 150 edits fill a 30 s part.
+    expect(BENCH_SAVE.editsPerPart * BENCH_SAVE.everyMs).toBe(BENCH_SAVE.partS * 1000);
+  });
+
+  test('L11\'s script has 600 edits in four 30 s parts at 0.2 s spacing over 16 columns, every tenth a torch; autosave paused in L11a and L11c, running in L11b and L11d', async () => {
+    const s = fakeSave();
+    const { driver, p, published } = await toL11(s.save);
+    // The hover's first frame reads no disc (the camera is still where the flight ended); the next one finds it filled
+    // and saves L1-L10's edits once, unmeasured, before any part starts.
+    expect([s.flushNows(), s.posts.length, s.pauses.length]).toEqual([0, 0, 0]);
+    expect(driver.pose(129.05, p, 12)).toBe(12);
+    expect(s.flushNows()).toBe(1);
+    expect(driver.pose(129.07, p, 12)).toBe(12);
+    expect([s.posts.length, s.pauses.length]).toEqual([0, 0]);
+    await flush();
+    const t0 = 129.1;
+    for (let i = 0; i < 2400; i++) {
+      const t = t0 + i * 0.05;
+      s.clock.t = t;
+      expect(driver.pose(t, p, 12)).toBe(12);
+      expect([p.x, p.z]).toEqual([20000.5, 0.5]);
+    }
+    s.clock.t = t0 + 120;
+    expect(driver.pose(t0 + 120, p, 12)).toBeNull();
+    expect(s.flushNows()).toBe(1);
+    // Autosave off, on, off, on, then paused again at the end.
+    expect(s.pauses).toEqual([true, false, true, false, true]);
+    const edits = s.posts.map((b) => {
+      expect(b.edits).toHaveLength(1);
+      return b.edits[0]!;
+    });
+    expect(edits).toHaveLength(600);
+    // 150 per part, 0.2 s apart from the part's start.
+    for (let k = 0; k < 600; k++) {
+      const part = Math.floor(k / 150);
+      expect(s.posts[k]!.t - (t0 + 30 * part)).toBeCloseTo(0.2 * (k % 150), 6);
+    }
+    // Over the 4 × 4 columns around the hover point's column (1250, 0), on the surface (heightAt, the first free y).
+    const cols = new Set(edits.map((e) => `${e.x >> 4},${e.z >> 4}`));
+    expect(cols.size).toBe(16);
+    for (const e of edits) {
+      expect(e.x >> 4).toBeGreaterThanOrEqual(1248);
+      expect(e.x >> 4).toBeLessThanOrEqual(1251);
+      expect(e.z >> 4).toBeGreaterThanOrEqual(-2);
+      expect(e.z >> 4).toBeLessThanOrEqual(1);
+      expect([e.op, e.y]).toEqual(['set', 70]);
+    }
+    // Alternately a stone placed (air expected) and broken back to air; every tenth a torch, each on a voxel of its own.
+    const stone = (STONE << 8) >>> 0;
+    const torch = (TORCH << 8) >>> 0;
+    let placed: Edit | null = null;
+    for (let k = 0; k < 600; k++) {
+      const e = edits[k]!;
+      if (k % 10 === 9) expect([e.value, e.expect]).toEqual([torch, 0]);
+      else if (placed === null) {
+        expect([e.value, e.expect]).toEqual([stone, 0]);
+        placed = e;
+      } else {
+        expect([e.x, e.y, e.z, e.value, e.expect]).toEqual([placed.x, placed.y, placed.z, 0, stone]);
+        placed = null;
+      }
+    }
+    expect([torch, stone, 0].map((v) => edits.filter((e) => e.value === v).length)).toEqual([60, 270, 270]);
+    expect(new Set(edits.filter((e) => e.value !== 0).map((e) => `${e.x},${e.z}`)).size).toBe(330);
+    // The leg's frames are leg 11; the published JSON has its four parts.
+    driver.done(FIXED);
+    const r = published[0] as BenchResult;
+    expect(r.persist.timedOut).toEqual([]);
+    expect(Object.keys(r.legs)).toContain('L11');
+  });
+
+  test('a disc that never fills within 60 s records `persist.timedOut` [\'L11\'] and ends the script with no flush and no edit', async () => {
+    const s = fakeSave({ filled: () => false });
+    const { driver, p, published } = await toL11(s.save);
+    expect(driver.pose(188.99, p, 12)).toBe(12);
+    expect(driver.pose(189, p, 12)).toBeNull();
+    expect([s.flushNows(), s.posts.length, s.pauses.length]).toEqual([0, 0, 0]);
+    driver.done(FIXED);
+    expect((published[0] as BenchResult).persist.timedOut).toEqual(['L11']);
+  });
+
+  test('L11\'s "on" parts\' flushes post a non-null history whose `done` grows with the parts\' edits (ruling P11)', async () => {
+    let t = 0;
+    const posted: Edit[] = [];
+    const flushes: Array<{ readonly t: number; readonly history: HistoryRecord | null; readonly steps: number }> = [];
+    const ticks: Array<() => void> = [];
+    const logged: BenchFlush[] = [];
+    const saving = createBenchSave({
+      worldId: 'b1',
+      fly: { x: 20000.5, y: 90, z: 0.5, yaw: 90, pitch: -15, mode: 'fly', speed: 12 },
+      frame: { t: 0.3 },
+      edits: {
+        post: (edits) => {
+          posted.push(...edits);
+          return Promise.resolve({ ok: true, prev: Uint32Array.from(edits, (e) => e.expect), next: Uint32Array.from(edits, (e) => e.value) });
+        },
+        pending: () => false,
+        settled: () => Promise.resolve(),
+      },
+      read: () => 0,
+      sim: {
+        flush: (_state, history) => {
+          flushes.push({ t, history, steps: posted.length });
+          return Promise.resolve({ type: 'flushed', id: flushes.length, ok: true, flushSeq: flushes.length, columns: 1, bytes: 9, syncMs: 0.2, commitMs: 3 });
+        },
+      },
+      clock: {
+        now: () => t * 1000,
+        setInterval: (f) => ticks.push(f),
+        clearInterval() {},
+        setTimeout: () => 0,
+        clearTimeout() {},
+      },
+      now: () => t * 1000,
+      wallNow: () => 1_800_000_000_000 + t * 1000,
+      filled: () => true,
+      samples: () => 0,
+      flushed: (f) => { logged.push(f); },
+    });
+    expect(ticks).toHaveLength(1);
+    const { driver, p } = await toL11(saving.hooks);
+    driver.pose(129.05, p, 12);
+    await flush();
+    // The unmeasured flushNow: nothing recorded yet (L10 posts around the history), so no history.
+    expect(flushes).toEqual([{ t: 0, history: null, steps: 0 }]);
+    const t0 = 129.1;
+    for (let i = 0; i < 2400; i++) {
+      t = t0 + i * 0.05;
+      driver.pose(t, p, 12);
+      // The autosave's 2,000 ms timer, after the posts' replies were recorded.
+      if (i % 40 === 39) {
+        await flush();
+        ticks[0]!();
+        await flush();
+      }
+    }
+    const inPart = (f: { t: number }, k: number): boolean => f.t >= t0 + 30 * k && f.t < t0 + 30 * (k + 1);
+    // Paused in L11a and L11c: their ticks post nothing.
+    expect(flushes.filter((f) => inPart(f, 0) || inPart(f, 2))).toEqual([]);
+    for (const k of [1, 3]) {
+      const on = flushes.filter((f) => inPart(f, k));
+      expect(on.length).toBeGreaterThanOrEqual(14);
+      let last: string | null = null;
+      for (const f of on) {
+        // Every step of the history is one accepted edit (the action post records each), the newest the last posted.
+        expect(f.history).not.toBeNull();
+        const done = f.history!.done;
+        expect(done).toHaveLength(Math.min(100, f.steps));
+        const e = posted[f.steps - 1]!;
+        expect(done[done.length - 1]).toEqual({ edits: [{ x: e.x, y: e.y, z: e.z, before: e.expect, after: e.value }] });
+        // The newest step moves on with the part's edits.
+        const newest = JSON.stringify(done[done.length - 1]);
+        expect(newest).not.toBe(last);
+        last = newest;
+      }
+    }
+    // The page's log of every flush, on its clock: the flushNow and each tick's post.
+    expect(logged).toHaveLength(flushes.length);
+    expect(logged.every((f) => f.ok && f.syncMs === 0.2 && f.commitMs === 3 && f.mainMs >= 0)).toBe(true);
+  });
+});
+
+describe('the bench\'s saved world in `wi10-bench` (SP5b spec §6.2; plan)', () => {
+  test('the route deletes `wi10-bench` at its start and end after closing the page\'s and the sim\'s connections: at the end the order is the sim client\'s dispose → the page\'s `kv.close()` → `deleteIdb`', async () => {
+    const order: string[] = [];
+    const mem = createMemoryKV();
+    const kv: KV = {
+      read: (r) => mem.read(r),
+      write: (ops) => {
+        order.push(`write ${ops.map((o) => o.store).join(',')}`);
+        return mem.write(ops);
+      },
+      onEvent: (f) => mem.onEvent(f),
+      close: () => {
+        order.push('kv.close');
+        mem.close();
+      },
+    };
+    const deleteDb = async (db: string): Promise<void> => { order.push(`deleteIdb ${db}`); };
+    const session = openMapSession({ ...DEFAULT_MAP_STATE, seed: BENCH_SEED, profile: 'default', patch: {} }, () => [3, 9]).state;
+    const opened = await openBenchSave({ open: async (db) => { order.push(`open ${db}`); return kv; }, deleteDb, id: 'b1', session, now: 1234 });
+    // At the start: deleted, opened, the world created (its `worlds` and `state` in one write).
+    expect(BENCH_DB).toBe('wi10-bench');
+    expect(order).toEqual(['deleteIdb wi10-bench', 'open wi10-bench', 'write worlds,state']);
+    // A world record of the route's seed and parameters, today's generator and table; its `load` an empty world's.
+    const parsed = parseWorldRecord(opened.world);
+    expect(parsed.ok).toBe(true);
+    const params = loadParams(opened.world);
+    expect(params.ok && params.value).toEqual(session.params);
+    expect(params.ok && olderGenerator(opened.world, params.value)).toBe(false);
+    expect(opened.world).toMatchObject({ id: 'b1', seedText: '42', seed: [...session.seed], profile: 'default', generatorVersion: 5, created: 1234, backupOf: null });
+    expect(opened.world.genKey).toBe(hex64(genKey(session.seed, stageHashes(session.params))));
+    expect(opened.load).toEqual({ db: 'wi10-bench', worldId: 'b1', flushSeq: 0, genKey: opened.world.genKey, updated: 0, stateTable: todayStateTable(), rewrite: null });
+    expect(opened.kv).toBe(kv);
+    // At the end: the sim's connection (its worker terminated), then the page's, then the database.
+    order.length = 0;
+    await closeBenchSave({ sim: { dispose: () => { order.push('sim.dispose'); } }, kv, deleteDb });
+    expect(order).toEqual(['sim.dispose', 'kv.close', 'deleteIdb wi10-bench']);
+    // The page runs both around the bench's run.
+    const src = readFileSync(new URL('../../src/ui/world/worldPage.ts', import.meta.url), 'utf8');
+    expect(src).toMatch(/openBenchSave\(\{ open: \(db\) => openIdbKV\(db\), deleteDb: deleteIdb,/);
+    expect(src).toMatch(/closeBenchSave\(\{ sim: simClient, kv: benchKv, deleteDb: deleteIdb \}\)/);
   });
 });
 

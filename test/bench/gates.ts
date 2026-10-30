@@ -31,6 +31,11 @@ export const MESH_P99_MAX_MS = 2.5;
  * through p99 (the upper bound of p95, the `column.sample` precedent), so stricter than the spec's p95.
  */
 export const RELIGHT_P95_MAX_MS = 3;
+/**
+ * SP5b §6.2: one flush's synchronous part (`persist.flush`: the sim's `flushSyncPart`, the dirty walk, the encode of
+ * each column and the batch, for 64 dirty columns), p99 in ms.
+ */
+export const PERSIST_FLUSH_P99_MAX_MS = 2;
 
 /**
  * `terrain.islands`' run (SP3e §7): 256 timed iterations after exactly one warm-up call, each call on the next of its
@@ -53,6 +58,11 @@ export const MESH_RUN = Object.freeze({ iterations: 1024, time: 0, warmupIterati
  * its 6-edit cycle, so the 258 calls are 43 whole turns and the region ends as it began.
  */
 export const RELIGHT_RUN = Object.freeze({ iterations: 256, time: 0, warmupIterations: 1, warmupTime: 0 });
+/**
+ * `persist.flush`'s run (SP5b §6.2), on the same pattern: one probe, one warm-up, 256 timed calls, each marking its 64
+ * columns dirty again (untimed: the take clears them) and flushing them.
+ */
+export const PERSIST_RUN = Object.freeze({ iterations: 256, time: 0, warmupIterations: 1, warmupTime: 0 });
 
 /**
  * Every gated bench row, in measurement order: `noise.bench.ts` measures exactly these, and `test/baselines.json`
@@ -62,7 +72,7 @@ export const RELIGHT_RUN = Object.freeze({ iterations: 256, time: 0, warmupItera
  * the slice rows `slice.vertical128`, `slice.horizontal128`, `slice.partWorst` and the session row `session.commitMaxTree`;
  * SP3e §7 appends `terrain.islands` (fillColumnT on floating_islands at cluster columns); SP4a §9.3 appends
  * `light.column` (one column's light job) and `mesh.section` (one non-trivial section's padded copy and mesh); SP5a §6.2
- * appends `relight.edit` (one edit's relight).
+ * appends `relight.edit` (one edit's relight); SP5b §6.2 appends `persist.flush` (one flush's synchronous part).
  */
 export const BENCH_ROWS = [
   'calibration.fmix32', 'lattice3.slice', 'perm512.slice', 'lattice3.random', 'perm512.random', 'normal.z2.climateC',
@@ -70,7 +80,7 @@ export const BENCH_ROWS = [
   'map.tile.b64.biome', 'map.tile.b16.relief', 'worker.configure', 'map.tile.b256.biome', 'map.tile.b256.relief',
   'store.alloc', 'density.corner', 'terrain.real', 'surface.column',
   'slice.vertical128', 'slice.horizontal128', 'slice.partWorst', 'session.commitMaxTree', 'terrain.islands',
-  'light.column', 'mesh.section', 'relight.edit',
+  'light.column', 'mesh.section', 'relight.edit', 'persist.flush',
 ] as const;
 
 export interface BenchKernel {
@@ -230,12 +240,14 @@ export interface AbsoluteLatencies {
   readonly meshP99: number;
   /** SP5a §6.2: `relight.edit` p99 (the upper bound of p95), gated at RELIGHT_P95_MAX_MS. */
   readonly relightP95: number;
+  /** SP5b §6.2: `persist.flush` p99, gated at PERSIST_FLUSH_P99_MAX_MS. */
+  readonly persistFlushP99: number;
 }
 
 /**
  * The absolute gates (P1 column budget, SP2a; the real T budget, SP3b; the slice and session commit budgets, SP3d; the
- * light and mesh budgets, SP4a; the relight budget, SP5a): checked by `npm run bench` and before
- * `npm run bench:record` writes, so a record refuses to write when one fails.
+ * light and mesh budgets, SP4a; the relight budget, SP5a; the flush's synchronous part, SP5b): checked by
+ * `npm run bench` and before `npm run bench:record` writes, so a record refuses to write when one fails.
  */
 export function absoluteGateFailures(l: AbsoluteLatencies): string[] {
   const out: string[] = [];
@@ -251,5 +263,6 @@ export function absoluteGateFailures(l: AbsoluteLatencies): string[] {
   if (l.meshP50 > MESH_P50_MAX_MS) out.push(`mesh.section p50 ${l.meshP50.toFixed(3)} ms > ${MESH_P50_MAX_MS} ms`);
   if (l.meshP99 > MESH_P99_MAX_MS) out.push(`mesh.section p99 ${l.meshP99.toFixed(3)} ms > ${MESH_P99_MAX_MS} ms`);
   if (l.relightP95 > RELIGHT_P95_MAX_MS) out.push(`relight.edit p99 ${l.relightP95.toFixed(3)} ms > ${RELIGHT_P95_MAX_MS} ms`);
+  if (l.persistFlushP99 > PERSIST_FLUSH_P99_MAX_MS) out.push(`persist.flush p99 ${l.persistFlushP99.toFixed(3)} ms > ${PERSIST_FLUSH_P99_MAX_MS} ms`);
   return out;
 }

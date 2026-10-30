@@ -44,7 +44,11 @@
  * canvas with the preview not wanted, fed every session change; the apply control (its `onApplied` marks the Apply
  * frame); the teleport over the bench's pool; the reveals since each mark, read through `sections.onColumnRevealed`.
  * For its edit leg L10 (SP5a spec §6.2) it builds its own edit path over the sim, with the same latency fed by the same
- * hook, and hands the driver the latency's samples and the coordinator's `editDropped` at the end.
+ * hook, and hands the driver the latency's samples and the coordinator's `editDropped` at the end. For its save leg L11
+ * (SP5b spec §6.2) the bench runs in a saved world of its own in `BENCH_DB` (`openBenchSave`: deleted, then the world
+ * created, its `load` posted with the attach), with a block history, the action post L11's edits take and the page's
+ * autosave, paused until the driver's "on" parts (`createBenchSave`); at the script's end or a failure every connection
+ * is closed and the database deleted (`closeBenchSave`).
  *
  * Errors after the reveal (SP4b spec §3.6, §7.4, D12) degrade: a skipped column shows a dismissible notice with "Copy
  * details", StoreFull a notice offering "Lower to RD n" (applied live on a click, never on its own); a fatal event (no
@@ -103,9 +107,12 @@
  * a held LMB or RMB is queued again by the frame's aim, until its release, the lock's release, a paused frame (the
  * palette, the map, the help) or F.
  */
-import type { Seed64 } from '../../core/hash';
+import { GENERATOR_VERSION } from '../../core/constants';
+import { hex64, type Seed64 } from '../../core/hash';
 import { MEDIUM } from '../../core/params/graphicsPresets';
+import { SCHEMA_VERSION, type JsonObject } from '../../core/params/migrate';
 import type { Params } from '../../core/params/schema';
+import { genKey, paramsHash, stageHashes } from '../../core/stage/hash';
 import { OPENING_T, TIME_SPEEDS } from '../../daynight/dayNight';
 import { probeCapabilities } from '../../engine/capabilities';
 import { evaluateWorldCapabilities, type CapabilityReport } from '../../engine/capabilityRules';
@@ -115,15 +122,15 @@ import {
 import { appliedDraftOf, type WorldStage } from '../../engine/invalidation';
 import { RD_MAX, reservationRdCap, resolveRenderDistance } from '../../engine/renderDistance';
 import type { Stage } from '../../engine/rings';
-import type { WorldSession } from '../../engine/session';
+import type { SessionState, WorldSession } from '../../engine/session';
 import { SimFailed, createBrowserSim, type SimClient } from '../../engine/simClient';
 import { createThrottle } from '../../engine/throttle';
 import { createUploadBudget } from '../../engine/uploadBudget';
 import { StoreFullError, WorkerFailed, createBrowserPool, poolSize, type WorkerPool } from '../../engine/workerPool';
-import { openIdbKV } from '../../persist/idb';
+import { deleteIdb, openIdbKV } from '../../persist/idb';
 import type { KV } from '../../persist/kv';
 import {
-  createSaves, loadParams, normalizeHistory, normalizeState, parseWorldRecord, remapOf, tableRelation, todayStateTable, type HistoryRecord,
+  createSaves, loadParams, newState, normalizeHistory, normalizeState, parseWorldRecord, remapOf, tableRelation, todayStateTable, type HistoryRecord,
   type HotbarRecord, type Place, type Saves, type StateBounds, type StateRecord, type WorldRecord,
 } from '../../persist/saves';
 import { SPEED_DEFAULT, applyCameraRotation, look, lookVectorInto, stepSpeed, toggleMode, type FlyState } from '../../player/fly';
@@ -158,7 +165,7 @@ import { cryptoSeed } from '../seedBox';
 import { SETTINGS_DEFAULTS, loadSettings, saveSettings, type WorldSettings } from '../settings';
 import {
   BENCH_IDLE_FRAMES, BENCH_REFILL, BENCH_TIME_SPEED, benchInterval, createBenchRecorder, createLiveReveals, jsHeapMB, type BenchDriver,
-  type BenchPose,
+  type BenchFlush, type BenchPose, type BenchWorld,
 } from './bench';
 import { firstView } from './firstView';
 import type { FlightContext } from './flight';
@@ -1731,7 +1738,8 @@ const stepRecord = (step: BlockStep): HistoryRecord['done'][number] => ({ edits:
  * and the day speed's index; `storedTime` unchanged while a `?shot=1&time=` capture fixes the clock, which is then not
  * saved), the world's hotbar record (`hotbarStorage`'s), the places and the wall clock (`now`), with the block
  * history's sides and version (§3.4 step 6); `settled` the edit path's; `editsSince` the accepted replies
- * (`countAccepted`); `onResult` every `flushed`.
+ * (`countAccepted`); `onResult` every `flushed`; `onBuild`, when given, as each build starts (the bench's clock of a
+ * flush's main-thread work, SP5b spec §6.2).
  */
 export function createPageAutosave(o: {
   readonly worldId: string;
@@ -1751,12 +1759,14 @@ export function createPageAutosave(o: {
   readonly clock: AutosaveDeps['clock'];
   readonly events: AutosaveDeps['events'];
   onResult(r: FlushedMsg): void;
+  onBuild?(): void;
 }): Autosave {
   return createAutosave({
     clock: o.clock,
     events: o.events,
     flush: (state, h) => o.sim.flush(state, h),
     build: () => {
+      o.onBuild?.();
       const steps = o.blockHistory.snapshot();
       return {
         state: snapshotState({
@@ -1775,6 +1785,136 @@ export function createPageAutosave(o: {
     editsSince: () => o.editsSince(),
     onResult: (r) => o.onResult(r),
   });
+}
+
+/** The bench's database (SP5b spec §6.2): the bench route's saved world lives here, never in `SAVES_DB`. */
+export const BENCH_DB = 'wi10-bench';
+
+/**
+ * A `worlds` record of the session's seed and parameters (§2.1), as a new world's: today's schema, generator, genKey
+ * and state table, `created` the given wall-clock time, no backup.
+ */
+function newWorldRecord(id: string, name: string, s: Pick<SessionState, 'seedText' | 'seed' | 'profile' | 'params'>, created: number): WorldRecord {
+  return {
+    id, name, seedText: s.seedText, seed: [s.seed[0], s.seed[1]], profile: s.profile, params: s.params as unknown as JsonObject,
+    schemaVersion: SCHEMA_VERSION, paramsHash: hex64(paramsHash(s.params)), generatorVersion: GENERATOR_VERSION,
+    genKey: hex64(genKey(s.seed, stageHashes(s.params))), stateTable: todayStateTable(), created, backupOf: null,
+  };
+}
+
+/**
+ * The bench route's saved world at its start (SP5b spec §6.2): `BENCH_DB` deleted (no connection to it is open yet),
+ * opened, and a world of the route's seed and parameters created in it (`worlds` and `state`, one write, as the menu's
+ * Create); the page keeps the connection, and its `load` is an empty world's. A write that does not complete throws.
+ */
+export async function openBenchSave(o: {
+  open(db: string): Promise<KV>;
+  deleteDb(db: string): Promise<void>;
+  readonly id: string;
+  readonly session: Pick<SessionState, 'seedText' | 'seed' | 'profile' | 'params'>;
+  /** The wall clock (`Date.now()`), the record's `created`. */
+  readonly now: number;
+}): Promise<{ kv: KV; world: WorldRecord; load: SavedLoad }> {
+  await o.deleteDb(BENCH_DB);
+  const kv = await o.open(BENCH_DB);
+  const world = newWorldRecord(o.id, 'Bench', o.session, o.now);
+  const state = newState(o.id, STATE_BOUNDS);
+  const w = await createSaves(kv).create(world, state);
+  if (w.status !== 'complete') {
+    kv.close();
+    throw new Error(`the bench's world could not be created in ${BENCH_DB}: ${w.status} (${w.errorName ?? 'no error name'})`);
+  }
+  return { kv, world, load: openRequest(BENCH_DB, world, state, { worldId: o.id, done: [], undone: [] }).load };
+}
+
+/**
+ * The bench route's saved world at its end (SP5b spec §6.2): every connection to `BENCH_DB` closed, then the database
+ * deleted: the sim's by disposing its client (the worker terminated, its connection with it; IdbKV's self-close on
+ * `versionchange` is the backstop), then the page's (`kv.close()`), then `deleteDb`.
+ */
+export function closeBenchSave(o: { readonly sim: Pick<SimClient, 'dispose'> | null; readonly kv: Pick<KV, 'close'>; deleteDb(db: string): Promise<void> }): Promise<void> {
+  o.sim?.dispose();
+  o.kv.close();
+  return o.deleteDb(BENCH_DB);
+}
+
+/** The bench's autosave listens to no page event: the bench's tab stays in front, and only its parts decide (§6.2). */
+const NO_PAGE_EVENTS: AutosaveDeps['events'] = { on: () => () => {}, hidden: () => false };
+
+/**
+ * L11's saving as the bench route composes it (SP5b spec §6.2; ruling P11): a block history over the bench's edit path
+ * and the action post that records into it (the post L11's edits take; L1-L10 keep the path's own post, so their cells
+ * stay comparable), and the page's autosave (`createPageAutosave`) over the bench's world, created paused, its build the
+ * pose, the clock, the default hotbar, no places and the history; every flush it posts is logged through `flushed` on
+ * `now`'s clock, its `mainMs` from the build's start to the post's return. `hooks` are the driver's `BenchWorld.save`.
+ */
+export function createBenchSave(o: {
+  readonly worldId: string;
+  readonly fly: Pick<FlyState, 'x' | 'y' | 'z' | 'yaw' | 'pitch' | 'mode' | 'speed'>;
+  readonly frame: { readonly t: number };
+  readonly edits: Pick<EditPath, 'post' | 'pending' | 'settled'>;
+  read(x: number, y: number, z: number): number;
+  readonly sim: Pick<SimClient, 'flush'>;
+  readonly clock: AutosaveDeps['clock'];
+  /** The page's clock, ms (`performance.now()`): the flushes' and the edits' times. */
+  now(): number;
+  /** The wall clock (`Date.now()`), the state's `updated`. */
+  wallNow(): number;
+  filled(): boolean;
+  samples(): number;
+  flushed(f: BenchFlush): void;
+}): { readonly autosave: Autosave; readonly blockHistory: BlockHistory; readonly hooks: NonNullable<BenchWorld['save']> } {
+  const accepted = countAccepted(o.edits.post);
+  const blockHistory = createBlockHistory({
+    post: accepted.post,
+    read: (x, y, z) => o.read(x, y, z),
+    pending: o.edits.pending,
+    settled: o.edits.settled,
+    notices: { show() {} },
+  });
+  const actionPost = createActionPost({ post: accepted.post, record: blockHistory.record });
+  const hotbar = STATE_BOUNDS.normalizeHotbar(null);
+  const buildStart = new Float64Array(1);
+  const autosave = createPageAutosave({
+    worldId: o.worldId,
+    fly: o.fly,
+    frame: o.frame,
+    speedIndex: () => 0,
+    storedTime: null,
+    hotbar: () => hotbar,
+    blockHistory,
+    sim: {
+      flush(state, history) {
+        const p = o.sim.flush(state, history);
+        const tPost = o.now();
+        const mainMs = tPost - buildStart[0]!;
+        p.then((r) => o.flushed({
+          tPost, tDone: o.now(), ok: r.ok, syncMs: r.ok ? r.syncMs : Number.NaN, commitMs: r.ok ? r.commitMs : Number.NaN, mainMs,
+        }), () => {});
+        return p;
+      },
+    },
+    settled: o.edits.settled,
+    editsSince: accepted.count,
+    now: () => o.wallNow(),
+    clock: o.clock,
+    events: NO_PAGE_EVENTS,
+    onResult: () => {},
+    onBuild: () => { buildStart[0] = o.now(); },
+  });
+  autosave.pause(true);
+  return {
+    autosave,
+    blockHistory,
+    hooks: {
+      post: (edits) => actionPost(edits),
+      pause: (on) => autosave.pause(on),
+      flushNow: () => autosave.flushNow(),
+      filled: () => o.filled(),
+      now: () => o.now(),
+      samples: () => o.samples(),
+    },
+  };
 }
 
 /**
@@ -1990,10 +2130,23 @@ export function mountWorldPage(root: HTMLElement, q: WorldQuery, hash: string, o
     const simClient = opts.flight === undefined ? createBrowserSim({ onFailure: () => simFailure() }) : null;
     sim = simClient;
     if (simClient !== null) teardown.push(() => simClient.dispose());
+    // The bench's saved world (SP5b spec §6.2): `BENCH_DB` deleted and the route's world created in it before the sim
+    // attaches, so its `load` (an empty world) goes with the attach, as a saved world's; the page keeps its connection
+    // until the script's end.
+    let benchSave: { readonly kv: KV; readonly world: WorldRecord; readonly load: SavedLoad } | null = null;
+    if (opts.bench !== undefined && simClient !== null) {
+      benchSave = await openBenchSave({ open: (db) => openIdbKV(db), deleteDb: deleteIdb, id: crypto.randomUUID(), session: session.state, now: Date.now() });
+      const kv = benchSave.kv;
+      teardown.push(() => kv.close());
+      if (state !== 'loading') return;
+    }
     const attaching = simClient?.attach(store.handles());
-    // A saved world's diffs (SP5b spec §3.4 step 3): `load` is posted right after the attach and awaited with it, so the
-    // read-through sees every saved edit from the first D; a sim that fails meanwhile leaves the world without editing.
-    const savedLoad = saved === null || simClient === null ? null : simClient.load(saved.load);
+    // A saved world's diffs (SP5b spec §3.4 step 3), and the bench's: `load` is posted right after the attach and
+    // awaited with it, so the read-through sees every saved edit from the first D; a sim that fails meanwhile leaves the
+    // world without editing.
+    const savedLoad = simClient === null ? null
+      : saved !== null ? simClient.load(saved.load)
+        : benchSave !== null ? simClient.load(benchSave.load) : null;
     // D14's notices and the load's counts, shown once the world's notices exist.
     const savedNotices: string[] = saved === null ? [] : [...saved.notices];
     const simAttached = attaching === undefined ? undefined : Promise.all([attaching, savedLoad]).then(([, loaded]) => {
@@ -2218,12 +2371,20 @@ export function mountWorldPage(root: HTMLElement, q: WorldQuery, hash: string, o
         stopped = true;
         cancelAnimationFrame(raf);
       };
-      // The live legs' teleport and preview driver (SP4c spec §8.4), created below.
+      // The live legs' teleport and preview driver (SP4c spec §8.4), and L11's autosave (SP5b spec §6.2), created below.
       let benchTeleport: Teleport | null = null;
       let benchDriver: PreviewDriver | null = null;
+      let benchAutosave: Autosave | null = null;
+      // The bench's saved world (opened above): at the end, or at a failure, every connection is closed and
+      // `BENCH_DB` deleted (`closeBenchSave`: the sim's dispose, the page's close, the deletion).
+      const benchKv = benchSave!.kv;
+      const closeBench = (): void => {
+        closeBenchSave({ sim: simClient, kv: benchKv, deleteDb: deleteIdb }).catch((e: unknown) => console.error(`The bench could not delete ${BENCH_DB}:`, e));
+      };
       // A failure after the reveal ends the script with the error, so measureChrome stops at once; the teleport (before
       // the pool: a landing in flight settles silently, ruling R5), the driver, the coordinator, the workers and the
-      // renderer are released as on the streaming route.
+      // renderer are released as on the streaming route, the autosave before the sim, whose dispose closes the bench's
+      // saved world.
       failAfterReveal = (cause, shown) => {
         const renderer = wr;
         wr = null;
@@ -2234,7 +2395,8 @@ export function mountWorldPage(root: HTMLElement, q: WorldQuery, hash: string, o
             () => benchTeleport?.dispose(),
             () => benchDriver?.dispose(),
             () => coordinator.dispose(),
-            () => simClient?.dispose(),
+            () => benchAutosave?.dispose(),
+            closeBench,
             () => pool?.terminate(),
             () => renderer?.dispose(),
           ],
@@ -2315,6 +2477,30 @@ export function mountWorldPage(root: HTMLElement, q: WorldQuery, hash: string, o
         });
         benchTeleport = teleporter;
         teardown.push(() => teleporter.dispose());
+        // L11's saving (SP5b spec §6.2; ruling P11): the block history and the action post L11's edits take, and the
+        // autosave over the bench's saved world, paused until L11b; the driver gets every flush it posts.
+        const benchSaving = createBenchSave({
+          worldId: benchSave!.world.id,
+          fly,
+          frame,
+          edits: benchEdits,
+          read: (x, y, z) => voxelValue(store, x, y, z),
+          sim: simClient!,
+          clock: {
+            now: () => performance.now(),
+            setInterval: (f, ms) => window.setInterval(f, ms),
+            clearInterval: (id) => window.clearInterval(id),
+            setTimeout: (f, ms) => window.setTimeout(f, ms),
+            clearTimeout: (id) => window.clearTimeout(id),
+          },
+          now: () => performance.now(),
+          wallNow: () => Date.now(),
+          filled: () => filledRadius(Math.floor(fly.x) >> 4, Math.floor(fly.z) >> 4, refillRd, isRevealed) === refillRd,
+          samples: () => editLatency.count,
+          flushed: (f) => bench.flushed(f),
+        });
+        benchAutosave = benchSaving.autosave;
+        teardown.push(() => benchSaving.autosave.dispose());
         // The bench's day speed, which a review scene sets to 0 with its fixed hour (SP5a spec §6.5).
         const benchClock = { speed: BENCH_TIME_SPEED };
         // The script's RD steps never exceed the reservation's cap (Task 26b); the review shots' camera reads the ground's
@@ -2350,6 +2536,7 @@ export function mountWorldPage(root: HTMLElement, q: WorldQuery, hash: string, o
             editState: (cx, cz) => coordinator.editState(cx, cz),
             read: (x, y, z) => voxelValue(store, x, y, z),
           },
+          save: benchSaving.hooks,
           setTime: (hours) => benchSetTime(frame, benchClock, hours),
           walk: (on) => benchWalk({ fly, walk, world, repeat: NO_REPEAT }, on),
         });
@@ -2520,6 +2707,9 @@ export function mountWorldPage(root: HTMLElement, q: WorldQuery, hash: string, o
             if (want === null) {
               stop();
               finish();
+              // The script ended: nothing saves any more, and the bench's saved world is closed and deleted.
+              benchSaving.autosave.dispose();
+              closeBench();
               return;
             }
             fly.x = pose.x;

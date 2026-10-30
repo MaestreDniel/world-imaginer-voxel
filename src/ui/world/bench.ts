@@ -15,6 +15,11 @@
  * 2c. then the edit leg L10 (SP5a spec §6.2, D26; `BENCH_EDIT`) at L9's destination: a hover until the RD 12 disc is
  *    filled (at most 60 s), 100 block edits through the page's edit path one every 250 ms, and a closing 6 s flight
  *    east while the pool streams, with 20 more edits; their latency is the page's `editLatency.ts`;
+ * 2d. then the save leg L11 (SP5b spec §6.2, D28; `BENCH_SAVE`) back at L10's hover point, in the bench's own saved
+ *    world (`wi10-bench`, deleted at the run's start and end): once the RD 12 disc there is filled, one unmeasured
+ *    `flushNow()`, then four 30 s parts with autosave off, on, off, on (L11a-L11d), each 150 edits at hold-repeat's
+ *    place rate through the page's action post (each recorded in the block history the flushes save); the `persist`
+ *    block compares the "on" parts' frames, edit latency and flushes with the "off" parts';
  * 3. hands the driver the run's fixed figures (`done`); the driver publishes `summarizeBench`'s JSON as
  *    `window.__wiBench.result` (read by `measureChrome.ts --route bench`) and a "Download JSON" button (the Firefox
  *    cells, by hand).
@@ -60,12 +65,14 @@ export const BENCH_TIME_SPEED = 60;
 export const BENCH_IDLE_FRAMES = 120;
 /**
  * The record's frames (SP5a spec §6.2): 95 s, the live legs at their caps (55 s) and L10 at its caps (91 s: the 60 s
- * hover, 25 s of edits and the 6 s flight) at 240 Hz is 241 s, 57,840 frames; 58,368 holds 243 s.
+ * hover, 25 s of edits and the 6 s flight) at 240 Hz is 241 s, 57,840 frames; 58,368 holds 243 s. SP5b spec §6.2 adds
+ * L11's four 30 s parts, 120 s at 240 Hz: 87,168 holds 363 s (its hover back at L10's place, short when the disc there
+ * stays filled, uses the slack L10's 60 s hover cap leaves; a full record takes no more frames).
  */
-export const BENCH_FRAME_CAPACITY = 58368;
+export const BENCH_FRAME_CAPACITY = 87168;
 
 export interface BenchLeg {
-  readonly name: 'L0' | 'L1' | 'L2' | 'L3' | 'L4' | 'L5' | 'L6' | 'L7' | 'L8' | 'L9' | 'L10';
+  readonly name: 'L0' | 'L1' | 'L2' | 'L3' | 'L4' | 'L5' | 'L6' | 'L7' | 'L8' | 'L9' | 'L10' | 'L11';
   readonly seconds: number;
   /** Blocks per second; 0 hovers. */
   readonly speed: number;
@@ -135,12 +142,43 @@ export const BENCH_EDIT_LEG: BenchLeg = {
   rdSteps: [],
 };
 
-/** Every leg, index = the record's `leg` (L0-L6 the timed script, L7-L9 the live legs, L10 the edit leg). */
-const ALL_LEGS: readonly BenchLeg[] = [...BENCH_LEGS, ...BENCH_LIVE_LEGS, BENCH_EDIT_LEG];
+/**
+ * The save leg L11 (SP5b spec §6.2, D28), after L10's flight: the camera back at L10's hover point (where its flight
+ * started) until the RD 12 disc there is filled (the page's `filledRadius`), at most `hoverMaxS` s (a timeout ends the
+ * script, recorded as `persist.timedOut`); then one `flushNow()` that saves L1-L10's edits, waited for and not measured;
+ * then the parts `BENCH_SAVE_PARTS`, `partS` s each, autosave paused or running as each says, each posting
+ * `editsPerPart` edits one every `everyMs` (hold-repeat's place rate, master §4.12) through the page's action post over
+ * the `area` × `area` columns around the hover point's column, on the surface: alternately a stone placed and broken,
+ * every `torchEvery`th a torch, each place and torch on a voxel of its own.
+ */
+export const BENCH_SAVE = { hoverMaxS: 60, partS: 30, editsPerPart: 150, everyMs: 200, area: 4, torchEvery: 10 } as const;
+
+/** L11's parts in order, and whether autosave runs in each (the comparison: "on" minus "off"). */
+export const BENCH_SAVE_PARTS = [
+  { name: 'L11a', autosave: false },
+  { name: 'L11b', autosave: true },
+  { name: 'L11c', autosave: false },
+  { name: 'L11d', autosave: true },
+] as const;
+export type SavePartName = (typeof BENCH_SAVE_PARTS)[number]['name'];
+
+/** L11 as a leg (`seconds` its caps: the hover's and the four parts'); it ends on its own, not on a timeline. */
+export const BENCH_SAVE_LEG: BenchLeg = {
+  name: 'L11',
+  seconds: BENCH_SAVE.hoverMaxS + BENCH_SAVE_PARTS.length * BENCH_SAVE.partS,
+  speed: 0,
+  headings: [],
+  rdSteps: [],
+};
+
+/** Every leg, index = the record's `leg` (L0-L6 the timed script, L7-L9 the live legs, L10 the edit leg, L11 the save leg). */
+const ALL_LEGS: readonly BenchLeg[] = [...BENCH_LEGS, ...BENCH_LIVE_LEGS, BENCH_EDIT_LEG, BENCH_SAVE_LEG];
 /** The first live leg's index. */
 const FIRST_LIVE = BENCH_LEGS.length;
 /** L10's index. */
 const EDIT_LEG = FIRST_LIVE + BENCH_LIVE_LEGS.length;
+/** L11's index. */
+const SAVE_LEG = EDIT_LEG + 1;
 
 /** Each leg's start, s, and the timed script's length (95 s; the live legs follow it). */
 const LEG_STARTS: readonly number[] = BENCH_LEGS.map((_, i) => BENCH_LEGS.slice(0, i).reduce((s, l) => s + l.seconds, 0));
@@ -616,6 +654,36 @@ export interface EditFigures {
   readonly frames: StreamFigures;
 }
 
+/** One L11 part's frame figures (snapped, over its script window) and its edits' `editVisibleP95` (null with none). */
+export interface SavePartFigures {
+  readonly p95: number;
+  readonly p99: number;
+  readonly over33: number;
+  readonly editVisibleP95: number | null;
+}
+
+/**
+ * L11's block (SP5b spec §6.2, D28): each part's figures; over the "on" parts (L11b, L11d) the flushes posted in them,
+ * `flushes` their count, `flushSyncP95Ms` and `flushSyncMaxMs` (the sim's synchronous part) and `flushCommitP95Ms` over
+ * the written ones, `flushMainP95Ms` (the tick's main-thread work) over all, and `replyDuringFlushP95Ms`, post → reply
+ * of the parts' edits whose interval overlaps a flush's post → `flushed`; then what autosave adds: `over33Added` (the
+ * "on" parts' sum minus the "off" parts'), `p95AddedMs` and `editVisibleAddedMs` (the "on" parts' mean minus the "off"
+ * parts', null when a part has no `editVisibleP95`). A figure with no sample is null; `timedOut` ['L11'] when the disc
+ * never filled.
+ */
+export type PersistFigures = { readonly [K in SavePartName]: SavePartFigures } & {
+  readonly flushSyncP95Ms: number | null;
+  readonly flushSyncMaxMs: number | null;
+  readonly flushCommitP95Ms: number | null;
+  readonly replyDuringFlushP95Ms: number | null;
+  readonly flushMainP95Ms: number | null;
+  readonly flushes: number;
+  readonly over33Added: number;
+  readonly p95AddedMs: number;
+  readonly editVisibleAddedMs: number | null;
+  readonly timedOut: readonly string[];
+};
+
 /** What the driver knows of L10 (SP5a spec §6.2) and hands `summarizeBench`. */
 export interface BenchEditRun {
   /**
@@ -631,6 +699,50 @@ export interface BenchEditRun {
 
 /** No L10 (a run that ended before it). */
 const NO_EDIT_RUN: BenchEditRun = { hoverAccepted: 0, streamingRefused: 0, timedOut: [] };
+
+/**
+ * One autosave flush the page logged (SP5b spec §6.2), on the page's clock (ms): its post and its `flushed`, the sim's
+ * `syncMs` and `commitMs` (NaN for a flush not written), and `mainMs`, the main thread's work for it, from its build's
+ * start to the post's return (the tick's build, change check and post).
+ */
+export interface BenchFlush {
+  readonly tPost: number;
+  readonly tDone: number;
+  readonly ok: boolean;
+  readonly syncMs: number;
+  readonly commitMs: number;
+  readonly mainMs: number;
+}
+
+/**
+ * One L11 part as it ran: its script window [tS0, tS1) (s, the record's `tMs` / 1000), the same window on the page's
+ * clock [t0, t1) (ms) and the edit latency's `visible` samples recorded in it, [samples0, samples1).
+ */
+export interface BenchSavePart {
+  readonly tS0: number;
+  readonly tS1: number;
+  readonly t0: number;
+  readonly t1: number;
+  readonly samples0: number;
+  readonly samples1: number;
+}
+
+/** What the driver knows of L11 (SP5b spec §6.2) and hands `summarizeBench`. */
+export interface BenchSaveRun {
+  /** The `visible` samples recorded before L11 started: L10's flight's end there. */
+  readonly samplesFrom: number;
+  /** The parts that ran, in order (`BENCH_SAVE_PARTS`). */
+  readonly parts: readonly BenchSavePart[];
+  /** L11's accepted edits, post and reply on the page's clock (ms). */
+  readonly edits: readonly { readonly tPost: number; readonly tReply: number }[];
+  /** Every flush the page logged, the unmeasured `flushNow` included. */
+  readonly flushes: readonly BenchFlush[];
+  /** ['L11'] when the disc at L10's hover point never filled within 60 s. */
+  readonly timedOut: readonly string[];
+}
+
+/** No L11 (a run that ended before it, or a driver bound without the save hooks). */
+const NO_SAVE_RUN: BenchSaveRun = { samplesFrom: Number.POSITIVE_INFINITY, parts: [], edits: [], flushes: [], timedOut: [] };
 
 /** The bench's JSON (spec §8.3; SP4c spec §8.4's `live`; SP5a spec §6.2's `edit`). */
 export interface BenchResult {
@@ -660,6 +772,8 @@ export interface BenchResult {
   readonly live: LiveFigures;
   /** L10: the edit leg (SP5a spec §6.2). */
   readonly edit: EditFigures;
+  /** L11: the save leg (SP5b spec §6.2). */
+  readonly persist: PersistFigures;
   /** Every frame whose snapped time is over 33 ms: its raw delta and its own and the previous frame's main ms. */
   readonly longFrames: ReadonlyArray<{
     readonly frame: number; readonly leg: string; readonly rawMs: number; readonly snappedMs: number; readonly mainMs: number;
@@ -822,10 +936,11 @@ const percentileOrNull = (values: ArrayLike<number>, p: number): number | null =
 
 /**
  * L10's block (SP5a spec §6.2) over its rows `idx`: the hover's figures from the first `run.hoverAccepted` values of
- * each latency ring, the streaming p95 from the `visible` values after them (BenchEditRun). A ring that wrapped (more
- * samples than it holds) has lost the hover's first ones, so it is refused.
+ * each latency ring, the streaming p95 from the `visible` values after them up to `samplesEnd` (L11's start; its own
+ * samples follow) (BenchEditRun). A ring that wrapped (more samples than it holds) has lost the hover's first ones, so
+ * it is refused.
  */
-function editFiguresOf(rec: BenchRecord, idx: readonly number[], fixed: BenchFixed, run: BenchEditRun): EditFigures {
+function editFiguresOf(rec: BenchRecord, idx: readonly number[], fixed: BenchFixed, run: BenchEditRun, samplesEnd: number): EditFigures {
   const s = fixed.edit;
   if (s.count > s.visible.length) throw new Error(`summarizeBench: the edit latency's ring wrapped (${s.count} samples, ${s.visible.length} kept)`);
   const hover = (ring: Float64Array): Float64Array => ring.subarray(0, Math.min(run.hoverAccepted, ring.length));
@@ -844,25 +959,75 @@ function editFiguresOf(rec: BenchRecord, idx: readonly number[], fixed: BenchFix
     stagedToShownP95Ms: percentileOrNull(hover(s.stagedToShown), 95),
     editDropped: fixed.totals.editDropped,
     mainP95Ms: percentileOrNull(pick(rec.playerMs, idx), 95),
-    editVisibleStreamingP95: percentileOrNull(s.visible.subarray(visible.length), 95),
+    editVisibleStreamingP95: percentileOrNull(s.visible.subarray(visible.length, samplesEnd), 95),
     streamingRefused: run.streamingRefused,
     timedOut: [...run.timedOut],
     frames: streamFiguresOf(rec, idx, fixed),
   };
 }
 
+const meanOf = (values: readonly number[]): number => values.reduce((a, v) => a + v, 0) / values.length;
+
+/**
+ * L11's block (SP5b spec §6.2) over its rows `idx`: each part's frames are its script window's, its `editVisibleP95` the
+ * `visible` samples recorded in it; the flushes and the edits of the "on" parts are those posted in their windows on the
+ * page's clock. A part that did not run has no frame and no sample.
+ */
+function persistFiguresOf(rec: BenchRecord, idx: readonly number[], fixed: BenchFixed, run: BenchSaveRun): PersistFigures {
+  const parts = BENCH_SAVE_PARTS.map((def, k) => {
+    const p = run.parts[k];
+    const rows = p === undefined ? [] : idx.filter((i) => rec.tMs[i]! >= p.tS0 * 1000 && rec.tMs[i]! < p.tS1 * 1000);
+    const snapped = pick(rec.snappedMs, rows);
+    const figures: SavePartFigures = {
+      p95: percentile(snapped, 95),
+      p99: percentile(snapped, 99),
+      over33: countIf(snapped, (v) => v > LONG_FRAME_MS),
+      editVisibleP95: p === undefined ? null : percentileOrNull(fixed.edit.visible.subarray(p.samples0, p.samples1), 95),
+    };
+    return { def, run: p, figures };
+  });
+  const on = parts.filter((p) => p.def.autosave);
+  const off = parts.filter((p) => !p.def.autosave);
+  const inOn = (t: number): boolean => on.some((p) => p.run !== undefined && t >= p.run.t0 && t < p.run.t1);
+  const flushes = run.flushes.filter((f) => inOn(f.tPost));
+  const written = flushes.filter((f) => f.ok);
+  const sync = written.map((f) => f.syncMs);
+  const overlapping = run.edits.filter((e) => inOn(e.tPost) && run.flushes.some((f) => e.tPost <= f.tDone && e.tReply >= f.tPost));
+  const visible = (ps: typeof parts): number | null => {
+    const v = ps.map((p) => p.figures.editVisibleP95);
+    return v.some((x) => x === null) ? null : meanOf(v as number[]);
+  };
+  const visibleOn = visible(on);
+  const visibleOff = visible(off);
+  return {
+    ...(Object.fromEntries(parts.map((p) => [p.def.name, p.figures])) as { [K in SavePartName]: SavePartFigures }),
+    flushSyncP95Ms: percentileOrNull(sync, 95),
+    flushSyncMaxMs: sync.length === 0 ? null : maxOf(sync),
+    flushCommitP95Ms: percentileOrNull(written.map((f) => f.commitMs), 95),
+    replyDuringFlushP95Ms: percentileOrNull(overlapping.map((e) => e.tReply - e.tPost), 95),
+    flushMainP95Ms: percentileOrNull(flushes.map((f) => f.mainMs), 95),
+    flushes: flushes.length,
+    over33Added: on.reduce((a, p) => a + p.figures.over33, 0) - off.reduce((a, p) => a + p.figures.over33, 0),
+    p95AddedMs: meanOf(on.map((p) => p.figures.p95)) - meanOf(off.map((p) => p.figures.p95)),
+    editVisibleAddedMs: visibleOn === null || visibleOff === null ? null : visibleOn - visibleOff,
+    timedOut: [...run.timedOut],
+  };
+}
+
 /**
  * The bench's JSON from its record and the fixed figures (spec §8.3): `stream` over L1-L6 (the streaming legs; L0's
  * hover only settles the first frames), the same frame figures per leg, L5's refill and L6's frames, `live` over L7-L9
- * (SP4c spec §8.4), `edit` over L10 with the driver's `editRun` (SP5a spec §6.2), every long frame and every structural
- * frame. `gpuMB` is the largest per-frame sum of the breakdown, which is reported at that frame. The live legs' MESH set
- * is the RD they ran at: 12, or the reservation's cap below it.
+ * (SP4c spec §8.4), `edit` over L10 with the driver's `editRun` (SP5a spec §6.2), `persist` over L11 with the driver's
+ * `saveRun` (SP5b spec §6.2), every long frame and every structural frame. `gpuMB` is the largest per-frame sum of the
+ * breakdown, which is reported at that frame. The live legs' MESH set is the RD they ran at: 12, or the reservation's
+ * cap below it.
  */
 export function summarizeBench(
   rec: BenchRecord,
   fixed: BenchFixed,
   teleportError: string | null = null,
   editRun: BenchEditRun = NO_EDIT_RUN,
+  saveRun: BenchSaveRun = NO_SAVE_RUN,
 ): BenchResult {
   const all: number[] = [];
   const byLeg: number[][] = ALL_LEGS.map(() => []);
@@ -941,7 +1106,8 @@ export function summarizeBench(
     L5: { refillMs: fixed.refillMs },
     L6: { frames: legs.L6.frames },
     live,
-    edit: editFiguresOf(rec, byLeg[EDIT_LEG]!, fixed, editRun),
+    edit: editFiguresOf(rec, byLeg[EDIT_LEG]!, fixed, editRun, saveRun.samplesFrom),
+    persist: persistFiguresOf(rec, byLeg[SAVE_LEG]!, fixed, saveRun),
     longFrames,
     structuralFrames,
   };
@@ -1184,6 +1350,20 @@ export interface BenchWorld {
     /** The voxel's value now (`state << 8 | fluid`, 0 where not Published): a review scene's `expect` (SP5a spec §6.5). */
     read(x: number, y: number, z: number): number;
   };
+  /**
+   * L11's hooks (SP5b spec §6.2), over the bench's saved world: the page's action post (the edit path, then the block
+   * history's `record`, ruling P11), the autosave's `pause` and `flushNow`, whether the RD disc around the camera's
+   * column is revealed (`filledRadius`), the page's clock (ms, the clock of `BenchFlush`) and the edit latency's
+   * `visible` samples so far. Absent, the script ends after L10.
+   */
+  readonly save?: {
+    post(edits: readonly Edit[]): Promise<EditOutcome>;
+    pause(on: boolean): void;
+    flushNow(): Promise<unknown>;
+    filled(): boolean;
+    now(): number;
+    samples(): number;
+  };
   /** The review scenes' clock (SP5a spec §6.5): fixed at `hours` (0 … 24) and paused. */
   setTime(hours: number): void;
   /** The review scenes' mode (SP5a spec §6.5): F's path (`toggleMode`, the near plane) when the mode differs. */
@@ -1203,9 +1383,10 @@ export interface BenchWorld {
  * flight: once L10's posts have replied it posts the scene (`reviewSceneEdits` at the hover point) in batches of
  * `REVIEW_SCENE_BATCH`, each after the last's reply, then calls `setTime` (and `walk`), holds the scene's pose for
  * `REVIEW_SETTLE_S` and freezes there. In L7-L10 the pose keeps x, z and the yaw, sets the
- * pitch −15 and y 150 (after L9's arrival, the teleport's y); L10's flight sets x and the yaw 90. The page writes each
- * rendered frame into `record` (`createBenchRecorder`). `fail` ends the script with an error (a failure after the
- * reveal), once.
+ * pitch −15 and y 150 (after L9's arrival, the teleport's y); L10's flight sets x and the yaw 90. With `save` bound,
+ * L11 follows L10's flight (`BENCH_SAVE`): x back at the flight's start, and the page logs every autosave flush through
+ * `flushed`. The page writes each rendered frame into `record` (`createBenchRecorder`). `fail` ends the script with an
+ * error (a failure after the reveal), once.
  */
 export interface BenchDriver {
   readonly record: BenchRecord;
@@ -1215,6 +1396,8 @@ export interface BenchDriver {
   pose(tS: number, out: BenchPose, fogRd: number): number | null;
   done(fixed: BenchFixed): void;
   fail(error: string): void;
+  /** An autosave flush settled (SP5b spec §6.2): the page logs every one, for L11's `persist` block. */
+  flushed(f: BenchFlush): void;
 }
 
 /**
@@ -1254,6 +1437,17 @@ const L10_EDITS = 1;
 const L10_FLIGHT = 2;
 /** A review shot's phase after the edits, in place of the flight (SP5a spec §6.5). */
 const L10_SCENE = 3;
+/** L11's interval between edits, s, and the tolerance its schedule allows the script's float times. */
+const SAVE_EVERY_S = BENCH_SAVE.everyMs / 1000;
+const SAVE_EPS_S = 1e-6;
+/** L11's edits in all (600). */
+const SAVE_EDITS = BENCH_SAVE_PARTS.length * BENCH_SAVE.editsPerPart;
+/** The spots an L11 column offers, an 8 × 8 grid two blocks apart, so each place and torch has a voxel of its own. */
+const SAVE_SPOTS_PER_COLUMN = 64;
+/** L11's phases: the hover back at L10's place for the disc, the unmeasured flush, the parts. */
+const L11_HOVER = 0;
+const L11_FLUSH = 1;
+const L11_PARTS = 2;
 
 export function createBenchDriver(o: { readonly shot: BenchShot | null; readonly capacity?: number; readonly publish: BenchPublish }): BenchDriver {
   const record = createBenchRecord(o.capacity ?? BENCH_FRAME_CAPACITY);
@@ -1269,8 +1463,8 @@ export function createBenchDriver(o: { readonly shot: BenchShot | null; readonly
   let heightAt: BenchWorld['heightAt'] | null = null;
   let live: BenchWorld['live'] | null = null;
   let shotY = Number.NaN;
-  // The live legs (SP4c spec §8.4) and L10: the one running (0 before L7, 11 after L10), its start and L7's, s; L9's
-  // arrival: `arrived` set by the teleport's promise, `arrivedS` the first pose after it (NaN before).
+  // The live legs (SP4c spec §8.4), L10 and L11: the one running (0 before L7, 12 after the last), its start and L7's,
+  // s; L9's arrival: `arrived` set by the teleport's promise, `arrivedS` the first pose after it (NaN before).
   let liveLeg = 0;
   let legStartS = 0;
   let l7StartS = Number.NaN;
@@ -1304,6 +1498,28 @@ export function createBenchDriver(o: { readonly shot: BenchShot | null; readonly
   let posedS = Number.NaN;
   let sceneFrozen = false;
   let sceneError: string | null = null;
+  // L11 (SP5b spec §6.2): its hooks (null until `bind`, and without them no L11), its phase, the flush's settling, the
+  // running part (its index, start in s, edits posted, and its page-clock start and sample count), the edits posted in
+  // all (their alternation and torches), the next spot, the stone placed and not yet broken, its accepted edits' post
+  // and reply times, the parts and flushes logged, the samples before it, and its time-out; its place (x, z): L10's
+  // hover point, where L10's flight started.
+  let save: NonNullable<BenchWorld['save']> | null = null;
+  const savePoint = new Float64Array(2);
+  let savePhase = L11_HOVER;
+  let saveFlushed = false;
+  let savePart = 0;
+  let partS = 0;
+  let partPosted = 0;
+  const partStart = new Float64Array(2);
+  let savePosted = 0;
+  let saveSpot = 0;
+  const savePlaced = Float64Array.of(0, Number.NaN, 0);
+  const saveTimes = new Float64Array(2 * SAVE_EDITS);
+  let saveAccepted = 0;
+  const saveParts: BenchSavePart[] = [];
+  const flushLog: BenchFlush[] = [];
+  let samplesFrom = Number.POSITIVE_INFINITY;
+  let saveTimedOut = false;
   const capped = (rd: number): number => Math.min(rd, rdMax);
 
   /** The live legs' pose (SP4c spec §8.4): x, z and the yaw kept; pitch −15; y 150 until L9's arrival, then kept. */
@@ -1480,6 +1696,115 @@ export function createBenchDriver(o: { readonly shot: BenchShot | null; readonly
     if (tS - posedS >= REVIEW_SETTLE_S) frozenLive = sceneFrozen = true;
     return true;
   };
+  /** Posts one L11 voxel edit through the action post; an accepted one's post and reply go to `saveTimes`. */
+  const postSave = (x: number, y: number, z: number, value: number, expect: number): void => {
+    const hooks = save!;
+    const tPost = hooks.now();
+    hooks.post([{ x, y, z, op: 'set', value, expect }]).then((r) => {
+      if (!r.ok || saveAccepted >= SAVE_EDITS) return;
+      saveTimes[2 * saveAccepted] = tPost;
+      saveTimes[2 * saveAccepted + 1] = hooks.now();
+      saveAccepted++;
+    }, () => {});
+  };
+  /**
+   * L11's next spot (plan): spot n lies on column n mod 16 of the 4 × 4 columns around block (bx, bz)'s column (east,
+   * then south, from 2 columns west and north of it), at point n / 16 of the column's 8 × 8 grid; its surface voxel
+   * (`heightAt`, the first free y) is written into `at`. A spot whose surface is not in the world is skipped; false when
+   * none is.
+   */
+  const nextSaveSpot = (bx: number, bz: number): boolean => {
+    const area = BENCH_SAVE.area;
+    const columns = area * area;
+    const cx0 = (bx >> 4) - area / 2;
+    const cz0 = (bz >> 4) - area / 2;
+    for (let tries = 0; tries < columns * SAVE_SPOTS_PER_COLUMN; tries++) {
+      const n = saveSpot++;
+      const c = n % columns;
+      const r = Math.floor(n / columns) % SAVE_SPOTS_PER_COLUMN;
+      const x = 16 * (cx0 + (c % area)) + 1 + 2 * (r % 8);
+      const z = 16 * (cz0 + Math.floor(c / area)) + 1 + 2 * Math.floor(r / 8);
+      const y = heightAt!(x, z);
+      if (y === null || y > MAX_Y) continue;
+      at[0] = x;
+      at[1] = y;
+      at[2] = z;
+      return true;
+    }
+    return false;
+  };
+  /**
+   * L11's next edit, as L10's hover edits: every tenth a torch on a new spot; otherwise the stone placed by the last
+   * stone edit broken back to air, or a stone placed on a new spot (air expected).
+   */
+  const saveEdit = (): void => {
+    const k = savePosted++;
+    const bx = Math.floor(savePoint[0]!);
+    const bz = Math.floor(savePoint[1]!);
+    if (k % BENCH_SAVE.torchEvery === BENCH_SAVE.torchEvery - 1) {
+      if (nextSaveSpot(bx, bz)) postSave(at[0]!, at[1]!, at[2]!, TORCH_VALUE, 0);
+    } else if (!Number.isNaN(savePlaced[1]!)) {
+      postSave(savePlaced[0]!, savePlaced[1]!, savePlaced[2]!, 0, STONE_VALUE);
+      savePlaced[1] = Number.NaN;
+    } else if (nextSaveSpot(bx, bz)) {
+      savePlaced.set(at);
+      postSave(at[0]!, at[1]!, at[2]!, STONE_VALUE, 0);
+    }
+  };
+  /** Starts part `k` at `tS`: autosave paused or running as the part says; its page-clock start and sample count. */
+  const startPart = (k: number, tS: number): void => {
+    const hooks = save!;
+    savePart = k;
+    partS = tS;
+    partPosted = 0;
+    hooks.pause(!BENCH_SAVE_PARTS[k]!.autosave);
+    partStart[0] = hooks.now();
+    partStart[1] = hooks.samples();
+  };
+  /** Ends the running part at `tS`, logging its windows and samples. */
+  const endPart = (tS: number): void => {
+    const hooks = save!;
+    saveParts.push({ tS0: partS, tS1: tS, t0: partStart[0]!, t1: hooks.now(), samples0: partStart[1]!, samples1: hooks.samples() });
+  };
+  /**
+   * One frame of L11 at `tS` (SP5b spec §6.2), after `livePose`, at L10's hover point: the hover until the disc there is
+   * filled (at most 60 s), the unmeasured flush, then the four parts, each pausing or running autosave at its start and
+   * posting its edits one every 200 ms; false once it ends (timed out, or after L11d, autosave paused again).
+   */
+  const saveStep = (tS: number, out: BenchPose): boolean => {
+    const hooks = save!;
+    out.x = savePoint[0]!;
+    out.z = savePoint[1]!;
+    if (savePhase === L11_HOVER) {
+      // On L11's first frame the camera is still where the flight ended: the disc is read from the next one.
+      if (tS === legStartS || !hooks.filled()) {
+        if (tS - legStartS < BENCH_SAVE.hoverMaxS) return true;
+        saveTimedOut = true;
+        return false;
+      }
+      savePhase = L11_FLUSH;
+      const settled = (): void => { saveFlushed = true; };
+      hooks.flushNow().then(settled, settled);
+      return true;
+    }
+    if (savePhase === L11_FLUSH) {
+      if (!saveFlushed) return true;
+      savePhase = L11_PARTS;
+      startPart(0, tS);
+    } else if (tS - partS >= BENCH_SAVE.partS - SAVE_EPS_S) {
+      endPart(tS);
+      if (savePart + 1 >= BENCH_SAVE_PARTS.length) {
+        hooks.pause(true);
+        return false;
+      }
+      startPart(savePart + 1, tS);
+    }
+    if (partPosted < BENCH_SAVE.editsPerPart && tS - partS >= partPosted * SAVE_EVERY_S - SAVE_EPS_S) {
+      partPosted++;
+      saveEdit();
+    }
+    return true;
+  };
   /**
    * One frame of the live legs at `tS`: whether a leg ends (settled or at its cap) and the next starts, or the script
    * ends (false); a live shot freezes on its event (`frozenLive`).
@@ -1502,7 +1827,7 @@ export function createBenchDriver(o: { readonly shot: BenchShot | null; readonly
         if (leg === 9) toEdit = true;
         else next = (leg + 1) as LiveLeg;
       }
-    } else if (liveLeg !== EDIT_LEG) return false;
+    } else if (liveLeg !== EDIT_LEG && liveLeg !== SAVE_LEG) return false;
     if (o.shot === 'apply-mid' && !Number.isNaN(l7StartS) && tS - l7StartS >= APPLY_MID_AFTER_S) frozenLive = true;
     if (o.shot === 'teleport' && !Number.isNaN(arrivedS) && tS - arrivedS >= TELEPORT_SHOT_AFTER_S) frozenLive = true;
     if (frozenLive) return true;
@@ -1512,7 +1837,19 @@ export function createBenchDriver(o: { readonly shot: BenchShot | null; readonly
       legStartS = tS;
     }
     if (liveLeg === EDIT_LEG && !editStep(tS, out)) {
-      liveLeg = EDIT_LEG + 1;
+      // L10's flight ended: L11 follows when its hooks are bound (never after L10's time-out or a review scene).
+      if (save === null || editTimedOut || review !== null) {
+        liveLeg = SAVE_LEG + 1;
+        return false;
+      }
+      liveLeg = SAVE_LEG;
+      legStartS = tS;
+      samplesFrom = save.samples();
+      savePoint[0] = flightX;
+      savePoint[1] = out.z;
+    }
+    if (liveLeg === SAVE_LEG && !saveStep(tS, out)) {
+      liveLeg = SAVE_LEG + 1;
       return false;
     }
     writeRow(liveLeg, tS);
@@ -1530,6 +1867,7 @@ export function createBenchDriver(o: { readonly shot: BenchShot | null; readonly
       heightAt = (x, z) => world.heightAt(x, z);
       live = world.live;
       edit = world.edit;
+      save = world.save ?? null;
       sceneHooks = { setTime: (h) => world.setTime(h), walk: (on) => world.walk(on) };
     },
     pose(tS, out, fogRd) {
@@ -1595,7 +1933,11 @@ export function createBenchDriver(o: { readonly shot: BenchShot | null; readonly
       if (o.shot !== null) return;
       let result: BenchResult | BenchError;
       try {
-        result = summarizeBench(record, fixed, teleportError, { hoverAccepted, streamingRefused, timedOut: editTimedOut ? ['L10'] : [] });
+        const edits = Array.from({ length: saveAccepted }, (_, k) => ({ tPost: saveTimes[2 * k]!, tReply: saveTimes[2 * k + 1]! }));
+        result = summarizeBench(
+          record, fixed, teleportError, { hoverAccepted, streamingRefused, timedOut: editTimedOut ? ['L10'] : [] },
+          { samplesFrom, parts: [...saveParts], edits, flushes: [...flushLog], timedOut: saveTimedOut ? ['L11'] : [] },
+        );
       } catch (e) {
         result = { route: 'bench=medium', error: e instanceof Error ? e.stack ?? e.message : String(e) };
       }
@@ -1605,6 +1947,9 @@ export function createBenchDriver(o: { readonly shot: BenchShot | null; readonly
       if (ended) return;
       ended = true;
       o.publish.result({ route: 'bench=medium', error });
+    },
+    flushed(f) {
+      flushLog.push(f);
     },
   };
 }

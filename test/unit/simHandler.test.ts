@@ -17,11 +17,11 @@ import { decodeColumnDiff, encodeColumnDiff } from '../../src/persist/diffCodec'
 import type { KV, WriteOp } from '../../src/persist/kv';
 import { createMemoryKV, type MemoryKV } from '../../src/persist/memory';
 import { flushOps, todayStateTable, type HistoryRecord, type StateRecord, type WorldRecord } from '../../src/persist/saves';
-import { NO_ENTRY } from '../../src/sim/diffStore';
+import { createDiffStore, NO_ENTRY } from '../../src/sim/diffStore';
 import { applyEdits } from '../../src/sim/edits';
 import { DIRT, GLASS, STONE } from '../../src/world/blocks/index';
 import type { DiffMsg, EditedMsg, ErrorMsg, FlushedMsg, FromSim, LoadedMsg } from '../../src/workers/protocol';
-import { createMemorySimHandler, createSimHandler, SIM_DRAIN_MS, type SimHandler, type SimReply } from '../../src/workers/simHandler';
+import { createMemorySimHandler, createSimHandler, flushSyncPart, SIM_DRAIN_MS, type SimHandler, type SimReply } from '../../src/workers/simHandler';
 import { R_READER, SIM_THREAD } from '../../src/world/store/reclaim';
 import type { ColumnDiff } from '../../src/world/store/api';
 import type { VoxelStore } from '../../src/world/store/store';
@@ -788,5 +788,47 @@ describe('`load` (SP5b spec §2.3, §3.3, D18, D19, D22)', () => {
     r.send(loadMsg(3, 'w1'));
     await r.until(1);
     expect([(r.got[0]!.msg as ErrorMsg).jobId, (r.got[0]!.msg as ErrorMsg).code]).toEqual([3, 'INTERNAL']);
+  });
+});
+
+describe('`flushSyncPart` (SP5b spec §6.2: the `persist.flush` bench row times the sim\'s own synchronous part)', () => {
+  test('`flushSyncPart` of 64 marked keys returns their ops, the keys as `taken` and the batch\'s bytes; the dirty set is empty after it', () => {
+    const diffs = createDiffStore();
+    /** One full dense section (fmt 1) at sy 2. */
+    const dense: ColumnDiff = { sy: new Uint8Array(4096).fill(2), idx: Uint16Array.from({ length: 4096 }, (_, k) => k), value: new Uint32Array(4096).fill(val(STONE)) };
+    const keys: number[] = [];
+    const cols: Array<{ key: number; bytes: Uint8Array | null }> = [];
+    let bytes = 0;
+    for (let i = 0; i < 64; i++) {
+      const cx = (i & 7) - 4;
+      const cz = (i >> 3) - 4;
+      const key = colKey(cx, cz);
+      keys.push(key);
+      // Every eighth column holds no entry (its key is deleted); the others a few entries, one a dense section.
+      if (i % 8 === 7) {
+        cols.push({ key, bytes: null });
+        continue;
+      }
+      const d = i === 0 ? dense : diffOf([[i % 24, i, val(STONE)], [(i + 5) % 24, 4095 - i, val(DIRT, 3)]]);
+      diffs.setColumn(cx, cz, d);
+      const b = encodeColumnDiff(d, GEN);
+      bytes += b.byteLength;
+      cols.push({ key, bytes: b });
+    }
+    // `setColumn` marks nothing: the 64 keys are marked as edits would mark them.
+    expect(diffs.takeDirty()).toHaveLength(0);
+    diffs.markDirty(keys);
+    const state = { ...stateOf('wp'), flushSeq: 5 };
+    const history = historyOf('wp');
+    const world = recordOf('wp');
+    const r = flushSyncPart(diffs, 'wp', GEN, state, history, world);
+    expect(r.ops).toEqual(flushOps('wp', cols, state, history, world));
+    expect([...r.taken]).toEqual(keys);
+    expect(r.bytes).toBe(bytes);
+    expect(r.ops).toHaveLength(64 + 3);
+    expect(diffs.takeDirty()).toHaveLength(0);
+    // Nothing marked: a batch of the state alone.
+    const empty = flushSyncPart(diffs, 'wp', GEN, state, null, null);
+    expect([empty.ops, [...empty.taken], empty.bytes]).toEqual([[{ op: 'put', store: 'state', key: 'wp', value: state }], [], 0]);
   });
 });

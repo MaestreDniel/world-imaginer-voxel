@@ -26,16 +26,16 @@
  * with nothing in the DiffStore. From a `load`'s arrival until it settles every later message waits, in arrival order;
  * a second `load` is BAD_MESSAGE. The load's `flushSeq`, genKey (a `Hash64`) and `updated` are kept for the flush.
  *
- * `flush` (spec §3.2, D18): with none in flight its synchronous part runs at once: the dirty-column set is taken, each
- * column encoded under the header genKey when it holds entries (else its key deleted), and `state` with `flushSeq` = the
- * last committed + 1, the history when given and a pending `record` go in one `write`. One flush is in flight at a
- * time: a later one waits, and a newer one replaces it (its state is newer; the waiting history is kept unless the newer
- * one carries one), answering every replaced id with its outcome (ruling P4). On `complete` the flush's `flushSeq` and
- * `updated` become the last committed; on `abort` or `closed` the taken columns are marked dirty again and the history
- * and the `record` stay pending unless newer ones arrived. An edit handled while the write is out marks its column again,
- * so the next flush carries it. `record` (no reply) waits for the next flush, and its genKey heads every column encoded
- * from then on (D21). A latched handler never flushes: a `flush` is INTERNAL and a `record` is dropped; with no world
- * loaded either is BAD_MESSAGE.
+ * `flush` (spec §3.2, D18): with none in flight its synchronous part (`flushSyncPart`) runs at once: the dirty-column
+ * set is taken, each column encoded under the header genKey when it holds entries (else its key deleted), and `state`
+ * with `flushSeq` = the last committed + 1, the history when given and a pending `record` go in one `write`. One flush
+ * is in flight at a time: a later one waits, and a newer one replaces it (its state is newer; the waiting history is
+ * kept unless the newer one carries one), answering every replaced id with its outcome (ruling P4). On `complete` the
+ * flush's `flushSeq` and `updated` become the last committed; on `abort` or `closed` the taken columns are marked dirty
+ * again and the history and the `record` stay pending unless newer ones arrived. An edit handled while the write is out
+ * marks its column again, so the next flush carries it. `record` (no reply) waits for the next flush, and its genKey
+ * heads every column encoded from then on (D21). A latched handler never flushes: a `flush` is INTERNAL and a `record`
+ * is dropped; with no world loaded either is BAD_MESSAGE.
  */
 import { colKeyCx, colKeyCz } from '../core/coords';
 import { parseHex64, type Hash64 } from '../core/hash';
@@ -95,6 +95,29 @@ interface QueuedFlush {
   state: StateRecord;
   history: HistoryRecord | null;
   readonly waiters: Array<{ readonly id: number; readonly post: (r: SimReply) => void }>;
+}
+
+/**
+ * A flush's synchronous part (spec §3.2; the `persist.flush` bench row times it, §6.2): the dirty-column set taken
+ * (`takeDirty`, which clears it), each column encoded under `genKey` when it holds entries (else its key deleted), and
+ * the batch with `state`, the history and the world record when given (`flushOps`). `taken` is the keys taken, which an
+ * aborted write marks dirty again; `bytes` the encoded columns' total.
+ */
+export function flushSyncPart(
+  diffs: DiffStore, worldId: string, genKey: Hash64, state: StateRecord, history: HistoryRecord | null, world: WorldRecord | null,
+): { ops: WriteOp[]; taken: Float64Array; bytes: number } {
+  const taken = diffs.takeDirty();
+  const cols: Array<{ key: number; bytes: Uint8Array | null }> = [];
+  let bytes = 0;
+  for (const key of taken) {
+    const cx = colKeyCx(key);
+    const cz = colKeyCz(key);
+    const col = diffs.columnSections(cx, cz);
+    const b = col === null ? null : encodeColumnSections(col, genKey);
+    if (b !== null) bytes += b.byteLength;
+    cols.push({ key, bytes: b });
+  }
+  return { ops: flushOps(worldId, cols, state, history, world), taken, bytes };
 }
 
 /** A record decoded and remapped, waiting for the rewrite's write before it reaches the DiffStore. */
@@ -203,26 +226,19 @@ export function createSimHandler(o: SimHandlerOptions): SimHandler {
     let write: Promise<WriteResult>;
     let syncMs: number;
     let columns: number;
-    let bytes = 0;
+    let bytes: number;
     let hist: HistoryRecord | null;
     let record: WorldRecord | null;
     const flushSeq = w.flushSeq + 1;
     const t0 = now();
     try {
-      keys = diffs.takeDirty();
-      const cols: Array<{ key: number; bytes: Uint8Array | null }> = [];
-      for (const key of keys) {
-        const cx = colKeyCx(key);
-        const cz = colKeyCz(key);
-        const col = diffs.columnSections(cx, cz);
-        const b = col === null ? null : encodeColumnSections(col, w.genKey);
-        if (b !== null) bytes += b.byteLength;
-        cols.push({ key, bytes: b });
-      }
-      columns = cols.length;
       hist = history ?? pendingHistory;
       record = pendingRecord;
-      const ops = flushOps(w.worldId, cols, { ...state, flushSeq }, hist, record);
+      const part = flushSyncPart(diffs, w.worldId, w.genKey, { ...state, flushSeq }, hist, record);
+      keys = part.taken;
+      columns = keys.length;
+      bytes = part.bytes;
+      const ops = part.ops;
       pendingHistory = null;
       pendingRecord = null;
       syncMs = now() - t0;
