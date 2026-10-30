@@ -23,8 +23,9 @@
  *    refuses unless the viewport is exactly 1920 × 1080 @ 1 (ruling P7); --probe-only stops here with exit 0;
  * 6. it records the page's console errors (ruling P8), navigates, and polls the route's result every second (15 min);
  *    every CDP call is bounded, and the poll fails fast when Chrome exits or the tab crashes (`pollResult`, `watchPage`);
- *    the enter route instead loads its setup page, six (a)/(b) pairs (their legs in `enterOrder`'s alternating order)
- *    and its end page, each a fresh page load polled for its own result, recording each load's machine telemetry
+ *    the enter route instead loads its setup page, six (a)/(b) pairs (their legs in `enterOrder`'s alternating order),
+ *    a new world created from the start screen (`newWorldLeg`) and its end page, each a fresh page load polled for its
+ *    own result, recording each pair load's machine telemetry
  *    (`machineTelemetry`; `runEnter`), and summarises them (`enterSummary`);
  * 7. it adds who measured, the load averages, the Chrome version, the window (warning when it left eDP-1), the viewport
  *    and the console errors, writes the JSON pretty-printed and prints its path and summary (ruling P9); for a shot it
@@ -369,6 +370,12 @@ const ENTER_RD = 12;
 export const ENTER_PAIRS = 6;
 /** The enter bench's end page: `wi10-bench` deleted. */
 export const ENTER_END_PATH = '/?bench=enter&phase=end';
+/**
+ * The new-world leg's start screen (SP5b spec §6.2): the worlds menu over `wi10-bench` (`db` is honoured only with
+ * `enterBench=1`), whose Create opens `/?world=<id>&enterBench=1&db=wi10-bench`, so the world is written to and
+ * measured in the bench's database.
+ */
+export const ENTER_NEW_WORLD_PATH = `/?enterBench=1&db=${ENTER_DB}`;
 /** How long one page of the enter route (the setup, a world load, the end) may take to publish its result. */
 const ENTER_PAGE_TIMEOUT_MS = 5 * 60 * 1000;
 
@@ -696,30 +703,65 @@ export async function pollResult(o: ResultPoll): Promise<string> {
   }
 }
 
+/** The new-world leg's page actions, over CDP in `runEnter` and over fakes in the unit test. */
+export interface NewWorldIo {
+  /** Loads `path` as a fresh page. */
+  open(path: string): Promise<void>;
+  /** Clicks the element `#id` once it exists and shows. */
+  click(id: string): Promise<void>;
+  /** The revealed world page's `window.__wiEnterResult` (a page's `{ error }` rejects). */
+  result(): Promise<EnterResult>;
+}
+
+/**
+ * The new world from the start screen (SP5b spec §6.2): `ENTER_NEW_WORLD_PATH`, New world (`#start-new`), Create
+ * (`#new-create`) with the proposed name, a random seed and the default preset, then the new world's `revealMs`
+ * (`newWorldRevealMs`).
+ */
+export async function newWorldLeg(io: NewWorldIo): Promise<number | null> {
+  await io.open(ENTER_NEW_WORLD_PATH);
+  await io.click('start-new');
+  await io.click('new-create');
+  return (await io.result()).revealMs;
+}
+
+/** Clicks `#id` when it exists and no ancestor is hidden; false while it does not. */
+const CLICK_SHOWN = (id: string) => `(() => {
+  const e = document.getElementById(${JSON.stringify(id)});
+  if (e === null || e.closest('[hidden]') !== null) return false;
+  e.click();
+  return true;
+})()`;
+
 /**
  * The enter route's pages (SP5b spec §6.2), each a fresh page load polled for its own global: the setup page
  * (`__wiEnter`: the saved world and its pose), six pairs of (a) and (b) in `enterOrder` (`__wiEnterResult`), each load's
- * `machineTelemetry` read as its result arrives, then the end page (`wi10-bench` deleted). The new world from the start
- * screen is Task 20's leg: until the worlds menu exists it is skipped, `newWorldRevealMs` null. A page's `{ error }`
- * stops the run.
+ * `machineTelemetry` read as its result arrives, the new world from the start screen (`newWorldLeg`), then the end page
+ * (`wi10-bench` deleted, the new world with it). A page's `{ error }` stops the run.
  */
 async function runEnter(o: { readonly cdp: Cdp; readonly base: string; readonly setupPath: string; readonly watch: PageWatch }): Promise<{ pairs: EnterPair[]; loads: LoadTelemetry[]; newWorldRevealMs: number | null }> {
-  const page = async <T>(path: string, global: '__wiEnter' | '__wiEnterResult'): Promise<T> => {
+  const open = async (path: string, global: '__wiEnter' | '__wiEnterResult'): Promise<void> => {
     // The previous document's value never answers for the next one.
     await evaluate(o.cdp, `delete window.${global}; true`);
     const url = new URL(path, o.base).href;
     console.log(`navigating to ${url}`);
     await call(o.cdp, 'Page.navigate', { url });
-    const text = await pollResult({
-      read: () => Promise.race([evaluate<string | null>(o.cdp, READ_GLOBAL(global)), o.watch.lost]),
-      dead: o.watch.dead,
-      pollMs: POLL_MS,
-      callTimeoutMs: CDP_CALL_TIMEOUT_MS,
-      timeoutMs: ENTER_PAGE_TIMEOUT_MS,
-    });
-    const v = JSON.parse(text) as Record<string, unknown>;
+  };
+  const poll = async (expression: string, what: string): Promise<string> => pollResult({
+    read: () => Promise.race([evaluate<string | null>(o.cdp, expression), o.watch.lost]),
+    dead: o.watch.dead,
+    pollMs: POLL_MS,
+    callTimeoutMs: CDP_CALL_TIMEOUT_MS,
+    timeoutMs: ENTER_PAGE_TIMEOUT_MS,
+  }).catch((e: unknown) => { throw new Error(`${what}: ${e instanceof Error ? e.message : String(e)}`); });
+  const resultOf = async <T>(path: string, global: '__wiEnter' | '__wiEnterResult'): Promise<T> => {
+    const v = JSON.parse(await poll(READ_GLOBAL(global), path)) as Record<string, unknown>;
     if ('error' in v) throw new Error(`${path}: ${String(v['error'])}`);
     return v as T;
+  };
+  const page = async <T>(path: string, global: '__wiEnter' | '__wiEnterResult'): Promise<T> => {
+    await open(path, global);
+    return resultOf<T>(path, global);
   };
   const setup = await page<EnterSetup>(o.setupPath, '__wiEnter');
   console.log(`saved world ${setup.worldId} at ${setup.pose.x}, ${setup.pose.y}, ${setup.pose.z} (yaw ${setup.pose.yaw}, pitch ${setup.pose.pitch})`);
@@ -741,9 +783,16 @@ async function runEnter(o: { readonly cdp: Cdp; readonly base: string; readonly 
     const order = enterOrder(i).map(name).join(' then ');
     console.log(`pair ${i + 1}/${ENTER_PAIRS} (${order}): (a) ${p.unsaved.revealMs} ms, (b) ${p.saved.revealMs} ms${i === 0 ? ' (discarded: the cold cache)' : ''}`);
   }
-  console.log('the new world from the start screen: skipped until the worlds menu exists (Task 20); newWorldRevealMs null');
+  const newWorldRevealMs = await newWorldLeg({
+    open: (path) => open(path, '__wiEnterResult'),
+    click: async (id) => {
+      await poll(`(${CLICK_SHOWN(id)}) ? 'clicked' : null`, `#${id}`);
+    },
+    result: () => resultOf<EnterResult>('the new world', '__wiEnterResult'),
+  });
+  console.log(`the new world from the start screen: ${newWorldRevealMs} ms`);
   await page<{ ended: true }>(ENTER_END_PATH, '__wiEnter');
-  return { pairs, loads, newWorldRevealMs: null };
+  return { pairs, loads, newWorldRevealMs };
 }
 
 // ---------------------------------------------------------------- the machine

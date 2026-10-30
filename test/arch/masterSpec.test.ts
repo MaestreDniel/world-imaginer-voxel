@@ -1370,6 +1370,7 @@ describe('master spec amendments (SP5b §9)', () => {
     [/^\s+ui\/world\/\* /, 'stateBounds.ts autosave.ts worldLock.ts modifyMode.ts places.ts placeDialog.ts (SP5b)', 'src/ui/world/stateBounds.ts'],
     [/^\s+ui\/world\/\* /, 'stateBounds.ts autosave.ts worldLock.ts modifyMode.ts places.ts placeDialog.ts (SP5b)', 'src/ui/world/autosave.ts'],
     [/^\s+ui\/world\/\* /, 'stateBounds.ts autosave.ts worldLock.ts modifyMode.ts places.ts placeDialog.ts (SP5b)', 'src/ui/world/worldLock.ts'],
+    [/^\s+ui\/shell\.ts /, 'worldsMenu.ts settingsPanel.ts (SP5b)', 'src/ui/worldsMenu.ts'],
   ];
 
   test('§10\'s SP5b entry and its receivers (SP5b spec §9, §11)', () => {
@@ -1448,6 +1449,19 @@ describe('master spec amendments (SP5b §9)', () => {
     expect(lines).toContain('**Block undo** (SP5a): Ctrl+Z / Ctrl+Y undo and redo block edits while the world owns the controls, the last 100 undo and 100 redo steps per world, kept across reloads (SP5b), separate from the map\'s history.');
     expect(s412).not.toContain('100 steps per session');
     expect(s412).toContain('Hotbar slots persist per world by type name (SP5b, in the `state` store), never by state id.');
+  });
+
+  test('§1\'s ui/world line names the start and worlds menus at `/`; §2.7\'s Session keeps the open world in the URL and the map\'s URL for the map and unsaved worlds; §5.2\'s World names the start screen\'s menus (SP5b spec §1.1, D1, D2, §9)', () => {
+    const entry = layoutEntry(/^\s+ui\/world\/\* /);
+    expect(entry).toContain('(SP4a) the 3D page: the start and worlds menus at `/` (SP5b: `ui/worldsMenu.ts`), the world page,');
+    expect(entry).not.toContain('the minimal start screen at `/`');
+    const session = text.split('\n').find((l) => l.startsWith('**Session.** '));
+    expect(session, 'no **Session.** paragraph in §2.7').toBeDefined();
+    expect(session!.startsWith('**Session.** Settings and panel layout go to localStorage behind try/catch; the open world is in the URL (`/?world=<id>`; SP5b). The world URL `?map#base64url(canonicalJSON({v: 1, seed, profile, patch, view}))`, for the map and for unsaved worlds (SP5b), makes a world shareable:')).toBe(true);
+    expect(session).not.toContain('last world');
+    const at52 = text.indexOf('### 5.2 ');
+    const lines52 = text.slice(at52, text.indexOf('### 5.3 ', at52)).split('\n');
+    expect(lines52).toContain('- **World:** seed (typed seed is authoritative; separate "Regenerate same seed" and "New seed" buttons), profile, presets, worlds (the start screen\'s menus, SP5b).');
   });
 
   test('§1 names each SP5b module in its entry, which exists', () => {

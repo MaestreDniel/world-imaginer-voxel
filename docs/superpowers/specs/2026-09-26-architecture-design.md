@@ -192,7 +192,7 @@ world-imaginer-voxel/          (repository root)
                                 the parameter panel, spline drawer, biome table, presets tab and cross-section (pure models beside thin DOM);
                                 SP3a adds the cross-section's Voxels mode
     ui/lab/* seedBox.ts          (SP1) the ?lab=noise research page; DOM-free seed-box logic
-    ui/world/* ui/loading/* ui/spike/* settings.ts   (SP4a) the 3D page: the minimal start screen at `/`, the world page, the
+    ui/world/* ui/loading/* ui/spike/* settings.ts   (SP4a) the 3D page: the start and worlds menus at `/` (SP5b: `ui/worldsMenu.ts`), the world page, the
                                 flight (`?flight=sp4a`) and panorama (`?pano`) routes; the loading screen with panoramas, tips and progress; the spike
                                 page (`?spike=batch`); the world's small settings block (SP5b's graphics settings screen replaces it);
                                 ui/world/bench.ts (SP4b: the `?bench=medium` route and its JSON); mapOverlay.ts applyControl.ts teleport.ts (SP4c) buildHud.ts blockHistory.ts (SP5a)
@@ -201,7 +201,7 @@ world-imaginer-voxel/          (repository root)
                                 sliceModel.ts; DOM: jsonEditor.ts sliceView.ts densityTab.ts inspector.css (SP10's full probe and
                                 further JSON editors go here too)
     ui/shell.ts styles.css mapView/*   (paramPanel, splineEditor and biomeTable became directories in SP2b)
-       metricsDashboard.ts worldsMenu.ts settingsPanel.ts palette.ts (SP5a) hud.ts debugOverlay.ts help.ts
+       metricsDashboard.ts worldsMenu.ts settingsPanel.ts (SP5b) palette.ts (SP5a) hud.ts debugOverlay.ts help.ts
     main.ts
   tools/detmath-oracle.py       (SP1) CPython port of detMath, a manual oracle for the detMath goldens
   test/ unit/ metrics/ bench/ arch/ harness/{region,refs,cache,stats,flood}.ts fixtures/ tools/ (SP2b: tools/mapLatency.ts, tools/uiSmoke.ts)
@@ -516,7 +516,7 @@ Import validates the magic and version, runs `migrate`, recomputes genKey, and c
 
 **Presets.** Format `{format:'wi10-preset', schemaVersion, name, profile, params}`, where `params` is the minimal patch over `resolveProfile(profile)`. Import checks format → name (profile ids are reserved) → profile → schemaVersion (newer is rejected) → migrate → applyPatch over the profile, showing every error path inline; unknown keys are errors. Import *loads* the preset; export writes the *current draft*. Saves and `.wiworld` store full params and load as migrate → applyPatch over `resolveProfile(profile)` (SP5b). Presets carry `schemaVersion` 2 since SP3d: migration 1 → 2 is the identity, since a version-1 document lacks the `density.defs` and `surface.rules` leaves and a missing leaf takes the profile's value (amended by SP3d).
 
-**Session.** Settings, last world and panel layout go to localStorage behind try/catch. The world URL `?map#base64url(canonicalJSON({v: 1, seed, profile, patch, view}))` makes a world shareable: `patch` is the session's minimal patch over the profile and there is no gzip (a full 52-knot offset edit is about 2.3 KB). It replaces `#seed=…&profile=<ProfileId>&p=<base64url(gzip(params diff vs profile))>` (amended by SP2b). An edited tree (`density.defs`, `surface.rules`: atomic `json` leaves of at most 128 KiB of canonical text each) travels whole in the patch, so in the URL and in presets; the map hash is not written above 64 KiB, with a notice to export a preset instead, and a hash longer than 1 MiB is refused on read; the URL keeps `v: 1`, since a URL cannot be migrated and missing leaves are the profile's (amended by SP3d).
+**Session.** Settings and panel layout go to localStorage behind try/catch; the open world is in the URL (`/?world=<id>`; SP5b). The world URL `?map#base64url(canonicalJSON({v: 1, seed, profile, patch, view}))`, for the map and for unsaved worlds (SP5b), makes a world shareable: `patch` is the session's minimal patch over the profile and there is no gzip (a full 52-knot offset edit is about 2.3 KB). It replaces `#seed=…&profile=<ProfileId>&p=<base64url(gzip(params diff vs profile))>` (amended by SP2b). An edited tree (`density.defs`, `surface.rules`: atomic `json` leaves of at most 128 KiB of canonical text each) travels whole in the patch, so in the URL and in presets; the map hash is not written above 64 KiB, with a notice to export a preset instead, and a hash longer than 1 MiB is refused on read; the URL keeps `v: 1`, since a URL cannot be migrated and missing leaves are the profile's (amended by SP3d).
 
 ## 3. Generation
 
@@ -1310,7 +1310,7 @@ Target: edit → visible ≤ 50 ms p95, measured in the HUD (SP5a: gated from th
 
 ### 5.2 Panels (CSS grid shell)
 
-- **World:** seed (typed seed is authoritative; separate "Regenerate same seed" and "New seed" buttons), profile, presets, worlds.
+- **World:** seed (typed seed is authoritative; separate "Regenerate same seed" and "New seed" buttons), profile, presets, worlds (the start screen's menus, SP5b).
 - **Parameters:** sections collapsed by default, slider plus numeric input, reset per parameter and per section, tooltips. Inline dialogs replace `prompt()` and `alert()`.
 - **Settings:** graphics and audio (master, music, sfx and ambient volumes; music frequency Always / Frequent / Standard / Never; sound pack).
 - **Help:** key map (H / F1).

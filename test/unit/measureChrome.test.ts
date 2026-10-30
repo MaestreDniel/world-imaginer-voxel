@@ -4,8 +4,8 @@ import { describe, expect, test } from 'vitest';
 import { BENCH_SHOTS } from '../../src/ui/world/bench';
 import { parseWorldQuery } from '../../src/ui/world/query';
 import {
-  ASSETS, benchLine, chromeArgs, drawnByProblem, endOfRunWarnings, ENTER_END_PATH, enterLine, enterOrder, enterPaths, enterSummary, flightLine, gpuMatches, launchEnv, machineTelemetry, MEASURE_LOAD_MAX, outputName,
-  parseMeasureArgs, PLACE_ATTEMPTS, placeWindow, pollResult, routePath, shaderCacheOf, SHOTS, viewportProblem, watchPage, windowProblem, withTimeout, type EnterPair,
+  ASSETS, benchLine, chromeArgs, drawnByProblem, endOfRunWarnings, ENTER_END_PATH, ENTER_NEW_WORLD_PATH, enterLine, enterOrder, enterPaths, enterSummary, flightLine, gpuMatches, launchEnv, machineTelemetry, MEASURE_LOAD_MAX, outputName,
+  newWorldLeg, parseMeasureArgs, PLACE_ATTEMPTS, placeWindow, pollResult, routePath, shaderCacheOf, SHOTS, viewportProblem, watchPage, windowProblem, withTimeout, type EnterPair,
   type MeasureArgs, type WindowBounds,
 } from '../tools/measureChrome';
 
@@ -123,6 +123,26 @@ describe('measureChrome: the enter route (SP5b spec §6.2)', () => {
     expect(shaderCacheOf(args({ route: 'enter' }))).toBe('cold');
     expect(routePath(args({ route: 'enter' }))).toBe('/?bench=enter');
     expect(ENTER_END_PATH).toBe('/?bench=enter&phase=end');
+  });
+
+  test('the enter route\'s new-world leg opens `/?enterBench=1&db=wi10-bench` and records `newWorldRevealMs`', async () => {
+    expect(ENTER_NEW_WORLD_PATH).toBe('/?enterBench=1&db=wi10-bench');
+    // The menu at that URL opens `wi10-bench`, and its Create's world URL carries both keys (the page's query honours `db` with `enterBench=1`).
+    const q = parseWorldQuery(new URL(ENTER_NEW_WORLD_PATH, 'http://localhost/').searchParams);
+    expect([q.enterBench, q.db, q.world]).toEqual([true, 'wi10-bench', null]);
+    const steps: string[] = [];
+    const ms = await newWorldLeg({
+      open: async (path) => { steps.push(`open ${path}`); },
+      click: async (id) => { steps.push(`click #${id}`); },
+      result: async () => { steps.push('result'); return { revealMs: 2345.5, idbOpenMs: 3, loadMs: 12, decodeMs: 0.5 }; },
+    });
+    expect(steps).toEqual(['open /?enterBench=1&db=wi10-bench', 'click #start-new', 'click #new-create', 'result']);
+    expect(ms).toBe(2345.5);
+    // The page's `{ error }` stops the leg.
+    await expect(newWorldLeg({ open: async () => {}, click: async () => {}, result: () => Promise.reject(new Error('the new world: the world did not load')) }))
+      .rejects.toThrow(/the world did not load/);
+    // The run's summary carries it.
+    expect(enterSummary([], { gpu: 'iris', renderer: IRIS, shaderCache: 'cold', newWorldRevealMs: ms }).newWorldRevealMs).toBe(2345.5);
   });
 
   test('`outputName({ route: \'enter\', gpu: \'iris\' })` is `enter-iris-chrome.json` in `assets/sp5b/`', () => {

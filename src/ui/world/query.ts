@@ -4,7 +4,7 @@
  * `workers` (an integer clamped to 2 … 6), `renderer=batch|mesh` (§6.2), and the capture mode's `shot=1` and `time`
  * (hours in [0, 24)), a saved world's `world=<id>` (SP5b spec §3.4, D4), and the enter bench's `enterBench=1` with its
  * `db=<name>` (SP5b spec §6.2), honoured only together. A malformed value is null; it never throws.
- * Which keys skip the start screen is `startModeOf`'s (`startScreen.ts`).
+ * Which keys skip the start screen is `startModeOf`'s (`ui/worldsMenu.ts`).
  */
 import { RD_MAX, RD_MIN } from '../../engine/renderDistance';
 import type { SectionRendererKind } from '../../render/sectionRenderer';

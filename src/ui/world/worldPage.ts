@@ -5,10 +5,14 @@
  * 1. The `#` hash is decoded first: a decode error shows the failure panel with only the map link, and nothing is
  *    probed, allocated or loaded (P47). The loading screen shows at once. With `?world=<id>` (SP5b spec §3.4) the
  *    saved world's records are read instead (`openSavedWorld`) and its session built from them; a world that cannot
- *    open shows "This world could not be opened: <reason>" the same way. Its `load` is posted right after the sim's
- *    attach and awaited with it, before the coordinator's first `update`. The enter bench's loads (`?enterBench=1`,
- *    SP5b spec §6.2) open `?db=` in place of `SAVES_DB` and record `window.__wiEnterResult` at the reveal: `revealMs`
- *    and, for a saved world, the connection's open, the `load`'s round trip and the sim's decode (`EnterTimes`).
+ *    open (held by another tab, or unreadable) goes back to the worlds menu with the notice (`refuseOpen`:
+ *    `/?notice=locked` or `/?notice=unreadable`, its reason through `sessionStorage`), except an enter bench's load,
+ *    which shows "This world could not be opened: <reason>" on the failure panel, so the bench records the error. Its
+ *    `load` is posted right after the sim's attach and awaited with it, before the coordinator's first `update`. The
+ *    enter bench's loads (`?enterBench=1`, SP5b spec §6.2) open `?db=` in place of `SAVES_DB` and record
+ *    `window.__wiEnterResult` at the reveal: `revealMs` and, for a saved world, the connection's open, the `load`'s
+ *    round trip and the sim's decode (`EnterTimes`). An unsaved world opened from a link shows SP5b's Point 2 notice
+ *    (`unsavedNoticeOf`; an in-place mount from the menu, `opts.unsavedNotice`, its own).
  * 2. Probe and `evaluateWorldCapabilities` (§8.5): a blocking cause replaces the page with the error screen (the causes,
  *    the capability table and a `?map` link).
  * 3. The session (`openMapSession`, which wires tier 2 of the trees; a tier-2 notice shows as a warning and the load
@@ -81,8 +85,8 @@
  * 1,000 ms), and a failure after the reveal saves once more (`lastFlush`, unless the sim is what failed) before the
  * panel shows and the sim is released. The sim's failure notice is `SAVED_EDIT_FAILED_NOTICE`. One tab per world (§3.5,
  * D7, D24; `worldLock.ts`): the world's lock is taken before its records are read and before the sim exists (held
- * elsewhere past 2 s: `LOCKED_NOTICE`), and released on `pagehide` after the autosave's last save is posted, or at the
- * teardown; a page restored from the back/forward cache reloads.
+ * elsewhere past 2 s: back to the worlds menu with `LOCKED_NOTICE`), and released on `pagehide` after the autosave's
+ * last save is posted, or at the teardown; a page restored from the back/forward cache reloads.
  *
  * The map in the world (SP4c spec §1.3, §2.3, §2.4, §4.2): at the reveal the streaming route creates the preview driver
  * (which adopts the first configure, wants no preview until the first M, and is fed every session change by the page
@@ -189,7 +193,8 @@ import { createReloader, createWorldUrl, installLeaveGuard, navigateTo, savedWor
 import { Y_MAX, Y_MIN, type WorldQuery } from './query';
 import { STATE_BOUNDS } from './stateBounds';
 import { createTeleport, type Teleport, type TeleportLanding } from './teleport';
-import { LOCKED_NOTICE, holdWorld, type LockManagerLike, type WorldHold } from './worldLock';
+import { holdWorld, type LockManagerLike, type WorldHold } from './worldLock';
+import { refusalText, refusalUrl, sessionStorageOrNull, type OpenRefusal, type StorageLike } from '../worldsMenu';
 
 /** The capture and test options (ruling P48). */
 export interface WorldPageOptions {
@@ -226,6 +231,34 @@ export interface WorldPageOptions {
    * map's tile requests on the pool it hands the overlay, records each teleport's landing, and attaches its parts.
    */
   readonly wiTest?: WiTestInstall;
+  /**
+   * An unsaved world mounted in place by the worlds menu (SP5b spec D14, `enterUnsaved`): the notice it shows in place
+   * of Point 2's `UNSAVED_NOTICE` (an in-place mount has no `?at`, `?rd` or `?workers`); null shows none.
+   */
+  readonly unsavedNotice?: string | null;
+}
+
+/** SP5b's Point 2: an unsaved world opened from a link (`?at`, `?rd`, `?workers`), shown until dismissed. */
+export const UNSAVED_NOTICE = 'This world is not saved: it was opened from a link. Use New world on the start screen to keep one.';
+
+/**
+ * The unsaved world's notice (SP5b spec Point 2, §1.1), or null: none in a saved world, the flight and the benches
+ * (`opts.flight`, `opts.bench`, an `?enterBench=1` load: the enter bench's unsaved leg differs from its saved one only
+ * in persistence, §6.2) or a `?shot=1` capture; else `opts.unsavedNotice` when given, else `UNSAVED_NOTICE`.
+ */
+export function unsavedNoticeOf(q: Pick<WorldQuery, 'world' | 'enterBench' | 'shot'>, opts: Pick<WorldPageOptions, 'flight' | 'bench' | 'unsavedNotice'>): string | null {
+  if (q.world !== null || q.enterBench || q.shot || opts.flight !== undefined || opts.bench !== undefined) return null;
+  return opts.unsavedNotice === undefined ? UNSAVED_NOTICE : opts.unsavedNotice;
+}
+
+/**
+ * The page's refusal of a saved world (SP5b spec §3.4 steps 1-2): back to the worlds menu with its notice
+ * (`leave(refusalUrl(…))`, an `unreadable` reason kept in `storage`), or, for an enter bench's load, the failure panel's
+ * text (`fail`), which the bench publishes as its `{ error }`.
+ */
+export function refuseOpen(refusal: OpenRefusal, o: { readonly enterBench: boolean; readonly storage: StorageLike | null; leave(url: string): void; fail(text: string): void }): void {
+  if (o.enterBench) o.fail(refusalText(refusal));
+  else o.leave(refusalUrl(refusal, o.storage));
 }
 
 declare global {
@@ -1646,14 +1679,14 @@ function navigatorLocks(): LockManagerLike | null {
 }
 
 /**
- * The main thread's part of opening world `id` (SP5b spec §3.4 steps 1-3; rulings P5, P6): first the world's lock
- * (`holdWorld`, D24: held by another tab past `LOCK_WAIT_MS` → `LOCKED_NOTICE`, nothing read; no Web Locks at all →
- * "storage is not available in this browser window", as no tab could save), then the page's connection (`open`; one
- * that rejects or throws is that same reason), `readSavedWorld`, then the session from the record (`openSavedSession`).
- * A refusal after the lock (`readSavedWorld`'s, or the session's `initNotice`: tier 2 refused the saved params and the
- * session opened `default` with `{}`) is "This world could not be opened: <reason>"; it writes nothing, closes the
- * connection, releases the lock and carries no `load`, so no `record` with another world's genKey can follow and the sim
- * is never loaded without the lock.
+ * The main thread's part of opening world `id` (SP5b spec §3.4 steps 1-3; rulings P5, P6, P22): first the world's lock
+ * (`holdWorld`, D24: held by another tab past `LOCK_WAIT_MS` → the `locked` refusal, nothing read; no Web Locks at all →
+ * `unreadable`, "storage is not available in this browser window", as no tab could save), then the page's connection
+ * (`open`; one that rejects or throws is that same reason), `readSavedWorld`, then the session from the record
+ * (`openSavedSession`). A refusal after the lock (`readSavedWorld`'s, or the session's `initNotice`: tier 2 refused the
+ * saved params and the session opened `default` with `{}`) is `unreadable` with that reason; it writes nothing, closes
+ * the connection, releases the lock and carries no `load`, so no `record` with another world's genKey can follow and
+ * the sim is never loaded without the lock. The page hands a refusal to `refuseOpen`.
  */
 export async function openSavedWorld(o: {
   readonly locks: LockManagerLike | null;
@@ -1662,11 +1695,11 @@ export async function openSavedWorld(o: {
   readonly id: string;
   readonly bounds: StateBounds;
   random(): Seed64;
-}): Promise<{ ok: true; opened: SavedOpen } | { ok: false; text: string }> {
-  const refuse = (reason: string) => ({ ok: false as const, text: `This world could not be opened: ${reason}` });
+}): Promise<{ ok: true; opened: SavedOpen } | { ok: false; refusal: OpenRefusal }> {
+  const refuse = (reason: string) => ({ ok: false as const, refusal: { notice: 'unreadable' as const, reason } });
   if (o.locks === null) return refuse(STORAGE_UNAVAILABLE);
   const lock = await holdWorld(o.locks, o.id);
-  if (lock === null) return { ok: false, text: LOCKED_NOTICE };
+  if (lock === null) return { ok: false, refusal: { notice: 'locked' } };
   let kv: KV;
   try {
     kv = await o.open();
@@ -2185,9 +2218,18 @@ export function mountWorldPage(root: HTMLElement, q: WorldQuery, hash: string, o
         }
         return;
       }
-      // Until Task 20's menu, a world held by another tab fails the load with `LOCKED_NOTICE` (D7).
+      // Held by another tab or unreadable: back to the worlds menu with the notice (§3.4 steps 1-2; D7, D14).
       if (!r.ok) {
-        fail(r.text, null);
+        refuseOpen(r.refusal, {
+          enterBench: q.enterBench,
+          storage: sessionStorageOrNull(),
+          leave: (url) => {
+            state = 'failed';
+            settle();
+            location.replace(url);
+          },
+          fail: (text) => fail(text, null),
+        });
         return;
       }
       saved = r.opened;
@@ -2891,6 +2933,9 @@ export function mountWorldPage(root: HTMLElement, q: WorldQuery, hash: string, o
     teardown.push(() => notices.dispose());
     // A saved world's D14 notices and its load's counts (SP5b spec §3.4 steps 2-3), until dismissed.
     for (const text of savedNotices) notices.show(text, { kind: 'warn' });
+    // An unsaved world's notice (SP5b's Point 2, or the menu's in-place one), until dismissed.
+    const unsaved = unsavedNoticeOf(q, opts);
+    if (unsaved !== null) notices.show(unsaved, { kind: 'warn' });
     // The edit path (SP5a spec §2.1, §2.6, §2.7): every edit of the page goes through it, and the sim's failure
     // disables it. The streaming route always has the sim (only the flight's has none, and it returned above).
     const editLatency = latency!;

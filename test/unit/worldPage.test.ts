@@ -50,8 +50,10 @@ import {
 } from '../../src/persist/saves';
 import {
   EDIT_FAILED_NOTICE, HISTORY_RESET_NOTICE, SAVED_EDIT_FAILED_NOTICE, STATE_RESET_NOTICE, countAccepted, createPageAutosave, hotbarStorage, lastFlush, leaveAfterSave,
-  installWorldLock, lowerRdHref, openRequest, openSavedWorld, readSavedWorld, restoreMode, restoredStart, savedWorldUrlRules, timeOfHours,
+  installWorldLock, lowerRdHref, openRequest, openSavedWorld, readSavedWorld, refuseOpen, restoreMode, restoredStart, savedWorldUrlRules, timeOfHours,
+  UNSAVED_NOTICE, unsavedNoticeOf, type WorldPageOptions,
 } from '../../src/ui/world/worldPage';
+import { noticeOfQuery, REFUSAL_REASON_KEY, type OpenRefusal, type StorageLike } from '../../src/ui/worldsMenu';
 import type { LockManagerLike } from '../../src/ui/world/worldLock';
 import { resolveProfile } from '../../src/core/params/profiles';
 import { seedFromInput } from '../../src/core/seed';
@@ -2058,7 +2060,22 @@ describe('opening a saved world (SP5b spec §3.4 steps 2-3, D14, D22)', () => {
     return t;
   };
   const random = (): [number, number] => [7, 7];
-  const REFUSED = 'This world could not be opened: ';
+  /** `unreadable` with `reason` (the menu shows "This world could not be opened: <reason>"). */
+  const unreadable = (reason: string) => ({ ok: false, refusal: { notice: 'unreadable', reason } });
+  /** A `sessionStorage` over a Map. */
+  function sessionStore(): StorageLike & { readonly map: Map<string, string> } {
+    const map = new Map<string, string>();
+    return { map, getItem: (k) => map.get(k) ?? null, setItem: (k, v) => { map.set(k, v); }, removeItem: (k) => { map.delete(k); } };
+  }
+  /** The page's `refuseOpen` of an ordinary (not enter-bench) load: the URL it leaves for, and the session storage. */
+  function refused(refusal: OpenRefusal) {
+    const storage = sessionStore();
+    const left: string[] = [];
+    const failed: string[] = [];
+    refuseOpen(refusal, { enterBench: false, storage, leave: (url) => left.push(url), fail: (t) => failed.push(t) });
+    expect(failed).toEqual([]);
+    return { left, storage };
+  }
   /** A lock manager that grants every request at once; `held()` counts the holds not yet released. */
   function freeLocks() {
     let held = 0;
@@ -2079,7 +2096,7 @@ describe('opening a saved world (SP5b spec §3.4 steps 2-3, D14, D22)', () => {
     for (let i = 0; i < 20; i++) await Promise.resolve();
   };
 
-  test('Review Focus 2: with a lock manager that never grants, the open fails with `This world is open in another tab`, reads nothing, and the in-process sim receives no `load`', async () => {
+  test('Review Focus 2: with a lock manager that never grants, the page navigates to `/?notice=locked` (the menu shows `This world is open in another tab`), reads nothing, and the in-process sim receives no `load`', async () => {
     const { kv } = await created();
     const ops = kv.opCount;
     let opens = 0;
@@ -2104,14 +2121,19 @@ describe('opening a saved world (SP5b spec §3.4 steps 2-3, D14, D22)', () => {
         handler.handle(msg, post);
       },
     }, () => 0), { onFailure() {} });
-    // The page's run(): the open first, and the sim's `load` only from an opened world (`saved.load`).
+    // The page's run(): the open first, the sim's `load` only from an opened world (`saved.load`), a refusal to the menu.
+    const left: string[] = [];
+    const storage = sessionStore();
     const page = async (locks: LockManagerLike) => {
       const r = await openSavedWorld({ locks, open, db: 'wi10', id: ID, bounds: STATE_BOUNDS, random });
       if (r.ok) void sim.load(r.opened.load).catch(() => {});
+      else refuseOpen(r.refusal, { enterBench: false, storage, leave: (url) => left.push(url), fail: () => { throw new Error('not an enter bench load'); } });
       await jobs();
       return r;
     };
-    expect(await page(never)).toEqual({ ok: false, text: 'This world is open in another tab' });
+    expect(await page(never)).toEqual({ ok: false, refusal: { notice: 'locked' } });
+    expect(left).toEqual(['/?notice=locked']);
+    expect(noticeOfQuery(new URLSearchParams('notice=locked'), storage)).toBe('This world is open in another tab');
     expect(requests).toEqual([{ name: 'wi10.world.w1', signal: true }]);
     expect([opens, kv.opCount - ops]).toEqual([0, 0]);
     await vi.waitFor(() => expect(types).toEqual([]));
@@ -2128,7 +2150,7 @@ describe('opening a saved world (SP5b spec §3.4 steps 2-3, D14, D22)', () => {
     const { kv } = await created();
     const ops = kv.opCount;
     const r = await openSavedWorld({ locks: null, open: () => Promise.resolve(kv), db: 'wi10', id: ID, bounds: STATE_BOUNDS, random });
-    expect(r).toEqual({ ok: false, text: `${REFUSED}storage is not available in this browser window` });
+    expect(r).toEqual(unreadable('storage is not available in this browser window'));
     expect(kv.opCount).toBe(ops);
   });
 
@@ -2201,7 +2223,7 @@ describe('opening a saved world (SP5b spec §3.4 steps 2-3, D14, D22)', () => {
     expect(same.ok && same.history).toEqual(history);
   });
 
-  test('params a tree validator refuses (`openSavedSession(…).initNotice` set) → not opened (the could-not-be-opened text), nothing written, no `load` posted', async () => {
+  test('params a tree validator refuses (`openSavedSession(…).initNotice` set) → not opened: the reason in sessionStorage and `/?notice=unreadable`; nothing written, no `load` posted', async () => {
     const tree = densityTree();
     tree['root'].b.x = { op: 'bogus' };
     const params = fixture().params;
@@ -2209,7 +2231,14 @@ describe('opening a saved world (SP5b spec §3.4 steps 2-3, D14, D22)', () => {
     const before = everything(kv);
     const ops = kv.opCount;
     const r = await openSavedWorld({ locks: free.locks, open: () => Promise.resolve(kv), db: 'wi10', id: ID, bounds: STATE_BOUNDS, random });
-    expect(r).toEqual({ ok: false, text: `${REFUSED}invalid patch (density.defs.root.b.x UNKNOWN_OP); opened the default profile with no changes` });
+    const reason = 'invalid patch (density.defs.root.b.x UNKNOWN_OP); opened the default profile with no changes';
+    expect(r).toEqual(unreadable(reason));
+    if (!r.ok) {
+      const { left, storage } = refused(r.refusal);
+      expect(left).toEqual(['/?notice=unreadable']);
+      expect(storage.map.get(REFUSAL_REASON_KEY)).toBe(reason);
+      expect(noticeOfQuery(new URLSearchParams('notice=unreadable'), storage)).toBe(`This world could not be opened: ${reason}`);
+    }
     // Only an opened world carries the `load` the page posts after the attach.
     expect('opened' in r).toBe(false);
     expect(everything(kv)).toEqual(before);
@@ -2220,13 +2249,19 @@ describe('opening a saved world (SP5b spec §3.4 steps 2-3, D14, D22)', () => {
     expect(free.held()).toBe(0);
   });
 
-  test('a missing or refused record and an opener that rejects or throws → not opened, nothing written (ruling P6)', async () => {
+  test('a missing or refused record and an opener that rejects or throws → not opened (`/?notice=unreadable` with the reason), nothing written (ruling P6)', async () => {
     const { kv } = await created();
     const before = everything(kv);
     const open = (id: string, o: () => Promise<KV>) => openSavedWorld({ locks: free.locks, open: o, db: 'wi10', id, bounds: STATE_BOUNDS, random });
-    expect(await open('nope', () => Promise.resolve(kv))).toEqual({ ok: false, text: `${REFUSED}no saved world has this id` });
+    const missing = await open('nope', () => Promise.resolve(kv));
+    expect(missing).toEqual(unreadable('no saved world has this id'));
+    if (!missing.ok) {
+      const { left, storage } = refused(missing.refusal);
+      expect(left).toEqual(['/?notice=unreadable']);
+      expect(storage.map.get(REFUSAL_REASON_KEY)).toBe('no saved world has this id');
+    }
     expect(everything(kv)).toEqual(before);
-    const storage = { ok: false, text: `${REFUSED}storage is not available in this browser window` };
+    const storage = unreadable('storage is not available in this browser window');
     expect(await open(ID, () => Promise.reject(new Error('blocked')))).toEqual(storage);
     expect(await open(ID, () => { throw new ReferenceError('indexedDB is not defined'); })).toEqual(storage);
     // Each refusal released the world's lock.
@@ -2286,6 +2321,52 @@ describe('opening a saved world (SP5b spec §3.4 steps 2-3, D14, D22)', () => {
     const other = openRequest('db', record({ stateTable: permuted() }), state, history);
     expect(other.load.rewrite).toEqual({ world: record(), history });
     expect(other.load).toMatchObject({ db: 'db', worldId: ID, flushSeq: 2, updated: 5, genKey: key, stateTable: permuted() });
+  });
+
+  test('an enter bench\'s load (`?enterBench=1`) is refused in place, on the failure panel, so the bench records the error; the page hands every refusal to `refuseOpen` and leaves with `location.replace`', () => {
+    const left: string[] = [];
+    const failed: string[] = [];
+    const storage = sessionStore();
+    const o = { enterBench: true, storage, leave: (url: string) => left.push(url), fail: (t: string) => failed.push(t) };
+    refuseOpen({ notice: 'locked' }, o);
+    refuseOpen({ notice: 'unreadable', reason: 'no saved world has this id' }, o);
+    expect(failed).toEqual(['This world is open in another tab', 'This world could not be opened: no saved world has this id']);
+    expect([left, storage.map.size]).toEqual([[], 0]);
+    const src = readFileSync(new URL('../../src/ui/world/worldPage.ts', import.meta.url), 'utf8');
+    const run = src.slice(src.indexOf('const r = await openSavedWorld('), src.indexOf('saved = r.opened;'));
+    expect(run).toMatch(/if \(!r\.ok\) \{\n\s+refuseOpen\(r\.refusal, \{\n\s+enterBench: q\.enterBench,\n\s+storage: sessionStorageOrNull\(\),/);
+    expect(run).toMatch(/location\.replace\(url\);/);
+    expect(run).toMatch(/fail: \(text\) => fail\(text, null\),/);
+  });
+});
+
+describe('the unsaved world\'s notice (SP5b spec Point 2, §1.1, D14)', () => {
+  const query = (s: string) => parseWorldQuery(new URLSearchParams(s));
+
+  test('an unsaved `?at` world shows Point 2\'s notice; a saved world, the bench and an `?at=…&enterBench=1` load do not', () => {
+    expect(UNSAVED_NOTICE).toBe('This world is not saved: it was opened from a link. Use New world on the start screen to keep one.');
+    expect(unsavedNoticeOf(query('at=10,20'), {})).toBe(UNSAVED_NOTICE);
+    expect(unsavedNoticeOf(query('rd=8'), {})).toBe(UNSAVED_NOTICE);
+    expect(unsavedNoticeOf(query('workers=4'), {})).toBe(UNSAVED_NOTICE);
+    expect(unsavedNoticeOf(query('world=w1'), {})).toBeNull();
+    expect(unsavedNoticeOf(query('world=w1&rd=8'), {})).toBeNull();
+    expect(unsavedNoticeOf(query('at=10,20&enterBench=1'), {})).toBeNull();
+    expect(unsavedNoticeOf(query('at=10,20&shot=1'), {})).toBeNull();
+    // The bench and the flight (their routes' options).
+    const bench = { bench: {} as NonNullable<WorldPageOptions['bench']> };
+    expect(unsavedNoticeOf(query('rd=12'), bench)).toBeNull();
+    expect(unsavedNoticeOf(query('rd=12'), { flight: () => {} })).toBeNull();
+    // The page shows it with the world's notices, until dismissed.
+    const src = readFileSync(new URL('../../src/ui/world/worldPage.ts', import.meta.url), 'utf8');
+    expect(src).toMatch(/const unsaved = unsavedNoticeOf\(q, opts\);\n\s+if \(unsaved !== null\) notices\.show\(unsaved, \{ kind: 'warn' \}\);/);
+  });
+
+  test('an in-place unsaved world with `unsavedNotice` shows that text instead', () => {
+    const text = 'This world is not saved: this browser window cannot store data.';
+    expect(unsavedNoticeOf(query(''), { unsavedNotice: text })).toBe(text);
+    expect(unsavedNoticeOf(query(''), { unsavedNotice: null })).toBeNull();
+    // A saved world never shows it.
+    expect(unsavedNoticeOf(query('world=w1'), { unsavedNotice: text })).toBeNull();
   });
 });
 
