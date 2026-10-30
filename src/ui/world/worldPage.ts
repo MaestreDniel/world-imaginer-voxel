@@ -918,15 +918,22 @@ export function flushOnPageHide(
 export interface WorldLockOnPage {
   /** Registers a last save run on `pagehide` before the release (the autosave's trigger); returns its remover. */
   onPageHide(f: () => void): () => void;
+  /**
+   * Registers a stop run once the lock is released at a `pagehide`, after the release (the autosave's dispose), so a page
+   * restored from the back/forward cache posts nothing more; returns its remover.
+   */
+  onRelease(f: () => void): () => void;
   /** The page's teardown: removes both listeners and releases the lock. */
   dispose(): void;
 }
 
 /**
- * A saved world's lock while its page is open (SP5b spec §3.5, D24): on `pagehide` every save `onPageHide` registered is
- * posted first (each guarded: one that throws is reported and the release still runs), then the lock is released, so the
- * next holder (this tab's reload, another tab) is granted it only after the last save was posted; a `pageshow` with
- * `persisted` (the page restored from the back/forward cache, its lock released at the `pagehide`) reloads it.
+ * A saved world's lock while its page is open (SP5b spec §3.5, D24): on the first `pagehide` every save `onPageHide`
+ * registered is posted first (each guarded: one that throws is reported and the release still runs), then the lock is
+ * released, so the next holder (this tab's reload, another tab) is granted it only after the last save was posted, and
+ * then every stop `onRelease` registered runs. A tab without the lock never writes: a later `pagehide` (the reload of a
+ * page restored from the back/forward cache) runs nothing. A `pageshow` with `persisted` (the page restored, its lock
+ * released at the `pagehide`) reloads it.
  */
 export function installWorldLock(
   win: Pick<EventTarget, 'addEventListener' | 'removeEventListener'>,
@@ -934,31 +941,46 @@ export function installWorldLock(
   reload: () => void,
 ): WorldLockOnPage {
   const saves = new Set<() => void>();
-  const onPageHide = (): void => {
-    for (const f of saves) {
+  const stops = new Set<() => void>();
+  let held = true;
+  const each = (fs: Set<() => void>, what: string): void => {
+    for (const f of fs) {
       try {
         f();
       } catch (e) {
-        console.error('The world\'s last save on pagehide:', e);
+        console.error(what, e);
       }
     }
+  };
+  const onPageHide = (): void => {
+    if (!held) return;
+    held = false;
+    each(saves, 'The world\'s last save on pagehide:');
+    saves.clear();
     lock.release();
+    each(stops, 'The world\'s stop after its release:');
+    stops.clear();
   };
   const onPageShow = (e: Event): void => {
     if ((e as PageTransitionEvent).persisted) reload();
   };
   win.addEventListener('pagehide', onPageHide);
   win.addEventListener('pageshow', onPageShow);
+  const register = (fs: Set<() => void>, f: () => void): () => void => {
+    if (!held) return () => {};
+    const g = (): void => f();
+    fs.add(g);
+    return () => { fs.delete(g); };
+  };
   return {
-    onPageHide(f) {
-      const save = (): void => f();
-      saves.add(save);
-      return () => { saves.delete(save); };
-    },
+    onPageHide: (f) => register(saves, f),
+    onRelease: (f) => register(stops, f),
     dispose() {
       win.removeEventListener('pagehide', onPageHide);
       win.removeEventListener('pageshow', onPageShow);
+      held = false;
       saves.clear();
+      stops.clear();
       lock.release();
     },
   };
@@ -3388,6 +3410,8 @@ export function mountWorldPage(root: HTMLElement, q: WorldQuery, hash: string, o
       });
       autosave = a;
       teardown.push(() => a.dispose());
+      // Stopped once the lock is released at a `pagehide`: a page restored from the back/forward cache never writes (§3.5).
+      teardown.push(worldLock!.onRelease(() => a.dispose()));
     }
 
     // The streaming frame (SP4b spec §7.2): the slow-frame notice and the throttle get every raw rAF delta before the

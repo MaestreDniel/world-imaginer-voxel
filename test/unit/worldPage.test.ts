@@ -2786,6 +2786,7 @@ describe('the world\'s lock in the page (SP5b spec §3.5, D24)', () => {
   /** The page's lock on `win` and its autosave, whose `pagehide` trigger goes through the lock's `onPageHide`. */
   function page() {
     const order: string[] = [];
+    const cleared: number[] = [];
     const win = new EventTarget();
     let reloads = 0;
     const lock = installWorldLock(win, { release: () => { order.push('release'); } }, () => { reloads++; });
@@ -2809,11 +2810,20 @@ describe('the world\'s lock in the page (SP5b spec §3.5, D24)', () => {
       settled: () => Promise.resolve(),
       editsSince: () => 0,
       now: () => 1_700_000_000_000,
-      clock: { now: () => 0, setInterval: () => 0, clearInterval() {}, setTimeout: () => 0, clearTimeout() {} },
-      events: { on: (type, f) => (type === 'pagehide' ? lock.onPageHide(f) : () => {}), hidden: () => false },
+      clock: { now: () => 0, setInterval: () => 7, clearInterval: (id) => { cleared.push(id); }, setTimeout: () => 0, clearTimeout() {} },
+      events: {
+        on(type, f) {
+          if (type === 'pagehide') return lock.onPageHide(f);
+          win.addEventListener(type, f);
+          return () => win.removeEventListener(type, f);
+        },
+        hidden: () => false,
+      },
       onResult: () => {},
     });
-    return { order, win, lock, autosave, reloads: () => reloads };
+    // As the page: the autosave stops once the lock is released at a `pagehide`.
+    lock.onRelease(() => autosave.dispose());
+    return { order, win, lock, autosave, reloads: () => reloads, cleared };
   }
 
   test('`pagehide` posts the flush before `release`; with nothing changed it only releases', () => {
@@ -2846,6 +2856,36 @@ describe('the world\'s lock in the page (SP5b spec §3.5, D24)', () => {
     expect(p.reloads()).toBe(1);
   });
 
+  test('a page restored from the back/forward cache posts nothing more: `pagehide` (persisted), `pageshow` (persisted), `markChanged`, `beforeunload` and `pagehide`', async () => {
+    const p = page();
+    p.autosave.markChanged();
+    p.win.dispatchEvent(pageEvent('pagehide', true));
+    expect(p.order).toEqual(['flush', 'release']);
+    // The 2,000 ms timer stopped with the release, before the page is frozen.
+    expect(p.cleared).toEqual([7]);
+    p.win.dispatchEvent(pageEvent('pageshow', true));
+    expect(p.reloads()).toBe(1);
+    // The reload's unload: its `beforeunload` and second `pagehide`; the resumed timer's tick; a failure's flush.
+    p.autosave.markChanged();
+    p.win.dispatchEvent(new Event('beforeunload'));
+    p.win.dispatchEvent(pageEvent('pagehide', false));
+    await p.autosave.tick();
+    expect(await p.autosave.flushNow()).toBeNull();
+    expect(p.order).toEqual(['flush', 'release']);
+  });
+
+  test('the lock\'s saves and stops run once, at the first `pagehide`: a later one finds the lock released and runs nothing', () => {
+    const order: string[] = [];
+    const win = new EventTarget();
+    const lock = installWorldLock(win, { release: () => { order.push('release'); } }, () => {});
+    lock.onPageHide(() => { order.push('save'); });
+    lock.onRelease(() => { order.push('stop'); });
+    win.dispatchEvent(pageEvent('pagehide', true));
+    expect(order).toEqual(['save', 'release', 'stop']);
+    win.dispatchEvent(pageEvent('pagehide', false));
+    expect(order).toEqual(['save', 'release', 'stop']);
+  });
+
   test('the teardown releases and removes both listeners: a later `pagehide` posts nothing, a later `pageshow` reloads nothing', () => {
     const p = page();
     p.autosave.markChanged();
@@ -2864,6 +2904,7 @@ describe('the world\'s lock in the page (SP5b spec §3.5, D24)', () => {
     expect(run.indexOf('random: cryptoSeed, locks: navigatorLocks() });')).toBeLessThan(run.indexOf('createBrowserSim('));
     expect(run).toMatch(/const lock = installWorldLock\(window, saved\.lock, \(\) => location\.reload\(\)\);\n\s+worldLock = lock;\n\s+teardown\.push\(\(\) => lock\.dispose\(\)\);/);
     expect(run).toMatch(/if \(type === 'pagehide'\) return worldLock!\.onPageHide\(f\);/);
+    expect(run).toMatch(/autosave = a;\n\s+teardown\.push\(\(\) => a\.dispose\(\)\);\n\s+\/\/[^\n]*\n\s+teardown\.push\(worldLock!\.onRelease\(\(\) => a\.dispose\(\)\)\);/);
     // A page disposed while it waited releases what the open took.
     expect(run).toMatch(/if \(state !== 'loading'\) \{\n\s+if \(r\.ok\) \{\n\s+r\.opened\.kv\.close\(\);\n\s+r\.opened\.lock\.release\(\);/);
   });
