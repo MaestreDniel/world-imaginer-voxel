@@ -4,7 +4,8 @@
  * publishes; a `StoreFull` rolls the batch back. The main cases run on a seed-42 region generated to 'L' by the region
  * harness (5 × 5 columns at the spawn, 1 thread, every proto kept, as `retainAllProtos`); the dirty-set and
  * `StoreFull` cases on a canned 5 × 5 store (stone up to y 69, air above), written with the store's writers, lit by
- * `lightRegion` and Published, protos kept.
+ * `lightRegion` and Published, protos kept. SP5b (lever 18f): a torch saved by the sim and overlaid by D after a reload
+ * lights exactly as the one placed live, while the reload's air and planks overlays leave their columns unflagged.
  */
 import { performance } from 'node:perf_hooks';
 import { beforeAll, describe, expect, test } from 'vitest';
@@ -18,12 +19,13 @@ import { centreSection, createLightScratch, DEFAULT_LIGHT_TABLES, lightRegion } 
 import { createDiffStore, NO_ENTRY, type DiffStore } from '../../src/sim/diffStore';
 import { applyEdits, createEditScratch, readDiff, type Edit, type EditResult } from '../../src/sim/edits';
 import { WATER_SOURCE } from '../../src/world/blocks/fluid';
-import { AIR, DIRT, GLASS, ICE, STONE, TORCH } from '../../src/world/blocks/index';
+import { AIR, DIRT, GLASS, ICE, OAK_PLANKS, STONE, TORCH } from '../../src/world/blocks/index';
+import type { ColumnDiff } from '../../src/world/store/api';
 import { protoAt, REC_DIFF_FLAG, SECTIONS } from '../../src/world/store/columnTable';
 import { copyLightRegion, lightIndex } from '../../src/world/store/padded';
 import { PROTO_BLOCKS, PROTO_FLUID } from '../../src/world/store/section';
 import { createStore, type VoxelStore } from '../../src/world/store/store';
-import { genRegion } from '../harness/region';
+import { genRegion, litRegionHash } from '../harness/region';
 import { testFloat, testRng } from '../harness/stats';
 
 const MiB = 1 << 20;
@@ -483,4 +485,55 @@ describe('applyEdits on a canned store: the entry changes and the dirty-column s
     expect(sortedKeys(d.takeDirty())).toEqual([colKey(0, 0)]);
     expect(sortedKeys(d.takeDirty())).toEqual([]);
   });
+});
+
+describe('a saved torch after a reload (SP5a spec §1.2, D23; SP5b lever 18f)', () => {
+  test('a reloaded world\'s saved torch lights exactly as one placed live', async () => {
+    const params = resolveProfile('default');
+    const sp = findSpawn(createGenContext(seedFromInput('42'), params));
+    const C: [number, number] = [sp.x >> 4, sp.z >> 4];
+    const region = { seed: '42', params, cx0: C[0] - 2, cz0: C[1] - 2, w: 5, h: 5, upTo: 'L', order: 'spiral', threads: 1 } as const;
+    const live = (await genRegion(region)).view.store;
+    const diffs = createDiffStore();
+    // A torch on the surface of C, planks on the surface of its east neighbour, the surface voxel of its south one dug out.
+    const top = (x: number, z: number): number => live.heightAt('worldSurface', x, z)!;
+    const torch: [number, number, number] = [16 * C[0] + 6, 0, 16 * C[1] + 9];
+    torch[1] = top(torch[0], torch[2]);
+    const planks: [number, number, number] = [16 * (C[0] + 1) + 8, 0, 16 * C[1] + 4];
+    planks[1] = top(planks[0], planks[2]);
+    const dug: [number, number, number] = [16 * C[0] + 3, 0, 16 * (C[1] + 1) + 12];
+    dug[1] = top(dug[0], dug[2]) - 1;
+    const edits = [set(...torch, val(TORCH), valueAt(live, ...torch)), set(...planks, val(OAK_PLANKS), valueAt(live, ...planks)), set(...dug, val(AIR), valueAt(live, ...dug))];
+    expect(applyEdits(live, diffs, createEditScratch(), edits, now).refused).toBeNull();
+    expect(live.final(C[0], C[1])!.light(torch[0] & 15, torch[1], torch[2] & 15) & 15, 'the live torch\'s block light').toBe(14);
+
+    // The reload: the sim's entries, as a flush saves them, overlaid by D on a fresh generation.
+    const saved = new Map<number, ColumnDiff>();
+    for (let cz = region.cz0; cz < region.cz0 + region.h; cz++) {
+      for (let cx = region.cx0; cx < region.cx0 + region.w; cx++) {
+        const d = readDiff(diffs, cx, cz);
+        if (d !== null) saved.set(colKey(cx, cz), d);
+      }
+    }
+    expect(saved.size).toBe(3);
+    const reloaded = (await genRegion({ ...region, diff: saved })).view.store;
+    // Only the torch's column is flagged: the planks and the dug voxel emit nothing.
+    expect([reloaded.diffFlag(C[0], C[1]), reloaded.diffFlag(C[0] + 1, C[1]), reloaded.diffFlag(C[0], C[1] + 1)]).toEqual([true, false, false]);
+    for (const [x, y, z] of [torch, planks, dug]) expect(valueAt(reloaded, x, y, z), `(${x}, ${y}, ${z})`).toBe(valueAt(live, x, y, z));
+    // Every lit column's light, voxel for voxel, and the whole region's lit hash.
+    for (let cz = region.cz0; cz < region.cz0 + region.h; cz++) {
+      for (let cx = region.cx0; cx < region.cx0 + region.w; cx++) {
+        const a = live.final(cx, cz)!;
+        const b = reloaded.final(cx, cz)!;
+        for (let sy = 0; sy < SECTIONS; sy++) {
+          const la = a.sectionLight(sy);
+          const lb = b.sectionLight(sy);
+          const wa = typeof la === 'number' ? new Uint8Array(4096).fill(la) : la;
+          const wb = typeof lb === 'number' ? new Uint8Array(4096).fill(lb) : lb;
+          expect(Buffer.from(wb).equals(Buffer.from(wa)), `(${cx}, ${cz}) sy ${sy}`).toBe(true);
+        }
+      }
+    }
+    expect(litRegionHash(reloaded, region.cx0, region.cz0, region.w, region.h)).toBe(litRegionHash(live, region.cx0, region.cz0, region.w, region.h));
+  }, 120_000);
 });

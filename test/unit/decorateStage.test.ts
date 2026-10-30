@@ -3,8 +3,9 @@
  * through `fillColumnD` on the centre. With zero features the final set shares the proto slots, the final heightmaps
  * equal the proto's where they coincide, and a stop before the shares leaves the column as T committed it.
  * SP5a (spec §2.5, D21): D's diff overlay. With a diff, the final equals the proto plus the entries, the proto keeps its
- * slots and values, `REC_DIFF_FLAG` is set and the heightmaps are the final's; without one, the output is today's (a
- * fixture recorded before the overlay existed).
+ * slots and values and the heightmaps are the final's; without one, the output is today's (a fixture recorded before the
+ * overlay existed). `REC_DIFF_FLAG` is set only by an overlay that writes a state emitting light (SP5a D23; SP5b lever
+ * 18f): generated terrain holds no emitter, so an overlay of anything else gives L's block-light scan nothing to find.
  */
 import { beforeAll, describe, expect, test } from 'vitest';
 import { STAGES } from '../../src/core/stage/registry';
@@ -266,7 +267,7 @@ describe("D's diff overlay (SP5a spec §2.5, D21)", () => {
     return { sy: Uint8Array.from(sy), idx: Uint16Array.from(idx), value: Uint32Array.from(value) };
   }
 
-  test('with a diff of 40 entries over 3 sections: the final equals proto + entries, the proto\'s slots unchanged, REC_DIFF_FLAG set, the heightmaps equal writeFinalHeightmaps over the final', () => {
+  test('with a diff of 40 entries over 3 sections: the final equals proto + entries, the proto\'s slots unchanged, REC_DIFF_FLAG set (its torches emit), the heightmaps equal writeFinalHeightmaps over the final', () => {
     const s = filledT();
     const before = protoSnapshot(s);
     const d = diff40();
@@ -297,6 +298,8 @@ describe("D's diff overlay (SP5a spec §2.5, D21)", () => {
       if (pb >= 0) expect(s.blockPool.refcount(pb), `proto blocks slot of ${sy}`).toBe(overlaid ? 1 : 2);
     }
 
+    // The diff's torches emit, so the column is flagged for L's block-light scan; its neighbours are not.
+    expect(d.value.some((v) => v >>> 8 === TORCH)).toBe(true);
     expect(s.diffFlag(CX, CZ)).toBe(true);
     for (let dz = -1; dz <= 1; dz++) for (let dx = -1; dx <= 1; dx++) if (dx !== 0 || dz !== 0) expect(s.diffFlag(CX + dx, CZ + dz)).toBe(false);
 
@@ -325,7 +328,7 @@ describe("D's diff overlay (SP5a spec §2.5, D21)", () => {
     expect(s.diffFlag(CX, CZ)).toBe(false);
   });
 
-  test('a diff equal to the proto everywhere leaves the column\'s values unchanged', () => {
+  test('a diff equal to the proto everywhere leaves the column\'s values unchanged and the column unflagged (generated terrain holds no emitter)', () => {
     const s = filledT();
     const before = protoSnapshot(s);
     const n = SECTIONS * 4096;
@@ -342,6 +345,20 @@ describe("D's diff overlay (SP5a spec §2.5, D21)", () => {
     expect(protoSnapshot(s).entries).toEqual(before.entries);
     expect(versionsOf(s)).toEqual(VERSIONS_FIXTURE);
     expect(auxHash(s.final(CX, CZ)!.aux()!)).toBe(AUX_FIXTURE);
-    expect(s.diffFlag(CX, CZ)).toBe(true);
+    expect(s.diffFlag(CX, CZ)).toBe(false);
+  });
+
+  test('a torch overlay flags; an air or planks overlay does not', () => {
+    /** One entry at (3, 200, 5), in section 16 (all air in the proto); the column's flag after D overlays it. */
+    const flagAfter = (value: number): boolean => {
+      const s = filledT();
+      const d: ColumnDiff = { sy: Uint8Array.of(16), idx: Uint16Array.of((8 << 8) | (5 << 4) | 3), value: Uint32Array.of(value) };
+      expect(fillColumnD(s, ctx, CX, CZ, NEVER, d)).toBe(true);
+      expect(s.final(CX, CZ)!.block(3, 200, 5), 'the entry is overlaid').toBe(value >>> 8);
+      return s.diffFlag(CX, CZ);
+    };
+    expect(flagAfter(TORCH << 8)).toBe(true);
+    expect(flagAfter(AIR << 8)).toBe(false);
+    expect(flagAfter(OAK_PLANKS << 8)).toBe(false);
   });
 });

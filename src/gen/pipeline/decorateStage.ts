@@ -8,8 +8,11 @@
  *   all-zero light is uniform and stores no slot (no light change, SP4a spec §2.5).
  * - SP5a (spec §2.5, D21): with a diff (the column's edit entries, `ColumnDiff`), each section holding entries is
  *   rebuilt from the proto plus the entries into this module's scratch and written with `w.replaceBlocks`
- *   (copy-on-write, so the proto stays generated; no light written), and `w.setDiffFlag()` marks the column for L's
- *   scan gate (D23). Without a diff, or with an empty one, nothing more is written.
+ *   (copy-on-write, so the proto stays generated; no light written). Without a diff, or with an empty one, nothing
+ *   more is written. `w.setDiffFlag()` marks the column for L's scan gate (D23) only when an entry writes a state that
+ *   emits light (SP5b, lever 18f): generated terrain holds no emitter, so another overlay gives the scan nothing to
+ *   find, and lava opens it by itself (`lightRegion`'s `anyLava`). A later D overlays the whole diff again, so a saved
+ *   emitter is flagged again; the sim flags its own edits.
  * - Then the final heightmaps of aux A (`finalHeightmaps.ts`, §3.2), over the final blocks and fluid: the proto's
  *   sections, and the rebuilt scratch for the overlaid ones (`nb.final` is null below Decorated). `tintTH` stays 0
  *   (SP8a writes it) and no proto is freed.
@@ -17,10 +20,12 @@
  * `workers/worldJobs.ts`). Follows the gen determinism rules.
  */
 import type { ColumnDiff as ColumnDiffT, ColumnView as ColumnViewT, ColumnWriter as ColumnWriterT, NeighborhoodReader as NeighborhoodReaderT } from '../../world/store/api';
+import { EMIT } from '../../world/blocks/index';
 import type { GenContext } from '../context';
 import { writeFinalHeightmaps } from './finalHeightmaps';
 
 const WRITE_HEIGHTMAPS = writeFinalHeightmaps;
+const EMITS = EMIT;
 
 /** Master §3.12's steps, in order; each places nothing until its features arrive (SP6 onwards). */
 const STEPS: readonly string[] = [
@@ -43,14 +48,18 @@ const REBUILT_BLOCKS: Uint16Array[] = [];
 const REBUILT_FLUID: Uint8Array[] = [];
 /** 1 for each section the current run's diff touches. */
 const TOUCHED = new Uint8Array(24);
+/** Whether the current run's diff writes a state that emits light (set by `rebuild`). */
+let emitting = false;
 
 /**
- * Rebuilds every section of `d` from the proto `k` plus the entries into the scratch, marking it in TOUCHED; entries in
- * any order, a later entry of the same voxel winning. Returns whether any section was rebuilt.
+ * Rebuilds every section of `d` from the proto `k` plus the entries into the scratch, marking it in TOUCHED and setting
+ * `emitting` when an entry's state emits; entries in any order, a later entry of the same voxel winning. Returns
+ * whether any section was rebuilt.
  */
 function rebuild(k: ColumnViewT, d: ColumnDiffT): boolean {
   const { sy: dsy, idx: didx, value: dval } = d;
   TOUCHED.fill(0);
+  emitting = false;
   for (let e = 0; e < dsy.length; e++) {
     const sy = dsy[e]!;
     if (TOUCHED[sy] === 0) {
@@ -67,6 +76,7 @@ function rebuild(k: ColumnViewT, d: ColumnDiffT): boolean {
     const v = dval[e]!;
     REBUILT_BLOCKS[sy]![didx[e]!] = v >>> 8;
     REBUILT_FLUID[sy]![didx[e]!] = v & 255;
+    if (EMITS[v >>> 8]! > 0) emitting = true;
   }
   return dsy.length > 0;
 }
@@ -123,7 +133,7 @@ export function decorateStage(ctx: GenContext, nb: NeighborhoodReaderT, w: Colum
         SECTION_BLOCKS[sy] = b;
         SECTION_FLUID[sy] = f;
       }
-      w.setDiffFlag();
+      if (emitting) w.setDiffFlag();
     }
     WRITE_HEIGHTMAPS(blockAt, fluidAt, w.aux());
   } finally {
