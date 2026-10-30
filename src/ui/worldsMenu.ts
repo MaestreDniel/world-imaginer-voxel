@@ -19,7 +19,11 @@
  *   Delete only. Rename and Delete write under the world's lock taken only if it is free (`withWorldIfFree`, D7, D24),
  *   and a held lock refuses them with `LOCKED_NOTICE`. The list is read again when the tab becomes visible (§1.1), and
  *   each read's time, through the rows' build, is recorded on `window.__wiMenuListMs` for the smoke's `menus` step.
- *   Export and Import .wiworld are Task 22's: until then their buttons do nothing.
+ * - Export and Import .wiworld (§2.4, D15): Export reads the world's last committed save in one read (`saves.readAll`,
+ *   no lock: a world open in another tab is read at one `flushSeq`, D7) and downloads it as `exportFileName(name)`.
+ *   Import .wiworld opens a file picker (`#load-import-file`), reads the file (`readWiworld`, under a new id), writes it
+ *   in one write (`saves.writeAll`) and says "Imported 'name'", with "n columns of this world could not be read" and
+ *   "n blocks of unknown types became air" when there are any; a refusal writes nothing and shows its reason.
  * Ids and the wall clock come in through the options (`newId`, `now`); text goes through `textContent` only.
  */
 import { hex64, type Seed64 } from '../core/hash';
@@ -30,9 +34,11 @@ import { genKey, paramsHash, stageHashes } from '../core/stage/hash';
 import { GENERATOR_VERSION } from '../core/constants';
 import type { WriteResult } from '../persist/kv';
 import {
-  loadParams, MAX_NAME, newState, newWorldName, todayStateTable, type Saves, type WorldRecord, type WorldRow,
+  exportFileName, loadParams, MAX_NAME, newState, newWorldName, todayStateTable, type Saves, type WorldRecord, type WorldRow,
 } from '../persist/saves';
+import { readWiworld, writeWiworld } from '../persist/wiworld';
 import { el } from './common/dom';
+import { downloadBlob, readBinaryFile } from './common/files';
 import { createNotices } from './common/notice';
 import { mountBackdrop } from './loading/panoramas';
 import { profileOptions } from './map/toolbar';
@@ -269,9 +275,14 @@ export function mountWorldsMenu(root: HTMLElement, o: WorldsMenuOptions): { disp
   const list = el('ul', 'world-list');
   list.id = 'load-list';
   const importButton = button('load-import', 'Import .wiworld');
+  const importFile = el('input');
+  importFile.id = 'load-import-file';
+  importFile.type = 'file';
+  importFile.accept = '.wiworld';
+  importFile.hidden = true;
   const loadBack = button('load-back', 'Back');
   const loadActions = el('nav', 'start-actions');
-  loadActions.append(importButton, loadBack);
+  loadActions.append(importButton, importFile, loadBack);
   const loadNoticeRow = el('div');
   loadNoticeRow.id = 'load-notice';
   load.append(loadHeading, list, loadActions, loadNoticeRow);
@@ -377,6 +388,48 @@ export function mountWorldsMenu(root: HTMLElement, o: WorldsMenuOptions): { disp
     });
   }
 
+  /** Export (D15): the last committed save in one read, downloaded as `exportFileName(name)`; no lock (D7). */
+  async function exportWorld(saves: Saves, id: string): Promise<void> {
+    try {
+      const dump = await saves.readAll(id);
+      if (disposed) return;
+      if (dump === null) {
+        loadNotices.show('The world could not be exported (its records could not be read)', { kind: 'error' });
+        return;
+      }
+      const blob = await writeWiworld(dump);
+      if (disposed) return;
+      downloadBlob(exportFileName(dump.world.name), blob);
+    } catch (e) {
+      if (!disposed) loadNotices.show(`The world could not be exported (${errorName(e)})`, { kind: 'error' });
+    }
+  }
+
+  /** Import (D15): the picked file read under a new id and written in one write; a refusal writes nothing. */
+  async function importWorld(saves: Saves, file: Blob): Promise<void> {
+    try {
+      const r = await readWiworld(await readBinaryFile(file), STATE_BOUNDS, o.newId(), o.now());
+      if (disposed) return;
+      if (!r.ok) {
+        loadNotices.show(r.reason, { kind: 'error' });
+        return;
+      }
+      const w = await saves.writeAll(r.dump);
+      if (disposed) return;
+      if (w.status !== 'complete') {
+        loadNotices.show(`The world could not be imported (${writeFailure(w)})`, { kind: 'error' });
+        return;
+      }
+      loadNotices.show(`Imported '${r.dump.world.name}'`, { kind: 'info' });
+      if (r.skippedColumns > 0) loadNotices.show(`${r.skippedColumns} columns of this world could not be read`, { kind: 'warn' });
+      if (r.unknownStates > 0) loadNotices.show(`${r.unknownStates} blocks of unknown types became air`, { kind: 'warn' });
+    } catch (e) {
+      if (!disposed) loadNotices.show(`The file could not be read (${errorName(e)})`, { kind: 'error' });
+      return;
+    }
+    await readList();
+  }
+
   const rowButton = (cls: string, text: string, run: () => void): HTMLButtonElement => {
     const b = el('button', `start-button ${cls}`, text);
     b.type = 'button';
@@ -406,7 +459,7 @@ export function mountWorldsMenu(root: HTMLElement, o: WorldsMenuOptions): { disp
     actions.append(
       rowButton('world-play', 'Play', () => o.navigate(worldUrl(w.id))),
       rowButton('world-rename', 'Rename', () => startRename(saves, w, nameEl)),
-      rowButton('world-export', 'Export', () => {}),
+      rowButton('world-export', 'Export', () => void exportWorld(saves, w.id)),
       rowButton('world-delete', 'Delete', () => void deleteWorld(saves, w.id, w.name)),
     );
     li.append(actions);
@@ -423,6 +476,23 @@ export function mountWorldsMenu(root: HTMLElement, o: WorldsMenuOptions): { disp
 
   loadBack.addEventListener('click', () => {
     show('start');
+  });
+
+  importButton.addEventListener('click', () => {
+    if (o.saves === null) {
+      loadNotices.show(NO_STORAGE, { kind: 'error' });
+      return;
+    }
+    importFile.click();
+  });
+
+  // The input is cleared after the pick, so that choosing the same file again fires `change`.
+  importFile.addEventListener('change', () => {
+    const file = importFile.files?.[0];
+    importFile.value = '';
+    if (file === undefined || o.saves === null) return;
+    loadNotices.clear();
+    void importWorld(o.saves, file);
   });
 
   const onVisibility = (): void => {

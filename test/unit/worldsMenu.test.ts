@@ -1,10 +1,14 @@
+import { gunzipSync, gzipSync } from 'node:zlib';
 import { afterEach, beforeEach, describe, expect, test, vi } from 'vitest';
+import { colKey } from '../../src/core/coords';
 import type { Seed64 } from '../../src/core/hash';
 import { seedFromInput, seedToText } from '../../src/core/seed';
+import { encodeColumnDiff } from '../../src/persist/diffCodec';
 import { createMemoryKV, type MemoryKV } from '../../src/persist/memory';
 import {
-  createSaves, loadParams, newState, olderGenerator, parseWorldRecord, todayStateTable, type HistoryRecord, type WorldRecord,
+  createSaves, exportFileName, loadParams, newState, olderGenerator, parseWorldRecord, todayStateTable, type HistoryRecord, type WorldRecord,
 } from '../../src/persist/saves';
+import { readWiworld, wiworldHash, writeWiworld } from '../../src/persist/wiworld';
 import { DEFAULT_MAP_STATE, encodeMapState } from '../../src/ui/map/mapState';
 import { profileOptions } from '../../src/ui/map/toolbar';
 import { parseWorldQuery } from '../../src/ui/world/query';
@@ -15,7 +19,13 @@ import {
   mountWorldsMenu, noticeOfQuery, PERSIST_ASKED_KEY, REFUSAL_REASON_KEY, refusalText, refusalUrl, savesDbOf, startModeOf,
   type StorageLike, type WorldsMenuOptions,
 } from '../../src/ui/worldsMenu';
-import { installDom, type FakeElement } from './fixtures/domShim';
+import { REGISTRY } from '../../src/world/blocks';
+import type { ColumnDiff } from '../../src/world/store/api';
+import { installDom, FakeElement } from './fixtures/domShim';
+
+const S = (key: string): number => REGISTRY.parseStateKey(key);
+/** One entry of state `state` at sy 0, idx 0. */
+const oneVoxel = (state: number): ColumnDiff => ({ sy: Uint8Array.of(0), idx: Uint16Array.of(0), value: Uint32Array.of(state << 8) });
 
 const query = (url: string) => new URL(url, 'http://localhost/').searchParams;
 const flush = () => new Promise<void>((r) => setTimeout(r, 0));
@@ -326,7 +336,7 @@ describe('mountWorldsMenu: Load world (SP5b spec §1.1, §1.3, D3, D7, D14, D24)
     vi.stubGlobal('localStorage', fakeStorage());
     vi.stubGlobal('__wiMenuListMs', undefined);
   });
-  afterEach(() => { vi.unstubAllGlobals(); });
+  afterEach(() => { vi.unstubAllGlobals(); vi.restoreAllMocks(); });
 
   /** Node's own Web Locks (24.21), as the browser's; each test's world ids are fresh, so no other test holds them. */
   const NODE_LOCKS = navigator.locks as unknown as LockManagerLike;
@@ -598,6 +608,100 @@ describe('mountWorldsMenu: Load world (SP5b spec §1.1, §1.3, D3, D7, D14, D24)
     one(dom.el('load-notice'), 'notice-confirm').click();
     await vi.waitFor(() => expect(kv.dump('worlds')).toEqual([]));
     for (const f of Object.values(dialogs)) expect(f).not.toHaveBeenCalled();
+  });
+
+  /** Every object URL's blob and every link clicked meanwhile (`downloadBlob`'s), from now on. */
+  function downloads() {
+    const blobs: Blob[] = [];
+    vi.spyOn(URL, 'createObjectURL').mockImplementation((b) => {
+      blobs.push(b as Blob);
+      return `blob:${blobs.length}`;
+    });
+    vi.spyOn(URL, 'revokeObjectURL').mockImplementation(() => {});
+    const click = vi.spyOn(FakeElement.prototype, 'click');
+    const links = () => (click.mock.contexts as FakeElement[])
+      .filter((e) => e.tagName === 'A')
+      .map((a) => ({ name: (a as unknown as HTMLAnchorElement).download, href: a.href }));
+    return { blobs, links };
+  }
+
+  /** Picks `file` in Load world's hidden file input. */
+  function pick(file: File): void {
+    const input = dom.el('load-import-file');
+    let opened = 0;
+    const onClick = () => { opened++; };
+    input.addEventListener('click', onClick);
+    dom.el('load-import').click();
+    input.removeEventListener('click', onClick);
+    expect(opened).toBe(1);
+    Object.assign(input, { files: [file] });
+    input.dispatchEvent(new Event('change'));
+  }
+
+  test('Export names the file `exportFileName`; Import adds the world with `Imported \'name\'`', async () => {
+    const kv = createMemoryKV();
+    const id = await saved(kv, 'Alpha/Beta?', { updated: 5, places: 2 });
+    expect((await kv.write([{ op: 'put', store: 'diffs', key: [id, colKey(1, 2)], value: encodeColumnDiff(oneVoxel(S('stone')), [1, 2]) }])).status).toBe('complete');
+    mount(kv);
+    await openLoad();
+    const d = downloads();
+    const write = vi.spyOn(kv, 'write');
+    one(row(id), 'world-export').click();
+    await vi.waitFor(() => expect(d.links()).toEqual([{ name: exportFileName('Alpha/Beta?'), href: 'blob:1' }]));
+    expect(exportFileName('Alpha/Beta?')).toBe('Alpha_Beta_.wiworld');
+    expect(write).not.toHaveBeenCalled();
+    const source = await createSaves(kv).readAll(id);
+    const exported = await readWiworld(d.blobs[0]!, STATE_BOUNDS, 'x', 0);
+    expect(exported.ok && wiworldHash(exported.dump)).toBe(wiworldHash(source!));
+
+    pick(new File([d.blobs[0]!], 'Alpha_Beta_.wiworld'));
+    await vi.waitFor(() => expect(dom.el('load-notice').textContent).toContain('Imported \'Alpha/Beta?\''));
+    expect(write).toHaveBeenCalledTimes(1);
+    await vi.waitFor(() => expect(rows().length).toBe(2));
+    const added = rows().map((r) => r.dataset['id']!).find((r) => r !== id)!;
+    expect(row(added).textContent).toContain('Alpha/Beta? · default · seed 7');
+    expect(row(added).textContent).toContain('· 2 places');
+    expect(wiworldHash((await createSaves(kv).readAll(added))!)).toBe(wiworldHash(source!));
+    expect(dom.el('load-notice').textContent).not.toContain('could not be read');
+  });
+
+  test('Review Focus 3 (P25): an imported file from another `stateTable` says `3 blocks of unknown types became air`; an undecodable column says `1 columns of this world could not be read`', async () => {
+    const kv = createMemoryKV();
+    const id = await saved(kv, 'Old', { updated: 5 });
+    const source = (await createSaves(kv).readAll(id))!;
+    const table = [...[...todayStateTable()].reverse().slice(0, 55), 'nope[x=1]'];
+    const unknown = oneVoxel(table.indexOf('nope[x=1]'));
+    const three: ColumnDiff = { sy: Uint8Array.of(0, 0, 0), idx: Uint16Array.of(1, 2, 3), value: Uint32Array.from([1, 2, 3], () => unknown.value[0]!) };
+    const broken = encodeColumnDiff(oneVoxel(1), [0, 0]);
+    broken[0] = 2;
+    const file = await writeWiworld({
+      ...source, world: { ...source.world, stateTable: table },
+      cols: [{ key: colKey(0, 0), bytes: encodeColumnDiff(three, [0, 0]) }, { key: colKey(0, 1), bytes: broken }],
+    });
+    mount(kv);
+    await openLoad();
+    pick(new File([file], 'old.wiworld'));
+    await vi.waitFor(() => expect(dom.el('load-notice').textContent).toContain('Imported \'Old\''));
+    expect(dom.el('load-notice').textContent).toContain('3 blocks of unknown types became air');
+    expect(dom.el('load-notice').textContent).toContain('1 columns of this world could not be read');
+    await vi.waitFor(() => expect(rows().length).toBe(2));
+  });
+
+  test('an Import refusal shows its reason and writes nothing', async () => {
+    const kv = createMemoryKV();
+    const id = await saved(kv, 'Alpha', { updated: 5 });
+    const raw = new Uint8Array(gunzipSync(new Uint8Array(await (await writeWiworld((await createSaves(kv).readAll(id))!)).arrayBuffer())));
+    new DataView(raw.buffer, raw.byteOffset).setUint32(4, 2, true);
+    mount(kv);
+    await openLoad();
+    const write = vi.spyOn(kv, 'write');
+    pick(new File([gzipSync(raw)], 'newer.wiworld'));
+    await vi.waitFor(() => expect(dom.el('load-notice').textContent).toContain('Made by a newer version of world-imaginer-voxel'));
+    pick(new File([new Uint8Array([1, 2, 3])], 'junk.wiworld'));
+    await vi.waitFor(() => expect(dom.el('load-notice').textContent).toContain('Not a .wiworld file'));
+    await flush();
+    expect(write).not.toHaveBeenCalled();
+    expect(kv.dump('worlds').map(([k]) => k)).toEqual([id]);
   });
 
   test('dispose stops the list\'s re-read', async () => {

@@ -190,7 +190,7 @@ world-imaginer-voxel/          (repository root)
                                 (SP4c: `mapTool.ts`, the tool both `?map` and the world's M overlay mount)
     ui/common/* paramPanel/* splineEditor/* biomeTable/* presets/* crossSection/*   (SP2b) shared DOM helpers, notices and shortcuts;
                                 the parameter panel, spline drawer, biome table, presets tab and cross-section (pure models beside thin DOM);
-                                SP3a adds the cross-section's Voxels mode
+                                SP3a adds the cross-section's Voxels mode; files.ts (SP5b: downloadBlob, readBinaryFile)
     ui/lab/* seedBox.ts          (SP1) the ?lab=noise research page; DOM-free seed-box logic
     ui/world/* ui/loading/* ui/spike/* settings.ts   (SP4a) the 3D page: the start and worlds menus at `/` (SP5b: `ui/worldsMenu.ts`), the world page, the
                                 flight (`?flight=sp4a`) and panorama (`?pano`) routes; the loading screen with panoramas, tips and progress; the spike
@@ -508,9 +508,9 @@ Sparse entries are sorted by idx, sections by sy, and trailer ticks by packedPos
 During development this dialog is expected often, since every SP changes the generator.
 
 **Export `.wiworld`.** A gzip `CompressionStream` over:
-- `"WI10"`, `u32 version`, `u32 headerLen`;
-- header JSON: the world record, the full params and the block-state table `(typeName, props) → id`;
-- records `i32 cx, i32 cz, u32 len, bytes`.
+- `"WI10"`, `u32 version` = 1, `u32 headerLen`;
+- header: UTF-8 canonical JSON `{format: 'wi10-world', world, state, history}`: the `worlds` record without `id` (its `stateTable` describes the records' ids), the `state` record without `worldId`, and the `history` record (SP5b);
+- records `i32 cx, i32 cz, u32 len, bytes`, one per edited column, sorted by colKey (the stored `ColumnDiffV1`, copied without decoding).
 
 Import validates the magic and version, runs `migrate`, recomputes genKey, and creates a new world id.
 

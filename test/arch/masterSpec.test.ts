@@ -1371,6 +1371,8 @@ describe('master spec amendments (SP5b §9)', () => {
     [/^\s+ui\/world\/\* /, 'stateBounds.ts autosave.ts worldLock.ts modifyMode.ts places.ts placeDialog.ts (SP5b)', 'src/ui/world/autosave.ts'],
     [/^\s+ui\/world\/\* /, 'stateBounds.ts autosave.ts worldLock.ts modifyMode.ts places.ts placeDialog.ts (SP5b)', 'src/ui/world/worldLock.ts'],
     [/^\s+ui\/shell\.ts /, 'worldsMenu.ts settingsPanel.ts (SP5b)', 'src/ui/worldsMenu.ts'],
+    [/^\s+persist\/kv\.ts /, 'kvContract.ts diffCodec.ts wiworld.ts saves.ts (SP5b)', 'src/persist/wiworld.ts'],
+    [/^\s+ui\/common\/\* /, 'files.ts (SP5b: downloadBlob, readBinaryFile)', 'src/ui/common/files.ts'],
   ];
 
   test('§10\'s SP5b entry and its receivers (SP5b spec §9, §11)', () => {
@@ -1394,6 +1396,19 @@ describe('master spec amendments (SP5b §9)', () => {
     const at = text.indexOf('### 2.7 ');
     const s27 = text.slice(at, text.indexOf('## 3. Generation', at));
     expect(s27.split('\n').some((l) => l === '- header `{v:1, genKey:u32x2, sections:u8}`, its genKey (informative: entries apply under any generator, SP5b);'), 'no informative-genKey header line in §2.7').toBe(true);
+  });
+
+  test('§2.7\'s `.wiworld` header is SP5b\'s: the format, the three records and the records by colKey (SP5b spec §2.4, D23, §9)', () => {
+    const at = text.indexOf('### 2.7 ');
+    const lines = text.slice(at, text.indexOf('## 3. Generation', at)).split('\n');
+    const head = lines.indexOf('**Export `.wiworld`.** A gzip `CompressionStream` over:');
+    expect(head, 'no `.wiworld` paragraph in §2.7').toBeGreaterThan(-1);
+    expect(lines.slice(head + 1, head + 4)).toEqual([
+      '- `"WI10"`, `u32 version` = 1, `u32 headerLen`;',
+      '- header: UTF-8 canonical JSON `{format: \'wi10-world\', world, state, history}`: the `worlds` record without `id` (its `stateTable` describes the records\' ids), the `state` record without `worldId`, and the `history` record (SP5b);',
+      '- records `i32 cx, i32 cz, u32 len, bytes`, one per edited column, sorted by colKey (the stored `ColumnDiffV1`, copied without decoding).',
+    ]);
+    expect(text).not.toContain('the world record, the full params and the block-state table');
   });
 
   test('§2.7\'s five IndexedDB stores and their records, the saved params over the profile; §2.2\'s `stateTable` kept equal to the ids on disk (SP5b spec §2.1, D16, D22, D33, §9)', () => {
