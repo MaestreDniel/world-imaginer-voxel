@@ -5,19 +5,23 @@
  * set of columns holding entries (`hasEntries`, the read-through's test, §2.5) from each `edited` reply's changes,
  * `entryAdded` and `entryRemoved` (SP5b D20). A saved world's `load` (SP5b spec §3.3, §3.4 step 3) resolves once its
  * `loaded` reply's `entryCols` became the whole entry set, so the read-through sees every saved edit from the first D.
+ * `flush` (SP5b spec §3.2) posts the state and history and resolves with the sim's `flushed`, committed or not (a KV
+ * failure is a result, not the sim's); `record` posts the world's changed record, which has no reply.
  *
  * **The sim's failure** (§2.1): an `error` event, an `error` reply of any code, or a reply the guard refuses
  * (`parseFromSim`, or one that does not answer a pending request of its kind, its batch's length or its column). In
  * this order: `failed` turns true, the entry set empties, the worker is terminated (so no batch already queued in its
  * port writes after its pins are released; the sim's handler also refuses every batch after an `error` reply),
  * `onFailure` runs once and synchronously (the page marks thread 15 dead, releases every sim pin and shows the
- * notice), then every pending `edits` and `load` rejects with `SimFailed` and every pending `diff` resolves null, so a
- * rejected post finds its pins already released. Later `edits` and `load`s reject and later `diff`s resolve null at
- * once, with nothing posted. `dispose` terminates the worker and settles its requests the same way, without
+ * notice), then every pending `edits`, `load` and `flush` rejects with `SimFailed` and every pending `diff` resolves
+ * null, so a rejected post finds its pins already released. Later `edits`, `load`s and `flush`es reject and later
+ * `diff`s resolve null at once, and a later `record` is dropped, with nothing posted (autosave counts a rejected flush
+ * as not saved; the sim's own failure notice shows). `dispose` terminates the worker and settles its requests the same way, without
  * `onFailure`. The page opens a world whose `load` failed without editing (SP5b spec §3.3).
  */
 import { colKey } from '../core/coords';
-import { parseFromSim, type DiffMsg, type Edit, type EditedMsg, type LoadedMsg, type LoadMsg, type ToSim } from '../workers/protocol';
+import type { HistoryRecord, StateRecord, WorldRecord } from '../persist/saves';
+import { parseFromSim, type DiffMsg, type Edit, type EditedMsg, type FlushedMsg, type LoadedMsg, type LoadMsg, type ToSim } from '../workers/protocol';
 import type { ColumnDiff } from '../world/store/api';
 import { SIM_THREAD } from '../world/store/reclaim';
 import type { StoreHandles } from '../world/store/store';
@@ -50,6 +54,13 @@ export interface SimClient {
   edits(e: readonly Edit[]): Promise<EditedMsg>;
   /** Column (cx, cz)'s entries, or null when it holds none or the sim failed (§2.5). */
   diff(cx: number, cz: number): Promise<ColumnDiff | null>;
+  /**
+   * Saves the open world (SP5b spec §3.2): resolves with `flushed`, ok or not; rejects `SimFailed` on the sim's failure
+   * or the client's dispose, and at once on a closed client.
+   */
+  flush(state: StateRecord, history: HistoryRecord | null): Promise<FlushedMsg>;
+  /** Sends the world's changed record for the next flush (no reply); nothing on a closed client. */
+  record(world: WorldRecord): void;
   /** Whether the column holds entries, as the `loaded` set and the `edited` replies' changes tell (false once the sim failed). */
   hasEntries(cx: number, cz: number): boolean;
   readonly failed: boolean;
@@ -59,9 +70,10 @@ export interface SimClient {
 type Pending =
   | { readonly kind: 'load'; resolve(m: LoadedMsg): void; reject(e: Error): void }
   | { readonly kind: 'edits'; readonly n: number; resolve(m: EditedMsg): void; reject(e: Error): void }
+  | { readonly kind: 'flush'; resolve(m: FlushedMsg): void; reject(e: Error): void }
   | { readonly kind: 'diff'; readonly cx: number; readonly cz: number; resolve(d: ColumnDiff | null): void };
 /** The request kind each id-carrying reply answers. */
-const REQUEST_OF: Readonly<Record<'loaded' | 'edited' | 'diff', Pending['kind']>> = { loaded: 'load', edited: 'edits', diff: 'diff' };
+const REQUEST_OF: Readonly<Record<'loaded' | 'edited' | 'diff' | 'flushed', Pending['kind']>> = { loaded: 'load', edited: 'edits', diff: 'diff', flushed: 'flush' };
 interface AttachWait { resolve(): void; reject(e: Error): void }
 
 const text = (e: unknown): string => (e instanceof Error ? `${e.name}: ${e.message}` : typeof e === 'object' && e !== null && 'message' in e ? String(e.message) : String(e));
@@ -77,7 +89,7 @@ export function createSimClient(spawn: () => SimWorkerLike, o: { onFailure(e: Er
   /** Failed or disposed: requests settle at once and replies are ignored. */
   let closed = false;
 
-  /** Settles every request still waiting: an attach, a load or a batch rejects with `e`, a diff resolves null. */
+  /** Settles every request still waiting: an attach, a load, a batch or a flush rejects with `e`, a diff resolves null. */
   const settleAll = (e: SimFailed): void => {
     const waits = [...pending.values()];
     pending.clear();
@@ -123,6 +135,11 @@ export function createSimClient(spawn: () => SimWorkerLike, o: { onFailure(e: Er
       entries.clear();
       for (const k of r.entryCols) entries.add(k);
       p.resolve(r);
+      return;
+    }
+    if (p.kind === 'flush') {
+      pending.delete(m.id);
+      p.resolve(m as FlushedMsg);
       return;
     }
     if (p.kind === 'edits') {
@@ -176,6 +193,17 @@ export function createSimClient(spawn: () => SimWorkerLike, o: { onFailure(e: Er
         post({ type: 'diff', id, cx, cz });
         pending.set(id, { kind: 'diff', cx, cz, resolve });
       });
+    },
+    flush(state, history) {
+      if (closed) return Promise.reject(new SimFailed('the sim failed or was disposed'));
+      const id = nextId++;
+      return new Promise<FlushedMsg>((resolve, reject) => {
+        post({ type: 'flush', id, state, history });
+        pending.set(id, { kind: 'flush', resolve, reject });
+      });
+    },
+    record(world) {
+      if (!closed) post({ type: 'record', world });
     },
     hasEntries: (cx, cz) => entries.has(colKey(cx, cz)),
     get failed() {

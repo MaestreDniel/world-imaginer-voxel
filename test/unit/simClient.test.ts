@@ -10,6 +10,7 @@ import { colKey } from '../../src/core/coords';
 import { worldJobsOf, type ReadThrough } from '../../src/engine/coordinator';
 import { createSimClient, SimFailed, type SimClient, type SimWorkerLike } from '../../src/engine/simClient';
 import type { ColumnDone, WorkerPool } from '../../src/engine/workerPool';
+import type { HistoryRecord, StateRecord, WorldRecord } from '../../src/persist/saves';
 import type { Edit } from '../../src/workers/protocol';
 import type { ColumnDiff } from '../../src/world/store/api';
 import { createStore } from '../../src/world/store/store';
@@ -154,6 +155,59 @@ describe('the sim client (SP5a spec §2.1, §2.5)', () => {
     const posted = w2.posted.length;
     await expect(disposed.load(loadArgs)).rejects.toBeInstanceOf(SimFailed);
     expect(w2.posted.length).toBe(posted);
+    expect(failures).toBe(1);
+  });
+
+  const state: StateRecord = { worldId: 'w1', flushSeq: 2, updated: 1_700_000_000_000, player: null, time: { t: 0.25, speedIndex: 0 }, hotbar: { v: 1, active: 0, slots: [] }, places: [] };
+  const history: HistoryRecord = { worldId: 'w1', done: [], undone: [] };
+  const world = { id: 'w1', genKey: 'fedcba9876543210' } as WorldRecord;
+  const flushedReply = (id: number, ok: boolean) => (ok
+    ? { type: 'flushed', id, ok, flushSeq: 3, columns: 2, bytes: 80, syncMs: 0.2, commitMs: 3 }
+    : { type: 'flushed', id, ok, status: 'abort', errorName: 'QuotaExceededError' });
+
+  test('`flush` posts the state and history and resolves with its `flushed`, ok or not; `record` posts and waits for no reply (SP5b spec §3.2, §3.3)', async () => {
+    const w = fakeSim();
+    let failures = 0;
+    const sim = createSimClient(() => w, { onFailure: () => { failures++; } });
+    const p = sim.flush(state, history);
+    expect(w.posted.at(-1)).toEqual({ type: 'flush', id: lastId(w), state, history });
+    w.reply(flushedReply(lastId(w), true));
+    expect(await p).toEqual(flushedReply(lastId(w), true));
+    const q = sim.flush(state, null);
+    expect(w.posted.at(-1)).toEqual({ type: 'flush', id: lastId(w), state, history: null });
+    w.reply(flushedReply(lastId(w), false));
+    expect(await q).toEqual(flushedReply(lastId(w), false));
+    sim.record(world);
+    expect(w.posted.at(-1)).toEqual({ type: 'record', world });
+    expect([sim.failed, failures]).toEqual([false, 0]);
+    // A `flushed` reply to a pending `edits` is the sim's failure, as any reply to no request of its kind.
+    const e = sim.edits([STONE_AT]);
+    w.reply(flushedReply(lastId(w), true));
+    await expect(e).rejects.toBeInstanceOf(SimFailed);
+    expect([sim.failed, failures]).toEqual([true, 1]);
+  });
+
+  test('a pending `flush` rejects `SimFailed` when the sim fails; a `flush` on a disposed client rejects at once', async () => {
+    const w = fakeSim();
+    let failures = 0;
+    const sim = createSimClient(() => w, { onFailure: () => { failures++; } });
+    const p = sim.flush(state, history);
+    w.reply({ type: 'error', jobId: null, epoch: null, code: 'INTERNAL', message: 'x' });
+    await expect(p).rejects.toBeInstanceOf(SimFailed);
+    expect(failures).toBe(1);
+    const posted = w.posted.length;
+    await expect(sim.flush(state, null)).rejects.toBeInstanceOf(SimFailed);
+    sim.record(world);
+    expect(w.posted.length).toBe(posted);
+    const w2 = fakeSim();
+    const disposed = createSimClient(() => w2, { onFailure: () => { failures++; } });
+    const pending = disposed.flush(state, null);
+    disposed.dispose();
+    await expect(pending).rejects.toBeInstanceOf(SimFailed);
+    const posted2 = w2.posted.length;
+    await expect(disposed.flush(state, history)).rejects.toBeInstanceOf(SimFailed);
+    disposed.record(world);
+    expect(w2.posted.length).toBe(posted2);
     expect(failures).toBe(1);
   });
 

@@ -786,6 +786,51 @@ describe('the sim worker\'s messages (SP5a spec §2.1)', () => {
     expect(parseFromSim(m)).toBeNull();
   });
 
+  const state = { worldId: 'w1', flushSeq: 0, updated: 1_700_000_000_000, player: null, time: { t: 0.25, speedIndex: 0 }, hotbar: { v: 1, active: 0, slots: [] }, places: [] };
+  const flushMsg = (o: Record<string, unknown> = {}) => ({ type: 'flush', id: 8, state, history: null, ...o });
+  const record = (o: Record<string, unknown> = {}) => ({ type: 'record', world: { ...world, genKey: 'fedcba9876543210' }, ...o });
+  const flushedOk = (o: Record<string, unknown> = {}) => ({ type: 'flushed', id: 8, ok: true, flushSeq: 4, columns: 2, bytes: 120, syncMs: 0.3, commitMs: 4.5, ...o });
+  const flushedFail = (o: Record<string, unknown> = {}) => ({ type: 'flushed', id: 8, ok: false, status: 'abort', errorName: 'QuotaExceededError', ...o });
+
+  test('`flush`, `record` and `flushed` are accepted (SP5b spec §3.2, §3.3)', () => {
+    expect(parseToSim(flushMsg())).not.toBeNull();
+    expect(parseToSim(flushMsg({ history: { worldId: 'w1', done: [], undone: [] } }))).not.toBeNull();
+    expect(parseToSim(record())).not.toBeNull();
+    expect(parseFromSim(flushedOk())).not.toBeNull();
+    expect(parseFromSim(flushedOk({ columns: 0, bytes: 0, syncMs: 0, commitMs: 0 }))).not.toBeNull();
+    expect(parseFromSim(flushedFail())).not.toBeNull();
+    expect(parseFromSim(flushedFail({ status: 'closed', errorName: null }))).not.toBeNull();
+  });
+  test.each<[string, unknown]>([
+    ['a flush with a non-integer id', flushMsg({ id: 0.5 })],
+    ['a flush without a state', flushMsg({ state: undefined })],
+    ['a flush whose state is not an object', flushMsg({ state: 'now' })],
+    ['a flush whose state has no string worldId', flushMsg({ state: { ...state, worldId: 1 } })],
+    ['a flush whose state has a NaN updated', flushMsg({ state: { ...state, updated: Number.NaN } })],
+    ['a flush whose history is neither null nor an object', flushMsg({ history: 'none' })],
+    ['a flush without a history', flushMsg({ history: undefined })],
+    ['a record without a world', record({ world: undefined })],
+    ['a record whose world has no string id', record({ world: { ...world, id: 3, genKey: 'fedcba9876543210' } })],
+    ['a record whose world has a genKey of 15 digits', record({ world: { ...world, genKey: 'fedcba987654321' } })],
+  ])('a flush or a record is refused: %s', (_n, m) => {
+    expect(parseToSim(m)).toBeNull();
+  });
+  test.each<[string, unknown]>([
+    ['flushed with a non-integer id', flushedOk({ id: 'a' })],
+    ['flushed without ok', flushedOk({ ok: undefined })],
+    ['flushed ok with a flushSeq of 0', flushedOk({ flushSeq: 0 })],
+    ['flushed ok with a non-integer flushSeq', flushedOk({ flushSeq: 1.5 })],
+    ['flushed ok with a negative columns', flushedOk({ columns: -1 })],
+    ['flushed ok with a non-integer bytes', flushedOk({ bytes: 0.5 })],
+    ['flushed ok with a NaN syncMs', flushedOk({ syncMs: Number.NaN })],
+    ['flushed ok without commitMs', flushedOk({ commitMs: undefined })],
+    ['flushed not ok with status complete', flushedFail({ status: 'complete' })],
+    ['flushed not ok with a numeric errorName', flushedFail({ errorName: 22 })],
+    ['flushed not ok without errorName', flushedFail({ errorName: undefined })],
+  ])('a flushed reply is refused: %s', (_n, m) => {
+    expect(parseFromSim(m)).toBeNull();
+  });
+
   test('each message to the sim is accepted', () => {
     expect(parseToSim({ type: 'attach', handles, thread: 15 })).not.toBeNull();
     expect(parseToSim(edits(edit(), edit({ op: 'revert', value: 0, expect: 1 << 8 })))).not.toBeNull();

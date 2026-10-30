@@ -1196,7 +1196,7 @@ Target: edit → visible ≤ 50 ms p95, measured in the HUD (SP5a: gated from th
 
 - **World open:** the sim worker loads all of the world's diffs in one key-range read (SP5b; no prefetch).
 - **Read-through:** the coordinator obtains the diff for a D job from the sim worker and passes it in the job (SP5a: cloned with the decorate message; only the sim's diff reply is transferred). Edits followed by unload and reload within the flush window can therefore never regenerate from a stale IDB diff (E5).
-- **Flush:** every 2 s, and on `visibilitychange` / `pagehide`, the sim worker writes all dirty diffs plus the `worlds` record (player, time, `flushSeq`) in **one readwrite transaction**. Commit is confirmed by `oncomplete`, so at most 2 s of edits can be lost. `navigator.storage.persist()` is requested once.
+- **Flush:** every 2 s, and on `visibilitychange` / `pagehide`, the sim worker writes all dirty diffs plus the `state` record (player, time, hotbar, places, `flushSeq`) and, when changed, the `history` record, in **one readwrite transaction**. Commit is confirmed by `oncomplete`, so at most 2 s of edits can be lost. `navigator.storage.persist()` is requested once.
 - **Durable backup:** `.wiworld` export.
 
 ### 4.14 Far-terrain LOD (Medium short ring; High and Ultra)

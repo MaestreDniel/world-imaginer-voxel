@@ -14,13 +14,13 @@ import { seedFromInput } from '../../src/core/seed';
 import { findSpawn } from '../../src/gen/column/spawn';
 import { createGenContext } from '../../src/gen/context';
 import { decodeColumnDiff, encodeColumnDiff } from '../../src/persist/diffCodec';
-import type { KV } from '../../src/persist/kv';
+import type { KV, WriteOp } from '../../src/persist/kv';
 import { createMemoryKV, type MemoryKV } from '../../src/persist/memory';
 import { flushOps, todayStateTable, type HistoryRecord, type StateRecord, type WorldRecord } from '../../src/persist/saves';
 import { NO_ENTRY } from '../../src/sim/diffStore';
 import { applyEdits } from '../../src/sim/edits';
 import { DIRT, GLASS, STONE } from '../../src/world/blocks/index';
-import type { DiffMsg, EditedMsg, ErrorMsg, FromSim, LoadedMsg } from '../../src/workers/protocol';
+import type { DiffMsg, EditedMsg, ErrorMsg, FlushedMsg, FromSim, LoadedMsg } from '../../src/workers/protocol';
 import { createMemorySimHandler, createSimHandler, SIM_DRAIN_MS, type SimHandler, type SimReply } from '../../src/workers/simHandler';
 import { R_READER, SIM_THREAD } from '../../src/world/store/reclaim';
 import type { ColumnDiff } from '../../src/world/store/api';
@@ -303,6 +303,282 @@ describe('the sim handler on a shared seed-42 region (SP5a spec §2.1)', () => {
     expect(vi.mocked(applyEdits).mock.calls.length).toBe(calls);
     expect(valueAt(store, x, y, z)).toBe(before);
     expect([blockVersion(store, C[0], C[1]), store.table.lightVersion(store.table.find(C[0], C[1]))]).toEqual(versions);
+  });
+
+  describe('`flush` and `record` (SP5b spec §3.2, §3.3, D18, D21)', () => {
+    let fid = 200;
+    /** A saved world loaded into a handler of its own, attached to the region's store, over `kv`. */
+    const opened = async (kv: MemoryKV, worldId: string, o: Record<string, unknown> = {}) => {
+      const s = over(kv, attachedHandler(createSimHandler({ openKV: async () => kv })));
+      s.send(loadMsg(1, worldId, o));
+      await s.until(1);
+      loadedOf(s.got[0]!);
+      return s;
+    };
+    /** A `flush` of `worldId`'s state (its `flushSeq` the sim's to set), `st` over it. */
+    const flushOf = (id: number, worldId: string, history: HistoryRecord | null = null, st: Partial<StateRecord> = {}) =>
+      ({ type: 'flush', id, state: { ...stateOf(worldId), flushSeq: 0, ...st }, history });
+    const okOf = (r: SimReply): Extract<FlushedMsg, { ok: true }> => {
+      expect(r.msg, JSON.stringify(r.msg)).toMatchObject({ type: 'flushed', ok: true });
+      return r.msg as Extract<FlushedMsg, { ok: true }>;
+    };
+    /** A voxel above the surface of column (C + dx, C + dz), at (lx, lz) in it; `before` its value now. */
+    const spot = (dx: number, dz: number, lx: number, lz: number) => {
+      const [cx, cz] = [C[0] + dx, C[1] + dz];
+      const x = 16 * cx + lx;
+      const z = 16 * cz + lz;
+      const y = surface(x, z) + 1;
+      return { x, y, z, cx, cz, key: colKey(cx, cz), before: valueAt(store, x, y, z) };
+    };
+    type Spot = ReturnType<typeof spot>;
+    const place = (h: SimHandler, s: Spot): void => {
+      expect(s.before).not.toBe(val(GLASS));
+      expect(edited(call(h, { type: 'edits', id: ++fid, edits: [set(s.x, s.y, s.z, val(GLASS), s.before)] })).refused).toBeNull();
+    };
+    /** Reverts `s`, so the later cases start from the generated terrain. */
+    const undo = (h: SimHandler, s: Spot): void => {
+      expect(edited(call(h, { type: 'edits', id: ++fid, edits: [revert(s.x, s.y, s.z, val(GLASS))] })).refused).toBeNull();
+      expect(valueAt(store, s.x, s.y, s.z)).toBe(s.before);
+    };
+    /** The world's stored columns, decoded, by colKey. */
+    const diffsOf = (kv: MemoryKV, worldId: string) => new Map((kv.dump('diffs') as Array<[readonly [string, number], Uint8Array]>)
+      .filter(([k]) => k[0] === worldId).map(([k, b]) => [k[1], decodeColumnDiff(b, todayStateTable().length)]));
+    const stateIn = async (kv: KV, worldId: string): Promise<StateRecord> => (await kv.read([{ op: 'get', store: 'state', key: worldId }]))[0] as StateRecord;
+    const diffAt = (h: SimHandler, s: Spot): number[][] => entriesOf(call(h, { type: 'diff', id: ++fid, cx: s.cx, cz: s.cz }).msg as DiffMsg);
+    const opsOf = (ops: readonly WriteOp[]) => ops.map((op) => [op.op, op.store, op.op === 'deleteRange' ? null : op.key]);
+
+    test('a flush writes the dirty columns, the state with `flushSeq` 1 and the history in one write; a second with nothing dirty writes the state only with `flushSeq` 2', async () => {
+      const kv = createMemoryKV();
+      const s = await opened(kv, 'wf1', { flushSeq: 0 });
+      const a = spot(0, 0, 1, 1);
+      const b = spot(1, 0, 2, 13);
+      place(s.handler, a);
+      place(s.handler, b);
+      const write = vi.spyOn(kv, 'write');
+      const H = historyOf('wf1');
+      s.send(flushOf(10, 'wf1', H));
+      await s.until(2);
+      expect(write).toHaveBeenCalledTimes(1);
+      const ops = write.mock.calls[0]![0];
+      expect(opsOf(ops)).toEqual([['put', 'diffs', ['wf1', a.key]], ['put', 'diffs', ['wf1', b.key]], ['put', 'state', 'wf1'], ['put', 'history', 'wf1']]);
+      const bytes = ops.slice(0, 2).reduce((n, op) => n + ((op as { value: Uint8Array }).value.byteLength), 0);
+      const f = okOf(s.got[1]!);
+      expect([f.id, f.flushSeq, f.columns, f.bytes]).toEqual([10, 1, 2, bytes]);
+      // Committed: each column decodes to the DiffStore's entries, the state carries `flushSeq` 1, the history is as posted.
+      const d = diffsOf(kv, 'wf1');
+      expect(sortedKeys(d.keys())).toEqual(sortedKeys([a.key, b.key]));
+      for (const p of [a, b]) expect(entriesOf(d.get(p.key)!.diff)).toEqual(diffAt(s.handler, p));
+      expect(await stateIn(kv, 'wf1')).toEqual({ ...stateOf('wf1'), flushSeq: 1 });
+      expect(kv.dump('history')).toEqual([['wf1', H]]);
+      // Nothing dirty: the state only.
+      s.send(flushOf(11, 'wf1'));
+      await s.until(3);
+      expect(write).toHaveBeenCalledTimes(2);
+      expect(write.mock.calls[1]![0]).toEqual([{ op: 'put', store: 'state', key: 'wf1', value: { ...stateOf('wf1'), flushSeq: 2 } }]);
+      const f2 = okOf(s.got[2]!);
+      expect([f2.id, f2.flushSeq, f2.columns, f2.bytes]).toEqual([11, 2, 0, 0]);
+      undo(s.handler, b);
+      undo(s.handler, a);
+    });
+
+    test('a column reverted to its generated value deletes its key', async () => {
+      const kv = createMemoryKV();
+      const s = await opened(kv, 'wf2', { flushSeq: 0 });
+      const a = spot(-1, 0, 14, 3);
+      place(s.handler, a);
+      s.send(flushOf(10, 'wf2'));
+      await s.until(2);
+      okOf(s.got[1]!);
+      expect([...diffsOf(kv, 'wf2').keys()]).toEqual([a.key]);
+      undo(s.handler, a);
+      const write = vi.spyOn(kv, 'write');
+      s.send(flushOf(11, 'wf2'));
+      await s.until(3);
+      expect(okOf(s.got[2]!).columns).toBe(1);
+      expect(opsOf(write.mock.calls[0]![0])).toEqual([['delete', 'diffs', ['wf2', a.key]], ['put', 'state', 'wf2']]);
+      expect(diffsOf(kv, 'wf2').size).toBe(0);
+    });
+
+    test('an abort (`failAt(3)`) merges the columns back: the next flush commits the union with `flushSeq` + 1, and a history and a `record` of the aborted batch are in it', async () => {
+      const kv = createMemoryKV();
+      await seed(kv, 'wf3', []);
+      const s = await opened(kv, 'wf3');
+      const a = spot(0, 1, 8, 8);
+      const b = spot(1, 1, 13, 12);
+      const c = spot(0, -1, 3, 6);
+      place(s.handler, a);
+      place(s.handler, b);
+      const R: WorldRecord = { ...recordOf('wf3'), name: 'Renamed' };
+      s.send({ type: 'record', world: R });
+      // A `record` has no reply.
+      expect(s.got).toHaveLength(1);
+      const H1 = historyOf('wf3');
+      const dumps = () => (['worlds', 'state', 'history', 'diffs'] as const).map((st) => kv.dump(st));
+      const before = dumps();
+      // The batch: a, b, the state, the history (op 3), the record.
+      kv.failAt(3);
+      s.send(flushOf(10, 'wf3', H1));
+      await s.until(2);
+      expect(s.got[1]!.msg).toEqual({ type: 'flushed', id: 10, ok: false, status: 'abort', errorName: 'AbortError' });
+      expect(dumps()).toEqual(before);
+      place(s.handler, c);
+      const write = vi.spyOn(kv, 'write');
+      s.send(flushOf(11, 'wf3'));
+      await s.until(3);
+      const f = okOf(s.got[2]!);
+      expect([f.flushSeq, f.columns]).toEqual([5, 3]);
+      expect(opsOf(write.mock.calls[0]![0])).toEqual([
+        ['put', 'diffs', ['wf3', a.key]], ['put', 'diffs', ['wf3', b.key]], ['put', 'diffs', ['wf3', c.key]],
+        ['put', 'state', 'wf3'], ['put', 'history', 'wf3'], ['put', 'worlds', 'wf3'],
+      ]);
+      expect(sortedKeys(diffsOf(kv, 'wf3').keys())).toEqual(sortedKeys([a.key, b.key, c.key]));
+      expect((await stateIn(kv, 'wf3')).flushSeq).toBe(5);
+      expect(kv.dump('history')).toEqual([['wf3', H1]]);
+      expect(kv.dump('worlds')).toEqual([['wf3', R]]);
+      for (const p of [c, b, a]) undo(s.handler, p);
+    });
+
+    test('two flushes posted while one is in flight: the first queued is replaced by the second, the queued history kept when the second has none; both queued ids get the merged write\'s outcome (ruling P4)', async () => {
+      const kv = createMemoryKV({ writeDelayMs: 30 });
+      const s = await opened(kv, 'wf4', { flushSeq: 0 });
+      const a = spot(-1, -1, 2, 2);
+      const b = spot(1, -1, 10, 5);
+      place(s.handler, a);
+      const write = vi.spyOn(kv, 'write');
+      const H1 = historyOf('wf4');
+      const H2: HistoryRecord = { ...historyOf('wf4'), undone: [{ edits: [] }] };
+      s.send(flushOf(10, 'wf4', H1));
+      place(s.handler, b);
+      s.send(flushOf(11, 'wf4', H2, { time: { t: 0.5, speedIndex: 1 } }));
+      s.send(flushOf(12, 'wf4', null, { time: { t: 0.75, speedIndex: 2 } }));
+      // One flush in flight: the queued one runs only when it settles.
+      expect(write).toHaveBeenCalledTimes(1);
+      await s.until(4);
+      expect(write).toHaveBeenCalledTimes(2);
+      expect(opsOf(write.mock.calls[0]![0])).toEqual([['put', 'diffs', ['wf4', a.key]], ['put', 'state', 'wf4'], ['put', 'history', 'wf4']]);
+      const second = write.mock.calls[1]![0];
+      expect(opsOf(second)).toEqual([['put', 'diffs', ['wf4', b.key]], ['put', 'state', 'wf4'], ['put', 'history', 'wf4']]);
+      // The newest state, and the replaced flush's history.
+      expect(second[1]).toEqual({ op: 'put', store: 'state', key: 'wf4', value: { ...stateOf('wf4'), flushSeq: 2, time: { t: 0.75, speedIndex: 2 } } });
+      expect(second[2]).toEqual({ op: 'put', store: 'history', key: 'wf4', value: H2 });
+      const [f1, f2, f3] = s.got.slice(1).map(okOf);
+      expect([f1!.id, f1!.flushSeq, f1!.columns]).toEqual([10, 1, 1]);
+      expect([f2!.id, f2!.flushSeq, f2!.columns]).toEqual([11, 2, 1]);
+      expect({ ...f3!, id: 11 }).toEqual(f2);
+      expect(f3!.id).toBe(12);
+      undo(s.handler, b);
+      undo(s.handler, a);
+    });
+
+    test('Review Focus 1: edits A posted, `flush` posted, edits B posted before A\'s reply; the flush\'s write `crashNext()`ed: a fresh handler\'s `load` on the same KV gives exactly the previous committed flush\'s columns, and `kv.read([{ op: \'get\', store: \'state\', key: worldId }])` gives its `flushSeq`; with the write completing instead, A\'s column is in it and B\'s column is dirty again and in the next flush with `flushSeq` + 1', async () => {
+      const kv = createMemoryKV();
+      const s = await opened(kv, 'wr1', { flushSeq: 0 });
+      const p = spot(-1, 1, 5, 9);
+      // B in A's column, at another voxel: the column is taken by the flush, then marked again.
+      const a = spot(0, 0, 13, 2);
+      const b = spot(0, 0, 2, 7);
+      // The previous committed flush: column P.
+      place(s.handler, p);
+      s.send(flushOf(10, 'wr1'));
+      await s.until(2);
+      expect(okOf(s.got[1]!).flushSeq).toBe(1);
+      const committed = kv.dump('diffs');
+      // A, the flush whose write never settles (the tab died before `oncomplete`), B.
+      place(s.handler, a);
+      kv.crashNext();
+      s.send(flushOf(11, 'wr1', historyOf('wr1')));
+      place(s.handler, b);
+      // The reopen: a fresh handler's `load` on the same KV.
+      const [st] = await kv.read([{ op: 'get', store: 'state', key: 'wr1' }]);
+      expect((st as StateRecord).flushSeq).toBe(1);
+      const fresh = over(kv);
+      fresh.send(loadMsg(1, 'wr1', { flushSeq: (st as StateRecord).flushSeq }));
+      await fresh.until(1);
+      expect(sortedKeys(loadedOf(fresh.got[0]!).entryCols)).toEqual([p.key]);
+      expect(diffAt(fresh.handler, p)).toEqual(diffAt(s.handler, p));
+      expect(diffAt(fresh.handler, a)).toEqual([]);
+      expect(kv.dump('diffs')).toEqual(committed);
+      expect(kv.dump('history')).toEqual([]);
+      // The crashed flush is never answered.
+      expect(s.got).toHaveLength(2);
+      for (const q of [b, a, p]) undo(s.handler, q);
+
+      // The write completing instead.
+      const kv2 = createMemoryKV({ writeDelayMs: 20 });
+      const s2 = await opened(kv2, 'wr2', { flushSeq: 0 });
+      place(s2.handler, a);
+      s2.send(flushOf(20, 'wr2'));
+      // Between the flush's encode and its settle.
+      place(s2.handler, b);
+      await s2.until(2);
+      expect([okOf(s2.got[1]!).flushSeq, okOf(s2.got[1]!).columns]).toEqual([1, 1]);
+      // A's column holds A's entry only: B came after the encode.
+      expect(entriesOf(diffsOf(kv2, 'wr2').get(a.key)!.diff)).toEqual([[sectionOf(a.y), idxOf(a.x, a.y, a.z), val(GLASS)]]);
+      const write = vi.spyOn(kv2, 'write');
+      s2.send(flushOf(21, 'wr2'));
+      await s2.until(3);
+      expect([okOf(s2.got[2]!).flushSeq, okOf(s2.got[2]!).columns]).toEqual([2, 1]);
+      expect(opsOf(write.mock.calls[0]![0])).toEqual([['put', 'diffs', ['wr2', a.key]], ['put', 'state', 'wr2']]);
+      const both = diffAt(s2.handler, a);
+      expect(both).toHaveLength(2);
+      expect(entriesOf(diffsOf(kv2, 'wr2').get(a.key)!.diff)).toEqual(both);
+      undo(s2.handler, b);
+      undo(s2.handler, a);
+    });
+
+    test('a column flushed before any `record` carries `load`\'s genKey in its header; after a `record` with another genKey, the next flushed column carries that one', async () => {
+      const kv = createMemoryKV();
+      const s = await opened(kv, 'wg', { flushSeq: 0 });
+      const a = spot(1, 0, 6, 6);
+      const a2 = spot(1, 0, 9, 11);
+      place(s.handler, a);
+      s.send(flushOf(10, 'wg'));
+      await s.until(2);
+      okOf(s.got[1]!);
+      expect(diffsOf(kv, 'wg').get(a.key)!.genKey).toEqual(GEN);
+      const R: WorldRecord = { ...recordOf('wg'), genKey: hex64(GEN_OLD) };
+      s.send({ type: 'record', world: R });
+      place(s.handler, a2);
+      s.send(flushOf(11, 'wg'));
+      await s.until(3);
+      okOf(s.got[2]!);
+      expect(diffsOf(kv, 'wg').get(a.key)!.genKey).toEqual(GEN_OLD);
+      expect(kv.dump('worlds')).toEqual([['wg', R]]);
+      undo(s.handler, a2);
+      undo(s.handler, a);
+    });
+
+    test('after an `error` reply nothing is flushed', async () => {
+      const kv = createMemoryKV();
+      const s = await opened(kv, 'we', { flushSeq: 0 });
+      // A malformed batch latches the handler.
+      expect((call(s.handler, { type: 'edits', id: 30, edits: [set(0, 70.5, 0, val(STONE), 0)] }).msg as ErrorMsg).code).toBe('BAD_MESSAGE');
+      const write = vi.spyOn(kv, 'write');
+      const e = call(s.handler, flushOf(31, 'we')).msg as ErrorMsg;
+      expect([e.type, e.jobId, e.code]).toEqual(['error', 31, 'INTERNAL']);
+      expect(e.message).toContain('nothing written');
+      const posted: SimReply[] = [];
+      s.handler.handle({ type: 'record', world: recordOf('we') }, (r) => posted.push(r));
+      await new Promise((resolve) => setTimeout(resolve, 10));
+      expect(posted).toEqual([]);
+      expect(write).not.toHaveBeenCalled();
+      expect(kv.dump('state')).toEqual([]);
+      // A handler with no world loaded refuses a flush, with its id.
+      const none = call(createMemorySimHandler(), flushOf(32, 'we')).msg as ErrorMsg;
+      expect([none.type, none.jobId, none.code]).toEqual(['error', 32, 'BAD_MESSAGE']);
+    });
+
+    test('`syncMs` and `commitMs` are finite and ≥ 0', async () => {
+      const kv = createMemoryKV({ writeDelayMs: 15 });
+      const s = await opened(kv, 'wt', { flushSeq: 0 });
+      const a = spot(0, 1, 11, 14);
+      place(s.handler, a);
+      s.send(flushOf(10, 'wt'));
+      await s.until(2);
+      const f = okOf(s.got[1]!);
+      for (const ms of [f.syncMs, f.commitMs]) expect(Number.isFinite(ms) && ms >= 0, `${ms}`).toBe(true);
+      undo(s.handler, a);
+    });
   });
 
   test('a throw inside `applyEdits` other than `StoreFull` (an injected bug, a `StoreCorrupt`) → an `error` reply with that `jobId` and `INTERNAL`/`STORE_CORRUPT`', () => {

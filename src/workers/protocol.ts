@@ -40,7 +40,7 @@ import { isLayerId, type LayerId } from '../gen/map/layers';
 import type { SplineLeaf } from '../metrics/splineStats';
 import type { Edit, EditRefusal } from '../sim/edits';
 import { payloadProblem, type ColumnMeshPayload } from '../mesh/column';
-import type { HistoryRecord, WorldRecord } from '../persist/saves';
+import type { HistoryRecord, StateRecord, WorldRecord } from '../persist/saves';
 import { REGISTRY } from '../world/blocks/index';
 import type { ColumnDiff, ColumnView } from '../world/store/api';
 import { COLUMN_TABLE_BYTES } from '../world/store/columnTable';
@@ -643,10 +643,20 @@ export interface LoadMsg {
   readonly rewrite: { readonly world: WorldRecord; readonly history: HistoryRecord | null } | null;
 }
 /**
- * What the main thread sends the sim: its store once, as thread 15 (an `AttachMsg` with `thread` 15 only), a saved
- * world's `load` (SP5b), then edits and diff requests.
+ * A save of the open world (SP5b spec §3.2, D18): the sim writes its dirty columns, `state` (its `flushSeq` the sim's:
+ * the last committed + 1), `history` when given and a pending `record`, in one transaction, and answers `flushed`.
  */
-export type ToSim = AttachMsg | LoadMsg | EditsMsg | DiffRequestMsg;
+export interface FlushMsg { readonly type: 'flush'; readonly id: number; readonly state: StateRecord; readonly history: HistoryRecord | null }
+/**
+ * The open world's changed record (SP5b spec §3.1, §3.6): after an Apply or the older-generator open. No reply: the next
+ * flush writes it, and its genKey heads every column flushed from now on (D21).
+ */
+export interface RecordMsg { readonly type: 'record'; readonly world: WorldRecord }
+/**
+ * What the main thread sends the sim: its store once, as thread 15 (an `AttachMsg` with `thread` 15 only), a saved
+ * world's `load` (SP5b), then edits and diff requests, and in a saved world `flush` and `record`.
+ */
+export type ToSim = AttachMsg | LoadMsg | EditsMsg | DiffRequestMsg | FlushMsg | RecordMsg;
 /**
  * A batch's outcome (§2.1; `sim/edits.ts`'s `EditResult`): `prev[k]` and `next[k]` edit k's entry before and after it
  * (0xFFFFFFFF for none), `dirty` the colKeys to remesh (§2.6), `entryAdded` and `entryRemoved` the colKeys that
@@ -675,8 +685,20 @@ export interface LoadedMsg {
   readonly type: 'loaded'; readonly id: number; readonly entryCols: Float64Array; readonly entries: number;
   readonly unknownStates: number; readonly skippedColumns: number; readonly decodeMs: number;
 }
+/**
+ * A `flush`'s answer (SP5b spec §3.2, §3.3): committed, with the `flushSeq` written, the columns put or deleted and their
+ * bytes, `syncMs` the synchronous part (take, encode, batch) and `commitMs` the write until it settled; or not, with the
+ * KV's status and error name (D14 tells a full disk, `QuotaExceededError`, from a closed connection). A flush that a
+ * newer one replaced while queued is answered with that one's outcome (ruling P4).
+ */
+export type FlushedMsg =
+  | {
+    readonly type: 'flushed'; readonly id: number; readonly ok: true; readonly flushSeq: number; readonly columns: number; readonly bytes: number;
+    readonly syncMs: number; readonly commitMs: number;
+  }
+  | { readonly type: 'flushed'; readonly id: number; readonly ok: false; readonly status: 'abort' | 'closed'; readonly errorName: string | null };
 /** What the sim answers; an `error`'s `jobId` is the id of the message it answers (null when unreadable), its `epoch` null. */
-export type FromSim = AttachedMsg | LoadedMsg | EditedMsg | DiffMsg | ErrorMsg;
+export type FromSim = AttachedMsg | LoadedMsg | EditedMsg | DiffMsg | FlushedMsg | ErrorMsg;
 
 /** Every `EditRefusal` (a record, so a new refusal cannot be left out of the reply guard). */
 const EDIT_REFUSALS: Readonly<Record<EditRefusal, true>> = Object.freeze({ unloaded: true, changed: true, noProto: true, full: true });
@@ -703,6 +725,16 @@ const loadOk = (m: Record<string, unknown>): boolean => {
     && (rw === null || (isObj(rw) && isObj(rw['world']) && typeof rw['world']['id'] === 'string' && (rw['history'] === null || isObj(rw['history']))));
 };
 
+/**
+ * A `flush`'s id, its state an object with a string `worldId` and a finite `updated`, and its history null or an object
+ * (the records were built and normalised on the main thread).
+ */
+const flushOk = (m: Record<string, unknown>): boolean => {
+  const st = m['state'];
+  const h = m['history'];
+  return isInt(m['id']) && isObj(st) && typeof st['worldId'] === 'string' && isFiniteNum(st['updated']) && (h === null || isObj(h));
+};
+
 /** Validates a message sent to the sim; null when malformed. */
 export function parseToSim(m: unknown): ToSim | null {
   if (!isObj(m)) return null;
@@ -717,6 +749,12 @@ export function parseToSim(m: unknown): ToSim | null {
     }
     case 'diff':
       return isInt(m['id']) && isColumn(m['cx'], m['cz']) ? (m as unknown as DiffRequestMsg) : null;
+    case 'flush':
+      return flushOk(m) ? (m as unknown as FlushMsg) : null;
+    case 'record': {
+      const w = m['world'];
+      return isObj(w) && typeof w['id'] === 'string' && isGenKeyHex(w['genKey']) ? (m as unknown as RecordMsg) : null;
+    }
     default:
       return null;
   }
@@ -753,6 +791,16 @@ export function parseFromSim(m: unknown): FromSim | null {
       return isInt(m['id']) && isColumn(m['cx'], m['cz']) && sy instanceof Uint8Array && idx instanceof Uint16Array
         && value instanceof Uint32Array && idx.length === sy.length && value.length === sy.length && diffEntriesOk(sy, idx)
         ? (m as unknown as DiffMsg) : null;
+    }
+    case 'flushed': {
+      const count = (v: unknown): boolean => isInt(v) && v >= 0;
+      if (!isInt(m['id'])) return null;
+      if (m['ok'] === true) {
+        return isInt(m['flushSeq']) && m['flushSeq'] >= 1 && count(m['columns']) && count(m['bytes']) && isFiniteNum(m['syncMs']) && isFiniteNum(m['commitMs'])
+          ? (m as unknown as FlushedMsg) : null;
+      }
+      return m['ok'] === false && (m['status'] === 'abort' || m['status'] === 'closed') && (m['errorName'] === null || typeof m['errorName'] === 'string')
+        ? (m as unknown as FlushedMsg) : null;
     }
     case 'error':
       return (m['jobId'] === null || isInt(m['jobId'])) && REPLY_CHECKS['error']!(m) === null ? (m as unknown as ErrorMsg) : null;

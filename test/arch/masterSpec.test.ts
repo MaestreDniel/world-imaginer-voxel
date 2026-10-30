@@ -1430,6 +1430,12 @@ describe('master spec amendments (SP5b §9)', () => {
     expect(text).not.toContain('`getAllKeys`');
   });
 
+  test('§4.13\'s Flush writes the dirty diffs, the `state` record and, when changed, the `history` record in one transaction (SP5b spec D16, D18, §9)', () => {
+    const at = text.indexOf('### 4.13 ');
+    const lines = text.slice(at, text.indexOf('### 4.14 ', at)).split('\n');
+    expect(lines).toContain('- **Flush:** every 2 s, and on `visibilitychange` / `pagehide`, the sim worker writes all dirty diffs plus the `state` record (player, time, hotbar, places, `flushSeq`) and, when changed, the `history` record, in **one readwrite transaction**. Commit is confirmed by `oncomplete`, so at most 2 s of edits can be lost. `navigator.storage.persist()` is requested once.');
+  });
+
   test('§1 names each SP5b module in its entry, which exists', () => {
     expect(SP5B_MODULES.length, 'SP5B_MODULES has no rows').toBeGreaterThan(0);
     for (const [head, token, file] of SP5B_MODULES) {
