@@ -2,11 +2,14 @@ import { afterEach, beforeEach, describe, expect, test, vi } from 'vitest';
 import type { Seed64 } from '../../src/core/hash';
 import { seedFromInput, seedToText } from '../../src/core/seed';
 import { createMemoryKV, type MemoryKV } from '../../src/persist/memory';
-import { createSaves, loadParams, newState, olderGenerator, todayStateTable, type WorldRecord } from '../../src/persist/saves';
+import {
+  createSaves, loadParams, newState, olderGenerator, parseWorldRecord, todayStateTable, type HistoryRecord, type WorldRecord,
+} from '../../src/persist/saves';
 import { DEFAULT_MAP_STATE, encodeMapState } from '../../src/ui/map/mapState';
 import { profileOptions } from '../../src/ui/map/toolbar';
 import { parseWorldQuery } from '../../src/ui/world/query';
 import { STATE_BOUNDS } from '../../src/ui/world/stateBounds';
+import { holdWorld, type LockManagerLike } from '../../src/ui/world/worldLock';
 import { SAVES_DB } from '../../src/ui/world/worldPage';
 import {
   mountWorldsMenu, noticeOfQuery, PERSIST_ASKED_KEY, REFUSAL_REASON_KEY, refusalText, refusalUrl, savesDbOf, startModeOf,
@@ -315,3 +318,307 @@ describe('mountWorldsMenu: the start screen and New world (SP5b spec §1.1, §1.
     await flush();
   });
 });
+
+describe('mountWorldsMenu: Load world (SP5b spec §1.1, §1.3, D3, D7, D14, D24)', () => {
+  let dom: ReturnType<typeof installDom>;
+  beforeEach(() => {
+    dom = installDom();
+    vi.stubGlobal('localStorage', fakeStorage());
+    vi.stubGlobal('__wiMenuListMs', undefined);
+  });
+  afterEach(() => { vi.unstubAllGlobals(); });
+
+  /** Node's own Web Locks (24.21), as the browser's; each test's world ids are fresh, so no other test holds them. */
+  const NODE_LOCKS = navigator.locks as unknown as LockManagerLike;
+
+  function mount(kv: MemoryKV, over: Partial<WorldsMenuOptions> = {}) {
+    const navigate = vi.fn<(url: string) => void>();
+    const saves = createSaves(kv);
+    const o: WorldsMenuOptions = {
+      saves,
+      locks: NODE_LOCKS,
+      random: () => [1, 0],
+      newId: () => crypto.randomUUID(),
+      now: () => 1_700_000_000_000,
+      navigate,
+      persistStorage: () => Promise.resolve(true),
+      enterUnsaved: () => {},
+      loadManifest: () => Promise.resolve<unknown>([]),
+      rand: () => 0,
+      notice: null,
+      benchDb: null,
+      ...over,
+    };
+    const menu = mountWorldsMenu(dom.body as unknown as HTMLElement, o);
+    return { menu, saves, navigate };
+  }
+
+  /** Every descendant of `root` carrying the class `cls`, depth-first (the shim's `querySelector` knows ids and tags only). */
+  function byClass(root: FakeElement, cls: string): FakeElement[] {
+    const out: FakeElement[] = [];
+    const walk = (e: FakeElement): void => {
+      for (const c of e.children) {
+        if (c.classList.contains(cls)) out.push(c);
+        walk(c);
+      }
+    };
+    walk(root);
+    return out;
+  }
+
+  const rows = () => byClass(dom.el('load-list'), 'world-row');
+  const row = (id: string): FakeElement => {
+    const r = rows().find((e) => e.dataset['id'] === id);
+    if (r === undefined) throw new Error(`no row for ${id}`);
+    return r;
+  };
+  const one = (root: FakeElement, cls: string): FakeElement => {
+    const [e] = byClass(root, cls);
+    if (e === undefined) throw new Error(`no .${cls}`);
+    return e;
+  };
+  /** The row's buttons by class, in order. */
+  const buttons = (r: FakeElement) => r.querySelectorAll('button').map((b) => b.className.split(' ').find((c) => c.startsWith('world-')));
+
+  /** "Modified YYYY-MM-DD HH:MM" in local time, through an independent formatter (Swedish dates are ISO-shaped). */
+  const modified = (ms: number) => `Modified ${new Date(ms).toLocaleString('sv-SE').slice(0, 16)}`;
+
+  const key = (code: string) => Object.assign(new Event('keydown', { cancelable: true }), { key: code, code });
+
+  /** A saved world with a state `updated` at `updated` (0: never saved) and `places` places. */
+  async function saved(
+    kv: MemoryKV, name: string, o: { updated?: number; places?: number; backupOf?: string | null; created?: number; profile?: WorldRecord['profile']; seedText?: string } = {},
+  ): Promise<string> {
+    const id = crypto.randomUUID();
+    const world: WorldRecord = {
+      id, name, seedText: o.seedText ?? '7', seed: [7, 0], profile: o.profile ?? 'default', params: {}, schemaVersion: 2,
+      paramsHash: '0'.repeat(16), generatorVersion: 5, genKey: '0'.repeat(16), stateTable: todayStateTable(), created: o.created ?? 1_600_000_000_000,
+      backupOf: o.backupOf ?? null,
+    };
+    const places = Array.from({ length: o.places ?? 0 }, (_, i) => ({ id: `p${i}`, name: `Place ${i}`, colour: 0, x: i, y: 70, z: 0, yaw: 0, pitch: 0 }));
+    const state = { ...newState(id, STATE_BOUNDS), updated: o.updated ?? 0, places };
+    expect((await createSaves(kv).create(world, state)).status).toBe('complete');
+    return id;
+  }
+
+  /** Clicks Load world and waits for the list's first read. */
+  async function openLoad(): Promise<void> {
+    dom.el('start-load').click();
+    await vi.waitFor(() => expect(globalThis.__wiMenuListMs).toBeTypeOf('number'));
+  }
+
+  const names = (kv: MemoryKV) => kv.dump('worlds').map(([, v]) => (v as WorldRecord).name);
+
+  test('rows newest first, each with its text; a backup row says `automatic copy`; a world with 3 places `· 3 places`; Play opens `/?world=<id>`', async () => {
+    const kv = createMemoryKV();
+    const alpha = await saved(kv, 'Alpha', { updated: 1_700_000_000_000, seedText: '11' });
+    const beta = await saved(kv, 'Beta', { updated: 1_700_000_900_000, places: 3, profile: 'amplified', seedText: 'hello' });
+    const copy = await saved(kv, 'Alpha (before the change 1)', { updated: 1_700_000_500_000, backupOf: alpha, seedText: '11' });
+    const { navigate } = mount(kv);
+    expect(shown(dom, 'load-list')).toBe(false);
+    await openLoad();
+    expect(shown(dom, 'load-list')).toBe(true);
+    expect(shown(dom, 'start-new')).toBe(false);
+    expect(rows().map((r) => r.dataset['id'])).toEqual([beta, copy, alpha]);
+    const b = row(beta).textContent;
+    expect(b).toContain('Beta · amplified · seed hello');
+    expect(b).toContain(`${modified(1_700_000_900_000)} · 3 places`);
+    expect(b).not.toContain('automatic copy');
+    expect(row(copy).textContent).toContain('Alpha (before the change 1) · default · seed 11');
+    expect(row(copy).textContent).toContain('automatic copy');
+    const a = row(alpha).textContent;
+    expect(a).toContain(modified(1_700_000_000_000));
+    for (const absent of ['places', 'automatic copy', 'older generator']) expect(a).not.toContain(absent);
+    for (const r of rows()) expect(buttons(r)).toEqual(['world-play', 'world-rename', 'world-export', 'world-delete']);
+    expect([dom.el('load-import').tagName, dom.el('load-back').tagName]).toEqual(['BUTTON', 'BUTTON']);
+    // The list's time for the smoke's `menus` step.
+    expect(Number.isFinite(globalThis.__wiMenuListMs) && globalThis.__wiMenuListMs! >= 0).toBe(true);
+    one(row(beta), 'world-play').click();
+    expect(navigate).toHaveBeenLastCalledWith(`/?world=${beta}`);
+    dom.el('load-back').click();
+    expect(shown(dom, 'start-new')).toBe(true);
+    expect(shown(dom, 'load-list')).toBe(false);
+  });
+
+  test('a never-saved world\'s row shows its `created` time (P24)', async () => {
+    const kv = createMemoryKV();
+    const id = await saved(kv, 'Fresh', { updated: 0, created: 1_650_000_000_000 });
+    mount(kv);
+    await openLoad();
+    expect(row(id).textContent).toContain(modified(1_650_000_000_000));
+  });
+
+  test('the empty list says `No saved worlds yet.`', async () => {
+    mount(createMemoryKV());
+    await openLoad();
+    expect(rows()).toEqual([]);
+    expect(dom.el('load-list').textContent).toBe('No saved worlds yet.');
+  });
+
+  test('a `worlds` record `parseWorldRecord` refuses shows its reason with Delete only, and Delete removes it (D14, P24)', async () => {
+    const kv = createMemoryKV();
+    const raw = { id: 'bad', seedText: '1' };
+    const p = parseWorldRecord(raw);
+    expect(p.ok).toBe(false);
+    expect((await kv.write([{ op: 'put', store: 'worlds', key: 'bad', value: raw }])).status).toBe('complete');
+    const fine = await saved(kv, 'Fine', { updated: 5 });
+    mount(kv);
+    await openLoad();
+    expect(rows().map((r) => r.dataset['id'])).toEqual([fine, 'bad']);
+    expect(row('bad').textContent).toContain(`This world could not be opened: ${p.ok ? '' : p.reason}`);
+    expect(buttons(row('bad'))).toEqual(['world-delete']);
+    one(row('bad'), 'world-delete').click();
+    await vi.waitFor(() => expect(dom.el('load-notice').textContent).toContain('Delete \'bad\'? This cannot be undone.'));
+    one(dom.el('load-notice'), 'notice-confirm').click();
+    await vi.waitFor(() => expect(rows().map((r) => r.dataset['id'])).toEqual([fine]));
+    expect(kv.dump('worlds').map(([k]) => k)).toEqual([fine]);
+  });
+
+  test('Rename: Enter keeps (the record renamed), Esc cancels (nothing written)', async () => {
+    const kv = createMemoryKV();
+    const id = await saved(kv, 'Alpha', { updated: 5 });
+    mount(kv);
+    await openLoad();
+    one(row(id), 'world-rename').click();
+    const field = one(row(id), 'world-name-input');
+    expect([field.tagName, field.value]).toEqual(['INPUT', 'Alpha']);
+    expect(dom.document.activeElement).toBe(field);
+    field.value = '  Gamma ';
+    field.dispatchEvent(key('Enter'));
+    await vi.waitFor(() => expect(names(kv)).toEqual(['Gamma']));
+    await vi.waitFor(() => expect(byClass(row(id), 'world-name-input')).toEqual([]));
+    expect(row(id).textContent).toContain('Gamma · default · seed 7');
+    const write = vi.spyOn(kv, 'write');
+    one(row(id), 'world-rename').click();
+    const again = one(row(id), 'world-name-input');
+    again.value = 'Delta';
+    again.dispatchEvent(key('Escape'));
+    expect(byClass(row(id), 'world-name-input')).toEqual([]);
+    expect(row(id).textContent).toContain('Gamma · default · seed 7');
+    await flush();
+    expect(write).not.toHaveBeenCalled();
+    expect(names(kv)).toEqual(['Gamma']);
+  });
+
+  test('Review Focus 2: Rename and Delete of a world whose lock is held are refused with `This world is open in another tab` and write nothing', async () => {
+    const kv = createMemoryKV();
+    const id = await saved(kv, 'Alpha', { updated: 5 });
+    // Another tab's world page holds the world.
+    const holder = await holdWorld(NODE_LOCKS, id);
+    expect(holder).not.toBeNull();
+    try {
+      mount(kv);
+      await openLoad();
+      const write = vi.spyOn(kv, 'write');
+      one(row(id), 'world-rename').click();
+      const field = one(row(id), 'world-name-input');
+      field.value = 'Gamma';
+      field.dispatchEvent(key('Enter'));
+      await vi.waitFor(() => expect(dom.el('load-notice').textContent).toContain('This world is open in another tab'));
+      one(dom.el('load-notice'), 'notice-close').click();
+      expect(dom.el('load-notice').textContent).toBe('');
+      one(row(id), 'world-delete').click();
+      await vi.waitFor(() => expect(dom.el('load-notice').textContent).toContain('Delete \'Alpha\'? This cannot be undone.'));
+      one(dom.el('load-notice'), 'notice-confirm').click();
+      await vi.waitFor(() => expect(dom.el('load-notice').textContent).toContain('This world is open in another tab'));
+      await flush();
+      expect(write).not.toHaveBeenCalled();
+      expect(names(kv)).toEqual(['Alpha']);
+      expect(kv.dump('state').map(([k]) => k)).toEqual([id]);
+    } finally {
+      holder?.release();
+    }
+  });
+
+  test('Delete asks in the notice row; Cancel writes nothing; Delete removes every key', async () => {
+    const kv = createMemoryKV();
+    const id = await saved(kv, 'Alpha', { updated: 5 });
+    const keep = await saved(kv, 'Keep', { updated: 4 });
+    const history: HistoryRecord = { worldId: id, done: [], undone: [] };
+    expect((await kv.write([
+      { op: 'put', store: 'history', key: id, value: history },
+      { op: 'put', store: 'diffs', key: [id, 0], value: new Uint8Array([1]) },
+      { op: 'put', store: 'diffs', key: [id, 2 ** 32 - 1], value: new Uint8Array([2]) },
+      { op: 'put', store: 'history', key: keep, value: { ...history, worldId: keep } },
+      { op: 'put', store: 'diffs', key: [keep, 3], value: new Uint8Array([3]) },
+    ])).status).toBe('complete');
+    mount(kv);
+    await openLoad();
+    const write = vi.spyOn(kv, 'write');
+    one(row(id), 'world-delete').click();
+    await vi.waitFor(() => expect(dom.el('load-notice').textContent).toContain('Delete \'Alpha\'? This cannot be undone.'));
+    expect(byClass(dom.el('load-notice'), 'notice-action').map((b) => b.textContent)).toEqual(['Delete', 'Cancel']);
+    byClass(dom.el('load-notice'), 'notice-action')[1]!.click();
+    await flush();
+    expect(write).not.toHaveBeenCalled();
+    expect(rows().map((r) => r.dataset['id'])).toEqual([id, keep]);
+    one(row(id), 'world-delete').click();
+    await vi.waitFor(() => expect(byClass(dom.el('load-notice'), 'notice-confirm').length).toBe(1));
+    one(dom.el('load-notice'), 'notice-confirm').click();
+    await vi.waitFor(() => expect(rows().map((r) => r.dataset['id'])).toEqual([keep]));
+    expect(write).toHaveBeenCalledTimes(1);
+    for (const store of ['worlds', 'state', 'history'] as const) expect(kv.dump(store).map(([k]) => k)).toEqual([keep]);
+    expect(kv.dump('diffs').map(([k]) => k)).toEqual([[keep, 3]]);
+  });
+
+  test('a hidden → visible switch reads the list again', async () => {
+    const kv = createMemoryKV();
+    await saved(kv, 'Alpha', { updated: 5 });
+    const { saves } = mount(kv);
+    const list = vi.spyOn(saves, 'list');
+    await openLoad();
+    expect(list).toHaveBeenCalledTimes(1);
+    // Another tab creates a world.
+    const other = await saved(kv, 'Beta', { updated: 6 });
+    dom.document.visibilityState = 'hidden';
+    dom.document.dispatchEvent(new Event('visibilitychange'));
+    await flush();
+    expect(list).toHaveBeenCalledTimes(1);
+    dom.document.visibilityState = 'visible';
+    dom.document.dispatchEvent(new Event('visibilitychange'));
+    await vi.waitFor(() => expect(rows().map((r) => r.dataset['id'])[0]).toBe(other));
+    expect(list).toHaveBeenCalledTimes(2);
+  });
+
+  test('no `confirm(` anywhere: Rename and Delete never open a browser dialog (the arch\'s uiDialogs rule scans the source)', async () => {
+    const dialogs = { confirm: vi.fn(() => true), alert: vi.fn(), prompt: vi.fn(() => null) };
+    for (const [k, f] of Object.entries(dialogs)) vi.stubGlobal(k, f);
+    const kv = createMemoryKV();
+    const id = await saved(kv, 'Alpha', { updated: 5 });
+    mount(kv);
+    await openLoad();
+    one(row(id), 'world-rename').click();
+    const field = one(row(id), 'world-name-input');
+    field.value = 'Gamma';
+    field.dispatchEvent(key('Enter'));
+    await vi.waitFor(() => expect(names(kv)).toEqual(['Gamma']));
+    await vi.waitFor(() => expect(byClass(row(id), 'world-delete').length).toBe(1));
+    one(row(id), 'world-delete').click();
+    await vi.waitFor(() => expect(byClass(dom.el('load-notice'), 'notice-confirm').length).toBe(1));
+    one(dom.el('load-notice'), 'notice-confirm').click();
+    await vi.waitFor(() => expect(kv.dump('worlds')).toEqual([]));
+    for (const f of Object.values(dialogs)) expect(f).not.toHaveBeenCalled();
+  });
+
+  test('dispose stops the list\'s re-read', async () => {
+    const kv = createMemoryKV();
+    const { menu, saves } = mount(kv);
+    const list = vi.spyOn(saves, 'list');
+    await openLoad();
+    menu.dispose();
+    dom.document.dispatchEvent(new Event('visibilitychange'));
+    await flush();
+    expect(list).toHaveBeenCalledTimes(1);
+  });
+});
+
+/** Whether `#id` and every ancestor are not hidden. */
+function shown(dom: ReturnType<typeof installDom>, id: string): boolean {
+  for (let e: FakeElement | null = dom.el(id); e !== null; e = e.parentElement) if (e.hidden) return false;
+  return true;
+}
+
+declare global {
+  // The worlds menu's list time (`window.__wiMenuListMs`), read here through `globalThis`.
+  var __wiMenuListMs: number | undefined;
+}

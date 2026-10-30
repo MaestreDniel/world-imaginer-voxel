@@ -3,8 +3,8 @@
  * on the loading screen's background (`mountBackdrop`).
  * - Start (D1): the title, New world, Load world and Settings, then the small links Map (`?map`) and Selftest
  *   (`?selftest=1`), and the screen's notice row (`#start-notice`), which shows the world page's refusal carried here
- *   as `?notice=<code>` (`noticeOfQuery`). A `#` hash is ignored. Load world is Task 21's and Settings Task 28's: until
- *   then their buttons do nothing.
+ *   as `?notice=<code>` (`noticeOfQuery`). A `#` hash is ignored. Settings is Task 28's: until then its button does
+ *   nothing.
  * - New world (D2): Name (proposed "New world N", which a cleared name takes at Create; at most `MAX_NAME` characters),
  *   Preset (the ready profiles in code order, as the map's select), Seed (a random 64-bit decimal; the dice puts another;
  *   any text, `resolveSeedText`), Create and Back. Create writes the `worlds` record and a new `state` in one write
@@ -12,6 +12,14 @@
  *   `PERSIST_ASKED_KEY`), then navigates to `/?world=<id>`; under the enter bench (`benchDb`, SP5b spec §6.2) the world
  *   is written to that database and its URL carries `&enterBench=1&db=<name>`. Without storage (`saves` null, D14)
  *   Create shows "Saving is not available in this browser window" until Task 29 opens the unsaved world instead.
+ * - Load world (§1.3, D3): one row per world of `saves.list()`, the most recently modified first ("name · preset · seed
+ *   N", "Modified YYYY-MM-DD HH:MM" in local time with "· n places" when it has any, "automatic copy" for a backup),
+ *   with Play (`/?world=<id>`), Rename (the name becomes a text field: Enter keeps, Esc cancels), Export and Delete
+ *   (asked in the screen's notice row, `notices.confirm`, never a browser dialog); a broken row (D14) shows why with
+ *   Delete only. Rename and Delete write under the world's lock taken only if it is free (`withWorldIfFree`, D7, D24),
+ *   and a held lock refuses them with `LOCKED_NOTICE`. The list is read again when the tab becomes visible (§1.1), and
+ *   each read's time, through the rows' build, is recorded on `window.__wiMenuListMs` for the smoke's `menus` step.
+ *   Export and Import .wiworld are Task 22's: until then their buttons do nothing.
  * Ids and the wall clock come in through the options (`newId`, `now`); text goes through `textContent` only.
  */
 import { hex64, type Seed64 } from '../core/hash';
@@ -20,14 +28,17 @@ import { resolveProfile, type ProfileId } from '../core/params/profiles';
 import { seedToText } from '../core/seed';
 import { genKey, paramsHash, stageHashes } from '../core/stage/hash';
 import { GENERATOR_VERSION } from '../core/constants';
-import { loadParams, MAX_NAME, newState, newWorldName, todayStateTable, type Saves, type WorldRecord } from '../persist/saves';
+import type { WriteResult } from '../persist/kv';
+import {
+  loadParams, MAX_NAME, newState, newWorldName, todayStateTable, type Saves, type WorldRecord, type WorldRow,
+} from '../persist/saves';
 import { el } from './common/dom';
 import { createNotices } from './common/notice';
 import { mountBackdrop } from './loading/panoramas';
 import { profileOptions } from './map/toolbar';
 import { resolveSeedText } from './seedBox';
 import { STATE_BOUNDS } from './world/stateBounds';
-import { LOCKED_NOTICE, type LockManagerLike } from './world/worldLock';
+import { LOCKED_NOTICE, withWorldIfFree, type LockManagerLike } from './world/worldLock';
 import type { WorldQuery } from './world/query';
 
 /**
@@ -157,6 +168,28 @@ function createdRecord(id: string, name: string, seed: { text: string; seed: See
   };
 }
 
+const pad2 = (n: number): string => String(n).padStart(2, '0');
+
+/** "Modified YYYY-MM-DD HH:MM" in local time (D3). */
+function modifiedText(ms: number): string {
+  const d = new Date(ms);
+  return `Modified ${d.getFullYear()}-${pad2(d.getMonth() + 1)}-${pad2(d.getDate())} ${pad2(d.getHours())}:${pad2(d.getMinutes())}`;
+}
+
+/** A write's failure, as Create's notice words it: "abort: QuotaExceededError". */
+const writeFailure = (w: WriteResult): string => `${w.status}${w.errorName === null ? '' : `: ${w.errorName}`}`;
+
+/** The name of a failure that rejected (a lock request, a read; a `DOMException` included). */
+const errorName = (e: unknown): string => {
+  const n = typeof e === 'object' && e !== null ? (e as { name?: unknown }).name : undefined;
+  return typeof n === 'string' ? n : String(e);
+};
+
+/** Records a list read's time for the smoke's `menus` step (`window.__wiMenuListMs`). */
+function recordListMs(ms: number): void {
+  (globalThis as { __wiMenuListMs?: number }).__wiMenuListMs = ms;
+}
+
 const button = (id: string, text: string): HTMLButtonElement => {
   const b = el('button', 'start-button', text);
   b.id = id;
@@ -228,16 +261,174 @@ export function mountWorldsMenu(root: HTMLElement, o: WorldsMenuOptions): { disp
   create.append(heading, field('Name', name), field('Preset', preset), field('Seed', seedRow), createActions, newNoticeRow);
   const newNotices = createNotices(newNoticeRow);
 
-  screen.append(start, create);
+  // Load world (D3).
+  const load = el('section', 'start-card');
+  load.id = 'load-world';
+  load.hidden = true;
+  const loadHeading = el('h1', 'start-title', 'Load world');
+  const list = el('ul', 'world-list');
+  list.id = 'load-list';
+  const importButton = button('load-import', 'Import .wiworld');
+  const loadBack = button('load-back', 'Back');
+  const loadActions = el('nav', 'start-actions');
+  loadActions.append(importButton, loadBack);
+  const loadNoticeRow = el('div');
+  loadNoticeRow.id = 'load-notice';
+  load.append(loadHeading, list, loadActions, loadNoticeRow);
+  const loadNotices = createNotices(loadNoticeRow);
+
+  screen.append(start, create, load);
 
   /** The name a cleared field takes at Create: "New world N", N the smallest no saved world uses. */
   let proposal = newWorldName([]);
   let creating = false;
+  /** The latest list read; an older one that settles later draws nothing. */
+  let listRead = 0;
+  /** A row's name is a text field (Rename): a visibility re-read waits, so the typed name stays. */
+  let renaming = false;
 
-  const show = (which: 'start' | 'new'): void => {
+  const show = (which: 'start' | 'new' | 'load'): void => {
     start.hidden = which !== 'start';
     create.hidden = which !== 'new';
+    load.hidden = which !== 'load';
   };
+
+  /** The world page's URL for `id`; under the enter bench it carries the bench's database (Spec correction 7). */
+  const worldUrl = (id: string): string => {
+    const bench = o.benchDb === null ? '' : `&enterBench=1&db=${encodeURIComponent(o.benchDb)}`;
+    return `/?world=${encodeURIComponent(id)}${bench}`;
+  };
+
+  /** Reads `saves.list()` and draws its rows; without storage (D14) says so. */
+  async function readList(): Promise<void> {
+    if (o.saves === null) {
+      list.replaceChildren();
+      loadNotices.show(NO_STORAGE, { kind: 'error' });
+      return;
+    }
+    const read = ++listRead;
+    const t0 = performance.now();
+    let rows: WorldRow[];
+    try {
+      rows = await o.saves.list();
+    } catch (e) {
+      if (!disposed && read === listRead) loadNotices.show(`The saved worlds could not be read (${errorName(e)})`, { kind: 'error' });
+      return;
+    }
+    if (disposed || read !== listRead) return;
+    renaming = false;
+    list.replaceChildren(...(rows.length === 0 ? [el('li', 'world-empty', 'No saved worlds yet.')] : rows.map(rowElement)));
+    recordListMs(performance.now() - t0);
+  }
+
+  /**
+   * Runs `write` under the world's lock if it is free (D24); a held lock shows `LOCKED_NOTICE` and calls nothing, and a
+   * write that does not complete shows why. The list is read again after it.
+   */
+  async function underLock(id: string, what: 'renamed' | 'deleted', write: () => Promise<WriteResult>): Promise<void> {
+    try {
+      const r = await withWorldIfFree(o.locks, id, write);
+      if (disposed) return;
+      if (r.held) loadNotices.show(LOCKED_NOTICE, { kind: 'warn' });
+      else if (r.value.status !== 'complete') loadNotices.show(`The world could not be ${what} (${writeFailure(r.value)})`, { kind: 'error' });
+    } catch (e) {
+      if (disposed) return;
+      loadNotices.show(`The world could not be ${what} (${errorName(e)})`, { kind: 'error' });
+    }
+    await readList();
+  }
+
+  /** Delete (D3): asked in the notice row, then `saves.remove` under the lock (E7: every key of the world). */
+  async function deleteWorld(saves: Saves, id: string, label: string): Promise<void> {
+    if (!(await loadNotices.confirm(`Delete '${label}'? This cannot be undone.`, 'Delete')) || disposed) return;
+    await underLock(id, 'deleted', () => saves.remove(id));
+  }
+
+  /** Rename (D3): the name becomes a text field; Enter keeps a changed, non-empty name, Esc cancels. */
+  function startRename(saves: Saves, world: WorldRecord, nameEl: HTMLElement): void {
+    if (renaming) return;
+    renaming = true;
+    const input = el('input', 'world-name-input');
+    input.type = 'text';
+    input.value = world.name;
+    nameEl.hidden = true;
+    nameEl.parentElement?.insertBefore(input, nameEl);
+    input.focus();
+    const cancel = (): void => {
+      input.remove();
+      nameEl.hidden = false;
+      renaming = false;
+    };
+    input.addEventListener('keydown', (e) => {
+      if (input.disabled) return;
+      if (e.key === 'Escape') {
+        e.preventDefault();
+        cancel();
+      } else if (e.key === 'Enter') {
+        e.preventDefault();
+        const typed = input.value.trim();
+        if (typed === '' || typed === world.name) {
+          cancel();
+          return;
+        }
+        input.disabled = true;
+        void underLock(world.id, 'renamed', () => saves.rename(world.id, typed));
+      }
+    });
+  }
+
+  const rowButton = (cls: string, text: string, run: () => void): HTMLButtonElement => {
+    const b = el('button', `start-button ${cls}`, text);
+    b.type = 'button';
+    b.addEventListener('click', run);
+    return b;
+  };
+
+  /** One `.world-row[data-id]`: the world's lines and its buttons, or a broken record's reason with Delete only (D14). */
+  function rowElement(row: WorldRow): HTMLLIElement {
+    const saves = o.saves!;
+    const li = el('li', 'world-row');
+    const actions = el('div', 'start-actions world-actions');
+    if (row.broken) {
+      li.dataset['id'] = row.id;
+      actions.append(rowButton('world-delete', 'Delete', () => void deleteWorld(saves, row.id, row.id)));
+      li.append(el('div', 'world-broken', refusalText({ notice: 'unreadable', reason: row.reason })), actions);
+      return li;
+    }
+    const w = row.world;
+    li.dataset['id'] = w.id;
+    const title = el('div', 'world-title');
+    const nameEl = el('span', 'world-name', w.name);
+    title.append(nameEl, ` · ${w.profile} · seed ${w.seedText}`);
+    const info = el('div', 'world-info', `${modifiedText(row.updated || w.created)}${row.places > 0 ? ` · ${row.places} places` : ''}`);
+    li.append(title, info);
+    if (w.backupOf !== null) li.append(el('div', 'world-badge', 'automatic copy'));
+    actions.append(
+      rowButton('world-play', 'Play', () => o.navigate(worldUrl(w.id))),
+      rowButton('world-rename', 'Rename', () => startRename(saves, w, nameEl)),
+      rowButton('world-export', 'Export', () => {}),
+      rowButton('world-delete', 'Delete', () => void deleteWorld(saves, w.id, w.name)),
+    );
+    li.append(actions);
+    return li;
+  }
+
+  loadButton.addEventListener('click', () => {
+    loadNotices.clear();
+    list.replaceChildren();
+    renaming = false;
+    show('load');
+    void readList();
+  });
+
+  loadBack.addEventListener('click', () => {
+    show('start');
+  });
+
+  const onVisibility = (): void => {
+    if (document.visibilityState === 'visible' && !load.hidden && !renaming) void readList();
+  };
+  document.addEventListener('visibilitychange', onVisibility);
 
   newButton.addEventListener('click', () => {
     newNotices.clear();
@@ -287,21 +478,22 @@ export function mountWorldsMenu(root: HTMLElement, o: WorldsMenuOptions): { disp
       if (w.status !== 'complete') {
         creating = false;
         createButton.disabled = false;
-        newNotices.show(`The world could not be created (${w.status}${w.errorName === null ? '' : `: ${w.errorName}`})`, { kind: 'error' });
+        newNotices.show(`The world could not be created (${writeFailure(w)})`, { kind: 'error' });
         return;
       }
       await askPersistOnce(o.persistStorage);
       if (disposed) return;
-      const bench = o.benchDb === null ? '' : `&enterBench=1&db=${encodeURIComponent(o.benchDb)}`;
-      o.navigate(`/?world=${encodeURIComponent(id)}${bench}`);
+      o.navigate(worldUrl(id));
     })();
   });
 
   return {
     dispose() {
       disposed = true;
+      document.removeEventListener('visibilitychange', onVisibility);
       startNotices.dispose();
       newNotices.dispose();
+      loadNotices.dispose();
       backdrop.dispose();
       screen.remove();
     },
