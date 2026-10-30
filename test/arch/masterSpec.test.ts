@@ -1370,6 +1370,7 @@ describe('master spec amendments (SP5b §9)', () => {
     [/^\s+persist\/kv\.ts /, 'kvContract.ts diffCodec.ts wiworld.ts saves.ts (SP5b)', 'src/persist/kv.ts'],
     [/^\s+persist\/kv\.ts /, 'kvContract.ts diffCodec.ts wiworld.ts saves.ts (SP5b)', 'src/persist/memory.ts'],
     [/^\s+persist\/kv\.ts /, 'kvContract.ts diffCodec.ts wiworld.ts saves.ts (SP5b)', 'src/persist/kvContract.ts'],
+    [/^\s+persist\/kv\.ts /, 'kvContract.ts diffCodec.ts wiworld.ts saves.ts (SP5b)', 'src/persist/diffCodec.ts'],
   ];
 
   test('§10\'s SP5b entry and its receivers (SP5b spec §9, §11)', () => {
@@ -1387,6 +1388,12 @@ describe('master spec amendments (SP5b §9)', () => {
     expect(sp8c).not.toContain('Creates `ui/settingsPanel.ts`');
     expect(spEntry('SP11', 'SP12')).toContain('fills SP5b\'s Graphics tab: the quality preset and the greyed rows (fog distance, clouds, shadows)');
     expect(spEntry('SP5c', 'SP6')).toContain('(stored in IndexedDB `wi10`, its `meta` store or a store of its own by a version bump; a paste is one block-history step, which SP5b persists)');
+  });
+
+  test('§2.7\'s `ColumnDiffV1` header genKey is informative (SP5b spec D21, §9)', () => {
+    const at = text.indexOf('### 2.7 ');
+    const s27 = text.slice(at, text.indexOf('## 3. Generation', at));
+    expect(s27.split('\n').some((l) => l === '- header `{v:1, genKey:u32x2, sections:u8}`, its genKey (informative: entries apply under any generator, SP5b);'), 'no informative-genKey header line in §2.7').toBe(true);
   });
 
   test('§1 names each SP5b module in its entry, which exists', () => {

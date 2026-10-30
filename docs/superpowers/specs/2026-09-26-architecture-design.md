@@ -479,7 +479,7 @@ interface MetricDef { id: MetricId; run(region: RegionView): Record<string, numb
 **Diffs.** Diffs hold **absolute final states** per voxel (block state u16, fluid u8), never deltas. The sim worker's `DiffStore` is authoritative: `Map<colKey, Map<sy, Map<voxelIdx, u32 = state<<8 | fluid>>>>`. On a voxel's first edit its generated value is remembered, so reverting removes the entry (SP5a: an edit equal to the column's current generated value, read from its retained proto, removes the entry).
 
 `ColumnDiffV1` codec, per column:
-- header `{v:1, genKey:u32x2, sections:u8}`;
+- header `{v:1, genKey:u32x2, sections:u8}`, its genKey (informative: entries apply under any generator, SP5b);
 - per section `u8 sy, u8 fmt, u16 n`:
   - fmt 0 (sparse): n × `{u16 idx, u16 state, u8 fluid}` (5 B);
   - fmt 1 (dense, used when n ≥ 2560): a 512 B edit bitmask, then 8192 B of states and 4096 B of fluid; voxels outside the mask are not edits;
