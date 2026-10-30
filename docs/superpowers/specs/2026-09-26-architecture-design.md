@@ -225,7 +225,7 @@ The authoritative layer table (value and type-only edges, worker edges, `light`/
 `test/arch/imports.test.ts` enforces these by regex-scanning imports.
 
 - **Layer order:** `core` ← `world` ← `gen`, then `light`, `mesh`, `sim`, `persist` and `metrics` (L2). `textures` and `audio` depend on `core` only (`audio` may also import `world/blocks` for sound groups and `world/store/api.ts` types). `sound/` (WebAudio) is main-thread only and never imported by workers or pure layers.
-- **Pure layers:** none of the layers above imports three, `document`, `window` or `indexedDB`. The exception is `persist/idb.ts`, which runs in the sim worker.
+- **Pure layers:** none of the layers above imports three, `document`, `window` or `indexedDB`. The exception is `persist/idb.ts`, which runs in the sim worker and, for the worlds menu, on the main thread (SP5b).
 - **`gen/`** imports only `world/store/api.ts` types. It never imports the store implementation, so the harness runs it on plain ArrayBuffers.
 - **`workers/*`** import L0-L2.
 - **`engine/`** imports L0-L2 types and `workers/protocol`, and never imports three.

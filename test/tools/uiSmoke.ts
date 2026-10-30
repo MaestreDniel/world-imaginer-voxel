@@ -12,7 +12,7 @@
  * profile (downloads included).
  *
  * The page is 1400 × 900 CSS px at DPR 1. The steps, in order, each with its checks:
- * - selftest: `?selftest=1` matches every golden in a real module worker;
+ * - selftest: `?selftest=1` matches every golden in a real module worker, and its IndexedDB section passes the KV contract;
  * - load: `?map` at seed 42, the default profile and view (0, 0, 64 blocks/px) settles its first preview;
  * - number: `rivers.gorgeDepth` typed in the Parameters tab;
  * - knot: a knot of `shape.offset` dragged in the spline drawer (one undo step; the statistics refresh);
@@ -168,6 +168,19 @@ export function goldenCount(goldensJson: string): number {
 export function selftestAllMatch(summary: string, count: number): boolean {
   const m = /^✓ all (\d+) goldens match/.exec(summary);
   return m !== null && Number(m[1]) === count;
+}
+
+/**
+ * The KV contract's cases (`KV_CONTRACT.length` in `src/persist/kvContract.ts`; this tool cannot import `src/`, so a unit
+ * test keeps them equal), which `?selftest=1`'s IndexedDB section runs on `IdbKV` (SP5b spec §6.4).
+ */
+export const KV_CONTRACT_CASES = 8;
+/** The IndexedDB section's line is written and no longer reads `running…`. */
+export const KV_SELFTEST_DONE = `(() => { const e = document.querySelector('#selftest-kv'); return e !== null && !e.textContent.endsWith('running…'); })()`;
+
+/** True when the selftest page's IndexedDB line reports all `count` contract cases passing. */
+export function kvSelftestPassed(line: string, count: number): boolean {
+  return line === `IndexedDB contract: ${count}/${count} passed`;
 }
 
 /** A surface-rule id (SP3c spec §3.1): `root`, then `.rules[k]` and `.then` steps. */
@@ -1403,6 +1416,10 @@ async function runSmoke(t: Smoke): Promise<void> {
   const summary = await p.eval<string>(`document.querySelector('h2 + div').textContent`);
   const goldens = goldenCount(readFileSync(join(ROOT, 'test/goldens.json'), 'utf8'));
   t.check(selftestAllMatch(summary, goldens), `selftest: ${summary} (test/goldens.json holds ${goldens})`, summary);
+  await p.until(KV_SELFTEST_DONE, 'selftest IndexedDB contract', 30000);
+  const kv = await p.eval<string>(`document.querySelector('#selftest-kv').textContent`);
+  const kvFailures = await p.eval<string[]>(`[...document.querySelectorAll('#selftest-kv + ul li')].map((li) => li.textContent)`);
+  t.check(kvSelftestPassed(kv, KV_CONTRACT_CASES), `selftest: ${kv} (KV_CONTRACT holds ${KV_CONTRACT_CASES})`, [kv, ...kvFailures].join('; '));
 
   t.step('load: ?map at seed 42, default profile, view (0, 0, 64 blocks/px)');
   await p.goto(`${p.base}?map#${mapHash(START)}`, MAP_READY);

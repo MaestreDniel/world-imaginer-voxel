@@ -32,7 +32,7 @@ import {
   BIOME_RGB, biomePixels, brokenIslandsJson, canonicalJson, clickCentre, crossPixels, distinctColours, freshSlice, goldenCount, groundTopRow, hoverAgrees, ignoredLog,
   ISLAND_MIN_BOTTOM_Y, islandOverGround, islandsFloorOk, issueLineOk, mapHash, MOUNTAIN_LINE, mountainSummaryOk, oceanAndLandOk, parseArgs, parseSegment, parseSliceReadout,
   parseSliceStats, presetCentre, presetLine, PRESET_MAP, PRESET_SHOTS, PRESET_TOP_MIN, presetProblems, presetState, presetSummaryOk, readMapHash, READY_PROFILES,
-  RULE_SAMPLE, sameJson, selftestAllMatch, SIZE_7, SIZE_8, SKY_RGB, sliceCellPoint, sliceColumn, SMOKE_PRESETS, SMOKE_STEPS, SQUARE_RGB, squareLabels, START, stepId,
+  RULE_SAMPLE, sameJson, selftestAllMatch, KV_CONTRACT_CASES, KV_SELFTEST_DONE, kvSelftestPassed, SIZE_7, SIZE_8, SKY_RGB, sliceCellPoint, sliceColumn, SMOKE_PRESETS, SMOKE_STEPS, SQUARE_RGB, squareLabels, START, stepId,
   summaryTopMax, timesText, VIEWPORT, viewportForDrawer, voxelLegendLabels, voxelReadoutOk, voxelRuleId, voxelSummaryOk, WATER_RGB, waterPixel, type MapUrlState,
   type SmokePreset, pixelDiffShare, SWIFTSHADER_ARGS, START_SEED_7_HASH, PARITY_VIEW, PARITY_WATER_VIEW, PARITY_VIEWS, WORLD_RD, worldMeshQuery, PARITY_TOL, PARITY_MAX_SHARE, leaveGuardLog,
   expectedRenderer, HUD_POLL_MS, hudMoved, hudOnce, parseHud, STREAM_HOLD_MS, STREAM_MIN_MOVE, STREAM_RD, STREAM_RD_MS, STREAM_REVEAL_MS, STREAM_RUNS, streamQuery,
@@ -62,6 +62,7 @@ import { selectSectionRenderer } from '../../src/render/sectionRenderer';
 import { mountWorldHud, type HudData } from '../../src/ui/hud';
 import { installDom } from './fixtures/domShim';
 import { ctxFor } from '../harness/gen';
+import { KV_CONTRACT } from '../../src/persist/kvContract';
 
 const EDITED: MapState = {
   v: 1, seed: '42', profile: 'default',
@@ -127,6 +128,25 @@ describe('UI smoke test: pure parts (SP2b spec §8 Tools, §12)', () => {
     expect(selftestAllMatch('✓ all 52 goldens match (3.2 s)', 54)).toBe(false);
     expect(selftestAllMatch('✗ 1 of 54 goldens differ (3.2 s)', 54)).toBe(false);
     expect(selftestAllMatch('computing 54/54…', 54)).toBe(false);
+  });
+
+  test('the `selftest` step waits for `#selftest-kv` and expects `IndexedDB contract: n/n passed` with n = `KV_CONTRACT.length` (SP5b spec §6.4)', () => {
+    expect(KV_CONTRACT_CASES).toBe(KV_CONTRACT.length);
+    expect(KV_CONTRACT_CASES).toBe(8);
+    expect(kvSelftestPassed('IndexedDB contract: 8/8 passed', 8)).toBe(true);
+    expect(kvSelftestPassed('IndexedDB contract: 7/8 passed', 8)).toBe(false);
+    expect(kvSelftestPassed('IndexedDB contract: 7/7 passed', 8)).toBe(false);
+    expect(kvSelftestPassed('IndexedDB contract: running…', 8)).toBe(false);
+    expect(kvSelftestPassed('IndexedDB contract: could not run: UnknownError', 8)).toBe(false);
+    expect(KV_SELFTEST_DONE).toContain(`document.querySelector('#selftest-kv')`);
+    const src = readFileSync(new URL('../tools/uiSmoke.ts', import.meta.url), 'utf8');
+    const step = src.slice(src.indexOf("t.step('selftest: ?selftest=1');"), src.indexOf("t.step('load: ?map"));
+    const goldens = step.indexOf('selftestAllMatch(summary, goldens)');
+    const wait = step.indexOf('await p.until(KV_SELFTEST_DONE, ');
+    const check = step.indexOf('t.check(kvSelftestPassed(kv, KV_CONTRACT_CASES), ');
+    expect([goldens, wait, check].every((i) => i > -1)).toBe(true);
+    expect(goldens).toBeLessThan(wait);
+    expect(wait).toBeLessThan(check);
   });
 
   test('the Voxels step reads the page\'s hover readout and summary in the formats the cut line writes (SP3a spec §5.2)', () => {

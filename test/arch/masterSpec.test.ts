@@ -1372,6 +1372,7 @@ describe('master spec amendments (SP5b §9)', () => {
     [/^\s+persist\/kv\.ts /, 'kvContract.ts diffCodec.ts wiworld.ts saves.ts (SP5b)', 'src/persist/kvContract.ts'],
     [/^\s+persist\/kv\.ts /, 'kvContract.ts diffCodec.ts wiworld.ts saves.ts (SP5b)', 'src/persist/diffCodec.ts'],
     [/^\s+persist\/kv\.ts /, 'kvContract.ts diffCodec.ts wiworld.ts saves.ts (SP5b)', 'src/persist/saves.ts'],
+    [/^\s+persist\/kv\.ts /, 'idb.ts memory.ts kvContract.ts diffCodec.ts wiworld.ts saves.ts (SP5b)', 'src/persist/idb.ts'],
   ];
 
   test('§10\'s SP5b entry and its receivers (SP5b spec §9, §11)', () => {
@@ -1414,6 +1415,11 @@ describe('master spec amendments (SP5b §9)', () => {
     const at22 = text.indexOf('### 2.2 ');
     const s22 = text.slice(at22, text.indexOf('### 2.3 ', at22));
     expect(s22).toContain('Each `worlds` record stores `stateTable` (the mapping at save time) (kept equal to the ids on disk: rewritten at an open whose table differs from today\'s, SP5b);');
+  });
+
+  test('§1\'s dependency rule: `persist/idb.ts` runs in the sim worker and, for the worlds menu, on the main thread (SP5b spec D17, §9)', () => {
+    const lines = text.split('\n');
+    expect(lines).toContain('- **Pure layers:** none of the layers above imports three, `document`, `window` or `indexedDB`. The exception is `persist/idb.ts`, which runs in the sim worker and, for the worlds menu, on the main thread (SP5b).');
   });
 
   test('§1 names each SP5b module in its entry, which exists', () => {

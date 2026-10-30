@@ -2,10 +2,15 @@
  * ?selftest=1 (SP2a spec §6.4): recomputes every golden (SP1, SP2a, SP3a, SP3b, SP3c and SP3e) in one real module worker and
  * compares with the bundled test/goldens.json. A key whose computation throws shows its error, and a job
  * the pool rejects (a failed worker) counts as a failed key, so the summary always completes (SP2a minor 9).
+ * A second section, after the goldens, runs the KV contract on `IdbKV` in its own database, `wi10-selftest`, deleted
+ * before and after; it never opens `wi10` (SP5b spec §6.4).
  */
 import goldens from '../../../test/goldens.json';
 import { createBrowserPool, type WorkerPool } from '../../engine/workerPool';
 import { allGoldenKeys } from '../../metrics/sp2aGoldens';
+import { deleteIdb, openIdbKV } from '../../persist/idb';
+import type { KV } from '../../persist/kv';
+import { runKvContract, type KvContractResult } from '../../persist/kvContract';
 
 export interface SelftestRow { readonly key: string; readonly expected: string | null; readonly actual: string | null; readonly error: string | null; readonly ok: boolean }
 
@@ -28,6 +33,45 @@ export async function runSelftest(
     onRow(row, i);
   }
   return rows;
+}
+
+/** The IndexedDB section's database (SP5b spec §6.4): never `wi10`. */
+export const KV_SELFTEST_DB = 'wi10-selftest';
+
+/**
+ * Runs `KV_CONTRACT` on `open`'s connections, with `remove` (the database deleted) before and after. Every case closes
+ * its connection (`runKvContract`), so the last `remove` never waits on one; it rejects only when a `remove` does.
+ */
+export async function runKvSelftest(open: () => Promise<KV>, remove: () => Promise<void>): Promise<KvContractResult[]> {
+  await remove();
+  const results = await runKvContract(open);
+  await remove();
+  return results;
+}
+
+/** Appends `#selftest-kv` ("IndexedDB contract: n/m passed") and each failure's name and error, over `KV_SELFTEST_DB`. */
+export async function mountKvSection(
+  host: HTMLElement,
+  openDb: (name: string) => Promise<KV> = (name) => openIdbKV(name),
+  deleteDb: (name: string) => Promise<void> = (name) => deleteIdb(name),
+): Promise<void> {
+  const line = document.createElement('div');
+  line.id = 'selftest-kv';
+  line.textContent = 'IndexedDB contract: running…';
+  const failures = document.createElement('ul');
+  host.append(line, failures);
+  try {
+    const results = await runKvSelftest(() => openDb(KV_SELFTEST_DB), () => deleteDb(KV_SELFTEST_DB));
+    line.textContent = `IndexedDB contract: ${results.filter((r) => r.ok).length}/${results.length} passed`;
+    for (const r of results) {
+      if (r.ok) continue;
+      const li = document.createElement('li');
+      li.textContent = `✗ ${r.name}  error: ${r.error}`;
+      failures.append(li);
+    }
+  } catch (e) {
+    line.textContent = `IndexedDB contract: could not run: ${e instanceof Error ? `${e.name}: ${e.message}` : String(e)}`;
+  }
 }
 
 export function mountSelftestPage(root: HTMLElement): void {
@@ -65,5 +109,6 @@ export function mountSelftestPage(root: HTMLElement): void {
     summary.textContent = `${bad === 0 ? `✓ all ${rows.length} goldens match` : `✗ ${bad} of ${rows.length} goldens differ`} (${((performance.now() - t0) / 1000).toFixed(1)} s)`;
     copy.disabled = false;
     pool.terminate();
+    return mountKvSection(page);
   });
 }
