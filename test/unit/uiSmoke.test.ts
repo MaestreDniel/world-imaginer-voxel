@@ -677,7 +677,7 @@ describe('UI smoke test: the 3D world steps (SP4a spec §9.6)', () => {
       expect(url.startsWith('?rd=4&')).toBe(true);
       const q = parseWorldQuery(new URLSearchParams(url));
       expect(q).toEqual({
-        at: PARITY_VIEW.at, y: PARITY_VIEW.y, yaw: PARITY_VIEW.yaw, pitch: PARITY_VIEW.pitch, rd: 4, workers: null, renderer, shot: true, time: null,
+        at: PARITY_VIEW.at, y: PARITY_VIEW.y, yaw: PARITY_VIEW.yaw, pitch: PARITY_VIEW.pitch, rd: 4, workers: null, renderer, shot: true, time: null, world: null,
       });
     }
     // The page's own default hour in the capture mode is the opening 08:00 (main.ts: q.time ?? 8).
@@ -695,7 +695,7 @@ describe('UI smoke test: the water parity view (final review B-I1)', () => {
     for (const renderer of ['mesh', 'batch'] as const) {
       const q = parseWorldQuery(new URLSearchParams(worldMeshQuery(renderer, PARITY_WATER_VIEW)));
       expect(q).toEqual({
-        at: PARITY_WATER_VIEW.at, y: PARITY_WATER_VIEW.y, yaw: PARITY_WATER_VIEW.yaw, pitch: PARITY_WATER_VIEW.pitch, rd: 4, workers: null, renderer, shot: true, time: null,
+        at: PARITY_WATER_VIEW.at, y: PARITY_WATER_VIEW.y, yaw: PARITY_WATER_VIEW.yaw, pitch: PARITY_WATER_VIEW.pitch, rd: 4, workers: null, renderer, shot: true, time: null, world: null,
       });
     }
     // The default view is still the spawn's.

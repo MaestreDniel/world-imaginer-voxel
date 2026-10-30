@@ -3,7 +3,10 @@
  * the reveal, then the frame loop.
  *
  * 1. The `#` hash is decoded first: a decode error shows the failure panel with only the map link, and nothing is
- *    probed, allocated or loaded (P47). The loading screen shows at once.
+ *    probed, allocated or loaded (P47). The loading screen shows at once. With `?world=<id>` (SP5b spec §3.4) the
+ *    saved world's records are read instead (`openSavedWorld`) and its session built from them; a world that cannot
+ *    open shows "This world could not be opened: <reason>" the same way. Its `load` is posted right after the sim's
+ *    attach and awaited with it, before the coordinator's first `update`.
  * 2. Probe and `evaluateWorldCapabilities` (§8.5): a blocking cause replaces the page with the error screen (the causes,
  *    the capability table and a `?map` link).
  * 3. The session (`openMapSession`, which wires tier 2 of the trees; a tier-2 notice shows as a warning and the load
@@ -93,7 +96,9 @@
  * a held LMB or RMB is queued again by the frame's aim, until its release, the lock's release, a paused frame (the
  * palette, the map, the help) or F.
  */
+import type { Seed64 } from '../../core/hash';
 import { MEDIUM } from '../../core/params/graphicsPresets';
+import type { Params } from '../../core/params/schema';
 import { OPENING_T, TIME_SPEEDS } from '../../daynight/dayNight';
 import { probeCapabilities } from '../../engine/capabilities';
 import { evaluateWorldCapabilities, type CapabilityReport } from '../../engine/capabilityRules';
@@ -108,6 +113,12 @@ import { SimFailed, createBrowserSim, type SimClient } from '../../engine/simCli
 import { createThrottle } from '../../engine/throttle';
 import { createUploadBudget } from '../../engine/uploadBudget';
 import { StoreFullError, WorkerFailed, createBrowserPool, poolSize, type WorkerPool } from '../../engine/workerPool';
+import { openIdbKV } from '../../persist/idb';
+import type { KV } from '../../persist/kv';
+import {
+  createSaves, loadParams, normalizeHistory, normalizeState, parseWorldRecord, remapOf, tableRelation, todayStateTable, type HistoryRecord,
+  type Saves, type StateBounds, type StateRecord, type WorldRecord,
+} from '../../persist/saves';
 import { SPEED_DEFAULT, applyCameraRotation, look, lookVectorInto, stepSpeed, toggleMode, type FlyState } from '../../player/fly';
 import { attachInput, isTextEntry } from '../../player/input';
 import { createHotbar, slotName, type Hotbar } from '../../player/hotbar';
@@ -120,7 +131,7 @@ import type { FrameState } from '../../render/frameState';
 import { NEAR_FLY, NEAR_WALK, createWorldRenderer, type GpuEstimate, type WorldRenderer } from '../../render/renderer';
 import { createSectionRendererCounts, selectSectionRenderer, type SectionRendererKind } from '../../render/sectionRenderer';
 import { outlineBounds } from '../../render/selection';
-import type { Edit } from '../../workers/protocol';
+import type { Edit, LoadMsg } from '../../workers/protocol';
 import { SIM_THREAD } from '../../world/store/reclaim';
 import { createStore, type VoxelStore } from '../../world/store/store';
 import { renderErrorScreen } from '../capabilityReport';
@@ -134,7 +145,7 @@ import { mountPalette, type Palette } from '../palette';
 import { mountWorldHud } from '../hud';
 import { mountLoadingScreen } from '../loading/loadingScreen';
 import { tips } from '../loading/tips';
-import { decodeMapState, openMapSession } from '../map/mapState';
+import { decodeMapState, openMapSession, openSavedSession, type MapState } from '../map/mapState';
 import { createPreviewDriver, createReplayingCanvas, draftOf, isSpawnError, type DriverStatus, type PreviewDriver } from '../map/previewDriver';
 import { cryptoSeed } from '../seedBox';
 import { SETTINGS_DEFAULTS, loadSettings, saveSettings, type WorldSettings } from '../settings';
@@ -156,6 +167,7 @@ import { createHoldRepeat, type HoldRepeat } from './holdRepeat';
 import { createMapOverlay, followSession, frameCapFor, worldMapView, type ControlsOwner, type MapOverlay } from './mapOverlay';
 import { createReloader, createWorldUrl, installLeaveGuard, navigateTo, type Reloader } from './reload';
 import { Y_MAX, Y_MIN, type WorldQuery } from './query';
+import { STATE_BOUNDS } from './stateBounds';
 import { createTeleport, type Teleport, type TeleportLanding } from './teleport';
 
 /** The capture and test options (ruling P48). */
@@ -1436,6 +1448,121 @@ export async function enterFullscreen(
   }
 }
 
+/** The IndexedDB database of the saved worlds (SP5b spec §2.1, D16). */
+export const SAVES_DB = 'wi10';
+/** D14: a saved world whose `state` record is not a record opens at the spawn with its defaults. */
+export const STATE_RESET_NOTICE = 'This world\'s position, time, hotbar and places could not be read and were reset';
+/** D14: a saved world whose `history` record is there but not a record opens with no undo or redo steps. */
+export const HISTORY_RESET_NOTICE = 'This world\'s undo history could not be read';
+/** Ruling P6: the page's connection to `SAVES_DB` could not be opened (blocked site data, no `indexedDB`). */
+const STORAGE_UNAVAILABLE = 'storage is not available in this browser window';
+
+/** A saved world's records as the page opens them (SP5b spec §3.4 step 2), or why it cannot open. */
+export type SavedWorldRead =
+  | { ok: true; world: WorldRecord; params: Params; state: StateRecord; history: HistoryRecord; notices: string[] }
+  | { ok: false; reason: string };
+
+/**
+ * Reads world `id`'s `worlds`, `state` and `history` records in one read (SP5b spec §3.4 step 2, D14): a read that
+ * fails, a missing `worlds` record, one `parseWorldRecord` refuses, or params `loadParams` refuses → `{ok: false,
+ * reason}`. A `state` that is not a record → `newState`'s defaults with `STATE_RESET_NOTICE`; an absent `history` (a new
+ * world's: Create writes none) → none and no notice; a present one that is not a record → none with
+ * `HISTORY_RESET_NOTICE`. Both go through the normaliser with `bounds`, the history's values remapped through
+ * `remapOf(world.stateTable)` when the stored table is neither today's nor a prefix of it (D22).
+ */
+export async function readSavedWorld(saves: Saves, id: string, bounds: StateBounds): Promise<SavedWorldRead> {
+  let raw: { world: unknown; state: unknown; history: unknown };
+  try {
+    raw = await saves.readOpen(id);
+  } catch (e) {
+    return { ok: false, reason: `its records could not be read (${errorText(e)})` };
+  }
+  if (raw.world === undefined) return { ok: false, reason: 'no saved world has this id' };
+  const parsed = parseWorldRecord(raw.world);
+  if (!parsed.ok) return { ok: false, reason: parsed.reason };
+  const world = parsed.world;
+  const params = loadParams(world);
+  if (!params.ok) {
+    const i = params.issues[0]!;
+    return { ok: false, reason: `invalid params (${i.path === '' ? '<root>' : i.path} ${i.code})` };
+  }
+  const notices: string[] = [];
+  const state = normalizeState(raw.state, id, bounds);
+  if (state.reset) notices.push(STATE_RESET_NOTICE);
+  const to = tableRelation(world.stateTable) === 'other' ? remapOf(world.stateTable).to : null;
+  const history = normalizeHistory(raw.history, id, to);
+  if (history.reset) notices.push(HISTORY_RESET_NOTICE);
+  return { ok: true, world, params: params.value, state: state.state, history: history.history, notices };
+}
+
+/** What the page posts as `load` (the message without its `type` and `id`). */
+export type SavedLoad = Omit<LoadMsg, 'type' | 'id'>;
+
+/**
+ * The `load` a saved world's open posts and the record the page keeps (SP5b spec §2.3, §3.4 step 3, §3.6; D22): the
+ * stored `stateTable` (the sim reads the stored ids through it), the world's genKey and the state's `flushSeq` and
+ * `updated`. When the stored table is not today's, `rewrite` carries the record with today's table, and `history` (read
+ * remapped) when the table is not a prefix of today's, which the sim writes before answering `loaded`; the page then
+ * keeps that record, so a later `record` or backup never writes the old table back over today's ids.
+ */
+export function openRequest(db: string, world: WorldRecord, state: StateRecord, history: HistoryRecord): { load: SavedLoad; kept: WorldRecord } {
+  const relation = tableRelation(world.stateTable);
+  const kept = relation === 'equal' ? world : { ...world, stateTable: todayStateTable() };
+  const rewrite = relation === 'equal' ? null : { world: kept, history: relation === 'other' ? history : null };
+  return {
+    load: { db, worldId: world.id, flushSeq: state.flushSeq, genKey: world.genKey, updated: state.updated, stateTable: world.stateTable, rewrite },
+    kept,
+  };
+}
+
+/** A saved world opened on the main thread: its connection, session, normalised records, notices, `load` and kept record. */
+export interface SavedOpen {
+  readonly kv: KV;
+  readonly session: WorldSession;
+  readonly state: StateRecord;
+  readonly history: HistoryRecord;
+  /** D14's notices for a `state` or `history` that could not be read. */
+  readonly notices: readonly string[];
+  readonly load: SavedLoad;
+  /** The record later `record` messages and the backup are built from (§3.6). */
+  readonly kept: WorldRecord;
+}
+
+/**
+ * The main thread's part of opening world `id` (SP5b spec §3.4 steps 2-3; rulings P5, P6): opens the page's connection
+ * (`open`; one that rejects or throws is "storage is not available in this browser window"), `readSavedWorld`, then the
+ * session from the record (`openSavedSession`). A refusal (`readSavedWorld`'s, or the session's `initNotice`: tier 2
+ * refused the saved params and the session opened `default` with `{}`) is "This world could not be opened: <reason>";
+ * it writes nothing, closes the connection and carries no `load`, so no `record` with another world's genKey can follow.
+ */
+export async function openSavedWorld(o: {
+  open(): Promise<KV>;
+  readonly db: string;
+  readonly id: string;
+  readonly bounds: StateBounds;
+  random(): Seed64;
+}): Promise<{ ok: true; opened: SavedOpen } | { ok: false; text: string }> {
+  const refuse = (reason: string) => ({ ok: false as const, text: `This world could not be opened: ${reason}` });
+  let kv: KV;
+  try {
+    kv = await o.open();
+  } catch {
+    return refuse(STORAGE_UNAVAILABLE);
+  }
+  const read = await readSavedWorld(createSaves(kv), o.id, o.bounds);
+  if (!read.ok) {
+    kv.close();
+    return refuse(read.reason);
+  }
+  const session = openSavedSession(read.params, read.world, o.random);
+  if (session.initNotice !== null) {
+    kv.close();
+    return refuse(session.initNotice);
+  }
+  const { load, kept } = openRequest(o.db, read.world, read.state, read.history);
+  return { ok: true, opened: { kv, session, state: read.state, history: read.history, notices: read.notices, load, kept } };
+}
+
 /**
  * Mounts the world page in `root` (replacing what it holds) and resolves once it settles: revealed, or failed with the
  * failure panel or the error screen showing. It never rejects for a load error; the page shows it.
@@ -1561,11 +1688,30 @@ export function mountWorldPage(root: HTMLElement, q: WorldQuery, hash: string, o
   };
 
   async function run(): Promise<void> {
-    // 1. The world from the hash (P47): a decode error loads nothing.
-    const decoded = decodeMapState(hash);
-    if (decoded.error !== null) {
-      fail(decoded.error, null);
-      return;
+    // 1. The world: a saved world's records (SP5b spec §3.4 step 2), else the hash (P47). A refusal or a decode error
+    // loads nothing (ruling P5).
+    let saved: SavedOpen | null = null;
+    let decoded: MapState | null = null;
+    if (q.world !== null) {
+      const r = await openSavedWorld({ open: () => openIdbKV(SAVES_DB), db: SAVES_DB, id: q.world, bounds: STATE_BOUNDS, random: cryptoSeed });
+      if (state !== 'loading') {
+        if (r.ok) r.opened.kv.close();
+        return;
+      }
+      if (!r.ok) {
+        fail(r.text, null);
+        return;
+      }
+      saved = r.opened;
+      const kv = saved.kv;
+      teardown.push(() => kv.close());
+    } else {
+      const d = decodeMapState(hash);
+      if (d.error !== null) {
+        fail(d.error, null);
+        return;
+      }
+      decoded = d.state;
     }
 
     if (typeof PerformanceObserver === 'function' && PerformanceObserver.supportedEntryTypes?.includes('longtask') === true) {
@@ -1594,7 +1740,7 @@ export function mountWorldPage(root: HTMLElement, q: WorldQuery, hash: string, o
     }
 
     // 3. Session, settings, render distance, store and pool.
-    const session = openMapSession(decoded.state, cryptoSeed);
+    const session = saved !== null ? saved.session : openMapSession(decoded!, cryptoSeed);
     seedText = session.state.seedText;
     profile = session.state.profile;
     if (session.initNotice !== null) loading.warn(session.initNotice);
@@ -1627,7 +1773,17 @@ export function mountWorldPage(root: HTMLElement, q: WorldQuery, hash: string, o
     const simClient = opts.flight === undefined ? createBrowserSim({ onFailure: () => simFailure() }) : null;
     sim = simClient;
     if (simClient !== null) teardown.push(() => simClient.dispose());
-    const simAttached = simClient?.attach(store.handles()).catch((e: unknown) => {
+    const attaching = simClient?.attach(store.handles());
+    // A saved world's diffs (SP5b spec §3.4 step 3): `load` is posted right after the attach and awaited with it, so the
+    // read-through sees every saved edit from the first D; a sim that fails meanwhile leaves the world without editing.
+    const savedLoad = saved === null || simClient === null ? null : simClient.load(saved.load);
+    // D14's notices and the load's counts, shown once the world's notices exist.
+    const savedNotices: string[] = saved === null ? [] : [...saved.notices];
+    const simAttached = attaching === undefined ? undefined : Promise.all([attaching, savedLoad]).then(([, loaded]) => {
+      if (loaded === null) return;
+      if (loaded.skippedColumns > 0) savedNotices.push(`${loaded.skippedColumns} columns of this world could not be read`);
+      if (loaded.unknownStates > 0) savedNotices.push(`${loaded.unknownStates} blocks of unknown types became air`);
+    }, (e: unknown) => {
       if (!(e instanceof SimFailed)) throw e;
     });
     // G2's edit latency (§6.2): staged through the coordinator's `onEditStaged`, revealed through the route's hook.
@@ -2173,6 +2329,8 @@ export function mountWorldPage(root: HTMLElement, q: WorldQuery, hash: string, o
     const reloader = createReloader((url) => navigateTo(url, location), disarm);
     const notices = createWorldNotices(host, reloader);
     teardown.push(() => notices.dispose());
+    // A saved world's D14 notices and its load's counts (SP5b spec §3.4 steps 2-3), until dismissed.
+    for (const text of savedNotices) notices.show(text, { kind: 'warn' });
     // The edit path (SP5a spec §2.1, §2.6, §2.7): every edit of the page goes through it, and the sim's failure
     // disables it. The streaming route always has the sim (only the flight's has none, and it returned above).
     const editLatency = latency!;

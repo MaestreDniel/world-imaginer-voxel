@@ -2,8 +2,8 @@
  * The 3D page's query (SP4a spec §8.1; rulings P42, P48): `?at=x,z` (integers clamped to ±500,000, master §2.1),
  * `y` (clamped to −64 … 400), `yaw` and `pitch` in degrees (copied unchanged), `rd` (an integer clamped to 4 … 16),
  * `workers` (an integer clamped to 2 … 6), `renderer=batch|mesh` (§6.2), and the capture mode's `shot=1` and `time`
- * (hours in [0, 24)). A malformed value is null; it never throws. Which keys skip the start screen is
- * `startModeOf`'s (`startScreen.ts`).
+ * (hours in [0, 24)), and a saved world's `world=<id>` (SP5b spec §3.4, D4). A malformed value is null; it never throws.
+ * Which keys skip the start screen is `startModeOf`'s (`startScreen.ts`).
  */
 import { RD_MAX, RD_MIN } from '../../engine/renderDistance';
 import type { SectionRendererKind } from '../../render/sectionRenderer';
@@ -21,6 +21,8 @@ export interface WorldQuery {
   readonly shot: boolean;
   /** Hours in [0, 24) for the capture mode's fixed clock; null otherwise (and ignored without `shot`). */
   readonly time: number | null;
+  /** The saved world's id (SP5b spec §3.4): the page opens its records instead of the `#` hash; null when absent or empty. */
+  readonly world: string | null;
 }
 
 /** The world's horizontal window (master §2.1). */
@@ -70,6 +72,7 @@ export function parseWorldQuery(q: URLSearchParams): WorldQuery {
   const workers = integer(q.get('workers'));
   const renderer = q.get('renderer');
   const time = decimal(q.get('time'));
+  const world = q.get('world');
   return {
     at: atOf(q.get('at')),
     y: y === null ? null : clamp(y, Y_MIN, Y_MAX),
@@ -80,5 +83,6 @@ export function parseWorldQuery(q: URLSearchParams): WorldQuery {
     renderer: renderer === 'batch' || renderer === 'mesh' ? renderer : null,
     shot: q.get('shot') === '1',
     time: time !== null && time >= 0 && time < 24 ? time : null,
+    world: world === null || world === '' ? null : world,
   };
 }

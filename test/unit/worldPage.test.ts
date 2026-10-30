@@ -40,7 +40,20 @@ import { createHoldRepeat } from '../../src/ui/world/holdRepeat';
 import { mountPalette } from '../../src/ui/palette';
 import { NO_ENTRY } from '../../src/sim/diffStore';
 import type { Edit } from '../../src/workers/protocol';
+import { hex64 } from '../../src/core/hash';
+import type { JsonObject } from '../../src/core/params/migrate';
+import { genKey, stageHashes } from '../../src/core/stage/hash';
+import type { KV } from '../../src/persist/kv';
+import { createMemoryKV, type MemoryKV } from '../../src/persist/memory';
+import {
+  createSaves, loadParams, newState, NO_VALUE, parseWorldRecord, todayStateTable, type HistoryRecord, type WorldRecord,
+} from '../../src/persist/saves';
+import {
+  HISTORY_RESET_NOTICE, STATE_RESET_NOTICE, openRequest, openSavedWorld, readSavedWorld,
+} from '../../src/ui/world/worldPage';
+import { STATE_BOUNDS } from '../../src/ui/world/stateBounds';
 import { installDom, type FakeElement } from './fixtures/domShim';
+import { densityTree } from './fixtures/editedTrees';
 
 /** A frame scheduler that queues callbacks; `flush` runs one frame. */
 function frames() {
@@ -1999,6 +2012,185 @@ describe('modes in the page: F, the near plane, the reach, the wheel and + / −
     speedKey(fly, -1);
     expect(fly.speed).toBe(SPEED_DEFAULT);
     expect(src()).toMatch(/case 'speedUp': speedKey\(fly, 1\); break;\s+case 'speedDown': speedKey\(fly, -1\); break;/);
+  });
+});
+
+describe('opening a saved world (SP5b spec §3.4 steps 2-3, D14, D22)', () => {
+  const FIXTURE = new URL('../fixtures/sp5bWorldParams.json', import.meta.url);
+  const fixture = (): { schemaVersion: number; params: JsonObject } =>
+    JSON.parse(readFileSync(FIXTURE, 'utf8')) as { schemaVersion: number; params: JsonObject };
+  const key = (() => {
+    const p = loadParams({ ...fixture(), profile: 'default' });
+    if (!p.ok) throw new Error('fixture');
+    return hex64(genKey([1, 2], stageHashes(p.value)));
+  })();
+  const ID = 'w1';
+  const record = (over: Partial<WorldRecord> = {}): WorldRecord => ({
+    id: ID, name: 'My world', seedText: 'hello', seed: [1, 2], profile: 'default', params: fixture().params,
+    schemaVersion: fixture().schemaVersion, paramsHash: '0123456789abcdef', generatorVersion: 5, genKey: key,
+    stateTable: todayStateTable(), created: 1_000, backupOf: null, ...over,
+  });
+  /** A world created as the menu's Create writes it: `worlds` and `state`, no `history` (§1.2). */
+  async function created(over: Partial<WorldRecord> = {}): Promise<{ kv: MemoryKV; saves: ReturnType<typeof createSaves> }> {
+    const kv = createMemoryKV();
+    const saves = createSaves(kv);
+    expect((await saves.create(record(over), newState(ID, STATE_BOUNDS))).status).toBe('complete');
+    return { kv, saves };
+  }
+  const put = (kv: KV, store: 'worlds' | 'state' | 'history', value: unknown) => kv.write([{ op: 'put', store, key: ID, value }]);
+  const everything = (kv: MemoryKV) => (['worlds', 'state', 'history', 'diffs', 'meta'] as const).map((st) => [st, kv.dump(st)]);
+  /** Today's table with ids 1 and 2 swapped: stored 1 is today's 2 and stored 2 today's 1. */
+  const permuted = (): string[] => {
+    const t = todayStateTable();
+    [t[1], t[2]] = [t[2]!, t[1]!];
+    return t;
+  };
+  const random = (): [number, number] => [7, 7];
+  const REFUSED = 'This world could not be opened: ';
+
+  test('`readSavedWorld` of a created world → ok with `newState`\'s defaults and `notices` `[]`', async () => {
+    const { saves } = await created();
+    const r = await readSavedWorld(saves, ID, STATE_BOUNDS);
+    expect(r.ok).toBe(true);
+    if (!r.ok) return;
+    expect(r.world).toEqual(record());
+    expect(r.state).toEqual(newState(ID, STATE_BOUNDS));
+    // A new world has no `history` record: none, and no notice (it is not an unreadable one).
+    expect(r.history).toEqual({ worldId: ID, done: [], undone: [] });
+    expect(r.notices).toEqual([]);
+    const p = loadParams(record());
+    expect(p.ok && r.params).toEqual(p.ok ? p.value : null);
+  });
+
+  test('a missing record → `{ok: false}`', async () => {
+    const { saves } = await created();
+    const r = await readSavedWorld(saves, 'nope', STATE_BOUNDS);
+    expect(r.ok).toBe(false);
+    if (!r.ok) expect(r.reason).toBe('no saved world has this id');
+  });
+
+  test('a record `parseWorldRecord` refuses → `{ok: false}` with its reason', async () => {
+    const { kv, saves } = await created();
+    const bad = { ...record(), seed: [1] };
+    await put(kv, 'worlds', bad);
+    const r = await readSavedWorld(saves, ID, STATE_BOUNDS);
+    const parsed = parseWorldRecord(bad);
+    expect(parsed.ok).toBe(false);
+    expect(r).toEqual({ ok: false, reason: parsed.ok ? '' : parsed.reason });
+    expect(r.ok ? '' : r.reason).toContain('seed');
+  });
+
+  test('a state `\'garbage\'` → the reset notice and defaults; a history `7` → the history notice and none', async () => {
+    const { kv, saves } = await created();
+    await put(kv, 'state', 'garbage');
+    await put(kv, 'history', 7);
+    const r = await readSavedWorld(saves, ID, STATE_BOUNDS);
+    expect(r.ok).toBe(true);
+    if (!r.ok) return;
+    expect(r.state).toEqual(newState(ID, STATE_BOUNDS));
+    expect(r.history).toEqual({ worldId: ID, done: [], undone: [] });
+    expect(r.notices).toEqual([STATE_RESET_NOTICE, HISTORY_RESET_NOTICE]);
+    expect(STATE_RESET_NOTICE).toBe('This world\'s position, time, hotbar and places could not be read and were reset');
+    expect(HISTORY_RESET_NOTICE).toBe('This world\'s undo history could not be read');
+  });
+
+  test('a permuted `stateTable`: the history\'s values remapped', async () => {
+    const { kv, saves } = await created({ stateTable: permuted() });
+    const history: HistoryRecord = {
+      worldId: ID,
+      done: [{ edits: [{ x: 1, y: 64, z: 2, before: NO_VALUE, after: 1 << 8 }, { x: 1, y: 65, z: 2, before: (2 << 8) | 3, after: 0 }] }],
+      undone: [{ edits: [{ x: -5, y: 70, z: 9, before: 0, after: 2 << 8 }] }],
+    };
+    await put(kv, 'history', history);
+    const r = await readSavedWorld(saves, ID, STATE_BOUNDS);
+    expect(r.ok).toBe(true);
+    if (!r.ok) return;
+    expect(r.history).toEqual({
+      worldId: ID,
+      done: [{ edits: [{ x: 1, y: 64, z: 2, before: NO_VALUE, after: 2 << 8 }, { x: 1, y: 65, z: 2, before: (1 << 8) | 3, after: 0 }] }],
+      undone: [{ edits: [{ x: -5, y: 70, z: 9, before: 0, after: 1 << 8 }] }],
+    });
+    expect(r.notices).toEqual([]);
+    // Today's table: the values as stored.
+    await put(kv, 'worlds', record());
+    const same = await readSavedWorld(saves, ID, STATE_BOUNDS);
+    expect(same.ok && same.history).toEqual(history);
+  });
+
+  test('params a tree validator refuses (`openSavedSession(…).initNotice` set) → not opened (the could-not-be-opened text), nothing written, no `load` posted', async () => {
+    const tree = densityTree();
+    tree['root'].b.x = { op: 'bogus' };
+    const params = fixture().params;
+    const { kv } = await created({ params: { ...params, density: { ...(params['density'] as JsonObject), defs: tree } } });
+    const before = everything(kv);
+    const ops = kv.opCount;
+    const r = await openSavedWorld({ open: () => Promise.resolve(kv), db: 'wi10', id: ID, bounds: STATE_BOUNDS, random });
+    expect(r).toEqual({ ok: false, text: `${REFUSED}invalid patch (density.defs.root.b.x UNKNOWN_OP); opened the default profile with no changes` });
+    // Only an opened world carries the `load` the page posts after the attach.
+    expect('opened' in r).toBe(false);
+    expect(everything(kv)).toEqual(before);
+    expect(kv.opCount).toBe(ops);
+    // The refusal closed the page's connection.
+    expect((await put(kv, 'state', 'x')).status).toBe('closed');
+  });
+
+  test('a missing or refused record and an opener that rejects or throws → not opened, nothing written (ruling P6)', async () => {
+    const { kv } = await created();
+    const before = everything(kv);
+    const open = (id: string, o: () => Promise<KV>) => openSavedWorld({ open: o, db: 'wi10', id, bounds: STATE_BOUNDS, random });
+    expect(await open('nope', () => Promise.resolve(kv))).toEqual({ ok: false, text: `${REFUSED}no saved world has this id` });
+    expect(everything(kv)).toEqual(before);
+    const storage = { ok: false, text: `${REFUSED}storage is not available in this browser window` };
+    expect(await open(ID, () => Promise.reject(new Error('blocked')))).toEqual(storage);
+    expect(await open(ID, () => { throw new ReferenceError('indexedDB is not defined'); })).toEqual(storage);
+  });
+
+  test('an opened world: its session from the record, the `load` the page posts and the kept record', async () => {
+    const { kv } = await created();
+    await put(kv, 'state', { ...newState(ID, STATE_BOUNDS), flushSeq: 4, updated: 9_000 });
+    const r = await openSavedWorld({ open: () => Promise.resolve(kv), db: 'wi10', id: ID, bounds: STATE_BOUNDS, random });
+    expect(r.ok).toBe(true);
+    if (!r.ok) return;
+    const o = r.opened;
+    expect(o.kv).toBe(kv);
+    expect([o.session.initNotice, o.session.state.seedText, o.session.state.profile]).toEqual([null, 'hello', 'default']);
+    // The session's params are the record's (`loadParams`): today's genKey for the record's seed is its stored one.
+    const p = loadParams(record());
+    expect(p.ok && o.session.state.params).toEqual(p.ok ? p.value : null);
+    expect(hex64(genKey([1, 2], stageHashes(o.session.state.params)))).toBe(key);
+    expect(o.load).toEqual({ db: 'wi10', worldId: ID, flushSeq: 4, genKey: key, updated: 9_000, stateTable: todayStateTable(), rewrite: null });
+    expect(o.kept).toEqual(record());
+    expect(o.notices).toEqual([]);
+  });
+
+  test('after a permuted-table open, the kept record\'s `stateTable` equals `todayStateTable()`', async () => {
+    const { kv } = await created({ stateTable: permuted() });
+    const history: HistoryRecord = { worldId: ID, done: [{ edits: [{ x: 0, y: 64, z: 0, before: NO_VALUE, after: 1 << 8 }] }], undone: [] };
+    await put(kv, 'history', history);
+    const r = await openSavedWorld({ open: () => Promise.resolve(kv), db: 'wi10', id: ID, bounds: STATE_BOUNDS, random });
+    expect(r.ok).toBe(true);
+    if (!r.ok) return;
+    const { kept, load } = r.opened;
+    expect(kept.stateTable).toEqual(todayStateTable());
+    expect(kept).toEqual({ ...record(), stateTable: todayStateTable() });
+    // The sim reads the stored ids through the stored table and writes today's record and the remapped history (D22).
+    expect(load.stateTable).toEqual(permuted());
+    expect(load.rewrite).toEqual({ world: kept, history: { worldId: ID, done: [{ edits: [{ x: 0, y: 64, z: 0, before: NO_VALUE, after: 2 << 8 }] }], undone: [] } });
+    expect(r.opened.history).toEqual(load.rewrite!.history);
+  });
+
+  test('`openRequest`: an equal table → no rewrite; a prefix → today\'s record and no history; another → both', () => {
+    const state = { ...newState(ID, STATE_BOUNDS), flushSeq: 2, updated: 5 };
+    const history: HistoryRecord = { worldId: ID, done: [], undone: [] };
+    const equal = openRequest('db', record(), state, history);
+    expect(equal.load.rewrite).toBeNull();
+    expect(equal.kept).toEqual(record());
+    const prefix = openRequest('db', record({ stateTable: todayStateTable().slice(0, -1) }), state, history);
+    expect(prefix.load.rewrite).toEqual({ world: record(), history: null });
+    expect(prefix.kept).toEqual(record());
+    const other = openRequest('db', record({ stateTable: permuted() }), state, history);
+    expect(other.load.rewrite).toEqual({ world: record(), history });
+    expect(other.load).toMatchObject({ db: 'db', worldId: ID, flushSeq: 2, updated: 5, genKey: key, stateTable: permuted() });
   });
 });
 

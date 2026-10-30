@@ -4,14 +4,15 @@
  * with a notice; a `hashchange` applies the view, then loads the draft in one session step. The page's session comes
  * from `openMapSession`, which wires tier 2 of the trees (SP3d spec §1.8): `decodeMapState` checks tier 1 only, so
  * the session refuses a semantically invalid tree in a link, at the constructor (a fresh tab) or at `load` (a
- * `hashchange`).
+ * `hashchange`). A saved world's session comes from its record instead (`openSavedSession`, SP5b), with the same tier 2.
  */
 import { utf8Bytes, type Seed64 } from '../../core/hash';
 import { canonicalJSON, q15 } from '../../core/params/canonical';
-import { applyPatch, isObj } from '../../core/params/kit';
+import { applyPatch, diffParams, isObj } from '../../core/params/kit';
 import { isProfileId, isProfileReady, resolveProfile, type ProfileId } from '../../core/params/profiles';
-import { SCHEMA, type ParamsPatch } from '../../core/params/schema';
+import { SCHEMA, type Params, type ParamsPatch } from '../../core/params/schema';
 import { WorldSession, type SessionResult } from '../../engine/session';
+import type { WorldRecord } from '../../persist/saves';
 import { isLayerId, type LayerId } from '../../gen/map/layers';
 import { validateParamTrees } from '../../gen/trees';
 import { base64urlDecode, base64urlEncode } from '../common/base64url';
@@ -97,6 +98,17 @@ export function decodeMapState(hash: string): { state: MapState; error: string |
  */
 export function openMapSession(decoded: MapState, random: () => Seed64): WorldSession {
   return new WorldSession(random, { seedText: decoded.seed, profile: decoded.profile, patch: decoded.patch, validateParams: validateParamTrees });
+}
+
+/**
+ * A saved world's session (SP5b spec §2.1, §3.4 step 2): the record's seed text and profile, and `params` (the record's
+ * `loadParams`) as the minimal patch over the profile, with tier 2 of the trees as `openMapSession`'s. A saved document
+ * tier 2 refuses opens `default` with `{}` and the session's `initNotice`, which the page takes as a refusal.
+ */
+export function openSavedSession(params: Params, w: Pick<WorldRecord, 'seedText' | 'profile'>, random: () => Seed64): WorldSession {
+  return new WorldSession(random, {
+    seedText: w.seedText, profile: w.profile, patch: diffParams(SCHEMA, resolveProfile(w.profile), params), validateParams: validateParamTrees,
+  });
 }
 
 /** The session call a hash load needs (WorldSession satisfies it). */

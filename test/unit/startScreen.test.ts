@@ -23,6 +23,10 @@ describe('startModeOf (SP4a spec §8.1, D21)', () => {
     expect(startModeOf(query('/?renderer=mesh&rd=8'))).toBe('world');
   });
 
+  test('?world=abc → \'world\' (a saved world, SP5b spec §3.4)', () => {
+    expect(startModeOf(query('/?world=abc'))).toBe('world');
+  });
+
   test('?renderer=mesh alone keeps the start screen', () => {
     expect(startModeOf(query('/?renderer=mesh'))).toBe('start');
   });

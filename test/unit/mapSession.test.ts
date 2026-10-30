@@ -6,11 +6,13 @@
 import { describe, expect, test, vi } from 'vitest';
 import type { Seed64 } from '../../src/core/hash';
 import { DEFAULT_DENSITY_TREE, DEFAULT_SURFACE_RULES } from '../../src/core/params/defaultTrees';
-import type { Params } from '../../src/core/params/schema';
+import { applyPatch, diffParams } from '../../src/core/params/kit';
+import { resolveProfile } from '../../src/core/params/profiles';
+import { SCHEMA, type Params } from '../../src/core/params/schema';
 import type { SessionChange, SessionSnapshot } from '../../src/engine/session';
 import { densitySourceValidations } from '../../src/gen/density/source';
 import { rulesSourceValidations } from '../../src/gen/surface/source';
-import { applyMapHash, DEFAULT_MAP_STATE, decodeMapState, encodeMapState, openMapSession, type MapState, type MapView } from '../../src/ui/map/mapState';
+import { applyMapHash, DEFAULT_MAP_STATE, decodeMapState, encodeMapState, openMapSession, openSavedSession, type MapState, type MapView } from '../../src/ui/map/mapState';
 import { densityTree, editedPatch } from './fixtures/editedTrees';
 
 /** While `hooks.badProfile` is set, `resolveProfile('large_biomes')` carries a density tree tier 2 refuses (every real profile passes, §1.8). */
@@ -149,5 +151,21 @@ describe('openMapSession: slider edits keep the trees (SP3d spec §1.12)', () =>
     expect(w.undo()).toBe(true);
     expect([w.state.params.climate.scaleMul, w.state.params.density.defs]).toEqual([2, defs]);
     expect(w.state.params.density.defs).toBe(defs);
+  });
+});
+
+describe('openSavedSession: a saved world\'s session (SP5b spec §2.1, §3.4 step 2)', () => {
+  test('`openSavedSession` over amplified params equals `openMapSession` of the same seed, profile and patch', () => {
+    const r = applyPatch(SCHEMA, resolveProfile('amplified'), { ...editedPatch(), climate: { scaleMul: 2 } });
+    if (!r.ok) throw new Error('the amplified patch');
+    const saved = openSavedSession(r.value, { seedText: 'hello', profile: 'amplified' }, random);
+    const patch = diffParams(SCHEMA, resolveProfile('amplified'), r.value);
+    const map = openMapSession({ ...DEFAULT_MAP_STATE, seed: 'hello', profile: 'amplified', patch }, random);
+    expect(saved.initNotice).toBeNull();
+    expect(saved.state).toEqual(map.state);
+    expect([saved.state.seedText, saved.state.profile, saved.modifiedCount('')]).toEqual(['hello', 'amplified', 3]);
+    expect(saved.state.params).toEqual(r.value);
+    // Tier 2 runs on it as on the map's (the arch's uiSessions rule): a tree it refuses is refused.
+    expect(saved.set('density.defs', bogusDensity()).ok).toBe(false);
   });
 });

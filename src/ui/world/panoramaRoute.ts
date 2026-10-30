@@ -55,7 +55,7 @@ declare global {
 /** The world page's query for `p`: its site, yaw and pitch, RD 12, the capture mode at its hour (ruling P48). */
 export function panoQuery(p: PanoramaSpec): WorldQuery {
   return {
-    at: { x: p.x, z: p.z }, y: null, yaw: p.yawDeg, pitch: PANO_PITCH, rd: PANO_RD, workers: null, renderer: null, shot: true, time: p.time,
+    at: { x: p.x, z: p.z }, y: null, yaw: p.yawDeg, pitch: PANO_PITCH, rd: PANO_RD, workers: null, renderer: null, shot: true, time: p.time, world: null,
   };
 }
 

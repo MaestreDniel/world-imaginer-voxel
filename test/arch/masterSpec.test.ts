@@ -1373,6 +1373,7 @@ describe('master spec amendments (SP5b §9)', () => {
     [/^\s+persist\/kv\.ts /, 'kvContract.ts diffCodec.ts wiworld.ts saves.ts (SP5b)', 'src/persist/diffCodec.ts'],
     [/^\s+persist\/kv\.ts /, 'kvContract.ts diffCodec.ts wiworld.ts saves.ts (SP5b)', 'src/persist/saves.ts'],
     [/^\s+persist\/kv\.ts /, 'idb.ts memory.ts kvContract.ts diffCodec.ts wiworld.ts saves.ts (SP5b)', 'src/persist/idb.ts'],
+    [/^\s+ui\/world\/\* /, 'stateBounds.ts autosave.ts worldLock.ts modifyMode.ts places.ts placeDialog.ts (SP5b)', 'src/ui/world/stateBounds.ts'],
   ];
 
   test('§10\'s SP5b entry and its receivers (SP5b spec §9, §11)', () => {

@@ -6,12 +6,12 @@ const parse = (search: string) => parseWorldQuery(new URLSearchParams(search));
 describe('parseWorldQuery (SP4a spec §8.1; rulings P42, P48)', () => {
   test('?at=12,-40&y=90&yaw=45&pitch=-20&rd=8&workers=4&renderer=mesh parses fully', () => {
     expect(parse('?at=12,-40&y=90&yaw=45&pitch=-20&rd=8&workers=4&renderer=mesh')).toEqual({
-      at: { x: 12, z: -40 }, y: 90, yaw: 45, pitch: -20, rd: 8, workers: 4, renderer: 'mesh', shot: false, time: null,
+      at: { x: 12, z: -40 }, y: 90, yaw: 45, pitch: -20, rd: 8, workers: 4, renderer: 'mesh', shot: false, time: null, world: null,
     });
   });
 
   test('an empty query is all null, shot false', () => {
-    expect(parse('')).toEqual({ at: null, y: null, yaw: null, pitch: null, rd: null, workers: null, renderer: null, shot: false, time: null });
+    expect(parse('')).toEqual({ at: null, y: null, yaw: null, pitch: null, rd: null, workers: null, renderer: null, shot: false, time: null, world: null });
   });
 
   test('?at=900000,0 clamps x to 500,000; ?rd=30 → 16; ?workers=1 → 2', () => {
@@ -58,5 +58,11 @@ describe('parseWorldQuery (SP4a spec §8.1; rulings P42, P48)', () => {
     expect(parse('?time=-1').time).toBeNull();
     expect(parse('?time=abc').time).toBeNull();
     expect(parse('?time=0').time).toBe(0);
+  });
+
+  test('?world=abc → `world` \'abc\'; absent → null (SP5b spec §3.4, D4)', () => {
+    expect(parse('?world=abc').world).toBe('abc');
+    expect(parse('').world).toBeNull();
+    expect(parse('?at=1,2').world).toBeNull();
   });
 });

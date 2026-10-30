@@ -11,10 +11,13 @@ import { el } from '../common/dom';
 import { mountBackdrop } from '../loading/panoramas';
 import { decodeMapState, openMapSession } from '../map/mapState';
 
-/** `?at`, `?rd` or `?workers` skips the start screen (they come from a link, a reload or a tool; spec §8.1). */
-const WORLD_KEYS = ['at', 'rd', 'workers'] as const;
+/**
+ * `?at`, `?rd` or `?workers` skips the start screen (they come from a link, a reload or a tool; spec §8.1), and so does
+ * a saved world's `?world` (SP5b spec §3.4).
+ */
+const WORLD_KEYS = ['at', 'rd', 'workers', 'world'] as const;
 
-/** 'world' iff any of `at`, `rd` or `workers` is in the query; a `#` hash or `?renderer` alone keeps 'start'. */
+/** 'world' iff any of `at`, `rd`, `workers` or `world` is in the query; a `#` hash or `?renderer` alone keeps 'start'. */
 export function startModeOf(query: URLSearchParams): 'start' | 'world' {
   return WORLD_KEYS.some((k) => query.has(k)) ? 'world' : 'start';
 }

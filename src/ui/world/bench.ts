@@ -1624,7 +1624,7 @@ declare global {
 /** The route's query: the given `workers` and `renderer`, RD 12, no position (the spawn), no capture mode. */
 export function benchQuery(query: URLSearchParams): WorldQuery {
   const q = parseWorldQuery(query);
-  return { at: null, y: null, yaw: null, pitch: null, rd: BENCH_RD, workers: q.workers, renderer: q.renderer, shot: false, time: null };
+  return { at: null, y: null, yaw: null, pitch: null, rd: BENCH_RD, workers: q.workers, renderer: q.renderer, shot: false, time: null, world: null };
 }
 
 /** The route's `#` hash: seed 42, the default profile, no patch. */
