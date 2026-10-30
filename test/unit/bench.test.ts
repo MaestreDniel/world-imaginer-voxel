@@ -1,24 +1,31 @@
 import { readFileSync } from 'node:fs';
 import { describe, expect, test } from 'vitest';
-import { hex64 } from '../../src/core/hash';
+import { colKey } from '../../src/core/coords';
+import { hex64, parseHex64 } from '../../src/core/hash';
 import { resolveProfile } from '../../src/core/params/profiles';
 import { genKey, stageHashes } from '../../src/core/stage/hash';
 import type { KV } from '../../src/persist/kv';
 import { createMemoryKV } from '../../src/persist/memory';
-import { loadParams, olderGenerator, parseWorldRecord, todayStateTable, type HistoryRecord } from '../../src/persist/saves';
-import { GLASS, ICE, REGISTRY, STONE, TORCH } from '../../src/world/blocks';
+import { decodeColumnDiff } from '../../src/persist/diffCodec';
+import { loadParams, normalizeState, olderGenerator, parseWorldRecord, todayStateTable, type HistoryRecord } from '../../src/persist/saves';
+import { discOffsets } from '../../src/engine/rings';
+import { AIR, GLASS, ICE, REGISTRY, STONE, TORCH } from '../../src/world/blocks';
 import { LAVA_SOURCE, WATER_SOURCE } from '../../src/world/blocks/fluid';
 import type { Edit } from '../../src/workers/protocol';
 import {
   BENCH_EDIT, BENCH_FIELDS, BENCH_FRAME_CAPACITY, BENCH_IDLE_FRAMES, BENCH_LEGS, BENCH_LIVE, BENCH_LIVE_LEGS, BENCH_PITCH, BENCH_RD, BENCH_REFILL,
   BENCH_SAVE, BENCH_SAVE_LEG, BENCH_SAVE_PARTS, BENCH_SEED, BENCH_SHOT_ABOVE, BENCH_SHOT_PITCH, BENCH_SHOTS, BENCH_TIME_SPEED, BENCH_Y, benchInterval, benchPose, createBenchDriver,
-  createBenchRecord, createBenchRecorder, createLiveReveals, REVIEW_HOUSE, REVIEW_POOL, REVIEW_SCENE_BATCH, REVIEW_SCENES, REVIEW_SETTLE_S, REVIEW_SITE,
+  createBenchRecord, createBenchRecorder, createLiveReveals, ENTER_AUTO_KEY, ENTER_AUTO_SETUP_PATH, ENTER_DENSE_COLUMNS, ENTER_DISC_RD, ENTER_PAIRS, ENTER_POSE, ENTER_SPARSE,
+  enterAutoEnded, enterAutoJson, enterAutoRecorded, enterAutoStart, enterPaths as benchEnterPaths, enterSaveDump, gpuOfRenderer, summarizeEnter, REVIEW_HOUSE, REVIEW_POOL, REVIEW_SCENE_BATCH, REVIEW_SCENES, REVIEW_SETTLE_S, REVIEW_SITE,
   REVIEW_SHOTS, reviewSceneEdits, summarizeBench, type BenchError, type BenchFixed, type BenchFlush, type BenchPose, type BenchRecord, type BenchResult,
   type BenchSaveRun, type BenchSources, type BenchWorld, type ReviewShot, type SceneVoxel,
 } from '../../src/ui/world/bench';
 import type { EditOutcome } from '../../src/ui/world/editPath';
 import { DEFAULT_MAP_STATE, openMapSession } from '../../src/ui/map/mapState';
-import { BENCH_DB, closeBenchSave, createBenchSave, openBenchSave } from '../../src/ui/world/worldPage';
+import { parseWorldQuery } from '../../src/ui/world/query';
+import { STATE_BOUNDS } from '../../src/ui/world/stateBounds';
+import { BENCH_DB, closeBenchSave, createBenchSave, enterResult, newWorldRecord, openBenchSave } from '../../src/ui/world/worldPage';
+import { ENTER_PAIRS as TOOL_ENTER_PAIRS, enterPaths as toolEnterPaths, enterSummary, type EnterPair } from '../tools/measureChrome';
 
 const START = { x: 1000, z: -2000 };
 const HZ240 = 1000 / 240;
@@ -1513,6 +1520,119 @@ describe('the bench\'s saved world in `wi10-bench` (SP5b spec §6.2; plan)', () 
     const src = readFileSync(new URL('../../src/ui/world/worldPage.ts', import.meta.url), 'utf8');
     expect(src).toMatch(/openBenchSave\(\{ open: \(db\) => openIdbKV\(db\), deleteDb: deleteIdb,/);
     expect(src).toMatch(/closeBenchSave\(\{ sim: simClient, kv: benchKv, deleteDb: deleteIdb \}\)/);
+  });
+});
+
+describe('the enter bench `?bench=enter` (SP5b spec §6.2, D28; plan)', () => {
+  const session = openMapSession({ ...DEFAULT_MAP_STATE, seed: BENCH_SEED, profile: 'default', patch: {} }, () => [3, 9]).state;
+  const world = newWorldRecord('enter-1', 'Enter bench', session, 1_700_000_000_000);
+  const pose = { x: 37, y: ENTER_POSE.y, z: -21, yaw: ENTER_POSE.yaw, pitch: ENTER_POSE.pitch };
+  /** A load's record (`window.__wiEnterResult`): an unsaved load has no storage figures. */
+  const loadOf = (revealMs: number, saved: boolean) => ({
+    revealMs, idbOpenMs: saved ? revealMs / 100 : null, loadMs: saved ? revealMs / 20 : null, decodeMs: saved ? revealMs / 40 : null,
+  });
+
+  test('the heavy save holds every column of the RD 15 disc, 64 entries each, 16 dense', () => {
+    expect(ENTER_POSE).toEqual({ y: 120, yaw: 45, pitch: -20 });
+    expect([ENTER_DISC_RD, ENTER_SPARSE, ENTER_DENSE_COLUMNS]).toEqual([BENCH_RD + 3, 64, 16]);
+    const d = enterSaveDump(world, pose, 1_700_000_000_500);
+    // Every column of the RD 12 + 3 disc around the pose's column (2, −2), in colKey order, nothing else.
+    const disc = discOffsets(15).map(([dx, dz]) => colKey(2 + dx, -2 + dz)).sort((a, b) => a - b);
+    expect(d.cols.map((c) => c.key)).toEqual(disc);
+    expect(d.cols.length).toBe(discOffsets(15).length);
+    let dense = 0;
+    for (const c of d.cols) {
+      const col = decodeColumnDiff(c.bytes, world.stateTable.length);
+      expect(col.genKey).toEqual(parseHex64(world.genKey));
+      const bySy = new Map<number, number>();
+      for (const sy of col.diff.sy) bySy.set(sy, (bySy.get(sy) ?? 0) + 1);
+      // 64 sparse entries in one section (fmt 0), and in 16 columns one full section at another sy (fmt 1).
+      const counts = [...bySy.values()].sort((a, b) => a - b);
+      if (counts.length === 2) {
+        dense++;
+        expect(counts).toEqual([64, 4096]);
+      } else expect(counts).toEqual([64]);
+      // Air entries only, above the terrain: the saved world draws as the unsaved one, so (a) and (b) differ only in persistence.
+      expect(col.diff.value.every((v) => v === (AIR << 8) >>> 0)).toBe(true);
+      expect([...bySy.keys()].every((sy) => sy >= 22)).toBe(true);
+    }
+    expect(dense).toBe(16);
+    // The state at the pose, flying at the default speed; no history; the world record unchanged.
+    expect(d.state.player).toEqual({ ...pose, mode: 'fly', speed: 12 });
+    expect(normalizeState(d.state, 'enter-1', STATE_BOUNDS)).toEqual({ state: d.state, reset: false });
+    expect(d.state).toMatchObject({ worldId: 'enter-1', updated: 1_700_000_000_500 });
+    expect(d.history).toBeNull();
+    expect(d.world).toBe(world);
+    // Seeded: the same save every time.
+    expect(enterSaveDump(world, pose, 1_700_000_000_500).cols).toEqual(d.cols);
+  });
+
+  test('the `auto=1` driver\'s URL sequence is setup → (a), (b) × 6 → end → result, the pose the same in (a) and (b), and its JSON has `measureChrome`\'s keys', () => {
+    const store = new Map<string, string>();
+    const storage = { getItem: (k: string) => store.get(k) ?? null, setItem: (k: string, v: string) => { store.set(k, v); } };
+    const visited: string[] = [ENTER_AUTO_SETUP_PATH];
+    const io = { storage, assign: (url: string) => { visited.push(url); } };
+    // Without the setup's state nothing navigates (a world load with `enterBench=1&auto=1` opened by hand).
+    expect(enterAutoRecorded(io, loadOf(100, false))).toBe(false);
+    expect(visited).toEqual(['/?bench=enter&auto=1']);
+    const setup = { worldId: 'w-auto', pose: { x: -123, y: 120, z: 456, yaw: 45, pitch: -20 } };
+    enterAutoStart(io, setup);
+    expect(store.has(ENTER_AUTO_KEY)).toBe(true);
+    const results = Array.from({ length: 12 }, (_, i) => loadOf(100 + 7 * i, i % 2 === 1));
+    for (const r of results) expect(enterAutoRecorded(io, r)).toBe(true);
+    enterAutoEnded(io);
+    const tool = toolEnterPaths(setup);
+    const pair = [`${tool.unsaved}&auto=1`, `${tool.saved}&auto=1`];
+    expect(benchEnterPaths(setup, true)).toEqual({ unsaved: pair[0], saved: pair[1] });
+    expect(benchEnterPaths(setup, false)).toEqual(tool);
+    expect(visited).toEqual([
+      '/?bench=enter&auto=1', ...Array.from({ length: 6 }, () => pair).flat(), '/?bench=enter&phase=end&auto=1', '/?bench=enter&phase=result&auto=1',
+    ]);
+    // (a) opens unsaved at the setup's pose, (b) the saved world (whose state holds that pose), both at RD 12.
+    const a = parseWorldQuery(new URLSearchParams(visited[1]!.slice(1)));
+    expect({ x: a.at?.x, z: a.at?.z, y: a.y, yaw: a.yaw, pitch: a.pitch }).toEqual(setup.pose);
+    const b = parseWorldQuery(new URLSearchParams(visited[2]!.slice(1)));
+    expect([b.world, b.db, b.enterBench, b.rd, a.rd, a.enterBench]).toEqual(['w-auto', 'wi10-bench', true, 12, 12, true]);
+    // The download: measureChrome's shape, with the GPU read from the renderer string and the cache unknown.
+    const renderer = 'Mesa Intel(R) Xe Graphics (ADL GT2)';
+    const json = enterAutoJson(io, { renderer, userAgent: 'Mozilla/5.0 Firefox/130.0' });
+    expect(json).not.toBeNull();
+    const pairs: EnterPair[] = Array.from({ length: 6 }, (_, i) => ({ unsaved: results[2 * i]!, saved: results[2 * i + 1]! }));
+    expect(json!.pairs).toEqual(pairs);
+    const fromTool = enterSummary(pairs, { gpu: 'iris', renderer, shaderCache: 'unknown', newWorldRevealMs: null });
+    for (const k of Object.keys(fromTool)) expect(json, k).toHaveProperty(k);
+    expect(json).toMatchObject({ ...fromTool, measuredBy: 'bench=enter&auto=1', userAgent: 'Mozilla/5.0 Firefox/130.0' });
+    expect([gpuOfRenderer('ANGLE (Intel, Mesa Intel(R) Iris(R) Xe Graphics (ADL GT2), OpenGL 4.6)'), gpuOfRenderer('NVIDIA GeForce RTX 3060 Laptop GPU/PCIe/SSE2'), gpuOfRenderer('llvmpipe')])
+      .toEqual(['iris', 'rtx', 'unknown']);
+  });
+
+  test('an `?enterBench=1` load publishes `{ revealMs, idbOpenMs, loadMs, decodeMs }` at its reveal, the last three null when unsaved; `db` replaces `wi10`', () => {
+    expect(enterResult(812.5, { idbOpenMs: 3.25, loadMs: 41, decodeMs: 17.5 })).toEqual({ revealMs: 812.5, idbOpenMs: 3.25, loadMs: 41, decodeMs: 17.5 });
+    expect(enterResult(640, { idbOpenMs: null, loadMs: null, decodeMs: null })).toEqual({ revealMs: 640, idbOpenMs: null, loadMs: null, decodeMs: null });
+    const src = readFileSync(new URL('../../src/ui/world/worldPage.ts', import.meta.url), 'utf8');
+    // The saved world's database: `?db=` (only with `enterBench=1`, `parseWorldQuery`), else `wi10`; the connection's open timed.
+    expect(src).toMatch(/const db = q\.db \?\? SAVES_DB;/);
+    expect(src).toMatch(/enterTimes\.idbOpenMs = performance\.now\(\) - t;/);
+    expect(src).toMatch(/openSavedWorld\(\{ open, db, id: q\.world,/);
+    // The `load`'s round trip and the sim's decode, for a saved world only (the bench's own save is not timed).
+    expect(src).toMatch(/: saved !== null \? timedLoad\(simClient, saved\.load\)/);
+    expect(src).toMatch(/enterTimes\.decodeMs = loaded\.decodeMs;/);
+    // Published at the reveal, right after `revealMs` is taken.
+    expect(src).toMatch(/stats\.revealMs = performance\.now\(\) - t0;\n    if \(q\.enterBench\) window\.__wiEnterResult = enterResult\(stats\.revealMs, enterTimes\);/);
+    // main.ts hands the settled page to `enterLoaded` (a failed load's `{ error }`, the self-driving step).
+    const main = readFileSync(new URL('../../src/main.ts', import.meta.url), 'utf8');
+    expect(main).toMatch(/if \(q\.enterBench\) \(await import\('\.\/ui\/world\/bench'\)\)\.enterLoaded\(page\.state === 'revealed', query\.get\('auto'\) === '1'\);/);
+    expect(main).toMatch(/query\.get\('bench'\) === 'enter'\n\s+\? import\('\.\/ui\/world\/bench'\)\.then\(\(m\) => m\.mountEnterBench\(app, query\)\)/);
+  });
+
+  test('`summarizeEnter` and measureChrome\'s `enterSummary` are a pinned mirror (ruling P19): the same six pairs give equal JSON', () => {
+    const pairs: EnterPair[] = [900, 101, 97, 110, 99, 103].map((u, i) => ({ unsaved: loadOf(u, false), saved: loadOf(u * (1 + i / 50), true) }));
+    const o = { gpu: 'rtx', renderer: 'NVIDIA GeForce RTX 3060', shaderCache: 'cold', newWorldRevealMs: 2500 };
+    const page = summarizeEnter(pairs, o);
+    expect(page).toEqual(enterSummary(pairs, o));
+    expect([ENTER_PAIRS, TOOL_ENTER_PAIRS]).toEqual([6, 6]);
+    expect(page.kept).toBe(5);
+    expect(page.enterRatio).toBe(page.medianSavedMs! / page.medianUnsavedMs!);
   });
 });
 

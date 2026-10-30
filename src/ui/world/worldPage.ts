@@ -6,7 +6,9 @@
  *    probed, allocated or loaded (P47). The loading screen shows at once. With `?world=<id>` (SP5b spec §3.4) the
  *    saved world's records are read instead (`openSavedWorld`) and its session built from them; a world that cannot
  *    open shows "This world could not be opened: <reason>" the same way. Its `load` is posted right after the sim's
- *    attach and awaited with it, before the coordinator's first `update`.
+ *    attach and awaited with it, before the coordinator's first `update`. The enter bench's loads (`?enterBench=1`,
+ *    SP5b spec §6.2) open `?db=` in place of `SAVES_DB` and record `window.__wiEnterResult` at the reveal: `revealMs`
+ *    and, for a saved world, the connection's open, the `load`'s round trip and the sim's decode (`EnterTimes`).
  * 2. Probe and `evaluateWorldCapabilities` (§8.5): a blocking cause replaces the page with the error screen (the causes,
  *    the capability table and a `?map` link).
  * 3. The session (`openMapSession`, which wires tier 2 of the trees; a tier-2 notice shows as a warning and the load
@@ -145,7 +147,7 @@ import type { FrameState } from '../../render/frameState';
 import { NEAR_FLY, NEAR_WALK, createWorldRenderer, type GpuEstimate, type WorldRenderer } from '../../render/renderer';
 import { createSectionRendererCounts, selectSectionRenderer, type SectionRendererKind } from '../../render/sectionRenderer';
 import { outlineBounds } from '../../render/selection';
-import type { Edit, FlushedMsg, LoadMsg } from '../../workers/protocol';
+import type { Edit, FlushedMsg, LoadedMsg, LoadMsg } from '../../workers/protocol';
 import { SIM_THREAD } from '../../world/store/reclaim';
 import { createStore, type VoxelStore } from '../../world/store/store';
 import { renderErrorScreen } from '../capabilityReport';
@@ -164,8 +166,8 @@ import { createPreviewDriver, createReplayingCanvas, draftOf, isSpawnError, type
 import { cryptoSeed } from '../seedBox';
 import { SETTINGS_DEFAULTS, loadSettings, saveSettings, type WorldSettings } from '../settings';
 import {
-  BENCH_IDLE_FRAMES, BENCH_REFILL, BENCH_TIME_SPEED, benchInterval, createBenchRecorder, createLiveReveals, jsHeapMB, type BenchDriver,
-  type BenchFlush, type BenchPose, type BenchWorld,
+  BENCH_DB, BENCH_IDLE_FRAMES, BENCH_REFILL, BENCH_TIME_SPEED, benchInterval, createBenchRecorder, createLiveReveals, jsHeapMB, type BenchDriver,
+  type BenchFlush, type BenchPose, type BenchWorld, type EnterResult,
 } from './bench';
 import { firstView } from './firstView';
 import type { FlightContext } from './flight';
@@ -1595,6 +1597,22 @@ export async function openSavedWorld(o: {
   return { ok: true, opened: { kv, session, state: read.state, history: read.history, notices: read.notices, load, kept } };
 }
 
+/**
+ * A saved world's open as the enter bench records it (SP5b spec §6.2), ms: the page's connection to the database, the
+ * `load`'s round trip (post → `loaded`) and the sim's decode, remap and `setColumn` inside it (`loaded.decodeMs`); each
+ * null until measured, and all three null for an unsaved world.
+ */
+export interface EnterTimes {
+  idbOpenMs: number | null;
+  loadMs: number | null;
+  decodeMs: number | null;
+}
+
+/** `window.__wiEnterResult` (SP5b spec §6.2): the page's `revealMs` (as the bench's) beside a saved open's times. */
+export function enterResult(revealMs: number | null, t: Readonly<EnterTimes>): EnterResult {
+  return { revealMs, idbOpenMs: t.idbOpenMs, loadMs: t.loadMs, decodeMs: t.decodeMs };
+}
+
 /** Where and how a saved world opens (SP5b spec §3.4 step 5): the page's start, from the world's `state` record. */
 export interface RestoredStart {
   /** The load's centre, or null for the pool's spawn search. */
@@ -1787,14 +1805,14 @@ export function createPageAutosave(o: {
   });
 }
 
-/** The bench's database (SP5b spec §6.2): the bench route's saved world lives here, never in `SAVES_DB`. */
-export const BENCH_DB = 'wi10-bench';
+/** The benches' database (SP5b spec §6.2; `bench.ts`): the bench route's saved world lives there, never in `SAVES_DB`. */
+export { BENCH_DB };
 
 /**
  * A `worlds` record of the session's seed and parameters (§2.1), as a new world's: today's schema, generator, genKey
  * and state table, `created` the given wall-clock time, no backup.
  */
-function newWorldRecord(id: string, name: string, s: Pick<SessionState, 'seedText' | 'seed' | 'profile' | 'params'>, created: number): WorldRecord {
+export function newWorldRecord(id: string, name: string, s: Pick<SessionState, 'seedText' | 'seed' | 'profile' | 'params'>, created: number): WorldRecord {
   return {
     id, name, seedText: s.seedText, seed: [s.seed[0], s.seed[1]], profile: s.profile, params: s.params as unknown as JsonObject,
     schemaVersion: SCHEMA_VERSION, paramsHash: hex64(paramsHash(s.params)), generatorVersion: GENERATOR_VERSION,
@@ -2046,8 +2064,18 @@ export function mountWorldPage(root: HTMLElement, q: WorldQuery, hash: string, o
     const fixedT = opts.timeHours === undefined || opts.timeHours === null ? null : timeOfHours(opts.timeHours);
     // A saved world's pose, mode, flying speed and time (SP5b spec §3.4 step 5, D4); null for an unsaved world.
     let restored: RestoredStart | null = null;
+    // The enter bench's times (SP5b spec §6.2), recorded for every load and published only under `?enterBench=1`.
+    const enterTimes: EnterTimes = { idbOpenMs: null, loadMs: null, decodeMs: null };
     if (q.world !== null) {
-      const r = await openSavedWorld({ open: () => openIdbKV(SAVES_DB), db: SAVES_DB, id: q.world, bounds: STATE_BOUNDS, random: cryptoSeed });
+      // The enter bench's saved world lives in its own database (`q.db`, only with `enterBench=1`).
+      const db = q.db ?? SAVES_DB;
+      const open = async (): Promise<KV> => {
+        const t = performance.now();
+        const kv = await openIdbKV(db);
+        enterTimes.idbOpenMs = performance.now() - t;
+        return kv;
+      };
+      const r = await openSavedWorld({ open, db, id: q.world, bounds: STATE_BOUNDS, random: cryptoSeed });
       if (state !== 'loading') {
         if (r.ok) r.opened.kv.close();
         return;
@@ -2141,11 +2169,20 @@ export function mountWorldPage(root: HTMLElement, q: WorldQuery, hash: string, o
       if (state !== 'loading') return;
     }
     const attaching = simClient?.attach(store.handles());
+    // A saved world's `load` round trip and the sim's decode in it, for the enter bench (SP5b spec §6.2).
+    const timedLoad = (client: SimClient, m: SavedLoad): Promise<LoadedMsg> => {
+      const posted = performance.now();
+      return client.load(m).then((loaded) => {
+        enterTimes.loadMs = performance.now() - posted;
+        enterTimes.decodeMs = loaded.decodeMs;
+        return loaded;
+      });
+    };
     // A saved world's diffs (SP5b spec §3.4 step 3), and the bench's: `load` is posted right after the attach and
     // awaited with it, so the read-through sees every saved edit from the first D; a sim that fails meanwhile leaves the
     // world without editing.
     const savedLoad = simClient === null ? null
-      : saved !== null ? simClient.load(saved.load)
+      : saved !== null ? timedLoad(simClient, saved.load)
         : benchSave !== null ? simClient.load(benchSave.load) : null;
     // D14's notices and the load's counts, shown once the world's notices exist.
     const savedNotices: string[] = saved === null ? [] : [...saved.notices];
@@ -2306,6 +2343,7 @@ export function mountWorldPage(root: HTMLElement, q: WorldQuery, hash: string, o
     state = 'revealed';
     progressHook.revealed = true;
     stats.revealMs = performance.now() - t0;
+    if (q.enterBench) window.__wiEnterResult = enterResult(stats.revealMs, enterTimes);
     stats.mergeMs = sections.counts(uploads).structuralMs;
     if (longTasks !== null) {
       const lt = stats.longTasks!;

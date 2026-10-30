@@ -514,7 +514,7 @@ export async function runFlight(ctx: FlightContext): Promise<FlightResult | Flig
 /** The route's query: the given `workers` and `renderer`, RD 12, no position (the spawn), no capture mode. */
 export function flightQuery(query: URLSearchParams): WorldQuery {
   const q = parseWorldQuery(query);
-  return { at: null, y: null, yaw: null, pitch: null, rd: FLIGHT_RD, workers: q.workers, renderer: q.renderer, shot: false, time: null, world: null };
+  return { at: null, y: null, yaw: null, pitch: null, rd: FLIGHT_RD, workers: q.workers, renderer: q.renderer, shot: false, time: null, world: null, enterBench: false, db: null };
 }
 
 /** The route's `#` hash: seed 42, the default profile, no patch. */

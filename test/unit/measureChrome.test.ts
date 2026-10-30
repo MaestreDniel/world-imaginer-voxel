@@ -2,9 +2,11 @@ import type { ChildProcess } from 'node:child_process';
 import { EventEmitter } from 'node:events';
 import { describe, expect, test } from 'vitest';
 import { BENCH_SHOTS } from '../../src/ui/world/bench';
+import { parseWorldQuery } from '../../src/ui/world/query';
 import {
-  ASSETS, benchLine, chromeArgs, drawnByProblem, endOfRunWarnings, flightLine, gpuMatches, launchEnv, MEASURE_LOAD_MAX, outputName, parseMeasureArgs, PLACE_ATTEMPTS, placeWindow,
-  pollResult, routePath, shaderCacheOf, SHOTS, viewportProblem, watchPage, windowProblem, withTimeout, type MeasureArgs, type WindowBounds,
+  ASSETS, benchLine, chromeArgs, drawnByProblem, endOfRunWarnings, ENTER_END_PATH, enterLine, enterPaths, enterSummary, flightLine, gpuMatches, launchEnv, MEASURE_LOAD_MAX, outputName,
+  parseMeasureArgs, PLACE_ATTEMPTS, placeWindow, pollResult, routePath, shaderCacheOf, SHOTS, viewportProblem, watchPage, windowProblem, withTimeout, type EnterPair,
+  type MeasureArgs, type WindowBounds,
 } from '../tools/measureChrome';
 
 const IRIS = 'ANGLE (Intel, Mesa Intel(R) Iris(R) Xe Graphics (ADL GT2), OpenGL 4.6)';
@@ -91,15 +93,79 @@ describe('measureChrome: the bench route (SP4b spec §8.3, §8.7)', () => {
     expect(routePath(args({ route: 'bench', workers: 4, renderer: 'mesh', shot: 'rd8' }))).toBe('/?bench=medium&workers=4&renderer=mesh&shot=rd8');
   });
 
-  test('every route writes to assets/sp5a since SP5a (SP5a spec §6.2); SP4a\'s, SP4b\'s and SP4c\'s files stay where they are', () => {
-    expect(ASSETS).toBe('docs/superpowers/specs/assets/sp5a');
-    expect(ASSETS.endsWith('assets/sp5a')).toBe(true);
+  test('every route writes to assets/sp5b since SP5b (SP5b spec §6.2); SP4a\'s-SP5a\'s files stay where they are', () => {
+    expect(ASSETS).toBe('docs/superpowers/specs/assets/sp5b');
+    expect(ASSETS.endsWith('assets/sp5b')).toBe(true);
   });
 
   test('the bench summary line, read defensively', () => {
     expect(benchLine({ stream: { frames: { p95: 4.167, over33: 0 }, drawCalls: { max: 61 }, main: { p95: 2.1 }, gpuMB: 74.5, partialColumnFrames: 0 } }))
       .toBe('stream frame p95 4.167 ms, over 33 ms 0, draw calls max 61, main p95 2.1 ms, GPU MB 74.5, partial column frames 0');
     expect(benchLine(null)).toBe('stream frame p95 n/a, over 33 ms n/a, draw calls max n/a, main p95 n/a, GPU MB n/a, partial column frames n/a');
+  });
+});
+
+/** A load's record (`window.__wiEnterResult`): an unsaved load has no storage figures. */
+const loadOf = (revealMs: number, saved: boolean) => ({
+  revealMs, idbOpenMs: saved ? revealMs / 100 : null, loadMs: saved ? revealMs / 20 : null, decodeMs: saved ? revealMs / 40 : null,
+});
+
+describe('measureChrome: the enter route (SP5b spec §6.2)', () => {
+  test('`--route enter` parses; `--workers` and `--shot` refuse it', () => {
+    expect(parseMeasureArgs(['--route', 'enter', '--gpu', 'rtx']))
+      .toEqual({ route: 'enter', gpu: 'rtx', workers: null, skipBuild: false, renderer: null, probeOnly: false, shot: null });
+    expect(parseMeasureArgs(['--route', 'enter']).gpu).toBe('iris');
+    expect(() => parseMeasureArgs(['--route', 'enter', '--workers', '4'])).toThrow(/--workers 4 applies to --route flight or bench only/);
+    expect(() => parseMeasureArgs(['--route', 'enter', '--shot', 'fly96', '--renderer', 'batch'])).toThrow(/--shot applies to --route bench only/);
+    // The cell is the probe's renderer, as G1.enter reads it.
+    expect(() => parseMeasureArgs(['--route', 'enter', '--renderer', 'mesh'])).toThrow(/--renderer does not apply to --route enter/);
+    // A cold driver shader cache, as the flight and the bench.
+    expect(shaderCacheOf(args({ route: 'enter' }))).toBe('cold');
+    expect(routePath(args({ route: 'enter' }))).toBe('/?bench=enter');
+    expect(ENTER_END_PATH).toBe('/?bench=enter&phase=end');
+  });
+
+  test('`outputName({ route: \'enter\', gpu: \'iris\' })` is `enter-iris-chrome.json` in `assets/sp5b/`', () => {
+    expect(outputName(args({ route: 'enter', gpu: 'iris' }))).toBe('enter-iris-chrome.json');
+    expect(outputName(args({ route: 'enter', gpu: 'rtx' }))).toBe('enter-rtx-chrome.json');
+    expect(ASSETS).toBe('docs/superpowers/specs/assets/sp5b');
+  });
+
+  test('`enterRatio` of pairs whose first is 10× slower is the median of the five kept (the first discarded)', () => {
+    const unsaved = [1000, 100, 104, 98, 102, 120];
+    const saved = [1100, 105, 112, 101, 108, 140];
+    const firstSlow = [10_000, ...unsaved.slice(1)];
+    const pairs: EnterPair[] = firstSlow.map((u, i) => ({ unsaved: loadOf(u, false), saved: loadOf(i === 0 ? 10 * saved[0]! : saved[i]!, true) }));
+    const s = enterSummary(pairs, { gpu: 'iris', renderer: IRIS, shaderCache: 'cold', newWorldRevealMs: null });
+    // Kept: unsaved 100, 104, 98, 102, 120 → 102; saved 105, 112, 101, 108, 140 → 108.
+    expect(s.kept).toBe(5);
+    expect(s.medianUnsavedMs).toBe(102);
+    expect(s.medianSavedMs).toBe(108);
+    expect(s.enterRatio).toBeCloseTo(108 / 102, 12);
+    expect(s.pairs).toEqual(pairs);
+    // The (b) loads' storage figures: medians over the kept pairs.
+    expect([s.idbOpenMs, s.loadMs, s.decodeMs]).toEqual([1.08, 108 / 20, 108 / 40]);
+    expect({ gpu: s.gpu, renderer: s.renderer, shaderCache: s.shaderCache, newWorldRevealMs: s.newWorldRevealMs }).toEqual({ gpu: 'iris', renderer: IRIS, shaderCache: 'cold', newWorldRevealMs: null });
+    // The slow first pair changes nothing: the same kept pairs after a fast first pair give the same figures.
+    const fast = enterSummary([{ unsaved: loadOf(1, false), saved: loadOf(1, true) }, ...pairs.slice(1)], { gpu: 'iris', renderer: IRIS, shaderCache: 'cold', newWorldRevealMs: null });
+    expect([fast.enterRatio, fast.medianUnsavedMs, fast.medianSavedMs]).toEqual([s.enterRatio, s.medianUnsavedMs, s.medianSavedMs]);
+    // The one-line summary (ruling P9), `n/a` where a figure is missing.
+    expect(enterLine(s)).toBe('enterRatio 1.059, median (a) 102.0 ms, median (b) 108.0 ms, (b) idbOpen 1.1 ms, load 5.4 ms, decode 2.7 ms');
+    expect(enterLine(enterSummary([], { gpu: 'iris', renderer: null, shaderCache: 'cold', newWorldRevealMs: null })))
+      .toBe('enterRatio n/a, median (a) n/a, median (b) n/a, (b) idbOpen n/a, load n/a, decode n/a');
+  });
+
+  test('the (a) and (b) URLs carry the same pose', () => {
+    const setup = { worldId: 'e1d0c9a8-0000-4000-8000-000000000001', pose: { x: -123, y: 120, z: 456, yaw: 45, pitch: -20 } };
+    const p = enterPaths(setup);
+    expect(p.unsaved).toBe('/?at=-123,456&y=120&yaw=45&pitch=-20&rd=12&enterBench=1');
+    expect(p.saved).toBe(`/?world=${setup.worldId}&rd=12&enterBench=1&db=wi10-bench`);
+    // (a) opens unsaved at the pose; (b) opens the saved world, whose state holds the same pose (bench.test.ts).
+    const a = parseWorldQuery(new URLSearchParams(p.unsaved.slice(1)));
+    expect({ x: a.at?.x, z: a.at?.z, y: a.y, yaw: a.yaw, pitch: a.pitch }).toEqual(setup.pose);
+    expect([a.rd, a.enterBench, a.world, a.db]).toEqual([12, true, null, null]);
+    const b = parseWorldQuery(new URLSearchParams(p.saved.slice(1)));
+    expect([b.world, b.rd, b.enterBench, b.db, b.at, b.y, b.yaw, b.pitch]).toEqual([setup.worldId, 12, true, 'wi10-bench', null, null, null, null]);
   });
 });
 

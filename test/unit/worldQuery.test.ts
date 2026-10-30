@@ -6,12 +6,12 @@ const parse = (search: string) => parseWorldQuery(new URLSearchParams(search));
 describe('parseWorldQuery (SP4a spec §8.1; rulings P42, P48)', () => {
   test('?at=12,-40&y=90&yaw=45&pitch=-20&rd=8&workers=4&renderer=mesh parses fully', () => {
     expect(parse('?at=12,-40&y=90&yaw=45&pitch=-20&rd=8&workers=4&renderer=mesh')).toEqual({
-      at: { x: 12, z: -40 }, y: 90, yaw: 45, pitch: -20, rd: 8, workers: 4, renderer: 'mesh', shot: false, time: null, world: null,
+      at: { x: 12, z: -40 }, y: 90, yaw: 45, pitch: -20, rd: 8, workers: 4, renderer: 'mesh', shot: false, time: null, world: null, enterBench: false, db: null,
     });
   });
 
   test('an empty query is all null, shot false', () => {
-    expect(parse('')).toEqual({ at: null, y: null, yaw: null, pitch: null, rd: null, workers: null, renderer: null, shot: false, time: null, world: null });
+    expect(parse('')).toEqual({ at: null, y: null, yaw: null, pitch: null, rd: null, workers: null, renderer: null, shot: false, time: null, world: null, enterBench: false, db: null });
   });
 
   test('?at=900000,0 clamps x to 500,000; ?rd=30 → 16; ?workers=1 → 2', () => {
@@ -64,5 +64,13 @@ describe('parseWorldQuery (SP4a spec §8.1; rulings P42, P48)', () => {
     expect(parse('?world=abc').world).toBe('abc');
     expect(parse('').world).toBeNull();
     expect(parse('?at=1,2').world).toBeNull();
+  });
+
+  test('`db` without `enterBench=1` is ignored (SP5b spec §6.2: the enter route\'s database)', () => {
+    expect(parse('?world=w&db=wi10-bench')).toMatchObject({ world: 'w', enterBench: false, db: null });
+    expect(parse('?world=w&enterBench=true&db=wi10-bench')).toMatchObject({ enterBench: false, db: null });
+    expect(parse('?world=w&enterBench=1&db=wi10-bench')).toMatchObject({ world: 'w', enterBench: true, db: 'wi10-bench' });
+    expect(parse('?at=1,2&enterBench=1')).toMatchObject({ enterBench: true, db: null });
+    expect(parse('?enterBench=1&db=').db).toBeNull();
   });
 });

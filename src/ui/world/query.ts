@@ -2,7 +2,8 @@
  * The 3D page's query (SP4a spec §8.1; rulings P42, P48): `?at=x,z` (integers clamped to ±500,000, master §2.1),
  * `y` (clamped to −64 … 400), `yaw` and `pitch` in degrees (copied unchanged), `rd` (an integer clamped to 4 … 16),
  * `workers` (an integer clamped to 2 … 6), `renderer=batch|mesh` (§6.2), and the capture mode's `shot=1` and `time`
- * (hours in [0, 24)), and a saved world's `world=<id>` (SP5b spec §3.4, D4). A malformed value is null; it never throws.
+ * (hours in [0, 24)), a saved world's `world=<id>` (SP5b spec §3.4, D4), and the enter bench's `enterBench=1` with its
+ * `db=<name>` (SP5b spec §6.2), honoured only together. A malformed value is null; it never throws.
  * Which keys skip the start screen is `startModeOf`'s (`startScreen.ts`).
  */
 import { RD_MAX, RD_MIN } from '../../engine/renderDistance';
@@ -23,6 +24,10 @@ export interface WorldQuery {
   readonly time: number | null;
   /** The saved world's id (SP5b spec §3.4): the page opens its records instead of the `#` hash; null when absent or empty. */
   readonly world: string | null;
+  /** The enter bench's loads (SP5b spec §6.2): true only for `enterBench=1`; the page records `window.__wiEnterResult`. */
+  readonly enterBench: boolean;
+  /** The saved worlds' database in place of `wi10` (the enter bench's `wi10-bench`); null unless `enterBench=1`. */
+  readonly db: string | null;
 }
 
 /** The world's horizontal window (master §2.1). */
@@ -73,6 +78,8 @@ export function parseWorldQuery(q: URLSearchParams): WorldQuery {
   const renderer = q.get('renderer');
   const time = decimal(q.get('time'));
   const world = q.get('world');
+  const enterBench = q.get('enterBench') === '1';
+  const db = q.get('db');
   return {
     at: atOf(q.get('at')),
     y: y === null ? null : clamp(y, Y_MIN, Y_MAX),
@@ -84,5 +91,7 @@ export function parseWorldQuery(q: URLSearchParams): WorldQuery {
     shot: q.get('shot') === '1',
     time: time !== null && time >= 0 && time < 24 ? time : null,
     world: world === null || world === '' ? null : world,
+    enterBench,
+    db: enterBench && db !== null && db !== '' ? db : null,
   };
 }

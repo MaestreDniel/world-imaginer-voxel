@@ -56,6 +56,7 @@ declare global {
 export function panoQuery(p: PanoramaSpec): WorldQuery {
   return {
     at: { x: p.x, z: p.z }, y: null, yaw: p.yawDeg, pitch: PANO_PITCH, rd: PANO_RD, workers: null, renderer: null, shot: true, time: p.time, world: null,
+    enterBench: false, db: null,
   };
 }
 

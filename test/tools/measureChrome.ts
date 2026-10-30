@@ -1,13 +1,14 @@
 /**
  * The agents' Chrome cells of the GPU measurements (SP4a spec §1.2, §9.5; SP4b spec §8.3, §8.4, §8.7; SP4c spec §8.4,
- * §8.7; not in CI): drives the spike page (`?spike=batch`), the flight route (`?flight=sp4a`) or the streaming bench
- * (`?bench=medium`, with SP4c's live legs and SP5a's edit leg) in our own headful Chrome on a hardware GPU, reads the
- * page's JSON over CDP and writes it into `docs/superpowers/specs/assets/sp5a/` (every route since SP5a; SP4a's, SP4b's
- * and SP4c's files stay in `assets/sp4a/`, `assets/sp4b/` and `assets/sp4c/`). With `--shot` the bench freezes at a
- * review shot's moment and the tool saves a 1920 × 1080 PNG there instead (§8.7, amended while planning: the shots need
- * the GPU). A page cannot write files, which is why this tool exists; the Firefox cells are the user's, by hand.
+ * §8.7; SP5b spec §6.2; not in CI): drives the spike page (`?spike=batch`), the flight route (`?flight=sp4a`), the
+ * streaming bench (`?bench=medium`, with SP4c's live legs, SP5a's edit leg and SP5b's save leg) or the enter bench
+ * (`?bench=enter`, `runEnter`) in our own headful Chrome on a hardware GPU, reads the page's JSON over CDP and writes it
+ * into `docs/superpowers/specs/assets/sp5b/` (every route since SP5b; SP4a's-SP5a's files stay in `assets/sp4a/`,
+ * `assets/sp4b/`, `assets/sp4c/` and `assets/sp5a/`). With `--shot` the bench freezes at a review shot's moment and the
+ * tool saves a 1920 × 1080 PNG there instead (§8.7, amended while planning: the shots need the GPU). A page cannot write
+ * files, which is why this tool exists; the Firefox cells are the user's, by hand (the enter bench's `&auto=1` form).
  *
- * Run it with `npm run measure:chrome -- --route spike|flight|bench [--gpu iris|rtx] [--workers 4]
+ * Run it with `npm run measure:chrome -- --route spike|flight|bench|enter [--gpu iris|rtx] [--workers 4]
  * [--renderer batch|mesh] [--shot <name>] [--skip-build] [--probe-only]`. In order:
  * 1. it refuses without DISPLAY or WAYLAND_DISPLAY: headful only, since headless rAF is not tied to the display;
  * 2. it refuses when the 1-minute load average is above MEASURE_LOAD_MAX, printing `uptime` (a quiet machine);
@@ -22,6 +23,8 @@
  *    refuses unless the viewport is exactly 1920 × 1080 @ 1 (ruling P7); --probe-only stops here with exit 0;
  * 6. it records the page's console errors (ruling P8), navigates, and polls the route's result every second (15 min);
  *    every CDP call is bounded, and the poll fails fast when Chrome exits or the tab crashes (`pollResult`, `watchPage`);
+ *    the enter route instead loads its setup page, six (a)/(b) pairs and its end page, each a fresh page load polled
+ *    for its own result (`runEnter`), and summarises them (`enterSummary`);
  * 7. it adds who measured, the load averages, the Chrome version, the window (warning when it left eDP-1), the viewport
  *    and the console errors, writes the JSON pretty-printed and prints its path and summary (ruling P9); for a shot it
  *    polls `__wiBench.shotReady` instead, refuses unless the canvas's `data-renderer` is the `--renderer`, and writes
@@ -60,10 +63,10 @@ const WINDOW_READS = 8;
 /** The pause between two steps of the sequence, so the window manager applies each one before the next. */
 const WINDOW_STEP_MS = 300;
 /**
- * Where every route writes (SP5a spec §6.2: SP5a's assets; SP4a's, SP4b's and SP4c's files stay in `assets/sp4a/`,
- * `assets/sp4b/` and `assets/sp4c/`).
+ * Where every route writes (SP5b spec §6.2: SP5b's assets; SP4a's-SP5a's files stay in `assets/sp4a/`, `assets/sp4b/`,
+ * `assets/sp4c/` and `assets/sp5a/`).
  */
-export const ASSETS = 'docs/superpowers/specs/assets/sp5a';
+export const ASSETS = 'docs/superpowers/specs/assets/sp5b';
 
 /**
  * The bench's review shots (SP4b spec §8.7; SP4c spec §8.7's `apply-before`, `apply-mid`, `apply-after`, `teleport`;
@@ -77,7 +80,7 @@ export const SHOTS = [
 export type Shot = (typeof SHOTS)[number];
 
 export interface MeasureArgs {
-  readonly route: 'spike' | 'flight' | 'bench';
+  readonly route: 'spike' | 'flight' | 'bench' | 'enter';
   readonly gpu: 'iris' | 'rtx';
   readonly workers: 4 | null;
   readonly skipBuild: boolean;
@@ -90,7 +93,8 @@ export interface MeasureArgs {
 /**
  * The command line. `--route` is required; `--gpu` defaults to the gate machine's Iris Xe (spec §9.5 writes it as
  * optional). `--workers` takes only 4 and only on the flight and bench routes, the cells with a `-w4` file name.
- * `--shot` belongs to the bench and needs `--renderer`, whose name the shot's file carries.
+ * `--shot` belongs to the bench and needs `--renderer`, whose name the shot's file carries. The enter route measures
+ * the probe's renderer, as `G1.enter` reads it, so it takes no `--renderer`.
  */
 export function parseMeasureArgs(argv: readonly string[]): MeasureArgs {
   let route: MeasureArgs['route'] | null = null;
@@ -109,7 +113,7 @@ export function parseMeasureArgs(argv: readonly string[]): MeasureArgs {
     };
     if (a === '--route') {
       const v = value();
-      if (v !== 'spike' && v !== 'flight' && v !== 'bench') throw new Error(`--route must be spike, flight or bench, not ${v}`);
+      if (v !== 'spike' && v !== 'flight' && v !== 'bench' && v !== 'enter') throw new Error(`--route must be spike, flight, bench or enter, not ${v}`);
       route = v;
     } else if (a === '--gpu') {
       const v = value();
@@ -132,18 +136,19 @@ export function parseMeasureArgs(argv: readonly string[]): MeasureArgs {
     else if (a === '--probe-only') probeOnly = true;
     else throw new Error(`unknown argument ${a}`);
   }
-  if (route === null) throw new Error('--route spike|flight|bench is required');
-  if (workers !== null && route === 'spike') throw new Error('--workers 4 applies to --route flight or bench only');
+  if (route === null) throw new Error('--route spike|flight|bench|enter is required');
+  if (workers !== null && (route === 'spike' || route === 'enter')) throw new Error('--workers 4 applies to --route flight or bench only');
   if (shot !== null && route !== 'bench') throw new Error('--shot applies to --route bench only');
   if (shot !== null && renderer === null) throw new Error('--shot needs --renderer batch|mesh (the shot\'s file names the renderer)');
+  if (renderer !== null && route === 'enter') throw new Error('--renderer does not apply to --route enter (the cell is the probe\'s renderer)');
   return { route, gpu, workers, skipBuild, renderer, probeOnly, shot };
 }
 
 /**
- * The output's file name (SP4a spec §1.2, §9.5; SP4b spec §8.3, §8.7): `spike-chrome-<gpu>.json`,
- * `flight-<gpu>-chrome.json`, `bench-<gpu>-chrome.json`, `-w4` for a 4-worker run. A forced `--renderer` adds
- * `-<renderer>`, so it never overwrites the cell the probe's renderer selected (G1 reads `flight-iris-chrome.json` and
- * `bench-iris-chrome.json`). A shot is `review-<shot>-<renderer>.png`.
+ * The output's file name (SP4a spec §1.2, §9.5; SP4b spec §8.3, §8.7; SP5b spec §6.2): `spike-chrome-<gpu>.json`,
+ * `flight-<gpu>-chrome.json`, `bench-<gpu>-chrome.json`, `enter-<gpu>-chrome.json`, `-w4` for a 4-worker run. A forced
+ * `--renderer` adds `-<renderer>`, so it never overwrites the cell the probe's renderer selected (G1 reads
+ * `flight-iris-chrome.json` and `bench-iris-chrome.json`). A shot is `review-<shot>-<renderer>.png`.
  */
 export function outputName(a: MeasureArgs): string {
   if (a.shot !== null) return `review-${a.shot}-${a.renderer ?? 'auto'}.png`;
@@ -151,9 +156,12 @@ export function outputName(a: MeasureArgs): string {
   return `${base}${a.workers === null ? '' : `-w${a.workers}`}${a.renderer === null ? '' : `-${a.renderer}`}.json`;
 }
 
-const ROUTE_QUERY: Readonly<Record<MeasureArgs['route'], string>> = { spike: 'spike=batch', flight: 'flight=sp4a', bench: 'bench=medium' };
+const ROUTE_QUERY: Readonly<Record<MeasureArgs['route'], string>> = { spike: 'spike=batch', flight: 'flight=sp4a', bench: 'bench=medium', enter: 'bench=enter' };
 
-/** The page path: `/?spike=batch`, `/?flight=sp4a` or `/?bench=medium`, then `&workers=4`, `&renderer=` and `&shot=` when given. */
+/**
+ * The page path: `/?spike=batch`, `/?flight=sp4a`, `/?bench=medium` or `/?bench=enter` (the enter bench's setup page),
+ * then `&workers=4`, `&renderer=` and `&shot=` when given.
+ */
 export function routePath(a: MeasureArgs): string {
   const q = [ROUTE_QUERY[a.route]];
   if (a.workers !== null) q.push(`workers=${a.workers}`);
@@ -346,6 +354,113 @@ export function benchLine(r: unknown): string {
     + `main p95 ${ms(['main', 'p95'])}, GPU MB ${n(['gpuMB'])}, partial column frames ${n(['partialColumnFrames'])}`;
 }
 
+// ---------------------------------------------------------------- the enter route (SP5b spec §6.2, D28)
+
+/**
+ * The enter bench's figures and paths, mirrored from `src/ui/world/bench.ts` (`BENCH_DB`, `BENCH_RD`, `ENTER_PAIRS`,
+ * `enterPaths`, `summarizeEnter`): tools cannot import `src/`, so `enterSummary` is a pinned mirror (ruling P19, after
+ * `uiSmoke.ts`'s precedent), and `bench.test.ts` feeds both the same pairs and expects equal JSON and equal paths.
+ */
+const ENTER_DB = 'wi10-bench';
+const ENTER_RD = 12;
+/** The alternations, each a fresh page load of (a) and then (b); the first pair (the cold cache) is discarded. */
+export const ENTER_PAIRS = 6;
+/** The enter bench's end page: `wi10-bench` deleted. */
+export const ENTER_END_PATH = '/?bench=enter&phase=end';
+/** How long one page of the enter route (the setup, a world load, the end) may take to publish its result. */
+const ENTER_PAGE_TIMEOUT_MS = 5 * 60 * 1000;
+
+/** The setup page's `window.__wiEnter`: the saved world and the pose its state holds. */
+export interface EnterSetup {
+  readonly worldId: string;
+  readonly pose: { readonly x: number; readonly y: number; readonly z: number; readonly yaw: number; readonly pitch: number };
+}
+
+/** A world load's `window.__wiEnterResult`, ms (the last three null on an unsaved load). */
+export interface EnterResult {
+  readonly revealMs: number | null;
+  readonly idbOpenMs: number | null;
+  readonly loadMs: number | null;
+  readonly decodeMs: number | null;
+}
+
+/** One alternation: (a) the unsaved load, then (b) the saved one. */
+export interface EnterPair {
+  readonly unsaved: EnterResult;
+  readonly saved: EnterResult;
+}
+
+/** The enter cell's JSON before the tool's own fields (`enter-<gpu>-chrome.json`). */
+export interface EnterSummary {
+  readonly route: 'bench=enter';
+  readonly pairs: EnterPair[];
+  readonly kept: number;
+  readonly enterRatio: number | null;
+  readonly medianUnsavedMs: number | null;
+  readonly medianSavedMs: number | null;
+  readonly idbOpenMs: number | null;
+  readonly loadMs: number | null;
+  readonly decodeMs: number | null;
+  readonly newWorldRevealMs: number | null;
+  readonly shaderCache: string;
+  readonly gpu: string;
+  readonly renderer: string | null;
+}
+
+/** (a) the same world opened unsaved at the saved pose and (b) the saved world in `wi10-bench`, both at RD 12 (§6.2). */
+export function enterPaths(s: EnterSetup): { unsaved: string; saved: string } {
+  const p = s.pose;
+  return {
+    unsaved: `/?at=${p.x},${p.z}&y=${p.y}&yaw=${p.yaw}&pitch=${p.pitch}&rd=${ENTER_RD}&enterBench=1`,
+    saved: `/?world=${encodeURIComponent(s.worldId)}&rd=${ENTER_RD}&enterBench=1&db=${ENTER_DB}`,
+  };
+}
+
+/** The median of `values`, or null for none (an even count: the mean of the middle two). */
+function medianOf(values: readonly number[]): number | null {
+  if (values.length === 0) return null;
+  const v = [...values].sort((a, b) => a - b);
+  const m = v.length >> 1;
+  return v.length % 2 === 1 ? v[m]! : (v[m - 1]! + v[m]!) / 2;
+}
+
+const finiteOf = (values: readonly (number | null)[]): number[] => values.filter((v): v is number => v !== null && Number.isFinite(v));
+
+/**
+ * The enter cell (§6.2): the medians over the pairs after the first (the cold cache), `enterRatio` = median (b) /
+ * median (a) (`G1.enter`), and the kept (b) loads' medians of `idbOpenMs`, `loadMs` and `decodeMs` (recorded).
+ */
+export function enterSummary(
+  pairs: readonly EnterPair[],
+  o: { readonly gpu: string; readonly renderer: string | null; readonly shaderCache: string; readonly newWorldRevealMs: number | null },
+): EnterSummary {
+  const kept = pairs.slice(1);
+  const medianUnsavedMs = medianOf(finiteOf(kept.map((p) => p.unsaved.revealMs)));
+  const medianSavedMs = medianOf(finiteOf(kept.map((p) => p.saved.revealMs)));
+  return {
+    route: 'bench=enter',
+    pairs: pairs.map((p) => ({ unsaved: { ...p.unsaved }, saved: { ...p.saved } })),
+    kept: kept.length,
+    enterRatio: medianUnsavedMs === null || medianSavedMs === null || medianUnsavedMs <= 0 ? null : medianSavedMs / medianUnsavedMs,
+    medianUnsavedMs,
+    medianSavedMs,
+    idbOpenMs: medianOf(finiteOf(kept.map((p) => p.saved.idbOpenMs))),
+    loadMs: medianOf(finiteOf(kept.map((p) => p.saved.loadMs))),
+    decodeMs: medianOf(finiteOf(kept.map((p) => p.saved.decodeMs))),
+    newWorldRevealMs: o.newWorldRevealMs,
+    shaderCache: o.shaderCache,
+    gpu: o.gpu,
+    renderer: o.renderer,
+  };
+}
+
+/** The enter cell's one-line summary (ruling P9). */
+export function enterLine(r: EnterSummary): string {
+  const ms = (v: number | null) => (v === null ? 'n/a' : `${v.toFixed(1)} ms`);
+  return `enterRatio ${r.enterRatio === null ? 'n/a' : r.enterRatio.toFixed(3)}, median (a) ${ms(r.medianUnsavedMs)}, median (b) ${ms(r.medianSavedMs)}, `
+    + `(b) idbOpen ${ms(r.idbOpenMs)}, load ${ms(r.loadMs)}, decode ${ms(r.decodeMs)}`;
+}
+
 // ---------------------------------------------------------------- the page side
 
 /** The unmasked WebGL renderer string of a fresh webgl2 context (spec §9.5's GPU check). */
@@ -356,8 +471,8 @@ const PROBE_RENDERER = `(() => {
   return String(gl.getParameter(ext === null ? gl.RENDERER : ext.UNMASKED_RENDERER_WEBGL));
 })()`;
 const READ_VIEWPORT = '({ innerWidth: window.innerWidth, innerHeight: window.innerHeight, devicePixelRatio: window.devicePixelRatio })';
-const RESULT_GLOBAL: Readonly<Record<MeasureArgs['route'], string>> = { spike: '__wiSpike', flight: '__wiFlight', bench: '__wiBench' };
-const readResult = (a: MeasureArgs) => `(() => {
+const RESULT_GLOBAL: Readonly<Record<Exclude<MeasureArgs['route'], 'enter'>, string>> = { spike: '__wiSpike', flight: '__wiFlight', bench: '__wiBench' };
+const readResult = (a: MeasureArgs & { route: Exclude<MeasureArgs['route'], 'enter'> }) => `(() => {
   const r = window.${RESULT_GLOBAL[a.route]}?.result;
   return r === undefined || r === null ? null : JSON.stringify(r);
 })()`;
@@ -367,6 +482,12 @@ const READ_SHOT = `(() => {
   if (b === undefined) return null;
   if (b.result !== null && b.result !== undefined && 'error' in b.result) return JSON.stringify({ error: b.result.error });
   return b.shotReady === true ? 'ready' : null;
+})()`;
+
+/** A page global as JSON, or null while the page has not set it. */
+const READ_GLOBAL = (name: string) => `(() => {
+  const r = window.${name};
+  return r === undefined || r === null ? null : JSON.stringify(r);
 })()`;
 
 /** The world canvas's `data-renderer` values (one canvas expected), as the UI smoke reads them. */
@@ -479,6 +600,45 @@ export async function pollResult(o: ResultPoll): Promise<string> {
       lastError = e instanceof Error ? e.message : String(e);
     }
   }
+}
+
+/**
+ * The enter route's pages (SP5b spec §6.2), each a fresh page load polled for its own global: the setup page
+ * (`__wiEnter`: the saved world and its pose), six alternations of (a) and (b) (`__wiEnterResult`), then the end page
+ * (`wi10-bench` deleted). The new world from the start screen is Task 20's leg: until the worlds menu exists it is
+ * skipped, `newWorldRevealMs` null. A page's `{ error }` stops the run.
+ */
+async function runEnter(o: { readonly cdp: Cdp; readonly base: string; readonly setupPath: string; readonly watch: PageWatch }): Promise<{ pairs: EnterPair[]; newWorldRevealMs: number | null }> {
+  const page = async <T>(path: string, global: '__wiEnter' | '__wiEnterResult'): Promise<T> => {
+    // The previous document's value never answers for the next one.
+    await evaluate(o.cdp, `delete window.${global}; true`);
+    const url = new URL(path, o.base).href;
+    console.log(`navigating to ${url}`);
+    await call(o.cdp, 'Page.navigate', { url });
+    const text = await pollResult({
+      read: () => Promise.race([evaluate<string | null>(o.cdp, READ_GLOBAL(global)), o.watch.lost]),
+      dead: o.watch.dead,
+      pollMs: POLL_MS,
+      callTimeoutMs: CDP_CALL_TIMEOUT_MS,
+      timeoutMs: ENTER_PAGE_TIMEOUT_MS,
+    });
+    const v = JSON.parse(text) as Record<string, unknown>;
+    if ('error' in v) throw new Error(`${path}: ${String(v['error'])}`);
+    return v as T;
+  };
+  const setup = await page<EnterSetup>(o.setupPath, '__wiEnter');
+  console.log(`saved world ${setup.worldId} at ${setup.pose.x}, ${setup.pose.y}, ${setup.pose.z} (yaw ${setup.pose.yaw}, pitch ${setup.pose.pitch})`);
+  const paths = enterPaths(setup);
+  const pairs: EnterPair[] = [];
+  for (let i = 0; i < ENTER_PAIRS; i++) {
+    const unsaved = await page<EnterResult>(paths.unsaved, '__wiEnterResult');
+    const saved = await page<EnterResult>(paths.saved, '__wiEnterResult');
+    pairs.push({ unsaved, saved });
+    console.log(`pair ${i + 1}/${ENTER_PAIRS}: (a) ${unsaved.revealMs} ms, (b) ${saved.revealMs} ms${i === 0 ? ' (discarded: the cold cache)' : ''}`);
+  }
+  console.log('the new world from the start screen: skipped until the worlds menu exists (Task 20); newWorldRevealMs null');
+  await page<{ ended: true }>(ENTER_END_PATH, '__wiEnter');
+  return { pairs, newWorldRevealMs: null };
 }
 
 // ---------------------------------------------------------------- the machine
@@ -600,6 +760,30 @@ async function main(argv: readonly string[]): Promise<number> {
     }
     if (a.probeOnly) return 0;
 
+    if (a.route === 'enter') {
+      // A world page's leave guard asks only after a user gesture, which CDP never gives; any dialog is accepted anyway.
+      const pageCdp = cdp;
+      pageCdp.on('Page.javascriptDialogOpening', () => { void call(pageCdp, 'Page.handleJavaScriptDialog', { accept: true }).catch(() => undefined); });
+      await call(cdp, 'Page.enable');
+      const run = await runEnter({ cdp, base: server.url, setupPath: routePath(a), watch }).catch((e: unknown) => {
+        throw new Error(`${e instanceof Error ? e.message : String(e)}${consoleErrors.length === 0 ? '' : `; console errors:\n${consoleErrors.join('\n')}`}`);
+      });
+      const loadAvg1After = loadavg()[0]!;
+      const viewport = await evaluate<Viewport>(cdp, READ_VIEWPORT);
+      const windowBounds = await win.read();
+      const result = {
+        ...enterSummary(run.pairs, { gpu: a.gpu, renderer, shaderCache, newWorldRevealMs: run.newWorldRevealMs }),
+        measuredBy: 'measureChrome', loadAvg1Before, loadAvg1After, chromeVersion, window: windowBounds, viewport, consoleErrors: [...consoleErrors],
+      };
+      const file = join(ROOT, ASSETS, outputName(a));
+      mkdirSync(join(ROOT, ASSETS), { recursive: true });
+      writeFileSync(file, `${JSON.stringify(result, null, 2)}\n`);
+      console.log(`wrote ${file}`);
+      console.log(enterLine(result));
+      for (const w of endOfRunWarnings({ loadAvg1After, window: windowBounds, viewport, consoleErrors }, 'cell')) console.warn(`WARNING: ${w}`);
+      return 0;
+    }
+    const route = a.route;
     const url = new URL(routePath(a), server.url).href;
     console.log(`navigating to ${url}`);
     await call(cdp, 'Page.navigate', { url });
@@ -632,7 +816,7 @@ async function main(argv: readonly string[]): Promise<number> {
       return 0;
     }
     const text = await pollResult({
-      read: () => Promise.race([evaluate<string | null>(page, readResult(a)), watch.lost]),
+      read: () => Promise.race([evaluate<string | null>(page, readResult({ ...a, route })), watch.lost]),
       dead: watch.dead,
       pollMs: POLL_MS,
       callTimeoutMs: CDP_CALL_TIMEOUT_MS,

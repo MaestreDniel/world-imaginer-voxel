@@ -31,6 +31,15 @@
  * build a fixed scene at its hover point through the page's edit path (`REVIEW_SITE`, `REVIEW_POOL`, `REVIEW_HOUSE`),
  * fix the clock (and walk) and hold the scene's pose; a scene the edit path refuses publishes `{ route, error }`.
  *
+ * The enter bench `?bench=enter` (SP5b spec §6.2, D28; `mountEnterBench`) measures entering a saved world against the
+ * same world opened unsaved at the same pose. Its setup page deletes `BENCH_DB`, writes a world (seed 42, the default
+ * profile) with a heavy save (`enterSaveDump`) and its state at a fixed pose beside the spawn, and publishes
+ * `window.__wiEnter = { worldId, pose }`; `&phase=end` deletes `BENCH_DB`. Between them `measureChrome.ts --route enter`
+ * loads, six times each and alternately, (a) `?at=…&enterBench=1` and (b) `?world=<id>&enterBench=1&db=wi10-bench`
+ * (`enterPaths`), each page publishing `window.__wiEnterResult` at its reveal (`worldPage.ts`), and writes
+ * `summarizeEnter`'s JSON. With `&auto=1` (a browser with no CDP driver: the user's Firefox) the pages drive themselves
+ * through `sessionStorage` (`ENTER_AUTO_KEY`): setup → (a), (b) × 6 → end → a result page that offers the JSON.
+ *
  * The world page imports this module's values; this module loads the page with a dynamic `import()`, so the two do not
  * import each other statically.
  */
@@ -39,22 +48,32 @@ import { medianInterval, percentile, snapFrameTime } from '../../render/frameTim
 import type { GpuEstimate, WorldRenderer } from '../../render/renderer';
 import type { RevealProbe, SectionRenderer, SectionRendererCounts, SectionRendererKind, StructuralKind } from '../../render/sectionRenderer';
 import { el } from '../common/dom';
+import { downloadText } from '../common/files';
 import { MIN_Y } from '../../core/constants';
-import { MAX_Y } from '../../core/coords';
+import { chunkCoord, colKey, MAX_Y, SECTION_VOXELS, SECTIONS } from '../../core/coords';
+import { parseHex64 } from '../../core/hash';
+import { splitmix32 } from '../../core/rng';
+import { encodeColumnDiff } from '../../persist/diffCodec';
+import { deleteIdb, openIdbKV } from '../../persist/idb';
+import { createSaves, DEFAULT_SPEED, newState, type WorldDump, type WorldRecord } from '../../persist/saves';
 import { lookVector } from '../../player/fly';
 import type { Edit } from '../../workers/protocol';
 import {
-  BRICKS, COBBLESTONE, GLASS, ICE, OAK_PLANKS, REGISTRY, RED_WOOL, STONE, TORCH, WHITE_WOOL,
+  AIR, BRICKS, COBBLESTONE, GLASS, ICE, OAK_PLANKS, REGISTRY, RED_WOOL, STONE, TORCH, WHITE_WOOL,
 } from '../../world/blocks';
 import { LAVA_SOURCE, WATER_SOURCE } from '../../world/blocks/fluid';
-import { DEFAULT_MAP_STATE, encodeMapState } from '../map/mapState';
+import { DEFAULT_MAP_STATE, encodeMapState, openMapSession } from '../map/mapState';
+import { cryptoSeed } from '../seedBox';
 import type { EditLatencySamples } from './editLatency';
 import type { EditOutcome } from './editPath';
 import { displayInterval } from './frameStep';
 import { parseWorldQuery, type WorldQuery } from './query';
+import { STATE_BOUNDS } from './stateBounds';
 
 /** The route's world and camera (spec §8.3). */
 export const BENCH_SEED = '42';
+/** The benches' database (SP5b spec §6.2): L11's saved world and the enter bench's live here, never in `wi10`. */
+export const BENCH_DB = 'wi10-bench';
 export const BENCH_PROFILE = 'default';
 export const BENCH_RD = 12;
 export const BENCH_Y = 150;
@@ -1963,13 +1982,17 @@ declare global {
      * true once a `&shot=` frame is on screen.
      */
     __wiBench?: { result: BenchResult | BenchError | null; shotReady?: boolean };
+    /** The enter bench's setup (`{ worldId, pose }`) or end (`{ ended: true }`) page once done, or `{ error }`. */
+    __wiEnter?: EnterSetup | { readonly ended: true } | { readonly error: string };
+    /** An `?enterBench=1` world load's figures at its reveal (`worldPage.ts`), or `{ error }` when it did not reveal. */
+    __wiEnterResult?: EnterResult | { readonly error: string };
   }
 }
 
 /** The route's query: the given `workers` and `renderer`, RD 12, no position (the spawn), no capture mode. */
 export function benchQuery(query: URLSearchParams): WorldQuery {
   const q = parseWorldQuery(query);
-  return { at: null, y: null, yaw: null, pitch: null, rd: BENCH_RD, workers: q.workers, renderer: q.renderer, shot: false, time: null, world: null };
+  return { at: null, y: null, yaw: null, pitch: null, rd: BENCH_RD, workers: q.workers, renderer: q.renderer, shot: false, time: null, world: null, enterBench: false, db: null };
 }
 
 /** The route's `#` hash: seed 42, the default profile, no patch. */
@@ -2040,4 +2063,384 @@ export async function mountBenchRoute(app: HTMLElement, query: URLSearchParams):
   panel?.say(`running the ${BENCH_SECONDS} s script, the live legs and the edit leg (up to ${liveS} s more) after the reveal (keep this tab in front)…`);
   const page = await mountWorldPage(app, benchQuery(query), benchHash(), { hud: false, overlay: false, bench: driver });
   if (page.state !== 'revealed' && !published) publish.result({ route: 'bench=medium', error: `the world did not load (page ${page.state})` });
+}
+
+// ---------------------------------------------------------------- the enter bench (SP5b spec §6.2, D28)
+
+/** The saved pose beside the spawn (plan): the eye at y 120, yaw 45, pitch −20, flying at the default speed. */
+export const ENTER_POSE = { y: 120, yaw: 45, pitch: -20 } as const;
+/** The heavy save's disc: every column within RD 12 + 3 of the pose's column. */
+export const ENTER_DISC_RD = BENCH_RD + 3;
+/** Every column's sparse entries, in one section (fmt 0). */
+export const ENTER_SPARSE = 64;
+/** The columns (seeded) that also hold one full section of 4,096 entries at another `sy` (fmt 1; ruling P20). */
+export const ENTER_DENSE_COLUMNS = 16;
+/** The alternations, each a fresh page load of (a) and then (b); the first pair (the cold cache) is discarded. */
+export const ENTER_PAIRS = 6;
+/**
+ * The entries' sections: the world's top two, above the terrain, and every entry air. The (b) world then draws exactly
+ * as the (a) one while its open reads, decodes and loads the whole save: the two differ only in persistence (§6.2).
+ */
+const ENTER_SPARSE_SY = SECTIONS - 2;
+const ENTER_DENSE_SY = SECTIONS - 1;
+/** The heavy save's seed: the same columns, entries and dense columns every run. */
+const ENTER_SAVE_SEED = 42;
+
+/** The saved pose: the eye's x, y, z and the view's degrees (ruling P42). */
+export interface EnterPose {
+  readonly x: number;
+  readonly y: number;
+  readonly z: number;
+  readonly yaw: number;
+  readonly pitch: number;
+}
+
+/** What the setup page publishes as `window.__wiEnter`. */
+export interface EnterSetup {
+  readonly worldId: string;
+  readonly pose: EnterPose;
+}
+
+/**
+ * One world load's figures, ms: `revealMs` as the bench's (`BenchFixed.load.revealMs`, from the page's mount to its
+ * reveal) and, for a saved world, the connection's open, the `load`'s round trip and the sim's decode in it (null on an
+ * unsaved load).
+ */
+export interface EnterResult {
+  readonly revealMs: number | null;
+  readonly idbOpenMs: number | null;
+  readonly loadMs: number | null;
+  readonly decodeMs: number | null;
+}
+
+/** One alternation: (a) the unsaved load, then (b) the saved one. */
+export interface EnterPair {
+  readonly unsaved: EnterResult;
+  readonly saved: EnterResult;
+}
+
+/** The enter cell's JSON (`enter-<gpu>-<browser>.json`; measureChrome's `enterSummary` is its pinned mirror). */
+export interface EnterSummary {
+  readonly route: 'bench=enter';
+  readonly pairs: EnterPair[];
+  /** The pairs the medians read: all but the first. */
+  readonly kept: number;
+  /** `G1.enter`: median (b) `revealMs` / median (a) `revealMs` over the kept pairs; null without both. */
+  readonly enterRatio: number | null;
+  readonly medianUnsavedMs: number | null;
+  readonly medianSavedMs: number | null;
+  /** The kept (b) loads' medians (recorded, not gated). */
+  readonly idbOpenMs: number | null;
+  readonly loadMs: number | null;
+  readonly decodeMs: number | null;
+  /** A new world from the start screen (Task 20's leg); null while it is not measured. */
+  readonly newWorldRevealMs: number | null;
+  readonly shaderCache: string;
+  readonly gpu: string;
+  /** The WebGL renderer string (ruling P42: G1.enter's shape check reads it). */
+  readonly renderer: string | null;
+}
+
+/**
+ * The heavy save (§6.2) of `world` at `pose`, written at `now` (its state's `updated`): every column of the RD 12 + 3
+ * disc around the pose's column with `ENTER_SPARSE` air entries at seeded indices in section 22, and
+ * `ENTER_DENSE_COLUMNS` seeded columns also with section 23 full of air, each encoded with the world's genKey; the
+ * columns in colKey order. The state holds the pose, flying at the default speed; there is no history.
+ */
+export function enterSaveDump(world: WorldRecord, pose: EnterPose, now: number): WorldDump {
+  const key = parseHex64(world.genKey);
+  const air = blockValue(AIR);
+  const cx0 = chunkCoord(pose.x);
+  const cz0 = chunkCoord(pose.z);
+  const disc = discOffsets(ENTER_DISC_RD);
+  const rand = splitmix32(ENTER_SAVE_SEED);
+  // The dense columns: the first ENTER_DENSE_COLUMNS of a seeded partial shuffle of the disc.
+  const order = disc.map((_, i) => i);
+  for (let i = 0; i < ENTER_DENSE_COLUMNS; i++) {
+    const j = i + (rand() % (order.length - i));
+    [order[i], order[j]] = [order[j]!, order[i]!];
+  }
+  const dense = new Set(order.slice(0, ENTER_DENSE_COLUMNS));
+  const cols = disc.map(([dx, dz], i) => {
+    const picked = new Set<number>();
+    while (picked.size < ENTER_SPARSE) picked.add(rand() % SECTION_VOXELS);
+    const n = ENTER_SPARSE + (dense.has(i) ? SECTION_VOXELS : 0);
+    const sy = new Uint8Array(n);
+    const idx = new Uint16Array(n);
+    const value = new Uint32Array(n).fill(air);
+    let k = 0;
+    for (const v of picked) {
+      sy[k] = ENTER_SPARSE_SY;
+      idx[k++] = v;
+    }
+    for (; k < n; k++) {
+      sy[k] = ENTER_DENSE_SY;
+      idx[k] = k - ENTER_SPARSE;
+    }
+    return { key: colKey(cx0 + dx, cz0 + dz), bytes: encodeColumnDiff({ sy, idx, value }, key) };
+  });
+  cols.sort((a, b) => a.key - b.key);
+  const state = {
+    ...newState(world.id, STATE_BOUNDS),
+    updated: now,
+    player: { x: pose.x, y: pose.y, z: pose.z, yaw: pose.yaw, pitch: pose.pitch, mode: 'fly' as const, speed: DEFAULT_SPEED },
+  };
+  return { world, state, history: null, cols };
+}
+
+/** (a) and (b)'s paths (§6.2): the unsaved world at the pose and the saved one in `BENCH_DB`, both at RD 12; `&auto=1` when self-driving. */
+export function enterPaths(s: EnterSetup, auto: boolean): { unsaved: string; saved: string } {
+  const p = s.pose;
+  const tail = auto ? '&auto=1' : '';
+  return {
+    unsaved: `/?at=${p.x},${p.z}&y=${p.y}&yaw=${p.yaw}&pitch=${p.pitch}&rd=${BENCH_RD}&enterBench=1${tail}`,
+    saved: `/?world=${encodeURIComponent(s.worldId)}&rd=${BENCH_RD}&enterBench=1&db=${BENCH_DB}${tail}`,
+  };
+}
+
+/** The self-driving form's pages: its setup, its end and its result. */
+export const ENTER_AUTO_SETUP_PATH = '/?bench=enter&auto=1';
+const ENTER_AUTO_END_PATH = '/?bench=enter&phase=end&auto=1';
+const ENTER_AUTO_RESULT_PATH = '/?bench=enter&phase=result&auto=1';
+
+/** The median of `values`, or null for none (an even count: the mean of the middle two). */
+function medianOf(values: readonly number[]): number | null {
+  if (values.length === 0) return null;
+  const v = [...values].sort((a, b) => a - b);
+  const m = v.length >> 1;
+  return v.length % 2 === 1 ? v[m]! : (v[m - 1]! + v[m]!) / 2;
+}
+
+const finiteOf = (values: readonly (number | null)[]): number[] => values.filter((v): v is number => v !== null && Number.isFinite(v));
+
+/**
+ * The enter cell's JSON (§6.2): the medians over the pairs after the first (the cold cache), `enterRatio` their ratio.
+ * A pinned mirror of measureChrome's `enterSummary` (tools cannot import `src/`; ruling P19): `bench.test.ts` feeds both
+ * the same pairs and expects equal JSON.
+ */
+export function summarizeEnter(
+  pairs: readonly EnterPair[],
+  o: { readonly gpu: string; readonly renderer: string | null; readonly shaderCache: string; readonly newWorldRevealMs: number | null },
+): EnterSummary {
+  const kept = pairs.slice(1);
+  const medianUnsavedMs = medianOf(finiteOf(kept.map((p) => p.unsaved.revealMs)));
+  const medianSavedMs = medianOf(finiteOf(kept.map((p) => p.saved.revealMs)));
+  return {
+    route: 'bench=enter',
+    pairs: pairs.map((p) => ({ unsaved: { ...p.unsaved }, saved: { ...p.saved } })),
+    kept: kept.length,
+    enterRatio: medianUnsavedMs === null || medianSavedMs === null || medianUnsavedMs <= 0 ? null : medianSavedMs / medianUnsavedMs,
+    medianUnsavedMs,
+    medianSavedMs,
+    idbOpenMs: medianOf(finiteOf(kept.map((p) => p.saved.idbOpenMs))),
+    loadMs: medianOf(finiteOf(kept.map((p) => p.saved.loadMs))),
+    decodeMs: medianOf(finiteOf(kept.map((p) => p.saved.decodeMs))),
+    newWorldRevealMs: o.newWorldRevealMs,
+    shaderCache: o.shaderCache,
+    gpu: o.gpu,
+    renderer: o.renderer,
+  };
+}
+
+/** The GPU a renderer string names: the Iris Xe, an NVIDIA RTX, or unknown (a masked or software renderer). */
+export function gpuOfRenderer(renderer: string): 'iris' | 'rtx' | 'unknown' {
+  if (/\b(?:Iris|Xe)\b/i.test(renderer)) return 'iris';
+  if (/\b(?:NVIDIA|RTX)\b/i.test(renderer)) return 'rtx';
+  return 'unknown';
+}
+
+/** The self-driving form's state in `sessionStorage` (plan): the next step and the loads' figures so far. */
+export const ENTER_AUTO_KEY = 'wi.enterAuto';
+
+interface EnterAutoState {
+  readonly step: number;
+  readonly setup: EnterSetup;
+  readonly results: EnterResult[];
+}
+
+/** The self-driving form's storage and navigation (`sessionStorage` and `location.assign` in the page; fakes in tests). */
+export interface EnterAutoIo {
+  readonly storage: Pick<Storage, 'getItem' | 'setItem'> | null;
+  assign(url: string): void;
+}
+
+function readAuto(io: EnterAutoIo): EnterAutoState | null {
+  try {
+    const text = io.storage?.getItem(ENTER_AUTO_KEY) ?? null;
+    if (text === null) return null;
+    const v = JSON.parse(text) as Partial<EnterAutoState> | null;
+    if (v === null || typeof v !== 'object' || typeof v.step !== 'number' || !Array.isArray(v.results) || typeof v.setup?.worldId !== 'string') return null;
+    return v as EnterAutoState;
+  } catch {
+    return null;
+  }
+}
+
+function writeAuto(io: EnterAutoIo, s: EnterAutoState): void {
+  if (io.storage === null) throw new Error('sessionStorage is not available in this browser window');
+  io.storage.setItem(ENTER_AUTO_KEY, JSON.stringify(s));
+}
+
+/** The world load at `step` (0-11: (a), (b) alternately), then the end page. */
+function enterAutoUrl(setup: EnterSetup, step: number): string {
+  if (step >= 2 * ENTER_PAIRS) return ENTER_AUTO_END_PATH;
+  const p = enterPaths(setup, true);
+  return step % 2 === 0 ? p.unsaved : p.saved;
+}
+
+/** The setup page's end under `&auto=1`: the state stored, then the first (a) load. */
+export function enterAutoStart(io: EnterAutoIo, setup: EnterSetup): void {
+  writeAuto(io, { step: 0, setup, results: [] });
+  io.assign(enterAutoUrl(setup, 0));
+}
+
+/**
+ * A revealed `enterBench=1&auto=1` load: its figures stored and the next page loaded. False, navigating nowhere, when
+ * no self-driving run is waiting for a load (no state, or every load recorded).
+ */
+export function enterAutoRecorded(io: EnterAutoIo, r: EnterResult): boolean {
+  const s = readAuto(io);
+  if (s === null || s.step >= 2 * ENTER_PAIRS) return false;
+  const next: EnterAutoState = { step: s.step + 1, setup: s.setup, results: [...s.results, r] };
+  writeAuto(io, next);
+  io.assign(enterAutoUrl(next.setup, next.step));
+  return true;
+}
+
+/** The end page's end under `&auto=1`: the result page. */
+export function enterAutoEnded(io: EnterAutoIo): void {
+  io.assign(ENTER_AUTO_RESULT_PATH);
+}
+
+/**
+ * The result page's JSON: `summarizeEnter` over the stored loads, the GPU read from the renderer string, the cache
+ * unknown (the browser's own) and no new-world leg; null until every load is recorded.
+ */
+export function enterAutoJson(
+  io: EnterAutoIo,
+  env: { readonly renderer: string | null; readonly userAgent: string },
+): (EnterSummary & { readonly measuredBy: string; readonly userAgent: string }) | null {
+  const s = readAuto(io);
+  if (s === null || s.results.length < 2 * ENTER_PAIRS) return null;
+  const pairs = Array.from({ length: ENTER_PAIRS }, (_, i): EnterPair => ({ unsaved: s.results[2 * i]!, saved: s.results[2 * i + 1]! }));
+  const summary = summarizeEnter(pairs, { gpu: gpuOfRenderer(env.renderer ?? ''), renderer: env.renderer, shaderCache: 'unknown', newWorldRevealMs: null });
+  return { ...summary, measuredBy: 'bench=enter&auto=1', userAgent: env.userAgent };
+}
+
+/** The page's `sessionStorage` (null when the accessor throws) and its navigation. */
+function browserAutoIo(): EnterAutoIo {
+  let storage: Storage | null = null;
+  try {
+    storage = window.sessionStorage;
+  } catch {
+    storage = null;
+  }
+  return { storage, assign: (url) => location.assign(url) };
+}
+
+/** The unmasked WebGL renderer string of a fresh webgl2 context, as measureChrome's probe reads it; null without one. */
+function probeRenderer(): string | null {
+  const gl = document.createElement('canvas').getContext('webgl2');
+  if (gl === null) return null;
+  const ext = gl.getExtension('WEBGL_debug_renderer_info');
+  return String(gl.getParameter(ext === null ? gl.RENDERER : ext.UNMASKED_RENDERER_WEBGL));
+}
+
+/**
+ * After an `?enterBench=1` world load settles (`main.ts`): a load that did not reveal publishes `{ error }`, so
+ * measureChrome stops at once; a revealed one under `&auto=1` stores its figures and loads the next page. Without
+ * `auto` nothing navigates.
+ */
+export function enterLoaded(revealed: boolean, auto: boolean): void {
+  if (!revealed) {
+    window.__wiEnterResult = { error: 'the world did not load' };
+    return;
+  }
+  const r = window.__wiEnterResult;
+  if (auto && r !== undefined && !('error' in r)) enterAutoRecorded(browserAutoIo(), r);
+}
+
+const errorOf = (e: unknown): string => (e instanceof Error ? e.message : String(e));
+
+/**
+ * The setup's saved world: `BENCH_DB` deleted, then the world of the route's seed and profile at `ENTER_POSE` beside
+ * the spawn, with the heavy save, in one write; the connection closed before the first world load opens its own.
+ */
+async function writeEnterSave(): Promise<EnterSetup> {
+  const [{ newWorldRecord }, { createGenContext }, { findSpawn }] = await Promise.all([
+    import('./worldPage'), import('../../gen/context'), import('../../gen/column/spawn'),
+  ]);
+  const session = openMapSession({ ...DEFAULT_MAP_STATE, seed: BENCH_SEED, profile: BENCH_PROFILE, patch: {} }, cryptoSeed).state;
+  const spawn = findSpawn(createGenContext(session.seed, session.params));
+  const pose: EnterPose = { x: spawn.x, y: ENTER_POSE.y, z: spawn.z, yaw: ENTER_POSE.yaw, pitch: ENTER_POSE.pitch };
+  const world = newWorldRecord(crypto.randomUUID(), 'Enter bench', session, Date.now());
+  const dump = enterSaveDump(world, pose, Date.now());
+  await deleteIdb(BENCH_DB);
+  const kv = await openIdbKV(BENCH_DB);
+  try {
+    const w = await createSaves(kv).writeAll(dump);
+    if (w.status !== 'complete') throw new Error(`the saved world could not be written to ${BENCH_DB}: ${w.status} (${w.errorName ?? 'no error name'})`);
+  } finally {
+    kv.close();
+  }
+  return { worldId: world.id, pose };
+}
+
+/** The enter bench's status line and, on the result page, its "Download JSON" button. */
+function enterPanel(app: HTMLElement): { say(s: string): void; offer(name: string, text: string): void } {
+  const panel = el('div', 'flight-panel');
+  panel.id = 'enter-panel';
+  panel.style.cssText = 'display:flex;gap:8px;align-items:center;padding:4px 8px;margin:8px;'
+    + 'background:rgba(15,22,41,.85);border-radius:4px;font:13px/1.4 system-ui,sans-serif;color:#e0e0e0';
+  const status = el('span', '', 'Enter bench: starting…');
+  panel.append(status);
+  app.replaceChildren(panel);
+  return {
+    say: (s) => { status.textContent = `Enter bench: ${s}`; },
+    offer(name, text) {
+      const download = el('button', '', 'Download JSON');
+      download.id = 'enter-download';
+      download.type = 'button';
+      download.addEventListener('click', () => downloadText(name, text));
+      panel.append(download);
+    },
+  };
+}
+
+/**
+ * Mounts `?bench=enter` in `app` (§6.2): the setup page (`window.__wiEnter = { worldId, pose }`), `&phase=end`
+ * (`BENCH_DB` deleted, `{ ended: true }`) or, under `&auto=1`, `&phase=result` (the JSON offered for download). A
+ * failure publishes `{ error }`, so measureChrome stops at once. Only `&auto=1` navigates by itself.
+ */
+export async function mountEnterBench(app: HTMLElement, query: URLSearchParams): Promise<void> {
+  const auto = query.get('auto') === '1';
+  const phase = query.get('phase');
+  const panel = enterPanel(app);
+  try {
+    if (phase === 'end') {
+      panel.say(`deleting ${BENCH_DB}…`);
+      await deleteIdb(BENCH_DB);
+      window.__wiEnter = { ended: true };
+      panel.say(`done: ${BENCH_DB} deleted`);
+      if (auto) enterAutoEnded(browserAutoIo());
+      return;
+    }
+    if (phase === 'result') {
+      const json = auto ? enterAutoJson(browserAutoIo(), { renderer: probeRenderer(), userAgent: navigator.userAgent }) : null;
+      if (json === null) throw new Error(`no self-driving run to show: open ${ENTER_AUTO_SETUP_PATH}`);
+      const ratio = json.enterRatio === null ? 'n/a' : json.enterRatio.toFixed(3);
+      panel.say(`done: enterRatio ${ratio}, median (a) ${json.medianUnsavedMs} ms, median (b) ${json.medianSavedMs} ms`);
+      panel.offer(`enter-${json.gpu}-${browserName()}.json`, `${JSON.stringify(json, null, 2)}\n`);
+      return;
+    }
+    if (phase !== null) throw new Error(`unknown phase ${phase}; end or result`);
+    panel.say(`writing the saved world to ${BENCH_DB}…`);
+    const setup = await writeEnterSave();
+    window.__wiEnter = setup;
+    panel.say(`ready: world ${setup.worldId} at ${setup.pose.x}, ${setup.pose.y}, ${setup.pose.z}`);
+    if (auto) enterAutoStart(browserAutoIo(), setup);
+  } catch (e) {
+    window.__wiEnter = { error: errorOf(e) };
+    panel.say(`failed: ${errorOf(e)}`);
+  }
 }

@@ -12,6 +12,9 @@ import type { Seed64 } from './core/hash';
  * read by `test/tools/panoramas.ts`. `?bench=medium` is the streaming bench (SP4b spec §8.3, `ui/world/bench.ts`): the
  * world page at seed 42 and RD 12, then a 95 s scripted flight through the page's own streaming frame, honouring
  * `?workers` and `?renderer`; its JSON is read by measureChrome (`&shot=<name>` freezes it for a review shot).
+ * `?bench=enter` is the enter bench's setup page (SP5b spec §6.2, `mountEnterBench`; `&phase=end` its end): a world
+ * load with `?enterBench=1` publishes its figures at the reveal, `{ error }` when it does not reveal, and under
+ * `&auto=1` loads the self-driving run's next page (`enterLoaded`).
  * `?wiTest=1` (the browser smoke, SP4c spec §8.6) installs `window.__wiTest` on the world route before anything mounts:
  * the pending-timer counters first, then the world page attaches its parts after the reveal; absent without the flag.
  */
@@ -43,7 +46,8 @@ async function world(query: URLSearchParams): Promise<void> {
   const opts = wiTest === null ? capture : { ...capture, wiTest };
   const enter = async (): Promise<void> => {
     const { mountWorldPage } = await import('./ui/world/worldPage');
-    await mountWorldPage(app, q, location.hash, opts);
+    const page = await mountWorldPage(app, q, location.hash, opts);
+    if (q.enterBench) (await import('./ui/world/bench')).enterLoaded(page.state === 'revealed', query.get('auto') === '1');
   };
   if (startModeOf(query) === 'world') return enter();
   const start = mountStartScreen(app, {
@@ -71,7 +75,9 @@ const started: Promise<void> = query.get('lab') === 'noise'
           ? import('./ui/world/flight').then((m) => m.mountFlightRoute(app, query))
           : query.get('bench') === 'medium'
             ? import('./ui/world/bench').then((m) => m.mountBenchRoute(app, query))
-            : query.has('pano')
-              ? import('./ui/world/panoramaRoute').then((m) => m.mountPanoramaRoute(app, query.get('pano') ?? ''))
-              : world(query);
+            : query.get('bench') === 'enter'
+              ? import('./ui/world/bench').then((m) => m.mountEnterBench(app, query))
+              : query.has('pano')
+                ? import('./ui/world/panoramaRoute').then((m) => m.mountPanoramaRoute(app, query.get('pano') ?? ''))
+                : world(query);
 started.catch(showBootFailure);
