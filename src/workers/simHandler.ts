@@ -39,7 +39,7 @@
  */
 import { colKeyCx, colKeyCz } from '../core/coords';
 import { parseHex64, type Hash64 } from '../core/hash';
-import { decodeColumnDiff, encodeColumnDiff, type DecodedColumn } from '../persist/diffCodec';
+import { decodeColumnDiff, encodeColumnDiff, encodeColumnSections, type DecodedColumn } from '../persist/diffCodec';
 import { worldRange, type KV, type WriteOp, type WriteResult } from '../persist/kv';
 import { createMemoryKV, type MemoryKV } from '../persist/memory';
 import { flushOps, remapDiff, remapOf, tableRelation, type HistoryRecord, type StateRecord, type WorldRecord } from '../persist/saves';
@@ -214,7 +214,8 @@ export function createSimHandler(o: SimHandlerOptions): SimHandler {
       for (const key of keys) {
         const cx = colKeyCx(key);
         const cz = colKeyCz(key);
-        const b = diffs.has(cx, cz) ? encodeColumnDiff(diffs.columnDiff(cx, cz)!, w.genKey) : null;
+        const col = diffs.columnSections(cx, cz);
+        const b = col === null ? null : encodeColumnSections(col, w.genKey);
         if (b !== null) bytes += b.byteLength;
         cols.push({ key, bytes: b });
       }

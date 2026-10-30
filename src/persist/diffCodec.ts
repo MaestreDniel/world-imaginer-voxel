@@ -4,9 +4,10 @@
  * fmt 0 (n < `DENSE_MIN`): n × `{u16 idx, u16 state, u8 fluid}` by idx, or fmt 1 (n ≥ `DENSE_MIN`): a 512 B mask (bit
  * `idx & 7` of byte `idx >> 3`), 4096 u16 states and 4096 u8 fluids, every voxel, the unmasked ones 0; trailer `u16
  * count` and count × `{u32 packedPos, u16 dueOffset}` by packedPos. A value is `state << 8 | fluid` (`diffStore.ts`).
- * The encoding is canonical: one column has exactly one byte string, whatever its input order. The header's genKey is
- * the world's when the column was written and is informative (D8: entries apply under any generator). The trailer is
- * written with count 0 until SP7; any count decodes, and SP5b's callers drop the decoded ticks (D21).
+ * The encoding is canonical: one column has exactly one byte string, whatever its input order (the flush writes the same
+ * bytes straight from the DiffStore's maps, `encodeColumnSections`). The header's genKey is the world's when the column
+ * was written and is informative (D8: entries apply under any generator). The trailer is written with count 0 until SP7;
+ * any count decodes, and SP5b's callers drop the decoded ticks (D21).
  */
 import type { Hash64 } from '../core/hash';
 import type { ColumnDiff } from '../world/store/api';
@@ -162,6 +163,97 @@ export function encodeColumnDiff(d: ColumnDiff, genKey: Hash64, ticks: readonly 
     view.setUint16(at + 4, t.dueOffset, true);
     at += TICK;
   }
+  return out;
+}
+
+/** A column's entries as the DiffStore holds them (`DiffStore.columnSections`): sections by `sy`, entries by `idx`, unordered. */
+export type ColumnSections = ReadonlyMap<number, ReadonlyMap<number, number>>;
+
+/**
+ * `encodeColumnSections`' scratch: one section's values by `idx`, and the mask of its `idx`s (bit `idx & 31` of word
+ * `idx >> 5`), which the walk clears, so both are free again after every section.
+ */
+const gathered = new Uint32Array(VOXELS);
+const gatheredMask = new Int32Array(VOXELS / 32);
+
+/** `Map.forEach`'s callback (a module function: the walk allocates no closure); an `idx` outside 0 … 4095 sets nothing. */
+function gather(value: number, idx: number): void {
+  gathered[idx] = value;
+  gatheredMask[idx >> 5]! |= 1 << (idx & 31);
+}
+
+/**
+ * The flush's encoding (SP5b spec §3.2; the `persist.flush` row times it, §6.2): exactly the bytes of
+ * `encodeColumnDiff(diffs.columnDiff(cx, cz), genKey)`, with no ticks, written straight from the DiffStore's maps
+ * (`columnSections`) with no intermediate `ColumnDiff` and no sort: each section's entries are gathered by `idx` into
+ * scratch and written in `idx` order by walking its mask. A fresh buffer of exactly `encodedSize` bytes. Throws on a
+ * `sy` outside 0 … 23, an `idx` outside 0 … 4095 and a state wider than u16.
+ */
+export function encodeColumnSections(col: ColumnSections, genKey: Hash64): Uint8Array {
+  const counts = new Uint32Array(SECTIONS);
+  let size = HEADER + TRAILER;
+  let sections = 0;
+  for (const [sy, sec] of col) {
+    if (!(Number.isInteger(sy) && sy >= 0 && sy < SECTIONS)) throw new RangeError(`ColumnDiffV1: sy ${sy} is outside 0 … ${SECTIONS - 1}`);
+    if (sec.size === 0) continue;
+    counts[sy] = sec.size;
+    size += sectionSize(sec.size);
+    sections++;
+  }
+
+  const out = new Uint8Array(size);
+  const view = new DataView(out.buffer);
+  view.setUint8(0, VERSION);
+  view.setUint32(1, genKey[0] >>> 0, true);
+  view.setUint32(5, genKey[1] >>> 0, true);
+  view.setUint8(9, sections);
+
+  let at = HEADER;
+  for (let sy = 0; sy < SECTIONS; sy++) {
+    const n = counts[sy]!;
+    if (n === 0) continue;
+    const dense = n >= DENSE_MIN;
+    view.setUint8(at, sy);
+    view.setUint8(at + 1, dense ? 1 : 0);
+    view.setUint16(at + 2, n, true);
+    at += SECTION_HEADER;
+    col.get(sy)!.forEach(gather);
+    let written = 0;
+    let wide = -1;
+    for (let w = 0; w < VOXELS / 32; w++) {
+      let word = gatheredMask[w]!;
+      if (word === 0) continue;
+      gatheredMask[w] = 0;
+      if (dense) {
+        out[at + 4 * w] = word & 0xFF;
+        out[at + 4 * w + 1] = (word >>> 8) & 0xFF;
+        out[at + 4 * w + 2] = (word >>> 16) & 0xFF;
+        out[at + 4 * w + 3] = word >>> 24;
+      }
+      do {
+        const low = word & -word;
+        const idx = (w << 5) | (31 - Math.clz32(low));
+        word ^= low;
+        const value = gathered[idx]!;
+        const state = value >>> 8;
+        if (state > 0xFFFF && wide < 0) wide = idx;
+        if (dense) {
+          view.setUint16(at + MASK + 2 * idx, state, true);
+          view.setUint8(at + MASK + 2 * VOXELS + idx, value & 0xFF);
+        } else {
+          view.setUint16(at, idx, true);
+          view.setUint16(at + 2, state, true);
+          view.setUint8(at + 4, value & 0xFF);
+          at += ENTRY;
+        }
+        written++;
+      } while (word !== 0);
+    }
+    if (written !== n) throw new RangeError(`ColumnDiffV1: an idx outside 0 … ${VOXELS - 1} at sy ${sy}`);
+    if (wide >= 0) throw new RangeError(`ColumnDiffV1: state ${gathered[wide]! >>> 8} at sy ${sy} idx ${wide} is not a u16`);
+    if (dense) at += DENSE;
+  }
+  view.setUint16(at, 0, true);
   return out;
 }
 

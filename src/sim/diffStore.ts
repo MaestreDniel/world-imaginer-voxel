@@ -26,6 +26,11 @@ export interface DiffStore {
   has(cx: number, cz: number): boolean;
   /** The column's entries in canonical order, in fresh arrays (transferable), or null when it holds none. */
   columnDiff(cx: number, cz: number): ColumnDiff | null;
+  /**
+   * The column's sections by `sy`, each its entries by `idx`, both unordered: read-only views of the store's own maps,
+   * valid until its next write, or null when it holds none. The flush encodes from them (`encodeColumnSections`).
+   */
+  columnSections(cx: number, cz: number): ReadonlyMap<number, ReadonlyMap<number, number>> | null;
   /** The `colKey`s of the columns holding entries. */
   columns(): IterableIterator<number>;
   /** The number of entries over every column. */
@@ -89,6 +94,9 @@ export function createDiffStore(): DiffStore {
         }
       }
       return { sy, idx, value };
+    },
+    columnSections(cx, cz) {
+      return cols.get(colKey(cx, cz)) ?? null;
     },
     columns() {
       return cols.keys();

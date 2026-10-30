@@ -6,12 +6,14 @@
  */
 import { readFileSync } from 'node:fs';
 import { describe, expect, test } from 'vitest';
+import { colKeyCx, colKeyCz } from '../../src/core/coords';
 import type { Hash64 } from '../../src/core/hash';
 import {
-  decodeColumnDiff, DENSE_MIN, DiffDecodeError, encodeColumnDiff, encodedSize, type FluidTick,
+  decodeColumnDiff, DENSE_MIN, DiffDecodeError, encodeColumnDiff, encodeColumnSections, encodedSize, type FluidTick,
 } from '../../src/persist/diffCodec';
 import { createDiffStore, type DiffStore } from '../../src/sim/diffStore';
 import type { ColumnDiff } from '../../src/world/store/api';
+import { persistFlushFixture } from '../harness/persistFixture';
 import { testRng } from '../harness/stats';
 
 const SEED = 0x5b02;
@@ -221,6 +223,55 @@ describe('ColumnDiffV1 round trips (SP5b spec §2.2, §6.1 E1)', () => {
     const one: ColumnDiff = { sy: Uint8Array.of(0), idx: Uint16Array.of(0), value: Uint32Array.of(1 << 8) };
     const ticks = [{ packedPos: 2 ** 32 - 1, dueOffset: 0xFFFF }, { packedPos: 0, dueOffset: 0 }];
     expect(decodeColumnDiff(encodeColumnDiff(one, [0, 0], ticks), 2).ticks).toEqual([ticks[1], ticks[0]]);
+  });
+});
+
+describe('the flush\'s direct encoding (`encodeColumnSections`, SP5b spec §3.2, §6.2 `persist.flush`)', () => {
+  const sectionsOf = (entries: Array<[sy: number, idx: number, value: number]>): Map<number, Map<number, number>> => {
+    const col = new Map<number, Map<number, number>>();
+    for (const [sy, idx, value] of entries) {
+      let sec = col.get(sy);
+      if (sec === undefined) col.set(sy, (sec = new Map()));
+      sec.set(idx, value);
+    }
+    return col;
+  };
+
+  test('equals `encodeColumnDiff(columnDiff(…))` byte for byte over every 5th of the 2,000 random columns, each DiffStore filled in a shuffled order', () => {
+    const next = testRng(SEED + 2);
+    const failures: string[] = [];
+    for (let i = 0; i < COLUMNS; i += 5) {
+      const c = RUN.cols[i]!;
+      const store = createDiffStore();
+      store.setColumn(3, -7, shuffledDiff(next, c.diff));
+      const want = encodeColumnDiff(store.columnDiff(3, -7)!, c.genKey);
+      const got = encodeColumnSections(store.columnSections(3, -7)!, c.genKey);
+      if (!sameArray(got, want) || got.byteLength !== got.buffer.byteLength) failures.push(`seed ${SEED} column ${i}`);
+    }
+    expect(failures).toEqual([]);
+  });
+
+  test('equals `encodeColumnDiff(columnDiff(…))` byte for byte over the `persist.flush` bench fixture\'s 64 columns', () => {
+    const { diffs, keys, entries } = persistFlushFixture();
+    expect(entries).toBe(41402);
+    const genKey: Hash64 = [0x01234567, 0x89abcdef];
+    for (const key of keys) {
+      const cx = colKeyCx(key);
+      const cz = colKeyCz(key);
+      expect(sameArray(encodeColumnSections(diffs.columnSections(cx, cz)!, genKey), encodeColumnDiff(diffs.columnDiff(cx, cz)!, genKey)), `column ${cx}, ${cz}`).toBe(true);
+    }
+  });
+
+  test('throws on a `sy` ≥ 24, an `idx` ≥ 4096 or a state wider than u16 (sparse and dense), and the next encode is unaffected', () => {
+    const dense = (bad: number): Array<[number, number, number]> =>
+      Array.from({ length: DENSE_MIN }, (_, i) => [2, i, i === 100 ? bad : (i + 1) << 8] as [number, number, number]);
+    expect(() => encodeColumnSections(sectionsOf([[24, 0, 1 << 8]]), [0, 0])).toThrow(/sy 24/);
+    expect(() => encodeColumnSections(sectionsOf([[3, 5, 1 << 8], [3, 4096, 2 << 8], [3, 9, 3 << 8]]), [0, 0])).toThrow(/an idx outside 0 … 4095 at sy 3/);
+    expect(() => encodeColumnSections(sectionsOf([[3, 5, 1 << 8], [3, 7, 0x10000 * 256], [3, 9, 3 << 8]]), [0, 0])).toThrow(/state 65536 at sy 3 idx 7 is not a u16/);
+    expect(() => encodeColumnSections(sectionsOf(dense(0x10000 * 256)), [0, 0])).toThrow(/state 65536 at sy 2 idx 100 is not a u16/);
+    const ok: Array<[number, number, number]> = [[3, 5, 1 << 8], [3, 9, 3 << 8 | 127], [0, 4095, 2 << 8], ...dense(7 << 8)];
+    const d: ColumnDiff = { sy: Uint8Array.from(ok, (e) => e[0]), idx: Uint16Array.from(ok, (e) => e[1]), value: Uint32Array.from(ok, (e) => e[2]) };
+    expect(sameArray(encodeColumnSections(sectionsOf(ok), [1, 2]), encodeColumnDiff(d, [1, 2]))).toBe(true);
   });
 });
 

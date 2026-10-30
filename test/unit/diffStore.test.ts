@@ -68,6 +68,24 @@ describe('DiffStore (SP5a spec §2.4, D20; master §2.7)', () => {
     }
   });
 
+  test('`columnSections` holds the column\'s entries by `sy` and `idx` (read-only views of the store\'s maps), and null for a column without entries', () => {
+    const d = createDiffStore();
+    expect(d.columnSections(4, -2)).toBeNull();
+    d.set(4, -2, 12, 4000, val(3));
+    d.set(4, -2, 0, 5, val(1));
+    d.set(4, -2, 12, 7, val(2, 8));
+    d.set(5, -2, 1, 1, val(9));
+    const secs = d.columnSections(4, -2)!;
+    expect([...secs.keys()].sort((a, b) => a - b)).toEqual([0, 12]);
+    expect(new Map(secs.get(0)!)).toEqual(new Map([[5, val(1)]]));
+    expect(new Map(secs.get(12)!)).toEqual(new Map([[4000, val(3)], [7, val(2, 8)]]));
+    d.remove(4, -2, 0, 5);
+    d.remove(4, -2, 12, 4000);
+    d.remove(4, -2, 12, 7);
+    expect(d.columnSections(4, -2)).toBeNull();
+    expect(d.columnSections(5, -2)!.get(1)!.get(1)).toBe(val(9));
+  });
+
   test('removing a column\'s last entry removes the column (`has` false, `columns()` without it, `size` 0)', () => {
     const d = createDiffStore();
     d.set(2, 3, 10, 50, val(5));
