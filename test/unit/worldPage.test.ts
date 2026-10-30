@@ -1,6 +1,6 @@
 import { readFileSync } from 'node:fs';
 import { PerspectiveCamera } from 'three';
-import { afterEach, beforeEach, describe, expect, test, vi } from 'vitest';
+import { afterEach, beforeAll, beforeEach, describe, expect, test, vi } from 'vitest';
 import { evaluateWorldCapabilities, type CapabilityReport } from '../../src/engine/capabilityRules';
 import type { StreamEvent } from '../../src/engine/coordinator';
 import { lowerRd } from '../../src/engine/renderDistance';
@@ -19,7 +19,7 @@ import { createNotices } from '../../src/ui/common/notice';
 import { URL_HASH_MAX, URL_OVERSIZE_NOTICE, createUrlWriter, oversizeNotice } from '../../src/ui/common/urlWriter';
 import { DEFAULT_MAP_STATE, decodeMapState, openMapSession, type MapView } from '../../src/ui/map/mapState';
 import { WORLD_MAP_BPP, worldMapView } from '../../src/ui/world/mapOverlay';
-import { AIR, REGISTRY, STONE } from '../../src/world/blocks/index';
+import { AIR, DIRT, GLASS, REGISTRY, STONE } from '../../src/world/blocks/index';
 import { WATER_SOURCE } from '../../src/world/blocks/fluid';
 import { createHotbar } from '../../src/player/hotbar';
 import { SPEED_DEFAULT, type FlyState } from '../../src/player/fly';
@@ -46,12 +46,21 @@ import { genKey, stageHashes } from '../../src/core/stage/hash';
 import type { KV } from '../../src/persist/kv';
 import { createMemoryKV, type MemoryKV } from '../../src/persist/memory';
 import {
-  createSaves, loadParams, newState, NO_VALUE, parseWorldRecord, todayStateTable, type HistoryRecord, type StateRecord, type WorldRecord,
+  createSaves, loadParams, newState, NO_VALUE, parseWorldRecord, todayStateTable, type HistoryRecord, type HotbarRecord, type StateRecord, type WorldRecord,
 } from '../../src/persist/saves';
 import {
-  EDIT_FAILED_NOTICE, HISTORY_RESET_NOTICE, SAVED_EDIT_FAILED_NOTICE, STATE_RESET_NOTICE, countAccepted, createPageAutosave, lastFlush, leaveAfterSave, lowerRdHref,
-  openRequest, openSavedWorld, readSavedWorld, restoreMode, restoredStart, savedWorldUrlRules, timeOfHours,
+  EDIT_FAILED_NOTICE, HISTORY_RESET_NOTICE, SAVED_EDIT_FAILED_NOTICE, STATE_RESET_NOTICE, countAccepted, createPageAutosave, hotbarStorage, lastFlush, leaveAfterSave,
+  lowerRdHref, openRequest, openSavedWorld, readSavedWorld, restoreMode, restoredStart, savedWorldUrlRules, timeOfHours,
 } from '../../src/ui/world/worldPage';
+import { resolveProfile } from '../../src/core/params/profiles';
+import { seedFromInput } from '../../src/core/seed';
+import { createSimClient } from '../../src/engine/simClient';
+import { findSpawn } from '../../src/gen/column/spawn';
+import { createGenContext } from '../../src/gen/context';
+import { createSimHandler } from '../../src/workers/simHandler';
+import type { VoxelStore } from '../../src/world/store/store';
+import { inProcessSimWorker } from '../harness/inProcessSim';
+import { genRegion } from '../harness/region';
 import { parseWorldQuery } from '../../src/ui/world/query';
 import { STATE_BOUNDS } from '../../src/ui/world/stateBounds';
 import { installDom, type FakeElement } from './fixtures/domShim';
@@ -2291,7 +2300,15 @@ describe('autosave in the saved world: Reloads reopen /?world, navigations and f
     const flushes: Array<{ state: StateRecord; history: HistoryRecord | null; resolve(m: FlushedMsg): void }> = [];
     const fly = { x: 100.5, y: 80.25, z: -40.75, yaw: 90, pitch: -20, mode: 'fly' as const, speed: 30 };
     const frame = { t: 0.5 };
-    const hotbar = createHotbar(null);
+    let hotbarRecord: HotbarRecord = STATE_BOUNDS.normalizeHotbar(null);
+    const hotbar = createHotbar(hotbarStorage(() => hotbarRecord, (r) => { hotbarRecord = r; }));
+    const history = createBlockHistory({
+      post: (): Promise<EditOutcome> => Promise.resolve({ ok: false, why: 'failed' }),
+      read: () => 0,
+      pending: () => false,
+      settled: () => Promise.resolve(),
+      notices: { show() {} },
+    });
     let edits = 0;
     const autosave = createPageAutosave({
       worldId: 'w 1',
@@ -2299,7 +2316,8 @@ describe('autosave in the saved world: Reloads reopen /?world, navigations and f
       frame,
       speedIndex: () => 2,
       storedTime: o.stored ?? null,
-      hotbar,
+      hotbar: () => hotbarRecord,
+      blockHistory: history,
       sim: { flush: (state, history) => new Promise<FlushedMsg>((resolve) => { flushes.push({ state, history, resolve }); }) },
       settled: () => Promise.resolve(),
       editsSince: () => edits,
@@ -2314,7 +2332,7 @@ describe('autosave in the saved world: Reloads reopen /?world, navigations and f
       events: { on: () => () => {}, hidden: () => false },
       onResult: () => {},
     });
-    return { autosave, flushes, fly, frame, hotbar, edit: () => { edits++; } };
+    return { autosave, flushes, fly, frame, hotbar, history, edit: () => { edits++; } };
   }
 
   test('in a saved world the failure panel\'s Reload, the context loss\'s Reload and the lower-RD link are `savedWorldUrl`s, never `/?at=`', () => {
@@ -2456,7 +2474,7 @@ describe('autosave in the saved world: Reloads reopen /?world, navigations and f
     expect(SRC()).toMatch(/simFailure = \(\) => onSimFailure\(\{ store, coordinator, editPath, notices, saved: saved !== null \}\);/);
   });
 
-  test('the page\'s autosave: the pose, the running clock (the stored time while a capture fixes it), the hotbar, the edits counted from the accepted replies', async () => {
+  test('the page\'s autosave: the pose, the running clock (the stored time while a capture fixes it), the hotbar, the block history, the edits counted from the accepted replies', async () => {
     const s = saving();
     s.frame.t = 0.75;
     s.fly.x = 200.5;
@@ -2467,6 +2485,12 @@ describe('autosave in the saved world: Reloads reopen /?world, navigations and f
     expect(posted.state.time).toEqual({ t: 0.75, speedIndex: 2 });
     expect(posted.state.hotbar).toMatchObject({ v: 1, active: 3 });
     expect([posted.state.worldId, posted.state.updated, posted.state.places]).toEqual(['w 1', 1_700_000_000_000, []]);
+    // The history as opened is not posted; a recorded step moves its version, and the next post carries both sides.
+    expect(posted.history).toBeNull();
+    const step: BlockStep = { edits: [{ x: 1, y: 70, z: 2, before: NO_ENTRY, after: STONE << 8 }] };
+    s.history.record(step);
+    void s.autosave.flushNow();
+    expect(s.flushes[1]!.history).toEqual({ worldId: 'w 1', done: [step], undone: [] });
     // A `?shot=1&time=` capture: the stored time is saved unchanged, whatever the frame's clock reads.
     const shot = saving({ stored: { t: 0.1, speedIndex: 1 } });
     void shot.autosave.flushNow();
@@ -2484,5 +2508,190 @@ describe('autosave in the saved world: Reloads reopen /?world, navigations and f
     await jobs();
     expect(counted.count()).toBe(1);
     expect(SRC()).toMatch(/const accepted = countAccepted\(editPath\.post\);/);
+  });
+});
+
+describe('the block history kept across reloads (SP5b spec §3.2, §3.4 step 6, D6, D32)', () => {
+  const FIXTURE = new URL('../fixtures/sp5bWorldParams.json', import.meta.url);
+  const ID = 'w1';
+  let store: VoxelStore;
+  /** The centre column of the 3 × 3 region (its 3 × 3 Published). */
+  let C: [number, number] = [0, 0];
+  beforeAll(async () => {
+    const params = resolveProfile('default');
+    const sp = findSpawn(createGenContext(seedFromInput('42'), params));
+    C = [sp.x >> 4, sp.z >> 4];
+    store = (await genRegion({ seed: '42', params, cx0: C[0] - 1, cz0: C[1] - 1, w: 3, h: 3, upTo: 'L', order: 'spiral', threads: 1, shared: true })).view.store;
+  }, 120_000);
+  afterEach(() => {
+    vi.useRealTimers();
+    vi.unstubAllGlobals();
+  });
+
+  const val = (state: number): number => (state << 8) >>> 0;
+  const valueAt = (x: number, y: number, z: number): number => ((store.blockAt(x, y, z) << 8) | store.fluidAt(x, y, z)) >>> 0;
+  const ctrlZ = () => Object.assign(new Event('keydown', { cancelable: true }), { key: 'z', ctrlKey: true, metaKey: false, shiftKey: false, altKey: false });
+  /** Moves vi's fake clock 1 ms at a time until `p` settles. */
+  async function settle<T>(p: Promise<T>): Promise<T> {
+    let done = false;
+    p.then(() => { done = true; }, () => { done = true; });
+    for (let i = 0; i < 5000 && !done; i++) await vi.advanceTimersByTimeAsync(1);
+    return p;
+  }
+
+  /** A world as the menu's Create writes it: `worlds` and `state`, no `history` (§1.2). */
+  async function created(): Promise<MemoryKV> {
+    const fixture = JSON.parse(readFileSync(FIXTURE, 'utf8')) as { schemaVersion: number; params: JsonObject };
+    const p = loadParams({ ...fixture, profile: 'default' });
+    if (!p.ok) throw new Error('fixture');
+    const record: WorldRecord = {
+      id: ID, name: 'My world', seedText: 'hello', seed: [1, 2], profile: 'default', params: fixture.params, schemaVersion: fixture.schemaVersion,
+      paramsHash: '0123456789abcdef', generatorVersion: 5, genKey: hex64(genKey([1, 2], stageHashes(p.value))), stateTable: todayStateTable(), created: 1_000,
+      backupOf: null,
+    };
+    const kv = createMemoryKV();
+    expect((await settle(createSaves(kv).create(record, newState(ID, STATE_BOUNDS)))).status).toBe('complete');
+    return kv;
+  }
+
+  /**
+   * The saved world's page as `run()` composes it from the open on: `readSavedWorld`, the sim (the real handler over
+   * `kv`, in process, each message handled `delay()` ms after its post, so its reply comes then) attached to the region's
+   * store and loaded, the edit path, the block history restored from the read and the recording post in front of it,
+   * the autosave, and the undo keys with the world owning. `posted` holds every batch the edit path sends the sim.
+   */
+  async function openPage(kv: MemoryKV, delay: () => number) {
+    const read = await settle(readSavedWorld(createSaves(kv), ID, STATE_BOUNDS));
+    if (!read.ok) throw new Error(read.reason);
+    const failures: Error[] = [];
+    const sim = createSimClient(() => inProcessSimWorker(createSimHandler({ openKV: async () => kv }), delay), { onFailure: (e) => { failures.push(e); } });
+    await settle(sim.attach(store.handles()));
+    await settle(sim.load(openRequest('wi10', read.world, read.state, read.history).load));
+    const posted: Edit[][] = [];
+    const editPath = createEditPath({
+      sim: { get failed() { return sim.failed; }, edits: (e) => { posted.push([...e]); return sim.edits(e); } },
+      coordinator: { editState: () => 0, simPin() {}, simUnpin() {}, markEdited() {} },
+      latency: createEditLatency(),
+      now: () => performance.now(),
+      notices: { show() {} },
+    });
+    const accepted = countAccepted(editPath.post);
+    const shown: string[] = [];
+    const blockHistory = createBlockHistory({
+      post: accepted.post, read: valueAt, pending: editPath.pending, settled: editPath.settled, notices: { show: (text) => { shown.push(text); } },
+    });
+    blockHistory.restore(read.history.done, read.history.undone);
+    const actionPost = createActionPost({ post: accepted.post, record: blockHistory.record });
+    const flushes: Array<HistoryRecord | null> = [];
+    const results: FlushedMsg[] = [];
+    const events = new Map<string, () => void>();
+    const autosave = createPageAutosave({
+      worldId: ID,
+      fly: { x: 0.5, y: 100, z: 0.5, yaw: 0, pitch: 0, mode: 'fly', speed: SPEED_DEFAULT },
+      frame: { t: 0.5 },
+      speedIndex: () => 0,
+      storedTime: null,
+      hotbar: () => read.state.hotbar,
+      blockHistory,
+      sim: { flush: (state, history) => { flushes.push(history); return sim.flush(state, history); } },
+      settled: editPath.settled,
+      editsSince: accepted.count,
+      now: () => Date.now(),
+      clock: {
+        now: () => performance.now(),
+        setInterval: (f, ms) => setInterval(f, ms) as unknown as number,
+        clearInterval: (id) => clearInterval(id),
+        setTimeout: (f, ms) => setTimeout(f, ms) as unknown as number,
+        clearTimeout: (id) => clearTimeout(id),
+      },
+      events: { on: (type, f) => { events.set(type, f); return () => { events.delete(type); }; }, hidden: () => false },
+      onResult: (r) => { results.push(r); },
+    });
+    const win = new EventTarget();
+    vi.stubGlobal('window', win);
+    const undoKeys = installUndoKeys({ owner: () => 'world', blocks: blockHistory, session: { undo: () => false, redo: () => false } });
+    return {
+      editPath, blockHistory, actionPost, autosave, flushes, results, events, posted, shown, win, failures,
+      /** The page's teardown: the keys, the autosave, the sim. */
+      close() {
+        undoKeys();
+        autosave.dispose();
+        sim.dispose();
+      },
+    };
+  }
+
+  test('Review Focus 1: one step on voxel A recorded and flushed first; then three steps on voxel B (distinct values) posted 50 ms apart, each reply 70 ms late; `pagehide` at 110 ms posts at once (no settled wait), its history holding A\'s step and B\'s first; after a reopen from the KV, Ctrl+Z ×3: B\'s first step dropped with `Can\'t undo there: the blocks changed`, A\'s step undone, and the third press finds nothing', async () => {
+    vi.useFakeTimers();
+    const kv = await created();
+    let delay = 0;
+    const one = await openPage(kv, () => delay);
+    /** A voxel just above the surface of the centre column, at (lx, lz) in it. */
+    const spot = (lx: number, lz: number) => {
+      const x = 16 * C[0] + lx;
+      const z = 16 * C[1] + lz;
+      return { x, y: store.heightAt('worldSurface', x, z)! + 1, z };
+    };
+    const A = spot(3, 3);
+    const B = spot(9, 12);
+    const genA = valueAt(A.x, A.y, A.z);
+    const genB = valueAt(B.x, B.y, B.z);
+    const set = (v: { x: number; y: number; z: number }, value: number, expectV: number): Edit => ({ ...v, op: 'set', value, expect: expectV });
+    // A: one step, recorded at its reply, then flushed with it.
+    expect(await settle(one.actionPost([set(A, val(STONE), genA)]))).toMatchObject({ ok: true });
+    expect(one.blockHistory.size).toBe(1);
+    expect(await settle(one.autosave.flushNow())).toMatchObject({ ok: true });
+    const stepA = { edits: [{ ...A, before: NO_ENTRY, after: val(STONE) }] };
+    expect(one.flushes).toEqual([{ worldId: ID, done: [stepA], undone: [] }]);
+    // B: three steps posted 50 ms apart, each reply 70 ms after its post (at 70, 120 and 170 ms).
+    delay = 70;
+    const values = [val(GLASS), val(DIRT), val(STONE)];
+    const t0 = performance.now();
+    const outs = [one.actionPost([set(B, values[0]!, genB)])];
+    await vi.advanceTimersByTimeAsync(50);
+    outs.push(one.actionPost([set(B, values[1]!, values[0]!)]));
+    await vi.advanceTimersByTimeAsync(50);
+    outs.push(one.actionPost([set(B, values[2]!, values[1]!)]));
+    await vi.advanceTimersByTimeAsync(10);
+    // 110 ms: B's first reply is in and its step recorded; the second and third are still out.
+    expect(performance.now() - t0).toBe(110);
+    expect([one.blockHistory.size, one.editPath.pending()]).toEqual([2, true]);
+    one.events.get('pagehide')!();
+    // Posted at once, with no settled wait: its history A's step and B's first.
+    const stepB1 = { edits: [{ ...B, before: NO_ENTRY, after: values[0]! }] };
+    expect(one.flushes).toHaveLength(2);
+    expect(one.flushes[1]).toEqual({ worldId: ID, done: [stepA, stepB1], undone: [] });
+    // The sim handles it after B's third edit (at 180 ms): the column with B's third value, the history as posted.
+    await vi.advanceTimersByTimeAsync(100);
+    expect((await Promise.all(outs)).map((o) => o.ok)).toEqual([true, true, true]);
+    expect(one.results.map((r) => r.ok)).toEqual([true, true]);
+    expect(kv.dump('history')).toEqual([[ID, { worldId: ID, done: [stepA, stepB1], undone: [] }]]);
+    one.close();
+    expect(valueAt(B.x, B.y, B.z)).toBe(values[2]);
+    // Reopened from the KV: the two saved steps.
+    delay = 0;
+    const two = await openPage(kv, () => delay);
+    expect([two.blockHistory.size, two.blockHistory.redoSize]).toEqual([2, 0]);
+    for (let i = 0; i < 3; i++) two.win.dispatchEvent(ctrlZ());
+    await vi.advanceTimersByTimeAsync(50);
+    // B's first step expects its glass, which B's third edit replaced: refused as changed, dropped; A's step undone;
+    // the third press finds nothing and posts nothing.
+    expect(two.posted).toEqual([
+      [{ ...B, op: 'revert', value: 0, expect: values[0] }],
+      [{ ...A, op: 'revert', value: 0, expect: val(STONE) }],
+    ]);
+    expect(two.shown).toEqual(['Can\'t undo there: the blocks changed', 'Undo · blocks']);
+    expect([two.blockHistory.size, two.blockHistory.redoSize]).toEqual([0, 1]);
+    expect([valueAt(A.x, A.y, A.z), valueAt(B.x, B.y, B.z)]).toEqual([genA, values[2]]);
+    expect([...one.failures, ...two.failures]).toEqual([]);
+    two.close();
+  });
+
+  test('the page restores a saved world\'s history, and creates its hotbar over `hotbarStorage` of the world\'s record (an unsaved world\'s stays in this browser, D29), which the autosave saves', () => {
+    const src = readFileSync(new URL('../../src/ui/world/worldPage.ts', import.meta.url), 'utf8');
+    expect(src).toMatch(/if \(saved !== null\) blockHistory\.restore\(saved\.history\.done, saved\.history\.undone\);\n\s+const actionPost = createActionPost/);
+    expect(src).toMatch(/let worldHotbar: HotbarRecord = saved !== null \? saved\.state\.hotbar : STATE_BOUNDS\.normalizeHotbar\(null\);/);
+    expect(src).toMatch(/const hotbar = createHotbar\(saved !== null \? hotbarStorage\(\(\) => worldHotbar, \(h\) => \{ worldHotbar = h; \}\) : storage\);/);
+    expect(src).toMatch(/hotbar: \(\) => worldHotbar,\n\s+blockHistory,\n\s+sim: simClient!,/);
   });
 });

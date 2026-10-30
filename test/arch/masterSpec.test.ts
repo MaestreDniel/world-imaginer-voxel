@@ -1271,12 +1271,6 @@ describe('master spec amendments (SP5a §9)', () => {
     expect(s59).not.toContain('Ctrl (sprint)');
   });
 
-  test('§4.12 gains the block-undo paragraph (SP5a spec §4.5, §9)', () => {
-    const at412 = text.indexOf('### 4.12 ');
-    const s412 = text.slice(at412, text.indexOf('### 4.13 ', at412));
-    expect(s412.split('\n')).toContain('**Block undo** (SP5a): Ctrl+Z / Ctrl+Y undo and redo block edits while the world owns the controls, 100 steps per session, separate from the map\'s history.');
-  });
-
   test('§4.12\'s Actions name the body in flight and hold to repeat (SP5a spec §4.1, §4.2, D6, §9)', () => {
     const at412 = text.indexOf('### 4.12 ');
     const s412 = text.slice(at412, text.indexOf('### 4.13 ', at412));
@@ -1444,6 +1438,15 @@ describe('master spec amendments (SP5b §9)', () => {
     const restored = lines.indexOf('- **Restored per saved world** (SP5b): the player\'s mode, position, yaw, pitch and flying speed.');
     expect(restored, 'no "Restored per saved world" bullet in §4.17').toBeGreaterThan(-1);
     expect(lines[restored - 1]).toBe('- **Keys:** cleared on blur, and ignored while focus is in a text input.');
+  });
+
+  test('§4.12\'s Block undo keeps the last 100 undo and 100 redo steps per world across reloads, and the hotbar persists in the `state` store (SP5b spec D6, §3.4 step 6, §9)', () => {
+    const at412 = text.indexOf('### 4.12 ');
+    const s412 = text.slice(at412, text.indexOf('### 4.13 ', at412));
+    const lines = s412.split('\n');
+    expect(lines).toContain('**Block undo** (SP5a): Ctrl+Z / Ctrl+Y undo and redo block edits while the world owns the controls, the last 100 undo and 100 redo steps per world, kept across reloads (SP5b), separate from the map\'s history.');
+    expect(s412).not.toContain('100 steps per session');
+    expect(s412).toContain('Hotbar slots persist per world by type name (SP5b, in the `state` store), never by state id.');
   });
 
   test('§1 names each SP5b module in its entry, which exists', () => {

@@ -1,7 +1,9 @@
 /**
  * The block history (SP5a spec §4.5, D13; Review Focus 2): 100 steps, the redo side cleared by a new step, each undo
  * and redo posted through the real edit path to a fake sim that checks every `expect` against its own voxels, the
- * value read now when a side has no entry, a press held while a post is pending, and the refusals' notices.
+ * value read now when a side has no entry, a press held while a post is pending, and the refusals' notices. SP5b
+ * (spec §3.4 step 6, D6, D32): `snapshot` and `restore` (each side the newest 100), `version`, and a step refused as
+ * `'changed'` dropped.
  */
 import { afterEach, beforeEach, describe, expect, test, vi } from 'vitest';
 import { colKey } from '../../src/core/coords';
@@ -93,6 +95,14 @@ function rig(delayMs = 0) {
     notices: { show: (text, ms) => { shown.push([text, ms]); } },
   });
   const act = createActionPost({ post: path.post, record: history.record });
+  /** Another history over the same edit path and voxels (the page's after a reload). */
+  const fresh = () => createBlockHistory({
+    post: path.post,
+    read: value,
+    pending: path.pending,
+    settled: path.settled,
+    notices: { show: (text, ms) => { shown.push([text, ms]); } },
+  });
   /** One action posted and answered: `delayMs` of fake time, then its outcome. */
   const action = async (edits: readonly Edit[]) => {
     const p = act(edits);
@@ -104,7 +114,7 @@ function rig(delayMs = 0) {
     history[k]();
     await vi.advanceTimersByTimeAsync(delayMs);
   };
-  return { gen, entries, value, states, posts, overlaps, path, history, shown, act, action, press, key };
+  return { gen, entries, value, states, posts, overlaps, path, history, shown, act, action, press, key, fresh };
 }
 
 beforeEach(() => { vi.useFakeTimers(); });
@@ -209,7 +219,7 @@ describe('createBlockHistory (SP5a spec §4.5, D13)', () => {
     expect(r.overlaps).toEqual([]);
   });
 
-  test('a refusal keeps the step: `not loaded` and `regenerating` name their cause for 4 s, undo and redo; `changed` shows nothing of its own', async () => {
+  test('`unloaded` keeps the step on top (SP5a), as does `regenerating`: each names its cause for 4 s, undo and redo', async () => {
     const r = rig();
     await r.action([set(17, STONE_V, AIR_V)]);
     r.states.set(colKey(1, 0), 1);
@@ -218,11 +228,6 @@ describe('createBlockHistory (SP5a spec §4.5, D13)', () => {
     await r.press('undo');
     expect([r.history.size, r.history.redoSize]).toEqual([1, 0]);
     r.states.delete(colKey(1, 0));
-    // Someone else's change at the voxel: the sim refuses the undo as `changed`, and the step stays.
-    r.entries.set(r.key(17, Y, 0), DIRT_V);
-    await r.press('undo');
-    expect([r.history.size, r.history.redoSize]).toEqual([1, 0]);
-    r.entries.set(r.key(17, Y, 0), STONE_V);
     await r.press('undo');
     r.states.set(colKey(1, 0), 1);
     await r.press('redo');
@@ -236,6 +241,101 @@ describe('createBlockHistory (SP5a spec §4.5, D13)', () => {
       ['Can\'t redo there: not loaded', 4000],
       ['Can\'t redo there: regenerating', 4000],
     ]);
+  });
+
+  test('a `\'changed\'` refusal drops the step with its notice; the next press undoes the older step (SP5b D32)', async () => {
+    const r = rig();
+    await r.action([set(1, STONE_V, AIR_V)]);
+    await r.action([set(2, STONE_V, AIR_V)]);
+    // Someone else's change at x 2: the sim refuses its undo as `changed`, and the step is dropped.
+    r.entries.set(r.key(2, Y, 0), DIRT_V);
+    await r.press('undo');
+    expect([r.history.size, r.history.redoSize]).toEqual([1, 0]);
+    expect(r.value(2, Y, 0)).toBe(DIRT_V);
+    await r.press('undo');
+    expect(r.posts[3]).toEqual([{ x: 1, y: Y, z: 0, op: 'revert', value: 0, expect: STONE_V }]);
+    expect(r.value(1, Y, 0)).toBe(AIR_V);
+    expect([r.history.size, r.history.redoSize]).toEqual([0, 1]);
+    // The same on the redo side: x 3's stone made dirt, that step undone, then x 3 broken since (its redo expects the
+    // stone), so the redo is refused and dropped.
+    await r.action([set(3, STONE_V, AIR_V)]);
+    await r.action([set(3, DIRT_V, STONE_V)]);
+    await r.press('undo');
+    expect([r.history.size, r.history.redoSize]).toEqual([1, 1]);
+    r.entries.set(r.key(3, Y, 0), AIR_V);
+    await r.press('redo');
+    expect([r.history.size, r.history.redoSize]).toEqual([1, 0]);
+    expect(r.value(3, Y, 0)).toBe(AIR_V);
+    expect(r.shown).toEqual([
+      ['Can\'t undo there: the blocks changed', 4000],
+      ['Undo · blocks', 1500],
+      ['Undo · blocks', 1500],
+      ['Can\'t redo there: the blocks changed', 4000],
+    ]);
+  });
+
+  test('`snapshot` then `restore` into a fresh history gives the same sides and the same undo (SP5b spec §3.4 step 6)', async () => {
+    const r = rig();
+    await r.action([set(1, STONE_V, AIR_V)]);
+    await r.action([set(2, STONE_V, AIR_V)]);
+    await r.action([set(3, DIRT_V, AIR_V)]);
+    await r.press('undo');
+    const s = r.history.snapshot();
+    expect(s.done.map((st) => st.edits[0]!.x)).toEqual([1, 2]);
+    expect(s.undone.map((st) => st.edits[0]!.x)).toEqual([3]);
+    // The snapshot is a copy: a later step does not reach it.
+    await r.action([set(4, STONE_V, AIR_V)]);
+    expect(s.done).toHaveLength(2);
+    const h = r.fresh();
+    h.restore(s.done, s.undone);
+    expect(h.snapshot()).toEqual(s);
+    expect([h.size, h.redoSize]).toEqual([2, 1]);
+    // Its undo is the original's: x 2's revert, expecting the stone placed.
+    const n = r.posts.length;
+    h.undo();
+    await vi.advanceTimersByTimeAsync(0);
+    expect(r.posts.slice(n)).toEqual([[{ x: 2, y: Y, z: 0, op: 'revert', value: 0, expect: STONE_V }]]);
+    expect(r.value(2, Y, 0)).toBe(AIR_V);
+    expect([h.size, h.redoSize]).toEqual([1, 2]);
+  });
+
+  test('`restore` of 120 steps keeps the newest 100', () => {
+    const r = rig();
+    const steps = (z: number) => Array.from({ length: 120 }, (_, x) => ({ edits: [{ x, y: Y, z, before: NO_ENTRY, after: STONE_V }] }));
+    const done = steps(0);
+    const undone = steps(1);
+    r.history.restore(done, undone);
+    expect([r.history.size, r.history.redoSize]).toEqual([100, 100]);
+    expect(r.history.snapshot()).toEqual({ done: done.slice(20), undone: undone.slice(20) });
+  });
+
+  test('`version` moves on record, undo, redo, drop and restore', async () => {
+    const r = rig();
+    const seen = [r.history.version];
+    const moved = (): void => {
+      expect(r.history.version, `after ${seen.length} changes`).not.toBe(seen[seen.length - 1]);
+      seen.push(r.history.version);
+    };
+    await r.action([set(1, STONE_V, AIR_V)]);
+    moved();
+    await r.action([set(2, STONE_V, AIR_V)]);
+    moved();
+    await r.press('undo');
+    moved();
+    await r.press('redo');
+    moved();
+    // A refusal that keeps the step (`unloaded`) does not move it; one that drops it (`changed`) does.
+    r.states.set(colKey(0, 0), 1);
+    await r.press('undo');
+    expect(r.history.version).toBe(seen[seen.length - 1]);
+    r.states.delete(colKey(0, 0));
+    r.entries.set(r.key(2, Y, 0), DIRT_V);
+    await r.press('undo');
+    expect(r.history.size).toBe(1);
+    moved();
+    r.history.restore([], []);
+    moved();
+    expect(new Set(seen).size).toBe(seen.length);
   });
 
   test('Review Focus 2: 12 undos 33 ms apart, step 3\'s column regenerating until the 8th press', async () => {

@@ -3,7 +3,8 @@
  * fluid bucket or the empty bucket, and the active one. 1-9 select a slot, the wheel steps it (wrapping), the palette
  * assigns the active slot and MMB picks into it. Every change is stored at once in `wi.world.hotbar` as
  * `{ v: 1, active, slots }`, slots by type name, and normalised on read; the storage is injected and may be null or
- * throw (private mode, quota): the hotbar then lasts for this page. SP5b moves it into the world record.
+ * throw (private mode, quota): the hotbar then lasts for this page. In a saved world (SP5b) the storage is the world's
+ * own (`hotbarStorage`, `ui/world/worldPage.ts`): the same record, kept in the world's `state` record instead.
  */
 import { REGISTRY } from '../world/blocks/index';
 import { displayName, PLACEABLE } from '../world/blocks/tags';

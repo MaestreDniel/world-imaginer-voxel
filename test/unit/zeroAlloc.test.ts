@@ -859,8 +859,9 @@ describe('zero allocation at rest (SP4b spec §3.10, D25)', () => {
 
   test(`${N} frame steps at rest in a saved world (autosave armed, its timer not firing) grow the heap by less than the boxing budget of 256 B per tick (SP5b spec §3.2, SP4b D25)`, async () => {
     const f = await atRest();
-    // The page's autosave over the frame's pose, clock and hotbar (SP5b spec §3.2): its 2,000 ms timer armed on a clock
-    // that never fires it, the page's events never sent. It has no per-frame hook: the state is built at a post only.
+    // The page's autosave over the frame's pose, clock and hotbar, and an empty block history (SP5b spec §3.2, §3.4 step
+    // 6): its 2,000 ms timer armed on a clock that never fires it, the page's events never sent. It has no per-frame
+    // hook: the state is built at a post only.
     const intervals: Array<{ ms: number; cleared: boolean }> = [];
     let flushes = 0;
     /** The autosave's reads of the edit count: at its creation, then only at a tick, a trigger or a post. */
@@ -871,7 +872,8 @@ describe('zero allocation at rest (SP4b spec §3.10, D25)', () => {
       frame: f.state,
       speedIndex: () => 0,
       storedTime: null,
-      hotbar: f.hotbar,
+      hotbar: () => ({ v: 1, active: f.hotbar.active, slots: f.hotbar.slots }),
+      blockHistory: { snapshot: () => ({ done: [], undone: [] }), version: 0 },
       sim: {
         flush: () => {
           flushes++;

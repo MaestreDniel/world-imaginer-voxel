@@ -12,10 +12,16 @@
  * - **A press while a post is pending** (a click's, or the history's own previous one) is held until the edit path has
  *   settled (every pending reply recorded), so it always acts on the step the user last saw land; held presses run in
  *   order, each after the previous reply.
- * - **Accepted:** the step moves to the other side and "Undo · blocks" or "Redo · blocks" shows for 1.5 s. **Refused:**
- *   the step stays; `unloaded` and `regenerating` show "Can't undo there: not loaded" / "… regenerating" ("Can't redo
- *   there: …") for 4 s; `changed`, `noProto`, `full` and `failed` show nothing of their own (the edit path already
- *   shows `full`'s notice, and the sim's failure its own).
+ * - **Accepted:** the step moves to the other side and "Undo · blocks" or "Redo · blocks" shows for 1.5 s. **Refused
+ *   as `changed`** (SP5b D32; the step's blocks were changed since, by another edit or by an edit saved without its
+ *   step before a reload): the step is dropped (by identity) and "Can't undo there: the blocks changed" ("Can't redo
+ *   there: …") shows for 4 s, so the next press reaches the older steps. **Otherwise refused:** the step stays;
+ *   `unloaded` and `regenerating` show "Can't undo there: not loaded" / "… regenerating" ("Can't redo there: …") for
+ *   4 s; `noProto`, `full` and `failed` show nothing of their own (the edit path already shows `full`'s notice, and the
+ *   sim's failure its own).
+ * - **Kept across reloads** (SP5b spec §3.4 step 6, D6): `snapshot` gives both sides for the autosave's `history`
+ *   record, `restore` puts a saved world's back at the open (each side its newest `BLOCK_HISTORY_STEPS`), and
+ *   `version` moves with every change of either side, so the autosave posts the history only when it changed.
  */
 import { NO_ENTRY } from '../../sim/diffStore';
 import type { Edit } from '../../workers/protocol';
@@ -44,6 +50,12 @@ export interface BlockHistory {
   readonly size: number;
   /** The steps that can be redone. */
   readonly redoSize: number;
+  /** Both sides, oldest first, as copies (a later step does not reach them). */
+  snapshot(): { done: BlockStep[]; undone: BlockStep[] };
+  /** Replaces both sides with `done` and `undone` (oldest first), each cut to its newest `BLOCK_HISTORY_STEPS`. */
+  restore(done: readonly BlockStep[], undone: readonly BlockStep[]): void;
+  /** Moved by `record`, an accepted undo or redo, a dropped step and `restore`. */
+  readonly version: number;
 }
 
 type Press = 'undo' | 'redo';
@@ -61,6 +73,7 @@ export function createBlockHistory(o: {
   const undone: BlockStep[] = [];
   const held: Press[] = [];
   let running = false;
+  let version = 0;
 
   const push = (side: BlockStep[], step: BlockStep): void => {
     side.push(step);
@@ -88,12 +101,19 @@ export function createBlockHistory(o: {
     const step = from[from.length - 1];
     if (step === undefined) return;
     const out = await o.post(editsOf(step, press));
-    if (out.ok) {
-      // By identity: a step recorded while this post was pending may sit above it now.
+    // By identity: a step recorded (or restored) while this post was pending may sit above it now.
+    const take = (): void => {
       const i = from.lastIndexOf(step);
       if (i >= 0) from.splice(i, 1);
+      version++;
+    };
+    if (out.ok) {
+      take();
       push(press === 'undo' ? undone : done, step);
       o.notices.show(press === 'undo' ? 'Undo · blocks' : 'Redo · blocks', DONE_NOTICE_MS);
+    } else if (out.why === 'changed') {
+      take();
+      o.notices.show(`Can't ${press} there: the blocks changed`, REFUSED_NOTICE_MS);
     } else if (out.why === 'unloaded' || out.why === 'regenerating') {
       o.notices.show(`Can't ${press} there: ${out.why === 'unloaded' ? 'not loaded' : 'regenerating'}`, REFUSED_NOTICE_MS);
     }
@@ -124,6 +144,7 @@ export function createBlockHistory(o: {
     record(step) {
       push(done, step);
       undone.length = 0;
+      version++;
     },
     undo: () => press('undo'),
     redo: () => press('redo'),
@@ -132,6 +153,15 @@ export function createBlockHistory(o: {
     },
     get redoSize() {
       return undone.length;
+    },
+    snapshot: () => ({ done: done.slice(), undone: undone.slice() }),
+    restore(d, u) {
+      done.splice(0, done.length, ...d.slice(Math.max(0, d.length - BLOCK_HISTORY_STEPS)));
+      undone.splice(0, undone.length, ...u.slice(Math.max(0, u.length - BLOCK_HISTORY_STEPS)));
+      version++;
+    },
+    get version() {
+      return version;
     },
   };
 }

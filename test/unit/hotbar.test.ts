@@ -1,5 +1,7 @@
-import { describe, expect, test } from 'vitest';
+import { afterEach, describe, expect, test, vi } from 'vitest';
+import type { HotbarRecord } from '../../src/persist/saves';
 import { createHotbar, DEFAULT_HOTBAR, HOTBAR_KEY, normalizeHotbar, slotName } from '../../src/player/hotbar';
+import { hotbarStorage } from '../../src/ui/world/worldPage';
 
 /** A `localStorage` stand-in over a Map, counting writes. */
 function memoryStorage(init: Record<string, string> = {}) {
@@ -138,5 +140,36 @@ describe('the hotbar (SP5a spec §4.3, D9)', () => {
   test('slot names: the block\'s display name, and the buckets', () => {
     expect(DEFAULT_HOTBAR.map(slotName)).toEqual(['Stone', 'Dirt', 'Grass block', 'Oak planks', 'Glass', 'Oak log', 'Torch', 'Water bucket', 'Lava bucket']);
     expect(slotName({ tool: 'emptyBucket' })).toBe('Empty bucket');
+  });
+});
+
+describe('the hotbar per saved world (SP5b spec §3.4 step 6, D4, D29)', () => {
+  afterEach(() => { vi.unstubAllGlobals(); });
+
+  test('a hotbar over `hotbarStorage` reads the world\'s `{v: 1, active: 4, slots}` and writes every change through `set`; `localStorage` untouched', () => {
+    const local = { getItem: vi.fn(() => null), setItem: vi.fn(), removeItem: vi.fn() };
+    vi.stubGlobal('localStorage', local);
+    const slots = [{ type: 'bricks', pinned: {} }, ...DEFAULT_HOTBAR.slice(1)];
+    let world: HotbarRecord = { v: 1, active: 4, slots };
+    const sets: HotbarRecord[] = [];
+    const h = createHotbar(hotbarStorage(() => world, (r) => { sets.push(r); world = r; }));
+    expect(h.active).toBe(4);
+    expect(h.slots).toEqual(slots);
+    h.select(2);
+    h.assign({ type: 'white_wool', pinned: {} });
+    h.step(1);
+    expect(sets).toHaveLength(3);
+    expect(sets.map((r) => [r.v, r.active])).toEqual([[1, 2], [1, 2], [1, 3]]);
+    expect(world).toEqual({ v: 1, active: 3, slots: [{ type: 'bricks', pinned: {} }, DEFAULT_HOTBAR[1], { type: 'white_wool', pinned: {} }, ...DEFAULT_HOTBAR.slice(3)] });
+    // Reopened over the record the world saved: the same hotbar.
+    const again = createHotbar(hotbarStorage(() => world, () => {}));
+    expect([again.active, again.slots]).toEqual([3, h.slots]);
+    // Only the hotbar's key is the world's.
+    const s = hotbarStorage(() => world, (r) => { sets.push(r); });
+    expect(s.getItem('wi.world.settings')).toBeNull();
+    s.setItem('wi.world.settings', '{}');
+    expect(sets).toHaveLength(3);
+    expect(HOTBAR_KEY).toBe('wi.world.hotbar');
+    for (const f of [local.getItem, local.setItem, local.removeItem]) expect(f).not.toHaveBeenCalled();
   });
 });

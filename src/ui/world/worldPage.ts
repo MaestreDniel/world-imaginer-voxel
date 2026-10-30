@@ -124,11 +124,11 @@ import { openIdbKV } from '../../persist/idb';
 import type { KV } from '../../persist/kv';
 import {
   createSaves, loadParams, normalizeHistory, normalizeState, parseWorldRecord, remapOf, tableRelation, todayStateTable, type HistoryRecord,
-  type Place, type Saves, type StateBounds, type StateRecord, type WorldRecord,
+  type HotbarRecord, type Place, type Saves, type StateBounds, type StateRecord, type WorldRecord,
 } from '../../persist/saves';
 import { SPEED_DEFAULT, applyCameraRotation, look, lookVectorInto, stepSpeed, toggleMode, type FlyState } from '../../player/fly';
 import { attachInput, isTextEntry } from '../../player/input';
-import { createHotbar, slotName, type Hotbar } from '../../player/hotbar';
+import { HOTBAR_KEY, createHotbar, slotName, type Hotbar } from '../../player/hotbar';
 import { bodyOf, breakAt, emptyBucketAt, pickAt, placeAt, type BodyBox } from '../../player/interaction';
 import { DEFAULT_KEYMAP, type Action } from '../../player/keymap';
 import { REACH_FLY, REACH_WALK, castRay, castRayFrom, createRayHit, type RayHit } from '../../player/raycast';
@@ -168,7 +168,7 @@ import { coversWorld, createApplyControl, createEpochs, updateAuxPolicy } from '
 import { LEAVE_WAIT_MS, createAutosave, snapshotState, type Autosave, type AutosaveDeps } from './autosave';
 import { createEditLatency } from './editLatency';
 import { mountBuildHud } from './buildHud';
-import { createActionPost, createBlockHistory, type BlockHistory } from './blockHistory';
+import { createActionPost, createBlockHistory, type BlockHistory, type BlockStep } from './blockHistory';
 import { createEditPath, type EditOutcome, type EditPath } from './editPath';
 import { createFrameStep, eyeSkyLight } from './frameStep';
 import { createHoldRepeat, type HoldRepeat } from './holdRepeat';
@@ -1708,12 +1708,30 @@ export function countAccepted(post: EditPath['post']): { post: EditPath['post'];
 const NO_PLACES: readonly Place[] = [];
 
 /**
+ * A saved world's hotbar storage (SP5b spec §3.4 step 6, D4): the slice of `Storage` that `createHotbar` reads and
+ * writes, over the world's hotbar record instead of `localStorage` (an unsaved world keeps SP5a's, D29).
+ * `getItem(HOTBAR_KEY)` is `get()`'s record as JSON; `setItem(HOTBAR_KEY, json)` hands `set` the parsed record, which
+ * the autosave's next build saves in the `state` record. Any other key is not the world's: null, and nothing kept.
+ */
+export function hotbarStorage(get: () => HotbarRecord, set: (h: HotbarRecord) => void): Pick<Storage, 'getItem' | 'setItem'> {
+  return {
+    getItem: (key) => (key === HOTBAR_KEY ? JSON.stringify(get()) : null),
+    setItem(key, value) {
+      if (key === HOTBAR_KEY) set(JSON.parse(value) as HotbarRecord);
+    },
+  };
+}
+
+/** A block-history step as the `history` record holds it. */
+const stepRecord = (step: BlockStep): HistoryRecord['done'][number] => ({ edits: [...step.edits] });
+
+/**
  * A saved world's autosave as the page creates it after the reveal (SP5b spec §3.2, D5): `flush` the sim client's;
  * `build` the state through `snapshotState` from the pose (`fly`), the clock (`frame.t`, which the frame step writes,
  * and the day speed's index; `storedTime` unchanged while a `?shot=1&time=` capture fixes the clock, which is then not
- * saved), the hotbar's record, the places and the wall clock (`now`), with the block history's record and version (an
- * empty history at version 0 until the block history is saved, SP5b spec §3.4 step 6); `settled` the edit path's;
- * `editsSince` the accepted replies (`countAccepted`); `onResult` every `flushed`.
+ * saved), the world's hotbar record (`hotbarStorage`'s), the places and the wall clock (`now`), with the block
+ * history's sides and version (§3.4 step 6); `settled` the edit path's; `editsSince` the accepted replies
+ * (`countAccepted`); `onResult` every `flushed`.
  */
 export function createPageAutosave(o: {
   readonly worldId: string;
@@ -1722,7 +1740,9 @@ export function createPageAutosave(o: {
   speedIndex(): number;
   /** The stored time while a capture fixes the clock (`RestoredStart.saveClock` false); null when the clock is saved. */
   readonly storedTime: { readonly t: number; readonly speedIndex: number } | null;
-  readonly hotbar: Pick<Hotbar, 'active' | 'slots'>;
+  /** The world's hotbar record, `{ v: 1, active, slots }` (the `get` of the hotbar's `hotbarStorage`). */
+  hotbar(): HotbarRecord;
+  readonly blockHistory: Pick<BlockHistory, 'snapshot' | 'version'>;
   readonly sim: Pick<SimClient, 'flush'>;
   settled(): Promise<void>;
   editsSince(): number;
@@ -1732,23 +1752,25 @@ export function createPageAutosave(o: {
   readonly events: AutosaveDeps['events'];
   onResult(r: FlushedMsg): void;
 }): Autosave {
-  const history: HistoryRecord = { worldId: o.worldId, done: [], undone: [] };
   return createAutosave({
     clock: o.clock,
     events: o.events,
     flush: (state, h) => o.sim.flush(state, h),
-    build: () => ({
-      state: snapshotState({
-        worldId: o.worldId,
-        fly: o.fly,
-        time: o.storedTime ?? { t: o.frame.t, speedIndex: o.speedIndex() },
-        hotbar: { v: 1, active: o.hotbar.active, slots: o.hotbar.slots },
-        places: NO_PLACES,
-        updated: o.now(),
-      }),
-      history,
-      historyVersion: 0,
-    }),
+    build: () => {
+      const steps = o.blockHistory.snapshot();
+      return {
+        state: snapshotState({
+          worldId: o.worldId,
+          fly: o.fly,
+          time: o.storedTime ?? { t: o.frame.t, speedIndex: o.speedIndex() },
+          hotbar: o.hotbar(),
+          places: NO_PLACES,
+          updated: o.now(),
+        }),
+        history: { worldId: o.worldId, done: steps.done.map(stepRecord), undone: steps.undone.map(stepRecord) },
+        historyVersion: o.blockHistory.version,
+      };
+    },
     settled: () => o.settled(),
     editsSince: () => o.editsSince(),
     onResult: (r) => o.onResult(r),
@@ -2553,6 +2575,8 @@ export function mountWorldPage(root: HTMLElement, q: WorldQuery, hash: string, o
       settled: editPath.settled,
       notices: { show: (text, ms) => notices.show(text, { timeoutMs: ms }) },
     });
+    // A saved world's steps as saved, remapped to today's ids (SP5b spec §3.4 step 6, D6).
+    if (saved !== null) blockHistory.restore(saved.history.done, saved.history.undone);
     const actionPost = createActionPost({ post: accepted.post, record: blockHistory.record });
     // A sim that failed during the load shows its notice now that the notices exist.
     if (simClient!.failed) simFailure();
@@ -2763,8 +2787,10 @@ export function mountWorldPage(root: HTMLElement, q: WorldQuery, hash: string, o
       teardown.push(() => huds.dispose());
       stopHud = () => huds.dispose();
     }
-    // The hotbar, remembered in this browser (SP5a spec §4.3), and its HUD: the crosshair, the bar and the slot's name.
-    const hotbar = createHotbar(storage);
+    // The hotbar (SP5a spec §4.3) and its HUD: the crosshair, the bar and the slot's name. A saved world's is its `state`
+    // record's, which the autosave saves (SP5b spec §3.4 step 6); an unsaved world's is remembered in this browser (D29).
+    let worldHotbar: HotbarRecord = saved !== null ? saved.state.hotbar : STATE_BOUNDS.normalizeHotbar(null);
+    const hotbar = createHotbar(saved !== null ? hotbarStorage(() => worldHotbar, (h) => { worldHotbar = h; }) : storage);
     const buildHud = mountBuildHud(host, { hotbar, hud, locked: () => document.pointerLockElement === canvas });
     teardown.push(() => buildHud.dispose());
 
@@ -3018,7 +3044,8 @@ export function mountWorldPage(root: HTMLElement, q: WorldQuery, hash: string, o
         frame,
         speedIndex: () => speedIndex,
         storedTime: restored !== null && !restored.saveClock ? opened.state.time : null,
-        hotbar,
+        hotbar: () => worldHotbar,
+        blockHistory,
         sim: simClient!,
         settled: editPath.settled,
         editsSince: accepted.count,
