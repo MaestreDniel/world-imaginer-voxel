@@ -1371,6 +1371,7 @@ describe('master spec amendments (SP5b §9)', () => {
     [/^\s+persist\/kv\.ts /, 'kvContract.ts diffCodec.ts wiworld.ts saves.ts (SP5b)', 'src/persist/memory.ts'],
     [/^\s+persist\/kv\.ts /, 'kvContract.ts diffCodec.ts wiworld.ts saves.ts (SP5b)', 'src/persist/kvContract.ts'],
     [/^\s+persist\/kv\.ts /, 'kvContract.ts diffCodec.ts wiworld.ts saves.ts (SP5b)', 'src/persist/diffCodec.ts'],
+    [/^\s+persist\/kv\.ts /, 'kvContract.ts diffCodec.ts wiworld.ts saves.ts (SP5b)', 'src/persist/saves.ts'],
   ];
 
   test('§10\'s SP5b entry and its receivers (SP5b spec §9, §11)', () => {
@@ -1394,6 +1395,25 @@ describe('master spec amendments (SP5b §9)', () => {
     const at = text.indexOf('### 2.7 ');
     const s27 = text.slice(at, text.indexOf('## 3. Generation', at));
     expect(s27.split('\n').some((l) => l === '- header `{v:1, genKey:u32x2, sections:u8}`, its genKey (informative: entries apply under any generator, SP5b);'), 'no informative-genKey header line in §2.7').toBe(true);
+  });
+
+  test('§2.7\'s five IndexedDB stores and their records, the saved params over the profile; §2.2\'s `stateTable` kept equal to the ids on disk (SP5b spec §2.1, D16, D22, D33, §9)', () => {
+    const at = text.indexOf('### 2.7 ');
+    const s27 = text.slice(at, text.indexOf('## 3. Generation', at));
+    const lines = s27.split('\n');
+    expect(lines).toContain('**IndexedDB `wi10` v1** (five stores, split by how often they change; SP5b):');
+    expect(lines.some((l) => l.startsWith('- `worlds`: key `id`, `{id, name, seedText, seed: [lo, hi], profile, params, schemaVersion, paramsHash, generatorVersion, genKey, stateTable: string[], created, backupOf: string | null}`')), 'no `worlds` record line in §2.7').toBe(true);
+    expect(lines.some((l) => l.startsWith('- `state`: key `worldId`, `{worldId, flushSeq, updated, player: {x, y, z, yaw, pitch, mode, speed} | null, time: {t, speedIndex}, hotbar: {v: 1, active, slots}, places: Place[]}`')), 'no `state` record line in §2.7').toBe(true);
+    expect(lines.some((l) => l.startsWith('- `history`: key `worldId`, `{worldId, done: Step[], undone: Step[]}`, each ≤ 100 steps')), 'no `history` record line in §2.7').toBe(true);
+    expect(lines).toContain('- `diffs`: key `[worldId, colKey]`, `ColumnDiffV1` bytes;');
+    expect(lines).toContain('- `meta`: empty in SP5b.');
+    expect(s27).toContain('`packs` (resource-pack and sound-pack blobs plus manifests, with `kind: \'textures\'|\'sounds\'`) and `presets` are added by a `wi10` version bump when SP8c\'s sound packs and SP10\'s preset library need them (SP5b).');
+    expect(s27).not.toContain('player:{pos,yaw,pitch,mode}');
+    expect(s27).toContain('Saves and `.wiworld` store full params and load as migrate → applyPatch over `resolveProfile(profile)` (SP5b).');
+    expect(s27).not.toContain('applyPatch over the defaults');
+    const at22 = text.indexOf('### 2.2 ');
+    const s22 = text.slice(at22, text.indexOf('### 2.3 ', at22));
+    expect(s22).toContain('Each `worlds` record stores `stateTable` (the mapping at save time) (kept equal to the ids on disk: rewritten at an open whose table differs from today\'s, SP5b);');
   });
 
   test('§1 names each SP5b module in its entry, which exists', () => {

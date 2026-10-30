@@ -281,7 +281,7 @@ These are rewritten against new tests. Everything else is written fresh:
 
 - **Connection-derived shapes are not stored.** Fence/pane connections and stair inner/outer corners are computed by the mesher (and collision/raycast) from neighbours, so edits never need neighbour state updates.
 - Waterlogging is not a property: it is the separate fluid byte.
-- **Append-only ids.** State ids are assigned append-only: `test/stateIds.lock.json` records every `(typeName, props) → id` ever published, and a unit test fails if an existing entry changes (new types and props only append: new types with their full property sets append, and a locked type never gains a property or a value; a variant that needs one is a new type, and `withType` converts between them; amended by SP3a). Each `worlds` record stores `stateTable` (the mapping at save time); load and import remap diffs through it (hotbar slots are stored by type name, §4.12); states whose type no longer exists become AIR, with a warning showing the count.
+- **Append-only ids.** State ids are assigned append-only: `test/stateIds.lock.json` records every `(typeName, props) → id` ever published, and a unit test fails if an existing entry changes (new types and props only append: new types with their full property sets append, and a locked type never gains a property or a value; a variant that needs one is a new type, and `withType` converts between them; amended by SP3a). Each `worlds` record stores `stateTable` (the mapping at save time) (kept equal to the ids on disk: rewritten at an open whose table differs from today's, SP5b); load and import remap diffs through it (hotbar slots are stored by type name, §4.12); states whose type no longer exists become AIR, with a warning showing the count.
 - A per-type `PLACEABLE` flag and a `category` (from `tags.ts`) drive the creative palette.
 - A test asserts at most **4096 used states** (`MAX_STATES`); per-state SoA tables are sized to it. `STATE_TYPE: Uint16Array` maps state → type; `stateOf(type, props)`, `propsOf(state)`, `withProp(state, prop, v)` and `withType(state, type)` (keeps the props both types share, defaults the rest; used by per-biome structure palettes) are pure table lookups; `rotateState(state, quarterTurns)` and `mirrorState` serve structure pieces and placement.
 
@@ -487,12 +487,14 @@ interface MetricDef { id: MetricId; run(region: RegionView): Record<string, numb
 
 Sparse entries are sorted by idx, sections by sy, and trailer ticks by packedPos, so encoding is canonical. All multi-byte integers in ColumnDiffV1 and `.wiworld` are **little-endian** (DataView calls pass `littleEndian = true`). Block-state ids follow the append-only rule of §2.2, and every save and export carries its `stateTable`.
 
-**IndexedDB `wi10` v1:**
-- `worlds`: `{id, name, seedText, seed, params, paramsHash, generatorVersion, genKey, created, updated, flushSeq, player:{pos,yaw,pitch,mode}, hotbar, stateTable, time}`;
-- `diffs`: key `[worldId, colKey]`;
-- `packs`: resource-pack and sound-pack blobs plus manifests, with `kind: 'textures'|'sounds'`;
-- `presets`;
-- `meta`.
+**IndexedDB `wi10` v1** (five stores, split by how often they change; SP5b):
+- `worlds`: key `id`, `{id, name, seedText, seed: [lo, hi], profile, params, schemaVersion, paramsHash, generatorVersion, genKey, stateTable: string[], created, backupOf: string | null}` (`params` the full document; written at create, rename, Apply, the older-generator open, import, and at an open whose `stateTable` differs from today's);
+- `state`: key `worldId`, `{worldId, flushSeq, updated, player: {x, y, z, yaw, pitch, mode, speed} | null, time: {t, speedIndex}, hotbar: {v: 1, active, slots}, places: Place[]}` (written by every flush that has a change);
+- `history`: key `worldId`, `{worldId, done: Step[], undone: Step[]}`, each ≤ 100 steps (written only when it changed);
+- `diffs`: key `[worldId, colKey]`, `ColumnDiffV1` bytes;
+- `meta`: empty in SP5b.
+
+`packs` (resource-pack and sound-pack blobs plus manifests, with `kind: 'textures'|'sounds'`) and `presets` are added by a `wi10` version bump when SP8c's sound packs and SP10's preset library need them (SP5b).
 
 `genKey = fnv1a64(utf8(`${GENERATOR_VERSION}|${seed[0]}|${seed[1]}|${hex64(stageHash('decorate'))}`))` (seed words as decimal u32, lo first; `hex64` = 16 lower-case hex digits, hi first), where the decorate stageHash covers exactly the decorate-, terrain- and climate-scope params (§5.1). Live and Remesh params never affect genKey. A save is valid only for its genKey.
 
@@ -511,7 +513,7 @@ During development this dialog is expected often, since every SP changes the gen
 
 Import validates the magic and version, runs `migrate`, recomputes genKey, and creates a new world id.
 
-**Presets.** Format `{format:'wi10-preset', schemaVersion, name, profile, params}`, where `params` is the minimal patch over `resolveProfile(profile)`. Import checks format → name (profile ids are reserved) → profile → schemaVersion (newer is rejected) → migrate → applyPatch over the profile, showing every error path inline; unknown keys are errors. Import *loads* the preset; export writes the *current draft*. Saves and `.wiworld` store full params and load as migrate → applyPatch over the defaults (SP1 spec §4.5). Presets carry `schemaVersion` 2 since SP3d: migration 1 → 2 is the identity, since a version-1 document lacks the `density.defs` and `surface.rules` leaves and a missing leaf takes the profile's value (amended by SP3d).
+**Presets.** Format `{format:'wi10-preset', schemaVersion, name, profile, params}`, where `params` is the minimal patch over `resolveProfile(profile)`. Import checks format → name (profile ids are reserved) → profile → schemaVersion (newer is rejected) → migrate → applyPatch over the profile, showing every error path inline; unknown keys are errors. Import *loads* the preset; export writes the *current draft*. Saves and `.wiworld` store full params and load as migrate → applyPatch over `resolveProfile(profile)` (SP5b). Presets carry `schemaVersion` 2 since SP3d: migration 1 → 2 is the identity, since a version-1 document lacks the `density.defs` and `surface.rules` leaves and a missing leaf takes the profile's value (amended by SP3d).
 
 **Session.** Settings, last world and panel layout go to localStorage behind try/catch. The world URL `?map#base64url(canonicalJSON({v: 1, seed, profile, patch, view}))` makes a world shareable: `patch` is the session's minimal patch over the profile and there is no gzip (a full 52-knot offset edit is about 2.3 KB). It replaces `#seed=…&profile=<ProfileId>&p=<base64url(gzip(params diff vs profile))>` (amended by SP2b). An edited tree (`density.defs`, `surface.rules`: atomic `json` leaves of at most 128 KiB of canonical text each) travels whole in the patch, so in the URL and in presets; the map hash is not written above 64 KiB, with a notice to export a preset instead, and a hash longer than 1 MiB is refused on read; the URL keeps `v: 1`, since a URL cannot be migrated and missing leaves are the profile's (amended by SP3d).
 

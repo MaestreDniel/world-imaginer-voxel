@@ -423,7 +423,7 @@ export function buildSchema<R extends Group>(root: R): Schema<R> {
   return { root, nodes, leaves, byPath, defaults: deepFreeze(defaults) as Value<R> };
 }
 
-/** Validates a complete params document (saves, .wiworld): every key required, unknown keys rejected. */
+/** Validates a params document (complete documents; saves and `.wiworld` load through `applyPatch` over the profile, SP5b D33): every key required, unknown keys rejected. */
 export function checkParams<R extends Group>(s: Schema<R>, v: unknown): Result<Value<R>> {
   const out: Issue[] = [];
   const walk = (n: Node, x: unknown, path: string): unknown => {
