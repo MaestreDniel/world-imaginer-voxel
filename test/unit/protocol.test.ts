@@ -842,6 +842,40 @@ describe('the sim worker\'s messages (SP5a spec §2.1)', () => {
     expect(parseFromSim(m)).toBeNull();
   });
 
+  const copy = { ...world, id: 'w2', name: 'My world (before the change)', genKey: 'fedcba9876543210', backupOf: 'w1' };
+  const backupMsg = (o: Record<string, unknown> = {}) => ({
+    type: 'backup', id: 9, newWorld: copy, newId: 'w2', state, history: { worldId: 'w1', done: [], undone: [] }, ...o,
+  });
+  const backedUp = (o: Record<string, unknown> = {}) => ({ type: 'backedUp', id: 9, ok: true, error: null, ...o });
+
+  test('`backup` and `backedUp` are accepted (SP5b spec §3.3, §3.6)', () => {
+    expect(parseToSim(backupMsg())).not.toBeNull();
+    expect(parseFromSim(backedUp())).not.toBeNull();
+    expect(parseFromSim(backedUp({ ok: false, error: 'QuotaExceededError' }))).not.toBeNull();
+    expect(parseFromSim(backedUp({ ok: false, error: 'closed' }))).not.toBeNull();
+  });
+  test.each<[string, unknown]>([
+    ['a backup with a null history', backupMsg({ history: null })],
+    ['a backup whose history is a change (always the whole record)', backupMsg({ history: historyChangeMsg })],
+    ['a backup whose history has no string worldId', backupMsg({ history: { worldId: 1, done: [], undone: [] } })],
+    ['a backup with a non-integer id', backupMsg({ id: 'a' })],
+    ['a backup without a newId', backupMsg({ newId: undefined })],
+    ['a backup whose newWorld\'s id is not its newId', backupMsg({ newId: 'w3' })],
+    ['a backup whose newWorld has a genKey of 15 digits', backupMsg({ newWorld: { ...copy, genKey: 'fedcba987654321' } })],
+    ['a backup whose newWorld has no string backupOf', backupMsg({ newWorld: { ...copy, backupOf: null } })],
+    ['a backup whose state has a NaN updated', backupMsg({ state: { ...state, updated: Number.NaN } })],
+  ])('a backup is refused: %s', (_n, m) => {
+    expect(parseToSim(m)).toBeNull();
+  });
+  test.each<[string, unknown]>([
+    ['backedUp with a non-integer id', backedUp({ id: 0.5 })],
+    ['backedUp ok with an error', backedUp({ error: 'AbortError' })],
+    ['backedUp not ok without an error', backedUp({ ok: false })],
+    ['backedUp without ok', backedUp({ ok: undefined })],
+  ])('a backedUp reply is refused: %s', (_n, m) => {
+    expect(parseFromSim(m)).toBeNull();
+  });
+
   test('each message to the sim is accepted', () => {
     expect(parseToSim({ type: 'attach', handles, thread: 15 })).not.toBeNull();
     expect(parseToSim(edits(edit(), edit({ op: 'revert', value: 0, expect: 1 << 8 })))).not.toBeNull();

@@ -8,22 +8,26 @@
  * `flush` (SP5b spec §3.2) posts the state and history and resolves with the sim's `flushed`, committed or not (a KV
  * failure is a result, not the sim's); a history that keeps steps of the last one posted goes as its change against it
  * (`historyChange`, D28's third lever), which the sim resolves to the same record. `record` posts the world's changed
- * record, which has no reply.
+ * record, which has no reply. `backup` (SP5b spec §3.6) posts the copy request with the whole history (it moves no
+ * change base) and resolves with `backedUp`, ok or not; `hasAnyEntries` tells the backup rule whether the world has any
+ * placed or removed block.
  *
  * **The sim's failure** (§2.1): an `error` event, an `error` reply of any code, or a reply the guard refuses
  * (`parseFromSim`, or one that does not answer a pending request of its kind, its batch's length or its column). In
  * this order: `failed` turns true, the entry set empties, the worker is terminated (so no batch already queued in its
  * port writes after its pins are released; the sim's handler also refuses every batch after an `error` reply),
  * `onFailure` runs once and synchronously (the page marks thread 15 dead, releases every sim pin and shows the
- * notice), then every pending `edits`, `load` and `flush` rejects with `SimFailed` and every pending `diff` resolves
- * null, so a rejected post finds its pins already released. Later `edits`, `load`s and `flush`es reject and later
- * `diff`s resolve null at once, and a later `record` is dropped, with nothing posted (autosave counts a rejected flush
- * as not saved; the sim's own failure notice shows). `dispose` terminates the worker and settles its requests the same way, without
- * `onFailure`. The page opens a world whose `load` failed without editing (SP5b spec §3.3).
+ * notice), then every pending `edits`, `load`, `flush` and `backup` rejects with `SimFailed` and every pending `diff`
+ * resolves null, so a rejected post finds its pins already released. Later `edits`, `load`s, `flush`es and `backup`s
+ * reject and later `diff`s resolve null at once, and a later `record` is dropped, with nothing posted (autosave counts a
+ * rejected flush as not saved; the sim's own failure notice shows). `dispose` terminates the worker and settles its
+ * requests the same way, without `onFailure`. The page opens a world whose `load` failed without editing (SP5b spec §3.3).
  */
 import { colKey } from '../core/coords';
 import type { HistoryRecord, StateRecord, WorldRecord } from '../persist/saves';
-import { historyChange, parseFromSim, type DiffMsg, type Edit, type EditedMsg, type FlushedMsg, type LoadedMsg, type LoadMsg, type ToSim } from '../workers/protocol';
+import {
+  historyChange, parseFromSim, type BackedUpMsg, type BackupMsg, type DiffMsg, type Edit, type EditedMsg, type FlushedMsg, type LoadedMsg, type LoadMsg, type ToSim,
+} from '../workers/protocol';
 import type { ColumnDiff } from '../world/store/api';
 import { SIM_THREAD } from '../world/store/reclaim';
 import type { StoreHandles } from '../world/store/store';
@@ -63,8 +67,15 @@ export interface SimClient {
   flush(state: StateRecord, history: HistoryRecord | null): Promise<FlushedMsg>;
   /** Sends the world's changed record for the next flush (no reply); nothing on a closed client. */
   record(world: WorldRecord): void;
+  /**
+   * Writes the pending flush and the backup copy (SP5b spec §3.6): resolves with `backedUp`, ok or not; rejects
+   * `SimFailed` as `flush` does.
+   */
+  backup(m: Omit<BackupMsg, 'type' | 'id'>): Promise<BackedUpMsg>;
   /** Whether the column holds entries, as the `loaded` set and the `edited` replies' changes tell (false once the sim failed). */
   hasEntries(cx: number, cz: number): boolean;
+  /** Whether any column holds entries: the entry set is not empty (false once the sim failed). */
+  hasAnyEntries(): boolean;
   readonly failed: boolean;
   dispose(): void;
 }
@@ -73,9 +84,12 @@ type Pending =
   | { readonly kind: 'load'; resolve(m: LoadedMsg): void; reject(e: Error): void }
   | { readonly kind: 'edits'; readonly n: number; resolve(m: EditedMsg): void; reject(e: Error): void }
   | { readonly kind: 'flush'; resolve(m: FlushedMsg): void; reject(e: Error): void }
+  | { readonly kind: 'backup'; resolve(m: BackedUpMsg): void; reject(e: Error): void }
   | { readonly kind: 'diff'; readonly cx: number; readonly cz: number; resolve(d: ColumnDiff | null): void };
 /** The request kind each id-carrying reply answers. */
-const REQUEST_OF: Readonly<Record<'loaded' | 'edited' | 'diff' | 'flushed', Pending['kind']>> = { loaded: 'load', edited: 'edits', diff: 'diff', flushed: 'flush' };
+const REQUEST_OF: Readonly<Record<'loaded' | 'edited' | 'diff' | 'flushed' | 'backedUp', Pending['kind']>> = {
+  loaded: 'load', edited: 'edits', diff: 'diff', flushed: 'flush', backedUp: 'backup',
+};
 interface AttachWait { resolve(): void; reject(e: Error): void }
 
 const text = (e: unknown): string => (e instanceof Error ? `${e.name}: ${e.message}` : typeof e === 'object' && e !== null && 'message' in e ? String(e.message) : String(e));
@@ -93,7 +107,7 @@ export function createSimClient(spawn: () => SimWorkerLike, o: { onFailure(e: Er
   /** Failed or disposed: requests settle at once and replies are ignored. */
   let closed = false;
 
-  /** Settles every request still waiting: an attach, a load, a batch or a flush rejects with `e`, a diff resolves null. */
+  /** Settles every request still waiting: an attach, a load, a batch, a flush or a backup rejects with `e`, a diff resolves null. */
   const settleAll = (e: SimFailed): void => {
     const waits = [...pending.values()];
     pending.clear();
@@ -144,6 +158,11 @@ export function createSimClient(spawn: () => SimWorkerLike, o: { onFailure(e: Er
     if (p.kind === 'flush') {
       pending.delete(m.id);
       p.resolve(m as FlushedMsg);
+      return;
+    }
+    if (p.kind === 'backup') {
+      pending.delete(m.id);
+      p.resolve(m as BackedUpMsg);
       return;
     }
     if (p.kind === 'edits') {
@@ -211,7 +230,16 @@ export function createSimClient(spawn: () => SimWorkerLike, o: { onFailure(e: Er
     record(world) {
       if (!closed) post({ type: 'record', world });
     },
+    backup(m) {
+      if (closed) return Promise.reject(new SimFailed('the sim failed or was disposed'));
+      const id = nextId++;
+      return new Promise<BackedUpMsg>((resolve, reject) => {
+        post({ type: 'backup', id, ...m });
+        pending.set(id, { kind: 'backup', resolve, reject });
+      });
+    },
     hasEntries: (cx, cz) => entries.has(colKey(cx, cz)),
+    hasAnyEntries: () => entries.size > 0,
     get failed() {
       return failed;
     },

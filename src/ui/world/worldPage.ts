@@ -96,7 +96,9 @@
  * loss disposes the overlay before the failure panel or the notice. The flight route creates neither; the bench creates the driver without the overlay.
  * In a saved world the overlay's header holds the world-modification switch (`modifyMode.ts`, SP5b spec §3.6, D10, D25):
  * the session is not writable from the open (`openSavedWorld`) until "Modify terrain" is switched on; an unsaved world
- * edits live with no switch.
+ * edits live with no switch. The apply control's `beforeApply` is the mode's: the first terrain change of each mode
+ * session in a world with edits waits for its backup copy (§3.6, D11, D26), and each Apply or adopt's record
+ * (`appliedRecord`) becomes the kept record and goes to the sim for the next flush.
  *
  * Live editing (SP4c spec §4.3, §6.2): the coordinator's first epoch is the first draft's genKey interned
  * (`createEpochs`); the apply control (`applyControl.ts`) ticks before every `coordinator.update` and applies the
@@ -192,7 +194,7 @@ import { createEditPath, type EditOutcome, type EditPath } from './editPath';
 import { createFrameStep, eyeSkyLight } from './frameStep';
 import { createHoldRepeat, type HoldRepeat } from './holdRepeat';
 import { createMapOverlay, followSession, frameCapFor, worldMapView, type ControlsOwner, type MapOverlay } from './mapOverlay';
-import { createModifyMode, createModifySwitch } from './modifyMode';
+import { createModifyMode, createModifySwitch, type ModifyMode } from './modifyMode';
 import { createReloader, createWorldUrl, installLeaveGuard, navigateTo, savedWorldUrl, type Reloader, type WorldUrl } from './reload';
 import { Y_MAX, Y_MIN, type WorldQuery } from './query';
 import { STATE_BOUNDS } from './stateBounds';
@@ -1676,6 +1678,19 @@ export function olderGeneratorRecord(kept: WorldRecord, readyGenKey: string): Wo
 }
 
 /**
+ * The record the page keeps after an Apply or adopt (SP5b spec §3.6; ruling P39): `kept` with the applied session's seed,
+ * preset and params, their `paramsHash`, the applied draft's genKey (`readyGenKey`, its `ReadyMsg.genKey`) and today's
+ * schema and generator version (the session's params are today's schema); its id, name, `created`, `stateTable` and
+ * `backupOf` kept. The page sends it with `record`, and a later backup copies it.
+ */
+export function appliedRecord(kept: WorldRecord, s: SessionState, readyGenKey: string): WorldRecord {
+  return {
+    ...kept, seedText: s.seedText, seed: [s.seed[0], s.seed[1]], profile: s.profile, params: s.params as unknown as JsonObject,
+    schemaVersion: SCHEMA_VERSION, paramsHash: hex64(paramsHash(s.params)), generatorVersion: GENERATOR_VERSION, genKey: readyGenKey,
+  };
+}
+
+/**
  * A saved world's generator check once its diffs are loaded (SP5b spec §3.4 step 4, D8, D21): a stored genKey that is
  * not today's sends `olderGeneratorRecord`'s record to the sim, which writes it with the next flush, and the page keeps
  * that record from then on (§3.6), so a later `record` or backup copies today's genKey. Entries apply under any
@@ -1919,6 +1934,12 @@ export function hotbarStorage(get: () => HotbarRecord, set: (h: HotbarRecord) =>
 /** A block-history step as the `history` record holds it. */
 const stepRecord = (step: BlockStep): HistoryRecord['done'][number] => ({ edits: [...step.edits] });
 
+/** The page's autosave, and the state and whole history it would post now: the backup's (SP5b spec §3.6, D26). */
+export interface PageAutosave extends Autosave {
+  /** The state record (the state parts' `record()`, `updated` now) and the block history as a whole record. */
+  build(): { readonly state: StateRecord; readonly history: HistoryRecord };
+}
+
 /**
  * A saved world's autosave as the page creates it after the reveal (SP5b spec §3.2, D5): `flush` the sim client's;
  * the state's parts (`createStateParts`) over the pose (`fly`), the clock (`frame.t`, which the frame step writes, and
@@ -1927,7 +1948,8 @@ const stepRecord = (step: BlockStep): HistoryRecord['done'][number] => ({ edits:
  * version and its sides as a record (§3.4 step 6), one record object per step for as long as the step lives, so the
  * sim client posts only what changed since the last history (D28's third lever); `settled` the edit path's;
  * `editsSince` the accepted replies (`countAccepted`); `onResult` every `flushed`; `onBuild`, when given, as each
- * post's work starts (the bench's clock of a flush's main-thread work, SP5b spec §6.2).
+ * post's work starts (the bench's clock of a flush's main-thread work, SP5b spec §6.2). `build` gives the backup the
+ * same state parts' record and history the next post would carry.
  */
 export function createPageAutosave(o: {
   readonly worldId: string;
@@ -1948,7 +1970,7 @@ export function createPageAutosave(o: {
   readonly events: AutosaveDeps['events'];
   onResult(r: FlushedMsg): void;
   onBuild?(): void;
-}): Autosave {
+}): PageAutosave {
   const records = new WeakMap<BlockStep, HistoryRecord['done'][number]>();
   const recordOf = (step: BlockStep): HistoryRecord['done'][number] => {
     let r = records.get(step);
@@ -1956,29 +1978,32 @@ export function createPageAutosave(o: {
     return r;
   };
   const { storedTime } = o;
-  return createAutosave({
+  const state = createStateParts({
+    worldId: o.worldId,
+    fly: o.fly,
+    t: () => (storedTime !== null ? storedTime.t : o.frame.t),
+    speedIndex: () => (storedTime !== null ? storedTime.speedIndex : o.speedIndex()),
+    hotbar: () => o.hotbar(),
+    places: () => NO_PLACES,
+    now: () => o.now(),
+  });
+  const history = (): HistoryRecord => {
+    const steps = o.blockHistory.snapshot();
+    return { worldId: o.worldId, done: steps.done.map(recordOf), undone: steps.undone.map(recordOf) };
+  };
+  const autosave = createAutosave({
     clock: o.clock,
     events: o.events,
-    flush: (state, h) => o.sim.flush(state, h),
-    state: createStateParts({
-      worldId: o.worldId,
-      fly: o.fly,
-      t: () => (storedTime !== null ? storedTime.t : o.frame.t),
-      speedIndex: () => (storedTime !== null ? storedTime.speedIndex : o.speedIndex()),
-      hotbar: () => o.hotbar(),
-      places: () => NO_PLACES,
-      now: () => o.now(),
-    }),
+    flush: (st, h) => o.sim.flush(st, h),
+    state,
     historyVersion: () => o.blockHistory.version,
-    history: () => {
-      const steps = o.blockHistory.snapshot();
-      return { worldId: o.worldId, done: steps.done.map(recordOf), undone: steps.undone.map(recordOf) };
-    },
+    history,
     settled: () => o.settled(),
     editsSince: () => o.editsSince(),
     onResult: (r) => o.onResult(r),
     onBuild: o.onBuild,
   });
+  return { ...autosave, build: () => ({ state: state.record(), history: history() }) };
 }
 
 /** The benches' database (SP5b spec §6.2; `bench.ts`): the bench route's saved world lives there, never in `SAVES_DB`. */
@@ -2974,7 +2999,7 @@ export function mountWorldPage(root: HTMLElement, q: WorldQuery, hash: string, o
     const disarm = installLeaveGuard(window);
     teardown.push(disarm);
     // A saved world's autosave (SP5b spec §3.2, D5), created below once the pose, the hotbar and the edit path exist.
-    let autosave: Autosave | null = null;
+    let autosave: PageAutosave | null = null;
     const reloader = createReloader(leaveAfterSave(() => autosave, (url) => navigateTo(url, location)), disarm);
     const notices = createWorldNotices(host, reloader);
     teardown.push(() => notices.dispose());
@@ -3133,6 +3158,12 @@ export function mountWorldPage(root: HTMLElement, q: WorldQuery, hash: string, o
       show: (text, ms) => notices.show(text, { timeoutMs: ms }),
     });
     teardown.push(() => undoNotice.dispose());
+    // A saved world's kept record and applied snapshot (SP5b spec §3.6): the open's (the older-generator open's record,
+    // Task 23), then each Apply's or adopt's; the backup copies the record, and a failed copy loads the snapshot back.
+    let kept = generator?.kept ?? null;
+    let appliedSnapshot = session.snapshot;
+    // The world-modification mode, created with the overlay below; its `beforeApply` holds a terrain change for its copy.
+    let modifyRef: ModifyMode | null = null;
     const applyControl = createApplyControl({
       coordinator,
       driver: previewDriver,
@@ -3142,9 +3173,17 @@ export function mountWorldPage(root: HTMLElement, q: WorldQuery, hash: string, o
       epochs,
       initial: appliedDraftOf(draftOf(session.state).seedKey, firstReady),
       initialGeneration: workers.epoch,
-      // SP4c always proceeds; SP5b's world-modification mode suspends auto-apply here (master §2.7 (b)).
-      beforeApply: () => true,
+      // An unsaved world always proceeds; a saved world's mode holds a terrain change while its backup copy is written
+      // (SP5b spec §3.6, D26).
+      beforeApply: (from) => modifyRef === null || modifyRef.beforeApply(from),
       onApplied: ({ from }) => {
+        // A saved world's record follows the applied draft, written by the next flush (SP5b spec §3.6, §3.2).
+        if (kept !== null) {
+          kept = appliedRecord(kept, session.state, applyControl.applied.genKey);
+          appliedSnapshot = session.snapshot;
+          simClient!.record(kept);
+          autosave?.markChanged();
+        }
         worldUrl.applied();
         mapRef?.applied(from);
         // After Watch live: an undo it just hid the map for shows its notice too (SP4c spec §2.4).
@@ -3400,8 +3439,25 @@ export function mountWorldPage(root: HTMLElement, q: WorldQuery, hash: string, o
     // The world-modification mode (SP5b spec §3.6, D10, D25): a saved world's map changes its terrain only while "Modify
     // terrain" is on, off at every open; an unsaved world has no switch and edits live. The mode reaches the tool once
     // the overlay mounts it (`tool` is read only after the overlay exists).
+    // Its backup (§3.6, D11, D26): the kept record, the autosave's state and history, a new id, every world's name.
     const modifySwitch = saved !== null ? createModifySwitch() : null;
-    const modifyMode = modifySwitch === null ? null : createModifyMode({ session, tool: () => mapOverlay.tool, checkbox: modifySwitch.checkbox });
+    const savedKv = saved?.kv ?? null;
+    const modifyMode = modifySwitch === null || savedKv === null ? null : createModifyMode({
+      session,
+      tool: () => mapOverlay.tool,
+      checkbox: modifySwitch.checkbox,
+      backup: {
+        sim: simClient!,
+        kept: () => kept!,
+        applied: () => appliedSnapshot,
+        // The autosave exists from the reveal, before the first frame ticks the apply control.
+        build: () => autosave!.build(),
+        newId: () => crypto.randomUUID(),
+        names: () => createSaves(savedKv).list().then((rows) => rows.flatMap((r) => (r.broken ? [] : [r.world.name]))),
+        notices,
+      },
+    });
+    modifyRef = modifyMode;
     if (modifyMode !== null) teardown.push(() => modifyMode.dispose());
     // The map overlay (SP4c spec §1.3): M before the reveal does nothing, since nothing exists to receive it.
     const mapOverlay = createMapOverlay({

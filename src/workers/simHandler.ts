@@ -38,19 +38,31 @@
  * marks its column again, so the next flush carries it. `record` (no reply) waits for the next flush, and its genKey
  * heads every column encoded from then on (D21). A latched handler never flushes: a `flush` is INTERNAL and a `record`
  * is dropped; with no world loaded either is BAD_MESSAGE.
+ *
+ * `backup` (spec §3.6, D11, D26): a flush whose write also holds the copy. Its flush part is the pending flush (the dirty
+ * columns, the pending history and `record`) with the backup's state and whole history; then, under `newId`, `newWorld`,
+ * the state with `updated` the last committed one (`load`'s until a write commits) and the history, and every column of
+ * the DiffStore encoded under the header genKey (D19), all in one `write`. It is queued as a flush is: behind the one in
+ * flight, its state and history replacing a queued flush's, which it absorbs (a flush arriving after it updates only the
+ * flush part's); its `flushSeq` is the last committed + 1 when it runs. On `complete` the flush part commits as a
+ * flush's, and the absorbed flushes are answered with its outcome (ruling P4); on `abort` or `closed` the flush part is
+ * merged back as an aborted flush's, the copy is not written, and `backedUp` names the KV's error (`'closed'` for a
+ * closed connection). The backup's history is not the base of a later flush's change: only a `flush` moves it.
  */
 import { colKeyCx, colKeyCz } from '../core/coords';
 import { parseHex64, type Hash64 } from '../core/hash';
 import { decodeColumnDiff, encodeColumnDiff, encodeColumnSections, type DecodedColumn } from '../persist/diffCodec';
 import { worldRange, type KV, type WriteOp, type WriteResult } from '../persist/kv';
 import { createMemoryKV, type MemoryKV } from '../persist/memory';
-import { flushOps, remapDiff, remapOf, tableRelation, type HistoryRecord, type StateRecord, type WorldRecord } from '../persist/saves';
+import { copyOps, flushOps, remapDiff, remapOf, tableRelation, type HistoryRecord, type StateRecord, type WorldRecord } from '../persist/saves';
 import { createDiffStore, type DiffStore } from '../sim/diffStore';
 import { applyEdits, createEditScratch, readDiff, type EditScratch } from '../sim/edits';
 import type { ColumnDiff } from '../world/store/api';
 import { R_STORE_ID, SIM_THREAD } from '../world/store/reclaim';
 import { attachStore, StoreCorrupt, type VoxelStore } from '../world/store/store';
-import { parseToSim, resolveHistory, type ErrorCode, type FlushedMsg, type FlushMsg, type FromSim, type LoadMsg, type RecordMsg, type ToSim } from './protocol';
+import {
+  parseToSim, resolveHistory, type BackedUpMsg, type BackupMsg, type ErrorCode, type FlushedMsg, type FlushMsg, type FromSim, type LoadMsg, type RecordMsg, type ToSim,
+} from './protocol';
 
 /** The sim's limbo retry interval while entries are left (§2.1: it has no reply loop like the pool's). */
 export const SIM_DRAIN_MS = 100;
@@ -92,11 +104,21 @@ interface OpenWorld {
   updated: number;
 }
 
-/** A `flush` waiting for the one in flight: the newest state, the history kept, and every id it answers (ruling P4). */
+/** A `backup` and where its `backedUp` goes. */
+interface PendingBackup {
+  readonly m: BackupMsg;
+  readonly post: (r: SimReply) => void;
+}
+
+/**
+ * A `flush` waiting for the one in flight: the newest state, the history kept, every id it answers (ruling P4), and the
+ * `backup` whose write it becomes, if one arrived.
+ */
 interface QueuedFlush {
   state: StateRecord;
   history: HistoryRecord | null;
   readonly waiters: Array<{ readonly id: number; readonly post: (r: SimReply) => void }>;
+  backup: PendingBackup | null;
 }
 
 /**
@@ -120,6 +142,22 @@ export function flushSyncPart(
     cols.push({ key, bytes: b });
   }
   return { ops: flushOps(worldId, cols, state, history, world), taken, bytes };
+}
+
+/**
+ * The backup's copy (spec §3.6, D19): `newWorld`, the state under `newId` with `flushSeq` (the original's in the same
+ * write) and `updated` (the original's last committed), the history under `newId`, and every column of the DiffStore
+ * encoded under `genKey`.
+ */
+function backupCopyOps(diffs: DiffStore, m: BackupMsg, genKey: Hash64, flushSeq: number, updated: number): WriteOp[] {
+  const cols: Array<{ key: number; bytes: Uint8Array }> = [];
+  for (const key of diffs.columns()) {
+    const col = diffs.columnSections(colKeyCx(key), colKeyCz(key));
+    const b = col === null ? null : encodeColumnSections(col, genKey);
+    if (b !== null) cols.push({ key, bytes: b });
+  }
+  const state: StateRecord = { ...m.state, worldId: m.newId, flushSeq, updated };
+  return copyOps(m.newWorld, state, { ...m.history, worldId: m.newId }, cols);
 }
 
 /** A record decoded and remapped, waiting for the rewrite's write before it reaches the DiffStore. */
@@ -219,12 +257,17 @@ export function createSimHandler(o: SimHandlerOptions): SimHandler {
   };
 
   /**
-   * Runs a flush's synchronous part and issues its write; when it settles, answers `waiters` with its outcome and runs
-   * the flush queued meanwhile.
+   * Runs a flush's synchronous part, with `backup`'s copy after it when given, and issues its write; when it settles,
+   * answers `waiters` with its outcome, then the backup, and runs the flush queued meanwhile.
    */
-  const runFlush = (w: OpenWorld, state: StateRecord, history: HistoryRecord | null, waiters: QueuedFlush['waiters']): void => {
+  const runFlush = (w: OpenWorld, state: StateRecord, history: HistoryRecord | null, waiters: QueuedFlush['waiters'], backup: PendingBackup | null): void => {
     const answer = (msg: FlushedMsg | null, e: string | null): void => {
       for (const x of waiters) send(msg !== null ? { msg: { ...msg, id: x.id }, transfer: [] } : err(x.id, 'INTERNAL', e!), x.post);
+      if (backup === null) return;
+      if (msg === null) return send(err(backup.m.id, 'INTERNAL', e!), backup.post);
+      const error = msg.ok ? null : msg.status === 'closed' ? 'closed' : (msg.errorName ?? 'AbortError');
+      const done: BackedUpMsg = { type: 'backedUp', id: backup.m.id, ok: msg.ok, error };
+      send({ msg: done, transfer: [] }, backup.post);
     };
     let keys: Float64Array;
     let write: Promise<WriteResult>;
@@ -242,7 +285,7 @@ export function createSimHandler(o: SimHandlerOptions): SimHandler {
       keys = part.taken;
       columns = keys.length;
       bytes = part.bytes;
-      const ops = part.ops;
+      const ops = backup === null ? part.ops : part.ops.concat(backupCopyOps(diffs, backup.m, w.genKey, flushSeq, w.updated));
       pendingHistory = null;
       pendingRecord = null;
       syncMs = now() - t0;
@@ -274,10 +317,12 @@ export function createSimHandler(o: SimHandlerOptions): SimHandler {
       queued = null;
       if (q === null) return;
       if (failed !== null) {
-        for (const x of q.waiters) send(err(x.id, 'INTERNAL', `the sim failed earlier (${failed}): nothing written`), x.post);
+        const why = `the sim failed earlier (${failed}): nothing written`;
+        for (const x of q.waiters) send(err(x.id, 'INTERNAL', why), x.post);
+        if (q.backup !== null) send(err(q.backup.m.id, 'INTERNAL', why), q.backup.post);
         return;
       }
-      runFlush(w, q.state, q.history, q.waiters);
+      runFlush(w, q.state, q.history, q.waiters, q.backup);
     });
   };
 
@@ -293,12 +338,33 @@ export function createSimHandler(o: SimHandlerOptions): SimHandler {
       return send(err(m.id, 'BAD_MESSAGE', 'a history change that does not fit the last flushed history'), post);
     }
     if (history !== null) historyBase = history;
-    if (!flushing) return runFlush(world, m.state, history, [{ id: m.id, post }]);
-    if (queued === null) queued = { state: m.state, history, waiters: [{ id: m.id, post }] };
+    if (!flushing) return runFlush(world, m.state, history, [{ id: m.id, post }], null);
+    if (queued === null) queued = { state: m.state, history, waiters: [{ id: m.id, post }], backup: null };
     else {
       queued.state = m.state;
       if (history !== null) queued.history = history;
       queued.waiters.push({ id: m.id, post });
+    }
+  };
+
+  /**
+   * A `backup` arriving: run at once as a flush with the copy, or queued behind the one in flight, its state and history
+   * replacing a queued flush's (which it absorbs). One backup at a time: the page waits for `backedUp`.
+   */
+  const onBackup = (m: BackupMsg, post: (r: SimReply) => void): void => {
+    if (failed !== null) return send(err(m.id, 'INTERNAL', `the sim failed earlier (${failed}): nothing written`), post);
+    if (world === null) return send(err(m.id, 'BAD_MESSAGE', 'no world is loaded'), post);
+    if (m.state.worldId !== world.worldId || m.history.worldId !== world.worldId || m.newWorld.backupOf !== world.worldId || m.newId === world.worldId) {
+      return send(err(m.id, 'BAD_MESSAGE', `a backup of another world than ${world.worldId}, or into it`), post);
+    }
+    if (queued !== null && queued.backup !== null) return send(err(m.id, 'BAD_MESSAGE', 'a backup is already waiting'), post);
+    const backup: PendingBackup = { m, post };
+    if (!flushing) return runFlush(world, m.state, m.history, [], backup);
+    if (queued === null) queued = { state: m.state, history: m.history, waiters: [], backup };
+    else {
+      queued.state = m.state;
+      queued.history = m.history;
+      queued.backup = backup;
     }
   };
 
@@ -315,6 +381,7 @@ export function createSimHandler(o: SimHandlerOptions): SimHandler {
     const m = parseToSim(raw);
     if (m !== null && m.type === 'flush') return onFlush(m, post);
     if (m !== null && m.type === 'record') return onRecord(m, post);
+    if (m !== null && m.type === 'backup') return onBackup(m, post);
     if (m === null || m.type !== 'load') {
       send(reply(raw, m), post);
       return;
@@ -375,6 +442,7 @@ export function createSimHandler(o: SimHandlerOptions): SimHandler {
         case 'load':
         case 'flush':
         case 'record':
+        case 'backup':
           // `run` handles these; none reaches here.
           return err(idOf(raw), 'BAD_MESSAGE', `a ${m.type} out of order`);
         default: {

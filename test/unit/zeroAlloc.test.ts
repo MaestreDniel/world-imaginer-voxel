@@ -48,9 +48,9 @@ import {
   createCoordinator, createCoordinatorCounts, type Coordinator, type CoordinatorCounts, type CoordinatorJobs,
   type StreamStore,
 } from '../../src/engine/coordinator';
-import { appliedDraftOf } from '../../src/engine/invalidation';
+import { appliedDraftOf, type WorldStage } from '../../src/engine/invalidation';
 import type { Stage } from '../../src/engine/rings';
-import type { SessionState } from '../../src/engine/session';
+import type { SessionState, WorldSession } from '../../src/engine/session';
 import { createThrottle } from '../../src/engine/throttle';
 import { createUploadBudget } from '../../src/engine/uploadBudget';
 import { createWorkerPool, type WorkerLike } from '../../src/engine/workerPool';
@@ -79,8 +79,9 @@ import { createFrameClock, createFrameNotice } from '../../src/ui/world/frameNot
 import { createFrameStep, type FrameStepDeps } from '../../src/ui/world/frameStep';
 import { createHoldRepeat } from '../../src/ui/world/holdRepeat';
 import { createMapOverlay, type MapOverlay } from '../../src/ui/world/mapOverlay';
+import { createModifyMode, createModifySwitch } from '../../src/ui/world/modifyMode';
 import { AUTOSAVE_MS } from '../../src/ui/world/autosave';
-import { createAim, createClickQueue, createPageAutosave, type Aim } from '../../src/ui/world/worldPage';
+import { createAim, createClickQueue, createPageAutosave, newWorldRecord, type Aim } from '../../src/ui/world/worldPage';
 import { STONE } from '../../src/world/blocks/index';
 import { createStore } from '../../src/world/store/store';
 import { installDom } from './fixtures/domShim';
@@ -394,6 +395,10 @@ interface AtRest {
   readonly hotbar: ReturnType<typeof createHotbar>;
   /** Edits the click queue posted (none at rest). */
   posts(): number;
+  /** The map's session (the apply control's). */
+  readonly session: WorldSession;
+  /** Routes the apply control's `beforeApply` through `gate` (a saved world's modification mode), or back to always true (null). */
+  setBeforeApply(gate: ((from: WorldStage | null) => boolean) | null): void;
 }
 
 /**
@@ -476,6 +481,7 @@ async function buildAtRest(): Promise<AtRest> {
   const epochs = createEpochs();
   epochs.of(ready.genKey);
   const applied: Array<string | null> = [];
+  let gate: ((from: WorldStage | null) => boolean) | null = null;
   const applyControl = createApplyControl({
     coordinator,
     driver,
@@ -485,7 +491,7 @@ async function buildAtRest(): Promise<AtRest> {
     epochs,
     initial: appliedDraftOf(draftOf(session.state).seedKey, ready),
     initialGeneration: pool.epoch,
-    beforeApply: () => true,
+    beforeApply: (from) => (gate === null ? true : gate(from)),
     onApplied: ({ from }) => { applied.push(from); },
   });
   report!({ poolEpoch: pool.epoch, sessionEpoch: session.state.epoch, seedKey: draftOf(session.state).seedKey, ready, gesture: false, urgent: true });
@@ -609,6 +615,8 @@ async function buildAtRest(): Promise<AtRest> {
     selection,
     hotbar,
     posts: () => posts,
+    session,
+    setBeforeApply(g) { gate = g; },
     sp5a(mode) {
       sp5aOn = true;
       if (fly.mode !== mode) toggleMode(fly, walk);
@@ -909,6 +917,51 @@ describe('zero allocation at rest (SP4b spec §3.10, D25)', () => {
     expect([flushes, reads]).toEqual([0, opened]);
     autosave.dispose();
     expect(intervals[0]!.cleared).toBe(true);
+  }, TIMEOUT_MS);
+
+  test(`${N} frame steps at rest in a saved world with the modification mode on and nothing kept grow the heap by less than the boxing budget of 256 B per tick (SP5b spec §3.6, D26; ruling P18)`, async () => {
+    const f = await atRest();
+    // The mode over the map's session, its backup over a sim with entries: `beforeApply` would copy at a terrain change,
+    // but with nothing configured since the last Apply the apply control never calls it.
+    const sw = createModifySwitch();
+    let asked = 0;
+    let posted = 0;
+    const mode = createModifyMode({
+      session: f.session,
+      tool: () => null,
+      checkbox: sw.checkbox,
+      backup: {
+        sim: {
+          hasAnyEntries: () => true,
+          backup: () => {
+            posted++;
+            return new Promise<never>(() => {});
+          },
+        },
+        kept: () => newWorldRecord('w1', 'My world', f.session.state, 1),
+        applied: () => f.session.snapshot,
+        build: () => { throw new Error('no backup at rest'); },
+        newId: () => 'never',
+        names: () => Promise.resolve([]),
+        notices: { show() {} },
+      },
+    });
+    mode.set(true);
+    f.setBeforeApply((from) => {
+      asked++;
+      return mode.beforeApply(from);
+    });
+    const applied = f.applied.length;
+    try {
+      const g = allocationOver(f.tick, 0, FRAME_STEP_ALLOC_MAX);
+      expectAtRest(g, FRAME_STEP_ALLOC_MAX);
+      expect([asked, posted, f.applied.length, mode.on]).toEqual([0, 0, applied, true]);
+      expect(f.counts.T.done).toBe(f.counts.T.needed);
+    } finally {
+      f.setBeforeApply(null);
+      mode.dispose();
+      f.session.setWritable(true);
+    }
   }, TIMEOUT_MS);
 
   test(`${N} frame-clock ticks (a cap of 144 on a 144 Hz display, the slow-frame notice past its 300 frames) grow the heap by less than 256 KB`, () => {

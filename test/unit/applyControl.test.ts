@@ -79,7 +79,7 @@ interface Rig {
 }
 
 /** The control over a fake driver and coordinator; the first draft (seed 42, default) is applied at generation 0. */
-function rig(o: { initialGeneration?: number } = {}): Rig {
+function rig(o: { initialGeneration?: number; beforeApply?: (from: WorldStage | null) => boolean } = {}): Rig {
   const session = openMapSession(DEFAULT_MAP_STATE, () => [1, 2]);
   const clock = fakeClock();
   const pool = { epoch: o.initialGeneration ?? 0 };
@@ -112,7 +112,7 @@ function rig(o: { initialGeneration?: number } = {}): Rig {
     initialGeneration: pool.epoch,
     beforeApply: (from) => {
       before.push(from);
-      return true;
+      return o.beforeApply?.(from) ?? true;
     },
     onApplied: ({ from }) => { applied.push(from); },
   });
@@ -289,6 +289,27 @@ describe('createApplyControl (SP4c spec §4.3, D4)', () => {
     expect(r.before).toEqual(['T', null]);
     expect(r.applied).toEqual(['T', null]);
     expect(r.calls.map((c) => c.kind)).toEqual(['apply', 'adopt']);
+  });
+
+  test('`beforeApply` returning false holds the draft and retries each tick until true; then it applies once (SP5b spec D26)', () => {
+    let allow = false;
+    const r = rig({ beforeApply: () => allow });
+    r.session.set(AMP, 3.0);
+    r.configure();
+    r.emit();
+    r.ticksTo(200);
+    // Held: asked at every tick past the quiet window, nothing applied.
+    const asked = r.before.length;
+    expect(asked).toBeGreaterThan(40);
+    expect(r.before.every((f) => f === 'T')).toBe(true);
+    expect([r.calls, r.applied, r.control.generation]).toEqual([[], [], 0]);
+    r.ticksTo(210);
+    expect(r.before.length).toBe(asked + 10);
+    // Allowed: the next tick applies the held draft once, and no tick asks again.
+    allow = true;
+    r.ticksTo(300);
+    expect(r.calls.map((c) => (c.kind === 'apply' ? [c.epoch, c.generation, c.from] : c.kind))).toEqual([[2, 1, 'T']]);
+    expect([r.applied, r.control.generation, r.before.length]).toEqual([['T'], 1, asked + 11]);
   });
 
   test('after an Apply, 100 more ticks call neither apply, adopt nor onApplied', () => {

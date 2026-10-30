@@ -704,10 +704,21 @@ export function resolveHistory(base: HistoryRecord | null, h: HistoryRecord | Hi
  */
 export interface RecordMsg { readonly type: 'record'; readonly world: WorldRecord }
 /**
- * What the main thread sends the sim: its store once, as thread 15 (an `AttachMsg` with `thread` 15 only), a saved
- * world's `load` (SP5b), then edits and diff requests, and in a saved world `flush` and `record`.
+ * The automatic backup's copy request (SP5b spec §3.6, D11, D26): in one transaction the sim writes the pending flush
+ * (its dirty columns, with `state` and `history`, which is always the whole record: the sim keeps none of its own) and
+ * then the copy under `newId`: `newWorld` (the page's kept record with the copy's id, name and `backupOf`), `state` and
+ * `history` under the new id, `state.updated` the original's last committed one, and every column of the DiffStore. A
+ * backup arriving while a flush is in flight waits like a flush, absorbing a queued one. Answered `backedUp`.
  */
-export type ToSim = AttachMsg | LoadMsg | EditsMsg | DiffRequestMsg | FlushMsg | RecordMsg;
+export interface BackupMsg {
+  readonly type: 'backup'; readonly id: number; readonly newWorld: WorldRecord; readonly newId: string;
+  readonly state: StateRecord; readonly history: HistoryRecord;
+}
+/**
+ * What the main thread sends the sim: its store once, as thread 15 (an `AttachMsg` with `thread` 15 only), a saved
+ * world's `load` (SP5b), then edits and diff requests, and in a saved world `flush`, `record` and `backup`.
+ */
+export type ToSim = AttachMsg | LoadMsg | EditsMsg | DiffRequestMsg | FlushMsg | RecordMsg | BackupMsg;
 /**
  * A batch's outcome (§2.1; `sim/edits.ts`'s `EditResult`): `prev[k]` and `next[k]` edit k's entry before and after it
  * (0xFFFFFFFF for none), `dirty` the colKeys to remesh (§2.6), `entryAdded` and `entryRemoved` the colKeys that
@@ -748,8 +759,13 @@ export type FlushedMsg =
     readonly syncMs: number; readonly commitMs: number;
   }
   | { readonly type: 'flushed'; readonly id: number; readonly ok: false; readonly status: 'abort' | 'closed'; readonly errorName: string | null };
+/**
+ * A `backup`'s answer (SP5b spec §3.3, §3.6): the copy and the pending flush committed (`error` null), or neither, with
+ * `error` the KV's error name (`QuotaExceededError` for a full disk), or `'closed'` for a closed connection.
+ */
+export interface BackedUpMsg { readonly type: 'backedUp'; readonly id: number; readonly ok: boolean; readonly error: string | null }
 /** What the sim answers; an `error`'s `jobId` is the id of the message it answers (null when unreadable), its `epoch` null. */
-export type FromSim = AttachedMsg | LoadedMsg | EditedMsg | DiffMsg | FlushedMsg | ErrorMsg;
+export type FromSim = AttachedMsg | LoadedMsg | EditedMsg | DiffMsg | FlushedMsg | BackedUpMsg | ErrorMsg;
 
 /** Every `EditRefusal` (a record, so a new refusal cannot be left out of the reply guard). */
 const EDIT_REFUSALS: Readonly<Record<EditRefusal, true>> = Object.freeze({ unloaded: true, changed: true, noProto: true, full: true });
@@ -792,6 +808,20 @@ const flushOk = (m: Record<string, unknown>): boolean => {
     && (h === null || (isObj(h) && (!isObj(h['done']) || (typeof h['worldId'] === 'string' && sideChangeOk(h['done']) && sideChangeOk(h['undone'])))));
 };
 
+/**
+ * A `backup`'s id, its `newWorld` an object whose string id is `newId` with a 16-hex-digit genKey and a string
+ * `backupOf`, its state as a flush's, and its history a whole record (a string `worldId`, `done` and `undone` arrays),
+ * never null nor a change.
+ */
+const backupOk = (m: Record<string, unknown>): boolean => {
+  const w = m['newWorld'];
+  const st = m['state'];
+  const h = m['history'];
+  return isInt(m['id']) && typeof m['newId'] === 'string' && isObj(w) && w['id'] === m['newId'] && isGenKeyHex(w['genKey']) && typeof w['backupOf'] === 'string'
+    && isObj(st) && typeof st['worldId'] === 'string' && isFiniteNum(st['updated'])
+    && isObj(h) && typeof h['worldId'] === 'string' && Array.isArray(h['done']) && Array.isArray(h['undone']);
+};
+
 /** Validates a message sent to the sim; null when malformed. */
 export function parseToSim(m: unknown): ToSim | null {
   if (!isObj(m)) return null;
@@ -812,6 +842,8 @@ export function parseToSim(m: unknown): ToSim | null {
       const w = m['world'];
       return isObj(w) && typeof w['id'] === 'string' && isGenKeyHex(w['genKey']) ? (m as unknown as RecordMsg) : null;
     }
+    case 'backup':
+      return backupOk(m) ? (m as unknown as BackupMsg) : null;
     default:
       return null;
   }
@@ -859,6 +891,9 @@ export function parseFromSim(m: unknown): FromSim | null {
       return m['ok'] === false && (m['status'] === 'abort' || m['status'] === 'closed') && (m['errorName'] === null || typeof m['errorName'] === 'string')
         ? (m as unknown as FlushedMsg) : null;
     }
+    case 'backedUp':
+      return isInt(m['id']) && ((m['ok'] === true && m['error'] === null) || (m['ok'] === false && typeof m['error'] === 'string'))
+        ? (m as unknown as BackedUpMsg) : null;
     case 'error':
       return (m['jobId'] === null || isInt(m['jobId'])) && REPLY_CHECKS['error']!(m) === null ? (m as unknown as ErrorMsg) : null;
     default:

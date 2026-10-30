@@ -8,9 +8,27 @@
  * the apply control still applies an edit already made) and stops new ones; neither switch shows a notice. The map tool
  * keeps the session it has (`MapToolDeps`); a tool mounted later is told the mode by the overlay at its mount.
  * `sessionCount` counts the switches on: the backup's latch is cleared at each (§3.6, Point 1).
+ *
+ * The automatic backup (§3.6, D11, D26) is the apply control's `beforeApply`, its rules in this order:
+ * - while a copy is being written, every terrain change ('T' or 'D') is held (false), the mode off included: a change
+ *   made meanwhile supersedes the held draft (the control keeps only the latest configure), and the draft held when the
+ *   copy commits applies with that one copy;
+ * - a terrain change with the mode on, the latch clear and the world holding any placed or removed block
+ *   (`sim.hasAnyEntries()`) posts `backup` (the page's kept record as the copy, named by `backupName` among every world's
+ *   names, the state and whole history built now, a new id), sets the latch and is held until `backedUp`;
+ * - anything else applies (`from` null, 'L' or 'MESH', the mode off, the latch set, no entries: a change with no entries
+ *   leaves the latch clear).
+ * On `ok` the held change applies at the next tick and "Backup saved as '<name>'" shows for 6 s; a revert to the applied
+ * draft meanwhile (`from` null) adopts at once, and the copy, once committed, is kept and spends the latch. On a failure
+ * the session loads the applied snapshot (`load(…, {force: true})`, the mode off included), D11's failure notice stays
+ * until dismissed, and the latch is cleared: no copy was kept, so the next terrain change tries again.
  */
-import type { WorldSession } from '../../engine/session';
+import type { WorldStage } from '../../engine/invalidation';
+import type { SessionSnapshot, WorldSession } from '../../engine/session';
+import type { SimClient } from '../../engine/simClient';
+import { backupName, type HistoryRecord, type StateRecord, type WorldRecord } from '../../persist/saves';
 import { el } from '../common/dom';
+import type { Notices } from '../common/notice';
 import type { MapTool } from '../map/mapTool';
 
 /** The switch's text (SP5b spec D10). */
@@ -33,6 +51,30 @@ export function createModifySwitch(): ModifySwitch {
   return { element, checkbox };
 }
 
+/** How long "Backup saved as …" shows (D11), ms. */
+export const BACKUP_NOTICE_MS = 6000;
+
+/** What the backup needs from the page (SP5b spec §3.6). */
+export interface BackupDeps {
+  readonly sim: Pick<SimClient, 'backup' | 'hasAnyEntries'>;
+  /** The record the page keeps (its open's, a rewrite's, the older-generator open's, then each `onApplied`'s): the copy's. */
+  kept(): WorldRecord;
+  /** The applied draft's snapshot (at the open and each `onApplied`), which a failed copy loads back. */
+  applied(): SessionSnapshot;
+  /** The state and the whole history now (the autosave's `build`). */
+  build(): { readonly state: StateRecord; readonly history: HistoryRecord };
+  /** A new world id (`crypto.randomUUID()`). */
+  newId(): string;
+  /** Every saved world's name, which the copy's name avoids. */
+  names(): Promise<readonly string[]>;
+  readonly notices: Pick<Notices, 'show'>;
+}
+
+/** D11's failure reason: "storage full" for a full disk, "storage closed" for a closed connection, else the error's name. */
+export function backupFailureReason(error: string): string {
+  return error === 'QuotaExceededError' ? 'storage full' : error === 'closed' ? 'storage closed' : error;
+}
+
 export interface ModifyMode {
   /** Whether terrain changes are allowed now: false at the open. */
   readonly on: boolean;
@@ -40,23 +82,68 @@ export interface ModifyMode {
   set(on: boolean): void;
   /** How many times the mode was switched on (the backup latch's mode sessions). */
   readonly sessionCount: number;
+  /** The apply control's `beforeApply` (D26): false holds the change while its backup copy is written (module comment). */
+  beforeApply(from: WorldStage | null): boolean;
   /** Stops following the checkbox. */
   dispose(): void;
 }
 
 /**
  * The mode over a saved world's `session` (set not writable here, and already by `openSavedWorld`), `checkbox` (the
- * switch's) and `tool` (the overlay's mounted tool, or null before the first M).
+ * switch's), `tool` (the overlay's mounted tool, or null before the first M) and `backup` (the copy's sources).
  */
 export function createModifyMode(o: {
   session: WorldSession;
   tool: () => Pick<MapTool, 'setEditable'> | null;
   checkbox: HTMLInputElement;
+  backup: BackupDeps;
 }): ModifyMode {
   let on = false;
   let sessionCount = 0;
+  /** The mode session whose copy was posted (the latch is set while it is the current one); 0: none. */
+  let latchedIn = 0;
+  /** A copy is being written. */
+  let writing = false;
+  /** A terrain change is held for the copy being written (a change, an adopt or a non-terrain Apply meanwhile ends it). */
+  let holding = false;
+  /** The copy committed while a change was held: that change applies at its next `beforeApply`. */
+  let approved = false;
   o.checkbox.checked = false;
   o.session.setWritable(false);
+  const b = o.backup;
+
+  /** Posts the copy of the world as it is now (the kept record, the state and history built now) and holds the change. */
+  const startBackup = (): void => {
+    const kept = b.kept();
+    const { state, history } = b.build();
+    const newId = b.newId();
+    writing = true;
+    holding = true;
+    latchedIn = sessionCount;
+    let name = '';
+    const settle = (failure: string | null): void => {
+      writing = false;
+      if (failure === null) {
+        approved = holding;
+        holding = false;
+        b.notices.show(`Backup saved as '${name}'`, { kind: 'info', timeoutMs: BACKUP_NOTICE_MS });
+        return;
+      }
+      holding = false;
+      approved = false;
+      latchedIn = 0;
+      o.session.load(b.applied(), { force: true });
+      b.notices.show(`Could not save a backup copy (${failure}): the terrain change was cancelled`, { kind: 'warn' });
+    };
+    b.names().catch((): readonly string[] => []).then((names) => {
+      name = backupName(kept.name, names);
+      return b.sim.backup({ newWorld: { ...kept, id: newId, name, backupOf: kept.id }, newId, state, history });
+    }).then(
+      (r) => settle(r.ok ? null : backupFailureReason(r.error ?? 'AbortError')),
+      // The sim failed: its own notice shows; nothing was copied, so the change does not happen.
+      () => settle('the world stopped saving'),
+    );
+  };
 
   const set = (next: boolean): void => {
     o.checkbox.checked = next;
@@ -74,6 +161,25 @@ export function createModifyMode(o: {
     get on() { return on; },
     set,
     get sessionCount() { return sessionCount; },
+    beforeApply(from) {
+      if (from !== 'T' && from !== 'D') {
+        // The held change is gone: an adopt or a non-terrain Apply replaced it.
+        holding = false;
+        approved = false;
+        return true;
+      }
+      if (approved) {
+        approved = false;
+        return true;
+      }
+      if (writing) {
+        holding = true;
+        return false;
+      }
+      if (!on || latchedIn === sessionCount || !b.sim.hasAnyEntries()) return true;
+      startBackup();
+      return false;
+    },
     dispose() {
       o.checkbox.removeEventListener('change', onChange);
     },

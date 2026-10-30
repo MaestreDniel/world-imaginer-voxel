@@ -20,7 +20,7 @@ import { flushOps, todayStateTable, type HistoryRecord, type StateRecord, type W
 import { createDiffStore, NO_ENTRY } from '../../src/sim/diffStore';
 import { applyEdits } from '../../src/sim/edits';
 import { DIRT, GLASS, STONE } from '../../src/world/blocks/index';
-import type { DiffMsg, EditedMsg, ErrorMsg, FlushedMsg, FromSim, HistoryChange, LoadedMsg } from '../../src/workers/protocol';
+import type { BackedUpMsg, DiffMsg, EditedMsg, ErrorMsg, FlushedMsg, FromSim, HistoryChange, LoadedMsg } from '../../src/workers/protocol';
 import { createMemorySimHandler, createSimHandler, flushSyncPart, SIM_DRAIN_MS, type SimHandler, type SimReply } from '../../src/workers/simHandler';
 import { R_READER, SIM_THREAD } from '../../src/world/store/reclaim';
 import type { ColumnDiff } from '../../src/world/store/api';
@@ -602,6 +602,171 @@ describe('the sim handler on a shared seed-42 region (SP5a spec §2.1)', () => {
       const f = okOf(s.got[1]!);
       for (const ms of [f.syncMs, f.commitMs]) expect(Number.isFinite(ms) && ms >= 0, `${ms}`).toBe(true);
       undo(s.handler, a);
+    });
+
+    describe('`backup` (SP5b spec §3.6, D11, D26)', () => {
+      const COPY_NAME = 'My world (before the change)';
+      /** A `backup` of `worldId` into `newId`: the kept record (`recordOf`) with the copy's id, name and `backupOf`. */
+      const backupOf = (id: number, worldId: string, newId: string, history: HistoryRecord = historyOf(worldId), st: Partial<StateRecord> = {}) => ({
+        type: 'backup', id, newWorld: { ...recordOf(worldId), id: newId, name: COPY_NAME, backupOf: worldId }, newId,
+        state: { ...stateOf(worldId), flushSeq: 0, ...st }, history,
+      });
+      const backedUpOf = (r: SimReply): BackedUpMsg => {
+        expect(r.msg.type, JSON.stringify(r.msg)).toBe('backedUp');
+        return r.msg as BackedUpMsg;
+      };
+      const worldsIn = (kv: MemoryKV) => new Map(kv.dump('worlds') as Array<[string, WorldRecord]>);
+      const historiesIn = (kv: MemoryKV) => new Map(kv.dump('history') as Array<[string, HistoryRecord]>);
+
+      test('a backup writes the pending flush and the copy in one write: the copy\'s diff keys, record (with `backupOf`) and state equal the original\'s', async () => {
+        const kv = createMemoryKV();
+        const s = await opened(kv, 'wb1', { flushSeq: 0 });
+        const a = spot(0, 0, 4, 4);
+        const b = spot(-1, 1, 11, 7);
+        place(s.handler, a);
+        s.send(flushOf(10, 'wb1'));
+        await s.until(2);
+        okOf(s.got[1]!);
+        // b is the pending flush's: edited after the last committed flush.
+        place(s.handler, b);
+        const write = vi.spyOn(kv, 'write');
+        const H = historyOf('wb1');
+        const B = backupOf(11, 'wb1', 'wb1c', H, { updated: UPDATED + 5000, time: { t: 0.5, speedIndex: 1 } });
+        s.send(B);
+        await s.until(3);
+        expect(backedUpOf(s.got[2]!)).toEqual({ type: 'backedUp', id: 11, ok: true, error: null });
+        expect(write).toHaveBeenCalledTimes(1);
+        const ops = write.mock.calls[0]![0];
+        // The pending flush first (b, the state, the history), then the copy: its record, state, history and every column.
+        expect(opsOf(ops.slice(0, 6))).toEqual([
+          ['put', 'diffs', ['wb1', b.key]], ['put', 'state', 'wb1'], ['put', 'history', 'wb1'],
+          ['put', 'worlds', 'wb1c'], ['put', 'state', 'wb1c'], ['put', 'history', 'wb1c'],
+        ]);
+        expect(ops.slice(6).map((op) => [op.op, op.store, op.op === 'deleteRange' ? null : op.key[0]])).toEqual([['put', 'diffs', 'wb1c'], ['put', 'diffs', 'wb1c']]);
+        const original = diffsOf(kv, 'wb1');
+        const copy = diffsOf(kv, 'wb1c');
+        expect(sortedKeys(original.keys())).toEqual(sortedKeys([a.key, b.key]));
+        expect(sortedKeys(copy.keys())).toEqual(sortedKeys(original.keys()));
+        for (const [k, d] of original) {
+          expect(entriesOf(copy.get(k)!.diff)).toEqual(entriesOf(d.diff));
+          expect(copy.get(k)!.genKey).toEqual(GEN);
+        }
+        // The record: the kept one's but for its id, name and `backupOf` (ruling P30).
+        const copied = worldsIn(kv).get('wb1c')!;
+        expect([copied.id, copied.name, copied.backupOf]).toEqual(['wb1c', COPY_NAME, 'wb1']);
+        expect({ ...copied, id: 'wb1', name: 'My world', backupOf: null }).toEqual(recordOf('wb1'));
+        expect(worldsIn(kv).has('wb1')).toBe(false);
+        // The state: the backup's but for its worldId and `updated` (the original's last committed), with the flushSeq
+        // written for the original in the same write; the history: the backup's, under each id.
+        expect(await stateIn(kv, 'wb1')).toEqual({ ...B.state, flushSeq: 2 });
+        expect(await stateIn(kv, 'wb1c')).toEqual({ ...B.state, worldId: 'wb1c', flushSeq: 2, updated: UPDATED });
+        expect(historiesIn(kv)).toEqual(new Map([['wb1', H], ['wb1c', { ...H, worldId: 'wb1c' }]]));
+        // Nothing is left dirty: a flush now writes the state only, with `flushSeq` 3.
+        s.send(flushOf(12, 'wb1'));
+        await s.until(4);
+        expect([okOf(s.got[3]!).flushSeq, okOf(s.got[3]!).columns]).toEqual([3, 0]);
+        undo(s.handler, b);
+        undo(s.handler, a);
+      });
+
+      test('an aborted backup merges the flush back; a flush it absorbed gets the same outcome (ruling P4); a closed connection answers `closed`', async () => {
+        const kv = createMemoryKV({ writeDelayMs: 20 });
+        const s = await opened(kv, 'wb2', { flushSeq: 0 });
+        const a = spot(1, 1, 6, 2);
+        const b = spot(1, -1, 3, 12);
+        place(s.handler, a);
+        // A flush in flight; then a queued flush, which the backup absorbs, and the backup's write aborts.
+        s.send(flushOf(10, 'wb2'));
+        kv.failAt(0);
+        place(s.handler, b);
+        const H = historyOf('wb2');
+        s.send(flushOf(11, 'wb2'));
+        s.send(backupOf(12, 'wb2', 'wb2c', H));
+        await s.until(4);
+        expect(okOf(s.got[1]!).flushSeq).toBe(1);
+        expect(s.got[2]!.msg).toEqual({ type: 'flushed', id: 11, ok: false, status: 'abort', errorName: 'AbortError' });
+        expect(backedUpOf(s.got[3]!)).toEqual({ type: 'backedUp', id: 12, ok: false, error: 'AbortError' });
+        // Nothing of the backup's write: flush 10's column and state only, no copy.
+        expect(sortedKeys(diffsOf(kv, 'wb2').keys())).toEqual([a.key]);
+        expect([kv.dump('worlds'), kv.dump('history'), (await stateIn(kv, 'wb2')).flushSeq]).toEqual([[], [], 1]);
+        // The flush part merged back: the next flush commits b's column and the backup's history, with `flushSeq` 2.
+        const write = vi.spyOn(kv, 'write');
+        s.send(flushOf(13, 'wb2'));
+        await s.until(5);
+        const f = okOf(s.got[4]!);
+        expect([f.id, f.flushSeq, f.columns]).toEqual([13, 2, 1]);
+        expect(opsOf(write.mock.calls[0]![0])).toEqual([['put', 'diffs', ['wb2', b.key]], ['put', 'state', 'wb2'], ['put', 'history', 'wb2']]);
+        expect(historiesIn(kv)).toEqual(new Map([['wb2', H]]));
+        expect(worldsIn(kv).size).toBe(0);
+        // A closed connection: `closed`.
+        kv.closeNow();
+        s.send(backupOf(14, 'wb2', 'wb2d', H));
+        await s.until(6);
+        expect(backedUpOf(s.got[5]!)).toEqual({ type: 'backedUp', id: 14, ok: false, error: 'closed' });
+        undo(s.handler, b);
+        undo(s.handler, a);
+      });
+
+      test('a backup posted during an in-flight flush writes after it, with `flushSeq` + 2', async () => {
+        const kv = createMemoryKV({ writeDelayMs: 30 });
+        const s = await opened(kv, 'wb3', { flushSeq: 0 });
+        const a = spot(-1, -1, 7, 9);
+        const b = spot(0, 1, 2, 3);
+        place(s.handler, a);
+        const write = vi.spyOn(kv, 'write');
+        const H1 = historyOf('wb3');
+        const H2: HistoryRecord = { ...historyOf('wb3'), undone: [{ edits: [] }] };
+        s.send(flushOf(10, 'wb3', H1));
+        place(s.handler, b);
+        s.send(flushOf(11, 'wb3', null, { updated: UPDATED + 1 }));
+        const B = backupOf(12, 'wb3', 'wb3c', H2, { updated: UPDATED + 2 });
+        s.send(B);
+        // One write in flight: the backup waits for it, absorbing the queued flush.
+        expect(write).toHaveBeenCalledTimes(1);
+        await s.until(4);
+        expect(write).toHaveBeenCalledTimes(2);
+        const f1 = okOf(s.got[1]!);
+        expect([f1.id, f1.flushSeq, f1.columns]).toEqual([10, 1, 1]);
+        // The absorbed flush is answered with the backup write's outcome: its flush part's flushSeq, columns and bytes.
+        const f2 = okOf(s.got[2]!);
+        const second = write.mock.calls[1]![0];
+        expect(opsOf(second.slice(0, 6))).toEqual([
+          ['put', 'diffs', ['wb3', b.key]], ['put', 'state', 'wb3'], ['put', 'history', 'wb3'],
+          ['put', 'worlds', 'wb3c'], ['put', 'state', 'wb3c'], ['put', 'history', 'wb3c'],
+        ]);
+        expect([f2.id, f2.flushSeq, f2.columns, f2.bytes]).toEqual([11, 2, 1, (second[0] as { value: Uint8Array }).value.byteLength]);
+        expect(backedUpOf(s.got[3]!)).toEqual({ type: 'backedUp', id: 12, ok: true, error: null });
+        // The original: the backup's state and history with `flushSeq` 2; the copy: the same, `updated` flush 10's.
+        expect(second[1]).toEqual({ op: 'put', store: 'state', key: 'wb3', value: { ...B.state, flushSeq: 2 } });
+        expect(second[2]).toEqual({ op: 'put', store: 'history', key: 'wb3', value: H2 });
+        expect(await stateIn(kv, 'wb3c')).toEqual({ ...B.state, worldId: 'wb3c', flushSeq: 2, updated: UPDATED });
+        expect(sortedKeys(diffsOf(kv, 'wb3c').keys())).toEqual(sortedKeys([a.key, b.key]));
+        undo(s.handler, b);
+        undo(s.handler, a);
+      });
+
+      test('the copy\'s `state.updated` is `load`\'s `updated` before any committed flush, then the last committed one\'s', async () => {
+        const kv = createMemoryKV();
+        const s = await opened(kv, 'wb4', { flushSeq: 0, updated: 111 });
+        const a = spot(-1, 0, 13, 1);
+        place(s.handler, a);
+        s.send(backupOf(10, 'wb4', 'wb4c', historyOf('wb4'), { updated: 150 }));
+        await s.until(2);
+        expect(backedUpOf(s.got[1]!).ok).toBe(true);
+        expect((await stateIn(kv, 'wb4c')).updated).toBe(111);
+        // The backup's own write was a committed state of the original too.
+        s.send(backupOf(11, 'wb4', 'wb4d', historyOf('wb4'), { updated: 180 }));
+        await s.until(3);
+        expect((await stateIn(kv, 'wb4d')).updated).toBe(150);
+        s.send(flushOf(12, 'wb4', null, { updated: 222 }));
+        await s.until(4);
+        okOf(s.got[3]!);
+        s.send(backupOf(13, 'wb4', 'wb4e', historyOf('wb4'), { updated: 250 }));
+        await s.until(5);
+        expect((await stateIn(kv, 'wb4e')).updated).toBe(222);
+        expect((await stateIn(kv, 'wb4')).updated).toBe(250);
+        undo(s.handler, a);
+      });
     });
   });
 

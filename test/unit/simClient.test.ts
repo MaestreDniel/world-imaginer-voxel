@@ -230,6 +230,63 @@ describe('the sim client (SP5a spec §2.1, §2.5)', () => {
     expect(failures).toBe(1);
   });
 
+  const backupArgs = { newWorld: { ...world, id: 'w2', backupOf: 'w1' } as WorldRecord, newId: 'w2', state, history };
+
+  test('`backup` posts the copy request and resolves with its `backedUp`, ok or not (SP5b spec §3.3, §3.6)', async () => {
+    const w = fakeSim();
+    const sim = createSimClient(() => w, { onFailure: () => { throw new Error('no failure expected'); } });
+    const p = sim.backup(backupArgs);
+    expect(w.posted.at(-1)).toEqual({ type: 'backup', id: lastId(w), ...backupArgs });
+    w.reply({ type: 'backedUp', id: lastId(w), ok: true, error: null });
+    expect(await p).toEqual({ type: 'backedUp', id: lastId(w), ok: true, error: null });
+    const q = sim.backup(backupArgs);
+    w.reply({ type: 'backedUp', id: lastId(w), ok: false, error: 'QuotaExceededError' });
+    expect(await q).toEqual({ type: 'backedUp', id: lastId(w), ok: false, error: 'QuotaExceededError' });
+    expect(sim.failed).toBe(false);
+  });
+
+  test('a pending `backup` rejects `SimFailed` when the sim fails', async () => {
+    const w = fakeSim();
+    let failures = 0;
+    const sim = createSimClient(() => w, { onFailure: () => { failures++; } });
+    const p = sim.backup(backupArgs);
+    w.reply({ type: 'error', jobId: lastId(w), epoch: null, code: 'INTERNAL', message: 'x' });
+    await expect(p).rejects.toBeInstanceOf(SimFailed);
+    expect(failures).toBe(1);
+    const posted = w.posted.length;
+    await expect(sim.backup(backupArgs)).rejects.toBeInstanceOf(SimFailed);
+    expect(w.posted.length).toBe(posted);
+    // A `backedUp` reply to a pending `flush` is the sim's failure, as any reply to no request of its kind.
+    const w2 = fakeSim();
+    const other = createSimClient(() => w2, { onFailure: () => { failures++; } });
+    const f = other.flush(state, null);
+    w2.reply({ type: 'backedUp', id: lastId(w2), ok: true, error: null });
+    await expect(f).rejects.toBeInstanceOf(SimFailed);
+    expect(failures).toBe(2);
+  });
+
+  test('`hasAnyEntries()` is false on an empty set, true after a `loaded` or an `entryAdded`, false again after the last `entryRemoved`', async () => {
+    const w = fakeSim();
+    const sim = createSimClient(() => w, { onFailure: () => { throw new Error('no failure expected'); } });
+    expect(sim.hasAnyEntries()).toBe(false);
+    const l = sim.load(loadArgs);
+    w.reply(loadedReply(lastId(w), [[0, -2]]));
+    await l;
+    expect(sim.hasAnyEntries()).toBe(true);
+    const a = sim.edits([STONE_AT]);
+    w.reply(editedReply(lastId(w), [], [[0, -2]]));
+    await a;
+    expect(sim.hasAnyEntries()).toBe(false);
+    const b = sim.edits([STONE_AT]);
+    w.reply(editedReply(lastId(w), [[5, 7]]));
+    await b;
+    expect(sim.hasAnyEntries()).toBe(true);
+    const c = sim.edits([STONE_AT]);
+    w.reply(editedReply(lastId(w), [], [[5, 7]]));
+    await c;
+    expect(sim.hasAnyEntries()).toBe(false);
+  });
+
   test('a `loaded` reply to a pending `edits` fails the sim, and so does an `edited` reply to a pending `load`', async () => {
     const w = fakeSim();
     let failures = 0;
