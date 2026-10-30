@@ -79,7 +79,8 @@ import { createFrameClock, createFrameNotice } from '../../src/ui/world/frameNot
 import { createFrameStep, type FrameStepDeps } from '../../src/ui/world/frameStep';
 import { createHoldRepeat } from '../../src/ui/world/holdRepeat';
 import { createMapOverlay, type MapOverlay } from '../../src/ui/world/mapOverlay';
-import { createAim, createClickQueue, type Aim } from '../../src/ui/world/worldPage';
+import { AUTOSAVE_MS } from '../../src/ui/world/autosave';
+import { createAim, createClickQueue, createPageAutosave, type Aim } from '../../src/ui/world/worldPage';
 import { STONE } from '../../src/world/blocks/index';
 import { createStore } from '../../src/world/store/store';
 import { installDom } from './fixtures/domShim';
@@ -854,6 +855,55 @@ describe('zero allocation at rest (SP4b spec §3.10, D25)', () => {
       expect([f.fly.x, f.fly.z]).toEqual([8.5, 8.5]);
       expect(f.fly.y).toBeCloseTo(f.walk.y + EYE, 12);
     });
+  }, TIMEOUT_MS);
+
+  test(`${N} frame steps at rest in a saved world (autosave armed, its timer not firing) grow the heap by less than the boxing budget of 256 B per tick (SP5b spec §3.2, SP4b D25)`, async () => {
+    const f = await atRest();
+    // The page's autosave over the frame's pose, clock and hotbar (SP5b spec §3.2): its 2,000 ms timer armed on a clock
+    // that never fires it, the page's events never sent. It has no per-frame hook: the state is built at a post only.
+    const intervals: Array<{ ms: number; cleared: boolean }> = [];
+    let flushes = 0;
+    /** The autosave's reads of the edit count: at its creation, then only at a tick, a trigger or a post. */
+    let reads = 0;
+    const autosave = createPageAutosave({
+      worldId: 'w1',
+      fly: f.fly,
+      frame: f.state,
+      speedIndex: () => 0,
+      storedTime: null,
+      hotbar: f.hotbar,
+      sim: {
+        flush: () => {
+          flushes++;
+          return new Promise<never>(() => {});
+        },
+      },
+      settled: () => Promise.resolve(),
+      editsSince: () => {
+        reads++;
+        return 0;
+      },
+      now: () => 0,
+      clock: {
+        now: () => 0,
+        setInterval: (_f, ms) => intervals.push({ ms, cleared: false }) - 1,
+        clearInterval: (id) => { intervals[id]!.cleared = true; },
+        setTimeout: () => 0,
+        clearTimeout() {},
+      },
+      events: { on: () => () => {}, hidden: () => false },
+      onResult() {},
+    });
+    const opened = reads;
+    f.sp5a('walk');
+    expectSp5aAtRest(f, () => {
+      expect([f.fly.mode, f.walk.onGround]).toEqual(['walk', true]);
+    });
+    // Armed and never fired: one interval of 2,000 ms, not cleared; nothing posted or checked during the frames.
+    expect(intervals).toEqual([{ ms: AUTOSAVE_MS, cleared: false }]);
+    expect([flushes, reads]).toEqual([0, opened]);
+    autosave.dispose();
+    expect(intervals[0]!.cleared).toBe(true);
   }, TIMEOUT_MS);
 
   test(`${N} frame-clock ticks (a cap of 144 on a 144 Hz display, the slow-frame notice past its 300 frames) grow the heap by less than 256 KB`, () => {

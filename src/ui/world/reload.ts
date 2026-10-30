@@ -2,7 +2,8 @@
  * The world page's own navigations (SP4a spec §7.1, §7.5; rulings P42, P50): the URL that reloads the world around the
  * camera, a reloader that navigates at most once, and the `beforeunload` guard against Ctrl+W, which the reloader
  * disarms first so that the page's own reloads never ask "Leave site?". Since SP4c (spec §1.6, D20) the address bar
- * follows the session and the last teleport (`createWorldUrl`), and every Reload reads the live session.
+ * follows the session and the last teleport (`createWorldUrl`), and every Reload reads the live session. In a saved
+ * world (SP5b spec §3.4 step 7, D4) the address stays `/?world=<id>` and every Reload is `savedWorldUrl`.
  */
 import type { WorldSession } from '../../engine/session';
 import { encodeMapState, type MapView } from '../map/mapState';
@@ -43,6 +44,14 @@ export function hereUrl(s: HereState, rd: number | null, hash: string): string {
   const h = hash.replace(/^#/, '');
   const place = placeParams(s).map(([k, v]) => `${k}=${v}`).join('&');
   return `/?${place}${rd === null ? '' : `&rd=${rd}`}${h === '' ? '' : `#${h}`}`;
+}
+
+/**
+ * A saved world's Reload (SP5b spec §3.4 step 7, D4): `/?world=<id>[&rd=<rd>]`, the id URI-encoded. It reopens the
+ * saved world at its last save; `hereUrl`'s `/?at=…#<hash>` would open an unsaved copy.
+ */
+export function savedWorldUrl(id: string, rd: number | null): string {
+  return `/?world=${encodeURIComponent(id)}${rd === null ? '' : `&rd=${rd}`}`;
 }
 
 /**

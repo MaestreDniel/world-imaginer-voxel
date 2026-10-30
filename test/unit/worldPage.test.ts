@@ -27,7 +27,7 @@ import { attachInput } from '../../src/player/input';
 import { advanceTime, clockHours } from '../../src/daynight/dayNight';
 import { EYE, createWalkState } from '../../src/player/walk';
 import { NEAR_FLY, NEAR_WALK } from '../../src/render/renderer';
-import { createReloader, createWorldUrl, worldHash, type HereState } from '../../src/ui/world/reload';
+import { createReloader, createWorldUrl, savedWorldUrl, worldHash, type HereState } from '../../src/ui/world/reload';
 import {
   closeOverlays, countPendingTimers, countTileCalls, createAim, createClickQueue, createHookEdit, createRdControl, createUndoNotice, createWorldNotices, everyFrameUntil, failBeforeReveal, flushOnPageHide, handleContextLoss,
   benchSetTime, benchWalk, handleStreamEvent, helpChange, installRepeatStop, installUndoKeys, installWiTest, mapKey, offerLowerRd, paletteFirst, onDriverStatus, onSimFailure, pushCoordinatorTeardown, rdShownOnLoad, releaseOnFailure, reloadRd, runTeardown, speedKey, stopAfterFailure, switchMode,
@@ -39,7 +39,7 @@ import { createActionPost, createBlockHistory, type BlockStep } from '../../src/
 import { createHoldRepeat } from '../../src/ui/world/holdRepeat';
 import { mountPalette } from '../../src/ui/palette';
 import { NO_ENTRY } from '../../src/sim/diffStore';
-import type { Edit } from '../../src/workers/protocol';
+import type { Edit, FlushedMsg } from '../../src/workers/protocol';
 import { hex64 } from '../../src/core/hash';
 import type { JsonObject } from '../../src/core/params/migrate';
 import { genKey, stageHashes } from '../../src/core/stage/hash';
@@ -49,7 +49,8 @@ import {
   createSaves, loadParams, newState, NO_VALUE, parseWorldRecord, todayStateTable, type HistoryRecord, type StateRecord, type WorldRecord,
 } from '../../src/persist/saves';
 import {
-  HISTORY_RESET_NOTICE, STATE_RESET_NOTICE, openRequest, openSavedWorld, readSavedWorld, restoreMode, restoredStart, timeOfHours,
+  EDIT_FAILED_NOTICE, HISTORY_RESET_NOTICE, SAVED_EDIT_FAILED_NOTICE, STATE_RESET_NOTICE, countAccepted, createPageAutosave, lastFlush, leaveAfterSave, lowerRdHref,
+  openRequest, openSavedWorld, readSavedWorld, restoreMode, restoredStart, savedWorldUrlRules, timeOfHours,
 } from '../../src/ui/world/worldPage';
 import { parseWorldQuery } from '../../src/ui/world/query';
 import { STATE_BOUNDS } from '../../src/ui/world/stateBounds';
@@ -2266,3 +2267,222 @@ describe('restoring the player in a saved world: pose, mode, flying speed, time 
 function flushMicrotasks(): Promise<void> {
   return new Promise((r) => setTimeout(r, 0));
 }
+
+describe('autosave in the saved world: Reloads reopen /?world, navigations and failures save first (SP5b spec §3.2, §3.4 step 7, D4, D14)', () => {
+  let dom: ReturnType<typeof installDom>;
+  beforeEach(() => {
+    dom = installDom();
+    vi.useFakeTimers();
+  });
+  afterEach(() => {
+    vi.useRealTimers();
+    vi.unstubAllGlobals();
+  });
+
+  const SRC = (): string => readFileSync(new URL('../../src/ui/world/worldPage.ts', import.meta.url), 'utf8');
+  /** Lets the promise jobs queued so far (and the ones they queue) run, without moving the fake clock. */
+  const jobs = async (): Promise<void> => {
+    for (let i = 0; i < 20; i++) await Promise.resolve();
+  };
+  const OK = (id: number): FlushedMsg => ({ type: 'flushed', id, ok: true, flushSeq: id, columns: 0, bytes: 0, syncMs: 0, commitMs: 0 });
+
+  /** The page's autosave over a fake sim whose `flush` replies the test settles by hand, on vi's fake timers. */
+  function saving(o: { stored?: { t: number; speedIndex: number } | null } = {}) {
+    const flushes: Array<{ state: StateRecord; history: HistoryRecord | null; resolve(m: FlushedMsg): void }> = [];
+    const fly = { x: 100.5, y: 80.25, z: -40.75, yaw: 90, pitch: -20, mode: 'fly' as const, speed: 30 };
+    const frame = { t: 0.5 };
+    const hotbar = createHotbar(null);
+    let edits = 0;
+    const autosave = createPageAutosave({
+      worldId: 'w 1',
+      fly,
+      frame,
+      speedIndex: () => 2,
+      storedTime: o.stored ?? null,
+      hotbar,
+      sim: { flush: (state, history) => new Promise<FlushedMsg>((resolve) => { flushes.push({ state, history, resolve }); }) },
+      settled: () => Promise.resolve(),
+      editsSince: () => edits,
+      now: () => 1_700_000_000_000,
+      clock: {
+        now: () => Date.now(),
+        setInterval: (f, ms) => setInterval(f, ms) as unknown as number,
+        clearInterval: (id) => clearInterval(id),
+        setTimeout: (f, ms) => setTimeout(f, ms) as unknown as number,
+        clearTimeout: (id) => clearTimeout(id),
+      },
+      events: { on: () => () => {}, hidden: () => false },
+      onResult: () => {},
+    });
+    return { autosave, flushes, fly, frame, hotbar, edit: () => { edits++; } };
+  }
+
+  test('in a saved world the failure panel\'s Reload, the context loss\'s Reload and the lower-RD link are `savedWorldUrl`s, never `/?at=`', () => {
+    const navigate = vi.fn<(url: string) => void>();
+    const notices = createWorldNotices(dom.body as unknown as HTMLElement, createReloader(navigate, () => {}));
+    // The page's URL rules in a saved world: `here` reopens the world, with the RD a Reload carries.
+    const url = savedWorldUrlRules('w 1');
+    expect(url.here(null)).toBe(savedWorldUrl('w 1', null));
+    expect(url.here(10)).toBe('/?world=w%201&rd=10');
+    // No writer: an Apply, a view change and a teleport's arrival write nothing (the address stays `/?world=<id>`).
+    expect(() => { url.applied(); url.viewChanged(); url.arrived({ x: 1, y: 2, z: 3, yaw: 0, pitch: 0 }); }).not.toThrow();
+    notices.failed('Streaming stopped: x', 'details', url.here(reloadRd(12, 8)));
+    expect(dom.el('world-failed-reload').href).toBe('/?world=w%201&rd=8');
+    let lost: (() => void) | null = null;
+    handleContextLoss({ onContextLost: (fn) => { lost = fn; } }, {
+      stop: () => {}, closeMap: () => {}, notices, hereHref: () => url.here(reloadRd(null, 8)), onError: (e) => { throw e; },
+    });
+    lost!();
+    expect(dom.el('world-context-reload').href).toBe('/?world=w%201');
+    dom.el('world-context-reload').click();
+    expect(navigate.mock.calls).toEqual([['/?world=w%201']]);
+    // The loading failure's lower-RD link: the saved world at the RD below; an unsaved world keeps `?rd`, `?at` and the hash.
+    expect(lowerRdHref(12, { x: 5, z: -7 }, '#abc', 'w 1')).toBe('/?world=w%201&rd=10');
+    expect(lowerRdHref(12, { x: 5, z: -7 }, '#abc', null)).toBe('/?rd=10&at=5,-7#abc');
+    expect(lowerRdHref(4, { x: 5, z: -7 }, '', 'w 1')).toBeNull();
+    expect(lowerRdHref(null, null, '', 'w 1')).toBeNull();
+    // The page: the saved world's rules in place of `createWorldUrl` (whose writer is not created), `here` read from them,
+    // and the loading screen's link with the query's world.
+    const src = SRC();
+    expect(src).toMatch(/worldUrl = savedWorldUrlRules\(q\.world\)/);
+    const unsaved = src.slice(src.indexOf('if (q.world === null) {\n      const urlWriter'), src.indexOf('worldUrl = savedWorldUrlRules(q.world)'));
+    expect(unsaved).toMatch(/createUrlWriter\(/);
+    expect(unsaved).toMatch(/worldUrl = createWorldUrl\(\{/);
+    expect(src.match(/createUrlWriter\(/g)).toHaveLength(1);
+    expect(src).toMatch(/const here = \(rdOf: number \| null\): string => worldUrl\.here\(rdOf\);/);
+    expect(src).toMatch(/show: \(\) => notices\.failed\(cause, shown, here\(reloadRd\(q\.rd, liveRd\)\)\),/);
+    expect(src).toMatch(/hereHref: \(\) => here\(reloadRd\(q\.rd, liveRd\)\),/);
+    expect(src).toMatch(/lowerRd: lowerRdHref\(rd, centre, hashPart, q\.world\)/);
+  });
+
+  test('a navigation waits for `beforeLeave`: the URL is set after `flushed`, or after 1,000 ms', async () => {
+    const s = saving();
+    const navigate = vi.fn<(url: string) => void>();
+    const disarm = vi.fn();
+    const reloader = createReloader(leaveAfterSave(() => s.autosave, navigate), disarm);
+    reloader.reload('/?world=w%201');
+    // The guard is disarmed and a flush posted at once; the URL waits for its `flushed`.
+    expect(disarm).toHaveBeenCalledTimes(1);
+    expect(s.flushes).toHaveLength(1);
+    await vi.advanceTimersByTimeAsync(400);
+    expect(navigate).not.toHaveBeenCalled();
+    s.flushes[0]!.resolve(OK(1));
+    await jobs();
+    expect(navigate.mock.calls).toEqual([['/?world=w%201']]);
+    // A reload whose flush is never answered navigates at 1,000 ms.
+    const t = saving();
+    const later = vi.fn<(url: string) => void>();
+    createReloader(leaveAfterSave(() => t.autosave, later), () => {}).reload('/?world=w%201&rd=8');
+    expect(t.flushes).toHaveLength(1);
+    await vi.advanceTimersByTimeAsync(999);
+    expect(later).not.toHaveBeenCalled();
+    await vi.advanceTimersByTimeAsync(1);
+    expect(later.mock.calls).toEqual([['/?world=w%201&rd=8']]);
+    // No autosave (an unsaved world): at once.
+    const now = vi.fn<(url: string) => void>();
+    createReloader(leaveAfterSave(() => null, now), () => {}).reload('/?at=1,2');
+    expect(now.mock.calls).toEqual([['/?at=1,2']]);
+    // The page's reloader goes through it, with the page's autosave.
+    expect(SRC()).toMatch(/const reloader = createReloader\(leaveAfterSave\(\(\) => autosave, \(url\) => navigateTo\(url, location\)\), disarm\);/);
+  });
+
+  test('a failure after the reveal posts one flush and releases the sim only after `flushed` (or 1,000 ms); a failure of the sim itself posts none', async () => {
+    const run = (s: ReturnType<typeof saving>, sim: { failed: boolean }) => {
+      const order: string[] = [];
+      stopAfterFailure({
+        stop: () => { order.push('stop'); },
+        closeMap: () => { order.push('closeMap'); },
+        save: () => lastFlush(s.autosave, sim, { setTimeout: (f, ms) => setTimeout(f, ms) as unknown as number, clearTimeout: (id) => clearTimeout(id) }),
+        show: () => { order.push('panel'); },
+        release: [() => { order.push('autosave.dispose'); s.autosave.dispose(); }, () => { order.push('sim.dispose'); }],
+        onError: (e) => { throw e; },
+      });
+      return order;
+    };
+    // `flushed` at 300 ms: the panel and the releases then, the sim's dispose after it.
+    const a = saving();
+    const order = run(a, { failed: false });
+    expect(order).toEqual(['stop', 'closeMap']);
+    await jobs();
+    expect(a.flushes).toHaveLength(1);
+    expect(a.flushes[0]!.state.player).toEqual({ x: 100.5, y: 80.25, z: -40.75, yaw: 90, pitch: -20, mode: 'fly', speed: 30 });
+    await vi.advanceTimersByTimeAsync(300);
+    expect(order).toEqual(['stop', 'closeMap']);
+    a.flushes[0]!.resolve(OK(1));
+    await jobs();
+    expect(order).toEqual(['stop', 'closeMap', 'panel', 'autosave.dispose', 'sim.dispose']);
+    expect(a.flushes).toHaveLength(1);
+    // Never answered: released at 1,000 ms.
+    const b = saving();
+    const slow = run(b, { failed: false });
+    await jobs();
+    expect(b.flushes).toHaveLength(1);
+    await vi.advanceTimersByTimeAsync(999);
+    expect(slow).toEqual(['stop', 'closeMap']);
+    await vi.advanceTimersByTimeAsync(1);
+    expect(slow).toEqual(['stop', 'closeMap', 'panel', 'autosave.dispose', 'sim.dispose']);
+    // The sim itself failed: nothing posted, released at once.
+    const c = saving();
+    const dead = run(c, { failed: true });
+    await jobs();
+    expect(c.flushes).toHaveLength(0);
+    expect(dead).toEqual(['stop', 'closeMap', 'panel', 'autosave.dispose', 'sim.dispose']);
+    // Without `save` (an unsaved world) the release is synchronous, as SP4b's.
+    const sync: string[] = [];
+    stopAfterFailure({ stop: () => { sync.push('stop'); }, show: () => { sync.push('panel'); }, release: [() => { sync.push('sim.dispose'); }], onError: () => {} });
+    expect(sync).toEqual(['stop', 'panel', 'sim.dispose']);
+    // The page: the streaming route's failure saves through `lastFlush` in a saved world, and disposes the autosave
+    // before the sim.
+    const src = SRC();
+    const start = src.indexOf('\n    failAfterReveal = (cause, shown) => {');
+    const block = src.slice(start, src.indexOf('\n    };', start + 1));
+    expect(block).toMatch(/save: saving === null \? undefined : \(\) => lastFlush\(saving, simClient!, window\),/);
+    const release = block.slice(block.indexOf('release: ['));
+    expect(release).toMatch(/^\s*\(\) => saving\?\.dispose\(\),$/m);
+    expect(release.indexOf('saving?.dispose()')).toBeLessThan(release.indexOf('simClient?.dispose()'));
+  });
+
+  test('the saved world\'s sim notice is `SAVED_EDIT_FAILED_NOTICE`', () => {
+    expect(SAVED_EDIT_FAILED_NOTICE).toBe('Editing stopped: the edit worker failed; changes after the last save (at most 2 s) are lost');
+    const notices = createWorldNotices(dom.body as unknown as HTMLElement, createReloader(vi.fn(), vi.fn()));
+    const coordinator = { editState: () => 0 as const, simPin: vi.fn(), simUnpin: vi.fn(), markEdited: vi.fn(), simUnpinAll: vi.fn() };
+    const editPath = createEditPath({ sim: { failed: false, edits: vi.fn() }, coordinator, latency: createEditLatency(), now: () => 0, notices: { show: vi.fn() } });
+    onSimFailure({ store: { markDead: () => {} }, coordinator, editPath, notices, saved: true });
+    const text = () => dom.el('world-notices').children.map((d: FakeElement) => d.textContent).join('\n');
+    expect(text()).toContain(SAVED_EDIT_FAILED_NOTICE);
+    expect(text()).not.toContain(EDIT_FAILED_NOTICE);
+    // An unsaved world keeps SP5a's (D29).
+    expect(EDIT_FAILED_NOTICE).toBe('Editing stopped: the edit worker failed; this session\'s edits are lost');
+    expect(SRC()).toMatch(/simFailure = \(\) => onSimFailure\(\{ store, coordinator, editPath, notices, saved: saved !== null \}\);/);
+  });
+
+  test('the page\'s autosave: the pose, the running clock (the stored time while a capture fixes it), the hotbar, the edits counted from the accepted replies', async () => {
+    const s = saving();
+    s.frame.t = 0.75;
+    s.fly.x = 200.5;
+    s.hotbar.select(3);
+    void s.autosave.flushNow();
+    const posted = s.flushes[0]!;
+    expect(posted.state.player).toMatchObject({ x: 200.5, mode: 'fly', speed: 30 });
+    expect(posted.state.time).toEqual({ t: 0.75, speedIndex: 2 });
+    expect(posted.state.hotbar).toMatchObject({ v: 1, active: 3 });
+    expect([posted.state.worldId, posted.state.updated, posted.state.places]).toEqual(['w 1', 1_700_000_000_000, []]);
+    // A `?shot=1&time=` capture: the stored time is saved unchanged, whatever the frame's clock reads.
+    const shot = saving({ stored: { t: 0.1, speedIndex: 1 } });
+    void shot.autosave.flushNow();
+    expect(shot.flushes[0]!.state.time).toEqual({ t: 0.1, speedIndex: 1 });
+    // The edit path's post, counted: an accepted non-empty batch counts one; a refusal and an empty batch none; the
+    // promise returned is the path's own.
+    const replies: EditOutcome[] = [{ ok: true, prev: Uint32Array.of(0), next: Uint32Array.of(256) }, { ok: false, why: 'changed' }, { ok: true, prev: new Uint32Array(0), next: new Uint32Array(0) }];
+    const results = replies.map((r) => Promise.resolve(r));
+    let k = 0;
+    const counted = countAccepted(() => results[k++]!);
+    const edit: Edit = { x: 1, y: 70, z: 2, op: 'set', value: 256, expect: 0 };
+    expect(counted.post([edit])).toBe(results[0]);
+    void counted.post([edit]);
+    void counted.post([]);
+    await jobs();
+    expect(counted.count()).toBe(1);
+    expect(SRC()).toMatch(/const accepted = countAccepted\(editPath\.post\);/);
+  });
+});

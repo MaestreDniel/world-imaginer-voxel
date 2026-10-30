@@ -1,6 +1,6 @@
 import { afterEach, beforeEach, describe, expect, test, vi } from 'vitest';
 import { parseWorldQuery } from '../../src/ui/world/query';
-import { createReloader, hereUrl, installLeaveGuard, navigateTo, withArrival } from '../../src/ui/world/reload';
+import { createReloader, hereUrl, installLeaveGuard, navigateTo, savedWorldUrl, withArrival } from '../../src/ui/world/reload';
 import { createWorldNotices, enterFullscreen, handleContextLoss } from '../../src/ui/world/worldPage';
 import { installDom, type FakeElement } from './fixtures/domShim';
 
@@ -22,6 +22,15 @@ describe('hereUrl (SP4a spec §7.5)', () => {
     const q = parseWorldQuery(new URLSearchParams(hereUrl({ x: 1234.5, y: 99.6, z: -987.2, yaw: 271.25, pitch: 12.34 }, 8, '#h').slice(2, -2)));
     expect(q.at).toEqual({ x: 1235, z: -987 });
     expect([q.y, q.yaw, q.pitch, q.rd]).toEqual([100, 271.3, 12.3, 8]);
+  });
+});
+
+describe('savedWorldUrl (SP5b spec §3.4 step 7, D4)', () => {
+  test('`savedWorldUrl(\'a b\', 12)` is `/?world=a%20b&rd=12`; without rd `/?world=a%20b`', () => {
+    expect(savedWorldUrl('a b', 12)).toBe('/?world=a%20b&rd=12');
+    expect(savedWorldUrl('a b', null)).toBe('/?world=a%20b');
+    // The query reads the id back unchanged.
+    expect(parseWorldQuery(new URLSearchParams(savedWorldUrl('a b', 12).slice(2))).world).toBe('a b');
   });
 });
 

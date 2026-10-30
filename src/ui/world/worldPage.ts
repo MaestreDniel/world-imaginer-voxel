@@ -69,6 +69,12 @@
  * M), through the debounced URL writer (a hash over 64 KiB dropped with the notice); each teleport's arrival rewrites
  * the search's `at`, `y`, `yaw` and `pitch`, flight never does; there is no `hashchange` listener in the world.
  *
+ * A saved world (SP5b spec §3.2, §3.4 step 7, D4, D14): no URL writer, so the address stays `/?world=<id>`, and every
+ * Reload (the failure panel's, the lost context's, the loading failure's lower RD) is `savedWorldUrl`. The autosave
+ * (`createPageAutosave`) is armed at the reveal; every navigation the page starts waits for its `beforeLeave` (at most
+ * 1,000 ms), and a failure after the reveal saves once more (`lastFlush`, unless the sim is what failed) before the
+ * panel shows and the sim is released. The sim's failure notice is `SAVED_EDIT_FAILED_NOTICE`.
+ *
  * The map in the world (SP4c spec §1.3, §2.3, §2.4, §4.2): at the reveal the streaming route creates the preview driver
  * (which adopts the first configure, wants no preview until the first M, and is fed every session change by the page
  * until the map tool is mounted, ruling R1) and the map overlay (`mapOverlay.ts`); M toggles it, the flight pauses and
@@ -118,7 +124,7 @@ import { openIdbKV } from '../../persist/idb';
 import type { KV } from '../../persist/kv';
 import {
   createSaves, loadParams, normalizeHistory, normalizeState, parseWorldRecord, remapOf, tableRelation, todayStateTable, type HistoryRecord,
-  type Saves, type StateBounds, type StateRecord, type WorldRecord,
+  type Place, type Saves, type StateBounds, type StateRecord, type WorldRecord,
 } from '../../persist/saves';
 import { SPEED_DEFAULT, applyCameraRotation, look, lookVectorInto, stepSpeed, toggleMode, type FlyState } from '../../player/fly';
 import { attachInput, isTextEntry } from '../../player/input';
@@ -132,7 +138,7 @@ import type { FrameState } from '../../render/frameState';
 import { NEAR_FLY, NEAR_WALK, createWorldRenderer, type GpuEstimate, type WorldRenderer } from '../../render/renderer';
 import { createSectionRendererCounts, selectSectionRenderer, type SectionRendererKind } from '../../render/sectionRenderer';
 import { outlineBounds } from '../../render/selection';
-import type { Edit, LoadMsg } from '../../workers/protocol';
+import type { Edit, FlushedMsg, LoadMsg } from '../../workers/protocol';
 import { SIM_THREAD } from '../../world/store/reclaim';
 import { createStore, type VoxelStore } from '../../world/store/store';
 import { renderErrorScreen } from '../capabilityReport';
@@ -159,14 +165,15 @@ import type { FlightContext } from './flight';
 import { createFogEase, createFogStep, filledRadius } from './fogEase';
 import { createFrameClock, createFrameNotice, lowerRd } from './frameNotice';
 import { coversWorld, createApplyControl, createEpochs, updateAuxPolicy } from './applyControl';
+import { LEAVE_WAIT_MS, createAutosave, snapshotState, type Autosave, type AutosaveDeps } from './autosave';
 import { createEditLatency } from './editLatency';
 import { mountBuildHud } from './buildHud';
 import { createActionPost, createBlockHistory, type BlockHistory } from './blockHistory';
-import { createEditPath, type EditOutcome } from './editPath';
+import { createEditPath, type EditOutcome, type EditPath } from './editPath';
 import { createFrameStep, eyeSkyLight } from './frameStep';
 import { createHoldRepeat, type HoldRepeat } from './holdRepeat';
 import { createMapOverlay, followSession, frameCapFor, worldMapView, type ControlsOwner, type MapOverlay } from './mapOverlay';
-import { createReloader, createWorldUrl, installLeaveGuard, navigateTo, type Reloader } from './reload';
+import { createReloader, createWorldUrl, installLeaveGuard, navigateTo, savedWorldUrl, type Reloader, type WorldUrl } from './reload';
 import { Y_MAX, Y_MIN, type WorldQuery } from './query';
 import { STATE_BOUNDS } from './stateBounds';
 import { createTeleport, type Teleport, type TeleportLanding } from './teleport';
@@ -467,18 +474,31 @@ export function pushCoordinatorTeardown(
  * HUD's timer, the teleport (ruling R5), the coordinator, the pool, the renderer), the overlay, the panel and each
  * release guarded as the teardown's (`runTeardown`): a release that throws (a `StoreCorrupt` in the coordinator's
  * sweep, a renderer whose context is gone, a tool's dispose) can neither hide the panel nor skip a later release (Task
- * 21 review M2).
+ * 21 review M2). In a saved world `save` (`lastFlush`, SP5b spec §3.2, D14) runs after the overlays close, and the panel
+ * and the releases wait for it (it settles within 1,000 ms); without it everything runs at once.
  */
 export function stopAfterFailure(o: {
   stop(): void;
   /** Disposes the map overlay before the panel shows (the streaming route; the bench has none). */
   closeMap?(): void;
+  /** A saved world's last flush, awaited before the panel and the releases (it never holds them past its bound). */
+  save?(): Promise<void>;
   show(): void;
   readonly release: ReadonlyArray<() => void>;
   onError(e: unknown): void;
 }): void {
   o.stop();
-  runTeardown([() => o.closeMap?.(), o.show, ...o.release], o.onError);
+  const save = o.save;
+  if (save === undefined) {
+    runTeardown([() => o.closeMap?.(), o.show, ...o.release], o.onError);
+    return;
+  }
+  runTeardown([() => o.closeMap?.()], o.onError);
+  const rest = (): void => runTeardown([o.show, ...o.release], o.onError);
+  new Promise<void>((resolve) => { resolve(save()); }).then(rest, (e: unknown) => {
+    o.onError(e);
+    rest();
+  });
 }
 
 /**
@@ -1068,25 +1088,29 @@ export function installWiTest(win: TimerHost & { __wiTest?: WiTest }): WiTestIns
   };
 }
 
-/** The notice of the sim's failure (SP5a spec §2.1); it stays until dismissed. */
+/** The notice of the sim's failure (SP5a spec §2.1); it stays until dismissed. An unsaved world's (SP5b D29). */
 export const EDIT_FAILED_NOTICE = 'Editing stopped: the edit worker failed; this session\'s edits are lost';
+/** The sim's failure notice in a saved world (SP5b spec D14): what the last committed flush saved is kept. */
+export const SAVED_EDIT_FAILED_NOTICE = 'Editing stopped: the edit worker failed; changes after the last save (at most 2 s) are lost';
 
 /**
  * The sim's failure (SP5a spec §2.1), which the route calls from the sim client's `onFailure`, before the client rejects
  * the pending batches: thread 15 marked dead (its reader epoch no longer holds releases in limbo), the edit path
  * disabled, every sim pin released (`simUnpinAll`, so a pending post's rejection needs no `simUnpin`) and the notice
- * shown with no timeout. The world keeps streaming.
+ * shown with no timeout, `SAVED_EDIT_FAILED_NOTICE` in a saved world (SP5b spec D14). The world keeps streaming.
  */
 export function onSimFailure(o: {
   store: Pick<VoxelStore, 'markDead'>;
   coordinator: Pick<Coordinator, 'simUnpinAll'>;
   editPath: { disable(): void };
   notices: Pick<WorldNotices, 'show'>;
+  /** A saved world's (default false: SP5a's notice). */
+  saved?: boolean;
 }): void {
   o.store.markDead(SIM_THREAD);
   o.editPath.disable();
   o.coordinator.simUnpinAll();
-  o.notices.show(EDIT_FAILED_NOTICE, { kind: 'error' });
+  o.notices.show(o.saved === true ? SAVED_EDIT_FAILED_NOTICE : EDIT_FAILED_NOTICE, { kind: 'error' });
 }
 
 /**
@@ -1607,6 +1631,131 @@ export function restoreMode(start: Pick<RestoredStart, 'walk'>, switchMode: () =
 }
 
 /**
+ * A saved world's URL rules (SP5b spec §3.4 step 7, D4), in place of `createWorldUrl`: no URL writer is created, so the
+ * address stays `/?world=<id>` (an Apply, a view change and a teleport's arrival write nothing), and `here`, which the
+ * failure panel's and the lost context's Reloads read, is `savedWorldUrl(id, rd)`.
+ */
+export function savedWorldUrlRules(id: string): WorldUrl {
+  return { applied() {}, viewChanged() {}, arrived() {}, here: (rd) => savedWorldUrl(id, rd) };
+}
+
+/**
+ * The loading failure's link to the next lower RD (P49), or null at RD 4 or before the RD is known: in a saved world
+ * (`world`, its id) `savedWorldUrl(world, lower)` (SP5b spec §3.2; nothing to save before the reveal), else
+ * `/?rd=<lower>[&at=<x>,<z>]<hash>`.
+ */
+export function lowerRdHref(rd: number | null, centre: { x: number; z: number } | null, hashPart: string, world: string | null): string | null {
+  const lower = rd === null ? null : lowerRd(rd);
+  if (lower === null) return null;
+  if (world !== null) return savedWorldUrl(world, lower);
+  return `/?rd=${lower}${centre === null ? '' : `&at=${centre.x},${centre.z}`}${hashPart}`;
+}
+
+/**
+ * The reloader's `navigate` (SP5b spec §3.2, D31): in a saved world every navigation the page starts first waits for
+ * `beforeLeave(LEAVE_WAIT_MS)` of the autosave `autosave()` returns, so the URL is set after that flush's `flushed` or
+ * after 1,000 ms, whichever comes first; with none (an unsaved world) it navigates at once.
+ */
+export function leaveAfterSave(autosave: () => Pick<Autosave, 'beforeLeave'> | null, navigate: (url: string) => void): (url: string) => void {
+  return (url) => {
+    const a = autosave();
+    if (a === null) navigate(url);
+    else void a.beforeLeave(LEAVE_WAIT_MS).then(() => navigate(url));
+  };
+}
+
+/**
+ * A saved world's last flush after a failure (SP5b spec §3.2, D14; `stopAfterFailure`'s `save`): `flushNow()`, waited
+ * for until its `flushed` or `LEAVE_WAIT_MS`, whichever comes first. When the sim is what failed nothing is posted.
+ */
+export function lastFlush(
+  autosave: Pick<Autosave, 'flushNow'>,
+  sim: { readonly failed: boolean },
+  clock: { setTimeout(f: () => void, ms: number): number; clearTimeout(id: number): void },
+): Promise<void> {
+  if (sim.failed) return Promise.resolve();
+  return new Promise<void>((resolve) => {
+    const id = clock.setTimeout(resolve, LEAVE_WAIT_MS);
+    const done = (): void => {
+      clock.clearTimeout(id);
+      resolve();
+    };
+    autosave.flushNow().then(done, done);
+  });
+}
+
+/**
+ * The edit path's `post`, counting its accepted replies (an `ok` outcome that edited something), the count autosave's
+ * `editsSince` reads (SP5b spec §3.2). It returns the path's own promise, so the block history's `record`, chained on
+ * it, runs where it did.
+ */
+export function countAccepted(post: EditPath['post']): { post: EditPath['post']; count(): number } {
+  let n = 0;
+  const counted = (out: EditOutcome): void => {
+    if (out.ok && out.next.length > 0) n++;
+  };
+  return {
+    post(edits, tClick) {
+      const p = post(edits, tClick);
+      void p.then(counted, () => {});
+      return p;
+    },
+    count: () => n,
+  };
+}
+
+/** A saved world's places until the page keeps them (SP5b spec §3.7). */
+const NO_PLACES: readonly Place[] = [];
+
+/**
+ * A saved world's autosave as the page creates it after the reveal (SP5b spec §3.2, D5): `flush` the sim client's;
+ * `build` the state through `snapshotState` from the pose (`fly`), the clock (`frame.t`, which the frame step writes,
+ * and the day speed's index; `storedTime` unchanged while a `?shot=1&time=` capture fixes the clock, which is then not
+ * saved), the hotbar's record, the places and the wall clock (`now`), with the block history's record and version (an
+ * empty history at version 0 until the block history is saved, SP5b spec §3.4 step 6); `settled` the edit path's;
+ * `editsSince` the accepted replies (`countAccepted`); `onResult` every `flushed`.
+ */
+export function createPageAutosave(o: {
+  readonly worldId: string;
+  readonly fly: Pick<FlyState, 'x' | 'y' | 'z' | 'yaw' | 'pitch' | 'mode' | 'speed'>;
+  readonly frame: { readonly t: number };
+  speedIndex(): number;
+  /** The stored time while a capture fixes the clock (`RestoredStart.saveClock` false); null when the clock is saved. */
+  readonly storedTime: { readonly t: number; readonly speedIndex: number } | null;
+  readonly hotbar: Pick<Hotbar, 'active' | 'slots'>;
+  readonly sim: Pick<SimClient, 'flush'>;
+  settled(): Promise<void>;
+  editsSince(): number;
+  /** The wall clock (`Date.now()`), the state's `updated`. */
+  now(): number;
+  readonly clock: AutosaveDeps['clock'];
+  readonly events: AutosaveDeps['events'];
+  onResult(r: FlushedMsg): void;
+}): Autosave {
+  const history: HistoryRecord = { worldId: o.worldId, done: [], undone: [] };
+  return createAutosave({
+    clock: o.clock,
+    events: o.events,
+    flush: (state, h) => o.sim.flush(state, h),
+    build: () => ({
+      state: snapshotState({
+        worldId: o.worldId,
+        fly: o.fly,
+        time: o.storedTime ?? { t: o.frame.t, speedIndex: o.speedIndex() },
+        hotbar: { v: 1, active: o.hotbar.active, slots: o.hotbar.slots },
+        places: NO_PLACES,
+        updated: o.now(),
+      }),
+      history,
+      historyVersion: 0,
+    }),
+    settled: () => o.settled(),
+    editsSince: () => o.editsSince(),
+    onResult: (r) => o.onResult(r),
+  });
+}
+
+/**
  * Mounts the world page in `root` (replacing what it holds) and resolves once it settles: revealed, or failed with the
  * failure panel or the error screen showing. It never rejects for a load error; the page shows it.
  */
@@ -1660,11 +1809,6 @@ export function mountWorldPage(root: HTMLElement, q: WorldQuery, hash: string, o
   });
   loading.progress(0, 'Generating');
 
-  const lowerRdHref = (): string | null => {
-    const lower = rd === null ? null : lowerRd(rd);
-    return lower === null ? null : `/?rd=${lower}${centre === null ? '' : `&at=${centre.x},${centre.z}`}${hashPart}`;
-  };
-
   /** The panel's details: a fatal event's message (when given), then the error's or the event cause's stack. */
   const details = (e: unknown, message: string | null = null): string => [
     message,
@@ -1696,7 +1840,8 @@ export function mountWorldPage(root: HTMLElement, q: WorldQuery, hash: string, o
     const renderer = wr;
     wr = null;
     failBeforeReveal({
-      show: () => loading.fail(cause, shown, { map: mapHref, lowerRd: lowerRdHref() }),
+      // In a saved world the lower RD reopens it (SP5b spec §3.2).
+      show: () => loading.fail(cause, shown, { map: mapHref, lowerRd: lowerRdHref(rd, centre, hashPart, q.world) }),
       release: { longTasks, sim, pool, renderer },
       settle,
       onError: (err) => console.error('The world page\'s release after a failure:', err),
@@ -2375,10 +2520,13 @@ export function mountWorldPage(root: HTMLElement, q: WorldQuery, hash: string, o
       return;
     }
 
-    // Every navigation the page starts disarms the Ctrl+W guard first and happens once (spec §7.1; ruling P50).
+    // Every navigation the page starts disarms the Ctrl+W guard first and happens once (spec §7.1; ruling P50); in a
+    // saved world it saves first (`leaveAfterSave`: the URL is set after `flushed` or 1,000 ms, SP5b spec §3.2).
     const disarm = installLeaveGuard(window);
     teardown.push(disarm);
-    const reloader = createReloader((url) => navigateTo(url, location), disarm);
+    // A saved world's autosave (SP5b spec §3.2, D5), created below once the pose, the hotbar and the edit path exist.
+    let autosave: Autosave | null = null;
+    const reloader = createReloader(leaveAfterSave(() => autosave, (url) => navigateTo(url, location)), disarm);
     const notices = createWorldNotices(host, reloader);
     teardown.push(() => notices.dispose());
     // A saved world's D14 notices and its load's counts (SP5b spec §3.4 steps 2-3), until dismissed.
@@ -2393,17 +2541,19 @@ export function mountWorldPage(root: HTMLElement, q: WorldQuery, hash: string, o
       now: () => performance.now(),
       notices: { show: (text, ms) => notices.show(text, { kind: 'warn', timeoutMs: ms }) },
     });
-    simFailure = () => onSimFailure({ store, coordinator, editPath, notices });
+    simFailure = () => onSimFailure({ store, coordinator, editPath, notices, saved: saved !== null });
+    // The edit path's accepted replies, counted for the autosave (SP5b spec §3.2); every post below goes through it.
+    const accepted = countAccepted(editPath.post);
     // The block history (SP5a spec §4.5, D13): every action posts through `actionPost`, which records an accepted one;
     // a side with no entry takes the voxel's value read now as its `expect`.
     const blockHistory = createBlockHistory({
-      post: editPath.post,
+      post: accepted.post,
       read: (x, y, z) => voxelValue(store, x, y, z),
       pending: editPath.pending,
       settled: editPath.settled,
       notices: { show: (text, ms) => notices.show(text, { timeoutMs: ms }) },
     });
-    const actionPost = createActionPost({ post: editPath.post, record: blockHistory.record });
+    const actionPost = createActionPost({ post: accepted.post, record: blockHistory.record });
     // A sim that failed during the load shows its notice now that the notices exist.
     if (simClient!.failed) simFailure();
     // The edit latency's reveals (§6.2); the bench's own hook feeds them on its route (L10).
@@ -2419,18 +2569,25 @@ export function mountWorldPage(root: HTMLElement, q: WorldQuery, hash: string, o
     let teleport: Teleport | null = null;
     // The world's URL (SP4c spec §1.6, D20): after every Apply and every view change of the map, the path, the search
     // and the live session's hash, debounced 200 ms, a hash over 64 KiB dropped with the notice; a teleport's arrival
-    // rewrites the search's place. Disposed (a pending write flushed) before the notices. No `hashchange` listener.
-    const urlWriter = createUrlWriter((u) => history.replaceState(null, '', u), 200, 1000, oversizeNotice(notices));
-    teardown.push(() => urlWriter.dispose());
-    teardown.push(flushOnPageHide(window, urlWriter));
-    const worldUrl = createWorldUrl({
-      session,
-      view: () => worldMapView(mapRef?.tool ?? null, fly),
-      camera: fly,
-      writer: urlWriter,
-      loc: location,
-    });
-    // The Reloads read the camera, the live session and the map's view now, never the hash the page was loaded with.
+    // rewrites the search's place. Disposed (a pending write flushed) before the notices. No `hashchange` listener. In a
+    // saved world no writer is created: the address stays `/?world=<id>` (SP5b spec §3.4 step 7, D4).
+    let worldUrl: WorldUrl;
+    if (q.world === null) {
+      const urlWriter = createUrlWriter((u) => history.replaceState(null, '', u), 200, 1000, oversizeNotice(notices));
+      teardown.push(() => urlWriter.dispose());
+      teardown.push(flushOnPageHide(window, urlWriter));
+      worldUrl = createWorldUrl({
+        session,
+        view: () => worldMapView(mapRef?.tool ?? null, fly),
+        camera: fly,
+        writer: urlWriter,
+        loc: location,
+      });
+    } else {
+      worldUrl = savedWorldUrlRules(q.world);
+    }
+    // The Reloads read the camera, the live session and the map's view now, never the hash the page was loaded with; in
+    // a saved world they reopen `/?world=<id>[&rd=<rd>]` (`savedWorldUrl`).
     const here = (rdOf: number | null): string => worldUrl.here(rdOf);
     let stopped = false;
     const stop = (): void => {
@@ -2444,14 +2601,17 @@ export function mountWorldPage(root: HTMLElement, q: WorldQuery, hash: string, o
     const fogStep = createFogStep(fog, fly, columns, loadRd);
     let rdControl!: { apply(rd: number | null): void };
     // A failure after the reveal (SP4b spec §7.4): the loop and the coordinator stop, the workers and the renderer are
-    // released, and the notices' panel offers "Copy details" and a Reload around the camera.
+    // released, and the notices' panel offers "Copy details" and a Reload around the camera. A saved world saves once
+    // more first, unless the sim is what failed, and the panel and the releases wait for it (SP5b spec §3.2, D14).
     let stopHud = (): void => {};
     failAfterReveal = (cause, shown) => {
       const renderer = wr;
       wr = null;
+      const saving = autosave;
       stopAfterFailure({
         stop,
         closeMap: () => closeOverlays(paletteRef, mapRef),
+        save: saving === null ? undefined : () => lastFlush(saving, simClient!, window),
         show: () => notices.failed(cause, shown, here(reloadRd(q.rd, liveRd))),
         // The HUD's timer would read the disposed renderer and coordinator; then what releaseOnFailure frees, each
         // step on its own.
@@ -2463,6 +2623,8 @@ export function mountWorldPage(root: HTMLElement, q: WorldQuery, hash: string, o
           () => driver?.dispose(),
           () => coordinator.dispose(),
           () => longTasks?.disconnect(),
+          // After its last flush, before the sim: nothing posts again (the panel's Reload leaves at once).
+          () => saving?.dispose(),
           () => simClient?.dispose(),
           () => pool?.terminate(),
           () => renderer?.dispose(),
@@ -2845,6 +3007,43 @@ export function mountWorldPage(root: HTMLElement, q: WorldQuery, hash: string, o
     // Undo and redo (SP4c spec §2.4; SP5a spec §4.5): live for the page's lifetime, map shown or hidden, never in text
     // entry; blocks while the world owns the controls, the session's params while the map does.
     teardown.push(installUndoKeys({ owner: () => mapOverlay.owner, blocks: blockHistory, session }));
+    // A saved world's autosave (SP5b spec §3.2, D5), armed at the reveal with the world as opened (its mode restored
+    // above): the 2,000 ms timer, the hide and close triggers, and the navigations' and the failure's last flush. It has
+    // no per-frame hook (SP4b D25).
+    if (saved !== null) {
+      const opened = saved;
+      const a = createPageAutosave({
+        worldId: opened.state.worldId,
+        fly,
+        frame,
+        speedIndex: () => speedIndex,
+        storedTime: restored !== null && !restored.saveClock ? opened.state.time : null,
+        hotbar,
+        sim: simClient!,
+        settled: editPath.settled,
+        editsSince: accepted.count,
+        now: () => Date.now(),
+        clock: {
+          now: () => performance.now(),
+          setInterval: (f, ms) => window.setInterval(f, ms),
+          clearInterval: (id) => window.clearInterval(id),
+          setTimeout: (f, ms) => window.setTimeout(f, ms),
+          clearTimeout: (id) => window.clearTimeout(id),
+        },
+        events: {
+          on(type, f) {
+            const target: Pick<EventTarget, 'addEventListener' | 'removeEventListener'> = type === 'visibilitychange' ? document : window;
+            target.addEventListener(type, f);
+            return () => target.removeEventListener(type, f);
+          },
+          hidden: () => document.visibilityState === 'hidden',
+        },
+        // Every `flushed`: D14's storage notices (SP5b spec §3.8) are not wired yet.
+        onResult: () => {},
+      });
+      autosave = a;
+      teardown.push(() => a.dispose());
+    }
 
     // The streaming frame (SP4b spec §7.2): the slow-frame notice and the throttle get every raw rAF delta before the
     // limiter, so an FPS cap of 30 is read as neither slow frames nor a reason to throttle generation.
