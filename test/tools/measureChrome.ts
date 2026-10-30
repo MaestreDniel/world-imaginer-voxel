@@ -23,8 +23,9 @@
  *    refuses unless the viewport is exactly 1920 × 1080 @ 1 (ruling P7); --probe-only stops here with exit 0;
  * 6. it records the page's console errors (ruling P8), navigates, and polls the route's result every second (15 min);
  *    every CDP call is bounded, and the poll fails fast when Chrome exits or the tab crashes (`pollResult`, `watchPage`);
- *    the enter route instead loads its setup page, six (a)/(b) pairs and its end page, each a fresh page load polled
- *    for its own result (`runEnter`), and summarises them (`enterSummary`);
+ *    the enter route instead loads its setup page, six (a)/(b) pairs (their legs in `enterOrder`'s alternating order)
+ *    and its end page, each a fresh page load polled for its own result, recording each load's machine telemetry
+ *    (`machineTelemetry`; `runEnter`), and summarises them (`enterSummary`);
  * 7. it adds who measured, the load averages, the Chrome version, the window (warning when it left eDP-1), the viewport
  *    and the console errors, writes the JSON pretty-printed and prints its path and summary (ruling P9); for a shot it
  *    polls `__wiBench.shotReady` instead, refuses unless the canvas's `data-renderer` is the `--renderer`, and writes
@@ -35,7 +36,7 @@
  * Tools run under plain Node (type stripping), so this file imports no `src/` module.
  */
 import { execFileSync, type ChildProcess } from 'node:child_process';
-import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
+import { mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { loadavg, tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { pathToFileURL } from 'node:url';
@@ -358,12 +359,13 @@ export function benchLine(r: unknown): string {
 
 /**
  * The enter bench's figures and paths, mirrored from `src/ui/world/bench.ts` (`BENCH_DB`, `BENCH_RD`, `ENTER_PAIRS`,
- * `enterPaths`, `summarizeEnter`): tools cannot import `src/`, so `enterSummary` is a pinned mirror (ruling P19, after
- * `uiSmoke.ts`'s precedent), and `bench.test.ts` feeds both the same pairs and expects equal JSON and equal paths.
+ * `enterOrder`, `enterPaths`, `summarizeEnter`): tools cannot import `src/`, so `enterSummary` is a pinned mirror
+ * (ruling P19, after `uiSmoke.ts`'s precedent), and `bench.test.ts` feeds both the same pairs and expects equal JSON,
+ * equal paths and the same order.
  */
 const ENTER_DB = 'wi10-bench';
 const ENTER_RD = 12;
-/** The alternations, each a fresh page load of (a) and then (b); the first pair (the cold cache) is discarded. */
+/** The pairs, each load a fresh page load, in `enterOrder`; the first pair (the cold cache) is discarded. */
 export const ENTER_PAIRS = 6;
 /** The enter bench's end page: `wi10-bench` deleted. */
 export const ENTER_END_PATH = '/?bench=enter&phase=end';
@@ -384,10 +386,89 @@ export interface EnterResult {
   readonly decodeMs: number | null;
 }
 
-/** One alternation: (a) the unsaved load, then (b) the saved one. */
+/** One pair: (a) the unsaved load and (b) the saved one, whichever ran first (`enterOrder`). */
 export interface EnterPair {
   readonly unsaved: EnterResult;
   readonly saved: EnterResult;
+}
+
+/** A pair's leg: (a) `unsaved` or (b) `saved`, the keys of `EnterPair` and of `enterPaths`. */
+export type EnterLeg = 'unsaved' | 'saved';
+
+/**
+ * Pair `i`'s legs in the order they load (SP5b spec §6.2, rulings R8): (a) then (b) in the even pairs, (b) then (a) in
+ * the odd ones, so a drift of the machine's clock over the run weighs on both legs alike.
+ */
+export function enterOrder(i: number): readonly [EnterLeg, EnterLeg] {
+  return i % 2 === 0 ? ['unsaved', 'saved'] : ['saved', 'unsaved'];
+}
+
+/** The machine's state as one load ends (rulings R8): recorded beside the cell, never gated. */
+export interface MachineTelemetry {
+  /** The mean `scaling_cur_freq` over the CPUs that report one, MHz; null when none can be read. */
+  readonly cpuMHz: number | null;
+  /** The `x86_pkg_temp` thermal zone, °C; null when there is none or it cannot be read. */
+  readonly pkgTempC: number | null;
+}
+
+/** One enter load's record in the cell's `loads` (in load order): which pair and leg, when, and the machine then. */
+export interface LoadTelemetry extends MachineTelemetry {
+  readonly pair: number;
+  readonly leg: EnterLeg;
+  /** Wall-clock ms (`Date.now()`) when the load's result was read and the telemetry with it. */
+  readonly at: number;
+}
+
+/** The reads `machineTelemetry` makes: a directory's entries and a file's text, each throwing when unreadable. */
+export interface SysFs {
+  list(dir: string): readonly string[];
+  read(path: string): string;
+}
+
+const NODE_SYSFS: SysFs = { list: (dir) => readdirSync(dir), read: (path) => readFileSync(path, 'utf8') };
+
+const CPU_DIR = '/sys/devices/system/cpu';
+const THERMAL_DIR = '/sys/class/thermal';
+
+/** A sysfs integer, or null when the file cannot be read or holds no integer. */
+function sysInt(fs: SysFs, path: string): number | null {
+  try {
+    const t = fs.read(path).trim();
+    return /^-?\d+$/.test(t) ? Number(t) : null;
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * The mean of `/sys/devices/system/cpu/cpu<N>/cpufreq/scaling_cur_freq` (kHz) in MHz and `x86_pkg_temp`'s
+ * `/sys/class/thermal/thermal_zone<N>/temp` (m°C) in °C; readable without root. Anything unreadable is skipped, and a
+ * figure with nothing to read is null, so the run never fails on it.
+ */
+export function machineTelemetry(fs: SysFs = NODE_SYSFS): MachineTelemetry {
+  const list = (dir: string): readonly string[] => {
+    try {
+      return fs.list(dir);
+    } catch {
+      return [];
+    }
+  };
+  const khz = list(CPU_DIR).filter((d) => /^cpu\d+$/.test(d)).map((d) => sysInt(fs, `${CPU_DIR}/${d}/cpufreq/scaling_cur_freq`))
+    .filter((v): v is number => v !== null);
+  let pkgTempC: number | null = null;
+  for (const z of list(THERMAL_DIR).filter((d) => /^thermal_zone\d+$/.test(d))) {
+    let type = '';
+    try {
+      type = fs.read(`${THERMAL_DIR}/${z}/type`).trim();
+    } catch {
+      continue;
+    }
+    if (type !== 'x86_pkg_temp') continue;
+    const m = sysInt(fs, `${THERMAL_DIR}/${z}/temp`);
+    pkgTempC = m === null ? null : m / 1000;
+    break;
+  }
+  return { cpuMHz: khz.length === 0 ? null : khz.reduce((a, b) => a + b, 0) / khz.length / 1000, pkgTempC };
 }
 
 /** The enter cell's JSON before the tool's own fields (`enter-<gpu>-chrome.json`). */
@@ -395,6 +476,8 @@ export interface EnterSummary {
   readonly route: 'bench=enter';
   readonly pairs: EnterPair[];
   readonly kept: number;
+  /** Each pair's (b) / (a) `revealMs`, the first included; null where either is missing or (a) is not positive. */
+  readonly pairRatios: (number | null)[];
   readonly enterRatio: number | null;
   readonly medianUnsavedMs: number | null;
   readonly medianSavedMs: number | null;
@@ -426,9 +509,18 @@ function medianOf(values: readonly number[]): number | null {
 
 const finiteOf = (values: readonly (number | null)[]): number[] => values.filter((v): v is number => v !== null && Number.isFinite(v));
 
+/** Pair `p`'s (b) / (a) `revealMs`, or null without both or with (a) not positive. */
+function pairRatio(p: EnterPair): number | null {
+  const a = p.unsaved.revealMs;
+  const b = p.saved.revealMs;
+  return a === null || b === null || !Number.isFinite(a) || !Number.isFinite(b) || a <= 0 ? null : b / a;
+}
+
 /**
- * The enter cell (§6.2): the medians over the pairs after the first (the cold cache), `enterRatio` = median (b) /
- * median (a) (`G1.enter`), and the kept (b) loads' medians of `idbOpenMs`, `loadMs` and `decodeMs` (recorded).
+ * The enter cell (§6.2): over the pairs after the first (the cold cache), `enterRatio` = the median of the pairs' ratios
+ * (b) / (a) (`G1.enter`; rulings R8: a pair's two loads run back to back, so a step in the machine's clock between the
+ * legs' medians does not move it), the legs' medians and the (b) loads' medians of `idbOpenMs`, `loadMs` and
+ * `decodeMs` (recorded).
  */
 export function enterSummary(
   pairs: readonly EnterPair[],
@@ -437,11 +529,13 @@ export function enterSummary(
   const kept = pairs.slice(1);
   const medianUnsavedMs = medianOf(finiteOf(kept.map((p) => p.unsaved.revealMs)));
   const medianSavedMs = medianOf(finiteOf(kept.map((p) => p.saved.revealMs)));
+  const pairRatios = pairs.map(pairRatio);
   return {
     route: 'bench=enter',
     pairs: pairs.map((p) => ({ unsaved: { ...p.unsaved }, saved: { ...p.saved } })),
     kept: kept.length,
-    enterRatio: medianUnsavedMs === null || medianSavedMs === null || medianUnsavedMs <= 0 ? null : medianSavedMs / medianUnsavedMs,
+    pairRatios,
+    enterRatio: medianOf(finiteOf(pairRatios.slice(1))),
     medianUnsavedMs,
     medianSavedMs,
     idbOpenMs: medianOf(finiteOf(kept.map((p) => p.saved.idbOpenMs))),
@@ -604,11 +698,12 @@ export async function pollResult(o: ResultPoll): Promise<string> {
 
 /**
  * The enter route's pages (SP5b spec §6.2), each a fresh page load polled for its own global: the setup page
- * (`__wiEnter`: the saved world and its pose), six alternations of (a) and (b) (`__wiEnterResult`), then the end page
- * (`wi10-bench` deleted). The new world from the start screen is Task 20's leg: until the worlds menu exists it is
- * skipped, `newWorldRevealMs` null. A page's `{ error }` stops the run.
+ * (`__wiEnter`: the saved world and its pose), six pairs of (a) and (b) in `enterOrder` (`__wiEnterResult`), each load's
+ * `machineTelemetry` read as its result arrives, then the end page (`wi10-bench` deleted). The new world from the start
+ * screen is Task 20's leg: until the worlds menu exists it is skipped, `newWorldRevealMs` null. A page's `{ error }`
+ * stops the run.
  */
-async function runEnter(o: { readonly cdp: Cdp; readonly base: string; readonly setupPath: string; readonly watch: PageWatch }): Promise<{ pairs: EnterPair[]; newWorldRevealMs: number | null }> {
+async function runEnter(o: { readonly cdp: Cdp; readonly base: string; readonly setupPath: string; readonly watch: PageWatch }): Promise<{ pairs: EnterPair[]; loads: LoadTelemetry[]; newWorldRevealMs: number | null }> {
   const page = async <T>(path: string, global: '__wiEnter' | '__wiEnterResult'): Promise<T> => {
     // The previous document's value never answers for the next one.
     await evaluate(o.cdp, `delete window.${global}; true`);
@@ -630,15 +725,25 @@ async function runEnter(o: { readonly cdp: Cdp; readonly base: string; readonly 
   console.log(`saved world ${setup.worldId} at ${setup.pose.x}, ${setup.pose.y}, ${setup.pose.z} (yaw ${setup.pose.yaw}, pitch ${setup.pose.pitch})`);
   const paths = enterPaths(setup);
   const pairs: EnterPair[] = [];
+  const loads: LoadTelemetry[] = [];
+  const name = (leg: EnterLeg) => (leg === 'unsaved' ? '(a)' : '(b)');
   for (let i = 0; i < ENTER_PAIRS; i++) {
-    const unsaved = await page<EnterResult>(paths.unsaved, '__wiEnterResult');
-    const saved = await page<EnterResult>(paths.saved, '__wiEnterResult');
-    pairs.push({ unsaved, saved });
-    console.log(`pair ${i + 1}/${ENTER_PAIRS}: (a) ${unsaved.revealMs} ms, (b) ${saved.revealMs} ms${i === 0 ? ' (discarded: the cold cache)' : ''}`);
+    const got: Partial<Record<EnterLeg, EnterResult>> = {};
+    for (const leg of enterOrder(i)) {
+      const r = await page<EnterResult>(paths[leg], '__wiEnterResult');
+      got[leg] = r;
+      const t: LoadTelemetry = { pair: i, leg, at: Date.now(), ...machineTelemetry() };
+      loads.push(t);
+      console.log(`  ${name(leg)} ${r.revealMs} ms; CPU ${t.cpuMHz === null ? 'n/a' : `${t.cpuMHz.toFixed(0)} MHz`}, package ${t.pkgTempC === null ? 'n/a' : `${t.pkgTempC} °C`}`);
+    }
+    const p: EnterPair = { unsaved: got.unsaved!, saved: got.saved! };
+    pairs.push(p);
+    const order = enterOrder(i).map(name).join(' then ');
+    console.log(`pair ${i + 1}/${ENTER_PAIRS} (${order}): (a) ${p.unsaved.revealMs} ms, (b) ${p.saved.revealMs} ms${i === 0 ? ' (discarded: the cold cache)' : ''}`);
   }
   console.log('the new world from the start screen: skipped until the worlds menu exists (Task 20); newWorldRevealMs null');
   await page<{ ended: true }>(ENTER_END_PATH, '__wiEnter');
-  return { pairs, newWorldRevealMs: null };
+  return { pairs, loads, newWorldRevealMs: null };
 }
 
 // ---------------------------------------------------------------- the machine
@@ -773,6 +878,7 @@ async function main(argv: readonly string[]): Promise<number> {
       const windowBounds = await win.read();
       const result = {
         ...enterSummary(run.pairs, { gpu: a.gpu, renderer, shaderCache, newWorldRevealMs: run.newWorldRevealMs }),
+        loads: run.loads,
         measuredBy: 'measureChrome', loadAvg1Before, loadAvg1After, chromeVersion, window: windowBounds, viewport, consoleErrors: [...consoleErrors],
       };
       const file = join(ROOT, ASSETS, outputName(a));

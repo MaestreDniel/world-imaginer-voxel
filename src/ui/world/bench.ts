@@ -2075,7 +2075,7 @@ export const ENTER_DISC_RD = BENCH_RD + 3;
 export const ENTER_SPARSE = 64;
 /** The columns (seeded) that also hold one full section of 4,096 entries at another `sy` (fmt 1; ruling P20). */
 export const ENTER_DENSE_COLUMNS = 16;
-/** The alternations, each a fresh page load of (a) and then (b); the first pair (the cold cache) is discarded. */
+/** The pairs, each load a fresh page load, in `enterOrder`; the first pair (the cold cache) is discarded. */
 export const ENTER_PAIRS = 6;
 /**
  * The entries' sections: the world's top two, above the terrain, and every entry air. The (b) world then draws exactly
@@ -2113,10 +2113,21 @@ export interface EnterResult {
   readonly decodeMs: number | null;
 }
 
-/** One alternation: (a) the unsaved load, then (b) the saved one. */
+/** One pair: (a) the unsaved load and (b) the saved one, whichever ran first (`enterOrder`). */
 export interface EnterPair {
   readonly unsaved: EnterResult;
   readonly saved: EnterResult;
+}
+
+/** A pair's leg: (a) `unsaved` or (b) `saved`, the keys of `EnterPair` and of `enterPaths`. */
+export type EnterLeg = 'unsaved' | 'saved';
+
+/**
+ * Pair `i`'s legs in the order they load (§6.2): (a) then (b) in the even pairs, (b) then (a) in the odd ones, so a
+ * drift of the machine's clock over the run weighs on both legs alike. Mirrored by measureChrome's `enterOrder`.
+ */
+export function enterOrder(i: number): readonly [EnterLeg, EnterLeg] {
+  return i % 2 === 0 ? ['unsaved', 'saved'] : ['saved', 'unsaved'];
 }
 
 /** The enter cell's JSON (`enter-<gpu>-<browser>.json`; measureChrome's `enterSummary` is its pinned mirror). */
@@ -2125,7 +2136,9 @@ export interface EnterSummary {
   readonly pairs: EnterPair[];
   /** The pairs the medians read: all but the first. */
   readonly kept: number;
-  /** `G1.enter`: median (b) `revealMs` / median (a) `revealMs` over the kept pairs; null without both. */
+  /** Each pair's (b) / (a) `revealMs`, the first included; null where either is missing or (a) is not positive. */
+  readonly pairRatios: (number | null)[];
+  /** `G1.enter`: the median of the kept pairs' `pairRatios`; null without any. */
   readonly enterRatio: number | null;
   readonly medianUnsavedMs: number | null;
   readonly medianSavedMs: number | null;
@@ -2213,10 +2226,17 @@ function medianOf(values: readonly number[]): number | null {
 
 const finiteOf = (values: readonly (number | null)[]): number[] => values.filter((v): v is number => v !== null && Number.isFinite(v));
 
+/** Pair `p`'s (b) / (a) `revealMs`, or null without both or with (a) not positive. */
+function pairRatio(p: EnterPair): number | null {
+  const a = p.unsaved.revealMs;
+  const b = p.saved.revealMs;
+  return a === null || b === null || !Number.isFinite(a) || !Number.isFinite(b) || a <= 0 ? null : b / a;
+}
+
 /**
- * The enter cell's JSON (§6.2): the medians over the pairs after the first (the cold cache), `enterRatio` their ratio.
- * A pinned mirror of measureChrome's `enterSummary` (tools cannot import `src/`; ruling P19): `bench.test.ts` feeds both
- * the same pairs and expects equal JSON.
+ * The enter cell's JSON (§6.2): over the pairs after the first (the cold cache), `enterRatio` the median of the pairs'
+ * ratios (b) / (a), and the legs' medians. A pinned mirror of measureChrome's `enterSummary` (tools cannot import
+ * `src/`; ruling P19): `bench.test.ts` feeds both the same pairs and expects equal JSON.
  */
 export function summarizeEnter(
   pairs: readonly EnterPair[],
@@ -2225,11 +2245,13 @@ export function summarizeEnter(
   const kept = pairs.slice(1);
   const medianUnsavedMs = medianOf(finiteOf(kept.map((p) => p.unsaved.revealMs)));
   const medianSavedMs = medianOf(finiteOf(kept.map((p) => p.saved.revealMs)));
+  const pairRatios = pairs.map(pairRatio);
   return {
     route: 'bench=enter',
     pairs: pairs.map((p) => ({ unsaved: { ...p.unsaved }, saved: { ...p.saved } })),
     kept: kept.length,
-    enterRatio: medianUnsavedMs === null || medianSavedMs === null || medianUnsavedMs <= 0 ? null : medianSavedMs / medianUnsavedMs,
+    pairRatios,
+    enterRatio: medianOf(finiteOf(pairRatios.slice(1))),
     medianUnsavedMs,
     medianSavedMs,
     idbOpenMs: medianOf(finiteOf(kept.map((p) => p.saved.idbOpenMs))),
@@ -2281,11 +2303,10 @@ function writeAuto(io: EnterAutoIo, s: EnterAutoState): void {
   io.storage.setItem(ENTER_AUTO_KEY, JSON.stringify(s));
 }
 
-/** The world load at `step` (0-11: (a), (b) alternately), then the end page. */
+/** The world load at `step` (0-11: pair `step >> 1`'s legs in `enterOrder`), then the end page. */
 function enterAutoUrl(setup: EnterSetup, step: number): string {
   if (step >= 2 * ENTER_PAIRS) return ENTER_AUTO_END_PATH;
-  const p = enterPaths(setup, true);
-  return step % 2 === 0 ? p.unsaved : p.saved;
+  return enterPaths(setup, true)[enterOrder(step >> 1)[step & 1]];
 }
 
 /** The setup page's end under `&auto=1`: the state stored, then the first (a) load. */
@@ -2322,7 +2343,10 @@ export function enterAutoJson(
 ): (EnterSummary & { readonly measuredBy: string; readonly userAgent: string }) | null {
   const s = readAuto(io);
   if (s === null || s.results.length < 2 * ENTER_PAIRS) return null;
-  const pairs = Array.from({ length: ENTER_PAIRS }, (_, i): EnterPair => ({ unsaved: s.results[2 * i]!, saved: s.results[2 * i + 1]! }));
+  const pairs = Array.from({ length: ENTER_PAIRS }, (_, i): EnterPair => {
+    const order = enterOrder(i);
+    return { unsaved: s.results[2 * i + order.indexOf('unsaved')]!, saved: s.results[2 * i + order.indexOf('saved')]! };
+  });
   const summary = summarizeEnter(pairs, { gpu: gpuOfRenderer(env.renderer ?? ''), renderer: env.renderer, shaderCache: 'unknown', newWorldRevealMs: null });
   return { ...summary, measuredBy: 'bench=enter&auto=1', userAgent: env.userAgent };
 }

@@ -16,7 +16,7 @@ import {
   BENCH_EDIT, BENCH_FIELDS, BENCH_FRAME_CAPACITY, BENCH_IDLE_FRAMES, BENCH_LEGS, BENCH_LIVE, BENCH_LIVE_LEGS, BENCH_PITCH, BENCH_RD, BENCH_REFILL,
   BENCH_SAVE, BENCH_SAVE_LEG, BENCH_SAVE_PARTS, BENCH_SEED, BENCH_SHOT_ABOVE, BENCH_SHOT_PITCH, BENCH_SHOTS, BENCH_TIME_SPEED, BENCH_Y, benchInterval, benchPose, createBenchDriver,
   createBenchRecord, createBenchRecorder, createLiveReveals, ENTER_AUTO_KEY, ENTER_AUTO_SETUP_PATH, ENTER_DENSE_COLUMNS, ENTER_DISC_RD, ENTER_PAIRS, ENTER_POSE, ENTER_SPARSE,
-  enterAutoEnded, enterAutoJson, enterAutoRecorded, enterAutoStart, enterPaths as benchEnterPaths, enterSaveDump, gpuOfRenderer, summarizeEnter, REVIEW_HOUSE, REVIEW_POOL, REVIEW_SCENE_BATCH, REVIEW_SCENES, REVIEW_SETTLE_S, REVIEW_SITE,
+  enterAutoEnded, enterAutoJson, enterAutoRecorded, enterAutoStart, enterOrder as benchEnterOrder, enterPaths as benchEnterPaths, enterSaveDump, gpuOfRenderer, summarizeEnter, REVIEW_HOUSE, REVIEW_POOL, REVIEW_SCENE_BATCH, REVIEW_SCENES, REVIEW_SETTLE_S, REVIEW_SITE,
   REVIEW_SHOTS, reviewSceneEdits, summarizeBench, type BenchError, type BenchFixed, type BenchFlush, type BenchPose, type BenchRecord, type BenchResult,
   type BenchSaveRun, type BenchSources, type BenchWorld, type ReviewShot, type SceneVoxel,
 } from '../../src/ui/world/bench';
@@ -25,7 +25,7 @@ import { DEFAULT_MAP_STATE, openMapSession } from '../../src/ui/map/mapState';
 import { parseWorldQuery } from '../../src/ui/world/query';
 import { STATE_BOUNDS } from '../../src/ui/world/stateBounds';
 import { BENCH_DB, closeBenchSave, createBenchSave, enterResult, newWorldRecord, openBenchSave } from '../../src/ui/world/worldPage';
-import { ENTER_PAIRS as TOOL_ENTER_PAIRS, enterPaths as toolEnterPaths, enterSummary, type EnterPair } from '../tools/measureChrome';
+import { ENTER_PAIRS as TOOL_ENTER_PAIRS, enterOrder as toolEnterOrder, enterPaths as toolEnterPaths, enterSummary, type EnterPair } from '../tools/measureChrome';
 
 const START = { x: 1000, z: -2000 };
 const HZ240 = 1000 / 240;
@@ -1567,7 +1567,7 @@ describe('the enter bench `?bench=enter` (SP5b spec §6.2, D28; plan)', () => {
     expect(enterSaveDump(world, pose, 1_700_000_000_500).cols).toEqual(d.cols);
   });
 
-  test('the `auto=1` driver\'s URL sequence is setup → (a), (b) × 6 → end → result, the pose the same in (a) and (b), and its JSON has `measureChrome`\'s keys', () => {
+  test('the `auto=1` driver\'s URL sequence is setup → (a), (b), then (b), (a), × 3 → end → result, the pose the same in (a) and (b), and its JSON has `measureChrome`\'s keys', () => {
     const store = new Map<string, string>();
     const storage = { getItem: (k: string) => store.get(k) ?? null, setItem: (k: string, v: string) => { store.set(k, v); } };
     const visited: string[] = [ENTER_AUTO_SETUP_PATH];
@@ -1578,7 +1578,9 @@ describe('the enter bench `?bench=enter` (SP5b spec §6.2, D28; plan)', () => {
     const setup = { worldId: 'w-auto', pose: { x: -123, y: 120, z: 456, yaw: 45, pitch: -20 } };
     enterAutoStart(io, setup);
     expect(store.has(ENTER_AUTO_KEY)).toBe(true);
-    const results = Array.from({ length: 12 }, (_, i) => loadOf(100 + 7 * i, i % 2 === 1));
+    // The loads in visiting order: (a), (b) in the even pairs, (b), (a) in the odd ones.
+    const savedAt = (i: number) => ((i >> 1) % 2 === 0) === (i % 2 === 1);
+    const results = Array.from({ length: 12 }, (_, i) => loadOf(100 + 7 * i, savedAt(i)));
     for (const r of results) expect(enterAutoRecorded(io, r)).toBe(true);
     enterAutoEnded(io);
     const tool = toolEnterPaths(setup);
@@ -1586,7 +1588,7 @@ describe('the enter bench `?bench=enter` (SP5b spec §6.2, D28; plan)', () => {
     expect(benchEnterPaths(setup, true)).toEqual({ unsaved: pair[0], saved: pair[1] });
     expect(benchEnterPaths(setup, false)).toEqual(tool);
     expect(visited).toEqual([
-      '/?bench=enter&auto=1', ...Array.from({ length: 6 }, () => pair).flat(), '/?bench=enter&phase=end&auto=1', '/?bench=enter&phase=result&auto=1',
+      '/?bench=enter&auto=1', ...Array.from({ length: 6 }, (_, i) => (i % 2 === 0 ? pair : [pair[1], pair[0]])).flat(), '/?bench=enter&phase=end&auto=1', '/?bench=enter&phase=result&auto=1',
     ]);
     // (a) opens unsaved at the setup's pose, (b) the saved world (whose state holds that pose), both at RD 12.
     const a = parseWorldQuery(new URLSearchParams(visited[1]!.slice(1)));
@@ -1597,8 +1599,12 @@ describe('the enter bench `?bench=enter` (SP5b spec §6.2, D28; plan)', () => {
     const renderer = 'Mesa Intel(R) Xe Graphics (ADL GT2)';
     const json = enterAutoJson(io, { renderer, userAgent: 'Mozilla/5.0 Firefox/130.0' });
     expect(json).not.toBeNull();
-    const pairs: EnterPair[] = Array.from({ length: 6 }, (_, i) => ({ unsaved: results[2 * i]!, saved: results[2 * i + 1]! }));
+    // Each pair holds its (a) and (b) whatever order they ran in.
+    const pairs: EnterPair[] = Array.from({ length: 6 }, (_, i) => (i % 2 === 0
+      ? { unsaved: results[2 * i]!, saved: results[2 * i + 1]! }
+      : { unsaved: results[2 * i + 1]!, saved: results[2 * i]! }));
     expect(json!.pairs).toEqual(pairs);
+    for (const p of json!.pairs) expect([p.unsaved.idbOpenMs, p.saved.idbOpenMs === null]).toEqual([null, false]);
     const fromTool = enterSummary(pairs, { gpu: 'iris', renderer, shaderCache: 'unknown', newWorldRevealMs: null });
     for (const k of Object.keys(fromTool)) expect(json, k).toHaveProperty(k);
     expect(json).toMatchObject({ ...fromTool, measuredBy: 'bench=enter&auto=1', userAgent: 'Mozilla/5.0 Firefox/130.0' });
@@ -1632,7 +1638,12 @@ describe('the enter bench `?bench=enter` (SP5b spec §6.2, D28; plan)', () => {
     expect(page).toEqual(enterSummary(pairs, o));
     expect([ENTER_PAIRS, TOOL_ENTER_PAIRS]).toEqual([6, 6]);
     expect(page.kept).toBe(5);
-    expect(page.enterRatio).toBe(page.medianSavedMs! / page.medianUnsavedMs!);
+    // The median of the kept pairs' ratios b/a (1.02 … 1.10): pair 4's 1.06, not median (b) / median (a).
+    expect(page.enterRatio).toBe(page.pairRatios[3]);
+    expect(page.enterRatio).toBeCloseTo(1.06, 12);
+    expect(page.enterRatio).not.toBeCloseTo(page.medianSavedMs! / page.medianUnsavedMs!, 3);
+    // Both drivers run each pair's legs in the same alternating order.
+    expect(Array.from({ length: ENTER_PAIRS }, (_, i) => benchEnterOrder(i))).toEqual(Array.from({ length: TOOL_ENTER_PAIRS }, (_, i) => toolEnterOrder(i)));
   });
 });
 

@@ -4,7 +4,7 @@ import { describe, expect, test } from 'vitest';
 import { BENCH_SHOTS } from '../../src/ui/world/bench';
 import { parseWorldQuery } from '../../src/ui/world/query';
 import {
-  ASSETS, benchLine, chromeArgs, drawnByProblem, endOfRunWarnings, ENTER_END_PATH, enterLine, enterPaths, enterSummary, flightLine, gpuMatches, launchEnv, MEASURE_LOAD_MAX, outputName,
+  ASSETS, benchLine, chromeArgs, drawnByProblem, endOfRunWarnings, ENTER_END_PATH, enterLine, enterOrder, enterPaths, enterSummary, flightLine, gpuMatches, launchEnv, machineTelemetry, MEASURE_LOAD_MAX, outputName,
   parseMeasureArgs, PLACE_ATTEMPTS, placeWindow, pollResult, routePath, shaderCacheOf, SHOTS, viewportProblem, watchPage, windowProblem, withTimeout, type EnterPair,
   type MeasureArgs, type WindowBounds,
 } from '../tools/measureChrome';
@@ -131,7 +131,7 @@ describe('measureChrome: the enter route (SP5b spec §6.2)', () => {
     expect(ASSETS).toBe('docs/superpowers/specs/assets/sp5b');
   });
 
-  test('`enterRatio` of pairs whose first is 10× slower is the median of the five kept (the first discarded)', () => {
+  test('`enterRatio` of pairs whose first is 10× slower is the median of the five kept pairs\' ratios (the first discarded)', () => {
     const unsaved = [1000, 100, 104, 98, 102, 120];
     const saved = [1100, 105, 112, 101, 108, 140];
     const firstSlow = [10_000, ...unsaved.slice(1)];
@@ -141,7 +141,10 @@ describe('measureChrome: the enter route (SP5b spec §6.2)', () => {
     expect(s.kept).toBe(5);
     expect(s.medianUnsavedMs).toBe(102);
     expect(s.medianSavedMs).toBe(108);
-    expect(s.enterRatio).toBeCloseTo(108 / 102, 12);
+    // The kept pairs' ratios b/a: 1.05, 1.0769, 1.0306, 1.0588, 1.1667; their median is pair 5's, 108 / 102.
+    expect(s.pairRatios.slice(1)).toEqual([105 / 100, 112 / 104, 101 / 98, 108 / 102, 140 / 120]);
+    expect(s.pairRatios[0]).toBeCloseTo(1.1, 12);
+    expect(s.enterRatio).toBe(108 / 102);
     expect(s.pairs).toEqual(pairs);
     // The (b) loads' storage figures: medians over the kept pairs.
     expect([s.idbOpenMs, s.loadMs, s.decodeMs]).toEqual([1.08, 108 / 20, 108 / 40]);
@@ -153,6 +156,60 @@ describe('measureChrome: the enter route (SP5b spec §6.2)', () => {
     expect(enterLine(s)).toBe('enterRatio 1.059, median (a) 102.0 ms, median (b) 108.0 ms, (b) idbOpen 1.1 ms, load 5.4 ms, decode 2.7 ms');
     expect(enterLine(enterSummary([], { gpu: 'iris', renderer: null, shaderCache: 'cold', newWorldRevealMs: null })))
       .toBe('enterRatio n/a, median (a) n/a, median (b) n/a, (b) idbOpen n/a, load n/a, decode n/a');
+  });
+
+  test('a clock step between the legs\' medians: `enterRatio` is the median of the per-pair ratios (1.05), not median (b) / median (a) (about 2)', () => {
+    // Run 2 of the early measurement: the machine's clock halves after pair 3's (a), so median (a) falls before the step
+    // and median (b) after it; each pair's two loads run back to back and keep their 1.05.
+    const pairs: EnterPair[] = [[4000, 4200], [3400, 3570], [3400, 3570], [3400, 6825], [6500, 6825], [6500, 6825]]
+      .map(([a, b]) => ({ unsaved: loadOf(a!, false), saved: loadOf(b!, true) }));
+    const s = enterSummary(pairs, { gpu: 'iris', renderer: IRIS, shaderCache: 'cold', newWorldRevealMs: null });
+    expect([s.medianUnsavedMs, s.medianSavedMs]).toEqual([3400, 6825]);
+    expect(s.medianSavedMs! / s.medianUnsavedMs!).toBeGreaterThan(2);
+    expect(s.enterRatio).toBeCloseTo(1.05, 12);
+    // A pair without both loads gives no ratio, and the median reads the others; none at all gives null.
+    const missing = enterSummary([pairs[0]!, { unsaved: loadOf(0, false), saved: loadOf(10, true) }, { unsaved: { ...loadOf(1, false), revealMs: null }, saved: loadOf(1, true) }, ...pairs.slice(1, 4)],
+      { gpu: 'iris', renderer: IRIS, shaderCache: 'cold', newWorldRevealMs: null });
+    expect(missing.pairRatios.slice(1, 3)).toEqual([null, null]);
+    expect(missing.enterRatio).toBeCloseTo(1.05, 12);
+    expect(enterSummary(pairs.slice(0, 1), { gpu: 'iris', renderer: IRIS, shaderCache: 'cold', newWorldRevealMs: null }).enterRatio).toBeNull();
+  });
+
+  test('the legs alternate within each pair: (a) then (b), then (b) then (a)', () => {
+    expect(Array.from({ length: 6 }, (_, i) => enterOrder(i))).toEqual([
+      ['unsaved', 'saved'], ['saved', 'unsaved'], ['unsaved', 'saved'], ['saved', 'unsaved'], ['unsaved', 'saved'], ['saved', 'unsaved'],
+    ]);
+  });
+
+  test('each load\'s telemetry: the mean `scaling_cur_freq` over the CPUs in MHz and `x86_pkg_temp` in °C, null when unreadable', () => {
+    const files = new Map<string, string>([
+      ['/sys/devices/system/cpu/cpu0/cpufreq/scaling_cur_freq', '2400000\n'],
+      ['/sys/devices/system/cpu/cpu1/cpufreq/scaling_cur_freq', '1200000\n'],
+      ['/sys/devices/system/cpu/cpu11/cpufreq/scaling_cur_freq', '900000\n'],
+      // Not a CPU directory: never read.
+      ['/sys/devices/system/cpu/cpufreq/scaling_cur_freq', '1\n'],
+      ['/sys/class/thermal/thermal_zone0/type', 'acpitz\n'],
+      ['/sys/class/thermal/thermal_zone0/temp', '30000\n'],
+      ['/sys/class/thermal/thermal_zone5/type', 'x86_pkg_temp\n'],
+      ['/sys/class/thermal/thermal_zone5/temp', '55500\n'],
+    ]);
+    const dirs = new Map<string, string[]>([
+      // cpu2 has no cpufreq (offline): skipped.
+      ['/sys/devices/system/cpu', ['cpu0', 'cpu1', 'cpu11', 'cpu2', 'cpufreq', 'cpuidle', 'online']],
+      ['/sys/class/thermal', ['cooling_device0', 'thermal_zone0', 'thermal_zone5']],
+    ]);
+    const fs = {
+      list: (dir: string) => { const d = dirs.get(dir); if (d === undefined) throw new Error(`ENOENT ${dir}`); return d; },
+      read: (path: string) => { const f = files.get(path); if (f === undefined) throw new Error(`ENOENT ${path}`); return f; },
+    };
+    expect(machineTelemetry(fs)).toEqual({ cpuMHz: 1500, pkgTempC: 55.5 });
+    // No sysfs (another OS, a sandbox): both null, nothing thrown.
+    const none = { list: () => { throw new Error('EACCES'); }, read: () => { throw new Error('EACCES'); } };
+    expect(machineTelemetry(none)).toEqual({ cpuMHz: null, pkgTempC: null });
+    // A garbled reading is skipped, not averaged as NaN.
+    files.set('/sys/devices/system/cpu/cpu1/cpufreq/scaling_cur_freq', 'n/a\n');
+    files.set('/sys/class/thermal/thermal_zone5/temp', '\n');
+    expect(machineTelemetry(fs)).toEqual({ cpuMHz: 1650, pkgTempC: null });
   });
 
   test('the (a) and (b) URLs carry the same pose', () => {
