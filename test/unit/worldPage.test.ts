@@ -49,7 +49,7 @@ import { hex64 } from '../../src/core/hash';
 import type { JsonObject } from '../../src/core/params/migrate';
 import { genKey, paramsHash, stageHashes } from '../../src/core/stage/hash';
 import { GENERATOR_VERSION } from '../../src/core/constants';
-import type { KV } from '../../src/persist/kv';
+import type { KV, KvEvent } from '../../src/persist/kv';
 import { createMemoryKV, type MemoryKV } from '../../src/persist/memory';
 import {
   createSaves, loadParams, newState, NO_VALUE, parseWorldRecord, todayStateTable, type HistoryRecord, type HotbarRecord, type Place, type StateRecord, type WorldRecord,
@@ -58,10 +58,10 @@ import {
   EDIT_FAILED_NOTICE, HISTORY_RESET_NOTICE, SAVED_EDIT_FAILED_NOTICE, STATE_RESET_NOTICE, countAccepted, createPageAutosave, hotbarStorage, lastFlush, leaveAfterSave,
   installWorldLock, lowerRdHref, OLDER_GENERATOR_NOTICE, OLDER_GENERATOR_NOTICE_MS, olderGeneratorRecord, openOlderGenerator, openRequest, openSavedWorld,
   readSavedWorld, refuseOpen, restoreMode, restoredStart, revealOlderGenerator, savePlaceKey, savedWorldUrlRules, settingsKey, timeOfHours, addPlaceAt,
-  worldIgnoresKeys,
+  worldIgnoresKeys, CLOSED_NOTICE, QUOTA_NOTICE, watchStorage,
   UNSAVED_NOTICE, unsavedNoticeOf, type WorldPageOptions,
 } from '../../src/ui/world/worldPage';
-import { noticeOfQuery, REFUSAL_REASON_KEY, type OpenRefusal, type StorageLike } from '../../src/ui/worldsMenu';
+import { BLOCKED_NOTICE, noticeOfQuery, REFUSAL_REASON_KEY, RELOAD_NOTICE, type OpenRefusal, type StorageLike } from '../../src/ui/worldsMenu';
 import type { LockManagerLike } from '../../src/ui/world/worldLock';
 import { resolveProfile } from '../../src/core/params/profiles';
 import { seedFromInput } from '../../src/core/seed';
@@ -74,6 +74,8 @@ import { inProcessSimWorker } from '../harness/inProcessSim';
 import { genRegion } from '../harness/region';
 import { parseWorldQuery } from '../../src/ui/world/query';
 import { STATE_BOUNDS } from '../../src/ui/world/stateBounds';
+import { AUTOSAVE_MS } from '../../src/ui/world/autosave';
+import { colKey } from '../../src/core/coords';
 import { installDom, type FakeElement } from './fixtures/domShim';
 import { densityTree } from './fixtures/editedTrees';
 
@@ -2640,11 +2642,11 @@ describe('opening a saved world (SP5b spec §3.4 steps 2-3, D14, D22)', () => {
     sim.dispose();
   });
 
-  test('without Web Locks (an insecure context\'s `navigator.locks` undefined) the open is refused as storage not available, nothing read', async () => {
+  test('without Web Locks (an insecure context\'s `navigator.locks` undefined) the open is refused as saving not available, nothing read', async () => {
     const { kv } = await created();
     const ops = kv.opCount;
     const r = await openSavedWorld({ locks: null, open: () => Promise.resolve(kv), db: 'wi10', id: ID, bounds: STATE_BOUNDS, random });
-    expect(r).toEqual(unreadable('storage is not available in this browser window'));
+    expect(r).toEqual(unreadable('Saving is not available in this browser window'));
     expect(kv.opCount).toBe(ops);
   });
 
@@ -2755,10 +2757,24 @@ describe('opening a saved world (SP5b spec §3.4 steps 2-3, D14, D22)', () => {
       expect(storage.map.get(REFUSAL_REASON_KEY)).toBe('no saved world has this id');
     }
     expect(everything(kv)).toEqual(before);
-    const storage = unreadable('storage is not available in this browser window');
+    const storage = unreadable('Saving is not available in this browser window');
     expect(await open(ID, () => Promise.reject(new Error('blocked')))).toEqual(storage);
     expect(await open(ID, () => { throw new ReferenceError('indexedDB is not defined'); })).toEqual(storage);
     // Each refusal released the world's lock.
+    await jobs();
+    expect(free.held()).toBe(0);
+  });
+
+  test('a `?world=` page whose storage cannot open takes the `/?notice=unreadable` redirect, the menu saying `This world could not be opened: Saving is not available in this browser window` (D14; ruling P37)', async () => {
+    const { kv } = await created();
+    const before = everything(kv);
+    const r = await openSavedWorld({ locks: free.locks, open: () => Promise.reject(new DOMException('denied', 'SecurityError')), db: 'wi10', id: ID, bounds: STATE_BOUNDS, random });
+    expect(r.ok).toBe(false);
+    if (r.ok) return;
+    const { left, storage } = refused(r.refusal);
+    expect(left).toEqual(['/?notice=unreadable']);
+    expect(noticeOfQuery(new URLSearchParams('notice=unreadable'), storage)).toBe('This world could not be opened: Saving is not available in this browser window');
+    expect(everything(kv)).toEqual(before);
     await jobs();
     expect(free.held()).toBe(0);
   });
@@ -3378,13 +3394,13 @@ describe('the block history kept across reloads (SP5b spec §3.2, §3.4 step 6, 
   const FIXTURE = new URL('../fixtures/sp5bWorldParams.json', import.meta.url);
   const ID = 'w1';
   let store: VoxelStore;
-  /** The centre column of the 3 × 3 region (its 3 × 3 Published). */
+  /** The centre column of the 5 × 3 region (its 3 × 3 Published, and its x neighbours' too: Review Focus 5's columns). */
   let C: [number, number] = [0, 0];
   beforeAll(async () => {
     const params = resolveProfile('default');
     const sp = findSpawn(createGenContext(seedFromInput('42'), params));
     C = [sp.x >> 4, sp.z >> 4];
-    store = (await genRegion({ seed: '42', params, cx0: C[0] - 1, cz0: C[1] - 1, w: 3, h: 3, upTo: 'L', order: 'spiral', threads: 1, shared: true })).view.store;
+    store = (await genRegion({ seed: '42', params, cx0: C[0] - 2, cz0: C[1] - 1, w: 5, h: 3, upTo: 'L', order: 'spiral', threads: 1, shared: true })).view.store;
   }, 120_000);
   afterEach(() => {
     vi.useRealTimers();
@@ -3448,6 +3464,9 @@ describe('the block history kept across reloads (SP5b spec §3.2, §3.4 step 6, 
     const flushes: Array<HistoryRecord | null> = [];
     const results: FlushedMsg[] = [];
     const events = new Map<string, () => void>();
+    // D14's storage notices as the page shows them (`watchStorage`), the texts up in `visible`.
+    const visible = new Set<string>();
+    const storage = watchStorage({ show: (text) => { visible.add(text); }, hide: (text) => { visible.delete(text); } }, kv);
     const autosave = createPageAutosave({
       worldId: ID,
       fly: { x: 0.5, y: 100, z: 0.5, yaw: 0, pitch: 0, mode: 'fly', speed: SPEED_DEFAULT },
@@ -3468,21 +3487,103 @@ describe('the block history kept across reloads (SP5b spec §3.2, §3.4 step 6, 
         clearTimeout: (id) => clearTimeout(id),
       },
       events: { on: (type, f) => { events.set(type, f); return () => { events.delete(type); }; }, hidden: () => false },
-      onResult: (r) => { results.push(r); },
+      onResult: (r) => {
+        results.push(r);
+        storage.flushed(r);
+      },
     });
     const win = new EventTarget();
     vi.stubGlobal('window', win);
     const undoKeys = installUndoKeys({ owner: () => 'world', blocks: blockHistory, session: { undo: () => false, redo: () => false } });
     return {
-      editPath, blockHistory, actionPost, autosave, flushes, results, events, posted, shown, win, failures,
-      /** The page's teardown: the keys, the autosave, the sim. */
+      editPath, blockHistory, actionPost, autosave, flushes, results, events, posted, shown, win, failures, sim, visible,
+      /** The page's teardown: the keys, the storage notices, the autosave, the sim. */
       close() {
         undoKeys();
+        storage.dispose();
         autosave.dispose();
         sim.dispose();
       },
     };
   }
+
+  /** Moves vi's fake clock 1 ms at a time until `done()` holds (at most 10 s). */
+  async function until(done: () => boolean): Promise<void> {
+    for (let i = 0; i < 10_000 && !done(); i++) await vi.advanceTimersByTimeAsync(1);
+    expect(done()).toBe(true);
+  }
+
+  test('Review Focus 5: `failAt(0, \'QuotaExceededError\')` on three successive flushes: the world keeps editing, `Not saving: the browser\'s storage is full. Free space, or export your worlds from Load world.` stays, every tick and `pagehide` post again; the fourth flush commits the union of the dirty columns, the latest history and the pending `record` with `flushSeq` + 1 and the notice hides; a `closed` connection shows `Not saving: this browser\'s storage was closed. Reload to continue.` and the tick stops posting', async () => {
+    vi.useFakeTimers();
+    const kv = await created();
+    const p = await openPage(kv, () => 0);
+    /** A voxel just above the surface of column C + (dcx, 0), at (lx, lz) in it. */
+    const spot = (dcx: number, lx: number, lz: number) => {
+      const x = 16 * (C[0] + dcx) + lx;
+      const z = 16 * C[1] + lz;
+      return { x, y: store.heightAt('worldSurface', x, z)! + 1, z };
+    };
+    const set = (v: { x: number; y: number; z: number }, value: number): Edit => ({ ...v, op: 'set', value, expect: valueAt(v.x, v.y, v.z) });
+    const step = (v: { x: number; y: number; z: number }, before: number, after: number) => ({ edits: [{ ...v, before, after }] });
+    const stateOf = () => kv.dump('state')[0]![1] as StateRecord;
+    expect(stateOf().flushSeq).toBe(0);
+    const [A, B, D] = [spot(0, 3, 3), spot(1, 5, 5), spot(-1, 7, 7)];
+    const failed = { type: 'flushed', ok: false, status: 'abort', errorName: 'QuotaExceededError' };
+    // A pending `record` (as an older generator's open sends), for the next committed flush.
+    const world = kv.dump('worlds')[0]![1] as WorldRecord;
+    p.sim.record({ ...world, name: 'Renamed' });
+    // 1: the 2 s tick after a step on A (column C), refused for quota.
+    kv.failAt(0, 'QuotaExceededError');
+    expect(await settle(p.actionPost([set(A, val(STONE))]))).toMatchObject({ ok: true });
+    await until(() => p.results.length === 1);
+    expect(p.results[0]).toMatchObject(failed);
+    expect([...p.visible]).toEqual([QUOTA_NOTICE]);
+    expect(QUOTA_NOTICE).toBe('Not saving: the browser\'s storage is full. Free space, or export your worlds from Load world.');
+    // 2: the next tick posts again with nothing new (the failed flush counts as changed); refused again.
+    kv.failAt(0, 'QuotaExceededError');
+    await until(() => p.results.length === 2);
+    expect(p.results[1]).toMatchObject(failed);
+    expect(p.flushes).toHaveLength(2);
+    // The world keeps editing: a step on B (column C + (1, 0)); 3: `pagehide` posts at once, refused.
+    expect(await settle(p.actionPost([set(B, val(GLASS))]))).toMatchObject({ ok: true });
+    kv.failAt(0, 'QuotaExceededError');
+    p.events.get('pagehide')!();
+    expect(p.flushes).toHaveLength(3);
+    await until(() => p.results.length === 3);
+    expect(p.results[2]).toMatchObject(failed);
+    expect([...p.visible]).toEqual([QUOTA_NOTICE]);
+    // Nothing reached the KV: still the state as created.
+    expect([kv.dump('diffs'), kv.dump('history'), stateOf().flushSeq, (kv.dump('worlds')[0]![1] as WorldRecord).name]).toEqual([[], [], 0, 'My world']);
+    // 4: a step on D (column C + (−1, 0)); the next tick commits the union, the latest history and the record.
+    expect(await settle(p.actionPost([set(D, val(DIRT))]))).toMatchObject({ ok: true });
+    await until(() => p.results.length === 4);
+    expect(p.results[3]).toMatchObject({ type: 'flushed', ok: true, flushSeq: 1, columns: 3 });
+    expect(kv.dump('diffs').map(([k]) => k)).toEqual(
+      [colKey(C[0], C[1]), colKey(C[0] + 1, C[1]), colKey(C[0] - 1, C[1])].sort((a, b) => a - b).map((k) => [ID, k]),
+    );
+    expect(kv.dump('history')).toEqual([[ID, {
+      worldId: ID, done: [step(A, NO_ENTRY, val(STONE)), step(B, NO_ENTRY, val(GLASS)), step(D, NO_ENTRY, val(DIRT))], undone: [],
+    }]]);
+    expect(stateOf().flushSeq).toBe(1);
+    expect((kv.dump('worlds')[0]![1] as WorldRecord).name).toBe('Renamed');
+    expect([...p.visible]).toEqual([]);
+    // The browser closes the connection (site data cleared): the next tick's flush answers `closed`, the notice shows,
+    // and nothing posts after it, neither the tick nor `pagehide`.
+    expect(await settle(p.actionPost([set(A, val(GLASS))]))).toMatchObject({ ok: true });
+    kv.closeNow();
+    await until(() => p.results.length === 5);
+    expect(p.results[4]).toMatchObject({ type: 'flushed', ok: false, status: 'closed' });
+    expect([...p.visible]).toEqual([CLOSED_NOTICE]);
+    expect(CLOSED_NOTICE).toBe('Not saving: this browser\'s storage was closed. Reload to continue.');
+    const posts = p.flushes.length;
+    expect(await settle(p.actionPost([set(B, val(STONE))]))).toMatchObject({ ok: true });
+    await vi.advanceTimersByTimeAsync(3 * AUTOSAVE_MS);
+    p.events.get('pagehide')?.();
+    await vi.advanceTimersByTimeAsync(10);
+    expect(p.flushes.length).toBe(posts);
+    expect(p.failures).toEqual([]);
+    p.close();
+  });
 
   test('Review Focus 1: one step on voxel A recorded and flushed first; then three steps on voxel B (distinct values) posted 50 ms apart, each reply 70 ms late; `pagehide` at 110 ms posts at once (no settled wait), its history holding A\'s step and B\'s first; after a reopen from the KV, Ctrl+Z ×3: B\'s first step dropped with `Can\'t undo there: the blocks changed`, A\'s step undone, and the third press finds nothing', async () => {
     vi.useFakeTimers();
@@ -3686,5 +3787,59 @@ describe('the world\'s lock in the page (SP5b spec §3.5, D24)', () => {
     expect(run).toMatch(/autosave = a;\n\s+teardown\.push\(\(\) => a\.dispose\(\)\);\n\s+\/\/[^\n]*\n\s+teardown\.push\(worldLock!\.onRelease\(\(\) => a\.dispose\(\)\)\);/);
     // A page disposed while it waited releases what the open took.
     expect(run).toMatch(/if \(state !== 'loading'\) \{\n\s+if \(r\.ok\) \{\n\s+r\.opened\.kv\.close\(\);\n\s+r\.opened\.lock\.release\(\);/);
+  });
+});
+
+describe('D14\'s storage notices during play (`watchStorage`, SP5b spec §2.1, §3.8)', () => {
+  /** A connection whose events the test emits, and the notices up. */
+  function watched() {
+    const listeners = new Set<(e: KvEvent) => void>();
+    const kv: Pick<KV, 'onEvent'> = { onEvent: (f) => { listeners.add(f); return () => { listeners.delete(f); }; } };
+    const visible = new Set<string>();
+    const shows: string[] = [];
+    const w = watchStorage({ show: (text) => { visible.add(text); shows.push(text); }, hide: (text) => { visible.delete(text); } }, kv);
+    const emit = (e: KvEvent) => { for (const f of [...listeners]) f(e); };
+    return { w, emit, visible, shows, listeners };
+  }
+  const ok: FlushedMsg = { type: 'flushed', id: 1, ok: true, flushSeq: 1, columns: 0, bytes: 0, syncMs: 0, commitMs: 0 };
+  const abort = (errorName: string | null): FlushedMsg => ({ type: 'flushed', id: 1, ok: false, status: 'abort', errorName });
+
+  test('`versionchange` shows `Reload to continue`; `blocked`, `Close other tabs of world-imaginer-voxel`; `closed`, the closed notice', () => {
+    const { w, emit, visible, listeners } = watched();
+    emit('versionchange');
+    expect([...visible]).toEqual(['Reload to continue']);
+    expect(RELOAD_NOTICE).toBe('Reload to continue');
+    emit('blocked');
+    expect(BLOCKED_NOTICE).toBe('Close other tabs of world-imaginer-voxel');
+    emit('closed');
+    expect([...visible]).toEqual([RELOAD_NOTICE, BLOCKED_NOTICE, CLOSED_NOTICE]);
+    w.dispose();
+    expect(listeners.size).toBe(0);
+  });
+
+  test('the quota notice shows once per run of failed flushes and hides at the next ok; another abort shows nothing of its own', () => {
+    const { w, visible, shows } = watched();
+    w.flushed(abort('AbortError'));
+    w.flushed(abort(null));
+    expect(shows).toEqual([]);
+    w.flushed(abort('QuotaExceededError'));
+    w.flushed(abort('QuotaExceededError'));
+    // Another abort between them keeps it up (it hides only when a flush succeeds).
+    w.flushed(abort('AbortError'));
+    expect([...visible]).toEqual([QUOTA_NOTICE]);
+    expect(shows).toEqual([QUOTA_NOTICE]);
+    w.flushed(ok);
+    expect([...visible]).toEqual([]);
+    w.flushed(abort('QuotaExceededError'));
+    expect(shows).toEqual([QUOTA_NOTICE, QUOTA_NOTICE]);
+    w.flushed({ type: 'flushed', id: 2, ok: false, status: 'closed', errorName: null });
+    expect([...visible]).toEqual([QUOTA_NOTICE, CLOSED_NOTICE]);
+  });
+
+  test('the page wires it: every `flushed` and the page\'s connection after the reveal, and `blocked` while the connection opens', () => {
+    const src = readFileSync(new URL('../../src/ui/world/worldPage.ts', import.meta.url), 'utf8');
+    expect(src).toMatch(/const storageNotices = watchStorage\(notices, saved\.kv\);/);
+    expect(src).toMatch(/onResult: \(r\) => storageNotices\.flushed\(r\),/);
+    expect(src).toMatch(/openIdbKV\(db, undefined, \(\) => loading\.warn\(BLOCKED_NOTICE\)\)/);
   });
 });

@@ -11,8 +11,9 @@
  *   any text, `resolveSeedText`), Create and Back. Create writes the `worlds` record and a new `state` in one write
  *   (`saves.create`), asks the browser once to keep this site's storage (`persistStorage`, remembered under
  *   `PERSIST_ASKED_KEY`), then navigates to `/?world=<id>`; under the enter bench (`benchDb`, SP5b spec §6.2) the world
- *   is written to that database and its URL carries `&enterBench=1&db=<name>`. Without storage (`saves` null, D14)
- *   Create shows "Saving is not available in this browser window" until Task 29 opens the unsaved world instead.
+ *   is written to that database and its URL carries `&enterBench=1&db=<name>`. Without storage (`saves` null, §3.8,
+ *   D14) Create mounts the unsaved world in place instead (`enterUnsaved`, as SP4a's "Enter the world"): the seed and
+ *   preset as its `#` hash in `?map`'s encoding, no `?rd`, with `UNSAVED_NO_STORAGE_NOTICE` in place of Point 2's.
  * - Load world (§1.3, D3): one row per world of `saves.list()`, the most recently modified first ("name · preset · seed
  *   N", "Modified YYYY-MM-DD HH:MM" in local time with "· n places" when it has any, "automatic copy" for a backup,
  *   "older generator" when its stored genKey is not today's, D8), with Play (`/?world=<id>`), Rename (the name becomes a
@@ -27,6 +28,9 @@
  *   Import .wiworld opens a file picker (`#load-import-file`), reads the file (`readWiworld`, under a new id), writes it
  *   in one write (`saves.writeAll`) and says "Imported 'name'", with "n columns of this world could not be read" and
  *   "n blocks of unknown types became air" when there are any; a refusal writes nothing and shows its reason.
+ * - Storage (§3.8, D14): without it (`saves` null) Load world and Import say `NO_STORAGE`; a `versionchange` on the
+ *   menu's connection shows `RELOAD_NOTICE` and the menu writes nothing more (Create, Rename, Delete and Import show it
+ *   instead).
  * Ids and the wall clock come in through the options (`newId`, `now`); text goes through `textContent` only.
  */
 import { hex64, type Seed64 } from '../core/hash';
@@ -43,8 +47,9 @@ import {
 import { readWiworld, writeWiworld } from '../persist/wiworld';
 import { el } from './common/dom';
 import { downloadBlob, readBinaryFile } from './common/files';
-import { createNotices } from './common/notice';
+import { createNotices, type Notices } from './common/notice';
 import { mountBackdrop } from './loading/panoramas';
+import { DEFAULT_MAP_STATE, encodeMapState } from './map/mapState';
 import { profileOptions } from './map/toolbar';
 import { resolveSeedText } from './seedBox';
 import { loadSettings, saveSettings } from './settings';
@@ -146,7 +151,7 @@ export function noticeOfQuery(query: URLSearchParams, storage: StorageLike | nul
 }
 
 export interface WorldsMenuOptions {
-  /** The saved worlds (`savesDbOf`'s database); null when storage cannot open (D14, Task 29). */
+  /** The saved worlds (`savesDbOf`'s database); null when storage cannot open (`openSaves`, §3.8, D14). */
   readonly saves: Saves | null;
   /** The worlds' locks, for Load world's Rename and Delete (D7, D24; Task 21). */
   readonly locks: LockManagerLike;
@@ -160,7 +165,7 @@ export interface WorldsMenuOptions {
   navigate(url: string): void;
   /** `navigator.storage.persist()`; asked once, at the first Create (D2). */
   persistStorage(): Promise<boolean>;
-  /** Mounts the unsaved world in place with the `#` hash and the page's `unsavedNotice` (D14, Task 29). */
+  /** Mounts the unsaved world in place with the `#` hash and the page's `unsavedNotice` (§3.8, D14). */
   enterUnsaved(hash: string, notice: string): void;
   /** The panorama manifest's reader and the pick (the loading screen's background). */
   loadManifest: () => Promise<unknown>;
@@ -171,8 +176,14 @@ export interface WorldsMenuOptions {
   readonly benchDb: string | null;
 }
 
-/** "Saving is not available in this browser window" (D14): Create's notice while `saves` is null. */
-const NO_STORAGE = 'Saving is not available in this browser window';
+/** D14: Load world's notice while `saves` is null, and the world page's reason when its connection cannot open. */
+export const NO_STORAGE = 'Saving is not available in this browser window';
+/** D14: the unsaved world New world opens without storage shows this in place of Point 2's notice. */
+export const UNSAVED_NO_STORAGE_NOTICE = 'This world is not saved: this browser window cannot store data.';
+/** D14: a `versionchange` on a connection (a newer version of the database opens elsewhere); it closed itself. */
+export const RELOAD_NOTICE = 'Reload to continue';
+/** D14: `blocked` while a connection opens (another tab holds an older version of the database). */
+export const BLOCKED_NOTICE = 'Close other tabs of world-imaginer-voxel';
 
 /**
  * A new world's `worlds` record (§1.2): the preset's resolved parameters as stored (`params`) and as loaded
@@ -323,6 +334,20 @@ export function mountWorldsMenu(root: HTMLElement, o: WorldsMenuOptions): { disp
   let listRead = 0;
   /** A row's name is a text field (Rename): a visibility re-read waits, so the typed name stays. */
   let renaming = false;
+  /** Set by a `versionchange` (D14): the connection closed itself, and the menu writes nothing more. */
+  let reloadNeeded = false;
+
+  const offEvent = o.saves?.kv.onEvent((e) => {
+    if (e !== 'versionchange' || disposed) return;
+    reloadNeeded = true;
+    for (const n of [startNotices, newNotices, loadNotices]) n.show(RELOAD_NOTICE, { kind: 'error' });
+  }) ?? null;
+
+  /** True, with `RELOAD_NOTICE` in `notices`, when a `versionchange` stopped the menu's writes. */
+  const writesStopped = (notices: Notices): boolean => {
+    if (reloadNeeded) notices.show(RELOAD_NOTICE, { kind: 'error' });
+    return reloadNeeded;
+  };
 
   const show = (which: 'start' | 'new' | 'load'): void => {
     start.hidden = which !== 'start';
@@ -363,6 +388,7 @@ export function mountWorldsMenu(root: HTMLElement, o: WorldsMenuOptions): { disp
    * write that does not complete shows why. The list is read again after it.
    */
   async function underLock(id: string, what: 'renamed' | 'deleted', write: () => Promise<WriteResult>): Promise<void> {
+    if (writesStopped(loadNotices)) return;
     try {
       const r = await withWorldIfFree(o.locks, id, write);
       if (disposed) return;
@@ -404,7 +430,7 @@ export function mountWorldsMenu(root: HTMLElement, o: WorldsMenuOptions): { disp
       } else if (e.key === 'Enter') {
         e.preventDefault();
         const typed = input.value.trim();
-        if (typed === '' || typed === world.name) {
+        if (typed === '' || typed === world.name || writesStopped(loadNotices)) {
           cancel();
           return;
         }
@@ -433,6 +459,7 @@ export function mountWorldsMenu(root: HTMLElement, o: WorldsMenuOptions): { disp
 
   /** Import (D15): the picked file read under a new id and written in one write; a refusal writes nothing. */
   async function importWorld(saves: Saves, file: Blob): Promise<void> {
+    if (writesStopped(loadNotices)) return;
     try {
       const r = await readWiworld(await readBinaryFile(file), STATE_BOUNDS, o.newId(), o.now());
       if (disposed) return;
@@ -507,6 +534,7 @@ export function mountWorldsMenu(root: HTMLElement, o: WorldsMenuOptions): { disp
 
   loadButton.addEventListener('click', () => {
     loadNotices.clear();
+    writesStopped(loadNotices);
     list.replaceChildren();
     renaming = false;
     show('load');
@@ -522,6 +550,7 @@ export function mountWorldsMenu(root: HTMLElement, o: WorldsMenuOptions): { disp
       loadNotices.show(NO_STORAGE, { kind: 'error' });
       return;
     }
+    if (writesStopped(loadNotices)) return;
     importFile.click();
   });
 
@@ -541,6 +570,7 @@ export function mountWorldsMenu(root: HTMLElement, o: WorldsMenuOptions): { disp
 
   newButton.addEventListener('click', () => {
     newNotices.clear();
+    writesStopped(newNotices);
     seed.value = seedToText(o.random());
     preset.value = profileOptions()[0]!;
     proposal = newWorldName([]);
@@ -571,16 +601,21 @@ export function mountWorldsMenu(root: HTMLElement, o: WorldsMenuOptions): { disp
 
   createButton.addEventListener('click', () => {
     if (creating) return;
+    const seedText = resolveSeedText(seed.value, o.random);
+    const profile = preset.value as ProfileId;
     if (o.saves === null) {
-      newNotices.show(NO_STORAGE, { kind: 'error' });
+      // No storage (§3.8, D14): the unsaved world in place, with the seed and the preset as its hash.
+      creating = true;
+      o.enterUnsaved(`#${encodeMapState({ ...DEFAULT_MAP_STATE, seed: seedText.text, profile })}`, UNSAVED_NO_STORAGE_NOTICE);
       return;
     }
+    if (writesStopped(newNotices)) return;
     const saves = o.saves;
     creating = true;
     createButton.disabled = true;
     const typed = Array.from(name.value.trim()).slice(0, MAX_NAME).join('');
     const id = o.newId();
-    const world = createdRecord(id, typed === '' ? proposal : typed, resolveSeedText(seed.value, o.random), preset.value as ProfileId, o.now());
+    const world = createdRecord(id, typed === '' ? proposal : typed, seedText, profile, o.now());
     void (async () => {
       const w = await saves.create(world, newState(id, STATE_BOUNDS));
       if (disposed) return;
@@ -599,6 +634,7 @@ export function mountWorldsMenu(root: HTMLElement, o: WorldsMenuOptions): { disp
   return {
     dispose() {
       disposed = true;
+      offEvent?.();
       document.removeEventListener('visibilitychange', onVisibility);
       startNotices.dispose();
       newNotices.dispose();

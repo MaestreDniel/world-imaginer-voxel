@@ -5,12 +5,13 @@ import { hex64, type Seed64 } from '../../src/core/hash';
 import { genKey, stageHashes } from '../../src/core/stage/hash';
 import { seedFromInput, seedToText } from '../../src/core/seed';
 import { encodeColumnDiff } from '../../src/persist/diffCodec';
+import type { KV, KvEvent } from '../../src/persist/kv';
 import { createMemoryKV, type MemoryKV } from '../../src/persist/memory';
 import {
   createSaves, exportFileName, loadParams, newState, olderGenerator, parseWorldRecord, todayStateTable, type HistoryRecord, type WorldRecord,
 } from '../../src/persist/saves';
 import { readWiworld, wiworldHash, writeWiworld } from '../../src/persist/wiworld';
-import { DEFAULT_MAP_STATE, encodeMapState } from '../../src/ui/map/mapState';
+import { decodeMapState, DEFAULT_MAP_STATE, encodeMapState } from '../../src/ui/map/mapState';
 import { SETTINGS_DEFAULTS, SETTINGS_KEY } from '../../src/ui/settings';
 import { profileOptions } from '../../src/ui/map/toolbar';
 import { parseWorldQuery } from '../../src/ui/world/query';
@@ -359,6 +360,53 @@ describe('mountWorldsMenu: the start screen and New world (SP5b spec §1.1, §1.
     await create(b.navigate);
     expect(b.navigate).toHaveBeenLastCalledWith('/?world=w1');
     expect([worlds(dbs.get('x')!).length, worlds(dbs.get('wi10')!).length]).toEqual([1, 1]);
+  });
+
+  test('with `saves` null, Load world says `Saving is not available in this browser window`, and New world calls `enterUnsaved` with the hash and `This world is not saved: this browser window cannot store data.` (SP5b spec §1.1, §3.8, D14)', async () => {
+    const { navigate, persistStorage, enterUnsaved } = mount({ saves: null });
+    dom.el('start-load').click();
+    await flush();
+    expect(dom.el('load-notice').textContent).toContain('Saving is not available in this browser window');
+    dom.el('load-back').click();
+    await openNew();
+    expect(shown('new-create')).toBe(true);
+    dom.el('new-preset').value = 'amplified';
+    dom.el('new-seed').value = '1234';
+    dom.el('new-create').click();
+    dom.el('new-create').click();
+    await flush();
+    // The unsaved world in place: the seed and preset as its `#` hash in `?map`'s encoding (no `?rd`), once.
+    const hash = `#${encodeMapState({ ...DEFAULT_MAP_STATE, seed: '1234', profile: 'amplified' })}`;
+    expect(enterUnsaved.mock.calls).toEqual([[hash, 'This world is not saved: this browser window cannot store data.']]);
+    expect(decodeMapState(hash)).toEqual({ state: { ...DEFAULT_MAP_STATE, seed: '1234', profile: 'amplified' }, error: null });
+    expect(navigate).not.toHaveBeenCalled();
+    expect(persistStorage).not.toHaveBeenCalled();
+    expect(dom.el('new-notice').textContent).toBe('');
+  });
+
+  test('a `versionchange` on the menu\'s connection shows `Reload to continue`, and the menu then writes nothing (D14)', async () => {
+    const kv = createMemoryKV();
+    const listeners: Array<(e: KvEvent) => void> = [];
+    const watched: KV = {
+      read: (r) => kv.read(r),
+      write: (ops) => kv.write(ops),
+      onEvent: (f) => { listeners.push(f); return () => { listeners.splice(listeners.indexOf(f), 1); }; },
+      close: () => kv.close(),
+    };
+    const { navigate, menu } = mount({ saves: createSaves(watched) });
+    expect(listeners).toHaveLength(1);
+    for (const f of [...listeners]) f('versionchange');
+    expect(dom.el('start-notice').textContent).toContain('Reload to continue');
+    await openNew();
+    expect(dom.el('new-notice').textContent).toContain('Reload to continue');
+    const write = vi.spyOn(kv, 'write');
+    dom.el('new-create').click();
+    await flush();
+    expect(write).not.toHaveBeenCalled();
+    expect(navigate).not.toHaveBeenCalled();
+    expect(kv.dump('worlds')).toEqual([]);
+    menu.dispose();
+    expect(listeners).toHaveLength(0);
   });
 
   test('dispose removes the screen', async () => {

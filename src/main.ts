@@ -57,10 +57,16 @@ async function world(query: URLSearchParams): Promise<void> {
   };
   if (menu.startModeOf(query) === 'world') return enter(location.hash);
 
-  // The menu's saved worlds; none without Web Locks (no world could be opened) or when the database cannot open (D14).
+  // The menu's saved worlds; none without Web Locks (no world could be opened) or when the database cannot open
+  // (`openSaves`, D14). `blocked` while it opens (another tab holds an older version) is said until the open settles.
   const locks = (navigator as { locks?: LockManagerLike }).locks ?? null;
-  const [{ openIdbKV }, { createSaves }] = await Promise.all([import('./persist/idb'), import('./persist/saves')]);
-  const saves = locks === null ? null : await openIdbKV(menu.savesDbOf(q)).then(createSaves, () => null);
+  const [{ openIdbKV }, { openSaves }] = await Promise.all([import('./persist/idb'), import('./persist/saves')]);
+  const blocked = document.createElement('p');
+  blocked.className = 'notice notice-warn';
+  blocked.textContent = menu.BLOCKED_NOTICE;
+  const onBlocked = (): void => { app.append(blocked); };
+  const saves = locks === null ? null : await openSaves(() => openIdbKV(menu.savesDbOf(q), undefined, onBlocked));
+  blocked.remove();
   const notice = menu.noticeOfQuery(query, menu.sessionStorageOrNull());
   if (query.has('notice')) {
     const rest = new URLSearchParams(query);

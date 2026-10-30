@@ -5,7 +5,8 @@
  * stored id → today's id, a key that no longer parses → air), the older-generator check (D8), and the one normaliser
  * every `state` and `history` record goes through, at open, at import and under the tick's snapshot; and the records
  * over the KV (§1.2, §1.3, §2.4, E7): the worlds menu's list, create, rename, delete and export and import batches, the
- * sim's flush and copy batches, and the names the menu proposes (D2, D11, D15).
+ * sim's flush and copy batches, and the names the menu proposes (D2, D11, D15); `openSaves` is null when storage
+ * cannot open (§3.8, D14).
  *
  * `persist/` value-imports the L2 core only, so the bounds that live in `player/`, `daynight/` and `ui/` (the hotbar's
  * `normalizeHotbar`, `TIME_SPEEDS`, the flying speed's range, the camera's y range) come in as `StateBounds`, which the
@@ -503,6 +504,18 @@ export function createSaves(kv: KV): Saves {
       return kv.write(copyOps(d.world, d.state, d.history, d.cols));
     },
   };
+}
+
+/**
+ * The saved worlds over the connection `open` gives (§3.8, D14), or null when it cannot open: `open` throws or rejects
+ * (`openIdbKV` with no `indexedDB`, blocked site data). Null is the spec's `saves.available()` false (ruling P36).
+ */
+export async function openSaves(open: () => Promise<KV>): Promise<Saves | null> {
+  try {
+    return createSaves(await open());
+  } catch {
+    return null;
+  }
 }
 
 /**

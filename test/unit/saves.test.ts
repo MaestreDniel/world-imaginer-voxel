@@ -21,7 +21,7 @@ import { worldRange, type KV, type ReadRequest } from '../../src/persist/kv';
 import { createMemoryKV } from '../../src/persist/memory';
 import {
   backupName, createSaves, DEFAULT_SPEED, DEFAULT_T, exportFileName, flushOps, HISTORY_STEPS, loadParams, MAX_NAME,
-  MAX_PLACES, newState, newWorldName, NO_VALUE, normalizeHistory, normalizeState, olderGenerator, parseWorldRecord,
+  MAX_PLACES, newState, newWorldName, NO_VALUE, normalizeHistory, normalizeState, olderGenerator, openSaves, parseWorldRecord,
   remapDiff, remapOf, remapValue, tableRelation, todayStateTable, type HistoryEdit, type HistoryRecord,
   type StateBounds, type StateRecord, type WorldRecord,
 } from '../../src/persist/saves';
@@ -570,5 +570,17 @@ describe('saves over the KV (§1.2, §1.3, §2.4, E7)', () => {
   test('`exportFileName(\'a/b:c é\')` → `a_b_c é.wiworld` (letters include non-ASCII letters)', () => {
     expect(exportFileName('a/b:c é')).toBe('a_b_c é.wiworld');
     expect(exportFileName('My-world_2 ¿?')).toBe('My-world_2 __.wiworld');
+  });
+});
+
+describe('openSaves (§3.8, D14; ruling P36)', () => {
+  test('`openSaves` of a throwing or rejecting `open` → null; of a resolving one → a `Saves` over that KV', async () => {
+    expect(await openSaves(() => { throw new ReferenceError('indexedDB is not defined'); })).toBeNull();
+    expect(await openSaves(() => Promise.reject(new Error('blocked site data')))).toBeNull();
+    const kv = createMemoryKV();
+    const saves = await openSaves(() => Promise.resolve(kv));
+    expect(saves).not.toBeNull();
+    expect(saves!.kv).toBe(kv);
+    expect(await saves!.list()).toEqual([]);
   });
 });

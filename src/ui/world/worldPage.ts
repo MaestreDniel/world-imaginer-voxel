@@ -85,10 +85,12 @@
  * Reload (the failure panel's, the lost context's, the loading failure's lower RD) is `savedWorldUrl`. The autosave
  * (`createPageAutosave`) is armed at the reveal; every navigation the page starts waits for its `beforeLeave` (at most
  * 1,000 ms), and a failure after the reveal saves once more (`lastFlush`, unless the sim is what failed) before the
- * panel shows and the sim is released. The sim's failure notice is `SAVED_EDIT_FAILED_NOTICE`. One tab per world (§3.5,
- * D7, D24; `worldLock.ts`): the world's lock is taken before its records are read and before the sim exists (held
- * elsewhere past 2 s: back to the worlds menu with `LOCKED_NOTICE`), and released on `pagehide` after the autosave's
- * last save is posted, or at the teardown; a page restored from the back/forward cache reloads.
+ * panel shows and the sim is released. The sim's failure notice is `SAVED_EDIT_FAILED_NOTICE`. Storage problems while it
+ * plays (§3.8, D14; `watchStorage`): every `flushed` and the page's connection's events show D14's notices, the world
+ * playable and its dirty set in the sim; `blocked` while the connection opens is a warning on the loading screen. One
+ * tab per world (§3.5, D7, D24; `worldLock.ts`): the world's lock is taken before its records are read and before the
+ * sim exists (held elsewhere past 2 s: back to the worlds menu with `LOCKED_NOTICE`), and released on `pagehide` after
+ * the autosave's last save is posted, or at the teardown; a page restored from the back/forward cache reloads.
  *
  * The map in the world (SP4c spec §1.3, §2.3, §2.4, §4.2): at the reveal the streaming route creates the preview driver
  * (which adopts the first configure, wants no preview until the first M, and is fed every session change by the page
@@ -213,7 +215,9 @@ import {
   TELEPORT_FAILED_MS, TELEPORT_FAILED_NOTICE, createTeleport, landAt, walkFeetY, type PointLanding, type Teleport, type TeleportLanding,
 } from './teleport';
 import { holdWorld, type LockManagerLike, type WorldHold } from './worldLock';
-import { invalidParamsReason, refusalText, refusalUrl, sessionStorageOrNull, type OpenRefusal, type StorageLike } from '../worldsMenu';
+import {
+  BLOCKED_NOTICE, NO_STORAGE, RELOAD_NOTICE, invalidParamsReason, refusalText, refusalUrl, sessionStorageOrNull, type OpenRefusal, type StorageLike,
+} from '../worldsMenu';
 
 /** The capture and test options (ruling P48). */
 export interface WorldPageOptions {
@@ -1753,8 +1757,46 @@ export const SAVES_DB = 'wi10';
 export const STATE_RESET_NOTICE = 'This world\'s position, time, hotbar and places could not be read and were reset';
 /** D14: a saved world whose `history` record is there but not a record opens with no undo or redo steps. */
 export const HISTORY_RESET_NOTICE = 'This world\'s undo history could not be read';
-/** Ruling P6: the page's connection to `SAVES_DB` could not be opened (blocked site data, no `indexedDB`). */
-const STORAGE_UNAVAILABLE = 'storage is not available in this browser window';
+/**
+ * Ruling P6: the page's connection to `SAVES_DB` could not be opened (blocked site data, no `indexedDB`); the menu's
+ * `NO_STORAGE` (D14, ruling P37).
+ */
+const STORAGE_UNAVAILABLE = NO_STORAGE;
+
+/** D14: a flush refused for quota; it stays until a later flush succeeds. */
+export const QUOTA_NOTICE = 'Not saving: the browser\'s storage is full. Free space, or export your worlds from Load world.';
+/** D14: the browser closed the storage (site data cleared): a flush answered `closed`, or the page's connection's `closed`. */
+export const CLOSED_NOTICE = 'Not saving: this browser\'s storage was closed. Reload to continue.';
+
+/**
+ * D14's notices while a saved world plays (SP5b spec §2.1, §3.8): a `flushed` refused with `QuotaExceededError` shows
+ * `QUOTA_NOTICE` once per run of failed flushes, hidden by the next one that succeeds; `closed` shows `CLOSED_NOTICE`
+ * (the autosave then stops posting); any other abort shows nothing (the autosave retries at every tick). The page's
+ * connection's `versionchange` shows `RELOAD_NOTICE`, `blocked` `BLOCKED_NOTICE` and `closed` `CLOSED_NOTICE`. The world
+ * stays playable and the dirty set stays in the sim's memory. `dispose` stops listening to `kv`.
+ */
+export function watchStorage(notices: Pick<Notices, 'show' | 'hide'>, kv: Pick<KV, 'onEvent'>): { flushed(r: FlushedMsg): void; dispose(): void } {
+  let full = false;
+  const off = kv.onEvent((e) => {
+    if (e === 'versionchange') notices.show(RELOAD_NOTICE, { kind: 'error' });
+    else if (e === 'blocked') notices.show(BLOCKED_NOTICE, { kind: 'warn' });
+    else notices.show(CLOSED_NOTICE, { kind: 'error' });
+  });
+  return {
+    flushed(r) {
+      if (r.ok) {
+        if (full) notices.hide(QUOTA_NOTICE);
+        full = false;
+      } else if (r.status === 'closed') {
+        notices.show(CLOSED_NOTICE, { kind: 'error' });
+      } else if (r.errorName === 'QuotaExceededError' && !full) {
+        full = true;
+        notices.show(QUOTA_NOTICE, { kind: 'error' });
+      }
+    },
+    dispose: off,
+  };
+}
 
 /** A saved world's records as the page opens them (SP5b spec §3.4 step 2), or why it cannot open. */
 export type SavedWorldRead =
@@ -1886,7 +1928,7 @@ function navigatorLocks(): LockManagerLike | null {
 /**
  * The main thread's part of opening world `id` (SP5b spec §3.4 steps 1-3; rulings P5, P6, P22): first the world's lock
  * (`holdWorld`, D24: held by another tab past `LOCK_WAIT_MS` → the `locked` refusal, nothing read; no Web Locks at all →
- * `unreadable`, "storage is not available in this browser window", as no tab could save), then the page's connection
+ * `unreadable`, "Saving is not available in this browser window", as no tab could save), then the page's connection
  * (`open`; one that rejects or throws is that same reason), `readSavedWorld`, then the session from the record
  * (`openSavedSession`). A refusal after the lock (`readSavedWorld`'s, or the session's `initNotice`: tier 2 refused the
  * saved params and the session opened `default` with `{}`) is `unreadable` with that reason; it writes nothing, closes
@@ -2427,7 +2469,7 @@ export function mountWorldPage(root: HTMLElement, q: WorldQuery, hash: string, o
       const db = q.db ?? SAVES_DB;
       const open = async (): Promise<KV> => {
         const t = performance.now();
-        const kv = await openIdbKV(db);
+        const kv = await openIdbKV(db, undefined, () => loading.warn(BLOCKED_NOTICE));
         enterTimes.idbOpenMs = performance.now() - t;
         return kv;
       };
@@ -3752,6 +3794,9 @@ export function mountWorldPage(root: HTMLElement, q: WorldQuery, hash: string, o
     if (saved !== null) {
       const opened = saved;
       const worldPlaces = places!;
+      // D14's storage notices (SP5b spec §3.8): every `flushed`, and the page's connection's events.
+      const storageNotices = watchStorage(notices, saved.kv);
+      teardown.push(() => storageNotices.dispose());
       const a = createPageAutosave({
         worldId: opened.state.worldId,
         fly,
@@ -3782,8 +3827,8 @@ export function mountWorldPage(root: HTMLElement, q: WorldQuery, hash: string, o
           },
           hidden: () => document.visibilityState === 'hidden',
         },
-        // Every `flushed`: D14's storage notices (SP5b spec §3.8) are not wired yet.
-        onResult: () => {},
+        // Every `flushed`: D14's storage notices (SP5b spec §3.8).
+        onResult: (r) => storageNotices.flushed(r),
       });
       autosave = a;
       teardown.push(() => a.dispose());
