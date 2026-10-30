@@ -79,7 +79,10 @@
  * Reload (the failure panel's, the lost context's, the loading failure's lower RD) is `savedWorldUrl`. The autosave
  * (`createPageAutosave`) is armed at the reveal; every navigation the page starts waits for its `beforeLeave` (at most
  * 1,000 ms), and a failure after the reveal saves once more (`lastFlush`, unless the sim is what failed) before the
- * panel shows and the sim is released. The sim's failure notice is `SAVED_EDIT_FAILED_NOTICE`.
+ * panel shows and the sim is released. The sim's failure notice is `SAVED_EDIT_FAILED_NOTICE`. One tab per world (§3.5,
+ * D7, D24; `worldLock.ts`): the world's lock is taken before its records are read and before the sim exists (held
+ * elsewhere past 2 s: `LOCKED_NOTICE`), and released on `pagehide` after the autosave's last save is posted, or at the
+ * teardown; a page restored from the back/forward cache reloads.
  *
  * The map in the world (SP4c spec §1.3, §2.3, §2.4, §4.2): at the reveal the streaming route creates the preview driver
  * (which adopts the first configure, wants no preview until the first M, and is fed every session change by the page
@@ -186,6 +189,7 @@ import { createReloader, createWorldUrl, installLeaveGuard, navigateTo, savedWor
 import { Y_MAX, Y_MIN, type WorldQuery } from './query';
 import { STATE_BOUNDS } from './stateBounds';
 import { createTeleport, type Teleport, type TeleportLanding } from './teleport';
+import { LOCKED_NOTICE, holdWorld, type LockManagerLike, type WorldHold } from './worldLock';
 
 /** The capture and test options (ruling P48). */
 export interface WorldPageOptions {
@@ -910,6 +914,56 @@ export function flushOnPageHide(
   return () => win.removeEventListener('pagehide', onPageHide);
 }
 
+/** A saved world's lock on its page (`installWorldLock`). */
+export interface WorldLockOnPage {
+  /** Registers a last save run on `pagehide` before the release (the autosave's trigger); returns its remover. */
+  onPageHide(f: () => void): () => void;
+  /** The page's teardown: removes both listeners and releases the lock. */
+  dispose(): void;
+}
+
+/**
+ * A saved world's lock while its page is open (SP5b spec §3.5, D24): on `pagehide` every save `onPageHide` registered is
+ * posted first (each guarded: one that throws is reported and the release still runs), then the lock is released, so the
+ * next holder (this tab's reload, another tab) is granted it only after the last save was posted; a `pageshow` with
+ * `persisted` (the page restored from the back/forward cache, its lock released at the `pagehide`) reloads it.
+ */
+export function installWorldLock(
+  win: Pick<EventTarget, 'addEventListener' | 'removeEventListener'>,
+  lock: WorldHold,
+  reload: () => void,
+): WorldLockOnPage {
+  const saves = new Set<() => void>();
+  const onPageHide = (): void => {
+    for (const f of saves) {
+      try {
+        f();
+      } catch (e) {
+        console.error('The world\'s last save on pagehide:', e);
+      }
+    }
+    lock.release();
+  };
+  const onPageShow = (e: Event): void => {
+    if ((e as PageTransitionEvent).persisted) reload();
+  };
+  win.addEventListener('pagehide', onPageHide);
+  win.addEventListener('pageshow', onPageShow);
+  return {
+    onPageHide(f) {
+      const save = (): void => f();
+      saves.add(save);
+      return () => { saves.delete(save); };
+    },
+    dispose() {
+      win.removeEventListener('pagehide', onPageHide);
+      win.removeEventListener('pageshow', onPageShow);
+      saves.clear();
+      lock.release();
+    },
+  };
+}
+
 /**
  * The browser smoke's test hook (SP4c spec §8.6): `window.__wiTest`, installed by `main.ts` before the world page mounts
  * and only under `?wiTest=1` (absent otherwise). The smoke reads the leak baseline and check through it (the session's
@@ -1560,16 +1614,27 @@ export interface SavedOpen {
   readonly load: SavedLoad;
   /** The record later `record` messages and the backup are built from (§3.6). */
   readonly kept: WorldRecord;
+  /** The world's lock (§3.5), held until the page releases it on `pagehide` or at its teardown. */
+  readonly lock: WorldHold;
+}
+
+/** `navigator.locks`, or null where the Web Locks API is missing (an insecure context: no tab could hold a world). */
+function navigatorLocks(): LockManagerLike | null {
+  return (navigator as { locks?: LockManagerLike }).locks ?? null;
 }
 
 /**
- * The main thread's part of opening world `id` (SP5b spec §3.4 steps 2-3; rulings P5, P6): opens the page's connection
- * (`open`; one that rejects or throws is "storage is not available in this browser window"), `readSavedWorld`, then the
- * session from the record (`openSavedSession`). A refusal (`readSavedWorld`'s, or the session's `initNotice`: tier 2
- * refused the saved params and the session opened `default` with `{}`) is "This world could not be opened: <reason>";
- * it writes nothing, closes the connection and carries no `load`, so no `record` with another world's genKey can follow.
+ * The main thread's part of opening world `id` (SP5b spec §3.4 steps 1-3; rulings P5, P6): first the world's lock
+ * (`holdWorld`, D24: held by another tab past `LOCK_WAIT_MS` → `LOCKED_NOTICE`, nothing read; no Web Locks at all →
+ * "storage is not available in this browser window", as no tab could save), then the page's connection (`open`; one
+ * that rejects or throws is that same reason), `readSavedWorld`, then the session from the record (`openSavedSession`).
+ * A refusal after the lock (`readSavedWorld`'s, or the session's `initNotice`: tier 2 refused the saved params and the
+ * session opened `default` with `{}`) is "This world could not be opened: <reason>"; it writes nothing, closes the
+ * connection, releases the lock and carries no `load`, so no `record` with another world's genKey can follow and the sim
+ * is never loaded without the lock.
  */
 export async function openSavedWorld(o: {
+  readonly locks: LockManagerLike | null;
   open(): Promise<KV>;
   readonly db: string;
   readonly id: string;
@@ -1577,24 +1642,30 @@ export async function openSavedWorld(o: {
   random(): Seed64;
 }): Promise<{ ok: true; opened: SavedOpen } | { ok: false; text: string }> {
   const refuse = (reason: string) => ({ ok: false as const, text: `This world could not be opened: ${reason}` });
+  if (o.locks === null) return refuse(STORAGE_UNAVAILABLE);
+  const lock = await holdWorld(o.locks, o.id);
+  if (lock === null) return { ok: false, text: LOCKED_NOTICE };
   let kv: KV;
   try {
     kv = await o.open();
   } catch {
+    lock.release();
     return refuse(STORAGE_UNAVAILABLE);
   }
   const read = await readSavedWorld(createSaves(kv), o.id, o.bounds);
   if (!read.ok) {
     kv.close();
+    lock.release();
     return refuse(read.reason);
   }
   const session = openSavedSession(read.params, read.world, o.random);
   if (session.initNotice !== null) {
     kv.close();
+    lock.release();
     return refuse(session.initNotice);
   }
   const { load, kept } = openRequest(o.db, read.world, read.state, read.history);
-  return { ok: true, opened: { kv, session, state: read.state, history: read.history, notices: read.notices, load, kept } };
+  return { ok: true, opened: { kv, session, state: read.state, history: read.history, notices: read.notices, load, kept, lock } };
 }
 
 /**
@@ -2063,9 +2134,11 @@ export function mountWorldPage(root: HTMLElement, q: WorldQuery, hash: string, o
   };
 
   async function run(): Promise<void> {
-    // 1. The world: a saved world's records (SP5b spec §3.4 step 2), else the hash (P47). A refusal or a decode error
-    // loads nothing (ruling P5).
+    // 1. The world: a saved world's lock, then its records (SP5b spec §3.4 steps 1-2), else the hash (P47). A refusal
+    // (the lock held by another tab included) or a decode error loads nothing (ruling P5): the sim is created only after.
     let saved: SavedOpen | null = null;
+    // A saved world's lock on this page (§3.5): released on `pagehide` after the autosave's last save, or at the teardown.
+    let worldLock: WorldLockOnPage | null = null;
     let decoded: MapState | null = null;
     // A `?shot=1&time=` capture's fixed clock (ruling P48), in a saved world too, where the clock is then not saved.
     const fixedT = opts.timeHours === undefined || opts.timeHours === null ? null : timeOfHours(opts.timeHours);
@@ -2082,16 +2155,24 @@ export function mountWorldPage(root: HTMLElement, q: WorldQuery, hash: string, o
         enterTimes.idbOpenMs = performance.now() - t;
         return kv;
       };
-      const r = await openSavedWorld({ open, db, id: q.world, bounds: STATE_BOUNDS, random: cryptoSeed });
+      const r = await openSavedWorld({ open, db, id: q.world, bounds: STATE_BOUNDS, random: cryptoSeed, locks: navigatorLocks() });
       if (state !== 'loading') {
-        if (r.ok) r.opened.kv.close();
+        if (r.ok) {
+          r.opened.kv.close();
+          r.opened.lock.release();
+        }
         return;
       }
+      // Until Task 20's menu, a world held by another tab fails the load with `LOCKED_NOTICE` (D7).
       if (!r.ok) {
         fail(r.text, null);
         return;
       }
       saved = r.opened;
+      // Pushed first, so the reversed teardown releases the lock last, after the sim and the connection are gone.
+      const lock = installWorldLock(window, saved.lock, () => location.reload());
+      worldLock = lock;
+      teardown.push(() => lock.dispose());
       const kv = saved.kv;
       teardown.push(() => kv.close());
       // The saved pose replaces `?at` (D4): its x, z the centre, or the spawn search for a new world's first Play.
@@ -3294,6 +3375,8 @@ export function mountWorldPage(root: HTMLElement, q: WorldQuery, hash: string, o
         },
         events: {
           on(type, f) {
+            // The last save on `pagehide` runs before the world's lock is released (§3.5).
+            if (type === 'pagehide') return worldLock!.onPageHide(f);
             const target: Pick<EventTarget, 'addEventListener' | 'removeEventListener'> = type === 'visibilitychange' ? document : window;
             target.addEventListener(type, f);
             return () => target.removeEventListener(type, f);

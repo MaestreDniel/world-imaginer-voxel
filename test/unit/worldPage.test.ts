@@ -50,8 +50,9 @@ import {
 } from '../../src/persist/saves';
 import {
   EDIT_FAILED_NOTICE, HISTORY_RESET_NOTICE, SAVED_EDIT_FAILED_NOTICE, STATE_RESET_NOTICE, countAccepted, createPageAutosave, hotbarStorage, lastFlush, leaveAfterSave,
-  lowerRdHref, openRequest, openSavedWorld, readSavedWorld, restoreMode, restoredStart, savedWorldUrlRules, timeOfHours,
+  installWorldLock, lowerRdHref, openRequest, openSavedWorld, readSavedWorld, restoreMode, restoredStart, savedWorldUrlRules, timeOfHours,
 } from '../../src/ui/world/worldPage';
+import type { LockManagerLike } from '../../src/ui/world/worldLock';
 import { resolveProfile } from '../../src/core/params/profiles';
 import { seedFromInput } from '../../src/core/seed';
 import { createSimClient } from '../../src/engine/simClient';
@@ -2058,6 +2059,78 @@ describe('opening a saved world (SP5b spec §3.4 steps 2-3, D14, D22)', () => {
   };
   const random = (): [number, number] => [7, 7];
   const REFUSED = 'This world could not be opened: ';
+  /** A lock manager that grants every request at once; `held()` counts the holds not yet released. */
+  function freeLocks() {
+    let held = 0;
+    const locks: LockManagerLike = {
+      request(_name, _o, cb) {
+        held++;
+        return Promise.resolve().then(() => cb({})).finally(() => { held--; });
+      },
+    };
+    return { locks, held: () => held };
+  }
+  let free = freeLocks();
+  beforeEach(() => {
+    free = freeLocks();
+  });
+  /** Lets the promise jobs queued so far run. */
+  const jobs = async (): Promise<void> => {
+    for (let i = 0; i < 20; i++) await Promise.resolve();
+  };
+
+  test('Review Focus 2: with a lock manager that never grants, the open fails with `This world is open in another tab`, reads nothing, and the in-process sim receives no `load`', async () => {
+    const { kv } = await created();
+    const ops = kv.opCount;
+    let opens = 0;
+    const open = (): Promise<KV> => {
+      opens++;
+      return Promise.resolve(kv);
+    };
+    // Another tab keeps the world past the page's wait: the request ends with the wait's abort, never granted.
+    const requests: Array<{ name: string; signal: boolean }> = [];
+    const never: LockManagerLike = {
+      request(name, o) {
+        requests.push({ name, signal: o.signal instanceof AbortSignal });
+        return Promise.reject(new DOMException('The lock request timed out', 'TimeoutError'));
+      },
+    };
+    const types: string[] = [];
+    const handler = createSimHandler({ openKV: async () => kv });
+    const sim = createSimClient(() => inProcessSimWorker({
+      ...handler,
+      handle(msg, post) {
+        types.push((msg as { type: string }).type);
+        handler.handle(msg, post);
+      },
+    }, () => 0), { onFailure() {} });
+    // The page's run(): the open first, and the sim's `load` only from an opened world (`saved.load`).
+    const page = async (locks: LockManagerLike) => {
+      const r = await openSavedWorld({ locks, open, db: 'wi10', id: ID, bounds: STATE_BOUNDS, random });
+      if (r.ok) void sim.load(r.opened.load).catch(() => {});
+      await jobs();
+      return r;
+    };
+    expect(await page(never)).toEqual({ ok: false, text: 'This world is open in another tab' });
+    expect(requests).toEqual([{ name: 'wi10.world.w1', signal: true }]);
+    expect([opens, kv.opCount - ops]).toEqual([0, 0]);
+    await vi.waitFor(() => expect(types).toEqual([]));
+    // The same page with the lock granted reads the world and posts its `load`.
+    const r = await page(free.locks);
+    expect(r.ok).toBe(true);
+    expect(opens).toBe(1);
+    await vi.waitFor(() => expect(types).toEqual(['load']));
+    if (r.ok) r.opened.lock.release();
+    sim.dispose();
+  });
+
+  test('without Web Locks (an insecure context\'s `navigator.locks` undefined) the open is refused as storage not available, nothing read', async () => {
+    const { kv } = await created();
+    const ops = kv.opCount;
+    const r = await openSavedWorld({ locks: null, open: () => Promise.resolve(kv), db: 'wi10', id: ID, bounds: STATE_BOUNDS, random });
+    expect(r).toEqual({ ok: false, text: `${REFUSED}storage is not available in this browser window` });
+    expect(kv.opCount).toBe(ops);
+  });
 
   test('`readSavedWorld` of a created world → ok with `newState`\'s defaults and `notices` `[]`', async () => {
     const { saves } = await created();
@@ -2135,31 +2208,36 @@ describe('opening a saved world (SP5b spec §3.4 steps 2-3, D14, D22)', () => {
     const { kv } = await created({ params: { ...params, density: { ...(params['density'] as JsonObject), defs: tree } } });
     const before = everything(kv);
     const ops = kv.opCount;
-    const r = await openSavedWorld({ open: () => Promise.resolve(kv), db: 'wi10', id: ID, bounds: STATE_BOUNDS, random });
+    const r = await openSavedWorld({ locks: free.locks, open: () => Promise.resolve(kv), db: 'wi10', id: ID, bounds: STATE_BOUNDS, random });
     expect(r).toEqual({ ok: false, text: `${REFUSED}invalid patch (density.defs.root.b.x UNKNOWN_OP); opened the default profile with no changes` });
     // Only an opened world carries the `load` the page posts after the attach.
     expect('opened' in r).toBe(false);
     expect(everything(kv)).toEqual(before);
     expect(kv.opCount).toBe(ops);
-    // The refusal closed the page's connection.
+    // The refusal closed the page's connection and released the world's lock.
     expect((await put(kv, 'state', 'x')).status).toBe('closed');
+    await jobs();
+    expect(free.held()).toBe(0);
   });
 
   test('a missing or refused record and an opener that rejects or throws → not opened, nothing written (ruling P6)', async () => {
     const { kv } = await created();
     const before = everything(kv);
-    const open = (id: string, o: () => Promise<KV>) => openSavedWorld({ open: o, db: 'wi10', id, bounds: STATE_BOUNDS, random });
+    const open = (id: string, o: () => Promise<KV>) => openSavedWorld({ locks: free.locks, open: o, db: 'wi10', id, bounds: STATE_BOUNDS, random });
     expect(await open('nope', () => Promise.resolve(kv))).toEqual({ ok: false, text: `${REFUSED}no saved world has this id` });
     expect(everything(kv)).toEqual(before);
     const storage = { ok: false, text: `${REFUSED}storage is not available in this browser window` };
     expect(await open(ID, () => Promise.reject(new Error('blocked')))).toEqual(storage);
     expect(await open(ID, () => { throw new ReferenceError('indexedDB is not defined'); })).toEqual(storage);
+    // Each refusal released the world's lock.
+    await jobs();
+    expect(free.held()).toBe(0);
   });
 
   test('an opened world: its session from the record, the `load` the page posts and the kept record', async () => {
     const { kv } = await created();
     await put(kv, 'state', { ...newState(ID, STATE_BOUNDS), flushSeq: 4, updated: 9_000 });
-    const r = await openSavedWorld({ open: () => Promise.resolve(kv), db: 'wi10', id: ID, bounds: STATE_BOUNDS, random });
+    const r = await openSavedWorld({ locks: free.locks, open: () => Promise.resolve(kv), db: 'wi10', id: ID, bounds: STATE_BOUNDS, random });
     expect(r.ok).toBe(true);
     if (!r.ok) return;
     const o = r.opened;
@@ -2172,13 +2250,19 @@ describe('opening a saved world (SP5b spec §3.4 steps 2-3, D14, D22)', () => {
     expect(o.load).toEqual({ db: 'wi10', worldId: ID, flushSeq: 4, genKey: key, updated: 9_000, stateTable: todayStateTable(), rewrite: null });
     expect(o.kept).toEqual(record());
     expect(o.notices).toEqual([]);
+    // The opened world holds its lock until the page releases it (§3.5).
+    await jobs();
+    expect(free.held()).toBe(1);
+    o.lock.release();
+    await jobs();
+    expect(free.held()).toBe(0);
   });
 
   test('after a permuted-table open, the kept record\'s `stateTable` equals `todayStateTable()`', async () => {
     const { kv } = await created({ stateTable: permuted() });
     const history: HistoryRecord = { worldId: ID, done: [{ edits: [{ x: 0, y: 64, z: 0, before: NO_VALUE, after: 1 << 8 }] }], undone: [] };
     await put(kv, 'history', history);
-    const r = await openSavedWorld({ open: () => Promise.resolve(kv), db: 'wi10', id: ID, bounds: STATE_BOUNDS, random });
+    const r = await openSavedWorld({ locks: free.locks, open: () => Promise.resolve(kv), db: 'wi10', id: ID, bounds: STATE_BOUNDS, random });
     expect(r.ok).toBe(true);
     if (!r.ok) return;
     const { kept, load } = r.opened;
@@ -2693,5 +2777,94 @@ describe('the block history kept across reloads (SP5b spec §3.2, §3.4 step 6, 
     expect(src).toMatch(/let worldHotbar: HotbarRecord = saved !== null \? saved\.state\.hotbar : STATE_BOUNDS\.normalizeHotbar\(null\);/);
     expect(src).toMatch(/const hotbar = createHotbar\(saved !== null \? hotbarStorage\(\(\) => worldHotbar, \(h\) => \{ worldHotbar = h; \}\) : storage\);/);
     expect(src).toMatch(/hotbar: \(\) => worldHotbar,\n\s+blockHistory,\n\s+sim: simClient!,/);
+  });
+});
+
+describe('the world\'s lock in the page (SP5b spec §3.5, D24)', () => {
+  const pageEvent = (type: 'pagehide' | 'pageshow', persisted: boolean): Event => Object.assign(new Event(type), { persisted });
+
+  /** The page's lock on `win` and its autosave, whose `pagehide` trigger goes through the lock's `onPageHide`. */
+  function page() {
+    const order: string[] = [];
+    const win = new EventTarget();
+    let reloads = 0;
+    const lock = installWorldLock(win, { release: () => { order.push('release'); } }, () => { reloads++; });
+    const hotbar = STATE_BOUNDS.normalizeHotbar(null);
+    const blockHistory = createBlockHistory({
+      post: (): Promise<EditOutcome> => Promise.resolve({ ok: false, why: 'failed' }),
+      read: () => 0,
+      pending: () => false,
+      settled: () => Promise.resolve(),
+      notices: { show() {} },
+    });
+    const autosave = createPageAutosave({
+      worldId: 'w1',
+      fly: { x: 0.5, y: 100, z: 0.5, yaw: 0, pitch: 0, mode: 'fly', speed: SPEED_DEFAULT },
+      frame: { t: 0.5 },
+      speedIndex: () => 0,
+      storedTime: null,
+      hotbar: () => hotbar,
+      blockHistory,
+      sim: { flush: () => { order.push('flush'); return new Promise<FlushedMsg>(() => {}); } },
+      settled: () => Promise.resolve(),
+      editsSince: () => 0,
+      now: () => 1_700_000_000_000,
+      clock: { now: () => 0, setInterval: () => 0, clearInterval() {}, setTimeout: () => 0, clearTimeout() {} },
+      events: { on: (type, f) => (type === 'pagehide' ? lock.onPageHide(f) : () => {}), hidden: () => false },
+      onResult: () => {},
+    });
+    return { order, win, lock, autosave, reloads: () => reloads };
+  }
+
+  test('`pagehide` posts the flush before `release`; with nothing changed it only releases', () => {
+    const changed = page();
+    changed.autosave.markChanged();
+    changed.win.dispatchEvent(pageEvent('pagehide', false));
+    expect(changed.order).toEqual(['flush', 'release']);
+    const same = page();
+    same.win.dispatchEvent(pageEvent('pagehide', true));
+    expect(same.order).toEqual(['release']);
+  });
+
+  test('a save that throws on `pagehide` still releases the lock', () => {
+    const order: string[] = [];
+    const win = new EventTarget();
+    const lock = installWorldLock(win, { release: () => { order.push('release'); } }, () => {});
+    lock.onPageHide(() => { throw new Error('boom'); });
+    const errors = vi.spyOn(console, 'error').mockImplementation(() => {});
+    win.dispatchEvent(pageEvent('pagehide', false));
+    expect(order).toEqual(['release']);
+    expect(errors).toHaveBeenCalledTimes(1);
+    errors.mockRestore();
+  });
+
+  test('`pageshow` with `persisted` reloads; without it nothing', () => {
+    const p = page();
+    p.win.dispatchEvent(pageEvent('pageshow', false));
+    expect(p.reloads()).toBe(0);
+    p.win.dispatchEvent(pageEvent('pageshow', true));
+    expect(p.reloads()).toBe(1);
+  });
+
+  test('the teardown releases and removes both listeners: a later `pagehide` posts nothing, a later `pageshow` reloads nothing', () => {
+    const p = page();
+    p.autosave.markChanged();
+    p.lock.dispose();
+    expect(p.order).toEqual(['release']);
+    p.win.dispatchEvent(pageEvent('pagehide', false));
+    p.win.dispatchEvent(pageEvent('pageshow', true));
+    expect(p.order).toEqual(['release']);
+    expect(p.reloads()).toBe(0);
+  });
+
+  test('the page wires it: the lock first in the open, before the sim exists; the autosave\'s `pagehide` through `onPageHide`; the teardown', () => {
+    const src = readFileSync(new URL('../../src/ui/world/worldPage.ts', import.meta.url), 'utf8');
+    const run = src.slice(src.indexOf('async function run(): Promise<void> {'));
+    expect(run.indexOf('random: cryptoSeed, locks: navigatorLocks() });')).toBeGreaterThan(0);
+    expect(run.indexOf('random: cryptoSeed, locks: navigatorLocks() });')).toBeLessThan(run.indexOf('createBrowserSim('));
+    expect(run).toMatch(/const lock = installWorldLock\(window, saved\.lock, \(\) => location\.reload\(\)\);\n\s+worldLock = lock;\n\s+teardown\.push\(\(\) => lock\.dispose\(\)\);/);
+    expect(run).toMatch(/if \(type === 'pagehide'\) return worldLock!\.onPageHide\(f\);/);
+    // A page disposed while it waited releases what the open took.
+    expect(run).toMatch(/if \(state !== 'loading'\) \{\n\s+if \(r\.ok\) \{\n\s+r\.opened\.kv\.close\(\);\n\s+r\.opened\.lock\.release\(\);/);
   });
 });
