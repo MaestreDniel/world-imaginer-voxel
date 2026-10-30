@@ -1,5 +1,5 @@
 {
-  "sha256": "3e660b5b3acfdef97f47be274dae03be7d230521f9216aa073831f54b9dc44b3",
+  "sha256": "17284d4faadc382d43fc4b00893db189e9b735817ef88460a458476c593c1b27",
   "canonical": {
     "startedSps": [
       "SP0",
@@ -207,13 +207,101 @@
           "max": 0
         }
       },
+      "E1": {
+        "canonicalFailures": {
+          "activeFrom": "SP5b",
+          "max": 0
+        },
+        "rejectFailures": {
+          "activeFrom": "SP5b",
+          "max": 0
+        },
+        "roundTripFailures": {
+          "activeFrom": "SP5b",
+          "max": 0
+        }
+      },
+      "E2": {
+        "regionHashMismatches": {
+          "activeFrom": "SP5b",
+          "max": 0
+        },
+        "roundTripMismatches": {
+          "activeFrom": "SP5b",
+          "max": 0
+        }
+      },
+      "E3": {
+        "reloadHashMismatches": {
+          "activeFrom": "SP5b",
+          "max": 0
+        },
+        "reloadStateMismatches": {
+          "activeFrom": "SP5b",
+          "max": 0
+        }
+      },
+      "E4": {
+        "abortedFlushInconsistent": {
+          "activeFrom": "SP5b",
+          "max": 0
+        },
+        "crashedFlushInconsistent": {
+          "activeFrom": "SP5b",
+          "max": 0
+        },
+        "lostAfterRetry": {
+          "activeFrom": "SP5b",
+          "max": 0
+        }
+      },
       "E5": {
+        "flushLightMismatches": {
+          "activeFrom": "SP5b",
+          "max": 0
+        },
+        "flushStale": {
+          "activeFrom": "SP5b",
+          "max": 0
+        },
         "sessionLightMismatches": {
           "activeFrom": "SP5a",
           "max": 0
         },
         "sessionStale": {
           "activeFrom": "SP5a",
+          "max": 0
+        }
+      },
+      "E6": {
+        "backupMissing": {
+          "activeFrom": "SP5b",
+          "max": 0
+        },
+        "backupSpurious": {
+          "activeFrom": "SP5b",
+          "max": 0
+        },
+        "olderGeneratorWrong": {
+          "activeFrom": "SP5b",
+          "max": 0
+        }
+      },
+      "E7": {
+        "crossWorldLeaks": {
+          "activeFrom": "SP5b",
+          "max": 0
+        },
+        "deleteLeftovers": {
+          "activeFrom": "SP5b",
+          "max": 0
+        },
+        "perWorldStateWrong": {
+          "activeFrom": "SP5b",
+          "max": 0
+        },
+        "remapMismatches": {
+          "activeFrom": "SP5b",
           "max": 0
         }
       },

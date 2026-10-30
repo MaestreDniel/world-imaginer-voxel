@@ -96,9 +96,27 @@ export const THRESHOLDS: ThresholdTable = {
   // SP5a spec §6.1 (D26): the incremental relight against a fresh `lightRegion` and `referenceLight` after random edits
   // (`edit.metric.ts`).
   L3: { mismatches: { max: 0, activeFrom: 'SP5a' } },
+  // SP5b spec §6.1 (D28): the codec, `.wiworld`, reload, aborted-flush, older-generator and backup, and per-world parts
+  // (`persist.metric.ts`), every tier.
+  E1: { roundTripFailures: { max: 0, activeFrom: 'SP5b' }, canonicalFailures: { max: 0, activeFrom: 'SP5b' }, rejectFailures: { max: 0, activeFrom: 'SP5b' } },
+  E2: { roundTripMismatches: { max: 0, activeFrom: 'SP5b' }, regionHashMismatches: { max: 0, activeFrom: 'SP5b' } },
+  E3: { reloadHashMismatches: { max: 0, activeFrom: 'SP5b' }, reloadStateMismatches: { max: 0, activeFrom: 'SP5b' } },
+  E4: {
+    abortedFlushInconsistent: { max: 0, activeFrom: 'SP5b' }, crashedFlushInconsistent: { max: 0, activeFrom: 'SP5b' },
+    lostAfterRetry: { max: 0, activeFrom: 'SP5b' },
+  },
   // SP5a spec §6.1 (D26): E5's session part, the edits back at their latest value and light after an unload, a race and a
-  // regenerated neighbour (`edit.metric.ts`, `.out/E5.session.json`); SP5b adds the flush part (`E5.flush`).
-  E5: { sessionStale: { max: 0, activeFrom: 'SP5a' }, sessionLightMismatches: { max: 0, activeFrom: 'SP5a' } },
+  // regenerated neighbour (`edit.metric.ts`, `.out/E5.session.json`). SP5b spec §6.1: the flush part, the session torn
+  // down within a flush window and reopened from the KV (`persist.metric.ts`, `.out/E5.flush.json`).
+  E5: {
+    sessionStale: { max: 0, activeFrom: 'SP5a' }, sessionLightMismatches: { max: 0, activeFrom: 'SP5a' },
+    flushStale: { max: 0, activeFrom: 'SP5b' }, flushLightMismatches: { max: 0, activeFrom: 'SP5b' },
+  },
+  E6: { olderGeneratorWrong: { max: 0, activeFrom: 'SP5b' }, backupMissing: { max: 0, activeFrom: 'SP5b' }, backupSpurious: { max: 0, activeFrom: 'SP5b' } },
+  E7: {
+    crossWorldLeaks: { max: 0, activeFrom: 'SP5b' }, deleteLeftovers: { max: 0, activeFrom: 'SP5b' },
+    perWorldStateWrong: { max: 0, activeFrom: 'SP5b' }, remapMismatches: { max: 0, activeFrom: 'SP5b' },
+  },
   // SP4a spec §9.1, §9.5 (D24): G1's three Medium cells on the static world, from the Chrome flight on the Iris Xe
   // (`g1.metric.ts`, `flight-iris-chrome.json`, re-measured on SP5a's code into `assets/sp5a/`). SP4b spec §8.2, §8.4
   // (D23): the six Medium streaming cells, from the committed Iris Xe Chrome bench files (`G1.streaming`, re-read from

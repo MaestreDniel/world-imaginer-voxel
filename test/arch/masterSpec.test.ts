@@ -1358,7 +1358,7 @@ describe('master spec amendments (SP5a §9)', () => {
 });
 
 describe('master spec amendments (SP5b §9)', () => {
-  /** [§1 entry head, the token its entry holds, the file on disk]; Tasks 2, 3, 4, 6, 10, 12, 19, 20, 22, 24, 26, 27 and 28 append theirs. */
+  /** [§1 entry head, the token its entry holds, the file on disk]; Tasks 2, 3, 4, 6, 10, 12, 19, 20, 22, 24, 26, 27, 28 and 30 append theirs. */
   const SP5B_MODULES: Array<[head: RegExp, token: string, file: string]> = [
     [/^\s+persist\/kv\.ts /, 'kvContract.ts diffCodec.ts wiworld.ts saves.ts (SP5b)', 'src/persist/kv.ts'],
     [/^\s+persist\/kv\.ts /, 'kvContract.ts diffCodec.ts wiworld.ts saves.ts (SP5b)', 'src/persist/memory.ts'],
@@ -1378,6 +1378,7 @@ describe('master spec amendments (SP5b §9)', () => {
     [/^\s+ui\/world\/\* /, 'stateBounds.ts autosave.ts worldLock.ts modifyMode.ts places.ts placeDialog.ts (SP5b)', 'src/ui/world/placeDialog.ts'],
     [/^\s+ui\/map\/\* /, 'placesTab.ts (SP5b)', 'src/ui/map/placesTab.ts'],
     [/^\s+ui\/shell\.ts /, 'worldsMenu.ts settingsPanel.ts (SP5b)', 'src/ui/settingsPanel.ts'],
+    [/^\s+test\/ unit\/ metrics\//, '(SP5b: metrics/persist.metric.ts)', 'test/metrics/persist.metric.ts'],
   ];
 
   test('§10\'s SP5b entry and its receivers (SP5b spec §9, §11)', () => {
@@ -1534,6 +1535,21 @@ describe('master spec amendments (SP5b §9)', () => {
     const at52 = text.indexOf('### 5.2 ');
     const lines52 = text.slice(at52, text.indexOf('### 5.3 ', at52)).split('\n');
     expect(lines52).toContain('- **Settings:** Graphics and Controls (SP5b), Audio (SP8c) (master, music, sfx and ambient volumes; music frequency Always / Frequent / Standard / Never; sound pack).');
+  });
+
+  test('§6.4\'s E1-E6 row ends with E6 as SP5b redefines it and E7 restores time, history and places per world; §6.3\'s Persistence names E1-E7 and the Palette\'s hotbar round-trips per world (SP5b spec §6.1, §9)', () => {
+    const e = text.split('\n').find((l) => l.startsWith('| E1-E6 |'));
+    expect(e, 'no E1-E6 row in §6.4').toBeDefined();
+    expect(e).toContain('(the session part SP5a, the flush part SP5b)');
+    expect(e!.endsWith('; an older generator opens with today\'s terrain and its edits, with the notice and no copy; the first terrain change in the modification mode in a world with edits makes exactly one backup equal to the world before it (redefined by the SP5b spec) | exact |'), 'the E1-E6 row\'s last clause').toBe(true);
+    expect(e).not.toContain('fork dialog');
+    const e7 = text.split('\n').find((l) => l.startsWith('| E7 |'));
+    expect(e7, 'no E7 row in §6.4').toBeDefined();
+    expect(e7).toContain('hotbar and player restored per world / time, history and places restored per world / `stateTable` remap on load');
+    const at63 = text.indexOf('### 6.3 ');
+    const lines63 = text.slice(at63, text.indexOf('### 6.4 ', at63)).split('\n');
+    expect(lines63).toContain('- **Persistence:** codec, `.wiworld` and fault-injection round-trips (E1-E7).');
+    expect(lines63.some((l) => l.startsWith('- **Palette:**') && l.endsWith('hotbar round-trips by type name per world.')), 'no Palette line ending "per world." in §6.3').toBe(true);
   });
 
   test('§1 names each SP5b module in its entry, which exists', () => {

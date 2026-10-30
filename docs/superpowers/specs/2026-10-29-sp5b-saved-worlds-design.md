@@ -445,3 +445,4 @@ Measured by an agent on 2026-10-30 on 2a9aad0, against Task 17's measurement on 
 (One line per commit that changes `test/thresholds.lock.json`.)
 
 - 2026-10-30 — SP5b Task 1: startedSps gains 'SP5b' (spec §8).
+- 2026-10-30 — SP5b Task 30: E1 (roundTripFailures, canonicalFailures, rejectFailures), E2 (roundTripMismatches, regionHashMismatches), E3 (reloadHashMismatches, reloadStateMismatches), E4 (abortedFlushInconsistent, crashedFlushInconsistent, lostAfterRetry), E5 flushStale and flushLightMismatches, E6 (olderGeneratorWrong, backupMissing, backupSpurious) and E7 (crossWorldLeaks, deleteLeftovers, perWorldStateWrong, remapMismatches), each max 0, gated from SP5b on every tier (persist.metric.ts, E5.flush; spec §6.1); new parts.

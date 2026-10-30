@@ -215,6 +215,7 @@ world-imaginer-voxel/          (repository root)
         (SP4b: metrics/stream.metric.ts, harness/inProcessPool.ts, integration/streaming.test.ts, integration/columnTableFuzz.test.ts)
         (SP4c: metrics/apply.metric.ts, integration/apply.test.ts)
         (SP5a: metrics/edit.metric.ts, integration/edit.test.ts)
+        (SP5b: metrics/persist.metric.ts)
         schema-shape.lock.json (SP1) stateIds.lock.json (SP3a)
         thresholds.ts thresholds.lock.json goldens.json baselines.json
 ```
@@ -1443,12 +1444,12 @@ Metric values are written to `test/metrics/.out/*.json` for trends. The harness 
 - **Presets:** migrations via an injected v1 → v2 list, patch over the profile, reserved names, import order and error paths, import loads, export writes the current draft.
 - **Session:** the typed seed is used; "same seed" regenerates the same world; URL round-trip.
 - **Invalidation:** stage-run counters per scope (U1).
-- **Persistence:** codec, `.wiworld` and fault-injection round-trips (E1-E6).
+- **Persistence:** codec, `.wiworld` and fault-injection round-trips (E1-E7).
 - **Resource-pack manifest:** fallbacks and overlays.
 - **Painters:** determinism hash; tileability (wrap-edge gradient ≤ 1.2 × interior mean gradient); ≥ 2 variants per block with mean |Δ| ≥ 4/255 between variants; ≤ 6 palette colours per base tile.
 - **Block states:** property table round-trips; `rotateState` for every property kind; placement orientation from yaw/hit point; connection-derived fence/pane/stair shapes from neighbour masks; box-model culling against `FULL_FACES`; collision and raycast against boxes.
 - **Audio:** DSP generator determinism and peak bounds; sound-pack manifest fallbacks; music scheduler per frequency setting; footstep cadence; ambience weights for canned contexts; `sound/engine` calls `resume()` on the first click, keydown or pointer lock (fake AudioContext) and clears the muted indicator on `running`.
-- **Palette:** every placeable type and state is reachable through the grid and variant picker; assigning writes the active hotbar slot; hotbar round-trips by type name.
+- **Palette:** every placeable type and state is reachable through the grid and variant picker; assigning writes the active hotbar slot; hotbar round-trips by type name per world.
 
 ### 6.4 Metric tests (IDs; thresholds locked)
 
@@ -1512,8 +1513,8 @@ Metric values are written to `test/metrics/.out/*.json` for trends. The harness 
 | F1 | fluid rules: 1 source converges to a radius-7 diamond / tick log over 2 runs | ≤ 40 ticks / identical |
 | F2 | worst-case flood (ocean wall into a 100k-voxel cave net) | updates ≤ cap per tick; diff ≤ 5 B per changed voxel; remesh ≤ 10 Hz per section; tick p95 ≤ 4 ms |
 | F3 | D18: region loaded with the sim running 2000 ticks and no edits → ticks executed / DiffStore entries / unsettled voxels changed; one edit adjacent to an unsettled front → ticks scheduled only within that front's connected fluid | 0 / 0 / 0; exact |
-| E1-E6 | diff codec; `.wiworld` round-trip hash; reload with edits hash; fault-injected aborted flush consistent (flushSeq); edit→unload→reload returns the latest diff (the session part SP5a, the flush part SP5b); genKey mismatch shows the fork dialog and each option (including Cancel) yields its specified world state | exact |
-| E7 | two worlds with the same genKey: edits in one never appear in the other / delete removes every `diffs` key of that worldId / hotbar and player restored per world / `stateTable` remap on load | exact |
+| E1-E6 | diff codec; `.wiworld` round-trip hash; reload with edits hash; fault-injected aborted flush consistent (flushSeq); edit→unload→reload returns the latest diff (the session part SP5a, the flush part SP5b); an older generator opens with today's terrain and its edits, with the notice and no copy; the first terrain change in the modification mode in a world with edits makes exactly one backup equal to the world before it (redefined by the SP5b spec) | exact |
+| E7 | two worlds with the same genKey: edits in one never appear in the other / delete removes every `diffs` key of that worldId / hotbar and player restored per world / time, history and places restored per world / `stateTable` remap on load | exact |
 | U1 | stage-run counters: decorate edit re-runs only {D, L, mesh}; terrain edit spares raw climate; climate re-runs all | exact |
 | U2 | param liveness: ±15% on each non-live param changes its stage output hash in ≥ 1 of 16 columns. SP2b (its spec §7): perturbations per kind (number and int ±15 % of \|v\| or of the range span, noise wavelength, every numeric spline knot by 15 % of the y span, box intervals shrunk and grown by 15 %); the stage output hash of the leaf's home stage (climate, shape or biome2d); 16 class columns chosen by the lattice conditions under which leaves act (land, coast, channel, gorge, basin, rim and one per lake gate), and bounded witnesses for leaves no class column decides (amended by SP2b). SP3b adds the `terrain` stage: its output hash is the region hash of one column after `fillColumnT`, tried at the land and coast class columns only, with no witness search, and every `density.*` leaf must be decided (amended by SP3b). SP3c adds five class columns for the terrain stage's `surface.*` leaves (`cliffY`, `cliffSteep`, `snowline`, `patch`, `badlands`; 21 class columns), found by a third pass over the same stream after SP2b's two so the existing 16 stay, each accepted only when every leaf it serves changes a voxel of the generated column; every `surface.*` leaf must be decided (amended by SP3c). SP3d: a `json` leaf's perturbation is pinned per leaf (`density.defs`: the `terrain` tap muted to 0; `surface.rules`: the deepslate gradient's upper bound 8 → 12), decided on the land column; U2 covers 68 leaves (amended by SP3d). SP3e: a `bool` leaf's perturbation is its negation; the islands leaves are decided on a floating_islands island column; U2 covers 73 leaves (amended by SP3e) | 100% |
 | U3 | no-placebo: params with `effectMetric` move that metric by > 0.5% at ±15% | 100% |

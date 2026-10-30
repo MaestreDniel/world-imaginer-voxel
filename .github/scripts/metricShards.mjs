@@ -28,6 +28,10 @@ export const SHARDS = {
   // on quick (59 s before E5 dropped to RD 4 there) against the plan's 50 s, so it runs in a shard of its own (the
   // spec's named lever).
   edit: [`${DIR}/edit.metric.ts`],
+  // SP5b spec §6.1, §7: E1-E7 and E5's flush part (`persist.metric.ts`), planned for `edit` at 25-40 s on quick; its
+  // prototype measured 57 s on quick (E1's 10,000 columns about 10 s, about 20 world opens at RD 4), which would take
+  // `edit` past the 145 s long pole, so it runs in a shard of its own (the spec's named lever, ruling P45).
+  persist: [`${DIR}/persist.metric.ts`],
   rest: null,
 };
 
