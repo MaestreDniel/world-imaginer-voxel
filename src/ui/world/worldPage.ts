@@ -1386,22 +1386,34 @@ export function settingsKey(o: {
   });
 }
 
-/** The controls that keep their own keys while a panel is open: a select, any `<input>`, a button, a text area. */
+/** The controls that keep their own keys inside an open panel: a select, any `<input>`, a button, a text area. */
 const PANEL_CONTROL_TAGS: ReadonlySet<string> = new Set(['SELECT', 'INPUT', 'BUTTON', 'TEXTAREA']);
+
+/** The focused element `worldIgnoresKeys` reads (`isTextEntry`'s). */
+type FocusTarget = { readonly tagName: string; readonly type?: string; readonly isContentEditable?: boolean };
+
+/** A panel the world's keys defer to (`worldIgnoresKeys`): whether it is open, and its root element (null: none). */
+export interface KeyPanel<N> {
+  readonly panel: { readonly isOpen: boolean };
+  readonly root: { contains(other: N | null): boolean } | null;
+}
 
 /**
  * The world's `isTextFocus` (SP5b spec §1.4; closes SP4a spec :731's `isTextEntry` hand-over): the world ignores a key
- * in a text-entry control (`isTextEntry`), and, while the Settings screen, the help, the palette or B's dialog is open
- * (`panelOpen`), in any focused control as well, so a select, a slider, a checkbox or a button keeps its own keys (the
- * arrows move a slider, Space presses a button) and the world handles none of them. With the focus elsewhere the keys
- * still reach the world, so H, G, M, B and E act through `paletteFirst`.
+ * in a text-entry control (`isTextEntry`), and in any focused control inside a panel that is open now (the Settings
+ * screen, the help, the palette or B's dialog), so a select, a slider, a checkbox or a button keeps its own keys (the
+ * arrows move a slider, Space presses a button) and the world handles none of them. A control left focused in a panel
+ * that has closed, hidden, is no open panel's (review I1): with the focus elsewhere the keys still reach the world, so
+ * H, G, M, B and E act through `paletteFirst`.
  */
-export function worldIgnoresKeys(
-  focused: { readonly tagName: string; readonly type?: string; readonly isContentEditable?: boolean } | null,
-  panelOpen: boolean,
+export function worldIgnoresKeys<N extends FocusTarget>(
+  focused: N | null,
+  panels: readonly KeyPanel<N>[],
 ): boolean {
   if (isTextEntry(focused)) return true;
-  return panelOpen && focused !== null && PANEL_CONTROL_TAGS.has(focused.tagName.toUpperCase());
+  if (focused === null || !PANEL_CONTROL_TAGS.has(focused.tagName.toUpperCase())) return false;
+  for (const { panel, root } of panels) if (panel.isOpen && root !== null && root.contains(focused)) return true;
+  return false;
 }
 
 /**
@@ -3583,6 +3595,13 @@ export function mountWorldPage(root: HTMLElement, q: WorldQuery, hash: string, o
     // A saved world left walking walks again (SP5b spec §3.4 step 5, D4): F's path once, the feet at the saved eye −
     // `EYE` with no snap, before the first frame step.
     if (restored !== null) restoreMode(restored, () => switchMode({ fly, walk, world, repeat: holdRepeat }));
+    // The panels whose focused controls keep their own keys (`worldIgnoresKeys`), by their roots' ids in the host.
+    const keyPanels: readonly KeyPanel<HTMLElement>[] = [
+      { panel: help, root: host.querySelector('#world-help') },
+      { panel: settingsPanel, root: host.querySelector('#settings-panel') },
+      { panel: palette, root: host.querySelector('#world-palette') },
+      { panel: placeDialog, root: host.querySelector('#place-dialog') },
+    ];
     const input = attachInput(canvas, {
       onAction,
       onLook: (dx, dy) => look(fly, dx, dy, settings.sensitivity * LOOK_DEG_PER_PIXEL),
@@ -3593,12 +3612,9 @@ export function mountWorldPage(root: HTMLElement, q: WorldQuery, hash: string, o
       // Walking, Ctrl+wheel steps the slot as the plain wheel does (SP5a spec §4.1, D9), so it never zooms the page and
       // never means two things while walking (kept when sprint left Ctrl for R and a double-tapped W, Task 45b).
       wheelCtrlAsSlot: () => fly.mode === 'walk',
-      // Text-entry controls (spec §7.1), and any focused control while a panel is open (SP5b spec §1.4): with no panel
-      // open a focused slider or select leaves H and F1 working (final review C-I2).
-      isTextFocus: () => worldIgnoresKeys(
-        document.activeElement as HTMLElement | null,
-        help.isOpen || settingsPanel.isOpen || palette.isOpen || placeDialog.isOpen,
-      ),
+      // Text-entry controls (spec §7.1), and any focused control inside an open panel (SP5b spec §1.4): a slider or a
+      // select left focused in a closed panel leaves H, G, M and F1 working (final review C-I2, Task 28 review I1).
+      isTextFocus: () => worldIgnoresKeys(document.activeElement as HTMLElement | null, keyPanels),
       // The world's keys act only while the world owns the controls (SP4c spec §2.3): never while the map owns.
       active: () => mapRef === null || mapRef.owner === 'world',
       doc: document,

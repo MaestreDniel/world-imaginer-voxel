@@ -1622,7 +1622,7 @@ describe('G and the Settings screen in the world (SP5b spec §1.4, D9; ruling P3
     const input = attachInput(canvas as unknown as HTMLElement, {
       onAction: (a) => actions.push(a),
       onLook: () => {},
-      isTextFocus: () => worldIgnoresKeys(dom.document.activeElement, panel.isOpen),
+      isTextFocus: () => worldIgnoresKeys(dom.document.activeElement, [{ panel, root: dom.el('settings-panel') }]),
       active: () => true,
       doc: dom.document as unknown as Pick<Document, 'addEventListener' | 'removeEventListener' | 'pointerLockElement'>,
       win: new EventTarget() as unknown as Pick<Window, 'addEventListener' | 'removeEventListener'>,
@@ -1663,20 +1663,117 @@ describe('G and the Settings screen in the world (SP5b spec §1.4, D9; ruling P3
     panel.dispose();
   });
 
-  test('`worldIgnoresKeys`: a text-entry control always; a select, a slider, a checkbox or a button only while a panel is open', () => {
-    for (const t of [{ tagName: 'INPUT', type: 'text' }, { tagName: 'TEXTAREA' }, { tagName: 'DIV', isContentEditable: true }]) {
-      expect(worldIgnoresKeys(t, false), JSON.stringify(t)).toBe(true);
-      expect(worldIgnoresKeys(t, true), JSON.stringify(t)).toBe(true);
+  test('a control left focused in a closed panel, hidden, is no open panel\'s: after the Settings screen or the palette closes, H opens and closes the help and G reaches the world (review I1)', () => {
+    // The page's panels and its H, G and E, as `worldPage.ts` wires them.
+    const panel = mountSettingsPanel(dom.body as unknown as HTMLElement, {
+      settings: SETTINGS_DEFAULTS, onSettings: () => {}, rdMax: 16, defaultRd: 12, onClose: () => {},
+    });
+    const help = mountHelp(dom.body as unknown as HTMLElement, {
+      map: DEFAULT_KEYMAP, report: REPORT, evaluation: evaluateWorldCapabilities(REPORT), rdMax: 16,
+      openMap: () => {}, openSettings: () => panel.open(), worldsMenu: () => {}, onFullscreen: () => {}, onClose: () => {},
+    });
+    const palette = mountPalette(dom.body as unknown as HTMLElement, { hotbar: createHotbar(null), requestLock: () => {}, onClose: () => {} });
+    const actions: string[] = [];
+    const canvas = dom.document.createElement('canvas');
+    const input = attachInput(canvas as unknown as HTMLElement, {
+      onAction: (a) => {
+        actions.push(a);
+        if (a === 'help') {
+          paletteFirst(palette, () => {
+            if (help.isOpen) help.close();
+            else {
+              panel.close();
+              help.open();
+            }
+          });
+        } else if (a === 'settings') {
+          settingsKey({ palette, help, dialog: { isOpen: false }, panel, releasePointer: () => {} });
+        } else if (a === 'palette' && !palette.isOpen) {
+          if (help.isOpen) help.close();
+          panel.close();
+          palette.open();
+        }
+      },
+      onLook: () => {},
+      isTextFocus: () => worldIgnoresKeys(dom.document.activeElement, [
+        { panel: help, root: dom.el('world-help') },
+        { panel, root: dom.el('settings-panel') },
+        { panel: palette, root: dom.el('world-palette') },
+      ]),
+      active: () => true,
+      doc: dom.document as unknown as Pick<Document, 'addEventListener' | 'removeEventListener' | 'pointerLockElement'>,
+      win: new EventTarget() as unknown as Pick<Window, 'addEventListener' | 'removeEventListener'>,
+    });
+    const press = (code: string, key: string): void => {
+      dom.document.dispatchEvent(keydown(code, key));
+    };
+    // G, the FOV slider focused, Esc: the screen closes and the slider keeps the focus, hidden.
+    press('KeyG', 'g');
+    expect(panel.isOpen).toBe(true);
+    dom.el('setting-fov').focus();
+    press('Escape', 'Escape');
+    expect(panel.isOpen).toBe(false);
+    expect(dom.document.activeElement).toBe(dom.el('setting-fov'));
+    // H opens the help, and H closes it again: the hidden slider is not the help's.
+    press('KeyH', 'h');
+    expect(help.isOpen).toBe(true);
+    press('KeyH', 'h');
+    expect(help.isOpen).toBe(false);
+    // E, a swatch clicked (a button takes the focus), E: the palette closes from the keyboard, the swatch focused.
+    press('KeyE', 'e');
+    expect(palette.isOpen).toBe(true);
+    dom.el('palette-slot-bricks').focus();
+    dom.el('palette-slot-bricks').click();
+    press('KeyE', 'e');
+    expect(palette.isOpen).toBe(false);
+    expect(dom.document.activeElement).toBe(dom.el('palette-slot-bricks'));
+    // H opens the help; with it open, G reaches the world (the help closes, the screen opens), then H again.
+    press('KeyH', 'h');
+    expect(help.isOpen).toBe(true);
+    press('KeyG', 'g');
+    expect(help.isOpen).toBe(false);
+    expect(panel.isOpen).toBe(true);
+    press('Escape', 'Escape');
+    press('KeyH', 'h');
+    expect(help.isOpen).toBe(true);
+    press('KeyH', 'h');
+    expect(help.isOpen).toBe(false);
+    expect(actions).toEqual(['settings', 'help', 'help', 'palette', 'help', 'settings', 'help', 'help']);
+    input.dispose();
+    help.close();
+    palette.dispose();
+    panel.dispose();
+  });
+
+  test('`worldIgnoresKeys`: a text-entry control always; a select, a slider, a checkbox or a button only inside a panel open now', () => {
+    type T = { tagName: string; type?: string; isContentEditable?: boolean };
+    const rootOf = (...inside: T[]) => ({ contains: (o: T | null) => o !== null && inside.includes(o) });
+    for (const t of [{ tagName: 'INPUT', type: 'text' }, { tagName: 'TEXTAREA' }, { tagName: 'DIV', isContentEditable: true }] as T[]) {
+      expect(worldIgnoresKeys(t, []), JSON.stringify(t)).toBe(true);
+      expect(worldIgnoresKeys(t, [{ panel: { isOpen: false }, root: rootOf(t) }]), JSON.stringify(t)).toBe(true);
     }
-    for (const t of [{ tagName: 'INPUT', type: 'range' }, { tagName: 'INPUT', type: 'checkbox' }, { tagName: 'SELECT' }, { tagName: 'BUTTON' }]) {
-      expect(worldIgnoresKeys(t, false), JSON.stringify(t)).toBe(false);
-      expect(worldIgnoresKeys(t, true), JSON.stringify(t)).toBe(true);
+    for (const t of [{ tagName: 'INPUT', type: 'range' }, { tagName: 'INPUT', type: 'checkbox' }, { tagName: 'SELECT' }, { tagName: 'BUTTON' }] as T[]) {
+      // No panel, or the control in a closed panel (hidden, still focused) while another panel is open: the world's.
+      expect(worldIgnoresKeys(t, []), JSON.stringify(t)).toBe(false);
+      expect(worldIgnoresKeys(t, [{ panel: { isOpen: false }, root: rootOf(t) }]), JSON.stringify(t)).toBe(false);
+      expect(worldIgnoresKeys(t, [
+        { panel: { isOpen: false }, root: rootOf(t) },
+        { panel: { isOpen: true }, root: rootOf() },
+      ]), JSON.stringify(t)).toBe(false);
+      // Inside a panel open now: its own keys.
+      expect(worldIgnoresKeys(t, [
+        { panel: { isOpen: true }, root: rootOf() },
+        { panel: { isOpen: true }, root: rootOf(t) },
+      ]), JSON.stringify(t)).toBe(true);
+      expect(worldIgnoresKeys(t, [{ panel: { isOpen: true }, root: null }]), JSON.stringify(t)).toBe(false);
     }
-    for (const t of [{ tagName: 'BODY' }, { tagName: 'CANVAS' }, null]) {
-      expect(worldIgnoresKeys(t, true), JSON.stringify(t)).toBe(false);
+    for (const t of [{ tagName: 'BODY' }, { tagName: 'CANVAS' }, null] as (T | null)[]) {
+      expect(worldIgnoresKeys(t, [{ panel: { isOpen: true }, root: rootOf(...(t === null ? [] : [t])) }]), JSON.stringify(t)).toBe(false);
     }
-    // The page's input: any panel counts (the Settings screen, the help, the palette, B's dialog).
-    expect(SRC()).toMatch(/isTextFocus: \(\) => worldIgnoresKeys\(\s+document\.activeElement as HTMLElement \| null,\s+help\.isOpen \|\| settingsPanel\.isOpen \|\| palette\.isOpen \|\| placeDialog\.isOpen,\s+\),/);
+    // The page's input: every panel counts (the help, the Settings screen, the palette, B's dialog), each by its
+    // root in the host.
+    expect(SRC()).toMatch(/isTextFocus: \(\) => worldIgnoresKeys\(document\.activeElement as HTMLElement \| null, keyPanels\),/);
+    expect(SRC()).toMatch(/const keyPanels: readonly KeyPanel<HTMLElement>\[\] = \[\s+\{ panel: help, root: host\.querySelector\('#world-help'\) \},\s+\{ panel: settingsPanel, root: host\.querySelector\('#settings-panel'\) \},\s+\{ panel: palette, root: host\.querySelector\('#world-palette'\) \},\s+\{ panel: placeDialog, root: host\.querySelector\('#place-dialog'\) \},\s+\];/);
   });
 
   test('G with the screen open closes it; with B\'s dialog open G does nothing; the page\'s G, the help\'s "Settings (G)" and the RD control go to the screen', () => {
