@@ -440,6 +440,29 @@ Measured by an agent on 2026-10-30 on 2a9aad0, against Task 17's measurement on 
 
 **Outcome:** `G1.enter` is met in both runs after lever 18f, so 18d and 18e are skipped. `G2.flush` is still missed in both runs after lever 18c, on `flushMainP95Ms` alone (0.540 and 0.600 ms against 0.3 ms). Under D28 the miss goes back to the user with every measurement, and the user's own check decides. No threshold is loosened.
 
+### The first SP5b CI run (Task 30)
+
+GitHub Actions run 41132868697 on `sp5b/saved-worlds` at 4fc62d1 (Task 30's review fixes on `test(metrics): E1-E7 and E5's flush part`), green, created 2026-10-30T21:41:16Z and completed 21:44:17Z: **wall 3 min 01 s**, within §7's expected ≈ 2.8-3.1 min and the 3 min 30 s exit criterion (SP5a's exit run 40821727832: 2 min 42 s). The critical path is `unit (rest)` (164 s, ending 21:44:12, then `ci-ok`), not metrics-quick `terrain`/`surface` as §7 expected (161 s and 151 s, both ending earlier). **The named lever was taken in Task 30's Steps 1-5, before this run** (319bf2b, ruling P45): `persist.metric.ts`'s prototype measured 57 s on quick against §7's 25-40 s, which would have taken `edit` past the 145 s long pole, so it runs in a metrics-quick shard of its own, `persist` (`.github/scripts/metricShards.mjs`, `test/unit/shards.test.ts`). With it, `edit` ran 107 s, well under 145 s, so Step 6's lever condition does not arise and no further commit or run follows. Job times (start → end) from `gh run view --json jobs`, each including its setup (checkout, `npm ci` and the shard check: about 9-14 s in the jobs read); "SP5a" stands for the exit run 40821727832's time where §7 plans no change (§7's own SP5a figures, `unit (rest)` 102 s, metrics-fast `rest` 71 s, metrics-quick `edit` 87 s and `rest` 106 s, are the first SP5a run's).
+
+| job | duration | §7 expectation | within |
+|---|---|---|---|
+| `changes` | 6 s | (not in §7) | — |
+| `check` | 121 s | ≈ 120-125 s | yes |
+| `unit (heavy)` | 67 s | 67 s (SP5a) | yes |
+| `unit (rest)` | 164 s | ≈ 115-120 s | no, +44 s (the critical path) |
+| metrics-fast `rest` | 116 s | ≈ 90 s (`persist.metric.ts` on fast: 71 s → ≈ 90 s) | no, +26 s; +24 s over SP5a's exit run (92 s), within §7's +15-25 s |
+| metrics-fast `surface` | 81 s | 79 s (SP5a) | yes |
+| metrics-fast `terrain` | 84 s | 53 s (SP5a) | no, +31 s |
+| metrics-quick `render` | 77 s | 48 s (SP5a) | no, +29 s |
+| metrics-quick `terrain` | 161 s | ≈ 145 s (the long pole) | no, +16 s |
+| metrics-quick `surface` | 151 s | ≈ 145 s (the long pole) | no, +6 s |
+| metrics-quick `edit` | 107 s | ≈ 115-125 s with `persist.metric.ts`; 110 s (SP5a) without it | yes (the file is in `persist`) |
+| metrics-quick `persist` (new) | 81 s | ≈ 25-40 s for the file; 57 s on the laptop (the prototype) | no, +41 s (its run step 65 s) |
+| metrics-quick `rest` | 127 s | 94 s (SP5a; §7: the file not in `rest`, so no change) | no, +33 s |
+| `ci-ok` | 3 s | (not in §7) | — |
+
+`unit (rest)` at about 164 s is the long pole, about 44-49 s above §7's ≈ 115-120 s: its vitest run took 149 s for 265 files and 4,657 tests, against SP5a's exit run's 80 s for 249 files and 4,163 tests (+16 files and +12 % tests, +87 % time), so SP5b's unit tests (§6.3) cost more than §7's +10-20 s. The jobs that run no SP5b file (metrics-fast `terrain`, metrics-quick `render`, `terrain` and `rest`) also ran 16-33 s longer than in SP5a's exit run, so part of every job's growth is the runners. The wall stays within 3 min 30 s; no shard is rebalanced in this commit (the job summary's slowest-files table, `slowest.mjs`, names the candidates in `unit (rest)` for `unit (heavy)`, which ran 67 s).
+
 ## Threshold log
 
 (One line per commit that changes `test/thresholds.lock.json`.)
