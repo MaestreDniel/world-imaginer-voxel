@@ -144,7 +144,7 @@ import { StoreFullError, WorkerFailed, createBrowserPool, poolSize, type WorkerP
 import { deleteIdb, openIdbKV } from '../../persist/idb';
 import type { KV } from '../../persist/kv';
 import {
-  createSaves, loadParams, newState, normalizeHistory, normalizeState, parseWorldRecord, remapOf, tableRelation, todayStateTable, type HistoryRecord,
+  MAX_PLACES, createSaves, loadParams, newState, normalizeHistory, normalizeState, parseWorldRecord, remapOf, tableRelation, todayStateTable, type HistoryRecord,
   type HotbarRecord, type Place, type Saves, type StateBounds, type StateRecord, type WorldRecord,
 } from '../../persist/saves';
 import { SPEED_DEFAULT, applyCameraRotation, look, lookVectorInto, stepSpeed, toggleMode, type FlyState } from '../../player/fly';
@@ -195,6 +195,8 @@ import { createFrameStep, eyeSkyLight } from './frameStep';
 import { createHoldRepeat, type HoldRepeat } from './holdRepeat';
 import { createMapOverlay, followSession, frameCapFor, worldMapView, type ControlsOwner, type MapOverlay } from './mapOverlay';
 import { createModifyMode, createModifySwitch, type ModifyMode } from './modifyMode';
+import { mountPlaceDialog, type PlaceDialog } from './placeDialog';
+import { PLACE_SAVED_MS, PLACE_SAVED_NOTICE, PLACES_FULL_MS, PLACES_FULL_NOTICE, createPlaces, proposedPlaceName, type Places } from './places';
 import { createReloader, createWorldUrl, installLeaveGuard, navigateTo, savedWorldUrl, type Reloader, type WorldUrl } from './reload';
 import { Y_MAX, Y_MIN, type WorldQuery } from './query';
 import { STATE_BOUNDS } from './stateBounds';
@@ -896,15 +898,21 @@ export function installUndoKeys(o: {
 /**
  * The overlays a failure or a context loss closes before the panel or the notice shows (SP4c spec §1.3, D27; final
  * review UI-2): the palette, closed without requesting the lock (its overlay, z-index 3, covers the notices, z-index 2),
- * then the map overlay, disposed with its tool. A palette whose close throws still lets the map close; the throw then
- * reaches the caller's `onError`.
+ * then B's place dialog, the same way and on the palette's layer (SP5b spec §3.7), then the map overlay, disposed with
+ * its tool. A palette whose close throws still lets the dialog and the map close; the throw then reaches the caller's
+ * `onError`.
  */
 export function closeOverlays(
   palette: Pick<Palette, 'isOpen' | 'close'> | null,
   map: Pick<MapOverlay, 'dispose'> | null,
+  placeDialog: Pick<PlaceDialog, 'isOpen' | 'close'> | null = null,
 ): void {
   try {
-    if (palette?.isOpen) palette.close();
+    try {
+      if (palette?.isOpen) palette.close();
+    } finally {
+      if (placeDialog?.isOpen) placeDialog.close();
+    }
   } finally {
     map?.dispose();
   }
@@ -1332,6 +1340,34 @@ export function mapKey(help: Pick<Help, 'isOpen' | 'close'>, map: Pick<MapOverla
 export function paletteFirst(palette: Pick<Palette, 'isOpen' | 'close'>, then: () => void): void {
   if (palette.isOpen) palette.close();
   then();
+}
+
+/**
+ * B (SP5b spec §3.7, D12), through `paletteFirst` as M and H: in a saved world (`places` non-null; an unsaved world
+ * stays SP5a's, D29), with neither the help nor the dialog open, the dialog opens with the camera's exact pose as the
+ * place and its position rounded down in the proposed name; its Save keeps the place and shows "Place saved" (1.5 s).
+ * With `MAX_PLACES` places, "A world holds at most 256 places" (4 s) and no dialog.
+ */
+export function savePlaceKey(o: {
+  readonly palette: Pick<Palette, 'isOpen' | 'close'>;
+  readonly help: Pick<Help, 'isOpen'>;
+  readonly dialog: Pick<PlaceDialog, 'isOpen' | 'open'>;
+  readonly places: Pick<Places, 'list' | 'add'> | null;
+  readonly camera: Pick<FlyState, 'x' | 'y' | 'z' | 'yaw' | 'pitch'>;
+  readonly notices: { show(text: string, ms: number): void };
+}): void {
+  paletteFirst(o.palette, () => {
+    const { places } = o;
+    if (places === null || o.help.isOpen || o.dialog.isOpen) return;
+    if (places.list.length >= MAX_PLACES) {
+      o.notices.show(PLACES_FULL_NOTICE, PLACES_FULL_MS);
+      return;
+    }
+    const { x, y, z, yaw, pitch } = o.camera;
+    o.dialog.open(proposedPlaceName(places.list.length, x, y, z), (name, colour) => {
+      if (places.add({ name, colour, x, y, z, yaw, pitch }) !== 'full') o.notices.show(PLACE_SAVED_NOTICE, PLACE_SAVED_MS);
+    });
+  });
 }
 
 /**
@@ -1913,7 +1949,7 @@ export function countAccepted(post: EditPath['post']): { post: EditPath['post'];
   };
 }
 
-/** A saved world's places until the page keeps them (SP5b spec §3.7). */
+/** A world with no places: the bench's (SP5b spec §6.2). */
 const NO_PLACES: readonly Place[] = [];
 
 /**
@@ -1944,7 +1980,8 @@ export interface PageAutosave extends Autosave {
  * A saved world's autosave as the page creates it after the reveal (SP5b spec §3.2, D5): `flush` the sim client's;
  * the state's parts (`createStateParts`) over the pose (`fly`), the clock (`frame.t`, which the frame step writes, and
  * the day speed's index; `storedTime` unchanged while a `?shot=1&time=` capture fixes the clock, which is then not
- * saved), the world's hotbar record (`hotbarStorage`'s), the places and the wall clock (`now`); the block history's
+ * saved), the world's hotbar record (`hotbarStorage`'s), the places (`Places.list`, a new list at every change, compared
+ * by identity; none when not given) and the wall clock (`now`); the block history's
  * version and its sides as a record (§3.4 step 6), one record object per step for as long as the step lives, so the
  * sim client posts only what changed since the last history (D28's third lever); `settled` the edit path's;
  * `editsSince` the accepted replies (`countAccepted`); `onResult` every `flushed`; `onBuild`, when given, as each
@@ -1960,6 +1997,8 @@ export function createPageAutosave(o: {
   readonly storedTime: { readonly t: number; readonly speedIndex: number } | null;
   /** The world's hotbar record, `{ v: 1, active, slots }` (the `get` of the hotbar's `hotbarStorage`). */
   hotbar(): HotbarRecord;
+  /** The world's places (SP5b spec §3.7); the bench has none. */
+  places?(): readonly Place[];
   readonly blockHistory: Pick<BlockHistory, 'snapshot' | 'version'>;
   readonly sim: Pick<SimClient, 'flush'>;
   settled(): Promise<void>;
@@ -1984,7 +2023,7 @@ export function createPageAutosave(o: {
     t: () => (storedTime !== null ? storedTime.t : o.frame.t),
     speedIndex: () => (storedTime !== null ? storedTime.speedIndex : o.speedIndex()),
     hotbar: () => o.hotbar(),
-    places: () => NO_PLACES,
+    places: () => o.places?.() ?? NO_PLACES,
     now: () => o.now(),
   });
   const history = (): HistoryRecord => {
@@ -3039,10 +3078,11 @@ export function mountWorldPage(root: HTMLElement, q: WorldQuery, hash: string, o
     sections.onColumnRevealed = (cx, cz) => editLatency.revealed(cx, cz, performance.now());
     teardown.push(() => { sections.onColumnRevealed = null; });
     // The map overlay and the preview driver (SP4c spec §1.3, §4.2), created below; a failure or a context loss
-    // disposes the overlay (and its tool) before the panel or the notice shows (D27), and closes the palette, mounted
-    // below, which would cover them (final review UI-2).
+    // disposes the overlay (and its tool) before the panel or the notice shows (D27), and closes the palette and B's
+    // place dialog, mounted below, which would cover them (final review UI-2; SP5b spec §3.7).
     let mapRef: MapOverlay | null = null;
     let paletteRef: Palette | null = null;
+    let placeDialogRef: PlaceDialog | null = null;
     let driver: PreviewDriver | null = null;
     // The teleport, created below; a failure after the reveal disposes it before the pool is terminated (ruling R5).
     let teleport: Teleport | null = null;
@@ -3089,7 +3129,7 @@ export function mountWorldPage(root: HTMLElement, q: WorldQuery, hash: string, o
       const saving = autosave;
       stopAfterFailure({
         stop,
-        closeMap: () => closeOverlays(paletteRef, mapRef),
+        closeMap: () => closeOverlays(paletteRef, mapRef, placeDialogRef),
         save: saving === null ? undefined : () => lastFlush(saving, simClient!, window),
         show: () => notices.failed(cause, shown, here(reloadRd(q.rd, liveRd))),
         // The HUD's timer would read the disposed renderer and coordinator; then what releaseOnFailure frees, each
@@ -3119,7 +3159,7 @@ export function mountWorldPage(root: HTMLElement, q: WorldQuery, hash: string, o
     });
     handleContextLoss(world, {
       stop,
-      closeMap: () => closeOverlays(paletteRef, mapRef),
+      closeMap: () => closeOverlays(paletteRef, mapRef, placeDialogRef),
       onError: (e) => console.error('The world page\'s context loss:', e),
       notices,
       // Without a query rd the setting applies (it holds every live change); a query's rd is replaced by the RD in
@@ -3296,22 +3336,25 @@ export function mountWorldPage(root: HTMLElement, q: WorldQuery, hash: string, o
     });
     // Closing removes the help's Esc listener from the document.
     teardown.push(() => help.close());
+    const requestLock = (): void => {
+      try {
+        // Chromium returns a promise that rejects when the lock is refused; others return nothing.
+        const r: unknown = canvas.requestPointerLock();
+        if (r instanceof Promise) r.catch(() => {});
+      } catch {
+        // A refused lock leaves the pointer free; a click on the canvas takes it.
+      }
+    };
     // The creative palette (SP5a spec §4.4, D10): E opens it; its own E requests the lock back, a click around its panel too.
-    const palette: Palette = mountPalette(host, {
-      hotbar,
-      requestLock: () => {
-        try {
-          // Chromium returns a promise that rejects when the lock is refused; others return nothing.
-          const r: unknown = canvas.requestPointerLock();
-          if (r instanceof Promise) r.catch(() => {});
-        } catch {
-          // A refused lock leaves the pointer free; a click on the canvas takes it.
-        }
-      },
-      onClose: () => {},
-    });
+    const palette: Palette = mountPalette(host, { hotbar, requestLock, onClose: () => {} });
     paletteRef = palette;
     teardown.push(() => palette.dispose());
+    // Saved places (SP5b spec §3.7, D12): a saved world's, from its `state` record, kept by the autosave (below); B's
+    // dialog, whose Save and Esc request the lock back. An unsaved world has none (D29).
+    const places = saved !== null ? createPlaces(saved.state.places, () => crypto.randomUUID()) : null;
+    const placeDialog = mountPlaceDialog(host, { requestLock, onClose: () => {} });
+    placeDialogRef = placeDialog;
+    teardown.push(() => placeDialog.dispose());
     rdControl = createRdControl({
       coordinator,
       world,
@@ -3356,6 +3399,14 @@ export function mountWorldPage(root: HTMLElement, q: WorldQuery, hash: string, o
           break;
         // M opens or closes the map overlay (SP4c spec §2.4); it acts whoever owns the controls.
         case 'map': paletteFirst(palette, () => mapKey(help, mapRef)); break;
+        // B saves a place, through the palette's close; never over the help or its own dialog (SP5b spec §3.7, D12).
+        case 'savePlace':
+          savePlaceKey({
+            palette, help, dialog: placeDialog, places, camera: fly, notices: { show: (text, ms) => notices.show(text, { timeoutMs: ms }) },
+          });
+          break;
+        // G does nothing until the Settings screen exists (SP5b spec §1.4).
+        case 'settings': break;
         // E opens the palette, never over the help; while it is open its own E listener closes it (SP5a spec §4.4).
         case 'palette':
           if (!palette.isOpen) {
@@ -3531,6 +3582,7 @@ export function mountWorldPage(root: HTMLElement, q: WorldQuery, hash: string, o
     // no per-frame hook (SP4b D25).
     if (saved !== null) {
       const opened = saved;
+      const worldPlaces = places!;
       const a = createPageAutosave({
         worldId: opened.state.worldId,
         fly,
@@ -3540,6 +3592,7 @@ export function mountWorldPage(root: HTMLElement, q: WorldQuery, hash: string, o
         hotbar: () => worldHotbar,
         blockHistory,
         sim: simClient!,
+        places: () => worldPlaces.list,
         settled: editPath.settled,
         editsSince: accepted.count,
         now: () => Date.now(),
@@ -3569,6 +3622,8 @@ export function mountWorldPage(root: HTMLElement, q: WorldQuery, hash: string, o
       teardown.push(worldLock!.onRelease(() => a.dispose()));
       // An older generator's open: D8's notice, and its `record` saved by the first tick (ruling P27).
       revealOlderGenerator(generator!, { notices, autosave: a });
+      // A place added, edited or removed is saved by the next tick (its list is new at each change, rulings R9).
+      teardown.push(worldPlaces.subscribe(() => a.markChanged()));
     }
 
     // The streaming frame (SP4b spec §7.2): the slow-frame notice and the throttle get every raw rAF delta before the
@@ -3584,8 +3639,9 @@ export function mountWorldPage(root: HTMLElement, q: WorldQuery, hash: string, o
       fly,
       walk,
       held: () => input.held,
-      // The flight pauses while the help or the palette is open or the map owns the controls (SP4c spec §2.3; SP5a §4.4).
-      paused: () => help.isOpen || palette.isOpen || mapOverlay.owner === 'map',
+      // The flight pauses while the help, the palette or B's dialog is open or the map owns the controls (SP4c spec §2.3;
+      // SP5a §4.4; SP5b §3.7).
+      paused: () => help.isOpen || palette.isOpen || placeDialog.isOpen || mapOverlay.owner === 'map',
       stopped: () => stopped,
       clock,
       coordinator,

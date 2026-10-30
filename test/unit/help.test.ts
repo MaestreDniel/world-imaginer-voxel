@@ -53,6 +53,11 @@ describe('mountHelp (SP4a spec §7.4, D31)', () => {
       for (const b of entry.bindings) expect(row!.textContent, entry.action).toContain(bindingLabel(b));
     }
     expect(rows.length).toBe(DEFAULT_KEYMAP.length);
+    // SP5b's B in World and G in View (SP5b spec §3.7); H is the help.
+    const cells = (action: string) => rows.find((r) => r.dataset.action === action)!.querySelectorAll('td').map((td) => td.textContent);
+    expect(cells('savePlace')).toEqual(['Save this place', 'B']);
+    expect(cells('settings')).toEqual(['Settings', 'G']);
+    expect(cells('help')).toEqual(['Help', 'H / F1']);
     // Grouped: one heading per group, in the map's order.
     expect(dom.el('help-keys').querySelectorAll('h4').map((h) => h.textContent)).toEqual(['Move', 'Speed', 'World', 'View', 'Build']);
   });

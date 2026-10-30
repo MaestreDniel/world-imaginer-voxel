@@ -246,7 +246,7 @@ describe('input (SP4a spec §7.1, master §4.17)', () => {
 
   test('an unbound key is not prevented', () => {
     const { doc, actions, input } = setup();
-    for (const [code, k, ctrl] of [['KeyG', 'g', true], ['KeyG', 'g', false], ['KeyQ', 'q', false], ['Tab', 'Tab', false]] as const) {
+    for (const [code, k, ctrl] of [['KeyJ', 'j', true], ['KeyJ', 'j', false], ['KeyQ', 'q', false], ['Tab', 'Tab', false]] as const) {
       const e = key('keydown', code, k, { ctrlKey: ctrl });
       doc.dispatchEvent(e);
       expect(e.defaultPrevented, `${ctrl ? 'Ctrl+' : ''}${k}`).toBe(false);

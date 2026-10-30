@@ -38,6 +38,8 @@ import { createEditPath, type EditOutcome } from '../../src/ui/world/editPath';
 import { createActionPost, createBlockHistory, type BlockStep } from '../../src/ui/world/blockHistory';
 import { createHoldRepeat } from '../../src/ui/world/holdRepeat';
 import { mountPalette } from '../../src/ui/palette';
+import { PLACE_SAVED_NOTICE, PLACES_FULL_NOTICE, createPlaces } from '../../src/ui/world/places';
+import { mountPlaceDialog } from '../../src/ui/world/placeDialog';
 import { NO_ENTRY } from '../../src/sim/diffStore';
 import type { Edit, FlushedMsg } from '../../src/workers/protocol';
 import { hex64 } from '../../src/core/hash';
@@ -47,12 +49,12 @@ import { GENERATOR_VERSION } from '../../src/core/constants';
 import type { KV } from '../../src/persist/kv';
 import { createMemoryKV, type MemoryKV } from '../../src/persist/memory';
 import {
-  createSaves, loadParams, newState, NO_VALUE, parseWorldRecord, todayStateTable, type HistoryRecord, type HotbarRecord, type StateRecord, type WorldRecord,
+  createSaves, loadParams, newState, NO_VALUE, parseWorldRecord, todayStateTable, type HistoryRecord, type HotbarRecord, type Place, type StateRecord, type WorldRecord,
 } from '../../src/persist/saves';
 import {
   EDIT_FAILED_NOTICE, HISTORY_RESET_NOTICE, SAVED_EDIT_FAILED_NOTICE, STATE_RESET_NOTICE, countAccepted, createPageAutosave, hotbarStorage, lastFlush, leaveAfterSave,
   installWorldLock, lowerRdHref, OLDER_GENERATOR_NOTICE, OLDER_GENERATOR_NOTICE_MS, olderGeneratorRecord, openOlderGenerator, openRequest, openSavedWorld,
-  readSavedWorld, refuseOpen, restoreMode, restoredStart, revealOlderGenerator, savedWorldUrlRules, timeOfHours,
+  readSavedWorld, refuseOpen, restoreMode, restoredStart, revealOlderGenerator, savePlaceKey, savedWorldUrlRules, timeOfHours,
   UNSAVED_NOTICE, unsavedNoticeOf, type WorldPageOptions,
 } from '../../src/ui/world/worldPage';
 import { noticeOfQuery, REFUSAL_REASON_KEY, type OpenRefusal, type StorageLike } from '../../src/ui/worldsMenu';
@@ -418,12 +420,36 @@ describe('the map overlay on a fatal error or a context loss (SP4c spec §1.3, �
     expect(() => closeOverlays({ isOpen: false, close: () => { throw new Error('closed twice'); } }, null)).not.toThrow();
   });
 
-  test('both of the streaming route\'s paths close the palette and the map through closeOverlays', () => {
+  test('both of the streaming route\'s paths close the palette, B\'s dialog and the map through closeOverlays', () => {
     const src = readFileSync(new URL('../../src/ui/world/worldPage.ts', import.meta.url), 'utf8');
-    expect(src.match(/^\s*closeMap: \(\) => closeOverlays\(paletteRef, mapRef\),$/gm)).toHaveLength(2);
+    expect(src.match(/^\s*closeMap: \(\) => closeOverlays\(paletteRef, mapRef, placeDialogRef\),$/gm)).toHaveLength(2);
     expect(src).not.toMatch(/closeMap: \(\) => mapRef\?\.dispose\(\)/);
     expect(src).toMatch(/^\s*let paletteRef: Palette \| null = null;$/m);
     expect(src).toMatch(/^\s*paletteRef = palette;$/m);
+    expect(src).toMatch(/^\s*let placeDialogRef: PlaceDialog \| null = null;$/m);
+    expect(src).toMatch(/^\s*placeDialogRef = placeDialog;$/m);
+  });
+
+  test('B\'s open dialog closes with the palette, without requesting the lock, and before the map (SP5b spec §3.7, D12)', () => {
+    const order: string[] = [];
+    const requestLock = vi.fn();
+    const dialog = mountPlaceDialog(dom.body as unknown as HTMLElement, { requestLock, onClose: () => { order.push('dialog.close'); } });
+    const save = vi.fn();
+    dialog.open('Place 1 (0, 70, 0)', save);
+    const overlay = openOverlay(order);
+    closeOverlays({ isOpen: true, close: () => { order.push('palette.close'); } }, overlay, dialog);
+    expect(order).toEqual(['palette.close', 'dialog.close', 'overlay.dispose (panel shown: false)']);
+    expect(dialog.isOpen).toBe(false);
+    expect(requestLock).not.toHaveBeenCalled();
+    expect(save).not.toHaveBeenCalled();
+    // A palette whose close throws still closes the dialog and the map; a closed dialog is left alone.
+    const second = openOverlay(order);
+    dialog.open('Place 1 (0, 70, 0)', save);
+    expect(() => closeOverlays({ isOpen: true, close: () => { throw new Error('no host'); } }, second, dialog)).toThrow('no host');
+    expect(dialog.isOpen).toBe(false);
+    expect(second.dispose).toHaveBeenCalledTimes(1);
+    expect(() => closeOverlays(null, null, dialog)).not.toThrow();
+    dialog.dispose();
   });
 });
 
@@ -1029,7 +1055,7 @@ describe('the world\'s URL (createWorldUrl, SP4c spec §1.6, D20)', () => {
     const start = src.indexOf('\n    failAfterReveal = (cause, shown) => {');
     expect(start).toBeGreaterThan(-1);
     const block = src.slice(start, src.indexOf('\n    };', start + 1));
-    expect(block).toMatch(/closeMap: \(\) => closeOverlays\(paletteRef, mapRef\)/);
+    expect(block).toMatch(/closeMap: \(\) => closeOverlays\(paletteRef, mapRef, placeDialogRef\)/);
     const release = block.slice(block.indexOf('release: ['));
     expect(release).toMatch(/^\s*\(\) => teleport\?\.dispose\(\),$/m);
     expect(release.indexOf('teleport?.dispose()')).toBeLessThan(release.indexOf('pool?.terminate()'));
@@ -1378,7 +1404,152 @@ describe('paletteFirst: M and H with the palette open (SP5a spec §4.4, D10)', (
     expect(src).toMatch(/case 'map': paletteFirst\(palette, \(\) => mapKey\(help, mapRef\)\); break;/);
     expect(src).toMatch(/case 'help':\s+paletteFirst\(palette, \(\) => \{/);
     expect(src).toMatch(/case 'palette':\s+if \(!palette\.isOpen\) \{\s+if \(help\.isOpen\) help\.close\(\);\s+palette\.open\(\);/);
-    expect(src).toMatch(/paused: \(\) => help\.isOpen \|\| palette\.isOpen \|\| mapOverlay\.owner === 'map',/);
+    expect(src).toMatch(/paused: \(\) => help\.isOpen \|\| palette\.isOpen \|\| placeDialog\.isOpen \|\| mapOverlay\.owner === 'map',/);
+  });
+});
+
+describe('B saves a place in a saved world (SP5b spec §3.7, D12; rulings P33, R9)', () => {
+  let dom: ReturnType<typeof installDom>;
+  beforeEach(() => { dom = installDom(); });
+  afterEach(() => { vi.unstubAllGlobals(); });
+
+  const camera = { x: 312.7, y: 88.2, z: -1540.1, yaw: 35, pitch: -12 };
+  /** `n` places at (i, 70, 0). */
+  const placesOf = (n: number): Place[] => Array.from({ length: n }, (_, i) => ({ id: `q${i}`, name: `Q${i}`, colour: 0, x: i, y: 70, z: 0, yaw: 0, pitch: 0 }));
+
+  /** B as the page wires it: the palette and the help as fakes, the real dialog, the places model and the notices' log. */
+  function setup(o: { paletteOpen?: boolean; helpOpen?: boolean; initial?: Place[]; saved?: boolean } = {}) {
+    const log: string[] = [];
+    const palette = { isOpen: o.paletteOpen ?? false, close: () => { palette.isOpen = false; log.push('palette.close'); } };
+    const help = { isOpen: o.helpOpen ?? false };
+    const requestLock = vi.fn();
+    const dialog = mountPlaceDialog(dom.body as unknown as HTMLElement, { requestLock, onClose: () => {} });
+    let n = 0;
+    const places = createPlaces(o.initial ?? [], () => `p${++n}`);
+    const shown: Array<[string, number]> = [];
+    const press = (): void => savePlaceKey({
+      palette, help, dialog, places: o.saved === false ? null : places, camera, notices: { show: (text, ms) => { shown.push([text, ms]); } },
+    });
+    return { log, palette, help, dialog, places, shown, press, requestLock };
+  }
+  const enter = (): void => { dom.document.dispatchEvent(Object.assign(new Event('keydown', { cancelable: true }), { code: 'Enter', key: 'Enter', repeat: false })); };
+
+  test('B with the palette open closes it and opens the dialog; with the help open B does nothing; with nothing open it opens the dialog and pauses the world', () => {
+    // The palette open: it closes first (without requesting the lock), then the dialog opens.
+    const s = setup({ paletteOpen: true });
+    s.press();
+    expect(s.log).toEqual(['palette.close']);
+    expect(s.palette.isOpen).toBe(false);
+    expect(s.dialog.isOpen).toBe(true);
+    s.dialog.dispose();
+    // The help open: nothing, the help stays.
+    const h = setup({ helpOpen: true });
+    h.press();
+    expect(h.dialog.isOpen).toBe(false);
+    expect(h.help.isOpen).toBe(true);
+    expect(h.shown).toEqual([]);
+    h.dialog.dispose();
+    // Nothing open: the dialog, the mouse released, with the camera's position rounded down as the proposal.
+    const p = setup();
+    const canvas = dom.document.createElement('canvas');
+    dom.document.setPointerLock(canvas);
+    p.press();
+    expect(p.dialog.isOpen).toBe(true);
+    expect(dom.document.pointerLockElement).toBe(null);
+    expect(dom.el('place-name').value).toBe('Place 1 (312, 88, -1541)');
+    // The frame step's `paused` includes the dialog (pinned below): the world pauses behind it.
+    const src = readFileSync(new URL('../../src/ui/world/worldPage.ts', import.meta.url), 'utf8');
+    expect(src).toMatch(/paused: \(\) => help\.isOpen \|\| palette\.isOpen \|\| placeDialog\.isOpen \|\| mapOverlay\.owner === 'map',/);
+    // B again while it is open does nothing (the proposal stays as typed).
+    dom.el('place-name').value = 'Lookout';
+    p.press();
+    expect(dom.el('place-name').value).toBe('Lookout');
+    // Enter keeps the camera's exact position and look, red, and shows "Place saved" for 1.5 s.
+    enter();
+    expect(p.dialog.isOpen).toBe(false);
+    expect(p.places.list).toEqual([{ id: 'p1', name: 'Lookout', colour: 0, x: 312.7, y: 88.2, z: -1540.1, yaw: 35, pitch: -12 }]);
+    expect(p.shown).toEqual([[PLACE_SAVED_NOTICE, 1500]]);
+    expect(PLACE_SAVED_NOTICE).toBe('Place saved');
+    expect(p.requestLock).toHaveBeenCalledTimes(1);
+    p.dialog.dispose();
+    // An unsaved world keeps SP5a's world (D29): B does nothing.
+    const u = setup({ saved: false });
+    u.press();
+    expect(u.dialog.isOpen).toBe(false);
+    expect(u.shown).toEqual([]);
+    u.dialog.dispose();
+  });
+
+  test('B with 256 places shows `A world holds at most 256 places` and no dialog', () => {
+    const s = setup({ initial: placesOf(256) });
+    s.press();
+    expect(s.dialog.isOpen).toBe(false);
+    expect(s.shown).toEqual([['A world holds at most 256 places', 4000]]);
+    expect(s.shown[0]![0]).toBe(PLACES_FULL_NOTICE);
+    expect(s.places.list).toHaveLength(256);
+    s.dialog.dispose();
+    // 255: the dialog opens, and the 256th is kept.
+    const t = setup({ initial: placesOf(255) });
+    t.press();
+    expect(t.dialog.isOpen).toBe(true);
+    enter();
+    expect(t.places.list).toHaveLength(256);
+    expect(t.places.list[255]!.name).toBe('Place 256 (312, 88, -1541)');
+    t.dialog.dispose();
+  });
+
+  test('a place added is in the next post\'s state', async () => {
+    const posted: StateRecord[] = [];
+    let n = 0;
+    const places = createPlaces(placesOf(1), () => `p${++n}`);
+    const hotbarRecord = STATE_BOUNDS.normalizeHotbar(null);
+    const autosave = createPageAutosave({
+      worldId: 'w1', fly: { x: 1, y: 80, z: 2, yaw: 0, pitch: 0, mode: 'fly', speed: SPEED_DEFAULT }, frame: { t: 0.25 }, speedIndex: () => 0,
+      storedTime: null, hotbar: () => hotbarRecord,
+      blockHistory: { snapshot: () => ({ done: [], undone: [] }), version: 0 },
+      places: () => places.list,
+      sim: {
+        flush(state) {
+          posted.push(state);
+          return Promise.resolve({ type: 'flushed', id: posted.length, ok: true, flushSeq: posted.length, columns: 0, bytes: 0, syncMs: 0, commitMs: 0 });
+        },
+      },
+      settled: () => Promise.resolve(), editsSince: () => 0, now: () => 1_700_000_000_000,
+      clock: {
+        now: () => 0,
+        setInterval: () => 0,
+        clearInterval: () => {},
+        setTimeout: (f, ms) => setTimeout(f, ms) as unknown as number,
+        clearTimeout: (id) => clearTimeout(id),
+      },
+      events: { on: () => () => {}, hidden: () => false }, onResult() {},
+    });
+    // The page's wiring: every change of the places marks the autosave changed.
+    const off = places.subscribe(() => autosave.markChanged());
+    await autosave.flushNow();
+    expect(posted.at(-1)!.places).toEqual(placesOf(1));
+    // Nothing changed: the tick posts nothing.
+    await autosave.tick();
+    expect(posted).toHaveLength(1);
+    const added = places.add({ name: 'Camp', colour: 3, x: 10.5, y: 72, z: -4.25, yaw: 90, pitch: 5 });
+    await autosave.tick();
+    expect(posted).toHaveLength(2);
+    expect(posted[1]!.places).toEqual([...placesOf(1), added]);
+    // An edit and a removal are posted the same way.
+    places.edit('q0', 'Home', 1);
+    await autosave.tick();
+    expect(posted[2]!.places.map((p) => [p.name, p.colour])).toEqual([['Home', 1], ['Camp', 3]]);
+    places.remove('q0');
+    await autosave.tick();
+    expect(posted[3]!.places).toEqual([added]);
+    off();
+    autosave.dispose();
+    // The page wires it so: the model from the opened state, its changes marking the autosave.
+    const src = readFileSync(new URL('../../src/ui/world/worldPage.ts', import.meta.url), 'utf8');
+    expect(src).toMatch(/const places = saved !== null \? createPlaces\(saved\.state\.places, \(\) => crypto\.randomUUID\(\)\) : null;/);
+    expect(src).toMatch(/places: \(\) => worldPlaces\.list,/);
+    expect(src).toMatch(/teardown\.push\(worldPlaces\.subscribe\(\(\) => a\.markChanged\(\)\)\);/);
+    expect(src).toMatch(/case 'savePlace':\s+savePlaceKey\(\{/);
   });
 });
 

@@ -178,6 +178,16 @@ export class FakeElement extends EventTarget {
     if (this.ownerDocument !== null) this.ownerDocument.activeElement = this;
   }
 
+  /** A text field's selected range, as `select()` leaves it (SP5b: B's name field, selected so typing replaces it). */
+  selectionStart = 0;
+  selectionEnd = 0;
+
+  /** Selects the whole value, as a text field's `select()` does. */
+  select(): void {
+    this.selectionStart = 0;
+    this.selectionEnd = this.value.length;
+  }
+
   /** Whether `other` is this element or one of its descendants, as the DOM's `contains`. */
   contains(other: FakeElement | null): boolean {
     for (let e = other; e !== null && e !== undefined; e = e.parentElement) if (e === this) return true;

@@ -10,8 +10,11 @@ describe('loading-screen tips (SP4a spec §8.3, §7.3; ruling P45)', () => {
     const named = new Set(TIP_TEMPLATES.flatMap(placeholders));
     const missing = DEFAULT_KEYMAP.map((e) => e.action).filter((a) => !named.has(a));
     expect(missing).toEqual([]);
-    expect(DEFAULT_KEYMAP.length).toBe(27);
+    expect(DEFAULT_KEYMAP.length).toBe(29);
     expect(named.has('map')).toBe(true);
+    // SP5b's B and G (SP5b spec §3.7).
+    expect(named.has('savePlace')).toBe(true);
+    expect(named.has('settings')).toBe(true);
     // SP5a's build group (SP5a spec §4.1, §4.6): F, E, 1-9 and the wheel.
     for (const a of ['toggleWalk', 'palette', 'slot1', 'slot5', 'slot9', 'slotNext', 'slotPrev']) expect(named.has(a), a).toBe(true);
   });
@@ -62,12 +65,20 @@ describe('loading-screen tips (SP4a spec §8.3, §7.3; ruling P45)', () => {
 
   test('the flight and streaming tips are present, and no tip speaks of an edge (SP4b spec §6.1, §6.2)', () => {
     expect(TIP_TEMPLATES).toContain('{forward} {back} fly forward and back at your height, {left} {right} strafe; {up} and {down} rise and descend.');
-    expect(TIP_TEMPLATES).toContain('The world loads around you as you fly; change the render distance in Help ({help}) → Settings.');
+    expect(TIP_TEMPLATES).toContain('The world loads around you as you fly; change the render distance in Settings ({settings}).');
     const text = tips(DEFAULT_KEYMAP).join('\n');
     expect(text).toContain('W S fly forward and back at your height, A D strafe; Space and Left Shift / Right Shift rise and descend.');
-    expect(text).toContain('The world loads around you as you fly; change the render distance in Help (H / F1) → Settings.');
+    expect(text).toContain('The world loads around you as you fly; change the render distance in Settings (G).');
     expect(text).not.toMatch(/edge/i);
     expect(TIP_TEMPLATES.join('\n')).not.toContain('loadHere');
+  });
+
+  test('B saves a place in a saved world, and G opens the Settings (SP5b spec §3.7, D12)', () => {
+    const text = tips(DEFAULT_KEYMAP).join('\n');
+    expect(TIP_TEMPLATES).toContain('In a saved world, {savePlace} saves this place with a name and a colour.');
+    expect(text).toContain('In a saved world, B saves this place with a name and a colour.');
+    expect(text).toContain('Settings (G)');
+    expect(text).not.toContain('Help (H / F1) → Settings');
   });
 
   test('a template naming an action the map lacks is left out', () => {

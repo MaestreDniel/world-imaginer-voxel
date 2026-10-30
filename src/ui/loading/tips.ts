@@ -10,7 +10,8 @@ import { bindingLabel, type KeyEntry } from '../../player/keymap';
  * time speed, help and HUD, the world loading around you (SP4b spec §6.2, in place of SP4a's R at the edge), the map
  * over the world (SP4c spec §2.4: M, teleport and live editing), the standalone `?map` and its "Open in 3D", the presets
  * on the map, click to look and Esc to free the mouse; then SP5a's build keys (SP5a spec §4.1, §4.6): F, E, 1-9 and the
- * wheel, the flying speed having moved to Ctrl+wheel.
+ * wheel, the flying speed having moved to Ctrl+wheel; then SP5b's B, which saves a place (SP5b spec §3.7). The render
+ * distance's tip names G, the Settings screen, since SP5b.
  */
 export const TIP_TEMPLATES: readonly string[] = [
   '{forward} {back} fly forward and back at your height, {left} {right} strafe; {up} and {down} rise and descend.',
@@ -18,13 +19,14 @@ export const TIP_TEMPLATES: readonly string[] = [
   'Change your flying speed with {speedUp} and {speedDown} while flying; the HUD shows it.',
   '{timeSpeed} changes the speed of time: ×1, ×10, ×60, then paused.',
   '{help} opens the help, with every key and the settings; {hud} shows or hides the counts.',
-  'The world loads around you as you fly; change the render distance in Help ({help}) → Settings.',
+  'The world loads around you as you fly; change the render distance in Settings ({settings}).',
   '{map} opens the map over the world: click to go there, edit the world live.',
   'The map also opens on its own page (?map); its "Open in 3D" flies you into the world you shaped there.',
   'The map\'s presets open other worlds: large biomes, an archipelago, amplified mountains, floating islands.',
   'Click the world to look around with the mouse; {releasePointer} frees the mouse.',
   '{toggleWalk} switches between flying and walking.',
   'Pick a hotbar slot with {slot1} {slot2} {slot3} {slot4} {slot5} {slot6} {slot7} {slot8} {slot9} or the wheel ({slotPrev}, {slotNext}); {palette} opens the block palette.',
+  'In a saved world, {savePlace} saves this place with a name and a colour.',
 ];
 
 /** A binding list as the help shows it ("Ctrl+Wheel up / + / ="). */

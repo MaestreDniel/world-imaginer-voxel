@@ -1382,7 +1382,7 @@ Target: edit → visible ≤ 50 ms p95, measured in the HUD (SP5a: gated from th
 
 ### 5.9 Controls
 
-WASD; Space (up/jump); Shift (down/sneak); R or double-tap W (sprint; SP5a, Ctrl+W closes the tab); F (walk/fly); M (map: SP4c's overlay, full screen or side by side); L (slice); I (inspector); P (params); G (graphics); E (creative palette); F3 (debug); H/F1 (help); 1-9 and wheel (hotbar), Ctrl+wheel and `+`/`-` (fly speed); LMB / RMB / MMB (break / place / pick); Ctrl+Z / Ctrl+Y (blocks while the world owns the controls, the map's settings while the map does; SP5a); Esc (release pointer); T (time speed, SP4a). Audio volumes and music frequency live in Settings.
+WASD; Space (up/jump); Shift (down/sneak); R or double-tap W (sprint; SP5a, Ctrl+W closes the tab); F (walk/fly); M (map: SP4c's overlay, full screen or side by side); L (slice); I (inspector); P (params); G (settings; SP5b); B (save a place; SP5b); E (creative palette); F3 (debug); H/F1 (help); 1-9 and wheel (hotbar), Ctrl+wheel and `+`/`-` (fly speed); LMB / RMB / MMB (break / place / pick); Ctrl+Z / Ctrl+Y (blocks while the world owns the controls, the map's settings while the map does; SP5a); Esc (release pointer); T (time speed, SP4a). Audio volumes and music frequency live in Settings.
 
 ## 6. Testing
 

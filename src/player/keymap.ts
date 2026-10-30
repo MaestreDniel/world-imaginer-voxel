@@ -13,6 +13,7 @@ export type Action =
   | 'forward' | 'back' | 'left' | 'right' | 'up' | 'down' | 'sprint' | 'speedUp' | 'speedDown'
   | 'timeSpeed' | 'help' | 'hud' | 'releasePointer' | 'map'
   | 'toggleWalk' | 'palette'
+  | 'savePlace' | 'settings'
   | 'slot1' | 'slot2' | 'slot3' | 'slot4' | 'slot5' | 'slot6' | 'slot7' | 'slot8' | 'slot9' | 'slotNext' | 'slotPrev';
 
 /** A wheel binding names its Ctrl modifier: Ctrl+wheel and the plain wheel are two bindings (SP5a spec §4.1, D9). */
@@ -41,6 +42,8 @@ const wheel = (dir: 'up' | 'down', ctrl: boolean): Binding => ({ kind: 'wheel', 
  * wheel, which took the wheel from the flying speed, now on Ctrl+wheel. While walking the page ignores `+`/`-` and
  * resolves Ctrl+wheel as the plain wheel (input.ts `wheelCtrlAsSlot`). Sprint is R since Task 45b (Ctrl+W closes the
  * tab, the user's finding at SP5a's production check); its double-tapped W is the input's (input.ts, `sprintTap.ts`).
+ * SP5b adds B, which saves a place in a saved world, and G, the Settings screen, which takes the settings out of the
+ * help (SP5b spec §1.4, §3.7).
  */
 export const DEFAULT_KEYMAP: readonly KeyEntry[] = [
   { action: 'forward', bindings: [code('KeyW')], label: 'Forward (at your height)', group: 'move', since: 'SP4a' },
@@ -53,7 +56,9 @@ export const DEFAULT_KEYMAP: readonly KeyEntry[] = [
   { action: 'speedUp', bindings: [wheel('up', true), key('+'), key('=')], label: 'Fly faster', group: 'speed', since: 'SP4a' },
   { action: 'speedDown', bindings: [wheel('down', true), key('-')], label: 'Fly slower', group: 'speed', since: 'SP4a' },
   { action: 'timeSpeed', bindings: [code('KeyT')], label: 'Time speed (×1, ×10, ×60, paused)', group: 'world', since: 'SP4a' },
-  { action: 'help', bindings: [code('KeyH'), code('F1')], label: 'Help and settings', group: 'view', since: 'SP4a' },
+  { action: 'savePlace', bindings: [code('KeyB')], label: 'Save this place', group: 'world', since: 'SP5b' },
+  { action: 'help', bindings: [code('KeyH'), code('F1')], label: 'Help', group: 'view', since: 'SP4a' },
+  { action: 'settings', bindings: [code('KeyG')], label: 'Settings', group: 'view', since: 'SP5b' },
   { action: 'hud', bindings: [code('F3')], label: 'Show or hide the counts', group: 'view', since: 'SP4a' },
   { action: 'releasePointer', bindings: [code('Escape')], label: 'Release the pointer', group: 'view', since: 'SP4a' },
   { action: 'map', bindings: [code('KeyM')], label: 'Map: teleport and live editing', group: 'view', since: 'SP4c' },

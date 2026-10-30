@@ -8,13 +8,16 @@ const BUILD: readonly Action[] = [
   'toggleWalk', 'palette', 'slot1', 'slot2', 'slot3', 'slot4', 'slot5', 'slot6', 'slot7', 'slot8', 'slot9', 'slotNext', 'slotPrev',
 ];
 
+/** SP5b's B and G (SP5b spec §3.7): save a place, the Settings screen. */
+const SP5B: readonly Action[] = ['savePlace', 'settings'];
+
 /**
- * Every action of SP4a spec §7.3 but R's loadHere (removed by SP4b spec §6.2), SP4c's M (SP4c spec §2.4) and SP5a's build group
- * (SP5a spec §4.1), spelled out so that a missing map entry fails here.
+ * Every action of SP4a spec §7.3 but R's loadHere (removed by SP4b spec §6.2), SP4c's M (SP4c spec §2.4), SP5a's build group
+ * (SP5a spec §4.1) and SP5b's B and G (SP5b spec §3.7), spelled out so that a missing map entry fails here.
  */
 const ACTIONS: readonly Action[] = [
   'forward', 'back', 'left', 'right', 'up', 'down', 'sprint', 'speedUp', 'speedDown',
-  'timeSpeed', 'help', 'hud', 'releasePointer', 'map', ...BUILD,
+  'timeSpeed', 'help', 'hud', 'releasePointer', 'map', ...BUILD, ...SP5B,
 ];
 
 const bindingKey = (b: Binding): string =>
@@ -29,12 +32,14 @@ describe('the key map as data (SP4a spec §7.3, D19)', () => {
       expect(entries[0]!.label, a).not.toBe('');
     }
     expect(DEFAULT_KEYMAP).toHaveLength(ACTIONS.length);
-    expect(DEFAULT_KEYMAP).toHaveLength(27);
+    expect(DEFAULT_KEYMAP).toHaveLength(29);
     // Esc is listed (the help names it) but the browser owns it: the input layer never resolves it.
     expect([...LISTED_ONLY]).toEqual(['releasePointer']);
     expect(resolveKey({ code: 'Escape', key: 'Escape' })).toBeNull();
-    // Every entry is SP4a's except SP4c's map (SP4c spec §2.4) and SP5a's build group (SP5a spec §4.1).
-    for (const e of DEFAULT_KEYMAP) expect(e.since, e.action).toBe(e.action === 'map' ? 'SP4c' : BUILD.includes(e.action) ? 'SP5a' : 'SP4a');
+    // Every entry is SP4a's except SP4c's map (SP4c spec §2.4), SP5a's build group (SP5a spec §4.1) and SP5b's B and G
+    // (SP5b spec §3.7).
+    const since = (a: Action) => (a === 'map' ? 'SP4c' : BUILD.includes(a) ? 'SP5a' : SP5B.includes(a) ? 'SP5b' : 'SP4a');
+    for (const e of DEFAULT_KEYMAP) expect(e.since, e.action).toBe(since(e.action));
     for (const e of DEFAULT_KEYMAP) expect(e.group === 'build', e.action).toBe(BUILD.includes(e.action));
   });
 
@@ -78,6 +83,17 @@ describe('the key map as data (SP4a spec §7.3, D19)', () => {
     expect(of('map')).toEqual(['code:KeyM']);
   });
 
+  test('B saves a place (group world) and G opens the Settings (group view), both SP5b\'s; H is the help (SP5b spec §3.7)', () => {
+    const of = (a: Action) => DEFAULT_KEYMAP.find((e) => e.action === a)!;
+    expect(of('savePlace')).toEqual({ action: 'savePlace', bindings: [{ kind: 'code', code: 'KeyB' }], label: 'Save this place', group: 'world', since: 'SP5b' });
+    expect(of('settings')).toEqual({ action: 'settings', bindings: [{ kind: 'code', code: 'KeyG' }], label: 'Settings', group: 'view', since: 'SP5b' });
+    expect(of('help').label).toBe('Help');
+    expect(of('savePlace').bindings.map(bindingKey)).toEqual(['code:KeyB']);
+    expect(of('settings').bindings.map(bindingKey)).toEqual(['code:KeyG']);
+    expect(resolveKey({ code: 'KeyB', key: 'b' })).toBe('savePlace');
+    expect(resolveKey({ code: 'KeyG', key: 'g' })).toBe('settings');
+  });
+
   test('the build group\'s bindings are SP5a spec §4.1\'s: F, E, Digit1-Digit9 by code, the plain wheel', () => {
     const of = (a: Action) => DEFAULT_KEYMAP.find((e) => e.action === a)!.bindings.map(bindingKey);
     expect(of('toggleWalk')).toEqual(['code:KeyF']);
@@ -115,7 +131,8 @@ describe('the key map as data (SP4a spec §7.3, D19)', () => {
     expect(resolveKey({ code: 'KeyR', key: 'p' })).toBe('sprint');
     expect(resolveKey({ code: 'F1', key: 'F1' })).toBe('help');
     expect(resolveKey({ code: 'KeyF', key: 'f' })).toBe('toggleWalk');
-    expect(resolveKey({ code: 'KeyG', key: 'g' })).toBeNull();
+    expect(resolveKey({ code: 'KeyG', key: 'g' })).toBe('settings');
+    expect(resolveKey({ code: 'KeyJ', key: 'j' })).toBeNull();
   });
 
   test('on a Spanish layout, + at BracketRight is speedUp and - at Slash is speedDown', () => {

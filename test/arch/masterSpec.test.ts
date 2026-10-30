@@ -1375,6 +1375,8 @@ describe('master spec amendments (SP5b §9)', () => {
     [/^\s+ui\/common\/\* /, 'files.ts (SP5b: downloadBlob, readBinaryFile)', 'src/ui/common/files.ts'],
     [/^\s+ui\/world\/\* /, 'stateBounds.ts autosave.ts worldLock.ts modifyMode.ts places.ts placeDialog.ts (SP5b)', 'src/ui/world/modifyMode.ts'],
     [/^\s+engine\/\s/, '(SP5b: session.ts\'s setWritable)', 'src/engine/session.ts'],
+    [/^\s+ui\/world\/\* /, 'stateBounds.ts autosave.ts worldLock.ts modifyMode.ts places.ts placeDialog.ts (SP5b)', 'src/ui/world/places.ts'],
+    [/^\s+ui\/world\/\* /, 'stateBounds.ts autosave.ts worldLock.ts modifyMode.ts places.ts placeDialog.ts (SP5b)', 'src/ui/world/placeDialog.ts'],
   ];
 
   test('§10\'s SP5b entry and its receivers (SP5b spec §9, §11)', () => {
@@ -1505,6 +1507,13 @@ describe('master spec amendments (SP5b §9)', () => {
     expect(s27).not.toContain('**Fork dialog.**');
     expect(s27).not.toContain('**Rebase:**');
     expect(text).not.toContain('During development this dialog is expected often');
+  });
+
+  test('§5.9 names G for the Settings and B to save a place (SP5b spec §3.7, §9)', () => {
+    const at59 = text.indexOf('### 5.9 Controls');
+    const s59 = text.slice(at59, text.indexOf('## 6. ', at59));
+    expect(s59).toContain('P (params); G (settings; SP5b); B (save a place; SP5b); E (creative palette);');
+    expect(s59).not.toContain('G (graphics)');
   });
 
   test('§1 names each SP5b module in its entry, which exists', () => {
