@@ -1,7 +1,8 @@
 import { gunzipSync, gzipSync } from 'node:zlib';
 import { afterEach, beforeEach, describe, expect, test, vi } from 'vitest';
 import { colKey } from '../../src/core/coords';
-import type { Seed64 } from '../../src/core/hash';
+import { hex64, type Seed64 } from '../../src/core/hash';
+import { genKey, stageHashes } from '../../src/core/stage/hash';
 import { seedFromInput, seedToText } from '../../src/core/seed';
 import { encodeColumnDiff } from '../../src/persist/diffCodec';
 import { createMemoryKV, type MemoryKV } from '../../src/persist/memory';
@@ -14,7 +15,10 @@ import { profileOptions } from '../../src/ui/map/toolbar';
 import { parseWorldQuery } from '../../src/ui/world/query';
 import { STATE_BOUNDS } from '../../src/ui/world/stateBounds';
 import { holdWorld, type LockManagerLike } from '../../src/ui/world/worldLock';
-import { SAVES_DB } from '../../src/ui/world/worldPage';
+import { olderGeneratorRecord, openRequest, SAVES_DB } from '../../src/ui/world/worldPage';
+import { createSimClient } from '../../src/engine/simClient';
+import { createSimHandler } from '../../src/workers/simHandler';
+import { inProcessSimWorker } from '../harness/inProcessSim';
 import {
   mountWorldsMenu, noticeOfQuery, PERSIST_ASKED_KEY, REFUSAL_REASON_KEY, refusalText, refusalUrl, savesDbOf, startModeOf,
   type StorageLike, type WorldsMenuOptions,
@@ -395,14 +399,23 @@ describe('mountWorldsMenu: Load world (SP5b spec §1.1, §1.3, D3, D7, D14, D24)
 
   const key = (code: string) => Object.assign(new Event('keydown', { cancelable: true }), { key: code, code });
 
-  /** A saved world with a state `updated` at `updated` (0: never saved) and `places` places. */
+  /** Today's genKey of a `saved` world's seed and its profile's params (`saved`'s default: no "older generator" badge). */
+  function todayKey(profile: WorldRecord['profile']): string {
+    const p = loadParams({ params: {}, schemaVersion: 2, profile });
+    if (!p.ok) throw new Error(`${profile} does not load`);
+    return hex64(genKey([7, 0], stageHashes(p.value)));
+  }
+
+  /** A saved world with a state `updated` at `updated` (0: never saved) and `places` places; its genKey today's unless given. */
   async function saved(
-    kv: MemoryKV, name: string, o: { updated?: number; places?: number; backupOf?: string | null; created?: number; profile?: WorldRecord['profile']; seedText?: string } = {},
+    kv: MemoryKV, name: string,
+    o: { updated?: number; places?: number; backupOf?: string | null; created?: number; profile?: WorldRecord['profile']; seedText?: string; genKey?: string } = {},
   ): Promise<string> {
     const id = crypto.randomUUID();
+    const profile = o.profile ?? 'default';
     const world: WorldRecord = {
-      id, name, seedText: o.seedText ?? '7', seed: [7, 0], profile: o.profile ?? 'default', params: {}, schemaVersion: 2,
-      paramsHash: '0'.repeat(16), generatorVersion: 5, genKey: '0'.repeat(16), stateTable: todayStateTable(), created: o.created ?? 1_600_000_000_000,
+      id, name, seedText: o.seedText ?? '7', seed: [7, 0], profile, params: {}, schemaVersion: 2,
+      paramsHash: '0'.repeat(16), generatorVersion: 5, genKey: o.genKey ?? todayKey(profile), stateTable: todayStateTable(), created: o.created ?? 1_600_000_000_000,
       backupOf: o.backupOf ?? null,
     };
     const places = Array.from({ length: o.places ?? 0 }, (_, i) => ({ id: `p${i}`, name: `Place ${i}`, colour: 0, x: i, y: 70, z: 0, yaw: 0, pitch: 0 }));
@@ -482,6 +495,72 @@ describe('mountWorldsMenu: Load world (SP5b spec §1.1, §1.3, D3, D7, D14, D24)
     one(dom.el('load-notice'), 'notice-confirm').click();
     await vi.waitFor(() => expect(rows().map((r) => r.dataset['id'])).toEqual([fine]));
     expect(kv.dump('worlds').map(([k]) => k)).toEqual([fine]);
+  });
+
+  const OLDER = 'older generator';
+  const OLDER_LINE = 'opens with today\'s terrain; your blocks stay at their coordinates';
+
+  test('the badge shows on that world until its open\'s `record` is written, then not (D8)', async () => {
+    const kv = createMemoryKV();
+    const stale = await saved(kv, 'Old', { updated: 5, genKey: 'f'.repeat(16) });
+    const fresh = await saved(kv, 'New', { updated: 6 });
+    mount(kv);
+    await openLoad();
+    expect(row(stale).textContent).toContain(OLDER);
+    expect(row(stale).textContent).toContain(OLDER_LINE);
+    expect(row(fresh).textContent).not.toContain(OLDER);
+    expect(buttons(row(stale))).toEqual(['world-play', 'world-rename', 'world-export', 'world-delete']);
+    // The world's open: today's genKey sent as its `record` (§3.4 step 4), which the next flush writes.
+    const read = await createSaves(kv).readOpen(stale);
+    const parsed = parseWorldRecord(read.world);
+    if (!parsed.ok) throw new Error(parsed.reason);
+    const sim = createSimClient(() => inProcessSimWorker(createSimHandler({ openKV: async () => kv }), () => 0), { onFailure() {} });
+    const state = newState(stale, STATE_BOUNDS);
+    expect((await sim.load(openRequest(SAVES_DB, parsed.world, state, { worldId: stale, done: [], undone: [] }).load)).type).toBe('loaded');
+    const sent = olderGeneratorRecord(parsed.world, todayKey('default'));
+    expect(sent).not.toBeNull();
+    sim.record(sent!);
+    // Before the flush the stored genKey is still the old one: a re-read still shows the badge.
+    dom.document.visibilityState = 'visible';
+    dom.document.dispatchEvent(new Event('visibilitychange'));
+    await flush();
+    expect(row(stale).textContent).toContain(OLDER);
+    expect(await sim.flush({ ...state, updated: 7 }, null)).toMatchObject({ ok: true });
+    sim.dispose();
+    dom.document.dispatchEvent(new Event('visibilitychange'));
+    await vi.waitFor(() => expect(row(stale).textContent).not.toContain(OLDER));
+    expect(row(stale).textContent).not.toContain(OLDER_LINE);
+  });
+
+  test('an imported older-generator file\'s row shows `older generator`', async () => {
+    const kv = createMemoryKV();
+    const id = await saved(kv, 'Alpha', { updated: 5 });
+    const source = (await createSaves(kv).readAll(id))!;
+    const file = await writeWiworld({ ...source, world: { ...source.world, genKey: 'f'.repeat(16) } });
+    mount(kv);
+    await openLoad();
+    expect(row(id).textContent).not.toContain(OLDER);
+    pick(new File([file], 'old.wiworld'));
+    await vi.waitFor(() => expect(rows().length).toBe(2));
+    const added = rows().map((r) => r.dataset['id']!).find((r) => r !== id)!;
+    expect(row(added).textContent).toContain(OLDER);
+    expect(row(added).textContent).toContain(OLDER_LINE);
+    expect(row(id).textContent).not.toContain(OLDER);
+  });
+
+  test('a record whose `loadParams` is refused shows a broken row: its reason, Delete only', async () => {
+    const kv = createMemoryKV();
+    const id = await saved(kv, 'Fine', { updated: 5 });
+    const raw = { ...(await createSaves(kv).readAll(id))!.world, id: 'bad', schemaVersion: 99 };
+    expect(parseWorldRecord(raw).ok).toBe(true);
+    expect(loadParams(raw).ok).toBe(false);
+    expect((await kv.write([{ op: 'put', store: 'worlds', key: 'bad', value: raw }, { op: 'put', store: 'state', key: 'bad', value: { ...newState('bad', STATE_BOUNDS), updated: 1 } }])).status).toBe('complete');
+    mount(kv);
+    await openLoad();
+    expect(rows().map((r) => r.dataset['id'])).toEqual([id, 'bad']);
+    expect(row('bad').textContent).toContain('This world could not be opened: invalid params (<root> MIGRATION_FAILED)');
+    expect(row('bad').textContent).not.toContain(OLDER);
+    expect(buttons(row('bad'))).toEqual(['world-delete']);
   });
 
   test('Rename: Enter keeps (the record renamed), Esc cancels (nothing written)', async () => {

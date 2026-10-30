@@ -42,7 +42,8 @@ import { NO_ENTRY } from '../../src/sim/diffStore';
 import type { Edit, FlushedMsg } from '../../src/workers/protocol';
 import { hex64 } from '../../src/core/hash';
 import type { JsonObject } from '../../src/core/params/migrate';
-import { genKey, stageHashes } from '../../src/core/stage/hash';
+import { genKey, paramsHash, stageHashes } from '../../src/core/stage/hash';
+import { GENERATOR_VERSION } from '../../src/core/constants';
 import type { KV } from '../../src/persist/kv';
 import { createMemoryKV, type MemoryKV } from '../../src/persist/memory';
 import {
@@ -50,7 +51,8 @@ import {
 } from '../../src/persist/saves';
 import {
   EDIT_FAILED_NOTICE, HISTORY_RESET_NOTICE, SAVED_EDIT_FAILED_NOTICE, STATE_RESET_NOTICE, countAccepted, createPageAutosave, hotbarStorage, lastFlush, leaveAfterSave,
-  installWorldLock, lowerRdHref, openRequest, openSavedWorld, readSavedWorld, refuseOpen, restoreMode, restoredStart, savedWorldUrlRules, timeOfHours,
+  installWorldLock, lowerRdHref, OLDER_GENERATOR_NOTICE, OLDER_GENERATOR_NOTICE_MS, olderGeneratorRecord, openOlderGenerator, openRequest, openSavedWorld,
+  readSavedWorld, refuseOpen, restoreMode, restoredStart, revealOlderGenerator, savedWorldUrlRules, timeOfHours,
   UNSAVED_NOTICE, unsavedNoticeOf, type WorldPageOptions,
 } from '../../src/ui/world/worldPage';
 import { noticeOfQuery, REFUSAL_REASON_KEY, type OpenRefusal, type StorageLike } from '../../src/ui/worldsMenu';
@@ -2337,6 +2339,146 @@ describe('opening a saved world (SP5b spec §3.4 steps 2-3, D14, D22)', () => {
     expect(run).toMatch(/if \(!r\.ok\) \{\n\s+refuseOpen\(r\.refusal, \{\n\s+enterBench: q\.enterBench,\n\s+storage: sessionStorageOrNull\(\),/);
     expect(run).toMatch(/location\.replace\(url\);/);
     expect(run).toMatch(/fail: \(text\) => fail\(text, null\),/);
+  });
+});
+
+describe('a world from an older generator (SP5b spec §3.4 step 4, §3.6, D8)', () => {
+  const FIXTURE = new URL('../fixtures/sp5bWorldParams.json', import.meta.url);
+  const fixture = (): { schemaVersion: number; params: JsonObject } =>
+    JSON.parse(readFileSync(FIXTURE, 'utf8')) as { schemaVersion: number; params: JsonObject };
+  const loaded = (() => {
+    const p = loadParams({ ...fixture(), profile: 'default' });
+    if (!p.ok) throw new Error('fixture');
+    return p.value;
+  })();
+  /** Today's genKey and paramsHash for the record's seed and params (what the first configure's `ReadyMsg` carries). */
+  const today = hex64(genKey([1, 2], stageHashes(loaded)));
+  const todayHash = hex64(paramsHash(loaded));
+  const STALE = 'ffffffffffffffff';
+  const ID = 'w1';
+  const record = (over: Partial<WorldRecord> = {}): WorldRecord => ({
+    id: ID, name: 'My world', seedText: 'hello', seed: [1, 2], profile: 'default', params: fixture().params,
+    schemaVersion: fixture().schemaVersion, paramsHash: '0123456789abcdef', generatorVersion: 4, genKey: STALE,
+    stateTable: todayStateTable(), created: 1_000, backupOf: null, ...over,
+  });
+  const locks: LockManagerLike = { request: (_name, _o, cb) => Promise.resolve().then(() => cb({})) };
+  const SRC = (): string => readFileSync(new URL('../../src/ui/world/worldPage.ts', import.meta.url), 'utf8');
+
+  /**
+   * The saved world's page from the open to the reveal, as `run()` composes it: `openSavedWorld` over a MemoryKV holding
+   * `world`, the sim (the real handler, in process) loaded, `openOlderGenerator` with today's genKey as the first
+   * configure's `ReadyMsg` carries it, the autosave (its timer's tick driven by the test), and `revealOlderGenerator`.
+   * `types` lists every message the sim receives.
+   */
+  async function openPage(world: WorldRecord) {
+    const kv = createMemoryKV();
+    expect((await createSaves(kv).create(world, newState(ID, STATE_BOUNDS))).status).toBe('complete');
+    const r = await openSavedWorld({ locks, open: () => Promise.resolve(kv), db: 'wi10', id: ID, bounds: STATE_BOUNDS, random: () => [7, 7] });
+    if (!r.ok) throw new Error('not opened');
+    const opened = r.opened;
+    const types: string[] = [];
+    const handler = createSimHandler({ openKV: async () => kv });
+    const failures: Error[] = [];
+    const sim = createSimClient(() => inProcessSimWorker({
+      ...handler,
+      handle(msg, post) {
+        types.push((msg as { type: string }).type);
+        handler.handle(msg, post);
+      },
+    }, () => 0), { onFailure: (e) => { failures.push(e); } });
+    expect((await sim.load(opened.load)).type).toBe('loaded');
+    const generator = openOlderGenerator({ kept: opened.kept, readyGenKey: today, sim });
+    const results: FlushedMsg[] = [];
+    const autosave = createPageAutosave({
+      worldId: ID,
+      fly: { x: 0.5, y: 100, z: 0.5, yaw: 0, pitch: 0, mode: 'fly', speed: SPEED_DEFAULT },
+      frame: { t: 0.5 },
+      speedIndex: () => 0,
+      storedTime: null,
+      hotbar: () => opened.state.hotbar,
+      blockHistory: { snapshot: () => ({ done: [], undone: [] }), version: 0 },
+      sim,
+      settled: () => Promise.resolve(),
+      editsSince: () => 0,
+      now: () => 1_700_000_000_000,
+      clock: {
+        now: () => performance.now(),
+        setInterval: () => 0,
+        clearInterval: () => {},
+        setTimeout: (f, ms) => setTimeout(f, ms) as unknown as number,
+        clearTimeout: (id) => clearTimeout(id),
+      },
+      events: { on: () => () => {}, hidden: () => false },
+      onResult: (res) => { results.push(res); },
+    });
+    const shown: Array<[string, unknown]> = [];
+    revealOlderGenerator(generator, { notices: { show: (text, o) => { shown.push([text, o]); } }, autosave });
+    return {
+      kv, opened, generator, autosave, results, shown, types, failures,
+      close() {
+        autosave.dispose();
+        sim.dispose();
+        opened.lock.release();
+      },
+    };
+  }
+
+  test('D8\'s notice text and its 8 s', () => {
+    expect(OLDER_GENERATOR_NOTICE).toBe('This world was made with an earlier generator version; it opens with today\'s terrain and your blocks stay at their coordinates.');
+    expect(OLDER_GENERATOR_NOTICE_MS).toBe(8000);
+  });
+
+  test('`olderGeneratorRecord`: an equal genKey → null; another → the kept record with today\'s genKey, `GENERATOR_VERSION` and the params\' `paramsHash`', () => {
+    expect(olderGeneratorRecord(record({ genKey: today }), today)).toBeNull();
+    expect(olderGeneratorRecord(record(), today)).toEqual(record({ genKey: today, generatorVersion: GENERATOR_VERSION, paramsHash: todayHash }));
+  });
+
+  test('a stored genKey ≠ today\'s → the notice once (8 s), one `record` with today\'s genKey and version, posted with the next tick', async () => {
+    const p = await openPage(record());
+    expect(p.generator.older).toBe(true);
+    expect(p.shown).toEqual([[OLDER_GENERATOR_NOTICE, { kind: 'info', timeoutMs: OLDER_GENERATOR_NOTICE_MS }]]);
+    await vi.waitFor(() => expect(p.types.filter((t) => t === 'record')).toEqual(['record']));
+    // Sent, not yet written: the stored record is the old one until a flush commits it.
+    expect(p.kv.dump('worlds')).toEqual([[ID, record()]]);
+    // The first tick after the reveal posts (the record counts as a change), and its flush writes the record.
+    await p.autosave.tick();
+    await vi.waitFor(() => expect(p.results.map((r) => r.ok)).toEqual([true]));
+    expect(p.kv.dump('worlds')).toEqual([[ID, record({ genKey: today, generatorVersion: GENERATOR_VERSION, paramsHash: todayHash })]]);
+    // Nothing else changed: the next tick posts nothing, and no second `record` or notice follows.
+    await p.autosave.tick();
+    await new Promise((r) => setTimeout(r, 10));
+    expect(p.types.filter((t) => t === 'flush' || t === 'record')).toEqual(['record', 'flush']);
+    expect(p.shown).toHaveLength(1);
+    expect(p.failures).toEqual([]);
+    p.close();
+  });
+
+  test('equal → no notice, no `record`', async () => {
+    const p = await openPage(record({ genKey: today, generatorVersion: GENERATOR_VERSION }));
+    expect(p.generator).toEqual({ older: false, kept: p.opened.kept });
+    expect(p.shown).toEqual([]);
+    await p.autosave.tick();
+    await new Promise((r) => setTimeout(r, 10));
+    expect(p.types).toEqual(['load']);
+    expect(p.results).toEqual([]);
+    p.close();
+  });
+
+  test('after an older-generator open, the page\'s kept record carries today\'s genKey (and today\'s table after a rewrite)', async () => {
+    const p = await openPage(record());
+    expect(p.generator.kept).toEqual(record({ genKey: today, generatorVersion: GENERATOR_VERSION, paramsHash: todayHash }));
+    p.close();
+    const t = todayStateTable();
+    [t[1], t[2]] = [t[2]!, t[1]!];
+    const q = await openPage(record({ stateTable: t }));
+    expect(q.generator.kept).toEqual(record({ genKey: today, generatorVersion: GENERATOR_VERSION, paramsHash: todayHash, stateTable: todayStateTable() }));
+    q.close();
+  });
+
+  test('the page wires it: the check after the load and the first configure, the notice and the change at the autosave\'s creation', () => {
+    const src = SRC();
+    expect(src).toMatch(/const firstReady = await workers\.configure\(session\.state\.seedText, session\.state\.params\);\n\s+await simAttached;\n\s+if \(state !== 'loading'\) return;\n(\s+\/\/.*\n)+\s+const generator = saved === null \? null : openOlderGenerator\(\{ kept: saved\.kept, readyGenKey: firstReady\.genKey, sim: simClient! \}\);/);
+    expect(src).toMatch(/teardown\.push\(worldLock!\.onRelease\(\(\) => a\.dispose\(\)\)\);\n(\s+\/\/.*\n)*\s+revealOlderGenerator\(generator!, \{ notices, autosave: a \}\);/);
   });
 });
 

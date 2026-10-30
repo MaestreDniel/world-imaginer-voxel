@@ -1479,6 +1479,23 @@ describe('master spec amendments (SP5b §9)', () => {
     expect(lines52).toContain('- **World:** seed (typed seed is authoritative; separate "Regenerate same seed" and "New seed" buttons), profile, presets, worlds (the start screen\'s menus, SP5b).');
   });
 
+  test('an older generator opens with today\'s terrain and a notice: §2.7\'s save rule, §6.2\'s Dev saves, risk 13 and §9\'s save binding (SP5b spec D8, §9)', () => {
+    const at27 = text.indexOf('### 2.7 ');
+    const s27 = text.slice(at27, text.indexOf('## 3. Generation', at27));
+    expect(s27).toContain('Live and Remesh params never affect genKey. A world whose stored genKey differs from today\'s opens with today\'s terrain, its edits at their coordinates, with a notice and an \'older generator\' badge in the list (SP5b).');
+    expect(text).not.toContain('A save is valid only for its genKey.');
+    const at62 = text.indexOf('### 6.2 ');
+    const lines62 = text.slice(at62, text.indexOf('### 6.3 ', at62)).split('\n');
+    expect(lines62).toContain('- **Dev saves** whose genKey no longer matches open with today\'s terrain and a notice (§2.7, SP5b).');
+    expect(text).not.toContain('go through the fork dialog of §2.7');
+    const at8 = text.indexOf('## 8. Risks');
+    const lines8 = text.slice(at8, text.indexOf('## 9. ', at8)).split('\n');
+    expect(lines8).toContain('13. **Save and golden churn during development.** An older generator opens with today\'s terrain (§2.7, SP5b).');
+    const at9 = text.indexOf('## 9. ');
+    const lines9 = text.slice(at9, text.indexOf('## 10. ', at9)).split('\n');
+    expect(lines9).toContain('| save binding | (generatorVersion, seed, stageHash(\'decorate\'), i.e. generation-scope params only) (SP5b: a mismatch opens with today\'s terrain and a notice) | (seed, paramsHash) only (silent misalignment after generator changes) |');
+  });
+
   test('§1 names each SP5b module in its entry, which exists', () => {
     expect(SP5B_MODULES.length, 'SP5B_MODULES has no rows').toBeGreaterThan(0);
     for (const [head, token, file] of SP5B_MODULES) {

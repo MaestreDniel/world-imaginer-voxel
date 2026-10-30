@@ -497,7 +497,7 @@ Sparse entries are sorted by idx, sections by sy, and trailer ticks by packedPos
 
 `packs` (resource-pack and sound-pack blobs plus manifests, with `kind: 'textures'|'sounds'`) and `presets` are added by a `wi10` version bump when SP8c's sound packs and SP10's preset library need them (SP5b).
 
-`genKey = fnv1a64(utf8(`${GENERATOR_VERSION}|${seed[0]}|${seed[1]}|${hex64(stageHash('decorate'))}`))` (seed words as decimal u32, lo first; `hex64` = 16 lower-case hex digits, hi first), where the decorate stageHash covers exactly the decorate-, terrain- and climate-scope params (§5.1). Live and Remesh params never affect genKey. A save is valid only for its genKey.
+`genKey = fnv1a64(utf8(`${GENERATOR_VERSION}|${seed[0]}|${seed[1]}|${hex64(stageHash('decorate'))}`))` (seed words as decimal u32, lo first; `hex64` = 16 lower-case hex digits, hi first), where the decorate stageHash covers exactly the decorate-, terrain- and climate-scope params (§5.1). Live and Remesh params never affect genKey. A world whose stored genKey differs from today's opens with today's terrain, its edits at their coordinates, with a notice and an 'older generator' badge in the list (SP5b).
 
 **Fork dialog.** It appears (a) on opening a world whose stored genKey differs from the one recomputed with the current GENERATOR_VERSION, and (b) on the first Apply of a decorate-, terrain- or climate-scope change in a world that has diffs. Auto-apply is suspended until the user answers, and the choice holds for the rest of the session. Options:
 1. **Fork:** a new world id with the new genKey and no diffs; the original save is untouched.
@@ -1422,7 +1422,7 @@ Metric values are written to `test/metrics/.out/*.json` for trends. The harness 
 
 - **Thresholds** live in `test/thresholds.ts`. `thresholds.test.ts` compares a hash against `thresholds.lock.json`, so changing one requires `npm run test:accept-thresholds` and a spec amendment. Agents cannot silently loosen a gate. A part may list the metric tiers it gates on (`tiers`, absent = every tier); on the other tiers its value is recorded, never gated, and dropping a tier counts as loosening (amended by SP3b, whose T3 gates on the full tier only).
 - **Goldens** (region hashes per built-in preset, per stage; SP3e: `sp3e.region.T.<preset>` and the column points of archipelago and floating_islands) change only via `npm run test:goldens`. A golden change requires a `GENERATOR_VERSION` bump, which a test checks.
-- **Dev saves** whose genKey no longer matches (stale generatorVersion or params) go through the fork dialog of §2.7 (option 3 is read-only with a warning).
+- **Dev saves** whose genKey no longer matches open with today's terrain and a notice (§2.7, SP5b).
 
 ### 6.3 Unit tests (selection)
 
@@ -1717,7 +1717,7 @@ High adds MSAA, a shadow cascade (about 2 ms), LOD 1 km and RD16 (dGPU target). 
 10. **Truncated settle fronts that look like walls.** A2 counts them; tune the cap and barriers. Fallback (policy B, only if A2 cannot be met): natural ticks inside sim distance with a lineage bit so only edit-caused flows persist (D18).
 11. **Tuning labour, or "tests pass but it looks bad".** Visual review of PNG slices, map snapshots and bench screenshots in every SP exit; the metrics dashboard; thresholds changed only by spec amendment.
 12. **Metric-suite runtime growth.** Region cache keyed by genKey, and tiered suites.
-13. **Save and golden churn during development.** generatorVersion policy (6.2).
+13. **Save and golden churn during development.** An older generator opens with today's terrain (§2.7, SP5b).
 14. **LOD mismatch** (overhangs, islands). T5 on LOD samples, fill mask, island terms, fog.
 15. **Scope creep.** YAGNI list plus a cut line per SP (see the decomposition). After SP7 the app is a complete explorer and editor with water.
 16. **u16 block states.** +55-60 % store memory and non-cube meshing/collision work. Mitigation: uniform-section elision, 4096-state cap, connection shapes derived rather than stored, `SHAPE_BOXES` restricted to the 11 listed models, shape quads excluded from greedy merging only.
@@ -1739,7 +1739,7 @@ High adds MSAA, a shadow cascade (about 2 ms), LOD 1 km and RD16 (dGPU target). 
 | runtime fluids | edit-triggered only | natural ticks + lineage bit (sim storms entering sim distance; world ≠ gen + diffs) |
 | shadows | custom depth pass inside materials | SunLight (no shadow chunks for custom ShaderMaterial) |
 | AO | preset-scaled (off at Low) | always on (the user listed AO as a preset setting) |
-| save binding | (generatorVersion, seed, stageHash('decorate'), i.e. generation-scope params only) | (seed, paramsHash) only (silent misalignment after generator changes) |
+| save binding | (generatorVersion, seed, stageHash('decorate'), i.e. generation-scope params only) (SP5b: a mismatch opens with today's terrain and a notice) | (seed, paramsHash) only (silent misalignment after generator changes) |
 | block ids | u16 states, connection shapes derived (user decision D12) | u8 ids without states (crude structures) |
 | hosting | Vite / Docker / Vercel with headers | coi-sw.js service worker (not needed once Vercel headers are available) |
 

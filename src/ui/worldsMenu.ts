@@ -13,12 +13,14 @@
  *   is written to that database and its URL carries `&enterBench=1&db=<name>`. Without storage (`saves` null, D14)
  *   Create shows "Saving is not available in this browser window" until Task 29 opens the unsaved world instead.
  * - Load world (§1.3, D3): one row per world of `saves.list()`, the most recently modified first ("name · preset · seed
- *   N", "Modified YYYY-MM-DD HH:MM" in local time with "· n places" when it has any, "automatic copy" for a backup),
- *   with Play (`/?world=<id>`), Rename (the name becomes a text field: Enter keeps, Esc cancels), Export and Delete
- *   (asked in the screen's notice row, `notices.confirm`, never a browser dialog); a broken row (D14) shows why with
- *   Delete only. Rename and Delete write under the world's lock taken only if it is free (`withWorldIfFree`, D7, D24),
- *   and a held lock refuses them with `LOCKED_NOTICE`. The list is read again when the tab becomes visible (§1.1), and
- *   each read's time, through the rows' build, is recorded on `window.__wiMenuListMs` for the smoke's `menus` step.
+ *   N", "Modified YYYY-MM-DD HH:MM" in local time with "· n places" when it has any, "automatic copy" for a backup,
+ *   "older generator" when its stored genKey is not today's, D8), with Play (`/?world=<id>`), Rename (the name becomes a
+ *   text field: Enter keeps, Esc cancels), Export and Delete (asked in the screen's notice row, `notices.confirm`, never
+ *   a browser dialog); a broken row (D14: a record `parseWorldRecord` refuses, or params `loadParams` refuses) shows why
+ *   with Delete only. Rename and Delete write under the world's lock taken only if it is free (`withWorldIfFree`, D7,
+ *   D24), and a held lock refuses them with `LOCKED_NOTICE`. The list is read again when the tab becomes visible
+ *   (§1.1), and each read's time, through the rows' build, is recorded on `window.__wiMenuListMs` for the smoke's
+ *   `menus` step.
  * - Export and Import .wiworld (§2.4, D15): Export reads the world's last committed save in one read (`saves.readAll`,
  *   no lock: a world open in another tab is read at one `flushSeq`, D7) and downloads it as `exportFileName(name)`.
  *   Import .wiworld opens a file picker (`#load-import-file`), reads the file (`readWiworld`, under a new id), writes it
@@ -27,6 +29,7 @@
  * Ids and the wall clock come in through the options (`newId`, `now`); text goes through `textContent` only.
  */
 import { hex64, type Seed64 } from '../core/hash';
+import type { Issue } from '../core/params/kit';
 import { SCHEMA_VERSION, type JsonObject } from '../core/params/migrate';
 import { resolveProfile, type ProfileId } from '../core/params/profiles';
 import { seedToText } from '../core/seed';
@@ -34,7 +37,7 @@ import { genKey, paramsHash, stageHashes } from '../core/stage/hash';
 import { GENERATOR_VERSION } from '../core/constants';
 import type { WriteResult } from '../persist/kv';
 import {
-  exportFileName, loadParams, MAX_NAME, newState, newWorldName, todayStateTable, type Saves, type WorldRecord, type WorldRow,
+  exportFileName, loadParams, MAX_NAME, newState, newWorldName, olderGenerator, todayStateTable, type Saves, type WorldRecord, type WorldRow,
 } from '../persist/saves';
 import { readWiworld, writeWiworld } from '../persist/wiworld';
 import { el } from './common/dom';
@@ -79,6 +82,15 @@ export type OpenRefusal = { readonly notice: 'locked' } | { readonly notice: 'un
 export function refusalText(r: OpenRefusal): string {
   return r.notice === 'locked' ? LOCKED_NOTICE : `This world could not be opened: ${r.reason}`;
 }
+
+/** Why params `loadParams` refuses do not open, as the world page and the list's broken row say it (D14). */
+export function invalidParamsReason(issues: readonly Issue[]): string {
+  const i = issues[0];
+  return i === undefined ? 'invalid params' : `invalid params (${i.path === '' ? '<root>' : i.path} ${i.code})`;
+}
+
+/** The second line of an older generator's row, under its badge (D3, D8). */
+const OLDER_GENERATOR_LINE = 'opens with today\'s terrain; your blocks stay at their coordinates';
 
 /** The part of `Storage` the refusal's reason and the persist flag use. */
 export type StorageLike = Pick<Storage, 'getItem' | 'setItem' | 'removeItem'>;
@@ -437,18 +449,19 @@ export function mountWorldsMenu(root: HTMLElement, o: WorldsMenuOptions): { disp
     return b;
   };
 
-  /** One `.world-row[data-id]`: the world's lines and its buttons, or a broken record's reason with Delete only (D14). */
+  /**
+   * One `.world-row[data-id]`: the world's lines and its buttons, with D8's badge when its stored genKey is not today's
+   * (`olderGenerator` over `loadParams`' params, as the world page's open computes it); a broken record's reason, or
+   * params `loadParams` refuses, with Delete only (D14).
+   */
   function rowElement(row: WorldRow): HTMLLIElement {
+    if (row.broken) return brokenRow(row.id, row.id, row.reason);
+    const w = row.world;
+    const params = loadParams(w);
+    if (!params.ok) return brokenRow(w.id, w.name, invalidParamsReason(params.issues));
     const saves = o.saves!;
     const li = el('li', 'world-row');
     const actions = el('div', 'start-actions world-actions');
-    if (row.broken) {
-      li.dataset['id'] = row.id;
-      actions.append(rowButton('world-delete', 'Delete', () => void deleteWorld(saves, row.id, row.id)));
-      li.append(el('div', 'world-broken', refusalText({ notice: 'unreadable', reason: row.reason })), actions);
-      return li;
-    }
-    const w = row.world;
     li.dataset['id'] = w.id;
     const title = el('div', 'world-title');
     const nameEl = el('span', 'world-name', w.name);
@@ -456,6 +469,7 @@ export function mountWorldsMenu(root: HTMLElement, o: WorldsMenuOptions): { disp
     const info = el('div', 'world-info', `${modifiedText(row.updated || w.created)}${row.places > 0 ? ` · ${row.places} places` : ''}`);
     li.append(title, info);
     if (w.backupOf !== null) li.append(el('div', 'world-badge', 'automatic copy'));
+    if (olderGenerator(w, params.value)) li.append(el('div', 'world-badge', 'older generator'), el('div', 'world-info', OLDER_GENERATOR_LINE));
     actions.append(
       rowButton('world-play', 'Play', () => o.navigate(worldUrl(w.id))),
       rowButton('world-rename', 'Rename', () => startRename(saves, w, nameEl)),
@@ -463,6 +477,17 @@ export function mountWorldsMenu(root: HTMLElement, o: WorldsMenuOptions): { disp
       rowButton('world-delete', 'Delete', () => void deleteWorld(saves, w.id, w.name)),
     );
     li.append(actions);
+    return li;
+  }
+
+  /** A broken row (D14): "This world could not be opened: <reason>" and Delete only, asked as `label`. */
+  function brokenRow(id: string, label: string, reason: string): HTMLLIElement {
+    const saves = o.saves!;
+    const li = el('li', 'world-row');
+    li.dataset['id'] = id;
+    const actions = el('div', 'start-actions world-actions');
+    actions.append(rowButton('world-delete', 'Delete', () => void deleteWorld(saves, id, label)));
+    li.append(el('div', 'world-broken', refusalText({ notice: 'unreadable', reason })), actions);
     return li;
   }
 

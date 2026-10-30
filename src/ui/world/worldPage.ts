@@ -194,7 +194,7 @@ import { Y_MAX, Y_MIN, type WorldQuery } from './query';
 import { STATE_BOUNDS } from './stateBounds';
 import { createTeleport, type Teleport, type TeleportLanding } from './teleport';
 import { holdWorld, type LockManagerLike, type WorldHold } from './worldLock';
-import { refusalText, refusalUrl, sessionStorageOrNull, type OpenRefusal, type StorageLike } from '../worldsMenu';
+import { invalidParamsReason, refusalText, refusalUrl, sessionStorageOrNull, type OpenRefusal, type StorageLike } from '../worldsMenu';
 
 /** The capture and test options (ruling P48). */
 export interface WorldPageOptions {
@@ -1625,10 +1625,7 @@ export async function readSavedWorld(saves: Saves, id: string, bounds: StateBoun
   if (!parsed.ok) return { ok: false, reason: parsed.reason };
   const world = parsed.world;
   const params = loadParams(world);
-  if (!params.ok) {
-    const i = params.issues[0]!;
-    return { ok: false, reason: `invalid params (${i.path === '' ? '<root>' : i.path} ${i.code})` };
-  }
+  if (!params.ok) return { ok: false, reason: invalidParamsReason(params.issues) };
   const notices: string[] = [];
   const state = normalizeState(raw.state, id, bounds);
   if (state.reset) notices.push(STATE_RESET_NOTICE);
@@ -1656,6 +1653,45 @@ export function openRequest(db: string, world: WorldRecord, state: StateRecord, 
     load: { db, worldId: world.id, flushSeq: state.flushSeq, genKey: world.genKey, updated: state.updated, stateTable: world.stateTable, rewrite },
     kept,
   };
+}
+
+/** D8's notice at the open of a world from an older generator (SP5b spec §3.4 step 4), shown `OLDER_GENERATOR_NOTICE_MS`. */
+export const OLDER_GENERATOR_NOTICE = 'This world was made with an earlier generator version; it opens with today\'s terrain and your blocks stay at their coordinates.';
+export const OLDER_GENERATOR_NOTICE_MS = 8000;
+
+/**
+ * The record an older generator's open sends (SP5b spec §3.4 step 4, D8): null when `readyGenKey` (the first configure's
+ * `ReadyMsg.genKey`, today's for the session's seed and params) equals the kept record's genKey; else the kept record
+ * with today's genKey, `GENERATOR_VERSION` and the `paramsHash` of its params as `loadParams` reads them (the session's;
+ * an opened world's params always load, and a refusal keeps the stored hash).
+ */
+export function olderGeneratorRecord(kept: WorldRecord, readyGenKey: string): WorldRecord | null {
+  if (readyGenKey === kept.genKey) return null;
+  const params = loadParams(kept);
+  return { ...kept, genKey: readyGenKey, generatorVersion: GENERATOR_VERSION, paramsHash: params.ok ? hex64(paramsHash(params.value)) : kept.paramsHash };
+}
+
+/**
+ * A saved world's generator check once its diffs are loaded (SP5b spec §3.4 step 4, D8, D21): a stored genKey that is
+ * not today's sends `olderGeneratorRecord`'s record to the sim, which writes it with the next flush, and the page keeps
+ * that record from then on (§3.6), so a later `record` or backup copies today's genKey. Entries apply under any
+ * generator: no copy, no dialog. `older` is what the reveal shows and saves (`revealOlderGenerator`).
+ */
+export function openOlderGenerator(o: { readonly kept: WorldRecord; readonly readyGenKey: string; readonly sim: Pick<SimClient, 'record'> }): { readonly older: boolean; readonly kept: WorldRecord } {
+  const sent = olderGeneratorRecord(o.kept, o.readyGenKey);
+  if (sent === null) return { older: false, kept: o.kept };
+  o.sim.record(sent);
+  return { older: true, kept: sent };
+}
+
+/**
+ * At the reveal, an older generator's open (SP5b spec §3.4 step 4, D8; ruling P27): D8's notice for 8 s, and the
+ * `record` it sent counted as a change, so the autosave's first tick posts the flush that writes it. Nothing otherwise.
+ */
+export function revealOlderGenerator(g: { readonly older: boolean }, o: { readonly notices: Pick<Notices, 'show'>; readonly autosave: Pick<Autosave, 'markChanged'> }): void {
+  if (!g.older) return;
+  o.notices.show(OLDER_GENERATOR_NOTICE, { kind: 'info', timeoutMs: OLDER_GENERATOR_NOTICE_MS });
+  o.autosave.markChanged();
 }
 
 /** A saved world opened on the main thread: its connection, session, normalised records, notices, `load` and kept record. */
@@ -2351,6 +2387,10 @@ export function mountWorldPage(root: HTMLElement, q: WorldQuery, hash: string, o
     const firstReady = await workers.configure(session.state.seedText, session.state.params);
     await simAttached;
     if (state !== 'loading') return;
+    // A saved world from an older generator (SP5b spec §3.4 step 4, D8): its record with today's genKey goes to the sim
+    // now that its diffs are loaded (the sim refuses a `record` before `loaded`; a failed sim's client sends nothing), and
+    // `generator.kept` is the record the page keeps from here (§3.6); the notice and the change wait for the reveal.
+    const generator = saved === null ? null : openOlderGenerator({ kept: saved.kept, readyGenKey: firstReady.genKey, sim: simClient! });
 
     // 4. The centre, the renderer and the load.
     let at: { x: number; z: number };
@@ -3457,6 +3497,8 @@ export function mountWorldPage(root: HTMLElement, q: WorldQuery, hash: string, o
       teardown.push(() => a.dispose());
       // Stopped once the lock is released at a `pagehide`: a page restored from the back/forward cache never writes (§3.5).
       teardown.push(worldLock!.onRelease(() => a.dispose()));
+      // An older generator's open: D8's notice, and its `record` saved by the first tick (ruling P27).
+      revealOlderGenerator(generator!, { notices, autosave: a });
     }
 
     // The streaming frame (SP4b spec §7.2): the slow-frame notice and the throttle get every raw rAF delta before the
