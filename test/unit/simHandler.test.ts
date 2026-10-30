@@ -81,22 +81,26 @@ describe('the sim handler on a shared seed-42 region (SP5a spec §2.1)', () => {
     expect([...m.prev]).toEqual([NO_ENTRY]);
     expect([...m.next]).toEqual([val(STONE)]);
     expect([...m.dirty]).toContain(colKey(C[0], C[1]));
-    expect([...m.entryCols]).toEqual([colKey(C[0], C[1])]);
+    expect([...m.entryAdded]).toEqual([colKey(C[0], C[1])]);
+    expect([...m.entryRemoved]).toEqual([]);
     expect(m.relightMs).toBeGreaterThanOrEqual(0);
     expect(m.editMs).toBeGreaterThanOrEqual(m.relightMs);
     // Written through the sim's own attachment: the main thread reads the voxel and the bumped version.
     expect(valueAt(store, x, y, z)).toBe(val(STONE));
     expect(blockVersion(store, C[0], C[1])).toBe(bv + 1);
     // Every array of the result is transferred whole.
-    expect(r.transfer).toEqual([m.prev.buffer, m.next.buffer, m.dirty.buffer, m.entryCols.buffer]);
-    for (const a of [m.prev, m.next, m.dirty, m.entryCols]) expect(a.byteLength).toBe(a.buffer.byteLength);
+    expect(r.transfer).toEqual([m.prev.buffer, m.next.buffer, m.dirty.buffer, m.entryAdded.buffer, m.entryRemoved.buffer]);
+    for (const a of [m.prev, m.next, m.dirty, m.entryAdded, m.entryRemoved]) expect(a.byteLength).toBe(a.buffer.byteLength);
     // A refusal comes back as a result too: the same voxel, expected at its old value, is `changed`.
     const refused = edited(post([set(x, y, z, val(DIRT), before)]));
     expect(refused.refused).toBe('changed');
     expect([...refused.prev]).toEqual([val(STONE)]);
+    expect([refused.entryAdded.length, refused.entryRemoved.length]).toEqual([0, 0]);
     expect(valueAt(store, x, y, z)).toBe(val(STONE));
-    // Undo it, so the later cases start from the generated terrain.
-    expect(edited(post([revert(x, y, z, val(STONE))])).refused).toBeNull();
+    // Undo it, so the later cases start from the generated terrain: the column's last entry goes.
+    const undone = edited(post([revert(x, y, z, val(STONE))]));
+    expect(undone.refused).toBeNull();
+    expect([[...undone.entryAdded], [...undone.entryRemoved]]).toEqual([[], [colKey(C[0], C[1])]]);
     expect(valueAt(store, x, y, z)).toBe(before);
   });
 

@@ -632,12 +632,13 @@ export interface DiffRequestMsg { readonly type: 'diff'; readonly id: number; re
 export type ToSim = AttachMsg | EditsMsg | DiffRequestMsg;
 /**
  * A batch's outcome (§2.1; `sim/edits.ts`'s `EditResult`): `prev[k]` and `next[k]` edit k's entry before and after it
- * (0xFFFFFFFF for none), `dirty` the colKeys to remesh (§2.6), `entryCols` the colKeys holding entries; each array
- * transferred.
+ * (0xFFFFFFFF for none), `dirty` the colKeys to remesh (§2.6), `entryAdded` and `entryRemoved` the colKeys that
+ * gained their first entry or lost their last in the batch (SP5b D20; both empty on a refusal); each array transferred.
  */
 export interface EditedMsg {
   readonly type: 'edited'; readonly id: number; readonly prev: Uint32Array; readonly next: Uint32Array; readonly dirty: Float64Array;
-  readonly entryCols: Float64Array; readonly refused: EditRefusal | null; readonly relightMs: number; readonly editMs: number;
+  readonly entryAdded: Float64Array; readonly entryRemoved: Float64Array; readonly refused: EditRefusal | null;
+  readonly relightMs: number; readonly editMs: number;
 }
 /**
  * Column (cx, cz)'s entries in canonical order (§2.4, §2.5): section `sy` (0 … 23), voxel `idx` (0 … 4095) and its
@@ -695,7 +696,7 @@ export function parseFromSim(m: unknown): FromSim | null {
     case 'edited': {
       const { prev, next, refused } = m;
       return isInt(m['id']) && prev instanceof Uint32Array && next instanceof Uint32Array && next.length === prev.length
-        && m['dirty'] instanceof Float64Array && m['entryCols'] instanceof Float64Array
+        && m['dirty'] instanceof Float64Array && m['entryAdded'] instanceof Float64Array && m['entryRemoved'] instanceof Float64Array
         && (refused === null || (typeof refused === 'string' && Object.hasOwn(EDIT_REFUSALS, refused)))
         && isFiniteNum(m['relightMs']) && isFiniteNum(m['editMs'])
         ? (m as unknown as EditedMsg) : null;

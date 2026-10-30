@@ -8,7 +8,7 @@
  */
 import { performance } from 'node:perf_hooks';
 import { beforeAll, describe, expect, test } from 'vitest';
-import { colKeyCx, colKeyCz } from '../../src/core/coords';
+import { colKey, colKeyCx, colKeyCz } from '../../src/core/coords';
 import { resolveProfile } from '../../src/core/params/profiles';
 import { seedFromInput } from '../../src/core/seed';
 import { findSpawn } from '../../src/gen/column/spawn';
@@ -113,7 +113,8 @@ describe('applyEdits on a seed-42 region (SP5a spec §2.1, §2.2, §2.4)', () =>
     expect(blockVersion(store, C[0], C[1])).toBe(bv + 1);
     expect(store.table.status(store.table.find(C[0], C[1]))).toBe(3);
     expect(cols(r.dirty)).toContain(`${C[0]},${C[1]}`);
-    expect(cols(r.entryCols)).toEqual(names(C));
+    expect(cols(r.entryAdded)).toEqual(names(C));
+    expect(cols(r.entryRemoved)).toEqual([]);
     expect(r.relightMs).toBeGreaterThanOrEqual(0);
     expect(r.editMs).toBeGreaterThanOrEqual(r.relightMs);
     expectLightFresh(store, C[0], C[1]);
@@ -142,7 +143,8 @@ describe('applyEdits on a seed-42 region (SP5a spec §2.1, §2.2, §2.4)', () =>
     expect([...back.next]).toEqual([NO_ENTRY]);
     expect(entry(diffs, x, y, z)).toBe(NO_ENTRY);
     expect(valueAt(store, x, y, z)).toBe(generated);
-    expect(cols(back.entryCols)).toEqual([]);
+    expect(cols(back.entryAdded)).toEqual([]);
+    expect(cols(back.entryRemoved)).toEqual(names(C));
 
     run([set(x, y, z, val(TORCH), generated)]);
     expect(entry(diffs, x, y, z)).toBe(val(TORCH));
@@ -336,7 +338,8 @@ describe('applyEdits on a canned store: the dirty set and StoreFull (SP5a spec �
     expect(auxOf(0, 0).toString('hex')).toBe(aux);
     expect(entry(d, 5, 70, 5)).toBe(NO_ENTRY);
     expect(d.size).toBe(0);
-    expect(cols(r.entryCols)).toEqual([]);
+    expect(cols(r.entryAdded)).toEqual([]);
+    expect(cols(r.entryRemoved)).toEqual([]);
     const want = vs.slice();
     const at = (cx: number, cz: number): number => 3 * (5 * (cz + 2) + (cx + 2));
     want[at(0, 0)]! += 1;
@@ -386,5 +389,98 @@ describe('applyEdits on a canned store: the dirty set and StoreFull (SP5a spec �
     expect(r.refused).toBeNull();
     expect([valueAt(s, 5, 70, 5), valueAt(s, 21, 70, 5)]).toEqual([val(STONE), val(STONE)]);
     expectLightFresh(s, 0, 0);
+  });
+});
+
+describe('applyEdits on a canned store: the entry changes and the dirty-column set (SP5b spec §3.2, §3.3, D20)', () => {
+  const scratch = createEditScratch();
+  /** The canned store's generated value at y: stone at and below `TOP`, air above. */
+  const generated = (y: number): number => val(y <= TOP ? STONE : AIR);
+  const sortedKeys = (keys: Iterable<number>): number[] => [...keys].sort((a, b) => a - b);
+
+  test('after 200 random edits (places, breaks, reverts, a refused batch), the union of `entryAdded` minus `entryRemoved` replayed into a set equals `diffs.columns()` after each batch', () => {
+    const s = cannedStore();
+    const d = createDiffStore();
+    const replay = new Set<number>();
+    const next = testRng(17);
+    const rng = () => testFloat(next);
+    const palette = [val(STONE), val(AIR), val(GLASS), val(TORCH), val(DIRT)];
+    const tally = { places: 0, breaks: 0, reverts: 0, refused: 0, added: 0, removed: 0 };
+    /** A random voxel holding an entry, as world (x, y, z), or null when the store holds none. */
+    const someEntry = (): [number, number, number] | null => {
+      const keys = [...d.columns()];
+      if (keys.length === 0) return null;
+      const key = keys[Math.floor(rng() * keys.length)]!;
+      const cd = d.columnDiff(colKeyCx(key), colKeyCz(key))!;
+      const k = Math.floor(rng() * cd.idx.length);
+      const i = cd.idx[k]!;
+      return [16 * colKeyCx(key) + (i & 15), 16 * cd.sy[k]! - 64 + (i >> 8), 16 * colKeyCz(key) + ((i >> 4) & 15)];
+    };
+    let posted = 0;
+    for (let b = 0; posted < 200; b++) {
+      const n = Math.min(1 + Math.floor(rng() * 3), 200 - posted);
+      const batch: Edit[] = [];
+      /** The value an earlier edit of the batch leaves at a voxel (the batch's `expect` chain). */
+      const left = new Map<string, number>();
+      for (let k = 0; k < n; k++) {
+        const pick = rng() < 0.3 ? someEntry() : null;
+        // Inside the inner 3 × 3 (columns −1 … 1), whose 3 × 3s are Published, around the stone's top.
+        const [x, y, z] = pick ?? [-16 + Math.floor(rng() * 48), TOP - 2 + Math.floor(rng() * 5), -16 + Math.floor(rng() * 48)];
+        const at = `${x},${y},${z}`;
+        const cur = left.get(at) ?? valueAt(s, x, y, z);
+        if (pick !== null) {
+          batch.push({ x, y, z, op: 'revert', value: 0, expect: cur });
+          left.set(at, generated(y));
+          tally.reverts++;
+        } else {
+          const value = palette[Math.floor(rng() * palette.length)]!;
+          batch.push(set(x, y, z, value, cur));
+          left.set(at, value);
+          if (value === val(AIR)) tally.breaks++;
+          else tally.places++;
+        }
+      }
+      // One batch, past the middle, with its last `expect` stale: refused `'changed'`, nothing written.
+      const refuse = b === 60;
+      if (refuse) {
+        const e = batch[batch.length - 1]!;
+        batch[batch.length - 1] = { ...e, expect: e.expect ^ 0x100 };
+      }
+      posted += n;
+      const r = applyEdits(s, d, scratch, batch, now);
+      expect(r.refused, `batch ${b}`).toBe(refuse ? 'changed' : null);
+      if (refuse) {
+        tally.refused++;
+        expect([r.entryAdded.length, r.entryRemoved.length]).toEqual([0, 0]);
+      }
+      for (const key of r.entryAdded) replay.add(key);
+      for (const key of r.entryRemoved) replay.delete(key);
+      tally.added += r.entryAdded.length;
+      tally.removed += r.entryRemoved.length;
+      expect(sortedKeys(replay), `batch ${b}`).toEqual(sortedKeys(d.columns()));
+    }
+    expect(posted).toBe(200);
+    expect(tally.refused).toBe(1);
+    // The run exercised each kind of edit, and columns both gained and lost their entries.
+    for (const kind of ['places', 'breaks', 'reverts', 'added', 'removed'] as const) expect(tally[kind], kind).toBeGreaterThan(0);
+  });
+
+  test('a batch refused `\'full\'` restores its entries and reports neither added nor removed, while its columns stay dirty (restored values marked)', () => {
+    const s = cannedStore(MiB);
+    while (s.blockPool.freeCount() > 1) s.blockPool.alloc();
+    const d = createDiffStore();
+    // An entry of (0, 0) from before the batch, its column's dirty mark already taken (as a flush would).
+    d.set(0, 0, sectionOf(60), idxOf(3, 60, 3), val(GLASS));
+    expect(sortedKeys(d.takeDirty())).toEqual([colKey(0, 0)]);
+    const r = applyEdits(s, d, scratch, [set(5, 70, 5, val(STONE), val(AIR)), set(21, 70, 5, val(STONE), val(AIR))], now);
+    expect(r.refused).toBe('full');
+    expect([r.entryAdded.length, r.entryRemoved.length]).toEqual([0, 0]);
+    // The first edit's entry was recorded, then restored; the earlier entry is untouched.
+    expect(entry(d, 5, 70, 5)).toBe(NO_ENTRY);
+    expect(entry(d, 3, 60, 3)).toBe(val(GLASS));
+    expect(sortedKeys(d.columns())).toEqual([colKey(0, 0)]);
+    // The recorded and restored column is marked; (1, 0), whose entry was never recorded, is not.
+    expect(sortedKeys(d.takeDirty())).toEqual([colKey(0, 0)]);
+    expect(sortedKeys(d.takeDirty())).toEqual([]);
   });
 });

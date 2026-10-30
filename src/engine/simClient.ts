@@ -2,7 +2,8 @@
  * The main thread's side of the sim worker (SP5a spec §2.1, §2.5, D17). Only `engine/` spawns workers, so this module
  * spawns `sim.worker.ts` (`createBrowserSim`) and the page calls it. It attaches the store as thread 15, posts `edits`
  * batches and `diff` requests with ids and matches each reply to its request (the sim answers in order), and keeps the
- * set of columns holding entries from each `edited` reply's `entryCols` (`hasEntries`, the read-through's test, §2.5).
+ * set of columns holding entries (`hasEntries`, the read-through's test, §2.5) from each `edited` reply's changes,
+ * `entryAdded` and `entryRemoved` (SP5b D20).
  *
  * **The sim's failure** (§2.1): an `error` event, an `error` reply of any code, or a reply the guard refuses
  * (`parseFromSim`, or one that does not answer a pending request of its kind, its batch's length or its column). In
@@ -42,7 +43,7 @@ export interface SimClient {
   edits(e: readonly Edit[]): Promise<EditedMsg>;
   /** Column (cx, cz)'s entries, or null when it holds none or the sim failed (§2.5). */
   diff(cx: number, cz: number): Promise<ColumnDiff | null>;
-  /** Whether the last reply's `entryCols` named the column (false once the sim failed). */
+  /** Whether the column holds entries, as the `edited` replies' changes tell (false once the sim failed). */
   hasEntries(cx: number, cz: number): boolean;
   readonly failed: boolean;
   dispose(): void;
@@ -109,8 +110,8 @@ export function createSimClient(spawn: () => SimWorkerLike, o: { onFailure(e: Er
       const r = m as EditedMsg;
       if (r.prev.length !== p.n) return fail(`an \`edited\` reply of ${r.prev.length} edits to a batch of ${p.n}`);
       pending.delete(m.id);
-      entries.clear();
-      for (const k of r.entryCols) entries.add(k);
+      for (const k of r.entryAdded) entries.add(k);
+      for (const k of r.entryRemoved) entries.delete(k);
       p.resolve(r);
       return;
     }

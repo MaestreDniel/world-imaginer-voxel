@@ -1,9 +1,9 @@
 /**
  * The page's sim client (SP5a spec §2.1, §2.5, D17) over a fake `SimWorkerLike`: it attaches the sim as thread 15,
  * posts `edits` and `diff` requests with ids and matches their replies, keeps the entry set from each reply's
- * `entryCols`, and on the sim's failure (an `error` event, an `error` reply of any code, or a reply its guard refuses)
- * sets `failed`, empties the entry set, calls `onFailure` once and synchronously, then rejects every pending `edits`
- * with `SimFailed` and resolves every pending and later `diff` with null.
+ * `entryAdded`/`entryRemoved` (SP5b D20), and on the sim's failure (an `error` event, an `error` reply of any code, or
+ * a reply its guard refuses) sets `failed`, empties the entry set, calls `onFailure` once and synchronously, then
+ * rejects every pending `edits` with `SimFailed` and resolves every pending and later `diff` with null.
  */
 import { describe, expect, test } from 'vitest';
 import { colKey } from '../../src/core/coords';
@@ -42,9 +42,10 @@ function fakeSim(): FakeSim {
 
 const STONE_AT: Edit = { x: 3, y: 70, z: -20, op: 'set', value: 1 << 8, expect: 0 };
 const lastId = (w: FakeSim): number => w.posted.at(-1)!['id'] as number;
-const editedReply = (id: number, entryCols: Array<[number, number]>, n = 1) => ({
+const keysOf = (cs: Array<[number, number]>): Float64Array => new Float64Array(cs.map(([cx, cz]) => colKey(cx, cz)));
+const editedReply = (id: number, added: Array<[number, number]>, removed: Array<[number, number]> = [], n = 1) => ({
   type: 'edited', id, prev: new Uint32Array(n).fill(0xFFFFFFFF), next: new Uint32Array(n).fill(1 << 8),
-  dirty: new Float64Array([colKey(0, -2)]), entryCols: new Float64Array(entryCols.map(([cx, cz]) => colKey(cx, cz))),
+  dirty: new Float64Array([colKey(0, -2)]), entryAdded: keysOf(added), entryRemoved: keysOf(removed),
   refused: null, relightMs: 0.5, editMs: 1,
 });
 const diffReply = (id: number, cx: number, cz: number, n: number) => ({
@@ -65,7 +66,7 @@ describe('the sim client (SP5a spec §2.1, §2.5)', () => {
     expect(sim.failed).toBe(false);
   });
 
-  test('the entry set follows `entryCols`', async () => {
+  test('the entry set follows `entryAdded`/`entryRemoved`', async () => {
     const w = fakeSim();
     const sim = createSimClient(() => w, { onFailure: () => { throw new Error('no failure expected'); } });
     expect(sim.hasEntries(0, -2)).toBe(false);
@@ -75,11 +76,20 @@ describe('the sim client (SP5a spec §2.1, §2.5)', () => {
     const ra = await a;
     expect([ra.type, ra.refused, [...ra.prev], [...ra.next]]).toEqual(['edited', null, [0xFFFFFFFF], [1 << 8]]);
     expect([sim.hasEntries(0, -2), sim.hasEntries(5, 7), sim.hasEntries(1, -2)]).toEqual([true, true, false]);
-    // Each reply's entryCols replaces the set, a refused one's too.
+    // Each reply's changes apply to the set: its added columns join it, its removed ones leave it, the rest stay.
     const b = sim.edits([STONE_AT]);
-    w.reply({ ...editedReply(lastId(w), [[5, 7]]), refused: 'changed' });
-    expect((await b).refused).toBe('changed');
-    expect([sim.hasEntries(0, -2), sim.hasEntries(5, 7)]).toEqual([false, true]);
+    w.reply(editedReply(lastId(w), [[1, -2]], [[0, -2]]));
+    await b;
+    expect([sim.hasEntries(0, -2), sim.hasEntries(5, 7), sim.hasEntries(1, -2)]).toEqual([false, true, true]);
+    // A refused batch reports no change, and the set stays as it was.
+    const c = sim.edits([STONE_AT]);
+    w.reply({ ...editedReply(lastId(w), []), refused: 'changed' });
+    expect((await c).refused).toBe('changed');
+    expect([sim.hasEntries(0, -2), sim.hasEntries(5, 7), sim.hasEntries(1, -2)]).toEqual([false, true, true]);
+    const e = sim.edits([STONE_AT]);
+    w.reply(editedReply(lastId(w), [], [[1, -2]]));
+    await e;
+    expect([sim.hasEntries(0, -2), sim.hasEntries(5, 7), sim.hasEntries(1, -2)]).toEqual([false, true, false]);
     // A diff request: the column's entries, or null for a zero-length reply (ruling R9).
     const d = sim.diff(5, 7);
     expect(w.posted.at(-1)).toEqual({ type: 'diff', id: lastId(w), cx: 5, cz: 7 });
@@ -95,7 +105,7 @@ describe('the sim client (SP5a spec §2.1, §2.5)', () => {
     const [ip, iq] = w.posted.slice(-2).map((m) => m['id'] as number);
     expect(ip).not.toBe(iq);
     w.reply(diffReply(ip!, 5, 7, 1));
-    w.reply(editedReply(iq!, [[5, 7]], 2));
+    w.reply(editedReply(iq!, [], [], 2));
     expect((await p)!.sy.length).toBe(1);
     expect((await q).prev.length).toBe(2);
     expect(sim.failed).toBe(false);
@@ -107,7 +117,7 @@ describe('the sim client (SP5a spec §2.1, §2.5)', () => {
     ['an `error` reply of another code', (w) => w.reply({ type: 'error', jobId: 1, epoch: null, code: 'BAD_MESSAGE', message: 'malformed message' })],
     ['a reply the guard refuses', (w) => w.reply({ type: 'edited', id: 1, prev: [0] })],
     ['a reply to no pending request', (w) => w.reply(editedReply(999, []))],
-    ['a reply whose prev is not the batch\'s length', (w) => w.reply(editedReply(lastIdOf(w, 'edits'), [], 3))],
+    ['a reply whose prev is not the batch\'s length', (w) => w.reply(editedReply(lastIdOf(w, 'edits'), [], [], 3))],
     ['a diff reply for another column', (w) => w.reply(diffReply(lastIdOf(w, 'diff'), 9, 9, 1))],
   ];
   const lastIdOf = (w: FakeSim, type: string): number => w.posted.filter((m) => m['type'] === type).at(-1)!['id'] as number;

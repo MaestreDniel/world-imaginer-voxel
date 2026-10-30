@@ -22,8 +22,12 @@
  * The dirty set (§2.6) is every column whose padded view holds a changed voxel: the edited column, its neighbours whose
  * one-voxel ring holds the edited voxel, and from the relight report each column with a changed section plus the
  * neighbours its border and corner bits face. The clock is injected (`now`): `sim/` reads no global clock.
+ *
+ * The entry changes (SP5b D20): `entryAdded` and `entryRemoved` name the edited columns whose `diffs.has` turned true
+ * or false over the batch, so the main thread keeps its entry set without the whole set on every reply. The
+ * DiffStore's own dirty-column set (SP5b §3.2) is marked by its `set` and `remove`, the restores included.
  */
-import { colKey } from '../core/coords';
+import { colKey, colKeyCx, colKeyCz } from '../core/coords';
 import { patchHeightmaps } from '../gen/pipeline/finalHeightmaps';
 import {
   createRelightScratch, EDGE_E, EDGE_N, EDGE_NE, EDGE_NW, EDGE_S, EDGE_SE, EDGE_SW, EDGE_W, relight, type RelightAccess,
@@ -52,14 +56,16 @@ export type EditRefusal = 'unloaded' | 'changed' | 'noProto' | 'full';
 /**
  * A batch's outcome (§2.1). `prev[k]` is edit k's DiffStore entry before it and `next[k]` the entry it left (`NO_ENTRY`
  * for none; a refused batch leaves both at the entries it found); `dirty` the colKeys to remesh (§2.6; empty on a
- * refusal before any write, the columns whose views held a rolled-back write on `'full'`), `entryCols` the colKeys
- * holding entries after the batch. Every array is fresh (transferable).
+ * refusal before any write, the columns whose views held a rolled-back write on `'full'`), `entryAdded` and
+ * `entryRemoved` the colKeys that gained their first entry or lost their last in the batch (both empty on a refusal;
+ * SP5b D20). Every array is fresh (transferable).
  */
 export interface EditResult {
   readonly prev: Uint32Array;
   readonly next: Uint32Array;
   readonly dirty: Float64Array;
-  readonly entryCols: Float64Array;
+  readonly entryAdded: Float64Array;
+  readonly entryRemoved: Float64Array;
   readonly refused: EditRefusal | null;
   readonly relightMs: number;
   readonly editMs: number;
@@ -293,12 +299,18 @@ export function applyEdits(store: VoxelStore, diffs: DiffStore, s: EditScratch, 
   const prev = new Uint32Array(n);
   const next = new Uint32Array(n);
   const dirty = new Set<number>();
+  /** Each edited column's `diffs.has` before the batch (D20's entry changes), gathered once the batch is valid. */
+  const had = new Map<number, boolean>();
   let refused: EditRefusal | null = null;
   let relightMs = 0;
   store.enterRead();
   try {
     refused = validate(store, edits);
     if (refused === null) {
+      for (const e of edits) {
+        const key = colKey(e.x >> 4, e.z >> 4);
+        if (!had.has(key)) had.set(key, diffs.has(e.x >> 4, e.z >> 4));
+      }
       const opened: EditWriter[] = [];
       const open = (cx: number, cz: number): EditWriter => {
         const w = store.reopenPublished(cx, cz);
@@ -414,11 +426,22 @@ export function applyEdits(store: VoxelStore, diffs: DiffStore, s: EditScratch, 
   } finally {
     store.exitRead();
   }
+  // A refused batch left the DiffStore as it found it: no change to report.
+  const added: number[] = [];
+  const removed: number[] = [];
+  if (refused === null) {
+    for (const [key, before] of had) {
+      const after = diffs.has(colKeyCx(key), colKeyCz(key));
+      if (after && !before) added.push(key);
+      else if (before && !after) removed.push(key);
+    }
+  }
   return {
     prev,
     next,
     dirty: Float64Array.from(dirty),
-    entryCols: Float64Array.from(diffs.columns()),
+    entryAdded: Float64Array.from(added),
+    entryRemoved: Float64Array.from(removed),
     refused,
     relightMs,
     editMs: now() - t0,

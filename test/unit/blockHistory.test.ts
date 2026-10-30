@@ -42,7 +42,7 @@ function rig(delayMs = 0) {
     const prev = new Uint32Array(n);
     const next = new Uint32Array(n);
     const reply = (refused: EditedMsg['refused']): EditedMsg => ({
-      type: 'edited', id: 1, prev, next, dirty: new Float64Array(0), entryCols: new Float64Array(0), refused, relightMs: 0, editMs: 0,
+      type: 'edited', id: 1, prev, next, dirty: new Float64Array(0), entryAdded: new Float64Array(0), entryRemoved: new Float64Array(0), refused, relightMs: 0, editMs: 0,
     });
     const batch = new Map<string, number>();
     for (const e of edits) {

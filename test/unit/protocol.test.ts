@@ -734,7 +734,7 @@ describe('the sim worker\'s messages (SP5a spec §2.1)', () => {
   const edits = (...es: unknown[]) => ({ type: 'edits', id: 4, edits: es });
   const edited = (o: Record<string, unknown> = {}) => ({
     type: 'edited', id: 4, prev: new Uint32Array(2), next: new Uint32Array(2), dirty: new Float64Array([colKey(0, -1)]),
-    entryCols: new Float64Array([colKey(0, -1)]), refused: null, relightMs: 0.4, editMs: 1.2, ...o,
+    entryAdded: new Float64Array([colKey(0, -1)]), entryRemoved: new Float64Array([colKey(3, 2)]), refused: null, relightMs: 0.4, editMs: 1.2, ...o,
   });
   const diff = (o: Record<string, unknown> = {}) => ({
     type: 'diff', id: 5, cx: 0, cz: -1, sy: new Uint8Array([8]), idx: new Uint16Array([4085]), value: new Uint32Array([1 << 8]), ...o,
@@ -783,7 +783,7 @@ describe('the sim worker\'s messages (SP5a spec §2.1)', () => {
   test('each reply of the sim is accepted', () => {
     expect(parseFromSim({ type: 'attached' })).not.toBeNull();
     expect(parseFromSim(edited())).not.toBeNull();
-    expect(parseFromSim(edited({ refused: 'changed', dirty: new Float64Array(0) }))).not.toBeNull();
+    expect(parseFromSim(edited({ refused: 'changed', dirty: new Float64Array(0), entryAdded: new Float64Array(0), entryRemoved: new Float64Array(0) }))).not.toBeNull();
     for (const refused of ['unloaded', 'noProto', 'full']) expect(parseFromSim(edited({ refused })), refused).not.toBeNull();
     expect(parseFromSim(diff())).not.toBeNull();
     expect(parseFromSim(diff({ sy: new Uint8Array(0), idx: new Uint16Array(0), value: new Uint32Array(0) }))).not.toBeNull();
@@ -799,7 +799,11 @@ describe('the sim worker\'s messages (SP5a spec §2.1)', () => {
     ['edited whose next is not a Uint32Array', edited({ next: new Int32Array(2) })],
     ['edited whose next is not prev\'s length', edited({ next: new Uint32Array(3) })],
     ['edited whose dirty is not a Float64Array', edited({ dirty: new Uint32Array(1) })],
-    ['edited whose entryCols is not a Float64Array', edited({ entryCols: [colKey(0, -1)] })],
+    ['edited whose entryAdded is not a Float64Array', edited({ entryAdded: [colKey(0, -1)] })],
+    ['edited whose entryRemoved is not a Float64Array', edited({ entryRemoved: new Uint32Array(1) })],
+    ['edited without entryAdded', edited({ entryAdded: undefined })],
+    ['edited without entryRemoved', edited({ entryRemoved: undefined })],
+    ['edited with the whole entryCols instead of the changes', edited({ entryAdded: undefined, entryRemoved: undefined, entryCols: new Float64Array([colKey(0, -1)]) })],
     ['edited with an unknown refusal', edited({ refused: 'busy' })],
     ['edited with a NaN relightMs', edited({ relightMs: Number.NaN })],
     ['edited without editMs', edited({ editMs: undefined })],

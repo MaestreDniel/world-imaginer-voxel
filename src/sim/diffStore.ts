@@ -4,6 +4,10 @@
  * value only; the rule that an edit equal to the generated value removes its entry is the caller's (`edits.ts` reads
  * the generated value from the retained proto). The store never drops entries on its own: they stay at their
  * coordinates after an Apply (D14). Emptied maps are deleted, so a column with no entries is absent.
+ *
+ * **The dirty-column set** (SP5b spec §3.2): `set` and an effective `remove` mark their column, so both an edit's
+ * writes and a refused batch's restores reach the next flush; `takeDirty` hands the set over and clears it, and
+ * `markDirty` merges an aborted flush's columns back. `setColumn` (the world's load) marks nothing.
  */
 import { colKey } from '../core/coords';
 import type { ColumnDiff } from '../world/store/api';
@@ -26,10 +30,17 @@ export interface DiffStore {
   columns(): IterableIterator<number>;
   /** The number of entries over every column. */
   readonly size: number;
+  /** The `colKey`s of the columns whose entries changed since the last take, in a fresh array (transferable); clears the set. */
+  takeDirty(): Float64Array;
+  /** Marks the columns `keys` dirty (an aborted flush's merge-back, SP5b spec §3.2). */
+  markDirty(keys: Iterable<number>): void;
+  /** Replaces column (cx, cz)'s entries with `d`'s (none when it is empty); marks nothing dirty (the world's load). */
+  setColumn(cx: number, cz: number, d: ColumnDiff): void;
 }
 
 export function createDiffStore(): DiffStore {
   const cols = new Map<number, Map<number, Map<number, number>>>();
+  const dirty = new Set<number>();
   let size = 0;
 
   return {
@@ -44,6 +55,7 @@ export function createDiffStore(): DiffStore {
       if (sec === undefined) col.set(sy, (sec = new Map()));
       if (!sec.has(idx)) size++;
       sec.set(idx, value);
+      dirty.add(key);
     },
     remove(cx, cz, sy, idx) {
       const key = colKey(cx, cz);
@@ -51,6 +63,7 @@ export function createDiffStore(): DiffStore {
       const sec = col?.get(sy);
       if (col === undefined || sec === undefined || !sec.delete(idx)) return;
       size--;
+      dirty.add(key);
       if (sec.size === 0) col.delete(sy);
       if (col.size === 0) cols.delete(key);
     },
@@ -82,6 +95,32 @@ export function createDiffStore(): DiffStore {
     },
     get size() {
       return size;
+    },
+    takeDirty() {
+      const keys = Float64Array.from(dirty);
+      dirty.clear();
+      return keys;
+    },
+    markDirty(keys) {
+      for (const key of keys) dirty.add(key);
+    },
+    setColumn(cx, cz, d) {
+      const key = colKey(cx, cz);
+      const old = cols.get(key);
+      if (old !== undefined) {
+        for (const sec of old.values()) size -= sec.size;
+        cols.delete(key);
+      }
+      if (d.sy.length === 0) return;
+      const col = new Map<number, Map<number, number>>();
+      for (let k = 0; k < d.sy.length; k++) {
+        const s = d.sy[k]!;
+        let sec = col.get(s);
+        if (sec === undefined) col.set(s, (sec = new Map()));
+        if (!sec.has(d.idx[k]!)) size++;
+        sec.set(d.idx[k]!, d.value[k]!);
+      }
+      cols.set(key, col);
     },
   };
 }

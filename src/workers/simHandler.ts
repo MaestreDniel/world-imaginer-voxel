@@ -70,10 +70,10 @@ export function createSimHandler(): SimHandler {
           if (store === null) return err(m.id, 'NOT_ATTACHED', 'no attach yet');
           const r = applyEdits(store, diffs, scratch ??= createEditScratch(), m.edits, now);
           const msg: FromSim = {
-            type: 'edited', id: m.id, prev: r.prev, next: r.next, dirty: r.dirty, entryCols: r.entryCols, refused: r.refused,
-            relightMs: r.relightMs, editMs: r.editMs,
+            type: 'edited', id: m.id, prev: r.prev, next: r.next, dirty: r.dirty, entryAdded: r.entryAdded, entryRemoved: r.entryRemoved,
+            refused: r.refused, relightMs: r.relightMs, editMs: r.editMs,
           };
-          return { msg, transfer: [r.prev.buffer, r.next.buffer, r.dirty.buffer, r.entryCols.buffer] as ArrayBuffer[] };
+          return { msg, transfer: [r.prev.buffer, r.next.buffer, r.dirty.buffer, r.entryAdded.buffer, r.entryRemoved.buffer] as ArrayBuffer[] };
         }
         case 'diff': {
           const d = readDiff(diffs, m.cx, m.cz);

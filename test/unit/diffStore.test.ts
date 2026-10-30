@@ -114,3 +114,78 @@ describe('DiffStore (SP5a spec §2.4, D20; master §2.7)', () => {
     expect(total).toBe(1000);
   });
 });
+
+describe('the dirty-column set (SP5b spec §3.2)', () => {
+  /** A `takeDirty` result as sorted colKeys. */
+  const taken = (d: ReturnType<typeof createDiffStore>): number[] => [...d.takeDirty()].sort((a, b) => a - b);
+  const sorted = (...keys: number[]): number[] => keys.sort((a, b) => a - b);
+
+  test('set and remove mark their column; `takeDirty` returns each once, then nothing', () => {
+    const d = createDiffStore();
+    expect(d.takeDirty()).toBeInstanceOf(Float64Array);
+    expect(taken(d)).toEqual([]);
+    d.set(0, 0, 8, 100, val(7));
+    d.set(0, 0, 9, 5, val(3));
+    d.set(-3, 5, 23, 4095, val(57, 1));
+    d.set(4, -2, 0, 0, val(1));
+    d.remove(4, -2, 0, 0);
+    // Each column once, however many entries of it changed.
+    expect(taken(d)).toEqual(sorted(colKey(0, 0), colKey(-3, 5), colKey(4, -2)));
+    expect(taken(d)).toEqual([]);
+    // A remove marks its column; a set marks it again after a take.
+    d.remove(0, 0, 8, 100);
+    expect(taken(d)).toEqual([colKey(0, 0)]);
+    d.set(-3, 5, 23, 4095, val(12));
+    expect(taken(d)).toEqual([colKey(-3, 5)]);
+    expect(taken(d)).toEqual([]);
+    // `markDirty` (an aborted flush's merge-back) adds keys to the set, each once.
+    d.set(1, 1, 2, 3, val(4));
+    d.markDirty([colKey(1, 1), colKey(7, -7), colKey(7, -7)]);
+    expect(taken(d)).toEqual(sorted(colKey(1, 1), colKey(7, -7)));
+    expect(taken(d)).toEqual([]);
+    // The fresh array owns its whole buffer (transferable).
+    d.set(2, 2, 0, 0, val(1));
+    const t = d.takeDirty();
+    expect(t.byteOffset === 0 && t.byteLength === t.buffer.byteLength).toBe(true);
+  });
+
+  test('`setColumn` marks nothing and replaces the column', () => {
+    const d = createDiffStore();
+    d.set(3, -1, 4, 10, val(9));
+    d.set(3, -1, 20, 11, val(8));
+    d.set(0, 0, 0, 0, val(1));
+    d.takeDirty();
+    d.setColumn(3, -1, { sy: new Uint8Array([2, 4]), idx: new Uint16Array([7, 4095]), value: new Uint32Array([val(5), val(0, 8)]) });
+    expect(Array.from(d.takeDirty())).toEqual([]);
+    // The old entries are gone, the new ones in place; `size` counts the replacement.
+    expect(d.get(3, -1, 4, 10)).toBe(NO_ENTRY);
+    expect(d.get(3, -1, 20, 11)).toBe(NO_ENTRY);
+    expect(d.get(3, -1, 2, 7)).toBe(val(5));
+    expect(d.get(3, -1, 4, 4095)).toBe(val(0, 8));
+    expect(d.size).toBe(3);
+    const cd = d.columnDiff(3, -1)!;
+    expect([Array.from(cd.sy), Array.from(cd.idx), Array.from(cd.value)]).toEqual([[2, 4], [7, 4095], [val(5), val(0, 8)]]);
+    // A column that held nothing gains its entries; an empty diff leaves the column absent.
+    d.setColumn(-8, 6, { sy: new Uint8Array([23]), idx: new Uint16Array([1]), value: new Uint32Array([val(2)]) });
+    expect(d.has(-8, 6)).toBe(true);
+    d.setColumn(0, 0, { sy: new Uint8Array(0), idx: new Uint16Array(0), value: new Uint32Array(0) });
+    expect(d.has(0, 0)).toBe(false);
+    expect(d.size).toBe(3);
+    expect([...d.columns()].sort((a, b) => a - b)).toEqual(sorted(colKey(3, -1), colKey(-8, 6)));
+    expect(Array.from(d.takeDirty())).toEqual([]);
+  });
+
+  test('a remove that empties a column marks it (a flush then deletes its key)', () => {
+    const d = createDiffStore();
+    d.set(5, 5, 10, 20, val(6));
+    d.takeDirty();
+    d.remove(5, 5, 10, 20);
+    expect(d.has(5, 5)).toBe(false);
+    expect(Array.from(d.takeDirty())).toEqual([colKey(5, 5)]);
+    // A loaded column emptied by a remove is marked too.
+    d.setColumn(6, 6, { sy: new Uint8Array([0]), idx: new Uint16Array([0]), value: new Uint32Array([val(2)]) });
+    d.remove(6, 6, 0, 0);
+    expect(d.has(6, 6)).toBe(false);
+    expect(Array.from(d.takeDirty())).toEqual([colKey(6, 6)]);
+  });
+});

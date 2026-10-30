@@ -22,7 +22,8 @@ const STONE = 1 << 8;
 const at = (x: number, z: number): Edit => ({ x, y: 70, z, op: 'set', value: STONE, expect: 0 });
 const reply = (n: number, o: Partial<EditedMsg> = {}): EditedMsg => ({
   type: 'edited', id: 1, prev: new Uint32Array(n).fill(0xFFFFFFFF), next: new Uint32Array(n).fill(STONE),
-  dirty: new Float64Array([colKey(0, 0), colKey(1, 0)]), entryCols: new Float64Array([colKey(0, 0)]), refused: null,
+  dirty: new Float64Array([colKey(0, 0), colKey(1, 0)]), entryAdded: new Float64Array([colKey(0, 0)]),
+  entryRemoved: new Float64Array(0), refused: null,
   relightMs: 0.75, editMs: 1.5, ...o,
 });
 
