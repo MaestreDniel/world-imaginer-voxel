@@ -1,7 +1,9 @@
 /**
  * `saves.ts`' pure part (SP5b spec §2.1-§2.3, D22, D33): the saved params load over the profile and the committed
  * SP5b-era fixture, the `stateTable` relation and remap, the `worlds` record's shape check, the state and history
- * normaliser (one test per field of §2.1) and the older-generator check.
+ * normaliser (one test per field of §2.1) and the older-generator check; and the records over the KV (§1.2, §1.3, §2.4,
+ * D2, D11, D15, E7): the list, create, rename, delete, the export and import batches, the sim's batch builders and the
+ * proposed names.
  */
 import { readFileSync } from 'node:fs';
 import { describe, expect, test } from 'vitest';
@@ -15,10 +17,13 @@ import { SCHEMA } from '../../src/core/params/schema';
 import { genKey, stageHashes } from '../../src/core/stage/hash';
 import { TIME_SPEEDS } from '../../src/daynight/dayNight';
 import { WorldSession } from '../../src/engine/session';
+import { worldRange, type KV, type ReadRequest } from '../../src/persist/kv';
+import { createMemoryKV } from '../../src/persist/memory';
 import {
-  DEFAULT_SPEED, DEFAULT_T, HISTORY_STEPS, loadParams, MAX_NAME, MAX_PLACES, newState, NO_VALUE, normalizeHistory,
-  normalizeState, olderGenerator, parseWorldRecord, remapDiff, remapOf, remapValue, tableRelation, todayStateTable,
-  type HistoryEdit, type StateBounds, type WorldRecord,
+  backupName, createSaves, DEFAULT_SPEED, DEFAULT_T, exportFileName, flushOps, HISTORY_STEPS, loadParams, MAX_NAME,
+  MAX_PLACES, newState, newWorldName, NO_VALUE, normalizeHistory, normalizeState, olderGenerator, parseWorldRecord,
+  remapDiff, remapOf, remapValue, tableRelation, todayStateTable, type HistoryEdit, type HistoryRecord,
+  type StateBounds, type StateRecord, type WorldRecord,
 } from '../../src/persist/saves';
 import { SPEED_MAX, SPEED_MIN } from '../../src/player/fly';
 import { normalizeHotbar } from '../../src/player/hotbar';
@@ -405,5 +410,165 @@ describe('olderGenerator (D8)', () => {
     const w = { ...record(pageKey), seedText: 'hello', seed: [s.seed[0], s.seed[1]] as [number, number], params: withoutDefs(f.params) };
     expect(hex64(genKey(w.seed, stageHashes(p.value)))).toBe(pageKey);
     expect(olderGenerator(w, p.value)).toBe(false);
+  });
+});
+
+describe('saves over the KV (§1.2, §1.3, §2.4, E7)', () => {
+  const key = (() => {
+    const p = loadParams(fixture());
+    if (!p.ok) throw new Error('fixture');
+    return hex64(genKey([1, 2], stageHashes(p.value)));
+  })();
+  const world = (id: string, over: Partial<WorldRecord> = {}): WorldRecord => ({
+    id, name: `World ${id}`, seedText: 'hello', seed: [1, 2], profile: 'default', params: fixture().params, schemaVersion: 2,
+    paramsHash: '0123456789abcdef', generatorVersion: 5, genKey: key, stateTable: todayStateTable(), created: 1_000, backupOf: null,
+    ...over,
+  });
+  const state = (id: string, over: Partial<StateRecord> = {}): StateRecord => ({ ...newState(id, BOUNDS), ...over });
+  const history = (id: string): HistoryRecord => ({ worldId: id, done: [step()], undone: [] });
+  const bytes = (...b: number[]) => new Uint8Array(b);
+  const COMPLETE = { status: 'complete', errorName: null };
+
+  /** Two worlds, each with its three records and three columns, written through `copyOps` (`writeAll`). */
+  async function twoWorlds() {
+    const kv = createMemoryKV();
+    const saves = createSaves(kv);
+    for (const id of ['a', 'b']) {
+      const cols = [3, 1, 2 ** 32 - 1].map((k) => ({ key: k, bytes: bytes(k & 0xFF, id.charCodeAt(0)) }));
+      expect(await saves.writeAll({ world: world(id), state: state(id, { updated: 5_000 }), history: history(id), cols })).toEqual(COMPLETE);
+    }
+    return { kv, saves };
+  }
+
+  /** The KV with every `read`'s requests recorded. */
+  const spyReads = (kv: KV) => {
+    const reads: (readonly ReadRequest[])[] = [];
+    const spy: KV = { read: (reqs) => (reads.push(reqs), kv.read(reqs)), write: kv.write, onEvent: kv.onEvent, close: kv.close };
+    return { spy, reads };
+  };
+
+  /** Every key of the KV, by store. */
+  const allKeys = (kv: ReturnType<typeof createMemoryKV>) =>
+    (['worlds', 'state', 'history', 'diffs', 'meta'] as const).map((s) => [s, kv.dump(s).map(([k]) => k)]);
+
+  test('`list` orders by `updated` descending, a never-saved world by `created` (its row\'s `updated` is `created`); ties by id', async () => {
+    const kv = createMemoryKV();
+    const saves = createSaves(kv);
+    await saves.create(world('old', { created: 1_000 }), state('old', { updated: 2_000 }));
+    await saves.create(world('new', { created: 3_000 }), state('new'));
+    await saves.create(world('tie2', { created: 1 }), state('tie2', { updated: 2_500 }));
+    await saves.create(world('tie1', { created: 2 }), state('tie1', { updated: 2_500, places: [goodPlace(1), goodPlace(2)] as unknown as StateRecord['places'] }));
+    const rows = await saves.list();
+    expect(rows.map((r) => (r.broken ? r.id : r.world.id))).toEqual(['new', 'tie1', 'tie2', 'old']);
+    expect(rows[0]).toEqual({ broken: false, world: world('new', { created: 3_000 }), updated: 3_000, places: 0 });
+    expect(rows[1]).toMatchObject({ broken: false, updated: 2_500, places: 2 });
+  });
+
+  test('`list` makes one `read` and never touches `diffs` or `history` (a spy KV)', async () => {
+    const { kv } = await twoWorlds();
+    const { spy, reads } = spyReads(kv);
+    const rows = await createSaves(spy).list();
+    expect(rows).toHaveLength(2);
+    expect(reads).toHaveLength(1);
+    expect(reads[0]!.map((r) => r.store).sort()).toEqual(['state', 'worlds']);
+    expect(reads[0]!.every((r) => r.op === 'getAll' && r.range === null)).toBe(true);
+  });
+
+  test('a `worlds` record with a non-string `name` is listed as a broken row with `parseWorldRecord`\'s reason', async () => {
+    const kv = createMemoryKV();
+    const saves = createSaves(kv);
+    await saves.create(world('good'), state('good'));
+    await kv.write([{ op: 'put', store: 'worlds', key: 'bad', value: { ...world('bad'), name: 7 } }]);
+    const rows = await saves.list();
+    const reason = parseWorldRecord({ ...world('bad'), name: 7 });
+    expect(reason.ok).toBe(false);
+    expect(rows).toContainEqual({ broken: true, id: 'bad', reason: reason.ok ? '' : reason.reason });
+    expect(rows).toContainEqual(expect.objectContaining({ broken: false, world: world('good') }));
+  });
+
+  test('`create` then `readOpen` returns both records; `history` undefined', async () => {
+    const kv = createMemoryKV();
+    const saves = createSaves(kv);
+    expect(await saves.create(world('w'), state('w'))).toEqual(COMPLETE);
+    expect(kv.opCount).toBe(2);
+    expect(await saves.readOpen('w')).toEqual({ world: world('w'), state: state('w'), history: undefined });
+    expect(await saves.readOpen('nope')).toEqual({ world: undefined, state: undefined, history: undefined });
+  });
+
+  test('rename trims and cuts to 64; an empty name is refused', async () => {
+    const kv = createMemoryKV();
+    const saves = createSaves(kv);
+    await saves.create(world('w'), state('w'));
+    expect(await saves.rename('w', `  ${'é'.repeat(70)}  `)).toEqual(COMPLETE);
+    expect((await saves.readOpen('w')).world).toEqual(world('w', { name: 'é'.repeat(MAX_NAME) }));
+    expect(await saves.rename('w', '  Home \t')).toEqual(COMPLETE);
+    expect((await saves.readOpen('w')).world).toEqual(world('w', { name: 'Home' }));
+    const ops = kv.opCount;
+    expect(await saves.rename('w', ' \t ')).toEqual({ status: 'abort', errorName: 'EmptyName' });
+    expect(kv.opCount).toBe(ops);
+    expect((await saves.readOpen('w')).world).toEqual(world('w', { name: 'Home' }));
+  });
+
+  test('`remove` leaves no key of the world in any store, and another world\'s keys untouched (E7\'s `deleteLeftovers` in small)', async () => {
+    const { kv, saves } = await twoWorlds();
+    const before = allKeys(kv);
+    expect(await saves.remove('a')).toEqual(COMPLETE);
+    const after = allKeys(kv);
+    const ofA = (k: unknown) => k === 'a' || (Array.isArray(k) && k[0] === 'a');
+    expect(after).toEqual(before.map(([s, keys]) => [s, (keys as unknown[]).filter((k) => !ofA(k))]));
+    expect(kv.dump('diffs')).toHaveLength(3);
+    expect(await saves.readAll('b')).not.toBeNull();
+  });
+
+  test('a `failAt(2)` during `remove` leaves every key', async () => {
+    const { kv, saves } = await twoWorlds();
+    const before = allKeys(kv);
+    kv.failAt(2);
+    expect(await saves.remove('a')).toEqual({ status: 'abort', errorName: 'AbortError' });
+    expect(allKeys(kv)).toEqual(before);
+  });
+
+  test('`readAll` returns the diffs in colKey order', async () => {
+    const { kv, saves } = await twoWorlds();
+    const { spy, reads } = spyReads(kv);
+    const d = await createSaves(spy).readAll('a');
+    expect(reads).toHaveLength(1);
+    expect(d).toEqual({
+      world: world('a'), state: state('a', { updated: 5_000 }), history: history('a'),
+      cols: [1, 3, 2 ** 32 - 1].map((k) => ({ key: k, bytes: bytes(k & 0xFF, 'a'.charCodeAt(0)) })),
+    });
+    expect(await saves.readAll('nope')).toBeNull();
+    await saves.create(world('c'), state('c'));
+    expect(await saves.readAll('c')).toEqual({ world: world('c'), state: state('c'), history: null, cols: [] });
+  });
+
+  test('`flushOps` with a null column deletes its key', async () => {
+    const kv = createMemoryKV();
+    await kv.write(flushOps('w', [{ key: 1, bytes: bytes(1) }, { key: 2, bytes: bytes(2) }], state('w', { flushSeq: 1 }), history('w'), world('w')));
+    const ops = flushOps('w', [{ key: 1, bytes: null }, { key: 3, bytes: bytes(3) }], state('w', { flushSeq: 2 }), null, null);
+    expect(ops).toContainEqual({ op: 'delete', store: 'diffs', key: ['w', 1] });
+    expect(ops.some((o) => o.store === 'history' || o.store === 'worlds')).toBe(false);
+    expect(await kv.write(ops)).toEqual(COMPLETE);
+    expect(kv.dump('diffs')).toEqual([[['w', 2], bytes(2)], [['w', 3], bytes(3)]]);
+    expect(kv.dump('state')).toEqual([['w', state('w', { flushSeq: 2 })]]);
+    expect(kv.dump('history')).toEqual([['w', history('w')]]);
+    expect(kv.dump('worlds')).toEqual([['w', world('w')]]);
+    expect(worldRange('w')).toEqual({ lower: ['w', 0], upper: ['w', 2 ** 32] });
+  });
+
+  test('`newWorldName` with "New world 1", "New world 3" taken → "New world 2"', () => {
+    expect(newWorldName(['New world 1', 'New world 3'])).toBe('New world 2');
+    expect(newWorldName([])).toBe('New world 1');
+  });
+
+  test('`backupName(\'My world\', [\'My world (before the change)\'])` → "My world (before the change 2)"', () => {
+    expect(backupName('My world', ['My world (before the change)'])).toBe('My world (before the change 2)');
+    expect(backupName('My world', [])).toBe('My world (before the change)');
+    expect(backupName('My world', ['My world (before the change)', 'My world (before the change 2)'])).toBe('My world (before the change 3)');
+  });
+
+  test('`exportFileName(\'a/b:c é\')` → `a_b_c é.wiworld` (letters include non-ASCII letters)', () => {
+    expect(exportFileName('a/b:c é')).toBe('a_b_c é.wiworld');
+    expect(exportFileName('My-world_2 ¿?')).toBe('My-world_2 __.wiworld');
   });
 });

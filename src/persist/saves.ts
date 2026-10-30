@@ -3,7 +3,9 @@
  * `history` stores, the `worlds` record's shape check, the saved params load (D33: `migrate` → `applyPatch` over
  * `resolveProfile(profile)`, so a leaf a later SP adds takes the world's profile value), the `stateTable` remap (D22:
  * stored id → today's id, a key that no longer parses → air), the older-generator check (D8), and the one normaliser
- * every `state` and `history` record goes through, at open, at import and under the tick's snapshot.
+ * every `state` and `history` record goes through, at open, at import and under the tick's snapshot; and the records
+ * over the KV (§1.2, §1.3, §2.4, E7): the worlds menu's list, create, rename, delete and export and import batches, the
+ * sim's flush and copy batches, and the names the menu proposes (D2, D11, D15).
  *
  * `persist/` value-imports the L2 core only, so the bounds that live in `player/`, `daynight/` and `ui/` (the hotbar's
  * `normalizeHotbar`, `TIME_SPEEDS`, the flying speed's range, the camera's y range) come in as `StateBounds`, which the
@@ -20,6 +22,7 @@ import { genKey, stageHashes } from '../core/stage/hash';
 import { NO_ENTRY } from '../sim/diffStore';
 import { REGISTRY } from '../world/blocks';
 import type { ColumnDiff } from '../world/store/api';
+import { worldRange, type KV, type WriteOp, type WriteResult } from './kv';
 
 /** The `worlds` record (§2.1): `params` the full document (master §2.7), `backupOf` the original's id (D11). */
 export interface WorldRecord {
@@ -375,4 +378,191 @@ export function normalizeHistory(raw: unknown, worldId: string, to: Int32Array |
   const done = normalizeSide(raw['done'], to);
   const undone = normalizeSide(raw['undone'], to);
   return { history: { worldId, done: done.steps, undone: undone.steps }, reset: false, dropped: done.dropped + undone.dropped };
+}
+
+// ---------------------------------------------------------------- the records over the KV
+
+/**
+ * A Load world row (§1.3): `updated` is the state's `updated` when positive, else the world's `created` (a world never
+ * saved since its create); `places` the state's place count. A `worlds` record `parseWorldRecord` refuses stays in the
+ * list with its reason, so Delete can remove it (D14).
+ */
+export type WorldRow =
+  | { broken: false; world: WorldRecord; updated: number; places: number }
+  | { broken: true; id: string; reason: string };
+
+/** A world's last committed save (Export, Import, the backup copy): `cols` in colKey order, the stored bytes. */
+export interface WorldDump {
+  world: WorldRecord;
+  state: StateRecord;
+  history: HistoryRecord | null;
+  cols: { key: number; bytes: Uint8Array }[];
+}
+
+/** The worlds menu's records over the KV; each method is one `read` or one `write` (rename reads, then writes). */
+export interface Saves {
+  /** `worlds` and `state` in one read (never `diffs` or `history`), most recently modified first, ties by id; broken rows last. */
+  list(): Promise<WorldRow[]>;
+  /** The `worlds` and `state` records in one write (§1.2). */
+  create(w: WorldRecord, state: StateRecord): Promise<WriteResult>;
+  /** The three records as stored (`undefined` when absent), in one read; the page parses and normalises them. */
+  readOpen(id: string): Promise<{ world: unknown; state: unknown; history: unknown }>;
+  /** The name trimmed and cut to `MAX_NAME`; an empty name or a missing or broken record writes nothing. The caller holds the world's lock. */
+  rename(id: string, name: string): Promise<WriteResult>;
+  /** The three records and the world's `diffs` range in one write (E7). The caller holds the world's lock. */
+  remove(id: string): Promise<WriteResult>;
+  /** The three records and the `diffs` range in one read, so a world open in another tab is read at one `flushSeq`; null without a readable `worlds` record or a `state` record. */
+  readAll(id: string): Promise<WorldDump | null>;
+  /** The three records and every column in one write (Import). */
+  writeAll(d: WorldDump): Promise<WriteResult>;
+  readonly kv: KV;
+}
+
+const nothingWritten = (errorName: string): WriteResult => ({ status: 'abort', errorName });
+
+/** The row's modified time: the state's positive finite `updated`, else the world's `created` (P8). */
+function rowOf(world: WorldRecord, state: unknown): WorldRow {
+  const updated = isObj(state) && isNum(state['updated']) && state['updated'] > 0 ? state['updated'] : world.created;
+  const places = isObj(state) && Array.isArray(state['places']) ? state['places'].length : 0;
+  return { broken: false, world, updated, places };
+}
+
+const rowId = (r: WorldRow): string => (r.broken ? r.id : r.world.id);
+
+/** Descending by `updated`, ties by id; a broken row has no modified time and sorts after every readable one, by id. */
+function compareRows(a: WorldRow, b: WorldRow): number {
+  if (a.broken !== b.broken) return a.broken ? 1 : -1;
+  if (!a.broken && !b.broken && a.updated !== b.updated) return b.updated - a.updated;
+  const ia = rowId(a);
+  const ib = rowId(b);
+  return ia < ib ? -1 : ia > ib ? 1 : 0;
+}
+
+export function createSaves(kv: KV): Saves {
+  return {
+    kv,
+    async list() {
+      const [worlds, states] = (await kv.read([
+        { op: 'getAll', store: 'worlds', range: null },
+        { op: 'getAll', store: 'state', range: null },
+      ])) as [{ keys: string[]; values: unknown[] }, { keys: string[]; values: unknown[] }];
+      const stateOf = new Map<string, unknown>(states.keys.map((k, i) => [k, states.values[i]]));
+      const rows = worlds.keys.map((id, i): WorldRow => {
+        const p = parseWorldRecord(worlds.values[i]);
+        return p.ok ? rowOf(p.world, stateOf.get(id)) : { broken: true, id, reason: p.reason };
+      });
+      return rows.sort(compareRows);
+    },
+    create(w, state) {
+      return kv.write([
+        { op: 'put', store: 'worlds', key: w.id, value: w },
+        { op: 'put', store: 'state', key: w.id, value: state },
+      ]);
+    },
+    async readOpen(id) {
+      const [world, state, history] = await kv.read([
+        { op: 'get', store: 'worlds', key: id },
+        { op: 'get', store: 'state', key: id },
+        { op: 'get', store: 'history', key: id },
+      ]);
+      return { world, state, history };
+    },
+    async rename(id, name) {
+      const cut = Array.from(name.trim()).slice(0, MAX_NAME).join('');
+      if (cut === '') return nothingWritten('EmptyName');
+      const [raw] = await kv.read([{ op: 'get', store: 'worlds', key: id }]);
+      const p = parseWorldRecord(raw);
+      if (!p.ok) return nothingWritten('NotFound');
+      return kv.write([{ op: 'put', store: 'worlds', key: id, value: { ...p.world, name: cut } }]);
+    },
+    remove(id) {
+      return kv.write([
+        { op: 'delete', store: 'worlds', key: id },
+        { op: 'delete', store: 'state', key: id },
+        { op: 'delete', store: 'history', key: id },
+        { op: 'deleteRange', store: 'diffs', range: worldRange(id) },
+      ]);
+    },
+    async readAll(id) {
+      const [world, state, history, diffs] = (await kv.read([
+        { op: 'get', store: 'worlds', key: id },
+        { op: 'get', store: 'state', key: id },
+        { op: 'get', store: 'history', key: id },
+        { op: 'getAll', store: 'diffs', range: worldRange(id) },
+      ])) as [unknown, unknown, unknown, { keys: (readonly [string, number])[]; values: Uint8Array[] }];
+      const p = parseWorldRecord(world);
+      if (!p.ok || !isObj(state)) return null;
+      return {
+        world: p.world,
+        state: state as unknown as StateRecord,
+        history: isObj(history) ? (history as unknown as HistoryRecord) : null,
+        cols: diffs.keys.map((k, i) => ({ key: k[1], bytes: diffs.values[i]! })),
+      };
+    },
+    writeAll(d) {
+      return kv.write(copyOps(d.world, d.state, d.history, d.cols));
+    },
+  };
+}
+
+/**
+ * One flush's batch (§3.2): each column's bytes under `[worldId, key]` (null bytes → its delete), the state, and the
+ * history and the `worlds` record when given.
+ */
+export function flushOps(
+  worldId: string,
+  cols: readonly { key: number; bytes: Uint8Array | null }[],
+  state: StateRecord,
+  history: HistoryRecord | null,
+  world: WorldRecord | null,
+): WriteOp[] {
+  const ops: WriteOp[] = cols.map((c): WriteOp =>
+    c.bytes === null
+      ? { op: 'delete', store: 'diffs', key: [worldId, c.key] }
+      : { op: 'put', store: 'diffs', key: [worldId, c.key], value: c.bytes });
+  ops.push({ op: 'put', store: 'state', key: worldId, value: state });
+  if (history !== null) ops.push({ op: 'put', store: 'history', key: worldId, value: history });
+  if (world !== null) ops.push({ op: 'put', store: 'worlds', key: world.id, value: world });
+  return ops;
+}
+
+/** A whole world's batch under `world.id` (Import, the backup copy): the record, the state, the history when given, every column. */
+export function copyOps(
+  world: WorldRecord,
+  state: StateRecord,
+  history: HistoryRecord | null,
+  cols: readonly { key: number; bytes: Uint8Array }[],
+): WriteOp[] {
+  const ops: WriteOp[] = [
+    { op: 'put', store: 'worlds', key: world.id, value: world },
+    { op: 'put', store: 'state', key: world.id, value: state },
+  ];
+  if (history !== null) ops.push({ op: 'put', store: 'history', key: world.id, value: history });
+  for (const c of cols) ops.push({ op: 'put', store: 'diffs', key: [world.id, c.key], value: c.bytes });
+  return ops;
+}
+
+// ---------------------------------------------------------------- the proposed names
+
+/** "New world N", N ≥ 1 the smallest no world uses (D2). */
+export function newWorldName(taken: readonly string[]): string {
+  const used = new Set(taken);
+  let n = 1;
+  while (used.has(`New world ${n}`)) n++;
+  return `New world ${n}`;
+}
+
+/** "<name> (before the change)", then "<name> (before the change 2)", "… 3", the first no world uses (D11). */
+export function backupName(name: string, taken: readonly string[]): string {
+  const used = new Set(taken);
+  const first = `${name} (before the change)`;
+  if (!used.has(first)) return first;
+  let n = 2;
+  while (used.has(`${name} (before the change ${n})`)) n++;
+  return `${name} (before the change ${n})`;
+}
+
+/** The download's name (D15): every character outside letters, digits, space, `-` and `_` → `_`, plus `.wiworld`. */
+export function exportFileName(name: string): string {
+  return `${name.replace(/[^\p{L}\p{Nd} _-]/gu, '_')}.wiworld`;
 }
