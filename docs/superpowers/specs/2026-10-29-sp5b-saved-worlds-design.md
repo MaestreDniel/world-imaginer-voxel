@@ -376,6 +376,47 @@ The exit commit says in `CLAUDE.md` and `README.md` that SP5b is implemented and
 
 (Filled at the exit: CI runs job by job against §7, the E readings per tier, the bench and enter files with `G2.flush` and `G1.enter`, the `persist.flush` row, the smoke with the `pagehide` outcome, the review screenshots (§6.7), the Chrome and Firefox selftests, the production checks, the cut line as taken, risk 1's wording, the user's check.)
 
+### The early measurement (Task 17)
+
+Measured by an agent on 2026-10-30 on 4067db5 (every SP5b task through Task 16; no D28 lever) through `npm run measure:chrome -- --gpu iris`: the probe first (`--route bench --probe-only`: ANGLE on Mesa Intel Iris Xe Graphics (ADL GT2), OpenGL 4.6; fullscreen 1920 × 1080 @ 1 on eDP-1 at 240 Hz), then `--route bench` twice and `--route enter` twice, PRIME on-demand, Chrome 155.0.8059.39, RD 12, 6 workers, a cold driver shader cache (`MESA_SHADER_CACHE_DISABLE=true` in the tool's own Chrome only). The files are not committed (the exit's are). Each run started at a 1-minute load below 1.0, and the pages' own workers raised it during the run (bench 0.17 → 3.22 and 0.82 → 2.20; enter, 13 page loads each, 0.81 → 6.12 and 0.96 → 6.57), so the tool's end-of-run load warning fired on each, as in SP5a. The bench files have no console error; each enter file has 12 entries, all Chrome's benign log that a `beforeunload` panel was blocked on a page without a user gesture (one per world page left). Times in ms.
+
+**`G2.flush`** (the `persist` block, L11; `persist.flushes` 30 and `persist.timedOut` [] in both runs):
+
+| run | L11a-L11d frame p95 | `over33` a/b/c/d | `editVisibleP95` a/b/c/d | `over33Added` ≤ 1 | `p95AddedMs` ≤ 4.17 | `editVisibleAddedMs` ≤ 8.33 | "on" `editVisibleP95` ≤ 50 | `replyDuringFlushP95Ms` ≤ 5 | `flushMainP95Ms` ≤ 0.3 | `flushSyncP95Ms` | `flushSyncMaxMs` | `flushCommitP95Ms` |
+|---|---|---|---|---|---|---|---|---|---|---|---|---|
+| 1 | 4.165 each | 0/0/0/0 | 14.04/16.64/13.69/13.97 | 0 | 0 | 1.44 | 16.64 | 2.30 | **0.705 (miss)** | 0.305 | 0.345 | 2.19 |
+| 2 | 4.165 each | 0/0/0/0 | 13.74/17.30/13.65/13.66 | 0 | 0 | 1.79 | 17.30 | 2.12 | **0.700 (miss)** | 0.275 | 0.375 | 81.32 |
+
+`G2.flush` is missed in both runs on one part only: `flushMainP95Ms`, the tick's main-thread work per flush, about 0.70 ms against master §7's 0.3 ms (2.3 ×). Every other part is met with a wide margin: no added long frame, no added frame p95, the edits' visibility 1.4 and 1.8 ms slower with autosave on, an edit's reply during a flush 2.1-2.3 ms. `flushCommitP95Ms`, not gated, reads 2.19 and 81.32 ms: the IndexedDB commit varies about 37 × between the runs, while the replies during flushes stay at about 2 ms.
+
+**`G1.enter`** (five kept pairs; the first, cold pair discarded; `newWorldRevealMs` null in both, since the tool skips that leg until Task 20's worlds menu exists):
+
+| run | median (a) unsaved `revealMs` | median (b) saved `revealMs` | `enterRatio` ≤ 1.10 | per-pair b/a (pairs 2-6) | `idbOpenMs` + `loadMs` | `decodeMs` |
+|---|---|---|---|---|---|---|
+| 1 | 6,001.5 | 6,536.8 | **1.089 (met)** | 1.648, 1.088, 1.082, 1.163, 1.068 | 1.61 + 88.73 = 90.34 | 25.21 |
+| 2 | 3,357.6 | 6,617.8 | **1.971 (miss)** | 1.117, 1.126, 2.065, 1.127, 1.136 | 1.52 + 88.89 = 90.41 | 26.18 |
+
+`G1.enter` is met in run 1 and missed in run 2, so it is not met in both runs. Both runs show the same step in the reveal time of both legs partway through the run: every load is at first near 3.3-3.5 s (SP5a's committed `load.revealMs` 3,281), and from one load onwards (run 1's fourth, run 2's eighth) every load, unsaved or saved, is near 5.9-6.8 s. The saved world's own cost (`idbOpenMs` + `loadMs` + `decodeMs`, about 115 ms) does not change across the step, so the step is not persistence. Run 2's 1.971 comes from its median (a) falling before the step and its median (b) after it. The pairs whose two legs fall on the same side of the step read b/a 1.068-1.163, median about 1.12, so without the step the ratio still sits at or just above 1.10. The step's cause (for example CPU or power throttling as the load climbs over 13 consecutive page loads, or work left over from the previous document) is not traced.
+
+**L1-L10 against SP5a's committed file** (`assets/sp5a/bench-iris-chrome.json`; L1-L10 run with autosave paused). The headline cells, SP5a → run 1 → run 2 (frames quantised to the 4.165 ms interval):
+
+| leg | frames p95 | p99 | max | `over33` | main p95 |
+|---|---|---|---|---|---|
+| L1 | 4.17 → 4.17 → 4.17 | 4.17 → 4.17 → 4.17 | 12.49 → 8.33 → 8.33 | 0 → 0 → 0 | 1.585 → 1.615 → 1.665 |
+| L2 | 4.17 → 4.17 → 4.17 | 4.17 → 4.17 → 4.17 | 8.33 → 8.33 → 8.33 | 0 → 0 → 0 | 1.585 → 1.550 → 1.495 |
+| L3 | **8.33 → 12.49 → 12.49** | 12.49 → 12.49 → 12.49 | 16.66 → 16.66 → 16.66 | 0 → 0 → 0 | 3.085 → 3.160 → 3.465 |
+| L4 | 8.33 → 8.33 → 8.33 | 8.33 → 8.33 → 8.33 | 12.49 → 12.49 → 12.49 | 0 → 0 → 0 | 2.215 → 2.205 → 2.260 |
+| L5 | 8.33 → 8.33 → 8.33 | 12.49 → 12.49 → 12.49 | 12.49 → 16.66 → 12.49 | 0 → 0 → 0 | 2.265 → 2.305 → 2.370 |
+| L6 | 4.17 → 4.17 → 4.17 | 8.33 → 8.33 → 8.33 | 12.49 → 12.49 → 12.49 | 0 → 0 → 0 | 1.440 → 1.400 → 1.450 |
+| L7 | 12.49 → 12.49 → 12.49 | 12.49 → 12.49 → 12.49 | 16.66 → 16.66 → 16.66 | 0 → 0 → 0 | 3.995 → 3.940 → 3.900 |
+| L8 | 12.49 → 12.49 → 12.49 | 12.49 → 12.49 → 12.49 | 12.49 → 12.49 → 16.66 | 0 → 0 → 0 | 3.560 → 3.525 → 3.470 |
+| L9 | 12.49 → 12.49 → 12.49 | 12.49 → 12.49 → 12.49 | 16.66 → 12.49 → 16.66 | 0 → 0 → 0 | 3.980 → 4.050 → 3.730 |
+| L10 | 4.17 → 4.17 → 4.17 | 4.17 → 8.33 → 4.17 | 12.49 → 12.49 → 12.49 | 0 → 0 → 0 | 1.675 → 1.680 → 1.710 |
+
+No `over33` anywhere, and every leg's main p95 within +12 %. Of every numeric cell of L1-L10, 22 (run 1) and 18 (run 2) moved by more than 30 %; one frame interval is 33-100 % of a frame cell. The consistent, gate-relevant move is L3's frame p95, one interval up in both runs; in both runs also L1's frame max one interval down, L9's main p50 1.185 → 1.785 and 1.780, and the maxima of L2's and L8's coordinator time up and L4's upload time down. The rest are maxima or sub-millisecond coordinator and upload cells that move in both directions between the runs. Beside them, SP5a → run 1 → run 2: the stream's p95 8.33 → 8.33 → 8.33, `over33` 0, main p95 2.55 → 2.59 → 2.81; L5 `refillMs` 4,152 → 3,925 → 4,029; `load.revealMs` 3,281 → 3,451 → 3,460; L10's `editVisibleP95` 13.85 → 13.13 → 13.55, `replyP95Ms` 2.61 → 2.34 → 2.48, `editDropped` and `streamingRefused` 0. The frame record held 59,096 and 58,853 of `BENCH_FRAME_CAPACITY` 87,168.
+
+**Decision:** neither gate is met in both runs, so Task 18 is not skipped. `G2.flush` (missed in both runs, on `flushMainP95Ms`): Task 18's `G2.flush` levers run next, in order, 18a (the flush's encode split over several messages), 18b (at most 32 columns per flush), 18c (the tick's snapshot reduced to what changed), each measured on the bench route before the next and stopping at the first that meets the gate. `G1.enter` (met in run 1, missed in run 2): Task 18's `G1.enter` levers run next, in order, 18d (decode each column at its first `diff` request) and 18e (the master's ring prefetch in place of D19's whole load), each measured on the enter route before the next. The controller runs the levers' measurements; a gate still missed after its levers goes back to the user with every measurement (D28).
+
 ## Threshold log
 
 (One line per commit that changes `test/thresholds.lock.json`.)
