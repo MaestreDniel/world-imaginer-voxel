@@ -149,7 +149,7 @@ import { SimFailed, createBrowserSim, type SimClient } from '../../engine/simCli
 import { createThrottle } from '../../engine/throttle';
 import { createUploadBudget } from '../../engine/uploadBudget';
 import { StoreFullError, WorkerFailed, createBrowserPool, poolSize, type WorkerPool } from '../../engine/workerPool';
-import { deleteIdb, openIdbKV } from '../../persist/idb';
+import { deleteIdb, idbAvailable, openIdbKV } from '../../persist/idb';
 import type { KV } from '../../persist/kv';
 import {
   MAX_PLACES, createSaves, loadParams, newState, normalizeHistory, normalizeState, parseWorldRecord, remapOf, tableRelation, todayStateTable, type HistoryRecord,
@@ -217,7 +217,8 @@ import {
 } from './teleport';
 import { LOCKED_NOTICE, holdWorld, withWorldIfFree, type LockManagerLike, type WorldHold } from './worldLock';
 import {
-  BLOCKED_NOTICE, NO_STORAGE, RELOAD_NOTICE, invalidParamsReason, refusalText, refusalUrl, sessionStorageOrNull, type OpenRefusal, type StorageLike,
+  BLOCKED_NOTICE, NO_STORAGE, RELOAD_NOTICE, UNSAVED_NO_STORAGE_NOTICE, invalidParamsReason, refusalText, refusalUrl, sessionStorageOrNull,
+  type OpenRefusal, type StorageLike,
 } from '../worldsMenu';
 
 /** The capture and test options (ruling P48). */
@@ -268,11 +269,35 @@ export const UNSAVED_NOTICE = 'This world is not saved: it was opened from a lin
 /**
  * The unsaved world's notice (SP5b spec Point 2, §1.1), or null: none in a saved world, the flight and the benches
  * (`opts.flight`, `opts.bench`, an `?enterBench=1` load: the enter bench's unsaved leg differs from its saved one only
- * in persistence, §6.2) or a `?shot=1` capture; else `opts.unsavedNotice` when given, else `UNSAVED_NOTICE`.
+ * in persistence, §6.2) or a `?shot=1` capture; else `opts.unsavedNotice` when given, else `UNSAVED_NOTICE`, or D14's
+ * `UNSAVED_NO_STORAGE_NOTICE` when this window cannot store a world (`canStore` false: Point 2's advice, New world,
+ * cannot keep one there; a reload of the in-place unsaved world's teleport URL, final review MENU-6).
  */
-export function unsavedNoticeOf(q: Pick<WorldQuery, 'world' | 'enterBench' | 'shot'>, opts: Pick<WorldPageOptions, 'flight' | 'bench' | 'unsavedNotice'>): string | null {
+export function unsavedNoticeOf(
+  q: Pick<WorldQuery, 'world' | 'enterBench' | 'shot'>,
+  opts: Pick<WorldPageOptions, 'flight' | 'bench' | 'unsavedNotice'>,
+  canStore = true,
+): string | null {
   if (q.world !== null || q.enterBench || q.shot || opts.flight !== undefined || opts.bench !== undefined) return null;
-  return opts.unsavedNotice === undefined ? UNSAVED_NOTICE : opts.unsavedNotice;
+  if (opts.unsavedNotice !== undefined) return opts.unsavedNotice;
+  return canStore ? UNSAVED_NOTICE : UNSAVED_NO_STORAGE_NOTICE;
+}
+
+/**
+ * Whether this browser window looks able to keep a saved world (final review MENU-6), checked without opening anything:
+ * Web Locks (`navigator.locks`), IndexedDB (`hasIdb`) and the site's data (`localStorage`, whose access throws or gives
+ * null when the site's data is blocked). A database that fails only when opened is not caught here.
+ */
+export function windowCanStore(
+  g: { readonly navigator?: unknown; readonly localStorage?: unknown } = globalThis,
+  hasIdb: () => boolean = idbAvailable,
+): boolean {
+  try {
+    const locks = (g.navigator as { locks?: unknown } | undefined)?.locks;
+    return locks !== undefined && locks !== null && hasIdb() && g.localStorage !== undefined && g.localStorage !== null;
+  } catch {
+    return false;
+  }
 }
 
 /**
@@ -3335,7 +3360,7 @@ export function mountWorldPage(root: HTMLElement, q: WorldQuery, hash: string, o
     // A saved world's D14 notices and its load's counts (SP5b spec §3.4 steps 2-3), until dismissed.
     for (const text of savedNotices) notices.show(text, { kind: 'warn' });
     // An unsaved world's notice (SP5b's Point 2, or the menu's in-place one), until dismissed.
-    const unsaved = unsavedNoticeOf(q, opts);
+    const unsaved = unsavedNoticeOf(q, opts, windowCanStore());
     if (unsaved !== null) notices.show(unsaved, { kind: 'warn' });
     // The edit path (SP5a spec §2.1, §2.6, §2.7): every edit of the page goes through it, and the sim's failure
     // disables it. The streaming route always has the sim (only the flight's has none, and it returned above).

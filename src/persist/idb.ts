@@ -145,6 +145,15 @@ function wrap(db: IDBDatabase): KV {
   };
 }
 
+/** Whether the global `indexedDB` is there, checked without opening anything (a getter that throws counts as absent). */
+export function idbAvailable(): boolean {
+  try {
+    return typeof indexedDB !== 'undefined' && indexedDB !== null;
+  } catch {
+    return false;
+  }
+}
+
 /** Opens `name` at version 1 (the global `indexedDB` unless `factory` is given); rejects with a `KvError` when it cannot. */
 export function openIdbKV(name: string, factory?: IDBFactory, onBlocked?: () => void): Promise<KV> {
   return new Promise((resolve, reject) => {

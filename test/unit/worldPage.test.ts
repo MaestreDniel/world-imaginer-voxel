@@ -60,9 +60,9 @@ import {
   installWorldLock, lowerRdHref, OLDER_GENERATOR_NOTICE, OLDER_GENERATOR_NOTICE_MS, olderGeneratorRecord, openOlderGenerator, openRequest, openSavedWorld,
   readSavedWorld, refuseOpen, restoreMode, restoredStart, revealOlderGenerator, savePlaceKey, savedWorldUrlRules, settingsKey, timeOfHours, addPlaceAt,
   worldIgnoresKeys, CLOSED_NOTICE, QUOTA_NOTICE, watchStorage,
-  UNSAVED_NOTICE, unsavedNoticeOf, askLeaveUnsaved, LEAVE_UNSAVED_NOTICE, type WorldPageOptions,
+  UNSAVED_NOTICE, unsavedNoticeOf, windowCanStore, askLeaveUnsaved, LEAVE_UNSAVED_NOTICE, type WorldPageOptions,
 } from '../../src/ui/world/worldPage';
-import { BLOCKED_NOTICE, noticeOfQuery, REFUSAL_REASON_KEY, RELOAD_NOTICE, type OpenRefusal, type StorageLike } from '../../src/ui/worldsMenu';
+import { BLOCKED_NOTICE, noticeOfQuery, REFUSAL_REASON_KEY, RELOAD_NOTICE, UNSAVED_NO_STORAGE_NOTICE, type OpenRefusal, type StorageLike } from '../../src/ui/worldsMenu';
 import type { LockManagerLike } from '../../src/ui/world/worldLock';
 import { resolveProfile } from '../../src/core/params/profiles';
 import { seedFromInput } from '../../src/core/seed';
@@ -3174,7 +3174,7 @@ describe('the unsaved world\'s notice (SP5b spec Point 2, §1.1, D14)', () => {
     expect(unsavedNoticeOf(query('rd=12'), { flight: () => {} })).toBeNull();
     // The page shows it with the world's notices, until dismissed.
     const src = readFileSync(new URL('../../src/ui/world/worldPage.ts', import.meta.url), 'utf8');
-    expect(src).toMatch(/const unsaved = unsavedNoticeOf\(q, opts\);\n\s+if \(unsaved !== null\) notices\.show\(unsaved, \{ kind: 'warn' \}\);/);
+    expect(src).toMatch(/const unsaved = unsavedNoticeOf\(q, opts, windowCanStore\(\)\);\n\s+if \(unsaved !== null\) notices\.show\(unsaved, \{ kind: 'warn' \}\);/);
   });
 
   test('an in-place unsaved world with `unsavedNotice` shows that text instead', () => {
@@ -3183,6 +3183,30 @@ describe('the unsaved world\'s notice (SP5b spec Point 2, §1.1, D14)', () => {
     expect(unsavedNoticeOf(query(''), { unsavedNotice: null })).toBeNull();
     // A saved world never shows it.
     expect(unsavedNoticeOf(query('world=w1'), { unsavedNotice: text })).toBeNull();
+  });
+
+  test('in a window that cannot store a world, a reload of a teleport\'s `?at` URL shows `This world is not saved: this browser window cannot store data.`, never Point 2\'s advice (final review MENU-6)', () => {
+    expect(unsavedNoticeOf(query('at=10,20&y=80&yaw=0&pitch=0'), {}, false)).toBe(UNSAVED_NO_STORAGE_NOTICE);
+    expect(unsavedNoticeOf(query('rd=8'), {}, false)).toBe(UNSAVED_NO_STORAGE_NOTICE);
+    expect(unsavedNoticeOf(query('at=10,20'), {}, true)).toBe(UNSAVED_NOTICE);
+    // The bench, a saved world and an in-place mount's own text are as before.
+    expect(unsavedNoticeOf(query('at=10,20&shot=1'), {}, false)).toBeNull();
+    expect(unsavedNoticeOf(query('world=w1'), {}, false)).toBeNull();
+    expect(unsavedNoticeOf(query(''), { unsavedNotice: null }, false)).toBeNull();
+    // The check opens nothing: Web Locks, IndexedDB and the site's data (`localStorage`, which throws when it is blocked).
+    const locks = { request: () => Promise.resolve() };
+    const win = (o: { locks?: unknown; storage?: () => unknown }) => ({
+      navigator: o.locks === undefined ? {} : { locks: o.locks },
+      get localStorage(): unknown { return (o.storage ?? (() => ({})))(); },
+    });
+    expect(windowCanStore(win({ locks }), () => true)).toBe(true);
+    expect(windowCanStore(win({}), () => true)).toBe(false);
+    expect(windowCanStore(win({ locks }), () => false)).toBe(false);
+    expect(windowCanStore(win({ locks, storage: () => { throw new DOMException('blocked', 'SecurityError'); } }), () => true)).toBe(false);
+    expect(windowCanStore(win({ locks, storage: () => null }), () => true)).toBe(false);
+    // The page asks it.
+    const src = readFileSync(new URL('../../src/ui/world/worldPage.ts', import.meta.url), 'utf8');
+    expect(src).toMatch(/const unsaved = unsavedNoticeOf\(q, opts, windowCanStore\(\)\);/);
   });
 });
 
