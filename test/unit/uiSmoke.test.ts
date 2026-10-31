@@ -44,6 +44,8 @@ import {
   WALK_HOLD_MS, WALK_MIN_MOVE, WALK_PATH_BLOCKS, WALK_QUERY, walkCorridor, walkSnapOk,
   createdWorldId, PAGEHIDE_RELOAD_MS, POSE_TOL, poseWithin, rowTitleOk, SAVE_EDITS, SAVE_SPEED_INDEX, saveColumns, savedWorldQuery, SMOKE_KEYS,
   SMOKE_LOCKED_NOTICE, SMOKE_WORLD, START_BUTTONS,
+  COPY_BADGE, exportedFile, FIRST_PLACE_DOT, importedNotice, MODIFY_EDIT, OLDER_BADGE, OLDER_WORLD, PAUSED_SPEED_INDEX, SETTINGS_FOV, SMOKE_BACKUP_NOTICE, SMOKE_COPY,
+  SMOKE_PLACE, SMOKE_PLACE_SAVED, SP5B_SHOTS,
 } from '../tools/uiSmoke';
 import { FACE_DOWN, FACE_EAST, FACE_NORTH, FACE_SOUTH, FACE_UP, FACE_WEST } from '../../src/world/blocks/kinds';
 import { EMIT, REGISTRY } from '../../src/world/blocks/index';
@@ -51,7 +53,7 @@ import { PLACEABLE } from '../../src/world/blocks/tags';
 import { paletteGroups } from '../../src/ui/palette';
 import { LANDING_ABOVE, LANDING_MAX_Y, landingY } from '../../src/ui/world/teleport';
 import { WORLD_MAP_BPP } from '../../src/ui/world/mapOverlay';
-import { SETTINGS_KEY, SETTINGS_DEFAULTS } from '../../src/ui/settings';
+import { SETTING_RANGES, SETTINGS_KEY, SETTINGS_DEFAULTS } from '../../src/ui/settings';
 import { previewStatusText } from '../../src/ui/map/toolbar';
 import { findSpawn } from '../../src/gen/column/spawn';
 import { columnPoint } from '../../src/gen/column/columnPoint';
@@ -70,6 +72,8 @@ import { createSaves } from '../../src/persist/saves';
 import { DEFAULT_KEYMAP } from '../../src/player/keymap';
 import { mountWorldsMenu, startModeOf } from '../../src/ui/worldsMenu';
 import { LOCKED_NOTICE } from '../../src/ui/world/worldLock';
+import { backupName, exportFileName } from '../../src/persist/saves';
+import { PLACE_COLOURS, PLACE_SAVED_NOTICE } from '../../src/ui/world/places';
 
 const EDITED: MapState = {
   v: 1, seed: '42', profile: 'default',
@@ -279,13 +283,16 @@ describe('UI smoke test: pure parts (SP2b spec §8 Tools, §12)', () => {
     expect(mountainSummaryOk(flat), flat).toBe(false);
   });
 
-  test('the steps run in SMOKE_STEPS order: the Density steps after rule, then preset profiles (SP3e), then start, world and world-mesh (SP4a), then SP4b\'s stream, then SP4c\'s overlay and overlay-mesh, then SP5a\'s build and walk, then SP5b\'s menus, save, crash and two tabs before console (SP3d spec §6, SP3e spec §8, SP4a spec §9.6, SP4b spec §8.6, SP4c spec §8.6, SP5a spec §6.4, SP5b spec §6.5, ruling P52)', () => {
+  test('the steps run in SMOKE_STEPS order: the Density steps after rule, then preset profiles (SP3e), then start, world and world-mesh (SP4a), then SP4b\'s stream, then SP4c\'s overlay and overlay-mesh, then SP5a\'s build and walk, then SP5b\'s menus, save, crash, two tabs, export/import, places, modify and settings-world before console (SP3d spec §6, SP3e spec §8, SP4a spec §9.6, SP4b spec §8.6, SP4c spec §8.6, SP5a spec §6.4, SP5b spec §6.5, ruling P52)', () => {
     expect(SMOKE_STEPS).toEqual([
       'selftest', 'load', 'number', 'knot', 'slider', 'box', 'profile', 'presets', 'undo/redo', 'reload', 'cut line', 'voxels', 'tabs', 'rule',
       'density tab', 'density node', 'density mute', 'density json', 'density narrow', 'density horizontal', 'density drag', 'density times',
-      'preset profiles', 'start', 'world', 'world-mesh', 'stream', 'overlay', 'overlay-mesh', 'build', 'walk', 'menus', 'save', 'crash', 'two tabs', 'console',
+      'preset profiles', 'start', 'world', 'world-mesh', 'stream', 'overlay', 'overlay-mesh', 'build', 'walk', 'menus', 'save', 'crash', 'two tabs',
+      'export/import', 'places', 'modify', 'settings-world', 'console',
     ]);
-    expect(SMOKE_STEPS.slice(SMOKE_STEPS.indexOf('walk'), SMOKE_STEPS.indexOf('console') + 1)).toEqual(['walk', 'menus', 'save', 'crash', 'two tabs', 'console']);
+    expect(SMOKE_STEPS.slice(SMOKE_STEPS.indexOf('walk'), SMOKE_STEPS.indexOf('console') + 1)).toEqual([
+      'walk', 'menus', 'save', 'crash', 'two tabs', 'export/import', 'places', 'modify', 'settings-world', 'console',
+    ]);
     expect(SMOKE_STEPS.indexOf('density tab')).toBe(SMOKE_STEPS.indexOf('rule') + 1);
     expect(SMOKE_STEPS.indexOf('start')).toBe(SMOKE_STEPS.indexOf('preset profiles') + 1);
     expect(SMOKE_STEPS.indexOf('world')).toBe(SMOKE_STEPS.indexOf('start') + 1);
@@ -293,7 +300,10 @@ describe('UI smoke test: pure parts (SP2b spec §8 Tools, §12)', () => {
     expect(SMOKE_STEPS.indexOf('overlay')).toBe(SMOKE_STEPS.indexOf('stream') + 1);
     expect(SMOKE_STEPS.indexOf('build')).toBe(SMOKE_STEPS.indexOf('overlay-mesh') + 1);
     expect(SMOKE_STEPS.indexOf('menus')).toBe(SMOKE_STEPS.indexOf('walk') + 1);
-    expect(SMOKE_STEPS.indexOf('two tabs')).toBe(SMOKE_STEPS.indexOf('console') - 1);
+    expect(SMOKE_STEPS.indexOf('export/import')).toBe(SMOKE_STEPS.indexOf('two tabs') + 1);
+    expect(SMOKE_STEPS.indexOf('settings-world')).toBe(SMOKE_STEPS.indexOf('console') - 1);
+    expect(stepId('export/import: Export, Delete, Import; worldHash() equal')).toBe('export/import');
+    expect(stepId('settings-world: G opens, FOV 80 applies, Esc closes')).toBe('settings-world');
     expect(SMOKE_STEPS.indexOf('console')).toBe(SMOKE_STEPS.length - 1);
     expect(stepId('world-mesh: the parity of mesh and batch')).toBe('world-mesh');
     expect(stepId('world: /?rd=4 to the reveal')).toBe('world');
@@ -1246,6 +1256,60 @@ describe('UI smoke test: the saved-world steps (SP5b spec §6.5)', () => {
 
   test('`two tabs` waits for D7\'s notice, the world page\'s own text', () => {
     expect(SMOKE_LOCKED_NOTICE).toBe(LOCKED_NOTICE);
+  });
+
+  test('`export/import` waits for the export\'s file name and the import\'s notice, the menu\'s own; the time is paused first (×1, ×10, ×60, paused)', () => {
+    expect(exportedFile(SMOKE_WORLD.rename)).toBe('Smoke world.wiworld');
+    for (const name of [SMOKE_WORLD.rename, OLDER_WORLD, 'a/b:c*d?', 'Ñandú ö 7', 'x.y'] as const) expect(exportedFile(name), name).toBe(exportFileName(name));
+    expect(importedNotice(SMOKE_WORLD.rename)).toBe("Imported 'Smoke world'");
+    const menu = readFileSync(new URL('../../src/ui/worldsMenu.ts', import.meta.url), 'utf8');
+    expect(menu).toContain('loadNotices.show(`Imported \'${r.dump.world.name}\'`');
+    expect(TIME_SPEEDS[PAUSED_SPEED_INDEX]).toBe(0);
+    expect(PAUSED_SPEED_INDEX).toBe(TIME_SPEEDS.length - 1);
+  });
+
+  test('`places` saves a blue place with Enter and waits for "Place saved", the page\'s notice', () => {
+    expect(SMOKE_PLACE_SAVED).toBe(PLACE_SAVED_NOTICE);
+    expect(SMOKE_PLACE).toEqual({ name: 'Smoke place', colour: 4 });
+    expect(PLACE_COLOURS[SMOKE_PLACE.colour]).toBe('#4aa3df');
+    // The `save` step's place, saved with the dialog's default colour, is the dot `places` looks for.
+    expect(FIRST_PLACE_DOT).toBe(PLACE_COLOURS[0]);
+  });
+
+  test('`modify` changes density.detailAmpHi from amplified\'s 1.5 to 4; the copy is "<name> (before the change)", listed with "automatic copy", and the older-generator row is the second import\'s', () => {
+    expect(MODIFY_EDIT).toEqual({ id: 'pp-density.detailAmpHi', value: '4' });
+    const density = (resolveProfile(SMOKE_WORLD.preset) as unknown as { density: { detailAmpHi: number } }).density;
+    expect(String(density.detailAmpHi)).not.toBe(MODIFY_EDIT.value);
+    expect(SMOKE_COPY).toBe(backupName(SMOKE_WORLD.rename, [SMOKE_WORLD.rename, OLDER_WORLD]));
+    expect(SMOKE_COPY).toBe('Smoke world (before the change)');
+    expect(SMOKE_BACKUP_NOTICE).toBe("Backup saved as 'Smoke world (before the change)'");
+    const modify = readFileSync(new URL('../../src/ui/world/modifyMode.ts', import.meta.url), 'utf8');
+    expect(modify).toContain('b.notices.show(`Backup saved as \'${name}\'`');
+    const menu = readFileSync(new URL('../../src/ui/worldsMenu.ts', import.meta.url), 'utf8');
+    expect(menu).toContain(`el('div', 'world-badge', '${COPY_BADGE}')`);
+    expect(menu).toContain(`el('div', 'world-badge', '${OLDER_BADGE}')`);
+    expect([COPY_BADGE, OLDER_BADGE]).toEqual(['automatic copy', 'older generator']);
+    expect(OLDER_WORLD).toBe('Older world');
+  });
+
+  test('`settings-world` sets the field of view to 80, inside the slider\'s range and not the default', () => {
+    expect(SETTINGS_FOV).toBe(80);
+    expect(SETTINGS_FOV).toBeGreaterThanOrEqual(SETTING_RANGES.fov.min);
+    expect(SETTINGS_FOV).toBeLessThanOrEqual(SETTING_RANGES.fov.max);
+    expect((SETTINGS_FOV - SETTING_RANGES.fov.min) % SETTING_RANGES.fov.step).toBe(0);
+    expect(SETTINGS_FOV).not.toBe(SETTINGS_DEFAULTS.fov);
+  });
+
+  test('--shots writes SP5b\'s seven review screenshots (spec §6.7), committed in assets/sp5b at 1400 × 900', () => {
+    expect(Object.values(SP5B_SHOTS)).toEqual([
+      'review-start.png', 'review-new-world.png', 'review-load-world.png', 'review-settings-graphics.png', 'review-settings-controls.png',
+      'review-place-dialog.png', 'review-map-places.png',
+    ]);
+    for (const name of Object.values(SP5B_SHOTS)) {
+      const png = readFileSync(new URL(`../../docs/superpowers/specs/assets/sp5b/${name}`, import.meta.url));
+      expect(png.subarray(1, 4).toString('latin1'), name).toBe('PNG');
+      expect([png.readUInt32BE(16), png.readUInt32BE(20)], name).toEqual([VIEWPORT.width, VIEWPORT.height]);
+    }
   });
 });
 

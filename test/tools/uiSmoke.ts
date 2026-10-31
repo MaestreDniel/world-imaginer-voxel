@@ -105,6 +105,21 @@
  *   - two tabs (D7, D24): a second target on the same `?world` shows "This world is open in another tab" on the start
  *     screen; after the first target closes, the second opens it; `Page.reload` of its own target reopens it; the
  *     help's Worlds menu → Load world → Play the same world in the same target opens it;
+ *   - export/import (§2.4, D15): the world with the hook, its clock paused (T), `flushNow()` and `worldHash()`; Load
+ *     world's Export downloads `<name>.wiworld` (CDP's download behaviour, into the run's directory), Delete (confirmed
+ *     in the notice row), Import with `DOM.setFileInputFiles` ("Imported '<name>'", a new id); the imported world opens
+ *     with `worldHash()` equal; the file imported again and renamed "Older world" (for `modify`'s older-generator row);
+ *     the next steps run on the imported world;
+ *   - places (§3.7, D12, D13): flying, a map click 300 px east, a look through the pointer lock when granted; B, a name
+ *     typed and the blue swatch, Enter → "Place saved"; M → the Places tab lists both places and the first one's dot is
+ *     drawn 300 px west of the arrow; its ↗ teleports to its pose within 0.01 (`pose()`, yaw and pitch included);
+ *   - modify (§3.6, D10, D11): off at the open (`#map-modify` unchecked, `density.detailAmpHi` disabled, the map's
+ *     Ctrl+Z inert); on, that parameter typed: "Backup saved as 'Smoke world (before the change)'", then applied; off
+ *     again, Ctrl+Z leaves it; `markOlderGenerator` on "Older world"; Load world lists the copy with "automatic copy"
+ *     and "Older world" with "older generator";
+ *   - settings-world (§1.4, D9): G opens the Settings over the world, its two tabs; the field of view 80 with the arrows
+ *     on the focused slider applies to the camera (`fov()`); Esc closes it, then T and H/H reach the world; G again,
+ *     its Close button, then T reaches the world (no hidden control keeps the world's keys);
  * - console: no exception, console error or failed load, except the known favicon.ico 404 and Chrome's notice that it
  *   blocked a world page's `beforeunload` prompt when a step left it (`leaveGuardLog`); every step ran.
  * With --shots DIR it then writes the spec §12 screenshots into DIR, at seed 42 from a newly loaded page (the
@@ -123,7 +138,10 @@
  * blocks centred on the window at 16 blocks/px, a 256 × 256 px clip of the map.
  * The 3D steps save `start.png`, `world.png`, `world-mesh.png`, `world-mesh-water.png`, `stream.png`,
  * `stream-mesh.png`, `review-overlay-full.png` and `review-overlay-split.png` (SP4c spec §8.7, 1920 × 1080) into DIR as
- * they run, with --shots only.
+ * they run, with --shots only; so do the saved-world steps with SP5b's seven (`SP5B_SHOTS`, spec §6.7, 1400 × 900):
+ * `review-start.png` and `review-new-world.png` (menus), `review-place-dialog.png` and `review-map-places.png`
+ * (places), `review-load-world.png` (modify) and `review-settings-graphics.png` and `review-settings-controls.png`
+ * (settings-world). Only those seven are committed, in `assets/sp5b/` (ruling P48).
  * Options: --skip-build, --profile-dir DIR, --shots DIR. The exit code is 0 only when every check passes.
  */
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
@@ -490,15 +508,16 @@ export function presetProblems(text: string, expected: { readonly name: string; 
  * step) follows them on pages of its own. SP4a's 3D steps `start`, `world` and `world-mesh` (spec §9.6) come next, on
  * pages of their own, inside `runSmoke`, then SP4b's `stream` (spec §8.6: one step for both renderers, since the runner
  * refuses a repeated id), then SP4c's `overlay` and `overlay-mesh` (spec §8.6: one step per renderer, each on its own
- * page), then SP5a's `build` and `walk` (SP5a spec §6.4, each on its own page), then SP5b's `menus`, `save`, `crash`
- * and `two tabs` (SP5b spec §6.5, on the saved world `menus` creates); `console` stays last, the closing step main()
- * runs after `runSmoke` (ruling P52).
+ * page), then SP5a's `build` and `walk` (SP5a spec §6.4, each on its own page), then SP5b's `menus`, `save`, `crash`,
+ * `two tabs`, `export/import`, `places`, `modify` and `settings-world` (SP5b spec §6.5, on the saved world `menus`
+ * creates and, from `export/import` on, its import); `console` stays last, the closing step main() runs after
+ * `runSmoke` (ruling P52).
  */
 export const SMOKE_STEPS = [
   'selftest', 'load', 'number', 'knot', 'slider', 'box', 'profile', 'presets', 'undo/redo', 'reload', 'cut line', 'voxels', 'tabs', 'rule',
   'density tab', 'density node', 'density mute', 'density json', 'density narrow', 'density horizontal', 'density drag', 'density times',
   'preset profiles', 'start', 'world', 'world-mesh', 'stream', 'overlay', 'overlay-mesh', 'build', 'walk', 'menus', 'save', 'crash', 'two tabs',
-  'console',
+  'export/import', 'places', 'modify', 'settings-world', 'console',
 ] as const;
 export type SmokeStep = (typeof SMOKE_STEPS)[number];
 
@@ -818,6 +837,55 @@ export const POSE_TOL = 0.01;
 export const PAGEHIDE_RELOAD_MS = 300;
 /** D7's notice (`LOCKED_NOTICE`, `ui/world/worldLock.ts`; a unit test compares them). */
 export const SMOKE_LOCKED_NOTICE = 'This world is open in another tab';
+
+/** `exportFileName` (`persist/saves.ts`, mirrored: a unit test compares them): the file Export downloads for a world `name`. */
+export function exportedFile(name: string): string {
+  return `${name.replace(/[^\p{L}\p{Nd} _-]/gu, '_')}.wiworld`;
+}
+
+/** The Load world screen's notice after an import (`ui/worldsMenu.ts`; a unit test pins the menu's text). */
+export function importedNotice(name: string): string {
+  return `Imported '${name}'`;
+}
+
+/** The day speed's index of "paused" (`TIME_SPEEDS[3]`, 0: a unit test compares them): `export/import` pauses the clock. */
+export const PAUSED_SPEED_INDEX = 3;
+/**
+ * The name the second import of `export/import`'s file is renamed to: the world the hook's `markOlderGenerator` marks
+ * (ruling P50: no tab holds it) for the Load world list's older-generator row (`review-load-world.png`).
+ */
+export const OLDER_WORLD = 'Older world';
+/** The place `places` saves (B, the name typed, the blue swatch, `PLACE_COLOURS[4]`; a unit test compares them). */
+export const SMOKE_PLACE = { name: 'Smoke place', colour: 4 } as const;
+/** B's confirmation (`PLACE_SAVED_NOTICE`, `ui/world/places.ts`; a unit test compares them). */
+export const SMOKE_PLACE_SAVED = 'Place saved';
+/** `modify`'s terrain change: the parameter field and the value typed (amplified's 1.5 → 4, as the overlay steps'). */
+export const MODIFY_EDIT = { id: 'pp-density.detailAmpHi', value: '4' } as const;
+/** The backup copy's name (`backupName` of the imported world's name, D11; a unit test compares them) and its notice. */
+export const SMOKE_COPY = `${SMOKE_WORLD.rename} (before the change)`;
+export const SMOKE_BACKUP_NOTICE = `Backup saved as '${SMOKE_COPY}'`;
+/** The Load world rows' badges (`ui/worldsMenu.ts`, D3; a unit test pins the menu's text). */
+export const COPY_BADGE = 'automatic copy';
+export const OLDER_BADGE = 'older generator';
+/** The `save` step's place's colour, the dialog's default (`PLACE_COLOURS[0]`, red; a unit test compares them). */
+export const FIRST_PLACE_DOT = '#e5534b';
+/** The field of view `settings-world` sets through `#setting-fov` (in `SETTING_RANGES.fov`, not the default 70). */
+export const SETTINGS_FOV = 80;
+
+/**
+ * SP5b's review screenshots (spec §6.7, D1-D3, D9, D12, D13), saved by the saved-world steps with --shots: the start
+ * screen and New world (`menus`), the Load world list with an automatic copy and an older-generator row (`modify`), the
+ * Settings' two tabs (`settings-world`), B's dialog and the map with its place dots and Places tab (`places`).
+ */
+export const SP5B_SHOTS = {
+  start: 'review-start.png',
+  newWorld: 'review-new-world.png',
+  loadWorld: 'review-load-world.png',
+  settingsGraphics: 'review-settings-graphics.png',
+  settingsControls: 'review-settings-controls.png',
+  placeDialog: 'review-place-dialog.png',
+  mapPlaces: 'review-map-places.png',
+} as const;
 
 /** The camera's pose as the hook reads it (`__wiTest.pose()`). */
 export interface PoseRead { readonly x: number; readonly y: number; readonly z: number; readonly yaw: number; readonly pitch: number }
@@ -3230,16 +3298,19 @@ async function blocksOnceLoaded(p: Page, vs: readonly Voxel[]): Promise<number[]
 /**
  * `menus` (spec §6.5): New world with seed smoke-7 and amplified → Create → the world reveals at `/?world=<id>`; back to
  * `/`, Load world lists it first (its title names the preset and the seed) and the list's time is recorded
- * (`__wiMenuListMs`); Rename to "Smoke world"; Settings from the start screen opens and closes. The new world's id, or
- * null when Create did not reach it.
+ * (`__wiMenuListMs`); Rename to "Smoke world"; Settings from the start screen opens and closes. With --shots, the start
+ * screen and New world filled in are `review-start.png` and `review-new-world.png`. The new world's id, or null when
+ * Create did not reach it.
  */
 async function menusChecks(t: Smoke): Promise<string | null> {
   const p = t.page;
   await p.goto(p.base, `document.getElementById('start-new') !== null`);
+  await reviewShot(t, SP5B_SHOTS.start);
   await p.click('#start-new');
   await p.until(`document.getElementById('new-world')?.hidden === false`, 'menus: New world', 5000);
   await p.typeInto('#new-seed', SMOKE_WORLD.seed);
   await p.choose('#new-preset', SMOKE_WORLD.preset);
+  await reviewShot(t, SP5B_SHOTS.newWorld);
   await p.click('#new-create');
   const reached = await polled(p, 'window.__wiWorld !== undefined', 30_000);
   const at = await p.eval<string>('location.pathname + location.search');
@@ -3433,6 +3504,383 @@ async function twoTabsChecks(t: Smoke, id: string): Promise<void> {
   if (reached !== null) await worldRevealed(t, 'two tabs: Worlds menu → Play the same world in the same target');
 }
 
+/** With --shots, the viewport saved as `name` once the screen has drawn (300 ms); nothing without. */
+async function reviewShot(t: Smoke, name: string): Promise<void> {
+  if (t.shots === null) return;
+  await sleep(300);
+  t.save(name, (await t.page.capture()).png);
+}
+
+/** A place as the hook reads it (`__wiTest.places()`, `persist/saves.ts`' `Place`). */
+interface PlaceRead { readonly id: string; readonly name: string; readonly colour: number; readonly x: number; readonly y: number; readonly z: number; readonly yaw: number; readonly pitch: number }
+
+/** The Load world list's rows, in order: the id, the name, the badges. */
+const LIST_ROWS = `[...document.querySelectorAll('#load-list .world-row')].map((r) => ({
+  id: r.dataset.id ?? '', name: r.querySelector('.world-name')?.textContent ?? null, badges: [...r.querySelectorAll('.world-badge')].map((b) => b.textContent),
+}))`;
+const LIST_IDS = `[...document.querySelectorAll('#load-list .world-row')].map((r) => r.dataset.id ?? '')`;
+const LOAD_NOTICE = `document.getElementById('load-notice')?.textContent ?? ''`;
+/** Every notice row's text, joined: the world's and the map tool's (a world notice shows in the tool's row while the map covers the 3D). */
+const ALL_NOTICES = `[...document.querySelectorAll('.notices')].map((n) => n.textContent).join('|')`;
+/** The page expressions "the Settings screen is shown" and "… hidden". */
+const SETTINGS_SHOWN = `document.getElementById('settings-panel')?.hidden === false`;
+const SETTINGS_HIDDEN = `document.getElementById('settings-panel')?.hidden === true`;
+/** The focused element, for the report: its id, else its tag; and whether it sits inside the (closed) Settings screen. */
+const FOCUSED = `(() => { const a = document.activeElement; return { at: a === null ? null : a.id || a.tagName, inSettings: a !== null && document.getElementById('settings-panel').contains(a) }; })()`;
+
+type RowRead = { readonly id: string; readonly name: string | null; readonly badges: readonly string[] };
+
+/** The world page with the hook on saved world `id`: the steps' page when it already is, else `openSaved`. */
+async function onSaved(t: Smoke, what: string, id: string): Promise<boolean> {
+  const here = await t.page.eval<string | null>(`(() => { try { return window.__wiWorld?.revealed === true ? __wiTest.worldId() : null; } catch { return null; } })()`).catch(() => null);
+  return here === id ? true : openSaved(t, what, id);
+}
+
+/** The start screen's Load world list, read (at least one row). */
+async function loadList(t: Smoke, what: string): Promise<void> {
+  const p = t.page;
+  await p.goto(p.base, `document.getElementById('start-load') !== null`);
+  await p.click('#start-load');
+  await p.until(`document.getElementById('load-world')?.hidden === false && document.querySelector('#load-list .world-row') !== null`, `${what}: the Load world list`, 10_000);
+}
+
+/** Picks `file` in the Load world screen's hidden file input through CDP (`DOM.setFileInputFiles`, which fires `change`). */
+async function pickImport(p: Page, file: string): Promise<void> {
+  const r = await p.cdp.send('Runtime.evaluate', { expression: `document.getElementById('load-import-file')`, returnByValue: false });
+  const objectId = (r['result'] as { objectId?: string }).objectId;
+  if (objectId === undefined) throw new Error('no #load-import-file');
+  await p.cdp.send('DOM.setFileInputFiles', { files: [file], objectId });
+  await p.cdp.send('Runtime.releaseObject', { objectId });
+}
+
+/** M, the map shown in full screen (through the header when side by side is stored), its tiles drawn. */
+async function openFullMap(t: Smoke, what: string): Promise<void> {
+  const p = t.page;
+  await pressM(p);
+  await p.until(OVERLAY_SHOWN, `${what}: the map after M`, 15_000);
+  if (await p.eval<boolean>(WORLD_SPLIT)) {
+    await p.click('#map-mode-full');
+    await p.until(`!(${WORLD_SPLIT})`, `${what}: full screen through the header`, 5000);
+  }
+  await p.until(`(${MAP_DRAWN}).share > 0.5`, `${what}: the map's tiles`, 15_000).catch(() => 0);
+}
+
+/**
+ * The map canvas's pixels of colour `hex` (each channel within 3) within 8 px of the view's centre moved `dx` px east:
+ * a place's dot (spec §3.7: filled in its colour, a white rim).
+ */
+function mapDotPixels(hex: string, dx: number): string {
+  const [r, g, b] = [1, 3, 5].map((i) => parseInt(hex.slice(i, i + 2), 16));
+  return `(() => {
+    const c = document.querySelector('#map-overlay .map-canvas');
+    const d = c.getContext('2d').getImageData(0, 0, c.width, c.height).data;
+    const cx = Math.floor(c.width / 2) + ${dx}, cy = Math.floor(c.height / 2);
+    let n = 0;
+    for (let y = cy - 8; y <= cy + 8; y++) for (let x = cx - 8; x <= cx + 8; x++) {
+      if (x < 0 || y < 0 || x >= c.width || y >= c.height) continue;
+      const k = 4 * (y * c.width + x);
+      if (Math.abs(d[k] - ${r}) <= 3 && Math.abs(d[k + 1] - ${g}) <= 3 && Math.abs(d[k + 2] - ${b}) <= 3) n++;
+    }
+    return n;
+  })()`;
+}
+
+/** Renames row `id` of the Load world list to `name` (Rename, typed, Enter), checked as listed. */
+async function renameRow(t: Smoke, id: string, name: string, what: string): Promise<boolean> {
+  const p = t.page;
+  const row = `.world-row[data-id="${id}"]`;
+  await p.click(`${row} .world-rename`);
+  await p.until(`document.querySelector('${row} .world-name-input') !== null`, `${what}: the name as a text field`, 5000);
+  await p.typeInto(`${row} .world-name-input`, name);
+  await p.enter();
+  return holds(t, `document.querySelector('${row} .world-name')?.textContent === ${JSON.stringify(name)} && document.querySelector('${row} .world-name-input') === null`,
+    `${what}: Rename to "${name}" (Enter) is listed`, 10_000, () => p.eval(`document.querySelector('${row}')?.textContent ?? null`));
+}
+
+/**
+ * `export/import` (spec §6.5, §2.4, D15): the world reopened with the hook and its clock paused (T to "paused", so that
+ * leaving it saves nothing more), `flushNow()`, then `worldHash()`; on the Load world list, Export downloads
+ * `<name>.wiworld` (CDP's download behaviour, into the run's temp directory), Delete (confirmed in the notice row) takes
+ * the world off the list, and Import with `DOM.setFileInputFiles` says "Imported '<name>'" and lists it under a new id;
+ * that world opens with `worldHash()` equal. A second import of the same file, renamed `OLDER_WORLD`, is the world
+ * `modify` marks as from an older generator (ruling P50: no tab holds it). The two imports' ids, or null.
+ */
+async function exportImportChecks(t: Smoke, id: string): Promise<{ readonly imported: string; readonly older: string | null } | null> {
+  const p = t.page;
+  if (!(await openSaved(t, 'export/import: the world with the hook', id))) return null;
+  await p.blur();
+  for (let i = 0; i <= PAUSED_SPEED_INDEX && (await p.eval<number>('__wiTest.clock().speedIndex')) !== PAUSED_SPEED_INDEX; i++) {
+    await p.key('t', SMOKE_KEYS.timeSpeed, 84, 0, 't');
+    await sleep(100);
+  }
+  await holds(t, `__wiTest.clock().speedIndex === ${PAUSED_SPEED_INDEX}`, 'export/import: T pauses the clock (leaving then saves nothing more)', 5000, () => p.eval('__wiTest.clock()'));
+  // At rest before the save: a walking body settles on the ground.
+  await sleep(500);
+  const flushed = await p.eval<{ ok: boolean; flushSeq: number | null }>('__wiTest.flushNow()');
+  t.check(flushed.ok, `export/import: flushNow() commits (flushSeq ${flushed.flushSeq ?? '?'})`, flushed);
+  const hash = await p.eval<string>('__wiTest.worldHash()');
+  t.check(/^[0-9a-f]{16}$/.test(hash), `export/import: the world's worldHash() ${hash}`, hash);
+
+  await p.goto(p.base, `document.getElementById('start-load') !== null`);
+  await p.click('#start-load');
+  const row = `.world-row[data-id="${id}"]`;
+  await p.until(`document.querySelector('${row} .world-export') !== null`, 'export/import: the world in the Load world list', 10_000);
+  const name = await p.eval<string>(`document.querySelector('${row} .world-name').textContent`);
+  const file = join(t.downloads, exportedFile(name));
+  await p.cdp.send('Browser.setDownloadBehavior', { behavior: 'allow', downloadPath: t.downloads }).catch(() => undefined);
+  await p.click(`${row} .world-export`);
+  for (let i = 0; i < 150 && !existsSync(file); i++) await sleep(100);
+  const bytes = existsSync(file) ? readFileSync(file).length : 0;
+  t.check(bytes > 0, `export/import: Export downloads ${exportedFile(name)} (${bytes} bytes) into the run's directory`, file);
+  if (bytes === 0) return null;
+
+  await p.click(`${row} .world-delete`);
+  await p.until(`document.querySelector('#load-notice .notice-confirm') !== null`, 'export/import: Delete asks in the notice row', 5000);
+  // `[id=…]`, not `#…`: the page helpers read a selector that starts with `#` as a bare id.
+  await p.click('[id="load-notice"] .notice-confirm');
+  if (!(await holds(t, `document.querySelector('${row}') === null && document.querySelector('#load-list .world-row, #load-list .world-empty') !== null`,
+    'export/import: Delete (confirmed) takes the world off the list', 10_000, () => p.eval(LIST_ROWS)))) return null;
+
+  const importOnce = async (what: string, known: readonly string[]): Promise<string | null> => {
+    await pickImport(p, file);
+    const fresh = `(${LIST_IDS}).filter((i) => !${JSON.stringify(known)}.includes(i))`;
+    const ok = await holds(t, `(${LOAD_NOTICE}).includes(${JSON.stringify(importedNotice(name))}) && ${fresh}.length === 1`, what, 15_000,
+      () => p.eval(`({ notice: ${LOAD_NOTICE}, rows: ${LIST_ROWS} })`));
+    return ok ? (await p.eval<string[]>(fresh))[0] ?? null : null;
+  };
+  const imported = await importOnce(`export/import: Import with DOM.setFileInputFiles says "${importedNotice(name)}" and lists the world under a new id`, [id]);
+  if (imported === null) return null;
+  const title = await p.eval<string>(`document.querySelector('.world-row[data-id="${imported}"] .world-title')?.textContent ?? ''`);
+  t.check(imported !== id && title.startsWith(`${name} · `) && rowTitleOk(title), `export/import: the imported row "${title}"`, { id, imported, title });
+
+  // The Load list shot's older-generator row: the same file imported again, renamed.
+  let older = await importOnce('export/import: a second Import of the file lists another world', [id, imported]);
+  if (older !== null && !(await renameRow(t, older, OLDER_WORLD, 'export/import: the second import'))) older = null;
+
+  if (!(await openSaved(t, 'export/import: the imported world', imported))) return { imported, older };
+  const back = await p.eval<string>('__wiTest.worldHash()');
+  t.check(back === hash, `export/import: the imported world's worldHash() equals the exported world's (${back})`, { hash, back });
+  return { imported, older };
+}
+
+/**
+ * `places` (spec §6.5, §3.7, D12, D13), flying (a place is the camera's exact pose; walking, a place in the air would
+ * fall from it): a click on the map 300 px east of the arrow takes the camera away from the `save` step's place, and a
+ * look through the pointer lock (when headless Chrome grants it) turns it; B opens the dialog, the name typed and the
+ * blue swatch picked (`review-place-dialog.png`), Enter keeps it with "Place saved"; M → the Places tab lists both, and
+ * the first place's dot is drawn 300 px west of the arrow (`review-map-places.png`); its ↗ teleports to its pose within
+ * 0.01 (`pose()`, yaw and pitch included) and closes the full-screen map.
+ */
+async function placesChecks(t: Smoke, id: string): Promise<void> {
+  const p = t.page;
+  if (!(await onSaved(t, 'places: the imported world', id))) return;
+  const before = await p.eval<PlaceRead[]>('__wiTest.places()');
+  const first = before[0];
+  if (first === undefined) {
+    t.check(false, 'places: the save step\'s place came with the import', before);
+    return;
+  }
+  if ((await p.eval<string>('__wiTest.mode()')) === 'walk') {
+    await p.blur();
+    await p.key('f', SMOKE_KEYS.toggleWalk, 70, 0, 'f');
+  }
+  if (!(await holds(t, `__wiTest.mode() === 'fly'`, 'places: flying (F)', 5000, () => p.eval('__wiTest.mode()')))) return;
+
+  // Away from the first place: the map's click teleport, 300 px (1,200 blocks) east.
+  await openFullMap(t, 'places');
+  const box = await p.eval<Box>(MAP_CANVAS_BOX);
+  await p.clickAt(Math.round(box.x + box.width / 2 + TELEPORT_EAST_PX), Math.round(box.y + box.height / 2));
+  if (!(await holds(t, `__wiTest.lastLanding() !== null && (${OVERLAY_CLOSED})`, `places: a map click ${TELEPORT_EAST_PX} px east of the arrow teleports away from the first place`, 10_000,
+    () => p.eval('__wiTest.pose()')))) return;
+  await sleep(600);
+  const look0 = await hookPose(p);
+  let turned = false;
+  if (await takeLock(p)) {
+    for (let i = 1; i <= 10; i++) {
+      await p.mouse('mouseMoved', VIEWPORT.width / 2 + 15 * i, VIEWPORT.height / 2 - 4 * i);
+      await sleep(16);
+    }
+    await sleep(200);
+    await p.key('Escape', 'Escape', 27);
+    await sleep(200);
+    const look1 = await hookPose(p);
+    turned = Math.abs(look1.yaw - look0.yaw) > 1 || Math.abs(look1.pitch - look0.pitch) > 1;
+  }
+  t.record(turned ? 'the look turned through the pointer lock before B (the ↗ restores yaw and pitch)' : 'the look did not turn before B (no pointer lock, or no movement under it): the ↗\'s yaw and pitch are the place\'s and the camera\'s alike');
+
+  await p.blur();
+  await p.key('b', SMOKE_KEYS.savePlace, 66, 0, 'b');
+  if (!(await holds(t, `document.getElementById('place-dialog')?.hidden === false`, 'places: B opens the Save place dialog', 5000, () => p.eval('__wiTest.places()')))) return;
+  await p.typeInto('#place-name', SMOKE_PLACE.name);
+  await p.click(`[id="place-dialog"] .place-swatch[data-colour="${SMOKE_PLACE.colour}"]`);
+  t.check(await p.eval<string | null>(`document.querySelector('#place-dialog .place-swatch[data-colour="${SMOKE_PLACE.colour}"]').getAttribute('aria-pressed')`) === 'true',
+    'places: the blue swatch is chosen');
+  await reviewShot(t, SP5B_SHOTS.placeDialog);
+  const pose = await hookPose(p);
+  await p.enter();
+  await holds(t, `(${WORLD_NOTICES}).includes(${JSON.stringify(SMOKE_PLACE_SAVED)}) && __wiTest.places().length === ${before.length + 1}`,
+    `places: Enter keeps it, "${SMOKE_PLACE_SAVED}"`, 3000, () => p.eval(`({ notices: ${WORLD_NOTICES}, places: __wiTest.places() })`));
+  const added = (await p.eval<PlaceRead[]>('__wiTest.places()')).at(-1);
+  t.check(added !== undefined && added.name === SMOKE_PLACE.name && added.colour === SMOKE_PLACE.colour && poseWithin(pose, added, POSE_TOL),
+    `places: the place keeps the typed name, the blue colour and the camera's pose`, { pose, added });
+
+  await openFullMap(t, 'places: the map again');
+  await p.click('#map-tab-places');
+  await holds(t, `[...document.querySelectorAll('#places-list .place-row .place-name')].map((e) => e.textContent).join('|') === ${JSON.stringify([...before.map((x) => x.name), SMOKE_PLACE.name].join('|'))}`,
+    `places: the Places tab lists the ${before.length + 1} places in the order saved`, 5000, () => p.eval(`document.getElementById('places-list')?.textContent ?? null`));
+  // The dots redraw with the map's overlays: one more frame for them; the shot gives the tiles 3 s for their full detail.
+  await sleep(300);
+  if (t.shots !== null) await sleep(3000);
+  const dot = await p.eval<number>(mapDotPixels(FIRST_PLACE_DOT, -TELEPORT_EAST_PX));
+  t.check(dot >= 5, `places: the first place's dot (${FIRST_PLACE_DOT}) is drawn ${TELEPORT_EAST_PX} px west of the arrow (${dot} px)`, dot);
+  await reviewShot(t, SP5B_SHOTS.mapPlaces);
+
+  await p.click(`[id="places-list"] .place-row[data-id="${first.id}"] .place-go`);
+  const goal = JSON.stringify({ x: first.x, y: first.y, z: first.z, yaw: first.yaw, pitch: first.pitch });
+  await holds(t, `(${OVERLAY_CLOSED}) && (() => { const a = __wiTest.pose(), b = ${goal}; return ['x', 'y', 'z', 'yaw', 'pitch'].every((k) => Math.abs(a[k] - b[k]) <= ${POSE_TOL}); })()`,
+    `places: ↗ teleports to "${first.name}"'s pose within ${POSE_TOL} (yaw and pitch included) and closes the map`, 5000, async () => ({ place: first, pose: await hookPose(p) }));
+}
+
+/** Ctrl+Z with the map owning, then 1 s: the field `MODIFY_EDIT.id` still reads `value` and nothing regenerates. */
+async function undoInert(t: Smoke, what: string, value: string): Promise<void> {
+  const p = t.page;
+  const field = `document.getElementById(${JSON.stringify(MODIFY_EDIT.id)})`;
+  await p.blur();
+  await p.undoKey();
+  await sleep(1000);
+  const after = await p.eval<{ owner: string; value: string; stale: number }>(`({ owner: __wiTest.owner(), value: ${field}.value, stale: __wiTest.stale() })`);
+  t.check(after.owner === 'map' && after.value === value && after.stale === 0, `${what}: Ctrl+Z with the map owning is inert (${MODIFY_EDIT.id} ${after.value}, nothing stale)`, after);
+}
+
+/**
+ * `modify` (spec §6.5, §3.6, D10, D11): M; off at the open: `#map-modify` unchecked, the `density.detailAmpHi` control
+ * disabled, the map's Ctrl+Z inert; on: that parameter typed (4), held for the copy, "Backup saved as '<name> (before
+ * the change)'" (in the tool's notice row: the map covers the 3D), then applied (Watch live then hides the map while
+ * the world regenerates; M brings it back); off again, Ctrl+Z leaves the change. Then the hook marks the second import as from an
+ * older generator (`markOlderGenerator`), and the Load world list shows the copy with "automatic copy" and that world
+ * with "older generator" (`review-load-world.png`).
+ */
+async function modifyChecks(t: Smoke, ids: { readonly imported: string; readonly older: string | null }): Promise<void> {
+  const p = t.page;
+  if (!(await onSaved(t, 'modify: the imported world', ids.imported))) return;
+  await openFullMap(t, 'modify');
+  const field = `document.getElementById(${JSON.stringify(MODIFY_EDIT.id)})`;
+  t.check(await p.eval<boolean>(`document.getElementById('map-modify')?.checked === false`), 'modify: off at the open (#map-modify unchecked)');
+  await p.click('#map-tab-parameters');
+  if (!(await p.eval<boolean>(revealParam(field)))) throw new Error(`no parameter field #${MODIFY_EDIT.id}`);
+  const v0 = await p.eval<string>(`${field}.value`);
+  t.check(await p.eval<boolean>(`${field}.disabled === true`), `modify: off, the ${MODIFY_EDIT.id} control is disabled`);
+  await undoInert(t, 'modify: off', v0);
+
+  await p.click('#map-modify');
+  if (!(await holds(t, `document.getElementById('map-modify').checked === true && ${field}.disabled === false`, 'modify: on, the control enabled', 5000,
+    () => p.eval(`${field}.disabled`)))) return;
+  // The copy is written in well under a second and the world then regenerates as fast: a recorder in the page notes, per
+  // frame, when the notice first shows and when the stale count first rises.
+  await p.eval(`(() => {
+    const r = window.__wiSmokeModify = { noticeAt: null, roseAt: null, done: false };
+    const step = () => {
+      if (r.done) return;
+      const now = performance.now();
+      if (r.noticeAt === null && (${ALL_NOTICES}).includes(${JSON.stringify(SMOKE_BACKUP_NOTICE)})) r.noticeAt = now;
+      if (r.roseAt === null && __wiTest.stale() > 0) r.roseAt = now;
+      requestAnimationFrame(step);
+    };
+    requestAnimationFrame(step);
+    return true;
+  })()`);
+  await typeParam(p, MODIFY_EDIT.id, MODIFY_EDIT.value);
+  const what = `modify: on, ${MODIFY_EDIT.id} ${v0} → ${MODIFY_EDIT.value} typed`;
+  const held = await holds(t, 'window.__wiSmokeModify.noticeAt !== null && window.__wiSmokeModify.roseAt !== null && __wiTest.stale() === 0',
+    `${what}: "${SMOKE_BACKUP_NOTICE}", then the world regenerates and settles`, OVERLAY_APPLY_MS, () => p.eval('window.__wiSmokeModify'));
+  const rec = await p.eval<{ noticeAt: number | null; roseAt: number | null }>('(window.__wiSmokeModify.done = true, window.__wiSmokeModify)');
+  if (held) {
+    t.check(rec.noticeAt! <= rec.roseAt!, `${what}: the change waits for its copy (the notice ${(rec.roseAt! - rec.noticeAt!).toFixed(0)} ms before the world goes stale)`, rec);
+  }
+  // Watch live (SP4c D18, on by default) hides the full-screen map while the world regenerates: M brings it back.
+  if (await p.eval<boolean>(OVERLAY_CLOSED)) await openFullMap(t, 'modify: the map again');
+  await p.click('#map-tab-parameters');
+  await p.click('#map-modify');
+  await holds(t, `document.getElementById('map-modify').checked === false && ${field}.disabled === true`, 'modify: off again', 5000, () => p.eval(`${field}.disabled`));
+  await undoInert(t, 'modify: off again, the change in the history', MODIFY_EDIT.value);
+
+  if (ids.older !== null) {
+    const marked = await p.eval<string>(`__wiTest.markOlderGenerator(${JSON.stringify(ids.older)}).then(() => 'ok', (e) => String(e))`);
+    t.check(marked === 'ok', `modify: the hook marks "${OLDER_WORLD}" as from an older generator`, marked);
+  } else {
+    t.check(false, `modify: "${OLDER_WORLD}" (export/import's second import) to mark`);
+  }
+  await pressM(p);
+  await p.until(OVERLAY_CLOSED, 'modify: M closes the map', 5000);
+
+  await loadList(t, 'modify');
+  const rows = await p.eval<RowRead[]>(LIST_ROWS);
+  const copy = rows.find((r) => r.name === SMOKE_COPY);
+  t.check(copy !== undefined && copy.badges.includes(COPY_BADGE), `modify: the Load world list shows "${SMOKE_COPY}" with "${COPY_BADGE}"`, rows);
+  t.check(rows.find((r) => r.id === ids.imported)?.badges.length === 0, 'modify: the world itself has no badge (today\'s generator, no copy)', rows);
+  const older = rows.find((r) => r.id === ids.older);
+  t.check(older !== undefined && older.badges.includes(OLDER_BADGE) && !older.badges.includes(COPY_BADGE), `modify: "${OLDER_WORLD}" shows "${OLDER_BADGE}"`, rows);
+  await reviewShot(t, SP5B_SHOTS.loadWorld);
+}
+
+/**
+ * `settings-world` (spec §6.5, §1.4, D9): G opens the Settings over the world (`review-settings-graphics.png`, then the
+ * Controls tab, `review-settings-controls.png`); the field of view set to 80 with the arrows on the focused slider applies
+ * to the camera (`fov()`), and Esc closes it. Closed by Esc, then by its Close button (the focus left on the slider, then
+ * on that button, both hidden), the world's keys reach the world again (Task 28's review I1, in Chrome): T moves the day
+ * speed; after Esc, H opens the help and H again closes it.
+ */
+async function settingsWorldChecks(t: Smoke, id: string): Promise<void> {
+  const p = t.page;
+  if (!(await onSaved(t, 'settings-world: the imported world', id))) return;
+  if (!(await p.eval<boolean>(OVERLAY_CLOSED))) {
+    await pressM(p);
+    await p.until(OVERLAY_CLOSED, 'settings-world: M closes the map', 5000);
+  }
+  const speed = (): Promise<number> => p.eval<number>('__wiTest.clock().speedIndex');
+  const tPress = async (what: string): Promise<void> => {
+    const s0 = await speed();
+    await p.key('t', SMOKE_KEYS.timeSpeed, 84, 0, 't');
+    await holds(t, `__wiTest.clock().speedIndex === ${(s0 + 1) % (PAUSED_SPEED_INDEX + 1)}`, what, 5000, async () => ({ speedIndex: await speed(), focus: await p.eval(FOCUSED) }));
+  };
+  await p.blur();
+  await p.key('g', SMOKE_KEYS.settings, 71, 0, 'g');
+  if (!(await holds(t, SETTINGS_SHOWN, 'settings-world: G opens the Settings over the world', 5000, () => p.eval(FOCUSED)))) return;
+  t.check(await p.eval<boolean>(`document.getElementById('settings-graphics').hidden === false && document.getElementById('settings-tab-graphics').getAttribute('aria-selected') === 'true'`),
+    'settings-world: on the Graphics tab');
+  await reviewShot(t, SP5B_SHOTS.settingsGraphics);
+  await p.click('#settings-tab-controls');
+  await holds(t, `document.getElementById('settings-controls').hidden === false && document.getElementById('settings-graphics').hidden === true`, 'settings-world: the Controls tab', 5000,
+    () => p.eval(`document.getElementById('settings-panel').textContent`));
+  await reviewShot(t, SP5B_SHOTS.settingsControls);
+  await p.click('#settings-tab-graphics');
+
+  // The field of view with real keys on the focused slider (the world handles none of them while the screen is open).
+  await p.eval(`(document.getElementById('setting-fov').focus(), true)`);
+  const fov0 = Number(await p.eval<string>(`document.getElementById('setting-fov').value`));
+  const right = SETTINGS_FOV >= fov0;
+  for (let i = 0; i < Math.abs(SETTINGS_FOV - fov0); i++) await p.key(right ? 'ArrowRight' : 'ArrowLeft', right ? 'ArrowRight' : 'ArrowLeft', right ? 39 : 37);
+  await holds(t, `__wiTest.fov() === ${SETTINGS_FOV} && document.getElementById('setting-fov').value === '${SETTINGS_FOV}'`,
+    `settings-world: the field of view ${fov0} → ${SETTINGS_FOV} with the arrows on the focused slider applies to the camera (fov())`, 5000,
+    async () => ({ fov: await p.eval('__wiTest.fov()'), value: await p.eval(`document.getElementById('setting-fov').value`) }));
+  await p.key('Escape', 'Escape', 27);
+  if (!(await holds(t, SETTINGS_HIDDEN, 'settings-world: Esc closes the Settings', 5000, () => p.eval(FOCUSED)))) return;
+  t.record(`after Esc the focus is on ${JSON.stringify(await p.eval(FOCUSED))}`);
+  await tPress('settings-world: after Esc, T reaches the world (the day speed moves; no hidden control keeps the keys)');
+  await p.key('h', SMOKE_KEYS.help, 72);
+  await holds(t, `document.getElementById('world-help')?.hidden === false`, 'settings-world: after Esc, H opens the help', 5000, () => p.eval(FOCUSED));
+  await p.key('h', SMOKE_KEYS.help, 72);
+  await holds(t, `document.getElementById('world-help')?.hidden === true`, 'settings-world: H again closes it (review I1: a control left in the closed Settings takes no key)', 5000, () => p.eval(FOCUSED));
+
+  await p.key('g', SMOKE_KEYS.settings, 71, 0, 'g');
+  if (!(await holds(t, SETTINGS_SHOWN, 'settings-world: G opens the Settings again', 5000, () => p.eval(FOCUSED)))) return;
+  await p.click('#settings-close');
+  if (!(await holds(t, SETTINGS_HIDDEN, 'settings-world: its Close button closes it', 5000, () => p.eval(FOCUSED)))) return;
+  t.record(`after the Close button the focus is on ${JSON.stringify(await p.eval(FOCUSED))}`);
+  await tPress('settings-world: after the Close button, T reaches the world');
+  t.check(await p.eval<number>('__wiTest.fov()') === SETTINGS_FOV, `settings-world: the field of view stays ${SETTINGS_FOV}`);
+}
+
 /** SP5b's saved-world steps (spec §6.5), in order, on the world `menus` creates. */
 async function runSaved(t: Smoke): Promise<void> {
   t.step(`menus: New world (seed ${SMOKE_WORLD.seed}, ${SMOKE_WORLD.preset}) → Create → /?world=<id>; Load world lists it first, the list's time; Rename; Settings from the start screen`);
@@ -3475,6 +3923,47 @@ async function runSaved(t: Smoke): Promise<void> {
     t.check(false, `two tabs: the step stopped: ${e instanceof Error ? e.message : String(e)}`);
   }
   t.check(t.errors.length === errors0, 'two tabs: no page error', t.errors.slice(errors0));
+
+  t.step('export/import: Export downloads the world, Delete, Import with DOM.setFileInputFiles; worldHash() equal');
+  errors0 = t.errors.length;
+  let ids: { readonly imported: string; readonly older: string | null } | null = null;
+  try {
+    if (id === null) t.check(false, 'export/import: the world menus created');
+    else ids = await exportImportChecks(t, id);
+  } catch (e) {
+    t.check(false, `export/import: the step stopped: ${e instanceof Error ? e.message : String(e)}`);
+  }
+  t.check(t.errors.length === errors0, 'export/import: no page error', t.errors.slice(errors0));
+
+  t.step(`places: B saves "${SMOKE_PLACE.name}", the Places tab lists it, ↗ teleports to a place's pose`);
+  errors0 = t.errors.length;
+  try {
+    if (ids === null) t.check(false, 'places: the imported world');
+    else await placesChecks(t, ids.imported);
+  } catch (e) {
+    t.check(false, `places: the step stopped: ${e instanceof Error ? e.message : String(e)}`);
+  }
+  t.check(t.errors.length === errors0, 'places: no page error', t.errors.slice(errors0));
+
+  t.step('modify: off, the controls disabled and Ctrl+Z inert; on, a terrain change keeps a backup copy, listed');
+  errors0 = t.errors.length;
+  try {
+    if (ids === null) t.check(false, 'modify: the imported world');
+    else await modifyChecks(t, ids);
+  } catch (e) {
+    t.check(false, `modify: the step stopped: ${e instanceof Error ? e.message : String(e)}`);
+  }
+  t.check(t.errors.length === errors0, 'modify: no page error', t.errors.slice(errors0));
+
+  t.step(`settings-world: G opens, FOV ${SETTINGS_FOV} applies, Esc closes; the world's keys work after each close`);
+  errors0 = t.errors.length;
+  try {
+    if (ids === null) t.check(false, 'settings-world: the imported world');
+    else await settingsWorldChecks(t, ids.imported);
+  } catch (e) {
+    t.check(false, `settings-world: the step stopped: ${e instanceof Error ? e.message : String(e)}`);
+  }
+  t.check(t.errors.length === errors0, 'settings-world: no page error', t.errors.slice(errors0));
 }
 
 // ---------------------------------------------------------------- screenshots (spec §12)
