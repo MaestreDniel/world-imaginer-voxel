@@ -13,12 +13,13 @@
  * - while a copy is being written, every terrain change ('T' or 'D') is held (false), the mode off included: a change
  *   made meanwhile supersedes the held draft (the control keeps only the latest configure), and the draft held when the
  *   copy commits applies with that one copy;
- * - a terrain change with the mode on, the latch clear and the world holding any placed or removed block
- *   (`sim.hasAnyEntries()`) sets the latch, reads every world's name and then posts `backup` (the page's kept record as
- *   the copy, named by `backupName` among those names, the state and whole history built at the post, a new id), and is
- *   held until `backedUp`;
- * - anything else applies (`from` null, 'L' or 'MESH', the mode off, the latch set, no entries: a change with no entries
- *   leaves the latch clear).
+ * - a terrain change made with the mode on (the mode may be off by its apply: D10 lets a change already made apply, and
+ *   D11 copies it first), the latch clear and the world holding any placed or removed block (`sim.hasAnyEntries()`)
+ *   sets the latch, reads every world's name and then posts `backup` (the page's kept record as the copy, named by
+ *   `backupName` among those names, the state and whole history built at the post, a new id), and is held until
+ *   `backedUp`;
+ * - anything else applies (`from` null, 'L' or 'MESH', the latch set, no entries: a change with no entries leaves the
+ *   latch clear). A world opened with the mode never on is in mode session 0, its latch set (`latchedIn` 0).
  * On `ok` the held change applies at the next tick and "Backup saved as '<name>'" shows for 6 s; a revert to the applied
  * draft meanwhile (`from` null) adopts at once, and the copy, once committed, is kept and spends the latch. On a failure
  * the session loads the applied snapshot (`load(…, {force: true})`, the mode off included), D11's failure notice stays
@@ -181,7 +182,9 @@ export function createModifyMode(o: {
         holding = true;
         return false;
       }
-      if (!on || latchedIn === sessionCount || !b.sim.hasAnyEntries()) return true;
+      // The mode off does not skip the copy: the session refuses changes then, so a terrain change here was made with the
+      // mode on (D11), the mode switched off before it applied (D10); the latch covers it, as `sessionCount` stays put.
+      if (latchedIn === sessionCount || !b.sim.hasAnyEntries()) return true;
       startBackup();
       return false;
     },

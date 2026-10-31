@@ -99,7 +99,8 @@ import { testRng } from '../harness/stats';
  *   the original continues under its id with the new parameters and genKey (after the next flush), every block at its
  *   coordinates, the one equal to the new terrain's value included and stored (`backupMissing`). A second change in that
  *   mode session, a change with the mode off, and `beforeApply` of 'L', 'MESH' and an adopt in a new mode session make
- *   no copy; the copy posted before the draft returned to the applied one is made and kept (`backupSpurious`). Then the
+ *   no copy; the copy posted before the draft returned to the applied one is made and kept (`backupSpurious`). A change
+ *   made with the mode on and the mode switched off before it applies makes exactly one copy first (`backupMissing`). Then the
  *   stored genKey is made an older one and a column holding an entry equal to today's generated value is added under it:
  *   the open is flagged older with D8's notice once, today's terrain with every edit at its coordinates and that entry
  *   read and kept, no copy, and the next flush writes today's genKey, so the flag no longer holds (`olderGeneratorWrong`).
@@ -1291,6 +1292,12 @@ async function measureE6(): Promise<{ values: Record<string, number>; problems: 
       backupSpurious++;
       problems.add(`E6: ${copiesOf().length} copies after 'L', 'MESH' and an adopt (2 expected)`);
     }
+    // A change made with the mode on and the mode switched off before it applies: still exactly one copy first (D11).
+    const r6 = await p.change({ density: { detailAmpHi: 2.5 } }, { offBeforeApply: true });
+    if (r6.from !== 'T' || !r6.backedUp || p.backups.length !== 3 || copiesOf().length !== 3) {
+      backupMissing++;
+      problems.add(`E6: a change made on and applied off: from ${r6.from}, backed up ${r6.backedUp}, ${copiesOf().length} copies (3 expected)`);
+    }
     // A voxel with no entry, read now: today's generated value, the older generator's entry below.
     const gx = 16 * (p.centre.cx + 3) + 4;
     const gz = 16 * p.centre.cz + 4;
@@ -1313,6 +1320,7 @@ async function measureE6(): Promise<{ values: Record<string, number>; problems: 
   ];
   expect((await kv.write(ops)).status).toBe('complete');
   const worldsBefore = kv.dump('worlds').length;
+  const copiesBefore = copiesOf().length;
   p = await openPersistWorld({ kv, worldId: 'e6', rd: RD });
   try {
     const shown = p.notices.filter((t) => t === OLDER_GENERATOR_NOTICE).length;
@@ -1327,7 +1335,7 @@ async function measureE6(): Promise<{ values: Record<string, number>; problems: 
     const b = storedCols(kv, 'e6').get(gKey);
     const d = b === undefined ? null : decodeColumnDiff(b, rec.stateTable.length).diff;
     checks.push(
-      ['no copy', p.backups.length === 0 && kv.dump('worlds').length === worldsBefore && copiesOf().length === 2],
+      ['no copy', p.backups.length === 0 && kv.dump('worlds').length === worldsBefore && copiesOf().length === copiesBefore],
       ['the flush wrote today\'s genKey, so the flag no longer holds', rec.genKey === p.kept().genKey && rec.genKey !== OLD && rp.ok && !olderGenerator(rec, rp.value)],
       ['the entry\'s key still stored after the flush', d !== null && d.value.length === 1 && d.value[0] === generated.value],
     );

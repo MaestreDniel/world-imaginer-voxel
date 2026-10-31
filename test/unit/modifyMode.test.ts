@@ -286,6 +286,23 @@ describe('the automatic backup: `beforeApply` (SP5b spec §3.6, D11, D26)', () =
     expect([r.copies.length, r.kept.params]).toEqual([1, r.session.state.params]);
   });
 
+  test('a change made with the mode on and the mode switched off before the tick: exactly one copy, the change held until `backedUp` (D11)', async () => {
+    const r = backupRig({ writeMs: 300 });
+    r.mode.set(true);
+    r.session.set('climate.scaleMul', 2);
+    r.emit();
+    await r.to(50);
+    // Unticked within the quiet window: the change was made with the mode on, so it still applies only after its copy.
+    r.mode.set(false);
+    await r.to(200);
+    expect([r.calls, r.copies.map((c) => c.newWorld.name)]).toEqual([[], [FIRST]]);
+    await r.to(449);
+    expect([r.calls, r.shown]).toEqual([[], []]);
+    await r.to(600);
+    expect([r.calls, r.copies.length, texts(r)]).toEqual([['T'], 1, [`Backup saved as '${FIRST}'`]]);
+    expect(r.mode.on).toBe(false);
+  });
+
   test('the copy\'s state and history are built when it is posted, after the names are read: an autosave flush posted meanwhile reaches the sim first and holds nothing newer than the copy (D26)', async () => {
     let release: ((names: readonly string[]) => void) | null = null;
     // The autosave's state and history now: a placed block adds a step and moves `updated`.

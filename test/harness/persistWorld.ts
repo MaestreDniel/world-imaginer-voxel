@@ -90,9 +90,11 @@ export interface PersistWorld {
    * Changes the draft by `patch` (the session's `load` over the current patch; nothing when the mode refuses it), then
    * frames until the apply control applied or adopted it and the world settled: `from` the Apply's stage (null for an
    * adopt or no change), `backedUp` whether a backup copy was posted during it and committed. With
-   * `revertBeforeCommit`, the draft returns to the applied one as soon as the copy is posted (D11's adopt).
+   * `revertBeforeCommit`, the draft returns to the applied one as soon as the copy is posted (D11's adopt). With
+   * `offBeforeApply`, the mode is switched off right after the change is made, before any frame (D10: an edit already
+   * made still applies).
    */
-  change(patch: ParamsPatch, o?: { revertBeforeCommit?: boolean }): Promise<{ from: WorldStage | null; backedUp: boolean }>;
+  change(patch: ParamsPatch, o?: { revertBeforeCommit?: boolean; offBeforeApply?: boolean }): Promise<{ from: WorldStage | null; backedUp: boolean }>;
   /** The page's `record`: sent to the sim, counted as a change for the next flush. */
   record(world: WorldRecord): void;
   readonly kv: MemoryKV;
@@ -409,6 +411,7 @@ export async function openPersistWorld(o: { kv: MemoryKV; worldId: string; rd: n
         const before = session.snapshot;
         const res = session.load({ profile: before.profile, patch: mergePatch(before.patch, patch) });
         if (!res.ok) throw new Error(`persistWorld: change: ${res.issues[0]?.message ?? 'refused'}`);
+        if (opts?.offBeforeApply === true) mode.set(false);
         if (draftKeyOf(session.snapshot) === draftKeyOf(before)) return { from: null, backedUp: false };
         const n = appliedCount;
         const b0 = backups.length;
