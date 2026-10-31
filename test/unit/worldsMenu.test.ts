@@ -694,6 +694,55 @@ describe('mountWorldsMenu: Load world (SP5b spec §1.1, §1.3, D3, D7, D14, D24)
     expect(names(kv)).toEqual(['Gamma']);
   });
 
+  test('a Delete on another row and a visibility re-read during a Rename keep the field and its typed name; the list is drawn after Esc (final review MENU-3)', async () => {
+    const kv = createMemoryKV();
+    const a = await saved(kv, 'Alpha', { updated: 5 });
+    const b = await saved(kv, 'Beta', { updated: 6 });
+    mount(kv);
+    await openLoad();
+    one(row(a), 'world-rename').click();
+    one(row(a), 'world-name-input').value = 'Typed';
+    one(row(b), 'world-delete').click();
+    await vi.waitFor(() => expect(dom.el('load-notice').textContent).toContain('Delete \'Beta\'?'));
+    one(dom.el('load-notice'), 'notice-confirm').click();
+    await vi.waitFor(() => expect(names(kv)).toEqual(['Alpha']));
+    dom.document.visibilityState = 'visible';
+    dom.document.dispatchEvent(new Event('visibilitychange'));
+    await flush();
+    await flush();
+    // The field and its text stay; the list is not redrawn under it.
+    expect(one(row(a), 'world-name-input').value).toBe('Typed');
+    expect(rows().map((r) => r.dataset['id'])).toEqual([b, a]);
+    // Esc: the skipped read is caught up.
+    one(row(a), 'world-name-input').dispatchEvent(key('Escape'));
+    await vi.waitFor(() => expect(rows().map((r) => r.dataset['id'])).toEqual([a]));
+    expect(names(kv)).toEqual(['Alpha']);
+  });
+
+  test('a Rename whose re-read fails closes its field, and Rename works again; Enter during IME composition commits nothing (final review MENU-3)', async () => {
+    const kv = createMemoryKV();
+    const id = await saved(kv, 'Alpha', { updated: 5 });
+    const { saves } = mount(kv);
+    await openLoad();
+    one(row(id), 'world-rename').click();
+    const field = one(row(id), 'world-name-input');
+    field.value = 'Kanji';
+    const write = vi.spyOn(kv, 'write');
+    field.dispatchEvent(Object.assign(key('Enter'), { isComposing: true }));
+    await flush();
+    expect(write).not.toHaveBeenCalled();
+    expect(one(row(id), 'world-name-input')).toBe(field);
+    // The re-read after the Rename's write fails.
+    vi.spyOn(saves, 'list').mockRejectedValueOnce(new DOMException('gone', 'UnknownError'));
+    field.dispatchEvent(key('Enter'));
+    await vi.waitFor(() => expect(dom.el('load-notice').textContent).toContain('The saved worlds could not be read (UnknownError)'));
+    expect(names(kv)).toEqual(['Kanji']);
+    expect(byClass(row(id), 'world-name-input')).toEqual([]);
+    // Rename opens a field again.
+    one(row(id), 'world-rename').click();
+    expect(byClass(row(id), 'world-name-input')).toHaveLength(1);
+  });
+
   test('Review Focus 2: Rename and Delete of a world whose lock is held are refused with `This world is open in another tab` and write nothing', async () => {
     const kv = createMemoryKV();
     const id = await saved(kv, 'Alpha', { updated: 5 });

@@ -334,8 +334,14 @@ export function mountWorldsMenu(root: HTMLElement, o: WorldsMenuOptions): { disp
   let creating = false;
   /** The latest list read; an older one that settles later draws nothing. */
   let listRead = 0;
-  /** A row's name is a text field (Rename): a visibility re-read waits, so the typed name stays. */
+  /**
+   * A row's name is a text field (Rename): any other list read (a visibility re-read, after a Delete or an Import) waits
+   * and is drawn when the field closes (`redrawPending`), so the typed name stays (final review MENU-3).
+   */
   let renaming = false;
+  let redrawPending = false;
+  /** Closes the open Rename field and shows the row's name again; null when none is open. */
+  let closeRename: (() => void) | null = null;
   /** Set by a `versionchange` (D14): the connection closed itself, and the menu writes nothing more. */
   let reloadNeeded = false;
 
@@ -363,11 +369,18 @@ export function mountWorldsMenu(root: HTMLElement, o: WorldsMenuOptions): { disp
     return `/?world=${encodeURIComponent(id)}${bench}`;
   };
 
-  /** Reads `saves.list()` and draws its rows; without storage (D14) says so. */
-  async function readList(): Promise<void> {
+  /**
+   * Reads `saves.list()` and draws its rows; without storage (D14) says so. While a Rename's field is open only the
+   * Rename's own read (`own`) draws; another waits for the field to close. A failed own read closes the field.
+   */
+  async function readList(own = false): Promise<void> {
     if (o.saves === null) {
       list.replaceChildren();
       loadNotices.show(NO_STORAGE, { kind: 'error' });
+      return;
+    }
+    if (renaming && !own) {
+      redrawPending = true;
       return;
     }
     const read = ++listRead;
@@ -376,11 +389,19 @@ export function mountWorldsMenu(root: HTMLElement, o: WorldsMenuOptions): { disp
     try {
       rows = await o.saves.list();
     } catch (e) {
-      if (!disposed && read === listRead) loadNotices.show(`The saved worlds could not be read (${errorName(e)})`, { kind: 'error' });
+      if (disposed || read !== listRead) return;
+      loadNotices.show(`The saved worlds could not be read (${errorName(e)})`, { kind: 'error' });
+      if (own) closeRename?.();
       return;
     }
     if (disposed || read !== listRead) return;
+    if (renaming && !own) {
+      redrawPending = true;
+      return;
+    }
     renaming = false;
+    redrawPending = false;
+    closeRename = null;
     list.replaceChildren(...(rows.length === 0 ? [el('li', 'world-empty', 'No saved worlds yet.')] : rows.map(rowElement)));
     recordListMs(performance.now() - t0);
   }
@@ -400,7 +421,7 @@ export function mountWorldsMenu(root: HTMLElement, o: WorldsMenuOptions): { disp
       if (disposed) return;
       loadNotices.show(`The world could not be ${what} (${errorName(e)})`, { kind: 'error' });
     }
-    await readList();
+    await readList(what === 'renamed');
   }
 
   /** Delete (D3): asked in the notice row, then `saves.remove` under the lock (E7: every key of the world). */
@@ -409,7 +430,10 @@ export function mountWorldsMenu(root: HTMLElement, o: WorldsMenuOptions): { disp
     await underLock(id, 'deleted', () => saves.remove(id));
   }
 
-  /** Rename (D3): the name becomes a text field; Enter keeps a changed, non-empty name, Esc cancels. */
+  /**
+   * Rename (D3): the name becomes a text field; Enter keeps a changed, non-empty name, Esc cancels. A list read skipped
+   * while it was open is done when it closes. Keys of an IME composition are the composition's.
+   */
   function startRename(saves: Saves, world: WorldRecord, nameEl: HTMLElement): void {
     if (renaming) return;
     renaming = true;
@@ -419,13 +443,22 @@ export function mountWorldsMenu(root: HTMLElement, o: WorldsMenuOptions): { disp
     nameEl.hidden = true;
     nameEl.parentElement?.insertBefore(input, nameEl);
     input.focus();
-    const cancel = (): void => {
+    const close = (): void => {
       input.remove();
       nameEl.hidden = false;
       renaming = false;
+      closeRename = null;
+    };
+    closeRename = close;
+    const cancel = (): void => {
+      close();
+      if (redrawPending) {
+        redrawPending = false;
+        void readList();
+      }
     };
     input.addEventListener('keydown', (e) => {
-      if (input.disabled) return;
+      if (input.disabled || e.isComposing) return;
       if (e.key === 'Escape') {
         e.preventDefault();
         cancel();
@@ -542,6 +575,8 @@ export function mountWorldsMenu(root: HTMLElement, o: WorldsMenuOptions): { disp
     writesStopped(loadNotices);
     list.replaceChildren();
     renaming = false;
+    redrawPending = false;
+    closeRename = null;
     show('load');
     void readList();
   });
@@ -569,7 +604,7 @@ export function mountWorldsMenu(root: HTMLElement, o: WorldsMenuOptions): { disp
   });
 
   const onVisibility = (): void => {
-    if (document.visibilityState === 'visible' && !load.hidden && !renaming) void readList();
+    if (document.visibilityState === 'visible' && !load.hidden) void readList();
   };
   document.addEventListener('visibilitychange', onVisibility);
 
