@@ -60,7 +60,7 @@ import {
   installWorldLock, lowerRdHref, OLDER_GENERATOR_NOTICE, OLDER_GENERATOR_NOTICE_MS, olderGeneratorRecord, openOlderGenerator, openRequest, openSavedWorld,
   readSavedWorld, refuseOpen, restoreMode, restoredStart, revealOlderGenerator, savePlaceKey, savedWorldUrlRules, settingsKey, timeOfHours, addPlaceAt,
   worldIgnoresKeys, CLOSED_NOTICE, QUOTA_NOTICE, watchStorage,
-  UNSAVED_NOTICE, unsavedNoticeOf, type WorldPageOptions,
+  UNSAVED_NOTICE, unsavedNoticeOf, askLeaveUnsaved, LEAVE_UNSAVED_NOTICE, type WorldPageOptions,
 } from '../../src/ui/world/worldPage';
 import { BLOCKED_NOTICE, noticeOfQuery, REFUSAL_REASON_KEY, RELOAD_NOTICE, type OpenRefusal, type StorageLike } from '../../src/ui/worldsMenu';
 import type { LockManagerLike } from '../../src/ui/world/worldLock';
@@ -3382,7 +3382,7 @@ describe('autosave in the saved world: Reloads reopen /?world, navigations and f
     createReloader(leaveAfterSave(() => null, now), () => {}).reload('/?at=1,2');
     expect(now.mock.calls).toEqual([['/?at=1,2']]);
     // The page's reloader goes through it, with the page's autosave.
-    expect(SRC()).toMatch(/const reloader = createReloader\(leaveAfterSave\(\(\) => autosave, \(url\) => navigateTo\(url, location\)\), disarm\);/);
+    expect(SRC()).toMatch(/const reloader = createReloader\(leaveAfterSave\(\(\) => autosave, \(url\) => navigateTo\(url, location\), .*\), disarm\);/);
   });
 
   test('Worlds menu saves, then navigates to `/`, after `flushed` or 1,000 ms (SP5b spec D31)', async () => {
@@ -3429,6 +3429,60 @@ describe('autosave in the saved world: Reloads reopen /?world, navigations and f
     expect(now.mock.calls).toEqual([['/']]);
     // The page's help leaves through the page's reloader.
     expect(SRC()).toMatch(/worldsMenu: \(\) => reloader\.reload\('\/'\),/);
+  });
+
+  test('Worlds menu after a flush that is not saved (the storage full): the page asks in its notice row and does not navigate; Cancel or Dismiss keeps the page, its Ctrl+W guard armed and the menu working; Leave navigates (final review MENU-1)', async () => {
+    const helpWith = (reloader: ReturnType<typeof createReloader>) => mountHelp(dom.body as unknown as HTMLElement, {
+      map: DEFAULT_KEYMAP, report: REPORT, evaluation: evaluateWorldCapabilities(REPORT), rdMax: 16,
+      openMap: () => {}, openSettings: () => {}, worldsMenu: () => reloader.reload('/'), onFullscreen: () => {}, onClose: () => {},
+    });
+    const QUOTA = (id: number): FlushedMsg => ({ type: 'flushed', id, ok: false, status: 'abort', errorName: 'QuotaExceededError' });
+    const s = saving();
+    const navigate = vi.fn<(url: string) => void>();
+    let armed = true;
+    const arm = vi.fn(() => { armed = true; });
+    const disarm = vi.fn(() => { armed = false; });
+    const notices = createWorldNotices(dom.body as unknown as HTMLElement, createReloader(vi.fn(), vi.fn()));
+    const help = helpWith(createReloader(leaveAfterSave(() => s.autosave, navigate, () => askLeaveUnsaved(notices, arm, disarm)), disarm));
+    const asked = () => dom.el('world-notices').children.find((p) => p.textContent.includes(LEAVE_UNSAVED_NOTICE)) ?? null;
+    const press = (label: string) => asked()!.querySelectorAll('button').find((b) => b.textContent === label)!.click();
+    help.open();
+    dom.el('help-worlds-menu').click();
+    expect(armed).toBe(false);
+    s.flushes[0]!.resolve(QUOTA(1));
+    await jobs();
+    // Not saved: no navigation, the question in the page's notice row, and the guard armed again while it is asked.
+    expect(navigate).not.toHaveBeenCalled();
+    expect(asked()).not.toBeNull();
+    expect(asked()!.className).toContain('world-notice-error');
+    expect(armed).toBe(true);
+    // Cancel: the page stays, the guard stays armed, and the menu runs again (another flush is posted).
+    press('Cancel');
+    await jobs();
+    expect(asked()).toBeNull();
+    expect([navigate.mock.calls.length, armed]).toEqual([0, true]);
+    dom.el('help-worlds-menu').click();
+    expect([s.flushes.length, armed]).toEqual([2, false]);
+    s.flushes[1]!.resolve(QUOTA(2));
+    await jobs();
+    // Dismiss counts as Cancel.
+    press('Dismiss');
+    await jobs();
+    expect([navigate.mock.calls.length, armed]).toEqual([0, true]);
+    // Leave: the guard disarmed and `/` opened, once.
+    dom.el('help-worlds-menu').click();
+    s.flushes[2]!.resolve(QUOTA(3));
+    await jobs();
+    press('Leave');
+    await jobs();
+    expect(navigate.mock.calls).toEqual([['/']]);
+    expect(armed).toBe(false);
+    dom.el('help-worlds-menu').click();
+    await jobs();
+    expect([navigate.mock.calls.length, s.flushes.length]).toEqual([1, 3]);
+    // A flush that comes back saved, or none in time (the tests above), still navigates without asking.
+    // The page: the reloader asks through the page's notices, with the page's guard.
+    expect(SRC()).toMatch(/const reloader = createReloader\(leaveAfterSave\(\(\) => autosave, \(url\) => navigateTo\(url, location\), \(\) => askLeaveUnsaved\(notices, armGuard, disarm\)\), disarm\);/);
   });
 
   test('a failure after the reveal posts one flush and releases the sim only after `flushed` (or 1,000 ms); a failure of the sim itself posts none', async () => {

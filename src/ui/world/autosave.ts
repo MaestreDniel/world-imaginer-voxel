@@ -168,8 +168,11 @@ export interface Autosave {
   tick(): Promise<void>;
   /** Posts now; resolves with `flushed`, or null when the sim is gone (or the autosave disposed). */
   flushNow(): Promise<FlushedMsg | null>;
-  /** Posts now; resolves at `flushed` or after `ms` (`LEAVE_WAIT_MS`), whichever comes first. */
-  beforeLeave(ms?: number): Promise<void>;
+  /**
+   * Posts now; resolves at `flushed` with it, or after `ms` (`LEAVE_WAIT_MS`) with null, whichever comes first (null at
+   * once when the sim is gone): a leave whose flush came back not ok asks first (final review MENU-1).
+   */
+  beforeLeave(ms?: number): Promise<FlushedMsg | null>;
   /** Counts a change the state does not show (a pending `record`, a place) for the next post. */
   markChanged(): void;
   /** Stops (true) or resumes (false) the timer's posts. */
@@ -280,13 +283,14 @@ export function createAutosave(o: AutosaveDeps): Autosave {
       return post();
     },
     beforeLeave(ms = LEAVE_WAIT_MS) {
-      if (gone) return Promise.resolve();
-      return new Promise<void>((resolve) => {
-        const id = o.clock.setTimeout(resolve, ms);
+      if (gone) return Promise.resolve(null);
+      return new Promise<FlushedMsg | null>((resolve) => {
+        const id = o.clock.setTimeout(() => resolve(null), ms);
         o.onBuild?.();
-        void post().finally(() => {
+        let result: FlushedMsg | null = null;
+        void post().then((r) => { result = r; }).finally(() => {
           o.clock.clearTimeout(id);
-          resolve();
+          resolve(result);
         });
       });
     },

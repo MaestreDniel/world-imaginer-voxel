@@ -18,7 +18,10 @@ export interface HereState {
 }
 
 export interface Reloader {
-  /** Disarms the leave guard and navigates to `url`; every call after the first does nothing (Review Focus 3). */
+  /**
+   * Disarms the leave guard and navigates to `url`; every call after the first does nothing (Review Focus 3), unless the
+   * page asked and the user stayed.
+   */
   reload(url: string): void;
 }
 
@@ -137,16 +140,18 @@ export function createWorldUrl(o: {
 
 /**
  * Calls `disarm()` and then `navigate(url)` on the first `reload`, and nothing on any later one: a link clicked twice, or
- * another clicked while a reload is under way, never stacks a second navigation (Review Focus 3; ruling P50).
+ * another clicked while a reload is under way, never stacks a second navigation (Review Focus 3; ruling P50). A
+ * `navigate` whose promise resolves false did not leave after all (the page asked, and the user stayed: final review
+ * MENU-1), and the next `reload` runs again.
  */
-export function createReloader(navigate: (url: string) => void, disarm: () => void): Reloader {
+export function createReloader(navigate: (url: string) => void | Promise<boolean>, disarm: () => void): Reloader {
   let done = false;
   return {
     reload(url) {
       if (done) return;
       done = true;
       disarm();
-      navigate(url);
+      void navigate(url)?.then((left) => { if (!left) done = false; });
     },
   };
 }

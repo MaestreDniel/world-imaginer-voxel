@@ -84,7 +84,7 @@
  * A saved world (SP5b spec §3.2, §3.4 step 7, D4, D14): no URL writer, so the address stays `/?world=<id>`, and every
  * Reload (the failure panel's, the lost context's, the loading failure's lower RD) is `savedWorldUrl`. The autosave
  * (`createPageAutosave`) is armed at the reveal; every navigation the page starts waits for its `beforeLeave` (at most
- * 1,000 ms), and a failure after the reveal saves once more (`lastFlush`, unless the sim is what failed) before the
+ * 1,000 ms; a flush that comes back not saved asks `LEAVE_UNSAVED_NOTICE` first, final review MENU-1), and a failure after the reveal saves once more (`lastFlush`, unless the sim is what failed) before the
  * panel shows and the sim is released. The sim's failure notice is `SAVED_EDIT_FAILED_NOTICE`. Storage problems while it
  * plays (§3.8, D14; `watchStorage`): every `flushed` and the page's connection's events show D14's notices, the world
  * playable and its dirty set in the sim; `blocked` while the connection opens is a warning on the loading screen. One
@@ -744,6 +744,7 @@ export function createWorldNotices(host: HTMLElement, reloader: Reloader): World
         try { action.run(); } finally {
           hide(text, panel);
           dismissed(text);
+          opts.onDismiss?.();
         }
       });
       panel.append(b, ' ');
@@ -754,6 +755,7 @@ export function createWorldNotices(host: HTMLElement, reloader: Reloader): World
     dismiss.addEventListener('click', () => {
       hide(text, panel);
       dismissed(text);
+      opts.onDismiss?.();
     });
     panel.append(dismiss);
     byText.set(text, panel);
@@ -776,7 +778,11 @@ export function createWorldNotices(host: HTMLElement, reloader: Reloader): World
   };
   /** Shows the standing `text` where the route points now; a dismissal in the tool's row ends its standing. */
   const put = (text: string, opts: NoticeOptions): void => {
-    if (target !== null) target.show(text, { ...opts, onDismiss: () => dismissed(text) });
+    const onDismiss = (): void => {
+      dismissed(text);
+      opts.onDismiss?.();
+    };
+    if (target !== null) target.show(text, { ...opts, onDismiss });
     else if (text === STORE_FULL_TEXT && fullArgs !== null) fullHere(fullArgs.lower, fullArgs.apply);
     else showHere(text, opts);
   };
@@ -2142,14 +2148,48 @@ export function lowerRdHref(rd: number | null, centre: { x: number; z: number } 
 /**
  * The reloader's `navigate` (SP5b spec §3.2, D31): in a saved world every navigation the page starts first waits for
  * `beforeLeave(LEAVE_WAIT_MS)` of the autosave `autosave()` returns, so the URL is set after that flush's `flushed` or
- * after 1,000 ms, whichever comes first; with none (an unsaved world) it navigates at once.
+ * after 1,000 ms, whichever comes first; with none (an unsaved world) it navigates at once. A flush that comes back not
+ * saved (the storage full: D14) navigates only if `askUnsaved()` resolves true (final review MENU-1: leaving would drop
+ * every change since the last committed flush). Resolves whether it navigated: false tells the reloader the user stayed.
  */
-export function leaveAfterSave(autosave: () => Pick<Autosave, 'beforeLeave'> | null, navigate: (url: string) => void): (url: string) => void {
-  return (url) => {
-    const a = autosave();
-    if (a === null) navigate(url);
-    else void a.beforeLeave(LEAVE_WAIT_MS).then(() => navigate(url));
+export function leaveAfterSave(
+  autosave: () => Pick<Autosave, 'beforeLeave'> | null,
+  navigate: (url: string) => void,
+  askUnsaved: (() => Promise<boolean>) | null = null,
+): (url: string) => Promise<boolean> {
+  const leave = (url: string): true => {
+    navigate(url);
+    return true;
   };
+  return async (url) => {
+    const a = autosave();
+    if (a === null) return leave(url);
+    const r = await a.beforeLeave(LEAVE_WAIT_MS);
+    if (r === null || r.ok || askUnsaved === null || await askUnsaved()) return leave(url);
+    return false;
+  };
+}
+
+/** Final review MENU-1: a leave whose flush came back not saved asks first, in the page's notice row. */
+export const LEAVE_UNSAVED_NOTICE = 'Your changes since the last save are not saved and will be lost. Leave anyway?';
+
+/**
+ * Asks `LEAVE_UNSAVED_NOTICE` in the page's notices (never a browser dialog) with Leave and Cancel: resolves true on
+ * Leave, after `disarm()`, and false on Cancel or Dismiss. The Ctrl+W guard is armed again (`arm()`) while it asks, and
+ * stays armed when the user stays.
+ */
+export function askLeaveUnsaved(notices: Pick<WorldNotices, 'show'>, arm: () => void, disarm: () => void): Promise<boolean> {
+  arm();
+  return new Promise<boolean>((resolve) => {
+    notices.show(LEAVE_UNSAVED_NOTICE, {
+      kind: 'error',
+      actions: [
+        { label: 'Leave', run: () => { disarm(); resolve(true); } },
+        { label: 'Cancel', run: () => resolve(false) },
+      ],
+      onDismiss: () => resolve(false),
+    });
+  });
 }
 
 /**
@@ -3279,11 +3319,17 @@ export function mountWorldPage(root: HTMLElement, q: WorldQuery, hash: string, o
 
     // Every navigation the page starts disarms the Ctrl+W guard first and happens once (spec §7.1; ruling P50); in a
     // saved world it saves first (`leaveAfterSave`: the URL is set after `flushed` or 1,000 ms, SP5b spec §3.2).
-    const disarm = installLeaveGuard(window);
+    // A leave whose flush is not saved asks first and arms the guard again while it asks (final review MENU-1).
+    let guardOff = installLeaveGuard(window);
+    const disarm = (): void => guardOff();
+    const armGuard = (): void => {
+      guardOff();
+      guardOff = installLeaveGuard(window);
+    };
     teardown.push(disarm);
     // A saved world's autosave (SP5b spec §3.2, D5), created below once the pose, the hotbar and the edit path exist.
     let autosave: PageAutosave | null = null;
-    const reloader = createReloader(leaveAfterSave(() => autosave, (url) => navigateTo(url, location)), disarm);
+    const reloader = createReloader(leaveAfterSave(() => autosave, (url) => navigateTo(url, location), () => askLeaveUnsaved(notices, armGuard, disarm)), disarm);
     const notices = createWorldNotices(host, reloader);
     teardown.push(() => notices.dispose());
     // A saved world's D14 notices and its load's counts (SP5b spec §3.4 steps 2-3), until dismissed.

@@ -287,23 +287,32 @@ describe('autosave (SP5b spec §3.2)', () => {
     r.autosave.dispose();
   });
 
-  test('`beforeLeave(1000)` resolves at `flushed` (200 ms), or at 1,000 ms when none comes', async () => {
+  test('`beforeLeave(1000)` resolves at `flushed` (200 ms) with it, or at 1,000 ms with null when none comes', async () => {
     const r = rig();
     await r.clock.runTo(100);
     let leftAt = -1;
-    void r.autosave.beforeLeave(1000).then(() => { leftAt = r.clock.now(); });
+    let result: unknown;
+    void r.autosave.beforeLeave(1000).then((m) => { leftAt = r.clock.now(); result = m; });
     expect(r.posts.map((p) => p.at)).toEqual([100]);
     r.clock.setTimeout(() => r.ok(0), 200);
     await r.clock.runTo(1500);
     expect(leftAt).toBe(300);
+    expect(result).toMatchObject({ type: 'flushed', ok: true });
 
     let leftAgain = -1;
-    void r.autosave.beforeLeave(1000).then(() => { leftAgain = r.clock.now(); });
+    void r.autosave.beforeLeave(1000).then((m) => { leftAgain = r.clock.now(); result = m; });
     expect(r.posts.map((p) => p.at)).toEqual([100, 1500]);
     await r.clock.runTo(2499);
     expect(leftAgain).toBe(-1);
     await r.clock.runTo(3000);
     expect(leftAgain).toBe(2500);
+    expect(result).toBeNull();
+
+    // A flush that comes back not saved: its `flushed`, which the page's leave asks about (final review MENU-1).
+    void r.autosave.beforeLeave(1000).then((m) => { result = m; });
+    r.clock.setTimeout(() => r.fail(2), 100);
+    await r.clock.runTo(3500);
+    expect(result).toMatchObject({ type: 'flushed', ok: false });
     r.autosave.dispose();
   });
 
