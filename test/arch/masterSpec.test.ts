@@ -80,7 +80,8 @@
  * SP5b (its spec §8, §9, §11): the first commit lands §10's SP5b entry (its size L and spec, the Settings screen, the
  * exit and the cut line), the default receivers' worlds-menu polish, SP10's "Received from SP5b", SP8c's Audio tab,
  * SP11's Graphics tab and SP5c's clipboard storage, and moves the SP5a block's pins that read the SP5b entry and the
- * receivers here; the other §9 amendments land with what they describe, each moving the earlier pin it rewords.
+ * receivers here; the other §9 amendments land with what they describe, each moving the earlier pin it rewords. The
+ * exit words risk 1's Kill line by what SP5b met: its window closed, with no isolation or concurrency problem unfixed.
  * §1 names each SP5b module in its entry, which exists (`SP5B_MODULES`, a row added by each task that adds a module).
  */
 import { existsSync, readdirSync, readFileSync } from 'node:fs';
@@ -1190,7 +1191,7 @@ describe('master spec amendments (SP5a §9)', () => {
     expect(sp8a).toContain('SP5a for collision/raycast/orientation against boxes');
   });
 
-  test('the split\'s other §10 lines, §2.3, risk 1 and §4.12\'s deferred parts (SP5a spec §9)', () => {
+  test('the split\'s other §10 lines, §2.3 and §4.12\'s deferred parts (SP5a spec §9; risk 1\'s Kill line moved to the SP5b block)', () => {
     expect(spEntry('SP6', 'SP7').startsWith('**SP6 — Caves, carvers and cave biomes** (L; SP3c, SP5c; walking for in-game review from SP5a)'), 'the SP6 header').toBe(true);
     expect(spEntry('SP7', 'SP8a').startsWith('**SP7 — Water and fluids** (L; SP6, SP5a)'), 'the SP7 header').toBe(true);
     expect(spEntry('SP8c', 'SP9').startsWith('**SP8c — Audio** (M; SP7, SP5a;'), 'the SP8c header').toBe(true);
@@ -1204,9 +1205,6 @@ describe('master spec amendments (SP5a §9)', () => {
     const reclamation = text.split('\n').find((l) => l.startsWith('**Reclamation.**'));
     expect(reclamation).toContain('SP5a\'s sim worker 15');
     expect(reclamation).not.toMatch(/\bSP5's/);
-    const at8 = text.indexOf('## 8. Risks');
-    const kill = text.slice(at8, text.indexOf('\n2. ', at8)).split('\n').find((l) => l.trimStart().startsWith('- Kill:'));
-    expect(kill).toContain('if SP3a-SP5b shows an unfixable isolation or concurrency problem');
     const at412 = text.indexOf('### 4.12 ');
     const s412 = text.slice(at412, text.indexOf('### 4.13 ', at412));
     expect(s412).toContain('schedules fluid ticks for the 6 neighbours (SP7)');
@@ -1590,6 +1588,15 @@ describe('master spec amendments (SP5b §9)', () => {
     const lines63 = text.slice(at63, text.indexOf('### 6.4 ', at63)).split('\n');
     expect(lines63).toContain('- **Persistence:** codec, `.wiworld` and fault-injection round-trips (E1-E7).');
     expect(lines63.some((l) => l.startsWith('- **Palette:**') && l.endsWith('hotbar round-trips by type name per world.')), 'no Palette line ending "per world." in §6.3').toBe(true);
+  });
+
+  test('§8 risk 1\'s Kill line is closed at SP5b, which met no isolation or concurrency problem it could not fix; the SP4b parenthesis is kept verbatim (SP5b spec §8, §9)', () => {
+    // Moved from the SP5a describe (SP5b spec §8), with the amendment it pins; the SP4c block's pin of the parenthesis stays.
+    const at8 = text.indexOf('## 8. Risks');
+    const kill = text.slice(at8, text.indexOf('\n2. ', at8)).split('\n').find((l) => l.trimStart().startsWith('- Kill:'));
+    expect(kill, 'risk 1 has no `- Kill:` line').toBeDefined();
+    expect(kill).toBe('   - Kill: not taken; its window closed at SP5b. No SP of SP3a-SP5b met an isolation or concurrency problem it could not fix, so the store stays on the SAB and the switch to transferable snapshots is not made (amended by SP4b: the split moved Apply\'s rewrites of Published columns to SP4c, and SP5a\'s sim worker is deferred reclamation\'s first necessary consumer; SP4c\'s Apply frees and regenerates instead of rewriting). SP5b\'s saved worlds kept the sim worker the only writer of the open world, a Web Lock holds one tab per world, and every flush is one transaction carrying its `flushSeq`; the ordering problems found while planning and reviewing it (a replaced flush\'s reply, a rewrite at open that does not commit, a page restored from the back/forward cache, a backup\'s state built before an awaited read) were fixed inside that design. gen/light/mesh already run on plain ArrayBuffers in the harness, so a later switch would change only `store` and the transport.');
+    expect(kill).not.toContain('if SP3a-SP5b shows an unfixable isolation or concurrency problem');
   });
 
   test('§1 names each SP5b module in its entry, which exists', () => {
