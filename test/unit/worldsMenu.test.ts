@@ -22,7 +22,7 @@ import { createSimClient } from '../../src/engine/simClient';
 import { createSimHandler } from '../../src/workers/simHandler';
 import { inProcessSimWorker } from '../harness/inProcessSim';
 import {
-  mountWorldsMenu, noticeOfQuery, PERSIST_ASKED_KEY, REFUSAL_REASON_KEY, refusalText, refusalUrl, savesDbOf, startModeOf,
+  mountWorldsMenu, noticeOfQuery, PERSIST_ASKED_KEY, PERSIST_WAIT_MS, REFUSAL_REASON_KEY, refusalText, refusalUrl, savesDbOf, startModeOf,
   type StorageLike, type WorldsMenuOptions,
 } from '../../src/ui/worldsMenu';
 import { REGISTRY } from '../../src/world/blocks';
@@ -312,6 +312,27 @@ describe('mountWorldsMenu: the start screen and New world (SP5b spec §1.1, §1.
     answer(false);
     await vi.waitFor(() => expect(navigate).toHaveBeenCalledTimes(1));
     expect(worlds(kv).length).toBe(1);
+  });
+
+  test('a persist request that never settles (Firefox\'s prompt left open): Create navigates after 3 s whatever the answer (final review MENU-2)', async () => {
+    vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout'] });
+    try {
+      const persistStorage = vi.fn(() => new Promise<boolean>(() => {}));
+      const { kv, navigate } = mount({ persistStorage });
+      dom.el('start-new').click();
+      await vi.advanceTimersByTimeAsync(0);
+      dom.el('new-create').click();
+      await vi.advanceTimersByTimeAsync(0);
+      expect(persistStorage).toHaveBeenCalledTimes(1);
+      expect(worlds(kv).length).toBe(1);
+      await vi.advanceTimersByTimeAsync(PERSIST_WAIT_MS - 10);
+      expect(navigate).not.toHaveBeenCalled();
+      await vi.advanceTimersByTimeAsync(10);
+      expect(navigate.mock.calls).toEqual([['/?world=w1']]);
+      expect(PERSIST_WAIT_MS).toBe(3000);
+    } finally {
+      vi.useRealTimers();
+    }
   });
 
   test('a Create whose write does not complete shows why, navigates nowhere and can be retried', async () => {

@@ -10,9 +10,9 @@
  *   Preset (the ready profiles in code order, as the map's select), Seed (a random 64-bit decimal; the dice puts another;
  *   any text, `resolveSeedText`), Create and Back. Create writes the `worlds` record and a new `state` in one write
  *   (`saves.create`), asks the browser once to keep this site's storage (`persistStorage`, remembered under
- *   `PERSIST_ASKED_KEY`), then navigates to `/?world=<id>`; under the enter bench (`benchDb`, SP5b spec §6.2) the world
- *   is written to that database and its URL carries `&enterBench=1&db=<name>`. Without storage (`saves` null, §3.8,
- *   D14) Create mounts the unsaved world in place instead (`enterUnsaved`, as SP4a's "Enter the world"): the seed and
+ *   `PERSIST_ASKED_KEY`, its answer awaited at most `PERSIST_WAIT_MS`), then navigates to `/?world=<id>`; under the
+ *   enter bench (`benchDb`, SP5b spec §6.2) the world is written to that database and its URL carries
+ *   `&enterBench=1&db=<name>`. Without storage (`saves` null, §3.8, D14) Create mounts the unsaved world in place instead (`enterUnsaved`, as SP4a's "Enter the world"): the seed and
  *   preset as its `#` hash in `?map`'s encoding, no `?rd`, with `UNSAVED_NO_STORAGE_NOTICE` in place of Point 2's.
  * - Load world (§1.3, D3): one row per world of `saves.list()`, the most recently modified first ("name · preset · seed
  *   N", "Modified YYYY-MM-DD HH:MM" in local time with "· n places" when it has any, "automatic copy" for a backup,
@@ -80,6 +80,8 @@ export function savesDbOf(q: Pick<WorldQuery, 'db'>): string {
 
 /** The `localStorage` flag set at the first Create's `navigator.storage.persist()` request (D2, master §4.13). */
 export const PERSIST_ASKED_KEY = 'wi.persistAsked';
+/** How long Create waits for the `navigator.storage.persist()` answer before it opens the world anyway (D2). */
+export const PERSIST_WAIT_MS = 3000;
 /** The `sessionStorage` key that carries an `unreadable` refusal's reason from the world page to the menu. */
 export const REFUSAL_REASON_KEY = 'wi.openRefusal';
 
@@ -651,8 +653,9 @@ export function mountWorldsMenu(root: HTMLElement, o: WorldsMenuOptions): { disp
 
 /**
  * `navigator.storage.persist()` at the first Create only (D2): skipped when `PERSIST_ASKED_KEY` is set, which is set
- * before asking (without `localStorage` every Create asks); awaited, since Firefox's prompt belongs to this page, and
- * its answer and any failure ignored.
+ * before asking (without `localStorage` every Create asks); awaited, since Firefox's prompt belongs to this page, for at
+ * most `PERSIST_WAIT_MS` (a prompt dismissed by clicking away can stay unanswered; navigating cancels it), and its
+ * answer and any failure ignored.
  */
 async function askPersistOnce(persist: () => Promise<boolean>): Promise<void> {
   const storage = localStorageOrNull();
@@ -660,7 +663,10 @@ async function askPersistOnce(persist: () => Promise<boolean>): Promise<void> {
     if (storage?.getItem(PERSIST_ASKED_KEY) === '1') return;
     storage?.setItem(PERSIST_ASKED_KEY, '1');
   } catch { /* asked at every Create instead */ }
+  let timer: ReturnType<typeof setTimeout> | undefined;
   try {
-    await persist();
-  } catch { /* either answer works (D2) */ }
+    await Promise.race([persist(), new Promise<void>((resolve) => { timer = setTimeout(resolve, PERSIST_WAIT_MS); })]);
+  } catch { /* either answer works (D2) */ } finally {
+    clearTimeout(timer);
+  }
 }
