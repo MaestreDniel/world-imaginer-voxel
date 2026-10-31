@@ -12,8 +12,9 @@
  *   (`saves.create`), asks the browser once to keep this site's storage (`persistStorage`, remembered under
  *   `PERSIST_ASKED_KEY`, its answer awaited at most `PERSIST_WAIT_MS`), then navigates to `/?world=<id>`; under the
  *   enter bench (`benchDb`, SP5b spec §6.2) the world is written to that database and its URL carries
- *   `&enterBench=1&db=<name>`. Without storage (`saves` null, §3.8, D14) Create mounts the unsaved world in place instead (`enterUnsaved`, as SP4a's "Enter the world"): the seed and
- *   preset as its `#` hash in `?map`'s encoding, no `?rd`, with `UNSAVED_NO_STORAGE_NOTICE` in place of Point 2's.
+ *   `&enterBench=1&db=<name>`. Without storage (`saves` null, §3.8, D14) the Name field is hidden and Create mounts the
+ *   unsaved world in place instead (`enterUnsaved`, as SP4a's "Enter the world"): the seed and preset as its `#` hash
+ *   in `?map`'s encoding, no `?rd`, with `UNSAVED_NO_STORAGE_NOTICE` in place of Point 2's.
  * - Load world (§1.3, D3): one row per world of `saves.list()`, the most recently modified first ("name · preset · seed
  *   N", "Modified YYYY-MM-DD HH:MM" in local time with "· n places" when it has any, "automatic copy" for a backup,
  *   "older generator" when its stored genKey is not today's, D8), with Play (`/?world=<id>`), Rename (the name becomes a
@@ -292,7 +293,10 @@ export function mountWorldsMenu(root: HTMLElement, o: WorldsMenuOptions): { disp
   createActions.append(createButton, back);
   const newNoticeRow = el('div');
   newNoticeRow.id = 'new-notice';
-  create.append(heading, field('Name', name), field('Preset', preset), field('Seed', seedRow), createActions, newNoticeRow);
+  // Without storage the unsaved world keeps no name, so the field is not offered (final review MENU-4).
+  const nameField = field('Name', name);
+  nameField.hidden = o.saves === null;
+  create.append(heading, nameField, field('Preset', preset), field('Seed', seedRow), createActions, newNoticeRow);
   const newNotices = createNotices(newNoticeRow);
 
   // Load world (D3).

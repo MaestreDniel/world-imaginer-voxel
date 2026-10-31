@@ -405,6 +405,17 @@ describe('mountWorldsMenu: the start screen and New world (SP5b spec §1.1, §1.
     expect(dom.el('new-notice').textContent).toBe('');
   });
 
+  test('with `saves` null, New world hides the Name field, which an unsaved world would ignore; with storage it is shown (final review MENU-4)', async () => {
+    mount({ saves: null });
+    await openNew();
+    expect(shown('new-create')).toBe(true);
+    expect(shown('new-name')).toBe(false);
+    dom.body.replaceChildren();
+    mount();
+    await openNew();
+    expect(shown('new-name')).toBe(true);
+  });
+
   test('a `versionchange` on the menu\'s connection shows `Reload to continue`, and the menu then writes nothing (D14)', async () => {
     const kv = createMemoryKV();
     const listeners: Array<(e: KvEvent) => void> = [];
