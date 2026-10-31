@@ -2,6 +2,7 @@ import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { expect } from 'vitest';
+import { enterFileFailures, persistFailures, screenFailures, type ScreenOf } from '../harness/benchFiles';
 import { metricTest } from '../harness/metric';
 
 /**
@@ -10,7 +11,8 @@ import { metricTest } from '../harness/metric';
  * -- --route flight`, the `?flight=sp4a` route; SP4b spec §8.4; SP4c spec §8.4; SP5a spec §6.2; SP5b spec §6.2: every
  * G1 file re-measured into `assets/sp5b/`, the SP5a files staying in `assets/sp5a/`). Its shape is checked first: the
  * route's JSON with the renderer naming the Iris Xe (as reported), the section renderer RegionBatch ('batch'), RD 12,
- * the default profile and a cold driver shader cache (`shaderCache`, rulings R11). The three gated parts:
+ * the default profile, a cold driver shader cache (`shaderCache`, rulings R11) and the window fullscreen at 1920 × 1080
+ * with a 1920 × 1080 @ 1 viewport (`screenFailures`, final review GOV-4). The three gated parts:
  * - `mediumStaticP95`: the snapped frame times' p95 (`frames.p95`), max 16.7;
  * - `mediumStaticDrawCalls`: the draw calls' max (`drawCalls.max`), max 100;
  * - `mediumStaticMainP95`: the main-thread ms' p95 (`main.p95`), max 6.
@@ -21,7 +23,8 @@ import { metricTest } from '../harness/metric';
  * Iris Xe Chrome bench files `assets/sp5b/bench-iris-chrome.json` (the default pool) and `bench-iris-chrome-w4.json`
  * (4 workers), `npm run measure:chrome -- --route bench`, re-measured on SP5b's code (SP5b spec §6.2). Each file's
  * shape is checked first: route `bench=medium`, the renderer naming the Iris Xe, RegionBatch, RD 12, the default
- * profile, a cold driver shader cache (rulings R11), 4 workers in the w4 file, the `gpuMB` breakdown fields,
+ * profile, a cold driver shader cache (rulings R11), the window fullscreen at 1920 × 1080 with a 1920 × 1080 @ 1
+ * viewport (final review GOV-4), 4 workers in the w4 file, the `gpuMB` breakdown fields,
  * `structuralFrames` present, every entry's `leg` one of L0-L11, with every SP4b-leg entry's
  * (`leg` L0-L6) `stutterMs` ≤ 33 ms (the larger of its own snapped frame and the next one's, §8.4; rulings R10; SP4c's
  * live legs L7-L9 are `G1.live`'s; SP5a's edit leg L10's long frames are its `over33`, an exit check, not a G1 part;
@@ -64,7 +67,9 @@ import { metricTest } from '../harness/metric';
  * autosave off, on, off, on, L11a-L11d). The file's shape is checked as the streaming call's, plus the `persist`
  * block's: `timedOut` empty, at least 20 flushes in the "on" parts, every figure a gated part reads measured, both
  * "on" parts' `editVisibleP95` measured (rulings P42), and at least 20 edits overlapping a flush
- * (`replyDuringFlushCount`: L11 posts one right after each "on" part's flush, final review GOV-1). The gated parts:
+ * (`replyDuringFlushCount`: L11 posts one right after each "on" part's flush, final review GOV-1); the three added
+ * parts are recomputed from L11a-L11d and must equal the stored ones (`persistFailures`, final review GOV-4). The
+ * gated parts:
  * - `over33Added`: the "on" parts' `over33` sum minus the "off" parts', max 1;
  * - `p95AddedMs`: the "on" parts' mean frame p95 minus the "off" parts', max 4.17 (one 240 Hz interval);
  * - `editVisibleAddedMs`: the same difference of `editVisibleP95`, max 8.33 (two intervals);
@@ -79,7 +84,9 @@ import { metricTest } from '../harness/metric';
  * G1's enter part (SP5b spec §6.2, D28), every tier, a sixth call (`G1.enter`): read from the committed Iris Xe Chrome
  * enter file `assets/sp5b/enter-iris-chrome.json` (`npm run measure:chrome -- --route enter --gpu iris`). Its shape is
  * checked first: route `bench=enter`, the renderer naming the Iris Xe (rulings P42), a cold driver shader cache, six
- * pairs with the first (the cold cache) discarded, five kept. The gated part:
+ * pairs with the first (the cold cache) discarded, five kept, and (`enterFileFailures`, final review GOV-4) six
+ * `pairRatios` each its pair's (b) / (a), `enterRatio` their median over pairs 1-5 recomputed, `gpu` 'iris' and the window
+ * fullscreen at 1920 × 1080 with a 1920 × 1080 @ 1 viewport. The gated part:
  * - `enterRatio`: the median of the kept pairs' ratios (b) saved / (a) unsaved `revealMs`, max 1.10 (rulings R8).
  * Recorded beside it: both legs' medians, `idbOpenMs + loadMs`, `decodeMs` and `newWorldRevealMs` (null: -1). The RTX
  * and Firefox enter files are recorded, when present, in `.out/G1.enter.others.json`, never gated.
@@ -91,7 +98,7 @@ const GATED = 'flight-iris-chrome.json';
 const OTHERS = ['flight-iris-chrome-w4.json', 'flight-rtx-chrome.json', 'flight-iris-firefox.json', 'flight-rtx-firefox.json'] as const;
 
 /** The parts of a flight JSON G1 reads (`src/ui/world/flight.ts`' FlightResult, plus measureChrome's additions). */
-interface Flight {
+interface Flight extends ScreenOf {
   readonly route: string;
   readonly profile: string;
   readonly rd: number;
@@ -120,6 +127,7 @@ metricTest('G1', ['mediumStaticP95', 'mediumStaticDrawCalls', 'mediumStaticMainP
   expect(f.profile, 'on the default profile').toBe('default');
   expect(f.frames.count, 'a flight was measured').toBeGreaterThan(0);
   expect(f.shaderCache, 'measured on a cold driver shader cache (rulings R11)').toBe('cold');
+  expect(screenFailures(f), 'measured fullscreen at 1920 × 1080 @ 1 (final review GOV-4)').toEqual([]);
 
   const others: Record<string, unknown> = {};
   for (const file of OTHERS) {
@@ -203,7 +211,7 @@ interface Persist {
 }
 
 /** The parts of a bench JSON G1 reads (`src/ui/world/bench.ts`' BenchResult, plus measureChrome's additions). */
-interface Bench {
+interface Bench extends ScreenOf {
   readonly route: string;
   readonly profile: string;
   readonly rd: number;
@@ -267,6 +275,7 @@ function checkBench(file: string, workers: number | null): Bench {
   if (workers !== null) expect(b.workers, `${file}: ${workers} workers`).toBe(workers);
   expect(b.stream.frames.count, `${file}: a bench was measured`).toBeGreaterThan(0);
   expect(b.shaderCache, `${file}: measured on a cold driver shader cache (rulings R11)`).toBe('cold');
+  expect(screenFailures(b), `${file}: measured fullscreen at 1920 × 1080 @ 1 (final review GOV-4)`).toEqual([]);
   for (const k of ['gpuMB', 'geometryMB', 'texturesMB', 'drawingBufferMB'] as const) {
     expect(Number.isFinite(b.stream[k]), `${file}: stream.${k} is a number`).toBe(true);
   }
@@ -443,6 +452,7 @@ metricTest('G2', ['over33Added', 'p95AddedMs', 'editVisibleAddedMs', 'flushEditV
   expect(p.editVisibleAddedMs, `${BENCH}: editVisibleAddedMs measured`).not.toBeNull();
   expect(p.replyDuringFlushP95Ms, `${BENCH}: replyDuringFlushP95Ms measured`).not.toBeNull();
   expect(p.replyDuringFlushCount ?? 0, `${BENCH}: the edits overlapping a flush (replyDuringFlushCount)`).toBeGreaterThanOrEqual(MIN_REPLIES_DURING_FLUSH);
+  expect(persistFailures(p), `${BENCH}: the added parts are L11a-L11d's differences (final review GOV-4)`).toEqual([]);
 
   // The w4, RTX and Firefox files' persist blocks are recorded, never gated (SP5b spec §6.2).
   const others: Record<string, unknown> = {};
@@ -498,8 +508,9 @@ interface EnterLoad {
 }
 
 /** The parts of an enter JSON G1 reads (`bench.ts`' EnterSummary, plus measureChrome's additions). */
-interface Enter {
+interface Enter extends ScreenOf {
   readonly route: string;
+  readonly gpu?: string;
   readonly renderer?: string | null;
   readonly pairs: ReadonlyArray<{ readonly unsaved: EnterLoad; readonly saved: EnterLoad }>;
   readonly kept: number;
@@ -523,6 +534,7 @@ metricTest('G1', ['enterRatio'], () => {
   expect(e.pairs.length, `${ENTER}: ${ENTER_PAIRS} pairs`).toBe(ENTER_PAIRS);
   expect(e.kept, `${ENTER}: ${ENTER_KEPT} pairs kept`).toBe(ENTER_KEPT);
   expect(e.enterRatio, `${ENTER}: the kept pairs' ratio was measured`).not.toBeNull();
+  expect(enterFileFailures(e), `${ENTER}: six pairRatios, their median over pairs 1-5, the Iris Xe, fullscreen (final review GOV-4)`).toEqual([]);
 
   const others: Record<string, unknown> = {};
   for (const file of ENTER_OTHERS) {
