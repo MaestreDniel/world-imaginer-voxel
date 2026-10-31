@@ -41,7 +41,7 @@ describe('the committed browser files\' derived figures (SP5b spec §6.2; final 
     expect(enterFileFailures(five)).toEqual(['5 pairs, not 6', '5 pairRatios, not 6']);
     // A stored ratio that is not its pair's (b) / (a).
     const swapped = enterFile([150, 105, 104, 102, 106, 108]);
-    expect(enterFileFailures({ ...swapped, pairRatios: swapped.pairRatios.map((r, i) => (i === 2 ? 1 / r : r)) })[0]).toMatch(/^pairRatios\[2\] 0\.96\d*, not \(b\) \/ \(a\) 1\.04$/);
+    expect(enterFileFailures({ ...swapped, pairRatios: swapped.pairRatios.map((r, i) => (i === 2 ? 1 / r! : r)) })[0]).toMatch(/^pairRatios\[2\] 0\.96\d*, not \(b\) \/ \(a\) 1\.04$/);
     // The ratio of the medians (the statistic before rulings R8), or a median over all six, is refused.
     expect(enterFileFailures({ ...swapped, enterRatio: 1.07 })).toEqual(['enterRatio 1.07, not the median of pairRatios[1..5] 1.05']);
     expect(enterFileFailures({ ...swapped, enterRatio: (1.05 + 1.06) / 2 })).toHaveLength(1);
