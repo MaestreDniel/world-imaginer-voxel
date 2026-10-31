@@ -871,6 +871,30 @@ export const COPY_BADGE = 'automatic copy';
 export const OLDER_BADGE = 'older generator';
 /** The `save` step's place's colour, the dialog's default (`PLACE_COLOURS[0]`, red; a unit test compares them). */
 export const FIRST_PLACE_DOT = '#e5534b';
+/** `places`' own place's colour, `SMOKE_PLACE`'s blue (`PLACE_COLOURS[4]`; a unit test compares them). */
+export const ADDED_PLACE_DOT = '#4aa3df';
+/**
+ * `places`' map click south of the arrow after B (final review GOV-11), px: the place B saved sits under the arrow
+ * until the camera moves, so the map shot shows both dots only from somewhere else.
+ */
+export const PLACES_SHOT_SOUTH_PX = 150;
+/** The two dots the map shot shows, px from the arrow (east and south positive), once the camera is south of both. */
+export const PLACES_SHOT_DOTS = [
+  { colour: FIRST_PLACE_DOT, dx: -TELEPORT_EAST_PX, dy: -PLACES_SHOT_SOUTH_PX },
+  { colour: ADDED_PLACE_DOT, dx: 0, dy: -PLACES_SHOT_SOUTH_PX },
+] as const;
+
+/** Whether two looks differ by more than 1 in yaw or pitch (the ↗'s look check means something only then). */
+export const lookDiffers = (a: { readonly yaw: number; readonly pitch: number }, b: { readonly yaw: number; readonly pitch: number }): boolean =>
+  Math.abs(a.yaw - b.yaw) > 1 || Math.abs(a.pitch - b.pitch) > 1;
+
+/**
+ * Whether the help's Worlds menu is clicked again with `el.click()` (final review GOV-12): only when the document is
+ * still the world's and the CDP click never reached the button (`clicks`, the ids the document saw). Once it reached
+ * it, the leave is under way (it waits for a flush), and a second click would leave twice.
+ */
+export const worldsMenuFallback = (clicks: readonly string[] | null, sameDocument: boolean): boolean =>
+  sameDocument && !(clicks ?? []).includes('help-worlds-menu');
 /** The field of view `settings-world` sets through `#setting-fov` (in `SETTING_RANGES.fov`, not the default 70). */
 export const SETTINGS_FOV = 80;
 
@@ -3495,8 +3519,22 @@ async function twoTabsChecks(t: Smoke, id: string): Promise<void> {
   await p.eval(`(window.__wiSmokeClicks = [], document.addEventListener('click', (e) => window.__wiSmokeClicks.push(e.target.id || e.target.tagName), true), true)`);
   await p.eval(MARK_DOCUMENT);
   await p.click('#help-worlds-menu');
-  const menu = await polled(p, `${NEW_DOCUMENT} && document.getElementById('start-load') !== null`, 15_000);
-  t.check(menu !== null, 'two tabs: the help\'s Worlds menu opens the start screen in the same target', await p.eval(`({
+  const opened = `${NEW_DOCUMENT} && document.getElementById('start-load') !== null`;
+  let how = 'the CDP click';
+  let menu = await polled(p, opened, 5_000);
+  if (menu === null) {
+    // The CDP click missed once in Task 32's runs (final review GOV-12): when it never reached the button, the miss is
+    // recorded and the button clicked once more with el.click() through Runtime.evaluate. A miss of both is a product bug.
+    const miss = await p.eval<{ clicks: string[] | null; same: boolean }>(`({ clicks: window.__wiSmokeClicks ?? null, same: !(${NEW_DOCUMENT}),
+      help: document.getElementById('world-help')?.hidden ?? null, visibility: document.visibilityState, focus: document.hasFocus() })`).catch(() => null);
+    if (miss !== null && worldsMenuFallback(miss.clicks, miss.same)) {
+      t.record(`two tabs: the CDP click on the help's Worlds menu did not reach it within 5 s (${JSON.stringify(miss)}); clicked again with el.click() through Runtime.evaluate`);
+      await p.eval(`(document.getElementById('help-worlds-menu').click(), true)`).catch(() => false);
+      how = 'el.click() through Runtime.evaluate, after the CDP click missed';
+    }
+    menu = await polled(p, opened, 15_000);
+  }
+  t.check(menu !== null, `two tabs: the help's Worlds menu opens the start screen in the same target (${how})`, await p.eval(`({
     href: location.href, clicks: window.__wiSmokeClicks ?? null, help: document.getElementById('world-help')?.hidden ?? null,
     visibility: document.visibilityState, focus: document.hasFocus(),
   })`).catch((e: unknown) => String(e)));
@@ -3580,15 +3618,15 @@ async function openFullMap(t: Smoke, what: string): Promise<void> {
 }
 
 /**
- * The map canvas's pixels of colour `hex` (each channel within 3) within 8 px of the view's centre moved `dx` px east:
- * a place's dot (spec §3.7: filled in its colour, a white rim).
+ * The map canvas's pixels of colour `hex` (each channel within 3) within 8 px of the view's centre moved `dx` px east and
+ * `dy` px south: a place's dot (spec §3.7: filled in its colour, a white rim).
  */
-function mapDotPixels(hex: string, dx: number): string {
+function mapDotPixels(hex: string, dx: number, dy = 0): string {
   const [r, g, b] = [1, 3, 5].map((i) => parseInt(hex.slice(i, i + 2), 16));
   return `(() => {
     const c = document.querySelector('#map-overlay .map-canvas');
     const d = c.getContext('2d').getImageData(0, 0, c.width, c.height).data;
-    const cx = Math.floor(c.width / 2) + ${dx}, cy = Math.floor(c.height / 2);
+    const cx = Math.floor(c.width / 2) + ${dx}, cy = Math.floor(c.height / 2) + ${dy};
     let n = 0;
     for (let y = cy - 8; y <= cy + 8; y++) for (let x = cx - 8; x <= cx + 8; x++) {
       if (x < 0 || y < 0 || x >= c.width || y >= c.height) continue;
@@ -3681,9 +3719,11 @@ async function exportImportChecks(t: Smoke, id: string): Promise<{ readonly impo
  * `places` (spec §6.5, §3.7, D12, D13), flying (a place is the camera's exact pose; walking, a place in the air would
  * fall from it): a click on the map 300 px east of the arrow takes the camera away from the `save` step's place, and a
  * look through the pointer lock (when headless Chrome grants it) turns it; B opens the dialog, the name typed and the
- * blue swatch picked (`review-place-dialog.png`), Enter keeps it with "Place saved"; M → the Places tab lists both, and
- * the first place's dot is drawn 300 px west of the arrow (`review-map-places.png`); its ↗ teleports to its pose within
- * 0.01 (`pose()`, yaw and pitch included) and closes the full-screen map.
+ * blue swatch picked (`review-place-dialog.png`), Enter keeps it with "Place saved"; a map click 150 px south of the
+ * arrow moves the camera off the new place (final review GOV-11); M → the Places tab lists both, and both dots are
+ * drawn, the first 300 px west and 150 px north of the arrow and the new one 150 px north (`review-map-places.png`);
+ * the first place's ↗ teleports to its pose within 0.01 (`pose()`; yaw and pitch included when the look before it
+ * differs from the place's, else recorded as not tested) and closes the full-screen map.
  */
 async function placesChecks(t: Smoke, id: string): Promise<void> {
   const p = t.page;
@@ -3738,6 +3778,14 @@ async function placesChecks(t: Smoke, id: string): Promise<void> {
   t.check(added !== undefined && added.name === SMOKE_PLACE.name && added.colour === SMOKE_PLACE.colour && poseWithin(pose, added, POSE_TOL),
     `places: the place keeps the typed name, the blue colour and the camera's pose`, { pose, added });
 
+  // Off the new place, which sits under the arrow until the camera moves: a map click south (final review GOV-11).
+  await openFullMap(t, 'places: the map, to move off the new place');
+  const box2 = await p.eval<Box>(MAP_CANVAS_BOX);
+  await p.clickAt(Math.round(box2.x + box2.width / 2), Math.round(box2.y + box2.height / 2 + PLACES_SHOT_SOUTH_PX));
+  if (!(await holds(t, `(${OVERLAY_CLOSED}) && __wiTest.pose().z - ${pose.z} > ${PLACES_SHOT_SOUTH_PX * WORLD_MAP_BPP / 2}`,
+    `places: a map click ${PLACES_SHOT_SOUTH_PX} px south of the arrow moves the camera off the new place`, 10_000, () => p.eval('__wiTest.pose()')))) return;
+  await sleep(600);
+
   await openFullMap(t, 'places: the map again');
   await p.click('#map-tab-places');
   await holds(t, `[...document.querySelectorAll('#places-list .place-row .place-name')].map((e) => e.textContent).join('|') === ${JSON.stringify([...before.map((x) => x.name), SMOKE_PLACE.name].join('|'))}`,
@@ -3745,14 +3793,22 @@ async function placesChecks(t: Smoke, id: string): Promise<void> {
   // The dots redraw with the map's overlays: one more frame for them; the shot gives the tiles 3 s for their full detail.
   await sleep(300);
   if (t.shots !== null) await sleep(3000);
-  const dot = await p.eval<number>(mapDotPixels(FIRST_PLACE_DOT, -TELEPORT_EAST_PX));
-  t.check(dot >= 5, `places: the first place's dot (${FIRST_PLACE_DOT}) is drawn ${TELEPORT_EAST_PX} px west of the arrow (${dot} px)`, dot);
+  for (const d of PLACES_SHOT_DOTS) {
+    const n = await p.eval<number>(mapDotPixels(d.colour, d.dx, d.dy));
+    t.check(n >= 5, `places: the dot ${d.colour} is drawn ${-d.dx} px west and ${-d.dy} px north of the arrow (${n} px)`, n);
+  }
   await reviewShot(t, SP5B_SHOTS.mapPlaces);
 
+  // The ↗'s yaw and pitch mean something only when the look differs from the place's (the pointer-lock turn may not
+  // happen headless; final review GOV-11): otherwise they are recorded as not tested.
+  const look = await hookPose(p);
+  const keys = lookDiffers(look, first) ? ['x', 'y', 'z', 'yaw', 'pitch'] : ['x', 'y', 'z'];
+  if (keys.length === 3) t.record(`the look before ↗ equals "${first.name}"'s (${look.yaw}, ${look.pitch}): the ↗'s yaw and pitch are not tested`);
   await p.click(`[id="places-list"] .place-row[data-id="${first.id}"] .place-go`);
   const goal = JSON.stringify({ x: first.x, y: first.y, z: first.z, yaw: first.yaw, pitch: first.pitch });
-  await holds(t, `(${OVERLAY_CLOSED}) && (() => { const a = __wiTest.pose(), b = ${goal}; return ['x', 'y', 'z', 'yaw', 'pitch'].every((k) => Math.abs(a[k] - b[k]) <= ${POSE_TOL}); })()`,
-    `places: ↗ teleports to "${first.name}"'s pose within ${POSE_TOL} (yaw and pitch included) and closes the map`, 5000, async () => ({ place: first, pose: await hookPose(p) }));
+  await holds(t, `(${OVERLAY_CLOSED}) && (() => { const a = __wiTest.pose(), b = ${goal}; return ${JSON.stringify(keys)}.every((k) => Math.abs(a[k] - b[k]) <= ${POSE_TOL}); })()`,
+    `places: ↗ teleports to "${first.name}"'s pose within ${POSE_TOL} (${keys.length === 5 ? 'yaw and pitch included' : 'x, y, z; the look never left the place\'s'}) and closes the map`, 5000,
+    async () => ({ place: first, pose: await hookPose(p) }));
 }
 
 /** Ctrl+Z with the map owning, then 1 s: the field `MODIFY_EDIT.id` still reads `value` and nothing regenerates. */

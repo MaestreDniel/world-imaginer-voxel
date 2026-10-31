@@ -45,7 +45,7 @@ import {
   createdWorldId, PAGEHIDE_RELOAD_MS, POSE_TOL, poseWithin, rowTitleOk, SAVE_EDITS, SAVE_SPEED_INDEX, saveColumns, savedWorldQuery, SMOKE_KEYS,
   SMOKE_LOCKED_NOTICE, SMOKE_WORLD, START_BUTTONS,
   COPY_BADGE, exportedFile, FIRST_PLACE_DOT, importedNotice, MODIFY_EDIT, OLDER_BADGE, OLDER_WORLD, PAUSED_SPEED_INDEX, SETTINGS_FOV, SMOKE_BACKUP_NOTICE, SMOKE_BACKUP_NOTICE_MS, SMOKE_COPY,
-  SMOKE_PLACE, SMOKE_PLACE_SAVED, SP5B_SHOTS,
+  SMOKE_PLACE, SMOKE_PLACE_SAVED, SP5B_SHOTS, ADDED_PLACE_DOT, lookDiffers, PLACES_SHOT_DOTS, PLACES_SHOT_SOUTH_PX, worldsMenuFallback,
 } from '../tools/uiSmoke';
 import { FACE_DOWN, FACE_EAST, FACE_NORTH, FACE_SOUTH, FACE_UP, FACE_WEST } from '../../src/world/blocks/kinds';
 import { EMIT, REGISTRY } from '../../src/world/blocks/index';
@@ -1275,6 +1275,38 @@ describe('UI smoke test: the saved-world steps (SP5b spec §6.5)', () => {
     expect(PLACE_COLOURS[SMOKE_PLACE.colour]).toBe('#4aa3df');
     // The `save` step's place, saved with the dialog's default colour, is the dot `places` looks for.
     expect(FIRST_PLACE_DOT).toBe(PLACE_COLOURS[0]);
+  });
+
+  test('`places` moves the camera south of both places before the map shot, so both dots show beside the arrow (final review GOV-11)', () => {
+    expect(ADDED_PLACE_DOT).toBe(PLACE_COLOURS[SMOKE_PLACE.colour]);
+    expect(PLACES_SHOT_SOUTH_PX).toBe(150);
+    // After a map click 150 px south of the arrow, the first place is 300 px west and 150 px north of it, the new
+    // place 150 px north: neither under the arrow, both inside the 1400 × 900 viewport's map.
+    expect(PLACES_SHOT_DOTS).toEqual([
+      { colour: FIRST_PLACE_DOT, dx: -TELEPORT_EAST_PX, dy: -PLACES_SHOT_SOUTH_PX },
+      { colour: ADDED_PLACE_DOT, dx: 0, dy: -PLACES_SHOT_SOUTH_PX },
+    ]);
+    for (const d of PLACES_SHOT_DOTS) {
+      expect(Math.hypot(d.dx, d.dy)).toBeGreaterThan(40);
+      expect(Math.abs(d.dx)).toBeLessThan(VIEWPORT.width / 2 - 20);
+      expect(Math.abs(d.dy)).toBeLessThan(VIEWPORT.height / 2 - 20);
+    }
+  });
+
+  test('the ↗\'s yaw and pitch are checked only when the look differs from the place\'s (final review GOV-11)', () => {
+    expect(lookDiffers({ yaw: 10, pitch: -5 }, { yaw: 10.5, pitch: -5.5 })).toBe(false);
+    expect(lookDiffers({ yaw: 10, pitch: -5 }, { yaw: 12, pitch: -5 })).toBe(true);
+    expect(lookDiffers({ yaw: 10, pitch: -5 }, { yaw: 10, pitch: -7 })).toBe(true);
+  });
+
+  test('the help\'s Worlds menu is clicked again with el.click() only when the CDP click never reached it on the same document (final review GOV-12)', () => {
+    expect(worldsMenuFallback([], true)).toBe(true);
+    expect(worldsMenuFallback(null, true)).toBe(true);
+    expect(worldsMenuFallback(['CANVAS', 'world-help'], true)).toBe(true);
+    // It reached the button: its leave is under way (the flush's wait), so a second click would leave twice.
+    expect(worldsMenuFallback(['help-worlds-menu'], true)).toBe(false);
+    // The document changed already.
+    expect(worldsMenuFallback([], false)).toBe(false);
   });
 
   test('`modify` changes density.detailAmpHi from amplified\'s 1.5 to 4; the copy is "<name> (before the change)", listed with "automatic copy", and the older-generator row is the second import\'s', () => {
