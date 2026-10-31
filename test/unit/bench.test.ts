@@ -14,7 +14,7 @@ import { LAVA_SOURCE, WATER_SOURCE } from '../../src/world/blocks/fluid';
 import type { Edit } from '../../src/workers/protocol';
 import {
   BENCH_EDIT, BENCH_FIELDS, BENCH_FRAME_CAPACITY, BENCH_IDLE_FRAMES, BENCH_LEGS, BENCH_LIVE, BENCH_LIVE_LEGS, BENCH_PITCH, BENCH_RD, BENCH_REFILL,
-  BENCH_SAVE, BENCH_SAVE_LEG, BENCH_SAVE_PARTS, BENCH_SEED, BENCH_SHOT_ABOVE, BENCH_SHOT_PITCH, BENCH_SHOTS, BENCH_TIME_SPEED, BENCH_Y, benchInterval, benchPose, createBenchDriver,
+  BENCH_PROFILE, BENCH_SAVE, BENCH_SAVE_LEG, BENCH_SAVE_PARTS, BENCH_SEED, BENCH_SHOT_ABOVE, BENCH_SHOT_PITCH, BENCH_SHOTS, BENCH_TIME_SPEED, BENCH_Y, benchInterval, benchPose, createBenchDriver,
   createBenchRecord, createBenchRecorder, createLiveReveals, ENTER_AUTO_KEY, ENTER_AUTO_SETUP_PATH, ENTER_DENSE_COLUMNS, ENTER_DISC_RD, ENTER_PAIRS, ENTER_POSE, ENTER_SPARSE,
   enterAutoEnded, enterAutoJson, enterAutoRecorded, enterAutoStart, enterOrder as benchEnterOrder, enterPaths as benchEnterPaths, enterSaveDump, gpuOfRenderer, summarizeEnter, REVIEW_HOUSE, REVIEW_POOL, REVIEW_SCENE_BATCH, REVIEW_SCENES, REVIEW_SETTLE_S, REVIEW_SITE,
   REVIEW_SHOTS, reviewSceneEdits, summarizeBench, type BenchError, type BenchFixed, type BenchFlush, type BenchPose, type BenchRecord, type BenchResult,
@@ -1638,6 +1638,12 @@ describe('the bench\'s saved world in `wi10-bench` (SP5b spec §6.2; plan)', () 
 });
 
 describe('the enter bench `?bench=enter` (SP5b spec §6.2, D28; plan)', () => {
+  test('(a) carries no hash, so it opens the map\'s default world, which is the bench\'s seed and profile with no patch: (a) and (b) are one world (final review GOV-13)', () => {
+    const setup = { worldId: 'w', pose: { x: 1, y: ENTER_POSE.y, z: 2, yaw: ENTER_POSE.yaw, pitch: ENTER_POSE.pitch } };
+    for (const paths of [benchEnterPaths(setup, false), benchEnterPaths(setup, true), toolEnterPaths(setup)]) expect(paths.unsaved).not.toContain('#');
+    expect({ seed: DEFAULT_MAP_STATE.seed, profile: DEFAULT_MAP_STATE.profile, patch: DEFAULT_MAP_STATE.patch }).toEqual({ seed: BENCH_SEED, profile: BENCH_PROFILE, patch: {} });
+  });
+
   const session = openMapSession({ ...DEFAULT_MAP_STATE, seed: BENCH_SEED, profile: 'default', patch: {} }, () => [3, 9]).state;
   const world = newWorldRecord('enter-1', 'Enter bench', session, 1_700_000_000_000);
   const pose = { x: 37, y: ENTER_POSE.y, z: -21, yaw: ENTER_POSE.yaw, pitch: ENTER_POSE.pitch };
