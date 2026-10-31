@@ -134,6 +134,11 @@ export function createPresetsTab(host: HTMLElement, deps: PresetsDeps): PresetsT
     setMessage(importMsg, `reading ${file.name} …`, 'info');
     setIssues(importIssues, []);
     void readTextFile(file).then((text) => {
+      // The mode switched off while the file was read (SP5b D10): the session would refuse the load.
+      if (!editable || !session.writable) {
+        setMessage(importMsg, `${file.name} was not imported: turn on Modify terrain`, 'error');
+        return;
+      }
       const r = loadPresetText(session, text);
       if (!r.ok) {
         setMessage(importMsg, `${file.name} was not imported:`, 'error');

@@ -205,7 +205,8 @@ export function createToolbar(host: HTMLElement, deps: ToolbarDeps): Toolbar {
       return;
     }
     void notices.confirm(profileSwitchText(id, n), 'Switch').then((ok) => {
-      if (disposed || !ok || !report(session.setProfile(id))) return;
+      // The mode switched off while the confirmation was open (SP5b D10): the session would refuse, so nothing is said.
+      if (disposed || !ok || !editable || !session.writable || !report(session.setProfile(id))) return;
       const switched = session.state;
       notices.show('profile switched', { timeoutMs: 5000, actions: [{ label: 'Undo', run: () => { if (session.state === switched) session.undo(); } }] });
     });

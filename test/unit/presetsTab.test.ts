@@ -8,7 +8,9 @@ import { afterEach, describe, expect, test, vi } from 'vitest';
 import { WorldSession } from '../../src/engine/session';
 import { validateParamTrees } from '../../src/gen/trees';
 import type { Notices } from '../../src/ui/common/notice';
+import { presetText } from '../../src/ui/presets/presetFile';
 import { createPresetsTab } from '../../src/ui/presets/presetsTab';
+import { resolveProfile } from '../../src/core/params/profiles';
 import { installDom } from './fixtures/domShim';
 
 afterEach(() => { vi.unstubAllGlobals(); });
@@ -52,5 +54,37 @@ describe('the Presets tab\'s setEditable (SP5b spec D10)', () => {
     tab.setEditable(false);
     tab.setEditable(true);
     expect([el('pt-apply').disabled, el('pt-export').disabled, el('pt-import').disabled, el('pt-patch').disabled]).toEqual([true, true, false, false]);
+  });
+});
+
+describe('the Presets tab\'s import after the mode was switched off (PAGE-3)', () => {
+  test('a file read that resolves after the mode was switched off imports nothing, says so, and shows no "loaded preset" notice', async () => {
+    const dom = installDom();
+    // The file's read resolves when the test says so (Node has no FileReader).
+    let finish: (() => void) | null = null;
+    vi.stubGlobal('FileReader', class {
+      result: string | null = null;
+      onload: (() => void) | null = null;
+      onerror: (() => void) | null = null;
+      readAsText() { finish = () => { this.result = presetText('mine', 'large_biomes', resolveProfile('large_biomes')); this.onload?.(); }; }
+    });
+    const session = new WorldSession(() => [1, 2], { validateParams: validateParamTrees });
+    const host = dom.document.createElement('div');
+    dom.body.append(host);
+    const shown: string[] = [];
+    const tab = createPresetsTab(host as unknown as HTMLElement, {
+      session, notices: { show: (t: string) => { shown.push(t); } } as unknown as Notices, edit: (_e, fn) => fn(),
+    });
+    const input = dom.el('pt-file');
+    Object.assign(input, { files: [Object.assign(new Blob(['x']), { name: 'mine.wi10-preset.json' })] });
+    input.dispatchEvent(new Event('change'));
+    expect(finish).not.toBeNull();
+    // "Modify terrain" unticked while the file is read.
+    session.setWritable(false);
+    tab.setEditable(false);
+    finish!();
+    await new Promise((resolve) => { setTimeout(resolve, 0); });
+    expect([session.state.profile, shown]).toEqual(['default', []]);
+    expect(dom.el('pt-import-msg').textContent).toBe('mine.wi10-preset.json was not imported: turn on Modify terrain');
   });
 });

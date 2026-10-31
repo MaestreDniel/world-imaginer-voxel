@@ -543,6 +543,11 @@ export function createSplineDrawer(host: HTMLElement, deps: DrawerDeps): SplineD
     if (file === undefined || into === null || !editable) return;
     void readTextFile(file).then((text) => {
       if (leaf !== into) return;
+      // The mode switched off while the file was read (SP5b D10): the session would refuse the change.
+      if (!editable || !session.writable) {
+        setMessage([`${file.name} was not imported: turn on Modify terrain`], 'error');
+        return;
+      }
       const r = readShapeText(text, into, leafOpts(into));
       if (!r.ok) {
         setMessage([`${file.name} was not imported:`, ...r.issues], 'error');

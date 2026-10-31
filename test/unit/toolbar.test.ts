@@ -1,5 +1,7 @@
 import { afterEach, describe, expect, test, vi } from 'vitest';
+import { WorldSession as RealSession } from '../../src/engine/session';
 import type { WorldSession } from '../../src/engine/session';
+import { validateParamTrees } from '../../src/gen/trees';
 import type { Notices } from '../../src/ui/common/notice';
 import { BIOME_SIZE_SCALE } from '../../src/ui/map/biomeSize';
 import type { DriverStatus } from '../../src/ui/map/previewDriver';
@@ -109,6 +111,36 @@ describe('the toolbar in the world (SP4c spec §2.5, D17, D26)', () => {
     expect([byText('Undo').disabled, byText('Redo').disabled]).toEqual([true, true]);
     toolbar.setEditable(true);
     expect(terrain.map((c) => c.disabled)).toEqual([false, false, false, false, false, false, false]);
+  });
+
+  test('a profile switch confirmed after the mode was switched off changes nothing and shows no "profile switched" with its Undo (PAGE-3)', async () => {
+    const { document } = installDom();
+    const host = document.createElement('div');
+    const real = new RealSession(() => [1, 2], { seedText: '42', validateParams: validateParamTrees });
+    real.set('climate.scaleMul', 2);
+    real.set('climate.scaleMul', 3);
+    let answer: ((ok: boolean) => void) | null = null;
+    const shown: string[] = [];
+    const confirmer = {
+      confirm: () => new Promise<boolean>((resolve) => { answer = resolve; }),
+      show: (text: string) => { shown.push(text); },
+    } as unknown as Notices;
+    const toolbar = createToolbar(host as unknown as HTMLElement, {
+      session: real, notices: confirmer, layer: 'biome', edit: (_e, fn) => fn(),
+      onLayer: () => {}, onGrid: () => {}, onCut: () => {}, open3dHref: () => '/?at=0,0',
+      embedded: { slot: document.createElement('span') as unknown as HTMLElement, hint: 'Click: go here · Shift+click: pin' },
+    });
+    const select = host.querySelectorAll('select').find((x) => x.title === 'Profile')!;
+    const other = profileOptions().find((p) => p !== real.state.profile)!;
+    select.value = other;
+    select.dispatchEvent(new Event('change'));
+    expect(answer).not.toBeNull();
+    // "Modify terrain" unticked while the confirmation is open: the session refuses, then the editors are disabled.
+    real.setWritable(false);
+    toolbar.setEditable(false);
+    answer!(true);
+    await new Promise((resolve) => { setTimeout(resolve, 0); });
+    expect([real.state.profile, real.state.params.climate.scaleMul, shown]).toEqual(['default', 3, []]);
   });
 
   test('a control disabled for its own reason stays disabled after `setEditable(true)`: Undo and Redo with no step', () => {

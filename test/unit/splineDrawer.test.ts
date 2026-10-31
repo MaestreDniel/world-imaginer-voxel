@@ -11,6 +11,7 @@ import { WorldSession } from '../../src/engine/session';
 import { validateParamTrees } from '../../src/gen/trees';
 import type { Notices } from '../../src/ui/common/notice';
 import { createSplineDrawer } from '../../src/ui/splineEditor/drawer';
+import { shapeText } from '../../src/ui/splineEditor/shapeFile';
 import { installDom, type FakeElement } from './fixtures/domShim';
 
 /** Every descendant of `host`. */
@@ -132,5 +133,30 @@ describe('the spline drawer\'s setEditable (SP5b spec D10)', () => {
     d.drawer.setEditable(false);
     d.drawer.setEditable(true);
     expect([d.button('Reset spline').disabled, d.field('y').disabled, d.field('x').disabled]).toEqual([true, true, false]);
+  });
+});
+
+describe('the spline drawer\'s import after the mode was switched off (PAGE-3)', () => {
+  test('a file read that resolves after the mode was switched off says it was not imported, never "imported"', async () => {
+    let finish: (() => void) | null = null;
+    let text = '';
+    vi.stubGlobal('FileReader', class {
+      result: string | null = null;
+      onload: (() => void) | null = null;
+      onerror: (() => void) | null = null;
+      readAsText() { finish = () => { this.result = text; this.onload?.(); }; }
+    });
+    const { session, drawer, by } = mount();
+    text = shapeText('shape.offset', session.state.params.shape.offset);
+    const input = by('sd-file')[0]!;
+    Object.assign(input, { files: [Object.assign(new Blob(['x']), { name: 'offset.wi10-shape.json' })] });
+    input.dispatchEvent(new Event('change'));
+    expect(finish).not.toBeNull();
+    // "Modify terrain" unticked while the file is read.
+    session.setWritable(false);
+    drawer.setEditable(false);
+    finish!();
+    await new Promise((resolve) => { setTimeout(resolve, 0); });
+    expect(by('sd-message')[0]!.textContent).toBe('offset.wi10-shape.json was not imported: turn on Modify terrain');
   });
 });
