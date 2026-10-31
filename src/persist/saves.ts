@@ -330,11 +330,13 @@ export function normalizeState(raw: unknown, worldId: string, b: StateBounds): {
 
 /**
  * A history value under today's ids, or −1 when the sim's `editOk` would refuse it: `NO_VALUE`, or a u32 whose state,
- * after the remap, is below `REGISTRY.stateCount`. A state past the stored table is refused, an unknown one is air.
+ * after the remap, is below `REGISTRY.stateCount` and whose fluid byte has its reserved bit 7 clear (the codec refuses
+ * it). A state past the stored table is refused, an unknown one is air.
  */
 function historyValue(v: unknown, to: Int32Array | null): number {
   if (!isU32(v)) return -1;
   if (v === NO_VALUE) return v;
+  if ((v & 0x80) !== 0) return -1;
   if (to !== null && (v >>> 8) >= to.length) return -1;
   const r = to === null ? v + 0 : remapValue(v, to).value;
   return r >>> 8 < REGISTRY.stateCount ? r : -1;

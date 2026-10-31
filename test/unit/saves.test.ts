@@ -307,6 +307,13 @@ describe('normalizeHistory (§2.1)', () => {
     expect(r.reset).toBe(false);
   });
 
+  test('a value whose fluid byte has the reserved bit 7 drops its step, counted, as the sim\'s `editOk` and the codec refuse it (PER-1)', () => {
+    const raw = history([step(), step({ after: (1 << 8) | 0x80 })], [step({ before: (stone << 8 | 0xFF) >>> 0 })]);
+    const r = normalizeHistory(raw, WORLD, null);
+    expect(r.history).toEqual({ worldId: WORLD, done: [step()], undone: [] });
+    expect(r.dropped).toBe(2);
+  });
+
   test('a step with any bad edit is dropped whole', () => {
     const raw = history([{ edits: [edit(), edit({ y: 320 })] }, { edits: 'x' }, { edits: [] }, 7]);
     const r = normalizeHistory(raw, WORLD, null);

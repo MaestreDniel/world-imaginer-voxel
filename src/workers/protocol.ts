@@ -772,9 +772,10 @@ const EDIT_REFUSALS: Readonly<Record<EditRefusal, true>> = Object.freeze({ unloa
 const isU32 = (v: unknown): v is number => isInt(v) && v >= 0 && v <= 0xFFFFFFFF;
 /**
  * A u32 voxel value whose state (`v >>> 8`) is a registry state: D's guard (`diffStatesOk`) refuses any other, so an
- * entry the sim recorded from one would fail every later D of its column (SIM-3).
+ * entry the sim recorded from one would fail every later D of its column (SIM-3). Its fluid byte's reserved bit 7 is
+ * clear: the column codec refuses it, so a flushed entry holding it would make its column unreadable (SP5b PER-1).
  */
-const isVoxelValue = (v: unknown): v is number => isU32(v) && v >>> 8 < REGISTRY.stateCount;
+const isVoxelValue = (v: unknown): v is number => isU32(v) && v >>> 8 < REGISTRY.stateCount && (v & 0x80) === 0;
 /** One edit of a batch: integer coordinates inside the world, a known op, value and expect u32 with a registry state. */
 const editOk = (e: unknown): boolean =>
   isObj(e) && isInt(e['x']) && isInt(e['z']) && pointInWindow(e['x'], e['z']) && isInt(e['y']) && e['y'] >= -64 && e['y'] <= 319
