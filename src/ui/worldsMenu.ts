@@ -461,7 +461,10 @@ export function mountWorldsMenu(root: HTMLElement, o: WorldsMenuOptions): { disp
   async function importWorld(saves: Saves, file: Blob): Promise<void> {
     if (writesStopped(loadNotices)) return;
     try {
-      const r = await readWiworld(await readBinaryFile(file), STATE_BOUNDS, o.newId(), o.now());
+      // Every saved name, which an empty imported name's proposal avoids (D2).
+      const taken = await saves.list().then((rows) => rows.flatMap((w) => (w.broken ? [] : [w.world.name])), () => []);
+      if (disposed) return;
+      const r = await readWiworld(await readBinaryFile(file), STATE_BOUNDS, o.newId(), o.now(), taken);
       if (disposed) return;
       if (!r.ok) {
         loadNotices.show(r.reason, { kind: 'error' });

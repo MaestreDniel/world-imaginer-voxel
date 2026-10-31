@@ -567,14 +567,19 @@ export function newWorldName(taken: readonly string[]): string {
   return `New world ${n}`;
 }
 
-/** "<name> (before the change)", then "<name> (before the change 2)", "… 3", the first no world uses (D11). */
+/**
+ * "<name> (before the change)", then "<name> (before the change 2)", "… 3", the first no world uses (D11); `name` cut
+ * so the whole is at most `MAX_NAME` code points (D2), the suffix kept.
+ */
 export function backupName(name: string, taken: readonly string[]): string {
   const used = new Set(taken);
-  const first = `${name} (before the change)`;
+  const chars = Array.from(name);
+  const named = (suffix: string): string => `${chars.slice(0, Math.max(0, MAX_NAME - suffix.length)).join('')}${suffix}`;
+  const first = named(' (before the change)');
   if (!used.has(first)) return first;
   let n = 2;
-  while (used.has(`${name} (before the change ${n})`)) n++;
-  return `${name} (before the change ${n})`;
+  while (used.has(named(` (before the change ${n})`))) n++;
+  return named(` (before the change ${n})`);
 }
 
 /** The download's name (D15): every character outside letters, digits, space, `-` and `_` → `_`, plus `.wiworld`. */

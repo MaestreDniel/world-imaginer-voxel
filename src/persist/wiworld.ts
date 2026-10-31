@@ -10,7 +10,8 @@
  * record that does not decode is skipped and counted, as at an open. The state and history go through §2.1's
  * normaliser, the history remapped; each record is remapped to today's ids, keeping its decoded header genKey (D21), so
  * a file under today's table imports its records' bytes unchanged. The world gets today's `stateTable`, a new id and
- * the header's name, and keeps its genKey (an older one follows D8 at its open).
+ * the header's name, trimmed and cut to `MAX_NAME` code points as Rename's (D2; an empty one `newWorldName`'s
+ * proposal), and keeps its genKey (an older one follows D8 at its open).
  *
  * E2's hash (`wiworldHash`, D23) reads the content, never the gzip bytes, which `CompressionStream` does not fix byte
  * for byte across engines.
@@ -21,8 +22,8 @@ import { canonicalJSON } from '../core/params/canonical';
 import { isObj } from '../core/params/kit';
 import { decodeColumnDiff, encodeColumnDiff } from './diffCodec';
 import {
-  loadParams, normalizeHistory, normalizeState, parseWorldRecord, remapDiff, remapOf, tableRelation, todayStateTable,
-  type HistoryRecord, type StateBounds, type WorldDump,
+  loadParams, MAX_NAME, newWorldName, normalizeHistory, normalizeState, parseWorldRecord, remapDiff, remapOf, tableRelation,
+  todayStateTable, type HistoryRecord, type StateBounds, type WorldDump,
 } from './saves';
 
 /** The file format's version; a file with a larger one is refused (D15). */
@@ -141,9 +142,11 @@ const remapFor = (table: readonly string[]): Int32Array | null => (tableRelation
  * record (`parseWorldRecord`) and its parameters (`loadParams`), then every record's framing and bounds (a record past
  * the end, a column outside the world window, or columns not in increasing colKey order: damaged). A record that does
  * not decode against the header's table is skipped and counted in `skippedColumns`; `unknownStates` counts the entries
- * that became air.
+ * that became air. `taken`: every saved world's name, which an empty name's proposal avoids.
  */
-export async function readWiworld(b: Blob | Uint8Array, bounds: StateBounds, newId: string, now: number): Promise<WiworldRead> {
+export async function readWiworld(
+  b: Blob | Uint8Array, bounds: StateBounds, newId: string, now: number, taken: readonly string[] = [],
+): Promise<WiworldRead> {
   const gz = b instanceof Uint8Array ? b : new Uint8Array(await b.arrayBuffer());
   if (gz.length < 2 || gz[0] !== GZIP_ID[0] || gz[1] !== GZIP_ID[1]) return { ok: false, reason: 'Not a .wiworld file' };
   let raw: Uint8Array;
@@ -205,9 +208,11 @@ export async function readWiworld(b: Blob | Uint8Array, bounds: StateBounds, new
   const rawHistory = header['history'];
   const history: HistoryRecord | null =
     rawHistory === null || rawHistory === undefined ? null : normalizeHistory(rawHistory, newId, to).history;
+  const cut = Array.from(stored.world.name.trim()).slice(0, MAX_NAME).join('');
+  const name = cut === '' ? newWorldName(taken) : cut;
   return {
     ok: true,
-    dump: { world: { ...stored.world, stateTable: todayStateTable() }, state, history, cols },
+    dump: { world: { ...stored.world, name, stateTable: todayStateTable() }, state, history, cols },
     skippedColumns,
     unknownStates,
   };

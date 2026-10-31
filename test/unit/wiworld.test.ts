@@ -271,6 +271,21 @@ describe('.wiworld refusals and repairs (SP5b spec §2.4, D15, §2.1)', () => {
     expect(r.dump.history!.undone).toEqual([]);
   });
 
+  test('the header\'s name is trimmed and cut to `MAX_NAME` code points; an empty one becomes `newWorldName`\'s proposal among `taken` (D2, MENU-5)', async () => {
+    const src = sourceDump();
+    const named = async (name: string, taken?: readonly string[]) => {
+      const r = await readWiworld(await writeWiworld({ ...src, world: { ...src.world, name } }), STATE_BOUNDS, 'imported', NOW, taken);
+      if (!r.ok) throw new Error(r.reason);
+      return r.dump.world.name;
+    };
+    expect(await named('')).toBe('New world 1');
+    expect(await named('   ', ['New world 1', 'New world 2'])).toBe('New world 3');
+    expect(await named(`  ${'é'.repeat(70)}  `)).toBe('é'.repeat(MAX_NAME));
+    const astral = await named('😀'.repeat(70));
+    expect([Array.from(astral).length, astral]).toEqual([MAX_NAME, '😀'.repeat(MAX_NAME)]);
+    expect(await named('My world')).toBe('My world');
+  });
+
   test('a header without a history imports with none', async () => {
     const src = sourceDump();
     const r = await readWiworld(await writeWiworld({ ...src, history: null }), STATE_BOUNDS, 'imported', NOW);

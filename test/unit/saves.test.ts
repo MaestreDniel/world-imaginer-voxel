@@ -574,6 +574,22 @@ describe('saves over the KV (§1.2, §1.3, §2.4, E7)', () => {
     expect(backupName('My world', ['My world (before the change)', 'My world (before the change 2)'])).toBe('My world (before the change 3)');
   });
 
+  test('a long name\'s copy is cut to `MAX_NAME` code points, its suffix kept, so a copy of a copy grows no longer (PER-2)', () => {
+    const cp = (t: string): number => Array.from(t).length;
+    const long = 'x'.repeat(MAX_NAME);
+    const first = backupName(long, []);
+    expect([cp(first), first]).toEqual([MAX_NAME, `${'x'.repeat(MAX_NAME - 20)} (before the change)`]);
+    const second = backupName(long, [first]);
+    expect([cp(second), second.endsWith(' (before the change 2)')]).toEqual([MAX_NAME, true]);
+    // A copy of the copy: still 64 code points, and a name no world uses.
+    const again = backupName(first, [long, first]);
+    expect([cp(again), again]).toEqual([MAX_NAME, `${'x'.repeat(MAX_NAME - 22)} (before the change 2)`]);
+    // Code points, not UTF-16 units: an astral character is never split.
+    const astral = backupName('😀'.repeat(60), []);
+    expect([cp(astral), astral.startsWith('😀'.repeat(MAX_NAME - 20)), astral.includes('\uFFFD')]).toEqual([MAX_NAME, true, false]);
+    expect(backupName('My world', [])).toBe('My world (before the change)');
+  });
+
   test('`exportFileName(\'a/b:c é\')` → `a_b_c é.wiworld` (letters include non-ASCII letters)', () => {
     expect(exportFileName('a/b:c é')).toBe('a_b_c é.wiworld');
     expect(exportFileName('My-world_2 ¿?')).toBe('My-world_2 __.wiworld');

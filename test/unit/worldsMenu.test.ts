@@ -850,6 +850,21 @@ describe('mountWorldsMenu: Load world (SP5b spec §1.1, §1.3, D3, D7, D14, D24)
     await vi.waitFor(() => expect(rows().length).toBe(2));
   });
 
+  test('an imported empty name becomes `newWorldName`\'s proposal among the saved names; a long one is cut to 64 (D2, MENU-5)', async () => {
+    const kv = createMemoryKV();
+    const id = await saved(kv, 'New world 1', { updated: 5 });
+    const source = (await createSaves(kv).readAll(id))!;
+    mount(kv);
+    await openLoad();
+    pick(new File([await writeWiworld({ ...source, world: { ...source.world, name: '' } })], 'empty.wiworld'));
+    await vi.waitFor(() => expect(dom.el('load-notice').textContent).toContain('Imported \'New world 2\''));
+    await vi.waitFor(() => expect(rows().length).toBe(2));
+    pick(new File([await writeWiworld({ ...source, world: { ...source.world, name: 'y'.repeat(70) } })], 'long.wiworld'));
+    await vi.waitFor(() => expect(dom.el('load-notice').textContent).toContain(`Imported '${'y'.repeat(64)}'`));
+    await vi.waitFor(() => expect(rows().length).toBe(3));
+    expect(kv.dump('worlds').map(([, w]) => (w as { name: string }).name).sort()).toEqual(['New world 1', 'New world 2', 'y'.repeat(64)]);
+  });
+
   test('an Import refusal shows its reason and writes nothing', async () => {
     const kv = createMemoryKV();
     const id = await saved(kv, 'Alpha', { updated: 5 });
