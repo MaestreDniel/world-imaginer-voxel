@@ -446,6 +446,22 @@ describe('the automatic backup: `beforeApply` (SP5b spec §3.6, D11, D26)', () =
     expect([r.calls, r.copies.length, r.names]).toEqual([[null, 'T'], 2, ['My world', FIRST]]);
   });
 
+  test('after a failed copy, the revert replaces the cancelled step: undo never returns to the cancelled change nor starts another copy (PAGE-2)', async () => {
+    const r = backupRig({ writeMs: 300, fail: 'QuotaExceededError' });
+    r.mode.set(true);
+    const opened = r.session.state.params;
+    r.session.set('climate.scaleMul', 2);
+    r.emit();
+    await r.to(500);
+    expect([r.session.state.params, r.copies.length]).toEqual([opened, 1]);
+    // Ctrl+Z on the map (mode on): the cancelled change is not one undo away.
+    r.session.undo();
+    expect(r.session.state.params.climate.scaleMul).not.toBe(2);
+    r.emit();
+    await r.to(1000);
+    expect([r.copies.length, texts(r)]).toEqual([1, ['Could not save a backup copy (storage full): the terrain change was cancelled']]);
+  });
+
   test('a failure other than a full disk names the error, a closed connection says so; a failed copy leaves the latch clear, so the next change of the same mode session tries again', async () => {
     const r = backupRig({ writeMs: 50, fail: 'closed' });
     r.mode.set(true);

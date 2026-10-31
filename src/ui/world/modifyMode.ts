@@ -22,8 +22,9 @@
  *   latch clear). A world opened with the mode never on is in mode session 0, its latch set (`latchedIn` 0).
  * On `ok` the held change applies at the next tick and "Backup saved as '<name>'" shows for 6 s; a revert to the applied
  * draft meanwhile (`from` null) adopts at once, and the copy, once committed, is kept and spends the latch. On a failure
- * the session loads the applied snapshot (`load(…, {force: true})`, the mode off included), D11's failure notice stays
- * until dismissed, and the latch is cleared: no copy was kept, so the next terrain change tries again.
+ * the session loads the applied snapshot in place of the cancelled step (`load(…, {force: true, record: false})`, the
+ * mode off included), D11's failure notice stays until dismissed, and the latch is cleared: no copy was kept, so the
+ * next terrain change tries again.
  */
 import type { WorldStage } from '../../engine/invalidation';
 import type { SessionSnapshot, WorldSession } from '../../engine/session';
@@ -135,7 +136,8 @@ export function createModifyMode(o: {
       holding = false;
       approved = false;
       latchedIn = 0;
-      o.session.load(b.applied(), { force: true });
+      // `record: false`: the revert replaces the cancelled step, so the map's undo never offers that change again (PAGE-2).
+      o.session.load(b.applied(), { force: true, record: false });
       b.notices.show(`Could not save a backup copy (${failure}): the terrain change was cancelled`, { kind: 'warn' });
     };
     b.names().catch((): readonly string[] => []).then((names) => {
