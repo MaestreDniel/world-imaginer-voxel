@@ -522,7 +522,8 @@ describe('summarizeBench: the save leg L11 (SP5b spec §6.2, D28)', () => {
   test('`over33Added`, `p95AddedMs` and `editVisibleAddedMs` from fixed parts (on 3 and 1 frames over 33 ms, off 1 and 1 → 2)', () => {
     const r = summarizeBench(rec(), { ...FIXED, edit: EDIT }, null, undefined, run());
     expect(Object.keys(r.persist)).toEqual([
-      'L11a', 'L11b', 'L11c', 'L11d', 'flushSyncP95Ms', 'flushSyncMaxMs', 'flushCommitP95Ms', 'replyDuringFlushP95Ms', 'flushMainP95Ms', 'flushes',
+      'L11a', 'L11b', 'L11c', 'L11d', 'flushSyncP95Ms', 'flushSyncMaxMs', 'flushCommitP95Ms', 'replyDuringFlushP95Ms', 'replyDuringFlushCount', 'flushMainP95Ms',
+      'flushes',
       'over33Added', 'p95AddedMs', 'editVisibleAddedMs', 'timedOut',
     ]);
     expect(Object.keys(r.persist.L11a)).toEqual(['p95', 'p99', 'over33', 'editVisibleP95']);
@@ -538,6 +539,7 @@ describe('summarizeBench: the save leg L11 (SP5b spec §6.2, D28)', () => {
     expect(r.persist.editVisibleAddedMs).toBe(30);
     // No flush: the flush figures are null, and the count 0.
     expect([r.persist.flushSyncP95Ms, r.persist.flushCommitP95Ms, r.persist.replyDuringFlushP95Ms, r.persist.flushMainP95Ms, r.persist.flushes]).toEqual([null, null, null, null, 0]);
+    expect(r.persist.replyDuringFlushCount).toBe(0);
     expect(r.persist.timedOut).toEqual([]);
     // The leg's own frame figures, and the JSON round trip.
     expect(r.legs.L11.frames.count).toBe(80);
@@ -571,6 +573,8 @@ describe('summarizeBench: the save leg L11 (SP5b spec §6.2, D28)', () => {
     expect([r.persist.flushSyncP95Ms, r.persist.flushSyncMaxMs, r.persist.flushCommitP95Ms]).toEqual([1.5, 1.5, 6]);
     expect(r.persist.flushMainP95Ms).toBe(0.25);
     expect(r.persist.replyDuringFlushP95Ms).toBe(4);
+    // Its sample count (final review GOV-1): L11b's 3 ms and L11d's 4 ms.
+    expect(r.persist.replyDuringFlushCount).toBe(2);
   });
 
   test('L10\'s streaming p95 reads the samples before L11\'s (`samplesFrom`), not L11\'s', () => {
@@ -1436,6 +1440,8 @@ describe('createBenchDriver: the save leg L11 (SP5b spec §6.2, D28; plan)', () 
       filled: () => true,
       samples: () => 0,
       flushed: (f) => { logged.push(f); },
+      flushPosted() {},
+      ticked() {},
     });
     expect(ticks).toHaveLength(1);
     const { driver, p } = await toL11(saving.hooks);
@@ -1477,6 +1483,94 @@ describe('createBenchDriver: the save leg L11 (SP5b spec §6.2, D28; plan)', () 
     // The page's log of every flush, on its clock: the flushNow and each tick's post.
     expect(logged).toHaveLength(flushes.length);
     expect(logged.every((f) => f.ok && f.syncMs === 0.2 && f.commitMs === 3 && f.mainMs >= 0)).toBe(true);
+  });
+
+  test('every "on" part\'s flush has one scripted edit posted right after it, and every "off" part\'s timer tick one at the same tick (final review GOV-1): 30 flushes give ≥ 30 overlapping edits, counted in the summary', async () => {
+    let t = 0;
+    const posted: Array<{ readonly t: number; readonly edit: Edit }> = [];
+    const flushTimes: number[] = [];
+    // Each flush stays in flight 3 ms on the page's clock, settled by the test after the tick (`settle`).
+    const inFlight: Array<() => void> = [];
+    const ticks: Array<() => void> = [];
+    let bound: ReturnType<typeof createBenchDriver> | null = null;
+    const saving = createBenchSave({
+      worldId: 'b1',
+      fly: { x: 20000.5, y: 90, z: 0.5, yaw: 90, pitch: -15, mode: 'fly', speed: 12 },
+      frame: { t: 0.3 },
+      edits: {
+        post: (edits) => {
+          for (const edit of edits) posted.push({ t, edit });
+          return Promise.resolve({ ok: true, prev: Uint32Array.from(edits, (e) => e.expect), next: Uint32Array.from(edits, (e) => e.value) });
+        },
+        pending: () => false,
+        settled: () => Promise.resolve(),
+      },
+      read: () => 0,
+      sim: {
+        flush: () => {
+          flushTimes.push(t);
+          return new Promise((resolve) => {
+            inFlight.push(() => resolve({ type: 'flushed', id: flushTimes.length, ok: true, flushSeq: flushTimes.length, columns: 1, bytes: 9, syncMs: 0.2, commitMs: 3 }));
+          });
+        },
+      },
+      clock: {
+        now: () => t * 1000,
+        setInterval: (f) => ticks.push(f),
+        clearInterval() {},
+        setTimeout: () => 0,
+        clearTimeout() {},
+      },
+      now: () => t * 1000,
+      wallNow: () => 1_800_000_000_000 + t * 1000,
+      filled: () => true,
+      samples: () => 0,
+      flushed: (f) => bound?.flushed(f),
+      flushPosted: () => bound?.flushPosted(),
+      ticked: () => bound?.autosaveTicked(),
+    });
+    const settle = async (): Promise<void> => {
+      await flush();
+      for (const done of inFlight.splice(0)) done();
+      await flush();
+    };
+    const { driver, p, published } = await toL11(saving.hooks);
+    bound = driver;
+    driver.pose(129.05, p, 12);
+    await settle();
+    const t0 = 129.1;
+    const tickAt: number[] = [];
+    for (let i = 0; i < 2400; i++) {
+      t = t0 + i * 0.05;
+      driver.pose(t, p, 12);
+      // The autosave's 2,000 ms timer; its flush settles 3 ms later.
+      if (i % 40 === 39) {
+        await flush();
+        tickAt.push(t);
+        ticks[0]!();
+        await flush();
+        const tick = t;
+        t = tick + 0.003;
+        await settle();
+        t = tick;
+      }
+    }
+    t = t0 + 120;
+    expect(driver.pose(t, p, 12)).toBeNull();
+    const inPart = (x: number, k: number): boolean => x >= t0 + 30 * k && x < t0 + 30 * (k + 1);
+    // 15 ticks per part; the flushNow and the "on" parts' 30 ticks posted.
+    expect(tickAt.map((x) => [0, 1, 2, 3].findIndex((k) => inPart(x, k)))).toEqual([0, 1, 2, 3].flatMap((k) => Array<number>(15).fill(k)));
+    expect(flushTimes).toHaveLength(31);
+    // At each tick, in every part: one edit beside the part's 0.2 s schedule, posted at the tick's time (after the
+    // flush's post in the "on" parts).
+    for (const x of tickAt) expect(posted.filter((e) => e.t === x)).toHaveLength(1);
+    expect(posted).toHaveLength(600 + 60);
+    driver.done(FIXED);
+    const r = published[0] as BenchResult;
+    expect(r.persist.flushes).toBe(30);
+    // Each "on" part's flush overlaps the edit posted after it: at least one sample per flush.
+    expect(r.persist.replyDuringFlushCount).toBeGreaterThanOrEqual(30);
+    expect(r.persist.replyDuringFlushP95Ms).not.toBeNull();
   });
 });
 

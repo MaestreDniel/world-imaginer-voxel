@@ -68,6 +68,7 @@ import type { EditLatencySamples } from './editLatency';
 import type { EditOutcome } from './editPath';
 import { displayInterval } from './frameStep';
 import { parseWorldQuery, type WorldQuery } from './query';
+import { AUTOSAVE_MS } from './autosave';
 import { STATE_BOUNDS } from './stateBounds';
 
 /** The route's world and camera (spec §8.3). */
@@ -168,7 +169,10 @@ export const BENCH_EDIT_LEG: BenchLeg = {
  * then the parts `BENCH_SAVE_PARTS`, `partS` s each, autosave paused or running as each says, each posting
  * `editsPerPart` edits one every `everyMs` (hold-repeat's place rate, master §4.12) through the page's action post over
  * the `area` × `area` columns around the hover point's column, on the surface: alternately a stone placed and broken,
- * every `torchEvery`th a torch, each place and torch on a voxel of its own.
+ * every `torchEvery`th a torch, each place and torch on a voxel of its own. Besides them, each part posts one more such
+ * edit at each autosave timer tick: in the "on" parts right after the tick's flush is posted, so it overlaps that flush
+ * and `replyDuringFlushP95Ms` always has samples; in the "off" parts at the tick itself, so the parts stay comparable
+ * (final review GOV-1).
  */
 export const BENCH_SAVE = { hoverMaxS: 60, partS: 30, editsPerPart: 150, everyMs: 200, area: 4, torchEvery: 10 } as const;
 
@@ -685,7 +689,8 @@ export interface SavePartFigures {
  * L11's block (SP5b spec §6.2, D28): each part's figures; over the "on" parts (L11b, L11d) the flushes posted in them,
  * `flushes` their count, `flushSyncP95Ms` and `flushSyncMaxMs` (the sim's synchronous part) and `flushCommitP95Ms` over
  * the written ones, `flushMainP95Ms` (the tick's main-thread work) over all, and `replyDuringFlushP95Ms`, post → reply
- * of the parts' edits whose interval overlaps a flush's post → `flushed`; then what autosave adds: `over33Added` (the
+ * of the parts' edits whose interval overlaps a flush's post → `flushed`, over `replyDuringFlushCount` such edits (final
+ * review GOV-1); then what autosave adds: `over33Added` (the
  * "on" parts' sum minus the "off" parts'), `p95AddedMs` and `editVisibleAddedMs` (the "on" parts' mean minus the "off"
  * parts', null when a part has no `editVisibleP95`). A figure with no sample is null; `timedOut` ['L11'] when the disc
  * never filled.
@@ -695,6 +700,7 @@ export type PersistFigures = { readonly [K in SavePartName]: SavePartFigures } &
   readonly flushSyncMaxMs: number | null;
   readonly flushCommitP95Ms: number | null;
   readonly replyDuringFlushP95Ms: number | null;
+  readonly replyDuringFlushCount: number;
   readonly flushMainP95Ms: number | null;
   readonly flushes: number;
   readonly over33Added: number;
@@ -1024,6 +1030,7 @@ function persistFiguresOf(rec: BenchRecord, idx: readonly number[], fixed: Bench
     flushSyncMaxMs: sync.length === 0 ? null : maxOf(sync),
     flushCommitP95Ms: percentileOrNull(written.map((f) => f.commitMs), 95),
     replyDuringFlushP95Ms: percentileOrNull(overlapping.map((e) => e.tReply - e.tPost), 95),
+    replyDuringFlushCount: overlapping.length,
     flushMainP95Ms: percentileOrNull(flushes.map((f) => f.mainMs), 95),
     flushes: flushes.length,
     over33Added: on.reduce((a, p) => a + p.figures.over33, 0) - off.reduce((a, p) => a + p.figures.over33, 0),
@@ -1417,6 +1424,13 @@ export interface BenchDriver {
   fail(error: string): void;
   /** An autosave flush settled (SP5b spec §6.2): the page logs every one, for L11's `persist` block. */
   flushed(f: BenchFlush): void;
+  /**
+   * An autosave flush was just posted: in L11's "on" parts the driver posts one scripted edit at once, so it overlaps
+   * that flush (final review GOV-1).
+   */
+  flushPosted(): void;
+  /** The autosave's timer fired: in L11's "off" parts the driver posts one scripted edit then (final review GOV-1). */
+  autosaveTicked(): void;
 }
 
 /**
@@ -1459,8 +1473,12 @@ const L10_SCENE = 3;
 /** L11's interval between edits, s, and the tolerance its schedule allows the script's float times. */
 const SAVE_EVERY_S = BENCH_SAVE.everyMs / 1000;
 const SAVE_EPS_S = 1e-6;
-/** L11's edits in all (600). */
-const SAVE_EDITS = BENCH_SAVE_PARTS.length * BENCH_SAVE.editsPerPart;
+/**
+ * L11's edits in all: the parts' 600, and at most one per autosave timer tick in each part beside them (final review
+ * GOV-1).
+ */
+const SAVE_TICK_EDITS = BENCH_SAVE_PARTS.length * (Math.ceil((BENCH_SAVE.partS * 1000) / AUTOSAVE_MS) + 1);
+const SAVE_EDITS = BENCH_SAVE_PARTS.length * BENCH_SAVE.editsPerPart + SAVE_TICK_EDITS;
 /** The spots an L11 column offers, an 8 × 8 grid two blocks apart, so each place and torch has a voxel of its own. */
 const SAVE_SPOTS_PER_COLUMN = 64;
 /** L11's phases: the hover back at L10's place for the disc, the unmeasured flush, the parts. */
@@ -1527,6 +1545,9 @@ export function createBenchDriver(o: { readonly shot: BenchShot | null; readonly
   let savePhase = L11_HOVER;
   let saveFlushed = false;
   let savePart = 0;
+  // The running part's autosave (null while no part runs) and the tick edits posted (final review GOV-1).
+  let partAutosave: boolean | null = null;
+  let tickEdits = 0;
   let partS = 0;
   let partPosted = 0;
   const partStart = new Float64Array(2);
@@ -1776,7 +1797,8 @@ export function createBenchDriver(o: { readonly shot: BenchShot | null; readonly
     savePart = k;
     partS = tS;
     partPosted = 0;
-    hooks.pause(!BENCH_SAVE_PARTS[k]!.autosave);
+    partAutosave = BENCH_SAVE_PARTS[k]!.autosave;
+    hooks.pause(!partAutosave);
     partStart[0] = hooks.now();
     partStart[1] = hooks.samples();
   };
@@ -1784,6 +1806,15 @@ export function createBenchDriver(o: { readonly shot: BenchShot | null; readonly
   const endPart = (tS: number): void => {
     const hooks = save!;
     saveParts.push({ tS0: partS, tS1: tS, t0: partStart[0]!, t1: hooks.now(), samples0: partStart[1]!, samples1: hooks.samples() });
+  };
+  /**
+   * One edit beside the part's schedule at an autosave timer tick (final review GOV-1): posted when a part runs whose
+   * autosave is `on`, so an "on" part's lands right after its flush's post and an "off" part's at the tick.
+   */
+  const tickEdit = (on: boolean): void => {
+    if (partAutosave !== on || ended || tickEdits >= SAVE_TICK_EDITS) return;
+    tickEdits++;
+    saveEdit();
   };
   /**
    * One frame of L11 at `tS` (SP5b spec §6.2), after `livePose`, at L10's hover point: the hover until the disc there is
@@ -1813,6 +1844,7 @@ export function createBenchDriver(o: { readonly shot: BenchShot | null; readonly
     } else if (tS - partS >= BENCH_SAVE.partS - SAVE_EPS_S) {
       endPart(tS);
       if (savePart + 1 >= BENCH_SAVE_PARTS.length) {
+        partAutosave = null;
         hooks.pause(true);
         return false;
       }
@@ -1969,6 +2001,12 @@ export function createBenchDriver(o: { readonly shot: BenchShot | null; readonly
     },
     flushed(f) {
       flushLog.push(f);
+    },
+    flushPosted() {
+      tickEdit(true);
+    },
+    autosaveTicked() {
+      tickEdit(false);
     },
   };
 }

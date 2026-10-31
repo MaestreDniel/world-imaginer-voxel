@@ -62,8 +62,9 @@ import { metricTest } from '../harness/metric';
  * G2's flush parts (SP5b spec §6.2, D28), every tier, a fifth call (`G2.flush`): read from the same
  * `assets/sp5b/bench-iris-chrome.json`'s `persist` block (the bench's save leg L11: four 30 s parts at one place,
  * autosave off, on, off, on, L11a-L11d). The file's shape is checked as the streaming call's, plus the `persist`
- * block's: `timedOut` empty, at least 20 flushes in the "on" parts, every figure a gated part reads measured, and both
- * "on" parts' `editVisibleP95` measured (rulings P42). The gated parts:
+ * block's: `timedOut` empty, at least 20 flushes in the "on" parts, every figure a gated part reads measured, both
+ * "on" parts' `editVisibleP95` measured (rulings P42), and at least 20 edits overlapping a flush
+ * (`replyDuringFlushCount`: L11 posts one right after each "on" part's flush, final review GOV-1). The gated parts:
  * - `over33Added`: the "on" parts' `over33` sum minus the "off" parts', max 1;
  * - `p95AddedMs`: the "on" parts' mean frame p95 minus the "off" parts', max 4.17 (one 240 Hz interval);
  * - `editVisibleAddedMs`: the same difference of `editVisibleP95`, max 8.33 (two intervals);
@@ -191,6 +192,8 @@ interface Persist {
   readonly flushSyncMaxMs: number | null;
   readonly flushCommitP95Ms: number | null;
   readonly replyDuringFlushP95Ms: number | null;
+  /** The edits `replyDuringFlushP95Ms` reads (final review GOV-1); absent from the files measured before it. */
+  readonly replyDuringFlushCount?: number;
   readonly flushMainP95Ms: number | null;
   readonly flushes: number;
   readonly over33Added: number;
@@ -423,6 +426,8 @@ metricTest('G2', ['editVisibleP95'], () => {
 
 /** The "on" parts' flushes the gate needs at least (SP5b spec §6.2: the two "on" parts hold about 30). */
 const MIN_FLUSHES = 20;
+/** The edits overlapping a flush the gate needs at least (SP5b spec §6.2: one per "on" flush; final review GOV-1). */
+const MIN_REPLIES_DURING_FLUSH = 20;
 
 metricTest('G2', ['over33Added', 'p95AddedMs', 'editVisibleAddedMs', 'flushEditVisibleP95', 'replyDuringFlushP95Ms'], () => {
   // The streaming call's shape checks (route, Iris Xe, RegionBatch, RD 12, default profile, cold cache), then the
@@ -437,6 +442,7 @@ metricTest('G2', ['over33Added', 'p95AddedMs', 'editVisibleAddedMs', 'flushEditV
   expect(p.L11d.editVisibleP95, `${BENCH}: L11d's edits were shown`).not.toBeNull();
   expect(p.editVisibleAddedMs, `${BENCH}: editVisibleAddedMs measured`).not.toBeNull();
   expect(p.replyDuringFlushP95Ms, `${BENCH}: replyDuringFlushP95Ms measured`).not.toBeNull();
+  expect(p.replyDuringFlushCount ?? 0, `${BENCH}: the edits overlapping a flush (replyDuringFlushCount)`).toBeGreaterThanOrEqual(MIN_REPLIES_DURING_FLUSH);
 
   // The w4, RTX and Firefox files' persist blocks are recorded, never gated (SP5b spec §6.2).
   const others: Record<string, unknown> = {};
@@ -472,6 +478,7 @@ metricTest('G2', ['over33Added', 'p95AddedMs', 'editVisibleAddedMs', 'flushEditV
     flushSyncMaxMs: n(p.flushSyncMaxMs),
     flushCommitP95Ms: n(p.flushCommitP95Ms),
     flushes: p.flushes,
+    replyDuringFlushCount: p.replyDuringFlushCount!,
     ...perPart,
   };
 }, 600_000, { outName: 'G2.flush' });

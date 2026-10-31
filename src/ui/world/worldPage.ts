@@ -2412,7 +2412,9 @@ const NO_PAGE_EVENTS: AutosaveDeps['events'] = { on: () => () => {}, hidden: () 
  * and the action post that records into it (the post L11's edits take; L1-L10 keep the path's own post, so their cells
  * stay comparable), and the page's autosave (`createPageAutosave`) over the bench's world, created paused, its build the
  * pose, the clock, the default hotbar, no places and the history; every flush it posts is logged through `flushed` on
- * `now`'s clock, its `mainMs` from the build's start to the post's return. `hooks` are the driver's `BenchWorld.save`.
+ * `now`'s clock, its `mainMs` from the build's start to the post's return; `flushPosted` follows each post's return and
+ * `ticked` each fire of the autosave's timer, paused or not (L11's edits beside its schedule, final review GOV-1).
+ * `hooks` are the driver's `BenchWorld.save`.
  */
 export function createBenchSave(o: {
   readonly worldId: string;
@@ -2429,6 +2431,10 @@ export function createBenchSave(o: {
   filled(): boolean;
   samples(): number;
   flushed(f: BenchFlush): void;
+  /** A flush was just posted (the driver's `flushPosted`, final review GOV-1). */
+  flushPosted(): void;
+  /** The autosave's timer fired, paused or not (the driver's `autosaveTicked`, final review GOV-1). */
+  ticked(): void;
 }): { readonly autosave: Autosave; readonly blockHistory: BlockHistory; readonly hooks: NonNullable<BenchWorld['save']> } {
   const accepted = countAccepted(o.edits.post);
   const blockHistory = createBlockHistory({
@@ -2454,6 +2460,7 @@ export function createBenchSave(o: {
         const p = o.sim.flush(state, history);
         const tPost = o.now();
         const mainMs = tPost - buildStart[0]!;
+        o.flushPosted();
         p.then((r) => o.flushed({
           tPost, tDone: o.now(), ok: r.ok, syncMs: r.ok ? r.syncMs : Number.NaN, commitMs: r.ok ? r.commitMs : Number.NaN, mainMs,
         }), () => {});
@@ -2463,7 +2470,8 @@ export function createBenchSave(o: {
     settled: o.edits.settled,
     editsSince: accepted.count,
     now: () => o.wallNow(),
-    clock: o.clock,
+    // The timer's every fire reaches the driver first, paused or not (final review GOV-1).
+    clock: { ...o.clock, setInterval: (f, ms) => o.clock.setInterval(() => { o.ticked(); f(); }, ms) },
     events: NO_PAGE_EVENTS,
     onResult: () => {},
     onBuild: () => { buildStart[0] = o.now(); },
@@ -3108,6 +3116,8 @@ export function mountWorldPage(root: HTMLElement, q: WorldQuery, hash: string, o
           filled: () => filledRadius(Math.floor(fly.x) >> 4, Math.floor(fly.z) >> 4, refillRd, isRevealed) === refillRd,
           samples: () => editLatency.count,
           flushed: (f) => bench.flushed(f),
+          flushPosted: () => bench.flushPosted(),
+          ticked: () => bench.autosaveTicked(),
         });
         benchAutosave = benchSaving.autosave;
         teardown.push(() => benchSaving.autosave.dispose());
