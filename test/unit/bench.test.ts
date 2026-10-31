@@ -577,6 +577,26 @@ describe('summarizeBench: the save leg L11 (SP5b spec §6.2, D28)', () => {
     expect(r.persist.replyDuringFlushCount).toBe(2);
   });
 
+  test('a full frame record is an error, not a truncated L11 (final review GOV-7): the driver publishes `{ error }`', () => {
+    const frames = [...partFrames(0, 0), ...partFrames(1, 0)];
+    // Rows to spare: summarised as usual.
+    const roomy = recordOf(frames);
+    expect(roomy.n).toBeLessThan(roomy.capacity);
+    expect(() => summarizeBench(roomy, { ...FIXED, edit: EDIT }, null, undefined, run())).not.toThrow();
+    // Every row used: the frames after it were dropped, so the parts' figures would read a cut part.
+    const full = recordOf(frames);
+    const exact = createBenchRecord(full.n);
+    for (const f of BENCH_FIELDS) exact[f].set(full[f].subarray(0, full.n));
+    exact.n = full.n;
+    expect(() => summarizeBench(exact, { ...FIXED, edit: EDIT }, null, undefined, run())).toThrow(/^the bench's frame record is full \(40 frames\)/);
+    // Through the driver: its `done` publishes the error in place of a JSON.
+    const { driver, published } = driverOf(null);
+    driver.record.n = driver.record.capacity;
+    driver.done(FIXED);
+    expect(published).toHaveLength(1);
+    expect((published[0] as BenchError).error).toMatch(/frame record is full \(64 frames\)/);
+  });
+
   test('L10\'s streaming p95 reads the samples before L11\'s (`samplesFrom`), not L11\'s', () => {
     const r = summarizeBench(recordOf([{ leg: 10 }]), { ...FIXED, edit: EDIT }, null, { hoverAccepted: 2, streamingRefused: 0, timedOut: [] }, run({ samplesFrom: 4 }));
     // L10's hover read 20 and 30, its flight 40 and 40; L11's 50 … 80 are not L10's.

@@ -1046,7 +1046,7 @@ function persistFiguresOf(rec: BenchRecord, idx: readonly number[], fixed: Bench
  * (SP4c spec §8.4), `edit` over L10 with the driver's `editRun` (SP5a spec §6.2), `persist` over L11 with the driver's
  * `saveRun` (SP5b spec §6.2), every long frame and every structural frame. `gpuMB` is the largest per-frame sum of the
  * breakdown, which is reported at that frame. The live legs' MESH set is the RD they ran at: 12, or the reservation's
- * cap below it.
+ * cap below it. It throws on a full record (`n` at `capacity`), whose last frames were dropped (final review GOV-7).
  */
 export function summarizeBench(
   rec: BenchRecord,
@@ -1055,6 +1055,11 @@ export function summarizeBench(
   editRun: BenchEditRun = NO_EDIT_RUN,
   saveRun: BenchSaveRun = NO_SAVE_RUN,
 ): BenchResult {
+  // A full record dropped the frames after it, so the last legs' figures (L11's parts) would read a cut part (final
+  // review GOV-7): an error, not a JSON.
+  if (rec.n >= rec.capacity) {
+    throw new Error(`the bench's frame record is full (${rec.capacity} frames): the frames after it were not recorded`);
+  }
   const all: number[] = [];
   const byLeg: number[][] = ALL_LEGS.map(() => []);
   for (let i = 0; i < rec.n; i++) {
