@@ -155,6 +155,7 @@ import {
   MAX_PLACES, createSaves, loadParams, newState, normalizeHistory, normalizeState, parseWorldRecord, remapOf, tableRelation, todayStateTable, type HistoryRecord,
   type HotbarRecord, type Place, type Saves, type StateBounds, type StateRecord, type WorldRecord,
 } from '../../persist/saves';
+import { wiworldHash } from '../../persist/wiworld';
 import { SPEED_DEFAULT, applyCameraRotation, look, lookVectorInto, stepSpeed, toggleMode, type FlyState } from '../../player/fly';
 import { attachInput, isTextEntry } from '../../player/input';
 import { HOTBAR_KEY, createHotbar, slotName, type Hotbar } from '../../player/hotbar';
@@ -214,7 +215,7 @@ import { STATE_BOUNDS } from './stateBounds';
 import {
   TELEPORT_FAILED_MS, TELEPORT_FAILED_NOTICE, createTeleport, landAt, walkFeetY, type PointLanding, type Teleport, type TeleportLanding,
 } from './teleport';
-import { holdWorld, type LockManagerLike, type WorldHold } from './worldLock';
+import { LOCKED_NOTICE, holdWorld, withWorldIfFree, type LockManagerLike, type WorldHold } from './worldLock';
 import {
   BLOCKED_NOTICE, NO_STORAGE, RELOAD_NOTICE, invalidParamsReason, refusalText, refusalUrl, sessionStorageOrNull, type OpenRefusal, type StorageLike,
 } from '../worldsMenu';
@@ -1058,7 +1059,9 @@ export function installWorldLock(
  * and only under `?wiTest=1` (absent otherwise). The smoke reads the leak baseline and check through it (the session's
  * listeners, the pending timers, the map's tile requests), closes the overlay and disposes the tool, forces a fatal
  * error, and reads the controls owner, the stale count and the last teleport's landing; it edits a block through the
- * page's edit path and reads one back (SP5a spec §6.4).
+ * page's edit path and reads one back (SP5a spec §6.4); in a saved world it flushes, reads the places and the last
+ * committed save's hash, switches the modification mode, and reads the pose, the clock and the field of view, which the
+ * HUD (one decimal, no yaw) and a saved world's fixed address cannot show (SP5b spec §6.5).
  */
 export interface WiTest {
   /** The session's listeners (`WorldSession.listenerCount`). */
@@ -1110,12 +1113,40 @@ export interface WiTest {
   feet(): { x: number; y: number; z: number; onGround: boolean; snapPending: boolean; snapY: number | null } | null;
   /** `heightAt('motionBlocking')` at block column (⌊x⌋, ⌊z⌋), read inside a read section; null when it is not Published. */
   heightAt(x: number, z: number): number | null;
+  /** The saved world's id (`?world=`); null in an unsaved world. */
+  worldId(): string | null;
+  /**
+   * A flush now (`Autosave.flushNow`): its `ok` and, when ok, its `flushSeq`; `{ok: false, flushSeq: null}` in an unsaved
+   * world, before the autosave is armed, or when the sim is gone.
+   */
+  flushNow(): Promise<{ ok: boolean; flushSeq: number | null }>;
+  /** The saved world's places (`Places.list`, SP5b spec §3.7); none in an unsaved world. */
+  places(): Place[];
+  /** Puts the world-modification mode in force (`ModifyMode.set`, SP5b spec §3.6); throws in an unsaved world. */
+  modify(on: boolean): void;
+  /**
+   * `wiworldHash` of the world's last committed save, read through `saves.readAll` over the page's connection (ruling
+   * P41); rejects in an unsaved world or when the save cannot be read.
+   */
+  worldHash(): Promise<string>;
+  /** The camera's pose, unrounded: `FlyState`'s x, y (the eye), z, yaw and pitch. */
+  pose(): { x: number; y: number; z: number; yaw: number; pitch: number };
+  /** The clock: the time of day the frame step writes (`frame.t`) and the day speed's index into `TIME_SPEEDS`. */
+  clock(): { t: number; speedIndex: number };
+  /** The camera's vertical field of view, degrees. */
+  fov(): number;
+  /**
+   * Rewrites saved world `id`'s stored `worlds.genKey` to another value (`markOlderGenerator`), so the Load list shows it
+   * as from an older generator (Task 33's shot); refuses the open world's own id and rejects when another tab holds `id`
+   * (ruling P50). Rejects in an unsaved world.
+   */
+  markOlderGenerator(id: string): Promise<void>;
 }
 
 /** The parts of the hook the world page supplies once its streaming route runs. */
 export type WiTestPage = Pick<WiTest,
   'listenerCount' | 'closeOverlay' | 'disposeTool' | 'forceFatal' | 'owner' | 'stale' | 'edit' | 'blockAt' | 'mode' | 'aim' | 'hotbar' | 'blockHistory'
-  | 'lightAt' | 'feet' | 'heightAt'>;
+  | 'lightAt' | 'feet' | 'heightAt' | 'worldId' | 'flushNow' | 'places' | 'modify' | 'worldHash' | 'pose' | 'clock' | 'fov' | 'markOlderGenerator'>;
 
 /** The hook's installation, which `main.ts` hands the page (`WorldPageOptions.wiTest`). */
 export interface WiTestInstall {
@@ -1198,6 +1229,29 @@ export function createHookEdit(
   };
 }
 
+/** The hook's `flushNow` (SP5b spec §6.5): a flush's `flushed` as `ok` and its `flushSeq`; null (no sim) is not ok. */
+export function hookFlushed(r: FlushedMsg | null): { ok: boolean; flushSeq: number | null } {
+  return r !== null && r.ok ? { ok: true, flushSeq: r.flushSeq } : { ok: false, flushSeq: null };
+}
+
+/**
+ * The hook's `markOlderGenerator` (ruling P50): under world `id`'s lock if it is free (`withWorldIfFree`, D24), reads
+ * its `worlds` record and writes only that record back with every hex digit of its genKey complemented, so the stored
+ * genKey is never today's. Rejects when another tab holds the world, the record is missing or broken, or the write
+ * does not complete.
+ */
+export async function markOlderGenerator(kv: KV, locks: LockManagerLike, id: string): Promise<void> {
+  const r = await withWorldIfFree(locks, id, async () => {
+    const [raw] = await kv.read([{ op: 'get', store: 'worlds', key: id }]);
+    const p = parseWorldRecord(raw);
+    if (!p.ok) throw new Error(`markOlderGenerator: world ${id}: ${p.reason}`);
+    const genKey = p.world.genKey.replace(/[0-9a-f]/g, (d) => (15 - parseInt(d, 16)).toString(16));
+    return kv.write([{ op: 'put', store: 'worlds', key: id, value: { ...p.world, genKey } }]);
+  });
+  if (r.held) throw new Error(`markOlderGenerator: ${LOCKED_NOTICE}`);
+  if (r.value.status !== 'complete') throw new Error(`markOlderGenerator: the write did not complete (${r.value.status}: ${r.value.errorName ?? '-'})`);
+}
+
 /**
  * Installs the smoke's test hook on `win` (`win.__wiTest`), the timer counters first; `main.ts` calls it under
  * `?wiTest=1` only.
@@ -1230,6 +1284,15 @@ export function installWiTest(win: TimerHost & { __wiTest?: WiTest }): WiTestIns
     lightAt: (x, y, z) => attached().lightAt(x, y, z),
     feet: () => attached().feet(),
     heightAt: (x, z) => attached().heightAt(x, z),
+    worldId: () => attached().worldId(),
+    flushNow: () => attached().flushNow(),
+    places: () => attached().places(),
+    modify: (on) => attached().modify(on),
+    worldHash: () => attached().worldHash(),
+    pose: () => attached().pose(),
+    clock: () => attached().clock(),
+    fov: () => attached().fov(),
+    markOlderGenerator: (id) => attached().markOlderGenerator(id),
   };
   win.__wiTest = hook;
   return {
@@ -3782,6 +3845,29 @@ export function mountWorldPage(root: HTMLElement, q: WorldQuery, hash: string, o
         ? { x: walk.x, y: walk.y, z: walk.z, onGround: walk.onGround, snapPending: walk.snapPending, snapY: Number.isNaN(walk.snapY) ? null : walk.snapY }
         : null),
       heightAt: (x, z) => heightRead(store, x, z),
+      // A saved world's parts (SP5b spec §6.5): the autosave is armed below, so `flushNow` reads it at the call.
+      worldId: () => saved?.kept.id ?? null,
+      flushNow: async () => hookFlushed(autosave === null ? null : await autosave.flushNow()),
+      places: () => (places === null ? [] : places.list.slice()),
+      modify: (on) => {
+        if (modifyMode === null) throw new Error('the test hook\'s modify: not a saved world');
+        modifyMode.set(on);
+      },
+      worldHash: async () => {
+        if (saved === null) throw new Error('the test hook\'s worldHash: not a saved world');
+        const dump = await createSaves(saved.kv).readAll(saved.kept.id);
+        if (dump === null) throw new Error('the test hook\'s worldHash: the world\'s records could not be read');
+        return wiworldHash(dump);
+      },
+      pose: () => ({ x: fly.x, y: fly.y, z: fly.z, yaw: fly.yaw, pitch: fly.pitch }),
+      clock: () => ({ t: frame.t, speedIndex }),
+      fov: () => world.camera.fov,
+      markOlderGenerator: async (id) => {
+        const locks = navigatorLocks();
+        if (saved === null || locks === null) throw new Error('the test hook\'s markOlderGenerator: not a saved world');
+        if (id === saved.kept.id) throw new Error('the test hook\'s markOlderGenerator: not the open world (its lock is this page\'s)');
+        await markOlderGenerator(saved.kv, locks, id);
+      },
     });
     // Disposed before the input, the driver and the page's subscribe: a gesture still open ends through the tool.
     teardown.push(() => mapOverlay.dispose());

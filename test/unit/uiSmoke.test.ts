@@ -42,6 +42,8 @@ import {
   storedMapMode, TELEPORT_EAST_PX, teleportTarget, WORLD_MAP_BPP as SMOKE_WORLD_MAP_BPP,
   acrossFace, BUILD_QUERY, JUMP_MIN_RISE, PALETTE_SWATCHES, parseHudEdits, SMOKE_FACE, SMOKE_STATE, SMOKE_WATER_SOURCE, TORCH_MIN_LIGHT, WALK_GROUND_MS,
   WALK_HOLD_MS, WALK_MIN_MOVE, WALK_PATH_BLOCKS, WALK_QUERY, walkCorridor, walkSnapOk,
+  createdWorldId, PAGEHIDE_RELOAD_MS, POSE_TOL, poseWithin, rowTitleOk, SAVE_EDITS, SAVE_SPEED_INDEX, saveColumns, savedWorldQuery, SMOKE_KEYS,
+  SMOKE_LOCKED_NOTICE, SMOKE_WORLD, START_BUTTONS,
 } from '../tools/uiSmoke';
 import { FACE_DOWN, FACE_EAST, FACE_NORTH, FACE_SOUTH, FACE_UP, FACE_WEST } from '../../src/world/blocks/kinds';
 import { EMIT, REGISTRY } from '../../src/world/blocks/index';
@@ -56,13 +58,18 @@ import { columnPoint } from '../../src/gen/column/columnPoint';
 import { SEA_LEVEL } from '../../src/core/constants';
 import { lookVector } from '../../src/player/fly';
 import { parseWorldQuery } from '../../src/ui/world/query';
-import { OPENING_T } from '../../src/daynight/dayNight';
+import { OPENING_T, TIME_SPEEDS } from '../../src/daynight/dayNight';
 import { SPEED_DEFAULT } from '../../src/player/fly';
 import { selectSectionRenderer } from '../../src/render/sectionRenderer';
 import { mountWorldHud, type HudData } from '../../src/ui/hud';
 import { installDom } from './fixtures/domShim';
 import { ctxFor } from '../harness/gen';
 import { KV_CONTRACT } from '../../src/persist/kvContract';
+import { createMemoryKV } from '../../src/persist/memory';
+import { createSaves } from '../../src/persist/saves';
+import { DEFAULT_KEYMAP } from '../../src/player/keymap';
+import { mountWorldsMenu, startModeOf } from '../../src/ui/worldsMenu';
+import { LOCKED_NOTICE } from '../../src/ui/world/worldLock';
 
 const EDITED: MapState = {
   v: 1, seed: '42', profile: 'default',
@@ -272,19 +279,21 @@ describe('UI smoke test: pure parts (SP2b spec §8 Tools, §12)', () => {
     expect(mountainSummaryOk(flat), flat).toBe(false);
   });
 
-  test('the steps run in SMOKE_STEPS order: the Density steps after rule, then preset profiles (SP3e), then start, world and world-mesh (SP4a), then SP4b\'s stream, then SP4c\'s overlay and overlay-mesh, then SP5a\'s build and walk before console (SP3d spec §6, SP3e spec §8, SP4a spec §9.6, SP4b spec §8.6, SP4c spec §8.6, SP5a spec §6.4, ruling P52)', () => {
+  test('the steps run in SMOKE_STEPS order: the Density steps after rule, then preset profiles (SP3e), then start, world and world-mesh (SP4a), then SP4b\'s stream, then SP4c\'s overlay and overlay-mesh, then SP5a\'s build and walk, then SP5b\'s menus, save, crash and two tabs before console (SP3d spec §6, SP3e spec §8, SP4a spec §9.6, SP4b spec §8.6, SP4c spec §8.6, SP5a spec §6.4, SP5b spec §6.5, ruling P52)', () => {
     expect(SMOKE_STEPS).toEqual([
       'selftest', 'load', 'number', 'knot', 'slider', 'box', 'profile', 'presets', 'undo/redo', 'reload', 'cut line', 'voxels', 'tabs', 'rule',
       'density tab', 'density node', 'density mute', 'density json', 'density narrow', 'density horizontal', 'density drag', 'density times',
-      'preset profiles', 'start', 'world', 'world-mesh', 'stream', 'overlay', 'overlay-mesh', 'build', 'walk', 'console',
+      'preset profiles', 'start', 'world', 'world-mesh', 'stream', 'overlay', 'overlay-mesh', 'build', 'walk', 'menus', 'save', 'crash', 'two tabs', 'console',
     ]);
+    expect(SMOKE_STEPS.slice(SMOKE_STEPS.indexOf('walk'), SMOKE_STEPS.indexOf('console') + 1)).toEqual(['walk', 'menus', 'save', 'crash', 'two tabs', 'console']);
     expect(SMOKE_STEPS.indexOf('density tab')).toBe(SMOKE_STEPS.indexOf('rule') + 1);
     expect(SMOKE_STEPS.indexOf('start')).toBe(SMOKE_STEPS.indexOf('preset profiles') + 1);
     expect(SMOKE_STEPS.indexOf('world')).toBe(SMOKE_STEPS.indexOf('start') + 1);
     expect(SMOKE_STEPS.indexOf('stream')).toBe(SMOKE_STEPS.indexOf('world-mesh') + 1);
     expect(SMOKE_STEPS.indexOf('overlay')).toBe(SMOKE_STEPS.indexOf('stream') + 1);
     expect(SMOKE_STEPS.indexOf('build')).toBe(SMOKE_STEPS.indexOf('overlay-mesh') + 1);
-    expect(SMOKE_STEPS.indexOf('walk')).toBe(SMOKE_STEPS.indexOf('console') - 1);
+    expect(SMOKE_STEPS.indexOf('menus')).toBe(SMOKE_STEPS.indexOf('walk') + 1);
+    expect(SMOKE_STEPS.indexOf('two tabs')).toBe(SMOKE_STEPS.indexOf('console') - 1);
     expect(SMOKE_STEPS.indexOf('console')).toBe(SMOKE_STEPS.length - 1);
     expect(stepId('world-mesh: the parity of mesh and batch')).toBe('world-mesh');
     expect(stepId('world: /?rd=4 to the reveal')).toBe('world');
@@ -293,6 +302,11 @@ describe('UI smoke test: pure parts (SP2b spec §8 Tools, §12)', () => {
     expect(stepId('overlay-mesh: /?rd=4&renderer=mesh&wiTest=1, M, teleport, a terrain Apply')).toBe('overlay-mesh');
     expect(stepId('build: /?rd=4&renderer=batch&wiTest=1&pitch=-60, place, break, undo, the palette')).toBe('build');
     expect(stepId('walk: /?rd=4&renderer=batch&wiTest=1&yaw=0, F, W, Space, a walking teleport')).toBe('walk');
+    expect(stepId('menus: New world, Create, Load world, Rename, Settings')).toBe('menus');
+    expect(stepId('save: 12 edits, a place, walking, ×10, a flush and a reload')).toBe('save');
+    expect(stepId('crash: an edit, a flush, an edit, Page.crash')).toBe('crash');
+    // An id with a space, as `density tab`.
+    expect(stepId('two tabs: a second target is refused, then opens it')).toBe('two tabs');
     // Its own id: `presets` is the preset-file step.
     expect(stepId('preset profiles: each draft preset opened by URL')).toBe('preset profiles');
     expect(stepId('presets: export, apply {} in the patch box, import the exported file')).toBe('presets');
@@ -651,6 +665,10 @@ describe('UI smoke test: the 3D world steps (SP4a spec §9.6)', () => {
     const text = "Blocked attempt to show a 'beforeunload' confirmation panel for a frame that never had a user gesture since its load. https://www.chromestatus.com/feature/5082396709879808";
     expect(leaveGuardLog(text, 'http://127.0.0.1:4000/?rd=4')).toBe(true);
     expect(leaveGuardLog(text, `http://127.0.0.1:4000/${worldMeshQuery('mesh')}`)).toBe(true);
+    // A saved world's page (SP5b spec §1.1) is a world page too; its menu (`/`, `/?notice=locked`) is not.
+    expect(leaveGuardLog(text, 'http://127.0.0.1:4000/?world=abc&wiTest=1')).toBe(true);
+    expect(leaveGuardLog(text, 'http://127.0.0.1:4000/?world=abc')).toBe(true);
+    expect(leaveGuardLog(text, 'http://127.0.0.1:4000/?notice=locked')).toBe(false);
     expect(leaveGuardLog(text, 'http://127.0.0.1:4000/')).toBe(false);
     expect(leaveGuardLog(text, 'http://127.0.0.1:4000/?map#abc')).toBe(false);
     expect(leaveGuardLog(text, undefined)).toBe(false);
@@ -1109,6 +1127,125 @@ describe('UI smoke test: the build and walk steps (SP5a spec §6.4)', () => {
     // Over water (motionBlocking counts the fluid) the snapped body sinks: only the snap's y is checked.
     expect(walkSnapOk(feet({ y: 62.4, onGround: false }), 71, 63)).toBe(true);
     expect(walkSnapOk(null, 71, null)).toBe(false);
+  });
+});
+
+describe('UI smoke test: the saved-world steps (SP5b spec §6.5)', () => {
+  let dom: ReturnType<typeof installDom>;
+  beforeEach(() => {
+    dom = installDom();
+    const local = new Map<string, string>();
+    vi.stubGlobal('localStorage', { getItem: (k: string) => local.get(k) ?? null, setItem: (k: string, v: string) => { local.set(k, v); }, removeItem: (k: string) => { local.delete(k); } });
+  });
+  afterEach(() => {
+    vi.unstubAllGlobals();
+  });
+
+  /** The worlds menu as `/` mounts it, over a MemoryKV; `navigate` records Create's and Play's URLs. */
+  function mountMenu() {
+    const navigate = vi.fn<(url: string) => void>();
+    let ids = 0;
+    const menu = mountWorldsMenu(dom.body as unknown as HTMLElement, {
+      saves: createSaves(createMemoryKV()),
+      locks: { request: () => Promise.reject(new Error('no lock in this test')) },
+      random: () => [7, 0],
+      newId: () => `w${++ids}`,
+      now: () => 1_700_000_000_000,
+      navigate,
+      persistStorage: () => Promise.resolve(true),
+      enterUnsaved: () => {},
+      loadManifest: () => Promise.resolve<unknown>([]),
+      rand: () => 0,
+      notice: null,
+      benchDb: null,
+    });
+    return { menu, navigate };
+  }
+
+  test('`start` reads the menu\'s five ids: the three buttons and the two links, with their texts (SP5b spec §1.1)', () => {
+    const { menu } = mountMenu();
+    expect(START_BUTTONS.map((b) => b.id)).toEqual(['start-new', 'start-load', 'start-settings', 'start-map', 'start-selftest']);
+    for (const b of START_BUTTONS) {
+      const e = dom.el(b.id);
+      expect(e.textContent, b.id).toBe(b.text);
+      expect(e.tagName === 'A' ? e.href : null, b.id).toBe(b.href);
+    }
+    menu.dispose();
+  });
+
+  test('the world the smoke opens after Create and on a new target is `/?world=<id>&wiTest=1`: Create\'s own URL with the hook\'s flag', async () => {
+    const { menu, navigate } = mountMenu();
+    dom.el('start-new').click();
+    await new Promise<void>((r) => setTimeout(r, 0));
+    (dom.el('new-seed') as unknown as { value: string }).value = SMOKE_WORLD.seed;
+    (dom.el('new-preset') as unknown as { value: string }).value = SMOKE_WORLD.preset;
+    dom.el('new-create').click();
+    await vi.waitFor(() => expect(navigate).toHaveBeenCalledTimes(1));
+    const url = navigate.mock.calls[0]![0];
+    // Create navigates without the hook (main.ts installs `__wiTest` only under `?wiTest=1`).
+    expect(url).toBe('/?world=w1');
+    expect(createdWorldId(url)).toBe('w1');
+    expect(savedWorldQuery('w1')).toBe('?world=w1&wiTest=1');
+    expect(`/${savedWorldQuery('w1')}`).toBe(`${url}&wiTest=1`);
+    const q = new URLSearchParams(savedWorldQuery('w1'));
+    expect(parseWorldQuery(q).world).toBe('w1');
+    expect(q.get('wiTest')).toBe('1');
+    expect(startModeOf(q)).toBe('world');
+    // An id that needs escaping round-trips; a URL that is not a saved world's names none.
+    expect(createdWorldId(`/${savedWorldQuery('a b&c')}`)).toBe('a b&c');
+    expect(createdWorldId('/')).toBeNull();
+    expect(createdWorldId('/?rd=4')).toBeNull();
+    expect(createdWorldId('http://127.0.0.1:4000/?world=w9')).toBe('w9');
+    menu.dispose();
+  });
+
+  test('`menus` types seed smoke-7 and picks amplified, a ready preset; the row\'s title names both', () => {
+    expect(SMOKE_WORLD).toEqual({ seed: 'smoke-7', preset: 'amplified', rename: 'Smoke world' });
+    expect(profileOptions()).toContain(SMOKE_WORLD.preset);
+    expect(rowTitleOk('New world 1 · amplified · seed smoke-7')).toBe(true);
+    expect(rowTitleOk('Smoke world · amplified · seed smoke-7')).toBe(true);
+    expect(rowTitleOk('New world 1 · default · seed smoke-7')).toBe(false);
+    expect(rowTitleOk('New world 1 · amplified · seed smoke-77')).toBe(false);
+  });
+
+  test('the keys the steps press are the key map\'s: F walks, T the time speed, B a place, G the Settings, H the help', () => {
+    const codeOf = (action: string) => DEFAULT_KEYMAP.find((k) => k.action === action)!.bindings.flatMap((b) => (b.kind === 'code' ? [b.code] : []))[0];
+    expect(SMOKE_KEYS).toEqual({
+      toggleWalk: codeOf('toggleWalk'), timeSpeed: codeOf('timeSpeed'), savePlace: codeOf('savePlace'), settings: codeOf('settings'), help: codeOf('help'),
+    });
+    expect(SMOKE_KEYS).toEqual({ toggleWalk: 'KeyF', timeSpeed: 'KeyT', savePlace: 'KeyB', settings: 'KeyG', help: 'KeyH' });
+  });
+
+  test('`save`: 12 edits, T once is ×10, the pose within 0.01, a reload within 300 ms of the last edit', () => {
+    expect(SAVE_EDITS).toBe(12);
+    expect(TIME_SPEEDS[SAVE_SPEED_INDEX]).toBe(10);
+    expect(POSE_TOL).toBe(0.01);
+    expect(PAGEHIDE_RELOAD_MS).toBe(300);
+  });
+
+  test('saveColumns: 12 distinct columns beside the camera\'s, none its own, all within 16 blocks', () => {
+    const cols = saveColumns({ x: -10.3, z: 5.8 });
+    expect(cols).toHaveLength(SAVE_EDITS);
+    expect(new Set(cols.map((c) => `${c.x},${c.z}`)).size).toBe(SAVE_EDITS);
+    expect(cols.some((c) => c.x === -11 && c.z === 5)).toBe(false);
+    for (const c of cols) {
+      expect(Number.isInteger(c.x) && Number.isInteger(c.z)).toBe(true);
+      expect(Math.max(Math.abs(c.x - -11), Math.abs(c.z - 5))).toBeLessThanOrEqual(16);
+      expect(Math.max(Math.abs(c.x - -11), Math.abs(c.z - 5))).toBeGreaterThanOrEqual(2);
+    }
+  });
+
+  test('poseWithin: every part (x, y, z, yaw, pitch) within the tolerance', () => {
+    const a = { x: 1.5, y: 70.62, z: -3.25, yaw: 45, pitch: -10 };
+    expect(poseWithin(a, a, POSE_TOL)).toBe(true);
+    expect(poseWithin(a, { ...a, x: 1.509 }, POSE_TOL)).toBe(true);
+    for (const k of ['x', 'y', 'z', 'yaw', 'pitch'] as const) expect(poseWithin(a, { ...a, [k]: a[k] + 0.011 }, POSE_TOL), k).toBe(false);
+    expect(poseWithin(a, null, POSE_TOL)).toBe(false);
+    expect(poseWithin(a, { ...a, y: Number.NaN }, POSE_TOL)).toBe(false);
+  });
+
+  test('`two tabs` waits for D7\'s notice, the world page\'s own text', () => {
+    expect(SMOKE_LOCKED_NOTICE).toBe(LOCKED_NOTICE);
   });
 });
 

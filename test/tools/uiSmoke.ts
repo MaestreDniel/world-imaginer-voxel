@@ -57,9 +57,9 @@
  *   island over ground whose top voxel takes a surface rule (D21 (b)), and its `islandMask` layer over 4096² blocks
  *   around the window (16 blocks/px) draws ≥ 2 colours; archipelago's `biome` layer there holds ocean and land colours;
  * - the 3D world (SP4a spec §9.6), on pages of their own:
- *   - start: bare `/` shows the start screen with seed 42, the default profile and both buttons, nothing loading and no
- *     page error (`start.png`); `/#<seed 7's hash>` names seed 7; "Enter the world" on a bare `/` brings up the loading
- *     screen in the same page (the URL and the history unchanged), and the step stops there;
+ *   - start (SP5b spec §6.5): bare `/` shows the worlds menu's start screen (`START_BUTTONS`: New world, Load world,
+ *     Settings, and the Map and Selftest links), nothing loading and no page error (`start.png`); `/#<seed 7's hash>`
+ *     reads the same (a `#` hash changes nothing);
  *   - world: `/?rd=4` shows no start screen and reveals (`window.__wiWorld.revealed`, set by the page), with no page
  *     error (`world.png`); the canvas's `data-renderer` is the page's choice (`expectedRenderer`: RegionBatch where the
  *     browser has `WEBGL_multi_draw`, SP4b spec §8.6);
@@ -71,9 +71,10 @@
  *   - stream (SP4b spec §8.6): `/?rd=4&renderer=batch`, then `…=mesh` (`STREAM_RUNS`): `data-renderer` is the forced
  *     one; after the reveal a click on the canvas and W held for 4 s with real key input: the HUD's position moved
  *     more than 40 blocks (12 blocks/s × 4 s ≈ 47) and, within 5 s of releasing W, its `revealed` count grew, with no
- *     page error; then the help (H), whose `#setting-rd` shows the RD in force, 4, even with the batch run's 6 saved
- *     (rulings R8), and 6 chosen there: within 30 s the HUD shows `RD 6` and a larger `revealed`, with no navigation (a token set on `window` after the
- *     reveal is still there); `stream.png` and `stream-mesh.png`;
+ *     page error; then the Settings screen (G; SP5b spec §1.4, ruling P35), whose `#setting-rd` shows the RD in force,
+ *     4, even with the batch run's 6 saved (rulings R8), and 6 chosen there: within 30 s the HUD shows `RD 6` and a
+ *     larger `revealed`, with no navigation (a token set on `window` after the reveal is still there), and Esc closes it;
+ *     `stream.png` and `stream-mesh.png`;
  *   - overlay (SP4c spec §8.6), `/?rd=4&renderer=batch&wiTest=1` at 1920 × 1080 (`OVERLAY_VIEWPORT`, put back to
  *     `VIEWPORT` at the step's end), through the page's test hook `window.__wiTest` (`?wiTest=1` only): the leak
  *     baseline before the first M (CDP's listeners on window and document, the session's listeners, the pending
@@ -90,6 +91,20 @@
  *     open (the overlay closed, the failure panel with "Copy details", no page error);
  *   - overlay-mesh, `…&renderer=mesh&wiTest=1`: the map in full screen, the teleport and the terrain Apply, side by side;
  *     both overlay steps print the in-world preview's `lastLatencyMs` from the toolbar (information only, §6.4);
+ * - the saved worlds (SP5b spec §6.5), on the world `menus` creates, through the hook's saved-world parts (`?wiTest=1`:
+ *   Create and Play navigate to `/?world=<id>` without it, so the smoke opens `savedWorldQuery(id)` itself):
+ *   - menus: New world with seed smoke-7 and amplified → Create → the world reveals at `/?world=<id>`; back to `/`,
+ *     Load world lists it first (its title names the preset and the seed), the list's time recorded
+ *     (`__wiMenuListMs`); Rename to "Smoke world" (Enter); Settings from the start screen opens, Esc closes it;
+ *   - save: 12 stone edits through the hook, a place (B, Enter), F to walk, T to ×10, `flushNow()`; `Page.reload`
+ *     brings back every block, the place, the pose (`pose()` within 0.01), walking and the time speed; then one edit and
+ *     a reload within 300 ms of its reply: whether it survived is recorded (the `pagehide` flush, spec §3.2), never
+ *     gated;
+ *   - crash: an edit, `flushNow()`, one more edit, CDP `Page.crash`; a new target on the world opens it with the first
+ *     edit back (the second's outcome recorded); the new target becomes the steps' page;
+ *   - two tabs (D7, D24): a second target on the same `?world` shows "This world is open in another tab" on the start
+ *     screen; after the first target closes, the second opens it; `Page.reload` of its own target reopens it; the
+ *     help's Worlds menu → Load world → Play the same world in the same target opens it;
  * - console: no exception, console error or failed load, except the known favicon.ico 404 and Chrome's notice that it
  *   blocked a world page's `beforeunload` prompt when a step left it (`leaveGuardLog`); every step ran.
  * With --shots DIR it then writes the spec §12 screenshots into DIR, at seed 42 from a newly loaded page (the
@@ -475,13 +490,15 @@ export function presetProblems(text: string, expected: { readonly name: string; 
  * step) follows them on pages of its own. SP4a's 3D steps `start`, `world` and `world-mesh` (spec §9.6) come next, on
  * pages of their own, inside `runSmoke`, then SP4b's `stream` (spec §8.6: one step for both renderers, since the runner
  * refuses a repeated id), then SP4c's `overlay` and `overlay-mesh` (spec §8.6: one step per renderer, each on its own
- * page), then SP5a's `build` and `walk` (SP5a spec §6.4, each on its own page); `console` stays last, the closing step
- * main() runs after `runSmoke` (ruling P52).
+ * page), then SP5a's `build` and `walk` (SP5a spec §6.4, each on its own page), then SP5b's `menus`, `save`, `crash`
+ * and `two tabs` (SP5b spec §6.5, on the saved world `menus` creates); `console` stays last, the closing step main()
+ * runs after `runSmoke` (ruling P52).
  */
 export const SMOKE_STEPS = [
   'selftest', 'load', 'number', 'knot', 'slider', 'box', 'profile', 'presets', 'undo/redo', 'reload', 'cut line', 'voxels', 'tabs', 'rule',
   'density tab', 'density node', 'density mute', 'density json', 'density narrow', 'density horizontal', 'density drag', 'density times',
-  'preset profiles', 'start', 'world', 'world-mesh', 'stream', 'overlay', 'overlay-mesh', 'build', 'walk', 'console',
+  'preset profiles', 'start', 'world', 'world-mesh', 'stream', 'overlay', 'overlay-mesh', 'build', 'walk', 'menus', 'save', 'crash', 'two tabs',
+  'console',
 ] as const;
 export type SmokeStep = (typeof SMOKE_STEPS)[number];
 
@@ -751,6 +768,77 @@ export function walkSnapOk(feet: FeetRead | null, height: number | null, water: 
   return water !== null || (feet.onGround && Math.abs(feet.y - height) <= 1e-3);
 }
 
+// ---------------------------------------------------------------- the saved-world steps (SP5b spec §6.5)
+
+/** The worlds menu's start screen (`ui/worldsMenu.ts`, SP5b spec §1.1): its three buttons and two links (a unit test mounts it). */
+export const START_BUTTONS: ReadonlyArray<{ readonly id: string; readonly text: string; readonly href: string | null }> = [
+  { id: 'start-new', text: 'New world', href: null },
+  { id: 'start-load', text: 'Load world', href: null },
+  { id: 'start-settings', text: 'Settings', href: null },
+  { id: 'start-map', text: 'Map', href: '?map' },
+  { id: 'start-selftest', text: 'Selftest', href: '?selftest=1' },
+];
+
+/**
+ * A saved world's page with the test hook: Create and Play navigate to `/?world=<id>` without it (`main.ts` installs
+ * `__wiTest` only under `?wiTest=1`), so the smoke opens the world again this way after Create and on a new target.
+ */
+export function savedWorldQuery(id: string): string {
+  return `?world=${encodeURIComponent(id)}&wiTest=1`;
+}
+
+/** The saved world's id in a URL the page reached (`/?world=<id>`, Create's navigation), else null. */
+export function createdWorldId(url: string): string | null {
+  try {
+    const u = new URL(url, 'http://localhost/');
+    return u.pathname === '/' ? u.searchParams.get('world') : null;
+  } catch {
+    return null;
+  }
+}
+
+/** The `menus` step's world: the seed typed, the preset chosen, and its Rename. */
+export const SMOKE_WORLD = { seed: 'smoke-7', preset: 'amplified', rename: 'Smoke world' } as const;
+
+/** Whether a Load world row's title (`.world-title`: "<name> · <preset> · seed <seed>") names `SMOKE_WORLD`'s preset and seed. */
+export function rowTitleOk(text: string): boolean {
+  return text.endsWith(` · ${SMOKE_WORLD.preset} · seed ${SMOKE_WORLD.seed}`);
+}
+
+/** The key codes the saved-world steps and `stream` press (`DEFAULT_KEYMAP`'s, mirrored: a unit test compares them). */
+export const SMOKE_KEYS = { toggleWalk: 'KeyF', timeSpeed: 'KeyT', savePlace: 'KeyB', settings: 'KeyG', help: 'KeyH' } as const;
+
+/** The `save` step's edits through the hook. */
+export const SAVE_EDITS = 12;
+/** The day speed's index after one T (`TIME_SPEEDS[1]`, ×10; a unit test compares them). */
+export const SAVE_SPEED_INDEX = 1;
+/** How far the reopened pose may be from the saved one, per part (x, y, z, yaw, pitch). */
+export const POSE_TOL = 0.01;
+/** The `pagehide` measurement's reload follows its edit's reply within this, ms (spec §3.2). */
+export const PAGEHIDE_RELOAD_MS = 300;
+/** D7's notice (`LOCKED_NOTICE`, `ui/world/worldLock.ts`; a unit test compares them). */
+export const SMOKE_LOCKED_NOTICE = 'This world is open in another tab';
+
+/** The camera's pose as the hook reads it (`__wiTest.pose()`). */
+export interface PoseRead { readonly x: number; readonly y: number; readonly z: number; readonly yaw: number; readonly pitch: number }
+
+/** Whether `b` is `a` within `tol` in every part (a missing pose or a NaN never is). */
+export function poseWithin(a: PoseRead, b: PoseRead | null, tol: number): boolean {
+  if (b === null) return false;
+  return (['x', 'y', 'z', 'yaw', 'pitch'] as const).every((k) => Math.abs(a[k] - b[k]) <= tol);
+}
+
+/**
+ * The `save` step's 12 columns: a row of 12 along +x, 3 blocks south of the camera's column (x from 2 west to 9 east),
+ * so none is the camera's own and every one is within 9 blocks of it, Published at any render distance; each edit
+ * goes 2 above its column's `motionBlocking` top.
+ */
+export function saveColumns(camera: { readonly x: number; readonly z: number }): Array<{ x: number; z: number }> {
+  const cx = Math.floor(camera.x);
+  const cz = Math.floor(camera.z);
+  return Array.from({ length: SAVE_EDITS }, (_, i) => ({ x: cx - 2 + i, z: cz + 3 }));
+}
+
 // ---------------------------------------------------------------- the stream step (SP4b spec §8.6)
 
 /** The section renderer the page draws with (`selectSectionRenderer`, mirrored: a unit test compares them). */
@@ -834,14 +922,14 @@ export function hudMoved(a: { readonly x: number; readonly z: number }, b: { rea
 /**
  * Chrome's console error when a page's `beforeunload` guard meets a navigation the tool started without a user gesture:
  * the world page arms its Ctrl+W guard after the reveal (SP4a spec §7.1), and the steps leave each world page (every
- * one loaded with `?rd`) by navigating. It is the guard working, not a page error, so it is ignored for those pages
- * only; the same message from any other page still counts.
+ * one loaded with `?rd`, or a saved world's `?world`, SP5b spec §1.1) by navigating. It is the guard working, not a
+ * page error, so it is ignored for those pages only; the same message from any other page still counts.
  */
 export function leaveGuardLog(text: string, url: string | undefined): boolean {
   if (!text.startsWith("Blocked attempt to show a 'beforeunload' confirmation panel") || url === undefined) return false;
   try {
     const u = new URL(url);
-    return u.pathname === '/' && u.searchParams.has('rd') && !u.searchParams.has('map');
+    return u.pathname === '/' && (u.searchParams.has('rd') || u.searchParams.has('world')) && !u.searchParams.has('map');
   } catch {
     return false;
   }
@@ -1197,15 +1285,18 @@ function pageHelpers(): SmokePage {
 
 // ---------------------------------------------------------------- driving the page
 
-/** One page under test: evaluation, waits and real pointer and key input. */
+/** One page under test (a target of its own): evaluation, waits and real pointer and key input. */
 class Page {
   /** Mouse button state for the moves of a drag. */
   private buttons = 0;
   readonly cdp: Cdp;
   readonly base: string;
-  constructor(cdp: Cdp, base: string) {
+  /** The page's DevTools target id (`Target.closeTarget`). */
+  readonly targetId: string;
+  constructor(cdp: Cdp, base: string, targetId: string) {
     this.cdp = cdp;
     this.base = base;
+    this.targetId = targetId;
   }
 
   async eval<T>(expression: string): Promise<T> {
@@ -1361,22 +1452,41 @@ const MAP_READY = `document.querySelector('.map-status') !== null && __wiSmoke.s
 
 interface Check { readonly step: string; readonly ok: boolean; readonly what: string }
 
+/** More page targets in the smoke's Chrome (SP5b's `crash` and `two tabs`), each wired as the first page is. */
+interface Tabs {
+  /** A new page target on about:blank, in a window of its own (so the other pages stay visible). */
+  open(): Promise<Page>;
+  /** Closes `p`'s target (its `beforeunload` prompt accepted) and its connection. */
+  close(p: Page): Promise<void>;
+}
+
 class Smoke {
   readonly checks: Check[] = [];
   /** The steps begun, in order (their ids). */
   readonly ran: SmokeStep[] = [];
+  /** What a step records without gating it (the `pagehide` outcome, spec §3.2), printed again in the summary. */
+  readonly recorded: string[] = [];
   private stepName = '';
-  readonly page: Page;
+  /** The page the steps drive: `crash` and `two tabs` move it to a new target (the next steps and the shots use it). */
+  page: Page;
+  readonly tabs: Tabs | null;
   readonly downloads: string;
   /** The page errors seen so far (exceptions, console errors, failed loads; the favicon 404 aside), appended as they come. */
   readonly errors: readonly string[];
   /** Where the 3D steps save `start.png`, `world.png`, `world-mesh.png` and `world-mesh-water.png` (--shots); null: none. */
   readonly shots: string | null;
-  constructor(page: Page, downloads: string, errors: readonly string[], shots: string | null = null) {
+  constructor(page: Page, downloads: string, errors: readonly string[], shots: string | null = null, tabs: Tabs | null = null) {
     this.page = page;
     this.downloads = downloads;
     this.errors = errors;
     this.shots = shots;
+    this.tabs = tabs;
+  }
+
+  /** Records `what` for the report (never a check). */
+  record(what: string): void {
+    this.recorded.push(`${this.stepName.slice(0, this.stepName.indexOf(': '))}: ${what}`);
+    console.log(`  RECORDED ${what}`);
   }
 
   /** Saves `png` as `name` in the --shots directory, if one was given. */
@@ -1661,6 +1771,7 @@ async function runSmoke(t: Smoke): Promise<void> {
   await runOverlay(t);
   await runBuild(t);
   await runWalk(t);
+  await runSaved(t);
 }
 
 const statsOf = (s: SliceRead): SliceStatsText | null => parseSliceStats(s.stats);
@@ -2087,26 +2198,31 @@ async function runPresetProfiles(t: Smoke): Promise<void> {
 const WORLD_MS = 240000;
 /** The page expression "the world page settled": revealed, or the failure panel or the error screen showing. */
 const WORLD_SETTLED = `window.__wiWorld?.revealed === true || (document.getElementById('loading-fail')?.hidden === false) || document.getElementById('error-screen') !== null`;
-/** The start screen's texts and buttons as they read. */
+/** The worlds menu's start screen as it reads (`START_BUTTONS`' ids, each shown or not), its notice row, and whether anything loads. */
 const START_READ = `(() => {
-  const t = (id) => document.getElementById(id)?.textContent ?? null;
-  const enter = document.getElementById('start-enter');
-  const map = document.getElementById('start-map');
+  const read = (id) => {
+    const e = document.getElementById(id);
+    return e === null ? null : { id, text: e.textContent, href: e.tagName === 'A' ? e.getAttribute('href') : null, shown: e.offsetParent !== null };
+  };
   return {
-    seed: t('start-seed'), profile: t('start-profile'), error: document.getElementById('start-error')?.hidden === false ? t('start-error') : null,
-    enter: enter === null ? null : { text: enter.textContent, disabled: enter.disabled }, map: map === null ? null : { text: map.textContent, href: map.getAttribute('href') },
+    buttons: ${JSON.stringify(START_BUTTONS.map((b) => b.id))}.map(read),
+    notice: document.getElementById('start-notice')?.textContent ?? null,
     loading: document.getElementById('loading-screen') !== null, canvas: document.querySelector('canvas') !== null,
   };
 })()`;
 interface StartRead {
-  readonly seed: string | null;
-  readonly profile: string | null;
-  readonly error: string | null;
-  readonly enter: { readonly text: string; readonly disabled: boolean } | null;
-  readonly map: { readonly text: string; readonly href: string | null } | null;
+  readonly buttons: ReadonlyArray<{ readonly id: string; readonly text: string; readonly href: string | null; readonly shown: boolean } | null>;
+  readonly notice: string | null;
   readonly loading: boolean;
   readonly canvas: boolean;
 }
+
+/** Whether the start screen reads as `START_BUTTONS`, each shown. */
+const startOk = (r: StartRead): boolean =>
+  r.buttons.length === START_BUTTONS.length && START_BUTTONS.every((b, i) => {
+    const got = r.buttons[i];
+    return got !== null && got !== undefined && got.id === b.id && got.text === b.text && got.href === b.href && got.shown;
+  });
 
 /** The world canvas's `data-renderer` values (one canvas expected), read in the page. */
 const DRAWN_BY = `[...document.querySelectorAll('canvas[data-renderer]')].map((c) => c.dataset.renderer)`;
@@ -2141,31 +2257,23 @@ async function worldRevealed(t: Smoke, what: string): Promise<boolean> {
 async function runWorld(t: Smoke): Promise<void> {
   const p = t.page;
 
-  t.step('start: bare / shows the start screen (seed 42, the default profile, both buttons), a hash names its seed, "Enter the world" brings up the loading screen');
+  t.step('start: bare / shows the worlds menu (New world, Load world, Settings, Map, Selftest) with nothing loading; a # hash changes nothing');
   let errors0 = t.errors.length;
-  await p.goto(p.base, `document.getElementById('start-enter') !== null`);
+  await p.goto(p.base, `document.getElementById('start-new') !== null`);
   // The backdrop fetches the panorama manifest; let it land before the console is read.
   await sleep(1000);
   const bare = await p.eval<StartRead>(START_READ);
-  t.check(bare.seed === 'Seed: 42' && bare.profile === 'Profile: default' && bare.error === null, `bare /: ${bare.seed} · ${bare.profile}`, bare);
-  t.check(bare.enter !== null && bare.enter.text === 'Enter the world' && !bare.enter.disabled && bare.map !== null && bare.map.text === 'Open the map' && bare.map.href === '?map',
-    'both buttons: "Enter the world" and "Open the map" (?map)', bare);
+  t.check(startOk(bare), `bare /: ${START_BUTTONS.map((b) => `#${b.id} "${b.text}"${b.href === null ? '' : ` (${b.href})`}`).join(', ')}`, bare);
   t.check(!bare.loading && !bare.canvas, 'nothing loads while the start screen shows (no loading screen, no canvas)', bare);
+  t.check(bare.notice === '', 'no notice on a bare /', bare.notice);
   t.check(t.errors.length === errors0, 'bare /: no page error', t.errors.slice(errors0));
   t.save('start.png', (await p.capture()).png);
 
-  await p.goto(`${p.base}${START_SEED_7_HASH}`, `document.getElementById('start-seed') !== null`);
+  await p.goto(`${p.base}${START_SEED_7_HASH}`, `document.getElementById('start-new') !== null`);
+  await sleep(500);
   const seven = await p.eval<StartRead>(START_READ);
-  t.check(seven.seed === 'Seed: 7' && seven.profile === 'Profile: default' && seven.map?.href === `?map${START_SEED_7_HASH}`, `/#<seed 7>: ${seven.seed} · ${seven.profile}, the map link keeps the hash`, seven);
-
-  await p.goto(p.base, `document.getElementById('start-enter') !== null`);
-  errors0 = t.errors.length;
-  const before = await p.eval<{ href: string; history: number }>('({ href: location.href, history: history.length })');
-  await p.click('#start-enter');
-  const ms = await p.until(`document.getElementById('loading-screen') !== null && document.getElementById('start-screen') === null`, 'the loading screen after "Enter the world"', 10000);
-  const after = await p.eval<{ href: string; history: number }>('({ href: location.href, history: history.length })');
-  t.check(after.href === before.href && after.history === before.history, `"Enter the world": the loading screen after ${Math.round(ms)} ms in the same page (URL ${after.href}, no history entry)`, { before, after });
-  t.check(t.errors.length === errors0, '"Enter the world": no page error', t.errors.slice(errors0));
+  t.check(sameJson(seven, bare), '/#<seed 7>: the same start screen, nothing loading (a # hash changes nothing)', { bare, seven });
+  t.check(t.errors.length === errors0, '/#<seed 7>: no page error', t.errors.slice(errors0));
 
   t.step(`world: /?rd=${WORLD_RD} (no start screen) to the reveal, a clean console, world.png`);
   errors0 = t.errors.length;
@@ -2210,7 +2318,7 @@ async function runWorld(t: Smoke): Promise<void> {
     }
   }
 
-  t.step(`stream: /?rd=${WORLD_RD} forced to batch, then mesh: W held ${STREAM_HOLD_MS / 1000} s with real key input (the camera moves, columns reveal), then RD ${STREAM_RD} live in the help (no reload)`);
+  t.step(`stream: /?rd=${WORLD_RD} forced to batch, then mesh: W held ${STREAM_HOLD_MS / 1000} s with real key input (the camera moves, columns reveal), then RD ${STREAM_RD} live in the Settings screen (G; no reload)`);
   for (const { renderer, file } of STREAM_RUNS) {
     const what = `stream, renderer=${renderer}`;
     errors0 = t.errors.length;
@@ -2243,9 +2351,9 @@ async function runWorld(t: Smoke): Promise<void> {
     t.check(grown !== null, `${what}: the HUD's revealed grew within ${STREAM_REVEAL_MS / 1000} s of releasing W (${start.revealed} → ${grown?.revealed ?? '?'})`, { start, moved, grown });
     t.check(t.errors.length === errors0, `${what}: no page error while flying`, t.errors.slice(errors0));
 
-    // The help (H), then RD 6 in its settings: applied live, no reload.
-    await p.key('h', 'KeyH', 72);
-    await p.until(`document.getElementById('world-help')?.hidden === false`, `${what}: the help`, 5000);
+    // The Settings screen (G; SP5b spec §1.4), then RD 6 in it: applied live, no reload.
+    await p.key('g', SMOKE_KEYS.settings, 71);
+    await p.until(`document.getElementById('settings-panel')?.hidden === false`, `${what}: the Settings screen`, 5000);
     // The select shows the RD in force, not the saved one (the mesh run starts with the batch run's 6 saved).
     const shown = await p.eval<string>(`document.getElementById('setting-rd').value`);
     t.check(shown === String(WORLD_RD), `${what}: #setting-rd shows the RD in force, ${WORLD_RD} (rulings R8)`, shown);
@@ -2253,11 +2361,11 @@ async function runWorld(t: Smoke): Promise<void> {
     await p.choose('#setting-rd', String(STREAM_RD));
     const six = await hudOnce(hud, (h) => h.rd === STREAM_RD && h.revealed > before.revealed, STREAM_RD_MS);
     t.check(six !== null && six.rd === STREAM_RD && six.revealed > before.revealed,
-      `${what}: RD ${STREAM_RD} chosen in the help: the HUD shows RD ${six?.rd ?? '?'} and revealed ${before.revealed} → ${six?.revealed ?? '?'} within ${STREAM_RD_MS / 1000} s`, { before, six });
+      `${what}: RD ${STREAM_RD} chosen in the Settings screen: the HUD shows RD ${six?.rd ?? '?'} and revealed ${before.revealed} → ${six?.revealed ?? '?'} within ${STREAM_RD_MS / 1000} s`, { before, six });
     const same = await p.eval<boolean>(`window.__wiStreamToken === ${JSON.stringify(token)}`);
     t.check(same, `${what}: no navigation (the page's token is still there)`);
-    await p.click('#help-close');
-    await p.until(`document.getElementById('world-help')?.hidden === true`, `${what}: the help closed`, 5000);
+    await p.key('Escape', 'Escape', 27);
+    await p.until(`document.getElementById('settings-panel')?.hidden === true`, `${what}: Esc closed the Settings screen`, 5000);
     await sleep(500);
     t.save(file, (await p.capture()).png);
     t.check(t.errors.length === errors0, `${what}: no page error`, t.errors.slice(errors0));
@@ -3061,6 +3169,314 @@ async function runWalk(t: Smoke): Promise<void> {
   t.check(t.errors.length === errors0, 'walk: no page error', t.errors.slice(errors0));
 }
 
+// ---------------------------------------------------------------- the saved-world steps (SP5b spec §6.5)
+
+/** The page expression "the world page's hook is attached" (it attaches after the reveal; its parts throw until then). */
+const HOOK_READY = `(() => { try { __wiTest.worldId(); return true; } catch { return false; } })()`;
+/** Marks the document, so that a wait after a reload or a navigation the page starts reads the next one (`NEW_DOCUMENT`). */
+const MARK_DOCUMENT = '(window.__wiSmokeOld = true, true)';
+const NEW_DOCUMENT = 'window.__wiSmokeOld === undefined';
+/** The page expression "the start screen's notice row holds D7's notice". */
+const LOCKED_SHOWN = `(document.getElementById('start-notice')?.textContent ?? '').includes(${JSON.stringify(SMOKE_LOCKED_NOTICE)})`;
+
+const hookPose = (p: Page): Promise<PoseRead> => p.eval<PoseRead>('__wiTest.pose()');
+
+/**
+ * Polls the page expression `pred` every 100 ms through navigations (an evaluation in a document being replaced fails
+ * and is retried): the ms waited, or null after `ms`.
+ */
+async function polled(p: Page, pred: string, ms: number): Promise<number | null> {
+  const t0 = Date.now();
+  while (Date.now() - t0 <= ms) {
+    const ok = await p.eval<boolean>(`(() => { try { return typeof __wiSmoke === 'object' && document.readyState === 'complete' && !!(${pred}); } catch { return false; } })()`)
+      .catch(() => false);
+    if (ok) return Date.now() - t0;
+    await sleep(100);
+  }
+  return null;
+}
+
+/** After the document changed: the world page revealed, its hook attached and three frames drawn; false (a failed check) else. */
+async function savedRevealed(t: Smoke, what: string): Promise<boolean> {
+  const p = t.page;
+  if (!(await worldRevealed(t, what))) return false;
+  await p.until(HOOK_READY, `${what}: the test hook attached`, 30_000);
+  await p.until('window.__wiWorld.frames >= 3', `${what}: three frames after the reveal`, 30_000);
+  return true;
+}
+
+/** Opens saved world `id` with the hook (`savedWorldQuery`) in the steps' page. */
+async function openSaved(t: Smoke, what: string, id: string): Promise<boolean> {
+  const p = t.page;
+  await p.goto(`${p.base}${savedWorldQuery(id)}`, `window.__wiWorld !== undefined`);
+  return savedRevealed(t, what);
+}
+
+/** `Page.reload` of the steps' page, then the world page again (D24: the reload waits for its own previous document's lock). */
+async function reloadSaved(t: Smoke, what: string): Promise<boolean> {
+  const p = t.page;
+  await p.eval(MARK_DOCUMENT);
+  await p.reload(`${NEW_DOCUMENT} && window.__wiWorld !== undefined`);
+  return savedRevealed(t, what);
+}
+
+/** The states at voxels `vs`, once every one's column is Published again (−1 for a column still not Published after 30 s). */
+async function blocksOnceLoaded(p: Page, vs: readonly Voxel[]): Promise<number[]> {
+  const list = JSON.stringify(vs.map((v) => [v.x, v.y, v.z]));
+  await p.until(`${list}.every(([x, y, z]) => __wiTest.blockAt(x, y, z) !== -1)`, 'the voxels\' columns Published', 30_000).catch(() => 0);
+  return p.eval<number[]>(`${list}.map(([x, y, z]) => __wiTest.blockAt(x, y, z))`);
+}
+
+/**
+ * `menus` (spec §6.5): New world with seed smoke-7 and amplified → Create → the world reveals at `/?world=<id>`; back to
+ * `/`, Load world lists it first (its title names the preset and the seed) and the list's time is recorded
+ * (`__wiMenuListMs`); Rename to "Smoke world"; Settings from the start screen opens and closes. The new world's id, or
+ * null when Create did not reach it.
+ */
+async function menusChecks(t: Smoke): Promise<string | null> {
+  const p = t.page;
+  await p.goto(p.base, `document.getElementById('start-new') !== null`);
+  await p.click('#start-new');
+  await p.until(`document.getElementById('new-world')?.hidden === false`, 'menus: New world', 5000);
+  await p.typeInto('#new-seed', SMOKE_WORLD.seed);
+  await p.choose('#new-preset', SMOKE_WORLD.preset);
+  await p.click('#new-create');
+  const reached = await polled(p, 'window.__wiWorld !== undefined', 30_000);
+  const at = await p.eval<string>('location.pathname + location.search');
+  const id = createdWorldId(at);
+  t.check(reached !== null && id !== null && at === `/?world=${encodeURIComponent(id)}`, `menus: Create navigates to /?world=<id> (${at})`, at);
+  if (id === null || !(await worldRevealed(t, 'menus: the new world'))) return id;
+
+  await p.goto(p.base, `document.getElementById('start-load') !== null`);
+  await p.click('#start-load');
+  await p.until(`document.getElementById('load-world')?.hidden === false && document.querySelector('#load-list .world-row') !== null`, 'menus: the Load world list', 10_000);
+  const first = await p.eval<{ id: string | null; title: string; ms: number | null }>(`(() => {
+    const row = document.querySelector('#load-list .world-row');
+    return { id: row.dataset.id ?? null, title: row.querySelector('.world-title')?.textContent ?? '', ms: window.__wiMenuListMs ?? null };
+  })()`);
+  t.check(first.id === id && rowTitleOk(first.title), `menus: Load world lists it first: "${first.title}"`, first);
+  t.check(first.ms !== null && Number.isFinite(first.ms), `menus: the list read in ${first.ms?.toFixed(1) ?? '?'} ms (__wiMenuListMs)`, first.ms);
+  if (first.ms !== null) t.record(`the Load world list read in ${first.ms.toFixed(1)} ms (1 world)`);
+
+  const row = `.world-row[data-id="${id}"]`;
+  await p.click(`${row} .world-rename`);
+  await p.until(`document.querySelector('${row} .world-name-input') !== null`, 'menus: the name as a text field', 5000);
+  await p.typeInto(`${row} .world-name-input`, SMOKE_WORLD.rename);
+  await p.enter();
+  await holds(t, `document.querySelector('${row} .world-name')?.textContent === ${JSON.stringify(SMOKE_WORLD.rename)} && document.querySelector('${row} .world-name-input') === null`,
+    `menus: Rename to "${SMOKE_WORLD.rename}" (Enter) is listed`, 10_000, () => p.eval(`document.querySelector('${row}')?.textContent ?? null`));
+
+  await p.click('#load-back');
+  await p.until(`document.getElementById('start-card')?.hidden === false`, 'menus: back to the start screen', 5000);
+  await p.click('#start-settings');
+  await holds(t, `document.getElementById('settings-panel')?.hidden === false`, 'menus: Settings opens over the start screen', 5000, () => p.eval(START_READ));
+  await p.key('Escape', 'Escape', 27);
+  await holds(t, `document.getElementById('settings-panel')?.hidden === true && document.getElementById('start-card')?.hidden === false`,
+    'menus: Esc closes the Settings', 5000, () => p.eval(START_READ));
+  return id;
+}
+
+/**
+ * `save` (spec §6.5, §3.2): in the world, 12 edits through the hook, a place (B, Enter), F to walk, T to ×10; `flushNow()`;
+ * `Page.reload` → every block, the place, the pose (within 0.01), walking and the time speed back. Then one edit and a
+ * reload within 300 ms of its reply: whether the edit survived is recorded (the `pagehide` flush), never gated. The
+ * edits' voxels, for `crash`.
+ */
+async function saveChecks(t: Smoke, id: string): Promise<Voxel[] | null> {
+  const p = t.page;
+  if (!(await openSaved(t, 'save', id))) return null;
+  t.check(await p.eval<string | null>('__wiTest.worldId()') === id, 'save: the hook names the world');
+  const cols = saveColumns(await hookPose(p));
+  const edits = await p.eval<Array<{ x: number; y: number; z: number; r: string }>>(`(async () => {
+    const out = [];
+    for (const { x, z } of ${JSON.stringify(cols)}) {
+      const top = __wiTest.heightAt(x, z);
+      if (top === null) { out.push({ x, y: -1, z, r: 'not Published' }); continue; }
+      out.push({ x, y: top + 2, z, r: await __wiTest.edit(x, top + 2, z, ${SMOKE_STATE.stone}, 0) });
+    }
+    return out;
+  })()`);
+  t.check(edits.length === SAVE_EDITS && edits.every((e) => e.r === 'ok'), `save: ${SAVE_EDITS} stone edits through the hook, 2 above each column's top`, edits.filter((e) => e.r !== 'ok'));
+  const voxels: Voxel[] = edits.map(({ x, y, z }) => ({ x, y, z }));
+
+  const places0 = await p.eval<number>('__wiTest.places().length');
+  await p.blur();
+  await p.key('b', SMOKE_KEYS.savePlace, 66, 0, 'b');
+  if (!(await holds(t, `document.getElementById('place-dialog')?.hidden === false`, 'save: B opens the place dialog', 5000, () => p.eval('__wiTest.places()')))) return voxels;
+  await p.enter();
+  await holds(t, `__wiTest.places().length === ${places0 + 1} && document.getElementById('place-dialog')?.hidden === true`, 'save: Enter saves the place', 5000, () => p.eval('__wiTest.places()'));
+
+  await p.blur();
+  await p.key('f', SMOKE_KEYS.toggleWalk, 70, 0, 'f');
+  const grounded = `__wiTest.mode() === 'walk' && __wiTest.feet()?.onGround === true`;
+  if (!(await holds(t, grounded, 'save: F walks, and the feet reach the ground', 15_000, () => hookFeet(p)))) return voxels;
+  // At rest before the pose is read: still on the ground 300 ms later.
+  await sleep(300);
+  await p.until(grounded, 'save: the feet at rest', 5000);
+  await p.key('t', SMOKE_KEYS.timeSpeed, 84, 0, 't');
+  await holds(t, `__wiTest.clock().speedIndex === ${SAVE_SPEED_INDEX}`, 'save: T sets the time to ×10', 5000, () => p.eval('__wiTest.clock()'));
+
+  const pose = await hookPose(p);
+  const places = await p.eval<unknown[]>('__wiTest.places()');
+  const flushed = await p.eval<{ ok: boolean; flushSeq: number | null }>('__wiTest.flushNow()');
+  t.check(flushed.ok && flushed.flushSeq !== null, `save: flushNow() commits (flushSeq ${flushed.flushSeq ?? '?'})`, flushed);
+
+  if (!(await reloadSaved(t, 'save: the reload'))) return voxels;
+  const back = await blocksOnceLoaded(p, voxels);
+  t.check(back.every((s) => s === SMOKE_STATE.stone), `save: every one of the ${SAVE_EDITS} blocks is back after the reload`, back);
+  const placesBack = await p.eval<unknown[]>('__wiTest.places()');
+  t.check(sameJson(placesBack, places), `save: the place is back (${placesBack.length})`, { places, placesBack });
+  await holds(t, `__wiTest.mode() === 'walk'`, 'save: walking again', 5000, () => p.eval('__wiTest.mode()'));
+  const poseBack = await hookPose(p);
+  t.check(poseWithin(pose, poseBack, POSE_TOL), `save: the pose is back within ${POSE_TOL}`, { pose, poseBack });
+  const clock = await p.eval<{ t: number; speedIndex: number }>('__wiTest.clock()');
+  t.check(clock.speedIndex === SAVE_SPEED_INDEX, `save: the time speed is back (index ${clock.speedIndex}, ×10)`, clock);
+
+  // The `pagehide` outcome (spec §3.2): one edit, then a reload as soon as its reply is in; recorded, never gated.
+  const v: Voxel = { x: voxels[0]!.x, y: voxels[0]!.y + 1, z: voxels[0]!.z };
+  await p.eval(MARK_DOCUMENT);
+  const r = await hookEdit(p, v, SMOKE_STATE.stone);
+  const replied = Date.now();
+  await p.cdp.send('Page.reload', {});
+  const ms = Date.now() - replied;
+  t.check(r === 'ok' && ms <= PAGEHIDE_RELOAD_MS, `save: an edit (${r}), then Page.reload ${ms} ms after its reply (≤ ${PAGEHIDE_RELOAD_MS})`, { r, ms });
+  await sleep(300);
+  const ready = await polled(p, `${NEW_DOCUMENT} && window.__wiWorld !== undefined`, 30_000);
+  if (ready === null || !(await savedRevealed(t, 'save: the reload right after an edit'))) return voxels;
+  const [kept] = await blocksOnceLoaded(p, [v]);
+  t.record(`an edit, then a reload ${ms} ms after its reply: the edit was ${kept === SMOKE_STATE.stone ? 'kept (the pagehide flush committed)' : `not kept (block ${kept}: the pagehide flush did not commit)`}`);
+  return voxels;
+}
+
+/**
+ * `crash` (spec §6.5, §6.2): an edit, `flushNow()`, one more edit, then CDP `Page.crash`; a new target on the world:
+ * it opens, and the first edit is back (whether the second came back is recorded). The new target becomes the steps'
+ * page and the crashed one is closed.
+ */
+async function crashChecks(t: Smoke, id: string, voxels: readonly Voxel[]): Promise<void> {
+  const p = t.page;
+  const tabs = t.tabs;
+  if (tabs === null || voxels.length < 3) {
+    t.check(false, 'crash: a second target and the save step\'s voxels', { tabs: tabs !== null, voxels: voxels.length });
+    return;
+  }
+  const a: Voxel = { x: voxels[1]!.x, y: voxels[1]!.y + 1, z: voxels[1]!.z };
+  const b: Voxel = { x: voxels[2]!.x, y: voxels[2]!.y + 1, z: voxels[2]!.z };
+  const ra = await hookEdit(p, a, SMOKE_STATE.stone);
+  const flushed = await p.eval<{ ok: boolean; flushSeq: number | null }>('__wiTest.flushNow()');
+  const rb = await hookEdit(p, b, SMOKE_STATE.stone);
+  t.check(ra === 'ok' && flushed.ok && rb === 'ok', `crash: an edit (${ra}), flushNow() (flushSeq ${flushed.flushSeq ?? '?'}), one more edit (${rb})`, { ra, flushed, rb });
+  let crashed = false;
+  p.cdp.on('Inspector.targetCrashed', () => { crashed = true; });
+  await p.cdp.send('Inspector.enable').catch(() => undefined);
+  await Promise.race([p.cdp.send('Page.crash').catch(() => undefined), sleep(3000)]);
+  for (let i = 0; i < 50 && !crashed; i++) await sleep(100);
+  t.check(crashed, 'crash: CDP Page.crash crashed the page (Inspector.targetCrashed)');
+
+  const next = await tabs.open();
+  t.page = next;
+  if (await openSaved(t, 'crash: a new target on the world', id)) {
+    const [backA, backB] = await blocksOnceLoaded(next, [a, b]);
+    t.check(backA === SMOKE_STATE.stone, 'crash: the edit before the last flush is back', backA);
+    t.record(`the edit after the last flush, before Page.crash: ${backB === SMOKE_STATE.stone ? 'back (a later save committed it)' : `not back (block ${backB})`}`);
+  }
+  await tabs.close(p);
+}
+
+/**
+ * `two tabs` (spec §6.5, D7, D24): a second target on the same `?world` shows D7's notice on the start screen; after the
+ * first target closes, the second opens it; `Page.reload` of its own target reopens it; Worlds menu → Load world →
+ * Play the same world in the same target opens it. The second target stays the steps' page.
+ */
+async function twoTabsChecks(t: Smoke, id: string): Promise<void> {
+  const first = t.page;
+  const tabs = t.tabs;
+  if (tabs === null) {
+    t.check(false, 'two tabs: a second target');
+    return;
+  }
+  const second = await tabs.open();
+  await second.goto(`${second.base}${savedWorldQuery(id)}`, 'true');
+  const refused = await polled(second, `${LOCKED_SHOWN} && window.__wiWorld === undefined && document.getElementById('start-new') !== null`, 20_000);
+  t.check(refused !== null, `two tabs: a second target on the same ?world shows "${SMOKE_LOCKED_NOTICE}" on the start screen${refused === null ? '' : ` (${refused} ms)`}`,
+    await second.eval('({ href: location.href, notice: document.getElementById(\'start-notice\')?.textContent ?? null })').catch((e: unknown) => String(e)));
+  t.check(await first.eval<boolean>(`window.__wiWorld?.revealed === true && ${HOOK_READY}`).catch(() => false), 'two tabs: the first target keeps the world');
+
+  await tabs.close(first);
+  t.page = second;
+  if (!(await openSaved(t, 'two tabs: after the first target closed, the second opens the world', id))) return;
+  if (!(await reloadSaved(t, 'two tabs: Page.reload of the world\'s own target reopens it'))) return;
+
+  const p = second;
+  await p.blur();
+  await p.key('h', SMOKE_KEYS.help, 72);
+  await p.until(`document.getElementById('world-help')?.hidden === false`, 'two tabs: the help', 5000);
+  await frames(p, 2, 'two tabs: the help drawn');
+  // The clicks the document receives, for the failure's detail.
+  await p.eval(`(window.__wiSmokeClicks = [], document.addEventListener('click', (e) => window.__wiSmokeClicks.push(e.target.id || e.target.tagName), true), true)`);
+  await p.eval(MARK_DOCUMENT);
+  await p.click('#help-worlds-menu');
+  const menu = await polled(p, `${NEW_DOCUMENT} && document.getElementById('start-load') !== null`, 15_000);
+  t.check(menu !== null, 'two tabs: the help\'s Worlds menu opens the start screen in the same target', await p.eval(`({
+    href: location.href, clicks: window.__wiSmokeClicks ?? null, help: document.getElementById('world-help')?.hidden ?? null,
+    visibility: document.visibilityState, focus: document.hasFocus(),
+  })`).catch((e: unknown) => String(e)));
+  if (menu === null) return;
+  await p.click('#start-load');
+  const play = `.world-row[data-id="${id}"] .world-play`;
+  await p.until(`document.querySelector('${play}') !== null`, 'two tabs: the world in the Load world list', 10_000);
+  await p.eval(MARK_DOCUMENT);
+  await p.click(play);
+  const reached = await polled(p, `${NEW_DOCUMENT} && window.__wiWorld !== undefined`, 15_000);
+  const at = await p.eval<string>('location.pathname + location.search').catch(() => '');
+  t.check(reached !== null && createdWorldId(at) === id, `two tabs: Play navigates the same target to /?world=<id> (${at})`, at);
+  if (reached !== null) await worldRevealed(t, 'two tabs: Worlds menu → Play the same world in the same target');
+}
+
+/** SP5b's saved-world steps (spec §6.5), in order, on the world `menus` creates. */
+async function runSaved(t: Smoke): Promise<void> {
+  t.step(`menus: New world (seed ${SMOKE_WORLD.seed}, ${SMOKE_WORLD.preset}) → Create → /?world=<id>; Load world lists it first, the list's time; Rename; Settings from the start screen`);
+  let errors0 = t.errors.length;
+  let id: string | null = null;
+  try {
+    id = await menusChecks(t);
+  } catch (e) {
+    t.check(false, `menus: the step stopped: ${e instanceof Error ? e.message : String(e)}`);
+  }
+  t.check(t.errors.length === errors0, 'menus: no page error', t.errors.slice(errors0));
+
+  t.step(`save: ${SAVE_EDITS} edits, a place, walking, ×10; flushNow(); a reload brings all back; an edit and a reload within ${PAGEHIDE_RELOAD_MS} ms (recorded)`);
+  errors0 = t.errors.length;
+  let voxels: Voxel[] | null = null;
+  try {
+    if (id === null) t.check(false, 'save: the world menus created');
+    else voxels = await saveChecks(t, id);
+  } catch (e) {
+    t.check(false, `save: the step stopped: ${e instanceof Error ? e.message : String(e)}`);
+  }
+  t.check(t.errors.length === errors0, 'save: no page error', t.errors.slice(errors0));
+
+  t.step('crash: an edit, flushNow(), one more edit, Page.crash; a new target opens the world with the first edit');
+  errors0 = t.errors.length;
+  try {
+    if (id === null || voxels === null) t.check(false, 'crash: the world and the save step\'s voxels');
+    else await crashChecks(t, id, voxels);
+  } catch (e) {
+    t.check(false, `crash: the step stopped: ${e instanceof Error ? e.message : String(e)}`);
+  }
+  t.check(t.errors.length === errors0, 'crash: no page error', t.errors.slice(errors0));
+
+  t.step('two tabs: a second target is refused with the notice, opens the world once the first closes; a reload and Worlds menu → Play reopen it');
+  errors0 = t.errors.length;
+  try {
+    if (id === null) t.check(false, 'two tabs: the world menus created');
+    else await twoTabsChecks(t, id);
+  } catch (e) {
+    t.check(false, `two tabs: the step stopped: ${e instanceof Error ? e.message : String(e)}`);
+  }
+  t.check(t.errors.length === errors0, 'two tabs: no page error', t.errors.slice(errors0));
+}
+
 // ---------------------------------------------------------------- screenshots (spec §12)
 
 async function runShots(p: Page, dir: string): Promise<string[]> {
@@ -3287,16 +3703,21 @@ async function main(argv: readonly string[]): Promise<number> {
   const args = parseArgs(argv);
   let chrome: ChromeHandle | null = null;
   let cdp: Cdp | null = null;
+  /** The browser target's connection (`Target.createTarget`, `closeTarget`) and the more pages' (SP5b's steps). */
+  let browser: Cdp | null = null;
+  const more: Cdp[] = [];
   let profile: string | null = null;
   const pageErrors: string[] = [];
   const ignored: string[] = [];
   const cleanup = async () => {
     cdp?.close();
+    for (const c of more) c.close();
+    browser?.close();
     if (chrome !== null && running(chrome.proc)) {
       try {
-        const browser = await connect(chrome.wsUrl);
-        await Promise.race([browser.send('Browser.close'), sleep(3000)]).catch(() => undefined);
-        browser.close();
+        const b = await connect(chrome.wsUrl);
+        await Promise.race([b.send('Browser.close'), sleep(3000)]).catch(() => undefined);
+        b.close();
       } catch { /* the stop below still ends it */ }
       if (running(chrome.proc)) await Promise.race([new Promise<void>((r) => chrome!.proc.once('exit', () => r())), sleep(5000)]);
     }
@@ -3317,43 +3738,70 @@ async function main(argv: readonly string[]): Promise<number> {
     chrome = await startChrome({ headless: true, profileDir: profile, args: [`--window-size=${VIEWPORT.width},${VIEWPORT.height}`, ...SWIFTSHADER_ARGS], env: {} });
     console.log(`headless Chrome (pid ${chrome.proc.pid}) with DevTools on port ${chrome.port}, profile ${profile}`);
     const version = await (await fetch(`http://127.0.0.1:${chrome.port}/json/version`)).json() as { Browser?: string };
-    const targets = await (await fetch(`http://127.0.0.1:${chrome.port}/json/list`)).json() as Array<{ type: string; webSocketDebuggerUrl: string }>;
+    const targets = await (await fetch(`http://127.0.0.1:${chrome.port}/json/list`)).json() as Array<{ id: string; type: string; webSocketDebuggerUrl: string }>;
     const target = targets.find((t) => t.type === 'page');
     if (target === undefined) throw new Error('Chrome has no page target');
+    // Every page target is wired alike: its errors, the world page's `beforeunload` prompt, the helpers, the viewport.
+    const wire = async (c: Cdp): Promise<void> => {
+      c.on('Runtime.exceptionThrown', (e) => {
+        const d = e['exceptionDetails'] as { text?: string; exception?: { description?: string } };
+        pageErrors.push(`exception: ${d.exception?.description ?? d.text ?? ''}`);
+      });
+      c.on('Runtime.consoleAPICalled', (e) => {
+        if (e['type'] !== 'error' && e['type'] !== 'assert') return;
+        pageErrors.push(`console.${String(e['type'])}: ${(e['args'] as Array<{ value?: unknown; description?: string }>).map((a) => String(a.value ?? a.description)).join(' ')}`);
+      });
+      c.on('Log.entryAdded', (e) => {
+        const entry = e['entry'] as { level: string; text: string; url?: string };
+        if (entry.level !== 'error') return;
+        const line = `log: ${entry.text}${entry.url === undefined ? '' : ` (${entry.url})`}`;
+        if (ignoredLog(entry.text, entry.url) || leaveGuardLog(entry.text, entry.url)) ignored.push(line);
+        else pageErrors.push(line);
+      });
+      // The world page arms a Ctrl+W guard (`beforeunload`) after its reveal (SP4a spec §7.1): the steps' own navigations
+      // and closes leave it, so its prompt is accepted; any other dialog stays unanswered (and the step times out).
+      c.on('Page.javascriptDialogOpening', (e) => {
+        if (e['type'] !== 'beforeunload') return;
+        console.log('  (accepted the page\'s beforeunload prompt)');
+        void c.send('Page.handleJavaScriptDialog', { accept: true }).catch(() => undefined);
+      });
+      await c.send('Runtime.enable');
+      await c.send('Page.enable');
+      await c.send('Log.enable');
+      await c.send('DOM.enable');
+      await c.send('Emulation.setDeviceMetricsOverride', { width: VIEWPORT.width, height: VIEWPORT.height, deviceScaleFactor: 1, mobile: false });
+      await c.send('Page.addScriptToEvaluateOnNewDocument', { source: `globalThis.__wiSmoke = (${pageHelpers.toString()})();` });
+    };
     cdp = await connect(target.webSocketDebuggerUrl);
-    cdp.on('Runtime.exceptionThrown', (e) => {
-      const d = e['exceptionDetails'] as { text?: string; exception?: { description?: string } };
-      pageErrors.push(`exception: ${d.exception?.description ?? d.text ?? ''}`);
-    });
-    cdp.on('Runtime.consoleAPICalled', (e) => {
-      if (e['type'] !== 'error' && e['type'] !== 'assert') return;
-      pageErrors.push(`console.${String(e['type'])}: ${(e['args'] as Array<{ value?: unknown; description?: string }>).map((a) => String(a.value ?? a.description)).join(' ')}`);
-    });
-    cdp.on('Log.entryAdded', (e) => {
-      const entry = e['entry'] as { level: string; text: string; url?: string };
-      if (entry.level !== 'error') return;
-      const line = `log: ${entry.text}${entry.url === undefined ? '' : ` (${entry.url})`}`;
-      if (ignoredLog(entry.text, entry.url) || leaveGuardLog(entry.text, entry.url)) ignored.push(line);
-      else pageErrors.push(line);
-    });
-    // The world page arms a Ctrl+W guard (`beforeunload`) after its reveal (SP4a spec §7.1): the steps' own navigations
-    // leave it, so its prompt is accepted; any other dialog stays unanswered (and the step times out).
-    cdp.on('Page.javascriptDialogOpening', (e) => {
-      if (e['type'] !== 'beforeunload') return;
-      console.log('  (accepted the page\'s beforeunload prompt)');
-      void cdp?.send('Page.handleJavaScriptDialog', { accept: true }).catch(() => undefined);
-    });
-    await cdp.send('Runtime.enable');
-    await cdp.send('Page.enable');
-    await cdp.send('Log.enable');
-    await cdp.send('DOM.enable');
-    await cdp.send('Emulation.setDeviceMetricsOverride', { width: VIEWPORT.width, height: VIEWPORT.height, deviceScaleFactor: 1, mobile: false });
+    await wire(cdp);
     await cdp.send('Browser.setDownloadBehavior', { behavior: 'allow', downloadPath: downloads });
-    await cdp.send('Page.addScriptToEvaluateOnNewDocument', { source: `globalThis.__wiSmoke = (${pageHelpers.toString()})();` });
     console.log(`${version.Browser ?? 'Chrome'}, ${VIEWPORT.width} × ${VIEWPORT.height} CSS px at DPR 1`);
 
-    const page = new Page(cdp, server.url);
-    const smoke = new Smoke(page, downloads, pageErrors, args.shots);
+    const devtools = chrome.port;
+    const tabs: Tabs = {
+      async open() {
+        browser ??= await connect(chrome!.wsUrl);
+        const r = await browser.send('Target.createTarget', { url: 'about:blank', newWindow: true });
+        const targetId = String(r['targetId']);
+        const c = await connect(`ws://127.0.0.1:${devtools}/devtools/page/${targetId}`);
+        more.push(c);
+        await wire(c);
+        await c.send('Page.bringToFront');
+        return new Page(c, server.url, targetId);
+      },
+      async close(p) {
+        browser ??= await connect(chrome!.wsUrl);
+        await Promise.race([browser.send('Target.closeTarget', { targetId: p.targetId }).catch(() => undefined), sleep(5000)]);
+        for (let i = 0; i < 50; i++) {
+          const open = await (await fetch(`http://127.0.0.1:${devtools}/json/list`)).json() as Array<{ id: string }>;
+          if (!open.some((o) => o.id === p.targetId)) break;
+          await sleep(100);
+        }
+        p.cdp.close();
+      },
+    };
+    const page = new Page(cdp, server.url, target.id);
+    const smoke = new Smoke(page, downloads, pageErrors, args.shots, tabs);
     try {
       await runSmoke(smoke);
     } catch (e) {
@@ -3364,8 +3812,9 @@ async function main(argv: readonly string[]): Promise<number> {
     smoke.check(missing.length === 0, `every step of SMOKE_STEPS ran (${smoke.ran.length})`, missing);
     for (const l of ignored) console.log(`  ignored ${l}`);
     smoke.check(pageErrors.length === 0, `${pageErrors.length} page error(s)`, pageErrors);
-    if (args.shots !== null) await runShots(page, args.shots);
+    if (args.shots !== null) await runShots(smoke.page, args.shots);
     if (args.shots !== null && pageErrors.length > 0) smoke.check(false, 'page errors during the screenshots', pageErrors);
+    for (const r of smoke.recorded) console.log(`recorded: ${r}`);
     const failed = smoke.checks.filter((c) => !c.ok);
     console.log(`\nsmoke: ${smoke.checks.length - failed.length}/${smoke.checks.length} checks pass${failed.length === 0 ? '' : `; failed: ${failed.map((c) => `${c.step} — ${c.what}`).join('; ')}`}`);
     return failed.length === 0 ? 0 : 1;

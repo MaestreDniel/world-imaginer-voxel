@@ -33,7 +33,7 @@ import { createReloader, createWorldUrl, savedWorldUrl, worldHash, type HereStat
 import {
   closeOverlays, countPendingTimers, countTileCalls, createAim, createClickQueue, createHookEdit, createRdControl, createUndoNotice, createWorldNotices, everyFrameUntil, failBeforeReveal, flushOnPageHide, handleContextLoss,
   benchSetTime, benchWalk, handleStreamEvent, settingsChange, installRepeatStop, installUndoKeys, installWiTest, mapKey, offerLowerRd, paletteFirst, onDriverStatus, onSimFailure, pushCoordinatorTeardown, rdShownOnLoad, releaseOnFailure, reloadRd, runTeardown, speedKey, stopAfterFailure, switchMode,
-  UNDO_NOTICE_MS, type WiTest, type WiTestPage,
+  UNDO_NOTICE_MS, hookFlushed, markOlderGenerator, type WiTest, type WiTestPage,
 } from '../../src/ui/world/worldPage';
 import { createEditLatency } from '../../src/ui/world/editLatency';
 import { createEditPath, type EditOutcome } from '../../src/ui/world/editPath';
@@ -52,7 +52,7 @@ import { GENERATOR_VERSION } from '../../src/core/constants';
 import type { KV, KvEvent } from '../../src/persist/kv';
 import { createMemoryKV, type MemoryKV } from '../../src/persist/memory';
 import {
-  createSaves, loadParams, newState, NO_VALUE, parseWorldRecord, todayStateTable, type HistoryRecord, type HotbarRecord, type Place, type StateRecord, type WorldRecord,
+  createSaves, loadParams, newState, NO_VALUE, olderGenerator, parseWorldRecord, todayStateTable, type HistoryRecord, type HotbarRecord, type Place, type StateRecord, type WorldRecord,
 } from '../../src/persist/saves';
 import {
   EDIT_FAILED_NOTICE, HISTORY_RESET_NOTICE, SAVED_EDIT_FAILED_NOTICE, STATE_RESET_NOTICE, countAccepted, createPageAutosave, hotbarStorage, lastFlush, leaveAfterSave,
@@ -1170,6 +1170,15 @@ describe('the smoke\'s test hook, window.__wiTest under ?wiTest=1 (SP4c spec §8
       lightAt: (x, y, z) => x * 100 + y + z,
       feet: () => ({ x: 0.5, y: 70, z: -3.5, onGround: true, snapPending: false, snapY: null }),
       heightAt: (x, z) => (x === 0 ? null : x + z),
+      worldId: () => 'w1',
+      flushNow: async () => ({ ok: true, flushSeq: 4 }),
+      places: () => [{ id: 'p1', name: 'Home', colour: 2, x: 1, y: 70, z: -3, yaw: 45, pitch: -10 }],
+      modify: vi.fn(),
+      worldHash: async () => '0123456789abcdef',
+      pose: () => ({ x: 1.25, y: 71.62, z: -3.5, yaw: 45, pitch: -10 }),
+      clock: () => ({ t: 0.25, speedIndex: 1 }),
+      fov: () => 80,
+      markOlderGenerator: vi.fn(async () => {}),
     };
     install.attach(page);
     expect([hook.listenerCount(), hook.owner(), hook.stale()]).toEqual([2, 'map', 17]);
@@ -1184,6 +1193,18 @@ describe('the smoke\'s test hook, window.__wiTest under ?wiTest=1 (SP4c spec §8
     expect(hook.lightAt(1, 2, 3)).toBe(105);
     expect(hook.feet()).toEqual({ x: 0.5, y: 70, z: -3.5, onGround: true, snapPending: false, snapY: null });
     expect([hook.heightAt(0, 5), hook.heightAt(2, 5)]).toEqual([null, 7]);
+    // The saved-world parts (SP5b spec §6.5) pass through to the page as well.
+    expect(hook.worldId()).toBe('w1');
+    expect(await hook.flushNow()).toEqual({ ok: true, flushSeq: 4 });
+    expect(hook.places().map((p) => p.name)).toEqual(['Home']);
+    hook.modify(true);
+    expect((page.modify as ReturnType<typeof vi.fn>).mock.calls).toEqual([[true]]);
+    expect(await hook.worldHash()).toBe('0123456789abcdef');
+    expect(hook.pose()).toEqual({ x: 1.25, y: 71.62, z: -3.5, yaw: 45, pitch: -10 });
+    expect(hook.clock()).toEqual({ t: 0.25, speedIndex: 1 });
+    expect(hook.fov()).toBe(80);
+    await hook.markOlderGenerator('w2');
+    expect((page.markOlderGenerator as ReturnType<typeof vi.fn>).mock.calls).toEqual([['w2']]);
     hook.closeOverlay();
     hook.disposeTool();
     hook.forceFatal();
@@ -2591,6 +2612,42 @@ describe('opening a saved world (SP5b spec §3.4 steps 2-3, D14, D22)', () => {
   const jobs = async (): Promise<void> => {
     for (let i = 0; i < 20; i++) await Promise.resolve();
   };
+
+  test('the hook\'s flushNow: a committed flush\'s flushSeq; a failed flush or no sim is not ok (SP5b spec §6.5)', () => {
+    expect(hookFlushed({ type: 'flushed', id: 3, ok: true, flushSeq: 9, columns: 2, bytes: 100, syncMs: 0.1, commitMs: 4 })).toEqual({ ok: true, flushSeq: 9 });
+    expect(hookFlushed({ type: 'flushed', id: 3, ok: false, status: 'abort', errorName: 'QuotaExceededError' })).toEqual({ ok: false, flushSeq: null });
+    expect(hookFlushed(null)).toEqual({ ok: false, flushSeq: null });
+  });
+
+  test('the hook\'s markOlderGenerator writes only `worlds[id]` under its lock, with a genKey never today\'s; a held lock or a missing record writes nothing (ruling P50)', async () => {
+    const { kv, saves } = await created();
+    const before = everything(kv);
+    const ops = kv.opCount;
+    await markOlderGenerator(kv, free.locks, ID);
+    expect(free.held()).toBe(0);
+    const [raw] = await kv.read([{ op: 'get', store: 'worlds', key: ID }]);
+    const p = parseWorldRecord(raw);
+    if (!p.ok) throw new Error(p.reason);
+    // Every hex digit complemented: still 16 hex digits, and not the stored (today's) one.
+    expect(p.world.genKey).toMatch(/^[0-9a-f]{16}$/);
+    expect(p.world.genKey).not.toBe(key);
+    expect(p.world).toEqual({ ...record(), genKey: p.world.genKey });
+    const pl = loadParams(p.world);
+    expect(pl.ok && olderGenerator(p.world, pl.value)).toBe(true);
+    // One put: the state and every other store as they were.
+    expect(kv.opCount - ops).toBe(1);
+    expect(everything(kv).filter(([st]) => st !== 'worlds')).toEqual(before.filter(([st]) => st !== 'worlds'));
+    expect((await saves.list()).map((r) => !r.broken && r.world.genKey)).toEqual([p.world.genKey]);
+
+    // Another tab holds it: rejected with D7's notice, nothing written.
+    const heldLocks: LockManagerLike = { request: (_name, _o, cb) => Promise.resolve().then(() => cb(null)) };
+    const after = everything(kv);
+    await expect(markOlderGenerator(kv, heldLocks, ID)).rejects.toThrow(/This world is open in another tab/);
+    expect(everything(kv)).toEqual(after);
+    // No such world: rejected, nothing written.
+    await expect(markOlderGenerator(kv, free.locks, 'nope')).rejects.toThrow(/nope/);
+    expect(everything(kv)).toEqual(after);
+  });
 
   test('Review Focus 2: with a lock manager that never grants, the page navigates to `/?notice=locked` (the menu shows `This world is open in another tab`), reads nothing, and the in-process sim receives no `load`', async () => {
     const { kv } = await created();
