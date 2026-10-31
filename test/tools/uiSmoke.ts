@@ -864,6 +864,8 @@ export const MODIFY_EDIT = { id: 'pp-density.detailAmpHi', value: '4' } as const
 /** The backup copy's name (`backupName` of the imported world's name, D11; a unit test compares them) and its notice. */
 export const SMOKE_COPY = `${SMOKE_WORLD.rename} (before the change)`;
 export const SMOKE_BACKUP_NOTICE = `Backup saved as '${SMOKE_COPY}'`;
+/** How long the backup notice shows (`BACKUP_NOTICE_MS`, `ui/world/modifyMode.ts`, D11's 6 s; a unit test compares them). */
+export const SMOKE_BACKUP_NOTICE_MS = 6000;
 /** The Load world rows' badges (`ui/worldsMenu.ts`, D3; a unit test pins the menu's text). */
 export const COPY_BADGE = 'automatic copy';
 export const OLDER_BADGE = 'older generator';
@@ -3264,12 +3266,18 @@ async function polled(p: Page, pred: string, ms: number): Promise<number | null>
   return null;
 }
 
-/** After the document changed: the world page revealed, its hook attached and three frames drawn; false (a failed check) else. */
+/**
+ * After the document changed: the world page revealed, its hook attached, three frames drawn and the loading screen gone;
+ * false (a failed check) else.
+ */
 async function savedRevealed(t: Smoke, what: string): Promise<boolean> {
   const p = t.page;
   if (!(await worldRevealed(t, what))) return false;
   await p.until(HOOK_READY, `${what}: the test hook attached`, 30_000);
   await p.until('window.__wiWorld.frames >= 3', `${what}: three frames after the reveal`, 30_000);
+  // The loading screen (fixed, above the Settings screen) fades out over 300 ms after the reveal and takes every click
+  // until it is removed: `settings-world`'s click on the Controls tab, at once after G, otherwise lands on it.
+  await p.until(`document.getElementById('loading-screen') === null`, `${what}: the loading screen removed`, 5000);
   return true;
 }
 
@@ -3520,8 +3528,14 @@ const LIST_ROWS = `[...document.querySelectorAll('#load-list .world-row')].map((
 }))`;
 const LIST_IDS = `[...document.querySelectorAll('#load-list .world-row')].map((r) => r.dataset.id ?? '')`;
 const LOAD_NOTICE = `document.getElementById('load-notice')?.textContent ?? ''`;
-/** Every notice row's text, joined: the world's and the map tool's (a world notice shows in the tool's row while the map covers the 3D). */
-const ALL_NOTICES = `[...document.querySelectorAll('.notices')].map((n) => n.textContent).join('|')`;
+/**
+ * Every notice row's text, joined: the world's (`#world-notices`, class `world-notices`) and the map tool's (`.notices`;
+ * a world notice shows in the tool's row while the map covers the 3D), shown or not.
+ */
+const ALL_NOTICES = `[...document.querySelectorAll('#world-notices, .notices')].map((n) => n.textContent).join('|')`;
+/** The page expression "the world's notices are in sight (the map closed, `#world-notices` rendered) and hold `text`". */
+const worldNoticeSeen = (text: string): string => `(${OVERLAY_CLOSED} && (() => { const b = document.getElementById('world-notices');
+  return b !== null && b.checkVisibility() && b.textContent.includes(${JSON.stringify(text)}); })())`;
 /** The page expressions "the Settings screen is shown" and "… hidden". */
 const SETTINGS_SHOWN = `document.getElementById('settings-panel')?.hidden === false`;
 const SETTINGS_HIDDEN = `document.getElementById('settings-panel')?.hidden === true`;
@@ -3756,7 +3770,8 @@ async function undoInert(t: Smoke, what: string, value: string): Promise<void> {
  * `modify` (spec §6.5, §3.6, D10, D11): M; off at the open: `#map-modify` unchecked, the `density.detailAmpHi` control
  * disabled, the map's Ctrl+Z inert; on: that parameter typed (4), held for the copy, "Backup saved as '<name> (before
  * the change)'" (in the tool's notice row: the map covers the 3D), then applied (Watch live then hides the map while
- * the world regenerates; M brings it back); off again, Ctrl+Z leaves the change. Then the hook marks the second import as from an
+ * the world regenerates, and the notice must then be in sight in the world's notices, D11's 6 s; M brings the map
+ * back); off again, Ctrl+Z leaves the change. Then the hook marks the second import as from an
  * older generator (`markOlderGenerator`), and the Load world list shows the copy with "automatic copy" and that world
  * with "older generator" (`review-load-world.png`).
  */
@@ -3778,11 +3793,12 @@ async function modifyChecks(t: Smoke, ids: { readonly imported: string; readonly
   // The copy is written in well under a second and the world then regenerates as fast: a recorder in the page notes, per
   // frame, when the notice first shows and when the stale count first rises.
   await p.eval(`(() => {
-    const r = window.__wiSmokeModify = { noticeAt: null, roseAt: null, done: false };
+    const r = window.__wiSmokeModify = { noticeAt: null, roseAt: null, seenAt: null, done: false };
     const step = () => {
       if (r.done) return;
       const now = performance.now();
       if (r.noticeAt === null && (${ALL_NOTICES}).includes(${JSON.stringify(SMOKE_BACKUP_NOTICE)})) r.noticeAt = now;
+      if (r.seenAt === null && ${worldNoticeSeen(SMOKE_BACKUP_NOTICE)}) r.seenAt = now;
       if (r.roseAt === null && __wiTest.stale() > 0) r.roseAt = now;
       requestAnimationFrame(step);
     };
@@ -3793,9 +3809,17 @@ async function modifyChecks(t: Smoke, ids: { readonly imported: string; readonly
   const what = `modify: on, ${MODIFY_EDIT.id} ${v0} → ${MODIFY_EDIT.value} typed`;
   const held = await holds(t, 'window.__wiSmokeModify.noticeAt !== null && window.__wiSmokeModify.roseAt !== null && __wiTest.stale() === 0',
     `${what}: "${SMOKE_BACKUP_NOTICE}", then the world regenerates and settles`, OVERLAY_APPLY_MS, () => p.eval('window.__wiSmokeModify'));
-  const rec = await p.eval<{ noticeAt: number | null; roseAt: number | null }>('(window.__wiSmokeModify.done = true, window.__wiSmokeModify)');
+  // D11's 6 s: Watch live closes the full-screen map about 250 ms after the apply, and the notice must not stay behind in
+  // the hidden tool's row: it is in sight in the world's notices, within its 6 s.
+  const seen = held && await holds(t, 'window.__wiSmokeModify.seenAt !== null',
+    `${what}: "${SMOKE_BACKUP_NOTICE}" in sight in the world's notices after the Watch-live close`, SMOKE_BACKUP_NOTICE_MS, () => p.eval('window.__wiSmokeModify'));
+  const rec = await p.eval<{ noticeAt: number | null; roseAt: number | null; seenAt: number | null }>('(window.__wiSmokeModify.done = true, window.__wiSmokeModify)');
   if (held) {
     t.check(rec.noticeAt! <= rec.roseAt!, `${what}: the change waits for its copy (the notice ${(rec.roseAt! - rec.noticeAt!).toFixed(0)} ms before the world goes stale)`, rec);
+  }
+  if (seen) {
+    t.check(rec.seenAt! - rec.noticeAt! < SMOKE_BACKUP_NOTICE_MS,
+      `${what}: the notice in the world's notices ${(rec.seenAt! - rec.noticeAt!).toFixed(0)} ms after it showed, within its ${SMOKE_BACKUP_NOTICE_MS / 1000} s`, rec);
   }
   // Watch live (SP4c D18, on by default) hides the full-screen map while the world regenerates: M brings it back.
   if (await p.eval<boolean>(OVERLAY_CLOSED)) await openFullMap(t, 'modify: the map again');

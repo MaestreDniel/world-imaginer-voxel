@@ -42,6 +42,7 @@ import { createHoldRepeat } from '../../src/ui/world/holdRepeat';
 import { mountPalette } from '../../src/ui/palette';
 import { PLACE_SAVED_NOTICE, PLACES_FULL_NOTICE, createPlaces } from '../../src/ui/world/places';
 import { mountPlaceDialog } from '../../src/ui/world/placeDialog';
+import { BACKUP_NOTICE_MS } from '../../src/ui/world/modifyMode';
 import { TELEPORT_FAILED_MS, TELEPORT_FAILED_NOTICE } from '../../src/ui/world/teleport';
 import { NO_ENTRY } from '../../src/sim/diffStore';
 import type { Edit, FlushedMsg } from '../../src/workers/protocol';
@@ -1304,13 +1305,15 @@ describe('the world\'s notices over the map (SP4c spec §2.1, D27)', () => {
     showAll(s.notices, apply);
     expect(s.row()).toHaveLength(3);
     // The map closes: the two that stay come back to `.world-notices` (StoreFull with its own ids and its Lower button)
-    // and leave the hidden row; the timed one ends where it was shown.
+    // and leave the hidden row; the timed one comes too, for the time it has left (SP5b spec D11).
     s.notices.route(null);
-    expect(s.world()).toHaveLength(2);
+    expect(s.world()).toHaveLength(3);
     expect(s.world()[0]).toContain('The world store is full: new terrain is paused.');
     expect(s.world()[1]).toContain(URL_OVERSIZE_NOTICE);
-    expect(s.row()).toEqual(['Could not teleport×']);
+    expect(s.world()[2]).toContain('Could not teleport');
+    expect(s.row()).toEqual([]);
     vi.advanceTimersByTime(4000);
+    expect(s.world()).toHaveLength(2);
     expect(s.row()).toEqual([]);
     // M again: both go to the row, none stays under the opaque overlay.
     s.notices.route(s.tool);
@@ -1324,6 +1327,64 @@ describe('the world\'s notices over the map (SP4c spec §2.1, D27)', () => {
     // The condition's end takes the oversize notice down wherever it is; a dismissed StoreFull does not come back.
     oversizeNotice(s.notices)(false);
     s.notices.route(s.tool);
+    s.notices.route(null);
+    expect(s.world()).toEqual([]);
+    expect(s.row()).toEqual([]);
+  });
+
+  test('a timed notice moves with every route change, for the time it has left: D11\'s backup notice through the Watch-live close (SP5b spec D11)', () => {
+    vi.useFakeTimers();
+    const s = setup();
+    const text = "Backup saved as 'My world (before the change)'";
+    // The copy commits while the full-screen map covers the 3D: the notice goes to the tool's row.
+    s.notices.route(s.tool);
+    s.notices.show(text, { kind: 'info', timeoutMs: BACKUP_NOTICE_MS });
+    expect(s.row()).toEqual([`${text}×`]);
+    expect(s.world()).toEqual([]);
+    // Watch live closes the map about 250 ms later: the notice leaves the hidden row and shows in `.world-notices`.
+    vi.advanceTimersByTime(250);
+    s.notices.route(null);
+    expect(s.row()).toEqual([]);
+    expect(s.world()).toHaveLength(1);
+    expect(s.world()[0]).toContain(text);
+    // M again before it ends: back in the tool's row, once; the map closes again: back in the world.
+    vi.advanceTimersByTime(1000);
+    s.notices.route(s.tool);
+    expect(s.world()).toEqual([]);
+    expect(s.row()).toEqual([`${text}×`]);
+    s.notices.route(null);
+    expect(s.row()).toEqual([]);
+    expect(s.world()).toHaveLength(1);
+    // It ends 6 s after it was first shown, wherever it is then, and does not come back.
+    vi.advanceTimersByTime(BACKUP_NOTICE_MS - 1250 - 1);
+    expect(s.world()).toHaveLength(1);
+    vi.advanceTimersByTime(1);
+    expect(s.world()).toEqual([]);
+    expect(s.row()).toEqual([]);
+    s.notices.route(s.tool);
+    s.notices.route(null);
+    expect(s.world()).toEqual([]);
+    expect(s.row()).toEqual([]);
+  });
+
+  test('a timed notice dismissed in the tool\'s row or in `.world-notices`, or hidden, does not come back on a route change', () => {
+    vi.useFakeTimers();
+    const s = setup();
+    s.notices.route(s.tool);
+    s.notices.show('Could not teleport', { kind: 'warn', timeoutMs: 4000 });
+    dom.body.querySelectorAll('button').find((b: FakeElement) => b.textContent === '×')!.click();
+    expect(s.row()).toEqual([]);
+    s.notices.route(null);
+    expect(s.world()).toEqual([]);
+    s.notices.show('Could not teleport', { kind: 'warn', timeoutMs: 4000 });
+    expect(s.world()).toHaveLength(1);
+    dom.body.querySelectorAll('button').find((b: FakeElement) => b.textContent === 'Dismiss')!.click();
+    expect(s.world()).toEqual([]);
+    s.notices.route(s.tool);
+    expect(s.row()).toEqual([]);
+    // `hide` ends it too, wherever it is.
+    s.notices.show('Could not teleport', { kind: 'warn', timeoutMs: 4000 });
+    s.notices.hide('Could not teleport');
     s.notices.route(null);
     expect(s.world()).toEqual([]);
     expect(s.row()).toEqual([]);

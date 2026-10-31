@@ -44,7 +44,7 @@ import {
   WALK_HOLD_MS, WALK_MIN_MOVE, WALK_PATH_BLOCKS, WALK_QUERY, walkCorridor, walkSnapOk,
   createdWorldId, PAGEHIDE_RELOAD_MS, POSE_TOL, poseWithin, rowTitleOk, SAVE_EDITS, SAVE_SPEED_INDEX, saveColumns, savedWorldQuery, SMOKE_KEYS,
   SMOKE_LOCKED_NOTICE, SMOKE_WORLD, START_BUTTONS,
-  COPY_BADGE, exportedFile, FIRST_PLACE_DOT, importedNotice, MODIFY_EDIT, OLDER_BADGE, OLDER_WORLD, PAUSED_SPEED_INDEX, SETTINGS_FOV, SMOKE_BACKUP_NOTICE, SMOKE_COPY,
+  COPY_BADGE, exportedFile, FIRST_PLACE_DOT, importedNotice, MODIFY_EDIT, OLDER_BADGE, OLDER_WORLD, PAUSED_SPEED_INDEX, SETTINGS_FOV, SMOKE_BACKUP_NOTICE, SMOKE_BACKUP_NOTICE_MS, SMOKE_COPY,
   SMOKE_PLACE, SMOKE_PLACE_SAVED, SP5B_SHOTS,
 } from '../tools/uiSmoke';
 import { FACE_DOWN, FACE_EAST, FACE_NORTH, FACE_SOUTH, FACE_UP, FACE_WEST } from '../../src/world/blocks/kinds';
@@ -73,6 +73,7 @@ import { DEFAULT_KEYMAP } from '../../src/player/keymap';
 import { mountWorldsMenu, startModeOf } from '../../src/ui/worldsMenu';
 import { LOCKED_NOTICE } from '../../src/ui/world/worldLock';
 import { backupName, exportFileName } from '../../src/persist/saves';
+import { BACKUP_NOTICE_MS } from '../../src/ui/world/modifyMode';
 import { PLACE_COLOURS, PLACE_SAVED_NOTICE } from '../../src/ui/world/places';
 
 const EDITED: MapState = {
@@ -1285,6 +1286,10 @@ describe('UI smoke test: the saved-world steps (SP5b spec §6.5)', () => {
     expect(SMOKE_BACKUP_NOTICE).toBe("Backup saved as 'Smoke world (before the change)'");
     const modify = readFileSync(new URL('../../src/ui/world/modifyMode.ts', import.meta.url), 'utf8');
     expect(modify).toContain('b.notices.show(`Backup saved as \'${name}\'`');
+    // The notice must be in sight in the world's notices within its 6 s (D11), after the Watch-live close.
+    expect(SMOKE_BACKUP_NOTICE_MS).toBe(BACKUP_NOTICE_MS);
+    const page = readFileSync(new URL('../../src/ui/world/worldPage.ts', import.meta.url), 'utf8');
+    expect(page).toContain("const box = el('div', 'world-notices');\n  box.id = 'world-notices';");
     const menu = readFileSync(new URL('../../src/ui/worldsMenu.ts', import.meta.url), 'utf8');
     expect(menu).toContain(`el('div', 'world-badge', '${COPY_BADGE}')`);
     expect(menu).toContain(`el('div', 'world-badge', '${OLDER_BADGE}')`);

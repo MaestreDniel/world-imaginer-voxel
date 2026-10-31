@@ -614,9 +614,11 @@ export interface WorldNotices {
    * (the tool's notice row) instead of `.world-notices`; `null` sends them back. A notice that stays until its
    * condition ends or the user dismisses it (StoreFull, a `show` with no `timeoutMs`: the URL oversize, the Watch-live
    * notice) moves on every change of route, taken down where it was and shown in the new place, so it is never left
-   * under the opaque overlay nor in the hidden tool's row, and shows once (final review WLD-2); a timed notice ends
-   * where it was shown. `hide` removes the text here and in the last target routed to. The slow-frame, skipped,
-   * failure and context-loss notices never route (the overlay is disposed before the last two).
+   * under the opaque overlay nor in the hidden tool's row, and shows once (final review WLD-2); a timed notice moves
+   * too, for the time it has left, and ends `timeoutMs` after it was shown wherever it is then, so D11's "Backup saved
+   * as …" (6 s), shown in the tool's row, is still seen after the Watch-live close (SP5b spec D11). `hide` removes the
+   * text here and in the last target routed to. The slow-frame, skipped, failure and context-loss notices never route
+   * (the overlay is disposed before the last two).
    */
   route(target: Notices | null): void;
   /** Removes the notices and clears their timers. */
@@ -699,32 +701,41 @@ export function createWorldNotices(host: HTMLElement, reloader: Reloader): World
   let skippedShown = false;
   let failedShown = false;
   let disposed = false;
-  /** `show`'s notices by text, with their timeout. */
-  const byText = new Map<string, { readonly panel: HTMLElement; readonly timer: ReturnType<typeof setTimeout> | null }>();
+  /** `show`'s panels in `.world-notices`, by text (a timed one's timer is in `ends`). */
+  const byText = new Map<string, HTMLElement>();
   /**
    * The notices up that stay until their condition ends or the user dismisses them, by text, with what shows them
-   * again: each moves on a change of route (final review WLD-2). StoreFull's entry is `STORE_FULL_TEXT`.
+   * again: each moves on a change of route (final review WLD-2). StoreFull's entry is `STORE_FULL_TEXT`. A timed
+   * notice is one too, shown without its `timeoutMs`, while its timer in `ends` runs (SP5b spec D11).
    */
   const standing = new Map<string, NoticeOptions>();
+  /** The timed notices' timers, by text: each takes its notice down wherever it is then. */
+  const ends = new Map<string, ReturnType<typeof setTimeout>>();
+  /** Clears `text`'s timer in `ends`, if any. */
+  const endTimer = (text: string): void => {
+    const timer = ends.get(text);
+    if (timer === undefined) return;
+    ends.delete(text);
+    clearTimeout(timer);
+  };
   /** StoreFull's arguments while it stands, for its panel in `.world-notices`. */
   let fullArgs: { readonly lower: number | null; readonly apply: () => void } | null = null;
-  /** Removes `text`'s notice; with `panel`, only when it is still that one (a replaced notice's late timer or click). */
+  /** Removes `text`'s panel; with `panel`, only when it is still that one (a replaced notice's late click). */
   const hide = (text: string, panel: HTMLElement | null = null): void => {
-    const entry = byText.get(text);
-    if (entry === undefined || (panel !== null && entry.panel !== panel)) return;
+    const shown = byText.get(text);
+    if (shown === undefined || (panel !== null && shown !== panel)) return;
     byText.delete(text);
-    if (entry.timer !== null) clearTimeout(entry.timer);
-    entry.panel.remove();
+    shown.remove();
   };
   /** The user dismissed a standing notice (here or in the tool's row): it moves no more. */
   const dismissed = (text: string): void => {
     standing.delete(text);
+    endTimer(text);
     if (text === STORE_FULL_TEXT) fullArgs = null;
   };
-  /** Shows `text` in `.world-notices` (`show`'s panel). */
+  /** Shows the standing `text` in `.world-notices` (`show`'s panel); a click on one of its buttons dismisses it. */
   const showHere = (text: string, opts: NoticeOptions): void => {
     hide(text);
-    const stays = opts.timeoutMs === undefined;
     const panel = el('div', opts.kind === 'error' ? 'world-notice world-notice-error' : 'world-notice', `${text} `);
     for (const action of opts.actions ?? []) {
       const b = el('button', 'world-notice-dismiss', action.label);
@@ -732,7 +743,7 @@ export function createWorldNotices(host: HTMLElement, reloader: Reloader): World
       b.addEventListener('click', () => {
         try { action.run(); } finally {
           hide(text, panel);
-          if (stays) dismissed(text);
+          dismissed(text);
         }
       });
       panel.append(b, ' ');
@@ -742,11 +753,10 @@ export function createWorldNotices(host: HTMLElement, reloader: Reloader): World
     dismiss.title = 'Dismiss this notice';
     dismiss.addEventListener('click', () => {
       hide(text, panel);
-      if (stays) dismissed(text);
+      dismissed(text);
     });
     panel.append(dismiss);
-    const timer = stays ? null : setTimeout(() => hide(text, panel), opts.timeoutMs);
-    byText.set(text, { panel, timer });
+    byText.set(text, panel);
     box.append(panel);
   };
   /** StoreFull's panel in `.world-notices`, with its ids and its "Lower to RD n". */
@@ -781,17 +791,21 @@ export function createWorldNotices(host: HTMLElement, reloader: Reloader): World
   return {
     show(text, opts = {}) {
       if (disposed) return;
-      if (opts.timeoutMs === undefined) standing.set(text, opts);
-      else standing.delete(text);
-      if (target !== null) {
-        if (opts.timeoutMs === undefined) put(text, opts);
-        else target.show(text, opts);
-        return;
+      endTimer(text);
+      const { timeoutMs, ...shown } = opts;
+      standing.set(text, shown);
+      if (timeoutMs !== undefined) {
+        ends.set(text, setTimeout(() => {
+          ends.delete(text);
+          standing.delete(text);
+          takeDown(text, target);
+        }, timeoutMs));
       }
-      showHere(text, opts);
+      put(text, shown);
     },
     hide(text) {
       standing.delete(text);
+      endTimer(text);
       hide(text);
       lastTarget?.hide(text);
     },
@@ -854,6 +868,7 @@ export function createWorldNotices(host: HTMLElement, reloader: Reloader): World
     dispose() {
       disposed = true;
       standing.clear();
+      for (const text of [...ends.keys()]) endTimer(text);
       fullArgs = null;
       for (const text of [...byText.keys()]) hide(text);
       box.remove();
