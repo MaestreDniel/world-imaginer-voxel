@@ -109,7 +109,8 @@
  *     world's Export downloads `<name>.wiworld` (CDP's download behaviour, into the run's directory), Delete (confirmed
  *     in the notice row), Import with `DOM.setFileInputFiles` ("Imported '<name>'", a new id); the imported world opens
  *     with `worldHash()` equal; the file imported again and renamed "Older world" (for `modify`'s older-generator row);
- *     the next steps run on the imported world;
+ *     the file imported into a database of its own until Load world is taller than the window, which the wheel scrolls
+ *     and whose Back is reached (ruling R14); the next steps run on the imported world;
  *   - places (§3.7, D12, D13): flying, a map click 300 px east, a look through the pointer lock when granted; B, a name
  *     typed and the blue swatch, Enter → "Place saved"; M → the Places tab lists both places and the first one's dot is
  *     drawn 300 px west of the arrow; its ↗ teleports to its pose within 0.01 (`pose()`, yaw and pitch included);
@@ -1624,6 +1625,10 @@ async function runSmoke(t: Smoke): Promise<void> {
   const kv = await p.eval<string>(`document.querySelector('#selftest-kv').textContent`);
   const kvFailures = await p.eval<string[]>(`[...document.querySelectorAll('#selftest-kv + ul li')].map((li) => li.textContent)`);
   t.check(kvSelftestPassed(kv, KV_CONTRACT_CASES), `selftest: ${kv} (KV_CONTRACT holds ${KV_CONTRACT_CASES})`, [kv, ...kvFailures].join('; '));
+  // Ruling R14: the page, taller than the window with its goldens, scrolls under the wheel.
+  const tall = await p.eval<{ scroll: number; client: number }>(`(() => { const e = document.querySelector('.selftest-page'); return { scroll: e.scrollHeight, client: e.clientHeight }; })()`);
+  t.check(tall.scroll > tall.client && await wheelScrolls(p, '.selftest-page', VIEWPORT.width / 2, VIEWPORT.height / 2),
+    `selftest: the page (${tall.scroll} px in ${tall.client} px) scrolls under the wheel`, tall);
 
   t.step('load: ?map at seed 42, default profile, view (0, 0, 64 blocks/px)');
   await p.goto(`${p.base}?map#${mapHash(START)}`, MAP_READY);
@@ -3337,6 +3342,9 @@ async function blocksOnceLoaded(p: Page, vs: readonly Voxel[]): Promise<number[]
 async function menusChecks(t: Smoke): Promise<string | null> {
   const p = t.page;
   await p.goto(p.base, `document.getElementById('start-new') !== null`);
+  // Ruling R14: the start screen scrolls when its menu is taller than the window, and keeps its card centred when it fits.
+  const card = await p.eval<{ top: number; bottom: number; inner: number }>(`(() => { const r = document.getElementById('start-card').getBoundingClientRect(); return { top: r.top, bottom: r.bottom, inner: innerHeight }; })()`);
+  t.check(Math.abs((card.top + card.bottom) / 2 - card.inner / 2) <= 1, `menus: the start card is centred while it fits (${card.top.toFixed(0)}-${card.bottom.toFixed(0)} px of ${card.inner})`, card);
   await reviewShot(t, SP5B_SHOTS.start);
   await p.click('#start-new');
   await p.until(`document.getElementById('new-world')?.hidden === false`, 'menus: New world', 5000);
@@ -3649,13 +3657,70 @@ async function renameRow(t: Smoke, id: string, name: string, what: string): Prom
     `${what}: Rename to "${name}" (Enter) is listed`, 10_000, () => p.eval(`document.querySelector('${row}')?.textContent ?? null`));
 }
 
+/** Ruling R14's Load world list: a database of its own (the menu's `?enterBench=1&db=`), so the other steps' lists stay as they are. */
+const SCROLL_ROWS_DB = 'wi10-smoke-rows';
+/** At most this many imports to make Load world taller than the window. */
+const SCROLL_ROWS_MAX = 40;
+
+/**
+ * Sets `selector`'s scrollTop to 0 and turns the wheel once over (x, y): true when its scrollTop leaves 0 within 2 s, a
+ * user's scroll (a programmatic `scrollIntoView` also scrolls a box whose overflow is hidden; the wheel does not).
+ */
+async function wheelScrolls(p: Page, selector: string, x: number, y: number): Promise<boolean> {
+  const box = `document.querySelector(${JSON.stringify(selector)})`;
+  await p.eval(`void (${box}.scrollTop = 0)`);
+  await p.cdp.send('Input.dispatchMouseEvent', { type: 'mouseMoved', x, y, button: 'none', buttons: 0 });
+  await p.cdp.send('Input.dispatchMouseEvent', { type: 'mouseWheel', x, y, deltaX: 0, deltaY: 400 });
+  return (await polled(p, `${box}.scrollTop > 0`, 2000)) !== null;
+}
+
+/**
+ * Ruling R14: in `SCROLL_ROWS_DB`, `file` imported (up to `SCROLL_ROWS_MAX` times) until the start screen is taller than
+ * the window by 200 px; then its scrollHeight exceeds its clientHeight with Back below the fold, the wheel scrolls it,
+ * Back is in the window and on top after `scrollIntoView`, and a click on it returns to the start card.
+ */
+async function loadScrollChecks(t: Smoke, file: string): Promise<void> {
+  const p = t.page;
+  await p.goto(`${p.base}?enterBench=1&db=${SCROLL_ROWS_DB}`, `document.getElementById('start-load') !== null`);
+  await p.click('#start-load');
+  await p.until(`document.getElementById('load-world')?.hidden === false && document.querySelector('#load-list .world-row, #load-list .world-empty') !== null`,
+    'export/import: the Load world list of the scroll check', 10_000);
+  const screen = `document.getElementById('start-screen')`;
+  let rows = await p.eval<number>(`document.querySelectorAll('#load-list .world-row').length`);
+  while (rows < SCROLL_ROWS_MAX && !(await p.eval<boolean>(`${screen}.scrollHeight > ${screen}.clientHeight + 200`))) {
+    await pickImport(p, file);
+    await p.until(`document.querySelectorAll('#load-list .world-row').length === ${rows + 1}`, `export/import: import ${rows + 1} into ${SCROLL_ROWS_DB}`, 15_000);
+    rows++;
+  }
+  const m = await p.eval<{ scroll: number; client: number; backTop: number; inner: number }>(`(() => {
+    const s = ${screen};
+    s.scrollTop = 0;
+    return { scroll: s.scrollHeight, client: s.clientHeight, backTop: document.getElementById('load-back').getBoundingClientRect().top, inner: innerHeight };
+  })()`);
+  t.check(m.scroll > m.client && m.backTop >= m.inner,
+    `export/import: Load world with ${rows} rows is taller than the window (scrollHeight ${m.scroll} > clientHeight ${m.client}, Back at ${m.backTop.toFixed(0)} px of ${m.inner})`, m);
+  t.check(await wheelScrolls(p, '#start-screen', VIEWPORT.width / 2, VIEWPORT.height / 2), 'export/import: the wheel scrolls the Load world screen',
+    await p.eval(`getComputedStyle(${screen}).overflowY`));
+  const back = await p.eval<{ top: number; bottom: number; inner: number; onTop: boolean }>(`(() => {
+    const b = document.getElementById('load-back');
+    b.scrollIntoView({ block: 'nearest' });
+    const r = b.getBoundingClientRect();
+    return { top: r.top, bottom: r.bottom, inner: innerHeight, onTop: document.elementFromPoint(r.left + r.width / 2, r.top + r.height / 2) === b };
+  })()`);
+  t.check(back.top >= 0 && back.bottom <= back.inner && back.onTop, `export/import: after scrollIntoView, Back is in the window (${back.top.toFixed(0)}-${back.bottom.toFixed(0)} px of ${back.inner}) and on top`, back);
+  await p.click('#load-back');
+  await holds(t, `document.getElementById('start-card')?.hidden === false && document.getElementById('load-world')?.hidden === true`,
+    'export/import: Back, reached by scrolling, returns to the start card', 5000, () => p.eval(START_READ));
+}
+
 /**
  * `export/import` (spec §6.5, §2.4, D15): the world reopened with the hook and its clock paused (T to "paused", so that
  * leaving it saves nothing more), `flushNow()`, then `worldHash()`; on the Load world list, Export downloads
  * `<name>.wiworld` (CDP's download behaviour, into the run's temp directory), Delete (confirmed in the notice row) takes
  * the world off the list, and Import with `DOM.setFileInputFiles` says "Imported '<name>'" and lists it under a new id;
  * that world opens with `worldHash()` equal. A second import of the same file, renamed `OLDER_WORLD`, is the world
- * `modify` marks as from an older generator (ruling P50: no tab holds it). The two imports' ids, or null.
+ * `modify` marks as from an older generator (ruling P50: no tab holds it); then `loadScrollChecks` (ruling R14). The
+ * two imports' ids, or null.
  */
 async function exportImportChecks(t: Smoke, id: string): Promise<{ readonly imported: string; readonly older: string | null } | null> {
   const p = t.page;
@@ -3708,6 +3773,12 @@ async function exportImportChecks(t: Smoke, id: string): Promise<{ readonly impo
   // The Load list shot's older-generator row: the same file imported again, renamed.
   let older = await importOnce('export/import: a second Import of the file lists another world', [id, imported]);
   if (older !== null && !(await renameRow(t, older, OLDER_WORLD, 'export/import: the second import'))) older = null;
+
+  try {
+    await loadScrollChecks(t, file);
+  } catch (e) {
+    t.check(false, `export/import: the Load world scroll check stopped: ${e instanceof Error ? e.message : String(e)}`);
+  }
 
   if (!(await openSaved(t, 'export/import: the imported world', imported))) return { imported, older };
   const back = await p.eval<string>('__wiTest.worldHash()');

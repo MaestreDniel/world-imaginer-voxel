@@ -77,7 +77,8 @@ export async function mountKvSection(
 export function mountSelftestPage(root: HTMLElement): void {
   const expected = (goldens as unknown as { entries: Record<string, string> }).entries;
   const page = document.createElement('div');
-  page.style.cssText = 'font: 13px ui-monospace, monospace; color: #ddd; background: #1b1d22; min-height: 100vh; padding: 12px;';
+  page.className = 'selftest-page';
+  page.style.cssText = 'font: 13px ui-monospace, monospace; color: #ddd; background: #1b1d22; padding: 12px;';
   const title = document.createElement('h2');
   title.textContent = 'world-imaginer-voxel · selftest';
   const summary = document.createElement('div');
