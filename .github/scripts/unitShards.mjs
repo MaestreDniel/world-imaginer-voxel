@@ -12,11 +12,14 @@ const DIR = 'test/unit';
 
 /**
  * Shard name → its files; `rest` is the catch-all. Measured in CI run 39950653330: the ten 202 s of the 412 s summed,
- * rest (209 files) 210 s; rebalance by the job summaries (`slowest.mjs`).
+ * rest (209 files) 210 s; rebalance by the job summaries (`slowest.mjs`). CI run 41132868697 (SP5b): `unit (rest)` 164 s
+ * (vitest 149 s; its 265 files 355 s summed), `unit (heavy)` 67 s (54 s; 146 s summed), so the five slowest of rest
+ * moved to heavy (relight 59.6 s, zeroAlloc 21.1, terrainStage 11.1, terrainHeap 10.9, modifyMode 10.1; 113 s summed),
+ * about 240 and 260 s summed, both jobs near 110-120 s (final review GOV-8).
  */
 export const SHARDS = {
   heavy: ['sliceJob', 'floatingRules', 'workerPool', 'treeMutator', 'reviewSlices', 'columnStage', 'tile', 'fieldSlice',
-    'splineFixtures', 'surfaceProbe'].map((n) => `${DIR}/${n}.test.ts`),
+    'splineFixtures', 'surfaceProbe', 'relight', 'zeroAlloc', 'terrainStage', 'terrainHeap', 'modifyMode'].map((n) => `${DIR}/${n}.test.ts`),
   rest: null,
 };
 
