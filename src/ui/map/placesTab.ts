@@ -133,6 +133,8 @@ export function mountPlacesTab(host: HTMLElement, o: PlacesTabOptions): { dispos
       render();
     };
     name.addEventListener('keydown', (ev) => {
+      // A key that commits or cancels an IME composition belongs to the composition (PAGE-4).
+      if (ev.isComposing) return;
       if (ev.key === 'Enter') {
         ev.preventDefault();
         save();

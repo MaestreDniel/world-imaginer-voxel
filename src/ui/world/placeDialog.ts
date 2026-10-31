@@ -83,10 +83,15 @@ export function mountPlaceDialog(host: HTMLElement, o: { requestLock(): void; on
   cancelButton.addEventListener('click', () => finish(false));
 
   const onKeyDown = (e: KeyboardEvent): void => {
+    // A key that commits or cancels an IME composition belongs to the composition (PAGE-4).
+    if (e.isComposing) return;
     if (e.code === 'Escape' || e.key === 'Escape') {
       e.preventDefault();
       finish(false);
     } else if (e.code === 'Enter' || e.code === 'NumpadEnter' || e.key === 'Enter') {
+      // Enter on a focused Cancel or swatch is that button's own click (PAGE-4); elsewhere it is Save.
+      const focused = document.activeElement;
+      if (focused !== null && focused !== saveButton && focused.tagName === 'BUTTON' && panel.contains(focused)) return;
       e.preventDefault();
       finish(true);
     }

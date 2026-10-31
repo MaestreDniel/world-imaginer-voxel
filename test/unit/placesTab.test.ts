@@ -60,6 +60,21 @@ describe('mountPlacesTab: the map\'s Places tab in a saved world (SP5b spec §3.
   };
   const swatches = (row: FakeElement): FakeElement[] => row.querySelectorAll('button').filter((b) => b.classList.contains('place-swatch'));
 
+  test('Enter or Esc during IME composition in the name field is left to the composition: nothing saved or cancelled (PAGE-4)', () => {
+    const s = setup();
+    buttonOf(rows()[0]!, 'place-edit').click();
+    const name = partOf(rows()[0]!, 'place-edit-name');
+    name.value = '大峡谷';
+    // Safari can report key 'Enter' for the composition-commit Enter; `isComposing` is set in every engine.
+    for (const k of ['Enter', 'Escape']) {
+      const e = Object.assign(new Event('keydown', { cancelable: true }), { key: k, code: k, isComposing: true });
+      partOf(rows()[0]!, 'place-edit-name').dispatchEvent(e);
+      expect(e.defaultPrevented).toBe(false);
+    }
+    expect(s.places.list[0]).toEqual(saved[0]);
+    expect(partOf(rows()[0]!, 'place-edit-name').value).toBe('大峡谷');
+  });
+
   test('lists in saved order; ↗ teleports with the exact pose; ✎ edits name and colour; 🗑 deletes with `Deleted \'name\'`; `+ Add at the pin` disabled until a pin is set; a failed landing opens no dialog', () => {
     const s = setup();
     // The places in the order saved, each "● name" with the dot in its colour, and ↗ ✎ 🗑.

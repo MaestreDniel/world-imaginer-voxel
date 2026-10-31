@@ -75,6 +75,32 @@ describe('mountPlaceDialog: B\'s "Save place" (SP5b spec §3.7, D12)', () => {
     expect(dom.document.activeElement).toBe(dom.body);
   });
 
+  test('Enter with Cancel or a swatch focused is left to that button (nothing saved by the dialog); Enter or Esc during IME composition is left to the composition (PAGE-4)', () => {
+    const { dialog } = mount();
+    const save = vi.fn<(name: string, colour: number) => void>();
+    dialog.open('Place 1 (0, 70, 0)', save);
+    // A keyboard user tabs to Cancel and presses Enter: the button's own activation runs, not Save.
+    dom.el('place-cancel').focus();
+    expect(key('Enter', 'Enter').defaultPrevented).toBe(false);
+    expect([save.mock.calls.length, dialog.isOpen]).toEqual([0, true]);
+    swatches()[3]!.focus();
+    expect(key('Enter', 'Enter').defaultPrevented).toBe(false);
+    expect([save.mock.calls.length, dialog.isOpen]).toEqual([0, true]);
+    // A CJK user commits a composed name with Enter (Chrome and Firefox: code 'Enter', key 'Process', isComposing).
+    dom.el('place-name').focus();
+    dom.el('place-name').value = '基地';
+    for (const [code, k] of [['Enter', 'Process'], ['Escape', 'Escape']] as const) {
+      const e = Object.assign(new Event('keydown', { cancelable: true }), { code, key: k, repeat: false, isComposing: true });
+      dom.document.dispatchEvent(e);
+      expect(e.defaultPrevented).toBe(false);
+    }
+    expect([save.mock.calls.length, dialog.isOpen]).toEqual([0, true]);
+    // Enter with the Save button or the name field focused saves.
+    dom.el('place-save').focus();
+    expect(key('Enter', 'Enter').defaultPrevented).toBe(true);
+    expect(save.mock.calls).toEqual([['基地', 0]]);
+  });
+
   test('Save and Cancel are buttons: Save keeps the name and colour, Cancel saves nothing; both take the mouse back', () => {
     const { dialog, requestLock } = mount();
     const save = vi.fn<(name: string, colour: number) => void>();
