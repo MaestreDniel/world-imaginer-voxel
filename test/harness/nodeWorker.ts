@@ -15,6 +15,12 @@
  * and then drains. The wrapper runs `const r = h.handle(m, post); if (r !== undefined) post(r);`, so a task handler,
  * whose synchronous `handle` returns its reply and ignores `post`, works unchanged, and the sim's handler, which returns
  * nothing, posts each reply through `post`, at once or when its transaction settles.
+ * With `renew` (SP5b spec §6.3's `load` → `flush` → `load`), the wrapper also answers a harness-only `{ type: '__renew' }`,
+ * which never reaches the handler: once `h.drain()` returns 0 it replaces the handler with a new `factory()` and answers
+ * `{ type: 'renewed', ok: true }`; while limbo entries are left it answers `{ type: 'renewed', ok: false }` and keeps the
+ * handler, so no retired slot is left behind in the old handler's limbo (the caller retries after `retryMs`). Module
+ * state of the entry survives (`createMemorySimHandler`'s `MemoryKV` per database), so the new handler finds the world
+ * the old one flushed. A caller renews only with no request outstanding.
  */
 import { existsSync, mkdirSync, writeFileSync } from 'node:fs';
 import { basename } from 'node:path';
@@ -53,6 +59,8 @@ export interface NodeWorkerOptions {
   /** The limbo retry interval in ms while entries are left (default `LIMBO_RETRY_MS`). */
   readonly retryMs?: number;
   readonly stamp?: boolean;
+  /** Adds the `__renew` message, answered `renewed` (see the module comment). */
+  readonly renew?: boolean;
 }
 
 /**
@@ -78,7 +86,7 @@ export async function buildNodeTaskWorker(dir: string, opts: NodeWorkerOptions =
   writeFileSync(`${out}node-worker.mjs`, [
     "import { parentPort } from 'node:worker_threads';",
     `import { ${factory} } from './${bundle}';`,
-    `const h = ${factory}();`,
+    `${opts.renew === true ? 'let' : 'const'} h = ${factory}();`,
     // drainAfterReply (src/workers/taskHandler.ts): drain now, then every retryMs while entries are left, one timer at a time.
     'let retrying = false;',
     `const retry = () => { if ((h.drain?.() ?? 0) > 0) setTimeout(retry, ${retryMs}); else retrying = false; };`,
@@ -87,7 +95,17 @@ export async function buildNodeTaskWorker(dir: string, opts: NodeWorkerOptions =
       ? 'const post = (r) => { const handledAt = Number(process.hrtime.bigint()) / 1e6; parentPort.postMessage({ ...r.msg, handledAt }, r.transfer); drainAfterReply(); };'
       : 'const post = (r) => { parentPort.postMessage(r.msg, r.transfer); drainAfterReply(); };',
     // A synchronous handler returns its reply; the sim's handler returns nothing and posts through `post` (SP5b D18).
-    "parentPort.on('message', (m) => { const r = h.handle(m, post); if (r !== undefined) post(r); });",
+    opts.renew === true
+      ? [
+        "parentPort.on('message', (m) => {",
+        "  if (m !== null && typeof m === 'object' && m.type === '__renew') {",
+        "    if ((h.drain?.() ?? 0) > 0) { parentPort.postMessage({ type: 'renewed', ok: false }); return; }",
+        `    h = ${factory}(); parentPort.postMessage({ type: 'renewed', ok: true }); return;`,
+        '  }',
+        '  const r = h.handle(m, post); if (r !== undefined) post(r);',
+        '});',
+      ].join('\n')
+      : "parentPort.on('message', (m) => { const r = h.handle(m, post); if (r !== undefined) post(r); });",
   ].join('\n'));
   return `${out}node-worker.mjs`;
 }

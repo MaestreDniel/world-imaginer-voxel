@@ -1,7 +1,10 @@
+import { readFileSync } from 'node:fs';
 import { Worker } from 'node:worker_threads';
 import { describe, expect, test } from 'vitest';
+import { todayStateTable } from '../../src/persist/saves';
+import { SIM_DRAIN_MS } from '../../src/workers/simHandler';
 import { integerEnv } from '../harness/env';
-import { ask } from '../harness/nodeWorker';
+import { ask, buildNodeTaskWorker } from '../harness/nodeWorker';
 
 /**
  * SP3a §10's harness minors, carried by SP3b (spec §7): one shared `ask()` for every worker-thread test (the slab
@@ -33,6 +36,42 @@ describe('ask (test/harness/nodeWorker.ts)', () => {
     const w = worker("parentPort.once('message', () => { throw new Error('boom'); });");
     await expect(ask(w, 1)).rejects.toThrow(/boom/);
     await w.terminate();
+  });
+});
+
+describe('buildNodeTaskWorker (test/harness/nodeWorker.ts)', () => {
+  const sim = (dir: string, renew: boolean) =>
+    buildNodeTaskWorker(dir, { entry: 'src/workers/simHandler.ts', factory: 'createMemorySimHandler', retryMs: SIM_DRAIN_MS, renew });
+  const load = (id: number) => ({
+    type: 'load', id, db: 'harness-renew', worldId: 'w', flushSeq: 0, genKey: '0123456789abcdef', updated: 1, stateTable: todayStateTable(), rewrite: null,
+  });
+
+  test('`renew` adds the `__renew` branch to the wrapper (with `let h` and the drain check); without it the message reaches the handler (BAD_MESSAGE)', async () => {
+    const [renewing, plain] = await Promise.all([sim('harnessHelpers-renew', true), sim('harnessHelpers-plain', false)]);
+    const text = readFileSync(renewing, 'utf8');
+    expect(text).toContain('let h = createMemorySimHandler();');
+    expect(text).toContain("m.type === '__renew'");
+    expect(text).toContain("if ((h.drain?.() ?? 0) > 0) { parentPort.postMessage({ type: 'renewed', ok: false }); return; }");
+    expect(text).toContain("h = createMemorySimHandler(); parentPort.postMessage({ type: 'renewed', ok: true }); return;");
+    expect(readFileSync(plain, 'utf8')).not.toContain('__renew');
+    expect(readFileSync(plain, 'utf8')).toContain('const h = createMemorySimHandler();');
+
+    // The renewed handler is a new one: its `load` is the first again (a second `load` on one handler is BAD_MESSAGE).
+    const w = new Worker(renewing);
+    try {
+      expect(await ask(w, load(1))).toMatchObject({ type: 'loaded', id: 1 });
+      expect(await ask(w, load(2))).toMatchObject({ type: 'error', jobId: 2, code: 'BAD_MESSAGE' });
+      expect(await ask(w, { type: '__renew' })).toEqual({ type: 'renewed', ok: true });
+      expect(await ask(w, load(3))).toMatchObject({ type: 'loaded', id: 3 });
+    } finally {
+      await w.terminate();
+    }
+    const p = new Worker(plain);
+    try {
+      expect(await ask(p, { type: '__renew' })).toMatchObject({ type: 'error', code: 'BAD_MESSAGE' });
+    } finally {
+      await p.terminate();
+    }
   });
 });
 

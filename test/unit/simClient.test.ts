@@ -206,6 +206,28 @@ describe('the sim client (SP5a spec §2.1, §2.5)', () => {
     expect(sim.failed).toBe(false);
   });
 
+  test('a `load` resets the history base: the next flush posts its history whole, as a renewed sim holds none (rulings R9)', async () => {
+    const w = fakeSim();
+    const sim = createSimClient(() => w, { onFailure: () => { throw new Error('no failure expected'); } });
+    const step = (x: number): HistoryRecord['done'][number] => ({ edits: [{ x, y: 70, z: 0, before: 0xFFFFFFFF, after: 1 << 8 }] });
+    const [a, b] = [step(1), step(2)];
+    const h1: HistoryRecord = { worldId: 'w1', done: [a], undone: [] };
+    void sim.flush(state, h1);
+    w.reply(flushedReply(lastId(w), true));
+    const loaded = sim.load(loadArgs);
+    w.reply(loadedReply(lastId(w), []));
+    await loaded;
+    const h2: HistoryRecord = { worldId: 'w1', done: [a, b], undone: [] };
+    void sim.flush(state, h2);
+    expect(w.posted.at(-1)!['history']).toBe(h2);
+    w.reply(flushedReply(lastId(w), true));
+    // The base is h2 again from here: a later history sharing its steps posts as a change.
+    void sim.flush(state, { worldId: 'w1', done: [a, b, step(3)], undone: [] });
+    expect(w.posted.at(-1)!['history']).toMatchObject({ done: { from: 0, keep: 2 } });
+    await flush();
+    expect(sim.failed).toBe(false);
+  });
+
   test('a pending `flush` rejects `SimFailed` when the sim fails; a `flush` on a disposed client rejects at once', async () => {
     const w = fakeSim();
     let failures = 0;

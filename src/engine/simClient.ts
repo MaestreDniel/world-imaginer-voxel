@@ -7,10 +7,10 @@
  * `loaded` reply's `entryCols` became the whole entry set, so the read-through sees every saved edit from the first D.
  * `flush` (SP5b spec §3.2) posts the state and history and resolves with the sim's `flushed`, committed or not (a KV
  * failure is a result, not the sim's); a history that keeps steps of the last one posted goes as its change against it
- * (`historyChange`, D28's third lever), which the sim resolves to the same record. `record` posts the world's changed
- * record, which has no reply. `backup` (SP5b spec §3.6) posts the copy request with the whole history (it moves no
- * change base) and resolves with `backedUp`, ok or not; `hasAnyEntries` tells the backup rule whether the world has any
- * placed or removed block.
+ * (`historyChange`, D28's third lever), which the sim resolves to the same record; a `load` clears that base (the
+ * handler that answers it holds none). `record` posts the world's changed record, which has no reply. `backup` (SP5b
+ * spec §3.6) posts the copy request with the whole history (it moves no change base) and resolves with `backedUp`, ok
+ * or not; `hasAnyEntries` tells the backup rule whether the world has any placed or removed block.
  *
  * **The sim's failure** (§2.1): an `error` event, an `error` reply of any code, or a reply the guard refuses
  * (`parseFromSim`, or one that does not answer a pending request of its kind, its batch's length or its column). In
@@ -196,6 +196,8 @@ export function createSimClient(spawn: () => SimWorkerLike, o: { onFailure(e: Er
     load(m) {
       if (closed) return Promise.reject(new SimFailed('the sim failed or was disposed'));
       const id = nextId++;
+      // The sim that answers holds no history yet (a `load` is a handler's first world): the next one posts whole.
+      historyBase = null;
       return new Promise<LoadedMsg>((resolve, reject) => {
         post({ type: 'load', id, ...m });
         pending.set(id, { kind: 'load', resolve, reject });

@@ -19,14 +19,18 @@
  * every kind (stone, glass, ice, torch, wall torch, ladder, waterlogged ladder, water, lava, breaks; a quarter on a
  * column border; the first one's stone broken again by the 46th, which leaves no entry, rulings R27) after the fill;
  * a terrain Apply (`density.detailAmpHi` 4.0), with the same entries; undo of all 50 through the block history, after
- * which the DiffStore is empty and the window equals `genRegion` on the Apply's params with no diff; and, after one
- * more edit answered while a main-thread read section holds its retired slots in thread 15's limbo (freed by the sim's
- * own retries once the section closes), the sim stopped before the world (rulings R35), then everything unloaded and
- * the limbo drained, every pool slot is free.
+ * which the DiffStore is empty and the window equals `genRegion` on the Apply's params with no diff; a saved world's
+ * round trip through the sim's worker (SP5b spec §6.3): `load` of an empty world, 20 edits, a `flush`, the handler
+ * renewed in the same worker (the wrapper's harness-only `__renew`, `renew: true`, over the same in-worker `MemoryKV`),
+ * `attach` and `load` again, which give back the same entries, then one more edit and a `flush` of a history that shares
+ * the first one's steps (the client posts it whole after its `load`, rulings R9); and, after one more edit answered
+ * while a main-thread read section holds its retired slots in thread 15's limbo (freed by the sim's own retries once the
+ * section closes), the sim stopped before the world (rulings R35), then everything unloaded and the limbo drained, every
+ * pool slot is free.
  */
 import { Worker } from 'node:worker_threads';
 import { afterAll, beforeAll, describe, expect, test } from 'vitest';
-import { colKey } from '../../src/core/coords';
+import { colKey, colKeyCx, colKeyCz } from '../../src/core/coords';
 import type { Params } from '../../src/core/params/schema';
 import {
   createCoordinator, createCoordinatorCounts, worldJobsOf, type Coordinator, type CoordinatorJobs, type StreamCamera,
@@ -37,13 +41,14 @@ import { createSimClient, type SimClient, type SimWorkerLike } from '../../src/e
 import { createThrottle } from '../../src/engine/throttle';
 import { createWorkerPool, type WorkerLike, type WorkerPool } from '../../src/engine/workerPool';
 import { payloadProblem } from '../../src/mesh/column';
+import { todayStateTable, type HistoryRecord, type StateRecord } from '../../src/persist/saves';
 import { DEFAULT_MAP_STATE, openMapSession } from '../../src/ui/map/mapState';
 import { createPreviewDriver, createReplayingCanvas, draftOf, type DriverClock, type PreviewDriver } from '../../src/ui/map/previewDriver';
 import { createApplyControl, createEpochs, updateAuxPolicy, type ApplyControl } from '../../src/ui/world/applyControl';
 import { createActionPost, createBlockHistory, type BlockHistory } from '../../src/ui/world/blockHistory';
 import { createEditLatency } from '../../src/ui/world/editLatency';
 import { createEditPath, type EditOutcome, type EditPath } from '../../src/ui/world/editPath';
-import type { Edit } from '../../src/workers/protocol';
+import type { Edit, FlushedMsg } from '../../src/workers/protocol';
 import { SIM_DRAIN_MS } from '../../src/workers/simHandler';
 import { LAVA_SOURCE, NO_FLUID, WATER_SOURCE } from '../../src/world/blocks/fluid';
 import { AIR, GLASS, ICE, REGISTRY, STONE, TORCH } from '../../src/world/blocks/index';
@@ -81,20 +86,56 @@ const LADDERS = facings('ladder');
 const threads: Worker[] = [];
 let poolScript = '';
 let simScript = '';
+/** The sim's raw thread, which the round trip's `__renew` goes to. */
+let simThread: Worker | null = null;
+/** The round trip's `__renew` waiting for its `renewed`. */
+let renewWait: ((ok: boolean) => void) | null = null;
 
-/** A worker_threads Worker behind the browser Worker's surface (the pool's `WorkerLike`, the sim's `SimWorkerLike`). */
-function spawnNode(script: string): WorkerLike & SimWorkerLike {
+/**
+ * A worker_threads Worker behind the browser Worker's surface (the pool's `WorkerLike`, the sim's `SimWorkerLike`),
+ * with the raw `Worker` as `raw`. A `renewed` (the reply to the harness-only `__renew`) settles the round trip's wait
+ * and is not forwarded: the client's guard would refuse its type and fail the sim.
+ */
+function spawnNode(script: string): WorkerLike & SimWorkerLike & { readonly raw: Worker } {
   const w = new Worker(script);
   threads.push(w);
-  const like: WorkerLike & SimWorkerLike = {
+  const like: WorkerLike & SimWorkerLike & { readonly raw: Worker } = {
     postMessage: (msg, transfer) => { w.postMessage(msg, transfer as never); },
     onmessage: null,
     onerror: null,
     terminate: () => { void w.terminate(); },
+    raw: w,
   };
-  w.on('message', (data: unknown) => like.onmessage?.({ data }));
+  w.on('message', (data: unknown) => {
+    if (typeof data === 'object' && data !== null && (data as { type?: unknown }).type === 'renewed') {
+      const wait = renewWait;
+      renewWait = null;
+      if (wait === null) problems.push('a `renewed` with no `__renew` waiting');
+      else wait((data as { ok?: unknown }).ok === true);
+      return;
+    }
+    like.onmessage?.({ data });
+  });
   w.on('error', (e: unknown) => like.onerror?.(e));
   return like;
+}
+
+/**
+ * Renews the sim's handler in its worker (`__renew`), retrying every `SIM_DRAIN_MS` while its limbo holds entries;
+ * the caller has nothing outstanding and runs no frame until the client's `attach` and `load` are posted.
+ */
+async function renewSim(): Promise<void> {
+  const w = simThread;
+  if (w === null) throw new Error('no sim thread');
+  for (let attempt = 0; attempt < 50; attempt++) {
+    const ok = await new Promise<boolean>((resolve) => {
+      renewWait = resolve;
+      w.postMessage({ type: '__renew' });
+    });
+    if (ok) return;
+    await new Promise((r) => setTimeout(r, SIM_DRAIN_MS));
+  }
+  throw new Error('the sim\'s limbo did not drain for the renew');
 }
 
 /** The driver's clock on real time (the watchdog's timers by id). */
@@ -268,7 +309,7 @@ function clean(what: string): void {
 beforeAll(async () => {
   [poolScript, simScript] = await Promise.all([
     buildNodeTaskWorker('edit'),
-    buildNodeTaskWorker('edit-sim', { entry: 'src/workers/simHandler.ts', factory: 'createMemorySimHandler', retryMs: SIM_DRAIN_MS }),
+    buildNodeTaskWorker('edit-sim', { entry: 'src/workers/simHandler.ts', factory: 'createMemorySimHandler', retryMs: SIM_DRAIN_MS, renew: true }),
   ]);
   const store = createStore({ shared: true, maxBlockBytes: 256 * MiB, maxByteBytes: 256 * MiB });
   const pool = createWorkerPool(2, () => spawnNode(poolScript), { epochCells: store.epochs.cells, onWorkerDead: (t) => store.markDead(t) });
@@ -277,7 +318,11 @@ beforeAll(async () => {
   const session = openMapSession(DEFAULT_MAP_STATE, () => [1, 2]);
   const firstReady = await pool.configure(session.state.seedText, session.state.params);
   // The sim on its own thread, thread 15 of the store (spec §2.1); its failure ends the run.
-  const sim = createSimClient(() => spawnNode(simScript), { onFailure(e) { simFailure = e; } });
+  const sim = createSimClient(() => {
+    const s = spawnNode(simScript);
+    simThread = s.raw;
+    return s;
+  }, { onFailure(e) { simFailure = e; } });
   await sim.attach(store.handles());
   // D reads the sim's entries through (spec §2.5), as the page's `worldJobsOf(workers, simClient)`.
   const inner = worldJobsOf(pool, sim);
@@ -475,6 +520,81 @@ describe('edits on the real store equal genRegion with the same entries (SP5a sp
     }
     expect(windowHash()).toBe(await expected(w.session.state.params, undefined));
     clean('the undos');
+  });
+
+  test('a saved world\'s load, flush and load round trip through the sim\'s Node worker: the same entries back (SP5b spec §6.3)', async () => {
+    const w = W();
+    const epoch = applies.at(-1)!.epoch;
+    const UPDATED = 1_700_000_000_000;
+    const noticesBefore = notices.length;
+    // The header genKey of the columns the sim writes: the first draft's (16 hex digits).
+    const load = { db: 'edit-roundtrip', worldId: 'rt', genKey: w.firstReady.genKey, stateTable: todayStateTable(), rewrite: null } as const;
+    const state = (flushSeq: number): StateRecord => ({
+      worldId: 'rt', flushSeq, updated: UPDATED, player: null, time: { t: 0.25, speedIndex: 0 }, hotbar: { v: 1, active: 0, slots: [] }, places: [],
+    });
+    const empty = await settle(w.sim.load({ ...load, flushSeq: 0, updated: 0 }), 'the empty world\'s load');
+    expect([...empty.entryCols], 'an empty world').toEqual([]);
+
+    // 20 stones, one in each column of cx -2..2 × cz -2..1, into the first air above the surface (never (8, 8), the
+    // last case's voxel), one posted per frame.
+    const outcomes: Array<Promise<EditOutcome>> = [];
+    const placed: Array<{ readonly x: number; readonly y: number; readonly z: number }> = [];
+    for (let i = 0; i < 20; i++) {
+      const x = 16 * (-2 + (i % 5)) + ((3 * i + 1) % 16);
+      const z = 16 * (-2 + Math.floor(i / 5)) + ((5 * i + 2) % 16);
+      const y = Math.min(319, reading((s) => s.heightAt('worldSurface', x, z))!);
+      placed.push({ x, y, z });
+      outcomes.push(w.editPath.post([{ x, y, z, op: 'set', value: val(STONE), expect: valueAt(x, y, z) }]));
+      await frame();
+    }
+    const results = await settle(Promise.all(outcomes), 'the 20 edits\' replies');
+    expect(results.filter((o) => !o.ok), 'refused edits').toEqual([]);
+    await until(() => !w.editPath.pending() && inFlight === 0 && settledAt(epoch), SETTLE_MS, 'the 20 edits settled');
+    const cols = [...new Set(placed.map((p) => colKey(p.x >> 4, p.z >> 4)))].sort((a, b) => a - b);
+    expect(cols.length, 'one column per edit').toBe(20);
+    const before = await simEntries();
+    expect(before.lines.length, 'one entry per edit').toBe(20);
+    expect([...before.diff.keys()].sort((a, b) => a - b)).toEqual(cols);
+
+    // The history the page keeps: one step per edit, its objects kept by the next history (D28's third lever).
+    const steps = results.map((o, k) => {
+      const r = o as Extract<EditOutcome, { ok: true }>;
+      return { edits: [{ ...placed[k]!, before: r.prev[0]!, after: r.next[0]! }] };
+    });
+    const h1: HistoryRecord = { worldId: 'rt', done: steps, undone: [] };
+    const first = await settle(w.sim.flush(state(0), h1), 'the first flush');
+    expect(first, 'the first flush').toMatchObject({ type: 'flushed', ok: true, flushSeq: 1 });
+    // The earlier cases' columns, edited before this load and undone, are still dirty: the flush deletes their keys too.
+    expect((first as Extract<FlushedMsg, { ok: true }>).columns, 'the flushed columns').toBeGreaterThanOrEqual(20);
+
+    // A new handler in the same worker, over the same MemoryKV; no frame runs until its `attach` and `load` are posted,
+    // so no `diff` reaches it before the load.
+    await renewSim();
+    const attached = w.sim.attach(w.store.handles());
+    const loaded = w.sim.load({ ...load, flushSeq: 1, updated: UPDATED });
+    await settle(attached, 'the attach after the renew');
+    const again = await settle(loaded, 'the load after the renew');
+    expect([...again.entryCols].sort((a, b) => a - b), 'the loaded columns are the 20 edits\'').toEqual(cols);
+    expect([again.entries, again.unknownStates, again.skippedColumns]).toEqual([20, 0, 0]);
+    const after = await simEntries();
+    expect([...after.diff.keys()].sort((a, b) => a - b)).toEqual(cols);
+    for (const k of cols) expect(after.diff.get(k), `column ${k}'s diff`).toEqual(before.diff.get(k));
+    expect(after.lines).toEqual(before.lines);
+    for (const k of cols) expect(w.sim.hasEntries(colKeyCx(k), colKeyCz(k)), `column ${k} has entries`).toBe(true);
+
+    // The renewed handler edits and flushes: the client posts the history whole after its `load` (rulings R9).
+    const x = 16 * 2 + 9;
+    const z = 16 * 1 + 9;
+    const y = Math.min(319, reading((s) => s.heightAt('worldSurface', x, z))!);
+    const out = await settle(w.editPath.post([{ x, y, z, op: 'set', value: val(GLASS), expect: valueAt(x, y, z) }]), 'the edit after the renew');
+    expect(out.ok, 'the edit after the renew').toBe(true);
+    const r = out as Extract<EditOutcome, { ok: true }>;
+    await until(() => !w.editPath.pending() && inFlight === 0 && settledAt(epoch), SETTLE_MS, 'the edit after the renew settled');
+    const h2: HistoryRecord = { worldId: 'rt', done: [...steps, { edits: [{ x, y, z, before: r.prev[0]!, after: r.next[0]! }] }], undone: [] };
+    const second = await settle(w.sim.flush(state(0), h2), 'the flush after the renew');
+    expect(second, 'the flush after the renew').toMatchObject({ type: 'flushed', ok: true, flushSeq: 2, columns: 1 });
+    expect(notices.slice(noticesBefore), 'notices').toEqual([]);
+    clean('the round trip');
   });
 
   test('after unloading everything and draining the limbo, every pool slot is free', async () => {
