@@ -1665,7 +1665,7 @@ describe('the enter bench `?bench=enter` (SP5b spec §6.2, D28; plan)', () => {
     const store = new Map<string, string>();
     const storage = { getItem: (k: string) => store.get(k) ?? null, setItem: (k: string, v: string) => { store.set(k, v); } };
     const visited: string[] = [ENTER_AUTO_SETUP_PATH];
-    const io = { storage, assign: (url: string) => { visited.push(url); } };
+    const io = { storage, assign: (url: string) => { visited.push(url); }, here: () => visited[visited.length - 1]! };
     // Without the setup's state nothing navigates (a world load with `enterBench=1&auto=1` opened by hand).
     expect(enterAutoRecorded(io, loadOf(100, false))).toBe(false);
     expect(visited).toEqual(['/?bench=enter&auto=1']);
@@ -1704,6 +1704,36 @@ describe('the enter bench `?bench=enter` (SP5b spec §6.2, D28; plan)', () => {
     expect(json).toMatchObject({ ...fromTool, measuredBy: 'bench=enter&auto=1', userAgent: 'Mozilla/5.0 Firefox/130.0' });
     expect([gpuOfRenderer('ANGLE (Intel, Mesa Intel(R) Iris(R) Xe Graphics (ADL GT2), OpenGL 4.6)'), gpuOfRenderer('NVIDIA GeForce RTX 3060 Laptop GPU/PCIe/SSE2'), gpuOfRenderer('llvmpipe')])
       .toEqual(['iris', 'rtx', 'unknown']);
+  });
+
+  test('a load revealed on a page that is not the step\'s (an F5 or Back after its record, a duplicated tab) is not recorded, and the step\'s page is loaded instead (final review GOV-6)', () => {
+    const store = new Map<string, string>();
+    const storage = { getItem: (k: string) => store.get(k) ?? null, setItem: (k: string, v: string) => { store.set(k, v); } };
+    const visited: string[] = [ENTER_AUTO_SETUP_PATH];
+    let page = ENTER_AUTO_SETUP_PATH;
+    const io = { storage, assign: (url: string) => { visited.push(url); page = url; }, here: () => page };
+    const setup = { worldId: 'w-auto', pose: { x: -123.5, y: 120, z: 456, yaw: 45, pitch: -20 } };
+    enterAutoStart(io, setup);
+    const savedAt = (i: number) => ((i >> 1) % 2 === 0) === (i % 2 === 1);
+    // Pair 0's (a) and (b) recorded; then pair 0's (a) page is loaded again (Back twice) and reveals while pair 1's (b)
+    // is the step's: refused, and pair 1's (b) loaded. (A page of the step's own leg is that leg's load, whichever step
+    // first loaded it: pair 0's (b) and pair 1's (b) are one URL.)
+    const aPage = page;
+    expect(enterAutoRecorded(io, loadOf(100, savedAt(0)))).toBe(true);
+    expect(enterAutoRecorded(io, loadOf(107, savedAt(1)))).toBe(true);
+    const next = page;
+    expect(next).not.toBe(aPage);
+    page = aPage;
+    const stored = store.get(ENTER_AUTO_KEY);
+    expect(enterAutoRecorded(io, loadOf(999, true))).toBe(false);
+    expect(store.get(ENTER_AUTO_KEY)).toBe(stored);
+    expect(page).toBe(next);
+    // The run goes on from the step's page: every later pair keeps its own legs.
+    const results = Array.from({ length: 12 }, (_, i) => loadOf(100 + 7 * i, savedAt(i)));
+    for (const r of results.slice(2)) expect(enterAutoRecorded(io, r)).toBe(true);
+    const json = enterAutoJson(io, { renderer: 'Mesa Intel(R) Xe Graphics (ADL GT2)', userAgent: 'x' });
+    expect(json!.pairs.every((p) => p.unsaved.idbOpenMs === null && p.saved.idbOpenMs !== null)).toBe(true);
+    expect(json!.pairs.map((p) => p.saved.revealMs)).not.toContain(999);
   });
 
   test('an `?enterBench=1` load publishes `{ revealMs, idbOpenMs, loadMs, decodeMs }` at its reveal, the last three null when unsaved; `db` replaces `wi10`', () => {

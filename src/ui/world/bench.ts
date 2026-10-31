@@ -2309,19 +2309,27 @@ export function gpuOfRenderer(renderer: string): 'iris' | 'rtx' | 'unknown' {
   return 'unknown';
 }
 
-/** The self-driving form's state in `sessionStorage` (plan): the next step and the loads' figures so far. */
+/**
+ * The self-driving form's state in `sessionStorage` (plan): the next step, the page that step loads (`path`, final
+ * review GOV-6) and the loads' figures so far.
+ */
 export const ENTER_AUTO_KEY = 'wi.enterAuto';
 
 interface EnterAutoState {
   readonly step: number;
+  readonly path: string;
   readonly setup: EnterSetup;
   readonly results: EnterResult[];
 }
 
-/** The self-driving form's storage and navigation (`sessionStorage` and `location.assign` in the page; fakes in tests). */
+/**
+ * The self-driving form's storage, navigation and page (`sessionStorage`, `location.assign` and `location.pathname +
+ * location.search` in the page; fakes in tests).
+ */
 export interface EnterAutoIo {
   readonly storage: Pick<Storage, 'getItem' | 'setItem'> | null;
   assign(url: string): void;
+  here(): string;
 }
 
 function readAuto(io: EnterAutoIo): EnterAutoState | null {
@@ -2329,7 +2337,7 @@ function readAuto(io: EnterAutoIo): EnterAutoState | null {
     const text = io.storage?.getItem(ENTER_AUTO_KEY) ?? null;
     if (text === null) return null;
     const v = JSON.parse(text) as Partial<EnterAutoState> | null;
-    if (v === null || typeof v !== 'object' || typeof v.step !== 'number' || !Array.isArray(v.results) || typeof v.setup?.worldId !== 'string') return null;
+    if (v === null || typeof v !== 'object' || typeof v.step !== 'number' || typeof v.path !== 'string' || !Array.isArray(v.results) || typeof v.setup?.worldId !== 'string') return null;
     return v as EnterAutoState;
   } catch {
     return null;
@@ -2349,20 +2357,35 @@ function enterAutoUrl(setup: EnterSetup, step: number): string {
 
 /** The setup page's end under `&auto=1`: the state stored, then the first (a) load. */
 export function enterAutoStart(io: EnterAutoIo, setup: EnterSetup): void {
-  writeAuto(io, { step: 0, setup, results: [] });
-  io.assign(enterAutoUrl(setup, 0));
+  const path = enterAutoUrl(setup, 0);
+  writeAuto(io, { step: 0, path, setup, results: [] });
+  io.assign(path);
 }
+
+/** A path and query as the page's location reads them (`pathname + search`, its query percent-encoded the same way). */
+const pageOf = (url: string): string => {
+  const u = new URL(url, 'http://page.invalid/');
+  return u.pathname + u.search;
+};
 
 /**
  * A revealed `enterBench=1&auto=1` load: its figures stored and the next page loaded. False, navigating nowhere, when
- * no self-driving run is waiting for a load (no state, or every load recorded).
+ * no self-driving run is waiting for a load (no state, or every load recorded). False too, recording nothing, when the
+ * page is not the one the step loads (an F5 or Back after the step's record, or a duplicated tab, which copies
+ * `sessionStorage`): the step's page is loaded instead, so no later pair's legs are swapped (final review GOV-6). A
+ * page of the step's own leg is recorded as that leg's load, whichever step first loaded it (one leg's pages share a
+ * URL), so the pairs still hold an (a) and a (b) each.
  */
 export function enterAutoRecorded(io: EnterAutoIo, r: EnterResult): boolean {
   const s = readAuto(io);
   if (s === null || s.step >= 2 * ENTER_PAIRS) return false;
-  const next: EnterAutoState = { step: s.step + 1, setup: s.setup, results: [...s.results, r] };
-  writeAuto(io, next);
-  io.assign(enterAutoUrl(next.setup, next.step));
+  if (pageOf(io.here()) !== pageOf(s.path)) {
+    io.assign(s.path);
+    return false;
+  }
+  const path = enterAutoUrl(s.setup, s.step + 1);
+  writeAuto(io, { step: s.step + 1, path, setup: s.setup, results: [...s.results, r] });
+  io.assign(path);
   return true;
 }
 
@@ -2397,7 +2420,7 @@ function browserAutoIo(): EnterAutoIo {
   } catch {
     storage = null;
   }
-  return { storage, assign: (url) => location.assign(url) };
+  return { storage, assign: (url) => location.assign(url), here: () => location.pathname + location.search };
 }
 
 /** The unmasked WebGL renderer string of a fresh webgl2 context, as measureChrome's probe reads it; null without one. */
