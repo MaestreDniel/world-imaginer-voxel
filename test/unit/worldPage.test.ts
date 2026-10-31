@@ -1893,11 +1893,15 @@ describe('"+ Add at the pin" opens B\'s dialog on the pin\'s ground (SP5b spec Â
     const places = createPlaces(o.initial ?? [], () => `p${++n}`);
     const asked: Array<[number, number]> = [];
     const shown: Array<[string, unknown]> = [];
+    const palette = { isOpen: false, close() { this.isOpen = false; } };
+    const help = { isOpen: false };
+    const settings = { isOpen: false };
     const addAt = (x: number, z: number): Promise<boolean> => addPlaceAt({
       pool: { landing: (bx, bz) => { asked.push([bx, bz]); return o.landing(); } },
+      palette, help, settings,
       dialog, places, camera, notices: { show: (text, opts) => { shown.push([text, opts]); } },
     }, x, z);
-    return { dialog, places, asked, shown, addAt };
+    return { dialog, places, asked, shown, addAt, palette, help, settings };
   }
   const enter = (): void => { dom.document.dispatchEvent(Object.assign(new Event('keydown', { cancelable: true }), { code: 'Enter', key: 'Enter', repeat: false })); };
 
@@ -1948,6 +1952,32 @@ describe('"+ Add at the pin" opens B\'s dialog on the pin\'s ground (SP5b spec Â
     await expect(open.addAt(1, 2)).resolves.toBe(false);
     expect(dom.el('place-name').value).toBe('B\'s own');
     open.dialog.dispose();
+  });
+
+  test('as B: the palette closes first; nothing over the help or the Settings screen, also when one opened during the landing (PAGE-5)', async () => {
+    const s = setup({ landing: () => Promise.resolve({ surface: 70, water: -Infinity }) });
+    s.settings.isOpen = true;
+    await expect(s.addAt(1, 2)).resolves.toBe(false);
+    s.settings.isOpen = false;
+    s.help.isOpen = true;
+    await expect(s.addAt(1, 2)).resolves.toBe(false);
+    expect([s.asked, s.dialog.isOpen]).toEqual([[], false]);
+    s.help.isOpen = false;
+    // The Settings screen opened (G) while the landing was asked: no dialog over it.
+    let land: ((l: { surface: number; water: number }) => void) | null = null;
+    const slow = setup({ landing: () => new Promise((resolve) => { land = resolve; }) });
+    const pending = slow.addAt(1, 2);
+    await vi.waitFor(() => expect(land).not.toBeNull());
+    slow.settings.isOpen = true;
+    land!({ surface: 70, water: -Infinity });
+    await expect(pending).resolves.toBe(false);
+    expect(slow.dialog.isOpen).toBe(false);
+    slow.dialog.dispose();
+    // The palette open: closed first, then the dialog opens.
+    s.palette.isOpen = true;
+    await expect(s.addAt(1, 2)).resolves.toBe(true);
+    expect([s.palette.isOpen, s.dialog.isOpen]).toEqual([false, true]);
+    s.dialog.dispose();
   });
 
   test('the page hands the overlay its places: the model, the colours, the place teleport and `addAt`', () => {

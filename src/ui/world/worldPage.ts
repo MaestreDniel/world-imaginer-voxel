@@ -1531,19 +1531,28 @@ export function savePlaceKey(o: {
  * "+ Add at the pin" (SP5b spec §3.7, D13): B's dialog for the pin's column, standing on its ground (the walking
  * teleport's feet, max(surface, water) + 1, from the pool's `landing` at the pin's block, `landAt`), the eye `EYE` above
  * them, at the block's centre, looking where the camera looks; its Save keeps the place and shows "Place saved" (1.5 s).
- * Resolves true once the dialog opened. With `MAX_PLACES` places, "A world holds at most 256 places" (4 s), no landing
- * and no dialog; with the dialog already open, nothing. A landing that fails (as the teleport's `onFail`) opens no
- * dialog and shows "Could not teleport".
+ * Resolves true once the dialog opened. As B (`savePlaceKey`): the palette is closed first, and with the help, the
+ * Settings screen or the dialog open, nothing (also when one opened while the landing was asked). With `MAX_PLACES`
+ * places, "A world holds at most 256 places" (4 s), no landing and no dialog. A landing that fails (as the teleport's
+ * `onFail`) opens no dialog and shows "Could not teleport".
  */
 export async function addPlaceAt(o: {
   readonly pool: Pick<WorkerPool, 'landing'>;
+  readonly palette: Pick<Palette, 'isOpen' | 'close'>;
+  readonly help: Pick<Help, 'isOpen'>;
+  readonly settings: Pick<SettingsPanel, 'isOpen'>;
   readonly dialog: Pick<PlaceDialog, 'isOpen' | 'open'>;
   readonly places: Pick<Places, 'list' | 'add'>;
   readonly camera: Pick<FlyState, 'yaw' | 'pitch'>;
   readonly notices: Pick<WorldNotices, 'show'>;
 }, x: number, z: number): Promise<boolean> {
   const { places, dialog, notices } = o;
-  if (dialog.isOpen) return false;
+  /** Closes the palette first; false over the help, the Settings screen or the dialog (PAGE-5). */
+  const free = (): boolean => {
+    if (o.palette.isOpen) o.palette.close();
+    return !o.help.isOpen && !o.settings.isOpen && !dialog.isOpen;
+  };
+  if (!free()) return false;
   if (places.list.length >= MAX_PLACES) {
     notices.show(PLACES_FULL_NOTICE, { timeoutMs: PLACES_FULL_MS });
     return false;
@@ -1555,8 +1564,8 @@ export async function addPlaceAt(o: {
     notices.show(TELEPORT_FAILED_NOTICE, { kind: 'warn', timeoutMs: TELEPORT_FAILED_MS });
     return false;
   }
-  // B, or a second click, may have opened the dialog while the landing was asked.
-  if (dialog.isOpen) return false;
+  // B, G, H, E or a second click may have opened a panel or the dialog while the landing was asked.
+  if (!free()) return false;
   const y = walkFeetY(at.surface, at.water) + EYE;
   const { yaw, pitch } = o.camera;
   dialog.open(proposedPlaceName(places.list.length, at.x, y, at.z), (name, colour) => {
@@ -3831,7 +3840,7 @@ export function mountWorldPage(root: HTMLElement, q: WorldQuery, hash: string, o
         colours: PLACE_COLOURS,
         toPlace: (p) => teleporter.toPlace(p),
         addAt: (x, z) => addPlaceAt({
-          pool: workers, dialog: placeDialog, places, camera: fly, notices,
+          pool: workers, palette, help, settings: settingsPanel, dialog: placeDialog, places, camera: fly, notices,
         }, x, z),
       },
     });
