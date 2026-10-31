@@ -1,5 +1,5 @@
 {
-  "sha256": "17284d4faadc382d43fc4b00893db189e9b735817ef88460a458476c593c1b27",
+  "sha256": "9c88cd4b93abcc2ed3ae993873e489e53f602447c09d0a8e6d5fe610ab0e0513",
   "canonical": {
     "startedSps": [
       "SP0",
@@ -306,6 +306,10 @@
         }
       },
       "G1": {
+        "enterRatio": {
+          "activeFrom": "SP5b",
+          "max": 1.1
+        },
         "mediumFill4wMs": {
           "activeFrom": "SP4b",
           "max": 6000
@@ -356,9 +360,29 @@
         }
       },
       "G2": {
+        "editVisibleAddedMs": {
+          "activeFrom": "SP5b",
+          "max": 8.33
+        },
         "editVisibleP95": {
           "activeFrom": "SP5a",
           "max": 50
+        },
+        "flushEditVisibleP95": {
+          "activeFrom": "SP5b",
+          "max": 50
+        },
+        "over33Added": {
+          "activeFrom": "SP5b",
+          "max": 1
+        },
+        "p95AddedMs": {
+          "activeFrom": "SP5b",
+          "max": 4.17
+        },
+        "replyDuringFlushP95Ms": {
+          "activeFrom": "SP5b",
+          "max": 5
         }
       },
       "L1": {

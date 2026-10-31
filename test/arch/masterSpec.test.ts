@@ -1077,8 +1077,9 @@ describe('master spec amendments (SP4c §12)', () => {
     const apply = text.split('\n').find((l) => l.startsWith('- terrain Apply: first visible change near the player'));
     expect(apply, 'no terrain Apply line in §7').toBeDefined();
     expect(apply).toContain('≤ 0.5 s (recorded from SP4c\'s bench; gated by SP10)');
-    // SP5a gates G2's edit part only (SP5a spec §6.2); the Apply part has no gated part before SP10.
-    expect(Object.keys(THRESHOLDS.G2 ?? {}), 'G2 has no gated Apply part before SP10').toEqual(['editVisibleP95']);
+    // SP5a gates G2's edit part (SP5a spec §6.2), SP5b its flush parts (G2.flush, pinned in the SP5b block); the Apply
+    // part has no gated part before SP10.
+    expect(Object.keys(THRESHOLDS.G2 ?? {}).filter((p) => THRESHOLDS.G2?.[p]?.activeFrom !== 'SP5b'), 'G2 has no gated Apply part before SP10').toEqual(['editVisibleP95']);
   });
 
   test('§1\'s test entry lists SP4c\'s test files in their own parentheses, which exist (SP4c spec §8.5, §12)', () => {
@@ -1396,6 +1397,45 @@ describe('master spec amendments (SP5b §9)', () => {
     expect(sp8c).not.toContain('Creates `ui/settingsPanel.ts`');
     expect(spEntry('SP11', 'SP12')).toContain('fills SP5b\'s Graphics tab: the quality preset and the greyed rows (fog distance, clouds, shadows)');
     expect(spEntry('SP5c', 'SP6')).toContain('(stored in IndexedDB `wi10`, its `meta` store or a store of its own by a version bump; a paste is one block-history step, which SP5b persists)');
+  });
+
+  test('§10\'s Exit names `G2.flush` and `G1.enter`, and THRESHOLDS holds their rows as SP5b spec §6.2 and §12 state them (SP5b spec §6.2, §12, D28)', () => {
+    expect(spEntry('SP5b', 'SP5c')).toContain('the failure criteria\'s gates `G2.flush` and `G1.enter`, with the SP5b spec\'s thresholds');
+    const sp5b = readFileSync(fileURLToPath(new URL('../../docs/superpowers/specs/2026-10-29-sp5b-saved-worlds-design.md', import.meta.url)), 'utf8');
+    const flushRow = sp5b.split('\n').find((l) => l.startsWith('| saving stutters while building |'));
+    expect(flushRow, 'no `saving stutters while building` row in SP5b §6.2').toBeDefined();
+    const exitFlush = sp5b.split('\n').find((l) => l.startsWith('| saving does not stutter: `G2.flush`'));
+    expect(exitFlush, 'no `G2.flush` criterion in SP5b §12').toBeDefined();
+    // The five gated G2.flush parts: the §6.2 row's limit and the §12 criterion's, each equal to THRESHOLDS.
+    const flush: Array<[part: string, max: number, row: string, exit: string]> = [
+      ['over33Added', 1, '`over33Added` (the "on" parts\' sum − the "off" parts\') max 1', '`over33Added` ≤ 1'],
+      ['p95AddedMs', 4.17, '`p95AddedMs` (the "on" parts\' mean p95 − the "off" parts\') max 4.17', '`p95AddedMs` ≤ 4.17'],
+      ['editVisibleAddedMs', 8.33, '`editVisibleAddedMs` (the same difference of `editVisibleP95`) max 8.33', '`editVisibleAddedMs` ≤ 8.33'],
+      ['flushEditVisibleP95', 50, '`flushEditVisibleP95` (the larger of the "on" parts\' `editVisibleP95`', '`flushEditVisibleP95` ≤ 50'],
+      ['replyDuringFlushP95Ms', 5, '`replyDuringFlushP95Ms` max 5', '`replyDuringFlushP95Ms` ≤ 5'],
+    ];
+    for (const [part, max, row, exit] of flush) {
+      expect(THRESHOLDS.G2?.[part], `THRESHOLDS.G2.${part}`).toEqual({ max, activeFrom: 'SP5b' });
+      expect(flushRow, `SP5b §6.2's G2.flush ${part}`).toContain(row);
+      expect(exitFlush, `SP5b §12's G2.flush ${part}`).toContain(exit);
+    }
+    expect(flushRow).toContain(') max 50 (G2)');
+    // The sixth, `flushMainP95Ms` max 0.3, is held pending the user's check (D28): recorded by G2.flush, not a row, and
+    // the Threshold log and the exit evidence say so.
+    expect(flushRow).toContain('`flushMainP95Ms` max 0.3');
+    expect(exitFlush).toContain('`flushMainP95Ms` ≤ 0.3');
+    expect(THRESHOLDS.G2?.flushMainP95Ms, 'THRESHOLDS.G2.flushMainP95Ms is held pending the user\'s check').toBeUndefined();
+    const log = sp5b.slice(sp5b.indexOf('## Threshold log'));
+    expect(log).toContain('flushMainP95Ms max 0.3 (G2.flush) is held pending the user\'s check (D28, R10)');
+    expect(sp5b.slice(0, sp5b.indexOf('## Threshold log'))).toContain('so `flushMainP95Ms` max 0.3 is held pending the user\'s check (D28, R10)');
+    expect(Object.keys(THRESHOLDS.G2 ?? {}).filter((p) => THRESHOLDS.G2?.[p]?.activeFrom === 'SP5b').sort()).toEqual(flush.map(([p]) => p).sort());
+    // G1.enter: `enterRatio` max 1.10.
+    const enterRow = sp5b.split('\n').find((l) => l.startsWith('| entering a saved world clearly slower than a new one |'));
+    expect(enterRow, 'no `entering a saved world` row in SP5b §6.2').toBeDefined();
+    expect(enterRow).toContain('`G1.enter`: `enterRatio` = the median of the five kept pairs\' ratios (b) / (a), max 1.10');
+    expect(sp5b).toContain('`G1.enter` `enterRatio` ≤ 1.10 against the same world opened unsaved at the same pose');
+    expect(THRESHOLDS.G1?.enterRatio, 'THRESHOLDS.G1.enterRatio').toEqual({ max: 1.10, activeFrom: 'SP5b' });
+    expect(Object.keys(THRESHOLDS.G1 ?? {}).filter((p) => THRESHOLDS.G1?.[p]?.activeFrom === 'SP5b')).toEqual(['enterRatio']);
   });
 
   test('§2.7\'s `ColumnDiffV1` header genKey is informative (SP5b spec D21, §9)', () => {
