@@ -3771,8 +3771,6 @@ async function placesChecks(t: Smoke, id: string): Promise<void> {
     'places: the blue swatch is chosen');
   await reviewShot(t, SP5B_SHOTS.placeDialog);
   const pose = await hookPose(p);
-  // Enter in the name field: on the focused swatch it is the swatch's own click (final review PAGE-4).
-  await p.click('#place-name');
   await p.enter();
   await holds(t, `(${WORLD_NOTICES}).includes(${JSON.stringify(SMOKE_PLACE_SAVED)}) && __wiTest.places().length === ${before.length + 1}`,
     `places: Enter keeps it, "${SMOKE_PLACE_SAVED}"`, 3000, () => p.eval(`({ notices: ${WORLD_NOTICES}, places: __wiTest.places() })`));

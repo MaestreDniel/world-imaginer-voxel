@@ -89,9 +89,8 @@ export function mountPlaceDialog(host: HTMLElement, o: { requestLock(): void; on
       e.preventDefault();
       finish(false);
     } else if (e.code === 'Enter' || e.code === 'NumpadEnter' || e.key === 'Enter') {
-      // Enter on a focused Cancel or swatch is that button's own click (PAGE-4); elsewhere it is Save.
-      const focused = document.activeElement;
-      if (focused !== null && focused !== saveButton && focused.tagName === 'BUTTON' && panel.contains(focused)) return;
+      // Enter on a focused Cancel is Cancel's own click (PAGE-4); elsewhere, a focused swatch included, it is Save (D12, N1).
+      if (document.activeElement === cancelButton) return;
       e.preventDefault();
       finish(true);
     }
