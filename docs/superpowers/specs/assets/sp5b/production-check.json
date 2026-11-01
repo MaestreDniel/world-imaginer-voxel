@@ -1,0 +1,2771 @@
+{
+  "date": "2026-11-01T11:27:22.610Z",
+  "url": "https://world-imaginer-voxel.vercel.app/",
+  "gitHead": "61c4a1f8895a7a07f9605f063db7bc599d50aaca",
+  "servedBundle": "index-B8UGVfIF.js",
+  "localBundle": "index-B8UGVfIF.js",
+  "sameBuild": true,
+  "bundleCompare": {
+    "servedBundle": "index-B8UGVfIF.js",
+    "servedCss": "index-Cm1A9o1R.css",
+    "localBundle": "index-B8UGVfIF.js",
+    "indexSha256": "f4a43520be0efa6e36d5faf0c1c1a47fbf12f72feb2d10ca703197bd00cd09e5",
+    "distBuiltAt": "2026-11-01T10:24:53.143Z",
+    "assetsCompared": 51,
+    "assetsEqual": 51,
+    "assetsDiffering": []
+  },
+  "userAgent": "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/155.0.0.0 Safari/537.36",
+  "glRenderer": "ANGLE (Intel, Mesa Intel(R) Iris(R) Xe Graphics (ADL GT2), OpenGL 4.6)",
+  "glVendor": "Google Inc. (Intel)",
+  "multiDraw": true,
+  "window": {
+    "left": 0,
+    "top": 32,
+    "width": 1756,
+    "height": 956,
+    "windowState": "maximized"
+  },
+  "viewport": {
+    "innerWidth": 1756,
+    "innerHeight": 869,
+    "devicePixelRatio": 1.09375,
+    "hasFocus": false
+  },
+  "wiTestHonoured": true,
+  "loadBefore": {
+    "uptime": "12:27:22 up  2:53,  1 user,  load average: 0,61, 0,59, 0,91",
+    "loadavg": [
+      0.61,
+      0.59,
+      0.91
+    ]
+  },
+  "loadAfter": {
+    "uptime": "12:28:26 up  2:54,  1 user,  load average: 2,48, 1,18, 1,09",
+    "loadavg": [
+      2.48,
+      1.18,
+      1.09
+    ]
+  },
+  "steps": [
+    {
+      "step": 1,
+      "name": "start screen: New world (name, preset, typed seed), Create",
+      "notes": [],
+      "checks": [
+        {
+          "pass": true,
+          "what": "the bare / shows the worlds menu (New world, Load world …) with no world canvas",
+          "detail": {
+            "buttons": [
+              {
+                "id": "start-new",
+                "text": "New world",
+                "shown": true
+              },
+              {
+                "id": "start-load",
+                "text": "Load world",
+                "shown": true
+              },
+              {
+                "id": "start-settings",
+                "text": "Settings",
+                "shown": true
+              },
+              {
+                "id": "start-map",
+                "text": "Map",
+                "shown": true
+              },
+              {
+                "id": "start-selftest",
+                "text": "Selftest",
+                "shown": true
+              }
+            ],
+            "notice": "",
+            "loading": false,
+            "canvas": false
+          }
+        },
+        {
+          "pass": true,
+          "what": "the fresh profile holds no world before Create (wi10 already opened by the menu at version 1, empty)",
+          "detail": {
+            "exists": true,
+            "databases": [
+              "wi10@1"
+            ],
+            "version": 1,
+            "stores": [
+              "diffs",
+              "history",
+              "meta",
+              "state",
+              "worlds"
+            ],
+            "worlds": [],
+            "state": [],
+            "history": [],
+            "diffs": {}
+          }
+        },
+        {
+          "pass": true,
+          "what": "preset large_biomes chosen",
+          "detail": [
+            "default",
+            "large_biomes",
+            "archipelago",
+            "amplified",
+            "floating_islands"
+          ]
+        },
+        {
+          "pass": true,
+          "what": "the form reads name \"Prod world\", preset large_biomes, seed \"prod-5b-7\"",
+          "detail": {
+            "name": "Prod world",
+            "preset": "large_biomes",
+            "seed": "prod-5b-7"
+          }
+        },
+        {
+          "pass": true,
+          "what": "Create navigates to /?world=<id> (/?world=d27653c9-4539-4e1d-8ecd-c126e7dbbcab)",
+          "detail": "/?world=d27653c9-4539-4e1d-8ecd-c126e7dbbcab"
+        },
+        {
+          "pass": true,
+          "what": "the new world reveals (3244 ms from Create)"
+        },
+        {
+          "pass": true,
+          "what": "IndexedDB wi10 version 1 with stores diffs, history, meta, state, worlds",
+          "detail": {
+            "exists": true,
+            "databases": [
+              "wi10@1"
+            ],
+            "version": 1,
+            "stores": [
+              "diffs",
+              "history",
+              "meta",
+              "state",
+              "worlds"
+            ],
+            "worlds": [
+              {
+                "id": "d27653c9-4539-4e1d-8ecd-c126e7dbbcab",
+                "name": "Prod world",
+                "seedText": "prod-5b-7",
+                "profile": "large_biomes",
+                "backupOf": null,
+                "genKey": "1627597d9be597ba",
+                "paramsHash": "9b03442e6785a45d",
+                "generatorVersion": 5,
+                "schemaVersion": 2,
+                "created": 1793532448793,
+                "stateTableLength": 58,
+                "detailAmpHi": 1.5
+              }
+            ],
+            "state": [
+              {
+                "worldId": "d27653c9-4539-4e1d-8ecd-c126e7dbbcab",
+                "flushSeq": 0,
+                "updated": 0,
+                "player": null,
+                "time": {
+                  "t": 0.08333333333333333,
+                  "speedIndex": 0
+                },
+                "hotbar": {
+                  "v": 1,
+                  "active": 0,
+                  "slots": [
+                    {
+                      "type": "stone",
+                      "pinned": {}
+                    },
+                    {
+                      "type": "dirt",
+                      "pinned": {}
+                    },
+                    {
+                      "type": "grass_block",
+                      "pinned": {}
+                    },
+                    {
+                      "type": "oak_planks",
+                      "pinned": {}
+                    },
+                    {
+                      "type": "glass",
+                      "pinned": {}
+                    },
+                    {
+                      "type": "oak_log",
+                      "pinned": {}
+                    },
+                    {
+                      "type": "torch",
+                      "pinned": {}
+                    },
+                    {
+                      "fluid": "water"
+                    },
+                    {
+                      "fluid": "lava"
+                    }
+                  ]
+                },
+                "places": []
+              }
+            ],
+            "history": [],
+            "diffs": {}
+          }
+        },
+        {
+          "pass": true,
+          "what": "worlds[d27653c9-4539-4e1d-8ecd-c126e7dbbcab] holds name \"Prod world\", seedText \"prod-5b-7\", profile large_biomes, genKey 1627597d9be597ba, backupOf null",
+          "detail": {
+            "id": "d27653c9-4539-4e1d-8ecd-c126e7dbbcab",
+            "name": "Prod world",
+            "seedText": "prod-5b-7",
+            "profile": "large_biomes",
+            "backupOf": null,
+            "genKey": "1627597d9be597ba",
+            "paramsHash": "9b03442e6785a45d",
+            "generatorVersion": 5,
+            "schemaVersion": 2,
+            "created": 1793532448793,
+            "stateTableLength": 58,
+            "detailAmpHi": 1.5
+          }
+        },
+        {
+          "pass": true,
+          "what": "state[d27653c9-4539-4e1d-8ecd-c126e7dbbcab] exists (flushSeq 0, player null)",
+          "detail": {
+            "worldId": "d27653c9-4539-4e1d-8ecd-c126e7dbbcab",
+            "flushSeq": 0,
+            "updated": 0,
+            "player": null,
+            "time": {
+              "t": 0.08333333333333333,
+              "speedIndex": 0
+            },
+            "hotbar": {
+              "v": 1,
+              "active": 0,
+              "slots": [
+                {
+                  "type": "stone",
+                  "pinned": {}
+                },
+                {
+                  "type": "dirt",
+                  "pinned": {}
+                },
+                {
+                  "type": "grass_block",
+                  "pinned": {}
+                },
+                {
+                  "type": "oak_planks",
+                  "pinned": {}
+                },
+                {
+                  "type": "glass",
+                  "pinned": {}
+                },
+                {
+                  "type": "oak_log",
+                  "pinned": {}
+                },
+                {
+                  "type": "torch",
+                  "pinned": {}
+                },
+                {
+                  "fluid": "water"
+                },
+                {
+                  "fluid": "lava"
+                }
+              ]
+            },
+            "places": []
+          }
+        }
+      ],
+      "pass": true,
+      "startScreen": {
+        "buttons": [
+          {
+            "id": "start-new",
+            "text": "New world",
+            "shown": true
+          },
+          {
+            "id": "start-load",
+            "text": "Load world",
+            "shown": true
+          },
+          {
+            "id": "start-settings",
+            "text": "Settings",
+            "shown": true
+          },
+          {
+            "id": "start-map",
+            "text": "Map",
+            "shown": true
+          },
+          {
+            "id": "start-selftest",
+            "text": "Selftest",
+            "shown": true
+          }
+        ],
+        "notice": "",
+        "loading": false,
+        "canvas": false
+      },
+      "idbBefore": {
+        "exists": true,
+        "databases": [
+          "wi10@1"
+        ],
+        "version": 1,
+        "stores": [
+          "diffs",
+          "history",
+          "meta",
+          "state",
+          "worlds"
+        ],
+        "worlds": [],
+        "state": [],
+        "history": [],
+        "diffs": {}
+      },
+      "shotStart": "shots/1-start.png",
+      "presetOptions": [
+        "default",
+        "large_biomes",
+        "archipelago",
+        "amplified",
+        "floating_islands"
+      ],
+      "form": {
+        "name": "Prod world",
+        "preset": "large_biomes",
+        "seed": "prod-5b-7"
+      },
+      "shotNewWorld": "shots/1-new-world.png",
+      "worldId": "d27653c9-4539-4e1d-8ecd-c126e7dbbcab",
+      "createToRevealMs": 3244,
+      "persisted": false,
+      "idbAfterCreate": {
+        "exists": true,
+        "databases": [
+          "wi10@1"
+        ],
+        "version": 1,
+        "stores": [
+          "diffs",
+          "history",
+          "meta",
+          "state",
+          "worlds"
+        ],
+        "worlds": [
+          {
+            "id": "d27653c9-4539-4e1d-8ecd-c126e7dbbcab",
+            "name": "Prod world",
+            "seedText": "prod-5b-7",
+            "profile": "large_biomes",
+            "backupOf": null,
+            "genKey": "1627597d9be597ba",
+            "paramsHash": "9b03442e6785a45d",
+            "generatorVersion": 5,
+            "schemaVersion": 2,
+            "created": 1793532448793,
+            "stateTableLength": 58,
+            "detailAmpHi": 1.5
+          }
+        ],
+        "state": [
+          {
+            "worldId": "d27653c9-4539-4e1d-8ecd-c126e7dbbcab",
+            "flushSeq": 0,
+            "updated": 0,
+            "player": null,
+            "time": {
+              "t": 0.08333333333333333,
+              "speedIndex": 0
+            },
+            "hotbar": {
+              "v": 1,
+              "active": 0,
+              "slots": [
+                {
+                  "type": "stone",
+                  "pinned": {}
+                },
+                {
+                  "type": "dirt",
+                  "pinned": {}
+                },
+                {
+                  "type": "grass_block",
+                  "pinned": {}
+                },
+                {
+                  "type": "oak_planks",
+                  "pinned": {}
+                },
+                {
+                  "type": "glass",
+                  "pinned": {}
+                },
+                {
+                  "type": "oak_log",
+                  "pinned": {}
+                },
+                {
+                  "type": "torch",
+                  "pinned": {}
+                },
+                {
+                  "fluid": "water"
+                },
+                {
+                  "fluid": "lava"
+                }
+              ]
+            },
+            "places": []
+          }
+        ],
+        "history": [],
+        "diffs": {}
+      },
+      "shotWorld": "shots/1-new-world-revealed.png",
+      "wallMs": 3714,
+      "pageErrorsDuring": 0,
+      "consoleErrorsDuring": 0
+    },
+    {
+      "step": 2,
+      "name": "build: break and place with the mouse, hotbar slot 4, F to walk and W, a look; the autosave",
+      "notes": [],
+      "checks": [
+        {
+          "pass": true,
+          "what": "the hook names the world"
+        },
+        {
+          "pass": true,
+          "what": "the pointer lock is granted on the canvas"
+        },
+        {
+          "pass": true,
+          "what": "F walks and the feet reach the ground (206 ms)",
+          "detail": {
+            "x": 0,
+            "y": 78.0000001,
+            "z": 0,
+            "onGround": true,
+            "snapPending": false,
+            "snapY": null
+          }
+        },
+        {
+          "pass": true,
+          "what": "W for 1.2 s walks 5.06 blocks",
+          "detail": {
+            "before": {
+              "x": 0,
+              "y": 79.6200001,
+              "z": 0,
+              "yaw": 315.15,
+              "pitch": -10.15
+            },
+            "after": {
+              "x": -3.5712211187993423,
+              "y": 78.6200001,
+              "z": -3.5899691138197336,
+              "yaw": 315.15,
+              "pitch": -10.15
+            },
+            "movedBlocks": 5.063743528017397
+          }
+        },
+        {
+          "pass": true,
+          "what": "the mouse turns the look: yaw 315.1 → 329.7, pitch -10.2 → -40.3",
+          "detail": {
+            "before": {
+              "yaw": 315.15,
+              "pitch": -10.15
+            },
+            "after": {
+              "yaw": 329.7000000000005,
+              "pitch": -40.300000000000004
+            }
+          }
+        },
+        {
+          "pass": true,
+          "what": "4 makes slot 4 active (0 → 3, \"Oak planks\")",
+          "detail": {
+            "active": 3,
+            "slots": [
+              "Stone",
+              "Dirt",
+              "Grass block",
+              "Oak planks",
+              "Glass",
+              "Oak log",
+              "Torch",
+              "Water bucket",
+              "Lava bucket"
+            ]
+          }
+        },
+        {
+          "pass": true,
+          "what": "a block aimed within reach (-5, 76, -6) face 4",
+          "detail": {
+            "hit": true,
+            "x": -5,
+            "y": 76,
+            "z": -6,
+            "face": 4,
+            "outline": true
+          }
+        },
+        {
+          "pass": true,
+          "what": "LMB breaks (-5, 76, -6): state 15 → 0",
+          "detail": {
+            "tBefore": 15,
+            "tAfter": 0
+          }
+        },
+        {
+          "pass": true,
+          "what": "a block aimed after the break whose placed voxel is neither the hole nor at the body (20 small turns right)",
+          "detail": {
+            "hit": true,
+            "x": -4,
+            "y": 76,
+            "z": -6,
+            "face": 4,
+            "outline": true
+          }
+        },
+        {
+          "pass": true,
+          "what": "RMB places slot 4 (\"Oak planks\") at (-4, 77, -6): state 0 → 25",
+          "detail": {
+            "dBefore": 0,
+            "dAfter": 25
+          }
+        },
+        {
+          "pass": true,
+          "what": "block history 0 → 2 steps (redo 0)",
+          "detail": {
+            "h0": {
+              "size": 0,
+              "redo": 0
+            },
+            "h1": {
+              "size": 2,
+              "redo": 0
+            }
+          }
+        },
+        {
+          "pass": true,
+          "what": "an autosave (no flushNow) committed this state within 1531 ms of the check's start: flushSeq 4 → 5, player at the pose (walk), hotbar active 3, history 2 steps, 1 diff column(s)"
+        }
+      ],
+      "pass": true,
+      "query": "?world=d27653c9-4539-4e1d-8ecd-c126e7dbbcab&wiTest=1",
+      "openMs": 3857,
+      "modeAtOpen": "fly",
+      "poseAtOpen": {
+        "x": 0,
+        "y": 80,
+        "z": 0,
+        "yaw": 315,
+        "pitch": -10
+      },
+      "hotbarAtOpen": {
+        "active": 0,
+        "slots": [
+          "Stone",
+          "Dirt",
+          "Grass block",
+          "Oak planks",
+          "Glass",
+          "Oak log",
+          "Torch",
+          "Water bucket",
+          "Lava bucket"
+        ]
+      },
+      "historyAtOpen": {
+        "size": 0,
+        "redo": 0
+      },
+      "ownerAtOpen": "world",
+      "drawnBy": [
+        "batch"
+      ],
+      "lockGranted": true,
+      "walk": {
+        "before": {
+          "x": 0,
+          "y": 79.6200001,
+          "z": 0,
+          "yaw": 315.15,
+          "pitch": -10.15
+        },
+        "after": {
+          "x": -3.5712211187993423,
+          "y": 78.6200001,
+          "z": -3.5899691138197336,
+          "yaw": 315.15,
+          "pitch": -10.15
+        },
+        "movedBlocks": 5.063743528017397
+      },
+      "look": {
+        "before": {
+          "yaw": 315.15,
+          "pitch": -10.15
+        },
+        "after": {
+          "yaw": 329.7000000000005,
+          "pitch": -40.300000000000004
+        }
+      },
+      "hotbarAfter4": {
+        "active": 3,
+        "slots": [
+          "Stone",
+          "Dirt",
+          "Grass block",
+          "Oak planks",
+          "Glass",
+          "Oak log",
+          "Torch",
+          "Water bucket",
+          "Lava bucket"
+        ]
+      },
+      "aimBeforeBreak": {
+        "hit": true,
+        "x": -5,
+        "y": 76,
+        "z": -6,
+        "face": 4,
+        "outline": true
+      },
+      "breakAt": {
+        "x": -5,
+        "y": 76,
+        "z": -6
+      },
+      "breakStateBefore": 15,
+      "breakMs": 105,
+      "breakStateAfter": 0,
+      "aimAfterBreak": {
+        "hit": true,
+        "x": -5,
+        "y": 76,
+        "z": -7,
+        "face": 2,
+        "outline": true
+      },
+      "turnsToPlaceAim": 20,
+      "aimForPlace": {
+        "hit": true,
+        "x": -4,
+        "y": 76,
+        "z": -6,
+        "face": 4,
+        "outline": true
+      },
+      "poseAtPlace": {
+        "x": -3.571916389456568,
+        "y": 78.6200001,
+        "z": -3.5906680344696054,
+        "yaw": 347.70000000000005,
+        "pitch": -40.300000000000004
+      },
+      "placeAt": {
+        "x": -4,
+        "y": 77,
+        "z": -6
+      },
+      "placeStateBefore": 0,
+      "placeMs": 3,
+      "placeStateAfter": 25,
+      "historyBefore": {
+        "size": 0,
+        "redo": 0
+      },
+      "historyAfter": {
+        "size": 2,
+        "redo": 0
+      },
+      "shotBuilt": "shots/2-built.png",
+      "lockedAfterEsc": false,
+      "asLeft": {
+        "pose": {
+          "x": -3.571916389456568,
+          "y": 78.6200001,
+          "z": -3.5906680344696054,
+          "yaw": 347.70000000000005,
+          "pitch": -40.300000000000004
+        },
+        "mode": "walk",
+        "hotbar": {
+          "active": 3,
+          "slots": [
+            "Stone",
+            "Dirt",
+            "Grass block",
+            "Oak planks",
+            "Glass",
+            "Oak log",
+            "Torch",
+            "Water bucket",
+            "Lava bucket"
+          ]
+        },
+        "history": {
+          "size": 2,
+          "redo": 0
+        },
+        "clock": {
+          "t": 0.08915267916667263,
+          "speedIndex": 0
+        },
+        "blocks": {
+          "-5,76,-6": 0,
+          "-4,77,-6": 25
+        }
+      },
+      "autosave": {
+        "ms": 1531,
+        "state": {
+          "worldId": "d27653c9-4539-4e1d-8ecd-c126e7dbbcab",
+          "flushSeq": 5,
+          "updated": 1793532463857,
+          "player": {
+            "x": -3.571916389456568,
+            "y": 78.6200001,
+            "z": -3.5906680344696054,
+            "yaw": 347.70000000000005,
+            "pitch": -40.300000000000004,
+            "mode": "walk",
+            "speed": 12
+          },
+          "time": {
+            "t": 0.09031585000000701,
+            "speedIndex": 0
+          },
+          "hotbar": {
+            "v": 1,
+            "active": 3,
+            "slots": [
+              {
+                "type": "stone",
+                "pinned": {}
+              },
+              {
+                "type": "dirt",
+                "pinned": {}
+              },
+              {
+                "type": "grass_block",
+                "pinned": {}
+              },
+              {
+                "type": "oak_planks",
+                "pinned": {}
+              },
+              {
+                "type": "glass",
+                "pinned": {}
+              },
+              {
+                "type": "oak_log",
+                "pinned": {}
+              },
+              {
+                "type": "torch",
+                "pinned": {}
+              },
+              {
+                "fluid": "water"
+              },
+              {
+                "fluid": "lava"
+              }
+            ]
+          },
+          "places": []
+        },
+        "history": {
+          "worldId": "d27653c9-4539-4e1d-8ecd-c126e7dbbcab",
+          "done": 2,
+          "undone": 0,
+          "lastDone": {
+            "edits": [
+              {
+                "x": -4,
+                "y": 77,
+                "z": -6,
+                "before": 4294967295,
+                "after": 6400
+              }
+            ]
+          }
+        },
+        "diffs": {
+          "columns": 1,
+          "bytes": 26,
+          "cols": {
+            "2147450879": {
+              "bytes": 26,
+              "v": 1,
+              "headerGenKey": "1627597d9be597ba",
+              "bodyFnv": "4f93a353"
+            }
+          }
+        }
+      },
+      "wallMs": 11656,
+      "pageErrorsDuring": 0,
+      "consoleErrorsDuring": 0
+    },
+    {
+      "step": 3,
+      "name": "reload (Page.reload): blocks, pose and look, mode, hotbar, history; Ctrl+Z undoes the last block",
+      "notes": [],
+      "checks": [
+        {
+          "pass": true,
+          "what": "the address stays /?world=d27653c9-4539-4e1d-8ecd-c126e7dbbcab&wiTest=1"
+        },
+        {
+          "pass": true,
+          "what": "the blocks are back: broken (-5, 76, -6) = 0, placed (-4, 77, -6) = 25",
+          "detail": {
+            "t": 0,
+            "d": 25,
+            "expected": [
+              0,
+              25
+            ]
+          }
+        },
+        {
+          "pass": true,
+          "what": "the mode is back: walk"
+        },
+        {
+          "pass": true,
+          "what": "the pose and the look are back within 0.01 (Δ {\"x\":0,\"y\":0,\"z\":0,\"yaw\":0,\"pitch\":0})",
+          "detail": {
+            "ps": {
+              "x": -3.571916389456568,
+              "y": 78.6200001,
+              "z": -3.5906680344696054,
+              "yaw": 347.70000000000005,
+              "pitch": -40.300000000000004
+            },
+            "left": {
+              "x": -3.571916389456568,
+              "y": 78.6200001,
+              "z": -3.5906680344696054,
+              "yaw": 347.70000000000005,
+              "pitch": -40.300000000000004
+            }
+          }
+        },
+        {
+          "pass": true,
+          "what": "the hotbar is back (active slot 4, \"Oak planks\")",
+          "detail": {
+            "active": 3,
+            "slots": [
+              "Stone",
+              "Dirt",
+              "Grass block",
+              "Oak planks",
+              "Glass",
+              "Oak log",
+              "Torch",
+              "Water bucket",
+              "Lava bucket"
+            ]
+          }
+        },
+        {
+          "pass": true,
+          "what": "the block history is back (2 steps, redo 0)",
+          "detail": {
+            "size": 2,
+            "redo": 0
+          }
+        },
+        {
+          "pass": true,
+          "what": "the day speed is back (index 0)",
+          "detail": {
+            "t": 0.09099640000000778,
+            "speedIndex": 0
+          }
+        },
+        {
+          "pass": true,
+          "what": "Ctrl+Z after the reload undoes the last block: (-4, 77, -6) 25 → 0 (6 ms), history 2 → 1, redo 1; the broken block stays 0",
+          "detail": {
+            "ms": 6,
+            "state": 0,
+            "history": {
+              "size": 1,
+              "redo": 1
+            },
+            "brokenStill": 0
+          }
+        },
+        {
+          "pass": true,
+          "what": "Ctrl+Y puts it back (12 ms), history 2, redo 0",
+          "detail": {
+            "size": 2,
+            "redo": 0
+          }
+        }
+      ],
+      "pass": true,
+      "reloadToRevealMs": 3346,
+      "urlAfterReload": "/?world=d27653c9-4539-4e1d-8ecd-c126e7dbbcab&wiTest=1",
+      "blocksBack": {
+        "broken": {
+          "at": {
+            "x": -5,
+            "y": 76,
+            "z": -6
+          },
+          "state": 0
+        },
+        "placed": {
+          "at": {
+            "x": -4,
+            "y": 77,
+            "z": -6
+          },
+          "state": 25
+        }
+      },
+      "poseBack": {
+        "x": -3.571916389456568,
+        "y": 78.6200001,
+        "z": -3.5906680344696054,
+        "yaw": 347.70000000000005,
+        "pitch": -40.300000000000004
+      },
+      "poseLeft": {
+        "x": -3.571916389456568,
+        "y": 78.6200001,
+        "z": -3.5906680344696054,
+        "yaw": 347.70000000000005,
+        "pitch": -40.300000000000004
+      },
+      "poseDiff": {
+        "x": 0,
+        "y": 0,
+        "z": 0,
+        "yaw": 0,
+        "pitch": 0
+      },
+      "hotbarBack": {
+        "active": 3,
+        "slots": [
+          "Stone",
+          "Dirt",
+          "Grass block",
+          "Oak planks",
+          "Glass",
+          "Oak log",
+          "Torch",
+          "Water bucket",
+          "Lava bucket"
+        ]
+      },
+      "historyBack": {
+        "size": 2,
+        "redo": 0
+      },
+      "clockBack": {
+        "t": 0.09099640000000778,
+        "speedIndex": 0
+      },
+      "clockLeft": {
+        "t": 0.08915267916667263,
+        "speedIndex": 0
+      },
+      "owner": "world",
+      "shotReloaded": "shots/3-reloaded.png",
+      "undo": {
+        "ms": 6,
+        "state": 0,
+        "history": {
+          "size": 1,
+          "redo": 1
+        },
+        "brokenStill": 0
+      },
+      "redo": {
+        "ms": 12,
+        "history": {
+          "size": 2,
+          "redo": 0
+        }
+      },
+      "wallMs": 3838,
+      "pageErrorsDuring": 0,
+      "consoleErrorsDuring": 0
+    },
+    {
+      "step": 4,
+      "name": "two tabs: a second tab on the same world shows 'This world is open in another tab'",
+      "notes": [],
+      "checks": [
+        {
+          "pass": true,
+          "what": "the second tab shows \"This world is open in another tab×\" on the start screen with no world (2404 ms)",
+          "detail": {
+            "href": "https://world-imaginer-voxel.vercel.app/",
+            "notice": "This world is open in another tab×",
+            "world": false,
+            "canvas": false
+          }
+        },
+        {
+          "pass": true,
+          "what": "the first tab keeps the world (revealed, the hook names it)"
+        },
+        {
+          "pass": true,
+          "what": "the first tab still shows the world after the second tab closed"
+        }
+      ],
+      "pass": true,
+      "secondTab": {
+        "ms": 2404,
+        "href": "https://world-imaginer-voxel.vercel.app/",
+        "notice": "This world is open in another tab×",
+        "world": false,
+        "canvas": false
+      },
+      "shotRefused": "shots/4-second-tab-refused.png",
+      "wallMs": 2843,
+      "pageErrorsDuring": 0,
+      "consoleErrorsDuring": 0
+    },
+    {
+      "step": 5,
+      "name": "Load world: Rename, Export (.wiworld), Delete a second world, Import; the imported world opens equal",
+      "notes": [],
+      "checks": [
+        {
+          "pass": true,
+          "what": "T pauses the clock of the first world"
+        },
+        {
+          "pass": true,
+          "what": "a second world \"Prod scratch\" is created and opens (6d043fc6-c180-4c52-a63e-31cd64e3b4dd)"
+        },
+        {
+          "pass": true,
+          "what": "Load world lists both worlds (Prod scratch, Prod world)",
+          "detail": [
+            {
+              "id": "6d043fc6-c180-4c52-a63e-31cd64e3b4dd",
+              "name": "Prod scratch",
+              "title": "Prod scratch · default · seed scratch-2",
+              "info": "Modified 2026-11-01 12:27",
+              "badges": []
+            },
+            {
+              "id": "d27653c9-4539-4e1d-8ecd-c126e7dbbcab",
+              "name": "Prod world",
+              "title": "Prod world · large_biomes · seed prod-5b-7",
+              "info": "Modified 2026-11-01 12:27",
+              "badges": []
+            }
+          ]
+        },
+        {
+          "pass": true,
+          "what": "Rename \"Prod world\" → \"Prod check world\" (Enter): listed and stored in worlds[d27653c9-4539-4e1d-8ecd-c126e7dbbcab].name",
+          "detail": {
+            "ms": 104,
+            "listed": "Prod check world",
+            "stored": "Prod check world"
+          }
+        },
+        {
+          "pass": true,
+          "what": "the renamed world reopens paused"
+        },
+        {
+          "pass": true,
+          "what": "the world's worldHash() 83254b1601ced0af"
+        },
+        {
+          "pass": true,
+          "what": "Export downloads \"Prod check world.wiworld\" (3565 bytes, gzip of WI10 v1, format wi10-world, 1 column record(s)) into the prodcheck directory",
+          "detail": {
+            "download": {
+              "step": "5-Load world: Rename, Export (.wiworld), Delete a second world, Import; the imported world opens equal",
+              "guid": "a4dd2c30-e9a3-48d3-8222-590ca127886d",
+              "url": "blob:https://world-imaginer-voxel.vercel.app/19c74ce0-a388-4d07-8e52-9b0e1410bca",
+              "suggestedFilename": "Prod check world.wiworld",
+              "state": "completed",
+              "totalBytes": 3565,
+              "receivedBytes": 3565
+            },
+            "file": {
+              "path": "/home/maestre/Proyectos/world-imaginer-voxel/.superpowers/sp5b/prodcheck/Prod check world.wiworld",
+              "bytes": 3565,
+              "sha256": "b61c13f47147a12e0b0603eb81fd4d3c6bdafc0ff089af75ede8f0fedbecff2f",
+              "gzip": true,
+              "magic": "WI10",
+              "version": 1,
+              "headerFormat": "wi10-world",
+              "headerWorldName": "Prod check world",
+              "records": 1,
+              "unpackedBytes": 19577,
+              "headerPlaces": 0,
+              "headerHistoryDone": 2
+            }
+          }
+        },
+        {
+          "pass": true,
+          "what": "Delete asks in the notice row: \"Delete 'Prod scratch'? This cannot be undone.DeleteCancel\""
+        },
+        {
+          "pass": true,
+          "what": "Delete (confirmed) takes \"Prod scratch\" off the list and out of IndexedDB (worlds, state, history, diffs)",
+          "detail": {
+            "world": false,
+            "state": false,
+            "history": false,
+            "diffs": null
+          }
+        },
+        {
+          "pass": true,
+          "what": "the first world is still stored"
+        },
+        {
+          "pass": true,
+          "what": "Import (DOM.setFileInputFiles) says \"Imported 'Prod check world'\" and lists it under a new id (6be1f404-e967-4598-9dc5-1eeb251e7d88)",
+          "detail": {
+            "ms": 11,
+            "notice": "Imported 'Prod check world'×",
+            "id": "6be1f404-e967-4598-9dc5-1eeb251e7d88",
+            "rows": [
+              {
+                "id": "6be1f404-e967-4598-9dc5-1eeb251e7d88",
+                "name": "Prod check world",
+                "title": "Prod check world · large_biomes · seed prod-5b-7",
+                "info": "Modified 2026-11-01 12:28",
+                "badges": []
+              },
+              {
+                "id": "d27653c9-4539-4e1d-8ecd-c126e7dbbcab",
+                "name": "Prod check world",
+                "title": "Prod check world · large_biomes · seed prod-5b-7",
+                "info": "Modified 2026-11-01 12:28",
+                "badges": []
+              }
+            ]
+          }
+        },
+        {
+          "pass": true,
+          "what": "the imported world is stored: name \"Prod check world\", seed \"prod-5b-7\", large_biomes, 1 diff column(s) as the original's 1",
+          "detail": {
+            "world": {
+              "id": "6be1f404-e967-4598-9dc5-1eeb251e7d88",
+              "name": "Prod check world",
+              "seedText": "prod-5b-7",
+              "profile": "large_biomes",
+              "backupOf": null,
+              "genKey": "1627597d9be597ba",
+              "paramsHash": "9b03442e6785a45d",
+              "generatorVersion": 5,
+              "schemaVersion": 2,
+              "created": 1793532448793,
+              "stateTableLength": 58,
+              "detailAmpHi": 1.5
+            },
+            "state": {
+              "worldId": "6be1f404-e967-4598-9dc5-1eeb251e7d88",
+              "flushSeq": 11,
+              "updated": 1793532483764,
+              "player": {
+                "x": -3.571916389456568,
+                "y": 78.6200001,
+                "z": -3.5906680344696054,
+                "yaw": 347.70000000000005,
+                "pitch": -40.300000000000004,
+                "mode": "walk",
+                "speed": 12
+              },
+              "time": {
+                "t": 0.10250902500000789,
+                "speedIndex": 3
+              },
+              "hotbar": {
+                "v": 1,
+                "active": 3,
+                "slots": [
+                  {
+                    "type": "stone",
+                    "pinned": {}
+                  },
+                  {
+                    "type": "dirt",
+                    "pinned": {}
+                  },
+                  {
+                    "type": "grass_block",
+                    "pinned": {}
+                  },
+                  {
+                    "type": "oak_planks",
+                    "pinned": {}
+                  },
+                  {
+                    "type": "glass",
+                    "pinned": {}
+                  },
+                  {
+                    "type": "oak_log",
+                    "pinned": {}
+                  },
+                  {
+                    "type": "torch",
+                    "pinned": {}
+                  },
+                  {
+                    "fluid": "water"
+                  },
+                  {
+                    "fluid": "lava"
+                  }
+                ]
+              },
+              "places": []
+            },
+            "history": {
+              "worldId": "6be1f404-e967-4598-9dc5-1eeb251e7d88",
+              "done": 2,
+              "undone": 0,
+              "lastDone": {
+                "edits": [
+                  {
+                    "x": -4,
+                    "y": 77,
+                    "z": -6,
+                    "before": 4294967295,
+                    "after": 6400
+                  }
+                ]
+              }
+            },
+            "diffs": {
+              "columns": 1,
+              "bytes": 26,
+              "cols": {
+                "2147450879": {
+                  "bytes": 26,
+                  "v": 1,
+                  "headerGenKey": "1627597d9be597ba",
+                  "bodyFnv": "4f93a353"
+                }
+              }
+            },
+            "originalDiffs": {
+              "columns": 1,
+              "bytes": 26,
+              "cols": {
+                "2147450879": {
+                  "bytes": 26,
+                  "v": 1,
+                  "headerGenKey": "1627597d9be597ba",
+                  "bodyFnv": "4f93a353"
+                }
+              }
+            }
+          }
+        },
+        {
+          "pass": true,
+          "what": "the imported world's worldHash() 83254b1601ced0af equals the exported world's 83254b1601ced0af"
+        },
+        {
+          "pass": true,
+          "what": "the imported world's edited blocks equal: [0,25]",
+          "detail": {
+            "blocks1": [
+              0,
+              25
+            ],
+            "blocks3": [
+              0,
+              25
+            ]
+          }
+        },
+        {
+          "pass": true,
+          "what": "the imported world's block history came with it (2 steps)",
+          "detail": {
+            "size": 2,
+            "redo": 0
+          }
+        }
+      ],
+      "pass": true,
+      "flushBeforeLeaving": {
+        "ok": true,
+        "flushSeq": 10
+      },
+      "secondWorld": {
+        "id": "6d043fc6-c180-4c52-a63e-31cd64e3b4dd",
+        "name": "Prod scratch",
+        "preset": "default",
+        "seed": "scratch-2"
+      },
+      "listBefore": [
+        {
+          "id": "6d043fc6-c180-4c52-a63e-31cd64e3b4dd",
+          "name": "Prod scratch",
+          "title": "Prod scratch · default · seed scratch-2",
+          "info": "Modified 2026-11-01 12:27",
+          "badges": []
+        },
+        {
+          "id": "d27653c9-4539-4e1d-8ecd-c126e7dbbcab",
+          "name": "Prod world",
+          "title": "Prod world · large_biomes · seed prod-5b-7",
+          "info": "Modified 2026-11-01 12:27",
+          "badges": []
+        }
+      ],
+      "listMs": 11.410000000149012,
+      "renamed": {
+        "ms": 104,
+        "listed": "Prod check world",
+        "stored": "Prod check world"
+      },
+      "flushBeforeHash": {
+        "ok": true,
+        "flushSeq": 11
+      },
+      "worldHashExported": "83254b1601ced0af",
+      "blocksExported": [
+        0,
+        25
+      ],
+      "export": {
+        "download": {
+          "step": "5-Load world: Rename, Export (.wiworld), Delete a second world, Import; the imported world opens equal",
+          "guid": "a4dd2c30-e9a3-48d3-8222-590ca127886d",
+          "url": "blob:https://world-imaginer-voxel.vercel.app/19c74ce0-a388-4d07-8e52-9b0e1410bca",
+          "suggestedFilename": "Prod check world.wiworld",
+          "state": "completed",
+          "totalBytes": 3565,
+          "receivedBytes": 3565
+        },
+        "file": {
+          "path": "/home/maestre/Proyectos/world-imaginer-voxel/.superpowers/sp5b/prodcheck/Prod check world.wiworld",
+          "bytes": 3565,
+          "sha256": "b61c13f47147a12e0b0603eb81fd4d3c6bdafc0ff089af75ede8f0fedbecff2f",
+          "gzip": true,
+          "magic": "WI10",
+          "version": 1,
+          "headerFormat": "wi10-world",
+          "headerWorldName": "Prod check world",
+          "records": 1,
+          "unpackedBytes": 19577,
+          "headerPlaces": 0,
+          "headerHistoryDone": 2
+        }
+      },
+      "secondWorldBeforeDelete": {
+        "world": true,
+        "state": true,
+        "history": false,
+        "diffs": null
+      },
+      "deleteAsks": "Delete 'Prod scratch'? This cannot be undone.DeleteCancel",
+      "secondWorldAfterDelete": {
+        "world": false,
+        "state": false,
+        "history": false,
+        "diffs": null
+      },
+      "import": {
+        "ms": 11,
+        "notice": "Imported 'Prod check world'×",
+        "id": "6be1f404-e967-4598-9dc5-1eeb251e7d88",
+        "rows": [
+          {
+            "id": "6be1f404-e967-4598-9dc5-1eeb251e7d88",
+            "name": "Prod check world",
+            "title": "Prod check world · large_biomes · seed prod-5b-7",
+            "info": "Modified 2026-11-01 12:28",
+            "badges": []
+          },
+          {
+            "id": "d27653c9-4539-4e1d-8ecd-c126e7dbbcab",
+            "name": "Prod check world",
+            "title": "Prod check world · large_biomes · seed prod-5b-7",
+            "info": "Modified 2026-11-01 12:28",
+            "badges": []
+          }
+        ]
+      },
+      "importedStored": {
+        "world": {
+          "id": "6be1f404-e967-4598-9dc5-1eeb251e7d88",
+          "name": "Prod check world",
+          "seedText": "prod-5b-7",
+          "profile": "large_biomes",
+          "backupOf": null,
+          "genKey": "1627597d9be597ba",
+          "paramsHash": "9b03442e6785a45d",
+          "generatorVersion": 5,
+          "schemaVersion": 2,
+          "created": 1793532448793,
+          "stateTableLength": 58,
+          "detailAmpHi": 1.5
+        },
+        "state": {
+          "worldId": "6be1f404-e967-4598-9dc5-1eeb251e7d88",
+          "flushSeq": 11,
+          "updated": 1793532483764,
+          "player": {
+            "x": -3.571916389456568,
+            "y": 78.6200001,
+            "z": -3.5906680344696054,
+            "yaw": 347.70000000000005,
+            "pitch": -40.300000000000004,
+            "mode": "walk",
+            "speed": 12
+          },
+          "time": {
+            "t": 0.10250902500000789,
+            "speedIndex": 3
+          },
+          "hotbar": {
+            "v": 1,
+            "active": 3,
+            "slots": [
+              {
+                "type": "stone",
+                "pinned": {}
+              },
+              {
+                "type": "dirt",
+                "pinned": {}
+              },
+              {
+                "type": "grass_block",
+                "pinned": {}
+              },
+              {
+                "type": "oak_planks",
+                "pinned": {}
+              },
+              {
+                "type": "glass",
+                "pinned": {}
+              },
+              {
+                "type": "oak_log",
+                "pinned": {}
+              },
+              {
+                "type": "torch",
+                "pinned": {}
+              },
+              {
+                "fluid": "water"
+              },
+              {
+                "fluid": "lava"
+              }
+            ]
+          },
+          "places": []
+        },
+        "history": {
+          "worldId": "6be1f404-e967-4598-9dc5-1eeb251e7d88",
+          "done": 2,
+          "undone": 0,
+          "lastDone": {
+            "edits": [
+              {
+                "x": -4,
+                "y": 77,
+                "z": -6,
+                "before": 4294967295,
+                "after": 6400
+              }
+            ]
+          }
+        },
+        "diffs": {
+          "columns": 1,
+          "bytes": 26,
+          "cols": {
+            "2147450879": {
+              "bytes": 26,
+              "v": 1,
+              "headerGenKey": "1627597d9be597ba",
+              "bodyFnv": "4f93a353"
+            }
+          }
+        },
+        "originalDiffs": {
+          "columns": 1,
+          "bytes": 26,
+          "cols": {
+            "2147450879": {
+              "bytes": 26,
+              "v": 1,
+              "headerGenKey": "1627597d9be597ba",
+              "bodyFnv": "4f93a353"
+            }
+          }
+        }
+      },
+      "shotLoadWorld": "shots/5-load-world-after-import.png",
+      "worldHashImported": "83254b1601ced0af",
+      "blocksImported": [
+        0,
+        25
+      ],
+      "importedHistory": {
+        "size": 2,
+        "redo": 0
+      },
+      "shotImported": "shots/5-imported-world.png",
+      "wallMs": 17058,
+      "pageErrorsDuring": 0,
+      "consoleErrorsDuring": 0
+    },
+    {
+      "step": 6,
+      "name": "places: B saves a place (name, colour, Enter); the map (M) shows its dot, the Places tab lists it; ↗ teleports",
+      "notes": [],
+      "checks": [
+        {
+          "pass": true,
+          "what": "F: flying (a place is the camera's pose)"
+        },
+        {
+          "pass": true,
+          "what": "a map click 300 px east teleports and closes the map",
+          "detail": {
+            "x": 1198.5,
+            "y": 88,
+            "z": -3.5,
+            "yaw": 347.70000000000005,
+            "pitch": -40.300000000000004
+          }
+        },
+        {
+          "pass": true,
+          "what": "B opens the Save place dialog"
+        },
+        {
+          "pass": true,
+          "what": "the swatch 4 (#4aa3df) is chosen"
+        },
+        {
+          "pass": true,
+          "what": "Enter keeps \"Prod place\" (colour 4) at the camera's pose, \"Place saved\"",
+          "detail": {
+            "ms": 1,
+            "place": {
+              "id": "c0e035c0-0cf6-4f07-86ab-d1dbad65079a",
+              "name": "Prod place",
+              "colour": 4,
+              "x": 1198.5,
+              "y": 88,
+              "z": -3.5,
+              "yaw": 347.70000000000005,
+              "pitch": -40.300000000000004
+            },
+            "cameraPose": {
+              "x": 1198.5,
+              "y": 88,
+              "z": -3.5,
+              "yaw": 347.70000000000005,
+              "pitch": -40.300000000000004
+            }
+          }
+        },
+        {
+          "pass": true,
+          "what": "IndexedDB state[6be1f404-e967-4598-9dc5-1eeb251e7d88].places holds it after flushNow() (flushSeq 12)",
+          "detail": [
+            {
+              "id": "c0e035c0-0cf6-4f07-86ab-d1dbad65079a",
+              "name": "Prod place",
+              "colour": 4,
+              "x": 1198.5,
+              "y": 88,
+              "z": -3.5,
+              "yaw": 347.70000000000005,
+              "pitch": -40.300000000000004
+            }
+          ]
+        },
+        {
+          "pass": true,
+          "what": "the map shows the place's #4aa3df dot 300 px west of the arrow (38 px of its colour; the place 1202 blocks west)",
+          "detail": {
+            "placeOffsetBlocks": {
+              "dx": -1202,
+              "dz": -1
+            },
+            "statusBpp": null,
+            "pixelsOfPlaceColourAt300pxWest": 38
+          }
+        },
+        {
+          "pass": true,
+          "what": "the Places tab lists \"Prod place\"",
+          "detail": [
+            {
+              "id": "c0e035c0-0cf6-4f07-86ab-d1dbad65079a",
+              "name": "Prod place",
+              "text": "● Prod place ↗✎🗑"
+            }
+          ]
+        },
+        {
+          "pass": true,
+          "what": "↗ teleports to \"Prod place\"'s pose within 0.01 (x, y, z, yaw and pitch: the look had turned) and closes the map",
+          "detail": {
+            "from": {
+              "x": 2400.5,
+              "y": 98,
+              "z": -2.5,
+              "yaw": 15.149999999999977,
+              "pitch": -31.75
+            },
+            "place": {
+              "id": "c0e035c0-0cf6-4f07-86ab-d1dbad65079a",
+              "name": "Prod place",
+              "colour": 4,
+              "x": 1198.5,
+              "y": 88,
+              "z": -3.5,
+              "yaw": 347.70000000000005,
+              "pitch": -40.300000000000004
+            },
+            "to": {
+              "x": 1198.5,
+              "y": 88,
+              "z": -3.5,
+              "yaw": 347.70000000000005,
+              "pitch": -40.300000000000004
+            },
+            "ms": 2
+          }
+        }
+      ],
+      "pass": true,
+      "placesBefore": [],
+      "proposedName": "Place 1 (1198, 88, -4)",
+      "shotDialog": "shots/6-place-dialog.png",
+      "placeSaved": {
+        "ms": 1,
+        "place": {
+          "id": "c0e035c0-0cf6-4f07-86ab-d1dbad65079a",
+          "name": "Prod place",
+          "colour": 4,
+          "x": 1198.5,
+          "y": 88,
+          "z": -3.5,
+          "yaw": 347.70000000000005,
+          "pitch": -40.300000000000004
+        },
+        "cameraPose": {
+          "x": 1198.5,
+          "y": 88,
+          "z": -3.5,
+          "yaw": 347.70000000000005,
+          "pitch": -40.300000000000004
+        }
+      },
+      "placeStored": {
+        "flush": {
+          "ok": true,
+          "flushSeq": 12
+        },
+        "places": [
+          {
+            "id": "c0e035c0-0cf6-4f07-86ab-d1dbad65079a",
+            "name": "Prod place",
+            "colour": 4,
+            "x": 1198.5,
+            "y": 88,
+            "z": -3.5,
+            "yaw": 347.70000000000005,
+            "pitch": -40.300000000000004
+          }
+        ]
+      },
+      "lookTurnedBeforeGo": true,
+      "dot": {
+        "placeOffsetBlocks": {
+          "dx": -1202,
+          "dz": -1
+        },
+        "statusBpp": null,
+        "pixelsOfPlaceColourAt300pxWest": 38
+      },
+      "placesTab": [
+        {
+          "id": "c0e035c0-0cf6-4f07-86ab-d1dbad65079a",
+          "name": "Prod place",
+          "text": "● Prod place ↗✎🗑"
+        }
+      ],
+      "shotMap": "shots/6-map-places.png",
+      "go": {
+        "from": {
+          "x": 2400.5,
+          "y": 98,
+          "z": -2.5,
+          "yaw": 15.149999999999977,
+          "pitch": -31.75
+        },
+        "place": {
+          "id": "c0e035c0-0cf6-4f07-86ab-d1dbad65079a",
+          "name": "Prod place",
+          "colour": 4,
+          "x": 1198.5,
+          "y": 88,
+          "z": -3.5,
+          "yaw": 347.70000000000005,
+          "pitch": -40.300000000000004
+        },
+        "to": {
+          "x": 1198.5,
+          "y": 88,
+          "z": -3.5,
+          "yaw": 347.70000000000005,
+          "pitch": -40.300000000000004
+        },
+        "ms": 2
+      },
+      "wallMs": 4528,
+      "pageErrorsDuring": 0,
+      "consoleErrorsDuring": 0
+    },
+    {
+      "step": 7,
+      "name": "modification mode: on in the map, a terrain parameter changed; the '(before the change)' copy in Load world holds the old parameters",
+      "notes": [],
+      "checks": [
+        {
+          "pass": true,
+          "what": "off at the open (#map-modify unchecked)"
+        },
+        {
+          "pass": true,
+          "what": "off: the pp-density.detailAmpHi control is disabled (value 1.5)"
+        },
+        {
+          "pass": true,
+          "what": "the switch turns the mode on and enables the control"
+        },
+        {
+          "pass": true,
+          "what": "pp-density.detailAmpHi 1.5 → 4: \"Backup saved as 'Prod check world (before the change)'\" showed, the world regenerated and settled",
+          "detail": {
+            "noticeAt": 232.2800000011921,
+            "roseAt": 232.2800000011921,
+            "done": true,
+            "t0": 8161.569999998435
+          }
+        },
+        {
+          "pass": true,
+          "what": "the notice and the world's stale count first seen in the same frame (both at 232 ms after the change was typed); sampled once per frame, the record does not show which came first",
+          "detail": {
+            "noticeAt": 232.2800000011921,
+            "roseAt": 232.2800000011921,
+            "done": true,
+            "t0": 8161.569999998435
+          }
+        },
+        {
+          "pass": true,
+          "what": "the switch turns the mode off again"
+        },
+        {
+          "pass": true,
+          "what": "the world's record now holds density.detailAmpHi 4 (genKey 1627597d9be597ba → 6c842fa8b3e9cd34)",
+          "detail": {
+            "id": "6be1f404-e967-4598-9dc5-1eeb251e7d88",
+            "name": "Prod check world",
+            "seedText": "prod-5b-7",
+            "profile": "large_biomes",
+            "backupOf": null,
+            "genKey": "6c842fa8b3e9cd34",
+            "paramsHash": "8d53e4e5907e0beb",
+            "generatorVersion": 5,
+            "schemaVersion": 2,
+            "created": 1793532448793,
+            "stateTableLength": 58,
+            "detailAmpHi": 4
+          }
+        },
+        {
+          "pass": true,
+          "what": "IndexedDB holds the copy \"Prod check world (before the change)\" (backupOf 6be1f404-e967-4598-9dc5-1eeb251e7d88) with the old parameters: density.detailAmpHi 1.5, genKey 1627597d9be597ba, paramsHash 9b03442e6785a45d",
+          "detail": {
+            "id": "c908636a-67b5-47a6-bc8f-9b8c21dfccb5",
+            "name": "Prod check world (before the change)",
+            "seedText": "prod-5b-7",
+            "profile": "large_biomes",
+            "backupOf": "6be1f404-e967-4598-9dc5-1eeb251e7d88",
+            "genKey": "1627597d9be597ba",
+            "paramsHash": "9b03442e6785a45d",
+            "generatorVersion": 5,
+            "schemaVersion": 2,
+            "created": 1793532448793,
+            "stateTableLength": 58,
+            "detailAmpHi": 1.5
+          }
+        },
+        {
+          "pass": true,
+          "what": "the copy carries the same edited column(s) as the world and the first world (1; equal ColumnDiffV1 bodies by colKey: [[\"2147450879\",\"4f93a353\"]])",
+          "detail": {
+            "world": {
+              "id": "6be1f404-e967-4598-9dc5-1eeb251e7d88",
+              "name": "Prod check world",
+              "seedText": "prod-5b-7",
+              "profile": "large_biomes",
+              "backupOf": null,
+              "genKey": "6c842fa8b3e9cd34",
+              "paramsHash": "8d53e4e5907e0beb",
+              "generatorVersion": 5,
+              "schemaVersion": 2,
+              "created": 1793532448793,
+              "stateTableLength": 58,
+              "detailAmpHi": 4
+            },
+            "copy": {
+              "id": "c908636a-67b5-47a6-bc8f-9b8c21dfccb5",
+              "name": "Prod check world (before the change)",
+              "seedText": "prod-5b-7",
+              "profile": "large_biomes",
+              "backupOf": "6be1f404-e967-4598-9dc5-1eeb251e7d88",
+              "genKey": "1627597d9be597ba",
+              "paramsHash": "9b03442e6785a45d",
+              "generatorVersion": 5,
+              "schemaVersion": 2,
+              "created": 1793532448793,
+              "stateTableLength": 58,
+              "detailAmpHi": 1.5
+            },
+            "copyState": {
+              "flushSeq": 14,
+              "updated": 1793532491297,
+              "player": {
+                "x": 1198.5,
+                "y": 88,
+                "z": -3.5,
+                "yaw": 347.70000000000005,
+                "pitch": -40.300000000000004,
+                "mode": "fly",
+                "speed": 12
+              },
+              "places": 1
+            },
+            "copyDiffs": {
+              "columns": 1,
+              "bytes": 26,
+              "cols": {
+                "2147450879": {
+                  "bytes": 26,
+                  "v": 1,
+                  "headerGenKey": "1627597d9be597ba",
+                  "bodyFnv": "4f93a353"
+                }
+              }
+            },
+            "worldDiffs": {
+              "columns": 1,
+              "bytes": 26,
+              "cols": {
+                "2147450879": {
+                  "bytes": 26,
+                  "v": 1,
+                  "headerGenKey": "1627597d9be597ba",
+                  "bodyFnv": "4f93a353"
+                }
+              }
+            }
+          }
+        },
+        {
+          "pass": true,
+          "what": "Load world lists \"Prod check world (before the change)\" with \"automatic copy\"",
+          "detail": [
+            {
+              "id": "6be1f404-e967-4598-9dc5-1eeb251e7d88",
+              "name": "Prod check world",
+              "title": "Prod check world · large_biomes · seed prod-5b-7",
+              "info": "Modified 2026-11-01 12:28 · 1 place",
+              "badges": []
+            },
+            {
+              "id": "c908636a-67b5-47a6-bc8f-9b8c21dfccb5",
+              "name": "Prod check world (before the change)",
+              "title": "Prod check world (before the change) · large_biomes · seed prod-5b-7",
+              "info": "Modified 2026-11-01 12:28 · 1 place",
+              "badges": [
+                "automatic copy"
+              ]
+            },
+            {
+              "id": "d27653c9-4539-4e1d-8ecd-c126e7dbbcab",
+              "name": "Prod check world",
+              "title": "Prod check world · large_biomes · seed prod-5b-7",
+              "info": "Modified 2026-11-01 12:28",
+              "badges": []
+            }
+          ]
+        },
+        {
+          "pass": true,
+          "what": "the copy opens (its hook names c908636a-67b5-47a6-bc8f-9b8c21dfccb5)"
+        },
+        {
+          "pass": true,
+          "what": "the copy's map shows pp-density.detailAmpHi 1.5, the value before the change"
+        }
+      ],
+      "pass": true,
+      "storedBefore": {
+        "detailAmpHi": 1.5,
+        "genKey": "1627597d9be597ba",
+        "paramsHash": "9b03442e6785a45d",
+        "worlds": 2
+      },
+      "valueBefore": "1.5",
+      "shotModifyOn": "shots/7-modify-on.png",
+      "change": {
+        "from": "1.5",
+        "to": "4",
+        "recorder": {
+          "noticeAt": 232.2800000011921,
+          "roseAt": 232.2800000011921,
+          "done": true,
+          "t0": 8161.569999998435
+        },
+        "settledMs": 207
+      },
+      "shotAfterChange": "shots/7-after-change.png",
+      "valueAfter": "4",
+      "flushAfterChange": {
+        "ok": true,
+        "flushSeq": 15
+      },
+      "storedAfter": {
+        "world": {
+          "id": "6be1f404-e967-4598-9dc5-1eeb251e7d88",
+          "name": "Prod check world",
+          "seedText": "prod-5b-7",
+          "profile": "large_biomes",
+          "backupOf": null,
+          "genKey": "6c842fa8b3e9cd34",
+          "paramsHash": "8d53e4e5907e0beb",
+          "generatorVersion": 5,
+          "schemaVersion": 2,
+          "created": 1793532448793,
+          "stateTableLength": 58,
+          "detailAmpHi": 4
+        },
+        "copy": {
+          "id": "c908636a-67b5-47a6-bc8f-9b8c21dfccb5",
+          "name": "Prod check world (before the change)",
+          "seedText": "prod-5b-7",
+          "profile": "large_biomes",
+          "backupOf": "6be1f404-e967-4598-9dc5-1eeb251e7d88",
+          "genKey": "1627597d9be597ba",
+          "paramsHash": "9b03442e6785a45d",
+          "generatorVersion": 5,
+          "schemaVersion": 2,
+          "created": 1793532448793,
+          "stateTableLength": 58,
+          "detailAmpHi": 1.5
+        },
+        "copyState": {
+          "flushSeq": 14,
+          "updated": 1793532491297,
+          "player": {
+            "x": 1198.5,
+            "y": 88,
+            "z": -3.5,
+            "yaw": 347.70000000000005,
+            "pitch": -40.300000000000004,
+            "mode": "fly",
+            "speed": 12
+          },
+          "places": 1
+        },
+        "copyDiffs": {
+          "columns": 1,
+          "bytes": 26,
+          "cols": {
+            "2147450879": {
+              "bytes": 26,
+              "v": 1,
+              "headerGenKey": "1627597d9be597ba",
+              "bodyFnv": "4f93a353"
+            }
+          }
+        },
+        "worldDiffs": {
+          "columns": 1,
+          "bytes": 26,
+          "cols": {
+            "2147450879": {
+              "bytes": 26,
+              "v": 1,
+              "headerGenKey": "1627597d9be597ba",
+              "bodyFnv": "4f93a353"
+            }
+          }
+        }
+      },
+      "copyColumnHeaders": {
+        "copy": {
+          "2147450879": {
+            "bytes": 26,
+            "v": 1,
+            "headerGenKey": "1627597d9be597ba",
+            "bodyFnv": "4f93a353"
+          }
+        },
+        "world": {
+          "2147450879": {
+            "bytes": 26,
+            "v": 1,
+            "headerGenKey": "1627597d9be597ba",
+            "bodyFnv": "4f93a353"
+          }
+        }
+      },
+      "list": [
+        {
+          "id": "6be1f404-e967-4598-9dc5-1eeb251e7d88",
+          "name": "Prod check world",
+          "title": "Prod check world · large_biomes · seed prod-5b-7",
+          "info": "Modified 2026-11-01 12:28 · 1 place",
+          "badges": []
+        },
+        {
+          "id": "c908636a-67b5-47a6-bc8f-9b8c21dfccb5",
+          "name": "Prod check world (before the change)",
+          "title": "Prod check world (before the change) · large_biomes · seed prod-5b-7",
+          "info": "Modified 2026-11-01 12:28 · 1 place",
+          "badges": [
+            "automatic copy"
+          ]
+        },
+        {
+          "id": "d27653c9-4539-4e1d-8ecd-c126e7dbbcab",
+          "name": "Prod check world",
+          "title": "Prod check world · large_biomes · seed prod-5b-7",
+          "info": "Modified 2026-11-01 12:28",
+          "badges": []
+        }
+      ],
+      "shotList": "shots/7-load-world-copy.png",
+      "copyOpenedAt": {
+        "x": 1198.5,
+        "y": 88,
+        "z": -3.5,
+        "yaw": 347.70000000000005,
+        "pitch": -40.300000000000004
+      },
+      "copyValue": "1.5",
+      "wallMs": 5716,
+      "pageErrorsDuring": 0,
+      "consoleErrorsDuring": 0
+    },
+    {
+      "step": 8,
+      "name": "?selftest=1",
+      "notes": [],
+      "checks": [
+        {
+          "pass": true,
+          "what": "✓ all 59 goldens match (7.5 s) (test/goldens.json holds 59; 59 ✓ rows)",
+          "detail": "✓ all 59 goldens match (7.5 s)"
+        },
+        {
+          "pass": true,
+          "what": "IndexedDB contract: 8/8 passed",
+          "detail": {
+            "kv": "IndexedDB contract: 8/8 passed",
+            "kvFailures": []
+          }
+        },
+        {
+          "pass": true,
+          "what": "the selftest database wi10-selftest is deleted after the run",
+          "detail": [
+            "wi10@1"
+          ]
+        }
+      ],
+      "pass": true,
+      "wallMs": 8870,
+      "summaryMs": 7435,
+      "summary": "✓ all 59 goldens match (7.5 s)",
+      "keyCount": 59,
+      "repoGoldenCount": 59,
+      "equalCount": 59,
+      "matchesRepoGoldens": 59,
+      "byGroup": {
+        "sp1": 27,
+        "sp2a": 20,
+        "sp3a": 3,
+        "sp3b": 2,
+        "sp3c": 2,
+        "sp3e": 5
+      },
+      "mismatches": [],
+      "kv": "IndexedDB contract: 8/8 passed",
+      "kvFailures": [],
+      "kvMs": 205,
+      "databasesAfter": [
+        "wi10@1"
+      ],
+      "shot": "shots/8-selftest.png",
+      "pageErrorsDuring": 0,
+      "consoleErrorsDuring": 0
+    },
+    {
+      "step": 9,
+      "name": "page and console errors",
+      "notes": [],
+      "checks": [
+        {
+          "pass": true,
+          "what": "no page error (0)",
+          "detail": []
+        },
+        {
+          "pass": true,
+          "what": "no console error (0; 2 benign logs ignored and listed)",
+          "detail": []
+        }
+      ],
+      "pass": true,
+      "pageErrors": 0,
+      "consoleErrors": 0,
+      "ignored": 2,
+      "wallMs": 0,
+      "pageErrorsDuring": 0,
+      "consoleErrorsDuring": 0
+    }
+  ],
+  "selftest": "59/59",
+  "kvContract": "IndexedDB contract: 8/8 passed",
+  "allStepsPass": true,
+  "consoleErrors": [],
+  "pageErrors": [],
+  "ignoredLogs": [
+    {
+      "step": "0-setup",
+      "tab": "tab1",
+      "source": "log.network",
+      "text": "Failed to load resource: the server responded with a status of 404 ()",
+      "url": "https://world-imaginer-voxel.vercel.app/favicon.ico",
+      "why": "index.html declares no icon, so Chrome asks for /favicon.ico and the host answers 404 (the same ignore as test/tools/cdp.ts ignoredLog)"
+    },
+    {
+      "step": "5-Load world: Rename, Export (.wiworld), Delete a second world, Import; the imported world opens equal",
+      "tab": "tab1",
+      "source": "log.intervention",
+      "text": "Blocked attempt to show a 'beforeunload' confirmation panel for a frame that never had a user gesture since its load. https://www.chromestatus.com/feature/5082396709879808",
+      "url": "https://world-imaginer-voxel.vercel.app/?world=d27653c9-4539-4e1d-8ecd-c126e7dbbcab&wiTest=1",
+      "why": "Chrome's own intervention: a beforeunload confirmation asked for by a frame without a user gesture is blocked and logged (SP5a's leave guard, `installLeaveGuard` in src/ui/world/reload.ts, which asks before a world page is left; the autosave's beforeunload save, spec §3.2, does not ask); not a page error"
+    }
+  ],
+  "consoleWarnings": [
+    {
+      "step": "6-places: B saves a place (name, colour, Enter); the map (M) shows its dot, the Places tab lists it; ↗ teleports",
+      "tab": "tab1",
+      "source": "log.rendering",
+      "text": "Canvas2D: Multiple readback operations using getImageData are faster with the willReadFrequently attribute set to true. See: https://html.spec.whatwg.org/multipage/canvas.html#concept-canvas-will-read-frequently",
+      "why": "the check's own reads of the map canvas (getImageData for the map's tile coverage and the place's dot), not the page's"
+    },
+    {
+      "step": "7-modification mode: on in the map, a terrain parameter changed; the '(before the change)' copy in Load world holds the old parameters",
+      "tab": "tab1",
+      "source": "log.rendering",
+      "text": "Canvas2D: Multiple readback operations using getImageData are faster with the willReadFrequently attribute set to true. See: https://html.spec.whatwg.org/multipage/canvas.html#concept-canvas-will-read-frequently",
+      "why": "the check's own reads of the map canvas (getImageData for the map's tile coverage and the place's dot), not the page's"
+    }
+  ],
+  "dialogs": [
+    {
+      "step": "2-build: break and place with the mouse, hotbar slot 4, F to walk and W, a look; the autosave",
+      "tab": "tab1",
+      "type": "beforeunload",
+      "message": "",
+      "url": "https://world-imaginer-voxel.vercel.app/?world=d27653c9-4539-4e1d-8ecd-c126e7dbbcab"
+    },
+    {
+      "step": "3-reload (Page.reload): blocks, pose and look, mode, hotbar, history; Ctrl+Z undoes the last block",
+      "tab": "tab1",
+      "type": "beforeunload",
+      "message": "",
+      "url": "https://world-imaginer-voxel.vercel.app/?world=d27653c9-4539-4e1d-8ecd-c126e7dbbcab&wiTest=1"
+    },
+    {
+      "step": "5-Load world: Rename, Export (.wiworld), Delete a second world, Import; the imported world opens equal",
+      "tab": "tab1",
+      "type": "beforeunload",
+      "message": "",
+      "url": "https://world-imaginer-voxel.vercel.app/?world=d27653c9-4539-4e1d-8ecd-c126e7dbbcab&wiTest=1"
+    },
+    {
+      "step": "5-Load world: Rename, Export (.wiworld), Delete a second world, Import; the imported world opens equal",
+      "tab": "tab1",
+      "type": "beforeunload",
+      "message": "",
+      "url": "https://world-imaginer-voxel.vercel.app/?world=6d043fc6-c180-4c52-a63e-31cd64e3b4dd"
+    },
+    {
+      "step": "7-modification mode: on in the map, a terrain parameter changed; the '(before the change)' copy in Load world holds the old parameters",
+      "tab": "tab1",
+      "type": "beforeunload",
+      "message": "",
+      "url": "https://world-imaginer-voxel.vercel.app/?world=6be1f404-e967-4598-9dc5-1eeb251e7d88&wiTest=1"
+    },
+    {
+      "step": "8-?selftest=1",
+      "tab": "tab1",
+      "type": "beforeunload",
+      "message": "",
+      "url": "https://world-imaginer-voxel.vercel.app/?world=c908636a-67b5-47a6-bc8f-9b8c21dfccb5&wiTest=1"
+    }
+  ],
+  "lockAttempts": [
+    {
+      "step": "2-build: break and place with the mouse, hotbar slot 4, F to walk and W, a look; the autosave",
+      "what": "build",
+      "attempt": 1,
+      "elementAtCentre": "canvas",
+      "granted": true
+    },
+    {
+      "step": "6-places: B saves a place (name, colour, Enter); the map (M) shows its dot, the Places tab lists it; ↗ teleports",
+      "what": "places",
+      "attempt": 1,
+      "elementAtCentre": "canvas",
+      "granted": true
+    }
+  ],
+  "downloads": [
+    {
+      "step": "5-Load world: Rename, Export (.wiworld), Delete a second world, Import; the imported world opens equal",
+      "guid": "a4dd2c30-e9a3-48d3-8222-590ca127886d",
+      "url": "blob:https://world-imaginer-voxel.vercel.app/19c74ce0-a388-4d07-8e52-9b0e1410bca",
+      "suggestedFilename": "Prod check world.wiworld",
+      "state": "completed",
+      "totalBytes": 3565,
+      "receivedBytes": 3565
+    }
+  ],
+  "idbEnd": {
+    "exists": true,
+    "databases": [
+      "wi10@1"
+    ],
+    "version": 1,
+    "stores": [
+      "diffs",
+      "history",
+      "meta",
+      "state",
+      "worlds"
+    ],
+    "worlds": [
+      {
+        "id": "6be1f404-e967-4598-9dc5-1eeb251e7d88",
+        "name": "Prod check world",
+        "seedText": "prod-5b-7",
+        "profile": "large_biomes",
+        "backupOf": null,
+        "genKey": "6c842fa8b3e9cd34",
+        "paramsHash": "8d53e4e5907e0beb",
+        "generatorVersion": 5,
+        "schemaVersion": 2,
+        "created": 1793532448793,
+        "stateTableLength": 58,
+        "detailAmpHi": 4
+      },
+      {
+        "id": "c908636a-67b5-47a6-bc8f-9b8c21dfccb5",
+        "name": "Prod check world (before the change)",
+        "seedText": "prod-5b-7",
+        "profile": "large_biomes",
+        "backupOf": "6be1f404-e967-4598-9dc5-1eeb251e7d88",
+        "genKey": "1627597d9be597ba",
+        "paramsHash": "9b03442e6785a45d",
+        "generatorVersion": 5,
+        "schemaVersion": 2,
+        "created": 1793532448793,
+        "stateTableLength": 58,
+        "detailAmpHi": 1.5
+      },
+      {
+        "id": "d27653c9-4539-4e1d-8ecd-c126e7dbbcab",
+        "name": "Prod check world",
+        "seedText": "prod-5b-7",
+        "profile": "large_biomes",
+        "backupOf": null,
+        "genKey": "1627597d9be597ba",
+        "paramsHash": "9b03442e6785a45d",
+        "generatorVersion": 5,
+        "schemaVersion": 2,
+        "created": 1793532448793,
+        "stateTableLength": 58,
+        "detailAmpHi": 1.5
+      }
+    ],
+    "state": [
+      {
+        "worldId": "6be1f404-e967-4598-9dc5-1eeb251e7d88",
+        "flushSeq": 15,
+        "updated": 1793532492946,
+        "player": {
+          "x": 1198.5,
+          "y": 88,
+          "z": -3.5,
+          "yaw": 347.70000000000005,
+          "pitch": -40.300000000000004,
+          "mode": "fly",
+          "speed": 12
+        },
+        "time": {
+          "t": 0.10250902500000789,
+          "speedIndex": 3
+        },
+        "hotbar": {
+          "v": 1,
+          "active": 3,
+          "slots": [
+            {
+              "type": "stone",
+              "pinned": {}
+            },
+            {
+              "type": "dirt",
+              "pinned": {}
+            },
+            {
+              "type": "grass_block",
+              "pinned": {}
+            },
+            {
+              "type": "oak_planks",
+              "pinned": {}
+            },
+            {
+              "type": "glass",
+              "pinned": {}
+            },
+            {
+              "type": "oak_log",
+              "pinned": {}
+            },
+            {
+              "type": "torch",
+              "pinned": {}
+            },
+            {
+              "fluid": "water"
+            },
+            {
+              "fluid": "lava"
+            }
+          ]
+        },
+        "places": [
+          {
+            "id": "c0e035c0-0cf6-4f07-86ab-d1dbad65079a",
+            "name": "Prod place",
+            "colour": 4,
+            "x": 1198.5,
+            "y": 88,
+            "z": -3.5,
+            "yaw": 347.70000000000005,
+            "pitch": -40.300000000000004
+          }
+        ]
+      },
+      {
+        "worldId": "c908636a-67b5-47a6-bc8f-9b8c21dfccb5",
+        "flushSeq": 14,
+        "updated": 1793532491297,
+        "player": {
+          "x": 1198.5,
+          "y": 88,
+          "z": -3.5,
+          "yaw": 347.70000000000005,
+          "pitch": -40.300000000000004,
+          "mode": "fly",
+          "speed": 12
+        },
+        "time": {
+          "t": 0.10250902500000789,
+          "speedIndex": 3
+        },
+        "hotbar": {
+          "v": 1,
+          "active": 3,
+          "slots": [
+            {
+              "type": "stone",
+              "pinned": {}
+            },
+            {
+              "type": "dirt",
+              "pinned": {}
+            },
+            {
+              "type": "grass_block",
+              "pinned": {}
+            },
+            {
+              "type": "oak_planks",
+              "pinned": {}
+            },
+            {
+              "type": "glass",
+              "pinned": {}
+            },
+            {
+              "type": "oak_log",
+              "pinned": {}
+            },
+            {
+              "type": "torch",
+              "pinned": {}
+            },
+            {
+              "fluid": "water"
+            },
+            {
+              "fluid": "lava"
+            }
+          ]
+        },
+        "places": [
+          {
+            "id": "c0e035c0-0cf6-4f07-86ab-d1dbad65079a",
+            "name": "Prod place",
+            "colour": 4,
+            "x": 1198.5,
+            "y": 88,
+            "z": -3.5,
+            "yaw": 347.70000000000005,
+            "pitch": -40.300000000000004
+          }
+        ]
+      },
+      {
+        "worldId": "d27653c9-4539-4e1d-8ecd-c126e7dbbcab",
+        "flushSeq": 11,
+        "updated": 1793532482752,
+        "player": {
+          "x": -3.571916389456568,
+          "y": 78.6200001,
+          "z": -3.5906680344696054,
+          "yaw": 347.70000000000005,
+          "pitch": -40.300000000000004,
+          "mode": "walk",
+          "speed": 12
+        },
+        "time": {
+          "t": 0.10250902500000789,
+          "speedIndex": 3
+        },
+        "hotbar": {
+          "v": 1,
+          "active": 3,
+          "slots": [
+            {
+              "type": "stone",
+              "pinned": {}
+            },
+            {
+              "type": "dirt",
+              "pinned": {}
+            },
+            {
+              "type": "grass_block",
+              "pinned": {}
+            },
+            {
+              "type": "oak_planks",
+              "pinned": {}
+            },
+            {
+              "type": "glass",
+              "pinned": {}
+            },
+            {
+              "type": "oak_log",
+              "pinned": {}
+            },
+            {
+              "type": "torch",
+              "pinned": {}
+            },
+            {
+              "fluid": "water"
+            },
+            {
+              "fluid": "lava"
+            }
+          ]
+        },
+        "places": []
+      }
+    ],
+    "history": [
+      {
+        "worldId": "6be1f404-e967-4598-9dc5-1eeb251e7d88",
+        "done": 2,
+        "undone": 0,
+        "lastDone": {
+          "edits": [
+            {
+              "x": -4,
+              "y": 77,
+              "z": -6,
+              "before": 4294967295,
+              "after": 6400
+            }
+          ]
+        }
+      },
+      {
+        "worldId": "c908636a-67b5-47a6-bc8f-9b8c21dfccb5",
+        "done": 2,
+        "undone": 0,
+        "lastDone": {
+          "edits": [
+            {
+              "x": -4,
+              "y": 77,
+              "z": -6,
+              "before": 4294967295,
+              "after": 6400
+            }
+          ]
+        }
+      },
+      {
+        "worldId": "d27653c9-4539-4e1d-8ecd-c126e7dbbcab",
+        "done": 2,
+        "undone": 0,
+        "lastDone": {
+          "edits": [
+            {
+              "x": -4,
+              "y": 77,
+              "z": -6,
+              "before": 4294967295,
+              "after": 6400
+            }
+          ]
+        }
+      }
+    ],
+    "diffs": {
+      "6be1f404-e967-4598-9dc5-1eeb251e7d88": {
+        "columns": 1,
+        "bytes": 26,
+        "cols": {
+          "2147450879": {
+            "bytes": 26,
+            "v": 1,
+            "headerGenKey": "1627597d9be597ba",
+            "bodyFnv": "4f93a353"
+          }
+        }
+      },
+      "c908636a-67b5-47a6-bc8f-9b8c21dfccb5": {
+        "columns": 1,
+        "bytes": 26,
+        "cols": {
+          "2147450879": {
+            "bytes": 26,
+            "v": 1,
+            "headerGenKey": "1627597d9be597ba",
+            "bodyFnv": "4f93a353"
+          }
+        }
+      },
+      "d27653c9-4539-4e1d-8ecd-c126e7dbbcab": {
+        "columns": 1,
+        "bytes": 26,
+        "cols": {
+          "2147450879": {
+            "bytes": 26,
+            "v": 1,
+            "headerGenKey": "1627597d9be597ba",
+            "bodyFnv": "4f93a353"
+          }
+        }
+      }
+    }
+  },
+  "notes": [
+    "Git HEAD 61c4a1f8895a7a07f9605f063db7bc599d50aaca (main). Served build = local build of main: production's / references assets/index-B8UGVfIF.js and index-Cm1A9o1R.css; dist/index.html (built 2026-11-01T10:24:53.143Z) references assets/index-B8UGVfIF.js; every one of the 51 files in dist/assets/ was fetched from production and is byte-identical (51/51 sha256 equal; index-B8UGVfIF.js sha256 f4a43520be0efa6e36d5faf0c1c1a47fbf12f72feb2d10ca703197bd00cd09e5).",
+    "Production honours &wiTest=1 on a saved world (?world=<id>&wiTest=1): every step read the hook (worldId, blockAt, aim, hotbar, blockHistory, mode, feet, pose, clock, places, flushNow, worldHash, stale, owner, lastLanding) and the page's IndexedDB wi10 through a read-only transaction on a connection of the check's own, closed after each read.",
+    "The window manager placed the window maximized at (0, 32), 1756 × 956; the viewport was 1756 × 869 at devicePixelRatio 1.09375, as in SP5a's production check. document.hasFocus() read false on the first page, before any input; the pointer lock was granted on the first click both times it was asked (lockAttempts).",
+    "Step 1: the bare / shows New world, Load world, Settings, Map and Selftest with no world canvas. The menu opens IndexedDB wi10 (version 1, stores diffs, history, meta, state, worlds) at load, so the fresh profile already held an empty wi10 before Create; no world, state or diff. New world: name \"Prod world\", preset large_biomes (of default, large_biomes, archipelago, amplified, floating_islands), seed typed \"prod-5b-7\"; Create navigated to /?world=d27653c9-4539-4e1d-8ecd-c126e7dbbcab and the world revealed 3244 ms after the click; worlds[id] holds the name, seedText, profile, genKey and backupOf null, and state[id] has flushSeq 0 with player null. navigator.storage.persisted() read false afterwards (Chrome's answer to Create's persist() request for a fresh profile; the spec navigates whatever the answer).",
+    "Step 2 (RegionBatch: data-renderer [\"batch\"]): reopened with &wiTest=1, the world opened flying at the spawn pose {\"x\":0,\"y\":80,\"z\":0,\"yaw\":315,\"pitch\":-10}. Real CDP input with the pointer lock: F (walk; the feet on the ground in 206 ms), W held 1.2 s (5.06 blocks), mouse moves (yaw 315.15 → 329.7000000000005, pitch -10.15 → -40.300000000000004), the 4 key (active slot 0 → 3, \"Oak planks\"), LMB on the aimed (-5, 76, -6) (state 15 → 0 in 105 ms), 20 small turns right so that the place lands on another voxel, RMB placing Oak planks at (-4, 77, -6) (0 → 25 in 3 ms); block history 0 → 2. Esc released the lock. An autosave with no flushNow committed exactly that state 1531 ms after the check began to watch: flushSeq 5, state.player equal to __wiTest.pose() with mode walk and speed 12, hotbar active 3, history 2 done steps (the last one the planks edit), 1 diff column.",
+    "Step 3: Page.reload (the F5 path) reopened /?world=<id>&wiTest=1 in 3346 ms: the broken voxel 0 and the planks 25, walking, the pose and the look identical to the last digit (Δ x, y, z, yaw, pitch all 0), the hotbar's slot 4 active with the same slots, the block history {size 2, redo 0}, the day speed index 0. Ctrl+Z (CDP key, Ctrl modifier, the world owning) turned the planks back to air in 6 ms with history {1, 1} while the broken voxel stayed air; Ctrl+Y put them back in 12 ms, history {2, 0}.",
+    "Step 4: a second target (Target.createTarget, the same Chrome window) on /?world=<id>&wiTest=1 landed on the start screen at https://world-imaginer-voxel.vercel.app/ with the notice \"This world is open in another tab\" (the trailing × is the notice's close button) after 2404 ms (the world page's 2 s lock wait), with no world page and no canvas; the first tab kept the world, before and after the second target was closed.",
+    "Step 5: the first world's clock was paused (T to index 3) and saved, so the leaving flush cannot move its hash. A second world \"Prod scratch\" (default, seed scratch-2) was created and opened. Load world listed both (the list read in 11.4 ms, __wiMenuListMs); Rename (Enter) made \"Prod world\" \"Prod check world\", listed and stored. Reopened with the hook, flushNow then worldHash() = 83254b1601ced0af. Export (a real click) downloaded \"Prod check world.wiworld\" through Browser.setDownloadBehavior into this directory: 3565 bytes, gzip of \"WI10\" version 1, header format wi10-world, world name \"Prod check world\", 1 column record, history 2 steps (sha256 b61c13f47147a12e0b0603eb81fd4d3c6bdafc0ff089af75ede8f0fedbecff2f). Delete on \"Prod scratch\" asked \"Delete 'Prod scratch'? This cannot be undone.\" in the notice row; confirmed, the row went and IndexedDB held no worlds, state, history or diffs for it (it had worlds and state, no history and no diffs before). Import of the downloaded file (DOM.setFileInputFiles) said \"Imported 'Prod check world'\" and listed it under a new id 6be1f404-e967-4598-9dc5-1eeb251e7d88: same seed, preset, genKey 1627597d9be597ba, stateTable of 58, and the same diff column with an equal ColumnDiffV1 body. Opened with the hook: worldHash() 83254b1601ced0af, equal; the two edited voxels [0,25] equal; its block history 2 steps.",
+    "Step 6, in the imported world: F to fly; a map click 300 px east teleported (lastLanding set, the map closed); B opened the Save place dialog (proposed name \"Place 1 (1198, 88, -4)\"), \"Prod place\" typed, the blue swatch (colour 4, #4aa3df, aria-pressed true), Enter: \"Place saved\", __wiTest.places() +1 at the camera's exact pose, and after flushNow state[id].places holds it. Another map click 300 px east moved the camera 1,202 blocks off it and a look under the pointer lock turned it; M showed the place's dot 300 px west of the arrow (38 px of #4aa3df within 8 px of that point, taking the map at 4 blocks/px, the check's own constant, not read back from the page); the Places tab listed \"Prod place\"; its ↗ teleported to the place's x, y, z, yaw and pitch within 0.01 and closed the map.",
+    "Step 7, in the imported world: M, Modify terrain (#map-modify) unchecked and density.detailAmpHi's control disabled at 1.5; the switch on enabled it; typed 4 + Enter: \"Backup saved as 'Prod check world (before the change)'\" showed (in the tool's notice row) at 232 ms, first seen in the same frame as the world going stale (their order within the frame not shown), and the world regenerated and settled. Switched off again. After flushNow the world's record holds detailAmpHi 4 with genKey 1627597d9be597ba → 6c842fa8b3e9cd34, and IndexedDB holds a new world \"Prod check world (before the change)\" with backupOf the imported world's id, detailAmpHi 1.5, the old genKey 1627597d9be597ba and paramsHash 9b03442e6785a45d, and the same edited column (equal ColumnDiffV1 body by colKey; both the copy's and the world's column headers read genKey 1627597d9be597ba, the world's column having had no edit since the change). Load world listed it with \"automatic copy\"; it opened (the hook named it), and its map's Parameters tab showed detailAmpHi 1.5, the value before the change.",
+    "Step 8: ?selftest=1 on production: \"✓ all 59 goldens match (7.5 s)\", 59 of 59 rows ✓ against test/goldens.json's 59 keys (byGroup {\"sp1\":27,\"sp2a\":20,\"sp3a\":3,\"sp3b\":2,\"sp3c\":2,\"sp3e\":5}), no mismatch; \"IndexedDB contract: 8/8 passed\" in 205 ms; wi10-selftest no longer listed by indexedDB.databases() after the run.",
+    "Step 9: 0 page errors and 0 console errors across the run. Ignored and listed: the favicon.ico 404, and Chrome's intervention \"Blocked attempt to show a 'beforeunload' confirmation panel for a frame that never had a user gesture since its load\" (step 5, asked for by SP5a's leave guard on the renamed first world's page at ?world=<id>&wiTest=1, which had had no input since its load, only flushNow() and worldHash() through Runtime.evaluate, when it was left for the Export). 6 beforeunload dialogs (the same leave guard's) opened on the navigations away from worlds that had had input, each accepted by the script (Page.handleJavaScriptDialog). Two console warnings are Chrome's Canvas2D willReadFrequently hint, caused by the check's own getImageData reads of the map canvas.",
+    "This is the second run of the script. The first run (raw-run-1.json, run-1.log, shots-run1/; the same production build, 0 page and 0 console errors, steps 4, 5, 6 and 8 passing) failed checks for the script's reasons, which were fixed before this run and are listed in 'runs'."
+  ],
+  "observations": [
+    "The walk page still shows its \"Click to fly\" hint while walking, until the first pointer lock (shots/3-reloaded.png, taken walking after the reload). SP5a's production check noted the same; not a failure.",
+    "In shots/6-map-places.png a hollow red ring is drawn about 300 CSS px (about 1,200 blocks) west of the place's blue dot, which is about where the imported world opened and where its edited column lies. It is the map's spawn marker (`mapView.ts` strokes the spawn as a #ff3b30 ring): the imported world's spawn, near (0, 0). The place's own dot is the blue one.",
+    "The Load world rows show list bullets (•) to the left of each row (shots/5-load-world-after-import.png, shots/7-load-world-copy.png). Recorded for the review against the mockups, not judged here.",
+    "navigator.storage.persisted() read false after the first Create in the fresh profile."
+  ],
+  "runs": [
+    {
+      "run": 1,
+      "date": "2026-11-01T11:24:12.235Z",
+      "file": "raw-run-1.json",
+      "steps": "1:fail 2:fail 3:fail 4:pass 5:pass 6:pass 7:fail 8:pass 9:pass",
+      "pageErrors": 0,
+      "consoleErrors": 0,
+      "whyDiscarded": [
+        "step 1: the check expected no wi10 before Create, but the worlds menu opens wi10 when it loads, so an empty wi10 already existed. The check now asks for no stored world.",
+        "step 2: the world opened at pitch −58 in that run, so the look loop stopped before moving the mouse, and the look check failed. The RMB place went back into the broken voxel, so \"broken\" and \"placed\" were the same voxel and the reload compare read 25 for both. The look now always turns right first, and the place aim turns until its voxel is neither the hole nor at the body.",
+        "step 3: the undo and redo checks read __wiTest.blockHistory() as soon as the voxel changed. The voxel changes before the edit's reply, and the history only after it. The check now waits for both together.",
+        "step 7: the copy opens at the place's pose, 1,200 blocks from the edited column, so blockAt read −1 (not Published). The copy's edited column is now compared in IndexedDB (equal ColumnDiffV1 bodies by colKey)."
+      ]
+    },
+    {
+      "run": 2,
+      "date": "2026-11-01T11:27:22.610Z",
+      "file": "raw-run.json",
+      "steps": "1:pass 2:pass 3:pass 4:pass 5:pass 6:pass 7:pass 8:pass 9:pass",
+      "summary": "1 9/9 checks; 2 12/12 checks; 3 9/9 checks; 4 3/3 checks; 5 15/15 checks; 6 9/9 checks; 7 12/12 checks; 8 3/3 checks; 9 2/2 checks"
+    }
+  ],
+  "windowEnd": {
+    "left": 0,
+    "top": 32,
+    "width": 1756,
+    "height": 956,
+    "windowState": "maximized"
+  },
+  "script": "/home/maestre/Proyectos/world-imaginer-voxel/.superpowers/sp5b/prodcheck/prodcheck.mjs (Node v24.21.0, no npm dependency, run as: node prodcheck.mjs /home/maestre/Proyectos/world-imaginer-voxel/.superpowers/sp5b/prodcheck /home/maestre/Proyectos/world-imaginer-voxel), then /home/maestre/Proyectos/world-imaginer-voxel/.superpowers/sp5b/prodcheck/assemble.mjs for this file; raw output /home/maestre/Proyectos/world-imaginer-voxel/.superpowers/sp5b/prodcheck/raw-run.json, log /home/maestre/Proyectos/world-imaginer-voxel/.superpowers/sp5b/prodcheck/run.log, screenshots /home/maestre/Proyectos/world-imaginer-voxel/.superpowers/sp5b/prodcheck/shots/, the exported file /home/maestre/Proyectos/world-imaginer-voxel/.superpowers/sp5b/prodcheck/Prod check world.wiworld",
+  "chrome": "Chrome/155.0.8059.39, headful on the display, fresh mkdtemp profile /tmp/wi10-prodcheck-sp5b-E21BnE (removed at the end: true), DevTools on a free port (--remote-debugging-port=0), --start-maximized and --ignore-gpu-blocklist, no offload variables (PRIME on-demand, confirmed by the user and by prime-select query: ANGLE on OpenGL on the Iris Xe); MESA_SHADER_CACHE_DISABLE=true for this process only, so no user shader cache was read or written; stopped by CDP Browser.close (exit code 0)",
+  "firefox": {
+    "by": "the user, by hand, in their own Firefox, on production",
+    "browser": "Firefox 158",
+    "date": "2026-11-01",
+    "url": "https://world-imaginer-voxel.vercel.app/",
+    "build": "main at 61c4a1f, the build the Chrome check above found served (index-B8UGVfIF.js); main was not pushed again before the user's check",
+    "steps": "steps 1-8, as the Chrome check's (create, build, reload, two tabs, export and import, places, the mode and its backup, ?selftest=1): all good",
+    "reopenOnF5": "F5 on a saved world reopened it (D24's lock wait, which only Firefox's run checks on production)",
+    "editThenReload": "an edit followed by a reload within about 300 ms survived (the pagehide commit, spec §3.2; recorded, not gated). The user forced the quick reload with a double F5, because the leave guard's confirmation appears on the first",
+    "selftest": "59/59, the same values as the earlier Firefox reading (assets/sp5b/selftest-firefox.json); \"IndexedDB contract: 8/8 passed\"",
+    "stutter": "none noticed while building or breaking",
+    "userWords": "\"Todo bien en Firefox del 1 al 8, el cambio sobrevive al F5 según he podido probar (con doble F5 en Firefox fuerzo el refresh en menos de medio segundo, ya que aparece un modal de confirmación y con el ratón no me da tiempo a seleccionar la casilla). Esta vez no he notado tirones al construir o romper.\""
+  },
+  "corrections": [
+    {
+      "by": "the verifier, 2026-11-01",
+      "what": "step 5's ignored log and step 9's note: the blocked beforeunload confirmation and the 6 beforeunload dialogs attributed to SP5a's leave guard (installLeaveGuard), not to the page's beforeunload save handler",
+      "why": "the autosave's beforeunload listener only posts a flush; the leave guard is the listener that calls preventDefault, which is what asks for the confirmation"
+    },
+    {
+      "by": "the verifier, 2026-11-01",
+      "what": "step 6's note: the map's 4 blocks/px named as the check's constant, not read back from the page",
+      "why": "the dot is looked for 300 px west of the arrow because the clicks were 300 px; the scale is what the check assumes, about 1,202 blocks over those 300 px, and no field records the map's scale as the page had it"
+    },
+    {
+      "by": "the verifier, 2026-11-01",
+      "what": "step 7: \"the change waited for its copy\" replaced by the notice and the stale count being first seen in the same frame, their order not shown",
+      "why": "`noticeAt` and `roseAt` are both 232.28 ms: a per-frame sampler saw both in one frame, so the record cannot order them"
+    },
+    {
+      "by": "the verifier, 2026-11-01",
+      "what": "the observations: the hollow red ring west of the place's dot named as the map's spawn marker",
+      "why": "`mapView.ts` strokes the spawn as a #ff3b30 ring; it lies about 1,200 blocks west of the place, near (0, 0), where the world's spawn is"
+    },
+    {
+      "by": "the controller, 2026-11-01",
+      "what": "the firefox block filled from the user's check by hand, with the user's words quoted verbatim",
+      "why": "the block was pending when the Chrome check was recorded"
+    }
+  ]
+}
