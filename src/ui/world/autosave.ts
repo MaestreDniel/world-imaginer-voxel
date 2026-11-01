@@ -16,12 +16,12 @@
  *   the undo or redo of a large step; SP5c spec §2.8, D23), then builds the state and the history in the same task, so
  *   a flushed edit's step is in the same flush. The hide and close triggers post at once when something changed (the
  *   tab's own close stays SP5b's accepted window); `flushNow` and `beforeLeave` always post.
+ *   The state is rebuilt only when a part moved (else the last record with `updated` now); the history is built and
+ *   posted only when its version differs from the last committed one, else null.
  * - **A leave and a bulk batch** (SP5c spec §2.8): while a bulk batch is pending, `beforeLeave` first waits for the edit
  *   path to settle, at most 5,000 ms, so its flush carries the batch's step and the page does not end the sim before
  *   the batch is saved; then it posts and waits for `flushed` at most 1,000 ms, as with none pending, when it posts at
  *   once.
- *   The state is rebuilt only when a part moved (else the last record with `updated` now); the history is built and
- *   posted only when its version differs from the last committed one, else null.
  * - `pause(true)` stops the timer's posts (the bench's L1-L10 and L11's "off" parts), never `flushNow`'s. A `closed`
  *   result (the browser closed the connection, D14) stops the timer and the hide and close triggers; a `flush` that
  *   rejects `SimFailed` (the sim is gone) counts as not saved, reaches no notice, and stops every post.
