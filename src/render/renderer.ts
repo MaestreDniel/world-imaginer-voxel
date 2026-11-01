@@ -8,7 +8,7 @@ import { firstOrigin, type FloatingOrigin } from './floatingOrigin';
 import type { FrameState } from './frameState';
 import { createMaterialSystem, type MaterialSystem } from './materials/index';
 import { createSectionRenderer, type SectionRenderer, type SectionRendererKind } from './sectionRenderer';
-import { createSelection } from './selection';
+import { GHOST_CYAN, SELECTION_YELLOW, createSelection, createVolumeBox, type Selection, type VolumeBox } from './selection';
 import { createSky } from './sky';
 import { createFlatColorArray } from './textureArray';
 
@@ -20,7 +20,8 @@ import { createFlatColorArray } from './textureArray';
  * the section renderer itself, because the page (`ui`) may not touch `render/materials/`. It replaces SP0's sky page.
  * SP4b (spec §4.5, §5): the far plane follows a live render distance, the warm-up draws every region unculled, the
  * first floating origin is the snapped spawn, the GPU timer drops every query in flight on a disjoint, and the canvas
- * names its section renderer (`data-renderer`).
+ * names its section renderer (`data-renderer`). SP5c (spec §6.1): the selection tool's two volume boxes, the
+ * selection's and the ghost's, each a depth-tested line and a line dimmed through terrain drawn after the water.
  *
  * Pass order (master §4.5): opaque (front side, front to back), the sky dome, cutout (double side, alpha test), then
  * translucent (blended, back to front). The first three share three's opaque list, ordered by `opaquePassSort`; the
@@ -116,7 +117,8 @@ export interface WorldRenderer {
    * Compiles every material behind the loading screen (`renderer.compileAsync`, spec §6.4, §8.4), for every built
    * section whether revealed or not: three compiles only visible objects, and a `BatchedMesh` or region mesh needs its
    * own program variant, so the sections are counted visible for the compile's synchronous walk. A pass with no built
-   * section is compiled on a stand-in of the section renderer's kind (`compileScene`, rulings R11).
+   * section is compiled on a stand-in of the section renderer's kind (`compileScene`, rulings R11). The hidden outline
+   * and the two hidden volume boxes are counted visible too (`compileWorldScene`).
    */
   compile(): Promise<void>;
   /** Sorts the translucent regions from the camera, writes the frame uniforms and renders (inside the GPU timer). */
@@ -136,6 +138,17 @@ export interface WorldRenderer {
   setOutline(x0: number, y0: number, z0: number, x1: number, y1: number, z1: number): void;
   /** Hides the block outline: no target, the pointer free, paused, or no HUD. */
   hideOutline(): void;
+  /**
+   * Shows the selection's volume box around x0 … x1, y0 … y1, z0 … z1 in `colour`, relative to the floating origin (scene
+   * coordinates, as `setOutline`), seen dimmed through terrain (SP5c spec §6.1, D3). Allocates nothing.
+   */
+  setSelectionBox(x0: number, y0: number, z0: number, x1: number, y1: number, z1: number, colour: number): void;
+  /** Hides the selection's volume box: the tool off, no corner, or paused. */
+  hideSelectionBox(): void;
+  /** Shows the ghost's volume box, as `setSelectionBox` (SP5c spec §6.1, D11). */
+  setGhostBox(x0: number, y0: number, z0: number, x1: number, y1: number, z1: number, colour: number): void;
+  /** Hides the ghost's volume box. */
+  hideGhostBox(): void;
   /** The near plane: `NEAR_WALK` walking, `NEAR_FLY` flying (`applyNear`, SP5a spec §3.5). */
   setNear(near: number): void;
   /**
@@ -381,6 +394,60 @@ export function releaseGl(renderer: Pick<WebGLRenderer, 'dispose' | 'forceContex
   canvas.remove();
 }
 
+/** The world's scene and the overlays the page drives: the block outline and the two volume boxes (SP5c spec §6.1). */
+export interface WorldScene {
+  readonly scene: Scene;
+  /** The block outline (SP5a spec §3.5). */
+  readonly outline: Selection;
+  /** The selection's volume box (SP5c D3). */
+  readonly selectionBox: VolumeBox;
+  /** The ghost's volume box (SP5c D11). */
+  readonly ghostBox: VolumeBox;
+  /** Disposes the outline and the boxes. */
+  dispose(): void;
+}
+
+/** The scene: the sections, the sky, the outline and the two volume boxes, each overlay hidden until it is set. */
+export function createWorldScene(sections: Pick<SectionRenderer, 'root'>, sky: Object3D): WorldScene {
+  const outline = createSelection();
+  const selectionBox = createVolumeBox(SELECTION_YELLOW);
+  const ghostBox = createVolumeBox(GHOST_CYAN);
+  const scene = new Scene();
+  scene.add(sections.root);
+  scene.add(sky);
+  scene.add(outline.object, selectionBox.object, ghostBox.object);
+  return {
+    scene,
+    outline,
+    selectionBox,
+    ghostBox,
+    dispose() {
+      outline.dispose();
+      selectionBox.dispose();
+      ghostBox.dispose();
+    },
+  };
+}
+
+/** Runs `fn` with each of `roots` and everything under it counted visible (`withSectionsShown` over each). */
+function withAllShown<T>(roots: readonly Object3D[], fn: () => T, i = 0): T {
+  return i === roots.length ? fn() : withSectionsShown(roots[i]!, () => withAllShown(roots, fn, i + 1));
+}
+
+/**
+ * The load's compile over the world's scene (`compileScene`), with the hidden outline and both hidden volume boxes
+ * counted visible for the compile's synchronous walk, so their programs link behind the loading screen too, not on the
+ * first aimed frame or the first Q (SP5a spec §3.5, SP5c spec §6.1).
+ */
+export function compileWorldScene(
+  r: { compileAsync(scene: Object3D, camera: Camera): Promise<unknown> },
+  w: WorldScene,
+  camera: Camera,
+  sections: Pick<SectionRenderer, 'root' | 'addStandIns'>,
+): Promise<void> {
+  return withAllShown([w.outline.object, w.selectionBox.object, w.ghostBox.object], () => compileScene(r, w.scene, camera, sections));
+}
+
 /** The world renderer in `host`, with the section renderer of `o.kind` over its own materials (spec §6.1). */
 export function createWorldRenderer(host: HTMLElement, o: WorldRendererOptions): WorldRenderer {
   const albedo = createFlatColorArray();
@@ -394,11 +461,8 @@ export function createWorldRenderer(host: HTMLElement, o: WorldRendererOptions):
     throw e;
   }
   const sky = createSky(materials);
-  const selection = createSelection();
-  const scene = new Scene();
-  scene.add(sections.root);
-  scene.add(sky);
-  scene.add(selection.object);
+  const world = createWorldScene(sections, sky);
+  const { scene, outline: selection, selectionBox, ghostBox } = world;
   // The first floating origin is the snapped spawn (SP4b spec §3.4), before anything is staged.
   const origin = firstOrigin(o.originAt);
   sections.setOrigin(origin.x, origin.y, origin.z);
@@ -464,9 +528,7 @@ export function createWorldRenderer(host: HTMLElement, o: WorldRendererOptions):
     origin,
     sections,
     async compile() {
-      // The hidden outline counted visible for the compile's synchronous walk, so its program links behind the loading
-      // screen too, not on the first aimed frame.
-      await withSectionsShown(selection.object, () => compileScene(renderer, scene, camera, sections));
+      await compileWorldScene(renderer, world, camera, sections);
     },
     frame(state) {
       draw(state);
@@ -482,6 +544,18 @@ export function createWorldRenderer(host: HTMLElement, o: WorldRendererOptions):
     },
     hideOutline() {
       selection.hide();
+    },
+    setSelectionBox(x0, y0, z0, x1, y1, z1, colour) {
+      selectionBox.set(x0, y0, z0, x1, y1, z1, colour);
+    },
+    hideSelectionBox() {
+      selectionBox.hide();
+    },
+    setGhostBox(x0, y0, z0, x1, y1, z1, colour) {
+      ghostBox.set(x0, y0, z0, x1, y1, z1, colour);
+    },
+    hideGhostBox() {
+      ghostBox.hide();
     },
     setNear(near) {
       applyNear(camera, near);
@@ -508,7 +582,7 @@ export function createWorldRenderer(host: HTMLElement, o: WorldRendererOptions):
       timer?.dispose();
       sections.dispose();
       scene.clear();
-      selection.dispose();
+      world.dispose();
       sky.geometry.dispose();
       materials.dispose();
       albedo.dispose();

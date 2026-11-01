@@ -77,11 +77,40 @@ describe('mountBuildHud: the crosshair, the hotbar and the slot name (SP5a spec 
     expect(vi.getTimerCount()).toBe(0);
   });
 
+  test('the label is hidden at mount, shown with its text, hidden by null; the same text twice writes once (SP5c spec §1.3, D3)', () => {
+    const { hud } = mount();
+    const label = dom.el('world-select-label');
+    expect(label.hidden).toBe(true);
+    expect(label.textContent).toBe('');
+    // Count the writes of its text.
+    let writes = 0;
+    let text = label.textContent;
+    Object.defineProperty(label, 'textContent', {
+      get: () => text,
+      set: (v: string) => { writes++; text = v; },
+      configurable: true,
+    });
+    hud.setSelectLabel('Selection tool: LMB marks corner 1, RMB corner 2');
+    expect([label.hidden, label.textContent, writes]).toEqual([false, 'Selection tool: LMB marks corner 1, RMB corner 2', 1]);
+    hud.setSelectLabel('Selection tool: LMB marks corner 1, RMB corner 2');
+    expect(writes, 'the same text twice writes once').toBe(1);
+    hud.setSelectLabel('Corner 1 at 1, 2, 3: RMB marks corner 2');
+    expect([label.hidden, label.textContent, writes]).toEqual([false, 'Corner 1 at 1, 2, 3: RMB marks corner 2', 2]);
+    hud.setSelectLabel(null);
+    expect(label.hidden).toBe(true);
+    // Shown again with the text it holds: no write.
+    hud.setSelectLabel('Corner 1 at 1, 2, 3: RMB marks corner 2');
+    expect([label.hidden, writes]).toEqual([false, 2]);
+    hud.dispose();
+    expect(dom.body.children).toHaveLength(0);
+  });
+
   test('`hud` false: nothing mounted', () => {
     const { hotbar, hud } = mount({ hud: false, locked: () => true });
     expect(dom.body.children).toHaveLength(0);
     hotbar.select(3);
     hud.refresh();
+    hud.setSelectLabel('Selection tool: LMB marks corner 1, RMB corner 2');
     expect(dom.body.children).toHaveLength(0);
     expect(vi.getTimerCount()).toBe(0);
     hud.dispose();
@@ -104,5 +133,26 @@ describe('mountBuildHud: the crosshair, the hotbar and the slot name (SP5a spec 
     const slotNameTop = bottom('.world-slot-name') + 22;
     expect(slotNameTop).toBeLessThanOrEqual(bottom('.world-notices'));
     expect(slotNameTop).toBeLessThanOrEqual(bottom('.palette-panel'));
+  });
+
+  test('the selection label sits above the slot name, and the notices rise above it while it shows (styles.css; SP5c spec §1.3)', () => {
+    const css = readFileSync(new URL('../../src/ui/styles.css', import.meta.url), 'utf8');
+    const rule = (sel: string): string => {
+      const at = css.indexOf(`\n${sel} {`);
+      if (at < 0) throw new Error(`no rule ${sel}`);
+      return css.slice(css.indexOf('{', at) + 1, css.indexOf('}', at));
+    };
+    const bottom = (sel: string): number => {
+      const m = rule(sel).match(/(?:^|;)\s*bottom: ([\d.]+)(px|rem);/);
+      if (!m) throw new Error(`no bottom in ${sel}`);
+      return Number(m[1]) * (m[2] === 'rem' ? 16 : 1);
+    };
+    // One line, as tall as the slot name (about 21.4 px, a 22 px bound).
+    expect(rule('.world-select-label')).toContain('white-space: nowrap;');
+    expect(rule('.world-select-label')).toContain('pointer-events: none;');
+    expect(bottom('.world-select-label')).toBeGreaterThanOrEqual(bottom('.world-slot-name') + 22);
+    expect(bottom('.world-host:has(> .world-select-label:not([hidden])) > .world-notices'))
+      .toBeGreaterThanOrEqual(bottom('.world-select-label') + 22);
+    expect(css).toMatch(/\.world-select-label\[hidden\][^{]*\{ display: none; \}/);
   });
 });

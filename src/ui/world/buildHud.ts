@@ -3,6 +3,8 @@
  * the pointer lock; the hotbar, nine 40 × 40 px swatches 10 px above the bottom centre, the active one with a 2 px
  * white border; and the slot's name 8 px above the bar for `SLOT_NAME_MS` after a change of the hotbar (a timer
  * `dispose` clears). Text only through `textContent`. Nothing is mounted when `hud` is false (captures, panoramas).
+ * SP5c (spec §1.3, D3): the selection tool's label `#world-select-label`, above the slot name, set by `setSelectLabel`
+ * when the tool's state, its counts or a refusal change (never per frame) and hidden with the tool off.
  *
  * The swatches follow the hotbar through its `subscribe`; `refresh`, which the page calls on every rendered frame,
  * only shows or hides the crosshair when the lock changed, and allocates nothing.
@@ -30,9 +32,11 @@ export function swatchColor(slot: Slot): string {
 
 export function mountBuildHud(host: HTMLElement, o: { hotbar: Hotbar; hud: boolean; locked(): boolean }): {
   refresh(): void;
+  /** Shows the selection tool's label with `text` (written only when it differs), or hides it on null (SP5c §1.3). */
+  setSelectLabel(text: string | null): void;
   dispose(): void;
 } {
-  if (!o.hud) return { refresh() {}, dispose() {} };
+  if (!o.hud) return { refresh() {}, setSelectLabel() {}, dispose() {} };
   const { hotbar } = o;
   const cross = el('div', 'world-crosshair', '+');
   cross.id = 'world-crosshair';
@@ -40,6 +44,9 @@ export function mountBuildHud(host: HTMLElement, o: { hotbar: Hotbar; hud: boole
   const name = el('div', 'world-slot-name');
   name.id = 'world-slot-name';
   name.hidden = true;
+  const label = el('div', 'world-select-label');
+  label.id = 'world-select-label';
+  label.hidden = true;
   const bar = el('div', 'world-hotbar');
   bar.id = 'world-hotbar';
   const swatches: HTMLElement[] = [];
@@ -48,7 +55,7 @@ export function mountBuildHud(host: HTMLElement, o: { hotbar: Hotbar; hud: boole
     swatches.push(s);
     bar.append(s);
   }
-  host.append(cross, name, bar);
+  host.append(cross, label, name, bar);
 
   const draw = (): void => {
     for (let i = 0; i < swatches.length; i++) {
@@ -78,6 +85,8 @@ export function mountBuildHud(host: HTMLElement, o: { hotbar: Hotbar; hud: boole
   });
 
   let shownLocked = false;
+  /** The label's text as last written, so the same text is not written twice. */
+  let labelText = '';
   return {
     refresh() {
       const locked = o.locked();
@@ -85,10 +94,22 @@ export function mountBuildHud(host: HTMLElement, o: { hotbar: Hotbar; hud: boole
       shownLocked = locked;
       cross.hidden = !locked;
     },
+    setSelectLabel(text) {
+      if (text === null) {
+        label.hidden = true;
+        return;
+      }
+      if (text !== labelText) {
+        labelText = text;
+        label.textContent = text;
+      }
+      label.hidden = false;
+    },
     dispose() {
       unsubscribe();
       clearNameTimer();
       cross.remove();
+      label.remove();
       name.remove();
       bar.remove();
     },

@@ -1,14 +1,16 @@
 import {
   BoxGeometry, Group, LinearMipmapLinearFilter, Mesh, MeshBasicMaterial, NearestFilter, PerspectiveCamera, Scene,
-  ShaderMaterial, type BatchedMesh, type Material, type Object3D, type RenderItem,
+  ShaderMaterial, Vector3, type BatchedMesh, type LineSegments, type Material, type Object3D, type RenderItem,
 } from 'three';
+import { WebGLRenderList } from 'three/src/renderers/webgl/WebGLRenderLists.js';
 import { describe, expect, test } from 'vitest';
+import { MESH_PASS_TRANSLUCENT } from '../../src/mesh/column';
 import { createMaterialSystem } from '../../src/render/materials/index';
 import {
-  NEAR_FLY, NEAR_WALK, applyNear, applyRenderDistance, compileScene, createGpuTimer, gpuEstimateOf, opaquePassSort,
-  withRegionsUnculled, withSectionsShown, type GpuEstimate,
+  NEAR_FLY, NEAR_WALK, applyNear, applyRenderDistance, compileScene, compileWorldScene, createGpuTimer, createWorldScene,
+  gpuEstimateOf, opaquePassSort, withRegionsUnculled, withSectionsShown, type GpuEstimate,
 } from '../../src/render/renderer';
-import { createSelection } from '../../src/render/selection';
+import { GHOST_CYAN, SELECTION_YELLOW, VOLUME_DIM_ORDER, createSelection } from '../../src/render/selection';
 import { SKY_RENDER_ORDER } from '../../src/render/sky';
 import { createSectionRenderer, type SectionRendererKind } from '../../src/render/sectionRenderer';
 import { createSky } from '../../src/render/sky';
@@ -294,6 +296,113 @@ describe('compileScene: every pass\'s program at load, built or not (SP4b spec �
       sections.dispose();
     });
   }
+});
+
+describe('the volume boxes in the scene (SP5c spec §6.1, §6.4)', () => {
+  const world = (kind: SectionRendererKind) => {
+    const materials = createMaterialSystem({ variant: kind, ao: true, smoothLight: true }, createFlatColorArray());
+    const sections = createSectionRenderer(kind, materials);
+    const w = createWorldScene(sections, createSky(materials));
+    return { sections, w, camera: new PerspectiveCamera(70, 16 / 9, 0.1, 336) };
+  };
+  const linesUnder = (o: Object3D): LineSegments[] => {
+    const out: LineSegments[] = [];
+    o.traverse((c) => { if ((c as LineSegments).isLineSegments === true) out.push(c as LineSegments); });
+    return out;
+  };
+
+  test('the two boxes are in the scene, hidden until `set`; `compile` counts them visible', async () => {
+    const { sections, w, camera } = world('batch');
+    const boxes = [w.selectionBox, w.ghostBox];
+    for (const b of boxes) {
+      expect(w.scene.children).toContain(b.object);
+      expect(b.object.visible).toBe(false);
+    }
+    expect(w.scene.children).toContain(w.outline.object);
+    const visibleLines = (): LineSegments[] => {
+      const out: LineSegments[] = [];
+      w.scene.traverseVisible((o) => { if ((o as LineSegments).isLineSegments === true) out.push(o as LineSegments); });
+      return out;
+    };
+    expect(visibleLines()).toEqual([]);
+    // three's compile walks only visible objects: the walk sees the outline and both lines of both boxes.
+    const seen: Object3D[] = [];
+    const r = {
+      compileAsync(scene: Object3D): Promise<unknown> {
+        scene.traverseVisible((o) => { if ((o as LineSegments).isLineSegments === true) seen.push(o); });
+        return Promise.resolve(scene);
+      },
+    };
+    await compileWorldScene(r, w, camera, sections);
+    const all = [w.outline.object, ...linesUnder(w.selectionBox.object), ...linesUnder(w.ghostBox.object)];
+    expect(all).toHaveLength(5);
+    expect(new Set(seen)).toEqual(new Set(all));
+    expect(seen).toHaveLength(5);
+    // Hidden again after the compile.
+    expect(visibleLines()).toEqual([]);
+    expect([w.outline.object.visible, w.selectionBox.object.visible, w.ghostBox.object.visible]).toEqual([false, false, false]);
+    w.selectionBox.set(0, 64, 0, 4, 66, 3, SELECTION_YELLOW);
+    expect(new Set(visibleLines())).toEqual(new Set(linesUnder(w.selectionBox.object)));
+    w.ghostBox.set(0, 64, 0, 4, 66, 3, GHOST_CYAN);
+    expect(visibleLines()).toHaveLength(4);
+    w.selectionBox.hide();
+    w.ghostBox.hide();
+    expect(visibleLines()).toEqual([]);
+    w.dispose();
+    sections.dispose();
+  });
+
+  test('with a RegionMesh holding 64 translucent regions after its sort, the dimmed box sorts after every one of them in three\'s transparent list', () => {
+    const { sections, w, camera } = world('mesh');
+    // 8 × 8 regions of 8 × 8 columns, each with one water quad.
+    for (let rx = 0; rx < 8; rx++) {
+      for (let rz = 0; rz < 8; rz++) sections.stage(fakePayload(8 * rx + 3, 8 * rz + 3, [{ sy: 4, pass: 2, quads: 1 }]), 1);
+    }
+    pumpAll(sections);
+    sections.revealAll();
+    camera.position.set(512, 120, 512);
+    camera.lookAt(0, 60, 0);
+    camera.updateMatrixWorld(true);
+    sections.sortTranslucent(camera.position.x, camera.position.y, camera.position.z);
+    const water: Mesh[] = [];
+    sections.root.traverse((o) => {
+      if ((o as Mesh).isMesh === true && o.userData['pass'] === MESH_PASS_TRANSLUCENT) water.push(o as Mesh);
+    });
+    expect(water).toHaveLength(64);
+    expect(Math.max(...water.map((m) => m.renderOrder))).toBe(63);
+    // The boxes far behind every region: by depth alone they would be drawn first.
+    w.selectionBox.set(-900, 0, -900, -890, 10, -890, SELECTION_YELLOW);
+    w.ghostBox.set(-900, 0, -900, -890, 10, -890, GHOST_CYAN);
+    w.scene.updateMatrixWorld(true);
+
+    // three's projectObject: visible objects, the group order from the nearest Group, z the projected centre's depth.
+    const list = new WebGLRenderList(undefined as never);
+    list.init();
+    const proj = camera.projectionMatrix.clone().multiply(camera.matrixWorldInverse);
+    const v = new Vector3();
+    const project = (o: Object3D, groupOrder: number): void => {
+      if (!o.visible) return;
+      if ((o as Group).isGroup === true) groupOrder = o.renderOrder;
+      else if ((o as Mesh).isMesh === true || (o as LineSegments).isLineSegments === true) {
+        const z = v.setFromMatrixPosition(o.matrixWorld).applyMatrix4(proj).z;
+        const m = o as Mesh;
+        (list.push as (...a: unknown[]) => void)(o, m.geometry, m.material as Material, groupOrder, z, null, camera);
+      }
+      for (const c of o.children) project(c, groupOrder);
+    };
+    project(w.scene, 0);
+    list.sort(opaquePassSort({ terrainCutout: new ShaderMaterial() }), undefined as never, false);
+    const transparent = list.transparent.map((i) => i.object);
+    const dims = [w.selectionBox, w.ghostBox].map((b) => linesUnder(b.object)[1]!);
+    for (const d of dims) expect(d.renderOrder).toBe(VOLUME_DIM_ORDER);
+    for (const m of water) expect(transparent).toContain(m);
+    // Both dimmed lines come after every water region.
+    const lastWater = Math.max(...water.map((m) => transparent.indexOf(m)));
+    for (const d of dims) expect(transparent.indexOf(d)).toBeGreaterThan(lastWater);
+    expect(transparent.slice(-2)).toEqual(expect.arrayContaining(dims));
+    w.dispose();
+    sections.dispose();
+  });
 });
 
 describe('withRegionsUnculled (SP4b spec §3.9, §4.5)', () => {

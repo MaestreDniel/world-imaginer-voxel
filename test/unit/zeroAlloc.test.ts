@@ -15,6 +15,7 @@
  * the hold repeat's tick, the walk step's reads) and together in the frame step, as the world page wires them: the
  * page's aim (the DDA, the hold repeat's tick, the queued clicks, the outline through the real `Selection` at a fixed
  * target) and the build HUD's refresh over the hotbar, flying and walking on a Published stone floor (the walk step).
+ * SP5c's volume box (spec §6.1, D3) is pinned on its own: its `set` writes both lines' matrices and colours in place.
  *
  * This measures allocation, not retention (the plan's spec correction to §8.5): `terrainHeap.test.ts` runs `gc()`
  * twice before every reading, which collects the short-lived per-call objects D25 bans. Here, after a double `gc()`,
@@ -64,7 +65,7 @@ import { createFpsLimiter } from '../../src/render/fpsLimiter';
 import { createMaterialSystem } from '../../src/render/materials/index';
 import { gpuEstimateOf, type GpuEstimate, type WorldRenderer } from '../../src/render/renderer';
 import { createSectionRenderer, createSectionRendererCounts } from '../../src/render/sectionRenderer';
-import { createSelection, type Selection } from '../../src/render/selection';
+import { REFUSED_RED, SELECTION_YELLOW, createSelection, createVolumeBox, type Selection } from '../../src/render/selection';
 import { createSky } from '../../src/render/sky';
 import { createFlatColorArray } from '../../src/render/textureArray';
 import { createFrameStats } from '../../src/ui/frameStats';
@@ -1040,6 +1041,19 @@ describe('zero allocation at rest (SP4b spec §3.10, D25)', () => {
     expect(host.querySelector('#world-crosshair')!.hidden).toBe(false);
     expect([changes, hotbar.active]).toEqual([0, 0]);
     hud.dispose();
+  }, TIMEOUT_MS);
+
+  test(`${N} sets of a volume box (alternating colours) grow the heap by less than 256 KB (SP5c spec §6.1, D3)`, () => {
+    // The page writes the selection's box in place when the tool's state changes; the ghost's box follows its anchor.
+    const box = createVolumeBox();
+    let k = 0;
+    const g = allocationOver(() => {
+      const i = k++;
+      box.set(1234 + (i & 7), 70, -987, 1250, 80 + (i & 3), -970, (i & 1) === 0 ? SELECTION_YELLOW : REFUSED_RED);
+    }, WARM_UP, ZERO_ALLOC_MAX);
+    expectAtRest(g);
+    expect(box.object.visible).toBe(true);
+    box.dispose();
   }, TIMEOUT_MS);
 
   test(`${N} hold-repeat ticks, idle and with LMB held while its reply is pending, grow the heap by less than 256 KB (SP5a spec §4.1, D6, rulings R20)`, () => {

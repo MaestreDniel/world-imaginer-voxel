@@ -1677,6 +1677,10 @@ describe('master spec amendments (SP5c §13)', () => {
     expect(lines).toContain('- **Pure layers:** none of the layers above imports three, `document`, `window` or `indexedDB`. The exception is `persist/idb.ts`, which runs in the sim worker and, for the worlds menu and the selection tool\'s clipboard, on the main thread (SP5b, SP5c).');
   });
 
+  test('§1\'s renderer line names the volume box beside `selection.ts (SP5a)` (SP5c spec §6.1, §13)', () => {
+    expect(layoutEntry(/^\s+renderer\.ts /)).toContain('selection.ts (SP5a), the volume box (SP5c)');
+  });
+
   test('§2.2\'s `rotateState` line names the selection tool\'s turns (SP5c spec §13)', () => {
     expect(text).toContain('`rotateState(state, quarterTurns)` and `mirrorState` serve structure pieces and placement and the selection tool\'s turns (SP5c).');
   });
