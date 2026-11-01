@@ -143,6 +143,8 @@ export interface PersistWorld {
   pinned(cx: number, cz: number): boolean;
   /** Whether the store holds (cx, cz) Published (its own record). */
   published(cx: number, cz: number): boolean;
+  /** The coordinator's edit gate for (cx, cz)'s 3 × 3 (`editState`: 0 open, 1 not loaded, 2 regenerating). */
+  editState(cx: number, cz: number): 0 | 1 | 2;
   /** The messages of `type` posted to the sim so far. */
   posted(type: string): number;
   /** The coordinator's first fill of the current disc (`firstFill`). */
@@ -583,6 +585,7 @@ export async function openPersistWorld(o: {
         cam = { x: at.x + 16 * dcx, z: at.z + 16 * dcz, yawDeg: 0 };
       },
       pinned: (cx, cz) => (simPins.get(colKey(cx, cz)) ?? 0) > 0,
+      editState: (cx, cz) => coordinator.editState(cx, cz),
       published(cx, cz) {
         if (store.holder(cx, cz) !== 'self') return false;
         store.enterRead();

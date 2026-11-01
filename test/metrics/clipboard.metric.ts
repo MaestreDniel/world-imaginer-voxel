@@ -79,8 +79,9 @@ import { testRng } from '../harness/stats';
  *   the new generated terrain; one undo restores both boxes. The copy made before the change pasted after it: every
  *   cell the copied value. Review Focus 1: a paste, then a second 'T' change applied without waiting
  *   (`change(…, {noWait: true})`); Ctrl+Z while it regenerates refused by the gate, the step kept: `Can't undo there:
- *   regenerating`, or `… not loaded` when the Apply's first update has already freed stale columns of the step's 3 × 3s
- *   (the coordinator frees them nearest the camera first; `rf1Regenerating` records which); once
+ *   regenerating` while the step's 3 × 3s are all stale, `… not loaded` once the Apply's first update has freed one of
+ *   them (the edit gate's two closed states, SP5a spec §2.1; the coordinator frees stale columns nearest the camera
+ *   first, so at RD 4 it is `not loaded`): the notice must be exactly the gate's at the press (`rf1Gate` records it); once
  *   the world settles, Ctrl+Z restores the step's cells (a `NO_ENTRY` before → the new generated value). Last on that
  *   world (rulings P10): a cut of the house whose clipboard write is `crashNext()`ed (never settles; the cut is not
  *   awaited): frames until the write was issued, plus 50: no `edits` posted, every cell of the box unchanged, the
@@ -541,6 +542,18 @@ async function press(p: PersistWorld, op: 'undo' | 'redo', what: string): Promis
   await p.until(() => p.notices.length > n, `${what}: ${op}`);
   return p.notices.slice(n);
 }
+/** The distinct columns of `edits`, in first-edit order (the edit path's gate order, `editPath.ts` `post`). */
+function stepColumns(edits: readonly { readonly x: number; readonly z: number }[]): Array<[number, number]> {
+  const seen = new Set<string>();
+  const out: Array<[number, number]> = [];
+  for (const e of edits) {
+    const k = `${e.x >> 4},${e.z >> 4}`;
+    if (seen.has(k)) continue;
+    seen.add(k);
+    out.push([e.x >> 4, e.z >> 4]);
+  }
+  return out;
+}
 /** The stored clipboard record. */
 async function storedClipboard(clipKv: MemoryKV): Promise<unknown> {
   return (await clipKv.read([{ op: 'get', store: 'meta', key: CLIPBOARD_KEY }]))[0];
@@ -706,7 +719,7 @@ async function measureE3Paste(): Promise<{ values: Record<string, number>; probl
   // 3. Reopened: undo and redo again; the clipboard as before the reload, its paste equal; a move 3 down, undone.
   let backupId: string | null = null;
   /** Review Focus 1's refusal: 1 when it said `regenerating`, 0 when `not loaded` (recorded). */
-  let rf1Regenerating = -1;
+  let rf1Gate = -1;
   /** Review Focus 5's target cells of generated ground (recorded). */
   let rf5Ground = 0;
   let houseE: Box | null = null;
@@ -896,13 +909,27 @@ async function measureE3Paste(): Promise<{ values: Record<string, number>; probl
       const size = p.history.size;
       const started = await p.change(SETTLE, { noWait: true });
       if (started.from !== 'T' || p.atApplied()) problems.add(`E3.paste: Review Focus 1's change: from ${started.from}, settled ${p.atApplied()}`);
-      // The gate's two states during an Apply: its 3 × 3 stale (`regenerating`) or, once the Apply's first update freed
-      // the stale columns nearest the camera first (`coordinator.ts` `apply`), `not loaded`. Either refuses and keeps it.
+      // The notice is the edit gate's (SP5a spec §2.1, :173 and :330; SP5c spec §2.7's table): over the step's distinct
+      // columns, any `editState` 1 → `not loaded`, else any 2 → `regenerating` (`editPath.ts` `post`). During an Apply
+      // a 3 × 3 reads 2 while every column of it is still stale, and 1 once the Apply's first update has freed one of
+      // them (stale columns are freed nearest the camera first, `coordinator.ts` `apply`), until all nine are Published
+      // at the new epoch (`coordinator.test.ts`' "2 until a column of its 3 × 3 is freed, then 1 …"). The gate is read
+      // between frames, as the key is handled, so the expected notice is exact; it must be closed (not 0).
+      let gate = 0;
+      for (const [cx, cz] of stepColumns(step.edits)) {
+        const s = p.editState(cx, cz);
+        if (s === 1) {
+          gate = 1;
+          break;
+        }
+        if (s === 2) gate = 2;
+      }
+      const want = gate === 1 ? 'Can\'t undo there: not loaded' : 'Can\'t undo there: regenerating';
       said = await press(p, 'undo', 'E3.paste: Review Focus 1: Ctrl+Z while regenerating');
-      rf1Regenerating = said.includes('Can\'t undo there: regenerating') ? 1 : 0;
-      if (!(said.includes('Can\'t undo there: regenerating') || said.includes('Can\'t undo there: not loaded')) || p.history.size !== size) {
+      rf1Gate = gate;
+      if (gate === 0 || !said.includes(want) || said.some((t) => t.startsWith('Can\'t undo there') && t !== want) || p.history.size !== size) {
         pasteUndoMismatches++;
-        problems.add(`E3.paste: Ctrl+Z while regenerating said ${JSON.stringify(said)}, ${p.history.size} steps (${size} kept expected)`);
+        problems.add(`E3.paste: Ctrl+Z while regenerating (gate ${gate}) said ${JSON.stringify(said)} (${JSON.stringify(want)} expected), ${p.history.size} steps (${size} kept expected)`);
       }
       await p.until(() => p.atApplied(), 'E3.paste: Review Focus 1: the world settled');
       said = await press(p, 'undo', 'E3.paste: Review Focus 1: Ctrl+Z after the change');
@@ -1017,7 +1044,7 @@ async function measureE3Paste(): Promise<{ values: Record<string, number>; probl
     problems: problems.list,
     values: {
       pasteUndoMismatches, pasteRedoMismatches, clipboardReloadMismatches, pasteLeaveMismatches,
-      rf1Regenerating,
+      rf1Gate,
       rf5GroundCells: rf5Ground,
       diffEntriesAfterPastes: entries,
       loadDecodeMs: round3(decodeMs),
