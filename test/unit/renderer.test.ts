@@ -5,16 +5,18 @@ import {
 import { WebGLRenderList } from 'three/src/renderers/webgl/WebGLRenderLists.js';
 import { describe, expect, test } from 'vitest';
 import { MESH_PASS_TRANSLUCENT } from '../../src/mesh/column';
+import type { Ghost } from '../../src/render/ghost';
 import { createMaterialSystem } from '../../src/render/materials/index';
 import {
   NEAR_FLY, NEAR_WALK, applyNear, applyRenderDistance, compileScene, compileWorldScene, createGpuTimer, createWorldScene,
   gpuEstimateOf, opaquePassSort, withRegionsUnculled, withSectionsShown, type GpuEstimate,
 } from '../../src/render/renderer';
-import { GHOST_CYAN, SELECTION_YELLOW, VOLUME_DIM_ORDER, createSelection } from '../../src/render/selection';
+import { GHOST_CYAN, GHOST_ORDER, SELECTION_YELLOW, VOLUME_DIM_ORDER, createSelection } from '../../src/render/selection';
 import { SKY_RENDER_ORDER } from '../../src/render/sky';
 import { createSectionRenderer, type SectionRendererKind } from '../../src/render/sectionRenderer';
 import { createSky } from '../../src/render/sky';
 import { createFlatColorArray } from '../../src/render/textureArray';
+import { STONE } from '../../src/world/blocks/index';
 import { fakePayload } from './fixtures/payloads';
 import { pumpAll } from './sectionRendererContract';
 
@@ -302,8 +304,8 @@ describe('the volume boxes in the scene (SP5c spec §6.1, §6.4)', () => {
   const world = (kind: SectionRendererKind) => {
     const materials = createMaterialSystem({ variant: kind, ao: true, smoothLight: true }, createFlatColorArray());
     const sections = createSectionRenderer(kind, materials);
-    const w = createWorldScene(sections, createSky(materials));
-    return { sections, w, camera: new PerspectiveCamera(70, 16 / 9, 0.1, 336) };
+    const w = createWorldScene(sections, createSky(materials), materials);
+    return { sections, w, materials, camera: new PerspectiveCamera(70, 16 / 9, 0.1, 336) };
   };
   const linesUnder = (o: Object3D): LineSegments[] => {
     const out: LineSegments[] = [];
@@ -400,6 +402,126 @@ describe('the volume boxes in the scene (SP5c spec §6.1, §6.4)', () => {
     const lastWater = Math.max(...water.map((m) => transparent.indexOf(m)));
     for (const d of dims) expect(transparent.indexOf(d)).toBeGreaterThan(lastWater);
     expect(transparent.slice(-2)).toEqual(expect.arrayContaining(dims));
+    w.dispose();
+    sections.dispose();
+  });
+});
+
+describe('the ghost in the scene (SP5c spec §6.2, §6.4)', () => {
+  const world = (kind: SectionRendererKind) => {
+    const materials = createMaterialSystem({ variant: kind, ao: true, smoothLight: true }, createFlatColorArray());
+    const sections = createSectionRenderer(kind, materials);
+    const w = createWorldScene(sections, createSky(materials), materials);
+    return { sections, w, materials, camera: new PerspectiveCamera(70, 16 / 9, 0.1, 336) };
+  };
+  /** A built 1 × 1 × 1 stone ghost. */
+  const ready = (g: Ghost): void => {
+    g.setClipboard(1, 1, 1, new Uint32Array([STONE << 8]));
+    for (let i = 0; i < 100 && g.build === 'building'; i++) g.step(() => 0);
+    expect(g.build).toBe('ready');
+  };
+  const ghostMeshes = (root: Object3D, visibleOnly: boolean): Mesh[] => {
+    const out: Mesh[] = [];
+    const visit = (o: Object3D): void => {
+      if ((o as Mesh).isMesh === true && ((o as Mesh).material as Material).name === 'ghost') out.push(o as Mesh);
+    };
+    if (visibleOnly) root.traverseVisible(visit);
+    else root.traverse(visit);
+    return out;
+  };
+
+  for (const kind of ['batch', 'mesh'] as const) {
+    test(`${kind}: the ghost is in the scene at \`renderOrder\` \`GHOST_ORDER\`, hidden until placed; \`compile\` counts its placeholder visible`, async () => {
+      const { sections, w, materials, camera } = world(kind);
+      expect(w.scene.children).toContain(w.ghost.object);
+      expect(w.ghost.object.renderOrder).toBe(GHOST_ORDER);
+      expect(w.ghost.object.material).toBe(materials.ghost);
+      expect(w.ghost.object.visible).toBe(false);
+      expect(ghostMeshes(w.scene, true)).toEqual([]);
+      // three's compile walks only visible objects: the walk sees one ghost mesh, a one-cell placeholder, not the ghost.
+      const seen: Mesh[] = [];
+      const r = {
+        compileAsync(scene: Object3D): Promise<unknown> {
+          seen.push(...ghostMeshes(scene, true));
+          return Promise.resolve(scene);
+        },
+      };
+      await compileWorldScene(r, w, camera, sections);
+      expect(seen).toHaveLength(1);
+      const placeholder = seen[0]!;
+      expect(placeholder).not.toBe(w.ghost.object);
+      expect(placeholder.material).toBe(materials.ghost);
+      expect(placeholder.renderOrder).toBe(GHOST_ORDER);
+      expect(placeholder.geometry.getAttribute('position').count, 'one cell: 6 quads').toBe(24);
+      // Gone after the compile; the ghost still hidden.
+      expect(ghostMeshes(w.scene, false)).toEqual([w.ghost.object]);
+      expect(w.ghost.object.visible).toBe(false);
+      ready(w.ghost);
+      expect(w.ghost.object.visible, 'built, not placed').toBe(false);
+      w.ghost.place(0, 64, 0, 1);
+      expect(ghostMeshes(w.scene, true)).toEqual([w.ghost.object]);
+      w.ghost.hide();
+      expect(ghostMeshes(w.scene, true)).toEqual([]);
+      w.dispose();
+      sections.dispose();
+    });
+  }
+
+  test('a compile that throws still removes the placeholder', async () => {
+    const { sections, w, camera } = world('batch');
+    const r = { compileAsync(): Promise<unknown> { throw new Error('compile failed'); } };
+    await expect(compileWorldScene(r, w, camera, sections)).rejects.toThrow('compile failed');
+    expect(ghostMeshes(w.scene, false)).toEqual([w.ghost.object]);
+    w.dispose();
+    sections.dispose();
+  });
+
+  test('with a RegionMesh holding 64 translucent regions after its sort, the ghost sorts after every one of them and before the dimmed box', () => {
+    const { sections, w, camera } = world('mesh');
+    for (let rx = 0; rx < 8; rx++) {
+      for (let rz = 0; rz < 8; rz++) sections.stage(fakePayload(8 * rx + 3, 8 * rz + 3, [{ sy: 4, pass: 2, quads: 1 }]), 1);
+    }
+    pumpAll(sections);
+    sections.revealAll();
+    camera.position.set(512, 120, 512);
+    camera.lookAt(0, 60, 0);
+    camera.updateMatrixWorld(true);
+    sections.sortTranslucent(camera.position.x, camera.position.y, camera.position.z);
+    const water: Mesh[] = [];
+    sections.root.traverse((o) => {
+      if ((o as Mesh).isMesh === true && o.userData['pass'] === MESH_PASS_TRANSLUCENT) water.push(o as Mesh);
+    });
+    expect(water).toHaveLength(64);
+    // The ghost and its box far behind every region: by depth alone they would be drawn first.
+    ready(w.ghost);
+    w.ghost.place(-900, 0, -900, 0);
+    w.ghostBox.set(-900, 0, -900, -899, 1, -899, GHOST_CYAN);
+    w.scene.updateMatrixWorld(true);
+
+    const list = new WebGLRenderList(undefined as never);
+    list.init();
+    const proj = camera.projectionMatrix.clone().multiply(camera.matrixWorldInverse);
+    const v = new Vector3();
+    const project = (o: Object3D, groupOrder: number): void => {
+      if (!o.visible) return;
+      if ((o as Group).isGroup === true) groupOrder = o.renderOrder;
+      else if ((o as Mesh).isMesh === true || (o as LineSegments).isLineSegments === true) {
+        const z = v.setFromMatrixPosition(o.matrixWorld).applyMatrix4(proj).z;
+        const m = o as Mesh;
+        (list.push as (...a: unknown[]) => void)(o, m.geometry, m.material as Material, groupOrder, z, null, camera);
+      }
+      for (const c of o.children) project(c, groupOrder);
+    };
+    project(w.scene, 0);
+    list.sort(opaquePassSort({ terrainCutout: new ShaderMaterial() }), undefined as never, false);
+    const transparent = list.transparent.map((i) => i.object);
+    const at = transparent.indexOf(w.ghost.object);
+    expect(at, 'the ghost is drawn in the transparent list').toBeGreaterThanOrEqual(0);
+    for (const m of water) expect(transparent.indexOf(m)).toBeLessThan(at);
+    const dim: Object3D[] = [];
+    w.ghostBox.object.traverse((o) => { if ((o as LineSegments).isLineSegments === true && o.renderOrder === VOLUME_DIM_ORDER) dim.push(o); });
+    expect(dim).toHaveLength(1);
+    expect(transparent.indexOf(dim[0]!)).toBeGreaterThan(at);
     w.dispose();
     sections.dispose();
   });

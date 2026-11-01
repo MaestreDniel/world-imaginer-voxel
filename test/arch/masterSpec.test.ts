@@ -1653,6 +1653,7 @@ describe('master spec amendments (SP5c §13)', () => {
     [/^\s+ui\/world\/\* /, 'selectTool.ts clipboard.ts clipboardStore.ts pasteBatch.ts pasteBlocks.ts (SP5c)', 'src/ui/world/clipboardStore.ts'],
     [/^\s+ui\/world\/\* /, 'selectTool.ts clipboard.ts clipboardStore.ts pasteBatch.ts pasteBlocks.ts (SP5c)', 'src/ui/world/pasteBatch.ts'],
     [/^\s+ui\/world\/\* /, 'selectTool.ts clipboard.ts clipboardStore.ts pasteBatch.ts pasteBlocks.ts (SP5c)', 'src/ui/world/selectTool.ts'],
+    [/^\s+renderer\.ts /, 'ghost.ts (SP5c)', 'src/render/ghost.ts'],
   ];
 
   test('§1 names each SP5c module in its entry, which exists', () => {
@@ -1683,6 +1684,15 @@ describe('master spec amendments (SP5c §13)', () => {
 
   test('§1\'s renderer line names the volume box beside `selection.ts (SP5a)` (SP5c spec §6.1, §13)', () => {
     expect(layoutEntry(/^\s+renderer\.ts /)).toContain('selection.ts (SP5a), the volume box (SP5c)');
+  });
+
+  test('§4.5\'s pass 7 and draw calls name the selection tool\'s volume box and ghost (SP5c spec §6.4, §13)', () => {
+    const at = text.indexOf('### 4.5 Render structure');
+    const s45 = text.slice(at, text.indexOf('### 4.6 ', at));
+    const lines = s45.split('\n');
+    expect(lines).toContain('7. Selection box, and with the selection tool (SP5c) its volume box and the ghost, drawn after the translucent pass.');
+    expect(lines).not.toContain('7. Selection box.');
+    expect(s45).toContain('selection 1 (up to 7 while the selection tool shows a box and a ghost, SP5c)');
   });
 
   test('§2.2\'s `rotateState` line names the selection tool\'s turns (SP5c spec §13)', () => {

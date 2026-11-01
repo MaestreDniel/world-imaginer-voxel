@@ -15,7 +15,8 @@
  * the hold repeat's tick, the walk step's reads) and together in the frame step, as the world page wires them: the
  * page's aim (the DDA, the hold repeat's tick, the queued clicks, the outline through the real `Selection` at a fixed
  * target) and the build HUD's refresh over the hotbar, flying and walking on a Published stone floor (the walk step).
- * SP5c's volume box (spec §6.1, D3) is pinned on its own: its `set` writes both lines' matrices and colours in place.
+ * SP5c's volume box (spec §6.1, D3) is pinned on its own: its `set` writes both lines' matrices and colours in place;
+ * so is the ghost's `place` (spec §6.2, D25), which writes its matrix and the `ghostTurns` uniform only.
  * SP5c's selection tool (spec §1.2, §1.3, §10.5) is in the page's aim from SP5a's tests on, as the page wires it (the
  * tool's clicks, its reach, `createSelectActions` as the aim's `selection`), off until its own test turns it on with
  * both corners set: then the frame step writes the box and the label only when the tool's state changes.
@@ -65,6 +66,7 @@ import type { Action } from '../../src/player/keymap';
 import { EYE, createWalkState, type WalkState } from '../../src/player/walk';
 import { firstOrigin } from '../../src/render/floatingOrigin';
 import { createFpsLimiter } from '../../src/render/fpsLimiter';
+import { createGhost } from '../../src/render/ghost';
 import { createMaterialSystem } from '../../src/render/materials/index';
 import { gpuEstimateOf, type GpuEstimate, type WorldRenderer } from '../../src/render/renderer';
 import { createSectionRenderer, createSectionRendererCounts } from '../../src/render/sectionRenderer';
@@ -1122,6 +1124,24 @@ describe('zero allocation at rest (SP4b spec §3.10, D25)', () => {
     expectAtRest(g);
     expect(box.object.visible).toBe(true);
     box.dispose();
+  }, TIMEOUT_MS);
+
+  test(`${N} places of a built ghost (moved and turned through q 0-3) grow the heap by less than 256 KB (SP5c spec §6.2, §6.4, §10.5, D25)`, () => {
+    // The page places the ghost when its anchor, turn or offset changes: the matrix and the `ghostTurns` uniform only.
+    const m = createMaterialSystem({ variant: 'mesh', ao: true, smoothLight: true }, createFlatColorArray());
+    const ghost = createGhost(m);
+    ghost.setClipboard(1, 1, 1, new Uint32Array([STONE << 8]));
+    ghost.step(() => 0);
+    expect(ghost.build).toBe('ready');
+    let k = 0;
+    const g = allocationOver(() => {
+      const i = k++;
+      ghost.place(1234 + (i & 7), 70, -987, i & 3);
+    }, WARM_UP, ZERO_ALLOC_MAX);
+    expectAtRest(g);
+    expect(ghost.object.visible).toBe(true);
+    ghost.dispose();
+    m.dispose();
   }, TIMEOUT_MS);
 
   test(`${N} hold-repeat ticks, idle and with LMB held while its reply is pending, grow the heap by less than 256 KB (SP5a spec §4.1, D6, rulings R20)`, () => {

@@ -172,7 +172,7 @@ world-imaginer-voxel/          (repository root)
       coordinator.ts scheduler.ts (not created: the coordinator holds the scheduler) rings.ts workerPool.ts jobHeap.ts (SP4c) throttle.ts (SP4b) uploadBudget.ts session.ts (SP5b: session.ts's setWritable) invalidation.ts (SP4c with Apply's dirty stages; completed for every scope by SP10) capabilities.ts simClient.ts (SP5a)
       renderDistance.ts spikeStore.ts   (SP4a: the default render distance from the capability report; the spike's shared store)
     render/                     the only place three is imported (ui canvases are 2D; amended by SP0)
-      renderer.ts sectionRenderer.ts (interface; SP4b: and UploadGate) regionBatch.ts regionMesh.ts (fallback) floatingOrigin.ts selection.ts (SP5a), the volume box (SP5c)
+      renderer.ts sectionRenderer.ts (interface; SP4b: and UploadGate) regionBatch.ts regionMesh.ts (fallback) floatingOrigin.ts selection.ts (SP5a), the volume box (SP5c) ghost.ts (SP5c)
       fpsLimiter.ts frameState.ts frameTiming.ts regionGrid.ts spike/   (SP4a: the FPS cap; the per-frame inputs of the materials;
                                 rAF-delta snapping and percentiles; the region grid both section renderers share; the week-1 spike's stress scene
                                 and bench behind `?spike=batch`)
@@ -1056,11 +1056,11 @@ In AO, smooth light and connectivity15, "opaque" means PASS opaque with `FULL_FA
 4. Cutout (DoubleSide; alphaTest, or alphaToCoverage under MSAA).
 5. Translucent (blending with depthWrite on; `customSort` back to front by section centre; double-sided water top).
 6. Clouds.
-7. Selection box.
+7. Selection box, and with the selection tool (SP5c) its volume box and the ghost, drawn after the translucent pass.
 
 On Ultra, passes 2-4 (after the LOD depth clear) render into a `WebGLRenderTarget` with a `DepthTexture` for Fabulous water.
 
-**Draw calls:** about 16-20 regions × 3 plus LOD 4, sky 2, clouds 1 and selection 1, roughly 60 at Medium (target ≤ 100). 09 had about 2.3k at RD16. High adds RD16 regions and the shadow depth pass; its draw calls are recorded, not gated.
+**Draw calls:** about 16-20 regions × 3 plus LOD 4, sky 2, clouds 1 and selection 1 (up to 7 while the selection tool shows a box and a ghost, SP5c), roughly 60 at Medium (target ≤ 100). 09 had about 2.3k at RD16. High adds RD16 regions and the shadow depth pass; its draw calls are recorded, not gated.
 
 ### 4.6 Materials (`render/materials`, the only GLSL boundary)
 
