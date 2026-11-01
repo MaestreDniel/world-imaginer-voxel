@@ -15,18 +15,31 @@
  *    `publish()` once per column it wrote, then, when edits remain, `exitRead` and `enterRead`, so the slots the
  *    sub-batch retired are reclaimed before the next (writers are reopened as needed). One result for the whole batch:
  *    one `dirty`, `relightMs` the relights' sum, `editMs` the whole call, `limboMax` the most entries in this thread's
- *    limbo at the end of any sub-batch (after its `publish`, before its `exitRead`; 0 for a refusal before any write),
- *    `subBatchMaxMs` the longest sub-batch. The drain needs read depth 0 (`reclaim.ts`: only the outermost `exitRead`
+ *    limbo at the end of any sub-batch (after its `publish` or its rollback, before its `exitRead`; the compensating
+ *    pass's sub-batches included; 0 for a refusal before any write), `subBatchMaxMs` the longest sub-batch (the
+ *    compensating pass's included). The drain needs read depth 0 (`reclaim.ts`: only the outermost `exitRead`
  *    drains), so `applyEdits` is never called inside a read section: the sim handler calls it at depth 0, and so does
  *    every test, metric and bench row that reads `limboMax` (called inside one, the batch is still applied whole and
  *    exact, but nothing is reclaimed until the caller's own `exitRead`).
- * A `StoreFull` in the first sub-batch refuses the batch (`'full'`): every writer the sub-batch opened rolls back (no
- * allocation), each edited block column's heightmaps are rescanned, and the DiffStore is restored from `prev`. The
- * content is back to what it was, but a MESH in flight may have read the replaced slots meanwhile (§2.1 lets it run
- * beside an edit, "dropped by its versions"): the `blockVersion` of each column whose block write began and the
- * `lightVersion` of each column whose light write began are bumped after the restore, and `dirty` keeps the columns
- * gathered so far, so such a MESH is dropped and the columns are remeshed. Any other throw after validation (a bug, a
- * relight overflow, a `WriterStale`), and any throw in a later sub-batch, runs the same recovery over its own
+ * 4. **The headroom check** (SP5c spec §3.2): a valid batch of more than `SUB_BATCH` edits, before any write, is refused
+ *    `'full'` with nothing written (no version bumped, `dirty` empty) when the block pool's headroom (free slots plus
+ *    the slots it can still grow by) is below `HEADROOM_BLOCK_SLOTS` or the byte pool's below `HEADROOM_BYTE_SLOTS`.
+ *    A rollback frees nothing until the next drain, so without it a late `StoreFull` would most likely throw again in
+ *    the compensating pass.
+ * **A `StoreFull` in sub-batch k refuses the batch** (`'full'`), all or nothing. Sub-batch k is rolled back: every
+ * writer it opened rolls back (no allocation), the heightmaps of each block column it edited are rescanned, and its
+ * edits' DiffStore entries are restored from `prev` (loops limited to sub-batch k, so the published sub-batches' entries
+ * stay until they are undone). A MESH in flight may have read the replaced slots meanwhile (§2.1 lets it run beside an
+ * edit, "dropped by its versions"): the `blockVersion` of each column whose block write began and the `lightVersion` of
+ * each column whose light write began are bumped after the restore. When k > 0, `exitRead` and `enterRead` drain the
+ * rolled-back slots and a **compensating pass** undoes sub-batches k−1 … 0, each edit in reverse order: the value it
+ * replaced (`prevValue`, kept from validation) written with the same write and relight, its DiffStore entry set from
+ * `prev` directly (never the per-edit rule, so an entry equal to the generated value before the batch, possible after
+ * an Apply, is restored, not removed), each sub-batch published (its versions bumped) and drained. The diff flag stays
+ * set, as after any edit. Values, light, heightmaps and the DiffStore then equal the batch's start, and `dirty` holds
+ * every column either pass touched, so they are remeshed. A throw inside the compensating pass rolls back its own
+ * sub-batch and propagates (INTERNAL: the sim's failure, the last resort; the latched handler never flushes). Any
+ * other throw after validation (a bug, a relight overflow, a `WriterStale`) runs the same recovery over its own
  * sub-batch and is then rethrown, so no sub-batch is left half-written with its kept codes unreleased (the earlier
  * sub-batches stay published).
  *
@@ -45,6 +58,7 @@ import {
   type RelightScratch,
 } from '../light/relight';
 import type { ColumnDiff, ColumnView, EditWriter } from '../world/store/api';
+import type { SlabPool } from '../world/store/pool';
 import { StoreFull, type VoxelStore } from '../world/store/store';
 import { NO_ENTRY, type DiffStore } from './diffStore';
 
@@ -73,10 +87,11 @@ export type EditRefusal = 'unloaded' | 'changed' | 'noProto' | 'full';
 /**
  * A batch's outcome (§2.1). `prev[k]` is edit k's DiffStore entry before it and `next[k]` the entry it left (`NO_ENTRY`
  * for none; a refused batch leaves both at the entries it found); `dirty` the colKeys to remesh (§2.6; empty on a
- * refusal before any write, the columns whose views held a rolled-back write on `'full'`), `entryAdded` and
+ * refusal before any write, the columns whose views held a rolled-back or compensated write on a late `'full'`), `entryAdded` and
  * `entryRemoved` the colKeys that gained their first entry or lost their last in the batch (both empty on a refusal;
  * SP5b D20). `limboMax` is the most entries in the calling thread's limbo at the end of any sub-batch, before its
- * `exitRead` (0 for a refusal before any write), and `subBatchMaxMs` the longest sub-batch on `now` (SP5c spec §3.2).
+ * `exitRead` (0 for a refusal before any write; on a late `'full'`, the rolled-back sub-batch and the compensating
+ * pass's count too), and `subBatchMaxMs` the longest sub-batch on `now` (SP5c spec §3.2).
  * Every array is fresh (transferable).
  */
 export interface EditResult {
@@ -317,17 +332,38 @@ function edgesOf(lx: number, lz: number): number {
 }
 
 /**
- * Applies a batch of edits (§2.1, §2.2), validated whole first, then written in sub-batches of `SUB_BATCH` with a
- * drain between them (SP5c D21); see the module comment. Called outside any read section (the drain needs depth 0).
- * `now` is the clock behind `relightMs` (the relights' sum), `subBatchMaxMs` (the longest sub-batch) and `editMs`
- * (the whole call).
+ * The block pool's headroom a batch of more than `SUB_BATCH` edits needs before any write (SP5c spec §3.2, D21): above
+ * one sub-batch's measured worst case (a maximum paste of `paste.maxLit`'s content written y ascending, or its undo:
+ * 512 block slots in limbo; SP5c Task 3, Node).
  */
-export function applyEdits(store: VoxelStore, diffs: DiffStore, s: EditScratch, edits: readonly Edit[], now: () => number): EditResult {
+export const HEADROOM_BLOCK_SLOTS = 4096;
+/** The byte pool's headroom such a batch needs (the same worst case: 2,024 byte slots in limbo). */
+export const HEADROOM_BYTE_SLOTS = 8192;
+
+/** A pool's headroom (SP5c spec §3.2): its free slots plus the slots it can still grow by. */
+export function headroom(pool: SlabPool): number {
+  return pool.freeCount() + pool.maxSlots - pool.slotCount();
+}
+
+/** @internal The test seam of SP5c spec §3.2: `beforeEdit(k)` runs before edit k's write. Production passes none. */
+export interface EditHooks {
+  beforeEdit?(k: number): void;
+}
+
+/**
+ * Applies a batch of edits (§2.1, §2.2), validated whole first, then written in sub-batches of `SUB_BATCH` with a
+ * drain between them (SP5c D21), all or nothing; see the module comment. Called outside any read section (the drain
+ * needs depth 0). `now` is the clock behind `relightMs` (the relights' sum), `subBatchMaxMs` (the longest sub-batch)
+ * and `editMs` (the whole call); `hooks` is a test seam.
+ */
+export function applyEdits(
+  store: VoxelStore, diffs: DiffStore, s: EditScratch, edits: readonly Edit[], now: () => number, hooks?: EditHooks,
+): EditResult {
   const t0 = now();
   const n = edits.length;
   const prev = new Uint32Array(n);
   const next = new Uint32Array(n);
-  /** The voxel value each edit replaces, from validation (SP5c D20). */
+  /** The voxel value each edit replaces, from validation (SP5c D20): what the compensating pass writes back. */
   const prevValue = new Uint32Array(n);
   const dirty = new Set<number>();
   /** Each edited column's `diffs.has` before the batch (D20's entry changes), gathered once the batch is valid. */
@@ -338,93 +374,174 @@ export function applyEdits(store: VoxelStore, diffs: DiffStore, s: EditScratch, 
   let subBatchMaxMs = 0;
   /** Inside this call's read section (false only between a drain's `exitRead` and `enterRead`). */
   let reading = false;
+  /** The writers the current sub-batch reopened (each published once at its end). */
+  const opened: EditWriter[] = [];
+  /** The current sub-batch's writers whose block or light writes began: their versions are bumped on a rollback. */
+  const wroteBlocks: EditWriter[] = [];
+  const wroteLight: EditWriter[] = [];
+  const open = (cx: number, cz: number): EditWriter => {
+    const w = store.reopenPublished(cx, cz);
+    if (!opened.includes(w)) opened.push(w);
+    return w;
+  };
+  /** A sub-batch's end (SP5c spec §3.2): its retires still wait in this thread's limbo until the drain. */
+  const endSubBatch = (ts: number): void => {
+    limboMax = Math.max(limboMax, store.limboCount(store.thread));
+    subBatchMaxMs = Math.max(subBatchMaxMs, now() - ts);
+  };
+  /** The drain between sub-batches: the read section ended and entered again (reclaimed only at depth 0). */
+  const drain = (): void => {
+    reading = false;
+    store.exitRead();
+    store.enterRead();
+    reading = true;
+  };
+  /**
+   * Writes `value` at edit `e`'s voxel (§2.2): the section through scratch, `replaceBlocks`, the diff flag, the
+   * heightmaps from the old heights and the relight of the 3 × 3 with its light write-back. The dirty set gains each
+   * write's columns before the write, so a rollback remeshes what a MESH may have read. The DiffStore is the caller's.
+   */
+  const write = (e: Edit, value: number): void => {
+    const cx = e.x >> 4;
+    const cz = e.z >> 4;
+    const lx = e.x & 15;
+    const lz = e.z & 15;
+    const sy = (e.y + 64) >> 4;
+    const idx = (((e.y + 64) & 15) << 8) | (lz << 4) | lx;
+    const w = open(cx, cz);
+    const f = store.final(cx, cz)!;
+    const oldState = f.block(lx, e.y, lz);
+    const oldFluid = f.fluid(lx, e.y, lz);
+    // The section into scratch, the voxel set.
+    const b = f.sectionBlocks(sy);
+    const fl = f.sectionFluid(sy);
+    if (typeof b === 'number') s.blocks.fill(b);
+    else s.blocks.set(b);
+    if (typeof fl === 'number') s.fluid.fill(fl);
+    else s.fluid.set(fl);
+    s.blocks[idx] = value >>> 8;
+    s.fluid[idx] = value & 0xFF;
+    // The old heights, before the write (raw aux values, y + 1).
+    const aux = w.aux();
+    const at = (lz << 4) | lx;
+    const oldLb = aux.lightBlocking[at]!;
+    const fromY = Math.min(319, Math.max(e.y, aux.worldSurface[at]! - 1, aux.oceanFloor[at]! - 1, aux.motionBlocking[at]! - 1, oldLb - 1));
+    // The edited column and the neighbours whose ring holds the voxel.
+    addWithEdges(dirty, cx, cz, edgesOf(lx, lz));
+    if (!wroteBlocks.includes(w)) wroteBlocks.push(w);
+    w.replaceBlocks(sy, s.blocks, s.fluid);
+    w.setDiffFlag();
+    patchHeightmaps(f.block, f.fluid, aux, lx, lz, fromY);
+
+    // Relight the 3 × 3 (D19), then write back each section whose light changed.
+    const r0 = now();
+    const cache = s.cache;
+    cache.open(store, cx, cz);
+    const report = relight(cache, s.relight, ((e.y + ROW0) * W + 16 + lz) * W + 16 + lx, { state: oldState, fluid: oldFluid, lightBlocking: oldLb + ROW0 });
+    // The relight's columns: each with a changed section, and the neighbours its border and corner bits face.
+    for (let c = 0; c < COLUMNS; c++) {
+      if (report.sections[c] !== 0 || report.edges[c] !== 0) addWithEdges(dirty, cx + (c % 3) - 1, cz + ((c / 3) | 0) - 1, report.edges[c]!);
+    }
+    for (let m = 0; m < cache.copiedCount(); m++) {
+      const key = cache.copiedAt(m);
+      const c = (key / SECTIONS) | 0;
+      const ly = key - c * SECTIONS;
+      if (((report.sections[c]! >>> ly) & 1) === 0) continue;
+      const lw = open(cx + (c % 3) - 1, cz + ((c / 3) | 0) - 1);
+      if (!wroteLight.includes(lw)) wroteLight.push(lw);
+      lw.replaceLight(ly, cache.copy(key));
+    }
+    relightMs += now() - r0;
+  };
+  /** Edit k's DiffStore entry set to `prev[k]`, its entry before the batch (a rollback's and the compensating pass's). */
+  const restoreEntry = (k: number): void => {
+    const e = edits[k]!;
+    const sy = (e.y + 64) >> 4;
+    const idx = (((e.y + 64) & 15) << 8) | ((e.z & 15) << 4) | (e.x & 15);
+    if (prev[k] === NO_ENTRY) diffs.remove(e.x >> 4, e.z >> 4, sy, idx);
+    else diffs.set(e.x >> 4, e.z >> 4, sy, idx, prev[k]!);
+  };
+  /**
+   * Undoes the current sub-batch's writes: its writers rolled back (no allocation), the heightmaps of edits [lo, hi)
+   * rescanned whole, then each column whose block or light write began has that version bumped after the restore, so a
+   * MESH that read the batch's slots holds the old versions and is dropped (§2.1).
+   */
+  const rollback = (lo: number, hi: number): void => {
+    for (const w of opened) w.rollback();
+    for (let k = lo; k < hi; k++) {
+      const e = edits[k]!;
+      const w = store.reopenPublished(e.x >> 4, e.z >> 4);
+      const f = store.final(e.x >> 4, e.z >> 4)!;
+      patchHeightmaps(f.block, f.fluid, w.aux(), e.x & 15, e.z & 15, 319);
+    }
+    const table = store.table;
+    for (const w of wroteBlocks) table.bumpBlockVersion(table.find(w.cx, w.cz));
+    for (const w of wroteLight) table.bumpLightVersion(table.find(w.cx, w.cz));
+  };
+  const beginSubBatch = (): number => {
+    opened.length = 0;
+    wroteBlocks.length = 0;
+    wroteLight.length = 0;
+    return now();
+  };
+  /**
+   * The compensating pass (SP5c spec §3.2): after a `StoreFull` in the sub-batch starting at `s0` was rolled back and
+   * drained, sub-batches s0/SUB_BATCH − 1 … 0 are undone, each edit in reverse order with the value it replaced (the
+   * same write and relight) and its entry set from `prev` (never the per-edit rule, so an entry that equalled the
+   * generated value before the batch is restored, not removed), each sub-batch published and drained. The diff flag
+   * stays set. A throw here rolls back its own sub-batch and propagates (INTERNAL: the sim's failure, the last resort).
+   */
+  const compensate = (s0: number): void => {
+    for (let j = s0 - 1; j >= 0; j -= SUB_BATCH) {
+      const lo = Math.max(0, j - SUB_BATCH + 1);
+      const ts = beginSubBatch();
+      let i = j;
+      try {
+        for (; i >= lo; i--) {
+          write(edits[i]!, prevValue[i]!);
+          restoreEntry(i);
+        }
+        for (const w of opened) w.publish();
+      } catch (err) {
+        rollback(Math.max(i, lo), j + 1);
+        throw err;
+      }
+      endSubBatch(ts);
+      drain();
+    }
+  };
+
   store.enterRead();
   reading = true;
   try {
     refused = validate(store, edits, prevValue);
+    // The headroom check (SP5c spec §3.2): a batch that may need more than one sub-batch's slots is refused whole when
+    // either pool could not hold one more sub-batch's worst case.
+    if (refused === null && n > SUB_BATCH
+      && (headroom(store.blockPool) < HEADROOM_BLOCK_SLOTS || headroom(store.bytePool) < HEADROOM_BYTE_SLOTS)) refused = 'full';
     if (refused === null) {
       for (const e of edits) {
         const key = colKey(e.x >> 4, e.z >> 4);
         if (!had.has(key)) had.set(key, diffs.has(e.x >> 4, e.z >> 4));
       }
-      /** The writers the current sub-batch reopened (each published once at its end). */
-      const opened: EditWriter[] = [];
-      const open = (cx: number, cz: number): EditWriter => {
-        const w = store.reopenPublished(cx, cz);
-        if (!opened.includes(w)) opened.push(w);
-        return w;
-      };
-      /** The current sub-batch's writers whose block or light writes began: their versions are bumped on a rollback. */
-      const wroteBlocks: EditWriter[] = [];
-      const wroteLight: EditWriter[] = [];
       for (let s0 = 0; s0 < n; s0 += SUB_BATCH) {
         const end = Math.min(s0 + SUB_BATCH, n);
-        const ts = now();
-        opened.length = 0;
-        wroteBlocks.length = 0;
-        wroteLight.length = 0;
+        const ts = beginSubBatch();
         /** The sub-batch's edits whose writes began (heightmaps to rescan on a rollback), and whose entry was recorded. */
         let written = s0;
         let recorded = s0;
         try {
           for (let k = s0; k < end; k++) {
+            hooks?.beforeEdit?.(k);
             const e = edits[k]!;
             const cx = e.x >> 4;
             const cz = e.z >> 4;
-            const lx = e.x & 15;
-            const lz = e.z & 15;
             const sy = (e.y + 64) >> 4;
-            const idx = (((e.y + 64) & 15) << 8) | (lz << 4) | lx;
-            const w = open(cx, cz);
-            const f = store.final(cx, cz)!;
-            const p = store.proto(cx, cz)!;
-            const generated = generatedAt(p, e.x, e.y, e.z);
+            const idx = (((e.y + 64) & 15) << 8) | ((e.z & 15) << 4) | (e.x & 15);
+            const generated = generatedAt(store.proto(cx, cz)!, e.x, e.y, e.z);
             const value = e.op === 'revert' ? generated : e.value;
-            const oldState = f.block(lx, e.y, lz);
-            const oldFluid = f.fluid(lx, e.y, lz);
-            // The section into scratch, the voxel set.
-            const b = f.sectionBlocks(sy);
-            const fl = f.sectionFluid(sy);
-            if (typeof b === 'number') s.blocks.fill(b);
-            else s.blocks.set(b);
-            if (typeof fl === 'number') s.fluid.fill(fl);
-            else s.fluid.set(fl);
-            s.blocks[idx] = value >>> 8;
-            s.fluid[idx] = value & 0xFF;
-            // The old heights, before the write (raw aux values, y + 1).
-            const aux = w.aux();
-            const at = (lz << 4) | lx;
-            const oldLb = aux.lightBlocking[at]!;
-            const fromY = Math.min(319, Math.max(e.y, aux.worldSurface[at]! - 1, aux.oceanFloor[at]! - 1, aux.motionBlocking[at]! - 1, oldLb - 1));
-            // The dirty set gains each write's columns before the write, so a rollback remeshes what a MESH may have read.
-            // The edited column and the neighbours whose ring holds the voxel.
-            addWithEdges(dirty, cx, cz, edgesOf(lx, lz));
             written = k + 1;
-            if (!wroteBlocks.includes(w)) wroteBlocks.push(w);
-            w.replaceBlocks(sy, s.blocks, s.fluid);
-            w.setDiffFlag();
-            patchHeightmaps(f.block, f.fluid, aux, lx, lz, fromY);
-
-            // Relight the 3 × 3 (D19), then write back each section whose light changed.
-            const r0 = now();
-            const cache = s.cache;
-            cache.open(store, cx, cz);
-            const report = relight(cache, s.relight, ((e.y + ROW0) * W + 16 + lz) * W + 16 + lx, { state: oldState, fluid: oldFluid, lightBlocking: oldLb + ROW0 });
-            // The relight's columns: each with a changed section, and the neighbours its border and corner bits face.
-            for (let c = 0; c < COLUMNS; c++) {
-              if (report.sections[c] !== 0 || report.edges[c] !== 0) addWithEdges(dirty, cx + (c % 3) - 1, cz + ((c / 3) | 0) - 1, report.edges[c]!);
-            }
-            for (let m = 0; m < cache.copiedCount(); m++) {
-              const key = cache.copiedAt(m);
-              const c = (key / SECTIONS) | 0;
-              const ly = key - c * SECTIONS;
-              if (((report.sections[c]! >>> ly) & 1) === 0) continue;
-              const lw = open(cx + (c % 3) - 1, cz + ((c / 3) | 0) - 1);
-              if (!wroteLight.includes(lw)) wroteLight.push(lw);
-              lw.replaceLight(ly, cache.copy(key));
-            }
-            relightMs += now() - r0;
-
+            write(e, value);
             // The DiffStore (D20): a revert, or a set equal to the generated value, removes the entry.
             prev[k] = diffs.get(cx, cz, sy, idx);
             if (e.op === 'revert' || value === generated) diffs.remove(cx, cz, sy, idx);
@@ -434,44 +551,24 @@ export function applyEdits(store: VoxelStore, diffs: DiffStore, s: EditScratch, 
           }
           for (const w of opened) w.publish();
         } catch (err) {
-          // Any throw after validation runs the same recovery over its sub-batch (SIM-2); only a StoreFull in the first
-          // sub-batch is a refusal, any other throw (and any in a later sub-batch, whose predecessors stay published) is
-          // rethrown.
-          for (const w of opened) w.rollback();
-          // The heightmaps of each restored block column, rescanned whole.
-          for (let k = s0; k < written; k++) {
-            const e = edits[k]!;
-            const w = store.reopenPublished(e.x >> 4, e.z >> 4);
-            const f = store.final(e.x >> 4, e.z >> 4)!;
-            patchHeightmaps(f.block, f.fluid, w.aux(), e.x & 15, e.z & 15, 319);
-          }
-          for (let k = recorded - 1; k >= s0; k--) {
-            const e = edits[k]!;
-            const cx = e.x >> 4;
-            const cz = e.z >> 4;
-            const sy = (e.y + 64) >> 4;
-            const idx = (((e.y + 64) & 15) << 8) | ((e.z & 15) << 4) | (e.x & 15);
-            if (prev[k] === NO_ENTRY) diffs.remove(cx, cz, sy, idx);
-            else diffs.set(cx, cz, sy, idx, prev[k]!);
-          }
-          // After the restore, so a MESH that read the batch's slots holds the old versions and is dropped (§2.1).
-          const table = store.table;
-          for (const w of wroteBlocks) table.bumpBlockVersion(table.find(w.cx, w.cz));
-          for (const w of wroteLight) table.bumpLightVersion(table.find(w.cx, w.cz));
-          if (s0 > 0 || !(err instanceof StoreFull)) throw err;
+          // Any throw after validation runs the same recovery over its own sub-batch (SIM-2): its writers, heightmaps
+          // and entries (in reverse, from `prev`), loops limited to this sub-batch, so the published ones stay intact.
+          rollback(s0, written);
+          for (let k = recorded - 1; k >= s0; k--) restoreEntry(k);
+          if (!(err instanceof StoreFull)) throw err;
+          // A StoreFull (another thread took the headroom after the check) refuses the batch: the rolled-back slots
+          // drained, then the published sub-batches undone by the compensating pass, so the batch stays all or nothing.
           refused = 'full';
+          endSubBatch(ts);
+          if (s0 > 0) {
+            drain();
+            compensate(s0);
+          }
           break;
         }
-        // The sub-batch's figures (SP5c spec §3.2): its retires still wait in this thread's limbo until the drain.
-        limboMax = Math.max(limboMax, store.limboCount(store.thread));
-        subBatchMaxMs = Math.max(subBatchMaxMs, now() - ts);
+        endSubBatch(ts);
         // The drain between sub-batches; the last sub-batch's `exitRead` is the `finally`'s.
-        if (end < n) {
-          reading = false;
-          store.exitRead();
-          store.enterRead();
-          reading = true;
-        }
+        if (end < n) drain();
       }
     }
     if (refused !== null) {

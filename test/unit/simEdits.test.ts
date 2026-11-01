@@ -17,14 +17,18 @@ import { createGenContext } from '../../src/gen/context';
 import { writeFinalHeightmaps } from '../../src/gen/pipeline/finalHeightmaps';
 import { centreSection, createLightScratch, DEFAULT_LIGHT_TABLES, lightRegion } from '../../src/light/initial';
 import { createDiffStore, NO_ENTRY, type DiffStore } from '../../src/sim/diffStore';
-import { applyEdits, createEditScratch, readDiff, SUB_BATCH, validateStats, type Edit, type EditRefusal, type EditResult } from '../../src/sim/edits';
+import {
+  applyEdits, createEditScratch, headroom, HEADROOM_BLOCK_SLOTS, HEADROOM_BYTE_SLOTS, readDiff, SUB_BATCH, validateStats, type Edit, type EditRefusal,
+  type EditResult,
+} from '../../src/sim/edits';
 import { WATER_SOURCE } from '../../src/world/blocks/fluid';
 import { AIR, DIRT, GLASS, ICE, OAK_PLANKS, STONE, TORCH, WALL_TORCH } from '../../src/world/blocks/index';
 import type { ColumnDiff } from '../../src/world/store/api';
 import { protoAt, REC_DIFF_FLAG, SECTIONS } from '../../src/world/store/columnTable';
 import { copyLightRegion, lightIndex } from '../../src/world/store/padded';
 import { PROTO_BLOCKS, PROTO_FLUID } from '../../src/world/store/section';
-import { createStore, type VoxelStore } from '../../src/world/store/store';
+import type { SlabPool } from '../../src/world/store/pool';
+import { createStore, StoreFull, type VoxelStore } from '../../src/world/store/store';
 import { genRegion, litRegionHash } from '../harness/region';
 import { testFloat, testRng } from '../harness/stats';
 
@@ -52,6 +56,13 @@ function versions(s: VoxelStore, cx0: number, cz0: number, n: number): number[] 
 }
 
 const blockVersion = (s: VoxelStore, cx: number, cz: number): number => s.table.blockVersion(s.table.find(cx, cz));
+/** Column (cx, cz)'s aux A slot (its heightmaps), as hex. */
+const auxHex = (s: VoxelStore, cx: number, cz: number): string => {
+  const a = s.final(cx, cz)!.aux()!;
+  return Buffer.from(a.worldSurfaceWG.buffer, a.worldSurfaceWG.byteOffset, 4096).toString('hex');
+};
+/** A pool's live slots (`noise.bench.ts`' leak check): grown minus free. */
+const live = (p: SlabPool): number => p.slotCount() - p.freeCount();
 const lightVersions = (s: VoxelStore, cx0: number, cz0: number, n: number): number[] => versions(s, cx0, cz0, n).filter((_, i) => i % 3 === 1);
 
 /** The dirty columns of a result, as sorted "cx,cz" strings. */
@@ -622,6 +633,78 @@ describe('a paste in sub-batches (SP5c spec §3.2)', () => {
     expect(applyEdits(store, diffs, scratch, revertOf(edits), now).refused).toBeNull();
     expect(diffs.size).toBe(0);
   });
+
+  /** A hook throwing `StoreFull` before edit `at`'s write (another thread took the headroom), counting its throws. */
+  const fullAt = (at: number): { beforeEdit(k: number): void; threw: number; last: number } => {
+    const h = {
+      threw: 0,
+      last: -1,
+      beforeEdit(k: number): void {
+        h.last = k;
+        if (k !== at) return;
+        h.threw++;
+        throw new StoreFull(`injected before edit ${at}`);
+      },
+    };
+    return h;
+  };
+
+  test('a `StoreFull` thrown by the hook at edit 3,082 of an 8,192-edit paste (sub-batch 6 of 16): `refused` `\'full\'`; every voxel, every light section (against a fresh `lightRegion`), each block column\'s heightmaps (aux A) and every DiffStore entry equal to the batch\'s start; `dirty` ⊇ every edited column; `entryAdded` and `entryRemoved` empty; a later 1-edit batch is accepted', () => {
+    const edits = block(8192);
+    expect(Math.floor(3082 / SUB_BATCH)).toBe(6);
+    expect(Math.ceil(8192 / SUB_BATCH)).toBe(16);
+    const before = edits.map((e) => e.expect);
+    const aux = quad().map(([cx, cz]) => auxHex(store, cx, cz));
+    const hook = fullAt(3082);
+    const r = applyEdits(store, diffs, scratch, edits, now, hook);
+    expect(hook.threw).toBe(1);
+    expect(hook.last).toBe(3082);
+    expect(r.refused).toBe('full');
+    let changed = 0;
+    for (let k = 0; k < edits.length; k++) if (valueAt(store, edits[k]!.x, edits[k]!.y, edits[k]!.z) !== before[k]) changed++;
+    expect(changed).toBe(0);
+    for (const [cx, cz] of quad()) expectLightFresh(store, cx, cz);
+    expect(quad().map(([cx, cz]) => auxHex(store, cx, cz))).toEqual(aux);
+    expect(diffs.size).toBe(0);
+    expect(r.prev.every((p) => p === NO_ENTRY)).toBe(true);
+    expect(r.next.every((p) => p === NO_ENTRY)).toBe(true);
+    const dirty = cols(r.dirty);
+    for (const [cx, cz] of quad()) expect(dirty).toContain(`${cx},${cz}`);
+    expect(cols(r.entryAdded)).toEqual([]);
+    expect(cols(r.entryRemoved)).toEqual([]);
+    expect(store.limboCount(store.thread)).toBe(0);
+
+    const one = [edits[0]!];
+    const after = applyEdits(store, diffs, scratch, one, now);
+    expect(after.refused).toBeNull();
+    expect(valueAt(store, one[0]!.x, one[0]!.y, one[0]!.z)).toBe(val(STONE));
+    expect(applyEdits(store, diffs, scratch, revertOf(one), now).refused).toBeNull();
+    expect(diffs.size).toBe(0);
+  });
+
+  test('a DiffStore entry equal to the generated value before the batch (written with `diffs.set` directly, as after an Apply) is restored by the compensating pass, not removed', () => {
+    const edits = block(8192);
+    // One voxel in each of sub-batches 0, 3 and 5 (all compensated) holds an entry equal to its generated value.
+    const at = [0, 1700, 3000];
+    for (const k of at) {
+      const e = edits[k]!;
+      diffs.set(e.x >> 4, e.z >> 4, sectionOf(e.y), idxOf(e.x, e.y, e.z), e.expect);
+    }
+    const r = applyEdits(store, diffs, scratch, edits, now, fullAt(3082));
+    expect(r.refused).toBe('full');
+    expect(diffs.size).toBe(at.length);
+    for (const k of at) {
+      const e = edits[k]!;
+      expect(entry(diffs, e.x, e.y, e.z), `edit ${k}`).toBe(e.expect);
+      expect(r.prev[k]).toBe(e.expect);
+      expect(valueAt(store, e.x, e.y, e.z)).toBe(e.expect);
+    }
+    for (const k of at) {
+      const e = edits[k]!;
+      diffs.remove(e.x >> 4, e.z >> 4, sectionOf(e.y), idxOf(e.x, e.y, e.z));
+    }
+    expect(diffs.size).toBe(0);
+  });
 });
 
 /** Stone at and below y 69, air above. */
@@ -630,10 +713,11 @@ const TOP = 69;
 /**
  * The canned 5 × 5 store (columns −2 … 2): every column claimed, its proto written and shared into the final set
  * (`shareFinal`) with the light of one `lightRegion` over the same flat world (horizontally uniform, so every column's
- * light is the centre's), the final heightmaps written, then committed Published.
+ * light is the centre's), the final heightmaps written, then committed Published. Unshared with a 16 MiB byte pool
+ * unless `o` says otherwise (the really full store's cases, SP5c §3.2, share it so its retires wait in the limbo).
  */
-function cannedStore(maxBlockBytes = 16 * MiB): VoxelStore {
-  const s = createStore({ shared: false, maxBlockBytes, maxByteBytes: 16 * MiB });
+function cannedStore(maxBlockBytes = 16 * MiB, o: { readonly shared?: boolean; readonly maxByteBytes?: number } = {}): VoxelStore {
+  const s = createStore({ shared: o.shared ?? false, maxBlockBytes, maxByteBytes: o.maxByteBytes ?? 16 * MiB });
   const r = lightScratch.region;
   r.blocks.fill(AIR);
   r.blocks.fill(STONE, lightIndex(-15, -64, -15), lightIndex(-15, TOP + 1, -15));
@@ -765,6 +849,119 @@ describe('applyEdits on a canned store: the dirty set and StoreFull (SP5a spec �
     expect(r.refused).toBeNull();
     expect([valueAt(s, 5, 70, 5), valueAt(s, 21, 70, 5)]).toEqual([val(STONE), val(STONE)]);
     expectLightFresh(s, 0, 0);
+  });
+});
+
+/**
+ * SP5c spec §3.2 (D21): a really full store. The canned 5 × 5 store, shared (its retires wait in the limbo until a
+ * drain), with a block pool of 33 MiB (4,224 slots) and a byte pool of 40 MiB (10,240 slots): both headrooms above
+ * `HEADROOM_BLOCK_SLOTS` and `HEADROOM_BYTE_SLOTS` as built, each brought below its threshold by holding slots.
+ */
+describe('applyEdits on a really full store: the headroom check and the compensating pass (SP5c spec §3.2, D21)', () => {
+  const scratch = createEditScratch();
+  const full = (): VoxelStore => cannedStore(33 * MiB, { shared: true, maxByteBytes: 40 * MiB });
+  /**
+   * `n` underground stones of the editable 3 × 3 (columns −1 … 1) swapped for oak planks, 48 × 48 a layer from y 59
+   * down: opaque for opaque, so no light changes and no byte slot (the fluid stays uniform).
+   */
+  const swap = (s: VoxelStore, n: number): Edit[] => Array.from({ length: n }, (_, k) => {
+    const x = -16 + (k % 48);
+    const z = -16 + (Math.floor(k / 48) % 48);
+    const y = 59 - Math.floor(k / 2304);
+    return set(x, y, z, val(OAK_PLANKS), valueAt(s, x, y, z));
+  });
+  /** `n` wall torches in the open air above the 3 × 3, 32 × 32 a layer at y 75: each relight writes light sections. */
+  const torches = (s: VoxelStore, n: number): Edit[] => Array.from({ length: n }, (_, k) => {
+    const x = -16 + (k & 31);
+    const z = -16 + ((k >> 5) & 31);
+    const y = 75 + (k >> 10);
+    return set(x, y, z, val(WALL_TORCH), valueAt(s, x, y, z));
+  });
+  const inner = (): Array<[number, number]> => [-1, 0, 1].flatMap((cz) => [-1, 0, 1].map((cx): [number, number] => [cx, cz]));
+
+  test('(a) block slots taken until `headroom(store.blockPool)` is 4,095: a 2,048-edit paste is refused `\'full\'` with nothing written, `dirty` empty, no version bumped; likewise with the byte pool\'s headroom at 8,191; a batch of `SUB_BATCH` edits is not checked', () => {
+    const s = full();
+    const d = createDiffStore();
+    expect(HEADROOM_BLOCK_SLOTS).toBe(4096);
+    expect(HEADROOM_BYTE_SLOTS).toBe(8192);
+    expect(headroom(s.blockPool)).toBe(s.blockPool.freeCount() + s.blockPool.maxSlots - s.blockPool.slotCount());
+    expect(headroom(s.blockPool)).toBeGreaterThanOrEqual(HEADROOM_BLOCK_SLOTS);
+    expect(headroom(s.bytePool)).toBeGreaterThanOrEqual(HEADROOM_BYTE_SLOTS);
+    const held: number[] = [];
+    while (headroom(s.blockPool) > HEADROOM_BLOCK_SLOTS - 1) held.push(s.blockPool.alloc());
+    expect(headroom(s.blockPool)).toBe(4095);
+    expect(headroom(s.bytePool)).toBeGreaterThanOrEqual(HEADROOM_BYTE_SLOTS);
+
+    const refusedWhole = (edits: readonly Edit[]): void => {
+      const values = edits.map((e) => valueAt(s, e.x, e.y, e.z));
+      const vs = versions(s, -2, -2, 5);
+      const r = applyEdits(s, d, scratch, edits, now);
+      expect(r.refused).toBe('full');
+      expect(r.dirty.length).toBe(0);
+      expect(r.limboMax).toBe(0);
+      expect(cols(r.entryAdded)).toEqual([]);
+      expect(cols(r.entryRemoved)).toEqual([]);
+      expect(versions(s, -2, -2, 5)).toEqual(vs);
+      expect(edits.filter((e, k) => valueAt(s, e.x, e.y, e.z) !== values[k]).length).toBe(0);
+      expect(d.size).toBe(0);
+    };
+    refusedWhole(swap(s, 2048));
+
+    // The check reads only a batch of more than SUB_BATCH edits: 512 at the same headroom are written.
+    const small = swap(s, SUB_BATCH);
+    expect(applyEdits(s, d, scratch, small, now).refused).toBeNull();
+    expect(valueAt(s, small[0]!.x, small[0]!.y, small[0]!.z)).toBe(val(OAK_PLANKS));
+    expect(applyEdits(s, d, scratch, small.map((e) => ({ ...e, value: e.expect, expect: e.value })), now).refused).toBeNull();
+    expect(d.size).toBe(0);
+
+    // The byte pool's threshold: block slots given back, byte slots taken until its headroom is 8,191.
+    for (const id of held.splice(0)) s.blockPool.free(id);
+    expect(headroom(s.blockPool)).toBeGreaterThanOrEqual(HEADROOM_BLOCK_SLOTS);
+    while (headroom(s.bytePool) > HEADROOM_BYTE_SLOTS - 1) held.push(s.bytePool.alloc());
+    expect(headroom(s.bytePool)).toBe(8191);
+    refusedWhole(swap(s, 2048));
+  });
+
+  test('(b) a 4,096-edit batch, sub-batches 0-5 swapping underground stone for oak planks and 6-7 placing wall torches in the open air; the hook at edit 3,072 takes byte slots until 16 remain: sub-batch 6 throws `StoreFull`, `refused` `\'full\'`, the start state restored (voxels, light, heightmaps, DiffStore) and the compensating pass not throwing; once the hook\'s slots are freed and the limbo drained, every pool\'s live slots equal those before the batch', () => {
+    const s = full();
+    const d = createDiffStore();
+    const edits = [...swap(s, 3072), ...torches(s, 1024)];
+    expect(edits.length).toBe(4096);
+    expect(Math.floor(3072 / SUB_BATCH)).toBe(6);
+    expect(headroom(s.blockPool)).toBeGreaterThanOrEqual(HEADROOM_BLOCK_SLOTS);
+    expect(headroom(s.bytePool)).toBeGreaterThanOrEqual(HEADROOM_BYTE_SLOTS);
+    const values = edits.map((e) => valueAt(s, e.x, e.y, e.z));
+    const aux = inner().map(([cx, cz]) => auxHex(s, cx, cz));
+    const liveBefore = [live(s.blockPool), live(s.bytePool)];
+    const held: number[] = [];
+    let last = -1;
+    const hook = {
+      beforeEdit(k: number): void {
+        last = k;
+        // Another thread takes the byte pool's headroom between the check and sub-batch 6.
+        if (k === 3072) while (headroom(s.bytePool) > 16) held.push(s.bytePool.alloc());
+      },
+    };
+    const r = applyEdits(s, d, scratch, edits, now, hook);
+    expect(held.length).toBeGreaterThan(0);
+    expect(headroom(s.bytePool)).toBeLessThanOrEqual(16);
+    // The StoreFull came from a real allocation in sub-batch 6 (a torch's relight), after sub-batches 0-5 published.
+    expect(last).toBeGreaterThanOrEqual(3072);
+    expect(last).toBeLessThan(3072 + SUB_BATCH);
+    expect(r.refused).toBe('full');
+    expect(edits.filter((e, k) => valueAt(s, e.x, e.y, e.z) !== values[k]).length).toBe(0);
+    expectLightFresh(s, 0, 0);
+    expect(inner().map(([cx, cz]) => auxHex(s, cx, cz))).toEqual(aux);
+    expect(d.size).toBe(0);
+    const dirty = cols(r.dirty);
+    for (const [cx, cz] of inner()) expect(dirty).toContain(`${cx},${cz}`);
+    expect(cols(r.entryAdded)).toEqual([]);
+    expect(cols(r.entryRemoved)).toEqual([]);
+
+    for (const id of held) s.bytePool.free(id);
+    s.drain();
+    expect(s.limboCount(s.thread)).toBe(0);
+    expect([live(s.blockPool), live(s.bytePool)]).toEqual(liveBefore);
   });
 });
 
