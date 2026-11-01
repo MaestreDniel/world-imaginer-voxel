@@ -83,6 +83,10 @@
  * receivers here; the other §9 amendments land with what they describe, each moving the earlier pin it rewords. The
  * exit words risk 1's Kill line by what SP5b met: its window closed, with no isolation or concurrency problem unfixed.
  * §1 names each SP5b module in its entry, which exists (`SP5B_MODULES`, a row added by each task that adds a module).
+ * The close (SP5b §11, §12; Task 38): the place count was built (`worldsMenu.ts` writes "· n places"), so SP5b's cut
+ * line was not taken and the receivers say nothing moved; `flushMainP95Ms` max 0.3, held pending the user's check, is
+ * recorded, not gated, as the user's check decided under D28; the user's UX notes are handed to SP5c (its "Received
+ * from SP5b" line).
  */
 import { existsSync, readdirSync, readFileSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
@@ -1418,14 +1422,21 @@ describe('master spec amendments (SP5b §9)', () => {
       expect(exitFlush, `SP5b §12's G2.flush ${part}`).toContain(exit);
     }
     expect(flushRow).toContain(') max 50 (G2)');
-    // The sixth, `flushMainP95Ms` max 0.3, is held pending the user's check (D28): recorded by G2.flush, not a row, and
-    // the Threshold log and the exit evidence say so.
+    // The sixth, `flushMainP95Ms` max 0.3, was held pending the user's check (D28, R10; Task 34's log line) and is recorded,
+    // not gated, as the user's check decided (R16, Task 38): recorded by G2.flush, not a row, and §6.2, §12, the Threshold
+    // log and the exit evidence say so.
+    const decided = 'the user\'s check decided it under D28 on 2026-11-01 (R16; the user: "Accept, record only"';
     expect(flushRow).toContain('`flushMainP95Ms` max 0.3');
+    expect(flushRow).toContain(`recorded, not gated, and not in the lock: it missed after lever 18c, the user chose on 2026-10-30 to continue and decide at the end (D28, the controller's ruling R10), and ${decided}`);
+    expect(flushRow).not.toContain('held pending the user\'s check and not in the lock');
     expect(exitFlush).toContain('`flushMainP95Ms` ≤ 0.3');
-    expect(THRESHOLDS.G2?.flushMainP95Ms, 'THRESHOLDS.G2.flushMainP95Ms is held pending the user\'s check').toBeUndefined();
+    expect(exitFlush).toContain(`is recorded, not gated: it was held pending the user's check (D28, R10), and ${decided}`);
+    expect(exitFlush).not.toContain('Task 38 records the user\'s verdict');
+    expect(THRESHOLDS.G2?.flushMainP95Ms, 'THRESHOLDS.G2.flushMainP95Ms is recorded, not gated').toBeUndefined();
     const log = sp5b.slice(sp5b.indexOf('## Threshold log'));
     expect(log).toContain('flushMainP95Ms max 0.3 (G2.flush) is held pending the user\'s check (D28, R10)');
-    expect(sp5b.slice(0, sp5b.indexOf('## Threshold log'))).toContain('so `flushMainP95Ms` max 0.3 is held pending the user\'s check (D28, R10)');
+    expect(log).toContain('flushMainP95Ms max 0.3 (G2.flush) is recorded, not gated: the user\'s check decided it under D28 (R16; the user: "Accept, record only"; no stutter noticed while building or breaking; measured 0.47-0.485 ms on the Iris Xe Chrome files), closing the hold of Task 34\'s line; no lock change.');
+    expect(sp5b.slice(0, sp5b.indexOf('## Threshold log'))).toContain('- **`flushMainP95Ms` max 0.3, decided** (D28, the controller\'s ruling R16, closing R10\'s hold): the user\'s answer, "Accept, record only".');
     expect(Object.keys(THRESHOLDS.G2 ?? {}).filter((p) => THRESHOLDS.G2?.[p]?.activeFrom === 'SP5b').sort()).toEqual(flush.map(([p]) => p).sort());
     // G1.enter: `enterRatio` max 1.10.
     const enterRow = sp5b.split('\n').find((l) => l.startsWith('| entering a saved world clearly slower than a new one |'));
@@ -1434,6 +1445,27 @@ describe('master spec amendments (SP5b §9)', () => {
     expect(sp5b).toContain('`G1.enter` `enterRatio` ≤ 1.10 against the same world opened unsaved at the same pose');
     expect(THRESHOLDS.G1?.enterRatio, 'THRESHOLDS.G1.enterRatio').toEqual({ max: 1.10, activeFrom: 'SP5b' });
     expect(Object.keys(THRESHOLDS.G1 ?? {}).filter((p) => THRESHOLDS.G1?.[p]?.activeFrom === 'SP5b')).toEqual(['enterRatio']);
+  });
+
+  test('the place count was built, so SP5b\'s cut line was not taken and nothing moved to SP10 (SP5b spec §11)', () => {
+    // Built: Load world's rows carry "· n places", and "· 1 place" for one (SP5b spec §1.3, D3).
+    const menu = readFileSync(`${ROOT_DIR}src/ui/worldsMenu.ts`, 'utf8');
+    expect(menu).toContain('row.places > 0 ? ` · ${row.places} ${row.places === 1 ? \'place\' : \'places\'}` : \'\'');
+    const cut = spEntry('SP5b', 'SP5c').split('\n').find((l) => l.startsWith('- **Cut line:**'));
+    expect(cut).toBe('- **Cut line:** the Load list\'s place count ("· n places" on Load world\'s rows) (→ SP10). It was not taken: the place count shipped in SP5b, so nothing moved.');
+    expect(text).toContain('SP5b worlds-menu polish (the Load list\'s place count) → SP10 (delivered in SP5b, so nothing moved);');
+  });
+
+  test('the user\'s UX notes from SP5b\'s check are handed to SP5c, in SP5b spec §10 and master §10\'s SP5c entry (SP5b spec §10)', () => {
+    const notes = 'a Save button for Load world\'s Rename, which keeps the name only with Enter; a notice, when Modify terrain is switched on, that a terrain change will make a backup copy; a hover tooltip on the map\'s disabled parameters ("enable \'Modify terrain\' to edit here")';
+    const received = spEntry('SP5c', 'SP6').split('\n').find((l) => l.startsWith('- Received from SP5b (its spec §10; amended by SP5b):'));
+    expect(received, 'SP5c has no "Received from SP5b" line').toBeDefined();
+    expect(received).toBe(`- Received from SP5b (its spec §10; amended by SP5b): the user's notes from SP5b's check (2026-11-01; the user: "Lo podemos arreglar en SP5c"): ${notes}.`);
+    const sp5b = readFileSync(fileURLToPath(new URL('../../docs/superpowers/specs/2026-10-29-sp5b-saved-worlds-design.md', import.meta.url)), 'utf8');
+    const at10 = sp5b.indexOf('## 10. Notes handed to later SPs');
+    const sp5c = sp5b.slice(at10, sp5b.indexOf('## 11. ', at10)).split('\n').find((l) => l.startsWith('- **SP5c:**'));
+    expect(sp5c, 'SP5b spec §10 has no SP5c note').toBeDefined();
+    expect(sp5c).toContain(`The user's notes from SP5b's check (2026-11-01; the user: "Lo podemos arreglar en SP5c"): ${notes}. Master §10's SP5c entry receives them.`);
   });
 
   test('§2.7\'s `ColumnDiffV1` header genKey is informative (SP5b spec D21, §9)', () => {

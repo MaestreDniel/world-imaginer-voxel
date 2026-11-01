@@ -16,14 +16,14 @@
  *   unsaved world in place instead (`enterUnsaved`, as SP4a's "Enter the world"): the seed and preset as its `#` hash
  *   in `?map`'s encoding, no `?rd`, with `UNSAVED_NO_STORAGE_NOTICE` in place of Point 2's.
  * - Load world (§1.3, D3): one row per world of `saves.list()`, the most recently modified first ("name · preset · seed
- *   N", "Modified YYYY-MM-DD HH:MM" in local time with "· n places" when it has any, "automatic copy" for a backup,
- *   "older generator" when its stored genKey is not today's, D8), with Play (`/?world=<id>`), Rename (the name becomes a
- *   text field: Enter keeps, Esc cancels), Export and Delete (asked in the screen's notice row, `notices.confirm`, never
- *   a browser dialog); a broken row (D14: a record `parseWorldRecord` refuses, or params `loadParams` refuses) shows why
- *   with Delete only. Rename and Delete write under the world's lock taken only if it is free (`withWorldIfFree`, D7,
- *   D24), and a held lock refuses them with `LOCKED_NOTICE`. The list is read again when the tab becomes visible
- *   (§1.1), and each read's time, through the rows' build, is recorded on `window.__wiMenuListMs` for the smoke's
- *   `menus` step.
+ *   N", "Modified YYYY-MM-DD HH:MM" in local time with "· n places" (· 1 place for one) when it has any, "automatic
+ *   copy" for a backup, "older generator" when its stored genKey is not today's, D8), with Play (`/?world=<id>`), Rename
+ *   (the name becomes a text field: Enter keeps, Esc cancels), Export and Delete (asked in the screen's notice row,
+ *   `notices.confirm`, never a browser dialog); a broken row (D14: a record `parseWorldRecord` refuses, or params
+ *   `loadParams` refuses) shows why with Delete only. Rename and Delete write under the world's lock taken only if it is
+ *   free (`withWorldIfFree`, D7, D24), and a held lock refuses them with `LOCKED_NOTICE`. The list is read again when
+ *   the tab becomes visible (§1.1), and each read's time, through the rows' build, is recorded on
+ *   `window.__wiMenuListMs` for the smoke's `menus` step.
  * - Export and Import .wiworld (§2.4, D15): Export reads the world's last committed save in one read (`saves.readAll`,
  *   no lock: a world open in another tab is read at one `flushSeq`, D7) and downloads it as `exportFileName(name)`.
  *   Import .wiworld opens a file picker (`#load-import-file`), reads the file (`readWiworld`, under a new id), writes it
