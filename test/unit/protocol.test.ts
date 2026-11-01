@@ -735,7 +735,8 @@ describe('the sim worker\'s messages (SP5a spec §2.1)', () => {
   const edits = (...es: unknown[]) => ({ type: 'edits', id: 4, edits: es });
   const edited = (o: Record<string, unknown> = {}) => ({
     type: 'edited', id: 4, prev: new Uint32Array(2), next: new Uint32Array(2), dirty: new Float64Array([colKey(0, -1)]),
-    entryAdded: new Float64Array([colKey(0, -1)]), entryRemoved: new Float64Array([colKey(3, 2)]), refused: null, relightMs: 0.4, editMs: 1.2, ...o,
+    entryAdded: new Float64Array([colKey(0, -1)]), entryRemoved: new Float64Array([colKey(3, 2)]), refused: null, relightMs: 0.4, editMs: 1.2,
+    limboMax: 3979, subBatchMaxMs: 0.7, ...o,
   });
   const diff = (o: Record<string, unknown> = {}) => ({
     type: 'diff', id: 5, cx: 0, cz: -1, sy: new Uint8Array([8]), idx: new Uint16Array([4085]), value: new Uint32Array([1 << 8]), ...o,
@@ -922,6 +923,7 @@ describe('the sim worker\'s messages (SP5a spec §2.1)', () => {
   test('each reply of the sim is accepted', () => {
     expect(parseFromSim({ type: 'attached' })).not.toBeNull();
     expect(parseFromSim(edited())).not.toBeNull();
+    expect(parseFromSim(edited({ limboMax: 0, subBatchMaxMs: 0 })), 'a refusal before any write').not.toBeNull();
     expect(parseFromSim(edited({ refused: 'changed', dirty: new Float64Array(0), entryAdded: new Float64Array(0), entryRemoved: new Float64Array(0) }))).not.toBeNull();
     for (const refused of ['unloaded', 'noProto', 'full']) expect(parseFromSim(edited({ refused })), refused).not.toBeNull();
     expect(parseFromSim(diff())).not.toBeNull();
@@ -946,6 +948,10 @@ describe('the sim worker\'s messages (SP5a spec §2.1)', () => {
     ['edited with an unknown refusal', edited({ refused: 'busy' })],
     ['edited with a NaN relightMs', edited({ relightMs: Number.NaN })],
     ['edited without editMs', edited({ editMs: undefined })],
+    ['edited without limboMax (SP5c spec §3.2)', edited({ limboMax: undefined })],
+    ['edited with a negative limboMax', edited({ limboMax: -1 })],
+    ['edited with subBatchMaxMs −1', edited({ subBatchMaxMs: -1 })],
+    ['edited with a NaN subBatchMaxMs', edited({ subBatchMaxMs: Number.NaN })],
     ['a diff whose arrays differ in length', diff({ idx: new Uint16Array(2) })],
     ['a diff whose sy is not a Uint8Array', diff({ sy: new Uint16Array([8]) })],
     ['a diff whose value is not a Uint32Array', diff({ value: [256] })],

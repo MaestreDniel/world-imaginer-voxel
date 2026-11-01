@@ -428,7 +428,7 @@ export function createSimHandler(o: SimHandlerOptions): SimHandler {
           const r = applyEdits(store, diffs, scratch ??= createEditScratch(), m.edits, now);
           const msg: FromSim = {
             type: 'edited', id: m.id, prev: r.prev, next: r.next, dirty: r.dirty, entryAdded: r.entryAdded, entryRemoved: r.entryRemoved,
-            refused: r.refused, relightMs: r.relightMs, editMs: r.editMs,
+            refused: r.refused, relightMs: r.relightMs, editMs: r.editMs, limboMax: r.limboMax, subBatchMaxMs: r.subBatchMaxMs,
           };
           return { msg, transfer: [r.prev.buffer, r.next.buffer, r.dirty.buffer, r.entryAdded.buffer, r.entryRemoved.buffer] as ArrayBuffer[] };
         }

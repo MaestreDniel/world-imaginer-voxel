@@ -723,11 +723,13 @@ export type ToSim = AttachMsg | LoadMsg | EditsMsg | DiffRequestMsg | FlushMsg |
  * A batch's outcome (§2.1; `sim/edits.ts`'s `EditResult`): `prev[k]` and `next[k]` edit k's entry before and after it
  * (0xFFFFFFFF for none), `dirty` the colKeys to remesh (§2.6), `entryAdded` and `entryRemoved` the colKeys that
  * gained their first entry or lost their last in the batch (SP5b D20; both empty on a refusal); each array transferred.
+ * `limboMax` and `subBatchMaxMs` are the sub-batches' figures (SP5c spec §3.2): the most entries in the sim thread's
+ * limbo at the end of a sub-batch, and the longest sub-batch in ms (L12 records both per operation, §10.4).
  */
 export interface EditedMsg {
   readonly type: 'edited'; readonly id: number; readonly prev: Uint32Array; readonly next: Uint32Array; readonly dirty: Float64Array;
   readonly entryAdded: Float64Array; readonly entryRemoved: Float64Array; readonly refused: EditRefusal | null;
-  readonly relightMs: number; readonly editMs: number;
+  readonly relightMs: number; readonly editMs: number; readonly limboMax: number; readonly subBatchMaxMs: number;
 }
 /**
  * Column (cx, cz)'s entries in canonical order (§2.4, §2.5): section `sy` (0 … 23), voxel `idx` (0 … 4095) and its
@@ -874,6 +876,7 @@ export function parseFromSim(m: unknown): FromSim | null {
         && m['dirty'] instanceof Float64Array && m['entryAdded'] instanceof Float64Array && m['entryRemoved'] instanceof Float64Array
         && (refused === null || (typeof refused === 'string' && Object.hasOwn(EDIT_REFUSALS, refused)))
         && isFiniteNum(m['relightMs']) && isFiniteNum(m['editMs'])
+        && isFiniteNum(m['limboMax']) && m['limboMax'] >= 0 && isFiniteNum(m['subBatchMaxMs']) && m['subBatchMaxMs'] >= 0
         ? (m as unknown as EditedMsg) : null;
     }
     case 'diff': {

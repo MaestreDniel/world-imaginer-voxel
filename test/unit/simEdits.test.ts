@@ -401,6 +401,163 @@ describe('applyEdits on a seed-42 region (SP5a spec §2.1, §2.2, §2.4)', () =>
   });
 });
 
+/**
+ * SP5c D21: a batch is applied 1,024 edits at a time, the read section ended and entered again between sub-batches, so
+ * each sub-batch's retired slots are reclaimed before the next. Its own region, generated with `shared: true`: an
+ * unshared store frees a retired slot at once (`reclaim.ts:189`), so its limbo would read 0 with the sub-batches dropped.
+ */
+describe('a paste in sub-batches (SP5c spec §3.2)', () => {
+  let store: VoxelStore;
+  let cx0 = 0;
+  let cz0 = 0;
+  /** The centre column of the 5 × 5. */
+  let C: [number, number] = [0, 0];
+  const diffs = createDiffStore();
+  const scratch = createEditScratch();
+  /** The 32 × 32 × 32 block's min corner: across the corner of columns C − 1 and C, in air above the footprint. */
+  let X0 = 0;
+  let Y0 = 0;
+  let Z0 = 0;
+  const N = 32 * 32 * 32;
+  /**
+   * The block's first `n` voxels, slice by slice (y fastest, then z, then x: each sub-batch one 32 × 32 slice of x),
+   * each set to stone from the value it holds. The limbo a sub-batch leaves depends on the order: measured on this
+   * region (SP5c Task 3), this order's paste leaves at most 2,165 entries, layers bottom-up 4,205 and layers top-down
+   * (§2.3's paste order) 6,719: each stone of a layer darkens the light sections under it, re-written per edit.
+   */
+  const block = (n = N): Edit[] => Array.from({ length: n }, (_, k) => {
+    const x = X0 + (k >> 10);
+    const z = Z0 + ((k >> 5) & 31);
+    const y = Y0 + (k & 31);
+    return set(x, y, z, val(STONE), valueAt(store, x, y, z));
+  });
+  const revertOf = (edits: readonly Edit[]): Edit[] => edits.map((e) => ({ x: e.x, y: e.y, z: e.z, op: 'revert', value: 0, expect: e.value }));
+  /** The block's four columns. */
+  const quad = (): Array<[number, number]> => [[C[0] - 1, C[1] - 1], [C[0], C[1] - 1], [C[0] - 1, C[1]], [C[0], C[1]]];
+  /** `store` with `exitRead` counted (each call passed through). */
+  const counting = (): { s: VoxelStore; exits: () => number } => {
+    let exits = 0;
+    const s: VoxelStore = { ...store, exitRead: () => { exits++; store.exitRead(); } };
+    return { s, exits: () => exits };
+  };
+
+  beforeAll(async () => {
+    const params = resolveProfile('default');
+    const sp = findSpawn(createGenContext(seedFromInput('42'), params));
+    C = [sp.x >> 4, sp.z >> 4];
+    cx0 = C[0] - 2;
+    cz0 = C[1] - 2;
+    store = (await genRegion({ seed: '42', params, cx0, cz0, w: 5, h: 5, upTo: 'L', order: 'spiral', threads: 1, shared: true })).view.store;
+    expect(store.shared).toBe(true);
+    X0 = 16 * (C[0] - 1);
+    Z0 = 16 * (C[1] - 1);
+    let top = -64;
+    for (let z = Z0; z < Z0 + 32; z++) for (let x = X0; x < X0 + 32; x++) top = Math.max(top, store.heightAt('worldSurface', x, z)!);
+    Y0 = top + 1;
+    expect(Y0 + 31).toBeLessThanOrEqual(319);
+  }, 120_000);
+
+  test('a 32,768-edit paste across a column corner: every voxel stone, the four columns\' 3 × 3s\' light equal to a fresh `lightRegion`, `prev` `NO_ENTRY` and `next` the value, `limboMax` ≤ 4,096, the limbo empty after; its revert batch restores every voxel and empties the DiffStore', () => {
+    const edits = block();
+    const before = edits.map((e) => e.expect);
+    const r = applyEdits(store, diffs, scratch, edits, now);
+    expect(r.refused).toBeNull();
+    let wrong = 0;
+    for (const e of edits) if (valueAt(store, e.x, e.y, e.z) !== val(STONE)) wrong++;
+    expect(wrong).toBe(0);
+    for (const [cx, cz] of quad()) expectLightFresh(store, cx, cz);
+    expect(r.prev.every((p) => p === NO_ENTRY)).toBe(true);
+    expect(r.next.every((v) => v === val(STONE))).toBe(true);
+    expect(diffs.size).toBe(N);
+    expect(r.limboMax).toBeGreaterThan(0);
+    expect(r.limboMax).toBeLessThanOrEqual(4096);
+    expect(store.limboCount(store.thread)).toBe(0);
+
+    const back = applyEdits(store, diffs, scratch, revertOf(edits), now);
+    expect(back.refused).toBeNull();
+    let changed = 0;
+    for (let k = 0; k < N; k++) if (valueAt(store, edits[k]!.x, edits[k]!.y, edits[k]!.z) !== before[k]) changed++;
+    expect(changed).toBe(0);
+    expect(diffs.size).toBe(0);
+    expect(back.limboMax).toBeLessThanOrEqual(4096);
+    expect(store.limboCount(store.thread)).toBe(0);
+    for (const [cx, cz] of quad()) expectLightFresh(store, cx, cz);
+  });
+
+  test('a stale `expect` at the last edit (k = 32,767): `refused` `\'changed\'`, nothing written (every value, block and light version, and the DiffStore unchanged), `limboMax` 0', () => {
+    const edits = block();
+    const last = edits[N - 1]!;
+    edits[N - 1] = { ...last, expect: last.expect ^ 0x100 };
+    const before = edits.map((e) => valueAt(store, e.x, e.y, e.z));
+    const vs = versions(store, cx0, cz0, 5);
+    const r = applyEdits(store, diffs, scratch, edits, now);
+    expect(r.refused).toBe('changed');
+    expect(r.dirty.length).toBe(0);
+    let changed = 0;
+    for (let k = 0; k < N; k++) if (valueAt(store, edits[k]!.x, edits[k]!.y, edits[k]!.z) !== before[k]) changed++;
+    expect(changed).toBe(0);
+    expect(versions(store, cx0, cz0, 5)).toEqual(vs);
+    expect(diffs.size).toBe(0);
+    expect(r.limboMax).toBe(0);
+  });
+
+  test('sub-batches counted through a store wrapper counting `exitRead`: 1,024 edits → 1, 1,025 → 2, 32,768 → 32', () => {
+    for (const [n, want] of [[1024, 1], [1025, 2], [N, 32]] as const) {
+      const edits = block(n);
+      const c = counting();
+      expect(applyEdits(c.s, diffs, scratch, edits, now).refused).toBeNull();
+      expect(c.exits(), `${n} edits`).toBe(want);
+      expect(applyEdits(store, diffs, scratch, revertOf(edits), now).refused).toBeNull();
+      expect(diffs.size).toBe(0);
+    }
+  });
+
+  test('`relightMs` is the sum over sub-batches; `subBatchMaxMs` ≤ `editMs` (a clock ticking 1 per call: a 2,049-edit batch\'s relights take 1 each)', () => {
+    let t = 0;
+    const tick = (): number => ++t;
+    const edits = block(2049);
+    const r = applyEdits(store, diffs, scratch, edits, tick);
+    expect(r.refused).toBeNull();
+    // One tick per relight, across all three sub-batches (1,024 + 1,024 + 1).
+    expect(r.relightMs).toBe(2049);
+    // The longest sub-batch spans at least its own 1,024 relights, and less than the whole call of three.
+    expect(r.subBatchMaxMs).toBeGreaterThanOrEqual(1024);
+    expect(r.subBatchMaxMs).toBeLessThanOrEqual(r.editMs);
+    expect(r.subBatchMaxMs).toBeLessThan(r.editMs);
+    expect(applyEdits(store, diffs, scratch, revertOf(edits), now).refused).toBeNull();
+    expect(diffs.size).toBe(0);
+  });
+
+  test('inside an outer `enterRead` the batch is still applied whole and exact, and `limboMax` then counts every retire of the batch (no drain at depth > 0, `reclaim.ts:182`)', () => {
+    const edits = block(4096);
+    // The same batch at depth 0: each sub-batch's retires are reclaimed before the next.
+    const atZero = applyEdits(store, diffs, scratch, edits, now);
+    expect(atZero.refused).toBeNull();
+    expect(applyEdits(store, diffs, scratch, revertOf(edits), now).refused).toBeNull();
+    expect(store.limboCount(store.thread)).toBe(0);
+
+    store.enterRead();
+    try {
+      const r = applyEdits(store, diffs, scratch, edits, now);
+      expect(r.refused).toBeNull();
+      let wrong = 0;
+      for (const e of edits) if (valueAt(store, e.x, e.y, e.z) !== val(STONE)) wrong++;
+      expect(wrong).toBe(0);
+      expect(r.prev.every((p) => p === NO_ENTRY)).toBe(true);
+      expect(r.next.every((v) => v === val(STONE))).toBe(true);
+      for (const [cx, cz] of quad()) expectLightFresh(store, cx, cz);
+      // Nothing drained: the limbo holds every retire of the batch, and limboMax is its count at the last sub-batch's end.
+      expect(r.limboMax).toBe(store.limboCount(store.thread));
+      expect(r.limboMax).toBeGreaterThan(atZero.limboMax);
+    } finally {
+      store.exitRead();
+    }
+    expect(store.limboCount(store.thread)).toBe(0);
+    expect(applyEdits(store, diffs, scratch, revertOf(edits), now).refused).toBeNull();
+    expect(diffs.size).toBe(0);
+  });
+});
+
 /** Stone at and below y 69, air above. */
 const TOP = 69;
 

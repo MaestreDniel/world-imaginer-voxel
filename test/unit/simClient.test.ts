@@ -47,7 +47,7 @@ const keysOf = (cs: Array<[number, number]>): Float64Array => new Float64Array(c
 const editedReply = (id: number, added: Array<[number, number]>, removed: Array<[number, number]> = [], n = 1) => ({
   type: 'edited', id, prev: new Uint32Array(n).fill(0xFFFFFFFF), next: new Uint32Array(n).fill(1 << 8),
   dirty: new Float64Array([colKey(0, -2)]), entryAdded: keysOf(added), entryRemoved: keysOf(removed),
-  refused: null, relightMs: 0.5, editMs: 1,
+  refused: null, relightMs: 0.5, editMs: 1, limboMax: 0, subBatchMaxMs: 1,
 });
 const diffReply = (id: number, cx: number, cz: number, n: number) => ({
   type: 'diff', id, cx, cz, sy: new Uint8Array(n).fill(8), idx: new Uint16Array(n).map((_, k) => k), value: new Uint32Array(n).fill(1 << 8),

@@ -168,6 +168,26 @@ describe('the sim handler on a shared seed-42 region (SP5a spec §2.1)', () => {
     expect(valueAt(store, x, y, z)).toBe(before);
   });
 
+  test('`edited` carries `limboMax` and `subBatchMaxMs` from `applyEdits` (SP5c spec §3.2)', async () => {
+    const real = (await vi.importActual<typeof import('../../src/sim/edits')>('../../src/sim/edits')).applyEdits;
+    const x = 16 * C[0] + 4;
+    const z = 16 * C[1] + 10;
+    const y = surface(x, z);
+    const before = valueAt(store, x, y, z);
+    // The real pipeline runs; its two figures are replaced by values the handler could not have made up.
+    vi.mocked(applyEdits).mockImplementationOnce((...args) => ({ ...real(...args), limboMax: 3979, subBatchMaxMs: 61.5 }));
+    const m = edited(post([set(x, y, z, val(GLASS), before)]));
+    expect(m.refused).toBeNull();
+    expect(valueAt(store, x, y, z)).toBe(val(GLASS));
+    expect([m.limboMax, m.subBatchMaxMs]).toEqual([3979, 61.5]);
+    // Unmocked: the reply's figures are the call's own result.
+    const back = edited(post([revert(x, y, z, val(GLASS))]));
+    const r = vi.mocked(applyEdits).mock.results.at(-1)!.value as { limboMax: number; subBatchMaxMs: number };
+    expect([back.limboMax, back.subBatchMaxMs]).toEqual([r.limboMax, r.subBatchMaxMs]);
+    expect(back.subBatchMaxMs).toBeLessThanOrEqual(back.editMs);
+    expect(valueAt(store, x, y, z)).toBe(before);
+  });
+
   test('`diff` after two edits of a column → its canonical entries, transferred', () => {
     const x0 = 16 * C[0] + 11;
     const z0 = 16 * C[1] + 2;

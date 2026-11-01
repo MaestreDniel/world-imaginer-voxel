@@ -24,7 +24,7 @@ const reply = (n: number, o: Partial<EditedMsg> = {}): EditedMsg => ({
   type: 'edited', id: 1, prev: new Uint32Array(n).fill(0xFFFFFFFF), next: new Uint32Array(n).fill(STONE),
   dirty: new Float64Array([colKey(0, 0), colKey(1, 0)]), entryAdded: new Float64Array([colKey(0, 0)]),
   entryRemoved: new Float64Array(0), refused: null,
-  relightMs: 0.75, editMs: 1.5, ...o,
+  relightMs: 0.75, editMs: 1.5, limboMax: 0, subBatchMaxMs: 1.5, ...o,
 });
 
 /** A sim whose `edits` the test answers by hand, and a coordinator that logs the calls the path makes. */

@@ -2984,7 +2984,7 @@ describe('worldJobsOf over the sim client: the sim failure path (SP5a spec §2.1
     worker.onmessage!({ data: {
       type: 'edited', id: posted.at(-1)!['id'], prev: new Uint32Array(1).fill(0xFFFFFFFF), next: new Uint32Array(1).fill(STONE << 8),
       dirty: new Float64Array([colKey(0, 0)]), entryAdded: new Float64Array(entries.map(([x, z]) => colKey(x, z))),
-      entryRemoved: new Float64Array(0), refused: null, relightMs: 0.5, editMs: 1,
+      entryRemoved: new Float64Array(0), refused: null, relightMs: 0.5, editMs: 1, limboMax: 0, subBatchMaxMs: 1,
     } });
     expect((await first).refused).toBeNull();
     c.simUnpin(0, 0);
