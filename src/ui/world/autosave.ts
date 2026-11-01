@@ -3,7 +3,8 @@
  *
  * - **Triggers:** a 2,000 ms timer, independent of frames (the frame pauses under overlays); `visibilitychange` to
  *   hidden, `pagehide` and `beforeunload`; `flushNow` (a failure after the reveal, the bench, the test hook); and
- *   `beforeLeave` before every navigation the page starts, which posts and waits for `flushed` at most 1,000 ms.
+ *   `beforeLeave` before every navigation the page starts, which posts and waits for `flushed` at most 1,000 ms (after
+ *   a pending bulk batch's reply, below).
  * - **Changed** since the last committed flush: an edit reply (`editsSince()` above the count that flush captured), the
  *   state's parts (`createStateParts`' version: the pose, the time, the hotbar, the places), the history's version, a
  *   `markChanged()` (a pending `record`, a place) or a failed flush. A post captures the four; its `flushed` ok commits
@@ -11,8 +12,14 @@
  *   "changed", so every later tick and trigger posts again. The check reads versions and counts only (D28's third
  *   lever): an unchanged tick builds nothing.
  * - The timer's tick posts only when something changed; it first waits for the edit path to settle (`settled()`), at
- *   most 1,000 ms, then builds the state and the history in the same task, so a flushed edit's step is in the same
- *   flush. The hide and close triggers post at once when something changed; `flushNow` and `beforeLeave` always post.
+ *   most 1,000 ms, or at most 5,000 ms (`BULK_SETTLE_WAIT_MS`) while a bulk batch is pending (a paste, cut or move, or
+ *   the undo or redo of a large step; SP5c spec §2.8, D23), then builds the state and the history in the same task, so
+ *   a flushed edit's step is in the same flush. The hide and close triggers post at once when something changed (the
+ *   tab's own close stays SP5b's accepted window); `flushNow` and `beforeLeave` always post.
+ * - **A leave and a bulk batch** (SP5c spec §2.8): while a bulk batch is pending, `beforeLeave` first waits for the edit
+ *   path to settle, at most 5,000 ms, so its flush carries the batch's step and the page does not end the sim before
+ *   the batch is saved; then it posts and waits for `flushed` at most 1,000 ms, as with none pending, when it posts at
+ *   once.
  *   The state is rebuilt only when a part moved (else the last record with `updated` now); the history is built and
  *   posted only when its version differs from the last committed one, else null.
  * - `pause(true)` stops the timer's posts (the bench's L1-L10 and L11's "off" parts), never `flushNow`'s. A `closed`
@@ -33,6 +40,11 @@ export const AUTOSAVE_MS = 2000;
 export const SETTLE_WAIT_MS = 1000;
 /** How long a navigation waits for its flush's `flushed` (`beforeLeave`'s default). */
 export const LEAVE_WAIT_MS = 1000;
+/**
+ * How long the tick and a navigation wait for the edit path to settle while a bulk batch is pending (SP5c spec §2.8,
+ * D23): a maximum paste's reply takes about 1.5 s, so the flush after it carries its step.
+ */
+export const BULK_SETTLE_WAIT_MS = 5000;
 
 /**
  * The `state` record of the page's pose, clock, hotbar and places, through the §2.1 normaliser with `STATE_BOUNDS`, so
@@ -152,6 +164,8 @@ export interface AutosaveDeps {
   history(): HistoryRecord;
   /** The edit path's wait for every pending reply to be recorded. */
   settled(): Promise<void>;
+  /** Whether the edit path has a bulk batch posted and not answered (SP5c spec §3.4): the waits are then 5,000 ms. */
+  bulkPending(): boolean;
   /** The edit replies counted since the page opened (a running count, never reset: the autosave keeps its baseline). */
   editsSince(): number;
   /** Every `flushed` (the storage notices, Task 29); never called for a `SimFailed`. */
@@ -164,13 +178,17 @@ export interface AutosaveDeps {
 }
 
 export interface Autosave {
-  /** The timer's tick: when nothing pauses it and something changed, waits for `settled()` (≤ 1,000 ms) and posts. */
+  /**
+   * The timer's tick: when nothing pauses it and something changed, waits for `settled()` (≤ 1,000 ms, or ≤ 5,000 ms
+   * while a bulk batch is pending) and posts.
+   */
   tick(): Promise<void>;
   /** Posts now; resolves with `flushed`, or null when the sim is gone (or the autosave disposed). */
   flushNow(): Promise<FlushedMsg | null>;
   /**
    * Posts now; resolves at `flushed` with it, or after `ms` (`LEAVE_WAIT_MS`) with null, whichever comes first (null at
-   * once when the sim is gone): a leave whose flush came back not ok asks first (final review MENU-1).
+   * once when the sim is gone): a leave whose flush came back not ok asks first (final review MENU-1). While a bulk
+   * batch is pending it first waits for `settled()`, at most `BULK_SETTLE_WAIT_MS`, then posts and waits `ms`.
    */
   beforeLeave(ms?: number): Promise<FlushedMsg | null>;
   /** Counts a change the state does not show (a pending `record`, a place) for the next post. */
@@ -248,9 +266,9 @@ export function createAutosave(o: AutosaveDeps): Autosave {
     if (changed()) void post();
   };
 
-  /** Resolves when `settled()` does or after `SETTLE_WAIT_MS`, whichever comes first. */
-  const settledOrWait = (): Promise<void> => new Promise<void>((resolve) => {
-    const id = o.clock.setTimeout(resolve, SETTLE_WAIT_MS);
+  /** Resolves when `settled()` does or after `ms`, whichever comes first. */
+  const settledOrWait = (ms: number): Promise<void> => new Promise<void>((resolve) => {
+    const id = o.clock.setTimeout(resolve, ms);
     const done = (): void => {
       o.clock.clearTimeout(id);
       resolve();
@@ -260,7 +278,7 @@ export function createAutosave(o: AutosaveDeps): Autosave {
 
   const tick = (): Promise<void> => {
     if (paused || gone || stopped) return Promise.resolve();
-    ticking ??= settledOrWait().then(() => {
+    ticking ??= settledOrWait(o.bulkPending() ? BULK_SETTLE_WAIT_MS : SETTLE_WAIT_MS).then(() => {
       ticking = null;
       if (paused || gone || stopped) return;
       o.onBuild?.();
@@ -284,15 +302,21 @@ export function createAutosave(o: AutosaveDeps): Autosave {
     },
     beforeLeave(ms = LEAVE_WAIT_MS) {
       if (gone) return Promise.resolve(null);
-      return new Promise<FlushedMsg | null>((resolve) => {
-        const id = o.clock.setTimeout(() => resolve(null), ms);
-        o.onBuild?.();
-        let result: FlushedMsg | null = null;
-        void post().then((r) => { result = r; }).finally(() => {
-          o.clock.clearTimeout(id);
-          resolve(result);
+      const leave = (): Promise<FlushedMsg | null> => {
+        // The sim gone (or the autosave disposed) during a bulk batch's wait: nothing to post.
+        if (gone) return Promise.resolve(null);
+        return new Promise<FlushedMsg | null>((resolve) => {
+          const id = o.clock.setTimeout(() => resolve(null), ms);
+          o.onBuild?.();
+          let result: FlushedMsg | null = null;
+          void post().then((r) => { result = r; }).finally(() => {
+            o.clock.clearTimeout(id);
+            resolve(result);
+          });
         });
-      });
+      };
+      // A pending bulk batch's reply first, so the flush carries its step (SP5c spec §2.8); else at once, as SP5b.
+      return o.bulkPending() ? settledOrWait(BULK_SETTLE_WAIT_MS).then(leave) : leave();
     },
     markChanged() { marks++; },
     pause(on) { paused = on; },

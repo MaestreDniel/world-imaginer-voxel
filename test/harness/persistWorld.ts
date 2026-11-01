@@ -361,6 +361,7 @@ export async function openPersistWorld(o: { kv: MemoryKV; worldId: string; rd: n
       blockHistory: history,
       sim,
       settled: editPath.settled,
+      bulkPending: editPath.bulkPending,
       editsSince: accepted.count,
       now: () => Date.now(),
       clock: {

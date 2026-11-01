@@ -84,7 +84,7 @@
  * A saved world (SP5b spec §3.2, §3.4 step 7, D4, D14): no URL writer, so the address stays `/?world=<id>`, and every
  * Reload (the failure panel's, the lost context's, the loading failure's lower RD) is `savedWorldUrl`. The autosave
  * (`createPageAutosave`) is armed at the reveal; every navigation the page starts waits for its `beforeLeave` (at most
- * 1,000 ms; a flush that comes back not saved asks `LEAVE_UNSAVED_NOTICE` first, final review MENU-1), and a failure after the reveal saves once more (`lastFlush`, unless the sim is what failed) before the
+ * 1,000 ms, after a pending bulk batch's reply, at most 5,000 ms, SP5c spec §2.8; a flush that comes back not saved asks `LEAVE_UNSAVED_NOTICE` first, final review MENU-1), and a failure after the reveal saves once more (`lastFlush`, unless the sim is what failed) before the
  * panel shows and the sim is released. The sim's failure notice is `SAVED_EDIT_FAILED_NOTICE`. Storage problems while it
  * plays (§3.8, D14; `watchStorage`): every `flushed` and the page's connection's events show D14's notices, the world
  * playable and its dirty set in the sim; `blocked` while the connection opens is a warning on the loading screen. One
@@ -2185,7 +2185,8 @@ export function lowerRdHref(rd: number | null, centre: { x: number; z: number } 
 /**
  * The reloader's `navigate` (SP5b spec §3.2, D31): in a saved world every navigation the page starts first waits for
  * `beforeLeave(LEAVE_WAIT_MS)` of the autosave `autosave()` returns, so the URL is set after that flush's `flushed` or
- * after 1,000 ms, whichever comes first; with none (an unsaved world) it navigates at once. A flush that comes back not
+ * after 1,000 ms, whichever comes first (the flush posted after a pending bulk batch's reply, at most 5,000 ms, SP5c
+ * spec §2.8); with none (an unsaved world) it navigates at once. A flush that comes back not
  * saved (the storage full: D14) navigates only if `askUnsaved()` resolves true (final review MENU-1: leaving would drop
  * every change since the last committed flush). Resolves whether it navigated: false tells the reloader the user stayed.
  */
@@ -2322,6 +2323,8 @@ export function createPageAutosave(o: {
   readonly blockHistory: Pick<BlockHistory, 'snapshot' | 'version'>;
   readonly sim: Pick<SimClient, 'flush'>;
   settled(): Promise<void>;
+  /** The edit path's `bulkPending` (SP5c spec §2.8): the tick's and a leave's 5,000 ms wait; none (false) when not given. */
+  bulkPending?(): boolean;
   editsSince(): number;
   /** The wall clock (`Date.now()`), the state's `updated`. */
   now(): number;
@@ -2358,6 +2361,7 @@ export function createPageAutosave(o: {
     historyVersion: () => o.blockHistory.version,
     history,
     settled: () => o.settled(),
+    bulkPending: () => o.bulkPending?.() ?? false,
     editsSince: () => o.editsSince(),
     onResult: (r) => o.onResult(r),
     onBuild: o.onBuild,
@@ -2432,7 +2436,7 @@ export function createBenchSave(o: {
   readonly worldId: string;
   readonly fly: Pick<FlyState, 'x' | 'y' | 'z' | 'yaw' | 'pitch' | 'mode' | 'speed'>;
   readonly frame: { readonly t: number };
-  readonly edits: Pick<EditPath, 'post' | 'pending' | 'settled'>;
+  readonly edits: Pick<EditPath, 'post' | 'pending' | 'settled' | 'bulkPending'>;
   read(x: number, y: number, z: number): number;
   readonly sim: Pick<SimClient, 'flush'>;
   readonly clock: AutosaveDeps['clock'];
@@ -2480,6 +2484,7 @@ export function createBenchSave(o: {
       },
     },
     settled: o.edits.settled,
+    bulkPending: o.edits.bulkPending,
     editsSince: accepted.count,
     now: () => o.wallNow(),
     // The timer's every fire reaches the driver first, paused or not (final review GOV-1).
@@ -4011,6 +4016,7 @@ export function mountWorldPage(root: HTMLElement, q: WorldQuery, hash: string, o
         sim: simClient!,
         places: () => worldPlaces.list,
         settled: editPath.settled,
+        bulkPending: editPath.bulkPending,
         editsSince: accepted.count,
         now: () => Date.now(),
         clock: {

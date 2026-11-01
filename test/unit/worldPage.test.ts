@@ -3450,6 +3450,138 @@ describe('autosave in the saved world: Reloads reopen /?world, navigations and f
     expect(SRC()).toMatch(/const reloader = createReloader\(leaveAfterSave\(\(\) => autosave, \(url\) => navigateTo\(url, location\), .*\), disarm\);/);
   });
 
+  /** A 32,768-edit paste (SP5c's largest batch) of stone into air, 32 × 32 × 32 from (0, 70, 0). */
+  const PASTE: readonly Edit[] = Array.from({ length: 32768 }, (_, i): Edit => ({
+    x: i & 31, y: 70 + (i >> 10), z: (i >> 5) & 31, op: 'set', value: STONE << 8, expect: 0,
+  }));
+
+  /**
+   * The page's saving over a real edit path (SP5c spec §2.8, D23): a fake sim whose `edits` reply comes `replyMs` after
+   * the post and whose `flush` replies the test settles by hand; `countAccepted`, the block history and its recording
+   * post; and the page's autosave with the edit path's `settled` and `bulkPending`, its page events kept in `events`, on
+   * vi's fake timers (`at`: ms since the fixture was made).
+   */
+  function bulkSaving(replyMs: number) {
+    const t0 = Date.now();
+    const flushes: Array<{ at: number; history: HistoryRecord | null; resolve(m: FlushedMsg): void }> = [];
+    const sim = {
+      failed: false,
+      edits: (edits: readonly Edit[]) => new Promise<EditedMsg>((resolve) => {
+        setTimeout(() => resolve({
+          type: 'edited', id: 1, prev: new Uint32Array(edits.length), next: Uint32Array.from(edits, (e) => e.value), dirty: new Float64Array(0),
+          entryAdded: new Float64Array(0), entryRemoved: new Float64Array(0), refused: null, relightMs: 0, editMs: 0, limboMax: 0, subBatchMaxMs: 0,
+        }), replyMs);
+      }),
+    };
+    const editPath = createEditPath({
+      sim, coordinator: { editState: () => 0 as const, simPin() {}, simUnpin() {}, markEdited() {} }, latency: createEditLatency(), now: () => Date.now(),
+      notices: { show() {}, hide() {} },
+    });
+    const accepted = countAccepted(editPath.post);
+    const blockHistory = createBlockHistory({ post: accepted.post, read: () => 0, pending: editPath.pending, settled: editPath.settled, notices: { show() {} } });
+    const actionPost = createActionPost({ post: accepted.post, record: blockHistory.record });
+    const fly = { x: 100.5, y: 80.25, z: -40.75, yaw: 90, pitch: -20, mode: 'fly' as const, speed: 30 };
+    const events = new Map<string, () => void>();
+    const autosave = createPageAutosave({
+      worldId: 'w 1',
+      fly,
+      frame: { t: 0.5 },
+      speedIndex: () => 2,
+      storedTime: null,
+      hotbar: () => STATE_BOUNDS.normalizeHotbar(null),
+      blockHistory,
+      sim: { flush: (_state, history) => new Promise<FlushedMsg>((resolve) => { flushes.push({ at: Date.now() - t0, history, resolve }); }) },
+      settled: editPath.settled,
+      bulkPending: editPath.bulkPending,
+      editsSince: accepted.count,
+      now: () => 1_700_000_000_000,
+      clock: {
+        now: () => Date.now(),
+        setInterval: (f, ms) => setInterval(f, ms) as unknown as number,
+        clearInterval: (id) => clearInterval(id),
+        setTimeout: (f, ms) => setTimeout(f, ms) as unknown as number,
+        clearTimeout: (id) => clearTimeout(id),
+      },
+      events: { on: (type, f) => { events.set(type, f); return () => { events.delete(type); }; }, hidden: () => false },
+      onResult: () => {},
+    });
+    return { autosave, flushes, actionPost, editPath, blockHistory, fly, events };
+  }
+
+  test('a 32,768-edit paste whose reply comes at 1,500 ms; `leaveAfterSave` (Load world) at 10 ms: the flush is posted only after the reply and carries the paste\'s step, and the navigation happens only after `flushed`', async () => {
+    const s = bulkSaving(1500);
+    const paste = s.actionPost(PASTE);
+    await vi.advanceTimersByTimeAsync(10);
+    expect(s.editPath.bulkPending()).toBe(true);
+    // Load world: the page leaves for the Worlds menu (`/`) through `leaveAfterSave`.
+    const navigate = vi.fn<(url: string) => void>();
+    let left: boolean | null = null;
+    void leaveAfterSave(() => s.autosave, navigate)('/').then((l) => { left = l; });
+    await vi.advanceTimersByTimeAsync(1489);
+    expect(s.flushes).toHaveLength(0);
+    await vi.advanceTimersByTimeAsync(1);
+    expect(await paste).toMatchObject({ ok: true });
+    expect(s.blockHistory.size).toBe(1);
+    // Posted at the reply, after the step was recorded: the flush's history holds the paste's step.
+    expect(s.flushes.map((f) => f.at)).toEqual([1500]);
+    expect(s.flushes[0]!.history?.done).toHaveLength(1);
+    expect(s.flushes[0]!.history!.done[0]!.edits).toHaveLength(32768);
+    await vi.advanceTimersByTimeAsync(300);
+    expect(navigate).not.toHaveBeenCalled();
+    s.flushes[0]!.resolve(OK(1));
+    await jobs();
+    expect(navigate.mock.calls).toEqual([['/']]);
+    expect(left).toBe(true);
+    s.autosave.dispose();
+    // The page's saved world and the bench's autosave pass their edit path's `bulkPending` (ruling P3).
+    const src = SRC();
+    expect(src).toMatch(/settled: editPath\.settled,\n\s+bulkPending: editPath\.bulkPending,\n\s+editsSince: accepted\.count,/);
+    expect(src).toMatch(/readonly edits: Pick<EditPath, 'post' \| 'pending' \| 'settled' \| 'bulkPending'>;/);
+    expect(src).toMatch(/settled: o\.edits\.settled,\n\s+bulkPending: o\.edits\.bulkPending,\n\s+editsSince: accepted\.count,/);
+  });
+
+  test('the same through `createReloader`\'s Reload link', async () => {
+    const s = bulkSaving(1500);
+    const navigate = vi.fn<(url: string) => void>();
+    const disarm = vi.fn();
+    const notices = createWorldNotices(dom.body as unknown as HTMLElement, createReloader(leaveAfterSave(() => s.autosave, navigate), disarm));
+    notices.failed('Streaming stopped: x', 'details', '/?world=w%201');
+    const paste = s.actionPost(PASTE);
+    await vi.advanceTimersByTimeAsync(10);
+    dom.el('world-failed-reload').click();
+    expect(disarm).toHaveBeenCalledTimes(1);
+    await vi.advanceTimersByTimeAsync(1489);
+    expect(s.flushes).toHaveLength(0);
+    await vi.advanceTimersByTimeAsync(1);
+    expect(await paste).toMatchObject({ ok: true });
+    expect(s.flushes.map((f) => f.at)).toEqual([1500]);
+    expect(s.flushes[0]!.history?.done).toHaveLength(1);
+    expect(s.flushes[0]!.history!.done[0]!.edits).toHaveLength(32768);
+    await vi.advanceTimersByTimeAsync(300);
+    expect(navigate).not.toHaveBeenCalled();
+    s.flushes[0]!.resolve(OK(1));
+    await jobs();
+    expect(navigate.mock.calls).toEqual([['/?world=w%201']]);
+    s.autosave.dispose();
+  });
+
+  test('`pagehide` at 10 ms posts at once with no wait (unchanged)', async () => {
+    const s = bulkSaving(1500);
+    const paste = s.actionPost(PASTE);
+    await vi.advanceTimersByTimeAsync(10);
+    expect(s.editPath.bulkPending()).toBe(true);
+    // The pose moved: something to save.
+    s.fly.x += 1;
+    s.events.get('pagehide')!();
+    // Posted at once, before the paste's reply: its step is not recorded yet, so the history is not posted.
+    expect(s.flushes.map((f) => f.at)).toEqual([10]);
+    expect(s.flushes[0]!.history).toBeNull();
+    await vi.advanceTimersByTimeAsync(1490);
+    expect(await paste).toMatchObject({ ok: true });
+    expect(s.flushes).toHaveLength(1);
+    s.autosave.dispose();
+  });
+
   test('Worlds menu saves, then navigates to `/`, after `flushed` or 1,000 ms (SP5b spec D31)', async () => {
     // The help as the page mounts it: "Worlds menu" leaves through the page's reloader (`leaveAfterSave`).
     const helpWith = (reloader: ReturnType<typeof createReloader>) => mountHelp(dom.body as unknown as HTMLElement, {

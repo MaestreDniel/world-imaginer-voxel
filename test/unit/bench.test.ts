@@ -1440,6 +1440,7 @@ describe('createBenchDriver: the save leg L11 (SP5b spec §6.2, D28; plan)', () 
         },
         pending: () => false,
         settled: () => Promise.resolve(),
+        bulkPending: () => false,
       },
       read: () => 0,
       sim: {
@@ -1524,6 +1525,7 @@ describe('createBenchDriver: the save leg L11 (SP5b spec §6.2, D28; plan)', () 
         },
         pending: () => false,
         settled: () => Promise.resolve(),
+        bulkPending: () => false,
       },
       read: () => 0,
       sim: {

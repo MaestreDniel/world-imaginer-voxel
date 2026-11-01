@@ -10,7 +10,9 @@ import { canonicalJSON } from '../../src/core/params/canonical';
 import { SimFailed } from '../../src/engine/simClient';
 import type { HistoryRecord, HotbarRecord, Place, StateRecord } from '../../src/persist/saves';
 import type { FlyState } from '../../src/player/fly';
-import { AUTOSAVE_MS, createAutosave, createStateParts, LEAVE_WAIT_MS, SETTLE_WAIT_MS, snapshotState, type Autosave } from '../../src/ui/world/autosave';
+import {
+  AUTOSAVE_MS, BULK_SETTLE_WAIT_MS, createAutosave, createStateParts, LEAVE_WAIT_MS, SETTLE_WAIT_MS, snapshotState, type Autosave,
+} from '../../src/ui/world/autosave';
 import type { BlockStep } from '../../src/ui/world/blockHistory';
 import { STATE_BOUNDS } from '../../src/ui/world/stateBounds';
 import { createPageAutosave } from '../../src/ui/world/worldPage';
@@ -83,6 +85,8 @@ function rig() {
     x: 10.5,
     /** What `settled()` returns; resolved by default. */
     settled: (): Promise<void> => Promise.resolve(),
+    /** What `bulkPending()` returns: whether a bulk batch is posted and not answered (SP5c spec §2.8). */
+    bulk: false,
   };
   const history = (): HistoryRecord => ({
     worldId: 'w1',
@@ -123,6 +127,7 @@ function rig() {
       return history();
     },
     settled: () => page.settled(),
+    bulkPending: () => page.bulk,
     editsSince: () => page.edits,
     onResult: (r) => results.push(r),
   });
@@ -408,6 +413,123 @@ describe('autosave (SP5b spec §3.2)', () => {
     await r.clock.runTo(10000);
     r.fire('pagehide');
     expect(r.posts).toHaveLength(0);
+  });
+});
+
+describe('the autosave\'s and the leave\'s wait for a bulk batch (SP5c spec §2.8, D23)', () => {
+  /**
+   * A bulk batch posted at 0 whose reply comes at `at` ms (never when null): `bulkPending()` true until then, and
+   * `settled()` resolving at the reply with the batch's edit counted and its step recorded (the history's version moved).
+   */
+  const bulkAt = (r: ReturnType<typeof rig>, at: number | null): void => {
+    r.page.bulk = true;
+    const reply = at === null ? new Promise<void>(() => {}) : new Promise<void>((resolve) => {
+      r.clock.setTimeout(() => {
+        r.page.bulk = false;
+        r.page.edits++;
+        r.page.steps++;
+        r.page.historyVersion++;
+        resolve();
+      }, at - r.clock.now());
+    });
+    r.page.settled = () => reply;
+  };
+
+  test('the bulk wait is the spec\'s', () => {
+    expect(BULK_SETTLE_WAIT_MS).toBe(5000);
+  });
+
+  test('with a bulk batch pending whose reply comes at 1,500 ms, the tick posts at 1,500 ms, after the reply, with the history holding the step', async () => {
+    const r = rig();
+    bulkAt(r, 1500);
+    void r.autosave.tick();
+    await r.clock.runTo(1000);
+    expect(r.posts).toHaveLength(0);
+    await r.clock.runTo(1499);
+    expect(r.posts).toHaveLength(0);
+    await r.clock.runTo(1500);
+    expect(r.posts.map((p) => p.at)).toEqual([1500]);
+    expect(r.posts[0]!.history?.done).toHaveLength(1);
+    r.ok(0);
+    await r.clock.runTo(6000);
+    expect(r.posts).toHaveLength(1);
+    r.autosave.dispose();
+  });
+
+  test('a bulk reply that never comes: the tick posts at 5,000 ms', async () => {
+    const r = rig();
+    bulkAt(r, null);
+    r.page.x = 11.5;
+    void r.autosave.tick();
+    await r.clock.runTo(4999);
+    expect(r.posts).toHaveLength(0);
+    await r.clock.runTo(5000);
+    expect(r.posts.map((p) => p.at)).toEqual([5000]);
+    expect(r.posts[0]!.state.player?.x).toBe(11.5);
+    expect(r.posts[0]!.history).toBeNull();
+    r.autosave.dispose();
+  });
+
+  test('with no bulk batch pending the tick still waits at most 1,000 ms', async () => {
+    const r = rig();
+    r.page.settled = () => new Promise<void>(() => {});
+    r.page.x = 11.5;
+    void r.autosave.tick();
+    await r.clock.runTo(999);
+    expect(r.posts).toHaveLength(0);
+    await r.clock.runTo(1000);
+    expect(r.posts.map((p) => p.at)).toEqual([1000]);
+    r.autosave.dispose();
+  });
+
+  test('`beforeLeave` with a bulk post replied at 1,500 ms posts its flush after the reply (the flush\'s history holds the step) and resolves at `flushed`, or 1,000 ms after its post with null', async () => {
+    const r = rig();
+    // The timer's own ticks stay out of it: only the leave posts.
+    r.autosave.pause(true);
+    bulkAt(r, 1500);
+    let leftAt = -1;
+    let result: unknown;
+    void r.autosave.beforeLeave(LEAVE_WAIT_MS).then((m) => { leftAt = r.clock.now(); result = m; });
+    await r.clock.runTo(1499);
+    expect(r.posts).toHaveLength(0);
+    await r.clock.runTo(1500);
+    expect(r.posts.map((p) => p.at)).toEqual([1500]);
+    expect(r.posts[0]!.history?.done).toHaveLength(1);
+    r.clock.setTimeout(() => r.ok(0), 200);
+    await r.clock.runTo(3000);
+    expect(leftAt).toBe(1700);
+    expect(result).toMatchObject({ type: 'flushed', ok: true });
+
+    // A second bulk batch, replied 1,500 ms after the leave starts; its flush is never answered: null 1,000 ms after the post.
+    bulkAt(r, 4500);
+    let leftAgain = -1;
+    void r.autosave.beforeLeave(LEAVE_WAIT_MS).then((m) => { leftAgain = r.clock.now(); result = m; });
+    await r.clock.runTo(4499);
+    expect(r.posts).toHaveLength(1);
+    await r.clock.runTo(4500);
+    expect(r.posts.map((p) => p.at)).toEqual([1500, 4500]);
+    expect(r.posts[1]!.history?.done).toHaveLength(2);
+    await r.clock.runTo(5499);
+    expect(leftAgain).toBe(-1);
+    await r.clock.runTo(6000);
+    expect(leftAgain).toBe(5500);
+    expect(result).toBeNull();
+    r.autosave.dispose();
+  });
+
+  test('with no bulk batch pending `beforeLeave` posts at once, as today', async () => {
+    const r = rig();
+    // An edit still out (not bulk): its settle never comes, and the leave does not wait for it.
+    r.page.settled = () => new Promise<void>(() => {});
+    await r.clock.runTo(100);
+    let leftAt = -1;
+    void r.autosave.beforeLeave(LEAVE_WAIT_MS).then(() => { leftAt = r.clock.now(); });
+    expect(r.posts.map((p) => p.at)).toEqual([100]);
+    await r.clock.runTo(1099);
+    expect(leftAt).toBe(-1);
+    await r.clock.runTo(1100);
+    expect(leftAt).toBe(1100);
+    r.autosave.dispose();
   });
 });
 
