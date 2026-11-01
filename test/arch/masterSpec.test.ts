@@ -1677,6 +1677,10 @@ describe('master spec amendments (SP5c §13)', () => {
     expect(lines).toContain('- **Pure layers:** none of the layers above imports three, `document`, `window` or `indexedDB`. The exception is `persist/idb.ts`, which runs in the sim worker and, for the worlds menu and the selection tool\'s clipboard, on the main thread (SP5b, SP5c).');
   });
 
+  test('§1\'s materials line names the ghost material (SP5c spec §6.2, §13, D25)', () => {
+    expect(layoutEntry(/^\s+materials\/index\.ts /)).toContain('(SP5c: the ghost material, a GHOST define)');
+  });
+
   test('§1\'s renderer line names the volume box beside `selection.ts (SP5a)` (SP5c spec §6.1, §13)', () => {
     expect(layoutEntry(/^\s+renderer\.ts /)).toContain('selection.ts (SP5a), the volume box (SP5c)');
   });

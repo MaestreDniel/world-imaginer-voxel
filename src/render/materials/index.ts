@@ -5,14 +5,16 @@ import { createLightmap } from '../lightmap';
 import { SKY_FRAGMENT, SKY_VERTEX } from './glsl/sky.glsl';
 import { DECODE_DEBUG_FRAGMENT, decodeDebugVertex, TERRAIN_FRAGMENT, terrainVertex } from './glsl/terrain.glsl';
 import { WATER_FRAGMENT, waterVertex } from './glsl/water.glsl';
-import { createSharedUniforms, skyUniforms, terrainUniforms, waterUniforms } from './uniforms';
+import { createSharedUniforms, ghostUniforms, skyUniforms, terrainUniforms, waterUniforms } from './uniforms';
 
 /**
  * Materials v1 (SP4a spec §6.4-§6.6, master §4.6): terrain (opaque and cutout), Fast water, the sky dome and the
  * spike's decode-debug material, all `ShaderMaterial`s with `glslVersion: GLSL3`. The terrain and water materials come
  * in a RegionBatch variant (`'batch'`, three's batching chunks) and a RegionMesh variant (`'mesh'`, `REGION_MESH`, no
- * batching chunks), generated from the same GLSL (spec §6.2, D7). Lava, clouds, lod, shadowDepth and selection come
- * with their SPs.
+ * batching chunks), generated from the same GLSL (spec §6.2, D7). The selection tool's ghost (SP5c spec §6.2, D25) is
+ * the cutout terrain with a `GHOST` define, translucent, turned by a uniform and floored in light; its boxes and the
+ * outline use three's built-in line materials (`render/selection.ts`). Lava, clouds, lod and shadowDepth come with their
+ * SPs.
  */
 
 /** Which section renderer the materials serve: RegionBatch or RegionMesh (spec §6.2). */
@@ -32,12 +34,19 @@ export interface MaterialSystem {
   readonly sky: ShaderMaterial;
   /** Writes each vertex's `data` word as RGBA bytes (the spike's decode check, spec §1.2). */
   readonly decodeDebug: ShaderMaterial;
+  /**
+   * The selection tool's ghost (SP5c spec §6.2, D25): the variant's terrain vertex shader and `TERRAIN_FRAGMENT` with
+   * `CUTOUT` and `GHOST`, translucent (alpha `GHOST_ALPHA`), no depth write, depth-tested, double-sided in one pass.
+   */
+  readonly ghost: ShaderMaterial;
   readonly lightmap: ReturnType<typeof createLightmap>;
   /**
    * Writes the frame's fog, eye light, sky and sun uniforms and hands the lightmap the frame's day, dusk and brightness
    * (it rebuilds only when they moved a step); allocates nothing (SP4b spec §3.10).
    */
   setFrameUniforms(f: FrameState): void;
+  /** Writes the ghost's `ghostTurns` uniform, its quarter turns `q` (0-3); allocates nothing (SP5c spec §6.2). */
+  setGhostTurns(q: number): void;
   /** Frees the materials and the lightmap; the albedo array stays its owner's. */
   dispose(): void;
 }
@@ -103,7 +112,23 @@ export function createMaterialSystem(s: MaterialSettings, albedo: DataArrayTextu
     blending: NoBlending,
     toneMapped: false,
   });
-  const materials = [terrainOpaque, terrainCutout, water, sky, decodeDebug];
+  const ghostU = ghostUniforms(u);
+  const ghost = new ShaderMaterial({
+    name: 'ghost',
+    glslVersion: GLSL3,
+    uniforms: ghostU,
+    defines: { ...terrainDefines(), CUTOUT: '', GHOST: '' },
+    vertexShader: terrainVertex(s.variant),
+    fragmentShader: TERRAIN_FRAGMENT,
+    transparent: true,
+    depthWrite: false,
+    depthTest: true,
+    side: DoubleSide,
+    // Ruling P16: three draws a double-sided transparent material in two passes (back faces, then front); one pass.
+    forceSinglePass: true,
+  });
+  const turns = ghostU['ghostTurns']!;
+  const materials = [terrainOpaque, terrainCutout, water, sky, decodeDebug, ghost];
 
   // The frame's scratch: setFrameUniforms writes into these, so a frame allocates nothing (SP4b spec §3.10).
   const fog = { start: 0, end: 0 };
@@ -117,6 +142,7 @@ export function createMaterialSystem(s: MaterialSettings, albedo: DataArrayTextu
     water,
     sky,
     decodeDebug,
+    ghost,
     lightmap,
     setFrameUniforms(f) {
       fogRange(f.rd, f.fogBand, fog);
@@ -129,6 +155,9 @@ export function createMaterialSystem(s: MaterialSettings, albedo: DataArrayTextu
       sunDirectionInto(f.t, sun);
       u.sunDir.value.set(sun[0]!, sun[1]!, sun[2]!);
       lightmap.update(dayFactor(f.t), duskFactor(f.t), f.brightness);
+    },
+    setGhostTurns(q) {
+      turns.value = q;
     },
     dispose() {
       for (const m of materials) m.dispose();

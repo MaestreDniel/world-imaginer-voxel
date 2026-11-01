@@ -1,7 +1,7 @@
 /**
  * The terrain shaders (SP4a spec §6.4, master §4.6) and the decode-debug shaders of the spike's exactness test (§1.2).
  * Terrain: albedo(layer) × faceShade × AO × lightmap(block, sky), then the fog, then three's colour-space chunk; no
- * Lambert and no sun term. The defines `TERRAIN_AO`, `SMOOTH_LIGHT` and `CUTOUT` come from the material.
+ * Lambert and no sun term. The defines `TERRAIN_AO`, `SMOOTH_LIGHT`, `CUTOUT` and `GHOST` (SP5c) come from the material.
  */
 import { FACE_DOWN, FACE_EAST, FACE_NORTH, FACE_SOUTH, FACE_UP, FACE_WEST } from '../../../world/blocks/kinds';
 import type { MaterialVariant } from '../index';
@@ -31,6 +31,12 @@ const AO_FACTOR = [1, 0.8, 0.6, 0.45] as const;
 /** Glass's frame (SP5a spec §1.3): a framed fragment whose two in-face coordinates both lie in [1/16, 15/16] is clear. */
 const FRAME_LO = glslFloat(1 / 16);
 const FRAME_HI = glslFloat(15 / 16);
+
+/**
+ * The selection tool's ghost (SP5c spec §6.2, D25): its light is never below this, per channel, so the ghost, meshed
+ * under open sky (sky 15), which the lightmap dims at night, stays visible then.
+ */
+export const GHOST_LIGHT_FLOOR = 0.6;
 
 /**
  * The terrain vertex shader: decodes the solid `data` word; layer, face and frame flat, sky, block and AO
@@ -72,9 +78,19 @@ ${vertexPlace(variant, 'position')}  vViewPos = mvPos4.xyz;
  * and z across an east or west face, x and z across up or down, x and y across north or south) both in [1/16, 15/16].
  * The floating origin is a multiple of 512 blocks (`render/floatingOrigin.ts`), so `fract` is block-aligned, also on
  * merged quads.
+ *
+ * `GHOST` (SP5c spec §6.2, D25; with `CUTOUT`) is the selection tool's ghost: the mesh is turned by its object's
+ * rotation, so the side face ids it was meshed with are remapped by the `ghostTurns` uniform (0-3; north → east →
+ * south → west for each clockwise turn, up and down unchanged) before both uses, the glass frame's in-face coordinates
+ * and `FACE_SHADE`; its light is floored at `GHOST_LIGHT_FLOOR` and its alpha is the `ghostAlpha` uniform. Every
+ * ghost line sits inside `#ifdef GHOST`: without it the source is the terrain's, unchanged.
  */
 export const TERRAIN_FRAGMENT = `${FRAGMENT_OUTPUT}${LIGHT_INTERP_GLSL}
 uniform sampler2DArray albedo;
+#ifdef GHOST
+uniform float ghostAlpha;
+uniform uint ghostTurns;
+#endif
 ${LIGHTMAP_GLSL}${SKY_GLSL}${FOG_GLSL}
 flat in uint vLayer;
 flat in uint vFace;
@@ -87,16 +103,28 @@ in vec3 vWorldPos;
 ${floatArray('FACE_SHADE', FACE_SHADE)}
 void main() {
   vec4 base = texture(albedo, vec3(0.5, 0.5, float(vLayer)));
+#ifdef GHOST
+  uint face = vFace < 4u ? (vFace + ghostTurns) % 4u : vFace;
+#endif
 #ifdef CUTOUT
   if (base.a < 0.5) discard;
   if (vFrame != 0u) {
     vec3 cell = fract(vWorldPos);
+#ifdef GHOST
+    vec2 inFace = face == ${FACE_UP}u || face == ${FACE_DOWN}u ? cell.xz : face == ${FACE_EAST}u || face == ${FACE_WEST}u ? cell.zy : cell.xy;
+#else
     vec2 inFace = vFace == ${FACE_UP}u || vFace == ${FACE_DOWN}u ? cell.xz : vFace == ${FACE_EAST}u || vFace == ${FACE_WEST}u ? cell.zy : cell.xy;
+#endif
     if (all(greaterThanEqual(inFace, vec2(${FRAME_LO}))) && all(lessThanEqual(inFace, vec2(${FRAME_HI})))) discard;
   }
 #endif
+#ifdef GHOST
+  vec3 color = base.rgb * FACE_SHADE[min(face, 5u)] * vAo * max(lightmapAt(vBlock, vSky), vec3(${glslFloat(GHOST_LIGHT_FLOOR)}));
+  gl_FragColor = vec4(applyFog(color, vViewPos, vWorldPos), ghostAlpha);
+#else
   vec3 color = base.rgb * FACE_SHADE[min(vFace, 5u)] * vAo * lightmapAt(vBlock, vSky);
   gl_FragColor = vec4(applyFog(color, vViewPos, vWorldPos), 1.0);
+#endif
   #include <colorspace_fragment>
 }
 `;

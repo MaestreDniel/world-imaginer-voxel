@@ -1,9 +1,13 @@
+import { createHash } from 'node:crypto';
 import { Color, DoubleSide, GLSL3, NoColorSpace, SRGBColorSpace, type ShaderMaterial } from 'three';
 import { describe, expect, test } from 'vitest';
 import { skyColors, sunDirection } from '../../src/daynight/dayNight';
 import { FOG_GLSL } from '../../src/render/materials/glsl/common.glsl';
 import { packingGlsl } from '../../src/render/materials/glsl/packing.glsl';
+import { GHOST_LIGHT_FLOOR, TERRAIN_FRAGMENT, terrainVertex } from '../../src/render/materials/glsl/terrain.glsl';
 import { createMaterialSystem, fogRange, type MaterialSystem, type MaterialVariant } from '../../src/render/materials/index';
+import { GHOST_ALPHA } from '../../src/render/materials/uniforms';
+import { FACE_DOWN, FACE_EAST, FACE_NORTH, FACE_SOUTH, FACE_UP, FACE_WEST } from '../../src/world/blocks/kinds';
 import type { FrameState } from '../../src/render/frameState';
 import { createFlatColorArray } from '../../src/render/textureArray';
 
@@ -15,11 +19,56 @@ const VARIANTS = ['batch', 'mesh'] as const;
 
 const all = (m: MaterialSystem): Record<string, ShaderMaterial> => ({
   terrainOpaque: m.terrainOpaque, terrainCutout: m.terrainCutout, water: m.water, sky: m.sky, decodeDebug: m.decodeDebug,
+  ghost: m.ghost,
 });
 /** The terrain and water materials: the ones with a batched and a RegionMesh variant. */
 const terrainAndWater = (m: MaterialSystem): ShaderMaterial[] => [m.terrainOpaque, m.terrainCutout, m.water];
 
 const FRAME: FrameState = { t: 1 / 12, brightness: 0.3, eyeSky: 15, rd: 12, fogBand: 64 };
+
+/** The index of the `#endif` that closes the conditional block opened at `start` (nested blocks skipped). */
+function blockEnd(src: string, start: number): number {
+  const directive = /^\s*#(if|ifdef|ifndef|endif)\b/gm;
+  directive.lastIndex = start;
+  let depth = 0;
+  for (let m = directive.exec(src); m; m = directive.exec(src)) {
+    depth += m[1] === 'endif' ? -1 : 1;
+    if (depth === 0) return m.index + m[0].indexOf('#');
+  }
+  return -1;
+}
+
+/**
+ * `src` as the preprocessor sees it with `GHOST` defined or not: the `#ifdef GHOST` / `#ifndef GHOST` blocks resolved
+ * (their `#else` honoured) and their directive lines dropped; every other line, directives included, kept as written.
+ */
+function resolveGhost(src: string, ghost: boolean): string {
+  const frames: Array<{ ghost: boolean; on: boolean }> = [];
+  const out: string[] = [];
+  for (const line of src.split('\n')) {
+    const d = /^\s*#(\w+)\s*(\w*)/.exec(line);
+    const kind = d?.[1];
+    if (kind === 'ifdef' || kind === 'ifndef' || kind === 'if') {
+      const isGhost = kind !== 'if' && d![2] === 'GHOST';
+      frames.push({ ghost: isGhost, on: !isGhost || (kind === 'ifdef') === ghost });
+      if (isGhost) continue;
+    } else if (kind === 'else' || kind === 'elif' || kind === 'endif') {
+      const top = frames[frames.length - 1]!;
+      if (kind === 'endif') frames.pop();
+      if (top.ghost) {
+        expect(kind, 'no #elif in a GHOST block').not.toBe('elif');
+        if (kind === 'else') top.on = !top.on;
+        continue;
+      }
+    }
+    if (frames.every((f) => f.on)) out.push(line);
+  }
+  expect(frames, 'every conditional block is closed').toEqual([]);
+  return out.join('\n');
+}
+
+/** SHA-256 and length of `TERRAIN_FRAGMENT` before SP5c's ghost (SP5a's, at 37ebbb1). */
+const SP5A_TERRAIN_FRAGMENT = { sha256: 'cd91f3ef8ae9954e51b46c26a51b63e9e60b8882298b7b46704a9b590d7c8285', length: 2375 };
 
 describe('materials v1 (SP4a spec §6.4-§6.6)', () => {
   test('every material is a GLSL3 ShaderMaterial', () => {
@@ -255,7 +304,7 @@ describe('materials v1 (SP4a spec §6.4-§6.6)', () => {
         const src = m.fragmentShader;
         expect(src).toContain('flat in uint vFrame;');
         const start = src.indexOf('#ifdef CUTOUT');
-        const cutout = src.slice(start, src.indexOf('#endif', start));
+        const cutout = src.slice(start, blockEnd(src, start));
         expect(cutout).toContain('if (base.a < 0.5) discard;');
         expect(cutout).toContain('if (vFrame != 0u) {');
         // The two in-face coordinates of the block-aligned world position (the floating origin is a multiple of 512).
@@ -274,6 +323,104 @@ describe('materials v1 (SP4a spec §6.4-§6.6)', () => {
     m.lightmap.texture.addEventListener('dispose', () => disposed.push('lightmap'));
     ALBEDO.addEventListener('dispose', () => disposed.push('albedo'));
     m.dispose();
-    expect(disposed.sort()).toEqual(['decodeDebug', 'lightmap', 'sky', 'terrainCutout', 'terrainOpaque', 'water']);
+    expect(disposed.sort()).toEqual(['decodeDebug', 'ghost', 'lightmap', 'sky', 'terrainCutout', 'terrainOpaque', 'water']);
+  });
+});
+
+describe('the ghost material (SP5c spec §6.2, D25)', () => {
+  test('the ghost material: defines CUTOUT and GHOST, transparent, depthWrite false, depthTest true, uniforms ghostAlpha 0.45 and ghostTurns 0, in both variants', () => {
+    expect(GHOST_ALPHA).toBe(0.45);
+    for (const v of VARIANTS) {
+      const m = SYSTEMS[v];
+      const g = m.ghost;
+      expect(g.name).toBe('ghost');
+      expect(g.defines['CUTOUT'], v).toBeDefined();
+      expect(g.defines['GHOST'], v).toBeDefined();
+      // terrainDefines(): the settings' AO and smooth light, as the cutout terrain's.
+      expect(g.defines).toEqual({ ...m.terrainCutout.defines, GHOST: '' });
+      expect(g.transparent, v).toBe(true);
+      expect(g.depthWrite, v).toBe(false);
+      expect(g.depthTest, v).toBe(true);
+      expect(g.side, v).toBe(DoubleSide);
+      // Ruling P16: one pass of a double-sided transparent material (three draws it back then front otherwise).
+      expect(g.forceSinglePass, v).toBe(true);
+      expect(g.uniforms['ghostAlpha']!.value, v).toBe(0.45);
+      expect(g.uniforms['ghostTurns']!.value, v).toBe(0);
+      expect(g.vertexShader, v).toBe(terrainVertex(v));
+      expect(g.vertexShader, v).toBe(m.terrainCutout.vertexShader);
+      expect(g.fragmentShader, v).toBe(TERRAIN_FRAGMENT);
+      // The shared uniforms, so setFrameUniforms reaches the ghost too.
+      for (const name of ['albedo', 'lightmap', 'fogStart', 'fogEnd', 'eyeSky', 'skyZenith', 'skyHorizon', 'sunDir']) {
+        expect(g.uniforms[name], `${v} ${name}`).toBe(m.terrainOpaque.uniforms[name]);
+      }
+      // The ghost's own uniforms are not the terrain's.
+      expect(m.terrainCutout.uniforms['ghostAlpha']).toBeUndefined();
+      expect(m.terrainCutout.uniforms['ghostTurns']).toBeUndefined();
+    }
+    const off = system('mesh', false, false).ghost;
+    expect(off.defines).toEqual({ CUTOUT: '', GHOST: '' });
+  });
+
+  test('its fragment source remaps the face before both uses (the glass frame\'s in-face coordinates and FACE_SHADE), writes alpha from ghostAlpha and floors the light at 0.6', () => {
+    expect(GHOST_LIGHT_FLOOR).toBe(0.6);
+    // North → east → south → west for each clockwise turn: the side faces are 0-3 in that order, up and down above.
+    expect([FACE_NORTH, FACE_EAST, FACE_SOUTH, FACE_WEST]).toEqual([0, 1, 2, 3]);
+    expect(Math.min(FACE_UP, FACE_DOWN)).toBeGreaterThanOrEqual(4);
+    const src = resolveGhost(TERRAIN_FRAGMENT, true);
+    expect(src).toContain('uniform float ghostAlpha;');
+    expect(src).toContain('uniform uint ghostTurns;');
+    const body = src.slice(src.indexOf('void main() {'));
+    const remap = '  uint face = vFace < 4u ? (vFace + ghostTurns) % 4u : vFace;';
+    const at = body.indexOf(remap);
+    expect(at, 'the remap').toBeGreaterThanOrEqual(0);
+    const after = body.slice(at + remap.length);
+    expect(after, 'no use of the unturned face after the remap').not.toContain('vFace');
+    const inFace = after.indexOf('vec2 inFace = face == 4u || face == 5u ? cell.xz : face == 1u || face == 3u ? cell.zy : cell.xy;');
+    const shade = after.indexOf('FACE_SHADE[min(face, 5u)]');
+    expect(inFace, 'the glass frame reads the turned face').toBeGreaterThanOrEqual(0);
+    expect(shade, 'the face shade reads the turned face').toBeGreaterThan(inFace);
+    expect(after).toContain('vec3 color = base.rgb * FACE_SHADE[min(face, 5u)] * vAo * max(lightmapAt(vBlock, vSky), vec3(0.6));');
+    expect(after).toContain('gl_FragColor = vec4(applyFog(color, vViewPos, vWorldPos), ghostAlpha);');
+    expect(after).not.toContain('), 1.0);');
+    // Still the cutout: transparent texels and the inside of glass's frame are discarded.
+    expect(after).toContain('if (base.a < 0.5) discard;');
+    expect(after).toContain('if (all(greaterThanEqual(inFace, vec2(0.0625))) && all(lessThanEqual(inFace, vec2(0.9375)))) discard;');
+    // The remap in JS: q clockwise turns take each side face q steps along north → east → south → west.
+    const turned = (face: number, q: number): number => (face < 4 ? (face + q) % 4 : face);
+    expect(turned(FACE_NORTH, 1)).toBe(FACE_EAST);
+    expect(turned(FACE_EAST, 1)).toBe(FACE_SOUTH);
+    expect(turned(FACE_WEST, 1)).toBe(FACE_NORTH);
+    expect(turned(FACE_SOUTH, 3)).toBe(FACE_EAST);
+    expect(turned(FACE_UP, 2)).toBe(FACE_UP);
+    expect(turned(FACE_DOWN, 3)).toBe(FACE_DOWN);
+  });
+
+  test('the source with GHOST undefined equals today\'s TERRAIN_FRAGMENT (no ghost code outside #ifdef GHOST), so the terrain materials are unchanged', () => {
+    const plain = resolveGhost(TERRAIN_FRAGMENT, false);
+    expect(plain.length).toBe(SP5A_TERRAIN_FRAGMENT.length);
+    expect(createHash('sha256').update(plain).digest('hex')).toBe(SP5A_TERRAIN_FRAGMENT.sha256);
+    expect(plain).not.toMatch(/ghost/i);
+    expect(plain).not.toContain('uint face');
+    expect(TERRAIN_FRAGMENT).toContain('#ifdef GHOST');
+    for (const v of VARIANTS) {
+      for (const m of [SYSTEMS[v].terrainOpaque, SYSTEMS[v].terrainCutout]) {
+        expect(m.fragmentShader).toBe(TERRAIN_FRAGMENT);
+        expect(m.defines['GHOST']).toBeUndefined();
+      }
+    }
+  });
+
+  test('setGhostTurns(3) writes 3; dispose frees the ghost material', () => {
+    const m = system('batch');
+    const turns = m.ghost.uniforms['ghostTurns']!;
+    m.setGhostTurns(3);
+    expect(turns.value).toBe(3);
+    expect(m.ghost.uniforms['ghostTurns']).toBe(turns);
+    m.setGhostTurns(0);
+    expect(turns.value).toBe(0);
+    let freed = 0;
+    m.ghost.addEventListener('dispose', () => freed++);
+    m.dispose();
+    expect(freed).toBe(1);
   });
 });

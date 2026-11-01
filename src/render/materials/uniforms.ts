@@ -75,3 +75,14 @@ export function waterUniforms(u: SharedUniforms): Uniforms {
     waterDeep: { value: linear(...WATER_DEEP) },
   };
 }
+
+/** The selection tool's ghost's alpha (SP5c spec §6.2, D11). */
+export const GHOST_ALPHA = 0.45;
+
+/**
+ * The ghost's uniforms (SP5c spec §6.2, D25): terrain's, shared, plus its own alpha and `ghostTurns`, the quarter turns
+ * (0-3) its side faces are remapped by.
+ */
+export function ghostUniforms(u: SharedUniforms): Uniforms {
+  return { ...terrainUniforms(u), ghostAlpha: { value: GHOST_ALPHA }, ghostTurns: { value: 0 } };
+}
