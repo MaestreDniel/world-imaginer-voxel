@@ -93,14 +93,24 @@ export function breakAt(hit: RayHit, read: Read): Edit | null {
   return setEdit(x, y, z, AIR, FLUID_MODE[state] === FLUID_MODE_HOLD ? expect & 255 : NO_FLUID, expect);
 }
 
-/** The voxel across the hit face: the face's normal added to the hit voxel. */
-function across(hit: RayHit): [number, number, number] {
+/**
+ * The voxel across the hit face (the face's normal added to the hit voxel) written into `out[0..2]`, allocating
+ * nothing: the selection tool's anchor runs it per frame (SP5c spec §2.5).
+ */
+export function acrossInto(hit: { readonly x: number; readonly y: number; readonly z: number; readonly face: number },
+  out: Int32Array): void {
   const f = hit.face;
-  return [
-    hit.x + (f === FACE_EAST ? 1 : f === FACE_WEST ? -1 : 0),
-    hit.y + (f === FACE_UP ? 1 : f === FACE_DOWN ? -1 : 0),
-    hit.z + (f === FACE_SOUTH ? 1 : f === FACE_NORTH ? -1 : 0),
-  ];
+  out[0] = hit.x + (f === FACE_EAST ? 1 : f === FACE_WEST ? -1 : 0);
+  out[1] = hit.y + (f === FACE_UP ? 1 : f === FACE_DOWN ? -1 : 0);
+  out[2] = hit.z + (f === FACE_SOUTH ? 1 : f === FACE_NORTH ? -1 : 0);
+}
+
+const acrossScratch = new Int32Array(3);
+
+/** The voxel across the hit face, as a fresh array (`placeAt` and the buckets: once per click, not per frame). */
+function across(hit: RayHit): [number, number, number] {
+  acrossInto(hit, acrossScratch);
+  return [acrossScratch[0]!, acrossScratch[1]!, acrossScratch[2]!];
 }
 
 /** The horizontal facing nearest the opposite of the look (yaw 0 north, 90 east). */

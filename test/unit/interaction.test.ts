@@ -5,7 +5,9 @@
  */
 import { describe, expect, test } from 'vitest';
 import { lookVectorInto } from '../../src/player/fly';
-import { bodyOf, breakAt, emptyBucketAt, pickAt, placeAt, type BodyBox, type Slot } from '../../src/player/interaction';
+import {
+  acrossInto, bodyOf, breakAt, emptyBucketAt, pickAt, placeAt, type BodyBox, type Slot,
+} from '../../src/player/interaction';
 import { REACH_FLY, castRay, createRayHit, type RayHit } from '../../src/player/raycast';
 import { AIR, BEDROCK, GLASS, LADDER, REGISTRY, STONE, TORCH, WALL_TORCH } from '../../src/world/blocks/index';
 import { LAVA_SOURCE, packFluid, WATER_SOURCE } from '../../src/world/blocks/fluid';
@@ -140,6 +142,27 @@ describe('placeAt: the target (SP5a spec §4.2)', () => {
     const r = canned().set(0, 68, 0, STONE);
     expect(placeAt(hitOf(r, 0, 68, 0, FACE_UP), EMPTY, 0, FAR, r, always)).toBeNull();
     expect(placeAt(createRayHit(), block('stone'), 0, FAR, r, always)).toBeNull();
+  });
+});
+
+describe('acrossInto (SP5c spec §2.5)', () => {
+  test('`acrossInto` writes `across`\'s voxel for each of the six faces', () => {
+    const r = canned().set(5, 68, -7, STONE);
+    const out = new Int32Array(3);
+    for (const face of [FACE_NORTH, FACE_EAST, FACE_SOUTH, FACE_WEST, FACE_UP, FACE_DOWN]) {
+      const hit = hitOf(r, 5, 68, -7, face);
+      out.fill(99);
+      acrossInto(hit, out);
+      // `across` serves `placeAt`: the voxel it places into is `across`'s.
+      const e = placeAt(hit, block('stone'), 0, FAR, r, always)!;
+      expect([...out], `face ${face}`).toEqual([e.x, e.y, e.z]);
+    }
+    const at = (face: number): number[] => {
+      acrossInto({ x: 5, y: 68, z: -7, face }, out);
+      return [...out];
+    };
+    expect([FACE_NORTH, FACE_EAST, FACE_SOUTH, FACE_WEST, FACE_UP, FACE_DOWN].map(at)).toEqual(
+      [[5, 68, -8], [6, 68, -7], [5, 68, -6], [4, 68, -7], [5, 69, -7], [5, 67, -7]]);
   });
 });
 

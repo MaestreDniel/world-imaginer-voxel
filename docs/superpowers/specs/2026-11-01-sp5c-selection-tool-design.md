@@ -211,12 +211,12 @@ One voxel appears once, so the sim's in-batch rule (an earlier edit of the voxel
 
 ### 2.5 The ghost's anchor (D7, D11)
 
-Let the turned sizes be (W′, H, D′) and the aim's hit voxel h with face normal n, and a = h + n (`across`, `src/player/interaction.ts:97-104`, exported for this). The box's minimum corner:
+Let the turned sizes be (W′, H, D′) and the aim's hit voxel h with face normal n, and a = h + n, written by `acrossInto(hit, out)` (`src/player/interaction.ts:96-106`) into an `Int32Array`, allocating nothing. `across` (`:110-114`), which takes a whole `RayHit` and returns a fresh array, delegates to it and stays for `placeAt` and the buckets; the per-frame anchor cannot use it, since it would allocate. The box's minimum corner:
 - n = +y: (a.x − ⌊W′/2⌋, a.y, a.z − ⌊D′/2⌋); n = −y: (a.x − ⌊W′/2⌋, a.y − H + 1, a.z − ⌊D′/2⌋);
 - n = +x: (a.x, a.y, a.z − ⌊D′/2⌋); n = −x: (a.x − W′ + 1, a.y, a.z − ⌊D′/2⌋);
 - n = +z: (a.x − ⌊W′/2⌋, a.y, a.z); n = −z: (a.x − ⌊W′/2⌋, a.y, a.z − D′ + 1);
-then y + `offset`. The ghost never covers the aimed block.
-- **At each anchor, turn or offset change, on the main thread, with no read:** §2.7's y and window checks over the target box, and `editState` over the 3 × 3 of every column the box covers (at most 7 × 7 columns for a 64-wide box). A box that fails turns red with its reason ("it would leave the world (y −64 … 319)", "it would cross the world's edge", "part of it is not loaded", "the world is regenerating"), and no `copy` is posted for it.
+then y + `offset`. With offset 0 the ghost never covers the aimed block, and on a side face it never does at any offset; raised or lowered on a top or bottom face it can (on +y with offset −2 it starts at h.y − 1; on −y with offset 3 it reaches h.y + 2).
+- **At each anchor, turn or offset change, on the main thread, with no read:** §2.7's y and window checks over the target box, and one `editState` call per column the box covers, since `editState(cx, cz)` already checks its column's whole 3 × 3 (`src/engine/coordinator.ts:1551-1562`): a 64-wide box covers at most 5 columns a side, so at most 25 calls, covering at most 7 × 7 columns. A box that fails turns red with its reason ("it would leave the world (y −64 … 319)", "it would cross the world's edge", "part of it is not loaded", "the world is regenerating"), and no `copy` is posted for it.
 - **The target read, throttled:** once the anchor, the turn and the offset have stayed the same for 100 ms (`TARGET_READ_SETTLE_MS`), the page posts `copy` of the target box (one in flight; a newer box replaces a queued one). On its reply it counts the changed cells n and the replaced cells m (changed cells whose target value is not 0) and fills the replaced-cell overlay with the first 4,096 in x, z, y order (§6.3). A reply for a box that is no longer the ghost's is dropped. A `copied` with `why: 'unloaded'` marks the target "part of it is not loaded" (the box red). Until a reply, the counts read "counting…". So a sweeping aim reads nothing, and a still ghost is read once.
 
 ### 2.6 Rotation (D10)
@@ -339,7 +339,7 @@ One `InstancedMesh` of a unit cube grown by 0.01, `MeshBasicMaterial` red `#ff40
 ### 6.4 Draw calls and the frame
 
 - With the tool on and a ghost shown: the selection box 2, the ghost 1, the ghost's box 2, the replaced cells 1, so at most 6 draw calls beyond today's "selection 1" (master §4.5 :1062; the outline). The `?bench` legs L1-L11 never show the tool, so G1's draw-call cell (≤ 100) is unchanged; L12 records the count with the ghost shown (§10.4).
-- Per frame, inside master §7's "input, physics, raycast 0.3 ms": one ray of at most 32 blocks, the anchor, its main-thread checks (§2.5: arithmetic and at most 49 `editState` reads), two box `set`s and the ghost's matrix. Outside the at-rest frame: the ghost's build slices (one cell past 1 ms at most) and, once per still ghost (§2.5's 100 ms settle), the target reply's count and overlay fill (about 2 ms at 64³) with its 1 MiB buffer, recorded in L12 as `ghostBuildMs`, `ghostSliceMaxMs` and `overlayMainMaxMs`. Zero allocation at rest is tested with the box and with the ghost shown (§10.5).
+- Per frame, inside master §7's "input, physics, raycast 0.3 ms": one ray of at most 32 blocks, the anchor, its main-thread checks (§2.5: arithmetic and at most 25 `editState` calls, one per covered column, each checking its column's 3 × 3), two box `set`s and the ghost's matrix. Outside the at-rest frame: the ghost's build slices (one cell past 1 ms at most) and, once per still ghost (§2.5's 100 ms settle), the target reply's count and overlay fill (about 2 ms at 64³) with its 1 MiB buffer, recorded in L12 as `ghostBuildMs`, `ghostSliceMaxMs` and `overlayMainMaxMs`. Zero allocation at rest is tested with the box and with the ghost shown (§10.5).
 
 ## 7. The SP5b UX notes
 
