@@ -22,13 +22,23 @@
  * - **Kept across reloads** (SP5b spec §3.4 step 6, D6): `snapshot` gives both sides for the autosave's `history`
  *   record, `restore` puts a saved world's back at the open (each side its newest `BLOCK_HISTORY_STEPS`), and
  *   `version` moves with every change of either side, so the autosave posts the history only when it changed.
+ * - **The caps** (SP5c spec §5, D14): a cut, paste or move is one step of at most `MAX_STEP_EDITS` (32,768, declared
+ *   in `sim/edits.ts` for the sim's guard), and both sides together hold at most `MAX_HISTORY_EDITS` (65,536) edits,
+ *   mirrored in `saves.ts` (pinned equal in `stateBounds.test.ts`), so two maximum operations fill it. `record` drops
+ *   the oldest undo steps until the total fits, keeping the new step whole (recording clears the redo side, so only
+ *   undo steps are dropped). `restore`, like the normaliser, drops a step over `MAX_STEP_EDITS`, then, while the total
+ *   is over the cap, the oldest undo step, then the redo step furthest from the present (`undone[0]`). The total bounds
+ *   the `history` record the sim rewrites whole on every history-changing flush (about 2.9 MB at the cap).
  */
 import { NO_ENTRY } from '../../sim/diffStore';
+import { MAX_STEP_EDITS } from '../../sim/edits';
 import type { Edit } from '../../workers/protocol';
 import type { EditOutcome } from './editPath';
 
 /** The steps the history keeps (spec §4.5). */
 export const BLOCK_HISTORY_STEPS = 100;
+/** The edits both sides hold in all (SP5c spec §5, D14); `saves.ts`' `MAX_HISTORY_EDITS` mirrors it. */
+export const MAX_HISTORY_EDITS = 65_536;
 /** How long "Undo · blocks" / "Redo · blocks" shows (D13). */
 const DONE_NOTICE_MS = 1500;
 /** How long a refusal's "Can't undo there: …" shows (D13). */
@@ -40,7 +50,10 @@ export interface BlockStep {
 }
 
 export interface BlockHistory {
-  /** Adds a step on top (the oldest dropped past `BLOCK_HISTORY_STEPS`) and clears the redo side. */
+  /**
+   * Adds a step on top and clears the redo side; the oldest steps are dropped past `BLOCK_HISTORY_STEPS` and while the
+   * total edits exceed `MAX_HISTORY_EDITS` (the new step kept whole).
+   */
   record(step: BlockStep): void;
   /** Ctrl+Z while the world owns the controls. */
   undo(): void;
@@ -52,13 +65,23 @@ export interface BlockHistory {
   readonly redoSize: number;
   /** Both sides, oldest first, as copies (a later step does not reach them). */
   snapshot(): { done: BlockStep[]; undone: BlockStep[] };
-  /** Replaces both sides with `done` and `undone` (oldest first), each cut to its newest `BLOCK_HISTORY_STEPS`. */
+  /**
+   * Replaces both sides with `done` and `undone` (oldest first), each cut to its newest `BLOCK_HISTORY_STEPS`, a step
+   * over `MAX_STEP_EDITS` dropped, then, while the total exceeds `MAX_HISTORY_EDITS`, `done[0]`, then `undone[0]`.
+   */
   restore(done: readonly BlockStep[], undone: readonly BlockStep[]): void;
   /** Moved by `record`, an accepted undo or redo, a dropped step and `restore`. */
   readonly version: number;
 }
 
 type Press = 'undo' | 'redo';
+
+/** The edits of a side's steps. */
+const editsIn = (side: readonly BlockStep[]): number => {
+  let n = 0;
+  for (const s of side) n += s.edits.length;
+  return n;
+};
 
 export function createBlockHistory(o: {
   post(edits: readonly Edit[]): Promise<EditOutcome>;
@@ -144,6 +167,8 @@ export function createBlockHistory(o: {
     record(step) {
       push(done, step);
       undone.length = 0;
+      let total = editsIn(done);
+      while (total > MAX_HISTORY_EDITS && done.length > 1) total -= done.shift()!.edits.length;
       version++;
     },
     undo: () => press('undo'),
@@ -156,8 +181,14 @@ export function createBlockHistory(o: {
     },
     snapshot: () => ({ done: done.slice(), undone: undone.slice() }),
     restore(d, u) {
-      done.splice(0, done.length, ...d.slice(Math.max(0, d.length - BLOCK_HISTORY_STEPS)));
-      undone.splice(0, undone.length, ...u.slice(Math.max(0, u.length - BLOCK_HISTORY_STEPS)));
+      const kept = (side: readonly BlockStep[]): BlockStep[] =>
+        side.slice(Math.max(0, side.length - BLOCK_HISTORY_STEPS)).filter((s) => s.edits.length <= MAX_STEP_EDITS);
+      const nd = kept(d);
+      const nu = kept(u);
+      let total = editsIn(nd) + editsIn(nu);
+      while (total > MAX_HISTORY_EDITS) total -= (nd.length > 0 ? nd.shift()! : nu.shift()!).edits.length;
+      done.splice(0, done.length, ...nd);
+      undone.splice(0, undone.length, ...nu);
       version++;
     },
     get version() {

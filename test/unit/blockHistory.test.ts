@@ -3,14 +3,16 @@
  * and redo posted through the real edit path to a fake sim that checks every `expect` against its own voxels, the
  * value read now when a side has no entry, a press held while a post is pending, and the refusals' notices. SP5b
  * (spec §3.4 step 6, D6, D32): `snapshot` and `restore` (each side the newest 100), `version`, and a step refused as
- * `'changed'` dropped.
+ * `'changed'` dropped. SP5c (spec §5, D14): at most 65,536 edits over both sides, the oldest undo steps dropped by
+ * `record`; `restore` drops a step over `MAX_STEP_EDITS`, then the oldest undo steps, then `undone[0]`.
  */
 import { afterEach, beforeEach, describe, expect, test, vi } from 'vitest';
 import { colKey } from '../../src/core/coords';
 import { NO_ENTRY } from '../../src/sim/diffStore';
+import { MAX_STEP_EDITS } from '../../src/sim/edits';
 import type { Edit, EditedMsg } from '../../src/workers/protocol';
 import { AIR, DIRT, STONE } from '../../src/world/blocks/index';
-import { BLOCK_HISTORY_STEPS, createActionPost, createBlockHistory } from '../../src/ui/world/blockHistory';
+import { BLOCK_HISTORY_STEPS, createActionPost, createBlockHistory, MAX_HISTORY_EDITS, type BlockStep } from '../../src/ui/world/blockHistory';
 import { createEditLatency } from '../../src/ui/world/editLatency';
 import { createEditPath } from '../../src/ui/world/editPath';
 
@@ -369,6 +371,113 @@ describe('createBlockHistory (SP5a spec §4.5, D13)', () => {
     expect([r.history.size, r.history.redoSize]).toEqual([5, 7]);
     // No press ran before the previous reply: no post while another waited.
     expect(r.overlaps).toEqual([]);
+  });
+});
+
+describe('the history\'s caps (SP5c spec §5, D14)', () => {
+  /** A step of `n` edits (one shared edit object; the history reads only `edits.length` and the step's identity). */
+  const stepOf = (n: number): BlockStep => ({ edits: new Array(n).fill({ x: 0, y: Y, z: 0, before: NO_ENTRY, after: STONE_V }) });
+  const sizes = (steps: readonly BlockStep[]): number[] => steps.map((s) => s.edits.length);
+  const total = (h: { snapshot(): { done: BlockStep[]; undone: BlockStep[] } }): number => {
+    const s = h.snapshot();
+    return [...s.done, ...s.undone].reduce((n, st) => n + st.edits.length, 0);
+  };
+
+  test('`MAX_HISTORY_EDITS` is 65,536', () => {
+    expect(MAX_HISTORY_EDITS).toBe(65_536);
+  });
+
+  test('two 32,768-edit steps then a 1-edit step: the older 32,768 step is dropped (D14: two maximum operations fill it)', () => {
+    const r = rig();
+    const [a, b, c] = [stepOf(32_768), stepOf(32_768), stepOf(1)];
+    r.history.record(a);
+    r.history.record(b);
+    expect(r.history.snapshot().done).toEqual([a, b]);
+    expect(total(r.history)).toBe(65_536);
+    r.history.record(c);
+    const done = r.history.snapshot().done;
+    expect(done).toHaveLength(2);
+    expect(done[0]).toBe(b);
+    expect(done[1]).toBe(c);
+    expect(total(r.history)).toBe(32_769);
+  });
+
+  test('a 32,768 step then a 1-edit step: both kept (32,769)', () => {
+    const r = rig();
+    r.history.record(stepOf(32_768));
+    r.history.record(stepOf(1));
+    expect(sizes(r.history.snapshot().done)).toEqual([32_768, 1]);
+    expect(total(r.history)).toBe(32_769);
+  });
+
+  test('a 32,768 step after 50 one-edit steps keeps all 51 (32,818)', () => {
+    const r = rig();
+    for (let i = 0; i < 50; i++) r.history.record(stepOf(1));
+    r.history.record(stepOf(32_768));
+    expect(r.history.size).toBe(51);
+    expect(total(r.history)).toBe(32_818);
+  });
+
+  test('three 30,000 steps: the first dropped', () => {
+    const r = rig();
+    const steps = [stepOf(30_000), stepOf(30_000), stepOf(30_000)];
+    for (const s of steps) r.history.record(s);
+    const done = r.history.snapshot().done;
+    expect(done).toHaveLength(2);
+    expect(done[0]).toBe(steps[1]);
+    expect(done[1]).toBe(steps[2]);
+    expect(total(r.history)).toBe(60_000);
+  });
+
+  test('the 100-step bound kept for 1-edit steps', () => {
+    const r = rig();
+    const steps = Array.from({ length: 101 }, () => stepOf(1));
+    for (const s of steps) r.history.record(s);
+    const done = r.history.snapshot().done;
+    expect(done).toHaveLength(100);
+    expect(done[0]).toBe(steps[1]);
+    expect(done[99]).toBe(steps[100]);
+  });
+
+  test('recording clears the redo side, so only undo steps are counted and dropped', () => {
+    const r = rig();
+    r.history.restore([stepOf(30_000)], [stepOf(30_000)]);
+    expect(total(r.history)).toBe(60_000);
+    const s = stepOf(30_000);
+    r.history.record(s);
+    expect(r.history.redoSize).toBe(0);
+    expect(sizes(r.history.snapshot().done)).toEqual([30_000, 30_000]);
+    expect(r.history.snapshot().done[1]).toBe(s);
+  });
+
+  test('`restore` drops a 32,769-edit step; with undo steps 30,000 × 2 and a 30,000 redo step drops the oldest undo step (60,000 left); with a 10,000 undo step and redo steps 30,000, 30,000, 10,000 (`undone[0]` first) drops the undo step, then `undone[0]` (40,000 left)', () => {
+    const r = rig();
+    // A step over `MAX_STEP_EDITS` is dropped, on either side; the others are kept.
+    expect(MAX_STEP_EDITS).toBe(32_768);
+    const one = stepOf(1);
+    const two = stepOf(2);
+    r.history.restore([stepOf(32_769), one], [stepOf(32_769), two]);
+    expect(r.history.snapshot()).toEqual({ done: [one], undone: [two] });
+    // 90,000 in all: the oldest undo step goes.
+    const d1 = [stepOf(30_000), stepOf(30_000)];
+    const u1 = [stepOf(30_000)];
+    r.history.restore(d1, u1);
+    let s = r.history.snapshot();
+    expect(s.done).toHaveLength(1);
+    expect(s.done[0]).toBe(d1[1]);
+    expect(s.undone).toHaveLength(1);
+    expect(s.undone[0]).toBe(u1[0]);
+    expect(total(r.history)).toBe(60_000);
+    // 80,000 in all: the undo step (70,000 left), then the redo step furthest from the present, `undone[0]`.
+    const d2 = [stepOf(10_000)];
+    const u2 = [stepOf(30_000), stepOf(30_000), stepOf(10_000)];
+    r.history.restore(d2, u2);
+    s = r.history.snapshot();
+    expect(s.done).toEqual([]);
+    expect(s.undone).toHaveLength(2);
+    expect(s.undone[0]).toBe(u2[1]);
+    expect(s.undone[1]).toBe(u2[2]);
+    expect(total(r.history)).toBe(40_000);
   });
 });
 

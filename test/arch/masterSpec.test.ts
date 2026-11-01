@@ -1680,6 +1680,12 @@ describe('master spec amendments (SP5c §13)', () => {
     expect(text).toContain('`rotateState(state, quarterTurns)` and `mirrorState` serve structure pieces and placement and the selection tool\'s turns (SP5c).');
   });
 
+  test('§6.3\'s Selection line: the codec, the turns, the paste batch and the history\'s caps (SP5c spec §13, D14)', () => {
+    const at = text.indexOf('### 6.3 ');
+    const lines = text.slice(at, text.indexOf('### 6.4 ', at)).split('\n');
+    expect(lines).toContain('- **Selection** (SP5c): the clipboard codec and its remap by state key; positions and states turned together (four turns the identity, the provisional boxes turned); the paste batch (changed cells only, the move\'s merge, bounds and refusals); the history\'s caps.');
+  });
+
   test('§10\'s SP5c entry, its receivers and the hand-overs (SP5c spec §13, §14, §15)', () => {
     // Moved from the SP5a describe (SP5c spec §12): the header gains its size L and its spec.
     const sp5c = spEntry('SP5c', 'SP6');

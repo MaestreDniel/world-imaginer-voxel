@@ -21,7 +21,7 @@ import { worldRange, type KV, type ReadRequest } from '../../src/persist/kv';
 import { CLIPBOARD_KEY, clipboardOps, encodeClipboard } from '../../src/persist/clipboard';
 import { createMemoryKV } from '../../src/persist/memory';
 import {
-  backupName, copyOps, createSaves, DEFAULT_SPEED, DEFAULT_T, exportFileName, flushOps, HISTORY_STEPS, loadParams, MAX_NAME,
+  backupName, copyOps, createSaves, DEFAULT_SPEED, DEFAULT_T, exportFileName, flushOps, HISTORY_STEPS, loadParams, MAX_HISTORY_EDITS, MAX_NAME,
   MAX_PLACES, newState, newWorldName, NO_VALUE, normalizeHistory, normalizeState, olderGenerator, openSaves, parseWorldRecord,
   remapDiff, remapOf, remapValue, tableRelation, todayStateTable, type HistoryEdit, type HistoryRecord,
   type StateBounds, type StateRecord, type WorldRecord,
@@ -348,6 +348,29 @@ describe('normalizeHistory (§2.1)', () => {
     const r = normalizeHistory(history([step({ x: -0, z: -0 })]), WORLD, null);
     expect(Object.is(r.history.done[0]!.edits[0]!.x, 0)).toBe(true);
     expect(() => canonicalJSON(r.history)).not.toThrow();
+  });
+
+  test('`MAX_HISTORY_EDITS` (SP5c spec §5, D14): a step over `MAX_STEP_EDITS` dropped, then while over 65,536 edits the oldest undo step, then `undone[0]`, each counted in `dropped`', () => {
+    expect(MAX_HISTORY_EDITS).toBe(65_536);
+    /** A step of `n` edits, tagged by its `x`. */
+    const big = (n: number, x: number) => ({ edits: new Array(n).fill(edit({ x })) });
+    const shape = (steps: readonly { edits: HistoryEdit[] }[]) => steps.map((s) => [s.edits.length, s.edits[0]!.x]);
+    // A 32,769-edit step is dropped, on either side; the others are kept.
+    let r = normalizeHistory(history([big(32_769, 1), big(1, 2)], [big(2, 3)]), WORLD, null);
+    expect(shape(r.history.done)).toEqual([[1, 2]]);
+    expect(shape(r.history.undone)).toEqual([[2, 3]]);
+    expect(r.dropped).toBe(1);
+    // Undo 30,000 × 2 and a 30,000 redo step: the oldest undo step goes (60,000 left).
+    r = normalizeHistory(history([big(30_000, 1), big(30_000, 2)], [big(30_000, 3)]), WORLD, null);
+    expect(shape(r.history.done)).toEqual([[30_000, 2]]);
+    expect(shape(r.history.undone)).toEqual([[30_000, 3]]);
+    expect(r.dropped).toBe(1);
+    // A 10,000 undo step and redo steps 30,000, 30,000, 10,000: the undo step, then `undone[0]` (40,000 left).
+    r = normalizeHistory(history([big(10_000, 1)], [big(30_000, 2), big(30_000, 3), big(10_000, 4)]), WORLD, null);
+    expect(shape(r.history.done)).toEqual([]);
+    expect(shape(r.history.undone)).toEqual([[30_000, 3], [10_000, 4]]);
+    expect(r.dropped).toBe(2);
+    expect(r.reset).toBe(false);
   });
 
   test('`normalizeHistory(undefined, …)` → empty with `reset` false; `normalizeHistory(7, …)` → empty with `reset` true', () => {

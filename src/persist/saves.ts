@@ -21,6 +21,7 @@ import { isProfileId, isProfileReady, resolveProfile, type ProfileId } from '../
 import { SCHEMA, type Params } from '../core/params/schema';
 import { genKey, stageHashes } from '../core/stage/hash';
 import { NO_ENTRY } from '../sim/diffStore';
+import { MAX_STEP_EDITS } from '../sim/edits';
 import { REGISTRY } from '../world/blocks';
 import type { ColumnDiff } from '../world/store/api';
 import { worldRange, type KV, type WriteOp, type WriteResult } from './kv';
@@ -123,6 +124,8 @@ export const MAX_PLACES = 256;
 export const MAX_NAME = 64;
 /** Steps per history side: `BLOCK_HISTORY_STEPS` (pinned equal in `stateBounds.test.ts`). */
 export const HISTORY_STEPS = 100;
+/** Edits both history sides hold in all (SP5c spec §5, D14): `MAX_HISTORY_EDITS` (pinned equal in `stateBounds.test.ts`). */
+export const MAX_HISTORY_EDITS = 65_536;
 /** The flying speed a bad `speed` takes: `SPEED_DEFAULT` (pinned equal in `stateBounds.test.ts`). */
 export const DEFAULT_SPEED = 12;
 /** The time a bad `t` takes, 08:00: `OPENING_T` (pinned equal in `stateBounds.test.ts`). */
@@ -358,29 +361,47 @@ function normalizeStep(raw: unknown, to: Int32Array | null): { edits: HistoryEdi
   return { edits };
 }
 
-/** One side: the valid steps, the newest `HISTORY_STEPS` kept; `dropped` counts the rest. */
+/**
+ * One side: the valid steps, the newest `HISTORY_STEPS` kept, then a step over `MAX_STEP_EDITS` dropped (SP5c spec §5);
+ * `dropped` counts the rest.
+ */
 function normalizeSide(raw: unknown, to: Int32Array | null): { steps: { edits: HistoryEdit[] }[]; dropped: number } {
   if (!Array.isArray(raw)) return { steps: [], dropped: 0 };
-  const steps: { edits: HistoryEdit[] }[] = [];
+  const valid: { edits: HistoryEdit[] }[] = [];
   for (const s of raw as unknown[]) {
     const step = normalizeStep(s, to);
-    if (step !== null) steps.push(step);
+    if (step !== null) valid.push(step);
   }
-  const over = Math.max(0, steps.length - HISTORY_STEPS);
-  return { steps: steps.slice(over), dropped: raw.length - steps.length + over };
+  const steps = valid.slice(Math.max(0, valid.length - HISTORY_STEPS)).filter((s) => s.edits.length <= MAX_STEP_EDITS);
+  return { steps, dropped: raw.length - steps.length };
+}
+
+/** The edits of a side's steps. */
+function editsIn(side: readonly { edits: readonly HistoryEdit[] }[]): number {
+  let n = 0;
+  for (const s of side) n += s.edits.length;
+  return n;
 }
 
 /**
  * A `history` record read for `worldId`, each value remapped through `to` when given (D22): a step with any edit the
  * sim's `editOk` would refuse after the remap is dropped and counted, as are steps past `HISTORY_STEPS` per side (the
- * newest kept). `undefined` (a new world has no `history` record) is an empty history; any other value that is not a
- * record is an empty one with `reset` (D14's notice).
+ * newest kept) and, as the block history's `restore` does (SP5c spec §5, D14), a step over `MAX_STEP_EDITS`, then,
+ * while both sides hold more than `MAX_HISTORY_EDITS` edits, the oldest undo step, then the redo step furthest from the
+ * present (`undone[0]`). `undefined` (a new world has no `history` record) is an empty history; any other value that is
+ * not a record is an empty one with `reset` (SP5b D14's notice).
  */
 export function normalizeHistory(raw: unknown, worldId: string, to: Int32Array | null): { history: HistoryRecord; reset: boolean; dropped: number } {
   if (!isObj(raw)) return { history: { worldId, done: [], undone: [] }, reset: raw !== undefined, dropped: 0 };
   const done = normalizeSide(raw['done'], to);
   const undone = normalizeSide(raw['undone'], to);
-  return { history: { worldId, done: done.steps, undone: undone.steps }, reset: false, dropped: done.dropped + undone.dropped };
+  let dropped = done.dropped + undone.dropped;
+  let total = editsIn(done.steps) + editsIn(undone.steps);
+  while (total > MAX_HISTORY_EDITS) {
+    total -= (done.steps.length > 0 ? done.steps.shift()! : undone.steps.shift()!).edits.length;
+    dropped++;
+  }
+  return { history: { worldId, done: done.steps, undone: undone.steps }, reset: false, dropped };
 }
 
 // ---------------------------------------------------------------- the records over the KV

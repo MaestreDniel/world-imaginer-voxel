@@ -1451,6 +1451,7 @@ Metric values are written to `test/metrics/.out/*.json` for trends. The harness 
 - **Block states:** property table round-trips; `rotateState` for every property kind; placement orientation from yaw/hit point; connection-derived fence/pane/stair shapes from neighbour masks; box-model culling against `FULL_FACES`; collision and raycast against boxes.
 - **Audio:** DSP generator determinism and peak bounds; sound-pack manifest fallbacks; music scheduler per frequency setting; footstep cadence; ambience weights for canned contexts; `sound/engine` calls `resume()` on the first click, keydown or pointer lock (fake AudioContext) and clears the muted indicator on `running`.
 - **Palette:** every placeable type and state is reachable through the grid and variant picker; assigning writes the active hotbar slot; hotbar round-trips by type name per world.
+- **Selection** (SP5c): the clipboard codec and its remap by state key; positions and states turned together (four turns the identity, the provisional boxes turned); the paste batch (changed cells only, the move's merge, bounds and refusals); the history's caps.
 
 ### 6.4 Metric tests (IDs; thresholds locked)
 
