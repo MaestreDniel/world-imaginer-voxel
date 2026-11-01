@@ -5279,7 +5279,9 @@ describe('the selection tool in the page III: Ctrl+V, the ghost, turn, raise and
       placeGhost: (...p: number[]) => { g.calls.push(['place', ...p]); },
       hideGhost: () => { g.calls.push(['hide']); },
       ghostBuild: () => g.build,
-      setReplaced: () => {},
+      setReplaced: (x0: number, y0: number, z0: number, cells: Int32Array, count: number) => {
+        g.calls.push(['replaced', x0, y0, z0, count, Array.from(cells.subarray(0, 3 * count))]);
+      },
       hideReplaced: () => { g.calls.push(['hideReplaced']); },
     };
     const of = (kind: string): unknown[][] => g.calls.filter((c) => c[0] === kind).map((c) => c.slice(1));
@@ -5690,6 +5692,124 @@ describe('the selection tool in the page III: Ctrl+V, the ghost, turn, raise and
       expect([r.of('hide').length, r.of('hideBox').length, r.of('hideReplaced').length]).toEqual([1, 1, 1]);
       await vi.advanceTimersByTimeAsync(300);
       expect(r.copies).toEqual([]);
+    });
+  });
+
+  describe('the counts and the replaced cells (SP5c spec §2.5, §6.3, D11)', () => {
+    /** The cells of box b (offsets, index order: x, then z, then y) for which `pick` holds, as `setReplaced` takes them. */
+    const offsets = (b: PBox, pick: (x: number, y: number, z: number) => boolean): number[] => {
+      const out: number[] = [];
+      for (let y = 0; y < b.h; y++) for (let z = 0; z < b.d; z++) for (let x = 0; x < b.w; x++) if (pick(b.x0 + x, b.y0 + y, b.z0 + z)) out.push(x, y, z);
+      return out;
+    };
+    /** Z: 4 × 1 × 1 of air, air, dirt, air; pinned at (0, 61, 0) over air, water, air and stone (`zWorld`). */
+    const Z: Clipboard = { w: 4, h: 1, d: 1, values: new Uint32Array([0, 0, val(DIRT), 0]) };
+    const zWorld = (r: Rig): void => {
+      r.entries.set('1,61,0', val(AIR, WATER_SOURCE));
+      r.entries.set('3,61,0', val(STONE));
+    };
+
+    test('a target reply with 40 replaced among 3,296 changed: the label reads `3,296 blocks change, 40 replaced` and the overlay draws 40', async () => {
+      const r = pasteRig();
+      // 16 × 13 × 16 of dirt (3,328 cells) over air with 40 stone cells (replaced) and 32 dirt cells (unchanged).
+      const C: Clipboard = { w: 16, h: 13, d: 16, values: new Uint32Array(16 * 13 * 16).fill(val(DIRT)) };
+      const stone = new Set<string>();
+      for (let k = 0; k < 40; k++) stone.add(`${10 + (k % 16)},62,${20 + 5 * Math.floor(k / 16)}`);
+      for (const k of stone) r.entries.set(k, val(STONE));
+      for (let k = 0; k < 32; k++) r.entries.set(`${10 + (k % 16)},70,${20 + Math.floor(k / 16)}`, val(DIRT));
+      await pasted(r, C);
+      r.actions.placeAt(10, 61, 20, true);
+      await r.run(90);
+      expect([r.copies, r.of('replaced'), label(r)]).toEqual([[], [], `Paste 16 × 13 × 16 · counting…${TAIL}`]);
+      await r.run(30);
+      const box = { x0: 10, y0: 61, z0: 20, w: 16, h: 13, d: 16 };
+      expect(r.copies).toEqual([box]);
+      expect(label(r)).toBe(`Paste 16 × 13 × 16 · 3,296 blocks change, 40 replaced${TAIL}`);
+      expect(r.actions.ghostState().counts).toEqual({ n: 3296, m: 40 });
+      // The 40 stone cells in index order (x, then z, then y), offsets from the box's min corner (the origin at zero).
+      const cells = offsets(box, (x, y, z) => stone.has(`${x},${y},${z}`));
+      expect(cells).toHaveLength(120);
+      expect(r.of('replaced')).toEqual([[10, 61, 20, 40, cells]]);
+      // A still ghost is read once: the counts and the overlay are not written again.
+      await r.run(500);
+      expect([r.copies.length, r.of('replaced').length]).toEqual([1, 1]);
+    });
+
+    test('a reply for a stale box changes nothing', async () => {
+      const r = pasteRig();
+      zWorld(r);
+      r.st.copyDelayMs = 50;
+      await pasted(r, Z);
+      r.actions.placeAt(0, 61, 0, true);
+      await r.run(120);
+      expect(r.copies).toEqual([{ x0: 0, y0: 61, z0: 0, w: 4, h: 1, d: 1 }]);
+      // Moved before the reply (at 150 ms): the reply for the old box is dropped.
+      r.actions.placeAt(0, 62, 0, true);
+      const labels = r.labels.length;
+      await r.run(60);
+      expect([r.of('replaced'), r.actions.ghostState().counts, r.labels.length, label(r)])
+        .toEqual([[], null, labels, `Paste 4 × 1 × 1 · counting…${TAIL}`]);
+      // The new box's own read: dirt over air, nothing replaced and no overlay.
+      await r.run(200);
+      expect(r.copies).toHaveLength(2);
+      expect([r.actions.ghostState().counts, r.of('replaced'), label(r)]).toEqual([{ n: 1, m: 0 }, [], `Paste 4 × 1 × 1 · 1 blocks change, 0 replaced${TAIL}`]);
+    });
+
+    test('air written over air is neither changed nor replaced; a fluid replaced by air is replaced', async () => {
+      const r = pasteRig();
+      zWorld(r);
+      await pasted(r, Z);
+      r.actions.placeAt(0, 61, 0, true);
+      await r.run(150);
+      // Air over air (x 0): nothing. Air over water (x 1) and over stone (x 3): changed and replaced. Dirt over air (x 2):
+      // changed only.
+      expect(r.actions.ghostState().counts).toEqual({ n: 3, m: 2 });
+      expect(label(r)).toBe(`Paste 4 × 1 × 1 · 3 blocks change, 2 replaced${TAIL}`);
+      expect(r.of('replaced')).toEqual([[0, 61, 0, 2, [1, 0, 0, 3, 0, 0]]]);
+      // Turned twice (the box 4 × 1 × 1 again): the dirt lands on x 1, over the water; air over the stone at x 3.
+      selectToolAction('turn', r.actions);
+      selectToolAction('turn', r.actions);
+      await r.run(150);
+      expect(r.actions.ghostState().counts).toEqual({ n: 2, m: 2 });
+      expect(r.of('replaced').at(-1)).toEqual([0, 61, 0, 2, [1, 0, 0, 3, 0, 0]]);
+    });
+
+    test('the overlay hides with the ghost and while paused', async () => {
+      const r = pasteRig();
+      zWorld(r);
+      await pasted(r, Z);
+      r.actions.placeAt(0, 61, 0, true);
+      await r.run(150);
+      expect(r.of('replaced')).toHaveLength(1);
+      const hides = (): number => r.of('hideReplaced').length;
+      // Paused: hidden with the ghost; not drawn again until the box is read again after the resume.
+      r.frame(true);
+      expect([hides(), r.actions.ghostState().shown]).toEqual([1, false]);
+      await r.run(200, true);
+      r.frame();
+      expect([r.of('replaced').length, hides()]).toEqual([1, 1]);
+      await r.run(150);
+      expect(r.of('replaced')).toHaveLength(2);
+      expect(r.of('replaced').at(-1)).toEqual([0, 61, 0, 2, [1, 0, 0, 3, 0, 0]]);
+      // The ghost moved: the overlay hidden at once, until the new box's read.
+      r.actions.placeAt(0, 62, 0, true);
+      expect([hides(), r.actions.ghostState().counts]).toEqual([2, null]);
+      await r.run(150);
+      // Air there: nothing to draw, so it stays hidden.
+      expect([r.of('replaced').length, hides()]).toEqual([2, 2]);
+      r.actions.placeAt(0, 61, 0, true);
+      await r.run(150);
+      expect(r.of('replaced')).toHaveLength(3);
+      // After a rebase it covers the same world cells.
+      r.origin.x = 16;
+      r.origin.z = -16;
+      r.frame();
+      expect(r.of('replaced').at(-1)).toEqual([-16, 61, 16, 2, [1, 0, 0, 3, 0, 0]]);
+      // LMB ends the placing: hidden with the ghost.
+      const before = hides();
+      r.clicks.push(0);
+      r.frame();
+      expect([r.tool.mode, r.actions.ghostState().shown, hides()]).toEqual(['select', false, before + 1]);
     });
   });
 
@@ -6184,5 +6304,7 @@ describe('the selection tool in the page III: Ctrl+V, the ghost, turn, raise and
     expect(s).toMatch(/placeGhost: \(x0, y0, z0, q\) => world\.placeGhost\(x0, y0, z0, q\),/);
     expect(s).toMatch(/hideGhost: \(\) => world\.hideGhost\(\),/);
     expect(s).toMatch(/ghostBuild: \(\) => world\.ghostBuild\(\),/);
+    expect(s).toMatch(/setReplaced: \(x0, y0, z0, cells, count\) => world\.setReplaced\(x0, y0, z0, cells, count\),/);
+    expect(s).toMatch(/hideReplaced: \(\) => world\.hideReplaced\(\),/);
   });
 });

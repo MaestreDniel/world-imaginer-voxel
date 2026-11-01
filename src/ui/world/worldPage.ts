@@ -183,6 +183,7 @@ import { createFpsLimiter, type FpsLimiter } from '../../render/fpsLimiter';
 import type { FloatingOrigin } from '../../render/floatingOrigin';
 import type { FrameState } from '../../render/frameState';
 import { NEAR_FLY, NEAR_WALK, createWorldRenderer, type GpuEstimate, type WorldRenderer } from '../../render/renderer';
+import { REPLACED_MAX } from '../../render/ghost';
 import { createSectionRendererCounts, selectSectionRenderer, type SectionRendererKind } from '../../render/sectionRenderer';
 import { GHOST_CYAN, REFUSED_RED, SELECTION_YELLOW, outlineBounds } from '../../render/selection';
 import type { CopiedMsg, Edit, FlushedMsg, LoadedMsg, LoadMsg } from '../../workers/protocol';
@@ -217,7 +218,7 @@ import { LEAVE_WAIT_MS, createAutosave, createStateParts, type Autosave, type Au
 import { createEditLatency } from './editLatency';
 import { mountBuildHud } from './buildHud';
 import { createActionPost, createBlockHistory, type BlockHistory, type BlockStep } from './blockHistory';
-import type { Clipboard } from './clipboard';
+import { turnedCell, type Clipboard } from './clipboard';
 import { createClipboardStore, type ClipboardStore } from './clipboardStore';
 import { EDIT_FULL_NOTICE, createEditPath, formatCount, type EditOutcome, type EditPath } from './editPath';
 import { createFrameStep, eyeSkyLight } from './frameStep';
@@ -1851,8 +1852,8 @@ export function createAim(o: {
 }
 
 /**
- * The page's ghost and replaced-cell overlay (SP5c spec §6.2, §6.3): the `WorldRenderer` methods of Tasks 17, 21 and 24,
- * no-ops until those tasks and in the harnesses (`NO_GHOST`). Scene coordinates, as `setOutline`.
+ * The page's ghost and replaced-cell overlay (SP5c spec §6.2, §6.3): the `WorldRenderer` methods of the same names;
+ * no-ops in the harnesses (`NO_GHOST`). Scene coordinates, as `setOutline`.
  */
 export interface GhostHost {
   setGhostBox(x0: number, y0: number, z0: number, x1: number, y1: number, z1: number, colour: number): void;
@@ -1866,7 +1867,7 @@ export interface GhostHost {
   hideReplaced(): void;
 }
 
-/** A ghost host that draws nothing (the harnesses, and the page's ghost methods until Tasks 21 and 24). */
+/** A ghost host that draws nothing (the harnesses). */
 export const NO_GHOST: GhostHost = Object.freeze({
   setGhostBox() {}, hideGhostBox() {}, setGhost() {}, ghostStep() {}, placeGhost() {}, hideGhost() {},
   ghostBuild: () => 'empty' as const, setReplaced() {}, hideReplaced() {},
@@ -2038,6 +2039,41 @@ function placeRefusedText(why: Exclude<EditOutcome, { ok: true }>['why'], cant: 
   }
 }
 
+/**
+ * A target read's counts (SP5c spec §2.5, §6.3, D11), over the clipboard `c` turned q times at a box of its turned sizes
+ * `b`: n the cells whose turned value differs from `target`'s read value (the cells the paste changes: air over air is
+ * not one), m those of them whose target value is not 0 (a block or a fluid the paste replaces). The first
+ * `min(m, cells.length / 3)` replaced cells, in index order (x, then z, then y), are written into `cells` as x, y, z
+ * offset triples from the box's min corner.
+ */
+export function countTarget(c: Clipboard, q: number, b: { w: number; h: number; d: number }, target: Uint32Array,
+  cells: Int32Array): { n: number; m: number } {
+  const cap = Math.floor(cells.length / 3);
+  let n = 0;
+  let m = 0;
+  let i = 0;
+  for (let y = 0; y < b.h; y++) {
+    for (let z = 0; z < b.d; z++) {
+      for (let x = 0; x < b.w; x++, i++) {
+        const read = target[i]!;
+        if (turnedCell(c, q, x, y, z) === read) continue;
+        n++;
+        if (read === 0) continue;
+        if (m < cap) {
+          cells[3 * m] = x;
+          cells[3 * m + 1] = y;
+          cells[3 * m + 2] = z;
+        }
+        m++;
+      }
+    }
+  }
+  return { n, m };
+}
+
+const sameBox = (a: Box, b: Box): boolean =>
+  a.x0 === b.x0 && a.y0 === b.y0 && a.z0 === b.z0 && a.w === b.w && a.h === b.h && a.d === b.d;
+
 export function createSelectActions(o: {
   tool: SelectTool;
   sim: Pick<SimClient, 'copy'>;
@@ -2115,17 +2151,27 @@ export function createSelectActions(o: {
   // The turned sizes (W′, H, D′) and the anchor's min corner, written in place.
   const turned = { w: 1, h: 1, d: 1 };
   const corner = new Int32Array(3);
+  // The replaced cells of the last target read (§2.5, §6.3): offset triples in a scratch made once, how many are drawn
+  // (0 until a read, and again at each new anchor), and whether the overlay is shown.
+  const replacedCells = new Int32Array(3 * REPLACED_MAX);
+  let replacedN = 0;
+  let replacedShown = false;
 
-  // The ghost's throttled target read (§2.5): a reply for the ghost's box sets its refusal (the counts and the overlay
-  // are Task 24's).
+  // The ghost's throttled target read (§2.5): a reply for the ghost's box sets its refusal (a column not loaded) or its
+  // counts and the replaced cells, then the ghost's colour, the overlay and the label.
   const reader = createTargetReader({
     timers,
     copy: (b) => o.sim.copy(b, false),
-    onRead: (_b, r) => {
-      if (ghostClip === null) return;
-      const refusal = readRefusal(r);
-      if (refusal === ghostRefusal) return;
-      ghostRefusal = refusal;
+    onRead: (b, r) => {
+      if (ghostClip === null || ghostBox === null || !sameBox(b, ghostBox)) return;
+      ghostRefusal = readRefusal(r);
+      if (ghostRefusal === null && r.values !== null) {
+        ghostCounts = countTarget(ghostClip, boxTurns, ghostBox, r.values, replacedCells);
+        replacedN = Math.min(ghostCounts.m, REPLACED_MAX);
+      } else {
+        ghostCounts = null;
+        replacedN = 0;
+      }
       labelDirty = true;
       if (ghostShown) writeGhost();
       syncLabel();
@@ -2161,7 +2207,10 @@ export function createSelectActions(o: {
       : selectLabel(tool, o.keyName));
   };
 
-  /** The ghost and its box at the anchored box, relative to the floating origin (cyan, or red with a refusal). */
+  /**
+   * The ghost, its box (cyan, or red with a refusal) and the replaced cells (hidden while none are drawn) at the anchored
+   * box, relative to the floating origin.
+   */
   const writeGhost = (): void => {
     const b = ghostBox!;
     ghostOriginX = origin.x;
@@ -2172,6 +2221,13 @@ export function createSelectActions(o: {
     const z0 = b.z0 - ghostOriginZ;
     o.ghost.setGhostBox(x0, y0, z0, x0 + b.w, y0 + b.h, z0 + b.d, ghostRefusal === null ? GHOST_CYAN : REFUSED_RED);
     o.ghost.placeGhost(x0, y0, z0, boxTurns);
+    if (replacedN > 0) {
+      o.ghost.setReplaced(x0, y0, z0, replacedCells, replacedN);
+      replacedShown = true;
+    } else if (replacedShown) {
+      o.ghost.hideReplaced();
+      replacedShown = false;
+    }
     ghostShown = true;
   };
 
@@ -2179,6 +2235,7 @@ export function createSelectActions(o: {
   const hideGhost = (): void => {
     if (!ghostShown) return;
     ghostShown = false;
+    replacedShown = false;
     o.ghost.hideGhost();
     o.ghost.hideGhostBox();
     o.ghost.hideReplaced();
@@ -2194,6 +2251,7 @@ export function createSelectActions(o: {
     ghostBox = null;
     ghostRefusal = null;
     ghostCounts = null;
+    replacedN = 0;
     aimed = false;
     hitAimed = false;
     pinned = false;
@@ -2212,7 +2270,8 @@ export function createSelectActions(o: {
 
   /**
    * The ghost's box at min corner (x0, y0, z0) with the turned sizes (§2.5): its checks with no read, its colour, its
-   * placement, the target reader's `moved` (null for a refused box: no `copy` for it), the counts reset and the label.
+   * placement, the target reader's `moved` (null for a refused box: no `copy` for it), the counts reset (the replaced
+   * cells hidden until the box's own read) and the label.
    */
   const anchorAt = (x0: number, y0: number, z0: number): void => {
     turnSizes(ghostClip!);
@@ -2224,6 +2283,7 @@ export function createSelectActions(o: {
     boxOffset = tool.offset;
     ghostRefusal = refusal;
     ghostCounts = null;
+    replacedN = 0;
     keyed = true;
     writeGhost();
     reader.moved(refusal === null ? b : null);
@@ -2588,6 +2648,7 @@ export function createSelectActions(o: {
       o.ghost.hideGhostBox();
       o.ghost.hideReplaced();
       ghostShown = false;
+      replacedShown = false;
       o.release?.();
     },
   };
@@ -4655,9 +4716,8 @@ export function mountWorldPage(root: HTMLElement, q: WorldQuery, hash: string, o
         hideSelectionBox: () => world.hideSelectionBox(),
         setSelectLabel: (text) => buildHud.setSelectLabel(text),
       },
-      // The ghost's box and the ghost (Tasks 17, 21); the replaced-cell overlay with Task 24.
+      // The ghost's box, the ghost and the replaced-cell overlay (SP5c spec §6.1-§6.3).
       ghost: {
-        ...NO_GHOST,
         setGhostBox: (x0, y0, z0, x1, y1, z1, colour) => world.setGhostBox(x0, y0, z0, x1, y1, z1, colour),
         hideGhostBox: () => world.hideGhostBox(),
         setGhost: (w, h, d, values) => world.setGhost(w, h, d, values),
@@ -4665,6 +4725,8 @@ export function mountWorldPage(root: HTMLElement, q: WorldQuery, hash: string, o
         placeGhost: (x0, y0, z0, q) => world.placeGhost(x0, y0, z0, q),
         hideGhost: () => world.hideGhost(),
         ghostBuild: () => world.ghostBuild(),
+        setReplaced: (x0, y0, z0, cells, count) => world.setReplaced(x0, y0, z0, cells, count),
+        hideReplaced: () => world.hideReplaced(),
       },
       origin: world.origin,
       body: () => (fly.mode === 'walk'

@@ -1,16 +1,19 @@
 /**
  * The ghost's mesh (SP5c spec §6.2, §6.4, D11, D25): `render/ghost.ts` meshes the clipboard cell by cell (16³) through
  * the section mesher, sliced on an injected clock, into one geometry uploaded once, and places it by its matrix. No
- * WebGL: the material system builds without a context, and the geometry is read as three holds it.
+ * WebGL: the material system builds without a context, and the geometry is read as three holds it. The replaced-cell
+ * overlay (§6.3) is read through its instance matrices.
  */
-import { Vector3, type BufferAttribute } from 'three';
+import * as v8 from 'node:v8';
+import { runInNewContext } from 'node:vm';
+import { Matrix4, Quaternion, Vector3, type BufferAttribute, type MeshBasicMaterial } from 'three';
 import { describe, expect, test } from 'vitest';
 import { PACK_LAYOUT } from '../../src/mesh/packing';
 import {
-  GHOST_MAX_QUADS, GHOST_SLICE_MS, createGhost, type Ghost,
+  GHOST_MAX_QUADS, GHOST_SLICE_MS, REPLACED_GROW, REPLACED_MAX, REPLACED_OPACITY, createGhost, createReplacedOverlay, type Ghost,
 } from '../../src/render/ghost';
 import { createMaterialSystem } from '../../src/render/materials/index';
-import { GHOST_ORDER } from '../../src/render/selection';
+import { GHOST_ORDER, REFUSED_RED, VOLUME_DIM_ORDER } from '../../src/render/selection';
 import { createFlatColorArray } from '../../src/render/textureArray';
 import { AIR, GLASS, REGISTRY, STONE } from '../../src/world/blocks/index';
 
@@ -277,5 +280,103 @@ describe('the ghost\'s mesh (SP5c spec §6.2, D25)', () => {
       }
     }
     g.dispose();
+  });
+});
+
+describe('the replaced cells (SP5c spec §6.3, D11)', () => {
+  /** n distinct cells of a 64³ box as x, y, z offset triples: cell i at (i mod 64, ⌊i / 4096⌋, ⌊i / 64⌋ mod 64). */
+  const cellsOf = (n: number): Int32Array => {
+    const c = new Int32Array(3 * n);
+    for (let i = 0; i < n; i++) {
+      c[3 * i] = i % 64;
+      c[3 * i + 1] = Math.floor(i / 4096);
+      c[3 * i + 2] = Math.floor(i / 64) % 64;
+    }
+    return c;
+  };
+
+  test('the constants and the overlay: 4,096 cubes of 256 KB of matrices, red at 0.3 through terrain, at `VOLUME_DIM_ORDER`, hidden until set', () => {
+    expect([REPLACED_MAX, REPLACED_OPACITY, REPLACED_GROW]).toEqual([4096, 0.3, 0.01]);
+    const r = createReplacedOverlay();
+    expect(r.object.isInstancedMesh).toBe(true);
+    expect(r.object.instanceMatrix.array.length).toBe(16 * 4096);
+    expect(r.object.instanceMatrix.array.byteLength).toBe(256 * 1024);
+    expect(r.object.renderOrder).toBe(VOLUME_DIM_ORDER);
+    expect(r.object.visible).toBe(false);
+    expect(r.object.count).toBe(0);
+    const m = r.object.material as MeshBasicMaterial;
+    expect(m.isMeshBasicMaterial).toBe(true);
+    expect([m.color.getHex(), m.opacity, m.transparent, m.depthTest, m.depthWrite]).toEqual([REFUSED_RED, 0.3, true, false, false]);
+    // A unit cube from (0, 0, 0) to (1, 1, 1): an instance's matrix grows and places it.
+    r.object.geometry.computeBoundingBox();
+    const b = r.object.geometry.boundingBox!;
+    expect([b.min.toArray(), b.max.toArray()]).toEqual([[0, 0, 0], [1, 1, 1]]);
+    r.dispose();
+  });
+
+  test('`setReplaced` with 5,000 cells draws 4,096 (`count`), each instance matrix at its cell grown by 0.01', () => {
+    const r = createReplacedOverlay();
+    const buffer = r.object.instanceMatrix.array;
+    const cells = cellsOf(5000);
+    const [x0, y0, z0] = [-20, 61, 7];
+    r.set(x0, y0, z0, cells, 5000);
+    expect(r.object.count).toBe(4096);
+    expect(r.object.visible).toBe(true);
+    expect(r.object.instanceMatrix.array, 'the buffer allocated once').toBe(buffer);
+    const m = new Matrix4();
+    const p = new Vector3();
+    const q = new Quaternion();
+    const s = new Vector3();
+    const lo = new Vector3();
+    const hi = new Vector3();
+    for (let i = 0; i < 4096; i++) {
+      r.object.getMatrixAt(i, m);
+      m.decompose(p, q, s);
+      const [cx, cy, cz] = [x0 + cells[3 * i]!, y0 + cells[3 * i + 1]!, z0 + cells[3 * i + 2]!];
+      expect(s.toArray().map((v) => Math.round(v * 1e6) / 1e6), `cell ${i}'s size`).toEqual([1.02, 1.02, 1.02]);
+      expect(q.w, `cell ${i} unrotated`).toBeCloseTo(1, 9);
+      // The cube's corners: the cell grown by 0.01 on every side.
+      lo.set(0, 0, 0).applyMatrix4(m);
+      hi.set(1, 1, 1).applyMatrix4(m);
+      for (const [v, want] of [[lo.x, cx - 0.01], [lo.y, cy - 0.01], [lo.z, cz - 0.01], [hi.x, cx + 1.01], [hi.y, cy + 1.01], [hi.z, cz + 1.01]] as const) {
+        expect(v, `cell ${i}`).toBeCloseTo(want, 4);
+      }
+    }
+    // A smaller fill draws its own count over the same buffer; a count of 0 hides the overlay.
+    r.set(0, 0, 0, cells, 40);
+    expect([r.object.count, r.object.visible]).toEqual([40, true]);
+    expect(r.object.instanceMatrix.array).toBe(buffer);
+    r.set(0, 0, 0, cells, 0);
+    expect([r.object.count, r.object.visible]).toEqual([0, false]);
+    r.set(0, 0, 0, cells, 3);
+    r.hide();
+    expect(r.object.visible).toBe(false);
+    r.dispose();
+  });
+
+  test('1,000 fills grow the heap by less than 256 KB', () => {
+    v8.setFlagsFromString('--expose-gc');
+    const gc = runInNewContext('gc') as () => void;
+    // The heap's used bytes without V8's code spaces (`zeroAlloc.test.ts`'s reading).
+    const used = (): number => {
+      let n = 0;
+      for (const sp of v8.getHeapSpaceStatistics()) if (!/^(code|trusted|shared_trusted)_/.test(sp.space_name)) n += sp.space_used_size;
+      return n;
+    };
+    const r = createReplacedOverlay();
+    const cells = cellsOf(REPLACED_MAX);
+    const fill = (i: number): void => r.set(i & 15, 64, -(i & 7), cells, REPLACED_MAX - (i & 255));
+    for (let i = 0; i < 200; i++) fill(i);
+    const readings: number[] = [];
+    for (let attempt = 0; attempt < 3; attempt++) {
+      gc();
+      gc();
+      const before = used();
+      for (let i = 0; i < 1000; i++) fill(i);
+      readings.push(used() - before);
+      if (readings.at(-1)! < 256 * 1024) break;
+    }
+    expect(readings.at(-1), `readings ${readings.join(', ')} B`).toBeLessThan(256 * 1024);
+    r.dispose();
   });
 });

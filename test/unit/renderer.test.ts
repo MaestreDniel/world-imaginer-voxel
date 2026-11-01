@@ -1,6 +1,6 @@
 import {
   BoxGeometry, Group, LinearMipmapLinearFilter, Mesh, MeshBasicMaterial, NearestFilter, PerspectiveCamera, Scene,
-  ShaderMaterial, Vector3, type BatchedMesh, type LineSegments, type Material, type Object3D, type RenderItem,
+  ShaderMaterial, Vector3, type BatchedMesh, type InstancedMesh, type LineSegments, type Material, type Object3D, type RenderItem,
 } from 'three';
 import { WebGLRenderList } from 'three/src/renderers/webgl/WebGLRenderLists.js';
 import { describe, expect, test } from 'vitest';
@@ -522,6 +522,103 @@ describe('the ghost in the scene (SP5c spec §6.2, §6.4)', () => {
     w.ghostBox.object.traverse((o) => { if ((o as LineSegments).isLineSegments === true && o.renderOrder === VOLUME_DIM_ORDER) dim.push(o); });
     expect(dim).toHaveLength(1);
     expect(transparent.indexOf(dim[0]!)).toBeGreaterThan(at);
+    w.dispose();
+    sections.dispose();
+  });
+});
+
+describe('the replaced cells in the scene (SP5c spec §6.3, §6.4)', () => {
+  const world = (kind: SectionRendererKind) => {
+    const materials = createMaterialSystem({ variant: kind, ao: true, smoothLight: true }, createFlatColorArray());
+    const sections = createSectionRenderer(kind, materials);
+    const w = createWorldScene(sections, createSky(materials), materials);
+    return { sections, w, materials, camera: new PerspectiveCamera(70, 16 / 9, 0.1, 336) };
+  };
+  const instanced = (root: Object3D, visibleOnly: boolean): InstancedMesh[] => {
+    const out: InstancedMesh[] = [];
+    const visit = (o: Object3D): void => { if ((o as InstancedMesh).isInstancedMesh === true) out.push(o as InstancedMesh); };
+    if (visibleOnly) root.traverseVisible(visit);
+    else root.traverse(visit);
+    return out;
+  };
+
+  test('the overlay is in the scene at `renderOrder` `VOLUME_DIM_ORDER`, hidden until set; `compile` counts it visible and hides it again, also after a throw', async () => {
+    const { sections, w, camera } = world('batch');
+    expect(w.scene.children).toContain(w.replaced.object);
+    expect(w.replaced.object.renderOrder).toBe(VOLUME_DIM_ORDER);
+    expect(instanced(w.scene, false)).toEqual([w.replaced.object]);
+    expect(instanced(w.scene, true)).toEqual([]);
+    // three's compile walks only visible objects: the walk sees the overlay (its instancing program is new to the page).
+    const seen: InstancedMesh[] = [];
+    const r = {
+      compileAsync(scene: Object3D): Promise<unknown> {
+        seen.push(...instanced(scene, true));
+        return Promise.resolve(scene);
+      },
+    };
+    await compileWorldScene(r, w, camera, sections);
+    expect(seen).toEqual([w.replaced.object]);
+    expect(w.replaced.object.visible).toBe(false);
+    const fails = { compileAsync(): Promise<unknown> { throw new Error('compile failed'); } };
+    await expect(compileWorldScene(fails, w, camera, sections)).rejects.toThrow('compile failed');
+    expect(w.replaced.object.visible).toBe(false);
+    w.replaced.set(0, 64, 0, new Int32Array([0, 0, 0, 1, 0, 0]), 2);
+    expect(instanced(w.scene, true)).toEqual([w.replaced.object]);
+    w.replaced.hide();
+    expect(instanced(w.scene, true)).toEqual([]);
+    w.dispose();
+    sections.dispose();
+  });
+
+  test('with a RegionMesh holding 64 translucent regions after its sort, the overlay sorts after every one of them and after the ghost', () => {
+    const { sections, w, camera } = world('mesh');
+    for (let rx = 0; rx < 8; rx++) {
+      for (let rz = 0; rz < 8; rz++) sections.stage(fakePayload(8 * rx + 3, 8 * rz + 3, [{ sy: 4, pass: 2, quads: 1 }]), 1);
+    }
+    pumpAll(sections);
+    sections.revealAll();
+    camera.position.set(512, 120, 512);
+    camera.lookAt(0, 60, 0);
+    camera.updateMatrixWorld(true);
+    sections.sortTranslucent(camera.position.x, camera.position.y, camera.position.z);
+    const water: Mesh[] = [];
+    sections.root.traverse((o) => {
+      if ((o as Mesh).isMesh === true && o.userData['pass'] === MESH_PASS_TRANSLUCENT) water.push(o as Mesh);
+    });
+    expect(water).toHaveLength(64);
+    expect(Math.max(...water.map((m) => m.renderOrder))).toBe(63);
+    // The ghost and the overlay far behind every region: by depth alone they would be drawn first. The ghost nearer the
+    // camera than the overlay, so the overlay would be drawn before it by depth too.
+    w.ghost.setClipboard(1, 1, 1, new Uint32Array([STONE << 8]));
+    for (let i = 0; i < 100 && w.ghost.build === 'building'; i++) w.ghost.step(() => 0);
+    w.ghost.place(-800, 0, -800, 0);
+    w.replaced.set(-900, 0, -900, new Int32Array([0, 0, 0]), 1);
+    w.scene.updateMatrixWorld(true);
+
+    const list = new WebGLRenderList(undefined as never);
+    list.init();
+    const proj = camera.projectionMatrix.clone().multiply(camera.matrixWorldInverse);
+    const v = new Vector3();
+    const project = (o: Object3D, groupOrder: number): void => {
+      if (!o.visible) return;
+      if ((o as Group).isGroup === true) groupOrder = o.renderOrder;
+      else if ((o as Mesh).isMesh === true || (o as LineSegments).isLineSegments === true) {
+        const z = v.setFromMatrixPosition(o.matrixWorld).applyMatrix4(proj).z;
+        const m = o as Mesh;
+        (list.push as (...a: unknown[]) => void)(o, m.geometry, m.material as Material, groupOrder, z, null, camera);
+      }
+      for (const c of o.children) project(c, groupOrder);
+    };
+    project(w.scene, 0);
+    list.sort(opaquePassSort({ terrainCutout: new ShaderMaterial() }), undefined as never, false);
+    const transparent = list.transparent.map((i) => i.object);
+    const at = transparent.indexOf(w.replaced.object);
+    expect(at, 'the overlay is drawn in the transparent list').toBeGreaterThanOrEqual(0);
+    for (const m of water) expect(transparent.indexOf(m)).toBeLessThan(at);
+    const ghostAt = transparent.indexOf(w.ghost.object);
+    expect(ghostAt).toBeGreaterThanOrEqual(0);
+    expect(ghostAt).toBeLessThan(at);
+    expect(transparent.at(-1)).toBe(w.replaced.object);
     w.dispose();
     sections.dispose();
   });

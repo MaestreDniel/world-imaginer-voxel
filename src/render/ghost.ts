@@ -1,11 +1,13 @@
-import { Box3, BufferAttribute, BufferGeometry, Mesh, Sphere, Vector3 } from 'three';
+import {
+  Box3, BoxGeometry, BufferAttribute, BufferGeometry, InstancedMesh, Mesh, MeshBasicMaterial, Sphere, Vector3,
+} from 'three';
 import { createMeshBuilder, type MeshPass } from '../mesh/builder';
 import { meshBoxes } from '../mesh/boxes';
 import { meshSolid, type MeshOptions } from '../mesh/greedy';
 import { AIR, STONE } from '../world/blocks/index';
 import { PAD, createPaddedSection, padIndex } from '../world/store/padded';
 import type { MaterialSystem } from './materials/index';
-import { GHOST_ORDER } from './selection';
+import { GHOST_ORDER, REFUSED_RED, VOLUME_DIM_ORDER } from './selection';
 
 /**
  * The selection tool's ghost (SP5c spec §6.2, §6.4, D11, D25): the clipboard's blocks meshed on the main thread, sliced
@@ -31,12 +33,27 @@ import { GHOST_ORDER } from './selection';
  *   transform and the uniform only and allocates nothing (SP4b D25).
  * - **Shown:** hidden until placed; shown while placed with a built geometry (`'ready'`), so a ghost placed during its
  *   build appears with the slice that finishes it. `hide` and a new clipboard hide it until the next `place`.
+ *
+ * The replaced cells (SP5c spec §6.3, D11; `createReplacedOverlay`): the blocks a paste would replace, as red
+ * translucent cubes seen through terrain. One `InstancedMesh` of a unit cube grown by `REPLACED_GROW` on every side, a
+ * `MeshBasicMaterial` in the refused red at `REPLACED_OPACITY` with `depthTest` off, drawn at `VOLUME_DIM_ORDER` (after
+ * every translucent region and the ghost), its `REPLACED_MAX` instance matrices allocated once (256 KB). `set` writes
+ * the first matrices' translations in place (their scale is written once) and sets `count` to the number drawn,
+ * uploading only those matrices. Frustum culling is off: the instances move with every fill, and three would otherwise keep the bounding
+ * sphere of the first fill it saw.
  */
 
 /** A frame's build stops after the cell that crosses this (SP5c spec §6.2, D25). */
 export const GHOST_SLICE_MS = 1;
 /** Over this many quads the ghost shows its box only (SP5c D11). */
 export const GHOST_MAX_QUADS = 131_072;
+
+/** The most replaced cells drawn (SP5c spec §6.3): the overlay's instance capacity. */
+export const REPLACED_MAX = 4096;
+/** The replaced cells' opacity (SP5c spec §6.3). */
+export const REPLACED_OPACITY = 0.3;
+/** Blocks each replaced cell's cube is grown by on every side, so it is not coplanar with the block it marks. */
+export const REPLACED_GROW = 0.01;
 
 /** The build's state: nothing set, cells left to mesh, built, or stopped over `GHOST_MAX_QUADS`. */
 export type GhostBuild = 'empty' | 'building' | 'ready' | 'tooMany';
@@ -296,4 +313,73 @@ export function createGhostPlaceholder(m: MaterialSystem): Mesh {
   g.setClipboard(1, 1, 1, new Uint32Array([STONE << 8]));
   g.step(() => 0);
   return g.object;
+}
+
+/** The replaced-cell overlay (SP5c spec §6.3, D11). */
+export interface ReplacedOverlay {
+  /** The instanced cubes, at `VOLUME_DIM_ORDER`, hidden until `set`. */
+  readonly object: InstancedMesh;
+  /**
+   * Shows the first `min(count, REPLACED_MAX)` cells of `cells` (x, y, z offset triples from (x0, y0, z0), scene
+   * coordinates), each a unit cube grown by `REPLACED_GROW`; `count` 0 hides the overlay. Allocates only three's one
+   * update range.
+   */
+  set(x0: number, y0: number, z0: number, cells: Int32Array, count: number): void;
+  hide(): void;
+  dispose(): void;
+}
+
+/** The replaced-cell overlay (SP5c spec §6.3): one `InstancedMesh` of `REPLACED_MAX` cubes. */
+export function createReplacedOverlay(): ReplacedOverlay {
+  // The unit cube from (0, 0, 0) to (1, 1, 1): an instance's matrix scales it to 1 + 2 · grow and moves its min corner.
+  const geometry = new BoxGeometry(1, 1, 1).translate(0.5, 0.5, 0.5);
+  const material = new MeshBasicMaterial({
+    color: REFUSED_RED, transparent: true, opacity: REPLACED_OPACITY, depthTest: false, depthWrite: false,
+  });
+  material.name = 'replaced';
+  const object = new InstancedMesh(geometry, material, REPLACED_MAX);
+  object.renderOrder = VOLUME_DIM_ORDER;
+  object.frustumCulled = false;
+  object.count = 0;
+  object.visible = false;
+  const matrices = object.instanceMatrix.array as Float32Array;
+  const side = 1 + 2 * REPLACED_GROW;
+  // Each matrix's scale is written once; a fill writes the translations only (column-major, elements 12-14).
+  for (let i = 0; i < REPLACED_MAX; i++) {
+    const o = 16 * i;
+    matrices[o] = side;
+    matrices[o + 5] = side;
+    matrices[o + 10] = side;
+    matrices[o + 15] = 1;
+  }
+  return {
+    object,
+    set(x0, y0, z0, cells, count) {
+      const n = Math.min(count, REPLACED_MAX, Math.floor(cells.length / 3));
+      const g = REPLACED_GROW;
+      for (let i = 0; i < n; i++) {
+        const o = 16 * i + 12;
+        matrices[o] = x0 + cells[3 * i]! - g;
+        matrices[o + 1] = y0 + cells[3 * i + 1]! - g;
+        matrices[o + 2] = z0 + cells[3 * i + 2]! - g;
+      }
+      object.count = n;
+      if (n > 0) {
+        // Only the matrices drawn are uploaded (three clears the ranges after the upload).
+        const a = object.instanceMatrix;
+        a.clearUpdateRanges();
+        a.addUpdateRange(0, 16 * n);
+        a.needsUpdate = true;
+      }
+      object.visible = n > 0;
+    },
+    hide() {
+      object.visible = false;
+    },
+    dispose() {
+      geometry.dispose();
+      material.dispose();
+      object.dispose();
+    },
+  };
 }

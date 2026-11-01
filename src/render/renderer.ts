@@ -6,7 +6,9 @@ import { MEDIUM } from '../core/params/graphicsPresets';
 import { OPENING_T } from '../daynight/dayNight';
 import { firstOrigin, type FloatingOrigin } from './floatingOrigin';
 import type { FrameState } from './frameState';
-import { createGhost, createGhostPlaceholder, type Ghost, type GhostBuild } from './ghost';
+import {
+  createGhost, createGhostPlaceholder, createReplacedOverlay, type Ghost, type GhostBuild, type ReplacedOverlay,
+} from './ghost';
 import { createMaterialSystem, type MaterialSystem } from './materials/index';
 import { createSectionRenderer, type SectionRenderer, type SectionRendererKind } from './sectionRenderer';
 import { GHOST_CYAN, SELECTION_YELLOW, createSelection, createVolumeBox, type Selection, type VolumeBox } from './selection';
@@ -120,8 +122,8 @@ export interface WorldRenderer {
    * section whether revealed or not: three compiles only visible objects, and a `BatchedMesh` or region mesh needs its
    * own program variant, so the sections are counted visible for the compile's synchronous walk. A pass with no built
    * section is compiled on a stand-in of the section renderer's kind (`compileScene`, rulings R11). The hidden outline
-   * and the two hidden volume boxes are counted visible too, with a hidden one-cell placeholder of the ghost
-   * (`compileWorldScene`), so the first Ctrl+V links no program.
+   * and the two hidden volume boxes are counted visible too, with a hidden one-cell placeholder of the ghost and the
+   * hidden replaced-cell overlay (`compileWorldScene`), so the first Ctrl+V links no program.
    */
   compile(): Promise<void>;
   /** Sorts the translucent regions from the camera, writes the frame uniforms and renders (inside the GPU timer). */
@@ -170,6 +172,14 @@ export interface WorldRenderer {
   ghostBuild(): GhostBuild;
   /** The ghost build's last slice in ms (L12's `ghostSliceMaxMs`, spec §10.4). */
   ghostSliceMs(): number;
+  /**
+   * Shows the blocks a paste would replace (SP5c spec §6.3, D11): the first `count` (at most `REPLACED_MAX`) cells of
+   * `cells`, x, y, z offset triples from (x0, y0, z0), relative to the floating origin (scene coordinates, as
+   * `setOutline`), as red cubes seen through terrain; `count` 0 hides them. Writes the drawn matrices in place.
+   */
+  setReplaced(x0: number, y0: number, z0: number, cells: Int32Array, count: number): void;
+  /** Hides the replaced cells: the ghost moved, hidden or ended, or paused. */
+  hideReplaced(): void;
   /** The near plane: `NEAR_WALK` walking, `NEAR_FLY` flying (`applyNear`, SP5a spec §3.5). */
   setNear(near: number): void;
   /**
@@ -416,8 +426,8 @@ export function releaseGl(renderer: Pick<WebGLRenderer, 'dispose' | 'forceContex
 }
 
 /**
- * The world's scene and the overlays the page drives: the block outline, the two volume boxes (SP5c spec §6.1) and the
- * ghost (§6.2).
+ * The world's scene and the overlays the page drives: the block outline, the two volume boxes (SP5c spec §6.1), the
+ * ghost (§6.2) and the replaced cells (§6.3).
  */
 export interface WorldScene {
   readonly scene: Scene;
@@ -434,11 +444,19 @@ export interface WorldScene {
    * compile's walk only.
    */
   readonly ghostPlaceholder: Mesh;
-  /** Disposes the outline, the boxes and the ghost's geometries (the materials are the material system's). */
+  /** The replaced-cell overlay (SP5c spec §6.3, D11). */
+  readonly replaced: ReplacedOverlay;
+  /**
+   * Disposes the outline, the boxes, the ghost's geometries (the ghost material is the material system's) and the
+   * overlay.
+   */
   dispose(): void;
 }
 
-/** The scene: the sections, the sky, the outline, the two volume boxes and the ghost, each overlay hidden until it is set. */
+/**
+ * The scene: the sections, the sky, the outline, the two volume boxes, the ghost and the replaced cells, each overlay
+ * hidden until it is set.
+ */
 export function createWorldScene(sections: Pick<SectionRenderer, 'root'>, sky: Object3D, materials: MaterialSystem): WorldScene {
   const outline = createSelection();
   const selectionBox = createVolumeBox(SELECTION_YELLOW);
@@ -446,10 +464,11 @@ export function createWorldScene(sections: Pick<SectionRenderer, 'root'>, sky: O
   const ghost = createGhost(materials);
   const ghostPlaceholder = createGhostPlaceholder(materials);
   ghostPlaceholder.visible = false;
+  const replaced = createReplacedOverlay();
   const scene = new Scene();
   scene.add(sections.root);
   scene.add(sky);
-  scene.add(outline.object, selectionBox.object, ghostBox.object, ghost.object);
+  scene.add(outline.object, selectionBox.object, ghostBox.object, ghost.object, replaced.object);
   return {
     scene,
     outline,
@@ -457,12 +476,14 @@ export function createWorldScene(sections: Pick<SectionRenderer, 'root'>, sky: O
     ghostBox,
     ghost,
     ghostPlaceholder,
+    replaced,
     dispose() {
       outline.dispose();
       selectionBox.dispose();
       ghostBox.dispose();
       ghost.dispose();
       ghostPlaceholder.geometry.dispose();
+      replaced.dispose();
     },
   };
 }
@@ -478,6 +499,8 @@ function withAllShown<T>(roots: readonly Object3D[], fn: () => T, i = 0): T {
  * first aimed frame or the first Q (SP5a spec §3.5, SP5c spec §6.1). The ghost's one-cell placeholder joins the scene
  * for the walk, counted visible, and leaves it after, also after a throw: the ghost itself is empty and hidden at load,
  * and its program (the ghost material on a plain `Mesh`) would otherwise link on the first Ctrl+V (SP5c spec §6.2).
+ * The hidden replaced-cell overlay is counted visible too: three's instancing variant of `MeshBasicMaterial` is new to
+ * the page (§6.3).
  */
 export async function compileWorldScene(
   r: { compileAsync(scene: Object3D, camera: Camera): Promise<unknown> },
@@ -487,8 +510,8 @@ export async function compileWorldScene(
 ): Promise<void> {
   w.scene.add(w.ghostPlaceholder);
   try {
-    await withAllShown([w.outline.object, w.selectionBox.object, w.ghostBox.object, w.ghostPlaceholder],
-      () => compileScene(r, w.scene, camera, sections));
+    const shown = [w.outline.object, w.selectionBox.object, w.ghostBox.object, w.ghostPlaceholder, w.replaced.object];
+    await withAllShown(shown, () => compileScene(r, w.scene, camera, sections));
   } finally {
     w.scene.remove(w.ghostPlaceholder);
   }
@@ -508,7 +531,7 @@ export function createWorldRenderer(host: HTMLElement, o: WorldRendererOptions):
   }
   const sky = createSky(materials);
   const world = createWorldScene(sections, sky, materials);
-  const { scene, outline: selection, selectionBox, ghostBox, ghost } = world;
+  const { scene, outline: selection, selectionBox, ghostBox, ghost, replaced } = world;
   // The ghost build's clock, made once: `ghostStep` runs every rendered frame (SP4b D25).
   const clock = (): number => performance.now();
   // The first floating origin is the snapped spawn (SP4b spec §3.4), before anything is staged.
@@ -622,6 +645,12 @@ export function createWorldRenderer(host: HTMLElement, o: WorldRendererOptions):
     },
     ghostSliceMs() {
       return ghost.lastSliceMs;
+    },
+    setReplaced(x0, y0, z0, cells, count) {
+      replaced.set(x0, y0, z0, cells, count);
+    },
+    hideReplaced() {
+      replaced.hide();
     },
     setNear(near) {
       applyNear(camera, near);
