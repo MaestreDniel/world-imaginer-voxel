@@ -17,7 +17,7 @@ import { createGenContext } from '../../src/gen/context';
 import { writeFinalHeightmaps } from '../../src/gen/pipeline/finalHeightmaps';
 import { centreSection, createLightScratch, DEFAULT_LIGHT_TABLES, lightRegion } from '../../src/light/initial';
 import { createDiffStore, NO_ENTRY, type DiffStore } from '../../src/sim/diffStore';
-import { applyEdits, createEditScratch, readDiff, type Edit, type EditResult } from '../../src/sim/edits';
+import { applyEdits, createEditScratch, readDiff, validateStats, type Edit, type EditRefusal, type EditResult } from '../../src/sim/edits';
 import { WATER_SOURCE } from '../../src/world/blocks/fluid';
 import { AIR, DIRT, GLASS, ICE, OAK_PLANKS, STONE, TORCH } from '../../src/world/blocks/index';
 import type { ColumnDiff } from '../../src/world/store/api';
@@ -59,6 +59,29 @@ const cols = (keys: Float64Array): string[] => [...keys].map((k) => `${colKeyCx(
 const names = (...cs: Array<[number, number]>): string[] => cs.map(([cx, cz]) => `${cx},${cz}`).sort();
 
 const lightScratch = createLightScratch();
+
+/**
+ * The reference for SP5c D20: `validate`'s backward scan as it stood before the `Map` (`src/sim/edits.ts` at 7f371c5,
+ * `:250-269`), each edit's current value found by scanning back over the batch's earlier edits of the same voxel.
+ */
+function validateScan(store: VoxelStore, edits: readonly Edit[]): EditRefusal | null {
+  for (let k = 0; k < edits.length; k++) {
+    const e = edits[k]!;
+    const cx = e.x >> 4;
+    const cz = e.z >> 4;
+    for (let dz = -1; dz <= 1; dz++) for (let dx = -1; dx <= 1; dx++) if (!store.publishedAt((cx + dx) << 4, (cz + dz) << 4)) return 'unloaded';
+    const p = store.proto(cx, cz);
+    let current = -1;
+    for (let j = k - 1; j >= 0 && current < 0; j--) {
+      const o = edits[j]!;
+      if (o.x === e.x && o.y === e.y && o.z === e.z) current = o.op === 'revert' ? val(p!.block(e.x & 15, e.y, e.z & 15), p!.fluid(e.x & 15, e.y, e.z & 15)) : o.value;
+    }
+    if (current < 0) current = valueAt(store, e.x, e.y, e.z);
+    if (current !== e.expect) return 'changed';
+    if (p === null) return 'noProto';
+  }
+  return null;
+}
 
 /** Every column of the 3 × 3 around (cx, cz): its stored light against a fresh `lightRegion` (`mayEmit` true). */
 function expectLightFresh(s: VoxelStore, cx: number, cz: number): void {
@@ -232,6 +255,134 @@ describe('applyEdits on a seed-42 region (SP5a spec §2.1, §2.2, §2.4)', () =>
     expect(applied).toBe(100);
     expect(diffs.size).toBeGreaterThan(0);
     expect(snapshot()).toEqual(before);
+  });
+
+  /** The voxel's generated (proto) value. */
+  const generated = (x: number, y: number, z: number): number => {
+    const p = store.proto(x >> 4, z >> 4)!;
+    return val(p.block(x & 15, y, z & 15), p.fluid(x & 15, y, z & 15));
+  };
+  /** One edit putting the voxel to `value` from what it holds now. */
+  const restore = (x: number, y: number, z: number, value: number): void => {
+    expect(run([set(x, y, z, value, valueAt(store, x, y, z))]).refused).toBeNull();
+  };
+
+  test('linear validation equals the scan (SP5c D20): 1,000 random batches of 1-40 edits over 6 voxels of the centre column, sets and reverts, each `expect` right or stale, give the reference scan\'s `refused` and, when accepted, its values and `prev`/`next`', () => {
+    const at: Array<{ x: number; y: number; z: number }> = [];
+    for (const [lx, lz] of [[0, 0], [7, 8], [15, 15]] as const) {
+      const x = 16 * C[0] + lx;
+      const z = 16 * C[1] + lz;
+      const y = surface(x, z);
+      at.push({ x, y, z }, { x, y: y - 1, z });
+    }
+    const palette = [val(STONE), val(AIR), val(GLASS), val(TORCH), val(DIRT), val(AIR, WATER_SOURCE)];
+    let accepted = 0;
+    let refused = 0;
+    for (let seed = 1; seed <= 1000; seed++) {
+      const next = testRng(seed);
+      const rng = () => testFloat(next);
+      const n = 1 + Math.floor(rng() * 40);
+      // Half the batches carry one stale `expect`, at a random edit; the reference scan decides the outcome.
+      const staleAt = rng() < 0.5 ? Math.floor(rng() * n) : -1;
+      const start = at.map((v) => valueAt(store, v.x, v.y, v.z));
+      const model = start.slice();
+      const edits: Edit[] = [];
+      for (let k = 0; k < n; k++) {
+        const i = Math.floor(rng() * at.length);
+        const v = at[i]!;
+        const expectV = k === staleAt ? model[i]! ^ 0x100 : model[i]!;
+        if (rng() < 0.3) {
+          edits.push({ x: v.x, y: v.y, z: v.z, op: 'revert', value: 0, expect: expectV });
+          model[i] = generated(v.x, v.y, v.z);
+        } else {
+          const value = palette[Math.floor(rng() * palette.length)]!;
+          edits.push(set(v.x, v.y, v.z, value, expectV));
+          model[i] = value;
+        }
+      }
+      const msg = `seed ${seed}, batch ${JSON.stringify(edits)}`;
+      const want = validateScan(store, edits);
+      // The DiffStore entries each edit finds and leaves (SP5b D20's per-edit rule); a refusal leaves them as found.
+      const entries = at.map((v) => entry(diffs, v.x, v.y, v.z));
+      const wantPrev: number[] = [];
+      const wantNext: number[] = [];
+      for (const e of edits) {
+        const i = at.findIndex((v) => v.x === e.x && v.y === e.y && v.z === e.z);
+        const g = generated(e.x, e.y, e.z);
+        const value = e.op === 'revert' ? g : e.value;
+        wantPrev.push(entries[i]!);
+        if (want === null) entries[i] = e.op === 'revert' || value === g ? NO_ENTRY : value;
+        wantNext.push(entries[i]!);
+      }
+      const r = run(edits);
+      expect(r.refused, msg).toBe(want);
+      expect([...r.prev], msg).toEqual(wantPrev);
+      expect([...r.next], msg).toEqual(wantNext);
+      expect(at.map((v) => entry(diffs, v.x, v.y, v.z)), msg).toEqual(entries);
+      expect(at.map((v) => valueAt(store, v.x, v.y, v.z)), msg).toEqual(want === null ? model : start);
+      if (want === null) {
+        accepted++;
+        // Undone after, so the next batch starts from the same voxels.
+        for (let i = 0; i < at.length; i++) if (model[i] !== start[i]) restore(at[i]!.x, at[i]!.y, at[i]!.z, start[i]!);
+      } else {
+        refused++;
+      }
+    }
+    // Both outcomes are exercised.
+    expect(accepted).toBeGreaterThan(300);
+    expect(refused).toBeGreaterThan(300);
+  }, 120_000);
+
+  test('a voxel set twice in one batch: the second edit\'s `expect` must be the first\'s `value`', () => {
+    const x = 16 * C[0] + 4;
+    const z = 16 * C[1] + 10;
+    const y = surface(x, z);
+    const orig = valueAt(store, x, y, z);
+    expect(orig).not.toBe(val(GLASS));
+    const vs = versions(store, cx0, cz0, 5);
+    // The second edit expecting the store's value, not the first edit's: refused, nothing written.
+    const stale = run([set(x, y, z, val(GLASS), orig), set(x, y, z, val(STONE), orig)]);
+    expect(stale.refused).toBe('changed');
+    expect(valueAt(store, x, y, z)).toBe(orig);
+    expect(versions(store, cx0, cz0, 5)).toEqual(vs);
+    const r = run([set(x, y, z, val(GLASS), orig), set(x, y, z, val(STONE), val(GLASS))]);
+    expect(r.refused).toBeNull();
+    expect(valueAt(store, x, y, z)).toBe(val(STONE));
+    expect([...r.next]).toEqual([val(GLASS), val(STONE)]);
+    restore(x, y, z, orig);
+  });
+
+  test('a `revert` then a `set` of the same voxel: the `set`\'s `expect` is the generated value', () => {
+    const x = 16 * C[0] + 11;
+    const z = 16 * C[1] + 3;
+    const y = surface(x, z);
+    const orig = valueAt(store, x, y, z);
+    const g = generated(x, y, z);
+    expect(g).not.toBe(val(GLASS));
+    restore(x, y, z, val(GLASS));
+    // The `set` expecting the value before the revert: refused, nothing written.
+    const stale = run([{ x, y, z, op: 'revert', value: 0, expect: val(GLASS) }, set(x, y, z, val(TORCH), val(GLASS))]);
+    expect(stale.refused).toBe('changed');
+    expect(valueAt(store, x, y, z)).toBe(val(GLASS));
+    const r = run([{ x, y, z, op: 'revert', value: 0, expect: val(GLASS) }, set(x, y, z, val(TORCH), g)]);
+    expect(r.refused).toBeNull();
+    expect(valueAt(store, x, y, z)).toBe(val(TORCH));
+    expect([...r.prev]).toEqual([val(GLASS), NO_ENTRY]);
+    expect([...r.next]).toEqual([NO_ENTRY, val(TORCH)]);
+    restore(x, y, z, orig);
+  });
+
+  test('a one-edit batch builds no `Map`; a two-edit batch builds one (SP5c D20)', () => {
+    const x = 16 * C[0] + 9;
+    const z = 16 * C[1] + 6;
+    const y = surface(x, z);
+    const orig = valueAt(store, x, y, z);
+    validateStats.maps = 0;
+    expect(run([set(x, y, z, val(GLASS), orig)]).refused).toBeNull();
+    expect(validateStats.maps).toBe(0);
+    expect(run([set(x, y, z, val(STONE), val(GLASS)), set(x, y, z, val(GLASS), val(STONE))]).refused).toBeNull();
+    expect(validateStats.maps).toBe(1);
+    restore(x, y, z, orig);
   });
 
   test('a column whose proto was freed: `\'noProto\'`', () => {

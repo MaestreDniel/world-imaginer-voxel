@@ -2,8 +2,9 @@
  * The sim worker's edit pipeline (SP5a spec §2.1, §2.2, §2.6; D18-D20), pure over the attached store: `applyEdits`
  * runs one batch inside one read section.
  * 1. **Validate all first** (§2.1): each voxel's column and its 3 × 3 Published (`'unloaded'`), its value still
- *    `expect` (`'changed'`; an earlier edit of the same voxel in the batch counts as written), its column's proto
- *    retained (`'noProto'`). Any refusal refuses the batch with nothing written.
+ *    `expect` (`'changed'`; an earlier edit of the same voxel in the batch counts as written, found linear in the
+ *    batch through a `Map` from the packed voxel position, SP5c D20), its column's proto retained (`'noProto'`). Any
+ *    refusal refuses the batch with nothing written.
  * 2. **Per edit** (§2.2): the column's `EditWriter` (`reopenPublished`); the voxel's section copied into scratch and
  *    the voxel set (`revert`: the proto's value); `replaceBlocks` (copy-on-write, so the proto's shared slot stays the
  *    proto's); `setDiffFlag` (D23); `patchHeightmaps` from the old heights; `relight` over the 3 × 3 (D19) through a
@@ -243,11 +244,20 @@ function checkEdit(e: Edit): void {
 /** The proto's (generated) value of world voxel (x, y, z) of the column `p` views. */
 const generatedAt = (p: ColumnView, x: number, y: number, z: number): number => (p.block(x & 15, y, z & 15) << 8) | p.fluid(x & 15, y, z & 15);
 
+/** @internal Test-only counter (SP5c D20): the `Map`s `validate` built, one per batch of more than one edit. */
+export const validateStats = { maps: 0 };
+
 /**
  * The batch's refusal, or null (§2.1): every edit's 3 × 3 Published, its value `expect` (the value an earlier edit of
- * the same voxel in the batch leaves, else the store's), its column's proto retained.
+ * the same voxel in the batch leaves, else the store's), its column's proto retained. Linear in the batch (SP5c D20):
+ * a batch of more than one edit keeps a `Map` from the voxel's packed position, `colKey · 98,304 + (y + 64) · 256 +
+ * lz · 16 + lx` (below 2^53, as `colKey` < 2^32 and `(y + 64) · 256 + 255` ≤ 98,303), to the batch's value so far: a
+ * `revert`'s generated value, else the edit's `value`. `prevValue[k]` receives the value edit k replaces (the batch's
+ * value so far, else the store's), which a compensating pass writes back.
  */
-function validate(store: VoxelStore, edits: readonly Edit[]): EditRefusal | null {
+function validate(store: VoxelStore, edits: readonly Edit[], prevValue: Uint32Array): EditRefusal | null {
+  const inBatch = edits.length > 1 ? new Map<number, number>() : null;
+  if (inBatch !== null) validateStats.maps++;
   for (let k = 0; k < edits.length; k++) {
     const e = edits[k]!;
     checkEdit(e);
@@ -255,15 +265,12 @@ function validate(store: VoxelStore, edits: readonly Edit[]): EditRefusal | null
     const cz = e.z >> 4;
     for (let dz = -1; dz <= 1; dz++) for (let dx = -1; dx <= 1; dx++) if (!published(store, cx + dx, cz + dz)) return 'unloaded';
     const p = store.proto(cx, cz);
-    let current = -1;
-    for (let j = k - 1; j >= 0 && current < 0; j--) {
-      const o = edits[j]!;
-      // An earlier edit of the voxel passed the proto check of this same column, so `p` is not null here.
-      if (o.x === e.x && o.y === e.y && o.z === e.z) current = o.op === 'revert' ? generatedAt(p!, e.x, e.y, e.z) : o.value;
-    }
-    if (current < 0) current = (store.blockAt(e.x, e.y, e.z) << 8) | store.fluidAt(e.x, e.y, e.z);
+    const key = colKey(cx, cz) * 98_304 + (e.y + 64) * 256 + (e.z & 15) * 16 + (e.x & 15);
+    const current = inBatch?.get(key) ?? ((store.blockAt(e.x, e.y, e.z) << 8) | store.fluidAt(e.x, e.y, e.z));
     if (current !== e.expect) return 'changed';
     if (p === null) return 'noProto';
+    prevValue[k] = current;
+    inBatch?.set(key, e.op === 'revert' ? generatedAt(p, e.x, e.y, e.z) : e.value);
   }
   return null;
 }
@@ -298,6 +305,8 @@ export function applyEdits(store: VoxelStore, diffs: DiffStore, s: EditScratch, 
   const n = edits.length;
   const prev = new Uint32Array(n);
   const next = new Uint32Array(n);
+  /** The voxel value each edit replaces, from validation (SP5c D20). */
+  const prevValue = new Uint32Array(n);
   const dirty = new Set<number>();
   /** Each edited column's `diffs.has` before the batch (D20's entry changes), gathered once the batch is valid. */
   const had = new Map<number, boolean>();
@@ -305,7 +314,7 @@ export function applyEdits(store: VoxelStore, diffs: DiffStore, s: EditScratch, 
   let relightMs = 0;
   store.enterRead();
   try {
-    refused = validate(store, edits);
+    refused = validate(store, edits, prevValue);
     if (refused === null) {
       for (const e of edits) {
         const key = colKey(e.x >> 4, e.z >> 4);
