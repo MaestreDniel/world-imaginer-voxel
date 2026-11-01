@@ -32,6 +32,10 @@ export const SHARDS = {
   // prototype measured 57 s on quick (E1's 10,000 columns about 10 s, about 20 world opens at RD 4), which would take
   // `edit` past the 145 s long pole, so it runs in a shard of its own (the spec's named lever, ruling P45).
   persist: [`${DIR}/persist.metric.ts`],
+  // SP5c spec §10.1, §11 (D27): L3, E3 and E5's paste parts (`clipboard.metric.ts`, planned 30-55 s on quick: its own
+  // 10 × 10 region on every tier, the leave and the buried-house cases), which `rest` (the long pole) cannot take, so it
+  // runs in a shard of its own, as SP5a's and SP5b's files ended (prototype: 41 s on quick, 35 s on fast).
+  clipboard: [`${DIR}/clipboard.metric.ts`],
   rest: null,
 };
 

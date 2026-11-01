@@ -94,7 +94,9 @@
  * header into the new 'master spec amendments (SP5c §13)' describe; §13's other amendments land with what they
  * describe, each pinned there and moving the earlier pin it rewords (§2.7's `meta` line and §1's `persist/idb.ts`
  * exception; at the exit, SP5c's "Received from SP5b" worded as delivered). §1 names each SP5c module in its entry,
- * which exists (`SP5C_MODULES`, its first row added with the first module).
+ * which exists (`SP5C_MODULES`, its first row added with the first module). The paste parts' commit (`clipboard.metric.ts`,
+ * SP5c §10.1, §13): §6.4's L3 and E1-E6 rows name the paste parts, which `THRESHOLDS` holds activeFrom SP5c on every
+ * tier; §1's test entry names `metrics/clipboard.metric.ts`.
  */
 import { existsSync, readdirSync, readFileSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
@@ -1657,6 +1659,7 @@ describe('master spec amendments (SP5c §13)', () => {
     [/^\s+ui\/world\/\* /, 'selectTool.ts clipboard.ts clipboardStore.ts pasteBatch.ts pasteBlocks.ts (SP5c)', 'src/ui/world/selectTool.ts'],
     [/^\s+renderer\.ts /, 'ghost.ts (SP5c)', 'src/render/ghost.ts'],
     [/^\s+ui\/common\/\* /, 'modeTip.ts (SP5c)', 'src/ui/common/modeTip.ts'],
+    [/^\s+test\/ unit\/ metrics\//, '(SP5c: metrics/clipboard.metric.ts)', 'test/metrics/clipboard.metric.ts'],
   ];
 
   test('§1 names each SP5c module in its entry, which exists', () => {
@@ -1719,6 +1722,28 @@ describe('master spec amendments (SP5c §13)', () => {
     expect(lines[undo + 2]).toContain(`at most ${MAX_STEP_EDITS.toLocaleString('en-US')} blocks`);
     expect(lines[undo + 2]).toContain(`at most ${MAX_HISTORY_EDITS.toLocaleString('en-US')} changed blocks`);
     expect(lines[undo + 2]).toContain(`sub-batches of ${SUB_BATCH},`);
+  });
+
+  test('§6.4\'s L3 and E1-E6 rows name the paste parts, which THRESHOLDS holds activeFrom SP5c on every tier (SP5c spec §10.1, §13, D27)', () => {
+    const rows = text.split('\n');
+    const l3 = rows.find((l) => l.startsWith('| L3 |'));
+    expect(l3, 'no L3 row in §6.4').toBeDefined();
+    expect(l3).toBe('| L3 | 500 random edits incl. shaft open/close (SP5c: and pastes up to the maximum, `L3.paste`): incremental vs full recompute | 0 mismatches |');
+    const e = rows.find((l) => l.startsWith('| E1-E6 |'));
+    expect(e, 'no E1-E6 row in §6.4').toBeDefined();
+    expect(e).toContain('reload with edits hash (SP5c: E3 and E5 with pastes, their undo and redo, and the clipboard across a reload);');
+    // The parts the rows name, as THRESHOLDS holds them: max 0 from SP5c, every tier (no `tiers`), exact.
+    const parts: Array<[id: 'L3' | 'E3' | 'E5', parts: string[]]> = [
+      ['L3', ['pasteValueMismatches', 'pasteLightMismatches', 'pasteLimboOver']],
+      ['E3', ['pasteUndoMismatches', 'pasteRedoMismatches', 'clipboardReloadMismatches', 'pasteLeaveMismatches']],
+      ['E5', ['pasteStale']],
+    ];
+    for (const [id, names] of parts) {
+      for (const part of names) expect(THRESHOLDS[id]?.[part], `THRESHOLDS.${id}.${part}`).toEqual({ max: 0, activeFrom: 'SP5c' });
+      expect(Object.keys(THRESHOLDS[id] ?? {}).filter((p) => THRESHOLDS[id]?.[p]?.activeFrom === 'SP5c').sort(), `${id}'s SP5c parts`).toEqual([...names].sort());
+    }
+    expect(e).toContain('| exact |');
+    expect(l3).toContain('| 0 mismatches |');
   });
 
   test('§6.3\'s Selection line: the codec, the turns, the paste batch and the history\'s caps (SP5c spec §13, D14)', () => {

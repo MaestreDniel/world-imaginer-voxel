@@ -1,5 +1,5 @@
 {
-  "sha256": "f6673c6ce148d456450b28345abcab4d0ae47fea375d527c7b035583a00acb5d",
+  "sha256": "d58917bbe869e50c67387e1fbb9c89c3c6eaf0c10b58bdcb4089107bdfe8258f",
   "canonical": {
     "startedSps": [
       "SP0",
@@ -233,6 +233,22 @@
         }
       },
       "E3": {
+        "clipboardReloadMismatches": {
+          "activeFrom": "SP5c",
+          "max": 0
+        },
+        "pasteLeaveMismatches": {
+          "activeFrom": "SP5c",
+          "max": 0
+        },
+        "pasteRedoMismatches": {
+          "activeFrom": "SP5c",
+          "max": 0
+        },
+        "pasteUndoMismatches": {
+          "activeFrom": "SP5c",
+          "max": 0
+        },
         "reloadHashMismatches": {
           "activeFrom": "SP5b",
           "max": 0
@@ -263,6 +279,10 @@
         },
         "flushStale": {
           "activeFrom": "SP5b",
+          "max": 0
+        },
+        "pasteStale": {
+          "activeFrom": "SP5c",
           "max": 0
         },
         "sessionLightMismatches": {
@@ -401,6 +421,18 @@
       "L3": {
         "mismatches": {
           "activeFrom": "SP5a",
+          "max": 0
+        },
+        "pasteLightMismatches": {
+          "activeFrom": "SP5c",
+          "max": 0
+        },
+        "pasteLimboOver": {
+          "activeFrom": "SP5c",
+          "max": 0
+        },
+        "pasteValueMismatches": {
+          "activeFrom": "SP5c",
           "max": 0
         }
       },

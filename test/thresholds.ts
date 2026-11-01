@@ -94,23 +94,36 @@ export const THRESHOLDS: ThresholdTable = {
   L1: { mismatches: { max: 0, activeFrom: 'SP4a' } },
   L2: { enclosedLit: { max: 0, activeFrom: 'SP4a' } },
   // SP5a spec §6.1 (D26): the incremental relight against a fresh `lightRegion` and `referenceLight` after random edits
-  // (`edit.metric.ts`).
-  L3: { mismatches: { max: 0, activeFrom: 'SP5a' } },
+  // (`edit.metric.ts`). SP5c spec §10.1 (D27): the paste part, random pastes up to the maximum, a move and their undo on
+  // their own shared region (`clipboard.metric.ts`, `.out/L3.paste.json`), every tier.
+  L3: {
+    mismatches: { max: 0, activeFrom: 'SP5a' },
+    pasteValueMismatches: { max: 0, activeFrom: 'SP5c' }, pasteLightMismatches: { max: 0, activeFrom: 'SP5c' }, pasteLimboOver: { max: 0, activeFrom: 'SP5c' },
+  },
   // SP5b spec §6.1 (D28): the codec, `.wiworld`, reload, aborted-flush, older-generator and backup, and per-world parts
-  // (`persist.metric.ts`), every tier.
+  // (`persist.metric.ts`), every tier. SP5c spec §10.1 (D27): E3's paste part, pastes, a move and a cut undone and redone,
+  // across a reload, the clipboard across a reload and into another world, and a leave right after a maximum paste
+  // (`clipboard.metric.ts`, `.out/E3.paste.json`), every tier.
   E1: { roundTripFailures: { max: 0, activeFrom: 'SP5b' }, canonicalFailures: { max: 0, activeFrom: 'SP5b' }, rejectFailures: { max: 0, activeFrom: 'SP5b' } },
   E2: { roundTripMismatches: { max: 0, activeFrom: 'SP5b' }, regionHashMismatches: { max: 0, activeFrom: 'SP5b' } },
-  E3: { reloadHashMismatches: { max: 0, activeFrom: 'SP5b' }, reloadStateMismatches: { max: 0, activeFrom: 'SP5b' } },
+  E3: {
+    reloadHashMismatches: { max: 0, activeFrom: 'SP5b' }, reloadStateMismatches: { max: 0, activeFrom: 'SP5b' },
+    pasteUndoMismatches: { max: 0, activeFrom: 'SP5c' }, pasteRedoMismatches: { max: 0, activeFrom: 'SP5c' },
+    clipboardReloadMismatches: { max: 0, activeFrom: 'SP5c' }, pasteLeaveMismatches: { max: 0, activeFrom: 'SP5c' },
+  },
   E4: {
     abortedFlushInconsistent: { max: 0, activeFrom: 'SP5b' }, crashedFlushInconsistent: { max: 0, activeFrom: 'SP5b' },
     lostAfterRetry: { max: 0, activeFrom: 'SP5b' },
   },
   // SP5a spec §6.1 (D26): E5's session part, the edits back at their latest value and light after an unload, a race and a
   // regenerated neighbour (`edit.metric.ts`, `.out/E5.session.json`). SP5b spec §6.1: the flush part, the session torn
-  // down within a flush window and reopened from the KV (`persist.metric.ts`, `.out/E5.flush.json`).
+  // down within a flush window and reopened from the KV (`persist.metric.ts`, `.out/E5.flush.json`). SP5c spec §10.1
+  // (D27): the paste part, maximum pastes back at their values and light after a teleport of 640 columns, one with its
+  // reply pending through it (`clipboard.metric.ts`, `.out/E5.paste.json`).
   E5: {
     sessionStale: { max: 0, activeFrom: 'SP5a' }, sessionLightMismatches: { max: 0, activeFrom: 'SP5a' },
     flushStale: { max: 0, activeFrom: 'SP5b' }, flushLightMismatches: { max: 0, activeFrom: 'SP5b' },
+    pasteStale: { max: 0, activeFrom: 'SP5c' },
   },
   E6: { olderGeneratorWrong: { max: 0, activeFrom: 'SP5b' }, backupMissing: { max: 0, activeFrom: 'SP5b' }, backupSpurious: { max: 0, activeFrom: 'SP5b' } },
   E7: {

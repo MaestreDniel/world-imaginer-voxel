@@ -564,3 +564,4 @@ Measured 2026-11-01 in Node v24.21.0 on the reference CPU (i7-12700H), a quiet m
 (One line per commit that changes `test/thresholds.lock.json`, and per gate decision that changes no lock.)
 
 - 2026-11-01 — SP5c Task 1: startedSps gains 'SP5c' (spec §12).
+- 2026-11-02 — SP5c Task 27: L3 pasteValueMismatches, pasteLightMismatches and pasteLimboOver (L3.paste), E3 pasteUndoMismatches, pasteRedoMismatches, clipboardReloadMismatches and pasteLeaveMismatches (E3.paste), E5 pasteStale (E5.paste), each max 0, gated from SP5c on every tier (clipboard.metric.ts; spec §10.1); new parts.

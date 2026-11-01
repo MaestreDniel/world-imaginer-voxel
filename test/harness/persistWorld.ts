@@ -32,7 +32,20 @@
  * older-generator flag, `loaded` reply, D14 notices and frames to the first fill, the kept record, the notices shown,
  * the backups posted, the mode's `beforeApply` (E6's 'L' and 'MESH' cases: no parameter changes those stages alone,
  * `core/stage/registry.ts`), and `settle` and `until` (frames until a promise settles or a condition holds).
+ *
+ * **The selection tool** (SP5c spec §10.1, `clipboard.metric.ts`): the page's `createSelectTool` and
+ * `createSelectActions` over the sim client, the coordinator's gate, the action post and a clipboard store
+ * (`createClipboardStore`) whose KV is a second `MemoryKV` (`clipKv`, the caller's when given, so the clipboard outlives
+ * `dispose` and reaches a reopen or another world; `crashNext()` on it hits the clipboard's write, never a flush). The
+ * harness has no aim and no frame step: a paste or a move is placed with `select.placeAt(x0, y0, z0, true)` and
+ * confirmed with `select.confirm()`. The view and the ghost draw nothing; the origin is zero; the body is the pose's.
+ * `leave` is the page's leave path (the autosave's `beforeLeave`, then `dispose`); `copy` the sim client's; `teleport`
+ * moves the stream camera by whole columns from the pose; `pinned` mirrors the edit path's sim pins on the coordinator
+ * (each `simPin` of a column adds 1 to its 3 × 3 until its `simUnpin`), `published` reads the store's column state;
+ * `posted` counts the messages posted to the sim by type, `clipboardWrites` the clipboard's KV writes issued. A
+ * `delayMs` given the posted message delays its reply by type (a paste's `edits` alone).
  */
+import { colKey } from '../../src/core/coords';
 import type { ParamsPatch } from '../../src/core/params/schema';
 import type { Seed64 } from '../../src/core/hash';
 import { createCoordinator, createCoordinatorCounts, worldJobsOf, type StreamCamera, type StreamEvent } from '../../src/engine/coordinator';
@@ -41,27 +54,32 @@ import { draftKeyOf } from '../../src/engine/session';
 import { createSimClient, type SimClient } from '../../src/engine/simClient';
 import { createThrottle } from '../../src/engine/throttle';
 import { createWorkerPool } from '../../src/engine/workerPool';
-import type { MemoryKV } from '../../src/persist/memory';
+import type { KV } from '../../src/persist/kv';
+import { createMemoryKV, type MemoryKV } from '../../src/persist/memory';
 import { createSaves, type HistoryRecord, type HotbarRecord, type StateRecord, type WorldRecord } from '../../src/persist/saves';
 import type { FlyState } from '../../src/player/fly';
 import { createHotbar } from '../../src/player/hotbar';
+import { bodyOf, type BodyBox } from '../../src/player/interaction';
 import { EYE } from '../../src/player/walk';
 import { mergePatch } from '../../src/ui/lab/labState';
 import { createPreviewDriver, createReplayingCanvas, draftOf, type DriverClock } from '../../src/ui/map/previewDriver';
 import { createApplyControl, createEpochs, updateAuxPolicy } from '../../src/ui/world/applyControl';
 import { createActionPost, createBlockHistory, type BlockHistory } from '../../src/ui/world/blockHistory';
 import { createEditLatency } from '../../src/ui/world/editLatency';
+import { createClipboardStore } from '../../src/ui/world/clipboardStore';
 import { createEditPath, type EditOutcome } from '../../src/ui/world/editPath';
 import { createModifyMode, createModifySwitch } from '../../src/ui/world/modifyMode';
 import { createPlaces } from '../../src/ui/world/places';
+import type { Box } from '../../src/ui/world/pasteBatch';
 import { parseWorldQuery } from '../../src/ui/world/query';
+import { createSelectTool, type SelectTool } from '../../src/ui/world/selectTool';
 import { STATE_BOUNDS } from '../../src/ui/world/stateBounds';
 import type { LockManagerLike } from '../../src/ui/world/worldLock';
 import {
-  appliedRecord, countAccepted, createPageAutosave, hotbarStorage, openOlderGenerator, openSavedWorld, restoredStart,
-  revealOlderGenerator, SAVES_DB,
+  appliedRecord, countAccepted, createPageAutosave, createSelectActions, hotbarStorage, NO_GHOST, openOlderGenerator,
+  openSavedWorld, pageKeyName, restoredStart, revealOlderGenerator, SAVES_DB, type SelectActions,
 } from '../../src/ui/world/worldPage';
-import type { BackedUpMsg, Edit, FlushedMsg, LoadedMsg } from '../../src/workers/protocol';
+import type { BackedUpMsg, CopiedMsg, Edit, FlushedMsg, LoadedMsg } from '../../src/workers/protocol';
 import { createSimHandler } from '../../src/workers/simHandler';
 import { createStore, type VoxelStore } from '../../src/world/store/store';
 import { installDom } from '../unit/fixtures/domShim';
@@ -70,8 +88,13 @@ import { inProcessSimWorker } from './inProcessSim';
 import { litRegionHash } from './region';
 
 const MiB = 1 << 20;
-/** A step that has not settled after this many frames is a stall. */
+/**
+ * A step that has not settled after this many frames, and after `STALL_MS` at least, is a stall. The time floor keeps a
+ * reply delayed on purpose (SP5c's leave and Review Focus 1: 1,500 ms) from counting as one on a fast machine, where
+ * an idle frame takes a few tens of microseconds.
+ */
 const FRAMES_MAX = 50_000;
+const STALL_MS = 10_000;
 
 export interface PersistWorld {
   /** Posts a batch through the page's action post (recorded in the block history when accepted); frames until its outcome. */
@@ -92,15 +115,42 @@ export interface PersistWorld {
    * adopt or no change), `backedUp` whether a backup copy was posted during it and committed. With
    * `revertBeforeCommit`, the draft returns to the applied one as soon as the copy is posted (D11's adopt). With
    * `offBeforeApply`, the mode is switched off right after the change is made, before any frame (D10: an edit already
-   * made still applies).
+   * made still applies). With `noWait`, it returns once the Apply has started (the backup, if any, committed before
+   * it), the world still regenerating (`atApplied()` false until it settles).
    */
-  change(patch: ParamsPatch, o?: { revertBeforeCommit?: boolean; offBeforeApply?: boolean }): Promise<{ from: WorldStage | null; backedUp: boolean }>;
+  change(patch: ParamsPatch, o?: { revertBeforeCommit?: boolean; offBeforeApply?: boolean; noWait?: boolean }): Promise<{ from: WorldStage | null; backedUp: boolean }>;
   /** The page's `record`: sent to the sim, counted as a change for the next flush. */
   record(world: WorldRecord): void;
   readonly kv: MemoryKV;
   readonly simClient: SimClient;
   /** Tears the session down as the page does (the lock last); the KV stays open. */
   dispose(): void;
+  /** The page's leave (SP5c spec §2.8): the autosave's `beforeLeave` (frames until it resolves), then `dispose`. */
+  leave(): Promise<FlushedMsg | null>;
+
+  // The selection tool (SP5c spec §10.1; see the module comment).
+  readonly tool: SelectTool;
+  readonly select: SelectActions;
+  /** The clipboard's KV (the caller's `clipKv`, else one of this world's own). */
+  readonly clipKv: MemoryKV;
+  /** The clipboard's KV writes issued so far (each `write` call, settled or not). */
+  readonly clipboardWrites: number;
+  /** The sim client's `copy`; frames until its reply. */
+  copy(box: Box, gen: boolean): Promise<CopiedMsg>;
+  /** Moves the stream camera to the pose moved by (dcx, dcz) columns; (0, 0) is the pose. */
+  teleport(dcx: number, dcz: number): void;
+  /** Whether a pending edit pins (cx, cz): a `simPin` of a column within one of it not yet `simUnpin`ned. */
+  pinned(cx: number, cz: number): boolean;
+  /** Whether the store holds (cx, cz) Published (its own record). */
+  published(cx: number, cz: number): boolean;
+  /** The messages of `type` posted to the sim so far. */
+  posted(type: string): number;
+  /** The coordinator's first fill of the current disc (`firstFill`). */
+  filled(): boolean;
+  /** The applied epoch reached: no stale column, every one meshed (`change`'s settled test). */
+  atApplied(): boolean;
+  /** Whether the edit path has a bulk batch posted and not answered. */
+  bulkPending(): boolean;
 
   // Read back by the metric (see the module comment).
   readonly centre: { readonly cx: number; readonly cz: number };
@@ -154,7 +204,13 @@ const turn = (): Promise<void> => new Promise((r) => setImmediate(r));
 /** The session's random seed for an empty seed text, which a saved record never has (tests never use `Math.random`). */
 const randomSeed = (): Seed64 => [1, 2];
 
-export async function openPersistWorld(o: { kv: MemoryKV; worldId: string; rd: number; delayMs?: () => number }): Promise<PersistWorld> {
+export async function openPersistWorld(o: {
+  kv: MemoryKV; worldId: string; rd: number;
+  /** Each posted message's reply delay, ms, read at its post (none: 0). */
+  delayMs?: (msg: unknown) => number;
+  /** The clipboard's KV (SP5c): passed again to each reopen and to another world, so the clipboard outlives `dispose`. */
+  clipKv?: MemoryKV;
+}): Promise<PersistWorld> {
   const { kv, worldId, rd } = o;
   if (typeof (globalThis as { document?: unknown }).document === 'undefined') installDom();
   const teardown: Array<() => void> = [];
@@ -177,7 +233,21 @@ export async function openPersistWorld(o: { kv: MemoryKV; worldId: string; rd: n
     teardown.push(() => pool.terminate());
     let simFailure: Error | null = null;
     const delay = o.delayMs ?? (() => 0);
-    const sim = createSimClient(() => inProcessSimWorker(createSimHandler({ openKV: async () => kv }), delay), { onFailure(e) { simFailure = e; } });
+    // The messages posted by type; each message's delay read at its post, from the message (a paste's `edits` alone).
+    const postedByType = new Map<string, number>();
+    const spawnSim = () => {
+      let next = 0;
+      const w = inProcessSimWorker(createSimHandler({ openKV: async () => kv }), () => next);
+      const post = w.postMessage.bind(w);
+      w.postMessage = (m, transfer) => {
+        const type = String((m as { type?: unknown }).type);
+        postedByType.set(type, (postedByType.get(type) ?? 0) + 1);
+        next = delay(m);
+        post(m, transfer);
+      };
+      return w;
+    };
+    const sim = createSimClient(spawnSim, { onFailure(e) { simFailure = e; } });
     teardown.push(() => sim.dispose());
     await pool.attachStore(store.handles());
     const attaching = sim.attach(store.handles());
@@ -192,7 +262,7 @@ export async function openPersistWorld(o: { kv: MemoryKV; worldId: string; rd: n
     const start = restoredStart(opened.state, parseWorldQuery(new URLSearchParams(`world=${worldId}`)), null);
     const at = start.centre ?? await pool.spawn();
     const centre = { cx: Math.floor(at.x / 16), cz: Math.floor(at.z / 16) };
-    const cam: StreamCamera = { x: at.x, z: at.z, yawDeg: 0 };
+    let cam: StreamCamera = { x: at.x, z: at.z, yawDeg: 0 };
     const events: StreamEvent[] = [];
     const epochs = createEpochs();
     const coordinator = createCoordinator({
@@ -228,12 +298,13 @@ export async function openPersistWorld(o: { kv: MemoryKV; worldId: string; rd: n
     };
     let frames = 0;
     const until = async (done: () => boolean, what: string): Promise<void> => {
-      for (let i = 0; i < FRAMES_MAX; i++) {
+      const t0 = performance.now();
+      for (let i = 0; i < FRAMES_MAX || performance.now() - t0 < STALL_MS; i++) {
         await frame();
         frames++;
         if (done()) return;
       }
-      throw new Error(`persistWorld: ${what}: not settled after ${FRAMES_MAX} frames`);
+      throw new Error(`persistWorld: ${what}: not settled after ${FRAMES_MAX} frames and ${STALL_MS / 1000} s`);
     };
     const settle = async <T>(p: Promise<T>, what: string): Promise<T> => {
       let done = false;
@@ -251,7 +322,31 @@ export async function openPersistWorld(o: { kv: MemoryKV; worldId: string; rd: n
     if (loaded.skippedColumns > 0) notices.push(`${loaded.skippedColumns} columns of this world could not be read`);
     if (loaded.unknownStates > 0) notices.push(`${loaded.unknownStates} blocks of unknown types became air`);
     const show = { show: (text: string) => { notices.push(text); }, hide: () => {} };
-    const editPath = createEditPath({ sim, coordinator, latency: createEditLatency(), now: () => performance.now(), notices: show });
+    // The edit path's sim pins, mirrored as the coordinator counts them (each on the pinned column's 3 × 3).
+    const simPins = new Map<number, number>();
+    const pinBy = (cx: number, cz: number, d: number): void => {
+      for (let dz = -1; dz <= 1; dz++) {
+        for (let dx = -1; dx <= 1; dx++) {
+          const k = colKey(cx + dx, cz + dz);
+          const n = Math.max(0, (simPins.get(k) ?? 0) + d);
+          if (n === 0) simPins.delete(k);
+          else simPins.set(k, n);
+        }
+      }
+    };
+    const gate = {
+      editState: (cx: number, cz: number) => coordinator.editState(cx, cz),
+      simPin(cx: number, cz: number) {
+        pinBy(cx, cz, 1);
+        coordinator.simPin(cx, cz);
+      },
+      simUnpin(cx: number, cz: number) {
+        pinBy(cx, cz, -1);
+        coordinator.simUnpin(cx, cz);
+      },
+      markEdited: (keys: ArrayLike<number>) => coordinator.markEdited(keys),
+    };
+    const editPath = createEditPath({ sim, coordinator: gate, latency: createEditLatency(), now: () => performance.now(), notices: show });
     const accepted = countAccepted(editPath.post);
     const history = createBlockHistory({
       post: accepted.post,
@@ -380,6 +475,37 @@ export async function openPersistWorld(o: { kv: MemoryKV; worldId: string; rd: n
     revealOlderGenerator(generator, { notices: show, autosave });
     teardown.push(places.subscribe(() => autosave.markChanged()));
 
+    // The selection tool (SP5c spec §1-§2), as the page wires it, over the clipboard's own KV (module comment).
+    const clipKv = o.clipKv ?? createMemoryKV();
+    let clipboardWrites = 0;
+    const clipView: KV = {
+      read: (reqs) => clipKv.read(reqs),
+      write: (ops) => {
+        clipboardWrites++;
+        return clipKv.write(ops);
+      },
+      onEvent: (f) => clipKv.onEvent(f),
+      // The page closes only a connection the clipboard opened itself; this one outlives the world.
+      close() {},
+    };
+    const tool = createSelectTool();
+    const body: BodyBox = { minX: 0, minY: 0, minZ: 0, maxX: 0, maxY: 0, maxZ: 0 };
+    const select = createSelectActions({
+      tool,
+      sim,
+      editState: (cx, cz) => coordinator.editState(cx, cz),
+      clipboard: createClipboardStore({ kv: async () => clipView, notices: { show: (text) => { notices.push(text); } } }),
+      actionPost: (edits) => actionPost(edits),
+      notices: { show: (text) => { notices.push(text); } },
+      keyName: pageKeyName,
+      view: { setSelectionBox() {}, hideSelectionBox() {}, setSelectLabel() {} },
+      ghost: NO_GHOST,
+      origin: { x: 0, y: 0, z: 0 },
+      body: () => bodyOf('fly', fly.x, fly.y, fly.z, body),
+      stopRepeat: () => {},
+    });
+    teardown.push(() => select.dispose());
+
     /** The applied epoch reached: no stale MESH-set column, every one meshed. */
     const settledAtApplied = (): boolean => {
       coordinator.counts(counts);
@@ -425,6 +551,11 @@ export async function openPersistWorld(o: { kv: MemoryKV; worldId: string; rd: n
           return appliedCount > n;
         }, 'the change applied');
         const posted = backups.slice(b0);
+        // The Apply has started: a backup it waited for has committed, so its outcome is at hand without a frame.
+        if (opts?.noWait === true) {
+          const done = await Promise.all(posted.map((b) => b.done));
+          return { from: lastFrom, backedUp: done.some((x) => x.ok) };
+        }
         const outcomes = await settle(Promise.all(posted.map((b) => b.done)), 'the backup');
         await until(settledAtApplied, 'the world settled after the change');
         return { from: lastFrom, backedUp: outcomes.some((x) => x.ok) };
@@ -436,6 +567,35 @@ export async function openPersistWorld(o: { kv: MemoryKV; worldId: string; rd: n
       kv,
       simClient: sim,
       dispose,
+      async leave() {
+        const r = await settle(autosave.beforeLeave(), 'the leave');
+        dispose();
+        return r;
+      },
+      tool,
+      select,
+      clipKv,
+      get clipboardWrites() {
+        return clipboardWrites;
+      },
+      copy: (box, gen) => settle(sim.copy(box, gen), 'a copy'),
+      teleport(dcx, dcz) {
+        cam = { x: at.x + 16 * dcx, z: at.z + 16 * dcz, yawDeg: 0 };
+      },
+      pinned: (cx, cz) => (simPins.get(colKey(cx, cz)) ?? 0) > 0,
+      published(cx, cz) {
+        if (store.holder(cx, cz) !== 'self') return false;
+        store.enterRead();
+        try {
+          return store.publishedAt(16 * cx, 16 * cz);
+        } finally {
+          store.exitRead();
+        }
+      },
+      posted: (type) => postedByType.get(type) ?? 0,
+      filled: () => coordinator.firstFill(),
+      atApplied: settledAtApplied,
+      bulkPending: () => editPath.bulkPending(),
       centre,
       store,
       history,
