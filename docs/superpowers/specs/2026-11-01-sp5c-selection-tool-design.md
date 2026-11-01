@@ -559,6 +559,29 @@ Measured 2026-11-01 in Node v24.21.0 on the reference CPU (i7-12700H), a quiet m
 - **D31's rule:** `paste.maxLit` p50 1,358-1,442 ms is at most 1,500 and `paste.max` p99 585-666 ms is at most 800 in every run, so **the cap stays 32,768**. No spec figure changes. The lit row's margin is small: 4 % in run 1.
 - **The gates:** `paste.max` p99 ≤ 800 ms and `paste.maxLit` p99 ≤ 1,600 ms held in every run. `test/baselines.json` was re-recorded with both rows, and the gate run after it passed every absolute gate and the +30 % p50 ratio rule.
 
+### The first SP5c CI run (Task 27)
+
+Run 41363347185 on `sp5c/selection-tool` at f19addc (2026-11-01, push, every metrics shard cold as §11 expects): **success, wall 3 min 00 s** (23:41:41 → 23:44:41), within §11's 2.9-3.2 min and under the 3 min 30 s exit criterion. Job times against §11 (SP5b's exit run 41299209682 in brackets):
+
+| job | time | §11 expectation |
+|---|---|---|
+| metrics-quick (rest) | 163 s (164 s) | the long pole, unchanged |
+| metrics-quick (terrain) | 160 s (161 s) | ≈ 160 s, unchanged |
+| unit (rest) | 142 s (107 s) | ≈ 117-152 s; under the long pole, so the `unitShards.mjs` lever is not needed |
+| metrics-fast (rest) | 143 s (95 s) | `clipboard.metric.ts` on fast about +15-25 s; it grew +48 s (Task 27 recorded fast at 35 s locally), still 20 s under the long pole, so `fastShards` is unchanged |
+| metrics-quick (surface) | 133 s | not affected |
+| metrics-quick (edit) | 116 s | not affected |
+| unit (heavy) | 111 s (119 s) | ≈ 122-125 s; within the ±45 s run-to-run spread |
+| check | 94 s (83 s) | +3-8 s; +11 s, within the spread |
+| metrics-quick (persist) | 88 s | not affected |
+| metrics-quick (render) | 84 s | not affected |
+| metrics-fast (surface) | 83 s | not affected |
+| metrics-quick (clipboard) | 81 s | the new shard, ≈ 70-110 s with setup |
+| metrics-fast (terrain) | 54 s | not affected |
+| changes / ci-ok | 6 s / 4 s | — |
+
+No lever ran. The watch item for later runs is `metrics-fast (rest)` (143 s against the long pole's 160-163 s): if it passes the long pole, the clipboard file gets a fast shard of its own.
+
 ## Threshold log
 
 (One line per commit that changes `test/thresholds.lock.json`, and per gate decision that changes no lock.)
