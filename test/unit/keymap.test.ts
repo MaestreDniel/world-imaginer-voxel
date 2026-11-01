@@ -1,6 +1,7 @@
 import { describe, expect, test } from 'vitest';
 import {
-  DEFAULT_KEYMAP, LISTED_ONLY, bindingLabel, resolveKey, resolveWheel, type Action, type Binding,
+  DEFAULT_KEYMAP, LISTED_ONLY, PLACING_ACTIONS, bindingLabel, placingContext, resolveKey, resolveWheel, type Action, type Binding,
+  type KeyEntry,
 } from '../../src/player/keymap';
 
 /** SP5a's build group (SP5a spec §4.1): F, E, 1-9 and the plain wheel. */
@@ -11,17 +12,32 @@ const BUILD: readonly Action[] = [
 /** SP5b's B and G (SP5b spec §3.7): save a place, the Settings screen. */
 const SP5B: readonly Action[] = ['savePlace', 'settings'];
 
+/** SP5c's selection tool (SP5c spec §1.1, D4): Q, Ctrl+C, Ctrl+X, Ctrl+V, N, and while placing the wheel, ↑ and ↓. */
+const SELECT: readonly Action[] = ['selectTool', 'copy', 'cut', 'paste', 'move', 'turn', 'turnBack', 'raise', 'lower'];
+
 /**
  * Every action of SP4a spec §7.3 but R's loadHere (removed by SP4b spec §6.2), SP4c's M (SP4c spec §2.4), SP5a's build group
- * (SP5a spec §4.1) and SP5b's B and G (SP5b spec §3.7), spelled out so that a missing map entry fails here.
+ * (SP5a spec §4.1), SP5b's B and G (SP5b spec §3.7) and SP5c's selection tool (SP5c spec §1.1), spelled out so that a
+ * missing map entry fails here.
  */
 const ACTIONS: readonly Action[] = [
   'forward', 'back', 'left', 'right', 'up', 'down', 'sprint', 'speedUp', 'speedDown',
-  'timeSpeed', 'help', 'hud', 'releasePointer', 'map', ...BUILD, ...SP5B,
+  'timeSpeed', 'help', 'hud', 'releasePointer', 'map', ...BUILD, ...SP5B, ...SELECT,
 ];
 
+/** A code binding's Ctrl: absent (with or without), `+ctrl` (only with Ctrl or Cmd), `-ctrl` (only without). */
 const bindingKey = (b: Binding): string =>
-  (b.kind === 'code' ? `code:${b.code}` : b.kind === 'key' ? `key:${b.key}` : `wheel:${b.dir}${b.ctrl ? '+ctrl' : ''}`);
+  (b.kind === 'code'
+    ? `code:${b.code}${b.ctrl === undefined ? '' : b.ctrl ? '+ctrl' : '-ctrl'}`
+    : b.kind === 'key' ? `key:${b.key}` : `wheel:${b.dir}${b.ctrl ? '+ctrl' : ''}`);
+
+/** Whether one event can match both bindings: a code binding with no `ctrl` matches with Ctrl held or not. */
+const overlaps = (a: Binding, b: Binding): boolean => {
+  if (a.kind === 'code' && b.kind === 'code') return a.code === b.code && (a.ctrl === undefined || b.ctrl === undefined || a.ctrl === b.ctrl);
+  if (a.kind === 'key' && b.kind === 'key') return a.key === b.key;
+  if (a.kind === 'wheel' && b.kind === 'wheel') return a.dir === b.dir && a.ctrl === b.ctrl;
+  return false;
+};
 
 describe('the key map as data (SP4a spec §7.3, D19)', () => {
   test('every Action is bound or listed', () => {
@@ -32,15 +48,19 @@ describe('the key map as data (SP4a spec §7.3, D19)', () => {
       expect(entries[0]!.label, a).not.toBe('');
     }
     expect(DEFAULT_KEYMAP).toHaveLength(ACTIONS.length);
-    expect(DEFAULT_KEYMAP).toHaveLength(29);
+    expect(DEFAULT_KEYMAP).toHaveLength(38);
     // Esc is listed (the help names it) but the browser owns it: the input layer never resolves it.
     expect([...LISTED_ONLY]).toEqual(['releasePointer']);
     expect(resolveKey({ code: 'Escape', key: 'Escape' })).toBeNull();
-    // Every entry is SP4a's except SP4c's map (SP4c spec §2.4), SP5a's build group (SP5a spec §4.1) and SP5b's B and G
-    // (SP5b spec §3.7).
-    const since = (a: Action) => (a === 'map' ? 'SP4c' : BUILD.includes(a) ? 'SP5a' : SP5B.includes(a) ? 'SP5b' : 'SP4a');
+    // Every entry is SP4a's except SP4c's map (SP4c spec §2.4), SP5a's build group (SP5a spec §4.1), SP5b's B and G
+    // (SP5b spec §3.7) and SP5c's selection tool (SP5c spec §1.1).
+    const since = (a: Action) =>
+      (a === 'map' ? 'SP4c' : BUILD.includes(a) ? 'SP5a' : SP5B.includes(a) ? 'SP5b' : SELECT.includes(a) ? 'SP5c' : 'SP4a');
     for (const e of DEFAULT_KEYMAP) expect(e.since, e.action).toBe(since(e.action));
     for (const e of DEFAULT_KEYMAP) expect(e.group === 'build', e.action).toBe(BUILD.includes(e.action));
+    for (const e of DEFAULT_KEYMAP) expect(e.group === 'select', e.action).toBe(SELECT.includes(e.action));
+    // Appended after slotPrev, in the spec's order.
+    expect(DEFAULT_KEYMAP.slice(-9).map((e) => e.action)).toEqual(SELECT);
   });
 
   test('M opens the map: KeyM resolves to map, in the view group (SP4c spec §2.4, D15)', () => {
@@ -52,15 +72,99 @@ describe('the key map as data (SP4a spec §7.3, D19)', () => {
     expect(resolveKey({ code: 'KeyM', key: ',' })).toBe('map');
   });
 
-  test('no binding is shared by two actions', () => {
-    const seen = new Map<string, Action>();
-    for (const e of DEFAULT_KEYMAP) {
-      for (const b of e.bindings) {
-        const k = bindingKey(b);
-        expect(seen.get(k), `${k} bound to ${seen.get(k)} and ${e.action}`).toBeUndefined();
-        seen.set(k, e.action);
+  test('a binding shared by two actions is between actions whose contexts exclude each other: only the plain wheel\'s slotNext/turn and slotPrev/turnBack (SP5c spec §1.1)', () => {
+    const shared: Array<[Action, Action]> = [];
+    for (let i = 0; i < DEFAULT_KEYMAP.length; i++) {
+      for (let j = i + 1; j < DEFAULT_KEYMAP.length; j++) {
+        const a = DEFAULT_KEYMAP[i]!;
+        const b = DEFAULT_KEYMAP[j]!;
+        if (!a.bindings.some((x) => b.bindings.some((y) => overlaps(x, y)))) continue;
+        shared.push([a.action, b.action]);
+        for (const placing of [false, true]) {
+          const active = placingContext(placing);
+          expect(active(a.action) && active(b.action), `${a.action} and ${b.action} both active with placing ${placing}`).toBe(false);
+        }
       }
     }
+    expect(shared).toEqual([['slotNext', 'turn'], ['slotPrev', 'turnBack']]);
+  });
+
+  test('the selection tool\'s nine entries are SP5c spec §1.1\'s, in its group (D4)', () => {
+    const select = DEFAULT_KEYMAP.filter((e) => e.group === 'select');
+    const row = (action: Action, bindings: Binding[], label: string): KeyEntry => ({ action, bindings, label, group: 'select', since: 'SP5c' });
+    expect(select).toEqual([
+      row('selectTool', [{ kind: 'code', code: 'KeyQ', ctrl: false }], 'Selection tool on or off'),
+      row('copy', [{ kind: 'code', code: 'KeyC', ctrl: true }], 'Copy the selection'),
+      row('cut', [{ kind: 'code', code: 'KeyX', ctrl: true }], 'Cut the selection'),
+      row('paste', [{ kind: 'code', code: 'KeyV', ctrl: true }], 'Paste'),
+      row('move', [{ kind: 'code', code: 'KeyN', ctrl: false }], 'Move the selection'),
+      row('turn', [{ kind: 'wheel', dir: 'down', ctrl: false }], 'Turn the paste 90° clockwise'),
+      row('turnBack', [{ kind: 'wheel', dir: 'up', ctrl: false }], 'Turn the paste back 90°'),
+      row('raise', [{ kind: 'code', code: 'ArrowUp', ctrl: false }], 'Raise the paste'),
+      row('lower', [{ kind: 'code', code: 'ArrowDown', ctrl: false }], 'Lower the paste'),
+    ]);
+    expect([...PLACING_ACTIONS].sort()).toEqual(['lower', 'raise', 'turn', 'turnBack']);
+  });
+
+  test('Ctrl+C resolves copy, plain C nothing; Ctrl+Alt+C nothing; Cmd+C copy; Ctrl+Q and Ctrl+N nothing; plain Q selectTool, plain N move; plain W still resolves forward with Ctrl', () => {
+    expect(resolveKey({ code: 'KeyC', key: 'c', ctrlKey: true })).toBe('copy');
+    expect(resolveKey({ code: 'KeyC', key: 'c' })).toBeNull();
+    // AltGr sets both Ctrl and Alt (the user's Spanish layout): never a copy or a paste.
+    expect(resolveKey({ code: 'KeyC', key: 'c', ctrlKey: true, altKey: true })).toBeNull();
+    expect(resolveKey({ code: 'KeyV', key: 'v', ctrlKey: true, altKey: true })).toBeNull();
+    expect(resolveKey({ code: 'KeyC', key: 'c', metaKey: true })).toBe('copy');
+    expect(resolveKey({ code: 'KeyX', key: 'x', ctrlKey: true })).toBe('cut');
+    expect(resolveKey({ code: 'KeyV', key: 'v', ctrlKey: true })).toBe('paste');
+    expect(resolveKey({ code: 'KeyX', key: 'x' })).toBeNull();
+    expect(resolveKey({ code: 'KeyV', key: 'v' })).toBeNull();
+    expect(resolveKey({ code: 'KeyQ', key: 'q', ctrlKey: true })).toBeNull();
+    expect(resolveKey({ code: 'KeyN', key: 'n', ctrlKey: true })).toBeNull();
+    expect(resolveKey({ code: 'KeyN', key: 'n', metaKey: true })).toBeNull();
+    expect(resolveKey({ code: 'KeyQ', key: 'q' })).toBe('selectTool');
+    expect(resolveKey({ code: 'KeyN', key: 'n' })).toBe('move');
+    // The physical key: a layout typing something else at KeyQ (AZERTY's a) still toggles the tool.
+    expect(resolveKey({ code: 'KeyQ', key: 'a' })).toBe('selectTool');
+    expect(resolveKey({ code: 'KeyW', key: 'w', ctrlKey: true })).toBe('forward');
+    expect(resolveKey({ code: 'KeyW', key: 'w', metaKey: true })).toBe('forward');
+  });
+
+  test('a ctrl: true code binding is matched before the other code bindings, and `active` skips an entry for the next match', () => {
+    const map: readonly KeyEntry[] = [
+      { action: 'forward', bindings: [{ kind: 'code', code: 'KeyC' }], label: 'Forward', group: 'move', since: 'SP4a' },
+      { action: 'copy', bindings: [{ kind: 'code', code: 'KeyC', ctrl: true }], label: 'Copy', group: 'select', since: 'SP5c' },
+      { action: 'palette', bindings: [{ kind: 'key', key: 'c' }], label: 'Palette', group: 'build', since: 'SP5a' },
+    ];
+    expect(resolveKey({ code: 'KeyC', key: 'c', ctrlKey: true }, map)).toBe('copy');
+    expect(resolveKey({ code: 'KeyC', key: 'c' }, map)).toBe('forward');
+    expect(resolveKey({ code: 'KeyC', key: 'c', ctrlKey: true }, map, (a) => a !== 'copy')).toBe('forward');
+    expect(resolveKey({ code: 'KeyC', key: 'c' }, map, (a) => a !== 'forward')).toBe('palette');
+    expect(resolveKey({ code: 'KeyC', key: 'c' }, map, () => false)).toBeNull();
+  });
+
+  test('with the placing context off the plain wheel resolves slotNext/slotPrev and ↑, ↓ nothing; on, turn/turnBack and raise/lower (SP5c spec §1.1)', () => {
+    const off = placingContext(false);
+    const on = placingContext(true);
+    expect(resolveWheel(1, false, DEFAULT_KEYMAP, off)).toBe('slotNext');
+    expect(resolveWheel(-1, false, DEFAULT_KEYMAP, off)).toBe('slotPrev');
+    expect(resolveKey({ code: 'ArrowUp', key: 'ArrowUp' }, DEFAULT_KEYMAP, off)).toBeNull();
+    expect(resolveKey({ code: 'ArrowDown', key: 'ArrowDown' }, DEFAULT_KEYMAP, off)).toBeNull();
+    expect(resolveWheel(1, false, DEFAULT_KEYMAP, on)).toBe('turn');
+    expect(resolveWheel(-1, false, DEFAULT_KEYMAP, on)).toBe('turnBack');
+    expect(resolveKey({ code: 'ArrowUp', key: 'ArrowUp' }, DEFAULT_KEYMAP, on)).toBe('raise');
+    expect(resolveKey({ code: 'ArrowDown', key: 'ArrowDown' }, DEFAULT_KEYMAP, on)).toBe('lower');
+    // ↑ with Ctrl is nothing even while placing; Ctrl+wheel stays the flying speed either way.
+    expect(resolveKey({ code: 'ArrowUp', key: 'ArrowUp', ctrlKey: true }, DEFAULT_KEYMAP, on)).toBeNull();
+    expect(resolveWheel(1, true, DEFAULT_KEYMAP, on)).toBe('speedDown');
+    expect(resolveWheel(-1, true, DEFAULT_KEYMAP, off)).toBe('speedUp');
+    // Every other action is active in both contexts.
+    for (const e of DEFAULT_KEYMAP) {
+      const placingOnly = PLACING_ACTIONS.has(e.action);
+      const slotWheel = e.action === 'slotNext' || e.action === 'slotPrev';
+      expect(on(e.action), e.action).toBe(!slotWheel);
+      expect(off(e.action), e.action).toBe(!placingOnly);
+    }
+    // Without a context (the default), every entry is active: the wheel's first match is the slot's.
+    expect(resolveWheel(1, false)).toBe('slotNext');
   });
 
   test('the bindings are spec §7.3\'s', () => {
@@ -184,6 +288,10 @@ describe('the key map as data (SP4a spec §7.3, D19)', () => {
     expect(bindingLabel({ kind: 'wheel', dir: 'up', ctrl: true })).toBe('Ctrl+Wheel up');
     expect(bindingLabel({ kind: 'wheel', dir: 'down', ctrl: true })).toBe('Ctrl+Wheel down');
     expect(bindingLabel({ kind: 'code', code: 'Digit1' })).toBe('1');
+    // SP5c spec §1.1: a ctrl: true code binding names Ctrl; a ctrl: false one is the key alone.
+    expect(bindingLabel({ kind: 'code', code: 'KeyC', ctrl: true })).toBe('Ctrl+C');
+    expect(bindingLabel({ kind: 'code', code: 'KeyQ', ctrl: false })).toBe('Q');
+    expect(bindingLabel({ kind: 'code', code: 'ArrowUp', ctrl: false })).toBe('↑');
     for (const e of DEFAULT_KEYMAP) for (const b of e.bindings) expect(bindingLabel(b), bindingKey(b)).not.toBe('');
   });
 });

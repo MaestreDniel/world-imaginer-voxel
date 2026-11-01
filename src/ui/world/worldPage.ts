@@ -3797,6 +3797,11 @@ export function mountWorldPage(root: HTMLElement, q: WorldQuery, hash: string, o
         // F switches flight and walking and the near plane; a mode switch ends a held button's repeat (SP5a spec §3.1,
         // §4.1).
         case 'toggleWalk': switchMode({ fly, walk, world, repeat: holdRepeat }); break;
+        // The selection tool's keys (SP5c spec §1.1, D4) resolve from Task 14 on and act from Tasks 18-23: Q, Ctrl+C,
+        // Ctrl+X, Ctrl+V, N, and while placing the wheel, ↑ and ↓.
+        case 'selectTool': case 'copy': case 'cut': case 'paste': case 'move':
+        case 'turn': case 'turnBack': case 'raise': case 'lower':
+          break;
         default: break; // movement and sprint are held; Esc (releasePointer) is the browser's
       }
     };
@@ -3839,6 +3844,9 @@ export function mountWorldPage(root: HTMLElement, q: WorldQuery, hash: string, o
       // Walking, Ctrl+wheel steps the slot as the plain wheel does (SP5a spec §4.1, D9), so it never zooms the page and
       // never means two things while walking (kept when sprint left Ctrl for R and a double-tapped W, Task 45b).
       wheelCtrlAsSlot: () => fly.mode === 'walk',
+      // The placing context (SP5c spec §1.1): nothing is placed until the paste's ghost (Task 22), so the wheel steps the
+      // slot and ↑ and ↓ pass to the browser.
+      placing: () => false,
       // Text-entry controls (spec §7.1), and any focused control inside an open panel (SP5b spec §1.4): a slider or a
       // select left focused in a closed panel leaves H, G, M and F1 working (final review C-I2, Task 28 review I1).
       isTextFocus: () => worldIgnoresKeys(document.activeElement as HTMLElement | null, keyPanels),

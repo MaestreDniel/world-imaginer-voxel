@@ -1,4 +1,4 @@
-import { DEFAULT_KEYMAP, resolveKey, resolveWheel, type Action, type KeyEntry } from './keymap';
+import { DEFAULT_KEYMAP, placingContext, resolveKey, resolveWheel, type Action, type KeyEntry } from './keymap';
 import { createSprintTap } from './sprintTap';
 
 /**
@@ -12,6 +12,12 @@ import { createSprintTap } from './sprintTap';
  * edited world asks first through the page's beforeunload prompt). The wheel listener is not passive, so Ctrl+wheel
  * changes the speed instead of zooming the page; the plain wheel changes the hotbar slot (SP5a spec §4.1, D9), and
  * Ctrl+wheel does too while `wheelCtrlAsSlot()` (walking).
+ *
+ * The selection tool (SP5c spec §1.1, D4): Ctrl+C, Ctrl+X and Ctrl+V resolve only with Ctrl or Cmd and without Alt, so
+ * AltGr (Ctrl and Alt on the user's Spanish layout) never copies or pastes; Q and N only without Ctrl, so the browser's
+ * Ctrl+Q and Ctrl+N pass. Keys and the wheel resolve under the page's placing context (`placing()`, `placingContext`):
+ * while placing, the plain wheel (and Ctrl+wheel while walking) turns the paste and ↑ and ↓ raise and lower it;
+ * otherwise the wheel steps the slot and ↑ and ↓ resolve nothing, so they are not prevented.
  *
  * Mouse buttons (SP5a spec §4.1, D6): the first click on the canvas only takes the pointer lock; while the lock is held
  * and the world is active, `mousedown`/`mouseup` of LMB, MMB and RMB (0, 1, 2) reach `onButton` (MMB's down is
@@ -88,6 +94,8 @@ export function attachInput(
     onButton?(b: 0 | 1 | 2, down: boolean): void;
     /** While true the wheel resolves as if Ctrl were up, so Ctrl+wheel steps the slot (walking, SP5a spec D9). */
     wheelCtrlAsSlot?(): boolean;
+    /** Whether a paste or a move is being placed: the placing context of keys and the wheel (SP5c spec §1.1). */
+    placing?(): boolean;
     isTextFocus(): boolean;
     /** Whether the world owns the controls (SP4c spec §2.3); checked for every action but `map`. */
     active(): boolean;
@@ -118,7 +126,8 @@ export function attachInput(
   const onKeyDown = (e: KeyboardEvent): void => {
     // R already held as sprint: its auto-repeat under a later Ctrl stays the world's, so it never reloads.
     if (o.isTextFocus() || (isReload(e) && !down.has(e.code))) return;
-    const a = resolveKey(e, map);
+    const a = resolveKey(e, map, placingContext(o.placing?.() === true));
+    // An unresolved key is not prevented: ↑ and ↓ off placing, Ctrl+N, Ctrl+Q and AltGr+C reach the browser.
     if (a === null) return;
     if (a !== 'map' && !o.active()) return;
     e.preventDefault();
@@ -171,7 +180,7 @@ export function attachInput(
     e.preventDefault();
     if (o.isTextFocus() || !o.active()) return;
     const n = wheelSteps.push(e.deltaY, e.deltaMode);
-    const a = resolveWheel(n, e.ctrlKey && o.wheelCtrlAsSlot?.() !== true, map);
+    const a = resolveWheel(n, e.ctrlKey && o.wheelCtrlAsSlot?.() !== true, map, placingContext(o.placing?.() === true));
     if (a === null) return;
     for (let i = Math.abs(n); i > 0; i--) o.onAction(a);
   };

@@ -10,7 +10,8 @@ import { bindingLabel, type KeyEntry } from '../../player/keymap';
  * time speed, help and HUD, the world loading around you (SP4b spec §6.2, in place of SP4a's R at the edge), the map
  * over the world (SP4c spec §2.4: M, teleport and live editing), the standalone `?map` and its "Open in 3D", the presets
  * on the map, click to look and Esc to free the mouse; then SP5a's build keys (SP5a spec §4.1, §4.6): F, E, 1-9 and the
- * wheel, the flying speed having moved to Ctrl+wheel; then SP5b's B, which saves a place (SP5b spec §3.7). The render
+ * wheel, the flying speed having moved to Ctrl+wheel; then SP5b's B, which saves a place (SP5b spec §3.7); then SP5c's
+ * selection tool (SP5c spec §1.1, D4): Q, Ctrl+C, Ctrl+X and N, then Ctrl+V and the keys that place a paste. The render
  * distance's tip names G, the Settings screen, since SP5b, and the help's tip names only its keys (the settings left
  * the help for that screen, SP5b spec §1.4).
  */
@@ -28,6 +29,8 @@ export const TIP_TEMPLATES: readonly string[] = [
   '{toggleWalk} switches between flying and walking.',
   'Pick a hotbar slot with {slot1} {slot2} {slot3} {slot4} {slot5} {slot6} {slot7} {slot8} {slot9} or the wheel ({slotPrev}, {slotNext}); {palette} opens the block palette.',
   'In a saved world, {savePlace} saves this place with a name and a colour.',
+  'Press {selectTool} for the selection tool: LMB and RMB mark two corners, {copy} copies, {cut} cuts, {move} moves.',
+  '{paste} pastes: {turn} and {turnBack} turn the paste, {raise} and {lower} raise and lower it, RMB places it.',
 ];
 
 /** A binding list as the help shows it ("Ctrl+Wheel up / + / ="). */

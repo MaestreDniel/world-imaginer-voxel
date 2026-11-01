@@ -14,11 +14,13 @@ function setup(textFocus = false, activeAtStart = true) {
   let text = textFocus;
   let active = activeAtStart;
   let ctrlAsSlot = false;
+  let placing = false;
   const input = attachInput(target as unknown as HTMLElement, {
     onAction: (a) => actions.push(a),
     onLook: (dx, dy) => looks.push([dx, dy]),
     onButton: (b, down) => buttons.push([b, down]),
     wheelCtrlAsSlot: () => ctrlAsSlot,
+    placing: () => placing,
     isTextFocus: () => text,
     active: () => active,
     doc: doc as unknown as Pick<Document, 'addEventListener' | 'removeEventListener' | 'pointerLockElement'>,
@@ -29,11 +31,12 @@ function setup(textFocus = false, activeAtStart = true) {
     setText: (v: boolean) => { text = v; },
     setActive: (v: boolean) => { active = v; },
     setCtrlAsSlot: (v: boolean) => { ctrlAsSlot = v; },
+    setPlacing: (v: boolean) => { placing = v; },
     lock: () => { doc.pointerLockElement = target; },
   };
 }
 
-const key = (type: 'keydown' | 'keyup', code: string, k: string, mods: { ctrlKey?: boolean; metaKey?: boolean; shiftKey?: boolean; repeat?: boolean } = {}) =>
+const key = (type: 'keydown' | 'keyup', code: string, k: string, mods: { ctrlKey?: boolean; metaKey?: boolean; shiftKey?: boolean; altKey?: boolean; repeat?: boolean } = {}) =>
   Object.assign(new Event(type, { cancelable: true }), { code, key: k, ctrlKey: false, shiftKey: false, altKey: false, metaKey: false, repeat: false, ...mods });
 const wheel = (deltaY: number, ctrlKey = false, deltaMode = 0) => Object.assign(new Event('wheel', { cancelable: true }), { deltaY, deltaX: 0, deltaMode, ctrlKey });
 const mouse = (dx: number, dy: number) => Object.assign(new Event('mousemove'), { movementX: dx, movementY: dy });
@@ -102,6 +105,91 @@ describe('input (SP4a spec §7.1, master §4.17)', () => {
     target.dispatchEvent(wheel(-100, true));
     expect(actions.at(-1)).toBe('speedUp');
     input.dispose();
+  });
+
+  describe('the selection tool\'s keys and the placing context (SP5c spec §1.1, D4; Review Focus 3)', () => {
+    test('while placing and walking, Ctrl+wheel down resolves turn; while placing and flying it resolves speedDown, not turn', () => {
+      const { target, actions, input, setCtrlAsSlot, setPlacing } = setup();
+      setPlacing(true);
+      setCtrlAsSlot(true);
+      const walking = wheel(100, true);
+      target.dispatchEvent(walking);
+      expect(walking.defaultPrevented).toBe(true);
+      expect(actions).toEqual(['turn']);
+      setCtrlAsSlot(false);
+      target.dispatchEvent(wheel(100, true));
+      expect(actions).toEqual(['turn', 'speedDown']);
+      // The plain wheel turns either way while placing, and steps the slot once placing ends.
+      target.dispatchEvent(wheel(-100));
+      expect(actions.at(-1)).toBe('turnBack');
+      setPlacing(false);
+      target.dispatchEvent(wheel(100));
+      target.dispatchEvent(wheel(-100));
+      expect(actions.slice(-2)).toEqual(['slotNext', 'slotPrev']);
+      input.dispose();
+    });
+
+    test('AltGr+V and AltGr+C, Ctrl+N and Ctrl+Q resolve nothing and are not prevented; Ctrl+↑ while placing resolves nothing; Ctrl+C resolves copy and is prevented', () => {
+      const { doc, actions, input, setPlacing } = setup();
+      for (const placing of [false, true]) {
+        setPlacing(placing);
+        for (const e of [
+          key('keydown', 'KeyV', 'v', { ctrlKey: true, altKey: true }),
+          key('keydown', 'KeyC', 'c', { ctrlKey: true, altKey: true }),
+          key('keydown', 'KeyN', 'n', { ctrlKey: true }),
+          key('keydown', 'KeyQ', 'q', { ctrlKey: true }),
+          key('keydown', 'ArrowUp', 'ArrowUp', { ctrlKey: true }),
+        ]) {
+          doc.dispatchEvent(e);
+          expect(e.defaultPrevented, `${e.code} with placing ${placing}`).toBe(false);
+        }
+      }
+      expect(actions).toEqual([]);
+      setPlacing(false);
+      const copy = key('keydown', 'KeyC', 'c', { ctrlKey: true });
+      doc.dispatchEvent(copy);
+      expect(copy.defaultPrevented).toBe(true);
+      // Cmd too, and Ctrl+X, Ctrl+V; plain Q and N; a held Ctrl+V does not paste again.
+      doc.dispatchEvent(key('keydown', 'KeyC', 'c', { metaKey: true }));
+      doc.dispatchEvent(key('keydown', 'KeyX', 'x', { ctrlKey: true }));
+      doc.dispatchEvent(key('keydown', 'KeyV', 'v', { ctrlKey: true }));
+      doc.dispatchEvent(key('keydown', 'KeyV', 'v', { ctrlKey: true, repeat: true }));
+      doc.dispatchEvent(key('keydown', 'KeyQ', 'q'));
+      doc.dispatchEvent(key('keydown', 'KeyN', 'n'));
+      expect(actions).toEqual(['copy', 'copy', 'cut', 'paste', 'selectTool', 'move']);
+      // Plain C, X and V are nobody's: not prevented.
+      for (const [code, k] of [['KeyC', 'c'], ['KeyX', 'x'], ['KeyV', 'v']] as const) {
+        const e = key('keydown', code, k);
+        doc.dispatchEvent(e);
+        expect(e.defaultPrevented, code).toBe(false);
+      }
+      expect(input.held.size).toBe(0);
+      input.dispose();
+    });
+
+    test('↑ and ↓ off placing are not prevented; while placing they are, and a held ↑ (repeat true) acts once', () => {
+      const { doc, actions, input, setPlacing } = setup();
+      for (const [code, k] of [['ArrowUp', 'ArrowUp'], ['ArrowDown', 'ArrowDown']] as const) {
+        const e = key('keydown', code, k);
+        doc.dispatchEvent(e);
+        expect(e.defaultPrevented, code).toBe(false);
+      }
+      expect(actions).toEqual([]);
+      setPlacing(true);
+      const up = key('keydown', 'ArrowUp', 'ArrowUp');
+      doc.dispatchEvent(up);
+      expect(up.defaultPrevented).toBe(true);
+      const held = key('keydown', 'ArrowUp', 'ArrowUp', { repeat: true });
+      doc.dispatchEvent(held);
+      expect(held.defaultPrevented).toBe(true);
+      doc.dispatchEvent(key('keyup', 'ArrowUp', 'ArrowUp'));
+      const down = key('keydown', 'ArrowDown', 'ArrowDown');
+      doc.dispatchEvent(down);
+      expect(down.defaultPrevented).toBe(true);
+      expect(actions).toEqual(['raise', 'lower']);
+      expect(input.held.size).toBe(0);
+      input.dispose();
+    });
   });
 
   test('F, E and the digits fire their build actions once per press, prevented', () => {
@@ -246,7 +334,7 @@ describe('input (SP4a spec §7.1, master §4.17)', () => {
 
   test('an unbound key is not prevented', () => {
     const { doc, actions, input } = setup();
-    for (const [code, k, ctrl] of [['KeyJ', 'j', true], ['KeyJ', 'j', false], ['KeyQ', 'q', false], ['Tab', 'Tab', false]] as const) {
+    for (const [code, k, ctrl] of [['KeyJ', 'j', true], ['KeyJ', 'j', false], ['KeyQ', 'q', true], ['Tab', 'Tab', false]] as const) {
       const e = key('keydown', code, k, { ctrlKey: ctrl });
       doc.dispatchEvent(e);
       expect(e.defaultPrevented, `${ctrl ? 'Ctrl+' : ''}${k}`).toBe(false);

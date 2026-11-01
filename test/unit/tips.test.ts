@@ -10,19 +10,30 @@ describe('loading-screen tips (SP4a spec §8.3, §7.3; ruling P45)', () => {
     const named = new Set(TIP_TEMPLATES.flatMap(placeholders));
     const missing = DEFAULT_KEYMAP.map((e) => e.action).filter((a) => !named.has(a));
     expect(missing).toEqual([]);
-    expect(DEFAULT_KEYMAP.length).toBe(29);
+    expect(DEFAULT_KEYMAP.length).toBe(38);
     expect(named.has('map')).toBe(true);
     // SP5b's B and G (SP5b spec §3.7).
     expect(named.has('savePlace')).toBe(true);
     expect(named.has('settings')).toBe(true);
     // SP5a's build group (SP5a spec §4.1, §4.6): F, E, 1-9 and the wheel.
     for (const a of ['toggleWalk', 'palette', 'slot1', 'slot5', 'slot9', 'slotNext', 'slotPrev']) expect(named.has(a), a).toBe(true);
+    // SP5c's selection tool (SP5c spec §1.1, D4).
+    for (const a of ['selectTool', 'copy', 'cut', 'paste', 'move', 'turn', 'turnBack', 'raise', 'lower']) expect(named.has(a), a).toBe(true);
+  });
+
+  test('two tips name the selection tool\'s keys (SP5c spec §1.1, D4)', () => {
+    expect(TIP_TEMPLATES).toContain('Press {selectTool} for the selection tool: LMB and RMB mark two corners, {copy} copies, {cut} cuts, {move} moves.');
+    expect(TIP_TEMPLATES).toContain('{paste} pastes: {turn} and {turnBack} turn the paste, {raise} and {lower} raise and lower it, RMB places it.');
+    const text = tips(DEFAULT_KEYMAP);
+    expect(text).toContain('Press Q for the selection tool: LMB and RMB mark two corners, Ctrl+C copies, Ctrl+X cuts, N moves.');
+    expect(text).toContain('Ctrl+V pastes: Wheel down and Wheel up turn the paste, ↑ and ↓ raise and lower it, RMB places it.');
   });
 
   test('the sprint tip names R and the double-tapped W, not Ctrl (Task 45b: Ctrl+W closes the tab)', () => {
     const text = tips(DEFAULT_KEYMAP).join('\n');
     expect(text).toContain('Hold R, or double-tap W, to sprint: four times faster in flight.');
-    expect(text).not.toMatch(/\bCtrl\b(?!\+Wheel)/);
+    // The selection tips name Ctrl+C, Ctrl+X and Ctrl+V (SP5c spec §1.1); the sprint tip still names no Ctrl.
+    expect(text).not.toMatch(/\bCtrl\b(?!\+(Wheel|[CXV]\b))/);
   });
 
   test('the speed tip names Ctrl+wheel, and a build tip names F, E, 1-9 and the wheel (SP5a spec §4.1, §4.6)', () => {

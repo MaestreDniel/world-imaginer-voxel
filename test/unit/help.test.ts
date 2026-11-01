@@ -52,7 +52,7 @@ describe('mountHelp (SP4a spec §7.4, D31)', () => {
     expect(cells('settings')).toEqual(['Settings', 'G']);
     expect(cells('help')).toEqual(['Help', 'H / F1']);
     // Grouped: one heading per group, in the map's order.
-    expect(dom.el('help-keys').querySelectorAll('h4').map((h) => h.textContent)).toEqual(['Move', 'Speed', 'World', 'View', 'Build']);
+    expect(dom.el('help-keys').querySelectorAll('h4').map((h) => h.textContent)).toEqual(['Move', 'Speed', 'World', 'View', 'Build', 'Selection tool']);
   });
 
   test('a Build table lists F, E, 1-9 and the wheel; the Speed rows name Ctrl+wheel (SP5a spec §4.1, D9)', () => {
@@ -70,6 +70,26 @@ describe('mountHelp (SP4a spec §7.4, D31)', () => {
     const rows = section.querySelectorAll('tr');
     expect(rows.find((r) => r.dataset.action === 'speedUp')!.querySelectorAll('td')[1]!.textContent).toBe('Ctrl+Wheel up / + / =');
     expect(rows.find((r) => r.dataset.action === 'speedDown')!.querySelectorAll('td')[1]!.textContent).toBe('Ctrl+Wheel down / -');
+  });
+
+  test('a Selection tool table lists its nine keys: Q, Ctrl+C, Ctrl+X, Ctrl+V, N, the wheel, ↑ and ↓ (SP5c spec §1.1, D4)', () => {
+    mount();
+    const section = dom.el('help-keys');
+    const headings = section.querySelectorAll('h4');
+    const tables = section.querySelectorAll('table');
+    const select = tables[headings.findIndex((h) => h.textContent === 'Selection tool')]!;
+    const cells = select.querySelectorAll('tr').map((r) => [r.dataset.action, ...r.querySelectorAll('td').map((td) => td.textContent)]);
+    expect(cells).toEqual([
+      ['selectTool', 'Selection tool on or off', 'Q'],
+      ['copy', 'Copy the selection', 'Ctrl+C'],
+      ['cut', 'Cut the selection', 'Ctrl+X'],
+      ['paste', 'Paste', 'Ctrl+V'],
+      ['move', 'Move the selection', 'N'],
+      ['turn', 'Turn the paste 90° clockwise', 'Wheel down'],
+      ['turnBack', 'Turn the paste back 90°', 'Wheel up'],
+      ['raise', 'Raise the paste', '↑'],
+      ['lower', 'Lower the paste', '↓'],
+    ]);
   });
 
   test('the help names undo and redo by who has the controls, which no key-map entry carries (SP4c spec §2.4; SP5a spec §4.5)', () => {

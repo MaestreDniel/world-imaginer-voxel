@@ -14,11 +14,17 @@ export type Action =
   | 'timeSpeed' | 'help' | 'hud' | 'releasePointer' | 'map'
   | 'toggleWalk' | 'palette'
   | 'savePlace' | 'settings'
-  | 'slot1' | 'slot2' | 'slot3' | 'slot4' | 'slot5' | 'slot6' | 'slot7' | 'slot8' | 'slot9' | 'slotNext' | 'slotPrev';
+  | 'slot1' | 'slot2' | 'slot3' | 'slot4' | 'slot5' | 'slot6' | 'slot7' | 'slot8' | 'slot9' | 'slotNext' | 'slotPrev'
+  | 'selectTool' | 'copy' | 'cut' | 'paste' | 'move' | 'turn' | 'turnBack' | 'raise' | 'lower';
 
-/** A wheel binding names its Ctrl modifier: Ctrl+wheel and the plain wheel are two bindings (SP5a spec §4.1, D9). */
+/**
+ * A wheel binding names its Ctrl modifier: Ctrl+wheel and the plain wheel are two bindings (SP5a spec §4.1, D9). A code
+ * binding's `ctrl` (SP5c spec §1.1, D4): absent, it matches with or without Ctrl (moving with Ctrl held); `true`, only
+ * with Ctrl or Cmd held and Alt not held (AltGr sets both Ctrl and Alt, as `shortcutFor` refuses it,
+ * `ui/common/keys.ts`); `false`, only without Ctrl or Cmd.
+ */
 export type Binding =
-  | { kind: 'code'; code: string }
+  | { kind: 'code'; code: string; ctrl?: boolean }
   | { kind: 'key'; key: string }
   | { kind: 'wheel'; dir: 'up' | 'down'; ctrl: boolean };
 
@@ -26,11 +32,11 @@ export interface KeyEntry {
   readonly action: Action;
   readonly bindings: readonly Binding[];
   readonly label: string;
-  readonly group: 'move' | 'speed' | 'world' | 'view' | 'build';
+  readonly group: 'move' | 'speed' | 'world' | 'view' | 'build' | 'select';
   readonly since: SubProjectId;
 }
 
-const code = (c: string): Binding => ({ kind: 'code', code: c });
+const code = (c: string, ctrl?: boolean): Binding => (ctrl === undefined ? { kind: 'code', code: c } : { kind: 'code', code: c, ctrl });
 const key = (k: string): Binding => ({ kind: 'key', key: k });
 const wheel = (dir: 'up' | 'down', ctrl: boolean): Binding => ({ kind: 'wheel', dir, ctrl });
 
@@ -43,7 +49,10 @@ const wheel = (dir: 'up' | 'down', ctrl: boolean): Binding => ({ kind: 'wheel', 
  * resolves Ctrl+wheel as the plain wheel (input.ts `wheelCtrlAsSlot`). Sprint is R since Task 45b (Ctrl+W closes the
  * tab, the user's finding at SP5a's production check); its double-tapped W is the input's (input.ts, `sprintTap.ts`).
  * SP5b adds B, which saves a place in a saved world, and G, the Settings screen, which takes the settings out of the
- * help (SP5b spec §1.4, §3.7).
+ * help (SP5b spec §1.4, §3.7). SP5c adds the selection tool's group (SP5c spec §1.1, D4): Q and N without Ctrl, Ctrl+C,
+ * Ctrl+X and Ctrl+V (`ctrl: true`, matched first), and the four keys that act only while placing a paste or a move (the
+ * placing context, `placingContext`): there the plain wheel turns the paste instead of stepping the hotbar slot
+ * (`slotNext`, `slotPrev`), and ↑ and ↓ raise and lower it.
  */
 export const DEFAULT_KEYMAP: readonly KeyEntry[] = [
   { action: 'forward', bindings: [code('KeyW')], label: 'Forward (at your height)', group: 'move', since: 'SP4a' },
@@ -75,6 +84,15 @@ export const DEFAULT_KEYMAP: readonly KeyEntry[] = [
   { action: 'slot9', bindings: [code('Digit9')], label: 'Hotbar slot 9', group: 'build', since: 'SP5a' },
   { action: 'slotNext', bindings: [wheel('down', false)], label: 'Next hotbar slot', group: 'build', since: 'SP5a' },
   { action: 'slotPrev', bindings: [wheel('up', false)], label: 'Previous hotbar slot', group: 'build', since: 'SP5a' },
+  { action: 'selectTool', bindings: [code('KeyQ', false)], label: 'Selection tool on or off', group: 'select', since: 'SP5c' },
+  { action: 'copy', bindings: [code('KeyC', true)], label: 'Copy the selection', group: 'select', since: 'SP5c' },
+  { action: 'cut', bindings: [code('KeyX', true)], label: 'Cut the selection', group: 'select', since: 'SP5c' },
+  { action: 'paste', bindings: [code('KeyV', true)], label: 'Paste', group: 'select', since: 'SP5c' },
+  { action: 'move', bindings: [code('KeyN', false)], label: 'Move the selection', group: 'select', since: 'SP5c' },
+  { action: 'turn', bindings: [wheel('down', false)], label: 'Turn the paste 90° clockwise', group: 'select', since: 'SP5c' },
+  { action: 'turnBack', bindings: [wheel('up', false)], label: 'Turn the paste back 90°', group: 'select', since: 'SP5c' },
+  { action: 'raise', bindings: [code('ArrowUp', false)], label: 'Raise the paste', group: 'select', since: 'SP5c' },
+  { action: 'lower', bindings: [code('ArrowDown', false)], label: 'Lower the paste', group: 'select', since: 'SP5c' },
 ];
 
 /**
@@ -83,17 +101,53 @@ export const DEFAULT_KEYMAP: readonly KeyEntry[] = [
  */
 export const LISTED_ONLY: ReadonlySet<Action> = new Set<Action>(['releasePointer']);
 
+/** The actions that act only while a paste or a move is being placed (SP5c spec §1.1, the placing context). */
+export const PLACING_ACTIONS: ReadonlySet<Action> = new Set<Action>(['turn', 'turnBack', 'raise', 'lower']);
+
+/** While placing, the plain wheel turns the paste: the hotbar's wheel actions are the ones it replaces. */
+const SLOT_WHEEL: ReadonlySet<Action> = new Set<Action>(['slotNext', 'slotPrev']);
+
+const whilePlacing = (a: Action): boolean => !SLOT_WHEEL.has(a);
+const notPlacing = (a: Action): boolean => !PLACING_ACTIONS.has(a);
+
+/**
+ * The placing context (SP5c spec §1.1): while placing, `turn`, `turnBack`, `raise` and `lower` are active and `slotNext`
+ * and `slotPrev` are not; otherwise the reverse. Every other action is active in both. The two predicates are made once,
+ * so resolving a key or a wheel step allocates nothing.
+ */
+export function placingContext(placing: boolean): (a: Action) => boolean {
+  return placing ? whilePlacing : notPlacing;
+}
+
+/** Whether a code binding matches the event's code and modifiers (`Binding`'s `ctrl`; Cmd counts as Ctrl). */
+function codeMatches(b: { code: string; ctrl?: boolean }, e: { code: string; ctrlKey?: boolean; metaKey?: boolean; altKey?: boolean }): boolean {
+  if (b.code !== e.code) return false;
+  if (b.ctrl === undefined) return true;
+  const ctrl = e.ctrlKey === true || e.metaKey === true;
+  return b.ctrl ? ctrl && e.altKey !== true : !ctrl;
+}
+
 /**
  * The action a key event triggers, or null. Code bindings are matched first, over the whole map, so a physical
- * binding always wins over a `key:` binding of another action whatever the layout types there.
+ * binding always wins over a `key:` binding of another action whatever the layout types there; among them the
+ * `ctrl: true` ones come first (SP5c spec §1.1), so Ctrl+C is a copy even where another action held C without a
+ * modifier. An entry whose action `active` refuses is skipped (the placing context), and the search goes on.
  */
-export function resolveKey(e: { code: string; key: string }, map: readonly KeyEntry[] = DEFAULT_KEYMAP): Action | null {
+export function resolveKey(
+  e: { code: string; key: string; ctrlKey?: boolean; metaKey?: boolean; altKey?: boolean },
+  map: readonly KeyEntry[] = DEFAULT_KEYMAP,
+  active?: (a: Action) => boolean,
+): Action | null {
   for (const entry of map) {
-    if (LISTED_ONLY.has(entry.action)) continue;
-    for (const b of entry.bindings) if (b.kind === 'code' && b.code === e.code) return entry.action;
+    if (LISTED_ONLY.has(entry.action) || (active !== undefined && !active(entry.action))) continue;
+    for (const b of entry.bindings) if (b.kind === 'code' && b.ctrl === true && codeMatches(b, e)) return entry.action;
   }
   for (const entry of map) {
-    if (LISTED_ONLY.has(entry.action)) continue;
+    if (LISTED_ONLY.has(entry.action) || (active !== undefined && !active(entry.action))) continue;
+    for (const b of entry.bindings) if (b.kind === 'code' && b.ctrl !== true && codeMatches(b, e)) return entry.action;
+  }
+  for (const entry of map) {
+    if (LISTED_ONLY.has(entry.action) || (active !== undefined && !active(entry.action))) continue;
     for (const b of entry.bindings) if (b.kind === 'key' && b.key === e.key) return entry.action;
   }
   return null;
@@ -101,15 +155,20 @@ export function resolveKey(e: { code: string; key: string }, map: readonly KeyEn
 
 /**
  * The action of a wheel step by its sign (negative: up, away from the user) and its Ctrl modifier, or null for 0. The
- * modifier must match: Ctrl+wheel is `speedUp`/`speedDown`, the plain wheel `slotPrev`/`slotNext` (SP5a spec §4.1).
- * The input layer turns raw `deltaY`s into steps first (input.ts `createWheelSteps`: one step per notch or per 100 px
- * of a touchpad swipe).
+ * modifier must match: Ctrl+wheel is `speedUp`/`speedDown`, the plain wheel `slotPrev`/`slotNext` (SP5a spec §4.1), or
+ * `turnBack`/`turn` while placing (`active`, the placing context; SP5c spec §1.1). The input layer turns raw `deltaY`s
+ * into steps first (input.ts `createWheelSteps`: one step per notch or per 100 px of a touchpad swipe).
  */
-export function resolveWheel(deltaY: number, ctrl: boolean, map: readonly KeyEntry[] = DEFAULT_KEYMAP): Action | null {
+export function resolveWheel(
+  deltaY: number,
+  ctrl: boolean,
+  map: readonly KeyEntry[] = DEFAULT_KEYMAP,
+  active?: (a: Action) => boolean,
+): Action | null {
   if (!(deltaY < 0 || deltaY > 0)) return null; // 0, and NaN from a broken event
   const dir = deltaY < 0 ? 'up' : 'down';
   for (const entry of map) {
-    if (LISTED_ONLY.has(entry.action)) continue;
+    if (LISTED_ONLY.has(entry.action) || (active !== undefined && !active(entry.action))) continue;
     for (const b of entry.bindings) if (b.kind === 'wheel' && b.dir === dir && b.ctrl === ctrl) return entry.action;
   }
   return null;
@@ -136,13 +195,14 @@ const CODE_LABELS: Readonly<Record<string, string>> = {
 
 /**
  * A binding's label for the help, the tips and the HUD's hints (`KeyW` → "W", `ShiftLeft` → "Left Shift", Ctrl+wheel
- * up → "Ctrl+Wheel up").
+ * up → "Ctrl+Wheel up", a `ctrl: true` `KeyC` → "Ctrl+C").
  */
 export function bindingLabel(b: Binding): string {
   if (b.kind === 'wheel') return `${b.ctrl ? 'Ctrl+' : ''}${b.dir === 'up' ? 'Wheel up' : 'Wheel down'}`;
   if (b.kind === 'key') return b.key;
+  const prefix = b.ctrl === true ? 'Ctrl+' : '';
   const named = CODE_LABELS[b.code];
-  if (named !== undefined) return named;
+  if (named !== undefined) return prefix + named;
   const m = /^(?:Key|Digit)(.)$/.exec(b.code);
-  return m ? m[1]! : b.code;
+  return prefix + (m ? m[1]! : b.code);
 }

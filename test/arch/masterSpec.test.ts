@@ -1680,6 +1680,12 @@ describe('master spec amendments (SP5c §13)', () => {
     expect(text).toContain('`rotateState(state, quarterTurns)` and `mirrorState` serve structure pieces and placement and the selection tool\'s turns (SP5c).');
   });
 
+  test('§5.9 names Q, Ctrl+C / Ctrl+X / Ctrl+V, N and the placing keys (SP5c spec §1.1, §13, D4)', () => {
+    const at59 = text.indexOf('### 5.9 Controls');
+    const s59 = text.slice(at59, text.indexOf('## 6. ', at59));
+    expect(s59).toContain('E (creative palette); Q (selection tool; SP5c); Ctrl+C / Ctrl+X / Ctrl+V (copy, cut, paste; SP5c); N (move the selection; SP5c); while placing a paste, the wheel, ↑, ↓ (turn, raise, lower it; SP5c);');
+  });
+
   test('§6.3\'s Selection line: the codec, the turns, the paste batch and the history\'s caps (SP5c spec §13, D14)', () => {
     const at = text.indexOf('### 6.3 ');
     const lines = text.slice(at, text.indexOf('### 6.4 ', at)).split('\n');

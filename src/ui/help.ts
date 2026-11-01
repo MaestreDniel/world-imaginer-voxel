@@ -39,7 +39,7 @@ export interface Help {
 }
 
 const GROUP_TITLES: Readonly<Record<KeyEntry['group'], string>> = {
-  move: 'Move', speed: 'Speed', world: 'World', view: 'View', build: 'Build',
+  move: 'Move', speed: 'Speed', world: 'World', view: 'View', build: 'Build', select: 'Selection tool',
 };
 
 /**
