@@ -507,7 +507,7 @@ Sparse entries are sorted by idx, sections by sy, and trailer ticks by packedPos
 - header: UTF-8 canonical JSON `{format: 'wi10-world', world, state, history}`: the `worlds` record without `id` (its `stateTable` describes the records' ids), the `state` record without `worldId`, and the `history` record (SP5b);
 - records `i32 cx, i32 cz, u32 len, bytes`, one per edited column, sorted by colKey (the stored `ColumnDiffV1`, copied without decoding).
 
-Import validates the magic and version, runs `migrate`, recomputes genKey, and creates a new world id.
+Import validates the magic and version, runs `migrate`, keeps the stored genKey (a world whose stored genKey differs from today's opens as above, SP5b), and creates a new world id.
 
 **Presets.** Format `{format:'wi10-preset', schemaVersion, name, profile, params}`, where `params` is the minimal patch over `resolveProfile(profile)`. Import checks format → name (profile ids are reserved) → profile → schemaVersion (newer is rejected) → migrate → applyPatch over the profile, showing every error path inline; unknown keys are errors. Import *loads* the preset; export writes the *current draft*. Saves and `.wiworld` store full params and load as migrate → applyPatch over `resolveProfile(profile)` (SP5b). Presets carry `schemaVersion` 2 since SP3d: migration 1 → 2 is the identity, since a version-1 document lacks the `density.defs` and `surface.rules` leaves and a missing leaf takes the profile's value (amended by SP3d).
 
