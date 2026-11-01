@@ -579,6 +579,16 @@ describe('mountWorldsMenu: Load world (SP5b spec §1.1, §1.3, D3, D7, D14, D24)
     expect(shown(dom, 'load-list')).toBe(false);
   });
 
+  test('a world with 1 place says `· 1 place` (Task 33 M1)', async () => {
+    const kv = createMemoryKV();
+    const solo = await saved(kv, 'Solo', { updated: 1_700_000_000_000, places: 1 });
+    mount(kv);
+    await openLoad();
+    const t = row(solo).textContent;
+    expect(t).toContain(`${modified(1_700_000_000_000)} · 1 place`);
+    expect(t).not.toContain('1 places');
+  });
+
   test('a never-saved world\'s row shows its `created` time (P24)', async () => {
     const kv = createMemoryKV();
     const id = await saved(kv, 'Fresh', { updated: 0, created: 1_650_000_000_000 });

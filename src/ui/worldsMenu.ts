@@ -549,7 +549,7 @@ export function mountWorldsMenu(root: HTMLElement, o: WorldsMenuOptions): { disp
     const title = el('div', 'world-title');
     const nameEl = el('span', 'world-name', w.name);
     title.append(nameEl, ` · ${w.profile} · seed ${w.seedText}`);
-    const info = el('div', 'world-info', `${modifiedText(row.updated || w.created)}${row.places > 0 ? ` · ${row.places} places` : ''}`);
+    const info = el('div', 'world-info', `${modifiedText(row.updated || w.created)}${row.places > 0 ? ` · ${row.places} ${row.places === 1 ? 'place' : 'places'}` : ''}`);
     li.append(title, info);
     if (w.backupOf !== null) li.append(el('div', 'world-badge', 'automatic copy'));
     if (olderGenerator(w, params.value)) li.append(el('div', 'world-badge', 'older generator'), el('div', 'world-info', OLDER_GENERATOR_LINE));
