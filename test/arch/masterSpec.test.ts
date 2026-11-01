@@ -1503,7 +1503,7 @@ describe('master spec amendments (SP5b §9)', () => {
     expect(lines.some((l) => l.startsWith('- `state`: key `worldId`, `{worldId, flushSeq, updated, player: {x, y, z, yaw, pitch, mode, speed} | null, time: {t, speedIndex}, hotbar: {v: 1, active, slots}, places: Place[]}`')), 'no `state` record line in §2.7').toBe(true);
     expect(lines.some((l) => l.startsWith('- `history`: key `worldId`, `{worldId, done: Step[], undone: Step[]}`, each ≤ 100 steps')), 'no `history` record line in §2.7').toBe(true);
     expect(lines).toContain('- `diffs`: key `[worldId, colKey]`, `ColumnDiffV1` bytes;');
-    expect(lines).toContain('- `meta`: empty in SP5b.');
+    // The `meta` line moved to the SP5c describe (SP5c spec §13: the clipboard).
     expect(s27).toContain('`packs` (resource-pack and sound-pack blobs plus manifests, with `kind: \'textures\'|\'sounds\'`) and `presets` are added by a `wi10` version bump when SP8c\'s sound packs and SP10\'s preset library need them (SP5b).');
     expect(s27).not.toContain('player:{pos,yaw,pitch,mode}');
     expect(s27).toContain('Saves and `.wiworld` store full params and load as migrate → applyPatch over `resolveProfile(profile)` (SP5b).');
@@ -1511,11 +1511,6 @@ describe('master spec amendments (SP5b §9)', () => {
     const at22 = text.indexOf('### 2.2 ');
     const s22 = text.slice(at22, text.indexOf('### 2.3 ', at22));
     expect(s22).toContain('Each `worlds` record stores `stateTable` (the mapping at save time) (kept equal to the ids on disk: rewritten at an open whose table differs from today\'s, SP5b);');
-  });
-
-  test('§1\'s dependency rule: `persist/idb.ts` runs in the sim worker and, for the worlds menu, on the main thread (SP5b spec D17, §9)', () => {
-    const lines = text.split('\n');
-    expect(lines).toContain('- **Pure layers:** none of the layers above imports three, `document`, `window` or `indexedDB`. The exception is `persist/idb.ts`, which runs in the sim worker and, for the worlds menu, on the main thread (SP5b).');
   });
 
   test('§4.13\'s World open loads all of the world\'s diffs in one key-range read, and the Prefetch line is gone (SP5b spec D19, §9)', () => {
@@ -1655,6 +1650,7 @@ describe('master spec amendments (SP5c §13)', () => {
     [/^\s+ui\/world\/\* /, 'selectTool.ts clipboard.ts clipboardStore.ts pasteBatch.ts pasteBlocks.ts (SP5c)', 'src/ui/world/clipboard.ts'],
     [/^\s+ui\/world\/\* /, 'selectTool.ts clipboard.ts clipboardStore.ts pasteBatch.ts pasteBlocks.ts (SP5c)', 'src/ui/world/pasteBlocks.ts'],
     [/^\s+persist\/kv\.ts /, 'clipboard.ts (SP5c)', 'src/persist/clipboard.ts'],
+    [/^\s+ui\/world\/\* /, 'selectTool.ts clipboard.ts clipboardStore.ts pasteBatch.ts pasteBlocks.ts (SP5c)', 'src/ui/world/clipboardStore.ts'],
   ];
 
   test('§1 names each SP5c module in its entry, which exists', () => {
@@ -1665,6 +1661,18 @@ describe('master spec amendments (SP5c §13)', () => {
       expect(entry, `§1's ${head} entry does not name ${token}`).toContain(token);
       expect(existsSync(`${ROOT_DIR}${file}`), `${file} does not exist`).toBe(true);
     }
+  });
+
+  test('§2.7\'s `meta` line: the selection tool\'s clipboard, one per browser (SP5c spec §4.2, §13, D15; moved from the SP5b describe)', () => {
+    const at = text.indexOf('### 2.7 ');
+    const lines = text.slice(at, text.indexOf('## 3. Generation', at)).split('\n');
+    expect(lines).toContain('- `meta`: key `\'clipboard\'`, the selection tool\'s clipboard, one per browser: `{v: 1, w, h, d, keys, states, fluids}`, its states by state key (SP5c).');
+    expect(lines).not.toContain('- `meta`: empty in SP5b.');
+  });
+
+  test('§1\'s dependency rule: `persist/idb.ts` runs in the sim worker and, for the worlds menu and the selection tool\'s clipboard, on the main thread (SP5c spec D26, §13; moved from the SP5b describe, SP5b spec D17)', () => {
+    const lines = text.split('\n');
+    expect(lines).toContain('- **Pure layers:** none of the layers above imports three, `document`, `window` or `indexedDB`. The exception is `persist/idb.ts`, which runs in the sim worker and, for the worlds menu and the selection tool\'s clipboard, on the main thread (SP5b, SP5c).');
   });
 
   test('§2.2\'s `rotateState` line names the selection tool\'s turns (SP5c spec §13)', () => {

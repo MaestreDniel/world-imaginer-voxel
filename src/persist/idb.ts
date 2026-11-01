@@ -1,9 +1,10 @@
 /**
  * IdbKV: the KV over IndexedDB (SP5b spec §2.1, D16, D17; master §1's IStorage adapter), the only `indexedDB` user
- * (`test/arch/rules/banned.ts`). It runs in the sim worker and, for the worlds menu, on the main thread: one connection
- * per thread. Version 1's upgrade creates D16's five stores with out-of-line keys. `read` is one readonly transaction
- * (`get`, `getAll` + `getAllKeys` zipped, `count`); `write` is one readwrite transaction over the batch. Both span every
- * store, so transactions run in the order they were issued, as `MemoryKV`'s do. Durability is the browser's default.
+ * (`test/arch/rules/banned.ts`). It runs in the sim worker and, for the worlds menu and the selection tool's clipboard
+ * (`meta['clipboard']`, SP5c spec §4.2, D26), on the main thread: one connection per thread. Version 1's upgrade
+ * creates D16's five stores with out-of-line keys. `read` is one readonly transaction (`get`, `getAll` + `getAllKeys`
+ * zipped, `count`); `write` is one readwrite transaction over the batch. Both span every store, so transactions run in
+ * the order they were issued, as `MemoryKV`'s do. Durability is the browser's default.
  * - A synchronous throw while a batch is issued (`DataCloneError` from `put`'s clone, `DataError` from a bad key; neither
  *   aborts the transaction by itself) aborts it and settles `abort` with that exception's name; any other abort settles
  *   `abort` with the transaction's error's name (`QuotaExceededError`; `AbortError` when the browser closes the

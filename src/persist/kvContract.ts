@@ -1,5 +1,5 @@
 /**
- * The KV contract suite (SP5b spec §6.3, §6.4, D27): the cases every KV adapter passes, run on `MemoryKV` by vitest
+ * The KV contract suite (SP5b spec §6.3, §6.4, D27; the ninth case SP5c spec §10.7): the cases every KV adapter passes, run on `MemoryKV` by vitest
  * (`test/unit/kv.test.ts`) and on `IdbKV` in Chrome and Firefox by `?selftest=1`. Framework-free: a case throws an
  * `Error` naming its first mismatch. Each case uses its own world ids (prefixed `kvc-`; a name's 'a' and 'b' stand for
  * the case's two ids) and deletes what it wrote, so the cases share one database.
@@ -46,6 +46,16 @@ function same(a: unknown, b: unknown): boolean {
 
 function expectSame(what: string, actual: unknown, expected: unknown): void {
   if (!same(actual, expected)) throw new Error(`${what}: expected ${show(expected)}, got ${show(actual)}`);
+}
+
+/** `actual` is a `type` (not a subclass of another view) holding `expected`'s elements, so its bytes. */
+function expectTyped(what: string, actual: unknown, type: Uint16ArrayConstructor | Uint8ArrayConstructor, expected: Uint16Array | Uint8Array): void {
+  const name = actual === null || actual === undefined ? String(actual) : (actual as object).constructor?.name ?? typeof actual;
+  if (!(actual instanceof type) || name !== type.name) throw new Error(`${what}: expected a ${type.name}, got ${name}`);
+  const a = actual as Uint16Array | Uint8Array;
+  if (a.length !== expected.length || !a.every((x, i) => x === expected[i])) {
+    throw new Error(`${what}: expected the bytes ${type.name}[${expected.join(',')}], got ${type.name}[${a.join(',')}]`);
+  }
 }
 
 const COMPLETE: WriteResult = { status: 'complete', errorName: null };
@@ -258,6 +268,26 @@ export const KV_CONTRACT: readonly KvContractCase[] = [
         expectSame('getAll diffs worldRange(b) after deleteRange', allB, { keys: [diffKey(b, 0), diffKey(b, 9)], values: ['b0', 'b9'] });
       } finally {
         await cleanUp(kv, [{ op: 'deleteRange', store: 'diffs', range: worldRange(a) }, { op: 'deleteRange', store: 'diffs', range: worldRange(b) }]);
+      }
+    },
+  },
+  {
+    // SP5c spec §10.7: the selection tool's clipboard (`meta['clipboard']`, `persist/clipboard.ts`) holds its states as a
+    // `Uint16Array` and its fluids as a `Uint8Array`, which must come back through the adapter's clone as themselves.
+    name: 'a `Uint16Array` and a `Uint8Array` put in `meta` read back with their types and bytes',
+    async run(kv) {
+      const k = 'kvc-typed';
+      const states = new Uint16Array([0, 1, 65535, 256, 4095, 7]);
+      const fluids = new Uint8Array([0, 8, 127, 255, 1, 64]);
+      try {
+        await write(kv, 'put', [{ op: 'put', store: 'meta', key: k, value: { v: 1, keys: ['air', 'stone'], states, fluids } }]);
+        const [got] = await kv.read([{ op: 'get', store: 'meta', key: k }]);
+        const g = (got ?? {}) as { v?: unknown; keys?: unknown; states?: unknown; fluids?: unknown };
+        expectSame('get meta: v and keys', { v: g.v, keys: g.keys }, { v: 1, keys: ['air', 'stone'] });
+        expectTyped('get meta: states', g.states, Uint16Array, states);
+        expectTyped('get meta: fluids', g.fluids, Uint8Array, fluids);
+      } finally {
+        await cleanUp(kv, [{ op: 'delete', store: 'meta', key: k }]);
       }
     },
   },

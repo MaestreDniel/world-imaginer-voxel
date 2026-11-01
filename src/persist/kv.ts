@@ -11,7 +11,11 @@ export type StoreName = 'worlds' | 'state' | 'history' | 'diffs' | 'meta';
 /** D16's stores, in that order. */
 export const STORES: readonly StoreName[] = ['worlds', 'state', 'history', 'diffs', 'meta'];
 
-/** `worlds`, `state` and `history` by world id; `diffs` by `[worldId, colKey]`; `meta` by a string. */
+/**
+ * `worlds`, `state` and `history` by world id; `diffs` by `[worldId, colKey]`; `meta` by a string: `'clipboard'`, the
+ * selection tool's clipboard, one per browser (`persist/clipboard.ts`'s `ClipboardV1`, written by the main thread; SP5c
+ * spec §4.2, D15, D26). `meta` is in no world's Delete, Import, export or backup copy.
+ */
 export type Key = string | readonly [string, number];
 
 /** Lower inclusive, upper exclusive. */

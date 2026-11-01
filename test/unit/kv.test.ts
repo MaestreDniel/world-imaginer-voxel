@@ -17,6 +17,7 @@ describe('the KV contract on MemoryKV (SP5b spec §6.3)', () => {
       'structured-clone isolation: mutating the value after `put`, or a value `read` returned, changes nothing stored',
       '`count` by range',
       '`deleteRange(worldRange(\'a\'))` removes a\'s 3 keys and leaves b\'s 2',
+      'a `Uint16Array` and a `Uint8Array` put in `meta` read back with their types and bytes',
     ]);
   });
 
@@ -59,6 +60,24 @@ describe('the KV contract on MemoryKV (SP5b spec §6.3)', () => {
   test('`runKvContract` reports an opener that rejects as each case\'s error', async () => {
     const results = await runKvContract(() => Promise.reject(new Error('no storage')));
     expect(results).toEqual(KV_CONTRACT.map((c) => ({ name: c.name, ok: false, error: 'no storage' })));
+  });
+
+  test('the ninth case (SP5c spec §10.7) fails on an adapter that reads a `Uint16Array` back as a `Uint8Array`, as a plain array, or with other bytes', async () => {
+    const ninth = KV_CONTRACT[8]!;
+    const mangled = (f: (v: Uint16Array) => unknown): KV => {
+      const kv = createMemoryKV();
+      const fix = (v: unknown): unknown => {
+        if (v instanceof Uint16Array) return f(v);
+        if (v !== null && typeof v === 'object' && !ArrayBuffer.isView(v) && !Array.isArray(v)) {
+          return Object.fromEntries(Object.entries(v).map(([k, x]) => [k, fix(x)]));
+        }
+        return v;
+      };
+      return { ...kv, read: async (reqs) => (await kv.read(reqs)).map(fix) };
+    };
+    await expect(ninth.run(mangled((v) => new Uint8Array(v.buffer.slice(0))))).rejects.toThrow(/Uint16Array/);
+    await expect(ninth.run(mangled((v) => Array.from(v)))).rejects.toThrow(/Uint16Array/);
+    await expect(ninth.run(mangled((v) => new Uint16Array(v.length)))).rejects.toThrow(/bytes/);
   });
 });
 

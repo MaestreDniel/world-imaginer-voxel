@@ -18,9 +18,10 @@ import { genKey, stageHashes } from '../../src/core/stage/hash';
 import { TIME_SPEEDS } from '../../src/daynight/dayNight';
 import { WorldSession } from '../../src/engine/session';
 import { worldRange, type KV, type ReadRequest } from '../../src/persist/kv';
+import { CLIPBOARD_KEY, clipboardOps, encodeClipboard } from '../../src/persist/clipboard';
 import { createMemoryKV } from '../../src/persist/memory';
 import {
-  backupName, createSaves, DEFAULT_SPEED, DEFAULT_T, exportFileName, flushOps, HISTORY_STEPS, loadParams, MAX_NAME,
+  backupName, copyOps, createSaves, DEFAULT_SPEED, DEFAULT_T, exportFileName, flushOps, HISTORY_STEPS, loadParams, MAX_NAME,
   MAX_PLACES, newState, newWorldName, NO_VALUE, normalizeHistory, normalizeState, olderGenerator, openSaves, parseWorldRecord,
   remapDiff, remapOf, remapValue, tableRelation, todayStateTable, type HistoryEdit, type HistoryRecord,
   type StateBounds, type StateRecord, type WorldRecord,
@@ -533,6 +534,27 @@ describe('saves over the KV (§1.2, §1.3, §2.4, E7)', () => {
     kv.failAt(2);
     expect(await saves.remove('a')).toEqual({ status: 'abort', errorName: 'AbortError' });
     expect(allKeys(kv)).toEqual(before);
+  });
+
+  test('`Saves.remove` (Delete), an Import (`writeAll`) and a backup copy (`copyOps`) over a KV holding `meta[\'clipboard\']` leave it byte for byte (SP5c spec §4.2, §10.5)', async () => {
+    const { kv, saves } = await twoWorlds();
+    const values = new Uint32Array(4 * 3 * 2).map((_, i) => (i % 3 === 0 ? stone << 8 : i % 3 === 1 ? 0x0000_0008 : 0));
+    expect(await kv.write(clipboardOps(encodeClipboard(4, 3, 2, values)))).toEqual(COMPLETE);
+    const before = kv.dump('meta');
+    expect(before.map(([k]) => k)).toEqual([CLIPBOARD_KEY]);
+    const bytesOf = (dump: Array<[unknown, unknown]>) => dump.map(([k, v]) => {
+      const c = v as { keys: string[]; states: Uint16Array; fluids: Uint8Array } & Record<string, unknown>;
+      return [k, { ...c, states: [c.states.constructor.name, ...new Uint8Array(c.states.buffer, c.states.byteOffset, c.states.byteLength)], fluids: [c.fluids.constructor.name, ...c.fluids] }];
+    });
+    expect(await saves.remove('a')).toEqual(COMPLETE);
+    expect(bytesOf(kv.dump('meta')), 'after Delete').toEqual(bytesOf(before));
+    const imported = await saves.readAll('b');
+    expect(imported).not.toBeNull();
+    expect(await saves.writeAll({ ...imported!, world: world('imp') })).toEqual(COMPLETE);
+    expect(bytesOf(kv.dump('meta')), 'after an Import').toEqual(bytesOf(before));
+    expect(await kv.write(copyOps(world('copy', { backupOf: 'b' }), state('copy'), history('copy'), imported!.cols))).toEqual(COMPLETE);
+    expect(bytesOf(kv.dump('meta')), 'after a backup copy').toEqual(bytesOf(before));
+    expect(kv.dump('meta')).toEqual(before);
   });
 
   test('`readAll` returns the diffs in colKey order', async () => {

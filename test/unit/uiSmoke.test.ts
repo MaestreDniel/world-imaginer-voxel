@@ -142,14 +142,14 @@ describe('UI smoke test: pure parts (SP2b spec §8 Tools, §12)', () => {
     expect(selftestAllMatch('computing 54/54…', 54)).toBe(false);
   });
 
-  test('the `selftest` step waits for `#selftest-kv` and expects `IndexedDB contract: n/n passed` with n = `KV_CONTRACT.length` (SP5b spec §6.4)', () => {
+  test('the `selftest` step waits for `#selftest-kv` and expects `IndexedDB contract: n/n passed` with n = `KV_CONTRACT.length` (SP5b spec §6.4; SP5c spec §10.7: the ninth case)', () => {
     expect(KV_CONTRACT_CASES).toBe(KV_CONTRACT.length);
-    expect(KV_CONTRACT_CASES).toBe(8);
-    expect(kvSelftestPassed('IndexedDB contract: 8/8 passed', 8)).toBe(true);
-    expect(kvSelftestPassed('IndexedDB contract: 7/8 passed', 8)).toBe(false);
-    expect(kvSelftestPassed('IndexedDB contract: 7/7 passed', 8)).toBe(false);
-    expect(kvSelftestPassed('IndexedDB contract: running…', 8)).toBe(false);
-    expect(kvSelftestPassed('IndexedDB contract: could not run: UnknownError', 8)).toBe(false);
+    expect(KV_CONTRACT_CASES).toBe(9);
+    expect(kvSelftestPassed('IndexedDB contract: 9/9 passed', 9)).toBe(true);
+    expect(kvSelftestPassed('IndexedDB contract: 8/9 passed', 9)).toBe(false);
+    expect(kvSelftestPassed('IndexedDB contract: 8/8 passed', 9)).toBe(false);
+    expect(kvSelftestPassed('IndexedDB contract: running…', 9)).toBe(false);
+    expect(kvSelftestPassed('IndexedDB contract: could not run: UnknownError', 9)).toBe(false);
     expect(KV_SELFTEST_DONE).toContain(`document.querySelector('#selftest-kv')`);
     const src = readFileSync(new URL('../tools/uiSmoke.ts', import.meta.url), 'utf8');
     const step = src.slice(src.indexOf("t.step('selftest: ?selftest=1');"), src.indexOf("t.step('load: ?map"));

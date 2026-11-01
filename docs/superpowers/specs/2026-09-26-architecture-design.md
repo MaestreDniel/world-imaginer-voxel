@@ -228,7 +228,7 @@ The authoritative layer table (value and type-only edges, worker edges, `light`/
 `test/arch/imports.test.ts` enforces these by regex-scanning imports.
 
 - **Layer order:** `core` ← `world` ← `gen`, then `light`, `mesh`, `sim`, `persist` and `metrics` (L2). `textures` and `audio` depend on `core` only (`audio` may also import `world/blocks` for sound groups and `world/store/api.ts` types). `sound/` (WebAudio) is main-thread only and never imported by workers or pure layers.
-- **Pure layers:** none of the layers above imports three, `document`, `window` or `indexedDB`. The exception is `persist/idb.ts`, which runs in the sim worker and, for the worlds menu, on the main thread (SP5b).
+- **Pure layers:** none of the layers above imports three, `document`, `window` or `indexedDB`. The exception is `persist/idb.ts`, which runs in the sim worker and, for the worlds menu and the selection tool's clipboard, on the main thread (SP5b, SP5c).
 - **`gen/`** imports only `world/store/api.ts` types. It never imports the store implementation, so the harness runs it on plain ArrayBuffers.
 - **`workers/*`** import L0-L2.
 - **`engine/`** imports L0-L2 types and `workers/protocol`, and never imports three.
@@ -495,7 +495,7 @@ Sparse entries are sorted by idx, sections by sy, and trailer ticks by packedPos
 - `state`: key `worldId`, `{worldId, flushSeq, updated, player: {x, y, z, yaw, pitch, mode, speed} | null, time: {t, speedIndex}, hotbar: {v: 1, active, slots}, places: Place[]}` (written by every flush that has a change);
 - `history`: key `worldId`, `{worldId, done: Step[], undone: Step[]}`, each ≤ 100 steps (written only when it changed);
 - `diffs`: key `[worldId, colKey]`, `ColumnDiffV1` bytes;
-- `meta`: empty in SP5b.
+- `meta`: key `'clipboard'`, the selection tool's clipboard, one per browser: `{v: 1, w, h, d, keys, states, fluids}`, its states by state key (SP5c).
 
 `packs` (resource-pack and sound-pack blobs plus manifests, with `kind: 'textures'|'sounds'`) and `presets` are added by a `wi10` version bump when SP8c's sound packs and SP10's preset library need them (SP5b).
 
