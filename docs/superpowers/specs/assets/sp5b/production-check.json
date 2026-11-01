@@ -2736,7 +2736,7 @@
     "build": "main at 61c4a1f, the build the Chrome check above found served (index-B8UGVfIF.js); main was not pushed again before the user's check",
     "steps": "steps 1-8, as the Chrome check's (create, build, reload, two tabs, export and import, places, the mode and its backup, ?selftest=1): all good",
     "reopenOnF5": "F5 on a saved world reopened it (D24's lock wait, which only Firefox's run checks on production)",
-    "editThenReload": "an edit followed by a reload within about 300 ms survived (the pagehide commit, spec §3.2; recorded, not gated). The user forced the quick reload with a double F5, because the leave guard's confirmation appears on the first",
+    "editThenReload": "the edit survived a reload within half a second (the user: \"en menos de medio segundo\"); a reload within 300 ms was not shown (spec §3.2's pagehide outcome stays recorded, never gated). The user forced the quick reload with a double F5, because the leave guard's confirmation appears on the first",
     "selftest": "59/59, the same values as the earlier Firefox reading (assets/sp5b/selftest-firefox.json); \"IndexedDB contract: 8/8 passed\"",
     "stutter": "none noticed while building or breaking",
     "userWords": "\"Todo bien en Firefox del 1 al 8, el cambio sobrevive al F5 según he podido probar (con doble F5 en Firefox fuerzo el refresh en menos de medio segundo, ya que aparece un modal de confirmación y con el ratón no me da tiempo a seleccionar la casilla). Esta vez no he notado tirones al construir o romper.\""
