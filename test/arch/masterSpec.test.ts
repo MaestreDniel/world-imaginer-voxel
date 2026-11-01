@@ -87,6 +87,14 @@
  * line was not taken and the receivers say nothing moved; `flushMainP95Ms` max 0.3, held pending the user's check, is
  * recorded, not gated, as the user's check decided under D28; the user's UX notes are handed to SP5c (its "Received
  * from SP5b" line).
+ * SP5c (its spec §12, §13, §14, §15): the first commit lands §10's SP5c entry (its size L and spec, the line naming
+ * the keys, the ghost, the clipboard in `meta` and the caps, the exit and the cut line: the replaced-block overlay,
+ * → SP10), the default receivers' overlay, and the "Received from SP5c" lines of SP7, SP8a, SP8c, SP10 and SP11
+ * (§14's notes; SP10's carries the backlog's configurable undo keys), and moves the SP5a block's pin of the SP5c
+ * header into the new 'master spec amendments (SP5c §13)' describe; §13's other amendments land with what they
+ * describe, each pinned there and moving the earlier pin it rewords (§2.7's `meta` line and §1's `persist/idb.ts`
+ * exception; at the exit, SP5c's "Received from SP5b" worded as delivered). §1 names each SP5c module in its entry,
+ * which exists (`SP5C_MODULES`, its first row added with the first module).
  */
 import { existsSync, readdirSync, readFileSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
@@ -1166,7 +1174,6 @@ describe('master spec amendments (SP5a §9)', () => {
     expect(sp5a.split('\n').some((l) => l.startsWith('- **Cut line:** palette search (→ SP10)')), 'the SP5a entry has no `- **Cut line:** palette search (→ SP10)` line').toBe(true);
     // Moved from the SP4b block: SP5a does not carry the old SP5 entry's conditional either.
     expect(sp5a).not.toContain('If SP4b\'s cut line moved');
-    expect(spEntry('SP5c', 'SP6').startsWith('**SP5c — The selection tool** (M; SP5b)'), 'the SP5c header').toBe(true);
     expect(text).toContain('SP4b deferred-reclamation primitive → SP5 (delivered in SP4b, so nothing moved);');
     const critical = text.split('\n').find((l) => l.startsWith('Critical path: '));
     expect(critical).toContain('SP4c → SP5a → SP5b → SP5c → SP6');
@@ -1639,5 +1646,35 @@ describe('master spec amendments (SP5b §9)', () => {
       expect(entry, `§1's ${head} entry does not name ${token}`).toContain(token);
       expect(existsSync(`${ROOT_DIR}${file}`), `${file} does not exist`).toBe(true);
     }
+  });
+});
+
+describe('master spec amendments (SP5c §13)', () => {
+  test('§10\'s SP5c entry, its receivers and the hand-overs (SP5c spec §13, §14, §15)', () => {
+    // Moved from the SP5a describe (SP5c spec §12): the header gains its size L and its spec.
+    const sp5c = spEntry('SP5c', 'SP6');
+    expect(sp5c.startsWith('**SP5c — The selection tool** (L; SP5b). Spec: `2026-11-01-sp5c-selection-tool-design.md`.'), 'the SP5c header').toBe(true);
+    expect(sp5c).toContain('Q (the tool), Ctrl+C / Ctrl+X / Ctrl+V, N (move, the source back to the terrain); a ghost that rests on the aimed surface, turned with the wheel; one clipboard per browser in `meta`; at most 64 blocks a side and 32,768 changed blocks per operation (SP5c).');
+    expect(sp5c).toContain('**Exit:** as the SP5c spec §16 (`L3.paste`, `E3.paste`, `E5.paste`; `paste.max`, `paste.maxLit`; `G2.paste` with the SP5c spec\'s thresholds; the three notes received from SP5b; the user\'s check)');
+    expect(sp5c.split('\n').some((l) => l.startsWith('- **Cut line:** the replaced-block overlay (the red cubes; the label\'s counts "n blocks change, m replaced" stay) (→ SP10)')), 'the SP5c entry has no `- **Cut line:** the replaced-block overlay` line').toBe(true);
+    expect(sp5c).not.toContain('**Exit** and **Cut line:** set by the SP5c spec');
+    const receivers = text.split('\n').find((l) => l.startsWith('**Cut lines.**'));
+    expect(receivers, 'no `**Cut lines.**` paragraph in §10').toBeDefined();
+    expect(receivers).toContain('SP5c replaced-block overlay → SP10 (worded by the SP5c spec)');
+    const received = (id: SubProjectId, next: SubProjectId): string | undefined =>
+      spEntry(id, next).split('\n').find((l) => l.startsWith('- Received from SP5c (its spec §14; amended by SP5c):'));
+    const handed: Array<[id: SubProjectId, next: SubProjectId, phrases: string[]]> = [
+      ['SP7', 'SP8a', ['8k-updates-per-tick']],
+      ['SP8a', 'SP8b', ['rotateState']],
+      ['SP8c', 'SP9', ['one break-or-place event']],
+      ['SP10', 'SP11', ['SP5c\'s nine actions', 'Configurable Ctrl+Z / Ctrl+Y for blocks']],
+      ['SP11', 'SP12', ['the ghost material']],
+    ];
+    for (const [id, next, phrases] of handed) {
+      const line = received(id, next);
+      expect(line, `${id} has no "Received from SP5c" line`).toBeDefined();
+      for (const phrase of phrases) expect(line, `${id}'s "Received from SP5c" line`).toContain(phrase);
+    }
+    expect(spEntry('SP6', 'SP7')).not.toContain('Received from SP5c');
   });
 });

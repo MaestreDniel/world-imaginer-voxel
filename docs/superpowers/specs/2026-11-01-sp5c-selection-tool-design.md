@@ -543,3 +543,5 @@ The exit commit says in `CLAUDE.md` and `README.md` that SP5c is implemented and
 ## Threshold log
 
 (One line per commit that changes `test/thresholds.lock.json`, and per gate decision that changes no lock.)
+
+- 2026-11-01 — SP5c Task 1: startedSps gains 'SP5c' (spec §12).

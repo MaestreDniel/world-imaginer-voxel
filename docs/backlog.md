@@ -13,7 +13,7 @@ Improvements noted for later. They belong to no SP spec; pick them up when conve
 
 ## Controls
 
-- **Configurable Ctrl+Z / Ctrl+Y for blocks (SP5b).** The user (2026-11-01) asked that the keys undoing and redoing blocks be configurable. Today Ctrl+Z and Ctrl+Y (or Ctrl+Shift+Z) are fixed: they undo and redo blocks while the world owns the controls and the map's settings while the map owns them (SP5a, SP5b keeps the history per world). Today the shortcut is read by `src/ui/common/keys.ts` (shared with `?map`), outside the key map (`src/player/keymap.ts`), whose remapping panel is SP10's (master §10); configurable undo keys would join that map, SP10's panel or Settings' Controls tab.
+- **Configurable Ctrl+Z / Ctrl+Y for blocks** → master §10's SP10 entry ("Received from SP5c"), with SP5c's key map.
 
 ## Saved worlds
 
