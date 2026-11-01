@@ -135,8 +135,10 @@
  * sliced mesh, its cyan box) on the aimed face; at each change of the hit voxel, its face, the turns (the wheel) or the
  * offset (↑ ↓) the frame step anchors it again and checks its box with no read (red with the reason), and the target is
  * read once the ghost has stood still 100 ms; RMB checks the box and the body, reads the target and posts the paste as
- * one step from the clipboard read at Ctrl+V; LMB or Q cancels. One operation runs at a time (`busy()`); the move
- * follows in SP5c's Task 23.
+ * one step from the clipboard read at Ctrl+V; LMB or Q cancels. N reads the selection the same way and places it as the
+ * same ghost (the clipboard untouched); its RMB reads the source with its generated values and the target, then posts
+ * one step that fills the target with the source as read at RMB and returns the part of the source the target does
+ * not cover to the generated terrain (D8). One operation runs at a time (`busy()`).
  *
  * Keys with a panel open (SP5b spec §1.4; SP4a spec :731's hand-over): while the Settings screen, the help, the palette
  * or B's dialog is open, a focused control in it (a select, a slider, a checkbox, a button) keeps its own keys and the
@@ -222,7 +224,7 @@ import { createFrameStep, eyeSkyLight } from './frameStep';
 import { createHoldRepeat, type HoldRepeat } from './holdRepeat';
 import { createMapOverlay, followSession, frameCapFor, worldMapView, type ControlsOwner, type MapOverlay } from './mapOverlay';
 import { createModifyMode, createModifySwitch, type ModifyMode } from './modifyMode';
-import { bodyHits, boxChecks, cutBatch, pasteBatch, refusalText as batchRefusalText, type Box, type Refusal } from './pasteBatch';
+import { bodyHits, boxChecks, cutBatch, moveBatch, pasteBatch, refusalText as batchRefusalText, type Box, type Refusal } from './pasteBatch';
 import { mountPlaceDialog, type PlaceDialog } from './placeDialog';
 import {
   PLACE_COLOURS, PLACE_SAVED_MS, PLACE_SAVED_NOTICE, PLACES_FULL_MS, PLACES_FULL_NOTICE, createPlaces, proposedPlaceName, type Places,
@@ -1888,7 +1890,11 @@ export interface SelectActions {
    * ghost built from that clipboard and hidden until the first aim. Nothing while placing or busy.
    */
   paste(): Promise<void>;
-  /** N (§2.4, D8; Task 23). */
+  /**
+   * N (§2.4, D8): only with the tool on and not placing; fewer than two corners or a side over 64 → their notices (§1.4);
+   * else the selection read (`copy(selection, false)`; a column not loaded → its notice) and placed as a ghost of
+   * those values, the clipboard untouched (`tool.place('move')`, hidden until the first aim). Nothing while busy.
+   */
   move(): Promise<void>;
   /**
    * The wheel while placing (§1.1, D7, D10): `turn` 1, `turnBack` −1, through the tool; the ghost re-anchored at once
@@ -1899,10 +1905,10 @@ export interface SelectActions {
   raise(dir: 1 | -1): void;
   /**
    * The per-frame step, run by the aim on every call (a miss and a paused frame included): the selection's box and the
-   * label, and while a paste is placed the ghost's steps (§2.5): 1. the aim's hit (a miss leaves the ghost where it
-   * was); 2. unless pinned, when the hit voxel, its face, the turns or the offset changed, the ghost anchored again
-   * (its checks, colour, placement, target read and label); 3. one slice of its build; 4. on a paused frame the ghost,
-   * its box and the overlay hidden, the target read dropped and the anchor's key cleared. The label is written only
+   * label, and while a paste or a move is placed the ghost's steps (§2.5): 1. the aim's hit (a miss leaves the ghost
+   * where it was); 2. unless pinned, when the hit voxel, its face, the turns or the offset changed, the ghost anchored
+   * again (its checks, colour, placement, target read and label); 3. one slice of its build; 4. on a paused frame the
+   * ghost, its box and the overlay hidden, the target read dropped and the anchor's key cleared. The label is written only
    * when the tool's state, the ghost's refusal or counts or its "too many faces" change; the box when the state or the
    * floating origin changes, or on the first frame after a paused one, and hidden on a paused frame only (rulings
    * P25). Allocates nothing at rest.
@@ -1910,15 +1916,15 @@ export interface SelectActions {
   frame(hit: RayHit, paused: boolean): void;
   /**
    * The ghost's min corner set as an aim would set it (§2.5: the box's checks, its colour, `placeGhost`, the target
-   * reader's `moved`, the label), counted as an aim since Ctrl+V; with `pin`, the frame's anchor step leaves the corner
-   * alone until the paste or move ends (a turn or a raise keeps it: the sizes turn about it and the offset is not
-   * applied), so the harnesses place a paste at a chosen box. Ignored while busy or not placing.
+   * reader's `moved`, the label), counted as an aim since Ctrl+V or N; with `pin`, the frame's anchor step leaves the
+   * corner alone until the paste or move ends (a turn or a raise keeps it: the sizes turn about it and the offset is
+   * not applied), so the harnesses place a paste or a move at a chosen box. Ignored while busy or not placing.
    */
   placeAt(x0: number, y0: number, z0: number, pin?: boolean): void;
   /**
-   * RMB while placing (§2.3, D13; the move's from Task 23), on the box the frame step last anchored: `'ok'` on an accepted
-   * paste, a refusal's notice text (the ghost kept), or `''` when it did nothing (not placing, no aim since Ctrl+V, or
-   * the sim's failure).
+   * RMB while placing (§2.3, §2.4, D13), on the box the frame step last anchored: `'ok'` on an accepted paste or move, a
+   * refusal's notice text (the ghost kept), or `''` when it did nothing (not placing, no aim since Ctrl+V or N, or the
+   * sim's failure).
    */
   confirm(): Promise<string>;
   busy(): boolean;
@@ -1961,6 +1967,8 @@ export const unknownBecameAir = (n: number): string => `${formatCount(n)} blocks
 export const UNKNOWN_TYPES_MS = 6_000;
 /** A refused paste (§1.4, D13), its reason `refusalText`'s. */
 export const cantPaste = (reason: string): string => `Can't paste here: ${reason}`;
+/** A refused move (§1.4, D8, D13), its reason `refusalText`'s. */
+export const cantMove = (reason: string): string => `Can't move here: ${reason}`;
 
 /** An action's first binding as the help writes it (`bindingLabel`): the key names of the tool's label and notices. */
 export function pageKeyName(a: Action): string {
@@ -2016,15 +2024,16 @@ function cutRefusedText(why: Exclude<EditOutcome, { ok: true }>['why']): string 
 }
 
 /**
- * A paste's refused post (§2.3, D13; Spec correction 7): the gate's `unloaded` (or the sim's, or `noProto`) and
- * `regenerating`, the sim's `changed`, each "Can't paste here: …" and shown; `full` is the edit path's own notice
- * (shown by it) and `failed` the sim's failure notice, so null.
+ * A paste's or a move's refused post (§2.3, §2.4, D13; Spec correction 7), `cant` its "Can't paste here: …" or "Can't
+ * move here: …": the gate's `unloaded` (or the sim's, or `noProto`: a move's source column whose generated values are
+ * gone for a `revert`) and `regenerating`, the sim's `changed`, each shown; `full` is the edit path's own notice (shown
+ * by it) and `failed` the sim's failure notice, so null.
  */
-function pasteRefusedText(why: Exclude<EditOutcome, { ok: true }>['why']): string | null {
+function placeRefusedText(why: Exclude<EditOutcome, { ok: true }>['why'], cant: (reason: string) => string): string | null {
   switch (why) {
-    case 'unloaded': case 'noProto': return cantPaste(batchRefusalText(GATE_UNLOADED));
-    case 'regenerating': return cantPaste(batchRefusalText(GATE_REGENERATING));
-    case 'changed': return cantPaste(batchRefusalText({ why: 'changed' }));
+    case 'unloaded': case 'noProto': return cant(batchRefusalText(GATE_UNLOADED));
+    case 'regenerating': return cant(batchRefusalText(GATE_REGENERATING));
+    case 'changed': return cant(batchRefusalText({ why: 'changed' }));
     case 'full': case 'failed': return null;
   }
 }
@@ -2072,9 +2081,11 @@ export function createSelectActions(o: {
   // The label is written when the tool's state, the ghost's refusal or counts, or its "too many faces" change (§1.3).
   let labelDirty = true;
 
-  // The ghost (§2.3, §2.5): the clipboard read at Ctrl+V (null when not placing a paste), the box the frame step last
-  // anchored with the turns and offset it was anchored at, its refusal and counts, and whether it is shown.
+  // The ghost (§2.3, §2.4, §2.5): the clipboard read at Ctrl+V or the selection read at N (null when not placing), a
+  // move's source box, the box the frame step last anchored with the turns and offset it was anchored at, its refusal
+  // and counts, and whether it is shown.
   let ghostClip: Clipboard | null = null;
+  let moveSrc: Box | null = null;
   let ghostBox: Box | null = null;
   let boxTurns = 0;
   let boxOffset = 0;
@@ -2082,7 +2093,7 @@ export function createSelectActions(o: {
   let ghostCounts: GhostState['counts'] = null;
   let ghostShown = false;
   let tooMany = false;
-  // An aim since Ctrl+V (a hit, or `placeAt`); a hit among them (`lastHit` holds the last one); the pinned corner.
+  // An aim since Ctrl+V or N (a hit, or `placeAt`); a hit among them (`lastHit` holds the last one); the pinned corner.
   let aimed = false;
   let hitAimed = false;
   let pinned = false;
@@ -2141,7 +2152,7 @@ export function createSelectActions(o: {
 
   const ghostStateNow = (): GhostState => ({ box: ghostBox, refusal: ghostRefusal, counts: ghostCounts });
 
-  /** The label, when it changed: the placing label while a paste is placed (§2.5, D11), else the selection's (D3). */
+  /** The label, when it changed: the placing label while a paste or a move is placed (§2.5, D11), else the selection's (D3). */
   const syncLabel = (): void => {
     if (!labelDirty) return;
     labelDirty = false;
@@ -2179,6 +2190,7 @@ export function createSelectActions(o: {
     hideGhost();
     reader.moved(null);
     ghostClip = null;
+    moveSrc = null;
     ghostBox = null;
     ghostRefusal = null;
     ghostCounts = null;
@@ -2288,7 +2300,38 @@ export function createSelectActions(o: {
       return 'ok';
     }
     if (out.why === 'full') return EDIT_FULL_NOTICE;
-    const text = pasteRefusedText(out.why);
+    const text = placeRefusedText(out.why, cantPaste);
+    return text === null ? '' : refuse(text);
+  };
+
+  /**
+   * The move's confirm (§2.4, D8, D13) of source `src` (its values at N in `shown`) onto box `at` turned q: the checks
+   * with no read and the body; the source read with its generated values and the target read (two `copy`s posted
+   * together, answered in order); the batch from the source as read now, never the values the ghost shows; one step.
+   */
+  const confirmMove = async (shown: Clipboard, src: Box, q: number, at: Box): Promise<string> => {
+    const refuse = (text: string): string => {
+      o.notices.show(text, TOOL_NOTICE_MS);
+      return text;
+    };
+    const pre = boxChecks(at, o.editState) ?? (bodyHits(shown, q, at, o.body()) ? BODY : null);
+    if (pre !== null) return refuse(cantMove(batchRefusalText(pre)));
+    const [s, t]: [CopiedMsg, CopiedMsg] = await Promise.all([o.sim.copy(src, true), o.sim.copy(at, false)]);
+    if (s.values === null || s.generated === null || t.values === null) return refuse(cantMove(batchRefusalText(GATE_UNLOADED)));
+    // The body against the source as it will land (a block undone or redone in it since N counts).
+    if (bodyHits({ w: src.w, h: src.h, d: src.d, values: s.values }, q, at, o.body())) return refuse(cantMove(batchRefusalText(BODY)));
+    const edits = moveBatch(q, src, s.values, s.generated, at, t.values);
+    if (!Array.isArray(edits)) return refuse(cantMove(batchRefusalText(edits)));
+    // One step. The gate runs again inside the post over every edited column, the source's included.
+    const out = await o.actionPost(edits);
+    if (out.ok) {
+      o.notices.show(`Moved ${at.w} × ${at.h} × ${at.d}`, TOOL_DONE_MS);
+      endGhost();
+      tool.placed(at);
+      return 'ok';
+    }
+    if (out.why === 'full') return EDIT_FULL_NOTICE;
+    const text = placeRefusedText(out.why, cantMove);
     return text === null ? '' : refuse(text);
   };
 
@@ -2406,7 +2449,28 @@ export function createSelectActions(o: {
         o.ghost.setGhost(r.clip.w, r.clip.h, r.clip.d, r.clip.values);
       });
     },
-    move: () => Promise.resolve(),
+    move() {
+      // Only with the tool on and not placing (§1.1); none while another operation runs.
+      if (running || disposed || tool.mode !== 'select') return Promise.resolve();
+      const s = checkedSelection();
+      if (s === null) return Promise.resolve();
+      return operation(async () => {
+        // The ghost shows the selection as read now; the clipboard is not touched (D8).
+        const r: CopiedMsg = await o.sim.copy(s, false);
+        if (disposed) return;
+        if (r.values === null) {
+          o.notices.show(SELECTION_UNLOADED, TOOL_NOTICE_MS);
+          return;
+        }
+        endGhost();
+        if (!tool.place('move')) return;
+        ghostClip = { w: s.w, h: s.h, d: s.d, values: r.values };
+        moveSrc = s;
+        labelDirty = true;
+        // Hidden until the first aim, as Ctrl+V's.
+        o.ghost.setGhost(s.w, s.h, s.d, r.values);
+      });
+    },
 
     turn(dir) {
       if (running || disposed || tool.mode !== 'place') return;
@@ -2453,7 +2517,7 @@ export function createSelectActions(o: {
       }
       if (ghostClip !== null) {
         // Steps 1-2 (not while a confirm is in flight: the ghost stays on the box being pasted). A miss leaves the
-        // ghost where it was; with no aim since Ctrl+V it stays hidden.
+        // ghost where it was; with no aim since Ctrl+V or N it stays hidden.
         if (!running) {
           if (hit.hit) {
             aimed = true;
@@ -2490,19 +2554,20 @@ export function createSelectActions(o: {
     },
 
     confirm() {
-      if (running || disposed || tool.mode !== 'place' || tool.kind !== 'paste' || ghostClip === null) return Promise.resolve('');
-      // No aim since Ctrl+V: nothing.
+      if (running || disposed || tool.mode !== 'place' || ghostClip === null) return Promise.resolve('');
+      // No aim since Ctrl+V or N: nothing.
       if (!aimed || ghostBox === null) return Promise.resolve('');
       // The box brought up to date with a turn or a raise made since it was anchored (a harness with no frame step).
       if (tool.turns !== boxTurns || (!pinned && tool.offset !== boxOffset)) reanchor();
       const clip = ghostClip;
+      const src = moveSrc;
       const q = boxTurns;
       const at = ghostBox!;
       // The confirm reads the target itself: the throttled read is dropped until the ghost is anchored again.
       reader.moved(null);
       let result = '';
       return operation(async () => {
-        result = await confirmPaste(clip, q, at);
+        result = tool.kind === 'move' && src !== null ? await confirmMove(clip, src, q, at) : await confirmPaste(clip, q, at);
       }).then(() => {
         // A refusal keeps the ghost: the next frame anchors it again and reads its target after the settle.
         if (result !== 'ok') keyed = false;
@@ -2568,15 +2633,16 @@ export function routeButton(o: {
 }
 
 /**
- * The tool's keys in the page's action switch (SP5c spec §1.1): Q, Ctrl+C, Ctrl+X, Ctrl+V, and while placing the wheel
- * (`turn` down, `turnBack` up), ↑ and ↓; N from Task 23. Each is ignored while an operation runs.
+ * The tool's keys in the page's action switch (SP5c spec §1.1): Q, Ctrl+C, Ctrl+X, Ctrl+V, N, and while placing the
+ * wheel (`turn` down, `turnBack` up), ↑ and ↓. Each is ignored while an operation runs.
  */
-export function selectToolAction(a: Action, s: Pick<SelectActions, 'toggle' | 'copy' | 'cut' | 'paste' | 'turn' | 'raise'>): void {
+export function selectToolAction(a: Action, s: Pick<SelectActions, 'toggle' | 'copy' | 'cut' | 'paste' | 'move' | 'turn' | 'raise'>): void {
   switch (a) {
     case 'selectTool': s.toggle(); break;
     case 'copy': void s.copy(); break;
     case 'cut': void s.cut(); break;
     case 'paste': void s.paste(); break;
+    case 'move': void s.move(); break;
     case 'turn': s.turn(1); break;
     case 'turnBack': s.turn(-1); break;
     case 'raise': s.raise(1); break;
@@ -4659,13 +4725,12 @@ export function mountWorldPage(root: HTMLElement, q: WorldQuery, hash: string, o
         // F switches flight and walking and the near plane; a mode switch ends a held button's repeat (SP5a spec §3.1,
         // §4.1).
         case 'toggleWalk': switchMode({ fly, walk, world, repeat: holdRepeat }); break;
-        // The selection tool's keys (SP5c spec §1.1, D4): Q, Ctrl+C, Ctrl+X, Ctrl+V, and while placing the wheel, ↑ and
-        // ↓ (each ignored while an operation runs); N from Task 23.
-        case 'selectTool': case 'copy': case 'cut': case 'paste':
+        // The selection tool's keys (SP5c spec §1.1, D4): Q, Ctrl+C, Ctrl+X, Ctrl+V, N, and while placing the wheel, ↑
+        // and ↓ (each ignored while an operation runs).
+        case 'selectTool': case 'copy': case 'cut': case 'paste': case 'move':
         case 'turn': case 'turnBack': case 'raise': case 'lower':
           selectToolAction(a, selectActions);
           break;
-        case 'move': break;
         default: break; // movement and sprint are held; Esc (releasePointer) is the browser's
       }
     };

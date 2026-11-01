@@ -4847,7 +4847,7 @@ describe('the selection tool in the page I: Q, the corners, the box and Ctrl+C (
     expect(s).toMatch(/stopRepeat: \(\) => holdRepeat\.stop\(\),/);
     expect(s).toMatch(/release: \(\) => clipboardKv\.close\(\),/);
     expect(s).toMatch(/teardown\.push\(\(\) => selectActions\.dispose\(\)\);/);
-    expect(s).toMatch(/case 'selectTool': case 'copy': case 'cut': case 'paste':\s+case 'turn': case 'turnBack': case 'raise': case 'lower':\s+selectToolAction\(a, selectActions\);/);
+    expect(s).toMatch(/case 'selectTool': case 'copy': case 'cut': case 'paste': case 'move':\s+case 'turn': case 'turnBack': case 'raise': case 'lower':\s+selectToolAction\(a, selectActions\);/);
     expect(s).toMatch(/tool: toolClicks\(tool, selectActions\),/);
     expect(s).toMatch(/onButton: routeButton\(\{ toolOn: \(\) => tool\.mode !== 'off', clicks, hold: holdRepeat, now: nowS, clickTime: \(\) => performance\.now\(\) \}\),/);
     expect(s).toMatch(/reach: \(\) => aimReach\(tool, fly\), selection: selectActions,/);
@@ -5206,7 +5206,15 @@ describe('the selection tool in the page III: Ctrl+V, the ghost, turn, raise and
       for (let y = 0; y < b.h; y++) for (let z = 0; z < b.d; z++) for (let x = 0; x < b.w; x++) v[i++] = valueAt(b.x0 + x, b.y0 + y, b.z0 + z);
       return v;
     };
+    const readGen = (b: PBox): Uint32Array => {
+      const v = new Uint32Array(b.w * b.h * b.d);
+      let i = 0;
+      for (let y = 0; y < b.h; y++) for (let z = 0; z < b.d; z++) for (let x = 0; x < b.w; x++) v[i++] = gen(b.x0 + x, b.y0 + y, b.z0 + z);
+      return v;
+    };
     const copies: PBox[] = [];
+    // Each `copy`'s `gen` flag, in order (a move's source is read with its generated values, §2.4).
+    const gens: boolean[] = [];
     const posted: Edit[][] = [];
     const reply = (refused: EditedMsg['refused'], prev: Uint32Array, next: Uint32Array): EditedMsg => ({
       type: 'edited', id: posted.length, prev, next, dirty: new Float64Array(0), entryAdded: new Float64Array(0), entryRemoved: new Float64Array(0),
@@ -5214,13 +5222,14 @@ describe('the selection tool in the page III: Ctrl+V, the ghost, turn, raise and
     });
     const sim = {
       failed: false,
-      copy: (b: PBox, _gen: boolean): Promise<CopiedMsg> => {
+      copy: (b: PBox, withGen: boolean): Promise<CopiedMsg> => {
         copies.push({ x0: b.x0, y0: b.y0, z0: b.z0, w: b.w, h: b.h, d: b.d });
+        gens.push(withGen);
         return new Promise<CopiedMsg>((resolve, reject) => {
           const go = (): void => {
             if (st.copyFail !== null) reject(st.copyFail);
             else if (st.unloadedCopy) resolve({ type: 'copied', id: copies.length, values: null, generated: null, why: 'unloaded' });
-            else resolve({ type: 'copied', id: copies.length, values: read(b), generated: null, why: null });
+            else resolve({ type: 'copied', id: copies.length, values: read(b), generated: withGen ? readGen(b) : null, why: null });
           };
           if (st.copyDelayMs > 0) setTimeout(go, st.copyDelayMs);
           else go();
@@ -5332,8 +5341,8 @@ describe('the selection tool in the page III: Ctrl+V, the ghost, turn, raise and
     const lookAt = (x: number, z: number): void => { fly.x = x + 0.5; fly.z = z + 0.5; fly.pitch = -90; };
     const sky = (): void => { fly.pitch = 90; };
     return {
-      tool, actions, shown, st, entries, valueAt, read, copies, posted, blockHistory, kv, clipboard, g, of, last, labels, origin, fly,
-      stopRepeat, hold, clicks, aim, onButton, frame, run, paste, confirm, lookAt, sky, hotbar,
+      tool, actions, shown, st, entries, valueAt, read, copies, gens, posted, blockHistory, actionPost, kv, clipboard, g, of, last, labels,
+      origin, fly, stopRepeat, hold, clicks, aim, onButton, frame, run, paste, confirm, lookAt, sky, hotbar,
     };
   }
   type Rig = ReturnType<typeof pasteRig>;
@@ -5867,9 +5876,308 @@ describe('the selection tool in the page III: Ctrl+V, the ghost, turn, raise and
     });
   });
 
+  describe('N, the move (the page IV; SP5c spec §1.4, §2.4, §2.7; D8, D13)', () => {
+    /** The house: 8 × 5 × 8, a dirt shell with two glass panes in its z0 wall, air inside. */
+    const HOUSE = { w: 8, h: 5, d: 8 };
+    const houseCell = (x: number, y: number, z: number): number => {
+      const shell = x === 0 || x === HOUSE.w - 1 || y === 0 || y === HOUSE.h - 1 || z === 0 || z === HOUSE.d - 1;
+      if (!shell) return 0;
+      return y === 2 && z === 0 && (x === 3 || x === 4) ? val(GLASS) : val(DIRT);
+    };
+    /** The house's values in a `copy` reply's order. */
+    const house = (): number[] => {
+      const v: number[] = [];
+      for (let y = 0; y < HOUSE.h; y++) for (let z = 0; z < HOUSE.d; z++) for (let x = 0; x < HOUSE.w; x++) v.push(houseCell(x, y, z));
+      return v;
+    };
+    /** The rig's generated terrain: stone at y ≤ 60, air above. */
+    const genAt = (y: number): number => (y <= 60 ? val(STONE) : 0);
+    const boxAt = (x0: number, y0: number, z0: number): PBox => ({ x0, y0, z0, ...HOUSE });
+    /** The house written into the rig's DiffStore at `b` (an entry where it differs from the generated terrain). */
+    function build(r: Rig, b: PBox): void {
+      for (let y = 0; y < b.h; y++) {
+        for (let z = 0; z < b.d; z++) {
+          for (let x = 0; x < b.w; x++) {
+            const k = `${b.x0 + x},${b.y0 + y},${b.z0 + z}`;
+            const v = houseCell(x, y, z);
+            if (v === genAt(b.y0 + y)) r.entries.delete(k);
+            else r.entries.set(k, v);
+          }
+        }
+      }
+    }
+    /** Every cell of `b` (with y in [ya, yb] when given) equals the generated terrain and holds no entry. */
+    function generated(r: Rig, b: PBox, ya = b.y0, yb = b.y0 + b.h - 1): boolean {
+      for (let y = ya; y <= yb; y++) {
+        for (let z = b.z0; z < b.z0 + b.d; z++) {
+          for (let x = b.x0; x < b.x0 + b.w; x++) {
+            if (r.valueAt(x, y, z) !== genAt(y) || r.entries.has(`${x},${y},${z}`)) return false;
+          }
+        }
+      }
+      return true;
+    }
+    /** Q on, the corners at b's min and max, then N (through the page's action switch), settled. */
+    async function nKey(r: Rig, b: PBox): Promise<void> {
+      if (r.tool.mode === 'off') r.actions.toggle();
+      r.tool.mark(0, { x: b.x0, y: b.y0, z: b.z0 });
+      r.tool.mark(2, { x: b.x0 + b.w - 1, y: b.y0 + b.h - 1, z: b.z0 + b.d - 1 });
+      selectToolAction('move', r.actions);
+      await vi.advanceTimersByTimeAsync(0);
+    }
+    const MOVE_TAIL = ' · RMB moves, LMB cancels · Wheel turns · ↑ ↓ raise or lower';
+
+    test('a floating house moved 6 blocks down onto the ground with N and RMB: the source air, the target the house, one step, `Moved 8 × 5 × 8`; one Ctrl+Z restores both boxes', async () => {
+      const r = pasteRig();
+      const src = boxAt(10, 67, 10);
+      const at = boxAt(10, 61, 10);
+      build(r, src);
+      await nKey(r, src);
+      // N reads the selection and shows it as the ghost, hidden until the first aim.
+      expect([r.tool.mode, r.tool.kind, r.copies, r.gens]).toEqual(['place', 'move', [src], [false]]);
+      expect(r.g.clip).toEqual({ ...HOUSE, values: house() });
+      expect([r.shown, r.actions.ghostState().shown]).toEqual([[], false]);
+      r.actions.placeAt(10, 61, 10, true);
+      r.frame();
+      expect(r.last('box')).toEqual([10, 61, 10, 18, 66, 18, GHOST_CYAN]);
+      expect(label(r)).toBe(`Move 8 × 5 × 8 · counting…${MOVE_TAIL}`);
+      expect(await r.confirm()).toBe('ok');
+      // RMB reads the source with its generated values and the target, then posts one batch.
+      expect([r.copies.slice(1), r.gens.slice(1)]).toEqual([[src, at], [true, false]]);
+      expect([r.posted.length, r.blockHistory.size]).toEqual([1, 1]);
+      expect(r.shown).toEqual([['Moved 8 × 5 × 8', 1_500]]);
+      expect(Array.from(r.read(at))).toEqual(house());
+      expect(generated(r, src)).toBe(true);
+      // The placing ends (rulings P24): the selection the target, the ghost hidden, no target `copy` afterwards.
+      expect([r.tool.mode, r.tool.selection(), r.actions.ghostState().shown]).toEqual(['select', at, false]);
+      await r.run(300);
+      expect(r.copies).toHaveLength(3);
+      // One Ctrl+Z puts the house back where it was.
+      r.blockHistory.undo();
+      await r.run(20);
+      expect(Array.from(r.read(src))).toEqual(house());
+      expect(generated(r, at)).toBe(true);
+    });
+
+    test('a house moved 3 blocks down (overlapping its source): every cell right, one step', async () => {
+      const r = pasteRig();
+      const src = boxAt(10, 67, 10);
+      const at = boxAt(10, 64, 10);
+      build(r, src);
+      await nKey(r, src);
+      r.actions.placeAt(10, 64, 10, true);
+      expect(await r.confirm()).toBe('ok');
+      expect([r.posted.length, r.blockHistory.size]).toEqual([1, 1]);
+      // One edit per voxel.
+      const voxels = new Set(r.posted[0]!.map((e) => `${e.x},${e.y},${e.z}`));
+      expect(voxels.size).toBe(r.posted[0]!.length);
+      expect(Array.from(r.read(at))).toEqual(house());
+      expect(generated(r, src, 69, 71)).toBe(true);
+      r.blockHistory.undo();
+      await r.run(20);
+      expect(Array.from(r.read(src))).toEqual(house());
+      expect(generated(r, at, 64, 66)).toBe(true);
+    });
+
+    test('a buried house moved up: the source cells outside the target equal the generated ground', async () => {
+      const r = pasteRig();
+      const src = boxAt(10, 52, 10);
+      const at = boxAt(10, 55, 10);
+      build(r, src);
+      await nKey(r, src);
+      r.actions.placeAt(10, 55, 10, true);
+      expect(await r.confirm()).toBe('ok');
+      expect(Array.from(r.read(at))).toEqual(house());
+      // y 52 … 54 back to stone, with no entry left: no house-sized hole.
+      expect(generated(r, src, 52, 54)).toBe(true);
+      expect(r.posted[0]!.filter((e) => e.op === 'revert').every((e) => e.y >= 52 && e.y <= 54)).toBe(true);
+      expect(r.posted[0]!.some((e) => e.op === 'revert')).toBe(true);
+    });
+
+    test('the clipboard is not changed by a move', async () => {
+      const r = pasteRig();
+      await r.clipboard.write(X);
+      const src = boxAt(10, 67, 10);
+      build(r, src);
+      await nKey(r, src);
+      r.actions.placeAt(10, 61, 10, true);
+      expect(await r.confirm()).toBe('ok');
+      const kept = await r.clipboard.read();
+      expect(kept.clip === null ? null : { w: kept.clip.w, h: kept.clip.h, d: kept.clip.d, values: Array.from(kept.clip.values) })
+        .toEqual({ w: 3, h: 2, d: 2, values: Array.from(X.values) });
+    });
+
+    test('LMB after N changes nothing; nor does Q', async () => {
+      for (const how of ['lmb', 'q'] as const) {
+        const r = pasteRig();
+        const src = boxAt(10, 67, 10);
+        build(r, src);
+        const before = new Map(r.entries);
+        await nKey(r, src);
+        await r.run(50);
+        expect(r.actions.ghostState().shown, how).toBe(true);
+        if (how === 'lmb') {
+          r.clicks.push(0);
+          r.frame();
+          expect(r.tool.mode).toBe('select');
+          expect(r.tool.selection()).toEqual(src);
+        } else {
+          selectToolAction('selectTool', r.actions);
+          expect(r.tool.mode).toBe('off');
+        }
+        expect(r.actions.ghostState().shown, how).toBe(false);
+        await r.run(300);
+        const copies = r.copies.length;
+        expect([r.posted, r.shown, r.entries, r.blockHistory.size], how).toEqual([[], [], before, 0]);
+        await r.run(300);
+        expect(r.copies.length, how).toBe(copies);
+      }
+    });
+
+    test('N with one corner: `Mark two corners first: Q, then LMB and RMB`; with the tool off or while placing a paste N does nothing', async () => {
+      const r = pasteRig();
+      await r.actions.move();
+      expect([r.tool.mode, r.shown, r.copies]).toEqual(['off', [], []]);
+      r.actions.toggle();
+      r.tool.mark(0, { x: 10, y: 67, z: 10 });
+      selectToolAction('move', r.actions);
+      await vi.advanceTimersByTimeAsync(0);
+      expect(r.shown).toEqual([['Mark two corners first: Q, then LMB and RMB', 4_000]]);
+      expect([r.tool.mode, r.copies]).toEqual(['select', []]);
+      r.shown.length = 0;
+      r.tool.mark(2, { x: 11, y: 67, z: 10 });
+      await pasted(r);
+      await r.actions.move();
+      expect([r.tool.kind, r.shown, r.copies]).toEqual(['paste', [], []]);
+    });
+
+    test('N with a 65-wide selection: `The selection is larger than 64 blocks on a side`; over a column not loaded: its notice', async () => {
+      const r = pasteRig();
+      await nKey(r, { x0: 0, y0: 61, z0: 0, w: 65, h: 1, d: 1 });
+      expect(r.shown).toEqual([[SELECTION_TOO_LARGE, 4_000]]);
+      expect(SELECTION_TOO_LARGE).toBe('The selection is larger than 64 blocks on a side');
+      expect([r.tool.mode, r.copies]).toEqual(['select', []]);
+      r.shown.length = 0;
+      r.st.unloadedCopy = true;
+      await nKey(r, boxAt(10, 67, 10));
+      expect(r.shown).toEqual([[SELECTION_UNLOADED, 4_000]]);
+      expect([r.tool.mode, r.copies.length, r.g.clip]).toEqual(['select', 1, null]);
+    });
+
+    test('a move whose target is refused: `Can\'t move here: <reason>`, nothing posted, the ghost kept', async () => {
+      const cases: Array<[string, PBox, [number, number, number], string, number]> = [
+        // Its top past y 319: refused before any read.
+        ['outsideY', boxAt(10, 67, 10), [10, 316, 10], 'Can\'t move here: it would leave the world (y −64 … 319)', 0],
+        // A wall through the player's body (the eye at (0.5, 65.5, 0.5)): refused before any read.
+        ['body', boxAt(10, 67, 10), [0, 63, 0], 'Can\'t move here: you are inside it', 0],
+        // 64 × 8 × 64 of dirt moved 64 blocks east: 32,768 sets and 32,768 reverts, counted over both boxes.
+        ['tooMany', { x0: 0, y0: 70, z0: 100, w: 64, h: 8, d: 64 }, [64, 70, 100], 'Can\'t move here: it would change 65,536 blocks; at most 32,768 at once', 2],
+      ];
+      for (const [name, src, [x, y, z], text, reads] of cases) {
+        const r = pasteRig();
+        if (name === 'tooMany') {
+          for (let yy = src.y0; yy < src.y0 + src.h; yy++) for (let zz = src.z0; zz < src.z0 + src.d; zz++) for (let xx = src.x0; xx < src.x0 + src.w; xx++) r.entries.set(`${xx},${yy},${zz}`, val(DIRT));
+        } else {
+          build(r, src);
+        }
+        const before = new Map(r.entries);
+        await nKey(r, src);
+        r.actions.placeAt(x, y, z, true);
+        expect(await r.confirm(), name).toBe(text);
+        expect(r.shown, name).toEqual([[text, 4_000]]);
+        expect([r.copies.length - 1, r.posted, r.blockHistory.size, r.tool.mode, r.actions.ghostState().shown, r.actions.busy()], name)
+          .toEqual([reads, [], 0, 'place', true, false]);
+        expect(r.entries, name).toEqual(before);
+      }
+    });
+
+    test('the sim\'s replies: `\'changed\'`, `\'unloaded\'` and `\'noProto\'` give their `Can\'t move here` text, `\'full\'` only the edit path\'s notice; a source read answered `unloaded` the same; a `copy` rejected with `SimFailed` nothing (rulings P2)', async () => {
+      const cases: Array<[string, (r: Rig) => void, string, Array<[string, number]>]> = [
+        ['changed', (r) => { r.st.refuse = 'changed'; }, 'Can\'t move here: the blocks changed; try again', [['Can\'t move here: the blocks changed; try again', 4_000]]],
+        ['unloaded', (r) => { r.st.refuse = 'unloaded'; }, 'Can\'t move here: part of it is not loaded', [['Can\'t move here: part of it is not loaded', 4_000]]],
+        // A source column whose generated values are gone for a `revert`.
+        ['noProto', (r) => { r.st.refuse = 'noProto'; }, 'Can\'t move here: part of it is not loaded', [['Can\'t move here: part of it is not loaded', 4_000]]],
+        ['full', (r) => { r.st.refuse = 'full'; }, EDIT_FULL_NOTICE, [[EDIT_FULL_NOTICE, 4_000]]],
+        ['copyUnloaded', (r) => { r.st.unloadedCopy = true; }, 'Can\'t move here: part of it is not loaded', [['Can\'t move here: part of it is not loaded', 4_000]]],
+        ['simFailed', (r) => { r.st.copyFail = new SimFailed('the sim stopped'); }, '', []],
+      ];
+      const unhandled: unknown[] = [];
+      const onUnhandled = (e: unknown): void => { unhandled.push(e); };
+      process.on('unhandledRejection', onUnhandled);
+      try {
+        for (const [name, arrange, text, notices] of cases) {
+          const r = pasteRig();
+          const src = boxAt(10, 67, 10);
+          build(r, src);
+          const before = new Map(r.entries);
+          await nKey(r, src);
+          r.actions.placeAt(10, 61, 10, true);
+          arrange(r);
+          expect(await r.confirm(), name).toBe(text);
+          expect(r.shown, name).toEqual(notices);
+          expect([r.tool.mode, r.actions.ghostState().shown, r.blockHistory.size, r.actions.busy()], name).toEqual(['place', true, 0, false]);
+          expect(r.entries, name).toEqual(before);
+          if (name === 'copyUnloaded' || name === 'simFailed') expect(r.posted, name).toEqual([]);
+        }
+        await vi.advanceTimersByTimeAsync(0);
+      } finally {
+        process.off('unhandledRejection', onUnhandled);
+      }
+      expect(unhandled).toEqual([]);
+    });
+
+    test('a Ctrl+Z of a block inside the source while placing, then RMB: the target holds the source as read at RMB, and the source cells outside the target are generated', async () => {
+      const r = pasteRig();
+      const src = boxAt(10, 67, 10);
+      const at = boxAt(10, 61, 10);
+      build(r, src);
+      // A glass block placed inside the house, one step.
+      expect((await r.actionPost([{ x: 13, y: 69, z: 13, op: 'set', value: val(GLASS), expect: 0 }])).ok).toBe(true);
+      await nKey(r, src);
+      // The ghost shows the glass (N's read).
+      const glassAt = ((69 - 67) * 8 + 3) * 8 + 3;
+      expect(r.g.clip!.values[glassAt]).toBe(val(GLASS));
+      r.actions.placeAt(10, 61, 10, true);
+      r.frame();
+      // Ctrl+Z while placing takes the glass away.
+      r.blockHistory.undo();
+      await r.run(20);
+      expect(r.valueAt(13, 69, 13)).toBe(0);
+      expect(await r.confirm()).toBe('ok');
+      expect(r.valueAt(13, 63, 13)).toBe(0);
+      expect(Array.from(r.read(at))).toEqual(house());
+      expect(generated(r, src)).toBe(true);
+    });
+
+    test('an Apply started after the two `copy`s were posted (`editState` 2 at their replies): `Can\'t move here: the world is regenerating`, nothing posted, both boxes unchanged', async () => {
+      const r = pasteRig();
+      const src = boxAt(10, 67, 10);
+      const at = boxAt(10, 61, 10);
+      build(r, src);
+      await nKey(r, src);
+      r.actions.placeAt(10, 61, 10, true);
+      r.frame();
+      r.st.copyDelayMs = 200;
+      setTimeout(() => { r.st.editState = 2; }, 100);
+      const p = r.actions.confirm();
+      await vi.advanceTimersByTimeAsync(0);
+      // Both reads posted at once, the source's with its generated values.
+      expect([r.copies.slice(1), r.gens.slice(1)]).toEqual([[src, at], [true, false]]);
+      await r.run(300);
+      expect(await p).toBe('Can\'t move here: the world is regenerating');
+      expect(r.shown).toEqual([['Can\'t move here: the world is regenerating', 4_000]]);
+      expect([r.posted, r.tool.mode, r.blockHistory.size]).toEqual([[], 'place', 0]);
+      expect(Array.from(r.read(src))).toEqual(house());
+      expect(generated(r, at)).toBe(true);
+      r.st.editState = 0;
+      r.frame();
+      expect(r.actions.ghostState().shown).toBe(true);
+    });
+  });
+
   test('the page wires it: the ghost\'s renderer methods, Ctrl+V and the placing keys, the placing context', () => {
     const s = readFileSync(new URL('../../src/ui/world/worldPage.ts', import.meta.url), 'utf8');
-    expect(s).toMatch(/case 'selectTool': case 'copy': case 'cut': case 'paste':\s+case 'turn': case 'turnBack': case 'raise': case 'lower':\s+selectToolAction\(a, selectActions\);\s+break;/);
+    expect(s).toMatch(/case 'selectTool': case 'copy': case 'cut': case 'paste': case 'move':\s+case 'turn': case 'turnBack': case 'raise': case 'lower':\s+selectToolAction\(a, selectActions\);\s+break;/);
     expect(s).toMatch(/placing: \(\) => tool\.mode === 'place',/);
     expect(s).toMatch(/setGhost: \(w, h, d, values\) => world\.setGhost\(w, h, d, values\),/);
     expect(s).toMatch(/ghostStep: \(\) => world\.ghostStep\(\),/);

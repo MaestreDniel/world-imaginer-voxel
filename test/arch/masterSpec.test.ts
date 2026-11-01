@@ -105,7 +105,9 @@ import { DEFAULTS } from '../../src/core/params/defaults';
 import * as presetTrees from '../../src/core/params/presetTrees';
 import { resolveProfile } from '../../src/core/params/profiles';
 import { SCHEMA } from '../../src/core/params/schema';
+import { MAX_STEP_EDITS, SUB_BATCH } from '../../src/sim/edits';
 import { PIN_MAX } from '../../src/ui/inspector/sliceModel';
+import { MAX_HISTORY_EDITS } from '../../src/ui/world/blockHistory';
 import { REGISTRY } from '../../src/world/blocks';
 import { BENCH_ROWS, LIGHT_P50_MAX_MS, LIGHT_P99_MAX_MS, MESH_P50_MAX_MS, MESH_P99_MAX_MS, TERRAIN_P50_MAX_MS } from '../bench/gates';
 import { THRESHOLDS } from '../thresholds';
@@ -1703,6 +1705,19 @@ describe('master spec amendments (SP5c §13)', () => {
     const at59 = text.indexOf('### 5.9 Controls');
     const s59 = text.slice(at59, text.indexOf('## 6. ', at59));
     expect(s59).toContain('E (creative palette); Q (selection tool; SP5c); Ctrl+C / Ctrl+X / Ctrl+V (copy, cut, paste; SP5c); N (move the selection; SP5c); while placing a paste, the wheel, ↑, ↓ (turn, raise, lower it; SP5c);');
+  });
+
+  test('§4.12\'s Selection tool paragraph follows the Block undo line (SP5c spec §2.4, §13, D8; the cap kept by Task 5, sub-batches of 512 by ruling R5)', () => {
+    const at412 = text.indexOf('### 4.12 ');
+    const lines = text.slice(at412, text.indexOf('### 4.13 ', at412)).split('\n');
+    const undo = lines.findIndex((l) => l.startsWith('**Block undo** (SP5a):'));
+    expect(undo, 'no Block undo line in §4.12').toBeGreaterThan(-1);
+    expect(lines[undo + 1]).toBe('');
+    expect(lines[undo + 2]).toBe('**Selection tool** (SP5c): Q turns it on; LMB and RMB mark two corners on the aimed blocks (reach 32); Ctrl+C copies, Ctrl+X cuts, N moves, Ctrl+V pastes the clipboard as a ghost resting on the aimed surface, the wheel turns it 90° (`rotateState`), ↑/↓ raise and lower it, RMB pastes, LMB cancels. A selection is at most 64 blocks a side; a cut, paste or move changes at most 32,768 blocks and is one block-history step, applied in the sim in sub-batches of 512, all or nothing; the history holds at most 65,536 changed blocks in all. A move returns the part of its source the target does not cover to the generated terrain. A paste writes the clipboard\'s air and fluids, is refused (never clipped) outside y −64 … 319 or the window, over unloaded columns, while regenerating or over the player\'s body.');
+    // Its figures are the code's: the cap, the history's cap and the sub-batch.
+    expect(lines[undo + 2]).toContain(`at most ${MAX_STEP_EDITS.toLocaleString('en-US')} blocks`);
+    expect(lines[undo + 2]).toContain(`at most ${MAX_HISTORY_EDITS.toLocaleString('en-US')} changed blocks`);
+    expect(lines[undo + 2]).toContain(`sub-batches of ${SUB_BATCH},`);
   });
 
   test('§6.3\'s Selection line: the codec, the turns, the paste batch and the history\'s caps (SP5c spec §13, D14)', () => {

@@ -1180,6 +1180,8 @@ MeshPhysicalMaterial transmission and Reflector are never used.
 
 **Block undo** (SP5a): Ctrl+Z / Ctrl+Y undo and redo block edits while the world owns the controls, the last 100 undo and 100 redo steps per world, kept across reloads (SP5b), separate from the map's history.
 
+**Selection tool** (SP5c): Q turns it on; LMB and RMB mark two corners on the aimed blocks (reach 32); Ctrl+C copies, Ctrl+X cuts, N moves, Ctrl+V pastes the clipboard as a ghost resting on the aimed surface, the wheel turns it 90° (`rotateState`), ↑/↓ raise and lower it, RMB pastes, LMB cancels. A selection is at most 64 blocks a side; a cut, paste or move changes at most 32,768 blocks and is one block-history step, applied in the sim in sub-batches of 512, all or nothing; the history holds at most 65,536 changed blocks in all. A move returns the part of its source the target does not cover to the generated terrain. A paste writes the clipboard's air and fluids, is refused (never clipped) outside y −64 … 319 or the window, over unloaded columns, while regenerating or over the player's body.
+
 **Pipeline:**
 1. The main thread posts `{edits:[…]}` to the sim worker (two entries for doors and double plants, applied atomically; SP8a).
 2. The sim worker, immediately and not on a tick: validates, writes block and fluid, bumps `blockVersion`, updates heightmaps, relights incrementally, schedules fluid ticks for the 6 neighbours (SP7), and records the diff.
