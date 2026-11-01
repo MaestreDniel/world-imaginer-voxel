@@ -8,7 +8,7 @@
  * lights exactly as the one placed live, while the reload's air and planks overlays leave their columns unflagged.
  */
 import { performance } from 'node:perf_hooks';
-import { beforeAll, describe, expect, test } from 'vitest';
+import { beforeAll, beforeEach, describe, expect, test } from 'vitest';
 import { colKey, colKeyCx, colKeyCz } from '../../src/core/coords';
 import { resolveProfile } from '../../src/core/params/profiles';
 import { seedFromInput } from '../../src/core/seed';
@@ -17,9 +17,9 @@ import { createGenContext } from '../../src/gen/context';
 import { writeFinalHeightmaps } from '../../src/gen/pipeline/finalHeightmaps';
 import { centreSection, createLightScratch, DEFAULT_LIGHT_TABLES, lightRegion } from '../../src/light/initial';
 import { createDiffStore, NO_ENTRY, type DiffStore } from '../../src/sim/diffStore';
-import { applyEdits, createEditScratch, readDiff, validateStats, type Edit, type EditRefusal, type EditResult } from '../../src/sim/edits';
+import { applyEdits, createEditScratch, readDiff, SUB_BATCH, validateStats, type Edit, type EditRefusal, type EditResult } from '../../src/sim/edits';
 import { WATER_SOURCE } from '../../src/world/blocks/fluid';
-import { AIR, DIRT, GLASS, ICE, OAK_PLANKS, STONE, TORCH } from '../../src/world/blocks/index';
+import { AIR, DIRT, GLASS, ICE, OAK_PLANKS, STONE, TORCH, WALL_TORCH } from '../../src/world/blocks/index';
 import type { ColumnDiff } from '../../src/world/store/api';
 import { protoAt, REC_DIFF_FLAG, SECTIONS } from '../../src/world/store/columnTable';
 import { copyLightRegion, lightIndex } from '../../src/world/store/padded';
@@ -402,38 +402,65 @@ describe('applyEdits on a seed-42 region (SP5a spec §2.1, §2.2, §2.4)', () =>
 });
 
 /**
- * SP5c D21: a batch is applied 1,024 edits at a time, the read section ended and entered again between sub-batches, so
- * each sub-batch's retired slots are reclaimed before the next. Its own region, generated with `shared: true`: an
- * unshared store frees a retired slot at once (`reclaim.ts:189`), so its limbo would read 0 with the sub-batches dropped.
+ * SP5c D21: a batch is applied `SUB_BATCH` (512) edits at a time, the read section ended and entered again between
+ * sub-batches, so each sub-batch's retired slots are reclaimed before the next. Its own region (7 × 7, so the 64-wide
+ * lit block's columns have their 3 × 3 loaded), generated with `shared: true`: an unshared store frees a retired slot at
+ * once (`reclaim.ts:189`), so its limbo would read 0 with the sub-batches dropped.
  */
 describe('a paste in sub-batches (SP5c spec §3.2)', () => {
   let store: VoxelStore;
   let cx0 = 0;
   let cz0 = 0;
-  /** The centre column of the 5 × 5. */
+  /** The centre column of the 7 × 7. */
   let C: [number, number] = [0, 0];
   const diffs = createDiffStore();
   const scratch = createEditScratch();
-  /** The 32 × 32 × 32 block's min corner: across the corner of columns C − 1 and C, in air above the footprint. */
+  /** The blocks' min corner: across the corner of columns C − 1 and C, in air above the footprint (`Y0` the solid
+   * 32 × 32 × 32 block's, `YL` the 64 × 60 × 32 lit block's). */
   let X0 = 0;
   let Y0 = 0;
+  let YL = 0;
   let Z0 = 0;
   const N = 32 * 32 * 32;
   /**
-   * The block's first `n` voxels, slice by slice (y fastest, then z, then x: each sub-batch one 32 × 32 slice of x),
-   * each set to stone from the value it holds. The limbo a sub-batch leaves depends on the order: measured on this
-   * region (SP5c Task 3), this order's paste leaves at most 2,165 entries, layers bottom-up 4,205 and layers top-down
-   * (§2.3's paste order) 6,719: each stone of a layer darkens the light sections under it, re-written per edit.
+   * The solid block's first `n` voxels in the paste's order (§2.3: y ascending, then z, then x), each set to stone from
+   * the value it holds. The limbo a sub-batch leaves depends on the order (each stone of a layer darkens the light
+   * sections under it, re-written per edit): measured in SP5c Task 3 at SUB_BATCH 1,024, y descending left 6,719 entries
+   * on this paste (the lit one 9,925) and y ascending 4,205 (4,441); at 512, y ascending 2,198 (2,536).
    */
   const block = (n = N): Edit[] => Array.from({ length: n }, (_, k) => {
-    const x = X0 + (k >> 10);
+    const x = X0 + (k & 31);
     const z = Z0 + ((k >> 5) & 31);
-    const y = Y0 + (k & 31);
+    const y = Y0 + (k >> 10);
     return set(x, y, z, val(STONE), valueAt(store, x, y, z));
   });
-  const revertOf = (edits: readonly Edit[]): Edit[] => edits.map((e) => ({ x: e.x, y: e.y, z: e.z, op: 'revert', value: 0, expect: e.value }));
-  /** The block's four columns. */
+  /**
+   * §10.3's `paste.maxLit` content as Task 5 lays it out (rulings P1): 32 × 12 × 32 oak-plank house shells with a glass
+   * band on row 4 (corners planks) and 8 wall torches inside on row 6, 2 across x by 5 high (64 × 60 × 32), cut
+   * shell-major to 32,768 changes, then written in the paste's order (y ascending, then z, then x).
+   */
+  const litBlock = (): Edit[] => {
+    const cells: Array<[number, number, number, number]> = [];
+    for (let i = 0; i < 10 && cells.length < N; i++) {
+      const sx = i >= 5 ? 32 : 0;
+      const sy = (i % 5) * 12;
+      for (let y = 0; y < 12; y++) for (let z = 0; z < 32; z++) for (let x = 0; x < 32; x++) {
+        if (cells.length === N) break;
+        const wallX = x === 0 || x === 31;
+        const wallZ = z === 0 || z === 31;
+        if (wallX || wallZ || y === 0 || y === 11) cells.push([sx + x, sy + y, z, y === 4 && (wallX || wallZ) && !(wallX && wallZ) ? GLASS : OAK_PLANKS]);
+        else if (z === 30 && y === 6 && x % 4 === 2) cells.push([sx + x, sy + y, z, WALL_TORCH]);
+      }
+    }
+    cells.sort((a, b) => a[1] - b[1] || a[2] - b[2] || a[0] - b[0]);
+    return cells.map(([x, y, z, s]) => set(X0 + x, YL + y, Z0 + z, val(s), valueAt(store, X0 + x, YL + y, Z0 + z)));
+  };
+  /** The undo of a paste as the block history posts it (`blockHistory.ts`): each voxel reverted, in reverse order. */
+  const revertOf = (edits: readonly Edit[]): Edit[] => edits.map((e): Edit => ({ x: e.x, y: e.y, z: e.z, op: 'revert', value: 0, expect: e.value })).reverse();
+  /** The solid block's four columns. */
   const quad = (): Array<[number, number]> => [[C[0] - 1, C[1] - 1], [C[0], C[1] - 1], [C[0] - 1, C[1]], [C[0], C[1]]];
+  /** The lit block's eight columns. */
+  const oct = (): Array<[number, number]> => [-1, 0, 1, 2].flatMap((dx): Array<[number, number]> => [[C[0] + dx, C[1] - 1], [C[0] + dx, C[1]]]);
   /** `store` with `exitRead` counted (each call passed through). */
   const counting = (): { s: VoxelStore; exits: () => number } => {
     let exits = 0;
@@ -445,19 +472,33 @@ describe('a paste in sub-batches (SP5c spec §3.2)', () => {
     const params = resolveProfile('default');
     const sp = findSpawn(createGenContext(seedFromInput('42'), params));
     C = [sp.x >> 4, sp.z >> 4];
-    cx0 = C[0] - 2;
-    cz0 = C[1] - 2;
-    store = (await genRegion({ seed: '42', params, cx0, cz0, w: 5, h: 5, upTo: 'L', order: 'spiral', threads: 1, shared: true })).view.store;
+    cx0 = C[0] - 3;
+    cz0 = C[1] - 3;
+    store = (await genRegion({ seed: '42', params, cx0, cz0, w: 7, h: 7, upTo: 'L', order: 'spiral', threads: 1, shared: true })).view.store;
     expect(store.shared).toBe(true);
     X0 = 16 * (C[0] - 1);
     Z0 = 16 * (C[1] - 1);
     let top = -64;
-    for (let z = Z0; z < Z0 + 32; z++) for (let x = X0; x < X0 + 32; x++) top = Math.max(top, store.heightAt('worldSurface', x, z)!);
+    let topL = -64;
+    for (let z = Z0; z < Z0 + 32; z++) {
+      for (let x = X0; x < X0 + 64; x++) {
+        const h = store.heightAt('worldSurface', x, z)!;
+        if (x < X0 + 32) top = Math.max(top, h);
+        topL = Math.max(topL, h);
+      }
+    }
     Y0 = top + 1;
-    expect(Y0 + 31).toBeLessThanOrEqual(319);
-  }, 120_000);
+    YL = topL + 1;
+    expect(YL + 59).toBeLessThanOrEqual(319);
+  }, 180_000);
 
-  test('a 32,768-edit paste across a column corner: every voxel stone, the four columns\' 3 × 3s\' light equal to a fresh `lightRegion`, `prev` `NO_ENTRY` and `next` the value, `limboMax` ≤ 4,096, the limbo empty after; its revert batch restores every voxel and empties the DiffStore', () => {
+  // Each case reverts what it pastes; a case that failed before its revert fails here, not in the next case's checks.
+  beforeEach(() => {
+    expect(diffs.size).toBe(0);
+  });
+
+  test('a 32,768-edit paste across a column corner, written y ascending (§2.3): every voxel stone, the four columns\' 3 × 3s\' light equal to a fresh `lightRegion`, `prev` `NO_ENTRY` and `next` the value, `limboMax` ≤ 4,096, the limbo empty after; its undo restores every voxel, empties the DiffStore, `limboMax` ≤ 4,096', () => {
+    expect(SUB_BATCH).toBe(512);
     const edits = block();
     const before = edits.map((e) => e.expect);
     const r = applyEdits(store, diffs, scratch, edits, now);
@@ -484,25 +525,51 @@ describe('a paste in sub-batches (SP5c spec §3.2)', () => {
     for (const [cx, cz] of quad()) expectLightFresh(store, cx, cz);
   });
 
+  test('the lit maximum paste (`paste.maxLit`\'s 64 × 60 × 32 shells of planks, glass and wall torches, 32,768 changes), written y ascending: every voxel its value, the eight columns\' 3 × 3s\' light equal to a fresh `lightRegion`, `limboMax` ≤ 4,096, the limbo empty after; its undo restores every voxel, empties the DiffStore, `limboMax` ≤ 4,096', () => {
+    const edits = litBlock();
+    expect(edits.length).toBe(N);
+    const before = edits.map((e) => e.expect);
+    const r = applyEdits(store, diffs, scratch, edits, now);
+    expect(r.refused).toBeNull();
+    let wrong = 0;
+    for (const e of edits) if (valueAt(store, e.x, e.y, e.z) !== e.value) wrong++;
+    expect(wrong).toBe(0);
+    for (const [cx, cz] of oct()) expectLightFresh(store, cx, cz);
+    expect(diffs.size).toBe(N);
+    expect(r.limboMax).toBeGreaterThan(0);
+    expect(r.limboMax).toBeLessThanOrEqual(4096);
+    expect(store.limboCount(store.thread)).toBe(0);
+
+    const back = applyEdits(store, diffs, scratch, revertOf(edits), now);
+    expect(back.refused).toBeNull();
+    let changed = 0;
+    for (let k = 0; k < N; k++) if (valueAt(store, edits[k]!.x, edits[k]!.y, edits[k]!.z) !== before[k]) changed++;
+    expect(changed).toBe(0);
+    expect(diffs.size).toBe(0);
+    expect(back.limboMax).toBeLessThanOrEqual(4096);
+    expect(store.limboCount(store.thread)).toBe(0);
+    for (const [cx, cz] of oct()) expectLightFresh(store, cx, cz);
+  });
+
   test('a stale `expect` at the last edit (k = 32,767): `refused` `\'changed\'`, nothing written (every value, block and light version, and the DiffStore unchanged), `limboMax` 0', () => {
     const edits = block();
     const last = edits[N - 1]!;
     edits[N - 1] = { ...last, expect: last.expect ^ 0x100 };
     const before = edits.map((e) => valueAt(store, e.x, e.y, e.z));
-    const vs = versions(store, cx0, cz0, 5);
+    const vs = versions(store, cx0, cz0, 7);
     const r = applyEdits(store, diffs, scratch, edits, now);
     expect(r.refused).toBe('changed');
     expect(r.dirty.length).toBe(0);
     let changed = 0;
     for (let k = 0; k < N; k++) if (valueAt(store, edits[k]!.x, edits[k]!.y, edits[k]!.z) !== before[k]) changed++;
     expect(changed).toBe(0);
-    expect(versions(store, cx0, cz0, 5)).toEqual(vs);
+    expect(versions(store, cx0, cz0, 7)).toEqual(vs);
     expect(diffs.size).toBe(0);
     expect(r.limboMax).toBe(0);
   });
 
-  test('sub-batches counted through a store wrapper counting `exitRead`: 1,024 edits → 1, 1,025 → 2, 32,768 → 32', () => {
-    for (const [n, want] of [[1024, 1], [1025, 2], [N, 32]] as const) {
+  test('sub-batches counted through a store wrapper counting `exitRead`: 512 edits → 1, 513 → 2, 32,768 → 64', () => {
+    for (const [n, want] of [[512, 1], [513, 2], [N, 64]] as const) {
       const edits = block(n);
       const c = counting();
       expect(applyEdits(c.s, diffs, scratch, edits, now).refused).toBeNull();
@@ -512,17 +579,16 @@ describe('a paste in sub-batches (SP5c spec §3.2)', () => {
     }
   });
 
-  test('`relightMs` is the sum over sub-batches; `subBatchMaxMs` ≤ `editMs` (a clock ticking 1 per call: a 2,049-edit batch\'s relights take 1 each)', () => {
+  test('`relightMs` is the sum over sub-batches; `subBatchMaxMs` < `editMs` (a clock ticking 1 per call: a 2,049-edit batch\'s relights take 1 each)', () => {
     let t = 0;
     const tick = (): number => ++t;
     const edits = block(2049);
     const r = applyEdits(store, diffs, scratch, edits, tick);
     expect(r.refused).toBeNull();
-    // One tick per relight, across all three sub-batches (1,024 + 1,024 + 1).
+    // One tick per relight, across all five sub-batches (4 × 512 + 1).
     expect(r.relightMs).toBe(2049);
-    // The longest sub-batch spans at least its own 1,024 relights, and less than the whole call of three.
-    expect(r.subBatchMaxMs).toBeGreaterThanOrEqual(1024);
-    expect(r.subBatchMaxMs).toBeLessThanOrEqual(r.editMs);
+    // The longest sub-batch spans at least its own 512 relights, and less than the whole call of five.
+    expect(r.subBatchMaxMs).toBeGreaterThanOrEqual(512);
     expect(r.subBatchMaxMs).toBeLessThan(r.editMs);
     expect(applyEdits(store, diffs, scratch, revertOf(edits), now).refused).toBeNull();
     expect(diffs.size).toBe(0);

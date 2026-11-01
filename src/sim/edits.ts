@@ -11,7 +11,7 @@
  *    sparse section cache that reads the sections in place and copies a section's light on its first write; each
  *    changed light section written back with `replaceLight`; the DiffStore entry (a `revert`, or a `set` equal to the
  *    proto's value, removes it; D20).
- * 3. **Sub-batches** (SP5c spec §3.2, D21): step 2 runs `SUB_BATCH` (1,024) edits at a time; after each sub-batch
+ * 3. **Sub-batches** (SP5c spec §3.2, D21): step 2 runs `SUB_BATCH` (512) edits at a time; after each sub-batch
  *    `publish()` once per column it wrote, then, when edits remain, `exitRead` and `enterRead`, so the slots the
  *    sub-batch retired are reclaimed before the next (writers are reopened as needed). One result for the whole batch:
  *    one `dirty`, `relightMs` the relights' sum, `editMs` the whole call, `limboMax` the most entries in this thread's
@@ -61,8 +61,11 @@ export interface Edit {
   readonly expect: number;
 }
 
-/** The edits applied between two drains of the sim thread's limbo (SP5c spec §3.2, D21). */
-export const SUB_BATCH = 1024;
+/**
+ * The edits applied between two drains of the sim thread's limbo (SP5c spec §3.2, D21): 512 keeps a maximum paste's
+ * limbo under 4,096 entries in the paste's y-ascending order (measured 2,198 solid, 2,536 lit; 1,024 left 4,205-4,441).
+ */
+export const SUB_BATCH = 512;
 
 /** Why a batch was refused (§2.1): nothing of it was written. */
 export type EditRefusal = 'unloaded' | 'changed' | 'noProto' | 'full';
