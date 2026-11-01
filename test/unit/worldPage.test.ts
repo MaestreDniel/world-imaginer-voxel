@@ -21,7 +21,7 @@ import { createNotices } from '../../src/ui/common/notice';
 import { URL_HASH_MAX, URL_OVERSIZE_NOTICE, createUrlWriter, oversizeNotice } from '../../src/ui/common/urlWriter';
 import { DEFAULT_MAP_STATE, decodeMapState, openMapSession, type MapView } from '../../src/ui/map/mapState';
 import { WORLD_MAP_BPP, worldMapView } from '../../src/ui/world/mapOverlay';
-import { AIR, DIRT, GLASS, REGISTRY, STONE } from '../../src/world/blocks/index';
+import { AIR, DIRT, GLASS, LADDER, REGISTRY, STONE } from '../../src/world/blocks/index';
 import { WATER_SOURCE } from '../../src/world/blocks/fluid';
 import { createHotbar } from '../../src/player/hotbar';
 import { SPEED_DEFAULT, type FlyState } from '../../src/player/fly';
@@ -44,7 +44,7 @@ import { REFUSED_RED, SELECTION_YELLOW } from '../../src/render/selection';
 import { createRayHit } from '../../src/player/raycast';
 import type { Action } from '../../src/player/keymap';
 import { createEditLatency } from '../../src/ui/world/editLatency';
-import { createEditPath, type EditOutcome } from '../../src/ui/world/editPath';
+import { EDIT_FULL_NOTICE, createEditPath, type EditOutcome } from '../../src/ui/world/editPath';
 import { createActionPost, createBlockHistory, type BlockStep } from '../../src/ui/world/blockHistory';
 import { createHoldRepeat } from '../../src/ui/world/holdRepeat';
 import { mountPalette } from '../../src/ui/palette';
@@ -4844,9 +4844,307 @@ describe('the selection tool in the page I: Q, the corners, the box and Ctrl+C (
     expect(s).toMatch(/stopRepeat: \(\) => holdRepeat\.stop\(\),/);
     expect(s).toMatch(/release: \(\) => clipboardKv\.close\(\),/);
     expect(s).toMatch(/teardown\.push\(\(\) => selectActions\.dispose\(\)\);/);
-    expect(s).toMatch(/case 'selectTool': case 'copy': selectToolAction\(a, selectActions\); break;/);
+    expect(s).toMatch(/case 'selectTool': case 'copy': case 'cut': selectToolAction\(a, selectActions\); break;/);
     expect(s).toMatch(/tool: toolClicks\(tool, selectActions\),/);
     expect(s).toMatch(/onButton: routeButton\(\{ toolOn: \(\) => tool\.mode !== 'off', clicks, hold: holdRepeat, now: nowS, clickTime: \(\) => performance\.now\(\) \}\),/);
     expect(s).toMatch(/reach: \(\) => aimReach\(tool, fly\), selection: selectActions,/);
+  });
+});
+
+describe('the selection tool in the page II: Ctrl+X (SP5c spec §2.2, §10.5; D6, D26)', () => {
+  afterEach(() => {
+    vi.useRealTimers();
+  });
+  type CutBox = { x0: number; y0: number; z0: number; w: number; h: number; d: number };
+  const val = (state: number, fluid = 0): number => ((state << 8) | fluid) >>> 0;
+  /** The 4 × 3 × 5 selection `selected` marks: corners (0, 59, 0) and (3, 61, 4). */
+  const SEL: CutBox = { x0: 0, y0: 59, z0: 0, w: 4, h: 3, d: 5 };
+  const LADDER_WATER = val(LADDER, WATER_SOURCE);
+
+  /**
+   * `createSelectActions` as the page wires its cut: a fake world (generated stone at y ≤ 60, air above, and the
+   * DiffStore's entries: a dug hole at (0, 60, 0), a ladder holding water at (1, 61, 1), glass at (2, 61, 3)), a fake sim
+   * whose `copy` reads it and whose `edits` apply a batch all or nothing (`'changed'` at the first `expect` that differs,
+   * each edit's entry before and after as the sim's `prev` and `next`, a set equal to the generated value leaving no
+   * entry), the real edit path with its gate over `st.editState`, the real block history and `createActionPost`, and the
+   * real clipboard store over a `MemoryKV` (its `write` spied).
+   */
+  function cutRig(o: { writeDelayMs?: number } = {}) {
+    const tool = createSelectTool();
+    const shown: Array<[string, number]> = [];
+    const notices = { show: (text: string, ms: number) => { shown.push([text, ms]); }, hide: () => {} };
+    const st = {
+      editState: 0 as 0 | 1 | 2,
+      refuse: null as 'changed' | 'full' | 'noProto' | 'unloaded' | null,
+      failEdits: false,
+      unloadedCopy: false,
+    };
+    const gen = (_x: number, y: number, _z: number): number => (y <= 60 ? val(STONE) : val(AIR));
+    const key = (x: number, y: number, z: number): string => `${x},${y},${z}`;
+    const entries = new Map<string, number>([[key(0, 60, 0), val(AIR)], [key(1, 61, 1), LADDER_WATER], [key(2, 61, 3), val(GLASS)]]);
+    const valueAt = (x: number, y: number, z: number): number => entries.get(key(x, y, z)) ?? gen(x, y, z);
+    const read = (b: CutBox): Uint32Array => {
+      const v = new Uint32Array(b.w * b.h * b.d);
+      let i = 0;
+      for (let y = 0; y < b.h; y++) for (let z = 0; z < b.d; z++) for (let x = 0; x < b.w; x++) v[i++] = valueAt(b.x0 + x, b.y0 + y, b.z0 + z);
+      return v;
+    };
+    const copies: CutBox[] = [];
+    const posted: Edit[][] = [];
+    const reply = (refused: EditedMsg['refused'], prev: Uint32Array, next: Uint32Array): EditedMsg => ({
+      type: 'edited', id: posted.length, prev, next, dirty: new Float64Array(0), entryAdded: new Float64Array(0), entryRemoved: new Float64Array(0),
+      refused, relightMs: 0, editMs: 0, limboMax: 0, subBatchMaxMs: 0,
+    });
+    const sim = {
+      failed: false,
+      copy: (b: CutBox, _gen: boolean): Promise<CopiedMsg> => {
+        copies.push({ x0: b.x0, y0: b.y0, z0: b.z0, w: b.w, h: b.h, d: b.d });
+        return Promise.resolve(st.unloadedCopy
+          ? { type: 'copied', id: copies.length, values: null, generated: null, why: 'unloaded' }
+          : { type: 'copied', id: copies.length, values: read(b), generated: null, why: null });
+      },
+      edits: (e: readonly Edit[]): Promise<EditedMsg> => {
+        posted.push([...e]);
+        if (st.failEdits) return Promise.reject(new SimFailed('the sim stopped'));
+        if (st.refuse !== null) return Promise.resolve(reply(st.refuse, new Uint32Array(0), new Uint32Array(0)));
+        const after = new Map(entries);
+        const prev = new Uint32Array(e.length);
+        const next = new Uint32Array(e.length);
+        for (let i = 0; i < e.length; i++) {
+          const { x, y, z } = e[i]!;
+          const k = key(x, y, z);
+          if ((after.get(k) ?? gen(x, y, z)) !== e[i]!.expect) return Promise.resolve(reply('changed', new Uint32Array(0), new Uint32Array(0)));
+          prev[i] = after.get(k) ?? NO_ENTRY;
+          if (e[i]!.op === 'revert' || e[i]!.value === gen(x, y, z)) after.delete(k);
+          else after.set(k, e[i]!.value);
+          next[i] = after.get(k) ?? NO_ENTRY;
+        }
+        entries.clear();
+        for (const [k, v] of after) entries.set(k, v);
+        return Promise.resolve(reply(null, prev, next));
+      },
+    };
+    const editPath = createEditPath({
+      sim,
+      coordinator: { editState: () => st.editState, simPin() {}, simUnpin() {}, markEdited() {} },
+      latency: createEditLatency(),
+      now: () => performance.now(),
+      notices,
+    });
+    const blockHistory = createBlockHistory({ post: editPath.post, read: valueAt, pending: editPath.pending, settled: editPath.settled, notices });
+    const actionPost = createActionPost({ post: editPath.post, record: blockHistory.record });
+    const kv = createMemoryKV({ writeDelayMs: o.writeDelayMs ?? 0 });
+    const clipboard = createClipboardStore({ kv: () => Promise.resolve(kv), notices });
+    const writes = vi.spyOn(clipboard, 'write');
+    const actions = createSelectActions({
+      tool, sim, editState: () => st.editState, clipboard, actionPost, notices, keyName: pageKeyName,
+      view: { setSelectionBox() {}, hideSelectionBox() {}, setSelectLabel() {} }, ghost: NO_GHOST, origin: { x: 0, y: 0, z: 0 },
+      body: () => ({ minX: 0, minY: 0, minZ: 0, maxX: 0, maxY: 0, maxZ: 0 }), stopRepeat() {},
+    });
+    /** The stored clipboard, decoded, or null. */
+    const stored = async () => {
+      const [raw] = await kv.read([{ op: 'get', store: 'meta', key: CLIPBOARD_KEY }]);
+      if (raw === undefined) return null;
+      const d = decodeClipboard(raw);
+      return d.ok ? { w: d.w, h: d.h, d: d.d, values: Array.from(d.values) } : 'unreadable';
+    };
+    /** The box's cells now, as a stored clipboard of them would read. */
+    const cells = (b: CutBox = SEL) => ({ w: b.w, h: b.h, d: b.d, values: Array.from(read(b)) });
+    /** Q, then the two corners (`a` and `b` default to the 4 × 3 × 5 selection's). */
+    const select = (a: Corner = { x: 0, y: 59, z: 0 }, b: Corner = { x: 3, y: 61, z: 4 }): void => {
+      if (tool.mode === 'off') actions.toggle();
+      tool.mark(0, a);
+      tool.mark(2, b);
+    };
+    return { tool, actions, shown, st, entries, key, valueAt, copies, posted, blockHistory, kv, clipboard, writes, stored, cells, select };
+  }
+
+  /** Real timers: lets every pending promise and zero-delay timer run. */
+  async function jobs(): Promise<void> {
+    for (let i = 0; i < 5; i++) await flushMicrotasks();
+  }
+
+  test('Ctrl+X with one corner: `Mark two corners first: Q, then LMB and RMB` 4 s; with a 65-wide selection: `The selection is larger than 64 blocks on a side` 4 s; neither posts a `copy`', async () => {
+    const r = cutRig();
+    r.actions.toggle();
+    r.tool.mark(2, { x: 1, y: 60, z: 1 });
+    await r.actions.cut();
+    expect(r.shown).toEqual([['Mark two corners first: Q, then LMB and RMB', 4_000]]);
+    r.shown.length = 0;
+    r.select({ x: 0, y: 59, z: 0 }, { x: 64, y: 59, z: 0 });
+    await r.actions.cut();
+    expect(r.shown).toEqual([['The selection is larger than 64 blocks on a side', 4_000]]);
+    expect([r.copies, r.posted, r.writes.mock.calls.length]).toEqual([[], [], 0]);
+    // A copy answered `unloaded` (a column not Published): D5's notice, nothing written or posted.
+    r.shown.length = 0;
+    r.select();
+    r.st.unloadedCopy = true;
+    await r.actions.cut();
+    expect(r.shown).toEqual([['Part of the selection is not loaded: come closer and try again', 4_000]]);
+    expect([r.copies.length, r.posted, r.writes.mock.calls.length]).toEqual([1, [], 0]);
+  });
+
+  test('a cut refused by the cap, by `unloaded` or by `regenerating` leaves the previous clipboard (`clipboard.write` never called), each with its `Can\'t cut: …` text', async () => {
+    const cases: Array<[string, (r: ReturnType<typeof cutRig>) => void, string]> = [
+      // 64 × 64 × 64 of generated stone (y −3 … 60) but the dug hole at (0, 60, 0): 262,143 changed blocks.
+      ['cap', (r) => { r.select({ x: 0, y: -3, z: 0 }, { x: 63, y: 60, z: 63 }); }, 'Can\'t cut: it would change 262,143 blocks; at most 32,768 at once'],
+      ['unloaded', (r) => { r.select(); r.st.editState = 1; }, 'Can\'t cut: part of it is not loaded'],
+      ['regenerating', (r) => { r.select(); r.st.editState = 2; }, 'Can\'t cut: the world is regenerating'],
+    ];
+    for (const [name, arrange, text] of cases) {
+      const r = cutRig();
+      // The previous clipboard: a copy of one block of stone.
+      r.select({ x: 9, y: 50, z: 9 }, { x: 9, y: 50, z: 9 });
+      await r.actions.copy();
+      const previous = await r.stored();
+      expect(previous, name).toEqual({ w: 1, h: 1, d: 1, values: [val(STONE)] });
+      r.writes.mockClear();
+      r.shown.length = 0;
+      arrange(r);
+      const before = r.cells();
+      await r.actions.cut();
+      expect(r.shown, name).toEqual([[text, 4_000]]);
+      expect([r.writes.mock.calls.length, r.posted.length, r.blockHistory.size], name).toEqual([0, 0, 0]);
+      expect(await r.stored(), name).toEqual(previous);
+      expect(r.cells(), name).toEqual(before);
+      expect(r.actions.busy(), name).toBe(false);
+    }
+  });
+
+  test('an Apply started while the cut\'s clipboard write is pending (`writeDelayMs` 200; `editState` 2 from 100 ms): `Can\'t cut: the world is regenerating`, no `edits` posted, every cell unchanged, the clipboard holding the selection; a column unloaded meanwhile the same with `part of it is not loaded`', async () => {
+    vi.useFakeTimers();
+    for (const [state, text] of [[2, 'Can\'t cut: the world is regenerating'], [1, 'Can\'t cut: part of it is not loaded']] as const) {
+      const r = cutRig({ writeDelayMs: 200 });
+      r.select();
+      const before = r.cells();
+      setTimeout(() => { r.st.editState = state; }, 100);
+      const p = r.actions.cut();
+      await vi.advanceTimersByTimeAsync(300);
+      await p;
+      expect(r.shown).toEqual([[text, 4_000]]);
+      expect([r.posted.length, r.blockHistory.size, r.writes.mock.calls.length]).toEqual([0, 0, 1]);
+      expect(r.cells()).toEqual(before);
+      expect(await r.stored()).toEqual(before);
+      // The box as it was.
+      expect([r.tool.mode, r.tool.selection()]).toEqual(['select', SEL]);
+    }
+  });
+
+  test('a failed clipboard write (`failAt(0, \'QuotaExceededError\')`) posts nothing and shows `Could not keep the clipboard (…): nothing was cut` for 6 s', async () => {
+    const r = cutRig();
+    r.select();
+    const before = r.cells();
+    r.kv.failAt(0, 'QuotaExceededError');
+    await r.actions.cut();
+    expect(r.shown).toEqual([['Could not keep the clipboard (storage full): nothing was cut', 6_000]]);
+    expect([r.posted.length, r.blockHistory.size, r.writes.mock.calls.length, r.actions.busy()]).toEqual([0, 0, 1, false]);
+    expect(r.cells()).toEqual(before);
+    expect(await r.stored()).toBeNull();
+  });
+
+  test('the post is issued only after the write\'s `complete` (a `MemoryKV` with `writeDelayMs` 200: no `edits` before 200 ms)', async () => {
+    vi.useFakeTimers();
+    const r = cutRig({ writeDelayMs: 200 });
+    r.select();
+    const before = r.cells();
+    const p = r.actions.cut();
+    await vi.advanceTimersByTimeAsync(199);
+    // The write is pending (nothing in `meta` yet), and no `edits` is posted.
+    expect([r.copies.length, r.writes.mock.calls.length, r.posted.length, r.kv.dump('meta'), r.actions.busy()]).toEqual([1, 1, 0, [], true]);
+    await vi.advanceTimersByTimeAsync(1);
+    await p;
+    expect(r.posted.length).toBe(1);
+    expect(await r.stored()).toEqual(before);
+    expect(r.shown).toEqual([['Cut 4 × 3 × 5', 1_500]]);
+  });
+
+  test('a sim `\'changed\'` after the write: the clipboard holds the selection, every cell unchanged, `Can\'t cut: the blocks changed; try again`', async () => {
+    vi.useFakeTimers();
+    const r = cutRig({ writeDelayMs: 200 });
+    r.select();
+    const selection = r.cells();
+    // At 100 ms, while the write is pending, a block of the selection changes (another edit's reply).
+    setTimeout(() => { r.entries.set(r.key(3, 59, 4), val(DIRT)); }, 100);
+    const p = r.actions.cut();
+    await vi.advanceTimersByTimeAsync(300);
+    await p;
+    expect(r.shown).toEqual([['Can\'t cut: the blocks changed; try again', 4_000]]);
+    expect(r.posted.length).toBe(1);
+    expect(r.blockHistory.size).toBe(0);
+    expect(await r.stored()).toEqual(selection);
+    const now = r.cells();
+    expect(now.values.filter((v, i) => v !== selection.values[i])).toEqual([val(DIRT)]);
+    expect([r.valueAt(1, 61, 1), r.valueAt(2, 61, 3), r.valueAt(0, 59, 0)]).toEqual([LADDER_WATER, val(GLASS), val(STONE)]);
+    expect([r.tool.mode, r.tool.selection(), r.actions.busy()]).toEqual(['select', SEL, false]);
+  });
+
+  test('an accepted cut is one step and `Cut 4 × 3 × 5`; Ctrl+Z restores every cell; a cut ladder\'s water goes with it (D6: every fluid goes)', async () => {
+    const r = cutRig();
+    r.select();
+    const before = r.cells();
+    await r.actions.cut();
+    expect(r.shown).toEqual([['Cut 4 × 3 × 5', 1_500]]);
+    expect(r.copies).toEqual([SEL]);
+    // Every voxel that was not 0 (the dug hole is left out): 20 + 19 stone, the ladder and the glass.
+    expect(r.posted.length).toBe(1);
+    expect(r.posted[0]!.length).toBe(41);
+    const beforeAt = (e: Edit): number => before.values[((e.y - SEL.y0) * SEL.d + (e.z - SEL.z0)) * SEL.w + (e.x - SEL.x0)]!;
+    expect(r.posted[0]!.every((e) => e.op === 'set' && e.value === 0 && e.expect === beforeAt(e) && e.expect !== 0)).toBe(true);
+    expect(r.cells().values.every((v) => v === 0)).toBe(true);
+    // The ladder's water went with it: the voxel is 0, fluid byte included.
+    expect(r.valueAt(1, 61, 1)).toBe(0);
+    expect(r.posted[0]!.find((e) => e.x === 1 && e.y === 61 && e.z === 1)).toEqual({ x: 1, y: 61, z: 1, op: 'set', value: 0, expect: LADDER_WATER });
+    expect(r.blockHistory.size).toBe(1);
+    expect(await r.stored()).toEqual(before);
+    expect([r.tool.mode, r.tool.selection(), r.actions.busy()]).toEqual(['select', SEL, false]);
+    r.blockHistory.undo();
+    await jobs();
+    expect([r.posted.length, r.blockHistory.size, r.blockHistory.redoSize]).toEqual([2, 0, 1]);
+    expect(r.cells()).toEqual(before);
+    expect(r.valueAt(1, 61, 1)).toBe(LADDER_WATER);
+  });
+
+  test('the sim\'s other refusals after the write: `\'unloaded\'` and `\'noProto\'` read `Can\'t cut: part of it is not loaded`, `\'full\'` only the edit path\'s notice, the sim\'s failure nothing; each leaves the clipboard holding the selection and every cell unchanged', async () => {
+    const cases: Array<[string, (r: ReturnType<typeof cutRig>) => void, Array<[string, number]>]> = [
+      ['unloaded', (r) => { r.st.refuse = 'unloaded'; }, [['Can\'t cut: part of it is not loaded', 4_000]]],
+      ['noProto', (r) => { r.st.refuse = 'noProto'; }, [['Can\'t cut: part of it is not loaded', 4_000]]],
+      ['full', (r) => { r.st.refuse = 'full'; }, [[EDIT_FULL_NOTICE, 4_000]]],
+      ['failed', (r) => { r.st.failEdits = true; }, []],
+    ];
+    for (const [name, arrange, notices] of cases) {
+      const r = cutRig();
+      r.select();
+      const before = r.cells();
+      arrange(r);
+      await r.actions.cut();
+      expect(r.shown, name).toEqual(notices);
+      expect([r.posted.length, r.blockHistory.size, r.actions.busy()], name).toEqual([1, 0, false]);
+      expect(r.cells(), name).toEqual(before);
+      expect(await r.stored(), name).toEqual(before);
+    }
+  });
+
+  test('Review Focus 2: Ctrl+X twice 30 ms apart: one `copy`, one clipboard write, one `edits`, one step', async () => {
+    vi.useFakeTimers();
+    const r = cutRig({ writeDelayMs: 200 });
+    r.select();
+    selectToolAction('cut', r.actions);
+    await vi.advanceTimersByTimeAsync(30);
+    expect(r.actions.busy()).toBe(true);
+    selectToolAction('cut', r.actions);
+    await vi.advanceTimersByTimeAsync(500);
+    expect([r.copies.length, r.writes.mock.calls.length, r.posted.length, r.blockHistory.size]).toEqual([1, 1, 1, 1]);
+    expect(r.shown).toEqual([['Cut 4 × 3 × 5', 1_500]]);
+    expect(r.actions.busy()).toBe(false);
+  });
+
+  test('Ctrl+X does nothing with the tool off or while placing', async () => {
+    const r = cutRig();
+    await r.actions.cut();
+    r.select();
+    r.actions.toggle();
+    expect(r.tool.mode).toBe('off');
+    await r.actions.cut();
+    expect([r.shown, r.copies, r.posted]).toEqual([[], [], []]);
   });
 });

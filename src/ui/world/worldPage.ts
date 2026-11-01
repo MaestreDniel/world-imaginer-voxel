@@ -129,14 +129,17 @@
  * LMB and RMB are the tool's (`toolClicks` in the click queue; a press skips the hold repeat, `routeButton`), and the
  * aim's `selection` (`createSelectActions`) writes the selection's box and the build HUD's label when the tool's state
  * or the floating origin changes, hiding the box on a paused frame. Ctrl+C copies the box through the sim's `copy` into
- * the clipboard (`clipboardStore.ts`, `wi10`'s `meta` through `createClipboardKv`). One operation runs at a time
- * (`busy()`); the cut, the paste's ghost and the move follow in SP5c's Tasks 19-23.
+ * the clipboard (`clipboardStore.ts`, `wi10`'s `meta` through `createClipboardKv`). Ctrl+X reads the box the same way,
+ * checks its batch (the cap, the edit path's gate) before writing anything, writes the clipboard, and posts the batch
+ * only after that write completes (D6, D26). One operation runs at a time (`busy()`); the paste's ghost and the move
+ * follow in SP5c's Tasks 22-23.
  *
  * Keys with a panel open (SP5b spec §1.4; SP4a spec :731's hand-over): while the Settings screen, the help, the palette
  * or B's dialog is open, a focused control in it (a select, a slider, a checkbox, a button) keeps its own keys and the
  * world handles none of them (`worldIgnoresKeys`); otherwise H, G, M, B and E go through `paletteFirst`.
  */
 import { GENERATOR_VERSION } from '../../core/constants';
+import { colKey } from '../../core/coords';
 import { hex64, type Seed64 } from '../../core/hash';
 import { MEDIUM } from '../../core/params/graphicsPresets';
 import { SCHEMA_VERSION, type JsonObject } from '../../core/params/migrate';
@@ -214,7 +217,7 @@ import { createFrameStep, eyeSkyLight } from './frameStep';
 import { createHoldRepeat, type HoldRepeat } from './holdRepeat';
 import { createMapOverlay, followSession, frameCapFor, worldMapView, type ControlsOwner, type MapOverlay } from './mapOverlay';
 import { createModifyMode, createModifySwitch, type ModifyMode } from './modifyMode';
-import type { Box } from './pasteBatch';
+import { cutBatch, refusalText as batchRefusalText, type Box, type Refusal } from './pasteBatch';
 import { mountPlaceDialog, type PlaceDialog } from './placeDialog';
 import {
   PLACE_COLOURS, PLACE_SAVED_MS, PLACE_SAVED_NOTICE, PLACES_FULL_MS, PLACES_FULL_NOTICE, createPlaces, proposedPlaceName, type Places,
@@ -1909,6 +1912,10 @@ export const SELECTION_UNLOADED = 'Part of the selection is not loaded: come clo
 export const markTwoCorners = (keyName: (a: Action) => string): string => `Mark two corners first: ${keyName('selectTool')}, then LMB and RMB`;
 /** A copy whose clipboard write failed: the memory copy is kept (§4.2). */
 export const clipboardNotKept = (reason: string): string => `Could not keep the clipboard (${reason})`;
+/** A cut whose clipboard write failed: nothing is posted (§1.4, D6). */
+export const cutNotKept = (reason: string): string => `${clipboardNotKept(reason)}: nothing was cut`;
+/** A refused cut (§1.4, D6), its reason `refusalText`'s. */
+export const cantCut = (reason: string): string => `Can't cut: ${reason}`;
 
 /** An action's first binding as the help writes it (`bindingLabel`): the key names of the tool's label and notices. */
 export function pageKeyName(a: Action): string {
@@ -1926,6 +1933,43 @@ const tooLarge = (b: { w: number; h: number; d: number }): boolean =>
   b.w > MAX_SELECTION_SIDE || b.h > MAX_SELECTION_SIDE || b.d > MAX_SELECTION_SIDE;
 
 const NO_GHOST_STATE: GhostState & { readonly shown: boolean } = Object.freeze({ box: null, refusal: null, counts: null, shown: false });
+
+const GATE_UNLOADED: Refusal = Object.freeze({ why: 'unloaded' });
+const GATE_REGENERATING: Refusal = Object.freeze({ why: 'regenerating' });
+
+/**
+ * The edit path's gate (`editPath.ts`) run by the page before a cut writes its clipboard (SP5c spec §2.2 step 3): one
+ * `editState` per distinct edited column (each covers its column's 3 × 3); any 1 → `unloaded`, else any 2 →
+ * `regenerating`. Null when the batch would pass it now.
+ */
+function editGate(edits: readonly Edit[], editState: (cx: number, cz: number) => 0 | 1 | 2): Refusal | null {
+  const seen = new Set<number>();
+  let regenerating = false;
+  for (const e of edits) {
+    const cx = e.x >> 4;
+    const cz = e.z >> 4;
+    const k = colKey(cx, cz);
+    if (seen.has(k)) continue;
+    seen.add(k);
+    const s = editState(cx, cz);
+    if (s === 1) return GATE_UNLOADED;
+    if (s === 2) regenerating = true;
+  }
+  return regenerating ? GATE_REGENERATING : null;
+}
+
+/**
+ * A cut's notice for a refused post (§2.2 step 5): the gate's `unloaded` (or the sim's, or `noProto`) and `regenerating`,
+ * the sim's `changed`; `full` already has the edit path's notice and `failed` the sim's failure notice, so null.
+ */
+function cutRefusedText(why: Exclude<EditOutcome, { ok: true }>['why']): string | null {
+  switch (why) {
+    case 'unloaded': case 'noProto': return cantCut(batchRefusalText(GATE_UNLOADED));
+    case 'regenerating': return cantCut(batchRefusalText(GATE_REGENERATING));
+    case 'changed': return cantCut(batchRefusalText({ why: 'changed' }));
+    case 'full': case 'failed': return null;
+  }
+}
 
 export function createSelectActions(o: {
   tool: SelectTool;
@@ -2042,7 +2086,47 @@ export function createSelectActions(o: {
       });
     },
 
-    cut: () => Promise.resolve(),
+    cut() {
+      // As Ctrl+C: only with the tool on and not placing, one operation at a time (§1.1).
+      if (running || disposed || tool.mode !== 'select') return Promise.resolve();
+      const s = checkedSelection();
+      if (s === null) return Promise.resolve();
+      return operation(async () => {
+        // 1. The box read (§2.2).
+        const r: CopiedMsg = await o.sim.copy(s, false);
+        if (r.values === null) {
+          o.notices.show(SELECTION_UNLOADED, TOOL_NOTICE_MS);
+          return;
+        }
+        // 2-3. The batch, and the page's checks before anything is written (the cap, then the edit path's gate): a
+        // refusal here leaves the previous clipboard as it was.
+        const edits = cutBatch(s, r.values);
+        if (!Array.isArray(edits)) {
+          o.notices.show(cantCut(batchRefusalText(edits)), TOOL_NOTICE_MS);
+          return;
+        }
+        const gate = editGate(edits, o.editState);
+        if (gate !== null) {
+          o.notices.show(cantCut(batchRefusalText(gate)), TOOL_NOTICE_MS);
+          return;
+        }
+        // 4. The clipboard written and its write awaited: a reload after the cut always finds the cut blocks (D26).
+        const w = await o.clipboard.write({ w: s.w, h: s.h, d: s.d, values: r.values });
+        if (!w.ok) {
+          o.notices.show(cutNotKept(w.reason), CLIPBOARD_FAILED_MS);
+          return;
+        }
+        // 5. One step. The gate runs again inside the post, so an Apply started or a column unloaded during the write
+        // refuses it as the sim's own refusals do: nothing cut, the box as it was, the clipboard holding the selection.
+        const out = await o.actionPost(edits);
+        if (out.ok) {
+          o.notices.show(`Cut ${s.w} × ${s.h} × ${s.d}`, TOOL_DONE_MS);
+          return;
+        }
+        const text = cutRefusedText(out.why);
+        if (text !== null) o.notices.show(text, TOOL_NOTICE_MS);
+      });
+    },
     paste: () => Promise.resolve(),
     move: () => Promise.resolve(),
 
@@ -2122,11 +2206,12 @@ export function routeButton(o: {
   };
 }
 
-/** The tool's keys in the page's action switch (SP5c spec §1.1): Q and Ctrl+C here; the rest from Tasks 19-23. */
-export function selectToolAction(a: Action, s: Pick<SelectActions, 'toggle' | 'copy'>): void {
+/** The tool's keys in the page's action switch (SP5c spec §1.1): Q, Ctrl+C and Ctrl+X here; the rest from Tasks 22-23. */
+export function selectToolAction(a: Action, s: Pick<SelectActions, 'toggle' | 'copy' | 'cut'>): void {
   switch (a) {
     case 'selectTool': s.toggle(); break;
     case 'copy': void s.copy(); break;
+    case 'cut': void s.cut(); break;
     default: break;
   }
 }
@@ -4200,10 +4285,10 @@ export function mountWorldPage(root: HTMLElement, q: WorldQuery, hash: string, o
         // F switches flight and walking and the near plane; a mode switch ends a held button's repeat (SP5a spec §3.1,
         // §4.1).
         case 'toggleWalk': switchMode({ fly, walk, world, repeat: holdRepeat }); break;
-        // The selection tool's keys (SP5c spec §1.1, D4): Q and Ctrl+C act (each ignored while an operation runs); Ctrl+X,
-        // Ctrl+V, N, and while placing the wheel, ↑ and ↓, act from Tasks 19-23.
-        case 'selectTool': case 'copy': selectToolAction(a, selectActions); break;
-        case 'cut': case 'paste': case 'move':
+        // The selection tool's keys (SP5c spec §1.1, D4): Q, Ctrl+C and Ctrl+X act (each ignored while an operation
+        // runs); Ctrl+V, N, and while placing the wheel, ↑ and ↓, act from Tasks 22-23.
+        case 'selectTool': case 'copy': case 'cut': selectToolAction(a, selectActions); break;
+        case 'paste': case 'move':
         case 'turn': case 'turnBack': case 'raise': case 'lower':
           break;
         default: break; // movement and sprint are held; Esc (releasePointer) is the browser's
