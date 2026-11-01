@@ -37,10 +37,13 @@ import {
   CLIPBOARD_FAILED_MS, NO_GHOST, SELECTION_TOO_LARGE, SELECTION_UNLOADED, TOOL_DONE_MS, TOOL_NOTICE_MS, aimReach, createClipboardKv, createSelectActions,
   markTwoCorners, pageKeyName, routeButton, selectToolAction, toolClicks, type ClickTool,
 } from '../../src/ui/world/worldPage';
-import { CLIPBOARD_KEY, decodeClipboard } from '../../src/persist/clipboard';
-import { createClipboardStore, NO_STORAGE_NOTICE } from '../../src/ui/world/clipboardStore';
+import { CLIPBOARD_KEY, clipboardOps, decodeClipboard, encodeClipboard } from '../../src/persist/clipboard';
+import { createClipboardStore, NO_STORAGE_NOTICE, type ClipboardStore } from '../../src/ui/world/clipboardStore';
 import { SELECT_REACH, createSelectTool, type Corner } from '../../src/ui/world/selectTool';
-import { REFUSED_RED, SELECTION_YELLOW } from '../../src/render/selection';
+import { GHOST_CYAN, REFUSED_RED, SELECTION_YELLOW } from '../../src/render/selection';
+import { turnClipboard, type Clipboard } from '../../src/ui/world/clipboard';
+import { FACE_UP } from '../../src/world/blocks/kinds';
+import { bodyOf, type BodyBox } from '../../src/player/interaction';
 import { createRayHit } from '../../src/player/raycast';
 import type { Action } from '../../src/player/keymap';
 import { createEditLatency } from '../../src/ui/world/editLatency';
@@ -50,7 +53,7 @@ import { createHoldRepeat } from '../../src/ui/world/holdRepeat';
 import { mountPalette } from '../../src/ui/palette';
 import { PLACE_SAVED_NOTICE, PLACES_FULL_NOTICE, createPlaces } from '../../src/ui/world/places';
 import { mountPlaceDialog } from '../../src/ui/world/placeDialog';
-import { BACKUP_NOTICE_MS, backupFailureReason } from '../../src/ui/world/modifyMode';
+import { BACKUP_NOTICE_MS, backupFailureReason, createModifyMode, createModifySwitch } from '../../src/ui/world/modifyMode';
 import { TELEPORT_FAILED_MS, TELEPORT_FAILED_NOTICE } from '../../src/ui/world/teleport';
 import { NO_ENTRY } from '../../src/sim/diffStore';
 import type { CopiedMsg, Edit, EditedMsg, FlushedMsg } from '../../src/workers/protocol';
@@ -4844,7 +4847,7 @@ describe('the selection tool in the page I: Q, the corners, the box and Ctrl+C (
     expect(s).toMatch(/stopRepeat: \(\) => holdRepeat\.stop\(\),/);
     expect(s).toMatch(/release: \(\) => clipboardKv\.close\(\),/);
     expect(s).toMatch(/teardown\.push\(\(\) => selectActions\.dispose\(\)\);/);
-    expect(s).toMatch(/case 'selectTool': case 'copy': case 'cut': selectToolAction\(a, selectActions\); break;/);
+    expect(s).toMatch(/case 'selectTool': case 'copy': case 'cut': case 'paste':\s+case 'turn': case 'turnBack': case 'raise': case 'lower':\s+selectToolAction\(a, selectActions\);/);
     expect(s).toMatch(/tool: toolClicks\(tool, selectActions\),/);
     expect(s).toMatch(/onButton: routeButton\(\{ toolOn: \(\) => tool\.mode !== 'off', clicks, hold: holdRepeat, now: nowS, clickTime: \(\) => performance\.now\(\) \}\),/);
     expect(s).toMatch(/reach: \(\) => aimReach\(tool, fly\), selection: selectActions,/);
@@ -5146,5 +5149,732 @@ describe('the selection tool in the page II: Ctrl+X (SP5c spec §2.2, §10.5; D6
     expect(r.tool.mode).toBe('off');
     await r.actions.cut();
     expect([r.shown, r.copies, r.posted]).toEqual([[], [], []]);
+  });
+});
+
+describe('the selection tool in the page III: Ctrl+V, the ghost, turn, raise and RMB (SP5c spec §2.3, §2.5, §2.7, §2.8; D7, D9, D13, D15, D16)', () => {
+  beforeEach(() => { vi.useFakeTimers(); });
+  afterEach(() => {
+    vi.useRealTimers();
+    vi.unstubAllGlobals();
+  });
+  type PBox = { x0: number; y0: number; z0: number; w: number; h: number; d: number };
+  const val = (state: number, fluid = 0): number => ((state << 8) | fluid) >>> 0;
+  const OAK_X = REGISTRY.parseStateKey('oak_log[axis=x]');
+  const LADDER_WATER = val(LADDER, WATER_SOURCE);
+  /**
+   * X: a 3 × 2 × 2 clipboard (index `(y · d + z) · w + x`): stone, stone, glass / stone, dirt, stone on the bottom layer,
+   * an x-axis log and a waterlogged ladder among air on the top one.
+   */
+  const X: Clipboard = {
+    w: 3, h: 2, d: 2,
+    values: new Uint32Array([
+      val(STONE), val(STONE), val(GLASS), val(STONE), val(DIRT), val(STONE),
+      val(OAK_X), 0, 0, 0, LADDER_WATER, 0,
+    ]),
+  };
+  /** Y: another clipboard, 2 × 1 × 1 of dirt. */
+  const Y: Clipboard = { w: 2, h: 1, d: 1, values: new Uint32Array([val(DIRT), val(DIRT)]) };
+  const TAIL = ' · RMB pastes, LMB cancels · Wheel turns · ↑ ↓ raise or lower';
+
+  /**
+   * `createSelectActions` as the page wires its paste: a fake world (generated stone at y ≤ 60, air above, and the
+   * DiffStore's entries), a fake sim whose `copy` reads it (after `st.copyDelayMs`, at the reply) and whose `edits` apply
+   * a batch all or nothing (`'changed'` at the first `expect` that differs), the real edit path, block history and
+   * `createActionPost`, the real clipboard store over a `MemoryKV`, a recording ghost host and label, the target reader
+   * on the fake timers, and the page's aim (the click queue with `toolClicks`, the hold repeat, the reach) from an eye
+   * 4.5 blocks over the ground at (0.5, 65.5, 0.5) looking straight down at the stone voxel (0, 60, 0).
+   */
+  function pasteRig(o: { kv?: MemoryKV; clipboard?: ClipboardStore; locked?: boolean; hud?: boolean } = {}) {
+    const tool = createSelectTool();
+    const shown: Array<[string, number]> = [];
+    const notices = { show: (text: string, ms: number) => { shown.push([text, ms]); }, hide: () => {} };
+    const st = {
+      editState: 0 as 0 | 1 | 2,
+      refuse: null as 'changed' | 'full' | 'noProto' | 'unloaded' | null,
+      copyDelayMs: 0,
+      copyFail: null as Error | null,
+      unloadedCopy: false,
+    };
+    const gen = (_x: number, y: number, _z: number): number => (y <= 60 ? val(STONE) : 0);
+    const key = (x: number, y: number, z: number): string => `${x},${y},${z}`;
+    const entries = new Map<string, number>();
+    const valueAt = (x: number, y: number, z: number): number => entries.get(key(x, y, z)) ?? gen(x, y, z);
+    const read = (b: PBox): Uint32Array => {
+      const v = new Uint32Array(b.w * b.h * b.d);
+      let i = 0;
+      for (let y = 0; y < b.h; y++) for (let z = 0; z < b.d; z++) for (let x = 0; x < b.w; x++) v[i++] = valueAt(b.x0 + x, b.y0 + y, b.z0 + z);
+      return v;
+    };
+    const copies: PBox[] = [];
+    const posted: Edit[][] = [];
+    const reply = (refused: EditedMsg['refused'], prev: Uint32Array, next: Uint32Array): EditedMsg => ({
+      type: 'edited', id: posted.length, prev, next, dirty: new Float64Array(0), entryAdded: new Float64Array(0), entryRemoved: new Float64Array(0),
+      refused, relightMs: 0, editMs: 0, limboMax: 0, subBatchMaxMs: 0,
+    });
+    const sim = {
+      failed: false,
+      copy: (b: PBox, _gen: boolean): Promise<CopiedMsg> => {
+        copies.push({ x0: b.x0, y0: b.y0, z0: b.z0, w: b.w, h: b.h, d: b.d });
+        return new Promise<CopiedMsg>((resolve, reject) => {
+          const go = (): void => {
+            if (st.copyFail !== null) reject(st.copyFail);
+            else if (st.unloadedCopy) resolve({ type: 'copied', id: copies.length, values: null, generated: null, why: 'unloaded' });
+            else resolve({ type: 'copied', id: copies.length, values: read(b), generated: null, why: null });
+          };
+          if (st.copyDelayMs > 0) setTimeout(go, st.copyDelayMs);
+          else go();
+        });
+      },
+      edits: (e: readonly Edit[]): Promise<EditedMsg> => {
+        posted.push([...e]);
+        if (st.refuse !== null) return Promise.resolve(reply(st.refuse, new Uint32Array(0), new Uint32Array(0)));
+        const after = new Map(entries);
+        const prev = new Uint32Array(e.length);
+        const next = new Uint32Array(e.length);
+        for (let i = 0; i < e.length; i++) {
+          const { x, y, z } = e[i]!;
+          const k = key(x, y, z);
+          if ((after.get(k) ?? gen(x, y, z)) !== e[i]!.expect) return Promise.resolve(reply('changed', new Uint32Array(0), new Uint32Array(0)));
+          prev[i] = after.get(k) ?? NO_ENTRY;
+          if (e[i]!.op === 'revert' || e[i]!.value === gen(x, y, z)) after.delete(k);
+          else after.set(k, e[i]!.value);
+          next[i] = after.get(k) ?? NO_ENTRY;
+        }
+        entries.clear();
+        for (const [k, v] of after) entries.set(k, v);
+        return Promise.resolve(reply(null, prev, next));
+      },
+    };
+    const editPath = createEditPath({
+      sim,
+      coordinator: { editState: () => st.editState, simPin() {}, simUnpin() {}, markEdited() {} },
+      latency: createEditLatency(),
+      now: () => performance.now(),
+      notices,
+    });
+    const blockHistory = createBlockHistory({ post: editPath.post, read: valueAt, pending: editPath.pending, settled: editPath.settled, notices });
+    const actionPost = createActionPost({ post: editPath.post, record: blockHistory.record });
+    const kv = o.kv ?? createMemoryKV();
+    const clipboard = o.clipboard ?? createClipboardStore({ kv: () => Promise.resolve(kv), notices });
+    // The ghost host, recorded: `calls` in order (its box, the placements, the hides), the clipboard it was given.
+    const g = { calls: [] as unknown[][], build: 'ready' as 'empty' | 'building' | 'ready' | 'tooMany', steps: 0, clip: null as null | { w: number; h: number; d: number; values: number[] } };
+    const ghost = {
+      setGhostBox: (...b: number[]) => { g.calls.push(['box', ...b]); },
+      hideGhostBox: () => { g.calls.push(['hideBox']); },
+      setGhost: (w: number, h: number, d: number, values: Uint32Array) => {
+        g.calls.push(['ghost', w, h, d]);
+        g.clip = { w, h, d, values: Array.from(values) };
+      },
+      ghostStep: () => { g.steps++; },
+      placeGhost: (...p: number[]) => { g.calls.push(['place', ...p]); },
+      hideGhost: () => { g.calls.push(['hide']); },
+      ghostBuild: () => g.build,
+      setReplaced: () => {},
+      hideReplaced: () => { g.calls.push(['hideReplaced']); },
+    };
+    const of = (kind: string): unknown[][] => g.calls.filter((c) => c[0] === kind).map((c) => c.slice(1));
+    const last = (kind: string): unknown[] | undefined => of(kind).at(-1);
+    const labels: Array<string | null> = [];
+    const origin = { x: 0, y: 0, z: 0 };
+    const fly = { x: 0.5, y: 65.5, z: 0.5, yaw: 0, pitch: -90, mode: 'fly' as const };
+    const bodyBox: BodyBox = { minX: 0, minY: 0, minZ: 0, maxX: 0, maxY: 0, maxZ: 0 };
+    const stopRepeat = vi.fn();
+    const actions = createSelectActions({
+      tool, sim, editState: () => st.editState, clipboard, actionPost, notices, keyName: pageKeyName,
+      view: { setSelectionBox() {}, hideSelectionBox() {}, setSelectLabel: (t) => { labels.push(t); } },
+      ghost, origin,
+      body: () => bodyOf('fly', fly.x, fly.y, fly.z, bodyBox),
+      stopRepeat: () => stopRepeat(),
+      timers: { set: (f, ms) => setTimeout(f, ms) as unknown as number, clear: (id) => { clearTimeout(id); } },
+    });
+    // The page's aim over the fake world, with its click queue and hold repeat.
+    const world = { origin, setOutline: () => {}, hideOutline: () => {} };
+    const worldRead = { blockAt: (x: number, y: number, z: number) => valueAt(x, y, z) >>> 8, fluidAt: (x: number, y: number, z: number) => valueAt(x, y, z) & 0xff };
+    const hotbar = createHotbar(null);
+    const clicks = createClickQueue({
+      post: (edit, t) => { void actionPost([edit], t); }, hotbar, fly, walk: createWalkState(), editable: () => st.editState === 0,
+      tool: toolClicks(tool, actions),
+    });
+    let t = 0;
+    const hold = createHoldRepeat({ enabled: () => true, pending: editPath.pending, queue: (b) => clicks.push(b) });
+    stopRepeat.mockImplementation(() => hold.stop());
+    const aim = createAim({
+      fly, world: world as never, locked: () => o.locked ?? true, hud: o.hud ?? true, clicks, repeat: { hold, now: () => t },
+      reach: () => aimReach(tool, fly), selection: actions,
+    });
+    const onButton = routeButton({ toolOn: () => tool.mode !== 'off', clicks, hold, now: () => t, clickTime: () => t * 1000 });
+    /** One rendered frame 10 ms after the last. */
+    const frame = (paused = false): void => {
+      t += 0.01;
+      aim.aim(worldRead, paused);
+    };
+    /** `ms` of frames, 10 ms apart, the fake timers advanced with them. */
+    const run = async (ms: number, paused = false): Promise<void> => {
+      for (let i = 0; i < ms; i += 10) {
+        frame(paused);
+        await vi.advanceTimersByTimeAsync(10);
+      }
+    };
+    /** Ctrl+V, settled. */
+    const paste = async (): Promise<void> => {
+      const p = actions.paste();
+      await vi.advanceTimersByTimeAsync(0);
+      await p;
+    };
+    /** RMB's confirm, settled (`run` frames meanwhile). */
+    const confirm = async (ms = 50): Promise<string> => {
+      const p = actions.confirm();
+      await run(ms);
+      return p;
+    };
+    /** The ghost at the default aim: 3 × 2 × 2 X anchored on the top face of (0, 60, 0) at (−1, 61, −1). */
+    const lookAt = (x: number, z: number): void => { fly.x = x + 0.5; fly.z = z + 0.5; fly.pitch = -90; };
+    const sky = (): void => { fly.pitch = 90; };
+    return {
+      tool, actions, shown, st, entries, valueAt, read, copies, posted, blockHistory, kv, clipboard, g, of, last, labels, origin, fly,
+      stopRepeat, hold, clicks, aim, onButton, frame, run, paste, confirm, lookAt, sky, hotbar,
+    };
+  }
+  type Rig = ReturnType<typeof pasteRig>;
+  /** The box of X anchored at the default aim, as the ghost box writes it (x0 … z1). */
+  const X_AT = [-1, 61, -1, 2, 63, 1];
+  /** The label's last text. */
+  const label = (r: Rig): string | null | undefined => r.labels.at(-1);
+  /** The X clipboard kept, then Ctrl+V. */
+  async function pasted(r: Rig, c: Clipboard = X): Promise<void> {
+    await r.clipboard.write(c);
+    await r.paste();
+  }
+
+  describe('Ctrl+V', () => {
+    test('with the tool off it turns the tool on and shows the ghost at the first aim; with no aim since Ctrl+V, RMB does nothing', async () => {
+      const r = pasteRig();
+      await pasted(r);
+      expect([r.tool.mode, r.tool.kind, r.stopRepeat.mock.calls.length]).toEqual(['place', 'paste', 1]);
+      expect(r.g.clip).toEqual({ w: 3, h: 2, d: 2, values: Array.from(X.values) });
+      // No aim yet: hidden, and RMB does nothing.
+      r.sky();
+      await r.run(200);
+      expect([r.of('place'), r.of('box'), r.actions.ghostState().shown]).toEqual([[], [], false]);
+      expect(await r.confirm()).toBe('');
+      expect([r.copies, r.posted, r.shown]).toEqual([[], [], []]);
+      expect(label(r)).toBe(`Paste 3 × 2 × 2 · counting…${TAIL}`);
+      // The first aim: the ghost on the top face of the aimed stone, centred, its box cyan.
+      r.lookAt(0, 0);
+      r.frame();
+      expect(r.of('place')).toEqual([[-1, 61, -1, 0]]);
+      expect(r.of('box')).toEqual([[...X_AT, GHOST_CYAN]]);
+      expect(r.actions.ghostState()).toEqual({ box: { x0: -1, y0: 61, z0: -1, w: 3, h: 2, d: 2 }, refusal: null, counts: null, shown: true });
+      expect(r.g.steps).toBeGreaterThan(0);
+    });
+
+    test('each paste row of Task 18\'s notice table with its time: no clipboard 4 s, unreadable 4 s, unknown types 6 s, a refusal 4 s, done 1.5 s', async () => {
+      const r = pasteRig();
+      await r.paste();
+      expect(r.shown).toEqual([['The clipboard is empty: select a volume (Q) and copy it (Ctrl+C)', 4_000]]);
+      expect([r.tool.mode, r.g.calls]).toEqual(['off', []]);
+      r.shown.length = 0;
+      await r.kv.write([{ op: 'put', store: 'meta', key: CLIPBOARD_KEY, value: { v: 2 } }]);
+      await r.paste();
+      expect(r.shown).toEqual([['The kept clipboard could not be read', 4_000]]);
+      expect([r.tool.mode, r.g.calls]).toEqual(['off', []]);
+      r.shown.length = 0;
+      const enc = encodeClipboard(X.w, X.h, X.d, X.values);
+      await r.kv.write(clipboardOps({ ...enc, keys: enc.keys.map((k) => (k === REGISTRY.stateKey(DIRT) ? 'dirt_of_a_later_version' : k)) }));
+      await r.paste();
+      expect(r.shown).toEqual([['1 blocks of unknown types became air', 6_000]]);
+      r.shown.length = 0;
+      // A refusal: over the body (the ghost pinned into the eye's cell).
+      r.actions.placeAt(0, 64, 0, true);
+      expect(await r.confirm()).toBe('Can\'t paste here: you are inside it');
+      expect(r.shown).toEqual([['Can\'t paste here: you are inside it', 4_000]]);
+      r.shown.length = 0;
+      r.actions.placeAt(-1, 61, -1, true);
+      expect(await r.confirm()).toBe('ok');
+      expect(r.shown).toEqual([['Pasted 3 × 2 × 2', 1_500]]);
+    });
+
+    test('a clipboard with 3 unknown-key cells shows `3 blocks of unknown types became air` and the ghost, and RMB pastes air there', async () => {
+      const r = pasteRig();
+      const U: Clipboard = { w: 4, h: 1, d: 1, values: new Uint32Array([val(GLASS), val(DIRT), val(GLASS), val(GLASS)]) };
+      const enc = encodeClipboard(U.w, U.h, U.d, U.values);
+      await r.kv.write(clipboardOps({ ...enc, keys: enc.keys.map((k) => (k === REGISTRY.stateKey(GLASS) ? 'glass_of_a_later_version' : k)) }));
+      await r.paste();
+      expect(r.shown).toEqual([['3 blocks of unknown types became air', 6_000]]);
+      expect(r.g.clip).toEqual({ w: 4, h: 1, d: 1, values: [0, val(DIRT), 0, 0] });
+      expect(r.tool.mode).toBe('place');
+      // Pinned into the ground (stone at y 60): the unknown cells write air there.
+      r.actions.placeAt(5, 60, 5, true);
+      r.frame();
+      expect(r.actions.ghostState().shown).toBe(true);
+      expect(await r.confirm()).toBe('ok');
+      expect(r.posted).toEqual([[
+        { x: 5, y: 60, z: 5, op: 'set', value: 0, expect: val(STONE) },
+        { x: 6, y: 60, z: 5, op: 'set', value: val(DIRT), expect: val(STONE) },
+        { x: 7, y: 60, z: 5, op: 'set', value: 0, expect: val(STONE) },
+        { x: 8, y: 60, z: 5, op: 'set', value: 0, expect: val(STONE) },
+      ]]);
+      expect([r.valueAt(5, 60, 5), r.valueAt(6, 60, 5), r.valueAt(7, 60, 5), r.valueAt(8, 60, 5)]).toEqual([0, val(DIRT), 0, 0]);
+    });
+
+    test('RMB held placing blocks with hold repeat on, then Ctrl+V and an aim: over 2 s of frames no RMB reaches the tool (no confirm)', async () => {
+      const r = pasteRig();
+      await r.clipboard.write(X);
+      const confirm = vi.spyOn(r.actions, 'confirm');
+      const stop = vi.spyOn(r.hold, 'stop');
+      r.onButton(2, true);
+      await r.run(100);
+      const placedBlocks = r.posted.length;
+      expect(placedBlocks).toBeGreaterThan(0);
+      await r.paste();
+      expect([r.tool.mode, r.stopRepeat.mock.calls.length, stop.mock.calls.length]).toEqual(['place', 1, 1]);
+      await r.run(2_000);
+      expect(confirm).not.toHaveBeenCalled();
+      expect(r.posted.length).toBe(placedBlocks);
+      expect([r.tool.mode, r.actions.ghostState().shown]).toEqual(['place', true]);
+      r.onButton(2, false);
+    });
+
+    test('a failed Ctrl+C, then Ctrl+V shows the ghost of what was just copied, not the older stored clipboard (rulings P19)', async () => {
+      const r = pasteRig();
+      await r.clipboard.write(Y);
+      r.actions.toggle();
+      r.tool.mark(0, { x: 0, y: 59, z: 0 });
+      r.tool.mark(2, { x: 1, y: 61, z: 0 });
+      r.kv.failAt(0, 'QuotaExceededError');
+      await r.actions.copy();
+      expect(r.shown).toEqual([['Could not keep the clipboard (storage full)', 6_000]]);
+      await r.paste();
+      expect(r.g.clip).toEqual({ w: 2, h: 3, d: 1, values: [val(STONE), val(STONE), val(STONE), val(STONE), 0, 0] });
+    });
+  });
+
+  describe('placing', () => {
+    test('the wheel turns the ghost (the label `turned 90°`, `placeGhost` with q 1) and ↑ raises it by 1 for the rest of the placing', async () => {
+      const r = pasteRig();
+      await pasted(r);
+      r.frame();
+      selectToolAction('turn', r.actions);
+      // Turned: 2 × 2 × 3, anchored about the same aimed spot.
+      expect(r.last('place')).toEqual([-1, 61, -1, 1]);
+      expect(r.last('box')).toEqual([-1, 61, -1, 1, 63, 2, GHOST_CYAN]);
+      r.frame();
+      expect(label(r)).toBe(`Paste 3 × 2 × 2 · turned 90° · counting…${TAIL}`);
+      selectToolAction('raise', r.actions);
+      expect(r.last('place')).toEqual([-1, 62, -1, 1]);
+      // The aim moves: the offset stays.
+      r.lookAt(4, 3);
+      r.frame();
+      expect(r.last('place')).toEqual([3, 62, 2, 1]);
+      selectToolAction('turnBack', r.actions);
+      selectToolAction('lower', r.actions);
+      selectToolAction('lower', r.actions);
+      expect(r.last('place')).toEqual([3, 60, 2, 0]);
+      expect([r.tool.turns, r.tool.offset]).toEqual([0, -1]);
+      // A new placing starts unturned and unraised.
+      r.clicks.push(0);
+      r.frame();
+      await r.paste();
+      r.frame();
+      expect(r.last('place')).toEqual([3, 61, 2, 0]);
+    });
+
+    test('a ghost moved every frame posts no target `copy` until it rests 100 ms', async () => {
+      const r = pasteRig();
+      await pasted(r);
+      for (let i = 0; i < 100; i++) {
+        r.lookAt(i, 0);
+        await r.run(10);
+      }
+      expect(r.copies).toEqual([]);
+      await r.run(80);
+      expect(r.copies).toEqual([]);
+      await r.run(30);
+      expect(r.copies).toEqual([{ x0: 98, y0: 61, z0: -1, w: 3, h: 2, d: 2 }]);
+      await r.run(500);
+      expect(r.copies).toHaveLength(1);
+    });
+
+    test('LMB and Q cancel with nothing changed: the ghost hidden, no target `copy` afterwards (rulings P24)', async () => {
+      for (const how of ['lmb', 'q'] as const) {
+        const r = pasteRig();
+        await pasted(r);
+        await r.run(50);
+        expect(r.actions.ghostState().shown).toBe(true);
+        if (how === 'lmb') {
+          r.clicks.push(0);
+          r.frame();
+          expect(r.tool.mode).toBe('select');
+        } else {
+          selectToolAction('selectTool', r.actions);
+          expect(r.tool.mode).toBe('off');
+        }
+        expect(r.actions.ghostState().shown).toBe(false);
+        expect([r.of('hide').length, r.of('hideBox').length, r.of('hideReplaced').length]).toEqual([1, 1, 1]);
+        await r.run(300);
+        expect([r.copies, r.posted, r.shown, r.entries.size]).toEqual([[], [], [], 0]);
+      }
+    });
+
+    test('Ctrl+V, aim, open and close the help with the aim unchanged: the ghost shows again and one target `copy` is posted 100 ms after the resume', async () => {
+      const r = pasteRig();
+      await pasted(r);
+      await r.run(50);
+      await r.run(300, true);
+      expect(r.actions.ghostState().shown).toBe(false);
+      expect(r.of('hide')).toHaveLength(1);
+      expect(r.copies).toEqual([]);
+      const places = r.of('place').length;
+      r.frame();
+      expect(r.of('place')).toHaveLength(places + 1);
+      expect(r.last('place')).toEqual([-1, 61, -1, 0]);
+      expect(r.actions.ghostState().shown).toBe(true);
+      await vi.advanceTimersByTimeAsync(99);
+      expect(r.copies).toEqual([]);
+      await vi.advanceTimersByTimeAsync(1);
+      expect(r.copies).toEqual([{ x0: -1, y0: 61, z0: -1, w: 3, h: 2, d: 2 }]);
+    });
+
+    test('a second Ctrl+V of a different-size clipboard at the same aim re-anchors the ghost (its box the new size); Ctrl+V while placing changes nothing (rulings P18)', async () => {
+      const r = pasteRig();
+      await pasted(r);
+      r.frame();
+      selectToolAction('turn', r.actions);
+      selectToolAction('raise', r.actions);
+      // Ctrl+V while placing: no clipboard read, the same ghost, turns and offset.
+      const read = vi.spyOn(r.clipboard, 'read');
+      const calls = r.g.calls.length;
+      selectToolAction('paste', r.actions);
+      await r.run(20);
+      expect([read.mock.calls.length, r.tool.turns, r.tool.offset, r.g.calls.length]).toEqual([0, 1, 1, calls]);
+      // LMB ends the placing; Y kept; Ctrl+V at the same aim: the box Y's size.
+      r.clicks.push(0);
+      r.frame();
+      await r.clipboard.write(Y);
+      await r.paste();
+      r.frame();
+      expect(r.last('box')).toEqual([-1, 61, 0, 1, 62, 1, GHOST_CYAN]);
+      expect(r.actions.ghostState().box).toEqual({ x0: -1, y0: 61, z0: 0, w: 2, h: 1, d: 1 });
+    });
+
+    test('`placeAt(…, true)` then a wheel turn: the min corner stays pinned while the aim points elsewhere; `confirm()` pastes there', async () => {
+      const r = pasteRig();
+      await pasted(r);
+      r.actions.placeAt(10, 61, 10, true);
+      expect(r.last('place')).toEqual([10, 61, 10, 0]);
+      selectToolAction('turn', r.actions);
+      expect(r.last('place')).toEqual([10, 61, 10, 1]);
+      r.lookAt(-5, 7);
+      await r.run(50);
+      expect(r.last('place')).toEqual([10, 61, 10, 1]);
+      expect(r.last('box')).toEqual([10, 61, 10, 12, 63, 13, GHOST_CYAN]);
+      expect(await r.confirm()).toBe('ok');
+      const turned = turnClipboard(X, 1);
+      const want: Edit[] = [];
+      let i = 0;
+      for (let y = 0; y < 2; y++) for (let z = 0; z < 3; z++) for (let x = 0; x < 2; x++, i++) {
+        const v = turned.values[i]!;
+        if (v !== 0) want.push({ x: 10 + x, y: 61 + y, z: 10 + z, op: 'set', value: v, expect: 0 });
+      }
+      expect(r.posted).toEqual([want]);
+      expect(r.tool.selection()).toEqual({ x0: 10, y0: 61, z0: 10, w: 2, h: 2, d: 3 });
+    });
+
+    test('after a rebase the pinned ghost covers the same world cells (rulings P8)', async () => {
+      const r = pasteRig();
+      await pasted(r);
+      r.actions.placeAt(10, 61, 10, true);
+      r.frame();
+      r.origin.x = 16;
+      r.origin.z = -16;
+      r.frame();
+      expect(r.last('place')).toEqual([-6, 61, 26, 0]);
+      expect(r.last('box')).toEqual([-6, 61, 26, -3, 63, 28, GHOST_CYAN]);
+      expect(r.actions.ghostState().box).toEqual({ x0: 10, y0: 61, z0: 10, w: 3, h: 2, d: 2 });
+    });
+
+    test('after a first aim, a frame whose cast misses (the sky) leaves the ghost and its box where they were and posts no target `copy`', async () => {
+      const r = pasteRig();
+      await pasted(r);
+      await r.run(150);
+      expect(r.copies).toHaveLength(1);
+      const calls = r.g.calls.length;
+      r.sky();
+      await r.run(500);
+      expect([r.g.calls.length, r.copies.length, r.actions.ghostState().shown]).toEqual([calls, 1, true]);
+      expect(r.last('place')).toEqual([-1, 61, -1, 0]);
+    });
+
+    test('a paused frame with a miss hides the ghost (rulings P17); with the pointer free and with hud false the ghost still shows (rulings P25)', async () => {
+      const r = pasteRig();
+      await pasted(r);
+      r.frame();
+      r.sky();
+      r.frame(true);
+      expect([r.of('hide').length, r.of('hideBox').length, r.actions.ghostState().shown]).toEqual([1, 1, false]);
+      for (const [locked, hud] of [[false, true], [true, false]] as const) {
+        const q = pasteRig({ locked, hud });
+        await pasted(q);
+        q.frame();
+        expect(q.actions.ghostState().shown).toBe(true);
+        q.actions.placeAt(3, 61, 3);
+        expect(q.actions.ghostState().shown).toBe(true);
+      }
+    });
+
+    test('three boxes refused before any read (rulings P11): its top at y 319 raised with ↑, one reaching past x 524,288, one over an unloaded column: the box red, the reason in the label, no target `copy` after 200 ms', async () => {
+      // Its top at 319: X (2 high) on the top face of y 317, then ↑.
+      const a = pasteRig();
+      await pasted(a);
+      const hit = createRayHit();
+      Object.assign(hit, { hit: true, x: 0, y: 317, z: 0, face: FACE_UP, state: STONE });
+      a.actions.frame(hit, false);
+      expect(a.last('box')).toEqual([-1, 318, -1, 2, 320, 1, GHOST_CYAN]);
+      selectToolAction('raise', a.actions);
+      a.actions.frame(hit, false);
+      expect(a.last('box')).toEqual([-1, 319, -1, 2, 321, 1, REFUSED_RED]);
+      expect(label(a)).toBe(`Paste 3 × 2 × 2 · it would leave the world (y −64 … 319)${TAIL}`);
+      await vi.advanceTimersByTimeAsync(200);
+      expect(a.copies).toEqual([]);
+      // Past the world's edge.
+      const b = pasteRig();
+      await pasted(b);
+      b.actions.placeAt(524_287, 61, 0);
+      b.sky();
+      b.frame();
+      expect(b.last('box')).toEqual([524_287, 61, 0, 524_290, 63, 2, REFUSED_RED]);
+      expect(label(b)).toBe(`Paste 3 × 2 × 2 · it would cross the world's edge${TAIL}`);
+      await b.run(200);
+      expect(b.copies).toEqual([]);
+      // An unloaded column (`editState` 1).
+      const c = pasteRig();
+      await pasted(c);
+      c.st.editState = 1;
+      c.frame();
+      expect(c.last('box')).toEqual([...X_AT, REFUSED_RED]);
+      expect(label(c)).toBe(`Paste 3 × 2 × 2 · part of it is not loaded${TAIL}`);
+      await c.run(200);
+      expect(c.copies).toEqual([]);
+    });
+
+    test('a build that ends `\'tooMany\'` adds `no preview: too many faces` to the label, its box still shown', async () => {
+      const r = pasteRig();
+      await pasted(r);
+      r.frame();
+      const labels = r.labels.length;
+      r.frame();
+      expect(r.labels).toHaveLength(labels);
+      r.g.build = 'tooMany';
+      r.frame();
+      expect(label(r)).toBe(`Paste 3 × 2 × 2 · counting…${TAIL} · no preview: too many faces`);
+      expect(r.last('box')).toEqual([...X_AT, GHOST_CYAN]);
+      r.frame();
+      expect(r.labels).toHaveLength(labels + 1);
+    });
+
+    test('`dispose` hides the ghost, its box and the overlay, and a settle that was pending posts no `copy` (rulings P29)', async () => {
+      const r = pasteRig();
+      await pasted(r);
+      await r.run(50);
+      r.actions.dispose();
+      expect([r.of('hide').length, r.of('hideBox').length, r.of('hideReplaced').length]).toEqual([1, 1, 1]);
+      await vi.advanceTimersByTimeAsync(300);
+      expect(r.copies).toEqual([]);
+    });
+  });
+
+  describe('RMB', () => {
+    test('a refusal keeps the ghost; a paste over the player\'s body is refused `you are inside it` and `confirm()` resolves its text', async () => {
+      const r = pasteRig();
+      await pasted(r);
+      // The eye at (0.5, 65.5, 0.5): the body spans y 63.88 … 65.68; X's stone at its min corner (0, 63, 0).
+      r.actions.placeAt(0, 63, 0, true);
+      r.frame();
+      const p = r.actions.confirm();
+      await r.run(50);
+      expect(await p).toBe('Can\'t paste here: you are inside it');
+      expect(r.shown).toEqual([['Can\'t paste here: you are inside it', 4_000]]);
+      expect([r.tool.mode, r.actions.ghostState().shown, r.posted, r.actions.busy()]).toEqual(['place', true, [], false]);
+      // No read for the refused box; the kept ghost's target is read once it has stood still 100 ms again.
+      expect(r.copies).toEqual([]);
+      await r.run(100);
+      expect(r.copies).toEqual([{ x0: 0, y0: 63, z0: 0, w: 3, h: 2, d: 2 }]);
+    });
+
+    test('an accepted paste is one step, the selection is the pasted box, the mode `select` and `confirm()` resolves `\'ok\'`; the ghost hidden and no target `copy` afterwards (rulings P24); Ctrl+Z takes it back', async () => {
+      const r = pasteRig();
+      await pasted(r);
+      r.frame();
+      expect(await r.confirm()).toBe('ok');
+      expect(r.copies).toEqual([{ x0: -1, y0: 61, z0: -1, w: 3, h: 2, d: 2 }]);
+      expect(r.posted).toHaveLength(1);
+      expect(r.blockHistory.size).toBe(1);
+      expect(r.shown).toEqual([['Pasted 3 × 2 × 2', 1_500]]);
+      expect([r.tool.mode, r.tool.selection(), r.actions.ghostState().shown]).toEqual(['select', { x0: -1, y0: 61, z0: -1, w: 3, h: 2, d: 2 }, false]);
+      expect(Array.from(r.read({ x0: -1, y0: 61, z0: -1, w: 3, h: 2, d: 2 }))).toEqual(Array.from(X.values));
+      expect([r.of('hide').length, r.of('hideBox').length]).toEqual([1, 1]);
+      await r.run(300);
+      expect(r.copies).toHaveLength(1);
+      expect(label(r)).toBe('Selection 3 × 2 × 2 (12 blocks) · Ctrl+C copy · Ctrl+X cut · N move · Ctrl+V paste');
+      r.blockHistory.undo();
+      await r.run(20);
+      expect(r.entries.size).toBe(0);
+    });
+
+    test('a `\'changed\'` reply: `Can\'t paste here: the blocks changed; try again`, the ghost kept', async () => {
+      const r = pasteRig();
+      await pasted(r);
+      r.frame();
+      r.st.refuse = 'changed';
+      expect(await r.confirm()).toBe('Can\'t paste here: the blocks changed; try again');
+      expect(r.shown).toEqual([['Can\'t paste here: the blocks changed; try again', 4_000]]);
+      expect([r.tool.mode, r.actions.ghostState().shown, r.blockHistory.size]).toEqual(['place', true, 0]);
+    });
+
+    test('the sim\'s other replies: `\'unloaded\'` and `\'noProto\'` read `part of it is not loaded`, `\'full\'` only the edit path\'s notice; a `copy` answered `unloaded` the same; a `copy` rejected with `SimFailed` nothing, `busy()` false (rulings P2)', async () => {
+      const cases: Array<[string, (r: Rig) => void, string, Array<[string, number]>]> = [
+        ['unloaded', (r) => { r.st.refuse = 'unloaded'; }, 'Can\'t paste here: part of it is not loaded', [['Can\'t paste here: part of it is not loaded', 4_000]]],
+        ['noProto', (r) => { r.st.refuse = 'noProto'; }, 'Can\'t paste here: part of it is not loaded', [['Can\'t paste here: part of it is not loaded', 4_000]]],
+        ['full', (r) => { r.st.refuse = 'full'; }, EDIT_FULL_NOTICE, [[EDIT_FULL_NOTICE, 4_000]]],
+        ['simFailed', (r) => { r.st.copyFail = new SimFailed('the sim stopped'); }, '', []],
+        // The target `copy` answered `unloaded` (a column no longer Published at the reply): nothing posted.
+        ['copyUnloaded', (r) => { r.st.unloadedCopy = true; }, 'Can\'t paste here: part of it is not loaded', [['Can\'t paste here: part of it is not loaded', 4_000]]],
+      ];
+      const unhandled: unknown[] = [];
+      const onUnhandled = (e: unknown): void => { unhandled.push(e); };
+      process.on('unhandledRejection', onUnhandled);
+      try {
+        for (const [name, arrange, text, notices] of cases) {
+          const r = pasteRig();
+          await pasted(r);
+          r.frame();
+          arrange(r);
+          expect(await r.confirm(), name).toBe(text);
+          expect(r.shown, name).toEqual(notices);
+          expect([r.tool.mode, r.actions.ghostState().shown, r.blockHistory.size, r.actions.busy()], name).toEqual(['place', true, 0, false]);
+          if (name === 'copyUnloaded' || name === 'simFailed') expect(r.posted, name).toEqual([]);
+        }
+      } finally {
+        process.off('unhandledRejection', onUnhandled);
+      }
+      expect(unhandled).toEqual([]);
+    });
+
+    test('an Apply started after the target `copy` was posted (`editState` 2 at its reply): `Can\'t paste here: the world is regenerating`, nothing posted, the ghost kept', async () => {
+      const r = pasteRig();
+      await pasted(r);
+      r.frame();
+      r.st.copyDelayMs = 200;
+      setTimeout(() => { r.st.editState = 2; }, 100);
+      expect(await r.confirm(300)).toBe('Can\'t paste here: the world is regenerating');
+      expect(r.shown).toEqual([['Can\'t paste here: the world is regenerating', 4_000]]);
+      expect([r.posted, r.tool.mode, r.blockHistory.size]).toEqual([[], 'place', 0]);
+      r.st.editState = 0;
+      r.frame();
+      expect(r.actions.ghostState().shown).toBe(true);
+    });
+
+    test('Review Focus 2: RMB twice 30 ms apart, the target `copy`\'s reply at 200 ms: one target `copy`, one `edits`, one step, `Pasted …` once and no `Can\'t paste here`; LMB at 50 ms changes nothing and the paste lands; Q, the wheel and Ctrl+V while it is in flight change nothing', async () => {
+      const r = pasteRig();
+      await pasted(r);
+      r.frame();
+      r.st.copyDelayMs = 200;
+      const read = vi.spyOn(r.clipboard, 'read');
+      r.clicks.push(2);
+      await r.run(30);
+      expect(r.actions.busy()).toBe(true);
+      r.clicks.push(2);
+      await r.run(20);
+      r.clicks.push(0);
+      r.frame();
+      selectToolAction('selectTool', r.actions);
+      selectToolAction('turn', r.actions);
+      selectToolAction('paste', r.actions);
+      expect([r.tool.mode, r.tool.turns, read.mock.calls.length]).toEqual(['place', 0, 0]);
+      await r.run(500);
+      expect([r.copies.length, r.posted.length, r.blockHistory.size]).toEqual([1, 1, 1]);
+      expect(r.shown).toEqual([['Pasted 3 × 2 × 2', 1_500]]);
+      expect([r.tool.mode, r.actions.busy()]).toEqual(['select', false]);
+      expect(Array.from(r.read({ x0: -1, y0: 61, z0: -1, w: 3, h: 2, d: 2 }))).toEqual(Array.from(X.values));
+    });
+
+    test('Review Focus 4: two tabs\' stores over one KV: A pastes exactly the X its ghost showed though B wrote Y meanwhile, and A\'s next Ctrl+V reads Y; a write of Y while A\'s read of X is in flight gives A a whole clipboard', async () => {
+      const kv = createMemoryKV();
+      const notices = { show() {} };
+      const a = createClipboardStore({ kv: () => Promise.resolve(kv), notices });
+      const b = createClipboardStore({ kv: () => Promise.resolve(kv), notices });
+      const r = pasteRig({ kv, clipboard: a });
+      await b.write(X);
+      await r.paste();
+      expect(r.g.clip).toEqual({ w: 3, h: 2, d: 2, values: Array.from(X.values) });
+      await b.write(Y);
+      r.frame();
+      selectToolAction('turn', r.actions);
+      expect(await r.confirm()).toBe('ok');
+      const turned = turnClipboard(X, 1);
+      expect(Array.from(r.read({ x0: -1, y0: 61, z0: -1, w: 2, h: 2, d: 3 }))).toEqual(Array.from(turned.values));
+      await r.paste();
+      expect(r.g.clip).toEqual({ w: 2, h: 1, d: 1, values: Array.from(Y.values) });
+      // A write of Y while A's read of X is in flight.
+      const slow = createMemoryKV({ readDelayMs: 50 });
+      const a2 = createClipboardStore({ kv: () => Promise.resolve(slow), notices });
+      const b2 = createClipboardStore({ kv: () => Promise.resolve(slow), notices });
+      const q = pasteRig({ kv: slow, clipboard: a2 });
+      await b2.write(X);
+      const p = q.actions.paste();
+      await vi.advanceTimersByTimeAsync(10);
+      const w = b2.write(Y);
+      await vi.advanceTimersByTimeAsync(100);
+      await p;
+      await w;
+      const whole = [{ w: 3, h: 2, d: 2, values: Array.from(X.values) }, { w: 2, h: 1, d: 1, values: Array.from(Y.values) }];
+      expect(whole).toContainEqual(q.g.clip);
+    });
+
+    test('a paste is refused while regenerating (`Can\'t paste here: the world is regenerating`), never makes a backup (no `beforeApply` call), and works with the mode on or off', async () => {
+      installDom();
+      const session = new WorldSession(() => [1, 2], { seedText: '42', validateParams: validateParamTrees });
+      const sw = createModifySwitch();
+      const backup = vi.fn(() => Promise.reject(new Error('no backup expected')));
+      const mode = createModifyMode({
+        session, tool: () => null, checkbox: sw.checkbox,
+        backup: {
+          sim: { hasAnyEntries: () => true, backup }, kept: () => { throw new Error('no backup expected'); }, applied: () => session.snapshot,
+          build: () => { throw new Error('no backup expected'); }, newId: () => 'never', names: () => Promise.resolve([]), notices: { show() {} },
+        },
+      });
+      const beforeApply = vi.spyOn(mode, 'beforeApply');
+      const r = pasteRig();
+      await pasted(r);
+      r.st.editState = 2;
+      r.frame();
+      expect(r.last('box')).toEqual([...X_AT, REFUSED_RED]);
+      expect(await r.confirm()).toBe('Can\'t paste here: the world is regenerating');
+      expect(r.posted).toEqual([]);
+      r.st.editState = 0;
+      for (const on of [true, false]) {
+        mode.set(on);
+        r.shown.length = 0;
+        if (r.tool.mode !== 'place') await r.paste();
+        r.lookAt(on ? 0 : 8, 0);
+        r.frame();
+        expect(await r.confirm(), String(on)).toBe('ok');
+        expect(r.shown, String(on)).toEqual([['Pasted 3 × 2 × 2', 1_500]]);
+      }
+      expect([beforeApply.mock.calls.length, backup.mock.calls.length, r.blockHistory.size]).toEqual([0, 0, 2]);
+      mode.dispose();
+    });
+  });
+
+  test('the page wires it: the ghost\'s renderer methods, Ctrl+V and the placing keys, the placing context', () => {
+    const s = readFileSync(new URL('../../src/ui/world/worldPage.ts', import.meta.url), 'utf8');
+    expect(s).toMatch(/case 'selectTool': case 'copy': case 'cut': case 'paste':\s+case 'turn': case 'turnBack': case 'raise': case 'lower':\s+selectToolAction\(a, selectActions\);\s+break;/);
+    expect(s).toMatch(/placing: \(\) => tool\.mode === 'place',/);
+    expect(s).toMatch(/setGhost: \(w, h, d, values\) => world\.setGhost\(w, h, d, values\),/);
+    expect(s).toMatch(/ghostStep: \(\) => world\.ghostStep\(\),/);
+    expect(s).toMatch(/placeGhost: \(x0, y0, z0, q\) => world\.placeGhost\(x0, y0, z0, q\),/);
+    expect(s).toMatch(/hideGhost: \(\) => world\.hideGhost\(\),/);
+    expect(s).toMatch(/ghostBuild: \(\) => world\.ghostBuild\(\),/);
   });
 });

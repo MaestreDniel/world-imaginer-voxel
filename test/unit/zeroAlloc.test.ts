@@ -66,7 +66,7 @@ import type { Action } from '../../src/player/keymap';
 import { EYE, createWalkState, type WalkState } from '../../src/player/walk';
 import { firstOrigin } from '../../src/render/floatingOrigin';
 import { createFpsLimiter } from '../../src/render/fpsLimiter';
-import { createGhost } from '../../src/render/ghost';
+import { createGhost, type Ghost } from '../../src/render/ghost';
 import { createMaterialSystem } from '../../src/render/materials/index';
 import { gpuEstimateOf, type GpuEstimate, type WorldRenderer } from '../../src/render/renderer';
 import { createSectionRenderer, createSectionRendererCounts } from '../../src/render/sectionRenderer';
@@ -89,11 +89,12 @@ import { createModifyMode, createModifySwitch } from '../../src/ui/world/modifyM
 import { createPlaces, PLACE_COLOURS } from '../../src/ui/world/places';
 import { AUTOSAVE_MS } from '../../src/ui/world/autosave';
 import {
-  NO_GHOST, aimReach, createAim, createClickQueue, createPageAutosave, createSelectActions, newWorldRecord, pageKeyName, toolClicks, type Aim,
+  aimReach, createAim, createClickQueue, createPageAutosave, createSelectActions, newWorldRecord, pageKeyName, toolClicks, type Aim, type GhostHost,
+  type SelectActions,
 } from '../../src/ui/world/worldPage';
-import { createClipboardStore } from '../../src/ui/world/clipboardStore';
+import { createClipboardStore, type ClipboardStore } from '../../src/ui/world/clipboardStore';
 import { createSelectTool, type SelectTool } from '../../src/ui/world/selectTool';
-import { STONE } from '../../src/world/blocks/index';
+import { GLASS, STONE } from '../../src/world/blocks/index';
 import { createStore } from '../../src/world/store/store';
 import { installDom } from './fixtures/domShim';
 
@@ -415,10 +416,20 @@ interface AtRest {
   readonly hotbar: ReturnType<typeof createHotbar>;
   /** Edits the click queue posted (none at rest). */
   posts(): number;
-  /** The selection tool (off until SP5c's test), its volume box, and its writes of the box and the label. */
+  /** The selection tool (off until SP5c's test), its volume box, and its writes of the box, the label and the ghost. */
   readonly tool: SelectTool;
   readonly volumeBox: ReturnType<typeof createVolumeBox>;
-  toolWrites(): { boxes: number; labels: number };
+  toolWrites(): { boxes: number; labels: number; ghost: number };
+  /** The tool's actions as the aim's `selection`, its clipboard (memory only) and its real ghost (rulings P22). */
+  readonly select: SelectActions;
+  readonly clipboard: ClipboardStore;
+  readonly ghost: Ghost;
+  /** The target reader's timers: those set and not cleared, and running them; the target `copy`s posted. */
+  pendingTimers(): number;
+  runTimers(): void;
+  copies(): number;
+  /** Whether the sim's `copy` answers (all air) or never does (the default). */
+  answerCopies(on: boolean): void;
   /** The map's session (the apply control's). */
   readonly session: WorldSession;
   /** Routes the apply control's `beforeApply` through `gate` (a saved world's modification mode), or back to always true (null). */
@@ -471,8 +482,8 @@ async function buildAtRest(): Promise<AtRest> {
   const none: ReadonlySet<Action> = new Set();
   // A 144 Hz display under a cap of 144: the limiter's median runs on every tick and every tick renders. Enough
   // timestamps for the warm-ups and each frame-step test's attempts.
-  // SP5a's two tests warm up again and measure on their own (`sp5a`).
-  const times = boxedTimes(1000 / 144, FRAME_WARM_UP + SHOWN_WARM_UP + 2 * FRAME_WARM_UP + 3 * ATTEMPTS * ATTEMPTS * N);
+  // SP5a's two tests warm up again and measure on their own (`sp5a`); so do SP5c's tool tests (the box, the ghost).
+  const times = boxedTimes(1000 / 144, FRAME_WARM_UP + SHOWN_WARM_UP + 4 * FRAME_WARM_UP + 3 * ATTEMPTS * ATTEMPTS * N);
   let ticks = 0;
   // The budget's clock is the tick's timestamp: Node's `performance.now()` allocates on each call (88 B measured),
   // the browser's does not concern this code.
@@ -585,12 +596,55 @@ async function buildAtRest(): Promise<AtRest> {
   // the tool's clicks in the queue, and the actions as the aim's `selection`; off until SP5c's test.
   const tool = createSelectTool();
   const volumeBox = createVolumeBox();
-  const toolWrites = { boxes: 0, labels: 0 };
+  const toolWrites = { boxes: 0, labels: 0, ghost: 0 };
+  // The ghost (rulings P22): a real `createGhost` over the batch material system (no WebGL), stepped on the tick's
+  // clock; the ghost's box setters count only. The target reader's timers are the test's to run.
+  const ghostMesh = createGhost(materials);
+  const ghostClock = (): number => clockNow;
+  const ghostHost: GhostHost = {
+    setGhostBox: () => { toolWrites.ghost++; },
+    hideGhostBox: () => { toolWrites.ghost++; },
+    setGhost: (w, h, d, values) => {
+      toolWrites.ghost++;
+      ghostMesh.setClipboard(w, h, d, values);
+    },
+    ghostStep: () => ghostMesh.step(ghostClock),
+    placeGhost: (x0, y0, z0, q) => {
+      toolWrites.ghost++;
+      ghostMesh.place(x0, y0, z0, q);
+    },
+    hideGhost: () => {
+      toolWrites.ghost++;
+      ghostMesh.hide();
+    },
+    ghostBuild: () => ghostMesh.build,
+    setReplaced: () => { toolWrites.ghost++; },
+    hideReplaced: () => { toolWrites.ghost++; },
+  };
+  const timerFns = new Map<number, () => void>();
+  let timerId = 0;
+  let copies = 0;
+  let answer = false;
+  const clipboard = createClipboardStore({ kv: () => Promise.resolve(null), notices: { show() {} } });
   const selectActions = createSelectActions({
     tool,
-    sim: { copy: () => new Promise<never>(() => {}) },
+    sim: {
+      copy: (b) => {
+        copies++;
+        return answer
+          ? Promise.resolve({ type: 'copied', id: copies, values: new Uint32Array(b.w * b.h * b.d), generated: null, why: null })
+          : new Promise<never>(() => {});
+      },
+    },
     editState: () => 0,
-    clipboard: createClipboardStore({ kv: () => Promise.resolve(null), notices: { show() {} } }),
+    clipboard,
+    timers: {
+      set: (f) => {
+        timerFns.set(++timerId, f);
+        return timerId;
+      },
+      clear: (id) => { timerFns.delete(id); },
+    },
     actionPost: () => new Promise<never>(() => {}),
     notices: { show() {} },
     keyName: pageKeyName,
@@ -605,7 +659,7 @@ async function buildAtRest(): Promise<AtRest> {
       },
       setSelectLabel: () => { toolWrites.labels++; },
     },
-    ghost: NO_GHOST,
+    ghost: ghostHost,
     origin,
     body: () => ({ minX: 0, minY: 0, minZ: 0, maxX: 0, maxY: 0, maxZ: 0 }),
     stopRepeat() {},
@@ -682,6 +736,17 @@ async function buildAtRest(): Promise<AtRest> {
     tool,
     volumeBox,
     toolWrites: () => ({ ...toolWrites }),
+    select: selectActions,
+    clipboard,
+    ghost: ghostMesh,
+    pendingTimers: () => timerFns.size,
+    runTimers() {
+      const due = [...timerFns.values()];
+      timerFns.clear();
+      for (const f of due) f();
+    },
+    copies: () => copies,
+    answerCopies(on) { answer = on; },
     session,
     setBeforeApply(g) { gate = g; },
     sp5a(mode) {
@@ -970,6 +1035,42 @@ describe('zero allocation at rest (SP4b spec §3.10, D25)', () => {
       f.tick();
     }
     expect(f.volumeBox.object.visible).toBe(false);
+  }, TIMEOUT_MS);
+
+  test(`${N} frame steps at rest with the ghost shown at a fixed aim and turn (built and placed, its target read) grow the heap by less than the boxing budget of 256 B per tick (SP5c spec §2.5, §6.2, §6.4, §10.5, D25; rulings P22)`, async () => {
+    const f = await atRest();
+    f.sp5a('walk');
+    // A 3 × 2 × 2 clipboard of stone and glass (memory only), Ctrl+V and one turn: the first frame anchors the ghost on
+    // the aimed floor, the build finishes in a slice, the settle's target read is answered; then nothing changes.
+    const values = new Uint32Array(12);
+    for (let i = 0; i < 12; i++) values[i] = (i % 3 === 2 ? GLASS : STONE) << 8;
+    await f.clipboard.write({ w: 3, h: 2, d: 2, values });
+    f.answerCopies(true);
+    try {
+      await f.select.paste();
+      f.select.turn(1);
+      expect([f.tool.mode, f.tool.turns]).toEqual(['place', 1]);
+      for (let i = 0; i < FRAME_WARM_UP; i++) f.tick();
+      expect(f.pendingTimers()).toBe(1);
+      f.runTimers();
+      await new Promise<void>((resolve) => { setTimeout(resolve, 0); });
+      expect(f.copies()).toBe(1);
+      for (let i = 0; i < FRAME_WARM_UP; i++) f.tick();
+      expect([f.ghost.build, f.ghost.object.visible]).toEqual(['ready', true]);
+      expect(f.select.ghostState()).toMatchObject({ refusal: null, shown: true });
+      const writes = f.toolWrites();
+      expectSp5aAtRest(f, () => {
+        expect([f.fly.mode, f.walk.onGround, f.tool.mode, f.tool.turns]).toEqual(['walk', true, 'place', 1]);
+      });
+      // Nothing written, anchored or read in the measured window.
+      expect(f.toolWrites()).toEqual(writes);
+      expect([f.pendingTimers(), f.copies(), f.ghost.object.visible]).toEqual([0, 1, true]);
+    } finally {
+      f.answerCopies(false);
+      f.select.toggle();
+      f.tick();
+    }
+    expect([f.tool.mode, f.ghost.object.visible, f.volumeBox.object.visible]).toEqual(['off', false, false]);
   }, TIMEOUT_MS);
 
   test(`${N} frame steps at rest in a saved world (autosave armed, its timer not firing) grow the heap by less than the boxing budget of 256 B per tick (SP5b spec §3.2, SP4b D25)`, async () => {
