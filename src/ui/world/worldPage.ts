@@ -1375,6 +1375,18 @@ export function onSimFailure(o: {
 }
 
 /**
+ * The streaming route's edit path notices (SP5a spec §2.2, SP5c spec §3.4, D23), as warnings: `ms` 0 shows one with no
+ * timeout (the working notice, taken down by `hide` at its reply), since `WorldNotices.show` schedules a removal for
+ * any `timeoutMs` it is given, 0 included; any other `ms` is its timeout.
+ */
+export function editPathNotices(n: Pick<WorldNotices, 'show' | 'hide'>): { show(text: string, ms: number): void; hide(text: string): void } {
+  return {
+    show: (text, ms) => n.show(text, ms > 0 ? { kind: 'warn', timeoutMs: ms } : { kind: 'warn' }),
+    hide: (text) => n.hide(text),
+  };
+}
+
+/**
  * The page's handling of the coordinator's events after the reveal (SP4b spec §3.6, §7.4, D12): `fatal` (no live
  * worker, `StoreCorrupt`, more than 32 failed columns) calls `fail` with the panel's cause (its message in it) and the
  * event's cause; `skipped` shows the dismissible "Some terrain could not be generated" once, its details naming the
@@ -3041,7 +3053,7 @@ export function mountWorldPage(root: HTMLElement, q: WorldQuery, hash: string, o
           coordinator,
           latency: editLatency,
           now: () => performance.now(),
-          notices: { show() {} },
+          notices: { show() {}, hide() {} },
         });
         // The sim's failure: thread 15 dead, the path disabled, every sim pin released, and the script ends with it.
         simFailure = () => {
@@ -3380,7 +3392,7 @@ export function mountWorldPage(root: HTMLElement, q: WorldQuery, hash: string, o
       coordinator,
       latency: editLatency,
       now: () => performance.now(),
-      notices: { show: (text, ms) => notices.show(text, { kind: 'warn', timeoutMs: ms }) },
+      notices: editPathNotices(notices),
     });
     simFailure = () => onSimFailure({ store, coordinator, editPath, notices, saved: saved !== null });
     // The edit path's accepted replies, counted for the autosave (SP5b spec §3.2); every post below goes through it.

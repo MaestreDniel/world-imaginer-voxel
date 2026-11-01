@@ -363,7 +363,7 @@ beforeAll(async () => {
     epoch: 1,
     onEvent: (e) => { events.push(e); },
   });
-  const show = { show: (text: string) => { notices.push(text); } };
+  const show = { show: (text: string) => { notices.push(text); }, hide() {} };
   const editPath = createEditPath({ sim, coordinator, latency: createEditLatency(), now: () => performance.now(), notices: show });
   const history = createBlockHistory({
     post: editPath.post, read: valueAt, pending: editPath.pending, settled: editPath.settled, notices: show,

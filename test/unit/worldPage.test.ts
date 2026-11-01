@@ -33,7 +33,7 @@ import { createReloader, createWorldUrl, savedWorldUrl, worldHash, type HereStat
 import {
   closeOverlays, countPendingTimers, countTileCalls, createAim, createClickQueue, createHookEdit, createRdControl, createUndoNotice, createWorldNotices, everyFrameUntil, failBeforeReveal, flushOnPageHide, handleContextLoss,
   benchSetTime, benchWalk, handleStreamEvent, settingsChange, installRepeatStop, installUndoKeys, installWiTest, mapKey, offerLowerRd, paletteFirst, onDriverStatus, onSimFailure, pushCoordinatorTeardown, rdShownOnLoad, releaseOnFailure, reloadRd, runTeardown, speedKey, stopAfterFailure, switchMode,
-  UNDO_NOTICE_MS, hookFlushed, markOlderGenerator, type WiTest, type WiTestPage,
+  UNDO_NOTICE_MS, editPathNotices, hookFlushed, markOlderGenerator, type WiTest, type WiTestPage,
 } from '../../src/ui/world/worldPage';
 import { createEditLatency } from '../../src/ui/world/editLatency';
 import { createEditPath, type EditOutcome } from '../../src/ui/world/editPath';
@@ -45,7 +45,7 @@ import { mountPlaceDialog } from '../../src/ui/world/placeDialog';
 import { BACKUP_NOTICE_MS } from '../../src/ui/world/modifyMode';
 import { TELEPORT_FAILED_MS, TELEPORT_FAILED_NOTICE } from '../../src/ui/world/teleport';
 import { NO_ENTRY } from '../../src/sim/diffStore';
-import type { Edit, FlushedMsg } from '../../src/workers/protocol';
+import type { Edit, EditedMsg, FlushedMsg } from '../../src/workers/protocol';
 import { hex64 } from '../../src/core/hash';
 import type { JsonObject } from '../../src/core/params/migrate';
 import { genKey, paramsHash, stageHashes } from '../../src/core/stage/hash';
@@ -2052,7 +2052,7 @@ describe('onSimFailure (the sim\'s failure, SP5a spec §2.1)', () => {
       simUnpinAll: vi.fn(),
     };
     const sim = { failed: false, edits: vi.fn(() => new Promise<never>(() => {})) };
-    const editPath = createEditPath({ sim, coordinator, latency: createEditLatency(), now: () => 0, notices: { show: vi.fn() } });
+    const editPath = createEditPath({ sim, coordinator, latency: createEditLatency(), now: () => 0, notices: { show: vi.fn(), hide: vi.fn() } });
     onSimFailure({ store, coordinator, editPath, notices });
     expect(store.markDead.mock.calls).toEqual([[15]]);
     expect(coordinator.simUnpinAll).toHaveBeenCalledTimes(1);
@@ -2064,6 +2064,47 @@ describe('onSimFailure (the sim\'s failure, SP5a spec §2.1)', () => {
     expect(await editPath.post([{ x: 3, y: 70, z: 4, op: 'set', value: 1 << 8, expect: 0 }])).toEqual({ ok: false, why: 'failed' });
     expect(sim.edits).not.toHaveBeenCalled();
     expect(coordinator.simPin).not.toHaveBeenCalled();
+  });
+});
+
+describe('editPathNotices: the streaming route\'s edit path notices (SP5c spec §3.4, D23)', () => {
+  let dom: ReturnType<typeof installDom>;
+  beforeEach(() => { dom = installDom(); });
+  afterEach(() => { vi.unstubAllGlobals(); vi.useRealTimers(); });
+
+  test('through `editPathNotices` over a `createWorldNotices` (fake timers), a 32,768-edit batch whose reply comes at 1,500 ms: `Working on 32,768 blocks…` shown at 300 ms and still at 1,000 ms, gone at the reply', async () => {
+    vi.useFakeTimers();
+    const notices = createWorldNotices(dom.body as unknown as HTMLElement, createReloader(vi.fn(), vi.fn()));
+    const text = () => dom.el('world-notices').children.map((d: FakeElement) => d.textContent).join('\n');
+    let answer: ((m: EditedMsg) => void) | null = null;
+    const sim = { failed: false, edits: vi.fn(() => new Promise<EditedMsg>((r) => { answer = r; })) };
+    const coordinator = { editState: () => 0 as const, simPin: vi.fn(), simUnpin: vi.fn(), markEdited: vi.fn() };
+    const editPath = createEditPath({ sim, coordinator, latency: createEditLatency(), now: () => Date.now(), notices: editPathNotices(notices) });
+    const edits: Edit[] = Array.from({ length: 32768 }, (_, i) => ({ x: i & 15, y: 70, z: (i >> 4) & 15, op: 'set', value: STONE << 8, expect: 0 }));
+    const p = editPath.post(edits);
+    vi.advanceTimersByTime(300);
+    expect(text()).toContain('Working on 32,768 blocks…');
+    vi.advanceTimersByTime(700);
+    expect(text()).toContain('Working on 32,768 blocks…');
+    vi.advanceTimersByTime(500);
+    answer!({
+      type: 'edited', id: 1, prev: new Uint32Array(32768), next: new Uint32Array(32768), dirty: new Float64Array(0),
+      entryAdded: new Float64Array(0), entryRemoved: new Float64Array(0), refused: null, relightMs: 0, editMs: 0, limboMax: 0, subBatchMaxMs: 0,
+    });
+    expect(await p).toMatchObject({ ok: true });
+    expect(text()).not.toContain('Working on');
+    expect(editPath.bulkPending()).toBe(false);
+  });
+
+  test('`editPathNotices`\' `show(text, 4000)` still takes its notice down at 4,000 ms', () => {
+    vi.useFakeTimers();
+    const notices = createWorldNotices(dom.body as unknown as HTMLElement, createReloader(vi.fn(), vi.fn()));
+    const text = () => dom.el('world-notices').children.map((d: FakeElement) => d.textContent).join('\n');
+    editPathNotices(notices).show('Could not edit: memory full', 4000);
+    vi.advanceTimersByTime(3999);
+    expect(text()).toContain('Could not edit: memory full');
+    vi.advanceTimersByTime(1);
+    expect(text()).not.toContain('Could not edit: memory full');
   });
 });
 
@@ -3569,7 +3610,7 @@ describe('autosave in the saved world: Reloads reopen /?world, navigations and f
     expect(SAVED_EDIT_FAILED_NOTICE).toBe('Editing stopped: the edit worker failed; changes after the last save (at most 2 s) are lost');
     const notices = createWorldNotices(dom.body as unknown as HTMLElement, createReloader(vi.fn(), vi.fn()));
     const coordinator = { editState: () => 0 as const, simPin: vi.fn(), simUnpin: vi.fn(), markEdited: vi.fn(), simUnpinAll: vi.fn() };
-    const editPath = createEditPath({ sim: { failed: false, edits: vi.fn() }, coordinator, latency: createEditLatency(), now: () => 0, notices: { show: vi.fn() } });
+    const editPath = createEditPath({ sim: { failed: false, edits: vi.fn() }, coordinator, latency: createEditLatency(), now: () => 0, notices: { show: vi.fn(), hide: vi.fn() } });
     onSimFailure({ store: { markDead: () => {} }, coordinator, editPath, notices, saved: true });
     const text = () => dom.el('world-notices').children.map((d: FakeElement) => d.textContent).join('\n');
     expect(text()).toContain(SAVED_EDIT_FAILED_NOTICE);
@@ -3678,7 +3719,7 @@ describe('the block history kept across reloads (SP5b spec §3.2, §3.4 step 6, 
       coordinator: { editState: () => 0, simPin() {}, simUnpin() {}, markEdited() {} },
       latency: createEditLatency(),
       now: () => performance.now(),
-      notices: { show() {} },
+      notices: { show() {}, hide() {} },
     });
     const accepted = countAccepted(editPath.post);
     const shown: string[] = [];

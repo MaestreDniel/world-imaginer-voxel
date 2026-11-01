@@ -15,7 +15,8 @@ import type { ColumnMeshPayload } from '../../src/mesh/column';
 import type { Edit, EditedMsg } from '../../src/workers/protocol';
 import { SIM_THREAD } from '../../src/world/store/reclaim';
 import { createEditLatency, type EditLatency } from '../../src/ui/world/editLatency';
-import { createEditPath } from '../../src/ui/world/editPath';
+import { createBlockHistory } from '../../src/ui/world/blockHistory';
+import { BULK_MIN_EDITS, createEditPath, formatCount, WORKING_NOTICE_MS, workingNotice } from '../../src/ui/world/editPath';
 import { onSimFailure } from '../../src/ui/world/worldPage';
 
 const STONE = 1 << 8;
@@ -46,11 +47,32 @@ function fakes(states: (cx: number, cz: number) => 0 | 1 | 2 = () => 0) {
   };
   const latency: EditLatency = createEditLatency();
   const posted = vi.spyOn(latency, 'posted');
-  const notices = { show: vi.fn<(text: string, ms: number) => void>() };
+  const notices = { show: vi.fn<(text: string, ms: number) => void>(), hide: vi.fn<(text: string) => void>() };
   let t = 0;
-  const path = createEditPath({ sim, coordinator, latency, now: () => t, notices });
-  return { log, answers, sim, coordinator, latency, posted, notices, path, setNow: (v: number) => { t = v; } };
+  // Timers on the injected clock: `setNow` runs each one due by then, in order.
+  const due = new Map<number, { at: number; f: () => void }>();
+  let nextId = 1;
+  const timers = {
+    set: (f: () => void, ms: number): number => { due.set(nextId, { at: t + ms, f }); return nextId++; },
+    clear: (id: number): void => { due.delete(id); },
+  };
+  const setNow = (v: number): void => {
+    for (;;) {
+      let first: [number, { at: number; f: () => void }] | null = null;
+      for (const e of due) if (e[1].at <= v && (first === null || e[1].at < first[1].at)) first = e;
+      if (first === null) break;
+      due.delete(first[0]);
+      t = first[1].at;
+      first[1].f();
+    }
+    t = v;
+  };
+  const path = createEditPath({ sim, coordinator, latency, now: () => t, notices, timers });
+  return { log, answers, sim, coordinator, latency, posted, notices, path, setNow, timersPending: () => due.size };
 }
+
+/** `n` edits in column (0, 0). */
+const many = (n: number): Edit[] => Array.from({ length: n }, (_, i) => at(i & 15, (i >> 4) & 15));
 
 describe('createEditPath (SP5a spec §2.1, §2.6, §2.7)', () => {
   test('a post pins each edited column\'s 3 × 3 once, unpins at the reply, calls `markEdited` with `dirty` in the reply\'s task', async () => {
@@ -191,6 +213,124 @@ describe('createEditPath (SP5a spec §2.1, §2.6, §2.7)', () => {
   });
 });
 
+describe('bulk batches (SP5c spec §3.4, D23)', () => {
+  test('the pinned values: a batch of more than 2 edits is bulk, the notice after 250 ms, counts as "12,345"', () => {
+    expect(BULK_MIN_EDITS).toBe(3);
+    expect(WORKING_NOTICE_MS).toBe(250);
+    expect(formatCount(12345)).toBe('12,345');
+    expect(formatCount(7)).toBe('7');
+    expect(workingNotice(32768)).toBe('Working on 32,768 blocks…');
+  });
+
+  test('a 3-edit batch opens no latency sample; a 2-edit batch opens one, as today', async () => {
+    const f = fakes();
+    const p3 = f.path.post(many(3));
+    f.answers[0]!.resolve(reply(3));
+    expect(await p3).toMatchObject({ ok: true });
+    expect(f.posted).not.toHaveBeenCalled();
+    const p2 = f.path.post(many(2));
+    f.answers[1]!.resolve(reply(2));
+    expect(await p2).toMatchObject({ ok: true });
+    expect(f.posted).toHaveBeenCalledTimes(1);
+  });
+
+  test('a 32,768-edit batch whose reply comes at 400 ms shows `Working on 32,768 blocks…` at 250 ms and hides it at the reply', async () => {
+    const f = fakes();
+    const p = f.path.post(many(32768));
+    f.setNow(249);
+    expect(f.notices.show).not.toHaveBeenCalled();
+    f.setNow(250);
+    expect(f.notices.show.mock.calls).toEqual([['Working on 32,768 blocks…', 0]]);
+    f.setNow(400);
+    expect(f.notices.hide).not.toHaveBeenCalled();
+    f.answers[0]!.resolve(reply(32768));
+    await p;
+    expect(f.notices.hide.mock.calls).toEqual([['Working on 32,768 blocks…']]);
+    // One notice per batch.
+    f.setNow(5000);
+    expect(f.notices.show).toHaveBeenCalledTimes(1);
+  });
+
+  test('a bulk reply at 200 ms never shows it', async () => {
+    const f = fakes();
+    const p = f.path.post(many(32768));
+    f.setNow(200);
+    f.answers[0]!.resolve(reply(32768));
+    await p;
+    f.setNow(5000);
+    expect(f.notices.show).not.toHaveBeenCalled();
+    expect(f.notices.hide).not.toHaveBeenCalled();
+    expect(f.timersPending()).toBe(0);
+  });
+
+  test('`bulkPending()` is true from the post to the reply; false for a 2-edit batch, after a refusal and after `SimFailed`', async () => {
+    const f = fakes();
+    expect(f.path.bulkPending()).toBe(false);
+    const p = f.path.post(many(3));
+    expect(f.path.bulkPending()).toBe(true);
+    f.answers[0]!.resolve(reply(3));
+    await p;
+    expect(f.path.bulkPending()).toBe(false);
+    // A 2-edit batch is pending, never bulk.
+    const q = f.path.post(many(2));
+    expect(f.path.pending()).toBe(true);
+    expect(f.path.bulkPending()).toBe(false);
+    f.answers[1]!.resolve(reply(2));
+    await q;
+    // A refusal (its notice hidden too, shown or not).
+    const r = f.path.post(many(32768));
+    expect(f.path.bulkPending()).toBe(true);
+    f.setNow(300);
+    expect(f.notices.show).toHaveBeenLastCalledWith('Working on 32,768 blocks…', 0);
+    f.answers[2]!.resolve(reply(32768, { refused: 'changed' }));
+    expect(await r).toEqual({ ok: false, why: 'changed' });
+    expect(f.path.bulkPending()).toBe(false);
+    expect(f.notices.hide).toHaveBeenLastCalledWith('Working on 32,768 blocks…');
+    // `SimFailed`.
+    const s = f.path.post(many(1000));
+    expect(f.path.bulkPending()).toBe(true);
+    f.setNow(600);
+    expect(f.notices.show).toHaveBeenLastCalledWith('Working on 1,000 blocks…', 0);
+    f.answers[3]!.reject(new SimFailed('the sim failed: an error event'));
+    expect(await s).toEqual({ ok: false, why: 'failed' });
+    expect(f.path.bulkPending()).toBe(false);
+    expect(f.notices.hide).toHaveBeenLastCalledWith('Working on 1,000 blocks…');
+    expect(f.timersPending()).toBe(0);
+  });
+
+  test('a bulk batch refused at the gate (`unloaded`) shows nothing and leaves `bulkPending()` false', async () => {
+    const f = fakes(() => 1);
+    const p = f.path.post(many(32768));
+    expect(f.path.bulkPending()).toBe(false);
+    expect(await p).toEqual({ ok: false, why: 'unloaded' });
+    f.setNow(5000);
+    expect(f.notices.show).not.toHaveBeenCalled();
+    expect(f.notices.hide).not.toHaveBeenCalled();
+    expect(f.timersPending()).toBe(0);
+    expect(f.path.bulkPending()).toBe(false);
+  });
+
+  test('an undo of a 3,296-edit step through the block history is bulk too (no latency sample, `bulkPending()` true until its reply)', async () => {
+    const f = fakes();
+    const history = createBlockHistory({
+      post: f.path.post, read: () => 0, pending: f.path.pending, settled: f.path.settled, notices: { show() {} },
+    });
+    history.record({ edits: many(3296).map((e) => ({ x: e.x, y: e.y, z: e.z, before: 0, after: STONE })) });
+    history.undo();
+    expect(f.sim.edits).toHaveBeenCalledTimes(1);
+    expect(f.sim.edits.mock.calls[0]![0].length).toBe(3296);
+    expect(f.path.bulkPending()).toBe(true);
+    f.setNow(250);
+    expect(f.notices.show).toHaveBeenLastCalledWith('Working on 3,296 blocks…', 0);
+    f.answers[0]!.resolve(reply(3296));
+    await f.path.settled();
+    expect(f.path.bulkPending()).toBe(false);
+    expect(f.posted).not.toHaveBeenCalled();
+    expect(f.notices.hide).toHaveBeenLastCalledWith('Working on 3,296 blocks…');
+    expect(history.redoSize).toBe(1);
+  });
+});
+
 // ---------------------------------------------------------------- a real coordinator over a small fake world
 
 const slotOf = (cx: number, cz: number): number => (cx & 63) + 64 * (cz & 63);
@@ -286,7 +426,7 @@ describe('the sim\'s failure with posts pending (SP5a spec §2.1, §2.7)', () =>
     const sim = createSimClient(() => worker, {
       onFailure: () => onSimFailure({ store: { markDead: (t) => { dead.push(t); } }, coordinator, editPath: path!, notices }),
     });
-    path = createEditPath({ sim, coordinator, latency: createEditLatency(), now: () => 0, notices: { show: () => {} } });
+    path = createEditPath({ sim, coordinator, latency: createEditLatency(), now: () => 0, notices: { show: () => {}, hide: () => {} } });
     // Two posts on the west edge: their 3 × 3s overlap, two pins on the shared columns.
     const pinned = [[-4, 0], [-4, 1]] as const;
     const posts = pinned.map(([cx, cz]) => {

@@ -349,7 +349,7 @@ async function measureE5(): Promise<E5Result> {
       onEvent: (e) => { events.push(e); },
     });
     disposeCoordinator = () => coordinator.dispose();
-    const path = createEditPath({ sim, coordinator, latency: createEditLatency(), now, notices: { show() {} } });
+    const path = createEditPath({ sim, coordinator, latency: createEditLatency(), now, notices: { show() {}, hide() {} } });
 
     const C0: [number, number] = [Math.floor(spawn.x / 16), Math.floor(spawn.z / 16)];
     let cam: StreamCamera = { x: C0[0] * 16 + 8, z: C0[1] * 16 + 8, yawDeg: 0 };

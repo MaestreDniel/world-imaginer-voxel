@@ -86,7 +86,7 @@ function rig(delayMs = 0) {
     simUnpin() {},
     markEdited() {},
   };
-  const path = createEditPath({ sim, coordinator, latency: createEditLatency(), now: () => 0, notices: { show() {} } });
+  const path = createEditPath({ sim, coordinator, latency: createEditLatency(), now: () => 0, notices: { show() {}, hide() {} } });
   const shown: Array<[string, number]> = [];
   const history = createBlockHistory({
     post: path.post,
