@@ -12,6 +12,7 @@
  * Ctrl+Enter) and Reset are disabled.
  */
 import { el } from '../common/dom';
+import { setModeTip } from '../common/modeTip';
 import {
   anchorOfScroll, createScrollKeeper, EDITOR_LINE_PX, editorKeyAction, highlightParts, issueLines, lineIndexAt,
   type EditorModel, type EditorState, type EditorStatus, type ScrollRequest, type ScrollView,
@@ -46,7 +47,10 @@ export interface JsonEditorView {
    * while it was hidden (written then, a hidden textarea ignores it), else the offsets kept when it was hidden.
    */
   restoreScroll(): void;
-  /** The world-modification mode (SP5b spec D10): false makes the text read-only and disables Apply and Reset. */
+  /**
+   * The world-modification mode (SP5b spec D10): false makes the text read-only and disables Apply and Reset, with the
+   * reminder "Enable 'Modify terrain' to edit here" on them (SP5c spec §7.3, D19).
+   */
   setEditable(on: boolean): void;
   dispose(): void;
 }
@@ -100,10 +104,12 @@ export function createJsonEditor(deps: JsonEditorDeps): JsonEditorView {
     b.addEventListener('click', run);
     return b;
   };
-  const apply = button('Apply', 'Use the typed tree (Ctrl+Enter); an invalid tree is never sent', (e) => {
+  const APPLY_TIP = 'Use the typed tree (Ctrl+Enter); an invalid tree is never sent';
+  const RESET_TIP = "Reset the tree to the profile's";
+  const apply = button('Apply', APPLY_TIP, (e) => {
     if (model !== null) deps.edit(e, () => { model!.apply(); });
   });
-  const reset = button('Reset', "Reset the tree to the profile's", (e) => {
+  const reset = button('Reset', RESET_TIP, (e) => {
     if (model !== null) deps.edit(e, () => { model!.reset(); });
   });
   const status = el('span', 'je-status');
@@ -261,6 +267,10 @@ export function createJsonEditor(deps: JsonEditorDeps): JsonEditorView {
       text.readOnly = !on;
       reset.disabled = !on;
       apply.disabled = !on || (model?.state.clean ?? true);
+      // The reminder (SP5c spec §7.3, D19): on the text's box, and after Apply's and Reset's own titles.
+      setModeTip(box, on);
+      setModeTip(apply, on, APPLY_TIP);
+      setModeTip(reset, on, RESET_TIP);
     },
     dispose() {
       resizeObserver?.disconnect();

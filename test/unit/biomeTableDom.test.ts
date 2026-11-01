@@ -8,8 +8,9 @@ import { afterEach, describe, expect, test, vi } from 'vitest';
 import { WorldSession } from '../../src/engine/session';
 import { validateParamTrees } from '../../src/gen/trees';
 import { BIOME_TABLE_PATH } from '../../src/ui/biomeTable/model';
+import { MODE_OFF_TIP } from '../../src/ui/common/modeTip';
 import { createBiomeTable } from '../../src/ui/biomeTable/table';
-import { FakeElement, installDom } from './fixtures/domShim';
+import { FakeElement, installDom, shownTitle } from './fixtures/domShim';
 
 afterEach(() => { vi.unstubAllGlobals(); });
 
@@ -76,5 +77,23 @@ describe('the biome table\'s setEditable (SP5b spec D10)', () => {
     table.setEditable(true);
     expect(resets.every((b) => b.disabled)).toBe(true);
     expect(by('bt-field').every((c) => !c.disabled)).toBe(true);
+  });
+});
+
+describe('the reminder on the biome table\'s disabled controls (SP5c spec §7.3, D19)', () => {
+  test('the nearest titled ancestor of each disabled control (itself included) and of each bar contains the tip while not editable and not while editable; each control\'s own title is kept in both', () => {
+    const { table, by } = mount();
+    const edits = [...by('bt-field'), ...by('bt-wsign'), ...by('bt-reset'), ...by('bt-reset-all'), ...by('bt-bar')];
+    expect(edits.length).toBeGreaterThan(5);
+    const has = (c: FakeElement): boolean => (shownTitle(c) ?? '').includes(MODE_OFF_TIP);
+    const own = edits.map((c) => c.getAttribute('title'));
+    expect(own.every((t) => t !== null && t !== '')).toBe(true);
+    expect(edits.filter(has)).toEqual([]);
+    table.setEditable(false);
+    expect(edits.filter((c) => !has(c))).toEqual([]);
+    expect(edits.map((c) => c.getAttribute('title'))).toEqual(own.map((t) => `${t}\n${MODE_OFF_TIP}`));
+    table.setEditable(true);
+    expect(edits.filter(has)).toEqual([]);
+    expect(edits.map((c) => c.getAttribute('title'))).toEqual(own);
   });
 });

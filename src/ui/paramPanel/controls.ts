@@ -12,7 +12,8 @@
  * The Density tab's node form shows the number row of a ref's target (`createTargetRow`, SP3d spec §3.3).
  * Every control has a scope badge, a modified dot, a reset button and a tooltip (doc, range, unit, path).
  * `setEditable(false)` (a saved world's modification mode off, SP5b spec D10) disables its value inputs and its reset,
- * keeping each one's own reason: a field a rule fixes, a reset with nothing to reset, stay disabled when it is on again.
+ * keeping each one's own reason: a field a rule fixes, a reset with nothing to reset, stay disabled when it is on again;
+ * while it is off, hovering a disabled control shows "Enable 'Modify terrain' to edit here" (SP5c spec §7.3, D19).
  * A slider drag is one gesture (§1.3); a numeric field commits on Enter or blur (urgent) and Escape restores
  * the draft value; a refused value keeps its text with a red border and the issue text under its row, and is
  * not applied.
@@ -21,6 +22,7 @@ import type { NoiseDef } from '../../core/noise/types';
 import { getPath, type Issue } from '../../core/params/kit';
 import type { SessionResult, SessionState, WorldSession } from '../../engine/session';
 import { el } from '../common/dom';
+import { MODE_OFF_TIP, setModeTip } from '../common/modeTip';
 import {
   amplitudeItemChange, amplitudesToggle, boolShown, boolWrite, controlTip, issueLines, modifiedMarks, NOISE_FIELD_DOCS, NOISE_NUMBER_FIELDS, noiseFieldControl, noiseFieldLock,
   octavesChange, parseFieldText, refTargetControl, refTargetWrite, scopeBadge, sliderPosition, sliderPositions, sliderToValue, type ControlSpec, type NoiseNumberField,
@@ -179,15 +181,18 @@ function valueField(deps: RowDeps, id: string, issues: IssueBox, at: string, bas
 
 /**
  * Disables an input with the reason in the tooltips of its row and label, or enables it; not `editable` (the modification
- * mode off, SP5b spec D10) disables it too, with no reason shown.
+ * mode off, SP5b spec D10) disables it too, with the reminder `MODE_OFF_TIP` in those tooltips (SP5c spec §7.3). The
+ * row's title: a rule's reason, else the reminder while not editable, else no attribute (an empty title would hide every
+ * ancestor's).
  */
 function lockInput(
   line: HTMLElement, label: HTMLElement, tip: string, inputs: readonly (HTMLInputElement | HTMLSelectElement)[], reason: string | null, editable: boolean,
 ): void {
   for (const i of inputs) i.disabled = reason !== null || !editable;
   line.setAttribute('aria-disabled', String(reason !== null));
-  line.title = reason === null ? '' : `fixed: ${reason}`;
-  label.title = reason === null ? tip : `${tip}\nFixed: ${reason}`;
+  if (reason !== null) line.title = `fixed: ${reason}`;
+  else setModeTip(line, editable);
+  label.title = reason !== null ? `${tip}\nFixed: ${reason}` : editable ? tip : `${tip}\n${MODE_OFF_TIP}`;
 }
 
 /** A slider plus a numeric field (and, inside a noise sub-block, the field's label), with its issue text under it. */
@@ -266,7 +271,10 @@ interface Frame {
   readonly label: HTMLLabelElement;
   setModified(on: boolean): void;
   setLint(text: string | null): void;
-  /** False disables the reset (SP5b spec D10); true enables it again while the leaf is modified. */
+  /**
+   * False disables the reset (SP5b spec D10) and adds the reminder to the titles of the label, the badge, the dot, the
+   * reset and the header (SP5c spec §7.3); true enables the reset again while the leaf is modified and drops the line.
+   */
   setEditable(on: boolean): void;
 }
 
@@ -275,15 +283,17 @@ function frame(deps: ControlDeps, c: ControlSpec, onReset: () => void, extra: re
   element.dataset['path'] = c.path;
   const head = el('div', 'pp-head');
   const label = el('label', 'pp-label', c.label);
-  label.title = controlTip(c);
   const b = scopeBadge(c.scope);
   const badge = el('span', `pp-badge pp-badge-${c.scope}`, b.label);
-  badge.title = `${b.label}: ${b.tip}`;
   const dot = el('span', 'pp-dot', '●');
-  dot.title = 'modified: differs from the profile';
   const reset = el('button', 'pp-reset', '↺');
   reset.type = 'button';
-  reset.title = `Reset ${c.label} to the profile's value`;
+  // Each titled element of the header with its own title; the header itself (the bool's checkbox, the gaps) has none.
+  const titled: readonly (readonly [HTMLElement, string | undefined])[] = [
+    [label, controlTip(c)], [badge, `${b.label}: ${b.tip}`], [dot, 'modified: differs from the profile'],
+    [reset, `Reset ${c.label} to the profile's value`], [head, undefined],
+  ];
+  for (const [e, own] of titled) if (own !== undefined) e.title = own;
   reset.setAttribute('aria-label', `Reset ${c.label}`);
   reset.addEventListener('click', (e) => {
     run(deps, e, () => deps.session.reset(c.path));
@@ -312,6 +322,7 @@ function frame(deps: ControlDeps, c: ControlSpec, onReset: () => void, extra: re
     setEditable(on) {
       editable = on;
       reset.disabled = resetOff || !editable;
+      for (const [e, own] of titled) setModeTip(e, on, own);
     },
   };
 }
@@ -376,7 +387,8 @@ function amplitudesRow(deps: ControlDeps, leaf: string, def: () => NoiseDef): Am
   const element = el('div', 'pp-field-row');
   const line = el('div', 'pp-row');
   const label = el('span', 'pp-row-label', 'amplitudes');
-  label.title = `${NOISE_FIELD_DOCS.amplitudes}\nPath: ${at}`;
+  const tip = `${NOISE_FIELD_DOCS.amplitudes}\nPath: ${at}`;
+  label.title = tip;
   const toggle = el('input');
   toggle.type = 'checkbox';
   toggle.id = `pp-${at}`;
@@ -411,7 +423,7 @@ function amplitudesRow(deps: ControlDeps, leaf: string, def: () => NoiseDef): Am
       while (fields.length < list.length) {
         const i = fields.length;
         const f = valueField(deps, `pp-${at}[${i}]`, issues, at, leaf, (v) => deps.session.set(leaf, amplitudeItemChange(def(), i, v)));
-        f.input.title = `octave ${i}`;
+        setModeTip(f.input, editable, `octave ${i}`);
         f.input.setAttribute('aria-label', `amplitude of octave ${i}`);
         f.input.disabled = !editable;
         fields.push(f);
@@ -427,7 +439,13 @@ function amplitudesRow(deps: ControlDeps, leaf: string, def: () => NoiseDef): Am
     setEditable(on) {
       editable = on;
       toggle.disabled = !on;
-      for (const f of fields) f.input.disabled = !on;
+      for (const [i, f] of fields.entries()) {
+        f.input.disabled = !on;
+        setModeTip(f.input, on, `octave ${i}`);
+      }
+      // The reminder on the toggle's row and the label, as `lockInput` writes them (SP5c spec §7.3).
+      setModeTip(line, on);
+      setModeTip(label, on, tip);
     },
   };
 }

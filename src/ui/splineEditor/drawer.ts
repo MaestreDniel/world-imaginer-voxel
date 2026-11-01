@@ -31,6 +31,7 @@ import { splineOfLeaf, summarizeSplineStats, type SplineLeaf, type SplineStatsSu
 import { el } from '../common/dom';
 import { downloadText, readTextFile } from '../common/files';
 import { isTextEntry } from '../common/keys';
+import { setModeTip } from '../common/modeTip';
 import type { Notices } from '../common/notice';
 import type { PreviewDriver } from '../map/previewDriver';
 import { parseFieldText } from '../paramPanel/model';
@@ -64,7 +65,8 @@ export interface SplineDrawer {
   readonly leaf: SplineLeaf | null;
   /**
    * The world-modification mode (SP5b spec D10): false disables every edit (an open knot menu closes); true gives each
-   * control its own state back (Reset spline with nothing modified, a nested knot's y, stay disabled).
+   * control its own state back (Reset spline with nothing modified, a nested knot's y, stay disabled). While false, each
+   * edit's title ends with a line "Enable 'Modify terrain' to edit here" (SP5c spec §7.3, D19).
    */
   setEditable(on: boolean): void;
   /** Stops following the session and the driver (the DOM stays). */
@@ -211,6 +213,14 @@ export function createSplineDrawer(host: HTMLElement, deps: DrawerDeps): SplineD
   fields.x.row.title = 'x: the knot\'s position on the node\'s coord (between its neighbours; |x| ≤ 2)';
   fields.y.row.title = 'y: the knot\'s value in the leaf\'s unit (a nested knot holds a spline)';
   fields.d.row.title = 'd: the tangent, in the leaf\'s unit per unit of the coord (|d| ≤ 100000)';
+  /**
+   * The edits' own titles, which gain the reminder while not editable (SP5c spec §7.3, D19): the buttons, the knot fields'
+   * rows (their inputs have none) and the actions row (the hidden file input's wrapper, which has none).
+   */
+  const modeTips: readonly (readonly [HTMLElement, string | undefined])[] = [
+    ...[autoNode, autoAll, resetBtn, importBtn, deleteBtn, fields.x.row, fields.y.row, fields.d.row].map((e) => [e, e.title] as const),
+    [actions, undefined],
+  ];
   knotBox.append(knotHead, fields.x.row, fields.y.row, fields.d.row, knotIssue);
   const statsLine = el('div', 'sd-stats');
   statsLine.title = 'Bars: the weighted histogram of the node\'s coord over [−1, 1]. Rows under the axis: the share of land and of the world each segment and hold region covers.';
@@ -502,7 +512,10 @@ export function createSplineDrawer(host: HTMLElement, deps: DrawerDeps): SplineD
       items.push(b);
     };
     /** An item that edits the spline: disabled while the mode is off (SP5b spec D10). */
-    const editItem = (label: string, run: (ev: MouseEvent) => void) => item(label, run, !editable);
+    const editItem = (label: string, run: (ev: MouseEvent) => void) => {
+      item(label, run, !editable);
+      setModeTip(items[items.length - 1]!, editable);
+    };
     if (!nested) {
       const coords = nestCoords(c.leaf, c.spline, path);
       for (const coord of coords) editItem(`Nest by ${coord}`, (ev) => onKnot(ev, (now) => nestKnot(now.spline, path, coord, leafOpts(now.leaf)), k));
@@ -615,6 +628,7 @@ export function createSplineDrawer(host: HTMLElement, deps: DrawerDeps): SplineD
       editable = on;
       for (const b of [autoNode, autoAll, resetBtn, importBtn, deleteBtn, fields.x.input, fields.y.input, fields.d.input]) b.disabled = !on;
       fileInput.disabled = !on;
+      for (const [e, own] of modeTips) setModeTip(e, on, own);
       closeMenu();
       // Reset spline (nothing modified) and a selected nested knot's y keep their own reasons (render; nothing with no leaf).
       render();

@@ -11,6 +11,7 @@ import { isProfileId, isProfileReady, PROFILE_IDS, type ProfileId } from '../../
 import type { SessionResult, WorldSession } from '../../engine/session';
 import { isLayerId, LAYERS, type LayerId } from '../../gen/map/layers';
 import { el } from '../common/dom';
+import { setModeTip } from '../common/modeTip';
 import type { Notices } from '../common/notice';
 import { cutButton, CUT_OFF, type CutTool } from '../crossSection/model';
 import { BIOME_SIZE_SCALE, biomeSizePosition } from './biomeSize';
@@ -87,7 +88,8 @@ export interface Toolbar {
   setCut(tool: CutTool): void;
   /**
    * The world-modification mode (SP5b spec D10): false disables the seed, Same seed, New seed, the profile, the biome
-   * size, Undo and Redo; the layer, the grid and the cut line stay. Undo and Redo keep their own reason (no step).
+   * size, Undo and Redo; the layer, the grid and the cut line stay. Undo and Redo keep their own reason (no step). While
+   * false, hovering a disabled control shows "Enable 'Modify terrain' to edit here" (SP5c spec §7.3, D19).
    */
   setEditable(on: boolean): void;
   /**
@@ -131,11 +133,16 @@ export function createToolbar(host: HTMLElement, deps: ToolbarDeps): Toolbar {
   seedInput.placeholder = 'seed (empty = random)';
   seedInput.spellcheck = false;
   seedInput.setAttribute('aria-label', 'Seed');
-  const sameSeed = button('Same seed', 'Use the typed seed (as Enter does)');
-  const newSeed = button('New seed', 'Draw a random seed');
+  const SAME_SEED_TIP = 'Use the typed seed (as Enter does)';
+  const NEW_SEED_TIP = 'Draw a random seed';
+  const PROFILE_TIP = 'Profile';
+  const UNDO_TIP = 'Undo (Ctrl+Z)';
+  const REDO_TIP = 'Redo (Ctrl+Shift+Z or Ctrl+Y)';
+  const sameSeed = button('Same seed', SAME_SEED_TIP);
+  const newSeed = button('New seed', NEW_SEED_TIP);
   const profileSelect = el('select');
   for (const p of profileOptions()) profileSelect.append(new Option(p, p));
-  profileSelect.title = 'Profile';
+  profileSelect.title = PROFILE_TIP;
   const slider = el('input', 'map-size');
   slider.type = 'range';
   slider.min = '1';
@@ -144,8 +151,8 @@ export function createToolbar(host: HTMLElement, deps: ToolbarDeps): Toolbar {
   slider.setAttribute('aria-label', 'Biome size');
   const approx = el('span', 'map-approx');
   const sizeGroup = group('biome size', slider, approx);
-  const undoBtn = button('Undo', 'Undo (Ctrl+Z)');
-  const redoBtn = button('Redo', 'Redo (Ctrl+Shift+Z or Ctrl+Y)');
+  const undoBtn = button('Undo', UNDO_TIP);
+  const redoBtn = button('Redo', REDO_TIP);
   const gridBox = el('input');
   gridBox.type = 'checkbox';
   const gridLabel = el('label', 'map-group', 'grid ');
@@ -162,10 +169,21 @@ export function createToolbar(host: HTMLElement, deps: ToolbarDeps): Toolbar {
   const status = el('span', 'map-status', 'last edit → preview …');
   const open3d = button('Open in 3D', 'Open this world in 3D at the pin, else at the view centre');
   const embedded = deps.embedded;
+  const seedGroup = group('seed', seedInput, sameSeed, newSeed);
+  const profileGroup = group('profile', profileSelect);
+  const undoGroup = group('', undoBtn, redoBtn);
   host.append(
-    el('strong', 'map-title', 'world-imaginer-voxel · map'), layerSelect, group('seed', seedInput, sameSeed, newSeed),
-    group('profile', profileSelect), sizeGroup, group('', undoBtn, redoBtn), gridLabel, cutBtn,
+    el('strong', 'map-title', 'world-imaginer-voxel · map'), layerSelect, seedGroup,
+    profileGroup, sizeGroup, undoGroup, gridLabel, cutBtn,
   );
+  /**
+   * The reminder while not editable (SP5c spec §7.3): on the terrain controls' wrappers, and after the own title of each
+   * titled control (a nearest titled ancestor would show its own title alone). The biome size's wrapper is titled: `sync`.
+   */
+  const modeTips: readonly (readonly [HTMLElement, string | undefined])[] = [
+    [seedGroup, undefined], [sameSeed, SAME_SEED_TIP], [newSeed, NEW_SEED_TIP], [profileGroup, undefined], [profileSelect, PROFILE_TIP],
+    [undoGroup, undefined], [undoBtn, UNDO_TIP], [redoBtn, REDO_TIP],
+  ];
   if (embedded === null) host.append(open3d, status);
   else host.append(status, el('span', 'map-hint', embedded.hint), embedded.slot);
 
@@ -176,7 +194,7 @@ export function createToolbar(host: HTMLElement, deps: ToolbarDeps): Toolbar {
     const b = biomeSizeView(s.params.climate.scaleMul);
     slider.value = String(b.v);
     approx.textContent = b.mark;
-    sizeGroup.title = b.tip;
+    setModeTip(sizeGroup, editable, b.tip);
     undoBtn.disabled = !editable || !session.canUndo;
     redoBtn.disabled = !editable || !session.canRedo;
   };
@@ -254,6 +272,7 @@ export function createToolbar(host: HTMLElement, deps: ToolbarDeps): Toolbar {
     setEditable(on) {
       editable = on;
       for (const c of [seedInput, sameSeed, newSeed, profileSelect, slider]) c.disabled = !on;
+      for (const [e, own] of modeTips) setModeTip(e, on, own);
       sync();
     },
     dispose() {

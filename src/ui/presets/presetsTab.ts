@@ -9,6 +9,7 @@ import './presets.css';
 import type { SessionState, WorldSession } from '../../engine/session';
 import { el } from '../common/dom';
 import { downloadText, readTextFile } from '../common/files';
+import { setModeTip } from '../common/modeTip';
 import type { Notices } from '../common/notice';
 import { applyPatchText, exportDraft, loadedNotice, loadPresetText, patchBoxText, presetNameHint, type PatchApply } from './presetFile';
 
@@ -23,7 +24,8 @@ export interface PresetsTab {
   readonly element: HTMLElement;
   /**
    * The world-modification mode (SP5b spec D10): false disables Import and the JSON patch box with its Apply; true
-   * enables them again (Apply keeps its own reason, the draft's patch shown). Export stays.
+   * enables them again (Apply keeps its own reason, the draft's patch shown). Export stays. While false, hovering them
+   * shows "Enable 'Modify terrain' to edit here" (SP5c spec §7.3, D19).
    */
   setEditable(on: boolean): void;
   dispose(): void;
@@ -113,7 +115,8 @@ export function createPresetsTab(host: HTMLElement, deps: PresetsDeps): PresetsT
   fileInput.id = 'pt-file';
   fileInput.accept = '.json,application/json';
   fileInput.hidden = true;
-  const importBtn = button('pt-import', 'Import preset…', 'Load a .wi10-preset.json file: its profile and parameters replace the draft (one undo step); the seed is kept');
+  const IMPORT_TIP = 'Load a .wi10-preset.json file: its profile and parameters replace the draft (one undo step); the seed is kept';
+  const importBtn = button('pt-import', 'Import preset…', IMPORT_TIP);
   importBtn.addEventListener('click', () => fileInput.click());
   const importRow = el('div', 'pt-row');
   importRow.append(importBtn, fileInput);
@@ -167,7 +170,8 @@ export function createPresetsTab(host: HTMLElement, deps: PresetsDeps): PresetsT
   patchBox.spellcheck = false;
   patchBox.autocomplete = 'off';
   patchBox.setAttribute('aria-label', 'Patch JSON');
-  const applyBtn = button('pt-apply', 'Apply patch', 'Replace the draft\'s patch with this JSON (one undo step; Ctrl+Enter)');
+  const APPLY_TIP = 'Replace the draft\'s patch with this JSON (one undo step; Ctrl+Enter)';
+  const applyBtn = button('pt-apply', 'Apply patch', APPLY_TIP);
   const revertBtn = button('pt-revert', 'Revert', 'Show the draft\'s patch again (Escape)');
   const patchRow = el('div', 'pt-row');
   patchRow.append(applyBtn, revertBtn);
@@ -233,6 +237,12 @@ export function createPresetsTab(host: HTMLElement, deps: PresetsDeps): PresetsT
       editable = on;
       for (const c of [importBtn, fileInput, patchBox]) c.disabled = !on;
       renderPatchButtons();
+      // The reminder (SP5c spec §7.3, D19): after Import's and Apply's own titles, on the file input's row and on the
+      // patch box (its wrapper is the whole tab, whose Export stays enabled).
+      setModeTip(importBtn, on, IMPORT_TIP);
+      setModeTip(importRow, on);
+      setModeTip(patchBox, on);
+      setModeTip(applyBtn, on, APPLY_TIP);
     },
     dispose() {
       unsubscribe();

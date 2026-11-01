@@ -12,6 +12,7 @@ import { DEFAULTS } from '../../src/core/params/defaults';
 import { WorldSession } from '../../src/engine/session';
 import { ALLOWED_REF_TARGETS } from '../../src/gen/density/source';
 import { validateParamTrees } from '../../src/gen/trees';
+import { MODE_OFF_TIP } from '../../src/ui/common/modeTip';
 import { createDensityTab } from '../../src/ui/inspector/densityTab';
 import {
   anchorOfScroll, createScrollKeeper, EDITOR_LINE_PX, editorKeyAction, highlightParts, lineIndexAt, lineStart, scrollOfAnchor,
@@ -22,7 +23,7 @@ import {
   DEFAULT_SUB_TAB, DENSITY_STACK_PX, DENSITY_SUB_TAB_LABELS, DENSITY_SUB_TABS, DENSITY_WIDE_PX, densityLayout, shownPanes,
 } from '../../src/ui/inspector/model';
 import { refTargetControl, refTargetWrite, sliderToValue } from '../../src/ui/paramPanel/model';
-import { installDom, type FakeElement } from './fixtures/domShim';
+import { installDom, shownTitle, type FakeElement } from './fixtures/domShim';
 
 describe('layout mode by drawer width (§3.1)', () => {
   test('the four columns from 1,200 px, the Slice/JSON sub-tabs below, stacked below 900 px', () => {
@@ -264,5 +265,49 @@ describe('the Density tab in a saved world\'s modification mode (SP5b spec D10)'
     // Apply keeps its own reason: the buffer is the current tree.
     expect(jsonButton('Apply').disabled).toBe(true);
     expect(of('it-mute').every((m) => !m.disabled)).toBe(true);
+  });
+});
+
+describe('the reminder on the Density tab\'s disabled controls (SP5c spec §7.3, D19)', () => {
+  afterEach(() => { vi.unstubAllGlobals(); });
+
+  /** Every descendant of `e`. */
+  const all = (e: FakeElement): FakeElement[] => e.children.flatMap((c) => [c, ...all(c)]);
+
+  test('the nearest titled ancestor of each disabled control (itself included), the JSON editor\'s text, Apply and Reset and the tree\'s mutes contains the tip while not editable and not while editable; a control\'s own title is kept in both', () => {
+    const dom = installDom();
+    vi.stubGlobal('ResizeObserver', class { observe(): void {} disconnect(): void {} });
+    const session = new WorldSession(() => [1, 2], { validateParams: validateParamTrees });
+    const host = dom.document.createElement('div');
+    const tab = createDensityTab(host as unknown as HTMLElement, { session, edit: (_e, fn) => fn(), clock: { setTimeout: () => 0, clearTimeout: () => {} } });
+    const of = (cls: string): FakeElement[] => all(host).filter((e) => e.className.split(' ').includes(cls));
+    const form = of('it-form')[0]!;
+    const formControls = (): FakeElement[] => ['input', 'select', 'button', 'textarea'].flatMap((t) => form.querySelectorAll(t));
+    const json = of('je-bar')[0]!;
+    const jsonButton = (t: string): FakeElement => json.children.find((b) => b.textContent === t)!;
+    const edits = (): FakeElement[] => [...formControls(), of('je-text')[0]!, jsonButton('Apply'), jsonButton('Reset'), ...of('it-mute')];
+    const has = (c: FakeElement): boolean => (shownTitle(c) ?? '').includes(MODE_OFF_TIP);
+    expect(formControls().length).toBeGreaterThan(0);
+    expect(of('it-mute').length).toBeGreaterThan(0);
+    const titled = edits().filter((c) => c.getAttribute('title') !== null);
+    const own = titled.map((c) => c.title);
+    expect(titled.length).toBeGreaterThan(2);
+    expect(edits().filter(has)).toEqual([]);
+
+    tab.setEditable(false);
+    expect(edits().filter((c) => !has(c))).toEqual([]);
+    expect(titled.map((c) => c.title)).toEqual(own.map((t) => `${t}\n${MODE_OFF_TIP}`));
+    // Another node selected while not editable: its form shows the reminder too.
+    of('it-node').find((b) => b.getAttribute('aria-current') !== 'true')!.click();
+    expect(formControls().length).toBeGreaterThan(0);
+    expect(edits().filter((c) => !has(c))).toEqual([]);
+    // The tree's node buttons (looking) do not.
+    expect(of('it-node').filter(has)).toEqual([]);
+
+    tab.setEditable(true);
+    expect(edits().filter(has)).toEqual([]);
+    // Each titled control still shown has its own title back.
+    const live = new Set(all(host));
+    for (const [i, c] of titled.entries()) if (live.has(c)) expect(c.title).toBe(own[i]);
   });
 });

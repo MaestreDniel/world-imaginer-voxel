@@ -190,7 +190,8 @@ world-imaginer-voxel/          (repository root)
                                 (SP4c: `mapTool.ts`, the tool both `?map` and the world's M overlay mount); placesTab.ts (SP5b)
     ui/common/* paramPanel/* splineEditor/* biomeTable/* presets/* crossSection/*   (SP2b) shared DOM helpers, notices and shortcuts;
                                 the parameter panel, spline drawer, biome table, presets tab and cross-section (pure models beside thin DOM);
-                                SP3a adds the cross-section's Voxels mode; files.ts (SP5b: downloadBlob, readBinaryFile)
+                                SP3a adds the cross-section's Voxels mode; files.ts (SP5b: downloadBlob, readBinaryFile);
+                                modeTip.ts (SP5c): the "Enable 'Modify terrain' to edit here" reminder on the map's disabled controls
     ui/lab/* seedBox.ts          (SP1) the ?lab=noise research page; DOM-free seed-box logic
     ui/world/* ui/loading/* ui/spike/* settings.ts   (SP4a) the 3D page: the start and worlds menus at `/` (SP5b: `ui/worldsMenu.ts`), the world page, the
                                 flight (`?flight=sp4a`) and panorama (`?pano`) routes; the loading screen with panoramas, tips and progress; the spike

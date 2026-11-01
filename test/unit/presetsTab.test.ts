@@ -7,11 +7,12 @@
 import { afterEach, describe, expect, test, vi } from 'vitest';
 import { WorldSession } from '../../src/engine/session';
 import { validateParamTrees } from '../../src/gen/trees';
+import { MODE_OFF_TIP } from '../../src/ui/common/modeTip';
 import type { Notices } from '../../src/ui/common/notice';
 import { presetText } from '../../src/ui/presets/presetFile';
 import { createPresetsTab } from '../../src/ui/presets/presetsTab';
 import { resolveProfile } from '../../src/core/params/profiles';
-import { installDom } from './fixtures/domShim';
+import { installDom, shownTitle, type FakeElement } from './fixtures/domShim';
 
 afterEach(() => { vi.unstubAllGlobals(); });
 
@@ -54,6 +55,24 @@ describe('the Presets tab\'s setEditable (SP5b spec D10)', () => {
     tab.setEditable(false);
     tab.setEditable(true);
     expect([el('pt-apply').disabled, el('pt-export').disabled, el('pt-import').disabled, el('pt-patch').disabled]).toEqual([true, true, false, false]);
+  });
+});
+
+describe('the reminder on the Presets tab\'s disabled controls (SP5c spec §7.3, D19)', () => {
+  test('the nearest titled ancestor of Import, the file input, the patch box and Apply (each itself included) contains the tip while not editable and not while editable; Import\'s and Apply\'s own titles are kept in both; Export never shows it', () => {
+    const { tab, el } = mount();
+    const edits = ['pt-import', 'pt-file', 'pt-patch', 'pt-apply'].map(el);
+    const has = (c: FakeElement): boolean => (shownTitle(c) ?? '').includes(MODE_OFF_TIP);
+    const own = [el('pt-import').title, el('pt-apply').title];
+    expect(own.every((t) => t !== '')).toBe(true);
+    expect(edits.filter(has)).toEqual([]);
+    tab.setEditable(false);
+    expect(edits.filter((c) => !has(c))).toEqual([]);
+    expect([el('pt-import').title, el('pt-apply').title]).toEqual(own.map((t) => `${t}\n${MODE_OFF_TIP}`));
+    expect([has(el('pt-name')), has(el('pt-export'))]).toEqual([false, false]);
+    tab.setEditable(true);
+    expect(edits.filter(has)).toEqual([]);
+    expect([el('pt-import').title, el('pt-apply').title]).toEqual(own);
   });
 });
 

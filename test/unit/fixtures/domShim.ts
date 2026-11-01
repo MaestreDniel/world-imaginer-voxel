@@ -42,7 +42,6 @@ export class FakeElement extends EventTarget {
   href = '';
   /** An image's source (its `decode()` asks the owner document's `decodeImage`). */
   src = '';
-  title = '';
   type = '';
   style: Record<string, string> = {};
   dataset: Record<string, string> = {};
@@ -152,6 +151,18 @@ export class FakeElement extends EventTarget {
 
   remove(): void {
     this.parentElement?.detach(this);
+  }
+
+  /**
+   * The DOM's `title`: the 'title' attribute, '' while it is absent. Setting it (even to '') makes the attribute present,
+   * `removeAttribute('title')` makes it absent again, as in a browser (SP5c spec §7.3: "absent, not empty").
+   */
+  get title(): string {
+    return this.attrs.get('title') ?? '';
+  }
+
+  set title(v: string) {
+    this.attrs.set('title', String(v));
   }
 
   setAttribute(name: string, value: string): void {
@@ -278,6 +289,18 @@ export class FakeElement extends EventTarget {
     for (const c of this.childNodes) c.parentElement = null;
     this.childNodes.length = 0;
   }
+}
+
+/**
+ * The title a browser shows when `e` is hovered: the title of the nearest element with a 'title' attribute, `e` itself
+ * included, walking up the parents; null when none has one (SP5c spec §7.3).
+ */
+export function shownTitle(e: FakeElement): string | null {
+  for (let at: FakeElement | null = e; at !== null; at = at.parentElement) {
+    const t = at.getAttribute('title');
+    if (t !== null) return t;
+  }
+  return null;
 }
 
 function selectorMatcher(selector: string): (e: FakeElement) => boolean {

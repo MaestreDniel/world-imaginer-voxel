@@ -18,6 +18,7 @@ import { resolveProfile, type ProfileId } from '../../core/params/profiles';
 import type { SessionResult, SessionState, WorldSession } from '../../engine/session';
 import type { BiomeFamily } from '../../gen/biomes/registry';
 import { el } from '../common/dom';
+import { setModeTip } from '../common/modeTip';
 import { modifiedText } from '../paramPanel/model';
 import {
   barFraction, barValue, BIOME_TABLE_PATH, dragAxisEnd, hitBarEnd, intervalText, modifiedRows, resetRow, rowChanges, rowIssueText, setAxisText,
@@ -40,7 +41,8 @@ export interface BiomeTable {
   /**
    * The world-modification mode (SP5b spec D10): false disables every field, sign select and row reset and Reset table,
    * and a bar's press begins no drag; true gives each its own state back (a reset with nothing to reset stays disabled).
-   * The sort and the family filter stay.
+   * The sort and the family filter stay. While false, each of those controls' titles ends with a line "Enable 'Modify
+   * terrain' to edit here" (SP5c spec §7.3, D19).
    */
   setEditable(on: boolean): void;
   /** Stops following the session and ends the hover (the DOM stays). */
@@ -300,6 +302,8 @@ function createRow(deps: TableDeps, name: BoxBiome, biome: number, family: Biome
   reset.type = 'button';
   reset.title = `Reset ${name} to the profile's row`;
   reset.setAttribute('aria-label', `Reset ${name}`);
+  /** The row's edit controls with their own titles, which gain the reminder while not editable (SP5c spec §7.3). */
+  const modeTips: (readonly [HTMLElement, string])[] = [[cells.priority.input, cells.priority.input.title], [sign, W_TIP], [reset, reset.title]];
   const controls = el('span', 'bt-controls');
   controls.append(dot, reset);
   head.append(who, controls);
@@ -321,6 +325,7 @@ function createRow(deps: TableDeps, name: BoxBiome, biome: number, family: Biome
     cells[axis] = c;
     bars[axis] = bar(deps, name, axis, () => editable);
     axes.append(l, c.input, bars[axis].element);
+    modeTips.push([c.input, tip], [bars[axis].element, bars[axis].element.title]);
   }
   const prio = el('span', 'bt-prio');
   prio.append(prioLabel, cells.priority.input);
@@ -377,6 +382,7 @@ function createRow(deps: TableDeps, name: BoxBiome, biome: number, family: Biome
       for (const c of Object.values(cells)) c.input.disabled = !on;
       sign.disabled = !on;
       reset.disabled = unchanged || !on;
+      for (const [e, own] of modeTips) setModeTip(e, on, own);
     },
   };
 }
@@ -402,7 +408,8 @@ export function createBiomeTable(host: HTMLElement, deps: TableDeps): BiomeTable
   const count = el('span', 'bt-count');
   const resetAll = el('button', 'bt-reset-all', 'Reset table');
   resetAll.type = 'button';
-  resetAll.title = "Reset every row to the profile's table";
+  const RESET_ALL_TIP = "Reset every row to the profile's table";
+  resetAll.title = RESET_ALL_TIP;
   head.append(sortLabel, sortSelect, familyLabel, familySelect, count, resetAll);
   const help = el('p', 'bt-help', 'Type lo, hi or drag the ends of a bar. Hover a row to highlight its biome on the biome layer.');
   const list = el('div', 'bt-rows');
@@ -458,6 +465,7 @@ export function createBiomeTable(host: HTMLElement, deps: TableDeps): BiomeTable
       editable = on;
       for (const r of rows.values()) r.setEditable(on);
       resetAll.disabled = !on || !session.modified(BIOME_TABLE_PATH);
+      setModeTip(resetAll, on, RESET_ALL_TIP);
     },
     dispose() {
       unsubscribe();

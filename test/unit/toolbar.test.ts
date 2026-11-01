@@ -2,11 +2,12 @@ import { afterEach, describe, expect, test, vi } from 'vitest';
 import { WorldSession as RealSession } from '../../src/engine/session';
 import type { WorldSession } from '../../src/engine/session';
 import { validateParamTrees } from '../../src/gen/trees';
+import { MODE_OFF_TIP } from '../../src/ui/common/modeTip';
 import type { Notices } from '../../src/ui/common/notice';
 import { BIOME_SIZE_SCALE } from '../../src/ui/map/biomeSize';
 import type { DriverStatus } from '../../src/ui/map/previewDriver';
 import { biomeSizeView, createToolbar, previewStatusText, profileOptions, profileSwitchText, type ToolbarDeps } from '../../src/ui/map/toolbar';
-import { installDom, type FakeDocument, type FakeElement } from './fixtures/domShim';
+import { installDom, shownTitle, type FakeDocument, type FakeElement } from './fixtures/domShim';
 
 const status = (s: Partial<DriverStatus>): DriverStatus => ({ lastLatencyMs: null, pending: false, queued: false, settled: false, poolEpoch: null, sessionEpoch: null, error: null, ...s });
 
@@ -141,6 +142,38 @@ describe('the toolbar in the world (SP4c spec §2.5, D17, D26)', () => {
     answer!(true);
     await new Promise((resolve) => { setTimeout(resolve, 0); });
     expect([real.state.profile, real.state.params.climate.scaleMul, shown]).toEqual(['default', 3, []]);
+  });
+
+  test('the reminder (SP5c spec §7.3, D19): the nearest titled ancestor of each disabled control (itself included) contains the tip while not editable and not while editable; a control\'s own title (Same seed\'s, Profile\'s) is kept in both', () => {
+    const { document } = installDom();
+    const host = document.createElement('div');
+    const withSteps = { ...session, canUndo: true, canRedo: true } as unknown as WorldSession;
+    const toolbar = createToolbar(host as unknown as HTMLElement, {
+      session: withSteps, notices, layer: 'biome', edit: (_e, fn) => fn(),
+      onLayer: () => {}, onGrid: () => {}, onCut: () => {}, open3dHref: () => '/?at=0,0', embedded: null,
+    });
+    const inputs = host.querySelectorAll('input');
+    const buttons = host.querySelectorAll('button');
+    const byText = (t: string) => buttons.find((b) => b.textContent === t)!;
+    const profile = host.querySelectorAll('select').find((s) => s.title === 'Profile')!;
+    const terrain = [inputs.find((i) => i.type === 'text')!, byText('Same seed'), byText('New seed'), profile, inputs.find((i) => i.type === 'range')!, byText('Undo'), byText('Redo')];
+    const has = (c: FakeElement): boolean => (shownTitle(c) ?? '').includes(MODE_OFF_TIP);
+    const own = new Map([[byText('Same seed'), 'Use the typed seed (as Enter does)'], [profile, 'Profile']]);
+    expect(terrain.map(has)).toEqual([false, false, false, false, false, false, false]);
+    toolbar.setEditable(false);
+    expect(terrain.map((c) => c.disabled)).toEqual([true, true, true, true, true, true, true]);
+    expect(terrain.map(has)).toEqual([true, true, true, true, true, true, true]);
+    for (const [c, t] of own) expect(c.title).toBe(`${t}\n${MODE_OFF_TIP}`);
+    // A sync (every session change, the biome size's tip rewritten) keeps the reminder.
+    toolbar.sync();
+    expect(terrain.map(has)).toEqual([true, true, true, true, true, true, true]);
+    toolbar.setEditable(true);
+    expect(terrain.map(has)).toEqual([false, false, false, false, false, false, false]);
+    for (const [c, t] of own) expect(c.title).toBe(t);
+    // The looking controls never show it.
+    const looking = [host.querySelectorAll('select').find((s) => s.title === 'Map layer')!, inputs.find((i) => i.type === 'checkbox')!];
+    toolbar.setEditable(false);
+    expect(looking.map(has)).toEqual([false, false]);
   });
 
   test('a control disabled for its own reason stays disabled after `setEditable(true)`: Undo and Redo with no step', () => {

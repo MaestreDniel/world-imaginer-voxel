@@ -9,10 +9,11 @@
 import { afterEach, beforeEach, describe, expect, test, vi } from 'vitest';
 import { WorldSession } from '../../src/engine/session';
 import { validateParamTrees } from '../../src/gen/trees';
+import { MODE_OFF_TIP } from '../../src/ui/common/modeTip';
 import type { Notices } from '../../src/ui/common/notice';
 import { createSplineDrawer } from '../../src/ui/splineEditor/drawer';
 import { shapeText } from '../../src/ui/splineEditor/shapeFile';
-import { installDom, type FakeElement } from './fixtures/domShim';
+import { installDom, shownTitle, type FakeElement } from './fixtures/domShim';
 
 /** Every descendant of `host`. */
 function all(host: FakeElement): FakeElement[] {
@@ -133,6 +134,39 @@ describe('the spline drawer\'s setEditable (SP5b spec D10)', () => {
     d.drawer.setEditable(false);
     d.drawer.setEditable(true);
     expect([d.button('Reset spline').disabled, d.field('y').disabled, d.field('x').disabled]).toEqual([true, true, false]);
+  });
+});
+
+describe('the reminder on the spline drawer\'s disabled controls (SP5c spec §7.3, D19)', () => {
+  test('the nearest titled ancestor of each disabled control (itself included) contains the tip while not editable and not while editable; a control\'s own title is kept in both', () => {
+    const d = mount();
+    const plain = d.knots().find((k) => !k.nested)!;
+    d.at('contextmenu', plain, { button: 2 });
+    const file = d.by('sd-file')[0]!;
+    const edits = [
+      d.button('Auto tangents: node'), d.button('Auto tangents: spline'), d.button('Reset spline'), d.button('Import shape'), d.button('Delete'),
+      d.field('x'), d.field('y'), d.field('d'), file,
+    ];
+    const has = (c: FakeElement): boolean => (shownTitle(c) ?? '').includes(MODE_OFF_TIP);
+    const autoTip = d.button('Auto tangents: node').title;
+    const xRow = d.field('x').parentElement!;
+    const xTip = xRow.title;
+    expect(edits.filter(has)).toEqual([]);
+    d.drawer.setEditable(false);
+    expect(edits.filter((c) => !has(c))).toEqual([]);
+    expect(d.button('Auto tangents: node').title).toBe(`${autoTip}\n${MODE_OFF_TIP}`);
+    expect(xRow.title).toBe(`${xTip}\n${MODE_OFF_TIP}`);
+    // The knot menu's edits, opened while not editable, show it; Open and the looking buttons do not.
+    d.at('contextmenu', plain, { button: 2 });
+    const items = d.by('sd-menu')[0]!.children;
+    expect(items.filter((b) => b.disabled).length).toBeGreaterThan(0);
+    expect(items.filter((b) => b.disabled && !has(b))).toEqual([]);
+    for (const t of ['Export shape', 'Close']) expect(has(d.button(t)), t).toBe(false);
+    d.drawer.setEditable(true);
+    expect(edits.filter(has)).toEqual([]);
+    expect([d.button('Auto tangents: node').title, xRow.title]).toEqual([autoTip, xTip]);
+    d.at('contextmenu', plain, { button: 2 });
+    expect(d.by('sd-menu')[0]!.children.filter(has)).toEqual([]);
   });
 });
 

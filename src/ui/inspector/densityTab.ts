@@ -31,6 +31,7 @@ import './inspector.css';
 import type { SessionState, WorldSession } from '../../engine/session';
 import type { Params } from '../../core/params/schema';
 import { el } from '../common/dom';
+import { MODE_OFF_TIP, setModeTip } from '../common/modeTip';
 import { createTargetRow } from '../paramPanel/controls';
 import { createEditorModel, issueText, TREE_LEAVES, type EditorClock, type EditorIssue, type EditorModel, type EditorState, type TreeLeaf } from './editorModel';
 import {
@@ -69,6 +70,7 @@ export interface DensityTab {
   /**
    * The world-modification mode (SP5b spec D10): false disables every control of the node form (rebuilt forms too), the
    * tree's mute toggles and the JSON editor's edits; true enables them again (Apply keeps its own reason, a clean buffer).
+   * While false, hovering any of them shows "Enable 'Modify terrain' to edit here" (SP5c spec §7.3, D19).
    */
   setEditable(on: boolean): void;
   /** The drawer shows or hides the tab: scroll offsets are saved on hide and restored on show; a hidden tab skips renders. */
@@ -84,6 +86,21 @@ const numberText = (v: number): string => (Object.is(v, -0) ? '-0' : String(v));
 /** A key string of form data (−0 kept apart from 0). */
 const keyOf = (v: unknown): string => JSON.stringify(v, (_, x: unknown) => (Object.is(x, -0) ? '-0' : x));
 const isRefValue = (v: NumberValue): v is Exclude<NumberValue, number> => typeof v !== 'number';
+
+/** A tree row's mute toggle's own title. */
+function muteTip(muted: boolean): string {
+  return muted ? 'Unmute this tap' : "Mute this tap: the neutral value of its parent replaces its subtree";
+}
+
+/**
+ * A form element's own title: its title without the reminder's line (SP5c spec §7.3), so the reminder is added once and
+ * the own title given back; undefined when it has none (the reminder alone, or no title).
+ */
+function ownTitle(e: HTMLElement): string | undefined {
+  const t = e.getAttribute('title');
+  if (t === null || t === '' || t === MODE_OFF_TIP) return undefined;
+  return t.endsWith(`\n${MODE_OFF_TIP}`) ? t.slice(0, -MODE_OFF_TIP.length - 1) : t;
+}
 
 const windowClock: EditorClock = {
   setTimeout: (fn, ms) => window.setTimeout(fn, ms),
@@ -239,7 +256,7 @@ export function createDensityTab(host: HTMLElement, deps: DensityTabDeps): Densi
     }
     v.mute.checked = r.muted;
     v.mute.disabled = !editable;
-    v.mute.title = r.muted ? 'Unmute this tap' : "Mute this tap: the neutral value of its parent replaces its subtree";
+    setModeTip(v.mute, editable, muteTip(r.muted));
     v.mute.setAttribute('aria-label', `mute ${r.title}`);
   };
 
@@ -300,8 +317,15 @@ export function createDensityTab(host: HTMLElement, deps: DensityTabDeps): Densi
    */
   const applyFormEditable = (): void => {
     for (const tag of ['input', 'select', 'button', 'textarea']) {
-      for (const c of formPane.querySelectorAll<HTMLInputElement>(tag)) c.disabled = !editable;
+      for (const c of formPane.querySelectorAll<HTMLInputElement>(tag)) {
+        c.disabled = !editable;
+        // The reminder (SP5c spec §7.3) after the own title of the control and of each titled wrapper up to the pane.
+        for (let e: HTMLElement | null = c; e !== null && e !== formPane; e = e.parentElement) {
+          if (e.getAttribute('title') !== null) setModeTip(e, editable, ownTitle(e));
+        }
+      }
     }
+    setModeTip(formPane, editable);
   };
   /** What each control refreshes on a session change that keeps the form's structure (ref labels, target sliders). */
   let syncs: ((s: SessionState) => void)[] = [];
@@ -644,7 +668,11 @@ export function createDensityTab(host: HTMLElement, deps: DensityTabDeps): Densi
     setEditable(on) {
       editable = on;
       applyFormEditable();
-      for (const v of rowViews.values()) if (v.mute !== null) v.mute.disabled = !on;
+      for (const v of rowViews.values()) {
+        if (v.mute === null) continue;
+        v.mute.disabled = !on;
+        setModeTip(v.mute, on, muteTip(v.data.muted));
+      }
       view.setEditable(on);
     },
     setHoverValue(text) {
