@@ -6,13 +6,15 @@
  *   thread is answered `attached` again, anything else is BAD_MESSAGE (as the pool's workers, SP4b spec §2.8);
  * - `edits`: `applyEdits` over the attached store (NOT_ATTACHED before the attach), clocked by `performance.now`,
  *   answered `edited` with its arrays transferred; a refusal (`StoreFull` included, as `'full'`) is a result, not an error;
- * - `diff`: the DiffStore's entries of the column (`readDiff`), transferred; zero-length arrays when it holds none.
+ * - `diff`: the DiffStore's entries of the column (`readDiff`), transferred; zero-length arrays when it holds none;
+ * - `copy` (SP5c spec §3.3, D22): `readVolume` over the attached store (NOT_ATTACHED before the attach), answered
+ *   `copied` with its buffers transferred; a box outside the world is answered `why: 'outside'`, never an `error`.
  * A message the guard refuses is BAD_MESSAGE, with nothing written. Any throw out of the pipeline is an `error` reply
  * carrying the message's id: STORE_CORRUPT for `StoreCorrupt` (a pool lock held by a failed thread), INTERNAL otherwise;
  * the page treats either as the sim's failure (§2.1). Any `error` reply latches the handler: the page has then released
  * every sim pin and marked thread 15 dead, so each later `edits` (one already queued before the page terminated the
- * worker) is answered INTERNAL with nothing written; `attach` and `diff` answer as before, since neither writes the
- * store. `applyEdits` runs inside its own read section, and the writes it retires wait in this thread's limbo, which
+ * worker) is answered INTERNAL with nothing written; `attach`, `diff` and `copy` answer as before, since none writes
+ * the store. `applyEdits` runs inside its own read section, and the writes it retires wait in this thread's limbo, which
  * `drain` frees; the shell drains after each reply and every `SIM_DRAIN_MS` while entries are left.
  *
  * SP5b (spec §3.3, D18, D19, D22): the handler answers through `post` (`handle(m, post)`), so a reply can wait for a
@@ -56,7 +58,7 @@ import { worldRange, type KV, type WriteOp, type WriteResult } from '../persist/
 import { createMemoryKV, type MemoryKV } from '../persist/memory';
 import { copyOps, flushOps, remapDiff, remapOf, tableRelation, type HistoryRecord, type StateRecord, type WorldRecord } from '../persist/saves';
 import { createDiffStore, type DiffStore } from '../sim/diffStore';
-import { applyEdits, createEditScratch, readDiff, type EditScratch } from '../sim/edits';
+import { applyEdits, createEditScratch, readDiff, readVolume, type EditScratch } from '../sim/edits';
 import type { ColumnDiff } from '../world/store/api';
 import { R_STORE_ID, SIM_THREAD } from '../world/store/reclaim';
 import { attachStore, StoreCorrupt, type VoxelStore } from '../world/store/store';
@@ -438,6 +440,15 @@ export function createSimHandler(o: SimHandlerOptions): SimHandler {
             return { msg: { type: 'diff', id: m.id, cx: m.cx, cz: m.cz, sy: new Uint8Array(0), idx: new Uint16Array(0), value: new Uint32Array(0) }, transfer: [] };
           }
           return { msg: { type: 'diff', id: m.id, cx: m.cx, cz: m.cz, sy: d.sy, idx: d.idx, value: d.value }, transfer: [d.sy.buffer, d.idx.buffer, d.value.buffer] as ArrayBuffer[] };
+        }
+        case 'copy': {
+          // A read writes nothing, so it answers after a latch too (as `diff`).
+          if (store === null) return err(m.id, 'NOT_ATTACHED', 'no attach yet');
+          const r = readVolume(store, m.x0, m.y0, m.z0, m.w, m.h, m.d, m.gen);
+          const transfer: ArrayBuffer[] = [];
+          if (r.values !== null) transfer.push(r.values.buffer as ArrayBuffer);
+          if (r.generated !== null) transfer.push(r.generated.buffer as ArrayBuffer);
+          return { msg: { type: 'copied', id: m.id, values: r.values, generated: r.generated, why: r.why }, transfer };
         }
         case 'load':
         case 'flush':

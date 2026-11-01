@@ -18,8 +18,8 @@ import { writeFinalHeightmaps } from '../../src/gen/pipeline/finalHeightmaps';
 import { centreSection, createLightScratch, DEFAULT_LIGHT_TABLES, lightRegion } from '../../src/light/initial';
 import { createDiffStore, NO_ENTRY, type DiffStore } from '../../src/sim/diffStore';
 import {
-  applyEdits, createEditScratch, headroom, HEADROOM_BLOCK_SLOTS, HEADROOM_BYTE_SLOTS, readDiff, SUB_BATCH, validateStats, type Edit, type EditRefusal,
-  type EditResult,
+  applyEdits, createEditScratch, headroom, HEADROOM_BLOCK_SLOTS, HEADROOM_BYTE_SLOTS, MAX_COPY_SIDE, MAX_STEP_EDITS, readDiff, readVolume, SUB_BATCH,
+  validateStats, type Edit, type EditRefusal, type EditResult,
 } from '../../src/sim/edits';
 import { WATER_SOURCE } from '../../src/world/blocks/fluid';
 import { AIR, DIRT, GLASS, ICE, OAK_PLANKS, STONE, TORCH, WALL_TORCH } from '../../src/world/blocks/index';
@@ -704,6 +704,121 @@ describe('a paste in sub-batches (SP5c spec §3.2)', () => {
       diffs.remove(e.x >> 4, e.z >> 4, sectionOf(e.y), idxOf(e.x, e.y, e.z));
     }
     expect(diffs.size).toBe(0);
+  });
+
+  /** The box's cells read one by one as the store holds them, in `readVolume`'s order `(y · d + z) · w + x`. */
+  const expectedVolume = (x0: number, y0: number, z0: number, w: number, h: number, d: number, of: (x: number, y: number, z: number) => number): Uint32Array => {
+    const out = new Uint32Array(w * h * d);
+    for (let y = 0; y < h; y++) for (let z = 0; z < d; z++) for (let x = 0; x < w; x++) out[(y * d + z) * w + x] = of(x0 + x, y0 + y, z0 + z);
+    return out;
+  };
+  /** The proto's (generated) value of world voxel (x, y, z). */
+  const protoValue = (x: number, y: number, z: number): number => {
+    const p = store.proto(x >> 4, z >> 4)!;
+    return val(p.block(x & 15, y, z & 15), p.fluid(x & 15, y, z & 15));
+  };
+
+  test('the caps (SP5c spec §3.3, §5): `MAX_STEP_EDITS` 32,768, `MAX_COPY_SIDE` 64', () => {
+    expect(MAX_STEP_EDITS).toBe(32_768);
+    expect(MAX_COPY_SIDE).toBe(64);
+  });
+
+  test('`readVolume` of a 20 × 10 × 20 box across a column corner equals `blockAt << 8 | fluidAt` cell for cell in `(y · d + z) · w + x` order, in one read section (SP5c spec §3.3)', () => {
+    const x0 = 16 * C[0] - 10;
+    const z0 = 16 * C[1] - 10;
+    const y0 = store.heightAt('worldSurface', 16 * C[0], 16 * C[1])! - 6;
+    let enters = 0;
+    let exits = 0;
+    const s: VoxelStore = { ...store, enterRead: () => { enters++; store.enterRead(); }, exitRead: () => { exits++; store.exitRead(); } };
+    const r = readVolume(s, x0, y0, z0, 20, 10, 20, false);
+    expect([r.why, r.generated]).toEqual([null, null]);
+    expect(r.values).toBeInstanceOf(Uint32Array);
+    expect([...r.values!]).toEqual([...expectedVolume(x0, y0, z0, 20, 10, 20, (x, y, z) => valueAt(store, x, y, z))]);
+    // The box holds ground and air, so a wrong order would not pass by chance.
+    expect(new Set(r.values).size).toBeGreaterThan(1);
+    expect([enters, exits]).toEqual([1, 1]);
+    expect(store.limboCount(store.thread)).toBe(0);
+  });
+
+  test('a box reaching a column outside the Published set: `values` null, `why` `\'unloaded\'` (and so with `gen`)', () => {
+    // Column cx0 − 1 is outside the 7 × 7 region.
+    for (const gen of [false, true]) {
+      const r = readVolume(store, 16 * cx0 - 4, 60, 16 * C[1], 8, 2, 2, gen);
+      expect([r.values, r.generated, r.why], `gen ${String(gen)}`).toEqual([null, null, 'unloaded']);
+    }
+  });
+
+  test('y0 300, h 30: `outside`; x0 524,280, w 10: `outside`; the hook never called (and a box from y −64 or up to y 319 is inside)', () => {
+    let calls = 0;
+    const hook = (): void => { calls++; };
+    const x = 16 * C[0];
+    const z = 16 * C[1];
+    for (const [x0, y0, z0, w, h, d] of [
+      [x, 300, z, 1, 30, 1], [524_280, 70, z, 10, 1, 1], [x, -65, z, 1, 2, 1], [x, 70, -524_289, 1, 1, 2], [x, 70, 524_287, 1, 1, 2], [-524_289, 70, z, 2, 1, 1],
+    ] as const) {
+      const r = readVolume(store, x0, y0, z0, w, h, d, true, hook);
+      expect([r.values, r.generated, r.why], `${x0}, ${y0}, ${z0} × ${w}, ${h}, ${d}`).toEqual([null, null, 'outside']);
+    }
+    expect(calls).toBe(0);
+    expect(readVolume(store, x, -64, z, 1, 2, 1, false).why).toBeNull();
+    expect(readVolume(store, x, 290, z, 1, 30, 1, false).why).toBeNull();
+  });
+
+  test('with `gen`, `generated` equals the region\'s proto values, and after a placed block the two differ only there', () => {
+    // Columns C + 1 and C + 2, which no paste of this describe touches.
+    const x0 = 16 * (C[0] + 2) - 10;
+    const z0 = 16 * (C[1] + 2) - 10;
+    const xp = x0 + 7;
+    const zp = z0 + 13;
+    const yp = store.heightAt('worldSurface', xp, zp)!;
+    const y0 = yp - 5;
+    const at = ((yp - y0) * 20 + (zp - z0)) * 20 + (xp - x0);
+    const before = readVolume(store, x0, y0, z0, 20, 10, 20, true);
+    expect(before.why).toBeNull();
+    const want = expectedVolume(x0, y0, z0, 20, 10, 20, protoValue);
+    expect([...before.generated!]).toEqual([...want]);
+    expect([...before.values!]).toEqual([...want]);
+    const placed = set(xp, yp, zp, val(STONE), valueAt(store, xp, yp, zp));
+    expect(placed.expect).not.toBe(val(STONE));
+    expect(applyEdits(store, diffs, scratch, [placed], now).refused).toBeNull();
+    const after = readVolume(store, x0, y0, z0, 20, 10, 20, true);
+    expect([...after.generated!]).toEqual([...want]);
+    const differ: number[] = [];
+    for (let i = 0; i < want.length; i++) if (after.values![i] !== after.generated![i]) differ.push(i);
+    expect(differ).toEqual([at]);
+    expect(after.values![at]).toBe(val(STONE));
+    expect(applyEdits(store, diffs, scratch, revertOf([placed]), now).refused).toBeNull();
+  });
+});
+
+/**
+ * `readVolume` on a canned store of its own (SP5c spec §3.3): streaming frees columns at any moment, so a read that meets
+ * one freed between two cells answers `unloaded`; the shared region above cannot bring a freed column back.
+ */
+describe('readVolume and a column freed during the read (SP5c spec §3.3)', () => {
+  test('a column freed by the hook between cells 100 and 101 (`store.freeColumn` of cell 101\'s column): `unloaded`, the hook called for cells 0 … 100 only (and so with `gen`)', () => {
+    for (const gen of [false, true]) {
+      const s = cannedStore();
+      // 16 × 2 × 4 cells over columns (−1, 0) and (0, 0): cell 101 is (x −3, y 68, z 2), of column (−1, 0).
+      const seen: number[] = [];
+      const r = readVolume(s, -8, 68, 0, 16, 2, 4, gen, (i) => {
+        seen.push(i);
+        if (i === 100) s.freeColumn((-8 + (101 % 16)) >> 4, 0);
+      });
+      expect([r.values, r.generated, r.why], `gen ${String(gen)}`).toEqual([null, null, 'unloaded']);
+      expect(seen).toEqual(Array.from({ length: 101 }, (_, i) => i));
+    }
+  });
+
+  test('with `gen`, a column whose proto is gone: `unloaded`; without `gen` the same box reads', () => {
+    const s = cannedStore();
+    s.freeProto(0, 0);
+    // y 69 (stone) and 70 (air).
+    expect(readVolume(s, -8, TOP, 0, 16, 2, 4, true).why).toBe('unloaded');
+    const r = readVolume(s, -8, TOP, 0, 16, 2, 4, false);
+    expect(r.why).toBeNull();
+    expect([...r.values!].slice(0, 16)).toEqual(Array(16).fill(val(STONE)));
+    expect([...r.values!].slice(64, 80)).toEqual(Array(16).fill(val(AIR)));
   });
 });
 

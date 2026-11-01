@@ -18,9 +18,9 @@ import type { KV, WriteOp } from '../../src/persist/kv';
 import { createMemoryKV, type MemoryKV } from '../../src/persist/memory';
 import { flushOps, todayStateTable, type HistoryRecord, type StateRecord, type WorldRecord } from '../../src/persist/saves';
 import { createDiffStore, NO_ENTRY } from '../../src/sim/diffStore';
-import { applyEdits } from '../../src/sim/edits';
+import { applyEdits, MAX_STEP_EDITS, readVolume } from '../../src/sim/edits';
 import { DIRT, GLASS, STONE } from '../../src/world/blocks/index';
-import type { BackedUpMsg, DiffMsg, EditedMsg, ErrorMsg, FlushedMsg, FromSim, HistoryChange, LoadedMsg } from '../../src/workers/protocol';
+import type { BackedUpMsg, CopiedMsg, DiffMsg, EditedMsg, ErrorMsg, FlushedMsg, FromSim, HistoryChange, LoadedMsg } from '../../src/workers/protocol';
 import { createMemorySimHandler, createSimHandler, flushSyncPart, SIM_DRAIN_MS, type SimHandler, type SimReply } from '../../src/workers/simHandler';
 import { R_READER, SIM_THREAD } from '../../src/world/store/reclaim';
 import type { ColumnDiff } from '../../src/world/store/api';
@@ -296,6 +296,74 @@ describe('the sim handler on a shared seed-42 region (SP5a spec §2.1)', () => {
 
   test('a repeated attach to the same store as 15 is answered `attached` again', () => {
     expect(call(handler, { type: 'attach', handles: store.handles(), thread: 15 }).msg).toEqual({ type: 'attached' });
+  });
+
+  describe('`copy` (SP5c spec §3.3, D22)', () => {
+    const copied = (r: SimReply): CopiedMsg => {
+      expect(r.msg.type, JSON.stringify(r.msg)).toBe('copied');
+      return r.msg as CopiedMsg;
+    };
+    /** A 4 × 3 × 5 box around the centre column's surface. */
+    const box = () => {
+      const x0 = 16 * C[0] + 3;
+      const z0 = 16 * C[1] + 6;
+      return { x0, y0: surface(x0, z0) - 1, z0, w: 4, h: 3, d: 5 };
+    };
+
+    test('a `copy` answers `copied` with the box\'s values (and its generated values with `gen`), each buffer transferred', () => {
+      const b = box();
+      const want = readVolume(store, b.x0, b.y0, b.z0, b.w, b.h, b.d, true);
+      const r = call(handler, { type: 'copy', id: 60, ...b, gen: false });
+      const m = copied(r);
+      expect([m.id, m.why, m.generated]).toEqual([60, null, null]);
+      expect([...m.values!]).toEqual([...want.values!]);
+      expect(r.transfer).toEqual([m.values!.buffer]);
+      const g = call(handler, { type: 'copy', id: 61, ...b, gen: true });
+      const mg = copied(g);
+      expect([...mg.values!]).toEqual([...want.values!]);
+      expect([...mg.generated!]).toEqual([...want.generated!]);
+      expect(g.transfer).toEqual([mg.values!.buffer, mg.generated!.buffer]);
+    });
+
+    test('a `copy` outside answers `copied` with `why` `\'outside\'`, no `error` reply, and a later `edits` is accepted (the handler not latched)', () => {
+      const h = attachedHandler();
+      const x = 16 * C[0] + 2;
+      const z = 16 * C[1] + 2;
+      for (const [id, o] of [[62, { x0: x, y0: 300, z0: z, w: 1, h: 30, d: 1 }], [63, { x0: 524_280, y0: 70, z0: z, w: 10, h: 1, d: 1 }]] as const) {
+        const r = call(h, { type: 'copy', id, ...o, gen: true });
+        expect(copied(r)).toEqual({ type: 'copied', id, values: null, generated: null, why: 'outside' });
+        expect(r.transfer).toEqual([]);
+      }
+      const y = surface(x, z);
+      const before = valueAt(store, x, y, z);
+      const r = call(h, { type: 'edits', id: 64, edits: [set(x, y, z, before, before)] });
+      expect(edited(r).refused).toBeNull();
+      expect(valueAt(store, x, y, z)).toBe(before);
+    });
+
+    test('a `copy` after an `error` latched the handler still answers (it writes nothing, as `diff`)', () => {
+      const h = attachedHandler();
+      expect((call(h, { type: 'edits', id: 65, edits: [{ x: 0.5, y: 70, z: 0, op: 'set', value: 0, expect: 0 }] }).msg as ErrorMsg).code).toBe('BAD_MESSAGE');
+      const b = box();
+      const m = copied(call(h, { type: 'copy', id: 66, ...b, gen: false }));
+      expect([...m.values!]).toEqual([...readVolume(store, b.x0, b.y0, b.z0, b.w, b.h, b.d, false).values!]);
+    });
+
+    test('a malformed `copy` (w 65) answers BAD_MESSAGE', () => {
+      const m = call(attachedHandler(), { type: 'copy', id: 67, ...box(), w: 65, gen: false }).msg as ErrorMsg;
+      expect([m.type, m.jobId, m.code]).toEqual(['error', 67, 'BAD_MESSAGE']);
+    });
+
+    test('an `edits` of `MAX_STEP_EDITS` + 1 answers BAD_MESSAGE, with `applyEdits` not called', () => {
+      const x = 16 * C[0] + 2;
+      const z = 16 * C[1] + 3;
+      const y = surface(x, z);
+      const before = valueAt(store, x, y, z);
+      const calls = vi.mocked(applyEdits).mock.calls.length;
+      const m = call(attachedHandler(), { type: 'edits', id: 68, edits: Array.from({ length: MAX_STEP_EDITS + 1 }, () => set(x, y, z, before, before)) }).msg as ErrorMsg;
+      expect([m.type, m.jobId, m.code]).toEqual(['error', 68, 'BAD_MESSAGE']);
+      expect(vi.mocked(applyEdits).mock.calls.length).toBe(calls);
+    });
   });
 
   test('after an error reply (an INTERNAL, a BAD_MESSAGE) a later `edits` batch writes nothing: an INTERNAL `error` with its id, `applyEdits` not called; a `diff` still answers (SIM-1)', () => {
@@ -823,6 +891,11 @@ describe('the sim handler before an attach', () => {
     const d = call(h, { type: 'diff', id: 4, cx: 0, cz: 0 }).msg as DiffMsg;
     expect([d.type, d.id, d.sy.length]).toEqual(['diff', 4, 0]);
     expect(h.drain()).toBe(0);
+  });
+
+  test('`copy` before the attach answers NOT_ATTACHED with its id (SP5c spec §3.3)', () => {
+    const m = call(createMemorySimHandler(), { type: 'copy', id: 5, x0: 0, y0: 60, z0: 0, w: 2, h: 2, d: 2, gen: false }).msg as ErrorMsg;
+    expect([m.type, m.jobId, m.code]).toEqual(['error', 5, 'NOT_ATTACHED']);
   });
 });
 

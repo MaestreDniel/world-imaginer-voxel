@@ -13,6 +13,7 @@ import type { ColumnDone, WorkerPool } from '../../src/engine/workerPool';
 import type { HistoryRecord, StateRecord, WorldRecord } from '../../src/persist/saves';
 import type { Edit } from '../../src/workers/protocol';
 import type { ColumnDiff } from '../../src/world/store/api';
+import { REGISTRY } from '../../src/world/blocks/index';
 import { createStore } from '../../src/world/store/store';
 
 interface FakeSim extends SimWorkerLike {
@@ -442,5 +443,79 @@ describe('the sim client (SP5a spec §2.1, §2.5)', () => {
     await jobs.run('D', 0, -2, false, false);
     expect(w.posted.length).toBe(posted);
     expect(decorates.at(-1)).toEqual([0, -2, undefined]);
+  });
+});
+
+describe('the sim client\'s `copy` (SP5c spec §3.3, D22)', () => {
+  const BOX = { x0: 3, y0: 60, z0: -20, w: 2, h: 3, d: 4 } as const;
+  const N = BOX.w * BOX.h * BOX.d;
+  const STONE_V = 1 << 8;
+  const copiedReply = (id: number, o: Record<string, unknown> = {}) => ({
+    type: 'copied', id, values: new Uint32Array(N).fill(STONE_V), generated: null, why: null, ...o,
+  });
+
+  test('`copy` posts the box and `gen`, and a valid `copied` resolves it with its arrays; `outside` and `unloaded` resolve too', async () => {
+    const w = fakeSim();
+    const sim = createSimClient(() => w, { onFailure: () => { throw new Error('no failure expected'); } });
+    const a = sim.copy(BOX, false);
+    expect(w.posted.at(-1)).toEqual({ type: 'copy', id: lastId(w), ...BOX, gen: false });
+    const values = new Uint32Array(N).fill(STONE_V);
+    w.reply(copiedReply(lastId(w), { values }));
+    const ra = await a;
+    expect([ra.type, ra.why, ra.generated]).toEqual(['copied', null, null]);
+    expect(ra.values).toBe(values);
+    const b = sim.copy(BOX, true);
+    expect(w.posted.at(-1)!['gen']).toBe(true);
+    const generated = new Uint32Array(N);
+    w.reply(copiedReply(lastId(w), { generated }));
+    expect((await b).generated).toBe(generated);
+    for (const why of ['outside', 'unloaded'] as const) {
+      const c = sim.copy(BOX, true);
+      w.reply(copiedReply(lastId(w), { values: null, why }));
+      expect(await c).toEqual({ type: 'copied', id: lastId(w), values: null, generated: null, why });
+    }
+    expect(sim.failed).toBe(false);
+  });
+
+  const refused: Array<[string, boolean, (w: FakeSim) => unknown]> = [
+    ['answering no pending `copy`', false, () => copiedReply(999)],
+    ['answering a pending `edits`', false, (w) => copiedReply(lastIdOfType(w, 'edits'))],
+    ['of length w · h · d − 1', false, (w) => copiedReply(lastIdOfType(w, 'copy'), { values: new Uint32Array(N - 1) })],
+    ['whose `generated` is of length w · h · d + 1', true, (w) => copiedReply(lastIdOfType(w, 'copy'), { generated: new Uint32Array(N + 1) })],
+    ['holding a state ≥ `stateCount`', false, (w) => copiedReply(lastIdOfType(w, 'copy'), { values: new Uint32Array(N).fill(REGISTRY.stateCount << 8) })],
+    ['holding a fluid byte with bit 7', false, (w) => copiedReply(lastIdOfType(w, 'copy'), { values: new Uint32Array(N).fill(STONE_V | 0x80) })],
+    ['carrying `generated` when not asked', false, (w) => copiedReply(lastIdOfType(w, 'copy'), { generated: new Uint32Array(N) })],
+    ['without `generated` when asked', true, (w) => copiedReply(lastIdOfType(w, 'copy'))],
+  ];
+  const lastIdOfType = (w: FakeSim, type: string): number => w.posted.filter((m) => m['type'] === type).at(-1)!['id'] as number;
+
+  test.each(refused)('a `copied` %s is the sim\'s failure: `failed` true, `onFailure` once, the pending `copy` rejects `SimFailed`', async (_n, gen, reply) => {
+    const w = fakeSim();
+    let failures = 0;
+    const sim = createSimClient(() => w, { onFailure: () => { failures++; } });
+    const e = sim.edits([STONE_AT]);
+    const c = sim.copy(BOX, gen);
+    w.reply(reply(w));
+    expect([sim.failed, failures]).toEqual([true, 1]);
+    await expect(c).rejects.toBeInstanceOf(SimFailed);
+    await expect(e).rejects.toBeInstanceOf(SimFailed);
+    // A later `copy` rejects at once, with nothing posted.
+    const posted = w.posted.length;
+    await expect(sim.copy(BOX, false)).rejects.toBeInstanceOf(SimFailed);
+    expect(w.posted.length).toBe(posted);
+    expect(failures).toBe(1);
+  });
+
+  test('a pending `copy` rejects `SimFailed` on an `error` reply and on dispose', async () => {
+    const w = fakeSim();
+    const sim = createSimClient(() => w, { onFailure: () => {} });
+    const c = sim.copy(BOX, false);
+    w.reply({ type: 'error', jobId: lastId(w), epoch: null, code: 'INTERNAL', message: 'x' });
+    await expect(c).rejects.toBeInstanceOf(SimFailed);
+    const w2 = fakeSim();
+    const sim2 = createSimClient(() => w2, { onFailure: () => { throw new Error('no failure expected'); } });
+    const c2 = sim2.copy(BOX, true);
+    sim2.dispose();
+    await expect(c2).rejects.toBeInstanceOf(SimFailed);
   });
 });

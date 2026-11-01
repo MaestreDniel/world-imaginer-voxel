@@ -10,23 +10,28 @@
  * (`historyChange`, D28's third lever), which the sim resolves to the same record; a `load` clears that base (the
  * handler that answers it holds none). `record` posts the world's changed record, which has no reply. `backup` (SP5b
  * spec §3.6) posts the copy request with the whole history (it moves no change base) and resolves with `backedUp`, ok
- * or not; `hasAnyEntries` tells the backup rule whether the world has any placed or removed block.
+ * or not; `hasAnyEntries` tells the backup rule whether the world has any placed or removed block. `copy` (SP5c spec
+ * §3.3, D22) posts a box read and resolves with its `copied` reply (`outside` and `unloaded` included); the reply must
+ * answer a pending `copy` by id, with `values` of the box's w · h · d cells (`generated` too when asked, null when not),
+ * every value a registry state with its fluid's bit 7 clear (`parseFromSim`), else it is the sim's failure.
  *
  * **The sim's failure** (§2.1): an `error` event, an `error` reply of any code, or a reply the guard refuses
- * (`parseFromSim`, or one that does not answer a pending request of its kind, its batch's length or its column). In
- * this order: `failed` turns true, the entry set empties, the worker is terminated (so no batch already queued in its
- * port writes after its pins are released; the sim's handler also refuses every batch after an `error` reply),
- * `onFailure` runs once and synchronously (the page marks thread 15 dead, releases every sim pin and shows the
- * notice), then every pending `edits`, `load`, `flush` and `backup` rejects with `SimFailed` and every pending `diff`
- * resolves null, so a rejected post finds its pins already released. Later `edits`, `load`s, `flush`es and `backup`s
- * reject and later `diff`s resolve null at once, and a later `record` is dropped, with nothing posted (autosave counts a
- * rejected flush as not saved; the sim's own failure notice shows). `dispose` terminates the worker and settles its
- * requests the same way, without `onFailure`. The page opens a world whose `load` failed without editing (SP5b spec §3.3).
+ * (`parseFromSim`, or one that does not answer a pending request of its kind, its batch's length, its copy's box or
+ * its column). In this order: `failed` turns true, the entry set empties, the worker is terminated (so no batch already
+ * queued in its port writes after its pins are released; the sim's handler also refuses every batch after an `error`
+ * reply), `onFailure` runs once and synchronously (the page marks thread 15 dead, releases every sim pin and shows the
+ * notice), then every pending `edits`, `load`, `flush`, `backup` and `copy` rejects with `SimFailed` and every pending
+ * `diff` resolves null, so a rejected post finds its pins already released. Later `edits`, `load`s, `flush`es, `backup`s
+ * and `copy`s reject and later `diff`s resolve null at once, and a later `record` is dropped, with nothing posted
+ * (autosave counts a rejected flush as not saved; the sim's own failure notice shows). `dispose` terminates the worker
+ * and settles its requests the same way, without `onFailure`. The page opens a world whose `load` failed without
+ * editing (SP5b spec §3.3).
  */
 import { colKey } from '../core/coords';
 import type { HistoryRecord, StateRecord, WorldRecord } from '../persist/saves';
 import {
-  historyChange, parseFromSim, type BackedUpMsg, type BackupMsg, type DiffMsg, type Edit, type EditedMsg, type FlushedMsg, type LoadedMsg, type LoadMsg, type ToSim,
+  historyChange, parseFromSim, type BackedUpMsg, type BackupMsg, type CopiedMsg, type DiffMsg, type Edit, type EditedMsg, type FlushedMsg, type LoadedMsg,
+  type LoadMsg, type ToSim,
 } from '../workers/protocol';
 import type { ColumnDiff } from '../world/store/api';
 import { SIM_THREAD } from '../world/store/reclaim';
@@ -61,6 +66,11 @@ export interface SimClient {
   /** Column (cx, cz)'s entries, or null when it holds none or the sim failed (§2.5). */
   diff(cx: number, cz: number): Promise<ColumnDiff | null>;
   /**
+   * Reads the box's voxels in the sim (SP5c spec §3.3, D22), and with `gen` their generated values: resolves with the
+   * `copied` reply (`why` `'outside'` or `'unloaded'` included); rejects `SimFailed` on the sim's failure, as `edits`.
+   */
+  copy(box: { x0: number; y0: number; z0: number; w: number; h: number; d: number }, gen: boolean): Promise<CopiedMsg>;
+  /**
    * Saves the open world (SP5b spec §3.2): resolves with `flushed`, ok or not; rejects `SimFailed` on the sim's failure
    * or the client's dispose, and at once on a closed client.
    */
@@ -85,10 +95,11 @@ type Pending =
   | { readonly kind: 'edits'; readonly n: number; resolve(m: EditedMsg): void; reject(e: Error): void }
   | { readonly kind: 'flush'; resolve(m: FlushedMsg): void; reject(e: Error): void }
   | { readonly kind: 'backup'; resolve(m: BackedUpMsg): void; reject(e: Error): void }
+  | { readonly kind: 'copy'; readonly n: number; readonly gen: boolean; resolve(m: CopiedMsg): void; reject(e: Error): void }
   | { readonly kind: 'diff'; readonly cx: number; readonly cz: number; resolve(d: ColumnDiff | null): void };
 /** The request kind each id-carrying reply answers. */
-const REQUEST_OF: Readonly<Record<'loaded' | 'edited' | 'diff' | 'flushed' | 'backedUp', Pending['kind']>> = {
-  loaded: 'load', edited: 'edits', diff: 'diff', flushed: 'flush', backedUp: 'backup',
+const REQUEST_OF: Readonly<Record<'loaded' | 'edited' | 'diff' | 'copied' | 'flushed' | 'backedUp', Pending['kind']>> = {
+  loaded: 'load', edited: 'edits', diff: 'diff', copied: 'copy', flushed: 'flush', backedUp: 'backup',
 };
 interface AttachWait { resolve(): void; reject(e: Error): void }
 
@@ -165,6 +176,16 @@ export function createSimClient(spawn: () => SimWorkerLike, o: { onFailure(e: Er
       p.resolve(m as BackedUpMsg);
       return;
     }
+    if (p.kind === 'copy') {
+      const r = m as CopiedMsg;
+      // `parseFromSim` checked the shape and the values; the lengths and `generated` follow the request.
+      if (r.why === null && (r.values!.length !== p.n || (r.generated === null) === p.gen || (r.generated !== null && r.generated.length !== p.n))) {
+        return fail(`a \`copied\` reply of ${r.values!.length} values${r.generated === null ? '' : ` and ${r.generated.length} generated`} to a copy of ${p.n}${p.gen ? ' with gen' : ''}`);
+      }
+      pending.delete(m.id);
+      p.resolve(r);
+      return;
+    }
     if (p.kind === 'edits') {
       const r = m as EditedMsg;
       if (r.prev.length !== p.n) return fail(`an \`edited\` reply of ${r.prev.length} edits to a batch of ${p.n}`);
@@ -209,6 +230,15 @@ export function createSimClient(spawn: () => SimWorkerLike, o: { onFailure(e: Er
       return new Promise<EditedMsg>((resolve, reject) => {
         post({ type: 'edits', id, edits: e });
         pending.set(id, { kind: 'edits', n: e.length, resolve, reject });
+      });
+    },
+    copy(box, gen) {
+      if (closed) return Promise.reject(new SimFailed('the sim failed or was disposed'));
+      const id = nextId++;
+      const { x0, y0, z0, w, h, d } = box;
+      return new Promise<CopiedMsg>((resolve, reject) => {
+        post({ type: 'copy', id, x0, y0, z0, w, h, d, gen });
+        pending.set(id, { kind: 'copy', n: w * h * d, gen, resolve, reject });
       });
     },
     diff(cx, cz) {

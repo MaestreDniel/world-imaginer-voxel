@@ -965,6 +965,66 @@ describe('the sim worker\'s messages (SP5a spec §2.1)', () => {
   });
 });
 
+describe('the `copy` message and the `edits` guard\'s length cap (SP5c spec §3.3, D22)', () => {
+  const copy = (o: Record<string, unknown> = {}) => ({ type: 'copy', id: 9, x0: 5, y0: 60, z0: -3, w: 20, h: 10, d: 20, gen: false, ...o });
+  const copied = (o: Record<string, unknown> = {}) => ({ type: 'copied', id: 9, values: new Uint32Array([1 << 8, 0]), generated: null, why: null, ...o });
+  const edit = { x: 5, y: 70, z: -3, op: 'set', value: 1 << 8, expect: 0 };
+  const editsOf = (n: number) => ({ type: 'edits', id: 4, edits: Array.from({ length: n }, () => edit) });
+
+  test('a `copy` is accepted: sizes 1 … 64, `gen` either way, a corner outside the world (y0 400) not malformed', () => {
+    expect(parseToSim(copy())).not.toBeNull();
+    expect(parseToSim(copy({ w: 1, h: 64, d: 64, gen: true }))).not.toBeNull();
+    expect(parseToSim(copy({ y0: 400 }))).not.toBeNull();
+    expect(parseToSim(copy({ x0: 524_280, w: 10 }))).not.toBeNull();
+    expect(parseToSim(copy({ x0: -2_000_000, y0: -500, z0: 9_000_000 }))).not.toBeNull();
+  });
+  test.each<[string, unknown]>([
+    ['w 65', copy({ w: 65 })],
+    ['w 0', copy({ w: 0 })],
+    ['h 65', copy({ h: 65 })],
+    ['d −1', copy({ d: -1 })],
+    ['a fractional d', copy({ d: 2.5 })],
+    ['a fractional x0', copy({ x0: 0.5 })],
+    ['a NaN y0', copy({ y0: Number.NaN })],
+    ['an infinite z0', copy({ z0: Infinity })],
+    ['`gen` missing', copy({ gen: undefined })],
+    ['`gen` not a boolean', copy({ gen: 1 })],
+    ['a non-integer id', copy({ id: 'a' })],
+  ])('a `copy` is refused: %s', (_n, m) => {
+    expect(parseToSim(m)).toBeNull();
+  });
+
+  test('an `edits` of 32,769 edits is refused, of 32,768 accepted', () => {
+    expect(parseToSim(editsOf(32_768))).not.toBeNull();
+    expect(parseToSim(editsOf(32_769))).toBeNull();
+  });
+
+  test('a `copied` reply is accepted: values with or without `generated`, `outside` and `unloaded` with none', () => {
+    expect(parseFromSim(copied())).not.toBeNull();
+    expect(parseFromSim(copied({ generated: new Uint32Array([1 << 8, 0]) }))).not.toBeNull();
+    expect(parseFromSim(copied({ values: null, why: 'outside' }))).not.toBeNull();
+    expect(parseFromSim(copied({ values: null, why: 'unloaded' }))).not.toBeNull();
+    // The last registry state with fluid 127 (every bit but the reserved bit 7).
+    expect(parseFromSim(copied({ values: new Uint32Array([(((REGISTRY.stateCount - 1) << 8) | 0x7F) >>> 0]) }))).not.toBeNull();
+  });
+  test.each<[string, unknown]>([
+    ['a non-integer id', copied({ id: 0.5 })],
+    ['an unknown why', copied({ values: null, why: 'busy' })],
+    ['values not a Uint32Array', copied({ values: new Int32Array(2) })],
+    ['values an array', copied({ values: [256, 0] })],
+    ['generated not a Uint32Array', copied({ generated: [256, 0] })],
+    ['values without why null', copied({ why: 'outside' })],
+    ['no values with why null', copied({ values: null })],
+    ['generated with why unloaded', copied({ values: null, generated: new Uint32Array(2), why: 'unloaded' })],
+    ['a value whose state is stateCount', copied({ values: new Uint32Array([0, REGISTRY.stateCount << 8]) })],
+    ['a value whose fluid byte has bit 7', copied({ values: new Uint32Array([(1 << 8) | 0x80]) })],
+    ['a generated value whose state is stateCount', copied({ generated: new Uint32Array([0, REGISTRY.stateCount << 8]) })],
+    ['a generated value whose fluid byte has bit 7', copied({ generated: new Uint32Array([0, 0x81]) })],
+  ])('a `copied` reply is refused: %s', (_n, m) => {
+    expect(parseFromSim(m)).toBeNull();
+  });
+});
+
 describe('a flush\'s history as a change against the previous flush\'s (SP5b spec §3.3, D28\'s third lever)', () => {
   type Step = HistoryRecord['done'][number];
   const step = (x: number): Step => ({ edits: [{ x, y: 64, z: -2, before: 0xFFFFFFFF, after: (x % 50) << 8 }] });

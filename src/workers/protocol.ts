@@ -29,6 +29,8 @@
  * `edits`, a `diff` request with an `id`) and `FromSim` (`attached`, `edited`, `diff`, `error`), checked by `parseToSim`
  * and `parseFromSim`; the edit types come from `sim/edits.ts`, re-exported for the main thread's layers. A `decorate` may
  * carry `diff`, the column's edit entries for D's overlay (§2.5), checked by `parseToWorker`.
+ * SP5c (spec §3.3, D22): `copy` asks the sim for a box's values (1 … `MAX_COPY_SIDE` a side; a corner outside the world
+ * is not malformed, the sim answers it `outside`), answered `copied`; an `edits` batch holds at most `MAX_STEP_EDITS`.
  */
 import { MAP_LEVELS, MAP_TILE_PX, PART_BUDGET, SLICE_NS, type MapLevel } from '../core/constants';
 import type { StageId } from '../core/ids';
@@ -38,7 +40,7 @@ import type { Spawn } from '../gen/column/spawn';
 import type { ProbeField, SliceField } from '../gen/inspect/fieldSlice';
 import { isLayerId, type LayerId } from '../gen/map/layers';
 import type { SplineLeaf } from '../metrics/splineStats';
-import type { Edit, EditRefusal } from '../sim/edits';
+import { MAX_COPY_SIDE, MAX_STEP_EDITS, type Edit, type EditRefusal } from '../sim/edits';
 import { payloadProblem, type ColumnMeshPayload } from '../mesh/column';
 import type { HistoryRecord, StateRecord, WorldRecord } from '../persist/saves';
 import { REGISTRY } from '../world/blocks/index';
@@ -715,10 +717,20 @@ export interface BackupMsg {
   readonly state: StateRecord; readonly history: HistoryRecord;
 }
 /**
- * What the main thread sends the sim: its store once, as thread 15 (an `AttachMsg` with `thread` 15 only), a saved
- * world's `load` (SP5b), then edits and diff requests, and in a saved world `flush`, `record` and `backup`.
+ * A read of the box of w × h × d voxels from (x0, y0, z0) (SP5c spec §3.3, D22), answered `copied`: integers, each size
+ * 1 … `MAX_COPY_SIDE`, `gen` a boolean (also the generated values). A box reaching outside the world is not malformed:
+ * the sim answers it `outside`, so a ghost aimed past the world's edge never ends editing.
  */
-export type ToSim = AttachMsg | LoadMsg | EditsMsg | DiffRequestMsg | FlushMsg | RecordMsg | BackupMsg;
+export interface CopyMsg {
+  readonly type: 'copy'; readonly id: number; readonly x0: number; readonly y0: number; readonly z0: number;
+  readonly w: number; readonly h: number; readonly d: number; readonly gen: boolean;
+}
+/**
+ * What the main thread sends the sim: its store once, as thread 15 (an `AttachMsg` with `thread` 15 only), a saved
+ * world's `load` (SP5b), then edits, diff requests and volume reads (`copy`, SP5c), and in a saved world `flush`,
+ * `record` and `backup`.
+ */
+export type ToSim = AttachMsg | LoadMsg | EditsMsg | DiffRequestMsg | CopyMsg | FlushMsg | RecordMsg | BackupMsg;
 /**
  * A batch's outcome (§2.1; `sim/edits.ts`'s `EditResult`): `prev[k]` and `next[k]` edit k's entry before and after it
  * (0xFFFFFFFF for none), `dirty` the colKeys to remesh (§2.6), `entryAdded` and `entryRemoved` the colKeys that
@@ -766,8 +778,17 @@ export type FlushedMsg =
  * `error` the KV's error name (`QuotaExceededError` for a full disk), or `'closed'` for a closed connection.
  */
 export interface BackedUpMsg { readonly type: 'backedUp'; readonly id: number; readonly ok: boolean; readonly error: string | null }
+/**
+ * A `copy`'s answer (SP5c spec §3.3; `sim/edits.ts`'s `VolumeRead`): `values` the box's `state << 8 | fluid` in index
+ * order `(y · d + z) · w + x` and, when asked, `generated` the cells' generated values, transferred, with `why` null;
+ * or both null with `why` `'outside'` (nothing read) or `'unloaded'` (a column not Published, or its proto gone).
+ */
+export interface CopiedMsg {
+  readonly type: 'copied'; readonly id: number; readonly values: Uint32Array | null; readonly generated: Uint32Array | null;
+  readonly why: 'outside' | 'unloaded' | null;
+}
 /** What the sim answers; an `error`'s `jobId` is the id of the message it answers (null when unreadable), its `epoch` null. */
-export type FromSim = AttachedMsg | LoadedMsg | EditedMsg | DiffMsg | FlushedMsg | BackedUpMsg | ErrorMsg;
+export type FromSim = AttachedMsg | LoadedMsg | EditedMsg | DiffMsg | CopiedMsg | FlushedMsg | BackedUpMsg | ErrorMsg;
 
 /** Every `EditRefusal` (a record, so a new refusal cannot be left out of the reply guard). */
 const EDIT_REFUSALS: Readonly<Record<EditRefusal, true>> = Object.freeze({ unloaded: true, changed: true, noProto: true, full: true });
@@ -825,6 +846,16 @@ const backupOk = (m: Record<string, unknown>): boolean => {
     && isObj(h) && typeof h['worldId'] === 'string' && Array.isArray(h['done']) && Array.isArray(h['undone']);
 };
 
+/** A box side of a `copy`: an integer 1 … `MAX_COPY_SIDE`. */
+const isCopySide = (v: unknown): boolean => isInt(v) && v >= 1 && v <= MAX_COPY_SIDE;
+/**
+ * A `copy`'s id and corner integers, its sizes 1 … `MAX_COPY_SIDE`, `gen` a boolean. Whether the box lies in the world
+ * is the sim's answer (`outside`), not the guard's: a read is harmless, and an `error` reply would latch the sim.
+ */
+const copyOk = (m: Record<string, unknown>): boolean =>
+  isInt(m['id']) && isInt(m['x0']) && isInt(m['y0']) && isInt(m['z0']) && isCopySide(m['w']) && isCopySide(m['h']) && isCopySide(m['d'])
+  && typeof m['gen'] === 'boolean';
+
 /** Validates a message sent to the sim; null when malformed. */
 export function parseToSim(m: unknown): ToSim | null {
   if (!isObj(m)) return null;
@@ -835,10 +866,12 @@ export function parseToSim(m: unknown): ToSim | null {
       return loadOk(m) ? (m as unknown as LoadMsg) : null;
     case 'edits': {
       const edits = m['edits'];
-      return isInt(m['id']) && Array.isArray(edits) && edits.every(editOk) ? (m as unknown as EditsMsg) : null;
+      return isInt(m['id']) && Array.isArray(edits) && edits.length <= MAX_STEP_EDITS && edits.every(editOk) ? (m as unknown as EditsMsg) : null;
     }
     case 'diff':
       return isInt(m['id']) && isColumn(m['cx'], m['cz']) ? (m as unknown as DiffRequestMsg) : null;
+    case 'copy':
+      return copyOk(m) ? (m as unknown as CopyMsg) : null;
     case 'flush':
       return flushOk(m) ? (m as unknown as FlushMsg) : null;
     case 'record': {
@@ -856,6 +889,27 @@ export function parseToSim(m: unknown): ToSim | null {
 const diffEntriesOk = (sy: Uint8Array, idx: Uint16Array): boolean => {
   for (let k = 0; k < sy.length; k++) if (sy[k]! >= 24 || idx[k]! >= 4096) return false;
   return true;
+};
+
+/** Every value a voxel value of a registry state with its fluid's bit 7 clear (`isVoxelValue`). */
+const voxelValuesOk = (a: Uint32Array): boolean => {
+  const n = REGISTRY.stateCount;
+  for (let k = 0; k < a.length; k++) if (a[k]! >>> 8 >= n || (a[k]! & 0x80) !== 0) return false;
+  return true;
+};
+/** A `copied`'s `why`: null (read) or one of the two reasons. */
+const COPY_WHYS: readonly unknown[] = [null, 'outside', 'unloaded'];
+/**
+ * A `copied`'s shape (SP5c spec §3.3): an integer id, `why` one of the three; with `why` null a `Uint32Array` `values` and
+ * `generated` null or a `Uint32Array`, every value of both a registry state with its fluid's bit 7 clear; with a reason
+ * both null. The lengths, and whether `generated` was asked for, are the client's check (it holds the request).
+ */
+const copiedOk = (m: Record<string, unknown>): boolean => {
+  const { values, generated, why } = m;
+  if (!isInt(m['id']) || !COPY_WHYS.includes(why)) return false;
+  if (why !== null) return values === null && generated === null;
+  return values instanceof Uint32Array && voxelValuesOk(values)
+    && (generated === null || (generated instanceof Uint32Array && voxelValuesOk(generated)));
 };
 
 /** Validates a reply of the sim; null when malformed (the page treats it as the sim's failure, §2.1). */
@@ -885,6 +939,8 @@ export function parseFromSim(m: unknown): FromSim | null {
         && value instanceof Uint32Array && idx.length === sy.length && value.length === sy.length && diffEntriesOk(sy, idx)
         ? (m as unknown as DiffMsg) : null;
     }
+    case 'copied':
+      return copiedOk(m) ? (m as unknown as CopiedMsg) : null;
     case 'flushed': {
       const count = (v: unknown): boolean => isInt(v) && v >= 0;
       if (!isInt(m['id'])) return null;

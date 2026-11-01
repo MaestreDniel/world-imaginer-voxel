@@ -50,8 +50,12 @@
  * The entry changes (SP5b D20): `entryAdded` and `entryRemoved` name the edited columns whose `diffs.has` turned true
  * or false over the batch, so the main thread keeps its entry set without the whole set on every reply. The
  * DiffStore's own dirty-column set (SP5b §3.2) is marked by its `set` and `remove`, the restores included.
+ *
+ * SP5c (spec §3.3, D22): `readVolume` reads a box of at most `MAX_COPY_SIDE` a side for the `copy` message, in one read
+ * section, a box outside the world answered `'outside'` with nothing read; `MAX_STEP_EDITS` is the one declaration of
+ * the batch's length cap.
  */
-import { colKey, colKeyCx, colKeyCz } from '../core/coords';
+import { colKey, colKeyCx, colKeyCz, WINDOW_HALF, yInWorld } from '../core/coords';
 import { patchHeightmaps } from '../gen/pipeline/finalHeightmaps';
 import {
   createRelightScratch, EDGE_E, EDGE_N, EDGE_NE, EDGE_NW, EDGE_S, EDGE_SE, EDGE_SW, EDGE_W, relight, type RelightAccess,
@@ -80,6 +84,17 @@ export interface Edit {
  * limbo under 4,096 entries in the paste's y-ascending order (measured 2,198 solid, 2,536 lit; 1,024 left 4,205-4,441).
  */
 export const SUB_BATCH = 512;
+
+/**
+ * The most edits one batch may hold (SP5c spec §3.3, §5; D31 kept it at 32,768): a cut, paste or move changes at most
+ * this many voxels, and `parseToSim`'s `edits` guard refuses a longer batch. Declared once here, in the sim layer that
+ * `workers/`, `persist/` and `ui/` may all value-import (`workers/` cannot import `ui/`), and imported by
+ * `protocol.ts`, `blockHistory.ts` and `saves.ts`.
+ */
+export const MAX_STEP_EDITS = 32_768;
+
+/** The longest side of a box the sim reads for a `copy` (SP5c spec §3.3, D22): a clipboard is at most 64 a side. */
+export const MAX_COPY_SIDE = 64;
 
 /** Why a batch was refused (§2.1): nothing of it was written. */
 export type EditRefusal = 'unloaded' | 'changed' | 'noProto' | 'full';
@@ -607,4 +622,72 @@ export function applyEdits(
 /** Column (cx, cz)'s entries for D's overlay (§2.5), in fresh arrays, or null when it holds none (ruling R9). */
 export function readDiff(diffs: DiffStore, cx: number, cz: number): ColumnDiff | null {
   return diffs.columnDiff(cx, cz);
+}
+
+/**
+ * A box's voxels as the sim read them (SP5c spec §3.3): `values` each cell's `state << 8 | fluid`, `generated` its
+ * proto's value (with `gen`; else null), in index order `(y · d + z) · w + x`, fresh (transferable); or both null with
+ * `why` `'outside'` (a cell outside the world) or `'unloaded'` (a column not Published, or with `gen` its proto gone).
+ */
+export interface VolumeRead {
+  readonly values: Uint32Array | null;
+  readonly generated: Uint32Array | null;
+  readonly why: 'outside' | 'unloaded' | null;
+}
+
+const OUTSIDE: VolumeRead = Object.freeze({ values: null, generated: null, why: 'outside' });
+const UNLOADED: VolumeRead = Object.freeze({ values: null, generated: null, why: 'unloaded' });
+
+/**
+ * Reads the box of w × h × d voxels from (x0, y0, z0) (SP5c spec §3.3, D22). A box with any cell outside y −64 … 319
+ * or the window [−524,288, 524,288) is `'outside'`, with nothing read. Otherwise one read section, cells in index order
+ * `(y · d + z) · w + x` (x fastest, then z, then y): with `gen` the cell's generated value from its column's proto
+ * (`generatedAt`'s rule; each column's proto taken once, `'unloaded'` when one is gone), then `fluidAt`, then `blockAt`.
+ * Streaming frees columns on the main thread at any moment and `blockAt` of a column not Published is −1, so the read
+ * stops at the first −1 with `'unloaded'` (a −1 is never shifted into a value); since a free clears the Published
+ * status before it releases any slot, a cell whose `blockAt`, read last, is not −1 read its proto and fluid whole.
+ * `hook(i)` runs after cell i (tests only). Sizes are integers 1 … `MAX_COPY_SIDE` (the guard's), else `RangeError`.
+ */
+export function readVolume(
+  store: VoxelStore, x0: number, y0: number, z0: number, w: number, h: number, d: number, gen: boolean, hook?: (i: number) => void,
+): VolumeRead {
+  for (const s of [w, h, d]) if (!Number.isInteger(s) || s < 1 || s > MAX_COPY_SIDE) throw new RangeError(`readVolume: size ${s} outside 1 … ${MAX_COPY_SIDE}`);
+  if (!Number.isInteger(x0) || !Number.isInteger(y0) || !Number.isInteger(z0)) throw new RangeError(`readVolume: corner (${x0}, ${y0}, ${z0}) not integers`);
+  if (!yInWorld(y0) || !yInWorld(y0 + h - 1) || x0 < -WINDOW_HALF || x0 + w > WINDOW_HALF || z0 < -WINDOW_HALF || z0 + d > WINDOW_HALF) return OUTSIDE;
+  const values = new Uint32Array(w * h * d);
+  const generated = gen ? new Uint32Array(w * h * d) : null;
+  // The box's columns' protos (at most 5 × 5), taken once inside the read section.
+  const cx0 = x0 >> 4;
+  const cz0 = z0 >> 4;
+  const ncx = ((x0 + w - 1) >> 4) - cx0 + 1;
+  const protos: ColumnView[] = [];
+  store.enterRead();
+  try {
+    if (generated !== null) {
+      for (let cz = cz0; cz <= (z0 + d - 1) >> 4; cz++) {
+        for (let cx = cx0; cx < cx0 + ncx; cx++) {
+          const p = store.proto(cx, cz);
+          if (p === null) return UNLOADED;
+          protos.push(p);
+        }
+      }
+    }
+    let i = 0;
+    for (let y = y0; y < y0 + h; y++) {
+      for (let z = z0; z < z0 + d; z++) {
+        const pRow = ((z >> 4) - cz0) * ncx - cx0;
+        for (let x = x0; x < x0 + w; x++, i++) {
+          if (generated !== null) generated[i] = generatedAt(protos[pRow + (x >> 4)]!, x, y, z);
+          const fluid = store.fluidAt(x, y, z);
+          const block = store.blockAt(x, y, z);
+          if (block < 0) return UNLOADED;
+          values[i] = (block << 8) | fluid;
+          hook?.(i);
+        }
+      }
+    }
+  } finally {
+    store.exitRead();
+  }
+  return { values, generated, why: null };
 }
