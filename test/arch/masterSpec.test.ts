@@ -1650,6 +1650,26 @@ describe('master spec amendments (SP5b §9)', () => {
 });
 
 describe('master spec amendments (SP5c §13)', () => {
+  /** [§1 entry head, the token its entry holds, the file on disk]; each later task that creates a module appends its row. */
+  const SP5C_MODULES: Array<[head: RegExp, token: string, file: string]> = [
+    [/^\s+ui\/world\/\* /, 'selectTool.ts clipboard.ts clipboardStore.ts pasteBatch.ts pasteBlocks.ts (SP5c)', 'src/ui/world/clipboard.ts'],
+    [/^\s+ui\/world\/\* /, 'selectTool.ts clipboard.ts clipboardStore.ts pasteBatch.ts pasteBlocks.ts (SP5c)', 'src/ui/world/pasteBlocks.ts'],
+  ];
+
+  test('§1 names each SP5c module in its entry, which exists', () => {
+    expect(SP5C_MODULES.length, 'SP5C_MODULES has no rows').toBeGreaterThan(0);
+    for (const [head, token, file] of SP5C_MODULES) {
+      const entry = layoutEntry(head);
+      expect(entry, `§1 has no entry matching ${head}`).not.toBe('');
+      expect(entry, `§1's ${head} entry does not name ${token}`).toContain(token);
+      expect(existsSync(`${ROOT_DIR}${file}`), `${file} does not exist`).toBe(true);
+    }
+  });
+
+  test('§2.2\'s `rotateState` line names the selection tool\'s turns (SP5c spec §13)', () => {
+    expect(text).toContain('`rotateState(state, quarterTurns)` and `mirrorState` serve structure pieces and placement and the selection tool\'s turns (SP5c).');
+  });
+
   test('§10\'s SP5c entry, its receivers and the hand-overs (SP5c spec §13, §14, §15)', () => {
     // Moved from the SP5a describe (SP5c spec §12): the header gains its size L and its spec.
     const sp5c = spEntry('SP5c', 'SP6');

@@ -197,6 +197,7 @@ world-imaginer-voxel/          (repository root)
                                 page (`?spike=batch`); the world's small settings block (replaced by SP5b's Settings screen, `ui/settingsPanel.ts`);
                                 ui/world/bench.ts (SP4b: the `?bench=medium` route and its JSON); mapOverlay.ts applyControl.ts teleport.ts (SP4c) buildHud.ts blockHistory.ts (SP5a)
                                 stateBounds.ts autosave.ts worldLock.ts modifyMode.ts places.ts placeDialog.ts (SP5b)
+                                selectTool.ts clipboard.ts clipboardStore.ts pasteBatch.ts pasteBlocks.ts (SP5c)
     ui/inspector/*              (SP3d) the ?map Density tab. Pure: model.ts form.ts jsonText.ts editorModel.ts hoverModel.ts
                                 sliceModel.ts; DOM: jsonEditor.ts sliceView.ts densityTab.ts inspector.css (SP10's full probe and
                                 further JSON editors go here too)
@@ -285,7 +286,7 @@ These are rewritten against new tests. Everything else is written fresh:
 - Waterlogging is not a property: it is the separate fluid byte.
 - **Append-only ids.** State ids are assigned append-only: `test/stateIds.lock.json` records every `(typeName, props) → id` ever published, and a unit test fails if an existing entry changes (new types and props only append: new types with their full property sets append, and a locked type never gains a property or a value; a variant that needs one is a new type, and `withType` converts between them; amended by SP3a). Each `worlds` record stores `stateTable` (the mapping at save time) (kept equal to the ids on disk: rewritten at an open whose table differs from today's, SP5b); load and import remap diffs through it (hotbar slots are stored by type name, §4.12); states whose type no longer exists become AIR, with a warning showing the count.
 - A per-type `PLACEABLE` flag and a `category` (from `tags.ts`) drive the creative palette.
-- A test asserts at most **4096 used states** (`MAX_STATES`); per-state SoA tables are sized to it. `STATE_TYPE: Uint16Array` maps state → type; `stateOf(type, props)`, `propsOf(state)`, `withProp(state, prop, v)` and `withType(state, type)` (keeps the props both types share, defaults the rest; used by per-biome structure palettes) are pure table lookups; `rotateState(state, quarterTurns)` and `mirrorState` serve structure pieces and placement.
+- A test asserts at most **4096 used states** (`MAX_STATES`); per-state SoA tables are sized to it. `STATE_TYPE: Uint16Array` maps state → type; `stateOf(type, props)`, `propsOf(state)`, `withProp(state, prop, v)` and `withType(state, type)` (keeps the props both types share, defaults the rest; used by per-biome structure palettes) are pure table lookups; `rotateState(state, quarterTurns)` and `mirrorState` serve structure pieces and placement and the selection tool's turns (SP5c).
 
 Per-state SoA tables:
 - `OPACITY`: 0 transparent, 1 filters sky (leaves, ice, water), 15 opaque;
