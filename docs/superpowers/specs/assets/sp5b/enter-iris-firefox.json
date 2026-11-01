@@ -1,0 +1,110 @@
+{
+  "route": "bench=enter",
+  "pairs": [
+    {
+      "unsaved": {
+        "revealMs": 3519.92,
+        "idbOpenMs": null,
+        "loadMs": null,
+        "decodeMs": null
+      },
+      "saved": {
+        "revealMs": 3681.0600000000004,
+        "idbOpenMs": 2.240000000000009,
+        "loadMs": 84.94000000000005,
+        "decodeMs": 20.659999999999997
+      }
+    },
+    {
+      "unsaved": {
+        "revealMs": 3619.52,
+        "idbOpenMs": null,
+        "loadMs": null,
+        "decodeMs": null
+      },
+      "saved": {
+        "revealMs": 3713.58,
+        "idbOpenMs": 3.299999999999983,
+        "loadMs": 73.91999999999996,
+        "decodeMs": 20.28
+      }
+    },
+    {
+      "unsaved": {
+        "revealMs": 4280.12,
+        "idbOpenMs": null,
+        "loadMs": null,
+        "decodeMs": null
+      },
+      "saved": {
+        "revealMs": 6887.5,
+        "idbOpenMs": 9.920000000000016,
+        "loadMs": 95.68,
+        "decodeMs": 28.559999999999988
+      }
+    },
+    {
+      "unsaved": {
+        "revealMs": 6179.34,
+        "idbOpenMs": null,
+        "loadMs": null,
+        "decodeMs": null
+      },
+      "saved": {
+        "revealMs": 6673.200000000001,
+        "idbOpenMs": 1.740000000000009,
+        "loadMs": 102.67999999999995,
+        "decodeMs": 29.120000000000005
+      }
+    },
+    {
+      "unsaved": {
+        "revealMs": 6386.24,
+        "idbOpenMs": null,
+        "loadMs": null,
+        "decodeMs": null
+      },
+      "saved": {
+        "revealMs": 6525.16,
+        "idbOpenMs": 1.7800000000000011,
+        "loadMs": 95.32000000000005,
+        "decodeMs": 27.19999999999999
+      }
+    },
+    {
+      "unsaved": {
+        "revealMs": 6224.14,
+        "idbOpenMs": null,
+        "loadMs": null,
+        "decodeMs": null
+      },
+      "saved": {
+        "revealMs": 6452.26,
+        "idbOpenMs": 2.219999999999999,
+        "loadMs": 72.19999999999999,
+        "decodeMs": 21.439999999999998
+      }
+    }
+  ],
+  "kept": 5,
+  "pairRatios": [
+    1.045779449532944,
+    1.0259868711873397,
+    1.6091838546582806,
+    1.079921156628378,
+    1.0217530189908304,
+    1.036650846542655
+  ],
+  "enterRatio": 1.036650846542655,
+  "medianUnsavedMs": 6179.34,
+  "medianSavedMs": 6525.16,
+  "idbOpenMs": 2.219999999999999,
+  "loadMs": 95.32000000000005,
+  "decodeMs": 27.19999999999999,
+  "newWorldRevealMs": null,
+  "shaderCache": "unknown",
+  "gpu": "unknown",
+  "renderer": "Intel(R) HD Graphics, or similar",
+  "measuredBy": "bench=enter&auto=1",
+  "userAgent": "Mozilla/5.0 (X11; Ubuntu; Linux x86_64; rv:158.0) Gecko/20100101 Firefox/158.0"
+}
