@@ -5,7 +5,8 @@
  * one choke point for every editor and every direct call, the map's Ctrl+Z / Ctrl+Y included) and every editor's terrain
  * controls are shown disabled (`MapTool.setEditable`); looking, layers, the grid, the cut line, teleport and the pin work.
  * On, the map edits the world live as in SP4c. Switching off ends a drag in progress (the session records its step, so
- * the apply control still applies an edit already made) and stops new ones; neither switch shows a notice. The map tool
+ * the apply control still applies an edit already made) and stops new ones. Each switch on shows `MODIFY_ON_NOTICE` for
+ * `BACKUP_NOTICE_MS` (SP5c D18, through the page's notices, in the map's row); switching off shows none. The map tool
  * keeps the session it has (`MapToolDeps`); a tool mounted later is told the mode by the overlay at its mount.
  * `sessionCount` counts the switches on: the backup's latch is cleared at each (§3.6, Point 1).
  *
@@ -54,8 +55,14 @@ export function createModifySwitch(): ModifySwitch {
   return { element, checkbox };
 }
 
-/** How long "Backup saved as …" shows (D11), ms. */
+/** How long "Backup saved as …" shows (D11), and the switch's `MODIFY_ON_NOTICE` (SP5c D18), ms. */
 export const BACKUP_NOTICE_MS = 6000;
+
+/**
+ * Shown at each switch on (SP5c spec §7.2, D18), never at switch off. True in every case: the backup's latch is cleared at
+ * each switch on, and a copy is made only in a world with a placed or removed block.
+ */
+export const MODIFY_ON_NOTICE = 'Modify terrain is on: the first terrain change saves a backup copy of this world first, if you have built in it.';
 
 /** What the backup needs from the page (SP5b spec §3.6). */
 export interface BackupDeps {
@@ -161,6 +168,7 @@ export function createModifyMode(o: {
     // Off: the session first ends a drag in progress, then the editors are disabled; on: writable before editable.
     o.session.setWritable(on);
     o.tool()?.setEditable(on);
+    if (on) b.notices.show(MODIFY_ON_NOTICE, { kind: 'info', timeoutMs: BACKUP_NOTICE_MS });
   };
   const onChange = (): void => set(o.checkbox.checked);
   o.checkbox.addEventListener('change', onChange);

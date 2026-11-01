@@ -11,7 +11,7 @@ import { WorldSession, type SessionState } from '../../src/engine/session';
 import { validateParamTrees } from '../../src/gen/trees';
 import { draftOf, type Configured } from '../../src/ui/map/previewDriver';
 import { createApplyControl, createEpochs } from '../../src/ui/world/applyControl';
-import { createModifyMode, createModifySwitch, MODIFY_LABEL, type BackupDeps } from '../../src/ui/world/modifyMode';
+import { BACKUP_NOTICE_MS, createModifyMode, createModifySwitch, MODIFY_LABEL, MODIFY_ON_NOTICE, type BackupDeps } from '../../src/ui/world/modifyMode';
 import { appliedRecord, installUndoKeys, newWorldRecord, openOlderGenerator } from '../../src/ui/world/worldPage';
 import { GENERATOR_VERSION } from '../../src/core/constants';
 import { SCHEMA_VERSION } from '../../src/core/params/migrate';
@@ -133,6 +133,49 @@ describe('createModifyMode (SP5b spec §3.6, D10, D25)', () => {
     expect([session.writable, editable]).toEqual([true, []]);
   });
 
+  test('`set(true)` shows the text once with 6,000 ms', () => {
+    const r = backupRig();
+    r.mode.set(true);
+    expect(r.notices).toEqual([{ text: MODIFY_ON_NOTICE, kind: 'info', timeoutMs: 6000 }]);
+    expect([MODIFY_ON_NOTICE, BACKUP_NOTICE_MS]).toEqual(['Modify terrain is on: the first terrain change saves a backup copy of this world first, if you have built in it.', 6000]);
+    // The user's click on the switch shows it too, once.
+    const s = backupRig();
+    click(s.sw.checkbox);
+    expect([s.mode.on, s.notices]).toEqual([true, [{ text: MODIFY_ON_NOTICE, kind: 'info', timeoutMs: 6000 }]]);
+  });
+
+  test('`set(true)` again shows nothing', () => {
+    const r = backupRig();
+    r.mode.set(true);
+    r.mode.set(true);
+    expect(r.notices.map((n) => n.text)).toEqual([MODIFY_ON_NOTICE]);
+  });
+
+  test('`set(false)` shows nothing', () => {
+    const r = backupRig();
+    r.mode.set(false);
+    expect(r.notices).toEqual([]);
+    r.mode.set(true);
+    r.mode.set(false);
+    expect(r.notices.map((n) => n.text)).toEqual([MODIFY_ON_NOTICE]);
+    // Each later switch on shows it again.
+    r.mode.set(true);
+    expect(r.notices.map((n) => n.text)).toEqual([MODIFY_ON_NOTICE, MODIFY_ON_NOTICE]);
+  });
+
+  test('a backup\'s `Backup saved as …` still shows after it', async () => {
+    const r = backupRig({ writeMs: 300 });
+    r.mode.set(true);
+    r.session.set('climate.scaleMul', 2);
+    r.emit();
+    await r.to(460);
+    expect(r.calls).toEqual(['T']);
+    expect(r.notices).toEqual([
+      { text: MODIFY_ON_NOTICE, kind: 'info', timeoutMs: 6000 },
+      { text: `Backup saved as '${FIRST}'`, kind: 'info', timeoutMs: 6000 },
+    ]);
+  });
+
   test('`dispose` stops following the checkbox', () => {
     const { session, sw, mode } = rig();
     mode.dispose();
@@ -198,7 +241,10 @@ function backupRig(o: {
   const names = ['My world'];
   const copies: Array<Omit<BackupMsg, 'type' | 'id'>> = [];
   const writes: Array<{ due: number; m: Omit<BackupMsg, 'type' | 'id'>; resolve(r: BackedUpMsg): void }> = [];
-  const shown: Array<{ text: string; kind: string | undefined; timeoutMs: number | undefined }> = [];
+  /** Every notice shown, in order. */
+  const notices: Array<{ text: string; kind: string | undefined; timeoutMs: number | undefined }> = [];
+  /** The backup's notices: every one but the switch's `MODIFY_ON_NOTICE` (SP5c D18), which its own cases pin. */
+  const shown: typeof notices = [];
   let ids = 0;
   let kept = o.kept?.(session.state) ?? newWorldRecord('w1', 'My world', session.state, 1);
   let applied = session.snapshot;
@@ -215,7 +261,13 @@ function backupRig(o: {
     build: o.build ?? (() => ({ state: STATE, history: HISTORY })),
     newId: () => `copy-${++ids}`,
     names: o.names ?? (() => Promise.resolve([...names])),
-    notices: { show: (text, opts) => { shown.push({ text, kind: opts?.kind, timeoutMs: opts?.timeoutMs }); } },
+    notices: {
+      show: (text, opts) => {
+        const n = { text, kind: opts?.kind, timeoutMs: opts?.timeoutMs };
+        notices.push(n);
+        if (text !== MODIFY_ON_NOTICE) shown.push(n);
+      },
+    },
   };
   const mode = createModifyMode({ session, tool: () => null, checkbox: sw.checkbox, backup: deps });
   const first = readyOf(session.state);
@@ -237,7 +289,7 @@ function backupRig(o: {
   /** Settles every promise callback queued so far. */
   const settle = (): Promise<void> => new Promise((resolve) => { setTimeout(resolve, 0); });
   return {
-    session, sw, mode, control, calls, copies, shown, names, first,
+    session, sw, mode, control, calls, copies, shown, notices, names, first,
     get kept() { return kept; },
     setEntries(on: boolean) { entries = on; },
     setFail(e: string | null) { fail = e; },

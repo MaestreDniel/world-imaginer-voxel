@@ -715,6 +715,139 @@ describe('mountWorldsMenu: Load world (SP5b spec §1.1, §1.3, D3, D7, D14, D24)
     expect(names(kv)).toEqual(['Gamma']);
   });
 
+  describe('Rename\'s Save button (SP5c spec §7.1, D17)', () => {
+    /** Opens the Rename field on `id`'s row: the input and the `button.world-rename-save` right after it, "Save". */
+    function openRename(id: string): { field: FakeElement; save: FakeElement } {
+      one(row(id), 'world-rename').click();
+      const field = one(row(id), 'world-name-input');
+      const save = one(row(id), 'world-rename-save');
+      const siblings = field.parentElement!.childNodes;
+      expect([save.tagName, save.textContent, siblings.indexOf(save)]).toEqual(['BUTTON', 'Save', siblings.indexOf(field) + 1]);
+      return { field, save };
+    }
+    /** The field and its button are gone from the row. */
+    const closed = (id: string): boolean => byClass(row(id), 'world-name-input').length === 0 && byClass(row(id), 'world-rename-save').length === 0;
+
+    test('Save renames to the trimmed name', async () => {
+      const kv = createMemoryKV();
+      const id = await saved(kv, 'Alpha', { updated: 5 });
+      mount(kv);
+      await openLoad();
+      const { field, save } = openRename(id);
+      field.value = '  Gamma ';
+      save.click();
+      await vi.waitFor(() => expect(names(kv)).toEqual(['Gamma']));
+      await vi.waitFor(() => expect(closed(id)).toBe(true));
+      expect(row(id).textContent).toContain('Gamma · default · seed 7');
+    });
+
+    test('Save with the unchanged name writes nothing and closes', async () => {
+      const kv = createMemoryKV();
+      const id = await saved(kv, 'Alpha', { updated: 5 });
+      mount(kv);
+      await openLoad();
+      const write = vi.spyOn(kv, 'write');
+      const { field, save } = openRename(id);
+      field.value = ' Alpha  ';
+      save.click();
+      expect(closed(id)).toBe(true);
+      await flush();
+      expect(write).not.toHaveBeenCalled();
+      expect(names(kv)).toEqual(['Alpha']);
+      expect(row(id).textContent).toContain('Alpha · default · seed 7');
+    });
+
+    test('Save with an empty name writes nothing and closes', async () => {
+      const kv = createMemoryKV();
+      const id = await saved(kv, 'Alpha', { updated: 5 });
+      mount(kv);
+      await openLoad();
+      const write = vi.spyOn(kv, 'write');
+      const { field, save } = openRename(id);
+      field.value = '   ';
+      save.click();
+      expect(closed(id)).toBe(true);
+      await flush();
+      expect(write).not.toHaveBeenCalled();
+      expect(names(kv)).toEqual(['Alpha']);
+    });
+
+    test('the button is disabled while the write runs and gone after', async () => {
+      const kv = createMemoryKV();
+      const id = await saved(kv, 'Alpha', { updated: 5 });
+      mount(kv);
+      await openLoad();
+      // The rename's write waits for `release`.
+      const real = kv.write.bind(kv);
+      let release = (): void => {};
+      const gate = new Promise<void>((r) => { release = r; });
+      const write = vi.spyOn(kv, 'write').mockImplementationOnce(async (ops) => {
+        await gate;
+        return real(ops);
+      });
+      const { field, save } = openRename(id);
+      field.value = 'Gamma';
+      save.click();
+      await vi.waitFor(() => expect(write).toHaveBeenCalledTimes(1));
+      expect([field.disabled, save.disabled]).toEqual([true, true]);
+      // A second press while it runs does nothing: the button is disabled, and Enter on the disabled field too.
+      save.click();
+      field.dispatchEvent(key('Enter'));
+      await flush();
+      expect(write).toHaveBeenCalledTimes(1);
+      expect(one(row(id), 'world-rename-save')).toBe(save);
+      release();
+      await vi.waitFor(() => expect(names(kv)).toEqual(['Gamma']));
+      await vi.waitFor(() => expect(closed(id)).toBe(true));
+      expect(write).toHaveBeenCalledTimes(1);
+    });
+
+    test('a held lock refuses it with D7\'s notice as Enter does', async () => {
+      const kv = createMemoryKV();
+      const id = await saved(kv, 'Alpha', { updated: 5 });
+      const holder = await holdWorld(NODE_LOCKS, id);
+      expect(holder).not.toBeNull();
+      try {
+        mount(kv);
+        await openLoad();
+        const write = vi.spyOn(kv, 'write');
+        const { field, save } = openRename(id);
+        field.value = 'Gamma';
+        save.click();
+        await vi.waitFor(() => expect(dom.el('load-notice').textContent).toContain('This world is open in another tab'));
+        await vi.waitFor(() => expect(closed(id)).toBe(true));
+        await flush();
+        expect(write).not.toHaveBeenCalled();
+        expect(names(kv)).toEqual(['Alpha']);
+      } finally {
+        holder?.release();
+      }
+    });
+
+    test('Enter and Esc unchanged', async () => {
+      const kv = createMemoryKV();
+      const id = await saved(kv, 'Alpha', { updated: 5 });
+      mount(kv);
+      await openLoad();
+      // Enter keeps the trimmed name; the field and its button go.
+      const first = openRename(id);
+      first.field.value = ' Gamma ';
+      first.field.dispatchEvent(key('Enter'));
+      await vi.waitFor(() => expect(names(kv)).toEqual(['Gamma']));
+      await vi.waitFor(() => expect(closed(id)).toBe(true));
+      // Esc cancels: nothing written, the field and its button gone at once.
+      const write = vi.spyOn(kv, 'write');
+      const second = openRename(id);
+      second.field.value = 'Delta';
+      second.field.dispatchEvent(key('Escape'));
+      expect(closed(id)).toBe(true);
+      expect(row(id).textContent).toContain('Gamma · default · seed 7');
+      await flush();
+      expect(write).not.toHaveBeenCalled();
+      expect(names(kv)).toEqual(['Gamma']);
+    });
+  });
+
   test('a Delete on another row and a visibility re-read during a Rename keep the field and its typed name; the list is drawn after Esc (final review MENU-3)', async () => {
     const kv = createMemoryKV();
     const a = await saved(kv, 'Alpha', { updated: 5 });

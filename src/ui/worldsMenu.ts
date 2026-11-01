@@ -18,7 +18,7 @@
  * - Load world (§1.3, D3): one row per world of `saves.list()`, the most recently modified first ("name · preset · seed
  *   N", "Modified YYYY-MM-DD HH:MM" in local time with "· n places" (· 1 place for one) when it has any, "automatic
  *   copy" for a backup, "older generator" when its stored genKey is not today's, D8), with Play (`/?world=<id>`), Rename
- *   (the name becomes a text field: Enter keeps, Esc cancels), Export and Delete (asked in the screen's notice row,
+ *   (the name becomes a text field: Enter or Save keeps, Esc cancels), Export and Delete (asked in the screen's notice row,
  *   `notices.confirm`, never a browser dialog); a broken row (D14: a record `parseWorldRecord` refuses, or params
  *   `loadParams` refuses) shows why with Delete only. Rename and Delete write under the world's lock taken only if it is
  *   free (`withWorldIfFree`, D7, D24), and a held lock refuses them with `LOCKED_NOTICE`. The list is read again when
@@ -435,8 +435,9 @@ export function mountWorldsMenu(root: HTMLElement, o: WorldsMenuOptions): { disp
   }
 
   /**
-   * Rename (D3): the name becomes a text field; Enter keeps a changed, non-empty name, Esc cancels. A list read skipped
-   * while it was open is done when it closes. Keys of an IME composition are the composition's.
+   * Rename (D3): the name becomes a text field with a Save button after it (SP5c D17); Enter or Save keeps a changed,
+   * non-empty name (one `commit`), Esc cancels. No blur handler, so pressing Save does not cancel the field first. A list
+   * read skipped while it was open is done when it closes. Keys of an IME composition are the composition's.
    */
   function startRename(saves: Saves, world: WorldRecord, nameEl: HTMLElement): void {
     if (renaming) return;
@@ -446,9 +447,13 @@ export function mountWorldsMenu(root: HTMLElement, o: WorldsMenuOptions): { disp
     input.value = world.name;
     nameEl.hidden = true;
     nameEl.parentElement?.insertBefore(input, nameEl);
+    // After the input (the hidden name follows it).
+    const save = rowButton('world-rename-save', 'Save', () => commit());
+    nameEl.parentElement?.insertBefore(save, nameEl);
     input.focus();
     const close = (): void => {
       input.remove();
+      save.remove();
       nameEl.hidden = false;
       renaming = false;
       closeRename = null;
@@ -461,6 +466,18 @@ export function mountWorldsMenu(root: HTMLElement, o: WorldsMenuOptions): { disp
         void readList();
       }
     };
+    /** Enter's and Save's: an empty or unchanged name, or writes stopped, closes as Esc does; else the write under the lock. */
+    const commit = (): void => {
+      if (input.disabled) return;
+      const typed = input.value.trim();
+      if (typed === '' || typed === world.name || writesStopped(loadNotices)) {
+        cancel();
+        return;
+      }
+      input.disabled = true;
+      save.disabled = true;
+      void underLock(world.id, 'renamed', () => saves.rename(world.id, typed));
+    };
     input.addEventListener('keydown', (e) => {
       if (input.disabled || e.isComposing) return;
       if (e.key === 'Escape') {
@@ -468,13 +485,7 @@ export function mountWorldsMenu(root: HTMLElement, o: WorldsMenuOptions): { disp
         cancel();
       } else if (e.key === 'Enter') {
         e.preventDefault();
-        const typed = input.value.trim();
-        if (typed === '' || typed === world.name || writesStopped(loadNotices)) {
-          cancel();
-          return;
-        }
-        input.disabled = true;
-        void underLock(world.id, 'renamed', () => saves.rename(world.id, typed));
+        commit();
       }
     });
   }
