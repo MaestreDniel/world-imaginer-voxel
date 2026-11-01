@@ -23,14 +23,20 @@
  * round trip through the sim's worker (SP5b spec §6.3): `load` of an empty world, 20 edits, a `flush`, the handler
  * renewed in the same worker (the wrapper's harness-only `__renew`, `renew: true`, over the same in-worker `MemoryKV`),
  * `attach` and `load` again, which give back the same entries, then one more edit and a `flush` of a history that shares
- * the first one's steps (the client posts it whole after its `load`, rulings R9); and, after one more edit answered
+ * the first one's steps (the client posts it whole after its `load`, rulings R9); a paste of `MAX_STEP_EDITS` changed
+ * cells (SP5c spec §10.6: its target read by a `copy` through the worker, its batch from `pasteBatch`, y ascending,
+ * posted through the action post as one bulk step), after which the sim's entries are the earlier ones outside its box
+ * plus each pasted cell that differs from its proto, and the window equals `genRegion` with them; a `copy` of a
+ * 40 × 20 × 40 box with its generated values through the worker's guard and transfer, equal to the store's values and
+ * protos cell for cell, then a `copy` outside the window answered `outside` and a later edit accepted (the sim not
+ * latched); and, after one more edit answered
  * while a main-thread read section holds its retired slots in thread 15's limbo (freed by the sim's own retries once the
  * section closes), the sim stopped before the world (rulings R35), then everything unloaded and the limbo drained, every
  * pool slot is free.
  */
 import { Worker } from 'node:worker_threads';
 import { afterAll, beforeAll, describe, expect, test } from 'vitest';
-import { colKey, colKeyCx, colKeyCz } from '../../src/core/coords';
+import { colKey, colKeyCx, colKeyCz, WINDOW_HALF } from '../../src/core/coords';
 import type { Params } from '../../src/core/params/schema';
 import {
   createCoordinator, createCoordinatorCounts, worldJobsOf, type Coordinator, type CoordinatorJobs, type StreamCamera,
@@ -42,12 +48,15 @@ import { createThrottle } from '../../src/engine/throttle';
 import { createWorkerPool, type WorkerLike, type WorkerPool } from '../../src/engine/workerPool';
 import { payloadProblem } from '../../src/mesh/column';
 import { todayStateTable, type HistoryRecord, type StateRecord } from '../../src/persist/saves';
+import { MAX_STEP_EDITS } from '../../src/sim/edits';
 import { DEFAULT_MAP_STATE, openMapSession } from '../../src/ui/map/mapState';
 import { createPreviewDriver, createReplayingCanvas, draftOf, type DriverClock, type PreviewDriver } from '../../src/ui/map/previewDriver';
 import { createApplyControl, createEpochs, updateAuxPolicy, type ApplyControl } from '../../src/ui/world/applyControl';
 import { createActionPost, createBlockHistory, type BlockHistory } from '../../src/ui/world/blockHistory';
 import { createEditLatency } from '../../src/ui/world/editLatency';
-import { createEditPath, type EditOutcome, type EditPath } from '../../src/ui/world/editPath';
+import type { Clipboard } from '../../src/ui/world/clipboard';
+import { createEditPath, workingNotice, type EditOutcome, type EditPath } from '../../src/ui/world/editPath';
+import { pasteBatch, type Box } from '../../src/ui/world/pasteBatch';
 import type { Edit, FlushedMsg } from '../../src/workers/protocol';
 import { SIM_DRAIN_MS } from '../../src/workers/simHandler';
 import { LAVA_SOURCE, NO_FLUID, WATER_SOURCE } from '../../src/world/blocks/fluid';
@@ -595,6 +604,130 @@ describe('edits on the real store equal genRegion with the same entries (SP5a sp
     expect(second, 'the flush after the renew').toMatchObject({ type: 'flushed', ok: true, flushSeq: 2, columns: 1 });
     expect(notices.slice(noticesBefore), 'notices').toEqual([]);
     clean('the round trip');
+  });
+
+  test('a MAX_STEP_EDITS-changed paste (32,768) through the sim in the Node worker: equal to genRegion + the entries (SP5c spec §10.6)', async () => {
+    const w = W();
+    const epoch = applies.at(-1)!.epoch;
+    const noticesBefore = notices.length;
+    const stepsBefore = w.history.size;
+    // A cube of 32 a side over columns (−2, −2) … (−1, −1), every column's 3 × 3 open (never (8, 8), the last case's
+    // voxel), its middle at the surface of its centre: some cells in the ground, some in the air, a few of the round
+    // trip's stones among them.
+    const S = 32;
+    expect(S * S * S, 'the cube holds the cap').toBe(MAX_STEP_EDITS);
+    const surface = reading((s) => s.heightAt('worldSurface', -16, -16))!;
+    const at: Box = { x0: -2 * 16, y0: Math.min(319 - S + 1, surface - S / 2), z0: -2 * 16, w: S, h: S, d: S };
+    const inBox = (x: number, y: number, z: number): boolean =>
+      x >= at.x0 && x < at.x0 + S && y >= at.y0 && y < at.y0 + S && z >= at.z0 && z < at.z0 + S;
+    const before = await simEntries();
+
+    // The target read as the page reads it before a paste (§2.3): a `copy` through the worker's guard and transfer.
+    const read = await settle(w.sim.copy(at, false), 'the target\'s copy');
+    expect([read.why, read.generated], 'the target\'s copy').toEqual([null, null]);
+    const target = read.values!;
+    // The clipboard: stone and glass with a torch on every 7th diagonal (a lit paste, its relight across both column
+    // borders), each cell ice where that would equal its target, so every one of the 32,768 cells changes.
+    const values = new Uint32Array(S * S * S);
+    for (let y = 0, i = 0; y < S; y++) {
+      for (let z = 0; z < S; z++) {
+        for (let x = 0; x < S; x++, i++) {
+          const v = (x + y + z) % 7 === 0 ? val(TORCH) : ((x ^ z) & 1) === 1 ? val(GLASS) : val(STONE);
+          values[i] = v === target[i] ? val(ICE) : v;
+        }
+      }
+    }
+    const clip: Clipboard = { w: S, h: S, d: S, values };
+    const batch = pasteBatch(clip, 0, at, target);
+    if (!Array.isArray(batch)) throw new Error(`the paste was refused: ${batch.why}`);
+    // Exactly the cap: one more would be the guard's BAD_MESSAGE, which latches the sim (§3.3).
+    expect(batch.length, 'the paste\'s changed cells').toBe(MAX_STEP_EDITS);
+
+    // Posted as the page posts it: one bulk batch through the edit path, recorded as one block-history step.
+    const out = await settle(w.actionPost(batch), 'the paste');
+    expect(out.ok, 'the paste').toBe(true);
+    await until(() => !w.editPath.pending() && inFlight === 0 && settledAt(epoch), SETTLE_MS, 'the paste settled');
+    expect(w.history.size, 'one step for the paste').toBe(stepsBefore + 1);
+    const wrong = reading((s) => {
+      let n = 0;
+      for (const e of batch) if (val(s.blockAt(e.x, e.y, e.z), s.fluidAt(e.x, e.y, e.z)) !== e.value) n++;
+      return n;
+    });
+    expect(wrong, 'cells not at their pasted value').toBe(0);
+
+    // The entries: the earlier ones outside the box, and each pasted cell whose value differs from its proto's (D20).
+    const want = before.lines.filter((l) => {
+      const [x, y, z] = l.slice(0, l.indexOf('=')).split(',').map(Number) as [number, number, number];
+      return !inBox(x, y, z);
+    });
+    reading((s) => {
+      for (const e of batch) {
+        const p = s.proto(e.x >> 4, e.z >> 4);
+        if (p === null) throw new Error(`(${e.x}, ${e.y}, ${e.z}): no proto`);
+        if (val(p.block(e.x & 15, e.y, e.z & 15), p.fluid(e.x & 15, e.y, e.z & 15)) !== e.value) want.push(`${e.x},${e.y},${e.z}=${e.value}`);
+      }
+    });
+    want.sort();
+    const { diff, lines } = await simEntries();
+    expect(lines.length, 'the entries').toBe(want.length);
+    expect(lines, 'the sim\'s entries are the earlier ones outside the box plus the paste\'s').toEqual(want);
+    expect(windowHash(), 'the window').toBe(await expected(w.session.state.params, diff));
+    // A bulk batch may show "Working on 32,768 blocks…" while its reply is pending (D23); nothing else.
+    expect(notices.slice(noticesBefore).filter((t) => t !== workingNotice(MAX_STEP_EDITS)), 'notices').toEqual([]);
+    clean('the paste');
+  });
+
+  test('a copy of a 40 × 20 × 40 box through the worker\'s guard and transfer equals the store cell for cell; a copy outside the window answers outside and a later edit is accepted (SP5c spec §10.6)', async () => {
+    const w = W();
+    const epoch = applies.at(-1)!.epoch;
+    const noticesBefore = notices.length;
+    await until(() => !w.editPath.pending() && inFlight === 0 && settledAt(epoch), SETTLE_MS, 'the world settled before the copy');
+    // Over columns (−2, −2) … (1, 1) around the spawn's surface: the paste's corner, the round trip's stones and
+    // generated ground and air.
+    const yS = reading((s) => s.heightAt('worldSurface', 0, 0))!;
+    const box = { x0: -20, y0: Math.min(319 - 20 + 1, yS - 10), z0: -20, w: 40, h: 20, d: 40 };
+    const got = await settle(w.sim.copy(box, true), 'the copy');
+    expect(got.why, 'the copy').toBeNull();
+    const values = got.values!;
+    const generated = got.generated!;
+    expect([values.length, generated.length], 'the copy\'s cells').toEqual([40 * 20 * 40, 40 * 20 * 40]);
+    const [wrongValue, wrongGen, edited] = reading((s) => {
+      let v = 0;
+      let g = 0;
+      let e = 0;
+      for (let y = 0, i = 0; y < box.h; y++) {
+        for (let z = 0; z < box.d; z++) {
+          for (let x = 0; x < box.w; x++, i++) {
+            const [bx, by, bz] = [box.x0 + x, box.y0 + y, box.z0 + z];
+            if (values[i] !== val(s.blockAt(bx, by, bz), s.fluidAt(bx, by, bz))) v++;
+            const p = s.proto(bx >> 4, bz >> 4);
+            if (p === null || generated[i] !== val(p.block(bx & 15, by, bz & 15), p.fluid(bx & 15, by, bz & 15))) g++;
+            if (values[i] !== generated[i]) e++;
+          }
+        }
+      }
+      return [v, g, e];
+    });
+    expect(wrongValue, 'cells whose copied value is not the store\'s').toBe(0);
+    expect(wrongGen, 'cells whose generated value is not the proto\'s').toBe(0);
+    expect(edited, 'the box holds edited cells').toBeGreaterThan(0);
+
+    // A box past the window's edge, and one above y 319: answered `outside` with nothing read, and the sim not latched.
+    const edge = await settle(w.sim.copy({ x0: WINDOW_HALF - 20, y0: 0, z0: 0, w: 40, h: 20, d: 40 }, true), 'the copy past the edge');
+    expect(edge, 'the copy past the edge').toMatchObject({ type: 'copied', values: null, generated: null, why: 'outside' });
+    const above = await settle(w.sim.copy({ x0: 0, y0: 310, z0: 0, w: 4, h: 20, d: 4 }, false), 'the copy above the world');
+    expect(above, 'the copy above the world').toMatchObject({ type: 'copied', values: null, generated: null, why: 'outside' });
+    expect(simFailure, 'the sim after the copies outside').toBeNull();
+    // A later edit is accepted: glass into the first air above the surface of column (1, 1) (never (8, 8)).
+    const [x, z] = [16 + 5, 16 + 5];
+    const y = Math.min(319, reading((s) => s.heightAt('worldSurface', x, z))!);
+    const edit = await settle(w.actionPost([{ x, y, z, op: 'set', value: val(GLASS), expect: valueAt(x, y, z) }]), 'the edit after the copies');
+    expect(edit.ok, 'the edit after the copies').toBe(true);
+    await until(() => !w.editPath.pending() && inFlight === 0 && settledAt(epoch), SETTLE_MS, 'the edit after the copies settled');
+    expect(valueAt(x, y, z)).toBe(val(GLASS));
+    expect(w.editPath.enabled, 'the edit path').toBe(true);
+    expect(notices.slice(noticesBefore), 'notices').toEqual([]);
+    clean('the copies');
   });
 
   test('after unloading everything and draining the limbo, every pool slot is free', async () => {
