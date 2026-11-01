@@ -25,10 +25,10 @@ import { buildColumnSample, newColumnSample } from '../../src/gen/column/columnS
 import { paintTile } from '../../src/gen/map/tile';
 import { fillColumnT } from '../../src/metrics/region';
 import { createStore, type VoxelStore } from '../../src/world/store/store';
-import { createDiffStore } from '../../src/sim/diffStore';
+import { createDiffStore, type DiffStore } from '../../src/sim/diffStore';
 import type { StateRecord } from '../../src/persist/saves';
 import { flushSyncPart } from '../../src/workers/simHandler';
-import { applyEdits, createEditScratch, type Edit } from '../../src/sim/edits';
+import { applyEdits, createEditScratch, type Edit, type EditResult } from '../../src/sim/edits';
 import { NO_FLUID } from '../../src/world/blocks/fluid';
 import { AIR, OPACITY, STONE, TORCH } from '../../src/world/blocks/index';
 import { createTaskHandler } from '../../src/workers/taskHandler';
@@ -47,12 +47,13 @@ import { sliceCostOf } from '../../src/gen/inspect/fieldSlice';
 import { runFieldSlice } from '../../src/workers/fieldSliceJob';
 import { planFieldSlice, type FieldSliceMsg, type FieldSliceSpec } from '../../src/workers/protocol';
 import { DEFAULT_MAP_STATE, openMapSession, type MapState } from '../../src/ui/map/mapState';
+import { pasteLitBlock, pasteMaxBlock, type PasteBlock } from '../../src/ui/world/pasteBlocks';
 import { capDensityTree, capSurfaceRules } from '../harness/capTrees';
 import { persistFlushFixture } from '../harness/persistFixture';
 import { PART_WORST_LEAVES, partWorstParams } from '../harness/sliceTrees';
 import {
-  absoluteGateFailures, BENCH_ROWS, benchKernels, CALIBRATION_BESIDE_RUN, gateFailures, ISLANDS_COLUMNS, ISLANDS_RUN, LIGHT_RUN, MESH_RUN,
-  measureBracketed, parseBenchExempt, PERSIST_RUN, RELIGHT_RUN, type Baselines,
+  absoluteGateFailures, BENCH_ROWS, benchKernels, CALIBRATION_BESIDE_RUN, D31_LIT_P50_MAX_MS, D31_MAX_P99_MAX_MS, gateFailures, ISLANDS_COLUMNS,
+  ISLANDS_RUN, LIGHT_RUN, MESH_RUN, measureBracketed, parseBenchExempt, PASTE_LIT_RUN, PASTE_RUN, PERSIST_RUN, RELIGHT_RUN, type Baselines,
 } from './gates';
 import { buildPerm, perm3 } from './perm512';
 
@@ -101,7 +102,7 @@ const setEdit = (x: number, y: number, z: number, value: number, expectV: number
 /** Opaque (opacity 15) and dry. */
 const solidAt = (s: VoxelStore, x: number, y: number, z: number): boolean => OPACITY[s.blockAt(x, y, z)]! === 15 && s.fluidAt(x, y, z) === NO_FLUID;
 
-test('SP1, SP2a, SP2b, SP3a, SP3b, SP3c, SP3d, SP3e, SP4a, SP5a and SP5b kernels', async ({ bench }) => {
+test('SP1, SP2a, SP2b, SP3a, SP3b, SP3c, SP3d, SP3e, SP4a, SP5a, SP5b and SP5c kernels', async ({ bench }) => {
   // SP3c §7: BENCH_EXEMPT names rows whose ratio gate is skipped (an unknown name fails here, before measuring);
   // bench:record never reads it.
   const exempt = process.env.BENCH_RECORD === '1' ? [] : parseBenchExempt(process.env.BENCH_EXEMPT);
@@ -128,7 +129,8 @@ test('SP1, SP2a, SP2b, SP3a, SP3b, SP3c, SP3d, SP3e, SP4a, SP5a and SP5b kernels
    * one warm-up iteration) or explicit options; `rerun`: resets the row's state before it runs again.
    */
   const measure = async (
-    name: string, evals: number, fn: () => unknown, run?: number | typeof ISLANDS_RUN | typeof LIGHT_RUN | typeof MESH_RUN, rerun?: () => void,
+    name: string, evals: number, fn: () => unknown, run?: number | typeof ISLANDS_RUN | typeof LIGHT_RUN | typeof MESH_RUN | typeof PASTE_RUN | typeof PASTE_LIT_RUN,
+    rerun?: () => void,
   ) => {
     const options = run === undefined ? undefined : typeof run === 'number' ? { iterations: run, time: 0, warmupIterations: 1 } : { ...run };
     const m = await measureBracketed(() => calibrateBeside(name), () => bench(name, fn).run(options), rerun);
@@ -474,6 +476,92 @@ test('SP1, SP2a, SP2b, SP3a, SP3b, SP3c, SP3d, SP3e, SP4a, SP5a and SP5b kernels
   expect(persistOps, 'persist.flush: 64 column puts and the state').toBe(65);
   expect(persistDiffs.takeDirty().length, 'persist.flush: the dirty set taken').toBe(0);
 
+  // SP5c §10.3 (D31's prototype): paste.max and paste.maxLit — one maximum paste (32,768 changes) through the sim's own
+  // `applyEdits` on relight.edit's region (`worldStore`, shared), each row on a DiffStore of its own, at read depth 0
+  // (outside any read section, so each sub-batch's retired slots are reclaimed before the next). The row's block
+  // (`pasteBlocks.ts`, L12c's blocks) is pasted into air with its min corner at inner column (rx0 + 7, rz0 + 7)'s corner
+  // and its y the highest worldSurface over its footprint + 1 (every cell air before), one `set` per changed cell
+  // (`expect` air), in §2.3's order: y ascending, then z, then x. Only the paste is timed (`overriddenDuration`: its
+  // `editMs`); its undo (a `revert` per cell, `expect` the pasted value, in reverse order as the block history posts it)
+  // runs untimed in the same call and every cell is checked after each, so the region ends as it began and every call
+  // pastes into the same air. Before each row's run, the same cells are pasted once in y-descending order (with its
+  // undo), timed and printed: §2.3 keeps y descending only if it is faster and its limboMax ≤ 4,096 on both rows (R5).
+  const PASTE_CHANGES = 32_768;
+  const pasteX0 = 16 * (rx0 + 7);
+  const pasteZ0 = 16 * (rz0 + 7);
+  interface PasteRow {
+    readonly name: string;
+    readonly y0: number;
+    readonly diffs: DiffStore;
+    /** §2.3's order (y ascending) and the y-descending one, each with its undo. */
+    readonly asc: readonly Edit[];
+    readonly ascUndo: readonly Edit[];
+    readonly desc: readonly Edit[];
+    readonly descUndo: readonly Edit[];
+  }
+  const undoOf = (edits: readonly Edit[]): Edit[] => edits.map((e): Edit => ({ x: e.x, y: e.y, z: e.z, op: 'revert', value: 0, expect: e.value })).reverse();
+  const pasteRow = (name: string, b: PasteBlock): PasteRow => {
+    let top = -64;
+    for (let z = pasteZ0; z < pasteZ0 + b.d; z++) for (let x = pasteX0; x < pasteX0 + b.w; x++) top = Math.max(top, surfaceY(x, z));
+    const y0 = top + 1;
+    expect(y0 + b.h - 1, `${name}: the block fits under y 320`).toBeLessThanOrEqual(319);
+    const asc: Edit[] = [];
+    const desc: Edit[] = [];
+    for (const descending of [false, true]) {
+      for (let k = 0; k < b.h; k++) {
+        const y = descending ? b.h - 1 - k : k;
+        for (let z = 0; z < b.d; z++) {
+          for (let x = 0; x < b.w; x++) {
+            const v = b.values[(y * b.d + z) * b.w + x]!;
+            if (v === val(AIR)) continue;
+            const at = valueAt(worldStore, pasteX0 + x, y0 + y, pasteZ0 + z);
+            if (at !== val(AIR)) throw new Error(`${name}: (${pasteX0 + x}, ${y0 + y}, ${pasteZ0 + z}) is not air before the paste`);
+            (descending ? desc : asc).push(setEdit(pasteX0 + x, y0 + y, pasteZ0 + z, v, at));
+          }
+        }
+      }
+    }
+    expect(asc.length, `${name}: the paste changes ${PASTE_CHANGES} cells`).toBe(PASTE_CHANGES);
+    expect(desc.length, `${name}: both orders change the same cells`).toBe(PASTE_CHANGES);
+    return { name, y0, diffs: createDiffStore(), asc, ascUndo: undoOf(asc), desc, descUndo: undoOf(desc) };
+  };
+  /** One paste and its undo; every cell checked after each. Returns the paste's result. */
+  const pasteOnce = (row: PasteRow, edits: readonly Edit[], undo: readonly Edit[]): EditResult => {
+    const r = applyEdits(worldStore, row.diffs, editScratch, edits, perfNow);
+    if (r.refused !== null) throw new Error(`${row.name}: the paste was refused '${r.refused}'`);
+    let wrong = 0;
+    for (const e of edits) if (valueAt(worldStore, e.x, e.y, e.z) !== e.value) wrong++;
+    if (wrong !== 0 || row.diffs.size !== edits.length) throw new Error(`${row.name}: after the paste ${wrong} cells differ, ${row.diffs.size} entries`);
+    const u = applyEdits(worldStore, row.diffs, editScratch, undo, perfNow);
+    if (u.refused !== null) throw new Error(`${row.name}: the undo was refused '${u.refused}'`);
+    for (const e of edits) if (valueAt(worldStore, e.x, e.y, e.z) !== e.expect) wrong++;
+    if (wrong !== 0 || row.diffs.size !== 0) throw new Error(`${row.name}: after the undo ${wrong} cells differ, ${row.diffs.size} entries`);
+    return r;
+  };
+  const poolMiB = (): string => `${(worldStore.blockPool.buffer.byteLength / 1048576).toFixed(0)}/${(worldStore.bytePool.buffer.byteLength / 1048576).toFixed(0)} MiB`;
+  interface PasteStats { calls: number; last: EditResult | null; limboMost: number; readonly pools: string[]; desc: EditResult | null }
+  const pasteRun = async (row: PasteRow, run: typeof PASTE_RUN | typeof PASTE_LIT_RUN): Promise<{ readonly run: Awaited<ReturnType<typeof measure>>; readonly stats: PasteStats }> => {
+    const stats: PasteStats = { calls: 0, last: null, limboMost: 0, pools: [poolMiB()], desc: null };
+    stats.desc = pasteOnce(row, row.desc, row.descUndo);
+    stats.pools.push(poolMiB());
+    const result = await measure(row.name, 1, () => {
+      stats.calls++;
+      const r = pasteOnce(row, row.asc, row.ascUndo);
+      stats.last = r;
+      stats.limboMost = Math.max(stats.limboMost, r.limboMax);
+      return { overriddenDuration: r.editMs };
+    }, run, () => { stats.calls = 0; stats.limboMost = 0; });
+    stats.pools.push(poolMiB());
+    return { run: result, stats };
+  };
+  const maxRow = pasteRow('paste.max', pasteMaxBlock(PASTE_CHANGES));
+  const pasteMax = await pasteRun(maxRow, PASTE_RUN);
+  expect(pasteMax.stats.calls, 'paste.max: one probe, one warm-up and 16 timed calls').toBe(1 + PASTE_RUN.warmupIterations + PASTE_RUN.iterations);
+  const litRow = pasteRow('paste.maxLit', pasteLitBlock(PASTE_CHANGES));
+  const pasteLit = await pasteRun(litRow, PASTE_LIT_RUN);
+  expect(pasteLit.stats.calls, 'paste.maxLit: one probe, one warm-up and 8 timed calls').toBe(1 + PASTE_LIT_RUN.warmupIterations + PASTE_LIT_RUN.iterations);
+  expect(worldStore.limboCount(worldStore.thread), 'the paste rows leave the limbo empty').toBe(0);
+
   let solidVoxels = 0;
   for (let i = 256; i < 98304; i++) solidVoxels += sCol.solid[i]!;
   expect(evaluated, 'surface.column evaluates part of the column (the fast path takes the rest)').toBeGreaterThan(0);
@@ -505,6 +593,25 @@ test('SP1, SP2a, SP2b, SP3a, SP3b, SP3c, SP3d, SP3e, SP4a, SP5a and SP5b kernels
   console.log(`mesh.section ${ms(meshRun)} (${meshSections.length} of the ${nonTrivial.length} non-trivial sections of its 14 × 14 inner columns; ${mc} calls, ${quads} quads)`);
   console.log(`relight.edit ${ms(relightRun)} (torch at (${tx}, ${ty}, ${tz}), stone at (${sx}, ${sy}, ${sz}), shaft cap at (${hx}, ${hy}, ${hz}) over a room topped at y ${roomTop}; ${rc} calls)`);
   console.log(`persist.flush ${ms(persistRun)} (64 columns, ${persistDenseAt.length} dense, ${persistEntries} entries, ${persistBytes} bytes encoded; ${pc} calls)`);
+  for (const [row, p] of [[maxRow, pasteMax], [litRow, pasteLit]] as const) {
+    const last = p.stats.last!;
+    const desc = p.stats.desc!;
+    console.log(
+      `${row.name} ${ms(p.run)}, max ${p.run.latency.max.toFixed(3)} ms (y ascending, ${PASTE_CHANGES} changes at (${pasteX0}, ${row.y0}, ${pasteZ0}); `
+      + `last call limboMax ${last.limboMax}, subBatchMaxMs ${last.subBatchMaxMs.toFixed(3)} ms, relightMs ${last.relightMs.toFixed(3)} ms; most limbo over the calls ${p.stats.limboMost}; `
+      + `${p.stats.calls} calls) y descending once: editMs ${desc.editMs.toFixed(3)} ms, limboMax ${desc.limboMax}, subBatchMaxMs ${desc.subBatchMaxMs.toFixed(3)} ms; `
+      + `pools block/byte ${p.stats.pools.join(' → ')} (before, after y descending, after the row)`,
+    );
+  }
+  // §2.3 (R5): y descending replaces y ascending only if its single timing is below 0.85 × y ascending's p50 on both rows
+  // (outside a single run's ±15 %) and its limboMax ≤ 4,096 on both; D31's rule (§10.3) sets the cap.
+  const descWins = [pasteMax, pasteLit].every((p) => p.stats.desc!.editMs < 0.85 * p.run.latency.p50 && p.stats.desc!.limboMax <= 4096);
+  console.log(`§2.3's order: ${descWins ? 'y descending is faster and within the limbo bound on both rows' : 'y ascending stays'}`);
+  const capLowered = pasteLit.run.latency.p50 > D31_LIT_P50_MAX_MS || pasteMax.run.latency.p99 > D31_MAX_P99_MAX_MS;
+  console.log(
+    `D31: paste.maxLit p50 ${pasteLit.run.latency.p50.toFixed(3)} ms (lowers above ${D31_LIT_P50_MAX_MS}), paste.max p99 ${pasteMax.run.latency.p99.toFixed(3)} ms `
+    + `(lowers above ${D31_MAX_P99_MAX_MS}): ${capLowered ? 'the cap would become 16,384' : 'the cap stays 32,768'}`,
+  );
   // Before the record: bench:record refuses to write when an absolute gate fails.
   expect(absoluteGateFailures({
     columnP50: columnRun.latency.p50, columnP95, terrainP50: terrainRun.latency.p50,
@@ -512,6 +619,7 @@ test('SP1, SP2a, SP2b, SP3a, SP3b, SP3c, SP3d, SP3e, SP4a, SP5a and SP5b kernels
     islandsP50: islandsRun.latency.p50,
     lightP50: lightRun.latency.p50, lightP99: lightRun.latency.p99, meshP50: meshRun.latency.p50, meshP99: meshRun.latency.p99,
     relightP95: relightRun.latency.p99, persistFlushP99: persistRun.latency.p99,
+    pasteMaxP99: pasteMax.run.latency.p99, pasteLitP99: pasteLit.run.latency.p99,
   }), 'absolute gates').toEqual([]);
   expect(Number.isFinite(sink)).toBe(true);
   if (process.env.BENCH_RECORD === '1') {

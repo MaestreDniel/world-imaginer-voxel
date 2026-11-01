@@ -36,6 +36,20 @@ export const RELIGHT_P95_MAX_MS = 3;
  * each column and the batch, for 64 dirty columns), p99 in ms.
  */
 export const PERSIST_FLUSH_P99_MAX_MS = 2;
+/**
+ * SP5c §10.3: one maximum paste through the sim's `applyEdits` (its `editMs`), p99 in ms, absolute only: `paste.max`
+ * (32,768 solid changes; about twice the recon's 411 ms in sub-batches) and `paste.maxLit` (32,768 changes of house
+ * shells with glass and wall torches, the relight-heavy case).
+ */
+export const PASTE_MAX_P99_MAX_MS = 800;
+export const PASTE_LIT_P99_MAX_MS = 1600;
+/**
+ * D31's rule (SP5c §10.3, D31), applied once before the cap is coded: `paste.maxLit`'s p50 above `D31_LIT_P50_MAX_MS`
+ * (2,000 ms visible, less Chrome's expected 1.2× and the remesh) or `paste.max`'s p99 above `D31_MAX_P99_MAX_MS` lowers
+ * `MAX_STEP_EDITS` from 32,768 to 16,384 (D12's alternative).
+ */
+export const D31_LIT_P50_MAX_MS = 1500;
+export const D31_MAX_P99_MAX_MS = 800;
 
 /**
  * `terrain.islands`' run (SP3e §7): 256 timed iterations after exactly one warm-up call, each call on the next of its
@@ -63,6 +77,12 @@ export const RELIGHT_RUN = Object.freeze({ iterations: 256, time: 0, warmupItera
  * columns dirty again (untimed: the take clears them) and flushing them.
  */
 export const PERSIST_RUN = Object.freeze({ iterations: 256, time: 0, warmupIterations: 1, warmupTime: 0 });
+/**
+ * `paste.max`'s and `paste.maxLit`'s runs (SP5c §10.3), on the same pattern: one probe, one warm-up, then 16 (solid) or
+ * 8 (lit, about 25 s) timed calls, each a maximum paste and its untimed undo, so the region ends as it began.
+ */
+export const PASTE_RUN = Object.freeze({ iterations: 16, time: 0, warmupIterations: 1, warmupTime: 0 });
+export const PASTE_LIT_RUN = Object.freeze({ iterations: 8, time: 0, warmupIterations: 1, warmupTime: 0 });
 
 /**
  * Every gated bench row, in measurement order: `noise.bench.ts` measures exactly these, and `test/baselines.json`
@@ -72,7 +92,8 @@ export const PERSIST_RUN = Object.freeze({ iterations: 256, time: 0, warmupItera
  * the slice rows `slice.vertical128`, `slice.horizontal128`, `slice.partWorst` and the session row `session.commitMaxTree`;
  * SP3e §7 appends `terrain.islands` (fillColumnT on floating_islands at cluster columns); SP4a §9.3 appends
  * `light.column` (one column's light job) and `mesh.section` (one non-trivial section's padded copy and mesh); SP5a §6.2
- * appends `relight.edit` (one edit's relight); SP5b §6.2 appends `persist.flush` (one flush's synchronous part).
+ * appends `relight.edit` (one edit's relight); SP5b §6.2 appends `persist.flush` (one flush's synchronous part); SP5c
+ * §10.3 appends `paste.max` and `paste.maxLit` (one maximum paste, solid and relight-heavy).
  */
 export const BENCH_ROWS = [
   'calibration.fmix32', 'lattice3.slice', 'perm512.slice', 'lattice3.random', 'perm512.random', 'normal.z2.climateC',
@@ -80,7 +101,7 @@ export const BENCH_ROWS = [
   'map.tile.b64.biome', 'map.tile.b16.relief', 'worker.configure', 'map.tile.b256.biome', 'map.tile.b256.relief',
   'store.alloc', 'density.corner', 'terrain.real', 'surface.column',
   'slice.vertical128', 'slice.horizontal128', 'slice.partWorst', 'session.commitMaxTree', 'terrain.islands',
-  'light.column', 'mesh.section', 'relight.edit', 'persist.flush',
+  'light.column', 'mesh.section', 'relight.edit', 'persist.flush', 'paste.max', 'paste.maxLit',
 ] as const;
 
 export interface BenchKernel {
@@ -242,11 +263,14 @@ export interface AbsoluteLatencies {
   readonly relightP95: number;
   /** SP5b §6.2: `persist.flush` p99, gated at PERSIST_FLUSH_P99_MAX_MS. */
   readonly persistFlushP99: number;
+  /** SP5c §10.3: `paste.max` and `paste.maxLit` p99, gated at PASTE_MAX_P99_MAX_MS and PASTE_LIT_P99_MAX_MS. */
+  readonly pasteMaxP99: number;
+  readonly pasteLitP99: number;
 }
 
 /**
  * The absolute gates (P1 column budget, SP2a; the real T budget, SP3b; the slice and session commit budgets, SP3d; the
- * light and mesh budgets, SP4a; the relight budget, SP5a; the flush's synchronous part, SP5b): checked by
+ * light and mesh budgets, SP4a; the relight budget, SP5a; the flush's synchronous part, SP5b; the maximum pastes, SP5c): checked by
  * `npm run bench` and before `npm run bench:record` writes, so a record refuses to write when one fails.
  */
 export function absoluteGateFailures(l: AbsoluteLatencies): string[] {
@@ -264,5 +288,7 @@ export function absoluteGateFailures(l: AbsoluteLatencies): string[] {
   if (l.meshP99 > MESH_P99_MAX_MS) out.push(`mesh.section p99 ${l.meshP99.toFixed(3)} ms > ${MESH_P99_MAX_MS} ms`);
   if (l.relightP95 > RELIGHT_P95_MAX_MS) out.push(`relight.edit p99 ${l.relightP95.toFixed(3)} ms > ${RELIGHT_P95_MAX_MS} ms`);
   if (l.persistFlushP99 > PERSIST_FLUSH_P99_MAX_MS) out.push(`persist.flush p99 ${l.persistFlushP99.toFixed(3)} ms > ${PERSIST_FLUSH_P99_MAX_MS} ms`);
+  if (l.pasteMaxP99 > PASTE_MAX_P99_MAX_MS) out.push(`paste.max p99 ${l.pasteMaxP99.toFixed(3)} ms > ${PASTE_MAX_P99_MAX_MS} ms`);
+  if (l.pasteLitP99 > PASTE_LIT_P99_MAX_MS) out.push(`paste.maxLit p99 ${l.pasteLitP99.toFixed(3)} ms > ${PASTE_LIT_P99_MAX_MS} ms`);
   return out;
 }

@@ -107,6 +107,7 @@ src/ui/world/clipboard.ts         the clipboard model: from a copy reply, the tu
 src/ui/world/clipboardStore.ts    where the clipboard lives: meta through a KV, or memory (§4.2)
 src/ui/world/selectTool.ts        the tool's modes, corners, ghost anchor, turn, offset and labels (pure; §1, §2.5)
 src/ui/world/pasteBatch.ts        the batch: changed voxels only, the move's merge, bounds, the cap, the body (pure; §2.3-§2.7)
+src/ui/world/pasteBlocks.ts       the two maximum paste blocks of `paste.max`, `paste.maxLit` and L12c (pure; §10.3, §10.4)
 src/render/selection.ts           createVolumeBox: the box drawn twice, depth-tested and dimmed through terrain (§6.1)
 src/render/ghost.ts               the ghost's sliced mesh build and its replaced cells (§6.2, §6.3)
 src/render/materials/index.ts glsl/terrain.glsl.ts   the ghost material (a GHOST define) (§6.2)
@@ -406,7 +407,7 @@ Seeded with `testRng` (`test/harness/stats.ts:2-10`), every failure printing its
 ### 10.3 `npm run bench` rows `paste.max` and `paste.maxLit` (D31's prototype)
 
 - **`paste.max`:** one 32,768-changed paste (a 32³ block of stone with an `oak_log` every 7th cell, into air above the surface) through `applyEdits` on the seed-42 region of `relight.edit` (`test/bench/noise.bench.ts:366-446`), alternating with its undo so the region ends as it began; `PASTE_RUN` 16 timed calls after 1 warm-up. Gate in `test/bench/gates.ts` beside `RELIGHT_P95_MAX_MS` (`:33`): p99 ≤ 800 ms (about twice the measured 411 ms), absolute only.
-- **`paste.maxLit`:** the relight-heavy maximum: stacked 32 × 12 × 32 house shells of planks with a glass band and interior wall torches (the recon's house, 3,296 changes each), as many as reach about 32,768 changes, pasted into air above the surface, alternating with its undo; `PASTE_LIT_RUN` 8 timed calls after 1 warm-up (about 25 s). Gate: p99 ≤ 1,600 ms, absolute only. Its first run also times the batch in y-descending order, once, against §2.3's y ascending, and records both orders' times and `limboMax` (§2.3 says which order is kept).
+- **`paste.maxLit`:** the relight-heavy maximum: stacked 32 × 12 × 32 house shells of planks with a glass band and interior wall torches (the recon's house, 3,296 changes each), laid 2 across x by 5 high in a 64 × 60 × 32 block, so it stays within a selection's 64 a side; 10 shells would be 32,960 changes, over the cap, so the block holds 9 whole shells and the 10th shell's cells in shell-major order (shell by shell; within a shell y, then z, then x) up to exactly 32,768 changes, the same cells in both batch orders (`src/ui/world/pasteBlocks.ts`, which L12c pastes too), pasted into air above the surface, alternating with its undo; `PASTE_LIT_RUN` 8 timed calls after 1 warm-up (about 25 s). Gate: p99 ≤ 1,600 ms, absolute only. Its first run also times the batch in y-descending order, once, against §2.3's y ascending, and records both orders' times and `limboMax` (§2.3 says which order is kept).
 - The +30 % rule compares each row's p50 ratio with the baseline's (`gates.ts:182-201`), as for every row, never the p99; `test/baselines.json` is re-recorded (`npm run bench:record`, a quiet machine). `relight.edit` stays per edit and keeps its gate.
 - **D31's rule,** applied once, in the plan's prototype task, before `MAX_STEP_EDITS` is used elsewhere: `paste.maxLit` p50 above 1,500 ms or `paste.max` p99 above 800 ms lowers the cap to 16,384 (D12's alternative), and the spec's figures are amended in the same commit.
 
@@ -485,7 +486,7 @@ Applied when the user approves this spec, each pinned in 'master spec amendments
 - **§10 SP5c** (:1878-1882): "(L; SP5b). Spec: `2026-11-01-sp5c-selection-tool-design.md`." (Point 1); the contents line kept and followed by "Q (the tool), Ctrl+C / Ctrl+X / Ctrl+V, N (move, the source back to the terrain); a ghost that rests on the aimed surface, turned with the wheel; one clipboard per browser in `meta`; at most 64 blocks a side and 32,768 changed blocks per operation (SP5c)."; **Exit:** "as the SP5c spec §16 (`L3.paste`, `E3.paste`, `E5.paste`; `paste.max`, `paste.maxLit`; `G2.paste` with the SP5c spec's thresholds; the three notes received from SP5b; the user's check)"; **Cut line:** §15's wording; the "Received from SP5b" line worded at the exit as delivered (SP5b's precedent).
 - **§10 Default receivers** (:1758): appends "SP5c replaced-block overlay → SP10 (worded by the SP5c spec)", worded at the exit by whether it was taken.
 - **§10 SP7, SP8a, SP8c, SP10, SP11:** each gains its "Received from SP5c (its spec §14; amended by SP5c): …" line, §14's text.
-- **§1:** `render/selection.ts (SP5a)` gains ", the volume box (SP5c)" after the token and `render/ghost.ts (SP5c)` is added; `materials/` lists the ghost material; `ui/world/*` gains `selectTool.ts clipboard.ts clipboardStore.ts pasteBatch.ts (SP5c)`; `persist/*` gains `clipboard.ts (SP5c)`; `ui/common/*` gains `modeTip.ts (SP5c)`; the test entry gains "(SP5c: metrics/clipboard.metric.ts)"; the dependency line "… and, for the worlds menu, on the main thread (SP5b)" → "… and, for the worlds menu and the selection tool's clipboard, on the main thread (SP5b, SP5c)".
+- **§1:** `render/selection.ts (SP5a)` gains ", the volume box (SP5c)" after the token and `render/ghost.ts (SP5c)` is added; `materials/` lists the ghost material; `ui/world/*` gains `selectTool.ts clipboard.ts clipboardStore.ts pasteBatch.ts pasteBlocks.ts (SP5c)`; `persist/*` gains `clipboard.ts (SP5c)`; `ui/common/*` gains `modeTip.ts (SP5c)`; the test entry gains "(SP5c: metrics/clipboard.metric.ts)"; the dependency line "… and, for the worlds menu, on the main thread (SP5b)" → "… and, for the worlds menu and the selection tool's clipboard, on the main thread (SP5b, SP5c)".
 - **§2.2:** "`rotateState(state, quarterTurns)` and `mirrorState` serve structure pieces and placement" gains "and the selection tool's turns (SP5c)".
 - **§2.7:** "`meta`: empty in SP5b." → "`meta`: key `'clipboard'`, the selection tool's clipboard, one per browser: `{v: 1, w, h, d, keys, states, fluids}`, its states by state key (SP5c)."
 - **§4.5:** "7. Selection box." → "7. Selection box, and with the selection tool (SP5c) its volume box and the ghost, drawn after the translucent pass."; "selection 1" → "selection 1 (up to 7 while the selection tool shows a box and a ghost, SP5c)".
@@ -540,6 +541,23 @@ The exit commit says in `CLAUDE.md` and `README.md` that SP5c is implemented and
 ## Exit evidence
 
 (Filled at the exit: D31's prototype, `paste.max` and `paste.maxLit` in Node with both batch orders, measured before the caps were coded, and the cap it kept; Chrome's figures from L12; the open and first-flush costs with a 65,536-edit history (§5); CI runs job by job against §11; the L3, E3 and E5 paste parts per tier, with `limboMax` and the pools' growth; the `paste.max` and `paste.maxLit` rows; the bench files with `G2.paste` and the re-read G1 and G2 cells; the smoke with its `select` step; the review screenshots (§10.10); the Chrome and Firefox selftests; the production checks; the cut line as taken; the user's check.)
+
+### D31's prototype (Task 5)
+
+Measured 2026-11-01 in Node v24.21.0 on the reference CPU (i7-12700H), a quiet machine (1-minute load 0.5-1.5), `npm run bench` (`test/bench/noise.bench.ts`) before `MAX_STEP_EDITS` is used anywhere: both rows paste 32,768 changes into air at (−353,184, 86, 235,776) on `relight.edit`'s seed-42 region, `SUB_BATCH` 512, each timed call the paste's `editMs` with its undo untimed. Four runs: two measuring runs, the `bench:record` run and the gate run after it.
+
+| run | `paste.max` p50 / p99 / max (ms) | `paste.maxLit` p50 / p99 / max (ms) |
+|---|---|---|
+| 1 | 656.960 / 665.512 / 665.954 | 1,441.589 / 1,455.676 / 1,455.812 |
+| 2 | 578.702 / 595.788 / 595.992 | 1,370.290 / 1,378.885 / 1,379.086 |
+| record | 613.130 / 627.796 / 629.746 | 1,388.921 / 1,400.618 / 1,400.698 |
+| gate | 578.091 / 584.884 / 585.215 | 1,357.606 / 1,366.322 / 1,366.472 |
+
+- **Sub-batches and limbo, y ascending** (§2.3's order), the same in every run: `paste.max` `limboMax` 1,822, `subBatchMaxMs` 34.1-34.8 ms, `relightMs` 181-198 ms; `paste.maxLit` `limboMax` 2,446, `subBatchMaxMs` 50.9-52.2 ms, `relightMs` 986-1,007 ms. Both are under §10.5's 4,096.
+- **y descending, timed once per row before its run:** `paste.max` 762-833 ms (`limboMax` 3,317, `subBatchMaxMs` 129-131 ms); `paste.maxLit` 1,594-1,685 ms (`limboMax` 6,080, over 4,096; `subBatchMaxMs` 233-235 ms). It is slower on both rows and breaks the limbo bound on the lit one, so **y ascending stays** (§2.3). That single paste runs first on the row, so its time includes the pools' growth (next item). The limbo bound alone decides the order.
+- **The pools' byte lengths** (block/byte), the same in every run: before `paste.max` 13/6 MiB, after its y-descending paste 16/17 MiB, after its run 16/17 MiB; after `paste.maxLit`'s y-descending paste 16/28 MiB, after its run 16/28 MiB. The pools grow only during each row's first, y-descending paste; the timed y-ascending calls grow nothing.
+- **D31's rule:** `paste.maxLit` p50 1,358-1,442 ms is at most 1,500 and `paste.max` p99 585-666 ms is at most 800 in every run, so **the cap stays 32,768**. No spec figure changes. The lit row's margin is small: 4 % in run 1.
+- **The gates:** `paste.max` p99 ≤ 800 ms and `paste.maxLit` p99 ≤ 1,600 ms held in every run. `test/baselines.json` was re-recorded with both rows, and the gate run after it passed every absolute gate and the +30 % p50 ratio rule.
 
 ## Threshold log
 

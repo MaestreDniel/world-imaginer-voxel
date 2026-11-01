@@ -2,9 +2,10 @@ import { readFileSync } from 'node:fs';
 import { Bench } from 'tinybench';
 import { expect, test } from 'vitest';
 import {
-  absoluteGateFailures, BENCH_ROWS, benchKernels, CALIBRATION_BESIDE_RUN, CALIBRATION_SPREAD_MAX, calibrationSpread, COLUMN_P50_MAX_MS, COLUMN_P95_MAX_MS, gateFailures, ISLANDS_COLUMNS, ISLANDS_RUN, KILL_RATIO_MAX,
+  absoluteGateFailures, BENCH_ROWS, benchKernels, CALIBRATION_BESIDE_RUN, CALIBRATION_SPREAD_MAX, calibrationSpread, COLUMN_P50_MAX_MS, COLUMN_P95_MAX_MS,
+  D31_LIT_P50_MAX_MS, D31_MAX_P99_MAX_MS, gateFailures, ISLANDS_COLUMNS, ISLANDS_RUN, KILL_RATIO_MAX,
   LIGHT_P50_MAX_MS, LIGHT_P99_MAX_MS, LIGHT_RUN, MESH_P50_MAX_MS, MESH_P99_MAX_MS, MESH_RUN, measureBracketed, P1_MAX_REGRESSION, parseBenchExempt,
-  PERSIST_FLUSH_P99_MAX_MS, PERSIST_RUN, ratioOf, RELIGHT_P95_MAX_MS, RELIGHT_RUN, ROW_ATTEMPTS_MAX, SESSION_COMMIT_P50_MAX_MS, SLICE_PART_P50_MAX_MS, SLICE_V128_P50_MAX_MS, TERRAIN_P50_MAX_MS, type Baselines,
+  PASTE_LIT_P99_MAX_MS, PASTE_LIT_RUN, PASTE_MAX_P99_MAX_MS, PASTE_RUN, PERSIST_FLUSH_P99_MAX_MS, PERSIST_RUN, ratioOf, RELIGHT_P95_MAX_MS, RELIGHT_RUN, ROW_ATTEMPTS_MAX, SESSION_COMMIT_P50_MAX_MS, SLICE_PART_P50_MAX_MS, SLICE_V128_P50_MAX_MS, TERRAIN_P50_MAX_MS, type Baselines,
 } from '../bench/gates';
 
 const base: Baselines = { machine: 'm', node: 'v24', date: '2026-09-27', killRatio: 1.2, kernels: { a: { nsPerEval: 10, ratio: 2 }, b: { nsPerEval: 5, ratio: 1 } } };
@@ -20,12 +21,16 @@ test('constants', () => {
   expect(RELIGHT_P95_MAX_MS).toBe(3);
   // SP5b §6.2: one flush's synchronous part, p99 ≤ 2 ms.
   expect(PERSIST_FLUSH_P99_MAX_MS).toBe(2);
+  // SP5c §10.3: the maximum paste, solid and relight-heavy, p99 ≤ 800 and 1,600 ms; D31's rule (§10.3, D31): the lit
+  // p50 above 1,500 ms or the solid p99 above 800 ms lowers the cap to 16,384.
+  expect([PASTE_MAX_P99_MAX_MS, PASTE_LIT_P99_MAX_MS]).toEqual([800, 1600]);
+  expect([D31_LIT_P50_MAX_MS, D31_MAX_P99_MAX_MS]).toEqual([1500, 800]);
 });
 
 /** Latencies within every absolute gate, at their bounds. */
 const AT_GATES = {
   columnP50: 0.7, columnP95: 1.2, terrainP50: 4, sliceV128P50: 300, slicePartP50: 250, sessionCommitP50: 4, islandsP50: 4,
-  lightP50: 4, lightP99: 8, meshP50: 1.0, meshP99: 2.5, relightP95: 3, persistFlushP99: 2,
+  lightP50: 4, lightP99: 8, meshP50: 1.0, meshP99: 2.5, relightP95: 3, persistFlushP99: 2, pasteMaxP99: 800, pasteLitP99: 1600,
 };
 
 test('absolute gates: column p50 / p95 (P1, SP2a) and the real T column p50 (SP3b §10), inclusive', () => {
@@ -90,6 +95,17 @@ test('absolute gate (SP5b §6.2): a `persist.flush` p99 of 2.1 ms fails `absolut
   expect(absoluteGateFailures({ ...AT_GATES, persistFlushP99: 2.1 })).toEqual(['persist.flush p99 2.100 ms > 2 ms']);
   expect(absoluteGateFailures({ ...AT_GATES, persistFlushP99: 1.9 })).toEqual([]);
   expect(absoluteGateFailures({ ...AT_GATES, relightP95: 3.1, persistFlushP99: 2.1 })).toEqual(['relight.edit p99 3.100 ms > 3 ms', 'persist.flush p99 2.100 ms > 2 ms']);
+});
+
+test('absolute gates (SP5c §10.3): paste.max p99 ≤ 800 ms, paste.maxLit p99 ≤ 1,600 ms, inclusive, after the earlier rows', () => {
+  expect(absoluteGateFailures({ ...AT_GATES, pasteMaxP99: 800.01, pasteLitP99: 1600.01 })).toEqual([
+    'paste.max p99 800.010 ms > 800 ms',
+    'paste.maxLit p99 1600.010 ms > 1600 ms',
+  ]);
+  expect(absoluteGateFailures({ ...AT_GATES, pasteMaxP99: 450, pasteLitP99: 1200 })).toEqual([]);
+  // Each bound has its own line, and they follow the earlier rows' lines.
+  expect(absoluteGateFailures({ ...AT_GATES, pasteLitP99: 1700 })).toEqual(['paste.maxLit p99 1700.000 ms > 1600 ms']);
+  expect(absoluteGateFailures({ ...AT_GATES, persistFlushP99: 2.1, pasteMaxP99: 900 })).toEqual(['persist.flush p99 2.100 ms > 2 ms', 'paste.max p99 900.000 ms > 800 ms']);
 });
 
 test('ratioOf (SP5a Task 43b): a row\'s ns per evaluation ÷ the calibration measured beside it, to 3 decimals', () => {
@@ -227,22 +243,22 @@ test('parseBenchExempt: a comma-separated list of BENCH_ROWS names, empty when u
   expect(parseBenchExempt([...BENCH_ROWS].reverse().join(','))).toEqual([...BENCH_ROWS].reverse());
 });
 
-test('the bench rows: SP1 to SP2b, the SP3a store row, the SP3b density corner and real T rows, SP3c surface.column, SP3d\'s slice and session rows, SP3e\'s terrain.islands, SP4a\'s light.column and mesh.section, SP5a\'s relight.edit, then SP5b\'s persist.flush', () => {
+test('the bench rows: SP1 to SP2b, the SP3a store row, the SP3b density corner and real T rows, SP3c surface.column, SP3d\'s slice and session rows, SP3e\'s terrain.islands, SP4a\'s light.column and mesh.section, SP5a\'s relight.edit, SP5b\'s persist.flush, then SP5c\'s paste.max and paste.maxLit', () => {
   expect(BENCH_ROWS).toEqual([
     'calibration.fmix32', 'lattice3.slice', 'perm512.slice', 'lattice3.random', 'perm512.random', 'normal.z2.climateC',
     'normal.z3.density3d', 'spline.offset', 'spline.mix3', 'detErf', 'stageHashes.genKey', 'column.point', 'column.sample',
     'map.tile.b64.biome', 'map.tile.b16.relief', 'worker.configure', 'map.tile.b256.biome', 'map.tile.b256.relief',
     'store.alloc', 'density.corner', 'terrain.real', 'surface.column',
     'slice.vertical128', 'slice.horizontal128', 'slice.partWorst', 'session.commitMaxTree', 'terrain.islands',
-    'light.column', 'mesh.section', 'relight.edit', 'persist.flush',
+    'light.column', 'mesh.section', 'relight.edit', 'persist.flush', 'paste.max', 'paste.maxLit',
   ]);
-  expect(BENCH_ROWS.slice(-4)).toEqual(['light.column', 'mesh.section', 'relight.edit', 'persist.flush']);
+  expect(BENCH_ROWS.slice(-6, -2)).toEqual(['light.column', 'mesh.section', 'relight.edit', 'persist.flush']);
   expect(BENCH_ROWS).not.toContain('terrain.provisional');
   expect(new Set(BENCH_ROWS).size).toBe(BENCH_ROWS.length);
 });
 
-test('`BENCH_ROWS` ends `\'relight.edit\', \'persist.flush\'` (SP5b §6.2 appends one flush\'s synchronous part)', () => {
-  expect(BENCH_ROWS.slice(-2)).toEqual(['relight.edit', 'persist.flush']);
+test('`BENCH_ROWS` ends `\'relight.edit\', \'persist.flush\', \'paste.max\', \'paste.maxLit\'` (SP5b §6.2 appends one flush\'s synchronous part, SP5c §10.3 the two maximum pastes)', () => {
+  expect(BENCH_ROWS.slice(-4)).toEqual(['relight.edit', 'persist.flush', 'paste.max', 'paste.maxLit']);
 });
 
 test('test/baselines.json records every bench row, so none is silently ungated', () => {
@@ -293,6 +309,13 @@ test('light.column and mesh.section run options (SP4a §9.3): one probe, one war
 test('persist.flush run options (SP5b §6.2): one probe, one warm-up and 256 timed calls', async () => {
   expect(PERSIST_RUN).toEqual({ iterations: 256, time: 0, warmupIterations: 1, warmupTime: 0 });
   expect(await benchCalls(PERSIST_RUN)).toBe(1 + 1 + 256);
+}, 30_000);
+
+test('paste.max and paste.maxLit run options (SP5c §10.3): one probe, one warm-up and 16 or 8 timed calls', async () => {
+  expect(PASTE_RUN).toEqual({ iterations: 16, time: 0, warmupIterations: 1, warmupTime: 0 });
+  expect(PASTE_LIT_RUN).toEqual({ iterations: 8, time: 0, warmupIterations: 1, warmupTime: 0 });
+  expect(await benchCalls(PASTE_RUN)).toBe(1 + 1 + 16);
+  expect(await benchCalls(PASTE_LIT_RUN)).toBe(1 + 1 + 8);
 }, 30_000);
 
 test('relight.edit run options (SP5a §6.2): one probe, one warm-up and 256 timed calls, 43 turns of its 6-edit cycle', async () => {
