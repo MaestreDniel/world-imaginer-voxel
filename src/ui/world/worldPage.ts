@@ -125,6 +125,13 @@
  * a held LMB or RMB is queued again by the frame's aim, until its release, the lock's release, a paused frame (the
  * palette, the map, the help, the Settings screen) or F.
  *
+ * The selection tool (SP5c spec §1-§2): Q turns it on and off (`selectTool.ts`); with it on, the aim casts 32 blocks,
+ * LMB and RMB are the tool's (`toolClicks` in the click queue; a press skips the hold repeat, `routeButton`), and the
+ * aim's `selection` (`createSelectActions`) writes the selection's box and the build HUD's label when the tool's state
+ * or the floating origin changes, hiding the box on a paused frame. Ctrl+C copies the box through the sim's `copy` into
+ * the clipboard (`clipboardStore.ts`, `wi10`'s `meta` through `createClipboardKv`). One operation runs at a time
+ * (`busy()`); the cut, the paste's ghost and the move follow in SP5c's Tasks 19-23.
+ *
  * Keys with a panel open (SP5b spec §1.4; SP4a spec :731's hand-over): while the Settings screen, the help, the palette
  * or B's dialog is open, a focused control in it (a select, a slider, a checkbox, a button) keeps its own keys and the
  * world handles none of them (`worldIgnoresKeys`); otherwise H, G, M, B and E go through `paletteFirst`.
@@ -160,15 +167,16 @@ import { SPEED_DEFAULT, applyCameraRotation, look, lookVectorInto, stepSpeed, to
 import { attachInput, isTextEntry } from '../../player/input';
 import { HOTBAR_KEY, createHotbar, slotName, type Hotbar } from '../../player/hotbar';
 import { bodyOf, breakAt, emptyBucketAt, pickAt, placeAt, type BodyBox } from '../../player/interaction';
-import { DEFAULT_KEYMAP, type Action } from '../../player/keymap';
+import { DEFAULT_KEYMAP, bindingLabel, type Action } from '../../player/keymap';
 import { REACH_FLY, REACH_WALK, castRay, castRayFrom, createRayHit, type RayHit } from '../../player/raycast';
 import { EYE, arriveFeet, createWalkState, setFeet, type WalkState } from '../../player/walk';
 import { createFpsLimiter, type FpsLimiter } from '../../render/fpsLimiter';
+import type { FloatingOrigin } from '../../render/floatingOrigin';
 import type { FrameState } from '../../render/frameState';
 import { NEAR_FLY, NEAR_WALK, createWorldRenderer, type GpuEstimate, type WorldRenderer } from '../../render/renderer';
 import { createSectionRendererCounts, selectSectionRenderer, type SectionRendererKind } from '../../render/sectionRenderer';
-import { outlineBounds } from '../../render/selection';
-import type { Edit, FlushedMsg, LoadedMsg, LoadMsg } from '../../workers/protocol';
+import { REFUSED_RED, SELECTION_YELLOW, outlineBounds } from '../../render/selection';
+import type { CopiedMsg, Edit, FlushedMsg, LoadedMsg, LoadMsg } from '../../workers/protocol';
 import { SIM_THREAD } from '../../world/store/reclaim';
 import { createStore, type VoxelStore } from '../../world/store/store';
 import { renderErrorScreen } from '../capabilityReport';
@@ -200,16 +208,21 @@ import { LEAVE_WAIT_MS, createAutosave, createStateParts, type Autosave, type Au
 import { createEditLatency } from './editLatency';
 import { mountBuildHud } from './buildHud';
 import { createActionPost, createBlockHistory, type BlockHistory, type BlockStep } from './blockHistory';
+import { createClipboardStore, type ClipboardStore } from './clipboardStore';
 import { createEditPath, type EditOutcome, type EditPath } from './editPath';
 import { createFrameStep, eyeSkyLight } from './frameStep';
 import { createHoldRepeat, type HoldRepeat } from './holdRepeat';
 import { createMapOverlay, followSession, frameCapFor, worldMapView, type ControlsOwner, type MapOverlay } from './mapOverlay';
 import { createModifyMode, createModifySwitch, type ModifyMode } from './modifyMode';
+import type { Box } from './pasteBatch';
 import { mountPlaceDialog, type PlaceDialog } from './placeDialog';
 import {
   PLACE_COLOURS, PLACE_SAVED_MS, PLACE_SAVED_NOTICE, PLACES_FULL_MS, PLACES_FULL_NOTICE, createPlaces, proposedPlaceName, type Places,
 } from './places';
 import { createReloader, createWorldUrl, installLeaveGuard, navigateTo, savedWorldUrl, type Reloader, type WorldUrl } from './reload';
+import {
+  MAX_SELECTION_SIDE, SELECT_REACH, createSelectTool, createTargetReader, selectLabel, type Corner, type GhostState, type SelectTool, type ToolMode,
+} from './selectTool';
 import { Y_MAX, Y_MIN, type WorldQuery } from './query';
 import { STATE_BOUNDS } from './stateBounds';
 import {
@@ -1640,6 +1653,9 @@ const CLICK_QUEUE_CAP = 16;
  * bucket drains the first fluid on a `'fluid'` ray from the eye within the mode's reach (`emptyBucketAt`); each edit
  * posted through the edit path. MMB picks the aimed type into the hotbar (`pickAt` → `hotbar.pick`). A refused or
  * missed click does nothing.
+ * With the selection tool on (`tool`, SP5c spec §1.2, D2) the buttons are the tool's, before `breakAt` and `place`:
+ * selecting, LMB marks corner 1 and RMB corner 2 at the hit voxel (a miss marks nothing); placing, RMB confirms the
+ * paste or move and LMB cancels it; MMB does nothing.
  */
 export interface ClickQueue {
   /**
@@ -1653,6 +1669,17 @@ export interface ClickQueue {
   clear(): void;
 }
 
+/** The selection tool as the click queue sees it (SP5c spec §1.2): its mode and what LMB and RMB do. */
+export interface ClickTool {
+  readonly mode: ToolMode;
+  /** Selecting: LMB (0) marks corner 1, RMB (2) corner 2 at the hit voxel, or nothing on a miss (null). */
+  mark(button: 0 | 2, hit: Corner | null): void;
+  /** Placing, RMB: the paste or move, at the box the frame step last anchored (it takes no hit). */
+  confirm(): void;
+  /** Placing, LMB: the paste or move cancelled. */
+  cancel(): void;
+}
+
 export function createClickQueue(o: {
   post(edit: Edit, tClick: number | undefined): void;
   /** RMB places its active slot; MMB picks into it. */
@@ -1663,6 +1690,8 @@ export function createClickQueue(o: {
   readonly walk: Pick<WalkState, 'x' | 'y' | 'z'>;
   /** A place's column gate (the page: `editState === 0`). */
   editable(cx: number, cz: number): boolean;
+  /** The selection tool (SP5c spec §1.2): with its mode not `off` the buttons are its (the page's `toolClicks`). */
+  readonly tool?: ClickTool;
 }): ClickQueue {
   const { fly, walk } = o;
   const buttons = new Uint8Array(CLICK_QUEUE_CAP);
@@ -1691,8 +1720,16 @@ export function createClickQueue(o: {
       buttons[n++] = b;
     },
     run(hit, read) {
+      const tool = o.tool;
       for (let i = 0; i < n; i++) {
         const b = buttons[i];
+        if (tool !== undefined && tool.mode !== 'off') {
+          if (tool.mode === 'select') {
+            if (b !== 1) tool.mark(b === 0 ? 0 : 2, hit.hit ? hit : null);
+          } else if (b === 2) tool.confirm();
+          else if (b === 0) tool.cancel();
+          continue;
+        }
         if (b === 1) {
           const type = pickAt(hit);
           if (type !== null) o.hotbar.pick(type);
@@ -1734,6 +1771,9 @@ export interface Aim {
  * two against the hit, a miss included (it empties the queue); a paused frame drops them unrun. Before they run the
  * held button's repeat (`repeat`, §4.1, D6) is ticked at the frame's time, so a repeat is aimed by this frame's DDA; a
  * paused frame (the palette, the map owning the controls, the help) stops it instead. Allocates nothing.
+ * SP5c (spec §1.2, D2): the cast's reach is `reach()` (the page's `aimReach`: 32 with the selection tool on, else the
+ * mode's), one cast per frame either way; after the outline, `selection.frame` runs on every call, a miss and a paused
+ * frame included (the selection's box and label, and from Task 22 the ghost).
  */
 export function createAim(o: {
   readonly fly: Pick<FlyState, 'x' | 'y' | 'z' | 'yaw' | 'pitch' | 'mode'>;
@@ -1746,6 +1786,10 @@ export function createAim(o: {
   readonly clicks?: Pick<ClickQueue, 'run' | 'clear'>;
   /** The held button's repeat and the frame clock it runs on, in seconds (the streaming route's; the bench has none). */
   readonly repeat?: { readonly hold: Pick<HoldRepeat, 'tick' | 'stop'>; now(): number };
+  /** The cast's reach in blocks (SP5c spec §1.2); absent, `REACH_WALK` walking and `REACH_FLY` flying. */
+  reach?(): number;
+  /** The selection tool's frame step (the page's `SelectActions`), run after the outline on every call (SP5c §1.2). */
+  readonly selection?: Pick<SelectActions, 'frame'>;
 }): Aim {
   const { fly, world } = o;
   const hit = createRayHit();
@@ -1765,7 +1809,7 @@ export function createAim(o: {
       ray[1] = fly.y;
       ray[2] = fly.z;
       lookVectorInto(dir, fly.yaw, fly.pitch);
-      castRayFrom(read, ray, fly.mode === 'walk' ? REACH_WALK : REACH_FLY, 'block', hit);
+      castRayFrom(read, ray, o.reach !== undefined ? o.reach() : fly.mode === 'walk' ? REACH_WALK : REACH_FLY, 'block', hit);
       if (paused) {
         o.repeat?.hold.stop();
         o.clicks?.clear();
@@ -1776,19 +1820,345 @@ export function createAim(o: {
       if (!hit.hit) {
         world.hideOutline();
         outlined = false;
+      } else {
+        outlineBounds(hit.state, hit.x, hit.y, hit.z, box);
+        const origin = world.origin;
+        box[0] = box[0]! - origin.x;
+        box[1] = box[1]! - origin.y;
+        box[2] = box[2]! - origin.z;
+        box[3] = box[3]! - origin.x;
+        box[4] = box[4]! - origin.y;
+        box[5] = box[5]! - origin.z;
+        outlined = !paused && o.hud && o.locked();
+        if (!outlined) world.hideOutline();
+        else world.setOutline(box[0], box[1], box[2], box[3], box[4], box[5]);
+      }
+      // The selection's box hides only on a paused frame, not with the pointer free or without the HUD (rulings P25).
+      o.selection?.frame(hit, paused);
+    },
+  };
+}
+
+/**
+ * The page's ghost and replaced-cell overlay (SP5c spec §6.2, §6.3): the `WorldRenderer` methods of Tasks 17, 21 and 24,
+ * no-ops until those tasks and in the harnesses (`NO_GHOST`). Scene coordinates, as `setOutline`.
+ */
+export interface GhostHost {
+  setGhostBox(x0: number, y0: number, z0: number, x1: number, y1: number, z1: number, colour: number): void;
+  hideGhostBox(): void;
+  setGhost(w: number, h: number, d: number, values: Uint32Array): void;
+  ghostStep(): void;
+  placeGhost(x0: number, y0: number, z0: number, q: number): void;
+  hideGhost(): void;
+  ghostBuild(): 'empty' | 'building' | 'ready' | 'tooMany';
+  setReplaced(x0: number, y0: number, z0: number, cells: Int32Array, count: number): void;
+  hideReplaced(): void;
+}
+
+/** A ghost host that draws nothing (the harnesses, and the page's ghost methods until Tasks 21 and 24). */
+export const NO_GHOST: GhostHost = Object.freeze({
+  setGhostBox() {}, hideGhostBox() {}, setGhost() {}, ghostStep() {}, placeGhost() {}, hideGhost() {},
+  ghostBuild: () => 'empty' as const, setReplaced() {}, hideReplaced() {},
+});
+
+/**
+ * The selection tool's actions (SP5c spec §1-§2), driven by the page's keys, its click queue (`toolClicks`) and its
+ * aim (`frame`). One operation at a time (Review Focus 2): `busy()` is true from the start of a copy, cut, paste, move or
+ * confirm to its last await, and while busy every tool action and click is ignored.
+ */
+export interface SelectActions {
+  /** Q (D1): the tool on or off (placing → off, the paste or move cancelled); leaving `off` stops the hold repeat. */
+  toggle(): void;
+  /** Ctrl+C (§2.1, D5). */
+  copy(): Promise<void>;
+  /** Ctrl+X (§2.2, D6; Task 19). */
+  cut(): Promise<void>;
+  /** Ctrl+V (§2.3, D7; Task 22). */
+  paste(): Promise<void>;
+  /** N (§2.4, D8; Task 23). */
+  move(): Promise<void>;
+  /**
+   * The per-frame step, run by the aim on every call (a miss and a paused frame included): the selection's box and the
+   * label, and from Task 22 the ghost's steps. The label is written only when the tool's state changes; the box when
+   * the state or the floating origin changes, or on the first frame after a paused one, and hidden on a paused frame
+   * only (rulings P25). Allocates nothing at rest.
+   */
+  frame(hit: RayHit, paused: boolean): void;
+  /** The ghost's min corner set as an aim would set it, `pin` keeping it until the paste or move ends (Task 22). */
+  placeAt(x0: number, y0: number, z0: number, pin?: boolean): void;
+  /** RMB while placing (Tasks 22, 23): `'ok'`, a refusal's notice text, or `''` when it did nothing. */
+  confirm(): Promise<string>;
+  busy(): boolean;
+  /** The ghost's box, refusal and counts, and whether it is shown (Task 22). */
+  ghostState(): GhostState & { readonly shown: boolean };
+  /** The page's teardown (rulings P29): the target reader disposed, the box and the label hidden, `release` called. */
+  dispose(): void;
+}
+
+/** "Copied W × H × D" and the other done notices (§1.4). */
+export const TOOL_DONE_MS = 1_500;
+/** The tool's refusals (§1.4). */
+export const TOOL_NOTICE_MS = 4_000;
+/** A clipboard that could not be kept (§1.4). */
+export const CLIPBOARD_FAILED_MS = 6_000;
+/** A copy, cut or move with a side over 64 (§1.4; the label reads D3's own text). */
+export const SELECTION_TOO_LARGE = `The selection is larger than ${MAX_SELECTION_SIDE} blocks on a side`;
+/** A copy, cut or move reaching a column that is not loaded (§1.4, D5). */
+export const SELECTION_UNLOADED = 'Part of the selection is not loaded: come closer and try again';
+/** A copy, cut or move with fewer than two corners (§1.4, D5), Q named from the key map. */
+export const markTwoCorners = (keyName: (a: Action) => string): string => `Mark two corners first: ${keyName('selectTool')}, then LMB and RMB`;
+/** A copy whose clipboard write failed: the memory copy is kept (§4.2). */
+export const clipboardNotKept = (reason: string): string => `Could not keep the clipboard (${reason})`;
+
+/** An action's first binding as the help writes it (`bindingLabel`): the key names of the tool's label and notices. */
+export function pageKeyName(a: Action): string {
+  const e = DEFAULT_KEYMAP.find((k) => k.action === a);
+  const b = e?.bindings[0];
+  return b === undefined ? '' : bindingLabel(b);
+}
+
+/** The aim's reach (SP5c spec §1.2, D2): `SELECT_REACH` with the selection tool on, else `REACH_WALK` / `REACH_FLY`. */
+export function aimReach(tool: Pick<SelectTool, 'mode'>, fly: Pick<FlyState, 'mode'>): number {
+  return tool.mode !== 'off' ? SELECT_REACH : fly.mode === 'walk' ? REACH_WALK : REACH_FLY;
+}
+
+const tooLarge = (b: { w: number; h: number; d: number }): boolean =>
+  b.w > MAX_SELECTION_SIDE || b.h > MAX_SELECTION_SIDE || b.d > MAX_SELECTION_SIDE;
+
+const NO_GHOST_STATE: GhostState & { readonly shown: boolean } = Object.freeze({ box: null, refusal: null, counts: null, shown: false });
+
+export function createSelectActions(o: {
+  tool: SelectTool;
+  sim: Pick<SimClient, 'copy'>;
+  editState(cx: number, cz: number): 0 | 1 | 2;
+  clipboard: ClipboardStore;
+  actionPost(edits: readonly Edit[]): Promise<EditOutcome>;
+  notices: { show(text: string, ms: number): void };
+  keyName(a: Action): string;
+  /** The renderer's selection box and the build HUD's label (Task 17); no-ops in the harnesses. */
+  view: {
+    setSelectionBox(x0: number, y0: number, z0: number, x1: number, y1: number, z1: number, colour: number): void;
+    hideSelectionBox(): void;
+    setSelectLabel(text: string | null): void;
+  };
+  ghost: GhostHost;
+  /** The renderer's floating origin (a fixed zero origin in the harnesses): every box is passed as world − origin. */
+  origin: Pick<FloatingOrigin, 'x' | 'y' | 'z'>;
+  body(): BodyBox;
+  /** The page's `holdRepeat.stop` (a no-op in the harnesses), called whenever the tool leaves `off`. */
+  stopRepeat(): void;
+  /** The target reader's timers (Task 16); `globalThis`'s when absent. */
+  timers?: { set(f: () => void, ms: number): number; clear(id: number): void };
+  /** Called once at `dispose` (the page: closes the clipboard's own `wi10` connection if its `kv()` opened one). */
+  release?(): void;
+}): SelectActions {
+  const { tool, view, origin } = o;
+  const timers = o.timers ?? {
+    set: (f: () => void, ms: number) => globalThis.setTimeout(f, ms) as unknown as number,
+    clear: (id: number) => { globalThis.clearTimeout(id); },
+  };
+  // The ghost's throttled target read (§2.5); its reply is used from Task 22 on.
+  const reader = createTargetReader({ timers, copy: (b) => o.sim.copy(b, false), onRead: () => {} });
+  let running = false;
+  let disposed = false;
+  // The frame step's change keys: the tool's version, the origin the box was written at, and whether it is hidden by a
+  // paused frame (so the first frame after it writes the box again).
+  let lastVersion = -1;
+  let boxOriginX = Number.NaN;
+  let boxOriginY = Number.NaN;
+  let boxOriginZ = Number.NaN;
+  let boxShown = false;
+  let boxStale = true;
+
+  const writeBox = (): void => {
+    boxOriginX = origin.x;
+    boxOriginY = origin.y;
+    boxOriginZ = origin.z;
+    const b = tool.mode === 'off' ? null : tool.selection();
+    if (b === null) {
+      if (boxShown) view.hideSelectionBox();
+      boxShown = false;
+      return;
+    }
+    view.setSelectionBox(
+      b.x0 - boxOriginX, b.y0 - boxOriginY, b.z0 - boxOriginZ,
+      b.x0 + b.w - boxOriginX, b.y0 + b.h - boxOriginY, b.z0 + b.d - boxOriginZ,
+      tooLarge(b) ? REFUSED_RED : SELECTION_YELLOW,
+    );
+    boxShown = true;
+  };
+
+  /** Runs `f` as the one operation in flight; a `SimFailed` ends it with no notice of its own (rulings P2). */
+  const operation = async (f: () => Promise<void>): Promise<void> => {
+    running = true;
+    try {
+      await f();
+    } catch (e) {
+      if (!(e instanceof SimFailed)) throw e;
+    } finally {
+      running = false;
+    }
+  };
+
+  /** The selection's box, or null after its notice: fewer than two corners, or a side over 64 (§1.4, §2.7). */
+  const checkedSelection = (): Box | null => {
+    if (tool.corner1 === null || tool.corner2 === null) {
+      o.notices.show(markTwoCorners(o.keyName), TOOL_NOTICE_MS);
+      return null;
+    }
+    const b = tool.selection()!;
+    if (tooLarge(b)) {
+      o.notices.show(SELECTION_TOO_LARGE, TOOL_NOTICE_MS);
+      return null;
+    }
+    return b;
+  };
+
+  return {
+    toggle() {
+      if (running || disposed) return;
+      tool.toggle();
+      if (tool.mode !== 'off') o.stopRepeat();
+    },
+
+    copy() {
+      // Only with the tool on and not placing (§1.1); none while another operation runs.
+      if (running || disposed || tool.mode !== 'select') return Promise.resolve();
+      const s = checkedSelection();
+      if (s === null) return Promise.resolve();
+      return operation(async () => {
+        // A copy works while the world regenerates: it reads what the world shows (D5).
+        const r: CopiedMsg = await o.sim.copy(s, false);
+        if (r.values === null) {
+          o.notices.show(SELECTION_UNLOADED, TOOL_NOTICE_MS);
+          return;
+        }
+        const w = await o.clipboard.write({ w: s.w, h: s.h, d: s.d, values: r.values });
+        if (!w.ok) {
+          o.notices.show(clipboardNotKept(w.reason), CLIPBOARD_FAILED_MS);
+          return;
+        }
+        o.notices.show(`Copied ${s.w} × ${s.h} × ${s.d}`, TOOL_DONE_MS);
+      });
+    },
+
+    cut: () => Promise.resolve(),
+    paste: () => Promise.resolve(),
+    move: () => Promise.resolve(),
+
+    frame(_hit, paused) {
+      if (disposed) return;
+      const v = tool.version;
+      const changed = v !== lastVersion;
+      if (changed) {
+        lastVersion = v;
+        view.setSelectLabel(selectLabel(tool, o.keyName));
+      }
+      if (paused) {
+        if (boxShown) view.hideSelectionBox();
+        boxShown = false;
+        boxStale = true;
         return;
       }
-      outlineBounds(hit.state, hit.x, hit.y, hit.z, box);
-      const origin = world.origin;
-      box[0] = box[0]! - origin.x;
-      box[1] = box[1]! - origin.y;
-      box[2] = box[2]! - origin.z;
-      box[3] = box[3]! - origin.x;
-      box[4] = box[4]! - origin.y;
-      box[5] = box[5]! - origin.z;
-      outlined = !paused && o.hud && o.locked();
-      if (!outlined) world.hideOutline();
-      else world.setOutline(box[0], box[1], box[2], box[3], box[4], box[5]);
+      if (changed || boxStale || origin.x !== boxOriginX || origin.y !== boxOriginY || origin.z !== boxOriginZ) {
+        boxStale = false;
+        writeBox();
+      }
+    },
+
+    placeAt() {},
+    confirm: () => Promise.resolve(''),
+    busy: () => running,
+    ghostState: () => NO_GHOST_STATE,
+
+    dispose() {
+      if (disposed) return;
+      disposed = true;
+      reader.dispose();
+      view.hideSelectionBox();
+      boxShown = false;
+      view.setSelectLabel(null);
+      o.release?.();
+    },
+  };
+}
+
+/** The click queue's tool for the page (SP5c spec §1.2): the tool's own buttons, each ignored while an operation runs. */
+export function toolClicks(tool: SelectTool, actions: Pick<SelectActions, 'busy' | 'confirm'>): ClickTool {
+  return {
+    get mode() {
+      return tool.mode;
+    },
+    mark(button, hit) {
+      if (!actions.busy()) tool.mark(button, hit);
+    },
+    confirm() {
+      if (!actions.busy()) void actions.confirm();
+    },
+    cancel() {
+      if (!actions.busy()) tool.cancel();
+    },
+  };
+}
+
+/**
+ * The page's `onButton` (SP5a spec §4.1; SP5c spec §1.2): a press goes through the hold repeat, except with the selection
+ * tool on, where it is pushed to the click queue itself (at the edit path's clock) so a held button acts once; a release
+ * always reaches the hold repeat.
+ */
+export function routeButton(o: {
+  toolOn(): boolean;
+  clicks: Pick<ClickQueue, 'push'>;
+  hold: Pick<HoldRepeat, 'down' | 'up'>;
+  /** The frame clock, seconds (the hold repeat's). */
+  now(): number;
+  /** The edit path's clock, ms (a click's time). */
+  clickTime(): number;
+}): (b: 0 | 1 | 2, down: boolean) => void {
+  return (b, down) => {
+    if (!down) o.hold.up(b, o.now());
+    else if (o.toolOn()) o.clicks.push(b, o.clickTime());
+    else o.hold.down(b, o.now());
+  };
+}
+
+/** The tool's keys in the page's action switch (SP5c spec §1.1): Q and Ctrl+C here; the rest from Tasks 19-23. */
+export function selectToolAction(a: Action, s: Pick<SelectActions, 'toggle' | 'copy'>): void {
+  switch (a) {
+    case 'selectTool': s.toggle(); break;
+    case 'copy': void s.copy(); break;
+    default: break;
+  }
+}
+
+/**
+ * The clipboard store's `kv()` for the page (SP5c spec §4.2, D26; rulings P12): a saved world's own connection; in an
+ * unsaved world `wi10` opened once, at the first copy or paste, when IndexedDB is there, else null. The open is cached,
+ * and a failed open answers null from then on (no retry at every copy). `close` closes only a connection it opened.
+ */
+export function createClipboardKv(o: { saved: KV | null; available(): boolean; open(): Promise<KV> }): {
+  kv(): Promise<KV | null>;
+  close(): void;
+} {
+  let opened: Promise<KV | null> | null = null;
+  let closed = false;
+  return {
+    kv() {
+      if (closed) return Promise.resolve(null);
+      if (o.saved !== null) return Promise.resolve(o.saved);
+      opened ??= o.available() ? o.open().then((kv) => {
+        if (closed) {
+          kv.close();
+          return null;
+        }
+        return kv;
+      }, () => null) : Promise.resolve(null);
+      return opened;
+    },
+    close() {
+      if (closed) return;
+      closed = true;
+      void opened?.then((kv) => kv?.close());
     },
   };
 }
@@ -3746,6 +4116,39 @@ export function mountWorldPage(root: HTMLElement, q: WorldQuery, hash: string, o
         settingsPanel.close();
       },
     };
+    // The selection tool (SP5c spec §1-§2): Q, the corners, the box and its label, and Ctrl+C here; Ctrl+X, Ctrl+V and N
+    // from Tasks 19-23. The clipboard lives in `wi10`'s `meta` (§4.2, D26): a saved world's own connection, else `wi10`
+    // opened at the first copy or paste (closed at the teardown).
+    const tool = createSelectTool();
+    const clipboardKv = createClipboardKv({ saved: saved?.kv ?? null, available: idbAvailable, open: () => openIdbKV(SAVES_DB) });
+    const toolBody: BodyBox = { minX: 0, minY: 0, minZ: 0, maxX: 0, maxY: 0, maxZ: 0 };
+    const selectActions = createSelectActions({
+      tool,
+      sim: simClient!,
+      editState: (cx, cz) => coordinator.editState(cx, cz),
+      clipboard: createClipboardStore({ kv: () => clipboardKv.kv(), notices: { show: (text, ms) => notices.show(text, { timeoutMs: ms }) } }),
+      actionPost: (edits) => actionPost(edits),
+      notices: { show: (text, ms) => notices.show(text, { timeoutMs: ms }) },
+      keyName: pageKeyName,
+      view: {
+        setSelectionBox: (x0, y0, z0, x1, y1, z1, colour) => world.setSelectionBox(x0, y0, z0, x1, y1, z1, colour),
+        hideSelectionBox: () => world.hideSelectionBox(),
+        setSelectLabel: (text) => buildHud.setSelectLabel(text),
+      },
+      // The ghost's box now; the ghost and the overlay with Tasks 21 and 24.
+      ghost: {
+        ...NO_GHOST,
+        setGhostBox: (x0, y0, z0, x1, y1, z1, colour) => world.setGhostBox(x0, y0, z0, x1, y1, z1, colour),
+        hideGhostBox: () => world.hideGhostBox(),
+      },
+      origin: world.origin,
+      body: () => (fly.mode === 'walk'
+        ? bodyOf('walk', walk.x, walk.y + EYE, walk.z, toolBody)
+        : bodyOf('fly', fly.x, fly.y, fly.z, toolBody)),
+      stopRepeat: () => holdRepeat.stop(),
+      release: () => clipboardKv.close(),
+    });
+    teardown.push(() => selectActions.dispose());
     const onAction = (a: Action): void => {
       switch (a) {
         // Walking, + and - do nothing (SP5a spec §3.3).
@@ -3797,9 +4200,10 @@ export function mountWorldPage(root: HTMLElement, q: WorldQuery, hash: string, o
         // F switches flight and walking and the near plane; a mode switch ends a held button's repeat (SP5a spec §3.1,
         // §4.1).
         case 'toggleWalk': switchMode({ fly, walk, world, repeat: holdRepeat }); break;
-        // The selection tool's keys (SP5c spec §1.1, D4) resolve from Task 14 on and act from Tasks 18-23: Q, Ctrl+C,
-        // Ctrl+X, Ctrl+V, N, and while placing the wheel, ↑ and ↓.
-        case 'selectTool': case 'copy': case 'cut': case 'paste': case 'move':
+        // The selection tool's keys (SP5c spec §1.1, D4): Q and Ctrl+C act (each ignored while an operation runs); Ctrl+X,
+        // Ctrl+V, N, and while placing the wheel, ↑ and ↓, act from Tasks 19-23.
+        case 'selectTool': case 'copy': selectToolAction(a, selectActions); break;
+        case 'cut': case 'paste': case 'move':
         case 'turn': case 'turnBack': case 'raise': case 'lower':
           break;
         default: break; // movement and sprint are held; Esc (releasePointer) is the browser's
@@ -3813,6 +4217,8 @@ export function mountWorldPage(root: HTMLElement, q: WorldQuery, hash: string, o
       fly,
       walk,
       editable: (cx, cz) => coordinator.editState(cx, cz) === 0,
+      // With the selection tool on, LMB and RMB are its (SP5c spec §1.2), each ignored while an operation runs.
+      tool: toolClicks(tool, selectActions),
     });
     // Hold to repeat (SP5a spec §4.1, D6): a press queues once; with the setting on, a held LMB or RMB is queued again
     // by the frame's aim once its rate has passed and the previous edit's reply has arrived. Its clock is the one the
@@ -3837,10 +4243,8 @@ export function mountWorldPage(root: HTMLElement, q: WorldQuery, hash: string, o
     const input = attachInput(canvas, {
       onAction,
       onLook: (dx, dy) => look(fly, dx, dy, settings.sensitivity * LOOK_DEG_PER_PIXEL),
-      onButton: (b, down) => {
-        if (down) holdRepeat.down(b, nowS());
-        else holdRepeat.up(b, nowS());
-      },
+      // With the selection tool on a press acts once: it skips the hold repeat (SP5c spec §1.2, D2).
+      onButton: routeButton({ toolOn: () => tool.mode !== 'off', clicks, hold: holdRepeat, now: nowS, clickTime: () => performance.now() }),
       // Walking, Ctrl+wheel steps the slot as the plain wheel does (SP5a spec §4.1, D9), so it never zooms the page and
       // never means two things while walking (kept when sprint left Ctrl for R and a double-tapped W, Task 45b).
       wheelCtrlAsSlot: () => fly.mode === 'walk',
@@ -4063,8 +4467,10 @@ export function mountWorldPage(root: HTMLElement, q: WorldQuery, hash: string, o
     let n = 0;
     let firstMax = 0;
     // The DDA, the held button's repeat, the queued clicks and the outline (SP5a spec §3.5, §4.1).
+    // The selection tool's reach and its box and label (SP5c spec §1.2, §1.3).
     const pageAim = createAim({
       fly, world, locked: () => document.pointerLockElement === canvas, hud, clicks, repeat: { hold: holdRepeat, now: nowS },
+      reach: () => aimReach(tool, fly), selection: selectActions,
     });
     const step = createFrameStep({
       fly,

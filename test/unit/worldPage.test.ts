@@ -34,7 +34,15 @@ import {
   closeOverlays, countPendingTimers, countTileCalls, createAim, createClickQueue, createHookEdit, createRdControl, createUndoNotice, createWorldNotices, everyFrameUntil, failBeforeReveal, flushOnPageHide, handleContextLoss,
   benchSetTime, benchWalk, handleStreamEvent, settingsChange, installRepeatStop, installUndoKeys, installWiTest, mapKey, offerLowerRd, paletteFirst, onDriverStatus, onSimFailure, pushCoordinatorTeardown, rdShownOnLoad, releaseOnFailure, reloadRd, runTeardown, speedKey, stopAfterFailure, switchMode,
   UNDO_NOTICE_MS, editPathNotices, hookFlushed, markOlderGenerator, type WiTest, type WiTestPage,
+  CLIPBOARD_FAILED_MS, NO_GHOST, SELECTION_TOO_LARGE, SELECTION_UNLOADED, TOOL_DONE_MS, TOOL_NOTICE_MS, aimReach, createClipboardKv, createSelectActions,
+  markTwoCorners, pageKeyName, routeButton, selectToolAction, toolClicks, type ClickTool,
 } from '../../src/ui/world/worldPage';
+import { CLIPBOARD_KEY, decodeClipboard } from '../../src/persist/clipboard';
+import { createClipboardStore, NO_STORAGE_NOTICE } from '../../src/ui/world/clipboardStore';
+import { SELECT_REACH, createSelectTool, type Corner } from '../../src/ui/world/selectTool';
+import { REFUSED_RED, SELECTION_YELLOW } from '../../src/render/selection';
+import { createRayHit } from '../../src/player/raycast';
+import type { Action } from '../../src/player/keymap';
 import { createEditLatency } from '../../src/ui/world/editLatency';
 import { createEditPath, type EditOutcome } from '../../src/ui/world/editPath';
 import { createActionPost, createBlockHistory, type BlockStep } from '../../src/ui/world/blockHistory';
@@ -42,10 +50,10 @@ import { createHoldRepeat } from '../../src/ui/world/holdRepeat';
 import { mountPalette } from '../../src/ui/palette';
 import { PLACE_SAVED_NOTICE, PLACES_FULL_NOTICE, createPlaces } from '../../src/ui/world/places';
 import { mountPlaceDialog } from '../../src/ui/world/placeDialog';
-import { BACKUP_NOTICE_MS } from '../../src/ui/world/modifyMode';
+import { BACKUP_NOTICE_MS, backupFailureReason } from '../../src/ui/world/modifyMode';
 import { TELEPORT_FAILED_MS, TELEPORT_FAILED_NOTICE } from '../../src/ui/world/teleport';
 import { NO_ENTRY } from '../../src/sim/diffStore';
-import type { Edit, EditedMsg, FlushedMsg } from '../../src/workers/protocol';
+import type { CopiedMsg, Edit, EditedMsg, FlushedMsg } from '../../src/workers/protocol';
 import { hex64 } from '../../src/core/hash';
 import type { JsonObject } from '../../src/core/params/migrate';
 import { genKey, paramsHash, stageHashes } from '../../src/core/stage/hash';
@@ -66,7 +74,7 @@ import { BLOCKED_NOTICE, noticeOfQuery, REFUSAL_REASON_KEY, RELOAD_NOTICE, UNSAV
 import type { LockManagerLike } from '../../src/ui/world/worldLock';
 import { resolveProfile } from '../../src/core/params/profiles';
 import { seedFromInput } from '../../src/core/seed';
-import { createSimClient } from '../../src/engine/simClient';
+import { SimFailed, createSimClient } from '../../src/engine/simClient';
 import { findSpawn } from '../../src/gen/column/spawn';
 import { createGenContext } from '../../src/gen/context';
 import { createSimHandler } from '../../src/workers/simHandler';
@@ -2486,8 +2494,9 @@ describe('hold to repeat in the page (SP5a spec §4.1, D6; Review Focus 1, rulin
     await r.frames(1010, 1500);
     expect(r.posts).toHaveLength(1);
     expect(r.record).toHaveBeenCalledTimes(1);
-    // The page's mouse buttons go through the hold repeat: a press queues once, a release ends the hold.
-    expect(src()).toMatch(/onButton: \(b, down\) => \{\s+if \(down\) holdRepeat\.down\(b, nowS\(\)\);\s+else holdRepeat\.up\(b, nowS\(\)\);\s+\},/);
+    // The page's mouse buttons go through the hold repeat (with the selection tool off): a press queues once, a release
+    // ends the hold (`routeButton`, tested with the tool).
+    expect(src()).toMatch(/onButton: routeButton\(\{ toolOn: \(\) => tool\.mode !== 'off', clicks, hold: holdRepeat, now: nowS,/);
     expect(src()).toMatch(/enabled: \(\) => settings\.holdRepeat,\s+pending: editPath\.pending,\s+queue: \(b\) => clicks\.push\(b, performance\.now\(\)\),/);
   });
 
@@ -2543,7 +2552,7 @@ describe('hold to repeat in the page (SP5a spec §4.1, D6; Review Focus 1, rulin
     // The page installs it on the canvas, and F (a mode switch) stops it too.
     expect(src()).toMatch(/teardown\.push\(installRepeatStop\(\{ doc: document, canvas, repeat: holdRepeat \}\)\);/);
     expect(src()).toMatch(/case 'toggleWalk': switchMode\(\{ fly, walk, world, repeat: holdRepeat \}\); break;/);
-    expect(src()).toMatch(/createAim\(\{\s+fly, world, locked: \(\) => document\.pointerLockElement === canvas, hud, clicks, repeat: \{ hold: holdRepeat, now: nowS \},\s+\}\)/);
+    expect(src()).toMatch(/createAim\(\{\s+fly, world, locked: \(\) => document\.pointerLockElement === canvas, hud, clicks, repeat: \{ hold: holdRepeat, now: nowS \},\s+reach: \(\) => aimReach\(tool, fly\), selection: selectActions,\s+\}\)/);
   });
 });
 
@@ -4240,5 +4249,604 @@ describe('D14\'s storage notices during play (`watchStorage`, SP5b spec §2.1, �
     expect(src).toMatch(/const storageNotices = watchStorage\(notices, saved\.kv\);/);
     expect(src).toMatch(/onResult: \(r\) => storageNotices\.flushed\(r\),/);
     expect(src).toMatch(/openIdbKV\(db, undefined, \(\) => loading\.warn\(BLOCKED_NOTICE\)\)/);
+  });
+});
+
+describe('the selection tool in the page I: Q, the corners, the box and Ctrl+C (SP5c spec §1.1-§1.4, §2.1; D1, D2, D3, D5)', () => {
+  const src = (): string => readFileSync(new URL('../../src/ui/world/worldPage.ts', import.meta.url), 'utf8');
+  const SAVED_KEY = (a: Action): string => pageKeyName(a);
+  /** The fake world the fake sim's `copy` reads: stone at y ≤ 69, air above. */
+  const valueAt = (_x: number, y: number, _z: number): number => (y <= 69 ? STONE << 8 : AIR << 8);
+  const boxValues = (b: { x0: number; y0: number; z0: number; w: number; h: number; d: number }): Uint32Array => {
+    const v = new Uint32Array(b.w * b.h * b.d);
+    let i = 0;
+    for (let y = 0; y < b.h; y++) for (let z = 0; z < b.d; z++) for (let x = 0; x < b.w; x++) v[i++] = valueAt(b.x0 + x, b.y0 + y, b.z0 + z);
+    return v;
+  };
+  type CopyBox = { x0: number; y0: number; z0: number; w: number; h: number; d: number };
+
+  /**
+   * `createSelectActions` over a fake sim (each `copy` answered from `valueAt`, or `unloaded`, or held until `release`),
+   * the real clipboard store over a `MemoryKV` (or none), a recording view and notices, a fixed origin (movable).
+   */
+  function selectRig(o: { kv?: MemoryKV | null; editState?: 0 | 1 | 2 } = {}) {
+    const tool = createSelectTool();
+    const shown: Array<[string, number]> = [];
+    const notices = { show: (text: string, ms: number) => { shown.push([text, ms]); } };
+    const calls: unknown[][] = [];
+    const labels: Array<string | null> = [];
+    const view = {
+      setSelectionBox: (...b: number[]) => { calls.push(['set', ...b]); },
+      hideSelectionBox: () => { calls.push(['hide']); },
+      setSelectLabel: (t: string | null) => { labels.push(t); },
+    };
+    const copies: Array<CopyBox & { gen: boolean }> = [];
+    const held: Array<() => void> = [];
+    const st = { hold: false, unloaded: false, fail: null as Error | null };
+    const sim = {
+      copy: (b: CopyBox, gen: boolean): Promise<CopiedMsg> => {
+        copies.push({ x0: b.x0, y0: b.y0, z0: b.z0, w: b.w, h: b.h, d: b.d, gen });
+        return new Promise<CopiedMsg>((resolve, reject) => {
+          const go = (): void => {
+            if (st.fail !== null) reject(st.fail);
+            else if (st.unloaded) resolve({ type: 'copied', id: copies.length, values: null, generated: null, why: 'unloaded' });
+            else resolve({ type: 'copied', id: copies.length, values: boxValues(b), generated: null, why: null });
+          };
+          if (st.hold) held.push(go);
+          else go();
+        });
+      },
+    };
+    const kv = o.kv === undefined ? createMemoryKV() : o.kv;
+    const clipboard = createClipboardStore({ kv: () => Promise.resolve(kv), notices });
+    const origin = { x: 0, y: 0, z: 0 };
+    const stopRepeat = vi.fn();
+    const release = vi.fn();
+    const editState = o.editState ?? 0;
+    const actions = createSelectActions({
+      tool, sim, editState: () => editState, clipboard, actionPost: () => Promise.resolve({ ok: false, why: 'failed' }), notices,
+      keyName: SAVED_KEY, view, ghost: NO_GHOST, origin, body: () => ({ minX: 0, minY: 0, minZ: 0, maxX: 0, maxY: 0, maxZ: 0 }),
+      stopRepeat, release,
+    });
+    const hit = createRayHit();
+    const frame = (paused = false): void => actions.frame(hit, paused);
+    const c = (x: number, y: number, z: number): Corner => ({ x, y, z });
+    /** The stored clipboard, decoded, or null. */
+    const stored = async () => {
+      if (kv === null) return null;
+      const [raw] = await kv.read([{ op: 'get', store: 'meta', key: CLIPBOARD_KEY }]);
+      if (raw === undefined) return null;
+      const d = decodeClipboard(raw);
+      return d.ok ? { w: d.w, h: d.h, d: d.d, values: Array.from(d.values) } : 'unreadable';
+    };
+    const releaseHeld = async (): Promise<void> => {
+      st.hold = false;
+      for (const go of held.splice(0)) go();
+      await flushMicrotasks();
+    };
+    return { tool, actions, shown, calls, labels, copies, st, kv, clipboard, origin, stopRepeat, release, frame, c, stored, releaseHeld };
+  }
+
+  /** Q, then corner 1 at (0, 60, 0) and corner 2 at (2, 61, 3): a 3 × 2 × 4 selection. */
+  function selected(r: ReturnType<typeof selectRig>): void {
+    r.actions.toggle();
+    r.tool.mark(0, r.c(0, 60, 0));
+    r.tool.mark(2, r.c(2, 61, 3));
+  }
+
+  describe('the click queue and the aim', () => {
+    /** A stone floor at y 68 (or none) under an eye 4.5 blocks up looking straight down; the tool's clicks spied. */
+    function clickRig() {
+      let floor = true;
+      const posted: Edit[] = [];
+      const world = { origin: { x: 0, y: 0, z: 0 }, setOutline: () => {}, hideOutline: () => {} };
+      const fly = { x: 0.5, y: 72.5, z: 0.5, yaw: 0, pitch: -90, mode: 'fly' as const };
+      const read = {
+        blockAt: (_x: number, y: number) => (floor && y === 68 ? STONE : AIR),
+        fluidAt: () => 0,
+      };
+      const r = selectRig();
+      const hotbar = createHotbar(null);
+      const reached: number[] = [];
+      const inner = toolClicks(r.tool, r.actions);
+      const tool: ClickTool = {
+        get mode() { return inner.mode; },
+        mark: (b, h) => { reached.push(b); inner.mark(b, h); },
+        confirm: () => { reached.push(2); inner.confirm(); },
+        cancel: () => { reached.push(0); inner.cancel(); },
+      };
+      const clicks = createClickQueue({ post: (e) => { posted.push(e); }, hotbar, fly, walk: createWalkState(), editable: () => true, tool });
+      let t = 0;
+      const hold = createHoldRepeat({ enabled: () => true, pending: () => false, queue: (b) => clicks.push(b) });
+      const stop = vi.spyOn(hold, 'stop');
+      const aim = createAim({
+        fly, world: world as never, locked: () => true, hud: true, clicks, repeat: { hold, now: () => t },
+        reach: () => aimReach(r.tool, fly), selection: r.actions,
+      });
+      const onButton = routeButton({ toolOn: () => r.tool.mode !== 'off', clicks, hold, now: () => t, clickTime: () => t * 1000 });
+      /** Frames 10 ms apart from `fromMs` to `toMs`. */
+      const frames = (fromMs: number, toMs: number): void => {
+        for (let ms = fromMs; ms <= toMs; ms += 10) {
+          t = ms / 1000;
+          aim.aim(read, false);
+        }
+      };
+      return { ...r, posted, fly, read, aim, clicks, hotbar, reached, hold, stop, onButton, frames, setFloor: (on: boolean) => { floor = on; } };
+    }
+
+    test('with the tool on, LMB marks corner 1 and RMB corner 2 at the hit; a miss changes nothing; MMB does nothing; with the tool off the queue breaks and places as before', () => {
+      const r = clickRig();
+      r.actions.toggle();
+      r.clicks.push(0);
+      r.aim.aim(r.read, false);
+      expect(r.tool.corner1).toEqual({ x: 0, y: 68, z: 0 });
+      r.fly.x = 3.5;
+      r.clicks.push(2);
+      r.aim.aim(r.read, false);
+      expect(r.tool.corner2).toEqual({ x: 3, y: 68, z: 0 });
+      // MMB picks nothing into the hotbar.
+      const slots = JSON.stringify(r.hotbar.slots);
+      r.clicks.push(1);
+      r.aim.aim(r.read, false);
+      expect([JSON.stringify(r.hotbar.slots), r.hotbar.active]).toEqual([slots, 0]);
+      // A miss marks nothing.
+      r.setFloor(false);
+      r.fly.x = 7.5;
+      r.clicks.push(0);
+      r.clicks.push(2);
+      r.aim.aim(r.read, false);
+      expect([r.tool.corner1, r.tool.corner2]).toEqual([{ x: 0, y: 68, z: 0 }, { x: 3, y: 68, z: 0 }]);
+      expect(r.posted).toEqual([]);
+      // The tool off: LMB breaks and RMB places, as before.
+      r.setFloor(true);
+      r.actions.toggle();
+      r.clicks.push(0);
+      r.aim.aim(r.read, false);
+      expect(r.posted).toEqual([{ x: 7, y: 68, z: 0, op: 'set', value: AIR << 8, expect: STONE << 8 }]);
+      r.clicks.push(2);
+      r.aim.aim(r.read, false);
+      expect(r.posted).toHaveLength(2);
+      expect([r.posted[1]!.x, r.posted[1]!.y, r.posted[1]!.z, r.posted[1]!.expect]).toEqual([7, 69, 0, AIR << 8]);
+      expect([r.tool.corner1, r.tool.corner2]).toEqual([{ x: 0, y: 68, z: 0 }, { x: 3, y: 68, z: 0 }]);
+    });
+
+    test('placing, RMB confirms and LMB cancels; MMB does nothing', () => {
+      const r = clickRig();
+      const confirm = vi.spyOn(r.actions, 'confirm');
+      r.tool.place('paste');
+      r.clicks.push(1);
+      r.clicks.push(2);
+      r.aim.aim(r.read, false);
+      expect(confirm).toHaveBeenCalledTimes(1);
+      expect(r.tool.mode).toBe('place');
+      r.clicks.push(0);
+      r.aim.aim(r.read, false);
+      expect(r.tool.mode).toBe('select');
+      expect(r.posted).toEqual([]);
+    });
+
+    test('with the tool on and hold repeat on, a held RMB over 2 s of frames queues exactly one press', () => {
+      const r = clickRig();
+      r.actions.toggle();
+      r.onButton(2, true);
+      r.frames(0, 2000);
+      r.onButton(2, false);
+      r.frames(2010, 2500);
+      expect(r.reached).toEqual([2]);
+      expect(r.tool.corner2).toEqual({ x: 0, y: 68, z: 0 });
+      expect(r.posted).toEqual([]);
+    });
+
+    test('RMB held placing blocks with hold repeat on, then Q: over 2 s of frames no RMB reaches the tool (no corner 2 marked; `holdRepeat.stop()` called)', () => {
+      for (const withStop of [true, false]) {
+        const r = clickRig();
+        // The page's `stopRepeat` is `holdRepeat.stop`; without it the held RMB keeps queuing into the tool.
+        if (withStop) r.stopRepeat.mockImplementation(() => r.hold.stop());
+        r.onButton(2, true);
+        r.frames(0, 100);
+        expect(r.posted).toHaveLength(1);
+        selectToolAction('selectTool', r.actions);
+        expect(r.tool.mode).toBe('select');
+        expect(r.stopRepeat).toHaveBeenCalledTimes(1);
+        r.frames(110, 2100);
+        if (withStop) {
+          expect(r.stop).toHaveBeenCalledTimes(1);
+          expect(r.reached).toEqual([]);
+          expect(r.tool.corner2).toBeNull();
+        } else {
+          // The case the stop exists for: a repeat already held keeps reaching the tool with no new press.
+          expect(r.reached.length).toBeGreaterThan(1);
+        }
+      }
+    });
+
+    test('`routeButton`: with the tool off a press goes to the hold repeat; on, to the click queue at the click\'s time; a release always to the hold repeat', () => {
+      const pushed: Array<[number, number | undefined]> = [];
+      const hold = { down: vi.fn(), up: vi.fn() };
+      let on = false;
+      const route = routeButton({ toolOn: () => on, clicks: { push: (b, t) => { pushed.push([b, t]); } }, hold, now: () => 1.5, clickTime: () => 1500 });
+      route(0, true);
+      expect(hold.down).toHaveBeenCalledWith(0, 1.5);
+      on = true;
+      route(2, true);
+      route(2, false);
+      expect(pushed).toEqual([[2, 1500]]);
+      expect(hold.down).toHaveBeenCalledTimes(1);
+      expect(hold.up).toHaveBeenCalledWith(2, 1.5);
+    });
+
+    test('the aim casts with reach 32 while the tool is on (a block 20 away is hit), 6 and 10 otherwise', () => {
+      const world = { origin: { x: 0, y: 0, z: 0 }, setOutline: () => {}, hideOutline: () => {} };
+      const tool = createSelectTool();
+      /** A single stone `below` blocks under the eye. */
+      const cast = (below: number, mode: 'fly' | 'walk', on: boolean): boolean => {
+        if ((tool.mode !== 'off') !== on) tool.toggle();
+        const fly = { x: 0.5, y: 80.5, z: 0.5, yaw: 0, pitch: -90, mode };
+        const read = { blockAt: (x: number, y: number, z: number) => (x === 0 && z === 0 && y === 80 - below ? STONE : AIR), fluidAt: () => 0 };
+        const aim = createAim({ fly, world: world as never, locked: () => true, hud: true, reach: () => aimReach(tool, fly) });
+        aim.aim(read, false);
+        return aim.hit.hit;
+      };
+      expect([cast(20, 'fly', true), cast(20, 'walk', true), cast(31, 'walk', true), cast(33, 'fly', true)]).toEqual([true, true, true, false]);
+      expect([cast(20, 'fly', false), cast(20, 'walk', false)]).toEqual([false, false]);
+      expect([cast(9, 'fly', false), cast(9, 'walk', false), cast(5, 'walk', false)]).toEqual([true, false, true]);
+      expect([aimReach({ mode: 'select' }, { mode: 'walk' }), aimReach({ mode: 'place' }, { mode: 'fly' })]).toEqual([SELECT_REACH, 32]);
+      expect([aimReach({ mode: 'off' }, { mode: 'walk' }), aimReach({ mode: 'off' }, { mode: 'fly' })]).toEqual([6, 10]);
+    });
+
+    test('a paused frame (help, palette, place dialog, Settings, the map owning the controls) hides the box and clears queued clicks', () => {
+      const r = clickRig();
+      selected(r);
+      r.aim.aim(r.read, false);
+      expect(r.calls.at(-1)).toEqual(['set', 0, 60, 0, 3, 62, 4, SELECTION_YELLOW]);
+      r.clicks.push(0);
+      r.aim.aim(r.read, true);
+      expect(r.calls.at(-1)).toEqual(['hide']);
+      r.aim.aim(r.read, false);
+      // The queued LMB was dropped unrun: corner 1 is still (0, 60, 0); the box shows again.
+      expect(r.tool.corner1).toEqual({ x: 0, y: 60, z: 0 });
+      expect(r.calls.at(-1)).toEqual(['set', 0, 60, 0, 3, 62, 4, SELECTION_YELLOW]);
+      expect(src()).toMatch(/paused: \(\) => help\.isOpen \|\| palette\.isOpen \|\| placeDialog\.isOpen \|\| settingsPanel\.isOpen \|\| mapOverlay\.owner === 'map',/);
+    });
+
+    test('with the pointer free and with hud false the box still shows (rulings P25)', () => {
+      for (const [locked, hud] of [[false, true], [true, false]] as const) {
+        const r = selectRig();
+        selected(r);
+        const world = { origin: { x: 0, y: 0, z: 0 }, setOutline: () => {}, hideOutline: vi.fn() };
+        const fly = { x: 0.5, y: 72.5, z: 0.5, yaw: 0, pitch: -90, mode: 'fly' as const };
+        const read = { blockAt: (_x: number, y: number) => (y === 68 ? STONE : AIR), fluidAt: () => 0 };
+        const aim = createAim({ fly, world: world as never, locked: () => locked, hud, reach: () => aimReach(r.tool, fly), selection: r.actions });
+        aim.aim(read, false);
+        expect(world.hideOutline).toHaveBeenCalled();
+        expect(r.calls).toEqual([['set', 0, 60, 0, 3, 62, 4, SELECTION_YELLOW]]);
+        // A miss still runs the frame step.
+        r.tool.mark(0, r.c(1, 60, 0));
+        aim.aim({ blockAt: () => AIR, fluidAt: () => 0 }, false);
+        expect(r.calls.at(-1)).toEqual(['set', 1, 60, 0, 3, 62, 4, SELECTION_YELLOW]);
+      }
+    });
+  });
+
+  describe('Ctrl+C', () => {
+    test('a copy: `Copied 3 × 2 × 4` for 1.5 s, one `copy` of the box without generated values, the clipboard written', async () => {
+      const r = selectRig();
+      selected(r);
+      await r.actions.copy();
+      expect(r.copies).toEqual([{ x0: 0, y0: 60, z0: 0, w: 3, h: 2, d: 4, gen: false }]);
+      expect(r.shown).toEqual([['Copied 3 × 2 × 4', 1_500]]);
+      expect(await r.stored()).toEqual({ w: 3, h: 2, d: 4, values: Array.from(boxValues({ x0: 0, y0: 60, z0: 0, w: 3, h: 2, d: 4 })) });
+      expect([TOOL_DONE_MS, TOOL_NOTICE_MS, CLIPBOARD_FAILED_MS]).toEqual([1_500, 4_000, 6_000]);
+    });
+
+    test('fewer than two corners: `Mark two corners first: Q, then LMB and RMB` for 4 s and no `copy`', async () => {
+      const r = selectRig();
+      r.actions.toggle();
+      await r.actions.copy();
+      r.tool.mark(2, r.c(1, 2, 3));
+      await r.actions.copy();
+      expect(r.shown).toEqual([['Mark two corners first: Q, then LMB and RMB', 4_000], ['Mark two corners first: Q, then LMB and RMB', 4_000]]);
+      expect(markTwoCorners((a) => (a === 'selectTool' ? 'K' : '?'))).toBe('Mark two corners first: K, then LMB and RMB');
+      expect(r.copies).toEqual([]);
+    });
+
+    test('a side over 64: `The selection is larger than 64 blocks on a side` for 4 s and no `copy`; 64 a side copies', async () => {
+      for (const [x1, y1, z1] of [[64, 60, 0], [0, 124, 0], [0, 60, -64]] as const) {
+        const r = selectRig();
+        r.actions.toggle();
+        r.tool.mark(0, r.c(0, 60, 0));
+        r.tool.mark(2, r.c(x1, y1, z1));
+        await r.actions.copy();
+        expect(r.shown).toEqual([['The selection is larger than 64 blocks on a side', 4_000]]);
+        expect(r.copies).toEqual([]);
+      }
+      expect(SELECTION_TOO_LARGE).toBe('The selection is larger than 64 blocks on a side');
+      const r = selectRig();
+      r.actions.toggle();
+      r.tool.mark(0, r.c(0, 0, 0));
+      r.tool.mark(2, r.c(63, 63, 63));
+      await r.actions.copy();
+      expect(r.shown).toEqual([['Copied 64 × 64 × 64', 1_500]]);
+    });
+
+    test('a selection reaching an unloaded column: `Part of the selection is not loaded: come closer and try again` for 4 s, the clipboard unwritten', async () => {
+      const r = selectRig();
+      selected(r);
+      r.st.unloaded = true;
+      await r.actions.copy();
+      expect(r.copies).toHaveLength(1);
+      expect(r.shown).toEqual([['Part of the selection is not loaded: come closer and try again', 4_000]]);
+      expect(SELECTION_UNLOADED).toBe('Part of the selection is not loaded: come closer and try again');
+      expect(await r.stored()).toBeNull();
+    });
+
+    test('a failed clipboard write: `Could not keep the clipboard (storage full)` for 6 s, the memory copy kept', async () => {
+      const kv = createMemoryKV();
+      const r = selectRig({ kv });
+      selected(r);
+      kv.failAt(0, 'QuotaExceededError');
+      await r.actions.copy();
+      expect(r.shown).toEqual([[`Could not keep the clipboard (${backupFailureReason('QuotaExceededError')})`, 6_000]]);
+      expect(r.shown[0]![0]).toBe('Could not keep the clipboard (storage full)');
+      const read = await r.clipboard.read();
+      expect([read.clip?.w, read.clip?.h, read.clip?.d]).toEqual([3, 2, 4]);
+    });
+
+    test('the first copy without storage: D15\'s notice for 6 s once, and `Copied` each time', async () => {
+      const r = selectRig({ kv: null });
+      selected(r);
+      await r.actions.copy();
+      await r.actions.copy();
+      expect(r.shown).toEqual([[NO_STORAGE_NOTICE, 6_000], ['Copied 3 × 2 × 4', 1_500], ['Copied 3 × 2 × 4', 1_500]]);
+    });
+
+    test('a copy while an Apply regenerates reads and writes the clipboard', async () => {
+      const r = selectRig({ editState: 2 });
+      selected(r);
+      await r.actions.copy();
+      expect(r.copies).toHaveLength(1);
+      expect(r.shown).toEqual([['Copied 3 × 2 × 4', 1_500]]);
+      expect((await r.stored()) !== null).toBe(true);
+    });
+
+    test('Ctrl+C with the tool off, or placing, does nothing; with focus in a text field nothing resolves', async () => {
+      const r = selectRig();
+      r.tool.toggle();
+      r.tool.mark(0, r.c(0, 60, 0));
+      r.tool.mark(2, r.c(2, 61, 3));
+      r.tool.toggle();
+      expect(r.tool.mode).toBe('off');
+      selectToolAction('copy', r.actions);
+      r.tool.place('paste');
+      selectToolAction('copy', r.actions);
+      await flushMicrotasks();
+      expect([r.copies, r.shown]).toEqual([[], []]);
+      // Through the input layer: a focused text field resolves nothing; without it Ctrl+C resolves `copy`.
+      const resolved: Action[] = [];
+      let text = true;
+      const target = Object.assign(new EventTarget(), { requestPointerLock: () => Promise.resolve() });
+      const doc = Object.assign(new EventTarget(), { pointerLockElement: null as unknown });
+      const input = attachInput(target as unknown as HTMLElement, {
+        onAction: (a) => resolved.push(a),
+        onLook: () => {},
+        isTextFocus: () => text,
+        active: () => true,
+        doc: doc as unknown as Pick<Document, 'addEventListener' | 'removeEventListener' | 'pointerLockElement'>,
+        win: new EventTarget() as unknown as Pick<Window, 'addEventListener' | 'removeEventListener'>,
+      });
+      const ctrlC = () => Object.assign(new Event('keydown', { cancelable: true }), { code: 'KeyC', key: 'c', ctrlKey: true, altKey: false, metaKey: false, shiftKey: false, repeat: false });
+      const e = ctrlC();
+      doc.dispatchEvent(e);
+      expect([resolved, e.defaultPrevented]).toEqual([[], false]);
+      text = false;
+      doc.dispatchEvent(ctrlC());
+      expect(resolved).toEqual(['copy']);
+      input.dispose();
+    });
+
+    test('a copy rejected with `SimFailed` leaves `busy()` false, shows no notice of its own and raises no unhandled rejection (rulings P2)', async () => {
+      const unhandled: unknown[] = [];
+      const listener = (e: unknown): void => { unhandled.push(e); };
+      process.on('unhandledRejection', listener);
+      try {
+        const r = selectRig();
+        selected(r);
+        r.st.fail = new SimFailed('the sim stopped');
+        await r.actions.copy();
+        await flushMicrotasks();
+        expect([r.actions.busy(), r.shown, unhandled]).toEqual([false, [], []]);
+        expect(await r.stored()).toBeNull();
+      } finally {
+        process.off('unhandledRejection', listener);
+      }
+    });
+  });
+
+  describe('the box and the label', () => {
+    test('Q, then one mark: a one-block yellow box at the corner and the label `Corner 1 at x, y, z: RMB marks corner 2`; Ctrl+C then shows `Mark two corners first: Q, then LMB and RMB`', async () => {
+      const r = selectRig();
+      r.frame();
+      expect([r.labels, r.calls]).toEqual([[null], []]);
+      r.actions.toggle();
+      r.frame();
+      expect(r.labels.at(-1)).toBe('Selection tool: LMB marks corner 1, RMB corner 2');
+      expect(r.calls).toEqual([]);
+      r.tool.mark(0, r.c(5, 64, -3));
+      r.frame();
+      expect(r.calls).toEqual([['set', 5, 64, -3, 6, 65, -2, SELECTION_YELLOW]]);
+      expect(r.labels.at(-1)).toBe('Corner 1 at 5, 64, -3: RMB marks corner 2');
+      await r.actions.copy();
+      expect(r.shown).toEqual([['Mark two corners first: Q, then LMB and RMB', 4_000]]);
+      // At rest nothing is written again.
+      const n = [r.calls.length, r.labels.length];
+      for (let i = 0; i < 100; i++) r.frame();
+      expect([r.calls.length, r.labels.length]).toEqual(n);
+    });
+
+    test('Q, then two marks: the box shown in yellow and the label `Selection 3 × 2 × 4 (24 blocks) · Ctrl+C copy · Ctrl+X cut · N move · Ctrl+V paste`', () => {
+      const r = selectRig();
+      selected(r);
+      r.frame();
+      expect(r.calls).toEqual([['set', 0, 60, 0, 3, 62, 4, SELECTION_YELLOW]]);
+      expect(r.labels.at(-1)).toBe('Selection 3 × 2 × 4 (24 blocks) · Ctrl+C copy · Ctrl+X cut · N move · Ctrl+V paste');
+    });
+
+    test('a 65-wide selection: the box red and the over-64 label', () => {
+      const r = selectRig();
+      r.actions.toggle();
+      r.tool.mark(0, r.c(-10, 60, 0));
+      r.tool.mark(2, r.c(54, 60, 0));
+      r.frame();
+      expect(r.calls).toEqual([['set', -10, 60, 0, 55, 61, 1, REFUSED_RED]]);
+      expect(r.labels.at(-1)).toBe('Selection 65 × 1 × 1: at most 64 blocks on a side');
+    });
+
+    test('Q again hides the box and the label; a third Q shows the kept corners\' box and label', () => {
+      const r = selectRig();
+      selected(r);
+      r.frame();
+      const label = r.labels.at(-1);
+      r.actions.toggle();
+      r.frame();
+      expect([r.calls.at(-1), r.labels.at(-1)]).toEqual([['hide'], null]);
+      r.actions.toggle();
+      r.frame();
+      expect([r.calls.at(-1), r.labels.at(-1)]).toEqual([['set', 0, 60, 0, 3, 62, 4, SELECTION_YELLOW], label]);
+      // Each Q that turns the tool on stops the hold repeat (spec §1.2).
+      expect(r.stopRepeat).toHaveBeenCalledTimes(2);
+    });
+
+    test('help opened and closed: the box shows again (rulings P8)', () => {
+      const r = selectRig();
+      selected(r);
+      r.frame();
+      r.frame(true);
+      r.frame(true);
+      expect(r.calls).toEqual([['set', 0, 60, 0, 3, 62, 4, SELECTION_YELLOW], ['hide']]);
+      // The label is not touched by a paused frame.
+      expect(r.labels).toHaveLength(1);
+      r.frame();
+      expect(r.calls.at(-1)).toEqual(['set', 0, 60, 0, 3, 62, 4, SELECTION_YELLOW]);
+      expect(r.labels).toHaveLength(1);
+    });
+
+    test('after an origin rebase the box covers the same world cells (rulings P8)', () => {
+      const r = selectRig();
+      selected(r);
+      r.origin.x = 1024;
+      r.origin.z = -2048;
+      r.frame();
+      expect(r.calls).toEqual([['set', -1024, 60, 2048, -1021, 62, 2052, SELECTION_YELLOW]]);
+      r.origin.x = 2048;
+      r.frame();
+      expect(r.calls.at(-1)).toEqual(['set', -2048, 60, 2048, -2045, 62, 2052, SELECTION_YELLOW]);
+      r.frame();
+      expect(r.calls).toHaveLength(2);
+      // The label does not move with the origin.
+      expect(r.labels).toHaveLength(1);
+    });
+
+    test('`dispose` hides the box and the label, releases the clipboard\'s connection, and the frame and keys do nothing after it (rulings P29)', () => {
+      const r = selectRig();
+      selected(r);
+      r.frame();
+      r.actions.dispose();
+      expect([r.calls.at(-1), r.labels.at(-1)]).toEqual([['hide'], null]);
+      expect(r.release).toHaveBeenCalledTimes(1);
+      const n = [r.calls.length, r.labels.length];
+      r.actions.toggle();
+      r.frame();
+      r.actions.dispose();
+      expect([r.calls.length, r.labels.length, r.tool.mode]).toEqual([...n, 'select']);
+      expect(r.release).toHaveBeenCalledTimes(1);
+    });
+  });
+
+  describe('one operation at a time (Review Focus 2)', () => {
+    test('a second Ctrl+C while the first\'s `copy` is in flight posts no second `copy`; `busy()` is false after its reply and after a refusal', async () => {
+      const r = selectRig();
+      selected(r);
+      r.st.hold = true;
+      const first = r.actions.copy();
+      expect(r.actions.busy()).toBe(true);
+      await r.actions.copy();
+      // While busy, Q and the tool's clicks are ignored too.
+      r.actions.toggle();
+      const clicks = toolClicks(r.tool, r.actions);
+      clicks.mark(0, r.c(9, 9, 9));
+      expect([r.copies.length, r.tool.mode, r.tool.corner1]).toEqual([1, 'select', { x: 0, y: 60, z: 0 }]);
+      await r.releaseHeld();
+      await first;
+      expect([r.actions.busy(), r.shown]).toEqual([false, [['Copied 3 × 2 × 4', 1_500]]]);
+      // A refusal (an unloaded column) also ends it.
+      r.st.unloaded = true;
+      r.st.hold = true;
+      const second = r.actions.copy();
+      expect(r.actions.busy()).toBe(true);
+      await r.releaseHeld();
+      await second;
+      expect([r.actions.busy(), r.copies.length]).toEqual([false, 2]);
+    });
+  });
+
+  describe('the clipboard\'s `kv()` (SP5c spec §4.2, D26; rulings P12)', () => {
+    const fakeKv = (): KV & { closed: number } => {
+      const kv = createMemoryKV();
+      return Object.assign(kv, { closed: 0, close() { (this as { closed: number }).closed++; } });
+    };
+    test('a saved world\'s own connection, never opened or closed here', async () => {
+      const saved = fakeKv();
+      const open = vi.fn(() => Promise.resolve(fakeKv()));
+      const k = createClipboardKv({ saved, available: () => true, open });
+      expect(await k.kv()).toBe(saved);
+      k.close();
+      expect([open.mock.calls.length, saved.closed]).toEqual([0, 0]);
+    });
+    test('an unsaved world opens `wi10` once, at the first call, and closes it at `close`; without IndexedDB, null and no open', async () => {
+      const opened = fakeKv();
+      const open = vi.fn(() => Promise.resolve(opened));
+      const k = createClipboardKv({ saved: null, available: () => true, open });
+      expect(open).not.toHaveBeenCalled();
+      expect(await k.kv()).toBe(opened);
+      expect(await k.kv()).toBe(opened);
+      expect(open).toHaveBeenCalledTimes(1);
+      k.close();
+      await flushMicrotasks();
+      expect(opened.closed).toBe(1);
+      expect(await k.kv()).toBeNull();
+      const none = vi.fn(() => Promise.resolve(fakeKv()));
+      const n = createClipboardKv({ saved: null, available: () => false, open: none });
+      expect([await n.kv(), none.mock.calls.length]).toEqual([null, 0]);
+    });
+    test('a failed open answers null from then on, with no retry; a close before the open settles closes it when it does', async () => {
+      const open = vi.fn(() => Promise.reject(new Error('blocked')));
+      const k = createClipboardKv({ saved: null, available: () => true, open });
+      expect(await k.kv()).toBeNull();
+      expect(await k.kv()).toBeNull();
+      expect(open).toHaveBeenCalledTimes(1);
+      let resolve!: (kv: KV) => void;
+      const late = fakeKv();
+      const slow = createClipboardKv({ saved: null, available: () => true, open: () => new Promise<KV>((r) => { resolve = r; }) });
+      const pending = slow.kv();
+      slow.close();
+      resolve(late);
+      expect(await pending).toBeNull();
+      expect(late.closed).toBe(1);
+    });
+  });
+
+  test('the page wires it: the tool\'s clicks, `routeButton`, the aim\'s reach and frame step, Q and Ctrl+C, the clipboard\'s `kv()`, the teardown', () => {
+    const s = src();
+    expect(s).toMatch(/const tool = createSelectTool\(\);/);
+    expect(s).toMatch(/const clipboardKv = createClipboardKv\(\{ saved: saved\?\.kv \?\? null, available: idbAvailable, open: \(\) => openIdbKV\(SAVES_DB\) \}\);/);
+    expect(s).toMatch(/clipboard: createClipboardStore\(\{ kv: \(\) => clipboardKv\.kv\(\),/);
+    expect(s).toMatch(/origin: world\.origin,/);
+    expect(s).toMatch(/stopRepeat: \(\) => holdRepeat\.stop\(\),/);
+    expect(s).toMatch(/release: \(\) => clipboardKv\.close\(\),/);
+    expect(s).toMatch(/teardown\.push\(\(\) => selectActions\.dispose\(\)\);/);
+    expect(s).toMatch(/case 'selectTool': case 'copy': selectToolAction\(a, selectActions\); break;/);
+    expect(s).toMatch(/tool: toolClicks\(tool, selectActions\),/);
+    expect(s).toMatch(/onButton: routeButton\(\{ toolOn: \(\) => tool\.mode !== 'off', clicks, hold: holdRepeat, now: nowS, clickTime: \(\) => performance\.now\(\) \}\),/);
+    expect(s).toMatch(/reach: \(\) => aimReach\(tool, fly\), selection: selectActions,/);
   });
 });

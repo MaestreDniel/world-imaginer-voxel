@@ -16,6 +16,9 @@
  * page's aim (the DDA, the hold repeat's tick, the queued clicks, the outline through the real `Selection` at a fixed
  * target) and the build HUD's refresh over the hotbar, flying and walking on a Published stone floor (the walk step).
  * SP5c's volume box (spec §6.1, D3) is pinned on its own: its `set` writes both lines' matrices and colours in place.
+ * SP5c's selection tool (spec §1.2, §1.3, §10.5) is in the page's aim from SP5a's tests on, as the page wires it (the
+ * tool's clicks, its reach, `createSelectActions` as the aim's `selection`), off until its own test turns it on with
+ * both corners set: then the frame step writes the box and the label only when the tool's state changes.
  *
  * This measures allocation, not retention (the plan's spec correction to §8.5): `terrainHeap.test.ts` runs `gc()`
  * twice before every reading, which collects the short-lived per-call objects D25 bans. Here, after a double `gc()`,
@@ -83,7 +86,11 @@ import { createMapOverlay, type MapOverlay } from '../../src/ui/world/mapOverlay
 import { createModifyMode, createModifySwitch } from '../../src/ui/world/modifyMode';
 import { createPlaces, PLACE_COLOURS } from '../../src/ui/world/places';
 import { AUTOSAVE_MS } from '../../src/ui/world/autosave';
-import { createAim, createClickQueue, createPageAutosave, newWorldRecord, type Aim } from '../../src/ui/world/worldPage';
+import {
+  NO_GHOST, aimReach, createAim, createClickQueue, createPageAutosave, createSelectActions, newWorldRecord, pageKeyName, toolClicks, type Aim,
+} from '../../src/ui/world/worldPage';
+import { createClipboardStore } from '../../src/ui/world/clipboardStore';
+import { createSelectTool, type SelectTool } from '../../src/ui/world/selectTool';
 import { STONE } from '../../src/world/blocks/index';
 import { createStore } from '../../src/world/store/store';
 import { installDom } from './fixtures/domShim';
@@ -406,6 +413,10 @@ interface AtRest {
   readonly hotbar: ReturnType<typeof createHotbar>;
   /** Edits the click queue posted (none at rest). */
   posts(): number;
+  /** The selection tool (off until SP5c's test), its volume box, and its writes of the box and the label. */
+  readonly tool: SelectTool;
+  readonly volumeBox: ReturnType<typeof createVolumeBox>;
+  toolWrites(): { boxes: number; labels: number };
   /** The map's session (the apply control's). */
   readonly session: WorldSession;
   /** Routes the apply control's `beforeApply` through `gate` (a saved world's modification mode), or back to always true (null). */
@@ -568,7 +579,36 @@ async function buildAtRest(): Promise<AtRest> {
   const selection = createSelection();
   const hotbar = createHotbar(null);
   let posts = 0;
-  const clicks = createClickQueue({ post: () => { posts++; }, hotbar, fly, walk, editable: () => true });
+  // SP5c's selection tool as the page wires it (spec §1.2, §1.3): the actions over no-op stores and the real volume box,
+  // the tool's clicks in the queue, and the actions as the aim's `selection`; off until SP5c's test.
+  const tool = createSelectTool();
+  const volumeBox = createVolumeBox();
+  const toolWrites = { boxes: 0, labels: 0 };
+  const selectActions = createSelectActions({
+    tool,
+    sim: { copy: () => new Promise<never>(() => {}) },
+    editState: () => 0,
+    clipboard: createClipboardStore({ kv: () => Promise.resolve(null), notices: { show() {} } }),
+    actionPost: () => new Promise<never>(() => {}),
+    notices: { show() {} },
+    keyName: pageKeyName,
+    view: {
+      setSelectionBox: (x0, y0, z0, x1, y1, z1, c) => {
+        toolWrites.boxes++;
+        volumeBox.set(x0, y0, z0, x1, y1, z1, c);
+      },
+      hideSelectionBox: () => {
+        toolWrites.boxes++;
+        volumeBox.hide();
+      },
+      setSelectLabel: () => { toolWrites.labels++; },
+    },
+    ghost: NO_GHOST,
+    origin,
+    body: () => ({ minX: 0, minY: 0, minZ: 0, maxX: 0, maxY: 0, maxZ: 0 }),
+    stopRepeat() {},
+  });
+  const clicks = createClickQueue({ post: () => { posts++; }, hotbar, fly, walk, editable: () => true, tool: toolClicks(tool, selectActions) });
   const holdRepeat = createHoldRepeat({ enabled: () => true, pending: () => false, queue: (b) => clicks.push(b) });
   const outlined: Pick<WorldRenderer, 'origin' | 'setOutline' | 'hideOutline'> = {
     origin,
@@ -577,6 +617,7 @@ async function buildAtRest(): Promise<AtRest> {
   };
   const pageAim = createAim({
     fly, world: outlined, locked: () => true, hud: true, clicks, repeat: { hold: holdRepeat, now: () => clockNow / 1000 },
+    reach: () => aimReach(tool, fly), selection: selectActions,
   });
   const buildHud = mountBuildHud(app as unknown as HTMLElement, { hotbar, hud: true, locked: () => true });
   let sp5aOn = false;
@@ -636,6 +677,9 @@ async function buildAtRest(): Promise<AtRest> {
     selection,
     hotbar,
     posts: () => posts,
+    tool,
+    volumeBox,
+    toolWrites: () => ({ ...toolWrites }),
     session,
     setBeforeApply(g) { gate = g; },
     sp5a(mode) {
@@ -900,6 +944,30 @@ describe('zero allocation at rest (SP4b spec §3.10, D25)', () => {
       expect([f.fly.x, f.fly.z]).toEqual([8.5, 8.5]);
       expect(f.fly.y).toBeCloseTo(f.walk.y + EYE, 12);
     });
+  }, TIMEOUT_MS);
+
+  test(`${N} frame steps at rest with the selection box shown (both corners set, the aim fixed) grow the heap by less than the boxing budget of 256 B per tick (SP5c spec §1.3, §6.1, §10.5)`, async () => {
+    const f = await atRest();
+    f.sp5a('walk');
+    // Q, then the two corners around the aimed floor: the box written once at the next frame, then never at rest.
+    f.tool.toggle();
+    const at = { x: f.aim.hit.x, y: f.aim.hit.y, z: f.aim.hit.z };
+    f.tool.mark(0, { x: at.x - 3, y: at.y - 2, z: at.z - 4 });
+    f.tool.mark(2, { x: at.x + 5, y: at.y, z: at.z + 1 });
+    try {
+      for (let i = 0; i < FRAME_WARM_UP; i++) f.tick();
+      expect(f.volumeBox.object.visible).toBe(true);
+      const writes = f.toolWrites();
+      expectSp5aAtRest(f, () => {
+        expect([f.fly.mode, f.walk.onGround, f.tool.mode]).toEqual(['walk', true, 'select']);
+      });
+      expect(f.toolWrites()).toEqual(writes);
+      expect(f.volumeBox.object.visible).toBe(true);
+    } finally {
+      f.tool.toggle();
+      f.tick();
+    }
+    expect(f.volumeBox.object.visible).toBe(false);
   }, TIMEOUT_MS);
 
   test(`${N} frame steps at rest in a saved world (autosave armed, its timer not firing) grow the heap by less than the boxing budget of 256 B per tick (SP5b spec §3.2, SP4b D25)`, async () => {
