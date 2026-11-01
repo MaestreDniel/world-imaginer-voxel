@@ -130,8 +130,11 @@ function placedState(slot: { readonly type: string; readonly pinned: Readonly<Re
   return REGISTRY.stateOf(type, slot.pinned);
 }
 
-/** True when the cell (x, y, z) and the body overlap with positive volume (a shared face is not an overlap). */
-function cellIntersects(x: number, y: number, z: number, b: BodyBox): boolean {
+/**
+ * True when the cell (x, y, z) and the body overlap with positive volume (a shared face is not an overlap). Also the
+ * selection tool's body rule for a paste (SP5c `pasteBatch.ts`'s `bodyHits`).
+ */
+export function cellIntersects(x: number, y: number, z: number, b: BodyBox): boolean {
   return b.minX < x + 1 && b.maxX > x && b.minY < y + 1 && b.maxY > y && b.minZ < z + 1 && b.maxZ > z;
 }
 

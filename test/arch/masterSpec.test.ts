@@ -1651,6 +1651,7 @@ describe('master spec amendments (SP5c §13)', () => {
     [/^\s+ui\/world\/\* /, 'selectTool.ts clipboard.ts clipboardStore.ts pasteBatch.ts pasteBlocks.ts (SP5c)', 'src/ui/world/pasteBlocks.ts'],
     [/^\s+persist\/kv\.ts /, 'clipboard.ts (SP5c)', 'src/persist/clipboard.ts'],
     [/^\s+ui\/world\/\* /, 'selectTool.ts clipboard.ts clipboardStore.ts pasteBatch.ts pasteBlocks.ts (SP5c)', 'src/ui/world/clipboardStore.ts'],
+    [/^\s+ui\/world\/\* /, 'selectTool.ts clipboard.ts clipboardStore.ts pasteBatch.ts pasteBlocks.ts (SP5c)', 'src/ui/world/pasteBatch.ts'],
   ];
 
   test('§1 names each SP5c module in its entry, which exists', () => {
