@@ -1,8 +1,10 @@
 /**
  * IdbKV: the KV over IndexedDB (SP5b spec §2.1, D16, D17; master §1's IStorage adapter), the only `indexedDB` user
  * (`test/arch/rules/banned.ts`). It runs in the sim worker and, for the worlds menu and the selection tool's clipboard
- * (`meta['clipboard']`, SP5c spec §4.2, D26), on the main thread: one connection per thread. Version 1's upgrade
- * creates D16's five stores with out-of-line keys. `read` is one readonly transaction (`get`, `getAll` + `getAllKeys`
+ * (`meta['clipboard']`, SP5c spec §4.2, D26), on the main thread: one connection per thread. The upgrade creates every
+ * store the database lacks, with out-of-line keys: D16's five at version 1, and from version 1 to 2 `historySteps`
+ * alone (SP5c spec §5, D28's lever 3), keeping every SP5b store and record (a v1 `history` record, its steps inline,
+ * still reads; the first flush that changes the history writes it in v2's form). `read` is one readonly transaction (`get`, `getAll` + `getAllKeys`
  * zipped, `count`); `write` is one readwrite transaction over the batch. Both span every store, so transactions run in
  * the order they were issued, as `MemoryKV`'s do. Durability is the browser's default.
  * - A synchronous throw while a batch is issued (`DataCloneError` from `put`'s clone, `DataError` from a bad key; neither
@@ -17,8 +19,8 @@
  */
 import { KvError, STORES, type Key, type KeyRange, type KV, type KvEvent, type ReadRequest, type WriteOp, type WriteResult } from './kv';
 
-/** `wi10`'s version (D16); SP8c's `packs` and SP10's `presets` bump it. */
-const VERSION = 1;
+/** `wi10`'s version (D16): 2 adds `historySteps` (SP5c spec §5, D28's lever 3); SP8c's `packs` and SP10's `presets` bump it again. */
+export const VERSION = 2;
 
 const COMPLETE: WriteResult = { status: 'complete', errorName: null };
 const CLOSED: WriteResult = { status: 'closed', errorName: null };
@@ -155,7 +157,7 @@ export function idbAvailable(): boolean {
   }
 }
 
-/** Opens `name` at version 1 (the global `indexedDB` unless `factory` is given); rejects with a `KvError` when it cannot. */
+/** Opens `name` at `VERSION` (the global `indexedDB` unless `factory` is given); rejects with a `KvError` when it cannot. */
 export function openIdbKV(name: string, factory?: IDBFactory, onBlocked?: () => void): Promise<KV> {
   return new Promise((resolve, reject) => {
     if (factory === undefined && typeof indexedDB === 'undefined') throw new KvError('NotSupportedError', 'IndexedDB is not available');

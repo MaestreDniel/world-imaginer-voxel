@@ -43,7 +43,7 @@ import { isLayerId, type LayerId } from '../gen/map/layers';
 import type { SplineLeaf } from '../metrics/splineStats';
 import { MAX_COPY_SIDE, MAX_STEP_EDITS, type Edit, type EditRefusal } from '../sim/edits';
 import { payloadProblem, type ColumnMeshPayload } from '../mesh/column';
-import type { HistoryRecord, StateRecord, WorldRecord } from '../persist/saves';
+import type { HistoryWrite, StateRecord, WorldRecord } from '../persist/saves';
 import { REGISTRY } from '../world/blocks/index';
 import type { ColumnDiff, ColumnView } from '../world/store/api';
 import { COLUMN_TABLE_BYTES } from '../world/store/columnTable';
@@ -685,68 +685,22 @@ export interface DiffRequestMsg { readonly type: 'diff'; readonly id: number; re
  * then answers `loaded`. `flushSeq` and `updated` are the stored state's, `genKey` the world record's 16 hex digits (the
  * header genKey of the columns the sim flushes until a `record` replaces it). With `rewrite` (a stored table that differs
  * from today's) the sim writes `worlds` ← `rewrite.world` and, when the stored table is not a prefix of today's, every
- * column re-encoded under today's ids and `history` ← `rewrite.history`, in one transaction before answering.
+ * column re-encoded under today's ids and the history ← `rewrite.history` (a whole write: its index and every step,
+ * SP5c spec §5), in one transaction before answering.
  */
 export interface LoadMsg {
   readonly type: 'load'; readonly id: number; readonly db: string; readonly worldId: string; readonly flushSeq: number;
   readonly genKey: string; readonly updated: number; readonly stateTable: readonly string[];
-  readonly rewrite: { readonly world: WorldRecord; readonly history: HistoryRecord | null } | null;
+  readonly rewrite: { readonly world: WorldRecord; readonly history: HistoryWrite | null } | null;
 }
 /**
  * A save of the open world (SP5b spec §3.2, D18): the sim writes its dirty columns, `state` (its `flushSeq` the sim's:
- * the last committed + 1), `history` when given and a pending `record`, in one transaction, and answers `flushed`. The
- * history comes whole or as its change against the base (`HistoryChange`), which the sim resolves on arrival.
+ * the last committed + 1), the history when given and a pending `record`, in one transaction, and answers `flushed`. The
+ * history is a `HistoryWrite` (SP5c spec §5, D28's lever 3): its index and only the steps whose records the page does
+ * not know to be stored, so a flush after a large step or after the open carries no step already saved.
  */
 export interface FlushMsg {
-  readonly type: 'flush'; readonly id: number; readonly state: StateRecord; readonly history: HistoryRecord | HistoryChange | null;
-}
-/** One step of a `history` record's side. */
-type HistoryStep = HistoryRecord['done'][number];
-/** One side of a `HistoryChange`: the base side's steps `from` … `from + keep − 1`, then `add`. */
-export interface HistorySideChange { readonly from: number; readonly keep: number; readonly add: readonly HistoryStep[] }
-/**
- * A `flush`'s history as its change against the base (SP5b spec §3.3, D28's third lever): the history the last `flush`
- * that carried one resolved to, which the client and the sim both keep (the sim's messages arrive in order). An autosave
- * tick then posts the steps recorded since, not the whole history.
- */
-export interface HistoryChange { readonly worldId: string; readonly done: HistorySideChange; readonly undone: HistorySideChange }
-
-/** Whether a flush's history is a change (its sides are runs, not arrays of steps). */
-export const isHistoryChange = (h: HistoryRecord | HistoryChange): h is HistoryChange => isObj(h.done);
-
-/** `next`'s side against `base`'s: the longest run of `base`'s steps (by identity) that `next` starts with, then the rest. */
-function sideChange(base: readonly HistoryStep[], next: readonly HistoryStep[]): HistorySideChange {
-  const from = next.length === 0 ? -1 : base.indexOf(next[0]!);
-  if (from < 0) return { from: 0, keep: 0, add: next.slice() };
-  let keep = 1;
-  while (keep < next.length && from + keep < base.length && base[from + keep] === next[keep]) keep++;
-  return { from, keep, add: next.slice(keep) };
-}
-
-/**
- * `next` to post against `base` (the client's side of D28's third lever): the change keeping each side's longest run of
- * `base`'s steps, matched by identity (the page's history records keep one object per step), or `next` itself when there
- * is no base or neither side keeps a step.
- */
-export function historyChange(base: HistoryRecord | null, next: HistoryRecord): HistoryRecord | HistoryChange {
-  if (base === null) return next;
-  const done = sideChange(base.done, next.done);
-  const undone = sideChange(base.undone, next.undone);
-  return done.keep + undone.keep === 0 ? next : { worldId: next.worldId, done, undone };
-}
-
-/**
- * The record a flush's history resolves to over `base` (the sim's side): a whole record as it is; a change, each side's
- * kept run of `base`'s steps then its added ones, or null when it does not fit `base` (none, or a run past a side's end).
- */
-export function resolveHistory(base: HistoryRecord | null, h: HistoryRecord | HistoryChange): HistoryRecord | null {
-  if (!isHistoryChange(h)) return h;
-  if (base === null) return null;
-  const side = (b: readonly HistoryStep[], c: HistorySideChange): HistoryStep[] | null =>
-    c.from + c.keep > b.length ? null : [...b.slice(c.from, c.from + c.keep), ...c.add];
-  const done = side(base.done, h.done);
-  const undone = side(base.undone, h.undone);
-  return done === null || undone === null ? null : { worldId: h.worldId, done, undone };
+  readonly type: 'flush'; readonly id: number; readonly state: StateRecord; readonly history: HistoryWrite | null;
 }
 /**
  * The open world's changed record (SP5b spec §3.1, §3.6): after an Apply or the older-generator open. No reply: the next
@@ -755,14 +709,15 @@ export function resolveHistory(base: HistoryRecord | null, h: HistoryRecord | Hi
 export interface RecordMsg { readonly type: 'record'; readonly world: WorldRecord }
 /**
  * The automatic backup's copy request (SP5b spec §3.6, D11, D26): in one transaction the sim writes the pending flush
- * (its dirty columns, with `state` and `history`, which is always the whole record: the sim keeps none of its own) and
+ * (its dirty columns, with `state` and `history`, which is always a whole write, every step with its record: the sim
+ * keeps none of its own) and
  * then the copy under `newId`: `newWorld` (the page's kept record with the copy's id, name and `backupOf`), `state` and
  * `history` under the new id, `state.updated` the original's last committed one, and every column of the DiffStore. A
  * backup arriving while a flush is in flight waits like a flush, absorbing a queued one. Answered `backedUp`.
  */
 export interface BackupMsg {
   readonly type: 'backup'; readonly id: number; readonly newWorld: WorldRecord; readonly newId: string;
-  readonly state: StateRecord; readonly history: HistoryRecord;
+  readonly state: StateRecord; readonly history: HistoryWrite;
 }
 /**
  * A read of the box of w × h × d voxels from (x0, y0, z0) (SP5c spec §3.3, D22), answered `copied`: integers, each size
@@ -870,45 +825,57 @@ const packedOk = (p: unknown): boolean => {
 };
 
 const isGenKeyHex = (v: unknown): v is string => typeof v === 'string' && /^[0-9a-f]{16}$/.test(v);
+/** A step id of a `HistoryWrite`: an integer 0 … 2^32 − 1 (`STEP_ID_LIMIT`, so a world's steps lie in `worldRange`). */
+const isStepId = (v: unknown): boolean => isInt(v) && v >= 0 && v < 2 ** 32;
+/**
+ * A `HistoryWrite` (SP5c spec §5, D28's lever 3): a string `worldId`, `done` and `undone` arrays of step ids with no id
+ * twice, and `steps` an array of `{id, edits}` with an id the index names and an `edits` array (the records were built
+ * and normalised on the main thread); `whole` also asks for a step for every id (a backup's, a rewrite's).
+ */
+const historyWriteOk = (h: unknown, whole: boolean): boolean => {
+  if (!isObj(h) || typeof h['worldId'] !== 'string' || !Array.isArray(h['done']) || !Array.isArray(h['undone']) || !Array.isArray(h['steps'])) return false;
+  const ids = new Set<unknown>();
+  for (const id of [...(h['done'] as unknown[]), ...(h['undone'] as unknown[])]) {
+    if (!isStepId(id) || ids.has(id)) return false;
+    ids.add(id);
+  }
+  const carried = new Set<unknown>();
+  for (const s of h['steps'] as unknown[]) {
+    if (!isObj(s) || !ids.has(s['id']) || carried.has(s['id']) || !Array.isArray(s['edits'])) return false;
+    carried.add(s['id']);
+  }
+  return !whole || carried.size === ids.size;
+};
+
 /**
  * A `load`'s scalars, its stored table an array of strings, and `rewrite` null or `{world, history}` with a string
- * `world.id` and a null or object `history` (the records were normalised on the main thread).
+ * `world.id` and a null or whole `HistoryWrite` history.
  */
 const loadOk = (m: Record<string, unknown>): boolean => {
   const rw = m['rewrite'];
   return isInt(m['id']) && typeof m['db'] === 'string' && typeof m['worldId'] === 'string' && isInt(m['flushSeq']) && m['flushSeq'] >= 0
     && isGenKeyHex(m['genKey']) && isFiniteNum(m['updated']) && isStrings(m['stateTable'])
-    && (rw === null || (isObj(rw) && isObj(rw['world']) && typeof rw['world']['id'] === 'string' && (rw['history'] === null || isObj(rw['history']))));
+    && (rw === null || (isObj(rw) && isObj(rw['world']) && typeof rw['world']['id'] === 'string' && (rw['history'] === null || historyWriteOk(rw['history'], true))));
 };
 
-/** A `HistorySideChange`: `from` and `keep` non-negative integers, `add` an array of objects. */
-const sideChangeOk = (c: unknown): boolean =>
-  isObj(c) && isInt(c['from']) && c['from'] >= 0 && isInt(c['keep']) && c['keep'] >= 0 && Array.isArray(c['add']) && c['add'].every(isObj);
-
-/**
- * A `flush`'s id, its state an object with a string `worldId` and a finite `updated`, and its history null, an object
- * (the records were built and normalised on the main thread) or, when its `done` is an object, a `HistoryChange` with a
- * string `worldId` and both sides well formed.
- */
+/** A `flush`'s id, its state an object with a string `worldId` and a finite `updated`, and its history null or a `HistoryWrite`. */
 const flushOk = (m: Record<string, unknown>): boolean => {
   const st = m['state'];
   const h = m['history'];
   return isInt(m['id']) && isObj(st) && typeof st['worldId'] === 'string' && isFiniteNum(st['updated'])
-    && (h === null || (isObj(h) && (!isObj(h['done']) || (typeof h['worldId'] === 'string' && sideChangeOk(h['done']) && sideChangeOk(h['undone'])))));
+    && (h === null || historyWriteOk(h, false));
 };
 
 /**
  * A `backup`'s id, its `newWorld` an object whose string id is `newId` with a 16-hex-digit genKey and a string
- * `backupOf`, its state as a flush's, and its history a whole record (a string `worldId`, `done` and `undone` arrays),
- * never null nor a change.
+ * `backupOf`, its state as a flush's, and its history a whole `HistoryWrite` (a step for every id), never null.
  */
 const backupOk = (m: Record<string, unknown>): boolean => {
   const w = m['newWorld'];
   const st = m['state'];
-  const h = m['history'];
   return isInt(m['id']) && typeof m['newId'] === 'string' && isObj(w) && w['id'] === m['newId'] && isGenKeyHex(w['genKey']) && typeof w['backupOf'] === 'string'
     && isObj(st) && typeof st['worldId'] === 'string' && isFiniteNum(st['updated'])
-    && isObj(h) && typeof h['worldId'] === 'string' && Array.isArray(h['done']) && Array.isArray(h['undone']);
+    && historyWriteOk(m['history'], true);
 };
 
 /** A box side of a `copy`: an integer 1 … `MAX_COPY_SIDE`. */

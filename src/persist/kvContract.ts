@@ -1,5 +1,5 @@
 /**
- * The KV contract suite (SP5b spec §6.3, §6.4, D27; the ninth case SP5c spec §10.7): the cases every KV adapter passes, run on `MemoryKV` by vitest
+ * The KV contract suite (SP5b spec §6.3, §6.4, D27; the ninth case SP5c spec §10.7, the tenth SP5c spec §5's `historySteps`): the cases every KV adapter passes, run on `MemoryKV` by vitest
  * (`test/unit/kv.test.ts`) and on `IdbKV` in Chrome and Firefox by `?selftest=1`. Framework-free: a case throws an
  * `Error` naming its first mismatch. Each case uses its own world ids (prefixed `kvc-`; a name's 'a' and 'b' stand for
  * the case's two ids) and deletes what it wrote, so the cases share one database.
@@ -288,6 +288,45 @@ export const KV_CONTRACT: readonly KvContractCase[] = [
         expectTyped('get meta: fluids', g.fluids, Uint8Array, fluids);
       } finally {
         await cleanUp(kv, [{ op: 'delete', store: 'meta', key: k }]);
+      }
+    },
+  },
+  {
+    // SP5c spec §5 (D28's lever 3, `wi10` v2): the history's steps, one record each under `[worldId, stepId]`; the open
+    // reads a world's range, and a flush deletes the ids its index no longer names by ranges between the live ones.
+    name: '`historySteps` holds each step under `[worldId, stepId]`: a `worldRange` read gives a\'s in id order and not b\'s; a `deleteRange` between two ids removes only the ids between',
+    async run(kv) {
+      const a = 'kvc-steps-a';
+      const b = 'kvc-steps-b';
+      const step = (x: number) => ({ edits: [{ x, y: 64, z: -3, before: 0xFFFFFFFF, after: 256 }] });
+      try {
+        await write(kv, 'puts', [
+          { op: 'put', store: 'historySteps', key: diffKey(a, 7), value: step(7) },
+          { op: 'put', store: 'historySteps', key: diffKey(b, 3), value: step(-3) },
+          { op: 'put', store: 'historySteps', key: diffKey(a, 2 ** 32 - 1), value: step(-1) },
+          { op: 'put', store: 'historySteps', key: diffKey(a, 0), value: step(0) },
+          { op: 'put', store: 'historySteps', key: diffKey(a, 3), value: step(3) },
+        ]);
+        const [all] = await kv.read([{ op: 'getAll', store: 'historySteps', range: worldRange(a) }]);
+        expectSame('getAll historySteps worldRange(a)', all, {
+          keys: [diffKey(a, 0), diffKey(a, 3), diffKey(a, 7), diffKey(a, 2 ** 32 - 1)],
+          values: [step(0), step(3), step(7), step(-1)],
+        });
+        await write(kv, 'deleteRange [a, 1] … [a, 7)', [{ op: 'deleteRange', store: 'historySteps', range: { lower: diffKey(a, 1), upper: diffKey(a, 7) } }]);
+        const [left, countB] = await kv.read([
+          { op: 'getAll', store: 'historySteps', range: worldRange(a) },
+          { op: 'count', store: 'historySteps', range: worldRange(b) },
+        ]);
+        expectSame('getAll historySteps worldRange(a) after the deleteRange', left, {
+          keys: [diffKey(a, 0), diffKey(a, 7), diffKey(a, 2 ** 32 - 1)],
+          values: [step(0), step(7), step(-1)],
+        });
+        expectSame('count historySteps worldRange(b)', countB, 1);
+      } finally {
+        await cleanUp(kv, [
+          { op: 'deleteRange', store: 'historySteps', range: worldRange(a) },
+          { op: 'deleteRange', store: 'historySteps', range: worldRange(b) },
+        ]);
       }
     },
   },

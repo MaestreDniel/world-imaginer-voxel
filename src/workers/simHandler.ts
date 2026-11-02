@@ -23,7 +23,7 @@
  * every `diffs` record of the world in one key-range read, decodes each (a record that fails is skipped and counted),
  * drops its fluid ticks (D21), remaps it to today's ids when the stored table is not today's or a prefix of it (an
  * unknown state → air, counted), and, with `rewrite`, writes in one transaction `worlds` and, for such a table, every
- * column re-encoded under today's ids (each keeping its header genKey), the history, and the deletes of the skipped
+ * column re-encoded under today's ids (each keeping its header genKey), the history (a whole write), and the deletes of the skipped
  * records (still under the old table's ids); only then does it fill the DiffStore (`setColumn`, nothing dirty) and post
  * `loaded`. A KV open or read failure, or a rewrite write that does not complete (ruling P3), is an INTERNAL `error`,
  * with nothing in the DiffStore. From a `load`'s arrival until it settles every later message waits, in arrival order;
@@ -31,10 +31,11 @@
  *
  * `flush` (spec §3.2, D18): with none in flight its synchronous part (`flushSyncPart`) runs at once: the dirty-column
  * set is taken, each column encoded under the header genKey when it holds entries (else its key deleted), and `state`
- * with `flushSeq` = the last committed + 1, the history when given and a pending `record` go in one `write`. A history
- * posted as a change is resolved on arrival against the last flushed one (`resolveHistory`; one that does not fit is
- * BAD_MESSAGE), so everything below sees whole records. One flush
- * is in flight at a time: a later one waits, and a newer one replaces it (its state is newer; the waiting history is
+ * with `flushSeq` = the last committed + 1, the history when given and a pending `record` go in one `write`. The history
+ * is the page's `HistoryWrite` (SP5c spec §5, D28's lever 3): `historyOps` puts the steps it carries (those the page
+ * does not know to be stored) under `[worldId, id]` in `historySteps`, deletes every other id's record and puts the
+ * index in `history`, so the sim keeps no history of its own and never rewrites a stored step. One flush is in flight
+ * at a time: a later one waits, and a newer one replaces it (its state is newer; the waiting history is
  * kept unless the newer one carries one), answering every replaced id with its outcome (ruling P4). On `complete` the
  * flush's `flushSeq` and `updated` become the last committed; on `abort` or `closed` the taken columns are marked dirty
  * again and the history and the `record` stay pending unless newer ones arrived. An edit handled while the write is out
@@ -50,21 +51,22 @@
  * flush part's); its `flushSeq` is the last committed + 1 when it runs. On `complete` the flush part commits as a
  * flush's, and the absorbed flushes are answered with its outcome (ruling P4); on `abort` or `closed` the flush part is
  * merged back as an aborted flush's, the copy is not written, and `backedUp` names the KV's error (`'closed'` for a
- * closed connection). The backup's history is not the base of a later flush's change: only a `flush` moves it.
+ * closed connection). The backup's history is a whole write (every step's record), stored under the world's id and
+ * under `newId`.
  */
 import { colKeyCx, colKeyCz } from '../core/coords';
 import { parseHex64, type Hash64 } from '../core/hash';
 import { decodeColumnDiff, encodeColumnDiff, encodeColumnSections, type DecodedColumn } from '../persist/diffCodec';
 import { worldRange, type KV, type WriteOp, type WriteResult } from '../persist/kv';
 import { createMemoryKV, type MemoryKV } from '../persist/memory';
-import { copyOps, flushOps, remapDiff, remapOf, tableRelation, type HistoryRecord, type StateRecord, type WorldRecord } from '../persist/saves';
+import { copyOps, flushOps, historyOps, remapDiff, remapOf, tableRelation, type HistoryWrite, type StateRecord, type WorldRecord } from '../persist/saves';
 import { createDiffStore, type DiffStore } from '../sim/diffStore';
 import { applyEdits, createEditScratch, readDiff, readVolume, type EditScratch } from '../sim/edits';
 import type { ColumnDiff } from '../world/store/api';
 import { R_STORE_ID, SIM_THREAD } from '../world/store/reclaim';
 import { attachStore, StoreCorrupt, type VoxelStore } from '../world/store/store';
 import {
-  parseToSim, resolveHistory, unpackEdits, type BackedUpMsg, type BackupMsg, type ErrorCode, type FlushedMsg, type FlushMsg, type FromSim, type LoadMsg, type RecordMsg, type ToSim,
+  parseToSim, unpackEdits, type BackedUpMsg, type BackupMsg, type ErrorCode, type FlushedMsg, type FlushMsg, type FromSim, type LoadMsg, type RecordMsg, type ToSim,
 } from './protocol';
 
 /** The sim's limbo retry interval while entries are left (§2.1: it has no reply loop like the pool's). */
@@ -119,7 +121,7 @@ interface PendingBackup {
  */
 interface QueuedFlush {
   state: StateRecord;
-  history: HistoryRecord | null;
+  history: HistoryWrite | null;
   readonly waiters: Array<{ readonly id: number; readonly post: (r: SimReply) => void }>;
   backup: PendingBackup | null;
 }
@@ -131,7 +133,7 @@ interface QueuedFlush {
  * aborted write marks dirty again; `bytes` the encoded columns' total.
  */
 export function flushSyncPart(
-  diffs: DiffStore, worldId: string, genKey: Hash64, state: StateRecord, history: HistoryRecord | null, world: WorldRecord | null,
+  diffs: DiffStore, worldId: string, genKey: Hash64, state: StateRecord, history: HistoryWrite | null, world: WorldRecord | null,
 ): { ops: WriteOp[]; taken: Float64Array; bytes: number } {
   const taken = diffs.takeDirty();
   const cols: Array<{ key: number; bytes: Uint8Array | null }> = [];
@@ -149,8 +151,8 @@ export function flushSyncPart(
 
 /**
  * The backup's copy (spec §3.6, D19): `newWorld`, the state under `newId` with `flushSeq` (the original's in the same
- * write) and `updated` (the original's last committed), the history under `newId`, and every column of the DiffStore
- * encoded under `genKey`.
+ * write) and `updated` (the original's last committed), the history under `newId` (its index and every step's record,
+ * SP5c spec §5), and every column of the DiffStore encoded under `genKey`.
  */
 function backupCopyOps(diffs: DiffStore, m: BackupMsg, genKey: Hash64, flushSeq: number, updated: number): WriteOp[] {
   const cols: Array<{ key: number; bytes: Uint8Array }> = [];
@@ -160,7 +162,7 @@ function backupCopyOps(diffs: DiffStore, m: BackupMsg, genKey: Hash64, flushSeq:
     if (b !== null) cols.push({ key, bytes: b });
   }
   const state: StateRecord = { ...m.state, worldId: m.newId, flushSeq, updated };
-  return copyOps(m.newWorld, state, { ...m.history, worldId: m.newId }, cols);
+  return copyOps(m.newWorld, state, m.history, cols);
 }
 
 /** A record decoded and remapped, waiting for the rewrite's write before it reaches the DiffStore. */
@@ -209,7 +211,7 @@ async function runLoad(m: LoadMsg, o: SimHandlerOptions, diffs: DiffStore): Prom
     const ops: WriteOp[] = [{ op: 'put', store: 'worlds', key: m.rewrite.world.id, value: m.rewrite.world }];
     if (relation === 'other') {
       for (const c of cols) ops.push({ op: 'put', store: 'diffs', key: [m.worldId, c.key], value: encodeColumnDiff(c.diff, c.genKey) });
-      if (m.rewrite.history !== null) ops.push({ op: 'put', store: 'history', key: m.worldId, value: m.rewrite.history });
+      if (m.rewrite.history !== null) ops.push(...historyOps(m.worldId, m.rewrite.history));
       // Still under the old table's ids, they would decode against the wrong table at the next open (D22).
       for (const key of skipped) ops.push({ op: 'delete', store: 'diffs', key: [m.worldId, key] });
     }
@@ -249,10 +251,8 @@ export function createSimHandler(o: SimHandlerOptions): SimHandler {
   let flushing = false;
   let queued: QueuedFlush | null = null;
   /** What the next flush writes besides its own: an aborted flush's history, and the latest `record` not yet committed. */
-  let pendingHistory: HistoryRecord | null = null;
+  let pendingHistory: HistoryWrite | null = null;
   let pendingRecord: WorldRecord | null = null;
-  /** The history the last `flush` that carried one resolved to: the base of the next one's change (D28's third lever). */
-  let historyBase: HistoryRecord | null = null;
   /** Posts `r`, latching the handler on its first `error` reply. */
   const send = (r: SimReply, post: (r: SimReply) => void): void => {
     if (r.msg.type === 'error' && failed === null) failed = `${r.msg.code}: ${r.msg.message}`;
@@ -263,7 +263,7 @@ export function createSimHandler(o: SimHandlerOptions): SimHandler {
    * Runs a flush's synchronous part, with `backup`'s copy after it when given, and issues its write; when it settles,
    * answers `waiters` with its outcome, then the backup, and runs the flush queued meanwhile.
    */
-  const runFlush = (w: OpenWorld, state: StateRecord, history: HistoryRecord | null, waiters: QueuedFlush['waiters'], backup: PendingBackup | null): void => {
+  const runFlush = (w: OpenWorld, state: StateRecord, history: HistoryWrite | null, waiters: QueuedFlush['waiters'], backup: PendingBackup | null): void => {
     const answer = (msg: FlushedMsg | null, e: string | null): void => {
       for (const x of waiters) send(msg !== null ? { msg: { ...msg, id: x.id }, transfer: [] } : err(x.id, 'INTERNAL', e!), x.post);
       if (backup === null) return;
@@ -277,7 +277,7 @@ export function createSimHandler(o: SimHandlerOptions): SimHandler {
     let syncMs: number;
     let columns: number;
     let bytes: number;
-    let hist: HistoryRecord | null;
+    let hist: HistoryWrite | null;
     let record: WorldRecord | null;
     const flushSeq = w.flushSeq + 1;
     const t0 = now();
@@ -336,11 +336,7 @@ export function createSimHandler(o: SimHandlerOptions): SimHandler {
     if (m.state.worldId !== world.worldId || (m.history !== null && m.history.worldId !== world.worldId)) {
       return send(err(m.id, 'BAD_MESSAGE', `a flush of another world than ${world.worldId}`), post);
     }
-    const history = m.history === null ? null : resolveHistory(historyBase, m.history);
-    if (m.history !== null && history === null) {
-      return send(err(m.id, 'BAD_MESSAGE', 'a history change that does not fit the last flushed history'), post);
-    }
-    if (history !== null) historyBase = history;
+    const history = m.history;
     if (!flushing) return runFlush(world, m.state, history, [{ id: m.id, post }], null);
     if (queued === null) queued = { state: m.state, history, waiters: [{ id: m.id, post }], backup: null };
     else {

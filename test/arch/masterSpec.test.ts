@@ -96,7 +96,8 @@
  * exception; at the exit, SP5c's "Received from SP5b" worded as delivered). §1 names each SP5c module in its entry,
  * which exists (`SP5C_MODULES`, its first row added with the first module). The paste parts' commit (`clipboard.metric.ts`,
  * SP5c §10.1, §13): §6.4's L3 and E1-E6 rows name the paste parts, which `THRESHOLDS` holds activeFrom SP5c on every
- * tier; §1's test entry names `metrics/clipboard.metric.ts`.
+ * tier; §1's test entry names `metrics/clipboard.metric.ts`. D28's lever 3 (Task 33): §2.7's `wi10` v2, its header and
+ * `history` line (moved from the SP5b describe) and its `historySteps` line.
  */
 import { existsSync, readdirSync, readFileSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
@@ -1502,10 +1503,9 @@ describe('master spec amendments (SP5b §9)', () => {
     const at = text.indexOf('### 2.7 ');
     const s27 = text.slice(at, text.indexOf('## 3. Generation', at));
     const lines = s27.split('\n');
-    expect(lines).toContain('**IndexedDB `wi10` v1** (five stores, split by how often they change; SP5b):');
+    // The header and the `history` line moved to the SP5c describe (SP5c spec §5: `wi10` v2's `historySteps`).
     expect(lines.some((l) => l.startsWith('- `worlds`: key `id`, `{id, name, seedText, seed: [lo, hi], profile, params, schemaVersion, paramsHash, generatorVersion, genKey, stateTable: string[], created, backupOf: string | null}`')), 'no `worlds` record line in §2.7').toBe(true);
     expect(lines.some((l) => l.startsWith('- `state`: key `worldId`, `{worldId, flushSeq, updated, player: {x, y, z, yaw, pitch, mode, speed} | null, time: {t, speedIndex}, hotbar: {v: 1, active, slots}, places: Place[]}`')), 'no `state` record line in §2.7').toBe(true);
-    expect(lines.some((l) => l.startsWith('- `history`: key `worldId`, `{worldId, done: Step[], undone: Step[]}`, each ≤ 100 steps')), 'no `history` record line in §2.7').toBe(true);
     expect(lines).toContain('- `diffs`: key `[worldId, colKey]`, `ColumnDiffV1` bytes;');
     // The `meta` line moved to the SP5c describe (SP5c spec §13: the clipboard).
     expect(s27).toContain('`packs` (resource-pack and sound-pack blobs plus manifests, with `kind: \'textures\'|\'sounds\'`) and `presets` are added by a `wi10` version bump when SP8c\'s sound packs and SP10\'s preset library need them (SP5b).');
@@ -1670,6 +1670,15 @@ describe('master spec amendments (SP5c §13)', () => {
       expect(entry, `§1's ${head} entry does not name ${token}`).toContain(token);
       expect(existsSync(`${ROOT_DIR}${file}`), `${file} does not exist`).toBe(true);
     }
+  });
+
+  test('§2.7\'s `wi10` v2: six stores, the `history` index of step ids and the `historySteps` records (SP5c spec §5, D14, D28\'s lever 3; the header and the `history` line moved from the SP5b describe)', () => {
+    const at = text.indexOf('### 2.7 ');
+    const lines = text.slice(at, text.indexOf('## 3. Generation', at)).split('\n');
+    expect(lines).toContain('**IndexedDB `wi10` v2** (six stores, split by how often they change; SP5b, and `historySteps` by SP5c\'s version bump, which keeps the other five and their records):');
+    expect(lines).toContain('- `history`: key `worldId`, `{worldId, done: stepId[], undone: stepId[]}`, each ≤ 100 steps (written only when it changed; v1\'s `{worldId, done: Step[], undone: Step[]}`, its steps inline, still reads, SP5c);');
+    expect(lines).toContain('- `historySteps`: key `[worldId, stepId]`, one history step `{edits}`, written once when the step is new and deleted when the history drops it, so a flush writes only the steps it adds (SP5c, its D28\'s lever 3).');
+    expect(lines).not.toContain('**IndexedDB `wi10` v1** (five stores, split by how often they change; SP5b):');
   });
 
   test('§2.7\'s `meta` line: the selection tool\'s clipboard, one per browser (SP5c spec §4.2, §13, D15; moved from the SP5b describe)', () => {

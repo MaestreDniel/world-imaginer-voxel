@@ -13,7 +13,7 @@ import { findSpawn } from '../../src/gen/column/spawn';
 import { createGenContext } from '../../src/gen/context';
 import { CLIPBOARD_KEY, decodeClipboard } from '../../src/persist/clipboard';
 import { createMemoryKV, type MemoryKV } from '../../src/persist/memory';
-import { createSaves, NO_VALUE, newState, normalizeHistory, todayStateTable, type HistoryRecord, type WorldRecord } from '../../src/persist/saves';
+import { createSaves, historyOps, NO_VALUE, newState, normalizeHistory, todayStateTable, wholeWrite, type HistoryRecord, type HistoryWrite, type WorldRecord } from '../../src/persist/saves';
 import { createDiffStore, NO_ENTRY } from '../../src/sim/diffStore';
 import { applyEdits, createEditScratch, readVolume, type Edit, type EditResult } from '../../src/sim/edits';
 import { DEFAULT_MAP_STATE, openMapSession } from '../../src/ui/map/mapState';
@@ -106,9 +106,11 @@ import { testRng } from '../harness/stats';
  * - **Recorded, not gated:** `.out/L3.paste.json` with each batch's `editMs`, `relightMs`, `subBatchMaxMs`,
  *   `limboMax` and each pool's byte length before and after in `.out/L3.paste.batches.json`; `.out/E3.paste.json` with
  *   the DiffStore's entries and the load's decode time after the pastes and, with a 65,536-edit history (two steps of
- *   32,768), the open's normalise-and-restore time (`normalizeHistory` and `restore`) and the first flush's main-thread
- *   clone, timed as `structuredClone` of the flush message the page's autosave builds (its state and whole history, as
- *   `simClient` sends the first flush after a load; the in-process sim clones nothing).
+ *   32,768, stored step by step as `wi10` v2 holds them, SP5c spec §5, D28's lever 3), the open's normalise-and-restore
+ *   time (`normalizeHistory` of the stored index and step records, then `restore`) and the first history-changing
+ *   flush's main-thread clone after the open (one step of one edit recorded), timed as `structuredClone` of the flush
+ *   message the page's autosave posts (its state and its history write, which carries only the new step; the in-process
+ *   sim clones nothing), with the steps that write carried.
  */
 const TIER = currentTier();
 const FAST = TIER === 'fast';
@@ -1109,7 +1111,7 @@ async function measureE3Paste(): Promise<{ values: Record<string, number>; probl
     problems.add('E3.paste: no backup to open');
   }
 
-  const big = measureBigHistory(problems);
+  const big = await measureBigHistory(problems);
   return {
     problems: problems.list,
     values: {
@@ -1121,23 +1123,28 @@ async function measureE3Paste(): Promise<{ values: Record<string, number>; probl
       bigHistoryEdits: big.edits,
       bigHistoryRestoreMs: round3(big.restoreMs),
       bigHistoryFirstFlushCloneMs: round3(big.cloneMs),
+      bigHistoryFirstFlushSteps: big.posted,
       seconds: round3((now() - t0) / 1000),
     },
   };
 }
 
 /**
- * With a 65,536-edit history (two steps of 32,768): the open's normalise-and-restore (`normalizeHistory` of the stored
- * record, then the block history's `restore`) and the first flush's main-thread clone (`structuredClone` of the flush
- * message the page's autosave builds: its state and its whole history).
+ * With a 65,536-edit history (two steps of 32,768) stored step by step (`historyOps` into a `MemoryKV`, read back as the
+ * page's open reads it): the open's normalise-and-restore (`normalizeHistory` of the stored index and step records, then
+ * the block history's `restore`) and the first history-changing flush after it (a one-edit step recorded): the
+ * main-thread clone (`structuredClone` of the flush message the page's autosave posts: its state and its history
+ * write) and the steps that write carried (SP5c spec §5, D28's lever 3: 1, the new step alone).
  */
-function measureBigHistory(problems: Problems): { edits: number; restoreMs: number; cloneMs: number } {
+async function measureBigHistory(problems: Problems): Promise<{ edits: number; restoreMs: number; cloneMs: number; posted: number }> {
   const step = (k: number): HistoryRecord['done'][number] => ({
     edits: Array.from({ length: 32_768 }, (_, i) => ({ x: (i & 31) + 64 * k, y: 70 + (i >> 10), z: (i >> 5) & 31, before: NO_VALUE, after: val(STONE) })),
   });
-  const stored: HistoryRecord = structuredClone({ worldId: 'big', done: [step(0), step(1)], undone: [] });
+  const kv = createMemoryKV();
+  await kv.write(historyOps('big', wholeWrite({ worldId: 'big', done: [step(0), step(1)], undone: [] })));
+  const read = await createSaves(kv).readOpen('big');
   const t0 = now();
-  const n = normalizeHistory(stored, 'big', null);
+  const n = normalizeHistory(read.history, 'big', null, read.steps);
   const history = createBlockHistory({
     post: () => Promise.resolve({ ok: false, why: 'failed' }), read: () => 0, pending: () => false, settled: () => Promise.resolve(), notices: { show() {} },
   });
@@ -1145,6 +1152,7 @@ function measureBigHistory(problems: Problems): { edits: number; restoreMs: numb
   const restoreMs = now() - t0;
   const edits = history.snapshot().done.reduce((a, s) => a + s.edits.length, 0);
   if (edits !== MAX_HISTORY_EDITS) problems.add(`E3.paste: the big history restored ${edits} edits (${MAX_HISTORY_EDITS} expected)`);
+  let posted: { state: unknown; history: HistoryWrite | null } | null = null;
   const autosave = createPageAutosave({
     worldId: 'big',
     fly: { x: 8.5, y: 120.25, z: 7.5, yaw: 0, pitch: 0, mode: 'fly', speed: 12 },
@@ -1153,7 +1161,13 @@ function measureBigHistory(problems: Problems): { edits: number; restoreMs: numb
     storedTime: null,
     hotbar: () => newState('big', STATE_BOUNDS).hotbar,
     blockHistory: history,
-    sim: { flush: () => Promise.reject(new Error('not posted')) },
+    historyIds: n.ids,
+    sim: {
+      flush: (state, h) => {
+        posted = { state, history: h };
+        return Promise.reject(new Error('not posted'));
+      },
+    },
     settled: () => Promise.resolve(),
     editsSince: () => 0,
     now: () => 1_700_000_000_000,
@@ -1161,12 +1175,20 @@ function measureBigHistory(problems: Problems): { edits: number; restoreMs: numb
     events: { on: () => () => {}, hidden: () => false },
     onResult() {},
   });
-  const built = autosave.build();
+  // A click after the open: one step of one edit (the oldest maximum step dropped to keep the total).
+  history.record({ edits: [{ x: 0, y: 200, z: 0, before: NO_VALUE, after: val(STONE) }] });
+  void autosave.flushNow().catch(() => {});
+  const sent = posted as { state: unknown; history: HistoryWrite | null } | null;
+  if (sent === null || sent.history === null) {
+    problems.add('E3.paste: the first flush after the big history\'s open posted no history');
+    autosave.dispose();
+    return { edits, restoreMs, cloneMs: Number.NaN, posted: -1 };
+  }
   const t1 = now();
-  structuredClone({ type: 'flush', id: 1, state: built.state, history: built.history });
+  structuredClone({ type: 'flush', id: 1, state: sent.state, history: sent.history });
   const cloneMs = now() - t1;
   autosave.dispose();
-  return { edits, restoreMs, cloneMs };
+  return { edits, restoreMs, cloneMs, posted: sent.history.steps.length };
 }
 
 // ---------------------------------------------------------------- E5.paste

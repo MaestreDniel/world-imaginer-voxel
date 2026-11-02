@@ -21,9 +21,9 @@ import { worldRange, type KV, type ReadRequest } from '../../src/persist/kv';
 import { CLIPBOARD_KEY, clipboardOps, encodeClipboard } from '../../src/persist/clipboard';
 import { createMemoryKV } from '../../src/persist/memory';
 import {
-  backupName, copyOps, createSaves, DEFAULT_SPEED, DEFAULT_T, exportFileName, flushOps, HISTORY_STEPS, loadParams, MAX_HISTORY_EDITS, MAX_NAME,
-  MAX_PLACES, newState, newWorldName, NO_VALUE, normalizeHistory, normalizeState, olderGenerator, openSaves, parseWorldRecord,
-  remapDiff, remapOf, remapValue, tableRelation, todayStateTable, type HistoryEdit, type HistoryRecord,
+  assembleHistory, backupName, copyOps, createSaves, createStepIds, DEFAULT_SPEED, DEFAULT_T, exportFileName, flushOps, HISTORY_STEPS, historyOps,
+  loadParams, MAX_HISTORY_EDITS, MAX_NAME, MAX_PLACES, newState, newWorldName, NO_VALUE, normalizeHistory, normalizeState, olderGenerator, openSaves,
+  parseWorldRecord, remapDiff, remapOf, remapValue, STEP_ID_LIMIT, tableRelation, todayStateTable, wholeWrite, writeRecord, type HistoryEdit, type HistoryRecord,
   type StateBounds, type StateRecord, type WorldRecord,
 } from '../../src/persist/saves';
 import { SPEED_MAX, SPEED_MIN } from '../../src/player/fly';
@@ -295,7 +295,7 @@ describe('normalizeHistory (§2.1)', () => {
   test('a well-formed history passes unchanged', () => {
     const raw = history([step(), step({ before: stone << 8 | 3, after: NO_VALUE })], [step({ x: -5 })]);
     const r = normalizeHistory(raw, WORLD, null);
-    expect(r).toEqual({ history: raw, reset: false, dropped: 0 });
+    expect(r).toMatchObject({ history: raw, reset: false, dropped: 0 });
   });
 
   test('a step with `y` 320, one with `x` 2^19, one with a state 4095 dropped and counted', () => {
@@ -374,8 +374,8 @@ describe('normalizeHistory (§2.1)', () => {
   });
 
   test('`normalizeHistory(undefined, …)` → empty with `reset` false; `normalizeHistory(7, …)` → empty with `reset` true', () => {
-    expect(normalizeHistory(undefined, WORLD, null)).toEqual({ history: { worldId: WORLD, done: [], undone: [] }, reset: false, dropped: 0 });
-    expect(normalizeHistory(7, WORLD, null)).toEqual({ history: { worldId: WORLD, done: [], undone: [] }, reset: true, dropped: 0 });
+    expect(normalizeHistory(undefined, WORLD, null)).toMatchObject({ history: { worldId: WORLD, done: [], undone: [] }, reset: false, dropped: 0 });
+    expect(normalizeHistory(7, WORLD, null)).toMatchObject({ history: { worldId: WORLD, done: [], undone: [] }, reset: true, dropped: 0 });
   });
 });
 
@@ -480,7 +480,7 @@ describe('saves over the KV (§1.2, §1.3, §2.4, E7)', () => {
 
   /** Every key of the KV, by store. */
   const allKeys = (kv: ReturnType<typeof createMemoryKV>) =>
-    (['worlds', 'state', 'history', 'diffs', 'meta'] as const).map((s) => [s, kv.dump(s).map(([k]) => k)]);
+    (['worlds', 'state', 'history', 'diffs', 'meta', 'historySteps'] as const).map((s) => [s, kv.dump(s).map(([k]) => k)]);
 
   test('`list` orders by `updated` descending, a never-saved world by `created` (its row\'s `updated` is `created`); ties by id', async () => {
     const kv = createMemoryKV();
@@ -522,8 +522,8 @@ describe('saves over the KV (§1.2, §1.3, §2.4, E7)', () => {
     const saves = createSaves(kv);
     expect(await saves.create(world('w'), state('w'))).toEqual(COMPLETE);
     expect(kv.opCount).toBe(2);
-    expect(await saves.readOpen('w')).toEqual({ world: world('w'), state: state('w'), history: undefined });
-    expect(await saves.readOpen('nope')).toEqual({ world: undefined, state: undefined, history: undefined });
+    expect(await saves.readOpen('w')).toEqual({ world: world('w'), state: state('w'), history: undefined, steps: new Map() });
+    expect(await saves.readOpen('nope')).toEqual({ world: undefined, state: undefined, history: undefined, steps: new Map() });
   });
 
   test('rename trims and cuts to 64; an empty name is refused', async () => {
@@ -575,7 +575,7 @@ describe('saves over the KV (§1.2, §1.3, §2.4, E7)', () => {
     expect(imported).not.toBeNull();
     expect(await saves.writeAll({ ...imported!, world: world('imp') })).toEqual(COMPLETE);
     expect(bytesOf(kv.dump('meta')), 'after an Import').toEqual(bytesOf(before));
-    expect(await kv.write(copyOps(world('copy', { backupOf: 'b' }), state('copy'), history('copy'), imported!.cols))).toEqual(COMPLETE);
+    expect(await kv.write(copyOps(world('copy', { backupOf: 'b' }), state('copy'), wholeWrite(history('copy')), imported!.cols))).toEqual(COMPLETE);
     expect(bytesOf(kv.dump('meta')), 'after a backup copy').toEqual(bytesOf(before));
     expect(kv.dump('meta')).toEqual(before);
   });
@@ -596,14 +596,15 @@ describe('saves over the KV (§1.2, §1.3, §2.4, E7)', () => {
 
   test('`flushOps` with a null column deletes its key', async () => {
     const kv = createMemoryKV();
-    await kv.write(flushOps('w', [{ key: 1, bytes: bytes(1) }, { key: 2, bytes: bytes(2) }], state('w', { flushSeq: 1 }), history('w'), world('w')));
+    await kv.write(flushOps('w', [{ key: 1, bytes: bytes(1) }, { key: 2, bytes: bytes(2) }], state('w', { flushSeq: 1 }), wholeWrite(history('w')), world('w')));
     const ops = flushOps('w', [{ key: 1, bytes: null }, { key: 3, bytes: bytes(3) }], state('w', { flushSeq: 2 }), null, null);
     expect(ops).toContainEqual({ op: 'delete', store: 'diffs', key: ['w', 1] });
-    expect(ops.some((o) => o.store === 'history' || o.store === 'worlds')).toBe(false);
+    expect(ops.some((o) => o.store === 'history' || o.store === 'historySteps' || o.store === 'worlds')).toBe(false);
     expect(await kv.write(ops)).toEqual(COMPLETE);
     expect(kv.dump('diffs')).toEqual([[['w', 2], bytes(2)], [['w', 3], bytes(3)]]);
     expect(kv.dump('state')).toEqual([['w', state('w', { flushSeq: 2 })]]);
-    expect(kv.dump('history')).toEqual([['w', history('w')]]);
+    expect(kv.dump('history')).toEqual([['w', { worldId: 'w', done: [0], undone: [] }]]);
+    expect(kv.dump('historySteps')).toEqual([[['w', 0], history('w').done[0]]]);
     expect(kv.dump('worlds')).toEqual([['w', world('w')]]);
     expect(worldRange('w')).toEqual({ lower: ['w', 0], upper: ['w', 2 ** 32] });
   });
@@ -638,6 +639,97 @@ describe('saves over the KV (§1.2, §1.3, §2.4, E7)', () => {
   test('`exportFileName(\'a/b:c é\')` → `a_b_c é.wiworld` (letters include non-ASCII letters)', () => {
     expect(exportFileName('a/b:c é')).toBe('a_b_c é.wiworld');
     expect(exportFileName('My-world_2 ¿?')).toBe('My-world_2 __.wiworld');
+  });
+});
+
+describe('the history step by step: `historySteps` (wi10 v2; SP5c spec §5, D28\'s lever 3)', () => {
+  const big = (x: number, n: number) => ({ edits: Array.from({ length: n }, (_, i) => edit({ x, y: 64 + (i % 200), z: i % 7 })) });
+  const COMPLETE = { status: 'complete', errorName: null };
+  /** World `id`'s `historySteps` records in the KV, by id. */
+  const stepsIn = (kv: ReturnType<typeof createMemoryKV>, id: string) =>
+    new Map(kv.dump('historySteps').flatMap(([k, v]) => (Array.isArray(k) && k[0] === id ? [[k[1] as number, v]] : [])));
+
+  test('a flush\'s ops put only the steps it carries, delete every id its index does not name, and put the index', async () => {
+    const kv = createMemoryKV();
+    const a = big(1, 3);
+    const b = big(2, 2);
+    const c = big(3, 1);
+    const ids = createStepIds(null);
+    const w1 = ids.write('w', [a, b], [], false);
+    expect(await kv.write(historyOps('w', w1))).toEqual(COMPLETE);
+    ids.committed(w1);
+    expect([...stepsIn(kv, 'w').keys()]).toEqual([0, 1]);
+    // An undo of b, then a new step c: recording clears the redo side, so b goes; a is not posted again.
+    const w2 = ids.write('w', [a, c], [], false);
+    expect(w2).toEqual({ worldId: 'w', done: [0, 2], undone: [], steps: [{ id: 2, edits: c.edits }] });
+    const ops = historyOps('w', w2);
+    expect(ops.filter((o) => o.op === 'put' && o.store === 'historySteps').map((o) => (o as { key: unknown }).key)).toEqual([['w', 2]]);
+    expect(ops.at(-1)).toEqual({ op: 'put', store: 'history', key: 'w', value: { worldId: 'w', done: [0, 2], undone: [] } });
+    expect(await kv.write(ops)).toEqual(COMPLETE);
+    expect(stepsIn(kv, 'w')).toEqual(new Map([[0, { edits: a.edits }], [2, { edits: c.edits }]]));
+    // Another world's steps are untouched by w's deletes.
+    expect(await kv.write(historyOps('v', wholeWrite({ worldId: 'v', done: [b], undone: [] })))).toEqual(COMPLETE);
+    expect(await kv.write(historyOps('w', ids.write('w', [], [], false)))).toEqual(COMPLETE);
+    expect(stepsIn(kv, 'w')).toEqual(new Map());
+    expect(stepsIn(kv, 'v')).toEqual(new Map([[0, { edits: b.edits }]]));
+    expect(kv.dump('history')).toEqual([['v', { worldId: 'v', done: [0], undone: [] }], ['w', { worldId: 'w', done: [], undone: [] }]]);
+  });
+
+  test('a step put that its index does not name is deleted in the same write; ids up to 2^32 − 1 lie in the world\'s range', async () => {
+    const kv = createMemoryKV();
+    const last = STEP_ID_LIMIT - 1;
+    const w = { worldId: 'w', done: [5, last], undone: [], steps: [{ id: 5, edits: [edit()] }, { id: 9, edits: [edit()] }, { id: last, edits: [edit()] }] };
+    expect(await kv.write(historyOps('w', w))).toEqual(COMPLETE);
+    expect([...stepsIn(kv, 'w').keys()]).toEqual([5, last]);
+    expect(await kv.read([{ op: 'count', store: 'historySteps', range: worldRange('w') }])).toEqual([2]);
+  });
+
+  test('the open: an index\'s ids read from the steps by id, kept with their ids and known stored; an id with no record, or named twice, is dropped and counted', () => {
+    const steps = new Map<number, unknown>([[3, step({ x: 3 })], [4, step({ x: 4 })], [8, step({ x: 8 })], [11, { edits: 'bad' }]]);
+    const r = normalizeHistory({ worldId: WORLD, done: [3, 4, 6, 4], undone: [8, 11] }, WORLD, null, steps);
+    expect(r.history).toEqual({ worldId: WORLD, done: [step({ x: 3 }), step({ x: 4 })], undone: [step({ x: 8 })] });
+    expect([r.dropped, r.reset]).toEqual([3, false]);
+    expect([...r.history.done, ...r.history.undone].map((s) => r.ids.of.get(s))).toEqual([3, 4, 8]);
+    expect([...r.ids.stored].sort((x, y) => x - y)).toEqual([3, 4, 8]);
+    // The next free id is past every stored record, also the dropped one's.
+    expect(r.ids.next).toBe(12);
+  });
+
+  test('a v1 `history` record (its steps inline) still opens: each step gets a fresh id, none known stored, so the first flush writes them all', () => {
+    const steps = new Map<number, unknown>([[2, step({ x: 9 })]]);
+    const r = normalizeHistory({ worldId: WORLD, done: [step({ x: 1 }), step({ x: 2 })], undone: [step({ x: 3 })] }, WORLD, null, steps);
+    expect(r.history.done).toEqual([step({ x: 1 }), step({ x: 2 })]);
+    expect([...r.history.done, ...r.history.undone].map((s) => r.ids.of.get(s))).toEqual([3, 4, 5]);
+    expect(r.ids.stored.size).toBe(0);
+    const w = createStepIds(r.ids).write(WORLD, r.history.done, r.history.undone, false);
+    expect(w.steps.map((s) => s.id)).toEqual([3, 4, 5]);
+  });
+
+  test('the caps apply to stored steps as to inline ones (D14): a step over MAX_STEP_EDITS and the oldest steps past MAX_HISTORY_EDITS are dropped', () => {
+    const steps = new Map<number, unknown>([[0, big(1, 32_769)], [1, big(2, 30_000)], [2, big(3, 30_000)], [3, big(4, 30_000)]]);
+    const r = normalizeHistory({ worldId: WORLD, done: [0, 1, 2], undone: [3] }, WORLD, null, steps);
+    expect(r.history.done.map((s) => r.ids.of.get(s))).toEqual([2]);
+    expect(r.history.undone.map((s) => r.ids.of.get(s))).toEqual([3]);
+    expect(r.dropped).toBe(2);
+    expect(MAX_HISTORY_EDITS).toBe(65_536);
+  });
+
+  test('`Saves`: `readOpen` reads the steps in the same read, `readAll` assembles them (Export\'s header unchanged), `writeAll` numbers them 0, 1, …', async () => {
+    const kv = createMemoryKV();
+    const saves = createSaves(kv);
+    const h: HistoryRecord = { worldId: 'w', done: [step({ x: 1 }), step({ x: 2 })], undone: [step({ x: 3 })] };
+    const ids = createStepIds(null);
+    const w = ids.write('w', h.done, h.undone, true);
+    expect(writeRecord(w)).toEqual(h);
+    expect(await kv.write([{ op: 'put', store: 'state', key: 'w', value: newState('w', BOUNDS) }, ...historyOps('w', w)])).toEqual(COMPLETE);
+    const read = await saves.readOpen('w');
+    expect(read.history).toEqual({ worldId: 'w', done: [0, 1], undone: [2] });
+    expect(read.steps).toEqual(new Map([[0, h.done[0]], [1, h.done[1]], [2, h.undone[0]]]));
+    expect(assembleHistory(read.history, read.steps)).toEqual(h);
+    // A v1 record assembles as it is; an id with no record is left out; no record at all is null.
+    expect(assembleHistory(h, new Map())).toEqual(h);
+    expect(assembleHistory({ worldId: 'w', done: [0, 7], undone: [] }, read.steps)).toEqual({ worldId: 'w', done: [h.done[0]], undone: [] });
+    expect(assembleHistory(undefined, read.steps)).toBeNull();
   });
 });
 

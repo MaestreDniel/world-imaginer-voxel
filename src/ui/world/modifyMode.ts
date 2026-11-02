@@ -30,7 +30,7 @@
 import type { WorldStage } from '../../engine/invalidation';
 import type { SessionSnapshot, WorldSession } from '../../engine/session';
 import type { SimClient } from '../../engine/simClient';
-import { backupName, type HistoryRecord, type StateRecord, type WorldRecord } from '../../persist/saves';
+import { backupName, type HistoryWrite, type StateRecord, type WorldRecord } from '../../persist/saves';
 import { el } from '../common/dom';
 import type { Notices } from '../common/notice';
 import type { MapTool } from '../map/mapTool';
@@ -71,8 +71,8 @@ export interface BackupDeps {
   kept(): WorldRecord;
   /** The applied draft's snapshot (at the open and each `onApplied`), which a failed copy loads back. */
   applied(): SessionSnapshot;
-  /** The state and the whole history now (the autosave's `build`). */
-  build(): { readonly state: StateRecord; readonly history: HistoryRecord };
+  /** The state and the whole history now, every step (the autosave's `build`). */
+  build(): { readonly state: StateRecord; readonly history: HistoryWrite };
   /** A new world id (`crypto.randomUUID()`). */
   newId(): string;
   /** Every saved world's name, which the copy's name avoids. */

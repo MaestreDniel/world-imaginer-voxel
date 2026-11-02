@@ -1,4 +1,5 @@
 import { describe, expect, test } from 'vitest';
+import { openIdbKV, VERSION } from '../../src/persist/idb';
 import { compareKeys, STORES, worldRange, type Key, type KV, type StoreName } from '../../src/persist/kv';
 import { KV_CONTRACT, runKvContract } from '../../src/persist/kvContract';
 import { createMemoryKV, type MemoryKV } from '../../src/persist/memory';
@@ -18,6 +19,7 @@ describe('the KV contract on MemoryKV (SP5b spec §6.3)', () => {
       '`count` by range',
       '`deleteRange(worldRange(\'a\'))` removes a\'s 3 keys and leaves b\'s 2',
       'a `Uint16Array` and a `Uint8Array` put in `meta` read back with their types and bytes',
+      '`historySteps` holds each step under `[worldId, stepId]`: a `worldRange` read gives a\'s in id order and not b\'s; a `deleteRange` between two ids removes only the ids between',
     ]);
   });
 
@@ -52,7 +54,7 @@ describe('the KV contract on MemoryKV (SP5b spec §6.3)', () => {
     const results = await runKvContract(async () => reversed());
     expect(results.map((r) => r.name)).toEqual(KV_CONTRACT.map((c) => c.name));
     const failed = results.filter((r) => !r.ok);
-    expect(failed.map((r) => r.name)).toEqual([KV_CONTRACT[1]!.name, KV_CONTRACT[2]!.name, KV_CONTRACT[7]!.name]);
+    expect(failed.map((r) => r.name)).toEqual([KV_CONTRACT[1]!.name, KV_CONTRACT[2]!.name, KV_CONTRACT[7]!.name, KV_CONTRACT[9]!.name]);
     for (const r of failed) expect(r.error).toMatch(/getAll/);
     expect(results.filter((r) => r.ok).every((r) => r.error === null)).toBe(true);
   });
@@ -214,7 +216,59 @@ describe('compareKeys (IndexedDB\'s key order)', () => {
     expect(outside.some(inside)).toBe(false);
   });
 
-  test('STORES are D16\'s five, in order', () => {
-    expect(STORES).toEqual(['worlds', 'state', 'history', 'diffs', 'meta']);
+  test('STORES are D16\'s five, in order, then wi10 v2\'s `historySteps` (SP5c spec §5, D28\'s lever 3)', () => {
+    expect(STORES).toEqual(['worlds', 'state', 'history', 'diffs', 'meta', 'historySteps']);
+  });
+});
+
+describe('`openIdbKV`\'s upgrade: `wi10` v2 adds `historySteps` (SP5c spec §5, D28\'s lever 3)', () => {
+  /**
+   * A fake IndexedDB factory over a database that holds `existing` at version `at`: `open` runs `onupgradeneeded` when
+   * asked for a later version, then `onsuccess`; it records every store created and every store deleted.
+   */
+  const fakeFactory = (existing: readonly string[], at: number) => {
+    const names = new Set(existing);
+    const created: string[] = [];
+    const deleted: string[] = [];
+    const opens: Array<[string, number]> = [];
+    const db = {
+      objectStoreNames: { contains: (n: string) => names.has(n) },
+      createObjectStore: (n: string) => { names.add(n); created.push(n); },
+      deleteObjectStore: (n: string) => { names.delete(n); deleted.push(n); },
+      close() {},
+      onclose: null,
+      onversionchange: null,
+    };
+    const factory = {
+      open(name: string, version: number) {
+        opens.push([name, version]);
+        const req: { result: typeof db; error: null; onupgradeneeded?: () => void; onsuccess?: () => void } = { result: db, error: null };
+        queueMicrotask(() => {
+          if (version > at) req.onupgradeneeded?.();
+          req.onsuccess?.();
+        });
+        return req;
+      },
+    };
+    return { factory: factory as unknown as IDBFactory, names, created, deleted, opens };
+  };
+
+  test('a v1 database (D16\'s five stores) opens at version 2 and gains `historySteps` alone, every SP5b store kept', async () => {
+    const f = fakeFactory(['worlds', 'state', 'history', 'diffs', 'meta'], 1);
+    const kv = await openIdbKV('wi10', f.factory);
+    expect(VERSION).toBe(2);
+    expect(f.opens).toEqual([['wi10', 2]]);
+    expect([f.created, f.deleted]).toEqual([['historySteps'], []]);
+    expect([...f.names]).toEqual([...STORES]);
+    kv.close();
+  });
+
+  test('a new database gets the six stores; one already at version 2 is not upgraded', async () => {
+    const fresh = fakeFactory([], 0);
+    (await openIdbKV('wi10-bench', fresh.factory)).close();
+    expect(fresh.created).toEqual([...STORES]);
+    const current = fakeFactory([...STORES], 2);
+    (await openIdbKV('wi10', current.factory)).close();
+    expect([current.created, current.deleted]).toEqual([[], []]);
   });
 });

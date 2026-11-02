@@ -64,7 +64,7 @@ import { GENERATOR_VERSION } from '../../src/core/constants';
 import type { KV, KvEvent } from '../../src/persist/kv';
 import { createMemoryKV, type MemoryKV } from '../../src/persist/memory';
 import {
-  createSaves, loadParams, newState, NO_VALUE, olderGenerator, parseWorldRecord, todayStateTable, type HistoryRecord, type HotbarRecord, type Place, type StateRecord, type WorldRecord,
+  createSaves, loadParams, newState, NO_VALUE, olderGenerator, parseWorldRecord, todayStateTable, writeRecord, type HistoryRecord, type HistoryWrite, type HotbarRecord, type Place, type StateRecord, type WorldRecord,
 } from '../../src/persist/saves';
 import {
   EDIT_FAILED_NOTICE, HISTORY_RESET_NOTICE, SAVED_EDIT_FAILED_NOTICE, STATE_RESET_NOTICE, countAccepted, createPageAutosave, hotbarStorage, lastFlush, leaveAfterSave,
@@ -3092,8 +3092,11 @@ describe('opening a saved world (SP5b spec §3.4 steps 2-3, D14, D22)', () => {
     expect(kept).toEqual({ ...record(), stateTable: todayStateTable() });
     // The sim reads the stored ids through the stored table and writes today's record and the remapped history (D22).
     expect(load.stateTable).toEqual(permuted());
-    expect(load.rewrite).toEqual({ world: kept, history: { worldId: ID, done: [{ edits: [{ x: 0, y: 64, z: 0, before: NO_VALUE, after: 2 << 8 }] }], undone: [] } });
-    expect(r.opened.history).toEqual(load.rewrite!.history);
+    // The history as a whole write (SP5c spec §5): every step under the id the page keeps for it, all stored by the rewrite.
+    expect(load.rewrite).toEqual({ world: kept, history: { worldId: ID, done: [0], undone: [], steps: [{ id: 0, edits: [{ x: 0, y: 64, z: 0, before: NO_VALUE, after: 2 << 8 }] }] } });
+    expect(r.opened.history).toEqual(writeRecord(load.rewrite!.history!));
+    expect(r.opened.historyIds.of.get(r.opened.history.done[0]!)).toBe(0);
+    expect([...r.opened.historyIds.stored]).toEqual([0]);
   });
 
   test('`openRequest`: an equal table → no rewrite; a prefix → today\'s record and no history; another → both', () => {
@@ -3106,7 +3109,7 @@ describe('opening a saved world (SP5b spec §3.4 steps 2-3, D14, D22)', () => {
     expect(prefix.load.rewrite).toEqual({ world: record(), history: null });
     expect(prefix.kept).toEqual(record());
     const other = openRequest('db', record({ stateTable: permuted() }), state, history);
-    expect(other.load.rewrite).toEqual({ world: record(), history });
+    expect(other.load.rewrite).toEqual({ world: record(), history: { ...history, steps: [] } });
     expect(other.load).toMatchObject({ db: 'db', worldId: ID, flushSeq: 2, updated: 5, genKey: key, stateTable: permuted() });
   });
 
@@ -3413,7 +3416,7 @@ describe('autosave in the saved world: Reloads reopen /?world, navigations and f
 
   /** The page's autosave over a fake sim whose `flush` replies the test settles by hand, on vi's fake timers. */
   function saving(o: { stored?: { t: number; speedIndex: number } | null } = {}) {
-    const flushes: Array<{ state: StateRecord; history: HistoryRecord | null; resolve(m: FlushedMsg): void }> = [];
+    const flushes: Array<{ state: StateRecord; history: HistoryWrite | null; resolve(m: FlushedMsg): void }> = [];
     const fly = { x: 100.5, y: 80.25, z: -40.75, yaw: 90, pitch: -20, mode: 'fly' as const, speed: 30 };
     const frame = { t: 0.5 };
     let hotbarRecord: HotbarRecord = STATE_BOUNDS.normalizeHotbar(null);
@@ -3533,7 +3536,7 @@ describe('autosave in the saved world: Reloads reopen /?world, navigations and f
    */
   function bulkSaving(replyMs: number) {
     const t0 = Date.now();
-    const flushes: Array<{ at: number; history: HistoryRecord | null; resolve(m: FlushedMsg): void }> = [];
+    const flushes: Array<{ at: number; history: HistoryWrite | null; resolve(m: FlushedMsg): void }> = [];
     const sim = {
       failed: false,
       edits: (edits: readonly Edit[]) => new Promise<EditedMsg>((resolve) => {
@@ -3595,7 +3598,7 @@ describe('autosave in the saved world: Reloads reopen /?world, navigations and f
     // Posted at the reply, after the step was recorded: the flush's history holds the paste's step.
     expect(s.flushes.map((f) => f.at)).toEqual([1500]);
     expect(s.flushes[0]!.history?.done).toHaveLength(1);
-    expect(s.flushes[0]!.history!.done[0]!.edits).toHaveLength(32768);
+    expect(s.flushes[0]!.history!.steps[0]!.edits).toHaveLength(32768);
     await vi.advanceTimersByTimeAsync(300);
     expect(navigate).not.toHaveBeenCalled();
     s.flushes[0]!.resolve(OK(1));
@@ -3626,7 +3629,7 @@ describe('autosave in the saved world: Reloads reopen /?world, navigations and f
     expect(await paste).toMatchObject({ ok: true });
     expect(s.flushes.map((f) => f.at)).toEqual([1500]);
     expect(s.flushes[0]!.history?.done).toHaveLength(1);
-    expect(s.flushes[0]!.history!.done[0]!.edits).toHaveLength(32768);
+    expect(s.flushes[0]!.history!.steps[0]!.edits).toHaveLength(32768);
     await vi.advanceTimersByTimeAsync(300);
     expect(navigate).not.toHaveBeenCalled();
     s.flushes[0]!.resolve(OK(1));
@@ -3838,7 +3841,7 @@ describe('autosave in the saved world: Reloads reopen /?world, navigations and f
     const step: BlockStep = { edits: [{ x: 1, y: 70, z: 2, before: NO_ENTRY, after: STONE << 8 }] };
     s.history.record(step);
     void s.autosave.flushNow();
-    expect(s.flushes[1]!.history).toEqual({ worldId: 'w 1', done: [step], undone: [] });
+    expect(s.flushes[1]!.history).toEqual({ worldId: 'w 1', done: [0], undone: [], steps: [{ id: 0, edits: step.edits }] });
     // A `?shot=1&time=` capture: the stored time is saved unchanged, whatever the frame's clock reads.
     const shot = saving({ stored: { t: 0.1, speedIndex: 1 } });
     void shot.autosave.flushNow();
@@ -3930,7 +3933,7 @@ describe('the block history kept across reloads (SP5b spec §3.2, §3.4 step 6, 
     });
     blockHistory.restore(read.history.done, read.history.undone);
     const actionPost = createActionPost({ post: accepted.post, record: blockHistory.record });
-    const flushes: Array<HistoryRecord | null> = [];
+    const flushes: Array<HistoryWrite | null> = [];
     const results: FlushedMsg[] = [];
     const events = new Map<string, () => void>();
     // D14's storage notices as the page shows them (`watchStorage`), the texts up in `visible`.
@@ -3944,6 +3947,7 @@ describe('the block history kept across reloads (SP5b spec §3.2, §3.4 step 6, 
       storedTime: null,
       hotbar: () => read.state.hotbar,
       blockHistory,
+      historyIds: read.historyIds,
       sim: { flush: (state, history) => { flushes.push(history); return sim.flush(state, history); } },
       settled: editPath.settled,
       editsSince: accepted.count,
@@ -4030,9 +4034,9 @@ describe('the block history kept across reloads (SP5b spec §3.2, §3.4 step 6, 
     expect(kv.dump('diffs').map(([k]) => k)).toEqual(
       [colKey(C[0], C[1]), colKey(C[0] + 1, C[1]), colKey(C[0] - 1, C[1])].sort((a, b) => a - b).map((k) => [ID, k]),
     );
-    expect(kv.dump('history')).toEqual([[ID, {
-      worldId: ID, done: [step(A, NO_ENTRY, val(STONE)), step(B, NO_ENTRY, val(GLASS)), step(D, NO_ENTRY, val(DIRT))], undone: [],
-    }]]);
+    // The history step by step (SP5c spec §5): the index and each step's record, none of the failed flushes' kept.
+    expect(kv.dump('history')).toEqual([[ID, { worldId: ID, done: [0, 1, 2], undone: [] }]]);
+    expect(kv.dump('historySteps')).toEqual([[[ID, 0], step(A, NO_ENTRY, val(STONE))], [[ID, 1], step(B, NO_ENTRY, val(GLASS))], [[ID, 2], step(D, NO_ENTRY, val(DIRT))]]);
     expect(stateOf().flushSeq).toBe(1);
     expect((kv.dump('worlds')[0]![1] as WorldRecord).name).toBe('Renamed');
     expect([...p.visible]).toEqual([]);
@@ -4075,7 +4079,7 @@ describe('the block history kept across reloads (SP5b spec §3.2, §3.4 step 6, 
     expect(one.blockHistory.size).toBe(1);
     expect(await settle(one.autosave.flushNow())).toMatchObject({ ok: true });
     const stepA = { edits: [{ ...A, before: NO_ENTRY, after: val(STONE) }] };
-    expect(one.flushes).toEqual([{ worldId: ID, done: [stepA], undone: [] }]);
+    expect(one.flushes).toEqual([{ worldId: ID, done: [0], undone: [], steps: [{ id: 0, edits: stepA.edits }] }]);
     // B: three steps posted 50 ms apart, each reply 70 ms after its post (at 70, 120 and 170 ms).
     delay = 70;
     const values = [val(GLASS), val(DIRT), val(STONE)];
@@ -4093,12 +4097,14 @@ describe('the block history kept across reloads (SP5b spec §3.2, §3.4 step 6, 
     // Posted at once, with no settled wait: its history A's step and B's first.
     const stepB1 = { edits: [{ ...B, before: NO_ENTRY, after: values[0]! }] };
     expect(one.flushes).toHaveLength(2);
-    expect(one.flushes[1]).toEqual({ worldId: ID, done: [stepA, stepB1], undone: [] });
+    // A's step was stored by the first flush: only B's first goes (SP5c spec §5, D28's lever 3).
+    expect(one.flushes[1]).toEqual({ worldId: ID, done: [0, 1], undone: [], steps: [{ id: 1, edits: stepB1.edits }] });
     // The sim handles it after B's third edit (at 180 ms): the column with B's third value, the history as posted.
     await vi.advanceTimersByTimeAsync(100);
     expect((await Promise.all(outs)).map((o) => o.ok)).toEqual([true, true, true]);
     expect(one.results.map((r) => r.ok)).toEqual([true, true]);
-    expect(kv.dump('history')).toEqual([[ID, { worldId: ID, done: [stepA, stepB1], undone: [] }]]);
+    expect(kv.dump('history')).toEqual([[ID, { worldId: ID, done: [0, 1], undone: [] }]]);
+    expect(kv.dump('historySteps')).toEqual([[[ID, 0], stepA], [[ID, 1], stepB1]]);
     one.close();
     expect(valueAt(B.x, B.y, B.z)).toBe(values[2]);
     // Reopened from the KV: the two saved steps.
@@ -4125,7 +4131,7 @@ describe('the block history kept across reloads (SP5b spec §3.2, §3.4 step 6, 
     expect(src).toMatch(/if \(saved !== null\) blockHistory\.restore\(saved\.history\.done, saved\.history\.undone\);\n\s+const actionPost = createActionPost/);
     expect(src).toMatch(/let worldHotbar: HotbarRecord = saved !== null \? saved\.state\.hotbar : STATE_BOUNDS\.normalizeHotbar\(null\);/);
     expect(src).toMatch(/const hotbar = createHotbar\(saved !== null \? hotbarStorage\(\(\) => worldHotbar, \(h\) => \{ worldHotbar = h; \}\) : storage\);/);
-    expect(src).toMatch(/hotbar: \(\) => worldHotbar,\n\s+blockHistory,\n\s+sim: simClient!,/);
+    expect(src).toMatch(/hotbar: \(\) => worldHotbar,\n\s+blockHistory,\n\s+historyIds: opened\.historyIds,\n\s+sim: simClient!,/);
   });
 });
 

@@ -215,9 +215,9 @@ export function selftestAllMatch(summary: string, count: number): boolean {
 /**
  * The KV contract's cases (`KV_CONTRACT.length` in `src/persist/kvContract.ts`; this tool cannot import `src/`, so a unit
  * test keeps them equal), which `?selftest=1`'s IndexedDB section runs on `IdbKV` (SP5b spec §6.4; the ninth, the
- * clipboard's typed arrays in `meta`, SP5c spec §10.7).
+ * clipboard's typed arrays in `meta`, SP5c spec §10.7; the tenth, `wi10` v2's `historySteps`, SP5c spec §5).
  */
-export const KV_CONTRACT_CASES = 9;
+export const KV_CONTRACT_CASES = 10;
 /** The IndexedDB section's line is written and no longer reads `running…`. */
 export const KV_SELFTEST_DONE = `(() => { const e = document.querySelector('#selftest-kv'); return e !== null && !e.textContent.endsWith('running…'); })()`;
 

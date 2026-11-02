@@ -56,7 +56,7 @@ import { createThrottle } from '../../src/engine/throttle';
 import { createWorkerPool } from '../../src/engine/workerPool';
 import type { KV } from '../../src/persist/kv';
 import { createMemoryKV, type MemoryKV } from '../../src/persist/memory';
-import { createSaves, type HistoryRecord, type HotbarRecord, type StateRecord, type WorldRecord } from '../../src/persist/saves';
+import { createSaves, writeRecord, type HistoryRecord, type HistoryWrite, type HotbarRecord, type StateRecord, type WorldRecord } from '../../src/persist/saves';
 import type { FlyState } from '../../src/player/fly';
 import { createHotbar } from '../../src/player/hotbar';
 import { bodyOf, type BodyBox } from '../../src/player/interaction';
@@ -105,8 +105,11 @@ export interface PersistWorld {
   windowHash(r: number): string;
   /** The state record the autosave would post now. */
   state(): StateRecord;
-  /** The state and the whole history the autosave would post now (its `build`, the backup's). */
-  build(): { readonly state: StateRecord; readonly history: HistoryRecord };
+  /**
+   * The state and the whole history the autosave would post now (its `build`, the backup's): `write` as posted (every
+   * step with its id, SP5c spec §5), `history` the same as one record.
+   */
+  build(): { readonly state: StateRecord; readonly history: HistoryRecord; readonly write: HistoryWrite };
   /** Switches the modification mode (its checkbox's path). */
   modify(on: boolean): void;
   /**
@@ -456,6 +459,7 @@ export async function openPersistWorld(o: {
       hotbar: () => worldHotbar,
       places: () => places.list,
       blockHistory: history,
+      historyIds: opened.historyIds,
       sim,
       settled: editPath.settled,
       bulkPending: editPath.bulkPending,
@@ -534,7 +538,10 @@ export async function openPersistWorld(o: {
         }
       },
       state: () => autosave.build().state,
-      build: () => autosave.build(),
+      build() {
+        const b = autosave.build();
+        return { state: b.state, history: writeRecord(b.history), write: b.history };
+      },
       modify: (on) => mode.set(on),
       async change(patch, opts) {
         const before = session.snapshot;

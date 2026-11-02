@@ -16,11 +16,11 @@ import { createGenContext } from '../../src/gen/context';
 import { decodeColumnDiff, encodeColumnDiff } from '../../src/persist/diffCodec';
 import type { KV, WriteOp } from '../../src/persist/kv';
 import { createMemoryKV, type MemoryKV } from '../../src/persist/memory';
-import { flushOps, todayStateTable, type HistoryRecord, type StateRecord, type WorldRecord } from '../../src/persist/saves';
+import { assembleHistory, createStepIds, flushOps, todayStateTable, wholeWrite, writeRecord, type HistoryRecord, type HistoryWrite, type StateRecord, type WorldRecord } from '../../src/persist/saves';
 import { createDiffStore, NO_ENTRY } from '../../src/sim/diffStore';
 import { applyEdits, MAX_STEP_EDITS, readVolume } from '../../src/sim/edits';
 import { DIRT, GLASS, STONE } from '../../src/world/blocks/index';
-import { packEdits, type BackedUpMsg, type CopiedMsg, type DiffMsg, type Edit, type EditedMsg, type ErrorMsg, type FlushedMsg, type FromSim, type HistoryChange, type LoadedMsg } from '../../src/workers/protocol';
+import { packEdits, type BackedUpMsg, type CopiedMsg, type DiffMsg, type Edit, type EditedMsg, type ErrorMsg, type FlushedMsg, type FromSim, type LoadedMsg } from '../../src/workers/protocol';
 import { createMemorySimHandler, createSimHandler, flushSyncPart, SIM_DRAIN_MS, type SimHandler, type SimReply } from '../../src/workers/simHandler';
 import { R_READER, SIM_THREAD } from '../../src/world/store/reclaim';
 import type { ColumnDiff } from '../../src/world/store/api';
@@ -66,7 +66,14 @@ const recordOf = (id: string): WorldRecord => ({
   id, name: 'My world', seedText: '42', seed: [42, 0], profile: 'default', params: {}, schemaVersion: 1, paramsHash: '0'.repeat(16),
   generatorVersion: 5, genKey: hex64(GEN), stateTable: todayStateTable(), created: 1, backupOf: null,
 });
-const historyOf = (worldId: string): HistoryRecord => ({ worldId, done: [{ edits: [{ x: 1, y: 70, z: 2, before: NO_ENTRY, after: val(STONE) }] }], undone: [] });
+const historyOf = (worldId: string): HistoryWrite => wholeWrite({ worldId, done: [{ edits: [{ x: 1, y: 70, z: 2, before: NO_ENTRY, after: val(STONE) }] }], undone: [] });
+/** The ops `historyOps` adds for a one-step whole write (SP5c spec §5): its step, the delete of every other id, the index. */
+const historyOpsOf = (worldId: string) => [['put', 'historySteps', [worldId, 0]], ['deleteRange', 'historySteps', null], ['put', 'history', worldId]];
+/** World `worldId`'s history as stored (its index and `historySteps` records), as one record; null with no index. */
+const storedHistory = (kv: MemoryKV, worldId: string): HistoryRecord | null => assembleHistory(
+  kv.dump('history').find(([k]) => k === worldId)?.[1],
+  new Map(kv.dump('historySteps').flatMap(([k, v]) => (Array.isArray(k) && k[0] === worldId ? [[k[1] as number, v]] : []))),
+);
 /** Writes `cols` (encoded under `genKey`) and the world's state through the sim's own flush batch. */
 async function seed(kv: KV, worldId: string, cols: ReadonlyArray<readonly [cx: number, cz: number, d: ColumnDiff]>, genKey: Hash64 = GEN): Promise<void> {
   const w = await kv.write(flushOps(worldId, cols.map(([cx, cz, d]) => ({ key: colKey(cx, cz), bytes: encodeColumnDiff(d, genKey) })), stateOf(worldId), null, null));
@@ -463,7 +470,7 @@ describe('the sim handler on a shared seed-42 region (SP5a spec §2.1)', () => {
       return s;
     };
     /** A `flush` of `worldId`'s state (its `flushSeq` the sim's to set), `st` over it. */
-    const flushOf = (id: number, worldId: string, history: HistoryRecord | null = null, st: Partial<StateRecord> = {}) =>
+    const flushOf = (id: number, worldId: string, history: HistoryWrite | null = null, st: Partial<StateRecord> = {}) =>
       ({ type: 'flush', id, state: { ...stateOf(worldId), flushSeq: 0, ...st }, history });
     const okOf = (r: SimReply): Extract<FlushedMsg, { ok: true }> => {
       expect(r.msg, JSON.stringify(r.msg)).toMatchObject({ type: 'flushed', ok: true });
@@ -507,7 +514,7 @@ describe('the sim handler on a shared seed-42 region (SP5a spec §2.1)', () => {
       await s.until(2);
       expect(write).toHaveBeenCalledTimes(1);
       const ops = write.mock.calls[0]![0];
-      expect(opsOf(ops)).toEqual([['put', 'diffs', ['wf1', a.key]], ['put', 'diffs', ['wf1', b.key]], ['put', 'state', 'wf1'], ['put', 'history', 'wf1']]);
+      expect(opsOf(ops)).toEqual([['put', 'diffs', ['wf1', a.key]], ['put', 'diffs', ['wf1', b.key]], ['put', 'state', 'wf1'], ...historyOpsOf('wf1')]);
       const bytes = ops.slice(0, 2).reduce((n, op) => n + ((op as { value: Uint8Array }).value.byteLength), 0);
       const f = okOf(s.got[1]!);
       expect([f.id, f.flushSeq, f.columns, f.bytes]).toEqual([10, 1, 2, bytes]);
@@ -516,7 +523,7 @@ describe('the sim handler on a shared seed-42 region (SP5a spec §2.1)', () => {
       expect(sortedKeys(d.keys())).toEqual(sortedKeys([a.key, b.key]));
       for (const p of [a, b]) expect(entriesOf(d.get(p.key)!.diff)).toEqual(diffAt(s.handler, p));
       expect(await stateIn(kv, 'wf1')).toEqual({ ...stateOf('wf1'), flushSeq: 1 });
-      expect(kv.dump('history')).toEqual([['wf1', H]]);
+      expect(storedHistory(kv, 'wf1')).toEqual(writeRecord(H));
       // Nothing dirty: the state only.
       s.send(flushOf(11, 'wf1'));
       await s.until(3);
@@ -560,9 +567,9 @@ describe('the sim handler on a shared seed-42 region (SP5a spec §2.1)', () => {
       // A `record` has no reply.
       expect(s.got).toHaveLength(1);
       const H1 = historyOf('wf3');
-      const dumps = () => (['worlds', 'state', 'history', 'diffs'] as const).map((st) => kv.dump(st));
+      const dumps = () => (['worlds', 'state', 'history', 'historySteps', 'diffs'] as const).map((st) => kv.dump(st));
       const before = dumps();
-      // The batch: a, b, the state, the history (op 3), the record.
+      // The batch: a, b, the state, the history (its step at op 3), the record.
       kv.failAt(3);
       s.send(flushOf(10, 'wf3', H1));
       await s.until(2);
@@ -576,11 +583,11 @@ describe('the sim handler on a shared seed-42 region (SP5a spec §2.1)', () => {
       expect([f.flushSeq, f.columns]).toEqual([5, 3]);
       expect(opsOf(write.mock.calls[0]![0])).toEqual([
         ['put', 'diffs', ['wf3', a.key]], ['put', 'diffs', ['wf3', b.key]], ['put', 'diffs', ['wf3', c.key]],
-        ['put', 'state', 'wf3'], ['put', 'history', 'wf3'], ['put', 'worlds', 'wf3'],
+        ['put', 'state', 'wf3'], ...historyOpsOf('wf3'), ['put', 'worlds', 'wf3'],
       ]);
       expect(sortedKeys(diffsOf(kv, 'wf3').keys())).toEqual(sortedKeys([a.key, b.key, c.key]));
       expect((await stateIn(kv, 'wf3')).flushSeq).toBe(5);
-      expect(kv.dump('history')).toEqual([['wf3', H1]]);
+      expect(storedHistory(kv, 'wf3')).toEqual(writeRecord(H1));
       expect(kv.dump('worlds')).toEqual([['wf3', R]]);
       for (const p of [c, b, a]) undo(s.handler, p);
     });
@@ -593,7 +600,7 @@ describe('the sim handler on a shared seed-42 region (SP5a spec §2.1)', () => {
       place(s.handler, a);
       const write = vi.spyOn(kv, 'write');
       const H1 = historyOf('wf4');
-      const H2: HistoryRecord = { ...historyOf('wf4'), undone: [{ edits: [] }] };
+      const H2: HistoryWrite = { ...H1, undone: [1], steps: [{ id: 1, edits: [] }] };
       s.send(flushOf(10, 'wf4', H1));
       place(s.handler, b);
       s.send(flushOf(11, 'wf4', H2, { time: { t: 0.5, speedIndex: 1 } }));
@@ -602,12 +609,16 @@ describe('the sim handler on a shared seed-42 region (SP5a spec §2.1)', () => {
       expect(write).toHaveBeenCalledTimes(1);
       await s.until(4);
       expect(write).toHaveBeenCalledTimes(2);
-      expect(opsOf(write.mock.calls[0]![0])).toEqual([['put', 'diffs', ['wf4', a.key]], ['put', 'state', 'wf4'], ['put', 'history', 'wf4']]);
+      expect(opsOf(write.mock.calls[0]![0])).toEqual([['put', 'diffs', ['wf4', a.key]], ['put', 'state', 'wf4'], ...historyOpsOf('wf4')]);
       const second = write.mock.calls[1]![0];
-      expect(opsOf(second)).toEqual([['put', 'diffs', ['wf4', b.key]], ['put', 'state', 'wf4'], ['put', 'history', 'wf4']]);
+      expect(opsOf(second)).toEqual([
+        ['put', 'diffs', ['wf4', b.key]], ['put', 'state', 'wf4'], ['put', 'historySteps', ['wf4', 1]], ['deleteRange', 'historySteps', null],
+        ['put', 'history', 'wf4'],
+      ]);
       // The newest state, and the replaced flush's history.
       expect(second[1]).toEqual({ op: 'put', store: 'state', key: 'wf4', value: { ...stateOf('wf4'), flushSeq: 2, time: { t: 0.75, speedIndex: 2 } } });
-      expect(second[2]).toEqual({ op: 'put', store: 'history', key: 'wf4', value: H2 });
+      expect(second.at(-1)).toEqual({ op: 'put', store: 'history', key: 'wf4', value: { worldId: 'wf4', done: [0], undone: [1] } });
+      expect(storedHistory(kv, 'wf4')).toEqual({ worldId: 'wf4', done: [{ edits: H1.steps[0]!.edits }], undone: [{ edits: [] }] });
       const [f1, f2, f3] = s.got.slice(1).map(okOf);
       expect([f1!.id, f1!.flushSeq, f1!.columns]).toEqual([10, 1, 1]);
       expect([f2!.id, f2!.flushSeq, f2!.columns]).toEqual([11, 2, 1]);
@@ -617,28 +628,50 @@ describe('the sim handler on a shared seed-42 region (SP5a spec §2.1)', () => {
       undo(s.handler, a);
     });
 
-    test('a history posted as a change against the previous flush\'s is written as the whole record, key for key; a change with no previous history is BAD_MESSAGE (D28\'s third lever)', async () => {
+    test('a flush writes only the steps it carries: a step stored by an earlier flush is kept, not written again; a dropped step\'s record is deleted (SP5c spec §5, D28\'s lever 3)', async () => {
       const kv = createMemoryKV();
       const s = await opened(kv, 'wh', { flushSeq: 0 });
-      const step = (x: number) => ({ edits: [{ x, y: 70, z: 2, before: NO_ENTRY, after: val(STONE) }] });
-      const H1: HistoryRecord = { worldId: 'wh', done: [step(1), step(2), step(3)], undone: [] };
+      const step = (x: number, n = 1) => ({ edits: Array.from({ length: n }, (_, i) => ({ x, y: 70 + i, z: 2, before: NO_ENTRY, after: val(STONE) })) });
+      const s1 = step(1, 32_768);
+      const s2 = step(2);
+      const s3 = step(3);
+      const ids = createStepIds(null);
+      const H1 = ids.write('wh', [s1, s2, s3], [], false);
       s.send(flushOf(10, 'wh', H1));
       await s.until(2);
       okOf(s.got[1]!);
-      // Ctrl+Z, then a step recorded: the change keeps done[1, 2) and adds two steps, and keeps nothing of the redo side.
-      const H2: HistoryRecord = { worldId: 'wh', done: [H1.done[1]!, step(4), step(5)], undone: [] };
-      const change: HistoryChange = { worldId: 'wh', done: { from: 1, keep: 1, add: [H2.done[1]!, H2.done[2]!] }, undone: { from: 0, keep: 0, add: [] } };
-      s.send(flushOf(11, 'wh', null));
-      s.send({ ...flushOf(12, 'wh'), history: change });
-      await s.until(4);
-      okOf(s.got[3]!);
-      const written = kv.dump('history') as Array<[string, HistoryRecord]>;
-      expect(written).toEqual([['wh', H2]]);
-      expect(JSON.stringify(written[0]![1])).toBe(JSON.stringify(H2));
-      // A fresh handler's first flush has no history to change.
-      const t = await opened(createMemoryKV(), 'wh2', { flushSeq: 0 });
-      const e = call(t.handler, { ...flushOf(20, 'wh2'), history: { ...change, worldId: 'wh2' } }).msg as ErrorMsg;
-      expect([e.type, e.jobId, e.code]).toEqual(['error', 20, 'BAD_MESSAGE']);
+      ids.committed(H1);
+      // Ctrl+Z of s3, then a step s4 recorded (the redo side cleared): the write carries s4 alone.
+      const s4 = step(4);
+      const H2 = ids.write('wh', [s1, s2, s4], [], false);
+      expect(H2.steps.map((x) => x.id)).toEqual([3]);
+      const write = vi.spyOn(kv, 'write');
+      s.send(flushOf(11, 'wh', H2));
+      await s.until(3);
+      okOf(s.got[2]!);
+      const puts = write.mock.calls[0]![0].filter((op) => op.op === 'put' && op.store === 'historySteps');
+      expect(puts.map((op) => (op as { key: unknown }).key)).toEqual([['wh', 3]]);
+      expect(storedHistory(kv, 'wh')).toEqual({ worldId: 'wh', done: [s1, s2, s4], undone: [] });
+      expect(kv.dump('historySteps').map(([k]) => k)).toEqual([['wh', 0], ['wh', 1], ['wh', 3]]);
+      expect(kv.dump('history')).toEqual([['wh', { worldId: 'wh', done: [0, 1, 3], undone: [] }]]);
+    });
+
+    test('a history write the guard refuses is BAD_MESSAGE with nothing written: an id twice, a step its index does not name, a step with no edits array', async () => {
+      const kv = createMemoryKV();
+      const s = await opened(kv, 'wg', { flushSeq: 0 });
+      const edits = [{ x: 1, y: 70, z: 2, before: NO_ENTRY, after: val(STONE) }];
+      const bad = [
+        { worldId: 'wg', done: [0, 0], undone: [], steps: [] },
+        { worldId: 'wg', done: [0], undone: [], steps: [{ id: 1, edits }] },
+        { worldId: 'wg', done: [0], undone: [], steps: [{ id: 0, edits: null }] },
+        { worldId: 'wg', done: [-1], undone: [], steps: [] },
+        { worldId: 'wg', done: [0], undone: [] },
+      ];
+      for (const [i, history] of bad.entries()) {
+        const e = call(s.handler, { ...flushOf(20 + i, 'wg'), history }).msg as ErrorMsg;
+        expect([e.type, e.jobId, e.code], JSON.stringify(history)).toEqual(['error', 20 + i, 'BAD_MESSAGE']);
+      }
+      expect([kv.dump('history'), kv.dump('historySteps')]).toEqual([[], []]);
     });
 
     test('Review Focus 1: edits A posted, `flush` posted, edits B posted before A\'s reply; the flush\'s write `crashNext()`ed: a fresh handler\'s `load` on the same KV gives exactly the previous committed flush\'s columns, and `kv.read([{ op: \'get\', store: \'state\', key: worldId }])` gives its `flushSeq`; with the write completing instead, A\'s column is in it and B\'s column is dirty again and in the next flush with `flushSeq` + 1', async () => {
@@ -754,7 +787,7 @@ describe('the sim handler on a shared seed-42 region (SP5a spec §2.1)', () => {
     describe('`backup` (SP5b spec §3.6, D11, D26)', () => {
       const COPY_NAME = 'My world (before the change)';
       /** A `backup` of `worldId` into `newId`: the kept record (`recordOf`) with the copy's id, name and `backupOf`. */
-      const backupOf = (id: number, worldId: string, newId: string, history: HistoryRecord = historyOf(worldId), st: Partial<StateRecord> = {}) => ({
+      const backupOf = (id: number, worldId: string, newId: string, history: HistoryWrite = historyOf(worldId), st: Partial<StateRecord> = {}) => ({
         type: 'backup', id, newWorld: { ...recordOf(worldId), id: newId, name: COPY_NAME, backupOf: worldId }, newId,
         state: { ...stateOf(worldId), flushSeq: 0, ...st }, history,
       });
@@ -763,7 +796,7 @@ describe('the sim handler on a shared seed-42 region (SP5a spec §2.1)', () => {
         return r.msg as BackedUpMsg;
       };
       const worldsIn = (kv: MemoryKV) => new Map(kv.dump('worlds') as Array<[string, WorldRecord]>);
-      const historiesIn = (kv: MemoryKV) => new Map(kv.dump('history') as Array<[string, HistoryRecord]>);
+      const historiesIn = (kv: MemoryKV) => new Map(kv.dump('history').map(([k]) => [k as string, storedHistory(kv, k as string)]));
 
       test('a backup writes the pending flush and the copy in one write: the copy\'s diff keys, record (with `backupOf`) and state equal the original\'s', async () => {
         const kv = createMemoryKV();
@@ -785,11 +818,11 @@ describe('the sim handler on a shared seed-42 region (SP5a spec §2.1)', () => {
         expect(write).toHaveBeenCalledTimes(1);
         const ops = write.mock.calls[0]![0];
         // The pending flush first (b, the state, the history), then the copy: its record, state, history and every column.
-        expect(opsOf(ops.slice(0, 6))).toEqual([
-          ['put', 'diffs', ['wb1', b.key]], ['put', 'state', 'wb1'], ['put', 'history', 'wb1'],
-          ['put', 'worlds', 'wb1c'], ['put', 'state', 'wb1c'], ['put', 'history', 'wb1c'],
+        expect(opsOf(ops.slice(0, 10))).toEqual([
+          ['put', 'diffs', ['wb1', b.key]], ['put', 'state', 'wb1'], ...historyOpsOf('wb1'),
+          ['put', 'worlds', 'wb1c'], ['put', 'state', 'wb1c'], ...historyOpsOf('wb1c'),
         ]);
-        expect(ops.slice(6).map((op) => [op.op, op.store, op.op === 'deleteRange' ? null : op.key[0]])).toEqual([['put', 'diffs', 'wb1c'], ['put', 'diffs', 'wb1c']]);
+        expect(ops.slice(10).map((op) => [op.op, op.store, op.op === 'deleteRange' ? null : op.key[0]])).toEqual([['put', 'diffs', 'wb1c'], ['put', 'diffs', 'wb1c']]);
         const original = diffsOf(kv, 'wb1');
         const copy = diffsOf(kv, 'wb1c');
         expect(sortedKeys(original.keys())).toEqual(sortedKeys([a.key, b.key]));
@@ -807,7 +840,7 @@ describe('the sim handler on a shared seed-42 region (SP5a spec §2.1)', () => {
         // written for the original in the same write; the history: the backup's, under each id.
         expect(await stateIn(kv, 'wb1')).toEqual({ ...B.state, flushSeq: 2 });
         expect(await stateIn(kv, 'wb1c')).toEqual({ ...B.state, worldId: 'wb1c', flushSeq: 2, updated: UPDATED });
-        expect(historiesIn(kv)).toEqual(new Map([['wb1', H], ['wb1c', { ...H, worldId: 'wb1c' }]]));
+        expect(historiesIn(kv)).toEqual(new Map([['wb1', writeRecord(H)], ['wb1c', { ...writeRecord(H), worldId: 'wb1c' }]]));
         // Nothing is left dirty: a flush now writes the state only, with `flushSeq` 3.
         s.send(flushOf(12, 'wb1'));
         await s.until(4);
@@ -842,8 +875,8 @@ describe('the sim handler on a shared seed-42 region (SP5a spec §2.1)', () => {
         await s.until(5);
         const f = okOf(s.got[4]!);
         expect([f.id, f.flushSeq, f.columns]).toEqual([13, 2, 1]);
-        expect(opsOf(write.mock.calls[0]![0])).toEqual([['put', 'diffs', ['wb2', b.key]], ['put', 'state', 'wb2'], ['put', 'history', 'wb2']]);
-        expect(historiesIn(kv)).toEqual(new Map([['wb2', H]]));
+        expect(opsOf(write.mock.calls[0]![0])).toEqual([['put', 'diffs', ['wb2', b.key]], ['put', 'state', 'wb2'], ...historyOpsOf('wb2')]);
+        expect(historiesIn(kv)).toEqual(new Map([['wb2', writeRecord(H)]]));
         expect(worldsIn(kv).size).toBe(0);
         // A closed connection: `closed`.
         kv.closeNow();
@@ -862,7 +895,7 @@ describe('the sim handler on a shared seed-42 region (SP5a spec §2.1)', () => {
         place(s.handler, a);
         const write = vi.spyOn(kv, 'write');
         const H1 = historyOf('wb3');
-        const H2: HistoryRecord = { ...historyOf('wb3'), undone: [{ edits: [] }] };
+        const H2: HistoryWrite = { ...H1, undone: [1], steps: [...H1.steps, { id: 1, edits: [] }] };
         s.send(flushOf(10, 'wb3', H1));
         place(s.handler, b);
         s.send(flushOf(11, 'wb3', null, { updated: UPDATED + 1 }));
@@ -877,15 +910,17 @@ describe('the sim handler on a shared seed-42 region (SP5a spec §2.1)', () => {
         // The absorbed flush is answered with the backup write's outcome: its flush part's flushSeq, columns and bytes.
         const f2 = okOf(s.got[2]!);
         const second = write.mock.calls[1]![0];
-        expect(opsOf(second.slice(0, 6))).toEqual([
-          ['put', 'diffs', ['wb3', b.key]], ['put', 'state', 'wb3'], ['put', 'history', 'wb3'],
-          ['put', 'worlds', 'wb3c'], ['put', 'state', 'wb3c'], ['put', 'history', 'wb3c'],
+        const twoSteps = (w: string) => [['put', 'historySteps', [w, 0]], ['put', 'historySteps', [w, 1]], ['deleteRange', 'historySteps', null], ['put', 'history', w]];
+        expect(opsOf(second.slice(0, 12))).toEqual([
+          ['put', 'diffs', ['wb3', b.key]], ['put', 'state', 'wb3'], ...twoSteps('wb3'),
+          ['put', 'worlds', 'wb3c'], ['put', 'state', 'wb3c'], ...twoSteps('wb3c'),
         ]);
         expect([f2.id, f2.flushSeq, f2.columns, f2.bytes]).toEqual([11, 2, 1, (second[0] as { value: Uint8Array }).value.byteLength]);
         expect(backedUpOf(s.got[3]!)).toEqual({ type: 'backedUp', id: 12, ok: true, error: null });
         // The original: the backup's state and history with `flushSeq` 2; the copy: the same, `updated` flush 10's.
         expect(second[1]).toEqual({ op: 'put', store: 'state', key: 'wb3', value: { ...B.state, flushSeq: 2 } });
-        expect(second[2]).toEqual({ op: 'put', store: 'history', key: 'wb3', value: H2 });
+        expect(second[5]).toEqual({ op: 'put', store: 'history', key: 'wb3', value: { worldId: 'wb3', done: [0], undone: [1] } });
+        expect(historiesIn(kv)).toEqual(new Map([['wb3', writeRecord(H2)], ['wb3c', { ...writeRecord(H2), worldId: 'wb3c' }]]));
         expect(await stateIn(kv, 'wb3c')).toEqual({ ...B.state, worldId: 'wb3c', flushSeq: 2, updated: UPDATED });
         expect(sortedKeys(diffsOf(kv, 'wb3c').keys())).toEqual(sortedKeys([a.key, b.key]));
         undo(s.handler, b);
@@ -1047,7 +1082,7 @@ describe('`load` (SP5b spec §2.3, §3.3, D18, D19, D22)', () => {
     const write = vi.spyOn(kv, 'write');
     const atReply: Record<string, unknown> = {};
     const snapshot = (k: MemoryKV) => () => {
-      for (const s of ['worlds', 'diffs', 'history'] as const) atReply[s] = k.dump(s);
+      for (const s of ['worlds', 'diffs', 'history', 'historySteps'] as const) atReply[s] = k.dump(s);
     };
     const prefix = over(kv);
     prefix.send(loadMsg(1, 'w1', { stateTable: today.slice(0, -1), rewrite: { world: recordOf('w1'), history: historyOf('w1') } }), snapshot(kv));
@@ -1055,7 +1090,7 @@ describe('`load` (SP5b spec §2.3, §3.3, D18, D19, D22)', () => {
     expect(loadedOf(prefix.got[0]!).entries).toBe(4);
     expect(write).toHaveBeenCalledTimes(1);
     expect(write.mock.calls[0]![0]).toEqual([{ op: 'put', store: 'worlds', key: 'w1', value: recordOf('w1') }]);
-    expect(atReply).toEqual({ worlds: [['w1', recordOf('w1')]], diffs: diffsBefore, history: [] });
+    expect(atReply).toEqual({ worlds: [['w1', recordOf('w1')]], diffs: diffsBefore, history: [], historySteps: [] });
 
     // A non-prefix table: every column under today's ids, each keeping its header genKey, and the history, in one write.
     const N = today.length;
@@ -1070,9 +1105,10 @@ describe('`load` (SP5b spec §2.3, §3.3, D18, D19, D22)', () => {
     expect(loadedOf(other.got[0]!).unknownStates).toBe(1);
     expect(write2).toHaveBeenCalledTimes(1);
     const ops = write2.mock.calls[0]![0];
-    expect(ops.map((op) => [op.op, op.store])).toEqual([['put', 'worlds'], ['put', 'diffs'], ['put', 'diffs'], ['put', 'history']]);
+    expect(ops.map((op) => [op.op, op.store])).toEqual([['put', 'worlds'], ['put', 'diffs'], ['put', 'diffs'], ['put', 'historySteps'], ['deleteRange', 'historySteps'], ['put', 'history']]);
     expect(atReply['worlds']).toEqual([['w1', recordOf('w1')]]);
-    expect(atReply['history']).toEqual([['w1', historyOf('w1')]]);
+    expect(atReply['history']).toEqual([['w1', { worldId: 'w1', done: [0], undone: [] }]]);
+    expect(atReply['historySteps']).toEqual([[['w1', 0], { edits: historyOf('w1').steps[0]!.edits }]]);
     const diffsAt = atReply['diffs'] as Array<[readonly [string, number], Uint8Array]>;
     expect(diffsAt.map(([k]) => k)).toEqual([['w1', colKey(0, 0)], ['w1', colKey(5, -5)]]);
     const decoded = diffsAt.map(([, b]) => decodeColumnDiff(b, N));
@@ -1093,13 +1129,13 @@ describe('`load` (SP5b spec §2.3, §3.3, D18, D19, D22)', () => {
     expect(diffs.map(([k]) => k)).toEqual([['w1', colKey(0, 0)], ['w1', colKey(5, -5)]]);
     expect(diffs.map(([, b]) => entriesOf(decodeColumnDiff(b, N).diff))).toEqual([[[4, 10, val(STONE)]], [[0, 0, val(GLASS)]]]);
     // A null history writes none.
-    expect(kv.dump('history')).toEqual([]);
+    expect([kv.dump('history'), kv.dump('historySteps')]).toEqual([[], []]);
   });
 
   test('a permuted-table rewrite whose write is failAt(0)-aborted answers error, and every key in the KV is as it was (ruling P3)', async () => {
     const kv = createMemoryKV();
     await seed(kv, 'w1', [[0, 0, diffOf([[4, 10, val(storedId(STONE))]])]]);
-    const dumps = () => (['worlds', 'state', 'history', 'diffs', 'meta'] as const).map((s) => kv.dump(s));
+    const dumps = () => (['worlds', 'state', 'history', 'diffs', 'meta', 'historySteps'] as const).map((s) => kv.dump(s));
     const before = dumps();
     kv.failAt(0);
     const o = over(kv);
@@ -1166,7 +1202,7 @@ describe('`flushSyncPart` (SP5b spec §6.2: the `persist.flush` bench row times 
     expect(r.ops).toEqual(flushOps('wp', cols, state, history, world));
     expect([...r.taken]).toEqual(keys);
     expect(r.bytes).toBe(bytes);
-    expect(r.ops).toHaveLength(64 + 3);
+    expect(r.ops).toHaveLength(64 + 1 + 3 + 1);
     expect(diffs.takeDirty()).toHaveLength(0);
     // Nothing marked: a batch of the state alone.
     const empty = flushSyncPart(diffs, 'wp', GEN, state, null, null);

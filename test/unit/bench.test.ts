@@ -7,7 +7,7 @@ import { genKey, stageHashes } from '../../src/core/stage/hash';
 import type { KV } from '../../src/persist/kv';
 import { createMemoryKV } from '../../src/persist/memory';
 import { decodeColumnDiff } from '../../src/persist/diffCodec';
-import { loadParams, normalizeState, olderGenerator, parseWorldRecord, todayStateTable, type HistoryRecord } from '../../src/persist/saves';
+import { loadParams, normalizeState, olderGenerator, parseWorldRecord, todayStateTable, type HistoryWrite } from '../../src/persist/saves';
 import { discOffsets } from '../../src/engine/rings';
 import { AIR, GLASS, ICE, REGISTRY, STONE, TORCH } from '../../src/world/blocks';
 import { LAVA_SOURCE, WATER_SOURCE } from '../../src/world/blocks/fluid';
@@ -1440,7 +1440,7 @@ describe('createBenchDriver: the save leg L11 (SP5b spec §6.2, D28; plan)', () 
   test('L11\'s "on" parts\' flushes post a non-null history whose `done` grows with the parts\' edits (ruling P11)', async () => {
     let t = 0;
     const posted: Edit[] = [];
-    const flushes: Array<{ readonly t: number; readonly history: HistoryRecord | null; readonly steps: number }> = [];
+    const flushes: Array<{ readonly t: number; readonly history: HistoryWrite | null; readonly steps: number }> = [];
     const ticks: Array<() => void> = [];
     const logged: BenchFlush[] = [];
     const saving = createBenchSave({
@@ -1503,14 +1503,16 @@ describe('createBenchDriver: the save leg L11 (SP5b spec §6.2, D28; plan)', () 
       expect(on.length).toBeGreaterThanOrEqual(14);
       let last: string | null = null;
       for (const f of on) {
-        // Every step of the history is one accepted edit (the action post records each), the newest the last posted.
+        // Every step of the history is one accepted edit (the action post records each), the newest the last posted,
+        // carried by the flush as a step no earlier flush stored (SP5c spec §5, D28's lever 3).
         expect(f.history).not.toBeNull();
         const done = f.history!.done;
         expect(done).toHaveLength(Math.min(100, f.steps));
         const e = posted[f.steps - 1]!;
-        expect(done[done.length - 1]).toEqual({ edits: [{ x: e.x, y: e.y, z: e.z, before: e.expect, after: e.value }] });
+        const step = f.history!.steps.find((s) => s.id === done[done.length - 1]);
+        expect(step).toEqual({ id: done[done.length - 1], edits: [{ x: e.x, y: e.y, z: e.z, before: e.expect, after: e.value }] });
         // The newest step moves on with the part's edits.
-        const newest = JSON.stringify(done[done.length - 1]);
+        const newest = JSON.stringify(step);
         expect(newest).not.toBe(last);
         last = newest;
       }
@@ -2747,7 +2749,7 @@ describe('createBenchDriver: the paste leg L12 (SP5c spec §10.4, D30; plan)', (
 
   test('an autosave tick during a pending L12b paste posts only after the reply, and the flush\'s history holds that step (rulings P32)', async () => {
     let answer: ((m: EditedMsg) => void) | null = null;
-    const histories: Array<HistoryRecord | null> = [];
+    const histories: Array<HistoryWrite | null> = [];
     const ticks: Array<() => void> = [];
     const path = createEditPath({
       sim: { failed: false, edits: () => new Promise<EditedMsg>((resolve) => { answer = resolve; }) },
@@ -2798,7 +2800,7 @@ describe('createBenchDriver: the paste leg L12 (SP5c spec §10.4, D30; plan)', (
     await flush();
     expect(histories).toHaveLength(1);
     const done = histories[0]!.done;
-    expect(done[done.length - 1]!.edits).toHaveLength(3296);
+    expect(histories[0]!.steps.find((s) => s.id === done[done.length - 1])!.edits).toHaveLength(3296);
   });
 });
 

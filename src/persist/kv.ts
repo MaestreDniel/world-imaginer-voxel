@@ -1,18 +1,22 @@
 /**
- * The KV interface (SP5b spec §2.1, D16, D27; master §1's IStorage adapter): IndexedDB `wi10`'s five stores, their keys
+ * The KV interface (SP5b spec §2.1, D16, D27; master §1's IStorage adapter): IndexedDB `wi10`'s six stores, their keys
  * and key ranges, and the two transactions `persist/` uses. `read` runs several `get`, `getAll` and `count` requests in
  * one readonly transaction; `write` applies one batch of puts and deletes in one readwrite transaction, so atomicity is
  * the adapter's and `saves.ts` never sees a request. There is no cursor. `IdbKV` (`idb.ts`) and `MemoryKV`
  * (`memory.ts`) implement it, and `kvContract.ts` is the suite both pass.
  */
 
-/** `packs` and `presets` are SP8c's and SP10's, added by a version bump (D16). */
-export type StoreName = 'worlds' | 'state' | 'history' | 'diffs' | 'meta';
-/** D16's stores, in that order. */
-export const STORES: readonly StoreName[] = ['worlds', 'state', 'history', 'diffs', 'meta'];
+/**
+ * `historySteps` is `wi10` v2's (SP5c spec §5, D28's lever 3: one record per history step); `packs` and `presets` are
+ * SP8c's and SP10's, added by a version bump (D16).
+ */
+export type StoreName = 'worlds' | 'state' | 'history' | 'diffs' | 'meta' | 'historySteps';
+/** D16's stores, in that order, then v2's `historySteps`. */
+export const STORES: readonly StoreName[] = ['worlds', 'state', 'history', 'diffs', 'meta', 'historySteps'];
 
 /**
- * `worlds`, `state` and `history` by world id; `diffs` by `[worldId, colKey]`; `meta` by a string: `'clipboard'`, the
+ * `worlds`, `state` and `history` by world id; `diffs` by `[worldId, colKey]`; `historySteps` by `[worldId, stepId]`
+ * (a step id below 2^32, so a world's steps lie in `worldRange` too); `meta` by a string: `'clipboard'`, the
  * selection tool's clipboard, one per browser (`persist/clipboard.ts`'s `ClipboardV1`, written by the main thread; SP5c
  * spec §4.2, D15, D26). `meta` is in no world's Delete, Import, export or backup copy.
  */
@@ -24,7 +28,10 @@ export interface KeyRange {
   readonly upper: Key;
 }
 
-/** One world's `diffs` keys: a colKey is below 2^32 (`core/coords.ts`), so `[worldId, 0] … [worldId, 2^32)`. */
+/**
+ * One world's `diffs` keys: a colKey is below 2^32 (`core/coords.ts`), so `[worldId, 0] … [worldId, 2^32)`; its
+ * `historySteps` keys too.
+ */
 export function worldRange(worldId: string): KeyRange {
   return { lower: [worldId, 0], upper: [worldId, 2 ** 32] };
 }

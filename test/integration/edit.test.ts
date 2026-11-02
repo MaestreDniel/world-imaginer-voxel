@@ -47,7 +47,7 @@ import { createSimClient, type SimClient, type SimWorkerLike } from '../../src/e
 import { createThrottle } from '../../src/engine/throttle';
 import { createWorkerPool, type WorkerLike, type WorkerPool } from '../../src/engine/workerPool';
 import { payloadProblem } from '../../src/mesh/column';
-import { todayStateTable, type HistoryRecord, type StateRecord } from '../../src/persist/saves';
+import { createStepIds, todayStateTable, type StateRecord } from '../../src/persist/saves';
 import { MAX_STEP_EDITS } from '../../src/sim/edits';
 import { DEFAULT_MAP_STATE, openMapSession } from '../../src/ui/map/mapState';
 import { createPreviewDriver, createReplayingCanvas, draftOf, type DriverClock, type PreviewDriver } from '../../src/ui/map/previewDriver';
@@ -565,14 +565,17 @@ describe('edits on the real store equal genRegion with the same entries (SP5a sp
     expect(before.lines.length, 'one entry per edit').toBe(20);
     expect([...before.diff.keys()].sort((a, b) => a - b)).toEqual(cols);
 
-    // The history the page keeps: one step per edit, its objects kept by the next history (D28's third lever).
+    // The history the page keeps: one step per edit, each with its id for as long as it lives (SP5c spec §5, D28's lever 3).
     const steps = results.map((o, k) => {
       const r = o as Extract<EditOutcome, { ok: true }>;
       return { edits: [{ ...placed[k]!, before: r.prev[0]!, after: r.next[0]! }] };
     });
-    const h1: HistoryRecord = { worldId: 'rt', done: steps, undone: [] };
+    const ids = createStepIds(null);
+    const h1 = ids.write('rt', steps, [], false);
+    expect(h1.steps, 'the first flush carries every step').toHaveLength(20);
     const first = await settle(w.sim.flush(state(0), h1), 'the first flush');
     expect(first, 'the first flush').toMatchObject({ type: 'flushed', ok: true, flushSeq: 1 });
+    ids.committed(h1);
     // The earlier cases' columns, edited before this load and undone, are still dirty: the flush deletes their keys too.
     expect((first as Extract<FlushedMsg, { ok: true }>).columns, 'the flushed columns').toBeGreaterThanOrEqual(20);
 
@@ -591,7 +594,8 @@ describe('edits on the real store equal genRegion with the same entries (SP5a sp
     expect(after.lines).toEqual(before.lines);
     for (const k of cols) expect(w.sim.hasEntries(colKeyCx(k), colKeyCz(k)), `column ${k} has entries`).toBe(true);
 
-    // The renewed handler edits and flushes: the client posts the history whole after its `load` (rulings R9).
+    // The renewed handler edits and flushes: the history's write carries only the new step (SP5c spec §5), which the
+    // renewed handler stores beside the 20 already stored.
     const x = 16 * 2 + 9;
     const z = 16 * 1 + 9;
     const y = Math.min(319, reading((s) => s.heightAt('worldSurface', x, z))!);
@@ -599,7 +603,8 @@ describe('edits on the real store equal genRegion with the same entries (SP5a sp
     expect(out.ok, 'the edit after the renew').toBe(true);
     const r = out as Extract<EditOutcome, { ok: true }>;
     await until(() => !w.editPath.pending() && inFlight === 0 && settledAt(epoch), SETTLE_MS, 'the edit after the renew settled');
-    const h2: HistoryRecord = { worldId: 'rt', done: [...steps, { edits: [{ x, y, z, before: r.prev[0]!, after: r.next[0]! }] }], undone: [] };
+    const h2 = ids.write('rt', [...steps, { edits: [{ x, y, z, before: r.prev[0]!, after: r.next[0]! }] }], [], false);
+    expect(h2.steps.map((s) => s.id), 'the flush after the renew carries the new step only').toEqual([20]);
     const second = await settle(w.sim.flush(state(0), h2), 'the flush after the renew');
     expect(second, 'the flush after the renew').toMatchObject({ type: 'flushed', ok: true, flushSeq: 2, columns: 1 });
     expect(notices.slice(noticesBefore), 'notices').toEqual([]);

@@ -1,6 +1,8 @@
 /**
- * Saved worlds' records (SP5b spec §2.1-§2.3; master §2.7), the pure part: the records of the `worlds`, `state` and
- * `history` stores, the `worlds` record's shape check, the saved params load (D33: `migrate` → `applyPatch` over
+ * Saved worlds' records (SP5b spec §2.1-§2.3; master §2.7), the pure part: the records of the `worlds`, `state`,
+ * `history` and `historySteps` stores (the history one record per step from `wi10` v2, SP5c spec §5, D28's lever 3:
+ * the page's step ids, `createStepIds`; the sim's ops, `historyOps`), the `worlds` record's shape check, the saved
+ * params load (D33: `migrate` → `applyPatch` over
  * `resolveProfile(profile)`, so a leaf a later SP adds takes the world's profile value), the `stateTable` remap (D22:
  * stored id → today's id, a key that no longer parses → air), the older-generator check (D8), and the one normaliser
  * every `state` and `history` record goes through, at open, at import and under the tick's snapshot; and the records
@@ -96,11 +98,59 @@ export interface HistoryEdit {
   after: number;
 }
 
-/** The `history` record (§2.1): each side at most `HISTORY_STEPS` steps, the newest last. */
+/** One step of a history side: its edits, in the order they were applied. */
+export interface HistoryStep {
+  edits: HistoryEdit[];
+}
+
+/**
+ * A world's whole history (§2.1), each side at most `HISTORY_STEPS` steps, the newest last: what the normaliser gives,
+ * the block history restores and `.wiworld`'s header holds. `wi10` v1 stored it as one `history` record; from v2 (SP5c
+ * spec §5, D28's lever 3) the store holds a `HistoryIndex` and each step its own `historySteps` record, and `readAll`
+ * assembles this record for Export.
+ */
 export interface HistoryRecord {
   worldId: string;
-  done: { edits: HistoryEdit[] }[];
-  undone: { edits: HistoryEdit[] }[];
+  done: HistoryStep[];
+  undone: HistoryStep[];
+}
+
+/**
+ * The `history` record from `wi10` v2 (SP5c spec §5, D28's lever 3): each side's step ids, oldest first; step `id` is
+ * the `historySteps` record under `[worldId, id]`, `{edits}`.
+ */
+export interface HistoryIndex {
+  worldId: string;
+  done: number[];
+  undone: number[];
+}
+
+/** A step as a flush or a backup posts it: its id in `historySteps` and its edits. */
+export interface IdStep {
+  readonly id: number;
+  readonly edits: readonly HistoryEdit[];
+}
+
+/**
+ * A history as the page posts it to the sim (a `flush`, a `backup`, a `load`'s rewrite): the index, and the steps it
+ * names whose records are not stored yet (a flush), or every step it names (a backup, a rewrite: `wholeWrite`). The sim
+ * writes it with `historyOps`.
+ */
+export interface HistoryWrite {
+  readonly worldId: string;
+  readonly done: readonly number[];
+  readonly undone: readonly number[];
+  readonly steps: readonly IdStep[];
+}
+
+/**
+ * A history's step ids as the open read them (`normalizeHistory`): each kept step's id (by the step object), the ids
+ * whose `historySteps` record is stored, and the first id no stored record or kept step uses.
+ */
+export interface HistoryIds {
+  readonly of: ReadonlyMap<object, number>;
+  readonly stored: ReadonlySet<number>;
+  readonly next: number;
 }
 
 /**
@@ -132,6 +182,8 @@ export const DEFAULT_SPEED = 12;
 export const DEFAULT_T = 1 / 12;
 /** A history value for "no entry": the DiffStore's `NO_ENTRY`. */
 export const NO_VALUE = NO_ENTRY;
+/** Step ids are below 2^32, so a world's `historySteps` keys lie in `worldRange` (as its colKeys do). */
+export const STEP_ID_LIMIT = 2 ** 32;
 
 const HEX64 = /^[0-9a-f]{16}$/;
 const PLACE_COLOURS = 8;
@@ -346,7 +398,7 @@ function historyValue(v: unknown, to: Int32Array | null): number {
 }
 
 /** A step with every edit inside the world (the window, `yInWorld`, integer coordinates) and valid values, or null. */
-function normalizeStep(raw: unknown, to: Int32Array | null): { edits: HistoryEdit[] } | null {
+function normalizeStep(raw: unknown, to: Int32Array | null): HistoryStep | null {
   if (!isObj(raw) || !Array.isArray(raw['edits']) || raw['edits'].length === 0) return null;
   const edits: HistoryEdit[] = [];
   for (const e of raw['edits'] as unknown[]) {
@@ -361,19 +413,50 @@ function normalizeStep(raw: unknown, to: Int32Array | null): { edits: HistoryEdi
   return { edits };
 }
 
+/** A stored step id: an integer in 0 … `STEP_ID_LIMIT` − 1. */
+const isStepId = (v: unknown): v is number => isInt(v) && v >= 0 && v < STEP_ID_LIMIT;
+
+/** The ids `normalizeHistory` hands out while it reads: the stored ones kept, every other step a fresh one. */
+interface IdReader {
+  readonly of: Map<object, number>;
+  readonly stored: Set<number>;
+  next: number;
+}
+
+/**
+ * One side's raw steps: an id (a v2 index) is looked up in `steps` (an id with no record, or one already used, is
+ * invalid), an object (a v1 record, an Import) is the step itself; each valid step gets its id in `ids`.
+ */
+function sideSteps(raw: unknown[], to: Int32Array | null, steps: ReadonlyMap<number, unknown>, ids: IdReader, used: Set<number>): HistoryStep[] {
+  const valid: HistoryStep[] = [];
+  for (const s of raw) {
+    if (typeof s === 'number') {
+      if (!isStepId(s) || used.has(s) || !steps.has(s)) continue;
+      used.add(s);
+      const step = normalizeStep(steps.get(s), to);
+      if (step === null) continue;
+      ids.of.set(step, s);
+      ids.stored.add(s);
+      valid.push(step);
+    } else {
+      const step = normalizeStep(s, to);
+      if (step === null) continue;
+      ids.of.set(step, ids.next++);
+      valid.push(step);
+    }
+  }
+  return valid;
+}
+
 /**
  * One side: the valid steps, the newest `HISTORY_STEPS` kept, then a step over `MAX_STEP_EDITS` dropped (SP5c spec §5);
  * `dropped` counts the rest.
  */
-function normalizeSide(raw: unknown, to: Int32Array | null): { steps: { edits: HistoryEdit[] }[]; dropped: number } {
+function normalizeSide(raw: unknown, to: Int32Array | null, steps: ReadonlyMap<number, unknown>, ids: IdReader, used: Set<number>): { steps: HistoryStep[]; dropped: number } {
   if (!Array.isArray(raw)) return { steps: [], dropped: 0 };
-  const valid: { edits: HistoryEdit[] }[] = [];
-  for (const s of raw as unknown[]) {
-    const step = normalizeStep(s, to);
-    if (step !== null) valid.push(step);
-  }
-  const steps = valid.slice(Math.max(0, valid.length - HISTORY_STEPS)).filter((s) => s.edits.length <= MAX_STEP_EDITS);
-  return { steps, dropped: raw.length - steps.length };
+  const valid = sideSteps(raw as unknown[], to, steps, ids, used);
+  const kept = valid.slice(Math.max(0, valid.length - HISTORY_STEPS)).filter((s) => s.edits.length <= MAX_STEP_EDITS);
+  return { steps: kept, dropped: raw.length - kept.length };
 }
 
 /** The edits of a side's steps. */
@@ -383,6 +466,8 @@ function editsIn(side: readonly { edits: readonly HistoryEdit[] }[]): number {
   return n;
 }
 
+const NO_STEPS: ReadonlyMap<number, unknown> = new Map();
+
 /**
  * A `history` record read for `worldId`, each value remapped through `to` when given (D22): a step with any edit the
  * sim's `editOk` would refuse after the remap is dropped and counted, as are steps past `HISTORY_STEPS` per side (the
@@ -390,18 +475,126 @@ function editsIn(side: readonly { edits: readonly HistoryEdit[] }[]): number {
  * while both sides hold more than `MAX_HISTORY_EDITS` edits, the oldest undo step, then the redo step furthest from the
  * present (`undone[0]`). `undefined` (a new world has no `history` record) is an empty history; any other value that is
  * not a record is an empty one with `reset` (SP5b D14's notice).
+ *
+ * `wi10` v2 (SP5c spec §5, D28's lever 3): a side's entry is a step id, read from `steps` (the world's `historySteps`
+ * records by id; an id with no record is dropped and counted), or, in a v1 record or an Import, the step itself. `ids`
+ * gives each kept step's id: a stored step keeps its own, any other gets a fresh one from `next`, past every id `steps`
+ * holds, so the page's flushes write only the steps not yet stored.
  */
-export function normalizeHistory(raw: unknown, worldId: string, to: Int32Array | null): { history: HistoryRecord; reset: boolean; dropped: number } {
-  if (!isObj(raw)) return { history: { worldId, done: [], undone: [] }, reset: raw !== undefined, dropped: 0 };
-  const done = normalizeSide(raw['done'], to);
-  const undone = normalizeSide(raw['undone'], to);
+export function normalizeHistory(
+  raw: unknown, worldId: string, to: Int32Array | null, steps: ReadonlyMap<number, unknown> = NO_STEPS,
+): { history: HistoryRecord; ids: HistoryIds; reset: boolean; dropped: number } {
+  let next = 0;
+  for (const id of steps.keys()) if (isStepId(id) && id >= next) next = id + 1;
+  const ids: IdReader = { of: new Map(), stored: new Set(), next };
+  if (!isObj(raw)) return { history: { worldId, done: [], undone: [] }, ids, reset: raw !== undefined, dropped: 0 };
+  const used = new Set<number>();
+  const done = normalizeSide(raw['done'], to, steps, ids, used);
+  const undone = normalizeSide(raw['undone'], to, steps, ids, used);
   let dropped = done.dropped + undone.dropped;
   let total = editsIn(done.steps) + editsIn(undone.steps);
   while (total > MAX_HISTORY_EDITS) {
     total -= (done.steps.length > 0 ? done.steps.shift()! : undone.steps.shift()!).edits.length;
     dropped++;
   }
-  return { history: { worldId, done: done.steps, undone: undone.steps }, reset: false, dropped };
+  return { history: { worldId, done: done.steps, undone: undone.steps }, ids, reset: false, dropped };
+}
+
+// ---------------------------------------------------------------- the history's records (SP5c D28's lever 3)
+
+/** A step as the history's sides hold it (the block history's `BlockStep`, a `HistoryStep`). */
+type AnyStep = { readonly edits: readonly HistoryEdit[] };
+
+/**
+ * The page's step ids (SP5c spec §5, D28's lever 3): each step keeps one id for as long as it lives (by identity), a new
+ * step takes the next free one, and the ids whose records a committed write stored are known, so a flush posts only the
+ * steps not stored yet.
+ */
+export interface StepIds {
+  /** Both sides' index and the steps not known to be stored (every step when `whole`: a backup, a rewrite). */
+  write(worldId: string, done: readonly AnyStep[], undone: readonly AnyStep[], whole: boolean): HistoryWrite;
+  /** `w` was committed: its steps are stored. */
+  committed(w: HistoryWrite): void;
+}
+
+/** The step ids of a world opened with `seed` (`normalizeHistory`'s `ids`), or of a new one (null). */
+export function createStepIds(seed: HistoryIds | null): StepIds {
+  const records = new WeakMap<object, IdStep>();
+  const stored = new Set<number>(seed?.stored ?? []);
+  let next = seed?.next ?? 0;
+  if (seed !== null) for (const [step, id] of seed.of) records.set(step, { id, edits: (step as AnyStep).edits });
+  const recordOf = (step: AnyStep): IdStep => {
+    let r = records.get(step);
+    if (r === undefined) records.set(step, (r = { id: next++, edits: step.edits.slice() }));
+    return r;
+  };
+  return {
+    write(worldId, done, undone, whole) {
+      const steps: IdStep[] = [];
+      const side = (from: readonly AnyStep[]): number[] => from.map((s) => {
+        const r = recordOf(s);
+        if (whole || !stored.has(r.id)) steps.push(r);
+        return r.id;
+      });
+      return { worldId, done: side(done), undone: side(undone), steps };
+    },
+    committed(w) {
+      for (const s of w.steps) stored.add(s.id);
+    },
+  };
+}
+
+/** `h` as a whole write, its steps numbered 0, 1, … (an Import, a test's history). */
+export function wholeWrite(h: HistoryRecord): HistoryWrite {
+  return createStepIds(null).write(h.worldId, h.done, h.undone, true);
+}
+
+/** A whole write as one record (its steps by id, in its index's order; an id it carries no step for left out). */
+export function writeRecord(w: HistoryWrite): HistoryRecord {
+  const byId = new Map(w.steps.map((s) => [s.id, s]));
+  const side = (ids: readonly number[]): HistoryStep[] => ids.flatMap((id) => {
+    const s = byId.get(id);
+    return s === undefined ? [] : [{ edits: [...s.edits] }];
+  });
+  return { worldId: w.worldId, done: side(w.done), undone: side(w.undone) };
+}
+
+/**
+ * The ops that store `w` under `worldId` (SP5c spec §5, D28's lever 3): a `historySteps` put per step it carries, then
+ * a `deleteRange` over each run of ids its index does not name (so a dropped step's record goes, and a stray put with
+ * it), then the `history` index. Every id the index names is either carried or already stored.
+ */
+export function historyOps(worldId: string, w: HistoryWrite): WriteOp[] {
+  const ops: WriteOp[] = [];
+  for (const s of w.steps) ops.push({ op: 'put', store: 'historySteps', key: [worldId, s.id], value: { edits: s.edits } });
+  const live = [...w.done, ...w.undone].sort((a, b) => a - b);
+  let lower = 0;
+  for (const id of live) {
+    if (id > lower) ops.push({ op: 'deleteRange', store: 'historySteps', range: { lower: [worldId, lower], upper: [worldId, id] } });
+    lower = Math.max(lower, id + 1);
+  }
+  if (lower < STEP_ID_LIMIT) ops.push({ op: 'deleteRange', store: 'historySteps', range: { lower: [worldId, lower], upper: [worldId, STEP_ID_LIMIT] } });
+  const index: HistoryIndex = { worldId, done: [...w.done], undone: [...w.undone] };
+  ops.push({ op: 'put', store: 'history', key: worldId, value: index });
+  return ops;
+}
+
+/**
+ * The history as stored, assembled into one record for Export (SP5c spec §5): a v2 index's ids each replaced by its
+ * `historySteps` record (an id with none left out), a v1 record's steps as they are; null when `raw` is not a record.
+ */
+export function assembleHistory(raw: unknown, steps: ReadonlyMap<number, unknown>): HistoryRecord | null {
+  if (!isObj(raw)) return null;
+  const side = (v: unknown): HistoryStep[] => (Array.isArray(v) ? (v as unknown[]) : []).flatMap((s) => {
+    if (typeof s !== 'number') return [s as HistoryStep];
+    return steps.has(s) ? [steps.get(s) as HistoryStep] : [];
+  });
+  return { ...(raw as unknown as HistoryRecord), done: side(raw['done']), undone: side(raw['undone']) };
+}
+
+/** A world's `historySteps` records read as `getAll` gives them, by id. */
+function stepsOf(all: { keys: readonly (readonly [string, number])[]; values: readonly unknown[] }): Map<number, unknown> {
+  return new Map(all.keys.map((k, i) => [k[1], all.values[i]]));
 }
 
 // ---------------------------------------------------------------- the records over the KV
@@ -429,15 +622,22 @@ export interface Saves {
   list(): Promise<WorldRow[]>;
   /** The `worlds` and `state` records in one write (§1.2). */
   create(w: WorldRecord, state: StateRecord): Promise<WriteResult>;
-  /** The three records as stored (`undefined` when absent), in one read; the page parses and normalises them. */
-  readOpen(id: string): Promise<{ world: unknown; state: unknown; history: unknown }>;
+  /**
+   * The three records as stored (`undefined` when absent) and the world's `historySteps` records by id, in one read; the
+   * page parses and normalises them.
+   */
+  readOpen(id: string): Promise<{ world: unknown; state: unknown; history: unknown; steps: Map<number, unknown> }>;
   /** The name trimmed and cut to `MAX_NAME`; an empty name or a missing or broken record writes nothing. The caller holds the world's lock. */
   rename(id: string, name: string): Promise<WriteResult>;
-  /** The three records and the world's `diffs` range in one write (E7). The caller holds the world's lock. */
+  /** The three records and the world's `historySteps` and `diffs` ranges in one write (E7). The caller holds the world's lock. */
   remove(id: string): Promise<WriteResult>;
-  /** The three records and the `diffs` range in one read, so a world open in another tab is read at one `flushSeq`; null without a readable `worlds` record or a `state` record. */
+  /**
+   * The three records, the `historySteps` range (assembled into the history, `assembleHistory`) and the `diffs` range in
+   * one read, so a world open in another tab is read at one `flushSeq`; null without a readable `worlds` record or a
+   * `state` record.
+   */
   readAll(id: string): Promise<WorldDump | null>;
-  /** The three records and every column in one write (Import). */
+  /** The three records, every step (numbered 0, 1, …: `wholeWrite`) and every column in one write (Import). */
   writeAll(d: WorldDump): Promise<WriteResult>;
   readonly kv: KV;
 }
@@ -484,12 +684,13 @@ export function createSaves(kv: KV): Saves {
       ]);
     },
     async readOpen(id) {
-      const [world, state, history] = await kv.read([
+      const [world, state, history, steps] = await kv.read([
         { op: 'get', store: 'worlds', key: id },
         { op: 'get', store: 'state', key: id },
         { op: 'get', store: 'history', key: id },
+        { op: 'getAll', store: 'historySteps', range: worldRange(id) },
       ]);
-      return { world, state, history };
+      return { world, state, history, steps: stepsOf(steps as { keys: (readonly [string, number])[]; values: unknown[] }) };
     },
     async rename(id, name) {
       const cut = Array.from(name.trim()).slice(0, MAX_NAME).join('');
@@ -504,27 +705,29 @@ export function createSaves(kv: KV): Saves {
         { op: 'delete', store: 'worlds', key: id },
         { op: 'delete', store: 'state', key: id },
         { op: 'delete', store: 'history', key: id },
+        { op: 'deleteRange', store: 'historySteps', range: worldRange(id) },
         { op: 'deleteRange', store: 'diffs', range: worldRange(id) },
       ]);
     },
     async readAll(id) {
-      const [world, state, history, diffs] = (await kv.read([
+      const [world, state, history, steps, diffs] = (await kv.read([
         { op: 'get', store: 'worlds', key: id },
         { op: 'get', store: 'state', key: id },
         { op: 'get', store: 'history', key: id },
+        { op: 'getAll', store: 'historySteps', range: worldRange(id) },
         { op: 'getAll', store: 'diffs', range: worldRange(id) },
-      ])) as [unknown, unknown, unknown, { keys: (readonly [string, number])[]; values: Uint8Array[] }];
+      ])) as [unknown, unknown, unknown, { keys: (readonly [string, number])[]; values: unknown[] }, { keys: (readonly [string, number])[]; values: Uint8Array[] }];
       const p = parseWorldRecord(world);
       if (!p.ok || !isObj(state)) return null;
       return {
         world: p.world,
         state: state as unknown as StateRecord,
-        history: isObj(history) ? (history as unknown as HistoryRecord) : null,
+        history: assembleHistory(history, stepsOf(steps)),
         cols: diffs.keys.map((k, i) => ({ key: k[1], bytes: diffs.values[i]! })),
       };
     },
     writeAll(d) {
-      return kv.write(copyOps(d.world, d.state, d.history, d.cols));
+      return kv.write(copyOps(d.world, d.state, d.history === null ? null : wholeWrite(d.history), d.cols));
     },
   };
 }
@@ -543,13 +746,14 @@ export async function openSaves(open: () => Promise<KV>): Promise<Saves | null> 
 
 /**
  * One flush's batch (§3.2): each column's bytes under `[worldId, key]` (null bytes → its delete), the state, and the
- * history and the `worlds` record when given.
+ * history (`historyOps`: its new steps, the dropped ones' deletes and the index; SP5c D28's lever 3) and the `worlds`
+ * record when given.
  */
 export function flushOps(
   worldId: string,
   cols: readonly { key: number; bytes: Uint8Array | null }[],
   state: StateRecord,
-  history: HistoryRecord | null,
+  history: HistoryWrite | null,
   world: WorldRecord | null,
 ): WriteOp[] {
   const ops: WriteOp[] = cols.map((c): WriteOp =>
@@ -557,23 +761,26 @@ export function flushOps(
       ? { op: 'delete', store: 'diffs', key: [worldId, c.key] }
       : { op: 'put', store: 'diffs', key: [worldId, c.key], value: c.bytes });
   ops.push({ op: 'put', store: 'state', key: worldId, value: state });
-  if (history !== null) ops.push({ op: 'put', store: 'history', key: worldId, value: history });
+  if (history !== null) ops.push(...historyOps(worldId, history));
   if (world !== null) ops.push({ op: 'put', store: 'worlds', key: world.id, value: world });
   return ops;
 }
 
-/** A whole world's batch under `world.id` (Import, the backup copy): the record, the state, the history when given, every column. */
+/**
+ * A whole world's batch under `world.id` (Import, the backup copy): the record, the state, the history when given (a
+ * whole write: every step it names), every column.
+ */
 export function copyOps(
   world: WorldRecord,
   state: StateRecord,
-  history: HistoryRecord | null,
+  history: HistoryWrite | null,
   cols: readonly { key: number; bytes: Uint8Array }[],
 ): WriteOp[] {
   const ops: WriteOp[] = [
     { op: 'put', store: 'worlds', key: world.id, value: world },
     { op: 'put', store: 'state', key: world.id, value: state },
   ];
-  if (history !== null) ops.push({ op: 'put', store: 'history', key: world.id, value: history });
+  if (history !== null) ops.push(...historyOps(world.id, history));
   for (const c of cols) ops.push({ op: 'put', store: 'diffs', key: [world.id, c.key], value: c.bytes });
   return ops;
 }

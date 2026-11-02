@@ -29,7 +29,7 @@
  * The state is built at a post, never per frame (SP4b D25: the frame step allocates nothing at rest).
  */
 import { SimFailed } from '../../engine/simClient';
-import { normalizeState, type HistoryRecord, type HotbarRecord, type Place, type StateRecord } from '../../persist/saves';
+import { normalizeState, type HistoryWrite, type HotbarRecord, type Place, type StateRecord } from '../../persist/saves';
 import type { FlyState } from '../../player/fly';
 import type { FlushedMsg } from '../../workers/protocol';
 import { STATE_BOUNDS } from './stateBounds';
@@ -155,13 +155,16 @@ export interface AutosaveDeps {
   /** The page's events; `on` returns the unsubscribe. */
   events: { on(type: 'visibilitychange' | 'pagehide' | 'beforeunload', f: () => void): () => void; hidden(): boolean };
   /** The sim client's `flush`: resolves with `flushed`, ok or not; rejects `SimFailed` when the sim is gone. */
-  flush(state: StateRecord, history: HistoryRecord | null): Promise<FlushedMsg>;
+  flush(state: StateRecord, history: HistoryWrite | null): Promise<FlushedMsg>;
   /** The state's parts (`createStateParts`): read at every check, the record built only for a post. */
   readonly state: StateParts;
   /** The block history's version (moved by every recorded step, undo, redo). */
   historyVersion(): number;
-  /** The block history's record: built only for a post whose history version differs from the last committed one. */
-  history(): HistoryRecord;
+  /**
+   * The block history's write (its index and the steps not yet stored, SP5c spec §5): built only for a post whose
+   * history version differs from the last committed one.
+   */
+  history(): HistoryWrite;
   /** The edit path's wait for every pending reply to be recorded. */
   settled(): Promise<void>;
   /** Whether the edit path has a bulk batch posted and not answered (SP5c spec §3.4): the waits are then 5,000 ms. */

@@ -2,13 +2,14 @@
  * The autosave (SP5b spec §3.2, D5, D18): its triggers (the 2,000 ms timer, the hide and close events, `flushNow`,
  * `beforeLeave`), what counts as changed since the last committed flush, the history posted only when its version
  * moved, and the state snapshot through the §2.1 normaliser; the state's parts and their versions, built only for a
- * post, and the page's history records, one object per step (D28's third lever). On a fake clock whose timers run in
+ * post, and the page's history writes, each step under one id and posted until a committed flush stored it (SP5c
+ * spec §5, D28's lever 3). On a fake clock whose timers run in
  * time order, fake page events and a fake `flush` whose replies the test settles by hand.
  */
 import { describe, expect, test } from 'vitest';
 import { canonicalJSON } from '../../src/core/params/canonical';
 import { SimFailed } from '../../src/engine/simClient';
-import type { HistoryRecord, HotbarRecord, Place, StateRecord } from '../../src/persist/saves';
+import { wholeWrite, type HistoryIds, type HistoryWrite, type HotbarRecord, type Place, type StateRecord } from '../../src/persist/saves';
 import type { FlyState } from '../../src/player/fly';
 import {
   AUTOSAVE_MS, BULK_SETTLE_WAIT_MS, createAutosave, createStateParts, LEAVE_WAIT_MS, SETTLE_WAIT_MS, snapshotState, type Autosave,
@@ -16,7 +17,7 @@ import {
 import type { BlockStep } from '../../src/ui/world/blockHistory';
 import { STATE_BOUNDS } from '../../src/ui/world/stateBounds';
 import { createPageAutosave } from '../../src/ui/world/worldPage';
-import { historyChange, type FlushedMsg } from '../../src/workers/protocol';
+import type { FlushedMsg } from '../../src/workers/protocol';
 
 /** Lets every pending promise continuation run. */
 const drain = (): Promise<void> => new Promise<void>((r) => setImmediate(r));
@@ -61,7 +62,7 @@ function fakeClock() {
 interface Post {
   readonly at: number;
   readonly state: StateRecord;
-  readonly history: HistoryRecord | null;
+  readonly history: HistoryWrite | null;
   resolve(r: FlushedMsg): void;
   reject(e: Error): void;
 }
@@ -88,7 +89,7 @@ function rig() {
     /** What `bulkPending()` returns: whether a bulk batch is posted and not answered (SP5c spec §2.8). */
     bulk: false,
   };
-  const history = (): HistoryRecord => ({
+  const history = (): HistoryWrite => wholeWrite({
     worldId: 'w1',
     done: Array.from({ length: page.steps }, (_, i) => ({ edits: [{ x: i, y: 64, z: 0, before: 0xFFFFFFFF, after: 1 << 8 }] })),
     undone: [],
@@ -622,36 +623,83 @@ describe('createStateParts (SP5b spec §3.2, D28\'s third lever)', () => {
   });
 });
 
-describe('the page\'s autosave (`createPageAutosave`; D28\'s third lever)', () => {
-  test('two posts\' history records share the objects of the steps both hold, so the sim client posts their change', async () => {
-    const step = (x: number): BlockStep => ({ edits: [{ x, y: 64, z: 0, before: 0xFFFFFFFF, after: 1 << 8 }] });
-    const done: BlockStep[] = [step(1), step(2)];
-    let version = 1;
-    const posted: Array<HistoryRecord | null> = [];
+describe('the page\'s autosave (`createPageAutosave`): the history step by step (SP5c spec §5, D28\'s lever 3)', () => {
+  const step = (x: number, n = 1): BlockStep => ({ edits: Array.from({ length: n }, (_, i) => ({ x, y: 64 + i, z: 0, before: 0xFFFFFFFF, after: 1 << 8 })) });
+  const ok = (id: number): FlushedMsg => ({ type: 'flushed', id, ok: true, flushSeq: id, columns: 0, bytes: 0, syncMs: 0, commitMs: 0 });
+  const failed = (id: number): FlushedMsg => ({ type: 'flushed', id, ok: false, status: 'abort', errorName: 'QuotaExceededError' });
+  /** A page autosave over a block history the test moves by hand; `replies` answers each flush in turn (ok by default). */
+  const pageRig = (o: { historyIds?: HistoryIds | null; replies?: Array<(id: number) => FlushedMsg> } = {}) => {
+    const sides = { done: [] as BlockStep[], undone: [] as BlockStep[] };
+    let version = 0;
+    const posted: Array<HistoryWrite | null> = [];
     const a = createPageAutosave({
       worldId: 'w1', fly: { x: 1, y: 80, z: 2, yaw: 0, pitch: 0, mode: 'fly', speed: 12 }, frame: { t: 0.25 }, speedIndex: () => 0,
       storedTime: null, hotbar: () => HOTBAR,
-      blockHistory: { snapshot: () => ({ done: done.slice(), undone: [] }), get version() { return version; } },
+      blockHistory: { snapshot: () => ({ done: sides.done.slice(), undone: sides.undone.slice() }), get version() { return version; } },
+      historyIds: o.historyIds,
       sim: {
         flush(_state, h) {
           posted.push(h);
-          return Promise.resolve({ type: 'flushed', id: posted.length, ok: true, flushSeq: posted.length, columns: 0, bytes: 0, syncMs: 0, commitMs: 0 });
+          return Promise.resolve((o.replies?.[posted.length - 1] ?? ok)(posted.length));
         },
       },
       settled: () => Promise.resolve(), editsSince: () => 0, now: () => 1_700_000_000_000, clock: fakeClock(),
       events: { on: () => () => {}, hidden: () => false }, onResult() {},
     });
-    version = 2;
-    await a.flushNow();
-    done.push(step(3));
-    version = 3;
-    await a.flushNow();
-    const [h1, h2] = posted as [HistoryRecord, HistoryRecord];
-    expect(h2).toEqual({ worldId: 'w1', done: done.map((s) => ({ edits: [...s.edits] })), undone: [] });
-    expect([h2.done[0], h2.done[1]]).toEqual([h1.done[0], h1.done[1]]);
-    expect(h2.done[0]).toBe(h1.done[0]);
-    expect(h2.done[1]).toBe(h1.done[1]);
-    expect(historyChange(h1, h2)).toEqual({ worldId: 'w1', done: { from: 0, keep: 2, add: [h2.done[2]] }, undone: { from: 0, keep: 0, add: [] } });
-    a.dispose();
+    return { a, sides, posted, moved: () => { version++; } };
+  };
+
+  test('a flush carries only the steps no committed flush stored: a new step once, an undo and a redo as ids only', async () => {
+    const r = pageRig();
+    const s1 = step(1, 3);
+    const s2 = step(2);
+    r.sides.done.push(s1, s2);
+    r.moved();
+    await r.a.flushNow();
+    const s3 = step(3);
+    r.sides.done.push(s3);
+    r.moved();
+    await r.a.flushNow();
+    // Undo s3, then redo it: it moves between the sides and keeps its id.
+    r.sides.undone.push(r.sides.done.pop()!);
+    r.moved();
+    await r.a.flushNow();
+    r.sides.done.push(r.sides.undone.pop()!);
+    r.moved();
+    await r.a.flushNow();
+    const [h1, h2, h3, h4] = r.posted as [HistoryWrite, HistoryWrite, HistoryWrite, HistoryWrite];
+    expect(h1).toEqual({ worldId: 'w1', done: [0, 1], undone: [], steps: [{ id: 0, edits: s1.edits }, { id: 1, edits: s2.edits }] });
+    expect(h2).toEqual({ worldId: 'w1', done: [0, 1, 2], undone: [], steps: [{ id: 2, edits: s3.edits }] });
+    expect(h3).toEqual({ worldId: 'w1', done: [0, 1], undone: [2], steps: [] });
+    expect(h4).toEqual({ worldId: 'w1', done: [0, 1, 2], undone: [], steps: [] });
+    r.a.dispose();
+  });
+
+  test('a flush that did not commit leaves its steps unstored: the next one carries them again', async () => {
+    const r = pageRig({ replies: [failed] });
+    const s1 = step(1);
+    r.sides.done.push(s1);
+    r.moved();
+    expect(await r.a.flushNow()).toMatchObject({ ok: false });
+    expect(await r.a.flushNow()).toMatchObject({ ok: true });
+    expect(r.posted.map((h) => h?.steps.map((s) => s.id))).toEqual([[0], [0]]);
+    r.a.dispose();
+  });
+
+  test('seeded with the open\'s ids, the first flush after the open posts no stored step, only the new one; `build` carries every step (the backup)', async () => {
+    const restored = [step(1, 32), step(2, 32)];
+    const historyIds: HistoryIds = { of: new Map([[restored[0]!, 7], [restored[1]!, 9]]), stored: new Set([7, 9]), next: 10 };
+    const r = pageRig({ historyIds });
+    r.sides.done.push(...restored);
+    const s3 = step(3);
+    r.sides.done.push(s3);
+    r.moved();
+    await r.a.flushNow();
+    expect(r.posted[0]).toEqual({ worldId: 'w1', done: [7, 9, 10], undone: [], steps: [{ id: 10, edits: s3.edits }] });
+    const built = r.a.build().history;
+    expect(built.done).toEqual([7, 9, 10]);
+    expect(built.steps.map((s) => s.id)).toEqual([7, 9, 10]);
+    expect(built.steps[0]!.edits).toEqual(restored[0]!.edits);
+    r.a.dispose();
   });
 });

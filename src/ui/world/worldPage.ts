@@ -171,7 +171,7 @@ import { StoreFullError, WorkerFailed, createBrowserPool, poolSize, type WorkerP
 import { deleteIdb, idbAvailable, openIdbKV } from '../../persist/idb';
 import type { KV } from '../../persist/kv';
 import {
-  MAX_PLACES, createSaves, loadParams, newState, normalizeHistory, normalizeState, parseWorldRecord, remapOf, tableRelation, todayStateTable, type HistoryRecord,
+  MAX_PLACES, createSaves, createStepIds, loadParams, newState, normalizeHistory, normalizeState, parseWorldRecord, remapOf, tableRelation, todayStateTable, type HistoryIds, type HistoryRecord, type HistoryWrite,
   type HotbarRecord, type Place, type Saves, type StateBounds, type StateRecord, type WorldRecord,
 } from '../../persist/saves';
 import { wiworldHash } from '../../persist/wiworld';
@@ -2961,7 +2961,7 @@ export function watchStorage(notices: Pick<Notices, 'show' | 'hide'>, kv: Pick<K
 
 /** A saved world's records as the page opens them (SP5b spec §3.4 step 2), or why it cannot open. */
 export type SavedWorldRead =
-  | { ok: true; world: WorldRecord; params: Params; state: StateRecord; history: HistoryRecord; notices: string[] }
+  | { ok: true; world: WorldRecord; params: Params; state: StateRecord; history: HistoryRecord; historyIds: HistoryIds; notices: string[] }
   | { ok: false; reason: string };
 
 /**
@@ -2970,10 +2970,12 @@ export type SavedWorldRead =
  * reason}`. A `state` that is not a record → `newState`'s defaults with `STATE_RESET_NOTICE`; an absent `history` (a new
  * world's: Create writes none) → none and no notice; a present one that is not a record → none with
  * `HISTORY_RESET_NOTICE`. Both go through the normaliser with `bounds`, the history's values remapped through
- * `remapOf(world.stateTable)` when the stored table is neither today's nor a prefix of it (D22).
+ * `remapOf(world.stateTable)` when the stored table is neither today's nor a prefix of it (D22). The history's steps are
+ * read from the world's `historySteps` records (SP5c spec §5, D28's lever 3), and `historyIds` gives each kept step's
+ * id and the ids already stored, so the autosave never posts a stored step again.
  */
 export async function readSavedWorld(saves: Saves, id: string, bounds: StateBounds): Promise<SavedWorldRead> {
-  let raw: { world: unknown; state: unknown; history: unknown };
+  let raw: { world: unknown; state: unknown; history: unknown; steps: Map<number, unknown> };
   try {
     raw = await saves.readOpen(id);
   } catch (e) {
@@ -2989,9 +2991,9 @@ export async function readSavedWorld(saves: Saves, id: string, bounds: StateBoun
   const state = normalizeState(raw.state, id, bounds);
   if (state.reset) notices.push(STATE_RESET_NOTICE);
   const to = tableRelation(world.stateTable) === 'other' ? remapOf(world.stateTable).to : null;
-  const history = normalizeHistory(raw.history, id, to);
+  const history = normalizeHistory(raw.history, id, to, raw.steps);
   if (history.reset) notices.push(HISTORY_RESET_NOTICE);
-  return { ok: true, world, params: params.value, state: state.state, history: history.history, notices };
+  return { ok: true, world, params: params.value, state: state.state, history: history.history, historyIds: history.ids, notices };
 }
 
 /** What the page posts as `load` (the message without its `type` and `id`). */
@@ -3002,12 +3004,14 @@ export type SavedLoad = Omit<LoadMsg, 'type' | 'id'>;
  * stored `stateTable` (the sim reads the stored ids through it), the world's genKey and the state's `flushSeq` and
  * `updated`. When the stored table is not today's, `rewrite` carries the record with today's table, and `history` (read
  * remapped) when the table is not a prefix of today's, which the sim writes before answering `loaded`; the page then
- * keeps that record, so a later `record` or backup never writes the old table back over today's ids.
+ * keeps that record, so a later `record` or backup never writes the old table back over today's ids. The history goes
+ * as a whole write, each step under its id in `ids` (`readSavedWorld`'s `historyIds`; SP5c spec §5).
  */
-export function openRequest(db: string, world: WorldRecord, state: StateRecord, history: HistoryRecord): { load: SavedLoad; kept: WorldRecord } {
+export function openRequest(db: string, world: WorldRecord, state: StateRecord, history: HistoryRecord, ids: HistoryIds | null = null): { load: SavedLoad; kept: WorldRecord } {
   const relation = tableRelation(world.stateTable);
   const kept = relation === 'equal' ? world : { ...world, stateTable: todayStateTable() };
-  const rewrite = relation === 'equal' ? null : { world: kept, history: relation === 'other' ? history : null };
+  const rewritten = relation === 'other' ? createStepIds(ids).write(world.id, history.done, history.undone, true) : null;
+  const rewrite = relation === 'equal' ? null : { world: kept, history: rewritten };
   return {
     load: { db, worldId: world.id, flushSeq: state.flushSeq, genKey: world.genKey, updated: state.updated, stateTable: world.stateTable, rewrite },
     kept,
@@ -3072,6 +3076,8 @@ export interface SavedOpen {
   readonly session: WorldSession;
   readonly state: StateRecord;
   readonly history: HistoryRecord;
+  /** Each restored step's id and the ids already stored (SP5c spec §5), the autosave's seed. */
+  readonly historyIds: HistoryIds;
   /** D14's notices for a `state` or `history` that could not be read. */
   readonly notices: readonly string[];
   readonly load: SavedLoad;
@@ -3130,8 +3136,11 @@ export async function openSavedWorld(o: {
   }
   // The modification mode is off at every open (§3.6): no terrain change until the user switches it on.
   session.setWritable(false);
-  const { load, kept } = openRequest(o.db, read.world, read.state, read.history);
-  return { ok: true, opened: { kv, session, state: read.state, history: read.history, notices: read.notices, load, kept, lock } };
+  const { load, kept } = openRequest(o.db, read.world, read.state, read.history, read.historyIds);
+  // A rewrite stores every step before `loaded` (SP5c spec §5): none of them is posted again.
+  const rewritten = load.rewrite?.history ?? null;
+  const historyIds = rewritten === null ? read.historyIds : { ...read.historyIds, stored: new Set([...rewritten.done, ...rewritten.undone]) };
+  return { ok: true, opened: { kv, session, state: read.state, history: read.history, historyIds, notices: read.notices, load, kept, lock } };
 }
 
 /**
@@ -3319,13 +3328,10 @@ export function hotbarStorage(get: () => HotbarRecord, set: (h: HotbarRecord) =>
   };
 }
 
-/** A block-history step as the `history` record holds it. */
-const stepRecord = (step: BlockStep): HistoryRecord['done'][number] => ({ edits: [...step.edits] });
-
 /** The page's autosave, and the state and whole history it would post now: the backup's (SP5b spec §3.6, D26). */
 export interface PageAutosave extends Autosave {
-  /** The state record (the state parts' `record()`, `updated` now) and the block history as a whole record. */
-  build(): { readonly state: StateRecord; readonly history: HistoryRecord };
+  /** The state record (the state parts' `record()`, `updated` now) and the block history as a whole write (every step). */
+  build(): { readonly state: StateRecord; readonly history: HistoryWrite };
 }
 
 /**
@@ -3334,8 +3340,9 @@ export interface PageAutosave extends Autosave {
  * the day speed's index; `storedTime` unchanged while a `?shot=1&time=` capture fixes the clock, which is then not
  * saved), the world's hotbar record (`hotbarStorage`'s), the places (`Places.list`, a new list at every change, compared
  * by identity; none when not given) and the wall clock (`now`); the block history's
- * version and its sides as a record (§3.4 step 6), one record object per step for as long as the step lives, so the
- * sim client posts only what changed since the last history (D28's third lever); `settled` the edit path's;
+ * version and its sides as a write (§3.4 step 6): each step keeps one id for as long as it lives (`createStepIds`,
+ * seeded with `historyIds`, the open's), and a flush carries only the steps no committed flush stored, so a flush after
+ * the open or after a large step posts no stored step again (SP5c spec §5, D28's lever 3); `settled` the edit path's;
  * `editsSince` the accepted replies (`countAccepted`); `onResult` every `flushed`; `onBuild`, when given, as each
  * post's work starts (the bench's clock of a flush's main-thread work, SP5b spec §6.2). `build` gives the backup the
  * same state parts' record and history the next post would carry.
@@ -3352,6 +3359,8 @@ export function createPageAutosave(o: {
   /** The world's places (SP5b spec §3.7); the bench has none. */
   places?(): readonly Place[];
   readonly blockHistory: Pick<BlockHistory, 'snapshot' | 'version'>;
+  /** The open's step ids (`SavedOpen.historyIds`); none for a world opened with no stored step. */
+  readonly historyIds?: HistoryIds | null;
   readonly sim: Pick<SimClient, 'flush'>;
   settled(): Promise<void>;
   /** The edit path's `bulkPending` (SP5c spec §2.8): the tick's and a leave's 5,000 ms wait; none (false) when not given. */
@@ -3364,12 +3373,7 @@ export function createPageAutosave(o: {
   onResult(r: FlushedMsg): void;
   onBuild?(): void;
 }): PageAutosave {
-  const records = new WeakMap<BlockStep, HistoryRecord['done'][number]>();
-  const recordOf = (step: BlockStep): HistoryRecord['done'][number] => {
-    let r = records.get(step);
-    if (r === undefined) records.set(step, (r = stepRecord(step)));
-    return r;
-  };
+  const ids = createStepIds(o.historyIds ?? null);
   const { storedTime } = o;
   const state = createStateParts({
     worldId: o.worldId,
@@ -3380,24 +3384,27 @@ export function createPageAutosave(o: {
     places: () => o.places?.() ?? NO_PLACES,
     now: () => o.now(),
   });
-  const history = (): HistoryRecord => {
+  const history = (whole: boolean): HistoryWrite => {
     const steps = o.blockHistory.snapshot();
-    return { worldId: o.worldId, done: steps.done.map(recordOf), undone: steps.undone.map(recordOf) };
+    return ids.write(o.worldId, steps.done, steps.undone, whole);
   };
   const autosave = createAutosave({
     clock: o.clock,
     events: o.events,
-    flush: (st, h) => o.sim.flush(st, h),
+    flush: (st, h) => o.sim.flush(st, h).then((r) => {
+      if (r.ok && h !== null) ids.committed(h);
+      return r;
+    }),
     state,
     historyVersion: () => o.blockHistory.version,
-    history,
+    history: () => history(false),
     settled: () => o.settled(),
     bulkPending: () => o.bulkPending?.() ?? false,
     editsSince: () => o.editsSince(),
     onResult: (r) => o.onResult(r),
     onBuild: o.onBuild,
   });
-  return { ...autosave, build: () => ({ state: state.record(), history: history() }) };
+  return { ...autosave, build: () => ({ state: state.record(), history: history(true) }) };
 }
 
 /** The benches' database (SP5b spec §6.2; `bench.ts`): the bench route's saved world lives there, never in `SAVES_DB`. */
@@ -5329,6 +5336,7 @@ export function mountWorldPage(root: HTMLElement, q: WorldQuery, hash: string, o
         storedTime: restored !== null && !restored.saveClock ? opened.state.time : null,
         hotbar: () => worldHotbar,
         blockHistory,
+        historyIds: opened.historyIds,
         sim: simClient!,
         places: () => worldPlaces.list,
         settled: editPath.settled,

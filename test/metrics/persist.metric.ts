@@ -15,8 +15,8 @@ import { decodeColumnDiff, DiffDecodeError, encodeColumnDiff, encodedSize, type 
 import { STORES, type WriteOp } from '../../src/persist/kv';
 import { createMemoryKV, type MemoryKV } from '../../src/persist/memory';
 import {
-  createSaves, DEFAULT_SPEED, DEFAULT_T, HISTORY_STEPS, loadParams, MAX_NAME, MAX_PLACES, newState, NO_VALUE, olderGenerator,
-  todayStateTable, type HistoryRecord, type Place, type PlayerRecord, type StateRecord, type WorldDump, type WorldRecord,
+  assembleHistory, createSaves, DEFAULT_SPEED, DEFAULT_T, HISTORY_STEPS, loadParams, MAX_NAME, MAX_PLACES, newState, NO_VALUE, olderGenerator,
+  todayStateTable, wholeWrite, writeRecord, type HistoryRecord, type HistoryWrite, type Place, type PlayerRecord, type StateRecord, type WorldDump, type WorldRecord,
 } from '../../src/persist/saves';
 import { readWiworld, wiworldHash, writeWiworld } from '../../src/persist/wiworld';
 import { createDiffStore } from '../../src/sim/diffStore';
@@ -311,6 +311,11 @@ function kvSnapshot(kv: MemoryKV): string {
 /** The `state` record of `id` in `kv`, as stored. */
 const storedState = (kv: MemoryKV, id: string): StateRecord | undefined =>
   kv.dump('state').find(([k]) => k === id)?.[1] as StateRecord | undefined;
+/** The world's history as stored (SP5c spec §5: its index and its `historySteps` records), assembled into one record. */
+const storedHistory = (kv: MemoryKV, id: string): HistoryRecord | null => assembleHistory(
+  kv.dump('history').find(([k]) => k === id)?.[1],
+  new Map(kv.dump('historySteps').flatMap(([k, v]) => (Array.isArray(k) && k[0] === id ? [[k[1] as number, v]] : []))),
+);
 const storedWorld = (kv: MemoryKV, id: string): WorldRecord | undefined =>
   kv.dump('worlds').find(([k]) => k === id)?.[1] as WorldRecord | undefined;
 /** World `id`'s stored columns, by colKey. */
@@ -936,10 +941,10 @@ async function measureE4(): Promise<{ values: Record<string, number>; problems: 
   expect((await call(h, { type: 'attach', handles: store.handles(), thread: 15 })).type).toBe('attached');
   expect((await call(h, loadOf(0))).type).toBe('loaded');
   const stateAt = (t: number): StateRecord => ({ ...newState('e4', STATE_BOUNDS), time: { t, speedIndex: 0 } });
-  const historyOf = (n: number): HistoryRecord => ({
+  const historyOf = (n: number): HistoryWrite => wholeWrite({
     worldId: 'e4', done: Array.from({ length: n }, (_, i) => ({ edits: [{ x: 16 * C[0] + i, y: 100, z: 16 * C[1], before: NO_VALUE, after: val(STONE) }] })), undone: [],
   });
-  const flushMsg = (t: number, history: HistoryRecord | null) => ({ type: 'flush', id: id++, state: stateAt(t), history });
+  const flushMsg = (t: number, history: HistoryWrite | null) => ({ type: 'flush', id: id++, state: stateAt(t), history });
   const edits = async (list: Edit[], what: string): Promise<void> => {
     const r = await call(h, { type: 'edits', id: id++, edits: list });
     if (r.type !== 'edited' || (r as EditedMsg).refused !== null) problems.add(`E4: ${what}: ${r.type === 'edited' ? `refused '${(r as EditedMsg).refused}'` : r.type}`);
@@ -1035,7 +1040,7 @@ async function measureE4(): Promise<{ values: Record<string, number>; problems: 
     problems.add(`E4: the retry: ${retry.ok ? `flushSeq ${retry.flushSeq}, ${retry.columns} columns` : 'not committed'} (2 and 64 expected)`);
   }
   lostAfterRetry += await storedAsLive(allKeys, 'the retry');
-  if (storedState(kv, 'e4')?.flushSeq !== 2 || !sameJson(kv.dump('history').find(([k]) => k === 'e4')?.[1], historyB) || !sameJson(storedWorld(kv, 'e4'), record)) {
+  if (storedState(kv, 'e4')?.flushSeq !== 2 || !sameJson(storedHistory(kv, 'e4'), writeRecord(historyB)) || !sameJson(storedWorld(kv, 'e4'), record)) {
     lostAfterRetry++;
     problems.add('E4: the retry did not write the aborted batch\'s flushSeq + 1, history or record');
   }
@@ -1625,8 +1630,9 @@ test('persist: the recorded values (not gated)', async () => {
   let backupMs = 0;
   try {
     const t = now();
+    const built = heavy.build();
     const r = await heavy.settle(heavy.simClient.backup({
-      newWorld: { ...heavy.kept(), id: 'heavy-copy', name: 'Heavy copy', backupOf: 'heavy' }, newId: 'heavy-copy', ...heavy.build(),
+      newWorld: { ...heavy.kept(), id: 'heavy-copy', name: 'Heavy copy', backupOf: 'heavy' }, newId: 'heavy-copy', state: built.state, history: built.write,
     }), 'the heavy backup');
     backupMs = now() - t;
     expect(r.ok, 'the heavy backup committed').toBe(true);

@@ -10,7 +10,7 @@ import { colKey } from '../../src/core/coords';
 import { worldJobsOf, type ReadThrough } from '../../src/engine/coordinator';
 import { createSimClient, SimFailed, type SimClient, type SimWorkerLike } from '../../src/engine/simClient';
 import type { ColumnDone, WorkerPool } from '../../src/engine/workerPool';
-import type { HistoryRecord, StateRecord, WorldRecord } from '../../src/persist/saves';
+import type { HistoryWrite, StateRecord, WorldRecord } from '../../src/persist/saves';
 import { PACKED_MIN_EDITS, unpackEdits, type Edit, type PackedEdits } from '../../src/workers/protocol';
 import type { ColumnDiff } from '../../src/world/store/api';
 import { REGISTRY } from '../../src/world/blocks/index';
@@ -186,7 +186,7 @@ describe('the sim client (SP5a spec §2.1, §2.5)', () => {
   });
 
   const state: StateRecord = { worldId: 'w1', flushSeq: 2, updated: 1_700_000_000_000, player: null, time: { t: 0.25, speedIndex: 0 }, hotbar: { v: 1, active: 0, slots: [] }, places: [] };
-  const history: HistoryRecord = { worldId: 'w1', done: [], undone: [] };
+  const history: HistoryWrite = { worldId: 'w1', done: [], undone: [], steps: [] };
   const world = { id: 'w1', genKey: 'fedcba9876543210' } as WorldRecord;
   const flushedReply = (id: number, ok: boolean) => (ok
     ? { type: 'flushed', id, ok, flushSeq: 3, columns: 2, bytes: 80, syncMs: 0.2, commitMs: 3 }
@@ -214,43 +214,20 @@ describe('the sim client (SP5a spec §2.1, §2.5)', () => {
     expect([sim.failed, failures]).toEqual([true, 1]);
   });
 
-  test('a flush\'s history that shares steps with the last one posted posts as its change; a null history keeps that base (D28\'s third lever)', async () => {
+  test('a flush\'s history write is posted as it is, after a `load` too: the client keeps no history of its own (SP5c spec §5, D28\'s lever 3)', async () => {
     const w = fakeSim();
     const sim = createSimClient(() => w, { onFailure: () => { throw new Error('no failure expected'); } });
-    const step = (x: number): HistoryRecord['done'][number] => ({ edits: [{ x, y: 70, z: 0, before: 0xFFFFFFFF, after: 1 << 8 }] });
-    const [a, b, c, d] = [step(1), step(2), step(3), step(4)];
-    const h1: HistoryRecord = { worldId: 'w1', done: [a, b, c], undone: [] };
+    const h1: HistoryWrite = { worldId: 'w1', done: [0, 1], undone: [], steps: [{ id: 1, edits: [{ x: 1, y: 70, z: 0, before: 0xFFFFFFFF, after: 1 << 8 }] }] };
     void sim.flush(state, h1);
-    expect(w.posted.at(-1)).toEqual({ type: 'flush', id: lastId(w), state, history: h1 });
-    w.reply(flushedReply(lastId(w), true));
-    void sim.flush(state, null);
-    expect(w.posted.at(-1)!['history']).toBeNull();
-    w.reply(flushedReply(lastId(w), true));
-    void sim.flush(state, { worldId: 'w1', done: [b, c, d], undone: [] });
-    expect(w.posted.at(-1)!['history']).toEqual({ worldId: 'w1', done: { from: 1, keep: 2, add: [d] }, undone: { from: 0, keep: 0, add: [] } });
-    w.reply(flushedReply(lastId(w), false));
-    await flush();
-    expect(sim.failed).toBe(false);
-  });
-
-  test('a `load` resets the history base: the next flush posts its history whole, as a renewed sim holds none (rulings R9)', async () => {
-    const w = fakeSim();
-    const sim = createSimClient(() => w, { onFailure: () => { throw new Error('no failure expected'); } });
-    const step = (x: number): HistoryRecord['done'][number] => ({ edits: [{ x, y: 70, z: 0, before: 0xFFFFFFFF, after: 1 << 8 }] });
-    const [a, b] = [step(1), step(2)];
-    const h1: HistoryRecord = { worldId: 'w1', done: [a], undone: [] };
-    void sim.flush(state, h1);
+    expect(w.posted.at(-1)!['history']).toBe(h1);
     w.reply(flushedReply(lastId(w), true));
     const loaded = sim.load(loadArgs);
     w.reply(loadedReply(lastId(w), []));
     await loaded;
-    const h2: HistoryRecord = { worldId: 'w1', done: [a, b], undone: [] };
+    const h2: HistoryWrite = { worldId: 'w1', done: [0, 1, 2], undone: [], steps: [{ id: 2, edits: [{ x: 2, y: 70, z: 0, before: 0xFFFFFFFF, after: 1 << 8 }] }] };
     void sim.flush(state, h2);
     expect(w.posted.at(-1)!['history']).toBe(h2);
     w.reply(flushedReply(lastId(w), true));
-    // The base is h2 again from here: a later history sharing its steps posts as a change.
-    void sim.flush(state, { worldId: 'w1', done: [a, b, step(3)], undone: [] });
-    expect(w.posted.at(-1)!['history']).toMatchObject({ done: { from: 0, keep: 2 } });
     await flush();
     expect(sim.failed).toBe(false);
   });

@@ -7,10 +7,9 @@
  * `entryAdded` and `entryRemoved` (SP5b D20). A saved world's `load` (SP5b spec §3.3, §3.4 step 3) resolves once its
  * `loaded` reply's `entryCols` became the whole entry set, so the read-through sees every saved edit from the first D.
  * `flush` (SP5b spec §3.2) posts the state and history and resolves with the sim's `flushed`, committed or not (a KV
- * failure is a result, not the sim's); a history that keeps steps of the last one posted goes as its change against it
- * (`historyChange`, D28's third lever), which the sim resolves to the same record; a `load` clears that base (the
- * handler that answers it holds none). `record` posts the world's changed record, which has no reply. `backup` (SP5b
- * spec §3.6) posts the copy request with the whole history (it moves no change base) and resolves with `backedUp`, ok
+ * failure is a result, not the sim's); the history is the page's `HistoryWrite` (its index and only the steps not yet
+ * stored, SP5c spec §5, D28's lever 3), posted as it is. `record` posts the world's changed record, which has no reply.
+ * `backup` (SP5b spec §3.6) posts the copy request with the whole history (every step) and resolves with `backedUp`, ok
  * or not; `hasAnyEntries` tells the backup rule whether the world has any placed or removed block. `copy` (SP5c spec
  * §3.3, D22) posts a box read and resolves with its `copied` reply (`outside` and `unloaded` included); the reply must
  * answer a pending `copy` by id, with `values` of the box's w · h · d cells (`generated` too when asked, null when not),
@@ -29,9 +28,9 @@
  * editing (SP5b spec §3.3).
  */
 import { colKey } from '../core/coords';
-import type { HistoryRecord, StateRecord, WorldRecord } from '../persist/saves';
+import type { HistoryWrite, StateRecord, WorldRecord } from '../persist/saves';
 import {
-  historyChange, packEdits, PACKED_MIN_EDITS, parseFromSim, type BackedUpMsg, type BackupMsg, type CopiedMsg, type DiffMsg, type Edit, type EditedMsg, type FlushedMsg, type LoadedMsg,
+  packEdits, PACKED_MIN_EDITS, parseFromSim, type BackedUpMsg, type BackupMsg, type CopiedMsg, type DiffMsg, type Edit, type EditedMsg, type FlushedMsg, type LoadedMsg,
   type LoadMsg, type ToSim,
 } from '../workers/protocol';
 import type { ColumnDiff } from '../world/store/api';
@@ -75,7 +74,7 @@ export interface SimClient {
    * Saves the open world (SP5b spec §3.2): resolves with `flushed`, ok or not; rejects `SimFailed` on the sim's failure
    * or the client's dispose, and at once on a closed client.
    */
-  flush(state: StateRecord, history: HistoryRecord | null): Promise<FlushedMsg>;
+  flush(state: StateRecord, history: HistoryWrite | null): Promise<FlushedMsg>;
   /** Sends the world's changed record for the next flush (no reply); nothing on a closed client. */
   record(world: WorldRecord): void;
   /**
@@ -113,8 +112,6 @@ export function createSimClient(spawn: () => SimWorkerLike, o: { onFailure(e: Er
   const attaches: AttachWait[] = [];
   const entries = new Set<number>();
   let nextId = 1;
-  /** The history the last `flush` that carried one posted: the next one posts its change against it (D28's third lever). */
-  let historyBase: HistoryRecord | null = null;
   let failed = false;
   /** Failed or disposed: requests settle at once and replies are ignored. */
   let closed = false;
@@ -221,8 +218,6 @@ export function createSimClient(spawn: () => SimWorkerLike, o: { onFailure(e: Er
     load(m) {
       if (closed) return Promise.reject(new SimFailed('the sim failed or was disposed'));
       const id = nextId++;
-      // The sim that answers holds no history yet (a `load` is a handler's first world): the next one posts whole.
-      historyBase = null;
       return new Promise<LoadedMsg>((resolve, reject) => {
         post({ type: 'load', id, ...m });
         pending.set(id, { kind: 'load', resolve, reject });
@@ -261,10 +256,8 @@ export function createSimClient(spawn: () => SimWorkerLike, o: { onFailure(e: Er
     flush(state, history) {
       if (closed) return Promise.reject(new SimFailed('the sim failed or was disposed'));
       const id = nextId++;
-      const posted = history === null ? null : historyChange(historyBase, history);
-      if (history !== null) historyBase = history;
       return new Promise<FlushedMsg>((resolve, reject) => {
-        post({ type: 'flush', id, state, history: posted });
+        post({ type: 'flush', id, state, history });
         pending.set(id, { kind: 'flush', resolve, reject });
       });
     },

@@ -16,7 +16,7 @@ import { appliedRecord, installUndoKeys, newWorldRecord, openOlderGenerator } fr
 import { GENERATOR_VERSION } from '../../src/core/constants';
 import { SCHEMA_VERSION } from '../../src/core/params/migrate';
 import { paramsHash } from '../../src/core/stage/hash';
-import type { HistoryRecord, StateRecord, WorldRecord } from '../../src/persist/saves';
+import { wholeWrite, type HistoryWrite, type StateRecord, type WorldRecord } from '../../src/persist/saves';
 import type { BackedUpMsg, BackupMsg } from '../../src/workers/protocol';
 import { installDom } from './fixtures/domShim';
 
@@ -215,7 +215,7 @@ describe('createModifyMode (SP5b spec §3.6, D10, D25)', () => {
 const STATE: StateRecord = {
   worldId: 'w1', flushSeq: 0, updated: 1_700_000_000_000, player: null, time: { t: 0.25, speedIndex: 0 }, hotbar: { v: 1, active: 0, slots: [] }, places: [],
 };
-const HISTORY: HistoryRecord = { worldId: 'w1', done: [{ edits: [{ x: 1, y: 70, z: 2, before: 0xFFFFFFFF, after: 1 << 8 }] }], undone: [] };
+const HISTORY: HistoryWrite = wholeWrite({ worldId: 'w1', done: [{ edits: [{ x: 1, y: 70, z: 2, before: 0xFFFFFFFF, after: 1 << 8 }] }], undone: [] });
 const FIRST = 'My world (before the change)';
 const SECOND = 'My world (before the change 2)';
 
@@ -371,8 +371,8 @@ describe('the automatic backup: `beforeApply` (SP5b spec §3.6, D11, D26)', () =
     // The change is held while every world's name is read; nothing is posted yet.
     expect([r.calls, r.copies, release === null]).toEqual([[], [], false]);
     // Meanwhile the player places a block and the autosave's tick posts a flush with it: it reaches the sim first.
-    const step = { edits: [{ x: 3, y: 71, z: 4, before: 0xFFFFFFFF, after: 2 << 8 }] };
-    live = { state: { ...STATE, updated: STATE.updated + 1 }, history: { ...HISTORY, done: [...HISTORY.done, step] } };
+    const step = { id: 1, edits: [{ x: 3, y: 71, z: 4, before: 0xFFFFFFFF, after: 2 << 8 }] };
+    live = { state: { ...STATE, updated: STATE.updated + 1 }, history: { ...HISTORY, done: [...HISTORY.done, step.id], steps: [...HISTORY.steps, step] } };
     const flushed = live;
     expect(r.copies).toEqual([]);
     release!(['My world']);

@@ -492,12 +492,13 @@ interface MetricDef { id: MetricId; run(region: RegionView): Record<string, numb
 
 Sparse entries are sorted by idx, sections by sy, and trailer ticks by packedPos, so encoding is canonical. All multi-byte integers in ColumnDiffV1 and `.wiworld` are **little-endian** (DataView calls pass `littleEndian = true`). Block-state ids follow the append-only rule of §2.2, and every save and export carries its `stateTable`.
 
-**IndexedDB `wi10` v1** (five stores, split by how often they change; SP5b):
+**IndexedDB `wi10` v2** (six stores, split by how often they change; SP5b, and `historySteps` by SP5c's version bump, which keeps the other five and their records):
 - `worlds`: key `id`, `{id, name, seedText, seed: [lo, hi], profile, params, schemaVersion, paramsHash, generatorVersion, genKey, stateTable: string[], created, backupOf: string | null}` (`params` the full document; written at create, rename, Apply, the older-generator open, import, and at an open whose `stateTable` differs from today's);
 - `state`: key `worldId`, `{worldId, flushSeq, updated, player: {x, y, z, yaw, pitch, mode, speed} | null, time: {t, speedIndex}, hotbar: {v: 1, active, slots}, places: Place[]}` (written by every flush that has a change);
-- `history`: key `worldId`, `{worldId, done: Step[], undone: Step[]}`, each ≤ 100 steps (written only when it changed);
+- `history`: key `worldId`, `{worldId, done: stepId[], undone: stepId[]}`, each ≤ 100 steps (written only when it changed; v1's `{worldId, done: Step[], undone: Step[]}`, its steps inline, still reads, SP5c);
 - `diffs`: key `[worldId, colKey]`, `ColumnDiffV1` bytes;
 - `meta`: key `'clipboard'`, the selection tool's clipboard, one per browser: `{v: 1, w, h, d, keys, states, fluids}`, its states by state key (SP5c).
+- `historySteps`: key `[worldId, stepId]`, one history step `{edits}`, written once when the step is new and deleted when the history drops it, so a flush writes only the steps it adds (SP5c, its D28's lever 3).
 
 `packs` (resource-pack and sound-pack blobs plus manifests, with `kind: 'textures'|'sounds'`) and `presets` are added by a `wi10` version bump when SP8c's sound packs and SP10's preset library need them (SP5b).
 
