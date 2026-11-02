@@ -1,12 +1,13 @@
 import { describe, expect, expectTypeOf, test } from 'vitest';
 import { COL_FIELD_BOUNDS } from '../../src/core/constants';
+import { DEFAULTS } from '../../src/core/params/defaults';
 import { DEFAULT_DENSITY_TREE } from '../../src/core/params/defaultTrees';
 import { checkJson, type TreeIssueCode } from '../../src/core/params/json';
 import type { Issue } from '../../src/core/params/kit';
 import { SAMPLE_FIELDS } from '../../src/gen/column/columnStage';
-import { EXPR_CHILD_KEYS, EXPR_OPS, validateExpr, type DensitySourceCode, type ExprErrorCode, type ExprIssue } from '../../src/gen/density/expr';
+import { EXPR_CHILD_KEYS, EXPR_OPS, exprHash, validateExpr, type DensitySourceCode, type ExprErrorCode, type ExprIssue } from '../../src/gen/density/expr';
 import {
-  ALLOWED_REF_TARGETS, densitySourceValidations, SOURCE_CHILD_KEYS, SOURCE_OPS, validateDensitySource,
+  ALLOWED_REF_TARGETS, densitySourceValidations, resolveDensity, SOURCE_CHILD_KEYS, SOURCE_OPS, validateDensitySource,
   type DensitySource, type SourceExpr, type SourceOp,
 } from '../../src/gen/density/source';
 
@@ -518,5 +519,37 @@ describe('validateDensitySource: the static magnitude analysis (SP3d spec §1.9 
     expect(issues(doc({ op: 'add', a: { op: 'add', a: nested, b: chain }, b: big }, noiseDef)))
       .toEqual(['root.a.a.x: NESTED_INTERPOLATED', 'root.a.b: VALUE_RANGE', ': COLUMN_COST']);
     expect(issues(doc({ op: 'add', a: chain, b: { op: 'noise', id: 'nope' } }))).toEqual(['root.b.id: UNKNOWN_NOISE']);
+  });
+});
+
+describe('noiseScaled in the source (SP6a spec §1.5)', () => {
+  const DCS = 'density.noises.detail.clampSigma'; // number [1, 8]
+  const ns = (sc: unknown, id: unknown = 'detail'): unknown => ({ op: 'noiseScaled', id, s: sc });
+
+  test('s is a literal in [1/16, 16] or a ref whose static range lies inside it; else SCALE_RANGE at <path>.s', () => {
+    expect(issues(doc(ns(0.75)))).toEqual([]);
+    expect(issues(doc(ns(1 / 16)))).toEqual([]);
+    expect(issues(doc(ns(16)))).toEqual([]);
+    expect(issues(doc(ns(R(DCS))))).toEqual([]);
+    expect(issues(doc({ op: 'add', a: Y, b: ns(R(LO)) }))).toEqual(['root.b.s: SCALE_RANGE']);
+    expect(issues(doc(ns(R(DCS, true))))).toEqual(['root.s: SCALE_RANGE']);
+    expect(issues(doc(ns(0)))).toEqual(['root.s: SCALE_RANGE']);
+    expect(issues(doc(ns(17)))).toEqual(['root.s: SCALE_RANGE']);
+    expect(issues(doc(ns(R('density.nope'))))).toEqual(['root.s: UNKNOWN_PARAM']);
+    expect(issues(doc(ns({ param: DCS, neg: false })))).toEqual(['root.s: BAD_FIELD']);
+    expect(issues(doc(ns('2')))).toEqual(['root.s: NOT_FINITE']);
+    expect(issues(doc(ns(1, 'jag')))).toEqual(['root.id: NOISE_DIMS']);
+    expect(one(doc(ns(R(LO)))).message).toContain('noiseScaled s must lie in [1/16, 16] for every value of its parameter refs');
+  });
+
+  test('resolveDensity writes the ref\'s value; the resolved tree hashes as the literal tree', () => {
+    const v = DEFAULTS.density.noises.detail.clampSigma;
+    const tree = doc({ op: 'add', a: ns(R(DCS)), b: { op: 'interpolated', x: ns(R(DCS)) } });
+    const out = resolveDensity(tree, DEFAULTS);
+    const root = out.root as { a: { op: string; id: string; s: number } };
+    expect(root.a).toEqual({ op: 'noiseScaled', id: 'detail', s: v });
+    const literal = resolveDensity(doc({ op: 'add', a: ns(v), b: { op: 'interpolated', x: ns(v) } }), DEFAULTS);
+    expect(exprHash(out.root)).toBe(exprHash(literal.root));
+    expect(Object.isFrozen(root.a)).toBe(true);
   });
 });

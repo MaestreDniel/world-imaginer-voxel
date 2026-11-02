@@ -45,12 +45,12 @@ function oracle(e: unknown, defs: Readonly<Record<string, unknown>>, mode: 'stru
   const muted = mode === 'column' && op === 'tap' && Object.hasOwn(n, 'mute');
   const inner = corner || op === 'interpolated';
   if (mode === 'column') {
-    const own = (op === 'noise' || op === 'noise2' ? 128 : 1) * (corner ? CORNERS : VOXELS);
+    const own = (op === 'noise' || op === 'noise2' || op === 'noiseScaled' ? 128 : 1) * (corner ? CORNERS : VOXELS);
     if (muted) return own + (inner ? CORNERS : VOXELS);
     return own + keys.reduce((s, k) => s + oracle(n[k], defs, mode, inner), 0);
   }
   let own = 1;
-  if (typeof mode === 'object' && (op === 'noise' || op === 'noise2')) {
+  if (typeof mode === 'object' && (op === 'noise' || op === 'noise2' || op === 'noiseScaled')) {
     const d = (mode.params.density.noises as Readonly<Record<string, { octaves: number; double: boolean }>>)[n['id'] as string]!;
     own = 4 * d.octaves * (d.double ? 2 : 1);
   }
@@ -85,6 +85,23 @@ describe('structural and work costs (SP3d spec §1.7, §5.2)', () => {
     expect(workCost({ root: { op: 'mul', a: { op: 'noise', id: 'detail' }, b: { op: 'noise2', id: 'jag' } }, defs: {} }, DEFAULTS)).toBe(1 + 8 + 16);
     // A noise the params do not hold weighs the static maximum, 4 × 16 × 2.
     expect(workCost({ root: { op: 'noise', id: 'nope' }, defs: {} }, DEFAULTS)).toBe(128);
+  });
+
+  test('a noiseScaled leaf costs what a noise leaf costs, inside and outside interpolated: 4 · octaves · (double ? 2 : 1) (SP6a §1.5)', () => {
+    const tree = (leaf: unknown) => ({ root: { op: 'add', a: leaf, b: { op: 'interpolated', x: { op: 'neg', x: leaf } } }, defs: {} });
+    const noise = { op: 'noise', id: 'detail' }, scaled = { op: 'noiseScaled', id: 'detail', s: 0.75 };
+    for (const p of [DEFAULTS, paramsWith({ density: { noises: { detail: { octaves: 3, double: true } } } }), paramsWith({ density: { noises: { detail: { octaves: 2, double: false } } } })]) {
+      const d = p.density.noises.detail;
+      const weight = 4 * d.octaves * (d.double ? 2 : 1);
+      expect(workCost({ root: scaled, defs: {} }, p)).toBe(weight);
+      expect(workCost({ root: { op: 'interpolated', x: scaled }, defs: {} }, p)).toBe(1 + 8 * weight);
+      expect(workCost(tree(scaled), p)).toBe(workCost(tree(noise), p));
+    }
+    expect(workCost({ root: { op: 'noiseScaled', id: 'nope', s: 1 }, defs: {} }, DEFAULTS)).toBe(128);
+    expect(structuralCost(tree(scaled).root)).toBe(structuralCost(tree(noise).root));
+    expect(densityColumnCost(tree(scaled))).toBe(densityColumnCost(tree(noise)));
+    expect(densityColumnCost({ root: scaled, defs: {} })).toBe(128 * VOXELS);
+    expect(densityColumnCost({ root: { op: 'interpolated', x: scaled }, defs: {} })).toBe(VOXELS + 128 * CORNERS);
   });
 
   test('own-property lookups: Object.prototype member names are ordinary def names, inherited members are not defs', () => {

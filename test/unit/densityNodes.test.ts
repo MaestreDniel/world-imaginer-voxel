@@ -1,7 +1,7 @@
 import { describe, expect, test } from 'vitest';
 import { NormalNoise } from '../../src/core/noise/normal';
 import { completeNoiseDef } from '../../src/core/noise/types';
-import type { ColExpr, Expr, InterpolatedExpr, Noise2Expr, NoiseExpr, RefExpr, SlideKnot } from '../../src/gen/density/expr';
+import type { ColExpr, Expr, InterpolatedExpr, Noise2Expr, NoiseExpr, NoiseScaledExpr, RefExpr, SlideKnot } from '../../src/gen/density/expr';
 import {
   evalNode, exprClass, inRange, ivAbs, ivAdd, ivClamp, ivHull, ivMax, ivMin, ivMul, ivNeg, ivNoise, ivSet, ivSlide,
   ivSlideFactor, ivSquare, ivWiden, joinClass, ownClass, rangeChoiceCase, slideAt, valAbs, valAdd, valClamp, valMax,
@@ -14,8 +14,9 @@ const Y: Expr = { op: 'y' };
 const COL_E: Expr = { op: 'col', field: 'E' };
 const N2: Expr = { op: 'noise2', id: 'jag' };
 const N3: Expr = { op: 'noise', id: 'overhang' };
-const READS: Record<string, number> = { 'col:E': 0.25, 'col:offset': 70, 'noise2:jag': 0.5, 'noise:overhang': -1.5 };
-type ReadExpr = ColExpr | Noise2Expr | NoiseExpr | InterpolatedExpr | RefExpr;
+const NS: Expr = { op: 'noiseScaled', id: 'overhang', s: 0.75 };
+const READS: Record<string, number> = { 'col:E': 0.25, 'col:offset': 70, 'noise2:jag': 0.5, 'noise:overhang': -1.5, 'noiseScaled:overhang': 2.25 };
+type ReadExpr = ColExpr | Noise2Expr | NoiseExpr | NoiseScaledExpr | InterpolatedExpr | RefExpr;
 
 /** A test walker over evalNode: children recurse, reads come from READS, and every child visit is logged. */
 function evaluate(e: Expr, y: number, log: Expr[] = []): number {
@@ -23,7 +24,7 @@ function evaluate(e: Expr, y: number, log: Expr[] = []): number {
     y,
     child: (c) => { log.push(c); return evaluate(c, y, log); },
     read: (r: ReadExpr) => {
-      const key = r.op === 'col' ? `col:${r.field}` : r.op === 'noise2' || r.op === 'noise' ? `${r.op}:${r.id}` : r.op;
+      const key = r.op === 'col' ? `col:${r.field}` : r.op === 'noise2' || r.op === 'noise' || r.op === 'noiseScaled' ? `${r.op}:${r.id}` : r.op;
       const v = READS[key];
       if (v === undefined) throw new Error(`no read for ${key}`);
       return v;
@@ -111,6 +112,32 @@ describe('leaves', () => {
     expect(exprClass(N2, true, {})).toBe('column');
     expect(exprClass(N3, false, {})).toBe('voxel');
     expect(exprClass(N3, true, {})).toBe('cell');
+  });
+
+  test('noiseScaled (SP6a §1.5): a read of the caller, y-dependent as noise (CELL inside interpolated, VOXEL outside)', () => {
+    expect(evaluate(NS, 0)).toBe(2.25);
+    expect(ownClass('noiseScaled', false)).toBe('voxel');
+    expect(ownClass('noiseScaled', true)).toBe('cell');
+    expect(exprClass(NS, false, {})).toBe('voxel');
+    expect(exprClass(NS, true, {})).toBe('cell');
+    expect(exprClass({ op: 'add', a: COL_E, b: NS }, true, {})).toBe('cell');
+    expect(exprClass({ op: 'interpolated', x: NS }, false, {})).toBe('voxel');
+    expect(exprClass({ op: 'ref', name: 'd' }, false, { d: NS })).toBe('voxel');
+  });
+
+  test('noiseScaled interval [−clampSigma, clampSigma] holds for real NormalNoise samples at (x/s, y/s, z/s)', () => {
+    for (const clampSigma of [0.5, 3]) {
+      const def = completeNoiseDef({ wavelength: 8, octaves: 2, clampSigma });
+      const nz = new NormalNoise([1, 2], 'density.test', def);
+      const r = iv((o, k) => ivNoise(clampSigma, o, k));
+      expect(r).toEqual([-clampSigma, clampSigma]);
+      for (const s of [1 / 16, 0.75, 1.5, 16]) {
+        for (let i = 0; i < 1000; i++) {
+          const x = (i * 7) % 113 - 56, y = (i * 13) % 97 - 48, z = (i * 3) % 89;
+          expect(inside(nz.z3(x / s, y / s, z / s), r)).toBe(true);
+        }
+      }
+    }
   });
 
   test('noise interval [−clampSigma, clampSigma] holds for real NormalNoise samples', () => {

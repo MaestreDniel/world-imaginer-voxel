@@ -2,6 +2,7 @@ import { describe, expect, test } from 'vitest';
 import { buildColumnSample, latticeIndex, newColumnSample, readField, SAMPLE_FIELDS, type ColumnSample } from '../../src/gen/column/columnStage';
 import { colValueIndex, compileDensity, cornerValueIndex, posValueIndex, type CompiledDensity } from '../../src/gen/density/compile';
 import { exprChildren, exprHash, ExprValidationError, type DensityExpr, type DensityNoise, type DensityNoiseSource, type Expr, type InterpolatedExpr } from '../../src/gen/density/expr';
+import { densityNoiseSource } from '../../src/gen/density/context';
 import { createDensityReference, interpolatedNodes } from '../../src/gen/density/reference';
 import { fuzzNoiseSource, randomDensityExpr } from '../harness/densityFuzz';
 import { ctxFor } from '../harness/gen';
@@ -16,6 +17,7 @@ const interp = (x: Expr): InterpolatedExpr => ({ op: 'interpolated', x });
 const add = (a: Expr, b: Expr): Expr => ({ op: 'add', a, b });
 const mul = (a: Expr, b: Expr): Expr => ({ op: 'mul', a, b });
 const ref = (name: string): Expr => ({ op: 'ref', name });
+const ns = (id: string, s: number): Expr => ({ op: 'noiseScaled', id, s });
 const SLIDE: Expr = { op: 'slide', x: C(1), knots: [[-64, 0], [-40, 1], [240, 1], [320, 0]] };
 const only = (root: Expr, defs: Record<string, Expr> = {}): DensityExpr => ({ root, defs });
 
@@ -375,5 +377,56 @@ describe('compileDensity: compiled == reference, bit for bit (fuzz)', () => {
         }
       }
     }
+  });
+});
+
+describe('compileDensity: noiseScaled (SP6a §1.5, D18)', () => {
+  const ctx = ctxFor('42');
+  const noises = densityNoiseSource(ctx);
+
+  test('add(noiseScaled(detail, 0.75), interpolated(noiseScaled(detail, 1.5))): compiled == reference on every voxel of columns (0, 0) and (−37, 12)', () => {
+    const outer = ns('detail', 0.75), inner = ns('detail', 1.5);
+    const e = only(add(outer, interp(inner)));
+    const c = compileDensity(e, noises);
+    const r = createDensityReference(e, noises);
+    expect(nodeOf(c, outer, false).cls).toBe('voxel');
+    expect(nodeOf(c, inner, true).cls).toBe('cell');
+    let voxels = 0;
+    for (const [cx, cz] of [[0, 0], [-37, 12]] as const) {
+      const s = buildColumnSample(ctx, cx, cz, newColumnSample());
+      begin(c, s);
+      for (let y = -64; y < 320; y++) {
+        for (let lz = 0; lz < 16; lz++) {
+          for (let lx = 0; lx < 16; lx++) {
+            const want = r.voxel(s, 16 * cx + lx, y, 16 * cz + lz);
+            const got = c.voxelFn(lx, y, lz);
+            if (!Object.is(got, want)) throw new Error(`(${cx}, ${cz}) voxel (${lx}, ${y}, ${lz}): compiled ${got} ≠ reference ${want}`);
+            voxels++;
+          }
+        }
+      }
+    }
+    expect(voxels).toBe(2 * 98304);
+  });
+
+  test('noiseScaled(detail, 1) equals noise(detail) bit for bit (x / 1 is x), outside and inside interpolated', () => {
+    const a = compileDensity(only(add(ns('detail', 1), interp(ns('detail', 1)))), noises);
+    const b = compileDensity(only(add(n3('detail'), interp(n3('detail')))), noises);
+    const s = buildColumnSample(ctx, -37, 12, newColumnSample());
+    begin(a, s);
+    begin(b, s);
+    for (let y = -64; y < 320; y += 7) {
+      for (let lz = 0; lz < 16; lz += 3) {
+        for (let lx = 0; lx < 16; lx += 2) expect(Object.is(a.voxelFn(lx, y, lz), b.voxelFn(lx, y, lz))).toBe(true);
+      }
+    }
+  });
+
+  test('two nodes differing only in s compile to two nodes; noise and noiseScaled s 1 never share one; equal ones share', () => {
+    const c = compileDensity(only(add(add(ns('detail', 1), ns('detail', 2)), add(n3('detail'), ns('detail', 2)))), noises);
+    expect(c.nodes.filter((n) => n.op === 'noiseScaled').map((n) => (n.expr as { s: number }).s)).toEqual([1, 2]);
+    expect(c.nodes.filter((n) => n.op === 'noise').length).toBe(1);
+    const k = compileDensity(only(add(ns('detail', 0.75), interp(ns('detail', 0.75)))), noises);
+    expect(k.nodes.filter((n) => n.op === 'noiseScaled').map((n) => n.inside)).toEqual([false, true]);
   });
 });

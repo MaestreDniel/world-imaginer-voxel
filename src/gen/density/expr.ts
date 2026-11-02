@@ -10,6 +10,7 @@
  * `mute` and the ref form `{param, neg?}` in every numeric scalar field, judges every order check over the refs' static
  * ranges, and reports the source codes. Code-built trees keep SP3b's rules exactly.
  */
+import { NOISE_SCALE_MAX, NOISE_SCALE_MIN } from '../../core/constants';
 import { createFnv64, hex64, utf8Bytes } from '../../core/hash';
 import { TREE_KEY_RE } from '../../core/params/json';
 import { SAMPLE_FIELDS, type SampleField } from '../column/columnStage';
@@ -19,6 +20,8 @@ const HEX = hex64;
 const UTF8 = utf8Bytes;
 const FIELDS = SAMPLE_FIELDS;
 const KEY_RE = TREE_KEY_RE;
+const SCALE_MIN = NOISE_SCALE_MIN;
+const SCALE_MAX = NOISE_SCALE_MAX;
 
 export interface ConstExpr { readonly op: 'const'; readonly v: number }
 export interface YExpr { readonly op: 'y' }
@@ -28,6 +31,11 @@ export interface ColExpr { readonly op: 'col'; readonly field: SampleField }
 export interface Noise2Expr { readonly op: 'noise2'; readonly id: string }
 /** z3(x, y, z) of the density noise `id` (dims 3). */
 export interface NoiseExpr { readonly op: 'noise'; readonly id: string }
+/**
+ * z3(x / s, y / s, z / s) of the density noise `id` (dims 3), one division per axis in that order (SP6a spec §1.5, D18):
+ * the noise stretched by `s`, a constant in [NOISE_SCALE_MIN, NOISE_SCALE_MAX] = [1/16, 16] (`core/constants.ts`).
+ */
+export interface NoiseScaledExpr { readonly op: 'noiseScaled'; readonly id: string; readonly s: number }
 export type BinaryOp = 'add' | 'mul' | 'min' | 'max';
 export interface BinaryExpr { readonly op: BinaryOp; readonly a: Expr; readonly b: Expr }
 export type UnaryOp = 'neg' | 'abs' | 'square';
@@ -44,7 +52,7 @@ export interface RefExpr { readonly op: 'ref'; readonly name: string }
 
 export type Expr =
   | ConstExpr | YExpr | ColExpr | Noise2Expr | NoiseExpr | BinaryExpr | UnaryExpr | ClampExpr | SlideExpr
-  | InterpolatedExpr | RangeChoiceExpr | TapExpr | RefExpr;
+  | InterpolatedExpr | RangeChoiceExpr | TapExpr | RefExpr | NoiseScaledExpr;
 export type ExprOp = Expr['op'];
 
 /** A whole density expression: the root and its named sub-expressions. */
@@ -53,15 +61,15 @@ export interface DensityExpr {
   readonly defs: Readonly<Record<string, Expr>>;
 }
 
-/** Every op, in SP3b spec §1.1's table order. */
+/** Every op, in SP3b spec §1.1's table order, then SP6a's `noiseScaled` (appended: every older op keeps its index). */
 export const EXPR_OPS: readonly ExprOp[] = [
   'const', 'y', 'col', 'noise2', 'noise', 'add', 'mul', 'min', 'max', 'neg', 'abs', 'square', 'clamp', 'slide',
-  'interpolated', 'rangeChoice', 'tap', 'ref',
+  'interpolated', 'rangeChoice', 'tap', 'ref', 'noiseScaled',
 ];
 
 /** The child slots of each op, in evaluation order (a then b; x then the chosen rangeChoice branch). */
 export const EXPR_CHILD_KEYS: { readonly [K in ExprOp]: readonly string[] } = {
-  const: [], y: [], col: [], noise2: [], noise: [], ref: [],
+  const: [], y: [], col: [], noise2: [], noise: [], ref: [], noiseScaled: [],
   add: ['a', 'b'], mul: ['a', 'b'], min: ['a', 'b'], max: ['a', 'b'],
   neg: ['x'], abs: ['x'], square: ['x'], clamp: ['x'], slide: ['x'], interpolated: ['x'], tap: ['x'],
   rangeChoice: ['x', 'inside', 'outside'],
@@ -69,7 +77,7 @@ export const EXPR_CHILD_KEYS: { readonly [K in ExprOp]: readonly string[] } = {
 
 /** The non-child keys of each op (besides `op`). */
 const SCALAR_KEYS: { readonly [K in ExprOp]: readonly string[] } = {
-  const: ['v'], y: [], col: ['field'], noise2: ['id'], noise: ['id'], ref: ['name'],
+  const: ['v'], y: [], col: ['field'], noise2: ['id'], noise: ['id'], ref: ['name'], noiseScaled: ['id', 's'],
   add: [], mul: [], min: [], max: [], neg: [], abs: [], square: [], interpolated: [],
   clamp: ['lo', 'hi'], slide: ['knots'], tap: ['name'], rangeChoice: ['lo', 'hi'],
 };
@@ -103,7 +111,7 @@ export type DensityNoiseSource = (id: string) => DensityNoise | undefined;
 export type ExprErrorCode =
   | 'NOT_OBJECT' | 'UNKNOWN_OP' | 'UNKNOWN_KEY' | 'NOT_FINITE' | 'BAD_FIELD' | 'UNKNOWN_NOISE' | 'NOISE_DIMS'
   | 'NOISE_REMAP' | 'BAD_NAME' | 'DUPLICATE_TAP' | 'UNKNOWN_REF' | 'REF_CYCLE' | 'NESTED_INTERPOLATED'
-  | 'CLAMP_ORDER' | 'RANGE_ORDER' | 'KNOTS_SHAPE' | 'KNOTS_ORDER';
+  | 'CLAMP_ORDER' | 'RANGE_ORDER' | 'KNOTS_SHAPE' | 'KNOTS_ORDER' | 'SCALE_RANGE';
 
 /**
  * The codes only a density source tree can get (SP3d spec §1.7 tier 2, density): the source mode of `validateExpr`
@@ -184,18 +192,21 @@ interface FieldRange { readonly lo: number; readonly hi: number; readonly ref: b
  * DFS pre-order (root, then defs in key order), then unknown refs and ref cycles, then interpolated nesting (only when
  * the refs resolve). [] means the value is a `DensityExpr` the compiler and the reference accept. Beyond the spec's
  * list it also rejects unknown keys, a noise used with the wrong dimension and duplicate tap names (rulings, Task 2).
+ * SP6a (its spec §1.5): `noiseScaled` takes a 3D noise as `noise` does, and its `s` must be a number in [1/16, 16]
+ * (`SCALE_RANGE` at `.s` when it is not finite or outside; `NOT_FINITE` when it is not a number).
  * The root's refs have their own bucket, so a def named '' is never taken for the root, and the def graph and the
  * nesting walk are iterative, so no chain of defs can overflow the stack (SP3d spec §1.7 step 3).
  *
  * With `source` (SP3d spec §1.7 tier 2 step 1, called by gen/density/source.ts) it validates a source tree: also the
  * ops `param` (`path` names one of `source.targets`, else `UNKNOWN_PARAM` at `.path`) and `recip` (of a `const` or a
  * `param`, `RECIP_OPERAND`; non-zero with finite reciprocals over the whole range, `RECIP_ZERO`; both at `.x`), tap
- * `mute`, and in `clamp`/`rangeChoice` `lo`/`hi`, each knot's y and v and `mute` a literal or a ref `{param, neg?}`
- * (`UNKNOWN_PARAM`, or `BAD_FIELD` for a malformed ref, at the field's path); literals within ±1e9 (`LITERAL_RANGE`);
+ * `mute`, and in `clamp`/`rangeChoice` `lo`/`hi`, each knot's y and v, `mute` and `noiseScaled.s` a literal or a ref
+ * `{param, neg?}` (`UNKNOWN_PARAM`, or `BAD_FIELD` for a malformed ref, at the field's path); literals within ±1e9 (`LITERAL_RANGE`);
  * `CLAMP_ORDER`, `RANGE_ORDER` and `KNOTS_ORDER` over the static ranges (a negated ref spans [0 − hi, 0 − lo]); every
  * slide segment's `v1 − vk` and `(v1 − vk) / (y1 − yk)` finite at the range ends that maximise them (`SLIDE_SLOPE`, at
  * the segment's upper knot); at most 64 knots per slide (`TOO_MANY_KNOTS` at `.knots`, its knots then unchecked); tap
- * names matching the key pattern (`BAD_NAME`). Mutes are ignored by the walks (the muted subtree is validated like any
+ * names matching the key pattern (`BAD_NAME`); a `noiseScaled.s` ref whose static range leaves [1/16, 16] is
+ * `SCALE_RANGE` at `.s` (SP6a spec §1.5). Mutes are ignored by the walks (the muted subtree is validated like any
  * other). The source mode stops after the def graph: the interpolated nesting is tier 2's step 5
  * (`nestedInterpolatedIssues`), which runs only once the whole-tree bounds hold.
  */
@@ -272,13 +283,24 @@ export function validateExpr(value: unknown, noises: DensityNoiseLookup, source?
         if (typeof f !== 'string' || !(FIELDS as readonly string[]).includes(f)) push(at('field'), 'BAD_FIELD', `col.field ${JSON.stringify(f)} is not a continuous ColumnSample field`);
         break;
       }
-      case 'noise2': case 'noise': {
+      case 'noise2': case 'noise': case 'noiseScaled': {
         const id = node['id'];
         const info = typeof id === 'string' ? noises(id) : undefined;
         const dims = o === 'noise2' ? 2 : 3;
         if (info === undefined) push(at('id'), 'UNKNOWN_NOISE', `unknown density noise ${JSON.stringify(id)}`);
         else if (info.dims !== dims) push(at('id'), 'NOISE_DIMS', `${o} needs a ${dims}D noise; ${String(id)} is ${info.dims}D`);
         else if (info.remap !== 'none') push(at('id'), 'NOISE_REMAP', `density noise ${String(id)} must have remap 'none'`);
+        if (o !== 'noiseScaled') break;
+        // s: a number (a non-finite one or one outside [1/16, 16] is SCALE_RANGE); in source mode also a ref whose
+        // whole static range lies inside [1/16, 16] (SP6a spec §1.5).
+        const sv = node['s'];
+        if (typeof sv === 'number' || source === undefined) {
+          if (typeof sv !== 'number') push(at('s'), 'NOT_FINITE', 'noiseScaled.s must be a finite number');
+          else if (!(sv >= SCALE_MIN && sv <= SCALE_MAX)) push(at('s'), 'SCALE_RANGE', 'noiseScaled s must lie in [1/16, 16]');
+        } else {
+          const r = sourceNumber(sv, at('s'), 'noiseScaled.s');
+          if (r !== null && !(r.lo >= SCALE_MIN && r.hi <= SCALE_MAX)) push(at('s'), 'SCALE_RANGE', `noiseScaled s must lie in [1/16, 16]${note(r)}`);
+        }
         break;
       }
       case 'add': case 'mul': case 'min': case 'max': child('a'); child('b'); break;
@@ -539,6 +561,7 @@ export function exprHash(e: Expr, memo: WeakMap<Expr, string> = new WeakMap()): 
     case 'const': num(e.v); break;
     case 'col': str(e.field); break;
     case 'noise2': case 'noise': str(e.id); break;
+    case 'noiseScaled': str(e.id); num(e.s); break;
     case 'clamp': case 'rangeChoice': num(e.lo); num(e.hi); break;
     case 'slide':
       h.updateU32LE(e.knots.length);

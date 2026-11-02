@@ -101,8 +101,10 @@ export const densityCostLint = (ratio: number): string => `density cost ≈ ${St
 const MUTE_NEUTRAL: ReadonlyMap<string, number> = new Map([['add', 0], ['mul', 1], ['max', -1e6], ['min', 1e6]]);
 /** Ops with one child slot: deleting one unwraps it (§3.3). */
 const UNWRAP_OPS: ReadonlySet<string> = new Set(['neg', 'abs', 'square', 'clamp', 'slide', 'interpolated', 'tap', 'recip']);
-/** Scalars a replaced op keeps when the new op has the same field with the same meaning. */
-const KEPT_SCALARS: ReadonlyMap<string, readonly string[]> = new Map([['clamp', ['lo', 'hi']], ['rangeChoice', ['lo', 'hi']]]);
+/** Scalars a replaced op keeps when the new op has the same field with the same meaning (`noise` ↔ `noiseScaled`: the 3D id). */
+const KEPT_SCALARS: ReadonlyMap<string, readonly string[]> = new Map([
+  ['clamp', ['lo', 'hi']], ['rangeChoice', ['lo', 'hi']], ['noise', ['id']], ['noiseScaled', ['id']],
+]);
 /** The rules' numeric fields and whether they are int fields (§1.3). */
 const RULE_NUMBERS: ReadonlyMap<string, boolean> = new Map([
   ['offset', true], ['minY', true], ['trueAtAndBelow', true], ['falseAtAndAbove', true], ['min', false], ['max', false], ['t', false],
@@ -129,9 +131,13 @@ function schemaNoises(prefix: string, dims: 2 | 3, strip: boolean): readonly str
   }
   return Object.freeze(out);
 }
-/** `noise2` reads the 2D density noises, `noise` the 3D ones (by id); `noiseThreshold` a 2D surface noise (by path). */
-export const DENSITY_NOISE_OPTIONS: Readonly<Record<'noise' | 'noise2', readonly string[]>> = Object.freeze({
+/**
+ * `noise2` reads the 2D density noises, `noise` and `noiseScaled` (SP6a §1.5) the 3D ones (by id); `noiseThreshold` a 2D
+ * surface noise (by path).
+ */
+export const DENSITY_NOISE_OPTIONS: Readonly<Record<'noise' | 'noise2' | 'noiseScaled', readonly string[]>> = Object.freeze({
   noise2: schemaNoises('density.noises.', 2, true), noise: schemaNoises('density.noises.', 3, true),
+  noiseScaled: schemaNoises('density.noises.', 3, true),
 });
 export const SURFACE_NOISE_OPTIONS: readonly string[] = schemaNoises('surface.noises.', 2, false);
 
@@ -244,6 +250,7 @@ function densityScalars(op: string, value: unknown): [string, unknown][] {
     case 'clamp': case 'rangeChoice': return [['lo', 0], ['hi', 1]];
     case 'slide': return [['knots', [[-64, 0], [320, 1]]]];
     case 'noise': case 'noise2': return [['id', DENSITY_NOISE_OPTIONS[op][0]]];
+    case 'noiseScaled': return [['id', DENSITY_NOISE_OPTIONS.noiseScaled[0]], ['s', 1]];
     case 'col': return [['field', 'offset']];
     case 'tap': return [['name', freshTapName(value)]];
     case 'ref': return [['name', defNames(value)[0]]];
@@ -471,6 +478,7 @@ function numberField(at: Located, key: string): { int: boolean } | null {
   if (key === 'v') return op === 'const' || op === 'param' ? { int: false } : null;
   if (key === 'lo' || key === 'hi') return op === 'clamp' || op === 'rangeChoice' ? { int: false } : null;
   if (key === 'mute') return op === 'tap' ? { int: false } : null;
+  if (key === 's') return op === 'noiseScaled' ? { int: false } : null;
   return op === 'slide' && KNOT_KEY.test(key) ? { int: false } : null;
 }
 
@@ -545,6 +553,8 @@ export function formFields(params: Params, sel: Selection): FormField[] {
       }
       case 'col': out.push(sel1('field', COL_FIELD_OPTIONS)); break;
       case 'noise': case 'noise2': out.push(sel1('id', DENSITY_NOISE_OPTIONS[n['op']])); break;
+      // s: a literal or a param; a negated ref would lie below 1/16, so the form offers none (SP6a §1.5).
+      case 'noiseScaled': out.push(sel1('id', DENSITY_NOISE_OPTIONS.noiseScaled), num('s', false, false)); break;
       case 'clamp': case 'rangeChoice': out.push(num('lo', false), num('hi', false)); break;
       case 'slide': out.push({ type: 'knots', key: 'knots', value: own(n, 'knots') as readonly (readonly [NumberValue, NumberValue])[] }); break;
       case 'tap':

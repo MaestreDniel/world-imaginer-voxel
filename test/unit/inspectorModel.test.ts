@@ -170,6 +170,17 @@ describe('rows and summaries', () => {
     expect(rows.filter((r) => r.tap).map((r) => r.path)).toEqual(['root.b', 'defs.alpha']);
   });
 
+  test('a noiseScaled row reads noiseScaled <id> /<s>, s a literal or a ref (SP6a §1.5)', () => {
+    const tree = { root: { op: 'add', a: { op: 'noiseScaled', id: 'detail', s: 0.75 }, b: { op: 'noiseScaled', id: 'overhang', s: { param: 'density.noises.detail.clampSigma' } } }, defs: {} };
+    const p = withDensity(tree);
+    const rows = rowsOf(inspectorTree(p, expandAll(p), null), 'density.defs');
+    expect(rows.map((r) => `${r.path} | ${r.summary}`)).toEqual([
+      'root | add',
+      'root.a | noiseScaled detail /0.75',
+      'root.b | noiseScaled overhang /density.noises.detail.clampSigma',
+    ]);
+  });
+
   test('param rows read the session value, so a slider move changes their summary and the key', () => {
     const w = session();
     const sel: Selection = { leaf: 'density.defs', path: 'root.a.b.b.a' };

@@ -14,7 +14,7 @@
  * `rangeChoice` never make it known again. A finite input may still give an infinite result endpoint (an overflow, never
  * NaN): it holds every value, and the parent is UNKNOWN. With finite intervals every result is exactly SP3b's.
  */
-import type { ColExpr, Expr, ExprOp, InterpolatedExpr, Noise2Expr, NoiseExpr, RefExpr, SlideExpr, SlideKnot } from './expr';
+import type { ColExpr, Expr, ExprOp, InterpolatedExpr, Noise2Expr, NoiseExpr, NoiseScaledExpr, RefExpr, SlideExpr, SlideKnot } from './expr';
 
 export function valAdd(a: number, b: number): number { return a + b; }
 export function valMul(a: number, b: number): number { return a * b; }
@@ -59,7 +59,7 @@ export function valSlide(x: number, knots: readonly SlideKnot[], y: number): num
 export function inRange(x: number, lo: number, hi: number): boolean { return lo <= x && x < hi; }
 
 /** The reads a node delegates to its caller, whose placement rules (§2.1, §2.2) decide where they are taken. */
-export type DelegatedExpr = ColExpr | Noise2Expr | NoiseExpr | InterpolatedExpr | RefExpr;
+export type DelegatedExpr = ColExpr | Noise2Expr | NoiseExpr | NoiseScaledExpr | InterpolatedExpr | RefExpr;
 
 /** What `evalNode` needs from the walker that calls it. */
 export interface NodeEnv {
@@ -67,7 +67,10 @@ export interface NodeEnv {
   readonly y: number;
   /** A child's value, through the caller's placement rules. */
   child(e: Expr): number;
-  /** `col`, `noise2`, `noise`, `interpolated` and `ref`: the caller samples, interpolates or resolves them. */
+  /**
+   * `col`, `noise2`, `noise`, `noiseScaled`, `interpolated` and `ref`: the caller samples, interpolates or resolves
+   * them (`noiseScaled` is z3(x / s, y / s, z / s) at the point, one division per axis in that order).
+   */
   read(e: DelegatedExpr): number;
   /**
    * A slide's knots, when the caller holds a copy (the reference reads thawed copies of a resolved tree's frozen arrays:
@@ -84,7 +87,7 @@ export function evalNode(e: Expr, env: NodeEnv): number {
   switch (e.op) {
     case 'const': return e.v;
     case 'y': return env.y;
-    case 'col': case 'noise2': case 'noise': case 'interpolated': case 'ref': return env.read(e);
+    case 'col': case 'noise2': case 'noise': case 'noiseScaled': case 'interpolated': case 'ref': return env.read(e);
     case 'add': { const a = env.child(e.a); return valAdd(a, env.child(e.b)); }
     case 'mul': { const a = env.child(e.a); return valMul(a, env.child(e.b)); }
     case 'min': { const a = env.child(e.a); return valMin(a, env.child(e.b)); }
@@ -158,7 +161,7 @@ export function ivSet(lo: number, hi: number, out: Float64Array, k: number): voi
   out[k + 1] = hi;
 }
 
-/** `noise2` / `noise`: [−clampSigma, clampSigma]. */
+/** `noise2` / `noise` / `noiseScaled`: [−clampSigma, clampSigma]. */
 export function ivNoise(clampSigma: number, out: Float64Array, k: number): void {
   ivSet(-clampSigma, clampSigma, out, k);
 }
@@ -303,13 +306,13 @@ export function ivWiden(lo: number, hi: number, out: Float64Array, k: number): v
 export type DensityClass = 'column' | 'cell' | 'voxel';
 
 /**
- * A node's own class: `y`, `slide` and `noise` are y-dependent (CELL inside `interpolated`, VOXEL outside, never
- * COLUMN); `interpolated` is VOXEL (evaluated per voxel from its CELL corners) and is never inside another; every other
- * op adds nothing (COLUMN), so `const`, `col` and `noise2` sub-trees stay COLUMN.
+ * A node's own class: `y`, `slide`, `noise` and `noiseScaled` are y-dependent (CELL inside `interpolated`, VOXEL
+ * outside, never COLUMN); `interpolated` is VOXEL (evaluated per voxel from its CELL corners) and is never inside
+ * another; every other op adds nothing (COLUMN), so `const`, `col` and `noise2` sub-trees stay COLUMN.
  */
 export function ownClass(op: ExprOp, inside: boolean): DensityClass {
   switch (op) {
-    case 'y': case 'slide': case 'noise': return inside ? 'cell' : 'voxel';
+    case 'y': case 'slide': case 'noise': case 'noiseScaled': return inside ? 'cell' : 'voxel';
     case 'interpolated':
       if (inside) throw new Error('an interpolated inside another has no class');
       return 'voxel';
@@ -346,7 +349,7 @@ function isColumn(e: Expr, defs: Readonly<Record<string, Expr>>, memo: WeakMap<E
   let r: boolean;
   switch (e.op) {
     case 'const': case 'col': case 'noise2': r = true; break;
-    case 'y': case 'slide': case 'noise': case 'interpolated': r = false; break;
+    case 'y': case 'slide': case 'noise': case 'noiseScaled': case 'interpolated': r = false; break;
     case 'ref': r = isColumn(resolve(e.name, defs), defs, memo); break;
     case 'add': case 'mul': case 'min': case 'max': r = isColumn(e.a, defs, memo) && isColumn(e.b, defs, memo); break;
     case 'rangeChoice': r = isColumn(e.x, defs, memo) && isColumn(e.inside, defs, memo) && isColumn(e.outside, defs, memo); break;

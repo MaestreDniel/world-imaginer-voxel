@@ -15,9 +15,11 @@
  *   the most tier 2 accepts, or 65, 200 and 1,024), air and unknown blocks,
  *   oversized values (too many values, too long arrays and strings, too large a text).
  * - Structure-preserving mutations (`PRESERVING_MUTATIONS`): change a literal within its range, swap two siblings,
- *   replace a literal by a param ref (int fields take only int targets), wrap a node in a tap (rules: a rule in a
- *   one-child sequence, a condition in a double `not`), mute a tap, add a def and reference it (rules: duplicate a
- *   branch).
+ *   replace a literal by a param ref (int fields take only int targets; a `noiseScaled.s` only the targets whose static
+ *   range lies inside [1/16, 16], never negated), wrap a node in a tap (rules: a rule in a one-child sequence, a
+ *   condition in a double `not`), mute a tap, add a def and reference it (rules: duplicate a branch), and (density, SP6a
+ *   §1.5) turn a `noise` into a `noiseScaled` of the same id, s a literal of `FUZZ_SCALES` or a clampSigma ref
+ *   (`scaleNoise`), so the edited trees of DT2 cover `noiseScaled` on the default trees too.
  *
  * A mutation never changes its input (the bases are frozen): it works on a copy (`cloneTree`, which keeps −0 and own
  * `__proto__` keys). Breaking mutations are not guaranteed to be refused, nor preserving ones accepted: the fuzz only
@@ -28,7 +30,8 @@ import { DEFAULT_DENSITY_TREE, DEFAULT_SURFACE_RULES } from '../../src/core/para
 import type { JsonFormat } from '../../src/core/params/json';
 import { ALLOWED_REF_TARGETS, SOURCE_CHILD_KEYS, SOURCE_OPS, type SourceOp } from '../../src/gen/density/source';
 import { CONDITION_KINDS, RULE_KINDS } from '../../src/gen/surface/rules';
-import { randomDensityExpr, SCHEMA_DENSITY_NOISES } from './densityFuzz';
+import { NOISE_SCALE_MAX, NOISE_SCALE_MIN } from '../../src/core/constants';
+import { FUZZ_SCALES, randomDensityExpr, SCHEMA_DENSITY_NOISES } from './densityFuzz';
 import { testFloat } from './stats';
 import { randomSurfaceRules, SCHEMA_SURFACE_NOISES, type SurfaceFuzzStyle } from './surfaceFuzz';
 
@@ -41,11 +44,11 @@ export const BREAKING_MUTATIONS = [
   'deleteKey', 'addKey', 'swapOp', 'badNumber', 'deepNesting', 'wideNesting', 'wrongType', 'badName', 'refCycle',
   'missingTarget', 'knotsOverflow', 'knotsGrow', 'airBlock', 'oversized',
 ] as const;
-export const PRESERVING_MUTATIONS = ['changeLiteral', 'swapSiblings', 'literalToParam', 'wrap', 'muteTap', 'addDef'] as const;
+export const PRESERVING_MUTATIONS = ['changeLiteral', 'swapSiblings', 'literalToParam', 'wrap', 'muteTap', 'addDef', 'scaleNoise'] as const;
 export type MutationName = (typeof BREAKING_MUTATIONS)[number] | (typeof PRESERVING_MUTATIONS)[number];
 
 /** The mutations that exist for a format (the others have no counterpart there). */
-const DENSITY_ONLY: ReadonlySet<MutationName> = new Set(['refCycle', 'knotsOverflow', 'knotsGrow', 'muteTap']);
+const DENSITY_ONLY: ReadonlySet<MutationName> = new Set(['refCycle', 'knotsOverflow', 'knotsGrow', 'muteTap', 'scaleNoise']);
 const RULES_ONLY: ReadonlySet<MutationName> = new Set(['airBlock']);
 export function mutationsOf(format: JsonFormat, cls: MutationClass): readonly MutationName[] {
   const all: readonly MutationName[] = cls === 'breaking' ? BREAKING_MUTATIONS : PRESERVING_MUTATIONS;
@@ -120,7 +123,7 @@ interface Field {
 
 const RULE_INT_FIELDS: ReadonlySet<string> = new Set(['offset', 'minY', 'trueAtAndBelow', 'falseAtAndAbove']);
 const RULE_NUMBER_FIELDS: ReadonlySet<string> = new Set(['offset', 'minY', 'trueAtAndBelow', 'falseAtAndAbove', 'min', 'max', 't']);
-const DENSITY_REF_FIELDS: ReadonlySet<string> = new Set(['lo', 'hi', 'mute']);
+const DENSITY_REF_FIELDS: ReadonlySet<string> = new Set(['lo', 'hi', 'mute', 's']);
 const SOURCE_OP_SET: ReadonlySet<string> = new Set<string>(SOURCE_OPS);
 
 /** Child keys of a density node (unknown op: none). */
@@ -245,6 +248,13 @@ const BAD_PARAM_PATHS: readonly string[] = [
 ];
 const TARGETS: readonly string[] = [...ALLOWED_REF_TARGETS.keys()];
 const INT_TARGETS: readonly string[] = TARGETS.filter((t) => ALLOWED_REF_TARGETS.get(t)!.kind === 'int');
+/** The targets a `noiseScaled.s` ref may name and stay valid: static range inside [1/16, 16] (the clampSigma ones). */
+const SCALE_TARGETS: readonly string[] = TARGETS.filter((t) => {
+  const r = ALLOWED_REF_TARGETS.get(t)!;
+  return r.lo >= NOISE_SCALE_MIN && r.hi <= NOISE_SCALE_MAX;
+});
+/** A `noiseScaled.s` field. */
+const isScale = (f: Field): boolean => f.key === 's' && !Array.isArray(f.parent) && own(f.parent, 'op') === 'noiseScaled';
 
 /** −0 never: a product or difference that gives −0 is written +0. */
 const plus0 = (v: number): number => (v === 0 ? 0 : v);
@@ -378,7 +388,10 @@ class Mutator {
           const field = this.pick(['tap', 'param', 'noise', 'col', 'ref']);
           if (field === 'tap') setSlot(slot, { op: 'tap', name: bad, x: getSlot(slot) });
           else if (field === 'param') setSlot(slot, { op: 'param', path: bad });
-          else if (field === 'noise') setSlot(slot, { op: this.pick(['noise', 'noise2']), id: bad });
+          else if (field === 'noise') {
+            const op = this.pick(['noise', 'noise2', 'noiseScaled']);
+            setSlot(slot, op === 'noiseScaled' ? { op, id: bad, s: 1 } : { op, id: bad });
+          }
           else if (field === 'col') setSlot(slot, { op: 'col', field: bad });
           else setSlot(slot, { op: 'ref', name: bad });
           return true;
@@ -534,7 +547,9 @@ class Mutator {
             return true;
           }
           if (fields.length === 0) return false;
-          setSlot(this.pick(fields), neg ? { param: this.pick(TARGETS), neg: true } : { param: this.pick(TARGETS) });
+          const f = this.pick(fields);
+          if (isScale(f)) setSlot(f, { param: this.pick(SCALE_TARGETS) });
+          else setSlot(f, neg ? { param: this.pick(TARGETS), neg: true } : { param: this.pick(TARGETS) });
           return true;
         }
         const fields = t.fields();
@@ -562,6 +577,14 @@ class Mutator {
           setSlot(slot, tap);
         }
         define(tap, 'mute', this.pick<unknown>([0, 1, -1, -1000000, 1000000, 0.5, -10, { param: this.pick(TARGETS) }, { param: this.pick(TARGETS), neg: true }]));
+        return true;
+      }
+      case 'scaleNoise': {
+        const noises = slots.filter((s) => own(getSlot(s), 'op') === 'noise');
+        if (noises.length === 0) return false;
+        const s = this.pick(noises);
+        const sc: unknown = this.next() % 4 === 0 ? { param: this.pick(SCALE_TARGETS) } : this.pick(FUZZ_SCALES);
+        setSlot(s, { op: 'noiseScaled', id: own(getSlot(s), 'id'), s: sc });
         return true;
       }
       case 'addDef': {

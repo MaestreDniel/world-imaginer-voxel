@@ -2,6 +2,8 @@ import { describe, expect, test } from 'vitest';
 import type { DensityExpr, DensityNoise, DensityNoiseSource, Expr, InterpolatedExpr } from '../../src/gen/density/expr';
 import { ExprValidationError } from '../../src/gen/density/expr';
 import { cellXZ, cellY, cornerY, fracXZ, fracY, lerp, trilerp } from '../../src/gen/density/nodes';
+import { compileDensity } from '../../src/gen/density/compile';
+import { densityNoiseSource } from '../../src/gen/density/context';
 import { createDensityReference, findTap, interpolatedNodes } from '../../src/gen/density/reference';
 import { buildColumnSample, latticeIndex, newColumnSample, readField, SAMPLE_FIELDS, type ColumnSample } from '../../src/gen/column/columnStage';
 import { fuzzNoiseSource, randomDensityExpr } from '../harness/densityFuzz';
@@ -15,6 +17,7 @@ const n2 = (id: string): Expr => ({ op: 'noise2', id });
 const n3 = (id: string): Expr => ({ op: 'noise', id });
 const interp = (x: Expr): InterpolatedExpr => ({ op: 'interpolated', x });
 const add = (a: Expr, b: Expr): Expr => ({ op: 'add', a, b });
+const ns = (id: string, sc: number): Expr => ({ op: 'noiseScaled', id, s: sc });
 const only = (root: Expr, defs: Record<string, Expr> = {}): DensityExpr => ({ root, defs });
 
 /** A fake density noise: z2/z3 are plain functions of world coordinates; every call is logged. */
@@ -106,6 +109,17 @@ describe('reference interpreter: hand-computed values', () => {
     log.length = 0;
     expect(r.corner(s, add(n2('a'), n3('b')), 1, 3, 4)).toBe(36 + 0.5 * -32 + (36 + 2 * -40 + 4 * -32));
     expect(log).toEqual([[36, -32], [36, -40, -32]]);
+  });
+
+  test('noiseScaled samples z3(x / s, y / s, z / s): the voxel at a voxel, the corner at a corner (SP6a §1.5)', () => {
+    const log: number[][] = [];
+    const noises = source({ b: fake(3, (x, y, z) => x + 2 * y + 4 * z, log) });
+    const r = createDensityReference(only(ns('b', 0.75)), noises);
+    expect(r.voxel(s, X0 + 5, 70, Z0 + 2)).toBe(37 / 0.75 + 2 * (70 / 0.75) + 4 * (-46 / 0.75));
+    expect(log).toEqual([[37 / 0.75, 70 / 0.75, -46 / 0.75]]);
+    log.length = 0;
+    expect(r.corner(s, ns('b', 1.5), 1, 3, 4)).toBe(36 / 1.5 + 2 * (-40 / 1.5) + 4 * (-32 / 1.5));
+    expect(log).toEqual([[36 / 1.5, -40 / 1.5, -32 / 1.5]]);
   });
 
   test('interpolated reproduces y and affine fields exactly, and interpolates a non-affine noise in x, z, y order', () => {
@@ -252,5 +266,48 @@ describe('reference interpreter on real columns', () => {
       }
     }
     expect(checked).toBeGreaterThan(30);
+  });
+});
+
+describe('reference interpreter: noiseScaled on real columns (SP6a §1.5, D18)', () => {
+  const ctx = ctxFor('42');
+  const noises = densityNoiseSource(ctx);
+  const detail = noises('detail')!;
+
+  test('add(noiseScaled(detail, 0.75), interpolated(noiseScaled(detail, 1.5))): reference == compiled on every voxel of columns (0, 0) and (−37, 12)', () => {
+    const e = only(add(ns('detail', 0.75), interp(ns('detail', 1.5))));
+    const r = createDensityReference(e, noises);
+    const c = compileDensity(e, noises);
+    for (const [cx, cz] of [[0, 0], [-37, 12]] as const) {
+      const sm = buildColumnSample(ctx, cx, cz, newColumnSample());
+      c.columnFn(sm);
+      c.positionFn(sm);
+      for (let y = -64; y < 320; y++) {
+        for (let lz = 0; lz < 16; lz++) {
+          for (let lx = 0; lx < 16; lx++) {
+            const want = c.voxelFn(lx, y, lz);
+            const got = r.voxel(sm, 16 * cx + lx, y, 16 * cz + lz);
+            if (!Object.is(got, want)) throw new Error(`(${cx}, ${cz}) voxel (${lx}, ${y}, ${lz}): reference ${got} ≠ compiled ${want}`);
+          }
+        }
+      }
+      // The outside term alone is the schema noise at the scaled voxel coordinates.
+      const ro = createDensityReference(only(ns('detail', 0.75)), noises);
+      const x = 16 * cx + 7, z = 16 * cz + 3;
+      expect(Object.is(ro.voxel(sm, x, 41, z), detail.z3(x / 0.75, 41 / 0.75, z / 0.75))).toBe(true);
+    }
+  });
+
+  test('noiseScaled(detail, 1) equals noise(detail) bit for bit, at voxels and corners', () => {
+    const sm = buildColumnSample(ctx, -37, 12, newColumnSample());
+    const a = createDensityReference(only(ns('detail', 1)), noises);
+    const b = createDensityReference(only(n3('detail')), noises);
+    for (let y = -64; y < 320; y += 5) {
+      for (let lx = 0; lx < 16; lx += 3) {
+        const x = -592 + lx, z = 192 + ((lx * 7) & 15);
+        expect(Object.is(a.voxel(sm, x, y, z), b.voxel(sm, x, y, z))).toBe(true);
+      }
+    }
+    for (let k = 0; k <= 48; k += 4) expect(Object.is(a.corner(sm, ns('detail', 1), 2, k, 3), b.corner(sm, n3('detail'), 2, k, 3))).toBe(true);
   });
 });

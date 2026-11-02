@@ -297,6 +297,7 @@ function densitySummary(node: TreeNode, params: Params): string {
     case 'const': return `const ${field(own(node, 'v'))}`;
     case 'col': return `col ${String(own(node, 'field'))}`;
     case 'noise': case 'noise2': return `${op} ${String(own(node, 'id'))}`;
+    case 'noiseScaled': return `noiseScaled ${String(own(node, 'id'))} /${field(own(node, 's'))}`;
     case 'param': {
       const path = String(own(node, 'path'));
       return `param ${path}${targetValue(params, path)}`;

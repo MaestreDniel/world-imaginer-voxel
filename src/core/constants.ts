@@ -102,6 +102,14 @@ export const DENSITY_COLUMN_COST_MAX = 954_106_688;
 export const RULES_COLUMN_COST_MAX = 138_870_784;
 
 /**
+ * The density op `noiseScaled{id, s}`'s scale range (SP6a spec §1.5, D18): z3(x / s, y / s, z / s) with s in
+ * [NOISE_SCALE_MIN, NOISE_SCALE_MAX] = [1/16, 16], a literal or a ref whose static range lies inside it
+ * (`gen/density/expr.ts`'s `SCALE_RANGE`).
+ */
+export const NOISE_SCALE_MIN = 1 / 16;
+export const NOISE_SCALE_MAX = 16;
+
+/**
  * The slice viewer's sizes and extents (SP3d spec §4.2, `gen/inspect/fieldSlice.ts`): n × n samples, a 32² draft then
  * the 128² slice; a horizontal plane's side E in blocks. Every allowed E and n give integer sample coordinates
  * (E / (2n) ≥ 1 is an integer). Shared by gen, the workers and the UI.

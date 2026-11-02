@@ -89,6 +89,13 @@ describe('replace op (density): children by position in SOURCE_CHILD_KEYS order,
     const tapped = withDensity(tree({ op: 'tap', name: 'tap1', x: { op: 'neg', x: Y } }, { d: { op: 'tap', name: 'tap2', x: Y } }));
     expect((valueOf(replaceOp(tapped, D('root.x'), 'tap')) as { root: { x: unknown } }).root.x).toEqual({ op: 'tap', name: 'tap3', x: Y });
   });
+  test('noiseScaled (SP6a §1.5): defaults to the first 3D noise at s 1; noise ↔ noiseScaled keep the id', () => {
+    const root = (op: string, q = p) => (valueOf(replaceOp(q, D('root'), op)) as { root: Record<string, unknown> }).root;
+    expect(root('noiseScaled')).toEqual({ op: 'noiseScaled', id: 'overhang', s: 1 });
+    expect(root('noiseScaled', withDensity(tree({ op: 'noise', id: 'detail' })))).toEqual({ op: 'noiseScaled', id: 'detail', s: 1 });
+    expect(root('noise', withDensity(tree({ op: 'noiseScaled', id: 'islands', s: 2 })))).toEqual({ op: 'noise', id: 'islands' });
+    expect(root('noise2', withDensity(tree({ op: 'noiseScaled', id: 'islands', s: 2 })))).toEqual({ op: 'noise2', id: 'jag' });
+  });
   test('the current op is a no-op; the selection stays on the node', () => {
     const e = replaceOp(p, D('root'), 'add');
     expect(valueOf(e)).toEqual(JSON.parse(JSON.stringify(p.density.defs)));
@@ -352,6 +359,24 @@ describe('the fields of a node', () => {
     expect(formFields(q, D('root.b'))).toEqual([{ type: 'select', key: 'name', value: 'd', options: ['d'] }]);
     expect(keys(withDensity((toggleMute(DEFAULTS, D('root.b')) as { value: unknown }).value), 'root.b')).toEqual(['name:name', 'number:mute']);
     expect(keys(DEFAULTS, 'root.a')).toEqual([]);
+  });
+  test('noiseScaled (SP6a §1.5): the 3D noise select and s, a literal or a param (never negated); a ref outside [1/16, 16] is refused at commit', () => {
+    const q = withDensity(tree({ op: 'noiseScaled', id: 'detail', s: 0.75 }));
+    expect(formFields(q, D('root'))).toEqual([
+      { type: 'select', key: 'id', value: 'detail', options: ['overhang', 'detail', 'islands'] },
+      { type: 'number', key: 's', value: 0.75, current: 0.75, int: false, negatable: false },
+    ]);
+    const root = (e: FormEdit) => (valueOf(e) as { root: Record<string, unknown> }).root;
+    expect(root(setField(q, D('root'), 'id', 'islands'))).toEqual({ op: 'noiseScaled', id: 'islands', s: 0.75 });
+    expect(root(setNumber(q, D('root'), 's', { kind: 'literal', value: 2 }))).toEqual({ op: 'noiseScaled', id: 'detail', s: 2 });
+    const cs = 'density.noises.detail.clampSigma';
+    const ref = setNumber(q, D('root'), 's', { kind: 'param', path: cs });
+    expect(root(ref)).toEqual({ op: 'noiseScaled', id: 'detail', s: { param: cs } });
+    expect(root(setNumber(withDensity((ref as { value: unknown }).value), D('root'), 's', { kind: 'literal' })).s).toBe(DEFAULTS.density.noises.detail.clampSigma);
+    const w = session();
+    expect(commitFormEdit(w, setNumber(withDensity(tree({ op: 'noiseScaled', id: 'detail', s: 0.75 }), w.state.params), D('root'), 's', { kind: 'param', path: cs })).ok).toBe(true);
+    const bad = commitFormEdit(w, setNumber(withDensity(tree({ op: 'noiseScaled', id: 'detail', s: 0.75 }), w.state.params), D('root'), 's', { kind: 'param', path: 'density.detailAmpLo' }));
+    expect(bad.ok ? [] : bad.issues.map((i) => `${i.path}: ${i.code}`)).toEqual(['root.s: SCALE_RANGE']);
   });
   test('rules: FIELDS without children; block states collide; set a select, a boolean, a biome list', () => {
     expect(BLOCK_STATE_OPTIONS).toContain('stone');

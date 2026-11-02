@@ -4,8 +4,9 @@
  * the UI and the worker.
  * - `structuralCost(node, defs)`: 1 per node plus its children's costs; a `ref` costs its def; `interpolated` costs
  *   1 + 8 × its child (eight corners per voxel); a muted tap counts its child (mutes ignored). Value-independent.
- * - `workCost(expr, params)`: the structural cost of an evaluated expression with every `noise` / `noise2` weighted
- *   4 × octaves × (double ? 2 : 1) of its configured `density.noises.<id>` leaf (§5.2).
+ * - `workCost(expr, params)`: the structural cost of an evaluated expression with every `noise` / `noise2` (and SP6a's
+ *   `noiseScaled`, its spec §1.5) weighted 4 × octaves × (double ? 2 : 1) of its configured `density.noises.<id>` leaf
+ *   (§5.2).
  * - `densityColumnCost(source)`: the source structure with mutes applied and refs expanded (no value is read), every
  *   noise at its static maximum weight (16 octaves, double), every node at voxel placement counted 98,304 times (a
  *   chunk column) and every node under `interpolated` 1,225 times (25 × 49 quart corners).
@@ -74,7 +75,8 @@ const NOISE_MAX_WEIGHT = NOISE_UNITS_PER_OCTAVE * NOISE_RANGES.octaves.max * 2;
 const SD_MAX_STATIC = SD_MAX_OF(TARGET_RANGES.get('surface.depthMul')![1], NOISE_RANGES.clampSigma.max);
 
 const opOf = (n: Rec): string | undefined => (Object.hasOwn(n, 'op') && typeof n['op'] === 'string' ? n['op'] : undefined);
-const isNoise = (op: string | undefined): boolean => op === 'noise' || op === 'noise2';
+/** A noise read, weighed as one: `noise`, `noise2` and `noiseScaled` (SP6a spec §1.5: the cost weight of `noise`). */
+const isNoise = (op: string | undefined): boolean => op === 'noise' || op === 'noise2' || op === 'noiseScaled';
 
 /** How a density cost weighs a node. */
 interface Model {

@@ -7,8 +7,9 @@
  *   [y0, y0 + 8], a COLUMN node with a column slot is the hull of its 4 corner-column values (exact);
  * - a node outside covers the cell's 128 voxels: `y` is [y0, y0 + 7], a COLUMN node with a position slot is the hull of
  *   its 4 × 4 position values, widened (spec §1.2: every voxel-level COLUMN value interval is widened);
- * - `noise` is [−clampSigma, clampSigma]; a `const` is [v, v]; `interpolated` is its child's interval, widened, or,
- *   once the cell's corners exist (`cellIntervalCorners`), the hull of its 8 corner values, widened;
+ * - `noise` and `noiseScaled` are [−clampSigma, clampSigma]; a `const` is [v, v]; `interpolated` is its child's
+ *   interval, widened, or, once the cell's corners exist (`cellIntervalCorners`), the hull of its 8 corner values,
+ *   widened;
  * - poison (SP3d spec §1.9 D): the interval ops of nodes.ts turn a non-finite input or a NaN result into UNKNOWN =
  *   [−∞, +∞], and every slot and corner hull tests each value it folds in for NaN and the finished hull for
  *   finiteness (never its ±Infinity seed), so a NaN or ±∞ slot or corner value makes the hull UNKNOWN; an UNKNOWN root
@@ -114,7 +115,7 @@ export function createDensityBounds(c: CompiledDensity, noises: DensityNoiseSour
       const [a = -1, b = -1, k3 = -1] = node.kids;
       switch (e.op) {
         case 'y': push(I_Y, id, 0, 0, 0, inside ? 8 : 7, 0, null); break;
-        case 'noise': {
+        case 'noise': case 'noiseScaled': {
           const nz = noises(e.id);
           if (nz === undefined) throw new Error(`unknown density noise ${e.id}`);
           push(I_NOISE, id, 0, 0, 0, nz.clampSigma, 0, null);

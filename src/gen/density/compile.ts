@@ -6,8 +6,8 @@
  *
  * Nodes. After ref resolution, equal sub-trees are one node per placement: the CSE key is the node's structure (op,
  * scalar fields with −0 ≠ +0, tap names, its children's nodes) plus the inside-`interpolated` flag. Each node has a
- * class (COLUMN < CELL < VOXEL; `y`, `slide` and `noise` are CELL inside `interpolated` and VOXEL outside; an
- * `interpolated` node is VOXEL) and is evaluated by one of four closures:
+ * class (COLUMN < CELL < VOXEL; `y`, `slide`, `noise` and `noiseScaled` are CELL inside `interpolated` and VOXEL
+ * outside; an `interpolated` node is VOXEL) and is evaluated by one of four closures:
  * - `columnFn(s)`: the COLUMN nodes inside `interpolated` that a non-COLUMN node reads (column slots), at the 5 × 5
  *   corner columns: `col` is the lattice value, `noise2` z2 at the corner column's (x, z);
  * - `positionFn(s)`: the COLUMN nodes outside `interpolated` that a non-COLUMN node reads (position slots), and COLUMN
@@ -46,7 +46,7 @@ const FIND_TAP = findTap;
 /** One node of the compiled DAG (after ref resolution and CSE). */
 export interface DensityNode {
   readonly op: Exclude<ExprOp, 'ref'>;
-  /** A source node with this structure (the first one met): its scalar fields (v, field, id, lo, hi, knots, name). */
+  /** A source node with this structure (the first one met): its scalar fields (v, field, id, s, lo, hi, knots, name). */
   readonly expr: Expr;
   /** Inside an `interpolated` (evaluated at corners) or not (at voxels and positions). */
   readonly inside: boolean;
@@ -137,6 +137,8 @@ function scalarKey(e: Expr): string {
     case 'const': return numKey(e.v);
     case 'col': return e.field;
     case 'noise2': case 'noise': return JSON.stringify(e.id);
+    // id and s: noiseScaled nodes differing only in s are two nodes (and the op in the key keeps them apart from noise).
+    case 'noiseScaled': return `${JSON.stringify(e.id)},${numKey(e.s)}`;
     case 'clamp': case 'rangeChoice': return `${numKey(e.lo)},${numKey(e.hi)}`;
     case 'slide': return e.knots.map(([y, v]) => `${numKey(y)}:${numKey(v)}`).join(',');
     case 'tap': return JSON.stringify(e.name);
@@ -273,6 +275,8 @@ export function compileDensity(expr: DensityExpr, noises: DensityNoiseSource): C
       }
       case 'noise2': { const nz = noise(e.id); f = () => nz.z2(px, pz); break; }
       case 'noise': { const nz = noise(e.id); f = () => nz.z3(px, py, pz); break; }
+      // One division per axis, x then y then z, as the reference (SP6a spec §1.5).
+      case 'noiseScaled': { const nz = noise(e.id), sc = e.s; f = () => nz.z3(px / sc, py / sc, pz / sc); break; }
       case 'add': { const a = kid(0), b = kid(1); f = () => { const va = a(); return va + b(); }; break; }
       case 'mul': { const a = kid(0), b = kid(1); f = () => { const va = a(); return va * b(); }; break; }
       case 'min': { const a = kid(0), b = kid(1); f = () => { const va = a(), vb = b(); return vb < va ? vb : va; }; break; }

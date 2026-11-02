@@ -4,6 +4,7 @@ import { createDensityBounds, fillDensityColumn, type DensityBounds } from '../.
 import { compileDensity, posValueIndex } from '../../src/gen/density/compile';
 import type { DensityExpr, DensityNoise, DensityNoiseSource, Expr } from '../../src/gen/density/expr';
 import { cornerY, ivWiden } from '../../src/gen/density/nodes';
+import { densityNoiseSource } from '../../src/gen/density/context';
 import { createDensityReference } from '../../src/gen/density/reference';
 import { fuzzNoiseSource, randomDensityExpr, terrainStandInExpr } from '../harness/densityFuzz';
 import { ctxFor } from '../harness/gen';
@@ -288,5 +289,51 @@ describe('bounds and early-outs: fuzz (SP3b spec §1.2, §10)', () => {
     expect(total.solid).toBeGreaterThan(0);
     expect(total.voxel).toBeGreaterThan(0);
     expect(total.voxel / (4 * 768)).toBeLessThan(0.2);
+  });
+});
+
+describe('bounds: noiseScaled (SP6a §1.5, D18)', () => {
+  test('a noiseScaled leaf\'s interval, outside and inside interpolated, holds every compiled value over a column', () => {
+    const ctx = ctxFor('42');
+    const noises = densityNoiseSource(ctx);
+    const cs = noises('detail')!.clampSigma;
+    const outer: Expr = { op: 'noiseScaled', id: 'detail', s: 0.75 };
+    const inner: Expr = { op: 'noiseScaled', id: 'detail', s: 1.5 };
+    const out = new Float64Array(2);
+    for (const [root, inside] of [[outer, false], [interp(inner), true]] as const) {
+      const c = compileDensity(only(root), noises);
+      const b = createDensityBounds(c, noises);
+      const leaf = c.nodes.findIndex((n) => n.op === 'noiseScaled');
+      expect(c.nodes[leaf]!.inside).toBe(inside);
+      for (const [cx, cz] of [[0, 0], [-37, 12]] as const) {
+        const s = buildColumnSample(ctx, cx, cz, newColumnSample());
+        begin(b, s);
+        let lo = Infinity, hi = -Infinity;
+        for (let ck = 0; ck < 48; ck++) {
+          for (let cj = 0; cj < 4; cj++) {
+            for (let ci = 0; ci < 4; ci++) {
+              b.cellInterval(ci, ck, cj, out, 0);
+              expect([b.nodeIntervals[2 * leaf], b.nodeIntervals[2 * leaf + 1]]).toEqual([-cs, cs]);
+              if (inside) {
+                c.cellCorners(ci, ck, cj);
+                b.cellIntervalCorners(ci, ck, cj, out, 0);
+              }
+              for (let y = cornerY(ck); y < cornerY(ck) + 8; y++) {
+                for (let lz = 4 * cj; lz < 4 * cj + 4; lz++) {
+                  for (let lx = 4 * ci; lx < 4 * ci + 4; lx++) {
+                    const v = c.voxelFn(lx, y, lz);
+                    if (!(out[0]! <= v && v <= out[1]! && -cs <= v && v <= cs)) throw new Error(`(${cx}, ${cz}) voxel (${lx}, ${y}, ${lz}) = ${v} outside [${out[0]}, ${out[1]}]`);
+                    if (v < lo) lo = v;
+                    if (v > hi) hi = v;
+                  }
+                }
+              }
+            }
+          }
+        }
+        // The noise moves over the column (not a constant read).
+        expect(hi - lo).toBeGreaterThan(0.5);
+      }
+    }
   });
 });

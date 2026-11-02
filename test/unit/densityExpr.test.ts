@@ -7,6 +7,7 @@ import {
 const NOISES = new Map<string, DensityNoiseInfo>([
   ['jag', { dims: 2, remap: 'none', clampSigma: 3 }],
   ['overhang', { dims: 3, remap: 'none', clampSigma: 3 }],
+  ['detail', { dims: 3, remap: 'none', clampSigma: 3 }],
   ['flat', { dims: 2, remap: 'uniform', clampSigma: 3 }],
 ]);
 const LOOKUP = (id: string): DensityNoiseInfo | undefined => NOISES.get(id);
@@ -26,7 +27,7 @@ const EVERY_OP: DensityExpr = {
     },
     b: {
       op: 'rangeChoice', x: { op: 'noise2', id: 'jag' }, lo: -1, hi: 1,
-      inside: { op: 'min', a: { op: 'abs', x: C(-2) }, b: { op: 'square', x: C(3) } },
+      inside: { op: 'min', a: { op: 'abs', x: C(-2) }, b: { op: 'square', x: { op: 'noiseScaled', id: 'detail', s: 0.75 } } },
       outside: { op: 'neg', x: C(1e6) },
     },
   },
@@ -36,13 +37,16 @@ const EVERY_OP: DensityExpr = {
 };
 
 describe('Expr structure', () => {
-  test('EXPR_OPS lists the 17 ops of SP3b spec §1.1 and EXPR_CHILD_KEYS their child slots in evaluation order', () => {
+  test('EXPR_OPS lists the 19 ops (SP3b spec §1.1\'s 18 and SP6a\'s noiseScaled) and EXPR_CHILD_KEYS their child slots in evaluation order', () => {
     expect([...EXPR_OPS].sort()).toEqual(['abs', 'add', 'clamp', 'col', 'const', 'interpolated', 'max', 'min', 'mul', 'neg',
-      'noise', 'noise2', 'rangeChoice', 'ref', 'slide', 'square', 'tap', 'y']);
+      'noise', 'noise2', 'noiseScaled', 'rangeChoice', 'ref', 'slide', 'square', 'tap', 'y']);
+    // Appended after 'ref': every existing op keeps its index (SP6a D18).
+    expect(EXPR_OPS.indexOf('ref')).toBe(17);
+    expect(EXPR_OPS.indexOf('noiseScaled')).toBe(18);
     expect(EXPR_CHILD_KEYS.add).toEqual(['a', 'b']);
     expect(EXPR_CHILD_KEYS.rangeChoice).toEqual(['x', 'inside', 'outside']);
     expect(EXPR_CHILD_KEYS.slide).toEqual(['x']);
-    for (const op of ['const', 'y', 'col', 'noise2', 'noise', 'ref'] as const) expect(EXPR_CHILD_KEYS[op]).toEqual([]);
+    for (const op of ['const', 'y', 'col', 'noise2', 'noise', 'ref', 'noiseScaled'] as const) expect(EXPR_CHILD_KEYS[op]).toEqual([]);
   });
 
   test('exprChildren returns the children in evaluation order', () => {
@@ -104,6 +108,26 @@ describe('validateExpr (SP3b spec §1.1)', () => {
     expect(issues(doc({ op: 'noise', id: 'jag' }))).toEqual(['root.id: NOISE_DIMS']);
     expect(issues(doc({ op: 'noise2', id: 'overhang' }))).toEqual(['root.id: NOISE_DIMS']);
     expect(issues(doc({ op: 'noise2', id: 'flat' }))).toEqual(['root.id: NOISE_REMAP']);
+  });
+
+  test('noiseScaled (SP6a §1.5): a known 3D noise with remap none, s finite in [1/16, 16]', () => {
+    const ns = (id: unknown, s: unknown): unknown => doc({ op: 'noiseScaled', id, s });
+    expect(issues(ns('detail', 0.75))).toEqual([]);
+    expect(issues(ns('detail', 0.0625))).toEqual([]);
+    expect(issues(ns('detail', 16))).toEqual([]);
+    expect(issues(ns('detail', 0))).toEqual(['root.s: SCALE_RANGE']);
+    expect(issues(ns('detail', 0.03125))).toEqual(['root.s: SCALE_RANGE']);
+    expect(issues(ns('detail', 17))).toEqual(['root.s: SCALE_RANGE']);
+    expect(issues(ns('detail', -1))).toEqual(['root.s: SCALE_RANGE']);
+    expect(issues(ns('detail', NaN))).toEqual(['root.s: SCALE_RANGE']);
+    expect(issues(ns('detail', Infinity))).toEqual(['root.s: SCALE_RANGE']);
+    expect(validateExpr(ns('detail', 0), LOOKUP)[0]!.message).toBe('noiseScaled s must lie in [1/16, 16]');
+    expect(issues(ns('detail', '2'))).toEqual(['root.s: NOT_FINITE']);
+    expect(issues(doc({ op: 'noiseScaled', id: 'detail' }))).toEqual(['root.s: NOT_FINITE']);
+    expect(issues(ns('nope', 1))).toEqual(['root.id: UNKNOWN_NOISE']);
+    expect(issues(ns('jag', 1))).toEqual(['root.id: NOISE_DIMS']);
+    expect(issues(ns('flat', 1))).toEqual(['root.id: NOISE_DIMS']);
+    expect(issues(doc({ op: 'noiseScaled', id: 'detail', s: 1, x: Y }))).toEqual(['root.x: UNKNOWN_KEY']);
   });
 
   test('ref names must exist and must not form a cycle', () => {
@@ -213,9 +237,18 @@ describe('exprHash (structural)', () => {
       { op: 'rangeChoice', x: Y, lo: 0, hi: 2, inside: C(1), outside: C(0) },
       { op: 'tap', name: 'a', x: Y }, { op: 'tap', name: 'b', x: Y },
       { op: 'ref', name: 'a' }, { op: 'ref', name: 'b' },
+      { op: 'noiseScaled', id: 'detail', s: 1 }, { op: 'noiseScaled', id: 'detail', s: 2 }, { op: 'noiseScaled', id: 'overhang', s: 1 },
+      { op: 'noise', id: 'detail' },
     ];
     const hashes = new Set(variants.map((v) => exprHash(v)));
     expect(hashes.size).toBe(variants.length);
+  });
+
+  test('noiseScaled hashes its id and s: s 1 ≠ s 2, and noise detail ≠ noiseScaled detail s 1 (SP6a §1.5)', () => {
+    const h = (e: Expr): string => exprHash(e);
+    expect(h({ op: 'noiseScaled', id: 'detail', s: 1 })).not.toBe(h({ op: 'noiseScaled', id: 'detail', s: 2 }));
+    expect(h({ op: 'noise', id: 'detail' })).not.toBe(h({ op: 'noiseScaled', id: 'detail', s: 1 }));
+    expect(h({ op: 'noiseScaled', id: 'detail', s: 1.5 })).toBe(h(JSON.parse('{"s":1.5,"id":"detail","op":"noiseScaled"}') as Expr));
   });
 
   test('the memo records every sub-tree and gives the same result', () => {

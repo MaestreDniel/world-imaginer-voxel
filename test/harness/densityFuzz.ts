@@ -8,6 +8,10 @@
  * draws as +0, so a tree over `SCHEMA_DENSITY_NOISES` is a `density.defs` value tier 1 accepts (it refuses −0); the
  * stream, and so every other choice of the tree, is unchanged.
  *
+ * SP6a (its spec §1.5, D18): a quarter of the 3D noise leaves are `noiseScaled`, with s from `FUZZ_SCALES`. The op and s
+ * come from the u32 that picks the leaf's noise (no extra draw), so every tree keeps the shape, constants and noise ids it
+ * had before the op and the fuzz figures of the other tests do not move.
+ *
  * Every tree is valid by construction: defs reference only earlier defs (no cycles), no `interpolated` is generated
  * inside another (a ref inside `interpolated` targets only a def without one), clamp lo ≤ hi, rangeChoice lo < hi,
  * slide knots strictly increasing, tap names unique. Heights (a ref counts as its def's height) are at most `maxDepth`
@@ -101,6 +105,12 @@ export interface DensityFuzzOptions {
   readonly negativeZero?: boolean;
 }
 
+/**
+ * The scales a fuzz `noiseScaled` draws (SP6a §1.5): inside [1/16, 16], both ends and both sides of 1; ×0.5 … ×1.5 of
+ * any of them (the mutator's `changeLiteral`) stays inside.
+ */
+export const FUZZ_SCALES: readonly number[] = [0.125, 0.5, 0.75, 1, 1.5, 2, 3, 8];
+
 type Op = Expr['op'];
 const INNER_OPS: readonly Op[] = ['add', 'mul', 'min', 'max', 'neg', 'abs', 'square', 'clamp', 'slide', 'interpolated', 'rangeChoice', 'tap'];
 const LEAF_OPS: readonly Op[] = ['const', 'y', 'col', 'noise2', 'noise', 'ref'];
@@ -124,7 +134,15 @@ export function randomDensityExpr(next: () => number, opts: DensityFuzzOptions =
         case 'y': return { op };
         case 'col': return { op, field: pick(SAMPLE_FIELDS) };
         case 'noise2': if (n2.length > 0) return { op, id: pick(n2).id }; break;
-        case 'noise': if (n3.length > 0) return { op, id: pick(n3).id }; break;
+        case 'noise': {
+          if (n3.length === 0) break;
+          // pick(n3)'s draw, also choosing noiseScaled (1 in 4) and its s: no extra draw (see the module comment).
+          const r = next();
+          const id = n3[r % n3.length]!.id;
+          const q = Math.floor(r / n3.length);
+          if (q % 4 === 0) return { op: 'noiseScaled', id, s: FUZZ_SCALES[Math.floor(q / 4) % FUZZ_SCALES.length]! };
+          return { op, id };
+        }
         case 'ref': {
           const ok = defInfo.filter((d) => d.height <= budget && !(inside && d.interp));
           if (ok.length > 0) return { op, name: pick(ok).name };

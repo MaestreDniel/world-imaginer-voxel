@@ -5,7 +5,8 @@
  * - the op `{op: 'param', path}`, a leaf standing where a `const` would, whose value is a parameter's;
  * - the op `{op: 'recip', x}`, `1 / x` of a constant operand (a `const`, or a `param` whose static range excludes 0);
  * - tap `mute` (the tap yields the mute value instead of its child), and the ref form `{param, neg?}` in every numeric
- *   scalar field (`clamp` and `rangeChoice` bounds, each knot's y and v, `mute`); `const.v` stays a literal.
+ *   scalar field (`clamp` and `rangeChoice` bounds, each knot's y and v, `mute`, SP6a's `noiseScaled.s`, whose ref must
+ *   have its whole static range inside [1/16, 16], else `SCALE_RANGE`); `const.v` stays a literal.
  * A ref names one of `ALLOWED_REF_TARGETS`: the `number` and `int` leaves under `density.` and `surface.` and the
  * `clampSigma` field of their noise leaves, each with its static range (value-independence, §1.3: every check holds over
  * the whole range, so a slider move never invalidates a stored tree).
@@ -85,6 +86,8 @@ export interface SourceY { readonly op: 'y' }
 export interface SourceCol { readonly op: 'col'; readonly field: SampleField }
 export interface SourceNoise2 { readonly op: 'noise2'; readonly id: string }
 export interface SourceNoise { readonly op: 'noise'; readonly id: string }
+/** SP6a §1.5: z3(x / s, y / s, z / s); `s` a literal or a ref whose static range lies inside [1/16, 16]. */
+export interface SourceNoiseScaled { readonly op: 'noiseScaled'; readonly id: string; readonly s: SourceNumber }
 export interface SourceBinary { readonly op: 'add' | 'mul' | 'min' | 'max'; readonly a: SourceExpr; readonly b: SourceExpr }
 export interface SourceUnary { readonly op: 'neg' | 'abs' | 'square'; readonly x: SourceExpr }
 export interface SourceClamp { readonly op: 'clamp'; readonly x: SourceExpr; readonly lo: SourceNumber; readonly hi: SourceNumber }
@@ -104,7 +107,7 @@ export interface SourceRecip { readonly op: 'recip'; readonly x: SourceConst | S
 
 export type SourceExpr =
   | SourceConst | SourceY | SourceCol | SourceNoise2 | SourceNoise | SourceBinary | SourceUnary | SourceClamp | SourceSlide
-  | SourceInterpolated | SourceRangeChoice | SourceTap | SourceRef | SourceParam | SourceRecip;
+  | SourceInterpolated | SourceRangeChoice | SourceTap | SourceRef | SourceParam | SourceRecip | SourceNoiseScaled;
 export type SourceOp = SourceExpr['op'];
 
 /** The `density.defs` leaf's value: the root and its named sub-expressions, in source form. */
@@ -268,7 +271,7 @@ type Iv = readonly [lo: number, hi: number];
 const UNKNOWN_IV: Iv = Object.freeze([-Infinity, Infinity] as const);
 /** `y` over every voxel and corner: [cornerY(0), cornerY(48)] = [−64, 320]. */
 const Y_IV: Iv = Object.freeze([CORNER_Y(0), CORNER_Y(48)] as const);
-/** `noise` and `noise2` at clampSigma's static maximum: [−8, 8]. */
+/** `noise`, `noise2` and `noiseScaled` at clampSigma's static maximum: [−8, 8]. */
 const NOISE_IV: Iv = Object.freeze([-NOISE_RANGES.clampSigma.max, NOISE_RANGES.clampSigma.max] as const);
 /** `col` fields (a Map: a field name is tree content). */
 const FIELD_IV: ReadonlyMap<string, Iv> = new Map(Object.entries(FIELD_BOUNDS));
@@ -295,7 +298,7 @@ function nodeIv(node: Rec, kid: (key: string) => Iv, defIv: ReadonlyMap<string, 
   switch (op) {
     case 'const': IV_SET(node['v'] as number, node['v'] as number, SCRATCH, 0); return scratch();
     case 'y': return Y_IV;
-    case 'noise': case 'noise2': return NOISE_IV;
+    case 'noise': case 'noise2': case 'noiseScaled': return NOISE_IV;
     case 'col': return (typeof node['field'] === 'string' ? FIELD_IV.get(node['field']) : undefined) ?? UNKNOWN_IV;
     case 'param': {
       const t = typeof node['path'] === 'string' ? ALLOWED_REF_TARGETS.get(node['path']) : undefined;
@@ -582,8 +585,8 @@ const isConst = (e: Expr): e is Extract<Expr, { op: 'const' }> => e.op === 'cons
 
 /**
  * The resolved, frozen copy of a validated source node (§1.6 steps 1-4, bottom-up): `param` → `const(value)`, ref-valued
- * fields → numbers, a muted tap → `tap(const(mute))` (unless `ownMute` is false: the inspector's selected tap), `recip`
- * → `const(1 / c)`, and an `add`, `mul`, `min`, `max`, `neg`, `abs`, `square` or `clamp` whose children are all `const`
+ * fields → numbers (`noiseScaled.s` too), a muted tap → `tap(const(mute))` (unless `ownMute` is false: the inspector's
+ * selected tap), `recip` → `const(1 / c)`, and an `add`, `mul`, `min`, `max`, `neg`, `abs`, `square` or `clamp` whose children are all `const`
  * → `const(v)` with nodes.ts's value functions; `tap`, `interpolated`, `slide`, `rangeChoice` and `ref` are never folded.
  * Each node is rebuilt in place of its source node, so every surviving node keeps its path. The recursion is bounded by
  * tier 2's expanded depth (128).
@@ -601,6 +604,7 @@ function resolveNode(node: SourceExpr, params: Params, ownMute = true): Expr {
     case 'y': return Object.freeze({ op: 'y' });
     case 'col': return Object.freeze({ op: 'col', field: node.field });
     case 'noise2': case 'noise': return Object.freeze({ op: node.op, id: node.id });
+    case 'noiseScaled': return Object.freeze({ op: 'noiseScaled', id: node.id, s: num(node.s) });
     case 'add': case 'mul': case 'min': case 'max': {
       const a = res(node.a), b = res(node.b);
       if (isConst(a) && isConst(b)) {

@@ -161,7 +161,7 @@ world-imaginer-voxel/          (repository root)
                                 splineStats.ts, liveness.ts, crossSection.ts, also run by the workers' stats job; SP3a: region.ts
                                 (fillColumnT, genRegionInProcess, regionHash) and sp3aGoldens.ts; SP3b: sp3bGoldens.ts; SP3c: sp3cGoldens.ts;
                                 SP3e: sp3eGoldens.ts, the preset window search and the sp3e.* goldens, and pointDigest.ts, the
-                                column-point digest shared with sp2aGoldens.ts (SP3e spec §6))
+                                column-point digest shared with sp2aGoldens.ts (SP3e spec §6); SP6a: sp6aGoldens.ts, the sp6a.* goldens)
     workers/protocol.ts taskHandler.ts task.worker.ts sim.worker.ts simHandler.ts (SP5a) worldJobs.ts spikeStore.worker.ts spikeStoreHandler.ts   (taskHandler: pure message handler, SP2a; SP3a: sliceJob.ts,
                                 the slice job with its worker-local store and LRU; SP3b splits a slice across the workers; SP3d:
                                 fieldSliceJob.ts, the fieldSlice and fieldProbe jobs' message handling, the evaluation being
@@ -242,7 +242,7 @@ The authoritative layer table (value and type-only edges, worker edges, `light`/
 `test/arch/banned.test.ts` enforces these:
 
 - In `core`, `world` and `gen`, and in the determinism files of the next rule: `Math.random`, `Date.now`, `performance.now` and `console.*` (amended by SP2b).
-- In `core/`, `gen/`, `world/blocks/**` (its ids and tables are hashed into goldens; `world/store/**` keeps only the bans of the previous rule) and the determinism files (`DET_FILES` in `test/arch/rules/banned.ts`: `metrics/sp1Goldens.ts`, `metrics/sp1Fixtures.ts`, `metrics/sp2aGoldens.ts`, the SP2b metrics shared by the tests, the workers and the UI, `metrics/splineStats.ts`, `metrics/biomeShares.ts`, `metrics/liveness.ts` and `metrics/crossSection.ts`, the SP3a region core and goldens, `metrics/region.ts` and `metrics/sp3aGoldens.ts`, and the SP3b and SP3c goldens, `metrics/sp3bGoldens.ts` and `metrics/sp3cGoldens.ts`, and the SP3e goldens with the preset window search, `metrics/sp3eGoldens.ts`, and the column-point digest they share with SP2a's, `metrics/pointDigest.ts`): only exactly-specified `Math` members (the SP0 allowlist minus `fround`), no `**`; no `Intl`, `localeCompare`, `toLocale*`, `String.prototype.normalize`, `TextEncoder` or `TextDecoder` (amended by SP1, SP2a, SP2b, SP3a, SP3c and SP3e).
+- In `core/`, `gen/`, `world/blocks/**` (its ids and tables are hashed into goldens; `world/store/**` keeps only the bans of the previous rule) and the determinism files (`DET_FILES` in `test/arch/rules/banned.ts`: `metrics/sp1Goldens.ts`, `metrics/sp1Fixtures.ts`, `metrics/sp2aGoldens.ts`, the SP2b metrics shared by the tests, the workers and the UI, `metrics/splineStats.ts`, `metrics/biomeShares.ts`, `metrics/liveness.ts` and `metrics/crossSection.ts`, the SP3a region core and goldens, `metrics/region.ts` and `metrics/sp3aGoldens.ts`, and the SP3b and SP3c goldens, `metrics/sp3bGoldens.ts` and `metrics/sp3cGoldens.ts`, and the SP3e goldens with the preset window search, `metrics/sp3eGoldens.ts`, and the column-point digest they share with SP2a's, `metrics/pointDigest.ts`, and the SP6a goldens, `metrics/sp6aGoldens.ts`): only exactly-specified `Math` members (the SP0 allowlist minus `fround`), no `**`; no `Intl`, `localeCompare`, `toLocale*`, `String.prototype.normalize`, `TextEncoder` or `TextDecoder` (amended by SP1, SP2a, SP2b, SP3a, SP3c, SP3e and SP6a).
 - In `core/noise/**`, `core/spline/**`, `metrics/**`, `gen/**` and `world/blocks/**`: imported value bindings are referenced only through top-level `const` aliases (vitest's transform turns them into getters; amended by SP1, SP2a and SP3a).
 - Exported numeric consts anywhere in `gen/` (fixed world constants live only in `core/constants.ts`).
 - Anywhere in the repository: no `.ogg`/`.mp3`/`.wav` files (sound packs are user-supplied, D17) and no import specifier resolving outside the repository (no copy-forward imports from world-imaginer).
@@ -428,6 +428,9 @@ type Expr =                                  // 3D density composition (preset d
 // is x, slide.knots: [y, v][], ref.name); the other ops arrive with the SPs that need them (amended by SP3b).
 // SP3d adds the source-only op `param` (a numeric `density.*`/`surface.*` leaf or a noise `clampSigma`), the `{param, neg?}` form
 // of every numeric field, `recip` (of a constant) and tap `mute`, resolved to the ops above before compilation (amended by SP3d).
+// SP6a adds `noiseScaled{id, s}`: z3(x/s, y/s, z/s) of the 3D density noise `id` (one division per axis), s ∈ [1/16, 16] (a
+// literal, or a `{param}` whose static range lies inside it); interval ±clampSigma, class and cost weight as `noise`, CSE and
+// hash keys include s; the cave formulas' rarity scales are written with it (amended by SP6a).
 interface CompiledDensity { cornerFn(ctx, x:number, y:number, z:number): number; voxelFn(ctx, i:number, interp:Float64Array): number;
   boundsCell(ctx, cellX:number, cellY:number, cellZ:number): [number, number]; point(x:number, y:number, z:number, tap?:string): number; }
 // SP3b's compileDensity(expr, noises) emits columnFn, positionFn, cornerFn, voxelFn and tapFn closures over its own typed scratch;

@@ -108,7 +108,9 @@
  * "SP6" reworded as SP6a or SP6b (left only in the §10 split paragraphs). The pins that read the SP6 entry or name SP6
  * move into the new 'master spec amendments (SP6a §13)' describe: SP3e's note (with `ISLAND_RUN_MIN_BOTTOM`), §5.8's
  * bench route, §3.7's caching line, the critical path and the SP7 header; the `spEntry('SP5c', …)` pins end at SP6a.
- * Each later SP6a commit pins its §13 item there, moving the earlier pin it rewords.
+ * Each later SP6a commit pins its §13 item there, moving the earlier pin it rewords: the `noiseScaled` commit (Task 3)
+ * pins item 10 (§2.5's `noiseScaled{id, s}`) and §1's `metrics/*.ts` entry and "Banned APIs" naming `sp6aGoldens.ts`
+ * (the "amended by" list's pin moved here from the SP3e describe).
  */
 import { existsSync, readdirSync, readFileSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
@@ -497,7 +499,7 @@ describe('master spec amendments (SP3e §11, §13)', () => {
     expect(DET_FILES.has('metrics/sp3eGoldens.ts')).toBe(true);
     const line = text.split('\n').find((l) => l.includes('(`DET_FILES` in `test/arch/rules/banned.ts`:'));
     expect(line).toContain('`metrics/sp3eGoldens.ts`');
-    expect(line).toContain('(amended by SP1, SP2a, SP2b, SP3a, SP3c and SP3e)');
+    // The "amended by" list's pin moved to the SP6a describe, which extends it.
   });
 
   test('§1\'s metrics entry and "Banned APIs" name pointDigest.ts (the column-point digest), which exists', () => {
@@ -1940,5 +1942,25 @@ describe('master spec amendments (SP6a §13)', () => {
     const bare = text.split('\n').filter((l) => /\bSP6\b/.test(l));
     for (const l of bare) expect(kept.some((k) => l.startsWith(k)), `a bare SP6 outside the split paragraphs: ${l.slice(0, 120)}`).toBe(true);
     for (const k of kept) expect(bare.some((l) => l.startsWith(k)), `no line starts with ${k}`).toBe(true);
+  });
+  test('§2.5\'s Expr ops gain noiseScaled{id, s} (SP6a spec §13 item 10, §1.5)', () => {
+    const lines = text.split('\n');
+    const from = lines.findIndex((l) => l.startsWith('type Expr ='));
+    const to = lines.findIndex((l, i) => i > from && l.startsWith('interface CompiledDensity'));
+    expect(from, 'no `type Expr =` in §2.5').toBeGreaterThanOrEqual(0);
+    const block = lines.slice(from, to).join('\n');
+    expect(block).toContain('// SP6a adds `noiseScaled{id, s}`: z3(x/s, y/s, z/s) of the 3D density noise `id` (one division per axis), s ∈ [1/16, 16]');
+    expect(block).toContain('interval ±clampSigma, class and cost weight as `noise`, CSE and\n// hash keys include s');
+    expect(block).toContain('(amended by SP6a).');
+  });
+
+  test('§1\'s metrics entry and "Banned APIs" name sp6aGoldens.ts (the sp6a.* goldens), which exists (SP6a spec §12.3)', () => {
+    const entry = layoutEntry(/^\s+metrics\/\*\.ts\s/);
+    expect(entry).toContain('SP6a: sp6aGoldens.ts, the sp6a.* goldens');
+    expect(existsSync(`${ROOT_DIR}src/metrics/sp6aGoldens.ts`), 'src/metrics/sp6aGoldens.ts does not exist').toBe(true);
+    expect(DET_FILES.has('metrics/sp6aGoldens.ts')).toBe(true);
+    const line = text.split('\n').find((l) => l.includes('(`DET_FILES` in `test/arch/rules/banned.ts`:'));
+    expect(line).toContain('and the SP6a goldens, `metrics/sp6aGoldens.ts`):');
+    expect(line).toContain('(amended by SP1, SP2a, SP2b, SP3a, SP3c, SP3e and SP6a)');
   });
 });

@@ -5,7 +5,8 @@
  *
  * Placement (§2.1, §2.2):
  * - outside `interpolated` (voxel level), `y` is the voxel's y, `col` is the ColumnSample's bilinear readout at the
- *   voxel's (x, z) (`readField`), `noise2` is z2(x, z) and `noise` z3(x, y, z) at the voxel;
+ *   voxel's (x, z) (`readField`), `noise2` is z2(x, z), `noise` z3(x, y, z) and `noiseScaled` z3(x / s, y / s, z / s)
+ *   (one division per axis, in that order) at the voxel;
  * - an `interpolated` node evaluates its child at the 8 corners of the voxel's cell and interpolates them (`trilerp`);
  * - at a corner (i, k, j), `y` is −64 + 8k, `col` is the lattice value `latticeIndex(i, j)` exactly, and the noises
  *   sample the corner's world coordinates (16cx + 4i, −64 + 8k, 16cz + 4j).
@@ -97,6 +98,7 @@ export function createDensityReference(expr: DensityExpr, noises: DensityNoiseSo
           case 'col': return s.f[r.field][li]!;
           case 'noise2': return noise(r.id).z2(cx, cz);
           case 'noise': return noise(r.id).z3(cx, cy, cz);
+          case 'noiseScaled': return noise(r.id).z3(cx / r.s, cy / r.s, cz / r.s);
           case 'ref': return EVAL(defs[r.name]!, env);
           case 'interpolated': throw new Error('an interpolated cannot be evaluated at a corner (nested interpolated)');
         }
@@ -121,6 +123,7 @@ export function createDensityReference(expr: DensityExpr, noises: DensityNoiseSo
           case 'col': return READ_FIELD(s, r.field, x, z);
           case 'noise2': return noise(r.id).z2(x, z);
           case 'noise': return noise(r.id).z3(x, y, z);
+          case 'noiseScaled': return noise(r.id).z3(x / r.s, y / r.s, z / r.s);
           case 'ref': return EVAL(defs[r.name]!, env);
           case 'interpolated': {
             const c = r.x;
