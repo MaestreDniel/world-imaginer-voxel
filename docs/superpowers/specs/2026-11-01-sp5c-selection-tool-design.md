@@ -592,6 +592,10 @@ Run 41363347185 on `sp5c/selection-tool` at f19addc (2026-11-01, push, every met
 
 No lever ran. The watch item for later runs is `metrics-fast (rest)` (143 s against the long pole's 160-163 s): if it passes the long pole, the clipboard file gets a fast shard of its own.
 
+### The exit CI run (Task 36)
+
+Run 41396465620 at 9af1022 (2026-11-02): **success, wall 2 min 56 s**, under the 3 min 30 s exit criterion. Long pole `metrics-quick (terrain)` 158 s; `unit (rest)` 152 s (the top of §11's 117-152 s, 6 s under the long pole: the first candidate for SP5b's GOV-8 lever, `unitShards.mjs`' `heavy`, if a later SP adds unit time); `metrics-quick (surface)` 147 s; `metrics-fast (rest)` 141 s; `check` 128 s (Task 35's autosave tests and the lever tests; +34 s on the first run, within the ±45 s spread but worth watching); `metrics-quick (persist)` 109 s and `(edit)` 109 s; `metrics-quick (rest)` 99 s; `metrics-fast (terrain)` 100 s; `unit (heavy)` 92 s; `metrics-quick (render)` 85 s; `metrics-fast (surface)` 82 s; `metrics-quick (clipboard)` 76 s. No lever ran.
+
 ### The Chrome cells and `G2.paste` (Task 32, after D28's levers)
 
 Measured 2026-11-02 by an agent with `npm run measure:chrome` on the laptop panel eDP-1 (1920 × 1080 fullscreen, 240 Hz, display interval 4.165 ms), PRIME on-demand, Chrome 155.0.8059.39, a cold driver shader cache in the tool's own Chrome only, each run started at a 1-minute load ≤ 1.5 (0.8-0.97; the bench's own workers raised it to 1.3-3.9 during the runs, which the tool warns about).
