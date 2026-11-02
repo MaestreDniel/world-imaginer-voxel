@@ -44,6 +44,7 @@ import {
   WALK_HOLD_MS, WALK_MIN_MOVE, WALK_PATH_BLOCKS, WALK_QUERY, walkCorridor, walkSnapOk,
   createdWorldId, PAGEHIDE_RELOAD_MS, POSE_TOL, poseWithin, rowTitleOk, SAVE_EDITS, SAVE_SPEED_INDEX, saveColumns, savedWorldQuery, SMOKE_KEYS,
   cellsHash, SELECT_HOUSE, SELECT_STATE, SELECT_TURNED, selectHouse, selectSites, turnHouse,
+  SHOT_GLASS, SHOT_RANGE, shotHouse, shotPitch, shotSites, SMOKE_ENTER_NAME, SMOKE_MODE_OFF_TIP, SMOKE_MODIFY_ON_NOTICE, SP5C_SHOTS,
   SMOKE_LOCKED_NOTICE, SMOKE_WORLD, START_BUTTONS,
   COPY_BADGE, exportedFile, FIRST_PLACE_DOT, importedNotice, MODIFY_EDIT, OLDER_BADGE, OLDER_WORLD, PAUSED_SPEED_INDEX, SETTINGS_FOV, SMOKE_BACKUP_NOTICE, SMOKE_BACKUP_NOTICE_MS, SMOKE_COPY,
   SMOKE_PLACE, SMOKE_PLACE_SAVED, SP5B_SHOTS, ADDED_PLACE_DOT, lookDiffers, PLACES_SHOT_DOTS, PLACES_SHOT_SOUTH_PX, worldsMenuFallback,
@@ -74,7 +75,8 @@ import { DEFAULT_KEYMAP } from '../../src/player/keymap';
 import { mountWorldsMenu, startModeOf } from '../../src/ui/worldsMenu';
 import { LOCKED_NOTICE } from '../../src/ui/world/worldLock';
 import { backupName, exportFileName } from '../../src/persist/saves';
-import { BACKUP_NOTICE_MS } from '../../src/ui/world/modifyMode';
+import { BACKUP_NOTICE_MS, MODIFY_ON_NOTICE } from '../../src/ui/world/modifyMode';
+import { MODE_OFF_TIP } from '../../src/ui/common/modeTip';
 import { PLACE_COLOURS, PLACE_SAVED_NOTICE } from '../../src/ui/world/places';
 import { turnClipboard } from '../../src/ui/world/clipboard';
 import { clipboardHash } from '../../src/ui/world/worldPage';
@@ -1418,6 +1420,87 @@ describe('UI smoke test: the saved-world steps (SP5b spec §6.5)', () => {
       expect(png.subarray(1, 4).toString('latin1'), name).toBe('PNG');
       expect([png.readUInt32BE(16), png.readUInt32BE(20)], name).toEqual([VIEWPORT.width, VIEWPORT.height]);
     }
+  });
+});
+
+describe('UI smoke test: SP5c\'s `menus` and `modify` notes and its review screenshots (SP5c spec §7, §10.10)', () => {
+  test('`modify`: the notice row after the switch holds `MODIFY_ON_NOTICE`, and the reminder on the disabled parameter is `MODE_OFF_TIP`', () => {
+    expect(SMOKE_MODIFY_ON_NOTICE).toBe(MODIFY_ON_NOTICE);
+    expect(SMOKE_MODE_OFF_TIP).toBe(MODE_OFF_TIP);
+    expect(SMOKE_MODE_OFF_TIP).toBe("Enable 'Modify terrain' to edit here");
+    // The later backup wait still tells the two notices apart.
+    expect(SMOKE_MODIFY_ON_NOTICE.includes(SMOKE_BACKUP_NOTICE)).toBe(false);
+  });
+
+  test('`menus`: the Enter rename names the world `SMOKE_ENTER_NAME`, and the second, saved with `.world-rename-save`, `SMOKE_WORLD.rename`', () => {
+    expect(SMOKE_ENTER_NAME).toBe('Smoke world draft');
+    expect(SMOKE_ENTER_NAME.trim()).toBe(SMOKE_ENTER_NAME);
+    expect(SMOKE_ENTER_NAME).not.toBe(SMOKE_WORLD.rename);
+    const menu = readFileSync(new URL('../../src/ui/worldsMenu.ts', import.meta.url), 'utf8');
+    expect(menu).toContain("rowButton('world-rename-save', 'Save', () => commit())");
+  });
+
+  test('--shots writes SP5c\'s five review screenshots (spec §10.10), committed in assets/sp5c at 1400 × 900', () => {
+    expect(Object.values(SP5C_SHOTS)).toEqual([
+      'review-selection.png', 'review-ghost.png', 'review-rotated-paste.png', 'review-rename-save.png', 'review-modify-notice.png',
+    ]);
+    for (const name of Object.values(SP5C_SHOTS)) {
+      const png = readFileSync(new URL(`../../docs/superpowers/specs/assets/sp5c/${name}`, import.meta.url));
+      expect(png.subarray(1, 4).toString('latin1'), name).toBe('PNG');
+      expect([png.readUInt32BE(16), png.readUInt32BE(20)], name).toEqual([VIEWPORT.width, VIEWPORT.height]);
+    }
+  });
+
+  test('the shots\' house is the `select` house with a glass pane: logs, ladders, a torch and glass, turned as the clipboard turns', () => {
+    expect(SHOT_GLASS).toBe(REGISTRY.parseStateKey('glass'));
+    const { w, h, d } = SELECT_HOUSE;
+    const house = shotHouse();
+    expect(house).toHaveLength(w * h * d);
+    const plain = selectHouse();
+    const differ = house.flatMap((v, i) => (v === plain[i] ? [] : [i]));
+    expect(differ.length).toBeGreaterThan(0);
+    for (const i of differ) {
+      expect(plain[i], `cell ${i}`).toBe(AIR << 8);
+      expect(house[i]! >>> 8, `cell ${i}`).toBe(SHOT_GLASS);
+    }
+    const states = new Set(house.map((v) => v >>> 8));
+    for (const s of [SELECT_STATE.logX, SELECT_STATE.ladderSouth, SELECT_STATE.torchEast, SHOT_GLASS]) expect(states.has(s), String(s)).toBe(true);
+    const t = turnClipboard({ w, h, d, values: Uint32Array.from(house) }, 1);
+    expect(turnHouse(house)).toEqual([...t.values]);
+  });
+
+  test('the shots\' three sites stand side by side in front of the camera at any yaw, apart from each other and from the `select` step\'s', () => {
+    for (let yaw = 0; yaw < 360; yaw += 3) {
+      for (const [x, z] of [[0.5, 0.5], [-10.3, 5.8], [100.9, -40.1]] as const) {
+        const s = shotSites({ x, z, yaw });
+        expect([s.house.w, s.house.d], `yaw ${yaw}`).toEqual([SELECT_HOUSE.w, SELECT_HOUSE.d]);
+        expect([s.paste.w, s.paste.d, s.ghost.w, s.ghost.d], `yaw ${yaw}`).toEqual([SELECT_HOUSE.d, SELECT_HOUSE.w, SELECT_HOUSE.d, SELECT_HOUSE.w]);
+        const sel = selectSites({ x, z });
+        const cells = (f: { x: number; z: number; w: number; d: number }) => Array.from({ length: f.w * f.d }, (_, i) => `${f.x + (i % f.w)},${f.z + Math.floor(i / f.w)}`);
+        const all = [s.house, s.paste, s.ghost, sel.house, sel.paste, sel.float, sel.again].flatMap(cells);
+        expect(new Set(all).size, `yaw ${yaw} at ${x}, ${z}`).toBe(all.length);
+        // Each footprint's centre within 40° of the look, about SHOT_RANGE away; the house left of the paste, the ghost right.
+        const fx = Math.sin((yaw * Math.PI) / 180), fz = -Math.cos((yaw * Math.PI) / 180);
+        const side: number[] = [];
+        for (const f of [s.house, s.paste, s.ghost]) {
+          const dx = f.x + f.w / 2 - x, dz = f.z + f.d / 2 - z;
+          const dist = Math.hypot(dx, dz);
+          expect((Math.acos((dx * fx + dz * fz) / dist) * 180) / Math.PI, `yaw ${yaw}`).toBeLessThan(40);
+          expect(dist, `yaw ${yaw}`).toBeGreaterThan(SHOT_RANGE - 2);
+          expect(dist, `yaw ${yaw}`).toBeLessThan(SHOT_RANGE + 8);
+          side.push(dx * -fz + dz * fx);
+        }
+        expect(side[0]! < side[1]! && side[1]! < side[2]!, `yaw ${yaw}: ${side}`).toBe(true);
+      }
+    }
+  });
+
+  test('the shots\' pitch looks at the ground SHOT_RANGE ahead, within -70° and 30°', () => {
+    expect(shotPitch(80, 64)).toBeCloseTo((-Math.atan2(80 - 64 - 1.5, SHOT_RANGE) * 180) / Math.PI, 9);
+    expect(shotPitch(66, 64)).toBeLessThan(0);
+    expect(shotPitch(60, 64)).toBeCloseTo((Math.atan2(5.5, SHOT_RANGE) * 180) / Math.PI, 9);
+    expect(shotPitch(-300, 64)).toBe(30);
+    expect(shotPitch(300, 64)).toBe(-70);
   });
 });
 

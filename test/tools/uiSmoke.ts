@@ -95,7 +95,8 @@
  *   Create and Play navigate to `/?world=<id>` without it, so the smoke opens `savedWorldQuery(id)` itself):
  *   - menus: New world with seed smoke-7 and amplified → Create → the world reveals at `/?world=<id>`; back to `/`,
  *     Load world lists it first (its title names the preset and the seed), the list's time recorded
- *     (`__wiMenuListMs`); Rename to "Smoke world" (Enter); Settings from the start screen opens, Esc closes it;
+ *     (`__wiMenuListMs`); Rename to "Smoke world draft" (Enter), then to "Smoke world" with the Save button beside the
+ *     field (SP5c spec §7.1); Settings from the start screen opens, Esc closes it;
  *   - save: 12 stone edits through the hook, a place (B, Enter), F to walk, T to ×10, `flushNow()`; `Page.reload`
  *     brings back every block, the place, the pose (`pose()` within 0.01), walking and the time speed; then one edit and
  *     a reload within 300 ms of its reply: whether it survived is recorded (the `pagehide` flush, spec §3.2), never
@@ -114,13 +115,17 @@
  *   - places (§3.7, D12, D13): flying, a map click 300 px east, a look through the pointer lock when granted; B, a name
  *     typed and the blue swatch, Enter → "Place saved"; M → the Places tab lists both places and the first one's dot is
  *     drawn 300 px west of the arrow; its ↗ teleports to its pose within 0.01 (`pose()`, yaw and pitch included);
- *   - modify (§3.6, D10, D11): off at the open (`#map-modify` unchecked, `density.detailAmpHi` disabled, the map's
- *     Ctrl+Z inert); on, that parameter typed: "Backup saved as 'Smoke world (before the change)'", then applied; off
+ *   - modify (§3.6, D10, D11): off at the open (`#map-modify` unchecked, `density.detailAmpHi` disabled, the titles
+ *     shown for it and its label holding "Enable 'Modify terrain' to edit here" (SP5c spec §7.3), the map's Ctrl+Z
+ *     inert); on, the notice row holds SP5c's Modify terrain notice (§7.2) and neither title the reminder; that
+ *     parameter typed: "Backup saved as 'Smoke world (before the change)'", then applied; off
  *     again, Ctrl+Z leaves it; `markOlderGenerator` on "Older world"; Load world lists the copy with "automatic copy"
  *     and "Older world" with "older generator";
  *   - settings-world (§1.4, D9): G opens the Settings over the world, its two tabs; the field of view 80 with the arrows
  *     on the focused slider applies to the camera (`fov()`); Esc closes it, then T and H/H reach the world; G again,
  *     its Close button, then T reaches the world (no hidden control keeps the world's keys);
+ *   - select (SP5c spec §10.8): a house through the hook; Q, the corners, Ctrl+C; Ctrl+V, one turn, the paste; Ctrl+Z,
+ *     Ctrl+Y; N moves a floating copy onto the ground; a reload, Ctrl+V again (`selectChecks`);
  * - console: no exception, console error or failed load, except the known favicon.ico 404 and Chrome's notice that it
  *   blocked a world page's `beforeunload` prompt when a step left it (`leaveGuardLog`); every step ran.
  * With --shots DIR it then writes the spec §12 screenshots into DIR, at seed 42 from a newly loaded page (the
@@ -142,7 +147,10 @@
  * they run, with --shots only; so do the saved-world steps with SP5b's seven (`SP5B_SHOTS`, spec §6.7, 1400 × 900):
  * `review-start.png` and `review-new-world.png` (menus), `review-place-dialog.png` and `review-map-places.png`
  * (places), `review-load-world.png` (modify) and `review-settings-graphics.png` and `review-settings-controls.png`
- * (settings-world). Only those seven are committed, in `assets/sp5b/` (ruling P48).
+ * (settings-world). Only those seven are committed, in `assets/sp5b/` (ruling P48). SP5c's five (`SP5C_SHOTS`, spec
+ * §10.10, 1400 × 900) follow: `review-rename-save.png` (menus), `review-modify-notice.png` (modify), and
+ * `review-selection.png`, `review-ghost.png` and `review-rotated-paste.png` (select, a scene built in front of the
+ * camera after the step's checks); only those five are committed, in `assets/sp5c/`.
  * Options: --skip-build, --profile-dir DIR, --shots DIR. The exit code is 0 only when every check passes.
  */
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
@@ -820,6 +828,11 @@ export function createdWorldId(url: string): string | null {
 
 /** The `menus` step's world: the seed typed, the preset chosen, and its Rename. */
 export const SMOKE_WORLD = { seed: 'smoke-7', preset: 'amplified', rename: 'Smoke world' } as const;
+/**
+ * The name `menus`' first Rename keeps with Enter; the second, kept with the Save button (`.world-rename-save`, SP5c
+ * spec §7.1, D17), gives the world `SMOKE_WORLD.rename`, the name the later steps read.
+ */
+export const SMOKE_ENTER_NAME = 'Smoke world draft';
 
 /** Whether a Load world row's title (`.world-title`: "<name> · <preset> · seed <seed>") names `SMOKE_WORLD`'s preset and seed. */
 export function rowTitleOk(text: string): boolean {
@@ -930,6 +943,52 @@ export function selectSites(pose: { readonly x: number; readonly z: number }): {
   };
 }
 
+/** Glass (`test/stateIds.lock.json`; a unit test keeps it the registry's): the pane the shots' house adds (SP5c spec §10.10). */
+export const SHOT_GLASS = 31;
+
+/**
+ * The house of SP5c's review shots (spec §10.10): `selectHouse` with a glass pane of two blocks in the air beside the
+ * ladders (cells (0, 1, 2) and (1, 1, 2)), so a turned ghost's face shading and glass frame can be compared with the
+ * pasted result: logs, ladders, a wall torch and glass.
+ */
+export function shotHouse(): number[] {
+  const { w, d } = SELECT_HOUSE;
+  const v = selectHouse();
+  for (const x of [0, 1]) v[(1 * d + 2) * w + x] = (SHOT_GLASS << 8) >>> 0;
+  return v;
+}
+
+/** How far ahead of the camera the shots' scene stands, blocks (horizontally). */
+export const SHOT_RANGE = 16;
+/** How far the camera rises (flying, Space held) before the shots, over the hills next to it, blocks. */
+const SHOT_RISE = 8;
+/** The distance between the shots' three footprints' centres, blocks, across the look. */
+const SHOT_SPACING = 7;
+
+/**
+ * The shots' three footprints, SHOT_RANGE ahead of the camera along its yaw and SHOT_SPACING apart across it, left to
+ * right: the house (W × D), its turned paste and the turned ghost beside it (D × W). They lie outside `selectSites`'.
+ */
+export function shotSites(pose: { readonly x: number; readonly z: number; readonly yaw: number }): { house: Footprint; paste: Footprint; ghost: Footprint } {
+  const r = (pose.yaw * Math.PI) / 180;
+  const fx = Math.sin(r);
+  const fz = -Math.cos(r);
+  const at = (k: number, w: number, d: number): Footprint => ({
+    x: Math.round(pose.x + fx * SHOT_RANGE - fz * k * SHOT_SPACING - w / 2),
+    z: Math.round(pose.z + fz * SHOT_RANGE + fx * k * SHOT_SPACING - d / 2),
+    w,
+    d,
+  });
+  const { w, d } = SELECT_HOUSE;
+  return { house: at(-1, w, d), paste: at(0, d, w), ghost: at(1, d, w) };
+}
+
+/** The pitch, degrees, that looks at 1.5 blocks above `groundY` SHOT_RANGE ahead from an eye at `eyeY`, within -70° and 30°. */
+export function shotPitch(eyeY: number, groundY: number): number {
+  const deg = (-Math.atan2(eyeY - groundY - 1.5, SHOT_RANGE) * 180) / Math.PI;
+  return Math.min(30, Math.max(-70, deg));
+}
+
 /** The `save` step's edits through the hook. */
 export const SAVE_EDITS = 12;
 /** The day speed's index after one T (`TIME_SPEEDS[1]`, ×10; a unit test compares them). */
@@ -967,6 +1026,10 @@ export const MODIFY_EDIT = { id: 'pp-density.detailAmpHi', value: '4' } as const
 /** The backup copy's name (`backupName` of the imported world's name, D11; a unit test compares them) and its notice. */
 export const SMOKE_COPY = `${SMOKE_WORLD.rename} (before the change)`;
 export const SMOKE_BACKUP_NOTICE = `Backup saved as '${SMOKE_COPY}'`;
+/** The notice at the switch's turn on (`MODIFY_ON_NOTICE`, `ui/world/modifyMode.ts`, SP5c spec §7.2, D18; a unit test compares them). */
+export const SMOKE_MODIFY_ON_NOTICE = 'Modify terrain is on: the first terrain change saves a backup copy of this world first, if you have built in it.';
+/** The reminder on a disabled terrain control's titled ancestor (`MODE_OFF_TIP`, `ui/common/modeTip.ts`, SP5c spec §7.3, D19; a unit test compares them). */
+export const SMOKE_MODE_OFF_TIP = "Enable 'Modify terrain' to edit here";
 /** How long the backup notice shows (`BACKUP_NOTICE_MS`, `ui/world/modifyMode.ts`, D11's 6 s; a unit test compares them). */
 export const SMOKE_BACKUP_NOTICE_MS = 6000;
 /** The Load world rows' badges (`ui/worldsMenu.ts`, D3; a unit test pins the menu's text). */
@@ -1014,6 +1077,19 @@ export const SP5B_SHOTS = {
   settingsControls: 'review-settings-controls.png',
   placeDialog: 'review-place-dialog.png',
   mapPlaces: 'review-map-places.png',
+} as const;
+
+/**
+ * SP5c's review screenshots (spec §10.10), 1400 × 900 as SP5b's, saved with --shots: the selection box with its label
+ * and a ghost before a paste with its replaced cells and counts (`select`), a turned house as a ghost beside the same
+ * house pasted (`select`), the Rename field with Save (`menus`) and the Modify terrain notice (`modify`).
+ */
+export const SP5C_SHOTS = {
+  selection: 'review-selection.png',
+  ghost: 'review-ghost.png',
+  rotatedPaste: 'review-rotated-paste.png',
+  renameSave: 'review-rename-save.png',
+  modifyNotice: 'review-modify-notice.png',
 } as const;
 
 /** The camera's pose as the hook reads it (`__wiTest.pose()`). */
@@ -3437,9 +3513,10 @@ async function blocksOnceLoaded(p: Page, vs: readonly Voxel[]): Promise<number[]
 /**
  * `menus` (spec §6.5): New world with seed smoke-7 and amplified → Create → the world reveals at `/?world=<id>`; back to
  * `/`, Load world lists it first (its title names the preset and the seed) and the list's time is recorded
- * (`__wiMenuListMs`); Rename to "Smoke world"; Settings from the start screen opens and closes. With --shots, the start
- * screen and New world filled in are `review-start.png` and `review-new-world.png`. The new world's id, or null when
- * Create did not reach it.
+ * (`__wiMenuListMs`); Rename to "Smoke world draft" kept with Enter, then to "Smoke world" kept with the Save button (SP5c
+ * spec §7.1, D17); Settings from the start screen opens and closes. With --shots, the start screen and New world filled
+ * in are `review-start.png` and `review-new-world.png`, and the second Rename's field with Save `review-rename-save.png`
+ * (SP5c spec §10.10). The new world's id, or null when Create did not reach it.
  */
 async function menusChecks(t: Smoke): Promise<string | null> {
   const p = t.page;
@@ -3472,12 +3549,23 @@ async function menusChecks(t: Smoke): Promise<string | null> {
   if (first.ms !== null) t.record(`the Load world list read in ${first.ms.toFixed(1)} ms (1 world)`);
 
   const row = `.world-row[data-id="${id}"]`;
+  const listed = (name: string): string =>
+    `document.querySelector('${row} .world-name')?.textContent === ${JSON.stringify(name)} && document.querySelector('${row} .world-name-input') === null`;
+  const rowText = () => p.eval(`document.querySelector('${row}')?.textContent ?? null`);
   await p.click(`${row} .world-rename`);
   await p.until(`document.querySelector('${row} .world-name-input') !== null`, 'menus: the name as a text field', 5000);
-  await p.typeInto(`${row} .world-name-input`, SMOKE_WORLD.rename);
+  await p.typeInto(`${row} .world-name-input`, SMOKE_ENTER_NAME);
   await p.enter();
-  await holds(t, `document.querySelector('${row} .world-name')?.textContent === ${JSON.stringify(SMOKE_WORLD.rename)} && document.querySelector('${row} .world-name-input') === null`,
-    `menus: Rename to "${SMOKE_WORLD.rename}" (Enter) is listed`, 10_000, () => p.eval(`document.querySelector('${row}')?.textContent ?? null`));
+  await holds(t, listed(SMOKE_ENTER_NAME), `menus: Rename to "${SMOKE_ENTER_NAME}" (Enter) is listed`, 10_000, rowText);
+  // SP5c spec §7.1 (D17): a second Rename, typed and kept by clicking the Save button beside the field.
+  await p.click(`${row} .world-rename`);
+  await p.until(`document.querySelector('${row} .world-name-input') !== null && document.querySelector('${row} .world-rename-save') !== null`,
+    'menus: the name as a text field with Save', 5000);
+  await p.typeInto(`${row} .world-name-input`, SMOKE_WORLD.rename);
+  await reviewShot(t, SP5C_SHOTS.renameSave);
+  await p.click(`${row} .world-rename-save`);
+  await holds(t, `${listed(SMOKE_WORLD.rename)} && document.querySelector('${row} .world-rename-save') === null`,
+    `menus: Rename to "${SMOKE_WORLD.rename}" (the Save button) is listed`, 10_000, rowText);
 
   await p.click('#load-back');
   await p.until(`document.getElementById('start-card')?.hidden === false`, 'menus: back to the start screen', 5000);
@@ -3984,6 +4072,13 @@ async function placesChecks(t: Smoke, id: string): Promise<void> {
     async () => ({ place: first, pose: await hookPose(p) }));
 }
 
+/**
+ * The page expression "the title the browser shows over element `el`": the nearest titled ancestor's (`el` included),
+ * or null when none has one (SP5c spec §7.3).
+ */
+const shownTitle = (el: string): string =>
+  `(() => { let e = ${el}; while (e !== null && !e.hasAttribute('title')) e = e.parentElement; return e === null ? null : e.title; })()`;
+
 /** Ctrl+Z with the map owning, then 1 s: the field `MODIFY_EDIT.id` still reads `value` and nothing regenerates. */
 async function undoInert(t: Smoke, what: string, value: string): Promise<void> {
   const p = t.page;
@@ -3997,7 +4092,9 @@ async function undoInert(t: Smoke, what: string, value: string): Promise<void> {
 
 /**
  * `modify` (spec §6.5, §3.6, D10, D11): M; off at the open: `#map-modify` unchecked, the `density.detailAmpHi` control
- * disabled, the map's Ctrl+Z inert; on: that parameter typed (4), held for the copy, "Backup saved as '<name> (before
+ * disabled, the titles shown for it and its label holding SP5c's reminder (SP5c spec §7.3), the map's Ctrl+Z inert;
+ * on: the notice row holds SP5c's Modify terrain notice (§7.2; `review-modify-notice.png`), neither title the reminder,
+ * that parameter typed (4), held for the copy, "Backup saved as '<name> (before
  * the change)'" (in the tool's notice row: the map covers the 3D), then applied (Watch live then hides the map while
  * the world regenerates, and the notice must then be in sight in the world's notices, D11's 6 s; M brings the map
  * back); off again, Ctrl+Z leaves the change. Then the hook marks the second import as from an
@@ -4014,11 +4111,23 @@ async function modifyChecks(t: Smoke, ids: { readonly imported: string; readonly
   if (!(await p.eval<boolean>(revealParam(field)))) throw new Error(`no parameter field #${MODIFY_EDIT.id}`);
   const v0 = await p.eval<string>(`${field}.value`);
   t.check(await p.eval<boolean>(`${field}.disabled === true`), `modify: off, the ${MODIFY_EDIT.id} control is disabled`);
+  const label = `document.querySelector(${JSON.stringify(`label[for="${MODIFY_EDIT.id}"]`)})`;
+  const tips = () => p.eval<{ field: string | null; label: string | null }>(`({ field: ${shownTitle(field)}, label: ${shownTitle(label)} })`);
+  const off = await tips();
+  t.check(off.field !== null && off.field.includes(SMOKE_MODE_OFF_TIP) && off.label !== null && off.label.includes(SMOKE_MODE_OFF_TIP),
+    `modify: off, the titles shown for #${MODIFY_EDIT.id} and its label hold "${SMOKE_MODE_OFF_TIP}" (SP5c spec §7.3)`, off);
   await undoInert(t, 'modify: off', v0);
 
   await p.click('#map-modify');
   if (!(await holds(t, `document.getElementById('map-modify').checked === true && ${field}.disabled === false`, 'modify: on, the control enabled', 5000,
     () => p.eval(`${field}.disabled`)))) return;
+  // SP5c spec §7.2 (D18): the switch's turn on shows its notice, in the tool's row while the map covers the 3D.
+  await holds(t, `(${ALL_NOTICES}).includes(${JSON.stringify(SMOKE_MODIFY_ON_NOTICE)})`, `modify: on, the notice row holds "${SMOKE_MODIFY_ON_NOTICE}"`, 2000,
+    () => p.eval(ALL_NOTICES));
+  await reviewShot(t, SP5C_SHOTS.modifyNotice);
+  const on = await tips();
+  t.check(!(on.field ?? '').includes(SMOKE_MODE_OFF_TIP) && !(on.label ?? '').includes(SMOKE_MODE_OFF_TIP),
+    `modify: on, neither title shown for #${MODIFY_EDIT.id} nor its label's holds the reminder`, on);
   // The copy is written in well under a second and the world then regenerates as fast: a recorder in the page notes, per
   // frame, when the notice first shows and when the stale count first rises.
   await p.eval(`(() => {
@@ -4204,6 +4313,18 @@ const modeIs = (mode: string): string => `__wiTest.selection().mode === ${JSON.s
  */
 async function placeAndConfirm(t: Smoke, what: string, key: 'paste' | 'move', at: Voxel, turns: number): Promise<boolean> {
   const p = t.page;
+  if (!(await showGhost(t, what, key, at, turns))) return false;
+  const r = await p.eval<string>('__wiTest.confirmPaste()');
+  t.check(r === 'ok', `${what}: the page's confirm (RMB's path): ${JSON.stringify(r)}`, r);
+  return r === 'ok' && await holds(t, modeIs('select'), `${what}: back in select`, 5000, () => p.eval('__wiTest.selection()'));
+}
+
+/**
+ * Ctrl+V (`paste`) or N (`move`), then the ghost pinned at `at` and `turns` wheel steps down (rulings P9: each waits
+ * for the one before it to settle), each checked. False when a wait failed (the key placed nothing, or no turn).
+ */
+async function showGhost(t: Smoke, what: string, key: 'paste' | 'move', at: Voxel, turns: number): Promise<boolean> {
+  const p = t.page;
   await p.blur();
   if (key === 'paste') await p.key('v', SMOKE_KEYS.paste, 86, 2);
   else await p.key('n', SMOKE_KEYS.move, 78, 0, 'n');
@@ -4220,9 +4341,7 @@ async function placeAndConfirm(t: Smoke, what: string, key: 'paste' | 'move', at
     const g1 = await p.eval<GhostRead>('__wiTest.ghost()');
     t.check(sameJson(g1.anchor, [at.x, at.y, at.z]) && g1.refusal === null, `${what}: still pinned at (${xyz(at)}) once turned, no refusal`, g1);
   }
-  const r = await p.eval<string>('__wiTest.confirmPaste()');
-  t.check(r === 'ok', `${what}: the page's confirm (RMB's path): ${JSON.stringify(r)}`, r);
-  return r === 'ok' && await holds(t, modeIs('select'), `${what}: back in select`, 5000, () => p.eval('__wiTest.selection()'));
+  return true;
 }
 
 /**
@@ -4338,6 +4457,204 @@ async function selectChecks(t: Smoke, id: string): Promise<void> {
   await p.key('c', SMOKE_KEYS.copy, 67, 2);
   await clipboardHolds(t, `select: Ctrl+C of it stores the turned house (${turnedSize.w} × ${turnedSize.h} × ${turnedSize.d}, its waterlogged ladder included)`,
     { ...turnedSize, hash: cellsHash(turned) }, 10_000);
+  if (t.shots !== null) await selectShots(t);
+}
+
+/** The page expression "the selection tool's label reads `text` at its start, shown". */
+const selectLabel = (text: string): string =>
+  `(() => { const l = document.getElementById('world-select-label'); return l !== null && !l.hidden && l.textContent.startsWith(${JSON.stringify(text)}); })()`;
+/** The page expression "the label's counts are read (not 'counting…'), with at least one replaced cell". */
+const COUNTED = `(() => { const m = /([\\d,]+) replaced/.exec(document.getElementById('world-select-label')?.textContent ?? ''); return m !== null && Number(m[1].replace(/,/g, '')) > 0; })()`;
+const SELECT_LABEL_TEXT = `document.getElementById('world-select-label')?.textContent ?? null`;
+
+/** Q until the selection tool is in `mode` ('off' or 'select'; Q switches between them, and from 'place' to 'off'). */
+async function toolTo(t: Smoke, what: string, mode: 'off' | 'select'): Promise<boolean> {
+  const p = t.page;
+  for (let i = 0; i < 2; i++) {
+    const was = await p.eval<string>('__wiTest.selection().mode');
+    if (was === mode) break;
+    await p.blur();
+    await p.key('q', SMOKE_KEYS.selectTool, 81, 0, 'q');
+    await p.until(`__wiTest.selection().mode !== ${JSON.stringify(was)}`, `${what}: Q`, 2000).catch(() => 0);
+  }
+  return holds(t, modeIs(mode), `${what}: Q leaves the tool ${mode}`, 5000, () => p.eval('__wiTest.selection()'));
+}
+
+/**
+ * The camera turned to `yaw` and `pitch` (degrees) through the pointer lock: mouse moves, each measured, until both are
+ * within 1°; then the lock released. False when headless Chrome refused the lock (the look unchanged).
+ */
+async function lookTo(p: Page, yaw: number, pitch: number): Promise<boolean> {
+  if (!(await takeLock(p))) return false;
+  let x = VIEWPORT.width / 2;
+  let y = VIEWPORT.height / 2;
+  // Degrees per pixel along x (the yaw grows to the right) and y (the pitch falls downwards), measured as it goes.
+  let kx = 0.15;
+  let ky = 0.15;
+  for (let i = 0; i < 8; i++) {
+    const now = await hookPose(p);
+    const needYaw = ((((yaw - now.yaw) % 360) + 540) % 360) - 180;
+    const needPitch = pitch - now.pitch;
+    if (Math.abs(needYaw) <= 1 && Math.abs(needPitch) <= 1) break;
+    const toX = Math.min(VIEWPORT.width - 1, Math.max(1, Math.round(x + needYaw / kx)));
+    const toY = Math.min(VIEWPORT.height - 1, Math.max(1, Math.round(y - needPitch / ky)));
+    if (toX === x && toY === y) break;
+    const steps = Math.ceil(Math.max(Math.abs(toX - x), Math.abs(toY - y)) / 30);
+    const fromX = x;
+    const fromY = y;
+    for (let k = 1; k <= steps; k++) {
+      await p.mouse('mouseMoved', Math.round(fromX + ((toX - fromX) * k) / steps), Math.round(fromY + ((toY - fromY) * k) / steps));
+      await sleep(16);
+    }
+    x = toX;
+    y = toY;
+    await sleep(150);
+    const after = await hookPose(p);
+    const movedYaw = ((((after.yaw - now.yaw) % 360) + 540) % 360) - 180;
+    if (Math.abs(movedYaw) > 0.5 && toX !== fromX) kx = Math.abs(movedYaw / (toX - fromX));
+    if (Math.abs(after.pitch - now.pitch) > 0.5 && toY !== fromY) ky = Math.abs((after.pitch - now.pitch) / (toY - fromY));
+  }
+  await p.eval('(document.exitPointerLock(), true)');
+  await p.until('document.pointerLockElement === null', 'select shots: the lock released', 2000);
+  return true;
+}
+
+/**
+ * SP5c's three `select` review screenshots (spec §10.10), with --shots only, in front of the camera (`shotSites`): the
+ * camera raised (flying, Space held) and turned along the axis with the clearest sight of them and at them when headless
+ * Chrome grants the pointer lock, the counts (F3) hidden: the shots' house (`shotHouse`: logs,
+ * ladders, a wall torch and a glass pane) built on the ground through the hook, Q and its corners: the box with its
+ * label (`review-selection.png`); Ctrl+C, Ctrl+V and the ghost pinned 2 east, 1 down and 1 south of the house, over
+ * part of it and of the ground, once its counts are read: its replaced cells and counts (`review-ghost.png`); the house
+ * pasted turned once, then Ctrl+V again, turned once and pinned beside it: the turned ghost beside the pasted result
+ * (`review-rotated-paste.png`); Q cancels it.
+ */
+async function selectShots(t: Smoke): Promise<void> {
+  const p = t.page;
+  if (!(await toolTo(t, 'select shots: the tool off for the look', 'off'))) return;
+  // Flying, the camera rises SHOT_RISE blocks (Space held), over the hills next to it; then it looks along the axis
+  // with the clearest sight of the scene SHOT_RANGE ahead (the `select` step's sites lie diagonally off its column, off
+  // the line of sight), the pitch at the scene's mean ground.
+  if ((await p.eval<string>('__wiTest.mode()')) === 'walk') {
+    await p.blur();
+    await p.key('f', SMOKE_KEYS.toggleWalk, 70, 0, 'f');
+  }
+  if (!(await holds(t, `__wiTest.mode() === 'fly'`, 'select shots: flying (F)', 5000, () => p.eval('__wiTest.mode()')))) return;
+  const y0 = (await hookPose(p)).y;
+  const space = { key: ' ', code: 'Space', windowsVirtualKeyCode: 32, nativeVirtualKeyCode: 32 };
+  await p.blur();
+  await p.cdp.send('Input.dispatchKeyEvent', { type: 'keyDown', ...space, text: ' ', unmodifiedText: ' ' });
+  await p.until(`__wiTest.pose().y >= ${y0 + SHOT_RISE}`, 'select shots: Space raises the camera', 3000).catch(() => 0);
+  await p.cdp.send('Input.dispatchKeyEvent', { type: 'keyUp', ...space });
+  await sleep(300);
+  const pose = await hookPose(p);
+  t.check(pose.y > y0 + 2, `select shots: Space raises the camera from y ${y0.toFixed(1)} to ${pose.y.toFixed(1)}`, pose);
+  const axes = [0, 90, 180, 270].map((a) => ({ yaw: a, sites: shotSites({ x: pose.x, z: pose.z, yaw: a }) }));
+  // Per axis: the columns between the eye and each site's centre whose top stands above the sight line to 1.5 blocks
+  // over that site's ground (an unloaded column counts 100).
+  const scores = await p.eval<number[]>(`${JSON.stringify(axes.map((a) => [a.sites.house, a.sites.paste, a.sites.ghost]))}.map((fs) => {
+    let n = 0;
+    for (const f of fs) {
+      const cx = f.x + f.w / 2, cz = f.z + f.d / 2;
+      const g = __wiTest.heightAt(Math.floor(cx), Math.floor(cz));
+      if (g === null) { n += 100; continue; }
+      for (let i = 3; i <= 17; i++) {
+        const k = i / 20, x = ${pose.x} + (cx - ${pose.x}) * k, z = ${pose.z} + (cz - ${pose.z}) * k;
+        const h = __wiTest.heightAt(Math.floor(x), Math.floor(z));
+        if (h === null) n += 100;
+        else if (h > ${pose.y} + (g + 1.5 - ${pose.y}) * k) n++;
+      }
+    }
+    return n;
+  })`);
+  const near = (a: number): number => Math.abs(((((a - pose.yaw) % 360) + 540) % 360) - 180);
+  const best = axes.map((a, i) => ({ ...a, score: scores[i]! })).sort((a, b) => a.score - b.score || near(a.yaw) - near(b.yaw))[0]!;
+  const { yaw, sites } = best;
+  t.record(`select shots: the camera looks along yaw ${yaw}° (blocked sight per axis 0/90/180/270: ${scores.join('/')})`);
+  const gh = await groundOver(t, 'select shots: the house', sites.house);
+  const gp = await groundOver(t, 'select shots: the paste', sites.paste);
+  const gg = await groundOver(t, 'select shots: the ghost', sites.ghost);
+  if (gh === null || gp === null || gg === null) return;
+  const pitch = shotPitch(pose.y, (gh + gp + gg) / 3);
+  if (await lookTo(p, yaw, pitch)) {
+    const now = await hookPose(p);
+    t.record(`select shots: the look turned to yaw ${now.yaw.toFixed(1)}°, pitch ${now.pitch.toFixed(1)}° (wanted ${yaw}°, ${pitch.toFixed(1)}°) through the pointer lock`);
+  } else {
+    t.record(`select shots: headless Chrome refused the pointer lock: the look kept (yaw ${pose.yaw.toFixed(1)}°, pitch ${pose.pitch.toFixed(1)}°), the scene off its axis`);
+  }
+  // F3 hides the counts over the scene for the shots, and F3 shows them again after.
+  const HUD_HIDDEN = `document.querySelector('.world-hud')?.hidden === true`;
+  const hudWas = await p.eval<boolean>(HUD_HIDDEN);
+  if (!hudWas) {
+    await p.blur();
+    await p.key('F3', 'F3', 114);
+    await holds(t, HUD_HIDDEN, 'select shots: F3 hides the counts', 2000, () => p.eval(HUD_HIDDEN));
+  }
+  try {
+    await selectScene(t, sites, { house: gh, paste: gp, ghost: gg });
+  } finally {
+    if (!hudWas && await p.eval<boolean>(HUD_HIDDEN)) {
+      await p.blur();
+      await p.key('F3', 'F3', 114);
+    }
+  }
+}
+
+/** The shots' scene on `sites`, each on its ground `g` (`selectShots`). */
+async function selectScene(t: Smoke, sites: ReturnType<typeof shotSites>, g: { readonly house: number; readonly paste: number; readonly ghost: number }): Promise<void> {
+  const p = t.page;
+  const gh = g.house;
+  const gp = g.paste;
+  const gg = g.ghost;
+
+  // 1. The house on the ground, Q, its corners: the box with its label.
+  const size = SELECT_HOUSE;
+  const house = shotHouse();
+  const at: Voxel = { x: sites.house.x, y: gh, z: sites.house.z };
+  const cells = boxCells(at, size, house);
+  const built = await p.eval<string[]>(`(async () => {
+    const out = [];
+    for (const [x, y, z, v] of ${JSON.stringify(house.map((v, i) => [...cells[i]!.slice(0, 3), v]))}) {
+      if (__wiTest.blockAt(x, y, z) === (v >>> 8) && (v & 255) === 0) continue;
+      const r = await __wiTest.edit(x, y, z, v >>> 8, v & 255);
+      if (r !== 'ok') out.push(x + ',' + y + ',' + z + ': ' + r);
+    }
+    return out;
+  })()`);
+  t.check(built.length === 0 && await p.eval<boolean>(cellsHold(cells)), `select shots: the shots' house (a glass pane added) through the hook at (${xyz(at)})`,
+    built.length > 0 ? built : await cellsOff(p, cells));
+  if (!(await toolTo(t, 'select shots: the selection', 'select'))) return;
+  const hi: Voxel = { x: at.x + size.w - 1, y: at.y + size.h - 1, z: at.z + size.d - 1 };
+  await p.eval(`(__wiTest.select(${xyz(at)}, ${xyz(hi)}), true)`);
+  if (!(await holds(t, selectLabel(`Selection ${size.w} × ${size.h} × ${size.d}`), `select shots: the label reads "Selection ${size.w} × ${size.h} × ${size.d} …"`, 5000,
+    () => p.eval(SELECT_LABEL_TEXT)))) return;
+  await reviewShot(t, SP5C_SHOTS.selection);
+
+  // 2. Ctrl+C; Ctrl+V and the ghost over part of the house and the ground: its replaced cells and counts.
+  await p.blur();
+  await p.key('c', SMOKE_KEYS.copy, 67, 2);
+  if (!(await clipboardHolds(t, 'select shots: Ctrl+C stores the shots\' house', { ...size, hash: cellsHash(house) }, 10_000))) return;
+  const over: Voxel = { x: at.x + 2, y: at.y - 1, z: at.z + 1 };
+  if (!(await showGhost(t, 'select shots: the ghost', 'paste', over, 0))) return;
+  if (!(await holds(t, COUNTED, 'select shots: the ghost\'s counts read, some cells replaced', 10_000, () => p.eval(SELECT_LABEL_TEXT)))) return;
+  await sleep(500);
+  await reviewShot(t, SP5C_SHOTS.ghost);
+  if (!(await toolTo(t, 'select shots: the ghost cancelled', 'off'))) return;
+  if (!(await toolTo(t, 'select shots: the tool on again', 'select'))) return;
+
+  // 3. The house pasted turned once; the same, turned, as a ghost beside it.
+  const turned = turnHouse(house);
+  const turnedSize = { w: size.d, h: size.h, d: size.w };
+  const pasteAt: Voxel = { x: sites.paste.x, y: gp, z: sites.paste.z };
+  if (!(await placeAndConfirm(t, 'select shots: the turned paste', 'paste', pasteAt, 1))) return;
+  const pasted = boxCells(pasteAt, turnedSize, turned);
+  t.check(await p.eval<boolean>(cellsHold(pasted)), `select shots: the turned house pasted at (${xyz(pasteAt)})`, await cellsOff(p, pasted));
+  const ghostAt: Voxel = { x: sites.ghost.x, y: gg, z: sites.ghost.z };
+  if (!(await showGhost(t, 'select shots: the turned ghost', 'paste', ghostAt, 1))) return;
+  await holds(t, `(${SELECT_LABEL_TEXT} ?? '').includes(' replaced')`, 'select shots: the turned ghost\'s counts read', 10_000, () => p.eval(SELECT_LABEL_TEXT));
+  await sleep(500);
+  await reviewShot(t, SP5C_SHOTS.rotatedPaste);
+  await toolTo(t, 'select shots: the turned ghost cancelled', 'off');
 }
 
 /** SP5b's saved-world steps (spec §6.5), in order, on the world `menus` creates; then SP5c's `select` (spec §10.8). */
