@@ -512,14 +512,14 @@ export function presetProblems(text: string, expected: { readonly name: string; 
  * refuses a repeated id), then SP4c's `overlay` and `overlay-mesh` (spec §8.6: one step per renderer, each on its own
  * page), then SP5a's `build` and `walk` (SP5a spec §6.4, each on its own page), then SP5b's `menus`, `save`, `crash`,
  * `two tabs`, `export/import`, `places`, `modify` and `settings-world` (SP5b spec §6.5, on the saved world `menus`
- * creates and, from `export/import` on, its import); `console` stays last, the closing step main() runs after
- * `runSmoke` (ruling P52).
+ * creates and, from `export/import` on, its import), then SP5c's `select` (SP5c spec §10.8, on that import); `console`
+ * stays last, the closing step main() runs after `runSmoke` (ruling P52).
  */
 export const SMOKE_STEPS = [
   'selftest', 'load', 'number', 'knot', 'slider', 'box', 'profile', 'presets', 'undo/redo', 'reload', 'cut line', 'voxels', 'tabs', 'rule',
   'density tab', 'density node', 'density mute', 'density json', 'density narrow', 'density horizontal', 'density drag', 'density times',
   'preset profiles', 'start', 'world', 'world-mesh', 'stream', 'overlay', 'overlay-mesh', 'build', 'walk', 'menus', 'save', 'crash', 'two tabs',
-  'export/import', 'places', 'modify', 'settings-world', 'console',
+  'export/import', 'places', 'modify', 'settings-world', 'select', 'console',
 ] as const;
 export type SmokeStep = (typeof SMOKE_STEPS)[number];
 
@@ -826,8 +826,109 @@ export function rowTitleOk(text: string): boolean {
   return text.endsWith(` · ${SMOKE_WORLD.preset} · seed ${SMOKE_WORLD.seed}`);
 }
 
-/** The key codes the saved-world steps and `stream` press (`DEFAULT_KEYMAP`'s, mirrored: a unit test compares them). */
-export const SMOKE_KEYS = { toggleWalk: 'KeyF', timeSpeed: 'KeyT', savePlace: 'KeyB', settings: 'KeyG', help: 'KeyH' } as const;
+/**
+ * The key codes the saved-world steps and `stream` press (`DEFAULT_KEYMAP`'s, mirrored: a unit test compares them);
+ * `select` presses the selection tool's Q and N plain and C and V with Ctrl (SP5c spec §10.8).
+ */
+export const SMOKE_KEYS = {
+  toggleWalk: 'KeyF', timeSpeed: 'KeyT', savePlace: 'KeyB', settings: 'KeyG', help: 'KeyH', selectTool: 'KeyQ', copy: 'KeyC', paste: 'KeyV', move: 'KeyN',
+} as const;
+
+// ---------------------------------------------------------------- the select step (SP5c spec §10.8)
+
+/**
+ * The `select` house's states (`test/stateIds.lock.json`; a unit test keeps them the registry's): oak planks, an
+ * x-axis oak log, a wall torch facing east and a ladder facing south.
+ */
+export const SELECT_STATE = { planks: 25, logX: 27, torchEast: 34, ladderSouth: 39 } as const;
+/**
+ * The turnable states after one turn (one wheel step down, clockwise seen from +y), by name and id: a unit test keeps
+ * each `REGISTRY.stateKey(rotateState(s, 1))` of `SELECT_STATE`'s.
+ */
+export const SELECT_TURNED = {
+  logX: { name: 'oak_log[axis=z]', state: 28 },
+  torchEast: { name: 'wall_torch[facing=south]', state: 35 },
+  ladderSouth: { name: 'ladder[facing=west]', state: 40 },
+} as const;
+/** The house's sides: W (x) 4, H (y) 3, D (z) 3, so one turn swaps W and D. */
+export const SELECT_HOUSE = { w: 4, h: 3, d: 3 } as const;
+
+/**
+ * The house's values `state << 8 | fluid`, in the clipboard's order (index `(y · d + z) · w + x`): a floor of planks;
+ * on it a row of x-axis logs along the north side, the wall torch facing east on the planks west of it with planks
+ * beside it, and two ladders facing south on the planks north of them, the west one waterlogged (a water source); a
+ * row of planks above the logs; air elsewhere.
+ */
+export function selectHouse(): number[] {
+  const { w, h, d } = SELECT_HOUSE;
+  const v = new Array<number>(w * h * d).fill(SMOKE_STATE.air);
+  const set = (x: number, y: number, z: number, state: number, fluid = 0): void => { v[(y * d + z) * w + x] = ((state << 8) | fluid) >>> 0; };
+  for (let z = 0; z < d; z++) for (let x = 0; x < w; x++) set(x, 0, z, SELECT_STATE.planks);
+  for (let x = 0; x < w; x++) {
+    set(x, 1, 0, SELECT_STATE.logX);
+    set(x, 2, 0, SELECT_STATE.planks);
+  }
+  set(0, 1, 1, SELECT_STATE.planks);
+  set(1, 1, 1, SELECT_STATE.torchEast);
+  set(2, 1, 1, SELECT_STATE.planks);
+  set(3, 1, 1, SELECT_STATE.planks);
+  set(2, 1, 2, SELECT_STATE.ladderSouth, SMOKE_WATER_SOURCE);
+  set(3, 1, 2, SELECT_STATE.ladderSouth);
+  return v;
+}
+
+/**
+ * The house's values turned once (the clipboard model's turn, `turnClipboard(c, 1)`; a unit test compares them): a cell
+ * (x, y, z) of the W × D box goes to (D − 1 − z, y, x) of the D × W box, its state turned by `SELECT_TURNED`, its fluid
+ * byte kept.
+ */
+export function turnHouse(values: readonly number[]): number[] {
+  const { w, h, d } = SELECT_HOUSE;
+  const turned: Record<number, number> = {
+    [SELECT_STATE.logX]: SELECT_TURNED.logX.state, [SELECT_STATE.torchEast]: SELECT_TURNED.torchEast.state, [SELECT_STATE.ladderSouth]: SELECT_TURNED.ladderSouth.state,
+  };
+  const out = new Array<number>(values.length).fill(0);
+  for (let y = 0; y < h; y++) {
+    for (let z = 0; z < d; z++) {
+      for (let x = 0; x < w; x++) {
+        const v = values[(y * d + z) * w + x]!;
+        const s = v >>> 8;
+        out[(y * w + x) * d + (d - 1 - z)] = (((turned[s] ?? s) << 8) | (v & 255)) >>> 0;
+      }
+    }
+  }
+  return out;
+}
+
+/** The page hook's clipboard hash (`clipboardHash`, mirrored: a unit test compares them): FNV-1a 64 over each value's 4 bytes, little-endian. */
+export function cellsHash(values: ArrayLike<number>): string {
+  let h = 0xcbf29ce484222325n;
+  for (let i = 0; i < values.length; i++) {
+    const v = values[i]! >>> 0;
+    for (let b = 0; b < 32; b += 8) h = ((h ^ BigInt((v >>> b) & 255)) * 0x100000001b3n) & 0xffffffffffffffffn;
+  }
+  return h.toString(16).padStart(16, '0');
+}
+
+/** A block footprint: its min corner (x, z) and its sides along x and z. */
+export interface Footprint { readonly x: number; readonly z: number; readonly w: number; readonly d: number }
+
+/**
+ * The `select` step's four sites around the camera's column, 3-12 blocks from it, apart: the house built through the
+ * hook; the first paste (turned once: D × W); the floating copy, moved onto the ground beneath it (W × D); the paste
+ * after the reload (turned once).
+ */
+export function selectSites(pose: { readonly x: number; readonly z: number }): { house: Footprint; paste: Footprint; float: Footprint; again: Footprint } {
+  const cx = Math.floor(pose.x);
+  const cz = Math.floor(pose.z);
+  const { w, d } = SELECT_HOUSE;
+  return {
+    house: { x: cx + 4, z: cz + 4, w, d },
+    paste: { x: cx + 4, z: cz - 8, w: d, d: w },
+    float: { x: cx - 9, z: cz + 4, w, d },
+    again: { x: cx - 9, z: cz - 8, w: d, d: w },
+  };
+}
 
 /** The `save` step's edits through the hook. */
 export const SAVE_EDITS = 12;
@@ -4033,7 +4134,213 @@ async function settingsWorldChecks(t: Smoke, id: string): Promise<void> {
   t.check(await p.eval<number>('__wiTest.fov()') === SETTINGS_FOV, `settings-world: the field of view stays ${SETTINGS_FOV}`);
 }
 
-/** SP5b's saved-world steps (spec §6.5), in order, on the world `menus` creates. */
+/** A box's cells and the states they must hold: [x, y, z, state] per cell of `values` placed with its min corner at `at`. */
+function boxCells(at: Voxel, size: { readonly w: number; readonly h: number; readonly d: number }, values: readonly number[]): Array<[number, number, number, number]> {
+  const out: Array<[number, number, number, number]> = [];
+  for (let y = 0; y < size.h; y++) {
+    for (let z = 0; z < size.d; z++) {
+      for (let x = 0; x < size.w; x++) out.push([at.x + x, at.y + y, at.z + z, values[(y * size.d + z) * size.w + x]! >>> 8]);
+    }
+  }
+  return out;
+}
+
+/** The page expression "every cell holds its state". */
+const cellsHold = (cells: ReadonlyArray<readonly [number, number, number, number]>): string =>
+  `${JSON.stringify(cells)}.every(([x, y, z, s]) => __wiTest.blockAt(x, y, z) === s)`;
+
+/** The cells that do not hold their state, with what they read (at most 8), for a failed check's detail. */
+const cellsOff = (p: Page, cells: ReadonlyArray<readonly [number, number, number, number]>): Promise<unknown> =>
+  p.eval(`${JSON.stringify(cells)}.filter(([x, y, z, s]) => __wiTest.blockAt(x, y, z) !== s).slice(0, 8).map(([x, y, z, s]) => ({ x, y, z, want: s, read: __wiTest.blockAt(x, y, z) }))`);
+
+/** The states of a box's cells as they read now (each with its own state as the one it must hold again). */
+const cellsNow = async (p: Page, at: Voxel, size: { readonly w: number; readonly h: number; readonly d: number }): Promise<Array<[number, number, number, number]>> => {
+  const cells = boxCells(at, size, new Array<number>(size.w * size.h * size.d).fill(0));
+  const read = await p.eval<number[]>(`${JSON.stringify(cells)}.map(([x, y, z]) => __wiTest.blockAt(x, y, z))`);
+  return cells.map(([x, y, z], i) => [x, y, z, read[i]!]);
+};
+
+/** The page expression "every column of footprint `f`, and the columns 16 blocks around it, is Published" (the edit gate's 3 × 3). */
+const footprintLoaded = (f: Footprint): string =>
+  `(() => { for (let x = ${f.x - 16}; x <= ${f.x + f.w + 15}; x += 8) for (let z = ${f.z - 16}; z <= ${f.z + f.d + 15}; z += 8) if (__wiTest.heightAt(x, z) === null) return false; return true; })()`;
+
+/** The highest `heightAt` over footprint `f` (its first free voxel above the ground), once every column is Published; null after 30 s. */
+async function groundOver(t: Smoke, what: string, f: Footprint): Promise<number | null> {
+  const p = t.page;
+  if (!(await holds(t, footprintLoaded(f), `${what}: the columns at (${f.x}, ${f.z}) and around them Published`, 30_000, async () => null))) return null;
+  return p.eval<number>(`Math.max(...Array.from({ length: ${f.w * f.d} }, (_, i) => __wiTest.heightAt(${f.x} + i % ${f.w}, ${f.z} + Math.floor(i / ${f.w}))))`);
+}
+
+type ClipRead = { w: number; h: number; d: number; hash: string } | null;
+
+/** Polls `__wiTest.clipboard()` (an async read from storage) until it holds `want`; a check either way. */
+async function clipboardHolds(t: Smoke, what: string, want: { w: number; h: number; d: number; hash: string }, ms: number): Promise<boolean> {
+  const p = t.page;
+  const t0 = Date.now();
+  let got: ClipRead = null;
+  while (Date.now() - t0 <= ms) {
+    got = await p.eval<ClipRead>('__wiTest.clipboard()');
+    if (got !== null && sameJson(got, want)) {
+      t.check(true, `${what} (${Date.now() - t0} ms)`);
+      return true;
+    }
+    await sleep(50);
+  }
+  t.check(false, `${what} within ${ms / 1000} s`, { want, got });
+  return false;
+}
+
+/** One wheel step down at the viewport's centre (the canvas): `turn` while placing (SP5c spec §1.1). */
+async function wheelDown(p: Page): Promise<void> {
+  await p.cdp.send('Input.dispatchMouseEvent', { type: 'mouseWheel', x: VIEWPORT.width / 2, y: VIEWPORT.height / 2, deltaX: 0, deltaY: 120 });
+}
+
+const modeIs = (mode: string): string => `__wiTest.selection().mode === ${JSON.stringify(mode)}`;
+
+/**
+ * Ctrl+V (`paste`) or N (`move`), then the ghost pinned at `at`, `turns` wheel steps down, and the page's confirm
+ * (rulings P9: each waits for the one before it to settle). True when the confirm said 'ok' and the tool is back in
+ * `select`.
+ */
+async function placeAndConfirm(t: Smoke, what: string, key: 'paste' | 'move', at: Voxel, turns: number): Promise<boolean> {
+  const p = t.page;
+  await p.blur();
+  if (key === 'paste') await p.key('v', SMOKE_KEYS.paste, 86, 2);
+  else await p.key('n', SMOKE_KEYS.move, 78, 0, 'n');
+  const label = key === 'paste' ? 'Ctrl+V' : 'N';
+  if (!(await holds(t, modeIs('place'), `${what}: ${label} places a ghost`, 10_000, () => p.eval('__wiTest.selection()')))) return false;
+  await p.eval(`(__wiTest.placeGhost(${xyz(at)}), true)`);
+  type GhostRead = { shown: boolean; anchor: [number, number, number] | null; turns: number; refusal: string | null };
+  const g = await p.eval<GhostRead>('__wiTest.ghost()');
+  t.check(g.shown && sameJson(g.anchor, [at.x, at.y, at.z]) && g.turns === 0 && g.refusal === null,
+    `${what}: the ghost shown, pinned at (${xyz(at)}), no refusal`, g);
+  for (let i = 0; i < turns; i++) await wheelDown(p);
+  if (turns > 0 && !(await holds(t, `__wiTest.ghost().turns === ${turns}`, `${what}: ${turns} wheel step(s) down turn it ${turns} time(s)`, 5000, () => p.eval('__wiTest.ghost()')))) return false;
+  if (turns > 0) {
+    const g1 = await p.eval<GhostRead>('__wiTest.ghost()');
+    t.check(sameJson(g1.anchor, [at.x, at.y, at.z]) && g1.refusal === null, `${what}: still pinned at (${xyz(at)}) once turned, no refusal`, g1);
+  }
+  const r = await p.eval<string>('__wiTest.confirmPaste()');
+  t.check(r === 'ok', `${what}: the page's confirm (RMB's path): ${JSON.stringify(r)}`, r);
+  return r === 'ok' && await holds(t, modeIs('select'), `${what}: back in select`, 5000, () => p.eval('__wiTest.selection()'));
+}
+
+/**
+ * `select` (SP5c spec §10.8): in the import of the `save` step's world, a small house through the hook (planks, x-axis
+ * logs, a wall torch facing east on its support, ladders facing south, one waterlogged), floating 2 above the ground; Q;
+ * the corners through the hook; Ctrl+C by CDP (the stored clipboard's sizes and hash); Ctrl+V, the ghost pinned, one
+ * wheel step down, the page's confirm: every cell the turned house, the torch, ladders and logs by name; Ctrl+Z and
+ * Ctrl+Y exact. A copy pasted 6 blocks above the ground, moved with N onto it: the source empty, the target the house,
+ * one Ctrl+Z restoring both. `Page.reload`; the clipboard kept; Ctrl+V and one turn again: a paste equal to the first,
+ * and its Ctrl+C the turned house's hash (its fluid included).
+ */
+async function selectChecks(t: Smoke, id: string): Promise<void> {
+  const p = t.page;
+  if (!(await onSaved(t, 'select: the imported world', id))) return;
+  if (!(await p.eval<boolean>(OVERLAY_CLOSED))) {
+    await pressM(p);
+    await p.until(OVERLAY_CLOSED, 'select: M closes the map', 5000);
+  }
+  const sites = selectSites(await hookPose(p));
+  const size = SELECT_HOUSE;
+  const turnedSize = { w: size.d, h: size.h, d: size.w };
+  const house = selectHouse();
+  const turned = turnHouse(house);
+
+  // 1. The house through the hook, 2 above the highest ground under it (every cell it differs in, its air included).
+  const g0 = await groundOver(t, 'select: the house', sites.house);
+  if (g0 === null) return;
+  const src: Voxel = { x: sites.house.x, y: g0 + 2, z: sites.house.z };
+  const srcCells = boxCells(src, size, house);
+  const built = await p.eval<string[]>(`(async () => {
+    const out = [];
+    for (const [x, y, z, v] of ${JSON.stringify(house.map((v, i) => [...srcCells[i]!.slice(0, 3), v]))}) {
+      if (__wiTest.blockAt(x, y, z) === (v >>> 8) && (v & 255) === 0) continue;
+      const r = await __wiTest.edit(x, y, z, v >>> 8, v & 255);
+      if (r !== 'ok') out.push(x + ',' + y + ',' + z + ': ' + r);
+    }
+    return out;
+  })()`);
+  t.check(built.length === 0 && await p.eval<boolean>(cellsHold(srcCells)), `select: the ${size.w} × ${size.h} × ${size.d} house through the hook at (${xyz(src)})`,
+    built.length > 0 ? built : await cellsOff(p, srcCells));
+
+  // 2. Q, the corners through the hook, Ctrl+C by CDP: the stored clipboard is the house (its waterlogged ladder included).
+  await p.blur();
+  await p.key('q', SMOKE_KEYS.selectTool, 81, 0, 'q');
+  if (!(await holds(t, modeIs('select'), 'select: Q turns the tool on', 5000, () => p.eval('__wiTest.selection()')))) return;
+  const hi: Voxel = { x: src.x + size.w - 1, y: src.y + size.h - 1, z: src.z + size.d - 1 };
+  await p.eval(`(__wiTest.select(${xyz(src)}, ${xyz(hi)}), true)`);
+  const sel = await p.eval<{ corner1: unknown; corner2: unknown }>('__wiTest.selection()');
+  t.check(sameJson(sel.corner1, [src.x, src.y, src.z]) && sameJson(sel.corner2, [hi.x, hi.y, hi.z]), `select: the corners (${xyz(src)}) and (${xyz(hi)}) through the hook`, sel);
+  await p.key('c', SMOKE_KEYS.copy, 67, 2);
+  if (!(await clipboardHolds(t, `select: Ctrl+C stores the house (${size.w} × ${size.h} × ${size.d}, hash ${cellsHash(house)})`, { ...size, hash: cellsHash(house) }, 10_000))) return;
+
+  // 3. Ctrl+V, pinned, one turn, the page's confirm: every cell the turned house; the turned states by name.
+  const gp = await groundOver(t, 'select: the paste', sites.paste);
+  if (gp === null) return;
+  const at: Voxel = { x: sites.paste.x, y: gp, z: sites.paste.z };
+  const before = await cellsNow(p, at, turnedSize);
+  const pasted = boxCells(at, turnedSize, turned);
+  const h0 = await hookHistory(p);
+  if (!(await placeAndConfirm(t, 'select: the paste', 'paste', at, 1))) return;
+  t.check(await p.eval<boolean>(cellsHold(pasted)), `select: every one of the ${pasted.length} pasted cells is the turned house's`, await cellsOff(p, pasted));
+  for (const k of ['logX', 'torchEast', 'ladderSouth'] as const) {
+    const want = pasted.filter((c) => c[3] === SELECT_TURNED[k].state);
+    const read = await p.eval<number[]>(`${JSON.stringify(want)}.map(([x, y, z]) => __wiTest.blockAt(x, y, z))`);
+    t.check(want.length > 0 && read.every((s) => s === SELECT_TURNED[k].state), `select: the turned ${k} reads ${SELECT_TURNED[k].name} (${want.length} cell(s))`, read);
+  }
+  const history = () => hookHistory(p);
+  t.check(sameJson(await history(), { size: h0.size + 1, redo: 0 }), `select: the paste is one block-history step (${h0.size} → ${h0.size + 1})`, await history());
+  await p.blur();
+  await p.undoKey();
+  await holds(t, `${cellsHold(before)} && ${historyIs(h0.size, 1)}`, 'select: Ctrl+Z restores every cell the paste changed', 10_000, () => cellsOff(p, before));
+  await p.redoKeyY();
+  await holds(t, `${cellsHold(pasted)} && ${historyIs(h0.size + 1, 0)}`, 'select: Ctrl+Y pastes it again, exactly', 10_000, () => cellsOff(p, pasted));
+
+  // 4. The motivating case: a copy floating 6 blocks above the ground, moved with N onto it; one Ctrl+Z restores both.
+  const gf = await groundOver(t, 'select: the floating copy', sites.float);
+  if (gf === null) return;
+  const high: Voxel = { x: sites.float.x, y: gf + 6, z: sites.float.z };
+  const low: Voxel = { x: sites.float.x, y: gf, z: sites.float.z };
+  if (!(await placeAndConfirm(t, 'select: the floating copy', 'paste', high, 0))) return;
+  const floating = boxCells(high, size, house);
+  t.check(await p.eval<boolean>(cellsHold(floating)), `select: the copy floats at (${xyz(high)}), 6 above the ground`, await cellsOff(p, floating));
+  const ground = await cellsNow(p, low, size);
+  const h1 = await history();
+  if (!(await placeAndConfirm(t, 'select: the move', 'move', low, 0))) return;
+  const empty = boxCells(high, size, new Array<number>(house.length).fill(SMOKE_STATE.air));
+  const landed = boxCells(low, size, house);
+  t.check(await p.eval<boolean>(cellsHold(empty)), 'select: N empties the source (its terrain: air)', await cellsOff(p, empty));
+  t.check(await p.eval<boolean>(cellsHold(landed)), `select: the house stands on the ground at (${xyz(low)})`, await cellsOff(p, landed));
+  t.check(sameJson(await history(), { size: h1.size + 1, redo: 0 }), `select: the move is one block-history step (${h1.size} → ${h1.size + 1})`, await history());
+  await p.blur();
+  await p.undoKey();
+  await holds(t, `${cellsHold(floating)} && ${cellsHold(ground)} && ${historyIs(h1.size, 1)}`, 'select: one Ctrl+Z restores both: the copy floating again, the ground as it was',
+    10_000, async () => ({ source: await cellsOff(p, floating), target: await cellsOff(p, ground) }));
+
+  // 5. A reload: the clipboard kept; Ctrl+V and one turn again paste the first paste's cells.
+  const flushed = await p.eval<{ ok: boolean; flushSeq: number | null }>('__wiTest.flushNow()');
+  t.check(flushed.ok, `select: flushNow() before the reload (flushSeq ${flushed.flushSeq ?? '?'})`, flushed);
+  if (!(await reloadSaved(t, 'select: the reload'))) return;
+  if (!(await p.eval<boolean>(OVERLAY_CLOSED))) {
+    await pressM(p);
+    await p.until(OVERLAY_CLOSED, 'select: M closes the map after the reload', 5000);
+  }
+  if (!(await clipboardHolds(t, 'select: the clipboard is kept across the reload', { ...size, hash: cellsHash(house) }, 10_000))) return;
+  const ga = await groundOver(t, 'select: the paste after the reload', sites.again);
+  if (ga === null) return;
+  const again: Voxel = { x: sites.again.x, y: ga, z: sites.again.z };
+  if (!(await placeAndConfirm(t, 'select: the paste after the reload', 'paste', again, 1))) return;
+  const second = boxCells(again, turnedSize, turned);
+  t.check(await p.eval<boolean>(cellsHold(second)), `select: after the reload the paste equals the first (${second.length} cells)`, await cellsOff(p, second));
+  // Its Ctrl+C: the cells as pasted, fluids included, hash to the turned house's.
+  await p.blur();
+  await p.key('c', SMOKE_KEYS.copy, 67, 2);
+  await clipboardHolds(t, `select: Ctrl+C of it stores the turned house (${turnedSize.w} × ${turnedSize.h} × ${turnedSize.d}, its waterlogged ladder included)`,
+    { ...turnedSize, hash: cellsHash(turned) }, 10_000);
+}
+
+/** SP5b's saved-world steps (spec §6.5), in order, on the world `menus` creates; then SP5c's `select` (spec §10.8). */
 async function runSaved(t: Smoke): Promise<void> {
   t.step(`menus: New world (seed ${SMOKE_WORLD.seed}, ${SMOKE_WORLD.preset}) → Create → /?world=<id>; Load world lists it first, the list's time; Rename; Settings from the start screen`);
   let errors0 = t.errors.length;
@@ -4116,6 +4423,18 @@ async function runSaved(t: Smoke): Promise<void> {
     t.check(false, `settings-world: the step stopped: ${e instanceof Error ? e.message : String(e)}`);
   }
   t.check(t.errors.length === errors0, 'settings-world: no page error', t.errors.slice(errors0));
+
+  t.step('select: a house through the hook; Q, the corners, Ctrl+C; Ctrl+V, one turn, the paste by name; Ctrl+Z, Ctrl+Y; N moves a floating copy onto the ground; a reload, Ctrl+V again');
+  errors0 = t.errors.length;
+  const select0 = Date.now();
+  try {
+    if (ids === null) t.check(false, 'select: the imported world');
+    else await selectChecks(t, ids.imported);
+  } catch (e) {
+    t.check(false, `select: the step stopped: ${e instanceof Error ? e.message : String(e)}`);
+  }
+  t.record(`the select step took ${((Date.now() - select0) / 1000).toFixed(1)} s`);
+  t.check(t.errors.length === errors0, 'select: no page error', t.errors.slice(errors0));
 }
 
 // ---------------------------------------------------------------- screenshots (spec §12)

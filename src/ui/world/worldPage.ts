@@ -146,7 +146,7 @@
  */
 import { GENERATOR_VERSION } from '../../core/constants';
 import { colKey } from '../../core/coords';
-import { hex64, type Seed64 } from '../../core/hash';
+import { createFnv64, hex64, type Seed64 } from '../../core/hash';
 import { MEDIUM } from '../../core/params/graphicsPresets';
 import { SCHEMA_VERSION, type JsonObject } from '../../core/params/migrate';
 import type { Params } from '../../core/params/schema';
@@ -1132,7 +1132,9 @@ export function installWorldLock(
  * error, and reads the controls owner, the stale count and the last teleport's landing; it edits a block through the
  * page's edit path and reads one back (SP5a spec §6.4); in a saved world it flushes, reads the places and the last
  * committed save's hash, switches the modification mode, and reads the pose, the clock and the field of view, which the
- * HUD (one decimal, no yaw) and a saved world's fixed address cannot show (SP5b spec §6.5).
+ * HUD (one decimal, no yaw) and a saved world's fixed address cannot show (SP5b spec §6.5); it reads the selection tool,
+ * the stored clipboard and the ghost, sets the corners (headless Chrome may refuse the pointer lock), pins the ghost and
+ * confirms a paste or a move through the page's own path (SP5c spec §10.8).
  */
 export interface WiTest {
   /** The session's listeners (`WorldSession.listenerCount`). */
@@ -1212,12 +1214,37 @@ export interface WiTest {
    * (ruling P50). Rejects in an unsaved world.
    */
   markOlderGenerator(id: string): Promise<void>;
+  /** The selection tool (SP5c spec §1.2): its mode and its corners as [x, y, z] (null when unset). */
+  selection(): { mode: ToolMode; corner1: [number, number, number] | null; corner2: [number, number, number] | null };
+  /**
+   * The clipboard as Ctrl+V would read it, from storage through the page's store (one `get`, decoded; SP5c spec §4.2):
+   * its sizes and `clipboardHash` of its values; null when there is none (or it cannot be read).
+   */
+  clipboard(): Promise<{ w: number; h: number; d: number; hash: string } | null>;
+  /**
+   * The ghost (SP5c spec §2.5): whether it is shown, its box's min corner (null before an aim), the tool's turns and its
+   * refusal's text (`refusalText`; null when none).
+   */
+  ghost(): { shown: boolean; anchor: [number, number, number] | null; turns: number; refusal: string | null };
+  /** Corners 1 and 2 at (x0, y0, z0) and (x1, y1, z1), as LMB and RMB mark them: only with the tool in `select` (Q first). */
+  select(x0: number, y0: number, z0: number, x1: number, y1: number, z1: number): void;
+  /**
+   * The ghost's min corner pinned at (x, y, z) (`placeAt(x, y, z, true)`), the aim ignored until the paste or the move
+   * ends; a turn or a raise keeps the corner. Only while placing.
+   */
+  placeGhost(x: number, y: number, z: number): void;
+  /** RMB while placing through the page's own path (`SelectActions.confirm`): 'ok', a refusal's text, or '' (nothing). */
+  confirmPaste(): Promise<string>;
 }
 
 /** The parts of the hook the world page supplies once its streaming route runs. */
 export type WiTestPage = Pick<WiTest,
   'listenerCount' | 'closeOverlay' | 'disposeTool' | 'forceFatal' | 'owner' | 'stale' | 'edit' | 'blockAt' | 'mode' | 'aim' | 'hotbar' | 'blockHistory'
-  | 'lightAt' | 'feet' | 'heightAt' | 'worldId' | 'flushNow' | 'places' | 'modify' | 'worldHash' | 'pose' | 'clock' | 'fov' | 'markOlderGenerator'>;
+  | 'lightAt' | 'feet' | 'heightAt' | 'worldId' | 'flushNow' | 'places' | 'modify' | 'worldHash' | 'pose' | 'clock' | 'fov' | 'markOlderGenerator'
+  | SelectionHook>;
+
+/** The selection tool's parts of the hook (SP5c spec §10.8). */
+type SelectionHook = 'selection' | 'clipboard' | 'ghost' | 'select' | 'placeGhost' | 'confirmPaste';
 
 /** The hook's installation, which `main.ts` hands the page (`WorldPageOptions.wiTest`). */
 export interface WiTestInstall {
@@ -1300,6 +1327,49 @@ export function createHookEdit(
   };
 }
 
+/** The smoke's clipboard hash (`WiTest.clipboard`): `hex64` of FNV-1a 64 over the values, each as 4 bytes little-endian. */
+export function clipboardHash(values: Uint32Array): string {
+  const h = createFnv64();
+  for (let i = 0; i < values.length; i++) h.updateU32LE(values[i]!);
+  return hex64(h.digest());
+}
+
+/**
+ * The hook's selection parts (SP5c spec §10.8) over the page's tool, its actions and its clipboard store: `select`
+ * marks the corners as LMB and RMB do (`select` mode only), `placeGhost` pins the ghost's min corner, `confirmPaste` is
+ * RMB's confirm, and `clipboard` reads the store as Ctrl+V does.
+ */
+export function selectionHooks(o: {
+  tool: SelectTool;
+  actions: Pick<SelectActions, 'ghostState' | 'placeAt' | 'confirm'>;
+  clipboard: Pick<ClipboardStore, 'read'>;
+}): Pick<WiTest, SelectionHook> {
+  const { tool, actions } = o;
+  const xyz = (c: Corner | null): [number, number, number] | null => (c === null ? null : [c.x, c.y, c.z]);
+  return {
+    selection: () => ({ mode: tool.mode, corner1: xyz(tool.corner1), corner2: xyz(tool.corner2) }),
+    clipboard: async () => {
+      const r = await o.clipboard.read();
+      return r.clip === null ? null : { w: r.clip.w, h: r.clip.h, d: r.clip.d, hash: clipboardHash(r.clip.values) };
+    },
+    ghost: () => {
+      const g = actions.ghostState();
+      return {
+        shown: g.shown,
+        anchor: g.box === null ? null : [g.box.x0, g.box.y0, g.box.z0],
+        turns: tool.turns,
+        refusal: g.refusal === null ? null : batchRefusalText(g.refusal),
+      };
+    },
+    select: (x0, y0, z0, x1, y1, z1) => {
+      tool.mark(0, { x: x0, y: y0, z: z0 });
+      tool.mark(2, { x: x1, y: y1, z: z1 });
+    },
+    placeGhost: (x, y, z) => actions.placeAt(x, y, z, true),
+    confirmPaste: () => actions.confirm(),
+  };
+}
+
 /** The hook's `flushNow` (SP5b spec §6.5): a flush's `flushed` as `ok` and its `flushSeq`; null (no sim) is not ok. */
 export function hookFlushed(r: FlushedMsg | null): { ok: boolean; flushSeq: number | null } {
   return r !== null && r.ok ? { ok: true, flushSeq: r.flushSeq } : { ok: false, flushSeq: null };
@@ -1364,6 +1434,12 @@ export function installWiTest(win: TimerHost & { __wiTest?: WiTest }): WiTestIns
     clock: () => attached().clock(),
     fov: () => attached().fov(),
     markOlderGenerator: (id) => attached().markOlderGenerator(id),
+    selection: () => attached().selection(),
+    clipboard: () => attached().clipboard(),
+    ghost: () => attached().ghost(),
+    select: (x0, y0, z0, x1, y1, z1) => attached().select(x0, y0, z0, x1, y1, z1),
+    placeGhost: (x, y, z) => attached().placeGhost(x, y, z),
+    confirmPaste: () => attached().confirmPaste(),
   };
   win.__wiTest = hook;
   return {
@@ -4703,11 +4779,12 @@ export function mountWorldPage(root: HTMLElement, q: WorldQuery, hash: string, o
     const tool = createSelectTool();
     const clipboardKv = createClipboardKv({ saved: saved?.kv ?? null, available: idbAvailable, open: () => openIdbKV(SAVES_DB) });
     const toolBody: BodyBox = { minX: 0, minY: 0, minZ: 0, maxX: 0, maxY: 0, maxZ: 0 };
+    const clipboardStore = createClipboardStore({ kv: () => clipboardKv.kv(), notices: { show: (text, ms) => notices.show(text, { timeoutMs: ms }) } });
     const selectActions = createSelectActions({
       tool,
       sim: simClient!,
       editState: (cx, cz) => coordinator.editState(cx, cz),
-      clipboard: createClipboardStore({ kv: () => clipboardKv.kv(), notices: { show: (text, ms) => notices.show(text, { timeoutMs: ms }) } }),
+      clipboard: clipboardStore,
       actionPost: (edits) => actionPost(edits),
       notices: { show: (text, ms) => notices.show(text, { timeoutMs: ms }) },
       keyName: pageKeyName,
@@ -4989,6 +5066,8 @@ export function mountWorldPage(root: HTMLElement, q: WorldQuery, hash: string, o
         if (id === saved.kept.id) throw new Error('the test hook\'s markOlderGenerator: not the open world (its lock is this page\'s)');
         await markOlderGenerator(saved.kv, locks, id);
       },
+      // The selection tool's parts (SP5c spec §10.8): the smoke's `select` step reads and drives the page's own tool.
+      ...selectionHooks({ tool, actions: selectActions, clipboard: clipboardStore }),
     });
     // Disposed before the input, the driver and the page's subscribe: a gesture still open ends through the tool.
     teardown.push(() => mapOverlay.dispose());

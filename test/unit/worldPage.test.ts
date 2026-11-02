@@ -33,7 +33,7 @@ import { createReloader, createWorldUrl, savedWorldUrl, worldHash, type HereStat
 import {
   closeOverlays, countPendingTimers, countTileCalls, createAim, createClickQueue, createHookEdit, createRdControl, createUndoNotice, createWorldNotices, everyFrameUntil, failBeforeReveal, flushOnPageHide, handleContextLoss,
   benchSetTime, benchWalk, handleStreamEvent, settingsChange, installRepeatStop, installUndoKeys, installWiTest, mapKey, offerLowerRd, paletteFirst, onDriverStatus, onSimFailure, pushCoordinatorTeardown, rdShownOnLoad, releaseOnFailure, reloadRd, runTeardown, speedKey, stopAfterFailure, switchMode,
-  UNDO_NOTICE_MS, editPathNotices, hookFlushed, markOlderGenerator, type WiTest, type WiTestPage,
+  UNDO_NOTICE_MS, editPathNotices, hookFlushed, markOlderGenerator, type WiTest, type WiTestPage, clipboardHash, selectionHooks,
   CLIPBOARD_FAILED_MS, NO_GHOST, SELECTION_TOO_LARGE, SELECTION_UNLOADED, TOOL_DONE_MS, TOOL_NOTICE_MS, aimReach, createClipboardKv, createSelectActions,
   markTwoCorners, pageKeyName, routeButton, selectToolAction, toolClicks, type ClickTool,
 } from '../../src/ui/world/worldPage';
@@ -1191,7 +1191,14 @@ describe('the smoke\'s test hook, window.__wiTest under ?wiTest=1 (SP4c spec §8
       clock: () => ({ t: 0.25, speedIndex: 1 }),
       fov: () => 80,
       markOlderGenerator: vi.fn(async () => {}),
+      selection: () => ({ mode: 'select', corner1: [1, 2, 3], corner2: null }),
+      clipboard: async () => ({ w: 4, h: 3, d: 2, hash: 'feedfacecafebeef' }),
+      ghost: () => ({ shown: true, anchor: [5, 70, -6], turns: 1, refusal: null }),
+      select: vi.fn(),
+      placeGhost: vi.fn(),
+      confirmPaste: vi.fn(async () => 'ok'),
     };
+    expect(() => hook.selection()).toThrow(/not attached/);
     install.attach(page);
     expect([hook.listenerCount(), hook.owner(), hook.stale()]).toEqual([2, 'map', 17]);
     // The SP5a parts (spec §6.4): the edit and the read-back pass through to the page.
@@ -1217,6 +1224,15 @@ describe('the smoke\'s test hook, window.__wiTest under ?wiTest=1 (SP4c spec §8
     expect(hook.fov()).toBe(80);
     await hook.markOlderGenerator('w2');
     expect((page.markOlderGenerator as ReturnType<typeof vi.fn>).mock.calls).toEqual([['w2']]);
+    // The selection tool's parts (SP5c spec §10.8) pass through to the page.
+    expect(hook.selection()).toEqual({ mode: 'select', corner1: [1, 2, 3], corner2: null });
+    expect(await hook.clipboard()).toEqual({ w: 4, h: 3, d: 2, hash: 'feedfacecafebeef' });
+    expect(hook.ghost()).toEqual({ shown: true, anchor: [5, 70, -6], turns: 1, refusal: null });
+    hook.select(1, 2, 3, 4, 5, 6);
+    expect((page.select as ReturnType<typeof vi.fn>).mock.calls).toEqual([[1, 2, 3, 4, 5, 6]]);
+    hook.placeGhost(7, 8, 9);
+    expect((page.placeGhost as ReturnType<typeof vi.fn>).mock.calls).toEqual([[7, 8, 9]]);
+    expect(await hook.confirmPaste()).toBe('ok');
     hook.closeOverlay();
     hook.disposeTool();
     hook.forceFatal();
@@ -1228,6 +1244,48 @@ describe('the smoke\'s test hook, window.__wiTest under ?wiTest=1 (SP4c spec §8
     expect(hook.lastLanding()).toEqual({ surface: 66, water: null, y: 90 });
     install.landed({ surface: 40, water: 63, y: 87 });
     expect(hook.lastLanding()).toEqual({ surface: 40, water: 63, y: 87 });
+  });
+
+  test('the hook\'s selection parts (SP5c spec §10.8): the tool\'s mode and corners, the clipboard read from storage with its sizes and hash, the ghost, the corners set, the ghost pinned, the page\'s confirm', async () => {
+    const tool = createSelectTool();
+    const kv = createMemoryKV();
+    const clipboard = createClipboardStore({ kv: async () => kv, notices: { show() {} } });
+    let pinned: unknown[] | null = null;
+    let state: { box: { x0: number; y0: number; z0: number; w: number; h: number; d: number } | null; refusal: { why: 'unloaded' } | null; counts: null; shown: boolean } = {
+      box: null, refusal: null, counts: null, shown: false,
+    };
+    const actions = {
+      ghostState: () => state,
+      placeAt: (x: number, y: number, z: number, pin?: boolean) => { pinned = [x, y, z, pin]; },
+      confirm: vi.fn(async () => 'ok'),
+    };
+    const h = selectionHooks({ tool, actions, clipboard });
+    expect(h.selection()).toEqual({ mode: 'off', corner1: null, corner2: null });
+    // The corners are set only in `select` (Q first), as LMB and RMB would mark them.
+    h.select(1, 70, 2, 4, 72, 5);
+    expect(h.selection()).toEqual({ mode: 'off', corner1: null, corner2: null });
+    tool.toggle();
+    h.select(4, 72, 5, 1, 70, 2);
+    expect(h.selection()).toEqual({ mode: 'select', corner1: [4, 72, 5], corner2: [1, 70, 2] });
+    expect(tool.selection()).toEqual({ x0: 1, y0: 70, z0: 2, w: 4, h: 3, d: 4 });
+    // The clipboard: null with none stored; else its sizes and the values' hash, read from storage (not a memory copy).
+    expect(await h.clipboard()).toBeNull();
+    const values = Uint32Array.from({ length: 2 * 1 * 3 }, (_, i) => (i === 4 ? (STONE << 8) | WATER_SOURCE : i % 2 === 0 ? STONE << 8 : 0));
+    await kv.write(clipboardOps(encodeClipboard(2, 1, 3, values)));
+    expect(await h.clipboard()).toEqual({ w: 2, h: 1, d: 3, hash: clipboardHash(values) });
+    expect(clipboardHash(values)).toMatch(/^[0-9a-f]{16}$/);
+    expect(clipboardHash(values)).not.toBe(clipboardHash(values.map((v, i) => (i === 4 ? STONE << 8 : v))));
+    // The ghost: its min corner, the tool's turns, the refusal as its text.
+    expect(h.ghost()).toEqual({ shown: false, anchor: null, turns: 0, refusal: null });
+    expect(tool.place('paste')).toBe(true);
+    tool.turn(1);
+    state = { box: { x0: 3, y0: 66, z0: -4, w: 3, h: 1, d: 2 }, refusal: { why: 'unloaded' }, counts: null, shown: true };
+    expect(h.ghost()).toEqual({ shown: true, anchor: [3, 66, -4], turns: 1, refusal: 'part of it is not loaded' });
+    // placeGhost pins the ghost's min corner; confirmPaste is the page's own confirm.
+    h.placeGhost(8, 70, -2);
+    expect(pinned).toEqual([8, 70, -2, true]);
+    expect(await h.confirmPaste()).toBe('ok');
+    expect(actions.confirm).toHaveBeenCalledTimes(1);
   });
 
   test('the page wires the hook only when given one: the overlay\'s pool counted, the landing recorded, the page\'s parts attached', () => {
@@ -4842,7 +4900,10 @@ describe('the selection tool in the page I: Q, the corners, the box and Ctrl+C (
     const s = src();
     expect(s).toMatch(/const tool = createSelectTool\(\);/);
     expect(s).toMatch(/const clipboardKv = createClipboardKv\(\{ saved: saved\?\.kv \?\? null, available: idbAvailable, open: \(\) => openIdbKV\(SAVES_DB\) \}\);/);
-    expect(s).toMatch(/clipboard: createClipboardStore\(\{ kv: \(\) => clipboardKv\.kv\(\),/);
+    expect(s).toMatch(/const clipboardStore = createClipboardStore\(\{ kv: \(\) => clipboardKv\.kv\(\),/);
+    expect(s).toMatch(/clipboard: clipboardStore,/);
+    // The smoke's hook reads and drives this tool, these actions and this store (SP5c spec §10.8).
+    expect(s).toMatch(/\.\.\.selectionHooks\(\{ tool, actions: selectActions, clipboard: clipboardStore \}\),/);
     expect(s).toMatch(/origin: world\.origin,/);
     expect(s).toMatch(/stopRepeat: \(\) => holdRepeat\.stop\(\),/);
     expect(s).toMatch(/release: \(\) => clipboardKv\.close\(\),/);

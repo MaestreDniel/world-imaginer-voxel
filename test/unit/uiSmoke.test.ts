@@ -43,6 +43,7 @@ import {
   acrossFace, BUILD_QUERY, JUMP_MIN_RISE, PALETTE_SWATCHES, parseHudEdits, SMOKE_FACE, SMOKE_STATE, SMOKE_WATER_SOURCE, TORCH_MIN_LIGHT, WALK_GROUND_MS,
   WALK_HOLD_MS, WALK_MIN_MOVE, WALK_PATH_BLOCKS, WALK_QUERY, walkCorridor, walkSnapOk,
   createdWorldId, PAGEHIDE_RELOAD_MS, POSE_TOL, poseWithin, rowTitleOk, SAVE_EDITS, SAVE_SPEED_INDEX, saveColumns, savedWorldQuery, SMOKE_KEYS,
+  cellsHash, SELECT_HOUSE, SELECT_STATE, SELECT_TURNED, selectHouse, selectSites, turnHouse,
   SMOKE_LOCKED_NOTICE, SMOKE_WORLD, START_BUTTONS,
   COPY_BADGE, exportedFile, FIRST_PLACE_DOT, importedNotice, MODIFY_EDIT, OLDER_BADGE, OLDER_WORLD, PAUSED_SPEED_INDEX, SETTINGS_FOV, SMOKE_BACKUP_NOTICE, SMOKE_BACKUP_NOTICE_MS, SMOKE_COPY,
   SMOKE_PLACE, SMOKE_PLACE_SAVED, SP5B_SHOTS, ADDED_PLACE_DOT, lookDiffers, PLACES_SHOT_DOTS, PLACES_SHOT_SOUTH_PX, worldsMenuFallback,
@@ -75,6 +76,8 @@ import { LOCKED_NOTICE } from '../../src/ui/world/worldLock';
 import { backupName, exportFileName } from '../../src/persist/saves';
 import { BACKUP_NOTICE_MS } from '../../src/ui/world/modifyMode';
 import { PLACE_COLOURS, PLACE_SAVED_NOTICE } from '../../src/ui/world/places';
+import { turnClipboard } from '../../src/ui/world/clipboard';
+import { clipboardHash } from '../../src/ui/world/worldPage';
 
 const EDITED: MapState = {
   v: 1, seed: '42', profile: 'default',
@@ -284,15 +287,15 @@ describe('UI smoke test: pure parts (SP2b spec §8 Tools, §12)', () => {
     expect(mountainSummaryOk(flat), flat).toBe(false);
   });
 
-  test('the steps run in SMOKE_STEPS order: the Density steps after rule, then preset profiles (SP3e), then start, world and world-mesh (SP4a), then SP4b\'s stream, then SP4c\'s overlay and overlay-mesh, then SP5a\'s build and walk, then SP5b\'s menus, save, crash, two tabs, export/import, places, modify and settings-world before console (SP3d spec §6, SP3e spec §8, SP4a spec §9.6, SP4b spec §8.6, SP4c spec §8.6, SP5a spec §6.4, SP5b spec §6.5, ruling P52)', () => {
+  test('the steps run in SMOKE_STEPS order: the Density steps after rule, then preset profiles (SP3e), then start, world and world-mesh (SP4a), then SP4b\'s stream, then SP4c\'s overlay and overlay-mesh, then SP5a\'s build and walk, then SP5b\'s menus, save, crash, two tabs, export/import, places, modify and settings-world, then SP5c\'s select before console (SP3d spec §6, SP3e spec §8, SP4a spec §9.6, SP4b spec §8.6, SP4c spec §8.6, SP5a spec §6.4, SP5b spec §6.5, SP5c spec §10.8, ruling P52)', () => {
     expect(SMOKE_STEPS).toEqual([
       'selftest', 'load', 'number', 'knot', 'slider', 'box', 'profile', 'presets', 'undo/redo', 'reload', 'cut line', 'voxels', 'tabs', 'rule',
       'density tab', 'density node', 'density mute', 'density json', 'density narrow', 'density horizontal', 'density drag', 'density times',
       'preset profiles', 'start', 'world', 'world-mesh', 'stream', 'overlay', 'overlay-mesh', 'build', 'walk', 'menus', 'save', 'crash', 'two tabs',
-      'export/import', 'places', 'modify', 'settings-world', 'console',
+      'export/import', 'places', 'modify', 'settings-world', 'select', 'console',
     ]);
     expect(SMOKE_STEPS.slice(SMOKE_STEPS.indexOf('walk'), SMOKE_STEPS.indexOf('console') + 1)).toEqual([
-      'walk', 'menus', 'save', 'crash', 'two tabs', 'export/import', 'places', 'modify', 'settings-world', 'console',
+      'walk', 'menus', 'save', 'crash', 'two tabs', 'export/import', 'places', 'modify', 'settings-world', 'select', 'console',
     ]);
     expect(SMOKE_STEPS.indexOf('density tab')).toBe(SMOKE_STEPS.indexOf('rule') + 1);
     expect(SMOKE_STEPS.indexOf('start')).toBe(SMOKE_STEPS.indexOf('preset profiles') + 1);
@@ -302,7 +305,9 @@ describe('UI smoke test: pure parts (SP2b spec §8 Tools, §12)', () => {
     expect(SMOKE_STEPS.indexOf('build')).toBe(SMOKE_STEPS.indexOf('overlay-mesh') + 1);
     expect(SMOKE_STEPS.indexOf('menus')).toBe(SMOKE_STEPS.indexOf('walk') + 1);
     expect(SMOKE_STEPS.indexOf('export/import')).toBe(SMOKE_STEPS.indexOf('two tabs') + 1);
-    expect(SMOKE_STEPS.indexOf('settings-world')).toBe(SMOKE_STEPS.indexOf('console') - 1);
+    expect(SMOKE_STEPS.indexOf('select')).toBe(SMOKE_STEPS.indexOf('settings-world') + 1);
+    expect(SMOKE_STEPS.indexOf('select')).toBe(SMOKE_STEPS.indexOf('console') - 1);
+    expect(stepId('select: a house, Q, Ctrl+C, Ctrl+V, one turn')).toBe('select');
     expect(stepId('export/import: Export, Delete, Import; worldHash() equal')).toBe('export/import');
     expect(stepId('settings-world: G opens, FOV 80 applies, Esc closes')).toBe('settings-world');
     expect(SMOKE_STEPS.indexOf('console')).toBe(SMOKE_STEPS.length - 1);
@@ -1219,12 +1224,78 @@ describe('UI smoke test: the saved-world steps (SP5b spec §6.5)', () => {
     expect(rowTitleOk('New world 1 · amplified · seed smoke-77')).toBe(false);
   });
 
-  test('the keys the steps press are the key map\'s: F walks, T the time speed, B a place, G the Settings, H the help', () => {
+  test('the keys the steps press are the key map\'s: F walks, T the time speed, B a place, G the Settings, H the help; Q, Ctrl+C, Ctrl+V and N the selection tool\'s (SP5c spec §10.8)', () => {
     const codeOf = (action: string) => DEFAULT_KEYMAP.find((k) => k.action === action)!.bindings.flatMap((b) => (b.kind === 'code' ? [b.code] : []))[0];
+    expect(SMOKE_KEYS).toEqual(Object.fromEntries(Object.keys(SMOKE_KEYS).map((a) => [a, codeOf(a)])));
+    expect(Object.keys(SMOKE_KEYS)).toHaveLength(9);
     expect(SMOKE_KEYS).toEqual({
-      toggleWalk: codeOf('toggleWalk'), timeSpeed: codeOf('timeSpeed'), savePlace: codeOf('savePlace'), settings: codeOf('settings'), help: codeOf('help'),
+      toggleWalk: 'KeyF', timeSpeed: 'KeyT', savePlace: 'KeyB', settings: 'KeyG', help: 'KeyH', selectTool: 'KeyQ', copy: 'KeyC', paste: 'KeyV', move: 'KeyN',
     });
-    expect(SMOKE_KEYS).toEqual({ toggleWalk: 'KeyF', timeSpeed: 'KeyT', savePlace: 'KeyB', settings: 'KeyG', help: 'KeyH' });
+    // Ctrl+C and Ctrl+V are the map's Ctrl bindings, Q and N its plain ones: the step presses them with those modifiers.
+    const ctrlOf = (action: string) => DEFAULT_KEYMAP.find((k) => k.action === action)!.bindings.some((b) => b.kind === 'code' && b.ctrl === true);
+    expect(['selectTool', 'copy', 'paste', 'move'].map(ctrlOf)).toEqual([false, true, true, false]);
+  });
+
+  test('`select`: the house\'s states are the registry\'s, and one turn names them oak_log[axis=z], wall_torch[facing=south], ladder[facing=west] (SP5c spec §10.8)', () => {
+    expect(SELECT_STATE).toEqual({
+      planks: REGISTRY.parseStateKey('oak_planks'), logX: REGISTRY.parseStateKey('oak_log[axis=x]'),
+      torchEast: REGISTRY.parseStateKey('wall_torch[facing=east]'), ladderSouth: REGISTRY.parseStateKey('ladder[facing=south]'),
+    });
+    for (const k of ['logX', 'torchEast', 'ladderSouth'] as const) {
+      expect(SELECT_TURNED[k].name, k).toBe(REGISTRY.stateKey(REGISTRY.rotateState(SELECT_STATE[k], 1)));
+      expect(SELECT_TURNED[k].state, k).toBe(REGISTRY.rotateState(SELECT_STATE[k], 1));
+    }
+    expect(Object.values(SELECT_TURNED).map((s) => s.name)).toEqual(['oak_log[axis=z]', 'wall_torch[facing=south]', 'ladder[facing=west]']);
+    expect(REGISTRY.rotateState(SELECT_STATE.planks, 1)).toBe(SELECT_STATE.planks);
+    expect(SMOKE_WATER_SOURCE).toBe(WATER_SOURCE);
+  });
+
+  test('`select`: the house holds planks, an x-axis log, a wall torch facing east on its support, a ladder facing south and a waterlogged one; turned once as the clipboard turns', () => {
+    const { w, h, d } = SELECT_HOUSE;
+    expect([w, h, d]).toEqual([4, 3, 3]);
+    const house = selectHouse();
+    expect(house).toHaveLength(w * h * d);
+    const at = (x: number, y: number, z: number) => house[(y * d + z) * w + x]!;
+    const states = new Set(house.map((v) => v >>> 8));
+    expect([...states].sort((a, b) => a - b)).toEqual([AIR, ...Object.values(SELECT_STATE)].sort((a, b) => a - b));
+    // The torch's support: the block west of it (it faces east, away from the wall).
+    const torch = house.findIndex((v) => v >>> 8 === SELECT_STATE.torchEast);
+    const tx = torch % w, tz = Math.floor(torch / w) % d, ty = Math.floor(torch / (w * d));
+    expect(at(tx - 1, ty, tz) >>> 8).toBe(SELECT_STATE.planks);
+    // Two ladders facing south, one of them waterlogged (a water source's fluid byte), every other cell dry.
+    const ladders = house.filter((v) => v >>> 8 === SELECT_STATE.ladderSouth);
+    expect(ladders.map((v) => v & 255).sort()).toEqual([0, SMOKE_WATER_SOURCE]);
+    expect(house.filter((v) => (v & 255) !== 0)).toHaveLength(1);
+    // The tool's turn is the clipboard model's (`turnClipboard`, SP5c spec §2.6).
+    const c = { w, h, d, values: Uint32Array.from(house) };
+    const t = turnClipboard(c, 1);
+    expect(turnHouse(house)).toEqual([...t.values]);
+    expect([t.w, t.h, t.d]).toEqual([d, h, w]);
+    expect(turnHouse(house).filter((v) => v >>> 8 === SELECT_STATE.logX)).toHaveLength(0);
+  });
+
+  test('`select`: the clipboard hash is the page hook\'s (`clipboardHash`: FNV-1a 64 over the values, 4 bytes little-endian each)', () => {
+    const house = selectHouse();
+    expect(cellsHash(house)).toBe(clipboardHash(Uint32Array.from(house)));
+    expect(cellsHash(turnHouse(house))).toBe(clipboardHash(Uint32Array.from(turnHouse(house))));
+    expect(cellsHash([])).toBe('cbf29ce484222325');
+    expect(cellsHash([0x01020304])).toBe(clipboardHash(Uint32Array.of(0x01020304)));
+    expect(cellsHash(house)).not.toBe(cellsHash(turnHouse(house)));
+  });
+
+  test('`select`: the four sites lie within 12 blocks of the camera\'s column, apart, none on it; each footprint as its paste lands', () => {
+    const sites = selectSites({ x: -10.3, z: 5.8 });
+    const fps = [sites.house, sites.paste, sites.float, sites.again];
+    expect([sites.house, sites.float].map((f) => [f.w, f.d])).toEqual([[SELECT_HOUSE.w, SELECT_HOUSE.d], [SELECT_HOUSE.w, SELECT_HOUSE.d]]);
+    expect([sites.paste, sites.again].map((f) => [f.w, f.d])).toEqual([[SELECT_HOUSE.d, SELECT_HOUSE.w], [SELECT_HOUSE.d, SELECT_HOUSE.w]]);
+    const cells = (f: { x: number; z: number; w: number; d: number }) => Array.from({ length: f.w * f.d }, (_, i) => `${f.x + (i % f.w)},${f.z + Math.floor(i / f.w)}`);
+    const all = fps.flatMap(cells);
+    expect(new Set(all).size).toBe(all.length);
+    for (const c of all) {
+      const [x, z] = c.split(',').map(Number) as [number, number];
+      expect(Math.max(Math.abs(x - -11), Math.abs(z - 5)), c).toBeLessThanOrEqual(12);
+      expect(Math.max(Math.abs(x - -11), Math.abs(z - 5)), c).toBeGreaterThanOrEqual(3);
+    }
   });
 
   test('`save`: 12 edits, T once is ×10, the pose within 0.01, a reload within 300 ms of the last edit', () => {
