@@ -14,10 +14,12 @@ import type { FlyState } from '../../src/player/fly';
 import {
   AUTOSAVE_MS, BULK_SETTLE_WAIT_MS, createAutosave, createStateParts, LEAVE_WAIT_MS, SETTLE_WAIT_MS, snapshotState, type Autosave,
 } from '../../src/ui/world/autosave';
-import type { BlockStep } from '../../src/ui/world/blockHistory';
+import { createActionPost, createBlockHistory, type BlockStep } from '../../src/ui/world/blockHistory';
+import { createEditLatency } from '../../src/ui/world/editLatency';
+import { createEditPath } from '../../src/ui/world/editPath';
 import { STATE_BOUNDS } from '../../src/ui/world/stateBounds';
 import { createPageAutosave } from '../../src/ui/world/worldPage';
-import type { FlushedMsg } from '../../src/workers/protocol';
+import type { Edit, EditedMsg, FlushedMsg } from '../../src/workers/protocol';
 
 /** Lets every pending promise continuation run. */
 const drain = (): Promise<void> => new Promise<void>((r) => setImmediate(r));
@@ -531,6 +533,124 @@ describe('the autosave\'s and the leave\'s wait for a bulk batch (SP5c spec §2.
     await r.clock.runTo(1100);
     expect(leftAt).toBe(1100);
     r.autosave.dispose();
+  });
+});
+
+describe('the page\'s autosave and a Ctrl+Z or Ctrl+Y held behind a bulk batch (SP5c spec §2.8, §3.4)', () => {
+  const STONE_V = 1 << 8;
+  /** `n` edits, a paste's bulk batch. */
+  const paste = (n: number): Edit[] => Array.from({ length: n }, (_, i) => ({ x: i, y: 70, z: 0, op: 'set', value: STONE_V, expect: 0 }));
+  /**
+   * The page's real edit path, block history and action post over a sim whose `edits` the test answers in order by
+   * hand (`answer`), and the page's autosave over them on a fake clock, its flushes answered ok at once. `log` holds the
+   * posts, the replies and the flushes in order.
+   */
+  const composed = () => {
+    const clock = fakeClock();
+    const log: string[] = [];
+    const answers: Array<() => void> = [];
+    const sim = {
+      failed: false,
+      edits: (e: readonly Edit[]): Promise<EditedMsg> => {
+        log.push(`edits ${e.length}`);
+        return new Promise<EditedMsg>((resolve) => {
+          answers.push(() => {
+            log.push(`reply ${e.length}`);
+            resolve({
+              type: 'edited', id: 1, prev: new Uint32Array(e.length).fill(0xFFFFFFFF), next: new Uint32Array(e.length).fill(STONE_V),
+              dirty: new Float64Array(0), entryAdded: new Float64Array(0), entryRemoved: new Float64Array(0), refused: null,
+              relightMs: 0, editMs: 0, limboMax: 0, subBatchMaxMs: 0,
+            });
+          });
+        });
+      },
+    };
+    const path = createEditPath({
+      sim, coordinator: { editState: () => 0, simPin() {}, simUnpin() {}, markEdited() {} }, latency: createEditLatency(), now: clock.now,
+      notices: { show() {}, hide() {} }, timers: { set: clock.setTimeout, clear: clock.clearTimeout },
+    });
+    const history = createBlockHistory({ post: path.post, read: () => 0, pending: path.pending, settled: path.settled, notices: { show() {} } });
+    const act = createActionPost({ post: path.post, record: history.record });
+    const flushes: Array<HistoryWrite | null> = [];
+    const autosave = createPageAutosave({
+      worldId: 'w1', fly: { x: 1, y: 80, z: 2, yaw: 0, pitch: 0, mode: 'fly', speed: 12 }, frame: { t: 0.25 }, speedIndex: () => 0,
+      storedTime: null, hotbar: () => HOTBAR, blockHistory: history,
+      sim: {
+        flush(_state, h) {
+          log.push('flush');
+          flushes.push(h);
+          return Promise.resolve({ type: 'flushed', id: flushes.length, ok: true, flushSeq: flushes.length, columns: 0, bytes: 0, syncMs: 0, commitMs: 0 });
+        },
+      },
+      settled: path.settled, bulkPending: path.bulkPending, pending: path.pending, editsSince: () => 0, now: () => 1_700_000_000_000, clock,
+      events: { on: () => () => {}, hidden: () => false }, onResult() {},
+    });
+    return { clock, log, path, history, act, autosave, flushes, answer: (): void => { answers.shift()!(); } };
+  };
+
+  test('a leave during a pending paste with Ctrl+Z held behind it: the flush is posted after the undo\'s reply, its history holding the paste on the undo side', async () => {
+    const c = composed();
+    void c.act(paste(100));
+    c.history.undo();
+    let left: FlushedMsg | null | undefined;
+    void c.autosave.beforeLeave(LEAVE_WAIT_MS).then((m) => { left = m; });
+    // The paste's reply: the held undo is posted, the leave's flush not yet.
+    c.answer();
+    await drain();
+    expect(c.log).toEqual(['edits 100', 'reply 100', 'edits 100']);
+    expect(left).toBeUndefined();
+    // The undo's reply: the step moved, then the flush.
+    c.answer();
+    await drain();
+    expect(c.log).toEqual(['edits 100', 'reply 100', 'edits 100', 'reply 100', 'flush']);
+    expect(c.flushes).toHaveLength(1);
+    expect(c.flushes[0]).toMatchObject({ done: [], undone: [0] });
+    expect(c.flushes[0]!.steps.map((s) => [s.id, s.edits.length])).toEqual([[0, 100]]);
+    expect(left).toMatchObject({ type: 'flushed', ok: true });
+    c.autosave.dispose();
+  });
+
+  test('a Ctrl+Z then a Ctrl+Y held behind a pending paste: the leave\'s flush follows both replies, the paste back on the done side', async () => {
+    const c = composed();
+    void c.act(paste(100));
+    c.history.undo();
+    c.history.redo();
+    void c.autosave.beforeLeave(LEAVE_WAIT_MS);
+    for (let i = 0; i < 3; i++) {
+      c.answer();
+      await drain();
+    }
+    expect(c.log).toEqual(['edits 100', 'reply 100', 'edits 100', 'reply 100', 'edits 100', 'reply 100', 'flush']);
+    expect(c.flushes[0]).toMatchObject({ done: [0], undone: [] });
+    c.autosave.dispose();
+  });
+
+  test('the tick during a pending paste with Ctrl+Z held behind it posts after the undo\'s reply, its history holding the paste on the undo side', async () => {
+    const c = composed();
+    void c.act(paste(100));
+    c.history.undo();
+    void c.autosave.tick();
+    c.answer();
+    await drain();
+    expect(c.log).toEqual(['edits 100', 'reply 100', 'edits 100']);
+    c.answer();
+    await drain();
+    expect(c.log).toEqual(['edits 100', 'reply 100', 'edits 100', 'reply 100', 'flush']);
+    expect(c.flushes[0]).toMatchObject({ done: [], undone: [0] });
+    c.autosave.dispose();
+  });
+
+  test('the bound is kept: a held undo whose reply never comes, the leave posts 5,000 ms after it began', async () => {
+    const c = composed();
+    void c.act(paste(100));
+    c.history.undo();
+    void c.autosave.beforeLeave(LEAVE_WAIT_MS);
+    c.answer();
+    await c.clock.runTo(BULK_SETTLE_WAIT_MS - 1);
+    expect(c.log).toEqual(['edits 100', 'reply 100', 'edits 100']);
+    await c.clock.runTo(BULK_SETTLE_WAIT_MS);
+    expect(c.log).toEqual(['edits 100', 'reply 100', 'edits 100', 'flush']);
+    c.autosave.dispose();
   });
 });
 

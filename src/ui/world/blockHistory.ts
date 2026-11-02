@@ -11,7 +11,9 @@
  *   its edits in reverse order, so a voxel edited twice in one step gets each `expect` right.
  * - **A press while a post is pending** (a click's, or the history's own previous one) is held until the edit path has
  *   settled (every pending reply recorded), so it always acts on the step the user last saw land; held presses run in
- *   order, each after the previous reply.
+ *   order, each after the previous reply. `idle()` is false while a press is held or running, and `drained()` waits
+ *   until it is true: the autosave's waits cover a press held behind a bulk batch, whose own batch is posted when that
+ *   batch's reply lands (SP5c spec §2.8).
  * - **Accepted:** the step moves to the other side and "Undo · blocks" or "Redo · blocks" shows for 1.5 s. **Refused
  *   as `changed`** (SP5b D32; the step's blocks were changed since, by another edit or by an edit saved without its
  *   step before a reload): the step is dropped (by identity) and "Can't undo there: the blocks changed" ("Can't redo
@@ -72,6 +74,10 @@ export interface BlockHistory {
   restore(done: readonly BlockStep[], undone: readonly BlockStep[]): void;
   /** Moved by `record`, an accepted undo or redo, a dropped step and `restore`. */
   readonly version: number;
+  /** Whether no press is held or running (its post answered and its step moved, kept or dropped). */
+  idle(): boolean;
+  /** Resolves once `idle()` holds: after the held presses have run, each reply handled; in a promise job when idle. */
+  drained(): Promise<void>;
 }
 
 type Press = 'undo' | 'redo';
@@ -96,6 +102,8 @@ export function createBlockHistory(o: {
   const undone: BlockStep[] = [];
   const held: Press[] = [];
   let running = false;
+  /** The running drain, null when none runs. */
+  let draining: Promise<void> | null = null;
   let version = 0;
 
   const push = (side: BlockStep[], step: BlockStep): void => {
@@ -155,13 +163,17 @@ export function createBlockHistory(o: {
       }
     } finally {
       running = false;
+      draining = null;
     }
   };
 
   const press = (p: Press): void => {
     held.push(p);
-    if (!running) void drain();
+    if (!running) draining = drain();
   };
+
+  // A press made meanwhile starts a new drain, which is waited for too.
+  const drained = (): Promise<void> => (draining === null ? Promise.resolve() : draining.then(drained, drained));
 
   return {
     record(step) {
@@ -194,6 +206,8 @@ export function createBlockHistory(o: {
     get version() {
       return version;
     },
+    idle: () => held.length === 0 && !running,
+    drained,
   };
 }
 

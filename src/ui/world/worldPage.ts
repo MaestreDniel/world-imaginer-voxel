@@ -3342,7 +3342,10 @@ export interface PageAutosave extends Autosave {
  * by identity; none when not given) and the wall clock (`now`); the block history's
  * version and its sides as a write (§3.4 step 6): each step keeps one id for as long as it lives (`createStepIds`,
  * seeded with `historyIds`, the open's), and a flush carries only the steps no committed flush stored, so a flush after
- * the open or after a large step posts no stored step again (SP5c spec §5, D28's lever 3); `settled` the edit path's;
+ * the open or after a large step posts no stored step again (SP5c spec §5, D28's lever 3); `settled` the edit path's,
+ * the autosave's waits then lasting until the edit path has nothing in flight (`pending`) and the block history holds
+ * no Ctrl+Z or Ctrl+Y, held or running (`idle`, `drained`), so a press held behind a bulk batch, whose own batch is
+ * posted when that batch's reply lands, is answered and its step moved before the flush is built (SP5c spec §2.8);
  * `editsSince` the accepted replies (`countAccepted`); `onResult` every `flushed`; `onBuild`, when given, as each
  * post's work starts (the bench's clock of a flush's main-thread work, SP5b spec §6.2). `build` gives the backup the
  * same state parts' record and history the next post would carry.
@@ -3358,13 +3361,16 @@ export function createPageAutosave(o: {
   hotbar(): HotbarRecord;
   /** The world's places (SP5b spec §3.7); the bench has none. */
   places?(): readonly Place[];
-  readonly blockHistory: Pick<BlockHistory, 'snapshot' | 'version'>;
+  /** A fake without `idle` and `drained` counts as holding no press (the tests' and the benches' fixed histories). */
+  readonly blockHistory: Pick<BlockHistory, 'snapshot' | 'version'> & Partial<Pick<BlockHistory, 'idle' | 'drained'>>;
   /** The open's step ids (`SavedOpen.historyIds`); none for a world opened with no stored step. */
   readonly historyIds?: HistoryIds | null;
   readonly sim: Pick<SimClient, 'flush'>;
   settled(): Promise<void>;
   /** The edit path's `bulkPending` (SP5c spec §2.8): the tick's and a leave's 5,000 ms wait; none (false) when not given. */
   bulkPending?(): boolean;
+  /** The edit path's `pending`: the waits last while it is true; none (false) when not given. */
+  pending?(): boolean;
   editsSince(): number;
   /** The wall clock (`Date.now()`), the state's `updated`. */
   now(): number;
@@ -3388,6 +3394,14 @@ export function createPageAutosave(o: {
     const steps = o.blockHistory.snapshot();
     return ids.write(o.worldId, steps.done, steps.undone, whole);
   };
+  const { blockHistory } = o;
+  /** The edit path settled and the history's held presses run, again while either has work left. */
+  const settled = async (): Promise<void> => {
+    do {
+      await o.settled();
+      await blockHistory.drained?.();
+    } while ((o.pending?.() ?? false) || !(blockHistory.idle?.() ?? true));
+  };
   const autosave = createAutosave({
     clock: o.clock,
     events: o.events,
@@ -3398,7 +3412,7 @@ export function createPageAutosave(o: {
     state,
     historyVersion: () => o.blockHistory.version,
     history: () => history(false),
-    settled: () => o.settled(),
+    settled,
     bulkPending: () => o.bulkPending?.() ?? false,
     editsSince: () => o.editsSince(),
     onResult: (r) => o.onResult(r),
@@ -3523,6 +3537,7 @@ export function createBenchSave(o: {
     },
     settled: o.edits.settled,
     bulkPending: o.edits.bulkPending,
+    pending: o.edits.pending,
     editsSince: accepted.count,
     now: () => o.wallNow(),
     // The timer's every fire reaches the driver first, paused or not (final review GOV-1).
@@ -5341,6 +5356,7 @@ export function mountWorldPage(root: HTMLElement, q: WorldQuery, hash: string, o
         places: () => worldPlaces.list,
         settled: editPath.settled,
         bulkPending: editPath.bulkPending,
+        pending: editPath.pending,
         editsSince: accepted.count,
         now: () => Date.now(),
         clock: {

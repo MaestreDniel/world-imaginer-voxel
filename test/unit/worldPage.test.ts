@@ -3606,11 +3606,12 @@ describe('autosave in the saved world: Reloads reopen /?world, navigations and f
     expect(navigate.mock.calls).toEqual([['/']]);
     expect(left).toBe(true);
     s.autosave.dispose();
-    // The page's saved world and the bench's autosave pass their edit path's `bulkPending` (ruling P3).
+    // The page's saved world and the bench's autosave pass their edit path's `bulkPending` (ruling P3), and its
+    // `pending`, so the waits also last while a post is in flight (SP5c spec §2.8; the block history is passed whole).
     const src = SRC();
-    expect(src).toMatch(/settled: editPath\.settled,\n\s+bulkPending: editPath\.bulkPending,\n\s+editsSince: accepted\.count,/);
+    expect(src).toMatch(/settled: editPath\.settled,\n\s+bulkPending: editPath\.bulkPending,\n\s+pending: editPath\.pending,\n\s+editsSince: accepted\.count,/);
     expect(src).toMatch(/readonly edits: Pick<EditPath, 'post' \| 'pending' \| 'settled' \| 'bulkPending'>;/);
-    expect(src).toMatch(/settled: o\.edits\.settled,\n\s+bulkPending: o\.edits\.bulkPending,\n\s+editsSince: accepted\.count,/);
+    expect(src).toMatch(/settled: o\.edits\.settled,\n\s+bulkPending: o\.edits\.bulkPending,\n\s+pending: o\.edits\.pending,\n\s+editsSince: accepted\.count,/);
   });
 
   test('the same through `createReloader`\'s Reload link', async () => {

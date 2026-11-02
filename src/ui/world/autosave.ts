@@ -21,7 +21,8 @@
  * - **A leave and a bulk batch** (SP5c spec §2.8): while a bulk batch is pending, `beforeLeave` first waits for the edit
  *   path to settle, at most 5,000 ms, so its flush carries the batch's step and the page does not end the sim before
  *   the batch is saved; then it posts and waits for `flushed` at most 1,000 ms, as with none pending, when it posts at
- *   once.
+ *   once. The page's `settled` also covers a Ctrl+Z or Ctrl+Y held behind the batch (the undo or redo of a large
+ *   step is bulk too): the flush is built after its reply, with the step on the side it moved to.
  * - `pause(true)` stops the timer's posts (the bench's L1-L10 and L11's "off" parts), never `flushNow`'s. A `closed`
  *   result (the browser closed the connection, D14) stops the timer and the hide and close triggers; a `flush` that
  *   rejects `SimFailed` (the sim is gone) counts as not saved, reaches no notice, and stops every post.
@@ -165,7 +166,10 @@ export interface AutosaveDeps {
    * history version differs from the last committed one.
    */
   history(): HistoryWrite;
-  /** The edit path's wait for every pending reply to be recorded. */
+  /**
+   * The wait for every pending reply to be recorded: the page's (`createPageAutosave`) also waits until the block
+   * history holds no Ctrl+Z or Ctrl+Y, held or running, so a press held behind a bulk batch is answered first (§2.8).
+   */
   settled(): Promise<void>;
   /** Whether the edit path has a bulk batch posted and not answered (SP5c spec §3.4): the waits are then 5,000 ms. */
   bulkPending(): boolean;

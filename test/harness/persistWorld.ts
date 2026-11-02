@@ -463,6 +463,7 @@ export async function openPersistWorld(o: {
       sim,
       settled: editPath.settled,
       bulkPending: editPath.bulkPending,
+      pending: editPath.pending,
       editsSince: accepted.count,
       now: () => Date.now(),
       clock: {

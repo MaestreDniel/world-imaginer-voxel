@@ -222,6 +222,37 @@ describe('createBlockHistory (SP5a spec §4.5, D13)', () => {
     expect(r.overlaps).toEqual([]);
   });
 
+  test('SP5c spec §2.8: a held press keeps `idle()` false until it has run; `drained()` resolves once its reply is recorded, at once when none is held', async () => {
+    const r = rig(50);
+    expect(r.history.idle()).toBe(true);
+    let first = false;
+    void r.history.drained().then(() => { first = true; });
+    await Promise.resolve();
+    await Promise.resolve();
+    expect(first).toBe(true);
+    await r.action([set(1, STONE_V, AIR_V)]);
+    void r.act([set(2, STONE_V, AIR_V)]);
+    // A pending click alone is the edit path's, not the history's.
+    expect(r.history.idle()).toBe(true);
+    r.history.undo();
+    r.history.undo();
+    expect(r.history.idle()).toBe(false);
+    let drained = false;
+    void r.history.drained().then(() => { drained = true; });
+    // The click's reply: the first undo posted, the second still held.
+    await vi.advanceTimersByTimeAsync(50);
+    expect(r.posts.length).toBe(3);
+    expect([r.history.idle(), drained]).toEqual([false, false]);
+    // The first undo's reply: the second posted.
+    await vi.advanceTimersByTimeAsync(50);
+    expect(r.posts.length).toBe(4);
+    expect([r.history.idle(), drained]).toEqual([false, false]);
+    // The second undo's reply, recorded: idle and drained.
+    await vi.advanceTimersByTimeAsync(50);
+    expect([r.history.idle(), drained]).toEqual([true, true]);
+    expect([r.history.size, r.history.redoSize]).toEqual([0, 2]);
+  });
+
   test('`unloaded` keeps the step on top (SP5a), as does `regenerating`: each names its cause for 4 s, undo and redo', async () => {
     const r = rig();
     await r.action([set(17, STONE_V, AIR_V)]);
