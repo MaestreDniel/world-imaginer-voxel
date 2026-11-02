@@ -36,7 +36,7 @@
  * (`FLOATING_SURFACE_RULES` exists and is floating_islands' rules): built, the SP3e entry's cut line says it was not taken
  * and the receivers say nothing moved; cut, SP12 receives the branch. §3.15's title names the code SP3e adds and its
  * amplified, archipelago and floating_islands rows state the final constants, read from the preset trees and overlays;
- * SP3e's "Received from SP3a" states amplified's final slide; SP6, SP8b and SP11 carry SP3e's notes (the island-run
+ * SP3e's "Received from SP3a" states amplified's final slide; SP6a, SP8b and SP11 carry SP3e's notes (the island-run
  * threshold `ISLAND_RUN_MIN_BOTTOM`, the islands tap's gate and corners read from `FLOATING_DENSITY_TREE`); SP12 receives
  * SP3e's §12 list with Z2's islands part at its measured value (the committed after set's `Z2.json`), and the continental
  * profile stays with SP12.
@@ -66,7 +66,7 @@
  * needed"), so it did not move; the climate-grid cache was not built (no module under `src/` names a climate grid) and moved to SP10, which receives it
  * in a "Received from SP4c" line and its exit; §1's `ci.yml` line names the metrics-fast shards (`fastShards.mjs`).
  * SP5a (its spec §8, §9): the first commit lands the split (the §10 paragraph and the SP5a, SP5b and SP5c entries in
- * place of SP5's) with its other §9 amendments (SP6, SP7, SP8a and SP8c, the receivers, the critical path, SP10's and
+ * place of SP5's) with its other §9 amendments (SP6a, SP7, SP8a and SP8c, the receivers, the critical path, SP10's and
  * SP8b's "Received from SP5a", §0.7, §2.5's `setLight`, §3.7), and moves the pins that read the SP5 entry here (SP5a's
  * walk-mode teleport, SP5b's saved places, the SP4b cut line's conditional); the pins of §3.7, §4.1, §5.1, §5.6 and
  * risk 1 take §9's rewordings in place. §1 names each SP5a module in its entry, which exists (`SP5A_MODULES`, a row
@@ -101,6 +101,14 @@
  * was built (`render/ghost.ts`'s replaced cells), so SP5c's cut line was not taken and its Cut line, the receivers and
  * SP10's "Received from SP5c" say nothing moved; SP5c's "Received from SP5b" ends "(delivered: …)", pinned with `toBe`
  * (moved from the SP5b describe, its SP5b-spec half kept).
+ * SP6a (its spec §12, §13, §14, §15): the first commit lands the split (the §10 paragraph and the SP6a and SP6b entries
+ * in place of SP6's, SP6a's with the Cut line of its §15) with §13 items 1-7: SP7's header naming SP6b, the "Received
+ * from SP6a" lines of SP6b and SP7-SP12 (§14's notes; the abyss hand-overs to SP7, SP8b and SP8c stay with SP6b, which
+ * records them), the critical path, the visible value and the default receivers, §2.5's `SubProjectId`, and every bare
+ * "SP6" reworded as SP6a or SP6b (left only in the §10 split paragraphs). The pins that read the SP6 entry or name SP6
+ * move into the new 'master spec amendments (SP6a §13)' describe: SP3e's note (with `ISLAND_RUN_MIN_BOTTOM`), §5.8's
+ * bench route, §3.7's caching line, the critical path and the SP7 header; the `spEntry('SP5c', …)` pins end at SP6a.
+ * Each later SP6a commit pins its §13 item there, moving the earlier pin it rewords.
  */
 import { existsSync, readdirSync, readFileSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
@@ -636,8 +644,7 @@ describe('master spec amendments (SP3e §12, §13, exit)', () => {
     expect(f, 'island-edge springs moved to SP8b').not.toMatch(/springs/);
   });
 
-  test('§10\'s SP6, SP8b and SP11 carry SP3e\'s notes', () => {
-    expect(spEntry('SP6', 'SP7')).toContain(`- Received from SP3e (its spec §12): exclude cave-detached runs above y ${ISLAND_RUN_MIN_BOTTOM - 1} from the floating_islands island branch, water v0's island rule and the surface scan's sky-open run under islands when caves reach y ≥ ${ISLAND_RUN_MIN_BOTTOM}.`);
+  test('§10\'s SP8b and SP11 carry SP3e\'s notes (SP6a\'s moved to the SP6a describe)', () => {
     expect(spEntry('SP8b', 'SP8c')).toContain('springs, lava lakes and island-edge springs feeding settle (island-edge springs on SP3e\'s islands term, `islandMask` and island runs; SP3e spec §12)');
     expect(spEntry('SP11', 'SP12')).toContain(`LOD clipmap with fill mask and island terms (the islands tap is non-positive outside the corners y ${band.lo}-${lastCorner} and where islandMask < ${gate.lo}; SP3e spec §12)`);
   });
@@ -880,7 +887,8 @@ describe('master spec amendments (SP4b §13)', () => {
   test('§5.8\'s bench route is `?bench=medium`\'s 95 s script, and §1\'s ui/world entry names bench.ts (SP4b spec §8.3, §13)', () => {
     const at = text.indexOf('### 5.8 Debug HUD and bench');
     const s58 = text.slice(at, text.indexOf('### 5.9 ', at));
-    expect(s58).toContain('a fixed seed and a scripted flight (SP4b: `?bench=medium`, 95 s, plains, mountains and ocean along straight legs at 20, 96 and 384 blocks/s with turns, a hover and a live RD change; SP6 adds the cave scenario, SP7 the flood)');
+    // The scenarios later SPs add moved to the SP6a describe.
+    expect(s58).toContain('a fixed seed and a scripted flight (SP4b: `?bench=medium`, 95 s, plains, mountains and ocean along straight legs at 20, 96 and 384 blocks/s with turns, a hover and a live RD change; ');
     expect(s58).not.toContain('60 s scripted flight');
     expect(layoutEntry(/^\s+ui\/world\/\* /)).toContain('ui/world/bench.ts (SP4b: the `?bench=medium` route and its JSON)');
   });
@@ -970,7 +978,8 @@ describe('master spec amendments (SP4c §12)', () => {
     const s37 = text.slice(at, text.indexOf('### 3.8 ', at));
     const caching = s37.split('\n').find((l) => l.startsWith('- Caching on the quart lattice comes with its first consumer'));
     expect(caching, 'no `- Caching on the quart lattice …` line in §3.7').toBeDefined();
-    expect(caching).toContain('(aquifers, structures: SP6-SP9; spawn and teleport query one point each and need none, SP4c)');
+    // The consumers' SPs moved to the SP6a describe.
+    expect(caching).toContain('; spawn and teleport query one point each and need none, SP4c)');
     expect(caching).not.toContain('SP4c-SP9');
     expect(s37).toContain('- **Teleport** (SP4c): in flight, the camera at max(surface, surfaceWaterLevel) + 24, at most 400, the yaw and pitch kept, where surface is max(⌊surfaceEst⌋, `surfaceEst3`) whenever the density tree has a `terrain` tap (the default tree included), else ⌊surfaceEst⌋, from one worker query before the terrain exists (the 3D estimate, so the arrival is never inside a jagged peak; the spawn keeps its own rule); in walk mode (SP5a) the feet at that surface + 1, the look direction kept, snapped to `MOTION_BLOCKING` once the column is published; while unloaded, the player hovers.');
     expect(s37).not.toContain('surfaceEst + 2');
@@ -1184,7 +1193,7 @@ describe('master spec amendments (SP5a §9)', () => {
     expect(sp5a).not.toContain('If SP4b\'s cut line moved');
     expect(text).toContain('SP4b deferred-reclamation primitive → SP5 (delivered in SP4b, so nothing moved);');
     const critical = text.split('\n').find((l) => l.startsWith('Critical path: '));
-    expect(critical).toContain('SP4c → SP5a → SP5b → SP5c → SP6');
+    expect(critical).toContain('SP4c → SP5a → SP5b → SP5c → ');
   });
 
   test('SP7 hands swimming and the buckets to SP5a; SP10 and SP8b receive from SP5a', () => {
@@ -1211,8 +1220,7 @@ describe('master spec amendments (SP5a §9)', () => {
   });
 
   test('the split\'s other §10 lines, §2.3 and §4.12\'s deferred parts (SP5a spec §9; risk 1\'s Kill line moved to the SP5b block)', () => {
-    expect(spEntry('SP6', 'SP7').startsWith('**SP6 — Caves, carvers and cave biomes** (L; SP3c, SP5c; walking for in-game review from SP5a)'), 'the SP6 header').toBe(true);
-    expect(spEntry('SP7', 'SP8a').startsWith('**SP7 — Water and fluids** (L; SP6, SP5a)'), 'the SP7 header').toBe(true);
+    // The SP6 and SP7 headers moved to the SP6a describe (the split).
     expect(spEntry('SP8c', 'SP9').startsWith('**SP8c — Audio** (M; SP7, SP5a;'), 'the SP8c header').toBe(true);
     expect(spEntry('SP8a', 'SP8b')).toContain('the replacement of SP5a\'s provisional boxes, glass frame and log-end layer');
     expect(spEntry('SP4a', 'SP4b')).toContain('(the full start and worlds menu is SP5b\'s)');
@@ -1413,7 +1421,7 @@ describe('master spec amendments (SP5b §9)', () => {
     expect(sp8c).toContain('(the `packs` store, by a `wi10` version bump)');
     expect(sp8c).not.toContain('Creates `ui/settingsPanel.ts`');
     expect(spEntry('SP11', 'SP12')).toContain('fills SP5b\'s Graphics tab: the quality preset and the greyed rows (fog distance, clouds, shadows)');
-    expect(spEntry('SP5c', 'SP6')).toContain('(stored in IndexedDB `wi10`, its `meta` store or a store of its own by a version bump; a paste is one block-history step, which SP5b persists)');
+    expect(spEntry('SP5c', 'SP6a')).toContain('(stored in IndexedDB `wi10`, its `meta` store or a store of its own by a version bump; a paste is one block-history step, which SP5b persists)');
   });
 
   test('§10\'s Exit names `G2.flush` and `G1.enter`, and THRESHOLDS holds their rows as SP5b spec §6.2 and §12 state them (SP5b spec §6.2, §12, D28)', () => {
@@ -1753,7 +1761,7 @@ describe('master spec amendments (SP5c §13)', () => {
   });
 
   test('§10\'s Exit names `G2.paste`, and THRESHOLDS holds its six rows as SP5c spec §10.4 and §16 state them (SP5c spec §10.4, §16, D28)', () => {
-    expect(spEntry('SP5c', 'SP6')).toContain('`G2.paste` with the SP5c spec\'s thresholds');
+    expect(spEntry('SP5c', 'SP6a')).toContain('`G2.paste` with the SP5c spec\'s thresholds');
     const sp5c = readFileSync(fileURLToPath(new URL('../../docs/superpowers/specs/2026-11-01-sp5c-selection-tool-design.md', import.meta.url)), 'utf8');
     const at = sp5c.indexOf('### 10.4 ');
     const gated = sp5c.slice(at, sp5c.indexOf('### 10.5 ', at)).split('\n');
@@ -1800,7 +1808,7 @@ describe('master spec amendments (SP5c §13)', () => {
 
   test('§10\'s SP5c entry, its receivers and the hand-overs (SP5c spec §13, §14, §15)', () => {
     // Moved from the SP5a describe (SP5c spec §12): the header gains its size L and its spec.
-    const sp5c = spEntry('SP5c', 'SP6');
+    const sp5c = spEntry('SP5c', 'SP6a');
     expect(sp5c.startsWith('**SP5c — The selection tool** (L; SP5b). Spec: `2026-11-01-sp5c-selection-tool-design.md`.'), 'the SP5c header').toBe(true);
     expect(sp5c).toContain('Q (the tool), Ctrl+C / Ctrl+X / Ctrl+V, N (move, the source back to the terrain); a ghost that rests on the aimed surface, turned with the wheel; one clipboard per browser in `meta`; at most 64 blocks a side and 32,768 changed blocks per operation (SP5c).');
     expect(sp5c).toContain('**Exit:** as the SP5c spec §16 (`L3.paste`, `E3.paste`, `E5.paste`; `paste.max`, `paste.maxLit`; `G2.paste` with the SP5c spec\'s thresholds; the three notes received from SP5b; the user\'s check)');
@@ -1827,13 +1835,14 @@ describe('master spec amendments (SP5c §13)', () => {
       expect(line, `${id} has no "Received from SP5c" line`).toBeDefined();
       for (const phrase of phrases) expect(line, `${id}'s "Received from SP5c" line`).toContain(phrase);
     }
-    expect(spEntry('SP6', 'SP7')).not.toContain('Received from SP5c');
+    expect(spEntry('SP6a', 'SP6b')).not.toContain('Received from SP5c');
+    expect(spEntry('SP6b', 'SP7')).not.toContain('Received from SP5c');
     expect(received('SP10', 'SP11')).not.toContain('if SP5c\'s cut line is taken');
   });
 
   test('the user\'s UX notes from SP5b\'s check: handed to SP5c in SP5b spec §10, and master §10\'s SP5c entry received them as delivered (SP5b spec §10; SP5c spec §7, §13; moved from the SP5b describe)', () => {
     const notes = 'a Save button for Load world\'s Rename, which keeps the name only with Enter; a notice, when Modify terrain is switched on, that a terrain change will make a backup copy; a hover tooltip on the map\'s disabled parameters ("enable \'Modify terrain\' to edit here")';
-    const received = spEntry('SP5c', 'SP6').split('\n').find((l) => l.startsWith('- Received from SP5b (its spec §10; amended by SP5b):'));
+    const received = spEntry('SP5c', 'SP6a').split('\n').find((l) => l.startsWith('- Received from SP5b (its spec §10; amended by SP5b):'));
     expect(received, 'SP5c has no "Received from SP5b" line').toBeDefined();
     expect(received).toBe(`- Received from SP5b (its spec §10; amended by SP5b): the user's notes from SP5b's check (2026-11-01; the user: "Lo podemos arreglar en SP5c"): ${notes} (delivered: the SP5c spec §7, D17-D19).`);
     const sp5b = readFileSync(fileURLToPath(new URL('../../docs/superpowers/specs/2026-10-29-sp5b-saved-worlds-design.md', import.meta.url)), 'utf8');
@@ -1841,5 +1850,92 @@ describe('master spec amendments (SP5c §13)', () => {
     const sp5c = sp5b.slice(at10, sp5b.indexOf('## 11. ', at10)).split('\n').find((l) => l.startsWith('- **SP5c:**'));
     expect(sp5c, 'SP5b spec §10 has no SP5c note').toBeDefined();
     expect(sp5c).toContain(`The user's notes from SP5b's check (2026-11-01; the user: "Lo podemos arreglar en SP5c"): ${notes}. Master §10's SP5c entry receives them.`);
+  });
+});
+
+describe('master spec amendments (SP6a §13)', () => {
+  test('§10\'s SP6a and SP6b entries, the split and the hand-overs (SP6a spec §13 items 1-7, §14)', () => {
+    // Item 1: the split paragraph.
+    expect(text).toContain('SP6 was split on 2026-11-02 into SP6a (the shape of the caves) and SP6b (cave biomes), proposed in brainstorming because it grew past L and accepted by the user ("Sí, partámoslo en SP6a y SP6b"); each is testable on its own (the SP6a spec\'s "What was agreed", item 1).');
+    // Item 2: the SP6a entry in place of SP6's.
+    const sp6a = spEntry('SP6a', 'SP6b');
+    expect(sp6a.startsWith('**SP6a — The shape of the caves** (XL; SP3c, SP5c; walking for in-game review from SP5a). Spec: `2026-11-02-sp6a-cave-shapes-design.md`.'), 'the SP6a header').toBe(true);
+    expect(sp6a).toContain('- Cave family terms in the default DAG, one interpolated slot per family (cheese / layer / pillars, spaghetti 2D and 3D with rarity, noodle, entrances, roughness, cheese roof term, the wet roof); worm, underground-worm and ravine carvers (detMath, LRU, a window of 11 chunks); the cave-type tag channel, the X-ray (X, PageUp/PageDown/Home), the cave-type slice field and the Caves tab; the cave parameters (the `caves` group); the light floor and night vision (L).');
+    expect(sp6a).toContain('**Deliverable:** explorable caves with visible surface entrances and ravines, seen through the X-ray.');
+    // Moved from the SP3e describe: SP3e's note, verbatim from the SP6 entry.
+    expect(sp6a).toContain(`- Received from SP3e (its spec §12): exclude cave-detached runs above y ${ISLAND_RUN_MIN_BOTTOM - 1} from the floating_islands island branch, water v0's island rule and the surface scan's sky-open run under islands when caves reach y ≥ ${ISLAND_RUN_MIN_BOTTOM}.`);
+    expect(sp6a).toContain('**Exit:** as the SP6a spec §16 (C1-C9; re-asserted with caves: L2, S1 `grassSky0`, DT1, DT2 probe == bulk and the tag; P1 T ≤ 10 ms p50, ≤ 20 ms p99; the DAG-closure overhead measured; L13 and L14; the user\'s check)');
+    // The Cut line: the SP6a spec §15's three items, in its order.
+    const cut = sp6a.split('\n').find((l) => l.startsWith('- **Cut line:**'));
+    expect(cut, 'the SP6a entry has no `- **Cut line:**` line').toBeDefined();
+    const items = ['the Caves tab\'s Find buttons ("Nearest <kind>"', 'the spaghetti-2D rarity bands', 'the underground-only carver'];
+    const at = items.map((item) => cut!.indexOf(item));
+    for (const [i, item] of items.entries()) expect(at[i], `the Cut line names ${item}`).toBeGreaterThan(-1);
+    expect(at, 'the Cut line\'s order').toEqual([...at].sort((a, b) => a - b));
+    expect(cut).toContain('(→ SP10); the spaghetti-2D rarity bands');
+    expect(cut!.split('(→ SP12)').length - 1, 'two items go to SP12').toBe(2);
+    // Item 2: the SP6b entry.
+    const sp6b = spEntry('SP6b', 'SP7');
+    expect(sp6b.startsWith('**SP6b — Cave biomes** (size set by the SP6b spec; SP6a).'), 'the SP6b header').toBe(true);
+    expect(sp6b).toContain('- 3D quart cave-biome picker (lush, dripstone, **abyss**) with cave floor and ceiling surface rules; the abyss surface-palette blocks (decided in the SP6b spec); the X-ray coloured by cave biome; the map cave-biome layer; the `cave_heavy` preset; cave culling (§4.15) with R3.');
+    expect(sp6b).toContain('**Deliverable:** cave biomes recognised by their blocks.');
+    const sp6bReceived = sp6b.split('\n').find((l) => l.startsWith('- Received from SP6a (its spec §14; amended by SP6a):'));
+    expect(sp6bReceived, 'SP6b has no "Received from SP6a" line').toBeDefined();
+    expect(sp6bReceived).toContain('`readyFrom` \'SP6b\'');
+    expect(sp6b).toContain('**Exit** and **Cut line:** set by the SP6b spec');
+    // Item 3: SP7's header (moved from the SP5a describe) and the "Received from SP6a" lines of SP7-SP12 (§14).
+    expect(spEntry('SP7', 'SP8a').startsWith('**SP7 — Water and fluids** (L; SP6b, SP5a)'), 'the SP7 header').toBe(true);
+    const handed: Array<[id: SubProjectId, entry: string, phrase: string]> = [
+      ['SP7', spEntry('SP7', 'SP8a'), '`wetCover`'],
+      ['SP8a', spEntry('SP8a', 'SP8b'), 'the floor\'s value is re-judged with textures'],
+      ['SP8b', spEntry('SP8b', 'SP8c'), 'ores in stone, never in tagged air'],
+      ['SP8c', spEntry('SP8c', 'SP9'), 'may read the tag'],
+      ['SP9', spEntry('SP9', 'SP10'), 'shrink carvers through'],
+      ['SP10', spEntry('SP10', 'SP11'), 'the carver-tunnel layer'],
+      ['SP11', spEntry('SP11', 'SP12'), 'the TSL seam'],
+      ['SP12', sp12Entry(), '`islandBranchOnGround`'],
+    ];
+    for (const [id, entry, phrase] of handed) {
+      const line = entry.split('\n').find((l) => l.startsWith('- Received from SP6a (its spec §14; amended by SP6a):'));
+      expect(line, `${id} has no "Received from SP6a" line`).toBeDefined();
+      expect(line, `${id}'s "Received from SP6a" line`).toContain(phrase);
+      // Item 3: the abyss hand-overs (SP7's lava, SP8b's crystals and gothic touch, SP8c's silence) are SP6b's to record.
+      expect(line, `${id}'s "Received from SP6a" line holds an abyss hand-over`).not.toMatch(/lava may appear|crystals or gems|gothic|silent|Oscuro y silencioso/);
+    }
+    // Item 4 (the critical path moved from the SP5a describe) and item 5.
+    const critical = text.split('\n').find((l) => l.startsWith('Critical path: '));
+    expect(critical).toContain('SP5c → SP6a → SP6b → SP7');
+    const visible = text.split('\n').find((l) => l.startsWith('Visible value in every SP: '));
+    expect(visible).toContain('caves and the X-ray in SP6a, cave biomes in SP6b');
+    const receivers = text.split('\n').find((l) => l.startsWith('**Cut lines.**'));
+    expect(receivers).toContain('SP6a underground-only carver and spaghetti-2D rarity bands → SP12; SP6a cave finder → SP10 (worded by the SP6a spec)');
+    // Item 7: each bare "SP6" names SP6a or SP6b.
+    const line = (head: string): string => {
+      const l = text.split('\n').find((x) => x.startsWith(head));
+      expect(l, `no line starting ${head}`).toBeDefined();
+      return l!;
+    };
+    expect(line('| meta |')).toContain('SP6b decides whether the meta holds it');
+    expect(line('**Aux slot B:**')).toContain('leaves `caveBiomeQ` 0 until SP6b');
+    expect(line('- **Ops.**')).toContain('caves add their ops on the same base in SP6a.');
+    expect(line('- **Interval rules.**')).toContain('(no cave taps before SP6a)');
+    expect(line('- **`col`**')).toContain('SP6a\'s wet roof reads `lakeMask`, `riverStrength` and `offset`, so no level-field rule is needed (amended by SP6a)');
+    // Moved from the SP4c describe (§3.7's caching line).
+    expect(line('- Caching on the quart lattice comes with its first consumer')).toContain('(aquifers, structures: SP7-SP9; spawn and teleport query one point each and need none, SP4c)');
+    expect(line('**Conditions:**')).toContain('`caveBiome` stays SP6b\'s');
+    expect(line('**Default rules**')).toContain('SP6b inserts rule 4 before rule 2');
+    expect(line('- abyss:')).toContain('are decided in the SP6b spec;');
+    expect(line('**Greedy meshing.**')).toContain('R2 is re-baselined at SP6a (caves) and SP8b');
+    expect(line('- Editable boxes')).toContain('the 3 cave biomes arrive in SP6b.');
+    // Moved from the SP4b describe (§5.8's bench route).
+    expect(line('**Bench route `?bench=<preset>`')).toContain('SP6a adds the cave scenario, SP7 the flood)');
+    expect(line('| S1 |')).toContain('gated from SP6a (amended by SP4a)');
+    expect(line('| R2 |')).toContain('re-baselined at SP6a and SP8b');
+    expect(spEntry('SP3a', 'SP3b')).toContain('(the block list grows in SP6b, SP8a, SP8b and SP9)');
+    // A bare SP6 is left only in the §10 split paragraphs (the SP5 split's check).
+    const kept = ['SP3 was split on ', 'SP3b was split on ', 'SP6 was split on '];
+    const bare = text.split('\n').filter((l) => /\bSP6\b/.test(l));
+    for (const l of bare) expect(kept.some((k) => l.startsWith(k)), `a bare SP6 outside the split paragraphs: ${l.slice(0, 120)}`).toBe(true);
+    for (const k of kept) expect(bare.some((l) => l.startsWith(k)), `no line starts with ${k}`).toBe(true);
   });
 });

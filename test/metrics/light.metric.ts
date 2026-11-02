@@ -32,10 +32,10 @@ import { genRegion, type GenRegionOptions, type RegionView } from '../harness/re
  *   y 319 by a face-connected flood over R through voxels light can enter (effective opacity < 15), crossing faces by
  *   the BFS rule of §4.1 (no face set in `FULL_FACES` of the voxel left or the opposite face of the voxel entered).
  *   An interior voxel with sky > 0 has a sky-15 voxel within 14 steps, so its path to the sky stays inside R: the
- *   flood's opaque sides make no false count. Trivially small before caves (SP6 re-asserts it).
+ *   flood's opaque sides make no false count. Trivially small before caves (SP6a re-asserts it).
  * - DT1's light part (gated, `.out/DT1.light.json`): `lightMismatches`, the runs of a region whose `litHash` (blocks,
  *   fluid, light, aux A and B of R) differs from the first run's.
- * - S1's `grassSky0` (recorded, activeFrom SP6, `.out/S1.light.json`): the share of grass_block tops (a grass_block
+ * - S1's `grassSky0` (recorded, activeFrom SP6a, `.out/S1.light.json`): the share of grass_block tops (a grass_block
  *   voxel whose voxel above has effective opacity < 15) with sky 0 in the voxel above (above y 319: sky 15), over the
  *   interior columns, pooled; 0 when no region has a grass top. On floating_islands it includes the grass under the
  *   islands (§4.4).

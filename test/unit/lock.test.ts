@@ -40,8 +40,8 @@ describe('diffGovernance', () => {
     expect(diffGovernance(base, edit((s) => { s.thresholds.T1!.span!.min = 50; }))[0]).toEqual(
       { path: 'T1.span', detail: 'min 60→50', kind: 'LOOSEN' },
     );
-    expect(diffGovernance(base, edit((s) => { s.thresholds.T1!.span!.activeFrom = 'SP6'; }))[0]).toEqual(
-      { path: 'T1.span', detail: 'activeFrom SP3a→SP6', kind: 'LOOSEN' },
+    expect(diffGovernance(base, edit((s) => { s.thresholds.T1!.span!.activeFrom = 'SP6a'; }))[0]).toEqual(
+      { path: 'T1.span', detail: 'activeFrom SP3a→SP6a', kind: 'LOOSEN' },
     );
   });
 
@@ -63,7 +63,7 @@ describe('diffGovernance', () => {
     expect(diffGovernance(base, edit((s) => { delete s.thresholds.T1!.span; }))[0]).toEqual(
       { path: 'T1.span', detail: 'removed', kind: 'LOOSEN' },
     );
-    expect(diffGovernance(base, edit((s) => { s.thresholds.C1 = { default: { min: 0.05, activeFrom: 'SP6' } }; }))[0]).toEqual(
+    expect(diffGovernance(base, edit((s) => { s.thresholds.C1 = { default: { min: 0.05, activeFrom: 'SP6a' } }; }))[0]).toEqual(
       { path: 'C1.default', detail: 'added', kind: 'TIGHTEN' },
     );
   });

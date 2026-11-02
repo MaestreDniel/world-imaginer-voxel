@@ -1,5 +1,5 @@
 {
-  "sha256": "8eb1ff761fe9d02b4f05d4143f122d367ccf087bca4240242777fefa2585258a",
+  "sha256": "3de32c8d93c33d5a01688b037a6179c08e503b3b0413c2143111e9fa9350308d",
   "canonical": {
     "startedSps": [
       "SP0",
@@ -16,7 +16,8 @@
       "SP4c",
       "SP5a",
       "SP5b",
-      "SP5c"
+      "SP5c",
+      "SP6a"
     ],
     "thresholds": {
       "B1": {
@@ -594,7 +595,7 @@
           "max": 0
         },
         "grassSky0": {
-          "activeFrom": "SP6",
+          "activeFrom": "SP6a",
           "max": 0.001
         },
         "ymod16": {

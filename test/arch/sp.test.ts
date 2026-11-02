@@ -15,10 +15,10 @@ describe('started sub-projects', () => {
     expect(CURRENT_SP).toBe(currentSpOf(STARTED_SPS));
   });
 
-  test('SP5c has started and is the current SP (SP5c spec §12)', () => {
-    expect(STARTED_SPS).toEqual(['SP0', 'SP1', 'SP2a', 'SP2b', 'SP3a', 'SP3b', 'SP3c', 'SP3d', 'SP3e', 'SP4a', 'SP4b', 'SP4c', 'SP5a', 'SP5b', 'SP5c']);
-    expect(CURRENT_SP).toBe('SP5c');
-    expect(currentSpOf(STARTED_SPS)).toBe('SP5c');
+  test('SP6a has started and is the current SP (SP6a spec §12)', () => {
+    expect(STARTED_SPS).toEqual(['SP0', 'SP1', 'SP2a', 'SP2b', 'SP3a', 'SP3b', 'SP3c', 'SP3d', 'SP3e', 'SP4a', 'SP4b', 'SP4c', 'SP5a', 'SP5b', 'SP5c', 'SP6a']);
+    expect(CURRENT_SP).toBe('SP6a');
+    expect(currentSpOf(STARTED_SPS)).toBe('SP6a');
   });
 
   test('currentSpOf stops at the first unstarted SP (SP4a alongside SP3c, SP3d and SP3e)', () => {
@@ -31,20 +31,21 @@ describe('started sub-projects', () => {
     expect(currentSpOf([...upTo3b, 'SP4a', 'SP3c', 'SP3d', 'SP3e'])).toBe('SP4a');
   });
 
-  test('SP_DEPS covers all 24 sub-projects and SP_ORDER follows it', () => {
+  test('SP_DEPS covers all 25 sub-projects and SP_ORDER follows it', () => {
     expect(SP_ORDER).toEqual([
       'SP0', 'SP1', 'SP2a', 'SP2b', 'SP3a', 'SP3b', 'SP3c', 'SP3d', 'SP3e', 'SP4a', 'SP4b', 'SP4c', 'SP5a', 'SP5b', 'SP5c',
-      'SP6', 'SP7', 'SP8a', 'SP8b', 'SP8c', 'SP9', 'SP10', 'SP11', 'SP12',
+      'SP6a', 'SP6b', 'SP7', 'SP8a', 'SP8b', 'SP8c', 'SP9', 'SP10', 'SP11', 'SP12',
     ]);
     for (const sp of SP_ORDER) for (const dep of SP_DEPS[sp]) expect(spIndex(dep)).toBeLessThan(spIndex(sp));
     expect(SP_ORDER).toEqual([...SUB_PROJECTS]);
     expect([SP_DEPS.SP2a, SP_DEPS.SP2b]).toEqual([['SP1'], ['SP2a']]);
     expect([
       SP_DEPS.SP3a, SP_DEPS.SP3b, SP_DEPS.SP3c, SP_DEPS.SP3d, SP_DEPS.SP3e, SP_DEPS.SP4a, SP_DEPS.SP4b, SP_DEPS.SP4c,
-      SP_DEPS.SP5a, SP_DEPS.SP5b, SP_DEPS.SP5c, SP_DEPS.SP6,
+      SP_DEPS.SP5a, SP_DEPS.SP5b, SP_DEPS.SP5c, SP_DEPS.SP6a,
     ]).toEqual([
       ['SP2b'], ['SP3a'], ['SP3b'], ['SP3c'], ['SP3d'], ['SP3b'], ['SP4a'], ['SP4b'], ['SP4b', 'SP4c'], ['SP5a'], ['SP5b'], ['SP3c', 'SP5c'],
     ]);
+    expect([SP_DEPS.SP6a, SP_DEPS.SP6b, SP_DEPS.SP7]).toEqual([['SP3c', 'SP5c'], ['SP6a'], ['SP6b', 'SP5a']]);
   });
 
   test('duplicates and unknown ids are rejected', () => {
@@ -58,7 +59,7 @@ describe('started sub-projects', () => {
   });
 
   test('parallel SPs: SP8c before SP8b is fine once SP7 and SP5a have started', () => {
-    const path = ['SP0', 'SP1', 'SP2a', 'SP2b', 'SP3a', 'SP3b', 'SP4a', 'SP4b', 'SP4c', 'SP3c', 'SP8a', 'SP5a', 'SP5b', 'SP5c', 'SP6', 'SP7', 'SP8c', 'SP8b'];
+    const path = ['SP0', 'SP1', 'SP2a', 'SP2b', 'SP3a', 'SP3b', 'SP4a', 'SP4b', 'SP4c', 'SP3c', 'SP8a', 'SP5a', 'SP5b', 'SP5c', 'SP6a', 'SP6b', 'SP7', 'SP8c', 'SP8b'];
     expect(validateStarted(path)).toEqual([]);
   });
 
@@ -76,10 +77,17 @@ describe('started sub-projects', () => {
     expect(validateStarted([...upTo3a, 'SP3b', 'SP4a', 'SP3c', 'SP3e'])).toEqual(['SP3e started before its dependency SP3d']);
   });
 
-  test('SP6 needs SP3c (surface rules) and SP5c, not SP3d', () => {
+  test('SP6a needs SP3c and SP5c, not SP3d', () => {
     const upTo3b = ['SP0', 'SP1', 'SP2a', 'SP2b', 'SP3a', 'SP3b'];
     const sp5 = ['SP5a', 'SP5b', 'SP5c'];
-    expect(validateStarted([...upTo3b, 'SP4a', 'SP4b', 'SP4c', ...sp5, 'SP6'])).toEqual(['SP6 started before its dependency SP3c']);
-    expect(validateStarted([...upTo3b, 'SP4a', 'SP4b', 'SP4c', ...sp5, 'SP3c', 'SP6'])).toEqual([]);
+    expect(validateStarted([...upTo3b, 'SP4a', 'SP4b', 'SP4c', ...sp5, 'SP6a'])).toEqual(['SP6a started before its dependency SP3c']);
+    expect(validateStarted([...upTo3b, 'SP4a', 'SP4b', 'SP4c', ...sp5, 'SP3c', 'SP6a'])).toEqual([]);
+  });
+
+  test('SP6b needs SP6a, and SP7 needs SP6b', () => {
+    const upTo5c = ['SP0', 'SP1', 'SP2a', 'SP2b', 'SP3a', 'SP3b', 'SP3c', 'SP3d', 'SP3e', 'SP4a', 'SP4b', 'SP4c', 'SP5a', 'SP5b', 'SP5c'];
+    expect(validateStarted([...upTo5c, 'SP6b'])).toEqual(['SP6b started before its dependency SP6a']);
+    expect(validateStarted([...upTo5c, 'SP6a', 'SP7'])).toEqual(['SP7 started before its dependency SP6b']);
+    expect(validateStarted([...upTo5c, 'SP6a', 'SP6b', 'SP7'])).toEqual([]);
   });
 });

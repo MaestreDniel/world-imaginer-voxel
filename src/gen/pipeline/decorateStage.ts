@@ -27,7 +27,7 @@ import { writeFinalHeightmaps } from './finalHeightmaps';
 const WRITE_HEIGHTMAPS = writeFinalHeightmaps;
 const EMITS = EMIT;
 
-/** Master §3.12's steps, in order; each places nothing until its features arrive (SP6 onwards). */
+/** Master §3.12's steps, in order; each places nothing until its features arrive (SP8b onwards). */
 const STEPS: readonly string[] = [
   'raw_generation', 'lakes', 'local_modifications', 'underground_structures', 'surface_structures',
   'underground_ores', 'underground_decoration', 'fluid_springs', 'vegetal_decoration', 'top_layer_modification',

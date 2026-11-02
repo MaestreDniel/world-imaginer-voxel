@@ -7,7 +7,7 @@
  * - Water v0: `top` is the y of the highest solid voxel per position (−64 when there is none above bedrock); air with
  *   `top − 12 < y ≤ surfaceWaterLevel` (nearest quart corner, as SP3a) becomes a water source, recorded in a
  *   column-wide water scratch. Air under an overhang near the water line fills; deeper enclosed air stays dry
- *   (aquifers, SP6). A position whose own level is −∞ stays dry beside a neighbour's water (the v0 "water wall").
+ *   (aquifers, SP7). A position whose own level is −∞ stays dry beside a neighbour's water (the v0 "water wall").
  *   With `islands.enabled` (SP3e spec §3.5) the fill's base skips island runs (bottom voxel ≥ ISLAND_RUN_MIN_BOTTOM,
  *   181), so the sea under a floating island fills as if the island were not there; `top` is unchanged.
  * - The per-block surface biome (`readBiome`), computed once into a 256-entry buffer for the surface pass and aux A.
@@ -18,7 +18,7 @@
  *   true `stop()` in any phase the stage returns false at once, without aux.
  * - Aux A: `worldSurfaceWG`, `oceanFloorWG` (SP3a §3.4 predicates) and `surfaceBiome` (the step's biome buffer).
  * - Aux B: `surfaceBiomeQ[qz·4 + qx]` is the 2D biome of lattice point (qx, qz), qx, qz ∈ 0 … 3, before the zoom;
- *   `caveBiomeQ[(qy·4 + qz)·4 + qx]` stays 0 (none) until SP6.
+ *   `caveBiomeQ[(qy·4 + qz)·4 + qx]` stays 0 (none) until SP6b.
  * The stage uses the SurfaceContext of its GenContext (`surfaceContextOf`, memoised), which holds the DensityContext.
  * Follows the gen determinism rules.
  * `terrainDensityDebug` is a test hook (SP3b §2.3, DT2): the same density phase, recording the bulk-evaluated values.

@@ -733,3 +733,5 @@ Ids are recon-obligations' (`.superpowers/sp6/recon-obligations.md`). "6a" = thi
 ## Threshold log
 
 (One line per commit that changes `test/thresholds.lock.json`, and per gate decision that changes no lock.)
+
+- 2026-11-03 — SP6a Task 1: startedSps gains 'SP6a'; S1.grassSky0 activeFrom 'SP6' → 'SP6a' (spec §12.1; the accept report prints it as LOOSEN only because spIndex('SP6') is −1 once 'SP6' leaves SP_DEPS, test/harness/lock.ts:72-75; it is not one: the part becomes gated, measured 0 on fast).

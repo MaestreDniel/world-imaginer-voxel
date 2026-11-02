@@ -16,17 +16,18 @@ describe('profiles', () => {
   test('ids, readiness and overlays', () => {
     expect(Object.keys(PROFILES)).toEqual([...PROFILE_IDS]);
     expect(PROFILE_IDS.map((id) => [id, PROFILES[id].readyFrom])).toEqual([
-      ['default', 'SP1'], ['large_biomes', 'SP2a'], ['archipelago', 'SP3e'], ['amplified', 'SP3e'], ['floating_islands', 'SP3e'], ['cave_heavy', 'SP6'],
+      ['default', 'SP1'], ['large_biomes', 'SP2a'], ['archipelago', 'SP3e'], ['amplified', 'SP3e'], ['floating_islands', 'SP3e'], ['cave_heavy', 'SP6b'],
     ]);
     expect(resolveProfile('large_biomes').climate.scaleMul).toBe(4);
     expect(resolveProfile('archipelago').climate.C.wavelength).toBe(840);
     expect(resolveProfile('default')).toBe(DEFAULTS);
   });
   test('readiness follows CURRENT_SP: from SP3e every profile but cave_heavy is ready (SP3e spec §11; SP4a spec §12)', () => {
-    expect(CURRENT_SP).toBe('SP5c');
+    expect(CURRENT_SP).toBe('SP6a');
     expect(PROFILE_IDS.filter((id) => isProfileReady(id))).toEqual(['default', 'large_biomes', 'archipelago', 'amplified', 'floating_islands']);
     expect(isProfileReady('cave_heavy')).toBe(false);
-    expect(isProfileReady('cave_heavy', 'SP6')).toBe(true);
+    expect(isProfileReady('cave_heavy', 'SP6b')).toBe(true);
+    expect(isProfileReady('cave_heavy', 'SP6a')).toBe(false);
     expect(isProfileReady('archipelago', 'SP3e')).toBe(true);
     expect(isProfileReady('archipelago', 'SP3d')).toBe(false);
     expect(isProfileReady('archipelago', 'SP3c')).toBe(false);

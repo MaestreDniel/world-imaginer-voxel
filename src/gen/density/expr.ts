@@ -22,7 +22,7 @@ const KEY_RE = TREE_KEY_RE;
 
 export interface ConstExpr { readonly op: 'const'; readonly v: number }
 export interface YExpr { readonly op: 'y' }
-/** A continuous ColumnSample field (never a level field: `col` is limited to finite fields until SP6). */
+/** A continuous ColumnSample field (never a level field: `col` is limited to finite fields until SP6a). */
 export interface ColExpr { readonly op: 'col'; readonly field: SampleField }
 /** z2(x, z) of the density noise `id` (schema leaf `density.noises.<id>`, dims 2). */
 export interface Noise2Expr { readonly op: 'noise2'; readonly id: string }

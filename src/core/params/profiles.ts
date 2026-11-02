@@ -35,7 +35,7 @@ export const PROFILES: Readonly<Record<ProfileId, Profile>> = {
     overlay: { islands: { enabled: true }, density: { defs: FLOATING_DENSITY_TREE }, surface: { rules: FLOATING_SURFACE_RULES } },
     readyFrom: 'SP3e',
   },
-  cave_heavy: { overlay: {}, readyFrom: 'SP6' },
+  cave_heavy: { overlay: {}, readyFrom: 'SP6b' },
 };
 
 /** A profile is selectable once its readyFrom is at or before `current` in master §10 order. */

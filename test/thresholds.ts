@@ -70,10 +70,10 @@ export const THRESHOLDS: ThresholdTable = {
     presetNonFinite: { max: 0, activeFrom: 'SP3e' }, presetHeightmaps: { max: 0, activeFrom: 'SP3e' },
     presetNoFeatureColumn: { max: 0, activeFrom: 'SP3e' },
   },
-  // SP4a spec §9.1 (D26): `grassSky0`, the master's grass at sky 0, recorded from SP4a (`light.metric.ts`), gated by SP6.
+  // SP4a spec §9.1 (D26): `grassSky0`, the master's grass at sky 0, recorded from SP4a (`light.metric.ts`), gated by SP6a.
   S1: {
     buried: { max: 0, activeFrom: 'SP3c' }, grassNoSky: { max: 0, activeFrom: 'SP3c' }, ymod16: { min: 0.001, activeFrom: 'SP3c' },
-    grassSky0: { max: 0.001, activeFrom: 'SP6' },
+    grassSky0: { max: 0.001, activeFrom: 'SP6a' },
   },
   S2: { deepslateBelow0: { min: 0.95, activeFrom: 'SP3c' }, deepslateAbove8: { max: 0.01, activeFrom: 'SP3c' }, bedrockFloor: { min: 1, activeFrom: 'SP3c' } },
   S3: { snowAboveLine: { min: 0.9, activeFrom: 'SP3c' }, snowNoSky: { max: 0, activeFrom: 'SP3c' } },
