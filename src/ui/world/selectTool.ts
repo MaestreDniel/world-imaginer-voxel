@@ -359,7 +359,9 @@ function turnHint(keyName: (a: Action) => string): string {
  * The label while placing (§2.5, D11): "Paste W × H × D · turned 90° · n blocks change, m replaced · RMB pastes, LMB
  * cancels · Wheel turns · ↑ ↓ raise or lower", `size` the clipboard's (or the moved selection's) as copied; "turned …"
  * only once turned; "counting…" until the target is read; a refusal's text in place of the counts; "Move …" and "RMB
- * moves" for a move; " · no preview: too many faces" appended when the ghost's mesh has too many faces (D11).
+ * moves" for a move; " · no preview: too many faces" appended when the ghost's mesh has too many faces (D11). Every key
+ * name is `keyName`'s (the turn keys through `turnHint`, "↑ ↓" the default map's `raise` and `lower`), so SP10's
+ * remapping renames them (spec §1.3).
  */
 export function placingLabel(t: SelectTool, size: { w: number; h: number; d: number }, g: GhostState,
   keyName: (a: Action) => string, tooMany: boolean): string {
@@ -369,6 +371,6 @@ export function placingLabel(t: SelectTool, size: { w: number; h: number; d: num
     : g.counts === null ? 'counting…'
       : `${formatCount(g.counts.n)} blocks change, ${formatCount(g.counts.m)} replaced`;
   const label = `${move ? 'Move' : 'Paste'} ${size.w} × ${size.h} × ${size.d}${turned} · ${counts} · RMB ${move ? 'moves' : 'pastes'}, `
-    + `LMB cancels · ${turnHint(keyName)} · ↑ ↓ raise or lower`;
+    + `LMB cancels · ${turnHint(keyName)} · ${keyName('raise')} ${keyName('lower')} raise or lower`;
   return tooMany ? `${label} · no preview: too many faces` : label;
 }

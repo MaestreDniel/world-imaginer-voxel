@@ -833,4 +833,19 @@ describe('the placing label (SP5c spec §2.5, D11)', () => {
     expect(placingLabel(placing(), size, ghost(), ctrlWheel, false))
       .toBe('Paste 5 × 3 × 7 · counting… · RMB pastes, LMB cancels · Ctrl+Wheel down / Ctrl+Wheel up turn · ↑ ↓ raise or lower');
   });
+
+  test('the default map\'s raise and lower keys are named ↑ and ↓ (`bindingLabel`), so the default label is unchanged', () => {
+    expect([keyName('raise'), keyName('lower')]).toEqual(['↑', '↓']);
+    expect(placingLabel(placing(), size, ghost(), keyName, false))
+      .toBe('Paste 5 × 3 × 7 · counting… · RMB pastes, LMB cancels · Wheel turns · ↑ ↓ raise or lower');
+  });
+
+  test('with `raise` and `lower` remapped: their own names (spec §1.3, D3)', () => {
+    const raised = (a: Action): string => (a === 'raise' ? 'Page up' : keyName(a));
+    expect(placingLabel(placing(), size, ghost(), raised, false))
+      .toBe('Paste 5 × 3 × 7 · counting… · RMB pastes, LMB cancels · Wheel turns · Page up ↓ raise or lower');
+    const both = (a: Action): string => (a === 'raise' ? 'Page up' : a === 'lower' ? 'Page down' : keyName(a));
+    expect(placingLabel(placing('move', 1), size, ghost({ n: 1_000, m: 0 }), both, false))
+      .toBe('Move 5 × 3 × 7 · turned 90° · 1,000 blocks change, 0 replaced · RMB moves, LMB cancels · Wheel turns · Page up Page down raise or lower');
+  });
 });
