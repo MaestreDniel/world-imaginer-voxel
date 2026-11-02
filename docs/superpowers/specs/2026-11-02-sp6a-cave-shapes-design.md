@@ -1,0 +1,735 @@
+# SP6a — The shape of the caves (Design)
+
+Date: 2026-11-02
+Status: **Approved by the user (2026-11-02).** Point 1 answered: XL, as specified ("XL, complete"); Point 2 answered: the summit grass caps that caves add in floating_islands are accepted until SP12 ("Accept until SP12"). Drafted 2026-11-02 and revised after the technical review, the fidelity review and the builder check (`.superpowers/sp6/revise-notes.md`). Size: **XL** (about 51 tasks; larger than SP5c's L at 37 tasks). Nothing here is implemented yet. This spec turns what the user agreed in brainstorming on 2026-11-02 (`.superpowers/sp6/design-brief.md`, which quotes the user's words in Spanish) into decisions, values and tests. Items the brief marks "guess, confirmed" are treated as agreed. Every point the brief leaves to the controller, or does not mention, is a decision taken here (D1-D31, D33-D36), each with an alternative. Two choices were the user's: D32, the size (Point 1: XL), and the extension of an earlier acceptance to caves (Point 2, part of D31: accepted until SP12); the user chose both recommendations.
+Parent: master spec `2026-09-26-architecture-design.md`. The sections involved are:
+- §10's SP6 entry (:1894-1899), which this spec splits into SP6a and SP6b (agreed by the user: "Sí, partámoslo en SP6a y SP6b"), and the SP7, SP8a, SP8b, SP8c, SP9, SP10, SP11 and SP12 entries it hands work to (§14); §10's Sizes (:1764), Cut lines and Default receivers (:1766), Critical path (:1968) and Visible value (:1972);
+- §1 (modules: `gen/caves/*`, `render/materials/**`, the test harness), §2.3 (the section channels), §2.5 (`SubProjectId`, :396; the Expr ops), §3.5 (lakes), §3.6 (the default expression, :656-679, and "As built by SP3b", :681-686), §3.7 (caching, :694), §3.8 (carvers, :699-721), §3.16-§3.17 (consistency, determinism);
+- §4.4 (R2's re-baseline, :1019), §4.5 (passes and draw calls), §4.8 (the lightmap, :1122-1126), §4.15 (cave culling, :1219), §4.16 (settings), §5.1 (scopes), §5.5-§5.6 (the slice view and map layers, :1345, :1357), §5.8 (the bench route, :1388), §5.9 (keys);
+- §6.1 (the harness, :1398-1407), §6.3 (the lightmap test, :1445), §6.4 (C1-C6 :1485-1490, B5, S1 :1495, DT1/DT2 :1508-1509, R2 :1511, R3 :1512, L2 :1518), §7 (the T rows and the kill criterion, :1618-1640), §8 (risk 3, :1711-1713).
+
+Previous SP: `2026-11-01-sp5c-selection-tool-design.md` (complete). **Received** (the full list, with where each item lands, is `.superpowers/sp6/recon-obligations.md`; §17 below is the table): from master §10's SP6 entry, everything except the cave-biome items (SP6b); from SP3e §12, the cave-detached island runs (master :1897); from SP3c and SP4a, S1's "grass at sky 0" gated with caves; from SP4a, L2 re-asserted and R2 re-baselined with caves; from SP4b, "SP6 adds the cave scenario" to the bench route; from SP3a and SP3b, every new Expr op pinned before caves are built on it and the cave bounds planned before the T gate is relied on.
+
+**Text this spec replaces** (each amendment is listed in §13 and pinned): master §10's SP6 entry (by the SP6a and SP6b entries); master §3.6's default expression for the cave terms (D2, D7, D17: the five hard switches become continuous, `lakeRoof` becomes the finite wet roof, the layer noise's λy 12 becomes 16, each family is interpolated on its own); master §3.6's "`col` reads finite fields only until SP6, which adds the level fields' −∞ interval rule" (D19: no such rule is needed); master §3.8's "within 8 columns (a 17×17 set)" (D21: a window derived from the parameters' maxima, R = 11), "Voxels … under lakes … are skipped" (D7: a continuous shrink), "Carved dirt below grass becomes grass" (D6: carving runs before the surface pass, so the pass skins the carved column); master §6.4's C6 definition "max y-plane carve rate / mean" (§10.1: per lattice residue within each 16-block band, so depth variation is not read as lattice bias); master §6.3's "(0,0) ≤ 0.02 luminance" (D14); master §5.6's "cave slice at y" as a map layer (D13: delivered as the Density tab's horizontal `caves` field, its square drawn on the map; a tile layer goes to SP10); `test/bench/gates.ts:11`'s `TERRAIN_P50_MAX_MS = 4` (D24: 10, the master's P1); `test/unit/inspectCost.test.ts:156`'s "`DENSITY_COLUMN_COST_MAX` = 64 × the default tree's cost" and its comment at `src/core/constants.ts:96-100` (D24: the cap stays, pinned to the SP3d default's cost); `src/core/params/migrate.ts:10`'s `SCHEMA_VERSION = 2` (D36: 3); `src/render/lightmap.ts:39`'s "(0, 0) stays 0 for every β" (D14).
+
+References written "master §x" point to the master spec, "SP5c Dn" to that spec, and a bare "§x" or "Dn" to this document; "the brief" is `.superpowers/sp6/design-brief.md`. Code is cited at `main` 5631c45 (`GENERATOR_VERSION` 5, `src/core/constants.ts:2`; `CURRENT_SP` 'SP5c', `src/core/ids.ts:25`; 59 goldens). The recon behind the citations is `.superpowers/sp6/recon-{obligations,gen,render,ui,tests}.md`. Costs marked "estimate" are not measured; each names the measurement that replaces it (most of them in D25's prototype).
+
+## Points for the user
+
+The brief leaves every technical and UX choice to this spec (D1-D31 and D33-D36, each with its alternative; any of them can be overturned at review). Two choices were the user's: one trades scope against time, the other extends an acceptance the user gave earlier. **Answered 2026-11-02: both recommendations** (Point 1 "XL, complete"; Point 2 "Accept until SP12"); the spec is written to them.
+
+1. **SP6a's size.** The brief puts in SP6a every noise cave family, the worm and ravine carvers, their parameters on the map, the X-ray view, the light floor and night vision. Counted as plan tasks: the split's bookkeeping (1); the cave terms as data and one new density op (3); a measuring prototype before anything else is built on them (D25, 1); the parameters (2); continuity, the caps, the wet roof and the island cap (2); the migration of saved worlds' trees (D36, 1); the carvers (4); the cave tag in the store and the probes (5); the harness and the cave metrics C1-C9 (6); the bench and the kill criterion (2); the X-ray (6); the light floor and night vision (2); the slice tint, the Caves tab and the finder (3); a second measuring checkpoint after the carvers and the X-ray pass (D25, 1); two Chrome bench legs (2); goldens, tuning, CI shards, master pins, smoke and screenshots (8); the exit and the checks (2). About 51 tasks: **XL**, beyond the master's L (2-3 weeks, master :1764). **Recommendation:** build it as specified and say XL in master §10's SP6a header (§13). Cave culling already moves to SP6b (D27), which is what keeps SP6a from growing further. **Alternative:** about 46 tasks, by moving three supports to SP10: the slice viewer's `caves` field (D13; the X-ray remains the way to see the caves, which is the tool the user chose), the Caves tab with its finder (D12, D16; the X-ray's keys and the review links remain), and recording the spec's own cave metrics (C7-C9) without gating them (D26). This alternative also changes two items the brief records as confirmed: the master's map cave slice and cave-type tint stay "as smaller supports beside" the X-ray (the brief's X-ray section), and the abrupt cuts become "automatic metrics" that the controller checks before the user's check (the brief's anti-goals and success sections). With it, the user's check alone judges cuts, rhythm and entrances. No alternative reaches L without moving something else the brief puts in SP6a (the X-ray, the carvers or the light work), which would also need the user's agreement.
+
+   **What the choice changes:** D12, D13, D16, D26, §7.3-§7.4, §10.1, the exit table (§16) and the header's size (§13).
+
+2. **Grass caps on cave-hollowed summits in floating_islands (D31).** On 2026-10-20 the user accepted, for the draft, that the floating_islands surface rules give grass tops to the default ground's summits above y 181 (master :1961: 61 % of them, 2,054 positions on seed 42); the exact fix, a `runBottomAbove` rule condition, was left to SP12. Caves can add new cases: a cave under a summit makes the rule's `stoneDepth{ceiling ≤ 100}` true where it was not. SP6a records the share of positions where the island branch fires on ground (`islandBranchOnGround`) before and after caves (§10.4). **Recommendation:** extend the 2026-10-20 acceptance to these new cases for the draft; SP12 fixes both with `runBottomAbove`; the before-and-after measurement is shown to the user at the exit. **Alternative:** build `runBottomAbove` in SP6a (about 2 more tasks); it changes the `sp3c.surface.ops` golden and floating_islands' summits now, which SP12 owns, and SP12's summit-cap item shrinks to the cluster-mask gate.
+
+   **What the choice changes:** D31, §13 item 2 (the SP3e line's wording), §14 (SP12), §17 (E13) and the size (+2 tasks).
+
+## Goal
+
+From the surface the player finds, now and then, a hole or a ravine that leads down. Underground there are several kinds of cave, each with its own look: wide interconnected "cheese" caverns with stone pillars, long winding spaghetti tunnels (3D and a flatter 2D layer), thin noodle tubes, worm tunnels with flat floors, ravines, and occasionally a very large interior space. Where caves meet a chunk border, a depth limit or another kind of cave, no flat wall or clean cut shows; neighbouring regions mix the kinds differently so no rhythm repeats. Caves stay below lakes, rivers and seas until SP7 brings aquifers. Worlds saved before SP6a open with the caves too (D36). Every size, frequency, depth range and rarity is a parameter on the map's panel, in a new Caves section, regenerating the world around the player as SP4c does. X shows the X-ray: rock, dirt and water vanish and the caves' hollows remain, translucent and coloured by cave type, within a depth band moved with PageUp and PageDown, the surface a faint film. Light level 0 is no longer pure black but a faint floor; L (or a Settings checkbox) turns on night vision. Underneath: the cave families are data in the default density tree, one `interpolated` slot per family; carvers are pure functions of their source chunk, cached, carved in T before water and surface rules; T writes a cave-type tag per carved voxel into a new store channel, which the X-ray, the slice tint and the metrics read. Measured by C1-C6 (master), new C7 (cuts), C8 (variety) and C9 (entrances and the surface), L2, S1, DT1, DT2, P1 (T ≤ 10 ms p50), the DAG-closure kill criterion and two Chrome bench legs. The generated world changes: `GENERATOR_VERSION` 5 → 6 at the first push that changes generated output and 6 → 7 at the second, and the goldens are re-recorded (D28).
+
+## Non-goals
+
+- **Cave biomes** (lush, dripstone, the abyss), their floor and ceiling rules and blocks, the X-ray coloured by cave biome, the `cave_heavy` preset: SP6b (the brief's split).
+- **Cave culling** and R3: SP6b (D27).
+- **Water, aquifers and lava in caves:** SP7 (the user: "Me parece bien que lleguen en SP7 y SP8"). SP6a's caves are dry or hold only water v0's lake, river and sea fill, which D7 keeps away from them.
+- **Ores, cave decoration, the abyss crystals:** SP8b. **Cave sounds:** SP8c.
+- **Structures in caves:** SP9; SP6a only keeps the hooks that let SP9 merge them without cuts (§14).
+- **Styling** of the X-ray's colours, the strip and the Caves tab: colours are named only so the kinds can be told apart (the user leaves styling until every SP is done: "el diseño/estilo en el frontend lo abordaré mejor una vez acabado todo", quoted in `2026-11-01-sp5c-selection-tool-design.md:31`).
+- **A map tile layer of caves and the carver-tunnel layer:** SP10 (D13).
+
+## What was agreed earlier, and what is only proposed
+
+From the brief, which records the user's words and each playback ("Lo veo bien hasta ahora", "Está bien así, continúa").
+1. **The split** (agreed): SP6a, the shape of the caves; SP6b, cave biomes. Everything in master §10's SP6 entry lands on one of them or is handed on with a reason (§17).
+2. **Entrances from the surface** (the user): "Desde la superficie encontraría alguna entrada hacia una cueva".
+3. **Several kinds, so it feels real** (the user): "habría al menos cuevas tipo túneles o espagueti, y cuevas agujereadas interconectadas tipo queso con mayor amplitud que las espagueti."
+4. **Occasional large interiors; sizes as parameters** (the user): "Ocasionalmente, habría espacios extensos en el interior, jugando con los posibles tamaños de cueva (también estarían como parámetros para retocar en la generación)."
+5. **Ravines and worms** (guess, confirmed): as in the master's SP6.
+6. **Minecraft 1.18+ as the reference** for the kinds and the interiors, not for its abrupt cuts (the user: "a su vez suelen tener cortes abruptos debido a las estructuras").
+7. **Anti-goals** (the user's words; their measurable form is a guess, confirmed): "Patrones excesivamente predecibles"; "encontrar muchos cortes abruptos en la generación" — a carver truncated at a chunk border or at its generation radius, a ravine cut short, a straight wall where two methods meet; variety by regional noise so neighbouring caves differ; occasional entrances, the surface staying terrain; no stutter walking through caves or generating them while moving. SP6 must not make SP9's fusion of in-cave structures harder.
+8. **The X-ray** (the user chose mockup A: "La A me encaja"; the details are a guess, confirmed): a key toggles it while flying; rock, dirt and water vanish and the hollow shape of each cave remains, semi-transparent, coloured by cave type (by cave biome as an option in SP6b); a depth range; the surface as a faint film; with the map beside (SP4c's side by side), a cave parameter changed regenerates the world around; fluid with everything loaded, or a measured radius. The cave-type tint and the map cave slice are smaller supports. Three readings are this spec's, not the user's: the key works walking as well as flying (D10; the brief says "while flying"); the user opens the map beside, X does not open it (D10, D12; the brief's "the map opens beside" can be read either way); and the map cave slice is delivered as the Density tab's horizontal cave-type field with its square drawn on the map, not as a map tile layer (D13; the tile layer goes to SP10).
+9. **Light** (the user): "Necesitaremos una luz mínima para que la pantalla no se quede completamente negra" and "una opción para activar 'visión nocturna' (como el efecto de poción de Minecraft)". The floor applies to the whole world and is low enough to keep day and night apart; night vision is a key and a Settings option; both change only how light is shown (guess, confirmed).
+10. **Success** (the user's check): "Bajar por una o varias entradas y recorrer los distintos tipos de cueva". Before it, the controller checks the metrics, the absence of stutter, the screenshots, and gives a convenient start (guess, confirmed; how is the controller's call: D16). The X-ray with a live edit, night vision and the light floor are checked by the controller (§16's production check) and offered to the user as optional steps (§10.11), not added to the user's check.
+11. **The generated world changes**; `GENERATOR_VERSION` goes up and the goldens are re-recorded (when and how: the controller's call, D28).
+12. **Ores, aquifers, springs and lava lakes come later** (the user called them essential: "sería imprescindible la presencia de minerales y de vez en cuando tener acuíferos y fuentes o lagos de lava"; and agreed: "Me parece bien que lleguen en SP7 y SP8"). SP6a's caves are empty of them; aquifers and lava are SP7's, ores and the master's `spring` and `lavaLake` features SP8b's (master :141, :845).
+
+Everything below that is not one of these items is this spec's proposal.
+
+## Decisions taken by this spec (for the user's review)
+
+### Decisions with a visible effect
+
+- **D1 The cave kinds** (§1.2, §2). *You notice:* eight kinds underground. **Cheese**: large rounded caverns joined into networks, with thin stone pillars standing in them, never within about 12 blocks of the surface. **Spaghetti 3D**: long tunnels a few blocks wide winding in every direction. **Spaghetti 2D**: flatter, wider tunnels that follow a wavy layer around y −64 … 64. **Noodles**: thin tubes 1-3 blocks wide below y 64. **Entrances**: tunnels that reach the surface and open there. **Worms**: carved tunnels with flat floors, tapered ends and an occasional fork or small room at the start. **Ravines**: tall narrow cuts with rough walls, often open to the sky. **Underground worms**: like worms, starting below y 24 and narrowing to nothing between y 24 and y 40, so none reaches above y 40 and none ends on a flat ceiling (the cut line, §15). The master's formulas are kept except where D2 changes them. Alternative: the master's formulas verbatim (§1.3 lists what that keeps).
+- **D2 No abrupt cuts** (§1.3, §1.4). *You notice:* no tunnel ends in a flat wall where a family's depth limit, rarity band or on/off switch lies; noodles close smoothly; caves fade out over 8 blocks below the surface instead of ending on a plane; at a depth limit, under water and under the floating islands' cap, caves narrow over about 16 blocks before they close. The rule: every cave term is continuous in x, y and z, a hard switch is allowed only where it cannot change the voxel's sign, and every closing cap has a gentle part (the family's value rises by about its own typical air depth over 16 blocks, so the cave shrinks gradually) before a steep part that guarantees closure. Continuity alone is not enough: a cap 20 times steeper than the family closes it within a block of a plane. The master's formulas break the rule in five places (§1.3), each replaced. Alternative: keep the master's switches and only measure the walls they leave (C7).
+- **D3 Occasional large interiors; neighbouring caves differ** (§1.2). *You notice:* in some regions, about one in five 512-block areas, cheese caverns grow several times larger (the user's "espacios extensos"); in others, noodles and spaghetti dominate. Two regional 2D noises (λ 1536 and 1024) shift the cheese threshold and the noodle/spaghetti balance. Alternative: no regional noise (caverns of one size everywhere, rhythm judged by C8 only).
+- **D4 Entrances: occasional, the surface stays terrain** (§1.2, §1.4). *You notice:* entrance tunnels and ravines open to the sky now and then (this spec's proposal, shown to the user with the measurements at tuning: within about 192 blocks of most places, at most about 150 openings per km², at most 2 % of land positions holed); deep caves never break the surface. Alternative: the master's switch at 8 blocks (a plane where every deep family stops).
+- **D5 Worms and ravines** (§2). *You notice:* worms of 85-112 steps, about 2-12 blocks across (estimate from §2.2's radii), flat-floored, ending round; one in four forks at its middle; one in four starts with a small room (D35); underground worms the same below y 40; ravines 84-112 blocks long, up to about 15 wide and 45 tall, rough-walled, narrowing at both ends. Under water and under the islands' cap carvers narrow to nothing instead of stopping on a plane. No carver ever stops at a chunk border or at the edge of its generation window. Alternative: the master's 17 × 17 window, which truncates the longest worms (§2.1).
+- **D6 Grass and cave floors** (§3.1). *You notice:* a ravine floor open to the sky gets its biome's top (grass, sand, snow), cave floors and walls are stone or deepslate (cave-biome floors arrive in SP6b), and grass never grows under a cave ceiling. Carving runs in T before water v0 and the surface pass, so the pass skins the carved column. Alternative: carve after the surface pass with the master's "carved dirt below grass becomes grass" rule.
+- **D7 Caves and water until SP7** (§1.4, §2.4). *You notice:* under a lake, river or sea, caves stay at least about 16 blocks below the bed, measured from the terrain's own surface there (not from the column's mean height, which can lie 9 to more than 30 blocks above a coastal bed), and narrow over the 16 blocks below that (no water wall inside a cave, no flooded shaft next to a dry cave). One continuous "wet roof" replaces the master's `lakeRoof` and covers rivers and seas too, and it reaches full strength at every position water v0 fills. SP7's aquifers decide whether caves may open under water. Alternative: the master's lake roof only, with vertical water walls in coastal caves and under rivers until SP7.
+- **D8 Floating islands** (§1.4, §2.4). *You notice:* in the floating_islands preset, caves narrow from y 156, are closed by y 176 and never reach y 180, so no hollow mountain top is ever taken for an island (SP3e's hand-over). One number leaf, `caves.limits.capTop` (default 344, above the world, so no cap; 180 in floating_islands' overlay), drives both the noise caves' cap and the carvers' shrink, so the two can never disagree; `islands.enabled` is a boolean that no tree can read (`src/gen/density/source.ts:9-11` accepts number and int leaves only) and it "switches no tree" (`src/core/params/schema.ts:139`). A panel lint warns when `islands.enabled` is on with `capTop` above 180 ("caves may detach runs above y 180; the island rules then treat them as islands"). Alternative: switch the cap with `islands.enabled` (needs a new `col` field carrying the flag); or a `deriveTree` replacement in floating_islands only, with the carvers reading `islands.enabled` (the two switches then disagree in default + islands on, or in floating_islands + islands off).
+- **D9 Cave parameters on the map** (§4). *You notice:* a Caves section in the map's Parameters tab, after Islands, with sub-sections Cheese, Spaghetti 3D, Spaghetti 2D, Noodles, Pillars, Entrances, Worms, Underground worms, Ravines and Limits; in each, the sizes first (this spec's order; the user asked for sizes as parameters), then frequency, depth range (lowest and highest y) and rarity, each with a Terrain badge. A change regenerates the world around you as any terrain change does (SP4c): the 3D follows on release, the Density tab's cave slice during the drag (D13). In a saved world they need Modify terrain, as every terrain control. Alternative: the parameters under Density (two levels deeper).
+- **D10 The X-ray** (§5). *You notice:* X turns it on and off, walking or flying (walking is this spec's addition; the brief says "while flying"). Rock, dirt, water and the sky vanish over a dark background; each cave's walls show as translucent coloured surfaces, so caves behind caves show through (overlaps read brighter); colours by kind (cheese amber, spaghetti 3D cyan, spaghetti 2D blue, noodle magenta, entrance green, worm orange, ravine red, underground worm yellow, other density air grey); the surface as a faint grey film, so entrances read as coloured holes in it; the film stays visible whatever the depth band, so entrances can always be found; it marks up faces open to the sky, so an overhang or (from SP8b) a tree canopy leaves a gap in it; caves fade with distance. X does not open the map; the user opens it beside (M) and changes a cave parameter there. It covers the whole render distance unless L14 at RD 12 forces a radius (D29); at RD 16 (`RD_MAX`, `src/engine/renderDistance.ts:10`) it is recorded and a radius may bind. A strip at the top reads "X-ray · y −64 … 319 · by cave type", with the colour legend. Alternative: a cut plane in 3D (the brief's mockup B) or a shader mode over the terrain mesh (no colour by kind); for the film, the band hiding it too, or a film from aux A's `WORLD_SURFACE` heightmap (no gaps, but the mesh job would need aux A).
+- **D11 The X-ray's depth band** (§7.1). *You notice:* PageDown and PageUp move a 32-block band down and up by 8 blocks; Home shows every depth again; the Caves tab's two sliders set the band exactly. A first press of X names these keys in a notice. Alternative: a band that follows the camera (eye y ± h), which cannot show a band below you while you stay put.
+- **D12 The Caves tab** (§7.3). *You notice:* in the world's map, a Caves tab after Presets: the X-ray checkbox (mirrors X), the band's sliders, "All depths", the legend, "Cave slice" (opens the Density tab's horizontal cave slice at the band's middle, centred on you), "Cave parameters" (opens Parameters › Caves), and "Find" with one button per kind, "Nearest <kind>", which moves you into that kind's nearest cave within 512 blocks, or says "No <kind> found within 512 blocks" or "No <kind> found in 2 s" (the search looks at the loaded world first, finds carver kinds from their paths without any terrain, and gives the noise kinds a 2 s budget; a second press or closing the tab cancels it; the buttons are on the cut line, §15). Alternative: the X-ray controls in the World tab and no finder.
+- **D13 The cave slice and the cave-type tint** (§7.4). *You notice:* the Density tab's slices gain a field "Cave type", on both planes: carved voxels coloured by kind (the X-ray's colours), other solid pale grey, open air the sky colour. A horizontal one is the master's "cave slice at y" (in a changed form: a slice field rather than a map layer), its square drawn on the map; it updates during a slider drag while a slice fits its budget (300 ms for 128 × 128 samples, §10.5), and on release otherwise. The Cross-section's Voxels mode tints cave air the same way. Alternative: a map tile layer with its own y control (moved to SP10, with the carver-tunnel layer).
+- **D14 The light floor** (§6.1). *You notice:* in a cave without torches, at night under cover, stone is a dim grey instead of black (at the default brightness, a stone face reads about sRGB 18 of 255); it is a fifth to a quarter of the midnight surface's light, so night stays night. The floor is the same at every time and place. Alternative: a floor that only clamps (levels 0 and 1 then look alike).
+- **D15 Night vision** (§6.2). *You notice:* L, or "Night vision (L)" in Settings › Graphics after Brightness, brightens everything around as Minecraft's potion does: every light level shows at full brightness in its own tint; the change eases over 0.3 s; the notice "Night vision on" or "off" (1.5 s); it is remembered in this browser like Brightness. The fog follows it, so far cave walls fade to the sky's colour. Alternative: a session toggle that is never saved, or a gentler curve that keeps some gradient.
+- **D16 Finding each kind for the review** (§10.10). *You notice:* before the user's check, the controller hands over one link per kind (cheese, pillars, spaghetti 3D, spaghetti 2D, noodle, entrance from the surface, worm, ravine, a large interior), each opening the default world at seed 42 standing in that cave, in flight; any can be saved as a place in a saved world. The Caves tab's finder (D12) does the same in any world. Alternative: the `cave_heavy` preset (SP6b's) or saved places, which cannot be shipped (they live in this browser's IndexedDB).
+
+### Technical decisions (no visible effect)
+
+- **D17 One `interpolated` slot per cave family** (§1.1). Each family (entrances, cheese, spaghetti 3D, spaghetti 2D, pillars, and the noodle's four noises) is its own `tap(name, interpolated(…))`; the root combines them per voxel. It gives sharper intersections (Minecraft's form), makes the cave-type tag exact and cheap (a choice among values already computed, read through a compiled tap reader, §3.2), and lets the inspector mute one family at a time (master :678). Cost estimate: about 9 trilerps more per voxel in straddling cells, +0.3-0.6 ms per column by the first estimate, up to about 3-4.5 ms by the technical review's count (§1.6); D25 measures it. Alternative: the master's single `interpolated` around the whole cave value (cheaper per voxel, but the tag must then be recomputed per family in a separate job, approximately).
+- **D18 One new Expr op, `noiseScaled{id, s}`** (§1.5): a density noise sampled at `(x/s, y/s, z/s)`, for the spaghetti rarity scales. Every other term is written with existing ops (`cube(x)` = `mul(square(x), x)`, `yGrad` = `slide(const 1, knots)`, toggles = `rangeChoice`). A new op rather than a field on `noise`, so `exprHash` of existing trees and the `sp3b.*` goldens do not move. Alternative: separate noise leaves per scale (no new op; about 48 more panel leaves, and the scales are no longer the same noise stretched).
+- **D19 No level-field −∞ rule** (§1.4). The lake roof reads the finite `lakeMask` and `offset` (and the wet roof adds `riverStrength`); `col` keeps reading finite fields only (`src/gen/column/columnStage.ts:37-42`). SP3b's NaN-safe intervals (delivered by SP3d's poison, `src/gen/density/nodes.ts:9-15`) stay as they are. Alternative: the master's `rangeChoice(y − col.lakeFloor, …)` with a −∞ interval rule and its tests.
+- **D20 The cave tag is a per-voxel byte channel in the store, written by T** (§3.2-§3.3). One source for the X-ray, the slice tint, the finder and the metrics (the master's "debug cave-type tag channel", made live). Low 4 bits: the kind; high 4 bits reserved (0). A section with no carved voxel is uniform 0 and costs no slot. A tree without the family taps (a user-edited tree) still gets a defined tag (§3.2). Estimate: +31-47 MB of shared memory at RD 12 (SP5c measured 53.6 MB), plus the column table's growth from 160 to 208 ints per record (2.6 → 3.4 MB); D25 measures it. Alternative: one byte per density cell in aux B's free 2,544 bytes (`src/world/store/aux.ts:6`), approximate (a noodle or a carver shares its cell's colour), at no memory cost.
+- **D21 Carvers: pure, cached, never truncated** (§2). A path is a pure function of (seed, kind, source chunk, the carver leaves), built with detMath and the seeded `Xoshiro128`, cached per worker in an LRU of 1024 paths; the voxel test runs in world coordinates in a fixed operation order, so two columns compute the same doubles for the same voxel. The source window's radius is derived from the leaves' static maxima: R = 11 chunks (23 × 23 = 529 sources), so no carved voxel can lie outside it. Alternative: the master's 17 × 17 window with the length and radius capped to fit it (worms up to about 96 steps).
+- **D22 Probes see the carvers; DT2 checks the tag** (§3.4). `solidAt(x, y, z)` = the density probe > 0 and not carved; `caveTagAt(x, y, z)` = the tag rule of §3.2 at one voxel. DT2's `probeBulk` compares `solidAt` with the stage, and a new part compares `caveTagAt` with the stored tag. The surface probe's column rebuild carves too. Alternative: the probe stays density-only and DT2 masks carved voxels (a weaker check).
+- **D23 The X-ray is a separate mesh pass, always built** (§5). The mesh job emits a fourth pass (`MESH_PASS_XRAY`) from the padded copy and the tag; both renderers draw it with an additive material. While the X-ray is off its objects are drawn collapsed by a uniform, and while it is on the normal passes are (the ghost, drawn with the terrain shader under `GHOST`, is exempt), so rows keep uploading under the upload gate and a toggle writes uniforms only. Alternative: build the X-ray rows on demand (no cost for a player who never presses X, a 1-3 s first toggle through the edit-remesh ring); or hide by visibility (one catch-up upload of every pending row at each toggle).
+- **D24 T's cost and gates** (§1.6, §10.5). Levers built in from the start: single-stack noises where isotropy does not matter, a sky gate on the deep families, `detail` skipped where it cannot change the sign, noodle noises evaluated only near their band (written into the tree, §1.1). The first lever applied on a miss keeps the output (a family that cannot be the minimum in a cell is not interpolated there); the ones after it change the output and must land before the golden record. `TERRAIN_P50_MAX_MS` 4 → 10 (the master's P1) with a new `TERRAIN_P99_MAX_MS` = 20, for `terrain.real` and `terrain.islands`. `DENSITY_COLUMN_COST_MAX` stays 954,106,688 (about 35 × the new default's cost instead of 64 ×); `test/unit/inspectCost.test.ts:156` then pins it as 64 × the SP3d default's cost (14,907,917), and the constant's comment (`src/core/constants.ts:96-100`) says so. The kill criterion is measured against a hand-inlined comparator in `test/bench/`. Alternative: recompute the cost cap as 64 × the new default (a looser security bound).
+- **D25 A measuring prototype before the rest is built on the caves, and a second checkpoint after the carvers and the X-ray** (§10.5). The plan's first generator tasks put the cave terms with their caps in the default tree (D17, D18) and measure `terrain.real` (p50, p99, the voxel phase's share), amplified columns' p99, the shared memory of the tag (D20, by a stub that writes it), the Chrome fill with 4 workers, the corner count, `slice.vertical128`, `slice.caves128` (with the reference's corner memo, §7.4) and each cap's closure distance (§1.4). The rule: if `terrain.real` p50 > 7 ms, or `mediumFill4wMs` > 5,600 ms (the gate is 6,000; SP5c measured 4,921), the levers of §1.6 are applied in order, each measured, before the carvers and the X-ray are built; a slice over 300 ms makes the slice update on release instead of during a drag; a miss after the levers goes to the user with the measurements. The second checkpoint, after the carvers, the tag and the X-ray pass exist, re-measures the fill, `mesh.section` p99, the path cache's memory and each pass's staging reservation (resized in the X-ray commit) and counts region buffer growth events. SP5c D31's pattern. Alternative: no prototype; misses found at the exit.
+- **D26 The anti-goals as metrics, under three new ids** (§10.1-§10.2). C7 (abrupt cuts), C8 (rhythm and variety), C9 (entrances and the surface), each with master §6.4 rows by amendment, in a new file `test/metrics/caves.metric.ts` with its own shards. A part is gated from its commit only when it holds by construction (`C7.carverReference`, `C7.reachOverflow`, `C7.endTaper`, `C7.islandCapAir`); every other part, the master's C1-C6 included, is written to `.out` at its commit and gated at the tuning task, at its bound (the master's for C1-C6; this spec's proposal for the rest) or at a bound the user approves with the measurements. Rows are enforced as soon as their `activeFrom` is started (`test/harness/metric.ts:43`) and 'SP6a' is started in the first commit, so a row added before tuning would turn the metric commit red on untuned defaults. Alternative: parts under C2, C4 and C6 (no new ids, but "cuts" and "rhythm" hidden under unrelated rows); or gate every part from its commit and tune inside the metric commit.
+- **D27 Cave culling goes to SP6b** with R3, the raycast visibility reference and the meta-bits decision (master :349). It is invisible, SP5c's G1 cells leave large headroom (frame p95 4.17 ms, `drawCallsMax` 16 of 100, `docs/superpowers/specs/assets/sp5c/bench-iris-chrome.json`), and SP6a is already XL; SP6b must keep the X-ray's pass out of it. Alternative: SP6a (recon-obligations E11's recommendation), adding about 4 tasks.
+- **D28 `GENERATOR_VERSION` and goldens: one bump per push that changes generated output, two such pushes** (§12.3). CI compares goldens against the push's `before` and fails a change without `headVersion > baseVersion` (`.github/workflows/ci.yml:69`, `test/harness/governance.ts:46-52`), so the version is a counter of output-changing pushes. The plan makes two: **push A** after D25's prototype (the cave families, caps, wet roof, island cap and the tag channel; 5 → 6), so CI's shards run the heavier T early (§11); **push B** after the carvers, the metrics and the tuning (6 → 7). Within a push, each generator commit records from the push's base (`git checkout <base> -- test/goldens.json`, then `npm run test:goldens`), so every commit is green and the push shows one bump. Work that changes no generated output (the X-ray, the light, the UI, the Chrome legs) is ordered between and after the two pushes and pushed at will. Target: 7 at the exit; 8 if the user's check asks for a retune. Alternative: one output-changing push (6 at the exit), with the prototype and every generator commit held unpushed for weeks and no CI on them (the SP3c precedent: one record on a branch, `2026-10-07-sp3c-surface-rules-palette-design.md:386`, `:621`).
+- **D29 Chrome routes re-measured into `assets/sp6a/`; legs L13 and L14** (§10.6). Caves change every existing G1 cell (more quads, more T), so every route is re-measured, as SP5c D30 did. L13 moves the camera through caves at walking speed along a route found when the leg starts (no physics, so runs are comparable and a retune does not break a stored route); L14 runs the X-ray at RD 12 with a band change and a live parameter change, and records RD 16. Alternative: only the new legs; the old cells stay read from `assets/sp5c/`; for L13, the walking player under scripted input (frames vary with collisions) or a route written into the bench's code (breaks at every retune).
+- **D30 The split's bookkeeping; SP7 depends on SP6b** (§12.1, §13). `'SP6'` becomes `'SP6a' | 'SP6b'` everywhere it is an id; `SP_DEPS`: SP6a ← SP3c, SP5c; SP6b ← SP6a; SP7 ← SP6b, SP5a. SP7 after SP6b, because the abyss's exclusions and the lava the user wants there follow SP6b's picker. Alternative: SP7 ← SP6a, SP5a, with SP6b and SP7 in parallel (aquifers need only the cave shapes).
+- **D31 SP3e's island predicate over caves: accepted and recorded** (§1.4). With D8, no ground run ever has its bottom at y ≥ 181, so water v0's island rule and the scan's sky run stay exact. The floating_islands surface predicate (`yAbove{181, runTop} ∧ stoneDepth{ceiling ≤ 100}`) can still fire on a mountain top above y 181 over a cave below 172, as it already fires on summits (master :1961, the summit grass caps the user accepted for the draft). SP6a records the share of positions where it fires on a run with bottom < 181 (`islandBranchOnGround`) before and after caves; the exact `runBottomAbove` condition stays SP12's, with the summit caps. The user accepted the summit caps without caves; extending that acceptance to the cases caves add is the user's (Point 2), and the spec is written to its recommendation. Alternative: build `runBottomAbove` in SP6a (changes floating_islands' summits, which SP12 owns).
+- **D32 SP6a is XL** (Point 1). Alternative: Point 1's trimmed scope.
+- **D33 `grassNoSky` stays beside S1's `grassSky0`** (§10.4). The master restores S1's grass-at-sky-0 part "in place of" SP3c's `grassNoSky` (master :1898); both hold with caves, and `grassNoSky` catches grass under a cave ceiling without needing light. Alternative: the master's wording (remove `grassNoSky`'s row).
+- **D34 No kind above 70 % of the cave volume** (`C3.maxShare`, §10.1). C3's floors keep each kind present; nothing in the master stops one kind from dominating, which the user's "cuevas de distintos tipos" rules out. Alternative: C3's floors only.
+- **D35 Worm rooms** (§2.2). One worm in four starts with an ellipsoid room (Minecraft's form), the vertical scale being the master's worm `yScale` 0.1-0.9 (master :709). The master's §3.8 has no rooms; they give worm networks the "occasional larger space" at their start. Alternative: no rooms (the master's §3.8).
+- **D36 Saved worlds' built-in trees move to the caves tree** (§12.4). A saved world stores its full params, its density tree included (`src/ui/worldsMenu.ts:196-200`, `src/ui/world/worldPage.ts:3045`, `:3433`), and `loadParams` lays them over the profile (`src/persist/saves.ts:237-245`), so without a migration every world saved before SP6a would open with SP5c's tree: carvers but no noise caves, and the world list's "opens with today's terrain" (`src/ui/worldsMenu.ts:104`) would be false. `SCHEMA_VERSION` 2 → 3 with a migration that replaces a stored `density.defs` equal (canonically) to one of the three SP5c built-in trees (default, amplified, floating_islands) by the SP6a tree of the same kind; a tree the user edited is kept, and its world gets the carvers only. Preset files go through the same `migrate` (`src/core/params/presets.ts:43`). The builds stay at their coordinates and may stand over or inside new caves: SP5b D8's accepted behaviour for an older generator. Alternative: no migration (old worlds keep SP5c's tree, and the world list's line says "opens with today's carvers; its terrain tree is older").
+
+## Module layout after SP6a
+
+```
+src/gen/density/expr.ts nodes.ts compile.ts bounds.ts reference.ts source.ts   the noiseScaled op (§1.5); tapReader (§3.2); the slice corner memo (§7.4)
+src/gen/inspect/cost.ts                 noiseScaled's weight; caves.noises.* ids
+src/core/params/defaultTrees.ts         the cave families, their floors and caps as data in DEFAULT_DENSITY_TREE (§1.1-§1.4)
+src/core/params/presetTrees.ts          paths re-derived (§1.1)
+src/core/params/profiles.ts             floating_islands' overlay sets caves.limits.capTop 180 (§1.4)
+src/core/params/schema.ts               the caves group (§4)
+src/core/params/migrate.ts              SCHEMA_VERSION 3: SP5c's built-in trees → SP6a's (§12.4)
+src/core/stage/registry.ts              terrain stage v4, params ['density', 'surface', 'caves']
+src/gen/caves/carvers.ts                sourceRoll, wormPath, ravinePath → CarverPath (§2.1-§2.3)
+src/gen/caves/carverCache.ts            the per-worker LRU of 1024 paths, memoised per GenContext (§2.5)
+src/gen/caves/carve.ts                  carveColumn (T), carvedAt (point probes) (§2.4)
+src/gen/caves/tags.ts                   the tag rule: tagColumn (T), caveTagAt (point), CAVE_KIND ids (§3.2)
+src/gen/pipeline/terrainStage.ts        the carve step and the tag write (§3.1)
+src/gen/density/probe.ts gen/surface/probe.ts   solidAt; the surface probe carves (§3.4)
+src/world/store/*                       the cave channel: proto and final sets, padded view, record layout (§3.3)
+src/mesh/xray.ts packing.ts column.ts   meshXray, PACK_LAYOUT 'xray', pass 3 (§5.1)
+src/render/regionBatch.ts regionMesh.ts regionGrid.ts sectionRenderer.ts   four passes (§5.1)
+src/render/materials/index.ts glsl/xray.glsl.ts   the X-ray material; the collapse uniform in terrain (not GHOST) and water (§5.2)
+src/render/lightmap.ts frameState.ts    the light floor; night vision (§6)
+src/ui/settings.ts settingsPanel.ts     nightVision (§6.2)
+src/player/keymap.ts                    xray, xrayUp, xrayDown, xrayAll, nightVision (§7.1)
+src/ui/world/xrayStrip.ts               the strip and legend (§7.2)
+src/ui/map/cavesTab.ts layout.ts        the Caves tab (§7.3)
+src/ui/paramPanel/lints.ts              the caves pairs; islands on with capTop > 180 (§4)
+src/ui/inspector/sliceModel.ts sliceView.ts gen/inspect/fieldSlice.ts   the caves field (§7.4)
+src/ui/crossSection/voxels.ts           cave air tinted (§7.4)
+src/workers/protocol.ts                 pass 3; the finder's job (§7.3)
+src/metrics/sp6aGoldens.ts              sp6a.* golden keys (§12.3)
+test/metrics/caves.metric.ts            C1-C9 (§10.1)
+test/harness/region.ts refs.ts flood.ts tags, isolatedColumn, the carver reference, 3D components (§10.1, §10.3)
+test/bench/inlined.ts                   the hand-inlined default expression (§10.5)
+```
+
+## 1. The density tree with caves
+
+### 1.1 Shape of the default tree (D17)
+
+Notation as master §3.6: values in blocks (×16 where the master writes `16·family`); `T` is the terrain tap; `body` the current terrain body (`DEFAULT_DENSITY_TREE`, `src/core/params/defaultTrees.ts:32-112`), unchanged. `rangeChoice(x, lo, hi, a, b)` is `a` where lo ≤ x < hi, else `b`.
+
+```
+T        = tap terrain( interpolated( ref body ) )                                    unchanged
+detailG  = rangeChoice(T, −1e9, 16, detail, 0)                                        detail unchanged (VOXEL); skipped where T ≥ 16
+fl(v)    = max(v, −48)                                                                 the family floor F = 48 (tree; §1.4)
+E        = tap entrances( interpolated( fl(16·entr) + cap_e ) )
+C        = tap cheese(    interpolated( sky( fl(16·cheese) + ramp + cap_c ) ) )
+S3       = tap spag3d(    interpolated( sky( fl(16·spag3D) + ramp + cap_s3 ) ) )
+S2       = tap spag2d(    interpolated( sky( fl(16·spag2D) + ramp + cap_s2 ) ) )
+P        = tap pillars(   interpolated( 16·pillars ) )
+keep     = rangeChoice(P, −1e9, 0.48, −1e6, P)                                         pillars ≥ 0.03 keep rock (VOXEL)
+caves    = max( min(E, C, S3, S2), keep )
+noodle   = tap noodle( fl(16·(−0.075 − 0.025·Kn + 1.5·max(|An|, |Bn|) + 4·max(0, −Nn))) + cap_n )      (VOXEL combine)
+           Nn = interpolated(nb(Nt, −1)), Kn = interpolated(nb(thk_n, 0)), An = interpolated(nb(Ra, 1)), Bn = interpolated(nb(Rb, 1))
+nb(N, c) = rangeChoice(y − maxY_n, −1e9, 40, rangeChoice(minY_n − y, −1e9, 40, N, c), c)   noodle noises only within 40 of the band
+final    = max( min( T + detailG, caves, noodle ), tap islands(−1e6) )
+sky(v)   = rangeChoice(ref body, −1e9, −8, 32, v)                                      deep families skipped ≥ 8 above the surface
+cap_f    = G_f·min(1, g_f + g_w + g_i) + 128·min(1, h_f + h_w + h_i)                    §1.4: gentle parts g, steep parts h
+```
+
+- `ref body` is CSE-shared by every `interpolated` node (same structure, all inside, `src/gen/density/compile.ts:174-187`), so it is evaluated once per corner. No `interpolated` is nested (`src/gen/density/expr.ts:105`).
+- `nb` is lever (3) written into the tree: `cornerFn` evaluates every slot at every corner (`src/gen/density/compile.ts:378-388`) and `rangeChoice` is lazy, so the four noodle noises are not evaluated at corners more than 40 blocks outside the noodle band (40 = `bandSpan`'s static maximum 32 + 8, a literal because a `rangeChoice` bound is a literal or a single ref, `src/gen/density/source.ts:1-12`). Outside it the constants close the tube (toggle 4·1, ridge 1.5·1).
+- `spawn` keeps treating the default tree as 2D (`src/gen/column/spawn.ts:50-56`) and `surfaceEst3` searches the `terrain` tap only (`src/gen/column/surfaceEstimate.ts:17`), so neither moves with caves (§3.4).
+- The preset trees are re-derived (`src/core/params/presetTrees.ts:80-178`): amplified's paths and floating_islands' `root.b.x` move with the new root, and the `was` checks (`:97`) catch a stale path at module load. The island cap is not a preset replacement: it is a term of every tree, set by a leaf (§1.4, D8).
+- `beard` stays SP9's (master :677).
+
+### 1.2 The families (D1, D3)
+
+Master §3.6's formulas (:661-666), in its units, with D2's changes marked "▲". Each named number is a schema leaf under `caves.*` (§4) unless marked "(tree)", a literal of the tree's data.
+
+| family | formula | noises (λxz / λy, octaves; "spec" = the master names none) |
+|---|---|---|
+| cheese | `4·L² + clamp(Nch + off_c − 0.1·Nra, −1, 1) + clamp((12 − T)/24, 0, 0.5)`; off_c 0.27 ▲ minus the regional term | Nch 96 / 144, 4 oct, double; L 96 / **16** ▲ (master 12, below SP3b's λy ≥ 16 rule, `src/core/params/schema.ts:113`), 1 oct; Nra 2D 1536, 2 oct (spec) |
+| pillars | `(2·Np − 1 − rare)·(0.55 + 0.55·thk_p)³`; kept where ≥ 0.03 | Np 30 / 400, 1 oct; rare, thk_p 60 / 400, 1 oct (spec) |
+| spaghetti 3D | `rough + clamp(max(\|S1\|, \|S2\|)·rm − 0.0765 − 0.0115·thk_s − 0.05·Nrb, −1, 1)`; `\|S·\|·rm` = `rm·\|noiseScaled(S·, rm)\|`, rm by rarity ▲ (§1.3): r < −0.5 → 0.75, < 0 → 1, < 0.5 → 1.5, else 2 | S1, S2 64, 1 oct; rarity r 128, 1 oct; thk_s 64; Nrb 2D 1024, 2 oct (spec) |
+| roughness | `rough = (−0.05 − 0.05·Nrm)·(−0.4 + \|Nr\|)` | Nr 32, Nrm 128, 1 oct (spec) |
+| spaghetti 2D | `clamp(max(rm2·\|noiseScaled(S2d, rm2)\| + 0.083·tm, (\|8·Nel + yGrad(−64→8, 320→−40)\| + tm)³), −1, 1)`, `tm = −0.95 − 0.35·Nthk`; rarity bands ▲ (Minecraft's 2D bands): r2 < −0.75 → 0.5, < −0.5 → 0.75, < 0.5 → 1, < 0.75 → 2, else 3, blended at each edge as §1.3 (cut line: rm2 = 1) | S2d 128 (master), 1 oct; Nel 2D 256, 2 oct; Nthk 64; rarity r2 128, 1 oct (spec) |
+| noodle | §1.1's voxel formula; toggle ▲ `+ 4·max(0, −Nt)` (tree) replaces `Nt < 0 ? +64`; band y −60 … 64 ▲ with §1.4's caps; `Nt` replaced by `Nt − 0.1·Nrb` (regional) | Nt 64; thk_n 64 (spec); Ra, Rb 18 (master), 1 oct |
+| entrances | `min(Ne + 0.37 + yGrad(−10→0.3, 30→0), rough + clamp(max(\|E1\|, \|E2\|) − 0.08, −1, 1))` | Ne 128, 3 oct, amplitudes [0.4, 0.5, 1.0] (master's amplitudes); E1, E2 64, 1 oct (spec) |
+
+- **Regional variety (D3):** Nra (λ 1536) lowers the cheese threshold where it is high: with the default amplitude 0.1, a region at Nra = +2 has off_c 0.07, about four times the cavern volume of the default 0.27 (estimate; C8.sizeSpread measures it). Nrb (λ 1024) widens spaghetti 3D and closes noodles together where positive, and the reverse where negative, so the mix differs between neighbouring regions (C8.typeMixVariation).
+- **Single stacks** (`double: false`, `src/core/noise/normal.ts:12-44`) for every cave noise except Nch (D24): 47.8 ns against 76.5 ns per one-octave evaluation (recon-gen §3.8).
+- Every vertical wavelength ≥ 16, SP3b's rule (2 × the 8-block corner step).
+- The `yGrad` terms are `slide` knots with literal y values, so they meet the knot order rule (`src/gen/density/expr.ts:309`, `:322`).
+
+### 1.3 Continuity: the five replaced switches (D2)
+
+| master switch | the cut it leaves | SP6a |
+|---|---|---|
+| `caves = rangeChoice(terrain, −1e9, 8, 16·entr, 16·under)` (:669) | every deep family stops on a plane 8 blocks below the surface | `ramp = clamp((8 − T)·2, 0, 32)` added to the deep families (§1.4); entrances unramped (the master's "entrances NOT depth-ramped") |
+| spaghetti rarity bands (3D: r < −0.5 → 0.75, < 0 → 1, < 0.5 → 1.5, else 2; 2D as §1.2) (:663) | tunnels jump sideways or end where the band changes | within ±0.05 of each band edge, `rm·|S(p/rm)|` is the linear blend of the two scales' values (both evaluated only there) |
+| noodle toggle `Nt < 0 ? +64` (:665) | noodles end in a wall on the surface Nt = 0 | `+ 4·max(0, −Nt)`: the tube narrows and closes by Nt ≈ −0.025 |
+| noodle band y ∈ [−60, 64] (:665) | noodles cut by the planes y = 64 and y = −60 | `cap_n` (§1.4) narrows them over 16 blocks outside the band, then closes them |
+| `lakeRoof = rangeChoice(y − col.lakeFloor, −8, 1e9, +1e6, −1e6)` (:668) | a flat wall at a basin's edge | the wet roof (§1.4) |
+
+Remaining switches cannot change a voxel's sign where they act:
+- **Inside an `interpolated` slot** (`sky`, `nb`, the floors `fl`): a switch acts on corner values, and the slot is the trilinear blend of its corners, so the slot stays continuous in space. `sky` also changes only corners 8 or more blocks above the surface, where T + detailG < 0 already makes the voxel air whatever the caves value is (|detail| ≤ 4.5); `nb` changes only corners where the band's steep cap already closes the noodle.
+- **At voxel level:** `keep` (the pillar's own surface: P ≥ 0.48 is solid on both sides of nothing else), `detailG` (T ≥ 16 cannot change sign; |detail| ≤ 4.5).
+A unit test (§10.7) samples each family tap on 1-block grids across every cap, band edge and rarity edge and fails on a jump larger than the family's local Lipschitz bound.
+
+### 1.4 Floors, caps and roofs (D2, D4, D7, D8, D19)
+
+- **Family floor (D2):** every family's value is `max(16·value, −F)` with F = 48 (tree literal) before its caps are added. A `max` with a constant bounds the value below whatever the leaves are, so the caps close every family for every leaf value in its static range (the noise leaves' `clampSigma` goes up to 8, `src/core/params/kit.ts:186`, and tier 2 checks at that maximum, `src/gen/density/source.ts:155-165`). Without the floor, spaghetti 3D could reach −70.7 at `clampSigma` 8 and entrances −136 at `entrances.offset` −0.5. The floor changes values only where a family is more than 48 below zero, deep inside air, so its shape is unchanged except within a fraction of a block of those cells. The unit test is an interval check over the leaves' static ranges (`bounds.ts` computes the intervals), not a check at the defaults.
+- **Surface ramp (D4):** `ramp = clamp((d_s − T)·2, 0, 32)`, d_s = `caves.limits.surfaceDepth` 8. The ramp is 0 where T ≥ 8 (about 8 blocks deep), 16 at the surface (T = 0) and 32 from 8 blocks above it, so the deep families fade out over the top 8 blocks; entrances are the only noise family that reaches the surface. With the cheese roof term (master :675) caverns stay about 12 blocks down. Inside the slots T is read as `ref body` at the corner.
+- **Caps: a gentle part, then a steep part (D2).** Each cap is two fractions of a distance outside the region a family may occupy: a gentle part g rising from 0 to 1 over s = `caves.limits.bandSpan` 16 (1 … 32) blocks, then a steep part h rising from 0 to 1 over the next 8 blocks. A family's caps add `cap_f = G_f·min(1, g_f + g_w + g_i) + K·min(1, h_f + h_w + h_i)`, K = 128 (tree). The gentle rise G_f is about the family's typical air depth (its value at the median carved voxel), so over the s blocks the cave shrinks gradually; the steep part guarantees closure: wherever a corner's h ≥ 1/2, the slot is ≥ −48 + 64 > 0. Defaults (tree literals, set from D25's measurement and re-set at tuning): entrances 16, cheese 16, spaghetti 3D 2.4, spaghetti 2D 2.4, noodle 2.4 (the ridged families' air values are about −1 to −3, the blobby ones' −5 to −16). A unit test measures each family's closure distance across each cap: the y span over which the carve rate falls from 90 % to 10 % of its value inside the region is ≥ 4 blocks at the defaults; D25 measures it before tuning.
+- **Depth bands (D9):** for a family with `minY`, `maxY`: `g_f = clamp((minY − y)·(1/s), 0, 1) + clamp((y − maxY)·(1/s), 0, 1)` and `h_f = clamp((minY − s − y)·(1/8), 0, 1) + clamp((y − maxY − s)·(1/8), 0, 1)`, written with `recip(param …)` as the default tree already writes a param's reciprocal (`src/core/params/defaultTrees.ts:53`). They are not `slide` knots: a knot's y is a literal or a single ref, and the knots must increase over the refs' whole static ranges (`src/gen/density/expr.ts:322`), which the overlapping `minY`/`maxY` ranges (−64 … 320) break. Defaults: cheese −56 … 320, spaghetti 3D −56 … 320, spaghetti 2D −64 … 320, noodle −60 … 64, entrances −64 … 320 (master values where it has them). With `minY` > `maxY` the family narrows across the inverted range and the lint warns (§4).
+- **Wet roof (D7, D19):** with d = `ref body` in the slots (T at voxel level for the noodle), the depth below the terrain's own surface at that point, `g_w = wet′·clamp((d_w + 8 + s − d)·(1/s), 0, 1)` and `h_w = wet′·clamp((d_w + 8 − d)·(1/8), 0, 1)`, d_w = `caves.limits.waterDepth` 16 (8 … 48). Under water, caves are fully open from d_w + 8 + s = 40 blocks below the bed, narrow over the 16 blocks above that, and are closed (h ≥ 1/2) within d_w + 4 = 20 blocks of the bed. The depth is the density's, not `offset`'s: the bed lies at `offset + jag·J + sigma·slide(overhang)` (`src/core/params/defaultTrees.ts:43-66`), and with sigma 3 at sea and 12-26 on coasts (`src/core/params/shapeDefaults.ts:23-26`) it can lie 9 to more than 30 blocks below `offset`.
+- **wet′** = `max(clamp(4·lakeMask, 0, 1), clamp(4·riverStrength, 0, 1), clamp((65 − offset)·(1/2), 0, 1))`, all finite `SAMPLE_FIELDS` with bounds in `COL_FIELD_BOUNDS` (`src/gen/column/columnStage.ts:37-42`, `src/core/constants.ts:48-86`). Water v0 fills air only in `base − 12 < y ≤ waterTop` with `waterTop` read at the nearest quart corner (`src/gen/pipeline/terrainStage.ts:98-118`, `src/gen/column/columnStage.ts:41-42`), and `waterLevel` is the sea level 63 for `offset` < 63, a river's wet flag or a lake (`src/gen/column/columnPoint.ts:51-54`, `src/core/constants.ts:7`). The gain 4 makes a position whose nearest corner is in a lake fully wet (the nearest corner's bilinear weight is ≥ 1/4), and the margin 65 covers bilinear `offset` between the corners. A unit scan, `wetCover`, checks over 100,000 positions of the quick tier's seeds on default and archipelago that every position whose water v0 `waterTop` ≥ y −64 has wet′ = 1; on a miss the same commit widens the terms in this order: the gain 4 → 8, the margin 65 → 67, and a river term `clamp((W − riverDist)·(1/4), 0, 1)` with W the largest wet half-width plus `wetMargin` (the wet flag, `src/gen/column/rivers.ts:78`, is not a `col` field). In a basin `offset` is the basin floor (`src/gen/column/lakes.ts:68-69`), so the roof contains the master's lake roof.
+- **Island cap (D8):** `g_i = clamp((y − capTop + 8 + s)·(1/s), 0, 1)`, `h_i = clamp((y − capTop + 8)·(1/8), 0, 1)`, capTop = `caves.limits.capTop` (180 … 344; default 344, above the world's top y 319, so it has no effect; 180 in floating_islands' overlay, `src/core/params/profiles.ts:34-37`). In floating_islands, caves narrow over y 156 … 172 and every corner at y ≥ 176 has h_i ≥ 1/2, so no noise cave air lies at y ≥ 176; carvers shrink to nothing by y 172 (§2.4). No cave air at y ≥ 180 = `ISLAND_RUN_MIN_BOTTOM − 1` (`src/core/constants.ts:94`), so no ground run gets its bottom at y ≥ 181 from a cave, which meets SP3e's hand-over by construction (D31 for the surface predicate). `C7.islandCapAir` counts cave air at y ≥ 176 in a floating_islands region: 0 (§10.1).
+
+### 1.5 The `noiseScaled` op (D18)
+
+`{op: 'noiseScaled', id, s}`: `z3(x/s, y/s, z/s)` of the density noise `id`, `s` a positive constant in [1/16, 16] (a literal, or a `{param}` whose leaf range lies inside it). Value interval ±clampSigma (as `noise`); class as `noise` (CELL inside `interpolated`, VOXEL outside, `nodes.ts:310-318`); cost weight as `noise` (`src/gen/inspect/cost.ts:1-20`); CSE and `exprHash` keys include `s`. Added through the checklist of recon-gen §3.1: `expr.ts` (type, `EXPR_OPS`, keys, validation, hash), `nodes.ts` (value, interval, class), `compile.ts` (scalar key `:135-145`, closure), `bounds.ts`, `reference.ts`, `source.ts` (source form, magnitude, fold), `cost.ts`, the inspector's form and model, the fuzzers (`test/harness/densityFuzz.ts`, `treeMutator.ts`). Pins: `test/unit/densityExpr.test.ts:39-40` gains the op; `test/unit/goldens.sp3b.test.ts:56`'s "`sp3b.density.ops` uses every op" is pinned to SP3b's set, and the new key `sp6a.density.ops` uses `noiseScaled` (SP3e's practice for rule kinds). The cave noises' ids are accepted under `caves.noises.` beside `density.noises.` (`src/gen/density/source.ts:135-168`, `src/gen/density/context.ts:33`, `:52-59`, `cost.ts:61`). The compile change list also gains `tapReader` (§3.2).
+
+### 1.6 Bounds and cost (D24)
+
+- **Why corners triple:** today 218 cells per column are decided solid without corners (recon-gen §3.8, scratch measurement on the 256 `terrain.real` columns); with cave taps bounded by ±clampSigma no underground cell is decided without its corners (`src/gen/density/bounds.ts:271-282`). Corners evaluated: median 142 today, 475 with caves (p90 311 → 718; the master's "about 700" is a p90).
+- **Estimate.** Corners: today a corner costs 185 ns (`density.corner`, `test/baselines.json`); the cave subtrees add about 150 closure nodes and about 30 octave evaluations, so about 2-2.5 µs per corner, about 1.1 ms at the median 475. Voxels: in a straddling cell `voxelFn` trilerps the ten slots and combines them, and the tag reads the family values (§3.2), about 0.3-0.4 µs per voxel; with C1's 5-15 % void about 70-100 of the roughly 270 underground cells per column straddle, so about 9-13k voxels, +3-4.5 ms (the first estimate, recon-gen §5, was +0.8-2.1 ms). Carvers 0.2-0.5 ms; scan and rules +0.1-0.3 ms. `terrain.real` p50 ≈ 4-9 ms against 2.29 ms today (`test/baselines.json`), under the 10 ms gate but likely above D25's 7 ms trigger; mountain columns (up to about 750 underground cells) may reach a p99 of 12-20 ms against 20. D25 records the voxel phase's share and amplified columns' p99.
+- **Levers, in order** (D25 applies them only if needed): (1) single stacks (built in); (2) the sky gate and `detailG` (built in); (3) noodle noises evaluated only for corners within 40 of the band (built in, `nb`); (4) per cell, from the corner hulls, a family whose hull's low end exceeds another family's high end cannot be the minimum and is not interpolated at the cell's voxels, and the noodle is skipped where its cell interval is positive (keeps the output); (5) octave pruning of Nch (4 → 3) and Ne (3 → 2) (changes the output); (6) per corner, evaluate entrances and cheese first and skip spaghetti where their `min` is already below −16 (changes the output: the interpolated min is not the min of the interpolated values; it needs per-slot laziness in `cornerFn`, which evaluates every slot, `src/gen/density/compile.ts:386`); (7) the user's decision with the measurements. Levers (5) and (6) land before push B's golden record (D28).
+- **Slice gates:** `slice.vertical128` (135.6 ms of its 300 ms gate, `test/bench/gates.ts:17`) evaluates the reference per sample, and the reference evaluates each `interpolated` node at its cell's 8 corners per sample with no cache across nodes (`src/gen/density/reference.ts:115-130`): ten slots make a sample about ten times dearer. §7.4's corner memo removes that; D25 measures `slice.vertical128` and the new `slice.caves128` (gate 300 ms).
+
+## 2. Carvers (D5, D21, D35)
+
+### 2.1 Sources and the window
+
+- Per source chunk (sx, sz) and kind k ∈ {worm, ravine, underground worm (cut line)}: `rng = new Xoshiro128(hash2(deriveSeed(seed, 'caves.' + k), sx, sz))` (`src/core/rng.ts:17-66`, `src/core/hash.ts:28-36`, `:262`); the first `nextFloat()` against the kind's chance (worm 0.15, ravine 0.015, underground worm 0.07; master :702-703); then the path's draws in the fixed order of §2.2-§2.3. The first RNG consumer in `gen/caves/`; `src/gen/surface/bands.ts:13-19` already seeds a `Xoshiro128` from `deriveSeed` the same way.
+- **Window (D21):** a source's carved voxels lie within L_max + r_max of its start, and the start lies inside its chunk, so a source in chunk sx reaches the chunks sx − R … sx + R with R the largest integer such that 16·R < 16 + L_max + r_max. With L_max = 160 (the length leaves' maximum, §4) and r_max = 9.5 (the largest horizontal radius along a path that any leaf combination allows: (1.5 + 3)·2.0 for worms and underground worms, 1.5 + 8 for ravines, whose width factor only narrows them, §2.3; a room, up to 7·2.0 = 14, sits at the start, where 14 < 16 + 160): 16 + 169.5 = 185.5, so R = 11, 23 × 23 = 529 sources. A path's points lie within its length of its start (each step moves 1 block; a branch starts at the trunk's midpoint with at most the remaining half). `C7.reachOverflow` checks it on 100,000 sources per kind, at the defaults and with every carver leaf at its static maximum, on each path's voxel reach (its box widened by its largest effective radius), not on its centre line (§10.1). Cost estimate: 529 rolls × 50 ns ≈ 26 µs per column; about 79 worm, 8 ravine and 37 underground-worm paths per window at the default chances.
+
+### 2.2 Worm and underground-worm paths
+
+- Start: x = 16·sx + 16·u, z = 16·sz + 16·u, y = startYMin + (startYMax − startYMin)·u (worms −56 … 180, master :708; underground worms −56 … 24); yaw = 2π·u; pitch = (u − 0.5)/4.
+- Steps n = max(1, length − ⌊lengthVar·u⌋) (112 − rand(28), master :708; the max keeps a path when the leaves allow `lengthVar` ≥ `length`); thickness t = 2·u + u; hMul ∈ [radiusMin, radiusMax] = [0.7, 1.4], vMul ∈ [0.8, 1.3], floor ∈ [−1, −0.4] (master :709-710).
+- Per step i: rh = (1.5 + detSin(π·i/n)·t)·hMul, rv = (1.5 + detSin(π·i/n)·t)·vMul: both ends taper to 1.5·mul, so a worm ends in a rounded cap, never larger than the steps before it (`C7.endTaper`); position += (cos p·cos y, sin p, cos p·sin y) through `detCos`/`detSin` (`src/core/detMath.ts:21-85`); pitch ·= 0.7; yaw += 0.1·yd; pitch += 0.1·pd; yd = 0.75·yd + (u − u)·u·4; pd = 0.9·pd + (u − u)·u·2 (Minecraft's drift; the constants are leaves under `caves.worms.shape`, §4, so master §0.5 holds).
+- Branch: at step ⌊n/2⌋, with chance 0.25 (master :711) and t > 1, the trunk ends and two branches start there with yaw ± π/2, thickness 0.5 + 0.5·u, n − ⌊n/2⌋ steps, from the same RNG stream. The trunk's end lies inside the branches' starts, so it is not a visible end.
+- Room (D35): with chance 0.25 a worm starts with an ellipsoid of horizontal radius (1 + 6·u)·hMul and vertical radius that times yScale ∈ [0.1, 0.9] (master's yScale, :709; Minecraft's room).
+- Underground worms use the worm leaves for everything but their chance, their start range and `maxY` (§4), and shrink to nothing between maxY − 16 = 24 and maxY = 40 (§2.4), so none reaches above y 40 and none ends on a flat ceiling.
+- Output: a `CarverPath` of Float64Array ellipsoids (x, y, z, rh, rv, floor) with its box.
+
+### 2.3 Ravine paths
+
+Start as worms with y ∈ [10, 72] (master :714); yaw 2π·u; pitch (u − 0.5)·0.25 (vertical rotation ±0.125); thickness from a trapezoid on [0, thicknessMax 6] with plateau 2; n = lengthMin + ⌊(max(lengthMin, lengthMax) − lengthMin + 1)·u⌋ ∈ [84, 112]; rh = 1.5 + detSin(π·i/n)·t, rv = rh·3 (yScale 3); per-y width factors redrawn every 3 blocks (width smoothness 3): f = 1 + u·u, stored as f² per world y (384 values in the path); the voxel test multiplies the horizontal term by f²(y) ≥ 1 (Minecraft's form), which narrows the ravine at some heights and roughens its walls, so its horizontal reach never exceeds rh. Ravines taper at both ends like worms, so none is "cut short" (`C7.endTaper`).
+
+### 2.4 Carving a column (D6, D7, D8)
+
+For each source in the window whose path box meets the column box, for each ellipsoid whose box meets it, for each voxel in both boxes: `d = ((x + 0.5 − cx)/rh)²·w(y) + ((z + 0.5 − cz)/rh)²·w(y) + ((y + 0.5 − cy)/rv)²` (w = 1 for worms, the ravine's f² otherwise), in that operation order; carve when `d < 1 − σ(x, y, z)` and, for worms, `(y + 0.5 − cy)/rv > floor`. The shrink `σ = max(σ_w, σ_i, σ_u)`, each in [0, 1] and linear, so a carver narrows to nothing over a span instead of stopping on a plane:
+- `σ_w = wet′·clamp((d_w + 8 + s − d)·(1/(8 + s)), 0, 1)` with d = the target position's pre-cave top (its highest solid voxel after the density fill, before carving) − y, so carvers close where the noise caves close (§1.4's wet roof);
+- `σ_i = clamp((y − capTop + 8 + s)·(1/s), 0, 1)`: 1 from y 172 when capTop is 180;
+- `σ_u = clamp((y − maxY_u + 16)·(1/16), 0, 1)` for underground worms only.
+The path stays a pure function of its source; the shrink reads only the target column's sample and its density fill, which T already holds. Only solid voxels are carved: at the carve step (§3.1) T has only `SOLID`, and every state T can produce there is `CARVABLE` (`src/world/blocks/registry.ts:223`, `:260`; only `packed_ice` is not, and the surface pass places it later), so the rule holds and is kept in the code for SP9's structure blocks. `aquifer.fluidAt` (master :719) is SP7's; until then a carved voxel is air.
+
+### 2.5 The path cache
+
+An LRU of 1024 `CarverPath`s per worker keyed by (kind, sx, sz), held in the GenContext's memo (a WeakMap, as `surfaceContextOf`, `src/gen/surface/context.ts:115-118`), cleared with the context on `configure`. A miss recomputes the same path (pure), so the cache never changes output (`DT1.carverCache`, §10.3). A column needs about 124 paths; neighbours share most of them. Memory: a worm path holds up to 112 ellipsoids × 6 doubles (about 5.4 KB), a ravine about 8 KB with its 384 f² values, so the LRU holds at most about 8.2 MB per worker (all ravines) and about 5.5 MB typically; building a path allocates, so `terrainHeap`'s garbage budget (about 1.5 MB per column, `src/gen/column/lakes.ts:8-11`) is re-measured with caves at D25's second checkpoint.
+
+## 3. The T stage, the cave tag and the probes
+
+### 3.1 Order (D6)
+
+Density fill → **carve** (new; one `stop()` poll before it; it first takes each position's pre-cave top from the fill's solidity, for §2.4's wet shrink) → **tag** (§3.2) → water v0 → per-block surface biome → surface pass → 24 `setProto` sections → aux A and B (today `src/gen/pipeline/terrainStage.ts:141-184`; the carve slot is between `:144` and `:145`). The scan skins the carved column: a ravine floor open to the sky is the sky run and gets the biome's top; cave floors are lower runs and get stone or deepslate (rules 1-2); grass never appears below the sky-open run (master :798). `test/unit/terrainStage.test.ts:420`'s poll count gains the carve poll.
+
+### 3.2 The tag (D17, D20)
+
+`CAVE_KIND`: 0 none, 1 cheese, 2 spaghetti 3D, 3 spaghetti 2D, 4 noodle, 5 entrance, 6 worm, 7 ravine, 8 underground worm, 9 other density air (air that no family tap present in the tree explains); 10-15 reserved (the mesh's film uses 15 in the X-ray pack, never in the store); the high 4 bits reserved, 0. The rule, a pure function of the voxel:
+1. if the final block is solid, 0;
+2. else if `T + detailG ≤ 0` (not pre-cave solid), 0;
+3. else if the density made it air: the candidates are E, C, S3 and S2 when `caves ≤ 0` (which needs `keep ≤ 0`), and the noodle when `noodle ≤ 0`; the tag is the candidate with the lowest value, ties in the order E, C, S3, S2, noodle. A voxel inside pillar rock (keep > 0) that a noodle opens is therefore a noodle, never the lowest of the four families that `keep` overrides;
+4. else (a carver carved it) the kind of the first source, in the window's fixed row order, whose ellipsoid carved it.
+
+Where the values come from (`fillDensityColumn`, `src/gen/density/bounds.ts:271-282`): a cell decided before its corners is decided by T + detailG alone, since the cave taps' intervals straddle 0 everywhere underground; one decided air there is sky, and its voxels get 0 without evaluation (a unit test asserts no such cell holds a pre-cave-solid voxel). A cell evaluated voxel by voxel has the family values from `voxelFn`. A cell decided air after its corners (a cave interior, which `voxelFn` skips) has its corners, and the tag trilerps the family slots there per voxel; that work is in §1.6's voxel estimate. The values are read through a new compiled `tapReader(name)`, resolved once per compile, which reads a tap's value at the voxel registers that `voxelFn` (or `setVoxel`) has set, with no Map lookup and no epoch bump (`tapFn` does both per call, `src/gen/density/compile.ts:419-425`, which would defeat the memo of shared subterms).
+
+**Trees without the family taps** (a user-edited tree, D36): with no `terrain` tap, density air gets 0 (pre-cave solidity is unknown) and only carver kinds are tagged; with some family taps missing, the candidates of step 3 are the taps present, and density air that none of them explains gets 9. DT2's `tagProbe` runs on `treeMutator` trees too.
+
+The harness's "debug channel" (master :678) is this channel; the harness adds only a pillar bit (rock kept by `keep` where `min(E, C, S3, S2) < 0`), recomputed per voxel by `caveDebugColumn` for C3's pillars part.
+
+### 3.3 Store, padded view, memory (D20)
+
+A third proto channel `cave` (u8 per voxel) written by `setProto` (`src/world/store/api.ts:63`), shared into the final set by reference count as blocks and fluid are (`src/world/store/store.ts:432-433`), read by `ColumnView.sectionCave`, copied into the padded view as a fourth array (`src/world/store/padded.ts:38-41`). Uniform-0 sections cost no slot (`src/world/store/section.ts:3-6`). The column record is fixed today: `RECORD_INTS` 160, `REC_FINAL` 16 + 24 × 4 and `REC_PROTO` 112 + 24 × 2 (`src/world/store/columnTable.ts:24-45`). With a cave entry in both sets the final set takes 24 × 5, `REC_PROTO` becomes 136, the proto set 24 × 3, and `RECORD_INTS` 208 (the column table grows from 2.6 to 3.4 MB). The sites that walk the entries change with it: the proto-to-final share (`store.ts:432-433`), `replaceBlocks` (`:585-590`, used by D's diff overlay and the sim's edits), which keeps the cave entry, and the release path (`:688-692`); a unit test checks that an edited section keeps its cave entry. Edits leave the channel: a placed block makes the voxel solid (the X-ray ignores it), a dug voxel was solid and so has tag 0 (not cave). It is not persisted (T regenerates it; diffs hold blocks only). `regionHash` covers it, so DT1 and the `*.region.T.*` goldens check it.
+
+### 3.4 Probes (D22)
+
+`solidAt(x, y, z)` = `probe` (`src/gen/density/probe.ts:19-26`) > 0 and not `carvedAt(x, y, z)`; `carvedAt` runs §2.4's test over the window's paths (same code as `carveColumn`); `caveTagAt` runs §3.2 at one voxel. The surface probe's column rebuild (`src/gen/surface/probe.ts`) carves through `carveColumn`, or `surfaceProbeBulk` fails. **Spawn and landing:** `spawnY` keeps the 2D estimate under the default tree (`src/gen/column/spawn.ts:50-56`, compared canonically), so `sp2a.spawn` is unchanged; `landingSurface` reads `surfaceEst3` on the `terrain` tap (`spawn.ts:63-69`). Neither sees an entrance or a ravine, so a new world or a teleport over one starts on the pre-cave surface: in flight the player hovers there, in walk mode falls to the floor once the column is published (accepted; master §3.7).
+
+## 4. Parameters (D9)
+
+- **Placement:** a top-level group `caves`, appended after `islands` (`src/core/params/schema.ts:137`, so `randomParams` and `randomPatch` draw every earlier group as before). `ALLOWED_REF_TARGETS` accepts number and int leaves under `caves.` and `clampSigma` under `caves.noises.` (`src/gen/density/source.ts:9-11`, `:135-151`); the terrain stage reads `['density', 'surface', 'caves']`, version 3 → 4 (`src/core/stage/registry.ts:20`), so every cave leaf's badge is Terrain (`registry.ts:29-32`, `:50-61`). The panel builds the section with no panel code (`src/ui/paramPanel/model.ts:85-100`).
+- **Sub-groups and their first leaves (sizes first, this spec's order):**
+
+| sub-group | leaves (default; range) |
+|---|---|
+| Cheese | `offset` 0.27 (−0.5 … 1; lower → larger caverns); `regional` 0.1 (0 … 0.4; the large-interior swing); `layerAmp` 4 (0 … 8); `roofDepth` 12 (0 … 48); `minY` −56, `maxY` 320 |
+| Spaghetti 3D | `thickness` 0.0765 (0 … 0.3); `thicknessVar` 0.0115 (0 … 0.1); `regional` 0.05 (0 … 0.2); `scales` 0.75, 1, 1.5, 2 (each 1/16 … 16); `minY` −56, `maxY` 320 |
+| Spaghetti 2D | `thickness` 0.95 (0.5 … 1.5, tm's constant); `layerAmp` 8 (0 … 32); `scales` 0.5, 0.75, 1, 2, 3 (each 1/16 … 16; cut line); `minY` −64, `maxY` 320 |
+| Noodles | `thickness` 0.075 (0 … 0.3); `ridgeMul` 1.5 (0.5 … 4); `regional` 0.1 (0 … 0.4); `minY` −60, `maxY` 64 |
+| Pillars | `threshold` 0.03 (0 … 0.5) |
+| Entrances | `offset` 0.37 (−0.5 … 1; lower → more entrances); `threshold` 0.08 (0 … 0.5); `minY` −64, `maxY` 320 |
+| Worms | `chance` 0.15 (0 … 1); `length` 112 (32 … 160); `lengthVar` 28 (0 … 64); `radiusMin` 0.7, `radiusMax` 1.4 (0.1 … 2); `vRatioMin` 0.8, `vRatioMax` 1.3 (0.1 … 3); `floorMin` −1, `floorMax` −0.4 (−1 … 1); `branchChance` 0.25; `roomChance` 0.25; `roomYScaleMin` 0.1, `roomYScaleMax` 0.9; `startYMin` −56, `startYMax` 180; `shape.*` (drift constants, §2.2) |
+| Underground worms (cut line) | `chance` 0.07 (0 … 1); `startYMin` −56, `startYMax` 24; `maxY` 40 (−32 … 120; they shrink to nothing over the 16 blocks below it); the shape, length and radius leaves are the Worms' |
+| Ravines | `chance` 0.015 (0 … 0.2); `lengthMin` 84, `lengthMax` 112 (32 … 160); `thicknessMax` 6 (0 … 8); `plateau` 2; `yScale` 3 (0.5 … 6); `widthSmoothness` 3 (1 … 16); `vRotation` 0.125; `startYMin` 10, `startYMax` 72 |
+| Limits | `surfaceDepth` 8 (0 … 32); `waterDepth` 16 (8 … 48); `bandSpan` 16 (1 … 32); `capTop` 344 (180 … 344; 180 in floating_islands) |
+| `caves.noises.*` | the noises of §1.2's table (each wavelength, octaves, yScale, amplitudes, double, clampSigma), collapsed |
+
+- **`cave_heavy` (SP6b)** needs exactly these leaves: `cheese.offset` 0.20, `entrances.offset` 0.30, `noodles.maxY` 120, `worms.chance`, `undergroundWorms.chance` and `ravines.chance` × 1.5 (master :918's "carver p × 1.5").
+- **Lints:** each `minY`/`maxY` pair and each `*Min`/`*Max` pair joins `ORDERED` (`src/ui/paramPanel/lints.ts:15-19`) with the effect "the range is inverted: the family narrows across it" or "the range is empty"; `worms.lengthVar` ≥ `worms.length` warns "some worms are 1 step long"; `islands.enabled` on with `caves.limits.capTop` above 180 warns "caves may detach runs above y 180; the island rules then treat them as islands" (D8).
+- **U2 liveness:** about 80 new leaves plus the noise leaves. A "cave" class column (a land column with every family present at seed 42, found by a scan) joins U2's columns, and probability leaves (`chance`, `branchChance`, `roomChance`) are decided on a bounded witness search over 64 columns (`test/metrics/params.metric.ts:43`); `capTop` is decided on a floating_islands column; U4's README block and the schema-shape lock (`npm run test:accept-schema`) grow with them.
+- **Live regeneration** is SP4c's, unchanged: the 3D regenerates from T on release after 150 ms (`src/ui/world/applyControl.ts:34`, `:105-120`), stale columns keep their meshes until the new ones swap in (`src/engine/coordinator.ts:99-109`). A cave edit redraws no map tile (the map stage reads no cave leaf, `registry.ts:25`); §10.7 tests that such an Apply is not delayed by the preview driver's watchdog (`src/ui/map/previewDriver.ts:93-95`, `:184-187`). The refill after a cave edit at RD 12 is about one medium fill (SP5c: 4,921 ms); L14 records it (`xrayApplyRefillMs`, §10.6).
+
+## 5. The X-ray (D10, D23)
+
+### 5.1 The mesh pass
+
+- `meshXray(padded, cave, builder)` in `src/mesh/xray.ts`, called by `meshColumnPayload` after `meshFluid` (`src/mesh/column.ts:304-336`). A voxel is **hollow** when its tag's kind ≠ 0 and its block is not an opaque full cube. Emitted: each face of a hollow voxel whose neighbour is an opaque full face (a cave wall), kind = the hollow's tag; and each up face of an opaque or fluid voxel whose up neighbour is air with sky light 15 (the surface film, kind 15; an overhang or a canopy leaves a gap in it, accepted in D10). Greedy merge on (kind, face) only (no light, no AO), so quads merge better than terrain quads (`src/mesh/faces.ts:111`).
+- `PACK_LAYOUT` gains a variant `xray`: position as the solid word's, data word face (3 bits), kind (4 bits), 4 bits reserved for SP6b's cave biome (`src/mesh/packing.ts:2-4`).
+- Pass 3 everywhere the pass list is fixed at three: `column.ts:37-39`, `:83`, `:265`; `MeshPass` (`src/mesh/builder.ts:10`); `regionBatch.ts:37`, `:119-123`, `:170`, `:219-220` (`sortObjects` off for pass 3); `regionMesh.ts:37`, `:192`, `:403`, `:593` (no translucent sort for pass 3); `src/workers/protocol.ts:568`, `:615`; the staging reservation (`src/render/regionGrid.ts:38-42`) 16,384 vertices for pass 3 (estimate; `xrayVertexBytes` in L14 records the real use). The opaque reservation, 131,072 vertices per region, was sized without cave walls, and a region that outgrows it re-creates its buffers ×1.5 (`regionGrid.ts:44`) on the main thread while streaming: D25's second checkpoint re-measures every pass's use with caves and the X-ray commit resizes the reservations; L13 and L14 count growth events.
+
+### 5.2 The material
+
+`xray.glsl` (`render/materials/**`, the only GLSL boundary, master :179), in the `batch` and `mesh` variants: flat colour from a 16-entry palette uniform by kind × FACE_SHADE; alpha 0.14 for walls, 0.05 for the film; additive blending, `depthWrite: false`, `depthTest: false`, double-sided, `forceSinglePass`, so the result needs no sorting; a distance fade to 0 at the fog end ((RD − 1)·16, `src/render/materials/index.ts:54-64`); wall fragments outside `[yMin, yMax + 1)` and every fragment beyond `xrayRadius` are discarded; the film (kind 15) ignores the band (D10). It reads no lightmap, so the light floor and night vision do not touch it. Compiled at load through the stand-ins (`src/render/sectionRenderer.ts:224-231`). The palette's colours are D10's.
+
+### 5.3 Toggle, band, background
+
+- One uniform `xrayOn` in the shared uniform objects (`src/render/materials/uniforms.ts:3-7`): the X-ray vertex shader collapses every vertex while it is 0; the terrain (opaque, cutout) and water vertex shaders collapse every vertex while it is 1; the ghost (the terrain shader under `#ifdef GHOST`, `src/render/materials/glsl/terrain.glsl.ts:121-123`, excluded from the collapse), the selection box and the outline are untouched. A toggle writes uniforms and the clear colour only (O(1), no allocation; `zeroAlloc.test.ts` covers it).
+- X-ray on: sky dome and clouds hidden, fog off for the terrain passes (they draw nothing), clear colour #0b0e14.
+- Band: `yMin`, `yMax` uniforms; default all (−64 … 319); PageUp/PageDown move a band of 32 by 8 (from "all", the first press makes the band 32 blocks centred on the camera's y); Home returns to all. Radius: `xrayRadius` = the fog end unless L14 forces a smaller one (D29).
+
+### 5.4 With live regeneration
+
+A cave edit regenerates every column from T (`coordinator.ts:1505-1506`); each new payload carries its pass 3 rows, swapped in atomically with the column (SP4c's swap, `sectionRenderer.ts:188-195`), so the caves grow, shrink and move in place while the X-ray is on. Band, radius and colour mode are uniforms; nothing remeshes.
+
+### 5.5 Cost (each estimate measured by L14 or the bench)
+
+Mesh time +25-50 % of `meshSolid` per non-trivial section (`mesh.xray` row); geometry 30-60 % of the cave-wall quads plus the film, about +5-15 MB at RD 12 against SP5c's 39.0 MB geometry (gate: GPU estimate ≤ 150 MB); draw calls +10-20 (SP5c max 16 of 100, `drawCallsMax` in `docs/superpowers/specs/assets/sp5c/bench-iris-chrome.json`); vertex work for the collapsed passes on either side of the toggle; fill (additive overdraw) bounded by the band, the fade and the discard. A radius is set only if L14's `xrayP95` misses 16.7 ms at RD 12; at RD 16 the same parts are recorded, and a radius may bind there.
+
+## 6. Light floor and night vision (D14, D15)
+
+### 6.1 The light floor
+
+In `lightmapRgba` only (`src/render/lightmap.ts:41-57`): after the per-channel max of the sky and block terms and before the brightness lift, `c′ = F + (1 − F)·c` with `F = LIGHT_FLOOR = 0.02`, neutral grey. Every level stays distinct; (15, 15) stays 1. Computed from `lightmap.ts:26-29`, `:41-57` (recon-render §5): the (0, 0) texel is byte 5 at β 0, 10 at β 0.3 (the default, `src/ui/settings.ts:29`), 20 at β 1; a stone north face reads sRGB 11, 18 and 30. The midnight sky-15 texel (moon floor `NIGHT_SKY` = 0.15, `lightmap.ts:18`) has luminance about 0.101 at β 0 and 0.145 at β 0.3 with the floor applied (0.083 at β 0 before it), so the floor is 0.20-0.27 of it. The moon floor (master §4.8's "night floor", the cycle controls of §4.9) is unchanged; the light floor is a separate constant below it. Stored light, the light jobs and every L metric are untouched; the fog under ground (`src/render/materials/glsl/common.glsl.ts:74`) lifts with it; the ghost keeps its own floor 0.6 (`terrain.glsl.ts:122`). The value is the user's to judge by eye at the check; a change is a one-constant edit with its test.
+
+### 6.2 Night vision
+
+`WorldSettings.nightVision: boolean`, default false (`src/ui/settings.ts:8-30`; `normalizeSettings` gives it its default, `:51-68`, so no migration). `FrameState.nightVision` ∈ [0, 1] eases 0 ↔ 1 over 0.3 s (`src/render/frameState.ts:7-18`), passed to `lightmap.update` with the day, dusk and brightness (`materials/index.ts:157`); the rebuild rule's quantised inputs include it (`lightmap.ts:59-91`), so the lightmap is rebuilt each frame only during the ease. The texel after the floor and the lift: `c″ = mix(c′, c′ / max(c′.r, c′.g, c′.b), nv)` (with the floor every texel's max is > 0). It changes no stored light and posts no worker message. The fog follows (D15).
+
+## 7. The UI
+
+### 7.1 Keys (D10, D11, D15)
+
+`Action` gains `xray`, `xrayDown`, `xrayUp`, `xrayAll`, `nightVision`, each `group: 'view'`, `since: 'SP6a'` (`src/player/keymap.ts:12-18`, `:31-37`):
+
+| action | binding | label |
+|---|---|---|
+| `xray` | `KeyX`, without Ctrl | X-ray on or off |
+| `xrayDown` | `PageDown` | Move the X-ray band down |
+| `xrayUp` | `PageUp` | Move the X-ray band up |
+| `xrayAll` | `Home` | Show every depth in the X-ray |
+| `nightVision` | `KeyL` | Night vision on or off |
+
+`KeyX` without Ctrl leaves Ctrl+X (cut, `keymap.ts:89`) as it is; L is free (`keymap.ts:57-96`). `CODE_LABELS` gains PageUp, PageDown, Home (`keymap.ts:178-194`); on laptops these are often Fn + an arrow, so the Caves tab's sliders are the other way (D11). Brackets are not used: on a Spanish layout `+` sits at BracketRight (`test/unit/keymap.test.ts:242-249`). The page's `onAction` switch gains the five (`src/ui/world/worldPage.ts:5076-5136`); keys act only while the world owns the controls (`worldPage.ts:5181-5182`). The action count pinned at 38 (`keymap.test.ts:51`, `tips.test.ts:13`) becomes 43. On a focused range input PageUp, PageDown and Home change its value; `worldIgnoresKeys` already leaves keys to a focused control in an open panel (`worldPage.ts:5178-5180`), and the smoke checks that PageDown on a focused band slider moves only the slider (§10.9).
+
+### 7.2 The strip, the HUD, notices
+
+- `#world-xray-strip` (DOM, as the build HUD): "X-ray · y a … b · by cave type" and the legend; set when the state changes, never per frame.
+- The F3 HUD gains the same line while the X-ray is on, as it does for "stale" (`src/ui/hud.ts:126`).
+- Notices (`WorldNotices.show`): the first X in a page: "X-ray: PageDown and PageUp move the depth band, Home shows every depth" (6 s; key names from the key map); L: "Night vision on" / "Night vision off" (1.5 s).
+
+### 7.3 The Caves tab (D12, D16)
+
+`layoutTabs(places, caves)` (`src/ui/map/layout.ts:16-23`) adds "Caves" after Presets in the world's map only (`?map` has no 3D). Contents: "X-ray (X)" checkbox; "Lowest y" and "Highest y" sliders (−64 … 319, step 1; lowest ≤ highest, kept so); "All depths"; the legend; the radius readout; "Cave slice" (opens the Density tab with a horizontal `caves` slice at the band's middle y, or the camera's y with the band at all, 256 blocks across, centred on the camera); "Cave parameters" (`panel.reveal('caves')`, `src/ui/paramPanel/panel.ts:130-141`); **Find** (cut line, §15): one button per kind, "Nearest <kind>". A pool job searches outward from the camera in rings of 64 blocks up to 512, sampling `caveTagAt` on a 4 × 8 × 4 lattice in each ring's columns (the carvers' kinds by their sources' boxes first), and returns the first hit's air voxel with a yaw along the cave; the camera moves there by `teleporter.toPlace` (`src/ui/world/teleport.ts:24-30`, `:94-96`) in flight; the result line reads "<kind> at x, y, z · d blocks away", "No <kind> found within 512 blocks" or "No <kind> found in 2 s", plus "Save as place" in a saved world. **Cost bound:** a full search of 512 blocks spans about 3,200 columns, and sampling them through `caveTagAt` would take about 16 s on one worker. So the job searches (1) the loaded store's tags first (about 192 blocks at RD 12), (2) for carver kinds, the path cache's boxes and their ellipsoids, with no density, out to 512 blocks, and (3) for noise kinds beyond the loaded area, the coarse lattice with a time budget of 2 s; a second press or closing the tab cancels it. A bench row `finder.nearest` records the worst kind's time (no gate).
+
+### 7.4 The slice viewer's `caves` field (D13)
+
+`sliceModel.ts`'s fields (`src/ui/inspector/sliceModel.ts:55-56`) gain `caves` ("Cave type") on both planes (`:79-84`). Samples through `caveTagAt` and `solidAt` (§3.4), coloured with the X-ray's palette, other solid pale grey, open air the sky colour (`VOXEL_COLORS.sky`, `src/ui/crossSection/voxels.ts:2-4`), with a legend. The horizontal plane's square is drawn on the map as today (`src/ui/map/mapTool.ts:363-372`); it re-requests on every configure, so it moves during a drag (`sliceView.ts:12-13`). The Cross-section's Voxels mode tints air with tag ≠ 0 by kind (`section.ts:10-15`). **Cost:** the `density`, `node` and `caves` fields go through the reference evaluator (`src/gen/inspect/fieldSlice.ts:19-20`), which evaluates every `interpolated` node at its cell's 8 corners per sample (`src/gen/density/reference.ts:115-130`); with D17's ten slots a sample would cost about ten times today's. The slice job therefore memoises corner values per (node, corner) within a slice part (pure values, so bit-exact and DT2 unaffected), and `caveTagAt` gets a batched form that shares a chunk's window, sources and path list across its samples. `slice.vertical128` keeps its 300 ms gate, and a new gate `slice.caves128` (a horizontal 128 × 128 `caves` slice, 256 blocks across) is p50 ≤ 300 ms (`SLICE_CAVES_P50_MAX_MS`). If either misses after the memo, the slice redraws on release instead of during a drag (D13) and the gate goes to the user with the measurements.
+
+### 7.5 Help and tips
+
+The help's Keys table lists the five under "View" with no help code (`src/ui/help.ts:63-76`). One tip template (`src/ui/loading/tips.ts:18-34`): "{xray} shows the caves through the rock; {xrayDown} and {xrayUp} move the depth band, {xrayAll} shows every depth; {nightVision} is night vision."
+
+## 8. Failure modes and review focus
+
+- **A flat wall where a switch or a limit lies** (a refactor reintroducing a hard switch): §1.3's continuity unit test; `C7.verticalStep`, `C7.switchWall`, `C7.flatWallShare`.
+- **A cap too steep** (continuous, but closing a cave within a block of a plane): §1.4's closure-distance unit test; `C7.verticalStep` across the band edges; `C7.flatWallShare` on a sea-floor region.
+- **A carver truncated at a chunk border or at the window:** `C7.reachOverflow` (pure), `C7.carverReference` against a global reference, `C7.borderPlaneRatio`.
+- **A carver that depends on its target column** (Minecraft's `canReach` shortcut, or a cache read with state): no per-target logic in the path builder (§2.1); `DT1.carverCache`, `DT1.isolated`.
+- **Swiss-cheese surface:** `C9.holedSurface`, `C9.thinRoof`, `C9.entrancesMax`; the ramp (§1.4).
+- **No entrances near the player:** `C2`, `C9.nearestEntrance`.
+- **A repeated look:** `C8.aperiodicity` (lags from 16 blocks, so chunk-sized rhythms show), `C8.typeMixVariation`; the carver starts' uniformity is a unit test.
+- **Water walls in caves** (D7's roof too weak at a shore, or a wet position the roof misses): the `wetCover` unit scan; `C7.waterWall` gated on default and archipelago. B5's master part "lake water with air horizontally adjacent" was never built (`test/metrics/water.metric.ts:90-104`) and stays SP7's (master :1905).
+- **Families below the cap's reach** (a leaf moved to its extreme): the family floor (§1.4) and its interval check over the static ranges; `C7.islandCapAir`.
+- **Worlds saved before SP6a opening without noise caves:** D36's migration and its tests (§12.4).
+- **The tag disagreeing with the blocks** (a cell decided air by bounds left untagged, or a noodle in pillar rock named after another family): the tag unit test (carved set = pre-cave solid ∧ air on every voxel of 64 columns; a noodle through pillar rock); `DT2.tagProbe`, also on `treeMutator` trees.
+- **T over budget, or the fill over 6 s:** D25's prototype, its second checkpoint and §1.6's levers; `terrain.real`, `terrain.islands`, L-fill.
+- **A slow slice or finder:** §7.4's corner memo and the `slice.caves128` gate; §7.3's budget and `finder.nearest`.
+- **Stutter walking in caves or with the X-ray on:** L13, L14 (`over33` 0).
+- **The X-ray hiding nothing or everything on toggle** (rows uploaded only on first draw): D23's uniform collapse; L14's toggle segment; a smoke step.
+- **A first toggle's long frame** (all pending rows uploaded at once): rows always drawn (collapsed), so none pend; L14's `xrayToggleMaxMs`.
+- **Night vision touching stored light:** the unit test that toggling posts no worker message and leaves `litHash` unchanged; L1, L3 and DT1.light unchanged by construction.
+- **The light floor flattening night:** §6.1's ratio test; the user's eye at the check.
+- **Preset trees broken by the new root:** the `was` checks at module load (`presetTrees.ts:97`); the `sp3e.region.T.*` goldens re-recorded under the same bump.
+- **Grass at sky 0 under cave ceilings:** S1 `grassSky0` gated, with a floating_islands window holding a large island over grass (SP4a's hand-over, its spec :737).
+- **A cave-only Apply waiting for the map's watchdog:** §4's test.
+- **CI's wall growing past 3 min 30 s:** §11's levers.
+
+## 9. What is kept
+
+SP5c's editing, clipboard and history; SP5b's persistence (`wi10` unchanged; the cave channel is not persisted; the params schema moves to version 3 only to migrate the built-in trees, D36); every existing key's meaning; the map page `?map` (no Caves tab); the 2D map and its tiles (no cave leaf reaches the map stage); the column stage (`sp2a.*` and `sp3e.column.point.*` goldens unchanged); the surface rules (`sp3c.*` unchanged: cave floor and ceiling rules are SP6b's); stored light and the light jobs; the block registry (no new state; `test/stateIds.lock.json` unchanged).
+
+## 10. Metrics and tests
+
+### 10.1 `test/metrics/caves.metric.ts` (D26)
+
+Over harness regions up to 'T' with the tag read from the store (`genRegion` gains `debugTags` for the pillar bit only, `test/harness/region.ts:37-111`). Instruments: 3D 6-connected components over a region's air from y −56 to 319 with sky connection at 319, labelled per 16-block slab with a union-find across slabs (`test/harness/flood.ts` gains it; today it has a 2D `components` only, `:21-25`); the pre-cave top per position (the highest voxel that is solid or tagged); a global carver reference in `test/harness/refs.ts` that carves every path whose box meets the region into the region's box, with no per-column work. Regions: fast, 2 regions 16 × 16 (seed 42, default); quick, 4 regions 32 × 32 (seeds 42 and 1, default) + 2 large_biomes + one 32 × 32 region each on archipelago (a coast and sea floor), amplified (summits and deep columns) and floating_islands (the island cap), at seed 42, found by a scan; full, the quick set over seeds 42, 1, 2, 3. The preset regions run the parts the table marks "presets"; the default parts keep their default regions.
+
+"From": **commit** = gated from the metric's commit, because the part holds by construction; **tuning** = written to `.out` from the metric's commit and gated at the tuning task (D26).
+
+| id | part | definition | threshold | from |
+|---|---|---|---|---|
+| C1 | `voidShare` | tagged voxels / voxels in y −56 … preCaveTop − 8, per profile | 5-15 % | tuning |
+| C2 | `skyComponents` / `skyShare` | sky-connected components reaching ≥ 8 below the pre-cave top, per km²; sky-connected share of cave air within 40 of the surface | ≥ 20 / km²; ≥ 20 % | tuning |
+| C3 | `shares` | cheese ≥ 20 %; spaghetti (3D + 2D) ≥ 10 %; noodle ≥ 2 %; carvers (worm + ravine + underground worm) ≥ 10 %; entrances ≥ 2 % of tagged voxels | master | tuning |
+| C3 | `pillars` / `ravines` | 128 × 128 blocks holding ≥ 1 pillar-bit voxel; ravine sources carving ≥ 1 voxel per km² (sky-exposed: one carved voxel sky-connected) | ≥ 90 %; ≥ 10 / km² (≥ 3) | tuning |
+| C3 | `maxShare` | the largest kind's share (D34) | ≤ 70 % | tuning |
+| C4 | `bands` / `floorPeak` | carve rate per 16-block band −56 … 40; largest single y of floors of components ≥ 10k voxels | ≥ 2 % each; ≤ 10 % | tuning |
+| C5 | `largest` / `landCarved` / `thinnest` | largest component / void; land columns with a tagged voxel; median thinnest axis of components ≥ 64 voxels | < 60 %; ≥ 60 %; ≥ 4 | tuning |
+| C5 | `thinnestByKind` | median thinnest axis of components ≥ 64 voxels whose voxels are mostly cheese / the same for spaghetti 3D (the user's "con mayor amplitud que las espagueti") | ≥ 1.5 | tuning |
+| C6 | `latticeBias` | within each 16-block band, the carve rate per residue y mod 8 (and x mod 4, z mod 4) over the band's mean rate; the maximum over residues and bands (depth variation between bands is C4's, not a lattice bias) | ≤ 1.1 | tuning |
+| C7 | `carverReference` | interior voxels where the stage's carver-tagged set ≠ the global reference's | 0 | commit |
+| C7 | `reachOverflow` | over 100,000 sources per kind, at the defaults and with every carver leaf at its static maximum, paths whose voxel reach (box widened by the largest effective radius) leaves the chunks within R of the source chunk (pure, no terrain) | 0 | commit |
+| C7 | `endTaper` | path ends (branch points excluded) whose last ellipsoid is larger than any of the 4 before it, or whose radius exceeds the path's median (pure, 100,000 sources per kind) | 0 | commit |
+| C7 | `islandCapAir` | cave air at y ≥ 176 in the floating_islands region (presets) | 0 | commit |
+| C7 | `borderPlaneRatio` | cave-wall faces on the planes x mod 16 = 0 over the planes x mod 16 ∈ {4, 8, 12}, and on x mod 16 = 15 over {3, 7, 11} (the same lattice residue mod 4), alike for z | 0.9-1.1 | tuning |
+| C7 | `verticalStep` | max over y −60 … 120 of carve rate(y) / rate(y ± 1), 3-layer smoothed, where rate ≥ 0.1 % (default and presets) | ≤ 1.5 | tuning |
+| C7 | `flatWallShare` | cave-wall faces in axis-aligned planar patches ≥ 6 × 6 faces (default and the archipelago sea floor) | ≤ 0.5 % | tuning |
+| C7 | `switchWall` | faces in the shell \|T − 8\| < 1 / the shell's share of all faces | ≤ 2 | tuning |
+| C7 | `waterWall` | water voxels horizontally adjacent to tagged air, per km² (default and archipelago) | ≤ 1 | tuning |
+| C8 | `aperiodicity` | at y −40, 0, 40: mean \|m(p) − m(p + L·e)\| for L 16, 32, 64 … 512, e x or z, over the random-pair mean | ≥ 0.9 | tuning |
+| C8 | `typeMixVariation` | median Jensen-Shannon divergence of C3's shares between edge-adjacent 128 × 128 tiles | ≥ 0.05 | tuning |
+| C8 | `sizeSpread` | log-sd of component volumes ≥ 64; share of 32 × 32 regions with a component ≥ 50k voxels (D3's "about one in five", ×½ … ×2) | ≥ 1.5; 10-40 % | tuning |
+| C9 | `nearestEntrance` | from 256 land positions per region (not river), horizontal distance to the nearest C2 opening (default and presets) | p90 ≤ 192 | tuning |
+| C9 | `entrancesMax` | C2's count per km² | ≤ 150 | tuning |
+| C9 | `holedSurface` | land positions whose pre-cave top voxel is tagged (default and presets) | ≤ 2 % | tuning |
+| C9 | `thinRoof` | land positions with tagged air within 3 blocks under a solid true top | ≤ 5 % | tuning |
+
+The carver starts' uniformity (Minecraft-like starts at x = 16·sx + 16·u) holds by construction, so it is a unit test (a χ² of (x mod 16, z mod 16) over 100,000 sources, p ≥ 0.01), not a metric part. **Tuning parts:** the tuning task adds each row with `activeFrom: 'SP6a'` at its bound. The master's bounds (C1-C6) are fixed: a miss after §1.6's levers and the tuning goes to the user with the measurements. The other bounds (`C3.maxShare`, `C5.thinnestByKind`, the tuning parts of C7, C8 and C9) are this spec's proposals, and the Exit evidence shows each with its measurement; if the dry run misses one, the measurements go to the user, whose bound is entered with a Threshold-log line. C1's cave_heavy 10-22 % is SP6b's to record and SP12's to gate (master :1964). The metric writes `caves.examples.json` to `test/metrics/.out/` (per kind, the pose of its largest component's air voxel nearest the region's centre at seed 42), from which D16's links are made.
+
+### 10.2 The anti-goals, made measurable
+
+| anti-goal (the brief) | measured by |
+|---|---|
+| a carver truncated at a chunk border or at its generation radius | `C7.reachOverflow`, `C7.carverReference`, `C7.borderPlaneRatio`, `DT1.isolated` |
+| a ravine cut short | `C7.endTaper` (ravines and worms), `C3.ravines` |
+| a straight wall where two methods meet | `C7.flatWallShare`, `C7.switchWall`, `C7.verticalStep`, `C6.latticeBias`, `C7.waterWall`, `C7.islandCapAir`, §1.3's continuity test, §1.4's closure-distance test |
+| patterns too predictable; neighbouring caves alike | `C8.*` |
+| occasional large interiors | `C8.sizeSpread` |
+| cheese wider than spaghetti | `C5.thinnestByKind` |
+| entrances exist within a reasonable distance; not Swiss cheese | `C2`, `C9.*` |
+| the kinds in the expected proportions | `C3.*` |
+| no stutter walking or streaming in caves | L13 (§10.6) |
+| fluid X-ray with everything loaded | L14 (§10.6) |
+
+### 10.3 Determinism (DT1, DT2)
+
+- DT1 (`test/metrics/region.metric.ts:62-117`) runs as today with the cave channel in `regionHash`; new parts `DT1.carverCache` (the region hash with an LRU of 1, of 1024, and warm from another region: equal) and `DT1.isolated` (a column generated alone on a fresh store by a new harness helper, `isolatedColumn` in `test/harness/region.ts`, equal to the same column inside a region).
+- DT2 (`region.metric.ts:146`, `:260`): `probeBulk` compares `solidAt` with the stage's solidity; new `tagProbe` compares `caveTagAt` with the stored tag, on the default tree and on `treeMutator` trees (§3.2's fallback); `compiledReference` and the SP3d edited-tree parts cover `noiseScaled` once `treeMutator` learns it; a new stratum samples cells whose cave interval straddles 0. `surfaceProbeBulk` with carving.
+- New `gen/` files join `DET_FILES` and the banned-API scan (`test/arch/rules/banned.ts`).
+
+### 10.4 Other metrics re-asserted
+
+- **L2** `enclosedLit` 0 (`test/thresholds.ts:95`), now with real caves; its comment (`test/metrics/light.metric.ts:35`) reworded.
+- **S1** `grassSky0` ≤ 0.1 %, `activeFrom` 'SP6' → 'SP6a' (`test/thresholds.ts:76`); the quick and full light tiers gain a floating_islands window holding a large island over grass, found by a scan (SP4a :737). `grassNoSky` (`:75`) stays gated beside it (D33; the master's "in place of" becomes "beside", §13): both hold with caves.
+- **T2** reads pre-cave solidity (solid or tagged) in the scatter, as the master's row says "pre-cave" (today `overhangsPeaks` is 0.1035 against 0.1 on fast; cave transitions would inflate it silently); T1, T3-T5 unchanged (T5's 1,000-position minimum guards its sample, `test/metrics/terrain.metric.ts:50-52`).
+- **R1** (`test/metrics/render.metric.ts:192`, 0/0) gains a region holding an entrance and a ravine across a chunk border, and a part `R1.xray`: X-ray faces against a brute-force count over hollow voxels, missing 0, extra 0.
+- **R2** re-measured with caves (master :1019, :1511); the bounds 0.85 / 0.55 stay unless the measurement misses them, which goes to the user (Threshold log). R4 recorded (gated from SP8b).
+- **B5:** unchanged. Its code has only `perKm2Min`, `perKm2Max` and `highShare` (`test/metrics/water.metric.ts:90-104`, `test/thresholds.ts:51`); the master's third part, lake water with air horizontally adjacent (master :1484), was never built and stays with SP7's exit (master :1905). SP6a's water-wall check is `C7.waterWall` (§10.1) with the `wetCover` scan (§1.4).
+- `islandBranchOnGround` (D31, Point 2) recorded before and after caves in `.out` and shown to the user at the exit.
+- The SP3c y mod 16 residue `landTopYmod16` (SP3c :357, SP3d D19) re-measured and recorded; it stays SP12's.
+- U2 for every new leaf (§4); U3 and U4 as built.
+
+### 10.5 Bench (P1, the kill criterion)
+
+- `TERRAIN_P50_MAX_MS` 4 → 10 and `TERRAIN_P99_MAX_MS` 20, for `terrain.real` and `terrain.islands` (`test/bench/gates.ts:11`, `:280`, `:283`), the master's P1.
+- New rows: `terrain.caves.warm` (a 16 × 16 spiral of neighbours, the LRU warm: the streaming case; recorded); `carver.paths` (one source's path per kind; recorded); `mesh.xray` (pass 3 alone; recorded; `mesh.section` keeps its gates p50 ≤ 1.0, p99 ≤ 2.5 ms with pass 3 inside it); `slice.caves128` (gated p50 ≤ 300 ms, `SLICE_CAVES_P50_MAX_MS`, §7.4); `finder.nearest` (the worst kind's search; recorded); `density.cornerInlined`.
+- `DENSITY_COLUMN_COST_MAX` stays (D24): `test/unit/inspectCost.test.ts:156` (`64 * densityColumnCost(DEFAULT_DENSITY_TREE)`) becomes `64 × 14,907,917`, the SP3d default's cost, and the constant's comment (`src/core/constants.ts:96-100`) says so; `:176`'s check that the muted and islands trees fit stays, and the amplified and floating_islands trees with caves are added to it.
+- **Kill criterion (master :1640):** `test/bench/inlined.ts` is the default expression hand-written as one function returning every interpolated slot's corner value; a unit test proves it bit-exact against the compiled tree on all 1,225 corners of 4 columns. Overhead = (`density.corner` − `density.cornerInlined`) per corner × corners per column (median 475), plus the same for the voxel phase, over `terrain.real`'s p50. Recorded in Exit evidence and master §7; > 25 % adds `new Function` codegen behind a CSP probe with `reference.ts` the oracle, by an amendment of this spec (its size grows; the user is told). Never exempt.
+- A pre-record run exempts by name (`BENCH_EXEMPT`, master :1637) the rows that rise by design: `terrain.real`, `terrain.islands`, `density.corner`, `slice.vertical128`, `slice.horizontal128`, `light.column`, `mesh.section`, `surface.column`; then `npm run bench:record`; then an exit run against the new baselines (SP3c's practice).
+
+### 10.6 Chrome legs (G1; D29)
+
+`?bench=medium` (`src/ui/world/bench.ts:118`, `:146`, `:250`) gains:
+- **L13 caves** ("SP6 adds the cave scenario", master :1388): at the bench seed, the finder's job (§7.3) finds the nearest entrance within 512 blocks of the bench's start; the camera flies there, then follows a route computed when the leg starts from the loaded store's tags: a walk through cave air one block above a floor, preferring cheese and then spaghetti, with a fixed tie-break, so the route is the same for the same seed and generator and needs no update after a retune. The camera moves along it at 4.3 blocks per second (the steady walking speed that `src/player/walk.ts:47-52`'s friction and acceleration give), the eye 1.62 above the floor (`walk.ts:44`), with no physics, so runs are comparable, for 60 s while the world streams. Parts `caveP95` ≤ 16.7 ms, `caveOver33` 0, `caveMainP95` ≤ 6 ms; recorded: the route's kinds, region buffer growth events.
+- **L14 X-ray** at RD 12: X on, hold 10 s, a 360° sweep, PageDown × 4, a cave parameter changed through the Apply path with the map side by side (the bench calls the apply control), wait for the refill, X off. Parts `xrayP95` ≤ 16.7 ms, `xrayOver33` 0, `xrayMainP95` ≤ 6 ms, `xrayGpuMB` ≤ 150 (X-ray buffers included), `xrayDrawCalls` ≤ 100, `xrayToggleMaxMs` ≤ 33; recorded: `gpuMs` p50/p95 with X-ray on and off, `xrayVertexBytes`, the radius in force, region buffer growth events, and `xrayApplyRefillMs` (from the release to the last column swapped; expected about one medium fill, ≤ 6,000 ms: the regeneration is T-bound, so a radius does not shorten it, and a miss goes to the user). The same segment is recorded at RD 16 (`RD_MAX`), not gated.
+- Every route re-measured into `docs/superpowers/specs/assets/sp6a/` (`test/tools/measureChrome.ts:73`, `test/metrics/g1.metric.ts:111-112`): G1's cells, `mediumFill4wMs` ≤ 6,000 (`test/thresholds.ts:148`; SP5c 4,921, the first gate likely to bind, D25), G2.edit, G2.flush, G2.paste, G1.enter. Run headful by an agent on the Iris Xe in Chrome; Firefox and the RTX recorded. A miss is handled by §1.6's levers, then the user (SP5c D28's pattern).
+
+### 10.7 Unit tests (summary)
+
+The `noiseScaled` op (value, interval, class, cost, hash, validation, reference = compiled); continuity across every switch (§1.3); each family's floored interval ≥ −48 over the leaves' static ranges (§1.4); each cap's closure distance ≥ 4 blocks (§1.4); the wet roof closing caves under a lake, river and sea column, measured from the bed; the `wetCover` scan; the island cap at `capTop` 180 and its absence at 344; carver RNG order, path purity, end taper, branch and room, n ≥ 1 at every leaf combination, the underground worm's shrink; the carver starts' χ²; `reachOverflow` on 10,000 sources at the defaults and the static maxima; the carve test's bit-identity across chunk borders (two columns, one ellipsoid); the LRU's purity; the tag rule (carved set = pre-cave solid ∧ air, on 64 columns; ties in order; a noodle through pillar rock is a noodle; cells decided air before corners hold no pre-cave-solid voxel; a tree without family taps); `tapReader` against `tapFn`; `solidAt` and `caveTagAt` against T; the store's cave channel (share, uniform 0, free, the 208-int record, an edited section keeps its cave entry); the params migration (a GV5 record of each of default, amplified and floating_islands opens with the SP6a tree; an edited tree is kept; the badge and the page compute the same genKey, as `test/unit/saves.test.ts:434-444`; a preset file at schema 2 migrates; `test/unit/presetFile.test.ts:151`'s "newer than this build (2)" follows the bump); the slice corner memo (bit-exact against the plain reference); the finder's budget and cancel; `meshXray` against a brute force on fixtures (walls, film, merges); the payload's pass 3 guard; the lightmap: (0, 0) > 0 and ≤ 0.3 × the midnight sky-15 texel's luminance at every t and β tested (replacing `test/unit/lightmap.test.ts:30-36`'s ≤ 0.02·255), block-only texels independent of t (`:38-43`), noon (15, 15) white, night vision's exact bytes and its return to the previous bytes; settings' `nightVision` default and persistence; the five actions, labels and tip; the Caves tab's controls and band rules; the `caves` slice field; the Apply after a cave-only edit not waiting for the watchdog; `zeroAlloc.test.ts` with the X-ray toggled; `test/unit/decorateStage.test.ts:218`'s `AUX_FIXTURE` re-pinned if a cave breaches its surface.
+
+### 10.8 `?selftest=1` and Bun
+
+The goldens grow by `sp6a.density.ops`, `sp6a.carver.paths` (a digest of the paths of 64 fixed sources per kind), `sp6a.region.T.caves` (an 8 × 8 window at seed 42 holding every kind, found by the scan): 59 → 62 keys, in the `allGoldenKeys` chain (`src/metrics/sp2aGoldens.ts:114-125`). Chrome (smoke) and Firefox (the controller's run) `?selftest=1` 62/62; `npx --yes bun@1 test/tools/goldensJsc.ts` 62/62.
+
+### 10.9 Browser smoke (`test/tools/uiSmoke.ts`)
+
+A `caves` step: X shows the strip and hides the terrain (a pixel read of the clear colour); PageDown changes the strip's band; Home restores "all"; L toggles night vision and the Settings checkbox follows and survives a reload; the Caves tab exists in the world's map and "Cave slice" opens the Density tab with the `caves` field; a cave parameter change regenerates (the stale count rises then falls). With the map side by side and a band slider focused, PageDown moves only the slider. `SMOKE_KEYS` (`uiSmoke.ts:846`) gains X, PageDown, Home, L.
+
+### 10.10 Review links and screenshots (D16)
+
+- **Links:** from `caves.examples.json`, one `/?at=x,z&y=…&yaw=…&pitch=…#<seed 42 default hash>` per kind and one for a large interior (`src/ui/world/reload.ts:43-46`; a given `y` is used exactly, `src/ui/world/firstView.ts:21`; an unsaved world opens in flight), written into the Exit evidence before the user's check.
+- **Screenshots** (`node test/tools/uiSmoke.ts --shots`, into `assets/sp6a/`): the X-ray at default and with a band; an entrance from the surface; a ravine; a cheese cavern with pillars; a spaghetti 3D tunnel; a spaghetti 2D layer; a noodle; a worm with its flat floor; a cave at the light floor with and without night vision; the night surface with the floor; a `caves` slice vertical and horizontal. Risk 11's visual review (master :1721).
+
+### 10.11 The user's check
+
+"Bajar por una o varias entradas y recorrer los distintos tipos de cueva": from the links or by flying, go down one or more entrances and walk through each kind. The last exit criterion.
+
+Offered to the user as optional steps (this spec's proposal; the controller checks them in production first, §16): turn on the X-ray, open the map side by side and change a cave size, watching the caves change; try night vision and judge the light floor by eye (§6.1 leaves the floor's value to the user's eye).
+
+## 11. CI impact
+
+Against SP5c's exit run 41396465620 (wall 2 min 56 s; long pole `metrics-quick (terrain)` 158 s; `unit (rest)` 152 s; `metrics-quick (surface)` 147 s; `metrics-fast (rest)` 141 s; `check` 128 s; the SP5c spec's Exit evidence); runs on one commit vary by up to ±45 s:
+- **Every terrain-generating file** (terrain, surface, region, light, render, edit, persist, clipboard, apply, stream, presets) runs the heavier T. `metrics-quick (terrain)`: its scatter analyses on the main thread between a worker's columns (`test/harness/terrainScatter.ts:276-289`), so it grows less than T: estimate +10-40 s (≈ 170-200 s). `metrics-quick (surface)` analyses in the workers (`test/harness/surfaceScatterWorker.ts:72`): estimate +20-50 s (≈ 170-200 s). The others +5-20 s each.
+- **`caves.metric.ts`:** quick about 80-160 s plus setup in a new metrics-quick shard `caves` (the three preset regions add about 20-40 s to the first estimate of 60-120 s); fast about 20-40 s in a new metrics-fast shard `caves` (`.github/scripts/metricShards.mjs:18-40`, `fastShards.mjs:20-24`; pinned by `test/unit/shards.test.ts:11-24`); in `rest` it would become the long pole.
+- **Unit:** +15-30 s of new tests; `unit (rest)` at 152 s would pass the long pole, so SP5b's GOV-8 lever runs at once: the slowest new files (continuity sampling, carver paths, the tag rule, `meshXray`) go to `unit (heavy)` (92 s).
+- **`check`:** +5-10 s (arch pins, integration with caves).
+- **Expected wall: ≈ 3.2-3.7 min without levers; ≈ 3.0-3.4 min with lever 1. Exit criterion: at most 3 min 30 s** (the budget). Levers in order, each measured: (1) `apply.metric.ts` out of the terrain shard into a shard of its own (`metricShards.mjs:20`; ≈ 25-35 s, SP4c's estimate); (2) the `caves` quick shard split by profile; (3) the quick tier's caves regions 4 → 3 (a sample reduction: the user's decision); (4) the quick terrain scatter's columns reduced (the user's decision). Region caches are keyed on `src/**` (`.github/workflows/ci.yml:128`, `:161`), so SP6a's first run starts every metrics shard cold. The docs-only path grows by the unit additions only. The Chrome legs, the bench and the smoke are not in CI. Push A (D28) gives the first CI measurement with the heavier T and no `caves` shard yet; push B the first with it, and the levers are applied there.
+
+## 12. Governance
+
+### 12.1 The first commit (D30)
+
+`SubProjectId` and `SUB_PROJECTS` replace `'SP6'` by `'SP6a'`, `'SP6b'` (`src/core/ids.ts:11`, `:16`, with the split comment); `CURRENT_SP` 'SP6a' (`:25`); `SP_DEPS` `SP6a: ['SP3c', 'SP5c']`, `SP6b: ['SP6a']`, `SP7: ['SP6b', 'SP5a']` (`test/harness/sp.ts:20-21`); `STARTED_SPS` appends 'SP6a' (`:37`); `test/arch/sp.test.ts:34-46`, `:61`, `:79-83`; `cave_heavy.readyFrom` 'SP6b' (`src/core/params/profiles.ts:38`; `test/unit/profiles.test.ts:19`, `:29`; `presetFile.test.ts:152`, `:258`); the fixtures typed `SubProjectId` (`test/unit/metric.test.ts:9-112`, `test/unit/lock.test.ts:43-44`, `:66`); `S1.grassSky0` 'SP6a' (`test/thresholds.ts:73-76`); comments (`src/gen/density/expr.ts:25`; `src/gen/pipeline/terrainStage.ts:10` "aquifers, SP7", `:21` "SP6b"; `decorateStage.ts:30` "SP8b"; `light.metric.ts:35`, `:38`); `npm run test:accept-thresholds` with a Threshold-log line that notes the accept report prints `grassSky0`'s 'SP6' → 'SP6a' as LOOSEN only because `spIndex('SP6')` is −1 once 'SP6' leaves `SP_DEPS` (`test/harness/lock.ts:72-75`, `sp.ts:31`, `:39-41`); it is not one. `CLAUDE.md` and `README.md` status lines. The master amendments of §13 that the split needs.
+
+### 12.2 Locks
+
+The thresholds lock changes with `caves.metric.ts`'s commit (the four construction parts of §10.1), the tuning task (every tuning part), the light commit (none: the lightmap bound is a unit test) and the Chrome commit (L13's and L14's parts, with the committed Iris Xe files), each with a Threshold-log line and this spec in the push (`test/harness/governance.ts:54-56`). The schema-shape lock changes with the caves group (`npm run test:accept-schema`). `test/stateIds.lock.json`: unchanged. `test/baselines.json` re-recorded (§10.5).
+
+### 12.3 `GENERATOR_VERSION` and goldens (D28)
+
+- **Push A** (D25's prototype: `noiseScaled`, the cave families with their floors and caps, the wet roof, the island cap, the tag channel with the noise kinds, D36's migration): `GENERATOR_VERSION` 5 → 6 in its first commit that changes generated output, with the terrain stage's version 3 → 4. Its base is the last commit with `GENERATOR_VERSION` 5 (`5631c45` or its successor before the first cave commit).
+- **Push B** (the carvers, the carver kinds in the tag, the metrics, the output-changing levers and the tuning): 6 → 7 in its first output-changing commit. Its base is push A's head.
+- Within a push, every generator commit records from that push's base: `git checkout <base> -- test/goldens.json`, then `npm run test:goldens`, so each commit is green and the push shows one bump and only the allowed keys against its `before` (`test/harness/governance.ts:46-52`). Work that changes no generated output (the X-ray, the light, the UI, the Chrome legs) is ordered between and after the two pushes; no such commit sits between unpushed generator commits.
+- **Allowed changes:** `generatorVersion`; `sp1.params` (its genKey hashes the version and the schema); `sp3a.region.T.default`, `sp3a.region.T.large_biomes`; `sp3e.region.T.amplified`, `.archipelago`, `.floating_islands`; `sp3b.density.default`; `sp3c.surface.ops` (its fixture columns are rebuilt through the surface probe on the default profile, so with the default tree and, from push B, the carvers: `src/metrics/sp3cGoldens.ts:54`, `:126-136`); new `sp6a.density.ops` (push A), `sp6a.carver.paths`, `sp6a.region.T.caves` (push B). Expected unchanged: every `sp2a.*` (`sp2a.spawn` keeps the 2D path, §3.4), `sp3e.column.point.*`, `sp3b.density.ops`, `sp3a.registry`, `sp3c.registry`. The review is the golden diff against the base, listed in the Exit evidence (the 15a2319 practice), with the Bun and `?selftest=1` runs.
+- **The number:** CI compares goldens with the push's `before` (`ci.yml:69`), so every output-changing push bumps. 7 at the exit; 8 if the user's check asks for a retune. The number is a counter, and the Exit evidence states the final one.
+
+### 12.4 Saved worlds and preset files (D36)
+
+- `SCHEMA_VERSION` 2 → 3 (`src/core/params/migrate.ts:10`) in push A's tree commit, with `MIGRATIONS[1]` (`:16`): if the document's `density.defs` is canonically equal to one of the three SP5c built-in trees (`DEFAULT_DENSITY_TREE`, `AMPLIFIED_DENSITY_TREE`, `FLOATING_DENSITY_TREE`, `src/core/params/profiles.ts:33-35`), it is replaced by the SP6a tree of the same kind; any other tree, a user's edit, is kept. The three SP5c trees are not kept in the code: the migration pins their canonical hashes (`fnv1a64` of their canonical JSON at `5631c45`).
+- Every path that reads stored params goes through `migrate`: saved worlds (`loadParams`, `src/persist/saves.ts:237-245`) and preset files (`src/core/params/presets.ts:43`). The map URL's hash carries a patch against the profile, not a schema version (`src/ui/map/mapState.ts:45-48`, `:73-96`), so a link whose patch carries an edited tree keeps it, as today.
+- The world list keeps SP5b D8's badge and line ("opens with today's terrain; your blocks stay at their coordinates", `src/ui/worldsMenu.ts:104`), which the migration makes true; builds stay at their coordinates and may stand over or inside new caves. A world whose tree the user edited gets the carvers only; no new notice (D36's alternative words one).
+- `test/unit/presetFile.test.ts:151`'s message "newer than this build (2)" follows the bump, and the schema-shape lock is accepted with it.
+
+## 13. Master-spec amendments made with this spec
+
+Applied when the user approves this spec, each pinned in a new describe 'master spec amendments (SP6a §13)' in `test/arch/masterSpec.test.ts`, with an `SP6A_MODULES` table checked against the files (SP5c's pattern, `:1642-1664`) and a header-comment paragraph. Pins that name SP6 move into it: `:39`, `:69` (header comment), `:639-640` (SP3e's note → `spEntry('SP6a', 'SP6b')`), `:883` (bench route), `:973` (§3.7 caching), `:1187` (critical path), `:1214-1215` (the SP6 and SP7 headers), `:1416`, `:1756`, `:1803`, `:1836` (`spEntry('SP5c', 'SP6')` → `'SP6a'`), `:1830` (neither SP6a nor SP6b receives from SP5c); `:141-145` (`SubProjectId`), `:147-154` (one header per id naming its deps) and `:156-168` (the chain) follow the new ids. The SP5 split (commit 766f2af) is the model.
+
+1. **§10 split paragraph**, after :1854: "SP6 was split on 2026-11-02 into SP6a (the shape of the caves) and SP6b (cave biomes), proposed in brainstorming because it grew past L and accepted by the user ("Sí, partámoslo en SP6a y SP6b"); each is testable on its own (the SP6a spec's "What was agreed", item 1)." Pinned by `test('the split', …)` with `toContain`.
+2. **§10 SP6 entry** (:1894-1899) replaced by:
+   - `**SP6a — The shape of the caves** (XL; SP3c, SP5c; walking for in-game review from SP5a). Spec: \`2026-11-02-sp6a-cave-shapes-design.md\`.` Contents: "Cave family terms in the default DAG, one interpolated slot per family (cheese / layer / pillars, spaghetti 2D and 3D with rarity, noodle, entrances, roughness, cheese roof term, the wet roof); worm, underground-worm and ravine carvers (detMath, LRU, a window of 11 chunks); the cave-type tag channel, the X-ray (X, PageUp/PageDown/Home), the cave-type slice field and the Caves tab; the cave parameters (the `caves` group); the light floor and night vision (L)." **Deliverable:** "explorable caves with visible surface entrances and ravines, seen through the X-ray." The "Received from SP3e" line moved here verbatim (with `ISLAND_RUN_MIN_BOTTOM`), worded at the exit as delivered in part ("(delivered: the SP6a spec §1.4, D8: no cave air at y ≥ 180, so water v0's island rule and the sky-open run stay exact; except the island branch over cave-hollowed summits → SP12 with the summit caps, the SP6a spec D31 and its Point 2)", or, if the user chooses Point 2's alternative, "(delivered: the SP6a spec §1.4, D8, D31)"). **Exit:** "as the SP6a spec §16 (C1-C9; re-asserted with caves: L2, S1 `grassSky0`, DT1, DT2 probe == bulk and the tag; P1 T ≤ 10 ms p50, ≤ 20 ms p99; the DAG-closure overhead measured; L13 and L14; the user's check)". **Cut line:** §15's wording.
+   - `**SP6b — Cave biomes** (size set by the SP6b spec; SP6a).` Contents: "3D quart cave-biome picker (lush, dripstone, **abyss**) with cave floor and ceiling surface rules; the abyss surface-palette blocks (decided in the SP6b spec); the X-ray coloured by cave biome; the map cave-biome layer; the `cave_heavy` preset; cave culling (§4.15) with R3." **Deliverable:** "cave biomes recognised by their blocks." "Received from SP6a (its spec §14; amended by SP6a): …" (§14's SP6b text). **Exit** and **Cut line:** "set by the SP6b spec" (B3, R3, C1's cave_heavy recorded, C1-C9, DT1, DT2's surface parts and P1 re-asserted at least).
+3. **§10 SP7 header** (:1901) "(L; SP6, SP5a)" → "(L; SP6b, SP5a)" (D30); SP7, SP8a, SP8b, SP8c, SP9, SP10, SP11 and SP12 gain "Received from SP6a (its spec §14; amended by SP6a): …" lines with §14's text. The abyss hand-overs to SP7 (lava), SP8b (crystals, the gothic touch) and SP8c (silence) are not in these lines: the brief makes SP6b their recorder, so SP6b writes them into the master; §14 states them here for reference.
+4. **Critical path** (:1968): "SP5c → SP6 → SP7" → "SP5c → SP6a → SP6b → SP7". **Visible value** (:1972): "caves in SP6" → "caves and the X-ray in SP6a, cave biomes in SP6b".
+5. **Default receivers** (:1766): "SP6 underground-only carver and spaghetti-2D rarity bands → SP12" → "SP6a underground-only carver and spaghetti-2D rarity bands → SP12; SP6a cave finder → SP10", worded at the exit by whether each was taken.
+6. **§2.5** (:396): `'SP6'` → `'SP6a'|'SP6b'`.
+7. **Bare "SP6" reworded:** :349 (meta bits: "SP6b decides"), :377 (`caveBiomeQ` 0 "until SP6b"), :681 and :684 ("SP6a"), :685 (D19's sentence: "`col` reads finite fields only; SP6a's wet roof reads `lakeMask`, `riverStrength` and `offset`, so no level-field rule is needed (amended by SP6a)"), :694 ("aquifers, structures: SP7-SP9"), :787 and :789 ("SP6b"), :844 ("SP6b spec"), :1019 and :1511 ("re-baselined at SP6a"), :1333 ("SP6b"), :1388 ("SP6a adds the cave scenario"), :1495 ("gated from SP6a"), :1808 ("SP6b"). The bare SP6 stays only in the historical split paragraphs (:1801, :1803).
+8. **§1:** `gen/caves/carvers.ts carverCache.ts` gains `carve.ts tags.ts (SP6a)`; `mesh/` gains `xray.ts (SP6a)`; `materials/` lists the X-ray material; `ui/world/*` gains `xrayStrip.ts (SP6a)`; `ui/map/*` gains `cavesTab.ts (SP6a)`; the test entry gains "(SP6a: metrics/caves.metric.ts, bench/inlined.ts)".
+9. **§2.3:** the section channels gain "`cave` (u8 per voxel: the cave kind in bits 0-3, bits 4-7 reserved; written by T, shared from the proto set, never persisted; SP6a)".
+10. **§2.5 Expr ops:** `noiseScaled{id, s}` added with its semantics (§1.5).
+11. **§3.6:** the default expression as built: §1.1's tree, §1.2's table (noises, amplitudes and offsets as the schema defaults, which the masterSpec header comment requires, `:4-6`), §1.3's continuity rule and §1.4's floors, caps, wet roof and island cap; "every term is a tap" → "every cave family is a tap (SP6a: the shared terms, roughness, the ramp, the caps and the wet roof, are not, so the inspector mutes and probes a family, not a shared term)"; the debug channel sentence → "T writes the winning kind per carved voxel into the `cave` channel (SP6a)"; the early-out line "(no cave taps before SP6)" → "(SP6a: the cave taps' intervals come from their noises' ±clampSigma, so underground cells need their corners)".
+12. **§3.8:** sources "within R = 11 chunks (23 × 23), R derived from the leaves' maxima (SP6a)"; §2.2-§2.3's path formulas and values as built, the worm rooms and the underground worm's shrink below y 40 included; the carving rules: "Only `CARVABLE` blocks; carvers shrink to nothing under water and below `caves.limits.capTop` (from y 172 in floating_islands) (SP6a); structure piece boxes (SP9) shrink them the same way; each carved voxel asks `aquifer.fluidAt` (SP7; until then it is air); carving runs before the surface pass, which skins the carved column (SP6a)."
+13. **§4.5:** the pass list gains "the X-ray pass (SP6a): cave walls and the surface film, additive, drawn alone while the X-ray is on"; draw calls gain "+1 per region with X-ray rows (SP6a)".
+14. **§4.8 Lightmap:** gains "a light floor F = 0.02 lifting every texel before the brightness (SP6a); night vision normalising each texel to its brightest channel, eased over 0.3 s (SP6a)". **§6.3:** "(0,0) ≤ 0.02 luminance" → "(0,0) = the light floor: > 0 and ≤ 0.3 × the midnight sky-15 texel's luminance at every β, with night vision off (SP6a)".
+15. **§4.16:** the overridable settings gain "night vision (SP6a)". **§5.9:** "X (X-ray; SP6a); PageUp / PageDown / Home (the X-ray band; SP6a); L (night vision; SP6a);".
+16. **§5.1:** Terrain scope's examples name "caves (`caves.*`)". **§5.5:** the slice fields deliver "cave type (SP6a)"; "each cave term" through the family taps; "carver mask" as the tag's carver kinds. **§5.6:** "cave slice at y" → "the cave slice at y: the Density tab's horizontal cave-type field, its square on the map (SP6a); a tile layer and carver tunnels → SP10".
+17. **§6.1:** the harness's `debugTags` reads the store's `cave` channel and adds the pillar bit; references gain "3D sky flood and components; a global carver reference (SP6a)"; the raycast visibility reference stays with cave culling (SP6b).
+18. **§6.4:** C1-C6 rows gain their parts as built, C6's definition becoming "within each 16-block band, the carve rate per lattice residue (y mod 8, x and z mod 4) over the band's mean" (SP6a), C5 gaining `thinnestByKind`; new rows C7, C8, C9 (§10.1's definitions and thresholds); S1's row "gated from SP6a; `grassNoSky` stays beside it" (D33); B5's row unchanged (its third part stays SP7's); L2's note; R2's re-baseline; G1's row gains L13 and L14's parts. Each cross-checked against `THRESHOLDS` (SP5c's pattern, `masterSpec.test.ts:1730-1757`). `MetricId` gains C7, C8, C9 (`src/core/ids.ts:28-48`).
+19. **§7:** a "Measured in SP6a" line (`terrain.real` and `terrain.islands` with caves, `terrain.caves.warm`, `carver.paths`, `mesh.xray`, `slice.caves128`, `finder.nearest`, the kill-criterion ratio, the fill); the T gate's text "≤ 10 / 20" now gated as p50 ≤ 10, p99 ≤ 20 by `TERRAIN_P50_MAX_MS` and `TERRAIN_P99_MAX_MS`. **§8 risk 3:** the outcome (which levers ran).
+
+## 14. Notes handed to later SPs
+
+- **SP6b** (receives, so its spec places each): the 3D quart cave-biome picker and its registry (master §3.10, :752-757, :776; the depth axis, :580); `caveBiomeQ` in aux B (:377); the `caveBiome` condition and rule 4 before rule 2 (:787-798), with `secondaryDepthRange` if its rules need it; the abyss palette, lush and dripstone blocks (the brief: very dark stone with faint veins, cracked variants, shale strata, ash floors, flat colours until SP8a; the `SOUND` group `abyss`, :313); the X-ray coloured by cave biome (the `xray` pack variant's 4 reserved bits, read from aux B by the mesh job); the map cave-biome layer and the slice view's biome3d field; `cave_heavy`'s overlay on §4's leaves, `readyFrom` 'SP6b'; B3; C1's cave_heavy 10-22 % recorded; **cave culling** (§4.15, :1219) with R3 (:1512), the raycast visibility reference (:1407), `connectivity15` in the staging (SP4b :632) and the meta bits 17-31 (:349), skipping the X-ray pass while the X-ray is on; C1-C9, L2, S1, DT1 and DT2 re-asserted (DT2's surface parts with the cave rules); P1 re-measured with about 300 cave quarts (:1629); `GENERATOR_VERSION` bumped again; new block states join the clipboard by state key and turn with `rotateState` (SP5c §14); the user's words that cave biomes give "variedad y bloques característicos a las diferentes cuevas", so each zone is recognised by its blocks; the abyss really dark from SP6b with SP6a's light floor (0.02, §6.1) and no other light until SP7's lava and SP8b's crystals; SP6b writes into the master the user's abyss hand-overs to SP7, SP8b and SP8c ("Oscuro y silencioso, decorado por elementos con un ligero toque gótico (SP8b) y puede ser iluminado un poco por gemas o cristales exclusivos de este bioma, y la propia lava que también emite luz"), which §14 lists below for reference; the `undergroundWorms.chance` × 1.5 in `cave_heavy`.
+- **SP7:** aquifers (master §3.9) replace the wet roof for oceans and rivers: SP7 decides whether caves may open under water then, and `caves.limits.waterDepth` with it; `aquifer.fluidAt` per carved voxel (§2.4); A1-A4 use SP6a's 3D components and the tag; the cave channel marks water-filled caves as hollow, so the X-ray shows flooded caves; the master's map cave slice "plus aquifer fluid" (master :1357): the `caves` slice field shows aquifer fluid in carved voxels; the `wetCover` scan and `C7.waterWall` re-read with aquifers; the level-field −∞ rule only if aquifers need `col` level fields (D19); `surfaceEst3` caching with its first consumer (:694); `dryPitsBelowSea` (SP3c); the bench's flood scenario after L13; **lava may appear in the abyss** (for reference; SP6b writes it into the master: the user wants lava, not water, to light it a little; the master's "the Abyss stays dry and dark", :737, is read as "no water"; SP6b records the abyss's box).
+- **SP8a:** textures darken albedo under the light floor: the floor's value is re-judged with textures; the X-ray material stays flat-coloured; the abyss's flat colours (SP6b) get painters.
+- **SP8b:** ores in stone, never in tagged air; cave decoration (glow lichen, cave vines, moss, dripstone) reads cave floors and ceilings from the scan's lower runs and the tag; **the abyss's faintly glowing crystals or gems and its light gothic touch** (for reference; SP6b writes it into the master); block-light emitters lift caves above the floor; D's first feature reads the decorated copy (SP4a :735); R4 gated with cave walls; a feature placed in tagged air keeps its voxel's tag (the X-ray treats a non-opaque feature as hollow, an opaque one as wall).
+- **SP8c:** the abyss silent (for reference; SP6b writes it into the master: "Oscuro y silencioso", little sound, not unsettling music); the cave ambience may read the tag and the enclosure; AU3's cave labels.
+- **SP9:** structures merging with caves without abrupt cuts (the user: "intentaríamos analizar como fusionarlas con la generación"): a structure's piece boxes shrink carvers through §2.4's shrink term and add a continuous roof term to the noise caves, as the wet roof does, so no carver or cave ends on a box face; the beard term (:677) stays the density's join; structures can read the tag to sit in or avoid cave air.
+- **SP10:** the map cave tile layer and the carver-tunnel layer (D13); the probe's carver hit and cave kind; full F3 with the kind at the feet; key remapping includes X, PageUp, PageDown, Home and L; the Caves tab's Find buttons if they were cut (§15).
+- **SP11:** the X-ray material is a GLSL material in `render/materials` (the TSL seam); the light floor and night vision live in the lightmap and work with the presets; the night fog's tuning (SP4b's user check) with the floor; whether LOD shows ravines and entrances (the LOD samples the surface without carvers).
+- **SP12:** the underground-only carver and spaghetti-2D rarity bands if cut (§15); the final cave tuning with cave_heavy and C1's 10-22 % gate (:1964); the floating_islands surface predicate over cave-hollowed summits (D31; Point 2's recommendation), fixed with the summit caps by `runBottomAbove`, shown with SP6a's `islandBranchOnGround` before and after caves; the y mod 16 residue (re-measured in SP6a); SP3b's small floating rocks above peaks (no cave mechanism removes them; SP3b :330).
+
+## 15. Cut line
+
+May slip, in this order, each named in master §10's Default receivers and worded at the exit by whether it was taken:
+1. **The Caves tab's Find buttons** ("Nearest <kind>") → SP10. D16's review links replace them for the user's check. The search job stays, because L13 uses it to find its entrance.
+2. **Spaghetti-2D rarity bands** (rm2 = 1 stays; the `spaghetti2d.scales` leaves go with them) → SP12 (the master's cut line).
+3. **The underground-only carver** (with its `undergroundWorms` leaves) → SP12 (the master's cut line); C3's carvers share then counts worms and ravines.
+
+The plan builds all three with §1.2's, §2.2's and §4's values unless the controller cuts one; each is cut whole.
+
+Not cuttable (the brief and master §10): every other noise family and both other carvers; the continuity rule, the floors and the caps; the wet roof and the island cap; D36's migration; the parameters on the map; the cave channel; the X-ray with its band, film and colours; the cave slice field; the light floor and night vision; C1-C9 as §10.1 assigns; L2, S1, DT1, DT2; P1; the kill criterion; L13 and L14.
+
+## 16. Exit criteria
+
+| criterion | checked by |
+|---|---|
+| C1-C6 within the master's thresholds; C7's construction parts from their commit; every tuning part gated at its bound (or the user's, logged) | `npm run test:metrics:full`, CI |
+| no abrupt cuts (the brief): `C7.*` green, §1.3's continuity test and §1.4's closure-distance test green, the screenshots show no flat end | metrics, `npm test`, review |
+| not predictable, neighbours differ, occasional large interiors (the brief): `C8.*` green | metrics |
+| entrances within reach, the surface not Swiss cheese (the brief): C2, `C9.*` green | metrics |
+| the kinds in proportion: C3's parts green, no kind > 70 %; cheese wider than spaghetti (`C5.thinnestByKind`) | metrics |
+| L2 0, S1 `grassSky0` ≤ 0.1 % and `grassNoSky` 0, DT1 (with `carverCache`, `isolated`), DT2 (`probeBulk`, `tagProbe`, `compiledReference` with `noiseScaled`) 0 on every tier | metrics |
+| `terrain.real` and `terrain.islands` p50 ≤ 10 ms, p99 ≤ 20 ms; `slice.vertical128` and `slice.caves128` p50 ≤ 300 ms; every other row within its gate and the +30 % rule against the re-recorded baselines | `npm run bench` |
+| the DAG-closure overhead measured and recorded; ≤ 25 % of T or codegen added by amendment | `density.cornerInlined`; Exit evidence |
+| D25's prototype applied before the carvers and the X-ray, and its second checkpoint after them, their measurements recorded | Exit evidence |
+| no stutter walking through caves or with the X-ray (the brief): L13's and L14's parts; G1, `mediumFill4wMs`, G2 and G1.enter re-read from `assets/sp6a/`; Firefox and RTX recorded | `g1.metric.ts`, `assets/sp6a/*.json` |
+| the light floor and night vision: the lightmap tests; night vision posts no worker message and changes no `litHash` | `npm test` |
+| the world changed only as allowed: `GENERATOR_VERSION` 7 (8 after a retune), the golden diff of each output-changing push against its base lists only §12.3's keys, `?selftest=1` 62/62 in Chrome and Firefox, Bun 62/62 | `git diff <base> -- test/goldens.json`, browsers, Bun |
+| worlds saved before SP6a open with the caves: D36's migration tests; a world saved in SP5c opened in production shows noise caves | `npm test`; the controller's check |
+| the smoke's `caves` step green | `node test/tools/uiSmoke.ts` |
+| build, tests and full metrics green with SP6a's rows active | `npm run build && npm test && npm run test:metrics:full` |
+| CI green, its wall against §11's estimate and at most 3 min 30 s | GitHub Actions |
+| production, headful, Chrome and Firefox: the X-ray, the band, a live cave edit side by side, night vision, a walk through an entrance | the controller's check |
+| the review links (§10.10) and screenshots in `assets/sp6a/` | Exit evidence; `uiSmoke.ts --shots` |
+| the master amendments pinned in 'master spec amendments (SP6a §13)'; every obligation of §17 placed | `npm test` (arch); §17 |
+| `islandBranchOnGround` before and after caves shown to the user (Point 2) | Exit evidence |
+| **the user's check:** go down one or more entrances and walk each kind of cave (§10.11) | the user's evaluation |
+
+The exit commit says in `CLAUDE.md` and `README.md` that SP6a is implemented and awaits CI, the production check and the user's check; the commit after them sets SP6a complete.
+
+## 17. Where every SP6 obligation lands
+
+Ids are recon-obligations' (`.superpowers/sp6/recon-obligations.md`). "6a" = this spec; "6b" = the SP6b spec receives it (§14); "→ X" = handed on, with the reason.
+
+| ids | lands on | where / reason |
+|---|---|---|
+| E1 header and dependencies | 6a + 6b | §13 item 2; SP6b depends on SP6a only |
+| E2 cave family terms; G7-G16, G18 | 6a | §1 (D1, D2, D17, D18); G11's per-voxel noodle is §1.1's four slots |
+| E3 worm and canyon carvers; L1; G20-G24; G34 | 6a | §2 (D5, D21); G24's structure skip → SP9 (no structures before it; §2.4's shrink is the hook) and `aquifer.fluidAt` → SP7 (aquifers are SP7's) |
+| E4, E5, E9, E10, E15; M2; D2, D5; G2, G4, G26-G28, G30, G33; U2; T7 | 6b | the brief's split; §14 |
+| E6, G18 debug tag channel | 6a | §3.2-§3.3 (D20) |
+| E7 cave-type tint | 6a | §7.4 (D13) |
+| E8 map cave slice | 6a; tile layer → SP10; aquifer fluid → SP7 | §7.4 (D13); a tile layer duplicates the slice and needs 3D samples in the tile job; aquifers are SP7's |
+| E11, E16; L2 (`render/culling`); D4; R1, R7; T8 | 6b | D27: invisible, G1 headroom, SP6a already XL |
+| E12 deliverable | 6a | §16, the user's check |
+| E13 SP3e's island runs | 6a | §1.4, §2.4 (D8); the surface predicate's over-firing on cave-hollowed summits → SP12 (D31: same fix as the summit caps the user accepted; extending that acceptance is Point 2) |
+| E14, T1-T6 C1-C6 | 6a; C1 cave_heavy → 6b records, SP12 gates | §10.1 |
+| E17, T9 L2 | 6a | §10.4 |
+| E18, T10 S1 | 6a | §10.4; `grassNoSky` kept beside |
+| E19, E20, T11 DT1, DT2 | 6a (density, carvers, tag) + 6b (surface parts) | §10.3 |
+| E21, G3, T12 P1 | 6a; 6b re-measures | §10.5 (D24) |
+| E22, P2 kill criterion | 6a | §10.5 |
+| E23, P5 cut line | 6a | §15 |
+| M1 09's pain points | 6a (entrances, morphology, noodle); 6b (cave biomes); → SP7 (lava) | C2, C3, C5; B3; A3 |
+| M3 the abyss | 6b (stone); → SP8b (mineral, crystals, decoration); → SP8c (ambience) | the brief; §14 |
+| L3 GLSL boundary | 6a | §5.2 |
+| L4 picker modules | 6b | |
+| L5 cave decoration kinds | → SP8b | decoration is D's (master :1919) |
+| L6 harness flood and components; raycast reference | 6a (flood, components, carver reference); 6b (raycast, with culling) | §10.1 |
+| D1 `CARVABLE` | 6a | §2.4 |
+| D3 `SOUND` abyss | built; 6b assigns it | |
+| D6 `SubProjectId` | 6a first commit | §12.1 |
+| D7 Expr ops | 6a | §1.5 (only `noiseScaled` is needed; the master's other listed ops stay "with the SPs that need them") |
+| G1 carver sources into T | 6a | §3.1 |
+| G5 lakes | 6a | §1.4 (D7: the wet roof from the bed, `wetCover`) |
+| G6 early-out with cave taps | 6a | §1.6 |
+| G17 level fields' −∞ rule | not needed | D19; SP7 adds it if aquifers read level fields |
+| G19 `surfaceEst3` caching | → SP7 | its first consumer is aquifers |
+| G25 aquifers, lava, the abyss exclusion | → SP7 | master :1902; lava allowed in the abyss (§14) |
+| G29 grass only on the sky run | 6a (+ 6b keeps it) | §3.1 (D6) |
+| G31 cave decoration | → SP8b | master :1919 |
+| G32 structures not in caves | → SP9 | §14's merge note |
+| G35 determinism, selftest | 6a + 6b | §10.3, §10.8 |
+| R2 R2 re-baseline | 6a | §10.4 |
+| R3, R4, R6 light rules, lightmap, night floor | 6a | §6 (D14, D15) |
+| R5 block-light emitters | → SP8b | decoration emitters |
+| R8 settings | 6a | §6.2 |
+| R9 ambience | → SP8c | master :1926 |
+| U1 Terrain scope | 6a (caves, carvers); 6b (cave biomes) | §4 |
+| U3 slice fields | 6a (family taps, carver kinds, cave type); 6b (biome3d); → SP10 (the rest) | §7.4 |
+| U4 probe fields | → SP10 | "probe of all stage outputs" (master :1940) |
+| U5 map layers | 6a (cave slice as a field); 6b (cave-biome layer); → SP10 (tile layer, carver tunnels) | D13 |
+| U6 F3 biome | → SP10; 6b may add the cave biome | master :1940 |
+| U7 bench cave scenario | 6a | L13 (§10.6) |
+| U8 controls | 6a | §7.1 |
+| T13 U2-U4 | 6a + 6b | §4 |
+| T14 streaming metric with caves | 6a | L13; the stream metric re-runs on cave terrain |
+| T15 A1-A4 | → SP7 | aquifers |
+| T16 O2, V4 | → SP8b | |
+| T17 AU3 | → SP8c | |
+| T18 R4 | → SP8b gates; 6a records | §10.4 |
+| T19 traceability lines | 6a (C2-C6, L2); 6b (B3) | §13 item 18 |
+| P1 T rows | 6a (corners, carvers); 6b (cave quarts) | §10.5 |
+| P3 risk 3 | 6a | §1.6 |
+| P4 risk 11 visual review | 6a + 6b | §10.10 |
+| SP0:119, SP3a:311/:357 `SP_DEPS` | 6a first commit | §12.1 |
+| SP1:397/:509 `cave_heavy {}` | 6b | |
+| SP2b:348/:490 cave biomes in the table | 6b | |
+| SP3a:326 pin new ops | 6a | §1.5 |
+| SP3b:21/:31, :416, :417/:438 | 6a | §1, §1.6, §10.3 |
+| SP3b:216-217/:415 dry pockets, water walls | → SP7; 6a's wet roof avoids new ones | D7 |
+| SP3b:222 `caveBiomeQ` | 6b | |
+| SP3b:330 small floating rocks | → SP12 | no cave mechanism removes them |
+| SP3b:412 NaN endpoints | delivered by SP3d | D19 |
+| SP3b:414, SP4c:552 caching | → SP7 | |
+| SP3c:21/:164/:307/:448/:467/:469 cave rules | 6b | |
+| SP3c:117 `CARVABLE` | 6a | §2.4 |
+| SP3c:342/… `dryPitsBelowSea` | → SP7 | aquifers and settle |
+| SP3c:357/… y mod 16 residue | 6a re-measures; → SP12 | §10.4 |
+| SP3c:449/:480, SP4a:16/:76/:579/:830 S1 | 6a | §10.4 |
+| SP3d:22/:600 | 6a (taps; level fields not needed); 6b (rules) | |
+| SP3e:32 `cave_heavy` | 6b | |
+| SP3e:537/:550/:619 | 6a | E13 |
+| SP4a:31, :60, :737/:777 culling, connectivity, meta bits | 6b | D27 |
+| SP4a:384/:737 floating window for S1 | 6a | §10.4 |
+| SP4a:584/:737 L2 | 6a | §10.4 |
+| SP4a:735 D reads the decorated copy | → SP8b | SP6a places no D feature |
+| SP4a:770 exit wording | done | |
+| SP4b:38/:630-632 | 6b (culling); 6a (L2, streaming with caves) | |
+| SP4b:668 bench cave scenario | 6a | L13 |
+| SP4c:79 D13 no daylight flash in a regenerating cave | 6a keeps it | the floor and night vision change display only; the eye's sky light rule (`frameStep.ts:113-125`) is untouched |
+| SP5a:77/:372 order and header | 6a | §13 |
+| SP5b:57/:314 `cave_heavy` | 6b | |
+| SP5c:6/:509 states and the clipboard | 6b | SP6a adds no state |
+| brief: X-ray by cave biome | 6b | |
+| brief: abyss palette, lush, dripstone | 6b | |
+| brief: SP8b crystals and gothic touch; SP8c silence; SP7 lava | 6b records; §14 states them now | |
+
+## Exit evidence
+
+(Filled during and at the exit: D25's prototype — `terrain.real` and `terrain.islands` p50/p99, the voxel phase's share, amplified columns' p99, corners per column, the cave channel's shared memory, `mediumFill4wMs`, `slice.vertical128`, `slice.caves128`, each cap's closure distance, and the levers applied; D25's second checkpoint — the fill, `mesh.section` p99, the path cache's memory, the reservations and growth events; push A's and push B's CI runs; the exit CI run against §11; the bench's exit run and the kill-criterion ratio; L13 and L14 on the Iris Xe in Chrome, Firefox and the RTX, with RD 16 recorded; the golden diff of each output-changing push against its base and the final `GENERATOR_VERSION`; each tuning part's measurement and the bound taken; `islandBranchOnGround` before and after caves (Point 2); D16's review links; the production check; the user's check.)
+
+## Threshold log
+
+(One line per commit that changes `test/thresholds.lock.json`, and per gate decision that changes no lock.)
