@@ -23,9 +23,11 @@ import { GHOST_ORDER, REFUSED_RED, VOLUME_DIM_ORDER } from './selection';
  *   skipped (its faces would all be its own voxels'). Over `GHOST_MAX_QUADS` the build stops at `'tooMany'` with no
  *   geometry: the page then shows the ghost's box only.
  * - **The slice:** `step(now)` meshes cells until the one that crosses `GHOST_SLICE_MS` (a cell is the unit of work),
- *   reading the injected clock once at the slice's start and once after each cell; the geometry is uploaded once, when
+ *   reading the injected clock once at the slice's start and once after each cell; the geometry is built once, when
  *   the last cell is done, in that slice, and the clock is read once more after it, so `lastSliceMs` (the slice's
- *   time, L12's `ghostSliceMaxMs`) counts the upload too.
+ *   time, L12's `ghostSliceMaxMs`) covers the meshing and the geometry's construction. The geometry is uploaded to the
+ *   GPU on the first frame the ghost is drawn (three uploads it lazily inside that frame's render), so the upload is
+ *   counted in that frame's figures, not in `lastSliceMs`.
  * - **The placement:** the mesh's position is the box's minimum corner (scene coordinates) plus the turn's translation
  *   (q 1: (D, 0, 0); q 2: (W, 0, D); q 3: (0, 0, W), W and D the unturned sizes), its rotation about y −q · 90° and its
  *   scale 1/8, which maps cell (x, y, z) as §2.6 does ((D − 1 − z, y, x) for one turn); the material's `ghostTurns`
