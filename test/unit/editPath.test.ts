@@ -16,6 +16,7 @@ import type { Edit, EditedMsg } from '../../src/workers/protocol';
 import { SIM_THREAD } from '../../src/world/store/reclaim';
 import { createEditLatency, type EditLatency } from '../../src/ui/world/editLatency';
 import { createBlockHistory } from '../../src/ui/world/blockHistory';
+import { PACKED_MIN_EDITS } from '../../src/workers/protocol';
 import { BULK_MIN_EDITS, createEditPath, formatCount, WORKING_NOTICE_MS, workingNotice } from '../../src/ui/world/editPath';
 import { onSimFailure } from '../../src/ui/world/worldPage';
 
@@ -216,6 +217,8 @@ describe('createEditPath (SP5a spec §2.1, §2.6, §2.7)', () => {
 describe('bulk batches (SP5c spec §3.4, D23)', () => {
   test('the pinned values: a batch of more than 2 edits is bulk, the notice after 250 ms, counts as "12,345"', () => {
     expect(BULK_MIN_EDITS).toBe(3);
+    // Every bulk batch goes to the sim packed (D28's lever 1).
+    expect(BULK_MIN_EDITS).toBe(PACKED_MIN_EDITS);
     expect(WORKING_NOTICE_MS).toBe(250);
     expect(formatCount(12345)).toBe('12,345');
     expect(formatCount(7)).toBe('7');

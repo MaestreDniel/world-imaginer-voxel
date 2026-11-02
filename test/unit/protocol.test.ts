@@ -13,9 +13,10 @@ import { paintTile, paintTileAbortable } from '../../src/gen/map/tile';
 import { createSurfaceContext } from '../../src/gen/surface/context';
 import { surfaceProbe } from '../../src/gen/surface/probe';
 import type { HistoryRecord } from '../../src/persist/saves';
+import { MAX_STEP_EDITS } from '../../src/sim/edits';
 import { AIR, BEDROCK, DEEPSLATE, REGISTRY, SNOW_BLOCK } from '../../src/world/blocks/index';
 import { leafOpts } from '../../src/ui/splineEditor/model';
-import { cellOf, historyChange, parseFromSim, parseFromWorker, parseSpikeStoreFromWorker, parseSpikeStoreToWorker, parseToSim, parseToWorker, pointInWindow, resolveHistory, SLICE_ROWS, SLICE_SAMPLES, sliceIndex, slicePartIndex, tileInWindow, type FromWorker, type HistoryChange, type ScopedJobType } from '../../src/workers/protocol';
+import { cellOf, historyChange, packEdits, parseFromSim, parseFromWorker, parseSpikeStoreFromWorker, parseSpikeStoreToWorker, parseToSim, parseToWorker, pointInWindow, resolveHistory, SLICE_ROWS, SLICE_SAMPLES, sliceIndex, slicePartIndex, tileInWindow, unpackEdits, type Edit, type FromWorker, type HistoryChange, type ScopedJobType } from '../../src/workers/protocol';
 import { createSliceJob } from '../../src/workers/sliceJob';
 import { createTaskHandler } from '../../src/workers/taskHandler';
 import { createStore } from '../../src/world/store/store';
@@ -1022,6 +1023,61 @@ describe('the `copy` message and the `edits` guard\'s length cap (SP5c spec §3.
     ['a generated value whose fluid byte has bit 7', copied({ generated: new Uint32Array([0, 0x81]) })],
   ])('a `copied` reply is refused: %s', (_n, m) => {
     expect(parseFromSim(m)).toBeNull();
+  });
+});
+
+describe('the packed `edits` form (SP5c spec §10.4, D28\'s lever 1)', () => {
+  const es: Edit[] = [
+    { x: 5, y: 70, z: -3, op: 'set', value: 1 << 8, expect: 0 },
+    { x: -524_288, y: -64, z: 524_287, op: 'revert', value: 0, expect: (((REGISTRY.stateCount - 1) << 8) | 0x7F) >>> 0 },
+    { x: 524_287, y: 319, z: -524_288, op: 'set', value: 0x7F, expect: 1 << 8 },
+  ];
+  const packedMsg = (o: Record<string, unknown> = {}) => ({ type: 'edits', id: 4, packed: { ...packEdits(es), ...o } });
+
+  test('`packEdits` lays edit k at xyz[3k … 3k + 2], value[k], expect[k], revert[k], and `unpackEdits` gives the edits back', () => {
+    const p = packEdits(es);
+    expect([...p.xyz]).toEqual([5, 70, -3, -524_288, -64, 524_287, 524_287, 319, -524_288]);
+    expect([...p.value]).toEqual([1 << 8, 0, 0x7F]);
+    expect([...p.expect]).toEqual([0, (((REGISTRY.stateCount - 1) << 8) | 0x7F) >>> 0, 1 << 8]);
+    expect([...p.revert]).toEqual([0, 1, 0]);
+    expect(unpackEdits(p)).toEqual(es);
+    expect(unpackEdits(packEdits([]))).toEqual([]);
+  });
+
+  test('a packed `edits` is accepted, of 32,768 edits too, and refused at 32,769', () => {
+    expect(parseToSim(packedMsg())).not.toBeNull();
+    const many = (n: number) => ({ type: 'edits', id: 4, packed: packEdits(Array.from({ length: n }, () => es[0]!)) });
+    expect(parseToSim(many(MAX_STEP_EDITS))).not.toBeNull();
+    expect(parseToSim(many(MAX_STEP_EDITS + 1))).toBeNull();
+  });
+
+  test.each<[string, Record<string, unknown>]>([
+    ['xyz not an Int32Array', { xyz: Float64Array.from(packEdits(es).xyz) }],
+    ['xyz an array', { xyz: [...packEdits(es).xyz] }],
+    ['value not a Uint32Array', { value: Int32Array.from(packEdits(es).value) }],
+    ['expect not a Uint32Array', { expect: [0, 0, 0] }],
+    ['revert not a Uint8Array', { revert: new Uint16Array(3) }],
+    ['xyz of the wrong length', { xyz: new Int32Array(8) }],
+    ['expect of the wrong length', { expect: new Uint32Array(2) }],
+    ['revert of the wrong length', { revert: new Uint8Array(4) }],
+    ['a y of 320', { xyz: Int32Array.of(5, 320, -3, 0, 70, 0, 0, 70, 0) }],
+    ['a y of −65', { xyz: Int32Array.of(5, -65, -3, 0, 70, 0, 0, 70, 0) }],
+    ['an x outside the window', { xyz: Int32Array.of(524_288, 70, -3, 0, 70, 0, 0, 70, 0) }],
+    ['a z outside the window', { xyz: Int32Array.of(5, 70, -524_289, 0, 70, 0, 0, 70, 0) }],
+    ['a revert flag of 2', { revert: Uint8Array.of(0, 2, 0) }],
+    ['a value whose state is stateCount', { value: Uint32Array.of(1 << 8, 0, REGISTRY.stateCount << 8) }],
+    ['a value whose fluid byte has bit 7', { value: Uint32Array.of(1 << 8, 0x80, 0) }],
+    ['an expect whose state is stateCount', { expect: Uint32Array.of(0, REGISTRY.stateCount << 8, 0) }],
+    ['an expect whose fluid byte has bit 7', { expect: Uint32Array.of(0, 0, (1 << 8) | 0x81) }],
+  ])('a packed `edits` is refused: %s', (_n, o) => {
+    expect(parseToSim(packedMsg(o))).toBeNull();
+  });
+
+  test('a packed `edits` that also carries `edits`, or whose `packed` is not an object, is refused', () => {
+    expect(parseToSim({ ...packedMsg(), edits: es })).toBeNull();
+    expect(parseToSim({ type: 'edits', id: 4, packed: null })).toBeNull();
+    expect(parseToSim({ type: 'edits', id: 4, packed: [1, 2] })).toBeNull();
+    expect(parseToSim({ ...packedMsg(), id: 0.5 })).toBeNull();
   });
 });
 

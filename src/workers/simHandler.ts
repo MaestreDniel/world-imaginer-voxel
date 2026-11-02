@@ -4,7 +4,8 @@
  * DiffStore (§2.4) and the edit scratch, and answers each message in the order it comes:
  * - `attach`: attaches the page's shared store as thread 15 (`SIM_THREAD`), once; a repeat with the same store id and
  *   thread is answered `attached` again, anything else is BAD_MESSAGE (as the pool's workers, SP4b spec §2.8);
- * - `edits`: `applyEdits` over the attached store (NOT_ATTACHED before the attach), clocked by `performance.now`,
+ * - `edits`: `applyEdits` over the attached store (NOT_ATTACHED before the attach), clocked by `performance.now`, a
+ *   packed batch unpacked first (`unpackEdits`, SP5c D28's lever 1),
  *   answered `edited` with its arrays transferred; a refusal (`StoreFull` included, as `'full'`) is a result, not an error;
  * - `diff`: the DiffStore's entries of the column (`readDiff`), transferred; zero-length arrays when it holds none;
  * - `copy` (SP5c spec §3.3, D22): `readVolume` over the attached store (NOT_ATTACHED before the attach), answered
@@ -63,7 +64,7 @@ import type { ColumnDiff } from '../world/store/api';
 import { R_STORE_ID, SIM_THREAD } from '../world/store/reclaim';
 import { attachStore, StoreCorrupt, type VoxelStore } from '../world/store/store';
 import {
-  parseToSim, resolveHistory, type BackedUpMsg, type BackupMsg, type ErrorCode, type FlushedMsg, type FlushMsg, type FromSim, type LoadMsg, type RecordMsg, type ToSim,
+  parseToSim, resolveHistory, unpackEdits, type BackedUpMsg, type BackupMsg, type ErrorCode, type FlushedMsg, type FlushMsg, type FromSim, type LoadMsg, type RecordMsg, type ToSim,
 } from './protocol';
 
 /** The sim's limbo retry interval while entries are left (§2.1: it has no reply loop like the pool's). */
@@ -427,7 +428,7 @@ export function createSimHandler(o: SimHandlerOptions): SimHandler {
         case 'edits': {
           if (failed !== null) return err(m.id, 'INTERNAL', `the sim failed earlier (${failed}): nothing written`);
           if (store === null) return err(m.id, 'NOT_ATTACHED', 'no attach yet');
-          const r = applyEdits(store, diffs, scratch ??= createEditScratch(), m.edits, now);
+          const r = applyEdits(store, diffs, scratch ??= createEditScratch(), 'packed' in m ? unpackEdits(m.packed) : m.edits, now);
           const msg: FromSim = {
             type: 'edited', id: m.id, prev: r.prev, next: r.next, dirty: r.dirty, entryAdded: r.entryAdded, entryRemoved: r.entryRemoved,
             refused: r.refused, relightMs: r.relightMs, editMs: r.editMs, limboMax: r.limboMax, subBatchMaxMs: r.subBatchMaxMs,

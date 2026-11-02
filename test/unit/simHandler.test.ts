@@ -20,7 +20,7 @@ import { flushOps, todayStateTable, type HistoryRecord, type StateRecord, type W
 import { createDiffStore, NO_ENTRY } from '../../src/sim/diffStore';
 import { applyEdits, MAX_STEP_EDITS, readVolume } from '../../src/sim/edits';
 import { DIRT, GLASS, STONE } from '../../src/world/blocks/index';
-import type { BackedUpMsg, CopiedMsg, DiffMsg, EditedMsg, ErrorMsg, FlushedMsg, FromSim, HistoryChange, LoadedMsg } from '../../src/workers/protocol';
+import { packEdits, type BackedUpMsg, type CopiedMsg, type DiffMsg, type Edit, type EditedMsg, type ErrorMsg, type FlushedMsg, type FromSim, type HistoryChange, type LoadedMsg } from '../../src/workers/protocol';
 import { createMemorySimHandler, createSimHandler, flushSyncPart, SIM_DRAIN_MS, type SimHandler, type SimReply } from '../../src/workers/simHandler';
 import { R_READER, SIM_THREAD } from '../../src/world/store/reclaim';
 import type { ColumnDiff } from '../../src/world/store/api';
@@ -362,6 +362,65 @@ describe('the sim handler on a shared seed-42 region (SP5a spec §2.1)', () => {
       const calls = vi.mocked(applyEdits).mock.calls.length;
       const m = call(attachedHandler(), { type: 'edits', id: 68, edits: Array.from({ length: MAX_STEP_EDITS + 1 }, () => set(x, y, z, before, before)) }).msg as ErrorMsg;
       expect([m.type, m.jobId, m.code]).toEqual(['error', 68, 'BAD_MESSAGE']);
+      expect(vi.mocked(applyEdits).mock.calls.length).toBe(calls);
+    });
+  });
+
+  describe('the packed `edits` form (SP5c spec §10.4, D28\'s lever 1)', () => {
+    /** A batch of `n` voxels above the surface across the centre column's corner (4 columns), as a bulk paste writes. */
+    const batch = (n: number, value: number) => {
+      const out: Edit[] = [];
+      for (let k = 0; out.length < n; k++) {
+        const x = 16 * C[0] - 3 + (k % 6);
+        const z = 16 * C[1] - 3 + (((k / 6) | 0) % 6);
+        const y = surface(x, z) + 2 + ((k / 36) | 0);
+        out.push({ x, y, z, op: 'set', value, expect: valueAt(store, x, y, z) });
+      }
+      return out;
+    };
+    const undo = (es: readonly Edit[]): Edit[] => es.map((e): Edit => ({ ...e, op: 'revert', value: 0, expect: e.value })).reverse();
+    const sameResult = (a: EditedMsg, b: EditedMsg) => {
+      expect([a.refused, b.refused]).toEqual([null, null]);
+      expect([...b.prev]).toEqual([...a.prev]);
+      expect([...b.next]).toEqual([...a.next]);
+      expect(sortedKeys(b.dirty)).toEqual(sortedKeys(a.dirty));
+      expect([sortedKeys(b.entryAdded), sortedKeys(b.entryRemoved)]).toEqual([sortedKeys(a.entryAdded), sortedKeys(a.entryRemoved)]);
+    };
+
+    test('a packed batch equals its object form\'s result: the reply\'s entries and dirty set, every voxel and its light; its undo too', () => {
+      const es = batch(100, val(GLASS));
+      const lightOf = () => es.map((e) => store.lightAt(e.x, e.y, e.z));
+      const startValues = es.map((e) => valueAt(store, e.x, e.y, e.z));
+      const startLight = lightOf();
+      const object = edited(call(handler, { type: 'edits', id: ++id, edits: es }));
+      const objValues = es.map((e) => valueAt(store, e.x, e.y, e.z));
+      const objLight = lightOf();
+      const objUndo = edited(call(handler, { type: 'edits', id: ++id, edits: undo(es) }));
+      expect(es.map((e) => valueAt(store, e.x, e.y, e.z))).toEqual(startValues);
+      const packed = edited(call(handler, { type: 'edits', id: ++id, packed: packEdits(es) }));
+      sameResult(object, packed);
+      expect(es.map((e) => valueAt(store, e.x, e.y, e.z))).toEqual(objValues);
+      expect(objValues.every((v) => v === val(GLASS))).toBe(true);
+      expect(lightOf()).toEqual(objLight);
+      const packedUndo = edited(call(handler, { type: 'edits', id: ++id, packed: packEdits(undo(es)) }));
+      sameResult(objUndo, packedUndo);
+      expect(es.map((e) => valueAt(store, e.x, e.y, e.z))).toEqual(startValues);
+      expect(lightOf()).toEqual(startLight);
+      // A stale `expect` refuses the packed batch as the object form does, with nothing written.
+      const stale = edited(call(handler, { type: 'edits', id: ++id, packed: packEdits(es.map((e, k) => (k === 99 ? { ...e, expect: val(DIRT) } : e))) }));
+      expect(stale.refused).toBe('changed');
+      expect(es.map((e) => valueAt(store, e.x, e.y, e.z))).toEqual(startValues);
+    });
+
+    test('a packed batch over `MAX_STEP_EDITS` is BAD_MESSAGE, with `applyEdits` not called', () => {
+      const x = 16 * C[0] + 2;
+      const z = 16 * C[1] + 3;
+      const y = surface(x, z);
+      const before = valueAt(store, x, y, z);
+      const calls = vi.mocked(applyEdits).mock.calls.length;
+      const one: Edit = { x, y, z, op: 'set', value: before, expect: before };
+      const m = call(attachedHandler(), { type: 'edits', id: 69, packed: packEdits(Array.from({ length: MAX_STEP_EDITS + 1 }, () => one)) }).msg as ErrorMsg;
+      expect([m.type, m.jobId, m.code]).toEqual(['error', 69, 'BAD_MESSAGE']);
       expect(vi.mocked(applyEdits).mock.calls.length).toBe(calls);
     });
   });

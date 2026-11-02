@@ -1,7 +1,8 @@
 /**
  * The main thread's side of the sim worker (SP5a spec §2.1, §2.5, D17). Only `engine/` spawns workers, so this module
  * spawns `sim.worker.ts` (`createBrowserSim`) and the page calls it. It attaches the store as thread 15, posts `edits`
- * batches and `diff` requests with ids and matches each reply to its request (the sim answers in order), and keeps the
+ * batches (a bulk one, `PACKED_MIN_EDITS` or more, packed with its arrays transferred: SP5c D28's lever 1) and `diff`
+ * requests with ids and matches each reply to its request (the sim answers in order), and keeps the
  * set of columns holding entries (`hasEntries`, the read-through's test, §2.5) from each `edited` reply's changes,
  * `entryAdded` and `entryRemoved` (SP5b D20). A saved world's `load` (SP5b spec §3.3, §3.4 step 3) resolves once its
  * `loaded` reply's `entryCols` became the whole entry set, so the read-through sees every saved edit from the first D.
@@ -30,7 +31,7 @@
 import { colKey } from '../core/coords';
 import type { HistoryRecord, StateRecord, WorldRecord } from '../persist/saves';
 import {
-  historyChange, parseFromSim, type BackedUpMsg, type BackupMsg, type CopiedMsg, type DiffMsg, type Edit, type EditedMsg, type FlushedMsg, type LoadedMsg,
+  historyChange, packEdits, PACKED_MIN_EDITS, parseFromSim, type BackedUpMsg, type BackupMsg, type CopiedMsg, type DiffMsg, type Edit, type EditedMsg, type FlushedMsg, type LoadedMsg,
   type LoadMsg, type ToSim,
 } from '../workers/protocol';
 import type { ColumnDiff } from '../world/store/api';
@@ -204,7 +205,10 @@ export function createSimClient(spawn: () => SimWorkerLike, o: { onFailure(e: Er
   worker.onmessage = (e) => onReply(e.data);
   worker.onerror = (e) => fail(`an error event (${text(e)})`);
 
-  const post = (m: ToSim): void => worker.postMessage(m);
+  const post = (m: ToSim, transfer?: Transferable[]): void => {
+    if (transfer === undefined) worker.postMessage(m);
+    else worker.postMessage(m, transfer);
+  };
 
   return {
     attach(h) {
@@ -228,7 +232,12 @@ export function createSimClient(spawn: () => SimWorkerLike, o: { onFailure(e: Er
       if (closed) return Promise.reject(new SimFailed('the sim failed or was disposed'));
       const id = nextId++;
       return new Promise<EditedMsg>((resolve, reject) => {
-        post({ type: 'edits', id, edits: e });
+        if (e.length < PACKED_MIN_EDITS) post({ type: 'edits', id, edits: e });
+        else {
+          // A bulk batch goes packed, its arrays transferred (D28's lever 1): no object per edit is cloned.
+          const packed = packEdits(e);
+          post({ type: 'edits', id, packed }, [packed.xyz.buffer, packed.value.buffer, packed.expect.buffer, packed.revert.buffer]);
+        }
         pending.set(id, { kind: 'edits', n: e.length, resolve, reject });
       });
     },

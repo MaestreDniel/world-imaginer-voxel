@@ -27,7 +27,7 @@
 import { colKey, colKeyCx, colKeyCz } from '../../core/coords';
 import type { Coordinator } from '../../engine/coordinator';
 import { SimFailed, type SimClient } from '../../engine/simClient';
-import type { Edit } from '../../workers/protocol';
+import { PACKED_MIN_EDITS, type Edit } from '../../workers/protocol';
 import type { EditLatency } from './editLatency';
 
 export type EditOutcome =
@@ -60,8 +60,11 @@ export interface EditPath {
 export const EDIT_FULL_NOTICE = 'Could not edit: memory full';
 const EDIT_FULL_MS = 4000;
 
-/** A batch of more edits than a door's two halves (the largest click, master §4.12) is bulk (SP5c spec §3.4, D23). */
-export const BULK_MIN_EDITS = 3;
+/**
+ * A batch of more edits than a door's two halves (the largest click, master §4.12) is bulk (SP5c spec §3.4, D23); the sim
+ * client posts each such batch packed (`PACKED_MIN_EDITS`, D28's lever 1).
+ */
+export const BULK_MIN_EDITS = PACKED_MIN_EDITS;
 /** How long a bulk batch's reply may take before "Working on n blocks…" shows (D23). */
 export const WORKING_NOTICE_MS = 250;
 

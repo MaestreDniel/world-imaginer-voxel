@@ -11,13 +11,15 @@ import { worldJobsOf, type ReadThrough } from '../../src/engine/coordinator';
 import { createSimClient, SimFailed, type SimClient, type SimWorkerLike } from '../../src/engine/simClient';
 import type { ColumnDone, WorkerPool } from '../../src/engine/workerPool';
 import type { HistoryRecord, StateRecord, WorldRecord } from '../../src/persist/saves';
-import type { Edit } from '../../src/workers/protocol';
+import { PACKED_MIN_EDITS, unpackEdits, type Edit, type PackedEdits } from '../../src/workers/protocol';
 import type { ColumnDiff } from '../../src/world/store/api';
 import { REGISTRY } from '../../src/world/blocks/index';
 import { createStore } from '../../src/world/store/store';
 
 interface FakeSim extends SimWorkerLike {
   readonly posted: Array<Record<string, unknown>>;
+  /** Each post's transfer list (undefined when none was passed). */
+  readonly transfers: Array<Transferable[] | undefined>;
   terminated: boolean;
   /** Delivers `data` as the sim's message. */
   reply(data: unknown): void;
@@ -26,11 +28,13 @@ interface FakeSim extends SimWorkerLike {
 function fakeSim(): FakeSim {
   const w: FakeSim = {
     posted: [],
+    transfers: [],
     terminated: false,
     onmessage: null,
     onerror: null,
-    postMessage(m) {
+    postMessage(m, transfer) {
       w.posted.push(m as Record<string, unknown>);
+      w.transfers.push(transfer);
     },
     terminate() {
       w.terminated = true;
@@ -65,6 +69,28 @@ describe('the sim client (SP5a spec §2.1, §2.5)', () => {
     expect(w.posted).toEqual([{ type: 'attach', handles, thread: 15 }]);
     w.reply({ type: 'attached' });
     await expect(attached).resolves.toBeUndefined();
+    expect(sim.failed).toBe(false);
+  });
+
+  test('a batch of `PACKED_MIN_EDITS` or more posts the packed form, its four arrays transferred; a shorter one the edits (SP5c D28\'s lever 1)', async () => {
+    expect(PACKED_MIN_EDITS).toBe(3);
+    const w = fakeSim();
+    const sim = createSimClient(() => w, { onFailure: () => { throw new Error('no failure expected'); } });
+    const two = [STONE_AT, { ...STONE_AT, op: 'revert', y: 71 } as const];
+    const a = sim.edits(two);
+    expect(w.posted.at(-1)).toEqual({ type: 'edits', id: lastId(w), edits: two });
+    w.reply(editedReply(lastId(w), [], [], 2));
+    await a;
+    const three = [...two, { ...STONE_AT, x: -4, value: 0, expect: 1 << 8 }];
+    const b = sim.edits(three);
+    const m = w.posted.at(-1)!;
+    expect(Object.keys(m).sort()).toEqual(['id', 'packed', 'type']);
+    const p = m['packed'] as PackedEdits;
+    expect(unpackEdits(p)).toEqual(three);
+    expect(w.transfers.at(-1)).toEqual([p.xyz.buffer, p.value.buffer, p.expect.buffer, p.revert.buffer]);
+    // The reply is matched by the batch's length, as for the object form.
+    w.reply(editedReply(lastId(w), [], [], 3));
+    expect((await b).prev).toHaveLength(3);
     expect(sim.failed).toBe(false);
   });
 

@@ -30,7 +30,8 @@
  * and `parseFromSim`; the edit types come from `sim/edits.ts`, re-exported for the main thread's layers. A `decorate` may
  * carry `diff`, the column's edit entries for D's overlay (§2.5), checked by `parseToWorker`.
  * SP5c (spec §3.3, D22): `copy` asks the sim for a box's values (1 … `MAX_COPY_SIDE` a side; a corner outside the world
- * is not malformed, the sim answers it `outside`), answered `copied`; an `edits` batch holds at most `MAX_STEP_EDITS`.
+ * is not malformed, the sim answers it `outside`), answered `copied`; an `edits` batch holds at most `MAX_STEP_EDITS`, and a
+ * bulk one comes packed in four transferred typed arrays (`PackedEditsMsg`, D28's lever 1).
  */
 import { MAP_LEVELS, MAP_TILE_PX, PART_BUDGET, SLICE_NS, type MapLevel } from '../core/constants';
 import type { StageId } from '../core/ids';
@@ -629,6 +630,53 @@ export type { Edit, EditRefusal } from '../sim/edits';
  * the `edited` reply to it.
  */
 export interface EditsMsg { readonly type: 'edits'; readonly id: number; readonly edits: readonly Edit[] }
+/**
+ * A batch's packed form (SP5c spec §10.4, D28's lever 1): edit k at `xyz[3k]`, `xyz[3k + 1]`, `xyz[3k + 2]` (x, y, z),
+ * `value[k]`, `expect[k]` and `revert[k]` (1 for a `revert`, 0 for a `set`), four typed arrays the client transfers, so a
+ * bulk batch's post clones no object per edit. The guard checks every element as it checks an `Edit`.
+ */
+export interface PackedEdits {
+  readonly xyz: Int32Array;
+  readonly value: Uint32Array;
+  readonly expect: Uint32Array;
+  readonly revert: Uint8Array;
+}
+/** An `edits` batch in its packed form (D28's lever 1): the sim applies `unpackEdits(packed)`, as `EditsMsg`'s edits. */
+export interface PackedEditsMsg { readonly type: 'edits'; readonly id: number; readonly packed: PackedEdits }
+/**
+ * The shortest batch the client posts packed: a bulk batch (`ui/world/editPath.ts`'s `BULK_MIN_EDITS`, a cut, paste or
+ * move and their undo); a click's one or two edits go as objects.
+ */
+export const PACKED_MIN_EDITS = 3;
+
+/** `edits` in their packed form, in fresh arrays (transferable). */
+export function packEdits(edits: readonly Edit[]): PackedEdits {
+  const n = edits.length;
+  const xyz = new Int32Array(3 * n);
+  const value = new Uint32Array(n);
+  const expect = new Uint32Array(n);
+  const revert = new Uint8Array(n);
+  for (let k = 0; k < n; k++) {
+    const e = edits[k]!;
+    xyz[3 * k] = e.x;
+    xyz[3 * k + 1] = e.y;
+    xyz[3 * k + 2] = e.z;
+    value[k] = e.value;
+    expect[k] = e.expect;
+    revert[k] = e.op === 'revert' ? 1 : 0;
+  }
+  return { xyz, value, expect, revert };
+}
+
+/** The edits a packed batch holds, in order (the sim's side of `packEdits`). */
+export function unpackEdits(p: PackedEdits): Edit[] {
+  const n = p.value.length;
+  const out = new Array<Edit>(n);
+  for (let k = 0; k < n; k++) {
+    out[k] = { x: p.xyz[3 * k]!, y: p.xyz[3 * k + 1]!, z: p.xyz[3 * k + 2]!, op: p.revert[k] === 1 ? 'revert' : 'set', value: p.value[k]!, expect: p.expect[k]! };
+  }
+  return out;
+}
 /** A request for column (cx, cz)'s DiffStore entries (§2.5); `id` matches the `diff` reply to it. */
 export interface DiffRequestMsg { readonly type: 'diff'; readonly id: number; readonly cx: number; readonly cz: number }
 /**
@@ -730,7 +778,7 @@ export interface CopyMsg {
  * world's `load` (SP5b), then edits, diff requests and volume reads (`copy`, SP5c), and in a saved world `flush`,
  * `record` and `backup`.
  */
-export type ToSim = AttachMsg | LoadMsg | EditsMsg | DiffRequestMsg | CopyMsg | FlushMsg | RecordMsg | BackupMsg;
+export type ToSim = AttachMsg | LoadMsg | EditsMsg | PackedEditsMsg | DiffRequestMsg | CopyMsg | FlushMsg | RecordMsg | BackupMsg;
 /**
  * A batch's outcome (§2.1; `sim/edits.ts`'s `EditResult`): `prev[k]` and `next[k]` edit k's entry before and after it
  * (0xFFFFFFFF for none), `dirty` the colKeys to remesh (§2.6), `entryAdded` and `entryRemoved` the colKeys that
@@ -804,6 +852,23 @@ const editOk = (e: unknown): boolean =>
   isObj(e) && isInt(e['x']) && isInt(e['z']) && pointInWindow(e['x'], e['z']) && isInt(e['y']) && e['y'] >= -64 && e['y'] <= 319
   && (e['op'] === 'set' || e['op'] === 'revert') && isVoxelValue(e['value']) && isVoxelValue(e['expect']);
 
+/**
+ * A packed batch (D28's lever 1): the four typed arrays, at most `MAX_STEP_EDITS` edits, `xyz` three per edit, and every
+ * element as `editOk` checks an edit (x and z in the window, y −64 … 319, `revert` 0 or 1, value and expect voxel values).
+ */
+const packedOk = (p: unknown): boolean => {
+  if (!isObj(p)) return false;
+  const { xyz, value, expect, revert } = p;
+  if (!(xyz instanceof Int32Array) || !(value instanceof Uint32Array) || !(expect instanceof Uint32Array) || !(revert instanceof Uint8Array)) return false;
+  const n = value.length;
+  if (n > MAX_STEP_EDITS || xyz.length !== 3 * n || expect.length !== n || revert.length !== n) return false;
+  for (let k = 0; k < n; k++) {
+    const y = xyz[3 * k + 1]!;
+    if (!pointInWindow(xyz[3 * k]!, xyz[3 * k + 2]!) || y < -64 || y > 319 || revert[k]! > 1 || !isVoxelValue(value[k]) || !isVoxelValue(expect[k])) return false;
+  }
+  return true;
+};
+
 const isGenKeyHex = (v: unknown): v is string => typeof v === 'string' && /^[0-9a-f]{16}$/.test(v);
 /**
  * A `load`'s scalars, its stored table an array of strings, and `rewrite` null or `{world, history}` with a string
@@ -865,6 +930,7 @@ export function parseToSim(m: unknown): ToSim | null {
     case 'load':
       return loadOk(m) ? (m as unknown as LoadMsg) : null;
     case 'edits': {
+      if (m['packed'] !== undefined) return isInt(m['id']) && m['edits'] === undefined && packedOk(m['packed']) ? (m as unknown as PackedEditsMsg) : null;
       const edits = m['edits'];
       return isInt(m['id']) && Array.isArray(edits) && edits.length <= MAX_STEP_EDITS && edits.every(editOk) ? (m as unknown as EditsMsg) : null;
     }
