@@ -1902,6 +1902,9 @@ describe('master spec amendments (SP6a §13)', () => {
       // Item 3: the abyss hand-overs (SP7's lava, SP8b's crystals and gothic touch, SP8c's silence) are SP6b's to record.
       expect(line, `${id}'s "Received from SP6a" line holds an abyss hand-over`).not.toMatch(/lava may appear|crystals or gems|gothic|silent|Oscuro y silencioso/);
     }
+    // Item 3: SP7's line carries §14's text to its last item before the abyss lava (left to SP6b).
+    const sp7Received = spEntry('SP7', 'SP8a').split('\n').find((l) => l.startsWith('- Received from SP6a (its spec §14; amended by SP6a):'));
+    expect(sp7Received, 'SP7\'s "Received from SP6a" line ends with the bench\'s flood scenario').toMatch(/`dryPitsBelowSea` \(SP3c\); the bench's flood scenario after L13\.$/);
     // Item 4 (the critical path moved from the SP5a describe) and item 5.
     const critical = text.split('\n').find((l) => l.startsWith('Critical path: '));
     expect(critical).toContain('SP5c → SP6a → SP6b → SP7');
