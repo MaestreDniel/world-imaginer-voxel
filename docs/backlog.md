@@ -23,6 +23,10 @@ Improvements noted for later. They belong to no SP spec; pick them up when conve
 
 - **The T-junction pinhole specks (SP4a).** Isolated bright single-pixel specks where merged quads meet, likely T-junction pinholes letting the sky through: about 55 pixels in SP4a's `review-spawn-day.png`, 31 in the islands shot, 30-130 per panorama (SP4a spec, Exit evidence). The user (2026-10-23) sees them only in heavily shadowed or dimly lit places and keeps them for later. No SP owns them; after the user's check, pick a fix (for example a tiny overlap of merged quads, or splitting T-junction edges in the mesher) when convenient, or hand it to SP4b's mesher work or SP11's quality pass.
 
+## Map
+
+- **The map shows the builds and edits in the world (the user, SP5c's check, 2026-11-02).** The map (`?map` and the in-world map, M) is drawn from the generator's column stage (biomes, relief, rivers), so a saved world's builds, pastes and other block edits never appear on it; only the generated terrain does. No SP has taken this so far. A likely shape: a layer over the map tiles from the loaded columns' final heightmaps and top blocks (or the DiffStore's edited columns), toggled like SP10's other map layers.
+
 ## Measurement tools
 
 - **The RTX enter cell leaves fullscreen near the end of the run (SP5b final review GOV-3).** Both RTX 3060 runs of `measure:chrome --route enter` (13 page loads under ANGLE's Vulkan backend on PRIME offload) started fullscreen and ended with the window `normal` at 0,16 1919 × 1079 and a 1875 × 948 viewport; the one-load RTX bench and every Iris Xe enter run did not. `measureChrome.ts` reads the window only at the start and the end, so when it left is unknown. Fix: record the window state and viewport with each load's telemetry in `runEnter`, and stop the run or mark the pair invalid at the first load outside fullscreen 1920 × 1080 (a `measureChrome.test.ts` case with a fake window going `normal` at load 5).
