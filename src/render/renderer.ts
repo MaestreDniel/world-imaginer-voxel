@@ -173,6 +173,11 @@ export interface WorldRenderer {
   /** The ghost build's last slice in ms (L12's `ghostSliceMaxMs`, spec §10.4). */
   ghostSliceMs(): number;
   /**
+   * The selection tool's objects drawn in the last `frame` (`toolDrawCallsOf`): the two volume boxes (two lines each),
+   * the ghost and the replaced-cell overlay, at most 6 (SP5c spec §6.4; L12's `toolDrawCallsMax`, §10.4).
+   */
+  toolDrawCalls(): number;
+  /**
    * Shows the blocks a paste would replace (SP5c spec §6.3, D11): the first `count` (at most `REPLACED_MAX`) cells of
    * `cells`, x, y, z offset triples from (x0, y0, z0), relative to the floating origin (scene coordinates, as
    * `setOutline`), as red cubes seen through terrain; `count` 0 hides them. Writes the drawn matrices in place.
@@ -488,6 +493,26 @@ export function createWorldScene(sections: Pick<SectionRenderer, 'root'>, sky: O
   };
 }
 
+/**
+ * The selection tool's objects the scene draws now (SP5c spec §6.4): each shown volume box's two lines (depth-tested and
+ * dimmed), the ghost when placed with a built geometry, and the replaced-cell overlay when shown; the block outline is
+ * not the tool's. At most 6.
+ */
+export function toolDrawCallsOf(w: Pick<WorldScene, 'selectionBox' | 'ghostBox' | 'ghost' | 'replaced'>): number {
+  let n = linesShown(w.selectionBox.object) + linesShown(w.ghostBox.object);
+  if (w.ghost.object.visible) n++;
+  if (w.replaced.object.visible && w.replaced.object.count > 0) n++;
+  return n;
+}
+
+/** A volume box's lines drawn: none while it is hidden. Indexed, so the frame that counts them allocates nothing. */
+function linesShown(box: Object3D): number {
+  if (!box.visible) return 0;
+  let n = 0;
+  for (let i = 0; i < box.children.length; i++) if (box.children[i]!.visible) n++;
+  return n;
+}
+
 /** Runs `fn` with each of `roots` and everything under it counted visible (`withSectionsShown` over each). */
 function withAllShown<T>(roots: readonly Object3D[], fn: () => T, i = 0): T {
   return i === roots.length ? fn() : withSectionsShown(roots[i]!, () => withAllShown(roots, fn, i + 1));
@@ -575,10 +600,13 @@ export function createWorldRenderer(host: HTMLElement, o: WorldRendererOptions):
   watchDpr();
   resize();
 
+  // The tool's objects drawn by the last frame (`toolDrawCalls`, SP5c spec §10.4).
+  let toolCalls = 0;
   const draw = (state: FrameState): void => {
     // The camera in scene coordinates, relative to the floating origin (ruling P17).
     sections.sortTranslucent(camera.position.x, camera.position.y, camera.position.z);
     materials.setFrameUniforms(state);
+    toolCalls = toolDrawCallsOf(world);
     timer?.begin();
     renderer.render(scene, camera);
     timer?.end();
@@ -645,6 +673,9 @@ export function createWorldRenderer(host: HTMLElement, o: WorldRendererOptions):
     },
     ghostSliceMs() {
       return ghost.lastSliceMs;
+    },
+    toolDrawCalls() {
+      return toolCalls;
     },
     setReplaced(x0, y0, z0, cells, count) {
       replaced.set(x0, y0, z0, cells, count);

@@ -20,6 +20,10 @@
  *    `flushNow()`, then four 30 s parts with autosave off, on, off, on (L11a-L11d), each 150 edits at hold-repeat's
  *    place rate through the page's action post (each recorded in the block history the flushes save); the `persist`
  *    block compares the "on" parts' frames, edit latency and flushes with the "off" parts';
+ * 2e. then the paste leg L12 (SP5c spec §10.4; `BENCH_PASTE`) at the same place with autosave on, through the page's
+ *    own selection tool (`BenchPasteHooks`): a 10 s baseline (L12a), a 32 × 12 × 32 house pasted, undone, redone, moved
+ *    and cut (L12b), the two maximum blocks pasted and undone (L12c), two ghosts swept and cancelled (L12d); the world
+ *    ends as it began, and the `paste` block holds each operation's, each part's and the leg's figures;
  * 3. hands the driver the run's fixed figures (`done`); the driver publishes `summarizeBench`'s JSON as
  *    `window.__wiBench.result` (read by `measureChrome.ts --route bench`) and a "Download JSON" button (the Firefox
  *    cells, by hand).
@@ -57,7 +61,8 @@ import { encodeColumnDiff } from '../../persist/diffCodec';
 import { deleteIdb, openIdbKV } from '../../persist/idb';
 import { createSaves, DEFAULT_SPEED, newState, type WorldDump, type WorldRecord } from '../../persist/saves';
 import { lookVector } from '../../player/fly';
-import type { Edit } from '../../workers/protocol';
+import type { ColumnDiff } from '../../world/store/api';
+import type { Edit, EditedMsg } from '../../workers/protocol';
 import {
   AIR, BRICKS, COBBLESTONE, GLASS, ICE, OAK_PLANKS, REGISTRY, RED_WOOL, STONE, TORCH, WHITE_WOOL,
 } from '../../world/blocks';
@@ -66,6 +71,8 @@ import { DEFAULT_MAP_STATE, encodeMapState, openMapSession } from '../map/mapSta
 import { cryptoSeed } from '../seedBox';
 import type { EditLatencySamples } from './editLatency';
 import type { EditOutcome } from './editPath';
+import type { Box } from './pasteBatch';
+import { pasteLitBlock, pasteMaxBlock, type PasteBlock } from './pasteBlocks';
 import { displayInterval } from './frameStep';
 import { parseWorldQuery, type WorldQuery } from './query';
 import { AUTOSAVE_MS } from './autosave';
@@ -87,12 +94,14 @@ export const BENCH_IDLE_FRAMES = 120;
  * The record's frames (SP5a spec §6.2): 95 s, the live legs at their caps (55 s) and L10 at its caps (91 s: the 60 s
  * hover, 25 s of edits and the 6 s flight) at 240 Hz is 241 s, 57,840 frames; 58,368 holds 243 s. SP5b spec §6.2 adds
  * L11's four 30 s parts, 120 s at 240 Hz: 87,168 holds 363 s (its hover back at L10's place, short when the disc there
- * stays filled, uses the slack L10's 60 s hover cap leaves; a full record takes no more frames).
+ * stays filled, uses the slack L10's 60 s hover cap leaves; a full record takes no more frames). SP5c spec §10.4 adds
+ * L12's 150 s at its caps (`BENCH_PASTE_LEG`), 36,000 frames: 123,168 holds 513 s, the script's 511 (its fill, as L11's
+ * hover, uses that slack).
  */
-export const BENCH_FRAME_CAPACITY = 87168;
+export const BENCH_FRAME_CAPACITY = 123_168;
 
 export interface BenchLeg {
-  readonly name: 'L0' | 'L1' | 'L2' | 'L3' | 'L4' | 'L5' | 'L6' | 'L7' | 'L8' | 'L9' | 'L10' | 'L11';
+  readonly name: 'L0' | 'L1' | 'L2' | 'L3' | 'L4' | 'L5' | 'L6' | 'L7' | 'L8' | 'L9' | 'L10' | 'L11' | 'L12';
   readonly seconds: number;
   /** Blocks per second; 0 hovers. */
   readonly speed: number;
@@ -194,14 +203,59 @@ export const BENCH_SAVE_LEG: BenchLeg = {
   rdSteps: [],
 };
 
-/** Every leg, index = the record's `leg` (L0-L6 the timed script, L7-L9 the live legs, L10 the edit leg, L11 the save leg). */
-const ALL_LEGS: readonly BenchLeg[] = [...BENCH_LEGS, ...BENCH_LIVE_LEGS, BENCH_EDIT_LEG, BENCH_SAVE_LEG];
+/**
+ * The paste leg L12 (SP5c spec §10.4), after L11 at L10's hover point, in `wi10-bench` with autosave on: a hover until
+ * the RD 12 disc there is filled (at most `fillMaxS` s; not counted in the capacity, as L11's hover is not: the disc at
+ * L10's point stays filled after L11), then its parts, each ending at its cap at the latest (`hoverS`, `houseMaxS`,
+ * `maxMaxS`, `sweepS`; a part that does not end by then, and a fill that never comes, is named in the `paste` block's
+ * `timedOut` and ends the script, as L10's and L11's time-outs do):
+ * - **L12a** a hover of `hoverS` s with the tool off (the baseline);
+ * - **L12b** the house (`benchHouse`, 32 × 12 × 32) pasted through the tool's own path with its ghost shown, pinned on
+ *   the surface across a column corner: `houseCycles` cycles of paste (turns = the cycle's index mod 4), undo, redo,
+ *   undo; a last paste (turn 1), undo, redo, so the house stands; a move of the house `moveDown` blocks down, undone; a
+ *   cut of the house, undone; the last paste undone (28 operations; the world back at its start);
+ * - **L12c** `pasteMaxBlock()` and `pasteLitBlock()`, each written to the clipboard first, `maxCycles` cycles of paste
+ *   and undo each (12 operations);
+ * - **L12d** the house written back to the clipboard, its ghost swept for half of `sweepS`, then a `terrainSide`³
+ *   clipboard copied from the terrain under the hover point and its ghost swept for the other half: the anchor pinned
+ *   one block further every frame (back and forth over `sweepSpan` blocks), a turn every `turnEveryS` s, then
+ *   cancelled; nothing pasted.
+ * Every operation of L12b and L12c starts at least `gapS` s after the last one and once every dirty column of the last
+ * batch is shown.
+ */
+export const BENCH_PASTE = { fillMaxS: 60, hoverS: 10, houseMaxS: 80, maxMaxS: 50, sweepS: 10 } as const;
+
+/** L12's script (plan): see `BENCH_PASTE`. */
+export const BENCH_PASTE_SCRIPT = {
+  gapS: 2, houseCycles: 5, maxCycles: 3, moveDown: 3, turnEveryS: 2, sweepSpan: 64, terrainSide: 64,
+} as const;
+
+/** L12's parts in order. */
+export const BENCH_PASTE_PARTS = ['L12a', 'L12b', 'L12c', 'L12d'] as const;
+export type PastePartName = (typeof BENCH_PASTE_PARTS)[number];
+
+/** L12 as a leg (`seconds` its parts' caps; the fill is not counted); it ends on its own, not on a timeline. */
+export const BENCH_PASTE_LEG: BenchLeg = {
+  name: 'L12',
+  seconds: BENCH_PASTE.hoverS + BENCH_PASTE.houseMaxS + BENCH_PASTE.maxMaxS + BENCH_PASTE.sweepS,
+  speed: 0,
+  headings: [],
+  rdSteps: [],
+};
+
+/**
+ * Every leg, index = the record's `leg` (L0-L6 the timed script, L7-L9 the live legs, L10 the edit leg, L11 the save
+ * leg, L12 the paste leg).
+ */
+const ALL_LEGS: readonly BenchLeg[] = [...BENCH_LEGS, ...BENCH_LIVE_LEGS, BENCH_EDIT_LEG, BENCH_SAVE_LEG, BENCH_PASTE_LEG];
 /** The first live leg's index. */
 const FIRST_LIVE = BENCH_LEGS.length;
 /** L10's index. */
 const EDIT_LEG = FIRST_LIVE + BENCH_LIVE_LEGS.length;
 /** L11's index. */
 const SAVE_LEG = EDIT_LEG + 1;
+/** L12's index. */
+const PASTE_LEG = SAVE_LEG + 1;
 
 /** Each leg's start, s, and the timed script's length (95 s; the live legs follow it). */
 const LEG_STARTS: readonly number[] = BENCH_LEGS.map((_, i) => BENCH_LEGS.slice(0, i).reduce((s, l) => s + l.seconds, 0));
@@ -709,6 +763,73 @@ export type PersistFigures = { readonly [K in SavePartName]: SavePartFigures } &
   readonly timedOut: readonly string[];
 };
 
+/**
+ * One L12 operation's figures (SP5c spec §10.4), ms on the page's clock: `pasteVisibleMs` post → the frame the last dirty
+ * column's new mesh was shown, `pasteFirstVisibleMs` the first's, `replyMs` post → reply, the sim's `editMs`, `relightMs`,
+ * longest sub-batch (`subBatchMaxMs`) and `limboMax` from its own `edited` reply (matched by `id`), `changed` its edits,
+ * `dirtyColumns`, `mainPostMs` the batch built and posted. A figure with no value is null (no batch, or never shown).
+ */
+export interface PasteOpFigures {
+  readonly op: BenchPasteOp['op'];
+  readonly part: PastePartName;
+  readonly answer: string;
+  readonly id: number | null;
+  readonly pasteVisibleMs: number | null;
+  readonly pasteFirstVisibleMs: number | null;
+  readonly replyMs: number | null;
+  readonly editMs: number | null;
+  readonly relightMs: number | null;
+  readonly subBatchMaxMs: number | null;
+  readonly limboMax: number | null;
+  readonly changed: number | null;
+  readonly dirtyColumns: number | null;
+  readonly mainPostMs: number | null;
+}
+
+/**
+ * One L12 part's figures (SP5c spec §10.4): its snapped frames' nearest-rank p50, p95, p99, max and the count over 33 ms;
+ * over the ghost builds started in it the longest build's slices in all (`ghostBuildMs`) and its frames
+ * (`ghostBuildFrames`), and the longest slice (`ghostSliceMaxMs`); the longest target reply's count and overlay fill
+ * (`overlayMainMaxMs`); the target `copy`s posted in it (`targetReads`); the whole frame's draw calls' max
+ * (`drawCallsMax`, the record's `calls`) and the tool's (`toolDrawCallsMax`, `WorldRenderer.toolDrawCalls`). Null with
+ * no sample.
+ */
+export interface PastePartFigures {
+  readonly p50: number | null;
+  readonly p95: number | null;
+  readonly p99: number | null;
+  readonly max: number | null;
+  readonly over33: number;
+  readonly ghostBuildMs: number | null;
+  readonly ghostBuildFrames: number | null;
+  readonly ghostSliceMaxMs: number | null;
+  readonly overlayMainMaxMs: number | null;
+  readonly targetReads: number;
+  readonly drawCallsMax: number | null;
+  readonly toolDrawCallsMax: number;
+}
+
+/**
+ * L12's block (SP5c spec §10.4): every operation's figures, each part's, the longest clipboard read and write, the
+ * pools' byte lengths before and after L12, and over L12b and L12c the flushes' longest main-thread work and sync part
+ * (`flushMainMaxMs`, `flushSyncMaxMs`, a paste's step in the history) and the longest diff read-through wait
+ * (`diffWaitMaxMs`); `timedOut` and `stoppedBy` as `BenchPasteRun`'s.
+ */
+export type PasteFigures = { readonly [K in PastePartName]: PastePartFigures } & {
+  readonly ops: readonly PasteOpFigures[];
+  readonly clipboardReadMs: number | null;
+  readonly clipboardWriteMs: number | null;
+  readonly poolBytes: {
+    readonly before: { readonly block: number; readonly byte: number } | null;
+    readonly after: { readonly block: number; readonly byte: number } | null;
+  };
+  readonly flushMainMaxMs: number | null;
+  readonly flushSyncMaxMs: number | null;
+  readonly diffWaitMaxMs: number | null;
+  readonly timedOut: readonly string[];
+  readonly stoppedBy: string | null;
+};
+
 /** What the driver knows of L10 (SP5a spec §6.2) and hands `summarizeBench`. */
 export interface BenchEditRun {
   /**
@@ -769,6 +890,283 @@ export interface BenchSaveRun {
 /** No L11 (a run that ended before it, or a driver bound without the save hooks). */
 const NO_SAVE_RUN: BenchSaveRun = { samplesFrom: Number.POSITIVE_INFINITY, parts: [], edits: [], flushes: [], timedOut: [] };
 
+/**
+ * One `edits` batch the bench's sim-client wrapper logged in L12 (SP5c spec §10.4; `createBenchSimLog`), on the page's
+ * clock (ms): `id` the sim's reply's (NaN until it replied), `changed` its edits, `tPost` its post, `mainPostMs` the main
+ * thread's work for it (from the operation's last awaited step, `mark`, to the post's return: the batch built and
+ * posted), and from its `edited` reply (NaN until then) `replyMs` (post → reply), the sim's `editMs`, `relightMs`,
+ * `subBatchMaxMs` and `limboMax`, `refused` (null when accepted) and `dirtyColumns`; then `firstVisibleMs` and
+ * `visibleMs`, post → the frame the first and the last dirty column's new mesh was shown (a column counts once a payload
+ * of it staged after the reply was revealed, `editLatency.ts`'s rule), null until then.
+ */
+export interface BenchEditsRecord {
+  id: number;
+  readonly changed: number;
+  readonly tPost: number;
+  readonly mainPostMs: number;
+  replyMs: number;
+  editMs: number;
+  relightMs: number;
+  subBatchMaxMs: number;
+  limboMax: number;
+  refused: string | null;
+  dirtyColumns: number;
+  firstVisibleMs: number | null;
+  visibleMs: number | null;
+}
+
+/** A timed piece of main-thread work L12 logs (page clock, ms): its start and its length. */
+export interface BenchTimed {
+  readonly t: number;
+  readonly ms: number;
+}
+
+/** One ghost build (SP5c spec §6.2): its start, its slices' ms in all, its frames (slices) and its longest slice. */
+export interface BenchGhostBuild {
+  readonly t: number;
+  buildMs: number;
+  frames: number;
+  sliceMaxMs: number;
+}
+
+/**
+ * What the page logs in L12 (SP5c spec §10.4), on its clock: each ghost build, each target reply's count and overlay
+ * fill (the reply → the label written), each clipboard read and write, and each D job's diff read-through wait (post →
+ * reply).
+ */
+export interface BenchPasteLog {
+  readonly ghosts: readonly BenchGhostBuild[];
+  readonly overlays: readonly BenchTimed[];
+  readonly clipboardReads: readonly BenchTimed[];
+  readonly clipboardWrites: readonly BenchTimed[];
+  readonly diffs: readonly BenchTimed[];
+}
+
+/**
+ * The bench's sim-client wrapper (SP5c spec §10.4): `sim` forwards to the page's sim client and, once `start`ed (L12),
+ * logs every `edits` batch (`BenchEditsRecord`, matched to its `edited` reply by the reply's id) and every `diff`'s wait;
+ * the coordinator's `onEditStaged` and the renderer's reveals reach it through `staged` and `revealed`. The page's D
+ * jobs read through `sim`, and the bench's edit path posts through it, so L1-L11 are not measured (nothing is logged
+ * before `start`).
+ */
+export interface BenchSimLog {
+  readonly sim: {
+    edits(e: readonly Edit[]): Promise<EditedMsg>;
+    diff(cx: number, cz: number): Promise<ColumnDiff | null>;
+    hasEntries(cx: number, cz: number): boolean;
+    readonly failed: boolean;
+  };
+  start(): void;
+  /** An operation's step that the next batch is built after (its start, or an awaited reply or write). */
+  mark(): void;
+  staged(cx: number, cz: number, t: number): void;
+  revealed(cx: number, cz: number, t: number): void;
+  /** Every dirty column of every logged batch shown since its reply (true with none, or once each is). */
+  shown(): boolean;
+  readonly edits: readonly BenchEditsRecord[];
+  readonly diffs: readonly BenchTimed[];
+}
+
+export function createBenchSimLog(
+  inner: {
+    edits(e: readonly Edit[]): Promise<EditedMsg>;
+    diff(cx: number, cz: number): Promise<ColumnDiff | null>;
+    hasEntries(cx: number, cz: number): boolean;
+    readonly failed: boolean;
+  },
+  now: () => number,
+): BenchSimLog {
+  let active = false;
+  let markT = Number.NaN;
+  const edits: BenchEditsRecord[] = [];
+  const diffs: BenchTimed[] = [];
+  // The batches whose dirty columns are not all shown: each column's state, 0 waiting for its staged payload, 1 staged.
+  const pending: Array<{ readonly rec: BenchEditsRecord; readonly cols: Map<number, number> }> = [];
+  const replied = (rec: BenchEditsRecord, r: EditedMsg): void => {
+    const t = now();
+    rec.id = r.id;
+    rec.replyMs = t - rec.tPost;
+    rec.editMs = r.editMs;
+    rec.relightMs = r.relightMs;
+    rec.subBatchMaxMs = r.subBatchMaxMs;
+    rec.limboMax = r.limboMax;
+    rec.refused = r.refused;
+    rec.dirtyColumns = r.dirty.length;
+    if (r.dirty.length === 0) {
+      rec.firstVisibleMs = rec.visibleMs = rec.replyMs;
+      return;
+    }
+    const cols = new Map<number, number>();
+    for (let k = 0; k < r.dirty.length; k++) cols.set(r.dirty[k]!, 0);
+    pending.push({ rec, cols });
+  };
+  return {
+    sim: {
+      edits(e) {
+        if (!active) return inner.edits(e);
+        const tPost = now();
+        const p = inner.edits(e);
+        const tPosted = now();
+        const rec: BenchEditsRecord = {
+          id: Number.NaN, changed: e.length, tPost, mainPostMs: tPosted - (Number.isNaN(markT) ? tPost : markT),
+          replyMs: Number.NaN, editMs: Number.NaN, relightMs: Number.NaN, subBatchMaxMs: Number.NaN, limboMax: Number.NaN,
+          refused: null, dirtyColumns: 0, firstVisibleMs: null, visibleMs: null,
+        };
+        markT = Number.NaN;
+        edits.push(rec);
+        return p.then((r) => {
+          replied(rec, r);
+          return r;
+        });
+      },
+      diff(cx, cz) {
+        if (!active) return inner.diff(cx, cz);
+        const t = now();
+        return inner.diff(cx, cz).then((d) => {
+          diffs.push({ t, ms: now() - t });
+          return d;
+        });
+      },
+      hasEntries: (cx, cz) => inner.hasEntries(cx, cz),
+      get failed() {
+        return inner.failed;
+      },
+    },
+    start() {
+      active = true;
+    },
+    mark() {
+      markT = now();
+    },
+    staged(cx, cz) {
+      if (pending.length === 0) return;
+      const key = colKey(cx, cz);
+      for (const p of pending) if (p.cols.get(key) === 0) p.cols.set(key, 1);
+    },
+    revealed(cx, cz, t) {
+      if (pending.length === 0) return;
+      const key = colKey(cx, cz);
+      for (let i = pending.length - 1; i >= 0; i--) {
+        const p = pending[i]!;
+        if (p.cols.get(key) !== 1) continue;
+        p.cols.delete(key);
+        p.rec.firstVisibleMs ??= t - p.rec.tPost;
+        if (p.cols.size === 0) {
+          p.rec.visibleMs = t - p.rec.tPost;
+          pending.splice(i, 1);
+        }
+      }
+    },
+    shown: () => pending.length === 0,
+    edits,
+    diffs,
+  };
+}
+
+/**
+ * L12b's house (SP5c spec §10.4: §10.1's house enlarged to a 32 × 12 × 32 shell, about 3,300 changed): the first shell of
+ * `pasteLitBlock`'s (§10.3's recon house: oak planks, a glass band, 8 interior wall torches; 3,296 cells).
+ */
+export function benchHouse(): PasteBlock {
+  const lit = pasteLitBlock();
+  const w = 32;
+  const h = 12;
+  const d = 32;
+  const values = new Uint32Array(w * h * d);
+  for (let y = 0; y < h; y++) {
+    for (let z = 0; z < d; z++) values.set(lit.values.subarray((y * lit.d + z) * lit.w, (y * lit.d + z) * lit.w + w), (y * d + z) * w);
+  }
+  return { w, h, d, values };
+}
+
+/**
+ * L12's hooks (SP5c spec §10.4): the page's selection tool over its own `createSelectActions` (`createBenchPaste`), in
+ * the bench's saved world, whose block history its undo and redo take; the edits log of the bench's sim-client wrapper
+ * and the figures the page logs. Absent, the script ends after L11.
+ */
+export interface BenchPasteHooks {
+  /** L12 starts: the tool's frame step runs from here, and the logs record. */
+  start(): void;
+  /** The `worldSurface` heightmap at (x, z): the highest non-air y + 1; null when not Published. */
+  surfaceAt(x: number, z: number): number | null;
+  /** Q. */
+  toggle(): void;
+  mode(): 'off' | 'select' | 'place';
+  /** The corners at box b's min (LMB) and max (RMB), in `select` (Q first when off). */
+  select(b: Box): void;
+  /** Ctrl+C: true when the clipboard was written. */
+  copy(): Promise<boolean>;
+  /** Ctrl+X: true when the cut's step was recorded. */
+  cut(): Promise<boolean>;
+  /** Ctrl+V: true when placing. */
+  paste(): Promise<boolean>;
+  /** N: true when placing. */
+  move(): Promise<boolean>;
+  /** The wheel while placing: one turn. */
+  turn(): void;
+  /** The ghost's min corner, pinned (`placeAt(x0, y0, z0, true)`). */
+  placeAt(x0: number, y0: number, z0: number): void;
+  /** The ghost's build is over (`ghostBuild()` not `'building'`). */
+  ghostBuilt(): boolean;
+  /** RMB while placing: `'ok'`, a refusal's text, or `''`. */
+  confirm(): Promise<string>;
+  /** LMB while placing (the paste or move cancelled). */
+  cancel(): void;
+  /** Ctrl+Z, Ctrl+Y: true when the step moved to the other side. */
+  undo(): Promise<boolean>;
+  redo(): Promise<boolean>;
+  /** The bench writes the clipboard (`ClipboardStore.write`): true when kept. */
+  writeClipboard(b: PasteBlock): Promise<boolean>;
+  /** The sim log's `shown`. */
+  shown(): boolean;
+  /** The sim log's batches. */
+  edits(): readonly BenchEditsRecord[];
+  /** The target `copy`s posted so far (the ghost's throttled reads, never a confirm's). */
+  targetReads(): number;
+  /** The renderer's `toolDrawCalls()`: the tool's objects drawn in the last frame. */
+  toolDrawCalls(): number;
+  /** The block pool's and the byte pool's byte lengths. */
+  poolBytes(): readonly [number, number];
+  log(): BenchPasteLog;
+}
+
+/** One L12 operation as it ran: what it was, its part, its answer (`'ok'` or why not), its batch (null when none posted). */
+export interface BenchPasteOp {
+  readonly op: 'paste' | 'undo' | 'redo' | 'move' | 'cut';
+  readonly part: PastePartName;
+  readonly answer: string;
+  readonly edits: BenchEditsRecord | null;
+}
+
+/** One L12 part as it ran: its script window [tS0, tS1) (s), its page-clock window [t0, t1) (ms), its own figures. */
+export interface BenchPastePart {
+  readonly name: PastePartName;
+  readonly tS0: number;
+  readonly tS1: number;
+  readonly t0: number;
+  readonly t1: number;
+  readonly targetReads: number;
+  readonly toolDrawCallsMax: number;
+}
+
+/** What the driver knows of L12 (SP5c spec §10.4) and hands `summarizeBench`. */
+export interface BenchPasteRun {
+  readonly parts: readonly BenchPastePart[];
+  readonly ops: readonly BenchPasteOp[];
+  readonly log: BenchPasteLog;
+  /** The pools' byte lengths (block, byte) at L12's start and end; null when L12 did not start. */
+  readonly poolsBefore: readonly [number, number] | null;
+  readonly poolsAfter: readonly [number, number] | null;
+  /** 'L12' when the fill never came, and each part that ended at its cap. */
+  readonly timedOut: readonly string[];
+  /** The first operation that did not succeed, and why (the leg ends there); null when none. */
+  readonly stoppedBy: string | null;
+}
+
+const NO_PASTE_LOG: BenchPasteLog = { ghosts: [], overlays: [], clipboardReads: [], clipboardWrites: [], diffs: [] };
+/** No L12 (a run that ended before it, or a driver bound without the paste hooks). */
+const NO_PASTE_RUN: BenchPasteRun = { parts: [], ops: [], log: NO_PASTE_LOG, poolsBefore: null, poolsAfter: null, timedOut: [], stoppedBy: null };
+
 /** The bench's JSON (spec §8.3; SP4c spec §8.4's `live`; SP5a spec §6.2's `edit`). */
 export interface BenchResult {
   readonly route: 'bench=medium';
@@ -799,6 +1197,8 @@ export interface BenchResult {
   readonly edit: EditFigures;
   /** L11: the save leg (SP5b spec §6.2). */
   readonly persist: PersistFigures;
+  /** L12: the paste leg (SP5c spec §10.4). */
+  readonly paste: PasteFigures;
   /** Every frame whose snapped time is over 33 ms: its raw delta and its own and the previous frame's main ms. */
   readonly longFrames: ReadonlyArray<{
     readonly frame: number; readonly leg: string; readonly rawMs: number; readonly snappedMs: number; readonly mainMs: number;
@@ -1040,11 +1440,83 @@ function persistFiguresOf(rec: BenchRecord, idx: readonly number[], fixed: Bench
   };
 }
 
+/** The largest of `values`, null with none (JSON has no NaN). */
+const maxOrNull = (values: readonly number[]): number | null => {
+  const v = values.filter((x) => Number.isFinite(x));
+  return v.length === 0 ? null : Math.max(...v);
+};
+const finiteOrNull = (v: number): number | null => (Number.isFinite(v) ? v : null);
+
+/**
+ * L12's block (SP5c spec §10.4) over its rows `idx`: each part's frames are its script window's, its logged figures
+ * those started in its page-clock window; the flushes and the diff waits over L12b's and L12c's windows.
+ */
+function pasteFiguresOf(rec: BenchRecord, idx: readonly number[], run: BenchPasteRun, flushes: readonly BenchFlush[]): PasteFigures {
+  const inWindow = (t: number, p: BenchPastePart | undefined): boolean => p !== undefined && t >= p.t0 && t < p.t1;
+  const parts = BENCH_PASTE_PARTS.map((name): [PastePartName, PastePartFigures] => {
+    const p = run.parts.find((x) => x.name === name);
+    const rows = p === undefined ? [] : idx.filter((i) => rec.tMs[i]! >= p.tS0 * 1000 && rec.tMs[i]! < p.tS1 * 1000);
+    const snapped = pick(rec.snappedMs, rows);
+    const builds = run.log.ghosts.filter((g) => inWindow(g.t, p));
+    const longest = builds.reduce<BenchGhostBuild | null>((a, g) => (a === null || g.buildMs > a.buildMs ? g : a), null);
+    return [name, {
+      p50: percentileOrNull(snapped, 50),
+      p95: percentileOrNull(snapped, 95),
+      p99: percentileOrNull(snapped, 99),
+      max: snapped.length === 0 ? null : maxOf(snapped),
+      over33: countIf(snapped, (v) => v > LONG_FRAME_MS),
+      ghostBuildMs: longest === null ? null : longest.buildMs,
+      ghostBuildFrames: longest === null ? null : longest.frames,
+      ghostSliceMaxMs: maxOrNull(builds.map((g) => g.sliceMaxMs)),
+      overlayMainMaxMs: maxOrNull(run.log.overlays.filter((o) => inWindow(o.t, p)).map((o) => o.ms)),
+      targetReads: p?.targetReads ?? 0,
+      drawCallsMax: rows.length === 0 ? null : maxOf(pick(rec.calls, rows)),
+      toolDrawCallsMax: p?.toolDrawCallsMax ?? 0,
+    }];
+  });
+  const bc = run.parts.filter((p) => p.name === 'L12b' || p.name === 'L12c');
+  const inBc = (t: number): boolean => bc.some((p) => inWindow(t, p));
+  const bcFlushes = flushes.filter((f) => inBc(f.tPost));
+  const pools = (v: readonly [number, number] | null) => (v === null ? null : { block: v[0], byte: v[1] });
+  const ops = run.ops.map((o): PasteOpFigures => {
+    const e = o.edits;
+    return {
+      op: o.op,
+      part: o.part,
+      answer: o.answer,
+      id: e === null ? null : finiteOrNull(e.id),
+      pasteVisibleMs: e?.visibleMs ?? null,
+      pasteFirstVisibleMs: e?.firstVisibleMs ?? null,
+      replyMs: e === null ? null : finiteOrNull(e.replyMs),
+      editMs: e === null ? null : finiteOrNull(e.editMs),
+      relightMs: e === null ? null : finiteOrNull(e.relightMs),
+      subBatchMaxMs: e === null ? null : finiteOrNull(e.subBatchMaxMs),
+      limboMax: e === null ? null : finiteOrNull(e.limboMax),
+      changed: e === null ? null : e.changed,
+      dirtyColumns: e === null ? null : e.dirtyColumns,
+      mainPostMs: e === null ? null : finiteOrNull(e.mainPostMs),
+    };
+  });
+  return {
+    ...(Object.fromEntries(parts) as { [K in PastePartName]: PastePartFigures }),
+    ops,
+    clipboardReadMs: maxOrNull(run.log.clipboardReads.map((r) => r.ms)),
+    clipboardWriteMs: maxOrNull(run.log.clipboardWrites.map((w) => w.ms)),
+    poolBytes: { before: pools(run.poolsBefore), after: pools(run.poolsAfter) },
+    flushMainMaxMs: maxOrNull(bcFlushes.map((f) => f.mainMs)),
+    flushSyncMaxMs: maxOrNull(bcFlushes.filter((f) => f.ok).map((f) => f.syncMs)),
+    diffWaitMaxMs: maxOrNull(run.log.diffs.filter((d) => inBc(d.t)).map((d) => d.ms)),
+    timedOut: [...run.timedOut],
+    stoppedBy: run.stoppedBy,
+  };
+}
+
 /**
  * The bench's JSON from its record and the fixed figures (spec §8.3): `stream` over L1-L6 (the streaming legs; L0's
  * hover only settles the first frames), the same frame figures per leg, L5's refill and L6's frames, `live` over L7-L9
  * (SP4c spec §8.4), `edit` over L10 with the driver's `editRun` (SP5a spec §6.2), `persist` over L11 with the driver's
- * `saveRun` (SP5b spec §6.2), every long frame and every structural frame. `gpuMB` is the largest per-frame sum of the
+ * `saveRun` (SP5b spec §6.2), `paste` over L12 with the driver's `pasteRun` and `saveRun`'s flushes (SP5c spec §10.4),
+ * every long frame and every structural frame. `gpuMB` is the largest per-frame sum of the
  * breakdown, which is reported at that frame. The live legs' MESH set is the RD they ran at: 12, or the reservation's
  * cap below it. It throws on a full record (`n` at `capacity`), whose last frames were dropped (final review GOV-7).
  */
@@ -1054,6 +1526,7 @@ export function summarizeBench(
   teleportError: string | null = null,
   editRun: BenchEditRun = NO_EDIT_RUN,
   saveRun: BenchSaveRun = NO_SAVE_RUN,
+  pasteRun: BenchPasteRun = NO_PASTE_RUN,
 ): BenchResult {
   // A full record dropped the frames after it, so the last legs' figures (L11's parts) would read a cut part (final
   // review GOV-7): an error, not a JSON.
@@ -1139,6 +1612,7 @@ export function summarizeBench(
     live,
     edit: editFiguresOf(rec, byLeg[EDIT_LEG]!, fixed, editRun, saveRun.samplesFrom),
     persist: persistFiguresOf(rec, byLeg[SAVE_LEG]!, fixed, saveRun),
+    paste: pasteFiguresOf(rec, byLeg[PASTE_LEG]!, pasteRun, saveRun.flushes),
     longFrames,
     structuralFrames,
   };
@@ -1395,6 +1869,11 @@ export interface BenchWorld {
     now(): number;
     samples(): number;
   };
+  /**
+   * L12's hooks (SP5c spec §10.4), over the bench's saved world (its autosave and its block history: L11's `save`
+   * hooks). Absent, or with no `save`, the script ends after L11.
+   */
+  readonly paste?: BenchPasteHooks;
   /** The review scenes' clock (SP5a spec §6.5): fixed at `hours` (0 … 24) and paused. */
   setTime(hours: number): void;
   /** The review scenes' mode (SP5a spec §6.5): F's path (`toggleMode`, the near plane) when the mode differs. */
@@ -1416,8 +1895,9 @@ export interface BenchWorld {
  * `REVIEW_SETTLE_S` and freezes there. In L7-L10 the pose keeps x, z and the yaw, sets the
  * pitch −15 and y 150 (after L9's arrival, the teleport's y); L10's flight sets x and the yaw 90. With `save` bound,
  * L11 follows L10's flight (`BENCH_SAVE`): x back at the flight's start, and the page logs every autosave flush through
- * `flushed`. The page writes each rendered frame into `record` (`createBenchRecorder`). `fail` ends the script with an
- * error (a failure after the reveal), once.
+ * `flushed`. With `paste` bound too, L12 follows L11 there (`BENCH_PASTE`, SP5c spec §10.4): its script runs through
+ * the hooks between frames, each step awaited and resumed at a later `pose`. The page writes each rendered frame into
+ * `record` (`createBenchRecorder`). `fail` ends the script with an error (a failure after the reveal), once.
  */
 export interface BenchDriver {
   readonly record: BenchRecord;
@@ -1490,6 +1970,16 @@ const SAVE_SPOTS_PER_COLUMN = 64;
 const L11_HOVER = 0;
 const L11_FLUSH = 1;
 const L11_PARTS = 2;
+/** L12's parts' caps, s, in `BENCH_PASTE_PARTS`' order. */
+const PASTE_CAPS: readonly number[] = [BENCH_PASTE.hoverS, BENCH_PASTE.houseMaxS, BENCH_PASTE.maxMaxS, BENCH_PASTE.sweepS];
+/** The leg index after the last leg: the script has ended. */
+const DONE_LEG = PASTE_LEG + 1;
+/** L12d's sweep: the anchor's x offset at frame k, one block a frame back and forth over `sweepSpan` blocks. */
+const sweepOffset = (k: number): number => {
+  const span = BENCH_PASTE_SCRIPT.sweepSpan;
+  const m = k % (2 * span);
+  return m < span ? m : 2 * span - m;
+};
 
 export function createBenchDriver(o: { readonly shot: BenchShot | null; readonly capacity?: number; readonly publish: BenchPublish }): BenchDriver {
   const record = createBenchRecord(o.capacity ?? BENCH_FRAME_CAPACITY);
@@ -1565,6 +2055,25 @@ export function createBenchDriver(o: { readonly shot: BenchShot | null; readonly
   const flushLog: BenchFlush[] = [];
   let samplesFrom = Number.POSITIVE_INFINITY;
   let saveTimedOut = false;
+  // L12 (SP5c spec §10.4): its hooks (null until `bind`, and without them no L12), whether its fill came (the script
+  // started), whether the script ended (finished, stopped or timed out) and must take no more steps (`aborted`); the
+  // script's clock (the last pose's time) and the poses so far; the one condition the script awaits, resolved by the
+  // first pose where it holds; the running part; what `summarizeBench` reads (BenchPasteRun); the last operation's start.
+  let paste: BenchPasteHooks | null = null;
+  let pasteStarted = false;
+  let pasteEnded = false;
+  let aborted = false;
+  let nowS = 0;
+  let poses = 0;
+  let waiter: { readonly cond: () => boolean; readonly resolve: () => void } | null = null;
+  let part: { readonly k: number; readonly tS0: number; readonly t0: number; readonly reads0: number; toolMax: number } | null = null;
+  const pasteParts: BenchPastePart[] = [];
+  const pasteOps: BenchPasteOp[] = [];
+  const pasteTimedOut: string[] = [];
+  let pasteStopped: string | null = null;
+  let poolsBefore: readonly [number, number] | null = null;
+  let poolsAfter: readonly [number, number] | null = null;
+  let lastOpS = Number.NEGATIVE_INFINITY;
   const capped = (rd: number): number => Math.min(rd, rdMax);
 
   /** The live legs' pose (SP4c spec §8.4): x, z and the yaw kept; pitch −15; y 150 until L9's arrival, then kept. */
@@ -1861,6 +2370,253 @@ export function createBenchDriver(o: { readonly shot: BenchShot | null; readonly
     }
     return true;
   };
+  /** Resolves at the first pose where `cond` holds (never once L12 has ended). */
+  const until = (cond: () => boolean): Promise<void> => new Promise((resolve) => {
+    if (!aborted) waiter = { cond, resolve };
+  });
+  /** Resolves at the next pose. */
+  const nextFrame = (): Promise<void> => {
+    const p0 = poses;
+    return until(() => poses > p0);
+  };
+  /** Starts L12's part `k` at the script's time, on the page's clock with the target reads so far. */
+  const startPastePart = (k: number): void => {
+    part = { k, tS0: nowS, t0: save!.now(), reads0: paste!.targetReads(), toolMax: 0 };
+  };
+  /** Ends the running part at the script's time, logging its windows and figures. */
+  const endPastePart = (): void => {
+    const p = part;
+    if (p === null) return;
+    part = null;
+    pasteParts.push({
+      name: BENCH_PASTE_PARTS[p.k]!, tS0: p.tS0, tS1: nowS, t0: p.t0, t1: save!.now(), targetReads: paste!.targetReads() - p.reads0,
+      toolDrawCallsMax: p.toolMax,
+    });
+  };
+  /** Ends L12's script: the running part ended where it is, no more steps; the leg ends at the next pose. */
+  const endPaste = (): void => {
+    endPastePart();
+    aborted = true;
+    waiter = null;
+    pasteEnded = true;
+  };
+  /** An operation or a write that did not succeed (`why`): the script stops there. */
+  const stop = (why: string): void => {
+    if (aborted) return;
+    pasteStopped ??= why;
+    endPaste();
+  };
+  const partName = (): PastePartName => BENCH_PASTE_PARTS[part?.k ?? 0]!;
+  /**
+   * One operation of L12b or L12c (SP5c spec §10.4): started at least `gapS` after the last one, once every dirty column
+   * of the last batch is shown; logged with its answer and its batch (the newest the sim log holds after it, matched by
+   * its reply's id); an answer other than `'ok'` stops the script.
+   */
+  const op = async (kind: BenchPasteOp['op'], run: () => Promise<string>): Promise<boolean> => {
+    const hooks = paste!;
+    await until(() => nowS - lastOpS >= BENCH_PASTE_SCRIPT.gapS - SAVE_EPS_S && hooks.shown());
+    if (aborted) return false;
+    lastOpS = nowS;
+    const k0 = hooks.edits().length;
+    const answer = await run();
+    if (aborted) return false;
+    const list = hooks.edits();
+    pasteOps.push({ op: kind, part: partName(), answer, edits: list.length > k0 ? list[list.length - 1]! : null });
+    if (answer === 'ok') return true;
+    stop(`${partName()}'s ${kind} (operation ${pasteOps.length}): ${answer === '' ? 'nothing was done' : answer}`);
+    return false;
+  };
+  /**
+   * A paste's or a move's steps after Ctrl+V or N (`open`): `turns` turns, the ghost pinned at (x0, y0, z0), shown for a
+   * frame and built, then RMB.
+   */
+  const placeAndConfirm = async (open: () => Promise<boolean>, turns: number, x0: number, y0: number, z0: number): Promise<string> => {
+    const hooks = paste!;
+    if (!(await open())) return 'nothing to place';
+    if (aborted) return '';
+    for (let q = 0; q < turns; q++) hooks.turn();
+    hooks.placeAt(x0, y0, z0);
+    const p0 = poses;
+    await until(() => poses > p0 && hooks.ghostBuilt());
+    if (aborted) return '';
+    return hooks.confirm();
+  };
+  const undoOp = (): Promise<boolean> => op('undo', async () => ((await paste!.undo()) ? 'ok' : 'nothing was undone'));
+  const redoOp = (): Promise<boolean> => op('redo', async () => ((await paste!.redo()) ? 'ok' : 'nothing was redone'));
+  /** The bench writes the clipboard; a write not kept stops the script. */
+  const writeClipboard = async (b: PasteBlock, what: string): Promise<boolean> => {
+    const ok = await paste!.writeClipboard(b);
+    if (aborted) return false;
+    if (!ok) stop(`${partName()}: ${what} could not be written to the clipboard`);
+    return ok;
+  };
+  /**
+   * A box of w × h × d pinned on the surface across a column corner, its footprint east of the camera's column (so it
+   * clears the camera's body; P27): x0 8 blocks into the column after the camera's, z0 8 blocks before the camera's
+   * column, y0 the highest `worldSurface` over the footprint (the box in air); null after stopping when a column is not
+   * Published or the box would leave the world.
+   */
+  const anchorFor = (w: number, h: number, d: number, what: string): Box | null => {
+    const bx = Math.floor(savePoint[0]!);
+    const bz = Math.floor(savePoint[1]!);
+    const x0 = 16 * ((bx >> 4) + 1) + 8;
+    const z0 = 16 * (bz >> 4) - 8;
+    let top = MIN_Y;
+    for (let z = z0; z < z0 + d; z++) {
+      for (let x = x0; x < x0 + w; x++) {
+        const y = paste!.surfaceAt(x, z);
+        if (y === null) {
+          stop(`${partName()}: ${what}'s place is not loaded at (${x}, ${z})`);
+          return null;
+        }
+        if (y > top) top = y;
+      }
+    }
+    if (top + h - 1 > MAX_Y) {
+      stop(`${partName()}: ${what} at y ${top} would leave the world`);
+      return null;
+    }
+    return { x0, y0: top, z0, w, h, d };
+  };
+  /**
+   * One of L12d's two sweeps, in its window [s0, s0 + sweepS / 2): Ctrl+V (`open`), then each frame the anchor pinned
+   * one block further and a turn every `turnEveryS`, then LMB at the window's end; nothing pasted. A ghost never placed
+   * in its window names L12d in `timedOut`.
+   */
+  const sweep = async (s0: number, open: () => Promise<boolean>, at: Box): Promise<void> => {
+    const hooks = paste!;
+    const half = BENCH_PASTE.sweepS / 2;
+    const ok = await open();
+    if (aborted) return;
+    if (!ok || nowS - s0 >= half - SAVE_EPS_S) {
+      if (!pasteTimedOut.includes('L12d')) pasteTimedOut.push('L12d');
+    } else {
+      const start = nowS;
+      let k = 0;
+      let turns = 0;
+      while (nowS - s0 < half - SAVE_EPS_S) {
+        hooks.placeAt(at.x0 + sweepOffset(k++), at.y0, at.z0);
+        for (const due = Math.floor((nowS - start) / BENCH_PASTE_SCRIPT.turnEveryS); turns < due; turns++) hooks.turn();
+        await nextFrame();
+        if (aborted) return;
+      }
+    }
+    if (hooks.mode() === 'place') hooks.cancel();
+    await until(() => nowS - s0 >= half - SAVE_EPS_S);
+  };
+  /** L12's script (SP5c spec §10.4; `BENCH_PASTE`), from the fill's end. */
+  const runPaste = async (): Promise<void> => {
+    const hooks = paste!;
+    const S = BENCH_PASTE_SCRIPT;
+    // L12a: the baseline, the tool off.
+    startPastePart(0);
+    await until(() => nowS - part!.tS0 >= BENCH_PASTE.hoverS - SAVE_EPS_S);
+    if (aborted) return;
+    endPastePart();
+    // L12b: the house, pasted, undone and redone, moved and cut, the world back at its start.
+    startPastePart(1);
+    const house = benchHouse();
+    const hb = anchorFor(house.w, house.h, house.d, 'the house');
+    if (hb === null || !(await writeClipboard(house, 'the house'))) return;
+    const pasteHouse = (turns: number): Promise<boolean> => op('paste', () => placeAndConfirm(() => hooks.paste(), turns, hb.x0, hb.y0, hb.z0));
+    for (let c = 0; c < S.houseCycles; c++) {
+      if (!(await pasteHouse(c % 4)) || !(await undoOp()) || !(await redoOp()) || !(await undoOp())) return;
+    }
+    if (!(await pasteHouse(1)) || !(await undoOp()) || !(await redoOp())) return;
+    // The house stands: N on its box, pinned 3 blocks down (overlapping its source), undone.
+    const moved = await op('move', () => {
+      hooks.select(hb);
+      return placeAndConfirm(() => hooks.move(), 0, hb.x0, hb.y0 - S.moveDown, hb.z0);
+    });
+    if (!moved || !(await undoOp())) return;
+    // Ctrl+X on the house's box (P13, P28: the corners set back to it), undone; then the last paste undone.
+    const cut = await op('cut', async () => {
+      hooks.select(hb);
+      return (await hooks.cut()) ? 'ok' : 'nothing was cut';
+    });
+    if (!cut || !(await undoOp()) || !(await undoOp())) return;
+    await until(() => hooks.shown());
+    if (aborted) return;
+    endPastePart();
+    // L12c: the two maximum blocks, each written to the clipboard first, pasted and undone.
+    startPastePart(2);
+    for (const [block, what] of [[pasteMaxBlock(), 'paste.max\'s block'], [pasteLitBlock(), 'paste.maxLit\'s block']] as const) {
+      const b = anchorFor(block.w, block.h, block.d, what);
+      if (b === null || !(await writeClipboard(block, what))) return;
+      for (let c = 0; c < S.maxCycles; c++) {
+        if (!(await op('paste', () => placeAndConfirm(() => hooks.paste(), 0, b.x0, b.y0, b.z0))) || !(await undoOp())) return;
+      }
+    }
+    await until(() => hooks.shown());
+    if (aborted) return;
+    endPastePart();
+    // L12d: the house's ghost, then a 64³ copy of the terrain under the hover point, each swept; nothing pasted.
+    startPastePart(3);
+    const s0 = nowS;
+    if (!(await writeClipboard(house, 'the house'))) return;
+    await sweep(s0, () => hooks.paste(), hb);
+    if (aborted) return;
+    const side = S.terrainSide;
+    const bx = Math.floor(savePoint[0]!);
+    const bz = Math.floor(savePoint[1]!);
+    const ty = hooks.surfaceAt(bx, bz) ?? 64;
+    const terrain: Box = {
+      x0: bx - side / 2, y0: Math.min(Math.max(ty - side / 2, MIN_Y), MAX_Y + 1 - side), z0: bz - side / 2, w: side, h: side, d: side,
+    };
+    await sweep(s0 + BENCH_PASTE.sweepS / 2, async () => {
+      hooks.select(terrain);
+      return (await hooks.copy()) && !aborted && hooks.paste();
+    }, hb);
+    if (aborted) return;
+    // Q: the tool off (from select; a ghost still placing is cancelled first).
+    for (let i = 0; i < 2 && hooks.mode() !== 'off'; i++) hooks.toggle();
+    await until(() => nowS - part!.tS0 >= BENCH_PASTE.sweepS - SAVE_EPS_S);
+    if (aborted) return;
+    endPaste();
+  };
+  /**
+   * One frame of L12 at `tS` (SP5c spec §10.4), after `livePose`, at L10's hover point: the fill (at most `fillMaxS`),
+   * then the script, resumed where it awaits (`until`); a part still running at its cap (its awaited step not ready)
+   * is named in `timedOut` and ends the script; false once the script has ended (autosave paused again).
+   */
+  const pasteStep = (tS: number, out: BenchPose): boolean => {
+    const hooks = paste!;
+    out.x = savePoint[0]!;
+    out.z = savePoint[1]!;
+    nowS = tS;
+    poses++;
+    if (!pasteStarted) {
+      if (tS === legStartS || !save!.filled()) {
+        if (tS - legStartS < BENCH_PASTE.fillMaxS) return true;
+        pasteTimedOut.push('L12');
+        return false;
+      }
+      pasteStarted = true;
+      // Autosave on for the whole leg; the tool's frame step and the logs from here.
+      save!.pause(false);
+      hooks.start();
+      poolsBefore = hooks.poolBytes();
+      runPaste().catch((e: unknown) => stop(`L12's script failed: ${e instanceof Error ? `${e.name}: ${e.message}` : String(e)}`));
+      return true;
+    }
+    if (part !== null) {
+      part.toolMax = Math.max(part.toolMax, hooks.toolDrawCalls());
+      const ready = waiter !== null && waiter.cond();
+      if (!ready && tS - part.tS0 >= PASTE_CAPS[part.k]!) {
+        pasteTimedOut.push(BENCH_PASTE_PARTS[part.k]!);
+        endPaste();
+      }
+    }
+    if (waiter !== null && waiter.cond()) {
+      const w = waiter;
+      waiter = null;
+      w.resolve();
+    }
+    if (!pasteEnded) return true;
+    poolsAfter = hooks.poolBytes();
+    save!.pause(true);
+    return false;
+  };
   /**
    * One frame of the live legs at `tS`: whether a leg ends (settled or at its cap) and the next starts, or the script
    * ends (false); a live shot freezes on its event (`frozenLive`).
@@ -1883,7 +2639,7 @@ export function createBenchDriver(o: { readonly shot: BenchShot | null; readonly
         if (leg === 9) toEdit = true;
         else next = (leg + 1) as LiveLeg;
       }
-    } else if (liveLeg !== EDIT_LEG && liveLeg !== SAVE_LEG) return false;
+    } else if (liveLeg !== EDIT_LEG && liveLeg !== SAVE_LEG && liveLeg !== PASTE_LEG) return false;
     if (o.shot === 'apply-mid' && !Number.isNaN(l7StartS) && tS - l7StartS >= APPLY_MID_AFTER_S) frozenLive = true;
     if (o.shot === 'teleport' && !Number.isNaN(arrivedS) && tS - arrivedS >= TELEPORT_SHOT_AFTER_S) frozenLive = true;
     if (frozenLive) return true;
@@ -1895,7 +2651,7 @@ export function createBenchDriver(o: { readonly shot: BenchShot | null; readonly
     if (liveLeg === EDIT_LEG && !editStep(tS, out)) {
       // L10's flight ended: L11 follows when its hooks are bound (never after L10's time-out or a review scene).
       if (save === null || editTimedOut || review !== null) {
-        liveLeg = SAVE_LEG + 1;
+        liveLeg = DONE_LEG;
         return false;
       }
       liveLeg = SAVE_LEG;
@@ -1905,7 +2661,16 @@ export function createBenchDriver(o: { readonly shot: BenchShot | null; readonly
       savePoint[1] = out.z;
     }
     if (liveLeg === SAVE_LEG && !saveStep(tS, out)) {
-      liveLeg = SAVE_LEG + 1;
+      // L11 ended: L12 follows when its hooks are bound (never after L11's time-out).
+      if (paste === null || saveTimedOut) {
+        liveLeg = DONE_LEG;
+        return false;
+      }
+      liveLeg = PASTE_LEG;
+      legStartS = tS;
+    }
+    if (liveLeg === PASTE_LEG && !pasteStep(tS, out)) {
+      liveLeg = DONE_LEG;
       return false;
     }
     writeRow(liveLeg, tS);
@@ -1924,6 +2689,7 @@ export function createBenchDriver(o: { readonly shot: BenchShot | null; readonly
       live = world.live;
       edit = world.edit;
       save = world.save ?? null;
+      paste = world.paste ?? null;
       sceneHooks = { setTime: (h) => world.setTime(h), walk: (on) => world.walk(on) };
     },
     pose(tS, out, fogRd) {
@@ -1993,6 +2759,10 @@ export function createBenchDriver(o: { readonly shot: BenchShot | null; readonly
         result = summarizeBench(
           record, fixed, teleportError, { hoverAccepted, streamingRefused, timedOut: editTimedOut ? ['L10'] : [] },
           { samplesFrom, parts: [...saveParts], edits, flushes: [...flushLog], timedOut: saveTimedOut ? ['L11'] : [] },
+          {
+            parts: [...pasteParts], ops: [...pasteOps], log: paste?.log() ?? NO_PASTE_LOG, poolsBefore, poolsAfter,
+            timedOut: [...pasteTimedOut], stoppedBy: pasteStopped,
+          },
         );
       } catch (e) {
         result = { route: 'bench=medium', error: e instanceof Error ? e.stack ?? e.message : String(e) };
@@ -2102,8 +2872,10 @@ export async function mountBenchRoute(app: HTMLElement, query: URLSearchParams):
   }
   const driver = createBenchDriver({ shot, publish });
   const { mountWorldPage } = await import('./worldPage');
-  const liveS = BENCH_LIVE_LEGS.reduce((t, l) => t + l.seconds, 0) + BENCH_EDIT_LEG.seconds;
-  panel?.say(`running the ${BENCH_SECONDS} s script, the live legs and the edit leg (up to ${liveS} s more) after the reveal (keep this tab in front)…`);
+  // The legs after the timed script at their caps: the live legs, L10, L11 (its hover included) and L12 (its fill included).
+  const liveS = BENCH_LIVE_LEGS.reduce((t, l) => t + l.seconds, 0) + BENCH_EDIT_LEG.seconds + BENCH_SAVE_LEG.seconds
+    + BENCH_PASTE.fillMaxS + BENCH_PASTE_LEG.seconds;
+  panel?.say(`running the ${BENCH_SECONDS} s script, then the live, edit, save and paste legs (up to ${liveS} s more) after the reveal (keep this tab in front)…`);
   const page = await mountWorldPage(app, benchQuery(query), benchHash(), { hud: false, overlay: false, bench: driver });
   if (page.state !== 'revealed' && !published) publish.result({ route: 'bench=medium', error: `the world did not load (page ${page.state})` });
 }

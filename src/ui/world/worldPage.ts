@@ -55,7 +55,10 @@
  * (SP5b spec §6.2) the bench runs in a saved world of its own in `BENCH_DB` (`openBenchSave`: deleted, then the world
  * created, its `load` posted with the attach), with a block history, the action post L11's edits take and the page's
  * autosave, paused until the driver's "on" parts (`createBenchSave`); at the script's end or a failure every connection
- * is closed and the database deleted (`closeBenchSave`).
+ * is closed and the database deleted (`closeBenchSave`). For its paste leg L12 (SP5c spec §10.4) the bench's D jobs and
+ * edit path go through its sim-client wrapper (`createBenchSimLog`, logging from L12 each batch's reply and visibility
+ * and each diff wait), and a selection tool of its own (`createBenchPaste`: the page's `createSelectActions` over the
+ * bench's sim, L11's block history and a clipboard in `BENCH_DB`) runs its frame step in the bench's aim from L12.
  *
  * Errors after the reveal (SP4b spec §3.6, §7.4, D12) degrade: a skipped column shows a dismissible notice with "Copy
  * details", StoreFull a notice offering "Lower to RD n" (applied live on a click, never on its own); a fatal event (no
@@ -206,8 +209,9 @@ import { cryptoSeed } from '../seedBox';
 import { SETTINGS_DEFAULTS, loadSettings, saveSettings, type WorldSettings } from '../settings';
 import { mountSettingsPanel, type SettingsPanel } from '../settingsPanel';
 import {
-  BENCH_DB, BENCH_IDLE_FRAMES, BENCH_REFILL, BENCH_TIME_SPEED, benchInterval, createBenchRecorder, createLiveReveals, jsHeapMB, type BenchDriver,
-  type BenchFlush, type BenchPose, type BenchWorld, type EnterResult,
+  BENCH_DB, BENCH_IDLE_FRAMES, BENCH_REFILL, BENCH_TIME_SPEED, benchInterval, createBenchRecorder, createBenchSimLog, createLiveReveals, jsHeapMB,
+  type BenchDriver, type BenchFlush, type BenchGhostBuild, type BenchPasteHooks, type BenchPose, type BenchSimLog, type BenchTimed, type BenchWorld,
+  type EnterResult,
 } from './bench';
 import { firstView } from './firstView';
 import type { FlightContext } from './flight';
@@ -3536,6 +3540,196 @@ export function createBenchSave(o: {
 }
 
 /**
+ * L12's tool as the bench route composes it (SP5c spec §10.4): a selection tool and its actions (`createSelectActions`,
+ * the page's own path) over the bench's sim, its edit path's gate, a clipboard store over the bench's saved world's KV
+ * (`wi10-bench`), the action post of L11's block history (so each cut, paste and move is one step its undo and redo
+ * take) and the renderer's boxes, ghost and overlay, with no notices or label. Around them, what L12 logs on `now`'s
+ * clock: each `copy` reply and clipboard read or write marks the sim log (the next batch is built from there); a `copy`
+ * posted while no operation runs is a target read (`targetReads`), and its reply to the label written is its count and
+ * overlay fill (`overlays`); each ghost build's slices (`ghostSliceMs` after each `ghostStep` that built); each
+ * clipboard read and write. `frame` is the aim's selection step, run only once L12 `start`ed, so L1-L11 are unchanged.
+ * `hooks` are the driver's `BenchWorld.paste`.
+ */
+export function createBenchPaste(o: {
+  readonly sim: Pick<SimClient, 'copy'>;
+  readonly log: Pick<BenchSimLog, 'start' | 'mark' | 'shown' | 'edits' | 'diffs'>;
+  editState(cx: number, cz: number): 0 | 1 | 2;
+  kv(): Promise<KV | null>;
+  actionPost(edits: readonly Edit[]): Promise<EditOutcome>;
+  readonly history: Pick<BlockHistory, 'undo' | 'redo' | 'size' | 'redoSize' | 'version'>;
+  /** The edit path's `settled`: an undo or redo is over once it resolves. */
+  settled(): Promise<void>;
+  readonly view: Pick<WorldRenderer, 'setSelectionBox' | 'hideSelectionBox'>;
+  readonly ghost: GhostHost;
+  ghostSliceMs(): number;
+  toolDrawCalls(): number;
+  poolBytes(): readonly [number, number];
+  surfaceAt(x: number, z: number): number | null;
+  readonly origin: Pick<FloatingOrigin, 'x' | 'y' | 'z'>;
+  body(): BodyBox;
+  now(): number;
+  /** The target reader's timers; `globalThis`'s when absent. */
+  readonly timers?: { set(f: () => void, ms: number): number; clear(id: number): void };
+}): { readonly tool: SelectTool; readonly actions: SelectActions; readonly hooks: BenchPasteHooks; frame(hit: RayHit, paused: boolean): void; dispose(): void } {
+  const { log, now } = o;
+  let active = false;
+  let targetReads = 0;
+  // A target reply waiting for its label: the reply's time (NaN for none); cleared at the next frame.
+  let overlayT = Number.NaN;
+  const ghosts: BenchGhostBuild[] = [];
+  const overlays: BenchTimed[] = [];
+  const clipboardReads: BenchTimed[] = [];
+  const clipboardWrites: BenchTimed[] = [];
+  let build: BenchGhostBuild | null = null;
+  let actions: SelectActions | null = null;
+  // Each write's outcome as it settles: `copy` reads whether its own write kept the clipboard.
+  let lastWriteOk = false;
+  const store = createClipboardStore({ kv: o.kv, notices: { show() {} } });
+  const clipboard: ClipboardStore = {
+    async write(c) {
+      const t = now();
+      const r = await store.write(c);
+      if (active) clipboardWrites.push({ t, ms: now() - t });
+      lastWriteOk = r.ok;
+      log.mark();
+      return r;
+    },
+    async read() {
+      const t = now();
+      const r = await store.read();
+      if (active) clipboardReads.push({ t, ms: now() - t });
+      log.mark();
+      return r;
+    },
+  };
+  const tool = createSelectTool();
+  actions = createSelectActions({
+    tool,
+    sim: {
+      copy(b, gen) {
+        // A copy posted while no operation runs is the ghost's throttled target read (a confirm's own read is not).
+        const target = active && actions !== null && !actions.busy();
+        if (target) targetReads++;
+        return o.sim.copy(b, gen).then((r) => {
+          log.mark();
+          if (target) overlayT = now();
+          return r;
+        });
+      },
+    },
+    editState: (cx, cz) => o.editState(cx, cz),
+    clipboard,
+    actionPost: (edits) => o.actionPost(edits),
+    notices: { show() {} },
+    keyName: pageKeyName,
+    view: {
+      setSelectionBox: (x0, y0, z0, x1, y1, z1, colour) => o.view.setSelectionBox(x0, y0, z0, x1, y1, z1, colour),
+      hideSelectionBox: () => o.view.hideSelectionBox(),
+      // No label in the bench; its write ends a target reply's count and overlay fill.
+      setSelectLabel() {
+        if (Number.isNaN(overlayT)) return;
+        overlays.push({ t: overlayT, ms: now() - overlayT });
+        overlayT = Number.NaN;
+      },
+    },
+    ghost: {
+      ...o.ghost,
+      setGhost(w, h, d, values) {
+        o.ghost.setGhost(w, h, d, values);
+        build = { t: now(), buildMs: 0, frames: 0, sliceMaxMs: 0 };
+        if (active) ghosts.push(build);
+      },
+      ghostStep() {
+        const building = o.ghost.ghostBuild() === 'building';
+        o.ghost.ghostStep();
+        if (!building || build === null) return;
+        const ms = o.ghostSliceMs();
+        build.buildMs += ms;
+        build.frames++;
+        build.sliceMaxMs = Math.max(build.sliceMaxMs, ms);
+      },
+    },
+    origin: o.origin,
+    body: () => o.body(),
+    stopRepeat() {},
+    timers: o.timers,
+  });
+  const a = actions;
+  /** Ctrl+Z or Ctrl+Y through the block history, over once the edit path settled: true when the step moved. */
+  const press = async (p: 'undo' | 'redo'): Promise<boolean> => {
+    log.mark();
+    const redo0 = o.history.redoSize;
+    if (p === 'undo') o.history.undo();
+    else o.history.redo();
+    await o.settled();
+    return p === 'undo' ? o.history.redoSize > redo0 : o.history.redoSize < redo0;
+  };
+  const hooks: BenchPasteHooks = {
+    start() {
+      active = true;
+      log.start();
+    },
+    surfaceAt: (x, z) => o.surfaceAt(x, z),
+    toggle: () => a.toggle(),
+    mode: () => tool.mode,
+    select(b) {
+      if (tool.mode === 'off') a.toggle();
+      tool.mark(0, { x: b.x0, y: b.y0, z: b.z0 });
+      tool.mark(2, { x: b.x0 + b.w - 1, y: b.y0 + b.h - 1, z: b.z0 + b.d - 1 });
+    },
+    async copy() {
+      lastWriteOk = false;
+      await a.copy();
+      return lastWriteOk;
+    },
+    async cut() {
+      log.mark();
+      const v = o.history.version;
+      await a.cut();
+      return o.history.version !== v;
+    },
+    async paste() {
+      await a.paste();
+      return tool.mode === 'place';
+    },
+    async move() {
+      await a.move();
+      return tool.mode === 'place';
+    },
+    turn: () => a.turn(1),
+    placeAt: (x0, y0, z0) => a.placeAt(x0, y0, z0, true),
+    ghostBuilt: () => o.ghost.ghostBuild() !== 'building',
+    confirm() {
+      log.mark();
+      return a.confirm();
+    },
+    cancel: () => tool.cancel(),
+    undo: () => press('undo'),
+    redo: () => press('redo'),
+    async writeClipboard(b) {
+      return (await clipboard.write({ w: b.w, h: b.h, d: b.d, values: b.values })).ok;
+    },
+    shown: () => log.shown(),
+    edits: () => log.edits,
+    targetReads: () => targetReads,
+    toolDrawCalls: () => o.toolDrawCalls(),
+    poolBytes: () => o.poolBytes(),
+    log: () => ({ ghosts, overlays, clipboardReads, clipboardWrites, diffs: log.diffs }),
+  };
+  return {
+    tool,
+    actions: a,
+    hooks,
+    frame(hit, paused) {
+      if (!active) return;
+      overlayT = Number.NaN;
+      a.frame(hit, paused);
+    },
+    dispose: () => a.dispose(),
+  };
+}
+
+/**
  * Mounts the world page in `root` (replacing what it holds) and resolves once it settles: revealed, or failed with the
  * failure panel or the error screen showing. It never rejects for a load error; the page shows it.
  */
@@ -3854,6 +4048,9 @@ export function mountWorldPage(root: HTMLElement, q: WorldQuery, hash: string, o
 
     const loadStart = performance.now();
     let onStreamEvent: ((e: StreamEvent) => void) | null = null;
+    // The bench's sim-client wrapper (SP5c spec §10.4): its D jobs' read-through and its edit path go through it, and from
+    // L12 it logs each batch and each diff wait; nothing before.
+    const benchLog = opts.bench !== undefined && simClient !== null ? createBenchSimLog(simClient, () => performance.now()) : null;
     // The first entry on the streaming coordinator (SP4b spec §3.11, D21): strict, so any error stops the load as in
     // SP4a (D12); every proto kept (D11); the camera held at the centre. The throttle is created here and kept for the
     // streaming frame; nothing feeds it before the reveal, so it stays at its maximum.
@@ -3862,7 +4059,7 @@ export function mountWorldPage(root: HTMLElement, q: WorldQuery, hash: string, o
     const epochs = createEpochs();
     const coordinator = createCoordinator({
       // D reads the sim's entries through (SP5a spec §2.5); null on the flight route.
-      jobs: worldJobsOf(workers, simClient),
+      jobs: worldJobsOf(workers, benchLog?.sim ?? simClient),
       store,
       sink: {
         stage: (p, seq) => sections.stage(p, seq),
@@ -3884,7 +4081,11 @@ export function mountWorldPage(root: HTMLElement, q: WorldQuery, hash: string, o
         else if (e.kind === 'fatal') fail(causeOf(e.cause, e.message), e.cause, e.message);
       },
       // An edit's payload staged (SP5a spec §4.6, §6.2): the first reveal of the column after it shows the edit.
-      onEditStaged: (cx, cz) => latency?.staged(cx, cz, performance.now()),
+      onEditStaged: (cx, cz) => {
+        const t = performance.now();
+        latency?.staged(cx, cz, t);
+        benchLog?.staged(cx, cz, t);
+      },
     });
     pushCoordinatorTeardown(teardown, coordinator, simClient, store);
     simFailure = () => {
@@ -4080,8 +4281,9 @@ export function mountWorldPage(root: HTMLElement, q: WorldQuery, hash: string, o
         // L10's edit path (SP5a spec §6.2): the streaming route's, with no notice to show; the latency's reveals come
         // through the same hook as the live legs' (`onColumnRevealed` holds one).
         const editLatency = latency!;
+        const simLog = benchLog!;
         const benchEdits = createEditPath({
-          sim: simClient!,
+          sim: simLog.sim,
           coordinator,
           latency: editLatency,
           now: () => performance.now(),
@@ -4097,7 +4299,9 @@ export function mountWorldPage(root: HTMLElement, q: WorldQuery, hash: string, o
         if (simClient!.failed) simFailure();
         sections.onColumnRevealed = (cx, cz) => {
           reveals.revealed(cx, cz);
-          editLatency.revealed(cx, cz, performance.now());
+          const t = performance.now();
+          editLatency.revealed(cx, cz, t);
+          simLog.revealed(cx, cz, t);
         };
         teardown.push(() => { sections.onColumnRevealed = null; });
         const liveDriver = createPreviewDriver(workers, createReplayingCanvas(), {
@@ -4165,6 +4369,38 @@ export function mountWorldPage(root: HTMLElement, q: WorldQuery, hash: string, o
         });
         benchAutosave = benchSaving.autosave;
         teardown.push(() => benchSaving.autosave.dispose());
+        // L12's tool (SP5c spec §10.4): the page's selection actions over the bench's sim, edit path and saved world, its
+        // steps in L11's block history, the clipboard in `wi10-bench`; the bench's aim runs its frame step from L12.
+        const pasteBody: BodyBox = { minX: 0, minY: 0, minZ: 0, maxX: 0, maxY: 0, maxZ: 0 };
+        const benchPaste = createBenchPaste({
+          sim: simClient!,
+          log: simLog,
+          editState: (cx, cz) => coordinator.editState(cx, cz),
+          kv: () => Promise.resolve(benchKv),
+          actionPost: (edits) => benchSaving.hooks.post(edits),
+          history: benchSaving.blockHistory,
+          settled: () => benchEdits.settled(),
+          view: world,
+          ghost: {
+            setGhostBox: (x0, y0, z0, x1, y1, z1, colour) => world.setGhostBox(x0, y0, z0, x1, y1, z1, colour),
+            hideGhostBox: () => world.hideGhostBox(),
+            setGhost: (w, h, d, values) => world.setGhost(w, h, d, values),
+            ghostStep: () => world.ghostStep(),
+            placeGhost: (x0, y0, z0, q) => world.placeGhost(x0, y0, z0, q),
+            hideGhost: () => world.hideGhost(),
+            ghostBuild: () => world.ghostBuild(),
+            setReplaced: (x0, y0, z0, cells, count) => world.setReplaced(x0, y0, z0, cells, count),
+            hideReplaced: () => world.hideReplaced(),
+          },
+          ghostSliceMs: () => world.ghostSliceMs(),
+          toolDrawCalls: () => world.toolDrawCalls(),
+          poolBytes: () => [store.blockPool.buffer.byteLength, store.bytePool.buffer.byteLength],
+          surfaceAt: (x, z) => store.heightAt('worldSurface', x, z),
+          origin: world.origin,
+          body: () => (fly.mode === 'walk' ? bodyOf('walk', walk.x, walk.y + EYE, walk.z, pasteBody) : bodyOf('fly', fly.x, fly.y, fly.z, pasteBody)),
+          now: () => performance.now(),
+        });
+        teardown.push(() => benchPaste.dispose());
         // The bench's day speed, which a review scene sets to 0 with its fixed hour (SP5a spec §6.5).
         const benchClock = { speed: BENCH_TIME_SPEED };
         // The script's RD steps never exceed the reservation's cap (Task 26b); the review shots' camera reads the ground's
@@ -4201,6 +4437,7 @@ export function mountWorldPage(root: HTMLElement, q: WorldQuery, hash: string, o
             read: (x, y, z) => voxelValue(store, x, y, z),
           },
           save: benchSaving.hooks,
+          paste: benchPaste.hooks,
           setTime: (hours) => benchSetTime(frame, benchClock, hours),
           walk: (on) => benchWalk({ fly, walk, world, repeat: NO_REPEAT }, on),
         });
@@ -4274,7 +4511,8 @@ export function mountWorldPage(root: HTMLElement, q: WorldQuery, hash: string, o
         // from the scripted pose although its step is always paused, so L10's main-thread time (`mainP95Ms`) includes
         // them (SP5a spec §6.2). The bench mounts without the HUD, so the outline is computed but never drawn: the review
         // shots and the draw counts are unchanged. No pointer lock is taken.
-        const benchAim = createAim({ fly, world, locked: () => true, hud });
+        // L12's tool (SP5c spec §10.4): its reach and its frame step, which runs only from L12 (`createBenchPaste`).
+        const benchAim = createAim({ fly, world, locked: () => true, hud, reach: () => aimReach(benchPaste.tool, fly), selection: benchPaste });
         const step = createFrameStep({
           fly,
           walk,

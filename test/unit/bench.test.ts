@@ -1,6 +1,6 @@
 import { readFileSync } from 'node:fs';
 import { describe, expect, test } from 'vitest';
-import { colKey } from '../../src/core/coords';
+import { colKey, colKeyCx, colKeyCz } from '../../src/core/coords';
 import { hex64, parseHex64 } from '../../src/core/hash';
 import { resolveProfile } from '../../src/core/params/profiles';
 import { genKey, stageHashes } from '../../src/core/stage/hash';
@@ -11,20 +11,29 @@ import { loadParams, normalizeState, olderGenerator, parseWorldRecord, todayStat
 import { discOffsets } from '../../src/engine/rings';
 import { AIR, GLASS, ICE, REGISTRY, STONE, TORCH } from '../../src/world/blocks';
 import { LAVA_SOURCE, WATER_SOURCE } from '../../src/world/blocks/fluid';
-import type { Edit } from '../../src/workers/protocol';
+import type { CopiedMsg, Edit, EditedMsg, FlushedMsg } from '../../src/workers/protocol';
+import type { ColumnDiff } from '../../src/world/store/api';
+import { CLIPBOARD_KEY, decodeClipboard, encodeClipboard } from '../../src/persist/clipboard';
+import type { RayHit } from '../../src/player/raycast';
+import { MAX_STEP_EDITS } from '../../src/sim/edits';
 import {
   BENCH_EDIT, BENCH_FIELDS, BENCH_FRAME_CAPACITY, BENCH_IDLE_FRAMES, BENCH_LEGS, BENCH_LIVE, BENCH_LIVE_LEGS, BENCH_PITCH, BENCH_RD, BENCH_REFILL,
-  BENCH_PROFILE, BENCH_SAVE, BENCH_SAVE_LEG, BENCH_SAVE_PARTS, BENCH_SEED, BENCH_SHOT_ABOVE, BENCH_SHOT_PITCH, BENCH_SHOTS, BENCH_TIME_SPEED, BENCH_Y, benchInterval, benchPose, createBenchDriver,
+  BENCH_PASTE, BENCH_PASTE_LEG, BENCH_PASTE_PARTS, BENCH_PASTE_SCRIPT, BENCH_PROFILE, BENCH_SAVE, BENCH_SAVE_LEG, BENCH_SAVE_PARTS, BENCH_SEED, BENCH_SHOT_ABOVE, BENCH_SHOT_PITCH, BENCH_SHOTS, BENCH_TIME_SPEED, BENCH_Y, benchInterval, benchPose, createBenchDriver,
   createBenchRecord, createBenchRecorder, createLiveReveals, ENTER_AUTO_KEY, ENTER_AUTO_SETUP_PATH, ENTER_DENSE_COLUMNS, ENTER_DISC_RD, ENTER_PAIRS, ENTER_POSE, ENTER_SPARSE,
   enterAutoEnded, enterAutoJson, enterAutoRecorded, enterAutoStart, enterOrder as benchEnterOrder, enterPaths as benchEnterPaths, enterSaveDump, gpuOfRenderer, summarizeEnter, REVIEW_HOUSE, REVIEW_POOL, REVIEW_SCENE_BATCH, REVIEW_SCENES, REVIEW_SETTLE_S, REVIEW_SITE,
-  REVIEW_SHOTS, reviewSceneEdits, summarizeBench, type BenchError, type BenchFixed, type BenchFlush, type BenchPose, type BenchRecord, type BenchResult,
-  type BenchSaveRun, type BenchSources, type BenchWorld, type ReviewShot, type SceneVoxel,
+  REVIEW_SHOTS, benchHouse, createBenchSimLog, reviewSceneEdits, summarizeBench, type BenchEditsRecord, type BenchError, type BenchFixed, type BenchFlush,
+  type BenchPasteHooks, type BenchPasteRun, type BenchPose, type BenchRecord, type BenchResult, type BenchSaveRun, type BenchSources, type BenchWorld,
+  type ReviewShot, type SceneVoxel,
 } from '../../src/ui/world/bench';
-import type { EditOutcome } from '../../src/ui/world/editPath';
+import { turnClipboard, turnedCell } from '../../src/ui/world/clipboard';
+import { createEditLatency } from '../../src/ui/world/editLatency';
+import { createEditPath, type EditOutcome } from '../../src/ui/world/editPath';
+import type { Box } from '../../src/ui/world/pasteBatch';
+import { pasteLitBlock, pasteMaxBlock } from '../../src/ui/world/pasteBlocks';
 import { DEFAULT_MAP_STATE, openMapSession } from '../../src/ui/map/mapState';
 import { parseWorldQuery } from '../../src/ui/world/query';
 import { STATE_BOUNDS } from '../../src/ui/world/stateBounds';
-import { BENCH_DB, closeBenchSave, createBenchSave, enterResult, newWorldRecord, openBenchSave } from '../../src/ui/world/worldPage';
+import { BENCH_DB, closeBenchSave, createBenchPaste, createBenchSave, enterResult, newWorldRecord, openBenchSave, type GhostHost } from '../../src/ui/world/worldPage';
 import { ENTER_PAIRS as TOOL_ENTER_PAIRS, enterOrder as toolEnterOrder, enterPaths as toolEnterPaths, enterSummary, type EnterPair } from '../tools/measureChrome';
 
 const START = { x: 1000, z: -2000 };
@@ -47,21 +56,26 @@ describe('the bench script (SP4b spec §8.3, D22)', () => {
     expect(BENCH_FRAME_CAPACITY).toBeGreaterThan(95 * 240);
   });
 
-  test('`BENCH_FRAME_CAPACITY` is 87168 (SP5b spec §6.2: SP5a\'s 58,368 and L11\'s 120 s at 240 Hz)', () => {
-    expect(BENCH_FRAME_CAPACITY).toBe(87168);
-    expect(58_368 + 120 * 240).toBe(87_168);
+  test('`BENCH_FRAME_CAPACITY` is 123,168 (SP5c spec §10.4: SP5b\'s 87,168 and L12\'s 150 s at 240 Hz)', () => {
+    expect(BENCH_FRAME_CAPACITY).toBe(123_168);
+    expect(87_168 + 150 * 240).toBe(123_168);
   });
 
-  test('the capacity holds 361 s at 240 Hz (86,640 frames: SP4c\'s 150 s, L10\'s 60 s hover cap, its 25 s of edits and its 6 s flight, L11\'s four 30 s parts)', () => {
+  test('the capacity holds the script\'s 511 s at 240 Hz (SP4c\'s 150 s, L10\'s 91 s at its caps, L11\'s four 30 s parts, L12\'s 150 s): 513 s', () => {
     expect(BENCH_EDIT).toEqual({ count: 100, everyMs: 250, radius: 8, hoverMaxS: 60, streamingCount: 20, streamingFlightS: 6, streamingSpeed: 20 });
     const liveS = BENCH_LIVE_LEGS.reduce((s, l) => s + l.seconds, 0);
     const l10S = BENCH_EDIT.hoverMaxS + (BENCH_EDIT.count * BENCH_EDIT.everyMs) / 1000 + BENCH_EDIT.streamingFlightS;
     const l11S = BENCH_SAVE_PARTS.length * BENCH_SAVE.partS;
-    expect([95 + liveS, l10S, l11S]).toEqual([150, 91, 120]);
-    expect((95 + liveS + l10S + l11S) * 240).toBe(86_640);
-    expect(BENCH_FRAME_CAPACITY).toBeGreaterThanOrEqual(86_640);
-    // 363 s at 240 Hz.
-    expect(Math.floor(BENCH_FRAME_CAPACITY / 240)).toBe(363);
+    // L12's four caps after the fill (the fill is not counted, as L11's hover is not).
+    const l12S = BENCH_PASTE.hoverS + BENCH_PASTE.houseMaxS + BENCH_PASTE.maxMaxS + BENCH_PASTE.sweepS;
+    expect(BENCH_PASTE).toEqual({ fillMaxS: 60, hoverS: 10, houseMaxS: 80, maxMaxS: 50, sweepS: 10 });
+    expect(l12S).toBe(150);
+    expect(BENCH_PASTE_LEG).toEqual({ name: 'L12', seconds: l12S, speed: 0, headings: [], rdSteps: [] });
+    expect([95 + liveS, l10S, l11S, l12S]).toEqual([150, 91, 120, 150]);
+    expect(95 + liveS + l10S + l11S + l12S).toBe(511);
+    expect(BENCH_FRAME_CAPACITY).toBeGreaterThanOrEqual(511 * 240);
+    // 513 s at 240 Hz.
+    expect(Math.floor(BENCH_FRAME_CAPACITY / 240)).toBe(513);
   });
 
   test('the capacity holds 150 s at 240 Hz (36,000 frames): the 95 s script and the live legs at their caps (SP4c spec §8.4)', () => {
@@ -230,7 +244,7 @@ describe('summarizeBench (SP4b spec §8.3)', () => {
     const r = summarizeBench(recordOf([{ leg: 0 }, { leg: 1 }, { leg: 5 }, { leg: 6 }]), FIXED);
     expect(Object.keys(r)).toEqual([
       'route', 'seed', 'profile', 'rd', 'rdClampedTo', 'workers', 'sectionRenderer', 'userAgent', 'renderer', 'vendor', 'multiDraw', 'timerQuery', 'screen', 'dpr',
-      'pixelRatio', 'displayIntervalMs', 'load', 'stream', 'legs', 'L5', 'L6', 'live', 'edit', 'persist', 'longFrames', 'structuralFrames',
+      'pixelRatio', 'displayIntervalMs', 'load', 'stream', 'legs', 'L5', 'L6', 'live', 'edit', 'persist', 'paste', 'longFrames', 'structuralFrames',
     ]);
     expect(r.route).toBe('bench=medium');
     expect(r.rdClampedTo).toBeNull();
@@ -247,7 +261,7 @@ describe('summarizeBench (SP4b spec §8.3)', () => {
     expect(Object.keys(r.stream.coordinatorMs)).toEqual(['p95', 'max']);
     expect(Object.keys(r.stream.uploadMs)).toEqual(['p95', 'max']);
     expect(Object.keys(r.stream.drawCalls)).toEqual(['max', 'mean']);
-    expect(Object.keys(r.legs)).toEqual(['L0', 'L1', 'L2', 'L3', 'L4', 'L5', 'L6', 'L7', 'L8', 'L9', 'L10', 'L11']);
+    expect(Object.keys(r.legs)).toEqual(['L0', 'L1', 'L2', 'L3', 'L4', 'L5', 'L6', 'L7', 'L8', 'L9', 'L10', 'L11', 'L12']);
     expect(Object.keys(r.legs.L1.frames)).toEqual(['count', 'p50', 'p95', 'p99', 'max', 'over33']);
     expect(r.L5).toEqual({ refillMs: 1234 });
     expect(Object.keys(r.L6)).toEqual(['frames']);
@@ -1313,13 +1327,13 @@ function fakeSave(o: { filled?: () => boolean } = {}) {
  * Runs the live legs (each settling at once) and L10 (its 100 edits, its 6 s flight east from L9's arrival at
  * (20,000.5, 90, 0.5)) with `save` bound, to L11's first frame at 129 s.
  */
-async function toL11(save: NonNullable<BenchWorld['save']>) {
+async function toL11(save: NonNullable<BenchWorld['save']>, paste?: BenchPasteHooks) {
   const run = driverOf(null);
   const f = fakeLive();
   f.settle[7] = true;
   f.settle[8] = true;
   f.settle[9] = true;
-  run.driver.bind({ rdMax: 16, heightAt: () => 70, live: f.live, edit: fakeEdit().edit, save, ...NO_SCENE });
+  run.driver.bind({ rdMax: 16, heightAt: () => 70, live: f.live, edit: fakeEdit().edit, save, paste, ...NO_SCENE });
   const p: BenchPose = { x: 0.5, y: 80, z: 0.5, yaw: 0, pitch: 0 };
   run.driver.pose(0, p, 12);
   run.driver.pose(95, p, 12);
@@ -2077,6 +2091,714 @@ describe('createBenchDriver: a teleport that never arrives keeps its cause in th
     const src = readFileSync(new URL('../../src/ui/world/worldPage.ts', import.meta.url), 'utf8');
     expect(src).toMatch(/onFail: \(cause\) => \{ landingFailure = \{ cause \}; \},/);
     expect(src).toMatch(/if \(!ok && landingFailure !== null\) throw landingFailure\.cause;/);
+  });
+});
+
+// ---------------------------------------------------------------- the paste leg L12 (SP5c spec §10.4)
+
+/** A voxel's key over the world's window (x, z in ±2^19, y in −64 … 319). */
+const vkey = (x: number, y: number, z: number): number => ((x + 524_288) * 1_048_576 + (z + 524_288)) * 512 + (y + 64);
+const STONE_V = (STONE << 8) >>> 0;
+/** The fake world's ground: stone below y 70, air from it. */
+const GROUND_Y = 70;
+const genValue = (y: number): number => (y < GROUND_Y ? STONE_V : 0);
+const MISS = { hit: false } as RayHit;
+
+/**
+ * The bench route's L12 pieces over a fake world (plan): the page's own `createBenchSimLog`, `createEditPath`,
+ * `createBenchSave` and `createBenchPaste` over a fake sim whose world is a map of voxels (ground stone below y 70), a
+ * fake coordinator whose `markEdited` reveals the dirty columns `revealDelayMs` later (by the batch's index in L12, −1
+ * before L12), a fake ghost built in two steps, injected timers and a `MemoryKV` for the clipboard, all on `clock.ms`.
+ */
+function fakePastePage(o: { revealDelayMs?: (batch: number) => number; events?: string[] } = {}) {
+  const clock = { ms: 0 };
+  const now = (): number => clock.ms;
+  const cells = new Map<number, number>();
+  // The highest non-air y + 1 written in each block column (the world's `worldSurface` over its ground).
+  const tops = new Map<number, number>();
+  const read = (x: number, y: number, z: number): number => cells.get(vkey(x, y, z)) ?? genValue(y);
+  const write = (x: number, y: number, z: number, v: number): void => {
+    if (v === genValue(y)) cells.delete(vkey(x, y, z));
+    else cells.set(vkey(x, y, z), v);
+    if (v !== 0) tops.set(vkey(x, 0, z), Math.max(tops.get(vkey(x, 0, z)) ?? GROUND_Y, y + 1));
+  };
+  const surfaceAt = (x: number, z: number): number => tops.get(vkey(x, 0, z)) ?? GROUND_Y;
+  let nextId = 0;
+  const copies: Array<{ readonly t: number; readonly box: Box; readonly gen: boolean }> = [];
+  const sim = {
+    failed: false,
+    edits(e: readonly Edit[]): Promise<EditedMsg> {
+      const id = ++nextId;
+      const n = e.length;
+      const prev = new Uint32Array(n);
+      const next = new Uint32Array(n);
+      const refused = e.some((x) => read(x.x, x.y, x.z) !== x.expect) ? 'changed' as const : null;
+      const cols = new Set<number>();
+      if (refused === null) {
+        for (let k = 0; k < n; k++) {
+          const x = e[k]!;
+          prev[k] = read(x.x, x.y, x.z);
+          const v = x.op === 'revert' ? genValue(x.y) : x.value;
+          write(x.x, x.y, x.z, v);
+          next[k] = v;
+          cols.add(colKey(x.x >> 4, x.z >> 4));
+        }
+      }
+      return Promise.resolve({
+        type: 'edited', id, prev, next, dirty: Float64Array.from(cols), entryAdded: new Float64Array(0), entryRemoved: new Float64Array(0),
+        refused, relightMs: id, editMs: 10 * id, limboMax: 100 * id, subBatchMaxMs: id / 2,
+      });
+    },
+    copy(b: Box, gen: boolean): Promise<CopiedMsg> {
+      copies.push({ t: clock.ms, box: b, gen });
+      const values = new Uint32Array(b.w * b.h * b.d);
+      const generated = gen ? new Uint32Array(values.length) : null;
+      let i = 0;
+      for (let y = 0; y < b.h; y++) {
+        for (let z = 0; z < b.d; z++) {
+          for (let x = 0; x < b.w; x++, i++) {
+            values[i] = read(b.x0 + x, b.y0 + y, b.z0 + z);
+            if (generated !== null) generated[i] = genValue(b.y0 + y);
+          }
+        }
+      }
+      return Promise.resolve({ type: 'copied', id: ++nextId, values, generated, why: null });
+    },
+    diff: (): Promise<ColumnDiff | null> => Promise.resolve(null),
+    hasEntries: () => false,
+    flush: (): Promise<FlushedMsg> => Promise.resolve({ type: 'flushed', id: ++nextId, ok: true, flushSeq: 1, columns: 1, bytes: 9, syncMs: 0.2, commitMs: 3 }),
+  };
+  const timers: Array<{ readonly id: number; readonly at: number; readonly f: () => void }> = [];
+  let timerId = 0;
+  const pageTimers = {
+    set: (f: () => void, ms: number): number => {
+      timers.push({ id: ++timerId, at: clock.ms + ms, f });
+      return timerId;
+    },
+    clear: (id: number): void => {
+      const i = timers.findIndex((t) => t.id === id);
+      if (i >= 0) timers.splice(i, 1);
+    },
+  };
+  const log = createBenchSimLog(sim, now);
+  const reveals: Array<{ readonly at: number; readonly cols: readonly number[] }> = [];
+  const coordinator = {
+    editState: (): 0 => 0,
+    simPin() {},
+    simUnpin() {},
+    markEdited(dirty: ArrayLike<number>) {
+      reveals.push({ at: clock.ms + (o.revealDelayMs?.(log.edits.length - 1) ?? 50), cols: Array.from(dirty) });
+    },
+  };
+  const path = createEditPath({ sim: log.sim, coordinator, latency: createEditLatency(), now, notices: { show() {}, hide() {} }, timers: pageTimers });
+  let driver: ReturnType<typeof createBenchDriver> | null = null;
+  const saving = createBenchSave({
+    worldId: 'b1',
+    fly: { x: 20000.5, y: 90, z: 0.5, yaw: 90, pitch: -15, mode: 'fly', speed: 12 },
+    frame: { t: 0.3 },
+    edits: path,
+    read,
+    sim,
+    clock: { now, setInterval: () => 0, clearInterval() {}, setTimeout: (f, ms) => pageTimers.set(f, ms), clearTimeout: (id) => pageTimers.clear(id) },
+    now,
+    wallNow: () => 1_800_000_000_000 + clock.ms,
+    filled: () => true,
+    samples: () => 0,
+    flushed: (f) => driver?.flushed(f),
+    flushPosted() {},
+    ticked() {},
+  });
+  const ghosts: string[] = [];
+  let build: 'empty' | 'building' | 'ready' = 'empty';
+  let steps = 0;
+  let shown = false;
+  const ghost: GhostHost = {
+    setGhostBox() {}, hideGhostBox() {},
+    setGhost(w, h, d) {
+      ghosts.push(`${w}x${h}x${d}`);
+      o.events?.push(`ghost ${w}x${h}x${d}`);
+      build = 'building';
+      steps = 0;
+      shown = false;
+    },
+    ghostStep() {
+      if (build === 'building' && ++steps >= 2) build = 'ready';
+    },
+    placeGhost() { shown = true; },
+    hideGhost() { shown = false; },
+    ghostBuild: () => build,
+    setReplaced() {}, hideReplaced() {},
+  };
+  const kv = createMemoryKV();
+  const page = createBenchPaste({
+    sim, log, editState: () => 0, kv: () => Promise.resolve(kv), actionPost: (e) => saving.hooks.post(e), history: saving.blockHistory,
+    settled: () => path.settled(), view: { setSelectionBox() {}, hideSelectionBox() {} }, ghost, ghostSliceMs: () => 0.25,
+    toolDrawCalls: () => (shown ? 6 : 2), poolBytes: () => [4096, 8192], surfaceAt, origin: { x: 0, y: 0, z: 0 },
+    body: () => ({ minX: 20000.2, minY: 88.4, minZ: 0.2, maxX: 20000.8, maxY: 90.2, maxZ: 0.8 }), now, timers: pageTimers,
+  });
+  /** After a pose: the aim's frame step, the due timers, the due reveals. */
+  const afterPose = (): void => {
+    page.frame(MISS, false);
+    for (let i = timers.findIndex((t) => t.at <= clock.ms); i >= 0; i = timers.findIndex((t) => t.at <= clock.ms)) timers.splice(i, 1)[0]!.f();
+    for (let i = reveals.length - 1; i >= 0; i--) {
+      if (reveals[i]!.at > clock.ms) continue;
+      for (const c of reveals.splice(i, 1)[0]!.cols) {
+        log.staged(colKeyCx(c), colKeyCz(c), clock.ms);
+        log.revealed(colKeyCx(c), colKeyCz(c), clock.ms);
+      }
+    }
+  };
+  const clipboard = async (): Promise<Uint32Array | null> => {
+    const [raw] = await kv.read([{ op: 'get', store: 'meta', key: CLIPBOARD_KEY }]);
+    const d = decodeClipboard(raw);
+    return d.ok ? d.values : null;
+  };
+  return { clock, cells, read, surfaceAt, copies, ghosts, page, saving, path, clipboard, afterPose, bind: (d: ReturnType<typeof createBenchDriver>) => { driver = d; } };
+}
+
+/**
+ * Runs L1-L11 with `save` and `paste` bound (L11's parts at 0.05 s; the clock `setMs` follows the script), then L12 at
+ * 0.1 s steps until the script ends; `between` runs after each L12 pose. Returns the published JSON and L12's start and
+ * end (s).
+ */
+async function runL12(save: NonNullable<BenchWorld['save']>, paste: BenchPasteHooks, o: {
+  setMs?(ms: number): void;
+  between?(): void;
+  atL12?(): void;
+  bind?(d: ReturnType<typeof createBenchDriver>): void;
+  /** What runs after each L12 pose so the script's awaited steps settle (default: a macrotask). */
+  settle?(): Promise<void>;
+} = {}) {
+  const { driver, p, published } = await toL11(save, paste);
+  o.bind?.(driver);
+  driver.pose(129.05, p, 12);
+  await flush();
+  const t0 = 129.1;
+  for (let i = 0; i < 2400; i++) {
+    o.setMs?.(Math.round((t0 + i * 0.05) * 1000));
+    expect(driver.pose(t0 + i * 0.05, p, 12)).toBe(12);
+    if (i % 100 === 99) await flush();
+  }
+  await flush();
+  o.atL12?.();
+  // L11 ends and L12 starts at the same frame.
+  const start = t0 + 120;
+  let end = Number.NaN;
+  for (let i = 0; i < 4000; i++) {
+    const t = start + i * 0.1;
+    o.setMs?.(Math.round(t * 1000));
+    if (driver.pose(t, p, 12) === null) {
+      end = t;
+      break;
+    }
+    expect([p.x, p.z]).toEqual([20000.5, 0.5]);
+    o.between?.();
+    await (o.settle ?? flush)();
+  }
+  driver.done(FIXED);
+  return { result: published[0] as BenchResult, start, end };
+}
+
+/** Settles a stub's steps: their promises resolve at once, so a few microtask turns carry the script on. */
+const microtasks = async (): Promise<void> => {
+  for (let k = 0; k < 24; k++) await Promise.resolve();
+};
+
+/** L12's hooks with every step answering at once, except those `hang` holds forever; each call's script time logged. */
+function stubPaste(o: { hang?: (what: string, n: number) => boolean; shown?: () => boolean; at: () => number }) {
+  const calls: Array<{ readonly what: string; readonly t: number }> = [];
+  const call = <T>(what: string, v: T): Promise<T> => {
+    calls.push({ what, t: o.at() });
+    const n = calls.filter((c) => c.what === what).length;
+    return o.hang?.(what, n) === true ? new Promise<T>(() => {}) : Promise.resolve(v);
+  };
+  let mode: 'off' | 'select' | 'place' = 'off';
+  const hooks: BenchPasteHooks = {
+    start() {},
+    surfaceAt: () => 70,
+    toggle() { mode = mode === 'off' ? 'select' : 'off'; },
+    mode: () => mode,
+    select() { mode = 'select'; },
+    copy: () => call('copy', true),
+    cut: () => call('cut', true),
+    paste() { mode = 'place'; return call('paste', true); },
+    move() { mode = 'place'; return call('move', true); },
+    turn() {},
+    placeAt() {},
+    ghostBuilt: () => true,
+    confirm() { mode = 'select'; return call('confirm', 'ok'); },
+    cancel() { mode = 'select'; },
+    undo: () => call('undo', true),
+    redo: () => call('redo', true),
+    writeClipboard: () => call('write', true),
+    shown: () => o.shown?.() ?? true,
+    edits: () => [],
+    targetReads: () => 0,
+    toolDrawCalls: () => 0,
+    poolBytes: () => [1, 2],
+    log: () => ({ ghosts: [], overlays: [], clipboardReads: [], clipboardWrites: [], diffs: [] }),
+  };
+  return { hooks, calls };
+}
+
+/**
+ * One instrumented L12 run on the fake page (about 1.7 s), shared by the tests that read it: the first redo's columns
+ * shown 3.5 s after its reply; each operation's start (with whether every dirty column was shown then); the house
+ * checked when the move and the cut run, the cut's clipboard, the world after L12b; the clipboard writes, Ctrl+V, Ctrl+C
+ * and the ghosts in order; L12d's start; the world and the house's box when L12 started.
+ */
+async function runShared() {
+  const events: string[] = [];
+  const f = fakePastePage({ revealDelayMs: (k) => (k === 2 ? 3500 : 50), events });
+  const h = f.page.hooks;
+  const house = benchHouse();
+  const starts: Array<{ readonly what: string; readonly t: number; readonly shown: boolean }> = [];
+  const checks: { move?: boolean; cut?: boolean; afterL12b?: boolean; moveBox?: Box | null; cutBox?: Box | null; clipboard?: Uint32Array | null } = {};
+  let start = new Map<number, number>();
+  let hb: Box | null = null;
+  let writes = 0;
+  let l12dFrom = Number.NaN;
+  /** Whether every cell of the house's box holds the house turned once (the 6th paste's turn). */
+  const houseStands = (): boolean => {
+    const b = hb!;
+    for (let y = 0; y < b.h; y++) {
+      for (let z = 0; z < b.d; z++) {
+        for (let x = 0; x < b.w; x++) if (f.read(b.x0 + x, b.y0 + y, b.z0 + z) !== turnedCell(house, 1, x, y, z)) return false;
+      }
+    }
+    return true;
+  };
+  const opStart = (what: string): void => { starts.push({ what, t: f.clock.ms, shown: h.shown() }); };
+  const hooks: BenchPasteHooks = {
+    ...h,
+    paste() {
+      opStart('paste');
+      events.push('paste');
+      return h.paste();
+    },
+    undo() {
+      opStart('undo');
+      return h.undo();
+    },
+    redo() {
+      opStart('redo');
+      return h.redo();
+    },
+    move() {
+      opStart('move');
+      checks.move = houseStands();
+      checks.moveBox = f.page.tool.selection();
+      return h.move();
+    },
+    async cut() {
+      opStart('cut');
+      checks.cut = houseStands();
+      checks.cutBox = f.page.tool.selection();
+      const ok = await h.cut();
+      checks.clipboard = await f.clipboard();
+      return ok;
+    },
+    copy() {
+      events.push('copy');
+      return h.copy();
+    },
+    writeClipboard(b) {
+      events.push(`write ${b.w}x${b.h}x${b.d}`);
+      // L12c's first write: L12b has ended; L12d's write of the house: the fourth.
+      if (++writes === 2) checks.afterL12b = f.cells.size === start.size && [...start].every(([k, v]) => f.cells.get(k) === v);
+      if (writes === 4) l12dFrom = f.clock.ms;
+      return h.writeClipboard(b);
+    },
+  };
+  const { result } = await runL12(f.saving.hooks, hooks, {
+    setMs: (ms) => { f.clock.ms = ms; },
+    between: f.afterPose,
+    bind: f.bind,
+    atL12() {
+      start = new Map(f.cells);
+      // The house's box: pinned 8 blocks into the column east of the camera's, 8 before its column on z, on the
+      // highest surface over the footprint (L11's torches there included).
+      let top = -64;
+      for (let z = -8; z < 24; z++) for (let x = 20024; x < 20056; x++) top = Math.max(top, f.surfaceAt(x, z));
+      hb = { x0: 20024, y0: top, z0: -8, w: 32, h: 12, d: 32 };
+    },
+  });
+  return { f, result, events, starts, checks, start, hb: hb!, l12dFrom };
+}
+let shared: ReturnType<typeof runShared> | null = null;
+const sharedRun = (): ReturnType<typeof runShared> => (shared ??= runShared());
+
+describe('createBenchDriver: the paste leg L12 (SP5c spec §10.4, D30; plan)', () => {
+  test('the leg: its constants, its parts and its house', () => {
+    expect(BENCH_PASTE_PARTS).toEqual(['L12a', 'L12b', 'L12c', 'L12d']);
+    expect(BENCH_PASTE_SCRIPT).toEqual({ gapS: 2, houseCycles: 5, maxCycles: 3, moveDown: 3, turnEveryS: 2, sweepSpan: 64, terrainSide: 64 });
+    // §10.1's house enlarged to a 32 × 12 × 32 shell, about 3,300 changed: §10.3's recon shell (3,296).
+    const house = benchHouse();
+    expect([house.w, house.h, house.d]).toEqual([32, 12, 32]);
+    expect(house.values.filter((v) => v !== 0)).toHaveLength(3296);
+  });
+
+  test('both maximum blocks and the house round-trip through `encodeClipboard` / `decodeClipboard` (rulings P26)', () => {
+    for (const b of [pasteMaxBlock(), pasteLitBlock(), benchHouse()]) {
+      // As IndexedDB keeps it: a structured clone of the record.
+      const d = decodeClipboard(structuredClone(encodeClipboard(b.w, b.h, b.d, b.values)));
+      expect(d.ok).toBe(true);
+      if (!d.ok) return;
+      expect([d.w, d.h, d.d, d.unknown]).toEqual([b.w, b.h, b.d, 0]);
+      expect(d.values).toEqual(b.values);
+    }
+  });
+
+  test('L12b runs 28 operations and L12c 12 on a fake clock, each at least 2 s after the last and after every dirty column is shown', async () => {
+    const { result, starts } = await sharedRun();
+    const r = result.paste;
+    expect([r.timedOut, r.stoppedBy]).toEqual([[], null]);
+    const b = r.ops.filter((x) => x.part === 'L12b');
+    const c = r.ops.filter((x) => x.part === 'L12c');
+    expect(b.map((x) => x.op)).toEqual([
+      ...Array.from({ length: 5 }, () => ['paste', 'undo', 'redo', 'undo']).flat(), 'paste', 'undo', 'redo', 'move', 'undo', 'cut', 'undo', 'undo',
+    ]);
+    expect(c.map((x) => x.op)).toEqual(Array.from({ length: 6 }, () => ['paste', 'undo']).flat());
+    expect(r.ops.every((x) => x.answer === 'ok')).toBe(true);
+    // The operations' starts (L12d's two Ctrl+V follow them): each at least 2 s after the last, with every dirty
+    // column of the last batch shown.
+    const ops = starts.slice(0, 40);
+    expect(ops.map((x) => x.what)).toEqual([...b, ...c].map((x) => x.op));
+    for (let k = 1; k < ops.length; k++) expect(ops[k]!.t - ops[k - 1]!.t).toBeGreaterThanOrEqual(2000);
+    expect(ops.every((x) => x.shown)).toBe(true);
+    // The first redo's columns were shown 3.5 s after its reply: the undo after it waited for them.
+    expect(ops[3]!.t - ops[2]!.t).toBeGreaterThanOrEqual(3500);
+    // Each operation's batch, shown: its visible times from its post.
+    for (const x of [...b, ...c]) {
+      expect(x.id).not.toBeNull();
+      expect(x.pasteVisibleMs).toBeGreaterThanOrEqual(50);
+      expect(x.pasteFirstVisibleMs).toBeLessThanOrEqual(x.pasteVisibleMs!);
+    }
+    // P27: each L12c paste lands whole in air, exactly the cap.
+    for (const x of c.filter((y) => y.op === 'paste')) expect([x.answer, x.changed]).toEqual(['ok', MAX_STEP_EDITS]);
+  });
+
+  test('on a fake sim, each operation\'s `replyMs`, `editMs`, `relightMs`, `subBatchMaxMs` and `limboMax` come from its own `edited` reply', async () => {
+    const ops = (await sharedRun()).result.paste.ops;
+    expect(ops).toHaveLength(40);
+    // The fake sim answers batch `id` with editMs 10 · id, relightMs id, subBatchMaxMs id / 2, limboMax 100 · id, at once.
+    for (const x of ops) {
+      const id = x.id!;
+      expect([x.replyMs, x.editMs, x.relightMs, x.subBatchMaxMs, x.limboMax]).toEqual([0, 10 * id, id, id / 2, 100 * id]);
+      expect(x.dirtyColumns).toBeGreaterThan(0);
+      expect(x.mainPostMs).toBe(0);
+    }
+    // Every operation its own batch: none shared.
+    expect(new Set(ops.map((x) => x.id)).size).toBe(40);
+    // An undo's batch is its step's: the same size as the paste before it.
+    expect(ops[1]!.changed).toBe(ops[0]!.changed);
+  });
+
+  test('the house stands when L12b\'s move and cut run, and the world equals its start after L12b; the cut\'s box is the house\'s and the clipboard after it holds the house (rulings P13, P28)', async () => {
+    const { result, checks, hb } = await sharedRun();
+    expect(result.paste.stoppedBy).toBeNull();
+    expect([checks.move, checks.cut, checks.afterL12b]).toEqual([true, true, true]);
+    expect(checks.moveBox).toEqual(hb);
+    expect(checks.cutBox).toEqual(hb);
+    expect(checks.clipboard).toEqual(turnClipboard(benchHouse(), 1).values);
+    // The cut changed the house's 3,296 cells; the move a batch of its own.
+    const move = result.paste.ops.find((x) => x.op === 'move')!;
+    const cut = result.paste.ops.find((x) => x.op === 'cut')!;
+    expect(cut.changed).toBe(3296);
+    expect(move.changed).toBeGreaterThan(0);
+  });
+
+  test('L12c and L12d write their clipboards before their cycles (L12d\'s first ghost is the house\'s); the world\'s cells are equal before and after L12 on the fake page', async () => {
+    const { f, result, events, start } = await sharedRun();
+    expect(result.paste.stoppedBy).toBeNull();
+    // L12b's house written before its first Ctrl+V.
+    const from = events.indexOf('write 32x32x32');
+    expect(events.slice(0, 3)).toEqual(['write 32x12x32', 'paste', 'ghost 32x12x32']);
+    expect(events.slice(0, from).filter((e) => e.startsWith('write'))).toEqual(['write 32x12x32']);
+    expect(events.slice(from)).toEqual([
+      'write 32x32x32', ...Array.from({ length: 3 }, () => ['paste', 'ghost 32x32x32']).flat(),
+      'write 64x60x32', ...Array.from({ length: 3 }, () => ['paste', 'ghost 64x60x32']).flat(),
+      'write 32x12x32', 'paste', 'ghost 32x12x32', 'copy', 'paste', 'ghost 64x64x64',
+    ]);
+    // Nothing pasted in L12d, every paste of L12b and L12c undone: the world is as it was when L12 started.
+    expect(f.cells.size).toBe(start.size);
+    for (const [k, v] of start) expect(f.cells.get(k)).toBe(v);
+    // The clipboard is written to the bench's database: it holds L12d's 64³ copy of the terrain.
+    expect((await f.clipboard())!.length).toBe(64 ** 3);
+    // The tool is off at the end.
+    expect(f.page.tool.mode).toBe('off');
+  });
+
+  test('L12d\'s `targetReads` counts the target `copy`s posted while sweeping', async () => {
+    const { f, result, l12dFrom } = await sharedRun();
+    // L12d's copies: the ghosts' throttled reads at the sweep's places, and the 64³ copy of the terrain at the hover point.
+    const inL12d = f.copies.filter((c) => c.t >= l12dFrom);
+    expect(inL12d.filter((c) => c.box.x0 === 20000 - 32)).toHaveLength(1);
+    expect(result.paste.L12d.targetReads).toBe(inL12d.length - 1);
+    expect(result.paste.L12d.targetReads).toBeGreaterThan(0);
+    // The confirms' own reads are no target reads.
+    expect(result.paste.L12b.targetReads).toBeLessThan(f.copies.filter((c) => c.t < l12dFrom).length);
+    // The tool's draw calls as the fake renderer counts them (6 with the ghost shown, else 2), per part.
+    expect([result.paste.L12a.toolDrawCallsMax, result.paste.L12b.toolDrawCallsMax, result.paste.L12d.toolDrawCallsMax]).toEqual([2, 6, 6]);
+  });
+
+  test('each L12 part ends at its `BENCH_PASTE` cap with its name in `timedOut`: the fill (60 s), L12b (80 s), L12c (50 s), L12d (10 s)', async () => {
+    const T = 129.1 + 120;
+    // The fill: the disc at L10's hover point never fills again after L11.
+    {
+      const s = fakeSave();
+      let l11 = true;
+      const save = { ...s.save, filled: () => l11 };
+      const stub = stubPaste({ at: () => 0 });
+      const run = await runL12(save, stub.hooks, { atL12: () => { l11 = false; }, settle: microtasks });
+      expect(run.result.paste.timedOut).toEqual(['L12']);
+      expect(run.end - run.start).toBeGreaterThanOrEqual(BENCH_PASTE.fillMaxS - 1e-6);
+      expect(run.end - run.start).toBeLessThan(BENCH_PASTE.fillMaxS + 0.1 + 1e-6);
+      expect(stub.calls).toEqual([]);
+    }
+    const cases = [
+      // L12b: the first paste's columns are never shown.
+      { name: 'L12b', cap: BENCH_PASTE.houseMaxS, write: 1, hang: () => false, shown: (calls: number) => calls === 0 },
+      // L12c: its first undo (the 15th: L12b has 14) never answers.
+      { name: 'L12c', cap: BENCH_PASTE.maxMaxS, write: 2, hang: (what: string, n: number) => what === 'undo' && n === 15, shown: () => true },
+      // L12d: the terrain's copy never answers.
+      { name: 'L12d', cap: BENCH_PASTE.sweepS, write: 4, hang: (what: string) => what === 'copy', shown: () => true },
+    ];
+    for (const c of cases) {
+      let t = 0;
+      const s = fakeSave();
+      const stub: ReturnType<typeof stubPaste> = stubPaste({
+        at: () => t, hang: c.hang, shown: () => c.shown(stub.calls.filter((x) => x.what === 'confirm').length),
+      });
+      const run = await runL12(s.save, stub.hooks, { setMs: (ms) => { t = ms / 1000; }, settle: microtasks });
+      expect(run.result.paste.timedOut, c.name).toEqual([c.name]);
+      expect(run.result.paste.stoppedBy, c.name).toBeNull();
+      // The part started with its clipboard's write, and ended at its cap.
+      const started = stub.calls.filter((x) => x.what === 'write')[c.write - 1]!.t;
+      expect(run.end - started, c.name).toBeGreaterThanOrEqual(c.cap - 1e-6);
+      expect(run.end - started, c.name).toBeLessThan(c.cap + 0.1 + 1e-6);
+      expect(run.start).toBeCloseTo(T, 6);
+      // The autosave ran through L12 and is paused again at its end.
+      expect(s.pauses.slice(-2), c.name).toEqual([false, true]);
+    }
+  });
+
+  test('an operation that does not succeed stops the leg: `stoppedBy` names it, and nothing after it runs', async () => {
+    let t = 0;
+    const s = fakeSave();
+    const stub = stubPaste({ at: () => t });
+    const hooks: BenchPasteHooks = { ...stub.hooks, redo: () => Promise.resolve(false) };
+    const run = await runL12(s.save, hooks, { setMs: (ms) => { t = ms / 1000; }, settle: microtasks });
+    expect(run.result.paste.stoppedBy).toBe('L12b\'s redo (operation 3): nothing was redone');
+    expect(run.result.paste.timedOut).toEqual([]);
+    expect(run.result.paste.ops.map((x) => [x.op, x.answer])).toEqual([['paste', 'ok'], ['undo', 'ok'], ['redo', 'nothing was redone']]);
+    expect(stub.calls.map((x) => x.what)).toEqual(['write', 'paste', 'confirm', 'undo']);
+  });
+
+  test('the `paste` block\'s fields and shapes', () => {
+    // L12's frames: 20 per part at script ms 10,000 k + 100 i, part k's first `longs[k]` snapped over 33 ms.
+    const longs = [0, 2, 1, 3];
+    const long = 8 * HZ240;
+    const frames: Frame[] = [];
+    for (let k = 0; k < 4; k++) {
+      for (let i = 0; i < 20; i++) frames.push({ leg: 12, tMs: 10_000 * k + 100 * i, snappedMs: i < longs[k]! ? long : HZ240, calls: 40 + k });
+    }
+    const parts = BENCH_PASTE_PARTS.map((name, k) => ({
+      name, tS0: 10 * k, tS1: 10 * k + 10, t0: 1000 + 10_000 * k, t1: 11_000 + 10_000 * k, targetReads: k, toolDrawCallsMax: k === 0 ? 0 : 6,
+    }));
+    const rec = (o: Partial<BenchEditsRecord>): BenchEditsRecord => ({
+      id: 7, changed: 3296, tPost: 12_000, mainPostMs: 4, replyMs: 90, editMs: 60, relightMs: 20, subBatchMaxMs: 9, limboMax: 2000,
+      refused: null, dirtyColumns: 16, firstVisibleMs: 150, visibleMs: 300, ...o,
+    });
+    const run: BenchPasteRun = {
+      parts,
+      ops: [
+        { op: 'paste', part: 'L12b', answer: 'ok', edits: rec({}) },
+        { op: 'undo', part: 'L12b', answer: 'ok', edits: rec({ id: 8, visibleMs: null, firstVisibleMs: null }) },
+        { op: 'cut', part: 'L12b', answer: 'nothing was cut', edits: null },
+      ],
+      log: {
+        // Builds in L12b (two) and L12d (one); the longest of L12b's by its slices in all.
+        ghosts: [{ t: 11_500, buildMs: 3, frames: 2, sliceMaxMs: 2.5 }, { t: 12_500, buildMs: 5, frames: 6, sliceMaxMs: 1 }, { t: 31_500, buildMs: 40, frames: 30, sliceMaxMs: 3.5 }],
+        overlays: [{ t: 11_600, ms: 0.5 }, { t: 31_600, ms: 2.2 }, { t: 31_700, ms: 1.1 }],
+        clipboardReads: [{ t: 11_000, ms: 4 }, { t: 31_000, ms: 9 }],
+        clipboardWrites: [{ t: 11_000, ms: 6 }],
+        // Diff waits in L12b (counted), L12d (not).
+        diffs: [{ t: 12_000, ms: 70 }, { t: 22_000, ms: 30 }, { t: 32_000, ms: 900 }],
+      },
+      poolsBefore: [4096, 8192],
+      poolsAfter: [8192, 8192],
+      timedOut: [],
+      stoppedBy: null,
+    };
+    // Flushes in L12a (not counted), L12b and L12c (counted; the failed one's sync not).
+    const flushOf = (tPost: number, o: Partial<BenchFlush> = {}): BenchFlush => ({ tPost, tDone: tPost + 10, ok: true, syncMs: 1, commitMs: 5, mainMs: 0.5, ...o });
+    const flushes = [flushOf(2000, { syncMs: 50, mainMs: 50 }), flushOf(12_000, { syncMs: 3, mainMs: 1.5 }), flushOf(22_000, { ok: false, syncMs: Number.NaN, mainMs: 2 })];
+    const save: BenchSaveRun = { samplesFrom: 0, parts: [], edits: [], flushes, timedOut: [] };
+    const r = summarizeBench(recordOf(frames), FIXED, null, undefined, save, run).paste;
+    expect(Object.keys(r)).toEqual([
+      'L12a', 'L12b', 'L12c', 'L12d', 'ops', 'clipboardReadMs', 'clipboardWriteMs', 'poolBytes', 'flushMainMaxMs', 'flushSyncMaxMs', 'diffWaitMaxMs',
+      'timedOut', 'stoppedBy',
+    ]);
+    expect(Object.keys(r.L12a)).toEqual([
+      'p50', 'p95', 'p99', 'max', 'over33', 'ghostBuildMs', 'ghostBuildFrames', 'ghostSliceMaxMs', 'overlayMainMaxMs', 'targetReads', 'drawCallsMax',
+      'toolDrawCallsMax',
+    ]);
+    // Each part's frames (nearest rank of 20: p95 the 19th smallest, p99 the 20th).
+    expect([r.L12a.over33, r.L12b.over33, r.L12c.over33, r.L12d.over33]).toEqual(longs);
+    expect([r.L12a.p95, r.L12b.p95, r.L12d.p95, r.L12c.p99, r.L12c.max]).toEqual([HZ240, long, long, long, long]);
+    expect([r.L12a.p50, r.L12d.p50]).toEqual([HZ240, HZ240]);
+    expect([r.L12a.drawCallsMax, r.L12d.drawCallsMax, r.L12a.toolDrawCallsMax, r.L12b.toolDrawCallsMax]).toEqual([40, 43, 0, 6]);
+    expect([r.L12a.targetReads, r.L12d.targetReads]).toEqual([0, 3]);
+    // The ghost builds and overlays by part; none in L12a.
+    expect([r.L12b.ghostBuildMs, r.L12b.ghostBuildFrames, r.L12b.ghostSliceMaxMs]).toEqual([5, 6, 2.5]);
+    expect([r.L12d.ghostBuildMs, r.L12d.ghostBuildFrames, r.L12d.ghostSliceMaxMs]).toEqual([40, 30, 3.5]);
+    expect([r.L12a.ghostBuildMs, r.L12a.ghostSliceMaxMs, r.L12a.overlayMainMaxMs]).toEqual([null, null, null]);
+    expect([r.L12b.overlayMainMaxMs, r.L12d.overlayMainMaxMs]).toEqual([0.5, 2.2]);
+    // Per operation, from its batch; none when it posted none.
+    expect(Object.keys(r.ops[0]!)).toEqual([
+      'op', 'part', 'answer', 'id', 'pasteVisibleMs', 'pasteFirstVisibleMs', 'replyMs', 'editMs', 'relightMs', 'subBatchMaxMs', 'limboMax', 'changed',
+      'dirtyColumns', 'mainPostMs',
+    ]);
+    expect(r.ops[0]).toEqual({
+      op: 'paste', part: 'L12b', answer: 'ok', id: 7, pasteVisibleMs: 300, pasteFirstVisibleMs: 150, replyMs: 90, editMs: 60, relightMs: 20,
+      subBatchMaxMs: 9, limboMax: 2000, changed: 3296, dirtyColumns: 16, mainPostMs: 4,
+    });
+    expect([r.ops[1]!.pasteVisibleMs, r.ops[1]!.pasteFirstVisibleMs]).toEqual([null, null]);
+    expect(Object.values(r.ops[2]!).slice(3)).toEqual(Array<null>(11).fill(null));
+    // The clipboard, the pools, and over L12b and L12c the flushes and the diff waits.
+    expect([r.clipboardReadMs, r.clipboardWriteMs]).toEqual([9, 6]);
+    expect(r.poolBytes).toEqual({ before: { block: 4096, byte: 8192 }, after: { block: 8192, byte: 8192 } });
+    expect([r.flushMainMaxMs, r.flushSyncMaxMs, r.diffWaitMaxMs]).toEqual([2, 3, 70]);
+    expect([r.timedOut, r.stoppedBy]).toEqual([[], null]);
+    // JSON: every key survives, no NaN.
+    const json = JSON.stringify(r);
+    expect(json).not.toContain('NaN');
+    expect(Object.keys(JSON.parse(json) as object)).toEqual(Object.keys(r));
+    // No L12: nothing recorded.
+    const none = summarizeBench(recordOf([{ leg: 1 }]), FIXED).paste;
+    expect([none.ops, none.L12b.p95, none.L12b.over33, none.poolBytes.before, none.diffWaitMaxMs, none.timedOut]).toEqual([[], null, 0, null, null, []]);
+  });
+
+  test('the sim-client wrapper matches each batch to its own `edited` reply by id, from `start`; a column counts as shown once revealed after its staged payload', async () => {
+    let t = 0;
+    const replies: Array<(m: EditedMsg) => void> = [];
+    const diffs: Array<(d: ColumnDiff | null) => void> = [];
+    const inner = {
+      failed: false,
+      edits: (): Promise<EditedMsg> => new Promise((resolve) => { replies.push(resolve); }),
+      diff: (): Promise<ColumnDiff | null> => new Promise((resolve) => { diffs.push(resolve); }),
+      hasEntries: (cx: number) => cx === 3,
+    };
+    const log = createBenchSimLog(inner, () => t);
+    const edit = (x: number): Edit => ({ x, y: 70, z: 0, op: 'set', value: STONE_V, expect: 0 });
+    const reply = (id: number, n: number, dirty: number[], f: number): EditedMsg => ({
+      type: 'edited', id, prev: new Uint32Array(n), next: new Uint32Array(n), dirty: Float64Array.from(dirty), entryAdded: new Float64Array(0),
+      entryRemoved: new Float64Array(0), refused: null, relightMs: f, editMs: 2 * f, limboMax: 100 * f, subBatchMaxMs: f / 2,
+    });
+    // Before `start` (L1-L11) nothing is logged, and the calls go through.
+    const early = log.sim.edits([edit(0)]);
+    replies.shift()!(reply(1, 1, [colKey(0, 0)], 1));
+    expect((await early).id).toBe(1);
+    void log.sim.diff(0, 0);
+    diffs.shift()!(null);
+    await flush();
+    expect([log.edits, log.diffs, log.shown()]).toEqual([[], [], true]);
+    expect([log.sim.hasEntries(3, 0), log.sim.hasEntries(4, 0), log.sim.failed]).toEqual([true, false, false]);
+    log.start();
+    // A batch built from its operation's mark (t 100) and posted at 103; a second one posted with no mark of its own.
+    t = 100;
+    log.mark();
+    t = 103;
+    const a = log.sim.edits([edit(0), edit(1), edit(16)]);
+    t = 104;
+    const b = log.sim.edits([edit(32)]);
+    // Answered out of order: each record takes its own reply's figures.
+    t = 150;
+    replies[1]!(reply(9, 1, [colKey(2, 0)], 3));
+    await b;
+    t = 200;
+    replies[0]!(reply(8, 3, [colKey(0, 0), colKey(1, 0)], 7));
+    await Promise.all([a, b]);
+    const row = (r: BenchEditsRecord) => [r.id, r.changed, r.tPost, r.mainPostMs, r.replyMs, r.editMs, r.relightMs, r.subBatchMaxMs, r.limboMax, r.dirtyColumns];
+    expect(log.edits.map(row)).toEqual([[8, 3, 103, 3, 97, 14, 7, 3.5, 700, 2], [9, 1, 104, 0, 46, 6, 3, 1.5, 300, 1]]);
+    expect(log.shown()).toBe(false);
+    // A reveal before the column's payload staged after the reply does not count.
+    log.revealed(0, 0, 210);
+    expect(log.edits[0]!.firstVisibleMs).toBeNull();
+    log.staged(0, 0, 220);
+    log.revealed(0, 0, 230);
+    expect([log.edits[0]!.firstVisibleMs, log.edits[0]!.visibleMs]).toEqual([127, null]);
+    log.staged(1, 0, 240);
+    log.revealed(1, 0, 260);
+    expect([log.edits[0]!.firstVisibleMs, log.edits[0]!.visibleMs]).toEqual([127, 157]);
+    expect(log.shown()).toBe(false);
+    log.staged(2, 0, 265);
+    log.revealed(2, 0, 270);
+    expect([log.edits[1]!.firstVisibleMs, log.edits[1]!.visibleMs, log.shown()]).toEqual([166, 166, true]);
+    // A diff's wait, post → reply.
+    t = 300;
+    const d = log.sim.diff(5, 5);
+    t = 340;
+    diffs.shift()!(null);
+    await d;
+    expect(log.diffs).toEqual([{ t: 300, ms: 40 }]);
+  });
+
+  test('an autosave tick during a pending L12b paste posts only after the reply, and the flush\'s history holds that step (rulings P32)', async () => {
+    let answer: ((m: EditedMsg) => void) | null = null;
+    const histories: Array<HistoryRecord | null> = [];
+    const ticks: Array<() => void> = [];
+    const path = createEditPath({
+      sim: { failed: false, edits: () => new Promise<EditedMsg>((resolve) => { answer = resolve; }) },
+      coordinator: { editState: () => 0, simPin() {}, simUnpin() {}, markEdited() {} },
+      latency: createEditLatency(),
+      now: () => 0,
+      notices: { show() {}, hide() {} },
+      timers: { set: () => 0, clear() {} },
+    });
+    const saving = createBenchSave({
+      worldId: 'b1',
+      fly: { x: 20000.5, y: 90, z: 0.5, yaw: 90, pitch: -15, mode: 'fly', speed: 12 },
+      frame: { t: 0.3 },
+      edits: path,
+      read: () => 0,
+      sim: {
+        flush: (_state, history) => {
+          histories.push(history);
+          return Promise.resolve({ type: 'flushed', id: histories.length, ok: true, flushSeq: histories.length, columns: 1, bytes: 9, syncMs: 0.2, commitMs: 3 });
+        },
+      },
+      clock: { now: () => 0, setInterval: (f) => ticks.push(f), clearInterval() {}, setTimeout: () => 0, clearTimeout() {} },
+      now: () => 0,
+      wallNow: () => 1_800_000_000_000,
+      filled: () => true,
+      samples: () => 0,
+      flushed() {},
+      flushPosted() {},
+      ticked() {},
+    });
+    // L12 runs with autosave on; the house's paste is posted and not answered yet.
+    saving.hooks.pause(false);
+    const house = benchHouse();
+    const edits: Edit[] = [];
+    house.values.forEach((v, i) => {
+      if (v !== 0) edits.push({ x: 20024 + (i % 32), y: 90 + Math.floor(i / 1024), z: -8 + (Math.floor(i / 32) % 32), op: 'set', value: v, expect: 0 });
+    });
+    const posted = saving.hooks.post(edits);
+    expect(path.bulkPending()).toBe(true);
+    ticks[0]!();
+    await flush();
+    expect(histories).toEqual([]);
+    answer!({
+      type: 'edited', id: 1, prev: new Uint32Array(edits.length), next: Uint32Array.from(edits, (e) => e.value), dirty: new Float64Array(0),
+      entryAdded: new Float64Array(0), entryRemoved: new Float64Array(0), refused: null, relightMs: 1, editMs: 1, limboMax: 0, subBatchMaxMs: 1,
+    });
+    expect((await posted).ok).toBe(true);
+    await flush();
+    expect(histories).toHaveLength(1);
+    const done = histories[0]!.done;
+    expect(done[done.length - 1]!.edits).toHaveLength(3296);
   });
 });
 

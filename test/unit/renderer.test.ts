@@ -9,7 +9,7 @@ import type { Ghost } from '../../src/render/ghost';
 import { createMaterialSystem } from '../../src/render/materials/index';
 import {
   NEAR_FLY, NEAR_WALK, applyNear, applyRenderDistance, compileScene, compileWorldScene, createGpuTimer, createWorldScene,
-  gpuEstimateOf, opaquePassSort, withRegionsUnculled, withSectionsShown, type GpuEstimate,
+  gpuEstimateOf, opaquePassSort, toolDrawCallsOf, withRegionsUnculled, withSectionsShown, type GpuEstimate,
 } from '../../src/render/renderer';
 import { GHOST_CYAN, GHOST_ORDER, SELECTION_YELLOW, VOLUME_DIM_ORDER, createSelection } from '../../src/render/selection';
 import { SKY_RENDER_ORDER } from '../../src/render/sky';
@@ -619,6 +619,38 @@ describe('the replaced cells in the scene (SP5c spec §6.3, §6.4)', () => {
     expect(ghostAt).toBeGreaterThanOrEqual(0);
     expect(ghostAt).toBeLessThan(at);
     expect(transparent.at(-1)).toBe(w.replaced.object);
+    w.dispose();
+    sections.dispose();
+  });
+});
+
+describe('the tool\'s draw calls (SP5c spec §6.4, §10.4: L12\'s `toolDrawCallsMax`)', () => {
+  test('`toolDrawCalls()` is 0 with the tool hidden and 6 with both boxes, the ghost and the overlay shown', () => {
+    const materials = createMaterialSystem({ variant: 'batch', ao: true, smoothLight: true }, createFlatColorArray());
+    const sections = createSectionRenderer('batch', materials);
+    const w = createWorldScene(sections, createSky(materials), materials);
+    // Nothing of the tool's shows: the outline is not the tool's (§6.4), so it never counts.
+    w.outline.set(0, 64, 0, 1, 65, 1);
+    expect(toolDrawCallsOf(w)).toBe(0);
+    // The selection's box: its depth-tested and its dimmed lines.
+    w.selectionBox.set(0, 64, 0, 4, 66, 4, SELECTION_YELLOW);
+    expect(toolDrawCallsOf(w)).toBe(2);
+    w.ghostBox.set(8, 64, 8, 9, 65, 9, GHOST_CYAN);
+    expect(toolDrawCallsOf(w)).toBe(4);
+    // A ghost built but not placed draws nothing; placed, one.
+    w.ghost.setClipboard(1, 1, 1, new Uint32Array([STONE << 8]));
+    for (let i = 0; i < 100 && w.ghost.build === 'building'; i++) w.ghost.step(() => 0);
+    expect(toolDrawCallsOf(w)).toBe(4);
+    w.ghost.place(8, 64, 8, 0);
+    expect(toolDrawCallsOf(w)).toBe(5);
+    w.replaced.set(8, 64, 8, new Int32Array([0, 0, 0]), 1);
+    expect(toolDrawCallsOf(w)).toBe(6);
+    // Hidden again, one by one.
+    w.replaced.hide();
+    w.ghost.hide();
+    w.ghostBox.hide();
+    w.selectionBox.hide();
+    expect(toolDrawCallsOf(w)).toBe(0);
     w.dispose();
     sections.dispose();
   });

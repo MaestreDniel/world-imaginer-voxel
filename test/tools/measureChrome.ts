@@ -1,10 +1,10 @@
 /**
  * The agents' Chrome cells of the GPU measurements (SP4a spec §1.2, §9.5; SP4b spec §8.3, §8.4, §8.7; SP4c spec §8.4,
  * §8.7; SP5b spec §6.2; not in CI): drives the spike page (`?spike=batch`), the flight route (`?flight=sp4a`), the
- * streaming bench (`?bench=medium`, with SP4c's live legs, SP5a's edit leg and SP5b's save leg) or the enter bench
- * (`?bench=enter`, `runEnter`) in our own headful Chrome on a hardware GPU, reads the page's JSON over CDP and writes it
- * into `docs/superpowers/specs/assets/sp5b/` (every route since SP5b; SP4a's-SP5a's files stay in `assets/sp4a/`,
- * `assets/sp4b/`, `assets/sp4c/` and `assets/sp5a/`). With `--shot` the bench freezes at a review shot's moment and the
+ * streaming bench (`?bench=medium`, with SP4c's live legs, SP5a's edit leg, SP5b's save leg and SP5c's paste leg) or the
+ * enter bench (`?bench=enter`, `runEnter`) in our own headful Chrome on a hardware GPU, reads the page's JSON over CDP
+ * and writes it into `docs/superpowers/specs/assets/sp5c/` (every route since SP5c, D30; SP4a's-SP5b's files stay in
+ * `assets/sp4a/`, `assets/sp4b/`, `assets/sp4c/`, `assets/sp5a/` and `assets/sp5b/`). With `--shot` the bench freezes at a review shot's moment and the
  * tool saves a 1920 × 1080 PNG there instead (§8.7, amended while planning: the shots need the GPU). A page cannot write
  * files, which is why this tool exists; the Firefox cells are the user's, by hand (the enter bench's `&auto=1` form).
  *
@@ -65,10 +65,10 @@ const WINDOW_READS = 8;
 /** The pause between two steps of the sequence, so the window manager applies each one before the next. */
 const WINDOW_STEP_MS = 300;
 /**
- * Where every route writes (SP5b spec §6.2: SP5b's assets; SP4a's-SP5a's files stay in `assets/sp4a/`, `assets/sp4b/`,
- * `assets/sp4c/` and `assets/sp5a/`).
+ * Where every route writes (SP5c spec §10.4, D30: SP5c's assets, every route re-measured there; SP4a's-SP5b's files stay
+ * in `assets/sp4a/`, `assets/sp4b/`, `assets/sp4c/`, `assets/sp5a/` and `assets/sp5b/`).
  */
-export const ASSETS = 'docs/superpowers/specs/assets/sp5b';
+export const ASSETS = 'docs/superpowers/specs/assets/sp5c';
 
 /**
  * The bench's review shots (SP4b spec §8.7; SP4c spec §8.7's `apply-before`, `apply-mid`, `apply-after`, `teleport`;
