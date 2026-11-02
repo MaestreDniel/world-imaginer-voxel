@@ -124,3 +124,97 @@ export function persistFailures(p: PersistOf): string[] {
   if (!sameOrNull(p.editVisibleAddedMs, added)) out.push(`editVisibleAddedMs ${fmt(p.editVisibleAddedMs)}, not the "on" mean editVisibleP95 − the "off" mean ${fmt(added)}`);
   return out;
 }
+
+/** L12's operations `G2.paste` reads (SP5c spec §10.4): L12b's 28 (the house's) and L12c's 12 (the maximum blocks'). */
+export const PASTE_OPS = { L12b: 28, L12c: 12 } as const;
+
+/** One L12 part's figures the gate reads (`bench.ts`' PastePartFigures). */
+interface PastePartOf {
+  readonly p95: number | null;
+  readonly over33: number;
+  readonly ghostSliceMaxMs: number | null;
+}
+
+/** One L12 operation's figures the gate reads (`bench.ts`' PasteOpFigures). */
+interface PasteOpOf {
+  readonly op: string;
+  readonly part: string;
+  readonly answer: string;
+  readonly pasteVisibleMs: number | null;
+}
+
+/** The parts of a `paste` block the gate reads (`bench.ts`' PasteFigures). */
+export interface PasteOf {
+  readonly L12a: PastePartOf;
+  readonly L12b: PastePartOf;
+  readonly L12c: PastePartOf;
+  readonly L12d: PastePartOf;
+  readonly ops: readonly PasteOpOf[];
+  readonly timedOut: readonly string[];
+  readonly stoppedBy: string | null;
+}
+
+/** `G2.paste`'s six gated parts (SP5c spec §10.4, D28). */
+export interface PasteGate {
+  readonly pasteOver33: number;
+  readonly sweepOver33: number;
+  readonly pasteP95AddedMs: number;
+  readonly housePasteVisibleP95: number;
+  readonly maxPasteVisibleMax: number;
+  readonly ghostSliceMaxMs: number;
+}
+
+/** The nearest-rank percentile `p` of `values` (`src/ui/frameStats.ts`' rule, the bench's), null with none. */
+function nearestRankOf(values: readonly number[], p: number): number | null {
+  if (values.length === 0) return null;
+  const v = [...values].sort((a, b) => a - b);
+  return v[Math.min(v.length - 1, Math.max(0, Math.ceil(p * v.length) - 1))]!;
+}
+
+const visibleOf = (p: PasteOf, part: 'L12b' | 'L12c'): number[] =>
+  p.ops.filter((o) => o.part === part && o.pasteVisibleMs !== null).map((o) => o.pasteVisibleMs!);
+
+/**
+ * A `paste` block's shape before it is gated: L12 ran to its end (`timedOut` empty, `stoppedBy` null, Task 31's extra
+ * key), L12b's 28 and L12c's 12 operations present, each answered 'ok' and shown (`pasteVisibleMs` measured), every
+ * part's frame p95 measured and at least one ghost build's slice timed.
+ */
+export function pasteFailures(p: PasteOf): string[] {
+  const out: string[] = [];
+  if (p.timedOut.length > 0) out.push(`timedOut ${p.timedOut.join(', ')}`);
+  if (p.stoppedBy !== null) out.push(`stoppedBy ${p.stoppedBy}`);
+  for (const part of ['L12b', 'L12c'] as const) {
+    const ops = p.ops.filter((o) => o.part === part);
+    if (ops.length !== PASTE_OPS[part]) out.push(`${ops.length} ${part} operations, not ${PASTE_OPS[part]}`);
+    const notOk = ops.filter((o) => o.answer !== 'ok').length;
+    if (notOk > 0) out.push(`${notOk} ${part} operations not 'ok'`);
+    const unshown = ops.filter((o) => o.pasteVisibleMs === null).length;
+    if (unshown > 0) out.push(`${unshown} ${part} operations never shown`);
+  }
+  for (const part of ['L12a', 'L12b', 'L12c', 'L12d'] as const) {
+    if (p[part].p95 === null) out.push(`${part}'s frame p95 not measured`);
+  }
+  if ([p.L12b, p.L12c, p.L12d].every((s) => s.ghostSliceMaxMs === null)) out.push('no ghost build slice timed');
+  return out;
+}
+
+/**
+ * `G2.paste`'s six parts from a `paste` block (SP5c spec §10.4): `pasteOver33` L12b's + L12c's `over33`, `sweepOver33`
+ * L12d's, `pasteP95AddedMs` the largest of L12b's, L12c's and L12d's frame p95 minus L12a's, `housePasteVisibleP95` the
+ * nearest-rank p95 of L12b's operations' `pasteVisibleMs`, `maxPasteVisibleMax` the largest of L12c's, `ghostSliceMaxMs`
+ * the longest slice recorded in any part. Call it on a block `pasteFailures` passes: a missing figure is NaN, which no
+ * gate passes.
+ */
+export function pasteGateOf(p: PasteOf): PasteGate {
+  const num = (v: number | null): number => v ?? Number.NaN;
+  const slices = [p.L12a, p.L12b, p.L12c, p.L12d].map((s) => s.ghostSliceMaxMs).filter((v): v is number => v !== null);
+  const maxVisible = visibleOf(p, 'L12c');
+  return {
+    pasteOver33: p.L12b.over33 + p.L12c.over33,
+    sweepOver33: p.L12d.over33,
+    pasteP95AddedMs: Math.max(num(p.L12b.p95), num(p.L12c.p95), num(p.L12d.p95)) - num(p.L12a.p95),
+    housePasteVisibleP95: num(nearestRankOf(visibleOf(p, 'L12b'), 0.95)),
+    maxPasteVisibleMax: maxVisible.length === 0 ? Number.NaN : Math.max(...maxVisible),
+    ghostSliceMaxMs: slices.length === 0 ? Number.NaN : Math.max(...slices),
+  };
+}

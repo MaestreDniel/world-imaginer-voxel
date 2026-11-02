@@ -1,9 +1,9 @@
 import { readFileSync } from 'node:fs';
 import { describe, expect, test } from 'vitest';
-import { enterFileFailures, persistFailures, screenFailures, type EnterFileOf, type PersistOf } from '../harness/benchFiles';
+import { enterFileFailures, pasteFailures, pasteGateOf, persistFailures, screenFailures, type EnterFileOf, type PasteOf, type PersistOf } from '../harness/benchFiles';
 
-const ASSETS_SP5B = new URL('../../docs/superpowers/specs/assets/sp5b/', import.meta.url);
-const read = <T>(file: string): T => JSON.parse(readFileSync(new URL(file, ASSETS_SP5B), 'utf8')) as T;
+const ASSETS_SP5C = new URL('../../docs/superpowers/specs/assets/sp5c/', import.meta.url);
+const read = <T>(file: string): T => JSON.parse(readFileSync(new URL(file, ASSETS_SP5C), 'utf8')) as T;
 
 const FULL = { window: { width: 1920, height: 1080, windowState: 'fullscreen' }, viewport: { innerWidth: 1920, innerHeight: 1080, devicePixelRatio: 1 } };
 
@@ -27,11 +27,9 @@ describe('the committed browser files\' derived figures (SP5b spec §6.2; final 
     expect(screenFailures({ ...FULL, viewport: { innerWidth: 1920, innerHeight: 1080, devicePixelRatio: 2 } })).toEqual(['viewport 1920 × 1080 @ 2, not 1920 × 1080 @ 1']);
   });
 
-  test('enterFileFailures: the gated Iris file passes; the RTX file is not the Iris\'s, and left fullscreen', () => {
+  test('enterFileFailures: the gated Iris file passes; the RTX file is not the Iris\'s (SP5c\'s stayed fullscreen)', () => {
     expect(enterFileFailures(read<EnterFileOf>('enter-iris-chrome.json'))).toEqual([]);
-    const rtx = enterFileFailures(read<EnterFileOf>('enter-rtx-chrome.json'));
-    expect(rtx[0]).toBe('gpu rtx, not iris');
-    expect(rtx).toContain('window normal, not fullscreen');
+    expect(enterFileFailures(read<EnterFileOf>('enter-rtx-chrome.json'))).toEqual(['gpu rtx, not iris']);
   });
 
   test('enterFileFailures: six pairs and ratios, each (b) / (a), and `enterRatio` the median of pairRatios[1..5]', () => {
@@ -77,5 +75,56 @@ describe('the committed browser files\' derived figures (SP5b spec §6.2; final 
     const none = { ...p, L11c: part(4, 0, null) };
     expect(persistFailures({ ...none, editVisibleAddedMs: null })).toEqual([]);
     expect(persistFailures(none)).toEqual(['editVisibleAddedMs 20, not the "on" mean editVisibleP95 − the "off" mean null']);
+  });
+});
+
+/** A `paste` block with every operation 'ok' and shown: L12b's 28 at 100 + i ms, L12c's 12 at 1,000 + 10 i ms. */
+function pasteBlock(over: Partial<PasteOf> = {}): PasteOf {
+  const op = (part: string, i: number, pasteVisibleMs: number | null) => ({ op: i % 2 === 0 ? 'paste' : 'undo', part, answer: 'ok', pasteVisibleMs });
+  const ops = [
+    ...Array.from({ length: 28 }, (_, i) => op('L12b', i, 100 + i)),
+    ...Array.from({ length: 12 }, (_, i) => op('L12c', i, 1000 + 10 * i)),
+  ];
+  const part = (p95: number | null, over33: number, ghostSliceMaxMs: number | null) => ({ p95, over33, ghostSliceMaxMs });
+  return {
+    L12a: part(4.165, 0, null), L12b: part(4.17, 0, 1.2), L12c: part(8.33, 1, 0.8), L12d: part(5, 2, 2.5),
+    ops, timedOut: [], stoppedBy: null, ...over,
+  };
+}
+
+describe('the committed bench files\' `paste` block and `G2.paste`\'s parts (SP5c spec §10.4, D28)', () => {
+  test('pasteGateOf: the six parts from L12a-L12d and L12b\'s and L12c\'s operations', () => {
+    const g = pasteGateOf(pasteBlock());
+    expect(g.pasteOver33, 'L12b\'s + L12c\'s over33').toBe(1);
+    expect(g.sweepOver33, 'L12d\'s over33').toBe(2);
+    expect(g.pasteP95AddedMs, 'the largest of L12b-L12d\'s p95 minus L12a\'s').toBeCloseTo(8.33 - 4.165, 9);
+    // Nearest rank: the 27th of 28 (ceil(0.95 · 28) = 27), 100 + 26.
+    expect(g.housePasteVisibleP95, 'the nearest-rank p95 of L12b\'s 28').toBe(126);
+    expect(g.maxPasteVisibleMax, 'L12c\'s largest').toBe(1110);
+    expect(g.ghostSliceMaxMs, 'the longest slice of any part').toBe(2.5);
+    // L12c\'s and L12d\'s operations do not enter the house\'s p95, nor L12b\'s the maximum.
+    const b = pasteBlock();
+    const slow = { ...b, ops: b.ops.map((o) => (o.part === 'L12c' ? { ...o, pasteVisibleMs: 5 } : o)) };
+    expect(pasteGateOf(slow).housePasteVisibleP95).toBe(126);
+    expect(pasteGateOf(slow).maxPasteVisibleMax).toBe(5);
+  });
+
+  test('pasteFailures: a whole L12 passes; a stopped, timed-out, short, refused or unshown one does not', () => {
+    expect(pasteFailures(pasteBlock())).toEqual([]);
+    expect(pasteFailures(pasteBlock({ stoppedBy: 'L12b\'s paste (operation 3): Can\'t paste here' }))).toEqual(['stoppedBy L12b\'s paste (operation 3): Can\'t paste here']);
+    expect(pasteFailures(pasteBlock({ timedOut: ['L12c'] }))).toEqual(['timedOut L12c']);
+    const b = pasteBlock();
+    expect(pasteFailures({ ...b, ops: b.ops.slice(1) })).toEqual(['27 L12b operations, not 28']);
+    expect(pasteFailures({ ...b, ops: b.ops.slice(0, -1) })).toEqual(['11 L12c operations, not 12']);
+    expect(pasteFailures({ ...b, ops: b.ops.map((o, i) => (i === 3 ? { ...o, answer: 'full' } : o)) })).toEqual(['1 L12b operations not \'ok\'']);
+    expect(pasteFailures({ ...b, ops: b.ops.map((o, i) => (i === 30 ? { ...o, pasteVisibleMs: null } : o)) })).toEqual(['1 L12c operations never shown']);
+    expect(pasteFailures({ ...b, L12a: { ...b.L12a, p95: null } })).toEqual(['L12a\'s frame p95 not measured']);
+    const noSlices = { ...b, L12b: { ...b.L12b, ghostSliceMaxMs: null }, L12c: { ...b.L12c, ghostSliceMaxMs: null }, L12d: { ...b.L12d, ghostSliceMaxMs: null } };
+    expect(pasteFailures(noSlices)).toEqual(['no ghost build slice timed']);
+    expect(Number.isNaN(pasteGateOf(noSlices).ghostSliceMaxMs), 'a missing figure gates as NaN').toBe(true);
+  });
+
+  test('pasteFailures: the committed Iris Xe Chrome bench file\'s L12 ran whole', () => {
+    expect(pasteFailures(read<{ paste: PasteOf }>('bench-iris-chrome.json').paste)).toEqual([]);
   });
 });

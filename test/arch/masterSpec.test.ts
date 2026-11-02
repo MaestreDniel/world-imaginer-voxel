@@ -1094,9 +1094,9 @@ describe('master spec amendments (SP4c §12)', () => {
     const apply = text.split('\n').find((l) => l.startsWith('- terrain Apply: first visible change near the player'));
     expect(apply, 'no terrain Apply line in §7').toBeDefined();
     expect(apply).toContain('≤ 0.5 s (recorded from SP4c\'s bench; gated by SP10)');
-    // SP5a gates G2's edit part (SP5a spec §6.2), SP5b its flush parts (G2.flush, pinned in the SP5b block); the Apply
-    // part has no gated part before SP10.
-    expect(Object.keys(THRESHOLDS.G2 ?? {}).filter((p) => THRESHOLDS.G2?.[p]?.activeFrom !== 'SP5b'), 'G2 has no gated Apply part before SP10').toEqual(['editVisibleP95']);
+    // SP5a gates G2's edit part (SP5a spec §6.2), SP5b its flush parts (G2.flush, pinned in the SP5b block), SP5c its
+    // paste parts (G2.paste, pinned in the SP5c block); the Apply part has no gated part before SP10.
+    expect(Object.keys(THRESHOLDS.G2 ?? {}).filter((p) => THRESHOLDS.G2?.[p]?.activeFrom !== 'SP5b' && THRESHOLDS.G2?.[p]?.activeFrom !== 'SP5c'), 'G2 has no gated Apply part before SP10').toEqual(['editVisibleP95']);
   });
 
   test('§1\'s test entry lists SP4c\'s test files in their own parentheses, which exist (SP4c spec §8.5, §12)', () => {
@@ -1750,6 +1750,52 @@ describe('master spec amendments (SP5c §13)', () => {
     const at = text.indexOf('### 6.3 ');
     const lines = text.slice(at, text.indexOf('### 6.4 ', at)).split('\n');
     expect(lines).toContain('- **Selection** (SP5c): the clipboard codec and its remap by state key; positions and states turned together (four turns the identity, the provisional boxes turned); the paste batch (changed cells only, the move\'s merge, bounds and refusals); the history\'s caps.');
+  });
+
+  test('§10\'s Exit names `G2.paste`, and THRESHOLDS holds its six rows as SP5c spec §10.4 and §16 state them (SP5c spec §10.4, §16, D28)', () => {
+    expect(spEntry('SP5c', 'SP6')).toContain('`G2.paste` with the SP5c spec\'s thresholds');
+    const sp5c = readFileSync(fileURLToPath(new URL('../../docs/superpowers/specs/2026-11-01-sp5c-selection-tool-design.md', import.meta.url)), 'utf8');
+    const at = sp5c.indexOf('### 10.4 ');
+    const gated = sp5c.slice(at, sp5c.indexOf('### 10.5 ', at)).split('\n');
+    const exit = sp5c.split('\n').find((l) => l.startsWith('| no stutter or long freeze pasting, moving or cutting a large build'));
+    expect(exit, 'no `G2.paste` criterion in SP5c §16').toBeDefined();
+    // Each part: its §10.4 bullet's head and limit (the limit in the spec's en-US form), and §16's criterion.
+    const paste: Array<[part: string, max: number, head: string, exit: string]> = [
+      ['pasteOver33', 0, '  - `pasteOver33` (frames over 33 ms in L12b and L12c)', '`pasteOver33` 0'],
+      ['sweepOver33', 0, '  - `sweepOver33` (frames over 33 ms in L12d)', '`sweepOver33` 0'],
+      ['pasteP95AddedMs', 4.17, '  - `pasteP95AddedMs` (the larger of L12b\'s, L12c\'s and L12d\'s frame p95 minus L12a\'s)', '`pasteP95AddedMs` ≤ 4.17'],
+      ['housePasteVisibleP95', 500, '  - `housePasteVisibleP95` (L12b\'s pastes, undos, redos, the move and the cut)', '`housePasteVisibleP95` ≤ 500'],
+      ['maxPasteVisibleMax', 2000, '  - `maxPasteVisibleMax` (L12c, both blocks)', '`maxPasteVisibleMax` ≤ 2,000'],
+      ['ghostSliceMaxMs', 4, '  - `ghostSliceMaxMs`', '`ghostSliceMaxMs` ≤ 4'],
+    ];
+    for (const [part, max, head, criterion] of paste) {
+      expect(THRESHOLDS.G2?.[part], `THRESHOLDS.G2.${part}`).toEqual({ max, activeFrom: 'SP5c' });
+      const bullet = gated.find((l) => l.startsWith(`${head} max `));
+      expect(bullet, `SP5c §10.4 has no ${part} bullet`).toBeDefined();
+      expect(bullet!.slice(head.length), `SP5c §10.4's ${part} limit`).toMatch(new RegExp(`^ max ${max.toLocaleString('en-US').replace('.', '\\.')}[ ;.]`));
+      expect(exit, `SP5c §16's G2.paste ${part}`).toContain(criterion);
+    }
+    expect(Object.keys(THRESHOLDS.G2 ?? {}).filter((p) => THRESHOLDS.G2?.[p]?.activeFrom === 'SP5c').sort(), 'G2\'s SP5c parts').toEqual(paste.map(([p]) => p).sort());
+  });
+
+  test('§6.4\'s G2 row, §4.12\'s Target and §7\'s Latency name the paste\'s budget, which THRESHOLDS holds (SP5c spec §10.4, §13, D28)', () => {
+    const g2 = text.split('\n').find((l) => l.startsWith('| G2 |'));
+    expect(g2, 'no G2 row in §6.4').toBeDefined();
+    expect(g2).toContain('/ a paste: no frame > 33 ms, the p95 frame ≤ one interval above the hover, a large build visible ≤ 0.5 s p95, the maximum ≤ 2 s (SP5c, from L12) |');
+    expect(g2!.endsWith('| ≤ 50 ms / ≤ 0.5 s / 0 frames, ≤ 4.17 ms, ≤ 0.5 s, ≤ 2 s |'), 'the G2 row\'s paste limits').toBe(true);
+    // The row's figures are THRESHOLDS': no frame over 33 ms, one 240 Hz interval, 0.5 s and 2 s.
+    const g = THRESHOLDS.G2!;
+    expect([g.pasteOver33?.max, g.sweepOver33?.max, g.pasteP95AddedMs?.max, g.housePasteVisibleP95?.max, g.maxPasteVisibleMax?.max]).toEqual([0, 0, 4.17, 500, 2000]);
+    const at412 = text.indexOf('### 4.12 ');
+    const target = text.slice(at412, text.indexOf('### 4.13 ', at412)).split('\n').find((l) => l.startsWith('Target:'));
+    expect(target, 'no `Target:` line in §4.12').toBeDefined();
+    expect(target!.endsWith('; a large build\'s paste → visible ≤ 0.5 s p95, the maximum paste ≤ 2 s, with no frame over 33 ms (SP5c, gated from the bench\'s L12).'), '§4.12\'s Target line').toBe(true);
+    const at7 = text.indexOf('## 7. ');
+    const s7 = text.slice(at7, text.indexOf('\n## 8. ', at7)).split('\n');
+    const latency = s7.indexOf('**Latency:**');
+    expect(latency, 'no `**Latency:**` list in §7').toBeGreaterThan(-1);
+    const items = s7.slice(latency + 1, s7.indexOf('', latency + 1));
+    expect(items.some((l) => l.includes('a large build\'s paste → visible ≤ 0.5 s p95; the maximum paste ≤ 2 s (SP5c)')), '§7\'s Latency names the paste').toBe(true);
   });
 
   test('§10\'s SP5c entry, its receivers and the hand-overs (SP5c spec §13, §14, §15)', () => {

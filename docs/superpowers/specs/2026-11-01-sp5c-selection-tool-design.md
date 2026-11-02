@@ -583,6 +583,31 @@ Run 41363347185 on `sp5c/selection-tool` at f19addc (2026-11-01, push, every met
 
 No lever ran. The watch item for later runs is `metrics-fast (rest)` (143 s against the long pole's 160-163 s): if it passes the long pole, the clipboard file gets a fast shard of its own.
 
+### The Chrome cells and `G2.paste` (Task 32, after D28's levers)
+
+Measured 2026-11-02 by an agent with `npm run measure:chrome` on the laptop panel eDP-1 (1920 × 1080 fullscreen, 240 Hz, display interval 4.165 ms), PRIME on-demand, Chrome 155.0.8059.39, a cold driver shader cache in the tool's own Chrome only, each run started at a 1-minute load ≤ 1.5 (0.8-0.97; the bench's own workers raised it to 1.3-3.9 during the runs, which the tool warns about).
+
+- **The first L12 runs missed.** On the code before the levers (d0ae1dc), `maxPasteVisibleMax` was 2,025.08 and 2,062.48 ms against 2,000 on the two Iris Xe bench runs: every lit maximum paste took 2,006-2,062 ms, of which the sim's `editMs` 1,940-1,995 and its `relightMs` 1,629-1,681 (Chrome's sim about 1.4× Node's, against D31's assumed 1.2×). The other five parts held. So D28's levers ran in order, each measured on the Iris bench route before the next:
+  - **Lever 1, a packed `edits` form** (b344dc7): the post fell from 8-12 ms to 1-3 ms and the post → reply gap beyond `editMs` from 15-19 ms to 2 ms, but `maxPasteVisibleMax` was 2,131.76 (the sim's `editMs` 2,051-2,076 on that run). Missed.
+  - **Lever 2, sub-batches of 512:** already the design (ruling R5).
+  - **Lever 3, per-step history records:** not run for this miss, since the flush parts are not its cause (§10.4: "if the flush parts are the cause"; `flushMainMaxMs` 11.9 and `diffWaitMaxMs` null). It runs anyway before the exit, on Task 27's record (ruling R8).
+  - **Lever 4, a batched relight per section** (ebecad9, with its own part `L3.paste`'s `pasteDirtyMissing`, §3.2): `maxPasteVisibleMax` 304.68. Met, so lever 5 (the cap at 16,384) did not run.
+- **The committed files** (`assets/sp5c/`, on ebecad9's code): `bench-iris-chrome.json` (the second of two Iris bench runs, as the plan says), `bench-iris-chrome-w4.json`, `flight-iris-chrome.json`, `enter-iris-chrome.json`, `bench-rtx-chrome.json` and `enter-rtx-chrome.json` (the RTX probe was accepted under on-demand, so no 'nvidia' switch was needed).
+
+| `G2.paste` part | max | Iris run 1 | Iris run 2 (committed) | w4 (recorded) | RTX (recorded) |
+|---|---|---|---|---|---|
+| `pasteOver33` | 0 | 0 | 0 | 0 | 2 |
+| `sweepOver33` | 0 | 0 | 0 | 0 | 0 |
+| `pasteP95AddedMs` | 4.17 | 0 | 0 | 0 | 0 |
+| `housePasteVisibleP95` | 500 | 77.68 | 76.23 | 72.80 | 70.24 |
+| `maxPasteVisibleMax` | 2,000 | 305.05 | 304.72 | 308.54 | 2,064.88 |
+| `ghostSliceMaxMs` | 4 | 2.01 | 2.48 | 2.04 | 1.80 |
+
+- **L12 on the committed file:** the lit maximum paste 299-305 ms visible (`editMs` 254-258, `relightMs` 195-202, longest sub-batch 26-27 ms, `limboMax` 96, 22 dirty columns), its undo 209-235 ms; the solid one 113-123 ms (`limboMax` 88). Every L12 part's frame p95 is 4.165 ms and its max at most 8.33 ms. Recorded: `clipboardReadMs` 3.04, `clipboardWriteMs` 8.71, `diffWaitMaxMs` none (no D job's read-through waited on the sim during L12; the longest `editMs` 257 ms), `flushMainMaxMs` 8.27, `flushSyncMaxMs` 1.70, `toolDrawCallsMax` 5 (≤ 6) and `drawCallsMax` 16 (≤ 100), the pools unchanged over L12 (block 41 MiB, byte 18 MiB; before lever 4 the byte pool grew 18 → 38 MiB). `overlayMainMaxMs` and `targetReads` are none and 0: L12 confirms before the 100 ms settle and L12d moves the anchor every frame, so no target read is posted (§2.5's rule).
+- **The RTX file's two long frames** (recorded, not gated): one solid paste of L12c was shown 2,064.88 ms after its post although its reply came at 86 ms; L12c's longest frame took 2,003 ms there (a stall outside the sim, whose reply was in), and a second frame went over 33 ms. The Iris runs show no such frame.
+- **`limboMax` in the browser:** before lever 4 the lit block left 5,799 (its undo 5,819) and the house's cut 4,210, above §10.5's 4,096, from the bench's placement (22 dirty columns); after it, at most 116 on every L12 operation.
+- **The earlier cells on the new files, all met:** G1 static (flight) `mediumStaticP95` 4.165, `mediumStaticDrawCalls` 11, `mediumStaticMainP95` 0.82; streaming `mediumStreamP95` 4.165, `mediumStreamOver33` 0, `mediumStreamDrawCalls` 17, `mediumStreamMainP95` 1.70, `mediumFill4wMs` 4,921.4, `mediumGpuMB` 54.82 (388 structural frames over L1-L12); live `mediumLiveP95` 4.165, `mediumLiveOver33` 0, `mediumLiveGpuMB` 51.69; `G2.edit` `editVisibleP95` 9.40; `G2.flush` `over33Added` 0, `p95AddedMs` 0, `editVisibleAddedMs` −0.06, `flushEditVisibleP95` 9.11, `replyDuringFlushP95Ms` 1.74 (`flushMainP95Ms` 0.40, recorded); `G1.enter` `enterRatio` 1.080 (pair ratios 1.102, 1.100, 1.080, 1.020, 1.085, 1.038; medians 2,307.4 and 2,538.3 ms), the RTX's 1.059. Each enter file logs 13 benign `beforeunload` messages.
+
 ## Threshold log
 
 (One line per commit that changes `test/thresholds.lock.json`, and per gate decision that changes no lock.)
@@ -590,3 +615,4 @@ No lever ran. The watch item for later runs is `metrics-fast (rest)` (143 s agai
 - 2026-11-01 — SP5c Task 1: startedSps gains 'SP5c' (spec §12).
 - 2026-11-02 — SP5c Task 27: L3 pasteValueMismatches, pasteLightMismatches and pasteLimboOver (L3.paste), E3 pasteUndoMismatches, pasteRedoMismatches, clipboardReloadMismatches and pasteLeaveMismatches (E3.paste), E5 pasteStale (E5.paste), each max 0, gated from SP5c on every tier (clipboard.metric.ts; spec §10.1); new parts.
 - 2026-11-02 — SP5c Task 33d (D28 lever 4): L3 pasteDirtyMissing max 0 (L3.paste), gated from SP5c on every tier (clipboard.metric.ts; spec §10.1, §10.4), the batched relight's own coverage; a new part (measured 0 on the quick tier).
+- 2026-11-02 — SP5c Task 32: G2 pasteOver33 max 0, sweepOver33 max 0, pasteP95AddedMs max 4.17, housePasteVisibleP95 max 500, maxPasteVisibleMax max 2000 and ghostSliceMaxMs max 4 (G2.paste), gated from SP5c on every tier from assets/sp5c/ (g1.metric.ts; spec §10.4, D28); G1's, G2.edit's, G2.flush's and G1.enter's cells re-read from assets/sp5c (D30); new parts (measured 0, 0, 0, 76.23, 304.72 and 2.48 on eDP-1 at 240 Hz, after D28's levers 1 and 4).

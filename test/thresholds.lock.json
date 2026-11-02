@@ -1,5 +1,5 @@
 {
-  "sha256": "4044585b51de15c25801c9417e068f8ff7990e198d5741142ddac1a0296c9d93",
+  "sha256": "8eb1ff761fe9d02b4f05d4143f122d367ccf087bca4240242777fefa2585258a",
   "canonical": {
     "startedSps": [
       "SP0",
@@ -393,6 +393,18 @@
           "activeFrom": "SP5b",
           "max": 50
         },
+        "ghostSliceMaxMs": {
+          "activeFrom": "SP5c",
+          "max": 4
+        },
+        "housePasteVisibleP95": {
+          "activeFrom": "SP5c",
+          "max": 500
+        },
+        "maxPasteVisibleMax": {
+          "activeFrom": "SP5c",
+          "max": 2000
+        },
         "over33Added": {
           "activeFrom": "SP5b",
           "max": 1
@@ -401,9 +413,21 @@
           "activeFrom": "SP5b",
           "max": 4.17
         },
+        "pasteOver33": {
+          "activeFrom": "SP5c",
+          "max": 0
+        },
+        "pasteP95AddedMs": {
+          "activeFrom": "SP5c",
+          "max": 4.17
+        },
         "replyDuringFlushP95Ms": {
           "activeFrom": "SP5b",
           "max": 5
+        },
+        "sweepOver33": {
+          "activeFrom": "SP5c",
+          "max": 0
         }
       },
       "L1": {

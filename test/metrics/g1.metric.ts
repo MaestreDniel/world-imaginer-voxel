@@ -2,17 +2,18 @@ import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { expect } from 'vitest';
-import { enterFileFailures, persistFailures, screenFailures, type ScreenOf } from '../harness/benchFiles';
+import { enterFileFailures, pasteFailures, pasteGateOf, persistFailures, screenFailures, type PasteOf, type ScreenOf } from '../harness/benchFiles';
 import { metricTest } from '../harness/metric';
 
 /**
  * G1's static cells (SP4a spec §9.1, §9.5, D24), every tier, milliseconds: read from the Chrome flight on the Iris Xe
- * re-measured on SP5b's code, `docs/superpowers/specs/assets/sp5b/flight-iris-chrome.json` (`npm run measure:chrome
- * -- --route flight`, the `?flight=sp4a` route; SP4b spec §8.4; SP4c spec §8.4; SP5a spec §6.2; SP5b spec §6.2: every
- * G1 file re-measured into `assets/sp5b/`, the SP5a files staying in `assets/sp5a/`). Its shape is checked first: the
- * route's JSON with the renderer naming the Iris Xe (as reported), the section renderer RegionBatch ('batch'), RD 12,
- * the default profile, a cold driver shader cache (`shaderCache`, rulings R11) and the window fullscreen at 1920 × 1080
- * with a 1920 × 1080 @ 1 viewport (`screenFailures`, final review GOV-4). The three gated parts:
+ * re-measured on SP5c's code, `docs/superpowers/specs/assets/sp5c/flight-iris-chrome.json` (`npm run measure:chrome
+ * -- --route flight`, the `?flight=sp4a` route; SP4b spec §8.4; SP4c spec §8.4; SP5a spec §6.2; SP5b spec §6.2; SP5c
+ * spec §10.4, D30: every G1 file re-measured into `assets/sp5c/`, the SP5b files staying in `assets/sp5b/`). Its shape
+ * is checked first: the route's JSON with the renderer naming the Iris Xe (as reported), the section renderer
+ * RegionBatch ('batch'), RD 12, the default profile, a cold driver shader cache (`shaderCache`, rulings R11) and the
+ * window fullscreen at 1920 × 1080 with a 1920 × 1080 @ 1 viewport (`screenFailures`, final review GOV-4). The three
+ * gated parts:
  * - `mediumStaticP95`: the snapped frame times' p95 (`frames.p95`), max 16.7;
  * - `mediumStaticDrawCalls`: the draw calls' max (`drawCalls.max`), max 100;
  * - `mediumStaticMainP95`: the main-thread ms' p95 (`main.p95`), max 6.
@@ -20,15 +21,15 @@ import { metricTest } from '../harness/metric';
  * recorded, when present, in `.out/G1.others.json`, never gated (§9.5: the Firefox cells are checked at the exit).
  *
  * G1's streaming cells (SP4b spec §8.2, §8.4, D23), every tier, a second call (`G1.streaming`): read from the committed
- * Iris Xe Chrome bench files `assets/sp5b/bench-iris-chrome.json` (the default pool) and `bench-iris-chrome-w4.json`
- * (4 workers), `npm run measure:chrome -- --route bench`, re-measured on SP5b's code (SP5b spec §6.2). Each file's
+ * Iris Xe Chrome bench files `assets/sp5c/bench-iris-chrome.json` (the default pool) and `bench-iris-chrome-w4.json`
+ * (4 workers), `npm run measure:chrome -- --route bench`, re-measured on SP5c's code (SP5c spec §10.4, D30). Each file's
  * shape is checked first: route `bench=medium`, the renderer naming the Iris Xe, RegionBatch, RD 12, the default
  * profile, a cold driver shader cache (rulings R11), the window fullscreen at 1920 × 1080 with a 1920 × 1080 @ 1
  * viewport (final review GOV-4), 4 workers in the w4 file, the `gpuMB` breakdown fields,
- * `structuralFrames` present, every entry's `leg` one of L0-L11, with every SP4b-leg entry's
+ * `structuralFrames` present, every entry's `leg` one of L0-L12, with every SP4b-leg entry's
  * (`leg` L0-L6) `stutterMs` ≤ 33 ms (the larger of its own snapped frame and the next one's, §8.4; rulings R10; SP4c's
  * live legs L7-L9 are `G1.live`'s; SP5a's edit leg L10's long frames are its `over33`, an exit check, not a G1 part;
- * SP5b's save leg L11's are `G2.flush`'s parts),
+ * SP5b's save leg L11's are `G2.flush`'s parts, SP5c's paste leg L12's `G2.paste`'s),
  * `partialColumnFrames` and `mixedColumnFrames` 0. The six gated parts:
  * - `mediumStreamP95`: the default run's `stream.frames.p95`, max 16.7;
  * - `mediumStreamOver33`: its `stream.frames.over33`, max 0;
@@ -41,7 +42,7 @@ import { metricTest } from '../harness/metric';
  * `partialColumnFrames` and `mixedColumnFrames` 0; the RTX cell is checked at SP4b's exit (§8.4).
  *
  * G1's live cells (SP4c spec §8.2, §8.4, D22), every tier, a third call (`G1.live`): read from the same
- * `assets/sp5b/bench-iris-chrome.json`'s `live` block (the bench's Apply, undo and teleport legs L7-L9). The file's
+ * `assets/sp5c/bench-iris-chrome.json`'s `live` block (the bench's Apply, undo and teleport legs L7-L9). The file's
  * shape is checked as the streaming call's, plus the `live` block's: frames measured, the `gpuMB` breakdown, at least
  * one L7-L9 structural frame and every one's `stutterMs` ≤ 33 ms, `live.partialColumnFrames` and
  * `live.mixedColumnFrames` 0. The three
@@ -54,7 +55,7 @@ import { metricTest } from '../harness/metric';
  * p95 and over33 are exit checks (§8.4), not rows.
  *
  * G2's edit part (SP5a spec §6.2, D26), every tier, a fourth call (`G2.edit`): read from the same
- * `assets/sp5b/bench-iris-chrome.json`'s `edit` block (the bench's edit leg L10: 100 scripted edits through the page's
+ * `assets/sp5c/bench-iris-chrome.json`'s `edit` block (the bench's edit leg L10: 100 scripted edits through the page's
  * edit path). The file's shape is checked as the streaming call's, plus the `edit` block's: `timedOut` empty (the
  * hover's RD 12 disc filled) and `editVisibleP95` measured. The gated part:
  * - `editVisibleP95`: `edit.editVisibleP95`, the post → the frame the edited column's new mesh is shown, max 50.
@@ -63,7 +64,7 @@ import { metricTest } from '../harness/metric';
  * bench files' `edit` blocks are recorded, when present, in `.out/G2.edit.others.json`, never gated.
  *
  * G2's flush parts (SP5b spec §6.2, D28), every tier, a fifth call (`G2.flush`): read from the same
- * `assets/sp5b/bench-iris-chrome.json`'s `persist` block (the bench's save leg L11: four 30 s parts at one place,
+ * `assets/sp5c/bench-iris-chrome.json`'s `persist` block (the bench's save leg L11: four 30 s parts at one place,
  * autosave off, on, off, on, L11a-L11d). The file's shape is checked as the streaming call's, plus the `persist`
  * block's: `timedOut` empty, at least 20 flushes in the "on" parts, every figure a gated part reads measured, both
  * "on" parts' `editVisibleP95` measured (rulings P42), and at least 20 edits overlapping a flush
@@ -82,7 +83,7 @@ import { metricTest } from '../harness/metric';
  * Firefox bench files' `persist` blocks are recorded, when present, in `.out/G2.flush.others.json`, never gated.
  *
  * G1's enter part (SP5b spec §6.2, D28), every tier, a sixth call (`G1.enter`): read from the committed Iris Xe Chrome
- * enter file `assets/sp5b/enter-iris-chrome.json` (`npm run measure:chrome -- --route enter --gpu iris`). Its shape is
+ * enter file `assets/sp5c/enter-iris-chrome.json` (`npm run measure:chrome -- --route enter --gpu iris`). Its shape is
  * checked first: route `bench=enter`, the renderer naming the Iris Xe (rulings P42), a cold driver shader cache, six
  * pairs with the first (the cold cache) discarded, five kept, and (`enterFileFailures`, final review GOV-4) six
  * `pairRatios` each its pair's (b) / (a), `enterRatio` their median over pairs 1-5 recomputed, `gpu` 'iris' and the window
@@ -90,9 +91,25 @@ import { metricTest } from '../harness/metric';
  * - `enterRatio`: the median of the kept pairs' ratios (b) saved / (a) unsaved `revealMs`, max 1.10 (rulings R8).
  * Recorded beside it: both legs' medians, `idbOpenMs + loadMs`, `decodeMs` and `newWorldRevealMs` (null: -1). The RTX
  * and Firefox enter files are recorded, when present, in `.out/G1.enter.others.json`, never gated.
+ *
+ * G2's paste parts (SP5c spec §10.4, D28), every tier, a seventh call (`G2.paste`): read from the same
+ * `assets/sp5c/bench-iris-chrome.json`'s `paste` block (the bench's paste leg L12: L12a the hover with the tool off,
+ * L12b the house's 28 pastes, undos, redos, a move and a cut, L12c the two maximum blocks' 12 pastes and undos, L12d the
+ * ghost swept). The file's shape is checked as the streaming call's, plus the `paste` block's (`pasteFailures`): L12 ran
+ * whole (`timedOut` empty, `stoppedBy` null), L12b's 28 and L12c's 12 operations present, each 'ok' and shown, every
+ * part's frame p95 measured and a ghost build's slice timed. The gated parts (`pasteGateOf`):
+ * - `pasteOver33`: L12b's + L12c's `over33`, max 0;
+ * - `sweepOver33`: L12d's `over33`, max 0;
+ * - `pasteP95AddedMs`: the largest of L12b's, L12c's and L12d's frame p95 minus L12a's, max 4.17 (one 240 Hz interval);
+ * - `housePasteVisibleP95`: the nearest-rank p95 of L12b's 28 `pasteVisibleMs`, max 500;
+ * - `maxPasteVisibleMax`: the largest of L12c's 12 `pasteVisibleMs`, max 2000;
+ * - `ghostSliceMaxMs`: the longest ghost build slice, max 4.
+ * The rest of the block is recorded (`clipboardReadMs`, `clipboardWriteMs`, `diffWaitMaxMs` with the longest `editMs`,
+ * `flushMainMaxMs`, `flushSyncMaxMs`, each part's frames, `toolDrawCallsMax` and `drawCallsMax`, the pools' growth).
+ * The w4 and RTX bench files' `paste` blocks are recorded, when present, in `.out/G2.paste.others.json`, never gated.
  */
 const ASSETS = fileURLToPath(new URL('../../docs/superpowers/specs/assets/sp4a/', import.meta.url));
-const ASSETS_SP5B = fileURLToPath(new URL('../../docs/superpowers/specs/assets/sp5b/', import.meta.url));
+const ASSETS_SP5C = fileURLToPath(new URL('../../docs/superpowers/specs/assets/sp5c/', import.meta.url));
 const OUT_DIR = fileURLToPath(new URL('./.out/', import.meta.url));
 const GATED = 'flight-iris-chrome.json';
 const OTHERS = ['flight-iris-chrome-w4.json', 'flight-rtx-chrome.json', 'flight-iris-firefox.json', 'flight-rtx-firefox.json'] as const;
@@ -118,8 +135,8 @@ interface Flight extends ScreenOf {
 const read = <T = Flight>(dir: string, file: string): T => JSON.parse(readFileSync(join(dir, file), 'utf8')) as T;
 
 metricTest('G1', ['mediumStaticP95', 'mediumStaticDrawCalls', 'mediumStaticMainP95'], () => {
-  expect(existsSync(join(ASSETS_SP5B, GATED)), `${GATED} missing: run npm run measure:chrome -- --route flight --gpu iris`).toBe(true);
-  const f = read(ASSETS_SP5B, GATED);
+  expect(existsSync(join(ASSETS_SP5C, GATED)), `${GATED} missing: run npm run measure:chrome -- --route flight --gpu iris`).toBe(true);
+  const f = read(ASSETS_SP5C, GATED);
   expect(f.route, 'the ?flight=sp4a JSON').toBe('flight=sp4a');
   expect(f.renderer ?? '', 'the renderer names the Iris Xe').toMatch(/Iris/i);
   expect(f.sectionRenderer, 'measured on RegionBatch').toBe('batch');
@@ -160,12 +177,14 @@ const OVER_MS = 33;
 
 /**
  * SP4b's legs (the 95 s script), whose structural frames the streaming call checks; L7-L9 are SP4c's live legs, L10
- * SP5a's edit leg and L11 SP5b's save leg (their structural frames are known, not stutter-checked: L10's `over33` is an
- * exit check, L11's long frames `G2.flush`'s parts).
+ * SP5a's edit leg, L11 SP5b's save leg and L12 SP5c's paste leg (their structural frames are known, not stutter-checked:
+ * L10's `over33` is an exit check, L11's long frames `G2.flush`'s parts, L12's `G2.paste`'s).
  */
 const SP4B_LEGS: ReadonlySet<string> = new Set(['L0', 'L1', 'L2', 'L3', 'L4', 'L5', 'L6']);
 const LIVE_LEGS: ReadonlySet<string> = new Set(['L7', 'L8', 'L9']);
 const EDIT_LEGS: ReadonlySet<string> = new Set(['L10', 'L11']);
+/** SP5c's paste leg L12, whose long frames are `G2.paste`'s parts (SP5c spec §10.4): known, not stutter-checked. */
+const PASTE_LEGS: ReadonlySet<string> = new Set(['L12']);
 
 /** A frame block of a bench JSON (`stream` over L1-L6, `live` over L7-L9, `edit.frames` over L10; `bench.ts`' StreamFigures). */
 interface BenchFrames {
@@ -208,6 +227,40 @@ interface Persist {
   readonly p95AddedMs: number;
   readonly editVisibleAddedMs: number | null;
   readonly timedOut: readonly string[];
+}
+
+/** One L12 part's figures (`bench.ts`' PastePartFigures). */
+interface PastePart {
+  readonly p50: number | null;
+  readonly p95: number | null;
+  readonly p99: number | null;
+  readonly max: number | null;
+  readonly over33: number;
+  readonly ghostBuildMs: number | null;
+  readonly ghostBuildFrames: number | null;
+  readonly ghostSliceMaxMs: number | null;
+  readonly overlayMainMaxMs: number | null;
+  readonly targetReads: number;
+  readonly drawCallsMax: number | null;
+  readonly toolDrawCallsMax: number;
+}
+
+/** L12's block of a bench JSON (`bench.ts`' PasteFigures): the parts a-d, every operation, the clipboard, flushes and pools. */
+interface Paste extends PasteOf {
+  readonly L12a: PastePart;
+  readonly L12b: PastePart;
+  readonly L12c: PastePart;
+  readonly L12d: PastePart;
+  readonly ops: ReadonlyArray<PasteOf['ops'][number] & { readonly editMs: number | null; readonly subBatchMaxMs: number | null }>;
+  readonly clipboardReadMs: number | null;
+  readonly clipboardWriteMs: number | null;
+  readonly poolBytes: {
+    readonly before: { readonly block: number; readonly byte: number } | null;
+    readonly after: { readonly block: number; readonly byte: number } | null;
+  };
+  readonly flushMainMaxMs: number | null;
+  readonly flushSyncMaxMs: number | null;
+  readonly diffWaitMaxMs: number | null;
 }
 
 /** The parts of a bench JSON G1 reads (`src/ui/world/bench.ts`' BenchResult, plus measureChrome's additions). */
@@ -253,6 +306,8 @@ interface Bench extends ScreenOf {
   };
   /** SP5b's save leg L11 (SP5b spec §6.2; `bench.ts`' PersistFigures); absent from SP5a's files. */
   readonly persist?: Persist;
+  /** SP5c's paste leg L12 (SP5c spec §10.4; `bench.ts`' PasteFigures); absent from SP5b's files. */
+  readonly paste?: Paste;
   readonly structuralFrames?: ReadonlyArray<{ readonly frame: number; readonly leg: string; readonly kind: string; readonly stutterMs: number }>;
   readonly shaderCache?: string;
 }
@@ -265,8 +320,8 @@ function checkReveal(file: string, b: Bench): void {
 
 /** The shape of a gated Iris Xe Chrome bench file (spec §8.4). */
 function checkBench(file: string, workers: number | null): Bench {
-  expect(existsSync(join(ASSETS_SP5B, file)), `${file} missing: run npm run measure:chrome -- --route bench --gpu iris${workers === 4 ? ' --workers 4' : ''}`).toBe(true);
-  const b = read<Bench>(ASSETS_SP5B, file);
+  expect(existsSync(join(ASSETS_SP5C, file)), `${file} missing: run npm run measure:chrome -- --route bench --gpu iris${workers === 4 ? ' --workers 4' : ''}`).toBe(true);
+  const b = read<Bench>(ASSETS_SP5C, file);
   expect(b.route, `${file}: the ?bench=medium JSON`).toBe('bench=medium');
   expect(b.renderer ?? '', `${file}: the renderer names the Iris Xe`).toMatch(/Iris/i);
   expect(b.sectionRenderer, `${file}: measured on RegionBatch`).toBe('batch');
@@ -282,8 +337,10 @@ function checkBench(file: string, workers: number | null): Bench {
   expect(Array.isArray(b.structuralFrames), `${file}: structuralFrames present`).toBe(true);
   // Every entry names a known leg, so a relabelled leg cannot leave either stutter check reading an empty set (final
   // review GOV-3).
-  const unknown = b.structuralFrames!.filter((e) => !SP4B_LEGS.has(e.leg) && !LIVE_LEGS.has(e.leg) && !EDIT_LEGS.has(e.leg)).map((e) => e.leg);
-  expect(unknown, `${file}: structural frames of a leg outside L0-L11`).toEqual([]);
+  const unknown = b.structuralFrames!
+    .filter((e) => !SP4B_LEGS.has(e.leg) && !LIVE_LEGS.has(e.leg) && !EDIT_LEGS.has(e.leg) && !PASTE_LEGS.has(e.leg))
+    .map((e) => e.leg);
+  expect(unknown, `${file}: structural frames of a leg outside L0-L12`).toEqual([]);
   // SP4b's legs only, so the re-asserted streaming cells stay as SP4b gated them; L7-L9 are `G1.live`'s (SP4c spec §8.4);
   // L10's long frames are its `over33`, an exit check (SP5a spec §6.2), recorded by `G2.edit`.
   const over = b.structuralFrames!.filter((e) => SP4B_LEGS.has(e.leg) && !(e.stutterMs <= OVER_MS));
@@ -299,8 +356,8 @@ metricTest('G1', ['mediumStreamP95', 'mediumStreamOver33', 'mediumStreamDrawCall
 
   const others: Record<string, unknown> = {};
   for (const file of BENCH_OTHERS) {
-    if (!existsSync(join(ASSETS_SP5B, file))) continue;
-    const o = read<Bench>(ASSETS_SP5B, file);
+    if (!existsSync(join(ASSETS_SP5C, file))) continue;
+    const o = read<Bench>(ASSETS_SP5C, file);
     checkReveal(file, o);
     others[file] = {
       renderer: o.renderer, sectionRenderer: o.sectionRenderer, workers: o.workers, displayIntervalMs: o.displayIntervalMs,
@@ -349,8 +406,8 @@ metricTest('G1', ['mediumLiveP95', 'mediumLiveOver33', 'mediumLiveGpuMB'], () =>
   // The w4 file's live legs are recorded, not gated (§8.4); the RTX and Firefox files' live blocks are exit checks.
   const others: Record<string, unknown> = {};
   for (const file of [BENCH_W4, ...BENCH_OTHERS]) {
-    if (!existsSync(join(ASSETS_SP5B, file))) continue;
-    const o = read<Bench>(ASSETS_SP5B, file);
+    if (!existsSync(join(ASSETS_SP5C, file))) continue;
+    const o = read<Bench>(ASSETS_SP5C, file);
     checkLiveReveal(file, o);
     const l = o.live!;
     others[file] = {
@@ -396,8 +453,8 @@ metricTest('G2', ['editVisibleP95'], () => {
   // The RTX, w4 and Firefox files' edit blocks are recorded, never gated (SP5a spec §6.2).
   const others: Record<string, unknown> = {};
   for (const file of [BENCH_W4, ...BENCH_OTHERS]) {
-    if (!existsSync(join(ASSETS_SP5B, file))) continue;
-    const o = read<Bench>(ASSETS_SP5B, file);
+    if (!existsSync(join(ASSETS_SP5C, file))) continue;
+    const o = read<Bench>(ASSETS_SP5C, file);
     if (o.edit === undefined) continue;
     others[file] = {
       renderer: o.renderer, sectionRenderer: o.sectionRenderer, workers: o.workers, displayIntervalMs: o.displayIntervalMs,
@@ -457,8 +514,8 @@ metricTest('G2', ['over33Added', 'p95AddedMs', 'editVisibleAddedMs', 'flushEditV
   // The w4, RTX and Firefox files' persist blocks are recorded, never gated (SP5b spec §6.2).
   const others: Record<string, unknown> = {};
   for (const file of [BENCH_W4, ...BENCH_OTHERS]) {
-    if (!existsSync(join(ASSETS_SP5B, file))) continue;
-    const o = read<Bench>(ASSETS_SP5B, file);
+    if (!existsSync(join(ASSETS_SP5C, file))) continue;
+    const o = read<Bench>(ASSETS_SP5C, file);
     if (o.persist === undefined) continue;
     others[file] = { renderer: o.renderer, sectionRenderer: o.sectionRenderer, workers: o.workers, displayIntervalMs: o.displayIntervalMs, ...o.persist };
   }
@@ -526,8 +583,8 @@ interface Enter extends ScreenOf {
 }
 
 metricTest('G1', ['enterRatio'], () => {
-  expect(existsSync(join(ASSETS_SP5B, ENTER)), `${ENTER} missing: run npm run measure:chrome -- --route enter --gpu iris`).toBe(true);
-  const e = read<Enter>(ASSETS_SP5B, ENTER);
+  expect(existsSync(join(ASSETS_SP5C, ENTER)), `${ENTER} missing: run npm run measure:chrome -- --route enter --gpu iris`).toBe(true);
+  const e = read<Enter>(ASSETS_SP5C, ENTER);
   expect(e.route, `${ENTER}: the ?bench=enter JSON`).toBe('bench=enter');
   expect(e.renderer ?? '', `${ENTER}: the renderer names the Iris Xe (rulings P42)`).toMatch(/Iris/i);
   expect(e.shaderCache, `${ENTER}: measured on a cold driver shader cache (rulings R11)`).toBe('cold');
@@ -538,8 +595,8 @@ metricTest('G1', ['enterRatio'], () => {
 
   const others: Record<string, unknown> = {};
   for (const file of ENTER_OTHERS) {
-    if (!existsSync(join(ASSETS_SP5B, file))) continue;
-    const o = read<Enter>(ASSETS_SP5B, file);
+    if (!existsSync(join(ASSETS_SP5C, file))) continue;
+    const o = read<Enter>(ASSETS_SP5C, file);
     others[file] = {
       renderer: o.renderer ?? null, kept: o.kept, pairRatios: o.pairRatios, enterRatio: o.enterRatio,
       medianUnsavedMs: o.medianUnsavedMs, medianSavedMs: o.medianSavedMs, idbOpenMs: o.idbOpenMs, loadMs: o.loadMs,
@@ -562,3 +619,73 @@ metricTest('G1', ['enterRatio'], () => {
     newWorldRevealMs: n(e.newWorldRevealMs),
   };
 }, 600_000, { outName: 'G1.enter' });
+
+metricTest('G2', ['pasteOver33', 'sweepOver33', 'pasteP95AddedMs', 'housePasteVisibleP95', 'maxPasteVisibleMax', 'ghostSliceMaxMs'], () => {
+  // The streaming call's shape checks (route, Iris Xe, RegionBatch, RD 12, default profile, cold cache), then the paste
+  // block's: L12 whole, L12b's 28 and L12c's 12 operations 'ok' and shown (SP5c spec §10.4).
+  const b = checkBench(BENCH, null);
+  expect(b.paste, `${BENCH}: the paste block (SP5c's L12) is present`).toBeDefined();
+  const p = b.paste!;
+  expect(pasteFailures(p), `${BENCH}: L12 ran whole`).toEqual([]);
+  const gate = pasteGateOf(p);
+
+  // The w4 and RTX files' paste blocks are recorded, never gated (SP5c spec §10.4).
+  const others: Record<string, unknown> = {};
+  for (const file of [BENCH_W4, ...BENCH_OTHERS]) {
+    if (!existsSync(join(ASSETS_SP5C, file))) continue;
+    const o = read<Bench>(ASSETS_SP5C, file);
+    if (o.paste === undefined) continue;
+    const failures = pasteFailures(o.paste);
+    others[file] = {
+      renderer: o.renderer, sectionRenderer: o.sectionRenderer, workers: o.workers, displayIntervalMs: o.displayIntervalMs,
+      failures, ...(failures.length === 0 ? pasteGateOf(o.paste) : {}),
+      L12a: o.paste.L12a, L12b: o.paste.L12b, L12c: o.paste.L12c, L12d: o.paste.L12d,
+      clipboardReadMs: o.paste.clipboardReadMs, clipboardWriteMs: o.paste.clipboardWriteMs, diffWaitMaxMs: o.paste.diffWaitMaxMs,
+      flushMainMaxMs: o.paste.flushMainMaxMs, flushSyncMaxMs: o.paste.flushSyncMaxMs, poolBytes: o.paste.poolBytes,
+    };
+  }
+  mkdirSync(OUT_DIR, { recursive: true });
+  writeFileSync(join(OUT_DIR, 'G2.paste.others.json'), `${JSON.stringify({ id: 'G2', tier: process.env.METRICS_TIER ?? null, others }, null, 2)}\n`);
+
+  // Recorded, not gated (SP5c spec §10.4): numbers, or -1 for a figure with no sample.
+  const n = (v: number | null): number => v ?? -1;
+  const maxOf = (values: ReadonlyArray<number | null>): number => {
+    const v = values.filter((x): x is number => x !== null);
+    return v.length === 0 ? -1 : Math.max(...v);
+  };
+  const parts = { L12a: p.L12a, L12b: p.L12b, L12c: p.L12c, L12d: p.L12d };
+  const perPart: Record<string, number> = {};
+  for (const [name, part] of Object.entries(parts)) {
+    perPart[`${name}P50`] = n(part.p50);
+    perPart[`${name}P95`] = n(part.p95);
+    perPart[`${name}P99`] = n(part.p99);
+    perPart[`${name}Max`] = n(part.max);
+    perPart[`${name}Over33`] = part.over33;
+    perPart[`${name}GhostBuildMs`] = n(part.ghostBuildMs);
+    perPart[`${name}GhostBuildFrames`] = n(part.ghostBuildFrames);
+    perPart[`${name}OverlayMainMaxMs`] = n(part.overlayMainMaxMs);
+    perPart[`${name}TargetReads`] = part.targetReads;
+    perPart[`${name}DrawCallsMax`] = n(part.drawCallsMax);
+    perPart[`${name}ToolDrawCallsMax`] = part.toolDrawCallsMax;
+  }
+  const { before, after } = p.poolBytes;
+  return {
+    ...gate,
+    displayIntervalMs: b.displayIntervalMs,
+    clipboardReadMs: n(p.clipboardReadMs),
+    clipboardWriteMs: n(p.clipboardWriteMs),
+    // Expected at most the longest `editMs` plus one sub-batch (SP5c spec §10.4).
+    diffWaitMaxMs: n(p.diffWaitMaxMs),
+    editMaxMs: maxOf(p.ops.map((o) => o.editMs)),
+    subBatchMaxMs: maxOf(p.ops.map((o) => o.subBatchMaxMs)),
+    flushMainMaxMs: n(p.flushMainMaxMs),
+    flushSyncMaxMs: n(p.flushSyncMaxMs),
+    toolDrawCallsMax: Math.max(...Object.values(parts).map((s) => s.toolDrawCallsMax)),
+    drawCallsMax: maxOf(Object.values(parts).map((s) => s.drawCallsMax)),
+    poolBlockBytesBefore: before?.block ?? -1,
+    poolBlockBytesAfter: after?.block ?? -1,
+    poolByteBytesBefore: before?.byte ?? -1,
+    poolByteBytesAfter: after?.byte ?? -1,
+    ...perPart,
+  };
+}, 600_000, { outName: 'G2.paste' });

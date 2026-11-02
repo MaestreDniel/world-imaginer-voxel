@@ -133,12 +133,12 @@ export const THRESHOLDS: ThresholdTable = {
     perWorldStateWrong: { max: 0, activeFrom: 'SP5b' }, remapMismatches: { max: 0, activeFrom: 'SP5b' },
   },
   // SP4a spec §9.1, §9.5 (D24): G1's three Medium cells on the static world, from the Chrome flight on the Iris Xe
-  // (`g1.metric.ts`, `flight-iris-chrome.json`, re-measured on SP5b's code into `assets/sp5b/`). SP4b spec §8.2,
-  // §8.4 (D23): the six Medium streaming cells, from the committed Iris Xe Chrome bench files (`G1.streaming`, re-read
-  // from `assets/sp5b/`). SP4c spec §8.2, §8.4 (D22): the three Medium live cells over the bench's Apply, undo and
-  // teleport legs, from `assets/sp5b/bench-iris-chrome.json`'s `live` block (`G1.live`). SP5b spec §6.2 (D28):
-  // entering a saved world against the same world opened unsaved, the median of the kept pairs' ratios, from
-  // `assets/sp5b/enter-iris-chrome.json` (`G1.enter`).
+  // (`g1.metric.ts`, `flight-iris-chrome.json`, re-measured on SP5c's code into `assets/sp5c/`, SP5c spec D30). SP4b
+  // spec §8.2, §8.4 (D23): the six Medium streaming cells, from the committed Iris Xe Chrome bench files
+  // (`G1.streaming`, re-read from `assets/sp5c/`). SP4c spec §8.2, §8.4 (D22): the three Medium live cells over the
+  // bench's Apply, undo and teleport legs, from `assets/sp5c/bench-iris-chrome.json`'s `live` block (`G1.live`). SP5b
+  // spec §6.2 (D28): entering a saved world against the same world opened unsaved, the median of the kept pairs'
+  // ratios, from `assets/sp5c/enter-iris-chrome.json` (`G1.enter`).
   G1: {
     mediumStaticP95: { max: 16.7, activeFrom: 'SP4a' }, mediumStaticDrawCalls: { max: 100, activeFrom: 'SP4a' }, mediumStaticMainP95: { max: 6, activeFrom: 'SP4a' },
     mediumStreamP95: { max: 16.7, activeFrom: 'SP4b' },
@@ -153,10 +153,12 @@ export const THRESHOLDS: ThresholdTable = {
     enterRatio: { max: 1.10, activeFrom: 'SP5b' },
   },
   // SP5a spec §6.2 (D26): G2's edit part, the post → the frame the edited column's new mesh is shown, over the bench's
-  // edit leg L10, from `assets/sp5b/bench-iris-chrome.json`'s `edit` block (`g1.metric.ts`, `G2.edit`). SP5b spec §6.2
+  // edit leg L10, from `assets/sp5c/bench-iris-chrome.json`'s `edit` block (`g1.metric.ts`, `G2.edit`). SP5b spec §6.2
   // (D28): the flush parts, what autosave adds over the bench's save leg L11, from the same file's `persist` block
-  // (`G2.flush`); the spec's `flushMainP95Ms` max 0.3 is held pending the user's check (D28), recorded, not a row yet.
-  // G2's Apply part stays SP10's.
+  // (`G2.flush`); the spec's `flushMainP95Ms` max 0.3 is recorded, not gated (the user's check decided it under D28).
+  // SP5c spec §10.4 (D28): the paste parts over the bench's paste leg L12, pasting, moving and cutting a large build,
+  // the maximum pastes and the ghost swept, from the same file's `paste` block (`G2.paste`). G2's Apply part stays
+  // SP10's.
   G2: {
     editVisibleP95: { max: 50, activeFrom: 'SP5a' },
     over33Added: { max: 1, activeFrom: 'SP5b' },
@@ -164,6 +166,12 @@ export const THRESHOLDS: ThresholdTable = {
     editVisibleAddedMs: { max: 8.33, activeFrom: 'SP5b' },
     flushEditVisibleP95: { max: 50, activeFrom: 'SP5b' },
     replyDuringFlushP95Ms: { max: 5, activeFrom: 'SP5b' },
+    pasteOver33: { max: 0, activeFrom: 'SP5c' },
+    sweepOver33: { max: 0, activeFrom: 'SP5c' },
+    pasteP95AddedMs: { max: 4.17, activeFrom: 'SP5c' },
+    housePasteVisibleP95: { max: 500, activeFrom: 'SP5c' },
+    maxPasteVisibleMax: { max: 2000, activeFrom: 'SP5c' },
+    ghostSliceMaxMs: { max: 4, activeFrom: 'SP5c' },
   },
   // SP3e spec §5.3 (D16): the master's diagnostics on the drafts, recorded on every tier from SP3e (`.out/Z1-Z3.json`),
   // gated on the quick and full tiers once SP12 starts.
