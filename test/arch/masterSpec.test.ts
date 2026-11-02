@@ -97,7 +97,10 @@
  * which exists (`SP5C_MODULES`, its first row added with the first module). The paste parts' commit (`clipboard.metric.ts`,
  * SP5c §10.1, §13): §6.4's L3 and E1-E6 rows name the paste parts, which `THRESHOLDS` holds activeFrom SP5c on every
  * tier; §1's test entry names `metrics/clipboard.metric.ts`. D28's lever 3 (Task 33): §2.7's `wi10` v2, its header and
- * `history` line (moved from the SP5b describe) and its `historySteps` line.
+ * `history` line (moved from the SP5b describe) and its `historySteps` line. The exit (SP5c §15, Task 36): the overlay
+ * was built (`render/ghost.ts`'s replaced cells), so SP5c's cut line was not taken and its Cut line, the receivers and
+ * SP10's "Received from SP5c" say nothing moved; SP5c's "Received from SP5b" ends "(delivered: …)", pinned with `toBe`
+ * (moved from the SP5b describe, its SP5b-spec half kept).
  */
 import { existsSync, readdirSync, readFileSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
@@ -1468,18 +1471,6 @@ describe('master spec amendments (SP5b §9)', () => {
     expect(text).toContain('SP5b worlds-menu polish (the Load list\'s place count) → SP10 (delivered in SP5b, so nothing moved);');
   });
 
-  test('the user\'s UX notes from SP5b\'s check are handed to SP5c, in SP5b spec §10 and master §10\'s SP5c entry (SP5b spec §10)', () => {
-    const notes = 'a Save button for Load world\'s Rename, which keeps the name only with Enter; a notice, when Modify terrain is switched on, that a terrain change will make a backup copy; a hover tooltip on the map\'s disabled parameters ("enable \'Modify terrain\' to edit here")';
-    const received = spEntry('SP5c', 'SP6').split('\n').find((l) => l.startsWith('- Received from SP5b (its spec §10; amended by SP5b):'));
-    expect(received, 'SP5c has no "Received from SP5b" line').toBeDefined();
-    expect(received).toBe(`- Received from SP5b (its spec §10; amended by SP5b): the user's notes from SP5b's check (2026-11-01; the user: "Lo podemos arreglar en SP5c"): ${notes}.`);
-    const sp5b = readFileSync(fileURLToPath(new URL('../../docs/superpowers/specs/2026-10-29-sp5b-saved-worlds-design.md', import.meta.url)), 'utf8');
-    const at10 = sp5b.indexOf('## 10. Notes handed to later SPs');
-    const sp5c = sp5b.slice(at10, sp5b.indexOf('## 11. ', at10)).split('\n').find((l) => l.startsWith('- **SP5c:**'));
-    expect(sp5c, 'SP5b spec §10 has no SP5c note').toBeDefined();
-    expect(sp5c).toContain(`The user's notes from SP5b's check (2026-11-01; the user: "Lo podemos arreglar en SP5c"): ${notes}. Master §10's SP5c entry receives them.`);
-  });
-
   test('§2.7\'s `ColumnDiffV1` header genKey is informative (SP5b spec D21, §9)', () => {
     const at = text.indexOf('### 2.7 ');
     const s27 = text.slice(at, text.indexOf('## 3. Generation', at));
@@ -1813,18 +1804,22 @@ describe('master spec amendments (SP5c §13)', () => {
     expect(sp5c.startsWith('**SP5c — The selection tool** (L; SP5b). Spec: `2026-11-01-sp5c-selection-tool-design.md`.'), 'the SP5c header').toBe(true);
     expect(sp5c).toContain('Q (the tool), Ctrl+C / Ctrl+X / Ctrl+V, N (move, the source back to the terrain); a ghost that rests on the aimed surface, turned with the wheel; one clipboard per browser in `meta`; at most 64 blocks a side and 32,768 changed blocks per operation (SP5c).');
     expect(sp5c).toContain('**Exit:** as the SP5c spec §16 (`L3.paste`, `E3.paste`, `E5.paste`; `paste.max`, `paste.maxLit`; `G2.paste` with the SP5c spec\'s thresholds; the three notes received from SP5b; the user\'s check)');
-    expect(sp5c.split('\n').some((l) => l.startsWith('- **Cut line:** the replaced-block overlay (the red cubes; the label\'s counts "n blocks change, m replaced" stay) (→ SP10)')), 'the SP5c entry has no `- **Cut line:** the replaced-block overlay` line').toBe(true);
+    // The exit (SP5c spec §15): the overlay shipped (`render/ghost.ts`'s replaced cells), so the cut line was not taken.
+    expect(readFileSync(`${ROOT_DIR}src/render/ghost.ts`, 'utf8')).toContain('const object = new InstancedMesh(geometry, material, REPLACED_MAX);');
+    const cut = sp5c.split('\n').find((l) => l.startsWith('- **Cut line:**'));
+    expect(cut).toBe('- **Cut line:** the replaced-block overlay (the red cubes; the label\'s counts "n blocks change, m replaced" stay) (→ SP10). It was not taken: the overlay shipped in SP5c, so nothing moved.');
     expect(sp5c).not.toContain('**Exit** and **Cut line:** set by the SP5c spec');
     const receivers = text.split('\n').find((l) => l.startsWith('**Cut lines.**'));
     expect(receivers, 'no `**Cut lines.**` paragraph in §10').toBeDefined();
-    expect(receivers).toContain('SP5c replaced-block overlay → SP10 (worded by the SP5c spec)');
+    expect(receivers).toContain('SP5c replaced-block overlay → SP10 (delivered in SP5c, so nothing moved);');
+    expect(receivers).not.toContain('(worded by the SP5c spec)');
     const received = (id: SubProjectId, next: SubProjectId): string | undefined =>
       spEntry(id, next).split('\n').find((l) => l.startsWith('- Received from SP5c (its spec §14; amended by SP5c):'));
     const handed: Array<[id: SubProjectId, next: SubProjectId, phrases: string[]]> = [
       ['SP7', 'SP8a', ['8k-updates-per-tick']],
       ['SP8a', 'SP8b', ['rotateState']],
       ['SP8c', 'SP9', ['one break-or-place event']],
-      ['SP10', 'SP11', ['SP5c\'s nine actions', 'Configurable Ctrl+Z / Ctrl+Y for blocks']],
+      ['SP10', 'SP11', ['SP5c\'s nine actions', 'Configurable Ctrl+Z / Ctrl+Y for blocks', 'The replaced-block overlay, SP5c\'s cut line, was delivered in SP5c, so nothing moved here (the SP5c spec §15).']],
       ['SP11', 'SP12', ['the ghost material']],
     ];
     for (const [id, next, phrases] of handed) {
@@ -1833,5 +1828,18 @@ describe('master spec amendments (SP5c §13)', () => {
       for (const phrase of phrases) expect(line, `${id}'s "Received from SP5c" line`).toContain(phrase);
     }
     expect(spEntry('SP6', 'SP7')).not.toContain('Received from SP5c');
+    expect(received('SP10', 'SP11')).not.toContain('if SP5c\'s cut line is taken');
+  });
+
+  test('the user\'s UX notes from SP5b\'s check: handed to SP5c in SP5b spec §10, and master §10\'s SP5c entry received them as delivered (SP5b spec §10; SP5c spec §7, §13; moved from the SP5b describe)', () => {
+    const notes = 'a Save button for Load world\'s Rename, which keeps the name only with Enter; a notice, when Modify terrain is switched on, that a terrain change will make a backup copy; a hover tooltip on the map\'s disabled parameters ("enable \'Modify terrain\' to edit here")';
+    const received = spEntry('SP5c', 'SP6').split('\n').find((l) => l.startsWith('- Received from SP5b (its spec §10; amended by SP5b):'));
+    expect(received, 'SP5c has no "Received from SP5b" line').toBeDefined();
+    expect(received).toBe(`- Received from SP5b (its spec §10; amended by SP5b): the user's notes from SP5b's check (2026-11-01; the user: "Lo podemos arreglar en SP5c"): ${notes} (delivered: the SP5c spec §7, D17-D19).`);
+    const sp5b = readFileSync(fileURLToPath(new URL('../../docs/superpowers/specs/2026-10-29-sp5b-saved-worlds-design.md', import.meta.url)), 'utf8');
+    const at10 = sp5b.indexOf('## 10. Notes handed to later SPs');
+    const sp5c = sp5b.slice(at10, sp5b.indexOf('## 11. ', at10)).split('\n').find((l) => l.startsWith('- **SP5c:**'));
+    expect(sp5c, 'SP5b spec §10 has no SP5c note').toBeDefined();
+    expect(sp5c).toContain(`The user's notes from SP5b's check (2026-11-01; the user: "Lo podemos arreglar en SP5c"): ${notes}. Master §10's SP5c entry receives them.`);
   });
 });
