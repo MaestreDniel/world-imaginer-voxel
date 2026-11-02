@@ -1,5 +1,5 @@
 {
-  "sha256": "d58917bbe869e50c67387e1fbb9c89c3c6eaf0c10b58bdcb4089107bdfe8258f",
+  "sha256": "4044585b51de15c25801c9417e068f8ff7990e198d5741142ddac1a0296c9d93",
   "canonical": {
     "startedSps": [
       "SP0",
@@ -421,6 +421,10 @@
       "L3": {
         "mismatches": {
           "activeFrom": "SP5a",
+          "max": 0
+        },
+        "pasteDirtyMissing": {
+          "activeFrom": "SP5c",
           "max": 0
         },
         "pasteLightMismatches": {

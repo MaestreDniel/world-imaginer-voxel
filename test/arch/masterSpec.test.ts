@@ -1734,7 +1734,7 @@ describe('master spec amendments (SP5c §13)', () => {
     expect(e).toContain('reload with edits hash (SP5c: E3 and E5 with pastes, their undo and redo, and the clipboard across a reload);');
     // The parts the rows name, as THRESHOLDS holds them: max 0 from SP5c, every tier (no `tiers`), exact.
     const parts: Array<[id: 'L3' | 'E3' | 'E5', parts: string[]]> = [
-      ['L3', ['pasteValueMismatches', 'pasteLightMismatches', 'pasteLimboOver']],
+      ['L3', ['pasteValueMismatches', 'pasteLightMismatches', 'pasteLimboOver', 'pasteDirtyMissing']],
       ['E3', ['pasteUndoMismatches', 'pasteRedoMismatches', 'clipboardReloadMismatches', 'pasteLeaveMismatches']],
       ['E5', ['pasteStale']],
     ];

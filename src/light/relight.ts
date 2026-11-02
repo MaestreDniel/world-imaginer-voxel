@@ -12,6 +12,13 @@
  *    voxel, cost max(1, effective opacity), strict increase only.
  * The result equals a full `lightRegion` of each column of the 3 × 3: a change reaches at most 14 voxels from the
  * edited voxel or its light column, so an edit in the centre column never reaches the 3 × 3's sides.
+ *
+ * `relightMany` (SP5c spec §10.4, D28's lever 4) relights once after many voxels of the centre column were written: the
+ * same steps, seeded from every written voxel (each with its state and fluid before the writes) and every light column
+ * they lie in (each with its `LIGHT_BLOCKING` before), so a bulk batch relights once per touched section instead of
+ * once per edit. Seeding the removal and the re-add from all of them at once is the classic multi-source relight: each
+ * seed is removed or re-added under the same rule as alone, the removal BFS runs over the union, and the re-add then
+ * settles every voxel at its highest reachable level. `relight` is `relightMany` with one seed.
  */
 import { AIR } from '../world/blocks/index';
 import { FACE_DOWN, FACE_EAST, FACE_NORTH, FACE_SOUTH, FACE_UP, FACE_WEST } from '../world/blocks/kinds';
@@ -78,6 +85,35 @@ export interface RelightReport {
   readonly edges: Uint8Array;
 }
 
+/**
+ * The voxels `relightMany` relights after (SP5c D28's lever 4), all in the centre column of the 3 × 3: `n` seeds, each
+ * a voxel index `at[k]` with its state and fluid before the writes (each voxel once), and `cols` light columns, each a
+ * local position `col[c]` = z · 48 + x with its `LIGHT_BLOCKING` row before the writes (`colLb[c]`, 0 … 384). Every
+ * seed's light column is listed. The arrays hold up to `SEED_CAPACITY` seeds and `COL_CAPACITY` columns.
+ */
+export interface RelightSeeds {
+  n: number;
+  readonly at: Int32Array;
+  readonly state: Int32Array;
+  readonly fluid: Int32Array;
+  cols: number;
+  readonly col: Int32Array;
+  readonly colLb: Int32Array;
+}
+
+/** A section's voxels: the most seeds one `relightMany` takes. */
+export const SEED_CAPACITY = 4096;
+/** A column's light columns. */
+export const COL_CAPACITY = 256;
+
+/** Empty seeds of full capacity. */
+export function createRelightSeeds(): RelightSeeds {
+  return {
+    n: 0, at: new Int32Array(SEED_CAPACITY), state: new Int32Array(SEED_CAPACITY), fluid: new Int32Array(SEED_CAPACITY),
+    cols: 0, col: new Int32Array(COL_CAPACITY), colLb: new Int32Array(COL_CAPACITY),
+  };
+}
+
 /** The relight's reusable state (one per sim worker). */
 export interface RelightScratch {
   /** The removal ring, `index << 4 | old level`: each voxel at most once per channel, read again for the report. */
@@ -88,15 +124,24 @@ export interface RelightScratch {
   readonly removed: Uint8Array;
   /** The report `relight` returns, rewritten by each call. */
   readonly report: RelightReport;
+  /** Per voxel, a seed's faces closed before and after its write, | 0x80 (0 for a voxel that is not a seed). */
+  readonly seedFaces: Uint8Array;
+  /** Each seed's light byte before the relight. */
+  readonly oldLight: Uint8Array;
+  /** `relight`'s one seed. */
+  readonly one: RelightSeeds;
 }
 
-/** Two 4 MB rings, a 128 KB removal bitset and the 9-column report. */
+/** Two 4 MB rings, a 128 KB removal bitset, the 9-column report, the seeds' 864 KB face marks and one seed. */
 export function createRelightScratch(): RelightScratch {
   return {
     removal: new Int32Array(RING),
     readd: new Int32Array(RING),
     removed: new Uint8Array(RING >> 3),
     report: { sections: new Uint32Array(9), edges: new Uint8Array(9) },
+    seedFaces: new Uint8Array(VOXELS),
+    oldLight: new Uint8Array(SEED_CAPACITY),
+    one: { n: 0, at: new Int32Array(1), state: new Int32Array(1), fluid: new Int32Array(1), cols: 0, col: new Int32Array(1), colLb: new Int32Array(1) },
   };
 }
 
@@ -113,10 +158,6 @@ let scr: RelightScratch;
 let tab: LightTables;
 let shift = 0;
 let keep = 0;
-/** The edited voxel, whose crossings are open when open before or after the edit. */
-let edited = -1;
-/** Its `FULL_FACES` before and after, intersected (a face closed in both worlds). */
-let editedFull = 0;
 let rLen = 0;
 let aHead = 0;
 let aLen = 0;
@@ -188,7 +229,9 @@ function removeInto(n: number, lu: number, opp: number): void {
 }
 
 function removeAround(u: number, lu: number): void {
-  const fu = u === edited ? editedFull : tab.fullFaces[acc.block(u)]!;
+  // A seed's crossings are open when open before or after its write: its faces closed in both worlds.
+  const m = scr.seedFaces[u]!;
+  const fu = m !== 0 ? m & 0x7F : tab.fullFaces[acc.block(u)]!;
   const row = (u / W) | 0;
   const x = u - row * W;
   const y = (row / W) | 0;
@@ -257,8 +300,8 @@ function frontierAround(v: number): void {
   if (y > 0) pushA((v - SY) << 4);
 }
 
-/** One channel (`sh` 0 block, 4 sky) of `relight`; `oldLevel` is the edited voxel's level before the edit. */
-function channel(i: number, before: RelightBefore, sh: number, oldLevel: number): void {
+/** One channel (`sh` 0 block, 4 sky) of `relightMany`; each seed's level before is in `scr.oldLight`. */
+function channel(sd: RelightSeeds, sh: number): void {
   shift = sh;
   keep = ~(15 << sh) & 0xFF;
   rLen = 0;
@@ -266,61 +309,66 @@ function channel(i: number, before: RelightBefore, sh: number, oldLevel: number)
   aLen = 0;
   const sky = sh === 4;
   const full = tab.fullFaces;
-  const state = acc.block(i);
-  const fl = acc.fluid(i);
-  const oldOp = EFF_OPACITY(before.state, before.fluid, tab);
-  const newOp = EFF_OPACITY(state, fl, tab);
-  const oldFull = full[before.state]!;
-  const newFull = full[state]!;
-  const newEmit = sky ? 0 : EFF_EMIT(state, fl, tab);
-  const weaker = newOp > oldOp || (newFull & ~oldFull) !== 0 || (!sky && newEmit < EFF_EMIT(before.state, before.fluid, tab));
-  const opened = newOp < oldOp || (oldFull & ~newFull) !== 0;
-  edited = i;
-  editedFull = oldFull & newFull;
-
-  const row = (i / W) | 0;
-  const x = i - row * W;
-  const y = (row / W) | 0;
-  const z = row - y * W;
-  let fall = false;
   if (sky) {
-    // The straight fall's re-seed between the old and the new LIGHT_BLOCKING of the edited light column.
-    const from = before.lightBlocking;
-    const to = acc.lightBlocking(x, z);
-    const p = z * W + x;
-    for (let r = from; r < to; r++) {
-      const v = r * SY + p;
-      const lv = levelOf(v);
-      if (lv > 0) remove(v, lv);
-    }
-    for (let r = to; r < from; r++) {
-      const v = r * SY + p;
-      if (levelOf(v) !== 15) {
-        setLevel(v, 15);
-        mark(v);
+    // The straight fall's re-seed between the old and the new LIGHT_BLOCKING of each written light column.
+    for (let c = 0; c < sd.cols; c++) {
+      const p = sd.col[c]!;
+      const z = (p / W) | 0;
+      const x = p - z * W;
+      const from = sd.colLb[c]!;
+      const to = acc.lightBlocking(x, z);
+      for (let r = from; r < to; r++) {
+        const v = r * SY + p;
+        const lv = levelOf(v);
+        if (lv > 0) remove(v, lv);
       }
-      pushA((v << 4) | 15);
-    }
-    fall = y >= to;
-  }
-  if (weaker) {
-    if (fall) {
-      // The edited voxel stays 15 in the fall; what it lit across a face it now closes is removed all the same.
-      removeAround(i, oldLevel);
-    } else {
-      const cur = levelOf(i);
-      if (cur > 0) remove(i, cur);
+      for (let r = to; r < from; r++) {
+        const v = r * SY + p;
+        if (levelOf(v) !== 15) {
+          setLevel(v, 15);
+          mark(v);
+        }
+        pushA((v << 4) | 15);
+      }
     }
   }
-  if (opened) {
-    // An opened voxel takes light from its neighbours and passes its own on through the faces it opened.
-    frontierAround(i);
-    pushA(i << 4);
-  }
-  if (newEmit > 0) pushA((i << 4) | newEmit);
-  if (sky && y === H - 1 && !fall) {
-    const s = topSeed(i);
-    if (s > 0) pushA((i << 4) | s);
+  for (let k = 0; k < sd.n; k++) {
+    const i = sd.at[k]!;
+    const bState = sd.state[k]!;
+    const bFluid = sd.fluid[k]!;
+    const state = acc.block(i);
+    const fl = acc.fluid(i);
+    const oldOp = EFF_OPACITY(bState, bFluid, tab);
+    const newOp = EFF_OPACITY(state, fl, tab);
+    const oldFull = full[bState]!;
+    const newFull = full[state]!;
+    const newEmit = sky ? 0 : EFF_EMIT(state, fl, tab);
+    const weaker = newOp > oldOp || (newFull & ~oldFull) !== 0 || (!sky && newEmit < EFF_EMIT(bState, bFluid, tab));
+    const opened = newOp < oldOp || (oldFull & ~newFull) !== 0;
+    const row = (i / W) | 0;
+    const x = i - row * W;
+    const y = (row / W) | 0;
+    const z = row - y * W;
+    const fall = sky && y >= acc.lightBlocking(x, z);
+    if (weaker) {
+      if (fall) {
+        // The seed stays 15 in the fall; what it lit across a face it now closes is removed all the same.
+        removeAround(i, (scr.oldLight[k]! >> sh) & 15);
+      } else {
+        const cur = levelOf(i);
+        if (cur > 0) remove(i, cur);
+      }
+    }
+    if (opened) {
+      // An opened voxel takes light from its neighbours and passes its own on through the faces it opened.
+      frontierAround(i);
+      pushA(i << 4);
+    }
+    if (newEmit > 0) pushA((i << 4) | newEmit);
+    if (sky && y === H - 1 && !fall) {
+      const s = topSeed(i);
+      if (s > 0) pushA((i << 4) | s);
+    }
   }
 
   // The removal BFS: the ring is read in order while it grows, never wrapping (each voxel is zeroed once).
@@ -343,20 +391,52 @@ function channel(i: number, before: RelightBefore, sh: number, oldLevel: number)
 /**
  * Relights the 3 × 3 after the voxel at `i` was written (its new state and fluid read through `a`, the column's new
  * `LIGHT_BLOCKING` through `a.lightBlocking`); `before` holds the voxel's state and fluid and the column's
- * `LIGHT_BLOCKING` row before the edit. Returns `s.report`.
+ * `LIGHT_BLOCKING` row before the edit. Returns `s.report`. `relightMany` with one seed.
  */
 export function relight(a: RelightAccess, s: RelightScratch, i: number, before: RelightBefore, t: LightTables = TABLES): RelightReport {
   if ((i | 0) !== i || i < 0 || i >= VOXELS) throw new RangeError(`relight: voxel ${i} outside the 3 × 3 (0 … ${VOXELS - 1})`);
-  if ((before.lightBlocking | 0) !== before.lightBlocking || before.lightBlocking < 0 || before.lightBlocking > H) {
-    throw new RangeError(`relight: lightBlocking row ${before.lightBlocking} outside 0 … ${H}`);
+  const one = s.one;
+  one.n = 1;
+  one.at[0] = i;
+  one.state[0] = before.state;
+  one.fluid[0] = before.fluid;
+  one.cols = 1;
+  one.col[0] = i % SY;
+  one.colLb[0] = before.lightBlocking;
+  return relightMany(a, s, one, t);
+}
+
+/**
+ * Relights the 3 × 3 once after the seeds' voxels were written (SP5c D28's lever 4): their new states and fluid read
+ * through `a`, their columns' new `LIGHT_BLOCKING` through `a.lightBlocking`; `seeds` holds each voxel's state and fluid
+ * and each light column's `LIGHT_BLOCKING` row before the writes. Returns `s.report`, the changes over all of them.
+ */
+export function relightMany(a: RelightAccess, s: RelightScratch, seeds: RelightSeeds, t: LightTables = TABLES): RelightReport {
+  if (seeds.n < 0 || seeds.n > SEED_CAPACITY || seeds.n > seeds.at.length) throw new RangeError(`relight: ${seeds.n} seeds (at most ${SEED_CAPACITY})`);
+  for (let k = 0; k < seeds.n; k++) {
+    const i = seeds.at[k]!;
+    if (i < 0 || i >= VOXELS) throw new RangeError(`relight: voxel ${i} outside the 3 × 3 (0 … ${VOXELS - 1})`);
+  }
+  for (let c = 0; c < seeds.cols; c++) {
+    const lb = seeds.colLb[c]!;
+    if (lb < 0 || lb > H) throw new RangeError(`relight: lightBlocking row ${lb} outside 0 … ${H}`);
   }
   acc = a;
   scr = s;
   tab = t;
   s.report.sections.fill(0);
   s.report.edges.fill(0);
-  const old = a.light(i);
-  channel(i, before, 0, old & 15);
-  channel(i, before, 4, (old >> 4) & 15);
+  const full = t.fullFaces;
+  for (let k = 0; k < seeds.n; k++) {
+    const i = seeds.at[k]!;
+    s.oldLight[k] = a.light(i);
+    s.seedFaces[i] = (full[seeds.state[k]!]! & full[a.block(i)]!) | 0x80;
+  }
+  try {
+    channel(seeds, 0);
+    channel(seeds, 4);
+  } finally {
+    for (let k = 0; k < seeds.n; k++) s.seedFaces[seeds.at[k]!] = 0;
+  }
   return s.report;
 }

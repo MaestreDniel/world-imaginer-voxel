@@ -7,7 +7,7 @@
 import { describe, expect, test } from 'vitest';
 import { createLightScratch, DEFAULT_LIGHT_TABLES, lightRegion, type LightScratch, type LightTables } from '../../src/light/initial';
 import {
-  createRelightScratch, EDGE_E, EDGE_N, EDGE_NE, EDGE_NW, EDGE_S, EDGE_SE, EDGE_SW, EDGE_W, relight,
+  createRelightScratch, createRelightSeeds, EDGE_E, EDGE_N, EDGE_NE, EDGE_NW, EDGE_S, EDGE_SE, EDGE_SW, EDGE_W, relight, relightMany,
   type RelightAccess, type RelightReport,
 } from '../../src/light/relight';
 import { LAVA_SOURCE, NO_FLUID, WATER_SOURCE } from '../../src/world/blocks/fluid';
@@ -465,4 +465,123 @@ describe('relight: random edits (SP5a spec §2.3)', () => {
       expect(rows.has(383)).toBe(true);
     }, 60_000);
   }
+});
+
+describe('relightMany: one relight after many writes (SP5c spec §10.4, D28\'s lever 4)', () => {
+  const seeds = createRelightSeeds();
+  /**
+   * Writes every (x, r, z, state, fluid) of `batch` in the centre column (a voxel written twice keeps its first value
+   * as its seed's before), patches each written light column's LIGHT_BLOCKING, and relights once.
+   */
+  function batchEdit(w: World, batch: ReadonlyArray<readonly [number, number, number, number, number]>): RelightReport {
+    seeds.n = 0;
+    seeds.cols = 0;
+    const seen = new Set<number>();
+    const colSeen = new Set<number>();
+    for (const [x, r, z, state, fluid] of batch) {
+      if (x < 16 || x > 31 || z < 16 || z > 31) throw new Error(`edit (${x}, ${z}) outside the centre column`);
+      const k = wi(x, r, z);
+      const p = (z + OFF) * WX + x + OFF;
+      if (!seen.has(k)) {
+        seen.add(k);
+        seeds.at[seeds.n] = li(x, r, z);
+        seeds.state[seeds.n] = w.blocks[k]!;
+        seeds.fluid[seeds.n] = w.fluid[k]!;
+        seeds.n++;
+      }
+      if (!colSeen.has(p)) {
+        colSeen.add(p);
+        seeds.col[seeds.cols] = z * L + x;
+        seeds.colLb[seeds.cols] = w.lb[p]!;
+        seeds.cols++;
+      }
+      w.blocks[k] = state;
+      w.fluid[k] = fluid;
+    }
+    for (const [x, r, z] of batch) {
+      const p = (z + OFF) * WX + x + OFF;
+      w.lb[p] = columnLb(w, x, z);
+      writeRegions(x, r, z, w.blocks[wi(x, r, z)]!, w.fluid[wi(x, r, z)]!, w.lb[p]!);
+    }
+    w.dirty.fill(0);
+    return relightMany(w.access, scratch, seeds, w.t);
+  }
+
+  test('a 16 × 16 stone slab over a lit room, then a torch ring under it, then both removed: equals after each', () => {
+    // A room x, z 16 … 31, rows 150 … 160 open to the sky in rock up to row 160.
+    const w = world((x, r, z) => (x >= 16 && x <= 31 && z >= 16 && z <= 31 && r >= 150 ? AIR : rock(160)(x, r, z)));
+    const slab: Array<[number, number, number, number, number]> = [];
+    for (let z = 16; z <= 31; z++) for (let x = 16; x <= 31; x++) slab.push([x, 160, z, STONE, NO_FLUID]);
+    let rep = batchEdit(w, slab);
+    expectEqualsReference(w, 'slab placed');
+    expect(sky(w, 23, 155, 23)).toBe(0);
+    expect(rep.sections[4]).not.toBe(0);
+    const ring: Array<[number, number, number, number, number]> = [];
+    for (let x = 17; x <= 30; x += 3) ring.push([x, 152, 17, TORCH, NO_FLUID], [x, 152, 30, GLASS, NO_FLUID]);
+    rep = batchEdit(w, ring);
+    expectEqualsReference(w, 'torches and glass placed');
+    expect(blk(w, 17, 152, 17)).toBe(14);
+    rep = batchEdit(w, [...slab, ...ring].map(([x, r, z]) => [x, r, z, AIR, NO_FLUID] as const));
+    expectEqualsReference(w, 'slab, torches and glass removed');
+    expect(sky(w, 23, 150, 23)).toBe(15);
+  });
+
+  for (let k = 1; k <= 3; k++) {
+    test(`random batches ${k}/3: 12 batches of 1-400 random writes in the centre column (seeded, stone, glass, ice, torch, wall torch, water, lava, a voxel written twice), each relit once: equals after each, the report the changes`, () => {
+      const ground = (x: number, z: number) => 310 + (((x + 16) * 5 + (z + 16) * 3) & 7);
+      const cave = (x: number, r: number, z: number) => x >= 18 && x <= 29 && z >= 18 && z <= 29 && r >= 280 && r <= 291;
+      const w = world(
+        (x, r, z) => {
+          if (x === 20 && r === 281 && z === 20) return TORCH;
+          if (cave(x, r, z)) return AIR;
+          return r <= ground(x, z) ? STONE : AIR;
+        },
+        (x, r, z) => (x === 28 && r === 280 && z === 28 ? LAVA_SOURCE : NO_FLUID),
+      );
+      const kinds: Array<[state: number, fluid: number]> = [
+        [AIR, NO_FLUID], [AIR, NO_FLUID], [STONE, NO_FLUID], [GLASS, NO_FLUID], [ICE, NO_FLUID], [TORCH, NO_FLUID],
+        [WALL_TORCH, NO_FLUID], [LADDER, WATER_SOURCE], [AIR, WATER_SOURCE], [AIR, LAVA_SOURCE],
+      ];
+      const next = testRng(0x5C5C + k);
+      for (let b = 0; b < 12; b++) {
+        const n = 1 + (next() % 400);
+        // A batch within a few rows (as one section's write), or spread over the column.
+        const r0 = next() % 2 === 0 ? 270 + (next() % 50) : -1;
+        const batch: Array<[number, number, number, number, number]> = [];
+        for (let j = 0; j < n; j++) {
+          const x = 16 + (next() % 16);
+          const z = 16 + (next() % 16);
+          const r = r0 >= 0 ? r0 + (next() % 16) : next() % H;
+          const [state, fluid] = kinds[next() % kinds.length]!;
+          batch.push([x, Math.min(H - 1, r), z, state, fluid]);
+        }
+        // A voxel written twice: the second write's value stands.
+        const [x, r, z] = batch[0]!;
+        const [state, fluid] = kinds[next() % kinds.length]!;
+        batch.push([x, r, z, state, fluid]);
+        const before = w.light.slice();
+        const rep = batchEdit(w, batch);
+        expectEqualsReference(w, `part ${k}, batch ${b} (${batch.length} writes)`);
+        const want = expectedReport(before, w.light);
+        expect({ sections: [...rep.sections], edges: [...rep.edges] }, `part ${k}, batch ${b}'s report`).toEqual(want);
+        for (let c = 0; c < 9; c++) expect(rep.sections[c]! & ~w.dirty[c]!, `part ${k}, batch ${b}: a reported section setLight never wrote`).toBe(0);
+      }
+    }, 60_000);
+  }
+
+  test('a seed outside the 3 × 3, more than 4,096 seeds, or a light column\'s row outside 0 … 384 throws `RangeError`', () => {
+    const w = world(rock(160));
+    const bad = createRelightSeeds();
+    bad.n = 1;
+    bad.at[0] = VOXELS;
+    expect(() => relightMany(w.access, scratch, bad, w.t)).toThrow(RangeError);
+    bad.at[0] = li(20, 170, 20);
+    bad.cols = 1;
+    bad.col[0] = 20 * L + 20;
+    bad.colLb[0] = 385;
+    expect(() => relightMany(w.access, scratch, bad, w.t)).toThrow(RangeError);
+    bad.colLb[0] = 161;
+    bad.n = 4097;
+    expect(() => relightMany(w.access, scratch, bad, w.t)).toThrow(RangeError);
+  });
 });

@@ -95,10 +95,12 @@ export const THRESHOLDS: ThresholdTable = {
   L2: { enclosedLit: { max: 0, activeFrom: 'SP4a' } },
   // SP5a spec §6.1 (D26): the incremental relight against a fresh `lightRegion` and `referenceLight` after random edits
   // (`edit.metric.ts`). SP5c spec §10.1 (D27): the paste part, random pastes up to the maximum, a move and their undo on
-  // their own shared region (`clipboard.metric.ts`, `.out/L3.paste.json`), every tier.
+  // their own shared region (`clipboard.metric.ts`, `.out/L3.paste.json`), every tier; D28's lever 4 adds the batched
+  // relight's own part, every column whose padded view a batch changed in its `dirty` (`pasteDirtyMissing`).
   L3: {
     mismatches: { max: 0, activeFrom: 'SP5a' },
     pasteValueMismatches: { max: 0, activeFrom: 'SP5c' }, pasteLightMismatches: { max: 0, activeFrom: 'SP5c' }, pasteLimboOver: { max: 0, activeFrom: 'SP5c' },
+    pasteDirtyMissing: { max: 0, activeFrom: 'SP5c' },
   },
   // SP5b spec §6.1 (D28): the codec, `.wiworld`, reload, aborted-flush, older-generator and backup, and per-world parts
   // (`persist.metric.ts`), every tier. SP5c spec §10.1 (D27): E3's paste part, pastes, a move and a cut undone and redone,

@@ -562,6 +562,69 @@ describe('a paste in sub-batches (SP5c spec §3.2)', () => {
     for (const [cx, cz] of oct()) expectLightFresh(store, cx, cz);
   });
 
+  test('a bulk lit batch under the batched relight (D28\'s lever 4): the lit block\'s first 4,096 changes (planks, glass, wall torches) shuffled across sections and columns, one voxel set twice: every voxel its last value, the eight columns\' 3 × 3s\' light equal to a fresh `lightRegion`, `dirty` holding every column whose padded view changed; its undo the same', () => {
+    const lit = litBlock().slice(0, 4096);
+    // Torches and glass in it, and a seeded shuffle, so each sub-batch's sections gather edits from apart in the batch.
+    expect(lit.some((e) => e.value === val(WALL_TORCH))).toBe(true);
+    expect(lit.some((e) => e.value === val(GLASS))).toBe(true);
+    const rng = testRng(0x33d);
+    const edits = lit.slice();
+    for (let k = edits.length - 1; k > 0; k--) {
+      const j = rng() % (k + 1);
+      [edits[k], edits[j]] = [edits[j]!, edits[k]!];
+    }
+    // A voxel set twice in one sub-batch: planks, then its own value; the second edit expects the first's.
+    const twice = edits[10]!;
+    edits.splice(11, 0, { ...twice, value: val(STONE) }, { ...twice, value: twice.value, expect: val(STONE) });
+    edits.splice(10, 1);
+    const cs = oct();
+    /** Every voxel of the eight columns' 3 × 3s: block, fluid and light, packed. */
+    const xs0 = 16 * (C[0] - 2);
+    const zs0 = 16 * (C[1] - 2);
+    const snap = (): Uint32Array => {
+      const out = new Uint32Array(96 * 64 * 384);
+      let i = 0;
+      for (let y = -64; y < 320; y++) for (let z = zs0; z < zs0 + 64; z++) for (let x = xs0; x < xs0 + 96; x++) {
+        out[i++] = (((store.blockAt(x, y, z) << 8) | store.fluidAt(x, y, z)) << 8 | store.lightAt(x, y, z)) >>> 0;
+      }
+      return out;
+    };
+    /** The columns whose padded view holds a voxel that differs between the snapshots, missing from `dirty`. */
+    const missing = (a: Uint32Array, b: Uint32Array, dirty: Float64Array): string[] => {
+      const d = new Set(dirty);
+      const out = new Set<string>();
+      let i = 0;
+      for (let y = -64; y < 320; y++) for (let z = zs0; z < zs0 + 64; z++) for (let x = xs0; x < xs0 + 96; x++, i++) {
+        if (a[i] === b[i]) continue;
+        for (let dz = -1; dz <= 1; dz++) for (let dx = -1; dx <= 1; dx++) {
+          const cx = (x + dx) >> 4;
+          const cz = (z + dz) >> 4;
+          if (!d.has(colKey(cx, cz))) out.add(`${cx},${cz}`);
+        }
+      }
+      return [...out].sort();
+    };
+    const s0 = snap();
+    const r = applyEdits(store, diffs, scratch, edits, now);
+    expect(r.refused).toBeNull();
+    let wrong = 0;
+    for (const e of lit) if (valueAt(store, e.x, e.y, e.z) !== e.value) wrong++;
+    expect(wrong).toBe(0);
+    for (const [cx, cz] of cs) expectLightFresh(store, cx, cz);
+    const s1 = snap();
+    expect(missing(s0, s1, r.dirty)).toEqual([]);
+    expect(r.limboMax).toBeLessThanOrEqual(4096);
+
+    const back = applyEdits(store, diffs, scratch, revertOf(lit), now);
+    expect(back.refused).toBeNull();
+    expect(lit.filter((e) => valueAt(store, e.x, e.y, e.z) !== e.expect).length).toBe(0);
+    expect(diffs.size).toBe(0);
+    for (const [cx, cz] of cs) expectLightFresh(store, cx, cz);
+    const s2 = snap();
+    expect(missing(s1, s2, back.dirty)).toEqual([]);
+    expect([...s2].every((v, i) => v === s0[i])).toBe(true);
+  });
+
   test('a stale `expect` at the last edit (k = 32,767): `refused` `\'changed\'`, nothing written (every value, block and light version, and the DiffStore unchanged), `limboMax` 0', () => {
     const edits = block();
     const last = edits[N - 1]!;
@@ -590,16 +653,25 @@ describe('a paste in sub-batches (SP5c spec §3.2)', () => {
     }
   });
 
-  test('`relightMs` is the sum over sub-batches; `subBatchMaxMs` < `editMs` (a clock ticking 1 per call: a 2,049-edit batch\'s relights take 1 each)', () => {
+  test('`relightMs` is the sum over sub-batches, one relight per section a sub-batch writes (D28\'s lever 4); `subBatchMaxMs` < `editMs` (a clock ticking 1 per call: a 2,049-edit batch\'s relights take 1 each)', () => {
     let t = 0;
     const tick = (): number => ++t;
     const edits = block(2049);
+    // The sections each sub-batch writes (a column's section, colKey · 24 + sy): 2 columns × 2 per 1,024-edit layer.
+    let sections = 0;
+    let most = 0;
+    for (let s0 = 0; s0 < edits.length; s0 += SUB_BATCH) {
+      const keys = new Set(edits.slice(s0, s0 + SUB_BATCH).map((e) => colKey(e.x >> 4, e.z >> 4) * 24 + sectionOf(e.y)));
+      sections += keys.size;
+      most = Math.max(most, keys.size);
+    }
+    expect([sections, most]).toEqual([9, 2]);
     const r = applyEdits(store, diffs, scratch, edits, tick);
     expect(r.refused).toBeNull();
-    // One tick per relight, across all five sub-batches (4 × 512 + 1).
-    expect(r.relightMs).toBe(2049);
-    // The longest sub-batch spans at least its own 512 relights, and less than the whole call of five.
-    expect(r.subBatchMaxMs).toBeGreaterThanOrEqual(512);
+    // One tick per relight, across all five sub-batches (4 × 512 + 1): one per section, not one per edit.
+    expect(r.relightMs).toBe(sections);
+    // The longest sub-batch spans at least its own relights, and less than the whole call of five.
+    expect(r.subBatchMaxMs).toBeGreaterThanOrEqual(most);
     expect(r.subBatchMaxMs).toBeLessThan(r.editMs);
     expect(applyEdits(store, diffs, scratch, revertOf(edits), now).refused).toBeNull();
     expect(diffs.size).toBe(0);

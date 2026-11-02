@@ -40,8 +40,8 @@ import { testRng } from '../harness/stats';
  * L3, E3 and E5's paste parts (SP5c spec §10.1, D27; master §6.4), in a metrics-quick shard of their own
  * (`clipboard`, spec §11). Every part `max 0` from SP5c, exact, on every tier; every problem names its seed or case.
  *
- * - **`L3.paste`** (`pasteValueMismatches`, `pasteLightMismatches`, `pasteLimboOver`): its own seed-42 region upTo 'L'
- *   of 10 × 10 columns at the spawn on every tier (L3's is 6 × 6 on the fast tier, too small for a 32-wide paste across
+ * - **`L3.paste`** (`pasteValueMismatches`, `pasteLightMismatches`, `pasteLimboOver`, `pasteDirtyMissing`): its own
+ *   seed-42 region upTo 'L' of 10 × 10 columns at the spawn on every tier (L3's is 6 × 6 on the fast tier, too small for a 32-wide paste across
  *   a column border with the 5 × 5 reference box), `shared: true`, so a sub-batch's retired slots wait in limbo as in
  *   the sim; the batches through the sim's own `applyEdits` (sub-batched), called outside any read section, and
  *   recorded as one step each by `blockHistory`'s `createActionPost`. K random pastes (seed 0x13ba; 5 on the fast tier,
@@ -58,6 +58,9 @@ import { testRng } from '../harness/stats';
  *   each side (light travels at most 14) on the box's footprint (`pasteLightMismatches`); `pasteLimboOver` counts the
  *   pastes (the maximum included) whose `limboMax` is above 4,096 slots. Every odd paste and the move are undone at
  *   once by `blockHistory`'s inverse batch (`undo`) and checked the same way against the values before.
+ *   `pasteDirtyMissing` (D28's lever 4, the batched relight's own coverage): for every batch (each paste, undo and the
+ *   move), the columns of its box's 3 × 3s whose padded view (§2.6) holds a voxel whose block, fluid or light it
+ *   changed, missing from its `dirty`.
  * - **`E3.paste`** (`pasteUndoMismatches`, `pasteRedoMismatches`, `clipboardReloadMismatches`, `pasteLeaveMismatches`):
  *   worlds of seed 42 opened in process through `openPersistWorld` at RD 4 over a `MemoryKV`, the clipboard on a second
  *   `MemoryKV` (`clipKv`, passed to every open), the tool driven as the page drives it (`select`: corners by
@@ -153,6 +156,62 @@ function around(cols: Iterable<number>): number[] {
   for (const k of cols) for (let dz = -1; dz <= 1; dz++) for (let dx = -1; dx <= 1; dx++) out.add(colKey(colKeyCx(k) + dx, colKeyCz(k) + dz));
   return [...out];
 }
+/** A column's voxels as the store holds them, `sy · 4096 + idx`: each one's `state << 16 | fluid << 8 | light`. */
+function columnVoxels(store: VoxelStore, key: number): Uint32Array {
+  const out = new Uint32Array(24 * 4096);
+  store.enterRead();
+  try {
+    const f = store.final(colKeyCx(key), colKeyCz(key));
+    if (f === null) throw new Error(`L3.paste: column (${colKeyCx(key)}, ${colKeyCz(key)}) has no final set`);
+    for (let sy = 0; sy < 24; sy++) {
+      const b = f.sectionBlocks(sy);
+      const fl = f.sectionFluid(sy);
+      const l = f.sectionLight(sy);
+      for (let i = 0; i < 4096; i++) {
+        const bv = typeof b === 'number' ? b : b[i]!;
+        const fv = typeof fl === 'number' ? fl : fl[i]!;
+        const lv = typeof l === 'number' ? l : l[i]!;
+        out[sy * 4096 + i] = (bv << 16) | (fv << 8) | lv;
+      }
+    }
+  } finally {
+    store.exitRead();
+  }
+  return out;
+}
+/** Every column of the 3 × 3s around `keys`, with its voxels (`columnVoxels`). */
+function snapColumns(store: VoxelStore, keys: Iterable<number>): Map<number, Uint32Array> {
+  const out = new Map<number, Uint32Array>();
+  for (const k of around(keys)) out.set(k, columnVoxels(store, k));
+  return out;
+}
+/**
+ * The columns whose padded view (the column and its one-voxel ring, §2.6) holds a voxel whose block, fluid or light
+ * differs between `before` and now, missing from the batch's `dirty`; each one named in `report`.
+ */
+function dirtyMissing(store: VoxelStore, before: Map<number, Uint32Array>, dirty: Float64Array, report: (s: string) => void, what: string): number {
+  const d = new Set(dirty);
+  const missing = new Set<number>();
+  for (const [key, was] of before) {
+    const cx = colKeyCx(key);
+    const cz = colKeyCz(key);
+    const now = columnVoxels(store, key);
+    for (let i = 0; i < now.length; i++) {
+      if (now[i] === was[i]) continue;
+      const lx = i & 15;
+      const lz = (i >> 4) & 15;
+      for (let dz = lz === 0 ? -1 : 0; dz <= (lz === 15 ? 1 : 0); dz++) {
+        for (let dx = lx === 0 ? -1 : 0; dx <= (lx === 15 ? 1 : 0); dx++) {
+          const k = colKey(cx + dx, cz + dz);
+          if (d.has(k) || missing.has(k)) continue;
+          missing.add(k);
+          report(`${what}: column (${cx + dx}, ${cz + dz}) not in \`dirty\`, its view holding (${16 * cx + lx}, ${((i >> 8) & 15) + 16 * (i >> 12) - 64}, ${16 * cz + lz}) changed`);
+        }
+      }
+    }
+  }
+  return missing.size;
+}
 const grow = (b: Box): Box => ({ x0: b.x0 - 1, y0: b.y0 - 1, z0: b.z0 - 1, w: b.w + 2, h: b.h + 2, d: b.d + 2 });
 function union(a: Box, b: Box): Box {
   const x0 = Math.min(a.x0, b.x0);
@@ -232,6 +291,7 @@ async function measureL3Paste(): Promise<{ values: Record<string, number>; probl
   let pasteValueMismatches = 0;
   let pasteLightMismatches = 0;
   let pasteLimboOver = 0;
+  let pasteDirtyMissing = 0;
   let referenceBoxes = 0;
   let compareMs = 0;
   let referenceMs = 0;
@@ -261,9 +321,15 @@ async function measureL3Paste(): Promise<{ values: Record<string, number>; probl
   const actionPost = createActionPost({ post, record: (s) => history.record(s) });
   const pools = (): [number, number] => [store.blockPool.buffer.byteLength, store.bytePool.buffer.byteLength];
 
-  /** Runs one batch as an action (or an undo), recorded; the result, or null after its problem. */
-  const run = async (what: string, f: () => Promise<EditOutcome | null>, n: number): Promise<EditResult | null> => {
+  /**
+   * Runs one batch over box `b` as an action (or an undo), recorded; the result, or null after its problem. The columns
+   * of `b`'s 3 × 3s whose views it changed must all be in its `dirty` (`pasteDirtyMissing`, D28's lever 4).
+   */
+  const run = async (what: string, f: () => Promise<EditOutcome | null>, n: number, b: Box): Promise<EditResult | null> => {
     const [b0, y0] = pools();
+    const t = now();
+    const snap = snapColumns(store, colsOf(b));
+    compareMs += now() - t;
     last = null;
     const out = await f();
     const r = last as EditResult | null;
@@ -271,6 +337,9 @@ async function measureL3Paste(): Promise<{ values: Record<string, number>; probl
       problems.add(`${what}: refused (${out === null || r === null ? 'nothing posted' : out.ok ? '?' : out.why})`);
       return null;
     }
+    const t1 = now();
+    pasteDirtyMissing += dirtyMissing(store, snap, r.dirty, report, what);
+    compareMs += now() - t1;
     const [b1, y1] = pools();
     batches.push({
       what, edits: n, editMs: round3(r.editMs), relightMs: round3(r.relightMs), subBatchMaxMs: round3(r.subBatchMaxMs), limboMax: r.limboMax,
@@ -324,7 +393,7 @@ async function measureL3Paste(): Promise<{ values: Record<string, number>; probl
       const l = last as EditResult | null;
       if (l === null) return null;
       return l.refused !== null ? { ok: false, why: l.refused } : { ok: true, prev: l.prev, next: l.next };
-    }, n);
+    }, n, b);
     if (r === null) return;
     if (history.size !== size - 1) problems.add(`${what}: the undo left ${history.size} steps (${size - 1} expected)`);
     pasteValueMismatches += cellDiffs(b, read(b).values!, (_x, _y, _z, i) => before[i]!, problems, `${what}: undone`);
@@ -361,7 +430,7 @@ async function measureL3Paste(): Promise<{ values: Record<string, number>; probl
       return;
     }
     if (o.changes !== undefined && edits.length !== o.changes) problems.add(`${what}: ${edits.length} changes (${o.changes} expected)`);
-    const r = await run(what, () => actionPost(edits), edits.length);
+    const r = await run(what, () => actionPost(edits), edits.length, at);
     if (r === null) return;
     if (r.limboMax > LIMBO_BOUND) {
       pasteLimboOver++;
@@ -428,7 +497,7 @@ async function measureL3Paste(): Promise<{ values: Record<string, number>; probl
     if (!Array.isArray(edits)) {
       problems.add(`${what}: refused by moveBatch (${edits.why})`);
     } else {
-      const r = await run(what, () => actionPost(edits), edits.length);
+      const r = await run(what, () => actionPost(edits), edits.length, all);
       if (r !== null) {
         // The generated terrain of the source's columns, from a fresh region of them.
         const gx0 = box.x0 >> 4;
@@ -453,6 +522,7 @@ async function measureL3Paste(): Promise<{ values: Record<string, number>; probl
       pasteValueMismatches,
       pasteLightMismatches,
       pasteLimboOver,
+      pasteDirtyMissing,
       pastes: L3_PASTES + 1,
       batches: batches.length,
       referenceBoxes,
@@ -1181,7 +1251,7 @@ async function measureE5Paste(): Promise<{ values: Record<string, number>; probl
 
 // ---------------------------------------------------------------- the metrics
 
-metricTest('L3', ['pasteValueMismatches', 'pasteLightMismatches', 'pasteLimboOver'], async () => {
+metricTest('L3', ['pasteValueMismatches', 'pasteLightMismatches', 'pasteLimboOver', 'pasteDirtyMissing'], async () => {
   const m = await measureL3Paste();
   mkdirSync(OUT_DIR, { recursive: true });
   writeFileSync(join(OUT_DIR, 'L3.paste.batches.json'), `${JSON.stringify({ id: 'L3.paste', tier: process.env.METRICS_TIER ?? null, batches: m.batches }, null, 2)}\n`);

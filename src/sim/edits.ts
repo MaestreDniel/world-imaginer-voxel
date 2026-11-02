@@ -11,6 +11,13 @@
  *    sparse section cache that reads the sections in place and copies a section's light on its first write; each
  *    changed light section written back with `replaceLight`; the DiffStore entry (a `revert`, or a `set` equal to the
  *    proto's value, removes it; D20).
+ *    **By section** (SP5c spec §10.4, D28's lever 4): a sub-batch's edits are written one section at a time, in the
+ *    order of each section's first edit (within a section, the batch's order): the section copied once with all its
+ *    voxels set, one `replaceBlocks`, each written block column's heightmaps patched once, and one `relightMany` of
+ *    the 3 × 3 seeded from every written voxel and light column. The light is a function of the blocks and every
+ *    relight starts from light that matches the blocks before it, so the result is the per-edit one; each section's
+ *    DiffStore entries are recorded after its write, in the batch's order (two edits of one voxel share a section, so
+ *    every `prev`/`next` is the per-edit one). The compensating pass writes edit by edit (`write`).
  * 3. **Sub-batches** (SP5c spec §3.2, D21): step 2 runs `SUB_BATCH` (512) edits at a time; after each sub-batch
  *    `publish()` once per column it wrote, then, when edits remain, `exitRead` and `enterRead`, so the slots the
  *    sub-batch retired are reclaimed before the next (writers are reopened as needed). One result for the whole batch:
@@ -58,8 +65,8 @@
 import { colKey, colKeyCx, colKeyCz, WINDOW_HALF, yInWorld } from '../core/coords';
 import { patchHeightmaps } from '../gen/pipeline/finalHeightmaps';
 import {
-  createRelightScratch, EDGE_E, EDGE_N, EDGE_NE, EDGE_NW, EDGE_S, EDGE_SE, EDGE_SW, EDGE_W, relight, type RelightAccess,
-  type RelightScratch,
+  createRelightScratch, createRelightSeeds, EDGE_E, EDGE_N, EDGE_NE, EDGE_NW, EDGE_S, EDGE_SE, EDGE_SW, EDGE_W, relight, relightMany,
+  type RelightAccess, type RelightScratch, type RelightSeeds,
 } from '../light/relight';
 import type { ColumnDiff, ColumnView, EditWriter } from '../world/store/api';
 import type { SlabPool } from '../world/store/pool';
@@ -268,17 +275,30 @@ function createSectionCache(): SectionCache {
   };
 }
 
-/** The sim's reusable state: the relight scratch, one section's blocks and fluid, and the 3 × 3 section cache. */
+/**
+ * The sim's reusable state: the relight scratch, one section's blocks and fluid, the 3 × 3 section cache, and a
+ * section write's seeds with its per-voxel and per-block-column marks (D28's lever 4).
+ */
 export interface EditScratch {
   readonly relight: RelightScratch;
   readonly blocks: Uint16Array;
   readonly fluid: Uint8Array;
   readonly cache: SectionCache;
+  readonly seeds: RelightSeeds;
+  /** Per voxel of a section: 1 once it is a seed of the section write. */
+  readonly seen: Uint8Array;
+  /** Per block column of a column: the section write's `fromY` for `patchHeightmaps`, −1000 when not written. */
+  readonly fromY: Int16Array;
+  /** The block columns the section write touched (lz · 16 + lx). */
+  readonly touched: Int32Array;
 }
 
-/** The relight's rings (≈ 8 MB), the section scratch and the 3 × 3 cache with its light copies (≈ 0.9 MB). */
+/** The relight's rings (≈ 9 MB), the section scratch and the 3 × 3 cache with its light copies (≈ 0.9 MB). */
 export function createEditScratch(): EditScratch {
-  return { relight: createRelightScratch(), blocks: new Uint16Array(VOXELS), fluid: new Uint8Array(VOXELS), cache: createSectionCache() };
+  return {
+    relight: createRelightScratch(), blocks: new Uint16Array(VOXELS), fluid: new Uint8Array(VOXELS), cache: createSectionCache(),
+    seeds: createRelightSeeds(), seen: new Uint8Array(VOXELS), fromY: new Int16Array(256).fill(-1000), touched: new Int32Array(256),
+  };
 }
 
 /** Column (cx, cz) of the edited column's 3 × 3 is Published, through the store's view-free read. */
@@ -468,6 +488,96 @@ export function applyEdits(
     }
     relightMs += now() - r0;
   };
+  /**
+   * Writes the edits `ks[0 … nk)` (one section of one column, in batch order) with their `values` at once (SP5c D28's
+   * lever 4): the section through scratch with every voxel set, one `replaceBlocks`, the diff flag, each written block
+   * column's heightmaps from its old heights (from the highest edit), and one `relightMany` of the 3 × 3 seeded from
+   * every written voxel (its value before the section write) and every written light column, with its light write-back.
+   * The result equals writing them one at a time: the light is a function of the blocks, and every relight starts from
+   * light that matches the blocks before it. The dirty set gains the columns before the write, as `write` does.
+   */
+  const writeSection = (ks: Int32Array, nk: number, values: Uint32Array): void => {
+    const e0 = edits[ks[0]!]!;
+    const cx = e0.x >> 4;
+    const cz = e0.z >> 4;
+    const sy = (e0.y + 64) >> 4;
+    const w = open(cx, cz);
+    const f = store.final(cx, cz)!;
+    const b = f.sectionBlocks(sy);
+    const fl = f.sectionFluid(sy);
+    if (typeof b === 'number') s.blocks.fill(b);
+    else s.blocks.set(b);
+    if (typeof fl === 'number') s.fluid.fill(fl);
+    else s.fluid.set(fl);
+    const aux = w.aux();
+    const seeds = s.seeds;
+    seeds.n = 0;
+    seeds.cols = 0;
+    let nTouched = 0;
+    try {
+      for (let j = 0; j < nk; j++) {
+        const k = ks[j]!;
+        const e = edits[k]!;
+        const lx = e.x & 15;
+        const lz = e.z & 15;
+        const idx = (((e.y + 64) & 15) << 8) | (lz << 4) | lx;
+        const at = (lz << 4) | lx;
+        if (s.seen[idx] === 0) {
+          // The voxel's value before the section write (its first edit here).
+          s.seen[idx] = 1;
+          const n = seeds.n++;
+          seeds.at[n] = ((e.y + ROW0) * W + 16 + lz) * W + 16 + lx;
+          seeds.state[n] = s.blocks[idx]!;
+          seeds.fluid[n] = s.fluid[idx]!;
+        }
+        if (s.fromY[at] === -1000) {
+          // The block column's old heights, before the write (raw aux values, y + 1), as `write` takes them.
+          const oldLb = aux.lightBlocking[at]!;
+          s.fromY[at] = Math.min(319, Math.max(e.y, aux.worldSurface[at]! - 1, aux.oceanFloor[at]! - 1, aux.motionBlocking[at]! - 1, oldLb - 1));
+          s.touched[nTouched++] = at;
+          const c = seeds.cols++;
+          seeds.col[c] = (16 + lz) * W + 16 + lx;
+          seeds.colLb[c] = oldLb + ROW0;
+        } else if (e.y > s.fromY[at]!) s.fromY[at] = Math.min(319, e.y);
+        const value = values[k]!;
+        s.blocks[idx] = value >>> 8;
+        s.fluid[idx] = value & 0xFF;
+        addWithEdges(dirty, cx, cz, edgesOf(lx, lz));
+      }
+      if (!wroteBlocks.includes(w)) wroteBlocks.push(w);
+      w.replaceBlocks(sy, s.blocks, s.fluid);
+      w.setDiffFlag();
+      for (let t = 0; t < nTouched; t++) {
+        const at = s.touched[t]!;
+        patchHeightmaps(f.block, f.fluid, aux, at & 15, at >> 4, s.fromY[at]!);
+      }
+
+      // Relight the 3 × 3 once (D28's lever 4), then write back each section whose light changed.
+      const r0 = now();
+      const cache = s.cache;
+      cache.open(store, cx, cz);
+      const report = relightMany(cache, s.relight, seeds);
+      for (let c = 0; c < COLUMNS; c++) {
+        if (report.sections[c] !== 0 || report.edges[c] !== 0) addWithEdges(dirty, cx + (c % 3) - 1, cz + ((c / 3) | 0) - 1, report.edges[c]!);
+      }
+      for (let m = 0; m < cache.copiedCount(); m++) {
+        const key = cache.copiedAt(m);
+        const c = (key / SECTIONS) | 0;
+        const ly = key - c * SECTIONS;
+        if (((report.sections[c]! >>> ly) & 1) === 0) continue;
+        const lw = open(cx + (c % 3) - 1, cz + ((c / 3) | 0) - 1);
+        if (!wroteLight.includes(lw)) wroteLight.push(lw);
+        lw.replaceLight(ly, cache.copy(key));
+      }
+      relightMs += now() - r0;
+    } finally {
+      for (let j = 0; j < nk; j++) {
+        const e = edits[ks[j]!]!;
+        s.seen[(((e.y + 64) & 15) << 8) | ((e.z & 15) << 4) | (e.x & 15)] = 0;
+      }
+      for (let t = 0; t < nTouched; t++) s.fromY[s.touched[t]!] = -1000;
+    }
+  };
   /** Edit k's DiffStore entry set to `prev[k]`, its entry before the batch (a rollback's and the compensating pass's). */
   const restoreEntry = (k: number): void => {
     const e = edits[k]!;
@@ -539,37 +649,77 @@ export function applyEdits(
         const key = colKey(e.x >> 4, e.z >> 4);
         if (!had.has(key)) had.set(key, diffs.has(e.x >> 4, e.z >> 4));
       }
+      /** Each edit's value to write (a revert's generated value), and the sub-batch's edits by section (D28's lever 4). */
+      const values = new Uint32Array(n);
+      const groupOf = new Map<number, number>();
+      const most = Math.min(n, SUB_BATCH);
+      const head = new Int32Array(most);
+      const tail = new Int32Array(most);
+      const link = new Int32Array(most);
+      const ks = new Int32Array(most);
+      const order = new Int32Array(most);
       for (let s0 = 0; s0 < n; s0 += SUB_BATCH) {
         const end = Math.min(s0 + SUB_BATCH, n);
         const ts = beginSubBatch();
-        /** The sub-batch's edits whose writes began (heightmaps to rescan on a rollback), and whose entry was recorded. */
+        /**
+         * The sub-batch's edits whose writes began (heightmaps to rescan on a rollback), and how many entries were
+         * recorded (`order[0 … recorded)`, the edits in the order their entries were set, each section's after its write).
+         */
         let written = s0;
-        let recorded = s0;
+        let recorded = 0;
         try {
+          // The sub-batch's sections, in the order of each one's first edit; within one, the batch's order.
+          groupOf.clear();
+          let groups = 0;
           for (let k = s0; k < end; k++) {
-            hooks?.beforeEdit?.(k);
             const e = edits[k]!;
-            const cx = e.x >> 4;
-            const cz = e.z >> 4;
-            const sy = (e.y + 64) >> 4;
-            const idx = (((e.y + 64) & 15) << 8) | ((e.z & 15) << 4) | (e.x & 15);
-            const generated = generatedAt(store.proto(cx, cz)!, e.x, e.y, e.z);
-            const value = e.op === 'revert' ? generated : e.value;
-            written = k + 1;
-            write(e, value);
-            // The DiffStore (D20): a revert, or a set equal to the generated value, removes the entry.
-            prev[k] = diffs.get(cx, cz, sy, idx);
-            if (e.op === 'revert' || value === generated) diffs.remove(cx, cz, sy, idx);
-            else diffs.set(cx, cz, sy, idx, value);
-            next[k] = diffs.get(cx, cz, sy, idx);
-            recorded = k + 1;
+            const key = colKey(e.x >> 4, e.z >> 4) * SECTIONS + ((e.y + 64) >> 4);
+            const g = groupOf.get(key);
+            link[k - s0] = -1;
+            if (g === undefined) {
+              groupOf.set(key, groups);
+              head[groups] = tail[groups] = k - s0;
+              groups++;
+            } else {
+              link[tail[g]!] = k - s0;
+              tail[g] = k - s0;
+            }
+          }
+          // Every edit of the sub-batch may be written from here: a rollback rescans all their heightmaps.
+          written = end;
+          for (let g = 0; g < groups; g++) {
+            let nk = 0;
+            for (let j = head[g]!; j !== -1; j = link[j]!) {
+              const k = s0 + j;
+              hooks?.beforeEdit?.(k);
+              const e = edits[k]!;
+              values[k] = e.op === 'revert' ? generatedAt(store.proto(e.x >> 4, e.z >> 4)!, e.x, e.y, e.z) : e.value;
+              ks[nk++] = k;
+            }
+            writeSection(ks, nk, values);
+            for (let j = 0; j < nk; j++) {
+              const k = ks[j]!;
+              const e = edits[k]!;
+              const cx = e.x >> 4;
+              const cz = e.z >> 4;
+              const sy = (e.y + 64) >> 4;
+              const idx = (((e.y + 64) & 15) << 8) | ((e.z & 15) << 4) | (e.x & 15);
+              const value = values[k]!;
+              const generated = e.op === 'revert' ? value : generatedAt(store.proto(cx, cz)!, e.x, e.y, e.z);
+              // The DiffStore (D20): a revert, or a set equal to the generated value, removes the entry.
+              prev[k] = diffs.get(cx, cz, sy, idx);
+              if (e.op === 'revert' || value === generated) diffs.remove(cx, cz, sy, idx);
+              else diffs.set(cx, cz, sy, idx, value);
+              next[k] = diffs.get(cx, cz, sy, idx);
+              order[recorded++] = k;
+            }
           }
           for (const w of opened) w.publish();
         } catch (err) {
           // Any throw after validation runs the same recovery over its own sub-batch (SIM-2): its writers, heightmaps
           // and entries (in reverse, from `prev`), loops limited to this sub-batch, so the published ones stay intact.
           rollback(s0, written);
-          for (let k = recorded - 1; k >= s0; k--) restoreEntry(k);
+          for (let j = recorded - 1; j >= 0; j--) restoreEntry(order[j]!);
           if (!(err instanceof StoreFull)) throw err;
           // A StoreFull (another thread took the headroom after the check) refuses the batch: the rolled-back slots
           // drained, then the published sub-batches undone by the compensating pass, so the batch stays all or nothing.
